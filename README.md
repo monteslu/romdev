@@ -134,4 +134,6 @@ The bundled WASM is built from pinned upstream source in a reproducible Emscript
 
 ## License
 
-MIT.
+romdev's code is **MIT**, and **the games you build are yours — including to
+sell.** Full details + the third-party component inventory: [LICENSE](./LICENSE)
+and [NOTICE](./NOTICE).

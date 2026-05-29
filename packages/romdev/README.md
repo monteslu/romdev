@@ -40,4 +40,7 @@ Agents: the server delivers [`AGENTS.md`](./AGENTS.md) as connection-time instru
 
 ## License
 
-MIT.
+romdev's code is **MIT**, and **the games you build are yours — including to
+sell.** Full details + third-party component inventory:
+[LICENSE](https://github.com/monteslu/romdev/blob/main/LICENSE) and
+[NOTICE](https://github.com/monteslu/romdev/blob/main/NOTICE).
