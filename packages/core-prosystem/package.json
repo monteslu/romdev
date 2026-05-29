@@ -1,0 +1,20 @@
+{
+  "name": "@romdev/core-prosystem",
+  "version": "0.1.0",
+  "description": "ProSystem libretro core (Atari 7800) for romdev, bundled as WASM.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./wasm/*": "./wasm/*"
+  },
+  "files": [
+    "index.js",
+    "wasm",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "license": "MIT"
+}

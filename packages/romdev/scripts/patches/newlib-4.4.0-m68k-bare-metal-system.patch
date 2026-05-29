@@ -1,0 +1,27 @@
+Replace newlib's m68k-unknown-elf default -DHAVE_SYSTEM with -DNO_EXEC.
+The original line combined -DHAVE_SYSTEM with -DMISSING_SYSCALL_NAMES,
+which produces a contradiction: HAVE_SYSTEM tells stdlib/system.c to
+call _system(), while MISSING_SYSCALL_NAMES strips the prototype, so
+the build fails with "implicit declaration of '_system'". On a bare-
+metal Genesis target there is no OS-level system() call, so NO_EXEC is
+the correct semantic — system() returns ENOSYS, no syscall referenced.
+
+Also add -DABORT_PROVIDED so newlib doesn't link an unused abort
+implementation that would pull in libgloss syscalls we also don't have.
+
+--- a/newlib/configure.host
++++ b/newlib/configure.host
+@@ -755,7 +755,12 @@ case "${host}" in
+ 	newlib_cflags="${newlib_cflags} -DNO_EXEC -DABORT_PROVIDED -DSMALL_MEMORY -DMISSING_SYSCALL_NAMES"
+ 	;;
+   m68k-unknown-elf)
+-	newlib_cflags="${newlib_cflags} -DHAVE_RENAME -DHAVE_SYSTEM -DMISSING_SYSCALL_NAMES"
++	# rom-dev-mcp: bare-metal m68k (Genesis) has no OS-level system()
++	# shell call. Original line had -DHAVE_SYSTEM + -DMISSING_SYSCALL_NAMES
++	# which together break: HAVE_SYSTEM makes system.c call _system(),
++	# MISSING_SYSCALL_NAMES strips the prototype. Use NO_EXEC instead so
++	# system() returns ENOSYS without referencing a missing syscall.
++	newlib_cflags="${newlib_cflags} -DHAVE_RENAME -DNO_EXEC -DMISSING_SYSCALL_NAMES -DABORT_PROVIDED"
+ 	syscall_dir=
+ 	;;
+   mcore-*-*)

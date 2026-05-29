@@ -1,0 +1,88 @@
+# Game Boy Color — troubleshooting
+
+Read MENTAL_MODEL.md first (`getPlatformDoc({platform:"gbc",
+name:"mental_model"})`). Most DMG-era troubleshooting from GB applies
+unchanged.
+
+## "ROM boots into green-shade DMG mode, not color"
+
+Header byte `$0143` isn't `$80`. The CGB boot ROM checks this byte
+and falls back to DMG mode when it's `$00`. Fix:
+
+```js
+buildSource({ platform: "gbc", language: "c", ... });
+patchGbHeader({ path: "<out.gbc>" });   /* auto-sets $0143 = $80 */
+```
+
+The `patchGbHeader` tool detects the `.gbc` extension and flips the
+byte on every build. If you're running `buildSource` then `loadMedia`
+without the patch step in between, you'll get a DMG ROM.
+
+## "OCPS / OCPD writes don't change colors"
+
+You're in DMG mode (see above) — those registers don't exist on DMG.
+Add the `patchGbHeader` step. Once in CGB mode, `OCPS` is the sprite
+palette index (with auto-increment in bit 7), `OCPD` is the data write.
+
+To write sprite palette 0, color 1 = bright red:
+
+```c
+OCPS = 0x80 | (0 * 8) | (1 * 2);  /* auto-inc + palette 0 + color 1 */
+OCPD = 0x1F;                       /* low byte: red 31, green 0 */
+OCPD = 0x00;                       /* high byte: blue 0 */
+```
+
+The `* 8` and `* 2` reflect the BCPS/OCPS layout — 8 palettes × 4
+colors × 2 bytes per color = 64 byte index space.
+
+## "BG colors stuck on default — only sprites change"
+
+BG palettes live at BCPS/BCPD ($FF68/$FF69), not OCPS/OCPD. And you
+must also write per-tile attribute bytes to VRAM bank 1 selecting
+which BG palette (0-7) each tile uses:
+
+```c
+VBK = 1;
+*(uint8_t*)0x9800 = 0x01;  /* tile at top-left uses BG palette 1 */
+VBK = 0;
+```
+
+Without the attribute writes, every BG tile defaults to palette 0.
+
+## "Game ran on Game Boy emulator but not on Game Boy Color emulator"
+
+`loadMedia({platform:"gbc", path})` expects gambatte in CGB mode. If
+your ROM was built with `platform:"gb"` (no patchGbHeader) the file
+extension is `.gb` and the header CGB byte is $00, so gambatte starts
+in DMG mode. To switch a DMG ROM to CGB:
+
+1. Rename / re-extension to `.gbc`
+2. Run `patchGbHeader({path:"out.gbc"})` — also fixes the global
+   checksum that the boot ROM checks
+
+## "Sound is the same as DMG"
+
+That's correct — CGB has the **identical** 4-channel APU as DMG. The
+`sound_*` API from gb_runtime works unchanged. CGB does NOT add new
+sound channels or extra waveforms.
+
+## "ROM size > 32 KB needed"
+
+The bundled GBC scaffolds all fit in 32 KB (single bank, no MBC).
+For larger projects use an MBC (memory bank controller). MBC1 / MBC3
+work in gambatte; set the `$0147` cartridge type byte accordingly.
+patchGbHeader doesn't set this — you write it from your asm/C.
+
+## "Frame heartbeat feels janky / slow"
+
+Default GBC speed is the same as DMG (~4 MHz Z80). Double-speed mode
+via KEY1 ($FF4D) doubles CPU but halves audio sample rate + breaks
+cycle-counted code. Most homebrew leaves it off; if you need the
+extra clocks, change the GB scaffold pattern to:
+
+```c
+KEY1 = 1;            /* request speed switch */
+__asm__("stop");     /* arm the switch (compiler-specific syntax) */
+```
+
+Not bundled in any scaffold — use only if you've measured a need.

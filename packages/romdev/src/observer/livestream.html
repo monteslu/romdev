@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>rom-dev-mcp /livestream</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0;
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #1a1a1a; color: #ddd;
+    height: 100vh; overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 12px;
+    background: #0a0a0a; border-bottom: 1px solid #333;
+    flex-shrink: 0;
+  }
+  header h1 { margin: 0; font-size: 14px; font-weight: 600; }
+  #status { font-size: 11px; color: #888; }
+  #status.connected { color: #4caf50; }
+  #status.disconnected { color: #f44336; }
+  #tabs {
+    display: flex; flex-wrap: wrap; gap: 4px;
+    padding: 6px 12px; background: #111; border-bottom: 1px solid #333;
+    flex-shrink: 0; min-height: 36px;
+  }
+  .tab {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 10px;
+    background: #222; border: 1px solid #333; border-radius: 4px;
+    cursor: pointer; user-select: none;
+    font-size: 12px; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    transition: background 0.12s;
+  }
+  .tab:hover { background: #2a2a2a; }
+  .tab.active { background: #0d47a1; border-color: #2196f3; color: #fff; }
+  .tab.disconnected { opacity: 0.55; }
+  .badge {
+    background: #d32f2f; color: #fff;
+    border-radius: 8px; padding: 1px 6px;
+    font-size: 10px; font-weight: 700;
+    min-width: 18px; text-align: center;
+  }
+  .tab.active .badge { display: none; }
+  #main {
+    display: flex; flex: 1; overflow: hidden;
+  }
+  #image-pane {
+    flex: 0 0 50%;
+    border-right: 1px solid #333;
+    overflow: auto;
+    padding: 12px;
+  }
+  #image-pane h2 {
+    margin: 0 0 8px;
+    font-size: 11px; text-transform: uppercase; color: #888;
+    font-weight: 600; letter-spacing: 0.05em;
+  }
+  .image-card {
+    background: #111;
+    border: 1px solid #2a2a2a; border-radius: 4px;
+    padding: 8px; margin-bottom: 8px;
+  }
+  .image-card .meta {
+    display: flex; justify-content: space-between;
+    font-size: 11px; color: #888; margin-bottom: 6px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  .image-card img {
+    display: block; max-width: 100%;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    border: 1px solid #000;
+    cursor: zoom-in;
+    transition: transform 0.1s;
+  }
+  .image-card.zoomed img { transform: scale(2); transform-origin: top left; }
+  .ansi-card {
+    background: #000;
+    border: 1px solid #2a2a2a; border-radius: 4px;
+    padding: 8px; margin-bottom: 8px;
+  }
+  .ansi-card .meta {
+    display: flex; justify-content: space-between;
+    font-size: 11px; color: #888; margin-bottom: 6px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  .ansi-card pre {
+    margin: 0;
+    /* Courier-family — universally available, true monospace so
+     * every column lines up regardless of glyph. ui-monospace can
+     * substitute a proportional font on some systems and breaks
+     * column alignment. */
+    font-family: "Courier New", Courier, monospace;
+    font-size: 11px;
+    /* line-height 1.0 keeps adjacent half-block rows touching so
+     * the spans' background colors form a continuous image (no gap
+     * stripes between rows). */
+    line-height: 1.0;
+    color: #ccc;
+    background: #000;
+    overflow: auto;
+    white-space: pre;
+  }
+  /* Spans inside the pre carry chafa's per-cell fg/bg colors via
+   * inline style. Force them to render as solid rectangles by
+   * removing any default span padding/border that might leak. */
+  .ansi-card pre span {
+    padding: 0; border: 0; margin: 0;
+  }
+  #log-pane {
+    flex: 1; overflow: auto;
+    padding: 0 8px 8px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+  }
+  #log-pane h2 {
+    margin: 12px 0 8px;
+    font-size: 11px; text-transform: uppercase; color: #888;
+    font-weight: 600; letter-spacing: 0.05em;
+    font-family: -apple-system, sans-serif;
+    position: sticky; top: 0; background: #1a1a1a; padding: 8px 0 4px;
+  }
+  .log-row {
+    background: #111;
+    border: 1px solid #2a2a2a; border-radius: 3px;
+    padding: 6px 8px; margin-bottom: 4px;
+  }
+  .log-row.ok { border-left: 3px solid #4caf50; }
+  .log-row.err { border-left: 3px solid #f44336; background: #2a1010; }
+  .log-row.sys { border-left: 3px solid #2196f3; background: #102030; }
+  .log-row .head {
+    display: flex; gap: 8px; align-items: baseline;
+    font-size: 11px; color: #888;
+  }
+  .log-row .ts { color: #666; }
+  .log-row .tool { color: #ffeb3b; font-weight: 600; }
+  .log-row .dur { color: #999; margin-left: auto; }
+  .log-row .summary {
+    margin-top: 4px;
+    color: #ccc; white-space: pre-wrap; word-break: break-word;
+  }
+  .log-row .key { color: #4fc3f7; }
+  .log-row .val { color: #b0bec5; }
+  .log-row .err-text {
+    margin-top: 4px;
+    color: #ff8a80;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  details > summary {
+    cursor: pointer; user-select: none;
+    color: #888; font-size: 11px;
+    margin-top: 4px;
+  }
+  details[open] > summary { color: #ccc; }
+  details pre {
+    margin: 4px 0 0;
+    padding: 6px 8px;
+    background: #0a0a0a; border-radius: 3px;
+    max-height: 400px; overflow: auto;
+    color: #ccc; font-size: 11px;
+  }
+  #empty {
+    padding: 40px; text-align: center; color: #666;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>rom-dev-mcp /livestream</h1>
+  <span id="status" class="disconnected">disconnected</span>
+</header>
+<div id="tabs"></div>
+<div id="main">
+  <div id="image-pane">
+    <h2>Latest images</h2>
+    <div id="image-list"></div>
+    <div id="empty">No images yet for this session.</div>
+  </div>
+  <div id="log-pane">
+    <h2>Activity log</h2>
+    <div id="log-list"></div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+(function() {
+  const socket = io();
+  const statusEl = document.getElementById("status");
+  const tabsEl = document.getElementById("tabs");
+  const imageListEl = document.getElementById("image-list");
+  const logListEl = document.getElementById("log-list");
+  const emptyEl = document.getElementById("empty");
+
+  // Per-session state.
+  // sessionKey → {
+  //   events: [],         // chronological event list
+  //   latestByKind: {},   // kind → latest image-event
+  //   unseen: 0,          // badge count when not active
+  //   connected: true,
+  // }
+  const sessions = new Map();
+  let activeSessionKey = null;
+
+  socket.on("connect", () => {
+    statusEl.textContent = "connected";
+    statusEl.className = "connected";
+  });
+  socket.on("disconnect", () => {
+    statusEl.textContent = "disconnected";
+    statusEl.className = "disconnected";
+  });
+
+  socket.on("replay", ({ events, activeSessions }) => {
+    // Seed any sessions the server already knows about, then replay
+    // the ring buffer in order. activeSessions ensures we have tabs
+    // for sessions that haven't fired events recently.
+    const live = new Set(activeSessions || []);
+    for (const sk of live) {
+      ensureSession(sk).connected = true;
+    }
+    for (const ev of events || []) {
+      handleEvent(ev, /*suppressUnseen*/ true);
+    }
+    // The ring buffer can resurrect sessions that have since been closed/
+    // reaped server-side (their connect event is still in the buffer). The
+    // server's `activeSessions` is the source of truth — drop any session
+    // we ended up with that the server says is gone, so the page doesn't
+    // open showing a pile of dead tabs.
+    for (const sk of [...sessions.keys()]) {
+      if (!live.has(sk)) sessions.delete(sk);
+    }
+    renderAll();
+    autoSelectIfSingle();
+  });
+
+  socket.on("event", (ev) => {
+    handleEvent(ev, false);
+    renderAll();
+    autoSelectIfSingle();
+  });
+
+  function ensureSession(sessionKey) {
+    let s = sessions.get(sessionKey);
+    if (!s) {
+      s = { events: [], latestByKind: {}, latestAnsi: null,
+            unseen: 0, connected: true };
+      sessions.set(sessionKey, s);
+    }
+    return s;
+  }
+
+  function handleEvent(ev, suppressUnseen) {
+    if (!ev.sessionKey) return;
+    const s = ensureSession(ev.sessionKey);
+
+    if (ev.type === "session_connect") {
+      s.connected = true;
+      s.events.push(ev);
+    } else if (ev.type === "session_disconnect") {
+      s.connected = false;
+      s.events.push(ev);
+      // Prune the tab a short while after it disconnects so the strip
+      // tracks reality instead of accumulating one tab per session ever
+      // seen. Keep it briefly (and never yank the tab the user is actively
+      // viewing) so the final state is visible. `suppressUnseen` is true
+      // during initial replay — don't schedule pruning for historical
+      // disconnects, just drop them at the next render.
+      if (!suppressUnseen) {
+        setTimeout(() => {
+          const cur = sessions.get(ev.sessionKey);
+          if (cur && !cur.connected && ev.sessionKey !== activeSessionKey) {
+            sessions.delete(ev.sessionKey);
+            renderAll();
+          }
+        }, 15000);
+      }
+    } else if (ev.type === "call") {
+      s.events.push(ev);
+      if (ev.images && ev.images.length) {
+        for (const img of ev.images) {
+          // One latest image per "tool" (kind = tool name); ev.tool
+          // identifies which inspect call produced it.
+          s.latestByKind[ev.tool] = { ts: ev.ts, base64: img.base64,
+                                      mimeType: img.mimeType, tool: ev.tool };
+        }
+      }
+      // screenshotAscii pushes both the PNG (above) AND the raw ANSI
+      // (here). Keep only the most-recent ANSI per session — older
+      // half-block frames aren't useful to stack.
+      if (typeof ev.ansi === "string") {
+        s.latestAnsi = { ts: ev.ts, tool: ev.tool, ansi: ev.ansi };
+      }
+    }
+    if (!suppressUnseen && ev.sessionKey !== activeSessionKey) {
+      s.unseen++;
+    }
+  }
+
+  function autoSelectIfSingle() {
+    const liveKeys = [...sessions.keys()].filter(k => sessions.get(k).connected);
+    if (!activeSessionKey && liveKeys.length === 1) {
+      selectTab(liveKeys[0]);
+    } else if (!activeSessionKey && sessions.size === 1) {
+      // Even disconnected — show the only thing we have.
+      selectTab([...sessions.keys()][0]);
+    }
+  }
+
+  function selectTab(sessionKey) {
+    activeSessionKey = sessionKey;
+    const s = sessions.get(sessionKey);
+    if (s) s.unseen = 0;
+    renderAll();
+  }
+
+  function renderAll() {
+    renderTabs();
+    renderImages();
+    renderLog();
+  }
+
+  function renderTabs() {
+    tabsEl.innerHTML = "";
+    const keys = [...sessions.keys()];
+    keys.sort((a, b) => {
+      // Live sessions first, then by first-seen order (insertion order
+      // in sessions Map is fine since we never re-insert).
+      const sa = sessions.get(a), sb = sessions.get(b);
+      if (sa.connected !== sb.connected) return sa.connected ? -1 : 1;
+      return 0;
+    });
+    for (const k of keys) {
+      const s = sessions.get(k);
+      const tab = document.createElement("div");
+      tab.className = "tab" + (k === activeSessionKey ? " active" : "")
+        + (!s.connected ? " disconnected" : "");
+      tab.onclick = () => selectTab(k);
+      tab.innerHTML = `<span>${k.slice(0, 8)}</span>`
+        + (s.unseen > 0 && k !== activeSessionKey
+            ? ` <span class="badge">${s.unseen}</span>` : "");
+      if (!s.connected) tab.title = "session closed";
+      tabsEl.appendChild(tab);
+    }
+  }
+
+  function renderImages() {
+    imageListEl.innerHTML = "";
+    if (!activeSessionKey) {
+      emptyEl.style.display = "block";
+      emptyEl.textContent = "Select a session tab above.";
+      return;
+    }
+    const s = sessions.get(activeSessionKey);
+    const imgs = Object.values(s.latestByKind)
+      .sort((a, b) => b.ts - a.ts);
+    const hasAnsi = !!s.latestAnsi;
+    if (imgs.length === 0 && !hasAnsi) {
+      emptyEl.style.display = "block";
+      emptyEl.textContent = "No images yet for this session.";
+      return;
+    }
+    emptyEl.style.display = "none";
+    // ANSI card first (when present) so the human sees exactly what
+    // the text-only agent saw, side-by-side with the real PNG below.
+    if (hasAnsi) {
+      const card = document.createElement("div");
+      card.className = "ansi-card";
+      const dt = new Date(s.latestAnsi.ts).toLocaleTimeString();
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      meta.innerHTML = `<span>${escapeHtml(s.latestAnsi.tool)} (ANSI)</span><span>${dt}</span>`;
+      card.appendChild(meta);
+      const pre = document.createElement("pre");
+      pre.innerHTML = ansiToHtml(s.latestAnsi.ansi);
+      card.appendChild(pre);
+      imageListEl.appendChild(card);
+    }
+    for (const img of imgs) {
+      const card = document.createElement("div");
+      card.className = "image-card";
+      const dt = new Date(img.ts).toLocaleTimeString();
+      card.innerHTML = `<div class="meta"><span>${img.tool}</span><span>${dt}</span></div>`;
+      const el = document.createElement("img");
+      el.src = `data:${img.mimeType};base64,${img.base64}`;
+      el.alt = img.tool;
+      el.onclick = () => card.classList.toggle("zoomed");
+      card.appendChild(el);
+      imageListEl.appendChild(card);
+    }
+  }
+
+  // Convert a raw ANSI-escape string (chafa output: \x1b[38;2;R;G;Bm and
+  // \x1b[48;2;R;G;Bm SGR sequences + reset + maybe \x1b[K) into safe HTML.
+  // Rules:
+  //   1. HTML-escape the literal text FIRST (glyphs may include & < > " ').
+  //   2. Normalize line endings — chafa emits \n; tolerate \r\n and strip
+  //      bare \r (browsers don't honor them; terminals do).
+  //   3. Walk \x1b[ ... <terminator> sequences. Parse SGR (terminator=m).
+  //      Ignore other CSI commands (cursor moves, clear) so we don't
+  //      bleed escape gunk into the output.
+  //   4. Emit one <span style="color:...;background:...">TEXT</span> per
+  //      style run. Close any open span before each newline so styled
+  //      backgrounds don't visually run across line breaks.
+  const ANSI_RE = /\x1b\[([\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e])/;
+  function ansiToHtml(input) {
+    // Normalize line endings BEFORE escaping. Browser <pre> respects \n;
+    // terminals expect \r\n. Strip lone \r so we don't get blank-looking
+    // rows or layout drift.
+    const norm = String(input)
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "");
+    let html = "";
+    let fg = null, bg = null;
+    let spanOpen = false;
+
+    const openSpan = () => {
+      const style = [];
+      if (fg) style.push(`color:rgb(${fg.r},${fg.g},${fg.b})`);
+      if (bg) style.push(`background:rgb(${bg.r},${bg.g},${bg.b})`);
+      if (!style.length) return;
+      html += `<span style="${style.join(";")}">`;
+      spanOpen = true;
+    };
+    const closeSpan = () => {
+      if (spanOpen) { html += "</span>"; spanOpen = false; }
+    };
+    const flushText = (text) => {
+      if (!text) return;
+      // Split on newline so we can close-and-reopen spans cleanly —
+      // a styled background should NOT extend across a line break.
+      const lines = text.split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        if (i > 0) {
+          closeSpan();
+          html += "\n";
+          openSpan();
+        }
+        if (lines[i]) html += escapeHtml(lines[i]);
+      }
+    };
+
+    let i = 0;
+    while (i < norm.length) {
+      const escIdx = norm.indexOf("\x1b", i);
+      if (escIdx < 0) {
+        flushText(norm.slice(i));
+        break;
+      }
+      flushText(norm.slice(i, escIdx));
+      // Parse the CSI sequence starting at escIdx. Slice a small window
+      // and feed to the regex; if it doesn't match, just skip the ESC
+      // char and continue (defensive — unrecognized escapes shouldn't
+      // dump raw bytes into the page).
+      const m = norm.slice(escIdx).match(ANSI_RE);
+      if (!m) { i = escIdx + 1; continue; }
+      const seq = m[1];
+      const terminator = seq[seq.length - 1];
+      // The full match consumed `\x1b` + `[` + seq (the `[` is the
+      // CSI introducer, not part of the capture group). Advance past
+      // ALL of it; one earlier off-by-one left the terminator `m`
+      // sitting as a stray glyph in the output.
+      i = escIdx + 2 + seq.length;
+      if (terminator !== "m") continue; // ignore non-SGR (e.g. \x1b[K)
+      // SGR params — semicolon-separated numbers (chafa truecolor:
+      // "38;2;R;G;B" for fg, "48;2;R;G;B" for bg, "0" for reset).
+      const params = seq.slice(0, -1).split(";").map((p) => parseInt(p, 10) || 0);
+      let pi = 0;
+      while (pi < params.length) {
+        const p = params[pi++];
+        if (p === 0) {
+          closeSpan(); fg = null; bg = null;
+        } else if (p === 38 && params[pi] === 2) {
+          fg = { r: params[pi + 1] | 0, g: params[pi + 2] | 0, b: params[pi + 3] | 0 };
+          pi += 4;
+          closeSpan(); openSpan();
+        } else if (p === 48 && params[pi] === 2) {
+          bg = { r: params[pi + 1] | 0, g: params[pi + 2] | 0, b: params[pi + 3] | 0 };
+          pi += 4;
+          closeSpan(); openSpan();
+        }
+        // Other SGR codes (8/16-color, bold, etc.) ignored — chafa
+        // in our setup only emits truecolor + reset.
+      }
+    }
+    closeSpan();
+    return html;
+  }
+
+  function renderLog() {
+    logListEl.innerHTML = "";
+    if (!activeSessionKey) return;
+    const s = sessions.get(activeSessionKey);
+    // Newest first — easier to scan when working live.
+    const evs = [...s.events].reverse();
+    for (const ev of evs) {
+      logListEl.appendChild(renderEvent(ev));
+    }
+  }
+
+  function renderEvent(ev) {
+    const row = document.createElement("div");
+    const dt = new Date(ev.ts).toLocaleTimeString();
+    if (ev.type === "session_connect") {
+      row.className = "log-row sys";
+      row.innerHTML = `<div class="head"><span class="ts">${dt}</span>`
+        + `<span>session connected</span></div>`;
+      return row;
+    }
+    if (ev.type === "session_disconnect") {
+      row.className = "log-row sys";
+      row.innerHTML = `<div class="head"><span class="ts">${dt}</span>`
+        + `<span>session disconnected</span></div>`;
+      return row;
+    }
+    // call event
+    row.className = "log-row " + (ev.ok ? "ok" : "err");
+    const head = document.createElement("div");
+    head.className = "head";
+    head.innerHTML = `<span class="ts">${dt}</span>`
+      + `<span class="tool">${escapeHtml(ev.tool)}</span>`
+      + `<span class="dur">${ev.durationMs}ms</span>`;
+    row.appendChild(head);
+
+    if (ev.args && Object.keys(ev.args).length > 0) {
+      const sum = document.createElement("div");
+      sum.className = "summary";
+      sum.innerHTML = renderTopLevelObject(ev.args);
+      row.appendChild(sum);
+    }
+
+    if (!ev.ok && ev.error) {
+      const errEl = document.createElement("div");
+      errEl.className = "err-text";
+      errEl.textContent = "error: " + ev.error;
+      row.appendChild(errEl);
+    }
+
+    if (ev.result && typeof ev.result === "object") {
+      // Show result as a collapsible detail.
+      const det = document.createElement("details");
+      const sum = document.createElement("summary");
+      sum.textContent = "result";
+      det.appendChild(sum);
+      const pre = document.createElement("pre");
+      pre.textContent = JSON.stringify(ev.result, null, 2);
+      det.appendChild(pre);
+      row.appendChild(det);
+    }
+    return row;
+  }
+
+  // Render top-level args/result with key=value pairs inline.
+  // Long string values are already truncated server-side (summarizeForLog).
+  function renderTopLevelObject(obj) {
+    if (!obj || typeof obj !== "object") return escapeHtml(String(obj));
+    const parts = [];
+    for (const k of Object.keys(obj)) {
+      const v = obj[k];
+      let display;
+      if (v == null) display = String(v);
+      else if (typeof v === "object") {
+        const s = JSON.stringify(v);
+        display = s.length > 80 ? s.slice(0, 78) + "…" : s;
+      } else if (typeof v === "string") {
+        display = JSON.stringify(v);
+        if (display.length > 80) display = display.slice(0, 78) + "…\"";
+      } else {
+        display = String(v);
+      }
+      parts.push(`<span class="key">${escapeHtml(k)}</span>=<span class="val">${escapeHtml(display)}</span>`);
+    }
+    return parts.join("  ");
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;",
+      "\"": "&quot;", "'": "&#39;",
+    }[c]));
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+hUGEDriver and hUGETracker
+==========================
+
+Repository: https://github.com/SuperDisk/hUGEDriver
+Upstream README (`Quick start (GBDK)` + `License` sections) bundled as
+`hUGEDriver.upstream.asm` (the canonical RGBDS implementation, ~1900 lines).
+
+From the upstream README:
+
+> ## License
+>
+> hUGETracker and hUGEDriver are dedicated to the public domain.
+
+That is, hUGEDriver carries no encumbrance — distributed under CC0 / public
+domain dedication. We therefore include both:
+
+  - hUGEDriver.upstream.asm     The full RGBDS source-of-truth (CC0).
+  - hUGEDriver.{c,h}            A compact SDCC-native rewrite providing the
+                                hUGE_init / hUGE_dosound / hUGE_mute_channel
+                                surface against a simplified song format,
+                                authored from scratch for rom-dev-mcp.
+
+The compact rewrite is independently CC0-dedicated for the same reason —
+no upstream code is copied; it implements a documented public-domain
+interface against the public GB APU register set.

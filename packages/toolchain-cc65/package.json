@@ -1,0 +1,21 @@
+{
+  "name": "@romdev/toolchain-cc65",
+  "version": "0.1.0",
+  "description": "cc65 toolchain (cc65 / ca65 / ld65 / da65) + target share files for romdev, bundled as WASM.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./wasm/*": "./wasm/*"
+  },
+  "files": [
+    "index.js",
+    "wasm",
+    "share",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "license": "MIT"
+}

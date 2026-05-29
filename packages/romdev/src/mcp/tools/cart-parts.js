@@ -1,0 +1,649 @@
+// extractCart / wrapRomFromParts — split ROM into standard pieces, and
+// glue them back together with a build-ready wrapper source + linker cfg.
+//
+// extractCart replaces `dd skip=16 count=16384` per-platform magic numbers
+// with one structured call. wrapRomFromParts handles the reverse — emit the
+// boilerplate source files (wrapper.s + linkerConfig) that buildSource
+// expects so an "extract → patch → re-wrap → buildSource" cycle has zero
+// hand-written glue.
+
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import path from "node:path";
+import { jsonContent, safeTool } from "../util.js";
+
+// ─── extractCart ──────────────────────────────────────────────────
+
+/**
+ * Split an iNES file into header.bin, prg.bin, chr.bin.
+ */
+function extractNes(data) {
+  if (data[0] !== 0x4e || data[1] !== 0x45 || data[2] !== 0x53 || data[3] !== 0x1a) {
+    throw new Error("extractCart[nes]: file is not iNES (missing magic at offset 0)");
+  }
+  const prgBanks = data[4];
+  const chrBanks = data[5];
+  const flags6 = data[6];
+  const flags7 = data[7];
+  const mapper = ((flags6 >> 4) & 0xF) | (flags7 & 0xF0);
+  const mirror = (flags6 & 0x01) ? "vertical" : "horizontal";
+  const hasFourScreen = !!(flags6 & 0x08);
+  const hasTrainer = !!(flags6 & 0x04);
+  const hasBattery = !!(flags6 & 0x02);
+
+  const prgSize = prgBanks * 16384;
+  const chrSize = chrBanks * 8192;
+  const trainerSize = hasTrainer ? 512 : 0;
+  const prgStart = 16 + trainerSize;
+  const chrStart = prgStart + prgSize;
+
+  const parts = {
+    "header.bin": data.slice(0, 16),
+    "prg.bin": data.slice(prgStart, prgStart + prgSize),
+  };
+  if (chrSize > 0) {
+    parts["chr.bin"] = data.slice(chrStart, chrStart + chrSize);
+  }
+  if (hasTrainer) {
+    parts["trainer.bin"] = data.slice(16, 16 + 512);
+  }
+  return {
+    parts,
+    manifest: {
+      platform: "nes",
+      format: "iNES",
+      prgBanks, prgSize,
+      chrBanks, chrSize,
+      mapper,
+      mirror,
+      hasFourScreen,
+      hasBattery,
+      hasTrainer,
+    },
+  };
+}
+
+/**
+ * Split an SNES ROM into copier-header (if present) + body. SNES doesn't
+ * have a separate CHR file the way NES does — graphics live inline in PRG
+ * banks — so the "parts" are minimal: just header + ROM. We pull out the
+ * internal header bytes ($FFC0 / $7FC0) too for inspection.
+ */
+function extractSnes(data) {
+  const copierOff = (data.length % 0x8000 === 0x200) ? 0x200 : 0;
+  const loMapper = data[copierOff + 0x7FC0 + 0x15];
+  const hiMapper = data[copierOff + 0xFFC0 + 0x15];
+  const isLo = !(hiMapper === 0x21 || hiMapper === 0x31);
+  const internalHeaderBase = copierOff + (isLo ? 0x7FC0 : 0xFFC0);
+  const parts = {};
+  if (copierOff) parts["copier_header.bin"] = data.slice(0, copierOff);
+  parts["rom.bin"] = data.slice(copierOff);
+  parts["internal_header.bin"] = data.slice(internalHeaderBase, internalHeaderBase + 0x40);
+  return {
+    parts,
+    manifest: {
+      platform: "snes",
+      format: isLo ? "LoROM" : "HiROM",
+      copierHeader: copierOff > 0,
+      copierHeaderBytes: copierOff,
+      internalHeaderOffset: internalHeaderBase,
+      romSize: data.length - copierOff,
+    },
+  };
+}
+
+/**
+ * Split a Genesis cart into vectors + header + body.
+ */
+function extractGenesis(data) {
+  return {
+    parts: {
+      "vectors.bin": data.slice(0, 0x100),
+      "header.bin": data.slice(0x100, 0x200),
+      "body.bin": data.slice(0x200),
+    },
+    manifest: {
+      platform: "genesis",
+      vectorTableBytes: 0x100,
+      headerBytes: 0x100,
+      bodyBytes: data.length - 0x200,
+    },
+  };
+}
+
+/**
+ * Split a Game Boy / GBC cart into boot, header, body.
+ */
+/**
+ * Split an SMS / Game Gear cart into:
+ *   pre_header.bin    — first $7FF0 bytes ($0000-$7FEF)
+ *   sega_header.bin   — $7FF0-$7FFF (16 bytes: "TMR SEGA", checksum, product code, region/version)
+ *   body.bin          — $8000 onwards (banked region)
+ * Carts under 32 KB are emitted as a single rom.bin with a note that no
+ * header was detected.
+ */
+function extractSms(data, platform) {
+  const parts = {};
+  const manifest = { platform, fileBytes: data.length };
+  if (data.length >= 0x8000) {
+    const magic = String.fromCharCode(...data.slice(0x7FF0, 0x7FF8));
+    if (magic === "TMR SEGA") {
+      parts["pre_header.bin"] = data.slice(0, 0x7FF0);
+      parts["sega_header.bin"] = data.slice(0x7FF0, 0x8000);
+      parts["body.bin"] = data.slice(0x8000);
+      // Parse header fields per SMS Power Software Reference.
+      const h = data.slice(0x7FF0, 0x8000);
+      manifest.hasSegaHeader = true;
+      manifest.headerOffset = 0x7FF0;
+      manifest.checksum = h[0x0A] | (h[0x0B] << 8);
+      // Product code: 5 nibbles BCD at $7FFC-$7FFE
+      const pcLo = h[0x0C], pcMid = h[0x0D], pcHi = h[0x0E] & 0x0F;
+      manifest.productCode = ((pcHi << 16) | (pcMid << 8) | pcLo).toString(16).toUpperCase();
+      manifest.version = (h[0x0E] >> 4) & 0x0F;
+      manifest.regionRomSize = h[0x0F];
+      manifest.region = ({ 3: "SMS-Japan", 4: "SMS-Export", 5: "GG-Japan", 6: "GG-Export", 7: "GG-International" })[(h[0x0F] >> 4) & 0x0F] ?? "unknown";
+      return { parts, manifest };
+    }
+  }
+  // Headerless homebrew (or sub-32KB cart).
+  parts["rom.bin"] = data;
+  manifest.hasSegaHeader = false;
+  return { parts, manifest };
+}
+
+/**
+ * Split an Atari 2600 cart. No real "header" — vectors live at the end.
+ * Emit body (everything except the last 6 bytes) + vectors.bin.
+ */
+/** Split a C64 .prg into load_address.bin (2 bytes) + body.bin. */
+function extractC64(data) {
+  if (data.length < 2) {
+    return { parts: { "rom.bin": data }, manifest: { platform: "c64", bytes: data.length } };
+  }
+  const loadAddr = data[0] | (data[1] << 8);
+  return {
+    parts: {
+      "load_address.bin": data.slice(0, 2),
+      "body.bin": data.slice(2),
+    },
+    manifest: {
+      platform: "c64",
+      bytes: data.length,
+      loadAddress: "$" + loadAddr.toString(16).toUpperCase().padStart(4, "0"),
+      loadAddressDec: loadAddr,
+      bodyBytes: data.length - 2,
+    },
+  };
+}
+
+function extractAtari2600(data) {
+  const parts = {};
+  if (data.length >= 6) {
+    parts["body.bin"] = data.slice(0, data.length - 6);
+    parts["vectors.bin"] = data.slice(data.length - 6);
+  } else {
+    parts["rom.bin"] = data;
+  }
+  const off = data.length - 6;
+  return {
+    parts,
+    manifest: {
+      platform: "atari2600",
+      bytes: data.length,
+      bankCount: data.length / 0x1000,
+      vectors: data.length >= 6 ? {
+        nmi:   "$" + ((data[off + 1] << 8) | data[off + 0]).toString(16).toUpperCase().padStart(4, "0"),
+        reset: "$" + ((data[off + 3] << 8) | data[off + 2]).toString(16).toUpperCase().padStart(4, "0"),
+        irq:   "$" + ((data[off + 5] << 8) | data[off + 4]).toString(16).toUpperCase().padStart(4, "0"),
+      } : null,
+    },
+  };
+}
+
+/**
+ * Split an Atari 7800 cart. May have a 128-byte A78 header; if present
+ * emit it as a78_header.bin and body.bin separately.
+ */
+function extractAtari7800(data) {
+  const hasHeader = data.length >= 128 &&
+    data[1] === 0x41 && data[2] === 0x54 && data[3] === 0x41 &&
+    data[4] === 0x52 && data[5] === 0x49 && data[6] === 0x37 &&
+    data[7] === 0x38 && data[8] === 0x30 && data[9] === 0x30;
+  const parts = {};
+  if (hasHeader) {
+    parts["a78_header.bin"] = data.slice(0, 128);
+  }
+  const bodyStart = hasHeader ? 128 : 0;
+  if (data.length - bodyStart >= 6) {
+    parts["body.bin"] = data.slice(bodyStart, data.length - 6);
+    parts["vectors.bin"] = data.slice(data.length - 6);
+  } else {
+    parts["rom.bin"] = data.slice(bodyStart);
+  }
+  const off = data.length - 6;
+  return {
+    parts,
+    manifest: {
+      platform: "atari7800",
+      bytes: data.length,
+      hasA78Header: hasHeader,
+      bodyBytes: data.length - bodyStart,
+      vectors: data.length - bodyStart >= 6 ? {
+        nmi:   "$" + ((data[off + 1] << 8) | data[off + 0]).toString(16).toUpperCase().padStart(4, "0"),
+        reset: "$" + ((data[off + 3] << 8) | data[off + 2]).toString(16).toUpperCase().padStart(4, "0"),
+        irq:   "$" + ((data[off + 5] << 8) | data[off + 4]).toString(16).toUpperCase().padStart(4, "0"),
+      } : null,
+    },
+  };
+}
+
+function extractGb(data, platform) {
+  return {
+    parts: {
+      "boot.bin": data.slice(0, 0x100),
+      "header.bin": data.slice(0x100, 0x150),
+      "body.bin": data.slice(0x150),
+    },
+    manifest: {
+      platform,
+      // Cartridge info from the header at $0143-$0149.
+      cgbFlag: data[0x143],
+      cartType: data[0x147],
+      romSize: data[0x148],
+      ramSize: data[0x149],
+    },
+  };
+}
+
+export async function extractCartCore({ path: romPath, platform, outputDir, inline }) {
+  const data = new Uint8Array(await readFile(romPath));
+  const resolved = platform ?? (
+    /\.nes$/i.test(romPath) ? "nes" :
+    /\.(sfc|smc)$/i.test(romPath) ? "snes" :
+    /\.(bin|md|gen)$/i.test(romPath) ? "genesis" :
+    /\.gb$/i.test(romPath) ? "gb" :
+    /\.gbc$/i.test(romPath) ? "gbc" :
+    /\.sms$/i.test(romPath) ? "sms" :
+    /\.gg$/i.test(romPath) ? "gg" :
+    /\.a26$/i.test(romPath) ? "atari2600" :
+    /\.a78$/i.test(romPath) ? "atari7800" :
+    /\.prg$/i.test(romPath) ? "c64" :
+    null
+  );
+  if (!resolved) {
+    throw new Error(`extractCart: could not detect platform for '${romPath}'. Pass platform explicitly.`);
+  }
+  let result;
+  switch (resolved) {
+    case "nes": result = extractNes(data); break;
+    case "snes": result = extractSnes(data); break;
+    case "genesis":
+    case "megadrive":
+    case "md": result = extractGenesis(data); break;
+    case "gb":
+    case "gbc": result = extractGb(data, resolved); break;
+    case "sms":
+    case "gg": result = extractSms(data, resolved); break;
+    case "atari2600":
+    case "a2600": result = extractAtari2600(data); break;
+    case "atari7800":
+    case "a7800": result = extractAtari7800(data); break;
+    case "c64":   result = extractC64(data); break;
+    default:
+      throw new Error(`extractCart: platform '${resolved}' not supported`);
+  }
+
+  // Default: write parts to disk. outputDir is REQUIRED unless inline:true.
+  if (!inline) {
+    if (!outputDir) {
+      throw new Error("extractCart: pass outputDir (write the parts to disk, returns file paths) or inline:true (return the parts as base64 in the response).");
+    }
+    await mkdir(outputDir, { recursive: true });
+    const filePaths = {};
+    for (const [name, bytes] of Object.entries(result.parts)) {
+      const out = path.join(outputDir, name);
+      await writeFile(out, bytes);
+      filePaths[name] = out;
+    }
+    await writeFile(path.join(outputDir, "manifest.json"), JSON.stringify(result.manifest, null, 2));
+    filePaths["manifest.json"] = path.join(outputDir, "manifest.json");
+    return {
+      platform: resolved,
+      sourcePath: romPath,
+      sourceBytes: data.length,
+      outputDir,
+      files: filePaths,
+      manifest: result.manifest,
+    };
+  }
+
+  // Inline mode — return parts as base64.
+  const inlineParts = {};
+  for (const [name, bytes] of Object.entries(result.parts)) {
+    inlineParts[name] = {
+      bytes: Buffer.from(bytes).toString("base64"),
+      length: bytes.length,
+    };
+  }
+  return {
+    platform: resolved,
+    sourcePath: romPath,
+    sourceBytes: data.length,
+    parts: inlineParts,
+    manifest: result.manifest,
+  };
+}
+
+// ─── wrapRomFromParts ─────────────────────────────────────────────
+
+/**
+ * NES wrapper.s + linkerConfig template. Emits an iNES header + segments
+ * for PRG (path) + CHR (path). Uses cc65's ld65 with three MEMORY blocks:
+ * HEADER, PRG, CHR; one SEGMENT each.
+ *
+ * Caller passes:
+ *   prgPath  — file path to the PRG-ROM bytes (gets INCBIN'd)
+ *   chrPath  — file path to the CHR-ROM bytes (or null for CHR-RAM)
+ *   mapper   — iNES mapper number (default 0 / NROM)
+ *   mirror   — "horizontal" | "vertical" | "four-screen" (default horizontal)
+ *   prgBanks — count of 16KB banks (default infer from prgPath size)
+ *   chrBanks — count of 8KB banks (default infer; 0 for CHR-RAM)
+ */
+function wrapNes({ prgPath, chrPath, mapper, mirror, prgBanks, chrBanks }) {
+  const m = mapper ?? 0;
+  const mirrorFlag = mirror === "vertical" ? 1 : mirror === "four-screen" ? 8 : 0;
+  const prg = prgPath;
+  const chr = chrPath ?? null;
+
+  // ld65 MEMORY `size` is BYTE COUNT (exclusive), not "last valid address."
+  // A 16KB region is $4000 bytes, not $3FFF. NROM-128 (1 PRG bank) anchors
+  // at CPU $C000 with hardware mirroring to $8000-$BFFF — vectors at
+  // $FFFA-$FFFF only resolve when the bank is loaded at $C000.
+  const banks = prgBanks ?? 1;
+  let prgStart, prgSize;
+  if (banks === 1) {
+    prgStart = 0xC000;
+    prgSize = 0x4000; // 16 KB
+  } else if (banks === 2) {
+    prgStart = 0x8000;
+    prgSize = 0x8000; // 32 KB — NROM-256
+  } else {
+    throw new Error(
+      `wrapRomFromParts[nes]: prgBanks=${banks} requires mapper-specific banking config ` +
+      `that this tool doesn't synthesize yet. Supported: prgBanks=1 (NROM-128) or 2 ` +
+      `(NROM-256). For larger / banked carts, write a custom linker config (and update ` +
+      `wrapRomFromParts to support that mapper).`
+    );
+  }
+  const chrBanksNum = chrBanks ?? (chr ? 1 : 0);
+  const chrSize = chrBanksNum * 0x2000; // 8 KB per bank
+
+  const hex4 = (n) => "$" + n.toString(16).toUpperCase().padStart(4, "0");
+  const hex2 = (n) => "$" + n.toString(16).toUpperCase().padStart(2, "0");
+
+  const wrapperSource =
+`.segment "HEADER"
+  .byte $4E, $45, $53, $1A     ; "NES\\x1a"
+  .byte $${banks.toString(16).toUpperCase().padStart(2, "0")}    ; PRG-ROM banks (16KB each)
+  .byte $${chrBanksNum.toString(16).toUpperCase().padStart(2, "0")}    ; CHR-ROM banks (8KB each; 0 = CHR-RAM)
+  .byte ${hex2((m << 4 | mirrorFlag) & 0xFF)}    ; mapper-lo + mirroring
+  .byte ${hex2(m & 0xF0)}    ; mapper-hi + NES 2.0 flags
+  .byte $00, $00, $00, $00, $00, $00, $00, $00
+
+.segment "PRG"
+  .incbin "${prg}"
+${chr ? `\n.segment "CHR"\n  .incbin "${chr}"\n` : ""}
+`;
+  // Every MEMORY block needs `file = %O` so the linked region writes to the
+  // output ROM (rather than being implicitly RAM-only). cc65's stock nes.cfg
+  // has this on every line; we mirrored that.
+  const lines = [
+    `MEMORY {`,
+    `  HEADER: file = %O, start = $0000, size = $0010, fill = yes, fillval = $00;`,
+    `  PRG:    file = %O, start = ${hex4(prgStart)}, size = ${hex4(prgSize)}, fill = yes, fillval = $FF;`,
+  ];
+  if (chrSize > 0) {
+    lines.push(`  CHR:    file = %O, start = $0000, size = ${hex4(chrSize)}, fill = yes, fillval = $00;`);
+  }
+  lines.push(`}`);
+  lines.push(`SEGMENTS {`);
+  lines.push(`  HEADER: load = HEADER, type = ro;`);
+  lines.push(`  PRG:    load = PRG, type = ro;`);
+  if (chrSize > 0) lines.push(`  CHR:    load = CHR, type = ro;`);
+  lines.push(`}`);
+  const linkerConfig = lines.join("\n") + "\n";
+  return { wrapperSource, linkerConfig };
+}
+
+/**
+ * Genesis wrapper template. Genesis just needs vectors + header + body
+ * concatenated in a flat ROM. We emit a vasm68k wrapper that incbins each.
+ */
+function wrapGenesis({ vectorsPath, headerPath, bodyPath }) {
+  const wrapperSource =
+`\torg $000000
+\tincbin "${vectorsPath}"
+\torg $000100
+\tincbin "${headerPath}"
+\torg $000200
+\tincbin "${bodyPath}"
+`;
+  return { wrapperSource, linkerConfig: null };
+}
+
+/**
+ * SNES wrapper template. Just concatenate the copier_header (if any) + the
+ * rom body. Emit an asar wrapper that uses incbin.
+ */
+function wrapSnes({ copierHeaderPath, romPath }) {
+  let src = "";
+  if (copierHeaderPath) src += `incbin "${copierHeaderPath}"\n`;
+  src += `incbin "${romPath}"\n`;
+  return { wrapperSource: src, linkerConfig: null };
+}
+
+/**
+ * Game Boy wrapper template. Concatenate boot + header + body. Emit an
+ * rgbasm wrapper using INCBIN.
+ */
+/**
+ * SMS / Game Gear wrapper template. Emits sdasz80 source that concats the
+ * pre-header code + sega header + body via .incbin into a flat output.
+ *
+ *   preHeaderPath  — code in $0000-$7FEF
+ *   headerPath     — 16-byte sega header at $7FF0
+ *   bodyPath       — banked region from $8000 onwards
+ *
+ * Sub-32KB carts can pass `rom.bin` as `bodyPath` and omit preHeader/header.
+ */
+function wrapSms({ preHeaderPath, headerPath, bodyPath, romPath }) {
+  if (romPath) {
+    // Headerless / sub-32KB path.
+    const wrapperSource =
+`\t.module sms_wrap
+\t.area _CODE (ABS)
+\t.org 0x0000
+\t.incbin "${romPath}"
+`;
+    return { wrapperSource, linkerConfig: null };
+  }
+  const wrapperSource =
+`\t.module sms_wrap
+\t.area _CODE (ABS)
+\t.org 0x0000
+\t.incbin "${preHeaderPath ?? "pre_header.bin"}"
+\t.org 0x7FF0
+\t.incbin "${headerPath ?? "sega_header.bin"}"
+\t.org 0x8000
+\t.incbin "${bodyPath ?? "body.bin"}"
+`;
+  return { wrapperSource, linkerConfig: null };
+}
+
+/**
+ * Atari 2600 wrapper. Just concatenate body + vectors at the right org
+ * (top of 4KB bank). Caller can pass bodyPath + vectorsPath (from
+ * extractCart) OR romPath for a one-shot incbin.
+ */
+function wrapAtari2600({ bodyPath, vectorsPath, romPath }) {
+  if (romPath) {
+    const wrapperSource =
+`\t.org $F000
+\t.incbin "${romPath}"
+`;
+    return { wrapperSource, linkerConfig: null };
+  }
+  const wrapperSource =
+`\t.org $F000
+\t.incbin "${bodyPath ?? "body.bin"}"
+\t.org $FFFA
+\t.incbin "${vectorsPath ?? "vectors.bin"}"
+`;
+  return { wrapperSource, linkerConfig: null };
+}
+
+/**
+ * Atari 7800 wrapper. Optional 128-byte A78 header (kept if extractCart
+ * found one), then body anchored to (0x10000 - bodyBytes), then vectors
+ * at $FFFA.
+ */
+function wrapAtari7800({ a78HeaderPath, bodyPath, vectorsPath, romPath, bodyBytes }) {
+  if (romPath) {
+    const wrapperSource =
+`\t.org $4000
+\t.incbin "${romPath}"
+`;
+    return { wrapperSource, linkerConfig: null };
+  }
+  const bodyOrg = 0x10000 - 6 - (bodyBytes ?? 0xC000);
+  const hexOrg = "$" + bodyOrg.toString(16).toUpperCase().padStart(4, "0");
+  let src = "";
+  if (a78HeaderPath) {
+    src += `\t; A78 header (not part of the 6502 image — emitted at file start)\n`;
+    src += `\t.incbin "${a78HeaderPath}"\n`;
+  }
+  src += `\t.org ${hexOrg}\n`;
+  src += `\t.incbin "${bodyPath ?? "body.bin"}"\n`;
+  src += `\t.org $FFFA\n`;
+  src += `\t.incbin "${vectorsPath ?? "vectors.bin"}"\n`;
+  return { wrapperSource: src, linkerConfig: null };
+}
+
+function wrapGb({ bootPath, headerPath, bodyPath }) {
+  const wrapperSource =
+`SECTION "boot", ROM0[$0000]
+  INCBIN "${bootPath}"
+SECTION "header", ROM0[$0100]
+  INCBIN "${headerPath}"
+SECTION "body", ROM0[$0150]
+  INCBIN "${bodyPath}"
+`;
+  return { wrapperSource, linkerConfig: null };
+}
+
+export async function wrapRomFromPartsCore(args) {
+  const { platform } = args;
+  switch (platform) {
+    case "nes": return wrapNes(args);
+    case "snes": return wrapSnes(args);
+    case "genesis":
+    case "megadrive":
+    case "md": return wrapGenesis(args);
+    case "gb":
+    case "gbc": return wrapGb(args);
+    case "sms":
+    case "gg": return wrapSms(args);
+    case "atari2600":
+    case "a2600": return wrapAtari2600(args);
+    case "atari7800":
+    case "a7800": return wrapAtari7800(args);
+    case "c64":   return wrapC64(args);
+    default:
+      throw new Error(`wrapRomFromParts: platform '${platform}' not supported`);
+  }
+}
+
+/**
+ * Wrap C64 parts back into a .prg. Just emits a vasm/ca65 wrapper that
+ * sets the load address and includes the body.
+ */
+function wrapC64({ loadAddress, bodyPath, romPath }) {
+  if (romPath) {
+    const wrapperSource =
+`; C64 .prg wrapper — reassembles a prebuilt body.
+        .org    $${(loadAddress ?? 0x0801).toString(16).toUpperCase()}
+        .incbin "${romPath}"
+`;
+    return { wrapperSource, linkerConfig: null };
+  }
+  const wrapperSource =
+`; C64 .prg wrapper — load_address.bin is the 2-byte little-endian
+; load address, body.bin is the program bytes that follow.
+        .incbin "load_address.bin"
+        .incbin "${bodyPath ?? "body.bin"}"
+`;
+  return { wrapperSource, linkerConfig: null };
+}
+
+// ─── MCP registration ─────────────────────────────────────────────
+
+export function registerCartPartsTools(server, z) {
+  server.tool(
+    "extractCart",
+    "Use this to split a ROM file into its standard parts (NES: header/prg/chr/trainer + a mapper/" +
+    "mirroring manifest; SNES/Genesis/GB/GBC: their respective header/body splits) — auto-detects format, " +
+    "no `dd skip=` magic. Pairs with wrapRomFromParts for a round-trip: extractCart → patchFile a part → " +
+    "wrapRomFromParts → buildSource, to surgically edit just CHR/PRG without re-extracting each time. " +
+    "DEFAULT writes the parts to outputDir and returns file paths; pass inline:true to get them base64-inlined " +
+    "in the response (you must pass one or the other).",
+    {
+      path: z.string().describe("Absolute path to the ROM file."),
+      platform: z.enum(["nes", "snes", "genesis", "megadrive", "md", "gb", "gbc", "sms", "gg", "atari2600", "a2600", "atari7800", "a7800", "c64"]).optional().describe("Override platform detection (auto-sniffs from extension)."),
+      outputDir: z.string().optional().describe("Directory to write the parts (+ manifest.json) to. Required unless inline:true."),
+      inline: z.boolean().default(false).describe("If true, return the parts as base64 in the response instead of writing to disk. Default false — then outputDir is required."),
+    },
+    safeTool(async (args) => {
+      const r = await extractCartCore(args);
+      return jsonContent(r);
+    }),
+  );
+
+  server.tool(
+    "wrapRomFromParts",
+    "Counterpart to extractCart: use this to generate a build-ready wrapper source (+ linker config for " +
+    "NES) that reassembles ROM parts back into a cart. Workflow: extractCart → patchFile a part → " +
+    "wrapRomFromParts → buildSource → playtest. Returns `wrapperSource` (save to disk, pass to buildSource) " +
+    "and `linkerConfig` (cc65 NES; null for asar/vasm/rgbasm targets). NES auto-generates the iNES header " +
+    "from `mapper`+`mirror` — pass `chrPath:null` for CHR-RAM. See param hints for per-platform paths.",
+    {
+      platform: z.enum(["nes", "snes", "genesis", "megadrive", "md", "gb", "gbc", "sms", "gg", "atari2600", "a2600", "atari7800", "a7800", "c64"]),
+      // NES
+      prgPath: z.string().optional().describe("NES: path to PRG bytes (incbin'd into the PRG segment)."),
+      chrPath: z.string().nullable().optional().describe("NES: path to CHR bytes; null for CHR-RAM carts."),
+      mapper: z.number().int().min(0).max(255).optional().describe("NES: iNES mapper number. Default 0 (NROM)."),
+      mirror: z.enum(["horizontal", "vertical", "four-screen"]).optional().describe("NES: nametable mirroring."),
+      prgBanks: z.number().int().min(1).max(255).optional().describe("NES: PRG bank count (16KB each)."),
+      chrBanks: z.number().int().min(0).max(255).optional().describe("NES: CHR bank count (8KB each). 0 = CHR-RAM."),
+      // SNES
+      romPath: z.string().optional().describe("SNES: path to the ROM body."),
+      copierHeaderPath: z.string().optional().describe("SNES: path to a 512B copier header to prepend."),
+      // Genesis
+      vectorsPath: z.string().optional().describe("Genesis: path to the 256B vector table."),
+      headerPath: z.string().optional().describe("Genesis/GB: path to header bytes."),
+      bodyPath: z.string().optional().describe("Genesis/GB: path to ROM body."),
+      // GB
+      bootPath: z.string().optional().describe("GB/GBC: path to the boot/jump bytes at $0000-$00FF."),
+      // SMS/GG
+      preHeaderPath: z.string().optional().describe("SMS/GG: path to code in $0000-$7FEF (the bulk of bank 0). Required for 32KB+ carts using the standard sega header."),
+      // Atari 2600/7800
+      vectorsPath: z.string().optional().describe("Atari 2600/7800: path to the 6-byte vector table at $FFFA-$FFFF. (Also used by Genesis for the 256B vector table.)"),
+      a78HeaderPath: z.string().optional().describe("Atari 7800: path to the 128-byte A78 header (if present)."),
+      bodyBytes: z.number().int().min(1).optional().describe("Atari 7800: size of the 6502 image body, needed to compute the cart origin (default 0xC000 = 48 KB)."),
+      // C64
+      loadAddress: z.number().int().min(0).max(0xFFFF).optional().describe("C64: load address (default 0x0801, the BASIC start). Used when bundling a romPath; otherwise the load_address.bin from extractCart is used."),
+    },
+    safeTool(async (args) => {
+      const r = await wrapRomFromPartsCore(args);
+      return jsonContent(r);
+    }),
+  );
+}

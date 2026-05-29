@@ -1,0 +1,59 @@
+# romdev patch — see README.md in this directory for full justification.
+# Exposes this core's internal memory regions (VRAM/OAM/palette/registers/etc.)
+# via retro_get_memory_data so romdev's inspect*/getCPUState/etc. tools can read
+# them. Upstream exposes only SAVE_RAM/SYSTEM_RAM. WITHOUT this patch the build
+# still succeeds but those tools return empty data (silent runtime failure).
+# git apply ignores everything above the first 'diff --git' line.
+#
+diff --git a/core/libretro.c b/core/libretro.c
+index 3e4dbdb..335e95a 100644
+--- a/core/libretro.c
++++ b/core/libretro.c
+@@ -28,6 +28,7 @@
+ #include "Tia.h"
+ #include "Memory.h"
+ #include "BupChip.h"
++#include "Sally.h"
+ 
+ #ifdef _3DS
+ extern void* linearMemAlign(size_t size, size_t alignment);
+@@ -619,10 +620,30 @@ unsigned retro_api_version(void)
+     return RETRO_API_VERSION;
+ }
+ 
++/* rom-dev-mcp extension: custom region IDs above libretro standard.
++ * Lets the host inspect 7800 CPU state for the getCPUState tool.
++ * MARIA / TIA / ROM are all reachable via system_ram (memory_ram is the
++ * full 64KB 6502 address space — MARIA at $20-$3F, TIA audio at $15-$1A,
++ * RIOT-side at $280-$2FF, RAM at $1800-$27FF, ROM at $4000-$FFFF). */
++#define ROMDEV_MEMORY_A78_CPU_REGS 0x150  /* 7-byte 6502 snapshot */
++
++static unsigned char romdev_a78_cpu_buf[7];
++
+ void *retro_get_memory_data(unsigned id)
+ {
+     if ( id == RETRO_MEMORY_SYSTEM_RAM )
+         return memory_ram;
++    if ( id == ROMDEV_MEMORY_A78_CPU_REGS ) {
++        /* Layout: pc_lo, pc_hi, a, x, y, p, s */
++        romdev_a78_cpu_buf[0] = sally_pc.b.l;
++        romdev_a78_cpu_buf[1] = sally_pc.b.h;
++        romdev_a78_cpu_buf[2] = sally_a;
++        romdev_a78_cpu_buf[3] = sally_x;
++        romdev_a78_cpu_buf[4] = sally_y;
++        romdev_a78_cpu_buf[5] = sally_p;
++        romdev_a78_cpu_buf[6] = sally_s;
++        return romdev_a78_cpu_buf;
++    }
+     return NULL;
+ }
+ 
+@@ -630,6 +651,8 @@ size_t retro_get_memory_size(unsigned id)
+ {
+     if ( id == RETRO_MEMORY_SYSTEM_RAM )
+         return MEMORY_SIZE;
++    if ( id == ROMDEV_MEMORY_A78_CPU_REGS )
++        return sizeof(romdev_a78_cpu_buf);
+     return 0;
+ }
+ 

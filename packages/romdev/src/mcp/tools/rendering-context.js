@@ -1,0 +1,650 @@
+// getRenderingContext — decode the current PPU/VDP state into structured
+// fields + a universal English summary. The big win: tell the agent which
+// CHR bank the BG and sprites are fetching from RIGHT NOW, plus the file
+// offset so direct patchFile works first-try.
+//
+// NES uses fceumm's `nes_ppu_regs` 4-byte region (PPU[0..3] = PPUCTRL,
+// PPUMASK, PPUSTATUS, OAMADDR). Other platforms TBD — the call shape is
+// already universal, so adding SNES/Genesis/GB is a future incremental.
+
+import { readFileSync } from "node:fs";
+import { getHost } from "../state.js";
+import { jsonContent, safeTool } from "../util.js";
+
+/**
+ * Decode the active rendering context for NES. Returns {nes: {...}, summary, area}.
+ */
+function nesContext(host, area) {
+  // PPU[4]: byte 0 = PPUCTRL, byte 1 = PPUMASK, byte 2 = PPUSTATUS, byte 3 = OAMADDR.
+  const ppu = host.readMemory("nes_ppu_regs", 0, 4);
+  const ppuctrl = ppu[0];
+  const ppumask = ppu[1];
+  const ppustatus = ppu[2];
+  const oamaddr = ppu[3];
+
+  // PPUCTRL bits:
+  //   0-1: base nametable address (00=$2000, 01=$2400, 10=$2800, 11=$2C00)
+  //   2:   VRAM increment (0 = +1 across, 1 = +32 down)
+  //   3:   sprite pattern table base (0 = $0000, 1 = $1000) — for 8x8 sprites only
+  //   4:   BG pattern table base (0 = $0000, 1 = $1000)
+  //   5:   sprite size (0 = 8x8, 1 = 8x16; for 8x16 the bit is per-tile)
+  //   7:   NMI enable on vblank
+  const baseNametable = ppuctrl & 0x03;
+  const vramIncrement = (ppuctrl & 0x04) ? 32 : 1;
+  const spritePatternBank = (ppuctrl & 0x08) ? 1 : 0;
+  const bgPatternBank = (ppuctrl & 0x10) ? 1 : 0;
+  const spriteHeight = (ppuctrl & 0x20) ? 16 : 8;
+  const nmiEnabled = !!(ppuctrl & 0x80);
+
+  // PPUMASK bits:
+  //   0: grayscale
+  //   1: show BG in leftmost 8px
+  //   2: show sprites in leftmost 8px
+  //   3: BG visible
+  //   4: sprites visible
+  //   5-7: emphasis bits (red/green/blue)
+  const grayscale = !!(ppumask & 0x01);
+  const bgLeftmost = !!(ppumask & 0x02);
+  const spritesLeftmost = !!(ppumask & 0x04);
+  const bgVisible = !!(ppumask & 0x08);
+  const spritesVisible = !!(ppumask & 0x10);
+  const emphasisBits = (ppumask >> 5) & 0x07;
+  const emphasisNames = ["red", "green", "blue"];
+  const emphasis = emphasisBits === 0
+    ? "none"
+    : emphasisNames.filter((_, i) => emphasisBits & (1 << i)).join("+");
+
+  // PPUSTATUS bits (read-only state, useful for "where in the frame are we"):
+  //   5: sprite overflow
+  //   6: sprite 0 hit
+  //   7: vblank flag
+  const spriteOverflow = !!(ppustatus & 0x20);
+  const sprite0Hit = !!(ppustatus & 0x40);
+  const vblank = !!(ppustatus & 0x80);
+
+  // CHR file offset math — works for NROM (mapper 0) directly. For banked
+  // mappers (MMC1/MMC3/etc.) the agent should treat this as the offset
+  // RELATIVE to whatever CHR bank is currently mapped; the live bytes
+  // returned by readMemory("nes_chr", ...) already reflect banking.
+  const status = host.getStatus();
+  let chrBaseInFile = null;
+  let mapperNum = null;
+  if (status.mediaPath) {
+    try {
+      // Sniff iNES header from disk to compute CHR base offset.
+      const data = readFileSync(status.mediaPath);
+      if (data[0] === 0x4e && data[1] === 0x45 && data[2] === 0x53 && data[3] === 0x1a) {
+        const prgBanks = data[4];
+        const chrBanks = data[5];
+        mapperNum = ((data[6] >> 4) & 0xF) | (data[7] & 0xF0);
+        if (chrBanks > 0) {
+          chrBaseInFile = 16 + prgBanks * 16384;
+        }
+      }
+    } catch {
+      // Bytes-loaded ROM (no path) — leave file offset null.
+    }
+  }
+
+  const bgPatternPpuBase = bgPatternBank * 0x1000;
+  const spritePatternPpuBase = spritePatternBank * 0x1000;
+  const bgChrFileOffset = chrBaseInFile != null ? chrBaseInFile + bgPatternPpuBase : null;
+  const spriteChrFileOffset = chrBaseInFile != null ? chrBaseInFile + spritePatternPpuBase : null;
+
+  const summary = [];
+  if (area === "all" || area === "bg") {
+    summary.push(
+      `BG is fetching from CHR bank ${bgPatternBank} (PPU $${bgPatternPpuBase.toString(16).toUpperCase().padStart(4,"0")}` +
+      (bgChrFileOffset != null
+        ? `, file offset 0x${bgChrFileOffset.toString(16).toUpperCase()}`
+        : `, file offset unknown — no mediaPath or CHR-RAM cart`) +
+      `)`
+    );
+  }
+  if (area === "all" || area === "sprites") {
+    summary.push(
+      `Sprites are fetching from CHR bank ${spritePatternBank} (PPU $${spritePatternPpuBase.toString(16).toUpperCase().padStart(4,"0")}` +
+      (spriteChrFileOffset != null
+        ? `, file offset 0x${spriteChrFileOffset.toString(16).toUpperCase()}`
+        : `, file offset unknown`) +
+      `, ${spriteHeight}px tall)`
+    );
+  }
+  if (area === "all") {
+    const ntAddr = 0x2000 + baseNametable * 0x400;
+    summary.push(
+      `Active nametable: $${ntAddr.toString(16).toUpperCase()} (index ${baseNametable})`
+    );
+    summary.push(
+      `BG ${bgVisible ? "visible" : "OFF"}, sprites ${spritesVisible ? "visible" : "OFF"}, NMI ${nmiEnabled ? "enabled" : "off"}` +
+      (vblank ? ", currently in vblank" : "")
+    );
+    if (mapperNum != null && mapperNum !== 0) {
+      summary.push(
+        `iNES mapper ${mapperNum} — for banked-CHR mappers (MMC1/MMC3/etc.), the file-offset answer above ` +
+        `assumes the active CHR bank covers PPU $0000-$1FFF. If your mapper does 1KB/2KB bank switching, ` +
+        `treat the live readMemory('nes_chr', 0, 8192) bytes as authoritative.`
+      );
+    }
+  }
+
+  return {
+    platform: "nes",
+    area,
+    nes: {
+      ppuctrl: {
+        hex: "0x" + ppuctrl.toString(16).toUpperCase().padStart(2, "0"),
+        baseNametable: "$" + (0x2000 + baseNametable * 0x400).toString(16).toUpperCase(),
+        vramIncrement,
+        spritePatternTable: "$" + spritePatternPpuBase.toString(16).toUpperCase().padStart(4, "0"),
+        bgPatternTable: "$" + bgPatternPpuBase.toString(16).toUpperCase().padStart(4, "0"),
+        spriteHeight,
+        nmiEnabled,
+      },
+      ppumask: {
+        hex: "0x" + ppumask.toString(16).toUpperCase().padStart(2, "0"),
+        bgVisible,
+        spritesVisible,
+        bgLeftmost,
+        spritesLeftmost,
+        grayscale,
+        emphasis,
+      },
+      ppustatus: {
+        hex: "0x" + ppustatus.toString(16).toUpperCase().padStart(2, "0"),
+        spriteOverflow,
+        sprite0Hit,
+        vblank,
+      },
+      oamaddr: "0x" + oamaddr.toString(16).toUpperCase().padStart(2, "0"),
+      activeBgPatternBank: bgPatternBank,
+      activeSpritePatternBank: spritePatternBank,
+      activeNametable: baseNametable,
+      chrFileOffsetForActiveBgBank: bgChrFileOffset,
+      chrFileOffsetForActiveSpriteBank: spriteChrFileOffset,
+      mapper: mapperNum,
+    },
+    summary,
+  };
+}
+
+/**
+ * SNES rendering-context decoder. Reads INIDISP/BGMODE/BG?SC/BG?NBA/OBSEL
+ * from snes9x's CGRAM-adjacent register block to derive active BG tile
+ * data + tilemap addresses per layer and OBJ tile base. NOT YET WIRED — the
+ * snes9x patch exposes CGRAM/OAM/ARAM/FillRAM but not the PPU register
+ * shadows. Same call shape will work once a snes_ppu_regs region is added.
+ */
+function snesContext(host, area) {
+  // snes9x exposes OAM, CGRAM, ARAM, FillRAM, and VRAM — but NOT the PPU
+  // register file ($2100-$213F), which is write-only and not mirrored in
+  // any readable struct. So we can't auto-report the BG mode / tilemap base
+  // / character base the way NES/GB/Genesis do. Instead of throwing (a dead
+  // tool), we report what IS observable and tell the agent exactly which
+  // params inspectBackgroundMap / inspectPatternTiles need.
+  const cgram = host.readMemory("snes_cgram", 0, 512);
+  const oam = host.readMemory("snes_oam", 0, 544);
+  const vram = host.readMemory("video_ram", 0, 0x10000);
+
+  // How much CGRAM / VRAM is non-zero — a cheap "has the game set things up
+  // yet?" signal so the agent knows whether to step more frames.
+  const cgramNonZero = cgram.some((b) => b !== 0);
+  let vramNonZero = 0;
+  for (let i = 0; i < vram.length; i++) if (vram[i] !== 0) vramNonZero++;
+  // Count visibly-onscreen sprites.
+  let onscreenSprites = 0;
+  for (let i = 0; i < 128; i++) {
+    const y = oam[i * 4 + 1];
+    if (y < 0xE0) onscreenSprites++;
+  }
+
+  const summary = [];
+  if (area === "all" || area === "bg") {
+    summary.push(
+      "SNES BG state: snes9x does NOT expose the PPU registers ($2100-$213F, write-only), " +
+      "so the BG mode, tilemap base (BGxSC) and character base (BGxNBA) can't be read back. " +
+      "To inspect a BG, call inspectBackgroundMap({platform:'snes', tilemapBaseByte, tileBaseByte, bpp, mapWidth, mapHeight}) " +
+      "with the addresses your game/SDK uses (PVSnesLib Mode 1 BG1 is 4bpp). " +
+      "inspectPatternTiles({platform:'snes', tileBaseByte, bpp}) renders the VRAM tile sheet."
+    );
+    summary.push(
+      `VRAM has ${vramNonZero} non-zero bytes / 65536 — ${vramNonZero === 0 ? "EMPTY (step more frames; the game hasn't uploaded tiles yet)" : "populated"}. ` +
+      `CGRAM (palette) is ${cgramNonZero ? "set" : "all zero (no palette uploaded yet — step more frames)"}.`
+    );
+  }
+  if (area === "all" || area === "sprites") {
+    summary.push(
+      `OAM: ${onscreenSprites} of 128 sprites are on-screen (Y<0xE0). ` +
+      `Call inspectSprites({platform:'snes'}) for the full decoded list (OBJ sizes assume the common 8×8/16×16 pair — OBSEL isn't readable).`
+    );
+  }
+  if (area === "all") {
+    summary.push(
+      "Readable SNES regions: snes_cgram (512B palette), snes_oam (544B), video_ram (64KB VRAM), " +
+      "snes_aram (64KB SPC700), snes_fillram (32KB DMA/PPU shadow — but the PPU regs in it are not " +
+      "reliably populated by snes9x). For CPU/audio state use getCPUState / getAudioState."
+    );
+  }
+
+  return {
+    platform: "snes",
+    area,
+    snes: {
+      ppuRegistersAvailable: false,
+      ppuRegistersNote: "snes9x does not expose $2100-$213F in a readable region; BG mode / tilemap base / char base must be supplied by the caller.",
+      cgramPopulated: cgramNonZero,
+      vramNonZeroBytes: vramNonZero,
+      onscreenSprites,
+      readableRegions: ["snes_cgram", "snes_oam", "video_ram", "snes_aram", "snes_fillram"],
+      hint: {
+        inspectBackgroundMap: "pass tilemapBaseByte, tileBaseByte, bpp (4 for Mode 1 BG1/BG2, 2 for BG3), mapWidth, mapHeight",
+        inspectPatternTiles: "pass tileBaseByte, bpp, paletteBase",
+      },
+    },
+    summary,
+  };
+}
+
+/**
+ * Genesis / Mega Drive rendering context decoder. Reads the 32-byte
+ * genesis_vdp_regs region (gpgx mirror of the VDP's write-only register
+ * file) and decodes plane A/B/window name-table bases, sprite-attribute
+ * table base, h-scroll table base, plane size, backdrop, and display mode.
+ *
+ * Unlike the NES, the Genesis has no "CHR bank" — tiles are addressed by
+ * a flat 11-bit index into VRAM (tileIndex × 32 bytes). So the useful
+ * answer here is WHERE each plane's name table lives and how big the
+ * plane is, which is exactly what inspectBackgroundMap consumes.
+ */
+async function genesisContext(host, area) {
+  const regs = host.readMemory("genesis_vdp_regs", 0, 32);
+  const { decodeVDPRegs } = await import("../../platforms/genesis/vdp.js");
+  const vdp = decodeVDPRegs(regs);
+  const { wCells, hCells } = vdp.planeSize;
+  const hx = (n) => "$" + n.toString(16).toUpperCase().padStart(4, "0");
+
+  const summary = [];
+  if (area === "all" || area === "bg") {
+    summary.push(
+      `Plane A name table: ${hx(vdp.nameTableA)} (VRAM). ` +
+      `Plane B name table: ${hx(vdp.nameTableB)}. ` +
+      `Plane size: ${wCells}×${hCells} cells (${wCells * 8}×${hCells * 8}px). ` +
+      `Window plane name table: ${hx(vdp.nameTableW)}.`
+    );
+    summary.push(
+      `Tiles are a flat 11-bit index into VRAM (tile N = VRAM offset 0x${(0).toString(16)} + N×32, 4bpp). ` +
+      `There is no CHR bank — a name-table entry's low 11 bits ARE the VRAM tile address. ` +
+      `Use inspectBackgroundMap({plane:'A'|'B'}) to render either plane's composite.`
+    );
+  }
+  if (area === "all" || area === "sprites") {
+    summary.push(
+      `Sprite attribute table (SAT): ${hx(vdp.spriteTable)} (VRAM, 80 entries × 8 bytes). ` +
+      `Use inspectSprites() to decode it.`
+    );
+  }
+  if (area === "all") {
+    summary.push(
+      `H-scroll table: ${hx(vdp.hScrollTable)}. ` +
+      `Backdrop color: palette ${vdp.bgColor.palette}, index ${vdp.bgColor.index}.`
+    );
+    summary.push(
+      `Display ${vdp.displayEnabled ? "ENABLED" : "OFF"}, mode ${vdp.hMode}/${vdp.vMode}, ` +
+      `vblank IRQ ${vdp.vblankInt ? "on" : "off"}, hblank IRQ ${vdp.hblankInt ? "on" : "off"}. ` +
+      `(${vdp.mode5 ? "Mode 5 — Genesis native" : "Mode 4 — SMS-compat"}.)`
+    );
+    summary.push(
+      "NOTE: gpgx snapshots the VDP register file at save-state time. Step the " +
+      "ROM past startup (stepFrames(120)+) before calling — power-on register " +
+      "state won't match what the title screen renders."
+    );
+  }
+
+  return {
+    platform: "genesis",
+    area,
+    genesis: {
+      displayEnabled: vdp.displayEnabled,
+      hMode: vdp.hMode,
+      vMode: vdp.vMode,
+      mode: vdp.mode5 ? "mode5" : "mode4",
+      vblankInt: vdp.vblankInt,
+      hblankInt: vdp.hblankInt,
+      extInt: vdp.extInt,
+      planeA: { nameTableBase: hx(vdp.nameTableA), nameTableBaseDec: vdp.nameTableA },
+      planeB: { nameTableBase: hx(vdp.nameTableB), nameTableBaseDec: vdp.nameTableB },
+      window: { nameTableBase: hx(vdp.nameTableW), nameTableBaseDec: vdp.nameTableW },
+      planeSize: { wCells, hCells, widthPx: wCells * 8, heightPx: hCells * 8 },
+      spriteAttrTableBase: hx(vdp.spriteTable),
+      spriteAttrTableBaseDec: vdp.spriteTable,
+      hScrollTableBase: hx(vdp.hScrollTable),
+      hScrollTableBaseDec: vdp.hScrollTable,
+      backdrop: vdp.bgColor,
+      vramRegion: "video_ram",
+    },
+    summary,
+  };
+}
+
+/**
+ * SMS / Game Gear context decoder. Reads sms_vdp_regs (16 bytes) and
+ * produces structured + summary output.
+ */
+async function smsContext(host, area, platform) {
+  const regs = host.readMemory("sms_vdp_regs", 0, 16);
+  const { decodeSmsVdpRegs } = await import("../../platforms/sms/vdp.js");
+  const vdp = decodeSmsVdpRegs(regs);
+
+  const summary = [];
+  if (area === "all" || area === "bg") {
+    summary.push(
+      `BG tile data base: ${vdp.bgTileDataBase} (VRAM offset 0x${vdp.bgTileDataBaseDec.toString(16).toUpperCase()}). ` +
+      `BG tiles 0..255 live here.`
+    );
+    summary.push(
+      `Name table base: ${vdp.nameTableBase} (VRAM offset 0x${vdp.nameTableBaseDec.toString(16).toUpperCase()}).`
+    );
+  }
+  if (area === "all" || area === "sprites") {
+    summary.push(
+      `Sprite tile data base: ${vdp.spriteTileDataBase} (VRAM offset 0x${vdp.spriteTileDataBaseDec.toString(16).toUpperCase()}). ` +
+      `Sprite size ${vdp.mode2.spriteSize8x16 ? "8x16" : "8x8"}${vdp.mode2.spriteMag2x ? ", 2x magnification" : ""}.`
+    );
+    summary.push(
+      `Sprite attribute table (SAT): ${vdp.spriteAttrTableBase} (VRAM offset 0x${vdp.spriteAttrTableBaseDec.toString(16).toUpperCase()}).`
+    );
+  }
+  if (area === "all") {
+    summary.push(
+      `BG scroll: (${vdp.bgScrollX}, ${vdp.bgScrollY}). ` +
+      `Display ${vdp.mode2.displayEnabled ? "ENABLED" : "OFF"}, vblank IRQ ${vdp.mode2.vblankInterruptEnable ? "on" : "off"}.`
+    );
+  }
+
+  return {
+    platform,
+    area,
+    sms: {
+      ...vdp,
+      // VRAM offset is the file/ram offset the agent can pass to readMemory("sms_vram").
+      // Direct splice targets:
+      vramRegionForBgTiles: platform === "gg" ? "gg_vram" : "sms_vram",
+      vramRegionForSpriteTiles: platform === "gg" ? "gg_vram" : "sms_vram",
+    },
+    summary,
+  };
+}
+
+/**
+ * GB / GBC rendering context decoder. Reads gb_io (128 B at $FF00-$FF7F)
+ * and produces structured + summary output.
+ */
+async function gbContext(host, area, platform) {
+  const io = host.readMemory("gb_io", 0, 0x80);
+  const { decodeLcdc } = await import("../../platforms/gb/ppu.js");
+  const lcdc = decodeLcdc(io[0x40]);
+  const stat = io[0x41];
+  const scy = io[0x42];
+  const scx = io[0x43];
+  const ly = io[0x44];
+  const lyc = io[0x45];
+  const wy = io[0x4A];
+  const wx = io[0x4B];
+  const bgp = io[0x47];
+  const obp0 = io[0x48];
+  const obp1 = io[0x49];
+  // GBC extras
+  const vbk = io[0x4F] & 0x01;        // current VRAM bank
+  const key1 = io[0x4D];               // double-speed switch ($FF4D)
+  const bgpi = io[0x68];               // BG palette index/auto-increment
+  const obpi = io[0x6A];               // OBJ palette index/auto-increment
+  const isCgb = platform === "gbc";
+
+  const summary = [];
+  if (area === "all" || area === "bg") {
+    summary.push(
+      `BG tile data: ${lcdc.bgTileDataBase} (${lcdc.bgTileDataMode === "8000_unsigned" ? "unsigned indexing — 256 tiles 0..255" : "signed indexing — tile id is int8, so 0..127 maps to $9000+, 128..255 to $8800+"}).`
+    );
+    summary.push(
+      `BG tile map: ${lcdc.bgTileMapBase} (32×32 = 1024 byte indices). BG ${lcdc.bgEnable ? "visible" : "OFF"}, scroll (${scx}, ${scy}).`
+    );
+  }
+  if (area === "all" || area === "sprites") {
+    summary.push(
+      `Sprites ${lcdc.spritesEnable ? "visible" : "OFF"}, size ${lcdc.spriteSize8x16 ? "8x16" : "8x8"}. ` +
+      `Sprite tile data is always at $8000 (unsigned).`
+    );
+  }
+  if (area === "all" || area === "window") {
+    summary.push(
+      `Window ${lcdc.windowEnable ? "visible" : "OFF"} at tile map ${lcdc.windowTileMapBase}, position (${wx}, ${wy}). ` +
+      `WX is offset by 7 — WX=7 means window starts at screen x=0.`
+    );
+  }
+  if (area === "all") {
+    summary.push(
+      `LCD ${lcdc.lcdEnable ? "ENABLED" : "OFF"}. Currently scanning LY=${ly}` +
+      (lyc !== 0 ? ` (LYC=${lyc} ${ly === lyc ? "MATCH" : "no match"})` : "") +
+      `. STAT=0x${stat.toString(16).toUpperCase().padStart(2, "0")}.`
+    );
+    if (isCgb) {
+      const speed = (key1 & 0x80) ? "double-speed (CGB)" : "normal";
+      summary.push(`GBC: VRAM bank ${vbk} active, ${speed} mode${(key1 & 0x01) ? " — speed switch pending" : ""}.`);
+      summary.push(`GBC BG palette index: $${bgpi.toString(16).toUpperCase().padStart(2, "0")} (auto-inc ${(bgpi & 0x80) ? "on" : "off"}). OBJ palette index: $${obpi.toString(16).toUpperCase().padStart(2, "0")}.`);
+    }
+  }
+
+  return {
+    platform,
+    area,
+    gb: {
+      lcdc,
+      stat: "0x" + stat.toString(16).toUpperCase().padStart(2, "0"),
+      scrollX: scx,
+      scrollY: scy,
+      ly,
+      lyc,
+      windowY: wy,
+      windowX: wx,
+      palettes: isCgb
+        ? { mode: "cgb", bgpi, obpi, vramBank: vbk }
+        : { mode: "dmg", bgp, obp0, obp1 },
+      ...(isCgb ? { key1: { hex: "0x" + key1.toString(16).toUpperCase().padStart(2, "0"), doubleSpeed: !!(key1 & 0x80), switchArmed: !!(key1 & 0x01) } } : {}),
+    },
+    summary,
+  };
+}
+
+export async function getRenderingContextCore({ platform, area = "all", sessionKey }) {
+  const host = getHost(sessionKey);
+  const p = platform ?? host.getStatus().platform;
+  switch (p) {
+    case "nes": return nesContext(host, area);
+    case "snes": return snesContext(host, area);
+    case "genesis":
+    case "megadrive":
+    case "md": return genesisContext(host, area);
+    case "gb":
+    case "gbc": return gbContext(host, area, p);
+    case "sms":
+    case "gg": return smsContext(host, area, p);
+    case "atari2600":
+    case "a2600": return atari2600Context(host, area);
+    case "atari7800":
+    case "a7800": return atari7800Context(host, area);
+    case "c64":   return c64Context(host, area);
+    default:
+      throw new Error(
+        `getRenderingContext: unknown platform '${p}'. Supported: nes, snes, genesis, gb, gbc, sms, gg, atari2600, atari7800, c64.`
+      );
+  }
+}
+
+async function c64Context(host, area) {
+  const { decodeViciiRegs, decodeSprites } = await import("../../platforms/c64/vic.js");
+  const regs = host.readMemory("c64_vic_regs", 0, 0x2F);
+  const vic = decodeViciiRegs(regs);
+  const sprites = decodeSprites(regs);
+  // IO port at $0001 controls ROM banking. CIA2 PA bits 0-1 select VIC bank.
+  const ioPort = host.readMemory("system_ram", 1, 1)[0];
+  const cia2 = host.readMemory("c64_cia2_regs", 0, 16);
+  const vicBank = (~cia2[0]) & 0x03;            // CIA2 PA bits 0-1 (inverted)
+  const vicBankBase = vicBank * 0x4000;
+  // Resolve absolute addresses from the VIC-bank-relative base.
+  const screenRamAbs = vicBankBase + parseInt(vic.memPointers.screenRamBaseInVicBank.replace("$", ""), 16);
+  const charBaseAbs  = vicBankBase + parseInt(vic.memPointers.charBaseInVicBank.replace("$", ""), 16);
+  const summary = {
+    screenOn: vic.ctrl1.screenOn,
+    mode: vic.ctrl1.bitmapMode
+      ? (vic.ctrl2.multicolorMode ? "multicolor-bitmap" : "hires-bitmap")
+      : (vic.ctrl1.extendedColorMode ? "extended-bg-text"
+          : vic.ctrl2.multicolorMode ? "multicolor-text" : "standard-text"),
+    cols: vic.ctrl2.cols40 ? 40 : 38,
+    rows: vic.ctrl1.rows25 ? 25 : 24,
+    scroll: { x: vic.ctrl2.xScroll, y: vic.ctrl1.yScroll },
+    border: vic.borderColor,
+    background: vic.backgroundColor,
+    rasterLine: vic.rasterLine,
+    spritesEnabled: sprites.filter((s) => s.visible).length,
+  };
+  return {
+    platform: "c64",
+    area,
+    c64: {
+      vic,
+      sprites,
+      memory: {
+        vicBank,
+        vicBankBase: "$" + vicBankBase.toString(16).toUpperCase().padStart(4, "0"),
+        screenRamAbs: "$" + screenRamAbs.toString(16).toUpperCase().padStart(4, "0"),
+        charBaseAbs:  "$" + charBaseAbs.toString(16).toUpperCase().padStart(4, "0"),
+        ioPortHex:    "0x" + ioPort.toString(16).toUpperCase().padStart(2, "0"),
+        kernalVisible: !!(ioPort & 0x02),
+        basicVisible:  !!(ioPort & 0x01),
+        charRomVisible: !(ioPort & 0x04),   // CHAREN=0 → char ROM at $D000
+      },
+    },
+    summary,
+  };
+}
+
+/**
+ * Atari 2600 rendering context — TIA snapshot decoded into structured form.
+ * The 2600 has no persistent "rendering setup" the way other platforms do;
+ * the kernel re-writes TIA per scanline. This is a moment-in-time snapshot.
+ */
+async function atari2600Context(host, area) {
+  const { snapshotTia } = await import("../../platforms/atari2600/tia.js");
+  const tia = snapshotTia(host);
+  const summary = [];
+  if (area === "all" || area === "bg") {
+    summary.push(
+      `Playfield colors: PF=${tia.colors.pf.hex}, BK=${tia.colors.bk.hex}. ` +
+      `Pattern (20 cols): 0x${tia.playfield.pattern20bit.toString(16).toUpperCase().padStart(5, "0")}. ` +
+      `Reflection: ${tia.ctrlpf.reflect ? "ON" : "off"}, score mode: ${tia.ctrlpf.score ? "ON" : "off"}.`
+    );
+  }
+  if (area === "all" || area === "sprites") {
+    summary.push(
+      `Player 0: gfx=${tia.sprites.p0.graphicsBin}, color=${tia.colors.p0.hex}, ` +
+      `${tia.sprites.p0.reflected ? "reflected, " : ""}HM=${tia.sprites.p0.horizMotion}. ` +
+      `NUSIZ0=${tia.nusiz0.playerCopies}.`
+    );
+    summary.push(
+      `Player 1: gfx=${tia.sprites.p1.graphicsBin}, color=${tia.colors.p1.hex}, ` +
+      `${tia.sprites.p1.reflected ? "reflected, " : ""}HM=${tia.sprites.p1.horizMotion}. ` +
+      `NUSIZ1=${tia.nusiz1.playerCopies}.`
+    );
+    summary.push(
+      `Missiles: M0=${tia.sprites.missile0.enabled ? "on" : "off"}, ` +
+      `M1=${tia.sprites.missile1.enabled ? "on" : "off"}; ball=${tia.sprites.ball.enabled ? "on" : "off"}.`
+    );
+  }
+  if (area === "all") {
+    summary.push(
+      `VSYNC ${tia.vsync ? "active" : "off"}, VBLANK disable=${tia.vblank.disable ? "on" : "off"}. ` +
+      `Audio ch0: ctrl=${tia.audio.ch0.control}/freq=${tia.audio.ch0.frequency}/vol=${tia.audio.ch0.volume}, ` +
+      `ch1: ctrl=${tia.audio.ch1.control}/freq=${tia.audio.ch1.frequency}/vol=${tia.audio.ch1.volume}.`
+    );
+    summary.push(
+      "NOTE: 2600 'rendering state' is per-scanline. The kernel changes TIA " +
+      "registers as the beam scans — this is the state at the moment of " +
+      "capture, not the per-frame composition. To watch a specific scanline, " +
+      "pause + step + sample at that beam position."
+    );
+  }
+  return { platform: "atari2600", area, atari2600: tia, summary };
+}
+
+/**
+ * Atari 7800 rendering context — MARIA registers decoded.
+ */
+async function atari7800Context(host, area) {
+  const { decodeMariaRegs } = await import("../../platforms/atari7800/maria.js");
+  const ram = host.readMemory("system_ram", 0x0020, 0x20);
+  const maria = decodeMariaRegs(ram);
+  // DPP (display list pointer) at $84/$85.
+  const dpp_ram = host.readMemory("system_ram", 0x0084, 2);
+  const dpp = dpp_ram[0] | (dpp_ram[1] << 8);
+  // CHARBASE at $87.
+  const charBase = host.readMemory("system_ram", 0x0087, 1)[0];
+
+  const summary = [];
+  if (area === "all" || area === "bg") {
+    summary.push(
+      `Background color: ${maria.background.byte.toString(16).toUpperCase().padStart(2, "0")} (RGB ${maria.background.rgb.join("/")}). ` +
+      `8 palettes × 4 colors active. Color 0 of every palette is the background color (shared).`
+    );
+  }
+  if (area === "all" || area === "sprites") {
+    summary.push(
+      `Display list pointer (DPP @ $84/$85): $${dpp.toString(16).toUpperCase().padStart(4, "0")}. ` +
+      `CHARBASE @ $87: $${charBase.toString(16).toUpperCase().padStart(2, "0")} (high byte of character pattern base address). ` +
+      `Sprites are emitted via the display list at this pointer — parse it to enumerate active drawables for the current zone.`
+    );
+  }
+  if (area === "all") {
+    summary.push(
+      `MARIA CTRL ($3C): ${maria.ctrl.hex}. ` +
+      `DMA ${maria.ctrl.dmaDisable ? "DISABLED" : "enabled"}, ` +
+      `${maria.ctrl.colorKill ? "color kill on, " : ""}` +
+      `${maria.ctrl.borderControl}-mode border, ` +
+      `${maria.ctrl.kangarooMode ? "kangaroo mode, " : ""}` +
+      `read mode ${maria.ctrl.readMode}, character width ${maria.ctrl.characterWidth}.`
+    );
+  }
+  return {
+    platform: "atari7800",
+    area,
+    atari7800: {
+      ...maria,
+      dpp: "0x" + dpp.toString(16).toUpperCase().padStart(4, "0"),
+      dppDec: dpp,
+      charBase: "0x" + charBase.toString(16).toUpperCase().padStart(2, "0"),
+    },
+    summary,
+  };
+}
+
+export function registerRenderingContextTools(server, z, sessionKey) {
+  server.tool(
+    "getRenderingContext",
+    "Use this to decode the loaded ROM's current rendering state into structured fields + a plain-English " +
+    "`summary[]`. The big win: it tells you WHICH CHR/tile bank BG and sprites are fetching from right now, " +
+    "plus the file offset ready for patchFile — so you don't patch the wrong half of CHR. (NES decodes " +
+    "PPUCTRL/MASK/STATUS bit-by-bit + derived `chrFileOffsetForActiveBgBank`; for banked mappers, live " +
+    "`readMemory('nes_chr',...)` is authoritative.) GOTCHA: step past startup (stepFrames(120)+) first — " +
+    "power-on PPU state is zeros and won't match the title screen.",
+    {
+      platform: z.string().optional().describe("Override platform; defaults to currently loaded ROM."),
+      area: z.enum(["bg", "sprites", "window", "all"]).default("all").describe("Limit summary to a subset of renderer state."),
+    },
+    safeTool(async (args) => {
+      // sessionKey is captured from the registerRenderingContextTools
+      // closure — pass it through so getRenderingContextCore can resolve
+      // the per-session host (round 26 fix; was `sessionKey is not defined`).
+      const r = await getRenderingContextCore({ ...args, sessionKey });
+      return jsonContent(r);
+    }),
+  );
+}

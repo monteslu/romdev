@@ -1,0 +1,40 @@
+FamiTone2 — NES music driver
+============================
+
+Files in this directory derived from FamiTone2:
+
+  famitone2.s    — the 6502 music engine, verbatim from upstream's
+                   ASM/famitone2.s (ca65-syntax variant).
+  music_data.s   — example track. The bytes are TestMusic3_good.s from
+                   the same upstream repo, retagged with `_music_data:`
+                   so cc65 C code can `extern` it.
+
+Author: Shiru (Eugene Burdykov)
+Upstream: https://github.com/nesdoug/famitone2d
+         (originally hosted at https://shiru.untergrund.net/code.shtml)
+
+Local edits in this bundle:
+  - famitone2.s: FT_DPCM_ENABLE + FT_SFX_ENABLE set to 0 by default
+    to minimize the bundled-driver footprint. Re-enable by editing the
+    top of famitone2.s and supplying matching data + sfx pointers.
+  - music_data.s: top label renamed `TestMusic3_music_data` →
+    `_music_data` + wrapped in `.segment "RODATA"` so the cc65
+    `chr-ram-runtime.cfg` linker can place it in PRG-ROM, and
+    `.export _music_data` so C code can reference it.
+
+License (from upstream license.txt):
+
+  The library is open source and released into the Public Domain. You
+  can use it for any purpose without restrictions: redistribute,
+  modify, use for commercial and non-commercial projects. You may
+  credit the author, inform the author about your project, donate,
+  etc, but nothing is obligatory, you could do it at free will.
+  Obviously, the library provided AS IS without warranties of any
+  kind, the author is not responsible for anything.
+
+  As stated in Shiru's original readme.txt file.
+
+text2data (the host-side .txt → .s converter) is NOT bundled because
+agents driving rom-dev-mcp can either edit music_data.s by hand or
+shell out to the upstream text2data source (text2data.cpp in the same
+repo) if they need full FamiTracker → driver conversion.
