@@ -26,7 +26,7 @@ export const RetroMemory = {
   RTC: 1,
   SYSTEM_RAM: 2,
   VIDEO_RAM: 3,
-  // rom-dev-mcp extensions exposed by our patched cores. These IDs are
+  // romdev extensions exposed by our patched cores. These IDs are
   // honored only by cores we control (fceumm, snes9x, genesis_plus_gx);
   // other cores return null/0 from retro_get_memory_data.
   NES_NAMETABLES:     0x100,

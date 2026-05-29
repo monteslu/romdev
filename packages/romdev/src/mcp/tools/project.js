@@ -908,7 +908,7 @@ TEMPLATES.genesis = {
     runtimeDirs: SGDK_RUNTIME_DIRS,
     lang: SGDK_LANG,
     ext: ".bin",
-    describe: "Two-player competitive shmup via JOY_1 + JOY_2. Each player has their own ship + 4-bullet pool + score. Enemies shared — first to hit scores the 10 points. Designed for the rom-dev-mcp playtest window with two hot-plugged controllers.",
+    describe: "Two-player competitive shmup via JOY_1 + JOY_2. Each player has their own ship + 4-bullet pool + score. Enemies shared — first to hit scores the 10 points. Designed for the romdev playtest window with two hot-plugged controllers.",
   },
 };
 
@@ -1584,9 +1584,9 @@ Compiles **C89**, not C99/C11. Stick to:
   if (tmpl?.linkerConfig) {
     filesSection += `- \`${tmpl.linkerConfig.dst}\` — ld65 linker config (memory layout, segment placement). **You own this.**\n`;
   }
-  filesSection += `\nEvery byte that compiles into your ROM is in this directory. If you move the repo somewhere else, you don't need to install anything from rom-dev-mcp to rebuild it — the compiler binaries are the only external dependency.\n\n`;
+  filesSection += `\nEvery byte that compiles into your ROM is in this directory. If you move the repo somewhere else, you don't need to install anything from romdev to rebuild it — the compiler binaries are the only external dependency.\n\n`;
 
-  const readme = `# ${title ?? name}\n\nA ${lang} project for ${platform}, scaffolded by rom-dev-mcp.\n\n${tmpl?.describe ? tmpl.describe + "\n\n" : ""}${filesSection}${c89Note}## Build + run with rom-dev-mcp\n\n${buildBlock}\n\n## Iterating\n\n- Edit \`${mainFilename}\` (or any of the runtime / crt0 / cfg files — they're yours).\n- Call \`runSource\` to see your changes. It builds + loads + runs + screenshots in one round trip.\n- Inspect at byte level: \`readMemory\`, \`inspectSprites\`, \`inspectPalette\`, \`inspectBackgroundMap({render:true})\`.\n- Open a playtest window for human eyes: \`loadCategory({category:"show"}); playtestStart({});\` — emulator stays live for every other tool.\n`;
+  const readme = `# ${title ?? name}\n\nA ${lang} project for ${platform}, scaffolded by romdev.\n\n${tmpl?.describe ? tmpl.describe + "\n\n" : ""}${filesSection}${c89Note}## Build + run with romdev\n\n${buildBlock}\n\n## Iterating\n\n- Edit \`${mainFilename}\` (or any of the runtime / crt0 / cfg files — they're yours).\n- Call \`runSource\` to see your changes. It builds + loads + runs + screenshots in one round trip.\n- Inspect at byte level: \`readMemory\`, \`inspectSprites\`, \`inspectPalette\`, \`inspectBackgroundMap({render:true})\`.\n- Open a playtest window for human eyes: \`loadCategory({category:"show"}); playtestStart({});\` — emulator stays live for every other tool.\n`;
   await fs.writeFile(path.join(projPath, "README.md"), readme, "utf-8");
   writtenFiles.push("README.md");
 

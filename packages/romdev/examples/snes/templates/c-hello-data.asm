@@ -12,7 +12,7 @@
 ; `.incbin "myfont.pal"`.
 ;
 ; Convert a PNG to .pic + .pal with PVSnesLib's gfx4snes tool (not
-; bundled in rom-dev-mcp yet — pre-convert outside the MCP and ship
+; bundled in romdev yet — pre-convert outside the MCP and ship
 ; the binary artifacts alongside your source).
 
 .include "hdr.asm"

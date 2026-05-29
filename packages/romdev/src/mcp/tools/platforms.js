@@ -41,7 +41,7 @@ const PLATFORM_QUIRKS = {
 export function registerPlatformTools(server, z) {
   server.tool(
     "listPlatforms",
-    "List every retro platform rom-dev-mcp can run. For each platform: emulator core, toolchain(s), the available programming languages (with the documented default), and any platform-specific quirks. Use this first to discover what's possible — and to check whether a non-default language is available before asking buildSource for it.",
+    "List every retro platform romdev can run. For each platform: emulator core, toolchain(s), the available programming languages (with the documented default), and any platform-specific quirks. Use this first to discover what's possible — and to check whether a non-default language is available before asking buildSource for it.",
     {},
     safeTool(async () => {
       const available = new Set(listAvailableCores());

@@ -320,7 +320,7 @@ export async function snapshotPatternTables(host) {
         : true,
     };
   } catch {
-    // Region not exposed by this core (rare; needs the rom-dev-mcp fceumm patch).
+    // Region not exposed by this core (rare; needs the romdev fceumm patch).
   }
 
   // Last resort: nothing we can show.

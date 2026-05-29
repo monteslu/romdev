@@ -5,7 +5,7 @@
  * own score. Enemies are shared — first hit wins the points. Cooperate
  * to survive longer; compete on the score counter.
  *
- * Designed for the rom-dev-mcp playtest window with two USB
+ * Designed for the romdev playtest window with two USB
  * controllers plugged in (R23c hot-plug lands a 2nd pad in port 1).
  * When no second pad is connected, port 2's ship just sits idle — the
  * single-player `shmup` template is still the right pick for that case.

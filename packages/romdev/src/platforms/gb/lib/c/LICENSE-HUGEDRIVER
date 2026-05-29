@@ -18,7 +18,7 @@ domain dedication. We therefore include both:
   - hUGEDriver.{c,h}            A compact SDCC-native rewrite providing the
                                 hUGE_init / hUGE_dosound / hUGE_mute_channel
                                 surface against a simplified song format,
-                                authored from scratch for rom-dev-mcp.
+                                authored from scratch for romdev.
 
 The compact rewrite is independently CC0-dedicated for the same reason —
 no upstream code is copied; it implements a documented public-domain

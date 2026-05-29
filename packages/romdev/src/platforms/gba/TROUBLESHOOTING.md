@@ -120,7 +120,7 @@ write than iprintf the first time but works on real hardware AND mGBA.
 Apt-install devkitPro (`apt install devkitpro-pacman` + `dkp-pacman -S
 gba-dev`), then build your project against THAT libgba.a — which has
 console.c + libsysbase. Works as a fallback if you genuinely need
-iprintf and the above two don't cut it. You lose rom-dev-mcp's zero-
+iprintf and the above two don't cut it. You lose romdev's zero-
 install promise but everything else still works.
 
 R27 (in the deferred-work list in PLAN.md) is to port libsysbase

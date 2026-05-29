@@ -1,6 +1,6 @@
-# rom-dev-mcp — Agent guide
+# romdev — Agent guide
 
-You are reading this because rom-dev-mcp is connected. This is the orientation. Read it once; you won't need to re-read it during a session.
+You are reading this because romdev is connected. This is the orientation. Read it once; you won't need to re-read it during a session.
 
 ## What this server does
 
@@ -518,7 +518,7 @@ OAM format: bytes per sprite are `[y, tileIndex, attributes, x]`.
 
 Three shapes, pick the one that matches what you're doing:
 
-- **`createProject({ platform, name, path, template? })`** — writes a starter directory: `main.{c,asm,s}` (from `examples/<platform>/templates/`) + every runtime file the template depends on (headers, crt0, linker .cfg) + README + `.gitignore`. Self-contained: take it elsewhere and rebuild with stock cc65/sdcc, no rom-dev-mcp install needed. Defaults to `template:"default"` (smallest visible-and-runnable program); most tier-1 platforms also have `hello_sprite` + `tile_engine` + the 5 genre templates.
+- **`createProject({ platform, name, path, template? })`** — writes a starter directory: `main.{c,asm,s}` (from `examples/<platform>/templates/`) + every runtime file the template depends on (headers, crt0, linker .cfg) + README + `.gitignore`. Self-contained: take it elsewhere and rebuild with stock cc65/sdcc, no romdev install needed. Defaults to `template:"default"` (smallest visible-and-runnable program); most tier-1 platforms also have `hello_sprite` + `tile_engine` + the 5 genre templates.
 
 - **`createProject({ ..., withSnippets: true })`** — same as above, **plus** drops every vetted starter snippet for the platform alongside main.c. Use when you want "main.c + every helper file ready to edit" in one shot, without picking a genre. Snippets that overlap with the template's runtime are skipped (no double-writes). Response includes `snippetsCopied: string[]`.
 
@@ -681,7 +681,7 @@ A few platform-tool quirks worth knowing up front:
 
 ## Session continuity — REUSE YOUR SESSION
 
-**MCP sessions on rom-dev-mcp do NOT expire.** They are persistent for
+**MCP sessions on romdev do NOT expire.** They are persistent for
 the lifetime of the server process — which is hours/days, not minutes.
 If you call `initialize` ONCE at conversation start, that same session
 key works for every subsequent tool call all session long.

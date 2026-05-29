@@ -1,6 +1,6 @@
 // Generic file I/O for agent-authored assets.
 //
-// rom-dev-mcp tools can take {outputPath} on the build/patch tools, but
+// romdev tools can take {outputPath} on the build/patch tools, but
 // agents often need to save arbitrary intermediate artifacts: a PNG they
 // generated, a backup of an existing ROM, a notes file, a partial work-
 // in-progress source file. writeAsset / readAsset cover that gap without

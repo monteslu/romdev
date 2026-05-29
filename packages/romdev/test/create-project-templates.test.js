@@ -66,9 +66,9 @@ for (const c of SCAFFOLD_CHECKS) {
       for (const f of c.expectFiles) {
         assert.ok(onDisk.includes(f), `expected ${f} in ${tmp} — got ${onDisk.join(", ")}`);
       }
-      // README should mention rom-dev-mcp + the right toolchain.
+      // README should mention romdev + the right toolchain.
       const readme = readFileSync(path.join(tmp, "README.md"), "utf-8");
-      assert.ok(/rom-dev-mcp/.test(readme), "README missing rom-dev-mcp reference");
+      assert.ok(/romdev/.test(readme), "README missing romdev reference");
       assert.ok(/runSource|buildSource/.test(readme), "README missing build verb");
     } finally {
       rmSync(tmp, { recursive: true, force: true });

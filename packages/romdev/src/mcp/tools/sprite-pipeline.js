@@ -505,7 +505,7 @@ async function crossPlatformSpriteImportImpl(args) {
         };
       }
     }
-    const manifest = { frames, meta: { app: "rom-dev-mcp/crossPlatformSpriteImport", source: sourceRom } };
+    const manifest = { frames, meta: { app: "romdev/crossPlatformSpriteImport", source: sourceRom } };
     await writeFile(outputManifest, JSON.stringify(manifest, null, 2));
     manifestInfo = { path: outputManifest, frames: Object.keys(frames).length };
   }

@@ -1,4 +1,4 @@
-# Building rom-dev-mcp from source
+# Building romdev from source
 
 Single source of truth for: which platforms exist, which cores + toolchains
 they use, where their patches live, which memory-region IDs they own, and
@@ -11,7 +11,7 @@ fill in your row in **§ Platform matrix**.
 
 ## ⚠ READ FIRST — build state as of the monorepo split (2026-05-29)
 
-The project is mid-migration from the single `rom-dev-mcp/` tree to the
+The project is mid-migration from the single `romdev/` tree to the
 **`romdev/` monorepo** (`~/code/cliemu/romdev/`, npm workspaces). This changes
 where built WASM lives, and parts of the sections below describe the OLD layout.
 
@@ -160,7 +160,7 @@ with a clear message if missing.
 
 ## What's bundled
 
-rom-dev-mcp ships **two kinds** of WASM blobs:
+romdev ships **two kinds** of WASM blobs:
 
 1. **Emulator cores** under `src/cores/wasm/` — libretro cores compiled
    to WASM. One core per emulator (e.g. `fceumm_libretro.wasm` for NES,
@@ -707,7 +707,7 @@ away — they exist to produce the above and are never shipped.
    full SGDK runtime INTO the user's project tree (libmd.a + sega.s
    + sega.preprocessed.s + md.ld + rom_header.c + LICENSE + 69
    headers under `include/`), so the project is portable: anyone with
-   `m68k-elf-gcc` installed can rebuild it without rom-dev-mcp. **No
+   `m68k-elf-gcc` installed can rebuild it without romdev. **No
    scripts** in the project — portability is in the directory shape,
    not in a shell file that might not run on Windows.
 

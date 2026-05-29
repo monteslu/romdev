@@ -25,7 +25,7 @@ void main(void) {
 
 async function startServerAndClient() {
   const server = new McpServer(
-    { name: "rom-dev-mcp-test", version: "0.0.1" },
+    { name: "romdev-test", version: "0.0.1" },
     { capabilities: { tools: {} } },
   );
   registerTools(server, z);
@@ -44,7 +44,7 @@ async function startServerAndClient() {
 test("vibe loop: build NES C with cc65, run in fceumm, screenshot", async () => {
   const client = await startServerAndClient();
 
-  const tmp = mkdtempSync(path.join(os.tmpdir(), "rom-dev-nes-"));
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "romdev-nes-"));
   const romPath = path.join(tmp, "hello.nes");
 
   const build = await client.callTool({

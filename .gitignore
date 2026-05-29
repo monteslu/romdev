@@ -16,7 +16,7 @@ node_modules/
 
 # Heavy build workspace — upstream core/compiler source + emscripten
 # intermediates. Reproduced by each package's build recipe; never committed.
-# (The 14GB build/ tree from rom-dev-mcp lives only in the OLD dir; the
+# (The 14GB build/ tree from romdev lives only in the OLD dir; the
 # per-package recipe lives in packages/*/build but its fetched/intermediate
 # artifacts are ignored — only the build SCRIPT + patches are committed.)
 build/

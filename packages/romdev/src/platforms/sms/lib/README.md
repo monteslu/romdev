@@ -1,7 +1,7 @@
 # SMS / Game Gear — quickstart
 
 The compressed version of "everything I had to learn the hard way
-building an SMS ROM with rom-dev-mcp."
+building an SMS ROM with romdev."
 
 ## Language: C is the default
 

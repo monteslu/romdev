@@ -5,7 +5,7 @@
 // sega.s + sega.preprocessed.s crt0, md.ld linker script, rom_header.c)
 // plus the recursive include/ header tree (~70 headers across nested dirs)
 // so the user's project is self-contained — can rebuild on any machine
-// with m68k-elf-gcc installed, no rom-dev-mcp required.
+// with m68k-elf-gcc installed, no romdev required.
 //
 // We assert: main.c lands, the runtime archive is bit-exact (binary-safe
 // copy, not utf-8-mangled), and the recursive include copy gets at least
@@ -27,7 +27,7 @@ const REPO_ROOT = resolve(__dirname, "..", "..", "..");
 const SGDK_LIB = join(REPO_ROOT, "src", "platforms", "genesis", "lib", "sgdk");
 
 test("createProject genesis sgdk_hello: ships full SGDK runtime + include tree", async () => {
-  const projPath = await mkdtemp(join(tmpdir(), "rom-dev-sgdk-create-"));
+  const projPath = await mkdtemp(join(tmpdir(), "romdev-sgdk-create-"));
   const r = await createProjectImpl({
     platform: "genesis",
     name: "sgdk-test",

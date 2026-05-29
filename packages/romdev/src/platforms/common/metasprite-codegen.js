@@ -45,7 +45,7 @@ function emitGenesis(v, layout, tiles, palette) {
     return `  { ${p.x}, ${p.y}, 0x${size.toString(16)}, ${p.tileOffset}, 0x${attr.toString(16).toUpperCase().padStart(4, "0")} }, // slot ${p.slot} ${p.wTiles}x${p.hTiles}`;
   }).join("\n");
   const wrap = (a, n) => { const o = []; for (let i = 0; i < a.length; i += n) o.push("  " + a.slice(i, i + n).join(", ") + ","); return o.join("\n"); };
-  return `// ${v} — Genesis meta-sprite (rom-dev-mcp). ${layout.tileCount} tiles, ${layout.bounds.w}x${layout.bounds.h}px.
+  return `// ${v} — Genesis meta-sprite (romdev). ${layout.tileCount} tiles, ${layout.bounds.w}x${layout.bounds.h}px.
 #ifndef ${v.toUpperCase()}_H
 #define ${v.toUpperCase()}_H
 #include <genesis.h>
@@ -81,7 +81,7 @@ function emitSnes(v, layout, tiles, palette) {
     // wPx/hPx and let the user pick the OBSEL pair; flip bits in attr.
     return `  { ${p.x}, ${p.y}, ${p.wPx}, ${p.hPx}, ${p.tileOffset}, ${p.palette}, ${p.priority ? 1 : 0}, ${p.flipH ? 1 : 0}, ${p.flipV ? 1 : 0} }, // slot ${p.slot}`;
   }).join("\n");
-  return `// ${v} — SNES meta-sprite (rom-dev-mcp). ${layout.tileCount} 4bpp tiles, ${layout.bounds.w}x${layout.bounds.h}px.
+  return `// ${v} — SNES meta-sprite (romdev). ${layout.tileCount} 4bpp tiles, ${layout.bounds.w}x${layout.bounds.h}px.
 // Upload ${v}_tiles to OBJ VRAM, ${v}_palette to a CGRAM OBJ line, then draw.
 #ifndef ${v.toUpperCase()}_H
 #define ${v.toUpperCase()}_H
@@ -109,7 +109,7 @@ function emitNes(v, layout, tiles, palette) {
       cells.push(`  { ${p.x + c * 8}, ${p.y + r * 8}, ${p.tileOffset + r * p.wTiles + c}, 0x${attr.toString(16).padStart(2, "0")} },`);
     }
   }
-  return `// ${v} — NES meta-sprite (rom-dev-mcp). ${layout.tileCount} 2bpp CHR tiles.
+  return `// ${v} — NES meta-sprite (romdev). ${layout.tileCount} 2bpp CHR tiles.
 // Inject ${v}_chr into CHR (or CHR-RAM); copy ${v}_cells into shadow OAM at runtime.
 #ifndef ${v.toUpperCase()}_H
 #define ${v.toUpperCase()}_H
@@ -135,7 +135,7 @@ function emitGb(v, layout, tiles, palette) {
       cells.push(`  { ${p.x}, ${p.y + r * 8}, ${p.tileOffset + r}, 0x${attr.toString(16).padStart(2, "0")} },`);
     }
   }
-  return `// ${v} — GB/GBC meta-sprite (rom-dev-mcp). ${layout.tileCount} 2bpp tiles.
+  return `// ${v} — GB/GBC meta-sprite (romdev). ${layout.tileCount} 2bpp tiles.
 // Copy ${v}_tiles to VRAM $8000+; copy ${v}_cells into shadow OAM ($C000-ish) then DMA.
 #ifndef ${v.toUpperCase()}_H
 #define ${v.toUpperCase()}_H
@@ -158,7 +158,7 @@ function emitSms(v, layout, tiles, palette, platform) {
   for (const p of layout.pieces) {
     for (let r = 0; r < p.hTiles; r++) cells.push(`  { ${p.x}, ${p.y + r * 8}, ${p.tileOffset + r} },`);
   }
-  return `// ${v} — ${platform.toUpperCase()} meta-sprite (rom-dev-mcp). ${layout.tileCount} 4bpp tiles.
+  return `// ${v} — ${platform.toUpperCase()} meta-sprite (romdev). ${layout.tileCount} 4bpp tiles.
 // Upload ${v}_tiles to sprite tile data base; write ${v}_cells into the SAT.
 #ifndef ${v.toUpperCase()}_H
 #define ${v.toUpperCase()}_H
@@ -176,7 +176,7 @@ const unsigned char ${v}_cell_count = ${cells.length};
 }
 
 function emitGeneric(v, layout, tiles) {
-  return `// ${v} — meta-sprite (rom-dev-mcp), platform ${layout.platform}.
+  return `// ${v} — meta-sprite (romdev), platform ${layout.platform}.
 const unsigned char ${v}_tiles[${tiles.length}] = {
 ${chunk(tiles)}
 };

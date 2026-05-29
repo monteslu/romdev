@@ -13,7 +13,7 @@
  *   - Ball off either side increments opponent's score + respawns
  *     toward the loser
  *
- * Designed for the rom-dev-mcp playtest window with hot-plugged
+ * Designed for the romdev playtest window with hot-plugged
  * controllers — plug in a second pad mid-session and player 2
  * just starts working without a restart.
  */

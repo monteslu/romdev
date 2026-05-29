@@ -406,7 +406,7 @@ export function runM68kdasm({ bytes, startAddress, addComments = true }) {
   }
 
   const lines = [
-    "; m68kdasm (rom-dev-mcp built-in)",
+    "; m68kdasm (romdev built-in)",
     "; Input bytes: " + bytes.length,
     "",
     "        .setcpu \"68000\"",

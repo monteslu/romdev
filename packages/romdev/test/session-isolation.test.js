@@ -30,7 +30,7 @@ const HAS_NESTEST = existsSync(ROM_PATH);
 
 async function startSession() {
   const server = new McpServer(
-    { name: "rom-dev-mcp-test-iso", version: "0.0.1" },
+    { name: "romdev-test-iso", version: "0.0.1" },
     { capabilities: { tools: {} } },
   );
   // registerTools with no sessionKey mints a fresh one — each call gets

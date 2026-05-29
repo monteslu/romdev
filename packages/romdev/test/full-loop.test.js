@@ -8,7 +8,7 @@
 //   5. Verify a framebuffer was produced.
 //
 // This is the highest-confidence single test in the suite — when it passes,
-// rom-dev-mcp can build, run, and observe a ROM end-to-end for every
+// romdev can build, run, and observe a ROM end-to-end for every
 // platform it claims to support.
 
 import { test } from "node:test";
@@ -59,7 +59,7 @@ for (const c of cases) {
     assert.ok(build.binary && build.binary.length > 0);
 
     // 2. Write ROM to a temp file (libretro cores generally want path-on-disk).
-    const tmp = await mkdtemp(path.join(os.tmpdir(), `rom-dev-fl-${c.platform}-`));
+    const tmp = await mkdtemp(path.join(os.tmpdir(), `romdev-fl-${c.platform}-`));
     const ext = c.platform === "snes" ? ".sfc"
               : c.platform === "genesis" ? ".bin"
               : c.platform === "gb" ? ".gb"

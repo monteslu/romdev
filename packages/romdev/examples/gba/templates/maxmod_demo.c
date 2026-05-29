@@ -9,7 +9,7 @@
  *   3. Call mmFrame() once per frame (anywhere outside the IRQ).
  *   4. mmStart(MOD_<NAME>_FROM_HEADER, mode) to begin playback.
  *
- * Build via rom-dev-mcp:
+ * Build via romdev:
  *   buildSource({
  *     platform: "gba",
  *     language: "c",

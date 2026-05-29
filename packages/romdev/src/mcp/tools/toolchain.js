@@ -120,7 +120,7 @@ function describeRomLayout(platform, bin) {
 export function registerToolchainTools(server, z, sessionKey) {
   server.tool(
     "listToolchains",
-    "List all homebrew toolchains rom-dev-mcp ships with. Tier-1 toolchains are bundled WASM (no install required).",
+    "List all homebrew toolchains romdev ships with. Tier-1 toolchains are bundled WASM (no install required).",
     {},
     safeTool(async () => {
       return jsonContent({
@@ -307,7 +307,7 @@ export function registerToolchainTools(server, z, sessionKey) {
           finalPath = outputPath;
         } else if (!inline) {
           // Default: write to a temp file so the response stays tiny.
-          const tmpDir = await mkdtemp(path.join(tmpdir(), "rom-dev-"));
+          const tmpDir = await mkdtemp(path.join(tmpdir(), "romdev-"));
           finalPath = path.join(tmpDir, "out.bin");
           await writeFile(finalPath, result.binary);
         }

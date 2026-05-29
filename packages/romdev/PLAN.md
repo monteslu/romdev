@@ -1,4 +1,4 @@
-# rom-dev-mcp — Plan
+# romdev — Plan
 
 A Node.js MCP server that gives coding agents (Claude, Codex) full control of homebrew ROM development across retro platforms by hosting libretro cores compiled to WASM.
 
@@ -111,7 +111,7 @@ Reorganize toward a clean published tree. Goal: the npm `files` whitelist ships 
 - **`platform-src/`** — the per-platform code examples + bundled SDK/runtime source + starter snippets that agents read and scaffold from (today's `examples/` + `src/platforms/*/lib`). Shipped because the R58 "agents grep their way out of corner cases" model depends on it being present in the install.
 - **WASM blobs** — cores (`*_libretro.wasm`) + toolchains (cc1/sdcc/asar/etc.). The heavy bits. Ship as-is (gzip-on-the-wire handles compression); only special-case the 135 MB file if the registry requires it.
 - **Build inputs stay OUT.** `build/` (14 GB of upstream core/toolchain source trees) is dev-only, never published — already excluded. Tests excluded via the `files` glob.
-- **Fix `package.json`:** `bin` still says `rom-dev-mcp`/`rom-dev-cli` — rename the primary bin to **`romdev`** so `npx romdev` works.
+- **Fix `package.json`:** `bin` still says `romdev`/`romdev-cli` — rename the primary bin to **`romdev`** so `npx romdev` works.
 - **⚠ The WASM blobs are NOT tracked in git** (verified 2026-05-28: `git ls-files src/cores/wasm` is empty; only `build/` and `src/toolchains/*/install/` are gitignored, but the committed-artifact `.wasm` were apparently never `git add`ed). `npm pack` ships from the working tree, so a publish from THIS machine would include them — but **a publish from a clean CI checkout (D5) would ship a package with no cores/toolchains = totally broken.** Resolve before any CI publish: either (a) commit the WASM artifacts to git (simplest, but adds ~210 MB to the repo + bloats clones), (b) use git-LFS for them, or (c) have the release job fetch/restore them from a GitHub Release artifact before `npm publish`. This is a launch-blocking decision, not a detail.
 
 ### Cross-platform / cross-arch — mostly free, two caveats
@@ -142,7 +142,7 @@ The player builds nothing (`npx romdev`). But the *build* audience — us + occa
 - [ ] **D1 — Strip dead weight.** Audit `src/toolchains/**` for libs/artifacts of unsupported platforms (cc65 Apple/GEOS/Atari-8bit `.lib`s first). Re-measure. Update the stale README size claim with real numbers.
 - [ ] **D2 — `npm publish --dry-run` + `npm pack`, inspect the tarball.** Confirm: (a) the WASM is actually in the tarball (it's NOT in git — see the ⚠ above — so this verifies the working-tree publish path), (b) `build/`+tests excluded, (c) the 135 MB cc1-arm.wasm is accepted (or plan the split). Single highest-information cheap step — **do it first.**
 - [ ] **D2b — Decide how WASM artifacts reach a CI publish** (commit / git-LFS / fetch-from-release). Launch-blocking for D5; without it, CI publishes an empty-of-cores package. See the ⚠ in Package layout.
-- [ ] **D3 — Rename the bins to `romdev`** in package.json (both: the MCP server `rom-dev-mcp` → primary `romdev`; the CLI `rom-dev-cli` → keep the `play <rom>`/`identify`/`run` subcommands reachable under `romdev` too, e.g. `romdev play game.gba` — that bonus emulator path already works, just needs the new name). THE acceptance test for the whole rollout: on a clean machine, `npx romdev` (no flags, no prior setup, no custom commands) boots the server AND every platform builds+runs. Verify via `npm pack` → install the tarball in a temp dir → `npx romdev` → exercise one build per platform. If any platform needs an extra command to work, the rollout has failed its north star.
+- [ ] **D3 — Rename the bins to `romdev`** in package.json (both: the MCP server `romdev` → primary `romdev`; the CLI `romdev-cli` → keep the `play <rom>`/`identify`/`run` subcommands reachable under `romdev` too, e.g. `romdev play game.gba` — that bonus emulator path already works, just needs the new name). THE acceptance test for the whole rollout: on a clean machine, `npx romdev` (no flags, no prior setup, no custom commands) boots the server AND every platform builds+runs. Verify via `npm pack` → install the tarball in a temp dir → `npx romdev` → exercise one build per platform. If any platform needs an extra command to work, the rollout has failed its north star.
 - [ ] **D3b — Change-cadence split:** `romdev` keeps ALL the fast-churning content (server, tools, scaffolds, libs, snippets, debug helpers) + hard-deps on the binary packages. The binaries (emulator cores + compiler wasm) move into `@romdev/platform-*` (single-platform binaries) and shared-binary packages (`@romdev/core-gpgx`, `@romdev/toolchain-sdcc`, `-cc65`) per the shared-binary sub-decision above. Each binary package PUBLISHES only the built wasm+glue; its build recipe (patch + build script + emscripten flags) lives in its repo, `.npmignore`'d. Change core/toolchain resolvers from `__dirname/wasm` to `import.meta.resolve`-of-the-dep-package; NO "not installed" UX (hard deps guarantee presence). Each binary package gets its own heavy Emscripten CI (fires on patch/version change only); `romdev` gets the fast `npm test` CI. **Can ship AFTER a monolith launch if time-constrained** — identical install from the user's view.
 - [ ] **D4 — Verify graceful SDL degradation.** Simulate `@kmamal/sdl` install failure; confirm headless server still runs and `playtest()` errors cleanly.
 - [ ] **D5 — Release CI:** GitHub Actions matrix (linux/mac/win, x64/arm64) running `npm test`; publish job on tag. Closes R5.
@@ -179,7 +179,7 @@ Rule for all of these: WASM is already fast enough and the ROM already runs ever
 
 > "Every existing debugger expects a human at the keyboard. Mesen's Lua API, Emulicious's DAP, mGBA's scripting all exist — but no one has wrapped them behind a uniform `runUntil` / `screenshot` / `traceWrite` interface that an LLM agent can call. **That wrapper is the entire moat.**" — research synthesis, 2026-05-23.
 
-rom-dev-mcp's defensibility is being **the** agent-first interface to retro emulation + toolchain — a deliberately designed surface for agents to make games, not "an MCP wrapper around an emulator." **As of v1 that wrapper exists and ships** (build/run/screenshot/inspect/patch across 13 platforms, deep introspection, sound + music, 5 genre scaffolds). The roadmap below is the *optimization* layer on top of that moat, not the moat itself.
+romdev's defensibility is being **the** agent-first interface to retro emulation + toolchain — a deliberately designed surface for agents to make games, not "an MCP wrapper around an emulator." **As of v1 that wrapper exists and ships** (build/run/screenshot/inspect/patch across 13 platforms, deep introspection, sound + music, 5 genre scaffolds). The roadmap below is the *optimization* layer on top of that moat, not the moat itself.
 
 Three sub-theses guide what we add:
 
@@ -362,7 +362,7 @@ Design implication: the harness must support high-frequency calls. `stepFrames(1
 └──────────────────┬──────────────────────────────┘
                    │ MCP (stdio)
 ┌──────────────────▼──────────────────────────────┐
-│ rom-dev-mcp server  (src/mcp)                   │
+│ romdev server  (src/mcp)                   │
 │ tools: loadMedia, stepFrames, screenshot, …     │
 └──────────────────┬──────────────────────────────┘
                    │
@@ -383,7 +383,7 @@ Design implication: the harness must support high-frequency calls. `stepFrames(1
 ### Module layout
 
 ```
-rom-dev-mcp/
+romdev/
 ├── PLAN.md
 ├── README.md
 ├── package.json
@@ -423,7 +423,7 @@ rom-dev-mcp/
 └── test/
 ```
 
-`cache/` is created at runtime under the OS user-data dir (e.g. `~/.local/share/rom-dev-mcp` on Linux) using Node `os.homedir()`. The in-repo `cache/` is only used when developing.
+`cache/` is created at runtime under the OS user-data dir (e.g. `~/.local/share/romdev` on Linux) using Node `os.homedir()`. The in-repo `cache/` is only used when developing.
 
 ### Key types
 
@@ -528,7 +528,7 @@ See `AGENTS.md` for the agent-facing tour of the full surface; `listCategories()
 ### M0 — Survey & scaffolding ✅ done
 
 - [x] Stack decision: Node + WASM (after rejecting Rust + native libretro)
-- [x] Location: `~/code/cliemu/rom-dev-mcp/`
+- [x] Location: `~/code/cliemu/romdev/`
 - [x] Plan + README
 - [x] `package.json`, ESM, `.gitignore`. (No `tsconfig.json` — plain JS chosen.)
 - [x] Captured retroemu + wasmcart-libretro patterns to memory `libretro-wasm-patterns.md`
@@ -614,7 +614,7 @@ Replicate the convenience layers from the historical C SDKs. Each is weeks of wo
 - [x] **C for Genesis end-to-end + SGDK bundled.** (R20, 2026-05-26)
   - **Stage 1 (native bootstrap):** binutils 2.42 → gcc 14.2.0 stage 1 → newlib 4.4.0 → gcc 14.2.0 stage 2 cross-toolchain for `m68k-elf` built natively (script: `scripts/build-m68k-toolchain.sh`). Required newlib patches: `_LDBL_EQ_DBL=1` so libm/complex compiles for m68k (long-double = double on this target), and configure.host swap of `-DHAVE_SYSTEM` for `-DNO_EXEC` so bare-metal m68k doesn't pull in an undefined `_system`. `--disable-libgloss` to skip the sim/io stub libs.
   - **Stage 2 (WASM port):** `cc1` (gcc C frontend, 17.5 MB), `m68k-elf-as` (binutils assembler, 889 KB), `m68k-elf-ld` (linker, 1.2 MB), `m68k-elf-objcopy` (ELF→raw, 681 KB) compiled to WASM via Emscripten with MODULARIZE + EXPORT_ES6 + ALLOW_MEMORY_GROWTH. cc1 needed `INITIAL_MEMORY=128MB` (default 16 MB OOMs immediately on real source). libiberty `psignal` fallback signature clashed with emscripten signal.h; resolved by setting `HAVE_PSIGNAL=1` in libiberty/config.h. gcov-tool depends on `ftw()` which emscripten libc lacks — bypassed by `make cc1` directly instead of `make all-gcc`. Script: `scripts/build-m68k-wasm-tools.sh`. Glue files are `.mjs` (emcc EXPORT_ES6 generates ESM with `import.meta.url`); `wasm-worker.js` updated to accept either `.js` or `.mjs`.
-  - **Stage 3 (SGDK runtime + onramp):** `libmd.a` (2.6 MB, 77 .o files), `sega.s` crt0 (raw original + cpp-preprocessed `sega.preprocessed.s` for the WASM `as` path), `rom_header.c`, `md.ld` linker script, full `include/` header tree (69 headers) bundled under `src/platforms/genesis/lib/sgdk/`. MIT LICENSE + GPL libgcc-runtime-exception COPYING.RUNTIME shipped. `buildGenesisC` has two modes: `sgdk:true` (default, links libmd.a + rom_header.bin + sega.o + libc/libgcc) and `sgdk:false` (minimum-viable: bare main → 256-byte vector + header → raw ROM). New createProject template `genesis/sgdk_hello` ships the full ~3 MB runtime INTO the user's project tree (libmd.a + sega.s/sega.preprocessed.s + md.ld + rom_header.c + LICENSE + 69 SGDK headers) per the project-self-containment policy: a Genesis SGDK project rebuilds on any machine with `m68k-elf-gcc` installed, no rom-dev-mcp required, and contains zero scripts (cross-platform-by-construction). Tests: `genesis-c.test.js`, `sgdk.test.js`, `project-genesis-sgdk.test.js`.
+  - **Stage 3 (SGDK runtime + onramp):** `libmd.a` (2.6 MB, 77 .o files), `sega.s` crt0 (raw original + cpp-preprocessed `sega.preprocessed.s` for the WASM `as` path), `rom_header.c`, `md.ld` linker script, full `include/` header tree (69 headers) bundled under `src/platforms/genesis/lib/sgdk/`. MIT LICENSE + GPL libgcc-runtime-exception COPYING.RUNTIME shipped. `buildGenesisC` has two modes: `sgdk:true` (default, links libmd.a + rom_header.bin + sega.o + libc/libgcc) and `sgdk:false` (minimum-viable: bare main → 256-byte vector + header → raw ROM). New createProject template `genesis/sgdk_hello` ships the full ~3 MB runtime INTO the user's project tree (libmd.a + sega.s/sega.preprocessed.s + md.ld + rom_header.c + LICENSE + 69 SGDK headers) per the project-self-containment policy: a Genesis SGDK project rebuilds on any machine with `m68k-elf-gcc` installed, no romdev required, and contains zero scripts (cross-platform-by-construction). Tests: `genesis-c.test.js`, `sgdk.test.js`, `project-genesis-sgdk.test.js`.
 - [x] **Onramp parity across Genesis / SNES / GB / GBC** (R21, 2026-05-26)
   - **Templates:** added 5 new Genesis SGDK templates (hello_sprite, tile_engine, shmup, platformer, puzzle) on top of the existing sgdk_hello, factored the SGDK runtime bundle to a `SGDK_RUNTIME` constant for clean reuse. Added 4 new SNES PVSnesLib templates (hello_sprite, shmup, platformer, puzzle) with hand-authored 4bpp sprite + palette `.asm` siblings (tcc-65816 is C89, so all declarations live at block top). Added 3 new GB SDCC sm83 templates (shmup, platformer, puzzle) using the same gb_runtime helpers as the existing default/hello_sprite/tile_engine.
   - **createGame:** extended GENRE_MAP from NES-only to **NES + GB + GBC + SNES + Genesis**, all three genres (shmup / platformer / puzzle). The createGame tool description + parameter docs updated to match.
@@ -661,7 +661,7 @@ Replicate the convenience layers from the historical C SDKs. Each is weeks of wo
   - **`language` + `runtime` plumbed through `runSource` schema.** runSource only had a path for buildSource's `language` arg; missing it meant GBA defaulted to "asm" (which we don't wire) and returned "asm path not yet wired". Added schema fields + threaded both to `buildForPlatform`. Plus: the GBA dispatcher in `toolchains/index.js` now defaults `language` to `"c"` when undefined since no asm path exists yet.
   - **`gba_sfx.h` + `gba_sfx.c` audio wrapper.** Minimal DMG-compatible APU wrapper: `sfx_init()` powers up SOUNDSTAT, `sfx_tone(channel, freq_period, length_frames)` triggers a 50% duty square on ch1/ch2 (`REG_SND1CNT`/`REG_SND2CNT`+`REG_SND[12]FREQ`), `sfx_noise(length_frames)` triggers ch4 noise. Channel 3 (wave RAM) + Direct Sound DMA streaming are out of scope (Direct Sound needs a timer + DMA setup + a sample buffer — for music+samples you'd pair with maxmod separately). Matches NES/GB scaffold sound shape so cross-platform game ports feel the same. Bundled into `GBA_LIBTONC_RUNTIME` staging so it lands next to main.c in `createProject` output.
   - **5 GBA genre scaffolds (Tonc-aligned, with sound).** shmup/platformer/puzzle/sports/racing. Each ~150-230 lines. Each uses TTE for text, OBJ_ATTR for sprites, key_poll for input, sfx_init/sfx_tone/sfx_noise for SFX. shmup: pew on A, explosion on bullet-hit. platformer: jump boing + landing thud. puzzle: rotate click + triple-clear chime. sports: paddle hit, wall blip, score chime/buzz. racing: lane-switch beep, crash noise. Plus `tonc_hello_sprite` (sprite + d-pad) for the simplest sprite-loop example.
-  - **The Tonc IRQ trap (caught + fixed in every scaffold).** `VBlankIntrWait()` is a BIOS function that halts the CPU until a vblank IRQ fires. **Without `irq_init(NULL); irq_add(II_VBLANK, NULL);` the BIOS halts forever** — the ROM appears to compile and load but freezes on frame 1. This is the canonical published-tutorial-vs-rom-dev-mcp gotcha; every scaffold (tonc_hello, tonc_hello_sprite, shmup, platformer, puzzle, sports, racing) now sets up IRQs before its main loop. TROUBLESHOOTING.md leads with this.
+  - **The Tonc IRQ trap (caught + fixed in every scaffold).** `VBlankIntrWait()` is a BIOS function that halts the CPU until a vblank IRQ fires. **Without `irq_init(NULL); irq_add(II_VBLANK, NULL);` the BIOS halts forever** — the ROM appears to compile and load but freezes on frame 1. This is the canonical published-tutorial-vs-romdev gotcha; every scaffold (tonc_hello, tonc_hello_sprite, shmup, platformer, puzzle, sports, racing) now sets up IRQs before its main loop. TROUBLESHOOTING.md leads with this.
   - **cc1.wasm rebuilt with `STACK_SIZE=8MB`.** Larger Tonc-using sources (tonc.h umbrella pulls in ~18 headers + TTE + many static inlines) overflow cc1's default 64 KB emscripten stack during LTO. Symptom: `Stack overflow detected. You can try increasing -sSTACK_SIZE (currently set to 65536)` mid-LTO pass + `[worker] Abort in WASM: memory access out of bounds`. Same fix shape we used on SDCC sm83 earlier.
   - **puzzle.c VRAM region disambiguation.** When BG0 grid + TTE BG1 share char-block 0 / screen-block adjacent regions, TTE's init writes wipe the BG0 tile data. Fix: puzzle.c puts BG0 tiles in CBB=3, SBB=28 (well clear of TTE's CBB=2, SBB=30). The other 4 genre scaffolds don't hit this because they use sprites for gameplay (BG0 is only TTE) — no overlap.
   - **README buildBlock for GBA.** `createProject({platform:"gba"})` README now emits a `runSource({sourcesPaths: { main.c, gba_sfx.c }, includePaths: { gba_sfx.h }})` block instead of the single-file default, so users discover the multi-file pattern immediately.
@@ -711,7 +711,7 @@ Replicate the convenience layers from the historical C SDKs. Each is weeks of wo
   - **Applied to:** buildSourceWithDebug (ROM + .dbg/.map + log all gated; debug/log written as siblings of outputPath), readMemory (dropped the duplicate base64 — hex only; ≤4 KB stays inline for ergonomics, >4 KB requires path/inline and writes RAW bytes), disassemble, convertImageToTiles, extractCart (flipped to require outputDir), recordSession (per-frame PNGs to outputDir), starterSnippets(getAll), build logs on buildSource/runSource/buildProject (large log → sibling `.build.log` + tail), and the image tools screenshot / stepAndScreenshot / inspectPatternTiles / inspectPalette / inspectSprites / inspectBackgroundMap / previewVisibleSprites. readAsset got a cap-tighten (1 MB → 64 KB default) rather than the full contract (it's a file-read tool).
   - **Images = per-CALL choice, never a server flag.** Multiple agents of differing vision capability share one server, and some "multimodal" clients silently drop/down-convert inline images — so the inline-vs-disk decision rides on each call's `inline` param. The inspect* tools ALWAYS return their structured JSON (sprite/palette/render-flag data); only the PNG is gated — so a text-only agent works from data, not an image it may never actually receive. Documented in AGENTS.md.
   - **Exceptions (deliberate):** small readMemory reads (≤4 KB inline); **runSource keeps its inline screenshot by default** (its identity is "build+run+SHOW me") with an optional `screenshotPath` to redirect.
-  - Verified the contract end-to-end over HTTP (no-path → clear error; inline:true → payload; path → file written + {path}, no inline). **331/331 tests pass** — updated the 5 tests that asserted the old inline-by-default shape to pass `inline:true`. See [[rom-dev-inline-images-per-call-not-per-server]].
+  - Verified the contract end-to-end over HTTP (no-path → clear error; inline:true → payload; path → file written + {path}, no inline). **331/331 tests pass** — updated the 5 tests that asserted the old inline-by-default shape to pass `inline:true`. See [[romdev-inline-images-per-call-not-per-server]].
 
 - [x] **R62 — Tool-surface context diet (concise descriptions + same-op consolidation)** (2026-05-28)
   The full tools/list is always-on context every turn for every client. Cut it on two axes — and concise descriptions help agents pick the right tool, not just save tokens. **Full tools/list payload ~17.5K → ~11.9K tokens (~32%); tool count 108 → 101.**
@@ -750,7 +750,7 @@ Replicate the convenience layers from the historical C SDKs. Each is weeks of wo
   - **Reply:** `~/code/cliemu/reply_to_nes_round2.md`.
 
 - [x] **R58b — Drop bundled library source INTO every scaffolded project tree** (2026-05-27)
-  R58 shipped readable library source in the rom-dev-mcp install. That was the half-step — agents could `copyStarterSnippets` to pull source into their project, but it wasn't automatic. R58b makes `createProject` copy library source into the project by default, so the agent's `~/coin-catch/` directory ends with:
+  R58 shipped readable library source in the romdev install. That was the half-step — agents could `copyStarterSnippets` to pull source into their project, but it wasn't automatic. R58b makes `createProject` copy library source into the project by default, so the agent's `~/coin-catch/` directory ends with:
   ```
   vendor/cc65/libsrc/lynx/       ← cc65 Lynx libsrc (TGI driver, lynx_snd, joystick, conio, crt0)
   vendor/libtonc/src/            ← libtonc (GBA — every TTE / OAM / IRQ implementation)
@@ -1061,7 +1061,7 @@ on a black-box bug, it's a massive net win.
 Persistent on disk at OS user-data dir, keyed by content hash:
 
 ```
-~/.local/share/rom-dev-mcp/objcache/
+~/.local/share/romdev/objcache/
   <platform>/
     <lib-or-project-name>/
       <sha256(source bytes + compiler flags + toolchain version)>.{o,rel}
@@ -1235,7 +1235,7 @@ loop at all.
 
 - **`SessionLog` class per `sessionKey`**, append-only. Holds the last
   N events in a ring buffer (in-memory) AND streams to disk as JSONL
-  at `~/.local/share/rom-dev-mcp/sessions/<sessionKey>/events.jsonl`.
+  at `~/.local/share/romdev/sessions/<sessionKey>/events.jsonl`.
   PNGs land as siblings (`event-0042.png`) with the JSON event holding
   the relative path.
 - **Middleware in `src/mcp/tools/index.js`** wraps every `safeTool`
@@ -1333,8 +1333,8 @@ loop at all.
   If we ever bind to non-loopback, the observer page becomes a
   privacy/security surface — would need at minimum a session token
   in the URL.
-- **In-tree vs sibling package.** Bake into rom-dev-mcp (one
-  `npm install` for everything) OR sibling `rom-dev-observer` package
+- **In-tree vs sibling package.** Bake into romdev (one
+  `npm install` for everything) OR sibling `romdev-observer` package
   (easier to evolve independently, run multiple viewers against one
   server). Lean toward in-tree for v1 — easier deploy.
 

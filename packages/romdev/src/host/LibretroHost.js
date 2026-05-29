@@ -71,7 +71,7 @@ export class LibretroHost {
    * @param {(level: number, msg: string) => void} [opts.log]
    */
   constructor(opts = {}) {
-    const tmp = mkdtempSync(path.join(os.tmpdir(), "rom-dev-mcp-"));
+    const tmp = mkdtempSync(path.join(os.tmpdir(), "romdev-"));
     /** @type {any | null} */
     this.mod = null;
     this.state = newCallbackState({

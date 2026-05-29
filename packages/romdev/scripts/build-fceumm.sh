@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build fceumm libretro core → WASM, with rom-dev-mcp's custom memory
+# Build fceumm libretro core → WASM, with romdev's custom memory
 # region patch applied (exposes NES OAM/PALETTE/NAMETABLES/CHR via
 # retro_get_memory_data for the inspectSprites/inspectPalette tools).
 #

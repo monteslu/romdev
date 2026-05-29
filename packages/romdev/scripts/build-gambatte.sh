@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build gambatte libretro core → WASM, with rom-dev-mcp's custom memory
+# Build gambatte libretro core → WASM, with romdev's custom memory
 # region patch applied (exposes GB/GBC VRAM/OAM/IO/HRAM + GBC palette
 # RAM + SM83 CPU snapshot via retro_get_memory_data for the
 # inspectSprites/inspectPalette/getCPUState/getRenderingContext tools).

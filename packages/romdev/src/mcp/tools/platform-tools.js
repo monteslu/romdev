@@ -641,7 +641,7 @@ export function registerPlatformTools(server, z, sessionKey) {
         const colors = getPlatformPaletteRgb(platform).map(([r, g, b]) => rgbHexLospec(r, g, b));
         const json = {
           name: `${platform} master palette`,
-          author: "rom-dev-mcp",
+          author: "romdev",
           colors,
         };
         if (outputPath) {

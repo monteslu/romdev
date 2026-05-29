@@ -183,7 +183,7 @@ export function registerInputLayoutTools(server, z) {
         platform,
         ...layout,
         physicalButtons: PHYSICAL_BUTTONS[platform] ?? [],
-        controllerModel: "rom-dev-mcp uses an Xbox-shaped baseline for setInput: dpad + 4 face buttons (north/east/south/west) + l/r/l2/r2 + l3/r3 sticks + start/select. Older platforms are subsets — physicalButtons lists what's actually wired. Pressing a button not in that list is a silent no-op.",
+        controllerModel: "romdev uses an Xbox-shaped baseline for setInput: dpad + 4 face buttons (north/east/south/west) + l/r/l2/r2 + l3/r3 sticks + start/select. Older platforms are subsets — physicalButtons lists what's actually wired. Pressing a button not in that list is a silent no-op.",
         libretroJoypadIds: LIBRETRO_JOYPAD_IDS,
         hardwareBits: HARDWARE_BITS[platform] ?? null,
         hardwareBitsCaveat:

@@ -7,7 +7,7 @@
  *   - Miss → ball respawns at centre, opponent scores
  *   - Per-side score in the top corners as ASCII digits via OAM
  *
- * Designed for the rom-dev-mcp playtest window: with two USB
+ * Designed for the romdev playtest window: with two USB
  * controllers plugged in, both players can play live. With one
  * controller, the keyboard arrow keys drive port 0 (player 1) and
  * port 1 acts as a wall-bot AI so single-player still works.

@@ -255,7 +255,7 @@ export function runZ80dasm({ bytes, startAddress, addComments = true }) {
 
   // Pass 2: emit.
   const lines = [
-    "; z80dasm (rom-dev-mcp built-in)",
+    "; z80dasm (romdev built-in)",
     "; Input bytes: " + bytes.length,
     "",
     "        .setcpu \"z80\"",

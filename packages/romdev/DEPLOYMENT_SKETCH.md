@@ -4,7 +4,7 @@
 NO folder renames done yet. This is the full map to sign off on first.
 
 **Settled decisions (this session):**
-- Folder + main project rename: `rom-dev-mcp` → **`romdev`** (never was a git repo — clean slate).
+- Folder + main project rename: `romdev` → **`romdev`** (never was a git repo — clean slate).
 - Topology: **polyrepo** — separate GitHub repo per package, each with its own CI.
 - GitHub home: **`monteslu/`** (personal). npm: main pkg **`romdev`** (unscoped); the rest **`@romdev/*`** (npm org `romdev`, to be created before first publish).
 - Install model: hard deps, exact-pinned in `romdev`. `npx romdev` installs everything. No custom CLI.

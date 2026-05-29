@@ -13,7 +13,7 @@ shelling out from the agent.
 | Draw sprites | [LibreSprite](https://libresprite.github.io/) | GPLv2 (Aseprite fork) | `.ase` |
 | Design levels | [Tiled](https://www.mapeditor.org/) | BSD-2 | `.tmj` (JSON) |
 | Animate | LibreSprite (export GIF) or any GIF editor | various | `.gif` |
-| Build ROM | rom-dev-mcp `loadAsepriteSheet` / `loadTilemap` / `loadGifAnimation` | MIT | platform tiles |
+| Build ROM | romdev `loadAsepriteSheet` / `loadTilemap` / `loadGifAnimation` | MIT | platform tiles |
 
 Every tool runs on Linux/Mac/Windows. No native dependencies, no
 build steps, no agent shell scripts.

@@ -140,7 +140,7 @@ collapsed all 8 1KB pages into copies of the first page on NROM.
 Fixed in R61 (2026-05-27). If you still see this, your MCP server
 is running a stale WASM:
 ```sh
-stat -c '%y' ~/code/cliemu/rom-dev-mcp/src/cores/wasm/fceumm_libretro.wasm
+stat -c '%y' ~/code/cliemu/romdev/src/cores/wasm/fceumm_libretro.wasm
 # Should be 2026-05-27 13:54 or later.
 ```
 Workaround if you can't restart: `inspectPatternTiles` reads CHR

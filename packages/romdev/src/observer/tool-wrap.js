@@ -7,7 +7,7 @@
 
 import { observer, extractImages, summarizeForLog } from "./bus.js";
 
-const INSTALLED = Symbol.for("rom-dev-mcp.observer-installed");
+const INSTALLED = Symbol.for("romdev.observer-installed");
 
 /**
  * Install tool-call instrumentation on an MCP server.

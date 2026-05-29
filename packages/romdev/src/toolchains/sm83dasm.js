@@ -151,7 +151,7 @@ export function runSm83dasm({ bytes, startAddress, addComments = true }) {
   }
 
   const lines = [
-    "; sm83dasm (rom-dev-mcp built-in)",
+    "; sm83dasm (romdev built-in)",
     "; Input bytes: " + bytes.length,
     "",
     "        .setcpu \"sm83\"",

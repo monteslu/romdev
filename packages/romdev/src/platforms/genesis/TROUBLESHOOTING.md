@@ -182,8 +182,8 @@ needs no native tools and produces ready-to-DMA blobs.
 The full SGDK helper-tool suite (`rescomp`, `bintos`, `convsym`,
 `xgmtool`) isn't yet ported to WASM. You can still use these tools
 **natively** on a build machine to produce the .bin / .o / .pal /
-.tileset blobs, then drop them into your rom-dev-mcp project as
-binary `extraSources` — the rom-dev-mcp build will just incbin them.
+.tileset blobs, then drop them into your romdev project as
+binary `extraSources` — the romdev build will just incbin them.
 
 For a handful of hand-drawn tiles, you can also author them as
 `u32[8]` arrays in C (4bpp tile format = 8 rows × 4 bytes each, two

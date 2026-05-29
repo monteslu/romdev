@@ -9,7 +9,7 @@
  * When no P2 controller is plugged in, the right paddle falls back to
  * "chase the ball" AI so the game is still playable solo.
  *
- * Designed for the rom-dev-mcp playtest window — plug in a second pad
+ * Designed for the romdev playtest window — plug in a second pad
  * mid-session and player 2 starts working without a restart.
  */
 #include "sms_hw.h"

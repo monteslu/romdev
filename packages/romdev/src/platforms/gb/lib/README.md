@@ -1,7 +1,7 @@
 # Game Boy / Game Boy Color — quickstart
 
 The compressed version of "everything I had to learn the hard way
-building a GB ROM with rom-dev-mcp."
+building a GB ROM with romdev."
 
 ## Language: RGBDS assembly
 
@@ -67,7 +67,7 @@ rgbfix -v -p 0 -m MBC1 -t "MYGAME" out.gb
 ```
 
 Most emulators (gambatte included) skip the verification when running
-in "headless" mode, so you'll see your game run in rom-dev-mcp's
+in "headless" mode, so you'll see your game run in romdev's
 gambatte even with an invalid header. Real hardware won't.
 
 ### 4. DMG colors are 4 SHADES, not 4 colors

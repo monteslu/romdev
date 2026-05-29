@@ -16,7 +16,7 @@ const GENRES = ["shmup", "platformer", "puzzle"];
 test("R21 createGame parity: every (platform, genre) pair scaffolds correctly", { timeout: 30000 }, async () => {
   for (const platform of PLATFORMS) {
     for (const genre of GENRES) {
-      const projPath = await mkdtemp(join(tmpdir(), `rom-dev-r21-${platform}-${genre}-`));
+      const projPath = await mkdtemp(join(tmpdir(), `romdev-r21-${platform}-${genre}-`));
       // createGame is a thin wrapper over createProjectImpl with template=genre,
       // so we use createProjectImpl directly here.
       const r = await createProjectImpl({

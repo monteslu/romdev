@@ -11,7 +11,7 @@
  * converts PNG → .pic + .pal; we don't bundle gfx4snes yet, so a hand-
  * authored .pic + .pal works equivalently).
  *
- * Build via rom-dev-mcp:
+ * Build via romdev:
  *   buildSource({
  *     platform: "snes", language: "c",
  *     sources: {

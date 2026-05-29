@@ -20,7 +20,7 @@ fetch_pinned cores.vice_x64 "$VICE_DIR"
 
 cd "$VICE_DIR"
 
-# Apply rom-dev-mcp memory-region patch. vice-libretro ships some files
+# Apply romdev memory-region patch. vice-libretro ships some files
 # with CRLF line endings, so normalize first; --recount lets the hunk line
 # numbers float a bit.
 PATCH_FILE="$PROJECT_DIR/scripts/patches/vice-romdev-memory-regions.patch"
@@ -28,9 +28,9 @@ if [ -f "$PATCH_FILE" ]; then
   # Normalize CRLF → LF on the file(s) we patch.
   sed -i 's/\r$//' libretro/libretro-core.c vice/src/maincpu.c || true
   if grep -q 'ROMDEV_MEMORY_C64' libretro/libretro-core.c; then
-    echo "rom-dev-mcp patch already applied — skipping."
+    echo "romdev patch already applied — skipping."
   else
-    echo "Applying rom-dev-mcp memory-region patch..."
+    echo "Applying romdev memory-region patch..."
     git apply --recount "$PATCH_FILE"
   fi
 fi

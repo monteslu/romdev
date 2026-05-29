@@ -6,7 +6,7 @@
 ;;
 ;; Why this exists separately from sms_crt0.s: every project under
 ;; createProject({platform:"gg"}) should be self-contained. Cross-
-;; platform-by-construction: a `.gg` ROM rebuilds without rom-dev-mcp
+;; platform-by-construction: a `.gg` ROM rebuilds without romdev
 ;; running. Don't read from sms/lib at build time.
 ;;
 ;; Replaces SDCC's stock z80 crt0 (which assumes a host runtime that

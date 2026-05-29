@@ -1,6 +1,6 @@
 # Examples
 
-Minimal "hello" projects for every platform rom-dev-mcp's bundled toolchains can build. Each one is the simplest thing that's still a real ROM — an agent forks from these instead of starting from a blank file.
+Minimal "hello" projects for every platform romdev's bundled toolchains can build. Each one is the simplest thing that's still a real ROM — an agent forks from these instead of starting from a blank file.
 
 Each example fits the convention:
 - A `main.c` or `main.asm`/`main.s` as the entry point.

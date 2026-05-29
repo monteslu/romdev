@@ -9,7 +9,7 @@
 // VGM 1.50 spec reference: https://vgmrips.net/wiki/VGM_Specification
 // (We use only PSG writes — opcode 0x50 + 1 byte — and frame waits 0x62 NTSC).
 //
-// Author: rom-dev-mcp project (CC0 — Public Domain).
+// Author: romdev project (CC0 — Public Domain).
 //
 // Usage:
 //   node scripts/build-genesis-demo-vgm.js <out.vgm>

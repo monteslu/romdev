@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build stella2014 (Atari 2600) libretro core → WASM, with rom-dev-mcp's
+# Build stella2014 (Atari 2600) libretro core → WASM, with romdev's
 # custom memory region patch applied (exposes TIA + 6502 snapshots via
 # retro_get_memory_data for inspectSprites/Palette/getCPUState).
 #

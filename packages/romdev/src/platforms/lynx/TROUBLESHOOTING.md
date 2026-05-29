@@ -52,7 +52,7 @@ Three things to check:
 
 Other Lynx emulators sometimes expect the 64-byte `.lnx` header that
 cc65's default config doesn't emit. Either:
-1. Stick with handy (rom-dev-mcp ships this).
+1. Stick with handy (romdev ships this).
 2. Wrap your ROM in a `.lnx` header — handy itself can produce one
    via `lyxx -i raw.bin -o game.lnx`.
 

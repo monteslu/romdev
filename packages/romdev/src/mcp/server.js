@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// rom-dev-mcp — MCP server (Streamable HTTP).
+// romdev — MCP server (Streamable HTTP).
 //
 // Exposes the libretro harness, save state, memory inspection, screenshot,
 // and platform/toolchain introspection as MCP tools over the modern
@@ -8,7 +8,7 @@
 // Default endpoint: http://127.0.0.1:7331/mcp
 //
 // Register with Claude Code:
-//   claude mcp add --transport http rom-dev http://127.0.0.1:7331/mcp
+//   claude mcp add --transport http romdev http://127.0.0.1:7331/mcp
 //
 // Run:
 //   node src/mcp/server.js           # blocks on the HTTP listener
@@ -53,7 +53,7 @@ async function loadInstructions() {
 function buildMcpServer(instructions, sessionKey) {
   const server = new McpServer(
     {
-      name: "rom-dev-mcp",
+      name: "romdev",
       version: "0.0.1",
     },
     {
@@ -231,7 +231,7 @@ async function main() {
     console.log(`romdev listening on http://${host}:${port}/mcp`);
     console.log(`livestream observer:    http://${host}:${port}/livestream`);
     console.log("Register with Claude Code:");
-    console.log(`  claude mcp add --transport http rom-dev http://${host}:${port}/mcp`);
+    console.log(`  claude mcp add --transport http romdev http://${host}:${port}/mcp`);
   });
 
   // Mount /livestream + socket.io on the same httpServer so we get one

@@ -91,7 +91,7 @@ OS:
 
 async function startServerAndClient() {
   const server = new McpServer(
-    { name: "rom-dev-mcp-test", version: "0.0.1" },
+    { name: "romdev-test", version: "0.0.1" },
     { capabilities: { tools: {} } },
   );
   registerTools(server, z);
@@ -110,7 +110,7 @@ async function startServerAndClient() {
 test("vibe loop: build 2600 ROM with dasm, run in stella, screenshot", async () => {
   const client = await startServerAndClient();
 
-  const tmp = mkdtempSync(path.join(os.tmpdir(), "rom-dev-e2e-"));
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "romdev-e2e-"));
   const romPath = path.join(tmp, "blue.bin");
 
   // Build the ROM via MCP.

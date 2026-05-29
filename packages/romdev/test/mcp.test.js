@@ -28,7 +28,7 @@ const HAS_NESTEST = existsSync(ROM_PATH);
 
 async function startServerAndClient() {
   const server = new McpServer(
-    { name: "rom-dev-mcp-test", version: "0.0.1" },
+    { name: "romdev-test", version: "0.0.1" },
     { capabilities: { tools: {} } },
   );
   registerTools(server, z);

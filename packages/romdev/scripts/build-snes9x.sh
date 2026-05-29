@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build snes9x libretro core → WASM, with rom-dev-mcp's custom memory
+# Build snes9x libretro core → WASM, with romdev's custom memory
 # region patch applied (exposes OAM/CGRAM/ARAM/FillRAM via
 # retro_get_memory_data for the inspectSprites/inspectPalette tools).
 #

@@ -164,7 +164,7 @@ isolation infrastructure). Steady-state builds are sub-second.
 ## "I want to use real graphics from a PNG"
 
 `gfx4snes` (the PVSnesLib companion tool) converts PNG → .pic + .pal.
-It's not yet bundled in rom-dev-mcp's WASM toolchain. Workflow:
+It's not yet bundled in romdev's WASM toolchain. Workflow:
 
 1. Run `gfx4snes` natively on your build machine to produce
    `mysprite.pic` + `mysprite.pal`.
@@ -178,5 +178,5 @@ It's not yet bundled in rom-dev-mcp's WASM toolchain. Workflow:
    .incbin "mysprite.pal"
    ```
 
-(rom-dev-mcp's `buildSource` accepts binary `.pic` / `.pal` blobs
+(romdev's `buildSource` accepts binary `.pic` / `.pal` blobs
 as sibling resources.)

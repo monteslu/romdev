@@ -14,7 +14,7 @@ You only need to run them if you're:
 - Verifying reproducibility.
 - Adding a new platform.
 
-End users of rom-dev-mcp do not run these — the prebuilt `.wasm` files ship
+End users of romdev do not run these — the prebuilt `.wasm` files ship
 in the npm package directly.
 
 ## Prerequisites

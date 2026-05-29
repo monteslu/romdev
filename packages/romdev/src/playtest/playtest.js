@@ -139,7 +139,7 @@ export async function playtest(args) {
   const { host } = args;
   if (!host) throw new Error("playtest requires a loaded host");
   const scale = args.scale ?? 3;
-  const title = args.title ?? "rom-dev-mcp playtest";
+  const title = args.title ?? "romdev playtest";
   const aspectMode = args.aspect ?? "fb";
 
   const sdl = await getSdl();

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build prosystem (Atari 7800) libretro core → WASM, with rom-dev-mcp's
+# Build prosystem (Atari 7800) libretro core → WASM, with romdev's
 # custom memory region patch applied (exposes 6502 CPU snapshot via
 # retro_get_memory_data for the getCPUState tool — MARIA/TIA/ROM are
 # already reachable via system_ram, which returns the full 64KB 6502

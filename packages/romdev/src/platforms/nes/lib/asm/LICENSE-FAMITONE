@@ -35,6 +35,6 @@ License (from upstream license.txt):
   As stated in Shiru's original readme.txt file.
 
 text2data (the host-side .txt → .s converter) is NOT bundled because
-agents driving rom-dev-mcp can either edit music_data.s by hand or
+agents driving romdev can either edit music_data.s by hand or
 shell out to the upstream text2data source (text2data.cpp in the same
 repo) if they need full FamiTracker → driver conversion.

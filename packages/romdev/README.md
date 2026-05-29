@@ -33,7 +33,7 @@ This package is the [Model Context Protocol](https://modelcontextprotocol.io/) s
 ```bash
 npx romdev
 # then, e.g. for Claude Code:
-claude mcp add --transport http rom-dev http://127.0.0.1:7331/mcp
+claude mcp add --transport http romdev http://127.0.0.1:7331/mcp
 ```
 
 Agents: the server delivers [`AGENTS.md`](./AGENTS.md) as connection-time instructions — the workflow guide for the tool surface. Project roadmap and the full tool list live in [`PLAN.md`](./PLAN.md); the build/recipe matrix is in [`BUILDING.md`](./BUILDING.md).

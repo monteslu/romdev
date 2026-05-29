@@ -4,7 +4,7 @@
  * published devkitARM tutorial uses. Mode 3 framebuffer, draws a red
  * pixel that moves left/right via the d-pad.
  *
- * Build via rom-dev-mcp:
+ * Build via romdev:
  *   buildSource({platform:"gba", language:"c", runtime:"libgba",
  *                source: <this file>})
  *

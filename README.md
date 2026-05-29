@@ -103,7 +103,7 @@ npx romdev          # boots the MCP server on http://127.0.0.1:7331/mcp
 Register it with your agent. For Claude Code:
 
 ```bash
-claude mcp add --transport http rom-dev http://127.0.0.1:7331/mcp
+claude mcp add --transport http romdev http://127.0.0.1:7331/mcp
 ```
 
 Then just describe what you want:

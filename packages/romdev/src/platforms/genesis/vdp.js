@@ -1,7 +1,7 @@
 // Genesis VDP helpers — decode SAT, CRAM, and 4bpp tile bytes.
 //
 // Mirrors the shape of src/platforms/nes/ppu.js, src/platforms/gb/ppu.js,
-// and src/platforms/snes/ppu.js. Used by the rom-dev-mcp debug tools
+// and src/platforms/snes/ppu.js. Used by the romdev debug tools
 // (inspectSprites, getPalette, etc.) for the Genesis platform.
 //
 // Memory regions exposed by the gpgx libretro patch (see memory.js):

@@ -1,7 +1,7 @@
 # Genesis / Mega Drive — quickstart
 
 The compressed version of "everything I had to learn the hard way
-building a Genesis ROM with rom-dev-mcp."
+building a Genesis ROM with romdev."
 
 ## Snippets shipped in this directory
 

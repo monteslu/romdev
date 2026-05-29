@@ -1,5 +1,5 @@
 // SNES PPU helpers — decode OAM, CGRAM, VRAM tiles, and BG tilemaps from
-// snes9x's exposed memory regions (rom-dev-mcp/snes9x patch: snes_oam,
+// snes9x's exposed memory regions (romdev/snes9x patch: snes_oam,
 // snes_cgram, plus the standard video_ram → Memory.VRAM 64 KB region).
 //
 // OAM is 544 bytes: a 512-byte "low" table (128 sprites × 4 bytes) plus

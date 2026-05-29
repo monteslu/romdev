@@ -4,7 +4,7 @@
  * Engine) to draw "Hello, Tonc!" on a Mode-0 tile background — the
  * canonical "Hello GBA" pattern from gbadev.net/tonc.
  *
- * Build via rom-dev-mcp:
+ * Build via romdev:
  *   buildSource({platform:"gba", language:"c", source: <this file>})
  *
  * (defaults to runtime:"libtonc" — pass {runtime:"libgba"} to use
@@ -57,7 +57,7 @@ int main(void) {
     /* Draw text. tte_write moves the internal cursor; \n wraps. */
     tte_write("#{P:32,32}");         /* position cursor at pixel (32,32) */
     tte_write("Hello, Tonc!\n");
-    tte_write("Built with rom-dev-mcp\n");
+    tte_write("Built with romdev\n");
 
     /* Formatted output without needing iprintf or libsysbase. */
     int year = 2026;

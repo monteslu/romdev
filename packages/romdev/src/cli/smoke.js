@@ -1,14 +1,14 @@
 #!/usr/bin/env node
-// rom-dev-cli — direct CLI for the rom-dev-mcp host.
+// romdev-cli — direct CLI for the romdev host.
 //
 // End users use `play` to fire up a ROM in a window. The other subcommands
 // are smoke-test harnesses that match what the MCP tools do, useful for
 // scripting + debugging without a running MCP server.
 //
 // Usage:
-//   rom-dev-cli play <rom-or-zip> [--platform PLAT] [--scale N]
-//   rom-dev-cli identify <rom-or-zip>
-//   rom-dev-cli run --core <path> --rom <path> [--frames N] [--screenshot out.png]
+//   romdev-cli play <rom-or-zip> [--platform PLAT] [--scale N]
+//   romdev-cli identify <rom-or-zip>
+//   romdev-cli run --core <path> --rom <path> [--frames N] [--screenshot out.png]
 //
 // `play` accepts .zip files — the first ROM-shaped entry is extracted to a
 // temp file and loaded into the matching libretro core. Platform is
@@ -140,7 +140,7 @@ async function playCommand(romPath, opts) {
   // Hand off to playtest
   const { playtest } = await import("../playtest/playtest.js");
   const scale = opts.scale ? parseInt(opts.scale, 10) : 3;
-  const title = opts.title ?? `rom-dev-cli — ${path.basename(romPath)}`;
+  const title = opts.title ?? `romdev-cli — ${path.basename(romPath)}`;
   const aspect = opts.aspect === "tv" ? "tv" : "fb";
   const session = await playtest({ host, scale, title, aspect });
   await session.closed;
@@ -181,40 +181,40 @@ async function runCommand(values) {
 }
 
 function usage(exitCode = 0) {
-  console.error(`rom-dev-cli — homebrew retro game tooling
+  console.error(`romdev-cli — homebrew retro game tooling
 
 Usage:
-  rom-dev-cli play <rom-or-zip> [--platform PLAT] [--scale N] [--title T] [--aspect fb|tv]
+  romdev-cli play <rom-or-zip> [--platform PLAT] [--scale N] [--title T] [--aspect fb|tv]
       Open a real SDL window for any ROM. Detects platform from extension.
       Extracts the first ROM out of a .zip automatically.
       --aspect fb (default): window opens at raw framebuffer * scale.
       --aspect tv: stretch to the core's reported TV aspect ratio
                    (Atari 2600 ~4:3, SNES ~8:7, etc.).
-      Run \`rom-dev-cli play --help\` for the keyboard/gamepad bindings.
+      Run \`romdev-cli play --help\` for the keyboard/gamepad bindings.
 
-  rom-dev-cli identify <rom-or-zip>
+  romdev-cli identify <rom-or-zip>
       Print a JSON description of the ROM (platform, mapper, hash, etc.).
 
-  rom-dev-cli run --core <_libretro.js> --rom <path> [--frames N] [--screenshot out.png]
+  romdev-cli run --core <_libretro.js> --rom <path> [--frames N] [--screenshot out.png]
       Smoke-test: step N frames headless, optionally write a PNG. For
       pipelines that need a fast no-window verification. Most users want
       'play' instead.
 
 Examples:
-  rom-dev-cli play ~/Downloads/Donkey\\ Kong\\ Country.zip
-  rom-dev-cli play smb1.nes --scale 4
-  rom-dev-cli play Adventure.a26 --aspect tv
-  rom-dev-cli identify rom.smc
+  romdev-cli play ~/Downloads/Donkey\\ Kong\\ Country.zip
+  romdev-cli play smb1.nes --scale 4
+  romdev-cli play Adventure.a26 --aspect tv
+  romdev-cli identify rom.smc
 `);
   process.exit(exitCode);
 }
 
 async function playHelp() {
   const { KEYBOARD_BINDINGS_HELP } = await import("../playtest/playtest.js");
-  console.error(`rom-dev-cli play — open a ROM in a native window
+  console.error(`romdev-cli play — open a ROM in a native window
 
 Usage:
-  rom-dev-cli play <rom-or-zip> [options]
+  romdev-cli play <rom-or-zip> [options]
 
 Options:
   --platform <id>   Override extension-based platform detection.
@@ -256,14 +256,14 @@ async function main() {
     case "play":
       if (values.help) { await playHelp(); break; }
       if (!positionals[1]) {
-        console.error("usage: rom-dev-cli play <rom-or-zip>  (try --help for controls)");
+        console.error("usage: romdev-cli play <rom-or-zip>  (try --help for controls)");
         process.exit(1);
       }
       await playCommand(positionals[1], values);
       break;
     case "identify":
       if (!positionals[1]) {
-        console.error("usage: rom-dev-cli identify <rom-or-zip>");
+        console.error("usage: romdev-cli identify <rom-or-zip>");
         process.exit(1);
       }
       await identifyCommand(positionals[1]);
