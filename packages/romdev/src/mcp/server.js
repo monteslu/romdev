@@ -234,7 +234,7 @@ async function main() {
           console.log(`[mcp] initialize carried stale session id ${sid} — stripped, minting fresh`);
         }
         transport = await createTransport();
-      } else if (typeof sid === "string" && sid.length > 0) {
+      } else if (!transport && typeof sid === "string" && sid.length > 0) {
         // The client presented a session id we don't have — almost always
         // because WE restarted (the client's session is fine from its side).
         // LAZY-INIT: transparently re-create that exact session and serve the
