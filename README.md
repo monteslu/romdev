@@ -8,9 +8,9 @@ npx romdev
 
 That's the whole setup. Everything — emulator cores, assemblers, C compilers, starter libraries, example projects, hardware reference docs — ships as bundled WebAssembly and data via npm. Same on Linux, Windows, and macOS (Node 24+).
 
-## What is this?
+## Features
 
-`romdev` is a [Model Context Protocol](https://modelcontextprotocol.io/) server. A coding agent connects to it and gets a tool surface for the full homebrew loop:
+`romdev` is a [Model Context Protocol](https://modelcontextprotocol.io/) server — a coding agent connects to it and gets a tool surface for the full homebrew loop:
 
 - **Building** — bundled per-platform toolchains (cc65, SDCC, RGBDS, asar, vasm, SGDK, PVSnesLib, libtonc, …) compiled to WebAssembly. The agent writes source, compiles it, and gets a real ROM.
 - **Running** — load the ROM into an emulated console (libretro cores as WASM) and step through it frame by frame.
