@@ -16,5 +16,18 @@
   "engines": {
     "node": ">=24"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monteslu/romdev.git",
+    "directory": "packages/toolchain-rgbds"
+  },
+  "homepage": "https://github.com/monteslu/romdev#readme",
+  "bugs": {
+    "url": "https://github.com/monteslu/romdev/issues"
+  },
+  "author": "Luis Montes"
 }

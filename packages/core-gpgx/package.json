@@ -16,5 +16,18 @@
   "engines": {
     "node": ">=24"
   },
-  "license": "SEE LICENSE IN README.md"
+  "license": "SEE LICENSE IN README.md",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monteslu/romdev.git",
+    "directory": "packages/core-gpgx"
+  },
+  "homepage": "https://github.com/monteslu/romdev#readme",
+  "bugs": {
+    "url": "https://github.com/monteslu/romdev/issues"
+  },
+  "author": "Luis Montes"
 }
