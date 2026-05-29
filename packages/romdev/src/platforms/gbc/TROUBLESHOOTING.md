@@ -2,7 +2,32 @@
 
 Read MENTAL_MODEL.md first (`getPlatformDoc({platform:"gbc",
 name:"mental_model"})`). Most DMG-era troubleshooting from GB applies
-unchanged.
+unchanged — including the **two SDCC sm83 codegen footguns below**, which are
+the #1 cause of a clean-building GBC C game that boots but never renders.
+
+## ⚠ "Sprites/tiles never show AND the CPU crashed (PC near $002B)" — the #1 SDCC footgun
+
+SDCC's sm83 backend **miscompiles a byte-copy loop through an `__xdata`
+pointer** — the "copy tiles into VRAM" pattern:
+```c
+uint8_t *dst = (uint8_t *)0x8000;
+for (uint8_t i = 0; i < 16; i++) dst[i] = src[i];   // ☠ writes to the return
+                                                    //   address → CPU crash
+```
+The build succeeds and the ROM boots, so it looks like a logic bug, but it's
+codegen — `PC` ends up stuck near `$002B`, sprites/tiles never appear, OAM
+stays zero. **Fix:** use the bundled `memcpy_vram(dst, src, n)` (in every
+project's `gb_runtime.c`) for ALL copies into VRAM/`__xdata`, never a raw
+for-loop. `buildSource` with `lint:"strict"` also flags the raw pattern.
+
+## ⚠ "Loop never ends / dead code after a loop" — uint8 loop-bound trap
+
+```c
+uint8_t i; for (i = 0; i < 32 * 32; i++) { ... }   // ☠ 255 < 1024 always true
+```
+A `uint8_t` can't reach a bound >255 → infinite loop, all later code dead. SDCC
+gives no warning. Use `uint16_t` for any bound that can exceed 255. (Linter
+flags it.) See [[sdcc-uint8-loop-bound-trap]].
 
 ## "ROM boots into green-shade DMG mode, not color"
 

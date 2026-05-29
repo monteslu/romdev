@@ -60,6 +60,81 @@ export function lintSdccSource(source, file = "main.c", opts = {}) {
     }
   }
 
+  // ─── uint8 loop-bound trap ──────────────────────────────────────
+  // `uint8_t i; for (i = 0; i < BOUND; i++)` where BOUND > 255 is an
+  // infinite loop (the counter can never reach the bound) and SDCC gives
+  // no warning. Detect: a u8-typed counter used in a `< BOUND` test where
+  // BOUND is a literal or a simple `A * B` product that exceeds 255.
+  // CONSERVATIVE: only flag when we can SEE the counter declared u8 and
+  // the bound is a constant we can evaluate — never guess.
+  {
+    // Collect names declared as 8-bit ints anywhere in the file.
+    const u8re = /\b(?:unsigned\s+char|char|u8|uint8_t|uint8|int8_t|int8|signed\s+char)\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*;/g;
+    const u8names = new Set();
+    let dm;
+    while ((dm = u8re.exec(source))) {
+      for (const n of dm[1].split(",")) u8names.add(n.trim());
+    }
+    const evalConst = (expr) => {
+      // Only literals and pure `A * B [* C]` products of decimal/hex ints.
+      const t = expr.trim();
+      if (/^(?:0x[0-9a-fA-F]+|\d+)$/.test(t)) return Number(t);
+      const parts = t.split("*").map((s) => s.trim());
+      if (parts.length >= 2 && parts.every((p) => /^(?:0x[0-9a-fA-F]+|\d+)$/.test(p))) {
+        return parts.reduce((a, p) => a * Number(p), 1);
+      }
+      return null;
+    };
+    for (let i = 0; i < lines.length; i++) {
+      const code = lines[i].replace(/\/\/.*$/, "").replace(/\/\*.*?\*\//g, "");
+      // for ( ... ident < BOUND ; ... )  — grab the counter + bound.
+      const m = code.match(/\bfor\s*\([^;]*;\s*([A-Za-z_]\w*)\s*<\s*([^;]+?)\s*;/);
+      if (!m) continue;
+      const [, counter, boundExpr] = m;
+      if (!u8names.has(counter)) continue;
+      const bound = evalConst(boundExpr);
+      if (bound !== null && bound > 255) {
+        issues.push({
+          severity: "warning",
+          file,
+          line: i + 1,
+          stage: "lint",
+          message: `uint8 loop counter '${counter}' with bound ${bound} (> 255) — infinite loop`,
+          details: `A u8/uint8_t/char counter can never reach ${bound}, so this loop never exits and all code after it is dead. ${portLabel} gives no warning. Declare '${counter}' as uint16_t. See GB TROUBLESHOOTING § uint8 loop-bound trap.`,
+          ref: "uint8-loop-bound",
+        });
+      }
+    }
+  }
+
+  // ─── __xdata / VRAM byte-copy miscompile ────────────────────────
+  // SDCC sm83 miscompiles `for (i...) dst[i] = src[i];` when dst is an
+  // __xdata pointer (e.g. into VRAM $8000) — it writes through the return
+  // address and crashes the CPU. Hard to prove the pointer target
+  // statically, so flag the SHAPE (an array-index copy `a[i] = b[i];`
+  // inside a for-loop) as ADVISORY, pointing at memcpy_vram. Conservative:
+  // require a for-loop on the line/just above + an indexed-to-indexed copy.
+  for (let i = 0; i < lines.length; i++) {
+    const code = lines[i].replace(/\/\/.*$/, "").replace(/\/\*.*?\*\//g, "");
+    // indexed-to-indexed copy: ident[idx] = ident[idx];  (same index token)
+    const cp = code.match(/\b([A-Za-z_]\w*)\s*\[\s*([A-Za-z_]\w*)\s*\]\s*=\s*([A-Za-z_]\w*)\s*\[\s*([A-Za-z_]\w*)\s*\]\s*;/);
+    if (!cp) continue;
+    const idx1 = cp[2], idx2 = cp[4];
+    if (idx1 !== idx2) continue; // not a parallel copy
+    // Require a for-loop driving this copy (this line or the 2 above).
+    const ctx = (lines[i] + "\n" + (lines[i - 1] || "") + "\n" + (lines[i - 2] || ""));
+    if (!/\bfor\s*\(/.test(ctx)) continue;
+    issues.push({
+      severity: "warning",
+      file,
+      line: i + 1,
+      stage: "lint",
+      message: `byte-copy loop \`${cp[1]}[${idx1}] = ${cp[3]}[${idx2}]\` — miscompiles if the destination is VRAM/__xdata`,
+      details: `${portLabel} miscompiles this pattern when '${cp[1]}' points into VRAM ($8000-$9FFF) or another __xdata region — it writes through the return address and crashes the CPU (PC near $002B, sprites/tiles never show). If '${cp[1]}' is a VRAM/__xdata pointer, use \`memcpy_vram(${cp[1]}, ${cp[3]}, n)\` (in gb_runtime.c) instead. Ignore if '${cp[1]}' is plain WRAM/an array. See GB TROUBLESHOOTING § the #1 SDCC footgun.`,
+      ref: "xdata-copy-miscompile",
+    });
+  }
+
   // Mid-block declarations (rough heuristic — flags any `type name [=...] ;`
   // that appears after a non-decl, non-blank statement at deeper indent
   // than the function opening brace).

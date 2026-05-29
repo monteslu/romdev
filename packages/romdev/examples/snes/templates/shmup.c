@@ -13,6 +13,15 @@
  *
  * Sibling data.asm provides the font + sprite-tile + sprite-palette
  * blobs. We use tile index 0 (ship), 1 (bullet), 2 (enemy).
+ *
+ * ⚠ TWO PVSnesLib footguns this scaffold handles for you:
+ *  1. oamSet's FIRST arg is a BYTE OFFSET into OAM, not a slot number.
+ *     Each sprite is 4 bytes, so sprite slot N lives at offset N*4.
+ *     Passing a plain slot number interleaves/corrupts entries. We use
+ *     the SPR(slot) macro below — always address sprites through it.
+ *  2. sfx_init() must run AFTER setScreenOn() and its return must be
+ *     checked. If it stalls before the screen is on, you get a black
+ *     screen forever. See the main() ordering below.
  */
 
 #include <snes.h>
@@ -22,6 +31,9 @@
 
 extern char tilfont, palfont;
 extern char tilsprite, palsprite;
+
+/* OAM is addressed by BYTE OFFSET; sprite slot N = offset N*4. */
+#define SPR(slot) ((slot) << 2)
 
 #define MAX_BULLETS 6
 #define MAX_ENEMIES 6
@@ -78,6 +90,8 @@ int main(void) {
     u16 prev = 0;
     u16 by, ey;
 
+    dmaClearVram();
+
     consoleSetTextMapPtr(0x6800);
     consoleSetTextGfxPtr(0x3000);
     consoleSetTextOffset(0x0100);
@@ -85,6 +99,9 @@ int main(void) {
     setMode(BG_MODE1, 0);
     bgSetDisable(1);
     bgSetDisable(2);
+    /* NOTE: the text BG (BG0) currently shows a garbage font (stub font in
+     * data.asm — see the ⚠ there). The game plays correctly; the HUD text
+     * is unreadable until a real pvsneslibfont .pic is dropped in. */
 
     /* 3 sprite tiles (ship/bullet/enemy) × 32 bytes = 96 bytes. */
     oamInitGfxSet(&tilsprite, 96, &palsprite, 32, 0,
@@ -95,15 +112,17 @@ int main(void) {
     for (i = 0; i < MAX_ENEMIES; i++) enemies[i].alive = 0;
     score = 0;
     spawn_timer = 0;
-    sfx_init();
 
     consoleDrawText(14, 1, "SCORE");
     consoleDrawText(2, 26, "D-PAD MOVE B FIRE");
 
-    /* Pre-stage all 13 OAM slots — hidden initially. */
-    for (i = 0; i < 13; i++) oamSet(i, 0, 240, 3, 0, 0, 0, 0);
+    /* Pre-stage all 13 OAM slots — hidden initially (SPR() = slot*4). */
+    for (i = 0; i < 13; i++) oamSet(SPR(i), 0, 240, 3, 0, 0, 0, 0);
 
+    /* Screen ON first, THEN sound. If the SPC wedges, sfx_init returns
+     * nonzero and we keep running silently — never a black screen. */
     setScreenOn();
+    sfx_init();
 
     while (1) {
         pad = padsCurrent(0);
@@ -141,15 +160,16 @@ int main(void) {
             }
         }
 
-        /* Stage OAM. Tile index = gfxoffset (32-byte stride). */
-        oamSet(0, player.x, player.y, 3, 0, 0, 0,  0);
+        /* Stage OAM. Tile index = gfxoffset (32-byte stride). Address
+         * each sprite by SPR(slot) — OAM is byte-indexed (slot*4). */
+        oamSet(SPR(0), player.x, player.y, 3, 0, 0, 0,  0);
         for (i = 0; i < MAX_BULLETS; i++) {
             by = bullets[i].alive ? bullets[i].y : 240;
-            oamSet(1 + i, bullets[i].x, by, 3, 0, 0, 32, 0);
+            oamSet(SPR(1 + i), bullets[i].x, by, 3, 0, 0, 32, 0);
         }
         for (i = 0; i < MAX_ENEMIES; i++) {
             ey = enemies[i].alive ? enemies[i].y : 240;
-            oamSet(7 + i, enemies[i].x, ey, 3, 0, 0, 64, 0);
+            oamSet(SPR(7 + i), enemies[i].x, ey, 3, 0, 0, 64, 0);
         }
         oamUpdate();
 

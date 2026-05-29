@@ -56,14 +56,22 @@
 
 #include <snes/snestypes.h>
 
-/* Call once near the start of main() before any sfx_play(). Uploads
- * the bundled SPC driver + sample bank + song table into ARAM at
- * $0200 and kicks it off running. Takes ~60 ms (~20 KB transferred
- * one byte at a time over the APUIO ports — the SPC's max rate).
+/* Upload the bundled SPC driver + sample bank + song table into ARAM
+ * and kick it off. Takes ~60 ms (~20 KB transferred one byte at a time
+ * over the APUIO ports — the SPC's max rate).
  *
- * Returns 0 on success, nonzero if the SPC didn't respond to the
- * boot handshake (usually means the SPC is in a weird state from a
- * previous program — try a hard reset). */
+ * ⚠ CALL THIS *AFTER* setScreenOn(), AND CHECK THE RETURN. Every wait
+ * inside is bounded — a wedged SPC can no longer hang the main CPU — but
+ * if it returns nonzero, sound init failed and you should just keep
+ * running (the game renders fine without sound). Calling it BEFORE the
+ * screen is on, or spinning on it, is the classic "black screen, OAM
+ * stays zero, video never starts" footgun.
+ *
+ * Returns 0 on success; nonzero = failed (sound unavailable, keep going):
+ *   1 = SPC boot handshake timed out (weird SPC state from a prior run)
+ *   2 = kick-command echo timed out
+ *   3 = byte-transfer echo timed out (mid-upload)
+ *   4 = jump-command echo timed out */
 u8 sfx_init(void);
 
 /* Trigger a sound effect. cmd = 1 (shoot) or 2 (explosion); other

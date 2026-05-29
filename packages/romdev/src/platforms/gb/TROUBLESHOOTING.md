@@ -50,6 +50,43 @@ Check in this order:
    inspectSprites({platform:"gbc"})   // shows what the LCD sees right now
    ```
 
+## ⚠ "Sprites/tiles never show AND the CPU crashed (PC near $002B)" — the #1 SDCC footgun
+
+**The single most common way a GB/GBC C game silently dies.** SDCC's sm83
+backend **miscompiles a byte-copy loop that writes through an `__xdata`
+pointer** — the canonical "copy my tiles into VRAM" pattern:
+
+```c
+uint8_t *dst = (uint8_t *)0x8000;   // VRAM
+for (uint8_t i = 0; i < 16; i++) dst[i] = src[i];   // ☠ MISCOMPILES
+```
+
+SDCC emits code that writes to the **return address** instead of `dst`,
+corrupting the stack → the CPU jumps to garbage and crashes (you'll see
+`PC` stuck around `$002B`, `SP` corrupt). The build SUCCEEDS and the ROM
+boots, so it looks like a logic bug — but it's codegen. Symptom: sprites/
+tiles never appear, OAM stays zero, `getCPUState` shows a wild PC.
+
+**Fix — use the bundled helper, never a raw `dst[i]=src[i]` loop to VRAM:**
+```c
+memcpy_vram(dst, src, 16);   // ships in gb_runtime.c — does the copy safely
+```
+`memcpy_vram()` is in every GB/GBC project's `gb_runtime.c`. Any time you copy
+bytes into VRAM ($8000-$9FFF) or another `__xdata` region, call it instead of
+hand-rolling a for-loop. (`buildSource` with `lint:"strict"` will also flag the
+raw pattern as a preflight error.)
+
+## ⚠ "Loop never ends / all code after a loop is dead" — uint8 loop-bound trap
+
+```c
+uint8_t i;
+for (i = 0; i < 32 * 32; i++) { ... }   // ☠ 255 < 1024 is ALWAYS true → infinite
+```
+A `uint8_t` counter can't reach a bound >255, so the loop never exits and
+everything after it is dead code. SDCC does **not** warn. Use `uint16_t` for any
+loop whose bound can exceed 255. (The preflight linter flags this too.) See also
+the cross-platform note: [[sdcc-uint8-loop-bound-trap]].
+
 ## "Wrong colors on GBC"
 
 1. **`$0143` is not $80.** This is the CGB-mode header byte. Set it

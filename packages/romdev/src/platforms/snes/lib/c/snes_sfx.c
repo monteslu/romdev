@@ -40,8 +40,19 @@ extern const u8 apu_blob_end[];
 
 #define APU_LOAD_ADDR  0x0200
 
+/* EVERY wait below is BOUNDED. A wedged SPC (bad previous state, flaky
+ * boot) must NEVER hang the main CPU here — pre-R7 the kick/per-byte/jump
+ * waits were unbounded `while` spins, so a stalled upload froze the whole
+ * game with a black screen (build succeeds, ROM boots, video never starts).
+ * Now each spin times out and sfx_init returns a distinct nonzero code so
+ * the caller can keep rendering (sound just won't play). ALWAYS call
+ * sfx_init AFTER setScreenOn() and check the return — see snes_sfx.h. */
+#define SFX_SPIN_LIMIT 0x8000u
+
 u8 sfx_init(void) {
     u16 i;
+    u16 to;
+    u8 jmp_cmd;
     u16 blob_size = (u16)(apu_blob_end - apu_blob);
     /* Wait for SPC700 boot handshake — it writes $AA into $2140 and
      * $BB into $2141 once its internal ROM finishes initializing. */
@@ -54,26 +65,29 @@ u8 sfx_init(void) {
     REG_APU0203 = APU_LOAD_ADDR;
     REG_APU01 = 0x01;
 
-    /* Kick handshake — write $CC to $2140 and wait for echo. */
+    /* Kick handshake — write $CC to $2140 and wait for echo (bounded). */
     REG_APU00 = 0xCC;
-    while (REG_APU00 != 0xCC) { /* spin */ }
+    to = SFX_SPIN_LIMIT;
+    while (REG_APU00 != 0xCC) { if (--to == 0) return 2; }
 
     /* Transfer apu_blob byte by byte. Index in $2140 doubles as the
-     * SPC's "ready for next byte" handshake. */
+     * SPC's "ready for next byte" handshake (bounded per byte). */
     for (i = 0; i < blob_size; i++) {
         REG_APU01 = apu_blob[i];
         REG_APU00 = (u8)(i & 0xFF);
-        while (REG_APU00 != (u8)(i & 0xFF)) { /* spin */ }
+        to = SFX_SPIN_LIMIT;
+        while (REG_APU00 != (u8)(i & 0xFF)) { if (--to == 0) return 3; }
     }
 
     /* Finish: set entry-point address, $00 in $2141, then "index + 2"
      * in $2140 (must be nonzero — if it would be zero, bump it). */
     REG_APU0203 = APU_LOAD_ADDR;
     REG_APU01 = 0x00;
-    u8 jmp_cmd = (u8)((i + 2) & 0xFF);
+    jmp_cmd = (u8)((i + 2) & 0xFF);
     if (jmp_cmd == 0) jmp_cmd = 1;
     REG_APU00 = jmp_cmd;
-    while (REG_APU00 != jmp_cmd) { /* spin */ }
+    to = SFX_SPIN_LIMIT;
+    while (REG_APU00 != jmp_cmd) { if (--to == 0) return 4; }
 
     return 0;
 }

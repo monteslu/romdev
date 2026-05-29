@@ -227,12 +227,30 @@ async function main() {
     });
   });
 
-  const httpServer = app.listen(port, host, () => {
+  // Loopback resolves to BOTH 127.0.0.1 (IPv4) and ::1 (IPv6) depending on the
+  // box — a client that connects to `localhost` may pick either. Binding only
+  // one stack means clients hitting the other get connection-refused (e.g. a
+  // Rust HTTP client that resolves localhost→::1 while we listen on 127.0.0.1).
+  // So when HOST is the default loopback, listen on BOTH; otherwise honor the
+  // explicit HOST as-is. `host` stays the canonical address for the banner.
+  const isDefaultLoopback = !process.env.HOST || host === "127.0.0.1";
+  const bindHosts = isDefaultLoopback ? ["127.0.0.1", "::1"] : [host];
+
+  // Primary listener (carries socket.io / observer). Extra loopback listeners
+  // share the same Express app so either stack reaches the same routes.
+  const httpServer = app.listen(port, bindHosts[0], () => {
     console.log(`romdev listening on http://${host}:${port}/mcp`);
     console.log(`livestream observer:    http://${host}:${port}/livestream`);
     console.log("Register with Claude Code:");
     console.log(`  claude mcp add --transport http romdev http://${host}:${port}/mcp`);
   });
+  const extraServers = [];
+  for (const h of bindHosts.slice(1)) {
+    const s = app.listen(port, h);
+    // A missing IPv6 stack shouldn't take the server down — log and move on.
+    s.on("error", (e) => console.log(`[mcp] secondary bind ${h}:${port} skipped: ${e.code || e.message}`));
+    extraServers.push(s);
+  }
 
   // Mount /livestream + socket.io on the same httpServer so we get one
   // process, one port. The observer module attaches itself; tool calls
@@ -247,6 +265,7 @@ async function main() {
     for (const t of transports.values()) {
       try { await t.close(); } catch {}
     }
+    for (const s of extraServers) { try { s.close(); } catch {} }
     httpServer.close(() => process.exit(0));
     // Backstop: force exit after 5s if something hangs.
     setTimeout(() => process.exit(1), 5000).unref();
