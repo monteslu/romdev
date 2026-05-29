@@ -8,7 +8,9 @@
     "packages/*"
   ],
   "scripts": {
-    "test": "npm test --workspaces --if-present"
+    "test": "npm test --workspaces --if-present",
+    "publish-all": "node publish-all.mjs",
+    "publish-all:dry": "node publish-all.mjs --dry-run"
   },
   "engines": {
     "node": ">=24"
