@@ -1,7 +1,7 @@
 ; ── mini_invaders.asm — Atari 2600 gallery-shooter scaffold ─────────
 ;
-; A "Space Invaders"-shaped 2600 game that uses the RIGHT TIA objects
-; instead of playfield "barcode" bars (see the note at the bottom).
+; A fixed-shooter / gallery-shooter 2600 game that uses the RIGHT TIA
+; objects instead of playfield "barcode" bars (see the note at the bottom).
 ;
 ; TIA object roles (the canonical layout for this genre):
 ;   P0  = player cannon (double-width via NUSIZ0 = %00000111)
