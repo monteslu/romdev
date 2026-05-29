@@ -140,8 +140,25 @@ async function main() {
   // and we transparently re-create that exact session under the hood.
   async function createTransport(fixedId) {
     const sessionKey = randomUUID();
+    // Compute the session id ONCE. The SDK may call sessionIdGenerator more
+    // than once; if it returned a fresh randomUUID() each time, the id placed
+    // in the response header and the id we register under in `transports`
+    // would diverge — so every subsequent call would miss the map, look
+    // "unknown", get re-adopted into a brand-new host, and lose all state.
+    // A stable closure over a single value keeps the header id == the map key.
+    const publicId = fixedId ?? randomUUID();
     const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => fixedId ?? randomUUID(),
+      sessionIdGenerator: () => publicId,
+      // Respond to each POST with a single JSON body instead of opening a
+      // persistent SSE stream. Without this the transport treats every request
+      // as a stream; non-streaming clients let that stream end immediately,
+      // the SDK fires `onclose`, and our onclose handler deletes the session
+      // from `transports` — so the NEXT call arrives as an "unknown session",
+      // gets lazily re-adopted (a brand-new host), and the cycle repeats. That
+      // is the "every call makes a new session / state never persists" bug.
+      // We don't stream server-initiated messages, so JSON responses are
+      // correct here and keep the session alive across calls.
+      enableJsonResponse: true,
       onsessioninitialized: (id) => {
         transports.set(id, transport);
         lastSeen.set(id, Date.now());
