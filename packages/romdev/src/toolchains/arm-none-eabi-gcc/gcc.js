@@ -39,10 +39,11 @@ function resolveArmGlue(file) {
   throw new Error(`arm-none-eabi-gcc WASM (${file}) not found — install @romdev/platform-gba`);
 }
 
-const CC1_GLUE      = resolveArmGlue("cc1-arm.mjs");
-const AS_GLUE       = resolveArmGlue("arm-none-eabi-as.mjs");
-const LD_GLUE       = resolveArmGlue("arm-none-eabi-ld.mjs");
-const OBJCOPY_GLUE  = resolveArmGlue("arm-none-eabi-objcopy.mjs");
+// Lazy + memoized per tool: resolve only on the first GBA-C build that uses
+// each tool, not at module load — so booting the server never touches this
+// (155MB, incl. the 135MB cc1-arm) package unless a GBA C ROM is actually built.
+const _glue = {};
+const armGlue = (file) => (_glue[file] ??= resolveArmGlue(file));
 
 /**
  * Compile a C source to ARM assembly via cc1.
@@ -72,7 +73,7 @@ export async function runCc1arm(args) {
     "-o", "/work/main.s",
   ];
   const r = await runIsolated({
-    gluePath: CC1_GLUE,
+    gluePath: armGlue("cc1-arm.mjs"),
     argv,
     inputFiles,
     outputFiles: [{ vfsPath: "/work/main.s", encoding: "utf8" }],
@@ -116,7 +117,7 @@ export async function runArmAs(args) {
     "-o", "/work/main.o",
   ];
   const r = await runIsolated({
-    gluePath: AS_GLUE,
+    gluePath: armGlue("arm-none-eabi-as.mjs"),
     argv,
     inputFiles,
     outputFiles: [{ vfsPath: "/work/main.o", encoding: "base64" }],
@@ -161,7 +162,7 @@ export async function runArmLd(args) {
     ...options,
   ];
   const r = await runIsolated({
-    gluePath: LD_GLUE,
+    gluePath: armGlue("arm-none-eabi-ld.mjs"),
     argv,
     inputFiles,
     outputFiles: [{ vfsPath: "/work/main.elf", encoding: "base64" }],
@@ -193,7 +194,7 @@ export async function runArmObjcopy(args) {
     "/work/main.gba",
   ];
   const r = await runIsolated({
-    gluePath: OBJCOPY_GLUE,
+    gluePath: armGlue("arm-none-eabi-objcopy.mjs"),
     argv,
     inputFiles,
     outputFiles: [{ vfsPath: "/work/main.gba", encoding: "base64" }],

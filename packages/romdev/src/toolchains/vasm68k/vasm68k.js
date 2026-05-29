@@ -22,7 +22,9 @@ function resolveVasm68kGlue() {
   if (existsSync(local)) return local;
   throw new Error("vasm68k WASM not found — install @romdev/toolchain-vasm");
 }
-const GLUE_PATH = resolveVasm68kGlue();
+// Lazy + memoized: resolve only on the first vasm (Genesis asm) build, not at boot.
+let _gluePath;
+const gluePath = () => (_gluePath ??= resolveVasm68kGlue());
 
 /**
  * Static analyzer for known Genesis landmines. Mirrors asar preflight
@@ -118,7 +120,7 @@ export async function runVasm68k(args) {
     "/work/main.s",
   ];
   const r = await runIsolated({
-    gluePath: GLUE_PATH,
+    gluePath: gluePath(),
     argv,
     inputFiles,
     outputFiles: [{ vfsPath: "/work/out.bin", encoding: "base64" }],

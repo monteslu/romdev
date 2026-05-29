@@ -37,10 +37,11 @@ function resolveM68kGlue(file) {
   throw new Error(`m68k-elf-gcc WASM (${file}) not found — install @romdev/toolchain-m68k-gcc`);
 }
 
-const CC1_GLUE      = resolveM68kGlue("cc1-m68k.mjs");
-const AS_GLUE       = resolveM68kGlue("m68k-elf-as.mjs");
-const LD_GLUE       = resolveM68kGlue("m68k-elf-ld.mjs");
-const OBJCOPY_GLUE  = resolveM68kGlue("m68k-elf-objcopy.mjs");
+// Lazy + memoized per tool: resolve only on the first Genesis-C build that uses
+// each tool, not at module load — so booting the server never touches this
+// (20MB) package unless a Genesis C ROM is actually built.
+const _glue = {};
+const m68kGlue = (file) => (_glue[file] ??= resolveM68kGlue(file));
 
 // ── cc1 — m68k gcc C frontend, source → assembly ─────────────────────
 //
@@ -76,7 +77,7 @@ export async function runCc1m68k(args) {
     "-o", "/work/main.s",
   ];
   const r = await runIsolated({
-    gluePath: CC1_GLUE,
+    gluePath: m68kGlue("cc1-m68k.mjs"),
     argv,
     inputFiles,
     outputFiles: [{ vfsPath: "/work/main.s", encoding: "utf8" }],
@@ -123,7 +124,7 @@ export async function runM68kAs(args) {
     "-o", "/work/main.o",
   ];
   const r = await runIsolated({
-    gluePath: AS_GLUE,
+    gluePath: m68kGlue("m68k-elf-as.mjs"),
     argv,
     inputFiles,
     outputFiles: [{ vfsPath: "/work/main.o", encoding: "base64" }],
@@ -171,7 +172,7 @@ export async function runM68kLd(args) {
     ...options,
   ];
   const r = await runIsolated({
-    gluePath: LD_GLUE,
+    gluePath: m68kGlue("m68k-elf-ld.mjs"),
     argv,
     inputFiles,
     outputFiles: [{ vfsPath: "/work/main.elf", encoding: "base64" }],
@@ -205,7 +206,7 @@ export async function runM68kObjcopy(args) {
     "/work/main.bin",
   ];
   const r = await runIsolated({
-    gluePath: OBJCOPY_GLUE,
+    gluePath: m68kGlue("m68k-elf-objcopy.mjs"),
     argv,
     inputFiles,
     outputFiles: [{ vfsPath: "/work/main.bin", encoding: "base64" }],

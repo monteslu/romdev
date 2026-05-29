@@ -24,7 +24,9 @@ function resolveDa65Glue() {
   if (existsSync(local)) return local;
   throw new Error("da65 WASM not found — install @romdev/toolchain-cc65");
 }
-const GLUE = resolveDa65Glue();
+// Lazy + memoized: resolve only on the first da65 disassembly, not at boot.
+let _glue;
+const glue = () => (_glue ??= resolveDa65Glue());
 
 /**
  * Disassemble a chunk of bytes.
@@ -67,7 +69,7 @@ export async function runDa65(args) {
     "/work/in.bin",
   ];
   const r = await runIsolated({
-    gluePath: GLUE,
+    gluePath: glue(),
     argv,
     inputFiles,
   });

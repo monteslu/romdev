@@ -29,9 +29,11 @@ function resolveRgbdsGlue(file) {
   if (existsSync(local)) return local;
   throw new Error(`RGBDS WASM (${file}) not found — install @romdev/toolchain-rgbds`);
 }
-const RGBASM_GLUE  = resolveRgbdsGlue("rgbasm.js");
-const RGBLINK_GLUE = resolveRgbdsGlue("rgblink.js");
-const RGBFIX_GLUE  = resolveRgbdsGlue("rgbfix.js");
+// Lazy + memoized per tool: resolve (and possibly throw "not installed") only
+// on the first GB/GBC asm build that uses each tool, not at module load — so
+// booting the server never touches this package unless RGBDS is actually used.
+const _glue = {};
+const rgbdsGlue = (file) => (_glue[file] ??= resolveRgbdsGlue(file));
 
 /**
  * Run rgbasm on a source program.
@@ -50,7 +52,7 @@ export async function runRgbasm(args) {
     inputFiles.push(textFile("/work/" + name, content));
   }
   const r = await runIsolated({
-    gluePath: RGBASM_GLUE,
+    gluePath: rgbdsGlue("rgbasm.js"),
     argv: ["-I", "/work", ...opts, "-o", "/work/out.o", "/work/main.asm"],
     inputFiles,
     outputFiles: [{ vfsPath: "/work/out.o", encoding: "base64" }],
@@ -76,7 +78,7 @@ export async function runRgblink(args) {
   const inputFiles = [];
   for (const [n, b] of Object.entries(objects)) inputFiles.push(binaryFile("/work/" + n, b));
   const r = await runIsolated({
-    gluePath: RGBLINK_GLUE,
+    gluePath: rgbdsGlue("rgblink.js"),
     argv: ["-o", "/work/out.gb", ...opts, ...Object.keys(objects).map((n) => "/work/" + n)],
     inputFiles,
     outputFiles: [{ vfsPath: "/work/out.gb", encoding: "base64" }],
@@ -99,7 +101,7 @@ export async function runRgbfix(args) {
   const { rom } = args;
   const opts = args.options ?? ["-v", "-p", "0xFF"];
   const r = await runIsolated({
-    gluePath: RGBFIX_GLUE,
+    gluePath: rgbdsGlue("rgbfix.js"),
     argv: [...opts, "/work/out.gb"],
     inputFiles: [binaryFile("/work/out.gb", rom)],
     outputFiles: [{ vfsPath: "/work/out.gb", encoding: "base64" }],

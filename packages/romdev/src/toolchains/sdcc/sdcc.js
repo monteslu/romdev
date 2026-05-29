@@ -34,14 +34,14 @@ function resolveSdccBaseDir() {
   if (existsSync(path.join(__dirname, "wasm", "sdcc.js"))) return __dirname;
   throw new Error("SDCC WASM not found — install @romdev/toolchain-sdcc");
 }
-const SDCC_BASE    = resolveSdccBaseDir();
-const sdccGlue     = (file) => path.join(SDCC_BASE, "wasm", file);
-const SDCC_GLUE    = sdccGlue("sdcc.js");
-const SDASGB_GLUE  = sdccGlue("sdasgb.js");
-const SDASZ80_GLUE = sdccGlue("sdasz80.js");
-const SDLD_GLUE    = sdccGlue("sdld.js");
-const MCPP_GLUE    = sdccGlue("mcpp.js");
-const SHARE_DIR = path.join(SDCC_BASE, "share", "sdcc");
+// Lazy + memoized: resolve (and possibly throw "not installed") only on the
+// first SDCC build (GB/GBC/SMS/GG C), not at module load — so booting the
+// server never touches this package unless SDCC is actually used. Resolve the
+// base dir once; derive each tool glue + the share dir from it on demand.
+let _sdccBase;
+const sdccBase  = () => (_sdccBase ??= resolveSdccBaseDir());
+const sdccGlue  = (file) => path.join(sdccBase(), "wasm", file);
+const shareDir  = () => path.join(sdccBase(), "share", "sdcc");
 
 /**
  * Map our platform ids to sdcc -m flag values + per-port lib directory.
@@ -109,10 +109,10 @@ export async function runSdcpp(args) {
     "/work/main.i",
   ];
   const r = await runIsolated({
-    gluePath: MCPP_GLUE,
+    gluePath: sdccGlue("mcpp.js"),
     argv,
     inputFiles,
-    hostDirMounts: [{ hostDir: path.join(SHARE_DIR, "include"), vfsDir: "/share/sdcc/include" }],
+    hostDirMounts: [{ hostDir: path.join(shareDir(), "include"), vfsDir: "/share/sdcc/include" }],
     outputFiles: [{ vfsPath: "/work/main.i", encoding: "utf8" }],
   });
   return {
@@ -153,7 +153,7 @@ export async function runSdccCompile(args) {
     ...options,
   ];
   const sdccResult = await runIsolated({
-    gluePath: SDCC_GLUE,
+    gluePath: sdccGlue("sdcc.js"),
     argv: sdccArgv,
     stdinText: cpp.preprocessed,
     outputFiles: [{ vfsPath: "/work/main.asm", encoding: "utf8" }],
@@ -199,7 +199,7 @@ export async function runSdasz80(args) {
     "/work/main.s",
   ];
   const r = await runIsolated({
-    gluePath: SDASZ80_GLUE,
+    gluePath: sdccGlue("sdasz80.js"),
     argv,
     inputFiles: [textFile("/work/main.s", source)],
     outputFiles: [{ vfsPath: "/work/main.rel", encoding: "utf8" }],
@@ -226,7 +226,7 @@ export async function runSdasgb(args) {
     "/work/main.s",
   ];
   const r = await runIsolated({
-    gluePath: SDASGB_GLUE,
+    gluePath: sdccGlue("sdasgb.js"),
     argv,
     inputFiles: [textFile("/work/main.s", source)],
     outputFiles: [{ vfsPath: "/work/main.rel", encoding: "utf8" }],
@@ -269,7 +269,7 @@ export async function runSdld(args) {
   if (crt0) {
     inputFiles.push(textFile("/work/crt0.rel", crt0));
   } else {
-    const stockCrt0 = await readFile(path.join(SHARE_DIR, "lib", port, "crt0.rel"));
+    const stockCrt0 = await readFile(path.join(shareDir(), "lib", port, "crt0.rel"));
     inputFiles.push(textFile("/work/crt0.rel", stockCrt0.toString("utf8")));
   }
   const argv = [
@@ -287,11 +287,11 @@ export async function runSdld(args) {
     "-e", // end of arg list
   ];
   const r = await runIsolated({
-    gluePath: SDLD_GLUE,
+    gluePath: sdccGlue("sdld.js"),
     argv,
     inputFiles,
     hostDirMounts: [
-      { hostDir: path.join(SHARE_DIR, "lib", port), vfsDir: "/share/sdcc/lib/" + port },
+      { hostDir: path.join(shareDir(), "lib", port), vfsDir: "/share/sdcc/lib/" + port },
     ],
     outputFiles: [
       { vfsPath: "/work/out.ihx", encoding: "utf8" },

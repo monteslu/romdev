@@ -33,8 +33,10 @@ function resolveWladxGlue(file) {
   if (existsSync(local)) return local;
   throw new Error(`wla-dx WASM (${file}) not found — install @romdev/platform-snes`);
 }
-const WLA_GLUE  = resolveWladxGlue("wla-65816.js");
-const LINK_GLUE = resolveWladxGlue("wlalink.js");
+// Lazy + memoized per tool: resolve only on the first wla-dx (SNES asm) build
+// that uses each tool, not at module load.
+const _glue = {};
+const wladxGlue = (file) => (_glue[file] ??= resolveWladxGlue(file));
 
 /**
  * Assemble a single .asm source with wla-65816.
@@ -69,7 +71,7 @@ export async function runWla65816(args) {
     "/work/main.asm",
   ];
   const r = await runIsolated({
-    gluePath: WLA_GLUE,
+    gluePath: wladxGlue("wla-65816.js"),
     argv,
     inputFiles,
     outputFiles: [{ vfsPath: "/work/main.o", encoding: "base64" }],
@@ -104,7 +106,7 @@ export async function runWlalink(args) {
     "/work/out.smc",
   ];
   const r = await runIsolated({
-    gluePath: LINK_GLUE,
+    gluePath: wladxGlue("wlalink.js"),
     argv,
     inputFiles,
     outputFiles: [{ vfsPath: "/work/out.smc", encoding: "base64" }],

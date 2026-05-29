@@ -26,7 +26,9 @@ function resolveAsarGlue() {
   if (existsSync(local)) return local;
   throw new Error("asar WASM not found — install @romdev/platform-snes");
 }
-const GLUE_PATH = resolveAsarGlue();
+// Lazy + memoized: resolve only on the first asar (SNES asm) build, not at boot.
+let _gluePath;
+const gluePath = () => (_gluePath ??= resolveAsarGlue());
 
 /**
  * Assemble an asar source.
@@ -188,7 +190,7 @@ async function assembleOnce({ source, includes, binaryIncludes, baseRom, extraOp
   }
   const argv = ["--no-title-check", ...extraOpts, "/work/main.asm", "/work/rom.sfc"];
   const r = await runIsolated({
-    gluePath: GLUE_PATH,
+    gluePath: gluePath(),
     argv,
     inputFiles,
     outputFiles: [

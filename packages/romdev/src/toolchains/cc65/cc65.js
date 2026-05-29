@@ -32,9 +32,14 @@ function resolveCc65BaseDir() {
   if (existsSync(path.join(__dirname, "wasm", "cc65.js"))) return __dirname;
   throw new Error("cc65 WASM not found — install @romdev/toolchain-cc65");
 }
-const CC65_BASE = resolveCc65BaseDir();
-const WASM_DIR = path.join(CC65_BASE, "wasm");
-const SHARE_DIR = path.join(CC65_BASE, "share", "cc65");
+// Lazy + memoized: resolve (and possibly throw "not installed") only on the
+// first cc65 build (NES/C64/Atari7800/Lynx), not at module load — so booting
+// the server never touches this package unless cc65 is actually used. Resolve
+// the base dir once; derive the wasm + share dirs from it on demand.
+let _cc65Base;
+const cc65Base = () => (_cc65Base ??= resolveCc65BaseDir());
+const wasmDir  = () => path.join(cc65Base(), "wasm");
+const shareDir = () => path.join(cc65Base(), "share", "cc65");
 
 import { runIsolated, textFile, binaryFile, getOutputBytes, getOutputText } from "../_worker/run.js";
 
@@ -55,7 +60,7 @@ export async function runCc65(args) {
     inputFiles.push(textFile("/work/" + name, content));
   }
   const r = await runIsolated({
-    gluePath: path.join(WASM_DIR, "cc65.js"),
+    gluePath: path.join(wasmDir(), "cc65.js"),
     argv: [
       ...(target ? ["-t", target] : []),
       "-I", "/share/cc65/include",
@@ -66,7 +71,7 @@ export async function runCc65(args) {
     ],
     inputFiles,
     hostDirMounts: [
-      { hostDir: path.join(SHARE_DIR, "include"), vfsDir: "/share/cc65/include" },
+      { hostDir: path.join(shareDir(), "include"), vfsDir: "/share/cc65/include" },
     ],
     outputFiles: [{ vfsPath: "/work/out.s", encoding: "utf8" }],
   });
@@ -100,7 +105,7 @@ export async function runCa65(args) {
     inputFiles.push(binaryFile("/work/" + name, bytes));
   }
   const r = await runIsolated({
-    gluePath: path.join(WASM_DIR, "ca65.js"),
+    gluePath: path.join(wasmDir(), "ca65.js"),
     argv: [
       ...(target ? ["-t", target] : []),
       "-I", "/share/cc65/asminc",
@@ -111,7 +116,7 @@ export async function runCa65(args) {
     ],
     inputFiles,
     hostDirMounts: [
-      { hostDir: path.join(SHARE_DIR, "asminc"), vfsDir: "/share/cc65/asminc" },
+      { hostDir: path.join(shareDir(), "asminc"), vfsDir: "/share/cc65/asminc" },
     ],
     outputFiles: [{ vfsPath: "/work/out.o", encoding: "base64" }],
   });
@@ -153,7 +158,7 @@ export async function runLd65(args) {
   const outputFiles = [{ vfsPath: "/work/out.bin", encoding: "base64" }];
   if (debug) outputFiles.push({ vfsPath: "/work/out.dbg", encoding: "utf8" });
   const r = await runIsolated({
-    gluePath: path.join(WASM_DIR, "ld65.js"),
+    gluePath: path.join(wasmDir(), "ld65.js"),
     argv: [
       ...configArgs,
       "-o", "/work/out.bin",
@@ -165,8 +170,8 @@ export async function runLd65(args) {
     ],
     inputFiles,
     hostDirMounts: [
-      { hostDir: path.join(SHARE_DIR, "lib"), vfsDir: "/share/cc65/lib" },
-      { hostDir: path.join(SHARE_DIR, "cfg"), vfsDir: "/share/cc65/cfg" },
+      { hostDir: path.join(shareDir(), "lib"), vfsDir: "/share/cc65/lib" },
+      { hostDir: path.join(shareDir(), "cfg"), vfsDir: "/share/cc65/cfg" },
     ],
     outputFiles,
   });

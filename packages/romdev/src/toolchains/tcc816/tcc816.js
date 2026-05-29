@@ -32,7 +32,9 @@ function resolveTcc816Glue() {
   if (existsSync(local)) return local;
   throw new Error("tcc816 WASM not found — install @romdev/platform-snes");
 }
-const GLUE_PATH = resolveTcc816Glue();
+// Lazy + memoized: resolve only on the first tcc816 (SNES C) build, not at boot.
+let _gluePath;
+const gluePath = () => (_gluePath ??= resolveTcc816Glue());
 
 /**
  * Compile a C source to 65816 assembly via tcc-65816.
@@ -63,7 +65,7 @@ export async function runTcc816(args) {
     "/work/main.c",
   ];
   const r = await runIsolated({
-    gluePath: GLUE_PATH,
+    gluePath: gluePath(),
     argv,
     inputFiles,
     outputFiles: [{ vfsPath: "/work/out.s", encoding: "utf8" }],

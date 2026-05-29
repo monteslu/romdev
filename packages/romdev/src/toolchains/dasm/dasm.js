@@ -24,7 +24,11 @@ function resolveDasmGlue() {
   if (existsSync(local)) return local;
   throw new Error("dasm WASM not found — install @romdev/platform-atari2600");
 }
-const GLUE_PATH = resolveDasmGlue();
+// Lazy + memoized: resolve (and possibly throw "not installed") only on the
+// FIRST dasm build, not at module load — so booting the server never touches
+// this package unless an Atari 2600 ROM is actually built.
+let _gluePath;
+const gluePath = () => (_gluePath ??= resolveDasmGlue());
 
 /**
  * Run dasm on a source program in-memory.
@@ -63,7 +67,7 @@ export async function runDasm(args) {
     ...extraOpts,
   ];
   const r = await runIsolated({
-    gluePath: GLUE_PATH,
+    gluePath: gluePath(),
     argv,
     inputFiles,
     outputFiles: [
