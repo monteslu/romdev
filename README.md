@@ -8,10 +8,6 @@ npx romdev
 
 That's the whole setup. Everything — emulator cores, assemblers, C compilers, starter libraries, example projects, hardware reference docs — ships as bundled WebAssembly and data via npm. Same on Linux, Windows, and macOS (Node 24+).
 
-Yes, it pulls a lot at install. That's the trade: bandwidth once, then **zero ongoing setup friction** — no PATH fiddling, no SDK installers, no "follow these 12 steps for your OS first." A game director with an idea should not be reading installation docs.
-
-> **Status:** launch-*candidate*, not yet 1.0. 12 platforms work end-to-end (build → run → screenshot → inspect → iterate) with idiomatic C SDKs or assemblers, 5 genre scaffolds + a music demo each, per-platform reference docs, and deep introspection. **326 / 326 tests passing.** What's still open: the weak-model "ships a game in one session" validation, a known NES stock-platformer idle-crash, and remote-MCP-client reconnect UX. See [packages/romdev/PLAN.md § Launch readiness](./packages/romdev/PLAN.md#launch-readiness--open-risks).
-
 ## What is this?
 
 `romdev` is a [Model Context Protocol](https://modelcontextprotocol.io/) server. A coding agent connects to it and gets a tool surface for the full homebrew loop:
