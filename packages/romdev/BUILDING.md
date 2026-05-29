@@ -9,46 +9,51 @@ fill in your row in **§ Platform matrix**.
 
 ---
 
-## ⚠ READ FIRST — build state as of the monorepo split (2026-05-29)
+## ⚠ READ FIRST — how the build relates to the published packages
 
-The project is mid-migration from the single `romdev/` tree to the
-**`romdev/` monorepo** (`~/code/cliemu/romdev/`, npm workspaces). This changes
-where built WASM lives, and parts of the sections below describe the OLD layout.
+`romdev` is an npm-workspaces monorepo (`~/code/cliemu/romdev/`):
+`packages/romdev` (server + tools + scaffolds, ships NO wasm) hard-depends on
+**14 binary packages** that carry the WebAssembly — 6 `@romdev/core-*`, 5
+`@romdev/toolchain-*`, 3 `@romdev/platform-{snes,gba,atari2600}`. romdev resolves
+each core/compiler from its package via `import.meta.resolve`, lazily, on first
+use of that platform.
 
-**What's true now:**
-- **WASM lives in `@romdev/*` packages**, not `src/.../wasm/`. The monorepo has
-  `packages/romdev` (server + tools + scaffolds, NO wasm) + 14 binary packages
-  (`@romdev/core-*`, `@romdev/toolchain-*`, `@romdev/platform-{snes,gba,atari2600}`).
-  romdev resolves each core/compiler from its package via `import.meta.resolve`.
-- **The build scripts (`scripts/build-*.sh`) still output to the OLD paths**
-  (`src/cores/wasm/`, `src/toolchains/<tc>/wasm/`). Relocating each script + its
-  patches INTO its owning package (so the package rebuilds its own wasm) is
-  **pending D-work** — see `DEPLOYMENT_SKETCH.md`. For now: build in the old tree,
-  the package wasm are copies of those outputs.
-- **emscripten on this dev box:** `~/code/mine/emsdk/`. Source it first:
-  `source ~/code/mine/emsdk/emsdk_env.sh`. Then `which emcc` should resolve.
+**Key facts for building:**
+- **WASM is a build OUTPUT, not committed to git.** git holds the source of
+  truth for *building* (these recipes, the patches, the version pins). The built
+  `.wasm` + glue ship via the npm binary packages (`npm pack` reads the working
+  tree). A fresh clone has no wasm until you build it or `npm install` the
+  packages. (Forced by GitHub's 100 MB/file limit — cc1-arm.wasm is 135 MB — and
+  it's the cleaner split anyway: CI rebuilds wasm in the pinned container rather
+  than trusting a stale committed blob.)
+- **Build scripts live in `packages/romdev/scripts/`** and stage their output
+  into `packages/romdev/src/cores/wasm/` + `src/toolchains/<tc>/wasm/`. Those
+  `src/.../wasm/` dirs are **gitignored staging** — the SHIPPING wasm is the copy
+  under each binary package's `packages/<pkg>/wasm/`. (Relocating each recipe to
+  output directly into its owning package is possible future cleanup; today they
+  stage to `src/` and the package wasm are copies.)
+- **emscripten:** use the pinned Docker build image (`build-image/`, FROM
+  `emscripten/emsdk:4.0.18`) for reproducibility, OR a local emsdk on PATH
+  (`source <emsdk>/emsdk_env.sh`; `which emcc` should resolve). On this dev box
+  emsdk lives at `~/code/mine/emsdk/`.
 - **Builds are NOT bit-reproducible.** A fresh `build-dasm.sh` produced a
   byte-different (98930 vs 98927 B), functionally-identical wasm — different
-  sha256, same behavior (test passed). So "the wasm changed" must be judged by
-  *behavior/tests*, not by hash equality across rebuilds. (Implication: don't
-  gate CI on hash-matching prebuilt vs rebuilt wasm — they won't match.)
-- **Verified buildable through the new layout:** dasm only (rebuilt from source,
-  dropped into `@romdev/platform-atari2600`, 2600 test passed). The other 13 use
-  COPIES of previously-built wasm — their from-scratch rebuild in the new layout
-  is unverified. The heavy ones (arm-gcc 155MB / m68k-gcc / sdcc) are multi-hour
-  Emscripten builds; rebuild rarely (mtimes show wasm is near-static).
+  sha256, same behavior (test passed). Judge "the wasm changed" by *behavior /
+  tests*, not hash equality across rebuilds. Don't gate CI on hash-matching
+  prebuilt vs rebuilt wasm.
+- The heavy toolchains (arm-gcc ~155 MB / m68k-gcc / sdcc) are multi-hour
+  Emscripten builds; rebuild rarely — the wasm is near-static.
 
-**REMOVED platforms (2026-05-29):** atari5200, zxspectrum, coleco, msx are fully
-gone (12-platform product now). Their build scripts (`build-atari800.sh`,
-`build-fmsx`-type, `build-gearcoleco`-type, fuse) + the
-`sync-cores-from-retroemu.sh` MSX/Coleco/ZX paths are **dead** — ignore mentions
-of them below. `build-atari5200`/atari800 is dead too.
+**12 supported platforms:** nes, gb, gbc, snes, genesis, sms, gg, c64, gba, lynx,
+atari2600, atari7800. (atari5200, zxspectrum, coleco, msx were removed; their
+build scripts and the old retroemu core-sync path are gone — ignore any stray
+mention below.)
 
 **GBA self-containment:** GBA's 3 ARM target archives (libc.a/libgcc.a/libnosys.a,
-~15 MB) now live in `src/platforms/gba/lib/arm-archives/` (copied from the 1GB
+~15 MB) live in `src/platforms/gba/lib/arm-archives/` (copied from the 1 GB
 `build/arm-toolchain/install/` tree, which is native build tools — NOT shipped).
-`gba-c.js readTargetArchives()` reads from there now, not from `build/`. So
-`@romdev/platform-gba` = mgba wasm + arm-gcc wasm + those 3 archives.
+`gba-c.js readTargetArchives()` reads from there. So `@romdev/platform-gba` =
+mgba wasm + arm-gcc wasm + those 3 archives.
 
 ---
 
@@ -160,14 +165,18 @@ with a clear message if missing.
 
 ## What's bundled
 
-romdev ships **two kinds** of WASM blobs:
+romdev ships **two kinds** of WASM blobs, each in its own npm binary package
+(`packages/<pkg>/wasm/`); the build scripts stage them via the gitignored
+`src/.../wasm/` dirs first:
 
-1. **Emulator cores** under `src/cores/wasm/` — libretro cores compiled
-   to WASM. One core per emulator (e.g. `fceumm_libretro.wasm` for NES,
-   `gpgx_libretro.wasm` shared across Genesis / SMS / Game Gear).
-2. **Toolchains** under `src/toolchains/<id>/wasm/` — assemblers /
-   compilers / linkers. One toolchain may target many platforms (e.g.
-   cc65 covers NES, C64, Atari 5200/7800, Lynx).
+1. **Emulator cores** — libretro cores compiled to WASM, one per emulator
+   (e.g. `fceumm_libretro.wasm` for NES; `genesis_plus_gx_libretro.wasm` shared
+   across Genesis / SMS / Game Gear). Shared cores → `@romdev/core-*`;
+   single-platform cores live in their `@romdev/platform-*` bundle.
+2. **Toolchains** — assemblers / compilers / linkers. One toolchain may target
+   many platforms (e.g. cc65 covers NES, C64, Atari 7800, Lynx). Shared
+   toolchains → `@romdev/toolchain-*`; single-platform toolchains live in the
+   `@romdev/platform-*` bundle.
 
 A platform = an emulator core + a toolchain + JS glue under
 `src/platforms/<id>/`. Adding a platform means wiring **all three**.
@@ -191,10 +200,6 @@ patch; we use the stock libretro core. Region IDs allocated below.
 | Atari 7800   | `prosystem_libretro.wasm`         | `prosystem-romdev-memory-regions.patch`  | cc65      | 0x150                | deep   |
 | Commodore 64 | `vice_x64_libretro.wasm`          | `vice-romdev-memory-regions.patch`       | cc65      | 0x170-0x175          | deep   |
 | Atari Lynx   | `handy_libretro.wasm`             | —                                        | cc65      | —                    | shallow (templates + sfx + music shipped; introspection generic) |
-| Atari 5200   | `atari800_libretro.wasm`          | — (core needs Asyncify rebuild)          | cc65      | —                    | build only |
-| MSX          | `fmsx_libretro.wasm`              | —                                        | sdcc      | —                    | shallow (bring-up only — single `default` template) |
-| ColecoVision | `gearcoleco_libretro.wasm`        | —                                        | sdcc      | —                    | shallow (bring-up only — single `default` template) |
-| ZX Spectrum  | `fuse_libretro.wasm`              | —                                        | sdcc      | —                    | build only (core rejects tape `retro_load_game`) |
 
 **Status legend:**
 - `deep` — inspectSprites / inspectPalette / getCPUState / getRenderingContext / disassembleRom / findReferences all wired with platform-specific decode.
@@ -239,9 +244,15 @@ objects, link to WASM, stage under `src/cores/wasm/`.
 ./scripts/build-stella2014.sh         # Atari 2600
 ./scripts/build-prosystem.sh          # Atari 7800
 ./scripts/build-vice.sh               # Commodore 64
-./scripts/build-atari800.sh           # Atari 5200 (Asyncify rebuild; BIOS-load path still blocks run loop)
-./scripts/sync-cores-from-retroemu.sh # Lynx / MSX / ColecoVision / ZX Spectrum (no patches needed today)
 ```
+
+Two cores have no in-repo build script yet: **handy** (Lynx) and **mgba** (GBA
+emulator core). They need no memory-region patch today and their wasm was
+sourced from the libretro WASM build; before a from-scratch rebuild, resolve
+their pinned commit in `scripts/versions.json` (currently
+`UNVERIFIED-resolve-before-rebuild`) and add a `build-<core>.sh` following the
+same shape. (The GBA *toolchain* — arm-gcc — does build in-repo via
+`build-arm-toolchain.sh` + `build-arm-wasm-tools.sh`.)
 
 ### Patch convention
 
@@ -317,7 +328,7 @@ git apply --recount scripts/patches/<core>-romdev-memory-regions.patch
 ### Multi-port toolchains
 
 **SDCC bundles four backends** in one WASM:
-- `z80` (SMS, Game Gear, MSX, ColecoVision, ZX Spectrum)
+- `z80` (SMS, Game Gear)
 - `sm83` aka `gbz80` (Game Boy / GBC, used by GBDK)
 - `z180` (rarely targeted)
 - `ez80_z80` (Game Gear superset)
@@ -420,8 +431,8 @@ the build script header so future you knows why.
 ### SDCC pre-flight linter
 
 `buildForPlatform` runs a pattern scanner over C sources **before**
-invoking SDCC, for all SDCC-targeted platforms (GB, GBC, SMS, GG, MSX,
-ColecoVision). What it catches:
+invoking SDCC, for all SDCC-targeted platforms (GB, GBC, SMS, GG). What it
+catches:
 
 - C99 syntax violations: mid-block decls, inline `for (int i = 0;)`,
   compound literals, designated initializers. SDCC sm83 is C89-only
@@ -847,11 +858,10 @@ Run the full integration suite:
 npm test
 ```
 
-102 tests today. Add a smoke test per platform under `test/` when you
-add a new one. The harness boots an MCP server in-process via
-`createMcpServer()` and drives it through the JSON-RPC surface; no
-mocks of cores or toolchains. If a test fails after your change,
-something cross-platform regressed.
+326 tests today (`npm test`). Add a smoke test per platform under `test/` when
+you add a new one. The harness boots an MCP server in-process and drives it
+through the JSON-RPC surface; no mocks of cores or toolchains. If a test fails
+after your change, something cross-platform regressed.
 
 ## Reproducibility checklist
 
@@ -870,16 +880,20 @@ Before merging a new platform or a core update:
       handles CRLF if upstream ships it.
 - [ ] Memory-region IDs in their assigned block (see allocation table);
       `src/host/types.js` updated.
-- [ ] Built WASM staged at `src/cores/wasm/<name>.wasm` AND committed
-      (we ship the binary; not everyone has emsdk).
+- [ ] Built WASM staged at `src/cores/wasm/<name>.wasm` (gitignored staging),
+      then copied into its binary package's `packages/<pkg>/wasm/`. WASM is NOT
+      committed to git — it ships via the npm package (`npm pack` reads the
+      working tree). Confirm the package's `npm pack --dry-run` includes the
+      new wasm.
 - [ ] `npm test` is 100% green.
 - [ ] Smoke test through curl on the running server (load → stepFrames
       → inspectPalette/Sprites/CPU/Rendering).
 - [ ] This file updated: matrix row, region-block, and any new
       toolchain bundle notes.
-- [ ] No build artifacts in `/tmp` — everything we'd want to reproduce
-      lives under `build/` (gitignored, source of truth is `scripts/`)
-      or `src/` (committed).
+- [ ] No build artifacts in `/tmp` — the reproducible source of truth is
+      `scripts/` (recipes + patches + pins, committed). `build/` and the
+      `src/.../wasm/` staging dirs are gitignored; the shipping wasm lives in
+      the binary packages (`packages/*/wasm/`).
 
 ## Known build-host quirks
 
