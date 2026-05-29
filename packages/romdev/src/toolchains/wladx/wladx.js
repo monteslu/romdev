@@ -20,18 +20,18 @@ import { runIsolated, textFile, binaryFile, getOutputBytes, getOutputText } from
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// wla-dx's WASM ships in @romdev/platform-snes (the SNES platform is the only
+// wla-dx's WASM ships in romdev-platform-snes (the SNES platform is the only
 // consumer). Resolve from that package; fall back to a local copy under src/
 // if present (transition / dev). The package is a hard dep of romdev.
 function resolveWladxGlue(file) {
   try {
-    const u = import.meta.resolve("@romdev/platform-snes");
+    const u = import.meta.resolve("romdev-platform-snes");
     const p = path.join(path.dirname(fileURLToPath(u)), "wasm", file);
     if (existsSync(p)) return p;
   } catch { /* package not resolvable — fall through to local */ }
   const local = path.join(__dirname, "wasm", file);
   if (existsSync(local)) return local;
-  throw new Error(`wla-dx WASM (${file}) not found — install @romdev/platform-snes`);
+  throw new Error(`wla-dx WASM (${file}) not found — install romdev-platform-snes`);
 }
 // Lazy + memoized per tool: resolve only on the first wla-dx (SNES asm) build
 // that uses each tool, not at module load.

@@ -81,12 +81,12 @@ The `platformer` scaffold side-scrolls (hardware camera + per-platform column st
 
 ## How it's packaged
 
-`romdev` is a small **monorepo** of npm packages. The thing you install is `romdev`; it hard-depends on a set of `@romdev/*` binary packages that carry the WebAssembly:
+`romdev` is a small **monorepo** of npm packages. The thing you install is `romdev`; it hard-depends on a set of `romdev-*` binary packages that carry the WebAssembly:
 
 - **[`romdev`](./packages/romdev)** — the MCP server, all generic tools, scaffolds, runtime/library source, debug helpers, and the `romdev` / `romdev-cli` binaries. The fast-churning layer; ships **zero wasm**.
-- **`@romdev/core-*`** (6) — shared emulator cores: `fceumm`, `gambatte`, `gpgx`, `vice`, `handy`, `prosystem`.
-- **`@romdev/platform-*`** (3) — self-contained platform bundles where the core + compiler are used by no one else: `snes`, `gba`, `atari2600`.
-- **`@romdev/toolchain-*`** (5) — shared compilers: `cc65`, `sdcc`, `m68k-gcc`, `vasm`, `rgbds`.
+- **`romdev-core-*`** (6) — shared emulator cores: `fceumm`, `gambatte`, `gpgx`, `vice`, `handy`, `prosystem`.
+- **`romdev-platform-*`** (3) — self-contained platform bundles where the core + compiler are used by no one else: `snes`, `gba`, `atari2600`.
+- **`romdev-toolchain-*`** (5) — shared compilers: `cc65`, `sdcc`, `m68k-gcc`, `vasm`, `rgbds`.
 
 `romdev` resolves each core/compiler from its package lazily — a toolchain's WASM is only loaded into memory the first time you build for that platform, so booting the server is fast and a session only pays for the platforms it actually uses. WASM is a **build output**: it ships via the npm packages, not committed to this git repo (which holds the source, recipes, and version pins). See [packages/romdev/BUILDING.md](./packages/romdev/BUILDING.md) for the platform × core × toolchain matrix and how the wasm is built (a pinned Emscripten container).
 

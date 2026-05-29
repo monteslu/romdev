@@ -6,7 +6,7 @@ NO folder renames done yet. This is the full map to sign off on first.
 **Settled decisions (this session):**
 - Folder + main project rename: `romdev` → **`romdev`** (never was a git repo — clean slate).
 - Topology: **polyrepo** — separate GitHub repo per package, each with its own CI.
-- GitHub home: **`monteslu/`** (personal). npm: main pkg **`romdev`** (unscoped); the rest **`@romdev/*`** (npm org `romdev`, to be created before first publish).
+- GitHub home: **`monteslu/`** (personal). npm: main pkg **`romdev`** (unscoped); the rest **`romdev-*`** (npm org `romdev`, to be created before first publish).
 - Install model: hard deps, exact-pinned in `romdev`. `npx romdev` installs everything. No custom CLI.
 - Engines: Node **≥24**.
 - **WASM IS committed to git** (decided 2026-05-29) — directly, no LFS. Each binary repo commits its built `.wasm` + glue alongside the build recipe. Rationale: makes CI trivial (clean checkout has the wasm → full test suite just runs, no fetch/build/split gymnastics), no LFS friction, and the tested wasm == committed wasm == published wasm (reproducible). Cost = clone size on the 3 heavy repos (arm-gcc ~155M, sdcc 22M, m68k 20M); fine — they're personal repos, cloned rarely, wasm is near-static. **Publishing is still MANUAL/local** (`npm publish` from disk) — no auto-publish, no publish CI, no npm tokens in CI. (The earlier "git-untracked-wasm blocker" + the whole CI-wrinkle question below are now MOOT — wasm-in-git resolves both.)
@@ -37,30 +37,30 @@ verified sharing map:
 ### Collapsed platform packages (3) — core + compiler together, nothing shared
 | # | GitHub repo | npm | binaries | platform |
 |---|---|---|---|---|
-| 2 | `monteslu/romdev-platform-snes` | `@romdev/platform-snes` | snes9x core + asar + tcc816 + wladx | SNES |
-| 3 | `monteslu/romdev-platform-gba` | `@romdev/platform-gba` | mgba core + arm-none-eabi-gcc (**155M**) | GBA |
-| 4 | `monteslu/romdev-platform-atari2600` | `@romdev/platform-atari2600` | stella2014 core + dasm | Atari 2600 |
+| 2 | `monteslu/romdev-platform-snes` | `romdev-platform-snes` | snes9x core + asar + tcc816 + wladx | SNES |
+| 3 | `monteslu/romdev-platform-gba` | `romdev-platform-gba` | mgba core + arm-none-eabi-gcc (**155M**) | GBA |
+| 4 | `monteslu/romdev-platform-atari2600` | `romdev-platform-atari2600` | stella2014 core + dasm | Atari 2600 |
 
 ### Shared emulator cores (7) — used by >1 platform, so standalone
 | # | GitHub repo | npm | core | serves |
 |---|---|---|---|---|
-| 5 | `monteslu/romdev-core-fceumm` | `@romdev/core-fceumm` | fceumm | NES |
-| 6 | `monteslu/romdev-core-gambatte` | `@romdev/core-gambatte` | gambatte | GB, GBC |
-| 7 | `monteslu/romdev-core-gpgx` | `@romdev/core-gpgx` | genesis_plus_gx | Genesis, SMS, GG |
-| 8 | `monteslu/romdev-core-vice` | `@romdev/core-vice` | vice_x64 | C64 |
-| 9 | `monteslu/romdev-core-handy` | `@romdev/core-handy` | handy | Lynx |
-| 10 | `monteslu/romdev-core-prosystem` | `@romdev/core-prosystem` | prosystem | Atari 7800 |
+| 5 | `monteslu/romdev-core-fceumm` | `romdev-core-fceumm` | fceumm | NES |
+| 6 | `monteslu/romdev-core-gambatte` | `romdev-core-gambatte` | gambatte | GB, GBC |
+| 7 | `monteslu/romdev-core-gpgx` | `romdev-core-gpgx` | genesis_plus_gx | Genesis, SMS, GG |
+| 8 | `monteslu/romdev-core-vice` | `romdev-core-vice` | vice_x64 | C64 |
+| 9 | `monteslu/romdev-core-handy` | `romdev-core-handy` | handy | Lynx |
+| 10 | `monteslu/romdev-core-prosystem` | `romdev-core-prosystem` | prosystem | Atari 7800 |
 
 (fceumm serves only NES, but NES's compiler cc65 IS shared → NES can't collapse, so fceumm stays a standalone core. Same logic: vice/handy/prosystem are solo cores but their platforms use shared cc65.)
 
 ### Shared compiler toolchains (4) — used by >1 platform, so standalone
 | # | GitHub repo | npm | binary | serves |
 |---|---|---|---|---|
-| 11 | `monteslu/romdev-toolchain-cc65` | `@romdev/toolchain-cc65` | cc65 (cc65+ca65+ld65+da65) | NES, C64, Lynx, 7800 |
-| 12 | `monteslu/romdev-toolchain-sdcc` | `@romdev/toolchain-sdcc` | sdcc (+sdas/sdld/mcpp, **22M**) | GB, GBC, SMS, GG |
-| 13 | `monteslu/romdev-toolchain-m68k-gcc` | `@romdev/toolchain-m68k-gcc` | m68k-elf-gcc (**20M**) | Genesis (C) |
-| 14 | `monteslu/romdev-toolchain-vasm` | `@romdev/toolchain-vasm` | vasm68k | Genesis (asm) |
-| 15 | `monteslu/romdev-toolchain-rgbds` | `@romdev/toolchain-rgbds` | rgbds (rgbasm/link/fix) | GB/GBC (asm) |
+| 11 | `monteslu/romdev-toolchain-cc65` | `romdev-toolchain-cc65` | cc65 (cc65+ca65+ld65+da65) | NES, C64, Lynx, 7800 |
+| 12 | `monteslu/romdev-toolchain-sdcc` | `romdev-toolchain-sdcc` | sdcc (+sdas/sdld/mcpp, **22M**) | GB, GBC, SMS, GG |
+| 13 | `monteslu/romdev-toolchain-m68k-gcc` | `romdev-toolchain-m68k-gcc` | m68k-elf-gcc (**20M**) | Genesis (C) |
+| 14 | `monteslu/romdev-toolchain-vasm` | `romdev-toolchain-vasm` | vasm68k | Genesis (asm) |
+| 15 | `monteslu/romdev-toolchain-rgbds` | `romdev-toolchain-rgbds` | rgbds (rgbasm/link/fix) | GB/GBC (asm) |
 
 **Total: 15 repos** (1 main + 3 collapsed-platform + 6 shared-core + 5 shared-toolchain).
 (Down from the naïve 18 — the SNES/GBA/2600 collapse merges 3 core + 4 toolchain packages into 3 platform packages.)
@@ -107,7 +107,7 @@ romdev/
   platform-src/        # scaffolds + per-platform runtime libs + debug helpers  (the churning content)
   .github/workflows/test.yml   # VM matrix {ubuntu,macos,windows}×{x64,arm64}, npm test, tag-gated publish
 ```
-(Resolvers change from `path.join(__dirname,"wasm")` → `import.meta.resolve("@romdev/core-fceumm")` etc.)
+(Resolvers change from `path.join(__dirname,"wasm")` → `import.meta.resolve("romdev-core-fceumm")` etc.)
 
 ---
 

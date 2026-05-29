@@ -1,0 +1,30 @@
+{
+  "name": "romdev-platform-gba",
+  "version": "0.1.0",
+  "description": "Game Boy Advance binaries for romdev: mGBA emulator core + arm-none-eabi-gcc toolchain (cc1 / as / ld / objcopy) (WASM). These ship together because nothing else uses them.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./wasm/*": "./wasm/*"
+  },
+  "files": [
+    "index.js",
+    "wasm",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monteslu/romdev.git",
+    "directory": "packages/romdev-platform-gba"
+  },
+  "homepage": "https://github.com/monteslu/romdev#readme",
+  "bugs": {
+    "url": "https://github.com/monteslu/romdev/issues"
+  },
+  "author": "Luis Montes"
+}

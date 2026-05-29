@@ -16,18 +16,18 @@ import { runIsolated, textFile, binaryFile, getOutputBytes } from "../_worker/ru
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// RGBDS's WASM ships in @romdev/toolchain-rgbds. Resolve each tool's glue
+// RGBDS's WASM ships in romdev-toolchain-rgbds. Resolve each tool's glue
 // from that package; fall back to a local copy under src/ if present
 // (transition / dev). The package is a hard dep of romdev.
 function resolveRgbdsGlue(file) {
   try {
-    const u = import.meta.resolve("@romdev/toolchain-rgbds");
+    const u = import.meta.resolve("romdev-toolchain-rgbds");
     const p = path.join(path.dirname(fileURLToPath(u)), "wasm", file);
     if (existsSync(p)) return p;
   } catch { /* package not resolvable — fall through to local */ }
   const local = path.join(__dirname, "wasm", file);
   if (existsSync(local)) return local;
-  throw new Error(`RGBDS WASM (${file}) not found — install @romdev/toolchain-rgbds`);
+  throw new Error(`RGBDS WASM (${file}) not found — install romdev-toolchain-rgbds`);
 }
 // Lazy + memoized per tool: resolve (and possibly throw "not installed") only
 // on the first GB/GBC asm build that uses each tool, not at module load — so

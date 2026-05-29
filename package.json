@@ -2,7 +2,7 @@
   "name": "romdev-monorepo",
   "version": "0.0.0",
   "private": true,
-  "description": "Monorepo for romdev (npx romdev) + its @romdev/* core & toolchain packages. Not published — see packages/* for the published packages.",
+  "description": "Monorepo for romdev (npx romdev) + its romdev-* core & toolchain packages. Not published — see packages/* for the published packages.",
   "type": "module",
   "workspaces": [
     "packages/*"

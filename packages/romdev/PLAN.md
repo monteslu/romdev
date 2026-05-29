@@ -49,44 +49,44 @@ An honest pre-1.0 risk register. These are the things that decide whether the la
 We ship everything (no on-demand fetch — zero-setup is the whole promise; a fetch step is the #1 first-run-horror-story risk), but **split into packages along the line where the change rate changes.** Observed over a week of dev (mtimes confirm it): the **WASM cores + compilers are a slow, stable layer** (newest wasn't touched in ~2-3 days, and the one recent change — fceumm — was a deliberate R59 patch, not churn), while **code / scaffolds / libraries / tooling churn hourly.** Things that change at wildly different rates should version + publish + CI independently. So:
 
 - **`romdev`** (the published entry point, what `npx romdev` runs) — the **fast-churning layer**: MCP server, generic tools (readMemory/screenshot/disassemble/host harness), **AND all the libraries + scaffolds + snippets + runtime + per-platform debug helpers** (`ppu.js`/`vdp.js`/…). Everything we edit constantly. Fast `npm test` CI; frequent publishes. Depends on the platform packages below for their binaries.
-- **`@romdev/platform-*`** — the **slow/stable, heavy layer ONLY**: that platform's **emulator core wasm + compiler wasm**. Nothing else. Rebuilt rarely via its own heavy Emscripten CI; versioned + published independently.
+- **`romdev-platform-*`** — the **slow/stable, heavy layer ONLY**: that platform's **emulator core wasm + compiler wasm**. Nothing else. Rebuilt rarely via its own heavy Emscripten CI; versioned + published independently.
 
   **Two faces — don't conflate them:**
   - **PUBLISHED to npm (what users get):** just the built `.wasm` + `.js` glue. Small, that's all an installer needs.
   - **In the package's SOURCE REPO (what builds the wasm):** the build recipe — `build-<core>.sh`, **its patches** (`scripts/patches/<core>-*.patch`), emscripten flags, upstream version pins, and the core's CI. This is `.npmignore`'d OUT of the tarball, exactly like the monorepo's 14 GB `build/` is excluded today. The package "has whatever it needs to build the wasm" — *in its repo, not its published artifact.* Its CI is "patch/version changes → rebuild wasm → commit → publish." (Open D3b detail: vendor upstream core source vs. fetch-at-build with a pinned commit — fetch is leaner, avoids replicating the 14 GB problem per-package.)
 
-  **Patches colocate with the binary they patch.** Today all core/compiler patches sit in one shared monorepo `scripts/patches/` (fceumm memory-regions, snes9x, gpgx, prosystem, stella2014, the cc65 stack-size / sdcc fixes…). Under the split, **each patch moves into the repo of the binary package it patches** — the fceumm patch in the NES-core package, the gpgx patch in `@romdev/core-gpgx`, etc. Rationale: a patch + the wasm it produces + the version bump + the republish are ONE atomic change-unit; colocating them makes "patch → rebuild → ship" a self-contained loop in one repo with one CI run (today it crosses `scripts/patches/` → `src/cores/wasm/` and couples to the monolith release). NOTE the distinction: only **patches to upstream core/compiler C source** (which regenerate wasm) move into binary packages; any fix to *shipped glue/runtime JS* stays in `romdev` (it's product code, not a build input). The patches are tiny hand-authored text — the valuable artifact — and they travel with their package.
+  **Patches colocate with the binary they patch.** Today all core/compiler patches sit in one shared monorepo `scripts/patches/` (fceumm memory-regions, snes9x, gpgx, prosystem, stella2014, the cc65 stack-size / sdcc fixes…). Under the split, **each patch moves into the repo of the binary package it patches** — the fceumm patch in the NES-core package, the gpgx patch in `romdev-core-gpgx`, etc. Rationale: a patch + the wasm it produces + the version bump + the republish are ONE atomic change-unit; colocating them makes "patch → rebuild → ship" a self-contained loop in one repo with one CI run (today it crosses `scripts/patches/` → `src/cores/wasm/` and couples to the monolith release). NOTE the distinction: only **patches to upstream core/compiler C source** (which regenerate wasm) move into binary packages; any fix to *shipped glue/runtime JS* stays in `romdev` (it's product code, not a build input). The patches are tiny hand-authored text — the valuable artifact — and they travel with their package.
 
-**Why this cut (not "platform package = everything for that platform"):** the content we change all week (scaffolds, tooling, snippets) stays in ONE package (`romdev`), so a cross-cutting change — like every edit this week — is a single `romdev` publish, NOT 12 platform-package republishes. You only touch `@romdev/platform-nes` when its *wasm* changes, which is rare. The two release cadences never collide. This is the whole point.
+**Why this cut (not "platform package = everything for that platform"):** the content we change all week (scaffolds, tooling, snippets) stays in ONE package (`romdev`), so a cross-cutting change — like every edit this week — is a single `romdev` publish, NOT 12 platform-package republishes. You only touch `romdev-platform-nes` when its *wasm* changes, which is rare. The two release cadences never collide. This is the whole point.
 
 **Install model: HARD dependencies, `romdev` is the orchestrator.** `romdev` is the ONLY thing the user installs (`npx romdev`); it lists the binary packages it needs as regular `dependencies` and resolves/loads them. The whole binary-package topology below is an **internal implementation detail romdev coordinates** — invisible to the user, who always just gets the matched, tested set installed up front. Works fully offline; no mid-session `npm install`; no custom CLI. Same footprint as a monolith, deliberately.
 
-- **Exact-pin the binary deps** (`"@romdev/core-gpgx": "2.1.0"`, not `^2.1.0`). `romdev`'s package.json is the single version coordinator — a given `romdev` release installs the exact binary set it was tested against. This is what makes "new library needs a newer compiler → bump the binary package, bump romdev's pin, publish romdev" a safe, atomic, reproducible coordination point (the dependency arrow points `romdev → binaries`, never back; a user can never end up with new-library + stale-compiler). Floating `^` ranges would silently break that guarantee.
+- **Exact-pin the binary deps** (`"romdev-core-gpgx": "2.1.0"`, not `^2.1.0`). `romdev`'s package.json is the single version coordinator — a given `romdev` release installs the exact binary set it was tested against. This is what makes "new library needs a newer compiler → bump the binary package, bump romdev's pin, publish romdev" a safe, atomic, reproducible coordination point (the dependency arrow points `romdev → binaries`, never back; a user can never end up with new-library + stale-compiler). Floating `^` ranges would silently break that guarantee.
 
 **Package the binaries by what's SHARED (the real sharing map):** core-sharing and compiler-sharing cut *across* each other (a platform's core-family ≠ its compiler-family), so group **per binary**, not per "platform family." `romdev` orchestrates which it pulls.
 
 | Binary | Kind | Serves platforms | Package |
 |---|---|---|---|
-| `genesis_plus_gx` | core | Genesis, SMS, GG | `@romdev/core-gpgx` |
-| `gambatte` | core | GB, GBC | `@romdev/core-gambatte` |
-| `fceumm` | core | NES | `@romdev/core-fceumm` |
-| `snes9x` | core | SNES | `@romdev/core-snes9x` |
-| `mgba` | core | GBA | `@romdev/core-mgba` |
-| `vice_x64` | core | C64 | `@romdev/core-vice` |
-| `handy` | core | Lynx | `@romdev/core-handy` |
-| `stella2014` | core | 2600 | `@romdev/core-stella` |
-| `prosystem` | core | 7800 | `@romdev/core-prosystem` |
-| `sdcc` | compiler | GB, GBC, SMS, GG | `@romdev/toolchain-sdcc` |
-| `cc65` | compiler | NES, C64, 7800, Lynx | `@romdev/toolchain-cc65` |
-| `arm-gcc` | compiler | GBA (the 135 MB one) | `@romdev/toolchain-arm-gcc` |
-| `m68k-gcc` | compiler | Genesis (C) | `@romdev/toolchain-m68k-gcc` |
-| `asar` | compiler | SNES (asm) | `@romdev/toolchain-asar` |
-| `tcc816`+`wladx` | compiler | SNES (C) | `@romdev/toolchain-snes-c` |
-| `vasm` | compiler | Genesis (asm) | `@romdev/toolchain-vasm` |
-| `rgbds` | compiler | GB/GBC (asm) | `@romdev/toolchain-rgbds` |
-| `dasm` | compiler | 2600 | `@romdev/toolchain-dasm` |
+| `genesis_plus_gx` | core | Genesis, SMS, GG | `romdev-core-gpgx` |
+| `gambatte` | core | GB, GBC | `romdev-core-gambatte` |
+| `fceumm` | core | NES | `romdev-core-fceumm` |
+| `snes9x` | core | SNES | `romdev-core-snes9x` |
+| `mgba` | core | GBA | `romdev-core-mgba` |
+| `vice_x64` | core | C64 | `romdev-core-vice` |
+| `handy` | core | Lynx | `romdev-core-handy` |
+| `stella2014` | core | 2600 | `romdev-core-stella` |
+| `prosystem` | core | 7800 | `romdev-core-prosystem` |
+| `sdcc` | compiler | GB, GBC, SMS, GG | `romdev-toolchain-sdcc` |
+| `cc65` | compiler | NES, C64, 7800, Lynx | `romdev-toolchain-cc65` |
+| `arm-gcc` | compiler | GBA (the 135 MB one) | `romdev-toolchain-arm-gcc` |
+| `m68k-gcc` | compiler | Genesis (C) | `romdev-toolchain-m68k-gcc` |
+| `asar` | compiler | SNES (asm) | `romdev-toolchain-asar` |
+| `tcc816`+`wladx` | compiler | SNES (C) | `romdev-toolchain-snes-c` |
+| `vasm` | compiler | Genesis (asm) | `romdev-toolchain-vasm` |
+| `rgbds` | compiler | GB/GBC (asm) | `romdev-toolchain-rgbds` |
+| `dasm` | compiler | 2600 | `romdev-toolchain-dasm` |
 
-Per-binary packaging = zero duplication + patch-once-republish-one (a gpgx fix bumps one package, not three platform packages). Each package's patch lives in its repo (see "Patches colocate" above). **Optional convenience bundles** like `@romdev/platform-sms-gg` (SMS+GG share BOTH gpgx and sdcc — the one case where a full binary set is shared) can be thin meta-packages on top, but the per-binary packages are the organizing primitive. Exact split/naming is whatever's cleanest at implementation — the user never sees it; `romdev` orchestrates.
+Per-binary packaging = zero duplication + patch-once-republish-one (a gpgx fix bumps one package, not three platform packages). Each package's patch lives in its repo (see "Patches colocate" above). **Optional convenience bundles** like `romdev-platform-sms-gg` (SMS+GG share BOTH gpgx and sdcc — the one case where a full binary set is shared) can be thin meta-packages on top, but the per-binary packages are the organizing primitive. Exact split/naming is whatever's cleanest at implementation — the user never sees it; `romdev` orchestrates.
 
 **Why split at all (wins independent of user footprint, which is unchanged):**
 1. **Decoupled release cadence** — the thing your week-of-dev observation proves: scaffold/tooling edits (hourly) republish only `romdev`; wasm patches (rare) republish only the affected binary package. No 104 MB monolith republish for a one-line snippet fix.
@@ -143,7 +143,7 @@ The player builds nothing (`npx romdev`). But the *build* audience — us + occa
 - [ ] **D2 — `npm publish --dry-run` + `npm pack`, inspect the tarball.** Confirm: (a) the WASM is actually in the tarball (it's NOT in git — see the ⚠ above — so this verifies the working-tree publish path), (b) `build/`+tests excluded, (c) the 135 MB cc1-arm.wasm is accepted (or plan the split). Single highest-information cheap step — **do it first.**
 - [ ] **D2b — Decide how WASM artifacts reach a CI publish** (commit / git-LFS / fetch-from-release). Launch-blocking for D5; without it, CI publishes an empty-of-cores package. See the ⚠ in Package layout.
 - [ ] **D3 — Rename the bins to `romdev`** in package.json (both: the MCP server `romdev` → primary `romdev`; the CLI `romdev-cli` → keep the `play <rom>`/`identify`/`run` subcommands reachable under `romdev` too, e.g. `romdev play game.gba` — that bonus emulator path already works, just needs the new name). THE acceptance test for the whole rollout: on a clean machine, `npx romdev` (no flags, no prior setup, no custom commands) boots the server AND every platform builds+runs. Verify via `npm pack` → install the tarball in a temp dir → `npx romdev` → exercise one build per platform. If any platform needs an extra command to work, the rollout has failed its north star.
-- [ ] **D3b — Change-cadence split:** `romdev` keeps ALL the fast-churning content (server, tools, scaffolds, libs, snippets, debug helpers) + hard-deps on the binary packages. The binaries (emulator cores + compiler wasm) move into `@romdev/platform-*` (single-platform binaries) and shared-binary packages (`@romdev/core-gpgx`, `@romdev/toolchain-sdcc`, `-cc65`) per the shared-binary sub-decision above. Each binary package PUBLISHES only the built wasm+glue; its build recipe (patch + build script + emscripten flags) lives in its repo, `.npmignore`'d. Change core/toolchain resolvers from `__dirname/wasm` to `import.meta.resolve`-of-the-dep-package; NO "not installed" UX (hard deps guarantee presence). Each binary package gets its own heavy Emscripten CI (fires on patch/version change only); `romdev` gets the fast `npm test` CI. **Can ship AFTER a monolith launch if time-constrained** — identical install from the user's view.
+- [ ] **D3b — Change-cadence split:** `romdev` keeps ALL the fast-churning content (server, tools, scaffolds, libs, snippets, debug helpers) + hard-deps on the binary packages. The binaries (emulator cores + compiler wasm) move into `romdev-platform-*` (single-platform binaries) and shared-binary packages (`romdev-core-gpgx`, `romdev-toolchain-sdcc`, `-cc65`) per the shared-binary sub-decision above. Each binary package PUBLISHES only the built wasm+glue; its build recipe (patch + build script + emscripten flags) lives in its repo, `.npmignore`'d. Change core/toolchain resolvers from `__dirname/wasm` to `import.meta.resolve`-of-the-dep-package; NO "not installed" UX (hard deps guarantee presence). Each binary package gets its own heavy Emscripten CI (fires on patch/version change only); `romdev` gets the fast `npm test` CI. **Can ship AFTER a monolith launch if time-constrained** — identical install from the user's view.
 - [ ] **D4 — Verify graceful SDL degradation.** Simulate `@kmamal/sdl` install failure; confirm headless server still runs and `playtest()` errors cleanly.
 - [ ] **D5 — Release CI:** GitHub Actions matrix (linux/mac/win, x64/arm64) running `npm test`; publish job on tag. Closes R5.
 - [ ] **D6 — (post-launch) Publish a `romdev/wasm-builder` Docker image** (pinned Emscripten + build scripts) as the contributor build on-ramp: `docker run --rm -v $PWD:/work romdev/wasm-builder ./build-<core>.sh` → reproducible wasm, zero local toolchain (no VS/Xcode ever — it's Linux+emcc, build-once, arch-independent). Recommended path, not required (scripts also run against native emcc). Small/infrequent audience; not on the player's critical path.

@@ -21,18 +21,18 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // SDCC's tool WASM AND its target share/ tree (include + per-port lib) both
-// ship in @romdev/toolchain-sdcc. Resolve the package's base dir once; fall
+// ship in romdev-toolchain-sdcc. Resolve the package's base dir once; fall
 // back to a local copy under src/ if present (transition / dev). The package
 // is a hard dep of romdev. The share/ files are mounted into MEMFS at call
 // time. (Mirrors the cc65 resolver.)
 function resolveSdccBaseDir() {
   try {
-    const u = import.meta.resolve("@romdev/toolchain-sdcc");
+    const u = import.meta.resolve("romdev-toolchain-sdcc");
     const dir = path.dirname(fileURLToPath(u));
     if (existsSync(path.join(dir, "wasm", "sdcc.js"))) return dir;
   } catch { /* package not resolvable — fall through to local */ }
   if (existsSync(path.join(__dirname, "wasm", "sdcc.js"))) return __dirname;
-  throw new Error("SDCC WASM not found — install @romdev/toolchain-sdcc");
+  throw new Error("SDCC WASM not found — install romdev-toolchain-sdcc");
 }
 // Lazy + memoized: resolve (and possibly throw "not installed") only on the
 // first SDCC build (GB/GBC/SMS/GG C), not at module load — so booting the

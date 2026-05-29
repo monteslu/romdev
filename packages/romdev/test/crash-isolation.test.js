@@ -10,12 +10,12 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// cc65's WASM now ships in @romdev/toolchain-cc65; resolve from the package
+// cc65's WASM now ships in romdev-toolchain-cc65; resolve from the package
 // (with a local src/ fallback for the transition layout) — same pattern as
 // the production resolver in src/toolchains/cc65/cc65.js.
 function resolveCc65Glue() {
   try {
-    const u = import.meta.resolve("@romdev/toolchain-cc65");
+    const u = import.meta.resolve("romdev-toolchain-cc65");
     const p = path.join(path.dirname(fileURLToPath(u)), "wasm", "cc65.js");
     if (existsSync(p)) return p;
   } catch { /* package not resolvable — fall through to local */ }

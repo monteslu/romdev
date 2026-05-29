@@ -51,18 +51,18 @@ export const CORES = {
 // src/cores/wasm copy (transition / dev). Add a row here as each platform's
 // package is carved out; platforms not listed still resolve locally.
 const CORE_PACKAGES = {
-  atari2600: "@romdev/platform-atari2600",
-  nes: "@romdev/core-fceumm",
-  gb: "@romdev/core-gambatte",
-  gbc: "@romdev/core-gambatte",
-  genesis: "@romdev/core-gpgx",
-  sms: "@romdev/core-gpgx",
-  gg: "@romdev/core-gpgx",
-  c64: "@romdev/core-vice",
-  lynx: "@romdev/core-handy",
-  atari7800: "@romdev/core-prosystem",
-  snes: "@romdev/platform-snes",
-  gba: "@romdev/platform-gba",
+  atari2600: "romdev-platform-atari2600",
+  nes: "romdev-core-fceumm",
+  gb: "romdev-core-gambatte",
+  gbc: "romdev-core-gambatte",
+  genesis: "romdev-core-gpgx",
+  sms: "romdev-core-gpgx",
+  gg: "romdev-core-gpgx",
+  c64: "romdev-core-vice",
+  lynx: "romdev-core-handy",
+  atari7800: "romdev-core-prosystem",
+  snes: "romdev-platform-snes",
+  gba: "romdev-platform-gba",
 };
 
 /** Try to get {jsPath,wasmPath} for a core from its @romdev package. */

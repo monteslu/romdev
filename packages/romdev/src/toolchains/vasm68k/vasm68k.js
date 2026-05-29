@@ -9,18 +9,18 @@ import { runIsolated, textFile, binaryFile, getOutputBytes } from "../_worker/ru
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// vasm68k's WASM ships in @romdev/toolchain-vasm. Resolve from that package;
+// vasm68k's WASM ships in romdev-toolchain-vasm. Resolve from that package;
 // fall back to a local copy under src/ if present (transition / dev). The
 // package is a hard dep of romdev.
 function resolveVasm68kGlue() {
   try {
-    const u = import.meta.resolve("@romdev/toolchain-vasm");
+    const u = import.meta.resolve("romdev-toolchain-vasm");
     const p = path.join(path.dirname(fileURLToPath(u)), "wasm", "vasm68k.js");
     if (existsSync(p)) return p;
   } catch { /* package not resolvable — fall through to local */ }
   const local = path.join(__dirname, "wasm", "vasm68k.js");
   if (existsSync(local)) return local;
-  throw new Error("vasm68k WASM not found — install @romdev/toolchain-vasm");
+  throw new Error("vasm68k WASM not found — install romdev-toolchain-vasm");
 }
 // Lazy + memoized: resolve only on the first vasm (Genesis asm) build, not at boot.
 let _gluePath;

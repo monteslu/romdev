@@ -13,8 +13,8 @@ fill in your row in **§ Platform matrix**.
 
 `romdev` is an npm-workspaces monorepo (`~/code/cliemu/romdev/`):
 `packages/romdev` (server + tools + scaffolds, ships NO wasm) hard-depends on
-**14 binary packages** that carry the WebAssembly — 6 `@romdev/core-*`, 5
-`@romdev/toolchain-*`, 3 `@romdev/platform-{snes,gba,atari2600}`. romdev resolves
+**14 binary packages** that carry the WebAssembly — 6 `romdev-core-*`, 5
+`romdev-toolchain-*`, 3 `romdev-platform-{snes,gba,atari2600}`. romdev resolves
 each core/compiler from its package via `import.meta.resolve`, lazily, on first
 use of that platform.
 
@@ -52,7 +52,7 @@ mention below.)
 **GBA self-containment:** GBA's 3 ARM target archives (libc.a/libgcc.a/libnosys.a,
 ~15 MB) live in `src/platforms/gba/lib/arm-archives/` (copied from the 1 GB
 `build/arm-toolchain/install/` tree, which is native build tools — NOT shipped).
-`gba-c.js readTargetArchives()` reads from there. So `@romdev/platform-gba` =
+`gba-c.js readTargetArchives()` reads from there. So `romdev-platform-gba` =
 mgba wasm + arm-gcc wasm + those 3 archives.
 
 ---
@@ -171,12 +171,12 @@ romdev ships **two kinds** of WASM blobs, each in its own npm binary package
 
 1. **Emulator cores** — libretro cores compiled to WASM, one per emulator
    (e.g. `fceumm_libretro.wasm` for NES; `genesis_plus_gx_libretro.wasm` shared
-   across Genesis / SMS / Game Gear). Shared cores → `@romdev/core-*`;
-   single-platform cores live in their `@romdev/platform-*` bundle.
+   across Genesis / SMS / Game Gear). Shared cores → `romdev-core-*`;
+   single-platform cores live in their `romdev-platform-*` bundle.
 2. **Toolchains** — assemblers / compilers / linkers. One toolchain may target
    many platforms (e.g. cc65 covers NES, C64, Atari 7800, Lynx). Shared
-   toolchains → `@romdev/toolchain-*`; single-platform toolchains live in the
-   `@romdev/platform-*` bundle.
+   toolchains → `romdev-toolchain-*`; single-platform toolchains live in the
+   `romdev-platform-*` bundle.
 
 A platform = an emulator core + a toolchain + JS glue under
 `src/platforms/<id>/`. Adding a platform means wiring **all three**.

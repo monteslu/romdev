@@ -19,18 +19,18 @@ import { runIsolated, textFile, getOutputText } from "../_worker/run.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// tcc816's WASM ships in @romdev/platform-snes (the SNES platform is the only
+// tcc816's WASM ships in romdev-platform-snes (the SNES platform is the only
 // consumer). Resolve from that package; fall back to a local copy under src/
 // if present (transition / dev). The package is a hard dep of romdev.
 function resolveTcc816Glue() {
   try {
-    const u = import.meta.resolve("@romdev/platform-snes");
+    const u = import.meta.resolve("romdev-platform-snes");
     const p = path.join(path.dirname(fileURLToPath(u)), "wasm", "tcc816.js");
     if (existsSync(p)) return p;
   } catch { /* package not resolvable — fall through to local */ }
   const local = path.join(__dirname, "wasm", "tcc816.js");
   if (existsSync(local)) return local;
-  throw new Error("tcc816 WASM not found — install @romdev/platform-snes");
+  throw new Error("tcc816 WASM not found — install romdev-platform-snes");
 }
 // Lazy + memoized: resolve only on the first tcc816 (SNES C) build, not at boot.
 let _gluePath;

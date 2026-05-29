@@ -21,20 +21,20 @@ import { runIsolated, textFile, binaryFile, getOutputBytes, getOutputText } from
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// m68k-elf-gcc's WASM ships in @romdev/toolchain-m68k-gcc. Resolve each tool's
+// m68k-elf-gcc's WASM ships in romdev-toolchain-m68k-gcc. Resolve each tool's
 // glue from that package; fall back to a local copy under src/ if present
 // (transition / dev). emcc's `EXPORT_ES6=1` output is ESM (uses
 // import.meta.url + dynamic require), so the glue uses .mjs extensions. The
 // package is a hard dep of romdev.
 function resolveM68kGlue(file) {
   try {
-    const u = import.meta.resolve("@romdev/toolchain-m68k-gcc");
+    const u = import.meta.resolve("romdev-toolchain-m68k-gcc");
     const p = path.join(path.dirname(fileURLToPath(u)), "wasm", file);
     if (existsSync(p)) return p;
   } catch { /* package not resolvable — fall through to local */ }
   const local = path.join(__dirname, "wasm", file);
   if (existsSync(local)) return local;
-  throw new Error(`m68k-elf-gcc WASM (${file}) not found — install @romdev/toolchain-m68k-gcc`);
+  throw new Error(`m68k-elf-gcc WASM (${file}) not found — install romdev-toolchain-m68k-gcc`);
 }
 
 // Lazy + memoized per tool: resolve only on the first Genesis-C build that uses

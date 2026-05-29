@@ -11,18 +11,18 @@ import { runIsolated, textFile, getOutputBytes, getOutputText } from "../_worker
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// dasm's WASM ships in @romdev/platform-atari2600 (the only platform that
+// dasm's WASM ships in romdev-platform-atari2600 (the only platform that
 // uses it). Resolve from that package; fall back to a local copy under src/
 // if present (transition / dev). The package is a hard dep of romdev.
 function resolveDasmGlue() {
   try {
-    const u = import.meta.resolve("@romdev/platform-atari2600");
+    const u = import.meta.resolve("romdev-platform-atari2600");
     const p = path.join(path.dirname(fileURLToPath(u)), "wasm", "dasm.js");
     if (existsSync(p)) return p;
   } catch { /* package not resolvable — fall through to local */ }
   const local = path.join(__dirname, "wasm", "dasm.js");
   if (existsSync(local)) return local;
-  throw new Error("dasm WASM not found — install @romdev/platform-atari2600");
+  throw new Error("dasm WASM not found — install romdev-platform-atari2600");
 }
 // Lazy + memoized: resolve (and possibly throw "not installed") only on the
 // FIRST dasm build, not at module load — so booting the server never touches

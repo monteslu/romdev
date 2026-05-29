@@ -2,7 +2,7 @@
 # Discipline: WASM is NOT committed to git — it's a build OUTPUT. git holds the
 # source of truth for BUILDING (recipes, patches, version pins, JS, tests); npm
 # holds the built artifact (`npm pack` reads the working tree, so published
-# @romdev/* packages still ship their .wasm). A fresh clone builds or installs
+# romdev-* packages still ship their .wasm). A fresh clone builds or installs
 # the wasm; it isn't carried in history. (Forced by GitHub's 100MB/file limit —
 # cc1-arm.wasm is 135MB — and it's the more correct split: CI rebuilds wasm in
 # the pinned emscripten container rather than trusting a possibly-stale blob.)

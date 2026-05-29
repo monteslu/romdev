@@ -23,20 +23,20 @@ import { runIsolated, textFile, binaryFile, getOutputBytes, getOutputText } from
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// arm-none-eabi-gcc's WASM ships in @romdev/platform-gba (the GBA platform is
+// arm-none-eabi-gcc's WASM ships in romdev-platform-gba (the GBA platform is
 // the only consumer). Resolve each tool's glue from that package; fall back to
 // a local copy under src/ if present (transition / dev). emcc emits ESM
 // (EXPORT_ES6=1) so the glue uses .mjs extensions. The package is a hard dep
 // of romdev.
 function resolveArmGlue(file) {
   try {
-    const u = import.meta.resolve("@romdev/platform-gba");
+    const u = import.meta.resolve("romdev-platform-gba");
     const p = path.join(path.dirname(fileURLToPath(u)), "wasm", file);
     if (existsSync(p)) return p;
   } catch { /* package not resolvable — fall through to local */ }
   const local = path.join(__dirname, "wasm", file);
   if (existsSync(local)) return local;
-  throw new Error(`arm-none-eabi-gcc WASM (${file}) not found — install @romdev/platform-gba`);
+  throw new Error(`arm-none-eabi-gcc WASM (${file}) not found — install romdev-platform-gba`);
 }
 
 // Lazy + memoized per tool: resolve only on the first GBA-C build that uses

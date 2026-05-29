@@ -6,7 +6,7 @@ The entry point for **romdev** — vibe-code real retro games. Lets a coding age
 npx romdev
 ```
 
-This package is the [Model Context Protocol](https://modelcontextprotocol.io/) server and CLI. It contains all the JavaScript — the MCP tool surface, the WASM libretro host, the per-platform scaffolds, runtime/library source, and debug helpers — but **no emulator or compiler WASM itself.** Those ship in the `@romdev/*` binary packages this package depends on, and are loaded on demand the first time you build or run a given platform.
+This package is the [Model Context Protocol](https://modelcontextprotocol.io/) server and CLI. It contains all the JavaScript — the MCP tool surface, the WASM libretro host, the per-platform scaffolds, runtime/library source, and debug helpers — but **no emulator or compiler WASM itself.** Those ship in the `romdev-*` binary packages this package depends on, and are loaded on demand the first time you build or run a given platform.
 
 > For the full project — what romdev is, the supported-platform matrix, how the pieces fit together, and how to develop on it — see the [repository README](https://github.com/monteslu/romdev#readme).
 
@@ -22,9 +22,9 @@ This package is the [Model Context Protocol](https://modelcontextprotocol.io/) s
 
 `romdev` hard-depends (exact-pinned) on the binary packages that carry the WebAssembly, so a single install gets a matched, tested set:
 
-- Cores: `@romdev/core-{fceumm,gambatte,gpgx,vice,handy,prosystem}`
-- Platforms: `@romdev/platform-{snes,gba,atari2600}`
-- Toolchains: `@romdev/toolchain-{cc65,sdcc,m68k-gcc,vasm,rgbds}`
+- Cores: `romdev-core-{fceumm,gambatte,gpgx,vice,handy,prosystem}`
+- Platforms: `romdev-platform-{snes,gba,atari2600}`
+- Toolchains: `romdev-toolchain-{cc65,sdcc,m68k-gcc,vasm,rgbds}`
 
 `@kmamal/sdl` is an optional dependency used only by `playtest()` / `romdev-cli play`. If it fails to install, the headless server still runs — only the live-window features degrade.
 

@@ -19,18 +19,18 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // cc65's tool WASM AND its target share/ tree (include / asminc / lib / cfg /
-// target) both ship in @romdev/toolchain-cc65. The share/ files are what ld65
+// target) both ship in romdev-toolchain-cc65. The share/ files are what ld65
 // needs to link a target, so they must come from the same place as the WASM.
 // Resolve the package's base dir once; fall back to a local copy under src/
 // if present (transition / dev). The package is a hard dep of romdev.
 function resolveCc65BaseDir() {
   try {
-    const u = import.meta.resolve("@romdev/toolchain-cc65");
+    const u = import.meta.resolve("romdev-toolchain-cc65");
     const dir = path.dirname(fileURLToPath(u));
     if (existsSync(path.join(dir, "wasm", "cc65.js"))) return dir;
   } catch { /* package not resolvable — fall through to local */ }
   if (existsSync(path.join(__dirname, "wasm", "cc65.js"))) return __dirname;
-  throw new Error("cc65 WASM not found — install @romdev/toolchain-cc65");
+  throw new Error("cc65 WASM not found — install romdev-toolchain-cc65");
 }
 // Lazy + memoized: resolve (and possibly throw "not installed") only on the
 // first cc65 build (NES/C64/Atari7800/Lynx), not at module load — so booting

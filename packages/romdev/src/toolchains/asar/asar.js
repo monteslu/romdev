@@ -13,18 +13,18 @@ import { runIsolated, textFile, binaryFile, getOutputBytes, getOutputText } from
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// asar's WASM ships in @romdev/platform-snes (the SNES platform is the only
+// asar's WASM ships in romdev-platform-snes (the SNES platform is the only
 // consumer). Resolve from that package; fall back to a local copy under src/
 // if present (transition / dev). The package is a hard dep of romdev.
 function resolveAsarGlue() {
   try {
-    const u = import.meta.resolve("@romdev/platform-snes");
+    const u = import.meta.resolve("romdev-platform-snes");
     const p = path.join(path.dirname(fileURLToPath(u)), "wasm", "asar.js");
     if (existsSync(p)) return p;
   } catch { /* package not resolvable — fall through to local */ }
   const local = path.join(__dirname, "wasm", "asar.js");
   if (existsSync(local)) return local;
-  throw new Error("asar WASM not found — install @romdev/platform-snes");
+  throw new Error("asar WASM not found — install romdev-platform-snes");
 }
 // Lazy + memoized: resolve only on the first asar (SNES asm) build, not at boot.
 let _gluePath;
