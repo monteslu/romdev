@@ -132,14 +132,20 @@ async function main() {
   // Spin up a fresh transport + McpServer for a NEW session (only ever
   // created in response to an `initialize` request — the server mints the
   // session id).
-  async function createTransport() {
+  // `fixedId`: when set (the LAZY-INIT / reconnect path), the transport
+  // adopts the client's existing session id instead of minting a new one —
+  // the SDK binds whatever sessionIdGenerator returns on initialize, so we
+  // just return the client's id. This is how a client survives a server
+  // restart: it shows up with an id we've never seen (because WE restarted),
+  // and we transparently re-create that exact session under the hood.
+  async function createTransport(fixedId) {
     const sessionKey = randomUUID();
     const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
+      sessionIdGenerator: () => fixedId ?? randomUUID(),
       onsessioninitialized: (id) => {
         transports.set(id, transport);
         lastSeen.set(id, Date.now());
-        console.log(`[mcp] session ${id} initialized (${transports.size} active)`);
+        console.log(`[mcp] session ${id} ${fixedId ? "re-adopted (lazy-init after restart)" : "initialized"} (${transports.size} active)`);
         try { observer.sessionConnected(sessionKey); } catch {}
       },
     });
@@ -157,6 +163,37 @@ async function main() {
     return transport;
   }
 
+  // Lazy-initialize a session the client THINKS exists but we don't (because
+  // we restarted). Create a transport bound to the client's id and mark it
+  // initialized so the SDK's per-request validation (sessionId match +
+  // _initialized) passes — i.e. we adopt the client's session instead of
+  // forcing a reinitialize.
+  //
+  // ⚠ SDK-COUPLING: the streamable-HTTP transport only binds its sessionId by
+  // running a real `initialize` HTTP request through Hono — which needs
+  // genuine Node req/res stream objects, not fabricable here. So we set the
+  // two state fields on the inner web-standard transport directly. These are
+  // plain instance fields (sessionId, _initialized) on _webStandardTransport.
+  // This is the one spot that reaches into SDK internals; it's pinned by
+  // package-lock and covered by a reconnect test (session-isolation.test.js).
+  // If an SDK upgrade renames these, the test fails loudly and we adjust.
+  async function lazyInitTransport(clientId) {
+    try {
+      const transport = await createTransport(clientId);
+      const inner = transport._webStandardTransport;
+      if (!inner || typeof inner !== "object") return null;
+      inner.sessionId = clientId;
+      inner._initialized = true;
+      // Register in our maps (createTransport's onsessioninitialized only
+      // fires on a real init, which we bypassed).
+      transports.set(clientId, transport);
+      return transport;
+    } catch (e) {
+      console.log(`[mcp] lazy-init failed for ${clientId}: ${e?.message}`);
+      return null;
+    }
+  }
+
   app.all("/mcp", async (req, res) => {
     try {
       const sid = req.headers["mcp-session-id"];
@@ -164,29 +201,51 @@ async function main() {
       if (transport && typeof sid === "string") lastSeen.set(sid, Date.now());
 
       if (!transport && req.method === "POST" && isInitializeRequest(req.body)) {
-        // Normal first-contact: client sent an initialize. Mint a new
-        // session with a server-generated id.
+        // Normal first-contact OR a reconnect: client sent an initialize.
+        // Mint a new session with a server-generated id.
+        //
+        // RECONNECT ROBUSTNESS: a reconnecting client may re-send initialize
+        // while STILL carrying its dead Mcp-Session-Id header. The MCP spec
+        // says initialize must not carry a session id, and the SDK transport
+        // can reject (400) an initialize that does — which would block the
+        // very reconnect we want to allow. So strip the stale id header
+        // before handing the request to the fresh transport: an initialize
+        // is always "start clean," never "resume id X". This guarantees a
+        // client can always get back in, no matter what id it's clinging to.
+        if (typeof sid === "string" && sid.length > 0) {
+          delete req.headers["mcp-session-id"];
+          console.log(`[mcp] initialize carried stale session id ${sid} — stripped, minting fresh`);
+        }
         transport = await createTransport();
+      } else if (typeof sid === "string" && sid.length > 0) {
+        // The client presented a session id we don't have — almost always
+        // because WE restarted (the client's session is fine from its side).
+        // LAZY-INIT: transparently re-create that exact session and serve the
+        // request, so the client never sees a failure and keeps its id. The
+        // emulator/host state was in our RAM and is gone, so the session comes
+        // back EMPTY — the first host-needing call returns the clear "reload
+        // your ROM" guidance (state.js). This is safe now that the full tool
+        // surface registers at init by default (no per-session loadCategory
+        // state to lose — the old reason we used to reject + force reinit).
+        console.log(`[mcp] lazy-init: re-adopting unknown session ${sid} (likely post-restart)`);
+        transport = await lazyInitTransport(sid);
+        if (!transport) {
+          // Lazy-init failed — fall back to the spec 404 so the client
+          // reinitializes cleanly rather than hanging.
+          res.status(404).json({
+            jsonrpc: "2.0",
+            error: { code: -32001, message: "Session not found; please re-initialize." },
+            id: req.body?.id ?? null,
+          });
+          return;
+        }
+        lastSeen.set(sid, Date.now());
       } else if (!transport) {
-        // Either an unknown session id (we restarted / it expired) or no
-        // id at all on a non-initialize request. Return the spec-compliant
-        // 404 "session not found". This is the DEFINED MCP signal for "your
-        // session is gone" — a well-behaved streamable-HTTP client discards
-        // the dead session and transparently re-`initialize`s, refetching a
-        // fresh tools/list. We deliberately do NOT silently adopt the id
-        // (the old "re-homing" behavior): adopting it suppressed the
-        // reconnect signal and trapped clients with stale, split-brain tool
-        // lists / lost loadCategory state. A clean 404 lets clients self-heal.
-        const hadId = typeof sid === "string" && sid.length > 0;
-        console.log(`[mcp] 404 unknown session ${hadId ? sid : "(none)"} — telling client to reinitialize`);
-        res.status(404).json({
+        // No session id at all on a non-initialize request — there's nothing
+        // to adopt. Tell the client to start a session.
+        res.status(400).json({
           jsonrpc: "2.0",
-          error: {
-            code: -32001,
-            message: hadId
-              ? "Session not found (the server restarted or your session expired). Reinitialize: open a new MCP session (re-send `initialize`) — your client should do this automatically on a 404. A fresh session has the full tool surface already; no loadCategory needed."
-              : "No Mcp-Session-Id and not an initialize request. Send POST initialize to start a session.",
-          },
+          error: { code: -32000, message: "No Mcp-Session-Id and not an initialize request. Send POST initialize to start a session." },
           id: req.body?.id ?? null,
         });
         return;

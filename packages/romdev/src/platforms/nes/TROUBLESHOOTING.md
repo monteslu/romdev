@@ -133,6 +133,31 @@ your score lives at row 0 it'll be in the nametable but invisible.
 Fix: move HUD to row 2+ and keep "press start"-style bottom UI at
 row 27 or lower.
 
+## "State corrupts / mystery crashes as the game grows" — RAM/BSS overflow
+
+The NES has only **2 KB of RAM** ($0000-$07FF), and the chr-ram linker
+config carves most of it up: zeropage, the stack, and `shadow_oam`
+(256 B at $0200) leave roughly **~512 B for your BSS+DATA** (globals).
+Overflow it and there's no error — your globals quietly collide with
+the stack or shadow OAM → corrupted state, sprites that flicker to
+garbage, random crashes.
+
+**Check the `ramUsage` field in the buildSource/runSource response** —
+it lists your BSS / DATA / ZEROPAGE segment sizes from the linker map.
+If BSS+DATA is approaching the config's RAM region, shrink your state:
+prefer `uint8_t` over `int`, bit-pack flags, use small fixed arrays,
+avoid large `static` buffers. (This is why "NES-shaped C" uses bitmasks
+and tiny structs — it's not style, it's the 512 B ceiling.)
+
+## "runSource screenshot looks one frame behind my sprites"
+
+On NES, the NMI handler DMAs `shadow_oam` → real OAM at the *start* of
+each vblank, so sprites you stage on frame N first appear when frame
+N+1 renders. `runSource` now steps one extra frame on NES before the
+screenshot so it matches your staged OAM — but if you script frames
+manually (`stepFrames` then `screenshot`), add one extra `stepFrames(1)`
+after staging to see the current sprite positions.
+
 ## "readMemory(nes_chr) returns same bytes for offset 0 and offset 4096"
 
 Was a real bug in R59 of the fceumm patch — `readMemory(nes_chr)`

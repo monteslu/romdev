@@ -322,6 +322,7 @@ export async function buildForPlatform(args) {
       issues: parseBuildLog(r.log),
       exitCode: r.exitCode,
       toolchain: anyC ? "cc65" : "ca65+ld65",
+      ...(r.ramUsage ? { ramUsage: r.ramUsage } : {}),
     };
   }
 

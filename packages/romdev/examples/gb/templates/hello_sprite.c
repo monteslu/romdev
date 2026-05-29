@@ -78,10 +78,18 @@ void main(void) {
     OCPD = (uint8_t)((obj_palette[i] >> 8) & 0xFF); /* high byte */
   }
 
-  /* ── 4. Build initial OAM ────────────────────────────────────────
-   * Clear all 40 slots then write our sprite into slot 0. */
+  /* ── 4. Build initial OAM, then DMA IT TO HARDWARE *BEFORE* LCD-on ──
+   * Clear all 40 slots, write our sprite into slot 0, then flush. The
+   * flush-before-LCD-on is the important bit: it guarantees the very
+   * FIRST visible frame shows your sprite instead of power-on garbage /
+   * an all-zero OAM. (oam_dma_flush is VRAM/OAM-safe while the LCD is
+   * off.) Skipping this is the classic GB/GBC "flat screen, OAM reads
+   * zero on frame 1" trap — especially if you also use the
+   * enable_vblank_irq() HALT path, where the first wait_vblank() sleeps
+   * before you'd otherwise get a chance to flush. */
   oam_clear();
   oam_set(0, y, x, /* tile= */ 1, /* attr= */ 0);
+  oam_dma_flush();      /* first OAM live before the screen turns on */
 
   /* ── 5. Turn the LCD back on with BG + OBJ enabled. ──────────────
    * LCDC bits: 0x80=LCD on, 0x02=OBJ on, 0x10=tile data at $8000.

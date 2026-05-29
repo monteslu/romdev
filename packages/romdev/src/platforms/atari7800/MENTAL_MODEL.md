@@ -64,6 +64,38 @@ and DLL; you do NOT poke pixels into a framebuffer.**
 - **Each DL header can pick a palette per object** (one of 8
   palettes, 4 colours each — including the shared background).
 
+### Dynamic display lists — what to rebuild per frame (READ THIS)
+
+The single biggest 7800 footgun for a moving game: **do NOT rebuild the
+whole DLL + every DL from scratch every frame.** MARIA may be mid-walk
+when you do, and a full teardown/rebuild races the display DMA →
+flicker, corruption, or a hung screen. (This is the #1 thing that makes
+a 7800 game "work for one frame then fall apart.")
+
+The stable pattern is **build the structure ONCE, then patch in place**:
+
+| Thing | When to build it | Why |
+| --- | --- | --- |
+| **DLL** (the zone list) | **Once, at init.** | Zone count + heights + DL pointers are your screen layout. It rarely changes. Point DPPH/DPPL at it once in `maria_init`. |
+| **DL headers' graphics pointer / palette** | **Per frame, in place.** | To animate or show/hide an object, overwrite the bytes of its EXISTING DL entry — don't relink the list. |
+| **DL header's X position** | **Per frame, in place.** | Horizontal movement = write the X byte of the object's existing DL header. Cheap and safe. |
+| **Moving an object vertically** | **Per frame, but carefully.** | Y = which zone. Either keep a DL entry in each zone and toggle which is "live" (set its width/graphics to a blank tile when hidden), or stamp the sprite at different row offsets inside one tall zone's data. Prefer the latter for a few objects. |
+| **Clearing stale objects** | **Per frame, targeted.** | Don't wipe the whole DL — overwrite just the entries that changed (set a hidden object's graphics pointer to a transparent/blank tile, or zero its width). |
+
+Practical recipe for a shmup/invaders-style game:
+1. `maria_init` — install the DLL once (e.g. a few fixed zones: HUD band,
+   play-field band, shield band). Never touched again.
+2. Pre-allocate a fixed set of DL entries per zone (player, N enemies,
+   shots) in RAM-backed DL data.
+3. Each frame: write only the X / graphics-pointer / palette bytes of the
+   entries that moved or changed; set width/graphics to "blank" for slots
+   that are inactive this frame.
+4. Never call your "build the entire display list" routine inside the
+   game loop — only the targeted byte writes.
+
+If the screen tears or hangs once motion starts, you're almost certainly
+rebuilding too much per frame. Pull the structural setup back into init.
+
 ## MARIA registers
 
 ```

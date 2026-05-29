@@ -24,6 +24,24 @@ extern void gg_sat_upload(void);
 #define MAX_BULLETS 4
 #define MAX_ENEMIES 4
 
+/* ── Game Gear visible viewport ──────────────────────────────────────
+ * Sprite OAM uses SMS HARDWARE coordinates (256x192 space), but the GG
+ * LCD only shows the CENTER 160x144. Anything outside the box below is
+ * placed "correctly" in hardware terms yet INVISIBLE on the real screen
+ * (and in the core's screenshot, which is the visible crop). Keep all
+ * gameplay sprites inside [VIS_X0..VIS_X1] x [VIS_Y0..VIS_Y1]. */
+#define VIS_X0  48    /* left edge of the visible region (hardware X)  */
+#define VIS_Y0  24    /* top edge  (hardware Y)                        */
+#define VIS_X1  207   /* right edge: 48 + 160 - 1                      */
+#define VIS_Y1  167   /* bottom edge: 24 + 144 - 1                     */
+#define VIS_W   160
+#define VIS_H   144
+/* Convert a visible-space coordinate (0..159, 0..143) to the hardware
+ * coordinate oam/gg_sprite_set wants. Use these if you'd rather think
+ * in screen space: gg_sprite_set(slot, VIS_TO_HW_X(sx), VIS_TO_HW_Y(sy), tile). */
+#define VIS_TO_HW_X(sx) ((uint8_t)((sx) + VIS_X0))
+#define VIS_TO_HW_Y(sy) ((uint8_t)((sy) + VIS_Y0))
+
 #define T_SHIP   0
 #define T_BULLET 1
 #define T_ENEMY  2
@@ -83,8 +101,9 @@ static void spawn(void) {
   uint8_t i;
   for (i = 0; i < MAX_ENEMIES; i++) {
     if (!enemies[i].alive) {
-      enemies[i].x = (uint8_t)(((spawn_timer * 37) & 0xFF) % (256 - 16) + 8);
-      enemies[i].y = 0;
+      /* Spawn across the VISIBLE width (hardware X in [VIS_X0..VIS_X1-8]). */
+      enemies[i].x = (uint8_t)(VIS_X0 + ((spawn_timer * 37u) % (VIS_W - 8)));
+      enemies[i].y = VIS_Y0;   /* enter at the top of the visible region */
       enemies[i].alive = 1;
       return;
     }
@@ -98,7 +117,8 @@ void main(void) {
   gg_load_palette(palette);
   gg_load_tiles(0x2000, sprite_tiles, 32 * 3);
 
-  player.x = 120; player.y = 160; player.alive = 1;
+  /* Start the ship centered, near the bottom of the VISIBLE region. */
+  player.x = (uint8_t)(VIS_X0 + VIS_W / 2 - 4); player.y = (uint8_t)(VIS_Y1 - 16); player.alive = 1;
   {
     uint8_t i;
     for (i = 0; i < MAX_BULLETS; i++) bullets[i].alive = 0;
@@ -130,22 +150,23 @@ void main(void) {
     gg_sat_upload();
 
     pad = gg_joypad_read();
-    if (pad & JOY_LEFT  && player.x > 4)        player.x = (uint8_t)(player.x - 2);
-    if (pad & JOY_RIGHT && player.x < 256 - 16) player.x = (uint8_t)(player.x + 2);
-    if (pad & JOY_UP    && player.y > 8)        player.y = (uint8_t)(player.y - 2);
-    if (pad & JOY_DOWN  && player.y < 192 - 16) player.y = (uint8_t)(player.y + 2);
+    /* Clamp movement to the VISIBLE box so the ship never slides off-screen. */
+    if (pad & JOY_LEFT  && player.x > VIS_X0)        player.x = (uint8_t)(player.x - 2);
+    if (pad & JOY_RIGHT && player.x < VIS_X1 - 8)    player.x = (uint8_t)(player.x + 2);
+    if (pad & JOY_UP    && player.y > VIS_Y0)        player.y = (uint8_t)(player.y - 2);
+    if (pad & JOY_DOWN  && player.y < VIS_Y1 - 8)    player.y = (uint8_t)(player.y + 2);
     if ((pad & JOY_B1) && !(prev & JOY_B1)) { fire(); sfx_tone(0, 200, 4); }
     prev = pad;
 
     for (i = 0; i < MAX_BULLETS; i++) {
       if (!bullets[i].alive) continue;
-      if (bullets[i].y < 4) { bullets[i].alive = 0; continue; }
+      if (bullets[i].y < VIS_Y0 + 4) { bullets[i].alive = 0; continue; }
       bullets[i].y = (uint8_t)(bullets[i].y - 4);
     }
     for (i = 0; i < MAX_ENEMIES; i++) {
       if (!enemies[i].alive) continue;
       enemies[i].y = (uint8_t)(enemies[i].y + 1);
-      if (enemies[i].y >= 192) enemies[i].alive = 0;
+      if (enemies[i].y >= VIS_Y1) enemies[i].alive = 0;  /* off the visible bottom */
     }
     spawn_timer = (uint8_t)(spawn_timer + 1);
     if (spawn_timer >= 28) { spawn_timer = 0; spawn(); }

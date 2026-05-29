@@ -94,6 +94,24 @@ const HARDWARE_LAYOUTS = {
     note: "Active-low. Handheld single controller. START is at port $00 bit 7, NOT in $DC. libretro JOYPAD maps button 1 → 'a', button 2 → 'b', START → 'start'.",
     faceButtons: FACE_BUTTON_MAP.gg,
   },
+  atari7800: {
+    register: "SWCHA ($0280, RIOT — directions), INPT0/INPT1 (2-button ProLine fire) OR INPT4/INPT5 (1-button/2600-compat fire), CTLSWA/CTLSWB ($0281/$0283) to select mode",
+    protocol: "direct-read",
+    strobe: "None for directions. ⚠ The fire-button read DEPENDS on controller mode: a 2-button ProLine pad reads fire via INPT0 (left/B) + INPT1 (right/A) when the port is driven; a 1-button or 2600-style joystick reads fire via INPT4/INPT5. Set the CTLSWx mode bits accordingly before reading.",
+    readSequence: "SWCHA: high nibble = player 1 directions (active-low: bit7 Right, bit6 Left, bit5 Down, bit4 Up). ProLine fire: INPT0/INPT1 bit 7 (the polarity flips with the port-drive state — verify against the emulator with readMemory). 2600-compat fire: INPT4/INPT5 bit 7 (active-low).",
+    bitOrder: ["P1 Right", "P1 Left", "P1 Down", "P1 Up", "P2 Right", "P2 Left", "P2 Down", "P2 Up"],
+    note: "The 2-button-vs-1-button fire path is the #1 7800 input footgun — if fire 'doesn't register', you're likely reading the wrong register for the pad mode. Directions are the SAME as the 2600 (shared RIOT SWCHA). libretro maps the two ProLine buttons onto JOYPAD 'a' (right/INPT1) and 'b' (left/INPT0). Verify empirically: drive holdInputs and readMemory the INPT register to confirm which bit moved.",
+    faceButtons: FACE_BUTTON_MAP.atari7800,
+  },
+  lynx: {
+    register: "Mikey JOYSTICK ($FCB0) — D-pad + A/B/Opt1/Opt2; SWITCHES ($FCB1) — Pause (bit 0)",
+    protocol: "direct-read",
+    strobe: "None — read the memory-mapped Mikey registers directly.",
+    readSequence: "JOYSTICK ($FCB0): bit7 Up, bit6 Down, bit5 Left, bit4 Right, bit3 Opt1, bit2 Opt2, bit1 B (inner), bit0 A (outer). ACTIVE-HIGH (1 = pressed) — unlike most retro pads. SWITCHES ($FCB1) bit0 = Pause.",
+    bitOrder: ["A", "B", "Opt2", "Opt1", "Right", "Left", "Down", "Up"],
+    note: "⚠ Two gotchas: (1) buttons are ACTIVE-HIGH on the Lynx (1=pressed), opposite the active-low convention almost everywhere else. (2) The D-pad's physical Up/Down/Left/Right is RELATIVE TO SCREEN ROTATION — Mikey flips the direction bits when the screen is set to the flipped/left-handed orientation, so 'Up' in code may be physical-down on a rotated game. cc65's lynx target + the bundled lynx lib expose these via joy_read-style helpers. libretro maps A→'a', B→'b', Opt1/Opt2→'start'/'select', Pause→'select' (verify with holdInputs + readMemory $FCB0).",
+    faceButtons: FACE_BUTTON_MAP.lynx,
+  },
 };
 
 const LIBRETRO_JOYPAD_IDS = {

@@ -1142,9 +1142,11 @@ TEMPLATES.gba = {
 // scaffolds from other platforms don't map cleanly — its hardware
 // forces "race the beam" rendering. Three templates here that ARE
 // idiomatic 2600:
-//   default       — single sprite, blue background, joystick movement
-//   paddle        — Pong-style: two paddles + ball + walls
-//   single_screen — dodge-the-falling-pixels using P0 + M0
+//   default        — single sprite, blue background, joystick movement
+//   paddle         — Pong-style: two paddles + ball + walls
+//   single_screen  — dodge-the-falling-pixels using P0 + M0
+//   music_demo     — two-voice TIA chiptune
+//   mini_invaders  — gallery shooter via P0 cannon + P1/NUSIZ1 invaders + M0 shot
 TEMPLATES.atari2600 = {
   default: {
     main: "templates/default.asm",
@@ -1173,6 +1175,13 @@ TEMPLATES.atari2600 = {
     lang: "6507 assembly (dasm)",
     ext: ".a26",
     describe: "Two-voice TIA chiptune scaffold. Voice 0 = 32-note melody, voice 1 = 16-note bass ostinato, both driven from hand-authored (AUDF, length_frames) note tables in ROM. AUDC0=AUDC1=$04 (pure tone). Music updates happen during VBLANK (never during visible scanlines). Display is minimal — blue BG + a centered playfield band — because the point IS the audio. The note tables ARE the song; edit them and you're writing chiptune.",
+  },
+  mini_invaders: {
+    main: "templates/mini_invaders.asm",
+    runtime: [],
+    lang: "6507 assembly (dasm)",
+    ext: ".a26",
+    describe: "Gallery-shooter (Space-Invaders-shaped) done with the RIGHT TIA objects, not playfield 'barcode' bars: P0 = double-width cannon, P1 + NUSIZ1=%011 = a row of THREE hardware-replicated invaders (one GRP1 write draws all three), M0 = the player shot. Aliens march left/right and drop a step at the edges; fire with the joystick button. The honest 2600-idiomatic way to do this genre — extend by reusing P1 lower for shields or adding M1 as an alien bomb. Verified: marches + renders cannon/aliens/shot.",
   },
 };
 

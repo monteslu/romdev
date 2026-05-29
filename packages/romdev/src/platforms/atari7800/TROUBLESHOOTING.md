@@ -124,6 +124,14 @@ Our scaffolds rebuild the DL during vblank, which works for small
 DLs (< ~100 bytes). Large DLs that take ~1 ms to rebuild may
 exceed vblank time and start corrupting the active frame.
 
+**For a real moving game, prefer PATCHING IN PLACE over rebuilding.**
+Build the DLL + DL structure ONCE at init, then each frame overwrite
+only the bytes that changed (an object's X / graphics-pointer / palette,
+or set width=0 / a blank tile to hide it). A full per-frame DLL+DL
+rebuild is the most common cause of "stable for one frame, then tears /
+hangs once motion starts." See MENTAL_MODEL.md § "Dynamic display lists —
+what to rebuild per frame" for the per-field rebuild-cadence table.
+
 ## "ROM > 32 KB doesn't run"
 
 The default linker config is single-bank 32 KB. The 7800 supports

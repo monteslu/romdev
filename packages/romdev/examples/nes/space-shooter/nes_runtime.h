@@ -22,18 +22,6 @@
  *     oam_clear()          — set all 64 sprites Y=$FF (off-screen).
  *     oam_spr(x,y,tile,attr) — push one sprite to the next free slot.
  *
- *     ⚠ FRAME ORDER — the #1 NES footgun. Stage sprites (oam_clear +
- *     oam_spr) BEFORE ppu_wait_nmi(), never after. The NMI handler DMAs
- *     this shadow buffer → real OAM at the START of vblank, copying
- *     whatever it holds at that instant. Correct loop:
- *         for (;;) {
- *             oam_clear();  oam_spr(...);  // stage FIRST
- *             ppu_wait_nmi();              // NMI DMAs what you just staged
- *             update_game();               // logic AFTER the wait
- *         }
- *     Flip it (wait, then stage) and the visible frame lags one frame /
- *     shows stale or empty sprites. Every genre template uses this order.
- *
  *   Input (Shiru bit layout: A=$80, B=$40, ...)
  *     pad_poll(0|1)        — read controller, return packed byte.
  *

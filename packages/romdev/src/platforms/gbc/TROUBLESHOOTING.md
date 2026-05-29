@@ -29,6 +29,28 @@ A `uint8_t` can't reach a bound >255 → infinite loop, all later code dead. SDC
 gives no warning. Use `uint16_t` for any bound that can exceed 255. (Linter
 flags it.) See [[sdcc-uint8-loop-bound-trap]].
 
+## ⚠ "Flat-color screen, no sprites, OAM reads all zero on the first frame(s)"
+
+Your sprites are staged in `shadow_oam` but never reached hardware OAM before
+the LCD turned on — so the first visible frame shows power-on garbage / nothing.
+Common when you enable the LCD, *then* enter a `wait_vblank()` loop that flushes
+OAM only after the wait (so frame 1 renders un-flushed), and especially when you
+use the `enable_vblank_irq()` HALT path (the first `wait_vblank()` sleeps the CPU
+before you'd flush).
+
+**Fix — DMA the first OAM frame BEFORE enabling the LCD:**
+```c
+oam_clear();
+oam_set(0, y, x, tile, attr);   /* stage your initial sprites */
+oam_dma_flush();                /* push to hardware while LCD is still off */
+LCDC = LCDC_LCD_ON | LCDC_OBJ_ON | LCDC_TILE_DATA_LO;   /* THEN turn on */
+/* now the loop: wait_vblank(); oam_dma_flush(); ... */
+```
+Also make sure `oam_dma_init_hram()` ran (lcd_init_default does it) so the DMA
+routine executes from HRAM. The bundled `hello_sprite` template shows this exact
+order. Diagnose with `inspectSprites` / `getRenderingContext` if a screenshot is
+just flat color.
+
 ## "ROM boots into green-shade DMG mode, not color"
 
 Header byte `$0143` isn't `$80`. The CGB boot ROM checks this byte

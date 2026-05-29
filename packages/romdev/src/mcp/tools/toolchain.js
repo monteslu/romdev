@@ -338,6 +338,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         binaryPath: finalPath,
         outputPath: outputPath && result.binary ? outputPath : null,
         romLayout: describeRomLayout(platform, result.binary),
+        ...(result.ramUsage ? { ramUsage: result.ramUsage } : {}),
         ...(result.stage ? { stage: result.stage } : {}),
         ...(await logField(result.log, inline, logSibling)),
         issues: result.issues ?? [],
@@ -523,6 +524,12 @@ export function registerToolchainTools(server, z, sessionKey) {
         host.setInput({ ports: holdInputs });
       }
       host.stepFrames(frames);
+      // NES: the NMI handler DMAs shadow OAM → real OAM at the START of each
+      // vblank, so sprites the game staged on frame N only become visible
+      // when frame N+1 renders. Without this, the screenshot looks "one frame
+      // behind" the staged OAM (a real surprise agents hit during debugging).
+      // Step one extra frame on NES so the screenshot matches staged sprites.
+      if (platform === "nes") host.stepFrames(1);
       const shot = host.screenshot();
 
       // One-shot "open playtest" hint. Conditions to attach:
@@ -549,6 +556,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         toolchain: build.toolchain,
         binaryBytes: build.binary.length,
         romLayout: describeRomLayout(platform, build.binary),
+        ...(build.ramUsage ? { ramUsage: build.ramUsage } : {}),
         framesRun: frames,
         framebuffer: { width: shot.width, height: shot.height },
         // Surface lint/build issues even on successful runs so agents see

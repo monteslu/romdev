@@ -16,6 +16,31 @@ tgi_init();
 Without `tgi_init` the framebuffer pointer isn't set; without
 `tgi_install` the TGI dispatcher has no driver to call.
 
+## "Screen stays blank even though tgi_install/tgi_init ran + I'm drawing"
+
+The other blank-screen cause: a bad render-loop order. The reliable
+Lynx loop is a FULL REDRAW every frame in this exact order:
+
+```c
+for (;;) {
+    while (tgi_busy()) { }            /* 1. wait for the Suzy blitter to
+                                       *    finish the LAST frame — drawing
+                                       *    while it's busy loses the frame */
+    tgi_setcolor(COLOR_BLACK);
+    tgi_bar(0, 0, tgi_getmaxx(), tgi_getmaxy());  /* 2. full-screen clear */
+    /* 3. draw all your objects with tgi_bar / tgi_line ... */
+    tgi_updatedisplay();              /* 4. push the frame */
+}
+```
+
+Two things that trip agents up:
+- **`while (tgi_busy()) { }` is required** before drawing the next frame.
+  Skipping it is the #1 "Lynx is blank" trap.
+- **Don't rely on `tgi_clear()`** to blank the screen in this
+  toolchain/emulator path — use a full-screen `tgi_bar(0,0,maxx,maxy)`
+  in the background colour instead. The bundled `shmup` scaffold uses
+  this exact loop; copy it.
+
 ## "tgi_outtextxy renders nothing"
 
 cc65's default TGI on Lynx ships without a font. Either:

@@ -143,7 +143,13 @@ void main(void) {
   for (i = 0; i < MAX_ENEMIES; i++) enemy_active[i] = 0;
 
   for (;;) {
-    /* ── Stage sprites for the upcoming NMI ──────────────────── */
+    /* ── Stage sprites BEFORE ppu_wait_nmi() ─────────────────────
+     * ⚠ ORDER IS LOAD-BEARING. The NMI handler DMAs shadow OAM →
+     * real OAM at the START of vblank, copying whatever shadow OAM
+     * holds AT THAT MOMENT. So stage (oam_clear + oam_spr) FIRST,
+     * THEN ppu_wait_nmi(). If you flip it (wait, then stage), the
+     * frame the player sees lags one frame behind / shows stale or
+     * empty sprites. Keep oam_* above the wait. */
     oam_clear();
     oam_spr(ship_x, ship_y, TILE_SHIP, SHIP_PAL);
     for (i = 0; i < MAX_BULLETS; i++) {

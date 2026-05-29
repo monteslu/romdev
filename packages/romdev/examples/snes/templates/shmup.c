@@ -73,6 +73,24 @@ static void fire(void) {
     }
 }
 
+/* Write all sprites into the OAM low table. Slot layout: 0=player,
+ * 1..6=bullets, 7..12=enemies. SPR(slot) = slot*4 (oamSet's id is a BYTE
+ * offset). Inactive objects park at Y=240 (off-screen) — that's how you
+ * "hide" a sprite; no oamSetEx needed (oamInitGfxSet leaves slots shown).
+ * Call oamUpdate() after to DMA the table to hardware. */
+static void stage_frame(void) {
+    u16 i, by, ey;
+    oamSet(SPR(0), player.x, player.y, 3, 0, 0, 0, 0);    /* player tile 0 */
+    for (i = 0; i < MAX_BULLETS; i++) {
+        by = bullets[i].alive ? bullets[i].y : 240;
+        oamSet(SPR(1 + i), bullets[i].x, by, 3, 0, 0, 32, 0); /* tile @ gfx 32 */
+    }
+    for (i = 0; i < MAX_ENEMIES; i++) {
+        ey = enemies[i].alive ? enemies[i].y : 240;
+        oamSet(SPR(7 + i), enemies[i].x, ey, 3, 0, 0, 64, 0); /* tile @ gfx 64 */
+    }
+}
+
 static void spawn(void) {
     u16 i;
     for (i = 0; i < MAX_ENEMIES; i++) {
@@ -97,11 +115,15 @@ int main(void) {
     consoleSetTextOffset(0x0100);
     consoleInitText(0, 16 * 2, &tilfont, &palfont);
     setMode(BG_MODE1, 0);
+    /* Disable ALL BG layers and render on a solid backdrop — the same
+     * clean approach the `default` template uses. (BG0 was the text-console
+     * layer, but its stub font rendered as a garbage checkerboard; until a
+     * real pvsneslibfont .pic is dropped in for an on-BG HUD, a clean
+     * sprite-only screen looks far better than garbage tiles.) */
+    bgSetDisable(0);
     bgSetDisable(1);
     bgSetDisable(2);
-    /* NOTE: the text BG (BG0) currently shows a garbage font (stub font in
-     * data.asm — see the ⚠ there). The game plays correctly; the HUD text
-     * is unreadable until a real pvsneslibfont .pic is dropped in. */
+    setPaletteColor(0, RGB5(0, 0, 6));   /* dark-blue backdrop (CGRAM 0) */
 
     /* 3 sprite tiles (ship/bullet/enemy) × 32 bytes = 96 bytes. */
     oamInitGfxSet(&tilsprite, 96, &palsprite, 32, 0,
@@ -116,8 +138,15 @@ int main(void) {
     consoleDrawText(14, 1, "SCORE");
     consoleDrawText(2, 26, "D-PAD MOVE B FIRE");
 
-    /* Pre-stage all 13 OAM slots — hidden initially (SPR() = slot*4). */
+    /* Pre-stage all 13 OAM slots off-screen (SPR() = slot*4 — oamSet's id
+     * is a BYTE OFFSET). After oamInitGfxSet, sprites default to shown, so
+     * just set position; hide an inactive sprite by parking it at Y=240. */
     for (i = 0; i < 13; i++) oamSet(SPR(i), 0, 240, 3, 0, 0, 0, 0);
+
+    /* Stage the first real frame + flush it to OAM BEFORE the screen turns
+     * on, so frame 1 shows the game (not power-on garbage). */
+    stage_frame();
+    oamUpdate();
 
     /* Screen ON first, THEN sound. If the SPC wedges, sfx_init returns
      * nonzero and we keep running silently — never a black screen. */
@@ -160,17 +189,7 @@ int main(void) {
             }
         }
 
-        /* Stage OAM. Tile index = gfxoffset (32-byte stride). Address
-         * each sprite by SPR(slot) — OAM is byte-indexed (slot*4). */
-        oamSet(SPR(0), player.x, player.y, 3, 0, 0, 0,  0);
-        for (i = 0; i < MAX_BULLETS; i++) {
-            by = bullets[i].alive ? bullets[i].y : 240;
-            oamSet(SPR(1 + i), bullets[i].x, by, 3, 0, 0, 32, 0);
-        }
-        for (i = 0; i < MAX_ENEMIES; i++) {
-            ey = enemies[i].alive ? enemies[i].y : 240;
-            oamSet(SPR(7 + i), enemies[i].x, ey, 3, 0, 0, 64, 0);
-        }
+        stage_frame();
         oamUpdate();
 
         render_score();

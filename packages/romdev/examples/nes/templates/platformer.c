@@ -111,7 +111,10 @@ void main(void) {
   for (;;) {
     player_y = (uint8_t)(py_q44 >> 4);
 
-    /* ── Stage sprites ──────────────────────────────────────── */
+    /* ── Stage sprites BEFORE ppu_wait_nmi() ────────────────────
+     * The NMI handler DMAs shadow OAM at vblank-start, so oam_clear +
+     * oam_spr MUST run before the wait below — flip the order and the
+     * visible frame lags / shows stale sprites. */
     oam_clear();
     /* player tile depends on whether airborne */
     oam_spr(px, player_y,

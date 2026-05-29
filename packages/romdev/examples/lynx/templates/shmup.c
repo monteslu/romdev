@@ -65,7 +65,19 @@ void main(void) {
   prev_btn = 0;
 
   for (;;) {
-    tgi_clear();
+    /* CANONICAL LYNX GAME LOOP — full-redraw every frame. The reliable order:
+     *   1. WAIT for the Suzy blitter to finish the previous frame:
+     *        while (tgi_busy()) { }
+     *      Skipping this is the #1 "Lynx screen stays blank" trap — drawing
+     *      while the blitter is mid-flight loses the frame.
+     *   2. CLEAR with a full-screen tgi_bar in the background colour, NOT
+     *      tgi_clear() (which can leave the framebuffer stale in this
+     *      toolchain+emulator path).
+     *   3. DRAW every object.
+     *   4. tgi_updatedisplay() to push the frame. */
+    while (tgi_busy()) { }
+    tgi_setcolor(COLOR_BLACK);
+    tgi_bar(0, 0, tgi_getmaxx(), tgi_getmaxy());  /* maxx/maxy = 159/101 = full screen */
 
     /* Render */
     tgi_setcolor(COLOR_YELLOW);

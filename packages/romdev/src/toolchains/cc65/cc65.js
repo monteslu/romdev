@@ -155,13 +155,21 @@ export async function runLd65(args) {
   if (linkerConfig) {
     inputFiles.push(textFile("/work/custom.cfg", linkerConfig));
   }
-  const outputFiles = [{ vfsPath: "/work/out.bin", encoding: "base64" }];
+  const outputFiles = [
+    { vfsPath: "/work/out.bin", encoding: "base64" },
+    // Always emit the linker map — its Segment list gives us per-segment
+    // sizes (BSS / DATA / ZEROPAGE / stack), which we surface as RAM usage
+    // so the agent sees "you used 380/512 B of BSS" instead of discovering
+    // a silent overflow at runtime.
+    { vfsPath: "/work/out.map", encoding: "utf8" },
+  ];
   if (debug) outputFiles.push({ vfsPath: "/work/out.dbg", encoding: "utf8" });
   const r = await runIsolated({
     gluePath: path.join(wasmDir(), "ld65.js"),
     argv: [
       ...configArgs,
       "-o", "/work/out.bin",
+      "--mapfile", "/work/out.map",
       ...extra,
       ...options,
       ...Object.keys(objects).map((n) => "/work/" + n),
@@ -180,7 +188,54 @@ export async function runLd65(args) {
     exitCode: r.exitCode,
     binary: getOutputBytes(r, "/work/out.bin"),
     dbg: debug ? getOutputText(r, "/work/out.dbg") : null,
+    map: getOutputText(r, "/work/out.map") || null,
     ...(r.crash ? { crash: r.crash, stage: "crash" } : {}),
+  };
+}
+
+/**
+ * Parse an ld65 map file's "Segment list" into RAM-usage info. ld65's map
+ * has a section like:
+ *   Segments list:
+ *   -------------
+ *   ZEROPAGE          Start End   Size  Align ...
+ *   BSS               000300 0004C8 0001C8 ...
+ * We pull out the segments that live in RAM (BSS / DATA / ZEROPAGE / a few
+ * common stack/heap names) with their sizes, so the agent can see how close
+ * it is to the per-config RAM ceiling. Returns null if the map can't be
+ * parsed (best-effort — never throws).
+ * @param {string|null} mapText
+ * @returns {{segments: Array<{name:string,start:number,end:number,size:number}>, note:string}|null}
+ */
+export function parseRamUsage(mapText) {
+  if (!mapText || typeof mapText !== "string") return null;
+  // The map's segment table rows look like: NAME  HHHHHH  HHHHHH  HHHHHH  ...
+  // (name, start, end, size — all hex). Match those rows.
+  const rows = [];
+  const re = /^([A-Z_][A-Z0-9_]*)\s+([0-9A-Fa-f]{6})\s+([0-9A-Fa-f]{6})\s+([0-9A-Fa-f]{6})\b/gm;
+  let m;
+  while ((m = re.exec(mapText))) {
+    const size = parseInt(m[4], 16);
+    if (size === 0) continue;
+    rows.push({ name: m[1], start: parseInt(m[2], 16), end: parseInt(m[3], 16), size });
+  }
+  if (!rows.length) return null;
+  // RAM-resident segments (cc65 conventions). BSS = uninitialised globals,
+  // DATA = initialised globals (RAM copy), ZEROPAGE = zp vars. Stack/heap
+  // segments vary by target; include common names.
+  // RAM = the data/bss/zp segments, AND they must live below the ROM window
+  // (cc65 RAM is in low memory; PRG/code segments like STARTUP/CODE sit at
+  // $8000+ on NES and shouldn't count as RAM usage).
+  const segments = rows.filter(
+    (r) => /^(BSS|DATA|ZEROPAGE|ZP|BSS2)$/.test(r.name) && r.start < 0x8000,
+  );
+  if (!segments.length) return null;
+  return {
+    segments,
+    note: "RAM segments from the linker map (sizes in bytes). On NROM/CHR-RAM, " +
+      "normal RAM is tight (~512 B for BSS/DATA outside zeropage + stack + " +
+      "shadow OAM). If BSS+DATA approaches the config's RAM region size, you're " +
+      "near overflow — symptoms are corrupted state / mystery crashes.",
   };
 }
 
@@ -256,6 +311,7 @@ export async function buildC(args) {
     dbg: ld.dbg,
     log,
     exitCode: ld.exitCode,
+    ramUsage: parseRamUsage(ld.map),
     stage: ld.exitCode === 0 ? "done" : "ld65",
   };
 }
@@ -310,6 +366,7 @@ export async function buildAsm(args) {
     dbg: ld.dbg,
     log,
     exitCode: ld.exitCode,
+    ramUsage: parseRamUsage(ld.map),
     stage: ld.exitCode === 0 ? "done" : "ld65",
   };
 }

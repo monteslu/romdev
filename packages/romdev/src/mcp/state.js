@@ -20,7 +20,17 @@ const hosts = new Map();
  */
 export function getHost(sessionKey) {
   const host = hosts.get(sessionKey);
-  if (!host) throw new Error("no media loaded — call loadMedia first");
+  if (!host) {
+    throw new Error(
+      "No ROM loaded in this session — call loadMedia({path}) first. " +
+      "If you WERE mid-session and just got reconnected (the server restarted, " +
+      "or your session expired and your client re-initialized): the emulator " +
+      "state is held in server memory only, so it did not survive — just " +
+      "re-run loadMedia({path}) with the ROM you were working on (it's still on " +
+      "disk) to pick back up. Re-applying any in-progress changes means " +
+      "rebuilding/reloading; a fresh boot is the recovery point.",
+    );
+  }
   return host;
 }
 
