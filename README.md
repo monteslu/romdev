@@ -1,6 +1,6 @@
 # romdev
 
-**A turnkey vibe-coding platform for retro homebrew games.** One command and a coding agent can make real, working ROMs for NES, SNES, Game Boy, Genesis, Atari, Commodore 64, and more — that run on RetroArch, native emulators, flash carts, and real hardware. No SDK installs. No emulator setup. No PATH fiddling. No "this only works on Linux."
+**Vibe-code real retro games.** One command, and your coding agent can make actual working ROMs for NES, SNES, Game Boy, Genesis, Atari, Commodore 64, and more — that run on RetroArch, native emulators, flash carts, and real hardware. No SDK installs. No emulator setup. No PATH fiddling. No "this only works on Linux."
 
 ```
 npx romdev

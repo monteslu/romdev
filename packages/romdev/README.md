@@ -1,6 +1,6 @@
 # romdev
 
-The entry point for **romdev** — a turnkey vibe-coding platform that lets a coding agent build, run, and inspect real retro homebrew ROMs (NES, SNES, Game Boy, Genesis, Atari, C64, GBA, and more) with one command.
+The entry point for **romdev** — vibe-code real retro games. Lets a coding agent build, run, and inspect actual homebrew ROMs (NES, SNES, Game Boy, Genesis, Atari, C64, GBA, and more) with one command.
 
 ```bash
 npx romdev
