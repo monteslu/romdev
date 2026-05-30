@@ -64,11 +64,11 @@ const LANGUAGE_TOOLCHAIN = {
   },
   snes: {
     asm: { toolchain: "asar",       available: true },
-    c:   { toolchain: "tcc816+wladx", available: true, note: "C for SNES via tcc-65816 + wla-65816 + wlalink (R15). Minimum-viable runtime — bare main() compiles. No PVSnesLib helpers (console, sprites) bundled yet." },
+    c:   { toolchain: "tcc816+wladx", available: true, note: "C for SNES via tcc-65816 + wla-65816 + wlalink. The PVSnesLib runtime IS bundled (built from source) and auto-linked — #include <snes.h> gives you consoleDrawText, setMode, oamSet, WaitForVBlank, etc. out of the box. `createGame`/`createProject` scaffold a complete PVSnesLib C project. Pass options.pvsneslib:false for the bare-main minimum-viable path." },
   },
   genesis: {
     asm: { toolchain: "vasm68k",      available: true },
-    c:   { toolchain: "m68k-elf-gcc", available: true, note: "C for Genesis via gcc 14.2.0 + binutils + newlib, all compiled to WASM (R20). Minimum-viable runtime — bare main() works. SGDK helpers (sprite engine, VDP, sound) pending bundling." },
+    c:   { toolchain: "m68k-elf-gcc", available: true, note: "C for Genesis via gcc 14.2.0 + binutils + newlib, all compiled to WASM. The SGDK runtime IS bundled (built from source) and auto-linked — sprite engine, VDP, controller, PSG/Z80 sound, resource helpers all work; #include <genesis.h>. `createGame`/`createProject` scaffold a complete SGDK C project (the recommended path). Pass options.sgdk:false for the bare-gcc minimum-viable path." },
   },
   gba: {
     c: { toolchain: "arm-none-eabi-gcc", available: true, note: "C for GBA via gcc 14.2.0 + binutils + newlib + libtonc 1.4.5 (default) OR libgba 0.5.4 (opt-in via runtime:\"libgba\"), all compiled to WASM (R24 + R28). #include <tonc.h> + tte_write/tte_printf works out of the box — that's the canonical Tonc-tutorial API every published GBA C resource uses. Caveat: tte_iohook (libtonc) and console.c (libgba) — the libsysbase-backed iprintf bridges — are NOT bundled. Use tte_printf directly, which is what the Tonc tutorial actually does." },
@@ -80,11 +80,13 @@ const LANGUAGE_TOOLCHAIN = {
 
 /**
  * Default language per platform. The choice reflects what's fastest /
- * smallest / best-matched to LLM fluency, NOT "what's friendliest to
- * humans." Most platforms default to asm because LLMs write retro asm
- * fluently and the resulting binaries are smaller + faster to build.
- * cc65-targeted platforms default to C because cc65 was originally a
- * C compiler and the C path is the canonical workflow there.
+ * smallest / best-matched to LLM fluency. Every platform that has a bundled
+ * C compiler + runtime defaults to C — that's the canonical, productive path
+ * and what `createGame`/`createProject` scaffold (cc65 for NES/C64/Atari7800/
+ * Lynx, SDCC for GB/GBC/SMS/GG, gcc+SGDK for Genesis, tcc+PVSnesLib for SNES,
+ * gcc+libtonc for GBA). Platforms whose only bundled toolchain is an assembler
+ * default to asm (Atari 2600 → dasm; SNES/Genesis keep an asm option too, but
+ * C is now the default since the SDKs are bundled from source).
  *
  * @type {Record<string, string>}
  */
@@ -96,8 +98,8 @@ const PLATFORM_DEFAULT_LANGUAGE = {
   lynx:       "c",
   gb:         "c",
   gbc:        "c",
-  snes:       "asm",
-  genesis:    "asm",
+  snes:       "c",
+  genesis:    "c",
   gba:        "c",
   sms:        "c",
   gg:         "c",
@@ -720,7 +722,7 @@ export async function buildForPlatform(args) {
   }
 
   throw new Error(
-    `no bundled toolchain for platform '${args.platform}' yet. v1 supports: atari2600 (dasm), nes/c64/atari7800/lynx (cc65), snes (asar), genesis (vasm68k), gb/gbc (rgbds), sms/gg (sdcc).`,
+    `no bundled toolchain for platform '${args.platform}'. Supported: atari2600 (dasm), nes/c64/atari7800/lynx (cc65), snes (C via tcc-65816+wla+PVSnesLib, or asm via asar), genesis (C via m68k-gcc+SGDK, or asm via vasm68k), gba (C via arm-gcc+libtonc/libgba), gb/gbc (sdcc sm83 / rgbds), sms/gg (sdcc). Call listPlatforms for the live matrix.`,
   );
 }
 

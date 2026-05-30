@@ -1613,7 +1613,18 @@ Compiles **C89**, not C99/C11. Stick to:
     // R30: Genesis SGDK templates ship genesis_sfx.{h,c} as runtime helpers.
     // If the template's runtime list includes .c files, emit a multi-file
     // sourcesPaths block; otherwise stick with the single-source form.
-    const runtimeCs = (tmpl?.runtime ?? []).filter((r) => /\.c$/i.test(r.dst));
+    //
+    // BUT: some runtime .c files are compiled by the build pipeline itself,
+    // NOT as user sources — listing them in sourcesPaths duplicates a symbol
+    // and FAILS the link. The classic one is SGDK's `rom_header.c`: the
+    // Genesis build assembles the ROM header as boot glue (Stage D) and the
+    // SGDK runtime archive intentionally excludes it, so a snippet that lists
+    // rom_header.c collides with that and the link dies on a duplicate header.
+    // Exclude such build-internal files from the documented build command.
+    const BUILD_INTERNAL_CS = new Set(["rom_header.c"]);
+    const runtimeCs = (tmpl?.runtime ?? [])
+      .filter((r) => /\.c$/i.test(r.dst))
+      .filter((r) => !BUILD_INTERNAL_CS.has(r.dst));
     if (runtimeCs.length > 0 && /\.c$/i.test(mainFilename)) {
       const runtimeHs = (tmpl?.runtime ?? []).filter((r) => /\.h$/i.test(r.dst));
       const srcLines = [`    "${mainFilename}": "${mainFilename}",`]
