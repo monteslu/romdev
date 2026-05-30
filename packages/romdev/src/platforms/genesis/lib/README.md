@@ -153,5 +153,5 @@ we do not emit.
 The YM2612 + Z80 sound CPU state is not currently as deeply
 introspectable as the SNES SPC700 + DSP — YM2612 in particular
 requires walking gpgx's internal struct which is version-fragile.
-If you hit a sound-debugging wall here, raise it in a devnote
-(`~/code/cliemu/devnote.md`) and the MCP dev will prioritize.
+If you hit a sound-debugging wall here, open an issue at
+https://github.com/monteslu/romdev/issues.

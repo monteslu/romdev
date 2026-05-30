@@ -26,5 +26,8 @@
   "bugs": {
     "url": "https://github.com/monteslu/romdev/issues"
   },
-  "author": "Luis Montes"
+  "author": "Luis Montes",
+  "scripts": {
+    "prepublishOnly": "node ../../scripts/check-wasm.mjs"
+  }
 }

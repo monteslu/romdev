@@ -129,8 +129,8 @@ const LIBRETRO_JOYPAD_IDS = {
 // keydown register after 8 shifts.
 //
 // These are the bits a ROM ACTUALLY reads. The libretro JOYPAD ids above
-// are protocol ids for setInput, NOT hardware bit positions. Confusing
-// the two is the bug from devnote.md #7.
+// are protocol ids for setInput, NOT hardware bit positions. (Confusing
+// the two is a classic footgun.)
 const HARDWARE_BITS = {
   nes: { // 8-bit shift register; bit positions in the 8-bit keydown byte
     a: 0x80, b: 0x40, select: 0x20, start: 0x10,

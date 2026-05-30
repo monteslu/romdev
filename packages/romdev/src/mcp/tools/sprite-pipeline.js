@@ -10,7 +10,6 @@
 //   3. (followup) crossPlatformSpriteImport — extract+crop+quantize+manifest
 //                                in one call. Lives here when shipped.
 //
-// Source feedback: ~/code/cliemu/feedback_round12_cross_game_sprite_lift.md
 
 import { readFile, writeFile } from "node:fs/promises";
 import { PNG } from "pngjs";

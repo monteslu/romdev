@@ -70,7 +70,7 @@ captured by devkitPro's libsysbase and rendered as text on a
 tile-based BG. Implementing that requires `<sys/iosupport.h>` +
 `<sys/statvfs.h>` + `<sys/dir.h>` + ~a dozen more libsysbase headers
 that vanilla newlib does NOT ship. Porting devkitPro's libsysbase to
-our toolchain is multi-day work that we deferred (see R27 in PLAN.md).
+our toolchain is multi-day work that is currently deferred.
 
 The trade-off: we got `#include <gba.h>` working end-to-end and 95% of
 the libgba API. iprintf is the 5% missing. R28 added libtonc as the
@@ -123,8 +123,8 @@ console.c + libsysbase. Works as a fallback if you genuinely need
 iprintf and the above two don't cut it. You lose romdev's zero-
 install promise but everything else still works.
 
-R27 (in the deferred-work list in PLAN.md) is to port libsysbase
-into our build so iprintf "just works."
+A deferred enhancement is to port libsysbase into our build so
+iprintf "just works."
 
 ## Adding sound to a scaffold
 

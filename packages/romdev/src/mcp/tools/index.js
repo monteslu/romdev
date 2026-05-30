@@ -14,7 +14,7 @@
 // their session. `loadCategory({category:"all"})` is the power-user
 // escape hatch — registers everything in one call.
 //
-// Per PLAN.md § Roadmap "narrow at entry, deep once in": categories don't
+// Design principle "narrow at entry, deep once in": categories don't
 // gate access; they organize discoverability. Once loaded, primitives
 // are fully usable.
 
@@ -336,7 +336,7 @@ const TOOL_OWNER = {
   starterSnippets: "project",
   listPlatformDocs: "project", getPlatformDoc: "project",
   // show category (was: advanced)
-  playtest: "show", playtestStop: "show", playtestStatus: "show",
+  playtest: "show", playtestStop: "show", playtestStatus: "show", playtestFramebuffer: "show",
   // advanced category
   runUntil: "advanced",
   watchMemory: "advanced", runUntilWrite: "advanced",

@@ -54,22 +54,29 @@ just flat color.
 ## "ROM boots into green-shade DMG mode, not color"
 
 Header byte `$0143` isn't `$80`. The CGB boot ROM checks this byte
-and falls back to DMG mode when it's `$00`. Fix:
+and falls back to DMG mode when it's `$00`.
+
+When you build with `platform:"gbc"`, `buildSource` / `runSource`
+**auto-fix the header** — Nintendo logo, header + global checksums,
+and `$0143 = $80` (CGB-enhanced) — so a freshly built `.gbc` already
+boots in color. You do **not** call `patchGbHeader` for that.
 
 ```js
-buildSource({ platform: "gbc", language: "c", ... });
-patchGbHeader({ path: "<out.gbc>" });   /* auto-sets $0143 = $80 */
+runSource({ platform: "gbc", language: "c", ... });  /* header auto-fixed */
 ```
 
-The `patchGbHeader` tool detects the `.gbc` extension and flips the
-byte on every build. If you're running `buildSource` then `loadMedia`
-without the patch step in between, you'll get a DMG ROM.
+If you instead see green-shade DMG mode, the ROM was almost certainly
+built with `platform:"gb"` (so the CGB flag stayed `$00`). Rebuild with
+`platform:"gbc"`. Reach for `patchGbHeader` only to fix up an existing /
+externally built `.gbc` whose header was never set, or to override a
+header field (e.g. force `cgb:false`).
 
 ## "OCPS / OCPD writes don't change colors"
 
 You're in DMG mode (see above) — those registers don't exist on DMG.
-Add the `patchGbHeader` step. Once in CGB mode, `OCPS` is the sprite
-palette index (with auto-increment in bit 7), `OCPD` is the data write.
+Rebuild with `platform:"gbc"` so the CGB flag is set. Once in CGB mode,
+`OCPS` is the sprite palette index (with auto-increment in bit 7),
+`OCPD` is the data write.
 
 To write sprite palette 0, color 1 = bright red:
 

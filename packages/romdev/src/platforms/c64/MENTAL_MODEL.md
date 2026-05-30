@@ -3,7 +3,7 @@
 One page. Read once before you write your first C64 game. The
 TROUBLESHOOTING.md alongside this file is for when something's broken.
 
-The C64 is the architectural outlier of cliemu's 6502-class platforms.
+The C64 is the architectural outlier of romdev's 6502-class platforms.
 It has KERNAL + BASIC ROMs always available (and your code can call
 them or override them), 64 KB of contiguous RAM with bank-switching to
 get under the I/O area, two CIAs for I/O, and a VIC-II that doesn't

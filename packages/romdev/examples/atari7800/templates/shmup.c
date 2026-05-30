@@ -2,9 +2,8 @@
  *
  * SCAFFOLD CAVEAT: the original "shmup with 4 enemies + 4 bullets"
  * exceeded the per-scanline DL pool budget within 7800's 2 KB RAM1
- * (and a per-scanline pool with computed row addresses ran into a
- * cc65 BSS placement bug that needs further investigation — see
- * the in-progress shmup task in handoff notes).
+ * (a per-scanline pool with computed row addresses ran into a
+ * cc65 BSS placement issue that needs further investigation).
  *
  * This minimal scaffold demonstrates: player ship that moves with
  * the joystick, fires bullets on FIRE button. Bullets travel up and

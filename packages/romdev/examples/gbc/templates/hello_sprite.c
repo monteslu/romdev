@@ -54,8 +54,6 @@ void main(void) {
   uint8_t x = 80;       /* hardware X = screen X + 8 */
   uint8_t y = 80;       /* hardware Y = screen Y + 16 */
   uint8_t i;
-  uint8_t *vram_dst;
-  const uint8_t *src;
 
   /* ── 1. LCD off (safe whether it was on or off) ──────────────────
    * lcd_init_default() checks LCDC.7 and only waits for vblank if the
@@ -66,12 +64,12 @@ void main(void) {
 
   /* ── 2. Upload our tile to VRAM slot 1 ($8010) ───────────────────
    * Slot 0 ($8000) is reserved for "blank" by convention so we don't
-   * accidentally render garbage tiles that point to it. */
-  vram_dst = (uint8_t *)0x8010;
-  src = tile_data;
-  for (i = 0; i < 16; i++) {
-    vram_dst[i] = src[i];
-  }
+   * accidentally render garbage tiles that point to it.
+   *
+   * Use memcpy_vram (bundled in gb_runtime.c) — a raw byte-copy loop
+   * into VRAM can be optimized away by SDCC and leave VRAM empty. See
+   * TROUBLESHOOTING.md "VRAM stays empty / sprite never appears". */
+  memcpy_vram((uint8_t *)0x8010, tile_data, 16);
 
   /* ── 3. Object palette 0 (CGB path) ──────────────────────────────
    * OCPS bit 7 = auto-increment after each write; bits 5..3 = palette
@@ -95,9 +93,13 @@ void main(void) {
   }
 
   /* ── 4. Build initial OAM ────────────────────────────────────────
-   * Clear all 40 slots then write our sprite into slot 0. */
+   * Clear all 40 slots, write our sprite into slot 0, then flush the
+   * shadow OAM to hardware BEFORE the LCD turns on — otherwise the very
+   * first displayed frame reads stale/zero OAM and the sprite is missing
+   * (or flat) for a frame. See TROUBLESHOOTING.md "first frame is blank". */
   oam_clear();
   oam_set(0, y, x, /* tile= */ 1, /* attr= */ 0);
+  oam_dma_flush();
 
   /* ── 5. Turn the LCD back on with BG + OBJ enabled. ──────────────
    * LCDC bits: 0x80=LCD on, 0x02=OBJ on, 0x10=tile data at $8000.

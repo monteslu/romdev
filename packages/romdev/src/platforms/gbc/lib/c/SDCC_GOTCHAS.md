@@ -77,8 +77,8 @@ extern undefined / typo:
 1. Bisect by deleting code chunks (halve the file, repeat).
 2. Reduce to a minimal 4–10 line repro.
 3. Capture the exact SDCC error message + the .i (preprocessed) input.
-4. Drop the repro in `~/code/cliemu/new_note_for_mcp_user.md` so we can
-   investigate. **Don't paper over it with workarounds** — with the
+4. Open an issue with the repro at https://github.com/monteslu/romdev/issues
+   so we can investigate. **Don't paper over it with workarounds** — with the
    stack-overflow fix in place, real codegen bugs are much rarer and
    each one is worth chasing to root cause.
 
@@ -109,9 +109,10 @@ If you need to write a custom VRAM block-copy:
   the value back). This is fragile.
 
 This is independent of the R26 OAM-alignment fix (`shadow_oam __at
-(0xC100)`) and the header-CGB-flag fix (`patchGbHeader`). All three
-are silent-failure bugs that look like "did my changes even land?"
-and need different fixes.
+(0xC100)`) and the header CGB-flag fix (now applied automatically by
+`buildSource` / `runSource`, not a manual `patchGbHeader` step). All
+three are silent-failure bugs that look like "did my changes even
+land?" and need different fixes.
 
 ## OAM DMA must run from HRAM (R55 fix — applies to ALL GB code, not just SDCC)
 

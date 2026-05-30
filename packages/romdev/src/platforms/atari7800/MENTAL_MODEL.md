@@ -4,7 +4,7 @@ One page. Read once before you write your first 7800 game. The
 TROUBLESHOOTING.md alongside this file is for when something's broken;
 this is the "what's going on" version.
 
-The 7800 is the **outlier** of cliemu's bundled platforms — its
+The 7800 is the **outlier** of romdev's bundled platforms — its
 architecture differs sharply from the NES / SMS / GB. If you've
 worked on those, **forget tilemaps + sprite-attribute tables**.
 The 7800 has neither.

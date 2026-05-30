@@ -13,12 +13,15 @@ check these first. All five have shipped fixes in the bundled runtime
 + tools, but a custom build that bypasses them hits exactly the same wall.
 
 1. **Cartridge header must be FULLY patched, not just logo + checksums.**
-   The `patchGbHeader` MCP tool now fills every byte at $0134..$014C
-   (title, CGB flag, cart type, ROM/RAM size, destination, etc.) — the
-   pre-r26 version left $0143 (the CGB flag) as the linker's $FF pad
-   byte, which made gambatte enter CGB mode on a DMG ROM and silently
-   ignore BGP/OBP* writes → white screen. Always call `patchGbHeader`
-   after build. For DMG-only carts pass no opts; for CGB pass `cgb: true`.
+   `buildSource` / `runSource` do this for you at build time (they run
+   rgbfix on the linked ROM): valid Nintendo logo, header + global
+   checksums, cart type / ROM-RAM size, and the CGB flag at $0143 — set
+   to $00 for `.gb` and $80/$C0 for `.gbc`. Getting $0143 wrong is the
+   classic white-screen: a stray $FF pad there trips CGB mode on a DMG
+   ROM so BGP/OBP* writes are ignored. Because the build sets it from the
+   platform you chose, a freshly built ROM is correct with **no manual
+   step**. Call `patchGbHeader` only to fix up an existing/external ROM
+   or override a field (title, cart type, ROM/RAM size, CGB flag).
 
 2. **OAM shadow buffer must be page-aligned.** OAM DMA copies 160 bytes
    from `$XX00` — it reads ONLY the high byte of your source address.
@@ -116,11 +119,12 @@ running a CGB-aware ROM, the DMG registers are ignored.
 - `0x80` = CGB-aware, DMG-compatible (recommended default)
 - `0xC0` = CGB-only (won't boot on DMG)
 
-Set this byte in your `gb_crt0.s` header section, OR call
-`patchGbHeader({path, cgb:true})` (auto-detects `.gbc` extension)
-after build. The bundled `patchGbHeader` MCP tool + the standalone
-`patch-header.js` script both default to `cgb:true` when the output
-file ends in `.gbc`.
+You normally don't touch this byte by hand: `buildSource` / `runSource`
+set it from the platform you build for ($00 for `platform:"gb"`, $80/$C0
+for `platform:"gbc"`). To force a value, set it in your `gb_crt0.s`
+header section, or call `patchGbHeader({path, cgb:true})` on the built
+ROM (it auto-detects the `.gbc` extension; the standalone
+`patch-header.js` script does the same).
 
 ## Sprite hardware quirks
 
@@ -182,14 +186,16 @@ is in the repo. Edit, fork, replace; nothing is auto-injected at build time.
 | `gb_runtime.h` | Helper declarations + PAD_* masks + `shadow_oam[]`. |
 | `gb_runtime.c` | Helper implementations. Linked as an extra TU. |
 | `gb_crt0.s` | Custom crt0 that reserves $0100-$014F for the header window, puts `init:` at $0150. |
-| `patch-header.js` | Standalone Node script that patches the Nintendo logo + header/global checksums on the built ROM. |
+| `patch-header.js` | Standalone Node script that patches the Nintendo logo + header/global checksums on a ROM — for fixing up an externally built ROM outside MCP. The normal build does this for you. |
 | `README.md` | Build invocation + "rebuild outside MCP" instructions. |
 
 Build calls explicitly reference these files via `sourcesPaths` /
-`includePaths` / `crt0Path` + `codeLoc: 0x150`. Then run
-`patchGbHeader({path})` (MCP tool) OR `node patch-header.js <rom>` (CLI)
-to fix up the cart header before the ROM will load under gambatte. See
-your project's README for the exact incantation.
+`includePaths` / `crt0Path` + `codeLoc: 0x150`. `buildSource` /
+`runSource` then fix up the cart header automatically (logo, checksums,
+CGB flag), so the ROM loads under gambatte with no extra step. Use
+`patchGbHeader({path})` (MCP tool) or `node patch-header.js <rom>` (CLI)
+only on a ROM the build pipeline didn't produce. See your project's
+README for the exact incantation.
 
 ## What's NOT done for you
 

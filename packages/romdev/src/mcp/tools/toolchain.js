@@ -320,11 +320,11 @@ export function registerToolchainTools(server, z, sessionKey) {
         ? d.consumeHint(
             "show-after-first-build",
             "Build succeeded — your user can watch the game live by calling " +
-            "loadCategory({category:'show'}) then playtestStart({}). The emulator " +
-            "stays available to all other tools (screenshot, readMemory, saveState, " +
-            "pause, stepFrames, ...) — playtest just opens a native window so a human " +
-            "can see what you're building. Recommended early in any session where a " +
-            "user is watching."
+            "loadCategory({category:'show'}) then playtest({}). It returns immediately " +
+            "and the window follows your rebuilds, so the emulator stays available to " +
+            "all other tools (screenshot, readMemory, saveState, pause, stepFrames, ...) " +
+            "while the human plays — screenshot() shows the same frame the human sees. " +
+            "Recommended early in any session where a user is watching."
           )
         : null;
       // Gate the build log: small → inline; large → sibling file next to the

@@ -89,11 +89,14 @@ the cross-platform note: [[sdcc-uint8-loop-bound-trap]].
 
 ## "Wrong colors on GBC"
 
-1. **`$0143` is not $80.** This is the CGB-mode header byte. Set it
-   in your `gb_crt0.s` header section, OR run
-   `patchGbHeader({path:"out.gbc"})` (auto-detects `.gbc` and sets the
-   flag), OR run `node patch-header.js out.gbc` (the script bundled
-   into every GB/GBC project by `createProject`). Verify:
+1. **`$0143` is not $80.** This is the CGB-mode header byte.
+   `buildSource` / `runSource` set it automatically from the platform —
+   build with `platform:"gbc"` and it's $80/$C0; build with
+   `platform:"gb"` and it stays $00 (DMG). So if colors are wrong, first
+   check you didn't build this as a `.gb` ROM — rebuild with
+   `platform:"gbc"`. (To force a value on an existing ROM: set it in your
+   `gb_crt0.s` header section, run `patchGbHeader({path:"out.gbc"})`, or
+   run `node patch-header.js out.gbc`.) Verify:
    ```sh
    xxd -s 0x143 -l 1 out.gbc      # expect: 80
    ```
@@ -214,5 +217,5 @@ createProject({
 
 ## Adding a new symptom
 
-Hit something not on this list? Drop a 5-line repro and the symptom
-in `~/code/cliemu/feedback_for_mcp_dev.md` so we can add it.
+Hit something not on this list? Open an issue with a 5-line repro and
+the symptom at https://github.com/monteslu/romdev/issues.

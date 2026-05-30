@@ -6,7 +6,7 @@
 //
 //   mmutil chiptune.xm -ochiptune_soundbank.bin -hchiptune_soundbank.h
 //
-// Author/license: cliemu project — released CC0 / public domain.
+// Author/license: romdev project — released CC0 / public domain.
 // No third-party tracker modules; everything in this file is generated
 // from primitives so the soundbank ships without attribution baggage.
 //
@@ -40,9 +40,9 @@ const concat = (...parts) => {
 // ── XM file structure ───────────────────────────────────────────────
 // Header (60 bytes — fixed)
 const id      = padStr("Extended Module: ", 17);    // 17 bytes "Extended Module: "
-const title   = padStr("cliemu chiptune    ", 20);  // 20-byte title
+const title   = padStr("romdev chiptune    ", 20);  // 20-byte title
 const marker  = u8(0x1a);                            // EOF marker
-const tracker = padStr("cliemu r34          ", 20); // 20-byte tracker name
+const tracker = padStr("romdev              ", 20); // 20-byte tracker name
 const version = u16(0x0104);                         // version 1.04
 
 // Module header (starts at offset 60)

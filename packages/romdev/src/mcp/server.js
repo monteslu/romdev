@@ -11,8 +11,11 @@
 //   claude mcp add --transport http romdev http://127.0.0.1:7331/mcp
 //
 // Run:
-//   node src/mcp/server.js           # blocks on the HTTP listener
-//   PORT=7332 node src/mcp/server.js # override port
+//   node src/mcp/server.js              # blocks on the HTTP listener
+//   node src/mcp/server.js --port 7332  # override port (flag)
+//   node src/mcp/server.js --port=7332  # same, = form
+//   PORT=7332 node src/mcp/server.js    # override port (env; flag wins)
+//   node src/mcp/server.js --host 0.0.0.0
 //   HOST=0.0.0.0 node src/mcp/server.js
 //     (binds to all interfaces; DNS rebinding protection disabled — only
 //      use this when you're explicitly fronting the server.)
@@ -29,6 +32,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { registerTools } from "./tools/index.js";
 import { clearHost } from "./state.js";
+import { log } from "./log.js";
 import { attachObserver } from "../observer/server.js";
 import { installObserverMiddleware } from "../observer/tool-wrap.js";
 import { observer } from "../observer/bus.js";
@@ -70,10 +74,28 @@ function buildMcpServer(instructions, sessionKey) {
   return server;
 }
 
+// Parse `--flag value` / `--flag=value` from argv. CLI flags take precedence
+// over env vars, which take precedence over the built-in defaults.
+function cliArg(name) {
+  const argv = process.argv.slice(2);
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === `--${name}`) return argv[i + 1];        // --port 7332
+    if (a.startsWith(`--${name}=`)) return a.slice(name.length + 3); // --port=7332
+  }
+  return undefined;
+}
+
 async function main() {
   const instructions = await loadInstructions();
-  const host = process.env.HOST ?? "127.0.0.1";
-  const port = Number(process.env.PORT ?? 7331);
+  const host = cliArg("host") ?? process.env.HOST ?? "127.0.0.1";
+  // Precedence: --port flag > PORT env > default 7331.
+  const portRaw = cliArg("port") ?? process.env.PORT ?? 7331;
+  const port = Number(portRaw);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    log.error(`romdev: invalid port "${portRaw}" — pass --port <1-65535> or set PORT.`);
+    process.exit(1);
+  }
 
   // Build the Express app manually so we can set a large JSON body limit.
   // (The SDK's createMcpExpressApp uses body-parser's default ~100KB,
@@ -92,7 +114,11 @@ async function main() {
   // names and a tiny summary of arguments (size, not contents) so big
   // payloads don't bloat the log file.
   app.use("/mcp", (req, res, next) => {
-    if (req.method === "POST" && req.body) {
+    // Per-call stdout trace — DEBUG only (noise in prod). The structured event
+    // stream on /livestream (observer bus) is the canonical way to monitor a
+    // running server; this is just a dev convenience. Skip building the summary
+    // string entirely when not verbose.
+    if (log.verbose && req.method === "POST" && req.body) {
       const { method, id, params } = req.body;
       if (method === "tools/call") {
         const argKeys = params?.arguments ? Object.keys(params.arguments) : [];
@@ -106,12 +132,23 @@ async function main() {
           return `${k}=${v}`;
         }).join(" ");
         const sid = req.headers["mcp-session-id"] ?? "?";
-        console.log(`[mcp] ${String(sid).slice(0,8)} call ${params?.name}(${summary})`);
+        log.debug(`[mcp] ${String(sid).slice(0,8)} call ${params?.name}(${summary})`);
       } else if (method && method !== "notifications/initialized") {
-        console.log(`[mcp] ${String(req.headers["mcp-session-id"] ?? "?").slice(0,8)} ${method}`);
+        log.debug(`[mcp] ${String(req.headers["mcp-session-id"] ?? "?").slice(0,8)} ${method}`);
       }
     }
     next();
+  });
+
+  // Dev-only diagnostic endpoint: the last N log records as JSON, so someone
+  // working ON the MCP server can see recent activity without scraping stdout
+  // or having had --verbose on (the ring buffer captures debug lines either
+  // way). NOT an end-user feature — undocumented, loopback-only, no stability
+  // guarantee. `?limit=N` caps the count (default 100).
+  app.get("/log", (req, res) => {
+    const n = Number.parseInt(req.query.limit, 10);
+    const limit = Number.isInteger(n) && n > 0 ? n : 100;
+    res.json({ count: log.recent(limit).length, verbose: log.verbose, records: log.recent(limit) });
   });
 
   // Session → transport map. One McpServer per session.
@@ -162,7 +199,7 @@ async function main() {
       onsessioninitialized: (id) => {
         transports.set(id, transport);
         lastSeen.set(id, Date.now());
-        console.log(`[mcp] session ${id} ${fixedId ? "re-adopted (lazy-init after restart)" : "initialized"} (${transports.size} active)`);
+        log.debug(`[mcp] session ${id} ${fixedId ? "re-adopted (lazy-init after restart)" : "initialized"} (${transports.size} active)`);
         try { observer.sessionConnected(sessionKey); } catch {}
       },
     });
@@ -172,7 +209,7 @@ async function main() {
       if (transport.sessionId) {
         transports.delete(transport.sessionId);
         lastSeen.delete(transport.sessionId);
-        console.log(`[mcp] session ${transport.sessionId} closed (${transports.size} active)`);
+        log.debug(`[mcp] session ${transport.sessionId} closed (${transports.size} active)`);
       }
     };
     const server = buildMcpServer(instructions, sessionKey);
@@ -206,7 +243,7 @@ async function main() {
       transports.set(clientId, transport);
       return transport;
     } catch (e) {
-      console.log(`[mcp] lazy-init failed for ${clientId}: ${e?.message}`);
+      log.debug(`[mcp] lazy-init failed for ${clientId}: ${e?.message}`);
       return null;
     }
   }
@@ -231,7 +268,7 @@ async function main() {
         // client can always get back in, no matter what id it's clinging to.
         if (typeof sid === "string" && sid.length > 0) {
           delete req.headers["mcp-session-id"];
-          console.log(`[mcp] initialize carried stale session id ${sid} — stripped, minting fresh`);
+          log.debug(`[mcp] initialize carried stale session id ${sid} — stripped, minting fresh`);
         }
         transport = await createTransport();
       } else if (!transport && typeof sid === "string" && sid.length > 0) {
@@ -244,7 +281,7 @@ async function main() {
         // your ROM" guidance (state.js). This is safe now that the full tool
         // surface registers at init by default (no per-session loadCategory
         // state to lose — the old reason we used to reject + force reinit).
-        console.log(`[mcp] lazy-init: re-adopting unknown session ${sid} (likely post-restart)`);
+        log.debug(`[mcp] lazy-init: re-adopting unknown session ${sid} (likely post-restart)`);
         transport = await lazyInitTransport(sid);
         if (!transport) {
           // Lazy-init failed — fall back to the spec 404 so the client
@@ -270,7 +307,7 @@ async function main() {
 
       await transport.handleRequest(req, res, req.body);
     } catch (err) {
-      console.error("[mcp] handler error:", err);
+      log.error("[mcp] handler error:", err);
       if (!res.headersSent) {
         res.status(500).json({
           jsonrpc: "2.0",
@@ -290,7 +327,7 @@ async function main() {
   // JSON-RPC-shaped error handler. Without this, body-parser failures
   // (e.g. PayloadTooLargeError) return HTML, which MCP clients can't parse.
   app.use((err, req, res, next) => {
-    console.error("[mcp] express error:", err);
+    log.error("[mcp] express error:", err);
     if (res.headersSent) return next(err);
     const status = err?.status ?? err?.statusCode ?? 500;
     res.status(status).json({
@@ -314,30 +351,35 @@ async function main() {
 
   // Primary listener (carries socket.io / observer). Extra loopback listeners
   // share the same Express app so either stack reaches the same routes.
+  // Banner host: when we're on the default loopback we listen on BOTH stacks
+  // and `localhost` is what users actually type, so advertise that. For an
+  // explicit non-loopback HOST, show exactly what was bound.
+  const bannerHost = isDefaultLoopback ? "localhost" : host;
   const httpServer = app.listen(port, bindHosts[0], () => {
-    console.log(`romdev listening on http://${host}:${port}/mcp`);
-    console.log(`livestream observer:    http://${host}:${port}/livestream`);
-    console.log("Register with Claude Code:");
-    console.log(`  claude mcp add --transport http romdev http://${host}:${port}/mcp`);
+    log.info(`romdev listening on http://${bannerHost}:${port}/mcp`);
+    log.info(`livestream observer:    http://${bannerHost}:${port}/livestream`);
+    log.info("Register with Claude Code:");
+    log.info(`  claude mcp add --transport http romdev http://${bannerHost}:${port}/mcp`);
   });
   const extraServers = [];
   for (const h of bindHosts.slice(1)) {
     const s = app.listen(port, h);
     // A missing IPv6 stack shouldn't take the server down — log and move on.
-    s.on("error", (e) => console.log(`[mcp] secondary bind ${h}:${port} skipped: ${e.code || e.message}`));
+    s.on("error", (e) => log.debug(`[mcp] secondary bind ${h}:${port} skipped: ${e.code || e.message}`));
     extraServers.push(s);
   }
 
-  // Mount /livestream + socket.io on the same httpServer so we get one
-  // process, one port. The observer module attaches itself; tool calls
-  // emit through the observer bus via the middleware installed in
-  // buildMcpServer().
-  attachObserver(app, httpServer);
+  // Mount /livestream + socket.io on the same port. Attach socket.io to EVERY
+  // loopback listener (IPv4 + IPv6), not just the primary — otherwise a browser
+  // whose `localhost` resolves to the other stack 404s on /socket.io. The
+  // observer module attaches itself; tool calls emit through the observer bus
+  // via the middleware installed in buildMcpServer().
+  attachObserver(app, httpServer, ...extraServers);
 
   // Graceful shutdown.
   const shutdown = async (sig) => {
     clearInterval(reaper);
-    console.log(`\n[mcp] ${sig} received, draining ${transports.size} session(s)...`);
+    log.info(`\n[mcp] ${sig} received, draining ${transports.size} session(s)...`);
     for (const t of transports.values()) {
       try { await t.close(); } catch {}
     }
@@ -362,7 +404,7 @@ async function main() {
       const seen = lastSeen.get(id);
       if (seen === undefined) { lastSeen.set(id, now); continue; } // give it one window
       if (now - seen > SESSION_IDLE_MS) {
-        console.log(`[mcp] reaping idle session ${id} (idle ${Math.round((now - seen) / 1000)}s)`);
+        log.debug(`[mcp] reaping idle session ${id} (idle ${Math.round((now - seen) / 1000)}s)`);
         try { transport.close(); } catch (e) {
           // close() failed — still evict from our tables so it can't leak.
           transports.delete(id); lastSeen.delete(id);
@@ -378,14 +420,14 @@ async function main() {
   // a setImmediate inside a WASM callback). Without this Node's
   // default is to crash the process.
   process.on("uncaughtException", (err) => {
-    console.error("[mcp] uncaughtException — keeping process alive:", err);
+    log.error("[mcp] uncaughtException — keeping process alive:", err);
   });
   process.on("unhandledRejection", (reason) => {
-    console.error("[mcp] unhandledRejection — keeping process alive:", reason);
+    log.error("[mcp] unhandledRejection — keeping process alive:", reason);
   });
 }
 
 main().catch((err) => {
-  console.error("romdev fatal:", err);
+  log.error("romdev fatal:", err);
   process.exit(1);
 });

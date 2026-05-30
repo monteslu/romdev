@@ -1,7 +1,7 @@
 # Atari 2600 / VCS — mental model
 
 One page. The 2600 is the most architecturally extreme console
-cliemu supports. Read this twice before you write code.
+romdev supports. Read this twice before you write code.
 
 ## The big idea
 

@@ -1,8 +1,7 @@
 // R52 — GG-agent friction-feedback fixes.
 //
-// Driven by ~/code/cliemu/feedback_round24_gg_scaffold_friction.md
-// after an agent shipped "Catch the Coin" for Game Gear. Captured
-// problems + the fixes shipped here:
+// Driven by agent friction feedback on the Game Gear scaffold.
+// Captured problems + the fixes shipped here:
 //
 //   1. createProject({platform:"gg"}) wrote an unrunnable stub. Now
 //      ships a real runtime-correct default.c + bundles gg_crt0.s

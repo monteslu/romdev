@@ -10,16 +10,18 @@ You drive the work. The human is a director — they may want a game, a ROM disa
 
 ## If a human is watching, open playtest early
 
-If a human is sitting next to you during this session — and that's most sessions in practice — open the playtest window as soon as your first build succeeds. `playtest()` opens a native SDL window that runs your ROM live and accepts USB gamepads (hot-plugged controllers are picked up automatically). Every other MCP tool keeps working against that same running ROM — `runSource` rebuilds update the live game in place, no relaunch. A human sitting next to you should be **playing the game** while you iterate, not watching screenshots scroll past.
+If a human is sitting next to you during this session — and that's most sessions in practice — open the playtest window as soon as your first build succeeds. `playtest()` opens a native SDL window that runs your ROM live and accepts USB gamepads (hot-plugged controllers are picked up automatically). It returns **immediately** — the render loop runs in the background, so you keep calling other tools while the human plays. Every other MCP tool keeps working against that same running ROM, and **`runSource`/`loadMedia` rebuilds update the window in place** — the window follows your latest build, no relaunch and no crash on rebuild. A human sitting next to you should be **playing the game** while you iterate, not watching screenshots scroll past.
 
 ```
-loadCategory({category:"show"})  // registers playtest / playtestStop / playtestStatus
-playtest()                       // opens the SDL window
+loadCategory({category:"show"})  // registers playtest / playtestStop / playtestStatus / playtestFramebuffer
+playtest()                       // opens the SDL window (returns immediately)
 ```
 
-After that, keep iterating with `runSource` / `buildSource` / readMemory / screenshot exactly as before — they all act on the live emulator the user is playing.
+After that, keep iterating with `runSource` / `buildSource` / readMemory / screenshot exactly as before — they all act on the live emulator the user is playing. Because the window and `screenshot()` read the **same** live host, what you screenshot is what the human sees. (If you ever need to be explicit — e.g. to double-check the human's exact frame — `playtestFramebuffer()` captures the window's framebuffer directly, with `source`/`loadedMediaPath`/`frameCount` metadata.)
 
-Skip playtest only when there's clearly no human in the loop: CI runs, automated test suites, batch reverse-engineering, or when the user has explicitly said "headless." When in doubt, ask once, then default to opening it.
+**No gamepad?** `playtest()`'s response includes a `keyboardControls` map and a `tellUser` note when no controller is detected — relay the keys to the human (arrows = D-pad, Z = main action, Enter = START, ESC closes) so they know how to play.
+
+Skip playtest only when there's clearly no human in the loop: CI runs, automated test suites, batch reverse-engineering, or when the user has explicitly said "headless." `playtest()` needs a desktop display; with none it returns `{opened:false, reason:"no-display"}` and tells you how to relaunch the server with the display env — every other tool (build, run, screenshot, inspect) is fully headless and unaffected. When in doubt, ask once, then default to opening it.
 
 ## Tool surface: everything is loaded — just call the tool
 
@@ -37,7 +39,7 @@ Skip playtest only when there's clearly no human in the loop: CI runs, automated
 - `debug` — inspectSprites, getCPUState, **disassemble**, symbol lookup, palette inspection, whichTilesAreRendered, addressToSymbol
 - `assets` — convert PNGs to tiles, WAVs to BRR, identify ROMs, plus the hacking toolkit (`patchFile`, `assembleSnippet`, `diffRoms`, `findFreeSpace`, `spliceCHR`, `extractCart`, `wrapRomFromParts`)
 - `project` — starter snippets per platform
-- `show` — `playtest` (open the live SDL window for a human)
+- `show` — `playtest` (open the live SDL window for a human), `playtestStop`, `playtestStatus`, `playtestFramebuffer` (capture exactly what the human's window shows)
 - `advanced` — runUntil, watchMemory / runUntilWrite, input recording
 
 **"Disassemble this NES ROM"** is now just: `disassembleRom({path, startAddress, length})`. No discovery step.
@@ -119,10 +121,10 @@ order:
 5. **Upstream GitHub** for compilers + emulators when the bug is
    below our thin wrappers. Don't bundle (gigabytes for gcc/binutils
    source) but the link is one click.
-6. **MCP feedback round** — file `feedback_round<N>_<platform>_*.md`
-   in `~/code/cliemu/` when you've actually hit a real bug AND can
-   provide repro details. Don't file when "it doesn't work" without
-   a diagnosis — read the bundled source first.
+6. **Hit a real bug in romdev itself?** Open an issue at
+   https://github.com/monteslu/romdev/issues with repro details. File
+   only with a diagnosis (not bare "it doesn't work") — read the bundled
+   source first.
 
 **Important constraint on path B:** the `vendor/` library source is
 **read-only in practice**. You can read + grep it freely, but if
@@ -188,7 +190,7 @@ NES, Game Boy, Game Boy Color, SNES, Genesis, Game Boy Advance, SMS, Game Gear, 
 
 Call `listPlatforms` (in the `platforms` category) for the live capability matrix, including per-platform language defaults and quirks. **Defaults are picked to maximize agent effectiveness** — for every platform that has a bundled C compiler, C is the default (LLMs write C cleanly; the compiler handles register allocation + memory mapping). Platforms whose only bundled toolchain is an assembler default to asm. Override with `language: "asm"` or `language: "c"` when you specifically need the non-default.
 
-For maintainers: [`BUILDING.md`](BUILDING.md) has the platform / core / patch / region-ID matrix and the recipe for adding a new platform.
+For maintainers: the platform / core / patch / region-ID matrix and the recipe for adding a new platform live in the project repo at https://github.com/monteslu/romdev.
 
 ## Deep debug tooling status per platform
 
@@ -556,7 +558,7 @@ const addr = m ? parseInt(m[1], 16) : null;  // e.g. 0xC100
 
 ## Playtest mode (optional)
 
-`playtest({ scale: 3 })` opens a real SDL window for a human to play the loaded ROM with a real controller. Blocks until the window closes. Only works if `@kmamal/sdl` is installed (it's an optional npm dep). Use this when the human wants to feel the game, not when you want to test it.
+`playtest({ scale: 3 })` opens a real SDL window for a human to play the loaded ROM with a keyboard or USB controller. It **returns immediately** — the render loop runs in the background and you keep using every other tool against the same live host (so `runSource`/`loadMedia` rebuilds update the window in place; it does not relaunch or crash on rebuild). Close it with `playtestStop` (or the human pressing ESC / Select+Start). Needs a desktop display *and* the optional `@kmamal/sdl` dep; with neither it returns `{opened:false, reason:...}` and the rest of the server keeps working headless. Use this when the human wants to feel the game, not when you want to test it (for your own checks, use `screenshot` — it reads the same live host the window shows). `playtestStatus` reports liveness + the window's media/frame; `playtestFramebuffer` captures exactly what the human sees.
 
 ## Common gotchas
 
@@ -671,7 +673,7 @@ A few platform-tool quirks worth knowing up front:
   - **SAT $D0 is the renderer terminator.** R53 fixed `sms_sprite_init` / `gg_sprite_init` so they no longer fill Y with $D0 (they use $E0 now — off-screen but not the terminator). You only hit the trap if you write $D0 yourself; if sprites past a given slot are missing in `inspectSprites`, that's still the diagnosis.
   - **R6 = 0xFB → sprite tiles at $0000**, not $2000 (older comments lied — fixed). Bit 2 SET = $2000, CLEAR = $0000. Trust `inspectSprites`' `spriteTileDataBase` field over comments.
 - **SNES CHR/tilemap can overlap in VRAM** if you put them carelessly. CHR starts at word $0000; if your CHR is 16KB the tilemap can't be at word $2000. Put tilemap at word $4000 or later when your CHR is big.
-- **SNES audio is a separate ROM build** — the Sony SPC700 coprocessor handles all sound; the main 65816 can only upload a driver + samples then send commands. Workflow: write your SPC driver in `arch spc700` .asm, `buildSource({platform:"spc700", source})` to flat raw bytes, then `.incbin` the result into your main 65816 .asm + write the $BBAA handshake at $2140-$2143 to upload it. `pcmToBrr({pcmPath, outputPath})` encodes 16-bit PCM into the SNES BRR format the SPC needs. See `src/platforms/snes/lib/audio_pipeline.asm` for the protocol overview; a working SPC driver example is at `~/code/cliemu/rom-games/snes/invaders/audio/spc_driver.asm`.
+- **SNES audio is a separate ROM build** — the Sony SPC700 coprocessor handles all sound; the main 65816 can only upload a driver + samples then send commands. Workflow: write your SPC driver in `arch spc700` .asm, `buildSource({platform:"spc700", source})` to flat raw bytes, then `.incbin` the result into your main 65816 .asm + write the $BBAA handshake at $2140-$2143 to upload it. `pcmToBrr({pcmPath, outputPath})` encodes 16-bit PCM into the SNES BRR format the SPC needs. See `src/platforms/snes/lib/audio_pipeline.asm` for the protocol overview, and the SPC driver bundled into any SNES game project scaffolded with a sound genre.
 - **All SDCC-built platforms (GB, GBC, SMS, GG, MSX, ColecoVision)** share a few SDCC-sm83 / -z80 quirks. The detailed reference is [`src/platforms/gb/lib/c/SDCC_GOTCHAS.md`](src/platforms/gb/lib/c/SDCC_GOTCHAS.md).
   **2026-05-25: The "for-loop + function-call crash family" (`dbuf_append_str NULL` assertion) is FIXED.** It was emscripten's default 64 KB stack overflowing the static `sm83_regs[]` table at runtime — not a SDCC codegen bug. Fixed by adding `-s STACK_SIZE=8388608` to `scripts/_lib.sh`. Patterns #1..#10 / #37 / #38 / #39 from previous agent notes all compile cleanly now. You don't need `unroll.h`, you don't need to split files into ≤200-line TUs, you don't need array-of-structs refactors. Write the natural code.
   **C89-only.** SDCC sm83 is C89. No inline `for (int i = 0; ...)`, no mid-block declarations, no compound literals. SDCC's syntax-error line is usually wrong (points at the FIRST decl after non-decl code); use the linter's line numbers instead.
@@ -710,8 +712,8 @@ You ONLY need to re-initialize in TWO cases:
 **Known historical friction (acknowledged 2026-05-25, since fixed):**
 real-world agents previously reported losing connections ~30% of long
 sessions. Server-side persistence is stable now. If you DO observe a
-session drop without a server restart, drop it in
-`~/code/cliemu/feedback_for_mcp_dev.md` with the timing — it's a
+session drop without a server restart, open an issue at
+https://github.com/monteslu/romdev/issues with the timing — it's a
 regression we want to catch.
 
 **Anti-pattern to AVOID:** opening a new session before every "block"

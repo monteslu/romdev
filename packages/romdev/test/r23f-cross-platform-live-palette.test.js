@@ -1,5 +1,4 @@
-// R23f regression test for the feedback in
-// ~/code/cliemu/feedback_round17_intent_validation.md.
+// R23f regression test for a cross-platform live-palette bug.
 //
 // Bug: crossPlatformSpriteImport({intent:"homebrew"}) did not propagate
 // the source ROM's live emulator palette through to its internal extract

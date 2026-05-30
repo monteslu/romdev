@@ -71,8 +71,8 @@ function appendSdccAbortHint(log, argv, toolName) {
     `Hint: unexpected SDCC abort. The historical "dbuf_append_str ` +
     `NULL" assertion family was fixed at the build level on ` +
     `2026-05-25 (emscripten stack overflow). If you see it now, it ` +
-    `is a different bug — capture the .c source + this log in ` +
-    `~/code/cliemu/new_note_for_mcp_user.md so it can be triaged.\n`;
+    `is a different bug — capture the .c source + this log and open ` +
+    `an issue at https://github.com/monteslu/romdev/issues.\n`;
 }
 
 /**

@@ -1,8 +1,7 @@
 // R54 — GB agent friction-feedback fixes (round 26).
 //
-// Driven by ~/code/cliemu/feedback_round26_gb_friction.md
-// after an agent built "Catch the Coin" on GB and reported 15 specific
-// items. This test covers every item that has a runtime/code fix:
+// Driven by agent friction feedback on the GB scaffold (15 specific
+// items). This test covers every item that has a runtime/code fix:
 //
 //   #1  patchGbHeader now fills $0134-$014C (cart type, ROM size, CGB
 //       flag, etc.) — not just logo + checksums. CGB flag defaults to

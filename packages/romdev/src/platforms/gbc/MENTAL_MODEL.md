@@ -13,12 +13,13 @@ runtime + tools, but a custom build that bypasses them hits exactly
 the same wall.
 
 1. **Cartridge header must be FULLY patched, not just logo + checksums.**
-   `patchGbHeader` now fills every byte at $0134..$014C. On `.gbc`
-   files it auto-sets the CGB flag at $0143 = $80 (CGB-aware + DMG-
-   compatible). Pre-r26 left $0143 = $FF (linker pad) which would
-   accidentally land in CGB mode on a DMG ROM — no problem here, but
-   the inverse can bite: if you start from a `.gb` ROM and want CGB
-   color, pass `cgb: true` explicitly.
+   `buildSource` / `runSource` do this for you at build time: every byte
+   at $0134..$014C is filled, and on `platform:"gbc"` the CGB flag at
+   $0143 is set to $80 (CGB-aware + DMG-compatible). You do **not** run
+   `patchGbHeader` on a freshly built ROM. Reach for `patchGbHeader` only
+   to fix up an existing / externally built ROM whose header was never
+   set, or to override a field — e.g. starting from a `.gb` ROM and
+   wanting CGB color, pass `cgb: true` explicitly.
 
 2. **OAM shadow buffer must be page-aligned.** `shadow_oam` is pinned
    at $C100 in the bundled runtime via `__at (0xC100)`. If you roll
@@ -67,9 +68,11 @@ The CGB boot ROM checks header byte **`$0143`**:
 - `$80` → CGB-enhanced mode (color works, DMG-compat fallback)
 - `$C0` → CGB-only mode (refuses to boot on a DMG)
 
-**Every bundled GBC scaffold is built with `$0143 = $80`** by
-`patchGbHeader({path:"out.gbc"})`. Without that step the ROM boots
-into DMG green-shade mode and OCPS/BCPS writes do nothing.
+**Every bundled GBC scaffold is built with `$0143 = $80`** — `buildSource`
+/ `runSource` set this automatically at build time when `platform:"gbc"`,
+so a freshly built `.gbc` boots in color with no extra step. (Build it as
+`platform:"gb"` instead and the flag stays `$00` → DMG green-shade mode,
+and OCPS/BCPS writes do nothing.)
 
 ## Palette setup
 
@@ -144,12 +147,13 @@ The genre scaffolds inherit from GB via `TEMPLATES.gbc = TEMPLATES.gb`;
 the only differences at build time are:
 
 - ROM extension: `.gbc` (vs `.gb`)
-- `patchGbHeader({path})` sets `$0143 = $80` to flip CGB mode on
+- the build sets `$0143 = $80` to flip CGB mode on (automatic when you
+  build with `platform:"gbc"` — no manual `patchGbHeader` step)
 - gambatte core accepts both DMG + CGB-mode ROMs
 
 For new GBC code that wants to be CGB-only (no DMG fallback) set the
-CGB byte to `$C0` instead of `$80`; `patchGbHeader` accepts an opt
-for that.
+CGB byte to `$C0` instead of `$80` — `patchGbHeader({path, cgb:true})`
+on the built ROM can override it.
 
 ## Horizontal scrolling (for side-scrollers)
 

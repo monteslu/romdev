@@ -83,11 +83,11 @@ static void stage_frame(void) {
     oamSet(SPR(0), player.x, player.y, 3, 0, 0, 0, 0);    /* player tile 0 */
     for (i = 0; i < MAX_BULLETS; i++) {
         by = bullets[i].alive ? bullets[i].y : 240;
-        oamSet(SPR(1 + i), bullets[i].x, by, 3, 0, 0, 32, 0); /* tile @ gfx 32 */
+        oamSet(SPR(1 + i), bullets[i].x, by, 3, 0, 0, 1, 0); /* gfxoffset = tile INDEX 1 (not a byte offset) */
     }
     for (i = 0; i < MAX_ENEMIES; i++) {
         ey = enemies[i].alive ? enemies[i].y : 240;
-        oamSet(SPR(7 + i), enemies[i].x, ey, 3, 0, 0, 64, 0); /* tile @ gfx 64 */
+        oamSet(SPR(7 + i), enemies[i].x, ey, 3, 0, 0, 2, 0); /* gfxoffset = tile INDEX 2 (not a byte offset) */
     }
 }
 

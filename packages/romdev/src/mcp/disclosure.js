@@ -7,7 +7,7 @@
 // navigable; a 65-tool surface induces decision paralysis even before the
 // agent picks the wrong one.
 //
-// Design constraint per PLAN.md § Roadmap: "narrow at entry, deep once in."
+// Design constraint: "narrow at entry, deep once in."
 // Recipes don't gate primitives; categories don't hide capabilities. Any
 // agent can load any category at any time. The "all" pseudo-category
 // loads everything in one call for power users who don't want the dance.

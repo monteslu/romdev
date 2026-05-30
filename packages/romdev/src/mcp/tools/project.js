@@ -1511,7 +1511,31 @@ Compiles **C89**, not C99/C11. Stick to:
       : "";
     buildBlock = "```js\nrunSource({\n  platform: \"" + platform + "\",\n  sourcesPaths: {\n" + srcLines + "\n  },\n" + (incLines ? "  includePaths: {\n" + incLines + "\n  },\n" : "") + "  linkerConfig: /* contents of " + tmpl.linkerConfig.dst + " */,\n  frames: 60,\n})\n```";
   } else if (isSdccSm83) {
-    buildBlock = "```js\nbuildSource({ platform: \"" + platform + "\", sourcesPaths: { \"main.c\": \"" + mainFilename + "\", \"gb_runtime.c\": \"gb_runtime.c\" }, includePaths: { \"gb_hardware.h\": \"gb_hardware.h\", \"gb_runtime.h\": \"gb_runtime.h\" }, crt0Path: \"gb_crt0.s\", codeLoc: 0x150, outputPath: \"" + name + romExt + "\" })\npatchGbHeader({ path: \"" + name + romExt + "\" })\nloadMedia({ platform: \"" + platform + "\", path: \"" + name + romExt + "\" }); stepFrames({ frames: 60 }); screenshot({})\n```";
+    // GB / GBC (SDCC sm83). runSource BUILDS + RUNS + SCREENSHOTS in one
+    // call AND auto-fixes the cartridge header (Nintendo logo, header +
+    // global checksums, CGB flag on .gbc) — no manual patchGbHeader step.
+    // Derive sources/includes from the template's runtime list so extra
+    // .c files (e.g. music_demo's hUGEDriver) are listed too.
+    const runtimeCs = (tmpl?.runtime ?? []).filter((r) => /\.c$/i.test(r.dst));
+    const srcLines = [`    "main.c":       "${mainFilename}",`]
+      .concat(runtimeCs.map((r) => `    "${r.dst}": "${r.dst}",`))
+      .join("\n");
+    const incLines = runtimeHeaders.length > 0
+      ? runtimeHeaders.map((h) => `    "${h.dst}": "${h.dst}",`).join("\n")
+      : "";
+    buildBlock =
+      "```js\nrunSource({\n" +
+      "  platform: \"" + platform + "\",\n" +
+      "  sourcesPaths: {\n" + srcLines + "\n  },\n" +
+      (incLines ? "  includePaths: {\n" + incLines + "\n  },\n" : "") +
+      "  crt0Path: \"gb_crt0.s\",\n" +
+      "  codeLoc: 0x150,\n" +
+      "  frames: 60,\n" +
+      "})\n```\n\n" +
+      "`runSource` auto-fixes the GB/GBC cartridge header (logo, checksums, " +
+      "CGB flag) — you do **not** call `patchGbHeader` for a freshly built " +
+      "ROM. Use `patchGbHeader` only to fix up an existing/external ROM on " +
+      "disk or to override header fields (title, cart type, ROM/RAM size).";
   } else if (isSdccZ80) {
     const inc = runtimeHeaders.length > 0
       ? `\n  includePaths: { ${runtimeHeaders.map((h) => `"${h.dst}": "${h.dst}"`).join(", ")} },`
@@ -1525,21 +1549,56 @@ Compiles **C89**, not C99/C11. Stick to:
   } else if (platform === "snes" && /\.c$/i.test(mainFilename)) {
     // R19b: SNES C-mode template (PVSnesLib runtime auto-linked). Multi-file
     // build with sibling .asm providing data symbols (tilfont/palfont).
-    const extraSourceLines = (tmpl?.extraSources ?? [])
-      .map((e) => `      "${e.dst}": "${e.dst}",`)
+    //
+    // SFX-enabled scaffolds (shmup/platformer/puzzle/etc.) also ship the
+    // SPC700 driver via SNES_SFX_RUNTIME. Those files split across THREE
+    // build args, and getting the split wrong is the documented footgun:
+    //   - snes_sfx_data.asm → a SOURCE (it .incbin's the apu blob; the build
+    //     fails with unresolved `apu_blob_end` if it's missing)
+    //   - apu_blob.bin      → a BINARY include (the .incbin'd payload)
+    //   - snes_sfx.h, snes_sfx.c → includePaths; main.c does
+    //     `#include "snes_sfx.c"`, so it is NOT a separately compiled source.
+    // The remaining SNES_SFX_RUNTIME files (spc_driver.asm, apu_blob.asm,
+    // *.brr, sample_bank.bin) are rebuild-only — not needed for the build.
+    const rt = tmpl?.runtime ?? [];
+    const has = (dst) => rt.some((r) => r.dst === dst);
+    const sfxSourceAsm = has("snes_sfx_data.asm") ? ["snes_sfx_data.asm"] : [];
+    const sfxIncludes = rt
+      .filter((r) => r.dst === "snes_sfx.h" || r.dst === "snes_sfx.c")
+      .map((r) => r.dst);
+    const sfxBinary = has("apu_blob.bin") ? ["apu_blob.bin"] : [];
+
+    const sourceNames = [mainFilename]
+      .concat((tmpl?.extraSources ?? []).map((e) => e.dst))
+      .concat(sfxSourceAsm);
+    const sourceLines = sourceNames
+      .map((n) => `    "${n}": "${n}",`)
       .join("\n");
+    const incLines = sfxIncludes
+      .map((n) => `    "${n}": "${n}",`)
+      .join("\n");
+    const binLines = sfxBinary
+      .map((n) => `    "${n}": "${n}",`)
+      .join("\n");
+
     buildBlock =
-      "```js\nbuildSource({\n" +
+      "```js\nrunSource({\n" +
       "  platform: \"snes\",\n" +
       "  language: \"c\",\n" +
-      "  sources: {\n" +
-      `    "${mainFilename}": "${mainFilename}",\n` +
-      (tmpl?.extraSources?.length ? `${extraSourceLines}\n` : "") +
-      "  },\n" +
+      "  sourcesPaths: {\n" + sourceLines + "\n  },\n" +
+      (incLines ? "  includePaths: {\n" + incLines + "\n  },\n" : "") +
+      (binLines ? "  binaryIncludePaths: {\n" + binLines + "\n  },\n" : "") +
+      "  frames: 120,\n" +
       "})\n```\n\n" +
       "PVSnesLib's runtime (crt0_snes, libm, libtcc, libc) is auto-linked. " +
       "`#include <snes.h>` works out of the box — consoleDrawText, setMode, " +
-      "WaitForVBlank, etc.";
+      "WaitForVBlank, etc." +
+      (sfxSourceAsm.length
+        ? " The SPC700 sound files are split across the three args above on " +
+          "purpose: `snes_sfx_data.asm` is a SOURCE, `apu_blob.bin` is a " +
+          "binary include, and `snes_sfx.{h,c}` are includes (main.c does " +
+          "`#include \"snes_sfx.c\"`). Omit any one and the build fails."
+        : "");
   } else if (platform === "snes" || platform === "genesis") {
     // R30: Genesis SGDK templates ship genesis_sfx.{h,c} as runtime helpers.
     // If the template's runtime list includes .c files, emit a multi-file
@@ -1595,7 +1654,7 @@ Compiles **C89**, not C99/C11. Stick to:
   }
   filesSection += `\nEvery byte that compiles into your ROM is in this directory. If you move the repo somewhere else, you don't need to install anything from romdev to rebuild it — the compiler binaries are the only external dependency.\n\n`;
 
-  const readme = `# ${title ?? name}\n\nA ${lang} project for ${platform}, scaffolded by romdev.\n\n${tmpl?.describe ? tmpl.describe + "\n\n" : ""}${filesSection}${c89Note}## Build + run with romdev\n\n${buildBlock}\n\n## Iterating\n\n- Edit \`${mainFilename}\` (or any of the runtime / crt0 / cfg files — they're yours).\n- Call \`runSource\` to see your changes. It builds + loads + runs + screenshots in one round trip.\n- Inspect at byte level: \`readMemory\`, \`inspectSprites\`, \`inspectPalette\`, \`inspectBackgroundMap({render:true})\`.\n- Open a playtest window for human eyes: \`loadCategory({category:"show"}); playtestStart({});\` — emulator stays live for every other tool.\n`;
+  const readme = `# ${title ?? name}\n\nA ${lang} project for ${platform}, scaffolded by romdev.\n\n${tmpl?.describe ? tmpl.describe + "\n\n" : ""}${filesSection}${c89Note}## Build + run with romdev\n\n${buildBlock}\n\n## Iterating\n\n- Edit \`${mainFilename}\` (or any of the runtime / crt0 / cfg files — they're yours).\n- Call \`runSource\` to see your changes. It builds + loads + runs + screenshots in one round trip.\n- Inspect at byte level: \`readMemory\`, \`inspectSprites\`, \`inspectPalette\`, \`inspectBackgroundMap({render:true})\`.\n- Open a playtest window for human eyes: \`loadCategory({category:"show"}); playtest({});\` — returns immediately, the window follows your rebuilds, and the emulator stays live for every other tool.\n`;
   await fs.writeFile(path.join(projPath, "README.md"), readme, "utf-8");
   writtenFiles.push("README.md");
 

@@ -165,8 +165,8 @@ collapsed all 8 1KB pages into copies of the first page on NROM.
 Fixed in R61 (2026-05-27). If you still see this, your MCP server
 is running a stale WASM:
 ```sh
-stat -c '%y' ~/code/cliemu/romdev/src/cores/wasm/fceumm_libretro.wasm
-# Should be 2026-05-27 13:54 or later.
+# Check the timestamp of the bundled fceumm wasm in your install:
+stat -c '%y' node_modules/romdev-core-fceumm/wasm/fceumm_libretro.wasm
 ```
 Workaround if you can't restart: `inspectPatternTiles` reads CHR
 via a different path and was unaffected throughout.
@@ -317,5 +317,5 @@ The canonical "boots cleanly + shows a sprite" sequence is:
 
 ## Adding a new symptom
 
-Hit something not on this list? Drop a 5-line repro and the symptom
-in `~/code/cliemu/feedback_for_mcp_dev.md`.
+Hit something not on this list? Open an issue with a 5-line repro and
+the symptom at https://github.com/monteslu/romdev/issues.

@@ -16,8 +16,8 @@ need to grep around the actual implementation. Trust hierarchy:
    our thin wrappers and beyond cc65's source. We don't bundle these
    because they're big and the agent can't rebuild them anyway, but
    you can fetch them on demand when chasing a deep bug.
-5. **MCP feedback round** — file `feedback_round<N>_lynx_*.md` in
-   `~/code/cliemu/` if you find an actual bug.
+5. **Found a real bug in romdev?** Open an issue at
+   https://github.com/monteslu/romdev/issues with repro details.
 
 ## Local source paths (in your project after `npm install`)
 

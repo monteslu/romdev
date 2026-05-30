@@ -5,7 +5,7 @@
 // pool — `runTcc816({source})` returns the .s assembly. The full
 // `C source → SNES ROM` pipeline ALSO needs wla-65816 + wlalink (to
 // assemble + link the tcc output) AND a libpvsneslib-equivalent
-// runtime + crt0. Those two are pending — see PLAN.md for the
+// runtime + crt0. Those two are pending — see the project roadmap for the
 // roadmap. Today this module is callable directly (for agents
 // inspecting what tcc would produce for a given C source) but is
 // NOT wired into buildSource yet.

@@ -316,8 +316,7 @@ function asarPreflight(source, { binaryIncludes = {}, includes = {} } = {}) {
   // Bank-rewind: scan all `org` bank bytes. If the bank goes UP and then
   // DOWN later in the file (e.g. $00 → $01 → $00), asar 1.x can corrupt
   // its bank-tracking and crash silently writing the rewound region.
-  // Bisected to this exact configuration in the rom-games/snes/invaders
-  // build session (devnote.md, 2026-05-23).
+  // Bisected to this exact configuration during a real SNES build.
   // -----------------------------------------------------------------------
   const orgDirective = /^\s*org\s+\$([0-9A-Fa-f]+)\b/;
   const orgs = []; // { line, addr, bank }
@@ -399,7 +398,7 @@ function asarPreflight(source, { binaryIncludes = {}, includes = {} } = {}) {
   }
 
   // -----------------------------------------------------------------------
-  // Landmine 5 (devnote.md 2026-05-23 round 2): `<opcode> #<symbol>` where
+  // Landmine 5: `<opcode> #<symbol>` where
   // <symbol> is an `=`-defined label-arithmetic constant whose operand
   // labels live in DIFFERENT banks. asar 1.x crashes silently in pass 1
   // when this is used as an immediate (`#`); using the same constant as

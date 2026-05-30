@@ -18,16 +18,23 @@ Just `#include "gb_hardware.h"` and (optionally) `#include "gb_runtime.h"` —
 both work in any GB/GBC C build the agent submits. Caller-supplied files
 of the same name win on collision, so you can override.
 
-**Cart header is NOT auto-patched anymore.** Earlier R7 versions had
-the build pipeline silently patch in the Nintendo logo + header
-checksums; we removed that to keep every byte that compiles visible
-in your repo. After building, patch the ROM yourself via either:
+**Cart header is auto-fixed at build time.** `buildSource` / `runSource`
+run rgbfix on the linked GB/GBC ROM — valid Nintendo logo at $0104,
+header checksum at $014D, global checksum at $014E, cartridge-type /
+RAM-size bytes, and the CGB flag at $0143 ($80/$C0 for `.gbc`, $00 for
+`.gb`). A freshly built ROM boots on hardware and strict cores with **no
+extra step** — you do not call `patchGbHeader` after a normal build.
 
-- `patchGbHeader({path: "out.gb"})` — MCP tool (loadCategory:"project")
+Reach for header tooling only when working with a ROM the build pipeline
+didn't produce, or to override a field:
+
+- `patchGbHeader({path: "out.gb"})` — MCP tool (loadCategory:"project").
+  Fixes up / overrides the header of an existing ROM on disk (title, cart
+  type, ROM/RAM size, CGB flag, etc.).
 - `node patch-header.js out.gb` — standalone Node script, copied into
   every GB project by `createProject`. Same logic, no MCP needed.
-- `rgbfix -v -p 0 out.gb` — RGBDS asm projects already have this in
-  their toolchain pipeline.
+- `rgbfix -v -p 0 out.gb` — what the build pipeline runs under the hood;
+  RGBDS asm projects can invoke it directly.
 
 ## Companion docs
 

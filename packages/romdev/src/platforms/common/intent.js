@@ -15,8 +15,6 @@
 //
 // No default — agents pick at every call. The dichotomy is
 // "shaping art for a target" vs "investigating bytes I didn't author."
-// See ~/code/cliemu/feedback_round15_intent_modes_v2.md for the
-// converged design.
 
 export const VALID_INTENTS = ["homebrew", "rom-hack"];
 

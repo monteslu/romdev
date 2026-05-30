@@ -610,7 +610,7 @@ export async function buildForPlatform(args) {
     //
     // Pass `port` so message text says the right port — SDCC sm83 on GB/GBC,
     // SDCC z80 on SMS/GG. Pre-r26 it always said
-    // "SDCC sm83" (cross-platform copy-paste bug — friction round 26 #4).
+    // "SDCC sm83" regardless of the actual port (a copy-paste bug).
     const { lintSources } = await import("./sdcc/preflight-lint.js");
     const lintIssues = lintSources(sources, { port: sdccPort.marg });
 

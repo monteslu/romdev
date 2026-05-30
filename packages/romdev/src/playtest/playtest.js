@@ -7,6 +7,7 @@ import {
   RETRO_PIXEL_FORMAT_RGB565,
   RETRO_PIXEL_FORMAT_XRGB8888,
 } from "../host/retroConstants.js";
+import { log } from "../mcp/log.js";
 
 // One-pixel solid-black RGBA buffer; we stretch it across the letterbox
 // bars each frame so they don't smear with leftover pixels.
@@ -136,15 +137,24 @@ function tvAspectFor(platform, displayAspect) {
  *   want the user-visible shape that matches the real hardware.
  */
 export async function playtest(args) {
-  const { host } = args;
-  if (!host) throw new Error("playtest requires a loaded host");
+  const openHost = args.host;
+  if (!openHost) throw new Error("playtest requires a loaded host");
+  // Resolve the session's CURRENT host each frame so the window FOLLOWS a
+  // rebuild. `runSource`/`loadMedia` call resetHost(), which replaces the host
+  // object AND unloads the old one's media — a window pinned to the open-time
+  // host would then throw "no media loaded" mid-tick and die. Following the
+  // live host means the window shows the agent's latest build in place (the
+  // documented "runSource updates the live game" UX) and never crashes on
+  // rebuild. Falls back to the open-time host if the accessor is absent.
+  const getLiveHost = typeof args.getLiveHost === "function" ? args.getLiveHost : () => openHost;
   const scale = args.scale ?? 3;
   const title = args.title ?? "romdev playtest";
   const aspectMode = args.aspect ?? "fb";
 
   const sdl = await getSdl();
 
-  // Step one frame so we know the framebuffer dimensions + pixel format.
+  // Window sizing + audio rate are fixed at open from the open-time host.
+  const host = openHost;
   host.stepFrames(1);
   const first = host.getFramebuffer();
   const fbWidth = first.width;
@@ -173,7 +183,7 @@ export async function playtest(args) {
     accelerated: true,
     vsync: false,
   });
-  console.error(`[playtest] window opened: ${winInitW}x${winInitH}, fb=${fbWidth}x${fbHeight}, aspect=${aspectMode}`);
+  log.debug(`[playtest] window opened: ${winInitW}x${winInitH}, fb=${fbWidth}x${fbHeight}, aspect=${aspectMode}`);
 
   // Open audio at the core's NATIVE sample rate, not a hardcoded one.
   // snes9x emits at ~32040 Hz, fceumm at 48000, genesis-plus-gx at 44100.
@@ -189,9 +199,9 @@ export async function playtest(args) {
       format: "s16",
     });
     audio.play();
-    console.error(`[playtest] audio: ${coreSampleRate} Hz, stereo, s16`);
+    log.debug(`[playtest] audio: ${coreSampleRate} Hz, stereo, s16`);
   } catch (e) {
-    console.error("[playtest] audio init failed (continuing silent):", e.message);
+    log.error("[playtest] audio init failed (continuing silent):", e.message);
   }
 
   // Two-slot controller state with SDL hot-plug. Slot 0 = player 1,
@@ -213,16 +223,16 @@ export async function playtest(args) {
     // Find lowest empty slot.
     const idx = controllers.findIndex((c) => c == null);
     if (idx < 0) {
-      console.error(`[playtest] controller plugged in but both slots full — ignoring: ${device.name}`);
+      log.debug(`[playtest] controller plugged in but both slots full — ignoring: ${device.name}`);
       return;
     }
     try {
       const inst = sdl.controller.openDevice(device);
       inst._device = device; // tag for deviceRemove matching
       controllers[idx] = inst;
-      console.error(`[playtest] controller slot ${idx + 1}: ${device.name}`);
+      log.debug(`[playtest] controller slot ${idx + 1}: ${device.name}`);
     } catch (e) {
-      console.error(`[playtest] controller open failed (slot ${idx + 1}):`, e.message);
+      log.error(`[playtest] controller open failed (slot ${idx + 1}):`, e.message);
     }
   }
 
@@ -232,7 +242,7 @@ export async function playtest(args) {
       if (inst && inst._device === device) {
         // SDL auto-closes the instance per its docs; just drop the ref.
         controllers[i] = null;
-        console.error(`[playtest] controller slot ${i + 1} disconnected: ${device.name}`);
+        log.debug(`[playtest] controller slot ${i + 1} disconnected: ${device.name}`);
         return;
       }
     }
@@ -240,7 +250,7 @@ export async function playtest(args) {
 
   // Pre-open already-plugged controllers (up to slot 1).
   if (sdl.controller.devices.length === 0) {
-    console.error("[playtest] no controller detected (keyboard fallback active)");
+    log.debug("[playtest] no controller detected (keyboard fallback active)");
   } else {
     for (const dev of sdl.controller.devices) {
       openInFreeSlot(dev);
@@ -295,7 +305,7 @@ export async function playtest(args) {
     try { sdl.controller.off("deviceRemove", onDeviceRemove); } catch {}
     try { audio?.close(); } catch {}
     try { if (!window.destroyed) window.destroy(); } catch {}
-    console.error(`[playtest] closed after ${frameCount} frames`);
+    log.debug(`[playtest] closed after ${frameCount} frames`);
     if (closeResolver) closeResolver();
   }
 
@@ -305,6 +315,13 @@ export async function playtest(args) {
 
   function tick() {
     if (!running || window.destroyed) { stop(); return; }
+    // Resolve the session's CURRENT host this frame. A `runSource`/`loadMedia`
+    // rebuild swapped it; we follow it so the window shows the latest build.
+    // If there's transiently no host or no media loaded (mid-swap), skip this
+    // frame — DON'T stop the window (that was the crash: the old host got its
+    // media unloaded and stepFrames threw).
+    const h = getLiveHost();
+    if (!h || !h.status?.loaded) return;
     // Read controller state for each slot independently. Slot 0 = port 0
     // (player 1), slot 1 = port 1 (player 2). Each slot's input is built
     // into its own port object; the agent's setInput is overwritten each
@@ -334,7 +351,7 @@ export async function playtest(args) {
     readControllerInto(port0, controllers[0]);
     readControllerInto(port1, controllers[1]);
     if (quit) {
-      console.error("[playtest] Select+Start pressed — closing");
+      log.debug("[playtest] Select+Start pressed — closing");
       stop();
       return;
     }
@@ -344,21 +361,23 @@ export async function playtest(args) {
     for (const [keyName, bit] of Object.entries(KEY_TO_LIBRETRO_BIT)) {
       if (heldKeys.has(keyName)) port0[bitToName(bit)] = true;
     }
-    host.setInput({ ports: [port0, port1] });
+    h.setInput({ ports: [port0, port1] });
 
     let stepped = 0;
     try {
-      stepped = host.stepFrames(1);
+      stepped = h.stepFrames(1);
     } catch (e) {
-      console.error("[playtest] step error:", e.message);
-      stop();
+      // A step error mid-swap (host being torn down/rebuilt) is transient —
+      // skip this frame and let the next tick pick up the new host. Don't kill
+      // the window. (A window-level failure is handled by the destroyed checks.)
+      log.error("[playtest] step error (skipping frame):", e.message);
       return;
     }
     if (stepped > 0) frameCount++;
 
     if (!window.destroyed) {
       try {
-        const fb = host.getFramebuffer();
+        const fb = h.getFramebuffer();
         const rgba = framebufferToRgba(fb);
 
         // Letterbox: compute the largest rect with the *target* aspect
@@ -374,9 +393,9 @@ export async function playtest(args) {
         const fbH = fb.height;
         let targetAspect;
         if (aspectMode === "tv") {
-          targetAspect = tvAspectFor(host.status.platform, host.status.displayAspect ?? fbW / fbH);
+          targetAspect = tvAspectFor(h.status.platform, h.status.displayAspect ?? fbW / fbH);
         } else if (aspectMode === "core") {
-          targetAspect = host.status.displayAspect ?? fbW / fbH;
+          targetAspect = h.status.displayAspect ?? fbW / fbH;
         } else {
           targetAspect = fbW / fbH;
         }
@@ -397,12 +416,21 @@ export async function playtest(args) {
           dstRect: { x: dstX, y: dstY, width: dstW, height: dstH },
         });
       } catch (e) {
-        if (e.message?.includes("destroyed")) { stop(); return; }
-        console.error("[playtest] render error:", e.message);
+        // A render throw usually means the window went away under us (the
+        // SDL handle was freed without a 'close' event — compositor kill,
+        // session loss). If the window is no longer alive, stop the loop so
+        // we don't spin forever rendering into a corpse (the stale-status
+        // bug). Only a transient error on a still-live window is logged.
+        if (window.destroyed || e.message?.includes("destroyed")) { stop(); return; }
+        log.error("[playtest] render error:", e.message);
       }
+    } else {
+      // Window vanished between the top-of-tick check and here.
+      stop();
+      return;
     }
 
-    if (running && audio && host.state.audioRing.length > 0) {
+    if (running && audio && h.state.audioRing.length > 0) {
       // SDL device tells us how many bytes are still queued (not yet played).
       // If we get >200ms ahead, the player got a stutter and is now
       // building latency — drop new samples until the queue drains back
@@ -415,10 +443,10 @@ export async function playtest(args) {
         const queuedMs = (queuedBytes / bytesPerSecond) * 1000;
         if (queuedMs < 200) {
           let total = 0;
-          for (const buf of host.state.audioRing) total += buf.byteLength;
+          for (const buf of h.state.audioRing) total += buf.byteLength;
           const merged = Buffer.alloc(total);
           let off = 0;
-          for (const buf of host.state.audioRing) {
+          for (const buf of h.state.audioRing) {
             merged.set(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength), off);
             off += buf.byteLength;
           }
@@ -426,11 +454,11 @@ export async function playtest(args) {
         }
       } catch (e) {
         if (!e.message?.includes("closed")) {
-          console.error("[playtest] audio enqueue error:", e.message);
+          log.error("[playtest] audio enqueue error:", e.message);
         }
       }
       // Always clear the ring — if we skipped enqueue we drop those samples.
-      host.state.audioRing.length = 0;
+      h.state.audioRing.length = 0;
     }
   }
 
@@ -445,6 +473,44 @@ export async function playtest(args) {
     closed: closedPromise,
     get frameCount() { return frameCount; },
     get running() { return running; },
+    // Truth-probe for the underlying SDL window. `running` is our own flag
+    // and can lag reality if the window dies without firing a 'close' event
+    // (compositor kill, X/Wayland session loss, invalid handle). Callers
+    // that need an honest answer (playtestStatus) check this and reconcile.
+    // Any throw from the SDL binding (handle freed under us) → treat as dead.
+    windowAlive() {
+      if (!running) return false;
+      try {
+        return !window.destroyed;
+      } catch {
+        return false;
+      }
+    },
+    // How many gamepads are currently mapped to player slots. Live (reflects
+    // hot-plug), so a caller can decide whether to surface the keyboard help.
+    // 0 → the user has no pad and is on the keyboard fallback.
+    get controllerCount() { return controllers.filter(Boolean).length; },
+    // The emulator host the window is CURRENTLY rendering. The window follows
+    // the session's live host (a `runSource`/`loadMedia` rebuild updates it in
+    // place), so this is whatever the human is looking at right now. Exposed so
+    // the agent can capture exactly that. See playtestFramebuffer.
+    get host() { return getLiveHost(); },
+    // Capture the framebuffer the human is currently looking at: PNG (base64) +
+    // dims + the host's media/frame metadata, straight off the live window host.
+    // Returns null if there's transiently no loaded host (mid-rebuild).
+    captureFrame() {
+      const h = getLiveHost();
+      if (!h || !h.status?.loaded) return null;
+      const shot = h.screenshot();
+      return {
+        pngBase64: shot.pngBase64,
+        width: shot.width,
+        height: shot.height,
+        loadedMediaPath: h.status?.mediaPath ?? null,
+        platform: h.status?.platform ?? null,
+        frameCount: h.status?.frameCount ?? frameCount,
+      };
+    },
   };
 }
 
