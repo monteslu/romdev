@@ -1051,7 +1051,7 @@ TEMPLATES.gba = {
     runtimeDirs: GBA_LIBTONC_RUNTIME_DIRS,
     lang: GBA_TONC_LANG,
     ext: ".gba",
-    describe: "Idiomatic Tonc-tutorial GBA C starter. #include <tonc.h>, TTE (Tonc Text Engine) draws 'Hello, Tonc!' on BG0 in MODE_0. Matches what every published GBA C tutorial at gbadev.net teaches. Bundled runtime: libtonc.a + 18 headers + gba_crt0 + linker script. Build with buildSource({platform:'gba', language:'c'}) — defaults to runtime:'libtonc'.",
+    describe: "Idiomatic Tonc-tutorial GBA C starter. #include <tonc.h>, TTE (Tonc Text Engine) draws 'Hello, Tonc!' on BG0 in MODE_0. Matches what every published GBA C tutorial at gbadev.net teaches. libtonc is compiled from its vendored source by the build (a fast prebuilt seed by default; pass rebuildSdk:true if you edit the SDK source) — the project gets the headers + gba_crt0 + linker script. Build with buildSource({platform:'gba', language:'c'}) — defaults to runtime:'libtonc'.",
   },
   tonc_hello_sprite: {
     main: "templates/tonc_hello_sprite.c",
@@ -1309,6 +1309,11 @@ async function copyDirRecursive(fs, path, srcDir, dstDir, writtenFiles, dstPrefi
     if (ent.isDirectory()) {
       await copyDirRecursive(fs, path, srcPath, dstPath, writtenFiles, relPath);
     } else if (ent.isFile()) {
+      // Skip romdev-internal SDK build-cache artifacts — the .seed.a/.seed.hash
+      // are how romdev's OWN build avoids recompiling the SDK; a user project
+      // never builds the SDK itself, so shipping the prebuilt blob into the
+      // project tree is just noise (and contradicts "everything here is source").
+      if (/\.seed\.(a|hash)$/i.test(ent.name)) continue;
       const isText = /\.(h|c|s|asm|inc|ld|txt|md|cfg|json)$/i.test(ent.name);
       const contents = await fs.readFile(srcPath, isText ? "utf-8" : null);
       await fs.writeFile(dstPath, contents);
