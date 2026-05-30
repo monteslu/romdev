@@ -40,3 +40,9 @@ packages/romdev/src/toolchains/*/wasm/
 
 # npm pack output
 *.tgz
+
+# Local release-mechanics tooling — kept out of git (and never shipped to npm).
+# Orchestrates the multi-package publish order; maintainer-local, not part of
+# the public project. (scripts/verify-wasm.mjs stays tracked — the packages'
+# prepublishOnly guard references it.)
+publish-all.mjs
