@@ -1,0 +1,173 @@
+// Audio asset & engine tools. Helps agents close the loop on SNES (and
+// future platforms') sound work, where the asm + sample-encoding stack
+// is intricate enough that without tooling the agent burns hours.
+
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { jsonContent, safeTool } from "../util.js";
+
+export function registerAudioTools(server, z, sessionKey) {
+  server.tool(
+    "pcmToBrr",
+    "Encode raw 16-bit signed PCM audio (mono, little-endian) into SNES BRR format. " +
+    "BRR is the SNES SPC700's only sample format — every sound effect and instrument " +
+    "on the system goes through it. Output is a Uint8Array of 9-byte BRR blocks ready " +
+    "to be uploaded into ARAM by your SPC driver. Pair this with the 'minimal-spc' or " +
+    "'snesmod' audio engines from getAudioEngine to actually hear the sound. " +
+    "Input: pass `pcmBase64` (raw s16le bytes), OR `pcmPath` (.pcm/.raw file on disk). " +
+    "If your source audio is a .wav, first strip the WAV header — every byte after the " +
+    "'data' chunk's 8-byte preamble is raw PCM. Output: `brrPath` (server writes a .brr) " +
+    "or `brrBase64` (inline). Pass `outputPath` to control where the .brr lands.",
+    {
+      pcmBase64: z.string().optional().describe("Base64-encoded raw 16-bit signed PCM (mono, little-endian)."),
+      pcmPath: z.string().optional().describe("Absolute path to a raw PCM file on disk. Preferred over pcmBase64."),
+      outputPath: z.string().optional().describe("If given, write the .brr to this absolute path and return path-only."),
+      loop: z.boolean().default(false).describe("If true, set the LOOP bit on the final block so the sample repeats. For one-shot SFX leave false; for sustained tones / drones / instruments set true."),
+    },
+    safeTool(async ({ pcmBase64, pcmPath, outputPath, loop }) => {
+      const { pcmToBrr } = await import("../../platforms/snes/brr.js");
+      let pcmBytes;
+      if (pcmPath) {
+        pcmBytes = await readFile(pcmPath);
+      } else if (pcmBase64) {
+        pcmBytes = Buffer.from(pcmBase64, "base64");
+      } else {
+        throw new Error("pcmToBrr: pass either pcmBase64 or pcmPath");
+      }
+      const { brr, blocks, samples } = pcmToBrr(pcmBytes, { loop });
+      const meta = {
+        brrBytes: brr.length,
+        blocks,
+        samples,
+        durationSeconds: samples / 32000,  // SPC700 native sample rate is 32 kHz
+        note: "BRR encoded with filter 0 (no prediction) and dynamic per-block shift. Upload starting at any 9-byte-aligned ARAM offset, then point your SPC driver's DSP voice at it.",
+      };
+      if (outputPath) {
+        await mkdir(path.dirname(outputPath), { recursive: true });
+        await writeFile(outputPath, brr);
+        return jsonContent({ ...meta, brrPath: outputPath });
+      }
+      return jsonContent({ ...meta, brrBase64: Buffer.from(brr).toString("base64") });
+    }),
+  );
+
+  // (no getAudioEngine — driver design is part of the work, not part of the
+  // toolchain. Authors write their own SPC stub + 65816 IPL upload to fit
+  // their game's needs.)
+
+  server.tool(
+    "recordAudio",
+    "Capture audio output from the currently running emulator and write it as a WAV file. " +
+    "Steps the emulator for `frames` frames while accumulating the audio samples it emits, " +
+    "then drains the buffer to a 16-bit signed stereo WAV. Useful for: 'did my SFX actually " +
+    "play?' debugging (record, listen, hear silence or beep), regression-testing audio " +
+    "across builds, capturing audio for non-realtime analysis. Sample rate is whatever the " +
+    "core emits — typically 32000 Hz (SNES SPC), 48000 Hz (most cores), or 44100 (some).",
+    {
+      frames: z.number().int().min(1).max(60000).default(180).describe("How many emulator frames to capture. 60 = 1 second at NTSC."),
+      path: z.string().describe("Absolute path to write the WAV file to."),
+      setInputs: z
+        .array(z.object({
+          up: z.boolean().optional(), down: z.boolean().optional(),
+          left: z.boolean().optional(), right: z.boolean().optional(),
+          a: z.boolean().optional(), b: z.boolean().optional(),
+          x: z.boolean().optional(), y: z.boolean().optional(),
+          l: z.boolean().optional(), r: z.boolean().optional(),
+          start: z.boolean().optional(), select: z.boolean().optional(),
+        }))
+        .max(2).optional()
+        .describe("Optional input state to hold during the recording. Useful for 'press B to fire SFX' captures."),
+    },
+    safeTool(async ({ frames, path: outPath, setInputs }) => {
+      const { getHost } = await import("../state.js");
+      const host = getHost(sessionKey);
+      if (!host.status.platform) {
+        throw new Error("recordAudio: no media loaded — call loadMedia first.");
+      }
+
+      // Clear any previously-buffered audio so the recording starts from now.
+      host.state.audioRing.length = 0;
+
+      if (setInputs && setInputs.length > 0) {
+        host.setInput({ ports: setInputs });
+      }
+      host.stepFrames(frames);
+      if (setInputs && setInputs.length > 0) {
+        host.setInput({ ports: [{}, {}] });
+      }
+
+      // Concatenate the audio ring into one Int16Array (interleaved stereo).
+      let total = 0;
+      for (const buf of host.state.audioRing) total += buf.length;
+      const samples = new Int16Array(total);
+      let off = 0;
+      for (const buf of host.state.audioRing) {
+        samples.set(buf, off);
+        off += buf.length;
+      }
+      host.state.audioRing.length = 0;
+
+      const sampleRate = host.status.audioSampleRate ?? 48000;
+      const wav = encodeWav(samples, sampleRate);
+      await mkdir(path.dirname(outPath), { recursive: true });
+      await writeFile(outPath, wav);
+
+      // RMS energy gives a quick "is anything actually playing?" check
+      // — silence will be 0, even quiet SFX should be >> 0.
+      let sumSq = 0;
+      for (let i = 0; i < samples.length; i++) sumSq += samples[i] * samples[i];
+      const rms = samples.length ? Math.sqrt(sumSq / samples.length) : 0;
+      const peak = samples.reduce((p, s) => Math.max(p, Math.abs(s)), 0);
+
+      return jsonContent({
+        path: outPath,
+        bytes: wav.length,
+        sampleRate,
+        channels: 2,
+        durationSeconds: samples.length / 2 / sampleRate,
+        sampleCount: samples.length / 2,
+        rms: Math.round(rms),
+        peak,
+        silent: peak === 0,
+        note: peak === 0
+          ? "RECORDED SILENCE. The emulator emitted no audio during this window. Likely your sound code isn't running, or the core's audio callback isn't wired up for this ROM."
+          : `Audio captured. Peak amplitude ${peak}/32767, RMS ${Math.round(rms)}. Listen to the WAV to confirm content.`,
+      });
+    }),
+  );
+}
+
+/**
+ * Encode interleaved 16-bit signed stereo PCM as a WAV file (RIFF/WAVE).
+ * @param {Int16Array} samples interleaved stereo (L R L R ...)
+ * @param {number} sampleRate
+ * @returns {Buffer}
+ */
+function encodeWav(samples, sampleRate) {
+  const numChannels = 2;
+  const bitsPerSample = 16;
+  const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+  const blockAlign = numChannels * (bitsPerSample / 8);
+  const dataSize = samples.length * 2;
+  const fileSize = 44 + dataSize;
+
+  const buf = Buffer.alloc(fileSize);
+  buf.write("RIFF", 0, "ascii");
+  buf.writeUInt32LE(fileSize - 8, 4);
+  buf.write("WAVE", 8, "ascii");
+  buf.write("fmt ", 12, "ascii");
+  buf.writeUInt32LE(16, 16);                  // fmt chunk size
+  buf.writeUInt16LE(1, 20);                   // PCM
+  buf.writeUInt16LE(numChannels, 22);
+  buf.writeUInt32LE(sampleRate, 24);
+  buf.writeUInt32LE(byteRate, 28);
+  buf.writeUInt16LE(blockAlign, 32);
+  buf.writeUInt16LE(bitsPerSample, 34);
+  buf.write("data", 36, "ascii");
+  buf.writeUInt32LE(dataSize, 40);
+  // Sample data
+  for (let i = 0; i < samples.length; i++) {
+    buf.writeInt16LE(samples[i], 44 + i * 2);
+  }
+  return buf;
+}

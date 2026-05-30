@@ -1,0 +1,118 @@
+# romdev patch — see README.md in this directory for full justification.
+# Exposes this core's internal memory regions (VRAM/OAM/palette/registers/etc.)
+# via retro_get_memory_data so romdev's inspect*/getCPUState/etc. tools can read
+# them. Upstream exposes only SAVE_RAM/SYSTEM_RAM. WITHOUT this patch the build
+# still succeeds but those tools return empty data (silent runtime failure).
+# git apply ignores everything above the first 'diff --git' line.
+#
+diff --git a/libretro/libretro.c b/libretro/libretro.c
+index 798c6cc..676c9d8 100644
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3743,6 +3743,33 @@ void retro_unload_game(void)
+ 
+ unsigned retro_get_region(void) { return vdp_pal ? RETRO_REGION_PAL : RETRO_REGION_NTSC; }
+ 
++/* rom-dev-mcp extension: custom memory region IDs above libretro standard.
++ * Mirrors fceumm + snes9x patches. Exposes Genesis sound/video chip state
++ * so inspectSprites / inspectPalette / getCPUState / etc. can read live
++ * data instead of parsing the savestate blob.
++ *
++ * Sound chip state (YM2612, PSG) is `static` in gpgx; we expose binary
++ * snapshots via psg_context_save / YM2612SaveContext into a per-process
++ * scratch buffer that callers read on demand. Decoders parse the known
++ * format on the JS side. */
++#define ROMDEV_MEMORY_GENESIS_CRAM     0x120
++#define ROMDEV_MEMORY_GENESIS_VSRAM    0x121
++#define ROMDEV_MEMORY_GENESIS_VDP_REGS 0x122
++#define ROMDEV_MEMORY_GENESIS_Z80_RAM  0x123
++#define ROMDEV_MEMORY_GENESIS_M68K     0x124
++#define ROMDEV_MEMORY_GENESIS_YM2612   0x125
++#define ROMDEV_MEMORY_GENESIS_PSG      0x126
++
++/* SMS / Game Gear region IDs. Same gpgx globals (vram/cram/reg) are
++ * shared across all systems gpgx emulates, but with different sizes:
++ *   SMS:  VRAM 16KB, CRAM 32B (16 entries × 6-bit BGR), VDP regs 11
++ *   GG:   VRAM 16KB, CRAM 64B (32 entries × 12-bit BGR), VDP regs 11
++ * Expose with SMS-correct sizes so callers don't need to know the
++ * Genesis-shaped backing buffer is 64KB / 128B / 32B. */
++#define ROMDEV_MEMORY_SMS_VRAM     0x130
++#define ROMDEV_MEMORY_SMS_CRAM     0x131
++#define ROMDEV_MEMORY_SMS_VDP_REGS 0x132
++#define ROMDEV_MEMORY_SMS_Z80_REGS 0x133
++#define ROMDEV_MEMORY_GG_VRAM      0x134
++#define ROMDEV_MEMORY_GG_CRAM      0x135
++
++/* shared.h already brings in genesis.h / vdp_ctrl.h / m68k.h. Sound
++ * headers aren't in shared.h; add them. Header paths are relative to
++ * the core/ include dir (Makefile.libretro adds it with -I). */
++#include "sound/ym2612.h"
++#include "sound/psg.h"
++#include "z80/z80.h"
++
++static unsigned char romdev_ym2612_snap[4096];
++static unsigned char romdev_psg_snap[1024];
++static unsigned char romdev_z80_snap[sizeof(Z80_Regs)];
++
++
+ void *retro_get_memory_data(unsigned id)
+ {
+    switch (id)
+@@ -3751,6 +3778,24 @@ void *retro_get_memory_data(unsigned id)
+          return sram.on ? sram.sram : NULL;
+       case RETRO_MEMORY_SYSTEM_RAM:
+          return work_ram;
++      case RETRO_MEMORY_VIDEO_RAM:
++         return vram;
++      case ROMDEV_MEMORY_GENESIS_CRAM:
++         return cram;
++      case ROMDEV_MEMORY_GENESIS_VSRAM:
++         return vsram;
++      case ROMDEV_MEMORY_GENESIS_VDP_REGS:
++         return reg;
++      case ROMDEV_MEMORY_GENESIS_Z80_RAM:
++         return zram;
++      case ROMDEV_MEMORY_GENESIS_M68K:
++         return &m68k;
++      case ROMDEV_MEMORY_GENESIS_YM2612:
++         YM2612SaveContext(romdev_ym2612_snap);
++         return romdev_ym2612_snap;
++      case ROMDEV_MEMORY_GENESIS_PSG:
++         psg_context_save(romdev_psg_snap);
++         return romdev_psg_snap;
++      case ROMDEV_MEMORY_SMS_VRAM:
++      case ROMDEV_MEMORY_GG_VRAM:
++         return vram;
++      case ROMDEV_MEMORY_SMS_CRAM:
++      case ROMDEV_MEMORY_GG_CRAM:
++         return cram;
++      case ROMDEV_MEMORY_SMS_VDP_REGS:
++         return reg;
++      case ROMDEV_MEMORY_SMS_Z80_REGS:
++         memcpy(romdev_z80_snap, &Z80, sizeof(Z80_Regs));
++         return romdev_z80_snap;
+       default:
+          return NULL;
+    }
+@@ -3802,6 +3847,15 @@ size_t retro_get_memory_size(unsigned id)
+             return 0x2000; /* 8KB internal RAM */
+       }
+ 
++      case RETRO_MEMORY_VIDEO_RAM:        return 0x10000;
++      case ROMDEV_MEMORY_GENESIS_CRAM:     return 0x80;
++      case ROMDEV_MEMORY_GENESIS_VSRAM:    return 0x80;
++      case ROMDEV_MEMORY_GENESIS_VDP_REGS: return 0x20;
++      case ROMDEV_MEMORY_GENESIS_Z80_RAM:  return 0x2000;
++      case ROMDEV_MEMORY_GENESIS_M68K:     return sizeof(m68ki_cpu_core);
++      case ROMDEV_MEMORY_GENESIS_YM2612:   return sizeof(romdev_ym2612_snap);
++      case ROMDEV_MEMORY_GENESIS_PSG:      return sizeof(romdev_psg_snap);
++      case ROMDEV_MEMORY_SMS_VRAM:         return 0x4000;   /* SMS VRAM = 16 KB */
++      case ROMDEV_MEMORY_GG_VRAM:          return 0x4000;   /* GG VRAM  = 16 KB */
++      case ROMDEV_MEMORY_SMS_CRAM:         return 0x20;     /* SMS CRAM = 32 B  */
++      case ROMDEV_MEMORY_GG_CRAM:          return 0x40;     /* GG CRAM  = 64 B  */
++      case ROMDEV_MEMORY_SMS_VDP_REGS:     return 0x10;     /* SMS uses lower 16 of the 32-byte reg file */
++      case ROMDEV_MEMORY_SMS_Z80_REGS:     return sizeof(romdev_z80_snap);
++
+       default:
+         return 0;
+    }

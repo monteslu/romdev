@@ -1,0 +1,110 @@
+import { resolveCore } from "../../cores/registry.js";
+import { defaultMediaKind } from "../../host/index.js";
+import { clearHost, getHost, getHostOrNull, resetHost } from "../state.js";
+import { jsonContent, safeTool, textContent } from "../util.js";
+
+const MEDIA_KINDS = ["cartridge", "disk", "tape", "program"];
+
+export function registerLifecycleTools(server, z, sessionKey) {
+  // Shared loader: accepts a file `path` OR base64 `bytes` (exactly one).
+  async function doLoadMedia({ platform, path, base64, mediaKind, virtualName }) {
+    const resolved = resolveCore(platform);
+    if (!resolved) throw new Error(`no core available for platform '${platform}'`);
+    if (!path && !base64) throw new Error("loadMedia: provide either `path` (file on disk) or `base64` (ROM bytes).");
+    if (path && base64) throw new Error("loadMedia: provide `path` OR `base64`, not both.");
+    const host = resetHost(sessionKey);
+    await host.loadCore(resolved.jsPath, resolved.wasmPath);
+    const bytes = base64 ? new Uint8Array(Buffer.from(base64, "base64")) : undefined;
+    await host.loadMedia({
+      platform,
+      ...(bytes ? { bytes, virtualName } : { path }),
+      mediaKind: mediaKind ?? defaultMediaKind(platform),
+    });
+    return jsonContent({
+      loaded: true,
+      platform,
+      core: resolved.coreName,
+      mediaKind: host.status.mediaKind,
+      ...(bytes ? { bytes: bytes.length } : { path: host.status.mediaPath }),
+      framebuffer: { width: host.status.fbWidth, height: host.status.fbHeight },
+    });
+  }
+
+  server.tool(
+    "loadMedia",
+    "Use this to load a ROM/disk/tape/program into a fresh host — resolves the right libretro core " +
+    "automatically. Pass `path` (file on disk) OR `base64` (ROM bytes — e.g. straight from buildSource, " +
+    "no disk write, for a fast iteration loop).",
+    {
+      platform: z.string().describe("Platform id (e.g. 'nes', 'gb', 'c64'). Use listPlatforms() to discover."),
+      path: z.string().optional().describe("Absolute path to the media file on disk. Provide this OR `base64`."),
+      base64: z.string().optional().describe("Base64-encoded ROM/disk/tape/program bytes. Provide this OR `path`."),
+      mediaKind: z.enum(MEDIA_KINDS).optional().describe("Media type. Defaults to 'cartridge' for consoles and 'program' for C64."),
+      virtualName: z.string().optional().describe("With `base64`: virtual filename shown to cores that fopen() the path (default '/rom')."),
+    },
+    safeTool(doLoadMedia),
+  );
+
+
+  server.tool(
+    "unloadMedia",
+    "Unload the current media without disposing the host. Use this before swapping a ROM if you want to keep the core hot.",
+    {},
+    safeTool(async () => {
+      const host = getHostOrNull(sessionKey);
+      if (host) host.unloadMedia();
+      return textContent("unloaded");
+    }),
+  );
+
+  server.tool(
+    "shutdown",
+    "Tear down the current host entirely. Free all resources. A subsequent loadMedia creates a fresh host.",
+    {},
+    safeTool(async () => {
+      clearHost(sessionKey);
+      return textContent("shutdown complete");
+    }),
+  );
+
+  server.tool(
+    "reset",
+    "Hard-reset the current loaded ROM (equivalent to power-cycling).",
+    {},
+    safeTool(async () => {
+      getHost(sessionKey).reset();
+      return textContent("reset");
+    }),
+  );
+
+  server.tool(
+    "pause",
+    "Pause emulation. Subsequent stepFrames calls return 0 until resume.",
+    {},
+    safeTool(async () => {
+      getHost(sessionKey).pause();
+      return textContent("paused");
+    }),
+  );
+
+  server.tool(
+    "resume",
+    "Resume emulation after pause.",
+    {},
+    safeTool(async () => {
+      getHost(sessionKey).resume();
+      return textContent("resumed");
+    }),
+  );
+
+  server.tool(
+    "getStatus",
+    "Get the current state of the host: platform, loaded media, frame count, paused state, framebuffer dimensions.",
+    {},
+    safeTool(async () => {
+      const host = getHostOrNull(sessionKey);
+      if (!host) return jsonContent({ loaded: false });
+      return jsonContent(host.getStatus());
+    }),
+  );
+}

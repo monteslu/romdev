@@ -1,0 +1,42 @@
+# romdev monorepo — root .gitignore
+# Discipline: WASM is NOT committed to git — it's a build OUTPUT. git holds the
+# source of truth for BUILDING (recipes, patches, version pins, JS, tests); npm
+# holds the built artifact (`npm pack` reads the working tree, so published
+# romdev-* packages still ship their .wasm). A fresh clone builds or installs
+# the wasm; it isn't carried in history. (Forced by GitHub's 100MB/file limit —
+# cc1-arm.wasm is 135MB — and it's the more correct split: CI rebuilds wasm in
+# the pinned emscripten container rather than trusting a possibly-stale blob.)
+# Only build inputs/intermediates, deps, the built wasm, and local cruft ignored.
+
+node_modules/
+*.log
+.DS_Store
+.env
+.env.local
+
+# Heavy build workspace — upstream core/compiler source + emscripten
+# intermediates. Reproduced by each package's build recipe; never committed.
+# (The 14GB build/ tree from romdev lives only in the OLD dir; the
+# per-package recipe lives in packages/*/build but its fetched/intermediate
+# artifacts are ignored — only the build SCRIPT + patches are committed.)
+build/
+packages/*/build/_work/
+packages/*/build/upstream/
+
+# Per-developer Claude Code instructions (autonomy mode, personal prefs).
+CLAUDE.md
+.claude/
+
+# Smoke-test ROMs — third-party homebrew we don't redistribute.
+**/test/roms/
+
+# Built WASM + emscripten glue — NOT committed (build output; see header).
+# The binary packages' wasm/ dirs (the real, shipped wasm):
+packages/*/wasm/
+# The legacy src/.../wasm/ output dirs in the main package (must stay empty —
+# a stray build run re-emits wasm there and would leak into romdev's tarball):
+packages/romdev/src/cores/wasm/
+packages/romdev/src/toolchains/*/wasm/
+
+# npm pack output
+*.tgz

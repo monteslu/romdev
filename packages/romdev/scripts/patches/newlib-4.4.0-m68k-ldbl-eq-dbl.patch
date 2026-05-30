@@ -1,0 +1,28 @@
+Set _LDBL_EQ_DBL=1 for m68k-elf so newlib's libm/complex sources
+don't reference long-double-only math functions (coshl, sinhl, expl,
+etc.) that newlib's m68k math.h conditionally hides behind
+__math_68881. The Genesis 68000 has no 68881 FPU; treating long double
+as double matches the m68k-elf-gcc ABI and lets libm/complex compile.
+
+Without this patch the newlib-4.4.0 build of libm/complex/c*l.c fails
+with "implicit declaration of 'coshl'" et al. Standard fix used by
+m68k-elf-gcc toolchain build guides.
+
+--- a/newlib/libc/include/sys/config.h
++++ b/newlib/libc/include/sys/config.h
+@@ -82,6 +82,15 @@
+ #if defined(__m68k__) || defined(__mc68000__) || defined(__riscv)
+ #define _READ_WRITE_RETURN_TYPE _ssize_t
+ #endif
++
++/* rom-dev-mcp: m68k-elf treats long double as double in its ABI, so tell
++ * newlib's libm to skip its long-double-only complex math. Without this,
++ * newlib/libm/complex/*l.c fails to compile with "implicit declaration
++ * of coshl/sinl/expl" because those decls are gated on __math_68881 (the
++ * 68881 FPU, absent on Sega Genesis's 68000).  */
++#if defined(__m68k__) || defined(__mc68000__)
++#define _LDBL_EQ_DBL 1
++#endif
+
+ #ifdef ___AM29K__
+ #define _FLOAT_RET double

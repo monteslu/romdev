@@ -1,0 +1,207 @@
+# romdev patch — see README.md in this directory for full justification.
+# Exposes this core's internal memory regions (VRAM/OAM/palette/registers/etc.)
+# via retro_get_memory_data so romdev's inspect*/getCPUState/etc. tools can read
+# them. Upstream exposes only SAVE_RAM/SYSTEM_RAM. WITHOUT this patch the build
+# still succeeds but those tools return empty data (silent runtime failure).
+# git apply ignores everything above the first 'diff --git' line.
+#
+diff --git a/libgambatte/include/gambatte.h b/libgambatte/include/gambatte.h
+index 7e5c43b..1cd0d7f 100644
+--- a/libgambatte/include/gambatte.h
++++ b/libgambatte/include/gambatte.h
+@@ -147,6 +147,12 @@ public:
+    void *rombank1_ptr() const;
+    void *zeropage_ptr() const;
+    void *oamram_ptr() const;
++   /* rom-dev-mcp extension: extra state accessors for inspector tools. */
++   void *iohram_ptr() const;
++   void *bgpdata_ptr() const;
++   void *objpdata_ptr() const;
++   void  cpu_snapshot(unsigned char *out) const;
++   bool  isCgbMode() const;
+ #endif
+ 
+ private:
+diff --git a/libgambatte/libretro/libretro.cpp b/libgambatte/libretro/libretro.cpp
+index 15b042c..cae68f0 100644
+--- a/libgambatte/libretro/libretro.cpp
++++ b/libgambatte/libretro/libretro.cpp
+@@ -2874,6 +2874,19 @@ void retro_unload_game()
+ 
+ unsigned retro_get_region() { return RETRO_REGION_NTSC; }
+ 
++/* rom-dev-mcp extension: custom memory region IDs above libretro standard.
++ * Lets the host inspect GB/GBC PPU state for inspectSprites / inspectPalette
++ * / getCPUState. Mirrors fceumm/snes9x/gpgx patches. */
++#define ROMDEV_MEMORY_GB_VRAM     0x140  /* 8KB DMG / 16KB GBC */
++#define ROMDEV_MEMORY_GB_OAM      0x141  /* 160B sprite OAM */
++#define ROMDEV_MEMORY_GB_IO       0x142  /* 128B IO regs $FF00-$FF7F */
++#define ROMDEV_MEMORY_GB_HRAM     0x143  /* 128B high RAM $FF80-$FFFE + IE */
++#define ROMDEV_MEMORY_GB_BGPDATA  0x144  /* 64B GBC BG palette RAM */
++#define ROMDEV_MEMORY_GB_OBJPDATA 0x145  /* 64B GBC sprite palette RAM */
++#define ROMDEV_MEMORY_GB_CPU_REGS 0x146  /* 18B SM83 CPU snapshot */
++
++static unsigned char romdev_gb_cpu_buf[18];
++
+ void *retro_get_memory_data(unsigned id)
+ {
+    if (rom_loaded) switch (id)
+@@ -2883,11 +2896,20 @@ void *retro_get_memory_data(unsigned id)
+       case RETRO_MEMORY_RTC:
+          return gb.rtcdata_ptr();
+       case RETRO_MEMORY_SYSTEM_RAM:
+-         /* Really ugly hack here, relies upon 
++         /* Really ugly hack here, relies upon
+           * libgambatte/src/memory/memptrs.cpp MemPtrs::reset not
+-          * realizing that that memchunk hack is ugly, or 
++          * realizing that that memchunk hack is ugly, or
+           * otherwise getting rearranged. */
+          return gb.rambank0_ptr();
++      case ROMDEV_MEMORY_GB_VRAM:     return gb.vram_ptr();
++      case ROMDEV_MEMORY_GB_OAM:      return gb.oamram_ptr();
++      case ROMDEV_MEMORY_GB_IO:       return gb.iohram_ptr();
++      case ROMDEV_MEMORY_GB_HRAM:     return gb.zeropage_ptr();
++      case ROMDEV_MEMORY_GB_BGPDATA:  return gb.bgpdata_ptr();
++      case ROMDEV_MEMORY_GB_OBJPDATA: return gb.objpdata_ptr();
++      case ROMDEV_MEMORY_GB_CPU_REGS:
++         gb.cpu_snapshot(romdev_gb_cpu_buf);
++         return romdev_gb_cpu_buf;
+    }
+ 
+    return 0;
+@@ -2902,14 +2924,21 @@ size_t retro_get_memory_size(unsigned id)
+       case RETRO_MEMORY_RTC:
+          return gb.rtcdata_size();
+       case RETRO_MEMORY_SYSTEM_RAM:
+-         /* This is rather hacky too... it relies upon 
++         /* This is rather hacky too... it relies upon
+           * libgambatte/src/memory/cartridge.cpp not changing
+-          * the call to memptrs.reset, but this is 
++          * the call to memptrs.reset, but this is
+           * probably mostly safe.
+           *
+           * GBC will probably not get a
+           * hardware upgrade anytime soon. */
+          return (gb.isCgb() ? 8 : 2) * 0x1000ul;
++      case ROMDEV_MEMORY_GB_VRAM:     return gb.isCgbMode() ? 0x4000 : 0x2000;
++      case ROMDEV_MEMORY_GB_OAM:      return 0xA0;
++      case ROMDEV_MEMORY_GB_IO:       return 0x80;
++      case ROMDEV_MEMORY_GB_HRAM:     return 0x80;
++      case ROMDEV_MEMORY_GB_BGPDATA:  return 0x40;
++      case ROMDEV_MEMORY_GB_OBJPDATA: return 0x40;
++      case ROMDEV_MEMORY_GB_CPU_REGS: return sizeof(romdev_gb_cpu_buf);
+    }
+ 
+    return 0;
+diff --git a/libgambatte/src/cpu.h b/libgambatte/src/cpu.h
+index 76c29de..f7bc078 100644
+--- a/libgambatte/src/cpu.h
++++ b/libgambatte/src/cpu.h
+@@ -56,6 +56,42 @@ public:
+    void *rombank1_ptr() const { return mem_.rombank1_ptr(); }
+    void *zeropage_ptr() const { return mem_.zeropage_ptr(); }
+    void *oamram_ptr() const { return mem_.oamram_ptr(); }
++   /* rom-dev-mcp: extra state accessors for inspectSprites/Palette/etc. */
++   void *iohram_ptr() const { return mem_.iohram_ptr(); }
++   void *bgpdata_ptr() const { return mem_.bgpdata_ptr(); }
++   void *objpdata_ptr() const { return mem_.objpdata_ptr(); }
++
++   /* rom-dev-mcp: 18-byte snapshot of the SM83 CPU state.
++    * Layout (little-endian):
++    *   0-1: pc
++    *   2-3: sp
++    *   4:   a
++    *   5:   f  (synthesized: Z N H C in bits 7..4, low nybble zero)
++    *   6:   b   7:   c
++    *   8:   d   9:   e
++    *  10:   h  11:   l
++    *  12:   ime    (0/1)
++    *  13:   halt   (0/1)
++    *  14-17: reserved (zero)
++    * gambatte stores flags split across hf1/hf2/zf/cf — synthesize the
++    * standard SM83 F register from them. zf is INVERTED: zf=0 means
++    * Z bit is set. */
++   void cpu_snapshot(unsigned char *out) const {
++      unsigned f = 0;
++      if (zf == 0)              f |= 0x80;            /* Z */
++      if ((hf2 ^ hf1) & 0x10)   f |= 0x20;            /* H */
++      if (cf & 0x100)           f |= 0x10;            /* C */
++      /* N flag isn't stored separately by gambatte; default 0. */
++      out[0] = pc_ & 0xFF; out[1] = (pc_ >> 8) & 0xFF;
++      out[2] = sp & 0xFF;  out[3] = (sp >> 8) & 0xFF;
++      out[4] = a_; out[5] = (unsigned char)f;
++      out[6] = b;  out[7] = c;
++      out[8] = d;  out[9] = e;
++      out[10] = h; out[11] = l;
++      out[12] = mem_.ime() ? 1 : 0;
++      out[13] = mem_.halted() ? 1 : 0;
++      out[14] = 0; out[15] = 0; out[16] = 0; out[17] = 0;
++   }
+ #endif
+ 
+ 	void setVideoBuffer(video_pixel_t *videoBuf, std::ptrdiff_t pitch) {
+diff --git a/libgambatte/src/gambatte-memory.h b/libgambatte/src/gambatte-memory.h
+index d82ca85..c32c59f 100644
+--- a/libgambatte/src/gambatte-memory.h
++++ b/libgambatte/src/gambatte-memory.h
+@@ -62,6 +62,12 @@ public:
+    void *rombank1_ptr() const { return cart_.romdata(0) + 0x4000; }
+    void *zeropage_ptr() const { return (void*)(ioamhram_ + 0x0180); }
+    void *oamram_ptr() const { return (void*)ioamhram_; }
++   /* rom-dev-mcp: I/O regs ($FF00-$FF7F) live at ioamhram_+0x100, 128B. */
++   void *iohram_ptr() const { return (void*)(ioamhram_ + 0x0100); }
++   /* rom-dev-mcp: GBC palette RAM accessors (delegate to LCD).
++    * Each table = 64 bytes (8 palettes x 4 colors x 2 bytes BGR555). */
++   void *bgpdata_ptr() const { return lcd_.bgpdata_ptr(); }
++   void *objpdata_ptr() const { return lcd_.objpdata_ptr(); }
+ #else
+    void loadSavedata() { cart_.loadSavedata(); }
+    void saveSavedata() { cart_.saveSavedata(); }
+diff --git a/libgambatte/src/gambatte.cpp b/libgambatte/src/gambatte.cpp
+index 5e1f952..04bf70a 100644
+--- a/libgambatte/src/gambatte.cpp
++++ b/libgambatte/src/gambatte.cpp
+@@ -237,6 +237,27 @@ void *GB::zeropage_ptr() const {
+ void *GB::oamram_ptr() const {
+  return p_->cpu.oamram_ptr();
+ }
++
++/* rom-dev-mcp extensions. */
++void *GB::iohram_ptr() const {
++ return p_->cpu.iohram_ptr();
++}
++
++void *GB::bgpdata_ptr() const {
++ return p_->cpu.bgpdata_ptr();
++}
++
++void *GB::objpdata_ptr() const {
++ return p_->cpu.objpdata_ptr();
++}
++
++void GB::cpu_snapshot(unsigned char *out) const {
++ p_->cpu.cpu_snapshot(out);
++}
++
++bool GB::isCgbMode() const {
++ return p_->cpu.isCgb();
++}
+ #endif
+ 
+ }
+diff --git a/libgambatte/src/video.h b/libgambatte/src/video.h
+index 7516ba1..154f649 100644
+--- a/libgambatte/src/video.h
++++ b/libgambatte/src/video.h
+@@ -158,6 +158,11 @@ class LCD
+       void setColorCorrectionBrightness(float colorCorrectionBrightness);
+       void setDarkFilterLevel(unsigned darkFilterLevel);
+       video_pixel_t gbcToRgb32(const unsigned bgr15);
++#ifdef __LIBRETRO__
++      /* rom-dev-mcp: expose raw 64-byte GBC palette RAM tables. */
++      void *bgpdata_ptr() const { return (void*)bgpData_; }
++      void *objpdata_ptr() const { return (void*)objpData_; }
++#endif
+    private:
+       enum Event { MEM_EVENT, LY_COUNT }; enum { NUM_EVENTS = LY_COUNT + 1 };
+       enum MemEvent { ONESHOT_LCDSTATIRQ, ONESHOT_UPDATEWY2, MODE1_IRQ, LYC_IRQ, SPRITE_MAP,

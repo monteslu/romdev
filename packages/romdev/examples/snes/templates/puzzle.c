@@ -1,0 +1,199 @@
+/* ── puzzle.c — SNES PVSnesLib match-3 falling-block scaffold ──────
+ *
+ * 6-wide × 12-tall grid drawn entirely via text-mode characters
+ * (R = red, G = green, B = blue). Active piece is 1×3 vertical;
+ * LEFT/RIGHT shifts, A rotates colour order, DOWN soft-drops, START
+ * hard-drops. Horizontal triples clear and score.
+ *
+ * Why text-mode? PVSnesLib's consoleDrawText is the simplest
+ * "draw something to a cell" path on SNES. Real puzzle games use
+ * BG-tile sprite cells with proper graphics — that's the natural
+ * next step from this scaffold.
+ */
+
+#include <snes.h>
+#include "snes_sfx.c"
+
+extern char tilfont, palfont;
+
+#define COLS 6
+#define ROWS 12
+
+static u8 grid[ROWS][COLS];
+static u8 piece[3];
+static s16 piece_x;
+static s16 piece_y;
+static u16 fall_timer;
+static u16 score;
+static u32 rng = 1;
+
+static u32 xorshift(void) {
+    rng ^= rng << 13;
+    rng ^= rng >> 17;
+    rng ^= rng << 5;
+    return rng;
+}
+
+static u8 random_colour(void) { return 1 + (xorshift() % 3); }
+
+static char glyph_for(u8 v) {
+    switch (v) {
+        case 1: return 'R';
+        case 2: return 'G';
+        case 3: return 'B';
+        default: return '.';
+    }
+}
+
+static void new_piece(void) {
+    piece[0] = random_colour();
+    piece[1] = random_colour();
+    piece[2] = random_colour();
+    piece_x = COLS / 2 - 1;
+    piece_y = -3;
+}
+
+static void draw_cell(s16 col, s16 row) {
+    char s[2];
+    if (row < 0 || row >= ROWS) return;
+    s[0] = glyph_for(grid[row][col]);
+    s[1] = 0;
+    consoleDrawText(col + 12, row + 4, s);
+}
+
+static void draw_grid(void) {
+    s16 r, c;
+    for (r = 0; r < ROWS; r++)
+        for (c = 0; c < COLS; c++)
+            draw_cell(c, r);
+}
+
+static void draw_piece(u8 clear) {
+    u16 i;
+    s16 r;
+    char s[2];
+    for (i = 0; i < 3; i++) {
+        r = piece_y + i;
+        if (r < 0 || r >= ROWS) continue;
+        s[0] = clear ? glyph_for(grid[r][piece_x])
+                     : glyph_for(piece[i]);
+        s[1] = 0;
+        consoleDrawText(piece_x + 12, r + 4, s);
+    }
+}
+
+static u8 collides(s16 col, s16 row) {
+    u16 i;
+    s16 r;
+    if (col < 0 || col >= COLS) return 1;
+    for (i = 0; i < 3; i++) {
+        r = row + i;
+        if (r >= ROWS) return 1;
+        if (r >= 0 && grid[r][col] != 0) return 1;
+    }
+    return 0;
+}
+
+static void lock_piece(void) {
+    u16 i;
+    s16 r, c;
+    u8 a, b, d;
+    for (i = 0; i < 3; i++) {
+        r = piece_y + i;
+        if (r >= 0 && r < ROWS) grid[r][piece_x] = piece[i];
+    }
+    for (i = 0; i < 3; i++) {
+        r = piece_y + i;
+        if (r < 0 || r >= ROWS) continue;
+        for (c = 0; c <= COLS - 3; c++) {
+            a = grid[r][c]; b = grid[r][c + 1]; d = grid[r][c + 2];
+            if (a != 0 && a == b && b == d) {
+                grid[r][c]     = 0;
+                grid[r][c + 1] = 0;
+                grid[r][c + 2] = 0;
+                if (score < 65500) score += 30;
+                sfx_play(2);  /* triple-clear chime */
+            }
+        }
+    }
+    draw_grid();
+}
+
+static void render_score(void) {
+    char buf[6];
+    u16 v;
+    s8 i;
+    buf[0]='0'; buf[1]='0'; buf[2]='0'; buf[3]='0'; buf[4]='0'; buf[5]=0;
+    v = score;
+    for (i = 4; i >= 0; i--) { buf[i] = '0' + (v % 10); v /= 10; }
+    consoleDrawText(20, 2, buf);
+}
+
+int main(void) {
+    s16 r, c;
+    u16 pad, prev = 0, fall_rate;
+    u8 t;
+
+    consoleSetTextMapPtr(0x6800);
+    consoleSetTextGfxPtr(0x3000);
+    consoleSetTextOffset(0x0100);
+    consoleInitText(0, 16 * 2, &tilfont, &palfont);
+    setMode(BG_MODE1, 0);
+    bgSetDisable(1);
+    bgSetDisable(2);
+
+    for (r = 0; r < ROWS; r++)
+        for (c = 0; c < COLS; c++)
+            grid[r][c] = 0;
+
+    score = 0;
+    fall_timer = 0;
+    new_piece();
+
+    consoleDrawText(14, 2, "SCORE");
+    consoleDrawText(2, 26, "LR MOVE A ROT START DROP");
+    sfx_init();
+    draw_grid();
+
+    setScreenOn();
+
+    while (1) {
+        pad = padsCurrent(0);
+        draw_piece(1);
+
+        if ((pad & KEY_LEFT)  && !(prev & KEY_LEFT)
+            && !collides(piece_x - 1, piece_y)) piece_x--;
+        if ((pad & KEY_RIGHT) && !(prev & KEY_RIGHT)
+            && !collides(piece_x + 1, piece_y)) piece_x++;
+        if ((pad & KEY_A) && !(prev & KEY_A)) {
+            t = piece[0]; piece[0] = piece[1]; piece[1] = piece[2]; piece[2] = t;
+            sfx_play(1);  /* rotate click */
+        }
+        if ((pad & KEY_START) && !(prev & KEY_START)) {
+            while (!collides(piece_x, piece_y + 1)) piece_y++;
+            lock_piece();
+            new_piece();
+            prev = pad;
+            render_score();
+            WaitForVBlank();
+            continue;
+        }
+        prev = pad;
+
+        fall_rate = (pad & KEY_DOWN) ? 4 : 30;
+        if (++fall_timer >= fall_rate) {
+            fall_timer = 0;
+            if (collides(piece_x, piece_y + 1)) {
+                lock_piece();
+                new_piece();
+            } else {
+                piece_y++;
+            }
+        }
+
+        draw_piece(0);
+        render_score();
+        WaitForVBlank();
+    }
+    return 0;
+}
