@@ -29,10 +29,73 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 // Minimum-viable runtime (R16, original code).
 const MINIMAL_LIB_DIR = path.resolve(__dirname, "..", "..", "platforms", "snes", "lib", "c");
-// PVSnesLib bundled runtime (R18). Pre-built .obj files + headers.
+// PVSnesLib bundled runtime (R18). Headers + the .asm SOURCE for the runtime
+// (crt0/libc/libm/libtcc) — assembled from source in-build, not linked from a
+// prebuilt .obj black box.
 const PVSNESLIB_DIR = path.resolve(__dirname, "..", "..", "platforms", "snes", "lib", "pvsneslib");
 const PVSNESLIB_INCLUDE = path.join(PVSNESLIB_DIR, "include");
-const PVSNESLIB_OBJS_DIR = path.join(PVSNESLIB_DIR, "objs");
+const PVSNESLIB_SOURCE_DIR = path.join(PVSNESLIB_DIR, "source");
+
+/**
+ * Assemble PVSnesLib's runtime objects (crt0_snes / libm / libtcc / libc) FROM
+ * its own .asm/.c SOURCE, replicating its Makefile: a SLOWROM comp_defs, tcc
+ * libc_c.c → asm, then wla each library .asm (each .include's hdr.asm + its
+ * feature siblings). Cached per-process — these don't change between user
+ * builds, but an edit to the vendored source busts the cache (keyed on bytes).
+ *
+ * @returns {Promise<{ok:boolean, objs?:Record<string,Uint8Array>, stage?:string, log?:string}>}
+ */
+let _pvSnesLibObjsCache = null;
+async function assemblePvSnesLibObjs() {
+  const { readdir } = await import("node:fs/promises");
+  const srcDir = PVSNESLIB_SOURCE_DIR;
+  // Load every .asm/.inc in source/ + include/ as wla includes (the lib .asm
+  // files .include hdr.asm + ~14 feature siblings).
+  const includes = {};
+  for (const f of await readdir(srcDir)) {
+    if (/\.(asm|inc|i)$/i.test(f)) includes[f] = await readFile(path.join(srcDir, f), "utf-8");
+  }
+  for (const f of await readdir(PVSNESLIB_INCLUDE)) {
+    if (/\.(asm|inc|i|h)$/i.test(f)) includes[f] = await readFile(path.join(PVSNESLIB_INCLUDE, f), "utf-8");
+  }
+  // Cache key folds in the library source bytes so an edit rebuilds.
+  const cacheKey = Object.entries(includes).map(([k, v]) => k + ":" + v.length).join("|");
+  if (_pvSnesLibObjsCache && _pvSnesLibObjsCache.key === cacheKey) return _pvSnesLibObjsCache.val;
+
+  // SLOWROM comp_defs (matches our default LoROM/SlowROM hdr.asm). Available as
+  // an include in case any unit references it.
+  includes["comp_defs.asm"] = "; HIROM / FASTROM definitions\n.SLOWROM\n";
+
+  let log = "";
+  // libc.asm .include's libc_c.asm — generated from libc_c.c via tcc.
+  const libcC = await readFile(path.join(srcDir, "libc_c.c"), "utf-8");
+  const tcc = await runTcc816({ source: libcC, headers: includes });
+  if (tcc.exitCode !== 0 || !tcc.asmSource) {
+    return { ok: false, stage: "tcc(libc_c.c)", log: log + (tcc.log || "") };
+  }
+  // tcc emits a leading `.include "hdr.asm"`. libc_c.asm is .include'd INTO
+  // libc.asm, which already includes hdr.asm — so strip tcc's copy to avoid a
+  // duplicate .MEMORYMAP ("can be defined only once"). (This mirrors the
+  // PVSnesLib Makefile, which sed-strips the same hdr include.)
+  includes["libc_c.asm"] = tcc.asmSource.replace(/^\s*\.include\s+"hdr\.asm".*$/im, "");
+
+  // Each unit is assembled to its OWN .obj, and each .include's hdr.asm (the
+  // memory map) — one .MEMORYMAP per independent obj, which is correct. wla
+  // resolves comp_defs.asm (.SLOWROM → LoROM branch) inside hdr.asm.
+  const objs = {};
+  for (const unit of ["crt0_snes", "libm", "libtcc", "libc"]) {
+    const src = includes[unit + ".asm"];
+    if (!src) return { ok: false, stage: `missing ${unit}.asm`, log };
+    const wla = await runWla65816({ source: src, includes, options: ["-d"] });
+    if (wla.exitCode !== 0 || !wla.object) {
+      return { ok: false, stage: `wla(${unit}.asm)`, log: log + (wla.log || "") };
+    }
+    objs[unit + ".obj"] = wla.object;
+  }
+  const val = { ok: true, objs };
+  _pvSnesLibObjsCache = { key: cacheKey, val };
+  return val;
+}
 
 /**
  * Compile + assemble + link a C source to a SNES ROM.
@@ -173,13 +236,15 @@ async function buildWithPvSnesLib({ sources, headers, tccOptions, wlaOptions, bi
     userObjs[objName] = wla.object;
   }
 
-  // ── Stage 3: link user objs + PVSnesLib's pre-built .obj files ──
-  const [crt0Obj, libmObj, libtccObj, libcObj] = await Promise.all([
-    readFile(path.join(PVSNESLIB_OBJS_DIR, "crt0_snes.obj")),
-    readFile(path.join(PVSNESLIB_OBJS_DIR, "libm.obj")),
-    readFile(path.join(PVSNESLIB_OBJS_DIR, "libtcc.obj")),
-    readFile(path.join(PVSNESLIB_OBJS_DIR, "libc.obj")),
-  ]);
+  // ── Stage 3: assemble PVSnesLib runtime FROM SOURCE, then link ──
+  const pvObjs = await assemblePvSnesLibObjs();
+  if (!pvObjs.ok) {
+    return { ok: false, binary: null, log: log + (pvObjs.log || ""), exitCode: 1, stage: `pvsneslib runtime: ${pvObjs.stage}`, runtime: "pvsneslib" };
+  }
+  const crt0Obj = pvObjs.objs["crt0_snes.obj"];
+  const libmObj = pvObjs.objs["libm.obj"];
+  const libtccObj = pvObjs.objs["libtcc.obj"];
+  const libcObj = pvObjs.objs["libc.obj"];
 
   // PVSnesLib's linkfile convention puts crt0 first (reset-vector tie-break),
   // then libm/libtcc/libc, then user code. wlalink's order matters for which
@@ -195,10 +260,10 @@ async function buildWithPvSnesLib({ sources, headers, tccOptions, wlaOptions, bi
 
   const link = await runWlalink({
     objects: {
-      "crt0_snes.obj": new Uint8Array(crt0Obj),
-      "libm.obj":      new Uint8Array(libmObj),
-      "libtcc.obj":    new Uint8Array(libtccObj),
-      "libc.obj":      new Uint8Array(libcObj),
+      "crt0_snes.obj": crt0Obj,
+      "libm.obj":      libmObj,
+      "libtcc.obj":    libtccObj,
+      "libc.obj":      libcObj,
       ...userObjs,
     },
     linkfile,
