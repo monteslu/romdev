@@ -3,7 +3,7 @@
 **Vibe-code real retro games.** One command, and your coding agent can make actual working ROMs for NES, SNES, Game Boy, Genesis, Atari, Commodore 64, and more — that run on RetroArch, native emulators, flash carts, and real hardware. No SDK installs. No emulator setup. No PATH fiddling. No "this only works on Linux."
 
 ```
-npx romdev
+npx romdev-mcp
 ```
 
 That's the whole setup. Everything — emulator cores, assemblers, C compilers, starter libraries, example projects, hardware reference docs — ships as bundled WebAssembly and data via npm. Same on Linux, Windows, and macOS (Node 24+).
@@ -30,7 +30,7 @@ your agent <--MCP--> romdev server <-> WASM libretro core <-> your game
 ## Who is it for?
 
 - **Coding agents.** The primary user — every capability is an MCP tool.
-- **Non-developers making a game with an AI's help.** Run `npx romdev`, point your agent at it, describe the game you want.
+- **Non-developers making a game with an AI's help.** Run `npx romdev-mcp`, point your agent at it, describe the game you want.
 - **Homebrew developers** who want a tighter loop than reload-the-emulator-by-hand. The same MCP tools drive great from a TUI, Inspector, or script.
 
 ## Supported systems — pick your platform
@@ -81,19 +81,19 @@ The `platformer` scaffold side-scrolls (hardware camera + per-platform column st
 
 ## How it's packaged
 
-`romdev` is a small **monorepo** of npm packages. The thing you install is `romdev`; it hard-depends on a set of `romdev-*` binary packages that carry the WebAssembly:
+`romdev` is a small **monorepo** of npm packages. The thing you install is `romdev-mcp`; it hard-depends on a set of `romdev-*` binary packages that carry the WebAssembly:
 
-- **[`romdev`](./packages/romdev)** — the MCP server, all generic tools, scaffolds, runtime/library source, debug helpers, and the `romdev` / `romdev-cli` binaries. The fast-churning layer; ships **zero wasm**.
+- **[`romdev-mcp`](./packages/romdev)** — the MCP server, all generic tools, scaffolds, runtime/library source, debug helpers, and the `romdev-mcp` / `romdev-mcp-cli` binaries. The fast-churning layer; ships **zero wasm**.
 - **`romdev-core-*`** (6) — shared emulator cores: `fceumm`, `gambatte`, `gpgx`, `vice`, `handy`, `prosystem`.
 - **`romdev-platform-*`** (3) — self-contained platform bundles where the core + compiler are used by no one else: `snes`, `gba`, `atari2600`.
 - **`romdev-toolchain-*`** (5) — shared compilers: `cc65`, `sdcc`, `m68k-gcc`, `vasm`, `rgbds`.
 
-`romdev` resolves each core/compiler from its package lazily — a toolchain's WASM is only loaded into memory the first time you build for that platform, so booting the server is fast and a session only pays for the platforms it actually uses. WASM is a **build output**: it ships via the npm packages, not committed to this git repo (which holds the source, recipes, and version pins). See [packages/romdev/BUILDING.md](./packages/romdev/BUILDING.md) for the platform × core × toolchain matrix and how the wasm is built (a pinned Emscripten container).
+`romdev-mcp` resolves each core/compiler from its package lazily — a toolchain's WASM is only loaded into memory the first time you build for that platform, so booting the server is fast and a session only pays for the platforms it actually uses. WASM is a **build output**: it ships via the npm packages, not committed to this git repo (which holds the source, recipes, and version pins). See [packages/romdev/BUILDING.md](./packages/romdev/BUILDING.md) for the platform × core × toolchain matrix and how the wasm is built (a pinned Emscripten container).
 
 ## Install & connect
 
 ```bash
-npx romdev          # boots the MCP server on http://127.0.0.1:7331/mcp
+npx romdev-mcp      # boots the MCP server on http://127.0.0.1:7331/mcp
 ```
 
 Register it with your agent. For Claude Code:

@@ -3,7 +3,7 @@
 The entry point for **romdev** — vibe-code real retro games. Lets a coding agent build, run, and inspect actual homebrew ROMs (NES, SNES, Game Boy, Genesis, Atari, C64, GBA, and more) with one command.
 
 ```bash
-npx romdev
+npx romdev-mcp
 ```
 
 This package is the [Model Context Protocol](https://modelcontextprotocol.io/) server and CLI. It contains all the JavaScript — the MCP tool surface, the WASM libretro host, the per-platform scaffolds, runtime/library source, and debug helpers — but **no emulator or compiler WASM itself.** Those ship in the `romdev-*` binary packages this package depends on, and are loaded on demand the first time you build or run a given platform.
@@ -13,25 +13,25 @@ This package is the [Model Context Protocol](https://modelcontextprotocol.io/) s
 ## What's in this package
 
 - **`bin`**
-  - `romdev` → the MCP server (`src/mcp/server.js`). Streamable-HTTP transport on `http://127.0.0.1:7331/mcp` by default (`PORT` / `HOST` to override).
-  - `romdev-cli` → a smoke/utility CLI, incl. `romdev-cli play <rom>` (SDL window, hot-plug controllers).
+  - `romdev-mcp` → the MCP server (`src/mcp/server.js`). Streamable-HTTP transport on `http://127.0.0.1:7331/mcp` by default (`PORT` / `HOST` to override).
+  - `romdev-mcp-cli` → a smoke/utility CLI, incl. `romdev-mcp-cli play <rom>` (SDL window, hot-plug controllers).
 - **`src/`** — the server, MCP tools, WASM host, core/toolchain resolvers, per-platform memory interpretation, and bundled library/runtime source (cc65 libs, PVSnesLib, SGDK, libtonc/libgba, hUGEDriver, …) that scaffolded projects link against.
 - **`examples/`** — per-platform starter projects and genre scaffolds.
 
 ## Dependencies
 
-`romdev` hard-depends (exact-pinned) on the binary packages that carry the WebAssembly, so a single install gets a matched, tested set:
+`romdev-mcp` hard-depends (exact-pinned) on the binary packages that carry the WebAssembly, so a single install gets a matched, tested set:
 
 - Cores: `romdev-core-{fceumm,gambatte,gpgx,vice,handy,prosystem}`
 - Platforms: `romdev-platform-{snes,gba,atari2600}`
 - Toolchains: `romdev-toolchain-{cc65,sdcc,m68k-gcc,vasm,rgbds}`
 
-`@kmamal/sdl` is an optional dependency used only by `playtest()` / `romdev-cli play`. If it fails to install, the headless server still runs — only the live-window features degrade.
+`@kmamal/sdl` is an optional dependency used only by `playtest()` / `romdev-mcp-cli play`. If it fails to install, the headless server still runs — only the live-window features degrade.
 
 ## Connect
 
 ```bash
-npx romdev
+npx romdev-mcp
 # then, e.g. for Claude Code:
 claude mcp add --transport http romdev http://127.0.0.1:7331/mcp
 ```
