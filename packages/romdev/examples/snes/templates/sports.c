@@ -1,0 +1,144 @@
+/* ── sports.c — SNES PVSnesLib two-player Pong scaffold ─────────────
+ *
+ * Two-player Pong. Both ports wired:
+ *   padsCurrent(0) — UP/DOWN moves the left paddle (player 1)
+ *   padsCurrent(1) — UP/DOWN moves the right paddle (player 2)
+ *
+ * AI fallback on port 1 when no second controller is plugged in
+ * (padsCurrent(1) returns 0). Per-side score 0-9 via consoleDrawText.
+ *
+ * tcc-65816 is C89 — all declarations at block top, no inline `for (u16 i …)`.
+ */
+
+#include <snes.h>
+#include "snes_sfx.c"
+
+extern char tilfont, palfont;
+extern char tilsprite, palsprite;
+
+#define COURT_TOP   16
+#define COURT_BOT   208
+#define PADDLE_H    24
+#define BALL_SIZE   8
+#define PADDLE_X1   16
+#define PADDLE_X2   232
+
+static s16 p1y, p2y, bx, by;
+static s8  bdx, bdy;
+static u16 score_p1, score_p2;
+static u16 serve_timer;
+
+static void serve_ball(u8 to_left) {
+    bx = 124;
+    by = 110;
+    bdx = to_left ? -2 : 2;
+    bdy = ((score_p1 + score_p2) & 1) ? -1 : 1;
+    serve_timer = 30;
+}
+
+static void reset_match(void) {
+    p1y = 96;
+    p2y = 96;
+    score_p1 = 0;
+    score_p2 = 0;
+    serve_ball(0);
+}
+
+static void render_scores(void) {
+    char buf[2];
+    buf[1] = 0;
+    buf[0] = '0' + (score_p1 % 10);
+    consoleDrawText(6, 2, buf);
+    buf[0] = '0' + (score_p2 % 10);
+    consoleDrawText(24, 2, buf);
+}
+
+int main(void) {
+    u16 p1, p2;
+    u16 i, slot;
+    s16 target;
+
+    consoleSetTextMapPtr(0x6800);
+    consoleSetTextGfxPtr(0x3000);
+    consoleSetTextOffset(0x0100);
+    consoleInitText(0, 16 * 2, &tilfont, &palfont);
+    setMode(BG_MODE1, 0);
+    bgSetDisable(1);
+    bgSetDisable(2);
+
+    oamInitGfxSet(&tilsprite, 32, &palsprite, 32, 0, 0x0000, OBJ_SIZE8_L16);
+
+    consoleDrawText(2, 1, "P1");
+    consoleDrawText(28, 1, "P2");
+    consoleDrawText(6, 26, "UP/DOWN MOVES YOUR PADDLE");
+
+    /* Hide all OAM slots initially. */
+    for (i = 0; i < 7; i++) oamSet(i, 0, 240, 3, 0, 0, 0, 0);
+
+    setScreenOn();
+    sfx_init();
+    reset_match();
+
+    while (1) {
+        slot = 0;
+        /* Left paddle = 3 stacked 8×8 sprites */
+        for (i = 0; i < PADDLE_H / 8; i++) {
+            oamSet(slot++, PADDLE_X1, (u16)(p1y + i * 8), 3, 0, 0, 0, 0);
+        }
+        for (i = 0; i < PADDLE_H / 8; i++) {
+            oamSet(slot++, PADDLE_X2, (u16)(p2y + i * 8), 3, 0, 0, 0, 0);
+        }
+        oamSet(slot++, bx, by, 3, 0, 0, 0, 0);
+        oamUpdate();
+        render_scores();
+        WaitForVBlank();
+
+        p1 = padsCurrent(0);
+        p2 = padsCurrent(1);
+
+        if ((p1 & KEY_UP)   && p1y > COURT_TOP)            p1y -= 2;
+        if ((p1 & KEY_DOWN) && p1y < COURT_BOT - PADDLE_H) p1y += 2;
+
+        if (p2 != 0) {
+            if ((p2 & KEY_UP)   && p2y > COURT_TOP)            p2y -= 2;
+            if ((p2 & KEY_DOWN) && p2y < COURT_BOT - PADDLE_H) p2y += 2;
+        } else {
+            target = by - PADDLE_H / 2;
+            if (p2y < target && p2y < COURT_BOT - PADDLE_H) p2y += 1;
+            else if (p2y > target && p2y > COURT_TOP)       p2y -= 1;
+        }
+
+        if (serve_timer > 0) {
+            serve_timer--;
+        } else {
+            bx = (s16)(bx + bdx);
+            by = (s16)(by + bdy);
+
+            if (by < COURT_TOP)             { by = COURT_TOP; bdy = (s8)(-bdy); }
+            if (by + BALL_SIZE > COURT_BOT) { by = COURT_BOT - BALL_SIZE; bdy = (s8)(-bdy); }
+
+            if (bdx < 0
+                && bx <= PADDLE_X1 + 8
+                && bx + BALL_SIZE >= PADDLE_X1
+                && by + BALL_SIZE > p1y
+                && by < p1y + PADDLE_H) {
+                bdx = (s8)(-bdx);
+                bx = PADDLE_X1 + 8;
+                sfx_play(1);  /* paddle hit */
+            }
+            if (bdx > 0
+                && bx + BALL_SIZE >= PADDLE_X2
+                && bx <= PADDLE_X2 + 8
+                && by + BALL_SIZE > p2y
+                && by < p2y + PADDLE_H) {
+                bdx = (s8)(-bdx);
+                bx = PADDLE_X2 - BALL_SIZE;
+                sfx_play(1);
+            }
+
+            if (bx < 4)   { if (score_p2 < 9) score_p2++; sfx_play(2); serve_ball(0); }
+            if (bx > 252) { if (score_p1 < 9) score_p1++; sfx_play(2); serve_ball(1); }
+        }
+    }
+    return 0;
+}

@@ -1,0 +1,139 @@
+# romdev patch — see README.md in this directory for full justification.
+# Exposes this core's internal memory regions (VRAM/OAM/palette/registers/etc.)
+# via retro_get_memory_data so romdev's inspect*/getCPUState/etc. tools can read
+# them. Upstream exposes only SAVE_RAM/SYSTEM_RAM. WITHOUT this patch the build
+# still succeeds but those tools return empty data (silent runtime failure).
+# git apply ignores everything above the first 'diff --git' line.
+#
+diff --git a/libretro.cxx b/libretro.cxx
+index 15c6d12..52171e7 100644
+--- a/libretro.cxx
++++ b/libretro.cxx
+@@ -28,6 +28,7 @@
+ #include "Paddles.hxx"
+ #include "Sound.hxx"
+ #include "M6532.hxx"
++#include "M6502.hxx"
+ #include "Version.hxx"
+ 
+ #include "Stubs.hxx"
+@@ -1253,11 +1254,26 @@ unsigned retro_api_version(void)
+    return RETRO_API_VERSION;
+ }
+ 
++/* rom-dev-mcp extension: 2600-specific region IDs above libretro standard.
++ * Exposes TIA + 6502 state for inspectSprites/Palette/getCPUState/etc.
++ * The 128B RIOT RAM already comes through RETRO_MEMORY_SYSTEM_RAM. */
++#define ROMDEV_MEMORY_A26_TIA_REGS  0x160  /* 32B TIA snapshot — see TIA::snapshot */
++#define ROMDEV_MEMORY_A26_CPU_REGS  0x161  /* 7B 6502 snapshot */
++
++static uInt8 romdev_a26_tia_buf[32];
++static uInt8 romdev_a26_cpu_buf[7];
++
+ void *retro_get_memory_data(unsigned id)
+ {
+    switch (id)
+    {
+       case RETRO_MEMORY_SYSTEM_RAM: return console->system().m6532().getRAM();
++      case ROMDEV_MEMORY_A26_TIA_REGS:
++         console->system().tia().snapshot(romdev_a26_tia_buf);
++         return romdev_a26_tia_buf;
++      case ROMDEV_MEMORY_A26_CPU_REGS:
++         console->system().m6502().snapshot(romdev_a26_cpu_buf);
++         return romdev_a26_cpu_buf;
+       default: return NULL;
+    }
+ }
+@@ -1267,6 +1283,8 @@ size_t retro_get_memory_size(unsigned id)
+    switch (id)
+    {
+       case RETRO_MEMORY_SYSTEM_RAM: return 128;
++      case ROMDEV_MEMORY_A26_TIA_REGS: return sizeof(romdev_a26_tia_buf);
++      case ROMDEV_MEMORY_A26_CPU_REGS: return sizeof(romdev_a26_cpu_buf);
+       default: return 0;
+    }
+ }
+diff --git a/stella/src/emucore/M6502.hxx b/stella/src/emucore/M6502.hxx
+index 79b50ee..7ecd246 100644
+--- a/stella/src/emucore/M6502.hxx
++++ b/stella/src/emucore/M6502.hxx
+@@ -114,6 +114,18 @@ class M6502 : public Serializable
+     */
+     uInt16 getPC() const { return PC; }
+ 
++    /* rom-dev-mcp: 7-byte 6502 snapshot for getCPUState.
++     * Layout (little-endian): pc_lo, pc_hi, a, x, y, p, sp. */
++    void snapshot(uInt8* out) const {
++      out[0] = PC & 0xFF;
++      out[1] = (PC >> 8) & 0xFF;
++      out[2] = A;
++      out[3] = X;
++      out[4] = Y;
++      out[5] = PS();
++      out[6] = SP;
++    }
++
+     /**
+       Answer true iff the last memory access was a read.
+ 
+diff --git a/stella/src/emucore/TIA.hxx b/stella/src/emucore/TIA.hxx
+index 5a5fe5b..7ba0f1a 100644
+--- a/stella/src/emucore/TIA.hxx
++++ b/stella/src/emucore/TIA.hxx
+@@ -308,6 +308,56 @@ class TIA : public Device
+     */
+     bool driveUnusedPinsRandom(uInt8 mode = 2);
+ 
++    /* rom-dev-mcp: 32-byte snapshot of TIA register state for the
++     * getRenderingContext / inspectSprites / inspectPalette tools.
++     * Layout (mostly mirrors TIA write-register addresses):
++     *   0  VSYNC      1  VBLANK
++     *   2  NUSIZ0     3  NUSIZ1
++     *   4  COLUP0     5  COLUP1     6  COLUPF    7  COLUBK
++     *   8  CTRLPF
++     *   9  REFP0      10 REFP1
++     *   11 PF0        12 PF1        13 PF2
++     *   14 GRP0       15 GRP1
++     *   16 ENAM0      17 ENAM1      18 ENABL
++     *   19 HMP0       20 HMP1       21 HMM0      22 HMM1     23 HMBL
++     *   24 VDELP0     25 VDELP1     26 VDELBL
++     *   27 AUDC0      28 AUDC1      29 AUDF0     30 AUDF1
++     *   31 AUDV0+AUDV1 (high nibble | low nibble — both fit) */
++    void snapshot(uInt8* out) const {
++      out[0]  = myVSYNC;
++      out[1]  = myVBLANK;
++      out[2]  = myNUSIZ0;
++      out[3]  = myNUSIZ1;
++      out[4]  = myColor[0]; /* P0 */
++      out[5]  = myColor[1]; /* P1 */
++      out[6]  = myColor[2]; /* PF */
++      out[7]  = myColor[3]; /* BK */
++      out[8]  = myCTRLPF;
++      out[9]  = myREFP0 ? 1 : 0;
++      out[10] = myREFP1 ? 1 : 0;
++      out[11] = (myPF >> 0)  & 0x0F; /* PF0 (4 bits) */
++      out[12] = (myPF >> 4)  & 0xFF; /* PF1 */
++      out[13] = (myPF >> 12) & 0xFF; /* PF2 */
++      out[14] = myGRP0;
++      out[15] = myGRP1;
++      out[16] = myENAM0 ? 1 : 0;
++      out[17] = myENAM1 ? 1 : 0;
++      out[18] = myENABL ? 1 : 0;
++      out[19] = myHMP0;
++      out[20] = myHMP1;
++      out[21] = myHMM0;
++      out[22] = myHMM1;
++      out[23] = myHMBL;
++      out[24] = myVDELP0 ? 1 : 0;
++      out[25] = myVDELP1 ? 1 : 0;
++      out[26] = myVDELBL ? 1 : 0;
++      out[27] = myAUDC0;
++      out[28] = myAUDC1;
++      out[29] = myAUDF0;
++      out[30] = myAUDF1;
++      out[31] = ((myAUDV0 & 0x0F) << 4) | (myAUDV1 & 0x0F);
++    }
++
+   private:
+     /**
+       Enables/disables all TIABit bits.  Note that disabling a graphical

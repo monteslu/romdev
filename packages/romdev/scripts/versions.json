@@ -1,0 +1,202 @@
+{
+  "_comment": [
+    "Single source of truth for every THIRD-PARTY upstream that romdev's build",
+    "scripts fetch + compile to WASM. romdev does NOT vendor any of this source",
+    "into git — it is fetched on demand by the build scripts, cached under build/",
+    "(gitignored), patched with OUR patches (scripts/patches/, committed, ours),",
+    "and only the resulting .wasm artifacts ship in the packages.",
+    "",
+    "Edit a pin HERE, never in a build-*.sh. Each build script reads this via",
+    "scripts/_versions.sh (pin_url / pin_ref / pin_sha helpers).",
+    "",
+    "kind: 'git'  -> fetched with `git` at the pinned commit (shallow).",
+    "kind: 'tarball' -> fetched with curl; 'sha256' lets the build detect drift.",
+    "'ref' is a human label (tag/branch); 'commit' is the EXACT pin that builds.",
+    "'license' records who owns the upstream code — it is theirs, not ours; we",
+    "ship only built artifacts and our own patches.",
+    "",
+    "The toolchain image itself is pinned separately: build-image/Dockerfile",
+    "(emscripten/emsdk:4.0.18). WASM is not bit-reproducible across emcc versions,",
+    "so an emsdk bump is a deliberate change."
+  ],
+
+  "emsdk": "4.0.18",
+
+  "cores": {
+    "fceumm": {
+      "kind": "git",
+      "url": "https://github.com/libretro/libretro-fceumm.git",
+      "ref": "master",
+      "commit": "3a84a6fd0ba20dd4877c06b1d58741172148395f",
+      "license": "GPL-2.0",
+      "patch": "scripts/patches/fceumm-romdev-memory-regions.patch",
+      "platforms": ["nes"]
+    },
+    "gambatte": {
+      "kind": "git",
+      "url": "https://github.com/libretro/gambatte-libretro.git",
+      "ref": "master",
+      "commit": "3262c2aa4adae8dba4f6d51cdd931c15cb11569f",
+      "license": "GPL-2.0",
+      "patch": "scripts/patches/gambatte-romdev-memory-regions.patch",
+      "platforms": ["gb", "gbc"]
+    },
+    "genesis_plus_gx": {
+      "kind": "git",
+      "url": "https://github.com/libretro/genesis-plus-gx.git",
+      "ref": "master",
+      "commit": "162c3439a697ffdfa00a5d3f44af103bf671f5dc",
+      "license": "non-commercial (Genesis Plus GX license)",
+      "patch": "scripts/patches/genesis-plus-gx-romdev-memory-regions.patch",
+      "platforms": ["genesis", "sms", "gg"]
+    },
+    "snes9x": {
+      "kind": "git",
+      "url": "https://github.com/libretro/snes9x.git",
+      "ref": "master",
+      "commit": "185488cd83aaf274752a742c94d45561cbecb7af",
+      "license": "snes9x (non-commercial)",
+      "patch": "scripts/patches/snes9x-romdev-memory-regions.patch",
+      "platforms": ["snes"]
+    },
+    "stella2014": {
+      "kind": "git",
+      "url": "https://github.com/libretro/stella2014-libretro.git",
+      "ref": "master",
+      "commit": "eed47e154d1bbda3305e9ef2d486b6710c8973f4",
+      "license": "GPL-2.0",
+      "patch": "scripts/patches/stella2014-romdev-memory-regions.patch",
+      "platforms": ["atari2600"]
+    },
+    "prosystem": {
+      "kind": "git",
+      "url": "https://github.com/libretro/prosystem-libretro.git",
+      "ref": "master",
+      "commit": "3f465db9c82fc6764cd90c53fc66eb630e0b3710",
+      "license": "GPL-2.0",
+      "patch": "scripts/patches/prosystem-romdev-memory-regions.patch",
+      "platforms": ["atari7800"]
+    },
+    "vice_x64": {
+      "kind": "git",
+      "url": "https://github.com/libretro/vice-libretro.git",
+      "ref": "master",
+      "commit": "b0d88812a0af0dcba40041d78709480ad1d90833",
+      "license": "GPL-2.0",
+      "patch": "scripts/patches/vice-romdev-memory-regions.patch",
+      "platforms": ["c64"]
+    },
+    "handy": {
+      "kind": "git",
+      "url": "https://github.com/libretro/libretro-handy.git",
+      "ref": "master",
+      "commit": "UNVERIFIED-resolve-before-rebuild",
+      "license": "zlib",
+      "patch": null,
+      "platforms": ["lynx"]
+    }
+  },
+
+  "toolchains": {
+    "cc65": {
+      "kind": "git",
+      "url": "https://github.com/cc65/cc65.git",
+      "ref": "V2.19",
+      "commit": "V2.19",
+      "license": "zlib",
+      "platforms": ["nes", "atari2600", "atari7800", "c64", "lynx"]
+    },
+    "sdcc": {
+      "kind": "tarball",
+      "url": "https://downloads.sourceforge.net/project/sdcc/sdcc/4.4.0/sdcc-src-4.4.0.tar.bz2",
+      "ref": "4.4.0",
+      "version": "4.4.0",
+      "sha256": "UNVERIFIED-fill-on-next-fetch",
+      "license": "GPL-2.0",
+      "platforms": ["gb", "gbc", "sms", "gg"]
+    },
+    "asar": {
+      "kind": "git",
+      "url": "https://github.com/RPGHacker/asar.git",
+      "ref": "master",
+      "commit": "5fd539cd510e4a26afef66fc14e35ca6d8ff0497",
+      "license": "LGPL-3.0",
+      "platforms": ["snes"]
+    },
+    "dasm": {
+      "kind": "git",
+      "url": "https://github.com/dasm-assembler/dasm.git",
+      "ref": "master",
+      "commit": "5b0b83b2ad33920bdf126e2001f366b3a5a8c34b",
+      "license": "GPL-2.0",
+      "platforms": ["atari2600"]
+    },
+    "vasm68k": {
+      "kind": "tarball",
+      "url": "http://sun.hasenbraten.de/vasm/release/vasm.tar.gz",
+      "ref": "rolling-release (no archived versions)",
+      "version": "rolling (sha-pinned 2026-05-29; upstream tarball carries no version label)",
+      "sha256": "c73702574e8d6a154a7d64f22d7b618d0b85ace98ec9eb63d5e7c5ec696e3a6b",
+      "license": "vasm (free for any use)",
+      "note": "Upstream serves only a rolling 'latest' tarball with no version in the URL. sha256 is our only drift detector — fill it after the next clean build and treat a mismatch as a deliberate bump.",
+      "platforms": ["genesis"]
+    },
+    "rgbds": {
+      "kind": "git",
+      "url": "https://github.com/gbdev/rgbds.git",
+      "ref": "master",
+      "commit": "075f132d77b23d07ce66e0e5ad7ac1bf45e60d00",
+      "license": "MIT",
+      "platforms": ["gb", "gbc"]
+    },
+    "tcc816": {
+      "kind": "git",
+      "url": "https://github.com/alekmaul/tcc.git",
+      "ref": "master",
+      "commit": "cc076f049282b7f8ca46b15c437db97d9224e763",
+      "license": "LGPL-2.1",
+      "platforms": ["snes"]
+    },
+    "wladx": {
+      "kind": "git",
+      "url": "https://github.com/vhelin/wla-dx.git",
+      "ref": "master",
+      "commit": "cdcd8e2e6b3501c8e1388350fd9b35d9a4bf2371",
+      "license": "GPL-2.0",
+      "platforms": ["snes"]
+    },
+    "maxmod": {
+      "kind": "git",
+      "url": "https://github.com/devkitPro/maxmod.git",
+      "ref": "master",
+      "commit": "d8de6ab499577d842561f1b8372fdf852985db77",
+      "license": "ISC",
+      "note": "GBA music/sound library (libmm.a). Built with the native arm-none-eabi toolchain; see build-maxmod.sh.",
+      "platforms": ["gba"]
+    },
+    "mmutil": {
+      "kind": "git",
+      "url": "https://github.com/devkitPro/mmutil.git",
+      "ref": "master",
+      "commit": "8b0792e45852b58fda4def4d263e246d3a73662d",
+      "license": "ISC",
+      "note": "Host-side soundbank converter (.xm/.mod/.it/.s3m → maxmod binary). Built as a native Linux ELF, paired with maxmod.",
+      "platforms": ["gba"]
+    }
+  },
+
+  "heavy_toolchains": {
+    "_comment": "GCC-family cross-toolchains — NOT covered by the light build image; need a native cross-gcc bootstrap. Pins recorded for completeness.",
+    "binutils": { "kind": "tarball", "version": "UNVERIFIED-from-build-script", "license": "GPL-3.0" },
+    "gcc": { "kind": "tarball", "version": "UNVERIFIED-from-build-script", "license": "GPL-3.0" },
+    "newlib": {
+      "kind": "tarball",
+      "version": "4.4.0",
+      "license": "BSD-style (mixed)",
+      "patches": [
+        "scripts/patches/newlib-4.4.0-m68k-bare-metal-system.patch",
+        "scripts/patches/newlib-4.4.0-m68k-ldbl-eq-dbl.patch"
+      ]
+    }
+  }
+}

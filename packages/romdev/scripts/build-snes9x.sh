@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# Build snes9x libretro core → WASM, with romdev's custom memory
+# region patch applied (exposes OAM/CGRAM/ARAM/FillRAM via
+# retro_get_memory_data for the inspectSprites/inspectPalette tools).
+#
+# Output: src/cores/wasm/snes9x_libretro.{js,wasm}.
+#
+# Repro: this script self-contains everything. Clones snes9x upstream,
+# applies scripts/patches/snes9x-romdev-memory-regions.patch, builds
+# with emscripten using the exact link flags retroemu uses, stages the
+# .js/.wasm under src/cores/wasm/.
+set -euo pipefail
+. "$(dirname "$0")/_lib.sh"
+require_cmd emcc
+require_cmd git
+require_cmd make
+
+# Upstream pin lives in scripts/versions.json (cores.snes9x).
+SNES9X_DIR="$BUILD_DIR/snes9x/src"
+PATCH_FILE="$PROJECT_DIR/$(pin_get cores.snes9x patch)"
+OUT="$PROJECT_DIR/src/cores/wasm"
+
+fetch_pinned cores.snes9x "$SNES9X_DIR"
+
+cd "$SNES9X_DIR"
+# Reset to clean state and reapply the patch idempotently. `git stash`
+# discards any prior partial apply attempts.
+git checkout -- libretro/libretro.cpp 2>/dev/null || true
+if ! git apply --check "$PATCH_FILE" 2>/dev/null; then
+  # Patch may already be applied; check by looking for the sentinel symbol.
+  if grep -q "ROMDEV_MEMORY_SNES_OAM" libretro/libretro.cpp; then
+    echo "Patch already present (sentinel ROMDEV_MEMORY_SNES_OAM found); skipping."
+  else
+    echo "FATAL: patch failed to apply and sentinel not present." >&2
+    exit 1
+  fi
+else
+  git apply "$PATCH_FILE"
+  echo "Applied $PATCH_FILE"
+fi
+
+# Build the libretro static archive (.a) using snes9x's own emscripten
+# Makefile platform.
+cd "$SNES9X_DIR/libretro"
+emmake make platform=emscripten clean >/dev/null 2>&1 || true
+emmake make platform=emscripten -j"$(nproc)"
+
+# Locate the produced archive. snes9x may emit `.a` or `.bc` depending
+# on the upstream Makefile version; both are LLVM IR archives that emcc
+# can link.
+CORE_LIB=$(find . -maxdepth 1 \( -name "*.a" -o -name "*_libretro*.bc" \) -print -quit)
+if [ -z "$CORE_LIB" ]; then
+  echo "FATAL: snes9x emscripten build did not produce a .a or .bc archive." >&2
+  exit 1
+fi
+if [[ "$CORE_LIB" == *.bc ]] && head -c 7 "$CORE_LIB" | grep -q '!<arch>'; then
+  mv "$CORE_LIB" "${CORE_LIB%.bc}.a"
+  CORE_LIB="${CORE_LIB%.bc}.a"
+fi
+
+# Final emcc link → WASM module. Flags mirror retroemu's snes9x.sh so the
+# core stays interchangeable with the rest of our bundled libretro cores.
+EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
+EXPORTED_RUNTIME='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS"]'
+
+mkdir -p "$OUT"
+emcc "$CORE_LIB" \
+  -O3 \
+  -s WASM=1 \
+  -s MODULARIZE=1 \
+  -s EXPORT_ES6=1 \
+  -s EXPORT_NAME=create_snes9x \
+  -s ENVIRONMENT=node \
+  -s ALLOW_MEMORY_GROWTH=1 \
+  -s INITIAL_MEMORY=33554432 \
+  -s MAXIMUM_MEMORY=268435456 \
+  -s ALLOW_TABLE_GROWTH=1 \
+  -s EXPORTED_FUNCTIONS="$EXPORTED_FUNCTIONS" \
+  -s EXPORTED_RUNTIME_METHODS="$EXPORTED_RUNTIME" \
+  -s FILESYSTEM=1 \
+  -s INVOKE_RUN=0 \
+  -s USE_ZLIB=1 \
+  -o "$OUT/snes9x_libretro.js"
+
+echo "snes9x_libretro staged at $OUT"
+ls -lh "$OUT/snes9x_libretro."{js,wasm}

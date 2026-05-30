@@ -1,0 +1,170 @@
+# romdev patch — see README.md in this directory for full justification.
+# Exposes this core's internal memory regions (VRAM/OAM/palette/registers/etc.)
+# via retro_get_memory_data so romdev's inspect*/getCPUState/etc. tools can read
+# them. Upstream exposes only SAVE_RAM/SYSTEM_RAM. WITHOUT this patch the build
+# still succeeds but those tools return empty data (silent runtime failure).
+# git apply ignores everything above the first 'diff --git' line.
+#
+diff --git a/libretro/libretro-core.c b/libretro/libretro-core.c
+--- a/libretro/libretro-core.c
++++ b/libretro/libretro-core.c
+@@ -8809,18 +8809,75 @@ bool retro_unserialize(const void *data_, size_t size)
+    return false;
+ }
+
++/* rom-dev-mcp extension: C64-specific region IDs above libretro standard.
++ * Exposes VIC-II / SID / CIA1/2 / 6510 state for inspectSprites/Palette/
++ * getCPUState/getRenderingContext/etc. */
++#define ROMDEV_MEMORY_C64_COLOR_RAM  0x170
++#define ROMDEV_MEMORY_C64_VIC_REGS   0x171
++#define ROMDEV_MEMORY_C64_SID_REGS   0x172
++#define ROMDEV_MEMORY_C64_CIA1_REGS  0x173
++#define ROMDEV_MEMORY_C64_CIA2_REGS  0x174
++#define ROMDEV_MEMORY_C64_CPU_REGS   0x175
++
++#include "vicii/viciitypes.h"
++#include "sid/sid.h"
++#include "c64/c64.h"
++#include "cia.h"
++#include "mos6510.h"
++
++extern vicii_t vicii;
++extern uint8_t *mem_color_ram_cpu;
++
++/* Globals lifted out of maincpu_mainloop()'s static locals (see the
++ * maincpu.c hunk below). Hold the live CPU state as of the last
++ * mainloop iteration. */
++extern uint8_t romdev_reg_a, romdev_reg_x, romdev_reg_y;
++extern uint8_t romdev_reg_p, romdev_reg_sp;
++extern unsigned int reg_pc;
++
++static uint8_t romdev_c64_sid_buf[29];
++static uint8_t romdev_c64_cpu_buf[7];
++static uint8_t romdev_c64_cia1_buf[16];
++static uint8_t romdev_c64_cia2_buf[16];
++
++static void romdev_fill_sid_regs(void)
++{
++   int i;
++   for (i = 0; i < 29; i++)
++      romdev_c64_sid_buf[i] = sid_peek((uint16_t)i);
++}
++
++/* R60: snapshot the CIA register block into a private buffer instead of
++ * returning a direct pointer to machine_context.cia{1,2}->c_cia. The
++ * direct-pointer return that lived here pre-R60 worked, but it leaked an
++ * upstream-struct-layout dependency — if VICE ever reshuffled the cia_context
++ * struct, the 16-byte read shape stayed the same but the bytes you got back
++ * could shift. Snapshot copying eliminates that risk for ~16 byte-reads of
++ * cost per call, which is noise.
++ *
++ * Returns 1 if the snapshot was filled, 0 if the CIA context isn't available
++ * (cold boot, between machine resets, etc.) so callers can return NULL. */
++static int romdev_fill_cia1_regs(void)
++{
++   if (!machine_context.cia1) return 0;
++   memcpy(romdev_c64_cia1_buf, machine_context.cia1->c_cia, 16);
++   return 1;
++}
++static int romdev_fill_cia2_regs(void)
++{
++   if (!machine_context.cia2) return 0;
++   memcpy(romdev_c64_cia2_buf, machine_context.cia2->c_cia, 16);
++   return 1;
++}
++
++static void romdev_fill_cpu_regs(void)
++{
++   romdev_c64_cpu_buf[0] = (uint8_t)(reg_pc & 0xff);
++   romdev_c64_cpu_buf[1] = (uint8_t)((reg_pc >> 8) & 0xff);
++   romdev_c64_cpu_buf[2] = romdev_reg_a;
++   romdev_c64_cpu_buf[3] = romdev_reg_x;
++   romdev_c64_cpu_buf[4] = romdev_reg_y;
++   romdev_c64_cpu_buf[5] = romdev_reg_p;
++   romdev_c64_cpu_buf[6] = romdev_reg_sp;
++}
++
+ void *retro_get_memory_data(unsigned id)
+ {
+-   if (id == RETRO_MEMORY_SYSTEM_RAM)
+-      return mem_ram;
++   switch (id) {
++   case RETRO_MEMORY_SYSTEM_RAM:        return mem_ram;
++   case ROMDEV_MEMORY_C64_COLOR_RAM:    return mem_color_ram_cpu;
++   case ROMDEV_MEMORY_C64_VIC_REGS:     return vicii.regs;
++   case ROMDEV_MEMORY_C64_SID_REGS:     romdev_fill_sid_regs(); return romdev_c64_sid_buf;
++   case ROMDEV_MEMORY_C64_CIA1_REGS:    return romdev_fill_cia1_regs() ? romdev_c64_cia1_buf : NULL;
++   case ROMDEV_MEMORY_C64_CIA2_REGS:    return romdev_fill_cia2_regs() ? romdev_c64_cia2_buf : NULL;
++   case ROMDEV_MEMORY_C64_CPU_REGS:     romdev_fill_cpu_regs(); return romdev_c64_cpu_buf;
++   default:                              break;
++   }
+    return NULL;
+ }
+
+ size_t retro_get_memory_size(unsigned id)
+ {
+-   if (id == RETRO_MEMORY_SYSTEM_RAM)
+-      return mem_ram_size;
++   switch (id) {
++   case RETRO_MEMORY_SYSTEM_RAM:        return mem_ram_size;
++   case ROMDEV_MEMORY_C64_COLOR_RAM:    return 0x400;
++   case ROMDEV_MEMORY_C64_VIC_REGS:     return 0x40;
++   case ROMDEV_MEMORY_C64_SID_REGS:     return 29;
++   case ROMDEV_MEMORY_C64_CIA1_REGS:    return 16;
++   case ROMDEV_MEMORY_C64_CIA2_REGS:    return 16;
++   case ROMDEV_MEMORY_C64_CPU_REGS:     return 7;
++   default:                              break;
++   }
+    return 0;
+ }
+
+diff --git a/vice/src/maincpu.c b/vice/src/maincpu.c
+--- a/vice/src/maincpu.c
++++ b/vice/src/maincpu.c
+@@ -287,7 +287,16 @@ int maincpu_int_status_no_alarm_check(void)
+ #ifdef C64DTV
+ mos6510dtv_regs_t maincpu_regs;
+ #else
+ mos6510_regs_t maincpu_regs;
+ #endif
++
++/* rom-dev-mcp extension: lifted out of maincpu_mainloop()'s static locals
++ * (see the `#define reg_a romdev_reg_a` block below) so libretro-core.c
++ * can read the live 6510 register file via the c64_cpu_regs region. */
++uint8_t romdev_reg_a = 0;
++uint8_t romdev_reg_x = 0;
++uint8_t romdev_reg_y = 0;
++uint8_t romdev_reg_p = 0;
++uint8_t romdev_reg_sp = 0;
+
+ static int maincpu_jammed = 0;
+
+@@ -529,11 +538,17 @@ void maincpu_mainloop(void)
+ #define ORIGIN_MEMSPACE (e_comp_space)
+ #ifndef C64DTV
+     /* Notice that using a struct for these would make it a lot slower (at
+        least, on gcc 2.7.2.x).  */
+-    static uint8_t reg_a = 0;
+-    static uint8_t reg_x = 0;
+-    static uint8_t reg_y = 0;
++    /* rom-dev-mcp: alias the static locals to file-scope globals so
++     * libretro-core.c can read them. The #defines below redirect every
++     * reference (including those inside the included CPU core macros)
++     * to the global storage. Zero code-gen impact: gcc treats them as
++     * identifier substitution. */
++#define reg_a   romdev_reg_a
++#define reg_x   romdev_reg_x
++#define reg_y   romdev_reg_y
++#define reg_p   romdev_reg_p
++#define reg_sp  romdev_reg_sp
+ #else
+     static int reg_a_read_idx = 0;
+     static int reg_a_write_idx = 0;
+@@ -565,8 +580,6 @@ void maincpu_mainloop(void)
+ #define reg_y_read dtv_registers[reg_y_idx]
+ #endif
+-    static uint8_t reg_p = 0;
+-    static uint8_t reg_sp = 0;
+     static uint8_t flag_n = 0;
+     static uint8_t flag_z = 0;
+ #ifndef NEED_REG_PC

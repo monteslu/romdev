@@ -1,0 +1,86 @@
+romdev — third-party component inventory
+========================================
+
+TL;DR — Games you build with romdev are YOURS, including to sell commercially.
+A built ROM contains only your code + permissive runtime libraries, compiled by
+toolchains with runtime exceptions. The non-commercial caveat below applies ONLY
+to redistributing the romdev tool bundle (which contains two non-commercial
+emulator cores) — never to the games you make with it.
+
+romdev's own code is MIT (see LICENSE). It bundles and redistributes
+third-party emulator cores, compiler toolchains, and game runtime libraries,
+each under its own license. This file inventories them.
+
+Two kinds of bundled component, governed differently:
+
+  • COMPILERS / TOOLCHAINS produce the user's ROM. Several are GPL/LGPL, but
+    compilers carry a RUNTIME EXCEPTION: the license of the compiler does NOT
+    extend to its output. A game compiled with GPL gcc/cc65/sdcc is the
+    author's own work, freely licensable. The GPL obligation falls on US (we
+    redistribute the compiler binary) — satisfied by shipping the build recipe
+    + pinned upstream source so anyone can reproduce the binary (see
+    packages/romdev/scripts/ and BUILDING.md).
+
+  • EMULATOR CORES never touch the user's ROM — they are a dev instrument
+    (run + observe). Their license governs only OUR redistribution of the core
+    binary. Most are GPL (OSI open source, source available upstream). Two are
+    NON-COMMERCIAL (see below), which is why romdev as a whole is distributed
+    as SOURCE-AVAILABLE / FREE FOR NON-COMMERCIAL USE rather than OSI open
+    source. romdev's own code is MIT and the game runtime libraries are
+    permissive, so games you BUILD with romdev are unencumbered (see below);
+    the non-commercial terms apply only to redistributing the bundled core
+    binaries themselves.
+
+
+NON-COMMERCIAL COMPONENTS (why romdev is "free for non-commercial use")
+-----------------------------------------------------------------------
+These two cores are under custom NON-COMMERCIAL licenses. They forbid
+commercial redistribution of the core, so a distribution of romdev that
+bundles them is free for non-commercial use and is not labeled OSI open
+source. (Your code is MIT; your built games are unencumbered — this affects
+only redistribution of these emulator binaries.)
+
+  snes9x            SNES core           non-commercial (snes9x license)
+  genesis_plus_gx   Genesis/SMS/GG core non-commercial (Genesis Plus GX license)
+
+
+Emulator cores
+--------------
+  fceumm            NES                 GPL-2.0
+  gambatte          GB / GBC            GPL-2.0
+  genesis_plus_gx   Genesis / SMS / GG  non-commercial  ⚠ (see above)
+  snes9x            SNES                non-commercial  ⚠ (see above)
+  mgba              GBA                 MPL-2.0
+  vice (x64)        C64                 GPL-2.0
+  stella2014        Atari 2600          GPL-2.0
+  prosystem         Atari 7800          GPL-2.0
+  handy             Atari Lynx          zlib
+
+Compiler toolchains  (runtime exception — does not encumber compiled ROMs)
+--------------------------------------------------------------------------
+  cc65              NES/C64/2600/7800/Lynx   zlib
+  sdcc              GB/GBC/SMS/GG            GPL-2.0 (runtime libs: GPL + linking exception)
+  arm-none-eabi-gcc GBA                     GPL-3.0 (GCC Runtime Library Exception)
+  m68k-elf-gcc      Genesis (C)             GPL-3.0 (GCC Runtime Library Exception)
+  binutils          (gcc toolchains)        GPL-3.0
+  newlib            (gcc toolchains)        BSD-style (mixed permissive)
+  asar              SNES (asm)              LGPL-3.0
+  dasm              Atari 2600 (asm)        GPL-2.0
+  vasm (m68k)       Genesis (asm)           free for any use (vasm license)
+  rgbds             GB/GBC (asm)            MIT
+  tcc816            SNES (C)                LGPL-2.1
+  wla-dx            SNES (asm)              GPL-2.0
+
+Game runtime / SDK libraries  (linked into the user's game; shipped as source)
+------------------------------------------------------------------------------
+  SGDK              Genesis C engine        MIT
+  PVSnesLib         SNES C library          MIT
+  libtonc / libgba  GBA C libraries         public domain / zlib-style
+  maxmod / mmutil   GBA music               ISC
+  hUGEDriver        GB/GBC music            MIT-style (see LICENSE-HUGEDRIVER)
+  FamiTone2         NES music               permissive (see LICENSE-FAMITONE)
+
+Full license texts for the bundled SDK libraries live alongside their source
+under packages/romdev/src/platforms/*/lib/. Emulator-core and compiler license
+texts travel with their upstream source, which is fetched at build time from
+the pinned commits recorded in packages/romdev/scripts/versions.json.
