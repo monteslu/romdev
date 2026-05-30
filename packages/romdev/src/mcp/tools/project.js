@@ -760,13 +760,12 @@ TEMPLATES.snes = {
     describe: "Continuous SPC700 music + SFX demo. Auto-plays a looping arpeggio on voice 1; B = shoot sfx (voice 0), A = stop music, START = resume. Starting point for adding music to any SNES C scaffold.",
   },
 };
-// All SGDK Genesis C templates share the same runtime bundle: libmd.a,
-// crt0 (sega.s + cpp-expanded sega.preprocessed.s for the bare WASM `as`),
-// linker script, ROM header source, MIT license, and the full include
-// tree. Factored to a constant so adding a new template only takes a
-// single line below (template name + main C file).
+// All SGDK Genesis C templates share the same runtime bundle: crt0 (sega.s +
+// cpp-expanded sega.preprocessed.s for the bare WASM `as`), linker script, ROM
+// header source, MIT license, and the full include tree. SGDK itself is
+// compiled from source by the build (its source is vendored via
+// SGDK_RUNTIME_DIRS) — no prebuilt libmd.a is copied in.
 const SGDK_RUNTIME = [
-  { src: "lib/sgdk/libmd.a",             dst: "libmd.a" },
   { src: "lib/sgdk/sega.s",              dst: "sega.s" },
   { src: "lib/sgdk/sega.preprocessed.s", dst: "sega.preprocessed.s" },
   { src: "lib/sgdk/rom_header.c",        dst: "rom_header.c" },
@@ -782,8 +781,12 @@ const SGDK_RUNTIME_DIRS = [
   { src: "lib/sgdk/include", dst: "include" },
   // R58b: ship the full SGDK src tree into the project. Agent can grep
   // it directly instead of guessing what SPR_addSprite / VDP_drawText /
-  // JOY_readJoypad / XGM2_startPlay actually do.
+  // JOY_readJoypad / XGM2_startPlay actually do. SGDK is compiled FROM this
+  // source by the build (no prebuilt libmd.a).
   { src: "lib/sgdk/src", dst: "vendor/sgdk/src" },
+  // res/: the generated libres (default font/logo) + its source (.res + PNGs)
+  // and the regen recipe — so the resource blobs are reproducible, not opaque.
+  { src: "lib/sgdk/res", dst: "vendor/sgdk/res" },
 ];
 const SGDK_LANG = "C (m68k-elf-gcc + SGDK)";
 

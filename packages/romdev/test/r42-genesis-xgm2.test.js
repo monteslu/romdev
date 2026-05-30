@@ -66,7 +66,7 @@ test("R42 Genesis XGM2 music: xgm2_demo template builds with .xgc incbin'd into 
   assert.ok(found, "compiled XGM2 blob bytes not located in final ROM — .incbin wiring broken");
 });
 
-test("R42 demo.vgm + demo.xgc are byte-stable (regen via scripts/build-genesis-demo-vgm.js + xgm2tool)", async () => {
+test("R42 demo.vgm + demo.xgc are byte-stable (regen via scripts/build-genesis-demo-vgm.js + xgm2tool)", { timeout: 180000 }, async () => {
   const vgm = await readFile(join(REPO_ROOT, "src/platforms/genesis/lib/sgdk/music/demo.vgm"));
   const xgc = await readFile(join(REPO_ROOT, "src/platforms/genesis/lib/sgdk/music/demo.xgc"));
   // Sizes pinned so any silent regeneration-drift is caught.

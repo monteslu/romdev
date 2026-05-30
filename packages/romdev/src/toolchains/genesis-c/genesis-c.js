@@ -32,11 +32,166 @@ import {
   runM68kLd,
   runM68kObjcopy,
 } from "../m68k-elf-gcc/gcc.js";
+import { runSjasm, runBintos } from "../sjasm/sjasm.js";
+import { packAr } from "../common/ar.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const MINIMAL_LIB_DIR = path.resolve(__dirname, "..", "..", "platforms", "genesis", "lib", "c");
 const SGDK_LIB_DIR    = path.resolve(__dirname, "..", "..", "platforms", "genesis", "lib", "sgdk");
+const SGDK_SRC_DIR    = path.join(SGDK_LIB_DIR, "src");
+const SGDK_INC_DIR    = path.join(SGDK_LIB_DIR, "include");
+const SGDK_RES_DIR    = path.join(SGDK_LIB_DIR, "res");
+
+/**
+ * Build the WHOLE SGDK runtime from its own source into a libmd.a, so Genesis
+ * links source-built objects rather than a prebuilt black-box archive. Steps:
+ *   1. sjasm each Z80 sound driver (.s80) → blob → bintos → generated .h + .s
+ *      (these .h are what SGDK's C #includes; the .s embed the Z80 blobs).
+ *   2. cc1+as every SGDK .c (57 files).
+ *   3. as every SGDK .s (incl. the bintos-generated driver .s + libres.s).
+ *   4. packAr the objects into libmd.a.
+ * Cached per-process (keyed on source bytes so an edit to vendored SGDK
+ * source rebuilds).
+ *
+ * @param {Record<string,string>} baseHeaders SGDK headers + sys headers
+ * @param {string[]} cc1Options
+ * @returns {Promise<{ok:boolean, libmd?:Uint8Array, stage?:string, log?:string}>}
+ */
+let _sgdkRuntimeCache = null;
+async function compileSgdkRuntime(baseHeaders, cc1Options) {
+  const { readdir } = await import("node:fs/promises");
+  // Collect source files.
+  const cFiles = [], sFiles = [], s80Files = [];
+  const localHeaders = {};
+  async function walk(dir, rel = "") {
+    let ents;
+    try { ents = await readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      const full = path.join(dir, e.name);
+      const sub = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) { await walk(full, sub); continue; }
+      // Skip optional extensions (ext/) — they pull in deps we don't vendor and
+      // aren't part of the core libmd that genesis.h exposes.
+      const norm = sub.replace(/\\/g, "/");
+      const isExt = norm.startsWith("ext/") || norm.includes("/ext/");
+      if (/\.(h|inc|i80)$/i.test(e.name)) { localHeaders[sub] = await readFile(full, "utf-8"); continue; }
+      if (isExt) continue;
+      // boot/sega.s is the crt0/header glue — the main build assembles it
+      // separately (Stage D) with the generated rom_header.bin sibling, so it's
+      // NOT part of the runtime archive. Skip both sega.s and rom_header.c here.
+      if (/(^|\/)sega\.s$/i.test(norm) || /(^|\/)rom_header\.c$/i.test(norm)) continue;
+      if (/\.c$/i.test(e.name)) cFiles.push({ full, sub });
+      else if (/\.s$/i.test(e.name)) sFiles.push({ full, sub });
+      else if (/\.s80$/i.test(e.name)) s80Files.push({ full, sub });
+    }
+  }
+  await walk(SGDK_SRC_DIR);
+
+  // Cache key from all source bytes.
+  const allSrc = {};
+  for (const f of [...cFiles, ...sFiles, ...s80Files]) allSrc[f.sub] = await readFile(f.full, "utf-8");
+  const cacheKey = Object.entries(allSrc).map(([k, v]) => k + ":" + v.length).join("|");
+  if (_sgdkRuntimeCache && _sgdkRuntimeCache.key === cacheKey) return _sgdkRuntimeCache.val;
+
+  let log = "";
+  const objects = {};
+  let objIdx = 0;
+  const addObj = (bytes) => { objects["o" + (objIdx++) + ".o"] = bytes; };
+
+  // ── 1. Z80 drivers → generated .h (+ .s blobs) ──────────────────
+  // The .i80 includes the drivers need live under include/snd/ (and some next
+  // to the drivers in src/). Gather both, keyed by basename (how .s80 references
+  // them: INCLUDE "z80_def.i80").
+  const z80Includes = {};
+  for (const [k, v] of Object.entries(localHeaders)) {
+    if (/\.i80$/i.test(k)) z80Includes[path.basename(k)] = v;
+  }
+  async function loadI80From(dir, rel = "") {
+    let ents;
+    try { ents = await readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) await loadI80From(full);
+      else if (/\.i80$/i.test(e.name)) z80Includes[e.name] = await readFile(full, "utf-8");
+    }
+  }
+  await loadI80From(SGDK_INC_DIR);
+  const driverAsm = {}; // generated bintos .s, keyed by basename
+  for (const d of s80Files) {
+    // Only the core sound drivers under snd/ are part of libmd. Optional
+    // extensions (e.g. ext/minimusic) ship .z80 deps we don't vendor and
+    // aren't #included by any SGDK .c — skip them.
+    if (!d.sub.replace(/\\/g, "/").startsWith("snd/")) continue;
+    const name = path.basename(d.sub).replace(/\.s80$/i, "");
+    const sj = await runSjasm({ source: allSrc[d.sub], includes: z80Includes });
+    if (!sj.ok) return { ok: false, stage: `sjasm(${d.sub})`, log: log + sj.log };
+    const bt = await runBintos({ binary: sj.binary, name });
+    if (!bt.ok) return { ok: false, stage: `bintos(${name})`, log: log + bt.log };
+    // The generated .h is what SGDK C files #include as "src/.../drv_X.h" etc.
+    // SGDK includes them by their src-relative path; expose by both basename
+    // and the original sub-path with .s80→.h so #include resolves.
+    baseHeaders[name + ".h"] = bt.h;
+    baseHeaders[d.sub.replace(/\.s80$/i, ".h")] = bt.h;
+    baseHeaders["src/" + d.sub.replace(/\.s80$/i, ".h")] = bt.h;
+    driverAsm[name] = bt.s;
+  }
+
+  // libres.h is a generated artifact (vendored); make it includable as res/libres.h.
+  try {
+    const libresH = await readFile(path.join(SGDK_RES_DIR, "libres.h"), "utf-8");
+    baseHeaders["res/libres.h"] = libresH;
+    baseHeaders["libres.h"] = libresH;
+  } catch { /* no libres — degraded */ }
+
+  // ── 2. compile every SGDK .c ────────────────────────────────────
+  const cHeaders = { ...baseHeaders, ...localHeaders };
+  for (const c of cFiles) {
+    const cc = await runCc1m68k({ source: allSrc[c.sub], headers: cHeaders, options: cc1Options });
+    if (cc.exitCode !== 0 || !cc.asmSource) return { ok: false, stage: `sgdk cc1(${c.sub})`, log: log + (cc.log || "") };
+    const as = await runM68kAs({ source: cc.asmSource });
+    if (as.exitCode !== 0 || !as.object) return { ok: false, stage: `sgdk as(${c.sub})`, log: log + (as.log || "") };
+    addObj(as.object);
+  }
+
+  // ── 3. assemble SGDK's own .s + the generated driver .s + libres.s ──
+  // SGDK's hand-written .s use cpp macros (e.g. `func`/`endfunc` in asm_mac.i)
+  // + `//` comments, so they're "assembler-with-cpp": preprocess via cc1 -E
+  // (with __ASSEMBLER__ + SGDK headers) THEN assemble. The bintos-generated
+  // driver .s and libres.s are plain GAS — assemble directly.
+  const cppThenAs = async (text, label) => {
+    const pp = await runCc1m68k({ source: text, headers: cHeaders, options: [...cc1Options, "-D__ASSEMBLER__=1", "-E"] });
+    if (pp.exitCode !== 0 || !pp.asmSource) return { err: `sgdk cpp(${label})`, log: pp.log };
+    const as = await runM68kAs({ source: pp.asmSource, options: ["--register-prefix-optional", "--bitwise-or"] });
+    if (as.exitCode !== 0 || !as.object) return { err: `sgdk as(${label})`, log: as.log };
+    return { obj: as.object };
+  };
+  const plainAs = async (text, label) => {
+    const as = await runM68kAs({ source: text, options: ["--register-prefix-optional", "--bitwise-or"] });
+    if (as.exitCode !== 0 || !as.object) return { err: `sgdk as(${label})`, log: as.log };
+    return { obj: as.object };
+  };
+  for (const f of sFiles) {
+    const r = await cppThenAs(allSrc[f.sub], f.sub);
+    if (r.err) return { ok: false, stage: r.err, log: log + (r.log || "") };
+    addObj(r.obj);
+  }
+  for (const [name, text] of Object.entries(driverAsm)) {
+    const r = await plainAs(text, name + ".s");
+    if (r.err) return { ok: false, stage: r.err, log: log + (r.log || "") };
+    addObj(r.obj);
+  }
+  try {
+    const libresS = await readFile(path.join(SGDK_RES_DIR, "libres.s"), "utf-8");
+    const r = await plainAs(libresS, "libres.s");
+    if (r.err) return { ok: false, stage: r.err, log: log + (r.log || "") };
+    addObj(r.obj);
+  } catch { /* no libres.s */ }
+
+  const val = { ok: true, libmd: packAr(objects) };
+  _sgdkRuntimeCache = { key: cacheKey, val };
+  return val;
+}
 
 /**
  * Compile + assemble + link a C source to a Genesis ROM (.bin).
@@ -179,10 +334,18 @@ async function buildWithSgdk({ sources, headers, binaryIncludes, cc1Options }) {
     return { ok: false, binary: null, log, exitCode: segaAs.exitCode || 1, stage: "as (sega.s)", runtime: "sgdk", ...(segaAs.crash ? { crash: segaAs.crash } : {}) };
   }
 
+  // ── Stage D2: compile the SGDK runtime FROM SOURCE → libmd.a ──
+  // (Z80 drivers via sjasm+bintos, all SGDK .c via m68k-gcc, libres + .s
+  // assembled, packed into an archive. No prebuilt libmd.a black box.)
+  const sgdkRt = await compileSgdkRuntime({ ...tccHeaders }, sgdkCc1Options);
+  if (!sgdkRt.ok) {
+    return { ok: false, binary: null, log: log + (sgdkRt.log || ""), exitCode: 1, stage: `sgdk runtime: ${sgdkRt.stage}`, runtime: "sgdk" };
+  }
+  log += `--- SGDK runtime compiled from source ---\n`;
+
   // ── Stage E: link everything ──
   const mdLd = await readFile(path.join(SGDK_LIB_DIR, "md.ld"), "utf-8");
-  const [libmd, libgcc, libc, libm] = await Promise.all([
-    readFile(path.join(SGDK_LIB_DIR, "libmd.a")),
+  const [libgcc, libc, libm] = await Promise.all([
     readFile(path.join(MINIMAL_LIB_DIR, "libgcc.a")),
     readFile(path.join(MINIMAL_LIB_DIR, "libc.a")),
     readFile(path.join(MINIMAL_LIB_DIR, "libm.a")),
@@ -192,7 +355,7 @@ async function buildWithSgdk({ sources, headers, binaryIncludes, cc1Options }) {
     objects: { "sega.o": segaAs.object, ...userObjs },
     linkScript: mdLd,
     archives: {
-      "libmd.a":  new Uint8Array(libmd),
+      "libmd.a":  sgdkRt.libmd,
       "libgcc.a": new Uint8Array(libgcc),
       "libc.a":   new Uint8Array(libc),
       "libm.a":   new Uint8Array(libm),

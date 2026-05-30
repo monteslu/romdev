@@ -42,9 +42,10 @@ test("createProject genesis sgdk_hello: ships full SGDK runtime + include tree",
   assert.ok(Array.isArray(r.files), "files array missing");
 
   // The flat runtime entries we declared in TEMPLATES.genesis.sgdk_hello.
+  // NOTE: no libmd.a — SGDK is now compiled FROM SOURCE by the build (its
+  // source is vendored under vendor/sgdk/), not linked from a prebuilt archive.
   const expectedFlat = [
     "main.c",
-    "libmd.a",
     "sega.s",
     "sega.preprocessed.s",
     "rom_header.c",
@@ -58,12 +59,10 @@ test("createProject genesis sgdk_hello: ships full SGDK runtime + include tree",
     assert.ok(st.isFile(), `not a regular file: ${f}`);
   }
 
-  // libmd.a is a 2.6 MB binary — verify it round-tripped byte-for-byte
-  // (catches utf-8 mangling regressions in the binary-detection logic).
-  const original = await readFile(join(SGDK_LIB, "libmd.a"));
-  const copied = await readFile(join(projPath, "libmd.a"));
-  assert.equal(copied.length, original.length, "libmd.a length mismatch");
-  assert.ok(copied.equals(original), "libmd.a bytes diverged from source");
+  // No prebuilt libmd.a is shipped anymore — the SDK source is, instead.
+  assert.ok(!r.files.includes("libmd.a"), "libmd.a should NOT ship (SGDK builds from source)");
+  // SGDK source must be vendored so the build can compile it + agents can read it.
+  assert.ok(r.files.some((f) => f.startsWith("vendor/sgdk/src/")), "SGDK source not vendored into project");
 
   // include/ tree copied recursively. genesis.h is the umbrella header
   // every SGDK project includes — must be present.
