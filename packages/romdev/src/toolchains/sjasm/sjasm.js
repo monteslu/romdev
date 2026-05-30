@@ -12,11 +12,17 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 function resolveGlue(name) {
-  // Local first (dev / pre-package). A future genesis platform package can host
-  // these wasm; mirror tcc816's import.meta.resolve fallback when that lands.
+  // sjasm + bintos ship in romdev-toolchain-m68k-gcc (the Genesis toolchain
+  // package — same place as the m68k compiler they pair with). Resolve from
+  // there; fall back to a local copy under src/ for dev.
+  try {
+    const u = import.meta.resolve("romdev-toolchain-m68k-gcc");
+    const p = path.join(path.dirname(fileURLToPath(u)), "wasm", name);
+    if (existsSync(p)) return p;
+  } catch { /* package not resolvable — fall through to local */ }
   const local = path.join(__dirname, "wasm", name);
   if (existsSync(local)) return local;
-  throw new Error(`sjasm WASM not found: ${name} — run scripts/build-sjasm.sh`);
+  throw new Error(`sjasm WASM not found: ${name} — install romdev-toolchain-m68k-gcc (or run scripts/build-sjasm.sh)`);
 }
 
 let _sjasmFactory, _bintosFactory;

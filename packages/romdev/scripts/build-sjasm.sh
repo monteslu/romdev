@@ -9,8 +9,8 @@
 # prebuilt libmd.a — no opaque blobs.
 #
 # Output:
-#   src/toolchains/sjasm/wasm/sjasm.{js,wasm}
-#   src/toolchains/sjasm/wasm/bintos.{js,wasm}
+#   ../romdev-toolchain-m68k-gcc/wasm/sjasm.{js,wasm}
+#   ../romdev-toolchain-m68k-gcc/wasm/bintos.{js,wasm}
 #
 # Upstream pinned in scripts/versions.json (toolchains.sgdk — sjasm + bintos
 # live in the SGDK repo under tools/).
@@ -20,7 +20,9 @@ require_cmd emcc
 require_cmd git
 
 SGDK_DIR="$BUILD_DIR/sgdk/src"
-OUT="$PROJECT_DIR/src/toolchains/sjasm/wasm"
+# sjasm + bintos ship in the Genesis toolchain package (alongside the m68k
+# compiler they pair with), not the main romdev package.
+OUT="$PROJECT_DIR/../romdev-toolchain-m68k-gcc/wasm"
 
 fetch_pinned toolchains.sgdk "$SGDK_DIR"
 
