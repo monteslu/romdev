@@ -35,12 +35,17 @@ import {
   runArmLd,
   runArmObjcopy,
 } from "../arm-none-eabi-gcc/gcc.js";
+import { packAr } from "../common/ar.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const LIBGBA_DIR  = path.resolve(__dirname, "..", "..", "platforms", "gba", "lib", "libgba");
 const LIBTONC_DIR = path.resolve(__dirname, "..", "..", "platforms", "gba", "lib", "libtonc");
 const MAXMOD_DIR  = path.resolve(__dirname, "..", "..", "platforms", "gba", "lib", "maxmod");
+// Minimal libsysbase (devoptab_list[] + reentrant write/read routing) so
+// newlib stdio (iprintf/printf) reaches a console device. Compiled from source
+// and linked with both libtonc (tte_init_con) and libgba (consoleInit).
+const SYSBASE_DIR = path.resolve(__dirname, "..", "..", "platforms", "gba", "lib", "sysbase");
 
 /**
  * Compile + assemble + link a C source to a GBA ROM (.gba).
@@ -125,7 +130,6 @@ function normalizeGbaSources(args) {
 async function buildWithLibtonc({ sources, headers, cc1Options, binaryIncludes = {}, maxmod = false }) {
   let log = "";
 
-  const libtoncA   = new Uint8Array(await readFile(path.join(LIBTONC_DIR, "libtonc.a")));
   const crt0Src    = await readFile(path.join(LIBTONC_DIR, "gba_crt0.s"), "utf-8");
   const linkScript = await readFile(path.join(LIBTONC_DIR, "gba_cart.ld"), "utf-8");
 
@@ -230,17 +234,47 @@ async function buildWithLibtonc({ sources, headers, cc1Options, binaryIncludes =
     objects["soundbank.o"] = soundbankStub.object;
   }
 
+  // ── Stage B4: compile libtonc (and maxmod) FROM SOURCE ───────────
+  // We link the SDK's own compiled objects, NOT a prebuilt libtonc.a/libmm.a.
+  // Edit any libtonc/maxmod source and the change takes effect — no opaque blob.
+  const tonc = await compileSdkObjects({
+    key: "libtonc",
+    srcDirs: [path.join(LIBTONC_DIR, "src"), SYSBASE_DIR],
+    headers: { ...sysHeaders, ...libtoncHeaders, ...maxmodHeaders, ...headers },
+  });
+  if (!tonc.ok) {
+    return { ok: false, binary: null, log: log + (tonc.log || ""), exitCode: 1, stage: tonc.stage, runtime: "libtonc" };
+  }
+  log += `--- libtonc compiled from source (${Object.keys(tonc.objects).length} objects) ---\n`;
+
+  let maxmodAr = null;
+  if (maxmod) {
+    const mmHeaders = await loadMaxmodAsmHeaders();
+    const mm = await compileSdkObjects({
+      key: "maxmod",
+      srcDirs: [path.join(MAXMOD_DIR, "source"), path.join(MAXMOD_DIR, "source_gba")],
+      headers: { ...sysHeaders, ...maxmodHeaders, ...mmHeaders },
+      cppDefines: ["SYS_GBA=1"],
+    });
+    if (!mm.ok) {
+      return { ok: false, binary: null, log: log + (mm.log || ""), exitCode: 1, stage: mm.stage, runtime: "libtonc" };
+    }
+    maxmodAr = packAr(mm.objects);
+    log += `--- maxmod compiled from source (${Object.keys(mm.objects).length} objects) ---\n`;
+  }
+
   // ── Stage C: link ───────────────────────────────────────────────
+  // The SDKs are linked as ARCHIVES packed from their compiled-from-source
+  // objects (so the linker pulls only referenced members — same as a prebuilt
+  // .a would). crt*.o + libgcc/libc/libnosys are gcc/newlib toolchain runtime.
   const archives = {
-    "libtonc.a":  libtoncA,
+    "libtonc.a":  packAr(tonc.objects),
     "crti.o":     new Uint8Array(await readFile(path.join(LIBTONC_DIR, "crti.o"))),
     "crtn.o":     new Uint8Array(await readFile(path.join(LIBTONC_DIR, "crtn.o"))),
     "crtbegin.o": new Uint8Array(await readFile(path.join(LIBTONC_DIR, "crtbegin.o"))),
     "crtend.o":   new Uint8Array(await readFile(path.join(LIBTONC_DIR, "crtend.o"))),
   };
-  if (maxmod) {
-    archives["libmm.a"] = new Uint8Array(await readFile(path.join(MAXMOD_DIR, "libmm.a")));
-  }
+  if (maxmodAr) archives["libmm.a"] = maxmodAr;
   const targetLibs = await readTargetArchives();
   Object.assign(archives, targetLibs);
 
@@ -257,6 +291,7 @@ async function buildWithLibtonc({ sources, headers, cc1Options, binaryIncludes =
     options: [
       "/work/crti.o",
       "/work/crtbegin.o",
+      // libtonc/maxmod archives are packed from compiled-from-source objects.
       "--start-group",
       "-ltonc",
       ...(maxmod ? ["-lmm"] : []),
@@ -296,8 +331,8 @@ async function buildWithLibtonc({ sources, headers, cc1Options, binaryIncludes =
 async function buildWithLibgba({ sources, headers, cc1Options }) {
   let log = "";
 
-  // Read the libgba bundle once.
-  const libgbaA   = new Uint8Array(await readFile(path.join(LIBGBA_DIR, "libgba.a")));
+  // Read the libgba bundle once (crt0 + linker script; the SDK itself is
+  // compiled from source below, not linked from libgba.a).
   const crt0Src   = await readFile(path.join(LIBGBA_DIR, "gba_crt0.s"), "utf-8");
   const linkScript = await readFile(path.join(LIBGBA_DIR, "gba_cart.ld"), "utf-8");
 
@@ -368,16 +403,26 @@ async function buildWithLibgba({ sources, headers, cc1Options }) {
   }
   objects["fake_heap_end.o"] = fakeHeapEndStub.object;
 
-  // ── Stage C: link everything against libgba.a + libgcc.a ────────
-  // We need:
-  //   - crti.o + crtn.o          (gcc startup — defines _init/_fini)
-  //   - crtbegin.o + crtend.o    (gcc C++ constructor/destructor scaffolding)
-  //   - libgba.a                  (the SDK)
-  //   - libgcc.a, libc.a, libnosys.a (newlib targets)
-  // Pull all into MEMFS via `archives` (libgba.a is a real archive;
-  // crt*.o are objects but the linker accepts both via archives map).
+  // ── Stage B3: compile libgba (+ libsysbase) FROM SOURCE ─────────
+  // Link libgba's own compiled objects, NOT a prebuilt libgba.a. Edit any
+  // libgba source and it takes effect. libsysbase (gba_iosupport.c) gives the
+  // devoptab routing so libgba's consoleInit() + iprintf work.
+  const gba = await compileSdkObjects({
+    key: "libgba",
+    srcDirs: [path.join(LIBGBA_DIR, "src"), SYSBASE_DIR],
+    headers: { ...sysHeaders, ...libgbaHeaders, ...headers },
+  });
+  if (!gba.ok) {
+    return { ok: false, binary: null, log: log + (gba.log || ""), exitCode: 1, stage: gba.stage, runtime: "libgba" };
+  }
+  log += `--- libgba compiled from source (${Object.keys(gba.objects).length} objects) ---\n`;
+
+  // ── Stage C: link ───────────────────────────────────────────────
+  // libgba is linked as an archive packed from compiled-from-source objects
+  // (linker pulls only referenced members — same as a prebuilt .a). crt*.o +
+  // libgcc/libc/libnosys are gcc/newlib toolchain runtime (prebuilt).
   const archives = {
-    "libgba.a": libgbaA,
+    "libgba.a":   packAr(gba.objects),
     "crti.o":     new Uint8Array(await readFile(path.join(LIBGBA_DIR, "crti.o"))),
     "crtn.o":     new Uint8Array(await readFile(path.join(LIBGBA_DIR, "crtn.o"))),
     "crtbegin.o": new Uint8Array(await readFile(path.join(LIBGBA_DIR, "crtbegin.o"))),
@@ -401,6 +446,7 @@ async function buildWithLibgba({ sources, headers, cc1Options }) {
     options: [
       "/work/crti.o",
       "/work/crtbegin.o",
+      // libgba archive packed from compiled-from-source objects.
       "--start-group",
       "-lgba",
       "-lc",
@@ -524,6 +570,25 @@ async function loadMaxmodHeaders() {
 }
 
 /**
+ * Maxmod's assembly include files (asm_include/*.inc) — the macro/struct/def
+ * includes its .s sources pull in via #include. Needed to compile maxmod from
+ * source. Keyed by bare name (how the .s files reference them). Cached.
+ */
+let _maxmodAsmHeadersCache = null;
+async function loadMaxmodAsmHeaders() {
+  if (_maxmodAsmHeadersCache) return _maxmodAsmHeadersCache;
+  const out = {};
+  const dir = path.join(MAXMOD_DIR, "asm_include");
+  let entries;
+  try { entries = await readdir(dir); } catch { entries = []; }
+  for (const name of entries) {
+    if (/\.(inc|h)$/i.test(name)) out[name] = await readFile(path.join(dir, name), "utf-8");
+  }
+  _maxmodAsmHeadersCache = out;
+  return out;
+}
+
+/**
  * Load every libgba header file under include/ into a {name: contents}
  * map suitable for passing as `headers` to cc1. Cached per-process.
  */
@@ -606,4 +671,93 @@ async function readTargetArchives() {
   }
   _targetArchivesCache = out;
   return out;
+}
+
+/**
+ * Compile an SDK's OWN SOURCE TREE into a map of {objName: Uint8Array}, so the
+ * SDK is built from the visible source we ship rather than linked from a
+ * prebuilt .a black box. An agent can edit any SDK .c/.s and the change takes
+ * effect on the next build (the per-process cache is keyed on the source bytes,
+ * so an edit invalidates only what changed).
+ *
+ * Handles two source forms:
+ *   - .c  → cc1 (C → asm) → as (asm → object)
+ *   - .s  → cc1 -E (cpp: #include/#define) → as     (maxmod's GAS+cpp asm)
+ *
+ * @param {Object} a
+ * @param {string} a.key cache key (sdk name + variant)
+ * @param {string[]} a.srcDirs absolute dirs to scan for .c/.s
+ * @param {Record<string,string>} a.headers headers map for cc1 (sys + sdk + src-local)
+ * @param {string[]} [a.cppDefines] e.g. ["SYS_GBA=1"] applied to .s preprocessing
+ * @param {string[]} [a.cc1Options]
+ * @returns {Promise<{ok:boolean, objects?:Record<string,Uint8Array>, stage?:string, log?:string}>}
+ */
+const _sdkObjCache = new Map();
+async function compileSdkObjects({ key, srcDirs, headers, cppDefines = [], cc1Options = [] }) {
+  // Gather source files (preserve sub-path in the object name to avoid clashes).
+  // Also collect .s/.inc files as AVAILABLE INCLUDES — GAS asm often #includes
+  // sibling .s "type" files (e.g. libtonc's tte_types.s) and .inc macro files.
+  const files = [];
+  const localIncludes = {};
+  for (const dir of srcDirs) {
+    async function walk(d, rel = "") {
+      let ents;
+      try { ents = await readdir(d, { withFileTypes: true }); } catch { return; }
+      for (const e of ents) {
+        const full = path.join(d, e.name);
+        const sub = rel ? `${rel}/${e.name}` : e.name;
+        if (e.isDirectory()) await walk(full, sub);
+        else if (/\.(c|s)$/i.test(e.name)) {
+          files.push({ full, sub });
+          if (/\.s$/i.test(e.name)) localIncludes[e.name] = await readFile(full, "utf-8");
+        } else if (/\.(inc|h)$/i.test(e.name)) {
+          localIncludes[e.name] = await readFile(full, "utf-8");
+        }
+      }
+    }
+    await walk(dir);
+  }
+  headers = { ...headers, ...localIncludes };
+  // Cache key folds in every source file's bytes so an edit busts the cache.
+  const srcTexts = {};
+  for (const f of files) srcTexts[f.sub] = await readFile(f.full, "utf-8");
+  const cacheKey = key + "\0" + Object.entries(srcTexts).map(([k, v]) => k + ":" + v.length).join("|");
+  if (_sdkObjCache.has(cacheKey)) return _sdkObjCache.get(cacheKey);
+
+  const defineOpts = cppDefines.map((d) => "-D" + d);
+  const objects = {};
+  let log = "";
+  let objIdx = 0;
+  for (const f of files) {
+    const src = srcTexts[f.sub];
+    // Short, unique member name (ar short-name field is 16 bytes incl. the GNU
+    // "/" terminator). Member names don't affect linking — only symbols do —
+    // so a sequential id keeps every name well under the limit.
+    const objName = "o" + (objIdx++) + ".o";
+    let asmText;
+    if (/\.c$/i.test(f.sub)) {
+      const cc1 = await runCc1arm({ source: src, headers, options: [...cc1Options, "-mthumb-interwork"] });
+      if (cc1.exitCode !== 0 || !cc1.asmSource) {
+        return { ok: false, stage: `sdk cc1 (${f.sub})`, log: log + (cc1.log || "") };
+      }
+      asmText = cc1.asmSource;
+    } else {
+      // .s: GAS "assembler-with-cpp" — preprocess with cc1 -E (expands #include
+      // of .inc/.s macro+type files + #define), then assemble. -D__ASSEMBLER__=1
+      // so asm-only headers (e.g. libtonc tonc_asminc.h) take their asm branch.
+      const pp = await runCc1arm({ source: src, headers, options: [...defineOpts, "-D__ASSEMBLER__=1", "-E"] });
+      if (pp.exitCode !== 0 || !pp.asmSource) {
+        return { ok: false, stage: `sdk cpp (${f.sub})`, log: log + (pp.log || "") };
+      }
+      asmText = pp.asmSource;
+    }
+    const as = await runArmAs({ source: asmText, includes: headers });
+    if (as.exitCode !== 0 || !as.object) {
+      return { ok: false, stage: `sdk as (${f.sub})`, log: log + (as.log || "") };
+    }
+    objects[objName] = as.object;
+  }
+  const result = { ok: true, objects };
+  _sdkObjCache.set(cacheKey, result);
+  return result;
 }

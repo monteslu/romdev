@@ -10,6 +10,12 @@
 
 typedef int _LOCK_T;
 typedef int _LOCK_RECURSIVE_T;
+/* Single-threaded GBA target: condition vars + threads never exist, but the
+ * (newer devkitPro) <sys/iosupport.h> __syscalls table references these types
+ * in function-pointer signatures, so they must be declared to parse. Opaque. */
+#ifndef _COND_T
+typedef int _COND_T;
+#endif
 
 #define __LOCK_INIT(class,lock) static int lock = 0;
 #define __LOCK_INIT_RECURSIVE(class,lock) static int lock = 0;
