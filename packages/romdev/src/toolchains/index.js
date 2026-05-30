@@ -373,6 +373,7 @@ export async function buildForPlatform(args) {
         runtime: args.runtime,    // explicit wins
         libgba:  args.libgba,     // legacy R24 flag (undef passes through)
         maxmod:  args.maxmod,     // R33 — opt-in maxmod music link
+        rebuildSdk: args.rebuildSdk, // compile SDK from source vs seed
       });
       return {
         ok: r.ok,
@@ -409,6 +410,7 @@ export async function buildForPlatform(args) {
         // Default: link against bundled SGDK runtime. Pass sgdk:false in
         // `options` for the bare-gcc minimum-viable path.
         sgdk: args.sgdk !== false,
+        rebuildSdk: args.rebuildSdk, // compile SGDK from source vs seed
       });
       return {
         ok: r.ok,

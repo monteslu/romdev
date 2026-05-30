@@ -69,11 +69,19 @@ export async function resolveSdkArchive(a) {
 
   // Explicit rebuild → compile from source (disk-cached by hash).
   if (a.rebuild) {
-    const cached = await readDiskCache(srcHash);
-    if (cached) return { ok: true, archive: cached, fromSource: true };
+    // When writeSeed is set (the seed generator), always recompile + persist
+    // the seed; don't short-circuit on the disk cache.
+    if (!a.writeSeed) {
+      const cached = await readDiskCache(srcHash);
+      if (cached) return { ok: true, archive: cached, fromSource: true };
+    }
     const r = await a.compileFromSource();
     if (!r.ok) return { ok: false, fromSource: true, stage: r.stage, log: r.log };
     await writeDiskCache(srcHash, r.archive);
+    if (a.writeSeed && a.seedPath) {
+      await writeFile(a.seedPath, r.archive);
+      await writeFile(a.seedHashPath, srcHash + "\n");
+    }
     return { ok: true, archive: r.archive, fromSource: true };
   }
 

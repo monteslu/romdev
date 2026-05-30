@@ -34,6 +34,7 @@ import {
 } from "../m68k-elf-gcc/gcc.js";
 import { runSjasm, runBintos } from "../sjasm/sjasm.js";
 import { packAr } from "../common/ar.js";
+import { resolveSdkArchive } from "../common/sdk-cache.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -58,6 +59,25 @@ const SGDK_RES_DIR    = path.join(SGDK_LIB_DIR, "res");
  * @param {string[]} cc1Options
  * @returns {Promise<{ok:boolean, libmd?:Uint8Array, stage?:string, log?:string}>}
  */
+/** Read every SGDK source file (src/ + res/) into a {path:text} map for hashing the seed. */
+async function readSgdkSources() {
+  const { readdir } = await import("node:fs/promises");
+  const out = {};
+  async function walk(dir, rel = "") {
+    let ents;
+    try { ents = await readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      const full = path.join(dir, e.name);
+      const sub = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) await walk(full, sub);
+      else if (/\.(c|s|s80|h|inc|i80|res)$/i.test(e.name)) out[dir + "/" + sub] = await readFile(full, "utf-8");
+    }
+  }
+  await walk(SGDK_SRC_DIR);
+  await walk(SGDK_RES_DIR);
+  return out;
+}
+
 let _sgdkRuntimeCache = null;
 async function compileSgdkRuntime(baseHeaders, cc1Options) {
   const { readdir } = await import("node:fs/promises");
@@ -216,7 +236,7 @@ export async function buildGenesisC(args) {
   const sources = normalizeGenesisSources(args);
   const useSgdk = args.sgdk !== false;
   if (useSgdk) {
-    return buildWithSgdk({ sources, headers, binaryIncludes, cc1Options });
+    return buildWithSgdk({ sources, headers, binaryIncludes, cc1Options, rebuildSdk: !!args.rebuildSdk, writeSeed: !!args.seedWrite });
   }
   return buildMinimal({ sources, headers, binaryIncludes, cc1Options });
 }
@@ -233,7 +253,7 @@ export async function buildGenesisC(args) {
  *   6. ld user.o + sega.o + libmd.a + libgcc.a + libc.a → ELF
  *   7. objcopy -O binary → final .bin
  */
-async function buildWithSgdk({ sources, headers, binaryIncludes, cc1Options }) {
+async function buildWithSgdk({ sources, headers, binaryIncludes, cc1Options, rebuildSdk = false, writeSeed = false }) {
   let log = "";
   // SGDK_GCC define + freestanding-style flags must be in cc1 invocations
   const sgdkCc1Options = [
@@ -337,11 +357,25 @@ async function buildWithSgdk({ sources, headers, binaryIncludes, cc1Options }) {
   // ── Stage D2: compile the SGDK runtime FROM SOURCE → libmd.a ──
   // (Z80 drivers via sjasm+bintos, all SGDK .c via m68k-gcc, libres + .s
   // assembled, packed into an archive. No prebuilt libmd.a black box.)
-  const sgdkRt = await compileSgdkRuntime({ ...tccHeaders }, sgdkCc1Options);
-  if (!sgdkRt.ok) {
-    return { ok: false, binary: null, log: log + (sgdkRt.log || ""), exitCode: 1, stage: `sgdk runtime: ${sgdkRt.stage}`, runtime: "sgdk" };
+  // Seed by default (compiling SGDK from source is ~18s); rebuildSdk:true
+  // recompiles; an edit to the vendored SGDK source without the flag is flagged.
+  const sdkWarnings = [];
+  const sgdkRes = await resolveSdkArchive({
+    name: "SGDK",
+    sources: await readSgdkSources(),
+    seedPath: path.join(SGDK_LIB_DIR, "libmd.seed.a"),
+    seedHashPath: path.join(SGDK_LIB_DIR, "libmd.seed.hash"),
+    rebuild: rebuildSdk, writeSeed,
+    compileFromSource: async () => {
+      const r = await compileSgdkRuntime({ ...tccHeaders }, sgdkCc1Options);
+      return r.ok ? { ok: true, archive: r.libmd } : r;
+    },
+  });
+  if (!sgdkRes.ok) {
+    return { ok: false, binary: null, log: log + (sgdkRes.log || ""), exitCode: 1, stage: `sgdk runtime: ${sgdkRes.stage}`, runtime: "sgdk" };
   }
-  log += `--- SGDK runtime compiled from source ---\n`;
+  if (sgdkRes.sdkEditIgnored) sdkWarnings.push(sgdkRes.sdkEditIgnored);
+  log += `--- SGDK runtime ${sgdkRes.fromSource ? "compiled from source" : "from prebuilt seed"} ---\n`;
 
   // ── Stage E: link everything ──
   const mdLd = await readFile(path.join(SGDK_LIB_DIR, "md.ld"), "utf-8");
@@ -355,7 +389,7 @@ async function buildWithSgdk({ sources, headers, binaryIncludes, cc1Options }) {
     objects: { "sega.o": segaAs.object, ...userObjs },
     linkScript: mdLd,
     archives: {
-      "libmd.a":  sgdkRt.libmd,
+      "libmd.a":  sgdkRes.archive,
       "libgcc.a": new Uint8Array(libgcc),
       "libc.a":   new Uint8Array(libc),
       "libm.a":   new Uint8Array(libm),
@@ -383,6 +417,7 @@ async function buildWithSgdk({ sources, headers, binaryIncludes, cc1Options }) {
     exitCode: 0,
     stage: "done",
     runtime: "sgdk",
+    ...(sdkWarnings.length ? { sdkEditIgnored: sdkWarnings } : {}),
   };
 }
 

@@ -36,6 +36,7 @@ import {
   runArmObjcopy,
 } from "../arm-none-eabi-gcc/gcc.js";
 import { packAr } from "../common/ar.js";
+import { resolveSdkArchive } from "../common/sdk-cache.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -99,7 +100,7 @@ export async function buildGbaC(args) {
     else runtime = "libtonc";
   }
 
-  const opts = { sources, headers, cc1Options, binaryIncludes, maxmod: !!args.maxmod };
+  const opts = { sources, headers, cc1Options, binaryIncludes, maxmod: !!args.maxmod, rebuildSdk: !!args.rebuildSdk, writeSeed: !!args.seedWrite };
   if (runtime === "libtonc") return buildWithLibtonc(opts);
   if (runtime === "libgba")  return buildWithLibgba(opts);
   if (runtime === "none")    return buildMinimal(opts);
@@ -127,7 +128,7 @@ function normalizeGbaSources(args) {
  *   5. ld user objects + gba_crt0.o + libtonc.a + libgcc.a + libc.a + libnosys.a → ELF
  *   6. objcopy -O binary → final .gba ROM
  */
-async function buildWithLibtonc({ sources, headers, cc1Options, binaryIncludes = {}, maxmod = false }) {
+async function buildWithLibtonc({ sources, headers, cc1Options, binaryIncludes = {}, maxmod = false, rebuildSdk = false, writeSeed = false }) {
   let log = "";
 
   const crt0Src    = await readFile(path.join(LIBTONC_DIR, "gba_crt0.s"), "utf-8");
@@ -234,41 +235,61 @@ async function buildWithLibtonc({ sources, headers, cc1Options, binaryIncludes =
     objects["soundbank.o"] = soundbankStub.object;
   }
 
-  // ── Stage B4: compile libtonc (and maxmod) FROM SOURCE ───────────
-  // We link the SDK's own compiled objects, NOT a prebuilt libtonc.a/libmm.a.
-  // Edit any libtonc/maxmod source and the change takes effect — no opaque blob.
-  const tonc = await compileSdkObjects({
-    key: "libtonc",
+  // ── Stage B4: resolve libtonc (and maxmod) — seed by default, or compile
+  // from source when rebuildSdk is set. Edits to the vendored SDK source take
+  // effect with rebuildSdk:true; without it, the fast prebuilt seed is used and
+  // an edit is flagged (sdkEditIgnored), never silently dropped.
+  const sdkWarnings = [];
+  const toncRes = await sdkArchive({
+    name: "libtonc",
     srcDirs: [path.join(LIBTONC_DIR, "src"), SYSBASE_DIR],
-    headers: { ...sysHeaders, ...libtoncHeaders, ...maxmodHeaders, ...headers },
+    seedBase: path.join(LIBTONC_DIR, "libtonc"),
+    rebuild: rebuildSdk, writeSeed,
+    compile: async () => {
+      const r = await compileSdkObjects({
+        key: "libtonc",
+        srcDirs: [path.join(LIBTONC_DIR, "src"), SYSBASE_DIR],
+        headers: { ...sysHeaders, ...libtoncHeaders, ...maxmodHeaders, ...headers },
+      });
+      return r.ok ? { ok: true, archive: packAr(r.objects) } : r;
+    },
   });
-  if (!tonc.ok) {
-    return { ok: false, binary: null, log: log + (tonc.log || ""), exitCode: 1, stage: tonc.stage, runtime: "libtonc" };
+  if (!toncRes.ok) {
+    return { ok: false, binary: null, log: log + (toncRes.log || ""), exitCode: 1, stage: toncRes.stage, runtime: "libtonc" };
   }
-  log += `--- libtonc compiled from source (${Object.keys(tonc.objects).length} objects) ---\n`;
+  if (toncRes.sdkEditIgnored) sdkWarnings.push(toncRes.sdkEditIgnored);
+  log += `--- libtonc ${toncRes.fromSource ? "compiled from source" : "from prebuilt seed"} ---\n`;
 
   let maxmodAr = null;
   if (maxmod) {
     const mmHeaders = await loadMaxmodAsmHeaders();
-    const mm = await compileSdkObjects({
-      key: "maxmod",
+    const mmRes = await sdkArchive({
+      name: "maxmod",
       srcDirs: [path.join(MAXMOD_DIR, "source"), path.join(MAXMOD_DIR, "source_gba")],
-      headers: { ...sysHeaders, ...maxmodHeaders, ...mmHeaders },
-      cppDefines: ["SYS_GBA=1"],
+      seedBase: path.join(MAXMOD_DIR, "maxmod"),
+      rebuild: rebuildSdk, writeSeed,
+      compile: async () => {
+        const r = await compileSdkObjects({
+          key: "maxmod",
+          srcDirs: [path.join(MAXMOD_DIR, "source"), path.join(MAXMOD_DIR, "source_gba")],
+          headers: { ...sysHeaders, ...maxmodHeaders, ...mmHeaders },
+          cppDefines: ["SYS_GBA=1"],
+        });
+        return r.ok ? { ok: true, archive: packAr(r.objects) } : r;
+      },
     });
-    if (!mm.ok) {
-      return { ok: false, binary: null, log: log + (mm.log || ""), exitCode: 1, stage: mm.stage, runtime: "libtonc" };
+    if (!mmRes.ok) {
+      return { ok: false, binary: null, log: log + (mmRes.log || ""), exitCode: 1, stage: mmRes.stage, runtime: "libtonc" };
     }
-    maxmodAr = packAr(mm.objects);
-    log += `--- maxmod compiled from source (${Object.keys(mm.objects).length} objects) ---\n`;
+    if (mmRes.sdkEditIgnored) sdkWarnings.push(mmRes.sdkEditIgnored);
+    maxmodAr = mmRes.archive;
+    log += `--- maxmod ${mmRes.fromSource ? "compiled from source" : "from prebuilt seed"} ---\n`;
   }
 
   // ── Stage C: link ───────────────────────────────────────────────
-  // The SDKs are linked as ARCHIVES packed from their compiled-from-source
-  // objects (so the linker pulls only referenced members — same as a prebuilt
-  // .a would). crt*.o + libgcc/libc/libnosys are gcc/newlib toolchain runtime.
+  // crt*.o + libgcc/libc/libnosys are gcc/newlib toolchain runtime.
   const archives = {
-    "libtonc.a":  packAr(tonc.objects),
+    "libtonc.a":  toncRes.archive,
     "crti.o":     new Uint8Array(await readFile(path.join(LIBTONC_DIR, "crti.o"))),
     "crtn.o":     new Uint8Array(await readFile(path.join(LIBTONC_DIR, "crtn.o"))),
     "crtbegin.o": new Uint8Array(await readFile(path.join(LIBTONC_DIR, "crtbegin.o"))),
@@ -315,7 +336,7 @@ async function buildWithLibtonc({ sources, headers, cc1Options, binaryIncludes =
     return { ok: false, binary: null, log, exitCode: objcopy.exitCode || 1, stage: "objcopy", runtime: "libtonc", ...(objcopy.crash ? { crash: objcopy.crash } : {}) };
   }
 
-  return { ok: true, binary: objcopy.binary, log, exitCode: 0, stage: "done", runtime: "libtonc" };
+  return { ok: true, binary: objcopy.binary, log, exitCode: 0, stage: "done", runtime: "libtonc", ...(sdkWarnings.length ? { sdkEditIgnored: sdkWarnings } : {}) };
 }
 
 /**
@@ -328,7 +349,7 @@ async function buildWithLibtonc({ sources, headers, cc1Options, binaryIncludes =
  *   4. ld user objects + gba_crt0.o + libgba.a + libgcc.a + libc.a → ELF
  *   5. objcopy -O binary → final .gba ROM
  */
-async function buildWithLibgba({ sources, headers, cc1Options }) {
+async function buildWithLibgba({ sources, headers, cc1Options, rebuildSdk = false, writeSeed = false }) {
   let log = "";
 
   // Read the libgba bundle once (crt0 + linker script; the SDK itself is
@@ -407,22 +428,31 @@ async function buildWithLibgba({ sources, headers, cc1Options }) {
   // Link libgba's own compiled objects, NOT a prebuilt libgba.a. Edit any
   // libgba source and it takes effect. libsysbase (gba_iosupport.c) gives the
   // devoptab routing so libgba's consoleInit() + iprintf work.
-  const gba = await compileSdkObjects({
-    key: "libgba",
+  const sdkWarnings = [];
+  const gbaRes = await sdkArchive({
+    name: "libgba",
     srcDirs: [path.join(LIBGBA_DIR, "src"), SYSBASE_DIR],
-    headers: { ...sysHeaders, ...libgbaHeaders, ...headers },
+    seedBase: path.join(LIBGBA_DIR, "libgba"),
+    rebuild: rebuildSdk, writeSeed,
+    compile: async () => {
+      const r = await compileSdkObjects({
+        key: "libgba",
+        srcDirs: [path.join(LIBGBA_DIR, "src"), SYSBASE_DIR],
+        headers: { ...sysHeaders, ...libgbaHeaders, ...headers },
+      });
+      return r.ok ? { ok: true, archive: packAr(r.objects) } : r;
+    },
   });
-  if (!gba.ok) {
-    return { ok: false, binary: null, log: log + (gba.log || ""), exitCode: 1, stage: gba.stage, runtime: "libgba" };
+  if (!gbaRes.ok) {
+    return { ok: false, binary: null, log: log + (gbaRes.log || ""), exitCode: 1, stage: gbaRes.stage, runtime: "libgba" };
   }
-  log += `--- libgba compiled from source (${Object.keys(gba.objects).length} objects) ---\n`;
+  if (gbaRes.sdkEditIgnored) sdkWarnings.push(gbaRes.sdkEditIgnored);
+  log += `--- libgba ${gbaRes.fromSource ? "compiled from source" : "from prebuilt seed"} ---\n`;
 
   // ── Stage C: link ───────────────────────────────────────────────
-  // libgba is linked as an archive packed from compiled-from-source objects
-  // (linker pulls only referenced members — same as a prebuilt .a). crt*.o +
-  // libgcc/libc/libnosys are gcc/newlib toolchain runtime (prebuilt).
+  // libgba archive from seed/source; crt*.o + libgcc/libc/libnosys are toolchain.
   const archives = {
-    "libgba.a":   packAr(gba.objects),
+    "libgba.a":   gbaRes.archive,
     "crti.o":     new Uint8Array(await readFile(path.join(LIBGBA_DIR, "crti.o"))),
     "crtn.o":     new Uint8Array(await readFile(path.join(LIBGBA_DIR, "crtn.o"))),
     "crtbegin.o": new Uint8Array(await readFile(path.join(LIBGBA_DIR, "crtbegin.o"))),
@@ -476,6 +506,7 @@ async function buildWithLibgba({ sources, headers, cc1Options }) {
     exitCode: 0,
     stage: "done",
     runtime: "libgba",
+    ...(sdkWarnings.length ? { sdkEditIgnored: sdkWarnings } : {}),
   };
 }
 
@@ -760,4 +791,42 @@ async function compileSdkObjects({ key, srcDirs, headers, cppDefines = [], cc1Op
   const result = { ok: true, objects };
   _sdkObjCache.set(cacheKey, result);
   return result;
+}
+
+/** Read every .c/.s source under the given dirs into a {relpath: text} map (for hashing). */
+async function readSdkSources(srcDirs) {
+  const out = {};
+  for (const dir of srcDirs) {
+    async function walk(d, rel = "") {
+      let ents;
+      try { ents = await readdir(d, { withFileTypes: true }); } catch { return; }
+      for (const e of ents) {
+        const full = path.join(d, e.name);
+        const sub = rel ? `${rel}/${e.name}` : e.name;
+        if (e.isDirectory()) await walk(full, sub);
+        else if (/\.(c|s|h|inc)$/i.test(e.name)) out[dir + "/" + sub] = await readFile(full, "utf-8");
+      }
+    }
+    await walk(dir);
+  }
+  return out;
+}
+
+/**
+ * Resolve an SDK archive with the seed/rebuild policy: use the prebuilt seed .a
+ * by default (fast), compile from source when `rebuild` is set, and warn if the
+ * vendored source was edited but not rebuilt. `compile` produces the archive
+ * from source (compileSdkObjects + packAr).
+ */
+async function sdkArchive({ name, srcDirs, seedBase, rebuild, writeSeed, compile }) {
+  const sources = await readSdkSources(srcDirs);
+  return resolveSdkArchive({
+    name,
+    sources,
+    seedPath: seedBase + ".seed.a",
+    seedHashPath: seedBase + ".seed.hash",
+    rebuild,
+    writeSeed,
+    compileFromSource: compile,
+  });
 }
