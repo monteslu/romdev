@@ -201,8 +201,9 @@ export function registerToolchainTools(server, z, sessionKey) {
       lint: z.enum(["advisory", "strict"]).default("advisory").describe("How to treat pre-flight lint warnings (SDCC platforms only). 'advisory' (default): warnings appear in `issues[]` but the build proceeds normally. 'strict': any lint warning fails the build with ok:false + stage:'lint', forcing you to fix patterns BEFORE the compiler runs. Use 'strict' when you want SDCC crash patterns to be hard errors instead of advisory hints."),
       runtime: z.string().optional().describe("GBA only: runtime selector — 'libtonc' (default), 'libgba' (devkitPro SDK), or 'none' (bare gcc + newlib). See src/platforms/gba/MENTAL_MODEL.md."),
       maxmod: z.boolean().optional().describe("GBA only: link against maxmod for music tracks (libmm.a). Default false. Caller must still call mmInit(...) + mmStart(...) + hook mmVBlank in the IRQ table."),
+      rebuildSdk: z.boolean().optional().describe("GBA + Genesis only: COMPILE the bundled SDK (libtonc/libgba/maxmod/SGDK) from its vendored source instead of linking the fast prebuilt cache seed. Default false (uses the seed — a few seconds). Pass true ONLY if you edited the SDK's own source under vendor/ (or want to verify the seed reproduces from source) — it's ~20-40s the first time, then disk-cached. If you edited SDK source WITHOUT this flag, the build still succeeds with the seed but returns an `sdkEditIgnored` warning telling you your edits weren't compiled."),
     },
-    safeTool(async ({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, crt0, crt0Path, codeLoc, dataLoc, options, linkerConfig, outputPath, inline, includeSymbols, lint, runtime, maxmod }) => {
+    safeTool(async ({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, crt0, crt0Path, codeLoc, dataLoc, options, linkerConfig, outputPath, inline, includeSymbols, lint, runtime, maxmod, rebuildSdk }) => {
       // Reject conflicting inline vs path args — fail loud, not silent.
       if (source != null && sourcePath != null) {
         throw new Error("buildSource: pass either `source` OR `sourcePath`, not both.");
@@ -276,6 +277,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         language,
         runtime,
         maxmod,
+        rebuildSdk,
         source: useSource,
         sources: mergedSources,
         includes: Object.keys(mergedIncludes).length ? mergedIncludes : undefined,
@@ -340,6 +342,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         romLayout: describeRomLayout(platform, result.binary),
         ...(result.ramUsage ? { ramUsage: result.ramUsage } : {}),
         ...(result.stage ? { stage: result.stage } : {}),
+        ...(result.sdkEditIgnored ? { sdkEditIgnored: result.sdkEditIgnored } : {}),
         ...(await logField(result.log, inline, logSibling)),
         issues: result.issues ?? [],
         ...(showHint ? { hint: showHint } : {}),
@@ -403,6 +406,7 @@ export function registerToolchainTools(server, z, sessionKey) {
       includePaths: z.record(z.string(), z.string()).optional(),
       runtime: z.string().optional().describe("See buildSource — GBA runtime selector: 'libtonc' (default), 'libgba', or 'none'."),
       maxmod: z.boolean().optional().describe("GBA only: link against maxmod for music tracks (libmm.a). Default false. Caller must still call mmInit(...) + mmStart(...) + hook mmVBlank in the IRQ table."),
+      rebuildSdk: z.boolean().optional().describe("See buildSource — GBA + Genesis: compile the bundled SDK from source instead of the fast prebuilt seed. Only needed if you edited the SDK's own vendored source."),
       crt0: z.string().optional().describe("See buildSource — custom crt0.s contents (SDCC platforms only)."),
       crt0Path: z.string().optional().describe("Path-based crt0 — see buildSource."),
       codeLoc: z.coerce.number().int().optional().describe("See buildSource — _CODE load address (SDCC platforms)."),
@@ -427,7 +431,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         .describe("Per-port input state to hold during the run. Index 0 = port 0."),
       screenshotPath: z.string().optional().describe("If set, write the result screenshot to this path and return {screenshotPath} instead of the inline image. Use this if your client can't display inline images. Default: the screenshot comes back inline (runSource's whole point is to show you the result)."),
     },
-    safeTool(async ({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, runtime, maxmod, crt0, crt0Path, codeLoc, dataLoc, linkerConfig, frames, holdInputs, screenshotPath }) => {
+    safeTool(async ({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, runtime, maxmod, rebuildSdk, crt0, crt0Path, codeLoc, dataLoc, linkerConfig, frames, holdInputs, screenshotPath }) => {
       const { buildForPlatform } = await import("../../toolchains/index.js");
       const resolved = resolveCore(platform);
       if (!resolved) throw new Error(`no core available for platform '${platform}'`);
@@ -494,6 +498,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         language,
         runtime,
         maxmod,
+        rebuildSdk,
         source: useSource2,
         sources: mergedSources2,
         includes: Object.keys(mergedIncludes).length ? mergedIncludes : undefined,
@@ -557,6 +562,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         binaryBytes: build.binary.length,
         romLayout: describeRomLayout(platform, build.binary),
         ...(build.ramUsage ? { ramUsage: build.ramUsage } : {}),
+        ...(build.sdkEditIgnored ? { sdkEditIgnored: build.sdkEditIgnored } : {}),
         framesRun: frames,
         framebuffer: { width: shot.width, height: shot.height },
         // Surface lint/build issues even on successful runs so agents see
