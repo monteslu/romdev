@@ -357,9 +357,10 @@ async function main() {
   const bannerHost = isDefaultLoopback ? "localhost" : host;
   const httpServer = app.listen(port, bindHosts[0], () => {
     log.info(`romdev listening on http://${bannerHost}:${port}/mcp`);
+    log.info("");
     log.info(`optional observer:      http://${bannerHost}:${port}/livestream`);
-    log.info(`  Claude Code:  claude mcp add --transport http romdev http://${bannerHost}:${port}/mcp`);
-    log.info("  Other agents (opencode, Codex, …): https://github.com/monteslu/romdev#connect");
+    log.info("");
+    log.info("connect your coding agent: https://github.com/monteslu/romdev#connect");
   });
   const extraServers = [];
   for (const h of bindHosts.slice(1)) {
