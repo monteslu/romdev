@@ -996,7 +996,8 @@ TEMPLATES.lynx = {
 // Use tte_printf directly with libtonc — that's the Tonc-tutorial
 // pattern and works without the libsysbase header chain.
 const GBA_LIBTONC_RUNTIME = [
-  { src: "lib/libtonc/libtonc.a",    dst: "libtonc.a" },
+  // libtonc itself is compiled from source by the build (its source is vendored
+  // via GBA_LIBTONC_RUNTIME_DIRS), so no prebuilt libtonc.a is copied in.
   { src: "lib/libtonc/gba_crt0.s",   dst: "gba_crt0.s" },
   { src: "lib/libtonc/gba_cart.ld",  dst: "gba_cart.ld" },
   { src: "lib/libtonc/crti.o",       dst: "crti.o" },
@@ -1020,7 +1021,8 @@ const GBA_LIBTONC_RUNTIME_DIRS = [
   { src: "lib/maxmod",             dst: "vendor/maxmod" },
 ];
 const GBA_LIBGBA_RUNTIME = [
-  { src: "lib/libgba/libgba.a",     dst: "libgba.a" },
+  // libgba is compiled from source by the build (source vendored via
+  // GBA_LIBGBA_RUNTIME_DIRS); no prebuilt libgba.a copied in.
   { src: "lib/libgba/gba_crt0.s",   dst: "gba_crt0.s" },
   { src: "lib/libgba/gba_cart.ld",  dst: "gba_cart.ld" },
   { src: "lib/libgba/crti.o",       dst: "crti.o" },
@@ -1117,7 +1119,7 @@ TEMPLATES.gba = {
     main: "templates/maxmod_demo.c",
     runtime: [
       ...GBA_LIBTONC_RUNTIME,
-      { src: "lib/maxmod/libmm.a",                       dst: "libmm.a" },
+      // maxmod compiled from source by the build — no prebuilt libmm.a.
       { src: "lib/maxmod/music/chiptune.xm",             dst: "chiptune.xm" },
       { src: "lib/maxmod/music/chiptune_soundbank.bin",  dst: "soundbank.bin" },
       { src: "lib/maxmod/music/chiptune_soundbank.h",    dst: "soundbank.h" },
