@@ -17,6 +17,7 @@
 
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { readFileSync } from "node:fs";
 import { Server as SocketIOServer } from "socket.io";
 import { observer } from "./bus.js";
 import { log } from "../mcp/log.js";
@@ -33,13 +34,13 @@ const __dirname = path.dirname(__filename);
  */
 export function attachObserver(app, ...httpServers) {
   const servers = httpServers.filter(Boolean);
-  // Serve the static SPA.
-  app.get("/livestream", (req, res) => {
-    res.sendFile(path.join(__dirname, "livestream.html"));
-  });
-  app.get("/livestream/", (req, res) => {
-    res.sendFile(path.join(__dirname, "livestream.html"));
-  });
+  // Serve the static SPA. Read+send the HTML directly rather than res.sendFile
+  // — sendFile's internal `send` throws NotFoundError on the absolute package
+  // path under npm/npx installs (404 even though the file is right there).
+  const html = readFileSync(path.join(__dirname, "livestream.html"), "utf8");
+  const serveHtml = (req, res) => res.type("html").send(html);
+  app.get("/livestream", serveHtml);
+  app.get("/livestream/", serveHtml);
 
   // Socket.io on the primary server, then ATTACHED to every other listener too
   // (io.attach is additive). No auth — loopback only.
