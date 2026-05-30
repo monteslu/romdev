@@ -8,10 +8,32 @@ import {
   RETRO_PIXEL_FORMAT_XRGB8888,
 } from "../host/retroConstants.js";
 import { log } from "../mcp/log.js";
+import path from "node:path";
 
 // One-pixel solid-black RGBA buffer; we stretch it across the letterbox
 // bars each frame so they don't smear with leftover pixels.
 const BLACK_PIXEL = Buffer.from([0, 0, 0, 0xFF]);
+
+/**
+ * Choose a default window title from the loaded host. Prefers the loaded
+ * ROM/project basename (e.g. "asteroids.sfc" → "asteroids"); for in-memory
+ * builds (runSource) the path is a synthetic "<memory.sfc>" with no project
+ * name, so fall back to the platform, then the generic label.
+ * @param {import("../host/index.js").LibretroHost} host
+ * @returns {string}
+ */
+export function deriveTitle(host) {
+  const mediaPath = host?.status?.mediaPath ?? "";
+  const platform = host?.status?.platform ?? null;
+  // Synthetic in-memory paths look like "<memory.sfc>" or "/rom.sfc" — no
+  // real project name. Treat those as nameless and fall back.
+  const real = mediaPath && !/^<memory|^\/rom\b|^\/rom\./.test(mediaPath);
+  if (real) {
+    const base = path.basename(mediaPath).replace(/\.[^.]+$/, "");
+    if (base) return platform ? `${base} (${platform})` : base;
+  }
+  return platform ? `romdev — ${platform}` : "romdev playtest";
+}
 
 let _sdlModule = null;
 async function getSdl() {
@@ -148,7 +170,13 @@ export async function playtest(args) {
   // rebuild. Falls back to the open-time host if the accessor is absent.
   const getLiveHost = typeof args.getLiveHost === "function" ? args.getLiveHost : () => openHost;
   const scale = args.scale ?? 3;
-  const title = args.title ?? "romdev playtest";
+  // Default the window title to the loaded ROM/project name so the human can
+  // tell which game they're looking at (instead of a generic "romdev
+  // playtest"). buildProject loads with a virtualName of the project dir, and
+  // file loads carry their own path — derive the basename from either. Falls
+  // back to the platform name, then the generic label. An explicit `title`
+  // arg always wins.
+  const title = args.title ?? deriveTitle(openHost);
   const aspectMode = args.aspect ?? "fb";
 
   const sdl = await getSdl();

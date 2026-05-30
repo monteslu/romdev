@@ -6,8 +6,23 @@ import { buildForPlatform } from "../../toolchains/index.js";
 import { resolveLinkerConfig } from "../../toolchains/cc65/preset-resolver.js";
 import { resolveCore } from "../../cores/registry.js";
 import { resetHost, getDisclosure } from "../state.js";
+import { PLATFORM_VIRTUAL_EXT } from "../../host/LibretroHost.js";
 import { imageContent, jsonContent, safeTool, textContent } from "../util.js";
 import { isPlaytestRunning } from "./playtest.js";
+import { log as serverLog } from "../log.js";
+
+// Record a build outcome into the /log ring buffer so a failed build's stage +
+// error tail are diagnosable later (the request was already traced; this adds
+// the RESULT). On failure we keep a chunk of the build log; on success just the
+// shape. Always recorded; only printed to stdout in verbose mode.
+function logBuildResult(verb, platform, result) {
+  if (result?.ok) {
+    serverLog.debug(`[build] ${verb} ${platform} OK ${result.binary ? result.binary.length + "B" : ""}`.trim());
+  } else {
+    const errTail = (result?.log || result?.err || "").slice(-1500);
+    serverLog.debug(`[build] ${verb} ${platform} FAILED stage=${result?.stage ?? "?"}${errTail ? "\n" + errTail : ""}`);
+  }
+}
 
 // One-shot "open playtest" hint state — per MCP session, set after the
 // hint has been delivered once so we don't keep nagging legitimate
@@ -19,6 +34,22 @@ import { isPlaytestRunning } from "./playtest.js";
 // the hint is meant to be a gentle one-time nudge, not durable state.
 /** @type {Set<string>} */
 const playtestHintGiven = new Set();
+
+/**
+ * Make a projectName safe to use as a virtual ROM filename (drives the
+ * playtest window title). Strip path separators / control chars, collapse
+ * whitespace, cap length. Never returns "" — falls back to "game".
+ * @param {string} name
+ * @returns {string}
+ */
+function sanitizeProjectName(name) {
+  const clean = String(name)
+    .replace(/[/\\<>:"|?*\x00-\x1f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 48);
+  return clean || "game";
+}
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -288,6 +319,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         codeLoc,
         dataLoc,
       });
+      logBuildResult("buildSource", platform, result);
       // lint:"strict" — if any lint warning fired, fail the build with
       // stage:"lint" so the agent must fix patterns before iterating.
       // We mutate the result rather than re-running because the lint
@@ -430,8 +462,9 @@ export function registerToolchainTools(server, z, sessionKey) {
         .optional()
         .describe("Per-port input state to hold during the run. Index 0 = port 0."),
       screenshotPath: z.string().optional().describe("If set, write the result screenshot to this path and return {screenshotPath} instead of the inline image. Use this if your client can't display inline images. Default: the screenshot comes back inline (runSource's whole point is to show you the result)."),
+      projectName: z.string().optional().describe("Optional name for this build (e.g. your game's name). Used as the playtest window title so the human can tell which game they're looking at; otherwise the window falls back to the platform name. Has no effect on the ROM."),
     },
-    safeTool(async ({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, runtime, maxmod, rebuildSdk, crt0, crt0Path, codeLoc, dataLoc, linkerConfig, frames, holdInputs, screenshotPath }) => {
+    safeTool(async ({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, runtime, maxmod, rebuildSdk, crt0, crt0Path, codeLoc, dataLoc, linkerConfig, frames, holdInputs, screenshotPath, projectName }) => {
       const { buildForPlatform } = await import("../../toolchains/index.js");
       const resolved = resolveCore(platform);
       if (!resolved) throw new Error(`no core available for platform '${platform}'`);
@@ -508,6 +541,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         codeLoc,
         dataLoc,
       });
+      logBuildResult("runSource", platform, build);
       if (!build.ok || !build.binary) {
         // runSource builds in-memory (no ROM path), so a large failure log
         // has nowhere to land — gate it to a tail + size rather than dumping
@@ -524,7 +558,13 @@ export function registerToolchainTools(server, z, sessionKey) {
 
       const host = resetHost(sessionKey);
       await host.loadCore(resolved.jsPath, resolved.wasmPath);
-      await host.loadMedia({ platform, bytes: build.binary });
+      // Pass projectName as a virtualName so the playtest window titles itself
+      // with the game name (the SDL window reads host.status.mediaPath). Keep
+      // a platform-correct extension so shared cores still resolve the system.
+      const virtualName = projectName
+        ? sanitizeProjectName(projectName) + (PLATFORM_VIRTUAL_EXT[platform] ?? "")
+        : undefined;
+      await host.loadMedia({ platform, bytes: build.binary, virtualName });
       if (holdInputs && holdInputs.length > 0) {
         host.setInput({ ports: holdInputs });
       }

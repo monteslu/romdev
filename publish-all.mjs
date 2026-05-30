@@ -70,6 +70,17 @@ function publishOne({ dir, pkg }) {
 }
 
 // --- preflight ---------------------------------------------------------------
+// Guard against shipping a package whose gitignored wasm was never built/staged
+// (a fresh clone or a wiped wasm/ dir would publish empty + break at runtime).
+// Runs even on --dry-run so a rehearsal catches a missing artifact too.
+console.log("== verifying wasm artifacts ==");
+try {
+  execFileSync("node", [path.join(ROOT, "scripts", "verify-wasm.mjs"), "--all", PKGS], { stdio: "inherit" });
+} catch {
+  console.error("\nAborting publish — build/stage the wasm first (scripts/build-*.sh).");
+  process.exit(1);
+}
+
 if (!DRY) {
   let who = "";
   try { who = execFileSync("npm", ["whoami"], { encoding: "utf8" }).trim(); }

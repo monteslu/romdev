@@ -114,11 +114,11 @@ async function main() {
   // names and a tiny summary of arguments (size, not contents) so big
   // payloads don't bloat the log file.
   app.use("/mcp", (req, res, next) => {
-    // Per-call stdout trace — DEBUG only (noise in prod). The structured event
-    // stream on /livestream (observer bus) is the canonical way to monitor a
-    // running server; this is just a dev convenience. Skip building the summary
-    // string entirely when not verbose.
-    if (log.verbose && req.method === "POST" && req.body) {
+    // Per-call trace. ALWAYS recorded into the /log ring buffer (the summary is
+    // a cheap, bounded string — sizes, not payloads), and PRINTED to stdout only
+    // in verbose mode (log.debug handles that split). This keeps the console
+    // quiet in prod while /log stays rich enough to diagnose what an agent did.
+    if (req.method === "POST" && req.body) {
       const { method, id, params } = req.body;
       if (method === "tools/call") {
         const argKeys = params?.arguments ? Object.keys(params.arguments) : [];

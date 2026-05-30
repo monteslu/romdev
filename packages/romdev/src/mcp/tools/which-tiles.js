@@ -116,24 +116,42 @@ export function registerWhichTilesTools(server, z, sessionKey) {
           sprite.add(tile);
         }
       } else if (p === "snes") {
-        // Sprites: always available from OAM.
+        // Sprites: always available from OAM. Use live OBSEL so the OBJ size
+        // (and thus renderable classification) is exact.
         const oam = host.readMemory("snes_oam", 0, 544);
-        const { decodeOAM, snesTilemapUsage } = await import("../../platforms/snes/ppu.js");
-        const sprites = decodeOAM(oam);
+        const fillram = host.readMemory("snes_fillram", 0, 0x8000);
+        const { decodeOAM, decodePpuRegs, ppuRegsPopulated, snesTilemapUsage } =
+          await import("../../platforms/snes/ppu.js");
+        const ppu = ppuRegsPopulated(fillram) ? decodePpuRegs(fillram) : null;
+        const sprites = decodeOAM(oam, ppu ? {
+          smallSize: ppu.objSize.small, largeSize: ppu.objSize.large,
+          objNameBaseByte: ppu.objNameBaseByte, objGapByte: ppu.objGapByte,
+        } : {});
         for (const s of sprites) {
-          if (!s.visible) continue;
+          if (!s.renderable) continue;
           sprite.add(s.tile);
         }
-        // BG: only if the caller supplies a tilemap base — snes9x doesn't
-        // expose BGxSC, so we can't auto-locate the map.
+        // BG: use the caller's tilemap base if given, else auto-locate each
+        // enabled layer's BGxSC base from the live PPU registers.
+        const vram = host.readMemory("video_ram", 0, 0x10000);
         if (snesTilemapBaseByte != null) {
-          const vram = host.readMemory("video_ram", 0, 0x10000);
           const usage = snesTilemapUsage(vram, {
             tilemapBaseByte: snesTilemapBaseByte,
             mapWidth: snesMapWidth,
             mapHeight: snesMapHeight,
           });
           for (const t of usage.used) bg.add(t);
+        } else if (ppu) {
+          for (let i = 0; i < 4; i++) {
+            if (!ppu.mainScreen[`bg${i + 1}`] && !ppu.subScreen[`bg${i + 1}`]) continue;
+            const layer = ppu.bg[i];
+            const usage = snesTilemapUsage(vram, {
+              tilemapBaseByte: layer.scBaseByte,
+              mapWidth: layer.mapWidth,
+              mapHeight: layer.mapHeight,
+            });
+            for (const t of usage.used) bg.add(t);
+          }
         }
       } else if (p === "genesis") {
         const { genesisTileUsage } = await import("../../platforms/genesis/vdp.js");

@@ -357,9 +357,51 @@ export function registerPlatformTools(server, z, sessionKey) {
 
       if (p === "snes") {
         const oam = host.readMemory("snes_oam", 0, 544);
-        const { decodeOAM } = await import("../../platforms/snes/ppu.js");
-        const sprites = decodeOAM(oam);
-        return jsonContent({ platform: p, sprites });
+        const fillram = host.readMemory("snes_fillram", 0, 0x8000);
+        const cgram = host.readMemory("snes_cgram", 0, 512);
+        const { decodeOAM, decodePpuRegs, ppuRegsPopulated, decodeCGRAM, checkObjPalettes } =
+          await import("../../platforms/snes/ppu.js");
+        // snes9x mirrors $2100-$213f into FillRAM (by full reg address), so we
+        // can read OBSEL and resolve real OBJ size + tile-base addressing.
+        const regsLive = ppuRegsPopulated(fillram);
+        const ppu = regsLive ? decodePpuRegs(fillram) : null;
+        const sprites = decodeOAM(oam, ppu ? {
+          smallSize: ppu.objSize.small,
+          largeSize: ppu.objSize.large,
+          objNameBaseByte: ppu.objNameBaseByte,
+          objGapByte: ppu.objGapByte,
+        } : {});
+        const colors = decodeCGRAM(cgram);
+        const { uninitializedPalettes, suspiciousPalettes, paletteReport, warnings } =
+          checkObjPalettes(sprites, colors);
+        const renderableCount = sprites.filter((s) => s.renderable).length;
+        const summary = [
+          `${renderableCount} of 128 OBJ slots are renderable on-screen` +
+            ` (the other ${128 - renderableCount} are parked off-screen/hidden — not drawn).`,
+          regsLive
+            ? `OBSEL=$${ppu.obsel.toString(16)}: OBJ size pair ${JSON.stringify(ppu.objSize.small)}/` +
+              `${JSON.stringify(ppu.objSize.large)}, OBJ tile base VRAM 0x${ppu.objNameBaseByte.toString(16)}, ` +
+              `OBJ layer ${ppu.mainScreen.obj ? "ENABLED" : "DISABLED"} on main screen (TM=$${ppu.tm.toString(16)}). ` +
+              `Each sprite's tileVramAddr + cgramPaletteRange are resolved from this.`
+            : `PPU registers not yet populated (step more frames before trusting OBJ size/base — ` +
+              `sizes assume the {8×8,16×16} default and tileVramAddr is null).`,
+        ];
+        if (warnings.length) summary.push(...warnings);
+        return jsonContent({
+          platform: p,
+          sprites,
+          renderableCount,
+          ppuRegsLive: regsLive,
+          ppu: ppu && {
+            obsel: ppu.obsel, objSize: ppu.objSize, objNameBaseByte: ppu.objNameBaseByte,
+            mainScreenObjEnabled: ppu.mainScreen.obj, tm: ppu.tm, ts: ppu.ts,
+          },
+          uninitializedObjPalettes: uninitializedPalettes,
+          suspiciousObjPalettes: suspiciousPalettes,
+          objPaletteReport: paletteReport,
+          warnings,
+          summary,
+        });
       }
 
       if (p === "genesis") {

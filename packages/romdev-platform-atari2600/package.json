@@ -28,6 +28,6 @@
   },
   "author": "Luis Montes",
   "scripts": {
-    "prepublishOnly": "node ../../scripts/check-wasm.mjs"
+    "prepublishOnly": "node ../../scripts/verify-wasm.mjs"
   }
 }

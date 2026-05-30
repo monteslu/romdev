@@ -86,6 +86,43 @@ small OR large via its high-table bit.
 The PPU draws **up to 32 sprites per scanline**, **up to 34 tiles
 per scanline** total. Beyond that, drops happen low-OAM-index-first.
 
+### The OBJ stable-path recipe (do this; it's the one that works)
+
+Most "my SNES sprites are garbage/flashing/invisible" pain comes from
+deviating from this. Follow it exactly until the game works, *then*
+optimize:
+
+1. **Use fixed OAM slots.** Decide slot N for each sprite up front. The
+   PVSnesLib OAM table is byte-addressed: **slot N lives at byte offset
+   `N << 2`** (i.e. `N*4`). Don't shuffle slots between frames — a moving
+   sprite keeps its slot and just changes X/Y.
+2. **Upload EVERY OBJ palette line you reference — before you show the
+   sprite.** OBJ palettes are CGRAM lines 8..15 (absolute index
+   `128 + line*16`, 16 colors each). If a sprite's attr names palette
+   line 2 but you only uploaded line 0, line 2 is whatever was in CGRAM
+   (usually zero) → garbage/transparent. Either upload all the lines you
+   use, or point every sprite at line 0 until art is in. (This is the #1
+   bug — `inspectSprites` now WARNS when a renderable sprite references an
+   all-zero OBJ palette line.)
+3. **Know your OBJ VRAM rules.** OBSEL picks the OBJ tile base (a page in
+   VRAM, in 0x2000-word steps) and the small/large size pair. A 16×16 OBJ
+   is a 2×2 block of 8×8 cells in the OBJ char table, laid out **+1 across,
+   +0x10 down** (the OBJ name table is 16 tiles wide). Tile index in OAM is
+   9-bit (attr bit 0 is the high bit / second-page select).
+4. **ROM-backed tiles beat runtime-generated tiles** for getting started.
+   DMA a fixed tile sheet to the OBJ VRAM page once at init; don't generate
+   OBJ tiles on the fly until the static path renders correctly. The "SNES
+   Invaders" stable path = static ship-angle frames + explicit asteroid
+   tiles + all palettes uploaded + fixed slots + a low sprite budget.
+5. **Verify with the tools, don't guess.** After a build that should show
+   sprites, call `getRenderingContext({platform:'snes'})` (it now decodes
+   OBSEL: OBJ size, tile base, and whether the OBJ layer is enabled on the
+   main screen via TM) and `inspectSprites({platform:'snes'})` (per-sprite
+   `renderable` vs hidden, resolved `tileVramAddr`, `cgramPaletteRange`, and
+   uninitialized-palette warnings). If `renderableCount` is 0 but you placed
+   sprites, the answer is right there: OBJ layer off in TM, all sprites
+   parked at Y≥0xE0, or off the X edges.
+
 ## Palette (CGRAM)
 
 256 colors × 2 bytes = 512 bytes, BGR-555:

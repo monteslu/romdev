@@ -169,60 +169,99 @@ function nesContext(host, area) {
 }
 
 /**
- * SNES rendering-context decoder. Reads INIDISP/BGMODE/BG?SC/BG?NBA/OBSEL
- * from snes9x's CGRAM-adjacent register block to derive active BG tile
- * data + tilemap addresses per layer and OBJ tile base. NOT YET WIRED — the
- * snes9x patch exposes CGRAM/OAM/ARAM/FillRAM but not the PPU register
- * shadows. Same call shape will work once a snes_ppu_regs region is added.
+ * SNES rendering-context decoder. Reads INIDISP/BGMODE/BGxSC/BGxNBA/OBSEL/
+ * TM/TS/color-math from the snes_fillram register shadow (snes9x mirrors the
+ * write-only $2100-$213f register file into Memory.FillRAM, indexed by full
+ * register address) and derives the active BG tilemap + char bases per layer
+ * and the OBJ tile base — the same answer NES/GB/Genesis give.
  */
-function snesContext(host, area) {
-  // snes9x exposes OAM, CGRAM, ARAM, FillRAM, and VRAM — but NOT the PPU
-  // register file ($2100-$213F), which is write-only and not mirrored in
-  // any readable struct. So we can't auto-report the BG mode / tilemap base
-  // / character base the way NES/GB/Genesis do. Instead of throwing (a dead
-  // tool), we report what IS observable and tell the agent exactly which
-  // params inspectBackgroundMap / inspectPatternTiles need.
+async function snesContext(host, area) {
+  const { decodePpuRegs, ppuRegsPopulated } = await import("../../platforms/snes/ppu.js");
   const cgram = host.readMemory("snes_cgram", 0, 512);
   const oam = host.readMemory("snes_oam", 0, 544);
   const vram = host.readMemory("video_ram", 0, 0x10000);
+  const fillram = host.readMemory("snes_fillram", 0, 0x8000);
+
+  const regsLive = ppuRegsPopulated(fillram);
+  const ppu = regsLive ? decodePpuRegs(fillram) : null;
 
   // How much CGRAM / VRAM is non-zero — a cheap "has the game set things up
   // yet?" signal so the agent knows whether to step more frames.
   const cgramNonZero = cgram.some((b) => b !== 0);
   let vramNonZero = 0;
   for (let i = 0; i < vram.length; i++) if (vram[i] !== 0) vramNonZero++;
-  // Count visibly-onscreen sprites.
+  // Count on-screen sprites (Y<0xE0 is not parked off-screen-top).
   let onscreenSprites = 0;
   for (let i = 0; i < 128; i++) {
     const y = oam[i * 4 + 1];
     if (y < 0xE0) onscreenSprites++;
   }
 
+  // Per-BG bytes the agent feeds straight into inspectBackgroundMap. bpp
+  // depends on BG mode/layer; default Mode-1 mapping (BG1/2 = 4bpp, BG3 =
+  // 2bpp) when we know the mode.
+  const bppForBg = (mode, layer) => {
+    if (mode === 0) return 2;
+    if (mode === 1) return layer === 2 ? 2 : 4; // BG3 (layer index 2) is 2bpp
+    if (mode === 3) return layer === 0 ? 8 : 4;
+    if (mode === 7) return 8;
+    return 4;
+  };
+  const layers = ppu ? ppu.bg.map((b, i) => ({
+    bg: i + 1,
+    enabledMain: ppu.mainScreen[`bg${i + 1}`],
+    enabledSub: ppu.subScreen[`bg${i + 1}`],
+    tilemapBaseByte: b.scBaseByte,
+    tileBaseByte: b.charBaseByte,
+    mapWidth: b.mapWidth,
+    mapHeight: b.mapHeight,
+    bpp: bppForBg(ppu.bgMode, i),
+  })) : null;
+
   const summary = [];
   if (area === "all" || area === "bg") {
-    summary.push(
-      "SNES BG state: snes9x does NOT expose the PPU registers ($2100-$213F, write-only), " +
-      "so the BG mode, tilemap base (BGxSC) and character base (BGxNBA) can't be read back. " +
-      "To inspect a BG, call inspectBackgroundMap({platform:'snes', tilemapBaseByte, tileBaseByte, bpp, mapWidth, mapHeight}) " +
-      "with the addresses your game/SDK uses (PVSnesLib Mode 1 BG1 is 4bpp). " +
-      "inspectPatternTiles({platform:'snes', tileBaseByte, bpp}) renders the VRAM tile sheet."
-    );
+    if (ppu) {
+      const active = layers.filter((l) => l.enabledMain || l.enabledSub)
+        .map((l) => `BG${l.bg}@map0x${l.tilemapBaseByte.toString(16)}/tiles0x${l.tileBaseByte.toString(16)}(${l.bpp}bpp)`)
+        .join(", ") || "none enabled";
+      summary.push(
+        `SNES BG mode ${ppu.bgMode}. Active layers: ${active}. ` +
+        `Brightness ${ppu.brightness}/15${ppu.forcedBlank ? " (FORCED BLANK — screen off!)" : ""}. ` +
+        `Feed a layer's tilemapBaseByte/tileBaseByte/bpp/mapWidth/mapHeight straight into ` +
+        `inspectBackgroundMap({platform:'snes', ...}).`
+      );
+    } else {
+      summary.push(
+        "SNES PPU registers not yet populated (FillRAM shadow is empty/uniform) — step more " +
+        "frames so the game writes $2100-$213f, then the BG mode / tilemap base / char base will decode."
+      );
+    }
     summary.push(
       `VRAM has ${vramNonZero} non-zero bytes / 65536 — ${vramNonZero === 0 ? "EMPTY (step more frames; the game hasn't uploaded tiles yet)" : "populated"}. ` +
       `CGRAM (palette) is ${cgramNonZero ? "set" : "all zero (no palette uploaded yet — step more frames)"}.`
     );
   }
   if (area === "all" || area === "sprites") {
-    summary.push(
-      `OAM: ${onscreenSprites} of 128 sprites are on-screen (Y<0xE0). ` +
-      `Call inspectSprites({platform:'snes'}) for the full decoded list (OBJ sizes assume the common 8×8/16×16 pair — OBSEL isn't readable).`
-    );
+    if (ppu) {
+      summary.push(
+        `OAM: ${onscreenSprites} of 128 slots on-screen (Y<0xE0). OBSEL=$${ppu.obsel.toString(16)} → ` +
+        `OBJ sizes ${JSON.stringify(ppu.objSize.small)}/${JSON.stringify(ppu.objSize.large)}, ` +
+        `OBJ tile base 0x${ppu.objNameBaseByte.toString(16)}, OBJ layer ` +
+        `${ppu.mainScreen.obj ? "ON" : "OFF"} (TM=$${ppu.tm.toString(16)}). ` +
+        `inspectSprites({platform:'snes'}) resolves per-sprite tileVramAddr + palette range + uninitialized-palette warnings.`
+      );
+    } else {
+      summary.push(
+        `OAM: ${onscreenSprites} of 128 slots on-screen (Y<0xE0). OBSEL not populated yet — step more frames. ` +
+        `inspectSprites({platform:'snes'}) gives the full decoded list.`
+      );
+    }
   }
   if (area === "all") {
     summary.push(
       "Readable SNES regions: snes_cgram (512B palette), snes_oam (544B), video_ram (64KB VRAM), " +
-      "snes_aram (64KB SPC700), snes_fillram (32KB DMA/PPU shadow — but the PPU regs in it are not " +
-      "reliably populated by snes9x). For CPU/audio state use getCPUState / getAudioState."
+      "snes_aram (64KB SPC700), snes_fillram (32KB PPU/DMA register shadow — $2100-$213f decoded above). " +
+      "For CPU/audio state use getCPUState / getAudioState."
     );
   }
 
@@ -230,16 +269,27 @@ function snesContext(host, area) {
     platform: "snes",
     area,
     snes: {
-      ppuRegistersAvailable: false,
-      ppuRegistersNote: "snes9x does not expose $2100-$213F in a readable region; BG mode / tilemap base / char base must be supplied by the caller.",
+      ppuRegistersAvailable: regsLive,
+      ppuRegistersNote: regsLive
+        ? "Decoded from snes_fillram ($2100-$213f shadow). bgMode/layers/obj below are live."
+        : "snes_fillram register shadow is empty/uniform — step more frames so the game writes the PPU registers.",
+      bgMode: ppu ? ppu.bgMode : null,
+      brightness: ppu ? ppu.brightness : null,
+      forcedBlank: ppu ? ppu.forcedBlank : null,
+      layers,
+      obj: ppu ? {
+        obsel: ppu.obsel,
+        size: ppu.objSize,
+        tileBaseByte: ppu.objNameBaseByte,
+        secondPageGapByte: ppu.objGapByte,
+        enabledMain: ppu.mainScreen.obj,
+      } : null,
+      colorMath: ppu ? ppu.colorMath : null,
       cgramPopulated: cgramNonZero,
       vramNonZeroBytes: vramNonZero,
       onscreenSprites,
       readableRegions: ["snes_cgram", "snes_oam", "video_ram", "snes_aram", "snes_fillram"],
-      hint: {
-        inspectBackgroundMap: "pass tilemapBaseByte, tileBaseByte, bpp (4 for Mode 1 BG1/BG2, 2 for BG3), mapWidth, mapHeight",
-        inspectPatternTiles: "pass tileBaseByte, bpp, paletteBase",
-      },
+      rawRegs: ppu ? ppu.raw : null,
     },
     summary,
   };

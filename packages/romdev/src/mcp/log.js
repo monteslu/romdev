@@ -36,9 +36,12 @@ const VERBOSE = computeVerbose();
 // to stay flat in memory — two caps guarantee that:
 //   - RING_CAP   : max number of records kept (oldest evicted on overflow)
 //   - MSG_CAP    : max chars per record (a giant stack/object can't bloat one)
-// Worst-case footprint ≈ RING_CAP * MSG_CAP ≈ 500 * 2 KB ≈ 1 MB, fixed.
-const RING_CAP = 500;
-const MSG_CAP = 2000;
+// Sized so a whole multi-turn agent session — including build error logs, which
+// can be several KB each — fits and stays diagnosable. Worst-case footprint ≈
+// RING_CAP * MSG_CAP ≈ 5000 * 8 KB ≈ 40 MB, fixed. Override with
+// ROMDEV_LOG_RING / ROMDEV_LOG_MSG_CAP if you need more/less.
+const RING_CAP = Number(process.env.ROMDEV_LOG_RING) || 5000;
+const MSG_CAP = Number(process.env.ROMDEV_LOG_MSG_CAP) || 8000;
 /** @type {{t:number, level:string, msg:string}[]} */
 const ring = [];
 
