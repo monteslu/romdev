@@ -81,10 +81,13 @@ test("playtestStop is a clean no-op when no window is open", async () => {
   assert.match(text, /no playtest window open/i);
 });
 
-test("playtest with no display returns an actionable no-display error (not a silent no-op)", async () => {
-  // Simulate the real-world trigger: a server launched from a shell/tmux
-  // session that has no desktop display env (started before desktop login,
-  // or a cron/CI run). playtest() must NOT silently appear to succeed.
+test("playtest when no window can open returns an actionable error (not a silent no-op)", async () => {
+  // No display env, and (in this unit harness) no ROM loaded. We no longer
+  // preflight on DISPLAY/WAYLAND_DISPLAY (that was Linux-only and falsely
+  // blocked macOS/Windows); playtest just attempts the SDL window and reports
+  // the real failure. The contract under test: playtest must NEVER silently
+  // appear to succeed when it can't open — it returns an actionable error,
+  // whether that's "no ROM loaded" (no media here) or an sdl-error (display).
   const savedDisplay = process.env.DISPLAY;
   const savedWayland = process.env.WAYLAND_DISPLAY;
   delete process.env.DISPLAY;
@@ -92,11 +95,15 @@ test("playtest with no display returns an actionable no-display error (not a sil
   try {
     const client = await startClient();
     const res = await client.callTool({ name: "playtest", arguments: {} });
-    const parsed = parseToolJson(res);
-    assert.equal(parsed.opened, false, "must report not-opened, not a fake success");
-    assert.equal(parsed.reason, "no-display");
-    assert.match(parsed.message, /DISPLAY|WAYLAND_DISPLAY/);
-    assert.match(parsed.message, /headless tool|still work/i, "should reassure that other tools still work");
+    const text = res.content.find((c) => c.type === "text")?.text ?? "";
+    // Either a structured tool result (opened:false) or a thrown error string —
+    // both are acceptable "did not silently open a window" outcomes. What must
+    // NOT happen is opened:true / a fake success.
+    let opened = false;
+    try { opened = JSON.parse(text).opened === true; } catch { /* error string */ }
+    assert.equal(opened, false, "playtest must not report a fake success when no window opened");
+    assert.match(text, /no rom loaded|sdl|display|headless|still work/i,
+      "must give an actionable reason (no ROM / SDL / display), not a silent no-op");
   } finally {
     if (savedDisplay !== undefined) process.env.DISPLAY = savedDisplay;
     if (savedWayland !== undefined) process.env.WAYLAND_DISPLAY = savedWayland;

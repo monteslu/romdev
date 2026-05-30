@@ -75,31 +75,12 @@ export function registerPlaytestTools(server, z, sessionKey) {
       aspect: z.enum(["fb", "tv", "core"]).default("fb").describe("Initial window shape. 'fb' (default) opens at raw framebuffer * scale — square pixels, exact dev-time geometry. 'tv' = 'how a player saw the hardware': 4:3 for consoles (NES/SNES/Genesis/SMS/Atari/C64); native LCD aspect for handhelds (GB/GBC 10:9 = 160×144 NOT stretched; GG ~6:5; Lynx 4:3; GBA 3:2). 'core' honors the core's reported display_aspect_ratio (the framebuffer geometric ratio, often non-4:3 — Genesis H40 reports ~10:7). The user can resize; letterbox preserves the chosen aspect. NOTE: 'tv' looks up the platform from the running host, so always pass the correct `platform` arg to loadMedia (`platform:\"gbc\"` not `\"gb\"` for a CGB game) or 'tv' falls back to the framebuffer aspect."),
     },
     safeTool(async ({ scale, title, aspect }) => {
-      // Preflight #1 (before requiring a host): a native SDL window needs a
-      // desktop display. If the server was launched from a shell with no
-      // DISPLAY / WAYLAND_DISPLAY (a tmux/ssh session started before the
-      // desktop login, or a cron/CI run), createWindow has nowhere to draw —
-      // it fails or silently shows nothing. Surface an actionable message
-      // instead of a mystery (and instead of a misleading "no ROM loaded" if
-      // getHost ran first). The display is what's missing, not the ROM.
-      if (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
-        return jsonContent({
-          opened: false,
-          reason: "no-display",
-          message:
-            "Can't open a playtest window: the server process has no DISPLAY or " +
-            "WAYLAND_DISPLAY set, so there's no desktop to draw on. This usually " +
-            "means the server was started from a shell/tmux/ssh session that " +
-            "predates the desktop login. Restart the server with the display env, " +
-            "e.g.: DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 " +
-            "XAUTHORITY=$XDG_RUNTIME_DIR/.mutter-Xwaylandauth.* node src/mcp/server.js " +
-            "(discover live values via: tr '\\0' '\\n' < /proc/<desktop-pid>/environ | " +
-            "grep -E '^(DISPLAY|WAYLAND_DISPLAY|XAUTHORITY)='). Every headless tool " +
-            "(screenshot, runSource, readMemory, ...) still works — only the live " +
-            "window needs a display.",
-        });
-      }
-
+      // No preflight display checks. We just attempt to open the SDL window and
+      // report whatever SDL says — env-var guessing (DISPLAY/WAYLAND_DISPLAY)
+      // is Linux-only and wrong on macOS/Windows, where those vars are never
+      // set even with a full GUI session. SDL's createWindow already knows
+      // whether it can draw on any platform; the try/catch below surfaces the
+      // real error.
       const host = getHost(sessionKey);
       const loadedMediaPath = host.status?.mediaPath ?? null;
       if (reconcileSession()) {
@@ -130,17 +111,24 @@ export function registerPlaytestTools(server, z, sessionKey) {
           aspect,
         });
       } catch (e) {
-        // createWindow / SDL init threw despite a display being set — surface
-        // the real reason rather than a generic tool error.
+        // SDL couldn't open a window — report what it said. We don't guess at
+        // the cause (no display / no GUI session / driver issue differ per OS
+        // and SDL already knows); we just relay the error plus the one fix that
+        // works everywhere, and remind the agent the headless tools are fine.
         return jsonContent({
           opened: false,
           reason: "sdl-error",
+          platform: process.platform,
           message:
-            "Failed to open the SDL playtest window: " + (e?.message ?? String(e)) +
-            ". A display IS set (DISPLAY=" + (process.env.DISPLAY ?? "") +
-            " WAYLAND_DISPLAY=" + (process.env.WAYLAND_DISPLAY ?? "") +
-            "), so this is an SDL/driver issue, not a missing-display one. The " +
-            "ROM stays loaded; screenshot / runSource / other tools still work.",
+            "Couldn't open the SDL playtest window: " + (e?.message ?? String(e)) +
+            ". This typically happens when the server runs as an MCP subprocess " +
+            "(spawned by your agent host) with no access to the logged-in desktop " +
+            "session. The reliable fix on any OS: run the server yourself in a " +
+            "terminal inside your desktop session (`npx romdev-mcp`), then connect " +
+            "your agent to it. Every headless tool (screenshot / runSource / " +
+            "readMemory / stepFrames / pressButton) still works against the live " +
+            "ROM — only the interactive window needs a desktop. You can also open " +
+            "the built ROM in any standalone emulator.",
           loadedMediaPath,
         });
       }

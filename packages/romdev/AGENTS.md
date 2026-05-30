@@ -8,6 +8,17 @@ Drives the full homebrew ROM dev loop for retro game platforms (NES, Game Boy, S
 
 You drive the work. The human is a director — they may want a game, a ROM disassembly, a tool-assisted reverse-engineering session, or anything else this server can do.
 
+## The compilers and emulators are bundled — don't install or download those
+
+Every **compiler, assembler, linker, and emulator core** you need to build and run ROMs is **already bundled** as WebAssembly inside romdev and runs through these MCP tools. So do **not**:
+- `apt`/`brew`/`npm install` a compiler (cc65, sdcc, gcc, tcc, wla, rgbds, vasm, m68k-gcc, …) — they're built in.
+- fetch a devkit/SDK (devkitPro, SGDK, PVSnesLib, libtonc/libgba, cc65 libs, …) — their source is bundled and the toolchains link against it for you.
+- look for a system emulator — the libretro cores (fceumm, snes9x, gpgx, gambatte, mGBA, …) run in-process.
+
+**Build/run/inspect happens through the romdev tools** (`buildSource`, `runSource`, `buildProject`, `loadMedia`, `screenshot`, `inspect*`, …) — not by shelling out to a system `gcc` or a downloaded toolchain. If you catch yourself reaching for a compiler/emulator install, stop and call the equivalent romdev tool. `listPlatforms` / `listToolchains` show what's available.
+
+This is scoped to the build/run toolchain — romdev is **not** an everything box. A user may well want **external art and music tools** (Aseprite/LibreSprite for sprites, a tracker like FamiStudio/Deflemask for music, ImageMagick for conversions). Those are legitimately the user's to install, and several romdev asset-loader tools (`loadAsepriteSheet`, `loadSpriteSheet`, `loadGifAnimation`, …) are designed to consume their output. Don't refuse or reinvent those — if the user wants to paint or compose in a real editor, that's expected; romdev imports the result.
+
 ## If a human is watching, open playtest early
 
 If a human is sitting next to you during this session — and that's most sessions in practice — open the playtest window as soon as your first build succeeds. `playtest()` opens a native SDL window that runs your ROM live and accepts USB gamepads (hot-plugged controllers are picked up automatically). It returns **immediately** — the render loop runs in the background, so you keep calling other tools while the human plays. Every other MCP tool keeps working against that same running ROM, and **`runSource`/`loadMedia` rebuilds update the window in place** — the window follows your latest build, no relaunch and no crash on rebuild. A human sitting next to you should be **playing the game** while you iterate, not watching screenshots scroll past.
@@ -21,7 +32,7 @@ After that, keep iterating with `runSource` / `buildSource` / readMemory / scree
 
 **No gamepad?** `playtest()`'s response includes a `keyboardControls` map and a `tellUser` note when no controller is detected — relay the keys to the human (arrows = D-pad, Z = main action, Enter = START, ESC closes) so they know how to play.
 
-Skip playtest only when there's clearly no human in the loop: CI runs, automated test suites, batch reverse-engineering, or when the user has explicitly said "headless." `playtest()` needs a desktop display; with none it returns `{opened:false, reason:"no-display"}` and tells you how to relaunch the server with the display env — every other tool (build, run, screenshot, inspect) is fully headless and unaffected. When in doubt, ask once, then default to opening it.
+Skip playtest only when there's clearly no human in the loop: CI runs, automated test suites, batch reverse-engineering, or when the user has explicitly said "headless." `playtest()` needs a desktop session to draw into; if it can't open a window it returns `{opened:false, reason:"sdl-error", message}` explaining how to get one (usually: run the server yourself in a terminal inside your desktop session via `npx romdev-mcp`, then connect your agent) — every other tool (build, run, screenshot, inspect) is fully headless and unaffected. When in doubt, ask once, then default to opening it.
 
 ## Tool surface: everything is loaded — just call the tool
 
