@@ -90,17 +90,57 @@ The `platformer` scaffold side-scrolls (hardware camera + per-platform column st
 
 `romdev-mcp` resolves each core/compiler from its package lazily — a toolchain's WASM is only loaded into memory the first time you build for that platform, so booting the server is fast and a session only pays for the platforms it actually uses. WASM is a **build output**: it ships via the npm packages, not committed to this git repo (which holds the source, recipes, and version pins). See [packages/romdev/BUILDING.md](./packages/romdev/BUILDING.md) for the platform × core × toolchain matrix and how the wasm is built (a pinned Emscripten container).
 
-## Install & connect
+## Connect
+
+Boot the server (it stays in the foreground — `Ctrl-C` to stop):
 
 ```bash
-npx romdev-mcp      # boots the MCP server on http://127.0.0.1:7331/mcp
+npx romdev-mcp      # MCP server on http://127.0.0.1:7331/mcp
 ```
 
-Register it with your agent. For Claude Code:
+The first run downloads the cores/toolchains; later runs start instantly from the npm cache. An **optional observer** for watching tool calls live is at `http://127.0.0.1:7331/livestream` — purely for humans, no agent needs it.
+
+Then register `http://127.0.0.1:7331/mcp` (streamable-HTTP transport) with your agent:
+
+### Claude Code
 
 ```bash
 claude mcp add --transport http romdev http://127.0.0.1:7331/mcp
 ```
+
+### opencode
+
+Add it to `opencode.json` (the `type` must be `"remote"` for an HTTP server):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "romdev": {
+      "type": "remote",
+      "url": "http://127.0.0.1:7331/mcp",
+      "enabled": true
+    }
+  }
+}
+```
+
+### Codex CLI
+
+Either run `codex mcp add romdev --url http://127.0.0.1:7331/mcp`, or add the table to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.romdev]
+url = "http://127.0.0.1:7331/mcp"
+```
+
+In a Codex session, `/mcp` lists the connected servers and their tools.
+
+### Any other MCP client
+
+It's a standard **streamable-HTTP** MCP server — point any MCP-capable client at `http://127.0.0.1:7331/mcp`. Set `PORT` / `HOST` env vars to change the bind address.
+
+---
 
 Then just describe what you want:
 
