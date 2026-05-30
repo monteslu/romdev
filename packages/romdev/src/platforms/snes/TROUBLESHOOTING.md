@@ -64,22 +64,48 @@ buildSource({platform:"snes", language:"c",
 For real fonts, run PVSnesLib's `gfx4snes` tool natively to convert
 a PNG → `.pic` + `.pal`, then `.incbin` them in `data.asm`.
 
-## "Sprites don't appear"
+## "Sprites don't appear" (or appear as garbage / flashing colors)
 
-Three things to check:
+**Diagnose first, don't guess.** Two tool calls tell you exactly what's
+wrong — they read the live PPU registers (OBSEL/TM) and OAM/CGRAM:
 
-1. **You called `oamSet()` but not `oamUpdate()`.** PVSnesLib's
-   `oamSet` writes to a RAM-side shadow buffer; `oamUpdate()`
-   pushes that buffer to OAM via DMA. Without it, the PPU sees
-   whatever was in OAM before.
-2. **Sprite Y is in the off-screen range.** OAM Y=$F0+ hides the
-   sprite. If you initialised OAM to zero and then never set Y,
-   your sprite is at Y=0 (visible), but if you set Y=240+ it's
-   invisible.
-3. **No sprite tile data uploaded.** `oamInitGfxSet` is the
-   canonical "upload sprite tiles + palette to VRAM" call. Forget
-   it and the OAM points to garbage tiles → invisible / random
-   patterns.
+- `getRenderingContext({platform:'snes'})` → `snes.obj.enabledMain` (is the
+  OBJ layer even on in TM?), `snes.obj.size`, `snes.obj.tileBaseByte`.
+- `inspectSprites({platform:'snes'})` → `renderableCount` (how many are
+  actually on-screen vs parked), each sprite's `renderable`/`hiddenReason`,
+  resolved `tileVramAddr` + `cgramPaletteRange`, and **`warnings` for any
+  renderable sprite pointing at an all-zero (never-uploaded) OBJ palette
+  line.**
+
+Common causes, in the order the tools will point you to:
+
+1. **OBJ layer disabled on the main screen.** `getRenderingContext`'s
+   `obj.enabledMain` is false → you never set TM ($212c) bit 4. In
+   PVSnesLib `setScreenOn()` + the OAM helpers normally handle this; if you
+   poked registers directly you may have clobbered it.
+2. **You called `oamSet()` but not `oamUpdate()`.** PVSnesLib's `oamSet`
+   writes a RAM-side shadow buffer; `oamUpdate()` DMAs it to OAM. Without
+   it the PPU sees stale OAM. (`inspectSprites` reads real OAM, so if it
+   shows your sprite but the screen doesn't, this is it.)
+3. **Sprite Y is in the off-screen range.** Y≥$E0 is the "hide" convention;
+   `inspectSprites` reports those as `renderable:false` with
+   `hiddenReason:"parked off-screen-top"`. A sprite you forgot to position
+   may sit at Y=0 (visible) or wherever uninitialized OAM left it.
+4. **Garbage / flashing colors = unintended OBJ palette line.** You used
+   palette line 1..3 but only uploaded line 0. `inspectSprites` WARNS via
+   `uninitializedObjPalettes` / `suspiciousObjPalettes` (+ `objPaletteReport`)
+   — and it catches MORE than all-zero lines: a line that's a flat fill, a
+   smooth default-looking ramp, or simply referenced *above* the contiguous
+   uploaded-from-line-0 block all get flagged as "likely never uploaded."
+   Fix: upload every line you reference (CGRAM `128 + line*16`), or point
+   sprites at an authored line.
+5. **No sprite tile data uploaded.** `oamInitGfxSet` is the canonical
+   "upload sprite tiles + palette to VRAM" call. Forget it and OAM points at
+   garbage tiles. `inspectSprites`'s `tileVramAddr` tells you where the
+   sprite's tile is — cross-check with `inspectPatternTiles` at that base.
+
+See MENTAL_MODEL.md → "The OBJ stable-path recipe" for the layout that
+avoids all five.
 
 ## "BG mode is wrong / background is glitched"
 

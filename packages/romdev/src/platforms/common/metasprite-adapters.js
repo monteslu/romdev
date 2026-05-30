@@ -97,12 +97,20 @@ export async function genesisAdapter(host) {
 //  +1 across, +0x10 down (16-wide OBJ name table). We export contiguously.
 // =====================================================================
 export async function snesAdapter(host) {
-  const { decodeOAM, decodeSnesTile, decodeCGRAM } = await import("../snes/ppu.js");
+  const { decodeOAM, decodeSnesTile, decodeCGRAM, decodePpuRegs, ppuRegsPopulated } =
+    await import("../snes/ppu.js");
   const vram = host.readMemory("video_ram", 0, 0x10000);
   const cgram = host.readMemory("snes_cgram", 0, 512);
   const oam = host.readMemory("snes_oam", 0, 544);
+  const fillram = host.readMemory("snes_fillram", 0, 0x8000);
   const colors = decodeCGRAM(cgram); // 256 entries
-  const raw = decodeOAM(oam);
+  // Live OBSEL → correct OBJ size pair so wTiles/hTiles are right (a 16×16
+  // OBJ must capture as 2×2 tiles, not 1×1).
+  const ppu = ppuRegsPopulated(fillram) ? decodePpuRegs(fillram) : null;
+  const raw = decodeOAM(oam, ppu ? {
+    smallSize: ppu.objSize.small, largeSize: ppu.objSize.large,
+    objNameBaseByte: ppu.objNameBaseByte, objGapByte: ppu.objGapByte,
+  } : {});
   // SNES OBJ palettes are CGRAM 128-255, 16 colors each (8 lines). palette
   // field is 0-7 → base = 128 + p*16.
   const palRgb = (p) => { const base = 128 + (p & 7) * 16; return colors.slice(base, base + 16).map((c) => [c.r, c.g, c.b]); };

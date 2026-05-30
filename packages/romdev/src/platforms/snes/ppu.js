@@ -26,13 +26,153 @@
 // All values are derived from snes9x's own structures (see ppu.h SPPU.
 // OAMData / SPPU.CGDATA), which are stable across snes9x versions.
 
+// --- PPU register decode (from snes_fillram) -------------------------------
+//
+// snes9x DOES mirror the write-only PPU register file $2100-$213f into
+// Memory.FillRAM — but indexed by the FULL register address, so OBSEL is
+// FillRAM[0x2101], NOT FillRAM[0x101]. The `snes_fillram` region exposes
+// the whole 32 KB shadow, so we can read back every PPU register the game
+// last wrote. (Verified empirically; the old "snes9x doesn't expose PPU
+// regs" assumption was reading the wrong offset.) This unlocks real OBSEL/
+// BGMODE/TM/TS/color-math decoding instead of asking the agent to guess.
+
+/** OBSEL ($2101) bits 5-7 select the small/large object-size PAIR. */
+const OBJ_SIZE_TABLE = [
+  { small: [8, 8],   large: [16, 16] },  // 0
+  { small: [8, 8],   large: [32, 32] },  // 1
+  { small: [8, 8],   large: [64, 64] },  // 2
+  { small: [16, 16], large: [32, 32] },  // 3
+  { small: [16, 16], large: [64, 64] },  // 4
+  { small: [32, 32], large: [64, 64] },  // 5
+  { small: [16, 32], large: [32, 64] },  // 6 (undocumented)
+  { small: [16, 32], large: [32, 32] },  // 7 (undocumented)
+];
+
+/**
+ * Decode the SNES PPU register file from the snes_fillram shadow.
+ * @param {Uint8Array} fillram 32 KB region read via readMemory("snes_fillram", 0, 0x8000)
+ * @returns {{
+ *   inidisp:number, forcedBlank:boolean, brightness:number,
+ *   bgMode:number, bg3Priority:number,
+ *   obsel:number, objSizeSel:number, objSize:{small:[number,number],large:[number,number]},
+ *   objNameBaseWord:number, objNameBaseByte:number, objNameSelect:number, objGapByte:number,
+ *   bg:Array<{scBaseWord:number,scBaseByte:number,mapSize:number,mapWidth:number,mapHeight:number,charBaseWord:number,charBaseByte:number}>,
+ *   tm:number, ts:number, mainScreen:object, subScreen:object,
+ *   cgwsel:number, cgadsub:number, colorMath:object,
+ *   raw:Object<string,number>
+ * }}
+ */
+export function decodePpuRegs(fillram) {
+  // FillRAM is indexed by full register address. Guard short reads.
+  const r = (addr) => (addr < fillram.length ? fillram[addr] : 0);
+
+  const inidisp = r(0x2100);
+  const obsel = r(0x2101);
+  const bgmode = r(0x2105);
+  const bg3prio = (bgmode >> 3) & 1;
+
+  // OBSEL: bits 0-2 = name base (×0x2000 words), bit 3-4 = name select gap,
+  // bits 5-7 = size selection.
+  const objNameBaseWord = (obsel & 0x07) << 13;       // word address
+  const objNameSelectBits = (obsel >> 3) & 0x03;
+  const objSizeSel = (obsel >> 5) & 0x07;
+  const objSize = OBJ_SIZE_TABLE[objSizeSel];
+
+  // Per-BG: BGxSC ($2107-210a) = tilemap base (bits 2-7 ×0x400 words) + size
+  // (bits 0-1). BGxNBA ($210b/210c) packs two BGs per byte = char base
+  // (×0x1000 words).
+  const bg = [];
+  const MAP_SIZE = [
+    { w: 32, h: 32 }, { w: 64, h: 32 }, { w: 32, h: 64 }, { w: 64, h: 64 },
+  ];
+  for (let i = 0; i < 4; i++) {
+    const bgsc = r(0x2107 + i);
+    const scBaseWord = (bgsc & 0xFC) << 8;             // bits 2-7 → ×0x400 words
+    const mapSize = bgsc & 0x03;
+    const nbaByte = r(0x210b + (i >> 1));
+    const nbaNybble = (i & 1) ? (nbaByte >> 4) & 0x0F : nbaByte & 0x0F;
+    const charBaseWord = nbaNybble << 12;              // ×0x1000 words
+    bg.push({
+      scBaseWord,
+      scBaseByte: scBaseWord * 2,
+      mapSize,
+      mapWidth: MAP_SIZE[mapSize].w,
+      mapHeight: MAP_SIZE[mapSize].h,
+      charBaseWord,
+      charBaseByte: charBaseWord * 2,
+    });
+  }
+
+  const tm = r(0x212c);
+  const ts = r(0x212d);
+  const screenBits = (b) => ({
+    bg1: !!(b & 0x01), bg2: !!(b & 0x02), bg3: !!(b & 0x04),
+    bg4: !!(b & 0x08), obj: !!(b & 0x10),
+  });
+
+  const cgwsel = r(0x2130);
+  const cgadsub = r(0x2131);
+
+  return {
+    inidisp,
+    forcedBlank: !!(inidisp & 0x80),
+    brightness: inidisp & 0x0F,
+    bgMode: bgmode & 0x07,
+    bg3Priority: bg3prio,
+    obsel,
+    objSizeSel,
+    objSize,
+    objNameBaseWord,
+    objNameBaseByte: objNameBaseWord * 2,
+    objNameSelect: objNameSelectBits,
+    // Second sprite tile page is objNameBase + (objNameSelect+1)×0x1000 words.
+    objGapByte: (objNameSelectBits + 1) * 0x1000 * 2,
+    bg,
+    tm,
+    ts,
+    mainScreen: screenBits(tm),
+    subScreen: screenBits(ts),
+    cgwsel,
+    cgadsub,
+    colorMath: {
+      addSubscreen: !!(cgwsel & 0x02),
+      subtract: !!(cgadsub & 0x80),
+      halve: !!(cgadsub & 0x40),
+      enableObj: !!(cgadsub & 0x10),
+      enableBackdrop: !!(cgadsub & 0x20),
+    },
+    raw: {
+      INIDISP: inidisp, OBSEL: obsel, BGMODE: bgmode,
+      BG1SC: r(0x2107), BG2SC: r(0x2108), BG3SC: r(0x2109), BG4SC: r(0x210a),
+      BG12NBA: r(0x210b), BG34NBA: r(0x210c),
+      TM: tm, TS: ts, CGWSEL: cgwsel, CGADSUB: cgadsub,
+    },
+  };
+}
+
+/**
+ * Is the PPU register shadow actually populated? A freshly-reset core (no
+ * frames stepped, or a game that hasn't touched the PPU) leaves FillRAM at
+ * its init value, so $2100-$213f can read back as all-zero / all-same. Use
+ * this to decide whether decoded regs are trustworthy.
+ * @param {Uint8Array} fillram
+ * @returns {boolean}
+ */
+export function ppuRegsPopulated(fillram) {
+  // INIDISP, OBSEL, BGMODE, and at least one screen-enable being non-zero is
+  // a strong signal the game has configured the PPU.
+  if (fillram.length <= 0x213f) return false;
+  const probe = [0x2100, 0x2101, 0x2105, 0x2107, 0x210b, 0x212c];
+  return probe.some((a) => fillram[a] !== 0 && fillram[a] !== 0xFF);
+}
+
 /**
  * Decode the SNES OAM into the generic sprite shape used by inspectSprites.
  * @param {Uint8Array} oam 544 bytes (low table + high table)
  * @param {{ smallSize?: [number, number], largeSize?: [number, number] }} [opts]
- *   OBSEL.size selects the small/large pair per object. We don't have
- *   OBSEL here without ppu_regs decoded, so default to the most common
- *   {8×8, 16×16} pair. Caller can override.
+ *   OBSEL.size selects the small/large pair per object. Pass the pair from
+ *   decodePpuRegs().objSize for accuracy; if omitted we default to the most
+ *   common {8×8, 16×16} pair.
  * @returns {Array<{
  *   slot: number, x: number, y: number, tile: number, palette: number,
  *   priority: number, flipH: boolean, flipV: boolean,
@@ -43,6 +183,13 @@
 export function decodeOAM(oam, opts = {}) {
   const smallSize = opts.smallSize ?? [8, 8];
   const largeSize = opts.largeSize ?? [16, 16];
+  // OBJ tile VRAM addressing, when we know OBSEL (decodePpuRegs output).
+  // Base page is objNameBaseByte; the name-table-select bit chooses the
+  // second page at +objGapByte. Each 8×8 cell is 32 bytes (4bpp; OBJ is
+  // always 4bpp). A 16×16 object occupies a 2×2 block of cells in VRAM.
+  const objBaseByte = opts.objNameBaseByte ?? null;   // null → unknown OBSEL
+  const objGapByte = opts.objGapByte ?? 0;
+  const OBJ_TILE_BYTES = 32;
   const sprites = [];
   for (let i = 0; i < 128; i++) {
     const lo = i * 4;
@@ -58,22 +205,154 @@ export function decodeOAM(oam, opts = {}) {
     const sizeBit = (hiBits >> 1) & 0x1;
     const fullX = (xHigh ? 0x100 : 0) | x;
     const [w, h] = sizeBit ? largeSize : smallSize;
+    // 9-bit X is signed: $100..$1FF wrap to negative (off the left edge).
+    const sx = fullX >= 0x100 ? fullX - 0x200 : fullX;
+    const nameTable = /** @type {0 | 1} */ (attr & 0x01);
+    const tile9 = tile | (nameTable << 8); // 9-bit OBJ tile index
+    const palette = (attr >> 1) & 0x7;
+
+    // Renderability: an OBJ is renderable this frame only if it overlaps the
+    // 256×224 (or ×239) screen box AND isn't parked at the off-screen-top
+    // Y=$E0..$FF convention games use to "hide" sprites. This is the real
+    // distinction Codex asked for — a populated OAM slot is NOT the same as
+    // a drawn sprite.
+    const onX = sx + w > 0 && sx < 256;
+    const onY = y < 0xE0 && (y + h) > 0;      // Y≥0xE0 is the hide convention
+    const renderable = onX && onY;
+    let hiddenReason = null;
+    if (!renderable) {
+      if (y >= 0xE0) hiddenReason = "parked off-screen-top (Y≥0xE0, the common hide convention)";
+      else if (!onX) hiddenReason = sx >= 256 ? "off right edge" : "off left edge";
+      else if (!onY) hiddenReason = "off bottom";
+    }
+
+    // Resolve OBJ tile VRAM address + CGRAM palette range when OBSEL known.
+    let tileVramAddr = null, tileVramByte = null;
+    if (objBaseByte != null) {
+      const page = nameTable ? objGapByte : 0;
+      tileVramByte = objBaseByte + page + tile * OBJ_TILE_BYTES;
+      tileVramAddr = "0x" + (tileVramByte & 0xFFFF).toString(16).padStart(4, "0");
+    }
+    // OBJ palettes occupy CGRAM 128..255 (palettes 8..15); each is 16 colors.
+    const cgramPaletteBase = 128 + palette * 16;
+
     sprites.push({
       slot: i,
-      x: fullX > 0x100 ? fullX - 0x200 : fullX, // sign-extend 9-bit X to signed
-      y, // SNES Y is 0..239; Y=$E0+ is "off-screen-top" convention
-      tile: tile | ((attr & 0x01) << 8), // attr bit 0 is name-table select; combined gives 9-bit tile
-      palette: (attr >> 1) & 0x7,
+      x: sx, // sign-extended 9-bit X (negative = off the left edge)
+      y, // SNES Y is 0..255; Y≥0xE0 is the off-screen-top hide convention
+      tile: tile9,
+      palette,
+      cgramPaletteBase,                  // first CGRAM index of this OBJ's 16-color palette
+      cgramPaletteRange: [cgramPaletteBase, cgramPaletteBase + 15],
       priority: (attr >> 4) & 0x3,
       flipH: !!((attr >> 6) & 0x1),
       flipV: !!((attr >> 7) & 0x1),
       size: { w, h },
-      visible: y < 0xF0 && fullX < 256 + w,
-      nameTable: /** @type {0 | 1} */ (attr & 0x01),
+      sizeIsLarge: !!sizeBit,
+      // `visible` kept for back-compat; `renderable` is the precise answer.
+      visible: renderable,
+      renderable,
+      hiddenReason,
+      tileVramAddr,                      // resolved VRAM byte addr of tile 0 (null if OBSEL unknown)
+      tileVramByte,
+      nameTable,
       raw: { byte0: x, byte1: y, byte2: tile, byte3: attr, hiBits },
     });
   }
   return sprites;
+}
+
+/**
+ * Inspect the OBJ palette lines that renderable sprites actually reference and
+ * flag the ones that look UNINTENTIONAL — not just all-zero, but stale/default
+ * "garbage" too. The classic SNES bug (Codex's Asteroids) is a sprite naming
+ * OBJ palette line 1 or 3 when only line 0 was uploaded: the unused lines hold
+ * whatever was in CGRAM (zero on some paths, a default ramp / leftover junk on
+ * others), so the sprite renders with wrong/garbage colors. An all-zero-only
+ * check misses the non-zero-junk case, so we grade each line on several
+ * signals and classify it `uninitialized` (high confidence) or `suspicious`.
+ *
+ * The single strongest signal is **contiguity**: real games upload OBJ
+ * palettes as a block starting at line 0, so a referenced line ABOVE the
+ * highest authored-looking line — with nothing authored in between — almost
+ * always means "I used a palette I never uploaded."
+ *
+ * @param {Array<ReturnType<typeof decodeOAM>[number]>} sprites
+ * @param {Array<{r:number,g:number,b:number,rawWord:number}>} cgramColors decodeCGRAM() output (256 entries)
+ * @returns {{ uninitializedPalettes:number[], suspiciousPalettes:number[], paletteReport:Array<{line:number,verdict:string,reasons:string[]}>, warnings:string[] }}
+ */
+export function checkObjPalettes(sprites, cgramColors) {
+  const lineWords = (line) => {
+    const base = 128 + line * 16;
+    const w = [];
+    for (let k = 0; k < 16; k++) w.push(cgramColors[base + k]?.rawWord ?? 0);
+    return w;
+  };
+  // Heuristic signals for one OBJ palette line (16 BGR555 words). Index 0 is
+  // the OBJ-transparent slot and the renderer ignores it, so judge colors 1-15.
+  const analyzeLine = (line) => {
+    const w = lineWords(line);
+    const body = w.slice(1); // colors 1..15 — the ones that actually draw
+    const reasons = [];
+    const allZero = w.every((v) => v === 0);
+    const bodyZero = body.every((v) => v === 0);
+    const distinct = new Set(body).size;
+    const uniform = distinct === 1;                 // every drawing color identical
+    // Smooth-ramp / default-gradient smell: each channel monotonic across the
+    // line (what a power-on/leftover default tends to look like). Cheap proxy:
+    // the raw words are monotonic non-decreasing or non-increasing.
+    let inc = true, dec = true;
+    for (let k = 1; k < body.length; k++) {
+      if (body[k] < body[k - 1]) inc = false;
+      if (body[k] > body[k - 1]) dec = false;
+    }
+    const monotonic = (inc || dec) && distinct >= 8; // a long smooth ramp, not a real sprite palette
+    if (allZero || bodyZero) reasons.push("all-zero (never written)");
+    if (uniform && !bodyZero) reasons.push("every color identical (flat fill — stale/default, not a sprite palette)");
+    if (monotonic) reasons.push("smooth color ramp across all 16 entries (looks like a power-on/leftover default, not authored art)");
+    return { line, words: w, allZero: allZero || bodyZero, uniform, monotonic, distinct, reasons };
+  };
+
+  // What does an *authored* OBJ palette look like? Use the referenced lines'
+  // own analysis: a line with several distinct non-zero colors and no default
+  // smell is "authored". The highest authored line bounds the uploaded block.
+  const usedLines = [...new Set(sprites.filter((s) => s.renderable).map((s) => s.palette))].sort((a, b) => a - b);
+  const analyses = new Map(usedLines.map((l) => [l, analyzeLine(l)]));
+  // Also probe line 0 (the conventional first OBJ palette) for the contiguity test.
+  if (!analyses.has(0)) analyses.set(0, analyzeLine(0));
+  const looksAuthored = (a) => a && a.distinct >= 2 && !a.allZero && !a.uniform && !a.monotonic;
+  let highestAuthored = -1;
+  for (const [line, a] of analyses) if (looksAuthored(a)) highestAuthored = Math.max(highestAuthored, line);
+
+  const uninitializedPalettes = [];
+  const suspiciousPalettes = [];
+  const paletteReport = [];
+  const warnings = [];
+  for (const pal of usedLines) {
+    const a = analyses.get(pal);
+    const reasons = [...a.reasons];
+    // Contiguity: a referenced line above the authored block, when SOME line
+    // looks authored, is the "used a palette I never uploaded" footgun.
+    if (highestAuthored >= 0 && pal > highestAuthored && !looksAuthored(a)) {
+      reasons.push(
+        `referenced but ABOVE the uploaded block (line ${highestAuthored} is the ` +
+        `highest that looks authored) — likely never uploaded`
+      );
+    }
+    if (reasons.length === 0) { paletteReport.push({ line: pal, verdict: "ok", reasons: [] }); continue; }
+    const base = 128 + pal * 16;
+    const highConfidence = a.allZero || reasons.some((r) => /never uploaded/.test(r));
+    const verdict = highConfidence ? "uninitialized" : "suspicious";
+    (highConfidence ? uninitializedPalettes : suspiciousPalettes).push(pal);
+    paletteReport.push({ line: pal, verdict, reasons });
+    warnings.push(
+      `OBJ palette line ${pal} (CGRAM ${base}-${base + 15}) is referenced by a renderable ` +
+      `sprite but looks ${verdict === "uninitialized" ? "UNINITIALIZED" : "SUSPICIOUS"}: ` +
+      reasons.join("; ") + ". Sprites using it will likely render with wrong/garbage colors. " +
+      `Upload this palette line explicitly (CGADD ${base} / setPaletteColor from ${base}), or point the sprite at an authored line.`
+    );
+  }
+  return { uninitializedPalettes, suspiciousPalettes, paletteReport, warnings };
 }
 
 /**
@@ -106,12 +385,12 @@ import { PNG } from "pngjs";
 
 // --- VRAM tile + tilemap decode --------------------------------------------
 //
-// snes9x doesn't expose the PPU registers ($2100-$213F) in a readable
-// region (they're write-only and not mirrored anywhere we can reach), so
-// the BG mode / tilemap base / tile base can't be auto-detected. Instead
-// these helpers take those as parameters with the PVSnesLib / SNES-common
-// defaults (Mode 1: 4bpp BG1/BG2, 2bpp BG3). The agent overrides them when
-// their game differs.
+// These render helpers take bpp / tilemap base / tile base as parameters.
+// You can get the live values from decodePpuRegs(snes_fillram) — BG mode,
+// each BGxSC tilemap base, each BGxNBA char base, and OBSEL OBJ base are all
+// decodable now (snes9x mirrors $2100-$213f into FillRAM). Defaults below are
+// the PVSnesLib / SNES-common Mode-1 values (4bpp BG1/BG2, 2bpp BG3) for when
+// you call these standalone without the decoded regs.
 //
 // SNES tile bitplane layout:
 //   2bpp tile = 16 bytes: 8 rows × {plane0, plane1} interleaved.
@@ -203,8 +482,8 @@ export function renderSnesTilesheet(vram, cgramColors, opts = {}) {
     tileCount,
     bpp,
     note: `${tileCount} ${bpp}bpp tiles from VRAM byte offset 0x${tileBase.toString(16)} ` +
-      `(palette base CGRAM index ${paletteBase}). SNES PPU regs aren't readable from snes9x, so ` +
-      `bpp/tileBase/paletteBase are assumptions (Mode 1 defaults) — override if your game differs.`,
+      `(palette base CGRAM index ${paletteBase}). If bpp/tileBase/paletteBase weren't supplied they ` +
+      `default to Mode-1 values — get the live ones from getRenderingContext({platform:'snes'}).`,
   };
 }
 
@@ -294,8 +573,8 @@ export function renderSnesTilemap(vram, cgramColors, opts = {}) {
     mapHeight: mapH,
     bpp,
     note: `${mapW}×${mapH}-tile BG map from VRAM byte offset 0x${tilemapBase.toString(16)} ` +
-      `(${bpp}bpp tiles at 0x${tileBase.toString(16)}). SNES PPU regs aren't readable from snes9x, ` +
-      `so tilemapBase/tileBase/bpp/mapSize are assumptions (Mode 1 BG1 defaults) — override per your game. ` +
+      `(${bpp}bpp tiles at 0x${tileBase.toString(16)}). If tilemapBase/tileBase/bpp/mapSize weren't ` +
+      `supplied they default to Mode-1 BG1 — get the live ones from getRenderingContext({platform:'snes'}).layers. ` +
       `Scroll is NOT applied; the visible window is a 256×224 sub-region.`,
   };
 }

@@ -45,7 +45,7 @@ const PLATFORM_CORE_OPTIONS = {};
  * Round 26 fix: pre-r26, in-memory GG loads landed as SMS because the
  * default virtualName was "/rom" with no extension.
  */
-const PLATFORM_VIRTUAL_EXT = {
+export const PLATFORM_VIRTUAL_EXT = {
   nes:        ".nes",
   snes:       ".sfc",
   genesis:    ".md",

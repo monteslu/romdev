@@ -2,7 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { PNG } from "pngjs";
 import { getHost } from "../state.js";
 import { imageContent, jsonContent, safeTool } from "../util.js";
-import { decodeOAM } from "../../platforms/snes/ppu.js";
+import { decodeOAM, decodePpuRegs, ppuRegsPopulated } from "../../platforms/snes/ppu.js";
 
 // Get the platform's visible sprites in the generic shape, or null if
 // not supported. Drives the screenshot overlay AND any future agents
@@ -11,7 +11,16 @@ function visibleSpritesFor(host, platform) {
   if (platform === "snes") {
     try {
       const oam = host.readMemory("snes_oam", 0, 544);
-      return decodeOAM(oam).filter((s) => s.y < 0xE0); // skip "Y off-screen" markers
+      const fillram = host.readMemory("snes_fillram", 0, 0x8000);
+      const ppu = ppuRegsPopulated(fillram) ? decodePpuRegs(fillram) : null;
+      const sprites = decodeOAM(oam, ppu ? {
+        smallSize: ppu.objSize.small, largeSize: ppu.objSize.large,
+        objNameBaseByte: ppu.objNameBaseByte, objGapByte: ppu.objGapByte,
+      } : {});
+      // Overlay only the truly renderable sprites — not every populated OAM
+      // slot. Off-screen/hidden slots would clutter the screenshot with boxes
+      // for sprites that aren't actually drawn.
+      return sprites.filter((s) => s.renderable);
     } catch { return null; }
   }
   if (platform === "nes") {
