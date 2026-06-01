@@ -421,7 +421,9 @@ export async function buildForPlatform(args) {
         // (RetroArch Genesis Plus GX / BlastEm) and flashcarts.
         binary: r.ok && r.binary ? finalizeGenesisRom(r.binary) : r.binary,
         listing: "",
-        symbols: "",
+        // The m68k-elf-ld map (symbol → final address) when the link produced
+        // one — used by buildSourceWithDebug / addressToSymbol for Genesis.
+        symbols: r.symbols ?? "",
         log: r.log,
         issues: parseBuildLog(r.log),
         exitCode: r.exitCode,

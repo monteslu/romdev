@@ -49,14 +49,34 @@ export function registerPlatformTools(server, z, sessionKey) {
       paletteBase: z.number().int().min(0).max(255).default(0).describe("SNES only: CGRAM index of color 0 of the sub-palette used to colorize the sheet. Default 0."),
       paletteIndex: z.number().int().min(0).max(3).default(0).describe("Genesis only: which CRAM sub-palette (0-3) to colorize the tile sheet with. Default 0."),
       tileCount: z.number().int().min(0).default(0).describe("SNES/Genesis only: how many tiles to render. 0 (default) fills VRAM from tileBaseByte."),
+      scale: z.number().int().min(1).max(16).default(1).describe("Integer upscale factor (nearest-neighbor, keeps pixels crisp). The default 8×8-tile strip renders each tile small/unreadable inline — scale:4 makes each tile 32×32. Use when inspecting a few tiles by eye."),
       outputPath: z.string().optional().describe("Absolute path to write the PNG to. Required unless inline:true."),
       inline: z.boolean().default(false).describe("If true, return the image in the response instead of writing to disk. Default false — then outputPath is required."),
     },
-    safeTool(async ({ platform, path: romPath, bpp, tileBaseByte, paletteBase, paletteIndex, tileCount, outputPath, inline }) => {
+    safeTool(async ({ platform, path: romPath, bpp, tileBaseByte, paletteBase, paletteIndex, tileCount, scale = 1, outputPath, inline }) => {
       requireImageTarget(outputPath, inline, "inspectPatternTiles");
+      // Integer nearest-neighbor upscale of a PNG — keeps pixel-art tiles crisp
+      // while making a small tile strip actually readable inline.
+      const upscalePng = (pngBuf) => {
+        if (!scale || scale <= 1) return pngBuf;
+        const src = PNG.sync.read(pngBuf);
+        const dst = new PNG({ width: src.width * scale, height: src.height * scale });
+        for (let y = 0; y < dst.height; y++) {
+          const sy = Math.floor(y / scale);
+          for (let x = 0; x < dst.width; x++) {
+            const sx = Math.floor(x / scale);
+            const si = (sy * src.width + sx) * 4, di = (y * dst.width + x) * 4;
+            dst.data[di] = src.data[si]; dst.data[di + 1] = src.data[si + 1];
+            dst.data[di + 2] = src.data[si + 2]; dst.data[di + 3] = src.data[si + 3];
+          }
+        }
+        return PNG.sync.write(dst);
+      };
       // Emit the PNG + structured JSON per the contract: inline returns the
       // image in content[]; otherwise write to disk and return {imagePath}.
-      const emit = async (pngBuf, structured) => {
+      const emit = async (pngBufRaw, structured) => {
+        const pngBuf = upscalePng(pngBufRaw);
+        if (scale > 1) structured = { ...structured, scale };
         if (inline) {
           return {
             content: [
@@ -217,7 +237,21 @@ export function registerPlatformTools(server, z, sessionKey) {
         const colors = decodeGenesisCRAM(cram);
         // 4 palettes × 16 entries = 64 colors; render as 4 rows of 16.
         const png = renderColorsAsPng(colors, 16);
-        return emit({ platform: p, colors }, png);
+        // CRAM is a flat 64-entry list; the VDP (and SGDK) address it as four
+        // 16-color sub-palettes. Group it so the agent doesn't have to guess
+        // which flat index its PALn lives at when calling inspectPatternTiles.
+        const subPalettes = [0, 1, 2, 3].map((n) => ({
+          index: n,
+          sgdkName: `PAL${n}`,
+          cramRange: [n * 16, n * 16 + 15],
+          colors: colors.slice(n * 16, n * 16 + 16),
+        }));
+        return emit({
+          platform: p,
+          colors,
+          subPalettes,
+          note: "Genesis CRAM = 4 sub-palettes × 16 colors. Flat index → sub-palette: 0-15=PAL0, 16-31=PAL1, 32-47=PAL2, 48-63=PAL3. Pass the sub-palette NUMBER (0-3) as inspectPatternTiles({paletteIndex}).",
+        }, png);
       }
 
       if (p === "sms" || p === "gg") {
