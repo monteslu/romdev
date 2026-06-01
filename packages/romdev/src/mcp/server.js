@@ -21,6 +21,7 @@
 //      use this when you're explicitly fronting the server.)
 
 import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -40,6 +41,16 @@ import { observer } from "../observer/bus.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Single source of truth for the version reported to MCP clients: read it from
+// package.json so serverInfo can never drift from the published package again.
+const PKG_VERSION = (() => {
+  try {
+    return JSON.parse(readFileSync(path.resolve(__dirname, "..", "..", "package.json"), "utf8")).version;
+  } catch {
+    return "0.0.0";
+  }
+})();
+
 async function loadInstructions() {
   try {
     const agentsPath = path.resolve(__dirname, "..", "..", "AGENTS.md");
@@ -58,7 +69,7 @@ function buildMcpServer(instructions, sessionKey) {
   const server = new McpServer(
     {
       name: "romdev",
-      version: "0.1.0",
+      version: PKG_VERSION,
     },
     {
       capabilities: { tools: {} },

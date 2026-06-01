@@ -49,6 +49,12 @@ export function parseBuildLog(log) {
       // SNES C path: wla-65816 assembler + wlalink linker. wlalink floods a
       // symbol-table dump on failure — parseWla extracts just the diagnostics.
       issues.push(...parseWla(text, baseStage));
+    } else if (/^gcc$|^cc1$|^as$|^ld$|^m68k$|^objcopy$/.test(baseStage)) {
+      // Genesis/GBA C path: GNU m68k/arm toolchain. ld emits "multiple
+      // definition" / "undefined reference" that the cc65 parser misses;
+      // parseGnuLd extracts them and adds Genesis-specific guidance for the
+      // classic rom_header collision.
+      issues.push(...parseGnuToolchain(text, baseStage));
     } else {
       // Unknown stage — try every parser, accept anything that yields hits.
       // Tag everything with the (possibly empty) actual stage name so an
@@ -59,6 +65,7 @@ export function parseBuildLog(log) {
       issues.push(...parseDasm(text));
       issues.push(...parseAsar(text, tag));
       issues.push(...parseRgbds(text, tag));
+      issues.push(...parseGnuToolchain(text, tag));
     }
   }
   return issues;
@@ -254,5 +261,78 @@ function parseVasm(text) {
       stage: "vasm",
     });
   }
+  return out;
+}
+
+// GNU toolchain (m68k for Genesis, arm for GBA): gcc / cc1 / as / ld / objcopy.
+// Two shapes worth catching:
+//   1. compiler diagnostics:  main.c:12:5: error: 'foo' undeclared
+//   2. LINKER diagnostics from ld, which the cc65 parser misses entirely:
+//        rom_header.o:(.text+0x0): multiple definition of `rom_header'
+//        sega.o:(.text+0x100): first defined here
+//        main.o: in function `main': undefined reference to `VDP_init'
+// The Genesis sega.s startup the build auto-assembles ALREADY defines
+// rom_header at .text.keepboot+0x100. If the agent also compiles SGDK's
+// rom_header.c (a common copy-paste from SGDK examples) the link dies on a
+// duplicate symbol with no hint about WHY. We special-case it.
+function parseGnuToolchain(text, stage = "ld") {
+  const out = [];
+  const seen = new Set();
+  const add = (issue) => {
+    const key = `${issue.message}@${issue.file ?? ""}:${issue.line ?? ""}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(issue);
+  };
+
+  // 1. gcc/cc1 compiler diagnostics (file:line:col: severity: message).
+  const ccRe = /^(?<file>[^\n:]+\.[chsCHS]):(?<line>\d+)(?::(?<col>\d+))?:\s*(?<sev>error|warning|note):\s*(?<msg>.+)$/gm;
+  let m;
+  while ((m = ccRe.exec(text))) {
+    const sev = m.groups.sev.toLowerCase();
+    add({
+      severity: sev === "error" ? "error" : sev === "warning" ? "warning" : "info",
+      file: m.groups.file,
+      line: parseInt(m.groups.line, 10),
+      col: m.groups.col ? parseInt(m.groups.col, 10) : undefined,
+      message: m.groups.msg.trim().replace(/\x1b\[[0-9;]*m/g, ""),
+      stage,
+    });
+  }
+
+  // 2. ld "multiple definition of `sym'" — with the rom_header special case.
+  const multiRe = /multiple definition of [`'"]?(?<sym>[A-Za-z_]\w*)['"`]?/g;
+  while ((m = multiRe.exec(text))) {
+    const sym = m.groups.sym;
+    const isRomHeader = sym === "rom_header";
+    add({
+      severity: "error",
+      message: `multiple definition of \`${sym}'`,
+      stage: "ld",
+      hint: isRomHeader
+        ? "The Genesis startup `sega.s` that romdev auto-assembles already " +
+          "defines `rom_header` (at .text.keepboot+0x100). You also compiled a " +
+          "`rom_header.c` (commonly copied from SGDK examples) which defines it " +
+          "AGAIN — so the link fails. FIX: remove rom_header.c from your build's " +
+          "source list. The build supplies the header itself; you do not need to. " +
+          "(If you need custom header fields, edit them in your build config, not " +
+          "by re-defining the symbol.)"
+        : `\`${sym}' is defined in more than one object file. Remove the duplicate ` +
+          "definition, or mark one as a declaration (extern) instead of a definition.",
+    });
+  }
+
+  // 3. ld "undefined reference to `sym'".
+  const undefRe = /undefined reference to [`'"]?(?<sym>[A-Za-z_]\w*)['"`]?/g;
+  while ((m = undefRe.exec(text))) {
+    add({
+      severity: "error",
+      message: `undefined reference to \`${m.groups.sym}'`,
+      stage: "ld",
+      hint: `\`${m.groups.sym}' is called/used but never defined or linked. Add the ` +
+        "source file that defines it to your build, or check for a typo in the name.",
+    });
+  }
+
   return out;
 }

@@ -72,3 +72,52 @@ test("wla-65816 assembler error parses with file/line", () => {
   assert.equal(issues[0].line, 12);
   assert.match(issues[0].message, /Unknown instruction/);
 });
+
+test("Genesis: rom_header multiple-definition gets an actionable hint", () => {
+  // Real m68k-elf-ld output when the agent compiles SGDK's rom_header.c
+  // alongside the auto-assembled sega.s.
+  const log = `
+--- ld ---
+/work/build/rom_header.o:(.text+0x0): multiple definition of \`rom_header'
+/work/build/sega.o:(.text.keepboot+0x100): first defined here
+m68k-elf-ld: link failed
+`;
+  const issues = parseBuildLog(log);
+  const dup = issues.find((i) => /multiple definition of `rom_header'/.test(i.message));
+  assert.ok(dup, "should capture the duplicate-definition error");
+  assert.equal(dup.severity, "error");
+  assert.equal(dup.stage, "ld");
+  assert.match(dup.hint, /remove rom_header\.c from your build/i);
+  assert.match(dup.hint, /sega\.s/);
+});
+
+test("GNU ld: generic multiple-definition + undefined-reference parse with hints", () => {
+  const log = `
+--- ld ---
+/work/a.o:(.text+0x4): multiple definition of \`g_state'
+/work/b.o:(.text+0x4): first defined here
+/work/main.o: in function \`main': undefined reference to \`VDP_init'
+`;
+  const issues = parseBuildLog(log);
+  const dup = issues.find((i) => /multiple definition of `g_state'/.test(i.message));
+  assert.ok(dup);
+  assert.match(dup.hint, /more than one object file/);
+  const undef = issues.find((i) => /undefined reference to `VDP_init'/.test(i.message));
+  assert.ok(undef);
+  assert.equal(undef.severity, "error");
+  assert.match(undef.hint, /never defined or linked/);
+});
+
+test("Genesis: m68k gcc compiler diagnostic parses with file/line", () => {
+  const log = `
+--- gcc ---
+/work/main.c:42:8: error: 'SPR_update' undeclared (first use in this function)
+`;
+  const issues = parseBuildLog(log);
+  const e = issues.find((i) => i.severity === "error");
+  assert.ok(e);
+  assert.equal(e.file, "/work/main.c");
+  assert.equal(e.line, 42);
+  assert.equal(e.col, 8);
+  assert.match(e.message, /SPR_update/);
+});

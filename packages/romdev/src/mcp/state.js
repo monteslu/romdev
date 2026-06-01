@@ -69,6 +69,11 @@ export function _liveHostCount() {
   return hosts.size;
 }
 
+/** Test-only: inject a (possibly fake) host for a session key. */
+export function _setHostForTest(sessionKey, host) {
+  hosts.set(sessionKey, host);
+}
+
 // Shared reference to the per-session disclosure manager, so tool
 // handlers outside index.js (toolchain.js, etc.) can call consumeHint()
 // to emit session-scoped one-shot nudges (e.g. "loadCategory('show') to

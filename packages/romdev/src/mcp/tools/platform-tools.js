@@ -18,6 +18,7 @@ function requireImageTarget(outPath, inline, tool) {
 }
 import { getCPUState } from "../../host/cpu-state.js";
 import { getDspState } from "../../host/dsp-state.js";
+import { getNesApuState } from "../../host/nes-apu-state.js";
 import { decodeGenesisPSG, decodeGenesisYM2612 } from "../../host/gpgx-state.js";
 
 /** Resolve the platform to inspect: explicit arg → currently loaded host. */
@@ -283,20 +284,30 @@ export function registerPlatformTools(server, z, sessionKey) {
       const blob = host.readMemory("genesis_psg", 0, 1024);
       return { platform: "genesis", chip, ...decodeGenesisPSG(blob) };
     }
-    throw new Error(`getAudioState: unknown chip '${chip}'. Use 'dsp' (SNES), 'psg' (Genesis/SMS), or 'ym2612' (Genesis).`);
+    if (chip === "nes") {
+      const p = resolvePlatform(host, "nes");
+      const apu = getNesApuState(host, p);
+      if (!apu) throw new Error("getAudioState chip:'nes' is NES only.");
+      return { platform: p, chip, ...apu };
+    }
+    throw new Error(`getAudioState: unknown chip '${chip}'. Use 'nes' (NES 2A03), 'dsp' (SNES), 'psg' (Genesis/SMS), or 'ym2612' (Genesis).`);
   }
 
   server.tool(
     "getAudioState",
-    "Use this to debug sound: decode a sound chip's live state. `chip:'dsp'` (SNES S-DSP) returns per-voice " +
-    "vol/pitch/adsr + `env` (internal envelope — 0 = silent regardless of vol) + `bufLastSamples` (nonzero " +
-    "proves the voice is producing audio) + `flg`; distinguishes 'never produced output' from 'muted by " +
-    "mixer.' GOTCHA: S-DSP FLG is $6C, KOFF is $5C (many refs swap them); power-on FLG=$E0 means your driver " +
+    "Use this to debug sound or transcribe music: decode a sound chip's live state. `chip:'nes'` (NES 2A03) " +
+    "returns per-channel {pulse1, pulse2, triangle, noise, dmc} with timer→freq→midi note name, duty, volume, " +
+    "and `playing` — decodes the $4000-$4017 register file directly, so you get a frame-accurate note timeline " +
+    "for ANY NES game without reverse-engineering its private sound driver. `chip:'dsp'` (SNES S-DSP) returns " +
+    "per-voice vol/pitch/adsr + `env` (internal envelope — 0 = silent regardless of vol) + `bufLastSamples` " +
+    "(nonzero proves the voice is producing audio) + `flg`; distinguishes 'never produced output' from 'muted " +
+    "by mixer.' GOTCHA: S-DSP FLG is $6C, KOFF is $5C (many refs swap them); power-on FLG=$E0 means your driver " +
     "MUST clear bit 6. `chip:'psg'` (Genesis/SMS SN76489) returns 3 tone + 1 noise channel state. " +
     "`chip:'ym2612'` (Genesis FM) returns a raw-blob snapshot (gpgx's struct isn't safely per-channel " +
-    "decodable) — useful for frame-to-frame diffing. Mirrors getCPUState({cpu}).",
+    "decodable) — useful for frame-to-frame diffing. Mirrors getCPUState({cpu}). To capture a note timeline " +
+    "over time, pair with watchMemory (region:'nes_apu_regs', onChange:'reset') or recordSession.",
     {
-      chip: z.enum(["dsp", "psg", "ym2612"]).describe("Which sound chip: 'dsp' (SNES S-DSP), 'psg' (Genesis/SMS SN76489), 'ym2612' (Genesis FM)."),
+      chip: z.enum(["nes", "dsp", "psg", "ym2612"]).describe("Which sound chip: 'nes' (NES 2A03 APU), 'dsp' (SNES S-DSP), 'psg' (Genesis/SMS SN76489), 'ym2612' (Genesis FM)."),
     },
     safeTool(async ({ chip }) => jsonContent(readAudioChip(chip))),
   );
@@ -305,15 +316,23 @@ export function registerPlatformTools(server, z, sessionKey) {
   server.tool(
     "inspectSprites",
     "List the loaded ROM's active sprite table in a generic {slot,x,y,tile,palette,priority,flipH,flipV,size:{w,h},visible}[] shape. Supported: NES (64 sprites), SNES (128 sprites with hi-table X/size). Generic across platforms — each platform's adapter reads its native OAM and normalizes to this shape so cross-platform sprite debugging is one tool call. " +
+    "Use `maxSlots` to return only the first N slots (e.g. maxSlots:8 for the active-piece + preview sprites) — shrinks the response when you don't need all 64/128. " +
     "The sprite JSON is ALWAYS returned. On platforms that also render a sprite PNG (sms/gg, gb/gbc, atari2600/7800): DEFAULT writes the PNG to outputPath and returns {imagePath}; pass inline:true to get the image in the response (you must pass one or the other on those platforms). NES/SNES/Genesis/C64 are JSON-only — no path needed.",
     {
       platform: z.string().optional(),
+      maxSlots: z.number().int().min(1).max(128).optional().describe("Return only the first N sprite slots (in OAM order). Omit for all slots. The JSON includes `slotsReturned`/`slotsTotal` so you know if it was clipped."),
       outputPath: z.string().optional().describe("Absolute path to write the sprite PNG to (only platforms that produce one). Required on those platforms unless inline:true."),
       inline: z.boolean().default(false).describe("If true, return the sprite image in the response instead of writing to disk (only platforms that produce one). Default false."),
     },
-    safeTool(async ({ platform, outputPath, inline }) => {
+    safeTool(async ({ platform, maxSlots, outputPath, inline }) => {
       const host = getHost(sessionKey);
       const p = resolvePlatform(host, platform);
+      // Generic slot clamp, applied by each platform branch before returning.
+      const clampSlots = (sprites) => {
+        const slotsTotal = sprites.length;
+        const clipped = maxSlots != null ? sprites.slice(0, maxSlots) : sprites;
+        return { sprites: clipped, slotsTotal, slotsReturned: clipped.length };
+      };
       // Gate the PNG for platforms that render one. JSON is always returned.
       const emitImage = async (pngBuf, structured) => {
         requireImageTarget(outputPath, inline, "inspectSprites");
@@ -352,7 +371,7 @@ export function registerPlatformTools(server, z, sessionKey) {
             raw: { byte0: y, byte1: tile, byte2: attr, byte3: x },
           });
         }
-        return jsonContent({ platform: p, sprites });
+        return jsonContent({ platform: p, ...clampSlots(sprites) });
       }
 
       if (p === "snes") {
@@ -387,9 +406,14 @@ export function registerPlatformTools(server, z, sessionKey) {
               `sizes assume the {8×8,16×16} default and tileVramAddr is null).`,
         ];
         if (warnings.length) summary.push(...warnings);
+        // Clamp only the per-sprite list; renderableCount/warnings stay
+        // computed over all 128 slots so the summary remains accurate.
+        const { sprites: spritesOut, slotsTotal, slotsReturned } = clampSlots(sprites);
         return jsonContent({
           platform: p,
-          sprites,
+          sprites: spritesOut,
+          slotsTotal,
+          slotsReturned,
           renderableCount,
           ppuRegsLive: regsLive,
           ppu: ppu && {
