@@ -20,13 +20,22 @@ export function registerLifecycleTools(server, z, sessionKey) {
       ...(bytes ? { bytes, virtualName } : { path }),
       mediaKind: mediaKind ?? defaultMediaKind(platform),
     });
+    // Framebuffer dimensions are NOT known until the core has run at least one
+    // frame — before that, fbWidth/fbHeight hold a pre-boot default (e.g.
+    // 256×192 on Genesis) that does NOT match the real output resolution
+    // (256×224 after booting). Reporting it here misleads any agent that routes
+    // on dimensions, so we omit it until a frame has been stepped and point the
+    // caller at stepFrames instead.
+    const framebufferKnown = host.status.frameCount > 0;
     return jsonContent({
       loaded: true,
       platform,
       core: resolved.coreName,
       mediaKind: host.status.mediaKind,
       ...(bytes ? { bytes: bytes.length } : { path: host.status.mediaPath }),
-      framebuffer: { width: host.status.fbWidth, height: host.status.fbHeight },
+      ...(framebufferKnown
+        ? { framebuffer: { width: host.status.fbWidth, height: host.status.fbHeight } }
+        : { framebufferNote: "Framebuffer dimensions are unknown until the core runs — call stepFrames first, then getStatus (the pre-boot default does not match the real output resolution)." }),
     });
   }
 
