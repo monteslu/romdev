@@ -103,7 +103,13 @@ export function registerInputTools(server, z, sessionKey) {
       return jsonContent({
         button,
         ...(resolved !== button ? { resolvedTo: resolved } : {}),
-        frames: frames + 1,
+        // `frames` = held frames (matches the requested arg + its documented
+        // default). The press also advances ONE extra frame to register the
+        // release, so the total frames stepped is `frames + 1` — reported
+        // separately so the held count matches what the caller asked for.
+        frames,
+        releaseFrames: 1,
+        framesStepped: frames + 1,
         frameCount: host.status.frameCount,
       });
     }),

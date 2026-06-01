@@ -146,6 +146,82 @@ export function paletteToGenericColors(palette32) {
 }
 
 /**
+ * Decode one 1KB NES nametable (960 tile indices + 64-byte attribute table)
+ * into structured, ready-to-use data — so an agent reverse-engineering a
+ * screen doesn't have to slice CIRAM and hand-decode the 2-bit-per-16×16-block
+ * attribute format itself.
+ *
+ * The attribute table packs the BG sub-palette (0-3) for each 16×16-pixel
+ * region (= 2×2 tiles): one byte per 32×32 area, four 2-bit quadrants
+ * (bits 0-1 = top-left, 2-3 = top-right, 4-5 = bottom-left, 6-7 = bottom-right).
+ * We expand it to a per-TILE grid so it lines up cell-for-cell with `tiles`.
+ *
+ * @param {Uint8Array} ciram a 1KB (or larger) region; first 1024 bytes are one
+ *   nametable: bytes 0-959 tile indices (32×30), 960-1023 attribute table.
+ * @param {Object} [opts]
+ * @param {number} [opts.which=0] which 1KB nametable when `ciram` holds ≥2.
+ * @param {{x:number,y:number,w:number,h:number}} [opts.region] tile sub-rect to
+ *   return (clipped to 32×30). Omit for the whole nametable.
+ * @returns {{
+ *   width: number, height: number, region: {x,y,w,h},
+ *   tiles: number[][],          // [row][col] tile index
+ *   subPaletteGrid: number[][], // [row][col] BG sub-palette 0-3 (per tile)
+ *   distinctTiles: number[],    // sorted unique tile indices in the region
+ *   attrTableHex: string,       // the raw 64-byte attribute table, for reference
+ * }}
+ */
+export function decodeNametable(ciram, opts = {}) {
+  const which = opts.which ?? 0;
+  const base = which * 0x400;
+  if (ciram.length < base + 1024) {
+    throw new Error(`decodeNametable: need ≥${base + 1024} bytes for nametable ${which}, got ${ciram.length}`);
+  }
+  const nt = ciram.subarray(base, base + 0x400);
+  const attr = nt.subarray(960, 1024); // 64 bytes
+
+  // Per-tile sub-palette: attr byte index = (row>>2)*8 + (col>>2); within it,
+  // quadrant = ((row>>1)&1)*2 + ((col>>1)&1) → shift 0/2/4/6.
+  const subPalAt = (col, row) => {
+    const byte = attr[(row >> 2) * 8 + (col >> 2)] ?? 0;
+    const shift = (((row >> 1) & 1) << 1 | ((col >> 1) & 1)) * 2;
+    return (byte >> shift) & 0x3;
+  };
+
+  // Clip the requested region to the 32×30 visible grid.
+  const rx = Math.max(0, opts.region?.x ?? 0);
+  const ry = Math.max(0, opts.region?.y ?? 0);
+  const rw = Math.min(32 - rx, opts.region?.w ?? 32);
+  const rh = Math.min(30 - ry, opts.region?.h ?? 30);
+
+  const tiles = [];
+  const subPaletteGrid = [];
+  const distinct = new Set();
+  for (let r = 0; r < rh; r++) {
+    const trow = [];
+    const prow = [];
+    for (let c = 0; c < rw; c++) {
+      const col = rx + c, row = ry + r;
+      const t = nt[row * 32 + col];
+      trow.push(t);
+      prow.push(subPalAt(col, row));
+      distinct.add(t);
+    }
+    tiles.push(trow);
+    subPaletteGrid.push(prow);
+  }
+
+  return {
+    width: rw,
+    height: rh,
+    region: { x: rx, y: ry, w: rw, h: rh },
+    tiles,
+    subPaletteGrid,
+    distinctTiles: Array.from(distinct).sort((a, b) => a - b),
+    attrTableHex: Array.from(attr, (b) => b.toString(16).padStart(2, "0")).join(""),
+  };
+}
+
+/**
  * Render a NES background nametable into a real 256×240 PNG by compositing:
  *   - the 32×30 tile indices from the nametable
  *   - the active 4 BG palettes from the palette region

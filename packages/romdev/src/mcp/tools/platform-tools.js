@@ -152,16 +152,30 @@ export function registerPlatformTools(server, z, sessionKey) {
   server.tool(
     "inspectPalette",
     "Read the loaded ROM's active color palette as a normalized {index,r,g,b,rawWord}[] list AND a PNG swatch sheet. Supported: NES (32 entries: 16 BG + 16 sprite), SNES (256 entries: BGR555 → expanded to 8bpc RGB), Genesis (64 entries: BGR XX nybbles → 8bpc), GB/GBC (4 grayscale shades for DMG; 32 colors for CGB). All return the same generic shape. " +
+    "NES filters: `area:'bg'` (16 entries) or `area:'sprite'`, and/or `subPalette:0-3` (just those 4 entries of the chosen area) — cuts payload when you only need one sub-palette. " +
     "The color list is ALWAYS returned. DEFAULT writes the swatch PNG to outputPath and returns {imagePath}; pass inline:true to get the image in the response (you must pass one or the other).",
     {
       platform: z.string().optional(),
+      area: z.enum(["bg", "sprite", "all"]).default("all").describe("NES only: 'bg' = entries 0-15, 'sprite' = 16-31, 'all' = both (default). Other platforms ignore this."),
+      subPalette: z.number().int().min(0).max(3).optional().describe("NES only: return just one 4-entry sub-palette (within the chosen `area`). E.g. area:'bg', subPalette:3 → the 4 colors of BG sub-palette 3."),
       outputPath: z.string().optional().describe("Absolute path to write the swatch PNG to. Required unless inline:true."),
       inline: z.boolean().default(false).describe("If true, return the swatch image in the response instead of writing to disk. Default false — then outputPath is required."),
     },
-    safeTool(async ({ platform, outputPath, inline }) => {
+    safeTool(async ({ platform, area = "all", subPalette, outputPath, inline }) => {
       const host = getHost(sessionKey);
       const p = resolvePlatform(host, platform);
       requireImageTarget(outputPath, inline, "inspectPalette");
+      // NES color-list filter: area (bg/sprite/all) + optional sub-palette.
+      // Applied to the JSON list only; the swatch PNG still shows the full set
+      // so the visual reference stays complete.
+      const filterNesColors = (colors) => {
+        if (p !== "nes" || (area === "all" && subPalette == null)) return colors;
+        const areaStart = area === "sprite" ? 16 : 0;
+        const areaLen = area === "all" ? 32 : 16;
+        let slice = colors.slice(areaStart, areaStart + areaLen);
+        if (subPalette != null) slice = slice.slice(subPalette * 4, subPalette * 4 + 4);
+        return slice;
+      };
       // The JSON (colors etc.) is ALWAYS returned; only the swatch PNG is gated.
       const emit = async (structured, pngBuf) => {
         if (inline) {
@@ -182,8 +196,11 @@ export function registerPlatformTools(server, z, sessionKey) {
         const palette = host.readMemory("nes_palette", 0, 32);
         const { renderPalettePng, paletteToGenericColors } = await import("../../platforms/nes/ppu.js");
         const png = renderPalettePng(palette);
-        const colors = paletteToGenericColors(palette);
-        return emit({ platform: p, colors }, png);
+        const colors = filterNesColors(paletteToGenericColors(palette));
+        const scope = (area === "all" && subPalette == null)
+          ? undefined
+          : { area, ...(subPalette != null ? { subPalette } : {}) };
+        return emit({ platform: p, ...(scope ? { scope } : {}), colors }, png);
       }
 
       if (p === "snes") {
@@ -532,17 +549,29 @@ export function registerPlatformTools(server, z, sessionKey) {
 
   server.tool(
     "inspectBackgroundMap",
-    "Use this to see the loaded ROM's background tile map. NES returns raw CIRAM bytes (or `render:true` " +
-    "for a PNG); GB/GBC/SMS/GG/Genesis return a PNG composite of the full BG plane/nametable (scroll is " +
-    "shown but NOT applied). `which`/`window`/`plane` select the map. SNES needs you to pass the BG params " +
-    "(`tilemapBaseByte`/`tileBaseByte`/`bpp`/`mapWidth`/`mapHeight`) because snes9x doesn't expose PPU " +
-    "registers — they default to a Mode-1 BG1 best-guess. See param hints for the rest. " +
-    "For platforms/paths that render a PNG (NES render:true, GB/GBC/Genesis/SMS/GG/SNES): DEFAULT writes the PNG to outputPath and returns {imagePath}; pass inline:true to get the image in the response (you must pass one or the other). NES render:false returns raw bytes only — no path needed.",
+    "Use this to see the loaded ROM's background tile map. NES render:false returns DECODED structured data — " +
+    "a per-tile `tiles` grid, a per-tile `subPaletteGrid` (BG sub-palette 0-3, already decoded from the " +
+    "attribute table so you never hand-decode the 2-bit-per-16×16-block format), and `distinctTiles`. Pass " +
+    "`region:{x,y,w,h}` (in tiles) to get just a sub-rectangle, or `attributesOnly:true` for just the " +
+    "sub-palette grid + raw attr bytes. NES render:true returns a PNG composite. GB/GBC/SMS/GG/Genesis return " +
+    "a PNG composite of the full BG plane/nametable (scroll shown but NOT applied). `which`/`window`/`plane` " +
+    "select the map. SNES needs the BG params (`tilemapBaseByte`/`tileBaseByte`/`bpp`/`mapWidth`/`mapHeight`) " +
+    "because snes9x doesn't expose PPU registers — they default to a Mode-1 BG1 best-guess. " +
+    "For PNG paths (NES render:true, GB/GBC/Genesis/SMS/GG/SNES): DEFAULT writes the PNG to outputPath and " +
+    "returns {imagePath}; pass inline:true for the image in the response. NES render:false is small when " +
+    "`region`/`attributesOnly` is used; for a full-screen decode pass `outputPath` to write the grids to disk.",
     {
       platform: z.string().optional(),
-      outputPath: z.string().optional().describe("Absolute path to write the BG composite PNG to (image-producing paths only). Required on those paths unless inline:true."),
+      outputPath: z.string().optional().describe("PNG paths: absolute path for the composite PNG (required unless inline:true). NES render:false: if given, write the full decoded JSON (tiles+subPaletteGrid) here and return only a compact summary + distinctTiles."),
       inline: z.boolean().default(false).describe("If true, return the BG image in the response instead of writing to disk (image-producing paths only). Default false."),
-      render: z.boolean().default(false).describe("NES: if true, return a rendered PNG composite instead of raw bytes. GB/GBC/Genesis: always renders a PNG; this flag is ignored."),
+      render: z.boolean().default(false).describe("NES: if true, return a rendered PNG composite instead of decoded structured data. GB/GBC/Genesis: always renders a PNG; this flag is ignored."),
+      region: z.object({
+        x: z.number().int().min(0).max(31),
+        y: z.number().int().min(0).max(29),
+        w: z.number().int().min(1).max(32),
+        h: z.number().int().min(1).max(30),
+      }).optional().describe("NES render:false only: return just this tile sub-rectangle (clipped to 32×30). Omit for the whole nametable. Slashes payload when you only care about one region."),
+      attributesOnly: z.boolean().default(false).describe("NES render:false only: return just the decoded subPaletteGrid + raw 64-byte attribute table (no tiles grid). Smallest payload for 'which sub-palette does this region use?'."),
       which: z.number().int().min(0).max(1).default(0).describe("NES: which 1KB nametable (0 = $2000, 1 = $2400). GB/GBC: 0 = $9800 (default), 1 = $9C00."),
       window: z.boolean().default(false).describe("GB/GBC only: if true, render the Window tile map base (follows LCDC.6) instead of the BG map base."),
       plane: z.enum(["A", "B"]).default("A").describe("Genesis only: which scroll plane to render — 'A' (default) or 'B'."),
@@ -552,7 +581,7 @@ export function registerPlatformTools(server, z, sessionKey) {
       mapWidth: z.union([z.literal(32), z.literal(64)]).default(32).describe("SNES only: tilemap width in tiles (32 or 64, per BGxSC size bits)."),
       mapHeight: z.union([z.literal(32), z.literal(64)]).default(32).describe("SNES only: tilemap height in tiles (32 or 64)."),
     },
-    safeTool(async ({ platform, render, which, window, plane, tilemapBaseByte, tileBaseByte, bpp, mapWidth, mapHeight, outputPath, inline }) => {
+    safeTool(async ({ platform, render, region, attributesOnly, which, window, plane, tilemapBaseByte, tileBaseByte, bpp, mapWidth, mapHeight, outputPath, inline }) => {
       const host = getHost(sessionKey);
       const p = resolvePlatform(host, platform);
       // Gate the PNG; the textual note travels alongside it. Used by every
@@ -578,11 +607,40 @@ export function registerPlatformTools(server, z, sessionKey) {
           const png = snapshotNametable(host, { which });
           return emitImage(png, `Background composite (nametable ${which}, 256×240).`);
         }
-        const nt = host.readMemory("nes_nametables", 0, 2048);
-        return jsonContent({
-          bytes: 2048,
-          hex: Array.from(nt, (b) => b.toString(16).padStart(2, "0")).join(""),
-        });
+        // render:false → DECODED structured data (tiles grid + per-tile
+        // sub-palette grid decoded from the attribute table + distinct tiles),
+        // so the agent never slices CIRAM or hand-decodes the 2-bit attr format.
+        const { decodeNametable } = await import("../../platforms/nes/ppu.js");
+        const ciram = host.readMemory("nes_nametables", 0, 2048);
+        const dec = decodeNametable(ciram, { which, region });
+        const common = {
+          platform: p,
+          which,
+          region: dec.region,
+          subPaletteGrid: dec.subPaletteGrid,
+          attrTableHex: dec.attrTableHex,
+          note: "subPaletteGrid[row][col] = BG sub-palette 0-3 for each tile (decoded from the attribute table). On NES, palette indices for sub-palette N are nes_palette[N*4 .. N*4+3].",
+        };
+        if (attributesOnly) {
+          return jsonContent(common);
+        }
+        const full = { ...common, distinctTiles: dec.distinctTiles, tiles: dec.tiles };
+        // Big full-screen grid → optionally spill to disk and return a summary,
+        // matching the disk-by-default ergonomics of screenshot/inspectPalette.
+        if (outputPath) {
+          const { mkdir: mkdirp, writeFile: writeFileP } = await import("node:fs/promises");
+          const dirname = (await import("node:path")).dirname(outputPath);
+          await mkdirp(dirname, { recursive: true });
+          await writeFileP(outputPath, JSON.stringify(full, null, 2));
+          return jsonContent({
+            platform: p, which, region: dec.region,
+            path: outputPath,
+            distinctTiles: dec.distinctTiles,
+            tileCount: dec.width * dec.height,
+            note: `Decoded ${dec.width}×${dec.height} tile grid + subPaletteGrid written to ${outputPath}. distinctTiles inline above. Pass a smaller region or attributesOnly to get the grids inline instead.`,
+          });
+        }
+        return jsonContent(full);
       }
       if (p === "gb" || p === "gbc") {
         const { snapshotBackgroundMap } = await import("../../platforms/gb/ppu.js");

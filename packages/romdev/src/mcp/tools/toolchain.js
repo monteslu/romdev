@@ -59,23 +59,56 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // logs are written to a sibling path (when one exists) and only a tail comes
 // back; inline:true returns the full log regardless.
 const LOG_TAIL = 1200;
+
+// On a SUCCESSFUL build the GCC LTO path (Genesis/GBA m68k/arm) prints
+// interprocedural-optimization phase banners and a per-pass timing table that
+// carry no diagnostic value — they just crowd the linker-map / objcopy
+// confirmation out of the tail. Strip those blocks on success so the signal
+// stays visible. Left intact on failure (timing can matter when diagnosing a
+// hang/OOM). The full untrimmed log is still written to logPath when spilled.
+export function denoiseSuccessLog(log) {
+  const lines = log.split("\n");
+  const kept = [];
+  let inTiming = false;
+  for (const line of lines) {
+    // GCC `-ftime-report` table: starts at a "Time variable" header and runs
+    // through the "TOTAL ... GGC" row. Drop the whole block.
+    if (/^\s*Time variable\b/.test(line)) { inTiming = true; continue; }
+    if (inTiming) {
+      if (/^\s*TOTAL\b/.test(line)) inTiming = false;
+      continue;
+    }
+    // LTO interprocedural-optimization phase dump:
+    //   "Performing interprocedural optimizations"
+    //   " <*free_lang_data> {heap 32M} <visibility> {heap 32M} ..."
+    if (/^\s*Performing interprocedural optimizations\s*$/.test(line)) continue;
+    if (/^\s*<[\w*][^>]*>\s*\{heap\b/.test(line)) continue;
+    kept.push(line);
+  }
+  return kept.join("\n");
+}
+
 /**
  * Fold the build log into a response payload per the gating rule.
  * @param {string|undefined|null} log
  * @param {boolean} inline  caller asked for the full log inline
  * @param {string|null} siblingPath  where to write a large log (e.g. ROM path + ".build.log"); null = nowhere
+ * @param {boolean} [ok=false]  whether the build succeeded — denoise LTO/timing on success
  * @returns {object} fields to spread into the response
  */
-async function logField(log, inline, siblingPath) {
+async function logField(log, inline, siblingPath, ok = false) {
   if (!log) return { log: null };
-  if (inline || log.length <= LOG_TAIL) return { log };
+  // Always write the FULL untrimmed log to disk (it's the forensic record);
+  // only the inline/tail view is denoised on success.
+  const view = ok ? denoiseSuccessLog(log) : log;
+  if (inline || view.length <= LOG_TAIL) return { log: view };
   if (siblingPath) {
     await writeFile(siblingPath, log, "utf8");
-    return { logPath: siblingPath, logTail: log.slice(-LOG_TAIL), logBytes: log.length };
+    return { logPath: siblingPath, logTail: view.slice(-LOG_TAIL), logBytes: log.length };
   }
   // No place to write — the log is a byproduct, not a primary artifact, so
   // return the tail + size rather than throwing.
-  return { logTail: log.slice(-LOG_TAIL), logBytes: log.length };
+  return { logTail: view.slice(-LOG_TAIL), logBytes: log.length };
 }
 
 // SDCC platforms whose stock-SDCC crt0 doesn't actually boot the target
@@ -375,7 +408,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         ...(result.ramUsage ? { ramUsage: result.ramUsage } : {}),
         ...(result.stage ? { stage: result.stage } : {}),
         ...(result.sdkEditIgnored ? { sdkEditIgnored: result.sdkEditIgnored } : {}),
-        ...(await logField(result.log, inline, logSibling)),
+        ...(await logField(result.log, inline, logSibling, result.ok)),
         issues: result.issues ?? [],
         ...(showHint ? { hint: showHint } : {}),
       };
@@ -672,7 +705,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         exitCode: result.exitCode,
         binaryBytes: result.binary ? result.binary.length : 0,
         outputPath: outputPath && result.binary ? outputPath : null,
-        ...(await logField(result.log, false, logSibling)),
+        ...(await logField(result.log, false, logSibling, result.ok)),
         issues: result.issues ?? [],
       });
     }),
