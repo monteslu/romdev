@@ -129,11 +129,36 @@ export function registerFrameTools(server, z, sessionKey) {
     }
   }
 
+  // Nearest-neighbor downscale of a PNG by an integer divisor. Nearest-neighbor
+  // (not averaging) is deliberate: it keeps pixel-art edges crisp and palette
+  // colors exact, so a half-size sanity-check shot still reads accurately. The
+  // PNG is fully decoded already (it's a tiny framebuffer), so this is cheap.
+  function downscalePng(pngBase64, scale) {
+    const src = PNG.sync.read(Buffer.from(pngBase64, "base64"));
+    const dw = Math.max(1, Math.round(src.width * scale));
+    const dh = Math.max(1, Math.round(src.height * scale));
+    const dst = new PNG({ width: dw, height: dh });
+    for (let y = 0; y < dh; y++) {
+      const sy = Math.min(src.height - 1, Math.floor(y / scale));
+      for (let x = 0; x < dw; x++) {
+        const sx = Math.min(src.width - 1, Math.floor(x / scale));
+        const si = (sy * src.width + sx) * 4;
+        const di = (y * dw + x) * 4;
+        dst.data[di] = src.data[si];
+        dst.data[di + 1] = src.data[si + 1];
+        dst.data[di + 2] = src.data[si + 2];
+        dst.data[di + 3] = src.data[si + 3];
+      }
+    }
+    return { base64: PNG.sync.write(dst).toString("base64"), width: dw, height: dh };
+  }
+
   // PNG capture. Writes to outPath, or returns inline when `inline`.
-  async function shootPng({ path: outPath, inline, overlayBoxes }) {
+  async function shootPng({ path: outPath, inline, overlayBoxes, scale }) {
     const host = getHost(sessionKey);
     const shot = host.screenshot();
     let pngBase64 = shot.pngBase64;
+    let width = shot.width, height = shot.height;
     let overlayInfo = null;
     if (overlayBoxes) {
       const platform = host.status.platform;
@@ -146,16 +171,23 @@ export function registerFrameTools(server, z, sessionKey) {
         overlayInfo = { platform, spritesDrawn: 0, note: `overlay not yet supported for '${platform}'` };
       }
     }
+    // Downscale AFTER overlay so the boxes scale with the image. scale=1 (or
+    // unset) is the full-resolution default; a quarter-size shot is ~75%
+    // fewer image tokens for routine "did it change?" sanity checks.
+    if (scale && scale < 1) {
+      const small = downscalePng(pngBase64, scale);
+      pngBase64 = small.base64; width = small.width; height = small.height;
+    }
     if (!inline) {
       await writeFile(outPath, Buffer.from(pngBase64, "base64"));
-      const json = jsonContent({ path: outPath, width: shot.width, height: shot.height, overlay: overlayInfo });
+      const json = jsonContent({ path: outPath, width, height, ...(scale && scale < 1 ? { scale, fullWidth: shot.width, fullHeight: shot.height } : {}), overlay: overlayInfo });
       json._observerImages = [{ kind: "image", mimeType: "image/png", base64: pngBase64 }];
       return json;
     }
     return {
       content: [
         imageContent(pngBase64),
-        { type: "text", text: `framebuffer ${shot.width}x${shot.height}${overlayInfo ? ` (overlay: ${overlayInfo.spritesDrawn} sprites)` : ""}` },
+        { type: "text", text: `framebuffer ${shot.width}x${shot.height}${scale && scale < 1 ? ` (scaled to ${width}x${height})` : ""}${overlayInfo ? ` (overlay: ${overlayInfo.spritesDrawn} sprites)` : ""}` },
       ],
     };
   }
@@ -204,15 +236,16 @@ export function registerFrameTools(server, z, sessionKey) {
       path: z.string().optional().describe("Absolute path to write to (PNG bytes or ANSI text per format). Required unless inline:true."),
       inline: z.boolean().default(false).describe("If true, return the image/ANSI in the response instead of writing to disk. Default false — then `path` is required."),
       overlayBoxes: z.boolean().default(false).describe("png only: draw colored sprite-bounding-box overlays (SNES + NES; ignored elsewhere)."),
+      scale: z.number().gt(0).max(1).optional().describe("png only: downscale factor (0<scale≤1) using nearest-neighbor (keeps pixel art crisp). e.g. 0.5 = quarter the pixels, ~75% fewer image tokens — ideal for routine 'did it change?' checks. Omit/1 = full resolution."),
       cols: z.number().int().min(4).max(640).optional().describe("ascii only: terminal columns. Default framebuffer_width/16 (1 char ≈ 2 game tiles)."),
       rows: z.number().int().min(4).max(480).optional().describe("ascii only: terminal rows. Default framebuffer_height/16."),
       symbols: z.enum(["ascii", "halfblock", "block", "quad", "sextant"]).default("ascii").describe("ascii only: chafa symbol set. 'ascii' (default) = pure ASCII; 'halfblock'/'quad'/'sextant' = denser, need Unicode."),
       colors: z.enum(["true", "256", "16", "fgbg"]).default("true").describe("ascii only: color depth. 'true' = 24-bit; '256'/'16' = palettes; 'fgbg' = mono shape."),
     },
-    safeTool(async ({ format, path: outPath, inline, overlayBoxes, cols, rows, symbols, colors }) => {
+    safeTool(async ({ format, path: outPath, inline, overlayBoxes, scale, cols, rows, symbols, colors }) => {
       requireImageTarget(outPath, inline, "screenshot");
       if (format === "ascii") return shootAscii({ cols, rows, symbols, colors, path: outPath, inline });
-      return shootPng({ path: outPath, inline, overlayBoxes });
+      return shootPng({ path: outPath, inline, overlayBoxes, scale });
     }),
   );
 

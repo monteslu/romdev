@@ -392,14 +392,34 @@ export class LibretroHost {
 
   /** @param {string} name */
   loadState(name) {
-    const mod = this._needMod();
     const snapshot = this.namedStates.get(name);
     if (!snapshot) throw new Error(`no save state named '${name}'`);
-    const ptr = mod._malloc(snapshot.byteLength);
+    this.unserializeState(snapshot);
+  }
+
+  /**
+   * Restore the emulator from a raw save-state blob (the inverse of
+   * serializeState). Used by both the in-memory loadState and the
+   * load-from-disk path so they share one code path. The blob must come from
+   * the SAME core/platform that produced it — retro_unserialize rejects a
+   * size/format mismatch and we surface that as a clear error.
+   * @param {Uint8Array} blob
+   */
+  unserializeState(blob) {
+    const mod = this._needMod();
+    if (!blob || !blob.byteLength) throw new Error("unserializeState: empty blob");
+    const expected = mod._retro_serialize_size();
+    if (expected && blob.byteLength !== expected) {
+      throw new Error(
+        `save-state size mismatch: blob is ${blob.byteLength} bytes but this core expects ${expected}. ` +
+        "The state was almost certainly saved from a different platform/ROM — load the matching ROM first.",
+      );
+    }
+    const ptr = mod._malloc(blob.byteLength);
     try {
-      mod.HEAPU8.set(snapshot, ptr);
-      const ok = mod._retro_unserialize(ptr, snapshot.byteLength);
-      if (!ok) throw new Error("retro_unserialize failed");
+      mod.HEAPU8.set(blob, ptr);
+      const ok = mod._retro_unserialize(ptr, blob.byteLength);
+      if (!ok) throw new Error("retro_unserialize failed (core rejected the blob)");
     } finally {
       mod._free(ptr);
     }

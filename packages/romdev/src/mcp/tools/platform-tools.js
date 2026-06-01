@@ -337,17 +337,24 @@ export function registerPlatformTools(server, z, sessionKey) {
     "The sprite JSON is ALWAYS returned. On platforms that also render a sprite PNG (sms/gg, gb/gbc, atari2600/7800): DEFAULT writes the PNG to outputPath and returns {imagePath}; pass inline:true to get the image in the response (you must pass one or the other on those platforms). NES/SNES/Genesis/C64 are JSON-only — no path needed.",
     {
       platform: z.string().optional(),
-      maxSlots: z.number().int().min(1).max(128).optional().describe("Return only the first N sprite slots (in OAM order). Omit for all slots. The JSON includes `slotsReturned`/`slotsTotal` so you know if it was clipped."),
+      maxSlots: z.number().int().min(1).max(128).optional().describe("Return only the first N sprite slots (in OAM order). Omit for all. e.g. maxSlots:8 = the active piece + next preview on most games."),
+      slots: z.array(z.number().int().min(0).max(127)).optional().describe("Return only these specific slot indices (non-contiguous OK, e.g. [0,1,2,3,8,9]). Takes precedence over maxSlots. Use when the slots you care about aren't the first N."),
       outputPath: z.string().optional().describe("Absolute path to write the sprite PNG to (only platforms that produce one). Required on those platforms unless inline:true."),
       inline: z.boolean().default(false).describe("If true, return the sprite image in the response instead of writing to disk (only platforms that produce one). Default false."),
     },
-    safeTool(async ({ platform, maxSlots, outputPath, inline }) => {
+    safeTool(async ({ platform, maxSlots, slots, outputPath, inline }) => {
       const host = getHost(sessionKey);
       const p = resolvePlatform(host, platform);
-      // Generic slot clamp, applied by each platform branch before returning.
+      // Generic slot filter, applied by each platform branch before returning.
+      // `slots` (explicit index list) wins over `maxSlots` (first N); the
+      // returned sprites keep their original .slot field so indices stay honest.
+      const slotSet = slots != null ? new Set(slots) : null;
       const clampSlots = (sprites) => {
         const slotsTotal = sprites.length;
-        const clipped = maxSlots != null ? sprites.slice(0, maxSlots) : sprites;
+        let clipped;
+        if (slotSet) clipped = sprites.filter((s, i) => slotSet.has(s.slot ?? i));
+        else if (maxSlots != null) clipped = sprites.slice(0, maxSlots);
+        else clipped = sprites;
         return { sprites: clipped, slotsTotal, slotsReturned: clipped.length };
       };
       // Gate the PNG for platforms that render one. JSON is always returned.
@@ -571,7 +578,8 @@ export function registerPlatformTools(server, z, sessionKey) {
         w: z.number().int().min(1).max(32),
         h: z.number().int().min(1).max(30),
       }).optional().describe("NES render:false only: return just this tile sub-rectangle (clipped to 32×30). Omit for the whole nametable. Slashes payload when you only care about one region."),
-      attributesOnly: z.boolean().default(false).describe("NES render:false only: return just the decoded subPaletteGrid + raw 64-byte attribute table (no tiles grid). Smallest payload for 'which sub-palette does this region use?'."),
+      attributesOnly: z.boolean().default(false).describe("NES render:false only: return just the decoded subPaletteGrid + raw attribute table (no tiles grid). Smallest payload for 'which sub-palette does this region use?'. Mutually exclusive with tilesOnly."),
+      tilesOnly: z.boolean().default(false).describe("NES render:false only: return just the tile-index grid + distinctTiles (no subPalette annotation). Cheapest 'what tiles are here?' read. Mutually exclusive with attributesOnly."),
       which: z.number().int().min(0).max(1).default(0).describe("NES: which 1KB nametable (0 = $2000, 1 = $2400). GB/GBC: 0 = $9800 (default), 1 = $9C00."),
       window: z.boolean().default(false).describe("GB/GBC only: if true, render the Window tile map base (follows LCDC.6) instead of the BG map base."),
       plane: z.enum(["A", "B"]).default("A").describe("Genesis only: which scroll plane to render — 'A' (default) or 'B'."),
@@ -581,9 +589,12 @@ export function registerPlatformTools(server, z, sessionKey) {
       mapWidth: z.union([z.literal(32), z.literal(64)]).default(32).describe("SNES only: tilemap width in tiles (32 or 64, per BGxSC size bits)."),
       mapHeight: z.union([z.literal(32), z.literal(64)]).default(32).describe("SNES only: tilemap height in tiles (32 or 64)."),
     },
-    safeTool(async ({ platform, render, region, attributesOnly, which, window, plane, tilemapBaseByte, tileBaseByte, bpp, mapWidth, mapHeight, outputPath, inline }) => {
+    safeTool(async ({ platform, render, region, attributesOnly, tilesOnly, which, window, plane, tilemapBaseByte, tileBaseByte, bpp, mapWidth, mapHeight, outputPath, inline }) => {
       const host = getHost(sessionKey);
       const p = resolvePlatform(host, platform);
+      if (attributesOnly && tilesOnly) {
+        throw new Error("inspectBackgroundMap: attributesOnly and tilesOnly are mutually exclusive — omit both to get tiles + subPaletteGrid together.");
+      }
       // Gate the PNG; the textual note travels alongside it. Used by every
       // image-producing path. NES render:false stays JSON-only (no image).
       const emitImage = async (pngBuf, note) => {
@@ -613,13 +624,26 @@ export function registerPlatformTools(server, z, sessionKey) {
         const { decodeNametable } = await import("../../platforms/nes/ppu.js");
         const ciram = host.readMemory("nes_nametables", 0, 2048);
         const dec = decodeNametable(ciram, { which, region });
+        const base = { platform: p, which, region: dec.region };
+        // tilesOnly: just the tile-index grid (+ distinctTiles) — the cheapest
+        // "what tiles are here?" read, no attribute annotation.
+        if (tilesOnly) {
+          return jsonContent({
+            ...base,
+            tiles: dec.tiles,
+            distinctTiles: dec.distinctTiles,
+            note: "tilesOnly: tile indices for the region. Re-call with attributesOnly:true (or neither flag) to also get the per-tile subPaletteGrid.",
+          });
+        }
+        // attrTableHex is the FULL 64-byte attribute table for the nametable —
+        // one byte covers a 32×32px (4×4-tile) area, so it can't be cleanly
+        // sliced to an arbitrary region. subPaletteGrid IS region-clipped (and
+        // is what you actually want); attrTableHex is labeled as the raw table.
         const common = {
-          platform: p,
-          which,
-          region: dec.region,
+          ...base,
           subPaletteGrid: dec.subPaletteGrid,
-          attrTableHex: dec.attrTableHex,
-          note: "subPaletteGrid[row][col] = BG sub-palette 0-3 for each tile (decoded from the attribute table). On NES, palette indices for sub-palette N are nes_palette[N*4 .. N*4+3].",
+          attrTableFullHex: dec.attrTableHex,
+          note: "subPaletteGrid[row][col] = BG sub-palette 0-3 per tile in the requested region (decoded from the attribute table). On NES, palette indices for sub-palette N are nes_palette[N*4 .. N*4+3]. attrTableFullHex is the raw 64-byte attribute table for the WHOLE nametable (not region-clipped — one byte spans a 4×4-tile area).",
         };
         if (attributesOnly) {
           return jsonContent(common);

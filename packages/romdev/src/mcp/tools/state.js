@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
 import path from "node:path";
 import { getHost } from "../state.js";
 import { jsonContent, safeTool, textContent } from "../util.js";
@@ -6,25 +6,57 @@ import { jsonContent, safeTool, textContent } from "../util.js";
 export function registerStateTools(server, z, sessionKey) {
   server.tool(
     "saveState",
-    "Snapshot the entire emulator state into a named slot. Use for checkpoint/restore workflows.",
+    "Snapshot the entire emulator state. Pass `name` for an in-memory slot (fast, but LOST when the MCP " +
+    "server restarts or a new session begins), and/or `path` to also write the blob to disk so it SURVIVES " +
+    "across sessions — then `loadState({path})` restores it without replaying the boot sequence. For a " +
+    "multi-session reverse-engineering project, save once to a path at the state you care about (e.g. " +
+    "gameplay) and reload it every session instead of re-running loadMedia + hundreds of stepFrames.",
     {
-      name: z.string().min(1).describe("Slot name. Overwrites any existing slot with the same name."),
+      name: z.string().min(1).optional().describe("In-memory slot name (overwrites any existing slot with the same name). Provide `name`, `path`, or both."),
+      path: z.string().optional().describe("Absolute path to ALSO write the raw save-state blob to (survives restarts). Reload with loadState({path}). The blob is core/platform-specific — load the matching ROM before restoring."),
     },
-    safeTool(async ({ name }) => {
-      getHost(sessionKey).saveState(name);
-      return textContent(`saved state '${name}'`);
+    safeTool(async ({ name, path: outPath }) => {
+      if (!name && !outPath) throw new Error("saveState: provide `name` (in-memory slot), `path` (disk), or both.");
+      const host = getHost(sessionKey);
+      const done = [];
+      if (name) { host.saveState(name); done.push(`slot '${name}'`); }
+      if (outPath) {
+        const blob = host.serializeState();
+        await mkdir(path.dirname(outPath), { recursive: true });
+        await writeFile(outPath, blob);
+        done.push(`${blob.length} bytes → ${outPath}`);
+      }
+      return jsonContent({
+        saved: true,
+        ...(name ? { name } : {}),
+        ...(outPath ? { path: outPath } : {}),
+        platform: host.status.platform,
+        note: `Saved ${done.join(" + ")}.` + (outPath ? " Restore across sessions with loadState({path}) after loading the same ROM." : ""),
+      });
     }),
   );
 
   server.tool(
     "loadState",
-    "Restore a previously saved state by name. Resets the framebuffer/frame counters to whatever the snapshot held.",
+    "Restore a previously saved state — from an in-memory `name` slot OR a `path` on disk (a blob written by " +
+    "saveState({path}) or dumpState). Resets the framebuffer/frame counters to whatever the snapshot held. " +
+    "Load-from-path is the cross-session escape hatch: skip the boot replay by restoring a disk snapshot " +
+    "(the matching ROM must already be loaded — the blob is core-specific and a mismatch errors clearly).",
     {
-      name: z.string().min(1),
+      name: z.string().min(1).optional().describe("In-memory slot name (from saveState({name})). Provide `name` OR `path`."),
+      path: z.string().optional().describe("Absolute path to a save-state blob on disk (from saveState({path}) or dumpState). Load the matching ROM first."),
     },
-    safeTool(async ({ name }) => {
-      getHost(sessionKey).loadState(name);
-      return textContent(`loaded state '${name}'`);
+    safeTool(async ({ name, path: inPath }) => {
+      if (!name && !inPath) throw new Error("loadState: provide `name` (in-memory slot) or `path` (disk).");
+      if (name && inPath) throw new Error("loadState: provide `name` OR `path`, not both.");
+      const host = getHost(sessionKey);
+      if (inPath) {
+        const blob = new Uint8Array(await readFile(inPath));
+        host.unserializeState(blob);
+        return jsonContent({ loaded: true, path: inPath, bytes: blob.length, platform: host.status.platform });
+      }
+      host.loadState(name);
+      return jsonContent({ loaded: true, name, platform: host.status.platform });
     }),
   );
 
