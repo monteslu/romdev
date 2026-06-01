@@ -282,6 +282,15 @@ incorrectly aligned."
   channels. For multi-channel sequenced music with envelopes / vibrato /
   pattern playback, roll your own — famitone2 is the standard NES sound
   driver but isn't bundled.
+  - **Debugging / transcribing sound:** `getAudioState({chip:"nes"})` decodes
+    the live APU register file ($4000-$4017) into per-channel
+    {pulse1, pulse2, triangle, noise, dmc} with note names, freq, duty and
+    volume — use it to confirm "is my channel actually playing the pitch I
+    think?" To capture a note timeline over time (e.g. to port a tune to
+    another platform), watch the registers: `watchMemory({region:"nes_apu_regs",
+    onChange:"reset", outputPath:...})` logs each note onset, or
+    `recordSession({memorySamples:[{region:"nes_apu_regs",...}], sampleEvery:1,
+    memoryOutputPath:...})` streams per-frame samples to disk.
 - Mapper support — only NROM-256 (32 KB PRG, no banks) is wired. For
   MMC1/MMC3/UNROM you'll need a different linker config.
 - IRQ — the IRQ vector returns. Most NES games use a custom IRQ
