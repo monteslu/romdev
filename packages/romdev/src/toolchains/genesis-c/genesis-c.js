@@ -417,6 +417,7 @@ async function buildWithSgdk({ sources, headers, binaryIncludes, cc1Options, reb
     exitCode: 0,
     stage: "done",
     runtime: "sgdk",
+    ...(ld.map ? { symbols: ld.map } : {}),
     ...(sdkWarnings.length ? { sdkEditIgnored: sdkWarnings } : {}),
   };
 }
@@ -546,6 +547,7 @@ async function buildMinimal(args) {
     exitCode: 0,
     stage: "done",
     runtime: "minimal",
+    ...(ld.map ? { symbols: ld.map } : {}),
   };
 }
 

@@ -54,6 +54,7 @@ export function registerSymbolTools(server, z) {
     safeTool(async ({ platform, source, sources, includes, linkerConfig, crt0, codeLoc, outputPath, inline }) => {
       const CC65_TARGETS = ["nes", "c64", "atari7800", "lynx"];
       const SDCC_TARGETS = ["gb", "gbc", "sms", "gg"];
+      const M68K_TARGETS = ["genesis"];
       if (!inline && !outputPath) {
         throw new Error("buildSourceWithDebug: pass outputPath (where to save the ROM; .dbg/.map/log land alongside it) or inline:true to get everything in the response.");
       }
@@ -135,9 +136,45 @@ export function registerSymbolTools(server, z) {
         return jsonContent(out);
       }
 
+      if (M68K_TARGETS.includes(platform)) {
+        // Genesis (m68k-elf gcc/ld). The linker now emits a GNU ld map
+        // (symbol → final address) which buildForPlatform surfaces as
+        // `symbols`. That's how you find where a RAM variable like `well`
+        // landed, then writeMemory to it.
+        const { buildForPlatform } = await import("../../toolchains/index.js");
+        const r = await buildForPlatform({ platform, language: "c", source, sources, includes });
+        const out = {
+          ok: r.ok,
+          toolchain: r.toolchain || "m68k-elf-gcc",
+          exitCode: r.exitCode,
+          stage: r.stage,
+          binaryBytes: r.binary ? r.binary.length : 0,
+          issues: r.issues,
+          ...logField(r.log, inline, sib?.log, r.ok),
+          mapHint:
+            "GNU ld .map: find your symbol in the 'Linker script and memory map' section — lines " +
+            "like `0xe0ff0048                well`. SGDK links 68k work-RAM through its mirror at " +
+            "0xE0FF0000 (hardware mirrors $FF0000 across the high bus). The work-RAM region is " +
+            "exposed as `system_ram` (64KB); the OFFSET into it is the low 16 bits of the symbol " +
+            "address — e.g. 0xE0FF0048 → writeMemory({region:'system_ram', offset:0x0048, ...}). " +
+            "C symbols have NO leading underscore in the m68k ELF (unlike SDCC's .map).",
+        };
+        if (r.binary) {
+          if (inline) out.binaryBase64 = Buffer.from(r.binary).toString("base64");
+          else out.binaryPath = writeOutput(r.binary, { outputPath, what: "ROM" }).path;
+        }
+        if (r.symbols) {
+          if (inline) out.mapText = r.symbols;
+          else out.mapPath = writeOutput(r.symbols, { outputPath: sib.map, what: ".map" }).path;
+        } else {
+          out.mapNote = "No linker map produced (link likely failed — check exitCode/log).";
+        }
+        return jsonContent(out);
+      }
+
       throw new Error(
-        `buildSourceWithDebug supports cc65 targets (${CC65_TARGETS.join(", ")}) ` +
-        `and SDCC targets (${SDCC_TARGETS.join(", ")}); got '${platform}'`
+        `buildSourceWithDebug supports cc65 targets (${CC65_TARGETS.join(", ")}), ` +
+        `SDCC targets (${SDCC_TARGETS.join(", ")}), and m68k targets (${M68K_TARGETS.join(", ")}); got '${platform}'`
       );
     }),
   );

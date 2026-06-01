@@ -19,16 +19,55 @@ import { decodeTile } from "../../platforms/common/tile-decode.js";
 import { TILE_SPECS } from "../../platforms/common/image-to-tiles.js";
 import { nesPaletteIndexToRgb } from "../../platforms/nes/ppu.js";
 
+// Live-VRAM tile region per platform (mirrors tile-inspect.js). Genesis/SNES
+// share the generic libretro video_ram id.
+function liveTileRegion(platform) {
+  switch (platform) {
+    case "nes": return "nes_chr";
+    case "sms": return "sms_vram";
+    case "gg": return "gg_vram";
+    case "gb":
+    case "gbc": return "gb_vram";
+    case "snes":
+    case "genesis":
+    case "megadrive":
+    case "md": return "video_ram";
+    default: throw new Error(`previewTileArt: fromEmulator not wired for platform '${platform}'`);
+  }
+}
+
 /**
- * Resolve tile bytes from one of: inline base64, raw file on disk, iNES
- * file (NES only — auto-locates CHR). Returns { bytes, source }.
+ * Resolve tile bytes from one of: live emulator VRAM (fromEmulator), inline
+ * base64, raw file on disk, or iNES file (NES auto-locates CHR).
+ * Returns { bytes, source }.
  */
-async function resolveTileBytes({ tileBytes, tilePath, tileStart, tileCount, platform, bytesPerTile }) {
+async function resolveTileBytes({ tileBytes, tilePath, fromEmulator, tileStart, tileCount, platform, bytesPerTile, sessionKey }) {
+  if (fromEmulator) {
+    const host = getHostOrNull(sessionKey);
+    if (!host || !host.status?.platform) {
+      throw new Error("previewTileArt: fromEmulator:true requires a loaded ROM — call loadMedia first.");
+    }
+    const region = liveTileRegion(platform);
+    const startByte = (tileStart ?? 0) * bytesPerTile;
+    const lenBytes = (tileCount ?? 256) * bytesPerTile;
+    let bytes = host.readMemory(region, startByte, lenBytes);
+    // Genesis VRAM is host-LE 16-bit-word-swapped — un-swap so tiles decode in
+    // VDP render order (same correction getTile applies). Other platforms /
+    // file sources are already logical.
+    const md = platform === "genesis" || platform === "megadrive" || platform === "md";
+    if (md && region === "video_ram") {
+      const sw = new Uint8Array(bytes.length);
+      for (let i = 0; i + 1 < bytes.length; i += 2) { sw[i] = bytes[i + 1]; sw[i + 1] = bytes[i]; }
+      if (bytes.length & 1) sw[bytes.length - 1] = bytes[bytes.length - 1];
+      bytes = sw;
+    }
+    return { bytes: Buffer.from(bytes), source: md ? "emulator (VRAM, byte-swap corrected)" : "emulator (VRAM)" };
+  }
   if (tileBytes) {
     return { bytes: Buffer.from(tileBytes, "base64"), source: "inline" };
   }
   if (!tilePath) {
-    throw new Error("previewTileArt: must pass either tileBytes (base64) or tilePath.");
+    throw new Error("previewTileArt: must pass tileBytes (base64), tilePath, or fromEmulator:true.");
   }
   const file = await readFile(tilePath);
   // iNES auto-locate (NES only).
@@ -66,7 +105,7 @@ async function resolveTileBytes({ tileBytes, tilePath, tileStart, tileCount, pla
  *   paletteIndex     - subpalette selector for platforms with multiple
  *                      subpalettes (NES 0-7, SNES 0-7 BG / 8-15 OBJ, etc.)
  */
-async function resolvePalette({ platform, palette, palettePath, paletteIndex, paletteFromEmulator, spec, intentDefaults }) {
+async function resolvePalette({ platform, palette, palettePath, paletteIndex, paletteFromEmulator, spec, intentDefaults, sessionKey }) {
   // Default fallback: monotonic ramp so tiles are at least visible.
   const fallbackRamp = () => {
     const ramp = [];
@@ -263,7 +302,7 @@ function renderSheet(tileBytes, platform, paletteRgb, tilesPerRow, scale, bytesP
 export async function previewTileArtCore(args) {
   const { resolveIntent } = await import("../../platforms/common/intent.js");
   const d = resolveIntent(args.intent);
-  const { platform, tilesPerRow = 16, scale = 1, outputPath } = args;
+  const { platform, tilesPerRow = 16, scale = 1, outputPath, sessionKey } = args;
   const spec = TILE_SPECS[platform];
   if (!spec) {
     throw new Error(`previewTileArt: unknown platform '${platform}'. Supported: ${Object.keys(TILE_SPECS).join(", ")}`);
@@ -274,13 +313,16 @@ export async function previewTileArtCore(args) {
   // rom-hack → false (default gray ramp). Explicit value wins.
   let resolvedPaletteFromEmulator = args.paletteFromEmulator;
   if (resolvedPaletteFromEmulator === undefined && !args.palette && !args.palettePath) {
-    resolvedPaletteFromEmulator = d.colorMode === "live-or-platform";
+    // If the TILES come from the live emulator, default the palette to live
+    // too — "preview my uploaded tiles" almost always means against the live
+    // palette. Otherwise fall back to the intent default.
+    resolvedPaletteFromEmulator = args.fromEmulator ? true : d.colorMode === "live-or-platform";
   }
 
   const { bytes, source } = await resolveTileBytes({
-    tileBytes: args.tileBytes, tilePath: args.tilePath,
+    tileBytes: args.tileBytes, tilePath: args.tilePath, fromEmulator: args.fromEmulator,
     tileStart: args.tileStart, tileCount: args.tileCount,
-    platform, bytesPerTile,
+    platform, bytesPerTile, sessionKey,
   });
   const paletteRgb = await resolvePalette({
     platform,
@@ -289,6 +331,7 @@ export async function previewTileArtCore(args) {
     paletteFromEmulator: resolvedPaletteFromEmulator,
     spec,
     intentDefaults: d,
+    sessionKey,
   });
 
   const fallbackBg = [0, 0, 0];
@@ -326,13 +369,16 @@ export function registerPreviewTileTools(server, z, sessionKey) {
     "Use this to preview tile bytes against a palette as a PNG — pure compositing, no build/load/screenshot " +
     "cycle. Author bytes → preview → iterate → patchFile once they look right. Cross-platform via " +
     "`platform` (nes/gb/gbc/sms/gg/snes/genesis/gba, each native encoding). Tile source: `tileBytes` " +
-    "(base64) or `tilePath` (raw dump or iNES ROM; `tileStart`/`tileCount` to slice). Palette: explicit " +
+    "(base64) or `tilePath` (raw dump or iNES ROM; `tileStart`/`tileCount` to slice) or `fromEmulator:true` " +
+    "(read tiles straight from the running emulator's VRAM — answer 'do my just-uploaded tiles look right?' " +
+    "in one call, no readMemory→encode round-trip; Genesis VRAM byte-swap handled for you). Palette: explicit " +
     "`palette` or `paletteFromEmulator:true` (NES/SNES/Genesis — preview against the real game palette " +
     "without rebuilding; defaults to a gray ramp). See param hints for palettePath / paletteIndex.",
     {
       platform: z.enum(["nes", "gb", "gbc", "sms", "gg", "snes", "genesis", "megadrive", "md", "gba"]),
       tileBytes: z.string().optional().describe("Base64 of raw tile bytes."),
       tilePath: z.string().optional().describe("Path to tile dump (raw) or iNES ROM (NES auto-locates CHR)."),
+      fromEmulator: z.boolean().optional().describe("Read tiles from the running emulator's live VRAM (use tileStart/tileCount to pick the range; defaults to 256 tiles from tileStart). Genesis VRAM's host-LE word byte-swap is corrected automatically. Mutually exclusive with tileBytes/tilePath."),
       tileStart: z.number().int().min(0).optional().describe("Starting tile index in the source."),
       tileCount: z.number().int().min(1).max(8192).optional().describe("How many tiles to render. Default: all."),
       palette: z.array(z.any()).optional().describe("Explicit palette. NES: 4 master indices. Others: RGB triples or indices."),
@@ -345,7 +391,7 @@ export function registerPreviewTileTools(server, z, sessionKey) {
       intent: intentZod(z),
     },
     safeTool(async (args) => {
-      const r = await previewTileArtCore(args);
+      const r = await previewTileArtCore({ ...args, sessionKey });
       if (r.pngBase64) {
         return {
           content: [

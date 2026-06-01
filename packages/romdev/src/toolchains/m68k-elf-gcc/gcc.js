@@ -166,6 +166,10 @@ export async function runM68kLd(args) {
   const argv = [
     "-T", "/work/genesis.ld",
     "-o", "/work/main.elf",
+    // Emit a linker map: it lists every symbol's final address (`0xADDR symbol`
+    // style), which is how an agent finds where a RAM variable like `well[][]`
+    // landed so it can writeMemory to it. Cheap to always produce.
+    "-Map=/work/main.map",
     ...libraryPaths.flatMap((p) => ["-L", p]),
     ...Object.keys(objects).map((n) => "/work/" + n),
     ...libraries.map((l) => `-l${l}`),
@@ -175,12 +179,18 @@ export async function runM68kLd(args) {
     gluePath: m68kGlue("m68k-elf-ld.mjs"),
     argv,
     inputFiles,
-    outputFiles: [{ vfsPath: "/work/main.elf", encoding: "base64" }],
+    outputFiles: [
+      { vfsPath: "/work/main.elf", encoding: "base64" },
+      { vfsPath: "/work/main.map", encoding: "utf8" },
+    ],
   });
   return {
     log: r.log,
     exitCode: r.exitCode,
     elf: getOutputBytes(r, "/work/main.elf"),
+    // The map is present on a successful link; absent → "" (link failed, so
+    // the caller is looking at exitCode/log anyway).
+    map: getOutputText(r, "/work/main.map") || null,
     ...(r.crash ? { crash: r.crash, stage: "crash" } : {}),
   };
 }

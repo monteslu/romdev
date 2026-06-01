@@ -100,13 +100,26 @@ export function registerMemoryTools(server, z, sessionKey) {
       // platform's CPU endianness.
       const info = REGION_INFO[region] ?? {};
       const endianness = info.endianness ?? genericEndianness(host.status.platform);
+      // Genesis VRAM is stored by genesis-plus-gx as 16-bit words in HOST
+      // (little-endian) byte order, so these raw bytes have each word's two
+      // bytes swapped vs the VDP-logical layout — a raw read is NOT a direct
+      // tile/pixel map. (The VDP un-swaps when rendering, so the screen is
+      // correct.) Use getTile (logicalPixels:true, the default) to decode tiles
+      // in render order instead of un-swapping by hand.
+      let note = info.note ?? null;
+      if (region === "video_ram" && host.status.platform === "genesis") {
+        note = (note ? note + " " : "") +
+          "GENESIS: these are RAW host-LE bytes — each 16-bit VRAM word's two bytes are SWAPPED " +
+          "vs the VDP-logical order, so this is not a direct tile/pixel map. getTile({logicalPixels:true}) " +
+          "decodes tiles in render order for you.";
+      }
       const meta = {
         region,
         offset,
         length: bytes.length,
         endianness,
         wordSize: info.wordSize ?? 1,
-        note: info.note ?? null,
+        note,
       };
       // Large reads: path-or-inline. Write the RAW bytes to disk (not hex) so
       // the artifact is directly usable; inline returns the hex string.
