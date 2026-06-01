@@ -90,9 +90,8 @@ worry about ground truth:
    implementation.
 2. **`createGame({platform, genre})`** — same but picks a known-good
    genre scaffold (shmup / platformer / puzzle / sports / racing).
-3. **`getStarterSnippet({platform, name})`** /
-   **`getAllStarterSnippets({platform})`** /
-   **`copyStarterSnippets({platform, destinationDir})`** — fetch
+3. **`starterSnippets({platform, mode})`** (mode `list`/`get`/`getAll`)
+   / **`copyStarterSnippets({platform, destinationDir})`** — fetch
    vetted helper files (reset routine, read_pad, OAM DMA, palette
    upload, etc.) when building from a smaller starting point.
    `copyStarterSnippets` writes the files to disk in one call
@@ -218,7 +217,7 @@ Different platforms have different levels of MCP-exposed debugging — different
 - **Commodore 64** (vice patched): inspectPalette (the 16-color hardware-fixed palette PNG + current border/background/extra-bg indices decoded from VIC-II regs), inspectSprites (8 MOBs decoded into the generic shape with X/Y/color/multicolor/expand-X/expand-Y/priority + the screen-RAM sprite-data pointers at $07F8 so the agent can locate sprite pixel blocks), getCPUState (6510 — A/X/Y/P/SP/PC from a `#define`-aliased live register file + the I/O port at $0001 decoded into LORAM/HIRAM/CHAREN), getRenderingContext (VIC-II regs decoded into mode/scroll/colors/sprites, VIC bank from CIA2 $DD00, absolute screen + char base addresses), readMemory regions for `system_ram` (64 KB RAM), `c64_color_ram` (1 KB), `c64_vic_regs` (64 B), `c64_sid_regs` (29 B via sid_peek), `c64_cia1_regs`/`c64_cia2_regs` (16 B each from `c_cia[]`), `c64_cpu_regs` (7 B). disassembleRom + findReferences accept `.prg` files (2-byte load-address header) and the C64 register annotation table for VIC-II / SID / CIA registers. Starter snippets cover vic_init / sprite_table / sid_play / read_joystick / basic_stub.
 - **MSX, ColecoVision**: standard system_ram + save_ram + video_ram. Deeper introspection not yet added — extend by patching their cores following the snes9x/gpgx/fceumm/vice pattern (see scripts/patches/).
 
-Starter snippets per platform live under `src/platforms/<platform>/lib/`. Discover via `listStarterSnippets({platform})`, fetch via `getStarterSnippet({platform, name})`. SNES + NES + Genesis + SMS + Game Boy + Atari 2600 + Atari 7800 have substantial snippet libraries; others are minimal.
+Starter snippets per platform live under `src/platforms/<platform>/lib/`. Discover via `starterSnippets({platform})` (default `mode:'list'`), fetch one via `starterSnippets({platform, mode:'get', name})`. SNES + NES + Genesis + SMS + Game Boy + Atari 2600 + Atari 7800 have substantial snippet libraries; others are minimal.
 
 ## ROMs are finalized for real hardware automatically
 
@@ -593,12 +592,12 @@ Two tools that save real time and frustration:
 
 ## Starter snippets
 
-`listStarterSnippets({ platform })` and `getStarterSnippet({ platform, name })` give you vetted boilerplate — reset routine, `read_pad`, OAM DMA, palette upload, nametable clear. Each snippet's comments encode foot-guns prior agent sessions already hit. Always check what's available for your platform before writing platform-specific boilerplate from scratch. NES, SNES, SMS, GG, GB/GBC, Genesis, GBA, C64, Atari 7800 all have substantial snippet libraries.
+`starterSnippets({ platform })` (default `mode:'list'`) and `starterSnippets({ platform, mode:'get', name })` give you vetted boilerplate — reset routine, `read_pad`, OAM DMA, palette upload, nametable clear. Each snippet's comments encode foot-guns prior agent sessions already hit. Always check what's available for your platform before writing platform-specific boilerplate from scratch. NES, SNES, SMS, GG, GB/GBC, Genesis, GBA, C64, Atari 7800 all have substantial snippet libraries.
 
 **Three ways to actually use them:**
 
-- `getStarterSnippet({platform, name})` — one snippet's contents, returned as a string.
-- `getAllStarterSnippets({platform, language?})` — every snippet joined into one string. Useful for **reading**; the giant blob lands in your context.
+- `starterSnippets({platform, mode:'get', name})` — one snippet's contents, returned as a string.
+- `starterSnippets({platform, mode:'getAll', language?})` — every snippet joined into one string. Useful for **reading**; the giant blob lands in your context (or pass `outputPath` to write it to disk instead).
 - **`copyStarterSnippets({platform, destinationDir, language?, include?})`** — writes every snippet (or a filtered subset) straight to disk. **Bytes never pass through your context.** Use this when you're scaffolding into a project dir. Flattens `lib/<lang>/foo.c` → `<destinationDir>/foo.c`. Optional `include: ["vdp_init", "joypad_read"]` whitelist for cherry-picking. Default `overwrite: true` (vetted boilerplate is meant to be regenerated).
 
 Or skip the separate call entirely: `createProject({withSnippets: true})` does the same thing as a one-shot.
@@ -666,7 +665,7 @@ If a platform genuinely lacks a tilemap (Atari 2600 races the beam; 7800 uses di
 A few platform-tool quirks worth knowing up front:
 
 - **asar (SNES) silent fails** on certain idioms: `$ - label` size expressions crash with a heap-pointer exit code (use `end_label - start_label` instead). Some opcode + operand arithmetic like `STA SYMBOL + N` where SYMBOL is `=`-defined also crashes silently — our preflight catches the common cases. When `ok: false, issues: []`, the wrapper now synthesizes a fallback issue with a hint.
-- **asar bank-border-crossed** can happen if your `org` + `dw` runs past $00FFFF. Native vectors are at $FFE4-$FFEE; emulation vectors at $FFF4-$FFFF. Use `getStarterSnippet({ platform: "snes", name: "lorom_header.asm" })` for the layout.
+- **asar bank-border-crossed** can happen if your `org` + `dw` runs past $00FFFF. Native vectors are at $FFE4-$FFEE; emulation vectors at $FFF4-$FFFF. Use `starterSnippets({ platform: "snes", mode: "get", name: "lorom_header.asm" })` for the layout.
 - **cc65 (NES, C64, etc.) zero page** starts at $02. cc65 reserves $00-$01 for its runtime. Your first `.res 1` lands at $02, not $00. Use `getMemoryMap` after `buildSourceWithDebug` to confirm.
 - **NES pattern table cap = 256 tiles per nametable**. The tilemap index is 8-bit, so per-frame BG can use at most 256 unique tiles per pattern table. Auto-converting a busy illustration usually overflows. `imageToTilemap` warns; the only workaround is mid-frame CHR bank switching (MMC3-class mapper).
 - **NES + GB/GBC turnkey** (R9/R10 self-contained + sound, 2026-05-25): use `createProject({platform, template, name, path})` to scaffold a project. The pipeline copies every file the template depends on — `{nes,gb}_runtime.{h,c}`, `gb_hardware.h`, custom `crt0.s`, linker `.cfg`, `patch-header.js` (GB) — into the project directory alongside `main.c`. **No auto-injection at build time.** The build pipeline compiles exactly what you tell it via `sources` / `sourcesPaths` / `includes` / `includePaths` / `crt0` / `crt0Path` / `linkerConfig` / `codeLoc`. Take the project elsewhere with stock cc65/sdcc and it builds the same way. The runtime APIs include sprites, BG, input, AND **sound** — `sound_init` / `sound_play_tone(channel, period, vol, length)` / `sound_play_noise` / `sound_off`. NES drives pulse1+pulse2+triangle+noise via $4000-$400F + $4015; GB drives the 4-channel APU via NR10-NR52. SFX-grade, fire-and-forget — for full music tracks, drop in famitone2 (NES) or your own driver. Templates: `default` (palette cycle), `hello_sprite` (sprite + d-pad + **beep on A press**), `tile_engine` (multi-room tile map). Docs: [`src/platforms/nes/MENTAL_MODEL.md`](src/platforms/nes/MENTAL_MODEL.md) + [`TROUBLESHOOTING.md`](src/platforms/nes/TROUBLESHOOTING.md); [`src/platforms/gb/MENTAL_MODEL.md`](src/platforms/gb/MENTAL_MODEL.md) + [`TROUBLESHOOTING.md`](src/platforms/gb/TROUBLESHOOTING.md). **Game-loop order matters on NES:** stage `oam_clear`+`oam_spr` BEFORE `ppu_wait_nmi`, not after — the NMI handler DMA's whatever shadow_oam contains at vblank-start. **GB ROM header:** both asm and C builds now auto-run `rgbfix` inside `buildSource`, so the Nintendo logo + checksums + CGB flag are correct out of the box — no manual `patchGbHeader` step needed.
