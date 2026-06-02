@@ -460,6 +460,40 @@ disassembly runs through built-in pure-JS decoders with full prefix
 coverage (Z80: CB/ED/DD/FD/DDCB/FDCB; SM83: CB only — no ED/DD/FD on GB).
 DD/FD/DDCB/FDCB). Annotations are post-processing in both paths.
 
+### Whole-ROM, rebuildable projects — `disassembleProject`
+
+`disassembleRom` gives you one routine as text. `disassembleProject` turns an
+**entire ROM into a complete, re-buildable project in one call**, across ALL
+supported systems (NES, SNES, GB/GBC, SMS/GG, Genesis, C64, Atari 2600/7800):
+
+```js
+disassembleProject({ path: "game.nes", outputDir: "./game-disasm" })
+// → { ok, platform, regions:[{file, startAddress, roundTripOk, readablePercent}],
+//     roundTrip:{ allByteExact, failed:[] }, readablePercentAvg }
+```
+
+It splits the ROM into regions (per-16KB bank for banked NES, per-32KB bank for
+SNES LoROM, slot0+slotX for GB, one flat region for SMS/Genesis/C64/Atari),
+disassembles each, then **reassembles it and verifies the result is byte-exact
+against the original**. Any line that doesn't reassemble faithfully falls back
+to `.byte`/`db` data recovered from the address comments — so the emitted `.asm`
+files ALWAYS rebuild to the original bytes (`roundTrip.allByteExact`). The
+`readablePercent` per region tells you how much came back as real instructions
+vs. data. Each `.asm` carries a provenance + round-trip header and is ready to
+edit and rebuild with the platform's native toolchain.
+
+Reassembler per CPU family (all bundled WASM, no installs): **cc65** ca65/ld65
+for 6502 + 65816, **sjasm** for Z80, **rgbds** for GB SM83, **vasm** for 68k.
+
+Caveats worth knowing up front:
+- **SNES and large Genesis ROMs come back byte-exact but DATA-ONLY**
+  (low `readablePercent`). Flat whole-ROM disassembly of a mostly-data image
+  heals down to `.byte`; meaningful instruction coverage there needs recursive
+  entry-point following, a known follow-up. The bytes are always correct.
+- Banked-NES is the strongest case — per-bank regions come back ~100%
+  instructions. GB/GBC, SMS/GG, C64, and Atari are also near-100%.
+- Platform is sniffed from the file extension; pass `platform:` to override.
+
 ## CHR/tile tools — file vs emulator source
 
 `getTile`, `inspectPatternTiles`, `extractSpriteSheet`, `tileFingerprints`,
