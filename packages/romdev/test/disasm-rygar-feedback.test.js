@@ -126,15 +126,39 @@ test("disassembleProject: every bank of a real MMC1 ROM round-trips byte-exact",
   const h = handlers();
   const tmp = await mkdtemp(path.join(os.tmpdir(), "disproj-"));
   try {
-    const r = parse(await h.disassembleProject({ path: driar, outputDir: tmp, verify: true }));
+    const r = parse(await h.disassembleProject({ path: driar, outputDir: tmp }));
     assert.equal(r.ok, true);
-    assert.equal(r.prgBanks, 8);
-    assert.equal(r.roundTrip.allOk, true, "all banks should round-trip; failed: " + JSON.stringify(r.roundTrip.failed));
-    // Provenance header is present in an emitted file.
+    assert.equal(r.platform, "nes");
+    assert.equal(r.regions.length, 8, "MMC1 ROM has 8 PRG banks → 8 regions");
+    assert.equal(r.roundTrip.allByteExact, true, "all banks should round-trip; failed: " + JSON.stringify(r.roundTrip.failed));
+    assert.ok(r.readablePercentAvg >= 80, "NES disassembly should be mostly instructions, got " + r.readablePercentAvg + "%");
+    // Provenance + round-trip header present in an emitted file.
     const bank0 = await readFile(path.join(tmp, "bank0.asm"), "utf8");
-    assert.match(bank0, /; bank 0 .* prg 0x00000\.\.0x03FFF/);
-    assert.match(bank0, /\.org \$8000/);
+    assert.match(bank0, /; bank 0 .*switchable \$8000/);
+    assert.match(bank0, /round-trip: BYTE-EXACT/);
   } finally {
     await rm(tmp, { recursive: true, force: true });
+  }
+}, { timeout: 120000 });
+
+// Cross-platform: disassembleProject produces a byte-exact project on non-NES
+// systems too (GB via rgbds, C64 via cc65). Skips any ROM not present.
+test("disassembleProject: byte-exact across GB and C64", async () => {
+  const h = handlers();
+  const cases = [
+    { plat: "gb", rom: "asteroids_gb_mcp/asteroids_gb.gb" },
+    { plat: "c64", rom: "rom-games/c64/tetris/tetris.prg" },
+  ];
+  for (const c of cases) {
+    const romPath = path.join(os.homedir(), "code/cliemu", c.rom);
+    if (!existsSync(romPath)) continue;
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "disproj-"));
+    try {
+      const r = parse(await h.disassembleProject({ path: romPath, outputDir: tmp }));
+      assert.equal(r.ok, true, `${c.plat} should round-trip byte-exact (failed: ${JSON.stringify(r.roundTrip.failed)})`);
+      assert.equal(r.roundTrip.allByteExact, true, `${c.plat} all regions byte-exact`);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
   }
 }, { timeout: 120000 });
