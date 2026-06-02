@@ -170,6 +170,25 @@ test("stopOnFirst stops at first filter-passing change", async () => {
   assert.equal(res.events[0].after, 7);
 });
 
+test("groupByPC collapses many events into per-PC rows with hit counts", async () => {
+  // Byte changes every frame for 20 frames → 20 raw events. Grouped by PC
+  // (all under one PC on the fake host) → a single row with hits:20.
+  const host = makeHost({ system_ram: [0] }, (f, mem) => { mem.system_ram[0] = f & 0xFF; });
+  setHost("test-session", host);
+  const handler = getWatchHandler();
+  const res = parseResult(await handler({
+    region: "system_ram", offset: 0, length: 1, frames: 20, onChange: "any", groupByPC: true,
+  }));
+  assert.equal(res.eventCount, 20, "all 20 changes still counted");
+  assert.ok(Array.isArray(res.byPC), "byPC summary present");
+  assert.equal(res.distinctPCs, res.byPC.length);
+  const totalHits = res.byPC.reduce((s, g) => s + g.hits, 0);
+  assert.equal(totalHits, 20, "grouped hits sum to the event count");
+  // Each group carries frame span + the offsets it touched.
+  assert.ok(res.byPC[0].firstFrame <= res.byPC[0].lastFrame);
+  assert.ok(Array.isArray(res.byPC[0].offsets));
+});
+
 test("missing region without ranges returns a clear error result", async () => {
   const host = makeHost({ system_ram: [0] }, () => {});
   setHost("test-session", host);

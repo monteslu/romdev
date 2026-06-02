@@ -314,7 +314,7 @@ const TOOL_OWNER = {
   getCPUState: "debug", getAudioState: "debug",
   buildSourceWithDebug: "debug", resolveSymbol: "debug", lookupAddress: "debug",
   getMemoryMap: "debug", listSymbols: "debug",
-  disassemble: "debug", disassembleRom: "debug", findReferences: "debug",
+  disassemble: "debug", disassembleRom: "debug", disassembleProject: "debug", findReferences: "debug",
   getRenderingContext: "debug",
   inspectTile: "debug",
   whichTilesAreRendered: "debug",

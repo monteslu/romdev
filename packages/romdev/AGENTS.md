@@ -609,7 +609,7 @@ The biggest mistake agents make on this server is reading binary files into thei
 - `loadMedia({ platform, path })` instead of `loadMediaBytes({ base64 })`
 - `buildSource({ sourcePath, binaryIncludePaths, includePaths, outputPath })` — paths in AND a path back out (`binaryPath`). Inline base64 only on opt-in `inline: true`.
 - `imageToTilemap({ platform, pngPath, outputDir })` — full-screen PNG → deduped tiles + tilemap + palette, input from disk, output to disk. **This is the tool for splash/title screens** (see the splash-screen section below). Supported: nes, snes, genesis, sms, gg, gb, gbc, c64.
-- `screenshot({ path })` — writes PNG to disk, skips inline payload
+- `screenshot({ path })` — writes PNG to disk, skips inline payload. For a quick "did it change?" sanity check, add `scale: 0.5` (nearest-neighbor, pixel-art-safe) — ~75% fewer image tokens; reserve full resolution for when you actually need pixel detail.
 - `extractSpriteSheet({ outputPath })` — same
 - `pcmToBrr({ pcmPath, outputPath })` — same
 
