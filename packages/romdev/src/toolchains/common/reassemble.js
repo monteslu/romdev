@@ -239,10 +239,26 @@ function translateParsed(parsed, startAddress, dialect, forced) {
     const refs = (p.code ?? "").match(LABEL_REF_RE);
     if (refs) for (const r of refs) referenced.add(r);
   }
-  const out = [dialect.org(startAddress)];
+  // Emit LEADING directives (da65's `.setcpu`/`.a8`/`.i8` preamble) BEFORE the
+  // org — ca65 needs `.setcpu` before `.org`, and an org placed above the cpu
+  // directive mis-links (everything becomes fill). Find the first non-directive
+  // /non-blank line; everything before it that's a directive is preamble.
+  const out = [];
+  let bodyStart = 0;
+  for (let i = 0; i < parsed.length; i++) {
+    const p = parsed[i];
+    if (p.directive) {
+      const d = dialect.directive ? dialect.directive(p.directive) : null;
+      if (d) out.push("\t" + d);
+      bodyStart = i + 1;
+    } else if (p.label == null && p.code == null && (!p.bytes || !p.bytes.length)) {
+      bodyStart = i + 1; // blank/comment in the preamble
+    } else break;
+  }
+  out.push(dialect.org(startAddress));
   for (const lbl of referenced) if (!defined.has(lbl)) out.push(dialect.equate(lbl, parseInt(lbl.slice(1), 16)));
   let fellBack = 0;
-  for (let i = 0; i < parsed.length; i++) {
+  for (let i = bodyStart; i < parsed.length; i++) {
     const p = parsed[i];
     if (p.directive) { const d = dialect.directive ? dialect.directive(p.directive) : null; if (d) out.push("\t" + d); continue; }
     if (p.label) out.push(dialect.labelDef(p.label));
@@ -337,3 +353,197 @@ export const RGBDS_SM83 = {
   equate: (l, a) => `DEF ${l} EQU $${a.toString(16).toUpperCase()}`,
   insn: sm83ToRgbds,
 };
+
+// ── Per-platform orchestrator ───────────────────────────────────────────────
+//
+// Disassemble a chunk of bytes for `platform` at CPU address `startAddress`,
+// then reassemble it BYTE-EXACT in that platform's native assembler. Returns
+// the reassembled source + verification. Picks the disassembler, dialect, and
+// assembler per CPU family:
+//   6502  (nes/c64/atari2600/atari7800) → da65 + ca65/ld65 (CA65 dialect)
+//   65816 (snes)                        → da65 65816 + ca65/ld65 (CA65)
+//   z80   (sms/gg)                      → z80dasm + sjasm (SJASM_Z80)
+//   sm83  (gb/gbc)                      → sm83dasm + rgbds (RGBDS_SM83)
+//   m68k  (genesis)                     → m68kdasm + vasm68k (VASM_M68K)
+
+const CPU_FAMILY = {
+  nes: "6502", c64: "6502", atari2600: "6502", atari7800: "6502", lynx: "6502",
+  snes: "65816",
+  sms: "z80", gg: "z80",
+  gb: "sm83", gbc: "sm83",
+  genesis: "m68k", megadrive: "m68k", md: "m68k",
+};
+
+/**
+ * @param {Object} a
+ * @param {string} a.platform
+ * @param {Uint8Array} a.bytes        the chunk to disassemble (already mapped to CPU space)
+ * @param {number} a.startAddress     CPU address of byte 0
+ * @returns {Promise<{ family:string, source:string, bytes:Uint8Array|null, ok:boolean,
+ *   total:number, dcLines:number, readablePercent:number, note?:string }>}
+ */
+export async function reassembleForPlatform(a) {
+  const { platform, bytes, startAddress } = a;
+  const family = CPU_FAMILY[platform];
+  if (!family) throw new Error(`reassembleForPlatform: no reassembly path for platform '${platform}'`);
+
+  // ── disassemble ──
+  let disasm;
+  if (family === "6502" || family === "65816") {
+    const { runDa65 } = await import("../cc65/da65.js");
+    const r = await runDa65({ bytes, startAddress, cpu: family === "65816" ? "65816" : "6502", options: ["--comments", "4"] });
+    disasm = r.asm;
+  } else if (family === "z80") {
+    const { runZ80dasm } = await import("../z80dasm.js");
+    disasm = runZ80dasm({ bytes, startAddress }).asm;
+  } else if (family === "sm83") {
+    const { runSm83dasm } = await import("../sm83dasm.js");
+    disasm = runSm83dasm({ bytes, startAddress }).asm;
+  } else if (family === "m68k") {
+    const { runM68kdasm } = await import("../m68kdasm.js");
+    disasm = runM68kdasm({ bytes, startAddress }).asm;
+  }
+
+  // cc65 families (6502/65816): da65's output is ALREADY valid cc65 with its
+  // own equates+labels — rebuilding it via the translator/heal breaks the
+  // cc65 link. Use da65's text verbatim (+ .org) and heal in-place.
+  if (family === "6502" || family === "65816") {
+    return reassembleCc65Native(disasm, startAddress, bytes, family);
+  }
+
+  // ── assemble callback + dialect per family (translator path: z80/sm83/m68k) ──
+  let dialect, assemble;
+  if (false) {
+    dialect = CA65;
+    const { runCa65, runLd65 } = await import("../cc65/cc65.js");
+    const cfg = `MEMORY{M:start $${startAddress.toString(16)},size $${bytes.length.toString(16)},type ro,file %O,fill yes,fillval $FF;}\nSEGMENTS{CODE:load M,type ro;}\n`;
+    assemble = async (src) => {
+      const ca = await runCa65({ source: src, target: "none" }).catch(() => null);
+      if (!ca || !ca.object) return null;
+      const ld = await runLd65({ objects: { "o.o": ca.object }, target: "none", linkerConfig: cfg }).catch(() => null);
+      return ld && ld.binary ? new Uint8Array(ld.binary) : null;
+    };
+  } else if (family === "z80") {
+    dialect = SJASM_Z80;
+    const { runSjasm } = await import("../sjasm/sjasm.js");
+    assemble = async (src) => { const s = await runSjasm({ source: src }).catch(() => null); return s && s.binary ? new Uint8Array(s.binary) : null; };
+  } else if (family === "sm83") {
+    dialect = RGBDS_SM83;
+    const { runRgbasm, runRgblink } = await import("../rgbds/rgbds.js");
+    assemble = async (src) => {
+      const o = await runRgbasm({ source: src }).catch(() => null);
+      if (!o || !o.object) return null;
+      const l = await runRgblink({ objects: { "out.o": o.object } }).catch(() => null);
+      // rgblink pads a full ROM bank; slice out our section at its address.
+      return l && l.binary ? new Uint8Array(l.binary).slice(startAddress, startAddress + bytes.length) : null;
+    };
+  } else if (family === "m68k") {
+    dialect = VASM_M68K;
+    const { runVasm68k } = await import("../vasm68k/vasm68k.js");
+    assemble = async (src) => { const v = await runVasm68k({ source: src }).catch(() => null); return v && v.binary ? new Uint8Array(v.binary) : null; };
+  }
+
+  const res = await reassembleByteExact(disasm, startAddress, bytes, dialect, assemble, 80);
+  const codeLineCount = disasm.split(/\r?\n/).filter((l) => /;\s*[0-9A-Fa-f]{4,8}\s/.test(l)).length;
+  const readablePercent = codeLineCount ? Math.round(100 * (1 - res.dcLines / codeLineCount)) : 100;
+  return {
+    family,
+    source: res.source,
+    bytes: res.bytes,
+    ok: res.ok,
+    total: codeLineCount,
+    dcLines: res.dcLines,
+    readablePercent,
+    note: res.note,
+  };
+}
+
+/**
+ * Reassemble cc65 (6502/65816) families by using da65's output AS-IS — it's
+ * already valid cc65 with its own equate/label structure. We inject `.org`
+ * after `.setcpu` (the proven byte-exact recipe) and heal by replacing any
+ * da65 CODE line that doesn't reassemble to its own bytes with a `.byte` of
+ * those bytes (recovered from the line's `; ADDR BB` comment). Preserves
+ * da65's equates/labels/`.a8`/`.i8` exactly.
+ * @returns same shape as reassembleForPlatform
+ */
+async function reassembleCc65Native(disasm, startAddress, original, family) {
+  const { runCa65, runLd65 } = await import("../cc65/cc65.js");
+  const cpuTag = family === "65816" ? "65816" : "6502";
+  const cfg = `MEMORY{M:start $${startAddress.toString(16)},size $${original.length.toString(16)},type ro,file %O,fill yes,fillval $FF;}\nSEGMENTS{CODE:load M,type ro;}\n`;
+
+  // Split da65 output into lines, tagging code lines with their {addr,bytes}.
+  const lines = disasm.split(/\r?\n/);
+  const meta = lines.map((line) => {
+    const m = line.match(/^\s*(?!L[0-9A-Fa-f]+:|;|\.)(\S.*?)\s*;\s*([0-9A-Fa-f]{4,8})\s+((?:[0-9A-Fa-f]{2}\s*)+)\s*$/);
+    if (m) return { code: true, addr: parseInt(m[2], 16), bytes: m[3].trim().split(/\s+/).map((h) => parseInt(h, 16)) };
+    return { code: false };
+  });
+  const forced = new Set(); // line indices replaced with .byte
+
+  const build = () => {
+    const out = lines.map((line, i) => {
+      if (forced.has(i)) return "\t.byte " + meta[i].bytes.map(hex2).join(",");
+      return line;
+    });
+    // inject `.org` right after `.setcpu`
+    const src = out.join("\n").replace(/(\.setcpu\s+"[^"]+")/, `$1\n\t.org $${startAddress.toString(16).toUpperCase()}`);
+    return src;
+  };
+  const assemble = async (src) => {
+    const ca = await runCa65({ source: src, target: "none" }).catch(() => null);
+    if (!ca || !ca.object) return null;
+    const ld = await runLd65({ objects: { "o.o": ca.object }, target: "none", linkerConfig: cfg }).catch(() => null);
+    return ld && ld.binary ? new Uint8Array(ld.binary) : null;
+  };
+
+  let source = build();
+  const codeLineCount = meta.filter((m) => m.code).length;
+  for (let pass = 0; pass < 80; pass++) {
+    source = build();
+    const out = await assemble(source);
+    if (out && out.length === original.length && firstDiff(original, out) < 0) {
+      return { family, source, bytes: out, ok: true, total: codeLineCount, dcLines: forced.size,
+        readablePercent: codeLineCount ? Math.round(100 * (1 - forced.size / codeLineCount)) : 100 };
+    }
+    if (!out) {
+      // ca65/ld failed — pin the first not-yet-pinned code line and retry.
+      const next = meta.findIndex((m, i) => m.code && !forced.has(i));
+      if (next < 0) break;
+      forced.add(next);
+      continue;
+    }
+    // byte mismatch: pin the code line owning the first diff.
+    const d = firstDiff(original, out);
+    const off = (d < 0 ? Math.min(out.length, original.length) : d) + startAddress;
+    let owner = -1;
+    for (let i = 0; i < meta.length; i++) {
+      if (meta[i].code && meta[i].addr <= off && off < meta[i].addr + meta[i].bytes.length) { owner = i; break; }
+      if (meta[i].code && meta[i].addr <= off) owner = i;
+    }
+    if (owner < 0 || forced.has(owner)) {
+      const next = meta.findIndex((m, i) => m.code && !forced.has(i));
+      if (next < 0) break;
+      forced.add(next);
+    } else {
+      forced.add(owner);
+    }
+  }
+  // Guaranteed floor: a CLEAN all-`.byte` dump of the original bytes (no da65
+  // equates/labels/width-directives to desync). This is byte-exact on every
+  // cc65 target we tested (incl. 65816, where mixing pinned `.byte` with live
+  // instructions can break `.a8`/`.i8` width state — so when the incremental
+  // heal can't converge, we emit pure data). Lower readability, but correct.
+  {
+    const rows = [`\t.setcpu "${cpuTag}"`, `\t.org $${startAddress.toString(16).toUpperCase()}`];
+    for (let i = 0; i < original.length; i += 16) {
+      rows.push("\t.byte " + Array.from(original.slice(i, i + 16)).map(hex2).join(","));
+    }
+    const flat = rows.join("\n") + "\n";
+    const out = await assemble(flat);
+    const ok = !!out && out.length === original.length && firstDiff(original, out) < 0;
+    return { family, source: flat, bytes: out ?? null, ok, total: codeLineCount, dcLines: codeLineCount,
+      readablePercent: 0,
+      note: ok ? "incremental heal did not converge; emitted byte-exact data-only (low readability)" : "could not reach byte-exact even as data" };
+  }
+}
