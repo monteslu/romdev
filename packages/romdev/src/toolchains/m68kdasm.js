@@ -294,19 +294,29 @@ function disasmOne(bytes, pos, addr) {
       const e = decodeEA(mode, reg, bytes, pos + 2, size, addr);
       return { length: 2 + e.len, text: `cmp${SIZE_SUFFIX[size]} ${e.text},${DATA_REG(dn)}` };
     }
-    // ADDA/SUBA (opmode 3 = word, 7 = long)
+    // ADD/SUB: opmode 3/7 = ADDA/SUBA (address dest). AND/OR have NO valid
+    // 3/7 opmode in the <ea>,Dn / Dn,<ea> family — those encodings are
+    // MULU/MULS (0xC) / DIVU/DIVS (0x8), which we don't decode. Emitting
+    // `and`+SIZE_SUFFIX[3] (undefined) produced the `andundefined`/`orundefined`
+    // garbage that then can't reassemble. Decode ADDA/SUBA; for AND/OR with
+    // opmode 3/7 fall through to the faithful `.dc.w` default below.
     if ((top === 0x9 || top === 0xD) && (opmode === 3 || opmode === 7)) {
       const size = opmode === 7 ? 2 : 1;
       const e = decodeEA(mode, reg, bytes, pos + 2, size, addr);
       return { length: 2 + e.len, text: `${top === 0x9 ? "suba" : "adda"}${SIZE_SUFFIX[size]} ${e.text},${ADDR_REG(dn)}` };
     }
-    const size = opmode & 3;
-    const dir = (opmode >> 2) & 1; // 0: <ea>,Dn  1: Dn,<ea>
-    const e = decodeEA(mode, reg, bytes, pos + 2, size, addr);
-    const text = dir
-      ? `${mnem}${SIZE_SUFFIX[size]} ${DATA_REG(dn)},${e.text}`
-      : `${mnem}${SIZE_SUFFIX[size]} ${e.text},${DATA_REG(dn)}`;
-    return { length: 2 + e.len, text };
+    // Only opmodes 0-2 (.b/.w/.l) and 4-6 are the regular ALU <ea><->Dn forms.
+    // opmode 3/7 on AND/OR (and any size we can't suffix) → not this family.
+    if (opmode !== 3 && opmode !== 7) {
+      const size = opmode & 3;
+      const dir = (opmode >> 2) & 1; // 0: <ea>,Dn  1: Dn,<ea>
+      const e = decodeEA(mode, reg, bytes, pos + 2, size, addr);
+      const text = dir
+        ? `${mnem}${SIZE_SUFFIX[size]} ${DATA_REG(dn)},${e.text}`
+        : `${mnem}${SIZE_SUFFIX[size]} ${e.text},${DATA_REG(dn)}`;
+      return { length: 2 + e.len, text };
+    }
+    // else: fall through to the `.dc.w` default (MULU/MULS/DIVU/DIVS etc.)
   }
 
   // ---- Immediate ops ($0___): ORI/ANDI/SUBI/ADDI/EORI/CMPI + BTST/BSET/BCLR/BCHG ----
