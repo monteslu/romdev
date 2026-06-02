@@ -1,6 +1,7 @@
 // Disassembly MCP tools — exposed as `disassemble` and `disassembleRom`.
 
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import nodePath from "node:path";
 import { jsonContent, safeTool, writeOutput } from "../util.js";
 import { parseSymbols, buildSymbolMap } from "../../toolchains/common/symbols.js";
 import { registersForPlatform } from "../../platforms/common/registers.js";
@@ -15,24 +16,42 @@ import { registersForPlatform } from "../../platforms/common/registers.js";
  * maps into the last 32 KB of PRG (16KB carts mirror $8000 ↔ $C000).
  * Returns the slice starting at the requested CPU address.
  */
-export function mapNesAddress(data, cpuAddr, length) {
+export function mapNesAddress(data, cpuAddr, length, bank) {
   if (data[0] !== 0x4e || data[1] !== 0x45 || data[2] !== 0x53 || data[3] !== 0x1a) {
     throw new Error("not a valid iNES file (missing NES\\x1a magic at offset 0)");
   }
   const prgBanks = data[4];
   const prgSize = prgBanks * 16384;
   const prgFileStart = 16;
+  const num16kBanks = prgSize >> 14; // 16KB banks
   // Mapper number = high nibble of flags6 + high nibble of flags7.
   const mapperNum = ((data[6] >> 4) & 0xF) | (data[7] & 0xF0);
   // For NROM (mapper 0): 16KB → mirrored at $8000 + $C000; 32KB → linear $8000-$FFFF.
   // For mapper>0 the topmost bank is fixed at $C000-$FFFF (UxROM, MMC1 final
-  // bank, MMC3 last two banks all do this); other banks are switchable. With
-  // no further info, default to "the bank that lives at $C000" for $C000+ and
-  // "bank 0" for $8000-$BFFF; agents who need a different bank pass a
-  // `bank` arg to disassembleRom.
+  // bank, MMC3 last two banks all do this); other banks are switchable.
+  //
+  // `bank` (when given) explicitly selects which 16KB PRG bank is mapped into
+  // the SWITCHABLE slot ($8000-$BFFF). This is the fix for "disassemble UxROM
+  // bank N at $8000" — previously impossible without slicing the ROM by hand.
+  // A $C000+ address still resolves to the fixed top bank regardless of `bank`.
   let offsetInPrg;
   let mapperLabel;
-  if (prgSize === 16384) {
+  if (bank != null && mapperNum !== 0 && prgSize > 16384) {
+    if (bank < 0 || bank >= num16kBanks) {
+      throw new Error(`NES bank ${bank} out of range (ROM has ${num16kBanks} × 16KB PRG banks, 0-${num16kBanks - 1})`);
+    }
+    if (cpuAddr >= 0xC000) {
+      // Fixed top bank — `bank` doesn't apply here.
+      offsetInPrg = (prgSize - 0x4000) + (cpuAddr - 0xC000);
+      mapperLabel = `mapper ${mapperNum} (fixed top bank at $C000; bank arg ignored above $C000)`;
+    } else if (cpuAddr >= 0x8000) {
+      offsetInPrg = bank * 0x4000 + (cpuAddr - 0x8000);
+      mapperLabel = `mapper ${mapperNum} (PRG bank ${bank} mapped at $8000)`;
+    } else {
+      offsetInPrg = -1;
+      mapperLabel = `mapper ${mapperNum}`;
+    }
+  } else if (prgSize === 16384) {
     // NROM-128 — mirror.
     offsetInPrg = cpuAddr & 0x3FFF;
     mapperLabel = `mapper ${mapperNum} (NROM-128 mirror)`;
@@ -48,7 +67,7 @@ export function mapNesAddress(data, cpuAddr, length) {
     } else {
       offsetInPrg = -1;
     }
-    mapperLabel = `mapper ${mapperNum} (top bank fixed at $C000, bank 0 at $8000)`;
+    mapperLabel = `mapper ${mapperNum} (top bank fixed at $C000, bank 0 at $8000 — pass bank:N for a different switchable bank)`;
   }
   if (offsetInPrg < 0 || offsetInPrg >= prgSize) {
     throw new Error(`CPU address $${cpuAddr.toString(16)} outside PRG ROM (${prgSize} bytes, ${mapperLabel})`);
@@ -565,29 +584,57 @@ export function mapC64Address(data, cpuAddr, length, bank = 0) {
 export function registerDisasmTools(server, z) {
   server.tool(
     "disassemble",
-    "Disassemble a chunk of bytes (provided as base64) using cc65's da65 disassembler. Defaults to 6502 / NES start address. " +
-    "Supports 6502, 65c02, 65sc02, 65816, huc6280. Pass `symbolsPath` (or `symbolsText`) to annotate the output with labels — " +
-    "auto-detects WLA .sym, cc65 .lbl, or pass `symbolsFormat` explicitly. Use this to read what an existing ROM does. " +
-    "DEFAULT writes the asm text to outputPath and returns {path, bytes}; pass inline:true to get the asm in the response " +
-    "(you must pass one or the other).",
+    "Disassemble a chunk of raw bytes using cc65's da65. Provide bytes as `path` (a file on disk — preferred, " +
+    "no base64 round-trip) OR `base64`. Defaults to 6502 / NES $8000. Supports 6502, 65c02, 65sc02, 65816, " +
+    "huc6280. Emits `.org <startAddress>` by default so the output re-assembles through ca65 (addOrigin:false " +
+    "to skip). Pass `symbolsPath`/`symbolsText` to annotate with labels (WLA .sym / cc65 .lbl). " +
+    "NOTE: this is the RAW path — for a ROM file you want mapper-aware disassembly with `; @0xNNNN` file-offset " +
+    "annotations and auto-tagged vectors, use `disassembleRom` instead. " +
+    "DEFAULT writes asm to outputPath and returns {path, bytes}; pass inline:true to get the asm in the response.",
     {
-      base64: z.string().describe("Base64 of the bytes to disassemble."),
+      path: z.string().optional().describe("Absolute path to a raw binary file to disassemble. Provide this OR `base64`. Preferred — avoids a base64 round-trip."),
+      base64: z.string().optional().describe("Base64 of the bytes to disassemble. Provide this OR `path`."),
       startAddress: z.number().int().min(0).max(0xffffff).default(0x8000).describe("Address of the first byte (e.g. 0x8000 for NES PRG)."),
       cpu: z.enum(["6502", "65c02", "65sc02", "65816", "huc6280"]).default("6502"),
+      addOrigin: z.boolean().default(true).describe("Prepend `.org <startAddress>` so the asm re-assembles through ca65 unmodified (absolute branch targets otherwise fail with 'Range error'). Set false when feeding a linker config that sets the origin."),
       symbolsPath: z.string().optional().describe("Optional path to a symbol file (asar .sym, cc65 .lbl). Auto-detect format from extension."),
       symbolsText: z.string().optional().describe("Optional inline symbol-file text. If both this and symbolsPath are given, symbolsPath wins."),
       symbolsFormat: z.enum(["wla", "cc65-lbl"]).optional().describe("Explicit symbol-file format override (when filename and content are ambiguous)."),
       outputPath: z.string().optional().describe("Absolute path to write the asm text to. Required unless inline:true."),
       inline: z.boolean().default(false).describe("If true, return the asm text in the response instead of writing to disk. Default false — then outputPath is required."),
     },
-    safeTool(async ({ base64, startAddress, cpu, symbolsPath, symbolsText, symbolsFormat, outputPath, inline }) => {
+    safeTool(async ({ path: inPath, base64, startAddress, cpu, addOrigin = true, symbolsPath, symbolsText, symbolsFormat, outputPath, inline }) => {
       if (!inline && !outputPath) {
         throw new Error("disassemble: pass outputPath (write the asm to disk, returns {path}) or inline:true (return the asm in the response).");
       }
+      if (!inPath && !base64) {
+        throw new Error("disassemble: pass `path` (a binary file on disk) or `base64` (the bytes).");
+      }
       const { runDa65 } = await import("../../toolchains/cc65/da65.js");
-      const bytes = new Uint8Array(Buffer.from(base64, "base64"));
+      const bytes = inPath
+        ? new Uint8Array(await readFile(inPath))
+        : new Uint8Array(Buffer.from(base64, "base64"));
       const r = await runDa65({ bytes, startAddress, cpu });
       let asm = r.asm;
+
+      // On failure, surface the error in the response — never write the raw
+      // da65 error text into outputPath (it'd masquerade as partial asm).
+      if (r.exitCode !== 0) {
+        return jsonContent({
+          ok: false,
+          exitCode: r.exitCode,
+          bytes: bytes.length,
+          startAddress,
+          cpu,
+          error: firstErrorLine(asm) ?? `da65 exited ${r.exitCode}`,
+          errorText: asm,
+          note: "Disassembly FAILED — outputPath not written. See `error`.",
+        });
+      }
+
+      // Round-trip origin (cc65 family only — da65 is always 6502-family here).
+      if (addOrigin) asm = injectOrigin(asm, startAddress);
+
       let symbolCount = 0;
       if (symbolsPath || symbolsText) {
         const text = symbolsPath ? await readFile(symbolsPath, "utf-8") : symbolsText;
@@ -597,11 +644,13 @@ export function registerDisasmTools(server, z) {
         symbolCount = symbols.length;
       }
       const meta = {
+        ok: true,
         exitCode: r.exitCode,
         bytes: bytes.length,
         startAddress,
         cpu,
         symbolCount,
+        ...(inPath ? { sourcePath: inPath } : {}),
       };
       if (inline) {
         return jsonContent({ ...meta, asm });
@@ -623,7 +672,7 @@ export function registerDisasmTools(server, z) {
     {
       path: z.string().describe("Absolute path to a ROM file (.nes / .sfc / .smc)."),
       platform: z.enum(["nes", "snes", "sms", "gg", "gb", "gbc", "atari2600", "atari7800", "c64", "genesis"]).optional().describe("Override platform detection. Omit to sniff from file extension."),
-      bank: z.number().int().min(0).max(255).optional().describe("GB/GBC only: which ROM bank to map at $4000-$7FFF when startAddress is in slot 1. Default bank 1."),
+      bank: z.number().int().min(0).max(255).optional().describe("Which switchable ROM bank to map into the banked slot before disassembling. NES (mapper>0): maps 16KB PRG bank N at $8000-$BFFF (a $C000+ startAddress still reads the fixed top bank). GB/GBC: maps the bank at $4000-$7FFF (default bank 1). Lets you disassemble UxROM/MMC1/MMC3 bank N without slicing the ROM by hand."),
       startAddress: z.number().int().min(0).max(0xffffff).default(0x8000).describe("CPU address to start at. NES: $8000-$FFFF. SNES: $008000-$FFFFFF (bank-prefixed)."),
       length: z.number().int().min(1).max(65536).optional().describe("Bytes to disassemble. Default 256. Mutually exclusive with endAddress."),
       endAddress: z.number().int().min(0).max(0xffffff).optional().describe("CPU end address (inclusive). Alternative to length — useful when disassembling 'from X to Y'."),
@@ -636,6 +685,7 @@ export function registerDisasmTools(server, z) {
       autoLabelVectors: z.boolean().default(true).describe("Pre-seed reset/nmi/irq labels from the vector table. Hugely improves orientation in unknown ROMs."),
       annotateRegisters: z.boolean().default(true).describe("Append `; PPUMASK` etc. to operands that hit a known hardware register."),
       annotateFileOffsets: z.boolean().default(true).describe("Append `; @0xNNNN` to every disassembled line — direct file offset for patchFile."),
+      addOrigin: z.boolean().default(true).describe("Prepend a `.org <startAddress>` directive (6502/cc65 output) so the asm RE-ASSEMBLES UNMODIFIED through ca65 — without it, absolute branch targets fail relocatable assembly with 'Range error'. Set false only when feeding a multi-segment linker config that sets the origin itself."),
       outputPath: z.string().optional().describe("Absolute path. If set, writes the raw asm to disk and returns `{outputPath, length, bytes}` instead of inline asm. Use for large disassemblies."),
     },
     safeTool(async (args) => {
@@ -645,6 +695,7 @@ export function registerDisasmTools(server, z) {
         autoLabelVectors,
         outputPath,
       } = args;
+      const addOrigin = args.addOrigin ?? true;
       // `let` because Genesis re-points an unset startAddress to the reset vector.
       let startAddress = args.startAddress;
       const annotateRegistersFlag = args.annotateRegisters ?? true;
@@ -713,7 +764,7 @@ export function registerDisasmTools(server, z) {
                   ? mapC64Address(data, startAddress, length, args.bank ?? 0)
                   : resolved === "genesis"
                     ? mapGenesisAddress(data, startAddress, length)
-                    : mapNesAddress(data, startAddress, length);
+                    : mapNesAddress(data, startAddress, length, args.bank);
 
       // Build vector labels + data ranges. For SMS, no vector table to
       // auto-read (Z80 uses reset $0000 + interrupt vector based on IM
@@ -809,6 +860,28 @@ export function registerDisasmTools(server, z) {
           if (t >= startAddress && t <= startAddress + length - 1) labels.push({ name, addr: t });
         }
       }
+      // Dedup vector labels by ADDRESS. Two interrupt vectors legitimately
+      // sharing one target is valid 6502 (Rygar points NMI and IRQ both at
+      // $C0F6) — but da65's LABELDEF and every dasm injector reject two labels
+      // at the same address ("Label for address $XXXX already defined"). Keep
+      // the first name (vector iteration order is reset/nmi/irq) and record the
+      // dropped aliases so the response can surface them.
+      const labelAliases = [];
+      if (labels.length > 1) {
+        const seen = new Map(); // addr -> first label name
+        const deduped = [];
+        for (const lab of labels) {
+          if (seen.has(lab.addr)) {
+            labelAliases.push({ alias: lab.name, sameAs: seen.get(lab.addr), addr: lab.addr });
+          } else {
+            seen.set(lab.addr, lab.name);
+            deduped.push(lab);
+          }
+        }
+        labels.length = 0;
+        labels.push(...deduped);
+      }
+
       const dataRangesInWindow = (dataRanges ?? []).filter((r) => {
         return r.start + r.length - 1 >= startAddress && r.start <= startAddress + length - 1;
       });
@@ -866,7 +939,10 @@ export function registerDisasmTools(server, z) {
             if (resolved === "atari7800") return mapAtari7800Address(data, cpuAddr, 1, args.bank ?? 0).fileOffset;
             if (resolved === "c64") return mapC64Address(data, cpuAddr, 1, args.bank ?? 0).fileOffset;
             if (resolved === "genesis") return mapGenesisAddress(data, cpuAddr, 1).fileOffset;
-            return mapNesAddress(data, cpuAddr, 1).fileOffset;
+            // `args.bank` maps $8000-$BFFF to the chosen switchable bank;
+            // mapNesAddress ignores it for $C000+ (fixed top bank), so each
+            // annotated line points at the correct PRG offset.
+            return mapNesAddress(data, cpuAddr, 1, args.bank).fileOffset;
           } catch {
             return null;
           }
@@ -878,7 +954,7 @@ export function registerDisasmTools(server, z) {
         if (resolved === "nes") {
           secondaryCpuToFile = (cpuAddr) => {
             try {
-              const off = mapNesAddress(data, cpuAddr, 1).fileOffset;
+              const off = mapNesAddress(data, cpuAddr, 1, args.bank).fileOffset;
               if (off == null) return null;
               return off - 16; // strip iNES header
             } catch {
@@ -892,6 +968,19 @@ export function registerDisasmTools(server, z) {
       if (annotateRegistersFlag) {
         const regs = registersForPlatform(resolved);
         asm = annotateRegisters(asm, regs);
+      }
+
+      // Emit an origin directive so the output ASSEMBLES UNMODIFIED. da65 emits
+      // absolute label references for out-of-window branch/jump targets (e.g.
+      // `bvs LC006` where LC006 := $C006); in ca65 relocatable mode the
+      // assembler can't compute the signed branch offset to an absolute target
+      // without knowing the segment's load address → "Range error". An `.org`
+      // after `.setcpu` pins it. Only for the cc65/6502 family (da65 output);
+      // the z80/sm83/m68k dasms have their own conventions. addOrigin:false
+      // opts out (e.g. when feeding into a multi-segment linker config that
+      // sets the origin itself).
+      if (addOrigin && (cpuFamily === "6502") && exitCode === 0) {
+        asm = injectOrigin(asm, startAddress);
       }
 
       // Truncate at first return (after annotations so we get the same line
@@ -915,14 +1004,33 @@ export function registerDisasmTools(server, z) {
         cpu: mapped.cpu,
         note: mapped.note,
         labels: labels.length > 0 ? labels.map((l) => ({ name: l.name, addr: "$" + l.addr.toString(16).toUpperCase() })) : undefined,
+        labelAliases: labelAliases.length > 0
+          ? labelAliases.map((a) => ({ alias: a.alias, sameAs: a.sameAs, addr: "$" + a.addr.toString(16).toUpperCase() }))
+          : undefined,
         dataRanges: dataRangesInWindow.length > 0 ? dataRangesInWindow : undefined,
         truncatedAtReturn: truncatedAtReturn || undefined,
       };
+
+      // On a disassembler failure, do NOT write outputPath — otherwise the raw
+      // da65 error string lands in the file the caller intends to Read as asm,
+      // and looks like partial output. Surface a top-level `error` + ok:false
+      // and keep the (error) text in `errorText` for diagnosis.
+      if (exitCode !== 0) {
+        return jsonContent({
+          ...baseResult,
+          ok: false,
+          error: firstErrorLine(asm) ?? `disassembler exited ${exitCode}`,
+          errorText: asm,
+          note: (baseResult.note ? baseResult.note + " " : "") +
+            "Disassembly FAILED — outputPath was NOT written (so a prior good file isn't clobbered with an error). See `error`.",
+        });
+      }
 
       if (outputPath) {
         await writeFile(outputPath, asm);
         return jsonContent({
           ...baseResult,
+          ok: true,
           outputPath,
           asmBytes: asm.length,
           asmLines: asm.split(/\r?\n/).length - 1,
@@ -930,9 +1038,205 @@ export function registerDisasmTools(server, z) {
         });
       }
 
-      return jsonContent({ ...baseResult, asm });
+      return jsonContent({ ...baseResult, ok: true, asm });
     }),
   );
+
+  server.tool(
+    "disassembleProject",
+    "Use this to turn a BANKED NES ROM into a complete, re-buildable project in ONE call — instead of " +
+    "disassembling each bank by hand. For a mapper>0 ROM (UxROM/MMC1/MMC3/...) it: disassembles every 16KB " +
+    "PRG bank (switchable banks decoded at $8000, the fixed top bank at $C000), writes one `bankN.asm` per " +
+    "bank with a provenance header (`; bank N — prg 0xXXXX..0xYYYY`) and an `.org` so each file assembles " +
+    "standalone, emits a per-bank ld65 linker config + a `build.sh`, and — critically — ROUND-TRIP VERIFIES " +
+    "each bank by reassembling it and comparing the bytes against the original PRG slice (`roundTripOk` per " +
+    "bank). A failing round-trip means the disassembly is NOT byte-exact — you'll know before you waste a " +
+    "build cycle. NROM (mapper 0) ROMs are handled as a single bank. Writes everything under `outputDir`.",
+    {
+      path: z.string().describe("Absolute path to the .nes ROM."),
+      outputDir: z.string().describe("Directory to write the project into (created if needed). Gets bankN.asm, bankN.cfg, build.sh, and a manifest."),
+      verify: z.boolean().default(true).describe("Round-trip each bank (reassemble + compare to the original PRG bytes) and report `roundTripOk`. Default true — turn off only for a quick listing dump."),
+      annotateRegisters: z.boolean().default(true).describe("Append `; PPUMASK` etc. on operands hitting a hardware register."),
+    },
+    safeTool(async ({ path: romPath, outputDir, verify = true, annotateRegisters: annotateRegistersFlag = true }) => {
+      const { runDa65 } = await import("../../toolchains/cc65/da65.js");
+      const data = new Uint8Array(await readFile(romPath));
+      if (data[0] !== 0x4e || data[1] !== 0x45 || data[2] !== 0x53 || data[3] !== 0x1a) {
+        throw new Error("disassembleProject: not an iNES file (only NES is supported today).");
+      }
+      const prgBanks16k = data[4] * 1;           // 16KB units per iNES header
+      const prgSize = prgBanks16k * 16384;
+      const mapperNum = ((data[6] >> 4) & 0xF) | (data[7] & 0xF0);
+      const PRG_FILE_START = 16;
+      const numBanks = prgSize >> 14;
+      await mkdir(outputDir, { recursive: true });
+
+      // Each switchable bank is decoded as if mapped at $8000; the LAST bank is
+      // the one games keep fixed at $C000 (vectors live there), so decode it at
+      // $C000 instead — that's where its absolute refs resolve.
+      const regs = annotateRegistersFlag ? registersForPlatform("nes") : null;
+      const banks = [];
+      for (let b = 0; b < numBanks; b++) {
+        const isFixedTop = (b === numBanks - 1) && numBanks > 1;
+        const org = isFixedTop ? 0xC000 : 0x8000;
+        const fileStart = PRG_FILE_START + b * 16384;
+        const slice = data.slice(fileStart, fileStart + 16384);
+
+        const da = await runDa65({ bytes: slice, startAddress: org, cpu: "6502", options: ["--comments", "4"] });
+        if (da.exitCode !== 0) {
+          banks.push({ bank: b, ok: false, error: firstErrorLine(da.asm), file: null });
+          continue;
+        }
+        let asm = da.asm;
+        if (regs) asm = annotateRegisters(asm, regs);
+        asm = injectOrigin(asm, org);
+        // Provenance header — makes a wrong-bank swap detectable by inspection.
+        const hdr =
+          `; bank ${b}${isFixedTop ? " (fixed, $C000)" : " (switchable, $8000)"} — ` +
+          `prg 0x${(b * 16384).toString(16).toUpperCase().padStart(5, "0")}..` +
+          `0x${(b * 16384 + 16383).toString(16).toUpperCase().padStart(5, "0")} ` +
+          `(file 0x${fileStart.toString(16).toUpperCase()}), mapper ${mapperNum}\n`;
+        asm = hdr + asm;
+
+        const asmName = `bank${b}.asm`;
+        await writeFile(nodePath.join(outputDir, asmName), asm);
+
+        // Minimal ld65 config: one 16KB ROM bank at `org`, no header/CHR (we
+        // verify PRG bytes only). Used for both round-trip and the user build.
+        const cfg = bankLinkerConfig(org);
+        await writeFile(nodePath.join(outputDir, `bank${b}.cfg`), cfg);
+
+        const entry = { bank: b, org: "$" + org.toString(16).toUpperCase(), file: asmName, ok: true };
+
+        if (verify) {
+          const ca = await runCa65Local(asm);
+          if (ca.exitCode !== 0 || !ca.object) {
+            entry.roundTripOk = false;
+            entry.roundTripError = `ca65 failed: ${firstErrorLine(ca.log)}`;
+          } else {
+            const ld = await runLd65Local(ca.object, cfg);
+            if (ld.exitCode !== 0 || !ld.binary) {
+              entry.roundTripOk = false;
+              entry.roundTripError = `ld65 failed: ${firstErrorLine(ld.log)}`;
+            } else {
+              const ok = ld.binary.length === slice.length && slice.every((v, i) => v === ld.binary[i]);
+              entry.roundTripOk = ok;
+              if (!ok) {
+                const at = firstDiffOffset(slice, ld.binary);
+                entry.roundTripError = at < 0
+                  ? `length mismatch (got ${ld.binary.length}, want ${slice.length})`
+                  : `byte mismatch at PRG offset 0x${(b * 16384 + at).toString(16).toUpperCase()} (in-bank 0x${at.toString(16).toUpperCase()})`;
+              }
+            }
+          }
+        }
+        banks.push(entry);
+      }
+
+      // build.sh: assemble every bank with the bundled cc65 (documents the
+      // exact invocation; the project is self-contained on disk).
+      const buildSh = buildScript(banks.filter((b) => b.ok));
+      await writeFile(nodePath.join(outputDir, "build.sh"), buildSh);
+
+      const verified = banks.filter((b) => b.roundTripOk !== undefined);
+      const allOk = verified.length > 0 && verified.every((b) => b.roundTripOk);
+      return jsonContent({
+        ok: banks.every((b) => b.ok),
+        path: romPath,
+        outputDir,
+        mapper: mapperNum,
+        prgBanks: numBanks,
+        banks,
+        roundTrip: verify
+          ? { verified: verified.length, allOk, failed: verified.filter((b) => !b.roundTripOk).map((b) => b.bank) }
+          : { verified: 0, note: "verify:false — bytes not checked against the original" },
+        note: verify
+          ? (allOk
+              ? `All ${verified.length} banks round-trip BYTE-EXACT. Edit the bankN.asm files and rebuild via build.sh (or buildSource per bank).`
+              : `Some banks did NOT round-trip — see banks[].roundTripError. A failing bank's .asm will NOT rebuild to the original bytes.`)
+          : `Listings written; round-trip verification skipped.`,
+      });
+    }),
+  );
+}
+
+/** Minimal ld65 config: one 16KB ROM bank loaded at `org`, raw output. */
+function bankLinkerConfig(org) {
+  const hex = "$" + org.toString(16).toUpperCase();
+  return [
+    "MEMORY {",
+    `  BANK: start ${hex}, size $4000, type ro, file %O, fill yes, fillval $FF;`,
+    "}",
+    "SEGMENTS {",
+    "  CODE: load BANK, type ro;",
+    "}",
+  ].join("\n") + "\n";
+}
+
+/** build.sh documenting the per-bank assemble+link (uses cc65 on PATH). */
+function buildScript(okBanks) {
+  const lines = ["#!/bin/sh", "# Reassemble each bank. Requires cc65 (ca65/ld65) on PATH.", "set -e"];
+  for (const b of okBanks) {
+    lines.push(`ca65 -t nes ${b.file} -o bank${b.bank}.o`);
+    lines.push(`ld65 -C bank${b.bank}.cfg bank${b.bank}.o -o bank${b.bank}.bin`);
+  }
+  lines.push("# Concatenate banks in order + prepend your iNES header to rebuild the ROM.");
+  return lines.join("\n") + "\n";
+}
+
+/** Reassemble disasm output with the bundled ca65 (round-trip half 1). */
+async function runCa65Local(asm) {
+  const { runCa65 } = await import("../../toolchains/cc65/cc65.js");
+  return runCa65({ source: asm, target: "nes" });
+}
+
+/** Link one bank object with a custom config (round-trip half 2). */
+async function runLd65Local(object, cfg) {
+  const { runLd65 } = await import("../../toolchains/cc65/cc65.js");
+  return runLd65({ objects: { "out.o": object }, target: "nes", linkerConfig: cfg });
+}
+
+/** First differing byte index between two arrays, or -1 if equal up to min length. */
+function firstDiffOffset(a, b) {
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) if (a[i] !== b[i]) return i;
+  return a.length === b.length ? -1 : n;
+}
+
+/**
+ * Prepend a `.org <addr>` directive to da65 output so it re-assembles
+ * unmodified through ca65 (without it, absolute branch targets fail
+ * relocatable assembly with "Range error"). Inserts AFTER any leading
+ * `.setcpu` line da65 emits; idempotent (no-op if an `.org` is already
+ * present near the top).
+ * @param {string} asm
+ * @param {number} addr
+ * @returns {string}
+ */
+function injectOrigin(asm, addr) {
+  const org = `.org $${(addr & 0xFFFF).toString(16).toUpperCase().padStart(4, "0")}`;
+  const lines = asm.split(/\r?\n/);
+  // Already has an origin in the first ~10 lines? leave it.
+  if (lines.slice(0, 10).some((l) => /^\s*\.org\b/i.test(l))) return asm;
+  // Insert right after the last leading directive (.setcpu / .segment /
+  // comment / blank) so it sits with the other preamble.
+  let insertAt = 0;
+  for (let i = 0; i < lines.length && i < 10; i++) {
+    if (/^\s*(\.setcpu|\.segment|;|$)/i.test(lines[i])) insertAt = i + 1;
+    else break;
+  }
+  lines.splice(insertAt, 0, org);
+  return lines.join("\n");
+}
+
+/** Best-effort: pull the first error-looking line out of a failed da65 dump. */
+function firstErrorLine(text) {
+  if (!text) return null;
+  for (const line of text.split(/\r?\n/)) {
+    if (/\b[Ee]rror\b|:\d+:/.test(line)) return line.trim();
+  }
+  const first = text.split(/\r?\n/).find((l) => l.trim());
+  return first ? first.trim() : null;
 }
 
 /**

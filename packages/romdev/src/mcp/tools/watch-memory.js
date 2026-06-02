@@ -122,6 +122,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         max: z.number().int().min(0).max(255).optional(),
       }).optional().describe("Keep only changes whose NEW byte value is within [min,max]. Combine with onChange to catch e.g. only large reloads."),
       maxEvents: z.number().int().min(1).max(100_000).default(256).describe("Cap on RETURNED events; surplus dropped with a `truncated` flag. When `outputPath` is set, ALL matching events are written to the file regardless of this cap (the cap only bounds the inline preview)."),
+      groupByPC: z.boolean().default(false).describe("Collapse events by the writing PC: return `byPC[]` = {pc, hits, firstFrame, lastFrame, offsets} (one row per instruction that touched the watched bytes) instead of thousands of raw rows. The answer to 'which code writes to $2007?' in a handful of rows. Composes with onChange/valueFilter; still streams the full per-event log to `outputPath` if set."),
       outputPath: z.string().optional().describe("If given, stream every filter-passing event to this path as NDJSON (one JSON object per line) and return a compact summary {path, eventCount, ...} plus a small inline preview (first maxEvents). Use for long watches so the full event log never enters your context."),
       pressDuring: z.array(z.object({
         frame: z.number().int().min(0).describe("Frame on which to press."),
@@ -130,7 +131,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         holdFrames: z.number().int().min(1).default(2),
       })).optional().describe("Schedule button presses while watching, so the agent can simulate user input mid-watch."),
     },
-    safeTool(async ({ region, offset = 0, length = 1, ranges, frames = 600, stopOnFirst = false, onChange = "any", valueFilter, maxEvents = 256, outputPath, pressDuring }) => {
+    safeTool(async ({ region, offset = 0, length = 1, ranges, frames = 600, stopOnFirst = false, onChange = "any", valueFilter, maxEvents = 256, groupByPC = false, outputPath, pressDuring }) => {
       const host = getHost(sessionKey);
 
       // Normalize to a list of ranges. Single-range mode requires `region`.
@@ -152,11 +153,27 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       let truncated = false;       // inline preview hit maxEvents
       let stoppedEarly = false;
       const fileLines = [];        // NDJSON lines when outputPath set
+      // groupByPC accumulator: pc -> {hits, firstFrame, lastFrame, offsets:Set}.
+      // Collapses "which instructions touched this byte" — the canonical
+      // "find the hot-path writer" question — into one row per PC regardless of
+      // how many thousands of times each fired.
+      const byPc = groupByPC ? new Map() : null;
 
       const pushEvent = (ev) => {
         totalMatched++;
+        if (byPc) {
+          const key = ev.pc ?? "(unknown)";
+          let g = byPc.get(key);
+          if (!g) { g = { pc: key, hits: 0, firstFrame: ev.frame, lastFrame: ev.frame, offsets: new Set() }; byPc.set(key, g); }
+          g.hits++;
+          g.lastFrame = ev.frame;
+          g.offsets.add(ev.offsetHex ?? ev.offset);
+        }
         if (outputPath) fileLines.push(JSON.stringify(ev));
-        if (preview.length < maxEvents) preview.push(ev);
+        // When grouping, the per-event preview is redundant with the summary —
+        // keep a small sample for context but don't let it dominate.
+        const cap = byPc ? Math.min(maxEvents, 32) : maxEvents;
+        if (preview.length < cap) preview.push(ev);
         else { truncated = true; }
       };
 
@@ -196,12 +213,20 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         }
       }
 
+      // Build the grouped-by-PC summary (sorted by hit count, descending).
+      const byPCSummary = byPc
+        ? Array.from(byPc.values())
+            .sort((a, b) => b.hits - a.hits)
+            .map((g) => ({ pc: g.pc, hits: g.hits, firstFrame: g.firstFrame, lastFrame: g.lastFrame, offsets: Array.from(g.offsets) }))
+        : undefined;
+
       const base = {
         framesStepped: stoppedEarly ? undefined : frames,
         watched: watchRanges,
         onChange,
         valueFilter: valueFilter ?? null,
         eventCount: totalMatched,
+        ...(byPCSummary ? { byPC: byPCSummary, distinctPCs: byPCSummary.length } : {}),
         stoppedEarly,
         truncated,
         note: totalMatched === 0
