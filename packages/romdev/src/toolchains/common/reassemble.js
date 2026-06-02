@@ -152,57 +152,32 @@ export async function reassembleByteExact(disasm, startAddress, original, dialec
     if (out.length === original.length && firstDiff(original, out) < 0) {
       return { source, bytes: out, ok: true, passes: pass + 1, dcLines: forced.size };
     }
-    // Walk lines tracking the output cursor by ORIGINAL length. On a mismatch
-    // we look ahead for an ANCHOR — a later line whose original bytes appear in
-    // `out` exactly where they'd be IF every line in between were same-length
-    // (cumulative original length). If found within a window, all the lines in
-    // between are same-length re-encodes (e.g. a run of suba→lea / stop$0f→$00):
-    // pin them all and jump the cursor to the anchor — handled in ONE pass.
-    // If no anchor is found, the first mismatching line changed LENGTH: pin it
-    // and desync; next pass it's an exact-length `dc.b` and the cursor re-syncs.
-    const ANCHOR_WINDOW = 24; // lines to scan for re-sync
+    // Walk output + source in lockstep by ORIGINAL length. A live instruction
+    // the assembler re-encoded to the SAME length but different bytes (suba→lea,
+    // jmp.l→jmp.w, stop) is pinned and we KEEP walking (the next line's bytes
+    // still line up). A line whose bytes don't match AND whose successor doesn't
+    // line up at original-length changed LENGTH → pin it and stop this pass; next
+    // pass it's an exact-length data directive, so the cursor re-syncs and we get
+    // past it. Converges in (#length-changing lines) passes; same-length
+    // re-encodes are all caught in a single pass.
     let outPos = 0;
     let desynced = false;
-    const codeLines = parsed.map((p, i) => ({ p, i })).filter((x) => x.p.bytes && x.p.bytes.length);
-    for (let ci = 0; ci < codeLines.length && !desynced; ci++) {
-      const { p, i } = codeLines[ci];
-      const len = p.bytes.length;
-      if (outPos + len > out.length) { desynced = true; break; }
-      let match = true;
-      for (let k = 0; k < len; k++) if (out[outPos + k] !== p.bytes[k]) { match = false; break; }
+    for (let i = 0; i < parsed.length && !desynced; i++) {
+      const p = parsed[i];
+      const len = p.bytes ? p.bytes.length : 0;
+      if (!len) continue;
+      let match = outPos + len <= out.length;
+      if (match) for (let k = 0; k < len; k++) if (out[outPos + k] !== p.bytes[k]) { match = false; break; }
       if (match) { outPos += len; continue; }
-      if (forced.has(i) || p.code == null) { desynced = true; break; } // data/pinned mismatch ⇒ upstream length drift
-      // Mismatch on a live instruction. Search forward for an anchor assuming
-      // same-length re-encodes for the run [ci .. anchor).
-      let cum = len, anchorCi = -1;
-      for (let aj = ci + 1; aj < codeLines.length && aj <= ci + ANCHOR_WINDOW; aj++) {
-        const a = codeLines[aj];
-        if (outPos + cum + a.p.bytes.length > out.length) break;
-        let am = true;
-        for (let k = 0; k < a.p.bytes.length; k++) if (out[outPos + cum + k] !== a.p.bytes[k]) { am = false; break; }
-        if (am) { anchorCi = aj; break; }
-        cum += a.p.bytes.length;
-      }
-      if (anchorCi >= 0) {
-        // The run [ci..anchorCi) is same-length overall (the anchor re-aligned
-        // at the cumulative ORIGINAL length). But only some lines in it
-        // actually re-encoded — pin ONLY those whose bytes differ at their
-        // own cumulative position, leaving faithful lines readable.
-        let p2 = outPos;
-        for (let j = ci; j < anchorCi; j++) {
-          const cj = codeLines[j];
-          let m2 = true;
-          for (let k = 0; k < cj.p.bytes.length; k++) if (out[p2 + k] !== cj.p.bytes[k]) { m2 = false; break; }
-          if (!m2 && cj.p.code != null) forced.add(cj.i);
-          p2 += cj.p.bytes.length;
-        }
-        outPos += cum;            // cum = total original length ci..anchorCi-1
-        ci = anchorCi - 1;        // loop ++ moves to anchorCi (which matched)
-      } else {
-        // No anchor → this line changed length. Pin just it; re-sync next pass.
-        forced.add(i);
-        desynced = true;
-      }
+      if (forced.has(i) || p.code == null) { outPos += len; continue; }
+      forced.add(i);
+      // Same-length re-encode? (the NEXT byte-bearing line's bytes appear right
+      // after this line's original length → cursor still aligned, keep going.)
+      const next = nextCodeOrData(parsed, i + 1);
+      const sameLen = next && next.bytes &&
+        outPos + len + next.bytes.length <= out.length &&
+        next.bytes.every((b, k) => out[outPos + len + k] === b);
+      if (sameLen) outPos += len; else desynced = true;
     }
     if (!desynced) {
       const next = parsed.findIndex((p, i) => p.code != null && !forced.has(i));
