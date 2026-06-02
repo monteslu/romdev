@@ -1051,7 +1051,9 @@ export function registerDisasmTools(server, z) {
     "standalone, emits a per-bank ld65 linker config + a `build.sh`, and — critically — ROUND-TRIP VERIFIES " +
     "each bank by reassembling it and comparing the bytes against the original PRG slice (`roundTripOk` per " +
     "bank). A failing round-trip means the disassembly is NOT byte-exact — you'll know before you waste a " +
-    "build cycle. NROM (mapper 0) ROMs are handled as a single bank. Writes everything under `outputDir`.",
+    "build cycle. NROM (mapper 0) ROMs are handled as a single bank. Writes everything under `outputDir`. " +
+    "NES-ONLY today (the iNES 16KB-bank model + cc65 round-trip are baked in); for other systems use " +
+    "`disassembleRom` per region — banked-rebuild scaffolding for SNES/GB/Genesis isn't built yet.",
     {
       path: z.string().describe("Absolute path to the .nes ROM."),
       outputDir: z.string().describe("Directory to write the project into (created if needed). Gets bankN.asm, bankN.cfg, build.sh, and a manifest."),
