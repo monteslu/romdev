@@ -102,6 +102,16 @@ function disasmOne(bytes, pos, addr) {
     return { length: 1, text: `.byte ${formatHex2(op)}` };
   }
 
+  // GB `stop` ($10) is a TWO-byte instruction (`10 00`) — the CPU swallows the
+  // following byte. rgbds (and the hardware) treat it as 2 bytes; decoding it
+  // as 1 byte desyncs the whole stream. A real `stop` is `10 00`; if the second
+  // byte is anything else it's almost certainly DATA misread as code, so emit a
+  // 1-byte `.byte $10` (faithful + reassembles) rather than a bogus `stop`.
+  if (op === 0x10) {
+    if (pos + 1 < bytes.length && bytes[pos + 1] === 0x00) return { length: 2, text: "stop" };
+    return { length: 1, text: `.byte ${formatHex2(op)}` };
+  }
+
   let length = 1;
   let text = tpl;
   if (text.includes("@nn")) {
