@@ -282,13 +282,29 @@ export const SJASM_Z80 = {
   insn: passthroughInsn("db"),
 };
 
+/** Translate sm83dasm operand syntax to RGBDS:
+ *   - memory operands `(...)` → `[...]`  (rgbds uses brackets)
+ *   - `sp++$N` → `sp+$N`, `sp+-$N` → `sp-$N`  (disasm doubles the sign)
+ *   - `ldh a,($XX)` → `ldh a,[$FFXX]`  (disasm emits the low byte of the $FFxx page)
+ * Anything still unfamiliar rides through; if rgbasm rejects it, the heal loop
+ * falls the line back to `db`. */
+function sm83ToRgbds(code) {
+  if (/undefined/.test(code)) return null;
+  if (/^\.?(dc\.[bwl]|byte|word|db|dw)\b/i.test(code)) return null;
+  let c = code;
+  c = c.replace(/sp\+\+/g, "sp+").replace(/sp\+-/g, "sp-");
+  c = c.replace(/(ldh\s+(?:[^,]*,\s*)?)\(\$([0-9A-Fa-f]{1,2})\)/, (_, p, hh) => `${p}($FF${hh.padStart(2, "0")})`);
+  c = c.replace(/\(([^()]*)\)/g, "[$1]");
+  return c;
+}
+
 /** rgbds (sm83 / Game Boy) dialect. rgbasm: `db`, `label:`, needs a SECTION;
  *  modern rgbasm requires `DEF name EQU value` (bare `name EQU` is rejected as
- *  an undefined-macro call). */
+ *  an undefined-macro call); memory operands use `[]` not `()`. */
 export const RGBDS_SM83 = {
   org: (a) => `SECTION "dis", ROM0[$${a.toString(16).toUpperCase()}]`,
   dataDir: (bytes) => "\tdb " + bytes.map(hex2).join(","),
   labelDef: (l) => l + ":",
   equate: (l, a) => `DEF ${l} EQU $${a.toString(16).toUpperCase()}`,
-  insn: passthroughInsn("db"),
+  insn: sm83ToRgbds,
 };
