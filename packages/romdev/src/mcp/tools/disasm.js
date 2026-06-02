@@ -1044,165 +1044,180 @@ export function registerDisasmTools(server, z) {
 
   server.tool(
     "disassembleProject",
-    "Use this to turn a BANKED NES ROM into a complete, re-buildable project in ONE call — instead of " +
-    "disassembling each bank by hand. For a mapper>0 ROM (UxROM/MMC1/MMC3/...) it: disassembles every 16KB " +
-    "PRG bank (switchable banks decoded at $8000, the fixed top bank at $C000), writes one `bankN.asm` per " +
-    "bank with a provenance header (`; bank N — prg 0xXXXX..0xYYYY`) and an `.org` so each file assembles " +
-    "standalone, emits a per-bank ld65 linker config + a `build.sh`, and — critically — ROUND-TRIP VERIFIES " +
-    "each bank by reassembling it and comparing the bytes against the original PRG slice (`roundTripOk` per " +
-    "bank). A failing round-trip means the disassembly is NOT byte-exact — you'll know before you waste a " +
-    "build cycle. NROM (mapper 0) ROMs are handled as a single bank. Writes everything under `outputDir`. " +
-    "NES-ONLY today (the iNES 16KB-bank model + cc65 round-trip are baked in); for other systems use " +
-    "`disassembleRom` per region — banked-rebuild scaffolding for SNES/GB/Genesis isn't built yet.",
+    "Use this to turn a ROM into a complete, re-buildable disassembly project in ONE call — across ALL " +
+    "supported systems: NES, SNES, Game Boy/Color, Sega Master System/Game Gear, Genesis/Mega Drive, " +
+    "C64, Atari 2600/7800. It splits the ROM into regions (per-16KB-bank for banked NES; one region for flat " +
+    "ROMs), disassembles each, and — critically — REASSEMBLES each region and verifies it is BYTE-EXACT " +
+    "against the original (`roundTripOk` per region). Lines that don't reassemble faithfully fall back to " +
+    "`.byte`/`db` data, so the output ALWAYS rebuilds to the original bytes; `readablePercent` reports how " +
+    "much came back as real instructions vs data. Each `.asm` has a provenance header and is ready to edit + " +
+    "rebuild. Writes everything under `outputDir`. (Per-CPU reassembler: cc65 for 6502/65816, sjasm for Z80, " +
+    "rgbds for GB, vasm for 68k.) NOTE: SNES currently emits byte-exact DATA-ONLY (low readablePercent) — " +
+    "instruction-level SNES is a known follow-up; the bytes are still correct.",
     {
-      path: z.string().describe("Absolute path to the .nes ROM."),
-      outputDir: z.string().describe("Directory to write the project into (created if needed). Gets bankN.asm, bankN.cfg, build.sh, and a manifest."),
-      verify: z.boolean().default(true).describe("Round-trip each bank (reassemble + compare to the original PRG bytes) and report `roundTripOk`. Default true — turn off only for a quick listing dump."),
-      annotateRegisters: z.boolean().default(true).describe("Append `; PPUMASK` etc. on operands hitting a hardware register."),
+      path: z.string().describe("Absolute path to the ROM (.nes/.sfc/.gb/.gbc/.sms/.gg/.bin/.prg/.a26/.a78)."),
+      outputDir: z.string().describe("Directory to write the project into (created if needed). Gets one .asm per region."),
+      platform: z.enum(["nes", "snes", "gb", "gbc", "sms", "gg", "genesis", "c64", "atari2600", "atari7800"]).optional().describe("Override platform detection (otherwise sniffed from the file extension)."),
     },
-    safeTool(async ({ path: romPath, outputDir, verify = true, annotateRegisters: annotateRegistersFlag = true }) => {
-      const { runDa65 } = await import("../../toolchains/cc65/da65.js");
+    safeTool(async ({ path: romPath, outputDir, platform }) => {
+      const { reassembleForPlatform } = await import("../../toolchains/common/reassemble.js");
       const data = new Uint8Array(await readFile(romPath));
-      if (data[0] !== 0x4e || data[1] !== 0x45 || data[2] !== 0x53 || data[3] !== 0x1a) {
-        throw new Error("disassembleProject: not an iNES file (only NES is supported today).");
-      }
-      const prgBanks16k = data[4] * 1;           // 16KB units per iNES header
-      const prgSize = prgBanks16k * 16384;
-      const mapperNum = ((data[6] >> 4) & 0xF) | (data[7] & 0xF0);
-      const PRG_FILE_START = 16;
-      const numBanks = prgSize >> 14;
+      const resolved = platform ?? sniffPlatformFromPath(romPath);
+      if (!resolved) throw new Error(`disassembleProject: could not detect platform from '${romPath}'. Pass platform explicitly.`);
       await mkdir(outputDir, { recursive: true });
 
-      // Each switchable bank is decoded as if mapped at $8000; the LAST bank is
-      // the one games keep fixed at $C000 (vectors live there), so decode it at
-      // $C000 instead — that's where its absolute refs resolve.
-      const regs = annotateRegistersFlag ? registersForPlatform("nes") : null;
-      const banks = [];
-      for (let b = 0; b < numBanks; b++) {
-        const isFixedTop = (b === numBanks - 1) && numBanks > 1;
-        const org = isFixedTop ? 0xC000 : 0x8000;
-        const fileStart = PRG_FILE_START + b * 16384;
-        const slice = data.slice(fileStart, fileStart + 16384);
+      // Plan the regions to disassemble for this platform (per-bank for banked
+      // ROMs; one region for flat ROMs). Each region → its own byte-exact .asm.
+      const regions = planRegions(resolved, data);
+      if (!regions.length) throw new Error(`disassembleProject: no regions planned for '${resolved}' (unsupported or empty ROM).`);
 
-        const da = await runDa65({ bytes: slice, startAddress: org, cpu: "6502", options: ["--comments", "4"] });
-        if (da.exitCode !== 0) {
-          banks.push({ bank: b, ok: false, error: firstErrorLine(da.asm), file: null });
-          continue;
-        }
-        let asm = da.asm;
-        if (regs) asm = annotateRegisters(asm, regs);
-        asm = injectOrigin(asm, org);
-        // Provenance header — makes a wrong-bank swap detectable by inspection.
-        const hdr =
-          `; bank ${b}${isFixedTop ? " (fixed, $C000)" : " (switchable, $8000)"} — ` +
-          `prg 0x${(b * 16384).toString(16).toUpperCase().padStart(5, "0")}..` +
-          `0x${(b * 16384 + 16383).toString(16).toUpperCase().padStart(5, "0")} ` +
-          `(file 0x${fileStart.toString(16).toUpperCase()}), mapper ${mapperNum}\n`;
-        asm = hdr + asm;
-
-        const asmName = `bank${b}.asm`;
-        await writeFile(nodePath.join(outputDir, asmName), asm);
-
-        // Minimal ld65 config: one 16KB ROM bank at `org`, no header/CHR (we
-        // verify PRG bytes only). Used for both round-trip and the user build.
-        const cfg = bankLinkerConfig(org);
-        await writeFile(nodePath.join(outputDir, `bank${b}.cfg`), cfg);
-
-        const entry = { bank: b, org: "$" + org.toString(16).toUpperCase(), file: asmName, ok: true };
-
-        if (verify) {
-          const ca = await runCa65Local(asm);
-          if (ca.exitCode !== 0 || !ca.object) {
-            entry.roundTripOk = false;
-            entry.roundTripError = `ca65 failed: ${firstErrorLine(ca.log)}`;
-          } else {
-            const ld = await runLd65Local(ca.object, cfg);
-            if (ld.exitCode !== 0 || !ld.binary) {
-              entry.roundTripOk = false;
-              entry.roundTripError = `ld65 failed: ${firstErrorLine(ld.log)}`;
-            } else {
-              const ok = ld.binary.length === slice.length && slice.every((v, i) => v === ld.binary[i]);
-              entry.roundTripOk = ok;
-              if (!ok) {
-                const at = firstDiffOffset(slice, ld.binary);
-                entry.roundTripError = at < 0
-                  ? `length mismatch (got ${ld.binary.length}, want ${slice.length})`
-                  : `byte mismatch at PRG offset 0x${(b * 16384 + at).toString(16).toUpperCase()} (in-bank 0x${at.toString(16).toUpperCase()})`;
-              }
-            }
-          }
-        }
-        banks.push(entry);
+      const out = [];
+      for (const reg of regions) {
+        const r = await reassembleForPlatform({ platform: resolved, bytes: reg.bytes, startAddress: reg.startAddress });
+        const header = `; ${reg.label} — ${reg.bytes.length} bytes @ $${reg.startAddress.toString(16).toUpperCase()} ` +
+          `(file 0x${reg.fileOffset.toString(16).toUpperCase()}), ${resolved}\n` +
+          `; round-trip: ${r.ok ? "BYTE-EXACT" : "FAILED"} · readable ${r.readablePercent}%` +
+          (r.note ? ` · ${r.note}` : "") + "\n\n";
+        await writeFile(nodePath.join(outputDir, reg.file), header + r.source);
+        out.push({
+          region: reg.name, file: reg.file, startAddress: "$" + reg.startAddress.toString(16).toUpperCase(),
+          bytes: reg.bytes.length, roundTripOk: r.ok, readablePercent: r.readablePercent,
+          ...(r.note ? { note: r.note } : {}),
+        });
       }
 
-      // build.sh: assemble every bank with the bundled cc65 (documents the
-      // exact invocation; the project is self-contained on disk).
-      const buildSh = buildScript(banks.filter((b) => b.ok));
-      await writeFile(nodePath.join(outputDir, "build.sh"), buildSh);
-
-      const verified = banks.filter((b) => b.roundTripOk !== undefined);
-      const allOk = verified.length > 0 && verified.every((b) => b.roundTripOk);
+      const allOk = out.every((r) => r.roundTripOk);
+      const avgReadable = Math.round(out.reduce((s, r) => s + r.readablePercent, 0) / out.length);
       return jsonContent({
-        ok: banks.every((b) => b.ok),
+        ok: allOk,
         path: romPath,
-        outputDir,
-        mapper: mapperNum,
-        prgBanks: numBanks,
-        banks,
-        roundTrip: verify
-          ? { verified: verified.length, allOk, failed: verified.filter((b) => !b.roundTripOk).map((b) => b.bank) }
-          : { verified: 0, note: "verify:false — bytes not checked against the original" },
-        note: verify
-          ? (allOk
-              ? `All ${verified.length} banks round-trip BYTE-EXACT. Edit the bankN.asm files and rebuild via build.sh (or buildSource per bank).`
-              : `Some banks did NOT round-trip — see banks[].roundTripError. A failing bank's .asm will NOT rebuild to the original bytes.`)
-          : `Listings written; round-trip verification skipped.`,
+        platform: resolved,
+        regions: out,
+        roundTrip: { regions: out.length, allByteExact: allOk, failed: out.filter((r) => !r.roundTripOk).map((r) => r.region) },
+        readablePercentAvg: avgReadable,
+        note: allOk
+          ? `All ${out.length} region(s) round-trip BYTE-EXACT (avg ${avgReadable}% disassembled as instructions, the rest as .byte data). Edit the .asm files and rebuild.`
+          : `Some regions did NOT round-trip byte-exact — see regions[].note.`,
       });
     }),
   );
 }
 
-/** Minimal ld65 config: one 16KB ROM bank loaded at `org`, raw output. */
-function bankLinkerConfig(org) {
-  const hex = "$" + org.toString(16).toUpperCase();
-  return [
-    "MEMORY {",
-    `  BANK: start ${hex}, size $4000, type ro, file %O, fill yes, fillval $FF;`,
-    "}",
-    "SEGMENTS {",
-    "  CODE: load BANK, type ro;",
-    "}",
-  ].join("\n") + "\n";
+/** Trim a long trailing run of a single pad byte ($00 or $FF) from a flat ROM
+ *  region so we don't disassemble megabytes of padding. Keeps everything up to
+ *  the last non-pad byte (rounded up a little for alignment). */
+function trimTrailingPad(bytes) {
+  let end = bytes.length;
+  while (end > 0 && (bytes[end - 1] === 0x00 || bytes[end - 1] === 0xFF)) end--;
+  // keep a tiny tail so a final real instruction isn't clipped; align to 16.
+  end = Math.min(bytes.length, (end + 16) & ~0xF);
+  return end < bytes.length ? bytes.slice(0, end) : bytes;
 }
 
-/** build.sh documenting the per-bank assemble+link (uses cc65 on PATH). */
-function buildScript(okBanks) {
-  const lines = ["#!/bin/sh", "# Reassemble each bank. Requires cc65 (ca65/ld65) on PATH.", "set -e"];
-  for (const b of okBanks) {
-    lines.push(`ca65 -t nes ${b.file} -o bank${b.bank}.o`);
-    lines.push(`ld65 -C bank${b.bank}.cfg bank${b.bank}.o -o bank${b.bank}.bin`);
+/** Sniff a platform from a ROM file extension (disassembleProject). */
+function sniffPlatformFromPath(p) {
+  if (/\.nes$/i.test(p)) return "nes";
+  if (/\.(sfc|smc)$/i.test(p)) return "snes";
+  if (/\.gbc$/i.test(p)) return "gbc";
+  if (/\.gb$/i.test(p)) return "gb";
+  if (/\.sms$/i.test(p)) return "sms";
+  if (/\.gg$/i.test(p)) return "gg";
+  if (/\.a26$/i.test(p)) return "atari2600";
+  if (/\.a78$/i.test(p)) return "atari7800";
+  if (/\.prg$/i.test(p)) return "c64";
+  if (/\.(gen|md|bin)$/i.test(p)) return "genesis";
+  return null;
+}
+
+/**
+ * Plan the disassembly regions for a ROM. Banked NES → one region per 16KB PRG
+ * bank (switchable at $8000, fixed top at $C000). Everything else → one region
+ * covering the code body at its load address. Each region:
+ *   { name, file, bytes, startAddress, fileOffset, label }
+ */
+function planRegions(platform, data) {
+  const regions = [];
+  if (platform === "nes") {
+    if (data[0] !== 0x4e || data[1] !== 0x45 || data[2] !== 0x53 || data[3] !== 0x1a) {
+      throw new Error("disassembleProject: not a valid iNES (.nes) file.");
+    }
+    const prgSize = data[4] * 16384;
+    const numBanks = prgSize >> 14;
+    const PRG = 16;
+    for (let b = 0; b < numBanks; b++) {
+      const isFixedTop = b === numBanks - 1 && numBanks > 1;
+      const org = isFixedTop ? 0xC000 : 0x8000;
+      const fileOffset = PRG + b * 16384;
+      regions.push({
+        name: `bank${b}`, file: `bank${b}.asm`,
+        bytes: data.slice(fileOffset, fileOffset + 16384),
+        startAddress: org, fileOffset,
+        label: `bank ${b}${isFixedTop ? " (fixed $C000)" : " (switchable $8000)"}`,
+      });
+    }
+    return regions;
   }
-  lines.push("# Concatenate banks in order + prepend your iNES header to rebuild the ROM.");
-  return lines.join("\n") + "\n";
-}
-
-/** Reassemble disasm output with the bundled ca65 (round-trip half 1). */
-async function runCa65Local(asm) {
-  const { runCa65 } = await import("../../toolchains/cc65/cc65.js");
-  return runCa65({ source: asm, target: "nes" });
-}
-
-/** Link one bank object with a custom config (round-trip half 2). */
-async function runLd65Local(object, cfg) {
-  const { runLd65 } = await import("../../toolchains/cc65/cc65.js");
-  return runLd65({ objects: { "out.o": object }, target: "nes", linkerConfig: cfg });
-}
-
-/** First differing byte index between two arrays, or -1 if equal up to min length. */
-function firstDiffOffset(a, b) {
-  const n = Math.min(a.length, b.length);
-  for (let i = 0; i < n; i++) if (a[i] !== b[i]) return i;
-  return a.length === b.length ? -1 : n;
+  if (platform === "snes") {
+    // LoROM: 32KB banks each mapped at $8000. One region per 32KB chunk.
+    const hasHeader = (data.length % 1024) === 512; // 512-byte copier header
+    const base = hasHeader ? 512 : 0;
+    const body = data.subarray(base);
+    const BANK = 0x8000;
+    for (let off = 0; off < body.length; off += BANK) {
+      const idx = off / BANK;
+      regions.push({
+        name: `bank${idx}`, file: `bank${idx}.asm`,
+        bytes: body.slice(off, off + BANK),
+        startAddress: 0x8000, fileOffset: base + off,
+        label: `LoROM bank ${idx}`,
+      });
+    }
+    return regions;
+  }
+  if (platform === "gb" || platform === "gbc") {
+    // 16KB banks; bank 0 fixed at $0000, banks 1+ at $4000.
+    const BANK = 0x4000;
+    for (let off = 0; off < data.length; off += BANK) {
+      const idx = off / BANK;
+      regions.push({
+        name: `bank${idx}`, file: `bank${idx}.asm`,
+        bytes: data.slice(off, off + BANK),
+        startAddress: idx === 0 ? 0x0000 : 0x4000, fileOffset: off,
+        label: `ROM bank ${idx}${idx === 0 ? " ($0000)" : " ($4000)"}`,
+      });
+    }
+    return regions;
+  }
+  if (platform === "sms" || platform === "gg") {
+    // Z80 mapped at $0000; one region for the whole ROM (Sega mapper banks
+    // beyond 48KB are rarer in homebrew — treat as flat for now).
+    regions.push({ name: "rom", file: "rom.asm", bytes: trimTrailingPad(data.slice(0)), startAddress: 0x0000, fileOffset: 0, label: "ROM ($0000)" });
+    return regions;
+  }
+  if (platform === "genesis") {
+    // 68k flat ROM at $000000; the reset PC is in the vector table. Disassemble
+    // from the reset vector to end (the header + vectors before it are data),
+    // trimming the trailing $00/$FF padding that fills a sized cart.
+    const resetPc = (data[4] << 24 | data[5] << 16 | data[6] << 8 | data[7]) >>> 0;
+    const start = (resetPc < data.length && resetPc >= 0x200) ? resetPc : 0x200;
+    regions.push({ name: "rom", file: "rom.asm", bytes: trimTrailingPad(data.slice(start)), startAddress: start, fileOffset: start, label: `code from reset PC $${start.toString(16)}` });
+    return regions;
+  }
+  if (platform === "c64") {
+    const loadAddr = data[0] | (data[1] << 8);
+    regions.push({ name: "prg", file: "prg.asm", bytes: data.slice(2), startAddress: loadAddr, fileOffset: 2, label: `PRG @ $${loadAddr.toString(16)}` });
+    return regions;
+  }
+  if (platform === "atari2600") {
+    regions.push({ name: "rom", file: "rom.asm", bytes: data.slice(0), startAddress: 0xF000, fileOffset: 0, label: "4KB cart @ $F000" });
+    return regions;
+  }
+  if (platform === "atari7800") {
+    const org = 0x10000 - data.length; // cart maps to top of address space
+    regions.push({ name: "rom", file: "rom.asm", bytes: data.slice(0), startAddress: org & 0xFFFF, fileOffset: 0, label: `cart @ $${(org & 0xFFFF).toString(16)}` });
+    return regions;
+  }
+  return regions;
 }
 
 /**

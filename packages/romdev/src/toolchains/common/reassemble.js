@@ -347,7 +347,12 @@ function sm83ToRgbds(code) {
  *  modern rgbasm requires `DEF name EQU value` (bare `name EQU` is rejected as
  *  an undefined-macro call); memory operands use `[]` not `()`. */
 export const RGBDS_SM83 = {
-  org: (a) => `SECTION "dis", ROM0[$${a.toString(16).toUpperCase()}]`,
+  // GB memory map: $0000-$3FFF = ROM0 (fixed bank 0), $4000-$7FFF = ROMX
+  // (switchable bank). rgbds rejects a ROM0 section at $4000, so pick the
+  // right section type by address.
+  org: (a) => (a < 0x4000)
+    ? `SECTION "dis", ROM0[$${a.toString(16).toUpperCase()}]`
+    : `SECTION "dis", ROMX[$${a.toString(16).toUpperCase()}]`,
   dataDir: (bytes) => "\tdb " + bytes.map(hex2).join(","),
   labelDef: (l) => l + ":",
   equate: (l, a) => `DEF ${l} EQU $${a.toString(16).toUpperCase()}`,
