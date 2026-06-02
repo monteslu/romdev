@@ -51,7 +51,14 @@ function parseLine(line) {
     const bytes = both[4].trim().split(/\s+/).map((h) => parseInt(h, 16));
     return { label: both[1], code: both[2].trim(), addr: parseInt(both[3], 16), bytes };
   }
-  return {}; // directive/comment/blank — skip
+  // Assembler STATE directives that emit no bytes but MUST be preserved for the
+  // reassembly to be correct — chiefly the 65816 width directives `.a8/.a16/
+  // .i8/.i16` (and `.setcpu`), which tell ca65 the accumulator/index size so
+  // `lda #imm` etc. get the right operand width. Dropping them silently
+  // mis-encodes everything after a width switch.
+  const dir = line.match(/^\s*(\.(?:setcpu|a8|a16|i8|i16|smart)\b.*)$/i);
+  if (dir) return { directive: dir[1].trim() };
+  return {}; // comment/blank — skip
 }
 
 /**
@@ -85,6 +92,7 @@ export function translateDisasm(disasm, startAddress, dialect) {
 
   let fellBack = 0;
   for (const p of raw) {
+    if (p.directive) { const d = dialect.directive ? dialect.directive(p.directive) : null; if (d) out.push("\t" + d); continue; }
     if (p.label) out.push(dialect.labelDef(p.label));
     if (p.code != null) {
       const native = dialect.insn(p.code);
@@ -236,6 +244,7 @@ function translateParsed(parsed, startAddress, dialect, forced) {
   let fellBack = 0;
   for (let i = 0; i < parsed.length; i++) {
     const p = parsed[i];
+    if (p.directive) { const d = dialect.directive ? dialect.directive(p.directive) : null; if (d) out.push("\t" + d); continue; }
     if (p.label) out.push(dialect.labelDef(p.label));
     if (p.code != null) {
       const isForced = dialect.__forced && dialect.__forced.has(i);
@@ -274,10 +283,13 @@ export const CA65 = {
   dataDir: (bytes) => "\t.byte " + bytes.map(hex2).join(","),
   labelDef: (l) => l + ":",
   equate: (l, a) => `${l} := $${a.toString(16).toUpperCase()}`,
+  // Keep cc65 state directives verbatim — `.a8/.a16/.i8/.i16` are REQUIRED for
+  // correct 65816 reassembly; `.setcpu` selects the CPU.
+  directive: (d) => d,
   insn: (code) => {
     if (/undefined/.test(code)) return null;
     if (/^\.?(dc\.[bwl]|byte|word)\b/i.test(code)) return null;
-    return code; // pass cc65 directives (.setcpu/.a8/.i8/.import) AND instructions through
+    return code;
   },
 };
 
