@@ -289,6 +289,23 @@ function passthroughInsn(dataMnemonic) {
   };
 }
 
+/** cc65 (ca65) dialect — for 6502 (NES/C64/Atari) and 65816 (SNES). da65's
+ *  output is ALREADY cc65 syntax, so this is near-identity: keep the `.setcpu`
+ *  and `.a8`/`.i8` size directives da65 emits (65816 needs them), pass
+ *  instructions through, and let the heal loop pin any `.byte`/illegal lines.
+ *  The org is injected separately in disasm.js / disassembleProject. */
+export const CA65 = {
+  org: (a) => "\t.org $" + a.toString(16).toUpperCase(),
+  dataDir: (bytes) => "\t.byte " + bytes.map(hex2).join(","),
+  labelDef: (l) => l + ":",
+  equate: (l, a) => `${l} := $${a.toString(16).toUpperCase()}`,
+  insn: (code) => {
+    if (/undefined/.test(code)) return null;
+    if (/^\.?(dc\.[bwl]|byte|word)\b/i.test(code)) return null;
+    return code; // pass cc65 directives (.setcpu/.a8/.i8/.import) AND instructions through
+  },
+};
+
 /** vasm68k (Motorola m68k) dialect — Genesis. */
 export const VASM_M68K = {
   org: (a) => "\torg $" + a.toString(16).toUpperCase(),
