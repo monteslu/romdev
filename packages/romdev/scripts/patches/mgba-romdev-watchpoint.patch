@@ -1,0 +1,99 @@
+# romdev patch for libretro-mgba (GBA) — see README.md in this directory.
+# Adds an instruction-level WRITE WATCHPOINT (ARM7TDMI): the GBAStore8/16/32
+# functions in src/gba/memory.c record cpu->gprs[ARM_PC] when a watched address
+# is written; libretro.c exports romdev_watchpoint_set/get. GBA is a flat 32-bit
+# address space — no ROM banking — so PC alone is unambiguous; no bank field.
+# (The ARM PC reflects pipeline prefetch; disassemble a couple instrs before it.)
+# git apply ignores everything above the first 'diff --git' line.
+#
+diff --git a/src/gba/memory.c b/src/gba/memory.c
+index 27e289c..6abf0db 100644
+--- a/src/gba/memory.c
++++ b/src/gba/memory.c
+@@ -18,6 +18,24 @@
+ #include <mgba-util/memory.h>
+ #include <mgba-util/vfs.h>
+ 
++/* romdev instruction-level write watchpoint (GBA, ARM7TDMI). The GBAStore8/16/32
++ * functions are the CPU write path; cpu->gprs[ARM_PC] is the program counter.
++ * Records the writing PC when a watched address is written. C globals; exported
++ * from the libretro layer. NOTE: the ARM PC reflects pipeline prefetch (the
++ * executing instruction is PC-8 in ARM / PC-4 in Thumb) — the watchpoint reports
++ * the raw gprs[ARM_PC]; disassemble a couple instructions before it. GBA is a
++ * flat 32-bit address space, so no bank field. */
++unsigned int  romdev_wp_addr     = 0;
++int           romdev_wp_enabled  = 0;
++unsigned int  romdev_wp_last_pc  = 0xFFFFFFFF;
++unsigned char romdev_wp_last_val = 0;
++unsigned int  romdev_wp_hits     = 0;
++#define ROMDEV_WP_GBA(cpu, addr, val) do { \
++		if (romdev_wp_enabled && (unsigned int)(addr) == romdev_wp_addr) { \
++			romdev_wp_last_pc = (cpu)->gprs[ARM_PC]; romdev_wp_last_val = (unsigned char)(val); romdev_wp_hits++; \
++		} \
++	} while (0)
++
+ #define IDLE_LOOP_THRESHOLD 10000
+ 
+ mLOG_DEFINE_CATEGORY(GBA_MEM, "GBA Memory", "gba.memory");
+@@ -830,6 +848,7 @@ uint32_t GBALoad8(struct ARMCore* cpu, uint32_t address, int* cycleCounter) {
+ 
+ void GBAStore32(struct ARMCore* cpu, uint32_t address, int32_t value, int* cycleCounter) {
+ 	struct GBA* gba = (struct GBA*) cpu->master;
++	ROMDEV_WP_GBA(cpu, address, value);
+ 	struct GBAMemory* memory = &gba->memory;
+ 	int wait = 0;
+ 	int32_t oldValue;
+@@ -882,6 +901,7 @@ void GBAStore32(struct ARMCore* cpu, uint32_t address, int32_t value, int* cycle
+ 
+ void GBAStore16(struct ARMCore* cpu, uint32_t address, int16_t value, int* cycleCounter) {
+ 	struct GBA* gba = (struct GBA*) cpu->master;
++	ROMDEV_WP_GBA(cpu, address, value);
+ 	struct GBAMemory* memory = &gba->memory;
+ 	int wait = 0;
+ 	int16_t oldValue;
+@@ -1027,6 +1047,7 @@ void GBAStore16(struct ARMCore* cpu, uint32_t address, int16_t value, int* cycle
+ 
+ void GBAStore8(struct ARMCore* cpu, uint32_t address, int8_t value, int* cycleCounter) {
+ 	struct GBA* gba = (struct GBA*) cpu->master;
++	ROMDEV_WP_GBA(cpu, address, value);
+ 	struct GBAMemory* memory = &gba->memory;
+ 	int wait = 0;
+ 	uint16_t oldValue;
+diff --git a/src/platform/libretro/libretro.c b/src/platform/libretro/libretro.c
+index 4b05a42..f63caeb 100644
+--- a/src/platform/libretro/libretro.c
++++ b/src/platform/libretro/libretro.c
+@@ -2269,6 +2269,33 @@ unsigned retro_get_region(void) {
+ 	return RETRO_REGION_NTSC; // TODO: This isn't strictly true
+ }
+ 
++/* romdev instruction-level write watchpoint (GBA ARM7). State defined in
++ * src/gba/memory.c (where the GBAStore hooks live); exported here for the host. */
++extern unsigned int  romdev_wp_addr;
++extern int           romdev_wp_enabled;
++extern unsigned int  romdev_wp_last_pc;
++extern unsigned char romdev_wp_last_val;
++extern unsigned int  romdev_wp_hits;
++
++void romdev_watchpoint_set(unsigned int addr, int enabled) {
++	romdev_wp_addr = addr;
++	romdev_wp_enabled = enabled ? 1 : 0;
++	romdev_wp_last_pc = 0xFFFFFFFF;
++	romdev_wp_last_val = 0;
++	romdev_wp_hits = 0;
++}
++
++void romdev_watchpoint_get(unsigned int* out6, int clearHits) {
++	if (!out6) return;
++	out6[0] = (unsigned int) romdev_wp_enabled;
++	out6[1] = romdev_wp_addr;
++	out6[2] = romdev_wp_last_pc;
++	out6[3] = (unsigned int) romdev_wp_last_val;
++	out6[4] = romdev_wp_hits;
++	out6[5] = 0xFFFFFFFF; /* GBA is a flat 32-bit address space — no ROM bank */
++	if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; }
++}
++
+ void retro_set_controller_port_device(unsigned port, unsigned device) {
+ 	UNUSED(port);
+ 	UNUSED(device);
