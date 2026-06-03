@@ -3,6 +3,17 @@
 When something's broken. Read MENTAL_MODEL.md first for the "what's
 going on" version (via `getPlatformDoc({platform:"genesis", name:"mental_model"})`).
 
+## "My C build is throwing 68000 assembler errors (identifier expected / missing reset vector)"
+
+That means the file was assembled as 68k by vasm68k instead of compiled as
+C. **Genesis C builds through m68k-elf-gcc + SGDK** (`#include <genesis.h>`),
+**not** vasm68k — vasm68k is only for hand-written 68000 assembly. You do NOT
+need to write assembly. The build now infers the language from your source
+(a `.c` file / C content → gcc), so the common cause is forcing it the wrong
+way: if you passed `language:"asm"`, drop it; if your source has no `.c`
+filename AND no obvious C tokens, pass `language:"c"` explicitly. (Reverse case:
+a `.s` asm file builds via vasm68k — that's correct.)
+
 ## "ROM builds but the screen is blank / black"
 
 The Genesis VDP starts in forced-blank state. SGDK's sega.s + libmd

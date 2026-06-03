@@ -229,12 +229,84 @@ function finalizeSnesRom(bin) {
  * @param {BuildArgs} args
  * @returns {Promise<BuildResult>}
  */
+/**
+ * Decide which language a build should use when the caller didn't pass one.
+ * Explicit `language` always wins. Otherwise we infer ONLY from a POSITIVE
+ * signal — a C filename (`sources` key ending .c/.h/.cpp) or unambiguous C
+ * content (`#include`, a `/* *​/` block comment, `int/void main(`) ⇒ "c"; an
+ * asm filename or a clear asm tell (leading `;` comment, `.org`/`dc.x`/`equ`/
+ * `arch` directives, `$`-hex with no C tokens) ⇒ "asm". When nothing points
+ * either way we return `undefined` and leave the historical dispatch alone
+ * (which falls to the platform's first/asm toolchain) — so this is a strict
+ * IMPROVEMENT, never a behavior change for inputs that already worked.
+ *
+ * This fixes the genesis foot-gun: `runSource({platform:"genesis", source:
+ * cCode})` with no `language` used to assemble C as 68k via vasm68k; the C
+ * content tell now routes it to m68k-elf-gcc + SGDK (the advertised default).
+ * Only relevant for platforms with BOTH a C and an asm toolchain producing
+ * different binaries (genesis, gba, gb/gbc, snes); cc65/sdcc platforms route
+ * by extension further down regardless.
+ *
+ * @param {{platform:string, language?:string, source?:string, sources?:Record<string,string>}} args
+ * @returns {string | undefined} the resolved language, or undefined to leave
+ *   the existing dispatch untouched (no positive signal / no language matrix)
+ */
+function resolveEffectiveLanguage(args) {
+  if (args.language) return args.language;
+  const langs = LANGUAGE_TOOLCHAIN[args.platform];
+  if (!langs) return undefined;
+
+  // 1) Filenames are the strongest signal. `sourceName` (single-file, threaded
+  //    from sourcePath's basename or the synthetic name) and the `sources` keys.
+  const names = [
+    ...(args.sourceName ? [args.sourceName] : []),
+    ...(args.sources ? Object.keys(args.sources) : []),
+  ];
+  if (names.some((n) => /\.(c|h|cpp|cc|cxx)$/i.test(n))) return langs.c?.available ? "c" : undefined;
+  if (names.length && names.every((n) => /\.(s|asm)$/i.test(n))) return langs.asm?.available ? "asm" : undefined;
+
+  // 2) Single-source content sniff — a LAST resort when no filename is known.
+  //    Require an unambiguous C tell that can't appear in an asm `;` comment.
+  //    (We deliberately do NOT trust a `/* */` block — asm doc-comments embed
+  //    them as prose, e.g. "buildSource({ source: /* this file */ })".) A C
+  //    preprocessor directive must be the first non-space on its line, which a
+  //    `;`-commented asm line never satisfies.
+  const body = args.source || "";
+  if (!body) return undefined;
+  const cTell = /^[ \t]*#[ \t]*(include|define|ifdef|ifndef|pragma)\b/m.test(body) ||
+                /^[ \t]*(?:int|void)\s+main\s*\(/m.test(body);
+  if (cTell && langs.c?.available) return "c";
+  // No clear signal → leave the historical default alone (asm-first dispatch).
+  return undefined;
+}
+
+/**
+ * Heuristic "is this C source?" for error messaging only (not dispatch). Looser
+ * than the dispatch sniff on purpose: here we WANT to catch a C file that ended
+ * up at an assembler so we can tell the agent to pass language:"c". Used to
+ * annotate a failed vasm68k/asm build with the real fix.
+ * @param {string} [src]
+ */
+function looksLikeCSource(src) {
+  if (!src) return false;
+  return /^[ \t]*#[ \t]*(include|define|ifdef|ifndef|pragma)\b/m.test(src) ||
+         /^[ \t]*(?:int|void|char|short|long|unsigned|static|const)\b.*\b\w+\s*\(/m.test(src) ||
+         /\b(?:int|void)\s+main\s*\(/.test(src) ||
+         (/\/\*[\s\S]*?\*\//.test(src) && /[;{}]\s*$/m.test(src) && !/^\s*;/m.test(src));
+}
+
 export async function buildForPlatform(args) {
+  // Resolve an omitted language from source filenames/content when there's a
+  // clear signal. Without this, genesis/gba/etc. silently fell to their FIRST
+  // (asm) toolchain instead of `defaultLanguage` — so a bare
+  // `runSource({platform:"genesis", source:cCode})` assembled C as 68k.
+  args = { ...args, language: resolveEffectiveLanguage(args) };
+
   // ---- language axis: validate before dispatching to toolchain ----
-  // Optional. When omitted, falls through to the existing per-platform
-  // dispatch (which has its own source-content heuristic for cc65).
-  // When specified, we check that the (platform, language) pair is
-  // supported AND available; reject with a structured error if not.
+  // When specified, we check that the (platform, language) pair is supported
+  // AND available; reject with a structured error if not. (When still omitted
+  // — no positive signal — the per-platform dispatch below applies its own
+  // historical default.)
   if (args.language) {
     const langs = LANGUAGE_TOOLCHAIN[args.platform];
     const entry = langs?.[args.language];
@@ -465,6 +537,18 @@ export async function buildForPlatform(args) {
       options: args.options,
     });
     const vasmOk = r.exitCode === 0 && r.binary !== null;
+    // If vasm68k FAILED on what is obviously C source, say so — don't let the
+    // agent read "missing reset vector / identifier expected" and conclude
+    // "Genesis wants hand-written asm." (Belt-and-suspenders: the language
+    // resolver above already routes C to gcc; this only fires if someone forced
+    // language:"asm" on a C file, or an exotic C file dodged every tell.)
+    let log = r.log;
+    if (!vasmOk && looksLikeCSource(source)) {
+      log = "[romdev] This source looks like C but was assembled as 68000 by vasm68k, " +
+        "which is why you're seeing 'identifier expected' / 'missing reset vector'. " +
+        "Genesis C builds through m68k-elf-gcc + SGDK — pass language:\"c\" (or give the " +
+        "file a .c name). You do NOT need to write 68k assembly.\n\n" + r.log;
+    }
     return {
       ok: vasmOk,
       // Same SGDK-style finalize (pad + $18E checksum) for hand-written
@@ -472,8 +556,8 @@ export async function buildForPlatform(args) {
       binary: vasmOk && r.binary ? finalizeGenesisRom(r.binary) : r.binary,
       listing: "",
       symbols: "",
-      log: r.log,
-      issues: parseBuildLog(r.log),
+      log,
+      issues: parseBuildLog(log),
       exitCode: r.exitCode,
       toolchain: "vasm68k",
     };
