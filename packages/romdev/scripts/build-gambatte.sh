@@ -22,6 +22,7 @@ cd "$GAMBATTE_DIR"
 # Reset the files the patch touches so re-runs are idempotent.
 git checkout -- \
   libgambatte/src/cpu.h \
+  libgambatte/src/cpu.cpp \
   libgambatte/src/gambatte-memory.h \
   libgambatte/src/video.h \
   libgambatte/include/gambatte.h \
@@ -43,6 +44,10 @@ else
 fi
 
 emmake make -f Makefile.libretro platform=emscripten clean >/dev/null 2>&1 || true
+# `make clean` doesn't remove the .a we create by renaming the .bc, so a stale
+# archive from a prior build can survive and shadow the fresh one (find -quit
+# picks .a before .bc). Drop stale archives so only this build's output remains.
+find . -maxdepth 2 -name "*_libretro_emscripten.a" -delete 2>/dev/null || true
 emmake make -f Makefile.libretro platform=emscripten -j"$(nproc)"
 
 CORE_LIB=$(find . -maxdepth 2 \( -name "*.a" -o -name "*_libretro_emscripten.bc" \) -print -quit)
@@ -98,7 +103,7 @@ if [ -n "$LIBRETRO_COMMON" ]; then
   fi
 fi
 
-EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
+EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_watchpoint_set","_romdev_watchpoint_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
 EXPORTED_RUNTIME='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS"]'
 
 mkdir -p "$OUT"
