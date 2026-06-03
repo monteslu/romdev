@@ -1,9 +1,23 @@
 # romdev patch for libretro-mgba (GBA) — see README.md in this directory.
-# Adds an instruction-level WRITE WATCHPOINT (ARM7TDMI): the GBAStore8/16/32
-# functions in src/gba/memory.c record cpu->gprs[ARM_PC] when a watched address
-# is written; libretro.c exports romdev_watchpoint_set/get. GBA is a flat 32-bit
-# address space — no ROM banking — so PC alone is unambiguous; no bank field.
-# (The ARM PC reflects pipeline prefetch; disassemble a couple instrs before it.)
+#
+# TWO additions:
+# 1) Instruction-level WRITE WATCHPOINT (ARM7TDMI): GBAStore8/16/32 in
+#    src/gba/memory.c record cpu->gprs[ARM_PC] when a watched address is written;
+#    libretro.c exports romdev_watchpoint_set/get. GBA is a flat 32-bit address
+#    space (no banking) so PC alone is unambiguous. The ARM PC reflects pipeline
+#    prefetch (exec instr is PC-8 ARM / PC-4 Thumb) — disassemble a couple instrs
+#    before the reported PC.
+# 2) DEBUG STATE REGIONS via retro_get_memory_data/_size custom IDs (0x180+):
+#    - 0x180 gba_cpu_regs: 20 u32 snapshot {gprs[0..15], cpsr, spsr, execMode,
+#      privMode} for getCPUState.
+#    - 0x10001 gba_io_regs: the 0x400 IO page (io[512]) — carries BOTH the LCD/
+#      video registers and the audio registers, so getRenderingContext and
+#      getAudioState both read it.
+#    - 0x10002 gba_palette: palette[512] (256 BG + 256 OBJ, 15-bit BGR).
+#    - 0x10003 gba_oam: oam.raw[512] — 128 sprites x 8 bytes for inspectSprites.
+#    All point at contiguous in-struct GBA fields (cpu regs assembled into a
+#    static snapshot buffer per call).
+#
 # git apply ignores everything above the first 'diff --git' line.
 #
 diff --git a/src/gba/memory.c b/src/gba/memory.c
@@ -60,10 +74,10 @@ index 27e289c..6abf0db 100644
  	int wait = 0;
  	uint16_t oldValue;
 diff --git a/src/platform/libretro/libretro.c b/src/platform/libretro/libretro.c
-index 4b05a42..f63caeb 100644
+index 4b05a42..12cb9bb 100644
 --- a/src/platform/libretro/libretro.c
 +++ b/src/platform/libretro/libretro.c
-@@ -2269,6 +2269,33 @@ unsigned retro_get_region(void) {
+@@ -2269,6 +2269,64 @@ unsigned retro_get_region(void) {
  	return RETRO_REGION_NTSC; // TODO: This isn't strictly true
  }
  
@@ -94,6 +108,75 @@ index 4b05a42..f63caeb 100644
 +	if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; }
 +}
 +
++/* romdev custom debug regions (GBA). High IDs so they never collide with the
++ * libretro RETRO_MEMORY_* enum. Each is exposed through retro_get_memory_data /
++ * _size below. CPU regs are assembled into a static snapshot buffer (the ARM
++ * register file is contiguous but cpsr/spsr/mode are separate fields); palette,
++ * OAM and the IO page are already contiguous in the GBA struct so we point at
++ * them directly. The IO page ($4000000-$40003FF) carries BOTH the LCD/video
++ * registers (DISPCNT, BGxCNT, scroll, window, blend) AND the audio registers
++ * (SOUNDxCNT, SOUNDCNT, SOUNDBIAS, WAVE_RAM), so one region serves both. */
++#define ROMDEV_REGION_GBA_CPU_REGS 0x180u /* 20 u32: gprs[0..15], cpsr, spsr, execMode, privMode */
++#define ROMDEV_REGION_GBA_IO_REGS  0x181u /* 0x400 bytes: io[512] — video + audio regs */
++#define ROMDEV_REGION_GBA_PALETTE  0x182u /* 0x400 bytes: palette[512] 15-bit BGR (256 BG + 256 OBJ) */
++#define ROMDEV_REGION_GBA_OAM      0x183u /* 0x400 bytes: oam.raw[512] — 128 sprites x 8 bytes */
++
++#ifdef M_CORE_GBA
++/* Assemble the ARM7 register snapshot. Layout (all little-endian u32):
++ *   [0..15] gprs r0..r15 (r13=SP, r14=LR, r15=PC, pipeline-prefetched)
++ *   [16] cpsr.packed  [17] spsr.packed  [18] executionMode (0=ARM,1=THUMB)
++ *   [19] privilegeMode */
++static unsigned int romdev_gba_cpu_snapshot[20];
++static void* romdev_gba_fill_cpu_snapshot(void) {
++	struct ARMCore* cpu = (struct ARMCore*) core->cpu;
++	int i;
++	for (i = 0; i < 16; ++i) romdev_gba_cpu_snapshot[i] = (unsigned int) cpu->gprs[i];
++	romdev_gba_cpu_snapshot[16] = (unsigned int) cpu->cpsr.packed;
++	romdev_gba_cpu_snapshot[17] = (unsigned int) cpu->spsr.packed;
++	romdev_gba_cpu_snapshot[18] = (unsigned int) cpu->executionMode;
++	romdev_gba_cpu_snapshot[19] = (unsigned int) cpu->privilegeMode;
++	return romdev_gba_cpu_snapshot;
++}
++#endif
++
  void retro_set_controller_port_device(unsigned port, unsigned device) {
  	UNUSED(port);
  	UNUSED(device);
+@@ -2327,6 +2385,20 @@ void* retro_get_memory_data(unsigned id) {
+ 			break;
+ 		}
+ 		break;
++#ifdef M_CORE_GBA
++	case ROMDEV_REGION_GBA_CPU_REGS:
++		if (core->platform(core) == mPLATFORM_GBA) return romdev_gba_fill_cpu_snapshot();
++		break;
++	case ROMDEV_REGION_GBA_IO_REGS:
++		if (core->platform(core) == mPLATFORM_GBA) return ((struct GBA*)core->board)->memory.io;
++		break;
++	case ROMDEV_REGION_GBA_PALETTE:
++		if (core->platform(core) == mPLATFORM_GBA) return ((struct GBA*)core->board)->video.palette;
++		break;
++	case ROMDEV_REGION_GBA_OAM:
++		if (core->platform(core) == mPLATFORM_GBA) return ((struct GBA*)core->board)->video.oam.raw;
++		break;
++#endif
+ 	default:
+ 		break;
+ 	}
+@@ -2373,6 +2445,16 @@ size_t retro_get_memory_size(unsigned id) {
+ 		return GB_SIZE_WORKING_RAM;
+ 	case RETRO_MEMORY_VIDEO_RAM:
+ 		return GBA_SIZE_VRAM;
++#ifdef M_CORE_GBA
++	case ROMDEV_REGION_GBA_CPU_REGS:
++		return sizeof(romdev_gba_cpu_snapshot); /* 20 * 4 = 80 bytes */
++	case ROMDEV_REGION_GBA_IO_REGS:
++		return GBA_SIZE_IO;        /* 0x400 */
++	case ROMDEV_REGION_GBA_PALETTE:
++		return GBA_SIZE_PALETTE_RAM; /* 0x400 */
++	case ROMDEV_REGION_GBA_OAM:
++		return GBA_SIZE_OAM;       /* 0x400 */
++#endif
+ 	default:
+ 		break;
+ 	}
