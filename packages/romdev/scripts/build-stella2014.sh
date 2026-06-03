@@ -20,6 +20,7 @@ fetch_pinned cores.stella2014 "$DIR"
 cd "$DIR"
 git checkout -- \
   stella/src/emucore/M6502.hxx \
+  stella/src/emucore/M6502.cxx \
   stella/src/emucore/TIA.hxx \
   libretro.cxx 2>/dev/null || true
 if ! git apply --recount --check "$PATCH_FILE" 2>/dev/null; then
@@ -35,6 +36,7 @@ else
 fi
 
 emmake make platform=emscripten clean >/dev/null 2>&1 || true
+find . -maxdepth 2 -name "*_libretro_emscripten.a" -delete 2>/dev/null || true
 emmake make platform=emscripten -j"$(nproc)"
 
 CORE_LIB=$(find . -maxdepth 2 \( -name "*.a" -o -name "*_libretro_emscripten.bc" \) -print -quit)
@@ -81,7 +83,7 @@ if [ -n "$LIBRETRO_COMMON" ]; then
   [ -n "$COMMON_OBJS" ] && emar rcs "$CORE_LIB" $COMMON_OBJS
 fi
 
-EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
+EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_watchpoint_set","_romdev_watchpoint_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
 EXPORTED_RUNTIME='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS"]'
 
 mkdir -p "$OUT"

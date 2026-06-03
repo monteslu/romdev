@@ -5,8 +5,42 @@
 # still succeeds but those tools return empty data (silent runtime failure).
 # git apply ignores everything above the first 'diff --git' line.
 #
+# Also adds an instruction-level WRITE WATCHPOINT (6502): memory_Write in
+# core/Memory.c records sally_pc when a watched address is written; libretro.c
+# exports romdev_watchpoint_set/get.
+# git apply ignores everything above the first 'diff --git' line.
+#
+diff --git a/core/Memory.c b/core/Memory.c
+index cb12bd3..d72f295 100644
+--- a/core/Memory.c
++++ b/core/Memory.c
+@@ -30,6 +30,14 @@
+ #include "Cartridge.h"
+ #include "Tia.h"
+ #include "Riot.h"
++#include "Sally.h"   /* for sally_pc (the 6502 PC) — romdev watchpoint */
++
++/* romdev instruction-level write watchpoint state (hook in memory_Write). */
++unsigned int  romdev_wp_addr     = 0;
++int           romdev_wp_enabled  = 0;
++unsigned int  romdev_wp_last_pc  = 0xFFFFFFFF;
++unsigned char romdev_wp_last_val = 0;
++unsigned int  romdev_wp_hits     = 0;
+ 
+ uint8_t memory_ram[MEMORY_SIZE] = {0};
+ uint8_t memory_rom[MEMORY_SIZE] = {0};
+@@ -83,6 +91,9 @@ uint8_t memory_Read(uint16_t address)
+ 
+ void memory_Write(uint16_t address, uint8_t data)
+ {
++   if (romdev_wp_enabled && (unsigned int)address == romdev_wp_addr) {
++      romdev_wp_last_pc = sally_pc.w; romdev_wp_last_val = data; romdev_wp_hits++;
++   }
+    if(!memory_rom[address])
+    {
+       switch(address)
 diff --git a/core/libretro.c b/core/libretro.c
-index 3e4dbdb..335e95a 100644
+index 3e4dbdb..58d2d94 100644
 --- a/core/libretro.c
 +++ b/core/libretro.c
 @@ -28,6 +28,7 @@
@@ -17,7 +51,40 @@ index 3e4dbdb..335e95a 100644
  
  #ifdef _3DS
  extern void* linearMemAlign(size_t size, size_t alignment);
-@@ -619,10 +620,30 @@ unsigned retro_api_version(void)
+@@ -614,15 +615,63 @@ unsigned retro_get_region(void)
+     return cartridge_region == REGION_NTSC ? RETRO_REGION_NTSC : RETRO_REGION_PAL;
+ }
+ 
++/* romdev instruction-level write watchpoint (6502) — records sally_pc when a
++ * watched address is written (hook in core/Memory.c). State defined there. */
++extern unsigned int  romdev_wp_addr;
++extern int           romdev_wp_enabled;
++extern unsigned int  romdev_wp_last_pc;
++extern unsigned char romdev_wp_last_val;
++extern unsigned int  romdev_wp_hits;
++
++void romdev_watchpoint_set(unsigned int addr, int enabled)
++{
++    romdev_wp_addr = addr;
++    romdev_wp_enabled = enabled ? 1 : 0;
++    romdev_wp_last_pc = 0xFFFFFFFF;
++    romdev_wp_last_val = 0;
++    romdev_wp_hits = 0;
++}
++
++void romdev_watchpoint_get(unsigned int *out5, int clearHits)
++{
++    if (!out5) return;
++    out5[0] = (unsigned int)romdev_wp_enabled;
++    out5[1] = romdev_wp_addr;
++    out5[2] = romdev_wp_last_pc;
++    out5[3] = (unsigned int)romdev_wp_last_val;
++    out5[4] = romdev_wp_hits;
++    if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; }
++}
++
+ unsigned retro_api_version(void)
+ {
      return RETRO_API_VERSION;
  }
  
@@ -48,7 +115,7 @@ index 3e4dbdb..335e95a 100644
      return NULL;
  }
  
-@@ -630,6 +651,8 @@ size_t retro_get_memory_size(unsigned id)
+@@ -630,6 +679,8 @@ size_t retro_get_memory_size(unsigned id)
  {
      if ( id == RETRO_MEMORY_SYSTEM_RAM )
          return MEMORY_SIZE;
