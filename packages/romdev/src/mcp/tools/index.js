@@ -55,6 +55,7 @@ import { registerInputLayoutTools } from "./input-layout.js";
 import { registerSnippetTools } from "./snippets.js";
 import { registerPlatformDocsTools } from "./platform-docs.js";
 import { registerAudioTools } from "./audio.js";
+import { registerCheatTools } from "./cheats.js";
 import { createDisclosure } from "../disclosure.js";
 import { jsonContent, safeTool } from "../util.js";
 import { getHostOrNull, setDisclosure } from "../state.js";
@@ -112,6 +113,7 @@ const CATEGORIES = [
       registerTileInspectTools(s, z, k);       // tile/CHR inspection helpers
       registerWhichTilesTools(s, z, k);        // whichTilesAreRendered
       registerAddressToSymbolTools(s, z, k);   // addressToSymbol — PC → C function name
+      registerCheatTools(s, z, k);             // gameCheats (labeled RAM/code map), applyCheat, clearCheats
     },
   },
   {
@@ -315,6 +317,7 @@ const TOOL_OWNER = {
   buildSourceWithDebug: "debug", resolveSymbol: "debug", lookupAddress: "debug",
   getMemoryMap: "debug", listSymbols: "debug",
   disassemble: "debug", disassembleRom: "debug", disassembleProject: "debug", findReferences: "debug",
+  gameCheats: "debug", applyCheat: "debug", clearCheats: "debug", makeCheat: "debug",
   getRenderingContext: "debug",
   inspectTile: "debug",
   whichTilesAreRendered: "debug",

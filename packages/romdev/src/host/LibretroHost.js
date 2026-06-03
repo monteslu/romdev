@@ -470,6 +470,63 @@ export class LibretroHost {
     const mod = this._needMod();
     mod._retro_reset();
     this.status.frameCount = 0;
+    // A reset clears the core's active cheats (they live in volatile core
+    // state, never in the ROM) — keep our mirror in sync.
+    this._activeCheats = new Map();
+  }
+
+  /** True when this core's WASM build exposes the libretro cheat interface.
+   *  (Older bundled cores predate the cheat-export build flag.) */
+  cheatsSupported() {
+    const mod = this.mod;
+    return !!(mod && typeof mod._retro_cheat_set === "function");
+  }
+
+  /**
+   * Enable (or update) a cheat via the libretro cheat interface — the SAME
+   * mechanism RetroArch uses. NON-DESTRUCTIVE: the code is applied in volatile
+   * core state (RAM write each frame for RAM cheats; an in-core read-intercept
+   * for ROM/compare cheats). The ROM file on disk is NEVER modified, and a
+   * reset/unload/loadState clears it. `code` is the RAW cheat string (e.g.
+   * "00C7:FF", "SXIOPO", "AJ9T-CA5Y") — the CORE decodes it, so this works for
+   * every format the core understands without us decoding first.
+   * @param {number} index  slot index (0-based; reuse to overwrite a slot)
+   * @param {string} code   raw cheat code string
+   * @param {boolean} [enabled=true]
+   */
+  setCheat(index, code, enabled = true) {
+    const mod = this._needMod();
+    if (typeof mod._retro_cheat_set !== "function") {
+      throw new Error(
+        "this core build does not expose the cheat interface (retro_cheat_set). " +
+        "Rebuild the core with the cheat exports, or apply RAM cheats via writeMemory.",
+      );
+    }
+    const bytes = Buffer.from(String(code) + "\0", "utf-8");
+    const ptr = mod._malloc(bytes.length);
+    try {
+      mod.HEAPU8.set(bytes, ptr);
+      mod._retro_cheat_set(index >>> 0, enabled ? 1 : 0, ptr);
+    } finally {
+      mod._free(ptr);
+    }
+    if (!this._activeCheats) this._activeCheats = new Map();
+    if (enabled) this._activeCheats.set(index, code);
+    else this._activeCheats.delete(index);
+  }
+
+  /** Clear ALL active cheats (calls retro_cheat_reset). Non-destructive. */
+  clearCheats() {
+    const mod = this._needMod();
+    if (typeof mod._retro_cheat_reset === "function") mod._retro_cheat_reset();
+    this._activeCheats = new Map();
+  }
+
+  /** The cheats currently enabled in this session: [{ index, code }]. */
+  listActiveCheats() {
+    return Array.from((this._activeCheats ?? new Map()).entries())
+      .map(([index, code]) => ({ index, code }))
+      .sort((a, b) => a.index - b.index);
   }
 
   pause() {

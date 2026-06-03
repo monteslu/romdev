@@ -4,7 +4,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-BUILD_DIR="$PROJECT_DIR/build"
+# Scratch dir for fetched upstream source + intermediate objects. Override with
+# ROMDEV_BUILD_DIR when the default isn't writable (e.g. a stale root-owned
+# build/ from an earlier privileged run). Gitignored either way.
+BUILD_DIR="${ROMDEV_BUILD_DIR:-$PROJECT_DIR/build}"
 
 # Centralized upstream pins (versions.json) + pin_*/fetch_pinned helpers.
 # shellcheck source=/dev/null
