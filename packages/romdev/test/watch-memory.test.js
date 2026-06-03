@@ -245,3 +245,56 @@ test("pressDuring honors platform button aliases (Genesis c -> y)", async () => 
   const sawY = host.inputLog.some((e) => e.input?.ports?.[0]?.y === true);
   assert.ok(sawY, "Genesis 'c' resolved to libretro 'y' before setInput");
 });
+
+// v15-feedback (more): compact value-vs-frame timeline for a per-frame ramp.
+test("format:'series' returns a compact value-vs-frame curve per offset", async () => {
+  // A monotonic ramp: byte = frame, changing every single frame.
+  const host = makeHost({ system_ram: [0] }, (f, mem) => { mem.system_ram[0] = f & 0xFF; });
+  setHost("test-session", host);
+  const handler = getWatchHandler();
+  const res = parseResult(await handler({
+    region: "system_ram", offset: 0, length: 1, frames: 20, onChange: "any",
+    format: "series",
+  }));
+  assert.equal(res.format, "series");
+  assert.equal(res.series.length, 1, "one series per watched offset");
+  const s = res.series[0];
+  assert.equal(s.offsetHex, "0x0000");
+  assert.equal(s.frames.length, 20, "every frame's change captured");
+  assert.equal(s.values.length, s.frames.length, "parallel arrays");
+  // The series is the actual trajectory: values track the frame numbers.
+  assert.deepEqual(s.values.slice(0, 3), [1, 2, 3]);
+  // No per-row pc/label boilerplate — it's columnar.
+  assert.equal(s.pc, undefined);
+});
+
+test("format:'series' downsamples to maxEvents (keeps first+last, spans window)", async () => {
+  const host = makeHost({ system_ram: [0] }, (f, mem) => { mem.system_ram[0] = f & 0xFF; });
+  setHost("test-session", host);
+  const handler = getWatchHandler();
+  const res = parseResult(await handler({
+    region: "system_ram", offset: 0, length: 1, frames: 100, onChange: "any",
+    format: "series", maxEvents: 10,
+  }));
+  const s = res.series[0];
+  assert.equal(s.points, 10, "downsampled to maxEvents");
+  assert.equal(s.downsampledFrom, 100, "reports the original count");
+  assert.equal(s.frames[0], 1, "first point kept");
+  assert.equal(s.frames[s.frames.length - 1], 100, "last point kept — series spans the whole window");
+  assert.ok(res.seriesNote, "downsample is surfaced, not silent");
+});
+
+test("sampleEvery keeps every Nth change", async () => {
+  const host = makeHost({ system_ram: [0] }, (f, mem) => { mem.system_ram[0] = f & 0xFF; });
+  setHost("test-session", host);
+  const handler = getWatchHandler();
+  const res = parseResult(await handler({
+    region: "system_ram", offset: 0, length: 1, frames: 20, onChange: "any",
+    format: "series", sampleEvery: 4,
+  }));
+  const s = res.series[0];
+  assert.equal(res.sampleEvery, 4);
+  // 20 changes, keep every 4th (indices 0,4,8,12,16) → 5 points.
+  assert.equal(s.points, 5);
+  assert.deepEqual(s.frames, [1, 5, 9, 13, 17]);
+});
