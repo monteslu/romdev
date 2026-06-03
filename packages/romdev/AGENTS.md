@@ -4,7 +4,7 @@ You are reading this because romdev is connected. This is the orientation. Read 
 
 ## What this server does
 
-Drives the full homebrew ROM dev loop for retro game platforms (NES, Game Boy, SNES, Genesis, Atari 2600/7800, Lynx, C64, plus SMS/GG/MSX/Coleco). Build → run → screenshot → inspect → patch → iterate. Also: disassemble existing ROMs, convert assets, study patterns from real games, drive emulator state for scripted testing. Bundled WASM toolchains and emulator cores — no system dependencies, no installs.
+Drives the full homebrew ROM dev loop for retro game platforms (NES, Game Boy, SNES, Genesis, Atari 2600/7800, Lynx, C64, plus SMS/GG/MSX/Coleco). Build → run → screenshot → inspect → patch → iterate. Also: disassemble existing ROMs, convert assets, study patterns from real games, drive emulator state for scripted testing, look up + apply cheats (a free labeled RAM/code map for known ROMs — and a fun bonus). Bundled WASM toolchains and emulator cores — no system dependencies, no installs.
 
 You drive the work. The human is a director — they may want a game, a ROM disassembly, a tool-assisted reverse-engineering session, or anything else this server can do.
 
@@ -334,6 +334,79 @@ disassembleRom({ path, startAddress: 0xE3AF, length: 32 })
 
 All in the `assets` category except `disassembleRom` (in `debug`).
 
+### Before you hunt — check the cheat database (`gameCheats`)
+
+For a KNOWN commercial ROM, the fastest way to find the byte is to not hunt at
+all: the bundled cheat database is a free, crowd-sourced **map of labeled RAM
+addresses and code sites**. Call `gameCheats({ path })` FIRST — for a matched
+game it returns that game's cheats with the address decoded out of each one:
+
+```js
+gameCheats({ path: "Rygar (USA).nes" })
+// → { matched:true, confidence:"name", game:"Rygar (USA)", crc32:"...",
+//     entries:[
+//       { desc:"Infinite Magic Attack", code:"00CD:FF",
+//         parts:[{ address:"$00CD", value:"0xFF", kind:"ram" }] },   // ← labeled RAM var
+//       { desc:"Infinite Health", code:"SXUZXTSA",
+//         parts:[{ address:"$8E20", value:"0xA5", compare:"0x85", kind:"code" }] }, // ← code site
+//       ...] }
+```
+
+So "which byte holds magic?" is answered in one call: `$00CD`. A RAM cheat
+(`kind:"ram"`) is a **labeled variable**; a Game Genie / ROM cheat
+(`kind:"code"`, has a `compare`) is a **labeled patch site** — point
+`disassembleRom` at its address to read the routine. Filter a long list with
+`filter:"health"` or `kind:"ram"`.
+
+**Trust it like you trust disasm — verify, don't assume.** A match is by
+No-Intro name / filename, NOT a verified CRC, so it's a PROBABLE match: very
+likely right, but a different region/revision can use different addresses. The
+`note` says so explicitly. Confirm a label before patching — the cheapest
+confirmation is to apply it and watch:
+
+```js
+applyCheat({ path:"Rygar (USA).nes", desc:"Infinite Magic Attack" })  // enable it live
+screenshot()                                                          // see the effect → label confirmed
+// or apply a RAW code from anywhere:
+applyCheat({ code:"00CD:FF" })          // RAM poke
+applyCheat({ code:"SXIOPO" })           // Game Genie (core decodes it)
+clearCheats()                           // remove all
+```
+
+`applyCheat` is also just **fun** — play any matched game with infinite lives,
+invincibility, etc. It is **NON-DESTRUCTIVE**, exactly like RetroArch: the cheat
+lives in volatile core state (a per-frame RAM write, or an in-core read-intercept
+for ROM cheats), the ROM file on disk is NEVER touched, and `reset` / `loadState`
+/ `clearCheats` removes it. Supported: NES, GB/GBC, SNES, Genesis, SMS/GG, Atari
+2600/7800. Unmatched ROMs (homebrew, your own WIP, an unlisted dump) return
+`matched:false` with a clear reason — the tool never guesses.
+
+### Creating NEW cheat codes (`makeCheat`)
+
+The inverse of decoding: turn a byte you found into a shareable code — for ANY
+ROM, **including your own homebrew/WIP** where no DB entry exists. This closes
+the loop with the byte-hunting tools:
+
+```js
+runUntilWrite({ region:"system_ram", offset:0xCD })   // 1. find the byte (or use gameCheats)
+makeCheat({ platform:"nes", address:0x00CD, value:0xFF })
+//   → { raw:"CD:FF", note:"RAM cheat...", ... }            // 2. RAM poke → raw code
+// For a ROM/Game-Genie patch, read the current byte and pass it as `compare`:
+readMemory({ region:"prg_rom", offset:0x8E20 })          //   (current byte = 0x85)
+makeCheat({ platform:"nes", address:0x8E20, value:0xA5, compare:0x85 })
+//   → { gameGenie:"SZZAETSA", verified:true, raw:"8E20:A5:85", ... }
+applyCheat({ code:"SZZAETSA" }) → screenshot()           // 3. confirm it works
+```
+
+`makeCheat` returns BOTH the Game Genie letter code (NES/GB/GBC/Genesis, where
+the address is in the platform's GG range) AND the raw `ADDR:VAL`, plus
+`verified:true` — every generated letter code is decoded back and confirmed to
+reproduce your address/value before it's returned (the encoders round-trip
+against ~77k real DB codes). RAM addresses outside the GG range come back as raw
+codes with an explanatory note. A RAM cheat needs just `address`+`value`; a
+ROM/code patch adds `compare` (the byte currently there — read it first).
+Nothing is ever written to a ROM file.
+
 **Tools for hacking, by category:**
 
 - `patchFile({path, offset, hex, expect, allowExpand})` — generic byte
@@ -363,11 +436,27 @@ All in the `assets` category except `disassembleRom` (in `debug`).
   `bank: N` (NES) replaces magic file offsets; `paletteHint:["#RRGGBB",...]`
   gives explicit RGB→palette-index mapping (skips the default quantization
   that requires PNGs with exactly 4 distinct grayscale levels).
+- `gameCheats({path, filter, kind})` — match a KNOWN ROM to the bundled
+  cheat DB and return THIS game's labeled RAM addresses + code sites
+  (decoded from each cheat). The free "which byte holds X?" map. Probable
+  match (name/filename, not CRC) — verify before patching.
+- `applyCheat({code | desc+path, index, enabled})` /
+  `clearCheats()` — apply a cheat to the loaded game LIVE and
+  non-destructively (the RetroArch way: volatile core state, ROM file
+  never touched). Use a raw `code` or a matched `desc`. Doubles as the
+  cheapest way to VERIFY a `gameCheats` label (apply → screenshot), and
+  as a fun-bonus (play with infinite lives, etc.).
+- `makeCheat({platform, address, value, compare?, style})` — CREATE a new
+  cheat code from an address+value (the inverse of decoding). Returns a
+  Game Genie letter code + the raw ADDR:VAL, with a `verified` round-trip
+  check. Works on any ROM incl. homebrew/WIP. Pair with runUntilWrite/
+  gameCheats (find the byte) → makeCheat (encode) → applyCheat (confirm).
 - `watchMemory({region, offset, length, frames, pressDuring})` /
   `runUntilWrite({region, offset, maxFrames, pressDuring})` — frame-level
   memory-write trace. Reports every change with PC, so you can map a
   RAM byte back to the writing code path. Cross-platform. The "find
-  the byte" half of hacking, mechanized.
+  the byte" half of hacking, mechanized. (Reach for this when a ROM
+  ISN'T in the cheat DB, or to find a byte no cheat covers.)
 - `whichTilesAreRendered()` — at the current emulator state, walk the
   BG nametable + OAM and return the set of tile IDs actually being
   drawn. Sample at known game states (title / gameplay / menu) and diff

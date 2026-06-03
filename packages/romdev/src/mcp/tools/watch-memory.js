@@ -169,6 +169,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       }).optional().describe("Keep only changes whose NEW byte value is within [min,max]. Combine with onChange to catch e.g. only large reloads."),
       maxEvents: z.number().int().min(1).max(100_000).default(256).describe("Cap on RETURNED events; surplus dropped with a `truncated` flag. When `outputPath` is set, ALL matching events are written to the file regardless of this cap (the cap only bounds the inline preview). NOTE: with `format:\"series\"` this caps SAMPLES PER OFFSET and downsamples (keeps an evenly-spaced subset spanning the whole window) instead of truncating, so the series always reaches the last frame."),
       format: z.enum(["events", "series"]).default("events").describe("Output shape. 'events' (default) = one verbose object per change. 'series' = COMPACT columnar: per watched offset return parallel `frames:[...]` + `values:[...]` arrays (the value-vs-frame curve) with the repeated region/label/pc boilerplate hoisted into a one-time header. Use 'series' for a dense single-byte timeline — physics arcs, animation counters, a value ramp that changes every frame — where you want the trajectory cheaply, not N fat rows. ~10× smaller for a monotonic ramp. Drops `pc` (use groupByPC/'events' if you need per-change PCs)."),
+      cheatLabels: z.string().optional().describe("Absolute path to the loaded ROM. When given, any watched RAM address that the bundled cheat DB has a label for is auto-annotated with that label (e.g. watching $00CD on Rygar tags events `Infinite Magic Attack`) — free semantic names from the crowd-sourced cheat map. Only annotates RAM-class regions where offset == CPU address (system_ram); a PROBABLE match (see gameCheats), so treat labels as strong hints, not gospel."),
       sampleEvery: z.number().int().min(1).default(1).describe("Keep only every Nth filter-passing change (1 = all). A cheap 'I want the trend, not every delta' knob — e.g. sampleEvery:4 on a per-frame ramp returns a quarter of the points, still spanning the full window. Applies in both 'events' and 'series' formats; combine with format:'series' for the most compact dense-timeline output."),
       groupByPC: z.boolean().default(false).describe("Collapse events by the sampled PC: return `byPC[]` = {pc, hits, firstFrame, lastFrame, offsets} (one row per PC seen at a write's frame boundary) instead of thousands of raw rows, and cap the inline `events[]` to a tiny sample (≤8). CAVEAT: `pc` is sampled at the frame boundary, NOT the writing instruction — for NMI/IRQ-driven writes (common on NES/GB) it is usually the interrupted main-thread PC (often an idle loop), so byPC rows can all collapse onto one idle-loop PC. Good for 'how often / which PCs', unreliable as 'which code wrote it' under interrupts. Composes with onChange/valueFilter; full per-event log still streams to `outputPath` if set."),
       outputPath: z.string().optional().describe("If given, stream every filter-passing event to this path as NDJSON (one JSON object per line) and return a compact summary {path, eventCount, ...} plus a small inline preview (first maxEvents). Use for long watches so the full event log never enters your context."),
@@ -179,7 +180,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         holdFrames: z.number().int().min(1).default(2),
       })).optional().describe("Schedule button presses while watching, so the agent can simulate user input mid-watch."),
     },
-    safeTool(async ({ region, offset = 0, length = 1, ranges, frames = 600, stopOnFirst = false, onChange = "any", valueFilter, maxEvents = 256, format = "events", sampleEvery = 1, groupByPC = false, outputPath, pressDuring }) => {
+    safeTool(async ({ region, offset = 0, length = 1, ranges, frames = 600, stopOnFirst = false, onChange = "any", valueFilter, maxEvents = 256, format = "events", sampleEvery = 1, groupByPC = false, outputPath, pressDuring, cheatLabels }) => {
       const host = getHost(sessionKey);
 
       // Normalize to a list of ranges. Single-range mode requires `region`.
@@ -189,6 +190,39 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
             if (!region) throw new Error("watchMemory: pass `region` (single-range) or `ranges` (multi-range).");
             return [{ region, offset, length }];
           })();
+
+      // Optional: auto-label watched RAM addresses from the cheat DB. Builds an
+      // address→desc map from the matched game's RAM cheats and fills in `label`
+      // for any range whose CPU address lines up (system_ram offset == address)
+      // and that the caller didn't already label. Free semantic names; PROBABLE
+      // match (see gameCheats) — labels are strong hints, not gospel.
+      let cheatLabelInfo;
+      if (cheatLabels) {
+        try {
+          const idMod = await import("../../rom-id/identifier.js");
+          const { lookupCheats } = await import("../../cheats/lookup.js");
+          const id = await idMod.identifyFile(cheatLabels).catch(() => null);
+          const res = await lookupCheats({ platform: id?.platform, fileName: path.basename(cheatLabels), romName: id?.title || undefined });
+          if (res.matched) {
+            const addrToDesc = new Map();
+            for (const e of res.entries) {
+              for (const p of (e.parts || [])) {
+                if (p && p.kind === "ram" && !addrToDesc.has(p.address)) addrToDesc.set(p.address, e.desc);
+              }
+            }
+            for (const r of watchRanges) {
+              if (r.label) continue;
+              // Only RAM-class regions where offset maps 1:1 to CPU address.
+              if (!/(^system_ram$|_ram$|_wram$|^gb_hram$)/.test(r.region)) continue;
+              const desc = addrToDesc.get(r.offset);
+              if (desc) r.label = desc;
+            }
+            cheatLabelInfo = { matched: true, game: res.game, confidence: res.confidence, labeled: watchRanges.filter((r) => r.label).length };
+          } else {
+            cheatLabelInfo = { matched: false };
+          }
+        } catch { cheatLabelInfo = { matched: false }; }
+      }
 
       const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
       const pressDriver = makePressDriver(host, presses);
@@ -303,6 +337,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         // When the caller scheduled input, ALWAYS report what landed — so a
         // press that never registered is visible, not a silent eventCount:0.
         ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
+        ...(cheatLabelInfo ? { cheatLabels: cheatLabelInfo } : {}),
         stoppedEarly,
         truncated,
         note: totalMatched === 0
