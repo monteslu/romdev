@@ -2,7 +2,7 @@
   "_comment": [
     "Single source of truth for every THIRD-PARTY upstream that romdev's build",
     "scripts fetch + compile to WASM. romdev does NOT vendor any of this source",
-    "into git \u2014 it is fetched on demand by the build scripts, cached under build/",
+    "into git — it is fetched on demand by the build scripts, cached under build/",
     "(gitignored), patched with OUR patches (scripts/patches/, committed, ours),",
     "and only the resulting .wasm artifacts ship in the packages.",
     "",
@@ -12,7 +12,7 @@
     "kind: 'git'  -> fetched with `git` at the pinned commit (shallow).",
     "kind: 'tarball' -> fetched with curl; 'sha256' lets the build detect drift.",
     "'ref' is a human label (tag/branch); 'commit' is the EXACT pin that builds.",
-    "'license' records who owns the upstream code \u2014 it is theirs, not ours; we",
+    "'license' records who owns the upstream code — it is theirs, not ours; we",
     "ship only built artifacts and our own patches.",
     "",
     "The toolchain image itself is pinned separately: build-image/Dockerfile",
@@ -105,9 +105,9 @@
       "kind": "git",
       "url": "https://github.com/libretro/libretro-handy.git",
       "ref": "master",
-      "commit": "UNVERIFIED-resolve-before-rebuild",
+      "commit": "bc55d462f0b2d6b073ea93dc552ebd73cec60fd1",
       "license": "zlib",
-      "patch": null,
+      "patch": "scripts/patches/handy-romdev-watchpoint.patch",
       "platforms": [
         "lynx"
       ]
@@ -169,7 +169,7 @@
       "version": "rolling (sha-pinned 2026-05-29; upstream tarball carries no version label)",
       "sha256": "c73702574e8d6a154a7d64f22d7b618d0b85ace98ec9eb63d5e7c5ec696e3a6b",
       "license": "vasm (free for any use)",
-      "note": "Upstream serves only a rolling 'latest' tarball with no version in the URL. sha256 is our only drift detector \u2014 fill it after the next clean build and treat a mismatch as a deliberate bump.",
+      "note": "Upstream serves only a rolling 'latest' tarball with no version in the URL. sha256 is our only drift detector — fill it after the next clean build and treat a mismatch as a deliberate bump.",
       "platforms": [
         "genesis"
       ]
@@ -222,7 +222,7 @@
       "ref": "master",
       "commit": "8b0792e45852b58fda4def4d263e246d3a73662d",
       "license": "ISC",
-      "note": "Host-side soundbank converter (.xm/.mod/.it/.s3m \u2192 maxmod binary). Built as a native Linux ELF, paired with maxmod.",
+      "note": "Host-side soundbank converter (.xm/.mod/.it/.s3m → maxmod binary). Built as a native Linux ELF, paired with maxmod.",
       "platforms": [
         "gba"
       ]
@@ -240,7 +240,7 @@
     }
   },
   "heavy_toolchains": {
-    "_comment": "GCC-family cross-toolchains \u2014 NOT covered by the light build image; need a native cross-gcc bootstrap. Pins recorded for completeness.",
+    "_comment": "GCC-family cross-toolchains — NOT covered by the light build image; need a native cross-gcc bootstrap. Pins recorded for completeness.",
     "binutils": {
       "kind": "tarball",
       "version": "UNVERIFIED-from-build-script",
