@@ -111,6 +111,17 @@
       "platforms": [
         "lynx"
       ]
+    },
+    "mgba": {
+      "kind": "git",
+      "url": "https://github.com/libretro/mgba.git",
+      "ref": "master",
+      "commit": "6dce57eef127dc4cc292644f38196e0e7c58590c",
+      "license": "MPL-2.0",
+      "patch": "scripts/patches/mgba-romdev-watchpoint.patch",
+      "platforms": [
+        "gba"
+      ]
     }
   },
   "toolchains": {
