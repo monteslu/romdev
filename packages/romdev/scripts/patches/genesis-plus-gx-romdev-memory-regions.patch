@@ -12,10 +12,10 @@
 # git apply ignores everything above the first 'diff --git' line.
 #
 diff --git a/core/m68k/m68kcpu.c b/core/m68k/m68kcpu.c
-index 36112a5..50f1cdd 100644
+index 36112a5..7b3fb3d 100644
 --- a/core/m68k/m68kcpu.c
 +++ b/core/m68k/m68kcpu.c
-@@ -31,6 +31,13 @@ static int irq_latency;
+@@ -31,6 +31,18 @@ static int irq_latency;
  
  m68ki_cpu_core m68k;
  
@@ -25,6 +25,11 @@ index 36112a5..50f1cdd 100644
 +unsigned int  romdev_wp_last_pc  = 0xFFFFFFFF;
 +unsigned char romdev_wp_last_val = 0;
 +unsigned int  romdev_wp_hits     = 0;
++/* SMS/GG only: live host pointer of the Z80 PC's page at write time (the z80.c
++ * WM hook sets it). libretro.c resolves it to a ROM offset → bank, since the
++ * SMS sega mapper pages a 16-bit Z80 PC into switchable ROM. (Genesis m68k has
++ * a flat 24-bit PC, so it leaves this 0 and reports no bank.) */
++unsigned char *romdev_wp_last_pc_ptr = 0;
 +
  
  /* ======================================================================== */
@@ -85,10 +90,10 @@ index b702173..3d3b965 100644
    m68ki_check_address_error(address, MODE_WRITE, FLAG_S | FUNCTION_CODE_USER_DATA) /* auto-disable (see m68kcpu.h) */
  
 diff --git a/core/z80/z80.c b/core/z80/z80.c
-index 74d5053..b45d23b 100644
+index 74d5053..619770b 100644
 --- a/core/z80/z80.c
 +++ b/core/z80/z80.c
-@@ -632,7 +632,21 @@ INLINE void BURNODD(int cycles, int opcodes, int cyclesum)
+@@ -632,7 +632,23 @@ INLINE void BURNODD(int cycles, int opcodes, int cyclesum)
  /***************************************************************
   * Write a byte to given memory location
   ***************************************************************/
@@ -102,9 +107,11 @@ index 74d5053..b45d23b 100644
 +extern unsigned int  romdev_wp_last_pc;
 +extern unsigned char romdev_wp_last_val;
 +extern unsigned int  romdev_wp_hits;
++extern unsigned char *romdev_wp_last_pc_ptr; /* live host ptr of the SMS/GG Z80 PC's page (for bank → ROM offset, resolved in libretro.c) */
 +#define WM(addr,value) do { \
 +    if (romdev_wp_enabled && (unsigned int)(addr) == romdev_wp_addr) { \
 +      romdev_wp_last_pc = PC; romdev_wp_last_val = (unsigned char)(value); romdev_wp_hits++; \
++      romdev_wp_last_pc_ptr = z80_readmap[(PC) >> 10] ? z80_readmap[(PC) >> 10] + (PC) : 0; \
 +    } \
 +    z80_writemem((addr),(value)); \
 +  } while (0)
@@ -112,10 +119,10 @@ index 74d5053..b45d23b 100644
  /***************************************************************
   * Read a word from given memory location
 diff --git a/libretro/libretro.c b/libretro/libretro.c
-index 798c6cc..14264d9 100644
+index 798c6cc..be5631a 100644
 --- a/libretro/libretro.c
 +++ b/libretro/libretro.c
-@@ -3743,6 +3743,77 @@ void retro_unload_game(void)
+@@ -3743,6 +3743,90 @@ void retro_unload_game(void)
  
  unsigned retro_get_region(void) { return vdp_pal ? RETRO_REGION_PAL : RETRO_REGION_NTSC; }
  
@@ -128,6 +135,8 @@ index 798c6cc..14264d9 100644
 +extern unsigned char romdev_wp_last_val;
 +extern unsigned int  romdev_wp_hits;
 +
++extern unsigned char *romdev_wp_last_pc_ptr; /* SMS/GG Z80 PC page ptr (m68kcpu.c) */
++
 +void romdev_watchpoint_set(unsigned int addr, int enabled)
 +{
 +   romdev_wp_addr = addr;
@@ -135,17 +144,28 @@ index 798c6cc..14264d9 100644
 +   romdev_wp_last_pc = 0xFFFFFFFF;
 +   romdev_wp_last_val = 0;
 +   romdev_wp_hits = 0;
++   romdev_wp_last_pc_ptr = 0;
 +}
 +
-+void romdev_watchpoint_get(unsigned int *out5, int clearHits)
++/* Fills out6: [enabled, addr, lastPC, lastVal, hits, prgOffset]. prgOffset is the
++ * absolute ROM-file offset of the SMS/GG writing instruction (disambiguates the
++ * sega-mapper bank for a 16-bit Z80 PC); 0xFFFFFFFF when not in mapped ROM or on
++ * Genesis (m68k PC is already a flat ROM address — no bank to resolve). */
++void romdev_watchpoint_get(unsigned int *out6, int clearHits)
 +{
-+   if (!out5) return;
-+   out5[0] = (unsigned int)romdev_wp_enabled;
-+   out5[1] = romdev_wp_addr;
-+   out5[2] = romdev_wp_last_pc;
-+   out5[3] = (unsigned int)romdev_wp_last_val;
-+   out5[4] = romdev_wp_hits;
-+   if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; }
++   unsigned int prgOff = 0xFFFFFFFF;
++   if (!out6) return;
++   if (romdev_wp_last_pc_ptr && cart.rom) {
++      ptrdiff_t d = romdev_wp_last_pc_ptr - cart.rom;
++      if (d >= 0 && (unsigned int)d < cart.romsize) prgOff = (unsigned int)d;
++   }
++   out6[0] = (unsigned int)romdev_wp_enabled;
++   out6[1] = romdev_wp_addr;
++   out6[2] = romdev_wp_last_pc;
++   out6[3] = (unsigned int)romdev_wp_last_val;
++   out6[4] = romdev_wp_hits;
++   out6[5] = prgOff;
++   if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; romdev_wp_last_pc_ptr = 0; }
 +}
 +
 +/* rom-dev-mcp extension: custom memory region IDs above libretro standard.
@@ -193,7 +213,7 @@ index 798c6cc..14264d9 100644
  void *retro_get_memory_data(unsigned id)
  {
     switch (id)
-@@ -3751,6 +3822,35 @@ void *retro_get_memory_data(unsigned id)
+@@ -3751,6 +3835,35 @@ void *retro_get_memory_data(unsigned id)
           return sram.on ? sram.sram : NULL;
        case RETRO_MEMORY_SYSTEM_RAM:
           return work_ram;
@@ -229,7 +249,7 @@ index 798c6cc..14264d9 100644
        default:
           return NULL;
     }
-@@ -3802,6 +3902,21 @@ size_t retro_get_memory_size(unsigned id)
+@@ -3802,6 +3915,21 @@ size_t retro_get_memory_size(unsigned id)
              return 0x2000; /* 8KB internal RAM */
        }
  
