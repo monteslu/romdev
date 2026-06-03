@@ -582,25 +582,31 @@ export class LibretroHost {
     mod._romdev_watchpoint_set(address >>> 0, enabled ? 1 : 0);
   }
 
-  /** Read the watchpoint state: { enabled, address, lastPC, lastValue, hits }.
-   *  lastPC is 0xFFFFFFFF (reported as null) until a write is seen. Pass
-   *  clearHits to reset the counter + lastPC after reading. */
+  /** Read the watchpoint state: { enabled, address, lastPC, lastValue, hits,
+   *  prgOffset? }. lastPC is 0xFFFFFFFF (reported as null) until a write is seen.
+   *  prgOffset (when the core reports it — fceumm/NES) is the ABSOLUTE PRG-ROM
+   *  offset of the writing instruction, which disambiguates the BANK for a
+   *  $8000-$BFFF PC on a banked mapper. Pass clearHits to reset after reading. */
   getWatchpoint(clearHits = false) {
     const mod = this._needMod();
     if (typeof mod._romdev_watchpoint_get !== "function") {
       throw new Error("this core build does not expose the write watchpoint.");
     }
-    const ptr = mod._malloc(20); // 5 × uint32
+    const ptr = mod._malloc(24); // up to 6 × uint32 (older cores write only 5)
     try {
+      // Pre-seed slot 6 so a 5-element core leaves prgOffset = "none".
+      new Uint32Array(mod.HEAPU8.buffer, ptr, 6).fill(0xFFFFFFFF);
       mod._romdev_watchpoint_get(ptr, clearHits ? 1 : 0);
-      const u = new Uint32Array(mod.HEAPU8.buffer, ptr, 5);
+      const u = new Uint32Array(mod.HEAPU8.buffer, ptr, 6);
       const lastPC = u[2];
+      const prgOffset = u[5];
       return {
         enabled: !!u[0],
         address: u[1],
         lastPC: lastPC === 0xFFFFFFFF ? null : lastPC,
         lastValue: u[3] & 0xFF,
         hits: u[4],
+        ...(prgOffset !== 0xFFFFFFFF ? { prgOffset } : {}),
       };
     } finally {
       mod._free(ptr);
