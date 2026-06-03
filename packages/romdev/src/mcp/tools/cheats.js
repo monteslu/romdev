@@ -179,51 +179,73 @@ export function registerCheatTools(server, z, sessionKey) {
     {
       platform: z.enum([...SUPPORTED]).describe("Target platform. Selects which cheat device(s) the code is encoded for (see tool description)."),
       address: z.number().int().min(0).describe("Address to cheat. RAM cheats: the RAM address (e.g. 0x00CD / SNES 0x7E0DBF). ROM cheats: the ROM address of the byte to patch."),
-      value: z.number().int().min(0).max(255).describe("Replacement byte value (0-255)."),
+      value: z.number().int().min(0).max(255).optional().describe("Replacement byte value (0-255). Provide `value` OR `values`."),
+      values: z.array(z.number().int().min(0).max(255)).min(1).max(64).optional().describe("Batch: make a code for each value at the same address/compare in one call (e.g. values:[2,3] to offer two strengths). Returns `variants:[{value, codes, raw}]`."),
       compare: z.number().int().min(0).max(255).optional().describe("ROM cheats only: the byte CURRENTLY at `address` (read it first). Its presence selects the device's ROM-patch form (e.g. 8-char NES Game Genie)."),
       device: z.enum(["game-genie", "pro-action-replay", "gameshark", "action-replay", "raw"]).optional().describe("Force a specific device's encoding. Default: the platform's native device(s)."),
     },
-    safeTool(async ({ platform, address, value, compare, device }) => {
-      const out = {
-        platform,
-        address: "$" + address.toString(16).toUpperCase(),
-        value: "0x" + value.toString(16).toUpperCase().padStart(2, "0"),
-        ...(compare != null ? { compare: "0x" + compare.toString(16).toUpperCase().padStart(2, "0") } : {}),
-      };
-      const parts = { address, value, ...(compare != null ? { compare } : {}) };
+    safeTool(async ({ platform, address, value, values, compare, device }) => {
       const range = GG_ADDR_RANGE[platform];
-      const verify = (code, dev) => {
-        const back = decodeCode(code, platform);
-        return !!back && back.address === address && back.value === value && (compare == null || back.compare === compare);
+      const devices = device ? [device] : nativeDevicesFor(platform);
+
+      // Build the code set for ONE value (factored out so a `values[]` batch
+      // reuses it without a per-value round-trip).
+      const buildFor = (v) => {
+        const parts = { address, value: v, ...(compare != null ? { compare } : {}) };
+        const verify = (code) => {
+          const back = decodeCode(code, platform);
+          return !!back && back.address === address && back.value === v && (compare == null || back.compare === compare);
+        };
+        const codes = [];
+        let rangeNote;
+        for (const dev of devices) {
+          if (dev === "raw") continue; // raw always added below
+          if (dev === "game-genie" && range && (address < range[0] || address > range[1])) {
+            rangeNote = `address $${address.toString(16).toUpperCase()} is outside this platform's Game Genie range ($${range[0].toString(16).toUpperCase()}-$${range[1].toString(16).toUpperCase()}); use the raw or another device code.`;
+            continue;
+          }
+          const r = encodeForDevice(parts, platform, dev);
+          if (r && r.code && verify(r.code)) codes.push({ device: r.device, code: r.code, verified: true });
+        }
+        const raw = encodeForDevice(parts, platform, "raw").code;
+        return {
+          value: "0x" + v.toString(16).toUpperCase().padStart(2, "0"),
+          codes, raw, ...(rangeNote ? { rangeNote } : {}),
+        };
       };
 
-      // Which devices to emit: the forced one, or the platform's native list.
-      const devices = device ? [device] : nativeDevicesFor(platform);
-      const codes = [];
-      for (const dev of devices) {
-        if (dev === "raw") continue; // raw always added below
-        // Letter/device codes have an address range; flag (don't emit garbage) if out of range.
-        if (dev === "game-genie" && range && (address < range[0] || address > range[1])) {
-          codes.push({ device: dev, code: null, note: `address $${address.toString(16).toUpperCase()} is outside this platform's Game Genie range ($${range[0].toString(16).toUpperCase()}-$${range[1].toString(16).toUpperCase()}); use the raw or another device code.` });
-          continue;
-        }
-        const r = encodeForDevice(parts, platform, dev);
-        if (r && r.code) {
-          const verified = verify(r.code, dev);
-          codes.push({ device: r.device, code: r.code, verified, ...(verified ? {} : { note: "round-trip check FAILED — not trustworthy" }) });
-        }
+      const common = {
+        platform,
+        address: "$" + address.toString(16).toUpperCase(),
+        ...(compare != null ? { compare: "0x" + compare.toString(16).toUpperCase().padStart(2, "0") } : {}),
+        kind: compare != null ? "code" : "ram",
+      };
+
+      // Batch form: one entry per value.
+      if (values && values.length) {
+        const variants = values.map(buildFor);
+        return jsonContent({
+          ...common,
+          variants,
+          note: (compare != null ? "ROM/code patches" : "RAM cheats") + " for " + platform + " at " + common.address +
+            " across " + values.length + " values. Each variant carries device codes + raw. Apply any with applyCheat({code}).",
+        });
       }
-      out.codes = codes.filter((c) => c.code && c.verified !== false);
-      out.raw = encodeForDevice(parts, platform, "raw").code;
-      // Pick a primary code to suggest applying (first verified device, else raw).
-      const primary = out.codes[0]?.code || out.raw;
-      out.kind = compare != null ? "code" : "ram";
-      out.note =
-        (compare != null ? "ROM/code patch" : "RAM cheat") + " for " + platform + ". " +
-        "Devices: " + (out.codes.length ? out.codes.map((c) => `${c.device} ${c.code}`).join(", ") + ", " : "") + "raw " + out.raw + ". " +
-        "Apply to confirm: applyCheat({ code: \"" + primary + "\" }). Non-destructive — no ROM file is touched.";
-      if (codes.some((c) => c.code === null)) out.rangeNote = codes.find((c) => c.code === null).note;
-      return jsonContent(out);
+
+      // Single-value form (back-compat).
+      if (value == null) throw new Error("makeCheat: provide `value` (single) or `values` (batch).");
+      const built = buildFor(value);
+      const primary = built.codes[0]?.code || built.raw;
+      return jsonContent({
+        ...common,
+        value: built.value,
+        codes: built.codes,
+        raw: built.raw,
+        ...(built.rangeNote ? { rangeNote: built.rangeNote } : {}),
+        note: (compare != null ? "ROM/code patch" : "RAM cheat") + " for " + platform + ". " +
+          "Devices: " + (built.codes.length ? built.codes.map((c) => `${c.device} ${c.code}`).join(", ") + ", " : "") + "raw " + built.raw + ". " +
+          "Apply to confirm: applyCheat({ code: \"" + primary + "\" }). Non-destructive — no ROM file is touched.",
+      });
     }),
   );
 }
