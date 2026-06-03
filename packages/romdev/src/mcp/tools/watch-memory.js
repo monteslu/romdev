@@ -462,6 +462,14 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
           note: "No write to that address within maxFrames. Increase maxFrames, or drive the game with pressDuring to trigger the write.",
         });
       }
+      // When the core reports a PRG-ROM offset for the PC (fceumm/NES), it
+      // disambiguates the BANK — turn it into the iNES bank index + the prg.bin
+      // offset so disassembleRom can target the exact bank, no $FF-padding from
+      // the wrong (fixed) bank on a banked mapper.
+      const prgOffset = result.prgOffset;
+      const bankInfo = (prgOffset != null)
+        ? { prgOffset: "0x" + prgOffset.toString(16).toUpperCase(), bank: Math.floor(prgOffset / 0x4000) }
+        : null;
       return jsonContent({
         found: true,
         address: "$" + address.toString(16).toUpperCase(),
@@ -470,10 +478,12 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         value: "0x" + result.lastValue.toString(16).toUpperCase().padStart(2, "0"),
         hits: result.hits,
         framesStepped: result.framesStepped,
+        ...(bankInfo ? bankInfo : {}),
         ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
         note: "pc is the EXACT writing instruction (captured in the CPU write path), not a frame sample. " +
-          "disassembleRom({ startAddress: " + (result.lastPC != null ? "0x" + result.lastPC.toString(16) : "pc") + " }) to see it. " +
-          "On a banked mapper, a $8000-$BFFF pc may be in a switchable bank — pass the right `bank` to disassembleRom.",
+          (bankInfo
+            ? `pc is in PRG bank ${bankInfo.bank} (prg offset ${bankInfo.prgOffset}) — disassembleRom({ startAddress: ${result.lastPC != null ? "0x" + result.lastPC.toString(16) : "pc"}, bank: ${bankInfo.bank} }) targets the exact bank (no fixed-bank $FF padding).`
+            : `disassembleRom({ startAddress: ${result.lastPC != null ? "0x" + result.lastPC.toString(16) : "pc"} }) to see it. On a banked mapper a $8000-$BFFF pc may be in a switchable bank — pass the right \`bank\`.`),
       });
     }),
   );
