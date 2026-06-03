@@ -19,7 +19,7 @@ import { readdir, readFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseCht, splitCombo } from "../src/cheats/parse-cht.js";
-import { decodeCode } from "../src/cheats/gamegenie.js";
+import { decodeWithDevice } from "../src/cheats/gamegenie.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const OUT_DEFAULT = path.join(__dirname, "..", "src", "cheats", "index");
@@ -63,11 +63,15 @@ async function buildPlatform(srcDir, dbDirName, platform) {
     const out = [];
     for (const e of entries) {
       const codes = splitCombo(e.code);
-      // Decode each sub-code; keep raw codes regardless so apply can pass them
-      // to the core verbatim even when we can't decode (unknown formats).
+      // Decode each sub-code WITH its device type (game-genie / pro-action-replay
+      // / gameshark / action-replay / raw). Keep raw codes regardless so apply
+      // can pass them to the core verbatim even when we can't decode the address.
       const decoded = codes.map((c) => {
-        const d = decodeCode(c, platform);
-        return d ? { ...d, kind: classify(d) } : null;
+        const d = decodeWithDevice(c, platform);
+        if (!d) return null;
+        return (d.address != null)
+          ? { address: d.address, value: d.value, ...(d.compare != null ? { compare: d.compare } : {}), kind: classify(d), device: d.device }
+          : { kind: "unknown", device: d.device }; // device known, address not descrambled
       });
       out.push({
         desc: e.desc,
