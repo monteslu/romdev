@@ -35,6 +35,11 @@ const PLATFORM_DIRS = {
   "Sega - Game Gear": "gg",
   "Atari - 2600": "atari2600",
   "Atari - 7800": "atari7800",
+  "Atari - Lynx": "lynx",
+  "Nintendo - Game Boy Advance": "gba",
+  // C64: the libretro-database cheats tree ships NO "Commodore - 64" folder
+  // (zero source cheats), so there is no index to build. makeCheat (raw
+  // ADDR:VAL via vice's retro_cheat_set) still works on C64 — see cheats.js.
 };
 
 // Classify a decoded code: a compare byte means it targets ROM/code (the

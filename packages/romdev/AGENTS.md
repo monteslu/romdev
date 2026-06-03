@@ -405,9 +405,16 @@ clearCheats()                           // remove all
 invincibility, etc. It is **NON-DESTRUCTIVE**, exactly like RetroArch: the cheat
 lives in volatile core state (a per-frame RAM write, or an in-core read-intercept
 for ROM cheats), the ROM file on disk is NEVER touched, and `reset` / `loadState`
-/ `clearCheats` removes it. Supported: NES, GB/GBC, SNES, Genesis, SMS/GG, Atari
-2600/7800. Unmatched ROMs (homebrew, your own WIP, an unlisted dump) return
-`matched:false` with a clear reason — the tool never guesses.
+/ `clearCheats` removes it. **`gameCheats` DB coverage (11/12):** NES, GB/GBC,
+SNES, Genesis, SMS/GG, Atari 2600/7800, **Lynx**, **GBA** — every tier-1 system
+except **C64** (the cheat database ships no C64 entries, so there's nothing to
+look up; `makeCheat` still works on C64). One caveat: **GBA** DB cheats are
+Code Breaker / GameShark (encrypted), so they're **apply-only** — the `code`
+applies live, but the address isn't descrambled into a labeled map the way the
+other systems are (the response says so via `mapNote`). **`applyCheat` /
+`makeCheat` work on all 12.** Unmatched ROMs (homebrew, your own WIP, an
+unlisted dump) return `matched:false` with a clear reason — the tool never
+guesses.
 
 ### Creating NEW cheat codes (`makeCheat`)
 
@@ -434,6 +441,9 @@ confirmed; the encoders round-trip 100% against the full DB — NES/Genesis/GB/G
 Game Genie, SNES Game Genie + PAR, GB GameShark). Force a specific device with
 `device:`. A RAM cheat needs just `address`+`value`; a ROM patch adds `compare`
 (the byte currently there). Nothing is ever written to a ROM file.
+**`makeCheat` works on all 12 tier-1 systems** — the systems with no native
+letter-code device (Atari 2600/7800, Lynx, GBA, C64) get a verified raw
+`ADDR:VAL` code that `applyCheat` passes straight to the core.
 
 ```js
 makeCheat({ platform:"snes", address:0x7E0DBF, value:0x63 })
