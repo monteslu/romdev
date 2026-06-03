@@ -5,8 +5,65 @@
 # still succeeds but those tools return empty data (silent runtime failure).
 # git apply ignores everything above the first 'diff --git' line.
 #
+# Also adds an instruction-level WRITE WATCHPOINT (65816): S9xSetByte/S9xSetWord
+# in getset.h stamp Registers.PBPC when a watched address is written; libretro.cpp
+# exports romdev_watchpoint_set/get. (Word writes are hooked too — the fast path
+# bypasses S9xSetByte.)
+# git apply ignores everything above the first 'diff --git' line.
+#
+diff --git a/getset.h b/getset.h
+index ec55ea9..06121e1 100644
+--- a/getset.h
++++ b/getset.h
+@@ -317,8 +317,35 @@ inline uint16 S9xGetWord (uint32 Address, enum s9xwrap_t w = WRAP_NONE)
+ 	}
+ }
+ 
++/* romdev write watchpoint — state defined in libretro.cpp. */
++extern "C" {
++extern unsigned int  romdev_wp_addr;
++extern int           romdev_wp_enabled;
++extern unsigned int  romdev_wp_last_pc;
++extern unsigned char romdev_wp_last_val;
++extern unsigned int  romdev_wp_hits;
++}
++
++/* Canonicalize a SNES bus address: the low 8 KB of WRAM is MIRRORED into banks
++ * $00-$3F and $80-$BF at $0000-$1FFF, so the CPU issues a stack/zero-page write
++ * as e.g. $00:0039 while the "real" WRAM address is $7E0039 — match both. */
++static inline unsigned int romdev_wp_canon(unsigned int a)
++{
++	a &= 0xffffff;
++	unsigned int bank = a >> 16, off = a & 0xffff;
++	if (off < 0x2000 && (bank <= 0x3f || (bank >= 0x80 && bank <= 0xbf)))
++		return 0x7e0000u | off;
++	return a;
++}
++#define ROMDEV_WP_SNES(addr, val) do { \
++		if (romdev_wp_enabled && romdev_wp_canon(addr) == romdev_wp_canon(romdev_wp_addr)) { \
++			romdev_wp_last_pc = Registers.PBPC; romdev_wp_last_val = (unsigned char)(val); romdev_wp_hits++; \
++		} \
++	} while (0)
++
+ inline void S9xSetByte (uint8 Byte, uint32 Address)
+ {
++	ROMDEV_WP_SNES(Address, Byte);
+ 	int		block = (Address & 0xffffff) >> MEMMAP_SHIFT;
+ 	uint8	*SetAddress = Memory.WriteMap[block];
+ 	int32	speed = memory_speed(Address);
+@@ -425,6 +452,10 @@ inline void S9xSetByte (uint8 Byte, uint32 Address)
+ 
+ inline void S9xSetWord (uint16 Word, uint32 Address, enum s9xwrap_t w = WRAP_NONE, enum s9xwriteorder_t o = WRITE_01)
+ {
++	/* romdev watchpoint: a word write covers Address and Address+1. (The fast
++	 * path below writes both bytes directly, bypassing S9xSetByte, so check here.) */
++	ROMDEV_WP_SNES(Address, Word);
++	ROMDEV_WP_SNES(Address + 1, Word >> 8);
+ 	uint32	mask = MEMMAP_MASK & (w == WRAP_PAGE ? 0xff : (w == WRAP_BANK ? 0xffff : 0xffffff));
+ 	if ((Address & mask) == mask)
+ 	{
 diff --git a/libretro/libretro.cpp b/libretro/libretro.cpp
-index d381c61..e84863b 100644
+index d381c61..d0e3838 100644
 --- a/libretro/libretro.cpp
 +++ b/libretro/libretro.cpp
 @@ -6,6 +6,7 @@
@@ -17,10 +74,39 @@ index d381c61..e84863b 100644
  #include "gfx.h"
  #include "snapshot.h"
  #include "controls.h"
-@@ -2029,6 +2030,14 @@ unsigned retro_get_region()
+@@ -2029,6 +2030,43 @@ unsigned retro_get_region()
      return Settings.PAL ? RETRO_REGION_PAL : RETRO_REGION_NTSC;
  }
  
++/* romdev instruction-level write watchpoint (65816). State defined here with C
++ * linkage; the hook in getset.h's S9xSetByte stamps Registers.PBPC (the full
++ * 24-bit program-bank:PC) when a watched address is written. Exported below. */
++extern "C" {
++unsigned int  romdev_wp_addr     = 0;
++int           romdev_wp_enabled  = 0;
++unsigned int  romdev_wp_last_pc  = 0xFFFFFFFF;
++unsigned char romdev_wp_last_val = 0;
++unsigned int  romdev_wp_hits     = 0;
++
++void romdev_watchpoint_set(unsigned int addr, int enabled) {
++   romdev_wp_addr = addr;
++   romdev_wp_enabled = enabled ? 1 : 0;
++   romdev_wp_last_pc = 0xFFFFFFFF;
++   romdev_wp_last_val = 0;
++   romdev_wp_hits = 0;
++}
++
++void romdev_watchpoint_get(unsigned int *out5, int clearHits) {
++   if (!out5) return;
++   out5[0] = (unsigned int)romdev_wp_enabled;
++   out5[1] = romdev_wp_addr;
++   out5[2] = romdev_wp_last_pc;
++   out5[3] = (unsigned int)romdev_wp_last_val;
++   out5[4] = romdev_wp_hits;
++   if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; }
++}
++}
++
 +/* rom-dev-mcp extension: custom memory region IDs above libretro standard.
 + * Mirrors the fceumm patch — lets the host inspect SNES OAM/CGRAM/ARAM
 + * directly instead of parsing freeze-state blobs. */
@@ -32,7 +118,7 @@ index d381c61..e84863b 100644
  void* retro_get_memory_data(unsigned type)
  {
      void* data;
-@@ -2051,6 +2060,18 @@ void* retro_get_memory_data(unsigned type)
+@@ -2051,6 +2089,18 @@ void* retro_get_memory_data(unsigned type)
          case RETRO_MEMORY_VIDEO_RAM:
          data = Memory.VRAM;
          break;
@@ -51,7 +137,7 @@ index d381c61..e84863b 100644
          //case RETRO_MEMORY_ROM:
          //	data = Memory.ROM;
          //	break;
-@@ -2085,6 +2106,18 @@ size_t retro_get_memory_size(unsigned type)
+@@ -2085,6 +2135,18 @@ size_t retro_get_memory_size(unsigned type)
          case RETRO_MEMORY_VIDEO_RAM:
              size = 64 * 1024;
              break;
