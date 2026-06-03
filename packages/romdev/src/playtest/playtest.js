@@ -106,6 +106,11 @@ export const KEYBOARD_BINDINGS_HELP = `Keyboard:
   RShift / Backspace   SELECT
   ESC                  Close playtest window
 
+Emulator hotkeys (RetroArch defaults):
+  P / Space            Pause / unpause emulation
+  F2                   Save state (to slot)
+  F4                   Load state (from slot)
+
 Gamepad: any SDL-recognized controller works. Physical-position mapping —
 the BOTTOM face button is always the main action, regardless of pad letter.
   Select + Start (held together)   Close playtest window`;
@@ -315,7 +320,26 @@ export async function playtest(args) {
   window.on("close", () => { stop(); });
   window.on("keyDown", (e) => {
     if (e.key === "escape") { stop(); return; }
-    if (e.key) heldKeys.add(e.key.toLowerCase());
+    const key = e.key ? e.key.toLowerCase() : "";
+    // RetroArch-style emulator hotkeys — act on the live host, not game input.
+    if (key === "p" || key === "space") {
+      const h = getLiveHost();
+      if (h) { h.status.paused ? h.resume() : h.pause(); }
+      return;
+    }
+    if (key === "f2") {
+      const h = getLiveHost();
+      if (h && h.status?.loaded) { try { h.saveState("hotkey"); } catch {} }
+      return;
+    }
+    if (key === "f4") {
+      const h = getLiveHost();
+      if (h && h.status?.loaded) { try { h.loadState("hotkey"); } catch (err) {
+        log.debug("[playtest] load state failed (no save yet?):", err.message);
+      } }
+      return;
+    }
+    if (key) heldKeys.add(key);
   });
   window.on("keyUp", (e) => {
     if (e.key) heldKeys.delete(e.key.toLowerCase());
