@@ -63,12 +63,15 @@ export function registerPlaytestTools(server, z, sessionKey) {
   server.tool(
     "playtest",
     "Use this to open a native SDL window so a HUMAN can watch and play the loaded ROM — the 'show a " +
-    "person' tool, NOT your iteration loop. Only call it once the game is worth a human's eyes (boots, " +
-    "renders, the feature is visible). FOR YOUR OWN TESTING use screenshots instead (runSource / " +
+    "person' tool, NOT your build-iteration loop. Only call it once the game is worth a human's eyes (boots, " +
+    "renders, the feature is visible). FOR YOUR OWN BUILD TESTING use screenshots instead (runSource / " +
     "stepAndScreenshot / screenshot) — a window on a black screen or crash just wastes the human's " +
-    "attention. Once open, every other tool keeps working against the SAME live host (snapshot mid-play, " +
-    "dump state, restore a saveState while they play). Requires @kmamal/sdl; stays open until closed or " +
-    "playtestStop. See the `aspect` param for window shape.",
+    "attention. BEST FOR (beyond demos): diagnosing a USER-REPORTED bug — when the human already has a repro, " +
+    "hand them the window, let them drive to the exact moment, then inspect the SAME live host in real time " +
+    "(readMemory / watchMemory / inspectSprites / dumpState, with pause/resume to freeze a moving state). " +
+    "That beats blindly re-deriving a state headless across reboots. Once open, every other tool keeps working " +
+    "against the SAME live host (snapshot mid-play, dump state, restore a saveState while they play). " +
+    "Requires @kmamal/sdl; stays open until closed or playtestStop. See the `aspect` param for window shape.",
     {
       scale: z.number().int().min(1).max(8).default(3).describe("Integer upscale factor for the window."),
       title: z.string().optional().describe("Window title."),
@@ -185,7 +188,21 @@ export function registerPlaytestTools(server, z, sessionKey) {
       // reconcileSession() probes the real SDL window and tears down a dead
       // one — so a window killed without a 'close' event reports running:false
       // instead of lying forever (the post-restart / compositor-kill case).
-      if (!reconcileSession()) return jsonContent({ running: false });
+      if (!reconcileSession()) {
+        // No window — but report whether a host/ROM is still loaded so the
+        // caller can decide whether to re-loadMedia or just re-open playtest,
+        // instead of defensively reloading (Jay's session2 #3).
+        const h = getHostOrNull(sessionKey);
+        return jsonContent({
+          running: false,
+          hostLoaded: !!h,
+          activeMediaPath: h?.status?.mediaPath ?? null,
+          activeFrameCount: h?.status?.frameCount ?? null,
+          note: h
+            ? "No playtest window, but a host/ROM is still loaded — re-open playtest without re-running loadMedia."
+            : "No playtest window and no host loaded — loadMedia (or runSource) first.",
+        });
+      }
       const activeHost = getHostOrNull(sessionKey);
       const windowHost = session.host ?? null;
       // The window binds its host at open; the session's active host gets
