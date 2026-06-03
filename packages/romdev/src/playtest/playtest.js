@@ -350,6 +350,13 @@ export async function playtest(args) {
     // media unloaded and stepFrames threw).
     const h = getLiveHost();
     if (!h || !h.status?.loaded) return;
+    // While paused the window keeps RENDERING the frozen frame (so the human
+    // still sees it), but must NOT touch input or step the core: otherwise the
+    // per-tick setInput would clobber any input the AGENT set for an
+    // inspect-while-paused experiment. stepFrames already returns 0 when
+    // paused; skipping setInput too is what makes `pause` mean "stop fighting
+    // me". The render block below runs unconditionally.
+    const paused = !!h.status.paused;
     // Read controller state for each slot independently. Slot 0 = port 0
     // (player 1), slot 1 = port 1 (player 2). Each slot's input is built
     // into its own port object; the agent's setInput is overwritten each
@@ -379,29 +386,33 @@ export async function playtest(args) {
     readControllerInto(port0, controllers[0]);
     readControllerInto(port1, controllers[1]);
     if (quit) {
+      // Select+Start always closes — even while paused — so the human can
+      // dismiss a frozen window from the pad.
       log.debug("[playtest] Select+Start pressed — closing");
       stop();
       return;
     }
-    // Merge in keyboard state on port 0. ORed with controller state so a
-    // user can mix both (rare, but harmless). Keyboard never reaches
-    // port 1 — that's reserved for the second physical controller.
-    for (const [keyName, bit] of Object.entries(KEY_TO_LIBRETRO_BIT)) {
-      if (heldKeys.has(keyName)) port0[bitToName(bit)] = true;
-    }
-    h.setInput({ ports: [port0, port1] });
+    if (!paused) {
+      // Merge in keyboard state on port 0. ORed with controller state so a
+      // user can mix both (rare, but harmless). Keyboard never reaches
+      // port 1 — that's reserved for the second physical controller.
+      for (const [keyName, bit] of Object.entries(KEY_TO_LIBRETRO_BIT)) {
+        if (heldKeys.has(keyName)) port0[bitToName(bit)] = true;
+      }
+      h.setInput({ ports: [port0, port1] });
 
-    let stepped = 0;
-    try {
-      stepped = h.stepFrames(1);
-    } catch (e) {
-      // A step error mid-swap (host being torn down/rebuilt) is transient —
-      // skip this frame and let the next tick pick up the new host. Don't kill
-      // the window. (A window-level failure is handled by the destroyed checks.)
-      log.error("[playtest] step error (skipping frame):", e.message);
-      return;
+      let stepped = 0;
+      try {
+        stepped = h.stepFrames(1);
+      } catch (e) {
+        // A step error mid-swap (host being torn down/rebuilt) is transient —
+        // skip this frame and let the next tick pick up the new host. Don't kill
+        // the window. (A window-level failure is handled by the destroyed checks.)
+        log.error("[playtest] step error (skipping frame):", e.message);
+        return;
+      }
+      if (stepped > 0) frameCount++;
     }
-    if (stepped > 0) frameCount++;
 
     if (!window.destroyed) {
       try {

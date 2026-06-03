@@ -1,5 +1,5 @@
 import { getHost } from "../state.js";
-import { jsonContent, safeTool, textContent } from "../util.js";
+import { jsonContent, safeTool } from "../util.js";
 
 // Resolve a platform-native button alias to the libretro button the host
 // understands. Genesis pads have A/B/C (+ X/Y/Z on 6-button) which libretro
@@ -62,7 +62,8 @@ export function registerInputTools(server, z, sessionKey) {
     "setInput",
     "Set controller state for the next frames. State persists until changed (held buttons stay held). " +
     "Shape: { ports: [{ a: true, start: false, ... }, { ... }] }. Use getInputLayout({platform}) " +
-    "to see which buttons exist on this platform (NES has no x/y, Genesis has no l/r, etc).",
+    "to see which buttons exist on this platform (NES has no x/y, Genesis has no l/r, etc). " +
+    "Echoes back the resulting held-button state per port so you can confirm the input landed in one call.",
     {
       ports: z.array(port).min(1).max(2).describe(
         "Per-port input. Index 0 = port 0, index 1 = port 1. " +
@@ -71,7 +72,10 @@ export function registerInputTools(server, z, sessionKey) {
     },
     safeTool(async ({ ports }) => {
       getHost(sessionKey).setInput({ ports });
-      return textContent("input set");
+      // Echo what's now held (the buttons set true), per port — confirms the
+      // press without a follow-up step+screenshot round-trip.
+      const held = ports.map((p) => Object.keys(p).filter((k) => p[k] === true));
+      return jsonContent({ inputSet: true, held });
     }),
   );
 

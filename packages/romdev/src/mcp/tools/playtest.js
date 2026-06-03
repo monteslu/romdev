@@ -71,6 +71,12 @@ export function registerPlaytestTools(server, z, sessionKey) {
     "(readMemory / watchMemory / inspectSprites / dumpState, with pause/resume to freeze a moving state). " +
     "That beats blindly re-deriving a state headless across reboots. Once open, every other tool keeps working " +
     "against the SAME live host (snapshot mid-play, dump state, restore a saveState while they play). " +
+    "INPUT/STEPPING WHILE OPEN: the window's own loop drives the emulator — each tick it rebuilds controller " +
+    "state from the human's gamepad+keyboard and calls setInput, then steps one frame. So your `setInput` is " +
+    "OVERWRITTEN on the next tick (the human's input wins; they are NOT merged with yours), and the window — " +
+    "not you — owns stepFrames. To inspect a moving state, `pause` (halts the tick loop, freezing input AND " +
+    "stepping) → readMemory/watchMemory/dumpState → `resume`. Reads don't need a pause; only deterministic " +
+    "stepping or agent-driven input do. " +
     "Requires @kmamal/sdl; stays open until closed or playtestStop. See the `aspect` param for window shape.",
     {
       scale: z.number().int().min(1).max(8).default(3).describe("Integer upscale factor for the window."),
