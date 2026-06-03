@@ -1,6 +1,6 @@
 {
   "name": "romdev-mcp",
-  "version": "0.1.35",
+  "version": "0.1.36",
   "description": "MCP server giving coding agents full control of homebrew ROM development across retro platforms (NES, SNES, GB, Genesis, Atari, C64, ...) via WASM libretro cores.",
   "type": "module",
   "main": "src/mcp/server.js",
@@ -9,6 +9,7 @@
     "romdev-mcp-cli": "src/cli/smoke.js"
   },
   "scripts": {
+    "postinstall": "node src/install/postinstall.mjs",
     "smoke": "node --enable-source-maps src/cli/smoke.js",
     "mcp": "node --enable-source-maps src/mcp/server.js",
     "test": "node --test 'src/**/*.test.js' 'test/**/*.test.js'"
