@@ -18,10 +18,10 @@ OUT="$PROJECT_DIR/src/cores/wasm"
 fetch_pinned cores.fceumm "$FCEUMM_DIR"
 
 cd "$FCEUMM_DIR"
-# Reset both files the patch touches — libretro.c (memory region exposure)
-# AND sound.c (drop `static` on the APU register holders so libretro.c
-# can extern them for the apu_regs snapshot).
-git checkout -- src/drivers/libretro/libretro.c src/sound.c 2>/dev/null || true
+# Reset the files the patch touches — libretro.c (memory regions + watchpoint
+# exports), sound.c (drop `static` on the APU register holders), and x6502.c
+# (the write-watchpoint hook + state) — so a clean re-apply always works.
+git checkout -- src/drivers/libretro/libretro.c src/sound.c src/x6502.c 2>/dev/null || true
 # Use --recount so the patch survives small additions to hunks (e.g. adding
 # a new ROMDEV_MEMORY_* region) without manually re-computing the @@ counts.
 if ! git apply --recount --check "$PATCH_FILE" 2>/dev/null; then
@@ -97,7 +97,7 @@ if [ -n "$LIBRETRO_COMMON" ]; then
   fi
 fi
 
-EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
+EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_watchpoint_set","_romdev_watchpoint_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
 EXPORTED_RUNTIME='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS"]'
 
 mkdir -p "$OUT"
