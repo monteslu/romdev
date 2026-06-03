@@ -405,8 +405,8 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     "the CPU write path — correct even for NMI/IRQ-driven writes (where the frame-sampled pc is just the idle loop). " +
     "Returns { found, address, pc, value, hits, framesStepped }. Then `disassembleRom({ startAddress: pc })` lands " +
     "you on the real store instruction. NOTE: supported on NES (fceumm), GB/GBC (gambatte), Genesis + SMS/GG " +
-    "(gpgx), and SNES (snes9x); other platforms return notSupported — use watchMemory there. On banked mappers a " +
-    "$8000-$BFFF pc may be in a switchable bank (disassemble with the right `bank`).",
+    "(gpgx), SNES (snes9x), and Atari 2600/7800 (stella/prosystem); C64 returns notSupported — use watchMemory " +
+    "there. On banked mappers a $8000-$BFFF pc may be in a switchable bank (disassemble with the right `bank`).",
     {
       address: z.number().int().min(0).describe("CPU address to watch for writes (e.g. 0x00CD). For NES, low RAM CPU address == system_ram offset."),
       maxFrames: z.number().int().min(1).max(1_000_000).default(600).describe("Max frames to step while waiting for a write."),

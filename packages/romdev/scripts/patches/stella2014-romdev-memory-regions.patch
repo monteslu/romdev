@@ -5,8 +5,13 @@
 # still succeeds but those tools return empty data (silent runtime failure).
 # git apply ignores everything above the first 'diff --git' line.
 #
+# Also adds an instruction-level WRITE WATCHPOINT (6502): M6502::poke records the
+# CPU PC when a watched address is written; libretro.cxx exports
+# romdev_watchpoint_set/get.
+# git apply ignores everything above the first 'diff --git' line.
+#
 diff --git a/libretro.cxx b/libretro.cxx
-index 15c6d12..52171e7 100644
+index 15c6d12..bd869c6 100644
 --- a/libretro.cxx
 +++ b/libretro.cxx
 @@ -28,6 +28,7 @@
@@ -17,7 +22,42 @@ index 15c6d12..52171e7 100644
  #include "Version.hxx"
  
  #include "Stubs.hxx"
-@@ -1253,11 +1254,26 @@ unsigned retro_api_version(void)
+@@ -1248,16 +1249,61 @@ unsigned retro_get_region(void)
+    return RETRO_REGION_NTSC;
+ }
+ 
++/* romdev instruction-level write watchpoint (6502) — state defined here; the
++ * hook in M6502::poke records the CPU PC when a watched address is written. */
++extern "C" {
++unsigned int  romdev_wp_addr     = 0;
++int           romdev_wp_enabled  = 0;
++unsigned int  romdev_wp_last_pc  = 0xFFFFFFFF;
++unsigned char romdev_wp_last_val = 0;
++unsigned int  romdev_wp_hits     = 0;
++
++void romdev_watchpoint_set(unsigned int addr, int enabled)
++{
++   romdev_wp_addr = addr;
++   romdev_wp_enabled = enabled ? 1 : 0;
++   romdev_wp_last_pc = 0xFFFFFFFF;
++   romdev_wp_last_val = 0;
++   romdev_wp_hits = 0;
++}
++
++void romdev_watchpoint_get(unsigned int *out5, int clearHits)
++{
++   if (!out5) return;
++   out5[0] = (unsigned int)romdev_wp_enabled;
++   out5[1] = romdev_wp_addr;
++   out5[2] = romdev_wp_last_pc;
++   out5[3] = (unsigned int)romdev_wp_last_val;
++   out5[4] = romdev_wp_hits;
++   if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; }
++}
++}
++
+ unsigned retro_api_version(void)
+ {
     return RETRO_API_VERSION;
  }
  
@@ -44,7 +84,7 @@ index 15c6d12..52171e7 100644
        default: return NULL;
     }
  }
-@@ -1267,6 +1283,8 @@ size_t retro_get_memory_size(unsigned id)
+@@ -1267,6 +1313,8 @@ size_t retro_get_memory_size(unsigned id)
     switch (id)
     {
        case RETRO_MEMORY_SYSTEM_RAM: return 128;
@@ -53,6 +93,32 @@ index 15c6d12..52171e7 100644
        default: return 0;
     }
  }
+diff --git a/stella/src/emucore/M6502.cxx b/stella/src/emucore/M6502.cxx
+index 9dfde89..8b8c399 100644
+--- a/stella/src/emucore/M6502.cxx
++++ b/stella/src/emucore/M6502.cxx
+@@ -122,8 +122,21 @@ inline uInt8 M6502::peek(uInt16 address, uInt8 flags)
+ }
+ 
+ // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
++/* romdev instruction-level write watchpoint — records the 6502 PC (this M6502's
++ * member) when a watched address is written. State defined in libretro.cxx. */
++extern "C" {
++extern unsigned int  romdev_wp_addr;
++extern int           romdev_wp_enabled;
++extern unsigned int  romdev_wp_last_pc;
++extern unsigned char romdev_wp_last_val;
++extern unsigned int  romdev_wp_hits;
++}
++
+ inline void M6502::poke(uInt16 address, uInt8 value)
+ {
++  if (romdev_wp_enabled && (unsigned int)address == romdev_wp_addr) {
++    romdev_wp_last_pc = PC; romdev_wp_last_val = value; romdev_wp_hits++;
++  }
+   ////////////////////////////////////////////////
+   // TODO - move this logic directly into CartAR
+   if(address != myLastAddress)
 diff --git a/stella/src/emucore/M6502.hxx b/stella/src/emucore/M6502.hxx
 index 79b50ee..7ecd246 100644
 --- a/stella/src/emucore/M6502.hxx
