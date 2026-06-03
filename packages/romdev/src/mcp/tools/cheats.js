@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { getHost } from "../state.js";
 import { jsonContent, safeTool } from "../util.js";
 import { lookupCheats } from "../../cheats/lookup.js";
-import { encodeCode, decodeCode } from "../../cheats/gamegenie.js";
+import { encodeForDevice, nativeDevicesFor, decodeCode } from "../../cheats/gamegenie.js";
 
 // Per-platform cheat address space (for makeCheat validation). A Game Genie
 // letter code can only address these ranges; out-of-range → raw ADDR:VAL only.
@@ -69,12 +69,20 @@ export function registerCheatTools(server, z, sessionKey) {
         const pretty = entries.map((e) => ({
           desc: e.desc,
           code: e.code,
-          parts: (e.parts || []).map((p) => p ? {
-            address: "$" + p.address.toString(16).toUpperCase(),
-            value: "0x" + p.value.toString(16).toUpperCase().padStart(2, "0"),
-            ...(p.compare != null ? { compare: "0x" + p.compare.toString(16).toUpperCase().padStart(2, "0") } : {}),
-            kind: p.kind,
-          } : null),
+          // `device` tells the agent WHICH cheat device each code is for —
+          // game-genie / pro-action-replay / gameshark / action-replay / raw —
+          // so it's never assumed to be "Game Genie".
+          parts: (e.parts || []).map((p) => {
+            if (!p) return null;
+            if (p.address == null) return { device: p.device, kind: p.kind, decoded: false };
+            return {
+              device: p.device,
+              address: "$" + p.address.toString(16).toUpperCase(),
+              value: "0x" + p.value.toString(16).toUpperCase().padStart(2, "0"),
+              ...(p.compare != null ? { compare: "0x" + p.compare.toString(16).toUpperCase().padStart(2, "0") } : {}),
+              kind: p.kind,
+            };
+          }),
         }));
         return jsonContent({
           ...res,
@@ -160,57 +168,61 @@ export function registerCheatTools(server, z, sessionKey) {
   server.tool(
     "makeCheat",
     "CREATE a brand-new cheat code from an address + value (the inverse of decoding). Turn a byte you found — " +
-    "via runUntilWrite/watchMemory/gameCheats — into a shareable code, for ANY ROM including your own homebrew/" +
-    "WIP (no database entry needed). Returns both a Game Genie letter code (where the platform has one) AND the " +
-    "raw ADDR:VAL form, plus a `verified` round-trip check (the generated code is decoded back and confirmed to " +
-    "reproduce your address/value). " +
-    "RAM cheat: give `address` + `value` (the value is forced into that RAM byte; 'infinite X' = a value the game " +
-    "won't decrement past). ROM/code cheat: also give `compare` (the byte currently at that ROM address — read it " +
-    "with readMemory/disassembleRom first), which yields the classic Game Genie ROM-patch form. " +
-    "Apply the result immediately with applyCheat to confirm the effect. NON-DESTRUCTIVE throughout — nothing is " +
-    "written to any ROM file.",
+    "via runUntilWrite/watchMemory/gameCheats — into a shareable code, for ANY ROM including your own homebrew/WIP " +
+    "(no database entry needed). Emits the code for the platform's NATIVE cheat DEVICE — and labels it, so it's " +
+    "never falsely called 'Game Genie': NES/Genesis = Game Genie; SNES = Pro Action Replay (+ Game Genie); GB/GBC " +
+    "= Game Genie (ROM) + GameShark (RAM); SMS/GG = Action Replay. Always also returns the raw ADDR:VAL form. Each " +
+    "generated code is round-trip `verified` (decoded back and confirmed to reproduce your address/value). " +
+    "RAM cheat: give `address` + `value`. ROM/code cheat: also give `compare` (the byte currently at that ROM " +
+    "address — read it first), yielding the device's ROM-patch form. Apply the result with applyCheat to confirm. " +
+    "NON-DESTRUCTIVE — nothing is written to any ROM file.",
     {
-      platform: z.enum([...SUPPORTED]).describe("Target platform — selects the Game Genie encoding (nes/gb/gbc/genesis use letter codes; others emit raw ADDR:VAL)."),
-      address: z.number().int().min(0).describe("Address to cheat. RAM cheats: the RAM address (e.g. 0x00CD). ROM/code cheats: the ROM address of the byte to patch."),
+      platform: z.enum([...SUPPORTED]).describe("Target platform. Selects which cheat device(s) the code is encoded for (see tool description)."),
+      address: z.number().int().min(0).describe("Address to cheat. RAM cheats: the RAM address (e.g. 0x00CD / SNES 0x7E0DBF). ROM cheats: the ROM address of the byte to patch."),
       value: z.number().int().min(0).max(255).describe("Replacement byte value (0-255)."),
-      compare: z.number().int().min(0).max(255).optional().describe("ROM cheats only: the byte CURRENTLY at `address` (read it first). Its presence makes this a ROM/code patch (8-char NES GG / 9-digit GB GG) rather than a RAM poke."),
-      style: z.enum(["gamegenie", "raw", "both"]).default("both").describe("Which code form(s) to return. 'both' (default) gives the Game Genie letter code AND the raw ADDR:VAL."),
+      compare: z.number().int().min(0).max(255).optional().describe("ROM cheats only: the byte CURRENTLY at `address` (read it first). Its presence selects the device's ROM-patch form (e.g. 8-char NES Game Genie)."),
+      device: z.enum(["game-genie", "pro-action-replay", "gameshark", "action-replay", "raw"]).optional().describe("Force a specific device's encoding. Default: the platform's native device(s)."),
     },
-    safeTool(async ({ platform, address, value, compare, style = "both" }) => {
-      const out = { platform, address: "$" + address.toString(16).toUpperCase(), value: "0x" + value.toString(16).toUpperCase().padStart(2, "0") };
-      if (compare != null) out.compare = "0x" + compare.toString(16).toUpperCase().padStart(2, "0");
-
+    safeTool(async ({ platform, address, value, compare, device }) => {
+      const out = {
+        platform,
+        address: "$" + address.toString(16).toUpperCase(),
+        value: "0x" + value.toString(16).toUpperCase().padStart(2, "0"),
+        ...(compare != null ? { compare: "0x" + compare.toString(16).toUpperCase().padStart(2, "0") } : {}),
+      };
       const parts = { address, value, ...(compare != null ? { compare } : {}) };
-      const wantGG = style === "gamegenie" || style === "both";
-      const wantRaw = style === "raw" || style === "both";
-
-      // Range check for the Game Genie letter form.
       const range = GG_ADDR_RANGE[platform];
-      const inRange = !range || (address >= range[0] && address <= range[1]);
+      const verify = (code, dev) => {
+        const back = decodeCode(code, platform);
+        return !!back && back.address === address && back.value === value && (compare == null || back.compare === compare);
+      };
 
-      if (wantGG) {
-        if (!inRange) {
-          out.gameGenieNote = `address $${address.toString(16).toUpperCase()} is outside this platform's Game Genie range ` +
-            `($${range[0].toString(16).toUpperCase()}-$${range[1].toString(16).toUpperCase()}) — only a raw ADDR:VAL code is valid here.`;
-        } else {
-          const gg = encodeCode(parts, platform, "gamegenie");
-          if (gg && !gg.includes(":")) {
-            // Verify: decode the generated code back and confirm it reproduces parts.
-            const back = decodeCode(gg, platform);
-            const verified = !!back && back.address === address && back.value === value &&
-              (compare == null || back.compare === compare);
-            out.gameGenie = gg;
-            out.verified = verified;
-            if (!verified) out.gameGenieNote = "round-trip check FAILED — not returning this as trustworthy.";
-          }
+      // Which devices to emit: the forced one, or the platform's native list.
+      const devices = device ? [device] : nativeDevicesFor(platform);
+      const codes = [];
+      for (const dev of devices) {
+        if (dev === "raw") continue; // raw always added below
+        // Letter/device codes have an address range; flag (don't emit garbage) if out of range.
+        if (dev === "game-genie" && range && (address < range[0] || address > range[1])) {
+          codes.push({ device: dev, code: null, note: `address $${address.toString(16).toUpperCase()} is outside this platform's Game Genie range ($${range[0].toString(16).toUpperCase()}-$${range[1].toString(16).toUpperCase()}); use the raw or another device code.` });
+          continue;
+        }
+        const r = encodeForDevice(parts, platform, dev);
+        if (r && r.code) {
+          const verified = verify(r.code, dev);
+          codes.push({ device: r.device, code: r.code, verified, ...(verified ? {} : { note: "round-trip check FAILED — not trustworthy" }) });
         }
       }
-      if (wantRaw) out.raw = encodeCode(parts, platform, "raw");
-
+      out.codes = codes.filter((c) => c.code && c.verified !== false);
+      out.raw = encodeForDevice(parts, platform, "raw").code;
+      // Pick a primary code to suggest applying (first verified device, else raw).
+      const primary = out.codes[0]?.code || out.raw;
+      out.kind = compare != null ? "code" : "ram";
       out.note =
-        (compare != null ? "ROM/code patch" : "RAM cheat") +
-        ". Apply it now to confirm the effect: applyCheat({ code: \"" + (out.gameGenie || out.raw) + "\" }). " +
-        "Non-destructive — nothing is written to any ROM file.";
+        (compare != null ? "ROM/code patch" : "RAM cheat") + " for " + platform + ". " +
+        "Devices: " + (out.codes.length ? out.codes.map((c) => `${c.device} ${c.code}`).join(", ") + ", " : "") + "raw " + out.raw + ". " +
+        "Apply to confirm: applyCheat({ code: \"" + primary + "\" }). Non-destructive — no ROM file is touched.";
+      if (codes.some((c) => c.code === null)) out.rangeNote = codes.find((c) => c.code === null).note;
       return jsonContent(out);
     }),
   );
