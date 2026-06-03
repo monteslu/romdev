@@ -9,6 +9,13 @@ import {
 } from "../host/retroConstants.js";
 import { log } from "../mcp/log.js";
 import path from "node:path";
+import { existsSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { createRequire } from "node:module";
+
+const execFileAsync = promisify(execFile);
+const require = createRequire(import.meta.url);
 
 // One-pixel solid-black RGBA buffer; we stretch it across the letterbox
 // bars each frame so they don't smear with leftover pixels.
@@ -35,12 +42,107 @@ export function deriveTitle(host) {
   return platform ? `romdev — ${platform}` : "romdev playtest";
 }
 
+/**
+ * Find the on-disk root directory of the @kmamal/sdl package. Its `exports`
+ * field doesn't expose `./package.json`, so we resolve the main entry and walk
+ * up to the nearest directory containing a package.json. Exported for tests.
+ * @returns {string | null}
+ */
+export function sdlPackageRoot() {
+  let entry;
+  try {
+    entry = require.resolve("@kmamal/sdl");
+  } catch {
+    return null;
+  }
+  let dir = path.dirname(entry);
+  while (dir !== path.dirname(dir)) {
+    if (existsSync(path.join(dir, "package.json"))) return dir;
+    dir = path.dirname(dir);
+  }
+  return null;
+}
+
+/**
+ * @kmamal/sdl ships its native binary (`dist/sdl.node`) via an `install`
+ * lifecycle script — NOT in the npm tarball. When romdev is started with
+ * `npx romdev-mcp`, npm's transitive install path skips that script, so the
+ * binary is never fetched and `require('../../dist/sdl.node')` throws
+ * ERR_MODULE_NOT_FOUND. Worse, Node's ESM loader CACHES a failed dynamic import
+ * for the process lifetime — so once the first `import("@kmamal/sdl")` rejects,
+ * it can never recover, even after the binary appears on disk.
+ *
+ * So we must verify (and repair) the binary BEFORE the first import. This
+ * locates @kmamal/sdl, checks for dist/sdl.node, and if missing runs its own
+ * scripts/install.mjs to download the prebuilt binary, then imports once.
+ *
+ * On failure throws an Error tagged with `.sdlKind` ("missing-binary" |
+ * "install-failed" | "sdl-error") and, when actionable, `.fixCmd` — the tool
+ * layer branches on these for an accurate message (vs the old one that always
+ * blamed the desktop session).
+ * @returns {Promise<any>} the SDL module
+ */
 let _sdlModule = null;
 async function getSdl() {
   if (_sdlModule) return _sdlModule;
-  const ns = await import("@kmamal/sdl");
-  _sdlModule = ns.default || ns;
-  return _sdlModule;
+
+  // Resolve the package root (works under npx, local install, or a monorepo
+  // symlink). Note: @kmamal/sdl's `exports` does NOT expose ./package.json, so
+  // resolve the main entry and walk up to the dir that contains package.json.
+  let sdlNode = null;
+  let installScript = null;
+  try {
+    const pkgDir = sdlPackageRoot();
+    if (pkgDir) {
+      sdlNode = path.join(pkgDir, "dist", "sdl.node");
+      installScript = path.join(pkgDir, "scripts", "install.mjs");
+    }
+  } catch {
+    // @kmamal/sdl itself isn't installed at all — nothing we can repair.
+  }
+
+  const tag = (err, kind, fixCmd) => {
+    err.sdlKind = kind;
+    if (fixCmd) err.fixCmd = fixCmd;
+    return err;
+  };
+
+  // Self-heal: if the prebuilt binary is missing but the install script is
+  // present, run it (exactly what the skipped postinstall would have done).
+  // This MUST happen before the first import — Node's ESM loader caches a
+  // rejected dynamic import for the process lifetime, so a failed first import
+  // could never recover even after the binary lands on disk.
+  if (sdlNode && !existsSync(sdlNode) && installScript && existsSync(installScript)) {
+    log("playtest: @kmamal/sdl native binary missing — fetching prebuilt via its install script…");
+    try {
+      await execFileAsync(process.execPath, [installScript], { timeout: 120000 });
+    } catch (e) {
+      throw tag(new Error(
+        `the @kmamal/sdl native binary isn't installed and the auto-install failed: ${e?.message ?? e}`,
+      ), "install-failed", `node "${installScript}"`);
+    }
+  }
+
+  // Still missing after the heal attempt → fail with the exact fix, BEFORE the
+  // import (so we never cache a rejection).
+  if (sdlNode && !existsSync(sdlNode)) {
+    throw tag(new Error(
+      `the @kmamal/sdl native binary isn't installed (expected at ${sdlNode})`,
+    ), "missing-binary", installScript ? `node "${installScript}"` : undefined);
+  }
+
+  // Binary present (or path unresolvable — let import surface the real error).
+  try {
+    const ns = await import("@kmamal/sdl");
+    _sdlModule = ns.default || ns;
+    return _sdlModule;
+  } catch (e) {
+    const isModuleErr = e?.code === "ERR_MODULE_NOT_FOUND" ||
+      /sdl\.node|dist[\\/]/.test(e?.message || "");
+    throw tag(new Error(e?.message ?? String(e)),
+      isModuleErr ? "missing-binary" : "sdl-error",
+      isModuleErr && installScript ? `node "${installScript}"` : undefined);
+  }
 }
 
 // Map SDL standard-controller button name → libretro JOYPAD bit.

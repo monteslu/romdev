@@ -120,24 +120,53 @@ export function registerPlaytestTools(server, z, sessionKey) {
           aspect,
         });
       } catch (e) {
-        // SDL couldn't open a window — report what it said. We don't guess at
-        // the cause (no display / no GUI session / driver issue differ per OS
-        // and SDL already knows); we just relay the error plus the one fix that
-        // works everywhere, and remind the agent the headless tools are fine.
+        // Branch on WHY it failed — the cause is either the @kmamal/sdl native
+        // binary not being installed (common under `npx`, where the transitive
+        // install script is skipped) or an actual display/session problem.
+        // Conflating them (the old message always blamed the desktop session)
+        // sent people down the wrong path.
+        const kind = e?.sdlKind;
+        const headlessNote =
+          " Every headless tool (screenshot / runSource / readMemory / " +
+          "stepFrames / pressButton) still works against the live ROM — only " +
+          "the interactive window is affected.";
+
+        if (kind === "missing-binary" || kind === "install-failed") {
+          // Native-addon problem, NOT a display problem.
+          const fix = e?.fixCmd
+            ? `Run: ${e.fixCmd} (then restart the server). `
+            : "Reinstall @kmamal/sdl so its prebuilt binary is fetched. ";
+          return jsonContent({
+            opened: false,
+            reason: "sdl-binary-missing",
+            platform: process.platform,
+            message:
+              "The playtest window couldn't open because the @kmamal/sdl native " +
+              "binary isn't installed: " + (e?.message ?? String(e)) + ". " +
+              (kind === "install-failed"
+                ? "An automatic install was attempted but failed (often a network/proxy block on the GitHub release download). "
+                : "(This is common under `npx romdev-mcp` — npm skips @kmamal/sdl's install script that fetches the binary; the server tried to self-heal but the binary is still absent.) ") +
+              fix + "This is a one-time native-addon fix, NOT a display/desktop " +
+              "issue." + headlessNote,
+            fixCommand: e?.fixCmd ?? null,
+            loadedMediaPath,
+          });
+        }
+
+        // A genuine SDL init / display failure (e.g. no video device, no
+        // desktop session). NOW the desktop-session advice is the right call.
         return jsonContent({
           opened: false,
           reason: "sdl-error",
           platform: process.platform,
           message:
             "Couldn't open the SDL playtest window: " + (e?.message ?? String(e)) +
-            ". This typically happens when the server runs as an MCP subprocess " +
-            "(spawned by your agent host) with no access to the logged-in desktop " +
-            "session. The reliable fix on any OS: run the server yourself in a " +
-            "terminal inside your desktop session (`npx romdev-mcp`), then connect " +
-            "your agent to it. Every headless tool (screenshot / runSource / " +
-            "readMemory / stepFrames / pressButton) still works against the live " +
-            "ROM — only the interactive window needs a desktop. You can also open " +
-            "the built ROM in any standalone emulator.",
+            ". SDL initialized but couldn't get a display. This usually means the " +
+            "server has no access to a logged-in desktop session — e.g. it was " +
+            "spawned as an MCP subprocess by your agent host, or runs over plain " +
+            "SSH/headless. The reliable fix: run the server yourself in a terminal " +
+            "inside your desktop session, then connect your agent to it." +
+            headlessNote + " You can also open the built ROM in any standalone emulator.",
           loadedMediaPath,
         });
       }
