@@ -1,16 +1,29 @@
-# romdev patch for libretro-handy (Lynx) — see README.md in this directory.
-# Adds an instruction-level WRITE WATCHPOINT (65C02): the CPU_POKE macro in
-# lynx/c65c02.h records mPC when a watched address is written; libretro.cpp
-# exports romdev_watchpoint_set/get. (Lynx 65C02 is a flat 64KB space — no ROM
-# banking — so PC alone is unambiguous; no bank field.) No memory-region patch
-# was ever applied to this core, so this is watchpoint-only.
+# romdev patch for handy (Atari Lynx) libretro core — see README.md here.
+#
+# TWO additions:
+# 1) Instruction-level WRITE WATCHPOINT (65C02): the CPU_POKE macro in
+#    lynx/c65c02.h records mPC when a watched address is written; libretro.cpp
+#    exports romdev_watchpoint_set/get. The Lynx 65C02 is a flat 64KB space
+#    (no ROM banking) so PC alone is unambiguous; no bank field.
+# 2) DEBUG STATE REGIONS via retro_get_memory_data/_size custom IDs:
+#    - 0x190 lynx_cpu_regs: 8-byte 65C02 snapshot {PClo,PChi,A,X,Y,SP,P,flags}
+#      from the public CSystem::GetRegs(C6502_REGS&), for getCPUState.
+#    - 0x191 lynx_hw_regs: the $FC00-$FDFF hardware-register window (512 bytes)
+#      read through the public Peek_CPU memory path — Suzy sprite regs ($FCxx) +
+#      Mikey LCD control / audio ($FD20-$FD3F) / palette ($FDA0-$FDBF). Used by
+#      getAudioState (Mikey) and inspectPalette/getRenderingContext (Lynx).
+#    Both synthesized into static buffers per call (the chip fields are private;
+#    Peek/GetRegs are the sanctioned public reads, side-effect-free here).
+#    Lynx sprites are SCB linked lists (no fixed OAM) so there is no sprite
+#    region — inspectSprites walks SCBs over the exported SYSTEM_RAM instead.
+#
 # git apply ignores everything above the first 'diff --git' line.
 #
 diff --git a/libretro/libretro.cpp b/libretro/libretro.cpp
-index ad4efd7..4853094 100644
+index ad4efd7..41fc8dd 100644
 --- a/libretro/libretro.cpp
 +++ b/libretro/libretro.cpp
-@@ -1292,6 +1292,38 @@ unsigned retro_get_region(void)
+@@ -1292,16 +1292,93 @@ unsigned retro_get_region(void)
     return RETRO_REGION_NTSC;
  }
  
@@ -46,9 +59,68 @@ index ad4efd7..4853094 100644
 +}
 +}
 +
++/* romdev debug state regions (Lynx). High IDs so they never collide with the
++ * libretro RETRO_MEMORY_* enum; honored only by this patched core.
++ *   0x190 lynx_cpu_regs: 8-byte 65C02 snapshot {PClo,PChi,A,X,Y,SP,P,flags}
++ *          assembled from the public CSystem::GetRegs(C6502_REGS&).
++ *   0x191 lynx_hw_regs: the $FC00-$FDFF hardware-register window (512 bytes),
++ *          read through the public Peek_CPU memory-map path. This is Suzy
++ *          ($FC00-$FCFF: sprite engine regs) + Mikey ($FD00-$FDFF: LCD control,
++ *          audio at $FD20-$FD3F, palette at $FDA0-$FDBF). The CPU registers and
++ *          this HW window are SYNTHESIZED into static buffers per call because
++ *          the chips' fields are private — Peek is the sanctioned public read
++ *          path and is side-effect-free for these register addresses.
++ * Lynx sprites have NO fixed OAM — they are SCB linked lists walked from a RAM
++ * address — so there is no sprite region; inspectSprites must walk SCBs over the
++ * already-exported SYSTEM_RAM. */
++#define ROMDEV_REGION_LYNX_CPU_REGS 0x190u
++#define ROMDEV_REGION_LYNX_HW_REGS  0x191u
++
++static unsigned char romdev_lynx_cpu_buf[8];
++static unsigned char romdev_lynx_hw_buf[0x200]; /* $FC00-$FDFF */
++
++static void *romdev_lynx_fill_cpu(void)
++{
++   C6502_REGS r;
++   lynx->GetRegs(r);
++   romdev_lynx_cpu_buf[0] = (unsigned char)(r.PC & 0xff);
++   romdev_lynx_cpu_buf[1] = (unsigned char)((r.PC >> 8) & 0xff);
++   romdev_lynx_cpu_buf[2] = (unsigned char)(r.A & 0xff);
++   romdev_lynx_cpu_buf[3] = (unsigned char)(r.X & 0xff);
++   romdev_lynx_cpu_buf[4] = (unsigned char)(r.Y & 0xff);
++   romdev_lynx_cpu_buf[5] = (unsigned char)(r.SP & 0xff);
++   romdev_lynx_cpu_buf[6] = (unsigned char)(r.PS & 0xff);
++   romdev_lynx_cpu_buf[7] = (unsigned char)((r.NMI ? 0x80 : 0) | (r.IRQ ? 0x40 : 0) | (r.WAIT ? 0x20 : 0));
++   return romdev_lynx_cpu_buf;
++}
++
++static void *romdev_lynx_fill_hw(void)
++{
++   for (unsigned i = 0; i < 0x200; ++i)
++      romdev_lynx_hw_buf[i] = lynx->Peek_CPU(0xFC00 + i);
++   return romdev_lynx_hw_buf;
++}
++
  void *retro_get_memory_data(unsigned type)
  {
-    if (lynx && type == RETRO_MEMORY_SYSTEM_RAM)
+-   if (lynx && type == RETRO_MEMORY_SYSTEM_RAM)
+-      return lynx->GetRamPointer();
++   if (!lynx) return NULL;
++   if (type == RETRO_MEMORY_SYSTEM_RAM) return lynx->GetRamPointer();
++   if (type == ROMDEV_REGION_LYNX_CPU_REGS) return romdev_lynx_fill_cpu();
++   if (type == ROMDEV_REGION_LYNX_HW_REGS)  return romdev_lynx_fill_hw();
+    return NULL;
+ }
+ 
+ size_t retro_get_memory_size(unsigned type)
+ {
+-   if (type == RETRO_MEMORY_SYSTEM_RAM)
+-      return 1024 * 64;
++   if (type == RETRO_MEMORY_SYSTEM_RAM) return 1024 * 64;
++   if (type == ROMDEV_REGION_LYNX_CPU_REGS) return sizeof(romdev_lynx_cpu_buf);
++   if (type == ROMDEV_REGION_LYNX_HW_REGS)  return sizeof(romdev_lynx_hw_buf);
+    return 0;
+ }
 diff --git a/lynx/c65c02.h b/lynx/c65c02.h
 index 0fdea74..a0f86dd 100644
 --- a/lynx/c65c02.h

@@ -523,11 +523,37 @@ export async function getRenderingContextCore({ platform, area = "all", sessionK
     case "atari7800":
     case "a7800": return atari7800Context(host, area);
     case "c64":   return c64Context(host, area);
+    case "gba":   return gbaContext(host, area);
+    case "lynx":  return lynxContext(host, area);
     default:
       throw new Error(
-        `getRenderingContext: unknown platform '${p}'. Supported: nes, snes, genesis, gb, gbc, sms, gg, atari2600, atari7800, c64.`
+        `getRenderingContext: unknown platform '${p}'. Supported: nes, snes, genesis, gb, gbc, sms, gg, atari2600, atari7800, c64, gba, lynx.`
       );
   }
+}
+
+async function gbaContext(host, area) {
+  const { decodeGbaRenderingContext } = await import("../../host/gba-video-state.js");
+  const io = host.readMemory("gba_io_regs", 0, 0x400);
+  const ctx = decodeGbaRenderingContext(io);
+  const summary = [];
+  if (ctx.forcedBlank) summary.push("FORCED BLANK is on (DISPCNT bit7) — the screen is white; clear it to see output.");
+  summary.push(`BG mode ${ctx.bgMode}. BG layers enabled: ${ctx.displayBg.map((on, i) => on ? i : null).filter((x) => x != null).join(",") || "none"}. OBJ ${ctx.displayObj ? "on" : "off"}.`);
+  for (const bg of ctx.bgLayers.filter((b) => b.enabled)) {
+    summary.push(`BG${bg.bg}: priority ${bg.priority}, charBase block ${bg.charBase} ($${(0x6000000 + bg.charBase * 0x4000).toString(16)}), mapBase block ${bg.mapBase} ($${(0x6000000 + bg.mapBase * 0x800).toString(16)}), ${bg.colorMode ? "256-color" : "16-color"}, size code ${bg.size}.`);
+  }
+  return { platform: "gba", area, ...ctx, summary };
+}
+
+async function lynxContext(host, area) {
+  const { decodeLynxRenderingContext } = await import("../../host/lynx-mikey-state.js");
+  const hw = host.readMemory("lynx_hw_regs", 0, 0x200);
+  const ctx = decodeLynxRenderingContext(hw);
+  const summary = [];
+  if (!ctx.displayDmaEnable) summary.push("Display DMA is OFF (DISPCTL bit0) — Mikey isn't refreshing the LCD from the display buffer; nothing will show.");
+  else summary.push(`Display DMA on. Buffer at ${ctx.displayAddress}. ${ctx.fourColour ? "4-color" : "4bpp/16-color"} mode${ctx.flip ? ", flipped" : ""}.`);
+  summary.push("Lynx has no tilemap/nametable — the framebuffer is a linear bitmap in RAM at displayAddress; sprites are SCB-drawn into it by Suzy (see inspectSprites).");
+  return { platform: "lynx", area, ...ctx, summary };
 }
 
 async function c64Context(host, area) {
