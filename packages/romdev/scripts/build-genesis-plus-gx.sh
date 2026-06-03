@@ -21,7 +21,7 @@ OUT="$PROJECT_DIR/src/cores/wasm"
 fetch_pinned cores.genesis_plus_gx "$GPGX_DIR"
 
 cd "$GPGX_DIR"
-git checkout -- libretro/libretro.c 2>/dev/null || true
+git checkout -- libretro/libretro.c core/m68k/m68kcpu.c core/m68k/m68kcpu.h core/z80/z80.c 2>/dev/null || true
 # --recount lets the patch survive small additions (new ROMDEV_MEMORY_*
 # region IDs etc) without re-numbering hunk headers by hand.
 if ! git apply --recount --check "$PATCH_FILE" 2>/dev/null; then
@@ -37,6 +37,9 @@ else
 fi
 
 emmake make -f Makefile.libretro platform=emscripten clean >/dev/null 2>&1 || true
+# Drop a stale .a (created by renaming the .bc; make clean doesn't remove it)
+# so find -quit can't pick it over this build's fresh output.
+find . -maxdepth 2 -name "*_libretro*.a" -delete 2>/dev/null || true
 emmake make -f Makefile.libretro platform=emscripten -j"$(nproc)"
 
 CORE_LIB=$(find . -maxdepth 2 \( -name "*.a" -o -name "*_libretro*.bc" \) -print -quit)
@@ -88,7 +91,7 @@ if [ -n "$LIBRETRO_COMMON" ]; then
   fi
 fi
 
-EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
+EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_watchpoint_set","_romdev_watchpoint_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
 EXPORTED_RUNTIME='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS"]'
 
 mkdir -p "$OUT"

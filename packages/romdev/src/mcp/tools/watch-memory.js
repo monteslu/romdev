@@ -404,9 +404,9 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     "CPU address, e.g. 0x00CD), steps up to `maxFrames`, and returns the writing instruction's PC captured INSIDE " +
     "the CPU write path — correct even for NMI/IRQ-driven writes (where the frame-sampled pc is just the idle loop). " +
     "Returns { found, address, pc, value, hits, framesStepped }. Then `disassembleRom({ startAddress: pc })` lands " +
-    "you on the real store instruction. NOTE: supported on NES (fceumm) and GB/GBC (gambatte); other platforms " +
-    "return notSupported — use watchMemory there. On banked mappers a $8000-$BFFF pc may be in a switchable bank " +
-    "(disassemble with the right `bank`).",
+    "you on the real store instruction. NOTE: supported on NES (fceumm), GB/GBC (gambatte), and Genesis + SMS/GG " +
+    "(gpgx — m68k for Genesis, Z80 for SMS/GG); other platforms return notSupported — use watchMemory there. On " +
+    "banked mappers a $8000-$BFFF pc may be in a switchable bank (disassemble with the right `bank`).",
     {
       address: z.number().int().min(0).describe("CPU address to watch for writes (e.g. 0x00CD). For NES, low RAM CPU address == system_ram offset."),
       maxFrames: z.number().int().min(1).max(1_000_000).default(600).describe("Max frames to step while waiting for a write."),
