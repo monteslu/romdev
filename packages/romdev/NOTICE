@@ -84,3 +84,19 @@ Full license texts for the bundled SDK libraries live alongside their source
 under packages/romdev/src/platforms/*/lib/. Emulator-core and compiler license
 texts travel with their upstream source, which is fetched at build time from
 the pinned commits recorded in packages/romdev/scripts/versions.json.
+
+
+Bundled data  (cheat database — used by gameCheats / applyCheat / makeCheat)
+----------------------------------------------------------------------------
+  romdev bundles a cheat database under packages/romdev/src/cheats/index/ — a
+  pre-parsed, per-platform index built from the community-aggregated RetroArch /
+  libretro-database cheat collection (the same data RetroArch, RetroDECK, and
+  Batocera ship). These cheat codes are an aggregation assembled over years from
+  Game Genie / Pro Action Replay code books and community cheat dumps; the
+  collection has no single uniform license and individual codes carry no stated
+  provenance. romdev redistributes a pre-parsed form (game name → decoded
+  address/value entries) rather than the raw .cht files, and uses it only as a
+  read/inspect aid + non-destructive cheat application. It is not linked into any
+  built game and does not affect the license of games you make. Source:
+  https://github.com/libretro/libretro-database (cht/). Rebuild the index from a
+  local .cht tree with packages/romdev/scripts/build-cheat-index.mjs.
