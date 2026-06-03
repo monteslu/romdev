@@ -332,9 +332,10 @@ of precision:
     → { found:true, pc:"$AF85", value:"0x81", hits:19 }
   disassembleRom({ path, startAddress: 0xAF85 })   // → the real store instruction
   ```
-  Supported on NES (fceumm) and GB/GBC (gambatte); other platforms return
-  `notSupported` — use `watchMemory` there. On a banked mapper a `$8000-$BFFF`
-  pc may be in a switchable bank — pass the right `bank` to `disassembleRom`.
+  Supported on NES (fceumm), GB/GBC (gambatte), and Genesis + SMS/GG (gpgx);
+  other platforms return `notSupported` — use `watchMemory` there. On a banked
+  mapper a `$8000-$BFFF` pc may be in a switchable bank — pass the right `bank`
+  to `disassembleRom`.
 - **`watchMemory` / `runUntilWrite` — cross-platform, frame-sampled.** Step until
   the byte changes; the returned `pc` is a frame-boundary sample (a lead, not a
   guarantee under interrupts — cross-check the value trace). Use on non-NES, or
