@@ -1046,7 +1046,9 @@ export function registerDisasmTools(server, z) {
     "disassembleProject",
     "Use this to turn a ROM into a complete, re-buildable disassembly project in ONE call — across ALL " +
     "supported systems: NES, SNES, Game Boy/Color, Sega Master System/Game Gear, Genesis/Mega Drive, " +
-    "C64, Atari 2600/7800. It splits the ROM into regions (per-16KB-bank for banked NES; one region for flat " +
+    "C64, Atari 2600/7800, and Lynx (65C02). (GBA is NOT supported — ARM7TDMI has no bundled disassembler; " +
+    "passing platform:'gba' returns an explicit message pointing to external ARM tools.) " +
+    "It splits the ROM into regions (per-16KB-bank for banked NES; one region for flat " +
     "ROMs), disassembles each, and — critically — REASSEMBLES each region and verifies it is BYTE-EXACT " +
     "against the original (`roundTripOk` per region). Lines that don't reassemble faithfully fall back to " +
     "`.byte`/`db` data, so the output ALWAYS rebuilds to the original bytes; `readablePercent` reports how " +
@@ -1055,9 +1057,9 @@ export function registerDisasmTools(server, z) {
     "rgbds for GB, vasm for 68k.) NOTE: SNES currently emits byte-exact DATA-ONLY (low readablePercent) — " +
     "instruction-level SNES is a known follow-up; the bytes are still correct.",
     {
-      path: z.string().describe("Absolute path to the ROM (.nes/.sfc/.gb/.gbc/.sms/.gg/.bin/.prg/.a26/.a78)."),
+      path: z.string().describe("Absolute path to the ROM (.nes/.sfc/.gb/.gbc/.sms/.gg/.bin/.prg/.a26/.a78/.lnx)."),
       outputDir: z.string().describe("Directory to write the project into (created if needed). Gets one .asm per region."),
-      platform: z.enum(["nes", "snes", "gb", "gbc", "sms", "gg", "genesis", "c64", "atari2600", "atari7800"]).optional().describe("Override platform detection (otherwise sniffed from the file extension)."),
+      platform: z.enum(["nes", "snes", "gb", "gbc", "sms", "gg", "genesis", "c64", "atari2600", "atari7800", "lynx", "gba"]).optional().describe("Override platform detection (otherwise sniffed from the file extension). 'gba' is accepted only to return the explicit unsupported-ARM message."),
     },
     safeTool(async ({ path: romPath, outputDir, platform }) => {
       const { reassembleForPlatform } = await import("../../toolchains/common/reassemble.js");
@@ -1125,7 +1127,11 @@ function sniffPlatformFromPath(p) {
   if (/\.a26$/i.test(p)) return "atari2600";
   if (/\.a78$/i.test(p)) return "atari7800";
   if (/\.prg$/i.test(p)) return "c64";
+  if (/\.(lnx|lyx)$/i.test(p)) return "lynx";
   if (/\.(gen|md|bin)$/i.test(p)) return "genesis";
+  // .gba is deliberately NOT sniffed: disassembleProject has no ARM7TDMI
+  // reassembler, so a GBA ROM cannot round-trip byte-exact here (see the
+  // explicit error in planRegions). Pass platform:'gba' to get that message.
   return null;
 }
 
@@ -1216,6 +1222,39 @@ function planRegions(platform, data) {
     const org = 0x10000 - data.length; // cart maps to top of address space
     regions.push({ name: "rom", file: "rom.asm", bytes: data.slice(0), startAddress: org & 0xFFFF, fileOffset: 0, label: `cart @ $${(org & 0xFFFF).toString(16)}` });
     return regions;
+  }
+  if (platform === "lynx") {
+    // The Lynx CPU is a 65C02 — the 6502-family da65/ca65 reassembly path
+    // already handles it (CPU_FAMILY.lynx === "6502" in reassemble.js). A `.lnx`
+    // file is a 64-byte LNX header ("LYNX" magic) followed by the raw cart
+    // image; an unheadered `.o`/`.bin` is the image directly. Strip the header,
+    // then disassemble the image as a flat 65C02 region.
+    const hasLnxHeader = data.length >= 64 &&
+      data[0] === 0x4c && data[1] === 0x59 && data[2] === 0x4e && data[3] === 0x58; // "LYNX"
+    const base = hasLnxHeader ? 64 : 0;
+    // Load address is loader-dependent on Lynx (the boot ROM copies the cart to
+    // RAM); homebrew typically runs from $0200 up. We disassemble from $0200 and
+    // LABEL it as an assumption so the user can re-org if their loader differs.
+    const body = trimTrailingPad(data.slice(base));
+    regions.push({
+      name: "cart", file: "cart.asm", bytes: body,
+      startAddress: 0x0200, fileOffset: base,
+      label: `Lynx 65C02 cart @ $0200 (ASSUMED load addr — loader-dependent)${hasLnxHeader ? ", LNX header stripped" : ""}`,
+    });
+    return regions;
+  }
+  if (platform === "gba") {
+    // GBA is ARM7TDMI (ARM + Thumb). romdev ships NO ARM disassembler or
+    // reassembler, so disassembleProject cannot produce a byte-exact,
+    // re-buildable project for it — that would require an ARM7 da/ca pair this
+    // toolset doesn't have. This is a NOTED skip, not a silent one.
+    throw new Error(
+      "disassembleProject does not support GBA: it is ARM7TDMI (ARM/Thumb), and romdev " +
+      "has no ARM disassembler/reassembler, so it cannot produce a byte-exact rebuildable " +
+      "project. All other 11 tier-1 systems are supported. For GBA, use an external ARM " +
+      "toolchain (arm-none-eabi-objdump / Ghidra / mgba's own debugger); romdev's live " +
+      "debug tools (readMemory/watchMemory/findWriter/getRenderingContext) DO work on GBA.",
+    );
   }
   return regions;
 }
