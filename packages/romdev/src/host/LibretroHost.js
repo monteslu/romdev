@@ -529,6 +529,53 @@ export class LibretroHost {
       .sort((a, b) => a.index - b.index);
   }
 
+  /** True when this core build exposes the instruction-level write watchpoint. */
+  watchpointSupported() {
+    const mod = this.mod;
+    return !!(mod && typeof mod._romdev_watchpoint_set === "function" && typeof mod._romdev_watchpoint_get === "function");
+  }
+
+  /**
+   * Arm (or disarm) the instruction-level write watchpoint on a CPU address.
+   * Unlike the frame-sampled watchMemory PC, this records the EXACT writing
+   * instruction's PC (captured inside the core's CPU write path), so it's
+   * correct even for NMI/IRQ-driven writes. One watchpoint at a time.
+   * @param {number} address CPU address to watch
+   * @param {boolean} [enabled=true]
+   */
+  setWatchpoint(address, enabled = true) {
+    const mod = this._needMod();
+    if (typeof mod._romdev_watchpoint_set !== "function") {
+      throw new Error("this core build does not expose the write watchpoint (rebuild with romdev_watchpoint_* exports).");
+    }
+    mod._romdev_watchpoint_set(address >>> 0, enabled ? 1 : 0);
+  }
+
+  /** Read the watchpoint state: { enabled, address, lastPC, lastValue, hits }.
+   *  lastPC is 0xFFFFFFFF (reported as null) until a write is seen. Pass
+   *  clearHits to reset the counter + lastPC after reading. */
+  getWatchpoint(clearHits = false) {
+    const mod = this._needMod();
+    if (typeof mod._romdev_watchpoint_get !== "function") {
+      throw new Error("this core build does not expose the write watchpoint.");
+    }
+    const ptr = mod._malloc(20); // 5 × uint32
+    try {
+      mod._romdev_watchpoint_get(ptr, clearHits ? 1 : 0);
+      const u = new Uint32Array(mod.HEAPU8.buffer, ptr, 5);
+      const lastPC = u[2];
+      return {
+        enabled: !!u[0],
+        address: u[1],
+        lastPC: lastPC === 0xFFFFFFFF ? null : lastPC,
+        lastValue: u[3] & 0xFF,
+        hits: u[4],
+      };
+    } finally {
+      mod._free(ptr);
+    }
+  }
+
   pause() {
     this.status.paused = true;
   }

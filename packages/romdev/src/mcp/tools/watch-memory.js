@@ -398,6 +398,70 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
   );
 
   server.tool(
+    "findWriter",
+    "Find the EXACT instruction that writes a RAM byte — the precise answer to 'which code wrote $XX?', fixing the " +
+    "frame-sampled-PC limitation of watchMemory/runUntilWrite. Arms a core-level WRITE WATCHPOINT on `address` (a " +
+    "CPU address, e.g. 0x00CD), steps up to `maxFrames`, and returns the writing instruction's PC captured INSIDE " +
+    "the CPU write path — correct even for NMI/IRQ-driven writes (where the frame-sampled pc is just the idle loop). " +
+    "Returns { found, address, pc, value, hits, framesStepped }. Then `disassembleRom({ startAddress: pc })` lands " +
+    "you on the real store instruction. NOTE: currently NES only (the watchpoint is in the fceumm core); other " +
+    "platforms return notSupported — use watchMemory there. On banked mappers a $8000-$BFFF pc may be in a " +
+    "switchable bank (disassemble with the right `bank`).",
+    {
+      address: z.number().int().min(0).describe("CPU address to watch for writes (e.g. 0x00CD). For NES, low RAM CPU address == system_ram offset."),
+      maxFrames: z.number().int().min(1).max(1_000_000).default(600).describe("Max frames to step while waiting for a write."),
+      pressDuring: z.array(z.object({
+        frame: z.number().int().min(0),
+        button: z.string(),
+        port: z.number().int().min(0).max(3).default(0),
+        holdFrames: z.number().int().min(1).default(2),
+      })).optional().describe("Schedule input while waiting (e.g. press A to trigger the write you're hunting)."),
+    },
+    safeTool(async ({ address, maxFrames, pressDuring }) => {
+      const host = getHost(sessionKey);
+      if (!host.watchpointSupported || !host.watchpointSupported()) {
+        return jsonContent({
+          found: false, notSupported: true, address: "$" + address.toString(16).toUpperCase(),
+          note: "This core build has no instruction-level write watchpoint (currently NES/fceumm only). " +
+            "Use watchMemory/runUntilWrite here — their pc is frame-sampled, so cross-check the value trace.",
+        });
+      }
+      host.setWatchpoint(address, true);
+      const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
+      const pressDriver = makePressDriver(host, presses);
+      let result = null;
+      for (let i = 0; i < maxFrames; i++) {
+        pressDriver.applyForFrame(i);
+        host.stepFrames(1);
+        const w = host.getWatchpoint();
+        if (w.hits > 0) { result = { ...w, framesStepped: i + 1 }; break; }
+      }
+      pressDriver.finish();
+      host.setWatchpoint(address, false); // disarm
+      if (!result) {
+        return jsonContent({
+          found: false, address: "$" + address.toString(16).toUpperCase(), framesStepped: maxFrames,
+          ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
+          note: "No write to that address within maxFrames. Increase maxFrames, or drive the game with pressDuring to trigger the write.",
+        });
+      }
+      return jsonContent({
+        found: true,
+        address: "$" + address.toString(16).toUpperCase(),
+        pc: result.lastPC != null ? "$" + result.lastPC.toString(16).toUpperCase() : null,
+        pcRaw: result.lastPC,
+        value: "0x" + result.lastValue.toString(16).toUpperCase().padStart(2, "0"),
+        hits: result.hits,
+        framesStepped: result.framesStepped,
+        ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
+        note: "pc is the EXACT writing instruction (captured in the CPU write path), not a frame sample. " +
+          "disassembleRom({ startAddress: " + (result.lastPC != null ? "0x" + result.lastPC.toString(16) : "pc") + " }) to see it. " +
+          "On a banked mapper, a $8000-$BFFF pc may be in a switchable bank — pass the right `bank` to disassembleRom.",
+      });
+    }),
+  );
+
+  server.tool(
     "runUntilWrite",
     "Step the emulator forward until a target byte changes, then stop. Convenience wrapper around watchMemory " +
     "with stopOnFirst=true. Returns the writing frame + before/after values + the CPU PC sampled at that frame boundary. " +
