@@ -28,10 +28,10 @@ index 7e5c43b..1cd0d7f 100644
  
  private:
 diff --git a/libgambatte/libretro/libretro.cpp b/libgambatte/libretro/libretro.cpp
-index 15b042c..cfb54bf 100644
+index 15b042c..88e9e5e 100644
 --- a/libgambatte/libretro/libretro.cpp
 +++ b/libgambatte/libretro/libretro.cpp
-@@ -2874,6 +2874,48 @@ void retro_unload_game()
+@@ -2874,6 +2874,50 @@ void retro_unload_game()
  
  unsigned retro_get_region() { return RETRO_REGION_NTSC; }
  
@@ -44,6 +44,7 @@ index 15b042c..cfb54bf 100644
 +extern unsigned long  romdev_wp_last_pc;
 +extern unsigned char  romdev_wp_last_val;
 +extern unsigned long  romdev_wp_hits;
++extern unsigned long  romdev_wp_last_rom_off;
 +
 +void romdev_watchpoint_set(unsigned addr, int enabled) {
 +   romdev_wp_addr = addr;
@@ -53,14 +54,15 @@ index 15b042c..cfb54bf 100644
 +   romdev_wp_hits = 0;
 +}
 +
-+void romdev_watchpoint_get(unsigned *out5, int clearHits) {
-+   if (!out5) return;
-+   out5[0] = (unsigned)romdev_wp_enabled;
-+   out5[1] = (unsigned)romdev_wp_addr;
-+   out5[2] = (unsigned)romdev_wp_last_pc;
-+   out5[3] = (unsigned)romdev_wp_last_val;
-+   out5[4] = (unsigned)romdev_wp_hits;
-+   if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; }
++void romdev_watchpoint_get(unsigned *out6, int clearHits) {
++   if (!out6) return;
++   out6[0] = (unsigned)romdev_wp_enabled;
++   out6[1] = (unsigned)romdev_wp_addr;
++   out6[2] = (unsigned)romdev_wp_last_pc;
++   out6[3] = (unsigned)romdev_wp_last_val;
++   out6[4] = (unsigned)romdev_wp_hits;
++   out6[5] = (unsigned)romdev_wp_last_rom_off; /* ROM offset (active bank) or 0xFFFFFFFF */
++   if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; romdev_wp_last_rom_off = 0xFFFFFFFF; }
 +}
 +}
 +
@@ -80,7 +82,7 @@ index 15b042c..cfb54bf 100644
  void *retro_get_memory_data(unsigned id)
  {
     if (rom_loaded) switch (id)
-@@ -2883,11 +2925,20 @@ void *retro_get_memory_data(unsigned id)
+@@ -2883,11 +2927,20 @@ void *retro_get_memory_data(unsigned id)
        case RETRO_MEMORY_RTC:
           return gb.rtcdata_ptr();
        case RETRO_MEMORY_SYSTEM_RAM:
@@ -103,7 +105,7 @@ index 15b042c..cfb54bf 100644
     }
  
     return 0;
-@@ -2902,14 +2953,21 @@ size_t retro_get_memory_size(unsigned id)
+@@ -2902,14 +2955,21 @@ size_t retro_get_memory_size(unsigned id)
        case RETRO_MEMORY_RTC:
           return gb.rtcdata_size();
        case RETRO_MEMORY_SYSTEM_RAM:
@@ -128,10 +130,10 @@ index 15b042c..cfb54bf 100644
  
     return 0;
 diff --git a/libgambatte/src/cpu.cpp b/libgambatte/src/cpu.cpp
-index 0fb6199..43e32ad 100644
+index 0fb6199..3452f15 100644
 --- a/libgambatte/src/cpu.cpp
 +++ b/libgambatte/src/cpu.cpp
-@@ -20,6 +20,19 @@
+@@ -20,6 +20,20 @@
  #include "gambatte-memory.h"
  #include "savestate.h"
  
@@ -146,12 +148,13 @@ index 0fb6199..43e32ad 100644
 +unsigned long romdev_wp_last_pc  = 0xFFFFFFFF;
 +unsigned char romdev_wp_last_val = 0;
 +unsigned long romdev_wp_hits     = 0;
++unsigned long romdev_wp_last_rom_off = 0xFFFFFFFF; /* ROM offset of the writing PC (active bank) */
 +}
 +
  namespace gambatte {
  
  CPU::CPU()
-@@ -143,8 +156,13 @@ void CPU::loadState(SaveState const &state) {
+@@ -143,8 +157,14 @@ void CPU::loadState(SaveState const &state) {
  #define PC_READ(dest) do { (dest) = mem_.read(pc, cycleCounter); pc = (pc + 1) & 0xFFFF; cycleCounter += 4; } while (0)
  #define FF_READ(dest, addr) do { (dest) = mem_.ff_read(addr, cycleCounter); cycleCounter += 4; } while (0)
  
@@ -160,6 +163,7 @@ index 0fb6199..43e32ad 100644
 +#define ROMDEV_WP_CHECK(a, d) do { \
 +		if (romdev_wp_enabled && (unsigned long)(a) == romdev_wp_addr) { \
 +			romdev_wp_last_pc = pc; romdev_wp_last_val = (unsigned char)(d); romdev_wp_hits++; \
++			romdev_wp_last_rom_off = mem_.romdev_romOffset(pc); \
 +		} \
 +	} while (0)
 +#define WRITE(addr, data) do { ROMDEV_WP_CHECK((addr), (data)); mem_.write(addr, data, cycleCounter); cycleCounter += 4; } while (0)
@@ -215,10 +219,30 @@ index 76c29de..f7bc078 100644
  
  	void setVideoBuffer(video_pixel_t *videoBuf, std::ptrdiff_t pitch) {
 diff --git a/libgambatte/src/gambatte-memory.h b/libgambatte/src/gambatte-memory.h
-index d82ca85..c32c59f 100644
+index d82ca85..19b71d7 100644
 --- a/libgambatte/src/gambatte-memory.h
 +++ b/libgambatte/src/gambatte-memory.h
-@@ -62,6 +62,12 @@ public:
+@@ -39,6 +39,19 @@ public:
+    
+ 	explicit Memory(Interrupter const &interrupter);
+ 	bool loaded() const { return cart_.loaded(); }
++	/* romdev watchpoint: absolute ROM-file offset of a CPU address using the
++	 * CURRENTLY-mapped bank (rmem(area) is host_ptr - area_base, like NES Page[]),
++	 * so a $4000-$7FFF PC resolves to the live switchable bank. Returns
++	 * 0xFFFFFFFF when the address isn't in mapped ROM. */
++	unsigned long romdev_romOffset(unsigned pc) const {
++		const unsigned char *rm = cart_.rmem(pc >> 12);
++		const unsigned char *base = cart_.romdata(0);
++		if (!rm || !base) return 0xFFFFFFFFul;
++		const unsigned char *p = rm + pc;
++		long off = (long)(p - base);
++		if (off < 0) return 0xFFFFFFFFul;
++		return (unsigned long)off;
++	}
+ 	void setStatePtrs(SaveState &state);
+ 	unsigned long saveState(SaveState &state, unsigned long cc);
+ 	void loadState(SaveState const &state);
+@@ -62,6 +75,12 @@ public:
     void *rombank1_ptr() const { return cart_.romdata(0) + 0x4000; }
     void *zeropage_ptr() const { return (void*)(ioamhram_ + 0x0180); }
     void *oamram_ptr() const { return (void*)ioamhram_; }
