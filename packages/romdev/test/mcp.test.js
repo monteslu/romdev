@@ -162,6 +162,28 @@ test("MCP: readMemory returns 16 bytes from NES system RAM", { skip: !HAS_NESTES
   assert.equal(data.hex.length, 32);
 });
 
+test("MCP: findWriter captures the instruction-level write PC (watchpoint)", { skip: !HAS_NESTEST && "nestest.nes not present" }, async () => {
+  const { client } = await startServerAndClient();
+  await client.callTool({ name: "loadMedia", arguments: { platform: "nes", path: ROM_PATH } });
+  await client.callTool({ name: "stepFrames", arguments: { frames: 60 } });
+  // Find a RAM address the ROM actually writes, so the watchpoint is sure to fire.
+  const before = JSON.parse((await client.callTool({ name: "readMemory", arguments: { region: "system_ram", offset: 0, length: 0x100 } })).content[0].text).hex;
+  await client.callTool({ name: "stepFrames", arguments: { frames: 5 } });
+  const after = JSON.parse((await client.callTool({ name: "readMemory", arguments: { region: "system_ram", offset: 0, length: 0x100 } })).content[0].text).hex;
+  let addr = -1;
+  for (let i = 0; i < 0x100; i++) {
+    if (before.slice(i * 2, i * 2 + 2) !== after.slice(i * 2, i * 2 + 2)) { addr = i; break; }
+  }
+  if (addr < 0) return; // no zero-page write in this window — nothing to assert
+  const r = await client.callTool({ name: "findWriter", arguments: { address: addr, maxFrames: 120 } });
+  assert.equal(r.isError, undefined, `findWriter errored: ${JSON.stringify(r)}`);
+  const w = JSON.parse(r.content[0].text);
+  assert.equal(w.found, true, `findWriter should catch a write to $${addr.toString(16)}`);
+  assert.match(w.pc, /^\$[0-9A-F]+$/, "pc is a real hex address");
+  assert.ok(w.hits >= 1, "at least one write recorded");
+  assert.ok(typeof w.pcRaw === "number" && w.pcRaw !== 0xFFFFFFFF, "pcRaw is a concrete PC, not the sentinel");
+});
+
 test("MCP: pressButton on NES does not throw", { skip: !HAS_NESTEST && "nestest.nes not present" }, async () => {
   const { client } = await startServerAndClient();
   await client.callTool({

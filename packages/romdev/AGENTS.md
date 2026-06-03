@@ -318,18 +318,33 @@ diffRoms({ platform, a: original, b: patched })    // 6. verify the patch landed
 loadMedia({ platform, path: patched }) → screenshot()  // 7. run it
 ```
 
-**Finding the right byte first.** Static disasm reading is the slow part —
-multiple `cmp #$XX` instructions look identical. Don't guess. Use
-`watchMemory` / `runUntilWrite` to step the emulator until the byte you
-care about changes, then read the returned PC + use the file-offset
-comments on the matching disasm line to know exactly what to patch.
+**Finding which CODE wrote a byte.** Static disasm reading is the slow part —
+multiple `cmp #$XX` instructions look identical. Don't guess. Two tools, in order
+of precision:
+
+- **`findWriter({ address, maxFrames, pressDuring })` — the precise one (NES).**
+  Arms a core-level WRITE WATCHPOINT and returns the EXACT writing instruction's
+  PC, captured inside the CPU write path — correct even for NMI/IRQ-driven writes
+  (the common NES case, where a frame-sampled PC is just the idle loop). This is
+  the right tool when you need the actual writer.
+  ```js
+  findWriter({ address: 0x00CD, maxFrames: 300, pressDuring:[{ frame:30, button:"A" }] })
+    → { found:true, pc:"$AF85", value:"0x81", hits:19 }
+  disassembleRom({ path, startAddress: 0xAF85 })   // → the real store instruction
+  ```
+  Currently NES only (the watchpoint lives in the fceumm core); other platforms
+  return `notSupported` — use `watchMemory` there. On a banked mapper a
+  `$8000-$BFFF` pc may be in a switchable bank — pass the right `bank` to
+  `disassembleRom`.
+- **`watchMemory` / `runUntilWrite` — cross-platform, frame-sampled.** Step until
+  the byte changes; the returned `pc` is a frame-boundary sample (a lead, not a
+  guarantee under interrupts — cross-check the value trace). Use on non-NES, or
+  for the value timeline.
 
 ```js
 runUntilWrite({ region:"system_ram", offset:0x03B6, maxFrames:300,
                 pressDuring:[{ frame:30, button:"A" }] })
-  → { pc: "$E3AF", changes:[{ before:31, after:32 }] }
-disassembleRom({ path, startAddress: 0xE3AF, length: 32 })
-  → exact writing instruction, with both .nes and prg.bin offsets
+  → { pc: "$E3AF" (frame-sampled), changes:[{ before:31, after:32 }] }
 ```
 
 All in the `assets` category except `disassembleRom` (in `debug`).
