@@ -20,6 +20,10 @@ import { getCPUState } from "../../host/cpu-state.js";
 import { getDspState } from "../../host/dsp-state.js";
 import { getNesApuState } from "../../host/nes-apu-state.js";
 import { decodeGenesisPSG, decodeGenesisYM2612 } from "../../host/gpgx-state.js";
+import { decodeGbApu, decodeGbaApu } from "../../host/gb-apu-state.js";
+import { decodeC64Sid } from "../../host/c64-sid-state.js";
+import { decodeLynxMikey, decodeLynxPalette, decodeLynxRenderingContext } from "../../host/lynx-mikey-state.js";
+import { decodeGbaSprites, decodeGbaPalette, decodeGbaRenderingContext } from "../../host/gba-video-state.js";
 
 /** Resolve the platform to inspect: explicit arg → currently loaded host. */
 function resolvePlatform(host, requested) {
@@ -288,16 +292,45 @@ export function registerPlatformTools(server, z, sessionKey) {
         }, png);
       }
 
-      throw new Error(`inspectPalette not yet wired for platform '${p}'. Supported: nes, snes, genesis, sms, gg, gb, gbc, atari2600, atari7800, c64.`);
+      if (p === "gba") {
+        // 256 BG + 256 OBJ entries, 15-bit BGR. Render both as a 16-wide grid.
+        const pal = host.readMemory("gba_palette", 0, 0x400);
+        const which = (area === "sprite") ? "obj" : (area === "bg") ? "bg" : "all";
+        const { entries } = decodeGbaPalette(pal, which);
+        const colors = entries.map((e) => ({ r: e.r, g: e.g, b: e.b, hex: e.hex, index: e.index, set: e.set }));
+        const png = renderColorsAsPng(colors, 16);
+        return emit({
+          platform: p,
+          colors,
+          note: "GBA palette: 256 BG entries (indices 0-255) + 256 OBJ entries (256-511), 15-bit BGR555. " +
+            "Each entry's `set` is 'bg' or 'obj'. Use area:'bg' or area:'sprite' to return just one bank.",
+        }, png);
+      }
+
+      if (p === "lynx") {
+        // Mikey 16-entry 12-bit palette from the $FC00-$FDFF HW window.
+        const hw = host.readMemory("lynx_hw_regs", 0, 0x200);
+        const { entries } = decodeLynxPalette(hw);
+        const colors = entries.map((e) => ({ r: e.r, g: e.g, b: e.b, hex: e.hex, index: e.index }));
+        const png = renderColorsAsPng(colors, 16);
+        return emit({
+          platform: p,
+          colors,
+          note: "Lynx Mikey palette: 16 entries, 12-bit (4 bits each G/R/B) from $FDA0 (green) + $FDB0 (blue/red).",
+        }, png);
+      }
+
+      throw new Error(`inspectPalette not yet wired for platform '${p}'. Supported: nes, snes, genesis, sms, gg, gb, gbc, atari2600, atari7800, c64, gba, lynx.`);
     }),
   );
 
   server.tool(
     "getCPUState",
-    "Use this to read a CPU's {pc, registers, flags, sp}. Main CPU is wired for nes, snes, genesis, " +
-    "sms, gg, gb, gbc, atari2600, atari7800, c64. Secondary CPUs via `cpu`: `spc700` (SNES audio — tells " +
-    "'stuck in IPL' vs 'running' vs 'crashed into garbage ARAM') and `z80` (Genesis sound — held in reset " +
-    "until the 68k releases it via $A11100, so a fresh boot reads all-zero).",
+    "Use this to read a CPU's {pc, registers, flags, sp}. Main CPU is wired for ALL 12 tier-1 systems: " +
+    "nes, snes, genesis, sms, gg, gb, gbc, atari2600, atari7800, c64, lynx (65C02), gba (ARM7TDMI — " +
+    "16 gprs + cpsr/spsr, plus execPc that accounts for ARM pipeline prefetch). Secondary CPUs via `cpu`: " +
+    "`spc700` (SNES audio — tells 'stuck in IPL' vs 'running' vs 'crashed into garbage ARAM') and `z80` " +
+    "(Genesis sound — held in reset until the 68k releases it via $A11100, so a fresh boot reads all-zero).",
     {
       platform: z.string().optional(),
       cpu: z.enum(["main", "spc700", "z80"]).default("main").describe("Which CPU to inspect. main = platform's primary CPU. spc700 = SNES audio CPU (SNES only). z80 = Genesis sound CPU (Genesis only — held in reset until the 68k releases it, so may read all-zero on a fresh boot)."),
@@ -307,7 +340,7 @@ export function registerPlatformTools(server, z, sessionKey) {
       const p = resolvePlatform(host, platform);
       const state = getCPUState(host, p, cpu);
       if (!state) {
-        throw new Error(`getCPUState: no decoder for platform '${p}' cpu '${cpu}'. Main CPU is wired for nes, snes, genesis, sms, gg, gb, gbc, atari2600, atari7800, c64. Secondary CPUs: snes 'spc700' (genesis 'z80' not yet decoded).`);
+        throw new Error(`getCPUState: no decoder for platform '${p}' cpu '${cpu}'. Main CPU is wired for nes, snes, genesis, sms, gg, gb, gbc, atari2600, atari7800, c64, lynx, gba. Secondary CPUs: snes 'spc700' (genesis 'z80' not yet decoded).`);
       }
       return jsonContent({ platform: p, cpu, ...state });
     }),
@@ -332,8 +365,12 @@ export function registerPlatformTools(server, z, sessionKey) {
       return { platform: "genesis", chip, ...decodeGenesisYM2612(blob) };
     }
     if (chip === "psg") {
+      // SN76489 — gpgx runs Genesis AND SMS/GG, and exposes the PSG via the
+      // same gpgx-internal region regardless of which is loaded, so chip:'psg'
+      // works for all three. Report the actual loaded platform.
+      const p = resolvePlatform(host);
       const blob = host.readMemory("genesis_psg", 0, 1024);
-      return { platform: "genesis", chip, ...decodeGenesisPSG(blob) };
+      return { platform: (p === "sms" || p === "gg") ? p : "genesis", chip, ...decodeGenesisPSG(blob) };
     }
     if (chip === "nes") {
       const p = resolvePlatform(host, "nes");
@@ -341,7 +378,29 @@ export function registerPlatformTools(server, z, sessionKey) {
       if (!apu) throw new Error("getAudioState chip:'nes' is NES only.");
       return { platform: p, chip, ...apu };
     }
-    throw new Error(`getAudioState: unknown chip '${chip}'. Use 'nes' (NES 2A03), 'dsp' (SNES), 'psg' (Genesis/SMS), or 'ym2612' (Genesis).`);
+    if (chip === "gb") {
+      // GB/GBC DMG APU — read the APU register file from gb_io ($FF00-$FF7F).
+      const p = resolvePlatform(host);
+      if (p !== "gb" && p !== "gbc") throw new Error("getAudioState chip:'gb' is for Game Boy / Game Boy Color only.");
+      const io = host.readMemory("gb_io", 0, 0x80);
+      return { platform: p, chip, ...decodeGbApu(io) };
+    }
+    if (chip === "gba") {
+      // GBA APU — the IO page carries the 4 DMG PSG channels + 2 DMA FIFO channels.
+      const io = host.readMemory("gba_io_regs", 0, 0x400);
+      return { platform: "gba", chip, ...decodeGbaApu(io) };
+    }
+    if (chip === "sid") {
+      // C64 SID (6581/8580) — 3 voices + filter, from c64_sid_regs ($D400-$D41C).
+      const regs = host.readMemory("c64_sid_regs", 0, 29);
+      return { platform: "c64", chip, ...decodeC64Sid(regs) };
+    }
+    if (chip === "mikey") {
+      // Lynx Mikey — 4 audio channels, from the $FC00-$FDFF HW window.
+      const hw = host.readMemory("lynx_hw_regs", 0, 0x200);
+      return { platform: "lynx", chip, ...decodeLynxMikey(hw) };
+    }
+    throw new Error(`getAudioState: unknown chip '${chip}'. Use 'nes' (NES 2A03), 'gb' (Game Boy/GBC), 'gba' (GBA), 'dsp' (SNES), 'psg' (Genesis/SMS/GG SN76489), 'ym2612' (Genesis FM), 'sid' (C64), or 'mikey' (Lynx).`);
   }
 
   server.tool(
@@ -355,10 +414,14 @@ export function registerPlatformTools(server, z, sessionKey) {
     "by mixer.' GOTCHA: S-DSP FLG is $6C, KOFF is $5C (many refs swap them); power-on FLG=$E0 means your driver " +
     "MUST clear bit 6. `chip:'psg'` (Genesis/SMS SN76489) returns 3 tone + 1 noise channel state. " +
     "`chip:'ym2612'` (Genesis FM) returns a raw-blob snapshot (gpgx's struct isn't safely per-channel " +
-    "decodable) — useful for frame-to-frame diffing. Mirrors getCPUState({cpu}). To capture a note timeline " +
+    "decodable) — useful for frame-to-frame diffing. `chip:'gb'` (Game Boy/GBC) and `chip:'gba'` (GBA) decode " +
+    "the DMG-style APU: 2 pulse + wave + noise with timer→freq→note (GBA adds 2 DMA FIFO channels). " +
+    "`chip:'sid'` (C64 6581/8580) returns 3 voices {waveform, freq→note, ADSR, pulse-width} + filter. " +
+    "`chip:'mikey'` (Lynx) returns the 4 Mikey audio channels {volume, freq→note, LFSR}. ALL 12 tier-1 " +
+    "systems now have a sound-chip decoder. Mirrors getCPUState({cpu}). To capture a note timeline " +
     "over time, pair with watchMemory (region:'nes_apu_regs', onChange:'reset') or recordSession.",
     {
-      chip: z.enum(["nes", "dsp", "psg", "ym2612"]).describe("Which sound chip: 'nes' (NES 2A03 APU), 'dsp' (SNES S-DSP), 'psg' (Genesis/SMS SN76489), 'ym2612' (Genesis FM)."),
+      chip: z.enum(["nes", "gb", "gba", "dsp", "psg", "ym2612", "sid", "mikey"]).describe("Which sound chip: 'nes' (NES 2A03 APU), 'gb' (Game Boy/GBC DMG APU — 2 pulse + wave + noise), 'gba' (GBA — DMG PSG + 2 DMA FIFO), 'dsp' (SNES S-DSP), 'psg' (Genesis/SMS/GG SN76489), 'ym2612' (Genesis FM), 'sid' (C64 6581/8580 — 3 voices + filter), 'mikey' (Lynx Mikey — 4 channels)."),
     },
     safeTool(async ({ chip }) => jsonContent(readAudioChip(chip))),
   );
@@ -584,7 +647,34 @@ export function registerPlatformTools(server, z, sessionKey) {
         };
       }
 
-      throw new Error(`inspectSprites not yet wired for platform '${p}'. Supported: nes, snes, genesis, sms, gg, gb, gbc, atari2600, atari7800, c64.`);
+      if (p === "gba") {
+        // 128 OAM sprites × 8 bytes, decoded to the normalized shape.
+        const oam = host.readMemory("gba_oam", 0, 0x400);
+        const { sprites } = decodeGbaSprites(oam, {});
+        return jsonContent({ platform: p, ...clampSlots(sprites) });
+      }
+
+      if (p === "lynx") {
+        // Lynx has NO fixed OAM: sprites are SCB (Sprite Control Block) linked
+        // lists walked from a RAM address (the engine follows SCBNEXT). There is
+        // no hardware sprite table to enumerate at rest, so we cannot return a
+        // generic OAM list. Point the agent at the SCB-walk approach instead.
+        const hw = host.readMemory("lynx_hw_regs", 0, 0x200);
+        const scbnext = hw[0x010] | (hw[0x011] << 8); // SUZY SCBNEXT $FC10/$FC11
+        return jsonContent({
+          platform: p,
+          sprites: [],
+          scbListHead: "$" + scbnext.toString(16).toUpperCase().padStart(4, "0"),
+          note: "Lynx has no fixed OAM — sprites are SCB (Sprite Control Block) linked lists in main RAM, " +
+            "walked by Suzy from the SCBNEXT pointer ($FC10/$FC11, shown as scbListHead). To enumerate sprites, " +
+            "read system_ram starting at scbListHead and follow each SCB's next-pointer: each SCB begins with " +
+            "SPRCTL0 (type/flip/bpp), SPRCTL1, collision#, then the next-SCB pointer, sprite-data pointer, and " +
+            "H/V position + size. The list ends when the next-pointer's high byte is 0. (scbListHead is whatever " +
+            "the game last wrote before SPRGO; it may be stale between frames.)",
+        });
+      }
+
+      throw new Error(`inspectSprites not yet wired for platform '${p}'. Supported: nes, snes, genesis, sms, gg, gb, gbc, atari2600, atari7800, c64, gba. (Lynx returns the SCB list head — it has no fixed OAM.)`);
     }),
   );
 

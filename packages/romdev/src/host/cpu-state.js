@@ -418,5 +418,69 @@ export function getCPUState(host, platform, cpu = "main") {
       },
     };
   }
+  if (platform === "gba") {
+    // Patched mgba exposes a 20-u32 ARM7TDMI snapshot via gba_cpu_regs:
+    //   [0..15] gprs r0..r15 (r13=SP, r14=LR, r15=PC), [16] cpsr.packed,
+    //   [17] spsr.packed, [18] executionMode (0=ARM,1=THUMB), [19] privMode.
+    // The PC is pipeline-prefetched: the executing instruction is PC-8 (ARM)
+    // or PC-4 (THUMB). We report the raw PC and the adjusted "exec" address.
+    const bytes = host.readMemory("gba_cpu_regs", 0, 80);
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const u32 = (i) => dv.getUint32(i * 4, true) >>> 0;
+    const gprs = [];
+    for (let i = 0; i < 16; i++) gprs.push(u32(i));
+    const cpsr = u32(16);
+    const spsr = u32(17);
+    const thumb = u32(18) === 1 || !!(cpsr & 0x20);
+    const pc = gprs[15];
+    const MODES = {
+      0x10: "user", 0x11: "fiq", 0x12: "irq", 0x13: "supervisor",
+      0x17: "abort", 0x1b: "undefined", 0x1f: "system",
+    };
+    const hex32 = (n) => "0x" + (n >>> 0).toString(16).toUpperCase().padStart(8, "0");
+    const registers = {};
+    for (let i = 0; i < 13; i++) registers["R" + i] = gprs[i];
+    registers.SP = gprs[13];   // R13
+    registers.LR = gprs[14];   // R14
+    registers.PC = gprs[15];   // R15
+    return {
+      pc,
+      sp: gprs[13],
+      // The instruction actually executing, accounting for pipeline prefetch.
+      execPc: (pc - (thumb ? 4 : 8)) >>> 0,
+      registers,
+      cpu: thumb ? "arm7tdmi (THUMB)" : "arm7tdmi (ARM)",
+      flags: {
+        N: !!(cpsr & 0x80000000), Z: !!(cpsr & 0x40000000),
+        C: !!(cpsr & 0x20000000), V: !!(cpsr & 0x10000000),
+        I: !!(cpsr & 0x80), F: !!(cpsr & 0x40), T: thumb,
+        raw: hex32(cpsr),
+      },
+      mode: MODES[cpsr & 0x1f] || ("0x" + (cpsr & 0x1f).toString(16)),
+      cpsr: hex32(cpsr),
+      spsr: hex32(spsr),
+      note: "ARM PC is pipeline-prefetched; the executing instruction is at execPc " +
+        "(PC-8 in ARM, PC-4 in THUMB). Registers are decimal; cpsr/spsr/execPc are hex.",
+    };
+  }
+  if (platform === "lynx") {
+    // Patched handy exposes a 16-byte 65C02 snapshot via lynx_cpu_regs (see
+    // the handy memory-regions patch). Layout: [0] PC lo, [1] PC hi, [2] A,
+    // [3] X, [4] Y, [5] SP, [6] P (status, bit5 set), [7] flags-from-NMI/IRQ.
+    const b = host.readMemory("lynx_cpu_regs", 0, 8);
+    const pc = b[0] | (b[1] << 8);
+    const p = b[6];
+    return {
+      pc,
+      sp: 0x100 | b[5],
+      registers: { A: b[2], X: b[3], Y: b[4], P: p, SP: b[5] },
+      cpu: "65c02",
+      flags: {
+        N: !!(p & 0x80), V: !!(p & 0x40), B: !!(p & 0x10), D: !!(p & 0x08),
+        I: !!(p & 0x04), Z: !!(p & 0x02), C: !!(p & 0x01),
+        raw: "0x" + p.toString(16).toUpperCase().padStart(2, "0"),
+      },
+    };
+  }
   return null;
 }

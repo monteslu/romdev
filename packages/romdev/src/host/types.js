@@ -69,6 +69,15 @@ export const RetroMemory = {
   C64_CIA1_REGS:      0x173,
   C64_CIA2_REGS:      0x174,
   C64_CPU_REGS:       0x175,
+  // GBA (mgba): CPU snapshot + the IO page (video AND audio regs) + palette + OAM.
+  GBA_CPU_REGS:       0x180,
+  GBA_IO_REGS:        0x181,
+  GBA_PALETTE:        0x182,
+  GBA_OAM:            0x183,
+  // Lynx (handy): CPU snapshot + the $FC00-$FDFF Suzy/Mikey HW register window
+  // (sprite regs, LCD control, audio $FD20-$FD3F, palette $FDA0-$FDBF).
+  LYNX_CPU_REGS:      0x190,
+  LYNX_HW_REGS:       0x191,
 };
 
 /** @type {Record<MemoryRegion, number>} */
@@ -117,6 +126,12 @@ export const MemoryRegionToRetro = {
   c64_cia1_regs: RetroMemory.C64_CIA1_REGS,
   c64_cia2_regs: RetroMemory.C64_CIA2_REGS,
   c64_cpu_regs:  RetroMemory.C64_CPU_REGS,
+  gba_cpu_regs:  RetroMemory.GBA_CPU_REGS,
+  gba_io_regs:   RetroMemory.GBA_IO_REGS,
+  gba_palette:   RetroMemory.GBA_PALETTE,
+  gba_oam:       RetroMemory.GBA_OAM,
+  lynx_cpu_regs: RetroMemory.LYNX_CPU_REGS,
+  lynx_hw_regs:  RetroMemory.LYNX_HW_REGS,
 };
 
 /**
