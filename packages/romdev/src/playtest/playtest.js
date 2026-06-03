@@ -109,6 +109,7 @@ export const KEYBOARD_BINDINGS_HELP = `Keyboard:
 Emulator hotkeys (RetroArch defaults):
   P / Space            Pause / unpause emulation
   K                    Frame advance (step one frame while paused)
+  R (hold)             Rewind (up to 10 seconds)
   F2                   Save state (to slot)
   F4                   Load state (from slot)
 
@@ -318,6 +319,11 @@ export async function playtest(args) {
   /** @type {Set<string>} */
   const heldKeys = new Set();
 
+  // Rewind ring buffer — one serialized snapshot per frame, capped at 10 s.
+  const MAX_REWIND_FRAMES = 600;
+  /** @type {Uint8Array[]} */
+  const rewindBuffer = [];
+
   window.on("close", () => { stop(); });
   window.on("keyDown", (e) => {
     if (e.key === "escape") { stop(); return; }
@@ -426,6 +432,10 @@ export async function playtest(args) {
       stop();
       return;
     }
+    // While paused: do NOTHING here — no input, no step, no rewind-capture.
+    // A paused window must truly freeze so it doesn't clobber input the AGENT
+    // set for an inspect-while-paused experiment (use the K hotkey to frame-
+    // advance, or release pause). The render block below still runs.
     if (!paused) {
       // Merge in keyboard state on port 0. ORed with controller state so a
       // user can mix both (rare, but harmless). Keyboard never reaches
@@ -433,19 +443,39 @@ export async function playtest(args) {
       for (const [keyName, bit] of Object.entries(KEY_TO_LIBRETRO_BIT)) {
         if (heldKeys.has(keyName)) port0[bitToName(bit)] = true;
       }
-      h.setInput({ ports: [port0, port1] });
-
-      let stepped = 0;
-      try {
-        stepped = h.stepFrames(1);
-      } catch (e) {
-        // A step error mid-swap (host being torn down/rebuilt) is transient —
-        // skip this frame and let the next tick pick up the new host. Don't kill
-        // the window. (A window-level failure is handled by the destroyed checks.)
-        log.error("[playtest] step error (skipping frame):", e.message);
-        return;
+      const isRewinding = heldKeys.has("r") && rewindBuffer.length > 0;
+      if (isRewinding) {
+        // Restore the previous snapshot and run one frame to produce its visual.
+        const snap = rewindBuffer.pop();
+        try {
+          h.unserializeState(snap);
+          h.stepFrames(1);
+          frameCount++;
+        } catch (e) {
+          log.error("[playtest] rewind error:", e.message);
+        }
+      } else {
+        // Capture snapshot before stepping so it can be rewound to later.
+        if (h.status?.loaded) {
+          try {
+            const snap = h.serializeState();
+            rewindBuffer.push(snap);
+            if (rewindBuffer.length > MAX_REWIND_FRAMES) rewindBuffer.shift();
+          } catch {}
+        }
+        h.setInput({ ports: [port0, port1] });
+        let stepped = 0;
+        try {
+          stepped = h.stepFrames(1);
+        } catch (e) {
+          // A step error mid-swap (host being torn down/rebuilt) is transient —
+          // skip this frame and let the next tick pick up the new host. Don't kill
+          // the window. (A window-level failure is handled by the destroyed checks.)
+          log.error("[playtest] step error (skipping frame):", e.message);
+          return;
+        }
+        if (stepped > 0) frameCount++;
       }
-      if (stepped > 0) frameCount++;
     }
 
     if (!window.destroyed) {
