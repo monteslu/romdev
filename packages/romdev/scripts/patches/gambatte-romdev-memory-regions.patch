@@ -5,6 +5,11 @@
 # still succeeds but those tools return empty data (silent runtime failure).
 # git apply ignores everything above the first 'diff --git' line.
 #
+# Also adds an instruction-level WRITE WATCHPOINT: the WRITE/FF_WRITE macros in
+# cpu.cpp stamp the live sm83 `pc` when a watched address is written; libretro.cpp
+# exports romdev_watchpoint_set/get. Records the TRUE writing instruction's PC.
+# git apply ignores everything above the first 'diff --git' line.
+#
 diff --git a/libgambatte/include/gambatte.h b/libgambatte/include/gambatte.h
 index 7e5c43b..1cd0d7f 100644
 --- a/libgambatte/include/gambatte.h
@@ -23,13 +28,42 @@ index 7e5c43b..1cd0d7f 100644
  
  private:
 diff --git a/libgambatte/libretro/libretro.cpp b/libgambatte/libretro/libretro.cpp
-index 15b042c..cae68f0 100644
+index 15b042c..cfb54bf 100644
 --- a/libgambatte/libretro/libretro.cpp
 +++ b/libgambatte/libretro/libretro.cpp
-@@ -2874,6 +2874,19 @@ void retro_unload_game()
+@@ -2874,6 +2874,48 @@ void retro_unload_game()
  
  unsigned retro_get_region() { return RETRO_REGION_NTSC; }
  
++/* romdev instruction-level write watchpoint — records the WRITING instruction's
++ * PC for a watched CPU address (the sm83 `pc` is live in the WRITE macros in
++ * cpu.cpp). State lives in cpu.cpp; exported here for the host. */
++extern "C" {
++extern unsigned long  romdev_wp_addr;
++extern int            romdev_wp_enabled;
++extern unsigned long  romdev_wp_last_pc;
++extern unsigned char  romdev_wp_last_val;
++extern unsigned long  romdev_wp_hits;
++
++void romdev_watchpoint_set(unsigned addr, int enabled) {
++   romdev_wp_addr = addr;
++   romdev_wp_enabled = enabled ? 1 : 0;
++   romdev_wp_last_pc = 0xFFFFFFFF;
++   romdev_wp_last_val = 0;
++   romdev_wp_hits = 0;
++}
++
++void romdev_watchpoint_get(unsigned *out5, int clearHits) {
++   if (!out5) return;
++   out5[0] = (unsigned)romdev_wp_enabled;
++   out5[1] = (unsigned)romdev_wp_addr;
++   out5[2] = (unsigned)romdev_wp_last_pc;
++   out5[3] = (unsigned)romdev_wp_last_val;
++   out5[4] = (unsigned)romdev_wp_hits;
++   if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; }
++}
++}
++
 +/* rom-dev-mcp extension: custom memory region IDs above libretro standard.
 + * Lets the host inspect GB/GBC PPU state for inspectSprites / inspectPalette
 + * / getCPUState. Mirrors fceumm/snes9x/gpgx patches. */
@@ -46,7 +80,7 @@ index 15b042c..cae68f0 100644
  void *retro_get_memory_data(unsigned id)
  {
     if (rom_loaded) switch (id)
-@@ -2883,11 +2896,20 @@ void *retro_get_memory_data(unsigned id)
+@@ -2883,11 +2925,20 @@ void *retro_get_memory_data(unsigned id)
        case RETRO_MEMORY_RTC:
           return gb.rtcdata_ptr();
        case RETRO_MEMORY_SYSTEM_RAM:
@@ -69,7 +103,7 @@ index 15b042c..cae68f0 100644
     }
  
     return 0;
-@@ -2902,14 +2924,21 @@ size_t retro_get_memory_size(unsigned id)
+@@ -2902,14 +2953,21 @@ size_t retro_get_memory_size(unsigned id)
        case RETRO_MEMORY_RTC:
           return gb.rtcdata_size();
        case RETRO_MEMORY_SYSTEM_RAM:
@@ -93,6 +127,46 @@ index 15b042c..cae68f0 100644
     }
  
     return 0;
+diff --git a/libgambatte/src/cpu.cpp b/libgambatte/src/cpu.cpp
+index 0fb6199..43e32ad 100644
+--- a/libgambatte/src/cpu.cpp
++++ b/libgambatte/src/cpu.cpp
+@@ -20,6 +20,19 @@
+ #include "gambatte-memory.h"
+ #include "savestate.h"
+ 
++/* romdev instruction-level write watchpoint (see the fceumm patch for the NES
++ * equivalent). The WRITE macros below stamp the live `pc` (the address of the
++ * currently-executing instruction) when a watched address is written, so the
++ * captured PC is the true writer — correct even for interrupt-driven writes.
++ * C linkage so the libretro layer can extern + export these. */
++extern "C" {
++unsigned long romdev_wp_addr     = 0;
++int           romdev_wp_enabled  = 0;
++unsigned long romdev_wp_last_pc  = 0xFFFFFFFF;
++unsigned char romdev_wp_last_val = 0;
++unsigned long romdev_wp_hits     = 0;
++}
++
+ namespace gambatte {
+ 
+ CPU::CPU()
+@@ -143,8 +156,13 @@ void CPU::loadState(SaveState const &state) {
+ #define PC_READ(dest) do { (dest) = mem_.read(pc, cycleCounter); pc = (pc + 1) & 0xFFFF; cycleCounter += 4; } while (0)
+ #define FF_READ(dest, addr) do { (dest) = mem_.ff_read(addr, cycleCounter); cycleCounter += 4; } while (0)
+ 
+-#define WRITE(addr, data) do { mem_.write(addr, data, cycleCounter); cycleCounter += 4; } while (0)
+-#define FF_WRITE(addr, data) do { mem_.ff_write(addr, data, cycleCounter); cycleCounter += 4; } while (0)
++#define ROMDEV_WP_CHECK(a, d) do { \
++		if (romdev_wp_enabled && (unsigned long)(a) == romdev_wp_addr) { \
++			romdev_wp_last_pc = pc; romdev_wp_last_val = (unsigned char)(d); romdev_wp_hits++; \
++		} \
++	} while (0)
++#define WRITE(addr, data) do { ROMDEV_WP_CHECK((addr), (data)); mem_.write(addr, data, cycleCounter); cycleCounter += 4; } while (0)
++#define FF_WRITE(addr, data) do { ROMDEV_WP_CHECK(0xFF00 | ((addr) & 0xFF), (data)); mem_.ff_write(addr, data, cycleCounter); cycleCounter += 4; } while (0)
+ 
+ #define PC_MOD(data) do { pc = data; cycleCounter += 4; } while (0)
+ 
 diff --git a/libgambatte/src/cpu.h b/libgambatte/src/cpu.h
 index 76c29de..f7bc078 100644
 --- a/libgambatte/src/cpu.h
