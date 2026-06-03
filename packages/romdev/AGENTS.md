@@ -47,7 +47,7 @@ Skip playtest only when there's clearly no human in the loop: CI runs, automated
 - `input` — drive controllers, look up hardware bit layouts
 - `state` — savestates and forensic state inspection (`saveState`, `loadState`, `exportState` a slot to disk without touching the live host, `listStates`, `dumpState`)
 - `memory` — read/write VRAM/OAM/CGRAM/ARAM and other regions
-- `debug` — inspectSprites, getCPUState, **disassemble**/disassembleProject, symbol lookup, palette inspection, whichTilesAreRendered, addressToSymbol, plus **cheats** (`gameCheats` = a free labeled RAM/code map for known ROMs, `applyCheat`/`clearCheats` non-destructively, `makeCheat` to create codes)
+- `debug` — inspectSprites, inspectPalette, getCPUState, getAudioState (sound-chip decode — all 12 systems), getRenderingContext, findWriter (write watchpoint), **disassemble**/disassembleProject, symbol lookup, whichTilesAreRendered, addressToSymbol, plus **cheats** (`gameCheats` = a free labeled RAM/code map for known ROMs, `applyCheat`/`clearCheats` non-destructively, `makeCheat` to create codes)
 - `assets` — convert PNGs to tiles, WAVs to BRR, identify ROMs, plus the hacking toolkit (`patchFile`, `assembleSnippet`, `diffRoms`, `findFreeSpace`, `spliceCHR`, `extractCart`, `wrapRomFromParts`)
 - `project` — starter snippets per platform
 - `show` — `playtest` (open the live SDL window for a human), `playtestStop`, `playtestStatus`, `playtestFramebuffer` (capture exactly what the human's window shows)

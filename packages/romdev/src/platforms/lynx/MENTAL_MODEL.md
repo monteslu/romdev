@@ -35,6 +35,14 @@ Mikey handles:
 - **Joystick** — read via SWITCHES register at `$FCB0`. cc65 provides
   `joy_read(JOY_1)` + `JOY_LEFT/RIGHT/UP/DOWN/BTN_1/BTN_2` macros.
 
+**Live debug:** `getAudioState({chip:"mikey"})` decodes the 4 audio voices
+(volume, period→freq→note, LFSR state); `inspectPalette` reads the 16-entry
+palette; `getRenderingContext` shows DISPCTL + the display base address;
+`getCPUState` reads the 65C02; `findWriter` is the write watchpoint. **Sprites
+are the exception** — the Lynx has no fixed OAM (sprites are SCB linked lists
+walked by Suzy), so `inspectSprites` returns the SCB list head ($FC10/$FC11) and
+you walk the chain over `system_ram`, rather than reading a sprite table.
+
 ## Frame heartbeat (cc65 + tgi)
 
 ```c
