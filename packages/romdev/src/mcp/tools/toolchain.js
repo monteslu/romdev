@@ -220,7 +220,7 @@ export function registerToolchainTools(server, z, sessionKey) {
     "Assemble or compile source code for a target platform. Pass either `source` (single file) or `sources` (multi-file project as {name: contents}). With `sources`, each entry becomes its own translation unit — for cc65 platforms (NES/C64/Atari7800/Lynx), .s/.asm files go to ca65 and .c files go to cc65; everything is linked together. Pass `linkerConfig` to override the default ld65 .cfg (useful when you need a larger ZP segment, custom mappers, or extra named segments). Returns the ROM bytes (base64) and the build log. Optionally writes the ROM to `outputPath`.",
     {
       platform: z.string().describe("Target platform id (e.g. 'nes', 'atari2600')."),
-      language: z.string().optional().describe("Optional language override (e.g. 'c', 'asm', 'basic'). Each platform has a documented default — omit to use it. Call listPlatforms() to see {defaultLanguage, languages:[...]} per platform. Most agents shouldn't set this; defaults are tuned for vibe-coding (smallest toolchain, fastest build, best LLM fluency). Use only when you specifically need a non-default language."),
+      language: z.string().optional().describe("Optional language override (e.g. 'c', 'asm', 'basic'). USUALLY OMIT IT: when omitted, the language is inferred from your source — its filename extension (a .c sourcePath / .c key in `sources` → C; .s/.asm → asm) or, lacking a filename, from the source content (#include / int main → C). Only the truly ambiguous case falls back to the platform's documented default (see listPlatforms() {defaultLanguage}). So on dual-language platforms like Genesis (C via SGDK + m68k-elf-gcc, or asm via vasm68k) you can just hand it a .c file and it builds as C. Set this explicitly only to force a non-default toolchain."),
       source: z.string().optional().describe("Single source file contents (shortcut). PREFER `sourcePath` for files already on disk — keeps your context small across iterations."),
       sourcePath: z.string().optional().describe("Absolute path to a single source file on disk. Server reads from disk; you don't need to pump the file's contents through your context window. Mutually exclusive with `source`."),
       sources: z
@@ -343,6 +343,10 @@ export function registerToolchainTools(server, z, sessionKey) {
         maxmod,
         rebuildSdk,
         source: useSource,
+        // Basename of the on-disk source, when given — lets language inference
+        // route by extension (main.c → C, main.s → asm) so an omitted
+        // `language` doesn't fall to the wrong toolchain (the genesis foot-gun).
+        sourceName: sourcePath ? path.basename(sourcePath) : undefined,
         sources: mergedSources,
         includes: Object.keys(mergedIncludes).length ? mergedIncludes : undefined,
         binaryIncludes: Object.keys(mergedBinaryIncludes).length ? mergedBinaryIncludes : undefined,
@@ -370,6 +374,7 @@ export function registerToolchainTools(server, z, sessionKey) {
       let finalPath = null;
       if (result.binary) {
         if (outputPath) {
+          await mkdir(path.dirname(outputPath), { recursive: true });
           await writeFile(outputPath, result.binary);
           finalPath = outputPath;
         } else if (!inline) {
@@ -566,6 +571,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         maxmod,
         rebuildSdk,
         source: useSource2,
+        sourceName: sourcePath ? path.basename(sourcePath) : undefined,
         sources: mergedSources2,
         includes: Object.keys(mergedIncludes).length ? mergedIncludes : undefined,
         binaryIncludes: Object.keys(mergedBinaryIncludes).length ? mergedBinaryIncludes : undefined,
@@ -649,6 +655,9 @@ export function registerToolchainTools(server, z, sessionKey) {
       // result" loop). If screenshotPath is set, write it there instead —
       // for clients that can't display inline images.
       if (screenshotPath) {
+        // Create the parent dir if missing so a path like ".../shots/title.png"
+        // doesn't ENOENT when the agent hasn't pre-made the folder.
+        await mkdir(path.dirname(screenshotPath), { recursive: true });
         await writeFile(screenshotPath, Buffer.from(shot.pngBase64, "base64"));
         const json = jsonContent({ ...summary, screenshotPath });
         json._observerImages = [{ kind: "image", mimeType: "image/png", base64: shot.pngBase64 }];
