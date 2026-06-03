@@ -107,7 +107,11 @@ export const KEYBOARD_BINDINGS_HELP = `Keyboard:
   ESC                  Close playtest window
 
 Emulator hotkeys (RetroArch defaults):
+  P / Space            Pause / unpause emulation
+  K                    Frame advance (step one frame while paused)
   R (hold)             Rewind (up to 10 seconds)
+  F2                   Save state (to slot)
+  F4                   Load state (from slot)
 
 Gamepad: any SDL-recognized controller works. Physical-position mapping —
 the BOTTOM face button is always the main action, regardless of pad letter.
