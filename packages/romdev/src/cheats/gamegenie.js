@@ -248,6 +248,103 @@ export function encodeGbGameGenie({ address, value, compare }) {
     : hex.slice(0, 3) + "-" + hex.slice(3, 6) + "-" + hex.slice(6);
 }
 
+// ── SNES Game Genie ─────────────────────────────────────────────────────
+// 8 chars "XXXX-XXXX". The chars use a scrambled hex alphabet, then the 24-bit
+// address is bit-permuted. Transcribed VERBATIM from snes9x S9xGameGenieToRaw
+// (the exact core romdev ships for SNES) so it's bit-identical to the emulator.
+const SNES_GG_GENIE_HEX = "DF4709156BC8A23E";
+
+export function decodeSnesGameGenie(code) {
+  const clean = code.replace(/-/g, "").toUpperCase();
+  if (clean.length !== 8) return null;
+  // Map each genie char → its real 4-bit nibble, building the 32-bit value.
+  let data = 0;
+  for (const ch of clean) {
+    const nib = SNES_GG_GENIE_HEX.indexOf(ch);
+    if (nib < 0) return null;
+    data = (data * 16 + nib) >>> 0;
+  }
+  const value = (data >>> 24) & 0xFF;
+  const a = data & 0xFFFFFF;
+  const address =
+    (((a & 0x003c00) << 10) +
+     ((a & 0x00003c) << 14) +
+     ((a & 0xf00000) >>> 8) +
+     ((a & 0x000003) << 10) +
+     ((a & 0x00c000) >>> 6) +
+     ((a & 0x0f0000) >>> 12) +
+     ((a & 0x0003c0) >>> 6)) >>> 0;
+  return { address, value };
+}
+
+// ── Game Boy GameShark ──────────────────────────────────────────────────
+// 8 hex digits "TTVVAAAA": TT = type/RAM-bank byte, VV = replacement value,
+// AAAA = the RAM address in LITTLE-ENDIAN order. (Distinct from GB Game Genie,
+// which is the 3-3-3 ROM-patch format.) These are RAM cheats.
+export function decodeGbGameShark(code) {
+  const clean = code.replace(/[-\s]/g, "").toUpperCase();
+  if (!/^[0-9A-F]{8}$/.test(clean)) return null;
+  const b = [0, 2, 4, 6].map((i) => parseInt(clean.slice(i, i + 2), 16));
+  const value = b[1];
+  const address = (b[3] << 8) | b[2]; // little-endian
+  return { address, value };
+}
+
+// ── Pro Action Replay / GameShark (raw hex address+value) ───────────────
+// SNES PAR: AAAAAAVV (6-hex 24-bit address + 2-hex value). SNES/SMS/GG ROM
+// cheats also appear as XXXX-XXXX hex (a 16-bit address-ish + 16-bit value).
+// These devices DON'T scramble — the hex IS the address and value — so "decode"
+// is just slicing. We label the device so the agent knows what it's looking at.
+export function decodeProActionReplay(code, platform) {
+  const clean = code.replace(/[-\s]/g, "").toUpperCase();
+  if (!/^[0-9A-F]+$/.test(clean)) return null;
+  if (platform === "snes" && clean.length === 8) {
+    // AAAAAA VV — 24-bit address, 8-bit value (most SNES PAR codes; 7E/7Fxxxx = WRAM).
+    return { address: parseInt(clean.slice(0, 6), 16), value: parseInt(clean.slice(6), 16) };
+  }
+  if (clean.length === 8) {
+    // XXXX VVVV — 16-bit address, 16-bit value (SMS/GG/Genesis AR-style).
+    return { address: parseInt(clean.slice(0, 4), 16), value: parseInt(clean.slice(4), 16) };
+  }
+  return null;
+}
+
+/** Identify which cheat DEVICE a code string is for, on a given platform.
+ *  Returns one of: "game-genie", "pro-action-replay", "gameshark",
+ *  "action-replay", "raw", or "unknown". Per-platform, because the SAME shape
+ *  means different devices on different systems (8 hex = SNES PAR, but on GB =
+ *  GameShark). This is what lets us be HONEST about device type. */
+export function detectDevice(code, platform) {
+  const c = code.trim();
+  if (c.includes(":")) return "raw";
+  const lettersOnly = /^[A-Z]+$/i.test(c.replace(/-/g, ""));
+  const hyphenHex = /^[0-9A-F]{4}-[0-9A-F]{4}$/i.test(c);
+  const hex8 = /^[0-9A-F]{8}$/i.test(c);
+  switch (platform) {
+    case "nes":
+      if (/^[APZLGITYEOXUKSVN]{6}$|^[APZLGITYEOXUKSVN]{8}$/i.test(c)) return "game-genie";
+      return "unknown";
+    case "genesis": case "megadrive": case "md":
+      if (/^[A-Z0-9]{4}-[A-Z0-9]{4}$/i.test(c) && lettersOnly === false && !hyphenHex) return "game-genie";
+      if (/^[ABCDEFGHJKLMNPRSTVWXYZ0-9]{4}-[ABCDEFGHJKLMNPRSTVWXYZ0-9]{4}$/i.test(c)) return "game-genie";
+      return "unknown";
+    case "gb": case "gbc":
+      if (/^[0-9A-F]{3}-[0-9A-F]{3}(-[0-9A-F]{3})?$/i.test(c)) return "game-genie";
+      if (hex8) return "gameshark"; // GB GameShark is 8 hex digits
+      return "unknown";
+    case "snes":
+      if (hyphenHex) return "game-genie";          // SNES Game Genie XXXX-XXXX
+      if (hex8) return "pro-action-replay";         // SNES PAR AAAAAAVV
+      return "unknown";
+    case "sms": case "gg":
+      if (hex8 || hyphenHex) return "action-replay"; // SMS/GG Action Replay
+      if (/^[0-9A-F]{3}-[0-9A-F]{3}/i.test(c)) return "game-genie";
+      return "unknown";
+    default:
+      return "unknown";
+  }
+}
+
 /** Dispatch a single code string to the right decoder for `platform`.
  *  Returns { address, value, compare? } or null if it can't be decoded.
  *  (Multi-code `+`-joined combos must be split by the caller.) */
@@ -260,15 +357,91 @@ export function decodeCode(code, platform) {
     case "genesis":
     case "megadrive":
     case "md":
-      return decodeGenesisGameGenie(c);
+      return decodeGenesisGameGenie(c) || decodeProActionReplay(c, platform);
     case "gb":
     case "gbc":
-      return decodeGbGameGenie(c);
+      // GB: 3-3-3 = Game Genie; 8 hex = GameShark (addr/val, no scramble).
+      return decodeGbGameGenie(c) || decodeGbGameShark(c);
+    case "snes":
+      // XXXX-XXXX = scrambled Game Genie; 8 plain hex = Pro Action Replay.
+      if (/-/.test(c)) return decodeSnesGameGenie(c);
+      return decodeProActionReplay(c, platform);
+    case "sms":
+    case "gg":
+      // SMS/GG Action Replay raw-hex (addr/val, no scramble).
+      return decodeProActionReplay(c, platform);
     default:
-      // SNES/SMS/GG/Atari use raw ADDR:VAL or Pro-Action-Replay forms we treat
-      // as raw when they contain ':'. Unknown letter codes → null (skipped).
       return null;
   }
+}
+
+// ── Encoders for the raw-hex devices ────────────────────────────────────
+/** ENCODE → SNES Pro Action Replay: AAAAAAVV (24-bit addr + 8-bit value). */
+export function encodeSnesProActionReplay({ address, value }) {
+  if (address == null || value == null) return null;
+  return (address & 0xFFFFFF).toString(16).toUpperCase().padStart(6, "0") +
+         (value & 0xFF).toString(16).toUpperCase().padStart(2, "0");
+}
+
+/** ENCODE → GB GameShark: TTVVAAAA (type 01, value, little-endian address). */
+export function encodeGbGameShark({ address, value, type = 0x01 }) {
+  if (address == null || value == null) return null;
+  const lo = address & 0xFF, hi = (address >> 8) & 0xFF;
+  return [type, value & 0xFF, lo, hi].map((b) => b.toString(16).toUpperCase().padStart(2, "0")).join("");
+}
+
+// Forward address scramble (the exact snes9x permutation, factored out so the
+// inverse can be DERIVED from it rather than hand-transcribed — derivation is
+// provably correct; hand-inverting this bit-soup is not).
+function snesScrambleAddr(a24) {
+  const a = a24 & 0xFFFFFF;
+  return (((a & 0x003c00) << 10) +
+          ((a & 0x00003c) << 14) +
+          ((a & 0xf00000) >>> 8) +
+          ((a & 0x000003) << 10) +
+          ((a & 0x00c000) >>> 6) +
+          ((a & 0x0f0000) >>> 12) +
+          ((a & 0x0003c0) >>> 6)) >>> 0;
+}
+// Build the inverse permutation ONCE: scramble each single input bit to learn
+// where it lands, then map output-bit → input-bit. (The scramble is a pure bit
+// permutation, so this fully characterizes it.)
+let _snesInvMap = null;
+function snesUnscrambleAddr(scrambled) {
+  if (!_snesInvMap) {
+    _snesInvMap = new Array(24).fill(-1);
+    for (let inBit = 0; inBit < 24; inBit++) {
+      const out = snesScrambleAddr(1 << inBit);
+      for (let outBit = 0; outBit < 24; outBit++) {
+        if ((out >>> outBit) & 1) { _snesInvMap[outBit] = inBit; break; }
+      }
+    }
+  }
+  let a = 0;
+  for (let outBit = 0; outBit < 24; outBit++) {
+    if ((scrambled >>> outBit) & 1) { const ib = _snesInvMap[outBit]; if (ib >= 0) a |= (1 << ib); }
+  }
+  return a >>> 0;
+}
+
+/** ENCODE → SNES Game Genie (inverse of the snes9x scramble, derived). */
+export function encodeSnesGameGenie({ address, value }) {
+  if (address == null || value == null) return null;
+  const s = snesUnscrambleAddr(address & 0xFFFFFF);
+  const data = (((value & 0xFF) * 0x1000000) + (s & 0xFFFFFF)) >>> 0;
+  let out = "";
+  for (let i = 7; i >= 0; i--) out += SNES_GG_GENIE_HEX[(Math.floor(data / Math.pow(16, i))) & 0xF];
+  return out.slice(0, 4) + "-" + out.slice(4);
+}
+
+/** Decode + label the device in one call. Returns { address, value, compare?,
+ *  device } or null. THE preferred entry point for the index/tools — it makes
+ *  the device type explicit (your "be clear what device" requirement). */
+export function decodeWithDevice(code, platform) {
+  const device = detectDevice(code, platform);
+  const decoded = decodeCode(code, platform);
+  if (!decoded) return device === "unknown" ? null : { device, address: null, value: null };
+  return { ...decoded, device };
 }
 
 /** Format a raw ADDR:VAL[:COMPARE] code from decoded parts (hex, no 0x). */
@@ -281,21 +454,53 @@ export function encodeRaw({ address, value, compare }) {
     : `${addrHex}:${valHex}`;
 }
 
-/** Encode { address, value, compare? } → a cheat code for `platform`.
- *  `style:"raw"` forces ADDR:VAL output (works on every platform — the cores
- *  accept it); `style:"gamegenie"` (default where supported) emits the letter
- *  code. Returns null if the platform/inputs can't produce that style.
- *  ALWAYS round-trips: decodeCode(encodeCode(p,plat),plat) reproduces p. */
+// Which physical cheat DEVICE each platform's "native" code is for. This is the
+// honesty layer: we don't call everything "Game Genie" — SNES native is Pro
+// Action Replay, SMS/GG is Action Replay, GB has both GG (ROM) and GameShark
+// (RAM). `nativeDevicesFor` lists them best-first.
+export function nativeDevicesFor(platform) {
+  switch (platform) {
+    case "nes": return ["game-genie"];
+    case "genesis": case "megadrive": case "md": return ["game-genie"];
+    case "snes": return ["pro-action-replay", "game-genie"];
+    case "gb": case "gbc": return ["game-genie", "gameshark"];
+    case "sms": case "gg": return ["action-replay"];
+    default: return ["raw"];
+  }
+}
+
+/** Encode { address, value, compare? } → { code, device } for `platform`.
+ *  Pass `device` to force a specific device; otherwise the platform's native
+ *  device is used. `device:"raw"` always works (ADDR:VAL). Returns null if the
+ *  inputs can't produce that device. ALWAYS round-trips. */
+export function encodeForDevice({ address, value, compare }, platform, device) {
+  const dev = device || nativeDevicesFor(platform)[0];
+  switch (dev) {
+    case "raw": return { code: encodeRaw({ address, value, compare }), device: "raw" };
+    case "game-genie": {
+      let code = null;
+      if (platform === "nes") code = encodeNesGameGenie({ address, value, compare });
+      else if (["genesis", "megadrive", "md"].includes(platform)) code = encodeGenesisGameGenie({ address, value });
+      else if (["gb", "gbc"].includes(platform)) code = encodeGbGameGenie({ address, value, compare });
+      else if (platform === "snes") code = encodeSnesGameGenie({ address, value });
+      return code ? { code, device: "game-genie" } : null;
+    }
+    case "pro-action-replay": {
+      const code = platform === "snes" ? encodeSnesProActionReplay({ address, value }) : null;
+      return code ? { code, device: "pro-action-replay" } : null;
+    }
+    case "gameshark": {
+      const code = ["gb", "gbc"].includes(platform) ? encodeGbGameShark({ address, value }) : null;
+      return code ? { code, device: "gameshark" } : null;
+    }
+    default: return null;
+  }
+}
+
+/** Back-compat thin wrapper: returns just the code string (style "raw" or the
+ *  platform's native device). Prefer encodeForDevice for the device label. */
 export function encodeCode({ address, value, compare }, platform, style = "gamegenie") {
   if (style === "raw") return encodeRaw({ address, value, compare });
-  switch (platform) {
-    case "nes": return encodeNesGameGenie({ address, value, compare });
-    case "genesis": case "megadrive": case "md":
-      return encodeGenesisGameGenie({ address, value }); // Genesis GG carries no compare
-    case "gb": case "gbc":
-      return encodeGbGameGenie({ address, value, compare });
-    default:
-      // No Game Genie letter scheme wired for this platform → fall back to raw.
-      return encodeRaw({ address, value, compare });
-  }
+  const r = encodeForDevice({ address, value, compare }, platform);
+  return r ? r.code : encodeRaw({ address, value, compare });
 }

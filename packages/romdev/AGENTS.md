@@ -353,10 +353,17 @@ gameCheats({ path: "Rygar (USA).nes" })
 ```
 
 So "which byte holds magic?" is answered in one call: `$00CD`. A RAM cheat
-(`kind:"ram"`) is a **labeled variable**; a Game Genie / ROM cheat
-(`kind:"code"`, has a `compare`) is a **labeled patch site** — point
-`disassembleRom` at its address to read the routine. Filter a long list with
-`filter:"health"` or `kind:"ram"`.
+(`kind:"ram"`) is a **labeled variable**; a ROM cheat (`kind:"code"`, has a
+`compare`) is a **labeled patch site** — point `disassembleRom` at its address
+to read the routine. Filter a long list with `filter:"health"` or `kind:"ram"`.
+
+**Device types are labeled — it's not all "Game Genie."** Each decoded part
+carries a `device` so you know exactly what you're looking at:
+`game-genie` (NES/Genesis/SNES/GB ROM patches), `pro-action-replay` (SNES — the
+most common SNES device, RAM pokes like `7E0DBF63`), `gameshark` (GB RAM),
+`action-replay` (SMS/GG), or `raw` (`ADDR:VAL`). A few formats (e.g. the SMS/GG
+Game Genie variant) are labeled with their device but left address-undecoded
+rather than guessing — honest over wrong.
 
 **Trust it like you trust disasm — verify, don't assume.** A match is by
 No-Intro name / filename, NOT a verified CRC, so it's a PROBABLE match: very
@@ -398,14 +405,21 @@ makeCheat({ platform:"nes", address:0x8E20, value:0xA5, compare:0x85 })
 applyCheat({ code:"SZZAETSA" }) → screenshot()           // 3. confirm it works
 ```
 
-`makeCheat` returns BOTH the Game Genie letter code (NES/GB/GBC/Genesis, where
-the address is in the platform's GG range) AND the raw `ADDR:VAL`, plus
-`verified:true` — every generated letter code is decoded back and confirmed to
-reproduce your address/value before it's returned (the encoders round-trip
-against ~77k real DB codes). RAM addresses outside the GG range come back as raw
-codes with an explanatory note. A RAM cheat needs just `address`+`value`; a
-ROM/code patch adds `compare` (the byte currently there — read it first).
-Nothing is ever written to a ROM file.
+`makeCheat` encodes for the platform's NATIVE device(s) and **labels each one**
+— NES/Genesis → Game Genie; SNES → Pro Action Replay **and** Game Genie; GB/GBC
+→ Game Genie (ROM) + GameShark (RAM); SMS/GG → Action Replay — plus the raw
+`ADDR:VAL` always. Each generated code carries `verified:true` (decoded back and
+confirmed; the encoders round-trip 100% against the full DB — NES/Genesis/GB/GBC
+Game Genie, SNES Game Genie + PAR, GB GameShark). Force a specific device with
+`device:`. A RAM cheat needs just `address`+`value`; a ROM patch adds `compare`
+(the byte currently there). Nothing is ever written to a ROM file.
+
+```js
+makeCheat({ platform:"snes", address:0x7E0DBF, value:0x63 })
+//   → { codes:[ {device:"pro-action-replay", code:"7E0DBF63", verified:true},
+//               {device:"game-genie", code:"17D8-9EE8", verified:true} ],
+//       raw:"7E0DBF:63", ... }
+```
 
 **Tools for hacking, by category:**
 
