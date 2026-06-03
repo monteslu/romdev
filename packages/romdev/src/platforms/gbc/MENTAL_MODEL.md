@@ -118,6 +118,7 @@ bit 7     BG-over-OBJ priority
 Identical to DMG — same 4-channel APU. `sound_init` / `sound_play_tone`
 / `sound_play_noise` / `sound_off` from `gb_runtime.h` work unchanged
 on GBC. See the GB MENTAL_MODEL.md for the channel layout.
+`getAudioState({chip:"gb"})` decodes the live APU on GBC too.
 
 ## Frame heartbeat
 

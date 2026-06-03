@@ -118,6 +118,10 @@ Global `SID_VOL_MODE` ($D418) holds master volume + filter routing
 bits. SID is famous for sounding incredible with very little code — see
 the `sid_play.s` starter snippet.
 
+**Debugging sound:** `getAudioState({chip:"sid"})` decodes all 3 voices live —
+waveform, freq→note, pulse-width, ADSR — plus the filter cutoff/resonance/mode.
+Handy for verifying a `sid_play` routine is actually gating notes.
+
 ## Cartridge / load file format
 
 The .prg format is dead simple:
