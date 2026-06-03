@@ -41,7 +41,11 @@ export function registerStateTools(server, z, sessionKey) {
     "Restore a previously saved state — from an in-memory `name` slot OR a `path` on disk (a blob written by " +
     "saveState({path}) or dumpState). Resets the framebuffer/frame counters to whatever the snapshot held. " +
     "Load-from-path is the cross-session escape hatch: skip the boot replay by restoring a disk snapshot " +
-    "(the matching ROM must already be loaded — the blob is core-specific and a mismatch errors clearly).",
+    "(the matching ROM must already be loaded — the blob is core-specific and a mismatch errors clearly). " +
+    "A state captures RAM/CPU/PPU/APU — NOT the ROM — so it is ROM-CONTENT-INDEPENDENT: a state saved on the " +
+    "stock ROM reloads cleanly into a rebuilt/patched ROM of the same core (same size/mapper). That enables a " +
+    "clean A/B patch test: save a gameplay state on the original, load the patched ROM, loadState, and the only " +
+    "difference between the two runs is your bytes.",
     {
       name: z.string().min(1).optional().describe("In-memory slot name (from saveState({name})). Provide `name` OR `path`."),
       path: z.string().optional().describe("Absolute path to a save-state blob on disk (from saveState({path}) or dumpState). Load the matching ROM first."),

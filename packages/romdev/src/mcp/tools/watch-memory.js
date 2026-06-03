@@ -18,6 +18,39 @@ import { getHost } from "../state.js";
 import { jsonContent, safeTool } from "../util.js";
 import { getCPUState } from "../../host/cpu-state.js";
 import { MemoryRegionToRetro } from "../../host/types.js";
+import { resolveButtonAlias } from "./input.js";
+
+// Drive scheduled `pressDuring` input through the host's ONLY input API
+// (setInput) — the watch loop owns stepFrames, so this must never advance the
+// emulator itself. Returns a stateful driver: call applyForFrame(i) at the top
+// of each watched frame (before stepFrames) to set the held-button state, and
+// finish() once at the end to release everything. `presses` is the sorted
+// schedule; each press holds from its `frame` for `holdFrames` frames.
+function makePressDriver(host, presses) {
+  let applied = 0;          // how many scheduled presses actually got a frame
+  let lastSet = null;       // last setInput payload we pushed (to avoid churn)
+  const platform = host.status?.platform;
+  return {
+    applied: () => applied,
+    applyForFrame(i) {
+      // Buttons whose [frame, frame+holdFrames) window covers frame i.
+      const held = presses.filter((p) => i >= p.frame && i < p.frame + (p.holdFrames ?? 2));
+      // Build a 2-port setInput payload from the held buttons.
+      const ports = [{}, {}];
+      for (const p of held) {
+        const resolved = resolveButtonAlias(p.button, platform);
+        ports[p.port ?? 0][resolved] = true;
+      }
+      const key = JSON.stringify(ports);
+      if (key !== lastSet) { host.setInput({ ports }); lastSet = key; }
+      // Count each scheduled press once, on the first frame it's actually held.
+      for (const p of held) { if (p.frame === i) applied++; }
+    },
+    finish() {
+      if (lastSet !== null && lastSet !== "[{},{}]") host.setInput({ ports: [{}, {}] });
+    },
+  };
+}
 
 // Single source of truth: the same canonical region vocabulary readMemory
 // uses (host/types.js). Previously this was a hand-maintained list that had
@@ -122,7 +155,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         max: z.number().int().min(0).max(255).optional(),
       }).optional().describe("Keep only changes whose NEW byte value is within [min,max]. Combine with onChange to catch e.g. only large reloads."),
       maxEvents: z.number().int().min(1).max(100_000).default(256).describe("Cap on RETURNED events; surplus dropped with a `truncated` flag. When `outputPath` is set, ALL matching events are written to the file regardless of this cap (the cap only bounds the inline preview)."),
-      groupByPC: z.boolean().default(false).describe("Collapse events by the writing PC: return `byPC[]` = {pc, hits, firstFrame, lastFrame, offsets} (one row per instruction that touched the watched bytes) instead of thousands of raw rows. The answer to 'which code writes to $2007?' in a handful of rows. Composes with onChange/valueFilter; still streams the full per-event log to `outputPath` if set."),
+      groupByPC: z.boolean().default(false).describe("Collapse events by the sampled PC: return `byPC[]` = {pc, hits, firstFrame, lastFrame, offsets} (one row per PC seen at a write's frame boundary) instead of thousands of raw rows, and cap the inline `events[]` to a tiny sample (≤8). CAVEAT: `pc` is sampled at the frame boundary, NOT the writing instruction — for NMI/IRQ-driven writes (common on NES/GB) it is usually the interrupted main-thread PC (often an idle loop), so byPC rows can all collapse onto one idle-loop PC. Good for 'how often / which PCs', unreliable as 'which code wrote it' under interrupts. Composes with onChange/valueFilter; full per-event log still streams to `outputPath` if set."),
       outputPath: z.string().optional().describe("If given, stream every filter-passing event to this path as NDJSON (one JSON object per line) and return a compact summary {path, eventCount, ...} plus a small inline preview (first maxEvents). Use for long watches so the full event log never enters your context."),
       pressDuring: z.array(z.object({
         frame: z.number().int().min(0).describe("Frame on which to press."),
@@ -143,6 +176,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
           })();
 
       const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
+      const pressDriver = makePressDriver(host, presses);
       const startFrame = host.status.frameCount;
 
       // Per-range previous snapshots.
@@ -171,18 +205,18 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         }
         if (outputPath) fileLines.push(JSON.stringify(ev));
         // When grouping, the per-event preview is redundant with the summary —
-        // keep a small sample for context but don't let it dominate.
-        const cap = byPc ? Math.min(maxEvents, 32) : maxEvents;
+        // keep only a tiny sample for context (the byPC[] rows are the answer;
+        // a 30-event watch shouldn't dump ~360 lines of raw events too).
+        const cap = byPc ? Math.min(maxEvents, 8) : maxEvents;
         if (preview.length < cap) preview.push(ev);
         else { truncated = true; }
       };
 
       outer:
       for (let i = 0; i < frames; i++) {
-        while (presses.length && presses[0].frame === i) {
-          const p = presses.shift();
-          try { host.pressButton(p.port, p.button, p.holdFrames); } catch { /* unknown button name */ }
-        }
+        // Set held-button state for this frame BEFORE stepping (the loop owns
+        // stepFrames; the driver only calls setInput).
+        pressDriver.applyForFrame(i);
         host.stepFrames(1);
         const frameAbs = startFrame + i + 1;
         let pcCached;
@@ -207,11 +241,13 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
             });
             if (stopOnFirst) { stoppedEarly = true; break outer; }
             // Without a file, once the inline preview is full there's no point
-            // continuing to count — but with a file we want the full total.
-            if (!outputPath && truncated) break outer;
+            // continuing — EXCEPT when grouping, where the byPC[] aggregate
+            // needs every event counted regardless of the preview cap.
+            if (!outputPath && !byPc && truncated) break outer;
           }
         }
       }
+      pressDriver.finish();   // release any still-held buttons
 
       // Build the grouped-by-PC summary (sorted by hit count, descending).
       const byPCSummary = byPc
@@ -227,6 +263,9 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         valueFilter: valueFilter ?? null,
         eventCount: totalMatched,
         ...(byPCSummary ? { byPC: byPCSummary, distinctPCs: byPCSummary.length } : {}),
+        // When the caller scheduled input, ALWAYS report what landed — so a
+        // press that never registered is visible, not a silent eventCount:0.
+        ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
         stoppedEarly,
         truncated,
         note: totalMatched === 0
@@ -256,8 +295,11 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
   server.tool(
     "runUntilWrite",
     "Step the emulator forward until a target byte changes, then stop. Convenience wrapper around watchMemory " +
-    "with stopOnFirst=true. Returns the writing frame + PC + before/after values + a screenshot of the resulting state. " +
-    "Pair this with `disassembleRom` + the returned PC to immediately locate the code line that did the write.",
+    "with stopOnFirst=true. Returns the writing frame + before/after values + the CPU PC sampled at that frame boundary. " +
+    "CAVEAT: the returned `pc` is a frame-boundary sample, NOT the writing instruction — for NMI/IRQ-driven writes (common on " +
+    "NES/GB) it is usually the interrupted main-thread PC (often an idle loop), not the writer. Use it as a lead and confirm " +
+    "against the value trace; `disassembleRom` near that PC is a starting point, not a guaranteed hit. " +
+    "(No screenshot is returned — call `screenshot` separately if you need the resulting frame.)",
     {
       region: z.enum(MEMORY_REGIONS),
       offset: z.number().int().min(0),
@@ -273,37 +315,46 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     safeTool(async ({ region, offset, length, maxFrames, pressDuring }) => {
       const host = getHost(sessionKey);
       const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
+      const pressDriver = makePressDriver(host, presses);
       let prev = snap(host, region, offset, length);
       const startFrame = host.status.frameCount;
 
       for (let i = 0; i < maxFrames; i++) {
-        while (presses.length && presses[0].frame === i) {
-          const p = presses.shift();
-          try { host.pressButton(p.port, p.button, p.holdFrames); } catch { /* ignore */ }
-        }
+        // Hold scheduled input via setInput before stepping (loop owns stepFrames).
+        pressDriver.applyForFrame(i);
         host.stepFrames(1);
         const cur = snap(host, region, offset, length);
         const changes = diffSnapshots(prev, cur, offset);
         if (changes.length > 0) {
           const pc = tryGetPC(host);
           const frameAbs = startFrame + i + 1;
+          pressDriver.finish();
           return jsonContent({
             written: true,
             frame: frameAbs,
             frameRelative: i + 1,
             changes,
+            ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
             pc: hexPC(pc),
             pcRaw: pc,
+            // NOTE: this PC is sampled at the frame boundary AFTER the write, not
+            // captured at the writing instruction. For NMI/IRQ-driven writes
+            // (the common case on NES/GB) it is usually the interrupted
+            // main-thread PC (often an idle loop), NOT the writer. Treat it as a
+            // lead, and confirm against the value trace / a manual disasm.
+            pcCaveat: "pc is a frame-boundary sample, not the writing instruction; for ISR-driven writes it is typically the interrupted main-thread PC (e.g. an idle loop), not the code that wrote the byte.",
             hint: pc != null
-              ? `Use disassembleRom near ${hexPC(pc)} on this ROM to find the writing instruction. The mapper-aware @0xNNNN file-offset comment on each line tells you what bytes to patch.`
+              ? `disassembleRom near ${hexPC(pc)} is a STARTING point — but if this ROM writes from an NMI/IRQ handler, ${hexPC(pc)} is likely the interrupted idle loop, not the writer. Cross-check with the value trace.`
               : "PC was not available — check that getCPUState is wired for this platform.",
           });
         }
         prev = cur;
       }
+      pressDriver.finish();
       return jsonContent({
         written: false,
         framesStepped: maxFrames,
+        ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
         note: "Target byte was not written within maxFrames. Try increasing maxFrames or driving the game with pressDuring.",
       });
     }),

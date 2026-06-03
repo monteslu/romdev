@@ -20,6 +20,9 @@ function makeHost(regions, perFrame) {
   for (const [r, arr] of Object.entries(regions)) mem[r] = Uint8Array.from(arr);
   const host = {
     status: { frameCount: 0, platform: "nes" },
+    // Records every setInput payload keyed by the frame it was set on, so tests
+    // can assert pressDuring actually drove input (the real bug: it never did).
+    inputLog: [],
     readMemory(region, offset, length) {
       const a = mem[region];
       if (!a) throw new Error(`fake host: unknown region ${region}`);
@@ -28,11 +31,13 @@ function makeHost(regions, perFrame) {
     stepFrames(n) {
       for (let i = 0; i < n; i++) {
         host.status.frameCount++;
-        perFrame(host.status.frameCount, mem);
+        perFrame(host.status.frameCount, mem, host);
       }
       return n;
     },
-    pressButton() {},
+    setInput(input) {
+      host.inputLog.push({ frame: host.status.frameCount, input });
+    },
   };
   return host;
 }
@@ -197,4 +202,46 @@ test("missing region without ranges returns a clear error result", async () => {
   const res = await handler({ frames: 1, offset: 0, length: 1, onChange: "any" });
   assert.equal(res.isError, true);
   assert.match(res.content[0].text, /pass `region`.*or `ranges`/);
+});
+
+// Regression for the real v0.1.15 bug: pressDuring called host.pressButton
+// (which LibretroHost doesn't have) inside a swallow-all try/catch, so input
+// was a silent no-op (eventCount:0, indistinguishable from "byte didn't move").
+// Now it drives host.setInput and reports what landed.
+test("pressDuring actually delivers input via setInput and reports it", async () => {
+  // The watched byte only changes on a frame where `start` is held — proving
+  // the press reached the (fake) ROM rather than being dropped.
+  const host = makeHost({ system_ram: [0] }, (f, mem, h) => {
+    const last = h.inputLog[h.inputLog.length - 1];
+    const startHeld = last?.input?.ports?.[0]?.start === true;
+    if (startHeld) mem.system_ram[0] = 0xAA;
+  });
+  setHost("test-session", host);
+  const handler = getWatchHandler();
+  const res = parseResult(await handler({
+    region: "system_ram", offset: 0, length: 1, frames: 30, onChange: "any",
+    pressDuring: [{ frame: 10, button: "start", holdFrames: 5 }],
+  }));
+  assert.equal(res.pressesScheduled, 1, "scheduled press reported");
+  assert.equal(res.pressesApplied, 1, "press actually applied (was 0 in the bug)");
+  assert.ok(res.eventCount >= 1, "the held button drove a byte change");
+  // The host saw start=true set on at least one frame.
+  const sawStart = host.inputLog.some((e) => e.input?.ports?.[0]?.start === true);
+  assert.ok(sawStart, "host.setInput received start=true");
+  // And it was released afterward (input cleared once the hold window passed).
+  const lastInput = host.inputLog[host.inputLog.length - 1];
+  assert.equal(lastInput.input.ports[0].start, undefined, "button released after hold");
+});
+
+test("pressDuring honors platform button aliases (Genesis c -> y)", async () => {
+  const host = makeHost({ system_ram: [0] }, () => {});
+  host.status.platform = "genesis";
+  setHost("test-session", host);
+  const handler = getWatchHandler();
+  await handler({
+    region: "system_ram", offset: 0, length: 1, frames: 5, onChange: "any",
+    pressDuring: [{ frame: 1, button: "c", holdFrames: 2 }],
+  });
+  const sawY = host.inputLog.some((e) => e.input?.ports?.[0]?.y === true);
+  assert.ok(sawY, "Genesis 'c' resolved to libretro 'y' before setInput");
 });

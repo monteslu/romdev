@@ -5,7 +5,9 @@ import { jsonContent, safeTool, textContent } from "../util.js";
 // understands. Genesis pads have A/B/C (+ X/Y/Z on 6-button) which libretro
 // maps onto a/b/y (+ x/.../z); the common confusion is Genesis `c`. SMS/GG
 // pads label their two buttons 1/2 → libretro a/b. Pass-through otherwise.
-function resolveButtonAlias(button, platform) {
+// Exported so watchMemory/runUntilWrite's `pressDuring` resolves aliases the
+// same way the standalone pressButton tool does.
+export function resolveButtonAlias(button, platform) {
   if (platform === "genesis" || platform === "megadrive" || platform === "md") {
     if (button === "c") return "y";   // Genesis C = libretro Y
   }
