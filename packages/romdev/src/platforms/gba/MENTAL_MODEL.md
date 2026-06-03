@@ -116,6 +116,12 @@ libgba sound API in `gba_sound.h` covers the tone channels but the
 DMA-driven PCM streaming is something you'd typically pair with
 maxmod (separate library, not bundled here).
 
+**Debugging sound:** `getAudioState({chip:"gba"})` decodes the live APU —
+per-channel freq→note/duty/volume for the 4 tone channels plus the 2 Direct
+Sound FIFO states. Pair with `inspectSprites`/`inspectPalette`/
+`getRenderingContext`/`getCPUState` (ARM7) and `findWriter` for the rest of the
+live-debug loop.
+
 **For scaffold-level sfx**, the libtonc runtime ships a minimal
 `gba_sfx.h` / `gba_sfx.c` pair (3 functions: `sfx_init`, `sfx_tone`,
 `sfx_noise`) that wraps the DMG-compatible APU directly. Same shape

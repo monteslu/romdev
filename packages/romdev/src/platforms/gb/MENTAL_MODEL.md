@@ -203,7 +203,9 @@ README for the exact incantation.
   + `sound_play_noise(length)` + `sound_off()` cover the common
   "beep on event" SFX pattern using the GB APU's 4 channels (2 square,
   triangle/wave, noise). For sequenced multi-channel music, roll your own
-  or use raw `NR*` register names from `gb_hardware.h`.
+  or use raw `NR*` register names from `gb_hardware.h`. To debug it,
+  `getAudioState({chip:"gb"})` decodes the live APU — per-channel
+  freq→note/duty/volume/sweep, straight from the `NR*` registers.
 - Window layer — `LCDC.5` + `WX`/`WY` registers, no helpers.
 - MBC1/MBC3/MBC5 bank switching — every ROM bundled is 32 KB ROM-only.
   For bigger games, write your own bank-switch macros and pass them
