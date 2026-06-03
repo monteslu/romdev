@@ -108,6 +108,7 @@ export const KEYBOARD_BINDINGS_HELP = `Keyboard:
 
 Emulator hotkeys (RetroArch defaults):
   P / Space            Pause / unpause emulation
+  K                    Frame advance (step one frame while paused)
   F2                   Save state (to slot)
   F4                   Load state (from slot)
 
@@ -337,6 +338,15 @@ export async function playtest(args) {
       if (h && h.status?.loaded) { try { h.loadState("hotkey"); } catch (err) {
         log.debug("[playtest] load state failed (no save yet?):", err.message);
       } }
+      return;
+    }
+    if (key === "k") {
+      const h = getLiveHost();
+      if (h && h.status?.loaded && h.status.paused) {
+        h.resume();
+        h.stepFrames(1);
+        h.pause();
+      }
       return;
     }
     if (key) heldKeys.add(key);
