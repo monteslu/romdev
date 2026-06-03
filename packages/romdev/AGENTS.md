@@ -4,7 +4,7 @@ You are reading this because romdev is connected. This is the orientation. Read 
 
 ## What this server does
 
-Drives the full homebrew ROM dev loop for retro game platforms (NES, Game Boy, SNES, Genesis, Atari 2600/7800, Lynx, C64, plus SMS/GG/MSX/Coleco). Build → run → screenshot → inspect → patch → iterate. Also: disassemble existing ROMs, convert assets, study patterns from real games, drive emulator state for scripted testing, look up + apply cheats (a free labeled RAM/code map for known ROMs — and a fun bonus). Bundled WASM toolchains and emulator cores — no system dependencies, no installs.
+Drives the full homebrew ROM dev loop for retro game platforms (NES, Game Boy, SNES, Genesis, Atari 2600/7800, Lynx, C64, plus SMS/GG/MSX/Coleco). Build → run → screenshot → inspect → patch → iterate. Also a strong reverse-engineering kit: disassemble existing ROMs (byte-exact rebuildable projects), find the EXACT instruction that wrote a RAM byte (`findWriter`, a core-level write watchpoint), look up + apply + create cheats (a free labeled RAM/code map for known ROMs — and a fun bonus), convert assets, study patterns from real games, drive emulator state for scripted testing. Bundled WASM toolchains and emulator cores — no system dependencies, no installs.
 
 You drive the work. The human is a director — they may want a game, a ROM disassembly, a tool-assisted reverse-engineering session, or anything else this server can do.
 
@@ -45,13 +45,13 @@ Skip playtest only when there's clearly no human in the loop: CI runs, automated
 - `platforms` — which platforms + languages are supported
 - `run` — load ROMs, step frames, screenshot (works for existing ROMs you didn't compile)
 - `input` — drive controllers, look up hardware bit layouts
-- `state` — savestates and forensic state inspection
+- `state` — savestates and forensic state inspection (`saveState`, `loadState`, `exportState` a slot to disk without touching the live host, `listStates`, `dumpState`)
 - `memory` — read/write VRAM/OAM/CGRAM/ARAM and other regions
-- `debug` — inspectSprites, getCPUState, **disassemble**, symbol lookup, palette inspection, whichTilesAreRendered, addressToSymbol
+- `debug` — inspectSprites, getCPUState, **disassemble**/disassembleProject, symbol lookup, palette inspection, whichTilesAreRendered, addressToSymbol, plus **cheats** (`gameCheats` = a free labeled RAM/code map for known ROMs, `applyCheat`/`clearCheats` non-destructively, `makeCheat` to create codes)
 - `assets` — convert PNGs to tiles, WAVs to BRR, identify ROMs, plus the hacking toolkit (`patchFile`, `assembleSnippet`, `diffRoms`, `findFreeSpace`, `spliceCHR`, `extractCart`, `wrapRomFromParts`)
 - `project` — starter snippets per platform
 - `show` — `playtest` (open the live SDL window for a human), `playtestStop`, `playtestStatus`, `playtestFramebuffer` (capture exactly what the human's window shows)
-- `advanced` — runUntil, watchMemory / runUntilWrite, input recording
+- `advanced` — runUntil, watchMemory / runUntilWrite, **`findWriter`** (the EXACT instruction that wrote a byte, via a core watchpoint — fixes the frame-sampled-PC problem), input recording
 
 **"Disassemble this NES ROM"** is now just: `disassembleRom({path, startAddress, length})`. No discovery step.
 
@@ -205,6 +205,12 @@ For maintainers: the platform / core / patch / region-ID matrix and the recipe f
 ## Deep debug tooling status per platform
 
 Different platforms have different levels of MCP-exposed debugging — different hardware needs different tools, and we've patched the cores where it's been worth it. Generic shapes (inspectSprites, inspectPalette, getCPUState) work cross-platform; coverage as of this writing:
+
+> **Universal across ALL the platforms below:** `findWriter` (the core-level
+> instruction write watchpoint — the exact PC that wrote a RAM byte),
+> `gameCheats`/`applyCheat`/`makeCheat` (cheat lookup/apply/create), `disassembleRom`
+> + `disassembleProject` + `findReferences`, and `watchMemory`/`runUntilWrite`.
+> The per-platform notes below cover the platform-SPECIFIC inspectors.
 
 - **SNES** (snes9x patched): inspectSprites, inspectPalette, getCPUState({cpu:'main'|'spc700'}), getDspState (full per-voice + master mixer), readMemory regions for OAM/CGRAM/ARAM/FillRAM. Audio + video both deeply introspectable.
 - **NES** (fceumm patched): inspectSprites, inspectPalette, getCPUState (6502), getRenderingContext (PPUCTRL/PPUMASK decoded → active CHR bank + file offset), readMemory regions for OAM/Palette/Nametables/CHR/CPU_REGS/PPU_REGS/APU_REGS.

@@ -75,10 +75,12 @@ export function registerStateTools(server, z, sessionKey) {
     "clean A/B patch test: save a gameplay state on the original, load the patched ROM, loadState, and the only " +
     "difference between the two runs is your bytes. " +
     "TWO THINGS TO KNOW: (1) the FRAMEBUFFER is not refreshed by a restore (the core hasn't run a frame), so an " +
-    "immediate `screenshot` shows a stale/blank frame — call `stepFrames(1)` once first (this tool does it for " +
-    "you when `render:true`, the default). (2) `frameCount` is the session's monotonic power-on counter and is " +
+    "immediate `screenshot` would otherwise show a stale/blank frame — so this tool renders one frame for you when " +
+    "`render:true` (the default), EVEN WHILE PAUSED, so a windowed+paused 'restore → screenshot to confirm' stays " +
+    "deterministic without resuming. (2) `frameCount` is the session's monotonic power-on counter and is " +
     "NOT rewound to the snapshot's frame — it keeps counting from the current run; don't treat it as the saved " +
-    "moment's frame number.",
+    "moment's frame number. (3) A restore REMOVES active cheats (a save-state blob doesn't carry frontend cheat " +
+    "state) — the response reports `cheatsCleared:N`.",
     {
       name: z.string().min(1).optional().describe("In-memory slot name (from saveState({name})). Provide `name` OR `path`."),
       path: z.string().optional().describe("Absolute path to a save-state blob on disk (from saveState({path}) or dumpState). Load the matching ROM first."),
