@@ -9,7 +9,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
-import { existsSync } from "node:fs";
+import os from "node:os";
+import { existsSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -142,6 +143,37 @@ test("MCP: save state, step further, load state restores frame count", { skip: !
   assert.equal(JSON.parse(restoreNoRender.content[0].text).rendered, false);
   const afterNoRender = JSON.parse((await client.callTool({ name: "getStatus", arguments: {} })).content[0].text).frameCount;
   assert.equal(afterNoRender, 131, "render:false did not advance the frame counter");
+});
+
+test("MCP: loadState clears active cheats (documented contract)", { skip: !HAS_NESTEST && "nestest.nes not present" }, async () => {
+  const { client } = await startServerAndClient();
+  await client.callTool({ name: "loadMedia", arguments: { platform: "nes", path: ROM_PATH } });
+  await client.callTool({ name: "stepFrames", arguments: { frames: 30 } });
+  await client.callTool({ name: "saveState", arguments: { name: "cp" } });
+  await client.callTool({ name: "applyCheat", arguments: { code: "0075:09" } });
+  // Restoring a state must clear cheats (frontend cheat state isn't in the blob).
+  const r = JSON.parse((await client.callTool({ name: "loadState", arguments: { name: "cp" } })).content[0].text);
+  assert.equal(r.cheatsCleared, 1, "loadState reports the cheat it cleared");
+  // Re-apply: it should land in slot 0 (proving the prior cheat was gone), not slot 1.
+  const re = JSON.parse((await client.callTool({ name: "applyCheat", arguments: { code: "0075:09" } })).content[0].text);
+  assert.deepEqual(re.active.map((c) => c.index), [0], "no stale cheat survived the restore");
+});
+
+test("MCP: exportState copies a slot to disk without touching the live host", { skip: !HAS_NESTEST && "nestest.nes not present" }, async () => {
+  const { client } = await startServerAndClient();
+  await client.callTool({ name: "loadMedia", arguments: { platform: "nes", path: ROM_PATH } });
+  await client.callTool({ name: "stepFrames", arguments: { frames: 30 } });
+  await client.callTool({ name: "saveState", arguments: { name: "slot1" } });
+  const before = JSON.parse((await client.callTool({ name: "getStatus", arguments: {} })).content[0].text).frameCount;
+  const out = path.join(os.tmpdir(), `romdev-export-${before}.state`);
+  const r = JSON.parse((await client.callTool({ name: "exportState", arguments: { fromSlot: "slot1", path: out } })).content[0].text);
+  assert.equal(r.exported, true);
+  assert.ok(r.bytes > 0);
+  assert.ok(existsSync(out), "the state file was written");
+  // Live host untouched: frame counter unchanged by the export.
+  const after = JSON.parse((await client.callTool({ name: "getStatus", arguments: {} })).content[0].text).frameCount;
+  assert.equal(after, before, "exportState did not advance/disturb the live host");
+  rmSync(out, { force: true });
 });
 
 test("MCP: readMemory returns 16 bytes from NES system RAM", { skip: !HAS_NESTEST && "nestest.nes not present" }, async () => {

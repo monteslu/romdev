@@ -674,9 +674,11 @@ OAM format: bytes per sprite are `[y, tileIndex, attributes, x]`.
 
 ## Save-state semantics
 
-`saveState(name)` / `loadState(name)` slots are **in-memory** and discarded when you call `shutdown` or load new media. To persist, `writeAsset({ path, base64: <get base64 from somewhere> })` after a `saveState`.
+`saveState(name)` / `loadState(name)` slots are **in-memory** and discarded on `shutdown` or new media. To persist a state across sessions:
+- `saveState({ path })` writes the CURRENT live host to a file directly.
+- `exportState({ fromSlot, path })` copies an EXISTING in-memory slot (e.g. one the human saved with a playtest emulator-hotkey — it appears in `listStates`) to a file **without disturbing the live host** (no pause/resume needed). Reload either with `loadState({ path })`.
 
-`reset()` resets the frame counter and the core's state but keeps the loaded ROM.
+`loadState` removes any active cheats (a save-state blob doesn't carry frontend cheat state) and reports `cheatsCleared`. `reset()` resets the frame counter + core state (and clears cheats) but keeps the loaded ROM.
 
 ## Project scaffolding
 
