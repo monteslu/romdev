@@ -1,6 +1,6 @@
 {
   "name": "romdev-mcp",
-  "version": "0.1.22",
+  "version": "0.1.23",
   "description": "MCP server giving coding agents full control of homebrew ROM development across retro platforms (NES, SNES, GB, Genesis, Atari, C64, ...) via WASM libretro cores.",
   "type": "module",
   "main": "src/mcp/server.js",
@@ -41,7 +41,7 @@
     "@monteslu/chafa-wasm": "^0.4.0",
     "romdev-core-fceumm": "0.3.0",
     "romdev-core-gambatte": "0.3.0",
-    "romdev-core-gpgx": "0.2.0",
+    "romdev-core-gpgx": "0.3.0",
     "romdev-core-handy": "0.1.0",
     "romdev-core-prosystem": "0.2.0",
     "romdev-core-vice": "0.2.0",

@@ -5,14 +5,149 @@
 # still succeeds but those tools return empty data (silent runtime failure).
 # git apply ignores everything above the first 'diff --git' line.
 #
+# Also adds an instruction-level WRITE WATCHPOINT for the m68k (Genesis): the
+# m68ki_write_8 path in core/m68k/m68kcpu.h stamps REG_PC when a watched address
+# is written; libretro.c exports romdev_watchpoint_set/get. (Genesis only; the
+# shared Z80 used for SMS/GG is a separate write path, not yet hooked.)
+# git apply ignores everything above the first 'diff --git' line.
+#
+diff --git a/core/m68k/m68kcpu.c b/core/m68k/m68kcpu.c
+index 36112a5..50f1cdd 100644
+--- a/core/m68k/m68kcpu.c
++++ b/core/m68k/m68kcpu.c
+@@ -31,6 +31,13 @@ static int irq_latency;
+ 
+ m68ki_cpu_core m68k;
+ 
++/* romdev instruction-level write watchpoint state (see m68kcpu.h for the hook). */
++unsigned int  romdev_wp_addr     = 0;
++int           romdev_wp_enabled  = 0;
++unsigned int  romdev_wp_last_pc  = 0xFFFFFFFF;
++unsigned char romdev_wp_last_val = 0;
++unsigned int  romdev_wp_hits     = 0;
++
+ 
+ /* ======================================================================== */
+ /* =============================== CALLBACKS ============================== */
+diff --git a/core/m68k/m68kcpu.h b/core/m68k/m68kcpu.h
+index b702173..3d3b965 100644
+--- a/core/m68k/m68kcpu.h
++++ b/core/m68k/m68kcpu.h
+@@ -674,6 +674,20 @@ INLINE uint m68ki_read_16(uint address);
+ INLINE uint m68ki_read_32(uint address);
+ 
+ /* Write to the current data space */
++/* romdev instruction-level write watchpoint (m68k). Records REG_PC (the
++ * executing instruction, give or take prefetch) when a watched address is
++ * written. Defined in m68kcpu.c; exported to the host via libretro.c. */
++extern unsigned int  romdev_wp_addr;
++extern int           romdev_wp_enabled;
++extern unsigned int  romdev_wp_last_pc;
++extern unsigned char romdev_wp_last_val;
++extern unsigned int  romdev_wp_hits;
++#define ROMDEV_WP_M68K(a, v) do { \
++    if (romdev_wp_enabled && (unsigned int)(a) == romdev_wp_addr) { \
++      romdev_wp_last_pc = REG_PC; romdev_wp_last_val = (unsigned char)(v); romdev_wp_hits++; \
++    } \
++  } while (0)
++
+ INLINE void m68ki_write_8(uint address, uint value);
+ INLINE void m68ki_write_16(uint address, uint value);
+ INLINE void m68ki_write_32(uint address, uint value);
+@@ -917,6 +931,7 @@ INLINE void m68ki_write_8(uint address, uint value)
+ {
+   cpu_memory_map *temp;
+ 
++  ROMDEV_WP_M68K(address, value);
+   m68ki_set_fc(FLAG_S | FUNCTION_CODE_USER_DATA) /* auto-disable (see m68kcpu.h) */
+ 
+ #ifdef HOOK_CPU
+@@ -933,6 +948,9 @@ INLINE void m68ki_write_16(uint address, uint value)
+ {
+   cpu_memory_map *temp;
+ 
++  /* word write covers address and address+1 */
++  ROMDEV_WP_M68K(address, value >> 8);
++  ROMDEV_WP_M68K(address + 1, value);
+   m68ki_set_fc(FLAG_S | FUNCTION_CODE_USER_DATA) /* auto-disable (see m68kcpu.h) */
+   m68ki_check_address_error(address, MODE_WRITE, FLAG_S | FUNCTION_CODE_USER_DATA); /* auto-disable (see m68kcpu.h) */
+ 
+@@ -950,6 +968,11 @@ INLINE void m68ki_write_32(uint address, uint value)
+ {
+   cpu_memory_map *temp;
+ 
++  /* long write covers address..address+3 */
++  ROMDEV_WP_M68K(address,     value >> 24);
++  ROMDEV_WP_M68K(address + 1, value >> 16);
++  ROMDEV_WP_M68K(address + 2, value >> 8);
++  ROMDEV_WP_M68K(address + 3, value);
+   m68ki_set_fc(FLAG_S | FUNCTION_CODE_USER_DATA) /* auto-disable (see m68kcpu.h) */
+   m68ki_check_address_error(address, MODE_WRITE, FLAG_S | FUNCTION_CODE_USER_DATA) /* auto-disable (see m68kcpu.h) */
+ 
+diff --git a/core/z80/z80.c b/core/z80/z80.c
+index 74d5053..b45d23b 100644
+--- a/core/z80/z80.c
++++ b/core/z80/z80.c
+@@ -632,7 +632,21 @@ INLINE void BURNODD(int cycles, int opcodes, int cyclesum)
+ /***************************************************************
+  * Write a byte to given memory location
+  ***************************************************************/
+-#define WM(addr,value) z80_writemem(addr,value)
++/* romdev write watchpoint — shared globals (defined in core/m68k/m68kcpu.c).
++ * For SMS/GG the Z80 is the active CPU; PC here is the live Z80 program counter.
++ * (Genesis uses the m68k; only one CPU is watched per platform, so sharing the
++ * globals is fine.) */
++extern unsigned int  romdev_wp_addr;
++extern int           romdev_wp_enabled;
++extern unsigned int  romdev_wp_last_pc;
++extern unsigned char romdev_wp_last_val;
++extern unsigned int  romdev_wp_hits;
++#define WM(addr,value) do { \
++    if (romdev_wp_enabled && (unsigned int)(addr) == romdev_wp_addr) { \
++      romdev_wp_last_pc = PC; romdev_wp_last_val = (unsigned char)(value); romdev_wp_hits++; \
++    } \
++    z80_writemem((addr),(value)); \
++  } while (0)
+ 
+ /***************************************************************
+  * Read a word from given memory location
 diff --git a/libretro/libretro.c b/libretro/libretro.c
-index 798c6cc..676c9d8 100644
+index 798c6cc..14264d9 100644
 --- a/libretro/libretro.c
 +++ b/libretro/libretro.c
-@@ -3743,6 +3743,33 @@ void retro_unload_game(void)
+@@ -3743,6 +3743,77 @@ void retro_unload_game(void)
  
  unsigned retro_get_region(void) { return vdp_pal ? RETRO_REGION_PAL : RETRO_REGION_NTSC; }
  
++/* romdev instruction-level write watchpoint — records the m68k REG_PC for a
++ * watched address (hook in core/m68k/m68kcpu.h). Genesis only for now (the
++ * shared Z80 is a separate write path, not yet hooked). */
++extern unsigned int  romdev_wp_addr;
++extern int           romdev_wp_enabled;
++extern unsigned int  romdev_wp_last_pc;
++extern unsigned char romdev_wp_last_val;
++extern unsigned int  romdev_wp_hits;
++
++void romdev_watchpoint_set(unsigned int addr, int enabled)
++{
++   romdev_wp_addr = addr;
++   romdev_wp_enabled = enabled ? 1 : 0;
++   romdev_wp_last_pc = 0xFFFFFFFF;
++   romdev_wp_last_val = 0;
++   romdev_wp_hits = 0;
++}
++
++void romdev_watchpoint_get(unsigned int *out5, int clearHits)
++{
++   if (!out5) return;
++   out5[0] = (unsigned int)romdev_wp_enabled;
++   out5[1] = romdev_wp_addr;
++   out5[2] = romdev_wp_last_pc;
++   out5[3] = (unsigned int)romdev_wp_last_val;
++   out5[4] = romdev_wp_hits;
++   if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; }
++}
++
 +/* rom-dev-mcp extension: custom memory region IDs above libretro standard.
 + * Mirrors fceumm + snes9x patches. Exposes Genesis sound/video chip state
 + * so inspectSprites / inspectPalette / getCPUState / etc. can read live
@@ -58,7 +193,7 @@ index 798c6cc..676c9d8 100644
  void *retro_get_memory_data(unsigned id)
  {
     switch (id)
-@@ -3751,6 +3778,24 @@ void *retro_get_memory_data(unsigned id)
+@@ -3751,6 +3822,35 @@ void *retro_get_memory_data(unsigned id)
           return sram.on ? sram.sram : NULL;
        case RETRO_MEMORY_SYSTEM_RAM:
           return work_ram;
@@ -94,7 +229,7 @@ index 798c6cc..676c9d8 100644
        default:
           return NULL;
     }
-@@ -3802,6 +3847,15 @@ size_t retro_get_memory_size(unsigned id)
+@@ -3802,6 +3902,21 @@ size_t retro_get_memory_size(unsigned id)
              return 0x2000; /* 8KB internal RAM */
        }
  
