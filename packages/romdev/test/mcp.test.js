@@ -124,10 +124,24 @@ test("MCP: save state, step further, load state restores frame count", { skip: !
     arguments: { name: "cp1" },
   });
   assert.equal(restore.isError, undefined);
+  // loadState refreshes the framebuffer by default (render:true) so an
+  // immediate screenshot isn't stale — it reports rendered:true and advances
+  // the monotonic counter by one (130 → 131). The core state itself is back
+  // at cp1; only our power-on counter is monotonic (documented).
+  const restoreBody = JSON.parse(restore.content[0].text);
+  assert.equal(restoreBody.rendered, true, "loadState renders one frame by default");
+  const afterRestore = JSON.parse((await client.callTool({ name: "getStatus", arguments: {} })).content[0].text).frameCount;
+  assert.equal(afterRestore, 131, "render:true stepped exactly one frame");
 
-  // After load, the core's internal state is back at cp1 but our frame counter
-  // does not roll back (it tracks calls into the host). That's documented
-  // behavior — the core is restored, our counter is monotonic.
+  // render:false restores WITHOUT advancing — for callers who need the core
+  // paused at the exact restored instant before any frame runs.
+  const restoreNoRender = await client.callTool({
+    name: "loadState",
+    arguments: { name: "cp1", render: false },
+  });
+  assert.equal(JSON.parse(restoreNoRender.content[0].text).rendered, false);
+  const afterNoRender = JSON.parse((await client.callTool({ name: "getStatus", arguments: {} })).content[0].text).frameCount;
+  assert.equal(afterNoRender, 131, "render:false did not advance the frame counter");
 });
 
 test("MCP: readMemory returns 16 bytes from NES system RAM", { skip: !HAS_NESTEST && "nestest.nes not present" }, async () => {

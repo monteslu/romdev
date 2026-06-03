@@ -119,6 +119,19 @@ function valueMatches(valueFilter, after) {
   return true;
 }
 
+// Downsample an array to at most `n` evenly-spaced elements, ALWAYS keeping the
+// first and last (so a value-vs-frame curve still spans the whole window). For
+// n>=length returns the array unchanged; for n<=1 returns just the last point.
+function downsample(arr, n) {
+  const len = arr.length;
+  if (len <= n) return arr;
+  if (n <= 1) return [arr[len - 1]];
+  const out = [];
+  const step = (len - 1) / (n - 1);
+  for (let i = 0; i < n; i++) out.push(arr[Math.round(i * step)]);
+  return out;
+}
+
 export function registerWatchMemoryTools(server, z, sessionKey) {
   const rangeShape = z.object({
     region: z.enum(MEMORY_REGIONS),
@@ -154,7 +167,9 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         min: z.number().int().min(0).max(255).optional(),
         max: z.number().int().min(0).max(255).optional(),
       }).optional().describe("Keep only changes whose NEW byte value is within [min,max]. Combine with onChange to catch e.g. only large reloads."),
-      maxEvents: z.number().int().min(1).max(100_000).default(256).describe("Cap on RETURNED events; surplus dropped with a `truncated` flag. When `outputPath` is set, ALL matching events are written to the file regardless of this cap (the cap only bounds the inline preview)."),
+      maxEvents: z.number().int().min(1).max(100_000).default(256).describe("Cap on RETURNED events; surplus dropped with a `truncated` flag. When `outputPath` is set, ALL matching events are written to the file regardless of this cap (the cap only bounds the inline preview). NOTE: with `format:\"series\"` this caps SAMPLES PER OFFSET and downsamples (keeps an evenly-spaced subset spanning the whole window) instead of truncating, so the series always reaches the last frame."),
+      format: z.enum(["events", "series"]).default("events").describe("Output shape. 'events' (default) = one verbose object per change. 'series' = COMPACT columnar: per watched offset return parallel `frames:[...]` + `values:[...]` arrays (the value-vs-frame curve) with the repeated region/label/pc boilerplate hoisted into a one-time header. Use 'series' for a dense single-byte timeline — physics arcs, animation counters, a value ramp that changes every frame — where you want the trajectory cheaply, not N fat rows. ~10× smaller for a monotonic ramp. Drops `pc` (use groupByPC/'events' if you need per-change PCs)."),
+      sampleEvery: z.number().int().min(1).default(1).describe("Keep only every Nth filter-passing change (1 = all). A cheap 'I want the trend, not every delta' knob — e.g. sampleEvery:4 on a per-frame ramp returns a quarter of the points, still spanning the full window. Applies in both 'events' and 'series' formats; combine with format:'series' for the most compact dense-timeline output."),
       groupByPC: z.boolean().default(false).describe("Collapse events by the sampled PC: return `byPC[]` = {pc, hits, firstFrame, lastFrame, offsets} (one row per PC seen at a write's frame boundary) instead of thousands of raw rows, and cap the inline `events[]` to a tiny sample (≤8). CAVEAT: `pc` is sampled at the frame boundary, NOT the writing instruction — for NMI/IRQ-driven writes (common on NES/GB) it is usually the interrupted main-thread PC (often an idle loop), so byPC rows can all collapse onto one idle-loop PC. Good for 'how often / which PCs', unreliable as 'which code wrote it' under interrupts. Composes with onChange/valueFilter; full per-event log still streams to `outputPath` if set."),
       outputPath: z.string().optional().describe("If given, stream every filter-passing event to this path as NDJSON (one JSON object per line) and return a compact summary {path, eventCount, ...} plus a small inline preview (first maxEvents). Use for long watches so the full event log never enters your context."),
       pressDuring: z.array(z.object({
@@ -164,7 +179,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         holdFrames: z.number().int().min(1).default(2),
       })).optional().describe("Schedule button presses while watching, so the agent can simulate user input mid-watch."),
     },
-    safeTool(async ({ region, offset = 0, length = 1, ranges, frames = 600, stopOnFirst = false, onChange = "any", valueFilter, maxEvents = 256, groupByPC = false, outputPath, pressDuring }) => {
+    safeTool(async ({ region, offset = 0, length = 1, ranges, frames = 600, stopOnFirst = false, onChange = "any", valueFilter, maxEvents = 256, format = "events", sampleEvery = 1, groupByPC = false, outputPath, pressDuring }) => {
       const host = getHost(sessionKey);
 
       // Normalize to a list of ranges. Single-range mode requires `region`.
@@ -184,6 +199,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
 
       const preview = [];          // bounded inline events
       let totalMatched = 0;        // ALL filter-passing events (file-backed)
+      let sampleCounter = 0;       // for sampleEvery: keep every Nth match
       let truncated = false;       // inline preview hit maxEvents
       let stoppedEarly = false;
       const fileLines = [];        // NDJSON lines when outputPath set
@@ -192,9 +208,30 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       // "find the hot-path writer" question — into one row per PC regardless of
       // how many thousands of times each fired.
       const byPc = groupByPC ? new Map() : null;
+      // format:"series" accumulator: offsetHex -> {offset, offsetHex, label,
+      // region, frames:[], values:[]}. The compact value-vs-frame curve, with
+      // the repeated boilerplate hoisted into the per-offset header (set once).
+      const seriesMap = format === "series" ? new Map() : null;
 
       const pushEvent = (ev) => {
         totalMatched++;
+        // sampleEvery: keep only every Nth filter-passing change (1 = all).
+        if (sampleEvery > 1) {
+          const keep = (sampleCounter % sampleEvery) === 0;
+          sampleCounter++;
+          if (!keep) return;
+        }
+        if (seriesMap) {
+          const key = ev.offsetHex ?? String(ev.offset);
+          let s = seriesMap.get(key);
+          if (!s) {
+            s = { offset: ev.offset, offsetHex: ev.offsetHex, region: ev.region, frames: [], values: [] };
+            if (ev.label != null) s.label = ev.label;
+            seriesMap.set(key, s);
+          }
+          s.frames.push(ev.frame);
+          s.values.push(ev.after);
+        }
         if (byPc) {
           const key = ev.pc ?? "(unknown)";
           let g = byPc.get(key);
@@ -241,9 +278,9 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
             });
             if (stopOnFirst) { stoppedEarly = true; break outer; }
             // Without a file, once the inline preview is full there's no point
-            // continuing — EXCEPT when grouping, where the byPC[] aggregate
-            // needs every event counted regardless of the preview cap.
-            if (!outputPath && !byPc && truncated) break outer;
+            // continuing — EXCEPT when grouping (byPC[] needs every event) or in
+            // series mode (the curve needs every point before its own downsample).
+            if (!outputPath && !byPc && !seriesMap && truncated) break outer;
           }
         }
       }
@@ -288,7 +325,40 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         });
       }
 
-      return jsonContent({ ...base, events: preview });
+      // format:"series" — compact columnar value-vs-frame curve per offset.
+      // maxEvents caps SAMPLES PER OFFSET by DOWNSAMPLING (evenly-spaced subset
+      // that always keeps the first and last point) rather than truncating, so
+      // the curve spans the whole window in one call.
+      if (seriesMap) {
+        let anyDownsampled = false;
+        const series = Array.from(seriesMap.values()).map((s) => {
+          const total = s.frames.length;
+          let { frames: fr, values: va } = s;
+          if (total > maxEvents) {
+            anyDownsampled = true;
+            fr = downsample(fr, maxEvents);
+            va = downsample(va, maxEvents);
+          }
+          return {
+            offset: s.offset, offsetHex: s.offsetHex, region: s.region,
+            ...(s.label != null ? { label: s.label } : {}),
+            points: fr.length, totalChanges: total,
+            ...(total > maxEvents ? { downsampledFrom: total } : {}),
+            frames: fr, values: va,
+          };
+        });
+        return jsonContent({
+          ...base,
+          format: "series",
+          ...(sampleEvery > 1 ? { sampleEvery } : {}),
+          series,
+          ...(anyDownsampled
+            ? { seriesNote: `One or more offsets had >maxEvents (${maxEvents}) changes and were DOWNSAMPLED to an evenly-spaced subset spanning the full window (first+last kept). Raise maxEvents or lower sampleEvery for more resolution; use outputPath for every raw delta.` }
+            : {}),
+        });
+      }
+
+      return jsonContent({ ...base, events: preview, ...(sampleEvery > 1 ? { sampleEvery } : {}) });
     }),
   );
 

@@ -39,28 +39,47 @@ export function registerStateTools(server, z, sessionKey) {
   server.tool(
     "loadState",
     "Restore a previously saved state — from an in-memory `name` slot OR a `path` on disk (a blob written by " +
-    "saveState({path}) or dumpState). Resets the framebuffer/frame counters to whatever the snapshot held. " +
+    "saveState({path}) or dumpState). Restores the CPU/PPU/APU/RAM the snapshot held. " +
     "Load-from-path is the cross-session escape hatch: skip the boot replay by restoring a disk snapshot " +
     "(the matching ROM must already be loaded — the blob is core-specific and a mismatch errors clearly). " +
     "A state captures RAM/CPU/PPU/APU — NOT the ROM — so it is ROM-CONTENT-INDEPENDENT: a state saved on the " +
     "stock ROM reloads cleanly into a rebuilt/patched ROM of the same core (same size/mapper). That enables a " +
     "clean A/B patch test: save a gameplay state on the original, load the patched ROM, loadState, and the only " +
-    "difference between the two runs is your bytes.",
+    "difference between the two runs is your bytes. " +
+    "TWO THINGS TO KNOW: (1) the FRAMEBUFFER is not refreshed by a restore (the core hasn't run a frame), so an " +
+    "immediate `screenshot` shows a stale/blank frame — call `stepFrames(1)` once first (this tool does it for " +
+    "you when `render:true`, the default). (2) `frameCount` is the session's monotonic power-on counter and is " +
+    "NOT rewound to the snapshot's frame — it keeps counting from the current run; don't treat it as the saved " +
+    "moment's frame number.",
     {
       name: z.string().min(1).optional().describe("In-memory slot name (from saveState({name})). Provide `name` OR `path`."),
       path: z.string().optional().describe("Absolute path to a save-state blob on disk (from saveState({path}) or dumpState). Load the matching ROM first."),
+      render: z.boolean().default(true).describe("Step a single frame after restoring so the framebuffer reflects the restored state (fixes the blank/stale screenshot-right-after-load footgun). Set false to restore WITHOUT advancing — e.g. when you need the core paused at the exact restored instant before any frame runs."),
     },
-    safeTool(async ({ name, path: inPath }) => {
+    safeTool(async ({ name, path: inPath, render = true }) => {
       if (!name && !inPath) throw new Error("loadState: provide `name` (in-memory slot) or `path` (disk).");
       if (name && inPath) throw new Error("loadState: provide `name` OR `path`, not both.");
       const host = getHost(sessionKey);
       if (inPath) {
         const blob = new Uint8Array(await readFile(inPath));
         host.unserializeState(blob);
-        return jsonContent({ loaded: true, path: inPath, bytes: blob.length, platform: host.status.platform });
+      } else {
+        host.loadState(name);
       }
-      host.loadState(name);
-      return jsonContent({ loaded: true, name, platform: host.status.platform });
+      // Refresh the framebuffer unless the caller opted out — without this the
+      // next screenshot is stale/blank because the core hasn't produced a frame
+      // since the restore. Advances frameCount by 1 (it's monotonic anyway).
+      let rendered = false;
+      if (render && !host.status.paused) { host.stepFrames(1); rendered = true; }
+      return jsonContent({
+        loaded: true,
+        ...(inPath ? { path: inPath } : { name }),
+        platform: host.status.platform,
+        rendered,
+        ...(render && host.status.paused
+          ? { note: "Host is paused, so the framebuffer was NOT refreshed; resume or stepFrames to render the restored state." }
+          : {}),
+      });
     }),
   );
 
