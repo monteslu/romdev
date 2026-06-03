@@ -138,6 +138,12 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     offset: z.number().int().min(0),
     length: z.number().int().min(1).max(4096).default(1),
     label: z.string().optional().describe("Optional name echoed on every event from this range — lets you tell disjoint ranges apart in one stream."),
+    // Per-range overrides of the call-wide filters. The whole point: in a
+    // multi-range watch, keep EVERY transition of a slow state byte while
+    // sampling/suppressing a fast free-running counter in the SAME pass.
+    onChange: z.enum(["any", "increase", "decrease", "reset"]).optional().describe("Per-range edge filter; overrides the call-wide `onChange` for THIS range only."),
+    sampleEvery: z.number().int().min(1).optional().describe("Per-range downsample: keep every Nth change from THIS range (e.g. 8 to thin a noisy per-frame counter while other ranges stay full)."),
+    valueFilter: z.object({ min: z.number().int().min(0).max(255).optional(), max: z.number().int().min(0).max(255).optional() }).optional().describe("Per-range value window; overrides the call-wide `valueFilter` for THIS range."),
   });
 
   server.tool(
@@ -159,7 +165,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       region: z.enum(MEMORY_REGIONS).optional().describe("Memory region to watch — the SAME canonical set readMemory accepts (incl. hardware registers like nes_apu_regs, genesis_ym2612, c64_sid_regs). Omit when using `ranges`."),
       offset: z.number().int().min(0).default(0).describe("First byte of the watched range (single-range mode)."),
       length: z.number().int().min(1).max(4096).default(1).describe("How many bytes to watch (single-range mode, default 1)."),
-      ranges: z.array(rangeShape).min(1).max(16).optional().describe("Watch several disjoint ranges in one pass. When given, `region`/`offset`/`length` are ignored. Each event carries its range's `label`. Ideal for music drivers where pitch and rhythm live in non-adjacent bytes."),
+      ranges: z.array(rangeShape).min(1).max(16).optional().describe("Watch several disjoint ranges in one pass. When given, `region`/`offset`/`length` are ignored. Each event carries its range's `label`. Ideal for music drivers, or tracing a state machine where a slow state byte and a noisy per-frame counter live in different bytes. Each range entry may OVERRIDE the call-wide filters with its own `onChange`/`sampleEvery`/`valueFilter` — so you can keep every transition of a slow state byte while sampling or suppressing a fast free-running counter in the SAME pass (the fix for one noisy byte burying the signal)."),
       frames: z.number().int().min(1).max(1_000_000).default(600).describe("How many frames to run (default 600 = ~10s NTSC)."),
       stopOnFirst: z.boolean().default(false).describe("If true, stop on the first detected (and filter-passing) change instead of running the full duration."),
       onChange: z.enum(["any", "increase", "decrease", "reset"]).default("any").describe("Edge filter. 'any' = every change (default). 'increase'/'decrease' = directional. 'reset' = value jumped UP vs prev (counter reload — the note-onset signal for countdown-based music drivers)."),
@@ -230,6 +236,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
 
       // Per-range previous snapshots.
       let prevs = watchRanges.map((r) => snap(host, r.region, r.offset, r.length));
+      const rangeSample = new Array(watchRanges.length).fill(0); // per-range sampleEvery counters
 
       const preview = [];          // bounded inline events
       let totalMatched = 0;        // ALL filter-passing events (file-backed)
@@ -298,9 +305,19 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
           const cur = snap(host, r.region, r.offset, r.length);
           const changes = diffSnapshots(prevs[ri], cur, r.offset, r.label);
           prevs[ri] = cur;
+          // Per-range filter overrides fall back to the call-wide values.
+          const rOnChange = r.onChange ?? onChange;
+          const rValueFilter = r.valueFilter ?? valueFilter;
+          const rSampleEvery = r.sampleEvery ?? 1;
           for (const c of changes) {
-            if (!edgeMatches(onChange, c.before, c.after)) continue;
-            if (!valueMatches(valueFilter, c.after)) continue;
+            if (!edgeMatches(rOnChange, c.before, c.after)) continue;
+            if (!valueMatches(rValueFilter, c.after)) continue;
+            // Per-range downsample (independent of the call-wide sampleEvery,
+            // which still applies globally inside pushEvent).
+            if (rSampleEvery > 1) {
+              rangeSample[ri] = (rangeSample[ri] ?? 0) + 1;
+              if ((rangeSample[ri] - 1) % rSampleEvery !== 0) continue;
+            }
             const pc = pcOnce();
             pushEvent({
               frame: frameAbs,

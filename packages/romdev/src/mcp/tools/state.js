@@ -37,6 +37,34 @@ export function registerStateTools(server, z, sessionKey) {
   );
 
   server.tool(
+    "exportState",
+    "Write an EXISTING in-memory state slot's bytes to a file on disk — WITHOUT touching the live host. Use this " +
+    "to persist a slot the human saved with a playtest emulator-hotkey (it shows up in `listStates`): " +
+    "`exportState({ fromSlot:'hotkey', path:'states/on_hill.state' })`. Unlike round-tripping through " +
+    "loadState+saveState, this never disturbs what's on the player's screen and needs no pause/resume — it just " +
+    "copies the slot's already-captured blob. (`saveState({name,path})` snapshots the CURRENT host into a slot+file; " +
+    "this exports an EXISTING slot.)",
+    {
+      fromSlot: z.string().min(1).describe("Name of the in-memory slot to export (from saveState({name}) or a playtest hotkey save; see listStates)."),
+      path: z.string().describe("Absolute path to write the slot's save-state blob to. Reload later with loadState({path})."),
+    },
+    safeTool(async ({ fromSlot, path: outPath }) => {
+      const host = getHost(sessionKey);
+      const blob = host.getStateBlob(fromSlot); // throws if the slot is missing — no host disturbance
+      await mkdir(path.dirname(outPath), { recursive: true });
+      await writeFile(outPath, blob);
+      return jsonContent({
+        exported: true,
+        fromSlot,
+        path: outPath,
+        bytes: blob.length,
+        platform: host.status.platform,
+        note: "Copied the slot to disk; the live host was not touched (no pause/resume needed).",
+      });
+    }),
+  );
+
+  server.tool(
     "loadState",
     "Restore a previously saved state — from an in-memory `name` slot OR a `path` on disk (a blob written by " +
     "saveState({path}) or dumpState). Restores the CPU/PPU/APU/RAM the snapshot held. " +
@@ -60,25 +88,27 @@ export function registerStateTools(server, z, sessionKey) {
       if (!name && !inPath) throw new Error("loadState: provide `name` (in-memory slot) or `path` (disk).");
       if (name && inPath) throw new Error("loadState: provide `name` OR `path`, not both.");
       const host = getHost(sessionKey);
+      let cheatsCleared = 0;
       if (inPath) {
         const blob = new Uint8Array(await readFile(inPath));
-        host.unserializeState(blob);
+        cheatsCleared = host.unserializeState(blob) || 0;
       } else {
-        host.loadState(name);
+        cheatsCleared = host.loadState(name) || 0;
       }
       // Refresh the framebuffer unless the caller opted out — without this the
       // next screenshot is stale/blank because the core hasn't produced a frame
-      // since the restore. Advances frameCount by 1 (it's monotonic anyway).
+      // since the restore. renderOneFrame runs ONE frame even while paused, so a
+      // windowed+paused "restore → screenshot to confirm" stays deterministic
+      // (no resume needed). Advances frameCount by 1 (monotonic anyway).
       let rendered = false;
-      if (render && !host.status.paused) { host.stepFrames(1); rendered = true; }
+      if (render) { host.renderOneFrame(); rendered = true; }
       return jsonContent({
         loaded: true,
         ...(inPath ? { path: inPath } : { name }),
         platform: host.status.platform,
         rendered,
-        ...(render && host.status.paused
-          ? { note: "Host is paused, so the framebuffer was NOT refreshed; resume or stepFrames to render the restored state." }
-          : {}),
+        ...(host.status.paused && rendered ? { renderedWhilePaused: true } : {}),
+        cheatsCleared, // a restore removes active cheats (frontend cheat state isn't in the blob)
       });
     }),
   );

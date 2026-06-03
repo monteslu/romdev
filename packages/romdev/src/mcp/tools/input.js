@@ -63,7 +63,11 @@ export function registerInputTools(server, z, sessionKey) {
     "Set controller state for the next frames. State persists until changed (held buttons stay held). " +
     "Shape: { ports: [{ a: true, start: false, ... }, { ... }] }. Use getInputLayout({platform}) " +
     "to see which buttons exist on this platform (NES has no x/y, Genesis has no l/r, etc). " +
-    "Echoes back the resulting held-button state per port so you can confirm the input landed in one call.",
+    "Returns `requested` = the held-button state you asked for. NOTE: `requested` is what you SET, NOT proof the " +
+    "emulated pad saw it — the game only reads the pad when ITS code polls, which may be a specific frame in a " +
+    "state machine. If a press doesn't take (e.g. a title waiting on Start), re-apply setInput IMMEDIATELY before " +
+    "the stepFrames/watchMemory that should consume it, and verify by reading the game's held-buttons RAM byte " +
+    "(or that the expected state transition happened) — not by this echo.",
     {
       ports: z.array(port).min(1).max(2).describe(
         "Per-port input. Index 0 = port 0, index 1 = port 1. " +
@@ -72,10 +76,10 @@ export function registerInputTools(server, z, sessionKey) {
     },
     safeTool(async ({ ports }) => {
       getHost(sessionKey).setInput({ ports });
-      // Echo what's now held (the buttons set true), per port — confirms the
-      // press without a follow-up step+screenshot round-trip.
-      const held = ports.map((p) => Object.keys(p).filter((k) => p[k] === true));
-      return jsonContent({ inputSet: true, held });
+      // Echo the REQUESTED held state (the buttons set true), per port. This is
+      // what was set, NOT a guarantee the emulated pad saw it — see description.
+      const requested = ports.map((p) => Object.keys(p).filter((k) => p[k] === true));
+      return jsonContent({ inputSet: true, requested });
     }),
   );
 

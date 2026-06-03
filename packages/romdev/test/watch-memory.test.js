@@ -134,6 +134,55 @@ test("multi-range watches disjoint regions on identical frames with labels", asy
   assert.equal(res.events[0].frame, res.events[1].frame);
 });
 
+// v18-feedback: per-range filters so one noisy free-running counter doesn't bury
+// the rare signal in a multi-range watch.
+test("per-range sampleEvery thins a noisy range while a slow range stays full", async () => {
+  // sys[0] = a noisy counter changing EVERY frame; sys[10] = a slow state byte
+  // that changes only on frames 5 and 12.
+  const host = makeHost({ system_ram: new Array(32).fill(0) }, (f, mem) => {
+    mem.system_ram[0] = f & 0xFF;                 // noisy: changes every frame
+    if (f === 5) mem.system_ram[10] = 1;          // slow: 2 transitions total
+    if (f === 12) mem.system_ram[10] = 2;
+  });
+  setHost("test-session", host);
+  const handler = getWatchHandler();
+  const res = parseResult(await handler({
+    ranges: [
+      { region: "system_ram", offset: 0, length: 1, label: "noisy", sampleEvery: 5 },
+      { region: "system_ram", offset: 10, length: 1, label: "state" },
+    ],
+    frames: 15, onChange: "any", maxEvents: 1000,
+  }));
+  const noisy = res.events.filter((e) => e.label === "noisy");
+  const state = res.events.filter((e) => e.label === "state");
+  // The slow range keeps BOTH its transitions...
+  assert.equal(state.length, 2, "slow state byte fully reported");
+  // ...while the noisy range (15 changes) is thinned ~5× (kept 1st, 6th, 11th...).
+  assert.ok(noisy.length <= 4 && noisy.length >= 2, `noisy range thinned to ${noisy.length} (was 15)`);
+});
+
+test("per-range onChange overrides the call-wide edge filter", async () => {
+  const host = makeHost({ system_ram: new Array(16).fill(0) }, (f, mem) => {
+    // sys[0] ramps up then resets (a counter); sys[5] just toggles.
+    mem.system_ram[0] = [0, 5, 3, 8, 1][f] ?? 1;
+    if (f === 2) mem.system_ram[5] = 0x99;
+  });
+  setHost("test-session", host);
+  const handler = getWatchHandler();
+  const res = parseResult(await handler({
+    ranges: [
+      // Only count UP-jumps (resets) on the counter, but ANY change on the toggle.
+      { region: "system_ram", offset: 0, length: 1, label: "counter", onChange: "reset" },
+      { region: "system_ram", offset: 5, length: 1, label: "toggle" },
+    ],
+    frames: 4, onChange: "any", maxEvents: 1000,
+  }));
+  const counter = res.events.filter((e) => e.label === "counter");
+  // counter seq 0→5→3→8→1: "reset" (jump UP vs prev) = 0→5 and 3→8 = 2.
+  assert.equal(counter.length, 2, "per-range onChange:reset applied to counter only");
+  assert.ok(res.events.some((e) => e.label === "toggle"), "toggle still uses call-wide any");
+});
+
 test("outputPath streams full log to NDJSON + returns capped preview", async () => {
   const host = makeHost({ system_ram: [0] }, (f, mem) => {
     mem.system_ram[0] = f & 0xFF; // changes every frame

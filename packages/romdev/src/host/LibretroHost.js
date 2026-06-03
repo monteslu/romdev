@@ -330,6 +330,22 @@ export class LibretroHost {
     return n;
   }
 
+  /** Run exactly ONE frame to refresh the framebuffer, even while paused — for a
+   *  deterministic "restore → screenshot" without un-pausing (so the real-time
+   *  playtest loop can't race). Advances the (monotonic) frame counter by 1.
+   *  Returns the frame count after. */
+  renderOneFrame() {
+    const mod = this._needMod();
+    if (!this.status.loaded) throw new Error("no media loaded");
+    mod._retro_run();
+    this.status.frameCount++;
+    if (this.state.lastFrame) {
+      this.status.fbWidth = this.state.lastFrame.width;
+      this.status.fbHeight = this.state.lastFrame.height;
+    }
+    return this.status.frameCount;
+  }
+
   /** @returns {{ width: number, height: number, pitch: number, format: number, pixels: Uint8Array }} */
   getFramebuffer() {
     if (!this.state.lastFrame) throw new Error("no frame produced yet — step frames first");
@@ -394,7 +410,7 @@ export class LibretroHost {
   loadState(name) {
     const snapshot = this.namedStates.get(name);
     if (!snapshot) throw new Error(`no save state named '${name}'`);
-    this.unserializeState(snapshot);
+    return this.unserializeState(snapshot); // returns # cheats cleared
   }
 
   /**
@@ -423,10 +439,25 @@ export class LibretroHost {
     } finally {
       mod._free(ptr);
     }
+    // A save-state restore replaces RAM/CPU/PPU but does NOT carry frontend cheat
+    // state — and our active cheats were applied for the PRE-restore run. Clear
+    // them so loadState honors its documented "cheats are removed" contract
+    // (matches reset()). Returns how many were cleared so callers can report it.
+    const cleared = this._activeCheats ? this._activeCheats.size : 0;
+    if (cleared) this.clearCheats();
+    return cleared;
   }
 
   listStates() {
     return Array.from(this.namedStates.keys());
+  }
+
+  /** Return a named in-memory slot's raw blob (for exporting to disk WITHOUT
+   *  disturbing the live host). Throws if the slot doesn't exist. */
+  getStateBlob(name) {
+    const blob = this.namedStates.get(name);
+    if (!blob) throw new Error(`no save state named '${name}'`);
+    return blob;
   }
 
   /**
