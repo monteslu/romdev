@@ -37,6 +37,7 @@ fi
 
 echo "Building VICE x64 archive..."
 emmake make platform=emscripten EMUTYPE=x64 clean 2>/dev/null || true
+find . -maxdepth 3 -name "*_libretro*.a" -delete 2>/dev/null || true
 emmake make platform=emscripten EMUTYPE=x64 -j"$(nproc)"
 
 CORE_LIB=$(find . -maxdepth 2 \( -name "vice_x64*.a" -o -name "vice_x64*_libretro_emscripten.bc" \) | head -1)
@@ -103,7 +104,7 @@ emcc "$CORE_LIB" \
   -s ALLOW_MEMORY_GROWTH=1 \
   -s INITIAL_MEMORY=67108864 -s MAXIMUM_MEMORY=536870912 \
   -s ALLOW_TABLE_GROWTH=1 \
-  -s 'EXPORTED_FUNCTIONS=["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]' \
+  -s 'EXPORTED_FUNCTIONS=["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_watchpoint_set","_romdev_watchpoint_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]' \
   -s 'EXPORTED_RUNTIME_METHODS=["FS","ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue"]' \
   -s FORCE_FILESYSTEM=1 \
   -s INVOKE_RUN=0 \
