@@ -216,4 +216,121 @@ export function registerMemoryTools(server, z, sessionKey) {
       return textContent(`wrote ${buf.length} bytes to ${region}+${offset}`);
     }),
   );
+
+  // ── snapshotMemory / diffMemory — "which bytes changed across this event?" ──
+  server.tool(
+    "snapshotMemory",
+    "Capture a baseline of a memory region (kept in server RAM, keyed by `name`) so you can later diffMemory " +
+    "against it. The workflow for 'which bytes did THIS event touch?': snapshotMemory before the event, trigger " +
+    "it (pressButton/stepFrames/etc.), then diffMemory after — you get just the changed offsets, no manual " +
+    "before/after hex comparison. Snapshots are per-session and overwrite on reuse of the same name.",
+    {
+      region: z.enum(REGIONS),
+      name: z.string().default("default").describe("Snapshot label — diffMemory uses the same name to compare. Take several (e.g. 'before-door', 'before-load') in one session."),
+      offset: z.number().int().min(0).default(0),
+      length: z.number().int().min(1).max(65536).optional().describe("Bytes to snapshot from offset (default: the whole region from offset)."),
+    },
+    safeTool(async ({ region, name, offset, length }) => {
+      const host = getHost(sessionKey);
+      const bytes = host.readMemory(region, offset, length ?? regionLength(host, region, offset));
+      memSnapshots(sessionKey).set(snapKey(region, name), { offset, bytes: Uint8Array.from(bytes) });
+      return jsonContent({ region, name, offset, length: bytes.length, note: "Baseline captured — trigger your event, then diffMemory({region, name}) for the changed bytes." });
+    }),
+  );
+
+  server.tool(
+    "diffMemory",
+    "Compare a region against an earlier snapshotMemory baseline and return ONLY the bytes that CHANGED: " +
+    "`changes:[{offset, before, after}]` (hex), plus `changedCount`. This is the direct answer to 'which bytes " +
+    "did this event touch?' — e.g. snapshot system_ram, walk into a door, diffMemory → the handful of state " +
+    "bytes the door handler wrote (area id, phase, flags) instead of eyeballing two 2KB hex dumps. Reads the " +
+    "SAME offset/length the snapshot covered.",
+    {
+      region: z.enum(REGIONS),
+      name: z.string().default("default").describe("Which snapshotMemory baseline to diff against (same name you snapshotted with)."),
+      maxChanges: z.number().int().min(1).max(65536).default(4096).describe("Cap the changes list (default 4096) so a wholesale change doesn't flood the response; `changedCount` is always the true total."),
+    },
+    safeTool(async ({ region, name, maxChanges }) => {
+      const host = getHost(sessionKey);
+      const snap = memSnapshots(sessionKey).get(snapKey(region, name));
+      if (!snap) throw new Error(`diffMemory: no snapshot named '${name}' for region '${region}'. Call snapshotMemory({region, name}) first.`);
+      const now = host.readMemory(region, snap.offset, snap.bytes.length);
+      const changes = [];
+      let changedCount = 0;
+      for (let i = 0; i < snap.bytes.length; i++) {
+        if (snap.bytes[i] !== now[i]) {
+          changedCount++;
+          if (changes.length < maxChanges) {
+            changes.push({
+              offset: "0x" + (snap.offset + i).toString(16).toUpperCase(),
+              offsetDec: snap.offset + i,
+              before: snap.bytes[i].toString(16).padStart(2, "0"),
+              after: now[i].toString(16).padStart(2, "0"),
+            });
+          }
+        }
+      }
+      return jsonContent({
+        region, name, baseOffset: snap.offset, length: snap.bytes.length,
+        changedCount, changes,
+        ...(changedCount > changes.length ? { truncated: true, note: `${changedCount} bytes changed; showing first ${changes.length} (raise maxChanges for more).` } : {}),
+      });
+    }),
+  );
+
+  server.tool(
+    "diffState",
+    "Like diffMemory but for the WHOLE machine: snapshot the serialized save-state, and diff returns whether it " +
+    "changed + a byte-delta count. Coarser than diffMemory (the state blob is core-internal, not a clean memory " +
+    "map) — use diffMemory for 'which RAM bytes' and diffState for a quick 'did anything at all change across " +
+    "this?' Pass mode:'snapshot' to capture, mode:'diff' to compare.",
+    {
+      name: z.string().default("default").describe("State snapshot label."),
+      mode: z.enum(["snapshot", "diff"]).describe("'snapshot' captures the current state as the baseline; 'diff' compares the current state to it."),
+    },
+    safeTool(async ({ name, mode }) => {
+      const host = getHost(sessionKey);
+      const store = stateSnapshots(sessionKey);
+      if (mode === "snapshot") {
+        const blob = host.serializeState();
+        store.set(name, Uint8Array.from(blob));
+        return jsonContent({ name, mode, size: blob.length, note: "State baseline captured — trigger your event, then diffState({name, mode:'diff'})." });
+      }
+      const base = store.get(name);
+      if (!base) throw new Error(`diffState: no state snapshot named '${name}'. Call diffState({name, mode:'snapshot'}) first.`);
+      const now = host.serializeState();
+      let differingBytes = 0;
+      const len = Math.min(base.length, now.length);
+      for (let i = 0; i < len; i++) if (base[i] !== now[i]) differingBytes++;
+      const sizeChanged = base.length !== now.length;
+      return jsonContent({
+        name, mode,
+        changed: differingBytes > 0 || sizeChanged,
+        differingBytes,
+        sizeChanged,
+        baselineSize: base.length,
+        currentSize: now.length,
+        note: "State blobs are core-internal — for the actual changed RAM addresses use snapshotMemory/diffMemory.",
+      });
+    }),
+  );
+}
+
+// Per-session snapshot stores for diffMemory / diffState. Keyed by sessionKey so
+// multi-session servers don't cross-contaminate baselines.
+/** @type {Map<string, Map<string, {offset:number, bytes:Uint8Array}>>} */
+const _memSnaps = new Map();
+/** @type {Map<string, Map<string, Uint8Array>>} */
+const _stateSnaps = new Map();
+function memSnapshots(key) { let m = _memSnaps.get(key); if (!m) { m = new Map(); _memSnaps.set(key, m); } return m; }
+function stateSnapshots(key) { let m = _stateSnaps.get(key); if (!m) { m = new Map(); _stateSnaps.set(key, m); } return m; }
+const snapKey = (region, name) => region + " " + name;
+
+/** Bytes from `offset` to the end of the region — for a whole-region snapshot
+ *  when no explicit length is given. Uses the core-reported region size. */
+function regionLength(host, region, offset) {
+  const size = host.regionSize ? host.regionSize(region) : 0;
+  const len = size - offset;
+  if (len <= 0) throw new Error(`snapshotMemory: offset ${offset} is past the end of region '${region}' (size ${size}).`);
+  return len;
 }
