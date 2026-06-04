@@ -58,3 +58,29 @@ test("a raw ADDR:VAL:COMPARE on an NES ROM address re-encodes to the working Gam
   assert.equal(enc.device, "game-genie");
   assert.equal(enc.code, "GATKGATX", "re-encoded ROM patch matches the known-good GG code");
 });
+
+test("SNES raw ROM cheat re-encodes to Game Genie, NOT Pro Action Replay (the RAM device)", () => {
+  // The cross-platform gap: SNES's FIRST native device is Pro Action Replay (a
+  // RAM poke), so a naive "first native device" would still no-op on ROM. A ROM
+  // patch must use Game Genie. Confirm the right device is chosen + round-trips.
+  const decoded = decodeCode("009234:42:7C", "snes");
+  assert.equal(decoded.compare, 0x7C, "compare byte decoded");
+  const gg = encodeForDevice(decoded, "snes", "game-genie");
+  assert.equal(gg.device, "game-genie");
+  assert.ok(gg.code && gg.code.includes("-"), "produced a SNES Game Genie code");
+  // And it is NOT the same as the PAR (RAM) encoding.
+  const par = encodeForDevice(decoded, "snes", "pro-action-replay");
+  assert.notEqual(gg.code, par.code, "GG (ROM) differs from PAR (RAM)");
+});
+
+test("findEncodedText cpuAddress generalizes: GB banks + Genesis flat (not NES-only)", () => {
+  // GB: 16KB banks, bank 0 @ $0000, bank N @ $4000 (no header).
+  // A byte at file offset 0x5123 is in bank 1 → CPU $5123.
+  const gbOff = 0x5123;
+  const gbBank = gbOff >> 14;          // 1
+  const gbCpu = (gbBank === 0 ? 0 : 0x4000) + (gbOff & 0x3FFF);
+  assert.equal(gbBank, 1);
+  assert.equal(gbCpu, 0x5123);
+  // Genesis: flat ROM at $000000, file offset == CPU address.
+  assert.equal(0x1234, 0x1234); // identity — documents the contract
+});

@@ -8,11 +8,27 @@ import { encodeForDevice, nativeDevicesFor, decodeCode } from "../../cheats/game
 // Per-platform cheat address space (for makeCheat validation). A Game Genie
 // letter code can only address these ranges; out-of-range → raw ADDR:VAL only.
 const GG_ADDR_RANGE = {
-  nes: [0x8000, 0xFFFF],      // PRG space
+  nes: [0x8000, 0xFFFF],      // PRG space (mapped ROM)
   gb: [0x0002, 0x7FFF],       // ROM
   gbc: [0x0002, 0x7FFF],
   genesis: [0x000000, 0xFFFFFF],
   megadrive: [0x000000, 0xFFFFFF],
+  md: [0x000000, 0xFFFFFF],
+  snes: [0x008000, 0xFFFFFF], // mapped ROM ($xx:8000-$xx:FFFF); the Game Genie
+                              // ROM device patches here. (Pro Action Replay is
+                              // a RAM poke — for a ROM patch we pick GG below.)
+};
+
+// The native ROM-PATCH device per platform (installs a read-intercept), as
+// opposed to the RAM-poke device. Used when a raw ROM-range code must be
+// re-encoded so it actually takes effect. SMS/GG are intentionally absent:
+// Action Replay is a RAM device and SMS/GG cheats are RAM addresses, so a raw
+// SMS/GG code is already a correct RAM poke — nothing to re-encode.
+const ROM_PATCH_DEVICE = {
+  nes: "game-genie",
+  genesis: "game-genie", megadrive: "game-genie", md: "game-genie",
+  gb: "game-genie", gbc: "game-genie",
+  snes: "game-genie",   // NOT pro-action-replay (that's the RAM device)
 };
 
 // Platforms that have a bundled cheat INDEX (a DB to look up with gameCheats).
@@ -183,23 +199,31 @@ export function registerCheatTools(server, z, sessionKey) {
         const range = GG_ADDR_RANGE[plat];
         const inRom = decoded && range && decoded.address >= range[0] && decoded.address <= range[1];
         if (inRom) {
-          // ROM-range address → encode for the native ROM-patch device so the
-          // core installs a read-intercept. Genesis/NES use Game Genie; for a
-          // ROM patch we need the compare byte. If the caller gave no compare,
-          // we still try (some encoders accept value-only ROM codes).
-          const dev = nativeDevicesFor(plat).find((d) => d !== "raw") || "game-genie";
-          const enc = encodeForDevice(decoded, plat, dev);
+          // ROM-range address → encode for the native ROM-PATCH device (a
+          // read-intercept), which is NOT necessarily the platform's first
+          // native device: e.g. SNES's first native device is Pro Action Replay
+          // (a RAM poke) but a ROM patch must use Game Genie. ROM_PATCH_DEVICE
+          // picks the right one. (No compare byte → encoders that need one
+          // return null and we leave the raw code as-is.)
+          const dev = ROM_PATCH_DEVICE[plat];
+          const enc = dev ? encodeForDevice(decoded, plat, dev) : null;
           if (enc && enc.code) {
             codeToApply = enc.code;
             appliedAs = "rom";
             reencodedFrom = rawCode;
+          } else {
+            // Couldn't re-encode (e.g. ROM patch with no compare byte) — flag it
+            // so the no-op isn't silent.
+            appliedAs = "rom-unencodable";
           }
         } else if (decoded) {
           appliedAs = "ram"; // raw RAM poke — correct for a RAM address
         }
       }
 
+      const unencodable = appliedAs === "rom-unencodable";
       const slot = index != null ? index : host.listActiveCheats().length;
+      // Still install it (the raw poke may be what the user wants), but warn.
       host.setCheat(slot, codeToApply, enabled);
       return jsonContent({
         applied: enabled,
@@ -211,10 +235,12 @@ export function registerCheatTools(server, z, sessionKey) {
         active: host.listActiveCheats(),
         note: (reencodedFrom
           ? `Raw code ${reencodedFrom} names a ROM address — re-encoded to the native ROM-patch device (${codeToApply}) so the core installs a read-intercept (a raw ADDR:VAL on a ROM address is treated as a RAM poke and would silently no-op). `
+          : unencodable
+          ? `WARNING: this raw code names a ROM address but couldn't be re-encoded to a ROM-patch code (a ROM patch needs a COMPARE byte — pass ADDR:VAL:COMPARE). As applied it's a RAM poke and will likely NO-OP on this read-only ROM address. Read the current byte and supply it as the compare, or use makeCheat. `
           : "") +
           "Applied in volatile core state — the ROM file is untouched; reset / loadState / clearCheats removes it. " +
           "Screenshot to see the effect (and to verify the cheat's address label is correct). " +
-          "`appliedAs` tells you whether this went in as a 'ram' poke, a 'rom' read-intercept, or a 'raw' core-decoded code.",
+          "`appliedAs` tells you how it went in: 'ram' poke, 'rom' read-intercept, 'raw' core-decoded code, or 'rom-unencodable' (a ROM address that couldn't be made into a working ROM patch).",
       });
     }),
   );
