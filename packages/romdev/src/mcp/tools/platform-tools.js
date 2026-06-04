@@ -320,7 +320,40 @@ export function registerPlatformTools(server, z, sessionKey) {
         }, png);
       }
 
-      throw new Error(`inspectPalette not yet wired for platform '${p}'. Supported: nes, snes, genesis, sms, gg, gb, gbc, atari2600, atari7800, c64, gba, lynx.`);
+      if (p === "pce") {
+        // HuC6260 VCE: 512-entry 9-bit GRB table (256 BG + 256 SPR).
+        const pal = host.readMemory("pce_vce_palette", 0, 1024);
+        const { decodeVcePalette } = await import("../../platforms/pce/vce.js");
+        const which = (area === "sprite") ? "sprite" : (area === "bg") ? "bg" : "all";
+        const { entries } = decodeVcePalette(pal, which);
+        const colors = entries.map((e) => ({ r: e.r, g: e.g, b: e.b, hex: e.hex, index: e.index, set: e.set, subPalette: e.subPalette, slot: e.slot }));
+        const png = renderColorsAsPng(colors, 16);
+        return emit({
+          platform: p,
+          colors,
+          note: "PC Engine VCE: 512 colors = 16 BG sub-palettes (indices 0-255) + 16 SPR sub-palettes (256-511), each 16 colors, 9-bit GRB. Slot 0 of each 16 = transparent/backdrop. Pass `area:'bg'|'sprite'` to narrow; `subPalette` (0-15) selects a row.",
+        }, png);
+      }
+
+      if (p === "msx") {
+        // V9938 paletteReg on MSX2 bitmap modes; fixed TMS9918 on MSX1 modes.
+        const palBytes = host.readMemory("msx_palette", 0, 32);
+        const regs = host.readMemory("msx_vdp_regs", 0, 64);
+        const { decodeMsxPalette, isV9938Mode } = await import("../../platforms/msx/vdp.js");
+        const { entries, source } = decodeMsxPalette(palBytes, isV9938Mode(regs));
+        const colors = entries.map((e) => ({ r: e.r, g: e.g, b: e.b, hex: e.hex, index: e.index }));
+        const png = renderColorsAsPng(colors, 16);
+        return emit({
+          platform: p,
+          colors,
+          paletteSource: source,
+          note: source === "v9938"
+            ? "MSX V9938 programmable palette: 16 entries, 9-bit GRB. Active because the VDP is in an MSX2 bitmap mode (screen 4+)."
+            : "MSX1 TMS9918 fixed palette: 16 hardware colors (programs choose indices, not RGB). The V9938 paletteReg is only used in MSX2 bitmap modes.",
+        }, png);
+      }
+
+      throw new Error(`inspectPalette not yet wired for platform '${p}'. Supported: nes, snes, genesis, sms, gg, gb, gbc, atari2600, atari7800, c64, gba, lynx, pce, msx.`);
     }),
   );
 
@@ -674,7 +707,33 @@ export function registerPlatformTools(server, z, sessionKey) {
         });
       }
 
-      throw new Error(`inspectSprites not yet wired for platform '${p}'. Supported: nes, snes, genesis, sms, gg, gb, gbc, atari2600, atari7800, c64, gba. (Lynx returns the SCB list head — it has no fixed OAM.)`);
+      if (p === "pce") {
+        // HuC6270 SATB: 64 sprites × 4 u16. JSON-only.
+        const satb = host.readMemory("pce_vdc_satb", 0, 512);
+        const { decodeSatb } = await import("../../platforms/pce/vdc.js");
+        const sprites = decodeSatb(satb);
+        return jsonContent({
+          platform: p,
+          ...clampSlots(sprites),
+          note: "PC Engine SATB: 64 sprites, 16/32 wide × 16/32/64 tall. `tile` is the pattern code (16×16 cells in VRAM). `palette` 0-15 indexes the 16 SPR sub-palettes (inspectPalette area:'sprite'). priority bit = in-front-of-BG.",
+        });
+      }
+
+      if (p === "msx") {
+        // V9938/TMS9918 sprite-attribute table lives in VRAM at the R5/R11 base.
+        const vram = host.readMemory("msx_vram", 0, host.regionSize("msx_vram"));
+        const regs = host.readMemory("msx_vdp_regs", 0, 64);
+        const { decodeMsxSprites, spriteAttrBase } = await import("../../platforms/msx/vdp.js");
+        const sprites = decodeMsxSprites(vram, regs);
+        return jsonContent({
+          platform: p,
+          ...clampSlots(sprites),
+          satBase: "$" + spriteAttrBase(regs).toString(16),
+          note: "MSX sprites: up to 32, read from the VRAM sprite-attribute table (base from VDP R5/R11). Y=208 ($D0) terminates the active list. MSX sprites have no flip bits; priority is by slot order (slot 0 = frontmost). `palette` is the color nibble (TMS9918) or palette index (V9938).",
+        });
+      }
+
+      throw new Error(`inspectSprites not yet wired for platform '${p}'. Supported: nes, snes, genesis, sms, gg, gb, gbc, atari2600, atari7800, c64, gba, pce, msx. (Lynx returns the SCB list head — it has no fixed OAM.)`);
     }),
   );
 

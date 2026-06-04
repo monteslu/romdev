@@ -53,6 +53,7 @@ export const SDCC_PORTS = {
   gg:         { marg: "z80",      libDir: "z80" },
   gb:         { marg: "sm83",     libDir: "sm83" },
   gbc:        { marg: "sm83",     libDir: "sm83" },
+  msx:        { marg: "z80",      libDir: "z80" },
 };
 
 import { runIsolated, textFile, binaryFile, getOutputBytes, getOutputText } from "../_worker/run.js";
@@ -442,6 +443,17 @@ export async function buildZ80C(args) {
   log += "--- sdld ---\n" + link.log;
   if (link.exitCode !== 0 || !link.ihx) {
     return { binary: null, log, exitCode: link.exitCode, stage: "sdld" };
+  }
+  // `romBase` (e.g. MSX $4000) means the cartridge maps at that address: the
+  // ihx writes records at absolute $4000+, so size the buffer to cover them,
+  // then slice to a `romBase`-based page image (offset 0 == address romBase).
+  // Without it, an MSX ROM would be a $0000-based image with its real code at
+  // offset $4000 — the header check + the core both expect it at offset 0.
+  if (args.romBase) {
+    const span = args.romBase + (args.romSize || 0);
+    const full = ihxToBin(link.ihx, span);
+    const end = args.romSize ? args.romBase + args.romSize : full.length;
+    return { binary: full.slice(args.romBase, end), log, exitCode: 0, stage: "done", map: link.map ?? null };
   }
   // If romSize is null/0, size the buffer to the highest address the ihx
   // actually wrote (no padding to a ROM size). Used for tape targets like

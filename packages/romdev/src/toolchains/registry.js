@@ -18,7 +18,7 @@ export const TOOLCHAINS = {
   cc65: {
     id: "cc65",
     displayName: "cc65 (6502 C compiler)",
-    platforms: ["nes", "c64", "atari7800", "lynx"],
+    platforms: ["nes", "c64", "atari7800", "lynx", "pce"],
     tier: 1,
     source: "bundled:cc65",
   },
@@ -39,7 +39,7 @@ export const TOOLCHAINS = {
   sdcc: {
     id: "sdcc",
     displayName: "sdcc (Z80 family C compiler, 4.5.0)",
-    platforms: ["sms", "gg"],
+    platforms: ["sms", "gg", "msx"],
     tier: 1,
     source: "bundled:sdcc",
   },
