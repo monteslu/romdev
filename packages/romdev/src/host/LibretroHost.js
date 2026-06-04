@@ -203,6 +203,18 @@ export class LibretroHost {
     this.status.loaded = true;
     this.status.frameCount = 0;
 
+    // Cache enough to re-load this exact media for a true power-cycle
+    // (reset({hard:true})). `retro_reset` is only a console RESET-button reset —
+    // it does NOT clear work RAM on most cores, so boot-seeded state persists.
+    // Stash the raw bytes (a copy, so a later free of the caller's buffer can't
+    // corrupt it) + the load descriptor; hardReset() replays loadMedia with it.
+    this._loadArgs = {
+      bytes: data instanceof Uint8Array ? data.slice() : new Uint8Array(data),
+      platform,
+      mediaKind,
+      virtualName: args.virtualName,
+    };
+
     // Read system_av_info to seed framebuffer dimensions.
     // struct retro_system_av_info {
     //   struct retro_game_geometry {
@@ -504,6 +516,22 @@ export class LibretroHost {
     // A reset clears the core's active cheats (they live in volatile core
     // state, never in the ROM) — keep our mirror in sync.
     this._activeCheats = new Map();
+  }
+
+  /**
+   * True power-cycle: re-load the ROM from scratch so work RAM is cleared and
+   * all boot-seeded state is fresh — what `retro_reset` does NOT do (it's only
+   * the RESET button; RAM persists on most cores). Falls back to a soft reset
+   * if the load args weren't cached (shouldn't happen after a normal load).
+   * @returns {Promise<boolean>} true if a full reload happened
+   */
+  async hardReset() {
+    if (!this._loadArgs) {
+      this.reset();
+      return false;
+    }
+    await this.loadMedia(this._loadArgs);
+    return true;
   }
 
   /** True when this core's WASM build exposes the libretro cheat interface.

@@ -19,6 +19,30 @@ import { readFile, writeFile } from "node:fs/promises";
 import { jsonContent, safeTool } from "../util.js";
 import { mapNesAddress, mapSnesAddress } from "./disasm.js";
 
+/**
+ * Map a RAW .nes file offset to its real 6502 CPU address + 16KB PRG bank.
+ * PRG is split into 16KB banks; the byte at prg-relative offset O lives in
+ * bank (O >> 14). The FIXED top bank (the last 16KB) is mapped at $C000-$FFFF;
+ * any other (switchable) bank is mapped at $8000-$BFFF when banked in. A flat
+ * `$8000 + O` (the old behavior) overflows past $FFFF for any bank > 0 on a
+ * multi-bank ROM — e.g. it returned $15E03 for prg $DE03 instead of bank 3 /
+ * $9E03. Returns null when the offset isn't inside PRG.
+ * @param {number} fileOffset raw .nes offset (includes the 16-byte iNES header)
+ * @param {number} prgSize total PRG size in bytes (header[4] * 16384)
+ * @returns {{ cpuAddress: string, bank: number } | null}
+ */
+export function nesFileOffsetToCpu(fileOffset, prgSize) {
+  const PRG_START = 16;
+  if (!(prgSize > 0) || fileOffset < PRG_START || fileOffset >= PRG_START + prgSize) return null;
+  const offInPrg = fileOffset - PRG_START;
+  const numBanks = prgSize >> 14;
+  const bank = offInPrg >> 14;
+  const inBank = offInPrg & 0x3FFF;
+  const isFixedTop = bank === numBanks - 1; // last 16KB is the fixed $C000 bank
+  const base = (numBanks === 1 || isFixedTop) ? 0xC000 : 0x8000;
+  return { cpuAddress: "$" + (base + inBank).toString(16).toUpperCase(), bank };
+}
+
 // ─── learnFontMap ────────────────────────────────────────────────
 
 /**
@@ -217,25 +241,10 @@ async function findEncodedTextCore({ romPath, text, fontMap, fontMapPath, platfo
     const lengthByte = detectLengthByte(data, i, needle.length);
 
     let cpuAddress = null;
-    if (platform) {
-      try {
-        // Reverse the mapper math: find CPU addr whose mapped fileOffset equals i.
-        // For NES NROM, file offset → CPU addr is: i - 16 (header) + ($C000 if NROM-128 else $8000).
-        if (platform === "nes") {
-          const prgStart = 16;
-          const prgSize = data[4] * 16384;
-          if (i >= prgStart && i < prgStart + prgSize) {
-            const offInPrg = i - prgStart;
-            if (prgSize === 16384) {
-              cpuAddress = "$" + (0xC000 + offInPrg).toString(16).toUpperCase();
-            } else {
-              cpuAddress = "$" + (0x8000 + offInPrg).toString(16).toUpperCase();
-            }
-          }
-        }
-      } catch {
-        // Outside ROM region — leave cpuAddress null.
-      }
+    let bank = null;
+    if (platform === "nes") {
+      const m = nesFileOffsetToCpu(i, (data[4] || 0) * 16384);
+      if (m) { cpuAddress = m.cpuAddress; bank = m.bank; }
     }
 
     // PRG-frame offset (NES: subtract the 16-byte iNES header). Useful
@@ -258,6 +267,10 @@ async function findEncodedTextCore({ romPath, text, fontMap, fontMapPath, platfo
       prgFileOffset,
       prgFileOffsetDec,
       cpuAddress,
+      // NES: the 16KB PRG bank this byte lives in. cpuAddress is the in-bank
+      // 6502 address (valid only when this bank is mapped in) — pair them when
+      // feeding disassembleRom({ startAddress: cpuAddress, bank }).
+      ...(bank != null ? { bank } : {}),
       contextBefore: ctxBefore,
       contextAfter: ctxAfter,
       surroundingHex,
@@ -336,7 +349,9 @@ export function registerFontMapTools(server, z) {
     "context bytes and flags a likely length-prefix byte before each match (catches the classic off-by-one " +
     "where text has a leading length byte and overwriting past it corrupts the next command). Returns both " +
     "`fileOffset` (raw .nes, for patching the .nes file) and `prgFileOffset` (header-stripped, for prg.bin " +
-    "from extractCart), plus NES mapper-aware `cpuAddress` for disassembleRom.",
+    "from extractCart), plus the NES bank-aware `cpuAddress` + `bank`: cpuAddress is the real in-bank 6502 " +
+    "address ($8000-$BFFF for a switchable bank, $C000-$FFFF for the fixed top bank), and `bank` is its 16KB " +
+    "PRG bank — pass them together to disassembleRom({ startAddress: cpuAddress, bank }) on a banked ROM.",
     {
       romPath: z.string().describe("Absolute path to the ROM."),
       text: z.string().describe("Text to search for."),

@@ -78,11 +78,23 @@ export function registerLifecycleTools(server, z, sessionKey) {
 
   server.tool(
     "reset",
-    "Hard-reset the current loaded ROM (equivalent to power-cycling).",
-    {},
-    safeTool(async () => {
-      getHost(sessionKey).reset();
-      return textContent("reset");
+    "Reset the loaded ROM. DEFAULT is a soft reset (the console's RESET button): it calls the core's " +
+    "retro_reset, which on most cores does NOT clear work RAM — so boot-seeded variables and any state " +
+    "the game already wrote PERSIST (e.g. a current-area byte stays at its old value). For a TRUE " +
+    "power-cycle that clears RAM and re-seeds boot state, pass `hard:true` — that reloads the ROM from " +
+    "scratch (equivalent to a fresh loadMedia). Use `hard:true` when re-testing boot-time behavior " +
+    "(e.g. iterating on a boot cheat / a different seed value); a soft reset boots the PREVIOUS state.",
+    {
+      hard: z.boolean().default(false).describe("true = full power-cycle (reload the ROM; clears work RAM + boot-seeded state). false (default) = soft RESET-button reset (RAM persists)."),
+    },
+    safeTool(async ({ hard }) => {
+      const host = getHost(sessionKey);
+      if (hard) {
+        const reloaded = await host.hardReset();
+        return textContent(reloaded ? "reset (hard / power-cycle — RAM cleared)" : "reset (soft — no cached ROM to reload for a hard reset)");
+      }
+      host.reset();
+      return textContent("reset (soft — RESET button; work RAM persists, use hard:true to clear it)");
     }),
   );
 
