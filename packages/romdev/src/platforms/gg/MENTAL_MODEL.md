@@ -121,6 +121,9 @@ channels route to the right speaker, bits 4-7 = same for left).
 Defaults to mono — write `0xFF` for "all channels to both speakers"
 explicitly.
 
+**Debugging sound:** `getAudioState({chip:"psg"})` decodes the live SN76489 —
+3 tone + 1 noise channel state (the same gpgx PSG region serves GG/SMS/Genesis).
+
 ## Frame heartbeat
 
 ```c

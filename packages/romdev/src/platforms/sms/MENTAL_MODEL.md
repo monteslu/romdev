@@ -210,6 +210,9 @@ A full driver is beyond the scope of these scaffolds. For
 playable SFX, manually pulse $7F with the latch-register byte
 followed by data bytes. Real games ship a music driver in WRAM.
 
+**Debugging sound:** `getAudioState({chip:"psg"})` decodes the live SN76489 —
+3 tone + 1 noise channel state (the same gpgx PSG region serves SMS/GG/Genesis).
+
 ## Cartridge layout
 
 ```
