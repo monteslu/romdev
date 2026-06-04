@@ -112,6 +112,24 @@ const HARDWARE_LAYOUTS = {
     note: "⚠ Two gotchas: (1) buttons are ACTIVE-HIGH on the Lynx (1=pressed), opposite the active-low convention almost everywhere else. (2) The D-pad's physical Up/Down/Left/Right is RELATIVE TO SCREEN ROTATION — Mikey flips the direction bits when the screen is set to the flipped/left-handed orientation, so 'Up' in code may be physical-down on a rotated game. cc65's lynx target + the bundled lynx lib expose these via joy_read-style helpers. libretro maps A→'a', B→'b', Opt1/Opt2→'start'/'select', Pause→'select' (verify with holdInputs + readMemory $FCB0).",
     faceButtons: FACE_BUTTON_MAP.lynx,
   },
+  pce: {
+    register: "Joypad port — strobe via the I/O port; the BIOS reads it for you",
+    protocol: "strobe-and-scan",
+    strobe: "The standard PCE pad is a 2-button pad (I and II) + Run + Select. A SEL/CLR strobe to the joyport latches the directions then the buttons; the cc65 pce target's joystick driver and the BIOS handle this.",
+    readSequence: "After strobe: a nibble for D-pad (Up/Right/Down/Left) then a nibble for buttons (I, II, Select, Run). Active-low.",
+    bitOrder: ["I", "II", "Select", "Run", "Up", "Right", "Down", "Left"],
+    note: "libretro maps button I → 'a' (east), II → 'b' (west), Run → 'start', Select → 'select'. The cc65 `pce` target exposes JOY_BTN_1_MASK/JOY_BTN_2_MASK + direction masks in pce.h. 6-button Avenue Pad exists but the standard pad is 2-button.",
+    faceButtons: FACE_BUTTON_MAP.pce,
+  },
+  msx: {
+    register: "PSG (AY-3-8910) port A/B via the PPI — read via BIOS GTSTCK ($00D5) + GTTRIG ($00D8)",
+    protocol: "bios-call",
+    strobe: "None for the common path — call the BIOS: GTSTCK(n) returns the joystick/cursor direction (0-8), GTTRIG(n) returns the trigger state. Direct PSG reads are possible but the BIOS is the portable way.",
+    readSequence: "GTSTCK: 0=center, 1-8 = the 8 compass directions (1=up, clockwise). GTTRIG: bit 7 set = trigger pressed. Trigger 1 = button 'a', trigger 2 = button 'b'.",
+    bitOrder: ["Trigger1", "Trigger2", "Up", "Down", "Left", "Right"],
+    note: "libretro maps trigger 1 → 'a' (east), trigger 2 → 'b' (west). The keyboard is also an input source on MSX (BIOS CHGET $009F / read the key matrix), but for games the joystick via GTSTCK/GTTRIG is the standard path. Port 0 = keyboard cursor + space; ports 1/2 = the joystick ports.",
+    faceButtons: FACE_BUTTON_MAP.msx,
+  },
 };
 
 const LIBRETRO_JOYPAD_IDS = {
@@ -183,6 +201,8 @@ const PHYSICAL_BUTTONS = {
   atari7800: ["up", "down", "left", "right", "east", "south", "start", "select"],
   lynx:      ["up", "down", "left", "right", "east", "south", "start"],
   c64:       ["up", "down", "left", "right", "south"],
+  pce:       ["up", "down", "left", "right", "east", "west", "start", "select"], // pad I/II + Run/Select
+  msx:       ["up", "down", "left", "right", "east", "west"],                      // joystick + 2 triggers
 };
 
 export function registerInputLayoutTools(server, z) {

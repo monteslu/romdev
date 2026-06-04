@@ -123,3 +123,40 @@ test("MSX tier-1: hello_msx scaffold (main + crt0) builds, boots C-BIOS, exposes
   const sprites = decodeMsxSprites(vram, regs);
   assert.ok(Array.isArray(sprites) && sprites.length <= 32);
 }, { timeout: 90000 });
+
+test("PCE asset pipeline: tile codec round-trips and matches planar-pairs", async () => {
+  const { encodePceTile, decodePceTile } = await import("../src/platforms/pce/tiles.js");
+  const tile = new Uint8Array(64);
+  for (let i = 0; i < 64; i++) tile[i] = (i * 7) % 16;
+  const enc = encodePceTile(tile);
+  assert.equal(enc.length, 32, "PCE tile is 32 bytes");
+  const dec = decodePceTile(enc);
+  assert.deepEqual([...dec], [...tile], "PCE tile round-trip is not identity");
+
+  // imageToTiles('pce') uses the SNES planar-pairs layout — verify a real PNG.
+  const { imageToTiles } = await import("../src/platforms/common/image-to-tiles.js");
+  const { PNG } = await import("pngjs");
+  const img = new PNG({ width: 8, height: 8 });
+  const colors = [[0, 0, 0], [255, 0, 0], [0, 255, 0], [0, 0, 255]];
+  for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+    const c = colors[(x + y) % 4]; const o = (y * 8 + x) * 4;
+    img.data[o] = c[0]; img.data[o + 1] = c[1]; img.data[o + 2] = c[2]; img.data[o + 3] = 255;
+  }
+  const r = imageToTiles("pce", PNG.sync.write(img), { maxTiles: 1 });
+  assert.equal(r.tiles.length, 32);
+  const back = decodePceTile(r.tiles);
+  // The 4-color diagonal gradient should decode to 4 distinct indices.
+  assert.equal(new Set(back).size, 4, "PCE imageToTiles lost colors");
+});
+
+test("MSX asset pipeline: screen-2 tile codec round-trips (2 colors/row)", async () => {
+  const { encodeMsxScreen2Tile, decodeMsxScreen2Tile } = await import("../src/platforms/msx/tiles.js");
+  const tile = new Uint8Array(64);
+  // 2 colors per row (the MSX constraint) so the codec is lossless.
+  for (let r = 0; r < 8; r++) for (let x = 0; x < 8; x++) tile[r * 8 + x] = (x < 4) ? 1 : 6;
+  const { pattern, color } = encodeMsxScreen2Tile(tile);
+  assert.equal(pattern.length, 8);
+  assert.equal(color.length, 8);
+  const dec = decodeMsxScreen2Tile(pattern, color);
+  assert.deepEqual([...dec], [...tile], "MSX screen-2 round-trip is not identity for a 2-color row");
+});

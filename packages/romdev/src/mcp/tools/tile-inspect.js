@@ -22,6 +22,8 @@ function tileRegion(platform) {
     // snes9x + gpgx both expose VRAM via the generic libretro id.
     case "snes":
     case "genesis": return "video_ram";
+    // PC Engine HuC6270 tiles are 4bpp planar-pairs (same as SNES) in VRAM.
+    case "pce": return "pce_vdc_vram";
     default:
       throw new Error(`text-mode tile inspection not yet wired for platform '${platform}'`);
   }
