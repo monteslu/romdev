@@ -107,32 +107,101 @@ async function learnFontMapCore({ romPath, knownStrings, alphabet }) {
  * Infer the font map from text RENDERED ON SCREEN: read the live nametable and
  * pull the tile IDs at each hint's (row,col) position — the tile ID IS the
  * fontMap byte for that character. Solves the chicken-and-egg (you'd otherwise
- * need the ROM offset, which is what you're hunting). NES only for now (reads
- * nes_nametables); the model generalizes to any tilemap platform.
+ * need the ROM offset, which is what you're hunting). Works on every tilemap
+ * platform via makeTilemapReader (NES/SNES/Genesis/GB-GBC/SMS-GG/C64).
  */
+/**
+ * Build a live tile-id reader for `platform`: resolves the active tilemap base
+ * from the platform's VDP/PPU registers and returns `(row,col) → tileId`, plus
+ * the grid width so we can range-check. Each tilemap platform stores the BG map
+ * differently (1 vs 2 bytes/entry, different grid width, different tile-index
+ * mask, host byte order); we reuse the platform decoders so the layout math
+ * isn't re-derived here. Returns null for platforms with no text-tile nametable
+ * (atari2600/7800: race-the-beam / display list; lynx/gba: bitmap framebuffer).
+ * @returns {Promise<{ tile:(row:number,col:number)=>number, cols:number, rows:number, baseLabel:string } | null>}
+ */
+async function makeTilemapReader(host, platform, which) {
+  if (platform === "nes") {
+    const nt = host.readMemory("nes_nametables", which * 1024, 1024);
+    return { cols: 32, rows: 30, baseLabel: `nes_nametables[${which}]`, tile: (r, c) => nt[r * 32 + c] };
+  }
+  if (platform === "gb" || platform === "gbc") {
+    const { decodeLcdc } = await import("../../platforms/gb/ppu.js");
+    const io = host.readMemory("gb_io", 0, 0x80);
+    const lcdc = decodeLcdc(io[0x40]); // LCDC at $FF40
+    // `which` overrides the BG map select: 0=$9800, 1=$9C00; default = live LCDC.
+    const base = (which === 1 ? 0x9C00 : which === 0 ? 0x9800 : lcdc.bgTileMapBaseDec) - 0x8000;
+    const vram = host.readMemory("gb_vram", 0, 0x2000);
+    return { cols: 32, rows: 32, baseLabel: `gb_vram@$${(base + 0x8000).toString(16)}`, tile: (r, c) => vram[base + r * 32 + c] };
+  }
+  if (platform === "sms" || platform === "gg") {
+    const { decodeSmsVdpRegs } = await import("../../platforms/sms/vdp.js");
+    const regs = host.readMemory("sms_vdp_regs", 0, 16);
+    const vdp = decodeSmsVdpRegs(regs);
+    const base = vdp.nameTableBaseDec; // VRAM byte offset
+    const region = platform === "gg" ? "gg_vram" : "sms_vram";
+    const vram = host.readMemory(region, 0, 0x4000);
+    // Mode-4 name table: 32×28 entries of 2 bytes LE; tile index = low 9 bits.
+    return { cols: 32, rows: 28, baseLabel: `${region}@$${base.toString(16)}`,
+      tile: (r, c) => { const o = base + (r * 32 + c) * 2; return (vram[o] | (vram[o + 1] << 8)) & 0x1FF; } };
+  }
+  if (platform === "genesis" || platform === "megadrive" || platform === "md") {
+    const { decodeVDPRegs } = await import("../../platforms/genesis/vdp.js");
+    const regs = host.readMemory("genesis_vdp_regs", 0, 0x20);
+    const vdp = decodeVDPRegs(regs);
+    const base = which === 1 ? vdp.nameTableB : vdp.nameTableA; // Plane A default, B if which=1
+    const vram = host.readMemory("video_ram", 0, 0x10000);
+    // Genesis VRAM words are stored host-big-endian: word = (hi<<8)|lo. Plane is
+    // 64 wide by default (H40); tile index = low 11 bits.
+    return { cols: 64, rows: 32, baseLabel: `video_ram@$${base.toString(16)} (plane ${which === 1 ? "B" : "A"})`,
+      tile: (r, c) => { const o = base + (r * 64 + c) * 2; return ((vram[o] << 8) | vram[o + 1]) & 0x7FF; } };
+  }
+  if (platform === "snes") {
+    const { decodePpuRegs } = await import("../../platforms/snes/ppu.js");
+    const fillram = host.readMemory("snes_fillram", 0, 0x8000);
+    const ppu = decodePpuRegs(fillram);
+    const bg = ppu.bg?.[which] ?? ppu.bg?.[0];
+    if (!bg) throw new Error("learnFontMap fromScreen: couldn't resolve a SNES BG tilemap base (PPU regs not populated — step a frame first).");
+    const base = bg.scBaseByte; // VRAM byte offset of the BG map
+    const vram = host.readMemory("video_ram", 0, 0x10000);
+    // BG map entry: 2 bytes LE; tile index = low 10 bits. 32×32 per screen.
+    return { cols: bg.mapWidth ?? 32, rows: bg.mapHeight ?? 32, baseLabel: `video_ram@$${base.toString(16)} (BG${which})`,
+      tile: (r, c) => { const o = base + (r * 32 + c) * 2; return (vram[o] | (vram[o + 1] << 8)) & 0x3FF; } };
+  }
+  if (platform === "c64") {
+    const { decodeViciiRegs } = await import("../../platforms/c64/vic.js");
+    const regs = host.readMemory("c64_vic_regs", 0, 0x2F);
+    const vic = decodeViciiRegs(regs);
+    const base = vic.memPointers?.screenRamBaseDec ??
+      parseInt(String(vic.memPointers?.screenRamBaseInVicBank ?? "$0400").replace("$", ""), 16);
+    const ram = host.readMemory("system_ram", 0, 0x10000);
+    // Text mode: 40×25 screen-codes, 1 byte/cell.
+    return { cols: 40, rows: 25, baseLabel: `system_ram@$${base.toString(16)} (screen RAM)`,
+      tile: (r, c) => ram[base + r * 40 + c] };
+  }
+  return null; // no text-tile nametable on this platform
+}
+
 async function learnFontMapFromScreen({ platform, fromScreen, which = 0, alphabet, sessionKey }) {
   const host = getHost(sessionKey);
   const plat = platform ?? host.getStatus?.().platform;
-  if (plat !== "nes") {
-    throw new Error(`learnFontMap fromScreen: live nametable mode is wired for NES today (got '${plat ?? "unknown"}'). For other platforms, use ROM mode (knownStrings+offset).`);
+  const reader = await makeTilemapReader(host, plat, which);
+  if (!reader) {
+    throw new Error(`learnFontMap fromScreen: '${plat ?? "unknown"}' has no text-tile nametable to read (atari2600/7800 race the beam; lynx/gba are bitmap). Use ROM mode (knownStrings+offset) instead.`);
   }
-  // NES nametable: 32 cols × 30 rows of tile indices, 1KB per nametable.
-  const NT_COLS = 32, NT_ROWS = 30;
-  const nt = host.readMemory("nes_nametables", which * 1024, 1024);
 
   /** @type {Record<string, number>} */
   const fontMap = {};
   const inferredFrom = [];
   for (const hint of fromScreen) {
     const { text, row, col } = hint;
-    if (row < 0 || row >= NT_ROWS) throw new Error(`learnFontMap fromScreen: row ${row} out of range (0-${NT_ROWS - 1}).`);
+    if (row < 0 || row >= reader.rows) throw new Error(`learnFontMap fromScreen: row ${row} out of range (0-${reader.rows - 1} for ${plat}).`);
     let mapped = "";
     for (let i = 0; i < text.length; i++) {
       const ch = text[i];
       const c = col + i;
-      if (c >= NT_COLS) throw new Error(`learnFontMap fromScreen: text "${text}" at col ${col} runs past the 32-tile row width.`);
-      const tileId = nt[row * NT_COLS + c];
-      if (ch === " " && fontMap[ch] === undefined) { /* space often maps to a blank tile — record it like any char */ }
+      if (c >= reader.cols) throw new Error(`learnFontMap fromScreen: text "${text}" at col ${col} runs past the ${reader.cols}-tile row width.`);
+      const tileId = reader.tile(row, c);
       if (fontMap[ch] !== undefined && fontMap[ch] !== tileId) {
         throw new Error(
           `learnFontMap fromScreen: conflict on '${ch}'. An earlier hint mapped it to tile 0x${fontMap[ch].toString(16).toUpperCase()}; ` +
@@ -151,14 +220,15 @@ async function learnFontMapFromScreen({ platform, fromScreen, which = 0, alphabe
   for (const ch of alphabetSet) if (fontMap[ch] === undefined) unknownChars.push(ch);
 
   return {
-    source: "live-nametable",
+    source: "live-tilemap",
     platform: plat,
     which,
+    tilemap: reader.baseLabel,
     fontMap,
     learnedChars: Object.keys(fontMap).sort().join(""),
     unknownChars,
     inferredFrom,
-    note: "Tile IDs read from the live nametable — they ARE the in-ROM character bytes for a game whose text is stored as raw tile indices (most NES games). Verify with findEncodedText before patching.",
+    note: "Tile/char IDs read from the live tilemap — they ARE the in-ROM character bytes for a game that stores text as raw tile indices. Verify with findEncodedText before patching.",
   };
 }
 
@@ -382,8 +452,11 @@ export function registerFontMapTools(server, z, sessionKey) {
     "• LIVE mode (`fromScreen:[{text, row, col}]`): the text is RENDERED on screen RIGHT NOW — read the tile " +
     "IDs straight from the live nametable at a tile position (row,col in 8×8 tiles from the top-left). This " +
     "solves the chicken-and-egg where you'd need the ROM offset (the thing you're hunting) to learn the map: " +
-    "inspectBackgroundMap shows you where the text is on screen, and this reads the tile IDs there. NES live " +
-    "mode reads `nes_nametables`; pass `which` (0-3) for the nametable if not 0.\n" +
+    "inspectBackgroundMap shows you where the text is on screen, and this reads the tile IDs there. Live mode " +
+    "works on every tilemap platform — NES, SNES, Genesis, GB/GBC, SMS/GG, C64 — each reading its own live " +
+    "BG map (the active base is resolved from the VDP/PPU registers). `which` selects the nametable/plane/BG " +
+    "layer (NES 0-3; Genesis 0=A/1=B; SNES BG index; GB 0=$9800/1=$9C00). NOT available on atari2600/7800 " +
+    "(race-the-beam, no nametable) or lynx/gba (bitmap framebuffer) — use ROM mode there.\n" +
     "Returns `{fontMap, learnedChars, unknownChars}` — save it as JSON and pass `fontMapPath` to " +
     "encodeTextForRom / findEncodedText. Throws on conflicting hints (usually a wrong offset/position). Per-ROM.",
     {
