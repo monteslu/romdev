@@ -1083,9 +1083,10 @@ export function registerPlatformTools(server, z, sessionKey) {
   server.tool(
     "imageToTilemap",
     "Use this to render a large PNG (title screen, cutscene, status panel, world map) from tiles: returns " +
-    "tile graphics + tilemap (NES nametable / SNES tilemap / GB BG map / C64 screen RAM) + per-cell " +
-    "palette/attribute + palette table, with tile dedup (h/v-flip aware). Supported: nes, snes, genesis, " +
-    "sms, gg, gb, gbc, c64. PREREQUISITE: the PNG must already be sized to the platform's native screen and " +
+    "tile graphics + tilemap (NES nametable / SNES tilemap / GB BG map / C64 screen RAM / PCE BAT / MSX " +
+    "screen-2 name+pattern+color tables) + per-cell palette/attribute + palette table, with tile dedup " +
+    "(h/v-flip aware where the platform's map supports it). Supported: nes, snes, genesis, " +
+    "sms, gg, gb, gbc, c64, pce, msx. PREREQUISITE: the PNG must already be sized to the platform's native screen and " +
     "quantized to its palette (see getPlatformPalettePng) — per-platform cell/bpp details are in the " +
     "platform's MENTAL_MODEL.md. Pass `pngPath` (preferred) or `pngBase64`; pass `outputDir` to write " +
     "chr/nametable/attr/palette/preview to disk instead of base64-inlining them.",
@@ -1322,6 +1323,31 @@ async function imageToTilemap(platform, args) {
       uniqueTiles: r.uniqueTiles,
       previewPng: r.previewPng,
       _c64: { backgroundColor: r.backgroundColor, imageColors: r.imageColors, warnings: r.warnings },
+    };
+  }
+  if (platform === "pce") {
+    const { pceImageToTilemap } = await import("../../platforms/pce/image-to-tilemap.js");
+    const r = pceImageToTilemap(args);
+    return {
+      chr: r.tiles,             // 4bpp planar-pairs tile bytes (32 B/tile)
+      nametable: r.nametable,   // the BAT (16-bit LE entries: tile|palette<<12)
+      attr: new Uint8Array(0),  // PCE attributes are packed into the BAT entry
+      palette: r.palette,       // 16 × VCE 9-bit GRB words
+      uniqueTiles: r.uniqueTiles,
+      uniqueTilesBeforeMerge: r.uniqueTiles,
+    };
+  }
+  if (platform === "msx") {
+    const { msxImageToTilemap } = await import("../../platforms/msx/image-to-tilemap.js");
+    const r = msxImageToTilemap(args);
+    return {
+      chr: r.tiles,             // screen-2 pattern table (1bpp, 8 B/tile)
+      nametable: r.nametable,   // 768 bytes (0..255 × 3 thirds)
+      attr: r.color,            // screen-2 color table (per-row fg/bg), 8 B/tile
+      palette: new Uint8Array(0), // MSX1 palette is the fixed TMS9918 set
+      uniqueTiles: r.uniqueTiles,
+      uniqueTilesBeforeMerge: r.uniqueTiles,
+      _msx: { mode: "screen2", note: "chr=pattern table, attr=color table, nametable=name table. Fixed TMS9918 palette." },
     };
   }
   if (platform === "atari2600" || platform === "a2600") {
