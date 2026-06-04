@@ -4,6 +4,21 @@ One page. Read once before you write your first MSX game. The TROUBLESHOOTING.md
 alongside this file is for when something's broken; this is the "what's going on"
 version.
 
+## Start here — don't hand-write the VDP/PSG plumbing
+
+romdev ships a **hardware helper library** (`src/platforms/msx/lib/c/`:
+`msx_hw.h` + `msx_vdp.c`, plus the cartridge `msx_crt0.s`) so you call
+`msx_set_screen2()`, `msx_vram_write()`, `msx_set_sprite()`, `msx_read_joystick()`,
+`msx_psg_tone()` in plain C. It uses DIRECT Z80 I/O ports (the reliable path —
+NOT fragile inline-asm BIOS wrappers).
+
+The fastest way to a working game: **`createProject({ platform: "msx", template:
+"sprite_move" })`** (also `music_sfx`, `catch_game`). It drops a complete,
+*building* project — a verified playable example + the helper lib + the cart
+crt0 + docs. Read the example's `main.c`, then change it. Examples live in
+`examples/msx/`. **Gotcha:** read joystick **port 1** (`msx_read_joystick(1)`) —
+port 0 is the keyboard, which an emulator's gamepad doesn't drive.
+
 ## CPU — Z80 (16-bit address space, paged in 16 KB slots)
 
 ```

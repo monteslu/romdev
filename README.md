@@ -35,14 +35,16 @@ your agent <--MCP--> romdev server <-> WASM libretro core <-> your game
 
 ## Supported systems — pick your platform
 
-Twelve consoles/computers, oldest → newest. They vary enormously in how hard a game is to make and how hard an existing game is to hack. **Build** = write code → compile → run. **Hack** = modify an existing commercial ROM (find data → patch → reinsert). A system can be easy on one and hard on the other. (Difficulty is rated *as it feels through romdev today* — see the note under the table; it gets easier as the tooling improves.)
+Fourteen consoles/computers, oldest → newest. They vary enormously in how hard a game is to make and how hard an existing game is to hack. **Build** = write code → compile → run. **Hack** = modify an existing commercial ROM (find data → patch → reinsert). A system can be easy on one and hard on the other. (Difficulty is rated *as it feels through romdev today* — see the note under the table; it gets easier as the tooling improves.)
 
 | System | Year | Languages (toolkit) | Build a game | Romhack a game | Best for |
 |---|---|---|---|---|---|
 | **Atari 2600** | 1977 | 6502 asm (dasm) | 🔴 Hardest | 🟠 Hard | The deep end. "Race the beam": no framebuffer, 128 B RAM, every scanline cycle-counted. Iconic, brutal, deeply rewarding. |
 | **Commodore 64** | 1982 | C / 6502 asm (cc65) | 🟢 Easy | — | 40 years of docs, weird but forgiving hardware. A great first 8-bit target. |
+| **MSX / MSX2** | 1983 | C / Z80 asm (SDCC) | 🟢 Easy | — | Z80 + the same TMS9918/V9938 VDP family as the Master System. Boots cartridge homebrew on the open C-BIOS (no proprietary ROM). Big international library. |
 | **NES / Famicom** | 1983 | C / 6502 asm (cc65) | 🔴 Hard | 🟡 Medium | "Everyone knows the NES" — but the PPU is unforgiving (OAM/NMI timing, CHR-RAM traps, silent black screens). Hacking is friendlier: lots of games store data plainly; the disassembler is mapper-aware. |
 | **Sega Master System** | 1985 | C / Z80 asm (SDCC) | 🟢 Easy | 🟡 Medium | Simple Z80 + VDP. Near-identical twin of the Game Gear. |
+| **PC Engine / TurboGrafx-16** | 1987 | C / HuC6280 asm (cc65) | 🟡 Medium | — | HuC6280 (65C02 superset) + the HuC6270 VDC. cc65 has no sprite library, so romdev ships a direct-register helper lib; 9-bit GRB color, 64 hardware sprites. HuCards boot with no BIOS. |
 | **Atari 7800** | 1986 | C / 6502 asm (cc65) | 🔴 Hard | 🟠 Hard | MARIA display-list graphics (~100 sprites, little flicker) but a unique model with sparse docs. |
 | **Sega Genesis / Mega Drive** | 1988 | C (SGDK) / 68000 asm (vasm) | 🟡 Medium | 🟢 Easy | SGDK is a real C engine (high productivity) with a big API + sharp edges. **Easiest system to hack:** flat 16 MB 68000 addressing, no bank-switching, near-ASCII text in many games. |
 | **Game Boy** | 1989 | C / SM83 asm (SDCC / RGBDS) | 🟢 Easy | 🟢 Easy | The recommended starting point. Simple hardware, mature C tooling; games often store data uncompressed → easy to hack too. |
@@ -52,7 +54,7 @@ Twelve consoles/computers, oldest → newest. They vary enormously in how hard a
 | **Game Boy Color** | 1998 | C / SM83 asm (SDCC / RGBDS) | 🟢 Easy | 🟢 Easy | The Game Boy with a real color palette — same easy tooling, plus CGB color. |
 | **Game Boy Advance** | 2001 | C (libtonc / libgba) | 🟡 Medium | — | 32-bit ARM, comfortable C with the well-documented Tonc library — but a big machine (IRQ/DMA/video modes = lots of surface to learn). |
 
-**Difficulty legend:** 🟢 Easy · 🟡 Medium · 🟠 Hard · 🔴 Hardest. **Build** ratings come from an agent that actually shipped the same game on all twelve; **Hack** ratings are for text/data edits (a `—` means no romhack data yet — it's CPU-and-game-dependent, and any game using custom compression jumps to Hard regardless of system).
+**Difficulty legend:** 🟢 Easy · 🟡 Medium · 🟠 Hard · 🔴 Hardest. **Build** ratings come from an agent that actually shipped games across the lineup; **Hack** ratings are for text/data edits (a `—` means no romhack data yet — it's CPU-and-game-dependent, and any game using custom compression jumps to Hard regardless of system).
 
 > **These ratings reflect difficulty *with romdev's current tooling* — not an abstract take on the hardware.** The biggest predictor of how hard a platform feels here isn't its raw hardware but the quality of its scaffolds, snippets, and SDK integration. Good tooling moves a platform a whole tier: the Atari 2600 is the hardest hardware on the list, yet a thick, hardware-verified snippet shelf made it *hard-but-shippable*; the same agent that found NES "hard" shipped on the C-and-SDK platforms in a single pass. **These numbers drift toward easier over time** as scaffolds, footgun fixes, and richer runtimes land. Treat the column as "expect roughly this much friction today," not "this system is permanently this hard."
 
@@ -60,7 +62,7 @@ Twelve consoles/computers, oldest → newest. They vary enormously in how hard a
 
 ## Each platform ships a real SDK + sound + scaffolds
 
-Every platform has a working core, **5 genre scaffolds** (shmup / platformer / puzzle / sports / racing) plus a music demo, a sound API, per-platform `MENTAL_MODEL.md` + `TROUBLESHOOTING.md` docs (readable in-session via `getPlatformDoc`), and debug helpers.
+Every platform has a working core, ready-made starter projects (most with **5 genre scaffolds** — shmup / platformer / puzzle / sports / racing — plus a music demo; PC Engine and MSX ship a hardware helper library + sprite/music/game example projects), a sound API, per-platform `MENTAL_MODEL.md` + `TROUBLESHOOTING.md` docs (readable in-session via `getPlatformDoc`), and debug helpers. Scaffold a project in one call with `createProject` (or `createGame` for the genre-shaped baselines).
 
 | Platform | Core | Compiler / SDK | Sound | Music engine |
 |---|---|---|---|---|
@@ -76,6 +78,8 @@ Every platform has a working core, **5 genre scaffolds** (shmup / platformer / p
 | Atari Lynx | handy | cc65 | `sfx_*` MIKEY 4-voice | cc65 lynx audio |
 | Atari 2600 | stella2014 | dasm (asm) | (asm) | 2-voice 6507 chiptune |
 | Atari 7800 | prosystem | cc65 | `sfx_*` TIA | 2-voice TIA tracker |
+| PC Engine | geargrafx | cc65 | `psg_tone` (HuC6280 PSG, 6 ch) | hand-authored PSG |
+| MSX / MSX2 | blueMSX | SDCC (z80) | `msx_psg_tone` (AY-3-8910) | hand-authored PSG |
 
 The `platformer` scaffold side-scrolls (hardware camera + per-platform column streaming) on every platform except NES (single-screen).
 
