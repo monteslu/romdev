@@ -1,0 +1,151 @@
+# romdev memory-region exposure for the blueMSX (MSX / MSX2) libretro core.
+#
+# blueMSX keeps its V9938 VDP state in a file-static `struct VDP` (singleton
+# `theVdp` in VDP.c) with no public accessors, so this patch adds five tiny
+# getters in VDP.c (+ decls in VDP.h) returning live pointers into theVdp, then
+# wires region cases in libretro.c. The Z80/R800 CPU is reachable from libretro.c
+# via the already-present `extern BoardInfo boardInfo` / `(R800*)boardInfo.cpuRef`
+# (the core uses that exact cast elsewhere); its active register bank `regs` is
+# snapshotted into a flat little-endian buffer.
+#
+# Region IDs (romdev 0x1C0 block, must match src/host/types.js):
+#   MSX_VRAM       0x1C0   UInt8[VRAM_SIZE=192KB]  V9938 VRAM (size reported = live vramSize)
+#   MSX_VDP_REGS   0x1C1   UInt8[64]               VDP register file
+#   MSX_VDP_STATUS 0x1C2   UInt8[16]               VDP status registers
+#   MSX_PALETTE    0x1C3   UInt16[16]   = 32 B     paletteReg (9-bit GRB)
+#   MSX_CPU_REGS   0x1C4   snapshot                AF/BC/DE/HL/IX/IY/PC/SP + I/R/iff/im/halt
+#
+diff --git a/Src/VideoChips/VDP.c b/Src/VideoChips/VDP.c
+index 8e5400d..36391fa 100644
+--- a/Src/VideoChips/VDP.c
++++ b/Src/VideoChips/VDP.c
+@@ -397,6 +397,25 @@ struct VDP {
+     FrameBufferData* frameBuffer;
+ };
+ 
++/* ---- romdev memory-region accessors (see VDP.h) --------------------- */
++/* Placed after the full `struct VDP` definition so the field accesses below
++ * see a complete type (the typedef earlier in the file is only a forward decl). */
++unsigned char* vdpRomdevGetVram(void) {
++    return theVdp ? theVdp->vram : (unsigned char*)0;
++}
++int vdpRomdevGetVramSize(void) {
++    return theVdp ? theVdp->vramSize : 0;
++}
++unsigned char* vdpRomdevGetRegs(void) {
++    return theVdp ? theVdp->vdpRegs : (unsigned char*)0;
++}
++unsigned char* vdpRomdevGetStatus(void) {
++    return theVdp ? theVdp->vdpStatus : (unsigned char*)0;
++}
++unsigned char* vdpRomdevGetPalette(void) {
++    return theVdp ? (unsigned char*)theVdp->paletteReg : (unsigned char*)0;
++}
++
+ #include "SpriteLine.h"
+ #include "Common.h"
+ 
+diff --git a/Src/VideoChips/VDP.h b/Src/VideoChips/VDP.h
+index cc6cbf5..8c1bab2 100644
+--- a/Src/VideoChips/VDP.h
++++ b/Src/VideoChips/VDP.h
+@@ -68,6 +68,15 @@ typedef struct {
+ int vdpRegisterDaConverter(VdpDaCallbacks* callbacks, void* ref, VideoMode videoModeMask);
+ void vdpUnregisterDaConverter(int vdpDaHandle);
+ 
++/* romdev memory-region accessors — return live pointers into the active VDP
++ * singleton so the libretro wrapper can expose VRAM/regs/status/palette to
++ * romdev's inspect tools. NULL/0 before the VDP is created. */
++unsigned char* vdpRomdevGetVram(void);
++int            vdpRomdevGetVramSize(void);
++unsigned char* vdpRomdevGetRegs(void);
++unsigned char* vdpRomdevGetStatus(void);
++unsigned char* vdpRomdevGetPalette(void);
++
+ /* The following methods needs target dependent implementation */
+ extern void RefreshScreen(int);
+ 
+diff --git a/libretro.c b/libretro.c
+index f583a99..a9468ae 100644
+--- a/libretro.c
++++ b/libretro.c
+@@ -1838,16 +1838,79 @@ unsigned retro_get_region(void)
+          return RETRO_REGION_NTSC;
+    }
+ }
++/* ---- romdev memory-region exposure (MSX / MSX2) --------------------- */
++#include "VDP.h"
++#define ROMDEV_MEMORY_MSX_VRAM       0x1C0
++#define ROMDEV_MEMORY_MSX_VDP_REGS   0x1C1
++#define ROMDEV_MEMORY_MSX_VDP_STATUS 0x1C2
++#define ROMDEV_MEMORY_MSX_PALETTE    0x1C3
++#define ROMDEV_MEMORY_MSX_CPU_REGS   0x1C4
++
++/* Z80/R800 register snapshot. R800's active bank `regs` holds RegisterPair
++ * unions (.W = UInt16); pack into a flat little-endian struct so getCPUState
++ * decodes a stable layout regardless of the core's internal union endianness. */
++#pragma pack(push, 1)
++struct romdev_msx_cpu_snap {
++    unsigned short af, bc, de, hl, ix, iy, pc, sp;
++    unsigned short af1, bc1, de1, hl1;
++    unsigned char  i, r, iff1, iff2, im, halt;
++};
++#pragma pack(pop)
++static struct romdev_msx_cpu_snap romdev_msx_cpu;
++
++static void* romdev_msx_cpu_data(void)
++{
++    R800* cpu = (R800*)boardInfo.cpuRef;
++    if (!cpu) return (void*)0;
++    romdev_msx_cpu.af  = cpu->regs.AF.W;
++    romdev_msx_cpu.bc  = cpu->regs.BC.W;
++    romdev_msx_cpu.de  = cpu->regs.DE.W;
++    romdev_msx_cpu.hl  = cpu->regs.HL.W;
++    romdev_msx_cpu.ix  = cpu->regs.IX.W;
++    romdev_msx_cpu.iy  = cpu->regs.IY.W;
++    romdev_msx_cpu.pc  = cpu->regs.PC.W;
++    romdev_msx_cpu.sp  = cpu->regs.SP.W;
++    romdev_msx_cpu.af1 = cpu->regs.AF1.W;
++    romdev_msx_cpu.bc1 = cpu->regs.BC1.W;
++    romdev_msx_cpu.de1 = cpu->regs.DE1.W;
++    romdev_msx_cpu.hl1 = cpu->regs.HL1.W;
++    romdev_msx_cpu.i    = cpu->regs.I;
++    romdev_msx_cpu.r    = cpu->regs.R;
++    romdev_msx_cpu.iff1 = cpu->regs.iff1;
++    romdev_msx_cpu.iff2 = cpu->regs.iff2;
++    romdev_msx_cpu.im   = cpu->regs.im;
++    romdev_msx_cpu.halt = cpu->regs.halt;
++    return &romdev_msx_cpu;
++}
++
+ void *retro_get_memory_data(unsigned id)
+ {
+    if ( id == RETRO_MEMORY_SYSTEM_RAM )
+       return g_mainRam;
++   switch (id) {
++      case RETRO_MEMORY_VIDEO_RAM:
++      case ROMDEV_MEMORY_MSX_VRAM:       return vdpRomdevGetVram();
++      case ROMDEV_MEMORY_MSX_VDP_REGS:   return vdpRomdevGetRegs();
++      case ROMDEV_MEMORY_MSX_VDP_STATUS: return vdpRomdevGetStatus();
++      case ROMDEV_MEMORY_MSX_PALETTE:    return vdpRomdevGetPalette();
++      case ROMDEV_MEMORY_MSX_CPU_REGS:   return romdev_msx_cpu_data();
++      default: break;
++   }
+    return NULL;
+ }
+ size_t retro_get_memory_size(unsigned id)
+ {
+    if ( id == RETRO_MEMORY_SYSTEM_RAM )
+       return g_mainRamSize;
++   switch (id) {
++      case RETRO_MEMORY_VIDEO_RAM:
++      case ROMDEV_MEMORY_MSX_VRAM:       return vdpRomdevGetVramSize();
++      case ROMDEV_MEMORY_MSX_VDP_REGS:   return 64;
++      case ROMDEV_MEMORY_MSX_VDP_STATUS: return 16;
++      case ROMDEV_MEMORY_MSX_PALETTE:    return 16 * 2;   /* paletteReg[16] UInt16 */
++      case ROMDEV_MEMORY_MSX_CPU_REGS:   return sizeof(romdev_msx_cpu);
++      default: break;
++   }
+    return 0;
+ }
+ unsigned retro_api_version(void){return RETRO_API_VERSION;}

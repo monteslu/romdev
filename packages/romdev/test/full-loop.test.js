@@ -43,6 +43,11 @@ const cases = [
   // assert that the toolchain pipeline + core load runs cleanly.
   { platform: "sms",        file: "sms/main.c" },
   { platform: "gg",         file: "gg/main.c" },
+  // PC Engine: cc65 conio hello (single source). hello_pce.c keeps a non-empty
+  // .bss so the crt0 BSS-clear doesn't underflow (see PCE TROUBLESHOOTING.md).
+  // MSX is NOT here — it needs a 2nd source (msx_crt0.s) which this single-file
+  // harness can't express; it's covered in test/pce-msx-tier1.test.js instead.
+  { platform: "pce",        file: "pce/main.c" },
 ];
 
 for (const c of cases) {
@@ -69,6 +74,7 @@ for (const c of cases) {
               : c.platform === "c64" ? ".prg"
               : c.platform === "sms" ? ".sms"
               : c.platform === "gg" ? ".gg"
+              : c.platform === "pce" ? ".pce"
               : ".nes";
     const romPath = path.join(tmp, "example" + ext);
     await writeFile(romPath, build.binary);

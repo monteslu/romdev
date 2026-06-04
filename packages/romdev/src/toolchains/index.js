@@ -16,6 +16,7 @@ const CC65_TARGET = {
   c64: "c64",
   atari7800: "atari7800",
   lynx: "lynx",
+  pce: "pce",
 };
 
 /**
@@ -76,6 +77,14 @@ const LANGUAGE_TOOLCHAIN = {
   sms:    { c: { toolchain: "sdcc", available: true }, asm: { toolchain: "sdcc", available: true } },
   gg:     { c: { toolchain: "sdcc", available: true }, asm: { toolchain: "sdcc", available: true } },
   spc700: { asm: { toolchain: "asar", available: true } },
+  pce: {
+    c:   { toolchain: "cc65", available: true, note: "C for PC Engine via cc65's huc6280 target — crt0 + pce.lib (VDC/VCE/PSG/joypad helpers) auto-linked. #include <pce.h>." },
+    asm: { toolchain: "cc65", available: true },
+  },
+  msx: {
+    c:   { toolchain: "sdcc", available: true, note: "C for MSX via SDCC's z80 port. Cartridge ROM with the 'AB' header + INIT pointer at $4000; boots on C-BIOS (open MSX BIOS). MSX2 by default (runs MSX1 carts too)." },
+    asm: { toolchain: "sdcc", available: true },
+  },
 };
 
 /**
@@ -104,6 +113,8 @@ const PLATFORM_DEFAULT_LANGUAGE = {
   sms:        "c",
   gg:         "c",
   spc700:     "asm",
+  pce:        "c",
+  msx:        "c",
 };
 
 /**
@@ -134,7 +145,16 @@ const SDCC_ROM_SIZE = {
   gg:         32 * 1024,  // Game Gear same
   gb:         32 * 1024,  // Game Boy 32 KB ROM (no MBC needed)
   gbc:        32 * 1024,
+  msx:        32 * 1024,  // 32KB MSX cartridge ($4000-$BFFF, 2 pages)
 };
+
+// MSX cartridge ROMs map into the $4000-$BFFF region and begin with a 16-byte
+// ROM header at $4000: "AB" magic + an INIT routine pointer (the BIOS calls it
+// at boot). The code therefore links at $4010 (right after the header). We
+// build the SDCC image based at $4000 then strip the linker's $0000-$3FFF
+// padding so the .rom starts at the header.
+const MSX_CODE_LOC = 0x4010;
+const MSX_ROM_BASE = 0x4000;
 
 /**
  * @typedef {Object} BuildArgs
@@ -682,7 +702,9 @@ export async function buildForPlatform(args) {
     const sources = args.sources ?? { "main.c": args.source };
     // GB/GBC: _CODE goes at $0150 — the area $0000-$014F is reserved for
     // the cartridge header + reset vectors which the custom crt0 provides.
-    const codeLoc = args.codeLoc ?? 0x0000;
+    // MSX: _CODE goes at $4010 — a cartridge maps at $4000-$BFFF and the first
+    // 16 bytes are the ROM header ("AB" + INIT vector) the crt0 emits.
+    const codeLoc = args.codeLoc ?? (args.platform === "msx" ? MSX_CODE_LOC : 0x0000);
     const romSize = SDCC_ROM_SIZE[args.platform] ?? 32 * 1024;
 
     // crt0 + headers + sources come straight from the caller. The build
@@ -713,6 +735,9 @@ export async function buildForPlatform(args) {
       dataLoc: args.dataLoc,
       libraries: args.libraries,
       crt0,
+      // MSX cartridges map at $4000 — produce a $4000-based page image so the
+      // "AB" header lands at offset 0 (not offset $4000 of a $0000-based image).
+      romBase: args.platform === "msx" ? MSX_ROM_BASE : undefined,
     });
     let binary = r.binary;
     // GB/GBC via SDCC: the C path produces a raw .gb with an UNPATCHED
@@ -787,6 +812,26 @@ export async function buildForPlatform(args) {
       binary[0x7FFA] = sum & 0xFF;
       binary[0x7FFB] = (sum >> 8) & 0xFF;
       r.log += `\n--- SMS header ${hasHeader ? "checksum fixed" : "written + checksummed"} ($7FFA=${sum.toString(16).toUpperCase().padStart(4,"0")}, region/size=$4C) ---`;
+    }
+    // MSX: the binary built with codeLoc=$4010 is a $4000-based page image.
+    // SDCC/sdldz80 emit an ihx that, converted to bin, starts at the lowest
+    // used address. Ensure the output is exactly the $4000-$BFFF cartridge image
+    // and that the first 16 bytes are a valid ROM header ("AB" + INIT pointer).
+    // The crt0 (msx_crt0.s) normally writes the header; if a bare build skipped
+    // it, synthesize a minimal one pointing INIT at $4010.
+    if (binary && r.exitCode === 0 && args.platform === "msx") {
+      if (!(binary[0] === 0x41 && binary[1] === 0x42)) { // not "AB"
+        // Synthesize: "AB", INIT=$4010 (LE), STATEMENT/DEVICE/TEXT = 0.
+        const hdr = new Uint8Array(16);
+        hdr[0] = 0x41; hdr[1] = 0x42;            // "AB"
+        hdr[2] = MSX_CODE_LOC & 0xFF;            // INIT lo
+        hdr[3] = (MSX_CODE_LOC >> 8) & 0xFF;     // INIT hi
+        // bytes 4-15 (STATEMENT/DEVICE/TEXT/reserved) stay zero.
+        binary.set(hdr, 0);
+        r.log += "\n--- MSX ROM header synthesized (\"AB\" + INIT=$4010) ---";
+      } else {
+        r.log += "\n--- MSX ROM header present (\"AB\") ---";
+      }
     }
     // Combine lint warnings with parsed build log. Lint comes first so
     // agents see them at the top of the issues array.
