@@ -624,7 +624,7 @@ export function registerToolchainTools(server, z, sessionKey) {
       // (CI, automated tests, agent working alone). Once is a nudge;
       // repeated is friction.
       let hint;
-      if (!isPlaytestRunning() && !playtestHintGiven.has(sessionKey)) {
+      if (!isPlaytestRunning(sessionKey) && !playtestHintGiven.has(sessionKey)) {
         playtestHintGiven.add(sessionKey);
         hint = "No playtest window is open. If a human is watching, consider " +
                "`loadCategory({category:\"show\"})` then `playtest()` so they can " +
