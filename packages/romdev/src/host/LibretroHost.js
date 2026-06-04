@@ -19,7 +19,8 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readdirSync, statSync, readFileSync, existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { loadLibretroCore } from "./coreLoader.js";
 import { newCallbackState, registerCallbacks } from "./callbacks.js";
 import { framebufferToRgba, framebufferToScreenshot } from "./framebuffer.js";
@@ -35,7 +36,64 @@ import {
  * to function headlessly (no menu = no user pick). Empty today — all
  * shipped cores load with their defaults.
  */
-const PLATFORM_CORE_OPTIONS = {};
+const PLATFORM_CORE_OPTIONS = {
+  // blueMSX defaults its machine to "SEGA - SC-3000" (an SG-1000 clone, wrong for
+  // MSX carts). Force the open MSX2+ C-BIOS machine — a superset that also runs
+  // MSX1 carts — so homebrew boots with no proprietary BIOS. The matching
+  // `… - C-BIOS` machine tree ships in romdev-core-bluemsx/bios and is mirrored
+  // into the wasm FS as the system dir (see loadMedia + resolveSystemDir).
+  msx: { bluemsx_msxtype: "MSX2+ - C-BIOS" },
+};
+
+/**
+ * Platforms whose core fopen()s a BIOS / machine-config tree from the system
+ * directory, mapped to the @romdev package + subdir that ships it. When the
+ * caller passes no systemDir, the host resolves the bundled tree from here so
+ * the platform boots with zero setup.
+ */
+const PLATFORM_SYSTEM_DIR = {
+  msx: { pkg: "romdev-core-bluemsx", export: "biosDir" },
+};
+
+/**
+ * Resolve the absolute path of a platform's bundled system/BIOS dir, or null if
+ * the platform needs none / the package isn't resolvable. Best-effort: any
+ * failure falls back to null (the core then boots with whatever default it has).
+ * @param {string} platform
+ * @returns {string | null}
+ */
+function resolvePlatformSystemDir(platform) {
+  const entry = PLATFORM_SYSTEM_DIR[platform];
+  if (!entry) return null;
+  try {
+    const dir = path.dirname(fileURLToPath(import.meta.resolve(entry.pkg)));
+    const biosDir = path.join(dir, "bios");
+    if (existsSync(biosDir)) return biosDir;
+  } catch { /* package not resolvable */ }
+  return null;
+}
+
+/**
+ * Recursively copy a host directory into the emscripten virtual FS so a core's
+ * fopen() can read it (BIOS / machine-config trees). emscripten FILESYSTEM=1
+ * MEMFS is enough — no NODEFS rebuild needed.
+ * @param {any} FS the core module's FS
+ * @param {string} hostDir absolute host path
+ * @param {string} fsDir destination path inside the wasm FS (e.g. "/system")
+ */
+function mirrorDirToFS(FS, hostDir, fsDir) {
+  try { FS.mkdir(fsDir); } catch { /* exists */ }
+  for (const name of readdirSync(hostDir)) {
+    const hostPath = path.join(hostDir, name);
+    const fsPath = fsDir + "/" + name;
+    const st = statSync(hostPath);
+    if (st.isDirectory()) {
+      mirrorDirToFS(FS, hostPath, fsPath);
+    } else if (st.isFile()) {
+      try { FS.writeFile(fsPath, readFileSync(hostPath)); } catch { /* skip */ }
+    }
+  }
+}
 
 /**
  * When loadMedia is called with `bytes:` and no `virtualName`, this is
@@ -60,6 +118,8 @@ export const PLATFORM_VIRTUAL_EXT = {
   lynx:       ".lnx",
   atari2600:  ".a26",
   atari7800:  ".a78",
+  pce:        ".pce",
+  msx:        ".rom",
 };
 import { RETRO_DEVICE_JOYPAD } from "./retroConstants.js";
 
@@ -74,6 +134,10 @@ export class LibretroHost {
     const tmp = mkdtempSync(path.join(os.tmpdir(), "romdev-"));
     /** @type {any | null} */
     this.mod = null;
+    // The host-disk system dir (BIOS / machine configs). Mirrored into the wasm
+    // FS on first loadMedia for cores that fopen() from it (blueMSX C-BIOS).
+    this.systemDir = opts.systemDir ?? null;
+    this._systemDirMounted = false;
     this.state = newCallbackState({
       systemDir: opts.systemDir ?? tmp,
       saveDir: opts.saveDir ?? tmp,
@@ -136,6 +200,30 @@ export class LibretroHost {
       }
       // Cores poll GET_VARIABLE_UPDATE to know when to re-read options.
       this.state.variablesUpdated = true;
+    }
+
+    // Some cores fopen() BIOS / machine-config files from the system directory
+    // (e.g. blueMSX reads `<systemDir>/Machines/<name>/cbios_*.rom`). When the
+    // caller didn't pass a systemDir, resolve the platform's bundled BIOS tree
+    // (romdev-core-bluemsx ships the open C-BIOS machines) so MSX "just works".
+    if (!this.systemDir) {
+      const bundled = resolvePlatformSystemDir(platform);
+      if (bundled) this.systemDir = bundled;
+    }
+
+    // The emscripten FS is virtual, so the host-disk systemDir isn't visible to
+    // the core's fopen unless we mirror it INTO the wasm FS. Do that once per
+    // host, and point the core's GET_SYSTEM_DIRECTORY at the in-FS path.
+    if (this.systemDir && !this._systemDirMounted && mod.FS) {
+      try {
+        const FS_SYS = "/system";
+        mirrorDirToFS(mod.FS, this.systemDir, FS_SYS);
+        // Redirect the core's reported system dir to the in-FS copy.
+        if (this.state) this.state.systemDir = FS_SYS;
+        this._systemDirMounted = true;
+      } catch (e) {
+        if (this.log) this.log(3, `system dir mirror failed: ${e.message}`);
+      }
     }
 
     let data, mediaPath, ext;

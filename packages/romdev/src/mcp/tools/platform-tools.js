@@ -23,6 +23,8 @@ import { decodeGenesisPSG, decodeGenesisYM2612 } from "../../host/gpgx-state.js"
 import { decodeGbApu, decodeGbaApu } from "../../host/gb-apu-state.js";
 import { decodeC64Sid } from "../../host/c64-sid-state.js";
 import { decodeLynxMikey, decodeLynxPalette, decodeLynxRenderingContext } from "../../host/lynx-mikey-state.js";
+import { getPcePsgState } from "../../host/pce-psg-state.js";
+import { getMsxAyState } from "../../host/msx-ay-state.js";
 import { decodeGbaSprites, decodeGbaPalette, decodeGbaRenderingContext } from "../../host/gba-video-state.js";
 
 /** Resolve the platform to inspect: explicit arg → currently loaded host. */
@@ -320,15 +322,49 @@ export function registerPlatformTools(server, z, sessionKey) {
         }, png);
       }
 
-      throw new Error(`inspectPalette not yet wired for platform '${p}'. Supported: nes, snes, genesis, sms, gg, gb, gbc, atari2600, atari7800, c64, gba, lynx.`);
+      if (p === "pce") {
+        // HuC6260 VCE: 512-entry 9-bit GRB table (256 BG + 256 SPR).
+        const pal = host.readMemory("pce_vce_palette", 0, 1024);
+        const { decodeVcePalette } = await import("../../platforms/pce/vce.js");
+        const which = (area === "sprite") ? "sprite" : (area === "bg") ? "bg" : "all";
+        const { entries } = decodeVcePalette(pal, which);
+        const colors = entries.map((e) => ({ r: e.r, g: e.g, b: e.b, hex: e.hex, index: e.index, set: e.set, subPalette: e.subPalette, slot: e.slot }));
+        const png = renderColorsAsPng(colors, 16);
+        return emit({
+          platform: p,
+          colors,
+          note: "PC Engine VCE: 512 colors = 16 BG sub-palettes (indices 0-255) + 16 SPR sub-palettes (256-511), each 16 colors, 9-bit GRB. Slot 0 of each 16 = transparent/backdrop. Pass `area:'bg'|'sprite'` to narrow; `subPalette` (0-15) selects a row.",
+        }, png);
+      }
+
+      if (p === "msx") {
+        // V9938 paletteReg on MSX2 bitmap modes; fixed TMS9918 on MSX1 modes.
+        const palBytes = host.readMemory("msx_palette", 0, 32);
+        const regs = host.readMemory("msx_vdp_regs", 0, 64);
+        const { decodeMsxPalette, isV9938Mode } = await import("../../platforms/msx/vdp.js");
+        const { entries, source } = decodeMsxPalette(palBytes, isV9938Mode(regs));
+        const colors = entries.map((e) => ({ r: e.r, g: e.g, b: e.b, hex: e.hex, index: e.index }));
+        const png = renderColorsAsPng(colors, 16);
+        return emit({
+          platform: p,
+          colors,
+          paletteSource: source,
+          note: source === "v9938"
+            ? "MSX V9938 programmable palette: 16 entries, 9-bit GRB. Active because the VDP is in an MSX2 bitmap mode (screen 4+)."
+            : "MSX1 TMS9918 fixed palette: 16 hardware colors (programs choose indices, not RGB). The V9938 paletteReg is only used in MSX2 bitmap modes.",
+        }, png);
+      }
+
+      throw new Error(`inspectPalette not yet wired for platform '${p}'. Supported: nes, snes, genesis, sms, gg, gb, gbc, atari2600, atari7800, c64, gba, lynx, pce, msx.`);
     }),
   );
 
   server.tool(
     "getCPUState",
-    "Use this to read a CPU's {pc, registers, flags, sp}. Main CPU is wired for ALL 12 tier-1 systems: " +
+    "Use this to read a CPU's {pc, registers, flags, sp}. Main CPU is wired for ALL 14 tier-1 systems: " +
     "nes, snes, genesis, sms, gg, gb, gbc, atari2600, atari7800, c64, lynx (65C02), gba (ARM7TDMI — " +
-    "16 gprs + cpsr/spsr, plus execPc that accounts for ARM pipeline prefetch). Secondary CPUs via `cpu`: " +
+    "16 gprs + cpsr/spsr, plus execPc that accounts for ARM pipeline prefetch), pce (HuC6280) and msx " +
+    "(Z80). Secondary CPUs via `cpu`: " +
     "`spc700` (SNES audio — tells 'stuck in IPL' vs 'running' vs 'crashed into garbage ARAM') and `z80` " +
     "(Genesis sound — held in reset until the 68k releases it via $A11100, so a fresh boot reads all-zero).",
     {
@@ -400,6 +436,18 @@ export function registerPlatformTools(server, z, sessionKey) {
       const hw = host.readMemory("lynx_hw_regs", 0, 0x200);
       return { platform: "lynx", chip, ...decodeLynxMikey(hw) };
     }
+    if (chip === "pce") {
+      // PC Engine HuC6280 PSG — 6 wavetable channels (ch 4/5 can do noise).
+      const psg = getPcePsgState(host);
+      if (!psg) throw new Error("getAudioState chip:'pce' — no PSG region (load a PCE ROM into the patched geargrafx core).");
+      return { platform: "pce", ...psg };
+    }
+    if (chip === "ay8910") {
+      // MSX AY-3-8910 — 3 square + noise + envelope.
+      const ay = getMsxAyState(host);
+      if (!ay) throw new Error("getAudioState chip:'ay8910' — no PSG region (load an MSX ROM into the patched blueMSX core).");
+      return { platform: "msx", ...ay };
+    }
     throw new Error(`getAudioState: unknown chip '${chip}'. Use 'nes' (NES 2A03), 'gb' (Game Boy/GBC), 'gba' (GBA), 'dsp' (SNES), 'psg' (Genesis/SMS/GG SN76489), 'ym2612' (Genesis FM), 'sid' (C64), or 'mikey' (Lynx).`);
   }
 
@@ -417,11 +465,14 @@ export function registerPlatformTools(server, z, sessionKey) {
     "decodable) — useful for frame-to-frame diffing. `chip:'gb'` (Game Boy/GBC) and `chip:'gba'` (GBA) decode " +
     "the DMG-style APU: 2 pulse + wave + noise with timer→freq→note (GBA adds 2 DMA FIFO channels). " +
     "`chip:'sid'` (C64 6581/8580) returns 3 voices {waveform, freq→note, ADSR, pulse-width} + filter. " +
-    "`chip:'mikey'` (Lynx) returns the 4 Mikey audio channels {volume, freq→note, LFSR}. ALL 12 tier-1 " +
+    "`chip:'mikey'` (Lynx) returns the 4 Mikey audio channels {volume, freq→note, LFSR}. " +
+    "`chip:'pce'` (PC Engine HuC6280 PSG) returns 6 wavetable channels (freq/volume/wave; ch 4-5 noise). " +
+    "`chip:'ay8910'` (MSX AY-3-8910) returns 3 square channels (tone→Hz, amplitude, tone/noise enable) + " +
+    "noise + envelope. ALL 14 tier-1 " +
     "systems now have a sound-chip decoder. Mirrors getCPUState({cpu}). To capture a note timeline " +
     "over time, pair with watchMemory (region:'nes_apu_regs', onChange:'reset') or recordSession.",
     {
-      chip: z.enum(["nes", "gb", "gba", "dsp", "psg", "ym2612", "sid", "mikey"]).describe("Which sound chip: 'nes' (NES 2A03 APU), 'gb' (Game Boy/GBC DMG APU — 2 pulse + wave + noise), 'gba' (GBA — DMG PSG + 2 DMA FIFO), 'dsp' (SNES S-DSP), 'psg' (Genesis/SMS/GG SN76489), 'ym2612' (Genesis FM), 'sid' (C64 6581/8580 — 3 voices + filter), 'mikey' (Lynx Mikey — 4 channels)."),
+      chip: z.enum(["nes", "gb", "gba", "dsp", "psg", "ym2612", "sid", "mikey", "pce", "ay8910"]).describe("Which sound chip: 'nes' (NES 2A03 APU), 'gb' (Game Boy/GBC DMG APU — 2 pulse + wave + noise), 'gba' (GBA — DMG PSG + 2 DMA FIFO), 'dsp' (SNES S-DSP), 'psg' (Genesis/SMS/GG SN76489), 'ym2612' (Genesis FM), 'sid' (C64 6581/8580 — 3 voices + filter), 'mikey' (Lynx Mikey — 4 channels), 'pce' (PC Engine HuC6280 PSG — 6 wavetable channels, ch 4/5 noise), 'ay8910' (MSX AY-3-8910 — 3 square + noise + envelope)."),
     },
     safeTool(async ({ chip }) => jsonContent(readAudioChip(chip))),
   );
@@ -674,7 +725,33 @@ export function registerPlatformTools(server, z, sessionKey) {
         });
       }
 
-      throw new Error(`inspectSprites not yet wired for platform '${p}'. Supported: nes, snes, genesis, sms, gg, gb, gbc, atari2600, atari7800, c64, gba. (Lynx returns the SCB list head — it has no fixed OAM.)`);
+      if (p === "pce") {
+        // HuC6270 SATB: 64 sprites × 4 u16. JSON-only.
+        const satb = host.readMemory("pce_vdc_satb", 0, 512);
+        const { decodeSatb } = await import("../../platforms/pce/vdc.js");
+        const sprites = decodeSatb(satb);
+        return jsonContent({
+          platform: p,
+          ...clampSlots(sprites),
+          note: "PC Engine SATB: 64 sprites, 16/32 wide × 16/32/64 tall. `tile` is the pattern code (16×16 cells in VRAM). `palette` 0-15 indexes the 16 SPR sub-palettes (inspectPalette area:'sprite'). priority bit = in-front-of-BG.",
+        });
+      }
+
+      if (p === "msx") {
+        // V9938/TMS9918 sprite-attribute table lives in VRAM at the R5/R11 base.
+        const vram = host.readMemory("msx_vram", 0, host.regionSize("msx_vram"));
+        const regs = host.readMemory("msx_vdp_regs", 0, 64);
+        const { decodeMsxSprites, spriteAttrBase } = await import("../../platforms/msx/vdp.js");
+        const sprites = decodeMsxSprites(vram, regs);
+        return jsonContent({
+          platform: p,
+          ...clampSlots(sprites),
+          satBase: "$" + spriteAttrBase(regs).toString(16),
+          note: "MSX sprites: up to 32, read from the VRAM sprite-attribute table (base from VDP R5/R11). Y=208 ($D0) terminates the active list. MSX sprites have no flip bits; priority is by slot order (slot 0 = frontmost). `palette` is the color nibble (TMS9918) or palette index (V9938).",
+        });
+      }
+
+      throw new Error(`inspectSprites not yet wired for platform '${p}'. Supported: nes, snes, genesis, sms, gg, gb, gbc, atari2600, atari7800, c64, gba, pce, msx. (Lynx returns the SCB list head — it has no fixed OAM.)`);
     }),
   );
 
@@ -824,7 +901,9 @@ export function registerPlatformTools(server, z, sessionKey) {
     "convertImageToTiles",
     "Use this to convert a PNG to a platform's native tile-byte format — raw tiles, no tilemap (use " +
     "imageToTilemap for a full picture with screen/attribute data). Supported: nes, gb, gbc, sms, gg, " +
-    "snes, genesis, atari7800, c64 — each with its native bit-depth/layout; programmable-palette " +
+    "snes, genesis, atari7800, c64, pce — each with its native bit-depth/layout; programmable-palette " +
+    "platforms also return a suggested palette. MSX is supported too but returns TWO streams " +
+    "(pattern.bin + color.bin for screen-2's per-row 2-color format) instead of one tiles.bin. " +
     "platforms also return a suggested palette. Image width/height must be multiples of 8. Good for " +
     "demakes (rip art from one platform, re-encode for another) — combine with patchRom or your source. " +
     "DEFAULT writes tiles.bin (+ palette.bin if a palette is produced) into outputDir and returns paths; pass " +
@@ -839,6 +918,50 @@ export function registerPlatformTools(server, z, sessionKey) {
     safeTool(async ({ platform, pngBase64, maxTiles, outputDir, inline }) => {
       if (!inline && !outputDir) {
         throw new Error("convertImageToTiles: pass outputDir (write tiles.bin/palette.bin to disk, returns paths) or inline:true (return base64 in the response).");
+      }
+      // MSX screen-2 is a special case: a tile is TWO parallel 8-byte tables
+      // (pattern bits + per-row fg/bg color), not one tile blob. Emit both
+      // streams (pattern.bin + color.bin) instead of the generic tiles.bin.
+      if (platform === "msx") {
+        const { PNG } = await import("pngjs");
+        const { encodeMsxScreen2Tiles } = await import("../../platforms/msx/tiles.js");
+        const png = Buffer.from(pngBase64, "base64");
+        const img = PNG.sync.read(png);
+        if (img.width % 8 || img.height % 8) {
+          throw new Error(`convertImageToTiles(msx): image ${img.width}x${img.height} must be a multiple of 8 in both dimensions.`);
+        }
+        // Map RGBA → nearest of the 16 fixed TMS9918 colors (MSX1 screen-2).
+        const { TMS9918_PALETTE } = await import("../../platforms/msx/vdp.js");
+        const indexed = new Uint8Array(img.width * img.height);
+        for (let i = 0; i < indexed.length; i++) {
+          const r0 = img.data[i * 4], g0 = img.data[i * 4 + 1], b0 = img.data[i * 4 + 2];
+          let best = 0, bestD = Infinity;
+          for (let c = 0; c < 16; c++) {
+            const [pr, pg, pb] = TMS9918_PALETTE[c];
+            const d = (pr - r0) ** 2 + (pg - g0) ** 2 + (pb - b0) ** 2;
+            if (d < bestD) { bestD = d; best = c; }
+          }
+          indexed[i] = best;
+        }
+        const { pattern, color } = encodeMsxScreen2Tiles(indexed, img.width, img.height);
+        const tilesAcross = img.width >> 3, tilesDown = img.height >> 3;
+        const msxOut = {
+          platform: "msx", mode: "screen2",
+          tilesAcross, tilesDown, totalTiles: tilesAcross * tilesDown,
+          patternBytes: pattern.length, colorBytes: color.length,
+          note: "MSX screen-2 tiles = TWO tables: pattern.bin (1bpp, bit7=leftmost) and color.bin (per-row high-nibble=fg, low-nibble=bg color index into the fixed 16-color TMS9918 palette). DMA pattern.bin to the pattern-generator base and color.bin to the color-table base (see getRenderingContext for those VRAM addresses). Each 8-pixel ROW is limited to 2 colors — that's the classic MSX constraint.",
+        };
+        if (inline) {
+          msxOut.patternBase64 = Buffer.from(pattern).toString("base64");
+          msxOut.colorBase64 = Buffer.from(color).toString("base64");
+        } else {
+          await mkdir(outputDir, { recursive: true });
+          msxOut.patternPath = path.join(outputDir, "pattern.bin");
+          msxOut.colorPath = path.join(outputDir, "color.bin");
+          await writeFile(msxOut.patternPath, Buffer.from(pattern));
+          await writeFile(msxOut.colorPath, Buffer.from(color));
+        }
+        return jsonContent(msxOut);
       }
       const { imageToTiles } = await import("../../platforms/common/image-to-tiles.js");
       const png = Buffer.from(pngBase64, "base64");
@@ -884,6 +1007,8 @@ export function registerPlatformTools(server, z, sessionKey) {
         out.note = "SMS/GG 4bpp 'interleaved' layout (32 B/tile, per-row [p0,p1,p2,p3]). Write tiles to VRAM tile data base (VDP reg 4); `paletteHex` is a suggested CRAM palette.";
       } else if (platform === "c64") {
         out.note = "C64 hi-res charset: each tile is one 8×8 char (8 B, 1bpp — bit set = foreground in the cell's Color-RAM color, clear = shared background). Load the tile bytes (tilesPath / tilesBase64) into your char base ($0800/$1000/etc.). For a full picture with per-cell colors + screen RAM, use imageToTilemap({platform:'c64'}) instead.";
+      } else if (platform === "pce") {
+        out.note = "PC Engine HuC6270 4bpp 'planar-pairs' layout (32 B/tile, same as SNES: 16 B plane 0+1, then 16 B plane 2+3). DMA the tile bytes into VRAM at your BG/SPR pattern base. `paletteHex` is a suggested 16-color set — pack each to the VCE's 9-bit GRB at use time. (MSX returns pattern.bin/color.bin instead — see its branch.)";
       }
       return jsonContent(out);
     }),
@@ -958,9 +1083,10 @@ export function registerPlatformTools(server, z, sessionKey) {
   server.tool(
     "imageToTilemap",
     "Use this to render a large PNG (title screen, cutscene, status panel, world map) from tiles: returns " +
-    "tile graphics + tilemap (NES nametable / SNES tilemap / GB BG map / C64 screen RAM) + per-cell " +
-    "palette/attribute + palette table, with tile dedup (h/v-flip aware). Supported: nes, snes, genesis, " +
-    "sms, gg, gb, gbc, c64. PREREQUISITE: the PNG must already be sized to the platform's native screen and " +
+    "tile graphics + tilemap (NES nametable / SNES tilemap / GB BG map / C64 screen RAM / PCE BAT / MSX " +
+    "screen-2 name+pattern+color tables) + per-cell palette/attribute + palette table, with tile dedup " +
+    "(h/v-flip aware where the platform's map supports it). Supported: nes, snes, genesis, " +
+    "sms, gg, gb, gbc, c64, pce, msx. PREREQUISITE: the PNG must already be sized to the platform's native screen and " +
     "quantized to its palette (see getPlatformPalettePng) — per-platform cell/bpp details are in the " +
     "platform's MENTAL_MODEL.md. Pass `pngPath` (preferred) or `pngBase64`; pass `outputDir` to write " +
     "chr/nametable/attr/palette/preview to disk instead of base64-inlining them.",
@@ -1197,6 +1323,31 @@ async function imageToTilemap(platform, args) {
       uniqueTiles: r.uniqueTiles,
       previewPng: r.previewPng,
       _c64: { backgroundColor: r.backgroundColor, imageColors: r.imageColors, warnings: r.warnings },
+    };
+  }
+  if (platform === "pce") {
+    const { pceImageToTilemap } = await import("../../platforms/pce/image-to-tilemap.js");
+    const r = pceImageToTilemap(args);
+    return {
+      chr: r.tiles,             // 4bpp planar-pairs tile bytes (32 B/tile)
+      nametable: r.nametable,   // the BAT (16-bit LE entries: tile|palette<<12)
+      attr: new Uint8Array(0),  // PCE attributes are packed into the BAT entry
+      palette: r.palette,       // 16 × VCE 9-bit GRB words
+      uniqueTiles: r.uniqueTiles,
+      uniqueTilesBeforeMerge: r.uniqueTiles,
+    };
+  }
+  if (platform === "msx") {
+    const { msxImageToTilemap } = await import("../../platforms/msx/image-to-tilemap.js");
+    const r = msxImageToTilemap(args);
+    return {
+      chr: r.tiles,             // screen-2 pattern table (1bpp, 8 B/tile)
+      nametable: r.nametable,   // 768 bytes (0..255 × 3 thirds)
+      attr: r.color,            // screen-2 color table (per-row fg/bg), 8 B/tile
+      palette: new Uint8Array(0), // MSX1 palette is the fixed TMS9918 set
+      uniqueTiles: r.uniqueTiles,
+      uniqueTilesBeforeMerge: r.uniqueTiles,
+      _msx: { mode: "screen2", note: "chr=pattern table, attr=color table, nametable=name table. Fixed TMS9918 palette." },
     };
   }
   if (platform === "atari2600" || platform === "a2600") {

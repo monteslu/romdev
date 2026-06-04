@@ -34,6 +34,12 @@ done
 echo "Building 6502 runtime libraries (native cc65 tools)..."
 make clean -C src
 make -j"$(nproc)"
+# Build the runtime libs for ALL targets explicitly — a bare `make` builds the
+# tools but does NOT reliably produce every target's lib (that's why an earlier
+# build shipped only 5 of the ~25 target libs, breaking PCE + Atari 5200/8-bit
+# at link). `make lib` walks libsrc/Makefile's full TARGETS list (incl. pce,
+# atari, atari5200, atarixl).
+make lib -j"$(nproc)"
 
 mkdir -p "$OUT" "$SHARE/lib" "$SHARE/asminc" "$SHARE/include" "$SHARE/cfg" "$SHARE/target"
 cp src/bin/cc65.js src/bin/cc65.wasm "$OUT/"
