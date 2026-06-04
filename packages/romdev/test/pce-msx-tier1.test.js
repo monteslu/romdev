@@ -149,6 +149,38 @@ test("PCE asset pipeline: tile codec round-trips and matches planar-pairs", asyn
   assert.equal(new Set(back).size, 4, "PCE imageToTiles lost colors");
 });
 
+test("PCE audio: getAudioState decodes the HuC6280 PSG (6 channels)", async () => {
+  const { getPcePsgState } = await import("../src/host/pce-psg-state.js");
+  const build = await buildForPlatform({ platform: "pce", source: "void main(void){for(;;);}", sourceName: "main.c" });
+  const core = resolveCore("pce");
+  const host = new LibretroHost();
+  await host.loadCore(core.jsPath, core.wasmPath);
+  await host.loadMedia({ platform: "pce", bytes: build.binary });
+  for (let i = 0; i < 30; i++) host.stepFrames(1);
+  const psg = getPcePsgState(host);
+  assert.ok(psg, "PCE PSG region not exposed — is the patched geargrafx core staged?");
+  assert.equal(psg.chip, "pce");
+  assert.equal(psg.channels.length, 6);
+  assert.equal(psg.channels[4].canNoise, true, "PCE ch4 should support noise");
+  assert.equal(psg.channels[0].canNoise, false, "PCE ch0 should NOT support noise");
+}, { timeout: 60000 });
+
+test("MSX audio: getAudioState decodes the AY-3-8910 (3 channels + envelope)", async () => {
+  const { getMsxAyState } = await import("../src/host/msx-ay-state.js");
+  const build = await buildForPlatform({ platform: "msx", source: "void main(void){for(;;);}", sourceName: "main.c" });
+  const core = resolveCore("msx");
+  const host = new LibretroHost();
+  await host.loadCore(core.jsPath, core.wasmPath);
+  await host.loadMedia({ platform: "msx", bytes: build.binary });
+  for (let i = 0; i < 120; i++) host.stepFrames(1);
+  const ay = getMsxAyState(host);
+  assert.ok(ay, "MSX PSG region not exposed — is the patched blueMSX core staged?");
+  assert.equal(ay.chip, "ay8910");
+  assert.equal(ay.channels.length, 3);
+  assert.ok(["A", "B", "C"].includes(ay.channels[0].channel));
+  assert.ok(typeof ay.envelope.shape === "number");
+}, { timeout: 90000 });
+
 test("MSX asset pipeline: screen-2 tile codec round-trips (2 colors/row)", async () => {
   const { encodeMsxScreen2Tile, decodeMsxScreen2Tile } = await import("../src/platforms/msx/tiles.js");
   const tile = new Uint8Array(64);

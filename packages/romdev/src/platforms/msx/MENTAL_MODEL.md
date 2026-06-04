@@ -87,5 +87,8 @@ exactly this.
 - `getRenderingContext()` — VDP R1 display-enable, screen mode, VRAM table bases.
 - `inspectPalette()` — V9938 9-bit GRB (or TMS9918 fixed) 16 entries.
 - `inspectSprites()` — VRAM sprite-attribute table, up to 32 sprites.
+- `getAudioState({ chip: "ay8910" })` — the AY-3-8910 PSG: 3 square-wave
+  channels (tone period→Hz, amplitude, tone/noise enable) + a shared noise
+  generator + the envelope (period + shape bits).
 - `readMemory()` regions: `msx_vram`, `msx_vdp_regs`, `msx_vdp_status`,
-  `msx_palette`, `msx_cpu_regs`, plus `system_ram` (the work RAM).
+  `msx_palette`, `msx_cpu_regs`, `msx_psg_regs`, plus `system_ram` (work RAM).
