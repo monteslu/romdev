@@ -312,3 +312,18 @@ test("createProject scaffolds a building project for PCE + MSX", async () => {
     assert.ok(b.binary && b.binary.length > 0, `${plat} scaffolded project failed to build:\n${b.log}`);
   }
 }, { timeout: 120000 });
+
+test("createProject default scaffolds for ALL 14 platforms (no missing default)", async () => {
+  const { createProjectImpl } = await import("../src/mcp/tools/project.js");
+  const { mkdtemp } = await import("node:fs/promises");
+  const os = await import("node:os");
+  const ALL = ["nes", "gb", "gbc", "atari2600", "atari7800", "lynx", "sms", "gg",
+    "genesis", "snes", "gba", "c64", "pce", "msx"];
+  for (const p of ALL) {
+    const dir = await mkdtemp(path.join(os.tmpdir(), `def-${p}-`));
+    // No template arg → must resolve a sensible default (GBA's first key is
+    // tonc_hello, not "default" — this caught a real bug).
+    const r = await createProjectImpl({ platform: p, name: "g", path: dir, overwrite: true });
+    assert.ok((r.writtenFiles || r.files || []).length > 0, `${p}: default scaffold wrote no files`);
+  }
+});

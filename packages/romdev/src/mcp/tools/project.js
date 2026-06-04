@@ -1395,10 +1395,14 @@ export async function createProjectImpl({ platform, name, path: projPath, title,
   let mainFilename;
   let lang;
   if (hasTemplates) {
-    const tname = template ?? "default";
+    // No template given → prefer a "default" entry, else fall back to the FIRST
+    // template the platform defines (e.g. GBA's first entry is `tonc_hello`, not
+    // `default`). Only error when an explicit, unknown template was requested.
+    const available = Object.keys(TEMPLATES[platform]);
+    const tname = template ?? (TEMPLATES[platform].default ? "default" : available[0]);
     tmpl = TEMPLATES[platform][tname];
     if (!tmpl) {
-      throw new Error(`Unknown template '${tname}' for platform '${platform}'. Available: ${Object.keys(TEMPLATES[platform]).join(", ")}`);
+      throw new Error(`Unknown template '${tname}' for platform '${platform}'. Available: ${available.join(", ")}`);
     }
     const mainExt = path.extname(tmpl.main);
     mainFilename = `main${mainExt}`;
