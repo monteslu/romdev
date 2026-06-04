@@ -8,16 +8,23 @@ Drives the full homebrew ROM dev loop for retro game platforms (NES, Game Boy, S
 
 You drive the work. The human is a director — they may want a game, a ROM disassembly, a tool-assisted reverse-engineering session, or anything else this server can do.
 
-## The compilers and emulators are bundled — don't install or download those
+## The one hard rule: NEVER install a compiler or emulator. romdev bundles every one.
 
-Every **compiler, assembler, linker, and emulator core** you need to build and run ROMs is **already bundled** as WebAssembly inside romdev and runs through these MCP tools. So do **not**:
-- `apt`/`brew`/`npm install` a compiler (cc65, sdcc, gcc, tcc, wla, rgbds, vasm, m68k-gcc, …) — they're built in.
-- fetch a devkit/SDK (devkitPro, SGDK, PVSnesLib, libtonc/libgba, cc65 libs, …) — their source is bundled and the toolchains link against it for you.
-- look for a system emulator — the libretro cores (fceumm, snes9x, gpgx, gambatte, mGBA, …) run in-process.
+Internalize this above all else: **you never need — and must never install — a compiler or an emulator to build or run a ROM here.** Every compiler/assembler/linker (cc65, sdcc, gcc, tcc, wla, rgbds, vasm, m68k-gcc, arm-none-eabi-gcc, …), every devkit/SDK (SGDK, PVSnesLib, libtonc/libgba, cc65 libs, …), and every emulator core (fceumm, snes9x, gpgx, gambatte, mGBA, handy, vice, prosystem, stella, …) is **already bundled as WASM** and runs in-process through these MCP tools. The whole build → link → run → inspect loop is `buildSource` / `runSource` / `buildProject` / `loadMedia` / `screenshot` / `inspect*` / `playtest` — never a host `gcc` or a downloaded toolchain.
 
-**Build/run/inspect happens through the romdev tools** (`buildSource`, `runSource`, `buildProject`, `loadMedia`, `screenshot`, `inspect*`, …) — not by shelling out to a system `gcc` or a downloaded toolchain. If you catch yourself reaching for a compiler/emulator install, stop and call the equivalent romdev tool. `listPlatforms` / `listToolchains` show what's available.
+**So if a build toolchain or emulator is ever invoked or prompts to install — `clang`, `gcc`, Xcode / macOS Command Line Tools, `node-gyp`, devkitPro, `brew/apt install <compiler>` — that is a DEFECT, not your cue to proceed.** Stop, do NOT install it, do NOT investigate it with host-side diagnostic commands (that just alarms the user), and surface it: "romdev should provide this — a host compiler/emulator should never be needed." Then find the romdev tool or report the gap. `listPlatforms` / `listToolchains` show what's bundled.
 
-This is scoped to the build/run toolchain — romdev is **not** an everything box. A user may well want **external art and music tools** (Aseprite/LibreSprite for sprites, a tracker like FamiStudio/Deflemask for music, ImageMagick for conversions). Those are legitimately the user's to install, and several romdev asset-loader tools (`loadAsepriteSheet`, `loadSpriteSheet`, `loadGifAnimation`, …) are designed to consume their output. Don't refuse or reinvent those — if the user wants to paint or compose in a real editor, that's expected; romdev imports the result.
+### Host content tools (art / audio / map editors) are totally fine
+
+This rule is about **compilers and emulators only** — NOT about content tools. ImageMagick, GIMP, Aseprite/LibreSprite, Audacity, Tiled, a tracker (FamiStudio/Deflemask), Python for a quick art script — all fine to use, and fine for the user to install. They produce **raw source art/audio** (a PNG, a sprite sheet, a `.wav`, a `.tmx`); romdev then **imports and packs** that into platform-native data. Use them freely when they help; just don't reach for a *compiler or emulator*.
+
+### romdev also packs assets in-server — reach for these first
+
+Asset conversion is bundled too, so you often don't need the host tools at all. First-class tools: `convertImageToTiles`, `imageToTilemap`, `quantizePngForPlatform`, `getPlatformPalettePng`, `getLospecPalette`, `validateGenesisTiles`, the loaders `loadSpriteSheet` / `loadAsepriteSheet` / `loadGifAnimation` / `loadTilemap`, and helpers like `captureMetaSprite` / `crossPlatformSpriteImport`. The canonical quantize→tile→pack path lives here — `loadCategory({category:"assets"})` to see it. Typical flow: paint pixels in a host editor (or generate a PNG), then `quantizePngForPlatform` → `convertImageToTiles` to get platform-native tiles. (You can do the whole thing in-server too when the art is procedural.)
+
+### Native-addon prompts are a packaging bug — never compile on the host
+
+A couple of optional features load a native Node addon (most notably the `playtest` SDL window, via `@kmamal/sdl`). These ship **prebuilt** — they must never compile on your machine. If you see a `clang` / Xcode / Command Line Tools / `node-gyp` build kick off while using romdev, the prebuilt binary is missing or mismatched: **do not let it compile, do not install a toolchain — report it.** `playtest` itself self-heals by downloading its prebuilt binary and, if it can't, returns `{opened:false, reason:"sdl-binary-missing", fixCommand}` with the exact one-line fix — it never needs a host compiler.
 
 ## If a human is watching, open playtest early
 
