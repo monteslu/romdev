@@ -54,7 +54,15 @@ async function main() {
   if (!existsSync(installScript)) return; // can't repair
 
   try {
-    await execFileAsync(process.execPath, [installScript], { timeout: 120000 });
+    // Force prebuilt-only: never let a missing prebuilt fall through to a
+    // node-gyp source build, which would invoke clang/Xcode/Command Line Tools
+    // on the host — exactly the "why is it compiling?" scare we must avoid.
+    // @kmamal/sdl's installer already downloads a prebuilt; this is belt-and-
+    // suspenders for anything in the chain that honors these flags.
+    await execFileAsync(process.execPath, [installScript], {
+      timeout: 120000,
+      env: { ...process.env, npm_config_build_from_source: "false", npm_config_build_from_source_all: "false" },
+    });
     if (existsSync(sdlNode)) {
       console.log("[romdev-mcp] fetched @kmamal/sdl native binary for playtest.");
     }

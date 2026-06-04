@@ -115,7 +115,11 @@ async function getSdl() {
   if (sdlNode && !existsSync(sdlNode) && installScript && existsSync(installScript)) {
     log("playtest: @kmamal/sdl native binary missing — fetching prebuilt via its install script…");
     try {
-      await execFileAsync(process.execPath, [installScript], { timeout: 120000 });
+      await execFileAsync(process.execPath, [installScript], {
+        timeout: 120000,
+        // Prebuilt-only — never fall through to a node-gyp/clang source build.
+        env: { ...process.env, npm_config_build_from_source: "false", npm_config_build_from_source_all: "false" },
+      });
     } catch (e) {
       throw tag(new Error(
         `the @kmamal/sdl native binary isn't installed and the auto-install failed: ${e?.message ?? e}`,
