@@ -486,12 +486,21 @@ export async function buildZ80C(args) {
 export function parseSdldMap(map) {
   if (!map) return [];
   const out = [];
+  const seen = new Set();
   for (const rawLine of map.split(/\r?\n/)) {
     const line = rawLine.trim();
-    // Match "<4 hex addr><whitespace><name>" — sdld emits 4-hex addresses
-    // for z80/sm83 (16-bit address space).
-    const m = /^([0-9A-Fa-f]{4,8})\s+([A-Za-z_.][A-Za-z0-9_.]*)\s*$/.exec(line);
+    // sdld emits two symbol-line shapes (z80/sm83, 16-bit addresses):
+    //   1. Area summary:   "0000C000  s__DATA"            (addr + name, EOL)
+    //   2. Global symbol:  "0000C000  _score   _work_main" (addr + name +
+    //      a "defined in module" column). The user's variables/functions are
+    //      shape 2 — the original regex's `$` anchor after the name dropped
+    //      them, so PC→symbol + getMemoryMap only ever saw the area markers.
+    // Accept an OPTIONAL trailing module column.
+    const m = /^([0-9A-Fa-f]{4,8})\s+([A-Za-z_.][A-Za-z0-9_.]*)(?:\s+\S.*)?$/.exec(line);
     if (m) {
+      const key = m[1] + ":" + m[2];
+      if (seen.has(key)) continue; // a symbol can appear in both the area + global lists
+      seen.add(key);
       out.push({
         address: parseInt(m[1], 16),
         addressHex: "0x" + m[1].toUpperCase(),
