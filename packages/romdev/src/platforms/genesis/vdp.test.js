@@ -20,17 +20,27 @@ test("rgbToGenesisColor: red/green/blue/black round-trip", () => {
   assert.equal(rgbToGenesisColor(0, 0, 0), 0x0000);
 });
 
-test("decodeCRAM: BGR words → RGB triples", () => {
+test("decodeCRAM: packed 9-bit (BBBGGGRRR) LE words → RGB triples", () => {
+  // The gpgx genesis_cram region stores PACKED 9-bit colours (0bBBBGGGRRR),
+  // little-endian — NOT the raw 16-bit bus word. Full-red is packed 0x007
+  // (bytes 07 00), green 0x038 (38 00), blue 0x1C0 (c0 01). Verified live:
+  // bus $00EE (yellow) → bytes 3f 00 → 0x003F → R7 G7 B0 → (255,255,0).
   const cram = new Uint8Array(128);
   cram[0] = 0x00; cram[1] = 0x00; // black at color 0
-  cram[2] = 0x00; cram[3] = 0x0E; // bright red at color 1
-  cram[4] = 0x00; cram[5] = 0xE0; // bright green at color 2
-  cram[6] = 0x0E; cram[7] = 0x00; // bright blue at color 3
+  cram[2] = 0x07; cram[3] = 0x00; // bright red   (0x007) at color 1
+  cram[4] = 0x38; cram[5] = 0x00; // bright green (0x038) at color 2
+  cram[6] = 0xc0; cram[7] = 0x01; // bright blue  (0x1C0) at color 3
   const colors = decodeCRAM(cram);
   assert.deepEqual(colors[0], [0, 0, 0]);
   assert.deepEqual(colors[1], [255, 0, 0]);
   assert.deepEqual(colors[2], [0, 255, 0]);
   assert.deepEqual(colors[3], [0, 0, 255]);
+});
+
+test("decodeCRAM: yellow regression (the bug the feedback found)", () => {
+  // Pre-fix every Genesis colour decoded to blue-on-black. Bus $00EE = yellow,
+  // packed to 0x003F (bytes 3f 00). Must decode to (255,255,0), not blue.
+  assert.deepEqual(decodeCRAM(new Uint8Array([0x3f, 0x00]))[0], [255, 255, 0]);
 });
 
 test("decodeSAT: sprite position/tile/palette decode", () => {
@@ -75,9 +85,9 @@ test("decode4bppTile: wrong size throws", () => {
 
 test("decodeGenesisSubpalette: extract a 16-color sub-palette", () => {
   const cram = new Uint8Array(128);
-  // Palette 1 starts at byte 32. Put a red at color 1.
-  cram[32 + 2] = 0x00;
-  cram[32 + 3] = 0x0E;
+  // Palette 1 starts at byte 32. Put a red (packed 0x007, bytes 07 00) at color 1.
+  cram[32 + 2] = 0x07;
+  cram[32 + 3] = 0x00;
   const sub = decodeGenesisSubpalette(cram, 1);
   assert.equal(sub.length, 16);
   assert.deepEqual(sub[1], [255, 0, 0]);

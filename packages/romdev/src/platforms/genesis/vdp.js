@@ -81,15 +81,21 @@ export function decodeSAT(sat) {
 }
 
 /**
- * Decode CRAM (128 bytes = 64 colors × uint16 big-endian) into
- * 64 RGB triples (each 0..255).
+ * Decode CRAM (128 bytes = 64 colors) into 64 RGB triples (each 0..255).
  *
- * Genesis colour word is BGR-aligned in 4-bit nibbles, but the
- * actual values are 3-bit (top bit of each nibble is unused):
- *   0BGR  where each letter is a 3-bit channel (values 0..7)
+ * IMPORTANT — the gpgx `genesis_cram` buffer does NOT hold the raw 16-bit VDP
+ * bus word (`BBB0GGG0RRR0`). On every CRAM write gpgx REPACKS the bus data to a
+ * 9-bit value `0b BBB GGG RRR` (3 bits per channel, contiguous, top bits 0) and
+ * stores that as a native uint16 — see vdp_ctrl.c case 0x03:
+ *   data = ((data&0xE00)>>3) | ((data&0x0E0)>>2) | ((data&0x00E)>>1);
+ * So the region is **packed 9-bit colours, little-endian** on our WASM host.
+ * Read LE, then extract R = bits 0-2, G = bits 3-5, B = bits 6-8.
  *
- * We expand to 0..255 by multiplying the 3-bit value by 36
- * (≈ 255/7).
+ * Verified live (Genesis hello scaffold): bus $00EE (B0 G7 R7 = yellow) lands as
+ * bytes `3f 00` → LE 0x003F → R7 G7 B0 → (255,255,0). The old "big-endian +
+ * bus-format masks" read collapsed everything to blue.
+ *
+ * We expand each 3-bit channel to 0..255 (×255/7).
  *
  * @param {Uint8Array} cram 128 bytes
  * @returns {Array<[number, number, number]>} 64 RGB triples
@@ -98,10 +104,10 @@ export function decodeCRAM(cram) {
   const colors = [];
   const n = Math.floor(cram.length / 2);
   for (let i = 0; i < n; i++) {
-    const w = (cram[i * 2] << 8) | cram[i * 2 + 1];
-    const r = (w >> 1) & 0x7;
-    const g = (w >> 5) & 0x7;
-    const b = (w >> 9) & 0x7;
+    const w = cram[i * 2] | (cram[i * 2 + 1] << 8);
+    const r = w & 0x7;
+    const g = (w >> 3) & 0x7;
+    const b = (w >> 6) & 0x7;
     colors.push([
       Math.round((r / 7) * 255),
       Math.round((g / 7) * 255),
