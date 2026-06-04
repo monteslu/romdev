@@ -83,17 +83,46 @@ export function registerMemoryTools(server, z, sessionKey) {
     `For reads >${INLINE_HEX_LIMIT} bytes you MUST pass either outputPath (the RAW bytes are written there and you get ` +
     "back {path, bytes}) or inline:true (the hex comes back in the response). " +
     "Generic regions: system_ram, save_ram, video_ram, rtc. NES extras (fceumm): nes_nametables, nes_palette, nes_oam, nes_chr. " +
-    "SNES extras (snes9x): snes_oam (544B incl. hi-table), snes_cgram (512B BGR555), snes_aram (64KB SPC700 RAM), snes_fillram (32KB PPU/DMA register shadow).",
+    "SNES extras (snes9x): snes_oam (544B incl. hi-table), snes_cgram (512B BGR555), snes_aram (64KB SPC700 RAM), snes_fillram (32KB PPU/DMA register shadow). " +
+    "BATCH: pass `offsets` (an array of addresses, or {offset,length} objects) to read several non-contiguous spots in ONE call — returns `reads:[{offset,length,hex}]`. Use this for scattered fields (e.g. player state at $0492, X at $0512, Y at $04F2) instead of one call each.",
     {
       region: z.enum(REGIONS),
       offset: z.number().int().min(0).default(0),
-      length: z.number().int().min(1).max(65536).describe("Number of bytes to read (max 65536)."),
-      outputPath: z.string().optional().describe(`Absolute path to write the RAW bytes to. Required for reads >${INLINE_HEX_LIMIT} bytes (unless inline:true). For SMALL reads it's honored too when given — writes the file AND returns hex inline — so a "snapshot RAM to disk, then diff two files" flow works at any size.`),
+      length: z.number().int().min(1).max(65536).optional().describe("Number of bytes to read (max 65536). Default 1. Ignored when `offsets` is given."),
+      offsets: z.array(z.union([
+        z.number().int().min(0),
+        z.object({ offset: z.number().int().min(0), length: z.number().int().min(1).max(65536).default(1) }),
+      ])).min(1).max(256).optional().describe("BATCH read: a list of addresses (each read as `length` bytes, default 1) or {offset,length} objects. Returns `reads:[{offset,length,hex}]` in order — one round-trip for many non-contiguous reads. Takes precedence over the single offset/length."),
+      outputPath: z.string().optional().describe(`Absolute path to write the RAW bytes to. Required for reads >${INLINE_HEX_LIMIT} bytes (unless inline:true). For SMALL reads it's honored too when given — writes the file AND returns hex inline — so a "snapshot RAM to disk, then diff two files" flow works at any size. (Not used with \`offsets\`.)`),
       inline: z.boolean().default(false).describe(`For reads >${INLINE_HEX_LIMIT} bytes: if true, return the hex string in the response instead of writing to disk. Default false — then outputPath is required for large reads.`),
     },
-    safeTool(async ({ region, offset, length, outputPath, inline }) => {
+    safeTool(async ({ region, offset, length, offsets, outputPath, inline }) => {
       const host = getHost(sessionKey);
-      const bytes = host.readMemory(region, offset, length);
+      const info0 = REGION_INFO[region] ?? {};
+      const endianness0 = info0.endianness ?? genericEndianness(host.status.platform);
+
+      // BATCH path: read each requested spot and return them in order. Always
+      // inline (these are small, scattered reads — the whole point is one call).
+      if (offsets && offsets.length) {
+        const reads = offsets.map((o) => {
+          const off = typeof o === "number" ? o : o.offset;
+          const len = typeof o === "number" ? (length ?? 1) : (o.length ?? 1);
+          const b = host.readMemory(region, off, len);
+          return {
+            offset: off,
+            length: b.length,
+            hex: Array.from(b, (x) => x.toString(16).padStart(2, "0")).join(""),
+          };
+        });
+        return jsonContent({
+          region,
+          endianness: endianness0,
+          wordSize: info0.wordSize ?? 1,
+          reads,
+        });
+      }
+
+      const bytes = host.readMemory(region, offset, length ?? 1);
       // Attach endianness + wordSize from the region info table so the
       // agent doesn't have to figure byte order out empirically. For
       // generic regions (system_ram etc) fall back to the loaded

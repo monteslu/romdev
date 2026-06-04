@@ -8,8 +8,51 @@ import { writeFile } from "node:fs/promises";
 import { getHost, getHostOrNull } from "../state.js";
 import { imageContent, jsonContent, safeTool, textContent } from "../util.js";
 
-// Module-scoped session handle so playtestStop / playtestStatus can reach it.
-let session = null;
+// Playtest windows are PER SESSION: the MCP server is multi-session (one server
+// serves several agents at once), and the same user can have 2-3 different games
+// open simultaneously — each in its own window. So we key the window handle by
+// sessionKey, NOT a single module global. One agent's window never clobbers
+// another's, and closing one session tears down only its own window.
+/** @type {Map<string, any>} */
+const sessions = new Map();
+
+/** Test-only: inject a fake session handle so the per-session registry can be
+ *  unit-tested without opening a real SDL window. Not used in production. */
+export function __setSessionForTest(sessionKey, fakeSession) {
+  if (fakeSession == null) sessions.delete(sessionKey);
+  else sessions.set(sessionKey, fakeSession);
+}
+
+/**
+ * Close the playtest window for ONE session (if any). Called when that session
+ * disconnects so a single agent leaving never touches the other agents' games.
+ * Safe to call when nothing is open for that key.
+ * @param {string} sessionKey
+ * @returns {boolean} true if a window was closed
+ */
+export function stopPlaytestForSession(sessionKey) {
+  const s = sessions.get(sessionKey);
+  if (!s) return false;
+  try { s.stop(); } catch {}
+  sessions.delete(sessionKey);
+  return true;
+}
+
+/**
+ * Close EVERY open playtest window. Called from the server's shutdown path so a
+ * shutdown leaves no window behind. Windows are in-process (same Node process
+ * as the server), so a clean exit tears them down anyway — but this makes it
+ * explicit and synchronous on SIGINT/SIGTERM across all sessions.
+ * @returns {number} how many windows were closed
+ */
+export function stopAllPlaytest() {
+  let n = 0;
+  for (const [key, s] of sessions) {
+    try { s.stop(); n++; } catch {}
+    sessions.delete(key);
+  }
+  return n;
+}
 
 /**
  * Pure truth-test for a playtest session handle. Prefers the window-level
@@ -29,34 +72,33 @@ export function isSessionAlive(s) {
 }
 
 /**
- * Reconcile our cached `session` against the real SDL window. If the window
- * died without firing a 'close' event, `session.running` stays true forever
- * and every playtest query lies. Probe the underlying window; if it's gone,
- * tear the session down so the next playtest() opens a fresh one.
- *
- * @returns {boolean} true if a live window is genuinely still up.
+ * Reconcile ONE session's cached handle against the real SDL window. If the
+ * window died without firing a 'close' event, `running` stays true forever and
+ * every query lies. Probe the window; if it's gone, drop it so the next
+ * playtest() for that session opens fresh.
+ * @param {string} sessionKey
+ * @returns {boolean} true if a live window is genuinely still up for that key.
  */
-function reconcileSession() {
-  if (!session) return false;
-  if (!isSessionAlive(session)) {
-    // Best-effort cleanup of the dead session, then forget it.
-    try { session.stop?.(); } catch {}
-    session = null;
+function reconcileSession(sessionKey) {
+  const s = sessions.get(sessionKey);
+  if (!s) return false;
+  if (!isSessionAlive(s)) {
+    try { s.stop?.(); } catch {}
+    sessions.delete(sessionKey);
     return false;
   }
   return true;
 }
 
 /**
- * Cheap "is there a live playtest window right now?" query, used by
- * runSource to decide whether to attach the one-shot "consider playtest"
- * hint to its response. Module-singleton scope matches the existing
- * `session` lifetime — there's at most one playtest window per process.
- *
+ * Cheap "is there a live playtest window for THIS session right now?" query,
+ * used by runSource to decide whether to attach the one-shot "consider
+ * playtest" hint to its response.
+ * @param {string} sessionKey
  * @returns {boolean}
  */
-export function isPlaytestRunning() {
-  return reconcileSession();
+export function isPlaytestRunning(sessionKey) {
+  return reconcileSession(sessionKey);
 }
 
 export function registerPlaytestTools(server, z, sessionKey) {
@@ -92,21 +134,22 @@ export function registerPlaytestTools(server, z, sessionKey) {
       // real error.
       const host = getHost(sessionKey);
       const loadedMediaPath = host.status?.mediaPath ?? null;
-      if (reconcileSession()) {
-        // A window is already open. We DON'T open a second one — there's one
-        // window per process, sharing the live host — so this is a no-op that
-        // just reports the existing window. The host (and thus the window's
-        // content) already reflects any rebuild you did via runSource.
+      if (reconcileSession(sessionKey)) {
+        // THIS session already has a window open. We don't open a second one for
+        // the same session — it shares this session's live host — so report the
+        // existing one. (A DIFFERENT session having its own window is fine and
+        // independent; this only reuses your own.)
         return jsonContent({
           opened: true,
           reusedExistingWindow: true,
           loadedMediaPath,
-          frameCount: host.status?.frameCount ?? session.frameCount,
-          note: "A playtest window was already open — reused it (one window per process, sharing the live host). The window already shows your latest loaded/rebuilt ROM. Call playtestStop first if you want to reopen with different scale/aspect.",
+          frameCount: host.status?.frameCount ?? sessions.get(sessionKey)?.frameCount,
+          note: "A playtest window was already open for this session — reused it (it shares your session's live host and already shows your latest loaded/rebuilt ROM). Call playtestStop first to reopen with a different scale/aspect. (Other agents' windows are separate.)",
         });
       }
 
       const { playtest, KEYBOARD_BINDINGS_HELP } = await import("../../playtest/playtest.js");
+      let session;
       try {
         // Pass a live-host accessor so the window FOLLOWS rebuilds: runSource/
         // loadMedia call resetHost() and replace the session host, and the
@@ -119,6 +162,7 @@ export function registerPlaytestTools(server, z, sessionKey) {
           title,
           aspect,
         });
+        sessions.set(sessionKey, session);
       } catch (e) {
         // Branch on WHY it failed — the cause is either the @kmamal/sdl native
         // binary not being installed (common under `npx`, where the transitive
@@ -170,8 +214,12 @@ export function registerPlaytestTools(server, z, sessionKey) {
           loadedMediaPath,
         });
       }
-      // Detach so process doesn't hang on the closed promise.
-      session.closed.then(() => { session = null; });
+      // Detach so process doesn't hang on the closed promise. Only clear THIS
+      // session's slot, and only if it still points at this same session (a
+      // later reopen could have replaced it).
+      session.closed.then(() => {
+        if (sessions.get(sessionKey) === session) sessions.delete(sessionKey);
+      });
       // No gamepad plugged in → the user is on the keyboard fallback. Hand the
       // agent the key map AND an explicit instruction to relay it, so the user
       // isn't left guessing which keys drive the game. (A pad hot-plugged later
@@ -202,13 +250,10 @@ export function registerPlaytestTools(server, z, sessionKey) {
 
   server.tool(
     "playtestStop",
-    "Close the live playtest window (if one is open). The emulator host stays loaded and you can keep using all the other tools.",
+    "Close the live playtest window for THIS session (if one is open). The emulator host stays loaded and you can keep using all the other tools. Other agents' windows are unaffected.",
     {},
     safeTool(async () => {
-      if (!session) return textContent("no playtest window open");
-      session.stop();
-      session = null;
-      return textContent("playtest window closed");
+      return textContent(stopPlaytestForSession(sessionKey) ? "playtest window closed" : "no playtest window open");
     }),
   );
 
@@ -223,7 +268,7 @@ export function registerPlaytestTools(server, z, sessionKey) {
       // reconcileSession() probes the real SDL window and tears down a dead
       // one — so a window killed without a 'close' event reports running:false
       // instead of lying forever (the post-restart / compositor-kill case).
-      if (!reconcileSession()) {
+      if (!reconcileSession(sessionKey)) {
         // No window — but report whether a host/ROM is still loaded so the
         // caller can decide whether to re-loadMedia or just re-open playtest,
         // instead of defensively reloading (Jay's session2 #3).
@@ -238,6 +283,7 @@ export function registerPlaytestTools(server, z, sessionKey) {
             : "No playtest window and no host loaded — loadMedia (or runSource) first.",
         });
       }
+      const session = sessions.get(sessionKey);
       const activeHost = getHostOrNull(sessionKey);
       const windowHost = session.host ?? null;
       // The window binds its host at open; the session's active host gets
@@ -275,7 +321,7 @@ export function registerPlaytestTools(server, z, sessionKey) {
       inline: z.boolean().default(false).describe("If true, return the image in the response instead of writing to disk. Default false — then `path` is required."),
     },
     safeTool(async ({ path: outPath, inline }) => {
-      if (!reconcileSession()) {
+      if (!reconcileSession(sessionKey)) {
         return jsonContent({
           ok: false,
           error: "no playtest window open",
@@ -285,7 +331,7 @@ export function registerPlaytestTools(server, z, sessionKey) {
       if (!inline && !outPath) {
         return jsonContent({ ok: false, error: "pass `path` (where to write the PNG) or `inline:true`." });
       }
-      const frame = session.captureFrame();
+      const frame = sessions.get(sessionKey).captureFrame();
       if (!frame) {
         return jsonContent({
           ok: false,
