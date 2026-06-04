@@ -59,7 +59,7 @@ const PLATFORM_QUIRKS = {
       "TIMING: C-BIOS shows its logo for ~2-3s (≈150 frames) BEFORE calling the cart INIT. Step >= 240 frames before expecting output on screen.",
       "Fastest visible output is BIOS calls: INITXT ($006C) sets the 40-col text screen + enables display, CHPUT ($00A2) prints the char in A. Put asm data labels INSIDE a function's asm block (file-scope __asm is a SDCC syntax error).",
       "Video is the V9938 VDP: VRAM up to 128KB, 16-entry programmable palette (9-bit GRB) on MSX2 bitmap modes, fixed TMS9918 palette on MSX1 modes. inspectPalette picks the right source automatically.",
-      "Debugging: getCPUState (z80), inspectPalette, inspectSprites (VRAM sprite-attr table), getRenderingContext (VDP R1 screen-enable + mode + VRAM table bases), getAudioState({chip:'ay8910'}) (3 square + noise + envelope), readMemory regions msx_vram/msx_vdp_regs/msx_vdp_status/msx_palette/msx_cpu_regs/msx_psg_regs.",
+      "Debugging: getCPUState (z80), inspectPalette, inspectSprites (VRAM sprite-attr table), getRenderingContext (VDP R1 screen-enable + mode + VRAM table bases), getAudioState({chip:'ay8910'}) (3 square + noise + envelope), getMemoryMap (pass the sdld .map), readMemory regions msx_vram/msx_vdp_regs/msx_vdp_status/msx_palette/msx_cpu_regs/msx_psg_regs.",
     ],
     starterSnippets: ["hello_msx.c", "msx_crt0.s"],
   },
