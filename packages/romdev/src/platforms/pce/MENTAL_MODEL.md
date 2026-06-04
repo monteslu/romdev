@@ -4,6 +4,19 @@ One page. Read once before you write your first PC Engine game. The
 TROUBLESHOOTING.md alongside this file is for when something's broken; this is
 the "what's going on" version.
 
+## Start here — don't write the register pokes from scratch
+
+romdev ships a **hardware helper library** (`src/platforms/pce/lib/c/`:
+`pce_hw.h` + `pce_video.c` + `pce_input.c` + `pce_sound.c`) so you call
+`vce_set_color()`, `vram_write()`, `set_sprite()`, `satb_dma()`, `pce_joy_read()`,
+`psg_tone()` instead of poking VDC/VCE registers by hand. cc65 has **no** sprite
+library, so this lib is how you get pixels on screen.
+
+The fastest way to a working game: **`createProject({ platform: "pce", template:
+"sprite_move" })`** (also `music_sfx`, `catch_game`). It drops a complete,
+*building* project — a verified playable example + the helper lib + docs. Read
+the example's `main.c`, then change it. The examples live in `examples/pce/`.
+
 ## CPU — HuC6280 (a 65C02 superset)
 
 The HuC6280 is a 65C02 core with extras: a memory-mapping unit (MPR registers),
