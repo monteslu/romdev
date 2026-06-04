@@ -482,5 +482,62 @@ export function getCPUState(host, platform, cpu = "main") {
       },
     };
   }
+  if (platform === "pce") {
+    // Patched geargrafx exposes a packed HuC6280 snapshot via pce_cpu_regs (see
+    // geargrafx-romdev-memory-regions.patch). Layout (LE):
+    //   [0..1] PC  [2] A  [3] X  [4] Y  [5] S  [6] P
+    //   [7..10] SPEED(s32)  [11] timer_enabled  [12] timer_counter
+    //   [13] timer_reload  [14] IDR  [15] IRR
+    // The HuC6280 is a 65C02 superset; P flags are the standard NV-BDIZC.
+    const b = host.readMemory("pce_cpu_regs", 0, 16);
+    const pc = b[0] | (b[1] << 8);
+    const p = b[6];
+    return {
+      pc,
+      sp: 0x2100 | b[5], // HuC6280 stack page is fixed at $21xx via MPR
+      registers: {
+        A: b[2], X: b[3], Y: b[4], S: b[5], P: p,
+        timer_counter: b[12], timer_reload: b[13], IDR: b[14], IRR: b[15],
+      },
+      cpu: "huc6280",
+      flags: {
+        N: !!(p & 0x80), V: !!(p & 0x40), T: !!(p & 0x20), B: !!(p & 0x10),
+        D: !!(p & 0x08), I: !!(p & 0x04), Z: !!(p & 0x02), C: !!(p & 0x01),
+        raw: "0x" + p.toString(16).toUpperCase().padStart(2, "0"),
+      },
+    };
+  }
+  if (platform === "msx") {
+    // Patched blueMSX exposes a packed Z80/R800 snapshot via msx_cpu_regs (see
+    // bluemsx-romdev-memory-regions.patch). Layout (LE, all u16 then u8):
+    //   af bc de hl ix iy pc sp | af1 bc1 de1 hl1 | i r iff1 iff2 im halt
+    const b = host.readMemory("msx_cpu_regs", 0, 30);
+    const w = (o) => b[o] | (b[o + 1] << 8);
+    const af = w(0), bc = w(2), de = w(4), hl = w(6);
+    const ix = w(8), iy = w(10), pc = w(12), sp = w(14);
+    const f = af & 0xFF, a = (af >> 8) & 0xFF;
+    return {
+      pc,
+      sp,
+      cpu: "z80",
+      registers: {
+        A: a, F: f,
+        B: (bc >> 8) & 0xFF, C: bc & 0xFF,
+        D: (de >> 8) & 0xFF, E: de & 0xFF,
+        H: (hl >> 8) & 0xFF, L: hl & 0xFF,
+        AF: af, BC: bc, DE: de, HL: hl, IX: ix, IY: iy,
+        AF_shadow: w(16), BC_shadow: w(18), DE_shadow: w(20), HL_shadow: w(22),
+        I: b[24], R: b[25],
+      },
+      flags: {
+        S: !!(f & 0x80), Z: !!(f & 0x40), H: !!(f & 0x10),
+        PV: !!(f & 0x04), N: !!(f & 0x02), C: !!(f & 0x01),
+        raw: "0x" + f.toString(16).toUpperCase().padStart(2, "0"),
+      },
+      interrupts: {
+        iff1: !!b[26], iff2: !!b[27], mode: b[28], halted: !!b[29],
+      },
+    };
+  }
   return null;
 }

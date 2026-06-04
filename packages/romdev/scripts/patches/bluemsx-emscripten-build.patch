@@ -1,0 +1,25 @@
+# romdev build-config patch for blueMSX-libretro under modern emsdk (wasm).
+#
+# Two fixes for clang/wasm-ld strictness:
+#  - Newer clang treats incompatible-function-pointer-types, int-conversion and
+#    implicit-function-declaration as ERRORS — relaxed to warnings here.
+#  - **-fno-common is REQUIRED** (NOT -fcommon). blueMSX has tentative
+#    definitions (e.g. `bool is_coleco, is_auto, ...;` in libretro.c;
+#    `UInt32* boardSysTime;` in Board.c). Under WASM/LLVM, -fcommon makes these
+#    DISAPPEAR at link (the symbol resolves as undefined); -fno-common forces
+#    them into real defined symbols. Verified with a minimal repro — this is the
+#    opposite of the usual GCC-10 -fcommon fix.
+#
+# git apply ignores everything above the first 'diff --git' line.
+#
+diff --git a/Makefile.libretro b/Makefile.libretro
+index 6f412c7..5d65891 100644
+--- a/Makefile.libretro
++++ b/Makefile.libretro
+@@ -1,5 +1,5 @@
+ TARGET_NAME := bluemsx
+-CFLAGS := -std=gnu89
++CFLAGS := -std=gnu89 -fno-common -Wno-error -Wno-incompatible-function-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration
+ CXXFLAGS := -std=gnu++98
+ GIT_VERSION := " $(shell git rev-parse --short HEAD || echo unknown)"
+ ifneq ($(GIT_VERSION)," unknown")

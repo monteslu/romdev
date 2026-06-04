@@ -38,6 +38,8 @@ export const CORES = {
   snes: { platform: "snes", coreName: "snes9x", displayName: "SNES (snes9x)" },
   gba: { platform: "gba", coreName: "mgba", displayName: "Game Boy Advance (mGBA)" },
   c64: { platform: "c64", coreName: "vice_x64", displayName: "Commodore 64 (VICE x64)" },
+  pce: { platform: "pce", coreName: "geargrafx", displayName: "PC Engine / TurboGrafx-16 (Geargrafx)", aka: "turbografx,tg16,pcengine" },
+  msx: { platform: "msx", coreName: "bluemsx", displayName: "MSX / MSX2 (blueMSX)", aka: "msx2" },
 };
 
 /**
@@ -63,6 +65,8 @@ const CORE_PACKAGES = {
   atari7800: "romdev-core-prosystem",
   snes: "romdev-platform-snes",
   gba: "romdev-platform-gba",
+  pce: "romdev-core-geargrafx",
+  msx: "romdev-core-bluemsx",
 };
 
 /** Try to get {jsPath,wasmPath} for a core from its @romdev package. */
