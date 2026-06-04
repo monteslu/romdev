@@ -33,6 +33,8 @@ const PLATFORM_LIMITS = {
   snes:       { maxColors: 16,  reason: "SNES default — assumes 4bpp tiles. For 2bpp pass maxColors=4 explicitly; for 8bpp pass maxColors=256." },
   gba:        { maxColors: 16,  reason: "GBA default — 4bpp tiles. Mode 4 uses 256-color tiles; pass maxColors=256 for that case." },
   atari7800:  { maxColors: 4,   reason: "MARIA palette select uses 2bpp tiles by default; per-palette 4 colors." },
+  pce:        { maxColors: 16,  reason: "PC Engine HuC6270 is 4bpp; 16 BG sub-palettes + 16 SPR sub-palettes, 16 colors each (9-bit GRB)." },
+  msx:        { maxColors: 16,  reason: "MSX V9938 is 4bpp on bitmap modes; MSX1 screen-2 uses the fixed 16-color TMS9918 palette (2 colors per 8-pixel row)." },
 };
 
 /**

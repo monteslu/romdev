@@ -883,7 +883,9 @@ export function registerPlatformTools(server, z, sessionKey) {
     "convertImageToTiles",
     "Use this to convert a PNG to a platform's native tile-byte format — raw tiles, no tilemap (use " +
     "imageToTilemap for a full picture with screen/attribute data). Supported: nes, gb, gbc, sms, gg, " +
-    "snes, genesis, atari7800, c64 — each with its native bit-depth/layout; programmable-palette " +
+    "snes, genesis, atari7800, c64, pce — each with its native bit-depth/layout; programmable-palette " +
+    "platforms also return a suggested palette. MSX is supported too but returns TWO streams " +
+    "(pattern.bin + color.bin for screen-2's per-row 2-color format) instead of one tiles.bin. " +
     "platforms also return a suggested palette. Image width/height must be multiples of 8. Good for " +
     "demakes (rip art from one platform, re-encode for another) — combine with patchRom or your source. " +
     "DEFAULT writes tiles.bin (+ palette.bin if a palette is produced) into outputDir and returns paths; pass " +
@@ -898,6 +900,50 @@ export function registerPlatformTools(server, z, sessionKey) {
     safeTool(async ({ platform, pngBase64, maxTiles, outputDir, inline }) => {
       if (!inline && !outputDir) {
         throw new Error("convertImageToTiles: pass outputDir (write tiles.bin/palette.bin to disk, returns paths) or inline:true (return base64 in the response).");
+      }
+      // MSX screen-2 is a special case: a tile is TWO parallel 8-byte tables
+      // (pattern bits + per-row fg/bg color), not one tile blob. Emit both
+      // streams (pattern.bin + color.bin) instead of the generic tiles.bin.
+      if (platform === "msx") {
+        const { PNG } = await import("pngjs");
+        const { encodeMsxScreen2Tiles } = await import("../../platforms/msx/tiles.js");
+        const png = Buffer.from(pngBase64, "base64");
+        const img = PNG.sync.read(png);
+        if (img.width % 8 || img.height % 8) {
+          throw new Error(`convertImageToTiles(msx): image ${img.width}x${img.height} must be a multiple of 8 in both dimensions.`);
+        }
+        // Map RGBA → nearest of the 16 fixed TMS9918 colors (MSX1 screen-2).
+        const { TMS9918_PALETTE } = await import("../../platforms/msx/vdp.js");
+        const indexed = new Uint8Array(img.width * img.height);
+        for (let i = 0; i < indexed.length; i++) {
+          const r0 = img.data[i * 4], g0 = img.data[i * 4 + 1], b0 = img.data[i * 4 + 2];
+          let best = 0, bestD = Infinity;
+          for (let c = 0; c < 16; c++) {
+            const [pr, pg, pb] = TMS9918_PALETTE[c];
+            const d = (pr - r0) ** 2 + (pg - g0) ** 2 + (pb - b0) ** 2;
+            if (d < bestD) { bestD = d; best = c; }
+          }
+          indexed[i] = best;
+        }
+        const { pattern, color } = encodeMsxScreen2Tiles(indexed, img.width, img.height);
+        const tilesAcross = img.width >> 3, tilesDown = img.height >> 3;
+        const msxOut = {
+          platform: "msx", mode: "screen2",
+          tilesAcross, tilesDown, totalTiles: tilesAcross * tilesDown,
+          patternBytes: pattern.length, colorBytes: color.length,
+          note: "MSX screen-2 tiles = TWO tables: pattern.bin (1bpp, bit7=leftmost) and color.bin (per-row high-nibble=fg, low-nibble=bg color index into the fixed 16-color TMS9918 palette). DMA pattern.bin to the pattern-generator base and color.bin to the color-table base (see getRenderingContext for those VRAM addresses). Each 8-pixel ROW is limited to 2 colors — that's the classic MSX constraint.",
+        };
+        if (inline) {
+          msxOut.patternBase64 = Buffer.from(pattern).toString("base64");
+          msxOut.colorBase64 = Buffer.from(color).toString("base64");
+        } else {
+          await mkdir(outputDir, { recursive: true });
+          msxOut.patternPath = path.join(outputDir, "pattern.bin");
+          msxOut.colorPath = path.join(outputDir, "color.bin");
+          await writeFile(msxOut.patternPath, Buffer.from(pattern));
+          await writeFile(msxOut.colorPath, Buffer.from(color));
+        }
+        return jsonContent(msxOut);
       }
       const { imageToTiles } = await import("../../platforms/common/image-to-tiles.js");
       const png = Buffer.from(pngBase64, "base64");
@@ -943,6 +989,8 @@ export function registerPlatformTools(server, z, sessionKey) {
         out.note = "SMS/GG 4bpp 'interleaved' layout (32 B/tile, per-row [p0,p1,p2,p3]). Write tiles to VRAM tile data base (VDP reg 4); `paletteHex` is a suggested CRAM palette.";
       } else if (platform === "c64") {
         out.note = "C64 hi-res charset: each tile is one 8×8 char (8 B, 1bpp — bit set = foreground in the cell's Color-RAM color, clear = shared background). Load the tile bytes (tilesPath / tilesBase64) into your char base ($0800/$1000/etc.). For a full picture with per-cell colors + screen RAM, use imageToTilemap({platform:'c64'}) instead.";
+      } else if (platform === "pce") {
+        out.note = "PC Engine HuC6270 4bpp 'planar-pairs' layout (32 B/tile, same as SNES: 16 B plane 0+1, then 16 B plane 2+3). DMA the tile bytes into VRAM at your BG/SPR pattern base. `paletteHex` is a suggested 16-color set — pack each to the VCE's 9-bit GRB at use time. (MSX returns pattern.bin/color.bin instead — see its branch.)";
       }
       return jsonContent(out);
     }),
