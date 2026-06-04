@@ -106,11 +106,15 @@ export function decodeGenesisCRAM(cram) {
   const out = [];
   for (let i = 0; i < 64; i++) {
     const off = i * 2;
-    // big-endian
-    const word = (cram[off] << 8) | cram[off + 1];
-    const r3 = (word >> 1) & 0x7;
-    const g3 = (word >> 5) & 0x7;
-    const b3 = (word >> 9) & 0x7;
+    // The gpgx `genesis_cram` buffer holds PACKED 9-bit colours, NOT the raw
+    // 16-bit bus word: on a CRAM write gpgx repacks BBB0GGG0RRR0 → 0bBBBGGGRRR
+    // (vdp_ctrl.c case 0x03) and stores that as a native uint16 → little-endian
+    // on our WASM host. Read LE, then R=bits0-2, G=bits3-5, B=bits6-8.
+    // (The old big-endian + bus-format masks made every colour blue.)
+    const word = cram[off] | (cram[off + 1] << 8);
+    const r3 = word & 0x7;
+    const g3 = (word >> 3) & 0x7;
+    const b3 = (word >> 6) & 0x7;
     // Expand 3-bit to 8-bit: replicate top bits (Genesis uses a non-linear
     // ladder in hardware, but the (n << 5) | (n << 2) | (n >> 1) form is
     // what most reference emulators output).
