@@ -23,6 +23,8 @@ import { decodeGenesisPSG, decodeGenesisYM2612 } from "../../host/gpgx-state.js"
 import { decodeGbApu, decodeGbaApu } from "../../host/gb-apu-state.js";
 import { decodeC64Sid } from "../../host/c64-sid-state.js";
 import { decodeLynxMikey, decodeLynxPalette, decodeLynxRenderingContext } from "../../host/lynx-mikey-state.js";
+import { getPcePsgState } from "../../host/pce-psg-state.js";
+import { getMsxAyState } from "../../host/msx-ay-state.js";
 import { decodeGbaSprites, decodeGbaPalette, decodeGbaRenderingContext } from "../../host/gba-video-state.js";
 
 /** Resolve the platform to inspect: explicit arg → currently loaded host. */
@@ -359,9 +361,10 @@ export function registerPlatformTools(server, z, sessionKey) {
 
   server.tool(
     "getCPUState",
-    "Use this to read a CPU's {pc, registers, flags, sp}. Main CPU is wired for ALL 12 tier-1 systems: " +
+    "Use this to read a CPU's {pc, registers, flags, sp}. Main CPU is wired for ALL 14 tier-1 systems: " +
     "nes, snes, genesis, sms, gg, gb, gbc, atari2600, atari7800, c64, lynx (65C02), gba (ARM7TDMI — " +
-    "16 gprs + cpsr/spsr, plus execPc that accounts for ARM pipeline prefetch). Secondary CPUs via `cpu`: " +
+    "16 gprs + cpsr/spsr, plus execPc that accounts for ARM pipeline prefetch), pce (HuC6280) and msx " +
+    "(Z80). Secondary CPUs via `cpu`: " +
     "`spc700` (SNES audio — tells 'stuck in IPL' vs 'running' vs 'crashed into garbage ARAM') and `z80` " +
     "(Genesis sound — held in reset until the 68k releases it via $A11100, so a fresh boot reads all-zero).",
     {
@@ -433,6 +436,18 @@ export function registerPlatformTools(server, z, sessionKey) {
       const hw = host.readMemory("lynx_hw_regs", 0, 0x200);
       return { platform: "lynx", chip, ...decodeLynxMikey(hw) };
     }
+    if (chip === "pce") {
+      // PC Engine HuC6280 PSG — 6 wavetable channels (ch 4/5 can do noise).
+      const psg = getPcePsgState(host);
+      if (!psg) throw new Error("getAudioState chip:'pce' — no PSG region (load a PCE ROM into the patched geargrafx core).");
+      return { platform: "pce", ...psg };
+    }
+    if (chip === "ay8910") {
+      // MSX AY-3-8910 — 3 square + noise + envelope.
+      const ay = getMsxAyState(host);
+      if (!ay) throw new Error("getAudioState chip:'ay8910' — no PSG region (load an MSX ROM into the patched blueMSX core).");
+      return { platform: "msx", ...ay };
+    }
     throw new Error(`getAudioState: unknown chip '${chip}'. Use 'nes' (NES 2A03), 'gb' (Game Boy/GBC), 'gba' (GBA), 'dsp' (SNES), 'psg' (Genesis/SMS/GG SN76489), 'ym2612' (Genesis FM), 'sid' (C64), or 'mikey' (Lynx).`);
   }
 
@@ -450,11 +465,14 @@ export function registerPlatformTools(server, z, sessionKey) {
     "decodable) — useful for frame-to-frame diffing. `chip:'gb'` (Game Boy/GBC) and `chip:'gba'` (GBA) decode " +
     "the DMG-style APU: 2 pulse + wave + noise with timer→freq→note (GBA adds 2 DMA FIFO channels). " +
     "`chip:'sid'` (C64 6581/8580) returns 3 voices {waveform, freq→note, ADSR, pulse-width} + filter. " +
-    "`chip:'mikey'` (Lynx) returns the 4 Mikey audio channels {volume, freq→note, LFSR}. ALL 12 tier-1 " +
+    "`chip:'mikey'` (Lynx) returns the 4 Mikey audio channels {volume, freq→note, LFSR}. " +
+    "`chip:'pce'` (PC Engine HuC6280 PSG) returns 6 wavetable channels (freq/volume/wave; ch 4-5 noise). " +
+    "`chip:'ay8910'` (MSX AY-3-8910) returns 3 square channels (tone→Hz, amplitude, tone/noise enable) + " +
+    "noise + envelope. ALL 14 tier-1 " +
     "systems now have a sound-chip decoder. Mirrors getCPUState({cpu}). To capture a note timeline " +
     "over time, pair with watchMemory (region:'nes_apu_regs', onChange:'reset') or recordSession.",
     {
-      chip: z.enum(["nes", "gb", "gba", "dsp", "psg", "ym2612", "sid", "mikey"]).describe("Which sound chip: 'nes' (NES 2A03 APU), 'gb' (Game Boy/GBC DMG APU — 2 pulse + wave + noise), 'gba' (GBA — DMG PSG + 2 DMA FIFO), 'dsp' (SNES S-DSP), 'psg' (Genesis/SMS/GG SN76489), 'ym2612' (Genesis FM), 'sid' (C64 6581/8580 — 3 voices + filter), 'mikey' (Lynx Mikey — 4 channels)."),
+      chip: z.enum(["nes", "gb", "gba", "dsp", "psg", "ym2612", "sid", "mikey", "pce", "ay8910"]).describe("Which sound chip: 'nes' (NES 2A03 APU), 'gb' (Game Boy/GBC DMG APU — 2 pulse + wave + noise), 'gba' (GBA — DMG PSG + 2 DMA FIFO), 'dsp' (SNES S-DSP), 'psg' (Genesis/SMS/GG SN76489), 'ym2612' (Genesis FM), 'sid' (C64 6581/8580 — 3 voices + filter), 'mikey' (Lynx Mikey — 4 channels), 'pce' (PC Engine HuC6280 PSG — 6 wavetable channels, ch 4/5 noise), 'ay8910' (MSX AY-3-8910 — 3 square + noise + envelope)."),
     },
     safeTool(async ({ chip }) => jsonContent(readAudioChip(chip))),
   );

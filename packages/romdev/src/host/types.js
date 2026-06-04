@@ -21,9 +21,9 @@
  *   | "gba_cpu_regs" | "gba_io_regs" | "gba_palette" | "gba_oam"
  *   | "lynx_cpu_regs" | "lynx_hw_regs"
  *   | "pce_vdc_vram" | "pce_vdc_satb" | "pce_vdc_regs"
- *   | "pce_vce_palette" | "pce_cpu_regs"
+ *   | "pce_vce_palette" | "pce_cpu_regs" | "pce_psg_regs"
  *   | "msx_vram" | "msx_vdp_regs" | "msx_vdp_status"
- *   | "msx_palette" | "msx_cpu_regs"
+ *   | "msx_palette" | "msx_cpu_regs" | "msx_psg_regs"
  * } MemoryRegion
  */
 
@@ -92,6 +92,7 @@ export const RetroMemory = {
   PCE_VDC_REGS:       0x1A2,
   PCE_VCE_PALETTE:    0x1A3,
   PCE_CPU_REGS:       0x1A4,
+  PCE_PSG_REGS:       0x1A5,
   // MSX / MSX2 (blueMSX): V9938 VDP VRAM (up to 192KB) + 64-entry register file
   // + status registers; 16-entry 9-bit-GRB palette; Z80/R800 CPU snapshot.
   MSX_VRAM:           0x1C0,
@@ -99,6 +100,7 @@ export const RetroMemory = {
   MSX_VDP_STATUS:     0x1C2,
   MSX_PALETTE:        0x1C3,
   MSX_CPU_REGS:       0x1C4,
+  MSX_PSG_REGS:       0x1C5,
 };
 
 /** @type {Record<MemoryRegion, number>} */
@@ -158,11 +160,13 @@ export const MemoryRegionToRetro = {
   pce_vdc_regs:    RetroMemory.PCE_VDC_REGS,
   pce_vce_palette: RetroMemory.PCE_VCE_PALETTE,
   pce_cpu_regs:    RetroMemory.PCE_CPU_REGS,
+  pce_psg_regs:    RetroMemory.PCE_PSG_REGS,
   msx_vram:        RetroMemory.MSX_VRAM,
   msx_vdp_regs:    RetroMemory.MSX_VDP_REGS,
   msx_vdp_status:  RetroMemory.MSX_VDP_STATUS,
   msx_palette:     RetroMemory.MSX_PALETTE,
   msx_cpu_regs:    RetroMemory.MSX_CPU_REGS,
+  msx_psg_regs:    RetroMemory.MSX_PSG_REGS,
 };
 
 /**
