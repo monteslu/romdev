@@ -31,6 +31,36 @@ const ROM_PATCH_DEVICE = {
   snes: "game-genie",   // NOT pro-action-replay (that's the RAM device)
 };
 
+/**
+ * Resolve a user-supplied cheat code into the string to hand the core, fixing
+ * the raw-ROM-cheat footgun: a raw `ADDR:VAL[:COMPARE]` on a ROM address is
+ * decoded by the core as a per-frame RAM poke (silently no-ops on read-only
+ * ROM), so we re-encode it to the platform's ROM-patch device (a read-
+ * intercept). Native-device codes (no `:`) pass through unchanged. Shared by
+ * applyCheat and loadMedia({cheats}).
+ * @param {string} rawCode
+ * @param {string|null} platform
+ * @returns {{ code: string, appliedAs: "ram"|"rom"|"raw"|"rom-unencodable", reencodedFrom: string|null }}
+ */
+export function resolveCheatCodeForApply(rawCode, platform) {
+  let code = rawCode, appliedAs = "raw", reencodedFrom = null;
+  const isRawForm = typeof rawCode === "string" && rawCode.includes(":");
+  if (isRawForm && platform) {
+    const decoded = decodeCode(rawCode, platform);
+    const range = GG_ADDR_RANGE[platform];
+    const inRom = decoded && range && decoded.address >= range[0] && decoded.address <= range[1];
+    if (inRom) {
+      const dev = ROM_PATCH_DEVICE[platform];
+      const enc = dev ? encodeForDevice(decoded, platform, dev) : null;
+      if (enc && enc.code) { code = enc.code; appliedAs = "rom"; reencodedFrom = rawCode; }
+      else appliedAs = "rom-unencodable";
+    } else if (decoded) {
+      appliedAs = "ram";
+    }
+  }
+  return { code, appliedAs, reencodedFrom };
+}
+
 // Platforms that have a bundled cheat INDEX (a DB to look up with gameCheats).
 // All 12 tier-1 cores expose retro_cheat_set, so applyCheat/makeCheat work
 // everywhere (see MAKE_CHEAT_PLATFORMS) — these are specifically the ones with
@@ -181,45 +211,11 @@ export function registerCheatTools(server, z, sessionKey) {
       }
       if (!rawCode) throw new Error("applyCheat: provide `code` (raw) or `desc` (+`path`).");
 
-      // A RAW `ADDR:VAL[:COMPARE]` code targeting a ROM address is a footgun:
-      // cores (e.g. fceumm) treat the raw libretro `AAAA:VV:CC` form as a
-      // per-frame RAM POKE, which silently no-ops on a read-only ROM address —
-      // while the SAME patch encoded as the platform's native device (NES Game
-      // Genie) installs the in-core READ-INTERCEPT and works. So when a raw code
-      // names a ROM-range address, transparently re-encode it to the native ROM
-      // device and apply THAT, and always report `appliedAs` so an inert apply
-      // is never silent. Game Genie / native-device codes (no `:`) pass through.
+      // Resolve the raw-ROM-cheat footgun (raw ADDR:VAL on a ROM address is a
+      // RAM poke that silently no-ops — re-encode it to a ROM-patch device). See
+      // resolveCheatCodeForApply. Shared with loadMedia({cheats}).
       const plat = host.getStatus?.().platform ?? null;
-      let codeToApply = rawCode;
-      let appliedAs = "raw";
-      let reencodedFrom = null;
-      const isRawForm = typeof rawCode === "string" && rawCode.includes(":");
-      if (isRawForm && plat) {
-        const decoded = decodeCode(rawCode, plat); // { address, value, compare? }
-        const range = GG_ADDR_RANGE[plat];
-        const inRom = decoded && range && decoded.address >= range[0] && decoded.address <= range[1];
-        if (inRom) {
-          // ROM-range address → encode for the native ROM-PATCH device (a
-          // read-intercept), which is NOT necessarily the platform's first
-          // native device: e.g. SNES's first native device is Pro Action Replay
-          // (a RAM poke) but a ROM patch must use Game Genie. ROM_PATCH_DEVICE
-          // picks the right one. (No compare byte → encoders that need one
-          // return null and we leave the raw code as-is.)
-          const dev = ROM_PATCH_DEVICE[plat];
-          const enc = dev ? encodeForDevice(decoded, plat, dev) : null;
-          if (enc && enc.code) {
-            codeToApply = enc.code;
-            appliedAs = "rom";
-            reencodedFrom = rawCode;
-          } else {
-            // Couldn't re-encode (e.g. ROM patch with no compare byte) — flag it
-            // so the no-op isn't silent.
-            appliedAs = "rom-unencodable";
-          }
-        } else if (decoded) {
-          appliedAs = "ram"; // raw RAM poke — correct for a RAM address
-        }
-      }
+      const { code: codeToApply, appliedAs, reencodedFrom } = resolveCheatCodeForApply(rawCode, plat);
 
       const unencodable = appliedAs === "rom-unencodable";
       const slot = index != null ? index : host.listActiveCheats().length;
