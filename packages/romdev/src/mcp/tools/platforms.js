@@ -36,6 +36,33 @@ const PLATFORM_QUIRKS = {
     ],
     starterSnippets: ["header.s", "vdp_init.s", "sprite_table.s", "nmi_safe.s", "z80_bootstrap.s"],
   },
+  pce: {
+    multiBank: false,                    // HuCard up to 1MB flat (no mapper for the common case)
+    maxRomBytesPerBank: 8 * 1024 * 1024,
+    headerLocation: "none — PCE HuCards boot from the reset vector at $FFFE (no magic header)",
+    notes: [
+      "Toolchain is cc65 (HuC6280 = 65C02 superset), language C by default. The conio text library is the fastest path to a visible screen — it inits the HuC6270 VDC + HuC6260 VCE and uploads a font for you.",
+      "EMPTY-BSS TRAP: cc65's pce/crt0.s clears .bss with `tii ...,__BSS_SIZE__-1`. With NO globals, __BSS_SIZE__=0 → ld65 'Range error in pce/crt0.s' AND a BLACK screen. ALWAYS keep at least one (ideally 2+ byte) global/static. See the hello_pce.c starter's `_keep_bss`.",
+      "Color is the HuC6260 VCE: 512 entries (256 BG + 256 SPR), 9-bit GRB (0bGGG_RRR_BBB). inspectPalette decodes it; area:'bg'|'sprite' narrows. Slot 0 of each 16-color sub-palette = transparent.",
+      "Sprites are the HuC6270 SATB: 64 sprites, 16/32 wide × 16/32/64 tall, pattern codes index 16×16 cells in VRAM. inspectSprites reads it.",
+      "Debugging: getCPUState (huc6280), inspectPalette, inspectSprites, getRenderingContext (VDC R5 screen-enable + scroll), getAudioState({chip:'pce'}) (6-channel PSG), getMemoryMap, readMemory regions pce_vdc_vram/pce_vdc_satb/pce_vdc_regs/pce_vce_palette/pce_cpu_regs/pce_psg_regs.",
+    ],
+    starterSnippets: ["hello_pce.c"],
+  },
+  msx: {
+    multiBank: false,                    // plain 32KB cartridge ($4000-$BFFF); mappers exist but not for the starter
+    maxRomBytesPerBank: 32 * 1024,
+    headerLocation: "$4000: 'AB' magic + INIT pointer at $4002 (the BIOS CALLs INIT to start the cart)",
+    notes: [
+      "Toolchain is SDCC (z80), language C by default. A cart maps at $4000-$BFFF; build with the msx_crt0.s starter (emits the 'AB' header) + `crt0:'.module empty\\n'`. romdev ships C-BIOS (open MSX BIOS) and auto-boots the MSX2+ machine — no proprietary ROM, zero setup.",
+      "INIT MUST NOT RETURN: C-BIOS CALLs the cart INIT to hand over the machine. If it `ret`s, the BIOS prints 'No cartridge found' (after running your code). End main() in an infinite loop — see hello_msx.c.",
+      "TIMING: C-BIOS shows its logo for ~2-3s (≈150 frames) BEFORE calling the cart INIT. Step >= 240 frames before expecting output on screen.",
+      "Fastest visible output is BIOS calls: INITXT ($006C) sets the 40-col text screen + enables display, CHPUT ($00A2) prints the char in A. Put asm data labels INSIDE a function's asm block (file-scope __asm is a SDCC syntax error).",
+      "Video is the V9938 VDP: VRAM up to 128KB, 16-entry programmable palette (9-bit GRB) on MSX2 bitmap modes, fixed TMS9918 palette on MSX1 modes. inspectPalette picks the right source automatically.",
+      "Debugging: getCPUState (z80), inspectPalette, inspectSprites (VRAM sprite-attr table), getRenderingContext (VDP R1 screen-enable + mode + VRAM table bases), getAudioState({chip:'ay8910'}) (3 square + noise + envelope), getMemoryMap (pass the sdld .map), readMemory regions msx_vram/msx_vdp_regs/msx_vdp_status/msx_palette/msx_cpu_regs/msx_psg_regs.",
+    ],
+    starterSnippets: ["hello_msx.c", "msx_crt0.s"],
+  },
 };
 
 export function registerPlatformTools(server, z) {

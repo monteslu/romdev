@@ -19,6 +19,7 @@
     flex-shrink: 0;
   }
   header h1 { margin: 0; font-size: 14px; font-weight: 600; }
+  #version { font-size: 11px; font-weight: 400; color: #888; }
   #status { font-size: 11px; color: #888; }
   #status.connected { color: #4caf50; }
   #status.disconnected { color: #f44336; }
@@ -170,7 +171,7 @@
 </head>
 <body>
 <header>
-  <h1>romdev /livestream</h1>
+  <h1>romdev /livestream <span id="version">__ROMDEV_VERSION__</span></h1>
   <span id="status" class="disconnected">disconnected</span>
 </header>
 <div id="tabs"></div>

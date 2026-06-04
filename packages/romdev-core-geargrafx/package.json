@@ -1,0 +1,16 @@
+{
+  "name": "romdev-core-geargrafx",
+  "version": "0.1.0",
+  "description": "Geargrafx libretro core (PC Engine / TurboGrafx-16) for romdev, bundled as WASM.",
+  "type": "module",
+  "main": "index.js",
+  "exports": { ".": "./index.js", "./wasm/*": "./wasm/*" },
+  "files": ["index.js", "wasm", "README.md"],
+  "engines": { "node": ">=24" },
+  "license": "GPL-3.0-or-later",
+  "repository": { "type": "git", "url": "git+https://github.com/monteslu/romdev.git", "directory": "packages/romdev-core-geargrafx" },
+  "homepage": "https://github.com/monteslu/romdev#readme",
+  "bugs": { "url": "https://github.com/monteslu/romdev/issues" },
+  "author": "Luis Montes",
+  "scripts": { "prepublishOnly": "node ../../scripts/verify-wasm.mjs" }
+}

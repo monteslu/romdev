@@ -105,6 +105,12 @@ const SPECS = {
   c64: { bpp: 1, layout: "planar", master: C64_PALETTE, hasProgrammablePalette: true, maxColors: 2 },
   atari7800: { bpp: 4, layout: "packed", master: ATARI2600_NTSC_PALETTE, hasProgrammablePalette: true, maxColors: 16 },
   lynx: { bpp: 4, layout: "packed", master: RGB_CUBE_256, hasProgrammablePalette: true, maxColors: 16 },
+  // PC Engine HuC6270 BG/sprite tile: 4bpp, identical byte layout to the SNES
+  // "planar-pairs" (16 bytes plane 0+1, then 16 bytes plane 2+3, MSB-first) —
+  // verified byte-for-byte against geargrafx's renderer. The VCE palette is
+  // 9-bit GRB; a suggested 16-color palette is returned (quantize against the
+  // RGB cube, then pack to GRB at use time via inspectPalette's decode).
+  pce: { bpp: 4, layout: "planar-pairs", master: RGB_CUBE_256, hasProgrammablePalette: true, maxColors: 16 },
 };
 
 /**

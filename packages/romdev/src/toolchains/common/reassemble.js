@@ -374,9 +374,12 @@ export const RGBDS_SM83 = {
 const CPU_FAMILY = {
   nes: "6502", c64: "6502", atari2600: "6502", atari7800: "6502", lynx: "6502",
   snes: "65816",
-  sms: "z80", gg: "z80",
+  sms: "z80", gg: "z80", msx: "z80",
   gb: "sm83", gbc: "sm83",
   genesis: "m68k", megadrive: "m68k", md: "m68k",
+  // PC Engine's HuC6280 is a 65C02 superset — the 6502-family da65/ca65 path
+  // reassembles it (da65 also has an explicit --cpu huc6280 mode for decode).
+  pce: "6502",
 };
 
 /**

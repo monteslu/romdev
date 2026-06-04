@@ -35,8 +35,9 @@ export function registerSymbolTools(server, z) {
   server.tool(
     "buildSourceWithDebug",
     "Like buildSource but also returns linker debug info for resolveSymbol / lookupAddress / getMemoryMap. " +
-    "cc65 platforms (NES, C64, Atari 7800, Lynx) produce a `.dbg`; SDCC platforms (GB, GBC, SMS, GG, " +
-    "MSX, Coleco, ZXSpectrum) produce an sdld `.map` (grep `AAAAAAAA  _symbol_name`). " +
+    "cc65 platforms (NES, C64, Atari 7800, Lynx, PCE) produce a `.dbg`; SDCC platforms (GB, GBC, SMS, GG, " +
+    "MSX, Coleco, ZXSpectrum) produce an sdld `.map`. Feed EITHER to getMemoryMap (dbg: or map:) for a " +
+    "categorized layout — no manual grepping needed. " +
     "DEFAULT writes the ROM + debug file + (large) log to disk and returns `{binaryPath, dbgPath|mapPath, " +
     "logPath}`; pass `inline:true` to get `binaryBase64` + the debug text + full log in context instead. " +
     "Accepts `source` (single) or `sources` (multi-file map).",
@@ -237,26 +238,57 @@ export function registerSymbolTools(server, z) {
 
   server.tool(
     "getMemoryMap",
-    "Categorized layout of where the linker placed your variables and code. Groups symbols by memory region (zeropage / system RAM / code / data) and lists each one with its address. Use this AFTER buildSourceWithDebug to find out where your variables landed — saves you from probing system_ram empirically. NES example: cc65 reserves zeropage bytes $00-$01 for its runtime, so your first .res variable lands at $02.",
+    "Categorized layout of where the linker placed your variables and code. Groups symbols by memory region (zeropage / system RAM / code / data) and lists each one with its address. Use this AFTER buildSourceWithDebug to find out where your variables landed — saves you from probing system_ram empirically. Accepts EITHER a cc65 `.dbg` (NES, C64, Atari 7800, Lynx, PCE) via `dbg`, OR an sdld `.map` (the Z80 family: GB, GBC, SMS, GG, MSX) via `map` — pass whichever buildSourceWithDebug returned (the `symbols` field on SDCC builds IS the .map). NES example: cc65 reserves zeropage bytes $00-$01 for its runtime, so your first .res variable lands at $02.",
     {
-      dbg: z.string().describe("Contents of the .dbg file from buildSourceWithDebug."),
+      dbg: z.string().optional().describe("Contents of the cc65 `.dbg` file (NES/C64/Atari7800/Lynx/PCE builds). Pass this OR `map`."),
+      map: z.string().optional().describe("Contents of the sdld `.map` file (GB/GBC/SMS/GG/MSX builds — it's the `symbols` field from buildSourceWithDebug). Pass this OR `dbg`."),
       platform: z.string().optional().describe("Platform id — adds region labels (zeropage, system RAM, etc.) per platform conventions."),
     },
-    safeTool(async ({ dbg, platform }) => {
-      const { parseDbg, DbgIndex } = await import("../../toolchains/cc65/dbgparse.js");
-      const idx = new DbgIndex(parseDbg(dbg));
-      const all = idx.listSymbols();
-
-      // Per-platform region boundaries. Most cc65 targets follow the
-      // host machine's natural CPU memory map.
+    safeTool(async ({ dbg, map, platform }) => {
+      // Per-platform region boundaries (CPU memory map). cc65 6502 targets +
+      // the Z80 family (SDCC) — both keyed the same way.
       const regionsByPlatform = {
         nes:       [{name:"zeropage",lo:0,hi:0xff},{name:"stack",lo:0x100,hi:0x1ff},{name:"system_ram",lo:0x200,hi:0x7ff},{name:"ppu_regs",lo:0x2000,hi:0x2007},{name:"apu_input",lo:0x4000,hi:0x401f},{name:"sram",lo:0x6000,hi:0x7fff},{name:"prg_rom",lo:0x8000,hi:0xffff}],
         c64:       [{name:"zeropage",lo:0,hi:0xff},{name:"stack",lo:0x100,hi:0x1ff},{name:"system_ram",lo:0x200,hi:0x9fff},{name:"basic_rom",lo:0xa000,hi:0xbfff},{name:"io",lo:0xd000,hi:0xdfff},{name:"kernal",lo:0xe000,hi:0xffff}],
         atari7800: [{name:"zeropage",lo:0,hi:0xff},{name:"stack",lo:0x100,hi:0x1ff},{name:"system_ram",lo:0x1800,hi:0x27ff},{name:"cart_rom",lo:0x4000,hi:0xffff}],
         lynx:      [{name:"zeropage",lo:0,hi:0xff},{name:"stack",lo:0x100,hi:0x1ff},{name:"system_ram",lo:0x200,hi:0xfbff},{name:"hw_regs",lo:0xfc00,hi:0xffff}],
+        // PC Engine (cc65 pce target): ZP + 8KB work RAM at $2200 (the pce.cfg
+        // MAIN segment), HuCard ROM mapped high. The HuC6280 stack lives in the
+        // $21xx page via the MPR mapping.
+        pce:       [{name:"zeropage",lo:0,hi:0xff},{name:"stack",lo:0x2100,hi:0x21ff},{name:"system_ram",lo:0x2200,hi:0x3fff},{name:"hucard_rom",lo:0xe000,hi:0xffff}],
+        // Z80 family (SDCC + sdld .map). Cartridge ROM in the low half, work RAM high.
+        gb:        [{name:"rom",lo:0,hi:0x7fff},{name:"vram",lo:0x8000,hi:0x9fff},{name:"cart_ram",lo:0xa000,hi:0xbfff},{name:"work_ram",lo:0xc000,hi:0xdfff},{name:"oam",lo:0xfe00,hi:0xfe9f},{name:"io_hram",lo:0xff00,hi:0xffff}],
+        gbc:       [{name:"rom",lo:0,hi:0x7fff},{name:"vram",lo:0x8000,hi:0x9fff},{name:"cart_ram",lo:0xa000,hi:0xbfff},{name:"work_ram",lo:0xc000,hi:0xdfff},{name:"oam",lo:0xfe00,hi:0xfe9f},{name:"io_hram",lo:0xff00,hi:0xffff}],
+        sms:       [{name:"rom",lo:0,hi:0xbfff},{name:"work_ram",lo:0xc000,hi:0xdfff},{name:"ram_mirror",lo:0xe000,hi:0xffff}],
+        gg:        [{name:"rom",lo:0,hi:0xbfff},{name:"work_ram",lo:0xc000,hi:0xdfff},{name:"ram_mirror",lo:0xe000,hi:0xffff}],
+        // MSX cartridge: BIOS low, cart at $4000-$BFFF, work RAM $C000-$FFFF.
+        msx:       [{name:"bios",lo:0,hi:0x3fff},{name:"cart_rom",lo:0x4000,hi:0xbfff},{name:"work_ram",lo:0xc000,hi:0xffff}],
       };
-      const regions = (platform && regionsByPlatform[platform]) || [];
 
+      // Parse symbols from whichever format was supplied.
+      let all;
+      let format;
+      if (dbg) {
+        const { parseDbg, DbgIndex } = await import("../../toolchains/cc65/dbgparse.js");
+        const idx = new DbgIndex(parseDbg(dbg));
+        all = idx.listSymbols();   // { name, addr, kind }
+        format = "cc65-dbg";
+      } else if (map) {
+        const { parseSdldMap } = await import("../../toolchains/sdcc/sdcc.js");
+        // parseSdldMap → { address, name, file }. Normalize to the dbg shape and
+        // strip the leading underscore C symbols carry so callers compare to C names.
+        all = parseSdldMap(map).map((s) => ({
+          name: s.name.replace(/^_/, ""),
+          addr: s.address,
+          kind: "symbol",
+          file: s.file,
+        }));
+        format = "sdld-map";
+      } else {
+        throw new Error("getMemoryMap: pass either `dbg` (cc65 .dbg — NES/C64/Atari7800/Lynx/PCE) or `map` (sdld .map — GB/GBC/SMS/GG/MSX). buildSourceWithDebug returns one of them.");
+      }
+
+      const regions = (platform && regionsByPlatform[platform]) || [];
       const labelFor = (addr) => {
         for (const r of regions) {
           if (addr >= r.lo && addr <= r.hi) return r.name;
@@ -278,6 +310,7 @@ export function registerSymbolTools(server, z) {
 
       return jsonContent({
         platform: platform ?? null,
+        format,
         regions: regions.map((r) => ({
           name: r.name,
           range: "$" + r.lo.toString(16).padStart(4, "0").toUpperCase() + "-$" + r.hi.toString(16).padStart(4, "0").toUpperCase(),

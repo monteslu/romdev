@@ -525,9 +525,11 @@ export async function getRenderingContextCore({ platform, area = "all", sessionK
     case "c64":   return c64Context(host, area);
     case "gba":   return gbaContext(host, area);
     case "lynx":  return lynxContext(host, area);
+    case "pce":   return pceContext(host, area);
+    case "msx":   return msxContext(host, area);
     default:
       throw new Error(
-        `getRenderingContext: unknown platform '${p}'. Supported: nes, snes, genesis, gb, gbc, sms, gg, atari2600, atari7800, c64, gba, lynx.`
+        `getRenderingContext: unknown platform '${p}'. Supported: nes, snes, genesis, gb, gbc, sms, gg, atari2600, atari7800, c64, gba, lynx, pce, msx.`
       );
   }
 }
@@ -555,6 +557,62 @@ async function lynxContext(host, area) {
   summary.push("Lynx has no tilemap/nametable — the framebuffer is a linear bitmap in RAM at displayAddress; sprites are SCB-drawn into it by Suzy (see inspectSprites).");
   return { platform: "lynx", area, ...ctx, summary };
 }
+
+async function pceContext(host, area) {
+  // HuC6270 VDC register file (m_register[20], u16 each). R5 = control register:
+  // bit7 = BG enable, bit6 = SP enable, bits3-2 = raster/vblank IRQ enable.
+  const regs = host.readMemory("pce_vdc_regs", 0, 40);
+  const u16 = (i) => regs[i * 2] | (regs[i * 2 + 1] << 8);
+  const cr = u16(5);
+  const bgEnable = !!(cr & 0x80);
+  const spEnable = !!(cr & 0x40);
+  const mwr = u16(9);
+  const bgScrollX = u16(7) & 0x3ff;
+  const bgScrollY = u16(8) & 0x1ff;
+  const satbSrc = u16(19);
+  const summary = [];
+  if (!bgEnable && !spEnable) summary.push("BG and SPR are BOTH disabled (VDC R5 bits 7/6 clear) — the screen shows only the backdrop color; enable them to see output.");
+  else summary.push(`BG ${bgEnable ? "on" : "off"}, SPR ${spEnable ? "on" : "off"} (VDC R5=$${cr.toString(16)}). BG scroll (${bgScrollX},${bgScrollY}). SATB DMA src $${satbSrc.toString(16)}.`);
+  summary.push("PCE has no nametable region — the BG map lives in VRAM (pce_vdc_vram); MWR (R9) selects the virtual screen size. Sprites are in the SATB (inspectSprites).");
+  return {
+    platform: "pce", area,
+    screenEnabled: bgEnable || spEnable,
+    bgEnable, spEnable,
+    control: cr, memoryWidth: mwr,
+    bgScrollX, bgScrollY, satbSource: satbSrc,
+    summary,
+  };
+}
+
+async function msxContext(host, area) {
+  const { decodeMsxVideoMode } = await import("../../platforms/msx/vdp.js");
+  const regs = host.readMemory("msx_vdp_regs", 0, 64);
+  const status = host.readMemory("msx_vdp_status", 0, 16);
+  const m = decodeMsxVideoMode(regs);
+  const summary = [];
+  if (!m.screenEnabled) summary.push("Display is DISABLED (VDP R1 bit6 / BLANK) — the screen is the border color; set R1 bit6 to enable.");
+  else summary.push(`Display on, ${m.mode}. R0=$${m.regs.r0.toString(16)} R1=$${m.regs.r1.toString(16)}.`);
+  // Table base addresses (× their alignment) — the agent needs these to find tiles/map in VRAM.
+  const r2 = regs[2] ?? 0, r3 = regs[3] ?? 0, r4 = regs[4] ?? 0, r5 = regs[5] ?? 0, r6 = regs[6] ?? 0;
+  const patternName = (r2 & 0x7f) << 10;
+  const colorTable = ((r3 & 0xff) | ((r10(regs) & 0x07) << 8)) << 6;
+  const patternGen = (r4 & 0x3f) << 11;
+  const spriteAttr = ((r5 & 0x7f) | ((regs[11] & 0x03) << 7)) << 7;
+  const spriteGen = (r6 & 0x3f) << 11;
+  summary.push(`VRAM tables: name=$${patternName.toString(16)} colors=$${colorTable.toString(16)} patterns=$${patternGen.toString(16)} sprAttr=$${spriteAttr.toString(16)} sprGen=$${spriteGen.toString(16)}.`);
+  return {
+    platform: "msx", area,
+    screenEnabled: m.screenEnabled,
+    mode: m.mode, modeNumber: m.modeNumber,
+    registers: { r0: m.regs.r0, r1: m.regs.r1, r2, r3, r4, r5, r6 },
+    tables: { patternName, colorTable, patternGen, spriteAttr, spriteGen },
+    statusReg0: status[0] ?? 0,
+    summary,
+  };
+}
+
+/** V9938 R10 (color-table high bits) — index 10 in vdpRegs. */
+function r10(regs) { return regs[10] ?? 0; }
 
 async function c64Context(host, area) {
   const { decodeViciiRegs, decodeSprites } = await import("../../platforms/c64/vic.js");

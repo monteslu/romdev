@@ -53,6 +53,7 @@ export const SDCC_PORTS = {
   gg:         { marg: "z80",      libDir: "z80" },
   gb:         { marg: "sm83",     libDir: "sm83" },
   gbc:        { marg: "sm83",     libDir: "sm83" },
+  msx:        { marg: "z80",      libDir: "z80" },
 };
 
 import { runIsolated, textFile, binaryFile, getOutputBytes, getOutputText } from "../_worker/run.js";
@@ -443,6 +444,17 @@ export async function buildZ80C(args) {
   if (link.exitCode !== 0 || !link.ihx) {
     return { binary: null, log, exitCode: link.exitCode, stage: "sdld" };
   }
+  // `romBase` (e.g. MSX $4000) means the cartridge maps at that address: the
+  // ihx writes records at absolute $4000+, so size the buffer to cover them,
+  // then slice to a `romBase`-based page image (offset 0 == address romBase).
+  // Without it, an MSX ROM would be a $0000-based image with its real code at
+  // offset $4000 — the header check + the core both expect it at offset 0.
+  if (args.romBase) {
+    const span = args.romBase + (args.romSize || 0);
+    const full = ihxToBin(link.ihx, span);
+    const end = args.romSize ? args.romBase + args.romSize : full.length;
+    return { binary: full.slice(args.romBase, end), log, exitCode: 0, stage: "done", map: link.map ?? null };
+  }
   // If romSize is null/0, size the buffer to the highest address the ihx
   // actually wrote (no padding to a ROM size). Used for tape targets like
   // ZX Spectrum where the loader cares about exact byte count.
@@ -474,12 +486,21 @@ export async function buildZ80C(args) {
 export function parseSdldMap(map) {
   if (!map) return [];
   const out = [];
+  const seen = new Set();
   for (const rawLine of map.split(/\r?\n/)) {
     const line = rawLine.trim();
-    // Match "<4 hex addr><whitespace><name>" — sdld emits 4-hex addresses
-    // for z80/sm83 (16-bit address space).
-    const m = /^([0-9A-Fa-f]{4,8})\s+([A-Za-z_.][A-Za-z0-9_.]*)\s*$/.exec(line);
+    // sdld emits two symbol-line shapes (z80/sm83, 16-bit addresses):
+    //   1. Area summary:   "0000C000  s__DATA"            (addr + name, EOL)
+    //   2. Global symbol:  "0000C000  _score   _work_main" (addr + name +
+    //      a "defined in module" column). The user's variables/functions are
+    //      shape 2 — the original regex's `$` anchor after the name dropped
+    //      them, so PC→symbol + getMemoryMap only ever saw the area markers.
+    // Accept an OPTIONAL trailing module column.
+    const m = /^([0-9A-Fa-f]{4,8})\s+([A-Za-z_.][A-Za-z0-9_.]*)(?:\s+\S.*)?$/.exec(line);
     if (m) {
+      const key = m[1] + ":" + m[2];
+      if (seen.has(key)) continue; // a symbol can appear in both the area + global lists
+      seen.add(key);
       out.push({
         address: parseInt(m[1], 16),
         addressHex: "0x" + m[1].toUpperCase(),
