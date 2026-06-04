@@ -53,7 +53,7 @@ Skip playtest only when there's clearly no human in the loop: CI runs, automated
 - `run` — load ROMs, step frames, screenshot (works for existing ROMs you didn't compile)
 - `input` — drive controllers, look up hardware bit layouts
 - `state` — savestates and forensic state inspection (`saveState`, `loadState`, `exportState` a slot to disk without touching the live host, `listStates`, `dumpState`)
-- `memory` — read/write VRAM/OAM/CGRAM/ARAM and other regions
+- `memory` — read/write VRAM/OAM/CGRAM/ARAM and other regions. `readMemory` takes `offsets:[…]` to batch scattered reads in one call. `snapshotMemory` + `diffMemory` answer "which bytes changed across this event?" (snapshot → trigger → diff returns just the changed offsets); `diffState` is the coarse whole-machine version.
 - `debug` — inspectSprites, inspectPalette, getCPUState, getAudioState (sound-chip decode — all 12 systems), getRenderingContext, findWriter (write watchpoint), **disassemble**/disassembleProject, symbol lookup, whichTilesAreRendered, addressToSymbol, plus **cheats** (`gameCheats` = a free labeled RAM/code map for known ROMs, `applyCheat`/`clearCheats` non-destructively, `makeCheat` to create codes)
 - `assets` — convert PNGs to tiles, WAVs to BRR, identify ROMs, plus the hacking toolkit (`patchFile`, `assembleSnippet`, `diffRoms`, `findFreeSpace`, `spliceCHR`, `extractCart`, `wrapRomFromParts`)
 - `project` — starter snippets per platform
@@ -347,14 +347,20 @@ of precision:
     → { found:true, pc:"$AF85", value:"0x81", hits:19 }
   disassembleRom({ path, startAddress: 0xAF85 })   // → the real store instruction
   ```
-  Supported on **every bundled platform** — NES, GB/GBC, Genesis, SMS/GG, SNES,
-  Atari 2600, Atari 7800, and C64 (all six CPU families). On a banked mapper a
-  `$8000-$BFFF` pc may be in a switchable bank — pass the right `bank` to
-  `disassembleRom`.
+  Supported on **all 12 tier-1 systems** — NES, GB/GBC, Genesis, SMS/GG, SNES,
+  Atari 2600/7800, C64, Lynx (65C02), and GBA (ARM7) — every bundled CPU family.
+  On a banked mapper a `$8000-$BFFF` pc may be in a switchable bank; findWriter
+  reports the `bank` (NES/GB/SMS-GG) so you can pass it to `disassembleRom`.
 - **`watchMemory` / `runUntilWrite` — cross-platform, frame-sampled.** Step until
   the byte changes; the returned `pc` is a frame-boundary sample (a lead, not a
   guarantee under interrupts — cross-check the value trace). Use on non-NES, or
   for the value timeline.
+- **`snapshotMemory` + `diffMemory` — "which bytes did THIS event touch?"** When
+  you don't yet know the address: snapshotMemory before the event, trigger it
+  (pressButton/stepFrames), then diffMemory — you get just the changed offsets
+  with before/after, no eyeballing two RAM dumps. The fast way to find an area-id
+  / phase / flag byte a transition writes. (`diffState` is the coarse
+  whole-machine "did anything change?" version.)
 
 ```js
 runUntilWrite({ region:"system_ram", offset:0x03B6, maxFrames:300,
@@ -405,10 +411,21 @@ confirmation is to apply it and watch:
 applyCheat({ path:"Rygar (USA).nes", desc:"Infinite Magic Attack" })  // enable it live
 screenshot()                                                          // see the effect → label confirmed
 // or apply a RAW code from anywhere:
-applyCheat({ code:"00CD:FF" })          // RAM poke
+applyCheat({ code:"00CD:FF" })          // RAM poke → appliedAs:"ram"
 applyCheat({ code:"SXIOPO" })           // Game Genie (core decodes it)
+applyCheat({ code:"C06C:0C:26" })       // raw ROM patch → auto-re-encoded to a read-intercept (appliedAs:"rom", reencodedFrom)
 clearCheats()                           // remove all
 ```
+
+**`appliedAs` tells you how it went in** — `"ram"` (per-frame poke), `"rom"` (in-core
+read-intercept), `"raw"` (core-decoded device code), or `"rom-unencodable"` (a ROM
+address that couldn't be made into a working ROM patch — likely a no-op; add a COMPARE
+byte). A raw `ADDR:VAL:COMPARE` on a ROM address would otherwise silently no-op as a RAM
+poke, so applyCheat transparently re-encodes it to the platform's ROM-patch device (NES/
+Genesis/GB Game Genie, SNES Game Genie — NOT Pro Action Replay, which is RAM). **Boot-time
+cheats:** pass `loadMedia({ cheats:[…] })` to apply codes BEFORE frame 0 (iterating on a
+boot-seeded value), and use `reset({ hard:true })` for a true power-cycle — plain `reset`
+is the RESET button and leaves work RAM (and boot-seeded state) intact.
 
 `applyCheat` is also just **fun** — play any matched game with infinite lives,
 invincibility, etc. It is **NON-DESTRUCTIVE**, exactly like RetroArch: the cheat
@@ -459,6 +476,34 @@ makeCheat({ platform:"snes", address:0x7E0DBF, value:0x63 })
 //   → { codes:[ {device:"pro-action-replay", code:"7E0DBF63", verified:true},
 //               {device:"game-genie", code:"17D8-9EE8", verified:true} ],
 //       raw:"7E0DBF:63", ... }
+```
+
+### Editing in-game TEXT (font maps)
+
+Games store text as their own tile-index encoding (Excitebike: A=$0A; Mario:
+ASCII-offset; FF: sparse). Three tools automate the round-trip instead of
+hand-deriving the table:
+
+- **`learnFontMap`** — infer the char→tile-ID map. TWO modes:
+  - ROM mode: `knownStrings:[{text, offset}]` when you found the text's bytes.
+  - **LIVE mode: `fromScreen:[{text, row, col}]`** — the text is on screen RIGHT
+    NOW; reads the tile IDs straight from the live BG map at a tile position. This
+    breaks the chicken-and-egg (you'd otherwise need the ROM offset you're
+    hunting). Works on every tilemap platform (NES/SNES/Genesis/GB/GBC/SMS/GG/C64);
+    `inspectBackgroundMap` shows you where the text sits. (atari2600/7800, lynx,
+    gba have no text-tile nametable → use ROM mode.)
+- **`findEncodedText({ romPath, text, fontMap })`** — locate the string in the
+  ROM. Returns `fileOffset` (.nes), `prgFileOffset` (prg.bin), and a bank-aware
+  `cpuAddress` + `bank` (NES/GB/GBC in-bank address, Genesis flat; SNES is
+  mapper-dependent → use the offsets) — feed `{startAddress, bank}` to
+  `disassembleRom`. Flags a likely length-prefix byte to avoid the classic
+  overrun.
+- **`encodeTextForRom`** — text + map → bytes, ready for `patchFile`.
+
+```js
+learnFontMap({ fromScreen:[{ text:"START", row:13, col:11 }] })   // read tiles off the live screen
+findEncodedText({ romPath, text:"MOUNTAIN", fontMap })            // → offsets + bank + context
+encodeTextForRom({ text:"NEW TEXT ", fontMap }) → patchFile(...)  // rewrite it
 ```
 
 **Tools for hacking, by category:**
@@ -748,6 +793,8 @@ const addr = m ? parseInt(m[1], 16) : null;  // e.g. 0xC100
 ## Playtest mode (optional)
 
 `playtest({ scale: 3 })` opens a real SDL window for a human to play the loaded ROM with a keyboard or USB controller. It **returns immediately** — the render loop runs in the background and you keep using every other tool against the same live host (so `runSource`/`loadMedia` rebuilds update the window in place; it does not relaunch or crash on rebuild). Close it with `playtestStop` (or the human pressing ESC / Select+Start). Needs a desktop display *and* the optional `@kmamal/sdl` dep; with neither it returns `{opened:false, reason:...}` and the rest of the server keeps working headless. Use this when the human wants to feel the game, not when you want to test it (for your own checks, use `screenshot` — it reads the same live host the window shows). `playtestStatus` reports liveness + the window's media/frame; `playtestFramebuffer` captures exactly what the human sees.
+
+**Windows are PER SESSION.** The server is multi-session (several agents, or a user with 2-3 games open at once); each session gets its OWN window — opening one never disturbs another agent's, `playtestStop` closes only yours, and a session disconnecting tears down just its own window. **Aspect:** the window defaults to `aspect:"tv"` (the 4:3 / native-LCD shape the game was authored for) with nearest-neighbor scaling, so it looks like real hardware and stays crisp + correct aspect when the human resizes it; pass `aspect:"fb"` for raw square-pixel dev geometry.
 
 ## Common gotchas
 
