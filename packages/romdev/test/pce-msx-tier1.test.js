@@ -192,3 +192,55 @@ test("MSX asset pipeline: screen-2 tile codec round-trips (2 colors/row)", async
   const dec = decodeMsxScreen2Tile(pattern, color);
   assert.deepEqual([...dec], [...tile], "MSX screen-2 round-trip is not identity for a 2-color row");
 });
+
+test("PCE imageToTilemap: emits deduped tiles + BAT + VCE palette", async () => {
+  const { pceImageToTilemap } = await import("../src/platforms/pce/image-to-tilemap.js");
+  const { PNG } = await import("pngjs");
+  const png = new PNG({ width: 256, height: 224 });
+  const colors = [[0, 0, 0], [255, 0, 0], [0, 255, 0], [0, 0, 255]];
+  for (let i = 0; i < 256 * 224; i++) {
+    const c = colors[i % 4]; const o = i * 4;
+    png.data[o] = c[0]; png.data[o + 1] = c[1]; png.data[o + 2] = c[2]; png.data[o + 3] = 255;
+  }
+  const r = pceImageToTilemap({ pngBytes: PNG.sync.write(png) });
+  assert.equal(r.nametable.length, 32 * 28 * 2, "PCE BAT size");
+  assert.equal(r.palette.length, 32, "PCE 16×u16 palette");
+  assert.ok(r.uniqueTiles >= 1 && r.tiles.length === r.uniqueTiles * 32, "PCE tile bytes consistent");
+  // Identical 4-color pattern in every cell → dedup collapses to a few tiles.
+  assert.ok(r.uniqueTiles <= 4, `expected heavy dedup, got ${r.uniqueTiles} tiles`);
+});
+
+test("MSX imageToTilemap: emits screen-2 pattern + color + name tables", async () => {
+  const { msxImageToTilemap } = await import("../src/platforms/msx/image-to-tilemap.js");
+  const { PNG } = await import("pngjs");
+  const png = new PNG({ width: 256, height: 192 });
+  for (let i = 0; i < 256 * 192; i++) {
+    const x = i % 256; const c = x < 128 ? 0 : 255; const o = i * 4;
+    png.data[o] = c; png.data[o + 1] = c; png.data[o + 2] = c; png.data[o + 3] = 255;
+  }
+  const r = msxImageToTilemap({ pngBytes: PNG.sync.write(png) });
+  assert.equal(r.tiles.length, 768 * 8, "MSX pattern table = 768 × 8 B");
+  assert.equal(r.color.length, 768 * 8, "MSX color table = 768 × 8 B");
+  assert.equal(r.nametable.length, 768, "MSX name table = 768 B");
+});
+
+test("MSX previewTileArt: composites screen-2 pattern+color from live VRAM", async () => {
+  const { previewTileArtCore } = await import("../src/mcp/tools/preview-tile.js");
+  const { _setHostForTest } = await import("../src/mcp/state.js");
+  const main = await readFile(path.join(PLAT, "msx", "lib", "c", "hello_msx.c"), "utf8");
+  const crt0 = await readFile(path.join(PLAT, "msx", "lib", "c", "msx_crt0.s"), "utf8");
+  let build;
+  for (let a = 0; a < 3 && !build?.binary; a++) {
+    build = await buildForPlatform({ platform: "msx", sources: { "main.c": main, "msx_crt0.s": crt0 }, crt0: ".module empty\n", sourceName: "main.c" });
+  }
+  const core = resolveCore("msx");
+  const host = new LibretroHost();
+  await host.loadCore(core.jsPath, core.wasmPath);
+  await host.loadMedia({ platform: "msx", bytes: build.binary });
+  for (let i = 0; i < 300; i++) host.stepFrames(1);
+  _setHostForTest("msx-pv", host);
+  const r = await previewTileArtCore({ platform: "msx", intent: "homebrew", paletteFromEmulator: true, sessionKey: "msx-pv", tileCount: 64 });
+  assert.equal(r.platform, "msx");
+  assert.equal(r.mode, "screen2");
+  assert.ok(r.pngBase64 && r.pngBase64.length > 0, "MSX previewTileArt produced no PNG");
+}, { timeout: 90000 });

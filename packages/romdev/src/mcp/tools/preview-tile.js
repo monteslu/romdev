@@ -18,6 +18,7 @@ import { intentZod } from "../../platforms/common/intent.js";
 import { decodeTile } from "../../platforms/common/tile-decode.js";
 import { TILE_SPECS } from "../../platforms/common/image-to-tiles.js";
 import { nesPaletteIndexToRgb } from "../../platforms/nes/ppu.js";
+import { decodeMsxPalette, isV9938Mode } from "../../platforms/msx/vdp.js";
 
 // Live-VRAM tile region per platform (mirrors tile-inspect.js). Genesis/SNES
 // share the generic libretro video_ram id.
@@ -186,6 +187,30 @@ export function decodeLivePalette(host, platform, subIdx, spec) {
     case "gbc": {
       throw new Error("previewTileArt[gb]: live palette read not yet wired (DMG palette is in $FF47/$FF48/$FF49; CGB has BCPS/BCPD bg palette RAM). Pass explicit `palette` for now.");
     }
+    case "pce": {
+      // VCE 512-entry 9-bit GRB; subIdx picks one of the 16-color sub-palettes
+      // (0-15 = BG sub-palettes, 16-31 = sprite sub-palettes).
+      const pal = host.readMemory("pce_vce_palette", 0, 1024);
+      const u16 = (i) => pal[i * 2] | (pal[i * 2 + 1] << 8);
+      const base = (subIdx & 0x1f) * 16;
+      const out = [];
+      for (let i = 0; i < 16; i++) {
+        const v = u16(base + i) & 0x1ff;
+        out.push([
+          Math.round(((v >> 3) & 7) * 255 / 7), // red
+          Math.round(((v >> 6) & 7) * 255 / 7), // green
+          Math.round((v & 7) * 255 / 7),        // blue
+        ]);
+      }
+      return out;
+    }
+    case "msx": {
+      // V9938 paletteReg (16 × 9-bit GRB) on MSX2 modes; TMS9918 fixed otherwise.
+      const palBytes = host.readMemory("msx_palette", 0, 32);
+      const regs = host.readMemory("msx_vdp_regs", 0, 64);
+      const { entries } = decodeMsxPalette(palBytes, isV9938Mode(regs));
+      return entries.map((e) => [e.r, e.g, e.b]);
+    }
     default:
       throw new Error(`previewTileArt[${platform}]: live palette read not implemented`);
   }
@@ -303,9 +328,17 @@ export async function previewTileArtCore(args) {
   const { resolveIntent } = await import("../../platforms/common/intent.js");
   const d = resolveIntent(args.intent);
   const { platform, tilesPerRow = 16, scale = 1, outputPath, sessionKey } = args;
+
+  // MSX screen-2 tiles are TWO parallel tables (1bpp pattern + per-row fg/bg
+  // color), so they don't fit the single-blob spec path. Handle MSX specially:
+  // read both tables from the live VDP and composite each tile.
+  if (platform === "msx") {
+    return previewMsxScreen2(args, d);
+  }
+
   const spec = TILE_SPECS[platform];
   if (!spec) {
-    throw new Error(`previewTileArt: unknown platform '${platform}'. Supported: ${Object.keys(TILE_SPECS).join(", ")}`);
+    throw new Error(`previewTileArt: unknown platform '${platform}'. Supported: ${Object.keys(TILE_SPECS).join(", ")}, msx`);
   }
   const bytesPerTile = (8 * 8 * spec.bpp) / 8;
   // ── Resolve paletteFromEmulator per intent ────────────────────
@@ -363,6 +396,64 @@ export async function previewTileArtCore(args) {
   return { ...result, pngBase64: png.toString("base64") };
 }
 
+/**
+ * Preview MSX screen-2 tiles. Reads the pattern-generator + color tables from
+ * the running VDP's VRAM (bases from VDP R4 / R3+R10) and composites each 8×8
+ * tile against the active MSX palette. screen-2 has 768 tiles (3 banks of 256).
+ */
+async function previewMsxScreen2(args, d) {
+  const { tilesPerRow = 16, scale = 1, outputPath, sessionKey, tileCount = 256, tileStart = 0 } = args;
+  const host = getHostOrNull(sessionKey);
+  if (!host) {
+    throw new Error("previewTileArt[msx]: needs a loaded ROM (screen-2 tiles live in the running VDP's VRAM). Call loadMedia first.");
+  }
+  const vram = host.readMemory("msx_vram", 0, host.regionSize("msx_vram"));
+  const regs = host.readMemory("msx_vdp_regs", 0, 64);
+  // Pattern-generator base = R4 << 11; color table base = (R3 | R10<<8) << 6.
+  const patBase = (regs[4] & 0x3f) << 11;
+  const colBase = ((regs[3] & 0xff) | ((regs[10] & 0x07) << 8)) << 6;
+  const palBytes = host.readMemory("msx_palette", 0, 32);
+  const { decodeMsxPalette, isV9938Mode } = await import("../../platforms/msx/vdp.js");
+  const { decodeMsxScreen2Tile } = await import("../../platforms/msx/tiles.js");
+  const { entries } = decodeMsxPalette(palBytes, isV9938Mode(regs));
+  const paletteRgb = entries.map((e) => [e.r, e.g, e.b]);
+
+  const n = Math.min(tileCount, 768 - tileStart);
+  const cols = Math.min(tilesPerRow, n);
+  const rows = Math.ceil(n / cols);
+  const W = cols * 8 * scale, H = rows * 8 * scale;
+  const png = new PNG({ width: W, height: H });
+  for (let t = 0; t < n; t++) {
+    const tile = tileStart + t;
+    const pattern = vram.slice(patBase + tile * 8, patBase + tile * 8 + 8);
+    const color = vram.slice(colBase + tile * 8, colBase + tile * 8 + 8);
+    const px = decodeMsxScreen2Tile(pattern, color); // 64 indices into the 16-color palette
+    const tx = (t % cols) * 8 * scale, ty = Math.floor(t / cols) * 8 * scale;
+    for (let y = 0; y < 8; y++) {
+      for (let x = 0; x < 8; x++) {
+        const [r, g, b] = paletteRgb[px[y * 8 + x] & 0x0f] ?? [0, 0, 0];
+        for (let sy = 0; sy < scale; sy++) for (let sx = 0; sx < scale; sx++) {
+          const o = ((ty + y * scale + sy) * W + (tx + x * scale + sx)) * 4;
+          png.data[o] = r; png.data[o + 1] = g; png.data[o + 2] = b; png.data[o + 3] = 255;
+        }
+      }
+    }
+  }
+  const buf = PNG.sync.write(png);
+  const result = {
+    platform: "msx", intent: d.intent, width: W, height: H,
+    tilesRendered: n, bpp: 1, mode: "screen2",
+    patternBase: "$" + patBase.toString(16), colorBase: "$" + colBase.toString(16),
+    paletteUsed: paletteRgb.map(([r, g, b]) => "#" + r.toString(16).padStart(2, "0") + g.toString(16).padStart(2, "0") + b.toString(16).padStart(2, "0")),
+    note: "MSX screen-2: pattern + per-row color read from live VRAM (bases shown). Each row uses 2 colors (the screen-2 constraint).",
+  };
+  if (outputPath) {
+    await writeFile(outputPath, buf);
+    return { ...result, outputPath };
+  }
+  return { ...result, pngBase64: buf.toString("base64") };
+}
+
 export function registerPreviewTileTools(server, z, sessionKey) {
   server.tool(
     "previewTileArt",
@@ -375,7 +466,7 @@ export function registerPreviewTileTools(server, z, sessionKey) {
     "`palette` or `paletteFromEmulator:true` (NES/SNES/Genesis — preview against the real game palette " +
     "without rebuilding; defaults to a gray ramp). See param hints for palettePath / paletteIndex.",
     {
-      platform: z.enum(["nes", "gb", "gbc", "sms", "gg", "snes", "genesis", "megadrive", "md", "gba"]),
+      platform: z.enum(["nes", "gb", "gbc", "sms", "gg", "snes", "genesis", "megadrive", "md", "gba", "atari2600", "atari7800", "c64", "lynx", "pce", "msx"]),
       tileBytes: z.string().optional().describe("Base64 of raw tile bytes."),
       tilePath: z.string().optional().describe("Path to tile dump (raw) or iNES ROM (NES auto-locates CHR)."),
       fromEmulator: z.boolean().optional().describe("Read tiles from the running emulator's live VRAM (use tileStart/tileCount to pick the range; defaults to 256 tiles from tileStart). Genesis VRAM's host-LE word byte-swap is corrected automatically. Mutually exclusive with tileBytes/tilePath."),
