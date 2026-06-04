@@ -303,6 +303,23 @@ export async function findReferencesCore({ path, platform, address, mapper, maxR
     const bytes = data.slice(start, Math.min(data.length, start + CAP));
     const r = runM68kdasm({ bytes, startAddress: start });
     asm = r.asm;
+  } else if (resolved === "pce") {
+    // PC Engine HuCard: HuC6280 (65C02 superset). da65 has an explicit huc6280
+    // CPU mode. The cart maps to the top of the address space (no header).
+    const body = data.slice(0);
+    const start = (0x10000 - body.length) & 0xffff;
+    const { runDa65 } = await import("../../toolchains/cc65/da65.js");
+    const r = await runDa65({ bytes: body, startAddress: start, cpu: "huc6280", options: ["--comments", "4"] });
+    asm = r.asm;
+  } else if (resolved === "msx") {
+    // MSX cartridge maps at $4000-$BFFF; skip the 16-byte "AB" header, then
+    // disassemble the Z80 image from $4010.
+    const hdr = data.length >= 2 && data[0] === 0x41 && data[1] === 0x42;
+    const base = hdr ? 16 : 0;
+    const bytes = data.slice(base, Math.min(data.length, base + 0x8000));
+    const { runZ80dasm } = await import("../../toolchains/z80dasm.js");
+    const r = runZ80dasm({ bytes, startAddress: 0x4000 + base });
+    asm = r.asm;
   } else {
     throw new Error(`findReferences: platform '${resolved}' not supported yet.`);
   }

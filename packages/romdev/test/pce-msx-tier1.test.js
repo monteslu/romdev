@@ -193,6 +193,33 @@ test("MSX asset pipeline: screen-2 tile codec round-trips (2 colors/row)", async
   assert.deepEqual([...dec], [...tile], "MSX screen-2 round-trip is not identity for a 2-color row");
 });
 
+test("findReferences: disassembles PCE (huc6280) and MSX (z80) ROMs", async () => {
+  const { findReferencesCore } = await import("../src/mcp/tools/find-references.js");
+  const { writeFile, mkdtemp } = await import("node:fs/promises");
+  const os = await import("node:os");
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "fr-"));
+
+  // PCE — disassemble the conio hello and find refs to the reset-vector region.
+  const pceSrc = await readFile(path.join(PLAT, "pce", "lib", "c", "hello_pce.c"), "utf8");
+  const pceBuild = await buildForPlatform({ platform: "pce", source: pceSrc, sourceName: "main.c" });
+  const pcePath = path.join(tmp, "game.pce");
+  await writeFile(pcePath, pceBuild.binary);
+  const pceRefs = await findReferencesCore({ path: pcePath, platform: "pce", address: 0xe000 });
+  assert.ok(typeof pceRefs.refsFound === "number", "PCE findReferences returned no result shape");
+
+  // MSX — the hello calls INITXT ($006C); there should be a ref to it.
+  const main = await readFile(path.join(PLAT, "msx", "lib", "c", "hello_msx.c"), "utf8");
+  const crt0 = await readFile(path.join(PLAT, "msx", "lib", "c", "msx_crt0.s"), "utf8");
+  let msxBuild;
+  for (let a = 0; a < 3 && !msxBuild?.binary; a++) {
+    msxBuild = await buildForPlatform({ platform: "msx", sources: { "main.c": main, "msx_crt0.s": crt0 }, crt0: ".module empty\n", sourceName: "main.c" });
+  }
+  const msxPath = path.join(tmp, "game.rom");
+  await writeFile(msxPath, msxBuild.binary);
+  const msxRefs = await findReferencesCore({ path: msxPath, platform: "msx", address: 0x006c });
+  assert.ok(msxRefs.refsFound >= 1, "MSX findReferences should find the INITXT ($006C) call");
+}, { timeout: 120000 });
+
 test("getMemoryMap: sdld .map path categorizes MSX (Z80) symbols by region", async () => {
   const { parseSdldMap } = await import("../src/toolchains/sdcc/sdcc.js");
   const main = "unsigned char score; unsigned int hiscore; void main(void){ score=1; hiscore=2; for(;;); }";
