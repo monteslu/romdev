@@ -266,6 +266,41 @@ const TEMPLATES = {
       describe: "Music playback via hUGEDriver. Compact SDCC-native rewrite of the upstream hUGEDriver interface (public domain) + a 4-pattern, two-channel hand-authored sample song. Driver advances on every vblank via hUGE_dosound().",
     },
   },
+
+  // ── PC Engine (cc65 HuC6280) — direct VDC/VCE/PSG helper lib + examples ──
+  // The helper lib (pce_video.c/pce_input.c/pce_sound.c + pce_hw.h) is copied as
+  // runtime; each template's main is a verified playable example.
+  pce: (() => {
+    const PCE_RUNTIME = [
+      { src: "lib/c/pce_hw.h", dst: "pce_hw.h" },
+      { src: "lib/c/pce_video.c", dst: "pce_video.c" },
+      { src: "lib/c/pce_input.c", dst: "pce_input.c" },
+      { src: "lib/c/pce_sound.c", dst: "pce_sound.c" },
+    ];
+    const mk = (name, describe) => ({ main: `${name}/main.c`, runtime: PCE_RUNTIME, lang: "C (cc65)", ext: ".pce", describe });
+    return {
+      default: mk("sprite_move", "Joypad-controlled 16x16 sprite over a solid background — the canonical PCE 'read pad + move a sprite' starter. Exercises the whole helper lib (VCE palette, VRAM upload, BAT fill, SATB + DMA, joypad). Same as the 'sprite_move' template."),
+      sprite_move: mk("sprite_move", "Joypad-controlled 16x16 sprite over a tiled background. d-pad moves the sprite; verified visible + responsive. Build up an action game from here."),
+      music_sfx: mk("music_sfx", "HuC6280 PSG demo: a looping melody plus a button-fired SFX. Shows psg_tone/psg_off across the PSG's wavetable channels."),
+      catch_game: mk("catch_game", "A complete tiny game: a paddle catches a falling object with the d-pad; full game loop with waitvsync(), two sprites, collision, scoring."),
+    };
+  })(),
+
+  // ── MSX (SDCC z80) — direct-port VDP/PSG helper lib + cart crt0 + examples ──
+  msx: (() => {
+    const MSX_RUNTIME = [
+      { src: "lib/c/msx_hw.h", dst: "msx_hw.h" },
+      { src: "lib/c/msx_vdp.c", dst: "msx_vdp.c" },
+    ];
+    const MSX_CRT0 = { presetSrc: "lib/c/msx_crt0.s", dst: "msx_crt0.s" };
+    const mk = (name, describe) => ({ main: `${name}/main.c`, runtime: MSX_RUNTIME, crt0: MSX_CRT0, lang: "C (SDCC z80)", ext: ".rom", describe });
+    return {
+      default: mk("sprite_move", "Joystick-controlled sprite on a screen-2 background — the canonical MSX starter. NOTE: read joystick PORT 1 (port 0 is the keyboard). Same as 'sprite_move'."),
+      sprite_move: mk("sprite_move", "Joystick-controlled sprite on a screen-2 background. d-pad moves the sprite; verified visible + responsive. The base for any action game."),
+      music_sfx: mk("music_sfx", "AY-3-8910 PSG demo: a looping melody on channel A plus a trigger-fired SFX on channel C, with an on-screen indicator."),
+      catch_game: mk("catch_game", "A complete tiny game: a paddle catches falling fruit with the joystick; full game loop with vblank sync, two sprites, collision, scoring."),
+    };
+  })(),
 };
 // R37: GBC has its own scaffold tree at examples/gbc/templates/ +
 // src/platforms/gbc/lib/c/. Same runtime files as GB (the APU + Z80 +
