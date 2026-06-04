@@ -88,7 +88,7 @@ export function registerMemoryTools(server, z, sessionKey) {
       region: z.enum(REGIONS),
       offset: z.number().int().min(0).default(0),
       length: z.number().int().min(1).max(65536).describe("Number of bytes to read (max 65536)."),
-      outputPath: z.string().optional().describe(`For reads >${INLINE_HEX_LIMIT} bytes: absolute path to write the raw bytes to. Required for large reads unless inline:true. Ignored for small reads (always inline hex).`),
+      outputPath: z.string().optional().describe(`Absolute path to write the RAW bytes to. Required for reads >${INLINE_HEX_LIMIT} bytes (unless inline:true). For SMALL reads it's honored too when given — writes the file AND returns hex inline — so a "snapshot RAM to disk, then diff two files" flow works at any size.`),
       inline: z.boolean().default(false).describe(`For reads >${INLINE_HEX_LIMIT} bytes: if true, return the hex string in the response instead of writing to disk. Default false — then outputPath is required for large reads.`),
     },
     safeTool(async ({ region, offset, length, outputPath, inline }) => {
@@ -127,7 +127,15 @@ export function registerMemoryTools(server, z, sessionKey) {
         const { path, bytes: written } = writeOutput(bytes, { outputPath, what: `readMemory(${region})` });
         return jsonContent({ ...meta, path, bytes: written });
       }
+      // Small read WITH an explicit outputPath: honor it — write the raw bytes
+      // to disk AND still return the hex inline (small, useful). The intent of
+      // passing outputPath is unambiguous; silently ignoring it broke the
+      // "snapshot RAM to a file, then diff two files" workflow.
       const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+      if (outputPath) {
+        const { path, bytes: written } = writeOutput(bytes, { outputPath, what: `readMemory(${region})` });
+        return jsonContent({ ...meta, path, bytes: written, hex });
+      }
       return jsonContent({ ...meta, hex });
     }),
   );
