@@ -671,7 +671,7 @@ export function registerDisasmTools(server, z) {
     "use `disassemble`.) See param hints for the rest.",
     {
       path: z.string().describe("Absolute path to a ROM file (.nes / .sfc / .smc)."),
-      platform: z.enum(["nes", "snes", "sms", "gg", "gb", "gbc", "atari2600", "atari7800", "c64", "genesis"]).optional().describe("Override platform detection. Omit to sniff from file extension."),
+      platform: z.enum(["nes", "snes", "sms", "gg", "gb", "gbc", "atari2600", "atari7800", "c64", "genesis", "pce", "msx"]).optional().describe("Override platform detection. Omit to sniff from file extension."),
       bank: z.number().int().min(0).max(255).optional().describe("Which switchable ROM bank to map into the banked slot before disassembling. NES (mapper>0): maps 16KB PRG bank N at $8000-$BFFF (a $C000+ startAddress still reads the fixed top bank). GB/GBC: maps the bank at $4000-$7FFF (default bank 1). Lets you disassemble UxROM/MMC1/MMC3 bank N without slicing the ROM by hand."),
       startAddress: z.number().int().min(0).max(0xffffff).default(0x8000).describe("CPU address to start at. NES: $8000-$FFFF. SNES: $008000-$FFFFFF (bank-prefixed)."),
       length: z.number().int().min(1).max(65536).optional().describe("Bytes to disassemble. Default 256. Mutually exclusive with endAddress."),
@@ -1243,6 +1243,33 @@ function planRegions(platform, data) {
     });
     return regions;
   }
+  if (platform === "pce") {
+    // PC Engine HuCard: the HuC6280 (65C02-family) image. cc65 pce.cfg maps the
+    // reset/IRQ vectors at $FFF6+ and the program high; homebrew typically runs
+    // from the ROM mapped at the top of the address space. Disassemble the image
+    // as a flat region from the cart base — a HuCard has no header to strip.
+    const body = trimTrailingPad(data.slice(0));
+    const org = (0x10000 - body.length) & 0xffff; // cart maps to top of space
+    regions.push({
+      name: "rom", file: "rom.asm", bytes: body,
+      startAddress: org, fileOffset: 0,
+      label: `HuCard @ $${org.toString(16)} (HuC6280)`,
+    });
+    return regions;
+  }
+  if (platform === "msx") {
+    // MSX cartridge maps at $4000-$BFFF; the 16-byte "AB" header at $4000 is
+    // data (magic + INIT/STATEMENT/DEVICE/TEXT pointers), code follows. Skip the
+    // header and disassemble the Z80 image from $4010.
+    const hdr = data.length >= 2 && data[0] === 0x41 && data[1] === 0x42;
+    const base = hdr ? 16 : 0;
+    regions.push({
+      name: "rom", file: "rom.asm", bytes: trimTrailingPad(data.slice(base)),
+      startAddress: 0x4000 + base, fileOffset: base,
+      label: `cart @ $${(0x4000 + base).toString(16)} (Z80)`,
+    });
+    return regions;
+  }
   if (platform === "gba") {
     // GBA is ARM7TDMI (ARM + Thumb). romdev ships NO ARM disassembler or
     // reassembler, so disassembleProject cannot produce a byte-exact,
@@ -1251,7 +1278,7 @@ function planRegions(platform, data) {
     throw new Error(
       "disassembleProject does not support GBA: it is ARM7TDMI (ARM/Thumb), and romdev " +
       "has no ARM disassembler/reassembler, so it cannot produce a byte-exact rebuildable " +
-      "project. All other 11 tier-1 systems are supported. For GBA, use an external ARM " +
+      "project. All other 13 tier-1 systems are supported. For GBA, use an external ARM " +
       "toolchain (arm-none-eabi-objdump / Ghidra / mgba's own debugger); romdev's live " +
       "debug tools (readMemory/watchMemory/findWriter/getRenderingContext) DO work on GBA.",
     );
