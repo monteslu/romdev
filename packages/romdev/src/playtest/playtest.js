@@ -135,6 +135,15 @@ async function getSdl() {
     ), "missing-binary", installScript ? `node "${installScript}"` : undefined);
   }
 
+  // Force nearest-neighbor scaling globally. SDL2 reads this env var at init;
+  // we already pass scaling:"nearest" per render, but this is belt-and-
+  // suspenders so a pixel-art ROM is NEVER blurred by bilinear filtering on any
+  // path. 0 = nearest, 1 = linear, 2 = best. MUST be set before SDL inits, i.e.
+  // before the import below.
+  if (!process.env.SDL_RENDER_SCALE_QUALITY) {
+    process.env.SDL_RENDER_SCALE_QUALITY = "0";
+  }
+
   // Binary present (or path unresolvable — let import surface the real error).
   try {
     const ns = await import("@kmamal/sdl");
@@ -236,6 +245,36 @@ the BOTTOM face button is always the main action, regardless of pad letter.
  * @param {string | null} platform
  * @param {number} displayAspect core-reported, used as fallback
  */
+/**
+ * Largest rect of `targetAspect` that fits inside a winW×winH window, centered
+ * (letterbox/pillarbox). Pure + exported so the aspect-on-resize behavior is
+ * unit-testable without a display. The image is ALWAYS drawn at this rect, so
+ * resizing the window never stretches it off-aspect — it just grows the bars.
+ * @param {number} winW window backing-store width (px)
+ * @param {number} winH window backing-store height (px)
+ * @param {number} targetAspect desired width/height ratio
+ * @returns {{dstX:number, dstY:number, dstW:number, dstH:number}}
+ */
+export function letterbox(winW, winH, targetAspect) {
+  const winAspect = winW / winH;
+  let dstW, dstH;
+  if (winAspect > targetAspect) {
+    // Window wider than target → full height, pillarbox left/right.
+    dstH = winH;
+    dstW = Math.round(winH * targetAspect);
+  } else {
+    // Window taller than target → full width, letterbox top/bottom.
+    dstW = winW;
+    dstH = Math.round(winW / targetAspect);
+  }
+  return {
+    dstX: Math.round((winW - dstW) / 2),
+    dstY: Math.round((winH - dstH) / 2),
+    dstW,
+    dstH,
+  };
+}
+
 function tvAspectFor(platform, displayAspect) {
   switch (platform) {
     case "nes":
@@ -290,7 +329,12 @@ export async function playtest(args) {
   // back to the platform name, then the generic label. An explicit `title`
   // arg always wins.
   const title = args.title ?? deriveTitle(openHost);
-  const aspectMode = args.aspect ?? "fb";
+  // Default to "tv" — the 4:3 / native-LCD shape the game was authored for, so
+  // the window looks like the real hardware (matches retroemu, which honors the
+  // core's display aspect / 4:3 fallback). "fb" (raw square pixels) makes most
+  // consoles look squished — NES 256×240 renders ~8% too narrow, Genesis H32
+  // too tall, etc. Agents who want exact dev-time pixel geometry pass aspect:"fb".
+  const aspectMode = args.aspect ?? "tv";
 
   const sdl = await getSdl();
 
@@ -608,17 +652,17 @@ export async function playtest(args) {
         } else {
           targetAspect = fbW / fbH;
         }
-        const winAspect = winPixelW / winPixelH;
-        let dstW, dstH;
-        if (winAspect > targetAspect) {
-          dstH = winPixelH;
-          dstW = Math.round(winPixelH * targetAspect);
-        } else {
-          dstW = winPixelW;
-          dstH = Math.round(winPixelW / targetAspect);
-        }
-        const dstX = Math.round((winPixelW - dstW) / 2);
-        const dstY = Math.round((winPixelH - dstH) / 2);
+        // Read the window's CURRENT backing-store size fresh every frame rather
+        // than relying on the cached resize-event values. node-sdl can miss /
+        // mis-report a resize event (and during a live drag the cached value
+        // lags the actual window), which left the dstRect sized for the old
+        // window while SDL stretched the texture to fill the new one — i.e. the
+        // image stopped respecting the aspect ratio on resize. window.pixelWidth
+        // is always the true current backing size; fall back to the cached
+        // values only if the live read isn't available.
+        const curW = window.pixelWidth || winPixelW;
+        const curH = window.pixelHeight || winPixelH;
+        const { dstX, dstY, dstW, dstH } = letterbox(curW, curH, targetAspect);
 
         window.render(fbW, fbH, fbW * 4, "rgba32", rgba, {
           scaling: "nearest",
