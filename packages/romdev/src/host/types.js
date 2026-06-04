@@ -264,6 +264,8 @@ export const FACE_BUTTON_MAP = {
   atari7800: { east: "a", south: "b" },
   lynx:      { east: "a", south: "b" },
   c64:       { south: "b" },         // C64 joystick fire
+  pce:       { east: "a", west: "b" },  // PC Engine pad: libretro A=button I, B=button II (Run=start, Select=select)
+  msx:       { east: "a", west: "b" },  // MSX joystick: libretro A=trigger 1, B=trigger 2
 };
 
 /**

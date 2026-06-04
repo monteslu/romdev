@@ -59,11 +59,20 @@ If your program has **no globals/statics**, `__BSS_SIZE__` is 0, the `-1`
 underflows, and you get a **"Range error in pce/crt0.s"** at link AND a black
 screen. Keep at least one (2+ byte) global. See TROUBLESHOOTING.md.
 
+## Art + input
+
+- `convertImageToTiles({ platform: "pce" })` — PNG → 4bpp HuC6270 tiles (the
+  "planar-pairs" layout: 32 B/tile, 16 B plane 0+1 then 16 B plane 2+3). Returns
+  a suggested 16-color palette too. DMA the bytes to your VRAM pattern base.
+- `getInputLayout({ platform: "pce" })` — the 2-button pad (I=east/'a',
+  II=west/'b', Run=start, Select=select) + how the joyport scan works.
+
 ## Debugging tools
 
 - `getCPUState()` — HuC6280 PC/A/X/Y/S/P + flags + timer/IRQ state.
 - `getRenderingContext()` — VDC R5 screen-enable, BG scroll, SATB source.
 - `inspectPalette()` — VCE 512-entry 9-bit GRB (area:'bg'|'sprite').
 - `inspectSprites()` — SATB 64 sprites (x/y/tile/palette/size/flip).
+- `getMemoryMap()` — where cc65 placed your variables (after buildSourceWithDebug).
 - `readMemory()` regions: `pce_vdc_vram`, `pce_vdc_satb`, `pce_vdc_regs`,
   `pce_vce_palette`, `pce_cpu_regs`.

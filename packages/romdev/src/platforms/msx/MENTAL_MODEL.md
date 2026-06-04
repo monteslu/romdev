@@ -71,6 +71,16 @@ is BIOS calls: **INITXT ($006C)** (40-col text mode + clear + enable display),
 **CHPUT ($00A2)** (print the char in register A). The `hello_msx.c` starter does
 exactly this.
 
+## Art + input
+
+- `convertImageToTiles({ platform: "msx" })` — PNG → MSX screen-2 tiles. Returns
+  TWO streams: `pattern.bin` (1bpp) + `color.bin` (per-row fg/bg nibbles into the
+  fixed 16-color TMS9918 palette). Each 8-pixel row is limited to 2 colors —
+  that's the classic MSX constraint. DMA pattern.bin to the pattern-generator
+  base and color.bin to the color-table base (getRenderingContext shows both).
+- `getInputLayout({ platform: "msx" })` — the joystick path via BIOS GTSTCK
+  ($00D5) + GTTRIG ($00D8); trigger 1 = 'a' (east), trigger 2 = 'b' (west).
+
 ## Debugging tools
 
 - `getCPUState()` — Z80 PC/SP/AF/BC/DE/HL/IX/IY + shadow regs + flags + IFF/IM.

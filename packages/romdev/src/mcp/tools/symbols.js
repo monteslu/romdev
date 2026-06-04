@@ -254,6 +254,10 @@ export function registerSymbolTools(server, z) {
         c64:       [{name:"zeropage",lo:0,hi:0xff},{name:"stack",lo:0x100,hi:0x1ff},{name:"system_ram",lo:0x200,hi:0x9fff},{name:"basic_rom",lo:0xa000,hi:0xbfff},{name:"io",lo:0xd000,hi:0xdfff},{name:"kernal",lo:0xe000,hi:0xffff}],
         atari7800: [{name:"zeropage",lo:0,hi:0xff},{name:"stack",lo:0x100,hi:0x1ff},{name:"system_ram",lo:0x1800,hi:0x27ff},{name:"cart_rom",lo:0x4000,hi:0xffff}],
         lynx:      [{name:"zeropage",lo:0,hi:0xff},{name:"stack",lo:0x100,hi:0x1ff},{name:"system_ram",lo:0x200,hi:0xfbff},{name:"hw_regs",lo:0xfc00,hi:0xffff}],
+        // PC Engine (cc65 pce target): ZP + 8KB work RAM at $2200 (the pce.cfg
+        // MAIN segment), HuCard ROM mapped high. The HuC6280 stack lives in the
+        // $21xx page via the MPR mapping.
+        pce:       [{name:"zeropage",lo:0,hi:0xff},{name:"stack",lo:0x2100,hi:0x21ff},{name:"system_ram",lo:0x2200,hi:0x3fff},{name:"hucard_rom",lo:0xe000,hi:0xffff}],
       };
       const regions = (platform && regionsByPlatform[platform]) || [];
 
