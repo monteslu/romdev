@@ -194,6 +194,12 @@ spcPlay(0);                 /* trigger SFX channel 0 */
 (Hand-authoring SPC drivers is hard. For SFX, PVSnesLib's PSG-style
 helpers are the canonical entry point.)
 
+**Debugging sound:** `getAudioState({chip:"dsp"})` decodes the live S-DSP —
+per-voice vol/pitch/ADSR + `env` (0 = silent regardless of vol) + `bufLastSamples`
+(nonzero proves the voice is producing audio) + `flg`; it distinguishes "never
+produced output" from "muted by mixer." GOTCHA: S-DSP FLG is $6C, KOFF is $5C
+(many refs swap them); power-on FLG=$E0 means your driver MUST clear bit 6.
+
 ## ROM layout (LoROM)
 
 ```
