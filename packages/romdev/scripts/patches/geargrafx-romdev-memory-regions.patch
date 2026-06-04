@@ -16,18 +16,80 @@
 #   PCE_VDC_REGS   0x1A2   u16[20]      = 40 B    VDC register file
 #   PCE_VCE_PALETTE 0x1A3  u16[512]     = 1024 B  color table (9-bit GRB), 256 BG + 256 SPR
 #   PCE_CPU_REGS   0x1A4   snapshot     PC/A/X/Y/S/P + timer/irq
+#   PCE_PSG_REGS   0x1A5   snapshot     6 PSG channels + main amplitude + LFO
 #
+diff --git a/platforms/libretro/libretro.cpp b/platforms/libretro/libretro.cpp
+index 131c841..72ea007 100644
 --- a/platforms/libretro/libretro.cpp
 +++ b/platforms/libretro/libretro.cpp
-@@ -448,6 +448,57 @@
+@@ -447,6 +447,107 @@ bool retro_unserialize(const void *data, size_t size)
+     return core->LoadState(reinterpret_cast<const u8*>(data), size);
  }
-
+ 
 +/* ---- romdev memory-region exposure (PC Engine) ----------------------- */
 +#define ROMDEV_MEMORY_PCE_VDC_VRAM    0x1A0
 +#define ROMDEV_MEMORY_PCE_VDC_SATB    0x1A1
 +#define ROMDEV_MEMORY_PCE_VDC_REGS    0x1A2
 +#define ROMDEV_MEMORY_PCE_VCE_PALETTE 0x1A3
 +#define ROMDEV_MEMORY_PCE_CPU_REGS    0x1A4
++#define ROMDEV_MEMORY_PCE_PSG_REGS    0x1A5
++
++/* HuC6280 PSG snapshot: 6 channels of {enabled, frequency, control, amplitude,
++ * vol_left, vol_right, wave_index, noise_control, noise_enabled, noise_freq}
++ * plus the global main-amplitude + LFO. getAudioState({chip:'pce'}) decodes it.
++ * The core's PSG state is a struct of pointers; we read the channel array via
++ * GetState()->CHANNELS and pack a stable little-endian layout. */
++#pragma pack(push, 1)
++struct romdev_pce_psg_chan {
++    uint8_t  enabled;
++    uint16_t frequency;
++    uint8_t  control;
++    uint8_t  amplitude;
++    uint8_t  vol_left;
++    uint8_t  vol_right;
++    uint8_t  wave_index;
++    uint8_t  noise_control;
++    uint8_t  noise_enabled;
++    uint32_t noise_freq;
++};
++struct romdev_pce_psg_snap {
++    uint8_t  channel_select;
++    uint8_t  main_amplitude;
++    uint16_t lfo_frequency;
++    uint8_t  lfo_control;
++    struct romdev_pce_psg_chan channels[6];
++};
++#pragma pack(pop)
++static struct romdev_pce_psg_snap romdev_pce_psg;
++
++static void* romdev_pce_psg_data(void)
++{
++    if (!core) return NULL;
++    HuC6280PSG::HuC6280PSG_State* st = core->GetAudio()->GetPSG()->GetState();
++    romdev_pce_psg.channel_select = st->CHANNEL_SELECT ? *st->CHANNEL_SELECT : 0;
++    romdev_pce_psg.main_amplitude = st->MAIN_AMPLITUDE ? *st->MAIN_AMPLITUDE : 0;
++    romdev_pce_psg.lfo_frequency  = st->LFO_FREQUENCY ? *st->LFO_FREQUENCY : 0;
++    romdev_pce_psg.lfo_control    = st->LFO_CONTROL ? *st->LFO_CONTROL : 0;
++    for (int i = 0; i < 6; i++) {
++        struct romdev_pce_psg_chan* d = &romdev_pce_psg.channels[i];
++        if (st->CHANNELS) {
++            HuC6280PSG::HuC6280PSG_Channel* c = &st->CHANNELS[i];
++            d->enabled       = c->enabled;
++            d->frequency     = c->frequency;
++            d->control       = c->control;
++            d->amplitude     = c->amplitude;
++            d->vol_left      = c->vol_left;
++            d->vol_right     = c->vol_right;
++            d->wave_index    = c->wave_index;
++            d->noise_control = c->noise_control;
++            d->noise_enabled = c->noise_enabled;
++            d->noise_freq    = c->noise_freq;
++        } else {
++            *d = (struct romdev_pce_psg_chan){0};
++        }
++    }
++    return &romdev_pce_psg;
++}
 +
 +/* HuC6280 register snapshot. The core's HuC6280_State is a struct of pointers
 + * to scattered registers; pack the values into a flat little-endian buffer so
@@ -68,10 +130,7 @@
  void *retro_get_memory_data(unsigned id)
  {
      switch (id)
-     {
-         case RETRO_MEMORY_SAVE_RAM:
-             return core->GetMemory()->GetBackupRAM();
-         case RETRO_MEMORY_SYSTEM_RAM:
+@@ -457,6 +558,18 @@ void *retro_get_memory_data(unsigned id)
              return core->GetMemory()->GetWorkingRAM();
          case RETRO_MEMORY_VIDEO_RAM:
              return (u8*)core->GetHuC6270_1()->GetVRAM();
@@ -85,15 +144,12 @@
 +            return (u8*)core->GetHuC6260()->GetColorTable();
 +        case ROMDEV_MEMORY_PCE_CPU_REGS:
 +            return romdev_pce_cpu_data();
++        case ROMDEV_MEMORY_PCE_PSG_REGS:
++            return romdev_pce_psg_data();
      }
-
+ 
      return NULL;
- }
-@@ -465,6 +516,16 @@
-     {
-         case RETRO_MEMORY_SAVE_RAM:
-             return core->GetMemory()->GetBackupRAMSize();
-         case RETRO_MEMORY_SYSTEM_RAM:
+@@ -472,6 +585,18 @@ size_t retro_get_memory_size(unsigned id)
              return core->GetMemory()->GetWorkingRAMSize();
          case RETRO_MEMORY_VIDEO_RAM:
              return HUC6270_VRAM_SIZE * 2;
@@ -107,7 +163,8 @@
 +            return 512 * 2;                         /* color_table[512] u16 = 1024 B */
 +        case ROMDEV_MEMORY_PCE_CPU_REGS:
 +            return sizeof(romdev_pce_cpu);
++        case ROMDEV_MEMORY_PCE_PSG_REGS:
++            return sizeof(romdev_pce_psg);
      }
-
+ 
      return 0;
- }

@@ -14,7 +14,56 @@
 #   MSX_VDP_STATUS 0x1C2   UInt8[16]               VDP status registers
 #   MSX_PALETTE    0x1C3   UInt16[16]   = 32 B     paletteReg (9-bit GRB)
 #   MSX_CPU_REGS   0x1C4   snapshot                AF/BC/DE/HL/IX/IY/PC/SP + I/R/iff/im/halt
+#   MSX_PSG_REGS   0x1C5   UInt8[16]               AY-3-8910 register file (via a singleton
+#                                                  captured in ay8910Create + a getter in AY8910.c)
 #
+diff --git a/Src/SoundChips/AY8910.c b/Src/SoundChips/AY8910.c
+index 3e74ec9..b564d1d 100644
+--- a/Src/SoundChips/AY8910.c
++++ b/Src/SoundChips/AY8910.c
+@@ -217,12 +217,21 @@ static int dbgWriteRegister(AY8910* ay8910, char* name, int regIndex, UInt32 val
+     return 1;
+ }
+ 
++/* romdev: capture the first AY8910 created (the MSX PSG) so the libretro
++ * wrapper can expose its 16 registers to getAudioState. */
++static AY8910* romdev_the_ay8910 = NULL;
++unsigned char* ay8910RomdevGetRegs(void) {
++    return romdev_the_ay8910 ? romdev_the_ay8910->regs : (unsigned char*)0;
++}
++
+ AY8910* ay8910Create(Mixer* mixer, Ay8910Connector connector, PsgType type, Int32 stereo, Int32* pan)
+ {
+     DebugCallbacks dbgCallbacks = { getDebugInfo, NULL, dbgWriteRegister, NULL };
+     AY8910* ay8910 = (AY8910*)calloc(1, sizeof(AY8910));
+     int i;
+ 
++    if (!romdev_the_ay8910) romdev_the_ay8910 = ay8910;
++
+     DoubleT v = 0x26a9;
+     for (i = 15; i >= 0; i--) {
+         voltTable[i] = (Int16)v;
+@@ -300,6 +309,7 @@ void ay8910Reset(AY8910* ay8910)
+ 
+ void ay8910Destroy(AY8910* ay8910)
+ {
++    if (romdev_the_ay8910 == ay8910) romdev_the_ay8910 = NULL; /* romdev: avoid dangling */
+     debugDeviceUnregister(ay8910->debugHandle);
+ 
+     switch (ay8910->connector) {
+diff --git a/Src/SoundChips/AY8910.h b/Src/SoundChips/AY8910.h
+index 01c0752..6076662 100644
+--- a/Src/SoundChips/AY8910.h
++++ b/Src/SoundChips/AY8910.h
+@@ -59,5 +59,8 @@ void ay8910SetIoPort(AY8910* ay8910, AY8910ReadCb readCb, AY8910ReadCb pollCb, A
+ void ay8910LoadState(AY8910* ay8910);
+ void ay8910SaveState(AY8910* ay8910);
+ 
++/* romdev: live pointer to the MSX PSG's 16 registers (NULL before create). */
++unsigned char* ay8910RomdevGetRegs(void);
++
+ #endif
+ 
 diff --git a/Src/VideoChips/VDP.c b/Src/VideoChips/VDP.c
 index 8e5400d..36391fa 100644
 --- a/Src/VideoChips/VDP.c
@@ -66,20 +115,22 @@ index cc6cbf5..8c1bab2 100644
  extern void RefreshScreen(int);
  
 diff --git a/libretro.c b/libretro.c
-index f583a99..a9468ae 100644
+index f583a99..2edaf66 100644
 --- a/libretro.c
 +++ b/libretro.c
-@@ -1838,16 +1838,79 @@ unsigned retro_get_region(void)
+@@ -1838,16 +1838,83 @@ unsigned retro_get_region(void)
           return RETRO_REGION_NTSC;
     }
  }
 +/* ---- romdev memory-region exposure (MSX / MSX2) --------------------- */
 +#include "VDP.h"
++#include "AY8910.h"
 +#define ROMDEV_MEMORY_MSX_VRAM       0x1C0
 +#define ROMDEV_MEMORY_MSX_VDP_REGS   0x1C1
 +#define ROMDEV_MEMORY_MSX_VDP_STATUS 0x1C2
 +#define ROMDEV_MEMORY_MSX_PALETTE    0x1C3
 +#define ROMDEV_MEMORY_MSX_CPU_REGS   0x1C4
++#define ROMDEV_MEMORY_MSX_PSG_REGS   0x1C5
 +
 +/* Z80/R800 register snapshot. R800's active bank `regs` holds RegisterPair
 + * unions (.W = UInt16); pack into a flat little-endian struct so getCPUState
@@ -129,6 +180,7 @@ index f583a99..a9468ae 100644
 +      case ROMDEV_MEMORY_MSX_VDP_STATUS: return vdpRomdevGetStatus();
 +      case ROMDEV_MEMORY_MSX_PALETTE:    return vdpRomdevGetPalette();
 +      case ROMDEV_MEMORY_MSX_CPU_REGS:   return romdev_msx_cpu_data();
++      case ROMDEV_MEMORY_MSX_PSG_REGS:   return ay8910RomdevGetRegs();
 +      default: break;
 +   }
     return NULL;
@@ -144,6 +196,7 @@ index f583a99..a9468ae 100644
 +      case ROMDEV_MEMORY_MSX_VDP_STATUS: return 16;
 +      case ROMDEV_MEMORY_MSX_PALETTE:    return 16 * 2;   /* paletteReg[16] UInt16 */
 +      case ROMDEV_MEMORY_MSX_CPU_REGS:   return sizeof(romdev_msx_cpu);
++      case ROMDEV_MEMORY_MSX_PSG_REGS:   return 16; /* AY8910 regs[16] */
 +      default: break;
 +   }
     return 0;

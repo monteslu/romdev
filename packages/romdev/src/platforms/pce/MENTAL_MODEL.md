@@ -74,5 +74,8 @@ screen. Keep at least one (2+ byte) global. See TROUBLESHOOTING.md.
 - `inspectPalette()` — VCE 512-entry 9-bit GRB (area:'bg'|'sprite').
 - `inspectSprites()` — SATB 64 sprites (x/y/tile/palette/size/flip).
 - `getMemoryMap()` — where cc65 placed your variables (after buildSourceWithDebug).
+- `getAudioState({ chip: "pce" })` — the HuC6280 PSG: 6 wavetable channels
+  (per-channel freq/volume/wave; channels 4-5 can also do noise) + main amplitude
+  + LFO.
 - `readMemory()` regions: `pce_vdc_vram`, `pce_vdc_satb`, `pce_vdc_regs`,
-  `pce_vce_palette`, `pce_cpu_regs`.
+  `pce_vce_palette`, `pce_cpu_regs`, `pce_psg_regs`.
