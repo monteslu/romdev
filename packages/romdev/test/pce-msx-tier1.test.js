@@ -288,3 +288,27 @@ test("MSX previewTileArt: composites screen-2 pattern+color from live VRAM", asy
   assert.equal(r.mode, "screen2");
   assert.ok(r.pngBase64 && r.pngBase64.length > 0, "MSX previewTileArt produced no PNG");
 }, { timeout: 90000 });
+
+test("createProject scaffolds a building project for PCE + MSX", async () => {
+  const { createProjectImpl } = await import("../src/mcp/tools/project.js");
+  const { mkdtemp, readFile, readdir } = await import("node:fs/promises");
+  const os = await import("node:os");
+  for (const [plat, tmpl] of [["pce", "sprite_move"], ["msx", "catch_game"]]) {
+    const dir = await mkdtemp(path.join(os.tmpdir(), `proj-${plat}-`));
+    await createProjectImpl({ platform: plat, name: "g", path: dir, template: tmpl, overwrite: true });
+    const files = await readdir(dir);
+    assert.ok(files.includes("main.c"), `${plat}: no main.c scaffolded`);
+    // gather sources + build the scaffolded project exactly as an agent would
+    const srcs = {}, incs = {};
+    for (const f of files) {
+      const c = await readFile(path.join(dir, f), "utf8");
+      if (f.endsWith(".h")) incs[f] = c;
+      else if (f.endsWith(".c") || f.endsWith(".s")) srcs[f] = c;
+    }
+    const args = plat === "msx"
+      ? { platform: "msx", sources: srcs, includes: incs, crt0: ".module empty\n", sourceName: "main.c" }
+      : { platform: "pce", sources: srcs, includes: incs, sourceName: "main.c" };
+    const b = await buildForPlatform(args);
+    assert.ok(b.binary && b.binary.length > 0, `${plat} scaffolded project failed to build:\n${b.log}`);
+  }
+}, { timeout: 120000 });
