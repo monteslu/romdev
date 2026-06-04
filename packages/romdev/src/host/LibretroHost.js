@@ -478,6 +478,19 @@ export class LibretroHost {
    * @param {number} length
    * @returns {Uint8Array}
    */
+  /**
+   * Byte size of a memory region (0 if the core doesn't expose it). Lets tools
+   * read "the whole region from offset" without guessing a length.
+   * @param {import("./types.js").MemoryRegion} region
+   * @returns {number}
+   */
+  regionSize(region) {
+    const mod = this._needMod();
+    const id = MemoryRegionToRetro[region];
+    if (id === undefined) return 0;
+    return mod._retro_get_memory_size(id) || 0;
+  }
+
   readMemory(region, offset, length) {
     const mod = this._needMod();
     const id = MemoryRegionToRetro[region];

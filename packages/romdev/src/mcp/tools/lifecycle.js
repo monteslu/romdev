@@ -2,12 +2,13 @@ import { resolveCore } from "../../cores/registry.js";
 import { defaultMediaKind } from "../../host/index.js";
 import { clearHost, getHost, getHostOrNull, resetHost } from "../state.js";
 import { jsonContent, safeTool, textContent } from "../util.js";
+import { resolveCheatCodeForApply } from "./cheats.js";
 
 const MEDIA_KINDS = ["cartridge", "disk", "tape", "program"];
 
 export function registerLifecycleTools(server, z, sessionKey) {
   // Shared loader: accepts a file `path` OR base64 `bytes` (exactly one).
-  async function doLoadMedia({ platform, path, base64, mediaKind, virtualName }) {
+  async function doLoadMedia({ platform, path, base64, mediaKind, virtualName, cheats }) {
     const resolved = resolveCore(platform);
     if (!resolved) throw new Error(`no core available for platform '${platform}'`);
     if (!path && !base64) throw new Error("loadMedia: provide either `path` (file on disk) or `base64` (ROM bytes).");
@@ -20,6 +21,27 @@ export function registerLifecycleTools(server, z, sessionKey) {
       ...(bytes ? { bytes, virtualName } : { path }),
       mediaKind: mediaKind ?? defaultMediaKind(platform),
     });
+
+    // Pre-seed cheats BEFORE the first frame — so a boot-time cheat (e.g. a Game
+    // Genie code that changes a value the reset code reads) is in effect from
+    // frame 0. Raw ROM codes are re-encoded to a read-intercept (same as
+    // applyCheat) so they don't silently no-op. Applied only if the core has the
+    // cheat interface; otherwise reported as skipped.
+    let appliedCheats;
+    if (cheats && cheats.length) {
+      appliedCheats = [];
+      const supported = host.cheatsSupported && host.cheatsSupported();
+      cheats.forEach((raw, i) => {
+        if (!supported) { appliedCheats.push({ code: raw, applied: false, reason: "core has no cheat interface" }); return; }
+        const { code, appliedAs, reencodedFrom } = resolveCheatCodeForApply(raw, platform);
+        try {
+          host.setCheat(i, code, true);
+          appliedCheats.push({ code, appliedAs, ...(reencodedFrom ? { reencodedFrom } : {}), applied: true });
+        } catch (e) {
+          appliedCheats.push({ code: raw, applied: false, reason: e?.message ?? String(e) });
+        }
+      });
+    }
     // Framebuffer dimensions are NOT known until the core has run at least one
     // frame — before that, fbWidth/fbHeight hold a pre-boot default (e.g.
     // 256×192 on Genesis) that does NOT match the real output resolution
@@ -36,6 +58,7 @@ export function registerLifecycleTools(server, z, sessionKey) {
       ...(framebufferKnown
         ? { framebuffer: { width: host.status.fbWidth, height: host.status.fbHeight } }
         : { framebufferNote: "Framebuffer dimensions are unknown until the core runs — call stepFrames first, then getStatus (the pre-boot default does not match the real output resolution)." }),
+      ...(appliedCheats ? { cheats: appliedCheats } : {}),
     });
   }
 
@@ -43,13 +66,16 @@ export function registerLifecycleTools(server, z, sessionKey) {
     "loadMedia",
     "Use this to load a ROM/disk/tape/program into a fresh host — resolves the right libretro core " +
     "automatically. Pass `path` (file on disk) OR `base64` (ROM bytes — e.g. straight from buildSource, " +
-    "no disk write, for a fast iteration loop).",
+    "no disk write, for a fast iteration loop). Pass `cheats` to apply codes BEFORE the first frame — for " +
+    "boot-time cheat testing (e.g. iterating on a Game Genie code that changes a value the reset code reads) " +
+    "in one call instead of loadMedia + applyCheat.",
     {
       platform: z.string().describe("Platform id (e.g. 'nes', 'gb', 'c64'). Use listPlatforms() to discover."),
       path: z.string().optional().describe("Absolute path to the media file on disk. Provide this OR `base64`."),
       base64: z.string().optional().describe("Base64-encoded ROM/disk/tape/program bytes. Provide this OR `path`."),
       mediaKind: z.enum(MEDIA_KINDS).optional().describe("Media type. Defaults to 'cartridge' for consoles and 'program' for C64."),
       virtualName: z.string().optional().describe("With `base64`: virtual filename shown to cores that fopen() the path (default '/rom')."),
+      cheats: z.array(z.string()).max(64).optional().describe("Cheat codes to apply before the first frame (Game Genie / raw ADDR:VAL[:COMPARE] / native device codes). Same handling as applyCheat — a raw ROM-address code is re-encoded to a read-intercept so it doesn't silently no-op. Returns a per-code `cheats:[{code, appliedAs, applied}]` report. Use for boot-time cheat testing."),
     },
     safeTool(doLoadMedia),
   );

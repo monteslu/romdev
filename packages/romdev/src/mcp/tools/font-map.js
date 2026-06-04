@@ -18,6 +18,7 @@
 
 import { readFile, writeFile } from "node:fs/promises";
 import { jsonContent, safeTool } from "../util.js";
+import { getHost } from "../state.js";
 
 /**
  * Map a RAW .nes file offset to its real 6502 CPU address + 16KB PRG bank.
@@ -99,6 +100,65 @@ async function learnFontMapCore({ romPath, knownStrings, alphabet }) {
     learnedChars: Object.keys(fontMap).sort().join(""),
     unknownChars,
     inferredFrom,
+  };
+}
+
+/**
+ * Infer the font map from text RENDERED ON SCREEN: read the live nametable and
+ * pull the tile IDs at each hint's (row,col) position — the tile ID IS the
+ * fontMap byte for that character. Solves the chicken-and-egg (you'd otherwise
+ * need the ROM offset, which is what you're hunting). NES only for now (reads
+ * nes_nametables); the model generalizes to any tilemap platform.
+ */
+async function learnFontMapFromScreen({ platform, fromScreen, which = 0, alphabet, sessionKey }) {
+  const host = getHost(sessionKey);
+  const plat = platform ?? host.getStatus?.().platform;
+  if (plat !== "nes") {
+    throw new Error(`learnFontMap fromScreen: live nametable mode is wired for NES today (got '${plat ?? "unknown"}'). For other platforms, use ROM mode (knownStrings+offset).`);
+  }
+  // NES nametable: 32 cols × 30 rows of tile indices, 1KB per nametable.
+  const NT_COLS = 32, NT_ROWS = 30;
+  const nt = host.readMemory("nes_nametables", which * 1024, 1024);
+
+  /** @type {Record<string, number>} */
+  const fontMap = {};
+  const inferredFrom = [];
+  for (const hint of fromScreen) {
+    const { text, row, col } = hint;
+    if (row < 0 || row >= NT_ROWS) throw new Error(`learnFontMap fromScreen: row ${row} out of range (0-${NT_ROWS - 1}).`);
+    let mapped = "";
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      const c = col + i;
+      if (c >= NT_COLS) throw new Error(`learnFontMap fromScreen: text "${text}" at col ${col} runs past the 32-tile row width.`);
+      const tileId = nt[row * NT_COLS + c];
+      if (ch === " " && fontMap[ch] === undefined) { /* space often maps to a blank tile — record it like any char */ }
+      if (fontMap[ch] !== undefined && fontMap[ch] !== tileId) {
+        throw new Error(
+          `learnFontMap fromScreen: conflict on '${ch}'. An earlier hint mapped it to tile 0x${fontMap[ch].toString(16).toUpperCase()}; ` +
+          `this hint (text="${text}", row=${row}, col=${col}, position=${i}) reads tile 0x${tileId.toString(16).toUpperCase()}. ` +
+          `Check the (row,col) — inspectBackgroundMap shows the exact tile grid.`
+        );
+      }
+      fontMap[ch] = tileId;
+      mapped += ch;
+    }
+    inferredFrom.push({ text, row, col, mappedChars: mapped });
+  }
+
+  const alphabetSet = alphabet ?? "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ©";
+  const unknownChars = [];
+  for (const ch of alphabetSet) if (fontMap[ch] === undefined) unknownChars.push(ch);
+
+  return {
+    source: "live-nametable",
+    platform: plat,
+    which,
+    fontMap,
+    learnedChars: Object.keys(fontMap).sort().join(""),
+    unknownChars,
+    inferredFrom,
+    note: "Tile IDs read from the live nametable — they ARE the in-ROM character bytes for a game whose text is stored as raw tile indices (most NES games). Verify with findEncodedText before patching.",
   };
 }
 
@@ -313,25 +373,43 @@ async function findEncodedTextCore({ romPath, text, fontMap, fontMapPath, platfo
 
 // ─── MCP registration ────────────────────────────────────────────
 
-export function registerFontMapTools(server, z) {
+export function registerFontMapTools(server, z, sessionKey) {
   server.tool(
     "learnFontMap",
     "Use this to infer a ROM's custom character→tile-ID map (most retro games use their own font " +
-    "encoding) from known-text-at-known-offset hints, instead of reverse-engineering it by hand. Workflow: " +
-    "find a recognizable on-screen string, locate its bytes in the ROM, pass `{text, offset}` hints; " +
-    "returns `{fontMap, learnedChars, unknownChars}` — save it as JSON and pass `fontMapPath` to " +
-    "encodeTextForRom / findEncodedText. Throws on conflicting hints (usually a wrong offset). Per-ROM, " +
-    "not per-platform.",
+    "encoding) instead of reverse-engineering it by hand. TWO modes:\n" +
+    "• ROM mode (`knownStrings:[{text, offset}]`): you found the text's bytes in the ROM file.\n" +
+    "• LIVE mode (`fromScreen:[{text, row, col}]`): the text is RENDERED on screen RIGHT NOW — read the tile " +
+    "IDs straight from the live nametable at a tile position (row,col in 8×8 tiles from the top-left). This " +
+    "solves the chicken-and-egg where you'd need the ROM offset (the thing you're hunting) to learn the map: " +
+    "inspectBackgroundMap shows you where the text is on screen, and this reads the tile IDs there. NES live " +
+    "mode reads `nes_nametables`; pass `which` (0-3) for the nametable if not 0.\n" +
+    "Returns `{fontMap, learnedChars, unknownChars}` — save it as JSON and pass `fontMapPath` to " +
+    "encodeTextForRom / findEncodedText. Throws on conflicting hints (usually a wrong offset/position). Per-ROM.",
     {
-      romPath: z.string().describe("Absolute path to the ROM file."),
-      platform: z.string().optional().describe("Optional — purely informational here; reuses the same map regardless of platform."),
+      romPath: z.string().optional().describe("Absolute path to the ROM file. Required for ROM mode (knownStrings); not needed for live mode (fromScreen)."),
+      platform: z.string().optional().describe("Platform — required for `fromScreen` live mode (selects the nametable region). Informational for ROM mode."),
       knownStrings: z.array(z.object({
         text: z.string().describe("The string you can see rendered in-game."),
         offset: z.number().int().min(0).describe("File offset where those bytes live in the ROM (find via findEncodedText hints or inspection)."),
-      })).min(1).describe("Hints. One or more is enough to start; more hints cover more of the alphabet."),
+      })).optional().describe("ROM mode hints: text + its ROM file offset. One or more covers more of the alphabet."),
+      fromScreen: z.array(z.object({
+        text: z.string().describe("The string visible on screen now."),
+        row: z.number().int().min(0).describe("Tile row of the text's first character (8px tiles from the top — e.g. row 13)."),
+        col: z.number().int().min(0).describe("Tile column of the first character (8px tiles from the left)."),
+      })).optional().describe("LIVE mode hints: text + its tile (row,col) in the rendered nametable. Reads tile IDs from live VRAM — no ROM offset needed."),
+      which: z.number().int().min(0).max(3).default(0).describe("NES live mode: which nametable (0-3). Default 0."),
       alphabet: z.string().optional().describe("Which characters to track in unknownChars[]. Default: A-Z, 0-9, space, ©."),
     },
     safeTool(async (args) => {
+      if (args.fromScreen && args.fromScreen.length) {
+        const r = await learnFontMapFromScreen({ ...args, sessionKey });
+        return jsonContent(r);
+      }
+      if (!args.knownStrings || !args.knownStrings.length) {
+        throw new Error("learnFontMap: pass `knownStrings:[{text, offset}]` (ROM mode) or `fromScreen:[{text, row, col}]` (live mode).");
+      }
+      if (!args.romPath) throw new Error("learnFontMap: `knownStrings` (ROM mode) needs `romPath`.");
       const r = await learnFontMapCore(args);
       return jsonContent(r);
     }),
