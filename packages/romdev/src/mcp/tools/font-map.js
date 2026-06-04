@@ -13,11 +13,11 @@
 //
 // All three are platform-agnostic — the mapping is per-ROM, not per-
 // platform. The `platform` arg is only used for CPU-address translation
-// in findEncodedText (reuses mapNesAddress/mapSnesAddress from disasm).
+// in findEncodedText (NES/GB/GBC bank-aware, Genesis flat; SNES is mapper-
+// dependent and left to fileOffset).
 
 import { readFile, writeFile } from "node:fs/promises";
 import { jsonContent, safeTool } from "../util.js";
-import { mapNesAddress, mapSnesAddress } from "./disasm.js";
 
 /**
  * Map a RAW .nes file offset to its real 6502 CPU address + 16KB PRG bank.
@@ -245,7 +245,20 @@ async function findEncodedTextCore({ romPath, text, fontMap, fontMapPath, platfo
     if (platform === "nes") {
       const m = nesFileOffsetToCpu(i, (data[4] || 0) * 16384);
       if (m) { cpuAddress = m.cpuAddress; bank = m.bank; }
+    } else if (platform === "gb" || platform === "gbc") {
+      // GB ROM: raw 16KB banks (no header). Bank 0 is fixed at $0000-$3FFF;
+      // any other bank maps to $4000-$7FFF when switched in.
+      bank = i >> 14;
+      const inBank = i & 0x3FFF;
+      cpuAddress = "$" + ((bank === 0 ? 0x0000 : 0x4000) + inBank).toString(16).toUpperCase();
+    } else if (platform === "genesis" || platform === "megadrive" || platform === "md") {
+      // Genesis: flat 68k ROM mapped at $000000, no header — file offset IS the
+      // CPU address.
+      cpuAddress = "$" + i.toString(16).toUpperCase();
     }
+    // SNES is intentionally left null: file-offset → CPU address depends on the
+    // LoROM/HiROM mapper (and a possible 512B copier header), so a correct value
+    // needs the mapper — not guessed here. Use prgFileOffset/fileOffset for SNES.
 
     // PRG-frame offset (NES: subtract the 16-byte iNES header). Useful
     // because patchFile against `prg.bin` (from extractCart) needs the
@@ -267,8 +280,8 @@ async function findEncodedTextCore({ romPath, text, fontMap, fontMapPath, platfo
       prgFileOffset,
       prgFileOffsetDec,
       cpuAddress,
-      // NES: the 16KB PRG bank this byte lives in. cpuAddress is the in-bank
-      // 6502 address (valid only when this bank is mapped in) — pair them when
+      // NES/GB/GBC: the 16KB bank this byte lives in. cpuAddress is the in-bank
+      // CPU address (valid only when this bank is mapped in) — pair them when
       // feeding disassembleRom({ startAddress: cpuAddress, bank }).
       ...(bank != null ? { bank } : {}),
       contextBefore: ctxBefore,
@@ -357,7 +370,7 @@ export function registerFontMapTools(server, z) {
       text: z.string().describe("Text to search for."),
       fontMap: z.record(z.string(), z.number().int().min(0).max(255)).optional(),
       fontMapPath: z.string().optional(),
-      platform: z.enum(["nes", "snes", "genesis", "megadrive", "md", "gb", "gbc"]).optional().describe("Optional — enables CPU-address translation in the response."),
+      platform: z.enum(["nes", "snes", "genesis", "megadrive", "md", "gb", "gbc"]).optional().describe("Optional — enables CPU-address translation. NES/GB/GBC return a bank-aware in-bank cpuAddress + `bank` (16KB banks); Genesis returns a flat cpuAddress (= file offset). SNES is mapper-dependent (LoROM/HiROM) so cpuAddress is left null — use prgFileOffset/fileOffset."),
       maxResults: z.number().int().min(1).max(256).default(16),
     },
     safeTool(async (args) => {
