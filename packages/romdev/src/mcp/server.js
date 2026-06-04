@@ -32,6 +32,7 @@ import { localhostHostValidation } from "@modelcontextprotocol/sdk/server/middle
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { registerTools } from "./tools/index.js";
+import { stopAllPlaytest, stopPlaytestForSession } from "./tools/playtest.js";
 import { clearHost } from "./state.js";
 import { log } from "./log.js";
 import { attachObserver } from "../observer/server.js";
@@ -215,6 +216,9 @@ async function main() {
       },
     });
     transport.onclose = () => {
+      // Close THIS session's playtest window (if any) — one agent disconnecting
+      // tears down only its own window/host; other agents' games keep running.
+      try { stopPlaytestForSession(sessionKey); } catch {}
       try { clearHost(sessionKey); } catch {}
       try { observer.sessionDisconnected(sessionKey); } catch {}
       if (transport.sessionId) {
@@ -392,6 +396,11 @@ async function main() {
   const shutdown = async (sig) => {
     clearInterval(reaper);
     log.info(`\n[mcp] ${sig} received, draining ${transports.size} session(s)...`);
+    // Close ALL open playtest windows (every session) FIRST — the server must
+    // not leave emulator windows running that it opened. They're in-process so a
+    // clean exit tears them down anyway, but closing them explicitly here avoids
+    // a flash of dead windows and frees SDL before we drop the event loop.
+    try { stopAllPlaytest(); } catch {}
     for (const t of transports.values()) {
       try { await t.close(); } catch {}
     }
@@ -402,6 +411,9 @@ async function main() {
   };
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
+  // Last-resort: on ANY exit path (including ones that bypass `shutdown`),
+  // make sure the in-process window is torn down. exit handlers must be sync.
+  process.on("exit", () => { try { stopAllPlaytest(); } catch {} });
 
   // Idle-session reaper. MCP transports don't time themselves out, and a
   // client that restarts/crashes/abandons its tab never sends a clean
