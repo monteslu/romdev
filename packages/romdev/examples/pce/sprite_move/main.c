@@ -98,7 +98,7 @@ static void fill_bat(void) {
     for (r = 0; r < 32; ++r) {
         vram_set_write_addr((u16)(BAT_VRAM + r * 32));
         for (col = 0; col < 32; ++col) {
-            e = ((r ^ col) & 1) ? ea : eb;     /* checkerboard */
+            e = ea;     /* solid background so the sprite stands out */
             VDC_DATA_LO = (u8)(e & 0xFF);
             VDC_DATA_HI = (u8)(e >> 8);
         }
@@ -117,7 +117,7 @@ void main(void) {
     vce_set_color(2, PCE_RGB(0, 2, 2));   /* BG color 2: dark teal     */
     /* Sprite sub-palette 0 lives at VCE 256..271. */
     vce_set_color(256, PCE_RGB(0, 0, 0)); /* sprite transparent        */
-    vce_set_color(257, PCE_RGB(7, 7, 0)); /* sprite color 1: yellow    */
+    vce_set_color(257, PCE_RGB(7, 7, 7)); /* sprite color 1: white     */
     vce_set_color(258, PCE_RGB(7, 1, 0)); /* sprite color 2: red       */
 
     /* --- patterns ---------------------------------------------------------- */
