@@ -37,7 +37,18 @@ export function attachObserver(app, ...httpServers) {
   // Serve the static SPA. Read+send the HTML directly rather than res.sendFile
   // — sendFile's internal `send` throws NotFoundError on the absolute package
   // path under npm/npx installs (404 even though the file is right there).
-  const html = readFileSync(path.join(__dirname, "livestream.html"), "utf8");
+  // Inject the package version (the same single-source-of-truth read the MCP
+  // serverInfo uses) so the page always shows the running server's version —
+  // never hardcoded, never drifting from the published package.
+  const version = (() => {
+    try {
+      return JSON.parse(readFileSync(path.resolve(__dirname, "..", "..", "package.json"), "utf8")).version;
+    } catch {
+      return "";
+    }
+  })();
+  const html = readFileSync(path.join(__dirname, "livestream.html"), "utf8")
+    .replace("__ROMDEV_VERSION__", version ? `v${version}` : "");
   const serveHtml = (req, res) => res.type("html").send(html);
   app.get("/livestream", serveHtml);
   app.get("/livestream/", serveHtml);
