@@ -193,6 +193,23 @@ test("MSX asset pipeline: screen-2 tile codec round-trips (2 colors/row)", async
   assert.deepEqual([...dec], [...tile], "MSX screen-2 round-trip is not identity for a 2-color row");
 });
 
+test("getMemoryMap: sdld .map path categorizes MSX (Z80) symbols by region", async () => {
+  const { parseSdldMap } = await import("../src/toolchains/sdcc/sdcc.js");
+  const main = "unsigned char score; unsigned int hiscore; void main(void){ score=1; hiscore=2; for(;;); }";
+  const crt0 = await readFile(path.join(PLAT, "msx", "lib", "c", "msx_crt0.s"), "utf8");
+  let build;
+  for (let a = 0; a < 3 && !build?.symbols; a++) {
+    build = await buildForPlatform({ platform: "msx", sources: { "main.c": main, "msx_crt0.s": crt0 }, crt0: ".module empty\n", sourceName: "main.c" });
+  }
+  const syms = parseSdldMap(build.symbols);
+  // The fix: user globals (with a trailing "defined in module" column) are now
+  // captured, not just the area markers.
+  const byName = Object.fromEntries(syms.map((s) => [s.name, s.address]));
+  assert.equal(byName.score, 0xc000, "score should be in work RAM at $C000");
+  assert.equal(byName.hiscore, 0xc001, "hiscore should follow at $C001");
+  assert.equal(byName.main, 0x4010, "main should be in cart ROM at $4010");
+}, { timeout: 90000 });
+
 test("PCE imageToTilemap: emits deduped tiles + BAT + VCE palette", async () => {
   const { pceImageToTilemap } = await import("../src/platforms/pce/image-to-tilemap.js");
   const { PNG } = await import("pngjs");
