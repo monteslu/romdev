@@ -4,7 +4,7 @@ You are reading this because romdev is connected. This is the orientation. Read 
 
 ## What this server does
 
-Drives the full homebrew ROM dev loop for 14 retro game platforms (NES, SNES, Game Boy, Game Boy Color, Game Boy Advance, Genesis, Sega Master System, Game Gear, Atari 2600/7800, Atari Lynx, Commodore 64, PC Engine / TurboGrafx-16, and MSX / MSX2). Build → run → screenshot → inspect → patch → iterate. Also a strong reverse-engineering kit: disassemble existing ROMs (byte-exact rebuildable projects), find the EXACT instruction that wrote a RAM byte (`findWriter`, a core-level write watchpoint), look up + apply + create cheats (a free labeled RAM/code map for known ROMs — and a fun bonus), convert assets, study patterns from real games, drive emulator state for scripted testing. Bundled WASM toolchains and emulator cores — no system dependencies, no installs.
+Drives the full homebrew ROM dev loop for 14 retro game platforms (NES, SNES, Game Boy, Game Boy Color, Game Boy Advance, Genesis, Sega Master System, Game Gear, Atari 2600/7800, Atari Lynx, Commodore 64, PC Engine / TurboGrafx-16, and MSX / MSX2). Build → run → screenshot → inspect → patch → iterate. Also a strong reverse-engineering kit: disassemble existing ROMs (byte-exact rebuildable projects), find the EXACT instruction that wrote a RAM byte (`findWriter`, a core-level write watchpoint), and — the cheapest RE move of all — look up cheats (`gameCheats`: a free, crowd-sourced labeled RAM/code map for known ROMs that answers "which byte holds X?" without disassembling), apply + create cheats, convert assets, study patterns from real games, drive emulator state for scripted testing. Bundled WASM toolchains and emulator cores — no system dependencies, no installs.
 
 You drive the work. The human is a director — they may want a game, a ROM disassembly, a tool-assisted reverse-engineering session, or anything else this server can do.
 
@@ -61,6 +61,32 @@ Skip playtest only when there's clearly no human in the loop: CI runs, automated
 - `advanced` — runUntil, watchMemory / runUntilWrite, **`findWriter`** (the EXACT instruction that wrote a byte, via a core watchpoint — fixes the frame-sampled-PC problem), input recording
 
 **"Disassemble this NES ROM"** is now just: `disassembleRom({path, startAddress, length})`. No discovery step.
+
+### Romhacking / reverse-engineering: start with `gameCheats` — it's a free RAM map
+
+When the task is to **modify an existing game** ("give the player infinite lives",
+"change this text", "find where the score lives"), the cheapest first move is
+almost always `gameCheats({path})`, NOT disassembly. The bundled cheat database is
+a crowd-sourced **labeled memory map** for thousands of known ROMs: each RAM cheat
+is a named address (`"Infinite Health" → $00CD`), each Game Genie / code cheat is a
+named code site (address + value). It answers the most expensive RE question —
+*"which byte or routine holds X?"* — for free, in one call, before you disassemble
+or hunt with watchMemory. This is a serious RE tool, not a toy.
+
+The canonical romhacking loop:
+1. **`identifyRom({path})`** → platform + title (sniffs zip-wrapped ROMs too).
+2. **`gameCheats({path})`** → the free labeled RAM/code map for THIS game. Filter
+   by keyword (`filter:"lives"`). Treat labels as *probable* (matched by name, not
+   verified CRC) — see step 3.
+3. **VERIFY the label** before patching: `writeMemory` the address live and watch
+   the effect, or `watchMemory`/`runUntilWrite` to confirm what touches it. Static
+   "matches the pattern" ≠ "actually runs."
+4. **Patch**: `patchFile`/`patchRom` (with `expect:` bytes so a wrong-revision
+   write is refused) — or apply the cheat live with `applyCheat` to prototype.
+
+Only drop to `disassembleRom` / `findReferences` / `findWriter` when cheats don't
+cover what you need (custom logic, compressed data, an address no cheat names).
+Those are powerful, but they're step 2 *after* the free map, not step 1.
 
 **If your session ever returns a 404 "session not found"** (the server restarted), your MCP client should auto-reconnect (re-`initialize`) — and the fresh session again has every tool loaded. You don't re-arm anything. If your client does NOT auto-reconnect on 404, restart its MCP connection once; that's a client limitation, not a server step.
 
