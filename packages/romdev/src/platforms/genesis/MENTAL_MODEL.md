@@ -169,6 +169,11 @@ SND_PSG_*  // legacy 4-channel PSG playback
 Hand-rolling YM2612 register pokes is possible but rarely worth it
 unless you're building a music engine.
 
+**Debugging sound:** `getAudioState({chip:"ym2612"})` returns a raw-blob snapshot
+of the FM chip (gpgx's struct isn't safely per-channel decodable — useful for
+frame-to-frame diffing), and `getAudioState({chip:"psg"})` decodes the SN76489
+(3 tone + 1 noise channel state, same chip as SMS/GG).
+
 ## ROM layout
 
 ```
