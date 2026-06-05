@@ -1,22 +1,25 @@
-// Disassembly → native-assembler reassembly translator.
+// Byte-exact disassemble → reassemble using NATIVE tools end to end.
 //
-// romdev's disassemblers (da65 / z80dasm / sm83dasm / m68kdasm) all emit the
-// same house style: a `.setcpu` line, `Lxxxxxx:` labels at referenced targets,
-// instruction lines, and a trailing `; ADDR BB BB ...` comment carrying the
-// original bytes for that line. That syntax is cc65-flavored and does NOT feed
-// straight into the *native* assemblers (sjasm / rgbds / vasm / asar).
+// `reassembleForPlatform` is the entry point. It disassembles with the native
+// binutils objdump for the CPU and reassembles with the matching native
+// assembler, healing any instruction the assembler rejects to an exact `.byte`:
+//   - 6502/65816 (NES/SNES/Atari/C64/PCE/Lynx) → da65 → ca65/ld65 (reassembleCc65Native)
+//   - m68k (Genesis)                            → objdump → m68k-elf-as/ld/objcopy
+//   - arm (GBA)                                 → objdump → arm-none-eabi-as/ld/objcopy
+//   - z80 (SMS/GG/MSX) + gbz80 (GB/GBC)         → objdump → z80-elf-as + objcopy
+//     (gbz80 objects can't be ld-linked, so as + `.org` + objcopy)
 //
-// This module converts that output into a chosen assembler's syntax so the
-// disassembly RE-ASSEMBLES BYTE-EXACT. The guaranteeing trick: every line's
-// original bytes are recoverable from its address-comment, so any line we
-// can't translate (a disassembler that emitted a broken/partial mnemonic, or
-// an instruction the assembler rejects) FALLS BACK to a data directive of the
-// exact original bytes. The output is therefore always byte-exact, and as
-// readable as the disassembler was able to make it.
+// objdump and `as` share GNU syntax, so the GNU CPUs need NO instruction
+// translation — objdump's lines feed straight back into `as`. The byte-exact
+// guarantee is the heal loop: assemble, diff vs the original, pin any
+// mismatching/rejected line to a `.byte` of its exact bytes, retry. Always
+// byte-exact; readability = how many lines stayed instructions.
 //
-// Verified byte-exact round-trips: m68k/vasm (Genesis), z80/sjasm (SMS/GG),
-// sm83/rgbds (GB/GBC). 6502/cc65 (NES/C64/Atari) uses the da65 `.org` path in
-// disasm.js directly (cc65 reassembles its own output natively).
+// NOTE: the dialect/translator helpers further down (translateDisasm,
+// reassembleByteExact, the CA65/VASM_M68K/SJASM_Z80/RGBDS_SM83 dialects, …) are
+// LEGACY/DEAD — the translation layer for the old hand-rolled JS decoders, which
+// are now deleted. reassembleForPlatform no longer calls them; left only until a
+// dead-code sweep removes them.
 
 /**
  * @typedef {Object} AsmDialect
