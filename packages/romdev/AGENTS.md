@@ -265,12 +265,17 @@ Different platforms have different levels of MCP-exposed debugging — different
 > families), **`runUntilPC`** (execution breakpoint — freeze the CPU AT an
 > instruction and read its registers), **`runUntilRead`** (the exact PC that read
 > a byte — read-side mirror of findWriter), **`stepInstruction`** (CPU single-step),
+> **`setRegister`** (write a CPU register), **`callSubroutine`/`decompressWith`**
+> (drive the ROM's OWN routine — e.g. its decompressor — and capture the output),
+> **`watchRange`** (log EVERY read/write hitting an address range — discovery),
+> **`logPCRange`** (coverage trace — distinct PCs executed in a window),
 > `gameCheats`/`searchCheats`/`applyCheat`/`makeCheat` (cheat
 > lookup/apply/create), `getCPUState`, `searchValue`/`searchNext`/`readCartRom`/`classifyRegion`,
 > `snapshotMemory`/`diffMemory`/`diffState`, `watchMemory`/`runUntilWrite`.
 > `getAudioState` covers the 12 systems with a sound chip (all but Atari 2600/7800).
-> (PC Engine has no write watchpoint, so `findWriter` is unavailable there — the
-> three breakpoint tools still work; anchor with `runUntilRead` or a known address.)
+> **`watchDma`** (which DMA wrote a VRAM tile, and from where) is **Genesis-only**
+> (VDP DMA) — elsewhere use `findWriter`/`watchRange`. All other RE tools above
+> work on every platform that has the register-write/watch core hooks (all 14).
 > `disassembleRom` + `findReferences` + `disassembleProject` cover **all 14** — every
 > CPU family disassembles through a native binutils `objdump` (WASM), and
 > `disassembleProject` reassembles byte-exact through the matching native

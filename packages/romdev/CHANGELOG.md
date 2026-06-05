@@ -2,6 +2,46 @@
 
 All notable changes to `romdev-mcp`. Dates are release dates.
 
+## 0.6.0
+
+Reverse-engineering round 2 — the tools that collapse the two walls a real
+romhack hits: **compressed assets** and **finding the unknown routine**. All on
+**all 14 platforms** (every CPU family), feature-detected with clean `notSupported`
+where a core can't. Requires the bumped core packages.
+
+### Added — drive the ROM's own code (item 1)
+- **`callSubroutine({ pc, regs, sandbox })`** — set up the CPU (registers by reg-id,
+  PC) and run a subroutine until it returns, then read back what it produced.
+  Sandboxed (snapshot+restore) by default. The general RE primitive.
+- **`decompressWith({ entryPC, sourceAddress, destAddress })`** — thin wrapper for
+  the decompressor shape (A0=src/A1=dst). Run the game's OWN codec and `readMemory`
+  the output — instead of reimplementing an undocumented LZ format. The codec wall,
+  gone.
+- **`setRegister({ regId, value })`** — write a CPU register (inverse of getCPUState).
+  Per-CPU reg-id conventions (m68k 0-7=D,8-15=A,16=PC,18=SP; 6502 0=A,1=X,2=Y,3=P,
+  4=SP,16=PC; SM83/Z80 0=A,1=F,2-7=BCDEHL,16=PC,18=SP; 65816 +5=DB,6=D; ARM 0-15=
+  r0-r15,16=CPSR). The host's `callSubroutine` knows each CPU's stack discipline
+  (page-stack vs predecrement, return width, the 6502/65816 RTS+1 quirk, ARM
+  pipeline flush), so it drives routines correctly on every core, not just Genesis.
+
+### Added — discovery (item 2)
+- **`watchRange({ start, end, kind })`** — log EVERY read/write hitting an address
+  range (not stop-on-first) as `{pc,address,value}`, with a `distinctPCs` summary.
+  The fix for "I don't know which PC touches this" — watch the whole pool and SEE
+  the routine instead of probing single addresses.
+- **`logPCRange({ start, end, frames })`** — coverage trace: every DISTINCT PC that
+  executed in a window. FIND an unknown renderer by seeing what runs, not guessing.
+
+### Added — targeted DMA (item 3, Genesis)
+- **`watchDma({ vramDest })`** — every mem→VDP DMA with its VRAM destination + ROM
+  source + length. "Which DMA wrote the tile at VRAM 0xNNNN, and from where?" — the
+  precise version of `traceVramSource`, the way to catch a DMA'd (not CPU-written)
+  name/portrait bitmap. Genesis-only (VDP DMA); `notSupported` elsewhere.
+
+### Also
+- **PC Engine (geargrafx) gained a write watchpoint** — so `findWriter` +
+  `watchRange`-write now work there too (round 1 had read-watch + breakpoint only).
+
 ## 0.5.0
 
 Execution breakpoints — the RE primitive that turns "infer for hours" into "read

@@ -121,15 +121,52 @@ readCartRom / readMemory at [A0] → follow the pointer
 ```
 
 Companion tools (all 14 platforms; feature-detect, `notSupported` if a core
-lacks it — only PC Engine, which has no findWriter, but its breakpoints work):
+lacks a hook):
 - **`runUntilRead({address})`** — the read-side mirror of findWriter: the EXACT
   instruction that READ an address (who *consumes* a value). Use it to anchor on
   a known data byte and find its reader.
 - **`stepInstruction()`** — CPU single-step; pair with `getCPUState` to watch
   registers change one instruction at a time through a routine.
+- **`setRegister({regId, value})`** — write a CPU register (inverse of getCPUState;
+  for setting up a callSubroutine by hand or forcing a path).
 
 Also: a breakpoint PC is a **guaranteed instruction boundary** — feed it to
 `disassembleRom({startAddress})` to avoid the mid-instruction-garbage trap.
+
+---
+
+## 5c. Compressed assets — drive the ROM's OWN decompressor (the codec wall)
+
+When a name/portrait/map is **LZ/RLE-compressed** (you proved the on-screen bytes
+aren't a flat table — `runUntilRead` on the suspected pool got 0 hits), don't
+reimplement the codec. Find the game's decompressor (trace a DMA/copy back to it,
+or `logPCRange`/`runUntilRead` near the asset), then RUN it:
+
+```
+decompressWith({ entryPC, sourceAddress, destAddress })  → runs the codec
+readMemory at destAddress                                → the decompressed bytes
+```
+
+Or the general form for any reg-args routine — `callSubroutine({ pc, regs })` sets
+the registers (m68k 8=A0, 9=A1, 0=D0; per-CPU reg-ids in `setRegister`'s docs),
+pushes a sentinel return, and runs until it returns. Most of these formats have a
+"stored/uncompressed" escape opcode, so once you can SEE the decompressed output
+you can usually craft a replacement by hand. (sandbox:false leaves the dest buffer
+live for readMemory; sandbox:true restores the game untouched.)
+
+## 5d. Find the UNKNOWN routine — discovery (the other half)
+
+Breakpoints are great once you KNOW the address. To FIND it:
+- **`watchRange({ start, end, kind })`** — log EVERY `{pc,address,value}` that reads
+  or writes anywhere in a range (not stop-on-first). Watch the whole name pool / a
+  struct / a flag region and SEE every PC that touches it, instead of probing single
+  addresses. `distinctPCs` is the actionable summary.
+- **`logPCRange({ start, end, frames })`** — coverage trace: every DISTINCT PC that
+  EXECUTED in an address window. "What code runs in this bank during the scoreboard
+  draw?" → disassembleRom the PCs it returns.
+- **`watchDma({ vramDest })`** (Genesis) — which DMA wrote the tile at a VRAM dest,
+  and the ROM SOURCE it came from. The targeted version of `traceVramSource`; the
+  way to catch a DMA'd (not CPU-written) name/portrait bitmap `findWriter` can't see.
 
 ---
 
@@ -162,6 +199,10 @@ transition.
 | Read a register AT an instruction | `runUntilPC({address})` → freeze → `getCPUState` |
 | Which instruction READ a byte | `runUntilRead({address})` (read-side findWriter) |
 | Single-step the CPU | `stepInstruction` (+ `getCPUState` to watch regs) |
+| Set a CPU register | `setRegister({regId, value})` |
+| Decompress a compressed asset | `decompressWith` / `callSubroutine` (run the ROM's own codec) |
+| FIND the unknown routine touching X | `watchRange({start,end})` (all hits) / `logPCRange` (coverage) |
+| Which DMA wrote a VRAM tile + its source (Genesis) | `watchDma({vramDest})` |
 | Where did a VRAM graphic come from (Genesis) | `traceVramSource` (ROM offset of the DMA source) |
 | Drive a menu fast | `navigate` (advances on screen change) |
 | Free RAM map for a known game | `gameCheats` / `searchCheats` |
