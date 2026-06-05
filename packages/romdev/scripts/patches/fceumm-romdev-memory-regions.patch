@@ -1,5 +1,5 @@
 diff --git a/src/drivers/libretro/libretro.c b/src/drivers/libretro/libretro.c
-index 96dece6..f88f898 100644
+index 96dece6..36aee3f 100644
 --- a/src/drivers/libretro/libretro.c
 +++ b/src/drivers/libretro/libretro.c
 @@ -262,6 +262,17 @@ static unsigned libretro_msg_interface_version = 0;
@@ -20,7 +20,7 @@ index 96dece6..f88f898 100644
  
  /* overclock the console by adding dummy scanlines to PPU loop
   * disables DMC DMA and WaveHi filling for these dummies
-@@ -3946,6 +3957,156 @@ unsigned retro_get_region(void)
+@@ -3946,6 +3957,248 @@ unsigned retro_get_region(void)
     return FSettings.PAL ? RETRO_REGION_PAL : RETRO_REGION_NTSC;
  }
  
@@ -143,6 +143,98 @@ index 96dece6..f88f898 100644
 +   if (clearHit) { romdev_pc_hit = 0; }
 +}
 +
++/* romdev register read/write — the inverse of getCPUState, used by the host's
++ * callSubroutine / setRegister (set A/X/Y/PC, push a sentinel return, run to it,
++ * capture the output). romdev 6502 reg-id convention (STABLE across all cores so
++ * the host passes the same ids): 0=A, 1=X, 2=Y, 3=P(status), 4=SP, 16=PC. Maps
++ * onto fceumm's X6502 struct (X.A/X.X/X.Y/X.P/X.S/X.PC). Returns 0 on success,
++ * -1 on an unknown id from setreg; getreg returns the value (0 for unknown). The
++ * NES PC is a flat 16-bit address (no bank arg) — fine for RE; the write-watch
++ * reports prgOffset separately if the bank matters. */
++int romdev_setreg(int regId, unsigned int value)
++{
++   switch (regId) {
++      case 0:  X.A  = (uint8_t)value;  return 0;  /* A */
++      case 1:  X.X  = (uint8_t)value;  return 0;  /* X */
++      case 2:  X.Y  = (uint8_t)value;  return 0;  /* Y */
++      case 3:  X.P  = (uint8_t)value;  return 0;  /* P (status) */
++      case 4:  X.S  = (uint8_t)value;  return 0;  /* SP */
++      case 16: X.PC = (uint16_t)value; return 0;  /* PC */
++      default: return -1;
++   }
++}
++
++unsigned int romdev_getreg(int regId)
++{
++   switch (regId) {
++      case 0:  return (unsigned int)X.A;
++      case 1:  return (unsigned int)X.X;
++      case 2:  return (unsigned int)X.Y;
++      case 3:  return (unsigned int)X.P;
++      case 4:  return (unsigned int)X.S;
++      case 16: return (unsigned int)X.PC;
++      default: return 0;
++   }
++}
++
++/* romdev RANGE watch (discovery) — log every read/write in [lo,hi]. mode: 1=read
++ * 2=write 3=both. Arm clears the buffer. State + the read/write hooks live in
++ * x6502.c (ROMDEV_RANGE_6502). */
++extern unsigned int  romdev_range_lo, romdev_range_hi;
++extern int           romdev_range_enabled, romdev_range_mode;
++extern unsigned int  romdev_range_pc[], romdev_range_addr[];
++extern unsigned char romdev_range_val[];
++extern unsigned int  romdev_range_count, romdev_range_stored;
++
++void romdev_range_set(unsigned int lo, unsigned int hi, int mode, int enabled)
++{
++   romdev_range_lo = lo; romdev_range_hi = hi;
++   romdev_range_mode = mode ? mode : 3;
++   romdev_range_enabled = enabled ? 1 : 0;
++   romdev_range_count = 0; romdev_range_stored = 0;
++}
++
++/* Drain up to `max` events into out[] as packed triples [pc,addr,val,...]
++ * (val in the low byte of its uint32 slot). Returns events written. out2 (size 2)
++ * gets [totalSeen, stored] so the caller knows if the ring overflowed. */
++unsigned int romdev_range_get(unsigned int *out, unsigned int max, unsigned int *out2)
++{
++   unsigned int i, n = romdev_range_stored;
++   if (out2) { out2[0] = romdev_range_count; out2[1] = romdev_range_stored; }
++   if (!out) return 0;
++   if (n > max) n = max;
++   for (i = 0; i < n; i++) {
++      out[i*3 + 0] = romdev_range_pc[i];
++      out[i*3 + 1] = romdev_range_addr[i];
++      out[i*3 + 2] = (unsigned int)romdev_range_val[i];
++   }
++   return n;
++}
++
++/* romdev PC COVERAGE log (discovery) — distinct in-window PCs over a run. State +
++ * the execute-loop hook live in x6502.c. */
++extern int           romdev_cov_enabled;
++extern unsigned int  romdev_cov_lo, romdev_cov_hi;
++extern unsigned int  romdev_cov_pcs[], romdev_cov_count, romdev_cov_total;
++
++void romdev_cov_set(unsigned int lo, unsigned int hi, int enabled)
++{
++   romdev_cov_lo = lo; romdev_cov_hi = hi;
++   romdev_cov_enabled = enabled ? 1 : 0;
++   romdev_cov_count = 0; romdev_cov_total = 0;
++}
++
++/* Copy up to `max` distinct PCs into out[]. out2 (size 2) gets [distinct,total]. */
++unsigned int romdev_cov_get(unsigned int *out, unsigned int max, unsigned int *out2)
++{
++   unsigned int i, n = romdev_cov_count;
++   if (out2) { out2[0] = romdev_cov_count; out2[1] = romdev_cov_total; }
++   if (!out) return 0;
++   if (n > max) n = max;
++   for (i = 0; i < n; i++) out[i] = romdev_cov_pcs[i];
++   return n;
++}
++
 +/* rom-dev-mcp extension: custom memory region IDs above libretro standard.
 + * Lets the host inspect NES PPU + APU state for agent-driven dev workflows.
 + * IDs mirror those used by snes9x/gpgx patches (same project). */
@@ -177,7 +269,7 @@ index 96dece6..f88f898 100644
  void *retro_get_memory_data(unsigned type)
  {
     uint8_t* data;
-@@ -3965,6 +4126,56 @@ void *retro_get_memory_data(unsigned type)
+@@ -3965,6 +4218,56 @@ void *retro_get_memory_data(unsigned type)
        case RETRO_MEMORY_SYSTEM_RAM:
           data = RAM;
           break;
@@ -234,7 +326,7 @@ index 96dece6..f88f898 100644
        default:
           data = NULL;
           break;
-@@ -3992,6 +4203,13 @@ size_t retro_get_memory_size(unsigned type)
+@@ -3992,6 +4295,13 @@ size_t retro_get_memory_size(unsigned type)
        case RETRO_MEMORY_SYSTEM_RAM:
           size = 0x800;
           break;
@@ -277,10 +369,10 @@ index e1c6438..e925205 100644
  static uint32_t DMCAddress = 0;
  static int32_t DMCSize = 0;
 diff --git a/src/x6502.c b/src/x6502.c
-index 61b83e0..df515a4 100644
+index 61b83e0..dff7c31 100644
 --- a/src/x6502.c
 +++ b/src/x6502.c
-@@ -29,6 +29,49 @@
+@@ -29,6 +29,108 @@
  X6502 X;
  uint8_t encryptOpcodes =0;
  
@@ -327,10 +419,69 @@ index 61b83e0..df515a4 100644
 +uint32_t      romdev_pc_last_pc = 0xFFFFFFFF;
 +uint32_t      romdev_pc_hits    = 0;
 +
++/* romdev RANGE watch (discovery): log EVERY {pc,addr,value} that reads or writes
++ * an address in [lo,hi] over a window — not stop-on-first. Hooked into the same
++ * read/write paths (RdMemNorm/RdRAMFast + WrMemNorm/WrRAMFast) as the single-
++ * address watch above. Ring buffer; the host drains it via romdev_range_get. The
++ * pc recorded is X.PC, the executing instruction. */
++#define ROMDEV_RANGE_CAP 4096
++unsigned int  romdev_range_lo      = 0;
++unsigned int  romdev_range_hi      = 0;
++int           romdev_range_enabled = 0;
++int           romdev_range_mode    = 0;     /* 1=read, 2=write, 3=both */
++unsigned int  romdev_range_pc  [ROMDEV_RANGE_CAP];
++unsigned int  romdev_range_addr[ROMDEV_RANGE_CAP];
++unsigned char romdev_range_val [ROMDEV_RANGE_CAP];
++unsigned int  romdev_range_count   = 0;     /* total events seen (may exceed CAP) */
++unsigned int  romdev_range_stored  = 0;     /* events actually stored (<= CAP) */
++
++/* romdev PC COVERAGE log (discovery): record DISTINCT PCs executed within an
++ * address window [lo,hi] over a run — "what code runs here?". Linear de-dup
++ * against the stored set (cheap for the small windows this targets). */
++#define ROMDEV_COV_CAP 8192
++unsigned int  romdev_cov_lo      = 0;
++unsigned int  romdev_cov_hi      = 0;
++int           romdev_cov_enabled = 0;
++unsigned int  romdev_cov_pcs[ROMDEV_COV_CAP];
++unsigned int  romdev_cov_count   = 0;       /* distinct PCs stored (<= CAP) */
++unsigned int  romdev_cov_total   = 0;       /* total in-range dispatches seen */
++
++/* Append one range-watch event (called from the read/write hooks via the macro
++ * ROMDEV_RANGE_6502 below). */
++void romdev_range_log(unsigned int pc, unsigned int addr, unsigned char val)
++{
++	romdev_range_count++;
++	if (romdev_range_stored < ROMDEV_RANGE_CAP) {
++		romdev_range_pc  [romdev_range_stored] = pc;
++		romdev_range_addr[romdev_range_stored] = addr;
++		romdev_range_val [romdev_range_stored] = val;
++		romdev_range_stored++;
++	}
++}
++
++/* Record a distinct in-window PC for the coverage log. */
++void romdev_cov_log(unsigned int pc)
++{
++	unsigned int i;
++	romdev_cov_total++;
++	for (i = 0; i < romdev_cov_count; i++) if (romdev_cov_pcs[i] == pc) return;
++	if (romdev_cov_count < ROMDEV_COV_CAP) romdev_cov_pcs[romdev_cov_count++] = pc;
++}
++
++/* romdev RANGE watch hook macro for the 6502 read/write paths. `w` is 1 for a
++ * write, 0 for a read; romdev_range_mode 1=read 2=write 3=both. pc is X.PC, the
++ * executing instruction. Cheap when disabled (one int test). */
++#define ROMDEV_RANGE_6502(a, v, w) do { \
++	if (romdev_range_enabled && (romdev_range_mode & ((w) ? 2 : 1)) \
++	    && (unsigned int)(a) >= romdev_range_lo && (unsigned int)(a) <= romdev_range_hi) { \
++		romdev_range_log(X.PC, (unsigned int)(a), (unsigned char)(v)); \
++	} \
++} while (0)
++
  uint32_t timestamp;
  uint32_t sound_timestamp;
  void FP_FASTAPASS(1) (*MapIRQHook)(int a);
-@@ -55,18 +98,33 @@ void FP_FASTAPASS(1) (*MapIRQHook)(int a);
+@@ -55,18 +157,37 @@ void FP_FASTAPASS(1) (*MapIRQHook)(int a);
  }
  
  static INLINE uint8_t RdMemNorm(uint32_t A) {
@@ -339,6 +490,7 @@ index 61b83e0..df515a4 100644
 +	if (romdev_rd_enabled && A == romdev_rd_addr) {
 +		romdev_rd_last_pc = X.PC; romdev_rd_last_val = v; romdev_rd_hits++;
 +	}
++	ROMDEV_RANGE_6502(A, v, 0);
 +	return(_DB = v);
  }
  
@@ -347,6 +499,7 @@ index 61b83e0..df515a4 100644
 +		romdev_wp_last_pc = X.PC; romdev_wp_last_val = V; romdev_wp_hits++;
 +		romdev_wp_last_pc_ptr = (X.PC >= 0x8000) ? Page[(X.PC >> 11) & 31] + X.PC : 0;
 +	}
++	ROMDEV_RANGE_6502(A, V, 1);
  	BWrite[A](A, V);
  }
  
@@ -354,6 +507,7 @@ index 61b83e0..df515a4 100644
 +	if (romdev_rd_enabled && A == romdev_rd_addr) {
 +		romdev_rd_last_pc = X.PC; romdev_rd_last_val = RAM[A]; romdev_rd_hits++;
 +	}
++	ROMDEV_RANGE_6502(A, RAM[A], 0);
  	return(_DB = RAM[A]);
  }
  
@@ -362,13 +516,23 @@ index 61b83e0..df515a4 100644
 +		romdev_wp_last_pc = X.PC; romdev_wp_last_val = V; romdev_wp_hits++;
 +		romdev_wp_last_pc_ptr = (X.PC >= 0x8000) ? Page[(X.PC >> 11) & 31] + X.PC : 0;
 +	}
++	ROMDEV_RANGE_6502(A, V, 1);
  	RAM[A] = V;
  }
  
-@@ -445,6 +503,34 @@ void X6502_Run(int32_t cycles)
+@@ -445,6 +566,43 @@ void X6502_Run(int32_t cycles)
  		}
  
  		_PI = _P;
++
++		/* romdev PC coverage log (discovery): record each DISTINCT in-window PC
++		 * about to execute. Checked here, BEFORE the opcode fetch, so _PC is the
++		 * address of the instruction about to run. Cheap when disabled (one int
++		 * test). */
++		if (romdev_cov_enabled
++		    && (unsigned int)_PC >= romdev_cov_lo
++		    && (unsigned int)_PC <= romdev_cov_hi)
++			romdev_cov_log(_PC);
 +
 +		/* romdev PC breakpoint / single-step: checked here, BEFORE the opcode
 +		 * fetch, so _PC (== pbackus) is the address of the instruction about to
