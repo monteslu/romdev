@@ -8,6 +8,14 @@ import { PNG } from "pngjs";
 import { getHost } from "../state.js";
 import { imageContent, jsonContent, safeTool, textContent } from "../util.js";
 
+// Consolidation: several handlers in this big shared file are extracted as
+// *Core functions that the consolidated domain tools (palette/tiles/background/
+// sprites/audioDebug, defined in their own router files) import + call. They're
+// assigned inside registerPlatformTools (they close over the module-scope
+// helpers) and exported as live bindings. registerPlatformTools must run first.
+export let inspectPaletteCore = async () => { throw new Error("platform-tools cores not initialized — registerPlatformTools must run first"); };
+export let getPlatformMasterPaletteCore = async () => { throw new Error("platform-tools cores not initialized — registerPlatformTools must run first"); };
+
 // Image-output contract: a PNG image goes to disk (path) OR comes back
 // inline (inline:true). No path + not inline → error. The structured
 // JSON (palette/sprite/tile data) is ALWAYS returned regardless.
@@ -175,19 +183,9 @@ export function registerPlatformTools(server, z, sessionKey) {
     }),
   );
 
-  server.tool(
-    "inspectPalette",
-    "Read the loaded ROM's active color palette as a normalized {index,r,g,b,rawWord}[] list AND a PNG swatch sheet. Supported: NES (32 entries: 16 BG + 16 sprite), SNES (256 entries: BGR555 → expanded to 8bpc RGB), Genesis (64 entries: BGR XX nybbles → 8bpc), GB/GBC (4 grayscale shades for DMG; 32 colors for CGB). All return the same generic shape. " +
-    "NES filters: `area:'bg'` (16 entries) or `area:'sprite'`, and/or `subPalette:0-3` (just those 4 entries of the chosen area) — cuts payload when you only need one sub-palette. " +
-    "The color list is ALWAYS returned. DEFAULT writes the swatch PNG to outputPath and returns {imagePath}; pass inline:true to get the image in the response (you must pass one or the other).",
-    {
-      platform: z.string().optional(),
-      area: z.enum(["bg", "sprite", "all"]).default("all").describe("NES only: 'bg' = entries 0-15, 'sprite' = 16-31, 'all' = both (default). Other platforms ignore this."),
-      subPalette: z.number().int().min(0).max(3).optional().describe("NES only: return just one 4-entry sub-palette (within the chosen `area`). E.g. area:'bg', subPalette:3 → the 4 colors of BG sub-palette 3."),
-      outputPath: z.string().optional().describe("Absolute path to write the swatch PNG to. Required unless inline:true."),
-      inline: z.boolean().default(false).describe("If true, return the swatch image in the response instead of writing to disk. Default false — then outputPath is required."),
-    },
-    safeTool(async ({ platform, area = "all", subPalette, outputPath, inline }) => {
+  // inspectPaletteCore: palette({source:'live'}). Module-scope so the `palette`
+  // router (in lospec.js) can import it; takes sessionKey for getHost.
+  inspectPaletteCore = async ({ platform, area = "all", subPalette, outputPath, inline }, sessionKey) => {
       const host = getHost(sessionKey);
       const p = resolvePlatform(host, platform);
       requireImageTarget(outputPath, inline, "inspectPalette");
@@ -356,8 +354,7 @@ export function registerPlatformTools(server, z, sessionKey) {
       }
 
       throw new Error(`inspectPalette not yet wired for platform '${p}'. Supported: nes, snes, genesis, sms, gg, gb, gbc, atari2600, atari7800, c64, gba, lynx, pce, msx.`);
-    }),
-  );
+  };
 
   server.tool(
     "getCPUState",
@@ -1030,20 +1027,8 @@ export function registerPlatformTools(server, z, sessionKey) {
   // platform's native palette using the PNG returned by getPlatformPalettePng.
   // The MCP tool then does the platform-specific tile/attribute encoding.
 
-  server.tool(
-    "getPlatformPalettePng",
-    "Return the target platform's master palette in one of three formats:\n" +
-    "  - `png` (default): PNG swatch sheet — every distinct color the hardware can display.\n" +
-    "     Use as the ImageMagick -remap target: `magick in.png -dither FloydSteinberg -remap palette.png out.png`.\n" +
-    "  - `lospec`: Lospec JSON `{name, author, colors:[hex_no_hash]}` — drops straight into LibreSprite / lospec.com.\n" +
-    "  - `hex`: text, one `#RRGGBB` per line — universal interchange.\n" +
-    "Pass `outputPath` to write the result to disk and skip the inline base64 / JSON.",
-    {
-      platform: z.string().describe("Target platform id (e.g. 'nes')."),
-      format: z.enum(["png", "lospec", "hex"]).default("png").describe("Output format. 'png' = swatch sheet for ImageMagick dithering (default). 'lospec' = Lospec-compatible JSON for LibreSprite import. 'hex' = one #RRGGBB per line."),
-      outputPath: z.string().optional().describe("If given, write the result to this absolute path. Skips inline payload in the response."),
-    },
-    safeTool(async ({ platform, format, outputPath }) => {
+  // getPlatformMasterPaletteCore: palette({source:'platformMaster'}). Module-scope.
+  getPlatformMasterPaletteCore = async ({ platform, format = "png", outputPath }) => {
       const { getPlatformPaletteRgb, rgbHex, rgbHexLospec } = await import("../../platforms/common/platform-palette.js");
       if (format === "lospec") {
         const colors = getPlatformPaletteRgb(platform).map(([r, g, b]) => rgbHexLospec(r, g, b));
@@ -1088,8 +1073,7 @@ export function registerPlatformTools(server, z, sessionKey) {
         pngBase64: Buffer.from(png).toString("base64"),
         note: "Save these bytes to a .png and pass it to ImageMagick as the -remap target. The resulting dithered image is what imageToTilemap expects. (Pass outputPath next time to skip the inline base64.)",
       });
-    }),
-  );
+  };
 
   server.tool(
     "imageToTilemap",

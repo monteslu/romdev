@@ -312,9 +312,9 @@ const TOOL_OWNER = {
   // memory category
   readMemory: "memory", writeMemory: "memory",
   // debug category
-  inspectPatternTiles: "debug", inspectPalette: "debug", inspectSprites: "debug",
+  inspectPatternTiles: "debug", inspectSprites: "debug",
   inspectBackgroundMap: "debug", convertImageToTiles: "debug",
-  getPlatformPalettePng: "debug", imageToTilemap: "debug",
+  imageToTilemap: "debug",
   getCPUState: "debug", getAudioState: "debug",
   buildSourceWithDebug: "debug", symbols: "debug",
   disasm: "debug",
@@ -334,7 +334,7 @@ const TOOL_OWNER = {
   loadTilemap: "assets", loadAsepriteSheet: "assets", loadGifAnimation: "assets", loadSpriteSheet: "assets",
   cropSpriteSheet: "assets", quantizePngForPlatform: "assets", crossPlatformSpriteImport: "assets",
   captureMetaSprite: "assets", renderMetaSpritePreview: "assets", groupVisibleSprites: "assets", emitMetaSpriteRenderer: "assets", validateGenesisTiles: "assets", extractSpriteFromScreenshot: "assets", previewVisibleSprites: "assets",
-  getLospecPalette: "assets",
+  palette: "debug",
   // project category
   scaffold: "project",
   // show category (was: advanced)
