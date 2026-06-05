@@ -262,10 +262,15 @@ Different platforms have different levels of MCP-exposed debugging — different
 
 > **Universal across ALL 14 platforms:** `findWriter` (the core-level
 > instruction write watchpoint — the exact PC that wrote a RAM byte, all 14 CPU
-> families), `gameCheats`/`searchCheats`/`applyCheat`/`makeCheat` (cheat
+> families), **`runUntilPC`** (execution breakpoint — freeze the CPU AT an
+> instruction and read its registers), **`runUntilRead`** (the exact PC that read
+> a byte — read-side mirror of findWriter), **`stepInstruction`** (CPU single-step),
+> `gameCheats`/`searchCheats`/`applyCheat`/`makeCheat` (cheat
 > lookup/apply/create), `getCPUState`, `searchValue`/`searchNext`/`readCartRom`/`classifyRegion`,
 > `snapshotMemory`/`diffMemory`/`diffState`, `watchMemory`/`runUntilWrite`.
 > `getAudioState` covers the 12 systems with a sound chip (all but Atari 2600/7800).
+> (PC Engine has no write watchpoint, so `findWriter` is unavailable there — the
+> three breakpoint tools still work; anchor with `runUntilRead` or a known address.)
 > `disassembleRom` + `findReferences` + `disassembleProject` cover **all 14** — every
 > CPU family disassembles through a native binutils `objdump` (WASM), and
 > `disassembleProject` reassembles byte-exact through the matching native
