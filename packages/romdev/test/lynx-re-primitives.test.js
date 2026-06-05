@@ -28,7 +28,7 @@ test("lynx RE primitives: setRegister + watchRange + logPCRange (65C02)", { time
   assert.equal(build.ok, true, "lynx build failed:\n" + build.log);
   const load = toJSON(await client.callTool({ name: "loadMedia", arguments: { platform: "lynx", path: build.binaryPath } }));
   assert.equal(load.loaded, true, "loadMedia failed: " + JSON.stringify(load));
-  toJSON(await client.callTool({ name: "stepFrames", arguments: { frames: 30 } }));
+  toJSON(await client.callTool({ name: "frame", arguments: { op: "step",  frames: 30 } }));
 
   const sr = toJSON(await client.callTool({ name: "setRegister", arguments: { regId: 0, value: 0x42 } }));
   assert.equal(sr.notSupported, undefined, "setRegister notSupported on lynx");

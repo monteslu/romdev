@@ -54,7 +54,7 @@ test("GB PC breakpoint + read watch + single-step (gambatte sm83)", { timeout: 2
   }));
   assert.equal(load.loaded, true, "loadMedia failed: " + JSON.stringify(load));
 
-  toJSON(await client.callTool({ name: "stepFrames", arguments: { frames: 60 } }));
+  toJSON(await client.callTool({ name: "frame", arguments: { op: "step",  frames: 60 } }));
 
   // 1) findWriter on 0xC000 → exact writing instruction PC.
   const fw = toJSON(await client.callTool({

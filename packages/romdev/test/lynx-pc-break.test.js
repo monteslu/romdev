@@ -61,7 +61,7 @@ test("Lynx PC breakpoint + read watch + single-step (handy 65C02)", { timeout: 1
   assert.equal(load.loaded, true, "loadMedia failed: " + JSON.stringify(load));
 
   // Boot into the main loop.
-  toJSON(await client.callTool({ name: "stepFrames", arguments: { frames: 30 } }));
+  toJSON(await client.callTool({ name: "frame", arguments: { op: "step",  frames: 30 } }));
 
   // 1) findWriter on the scratch byte → the EXACT 65C02 instruction PC writing it.
   const fw = toJSON(await client.callTool({

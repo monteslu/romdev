@@ -64,7 +64,7 @@ test("SNES RE primitives: setRegister + watchRange + logPCRange (+callSubroutine
   }));
   assert.equal(load.loaded, true, "loadMedia failed: " + JSON.stringify(load));
 
-  toJSON(await client.callTool({ name: "stepFrames", arguments: { frames: 60 } }));
+  toJSON(await client.callTool({ name: "frame", arguments: { op: "step",  frames: 60 } }));
 
   // ── item 1: setRegister round-trips ──
   // regId 0 = A (16-bit accumulator). Write 0xCAFE, read it back (A.W is uint16,

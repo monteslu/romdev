@@ -55,8 +55,7 @@ test("buildSource({platform:'genesis', language:'c'}) → loadable Genesis ROM",
   assert.equal(load.platform, "genesis");
 
   const step = toJSON(await client.callTool({
-    name: "stepFrames",
-    arguments: { frames: 4 },
+    name: "frame", arguments: { op: "step",  frames: 4 },
   }));
   assert.ok(step.framesRun >= 4, "stepFrames returned " + JSON.stringify(step));
 });

@@ -137,8 +137,7 @@ test("vibe loop: build 2600 ROM with dasm, run in stella, screenshot", async () 
 
   // Step + screenshot.
   const shot = await client.callTool({
-    name: "stepAndScreenshot",
-    arguments: { frames: 30, inline: true },
+    name: "frame", arguments: { op: "stepAndShot",  frames: 30, inline: true },
   });
   assert.equal(shot.isError, undefined, "shot error: " + JSON.stringify(shot));
   const img = shot.content.find((c) => c.type === "image");

@@ -58,7 +58,7 @@ test("Atari 7800 callSubroutine watchdog force-stops an infinite loop (prosystem
   assert.equal(load.loaded, true, "loadMedia failed: " + JSON.stringify(load));
 
   // Boot so main() runs and stores &spin at $1800.
-  toJSON(await client.callTool({ name: "stepFrames", arguments: { frames: 60 } }));
+  toJSON(await client.callTool({ name: "frame", arguments: { op: "step",  frames: 60 } }));
 
   const mem = toJSON(await client.callTool({
     name: "readMemory", arguments: { region: "system_ram", offset: PTR, length: 2 },

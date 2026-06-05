@@ -67,7 +67,7 @@ test("R23f crossPlatformSpriteImport propagates live source palette under intent
 
       // Step the emulator past boot so the palette is populated by the
       // game (nestest writes its palette early during init).
-      await client.callTool({ name: "stepFrames", arguments: { frames: 300 } });
+      await client.callTool({ name: "frame", arguments: { op: "step",  frames: 300 } });
 
       // Now run the composite under intent:"homebrew" with no explicit
       // paletteFromEmulator — the intent default should kick in and pull
@@ -135,7 +135,7 @@ test("R23f crossPlatformSpriteImport intent:rom-hack still uses grayscale (no re
         name: "loadMedia",
         arguments: { platform: "nes", path: ROM_PATH },
       });
-      await client.callTool({ name: "stepFrames", arguments: { frames: 300 } });
+      await client.callTool({ name: "frame", arguments: { op: "step",  frames: 300 } });
 
       const outPng = path.join(dir, "lift.png");
       const res = await client.callTool({

@@ -68,8 +68,7 @@ test("vibe loop: build NES C with cc65, run in fceumm, screenshot", async () => 
   assert.equal(loaded.isError, undefined);
 
   const shot = await client.callTool({
-    name: "stepAndScreenshot",
-    arguments: { frames: 30, inline: true },
+    name: "frame", arguments: { op: "stepAndShot",  frames: 30, inline: true },
   });
   assert.equal(shot.isError, undefined);
   const img = shot.content.find((c) => c.type === "image");

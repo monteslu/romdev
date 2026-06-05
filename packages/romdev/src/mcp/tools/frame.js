@@ -106,13 +106,7 @@ function hsvToRgb(h, s, v) {
 }
 
 export function registerFrameTools(server, z, sessionKey) {
-  server.tool(
-    "stepFrames",
-    "Advance emulation by N frames as fast as possible — NO real-time pacing, NO audio sync, NO vsync. Cores run at WASM speed: NES ~6-15k fps, SNES/Genesis ~2-5k fps, GB ~10k+ fps. That means stepFrames(3600) = 1 minute of game time in ~5-30ms (cheaper than a screenshot). Don't be timid: skip past title screens with stepFrames(300), advance through a level with stepFrames(7200) = 2 minutes, etc. Prefer ONE big call over many small ones. Returns the new frame count and framebuffer dimensions. Default 1 frame. TIP: if your very next call is a screenshot (the drive-then-look loop), use `stepAndScreenshot` instead to fold both into one round trip.",
-    {
-      frames: z.number().int().min(1).max(1_000_000).default(1).describe("Number of frames to step (1-1,000,000). Don't be conservative — 36000 frames (10 min) typically completes in <1s."),
-    },
-    safeTool(async ({ frames }) => {
+  async function doStep({ frames }) {
       const host = getHost(sessionKey);
       const n = host.stepFrames(frames);
       return jsonContent({
@@ -120,8 +114,7 @@ export function registerFrameTools(server, z, sessionKey) {
         frameCount: host.status.frameCount,
         framebuffer: { width: host.status.fbWidth, height: host.status.fbHeight },
       });
-    }),
-  );
+  }
 
   // Contract: an image goes to disk (path) OR comes back inline (inline:true).
   // No path + not inline → error. Keeps PNGs out of context unless asked for.
@@ -231,45 +224,14 @@ export function registerFrameTools(server, z, sessionKey) {
     return result;
   }
 
-  server.tool(
-    "screenshot",
-    "Use this to capture the latest frame. DEFAULT writes the image to `path` and returns `{path}` — pass " +
-    "`inline:true` to get the image in the response instead (you MUST pass one or the other). `format:'png'` " +
-    "(default) = real frame, exact colors; `format:'ascii'` = lossy chafa text render for agents that can't " +
-    "view images. `overlayBoxes:true` (png) draws a colored box around each visible sprite (SNES+NES). ASCII " +
-    "grid/symbol/color knobs are in the param hints. TIP: if you just stepped frames to reach this moment, " +
-    "`stepAndScreenshot` does the step + this capture in one call — use it for the drive-then-look loop.",
-    {
-      format: z.enum(["png", "ascii"]).default("png").describe("'png' (default) = real image. 'ascii' = lossy text render for environments that can't show images."),
-      path: z.string().optional().describe("Absolute path to write to (PNG bytes or ANSI text per format). Required unless inline:true."),
-      inline: z.boolean().default(false).describe("If true, return the image/ANSI in the response instead of writing to disk. Default false — then `path` is required."),
-      overlayBoxes: z.boolean().default(false).describe("png only: draw colored sprite-bounding-box overlays (SNES + NES; ignored elsewhere)."),
-      scale: z.number().gt(0).max(1).optional().describe("png only: downscale factor (0<scale≤1) using nearest-neighbor (keeps pixel art crisp). e.g. 0.5 = quarter the pixels, ~75% fewer image tokens — ideal for routine 'did it change?' checks. Omit/1 = full resolution."),
-      cols: z.number().int().min(4).max(640).optional().describe("ascii only: terminal columns. Default framebuffer_width/16 (1 char ≈ 2 game tiles)."),
-      rows: z.number().int().min(4).max(480).optional().describe("ascii only: terminal rows. Default framebuffer_height/16."),
-      symbols: z.enum(["ascii", "halfblock", "block", "quad", "sextant"]).default("ascii").describe("ascii only: chafa symbol set. 'ascii' (default) = pure ASCII; 'halfblock'/'quad'/'sextant' = denser, need Unicode."),
-      colors: z.enum(["true", "256", "16", "fgbg"]).default("true").describe("ascii only: color depth. 'true' = 24-bit; '256'/'16' = palettes; 'fgbg' = mono shape."),
-    },
-    safeTool(async ({ format, path: outPath, inline, overlayBoxes, scale, cols, rows, symbols, colors }) => {
-      requireImageTarget(outPath, inline, "screenshot");
+  async function doScreenshot({ format, path: outPath, inline, overlayBoxes, scale, cols, rows, symbols, colors }) {
+      requireImageTarget(outPath, inline, "frame({op:'screenshot'})");
       if (format === "ascii") return shootAscii({ cols, rows, symbols, colors, path: outPath, inline });
       return shootPng({ path: outPath, inline, overlayBoxes, scale });
-    }),
-  );
+  }
 
-
-  server.tool(
-    "stepAndScreenshot",
-    "Step N frames, then capture a screenshot — one round-trip instead of two. Same output contract as " +
-    "screenshot: DEFAULT writes the PNG to `path` and returns `{path}`; pass `inline:true` to get the image " +
-    "in the response (you MUST pass one or the other).",
-    {
-      frames: z.number().int().min(1).max(1_000_000).default(1),
-      path: z.string().optional().describe("Absolute path to write the PNG to. Required unless inline:true."),
-      inline: z.boolean().default(false).describe("If true, return the image in the response instead of writing to disk. Default false — then `path` is required."),
-    },
-    safeTool(async ({ frames, path: outPath, inline }) => {
-      requireImageTarget(outPath, inline, "stepAndScreenshot");
+  async function doStepAndShot({ frames, path: outPath, inline }) {
+      requireImageTarget(outPath, inline, "frame({op:'stepAndShot'})");
       const host = getHost(sessionKey);
       host.stepFrames(frames);
       const shot = host.screenshot();
@@ -285,6 +247,41 @@ export function registerFrameTools(server, z, sessionKey) {
           { type: "text", text: `stepped ${frames} → frame ${host.status.frameCount} (${shot.width}x${shot.height})` },
         ],
       };
+  }
+
+  server.tool(
+    "frame",
+    "Advance the emulator and capture frames. `op`: 'step' | 'screenshot' | 'stepAndShot'.\n" +
+    "'step': advance N `frames` as fast as possible — NO pacing/audio/vsync. Cores run at WASM speed (NES ~6-15k " +
+    "fps, SNES/Genesis ~2-5k, GB ~10k+), so frames:3600 = 1 min of game time in ~5-30ms (cheaper than a " +
+    "screenshot). Don't be timid — skip a title with 300, a level with 7200; prefer ONE big call.\n" +
+    "'screenshot': capture the latest frame. `format:'png'` (default, exact colors) or `'ascii'` (lossy chafa text " +
+    "render for agents that can't view images). `overlayBoxes` (png) draws a box per visible sprite (SNES+NES); " +
+    "`scale` (0<≤1) downscales (~75% fewer image tokens at 0.5 for routine 'did it change?' checks); ascii cols/" +
+    "rows/symbols/colors knobs in the param hints.\n" +
+    "'stepAndShot': step + screenshot in ONE round-trip — the drive-then-look loop.\n" +
+    "IMAGE CONTRACT (screenshot/stepAndShot): the image goes to `path` (default, returns {path}) OR inline:true — " +
+    "you MUST pass one. Keeps PNGs out of context unless asked.",
+    {
+      op: z.enum(["step", "screenshot", "stepAndShot"]).describe("step frames; capture a screenshot; or step+capture in one call."),
+      frames: z.number().int().min(1).max(1_000_000).default(1).describe("op=step/stepAndShot: frames to advance (1-1,000,000). Don't be conservative — 36000 (10 min) usually completes in <1s."),
+      format: z.enum(["png", "ascii"]).default("png").describe("op=screenshot: 'png' (default, real image) or 'ascii' (lossy text render)."),
+      path: z.string().optional().describe("op=screenshot/stepAndShot: absolute path to write to (required unless inline:true)."),
+      inline: z.boolean().default(false).describe("op=screenshot/stepAndShot: return the image in the response instead of writing to disk."),
+      overlayBoxes: z.boolean().default(false).describe("op=screenshot png: draw colored sprite-bounding-box overlays (SNES+NES)."),
+      scale: z.number().gt(0).max(1).optional().describe("op=screenshot png: downscale factor (0<scale≤1, nearest-neighbor). 0.5 ≈ 75% fewer image tokens."),
+      cols: z.number().int().min(4).max(640).optional().describe("op=screenshot ascii: terminal columns (default fb_width/16)."),
+      rows: z.number().int().min(4).max(480).optional().describe("op=screenshot ascii: terminal rows (default fb_height/16)."),
+      symbols: z.enum(["ascii", "halfblock", "block", "quad", "sextant"]).default("ascii").describe("op=screenshot ascii: chafa symbol set."),
+      colors: z.enum(["true", "256", "16", "fgbg"]).default("true").describe("op=screenshot ascii: color depth."),
+    },
+    safeTool(async (args) => {
+      switch (args.op) {
+        case "step":        return doStep(args);
+        case "screenshot":  return doScreenshot(args);
+        case "stepAndShot": return doStepAndShot(args);
+        default: throw new Error(`frame: unknown op '${args.op}'`);
+      }
     }),
   );
 }

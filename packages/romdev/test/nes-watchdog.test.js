@@ -60,7 +60,7 @@ test("NES watchdog: infinite-loop routine returns {watchdog:true} (fceumm 6502)"
     name: "loadMedia", arguments: { platform: "nes", base64: build.binaryBase64 },
   }));
   assert.equal(load.loaded, true, "loadMedia failed: " + JSON.stringify(load));
-  toJSON(await client.callTool({ name: "stepFrames", arguments: { frames: 30 } }));
+  toJSON(await client.callTool({ name: "frame", arguments: { op: "step",  frames: 30 } }));
 
   // The WATCHDOG: drive the infinite-loop routine. It must NOT hang — it returns
   // { returned:false, watchdog:true, finalPC=spinAddr }.

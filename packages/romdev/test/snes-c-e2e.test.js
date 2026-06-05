@@ -53,8 +53,7 @@ test("buildSource({platform:'snes', language:'c'}) (default pvsneslib) → loada
   assert.equal(load.platform, "snes");
   // Step a few frames to confirm snes9x didn't reject the cart on boot.
   const step = toJSON(await client.callTool({
-    name: "stepFrames",
-    arguments: { frames: 4 },
+    name: "frame", arguments: { op: "step",  frames: 4 },
   }));
   assert.ok(step.framesRun >= 4, "stepFrames returned " + JSON.stringify(step));
 });

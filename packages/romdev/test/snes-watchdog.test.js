@@ -63,7 +63,7 @@ test("SNES watchdog: a non-returning routine trips the watchdog, no hang (snes9x
     name: "loadMedia", arguments: { platform: "snes", path: build.binaryPath },
   }));
   assert.equal(load.loaded, true, "loadMedia failed: " + JSON.stringify(load));
-  toJSON(await client.callTool({ name: "stepFrames", arguments: { frames: 60 } }));
+  toJSON(await client.callTool({ name: "frame", arguments: { op: "step",  frames: 60 } }));
 
   // Discover a live PC inside the main loop via the per-frame write to $7E0010.
   const wr = toJSON(await client.callTool({

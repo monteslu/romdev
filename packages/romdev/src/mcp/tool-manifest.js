@@ -35,6 +35,8 @@ export const MERGE_MAP = {
   platform: { absorbs: ["listPlatforms", "resolvePlatform", "listToolchains", "installToolchain", "listPlatformDocs", "getPlatformDoc"], axis: "op" },
   // ── host (unload/shutdown/reset/pause/resume FSM; loadMedia + getStatus stay separate) ──
   host: { absorbs: ["unloadMedia", "shutdown", "reset", "pause", "resume"], axis: "op" },
+  // ── frame (step/screenshot/stepAndShot; stepInstruction folds in with the watch domain) ──
+  frame: { absorbs: ["stepFrames", "screenshot", "stepAndScreenshot"], axis: "op" },
 };
 
 /** Every OLD tool name that the consolidation removes (absorbed into a new tool). */
