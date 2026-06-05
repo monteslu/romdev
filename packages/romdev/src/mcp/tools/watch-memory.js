@@ -358,7 +358,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         stoppedEarly,
         truncated,
         note: totalMatched === 0
-          ? "No matching changes in the watched window. Try (a) onChange:'any' to confirm the byte moves at all, (b) longer `frames`, (c) `pressDuring` to drive the game past the event, (d) a different region/offset."
+          ? "No matching changes in the watched window. Try (a) onChange:'any' to confirm the byte moves at all, (b) longer `frames`, (c) `pressDuring` to drive the game past the event, (d) a different region/offset. If the byte never moves even with onChange:'any', this region may be REBUILT as a block (sprite/OAM shadow, display list, VRAM) rather than written in place — watch the SOURCE struct the copy/DMA reads from instead (find it with searchValue)."
           : (tryGetPC(host) == null ? "PC not available for this platform (getCPUState returned no pc field)." : undefined),
       };
 
@@ -459,7 +459,13 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         return jsonContent({
           found: false, address: "$" + address.toString(16).toUpperCase(), framesStepped: maxFrames,
           ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
-          note: "No write to that address within maxFrames. Increase maxFrames, or drive the game with pressDuring to trigger the write.",
+          note: "No per-byte CPU write to that address within maxFrames. Two common reasons: " +
+            "(1) the event didn't fire — increase maxFrames or drive the game with pressDuring to trigger it. " +
+            "(2) this region is rebuilt as a BLOCK rather than written field-by-field — sprite/OAM shadow tables, " +
+            "display lists, and VRAM are typically bulk-copied (memcpy/loop) or DMA'd from a SOURCE struct elsewhere, " +
+            "so no single instruction writes this exact byte. In that case the address you want is the SOURCE: watch " +
+            "the struct the copy reads from (find it with searchValue on the live value), or for graphics trace the " +
+            "DMA/copy source (Genesis VRAM DMA source is in VDP regs). 'Address is wrong' is usually case (2), not a bad address.",
         });
       }
       // When the core reports a PRG-ROM offset for the PC (fceumm/NES), it

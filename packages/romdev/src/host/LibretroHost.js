@@ -452,6 +452,72 @@ export class LibretroHost {
     return this.state.lastFrame;
   }
 
+  /**
+   * The loaded cartridge ROM as the CPU's program space starts from, derived
+   * from the bytes handed to retro_load_game (the file image, header-stripped
+   * per platform). This is NOT a live core memory region — it's the loaded image
+   * — but for un-banked platforms (Genesis/GB/SMS/GG: file base == CPU $000000 /
+   * $0000) reading offset N here IS "what the CPU fetches at ROM address N", which
+   * is exactly what you need to confirm a patch is actually running. For banked
+   * platforms (NES PRG, SNES LoROM/HiROM) the file image is correct bytes but the
+   * CPU sees them through a mapper, so a file offset is not a flat CPU address.
+   *
+   * @returns {{ bytes: Uint8Array, base: number, headerSkipped: number, mapped: boolean, platform: string, note: string }}
+   */
+  getCartRom() {
+    if (!this._loadArgs || !this._loadArgs.bytes) {
+      throw new Error("no ROM loaded — call loadMedia first");
+    }
+    const platform = this._loadArgs.platform;
+    const raw = this._loadArgs.bytes;
+    let headerSkipped = 0;
+    let mapped = false;
+    let base = 0;
+    let note = "File image == CPU ROM space (un-banked): offset N is the byte the CPU fetches at ROM address N.";
+
+    if (platform === "nes") {
+      // iNES / NES2.0: 16-byte header, then PRG (then CHR). The CPU sees PRG via
+      // the mapper at $8000-$FFFF — file offset is NOT a flat CPU address.
+      if (raw.length >= 4 && raw[0] === 0x4e && raw[1] === 0x45 && raw[2] === 0x53 && raw[3] === 0x1a) headerSkipped = 16;
+      mapped = true;
+      note = "NES PRG-ROM (iNES header skipped). Bytes are correct but the CPU sees them through the mapper at $8000-$FFFF — a file offset is not a flat CPU address. Use findWriter's prgOffset/bank to map a CPU PC to a PRG offset.";
+    } else if (platform === "snes") {
+      // Copier header: 512 bytes iff (len % 1024) == 512. After that, LoROM/HiROM
+      // banking maps the image into $00:8000+ — also not a flat CPU address.
+      if ((raw.length % 1024) === 512) headerSkipped = 512;
+      mapped = true;
+      note = "SNES ROM (copier header skipped if present). Bytes are correct but LoROM/HiROM banking maps them into $xx:8000+ — a file offset is not a flat CPU address.";
+    } else if (platform === "gba") {
+      mapped = true;
+      base = 0x08000000;
+      note = "GBA ROM is mapped flat at 0x08000000 — CPU address = 0x08000000 + file offset.";
+    }
+    // genesis/megadrive, gb, gbc, sms, gg, lynx, pce, c64, msx, atari*: file base
+    // is the CPU ROM base (un-banked or banked-from-0), default note applies.
+
+    const bytes = headerSkipped ? raw.subarray(headerSkipped) : raw;
+    return { bytes, base, headerSkipped, mapped, platform, note };
+  }
+
+  /**
+   * Cheap fingerprint of the current frame (FNV-1a over the pixel bytes), for
+   * "did the screen change?" checks without retaining a full base64 copy. 0 if
+   * no frame yet. Two identical frames hash identically; any pixel diff changes it.
+   * @returns {number}
+   */
+  framebufferHash() {
+    if (!this.state.lastFrame) return 0;
+    const px = this.state.lastFrame.pixels;
+    let h = 0x811c9dc5;
+    // Sample stride 1 (every byte) — frames are small (≤256x240x4); the whole
+    // buffer hashes in well under a frame's worth of time.
+    for (let i = 0; i < px.length; i++) {
+      h ^= px[i];
+      h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0; // h * 16777619 mod 2^32
+    }
+    return h >>> 0;
+  }
+
   /** Returns the latest frame as a base64 PNG. */
   screenshot() {
     const f = this.getFramebuffer();

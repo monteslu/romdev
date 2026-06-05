@@ -1,4 +1,6 @@
 import { writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { PNG } from "pngjs";
 import { getHost } from "../state.js";
 import { imageContent, jsonContent, safeTool } from "../util.js";
@@ -184,10 +186,15 @@ export function registerFrameTools(server, z, sessionKey) {
       json._observerImages = [{ kind: "image", mimeType: "image/png", base64: pngBase64 }];
       return json;
     }
+    // inline:true — ALSO write the PNG to a temp file so a follow-up crop/convert
+    // (ImageMagick etc.) has a real path instead of ENOENT-ing on a base64 blob.
+    // Path is stable per frame so repeated shots of the same frame don't pile up.
+    const tempPath = path.join(tmpdir(), `romdev-shot-${host.status.platform ?? "rom"}-f${host.status.frameCount ?? 0}.png`);
+    try { await writeFile(tempPath, Buffer.from(pngBase64, "base64")); } catch { /* best-effort; inline image is still returned */ }
     return {
       content: [
         imageContent(pngBase64),
-        { type: "text", text: `framebuffer ${shot.width}x${shot.height}${scale && scale < 1 ? ` (scaled to ${width}x${height})` : ""}${overlayInfo ? ` (overlay: ${overlayInfo.spritesDrawn} sprites)` : ""}` },
+        { type: "text", text: `framebuffer ${shot.width}x${shot.height}${scale && scale < 1 ? ` (scaled to ${width}x${height})` : ""}${overlayInfo ? ` (overlay: ${overlayInfo.spritesDrawn} sprites)` : ""} — also written to ${tempPath} (use this path for ImageMagick/crops; pass outputPath for a permanent location).` },
       ],
     };
   }
