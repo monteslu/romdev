@@ -1082,9 +1082,10 @@ export class LibretroHost {
     if (!this.pcBreakSupported()) {
       throw new Error("callSubroutine needs the PC breakpoint (romdev_pcbreak) too.");
     }
+    const prof = this._cpuCallProfile();
     const {
-      pc, regs = {}, spReg = 18, pcReg = 16, sentinelPC = 0,
-      sentinelBytes = 4, maxFrames = 600, sandbox = true, capture,
+      pc, regs = {}, spReg = prof.spReg, pcReg = prof.pcReg, sentinelPC = prof.defaultSentinel,
+      sentinelBytes = prof.retBytes, maxFrames = 600, sandbox = true, capture,
     } = a;
 
     const snapshot = sandbox ? this.serializeState() : null;
@@ -1092,19 +1093,41 @@ export class LibretroHost {
     try {
       // Set caller-supplied registers.
       for (const [id, val] of Object.entries(regs)) this.setReg(Number(id), val);
-      // Push the sentinel return address: SP -= width, write it there, set SP.
+      // Push the sentinel return address per the CPU's stack discipline, then set
+      // SP + PC. The return address width + push direction + byte order all come
+      // from the per-CPU profile (m68k pushes 4 BE bytes, predecrement; the 6502
+      // pushes 2 bytes high-then-low at $0100+SP and SP grows DOWN; SM83 pushes 2
+      // LE bytes predecrement; 65816 RTL pops 3 bytes).
       let sp = this.getReg(spReg) >>> 0;
-      sp = (sp - sentinelBytes) >>> 0;
-      // m68k is big-endian; write the return address as `sentinelBytes` big-endian
-      // bytes into work RAM at sp. (system_ram covers the 68k work-RAM window for
-      // the address range a normal SP uses on Genesis: $FF0000-$FFFFFF.)
+      // The 6502/65816 RTS/RTL return to (popped address + 1) — they push PC-1. So
+      // to land the run on `sentinelPC`, push sentinelPC + retAdjust (-1 there, 0
+      // for m68k RTS / SM83 RET / Z80 RET which return to the exact pushed addr).
+      const pushed = (sentinelPC + (prof.retAdjust ?? 0)) >>> 0;
       const buf = new Uint8Array(sentinelBytes);
-      for (let i = 0; i < sentinelBytes; i++) buf[i] = (sentinelPC >>> (8 * (sentinelBytes - 1 - i))) & 0xFF;
-      this.writeMemoryCpuAddr(sp, buf);
-      this.setReg(spReg, sp);
+      if (prof.retBigEndian) {
+        for (let i = 0; i < sentinelBytes; i++) buf[i] = (pushed >>> (8 * (sentinelBytes - 1 - i))) & 0xFF;
+      } else {
+        for (let i = 0; i < sentinelBytes; i++) buf[i] = (pushed >>> (8 * i)) & 0xFF;
+      }
+      if (prof.stackPage !== undefined) {
+        // 6502/65816-style page stack: bytes go at $page + SP, SP decremented after
+        // each byte (push order = the bytes as written, SP ends below them).
+        const base = prof.stackPage;
+        let s = sp & 0xFF;
+        for (let i = 0; i < sentinelBytes; i++) {
+          this.writeMemoryCpuAddr(base + s, buf.subarray(i, i + 1));
+          s = (s - 1) & 0xFF;
+        }
+        this.setReg(spReg, s);
+      } else {
+        // Predecrement stack (m68k/SM83): SP -= width, write the block, set SP.
+        sp = (sp - sentinelBytes) >>> 0;
+        this.writeMemoryCpuAddr(sp, buf);
+        this.setReg(spReg, sp);
+      }
       this.setReg(pcReg, pc >>> 0);
 
-      // Run until the routine RTSes back to the sentinel.
+      // Run until the routine returns to the sentinel.
       this.setPCBreak(sentinelPC >>> 0, true, false);
       try {
         framesRun = this._runFramesExclusive(() => {
@@ -1123,17 +1146,59 @@ export class LibretroHost {
     return { returned, framesRun, ...(captured !== undefined ? { captured } : {}) };
   }
 
-  /** Write bytes to a CPU address (resolves the platform's CPU-space→region map).
-   *  Used by callSubroutine to seed the stack. Genesis: $FF0000-$FFFFFF → system_ram. */
-  writeMemoryCpuAddr(cpuAddr, bytes) {
-    // Genesis 68k work RAM is $FF0000-$FFFFFF, mirrored; system_ram offset =
-    // cpuAddr & 0xFFFF. Other platforms add their own mapping as setReg lands.
-    if (this.status.platform === "genesis" || this.status.platform === "megadrive" || this.status.platform === "md") {
-      this.writeMemory("system_ram", cpuAddr & 0xFFFF, bytes);
-      return;
+  /**
+   * Per-CPU calling profile for callSubroutine: how the stack/return work for the
+   * loaded platform's CPU. reg-ids match each core's romdev_setreg convention.
+   *  - retBytes: width of the return address pushed (RTS/RTL pop width)
+   *  - retBigEndian: byte order of the pushed return address
+   *  - stackPage: if set, a page-relative stack ($0100 for 6502) — SP is an 8-bit
+   *    index into that page (push writes at page+SP, decrement); if undefined the
+   *    stack is a full predecrement stack (m68k/SM83) addressed by SP directly.
+   *  - ramMask / ramRegion: CPU-addr → memory region mapping for the stack writes.
+   */
+  _cpuCallProfile() {
+    const p = this.status.platform;
+    switch (p) {
+      case "genesis": case "megadrive": case "md":
+        // m68k: SP=18, PC=16; RTS pops a 4-byte big-endian return; work RAM
+        // $FF0000-$FFFFFF → system_ram (& 0xFFFF). Sentinel 0 (vector area).
+        return { spReg: 18, pcReg: 16, retBytes: 4, retBigEndian: true, defaultSentinel: 0, ramMask: 0xFFFF };
+      case "nes": case "atari2600": case "atari7800": case "lynx": case "c64": case "pce":
+        // 6502/65C02/HuC6280/6510: A=0,X=1,Y=2,P=3,SP=4,PC=16. RTS pops 2 bytes
+        // (PCL,PCH) from the $0100 page. system_ram is the low RAM; the stack page
+        // $0100-$01FF maps to system_ram offset 0x100-0x1FF on most of these.
+        return { spReg: 4, pcReg: 16, retBytes: 2, retBigEndian: true, defaultSentinel: 0, stackPage: 0x100, ramMask: 0xFFFF, retAdjust: -1 };
+      case "gb": case "gbc":
+        // SM83: PC=16, SP=18. CALL/RET push 2 little-endian bytes, predecrement
+        // SP. Stack lives in WRAM ($C000-$DFFF, also high RAM); SP & 0x1FFF →
+        // system_ram (the 8KB WRAM window). Sentinel 0 (rst vector area).
+        return { spReg: 18, pcReg: 16, retBytes: 2, retBigEndian: false, defaultSentinel: 0, ramMask: 0x1FFF };
+      case "snes":
+        // 65816: SP=4, PC=16. A long subroutine (JSL/RTL) pushes a 3-byte return
+        // (the 65816 stack is in bank 0, page-relative is the 8-bit/16-bit S). We
+        // push 3 bytes at the 16-bit S in bank 0 (predecrement); WRAM low mirror.
+        return { spReg: 4, pcReg: 16, retBytes: 3, retBigEndian: false, defaultSentinel: 0, ramMask: 0x1FFF, retAdjust: -1 };
+      case "sms": case "gg": case "msx":
+        // Z80: PC=16, SP=18. CALL/RET push 2 LE bytes predecrement. Work RAM
+        // window varies (SMS $C000-$DFFF → sms low RAM); SP & 0x1FFF.
+        return { spReg: 18, pcReg: 16, retBytes: 2, retBigEndian: false, defaultSentinel: 0, ramMask: 0x1FFF };
+      case "gba":
+        // ARM7TDMI: SP=r13 (reg-id 13), PC=r15 (reg-id 15). No implicit return-on-
+        // stack (BL uses LR). callSubroutine on ARM would set LR=sentinel instead
+        // of pushing — handled by the ARM branch (lrReg). EWRAM mapping.
+        return { spReg: 13, pcReg: 15, retBytes: 4, retBigEndian: false, defaultSentinel: 0, ramMask: 0x3FFFF, lrReg: 14 };
+      default:
+        // Unknown — m68k-shaped fallback (Genesis defaults).
+        return { spReg: 18, pcReg: 16, retBytes: 4, retBigEndian: true, defaultSentinel: 0, ramMask: 0xFFFF };
     }
-    // Fallback: treat cpuAddr as a system_ram offset.
-    this.writeMemory("system_ram", cpuAddr, bytes);
+  }
+
+  /** Write bytes to a CPU address, resolving the platform's CPU-space→region map
+   *  (used by callSubroutine to seed the stack). Uses the per-CPU profile's mask. */
+  writeMemoryCpuAddr(cpuAddr, bytes) {
+    const prof = this._cpuCallProfile();
+    const off = (cpuAddr & (prof.ramMask ?? 0xFFFF)) >>> 0;
+    this.writeMemory("system_ram", off, bytes);
   }
 
   // ── Range watch + PC coverage (item 2, discovery) ───────────────────────────

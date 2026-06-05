@@ -1,8 +1,8 @@
 diff --git a/cpuexec.cpp b/cpuexec.cpp
-index aa43b2f..7bdda4a 100644
+index aa43b2f..5d588c7 100644
 --- a/cpuexec.cpp
 +++ b/cpuexec.cpp
-@@ -19,6 +19,19 @@
+@@ -19,6 +19,27 @@
  
  static inline void S9xReschedule (void);
  
@@ -17,15 +17,31 @@ index aa43b2f..7bdda4a 100644
 +extern volatile int  romdev_pc_hit;
 +extern unsigned int  romdev_pc_last_pc;
 +extern unsigned int  romdev_pc_hits;
++
++/* romdev PC COVERAGE log (discovery): record DISTINCT in-window PCs about to
++ * execute. State + the de-dup helper live in libretro.cpp; the hook below sits
++ * at the same dispatch point as the pc-break check (Registers.PBPC is the
++ * instruction about to run). Cheap when disabled (one int test). */
++extern int           romdev_cov_enabled;
++extern unsigned int  romdev_cov_lo, romdev_cov_hi;
++extern void          romdev_cov_log(unsigned int pc);
 +}
 +
  void S9xMainLoop (void)
  {
  	#define CHECK_FOR_IRQ_CHANGE() \
-@@ -135,6 +148,34 @@ void S9xMainLoop (void)
+@@ -135,6 +156,42 @@ void S9xMainLoop (void)
  			break;
  		}
  
++		/* romdev PC coverage log (discovery): record each DISTINCT in-window PC
++		 * about to execute. Registers.PBPC is the address of the next opcode.
++		 * Cheap when disabled (one int test). */
++		if (romdev_cov_enabled
++		    && (Registers.PBPC & 0xffffff) >= romdev_cov_lo
++		    && (Registers.PBPC & 0xffffff) <= romdev_cov_hi)
++			romdev_cov_log(Registers.PBPC & 0xffffff);
++
 +		/* romdev PC breakpoint / single-step. Checked HERE — after interrupt
 +		 * dispatch, immediately before the opcode is fetched — so Registers.PBPC
 +		 * is exactly the instruction about to execute. On a hit we set the hit
@@ -58,10 +74,10 @@ index aa43b2f..7bdda4a 100644
  		struct	SOpcodes	*Opcodes;
  
 diff --git a/getset.h b/getset.h
-index ec55ea9..d2d33e9 100644
+index ec55ea9..3fddf5e 100644
 --- a/getset.h
 +++ b/getset.h
-@@ -54,7 +54,50 @@ static inline int32 memory_speed (uint32 address)
+@@ -54,7 +54,73 @@ static inline int32 memory_speed (uint32 address)
  	return (TWO_CYCLES);
  }
  
@@ -107,13 +123,36 @@ index ec55ea9..d2d33e9 100644
 +		} \
 +	} while (0)
 +
++/* ---- romdev RANGE watch (discovery, 65816) ----------------------------------
++ * Log EVERY {pc,addr,val} that reads or writes an address in [lo,hi] over a
++ * window — not stop-on-first. Hooked into the same read/write paths as the
++ * single-address watch above. `w` is 1 for a write, 0 for a read; the mode mask
++ * (1=read 2=write 3=both) lives in libretro.cpp. Addresses are canonicalized
++ * (WRAM mirror → $7Exxxx) so a window on $7E0000+ catches zero-page/stack
++ * accesses too. PC = Registers.PBPC & 0xffffff. */
++extern "C" {
++extern unsigned int  romdev_range_lo, romdev_range_hi;
++extern int           romdev_range_enabled, romdev_range_mode;
++extern void          romdev_range_log(unsigned int pc, unsigned int addr, unsigned char val);
++extern int           romdev_cov_enabled;
++extern unsigned int  romdev_cov_lo, romdev_cov_hi;
++extern void          romdev_cov_log(unsigned int pc);
++}
++#define ROMDEV_RANGE_SNES(addr, val, w) do { \
++		if (romdev_range_enabled && (romdev_range_mode & ((w) ? 2 : 1))) { \
++			unsigned int _ca = romdev_wp_canon(addr); \
++			if (_ca >= romdev_range_lo && _ca <= romdev_range_hi) \
++				romdev_range_log(Registers.PBPC & 0xffffff, _ca, (unsigned char)(val)); \
++		} \
++	} while (0)
++
 +/* The original byte-read body, renamed. S9xGetByte (below) wraps it so the read
 + * watch observes the returned value on EVERY exit path; transparent to callers. */
 +inline uint8 romdev_S9xGetByte_impl (uint32 Address)
  {
  	int		block = (Address & 0xffffff) >> MEMMAP_SHIFT;
  	uint8	*GetAddress = Memory.Map[block];
-@@ -157,6 +200,13 @@ inline uint8 S9xGetByte (uint32 Address)
+@@ -157,6 +223,14 @@ inline uint8 S9xGetByte (uint32 Address)
  	}
  }
  
@@ -121,13 +160,14 @@ index ec55ea9..d2d33e9 100644
 +{
 +	uint8 byte = romdev_S9xGetByte_impl(Address);
 +	ROMDEV_RD_SNES(Address, byte);
++	ROMDEV_RANGE_SNES(Address, byte, 0);
 +	return byte;
 +}
 +
  inline uint16 S9xGetWord (uint32 Address, enum s9xwrap_t w = WRAP_NONE)
  {
  	uint16	word;
-@@ -193,6 +243,10 @@ inline uint16 S9xGetWord (uint32 Address, enum s9xwrap_t w = WRAP_NONE)
+@@ -193,6 +267,12 @@ inline uint16 S9xGetWord (uint32 Address, enum s9xwrap_t w = WRAP_NONE)
  	if (GetAddress >= (uint8 *) CMemory::MAP_LAST)
  	{
  		word = READ_WORD(GetAddress + (Address & 0xffff));
@@ -135,18 +175,21 @@ index ec55ea9..d2d33e9 100644
 +		 * READ_WORD, bypassing S9xGetByte's wrapper — check both here. */
 +		ROMDEV_RD_SNES(Address, word);
 +		ROMDEV_RD_SNES(Address + 1, word >> 8);
++		ROMDEV_RANGE_SNES(Address, word, 0);
++		ROMDEV_RANGE_SNES(Address + 1, word >> 8, 0);
  		addCyclesInMemoryAccess_x2;
  		return (word);
  	}
-@@ -319,6 +373,7 @@ inline uint16 S9xGetWord (uint32 Address, enum s9xwrap_t w = WRAP_NONE)
+@@ -319,6 +399,8 @@ inline uint16 S9xGetWord (uint32 Address, enum s9xwrap_t w = WRAP_NONE)
  
  inline void S9xSetByte (uint8 Byte, uint32 Address)
  {
 +	ROMDEV_WP_SNES(Address, Byte);
++	ROMDEV_RANGE_SNES(Address, Byte, 1);
  	int		block = (Address & 0xffffff) >> MEMMAP_SHIFT;
  	uint8	*SetAddress = Memory.WriteMap[block];
  	int32	speed = memory_speed(Address);
-@@ -425,6 +480,10 @@ inline void S9xSetByte (uint8 Byte, uint32 Address)
+@@ -425,6 +507,12 @@ inline void S9xSetByte (uint8 Byte, uint32 Address)
  
  inline void S9xSetWord (uint16 Word, uint32 Address, enum s9xwrap_t w = WRAP_NONE, enum s9xwriteorder_t o = WRITE_01)
  {
@@ -154,11 +197,13 @@ index ec55ea9..d2d33e9 100644
 +	 * path below writes both bytes directly, bypassing S9xSetByte, so check here.) */
 +	ROMDEV_WP_SNES(Address, Word);
 +	ROMDEV_WP_SNES(Address + 1, Word >> 8);
++	ROMDEV_RANGE_SNES(Address, Word, 1);
++	ROMDEV_RANGE_SNES(Address + 1, Word >> 8, 1);
  	uint32	mask = MEMMAP_MASK & (w == WRAP_PAGE ? 0xff : (w == WRAP_BANK ? 0xffff : 0xffffff));
  	if ((Address & mask) == mask)
  	{
 diff --git a/libretro/libretro.cpp b/libretro/libretro.cpp
-index d381c61..1e67099 100644
+index d381c61..fd399ae 100644
 --- a/libretro/libretro.cpp
 +++ b/libretro/libretro.cpp
 @@ -6,6 +6,7 @@
@@ -169,7 +214,7 @@ index d381c61..1e67099 100644
  #include "gfx.h"
  #include "snapshot.h"
  #include "controls.h"
-@@ -2029,6 +2030,111 @@ unsigned retro_get_region()
+@@ -2029,6 +2030,247 @@ unsigned retro_get_region()
      return Settings.PAL ? RETRO_REGION_PAL : RETRO_REGION_NTSC;
  }
  
@@ -268,6 +313,142 @@ index d381c61..1e67099 100644
 +   out5[4] = romdev_pc_hits;
 +   if (clearHit) { romdev_pc_hit = 0; }
 +}
++
++/* ── romdev register read/write (65816) ──────────────────────────────────────
++ * The inverse of getCPUState, used by the host's callSubroutine / decompressWith
++ * (set A/X/Y/PC, push a sentinel return, run to it, capture the output). romdev
++ * 65816 reg-id convention (STABLE across all cores so the host passes the same
++ * ids): 0=A 1=X 2=Y 3=P(status) 4=SP(S) 5=DB(data bank) 6=D(direct page)
++ * 16=PC (24-bit PBPC: low 16 = program counter, high byte = program bank).
++ * Returns 0 on success, -1 on an unknown id.
++ *
++ * IMPORTANT (PC): the 65816 main loop fetches opcodes via CPU.PCBase[PCw], so a
++ * bare Registers.PBPC = value would NOT redirect execution — the stale fetch
++ * pointer would keep running the old code. S9xSetPCBase(addr) sets PBPC AND
++ * ShiftedPB/MemSpeed AND recomputes CPU.PCBase, so a set PC actually executes
++ * (this is what callSubroutine relies on). Same call cpu.cpp / snapshot.cpp use
++ * after restoring PBPC. */
++int romdev_setreg(int regId, unsigned int value)
++{
++   switch (regId) {
++      case 0:  Registers.A.W  = (uint16)value; return 0;   /* A  */
++      case 1:  Registers.X.W  = (uint16)value; return 0;   /* X  */
++      case 2:  Registers.Y.W  = (uint16)value; return 0;   /* Y  */
++      case 3:  Registers.P.W  = (uint16)value; return 0;   /* P (status) */
++      case 4:  Registers.S.W  = (uint16)value; return 0;   /* SP (S) */
++      case 5:  Registers.DB   = (uint8)value;  return 0;   /* data bank  */
++      case 6:  Registers.D.W  = (uint16)value; return 0;   /* direct page */
++      case 16: S9xSetPCBase(value & 0xffffff); return 0;   /* PC (refresh fetch ptr!) */
++      default: return -1;
++   }
++}
++
++unsigned int romdev_getreg(int regId)
++{
++   switch (regId) {
++      case 0:  return Registers.A.W;
++      case 1:  return Registers.X.W;
++      case 2:  return Registers.Y.W;
++      case 3:  return Registers.P.W;
++      case 4:  return Registers.S.W;
++      case 5:  return Registers.DB;
++      case 6:  return Registers.D.W;
++      case 16: return Registers.PBPC & 0xffffff;
++      default: return 0;
++   }
++}
++
++/* ── romdev RANGE watch (discovery) ──────────────────────────────────────────
++ * Log every {pc,addr,val} touching [lo,hi] over a window — not stop-on-first.
++ * The read/write hooks (getset.h) call romdev_range_log; here is the state, the
++ * de-dup-free ring buffer, and the set/get exports. mode: 1=read 2=write 3=both.
++ * Arm (romdev_range_set with enabled=1) clears the buffer. */
++#define ROMDEV_RANGE_CAP 4096
++unsigned int  romdev_range_lo      = 0;
++unsigned int  romdev_range_hi      = 0;
++int           romdev_range_enabled = 0;
++int           romdev_range_mode    = 0;     /* 1=read, 2=write, 3=both */
++unsigned int  romdev_range_pc  [ROMDEV_RANGE_CAP];
++unsigned int  romdev_range_addr[ROMDEV_RANGE_CAP];
++unsigned char romdev_range_val [ROMDEV_RANGE_CAP];
++unsigned int  romdev_range_count   = 0;     /* total events seen (may exceed CAP) */
++unsigned int  romdev_range_stored  = 0;     /* events actually stored (<= CAP) */
++
++/* Append one range-watch event (called from the getset.h read/write hooks). */
++void romdev_range_log(unsigned int pc, unsigned int addr, unsigned char val)
++{
++   romdev_range_count++;
++   if (romdev_range_stored < ROMDEV_RANGE_CAP) {
++      romdev_range_pc  [romdev_range_stored] = pc;
++      romdev_range_addr[romdev_range_stored] = addr;
++      romdev_range_val [romdev_range_stored] = val;
++      romdev_range_stored++;
++   }
++}
++
++void romdev_range_set(unsigned int lo, unsigned int hi, int mode, int enabled)
++{
++   romdev_range_lo = lo; romdev_range_hi = hi;
++   romdev_range_mode = mode ? mode : 3;
++   romdev_range_enabled = enabled ? 1 : 0;
++   romdev_range_count = 0; romdev_range_stored = 0;
++}
++
++/* Drain up to `max` events into out[] as packed triples [pc,addr,val,...]
++ * (val in the low byte of its uint32 slot). Returns events written. out2 (size 2)
++ * gets [totalSeen, stored] so the caller knows if the ring overflowed. */
++unsigned int romdev_range_get(unsigned int *out, unsigned int max, unsigned int *out2)
++{
++   unsigned int i, n = romdev_range_stored;
++   if (out2) { out2[0] = romdev_range_count; out2[1] = romdev_range_stored; }
++   if (!out) return 0;
++   if (n > max) n = max;
++   for (i = 0; i < n; i++) {
++      out[i*3 + 0] = romdev_range_pc[i];
++      out[i*3 + 1] = romdev_range_addr[i];
++      out[i*3 + 2] = (unsigned int)romdev_range_val[i];
++   }
++   return n;
++}
++
++/* ── romdev PC COVERAGE log (discovery) ──────────────────────────────────────
++ * Record DISTINCT PCs executed within [lo,hi] over a run — "what code runs
++ * here?". The hook in cpuexec.cpp:S9xMainLoop calls romdev_cov_log at dispatch.
++ * Linear de-dup against the stored set (cheap for the small windows this
++ * targets). */
++#define ROMDEV_COV_CAP 8192
++unsigned int  romdev_cov_lo      = 0;
++unsigned int  romdev_cov_hi      = 0;
++int           romdev_cov_enabled = 0;
++unsigned int  romdev_cov_pcs[ROMDEV_COV_CAP];
++unsigned int  romdev_cov_count   = 0;       /* distinct PCs stored (<= CAP) */
++unsigned int  romdev_cov_total   = 0;       /* total in-range dispatches seen */
++
++void romdev_cov_log(unsigned int pc)
++{
++   unsigned int i;
++   romdev_cov_total++;
++   for (i = 0; i < romdev_cov_count; i++) if (romdev_cov_pcs[i] == pc) return;
++   if (romdev_cov_count < ROMDEV_COV_CAP) romdev_cov_pcs[romdev_cov_count++] = pc;
++}
++
++void romdev_cov_set(unsigned int lo, unsigned int hi, int enabled)
++{
++   romdev_cov_lo = lo; romdev_cov_hi = hi;
++   romdev_cov_enabled = enabled ? 1 : 0;
++   romdev_cov_count = 0; romdev_cov_total = 0;
++}
++
++/* Copy up to `max` distinct PCs into out[]. out2 (size 2) gets [distinct,total]. */
++unsigned int romdev_cov_get(unsigned int *out, unsigned int max, unsigned int *out2)
++{
++   unsigned int i, n = romdev_cov_count;
++   if (out2) { out2[0] = romdev_cov_count; out2[1] = romdev_cov_total; }
++   if (!out) return 0;
++   if (n > max) n = max;
++   for (i = 0; i < n; i++) out[i] = romdev_cov_pcs[i];
++   return n;
++}
 +}
 +
 +/* rom-dev-mcp extension: custom memory region IDs above libretro standard.
@@ -281,7 +462,7 @@ index d381c61..1e67099 100644
  void* retro_get_memory_data(unsigned type)
  {
      void* data;
-@@ -2051,6 +2157,18 @@ void* retro_get_memory_data(unsigned type)
+@@ -2051,6 +2293,18 @@ void* retro_get_memory_data(unsigned type)
          case RETRO_MEMORY_VIDEO_RAM:
          data = Memory.VRAM;
          break;
@@ -300,7 +481,7 @@ index d381c61..1e67099 100644
          //case RETRO_MEMORY_ROM:
          //	data = Memory.ROM;
          //	break;
-@@ -2085,6 +2203,18 @@ size_t retro_get_memory_size(unsigned type)
+@@ -2085,6 +2339,18 @@ size_t retro_get_memory_size(unsigned type)
          case RETRO_MEMORY_VIDEO_RAM:
              size = 64 * 1024;
              break;

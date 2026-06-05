@@ -1,8 +1,8 @@
 diff --git a/libgambatte/include/gambatte.h b/libgambatte/include/gambatte.h
-index 7e5c43b..1cd0d7f 100644
+index 7e5c43b..4530bc7 100644
 --- a/libgambatte/include/gambatte.h
 +++ b/libgambatte/include/gambatte.h
-@@ -147,6 +147,12 @@ public:
+@@ -147,6 +147,16 @@ public:
     void *rombank1_ptr() const;
     void *zeropage_ptr() const;
     void *oamram_ptr() const;
@@ -12,14 +12,18 @@ index 7e5c43b..1cd0d7f 100644
 +   void *objpdata_ptr() const;
 +   void  cpu_snapshot(unsigned char *out) const;
 +   bool  isCgbMode() const;
++   /* rom-dev-mcp RE round 2: SM83 register read/write by romdev reg-id
++    * (0=A 1=F 2=B 3=C 4=D 5=E 6=H 7=L 16=PC 18=SP). */
++   int      romdev_setReg(int regId, unsigned value);
++   unsigned romdev_getReg(int regId) const;
  #endif
  
  private:
 diff --git a/libgambatte/libretro/libretro.cpp b/libgambatte/libretro/libretro.cpp
-index 15b042c..7db8286 100644
+index 15b042c..318debf 100644
 --- a/libgambatte/libretro/libretro.cpp
 +++ b/libgambatte/libretro/libretro.cpp
-@@ -2874,6 +2874,116 @@ void retro_unload_game()
+@@ -2874,6 +2874,192 @@ void retro_unload_game()
  
  unsigned retro_get_region() { return RETRO_REGION_NTSC; }
  
@@ -120,6 +124,82 @@ index 15b042c..7db8286 100644
 +}
 +}
 +
++/* ─── rom-dev-mcp RE round 2: register write + range watch + PC coverage ──────
++ * Bridges to the gambatte CPU the same way the pcbreak/watchpoint state does:
++ * setreg/getreg go through the `gb` GB instance → CPU::romdev_set/getReg; the
++ * range + coverage state are file-scope globals defined in cpu.cpp (the hooks
++ * live in the CPU read/write macros + the execute loop). EXACT export names and
++ * ABI match the Genesis reference so the core-agnostic host layer feature-detects
++ * and drives every patched core identically. */
++extern "C" {
++
++/* romdev register read/write — the inverse of getCPUState (callSubroutine /
++ * setRegister). SM83 reg-id convention (STABLE across cores): 0=A 1=F 2=B 3=C
++ * 4=D 5=E 6=H 7=L 16=PC 18=SP. Returns 0 on success, -1 on an unknown id.
++ * The setreg of PC writes pc_ (the field CPU::process loads into its `pc` local),
++ * so it takes effect on the next run — see CPU::romdev_setReg for the gotcha. */
++int romdev_setreg(int regId, unsigned value) {
++   return gb.romdev_setReg(regId, value);
++}
++
++unsigned romdev_getreg(int regId) {
++   return gb.romdev_getReg(regId);
++}
++
++/* romdev RANGE watch (discovery) — log every read/write in [lo,hi]. mode: 1=read
++ * 2=write 3=both. Arm clears the buffer. State + the read/write hooks live in
++ * cpu.cpp. */
++extern unsigned int  romdev_range_lo, romdev_range_hi;
++extern int           romdev_range_enabled, romdev_range_mode;
++extern unsigned int  romdev_range_pc[], romdev_range_addr[];
++extern unsigned char romdev_range_val[];
++extern unsigned int  romdev_range_count, romdev_range_stored;
++
++void romdev_range_set(unsigned lo, unsigned hi, int mode, int enabled) {
++   romdev_range_lo = lo; romdev_range_hi = hi;
++   romdev_range_mode = mode ? mode : 3;
++   romdev_range_enabled = enabled ? 1 : 0;
++   romdev_range_count = 0; romdev_range_stored = 0;
++}
++
++/* Drain up to `max` events into out[] as packed triples [pc,addr,val,...] (val
++ * in the low byte of its uint32 slot). Returns events written. out2 (size 2) gets
++ * [totalSeen, stored] so the caller knows if the ring overflowed. */
++unsigned romdev_range_get(unsigned *out, unsigned max, unsigned *out2) {
++   unsigned i, n = romdev_range_stored;
++   if (out2) { out2[0] = romdev_range_count; out2[1] = romdev_range_stored; }
++   if (!out) return 0;
++   if (n > max) n = max;
++   for (i = 0; i < n; i++) {
++      out[i*3 + 0] = romdev_range_pc[i];
++      out[i*3 + 1] = romdev_range_addr[i];
++      out[i*3 + 2] = (unsigned)romdev_range_val[i];
++   }
++   return n;
++}
++
++/* romdev PC COVERAGE log (discovery) — distinct in-window PCs over a run. */
++extern int           romdev_cov_enabled;
++extern unsigned int  romdev_cov_lo, romdev_cov_hi;
++extern unsigned int  romdev_cov_pcs[], romdev_cov_count, romdev_cov_total;
++
++void romdev_cov_set(unsigned lo, unsigned hi, int enabled) {
++   romdev_cov_lo = lo; romdev_cov_hi = hi;
++   romdev_cov_enabled = enabled ? 1 : 0;
++   romdev_cov_count = 0; romdev_cov_total = 0;
++}
++
++/* Copy up to `max` distinct PCs into out[]. out2 (size 2) gets [distinct,total]. */
++unsigned romdev_cov_get(unsigned *out, unsigned max, unsigned *out2) {
++   unsigned i, n = romdev_cov_count;
++   if (out2) { out2[0] = romdev_cov_count; out2[1] = romdev_cov_total; }
++   if (!out) return 0;
++   if (n > max) n = max;
++   for (i = 0; i < n; i++) out[i] = romdev_cov_pcs[i];
++   return n;
++}
++}
++
 +/* rom-dev-mcp extension: custom memory region IDs above libretro standard.
 + * Lets the host inspect GB/GBC PPU state for inspectSprites / inspectPalette
 + * / getCPUState. Mirrors fceumm/snes9x/gpgx patches. */
@@ -136,7 +216,7 @@ index 15b042c..7db8286 100644
  void *retro_get_memory_data(unsigned id)
  {
     if (rom_loaded) switch (id)
-@@ -2883,11 +2993,20 @@ void *retro_get_memory_data(unsigned id)
+@@ -2883,11 +3069,20 @@ void *retro_get_memory_data(unsigned id)
        case RETRO_MEMORY_RTC:
           return gb.rtcdata_ptr();
        case RETRO_MEMORY_SYSTEM_RAM:
@@ -159,7 +239,7 @@ index 15b042c..7db8286 100644
     }
  
     return 0;
-@@ -2902,14 +3021,21 @@ size_t retro_get_memory_size(unsigned id)
+@@ -2902,14 +3097,21 @@ size_t retro_get_memory_size(unsigned id)
        case RETRO_MEMORY_RTC:
           return gb.rtcdata_size();
        case RETRO_MEMORY_SYSTEM_RAM:
@@ -184,10 +264,10 @@ index 15b042c..7db8286 100644
  
     return 0;
 diff --git a/libgambatte/src/cpu.cpp b/libgambatte/src/cpu.cpp
-index 0fb6199..9b706af 100644
+index 0fb6199..e3a4308 100644
 --- a/libgambatte/src/cpu.cpp
 +++ b/libgambatte/src/cpu.cpp
-@@ -20,6 +20,44 @@
+@@ -20,6 +20,93 @@
  #include "gambatte-memory.h"
  #include "savestate.h"
  
@@ -227,12 +307,119 @@ index 0fb6199..9b706af 100644
 +volatile int  romdev_pc_hit      = 0;        /* set by the execute hook, cleared by the host */
 +unsigned int  romdev_pc_last_pc  = 0xFFFFFFFF;
 +unsigned int  romdev_pc_hits     = 0;
++
++/* romdev RE round 2 — RANGE watch (discovery): log EVERY {pc,addr,value} that
++ * reads or writes an address in [lo,hi] over a window — not stop-on-first. Hooked
++ * into the same READ/FF_READ/WRITE/FF_WRITE macros as the single-address watch,
++ * with the live sm83 `pc`. Ring buffer; the host drains it. Mirror of the
++ * Genesis m68k range watch. */
++#define ROMDEV_RANGE_CAP 4096
++unsigned int  romdev_range_lo      = 0;
++unsigned int  romdev_range_hi      = 0;
++int           romdev_range_enabled = 0;
++int           romdev_range_mode    = 0;     /* 1=read, 2=write, 3=both */
++unsigned int  romdev_range_pc  [ROMDEV_RANGE_CAP];
++unsigned int  romdev_range_addr[ROMDEV_RANGE_CAP];
++unsigned char romdev_range_val [ROMDEV_RANGE_CAP];
++unsigned int  romdev_range_count   = 0;     /* total events seen (may exceed CAP) */
++unsigned int  romdev_range_stored  = 0;     /* events actually stored (<= CAP) */
++
++/* romdev RE round 2 — PC COVERAGE log (discovery): record DISTINCT PCs executed
++ * within an address window [lo,hi] over a run of frames — "what code runs here?".
++ * Linear de-dup against the stored set (cheap for the small windows this targets).
++ * Hooked into CPU::process at the pc-break check spot (before opcode fetch). */
++#define ROMDEV_COV_CAP 8192
++unsigned int  romdev_cov_lo      = 0;
++unsigned int  romdev_cov_hi      = 0;
++int           romdev_cov_enabled = 0;
++unsigned int  romdev_cov_pcs[ROMDEV_COV_CAP];
++unsigned int  romdev_cov_count   = 0;       /* distinct PCs stored (<= CAP) */
++unsigned int  romdev_cov_total   = 0;       /* total in-window dispatches seen */
++
++/* Append one range-watch event (called from the READ/WRITE macros). */
++void romdev_range_log(unsigned int pc, unsigned int addr, unsigned char val)
++{
++   romdev_range_count++;
++   if (romdev_range_stored < ROMDEV_RANGE_CAP) {
++      romdev_range_pc  [romdev_range_stored] = pc;
++      romdev_range_addr[romdev_range_stored] = addr;
++      romdev_range_val [romdev_range_stored] = val;
++      romdev_range_stored++;
++   }
++}
++
++/* Record a distinct in-window PC for the coverage log. */
++void romdev_cov_log(unsigned int pc)
++{
++   unsigned int i;
++   romdev_cov_total++;
++   for (i = 0; i < romdev_cov_count; i++) if (romdev_cov_pcs[i] == pc) return;
++   if (romdev_cov_count < ROMDEV_COV_CAP) romdev_cov_pcs[romdev_cov_count++] = pc;
++}
 +}
 +
  namespace gambatte {
  
  CPU::CPU()
-@@ -139,12 +177,26 @@ void CPU::loadState(SaveState const &state) {
+@@ -130,6 +217,57 @@ void CPU::loadState(SaveState const &state) {
+ 	skip_ = state.cpu.skip;
+ }
+ 
++#ifdef __LIBRETRO__
++/* rom-dev-mcp RE round 2 — register read/write by romdev reg-id. SM83 convention
++ * (STABLE across cores): 0=A 1=F 2=B 3=C 4=D 5=E 6=H 7=L 16=PC 18=SP.
++ *
++ * The setreg-of-PC GOTCHA: CPU::process() copies pc_ into a LOCAL `pc` at the top
++ * of its outer loop and only writes it back to pc_ on exit. So to make a setreg of
++ * PC actually take on the NEXT process() call, we must write pc_ (the field
++ * process loads), NOT a stale local — which is what we do here. A (a_) is the same
++ * shape: process copies a_ into a local `a` at entry and writes it back on exit, so
++ * we write a_. sp/b/c/d/e/h/l are plain members read directly each instruction.
++ * The flags live split across hf1/hf2/zf/cf; we synthesize F with the file-local
++ * toF() (read) and decompose with zfFromF/hf2FromF/cfFromF (write), exactly like
++ * saveState/loadState — so a getReg after a setReg of F round-trips. */
++int CPU::romdev_setReg(int regId, unsigned value) {
++	switch (regId) {
++	case 0:  a_ = value & 0xFF; return 0;                 /* A  → a_ (process loads this at entry) */
++	case 1:                                               /* F  → split flag fields */
++		zf  =  zfFromF(value & 0xFF);
++		hf2 = hf2FromF(value & 0xFF);
++		hf1 = 0;                                          /* keep hf1 neutral; hf2 carries the H bit */
++		cf  =  cfFromF(value & 0xFF);
++		return 0;
++	case 2:  b = value & 0xFF; return 0;
++	case 3:  c = value & 0xFF; return 0;
++	case 4:  d = value & 0xFF; return 0;
++	case 5:  e = value & 0xFF; return 0;
++	case 6:  h = value & 0xFF; return 0;
++	case 7:  l = value & 0xFF; return 0;
++	case 16: pc_ = value & 0xFFFF; return 0;              /* PC → pc_ (process loads this each outer iter) */
++	case 18: sp = value & 0xFFFF; return 0;               /* SP → sp member */
++	default: return -1;
++	}
++}
++
++unsigned CPU::romdev_getReg(int regId) const {
++	switch (regId) {
++	case 0:  return a_;
++	case 1:  return toF(hf2, cf, zf) & 0xFF;
++	case 2:  return b;
++	case 3:  return c;
++	case 4:  return d;
++	case 5:  return e;
++	case 6:  return h;
++	case 7:  return l;
++	case 16: return pc_;
++	case 18: return sp;
++	default: return 0;
++	}
++}
++#endif
++
+ // The main reasons for the use of macros is to more conveniently be able to tweak
+ // which variables are local and which are not, combined with the fact that at the
+ // time they were written GCC had a tendency to not be able to keep hot variables
+@@ -139,12 +277,35 @@ void CPU::loadState(SaveState const &state) {
  #define de() ( d << 8 | e )
  #define hl() ( h << 8 | l )
  
@@ -245,10 +432,19 @@ index 0fb6199..9b706af 100644
 +			romdev_rd_last_pc = pc; romdev_rd_last_val = (unsigned char)(d); romdev_rd_hits++; \
 +		} \
 +	} while (0)
-+#define READ(dest, addr) do { (dest) = mem_.read(addr, cycleCounter); ROMDEV_RD_CHECK((addr), (dest)); cycleCounter += 4; } while (0)
++/* romdev RE round 2 — RANGE watch hook. `w` is 1 for a write, 0 for a read;
++ * romdev_range_mode 1=read 2=write 3=both. `pc` is the live sm83 PC of the
++ * executing instruction (in scope in CPU::process). Logs {pc,addr,val}. */
++#define ROMDEV_RANGE_CHECK(a, d, w) do { \
++		if (romdev_range_enabled && (romdev_range_mode & ((w) ? 2 : 1)) \
++		    && (unsigned int)(a) >= romdev_range_lo && (unsigned int)(a) <= romdev_range_hi) { \
++			romdev_range_log(pc, (unsigned int)(a), (unsigned char)(d)); \
++		} \
++	} while (0)
++#define READ(dest, addr) do { (dest) = mem_.read(addr, cycleCounter); ROMDEV_RD_CHECK((addr), (dest)); ROMDEV_RANGE_CHECK((addr), (dest), 0); cycleCounter += 4; } while (0)
  #define PC_READ(dest) do { (dest) = mem_.read(pc, cycleCounter); pc = (pc + 1) & 0xFFFF; cycleCounter += 4; } while (0)
 -#define FF_READ(dest, addr) do { (dest) = mem_.ff_read(addr, cycleCounter); cycleCounter += 4; } while (0)
-+#define FF_READ(dest, addr) do { (dest) = mem_.ff_read(addr, cycleCounter); ROMDEV_RD_CHECK(0xFF00 | ((addr) & 0xFF), (dest)); cycleCounter += 4; } while (0)
++#define FF_READ(dest, addr) do { (dest) = mem_.ff_read(addr, cycleCounter); ROMDEV_RD_CHECK(0xFF00 | ((addr) & 0xFF), (dest)); ROMDEV_RANGE_CHECK(0xFF00 | ((addr) & 0xFF), (dest), 0); cycleCounter += 4; } while (0)
  
 -#define WRITE(addr, data) do { mem_.write(addr, data, cycleCounter); cycleCounter += 4; } while (0)
 -#define FF_WRITE(addr, data) do { mem_.ff_write(addr, data, cycleCounter); cycleCounter += 4; } while (0)
@@ -258,15 +454,23 @@ index 0fb6199..9b706af 100644
 +			romdev_wp_last_rom_off = mem_.romdev_romOffset(pc); \
 +		} \
 +	} while (0)
-+#define WRITE(addr, data) do { ROMDEV_WP_CHECK((addr), (data)); mem_.write(addr, data, cycleCounter); cycleCounter += 4; } while (0)
-+#define FF_WRITE(addr, data) do { ROMDEV_WP_CHECK(0xFF00 | ((addr) & 0xFF), (data)); mem_.ff_write(addr, data, cycleCounter); cycleCounter += 4; } while (0)
++#define WRITE(addr, data) do { ROMDEV_WP_CHECK((addr), (data)); ROMDEV_RANGE_CHECK((addr), (data), 1); mem_.write(addr, data, cycleCounter); cycleCounter += 4; } while (0)
++#define FF_WRITE(addr, data) do { ROMDEV_WP_CHECK(0xFF00 | ((addr) & 0xFF), (data)); ROMDEV_RANGE_CHECK(0xFF00 | ((addr) & 0xFF), (data), 1); mem_.ff_write(addr, data, cycleCounter); cycleCounter += 4; } while (0)
  
  #define PC_MOD(data) do { pc = data; cycleCounter += 4; } while (0)
  
-@@ -515,6 +567,50 @@ void CPU::process(unsigned long const cycles) {
+@@ -515,6 +676,58 @@ void CPU::process(unsigned long const cycles) {
  				cycleCounter += cycles + (-cycles & 3);
  			}
  		} else while (cycleCounter < mem_.nextEventTime()) {
++			/* romdev RE round 2 — PC coverage log (discovery): record each DISTINCT
++			 * in-window PC about to execute. `pc` is the address of the next opcode
++			 * (before PC_READ). Cheap when disabled (one int test). */
++			if (romdev_cov_enabled
++			    && (unsigned int)pc >= romdev_cov_lo
++			    && (unsigned int)pc <= romdev_cov_hi)
++				romdev_cov_log(pc);
++
 +			/* romdev PC breakpoint / single-step: check BEFORE fetching the next
 +			 * opcode so `pc` is the address about to execute. On a hit, save the
 +			 * full CPU epilogue (pc_/a_/cycleCounter_) with `pc` UNCHANGED and
@@ -315,10 +519,10 @@ index 0fb6199..9b706af 100644
  
  			PC_READ(opcode);
 diff --git a/libgambatte/src/cpu.h b/libgambatte/src/cpu.h
-index 76c29de..f7bc078 100644
+index 76c29de..7b52f43 100644
 --- a/libgambatte/src/cpu.h
 +++ b/libgambatte/src/cpu.h
-@@ -56,6 +56,42 @@ public:
+@@ -56,6 +56,54 @@ public:
     void *rombank1_ptr() const { return mem_.rombank1_ptr(); }
     void *zeropage_ptr() const { return mem_.zeropage_ptr(); }
     void *oamram_ptr() const { return mem_.oamram_ptr(); }
@@ -358,6 +562,18 @@ index 76c29de..f7bc078 100644
 +      out[13] = mem_.halted() ? 1 : 0;
 +      out[14] = 0; out[15] = 0; out[16] = 0; out[17] = 0;
 +   }
++
++   /* rom-dev-mcp RE round 2: register read/write by romdev reg-id (the inverse
++    * of getCPUState; drives callSubroutine / setRegister). Defined in cpu.cpp so
++    * the file-local flag helpers (toF / zfFromF / hf2FromF / cfFromF) are visible.
++    * SM83 reg-id convention (STABLE across cores): 0=A 1=F 2=B 3=C 4=D 5=E 6=H
++    * 7=L 16=PC 18=SP. The setreg of PC writes pc_ (the field CPU::process loads
++    * into its `pc` local at the top of the outer loop) and SP writes the `sp`
++    * member; A writes a_ (the field process loads into its `a` local at entry) —
++    * so a setreg taken BEFORE the next process() actually sticks. Returns 0 on
++    * success, -1 on an unknown id. */
++   int      romdev_setReg(int regId, unsigned value);
++   unsigned romdev_getReg(int regId) const;
  #endif
  
  	void setVideoBuffer(video_pixel_t *videoBuf, std::ptrdiff_t pitch) {
@@ -399,10 +615,10 @@ index d82ca85..19b71d7 100644
     void loadSavedata() { cart_.loadSavedata(); }
     void saveSavedata() { cart_.saveSavedata(); }
 diff --git a/libgambatte/src/gambatte.cpp b/libgambatte/src/gambatte.cpp
-index 5e1f952..04bf70a 100644
+index 5e1f952..4db71c1 100644
 --- a/libgambatte/src/gambatte.cpp
 +++ b/libgambatte/src/gambatte.cpp
-@@ -237,6 +237,27 @@ void *GB::zeropage_ptr() const {
+@@ -237,6 +237,35 @@ void *GB::zeropage_ptr() const {
  void *GB::oamram_ptr() const {
   return p_->cpu.oamram_ptr();
  }
@@ -426,6 +642,14 @@ index 5e1f952..04bf70a 100644
 +
 +bool GB::isCgbMode() const {
 + return p_->cpu.isCgb();
++}
++
++int GB::romdev_setReg(int regId, unsigned value) {
++ return p_->cpu.romdev_setReg(regId, value);
++}
++
++unsigned GB::romdev_getReg(int regId) const {
++ return p_->cpu.romdev_getReg(regId);
 +}
  #endif
  
