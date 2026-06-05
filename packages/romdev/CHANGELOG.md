@@ -2,6 +2,55 @@
 
 All notable changes to `romdev-mcp`. Dates are release dates.
 
+## 0.4.1
+
+Fixes inverted controller-button mapping on the three genesis_plus_gx platforms
+(Genesis, SMS, Game Gear), backed by a **full empirical 14-platform input audit**.
+Pure `romdev-mcp` patch — no toolchain/core packages changed.
+
+### Fixed — genesis_plus_gx face-button aliases were inverted
+genesis_plus_gx maps the console's printed face buttons onto libretro ids in a
+non-obvious order, and romdev's native-button aliases + docs had it backwards.
+Verified empirically against the running core (an SGDK / port-$DC probe driven by
+each libretro button):
+- **Genesis**: A/B/C map to libretro **y/b/a** — so `setInput({a:true})` presses
+  Genesis **C**, and Genesis A (SGDK `BUTTON_A`) is `setInput({y:true})` /
+  `{west:true}`. `pressButton({button:'c'})` resolved to libretro `y` (Genesis A!);
+  now resolves to `a` (Genesis C).
+- **SMS / Game Gear**: button 1 (TL) = libretro **b**, button 2 (TR) = libretro
+  **a** — so `setInput({a:true})` presses button 2. `pressButton({button:'1'/'2'})`
+  resolved to `a`/`b`; now `b`/`a`.
+- The **spatial face-button names are correct** on all of these (east/south/west
+  resolve to the right physical button) — prefer them, or `pressButton`'s native
+  aliases, over raw libretro a/b/x/y.
+- This was an agent-reported bug: an SGDK platformer's jump (BUTTON_A) wouldn't
+  fire headlessly because every "reasonable" libretro guess pressed the wrong
+  button.
+
+### Verified — all 14 platforms probed live (so we KNOW the scope)
+Each platform got a hardware-register probe ROM driven by each libretro button.
+Result: the press-inversion is **exactly the three genesis_plus_gx platforms**
+(Genesis/SMS/GG). Every other core maps `setInput({a})`→A correctly:
+**NES** (fceumm), **GB/GBC** (gambatte), **SNES** (snes9x — a/b/x/y/l/r all
+correct), **GBA** (mGBA), **PC Engine** (geargrafx — a=I, b=II), **MSX** (bluemsx
+— a=trigger 1, b=trigger 2), **Lynx** (handy — a=A, b=B, active-high). **C64**
+(vice) and **Atari 2600** (stella) are single-fire — fire registers via `b`/`south`,
+`a` is a correct no-op.
+
+### Changed — docs
+- `getInputLayout` notes for genesis/sms/gg corrected (they previously claimed
+  libretro `a` = Genesis A / SMS button 1 — both wrong).
+- **Atari 7800** `getInputLayout` note corrected: it had the ProLine INPT register
+  numbers swapped (claimed a→INPT1/b→INPT0; the audit + prosystem source confirm
+  **a→INPT0 (right/button 2), b→INPT1 (left/button 1)**). The right/left semantic
+  was already right, so button presses were unaffected — only register-by-number
+  reads were misled. Also documents the default 1-button boot mode (both fires read
+  INPT4 until 2-button mode is enabled via CTLSWB).
+- `setInput` / `pressButton` descriptions now surface the face-button-naming trap
+  at the callsite and point to spatial names / `getInputLayout().faceButtons`.
+- `stepFrames` / `screenshot` descriptions nudge toward `stepAndScreenshot` for
+  the drive-then-look loop (token-saving).
+
 ## 0.4.0
 
 Native disassemblers across the board, GBA disassembly + byte-exact projects

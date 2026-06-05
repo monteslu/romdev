@@ -82,7 +82,7 @@ const HARDWARE_LAYOUTS = {
     strobe: "None — the SMS reads controller bits directly from the Z80 I/O port.",
     readSequence: "$DC: bit0 P1 Up, bit1 P1 Down, bit2 P1 Left, bit3 P1 Right, bit4 P1 button 1 (TL), bit5 P1 button 2 (TR), bits6-7 P2 Up/Down. $DD: bits0-3 P2 Left/Right/TL/TR, bit6 reset. ALL ACTIVE-LOW (0 = pressed).",
     bitOrder: ["P1 Up", "P1 Down", "P1 Left", "P1 Right", "P1 Button1", "P1 Button2", "P2 Up", "P2 Down"],
-    note: "Active-low: a pressed button reads 0. Two face buttons per pad (1=TL, 2=TR); no Start on the SMS pad (the console has a physical Pause button wired to the Z80 NMI). libretro JOYPAD maps button 1 → 'a', button 2 → 'b'.",
+    note: "Active-low: a pressed button reads 0. Two face buttons per pad (1=TL, 2=TR); no Start on the SMS pad (the console has a physical Pause button wired to the Z80 NMI). genesis_plus_gx maps button 1 (TL) → libretro 'b' and button 2 (TR) → libretro 'a' (NOTE the inversion: setInput({a:true}) presses button 2, not button 1). Spatial names are correct: west→button 1, east→button 2. pressButton({button:'1'|'2'}) takes the printed labels. Verified vs gpgx 2026-06-05.",
     faceButtons: FACE_BUTTON_MAP.sms,
   },
   gg: {
@@ -91,16 +91,16 @@ const HARDWARE_LAYOUTS = {
     strobe: "None — same VDP/controller chip as the SMS, read directly from Z80 I/O.",
     readSequence: "$DC: bit0 Up, bit1 Down, bit2 Left, bit3 Right, bit4 button 1, bit5 button 2 — all active-low. The Game Gear's extra START button is bit 7 of port $00 (also active-low).",
     bitOrder: ["Up", "Down", "Left", "Right", "Button1", "Button2"],
-    note: "Active-low. Handheld single controller. START is at port $00 bit 7, NOT in $DC. libretro JOYPAD maps button 1 → 'a', button 2 → 'b', START → 'start'.",
+    note: "Active-low. Handheld single controller. START is at port $00 bit 7, NOT in $DC. genesis_plus_gx maps button 1 → libretro 'b' and button 2 → libretro 'a' (same inversion as SMS — setInput({a:true}) presses button 2), START → 'start'. Spatial names are correct: west→button 1, east→button 2. Verified vs gpgx 2026-06-05.",
     faceButtons: FACE_BUTTON_MAP.gg,
   },
   atari7800: {
     register: "SWCHA ($0280, RIOT — directions), INPT0/INPT1 (2-button ProLine fire) OR INPT4/INPT5 (1-button/2600-compat fire), CTLSWA/CTLSWB ($0281/$0283) to select mode",
     protocol: "direct-read",
-    strobe: "None for directions. ⚠ The fire-button read DEPENDS on controller mode: a 2-button ProLine pad reads fire via INPT0 (left/B) + INPT1 (right/A) when the port is driven; a 1-button or 2600-style joystick reads fire via INPT4/INPT5. Set the CTLSWx mode bits accordingly before reading.",
+    strobe: "None for directions. ⚠ The fire-button read DEPENDS on controller mode: a 2-button ProLine pad reads fire via INPT0 (right/button 2/libretro 'a') + INPT1 (left/button 1/libretro 'b') when the port is driven; a 1-button or 2600-style joystick reads fire via INPT4/INPT5. Set the CTLSWx mode bits accordingly before reading. (Default boot is 1-BUTTON mode — both 'a' and 'b' collapse onto INPT4 until you enable 2-button mode by driving CTLSWB bit2.)",
     readSequence: "SWCHA: high nibble = player 1 directions (active-low: bit7 Right, bit6 Left, bit5 Down, bit4 Up). ProLine fire: INPT0/INPT1 bit 7 (the polarity flips with the port-drive state — verify against the emulator with readMemory). 2600-compat fire: INPT4/INPT5 bit 7 (active-low).",
     bitOrder: ["P1 Right", "P1 Left", "P1 Down", "P1 Up", "P2 Right", "P2 Left", "P2 Down", "P2 Up"],
-    note: "The 2-button-vs-1-button fire path is the #1 7800 input footgun — if fire 'doesn't register', you're likely reading the wrong register for the pad mode. Directions are the SAME as the 2600 (shared RIOT SWCHA). libretro maps the two ProLine buttons onto JOYPAD 'a' (right/INPT1) and 'b' (left/INPT0). Verify empirically: drive holdInputs and readMemory the INPT register to confirm which bit moved.",
+    note: "The 2-button-vs-1-button fire path is the #1 7800 input footgun — if fire 'doesn't register', you're likely reading the wrong register for the pad mode. Directions are the SAME as the 2600 (shared RIOT SWCHA). libretro maps the two ProLine buttons onto JOYPAD 'a' → INPT0 (right/button 2) and 'b' → INPT1 (left/button 1), active-HIGH bit7 (confirmed empirically vs prosystem 2026-06-05 + Riot.c). NOTE: default boot is 1-BUTTON mode (SWCHB bit2 set) where BOTH 'a' and 'b' read via INPT4 (active-low) and INPT0/1 stay dead — enable 2-button mode (CTLSWB bit2 = output, SWCHB bit2 = 0) to split them. Verify empirically: drive holdInputs and readMemory the INPT register to confirm which bit moved.",
     faceButtons: FACE_BUTTON_MAP.atari7800,
   },
   lynx: {
