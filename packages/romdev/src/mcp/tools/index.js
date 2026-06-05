@@ -333,7 +333,7 @@ const TOOL_OWNER = {
   findPointerTo: "assets", makeStoredBlock: "assets", relocateBlock: "assets",
   extractCart: "assets", wrapRomFromParts: "assets",
   previewTileArt: "assets",
-  learnFontMap: "assets", encodeTextForRom: "assets", findEncodedText: "assets",
+  text: "assets",
   loadTilemap: "assets", loadAsepriteSheet: "assets", loadGifAnimation: "assets", loadSpriteSheet: "assets",
   cropSpriteSheet: "assets", quantizePngForPlatform: "assets", crossPlatformSpriteImport: "assets",
   captureMetaSprite: "assets", renderMetaSpritePreview: "assets", groupVisibleSprites: "assets", emitMetaSpriteRenderer: "assets", validateGenesisTiles: "assets", extractSpriteFromScreenshot: "assets", previewVisibleSprites: "assets",

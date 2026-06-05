@@ -21,6 +21,8 @@ export const MERGE_MAP = {
   files: { absorbs: ["writeAsset", "readAsset", "listAssets"], axis: "op" },
   // ── cheats (DB lookup/search + apply/clear + make) ──
   cheats: { absorbs: ["gameCheats", "searchCheats", "applyCheat", "clearCheats", "makeCheat"], axis: "op" },
+  // ── text (custom-font learn/encode/find for romhacking) ──
+  text: { absorbs: ["learnFontMap", "encodeTextForRom", "findEncodedText"], axis: "op" },
 };
 
 /** Every OLD tool name that the consolidation removes (absorbed into a new tool). */
