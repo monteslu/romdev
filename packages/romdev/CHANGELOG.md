@@ -4,30 +4,53 @@ All notable changes to `romdev-mcp`. Dates are release dates.
 
 ## 0.4.0
 
-Native disassemblers across the board, GBA disassembly unlocked, and smarter
-cheat search.
+Native disassemblers across the board, GBA disassembly + byte-exact projects
+unlocked, and smarter cheat search. Disassembly is now byte-exact on **all 14
+platforms** — `disassembleRom`, `findReferences`, and `disassembleProject` all run
+through native tools end to end, no hand-rolled JS de/encoders left anywhere.
 
-### Changed — real disassemblers replace the hand-rolled ones
-All four hand-rolled JS instruction decoders are replaced by **native GNU
-binutils disassemblers compiled to WASM** (the same binutils we already build for
-each toolchain — we just ship `objdump` alongside `as`/`ld`/`objcopy`). The JS
-decoders dropped real instructions and (on m68k) desynced the byte stream into
-garbage — the "useless binary" a Genesis RE session hit.
+### Changed — native binutils disassemblers replace ALL the hand-rolled ones
+Every hand-rolled JS instruction decoder (m68k / z80 / sm83) is **deleted** and
+replaced by **native GNU binutils `objdump` compiled to WASM** — the same binutils
+we already build per toolchain, now shipping `objdump` alongside
+`as`/`ld`/`objcopy`. The JS decoders dropped real instructions and (on m68k)
+desynced the byte stream into garbage — the "useless binary" a Genesis RE session
+hit. There is **no JS fallback** — the native path is the only path.
 - **m68k (Genesis)** → `m68k-elf-objdump`. The JS decoder dropped move-sr / muls /
   divu and mis-sized the fallback; a real ROM now disassembles cleanly.
-- **Z80 (SMS / Game Gear / MSX)** → binutils z80 `objdump` (fixes the
+- **Z80 (SMS / Game Gear / MSX)** → binutils z80 `objdump` `-m z80` (fixes the
   (ix+d)/(iy+d) displacement display + edge cases).
-- **SM83 (Game Boy / Color)** → the same z80 objdump via its `gbz80` machine.
-- The pure-JS decoders remain as a fallback when the WASM isn't resolvable.
+- **SM83 (Game Boy / Color)** → the same z80-elf `objdump` via its `gbz80` machine.
+  One z80-elf binutils serves both CPU families.
+- **ARM/Thumb (GBA)** → `arm-none-eabi-objdump`.
 
 ### Added
 - **GBA disassembly** (the 14th platform, previously rejected) — `disassembleRom`
-  and `findReferences` now disassemble ARM7/Thumb via native `arm-none-eabi-objdump`
-  (ARM by default, `thumb:true` for Thumb code). `disassembleProject` still
-  excludes GBA (no byte-exact ARM reassembly yet).
+  and `findReferences` disassemble ARM7/Thumb via native `arm-none-eabi-objdump`
+  (ARM by default, `thumb:true` for Thumb code).
+- **`disassembleProject` now covers all 14 platforms, GBA included.** Each region
+  disassembles through the CPU's native objdump and reassembles **byte-exact**
+  through the matching native `as`/`ld`/`objcopy` (cc65 ca65/ld65 for 6502/65816).
+  Any line the assembler won't reproduce exactly is healed to a `.byte` of its real
+  bytes, so the round-trip is always byte-for-byte. The GBA project splits a 192-byte
+  header data region from an ARM code region; it rebuilds byte-exact but reads low
+  (most GBA C is Thumb reached via an ARM crt0 stub — ARM/Thumb mode-tracking is the
+  readability follow-up).
+- **Lynx** wired into `disassembleRom` + `findReferences` (65C02 via da65; strips the
+  64-byte LYNX header, anchors at $0200).
 - **Cheat search** now uses `fuse.js` over tag-stripped game names — adds
   character-level typo tolerance on top of the existing region/revision-tag and
   word-order robustness.
+
+### Internal
+- Native binutils 2.42 is built to WASM for THREE targets — `m68k-elf`,
+  `arm-none-eabi`, and `z80-elf` (one serves both Z80 and gbz80) — each shipping
+  `as`/`ld`/`objcopy`/`objdump`. Reproducible build scripts under `scripts/`
+  (`build-m68k-wasm-tools.sh`, `build-arm-wasm-tools.sh`, `build-z80-binutils-wasm.sh`),
+  pins in `scripts/versions.json`.
+- Bumped binary packages this release: `romdev-toolchain-m68k-gcc` 0.2.0 (+ objdump),
+  `romdev-platform-gba` 0.3.0 (+ ARM objdump), `romdev-toolchain-sdcc` 0.2.0
+  (+ z80-elf binutils).
 
 ## 0.3.1
 

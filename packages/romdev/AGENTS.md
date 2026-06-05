@@ -54,7 +54,7 @@ Skip playtest only when there's clearly no human in the loop: CI runs, automated
 - `input` — drive controllers, look up hardware bit layouts. `navigate` walks menus by advancing on SCREEN CHANGE (not fixed frames) and reports whether each press was consumed — the fast, reliable way to script a UI.
 - `state` — savestates and forensic state inspection (`saveState`, `loadState`, `exportState` a slot to disk without touching the live host, `listStates`, `dumpState`)
 - `memory` — read/write VRAM/OAM/CGRAM/ARAM and other regions (all 14 platforms). `readMemory` takes `offsets:[…]` to batch scattered reads in one call. **`searchValue`/`searchNext`** = the Cheat-Engine value-search loop ("find the address of X, narrow as X changes"). **`readCartRom`** reads the loaded cart image to confirm a patch is live. **`classifyRegion`** says whether bytes look like ASCII/code/tile-data (kills the "found table that's really a string" trap). `snapshotMemory` + `diffMemory` answer "which bytes changed across this event?" (diff defaults to a clustered summary with stride detection); `diffState` is the coarse whole-machine version.
-- `debug` — inspectSprites, inspectPalette, getCPUState (all 14), getAudioState (the 12 systems with a sound chip — all but Atari 2600/7800), getRenderingContext, findWriter (write watchpoint, all 14), **`traceVramSource`** (Genesis: which ROM offset a VRAM graphic was DMA'd from), **disassemble**/disassembleRom/findReferences (ALL 14 — native binutils objdump per CPU, incl. GBA ARM7/Thumb; only the byte-exact disassembleProject excludes GBA), symbol lookup, whichTilesAreRendered, addressToSymbol, plus **cheats** (`gameCheats` = a free labeled RAM/code map for known ROMs, `searchCheats` to fuzzy-find a game by name, `applyCheat`/`clearCheats` non-destructively, `makeCheat` to create codes)
+- `debug` — inspectSprites, inspectPalette, getCPUState (all 14), getAudioState (the 12 systems with a sound chip — all but Atari 2600/7800), getRenderingContext, findWriter (write watchpoint, all 14), **`traceVramSource`** (Genesis: which ROM offset a VRAM graphic was DMA'd from), **disassemble**/disassembleRom/findReferences/disassembleProject (ALL 14 — native binutils objdump per CPU, incl. GBA ARM7/Thumb; the byte-exact disassembleProject reassembles through native as/ld/objcopy), symbol lookup, whichTilesAreRendered, addressToSymbol, plus **cheats** (`gameCheats` = a free labeled RAM/code map for known ROMs, `searchCheats` to fuzzy-find a game by name, `applyCheat`/`clearCheats` non-destructively, `makeCheat` to create codes)
 - `assets` — convert PNGs to tiles, WAVs to BRR, identify ROMs, plus the hacking toolkit (`patchFile`, `assembleSnippet`, `diffRoms`, `findFreeSpace`, `spliceCHR`, `extractCart`, `wrapRomFromParts`)
 - `project` — starter snippets per platform
 - `show` — `playtest` (open the live SDL window for a human), `playtestStop`, `playtestStatus`, `playtestFramebuffer` (capture exactly what the human's window shows)
@@ -258,7 +258,7 @@ For maintainers: the platform / core / patch / region-ID matrix and the recipe f
 
 ## Deep debug tooling status per platform
 
-Different platforms have different levels of MCP-exposed debugging — different hardware needs different tools, and we've patched the cores where it's been worth it. The generic shapes — `getCPUState`, `findWriter`, `disassembleRom`/`findReferences` (except GBA), `searchValue`/`readCartRom`/`classifyRegion`, cheats — work on **all 14 platforms**. The deep per-platform inspectors (`inspectSprites`, `inspectPalette`, `getRenderingContext`, `getAudioState`) are detailed for **12 systems** below; **PC Engine and MSX** currently have the generic shapes + their core's native regions but not yet the full custom-inspector treatment (extend by patching their cores per the snes9x/gpgx pattern). `getAudioState` covers the **12 with a sound chip** (all but Atari 2600/7800). A few are honest hardware-shaped exceptions, noted inline below (the Lynx has no fixed OAM so inspectSprites returns the SCB list head; GBA has no bundled disassembler). Coverage detail per platform:
+Different platforms have different levels of MCP-exposed debugging — different hardware needs different tools, and we've patched the cores where it's been worth it. The generic shapes — `getCPUState`, `findWriter`, `disassembleRom`/`findReferences`/`disassembleProject`, `searchValue`/`readCartRom`/`classifyRegion`, cheats — work on **all 14 platforms** (disassembly via native binutils `objdump` compiled to WASM, one per CPU family — incl. GBA ARM7/Thumb). The deep per-platform inspectors (`inspectSprites`, `inspectPalette`, `getRenderingContext`, `getAudioState`) are detailed for **12 systems** below; **PC Engine and MSX** currently have the generic shapes + their core's native regions but not yet the full custom-inspector treatment (extend by patching their cores per the snes9x/gpgx pattern). `getAudioState` covers the **12 with a sound chip** (all but Atari 2600/7800). A few are honest hardware-shaped exceptions, noted inline below (the Lynx has no fixed OAM so inspectSprites returns the SCB list head). Coverage detail per platform:
 
 > **Universal across ALL 14 platforms:** `findWriter` (the core-level
 > instruction write watchpoint — the exact PC that wrote a RAM byte, all 14 CPU
@@ -266,21 +266,22 @@ Different platforms have different levels of MCP-exposed debugging — different
 > lookup/apply/create), `getCPUState`, `searchValue`/`searchNext`/`readCartRom`/`classifyRegion`,
 > `snapshotMemory`/`diffMemory`/`diffState`, `watchMemory`/`runUntilWrite`.
 > `getAudioState` covers the 12 systems with a sound chip (all but Atari 2600/7800).
-> `disassembleRom` + `findReferences` + `disassembleProject` cover 13 — **GBA is
-> the one exception** (ARM7TDMI has no bundled disassembler; its live-debug tools
-> all work, only static disasm doesn't). The per-platform notes below cover the
-> platform-SPECIFIC inspectors + chips (PC Engine + MSX: generic shapes only so far).
+> `disassembleRom` + `findReferences` + `disassembleProject` cover **all 14** — every
+> CPU family disassembles through a native binutils `objdump` (WASM), and
+> `disassembleProject` reassembles byte-exact through the matching native
+> `as`/`ld`/`objcopy`. The per-platform notes below cover the platform-SPECIFIC
+> inspectors + chips (PC Engine + MSX: generic shapes only so far).
 
 - **SNES** (snes9x patched): inspectSprites, inspectPalette, getCPUState({cpu:'main'|'spc700'}), getDspState (full per-voice + master mixer), readMemory regions for OAM/CGRAM/ARAM/FillRAM. Audio + video both deeply introspectable.
 - **NES** (fceumm patched): inspectSprites, inspectPalette, getCPUState (6502), getRenderingContext (PPUCTRL/PPUMASK decoded → active CHR bank + file offset), readMemory regions for OAM/Palette/Nametables/CHR/CPU_REGS/PPU_REGS/APU_REGS.
 - **Genesis** (gpgx patched): inspectSprites, inspectPalette, getCPUState({cpu:'main'}) for 68K, getYm2612State (limited — internal struct), getPsgState, readMemory regions for CRAM/VSRAM/VDP_REGS/Z80_RAM/M68K/YM2612/PSG/VRAM.
-- **SMS / Game Gear** (gpgx patched): inspectSprites (SAT decode + sprite-sheet PNG), inspectPalette (6-bit BGR for SMS, 12-bit BGR for GG), inspectPatternTiles (4bpp interleaved, 16KB VRAM as 512-tile sheet), getCPUState (Z80 — A/F/BC/DE/HL/IX/IY/shadows + flags + interrupt state), getAudioState({chip:'psg'}) (SN76489 — 3 tone + 1 noise; same gpgx region as Genesis), getRenderingContext (VDP regs → name table / BG-tile / sprite-tile / SAT addresses + scroll + display state), readMemory regions for sms_vram, sms_cram, sms_vdp_regs, sms_z80_regs (gg_vram, gg_cram for Game Gear's 64-byte palette). disassembleRom + findReferences run through a built-in JS Z80 decoder with full prefix coverage (CB/ED/DD/FD/DDCB/FDCB) and the same auto-label / register-annotation / file-offset / untilReturn pipeline as NES/SNES.
-- **Game Boy / Game Boy Color** (gambatte patched): inspectSprites (40-sprite OAM decode + sprite-sheet PNG with sprite-priority + h/v flip), inspectPalette (DMG: BGP/OBP0/OBP1 byte decode → 4 shades each; GBC: 64-byte BCPS/OCPS palette RAM → 8 palettes × 4 colors BGR555), inspectPatternTiles (384 tiles from $8000-$97FF), getCPUState (SM83 — A/F/BC/DE/HL + flags + IME/halt), getAudioState({chip:'gb'}) (DMG APU — 2 pulse + wave + noise with timer→freq→note, sweep, duty, panning), getRenderingContext (LCDC bit-by-bit, scroll, LY/LYC, window, GBC extras: VRAM bank / KEY1 / BCPS/OCPS index), readMemory regions for gb_vram, gb_oam, gb_io, gb_hram, gb_bgpdata, gb_objpdata, gb_cpu_regs. disassembleRom + findReferences route through a built-in JS SM83 decoder with full CB-prefix coverage + SM83-specific opcodes (`ld (hl+),a`, `ldh`, `reti`, `ld hl,sp+e8`).
+- **SMS / Game Gear** (gpgx patched): inspectSprites (SAT decode + sprite-sheet PNG), inspectPalette (6-bit BGR for SMS, 12-bit BGR for GG), inspectPatternTiles (4bpp interleaved, 16KB VRAM as 512-tile sheet), getCPUState (Z80 — A/F/BC/DE/HL/IX/IY/shadows + flags + interrupt state), getAudioState({chip:'psg'}) (SN76489 — 3 tone + 1 noise; same gpgx region as Genesis), getRenderingContext (VDP regs → name table / BG-tile / sprite-tile / SAT addresses + scroll + display state), readMemory regions for sms_vram, sms_cram, sms_vdp_regs, sms_z80_regs (gg_vram, gg_cram for Game Gear's 64-byte palette). disassembleRom + findReferences + disassembleProject run through the native binutils z80 `objdump` (WASM, `-m z80`) with full prefix coverage (CB/ED/DD/FD/DDCB/FDCB) and the same auto-label / register-annotation / file-offset / untilReturn pipeline as NES/SNES.
+- **Game Boy / Game Boy Color** (gambatte patched): inspectSprites (40-sprite OAM decode + sprite-sheet PNG with sprite-priority + h/v flip), inspectPalette (DMG: BGP/OBP0/OBP1 byte decode → 4 shades each; GBC: 64-byte BCPS/OCPS palette RAM → 8 palettes × 4 colors BGR555), inspectPatternTiles (384 tiles from $8000-$97FF), getCPUState (SM83 — A/F/BC/DE/HL + flags + IME/halt), getAudioState({chip:'gb'}) (DMG APU — 2 pulse + wave + noise with timer→freq→note, sweep, duty, panning), getRenderingContext (LCDC bit-by-bit, scroll, LY/LYC, window, GBC extras: VRAM bank / KEY1 / BCPS/OCPS index), readMemory regions for gb_vram, gb_oam, gb_io, gb_hram, gb_bgpdata, gb_objpdata, gb_cpu_regs. disassembleRom + findReferences + disassembleProject route through the native binutils z80 `objdump` in its `gbz80` machine (WASM, `-m gbz80`) — full CB-prefix coverage + SM83-specific opcodes (`ld (hl+),a`, `ldh`, `reti`, `ld hl,sp+e8`). One z80-elf binutils serves both plain Z80 (SMS/GG/MSX) and the GB CPU.
   - **Toolchains:** default is **C** via SDCC's sm83 port (same SDCC that powers SMS/GG/MSX/Coleco). For hand-tuned asm, pass `language:"asm"` to route through RGBDS. The C path uses `__sfr __at 0xFFNN` to bind GB I/O regs; helper headers under `src/platforms/gb/lib/c/gb_hardware.h` define LCDC/STAT/SCY/SCX/LY/BGP/OBP0/OBP1/etc. for both DMG and CGB. The SDCC 4.4.0 codegen quirk (`for (;;) { switch + write to __sfr }` crashes the register allocator) applies — use `do { ... } while (1)` and table-lookup writes instead.
 - **Atari 2600** (stella2014 patched): inspectPalette (NTSC 128-color palette PNG; current background luma+hue extracted from TIA snapshot), inspectSprites (no OAM — returns the 5 graphics objects state P0/P1/M0/M1/Ball + a current-scanline PNG showing TIA composition), getCPUState (6502 — A/X/Y/P/SP/PC from the M6502 internal regs), getRenderingContext (decodes the 32-byte TIA snapshot into playfield/sprite/colors), readMemory regions for `system_ram` (128 bytes of RIOT RAM), `a26_tia_regs` (32-byte TIA snapshot), `a26_cpu_regs` (7-byte 6502 snapshot). disassembleRom + findReferences anchor to the top of the bank ($F000-$FFFF) with vector-table labels (NMI/RESET/IRQ at $FFFA).
 - **Atari 7800** (prosystem patched): inspectPalette (256-color master PNG; MARIA palette block at $20-$3F decoded into 8 palettes × 3 colors + backdrop), inspectSprites (no OAM — returns the MARIA control regs + the DPP display-list-list pointer for the agent to walk), getCPUState (6502 — A/X/Y/P/SP/PC from prosystem's sally globals), getRenderingContext (MARIA CTRL bits + DPP + CHARBASE + dlistPtr), readMemory regions for `system_ram` (the entire 64KB 6502 address space — MARIA regs, RAM, ROM all visible) + `a78_cpu_regs`. disassembleRom + findReferences default to the top 16KB ($C000-$FFFF) where the reset vector lands.
 - **Commodore 64** (vice patched): inspectPalette (the 16-color hardware-fixed palette PNG + current border/background/extra-bg indices decoded from VIC-II regs), inspectSprites (8 MOBs decoded into the generic shape with X/Y/color/multicolor/expand-X/expand-Y/priority + the screen-RAM sprite-data pointers at $07F8 so the agent can locate sprite pixel blocks), getCPUState (6510 — A/X/Y/P/SP/PC from a `#define`-aliased live register file + the I/O port at $0001 decoded into LORAM/HIRAM/CHAREN), getAudioState({chip:'sid'}) (6581/8580 — 3 voices {waveform, freq→note, pulse-width, ADSR} + filter cutoff/resonance/mode), getRenderingContext (VIC-II regs decoded into mode/scroll/colors/sprites, VIC bank from CIA2 $DD00, absolute screen + char base addresses), readMemory regions for `system_ram` (64 KB RAM), `c64_color_ram` (1 KB), `c64_vic_regs` (64 B), `c64_sid_regs` (29 B via sid_peek), `c64_cia1_regs`/`c64_cia2_regs` (16 B each from `c_cia[]`), `c64_cpu_regs` (7 B). disassembleRom + findReferences accept `.prg` files (2-byte load-address header) and the C64 register annotation table for VIC-II / SID / CIA registers. Starter snippets cover vic_init / sprite_table / sid_play / read_joystick / basic_stub.
-- **Game Boy Advance** (mgba patched): inspectSprites (128 OAM sprites → generic shape with shape/size, 9-bit signed X, affine/hidden, tile/palette/priority), inspectPalette (256 BG + 256 OBJ 15-bit BGR555, `area:'bg'|'sprite'`), getCPUState (ARM7TDMI — 16 gprs r0-r15 + cpsr/spsr + mode + ARM/THUMB, plus `execPc` adjusted for pipeline prefetch), getAudioState({chip:'gba'}) (4 DMG PSG channels + 2 Direct Sound DMA FIFOs, master/bias), getRenderingContext (DISPCNT bg-mode + per-BG enable/priority/char-base/map-base/color-mode, forced-blank, OBJ enable), readMemory regions for `gba_cpu_regs`, `gba_io_regs` (the IO page — video AND audio regs), `gba_palette`, `gba_oam`, plus system_ram/video_ram/save_ram. **The one exception to the universal set:** no `disassembleProject`/`disassembleRom` — ARM7TDMI has no bundled disassembler; use external ARM tools. (findWriter and every other live-debug tool DO work.)
+- **Game Boy Advance** (mgba patched): inspectSprites (128 OAM sprites → generic shape with shape/size, 9-bit signed X, affine/hidden, tile/palette/priority), inspectPalette (256 BG + 256 OBJ 15-bit BGR555, `area:'bg'|'sprite'`), getCPUState (ARM7TDMI — 16 gprs r0-r15 + cpsr/spsr + mode + ARM/THUMB, plus `execPc` adjusted for pipeline prefetch), getAudioState({chip:'gba'}) (4 DMG PSG channels + 2 Direct Sound DMA FIFOs, master/bias), getRenderingContext (DISPCNT bg-mode + per-BG enable/priority/char-base/map-base/color-mode, forced-blank, OBJ enable), readMemory regions for `gba_cpu_regs`, `gba_io_regs` (the IO page — video AND audio regs), `gba_palette`, `gba_oam`, plus system_ram/video_ram/save_ram. disassembleRom + findReferences + disassembleProject run through the native binutils `arm-none-eabi-objdump` (WASM) — ARM by default, `thumb:true` for Thumb code; the byte-exact project reassembles through `arm-none-eabi-as`/`ld`/`objcopy`. (Note: GBA C compiles mostly to Thumb reached via an ARM crt0 stub, so an ARM-mode disasm of a full ROM decodes the Thumb spans as `.byte` — still byte-exact, just less readable until ARM/Thumb mode-tracking lands.)
 - **Atari Lynx** (handy patched): inspectPalette (16-entry 12-bit Mikey palette → RGB), getCPUState (65C02 — A/X/Y/P/SP/PC + flags), getAudioState({chip:'mikey'}) (4 channels — volume, timer→freq→note, 12-bit LFSR state), getRenderingContext (DISPCTL DMA-enable/flip/color-mode + display base address), readMemory regions for `lynx_cpu_regs`, `lynx_hw_regs` (the $FC00-$FDFF Suzy+Mikey window — sprite engine regs, LCD control, audio, palette), plus system_ram. **inspectSprites is a special case:** the Lynx has NO fixed OAM — sprites are SCB (Sprite Control Block) linked lists in RAM walked by Suzy, so inspectSprites returns the SCB list head (SCBNEXT $FC10/$FC11) and instructions to walk the chain over system_ram rather than a sprite table.
 - **MSX, ColecoVision**: standard system_ram + save_ram + video_ram. Deeper introspection not yet added — extend by patching their cores following the snes9x/gpgx/fceumm/vice pattern (see scripts/patches/).
 
@@ -698,21 +699,21 @@ What you get:
 - **`outputPath`** — writes raw asm to disk instead of returning a
   188KB JSON wad. Returns `{outputPath, asmBytes, asmLines}` for log/inspection.
 
-6502-family disassembly runs through cc65's da65 (WASM); Z80 + SM83
-disassembly runs through built-in pure-JS decoders with full prefix
-coverage (Z80: CB/ED/DD/FD/DDCB/FDCB; SM83: CB only — no ED/DD/FD on GB).
-DD/FD/DDCB/FDCB). Annotations are post-processing in both paths.
+Every CPU family disassembles through a native binutils disassembler compiled to
+WASM: 6502/65816 via cc65's `da65`; Z80 (SMS/GG/MSX) + SM83 (GB/GBC) via one
+z80-elf `objdump` (`-m z80` / `-m gbz80`); m68k (Genesis) via `m68k-elf-objdump`;
+ARM/Thumb (GBA) via `arm-none-eabi-objdump`. No hand-rolled JS decoders. The
+auto-label / register-annotation / file-offset / untilReturn handling is
+post-processing layered on the objdump output.
 
 ### Whole-ROM, rebuildable projects — `disassembleProject`
 
 `disassembleRom` gives you one routine as text. `disassembleProject` turns an
-**entire ROM into a complete, re-buildable project in one call**, across 13 of
-the 14 systems (NES, SNES, GB/GBC, SMS/GG, Genesis, C64, Atari 2600/7800,
-**Lynx** — 65C02, **PC Engine** — HuC6280, and **MSX** — Z80; byte-exact).
-**GBA is the sole exception** here: ARM7/Thumb DISASSEMBLES fine via
-`disassembleRom`/`findReferences` (native ARM objdump), but `disassembleProject`
-needs a byte-exact ARM REASSEMBLE step that isn't wired yet — `platform:'gba'`
-returns a message pointing you at disassembleRom instead:
+**entire ROM into a complete, re-buildable project in one call**, across **all 14
+systems** (NES, SNES, GB/GBC, SMS/GG, Genesis, **GBA**, C64, Atari 2600/7800,
+**Lynx** — 65C02, **PC Engine** — HuC6280, and **MSX** — Z80; always byte-exact).
+Each region disassembles through the CPU's native objdump and reassembles through
+the matching native `as`/`ld`/`objcopy`, so the round-trip is guaranteed byte-for-byte:
 
 ```js
 disassembleProject({ path: "game.nes", outputDir: "./game-disasm" })
@@ -731,13 +732,21 @@ vs. data. Each `.asm` carries a provenance + round-trip header and is ready to
 edit and rebuild with the platform's native toolchain.
 
 Reassembler per CPU family (all bundled WASM, no installs): **cc65** ca65/ld65
-for 6502 + 65816, **sjasm** for Z80, **rgbds** for GB SM83, **vasm** for 68k.
+for 6502 + 65816; native binutils **`as`/`ld`/`objcopy`** for the GNU CPUs —
+`m68k-elf` (Genesis), `arm-none-eabi` (GBA), and one `z80-elf` for both Z80
+(SMS/GG/MSX) and gbz80 (GB/GBC). objdump and `as` share GNU syntax, so objdump's
+output feeds straight back into `as` with no translation; any line the assembler
+won't reproduce exactly is healed to a `.byte` of its real bytes.
 
 Caveats worth knowing up front:
 - **SNES and large Genesis ROMs come back byte-exact but DATA-ONLY**
   (low `readablePercent`). Flat whole-ROM disassembly of a mostly-data image
   heals down to `.byte`; meaningful instruction coverage there needs recursive
   entry-point following, a known follow-up. The bytes are always correct.
+- **GBA** rebuilds byte-exact but reads LOW: GBA C compiles mostly to Thumb,
+  reached via an ARM crt0 stub, so an ARM-mode disasm decodes the Thumb spans as
+  `.byte`. ARM/Thumb mode-tracking is the readability follow-up; the bytes are
+  always correct. (The 192-byte GBA header is emitted as a clean data region.)
 - Banked-NES is the strongest case — per-bank regions come back ~100%
   instructions. GB/GBC, SMS/GG, C64, and Atari are also near-100%.
 - Platform is sniffed from the file extension; pass `platform:` to override.

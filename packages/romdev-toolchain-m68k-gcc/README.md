@@ -1,6 +1,7 @@
 # romdev-toolchain-m68k-gcc
 
-m68k-elf-gcc toolchain (cc1/as/ld/objcopy) for Sega Genesis C, as WebAssembly.
+m68k-elf-gcc toolchain (cc1/as/ld/objcopy/objdump) for Sega Genesis C — and the
+native m68k disassembler/reassembler behind `disassembleProject` — as WebAssembly.
 
 A binary package for [romdev](https://github.com/monteslu/romdev) — it ships the
 prebuilt WebAssembly + JS glue and is resolved by the main `romdev` package on

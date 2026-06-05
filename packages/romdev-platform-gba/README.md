@@ -1,6 +1,8 @@
 # romdev-platform-gba
 
-Game Boy Advance bundle: mGBA emulator core + arm-none-eabi-gcc toolchain (cc1/as/ld/objcopy), as WebAssembly.
+Game Boy Advance bundle: mGBA emulator core + arm-none-eabi-gcc toolchain
+(cc1/as/ld/objcopy/objdump) — the objdump also powers ARM/Thumb `disassembleRom` +
+byte-exact `disassembleProject` — as WebAssembly.
 
 A binary package for [romdev](https://github.com/monteslu/romdev) — it ships the
 prebuilt WebAssembly + JS glue and is resolved by the main `romdev` package on
