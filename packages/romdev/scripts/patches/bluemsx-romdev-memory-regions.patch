@@ -17,6 +17,17 @@
 #   MSX_PSG_REGS   0x1C5   UInt8[16]               AY-3-8910 register file (via a singleton
 #                                                  captured in ay8910Create + a getter in AY8910.c)
 #
+# Execution breakpoints (runUntilPC / runUntilRead / stepInstruction):
+#   Adds Z80/R800 hooks in Src/Z80/R800.c — a PC-break/single-step check at the
+#   top of the r800Execute / r800ExecuteUntil run loops (PC compared BEFORE the
+#   next opcode fetch; on hit it freezes the CPU at that PC and sets
+#   r800->terminate so the active run loop returns and retro_run completes the
+#   frame), plus READ and WRITE watchpoint hooks in readMem/writeMem (data path,
+#   not opcode fetch). libretro.c exports the romdev_pcbreak_*/romdev_readwatch_*/
+#   romdev_watchpoint_* setters+getters (same [out5]/[out6] layout as the gpgx
+#   m68k template). romdev_pc_step is a per-instruction countdown the host arms to
+#   2 so single-step ADVANCES the PC.
+#
 diff --git a/Src/SoundChips/AY8910.c b/Src/SoundChips/AY8910.c
 index 3e74ec9..b564d1d 100644
 --- a/Src/SoundChips/AY8910.c
@@ -114,11 +125,137 @@ index cc6cbf5..8c1bab2 100644
  /* The following methods needs target dependent implementation */
  extern void RefreshScreen(int);
  
+diff --git a/Src/Z80/R800.c b/Src/Z80/R800.c
+index e3dd190..eee05a9 100644
+--- a/Src/Z80/R800.c
++++ b/Src/Z80/R800.c
+@@ -42,6 +42,64 @@ static UInt8  ZSPXYTable[256];
+ static UInt8  ZSPHTable[256];
+ static UInt16 DAATable[0x800];
+ 
++/* ====================================================================== */
++/* romdev breakpoint / watchpoint state (Z80 / R800).                      */
++/*                                                                         */
++/* These globals are consulted by the hooks in this file and driven by the */
++/* romdev_pcbreak_/romdev_readwatch_/romdev_watchpoint_ exports in          */
++/* libretro.c. The PC breakpoint hook lives in the r800Execute /            */
++/* r800ExecuteUntil run loops (PC compared BEFORE the next instruction is   */
++/* fetched). The read watch hooks readMem (data reads, NOT opcode fetch);   */
++/* the write watch hooks writeMem. All record the live Z80 PC.             */
++
++/* PC breakpoint / single-step. */
++unsigned int  romdev_pc_addr    = 0;
++int           romdev_pc_enabled = 0;
++volatile int  romdev_pc_step    = 0;        /* per-instruction countdown; >0 = single-step armed */
++volatile int  romdev_pc_hit     = 0;        /* set by the execute hook, cleared by the host */
++unsigned int  romdev_pc_last_pc = 0xFFFFFFFF;
++unsigned int  romdev_pc_hits    = 0;
++
++/* READ watchpoint (data reads). */
++unsigned int  romdev_rd_addr     = 0;
++int           romdev_rd_enabled  = 0;
++unsigned int  romdev_rd_last_pc  = 0xFFFFFFFF;
++unsigned char romdev_rd_last_val = 0;
++unsigned int  romdev_rd_hits     = 0;
++
++/* WRITE watchpoint (data writes) — used by findWriter. */
++unsigned int  romdev_wp_addr     = 0;
++int           romdev_wp_enabled  = 0;
++unsigned int  romdev_wp_last_pc  = 0xFFFFFFFF;
++unsigned char romdev_wp_last_val = 0;
++unsigned int  romdev_wp_hits     = 0;
++
++/* romdev PC breakpoint / single-step check. Placed at the top of each run-loop
++ * iteration, BEFORE the next opcode is fetched, so r800->regs.PC.W is the
++ * address about to execute. On a hit it freezes the CPU at that PC (the
++ * instruction is NOT executed) and sets r800->terminate so the active run loop
++ * (r800Execute) returns and retro_run completes the frame — without consuming
++ * the rest of the frame the libretro loop would otherwise re-enter the CPU and
++ * step past the breakpoint (TRAP 2). The host polls romdev_pc_hit after
++ * retro_run and stops stepping once set. romdev_pc_step is a per-instruction
++ * countdown the host arms to 2 so ONE instruction executes before the stop
++ * fires (true single-step that advances the PC, not a re-stop on the same one). */
++#define ROMDEV_PCBREAK_CHECK(r800) do { \
++    if ((romdev_pc_enabled || romdev_pc_step) && !romdev_pc_hit) { \
++        int romdev_stepFire = 0; \
++        if (romdev_pc_step) { if (--romdev_pc_step <= 0) romdev_stepFire = 1; } \
++        if (romdev_stepFire || ((romdev_pc_enabled && !romdev_pc_step) \
++                                && (unsigned int)(r800)->regs.PC.W == romdev_pc_addr)) { \
++            romdev_pc_last_pc = (r800)->regs.PC.W; \
++            romdev_pc_hit = 1; \
++            romdev_pc_hits++; \
++            romdev_pc_step = 0; \
++            (r800)->terminate = 1; \
++            break; \
++        } \
++    } \
++} while (0)
++
+ 
+ static void cb(R800* r800);
+ static void dd(R800* r800);
+@@ -179,9 +237,19 @@ static void writePort(R800* r800, UInt16 port, UInt8 value) {
+ }
+ 
+ static UInt8 readMem(R800* r800, UInt16 address) {
++    UInt8 romdev_v;
+     delayMem(r800);
+     r800->cachePage = 0xffff;
+-    return r800->readMemory(r800->ref, address);
++    romdev_v = r800->readMemory(r800->ref, address);
++    /* romdev READ watchpoint: data reads only (opcode/operand fetches go
++     * through readOpcode and are deliberately not hooked). Records the live
++     * Z80 PC of the instruction performing the read. */
++    if (romdev_rd_enabled && (unsigned int)address == romdev_rd_addr) {
++        romdev_rd_last_pc = r800->regs.PC.W;
++        romdev_rd_last_val = romdev_v;
++        romdev_rd_hits++;
++    }
++    return romdev_v;
+ }
+ 
+ static UInt8 readOpcode(R800* r800, UInt16 address) {
+@@ -196,6 +264,13 @@ static UInt8 readOpcode(R800* r800, UInt16 address) {
+ static void writeMem(R800* r800, UInt16 address, UInt8 value) {
+     delayMem(r800);
+     r800->cachePage = 0xffff;
++    /* romdev WRITE watchpoint (findWriter): records the live Z80 PC of the
++     * instruction writing a watched address. */
++    if (romdev_wp_enabled && (unsigned int)address == romdev_wp_addr) {
++        romdev_wp_last_pc = r800->regs.PC.W;
++        romdev_wp_last_val = value;
++        romdev_wp_hits++;
++    }
+     r800->writeMemory(r800->ref, address, value);
+ 
+ #ifdef ENABLE_WATCHPOINTS
+@@ -6076,6 +6151,8 @@ void r800Execute(R800* r800) {
+         }
+ #endif
+ 
++        ROMDEV_PCBREAK_CHECK(r800);
++
+         executeInstruction(r800, readOpcode(r800, r800->regs.PC.W++));
+ 
+         if (r800->regs.halt)
+@@ -6169,9 +6246,11 @@ void r800ExecuteUntil(R800* r800, UInt32 endTime) {
+         }
+ #endif
+ 
++        ROMDEV_PCBREAK_CHECK(r800);
++
+         executeInstruction(r800, readOpcode(r800, r800->regs.PC.W++));
+ 
+-        if (!r800->regs.halt) { 
++        if (!r800->regs.halt) {
+             iff1 = r800->regs.iff1 >> 1;
+             r800->regs.iff1 >>= iff1;
+         }
 diff --git a/libretro.c b/libretro.c
-index f583a99..2edaf66 100644
+index f583a99..b6c8470 100644
 --- a/libretro.c
 +++ b/libretro.c
-@@ -1838,16 +1838,83 @@ unsigned retro_get_region(void)
+@@ -1838,16 +1838,179 @@ unsigned retro_get_region(void)
           return RETRO_REGION_NTSC;
     }
  }
@@ -167,6 +304,102 @@ index f583a99..2edaf66 100644
 +    romdev_msx_cpu.im   = cpu->regs.im;
 +    romdev_msx_cpu.halt = cpu->regs.halt;
 +    return &romdev_msx_cpu;
++}
++
++/* ---- romdev breakpoint / watchpoint exports (Z80 / R800) ------------- */
++/* State + hooks live in Src/Z80/R800.c. These thin setters/getters are the
++ * C-linkage surface the host calls (runUntilPC / runUntilRead / findWriter /
++ * stepInstruction). Layout matches the gpgx m68k template so the core-agnostic
++ * host code reads the same [out5] arrays. */
++extern unsigned int  romdev_pc_addr;
++extern int           romdev_pc_enabled;
++extern volatile int  romdev_pc_step;
++extern volatile int  romdev_pc_hit;
++extern unsigned int  romdev_pc_last_pc;
++extern unsigned int  romdev_pc_hits;
++
++extern unsigned int  romdev_rd_addr;
++extern int           romdev_rd_enabled;
++extern unsigned int  romdev_rd_last_pc;
++extern unsigned char romdev_rd_last_val;
++extern unsigned int  romdev_rd_hits;
++
++extern unsigned int  romdev_wp_addr;
++extern int           romdev_wp_enabled;
++extern unsigned int  romdev_wp_last_pc;
++extern unsigned char romdev_wp_last_val;
++extern unsigned int  romdev_wp_hits;
++
++/* PC BREAKPOINT. `step` arms a one-instruction single-step (ignores addr). */
++void romdev_pcbreak_set(unsigned int addr, int enabled, int step)
++{
++   romdev_pc_addr = addr;
++   romdev_pc_enabled = enabled ? 1 : 0;
++   /* step is a per-instruction countdown; arm to 2 so ONE instruction executes
++    * before the stop fires (true single-step that advances the PC). */
++   romdev_pc_step = step ? 2 : 0;
++   romdev_pc_hit = 0;
++   romdev_pc_last_pc = 0xFFFFFFFF;
++   romdev_pc_hits = 0;
++}
++
++/* Fills out5: [enabled, addr, hit, lastPC, hits]. Pass clearHit to re-arm. */
++void romdev_pcbreak_get(unsigned int *out5, int clearHit)
++{
++   if (!out5) return;
++   out5[0] = (unsigned int)romdev_pc_enabled;
++   out5[1] = romdev_pc_addr;
++   out5[2] = (unsigned int)romdev_pc_hit;
++   out5[3] = romdev_pc_last_pc;
++   out5[4] = romdev_pc_hits;
++   if (clearHit) { romdev_pc_hit = 0; }
++}
++
++/* READ watchpoint. */
++void romdev_readwatch_set(unsigned int addr, int enabled)
++{
++   romdev_rd_addr = addr;
++   romdev_rd_enabled = enabled ? 1 : 0;
++   romdev_rd_last_pc = 0xFFFFFFFF;
++   romdev_rd_last_val = 0;
++   romdev_rd_hits = 0;
++}
++
++/* Fills out5: [enabled, addr, lastPC, lastVal, hits]. */
++void romdev_readwatch_get(unsigned int *out5, int clearHits)
++{
++   if (!out5) return;
++   out5[0] = (unsigned int)romdev_rd_enabled;
++   out5[1] = romdev_rd_addr;
++   out5[2] = romdev_rd_last_pc;
++   out5[3] = (unsigned int)romdev_rd_last_val;
++   out5[4] = romdev_rd_hits;
++   if (clearHits) { romdev_rd_hits = 0; romdev_rd_last_pc = 0xFFFFFFFF; }
++}
++
++/* WRITE watchpoint (findWriter). */
++void romdev_watchpoint_set(unsigned int addr, int enabled)
++{
++   romdev_wp_addr = addr;
++   romdev_wp_enabled = enabled ? 1 : 0;
++   romdev_wp_last_pc = 0xFFFFFFFF;
++   romdev_wp_last_val = 0;
++   romdev_wp_hits = 0;
++}
++
++/* Fills out6: [enabled, addr, lastPC, lastVal, hits, prgOffset]. prgOffset is
++ * always 0xFFFFFFFF for MSX (no sega-style bank resolution here; the host only
++ * needs lastPC). out6[5] kept for layout-compat with the gpgx getter. */
++void romdev_watchpoint_get(unsigned int *out6, int clearHits)
++{
++   if (!out6) return;
++   out6[0] = (unsigned int)romdev_wp_enabled;
++   out6[1] = romdev_wp_addr;
++   out6[2] = romdev_wp_last_pc;
++   out6[3] = (unsigned int)romdev_wp_last_val;
++   out6[4] = romdev_wp_hits;
++   out6[5] = 0xFFFFFFFF;
++   if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; }
 +}
 +
  void *retro_get_memory_data(unsigned id)

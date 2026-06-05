@@ -6,19 +6,27 @@ All notable changes to `romdev-mcp`. Dates are release dates.
 
 Execution breakpoints — the RE primitive that turns "infer for hours" into "read
 the register." Adds `runUntilPC`, `runUntilRead`, and `stepInstruction`, live on
-**Genesis, NES, Game Boy/Color, and SNES** (more cores rolling out, same pattern
-as the write watchpoint). Requires the matching core packages: `romdev-core-gpgx`,
-`romdev-core-fceumm`, `romdev-core-gambatte` @ 0.5.0 and `romdev-platform-snes` @ 0.4.0.
+**all 14 platforms**. Same model as the write watchpoint; requires the bumped core
+packages (gpgx, fceumm, gambatte, prosystem, geargrafx, bluemsx, handy, vice,
+platform-snes, platform-atari2600, platform-gba).
 
-### Added — PC breakpoint + read watchpoint + single-step
+### Added — PC breakpoint + read watchpoint + single-step (all 14 platforms)
 The symmetric gaps next to `findWriter` (a core-level WRITE watchpoint), requested
 by an agent who could disassemble a name-decoder but couldn't read the one address
-register that held the answer. Now on 4 CPU families:
-- **Genesis** (m68k, genesis_plus_gx), **NES** (6502, fceumm), **Game Boy / Color**
-  (SM83, gambatte), **SNES** (65816, snes9x). Each core gains the same
-  `romdev_pcbreak_*` / `romdev_readwatch_*` exports (the gpgx m68k patch is the
-  template); the host + MCP layer is core-agnostic and feature-detects, returning
-  `notSupported` on cores not yet patched.
+register that held the answer. Every bundled CPU family now has it:
+- **m68k** Genesis (gpgx), **6502/65C02** NES (fceumm) · Atari 2600 (stella) ·
+  Atari 7800 (prosystem) · Lynx (handy), **SM83** GB/GBC (gambatte), **65816** SNES
+  (snes9x), **Z80** SMS/GG (gpgx) · MSX (bluemsx), **HuC6280** PC Engine (geargrafx),
+  **ARM7TDMI** GBA (mgba), **6510** C64 (vice).
+- Each core gains the same `romdev_pcbreak_*` / `romdev_readwatch_*` exports (the
+  gpgx m68k patch is the template); the host + MCP layer is core-agnostic and
+  feature-detects, returning `notSupported` on any core that lacks the exports.
+- Single-step is a per-instruction countdown so it ADVANCES the PC; on a hit the
+  core consumes its frame cycle budget (PC frozen) so `retro_run` still completes —
+  no mid-frame hang.
+- **PC Engine caveat:** geargrafx has no write watchpoint, so `findWriter` is
+  unavailable there — but `runUntilPC` / `runUntilRead` / `stepInstruction` work.
+  (Use `runUntilRead` or a known code address as the anchor instead of findWriter.)
 - **`runUntilPC({address, maxFrames, pressDuring})`** — runs until the m68k PC
   reaches `address`, then STOPS with the CPU frozen EXACTLY at that instruction
   (the core's execute loop bails mid-frame on the hit). Then `getCPUState` reads

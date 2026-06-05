@@ -8,10 +8,17 @@
 # Also adds an instruction-level WRITE WATCHPOINT (6502): M6502::poke records the
 # CPU PC when a watched address is written; libretro.cxx exports
 # romdev_watchpoint_set/get.
+#
+# Also adds an instruction-level READ WATCHPOINT (M6502::peek) and an
+# execution-level PC BREAKPOINT / single-step (the hook in M6502::execute sets
+# StopExecutionBit on a hit — the same path stella's debugger uses to break
+# mid-frame, so TIA::update's endFrame() runs and retro_run returns instead of
+# hanging). libretro.cxx exports romdev_readwatch_set/get and
+# romdev_pcbreak_set/get — these power runUntilRead / runUntilPC / stepInstruction.
 # git apply ignores everything above the first 'diff --git' line.
 #
 diff --git a/libretro.cxx b/libretro.cxx
-index 15c6d12..bd869c6 100644
+index 15c6d12..1ec0e20 100644
 --- a/libretro.cxx
 +++ b/libretro.cxx
 @@ -28,6 +28,7 @@
@@ -22,7 +29,7 @@ index 15c6d12..bd869c6 100644
  #include "Version.hxx"
  
  #include "Stubs.hxx"
-@@ -1248,16 +1249,61 @@ unsigned retro_get_region(void)
+@@ -1248,16 +1249,127 @@ unsigned retro_get_region(void)
     return RETRO_REGION_NTSC;
  }
  
@@ -54,6 +61,72 @@ index 15c6d12..bd869c6 100644
 +   out5[4] = romdev_wp_hits;
 +   if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; }
 +}
++
++/* romdev READ watchpoint (6502) — state defined here; the hook in M6502::peek
++ * records the CPU PC when a watched address is READ. Symmetric to the write
++ * watch above. Exported as romdev_readwatch_set/get. */
++unsigned int  romdev_rd_addr     = 0;
++int           romdev_rd_enabled  = 0;
++unsigned int  romdev_rd_last_pc  = 0xFFFFFFFF;
++unsigned char romdev_rd_last_val = 0;
++unsigned int  romdev_rd_hits     = 0;
++
++void romdev_readwatch_set(unsigned int addr, int enabled)
++{
++   romdev_rd_addr = addr;
++   romdev_rd_enabled = enabled ? 1 : 0;
++   romdev_rd_last_pc = 0xFFFFFFFF;
++   romdev_rd_last_val = 0;
++   romdev_rd_hits = 0;
++}
++
++/* Fills out5: [enabled, addr, lastPC, lastVal, hits]. */
++void romdev_readwatch_get(unsigned int *out5, int clearHits)
++{
++   if (!out5) return;
++   out5[0] = (unsigned int)romdev_rd_enabled;
++   out5[1] = romdev_rd_addr;
++   out5[2] = romdev_rd_last_pc;
++   out5[3] = (unsigned int)romdev_rd_last_val;
++   out5[4] = romdev_rd_hits;
++   if (clearHits) { romdev_rd_hits = 0; romdev_rd_last_pc = 0xFFFFFFFF; }
++}
++
++/* romdev PC BREAKPOINT (6502 execute hook in M6502::execute) — state defined
++ * here. Freezes the CPU exactly at the breakpoint PC via StopExecutionBit (the
++ * same path stella's debugger uses); the host polls romdev_pcbreak_get after each
++ * retro_run frame, stops stepping once hit is set, then reads registers via
++ * getCPUState. `step` arms a one-instruction single-step (ignores addr). */
++unsigned int  romdev_pc_addr    = 0;
++int           romdev_pc_enabled = 0;
++int           romdev_pc_step    = 0;
++volatile int  romdev_pc_hit     = 0;
++unsigned int  romdev_pc_last_pc = 0xFFFFFFFF;
++unsigned int  romdev_pc_hits    = 0;
++
++void romdev_pcbreak_set(unsigned int addr, int enabled, int step)
++{
++   romdev_pc_addr = addr;
++   romdev_pc_enabled = enabled ? 1 : 0;
++   /* step is a per-instruction countdown; arm to 2 so ONE instruction executes
++    * before the stop fires (true single-step that advances the PC). */
++   romdev_pc_step = step ? 2 : 0;
++   romdev_pc_hit = 0;
++   romdev_pc_last_pc = 0xFFFFFFFF;
++   romdev_pc_hits = 0;
++}
++
++/* Fills out5: [enabled, addr, hit, lastPC, hits]. Pass clearHit to re-arm. */
++void romdev_pcbreak_get(unsigned int *out5, int clearHit)
++{
++   if (!out5) return;
++   out5[0] = (unsigned int)romdev_pc_enabled;
++   out5[1] = romdev_pc_addr;
++   out5[2] = (unsigned int)romdev_pc_hit;
++   out5[3] = romdev_pc_last_pc;
++   out5[4] = romdev_pc_hits;
++   if (clearHit) { romdev_pc_hit = 0; }
++}
 +}
 +
  unsigned retro_api_version(void)
@@ -84,7 +157,7 @@ index 15c6d12..bd869c6 100644
        default: return NULL;
     }
  }
-@@ -1267,6 +1313,8 @@ size_t retro_get_memory_size(unsigned id)
+@@ -1267,6 +1379,8 @@ size_t retro_get_memory_size(unsigned id)
     switch (id)
     {
        case RETRO_MEMORY_SYSTEM_RAM: return 128;
@@ -94,10 +167,37 @@ index 15c6d12..bd869c6 100644
     }
  }
 diff --git a/stella/src/emucore/M6502.cxx b/stella/src/emucore/M6502.cxx
-index 9dfde89..8b8c399 100644
+index 9dfde89..9bbb002 100644
 --- a/stella/src/emucore/M6502.cxx
 +++ b/stella/src/emucore/M6502.cxx
-@@ -122,8 +122,21 @@ inline uInt8 M6502::peek(uInt16 address, uInt8 flags)
+@@ -103,6 +103,17 @@ void M6502::reset()
+ }
+ 
+ // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
++/* romdev instruction-level READ watchpoint — records the 6502 PC (this M6502's
++ * member) when a watched address is READ (mirror of the write watch below).
++ * State defined in libretro.cxx; exported via romdev_readwatch_*. */
++extern "C" {
++extern unsigned int  romdev_rd_addr;
++extern int           romdev_rd_enabled;
++extern unsigned int  romdev_rd_last_pc;
++extern unsigned char romdev_rd_last_val;
++extern unsigned int  romdev_rd_hits;
++}
++
+ inline uInt8 M6502::peek(uInt16 address, uInt8 flags)
+ {
+   ////////////////////////////////////////////////
+@@ -116,14 +127,30 @@ inline uInt8 M6502::peek(uInt16 address, uInt8 flags)
+   mySystem->incrementCycles(mySystemCyclesPerProcessorCycle);
+ 
+   uInt8 result = mySystem->peek(address, flags);
++  if (romdev_rd_enabled && (unsigned int)address == romdev_rd_addr) {
++    romdev_rd_last_pc = PC; romdev_rd_last_val = result; romdev_rd_hits++;
++  }
+   myLastAccessWasRead = true;
+   myLastPeekAddress = address;
+   return result;
  }
  
  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -119,6 +219,60 @@ index 9dfde89..8b8c399 100644
    ////////////////////////////////////////////////
    // TODO - move this logic directly into CartAR
    if(address != myLastAddress)
+@@ -140,6 +167,23 @@ inline void M6502::poke(uInt16 address, uInt8 value)
+ }
+ 
+ // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
++/* romdev PC BREAKPOINT / single-step (6502 execute hook below). When enabled and
++ * the 6502 PC about to execute equals romdev_pc_addr, the hook records the PC,
++ * sets romdev_pc_hit, and sets StopExecutionBit so M6502::execute returns and the
++ * frame ends EXACTLY at that PC (this is the same mechanism stella's own debugger
++ * uses to break mid-frame — TIA::update leaves myPartialFrameFlag true and
++ * endFrame() runs, so retro_run returns instead of hanging). romdev_pc_step arms
++ * a per-instruction countdown (host arms to 2 = "let ONE instruction execute,
++ * then stop") so single-step ADVANCES the PC. Exported via romdev_pcbreak_*. */
++extern "C" {
++extern unsigned int  romdev_pc_addr;
++extern int           romdev_pc_enabled;
++extern int           romdev_pc_step;
++extern volatile int  romdev_pc_hit;
++extern unsigned int  romdev_pc_last_pc;
++extern unsigned int  romdev_pc_hits;
++}
++
+ bool M6502::execute(uInt32 number)
+ {
+   // Clear all of the execution status bits except for the fatal error bit
+@@ -153,6 +197,29 @@ bool M6502::execute(uInt32 number)
+       uInt16 operandAddress = 0, intermediateAddress = 0;
+       uInt8 operand = 0;
+ 
++      // romdev PC breakpoint / single-step: checked here, BEFORE the opcode
++      // fetch, so PC is the address of the instruction about to execute. On a
++      // hit (or single-step countdown reaching 0) freeze the CPU at this PC:
++      // record it, set the hit flag, set StopExecutionBit so the frame ends
++      // cleanly (retro_run returns; leaving it incomplete = infinite hang), and
++      // break WITHOUT advancing PC. Gated on !romdev_pc_hit so a held breakpoint
++      // doesn't re-fire while the host reads state and disarms.
++      if ((romdev_pc_enabled || romdev_pc_step) && !romdev_pc_hit)
++      {
++        int stepFire = 0;
++        if (romdev_pc_step) { if (--romdev_pc_step <= 0) stepFire = 1; }
++        if (stepFire || ((romdev_pc_enabled && !romdev_pc_step)
++                         && (unsigned int)PC == romdev_pc_addr))
++        {
++          romdev_pc_last_pc = PC;            // leave PC frozen exactly here
++          romdev_pc_hit = 1;
++          romdev_pc_hits++;
++          romdev_pc_step = 0;               // one-shot
++          myExecutionStatus |= StopExecutionBit;
++          break;
++        }
++      }
++
+       // Reset the peek/poke address pointers
+       myLastPeekAddress = myLastPokeAddress = myDataAddressForPoke = 0;
+ 
 diff --git a/stella/src/emucore/M6502.hxx b/stella/src/emucore/M6502.hxx
 index 79b50ee..7ecd246 100644
 --- a/stella/src/emucore/M6502.hxx

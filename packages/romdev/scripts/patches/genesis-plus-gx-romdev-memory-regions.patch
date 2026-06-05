@@ -181,10 +181,53 @@ index b702173..ff96120 100644
    m68ki_check_address_error(address, MODE_WRITE, FLAG_S | FUNCTION_CODE_USER_DATA) /* auto-disable (see m68kcpu.h) */
  
 diff --git a/core/z80/z80.c b/core/z80/z80.c
-index 74d5053..619770b 100644
+index 74d5053..616983c 100644
 --- a/core/z80/z80.c
 +++ b/core/z80/z80.c
-@@ -632,7 +632,23 @@ INLINE void BURNODD(int cycles, int opcodes, int cyclesum)
+@@ -220,6 +220,18 @@ unsigned char (*z80_readmem)(unsigned int address);
+ void (*z80_writeport)(unsigned int port, unsigned char data);
+ unsigned char (*z80_readport)(unsigned int port);
+ 
++/* romdev PC breakpoint — shared globals (defined in core/m68k/m68kcpu.c). For
++ * SMS/GG the Z80 is the active CPU; the execute hook in z80_run compares the
++ * live Z80 PC against romdev_pc_addr (or counts down a single-step) and, on a
++ * hit, freezes the CPU at that PC and ends the frame. Same globals the m68k
++ * path uses — only one CPU is active per platform, so sharing is fine. */
++extern unsigned int  romdev_pc_addr;
++extern int           romdev_pc_enabled;
++extern int           romdev_pc_step;
++extern volatile int  romdev_pc_hit;
++extern unsigned int  romdev_pc_last_pc;
++extern unsigned int  romdev_pc_hits;
++
+ static UINT32 EA;
+ 
+ static UINT8 SZ[256];       /* zero and sign flags */
+@@ -627,12 +639,46 @@ INLINE void BURNODD(int cycles, int opcodes, int cyclesum)
+ /***************************************************************
+  * Read a byte from given memory location
+  ***************************************************************/
+-#define RM(addr) z80_readmem(addr)
++/* romdev READ watchpoint — shared globals (defined in core/m68k/m68kcpu.c).
++ * Mirror of the WM write watch below. For SMS/GG the Z80 is the active CPU; PC
++ * here is the live Z80 program counter. RM is the DATA read path (LD r,(addr)
++ * etc.) — opcode/operand fetches go through ROP()/ARG() and are NOT hooked, so
++ * this records only true data reads of a watched address. */
++extern unsigned int  romdev_rd_addr;
++extern int           romdev_rd_enabled;
++extern unsigned int  romdev_rd_last_pc;
++extern unsigned char romdev_rd_last_val;
++extern unsigned int  romdev_rd_hits;
++#define RM(addr) romdev_z80_rm((addr))
++INLINE unsigned char romdev_z80_rm(unsigned int addr)
++{
++  unsigned char v = z80_readmem(addr);
++  if (romdev_rd_enabled && (unsigned int)addr == romdev_rd_addr) {
++    romdev_rd_last_pc = PC; romdev_rd_last_val = v; romdev_rd_hits++;
++  }
++  return v;
++}
+ 
  /***************************************************************
   * Write a byte to given memory location
   ***************************************************************/
@@ -209,6 +252,48 @@ index 74d5053..619770b 100644
  
  /***************************************************************
   * Read a word from given memory location
+@@ -3421,6 +3467,32 @@ void z80_run(unsigned int cycles)
+ {
+   while( Z80.cycles < cycles )
+   {
++    /* romdev PC breakpoint / single-step (SMS/GG): check BEFORE fetching the
++     * next opcode so PC is the address about to execute. On a hit, freeze the
++     * CPU here (PC untouched → the instruction is NOT executed) and CONSUME the
++     * remaining cycle budget so z80_run returns and the libretro frame loop
++     * COMPLETES this frame — otherwise z80_run would return with Z80.cycles <
++     * cycles and the per-line scheduler would re-enter and step past the
++     * breakpoint (TRAP 2). The host polls romdev_pc_hit after retro_run and
++     * stops stepping once it's set, then reads the registers. romdev_pc_step is
++     * a per-instruction countdown the host arms to 2 so ONE instruction executes
++     * before the stop fires (true single-step that ADVANCES the PC). */
++    if ((romdev_pc_enabled || romdev_pc_step) && !romdev_pc_hit)
++    {
++      int romdev_stepFire = 0;
++      if (romdev_pc_step) { if (--romdev_pc_step <= 0) romdev_stepFire = 1; }
++      if (romdev_stepFire || ((romdev_pc_enabled && !romdev_pc_step)
++                              && (unsigned int)PC == romdev_pc_addr))
++      {
++        romdev_pc_last_pc = PC;
++        romdev_pc_hit = 1;
++        romdev_pc_hits++;
++        romdev_pc_step = 0;        /* one-shot */
++        Z80.cycles = cycles;       /* consume the frame so retro_run returns */
++        break;                     /* leave the CPU frozen at this PC */
++      }
++    }
++
+     /* check for IRQs before each instruction */
+     if (Z80.irq_state && IFF1 && !Z80.after_ei)
+     {
+@@ -3432,7 +3504,7 @@ void z80_run(unsigned int cycles)
+     R++;
+     EXEC_INLINE(op,ROP());
+   }
+-} 
++}
+ 
+ /****************************************************************************
+  * Get all registers in given buffer
 diff --git a/libretro/libretro.c b/libretro/libretro.c
 index 798c6cc..64b6d11 100644
 --- a/libretro/libretro.c
