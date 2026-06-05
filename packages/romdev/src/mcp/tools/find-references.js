@@ -326,6 +326,18 @@ export async function findReferencesCore({ path, platform, address, mapper, maxR
     const { runZ80dasm } = await import("../../toolchains/z80dasm.js");
     const r = runZ80dasm({ bytes, startAddress: 0x4000 + base });
     asm = r.asm;
+  } else if (resolved === "gba") {
+    // GBA = ARM7TDMI, ROM maps flat at 0x08000000. Disassemble as ARM (the
+    // default; Thumb regions need disassembleRom with thumb:true). Native
+    // binutils ARM objdump ships in romdev-platform-gba.
+    const { runObjdump, objdumpAvailable } = await import("../../toolchains/objdump.js");
+    if (!objdumpAvailable("arm")) {
+      throw new Error("findReferences: GBA needs the ARM objdump WASM (romdev-platform-gba).");
+    }
+    const CAP = 512 * 1024;
+    const bytes = data.slice(0, Math.min(data.length, CAP));
+    const r = await runObjdump({ bytes, arch: "arm", startAddress: 0x08000000 });
+    asm = r.asm;
   } else {
     throw new Error(`findReferences: platform '${resolved}' not supported yet.`);
   }
