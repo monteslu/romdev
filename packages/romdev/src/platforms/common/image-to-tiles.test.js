@@ -44,3 +44,32 @@ test("imageToTiles round-trip via pngjs (NES)", () => {
   assert.equal(r.totalTiles, 2);
   assert.equal(r.tiles.length, 32);
 });
+
+test("tileOrder:'sprite' emits column-major (Genesis multi-cell sprite order)", () => {
+  // 16x16 = 2x2 tiles. Give each TILE a distinct solid color from a known
+  // 4-color hint so the encoded byte content identifies which tile is which:
+  //   grid position: TL=idx0(black) TR=idx1 BL=idx2 BR=idx3
+  // packed 4bpp: a solid tile of index N = byte (N<<4)|N repeated. So byte[0]
+  // of each output tile tells us its index → its source grid cell.
+  const hint = [[0, 0, 0], [255, 0, 0], [0, 255, 0], [0, 0, 255]];
+  const W = 16, H = 16;
+  const px = Buffer.alloc(W * H * 4, 0);
+  for (let i = 3; i < px.length; i += 4) px[i] = 0xff; // opaque
+  const cellColor = (tx, ty) => hint[ty * 2 + tx]; // TL,TR,BL,BR = 0,1,2,3
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const [r0, g0, b0] = cellColor(x >> 3, y >> 3);
+      const o = (y * W + x) * 4;
+      px[o] = r0; px[o + 1] = g0; px[o + 2] = b0;
+    }
+  }
+  const firstNibble = (tiles, tileIdx) => tiles[tileIdx * 32] & 0x0f; // genesis = 32B/tile
+
+  const row = rgbaToTiles("genesis", { width: W, height: H, pixels: px, paletteHint: hint, tileOrder: "row" });
+  // Row-major sequence of source indices: TL(0), TR(1), BL(2), BR(3).
+  assert.deepEqual([0, 1, 2, 3].map((i) => firstNibble(row.tiles, i)), [0, 1, 2, 3]);
+
+  const spr = rgbaToTiles("genesis", { width: W, height: H, pixels: px, paletteHint: hint, tileOrder: "sprite" });
+  // Column-major: TL(0), BL(2), TR(1), BR(3) — down the first column, then the next.
+  assert.deepEqual([0, 1, 2, 3].map((i) => firstNibble(spr.tiles, i)), [0, 2, 1, 3]);
+});

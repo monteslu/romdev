@@ -180,9 +180,14 @@ export function rgbaToTiles(platform, args) {
     throw new Error(`paletteHint has ${paletteHint.length} entries; platform '${platform}' only supports ${spec.maxColors} colors per tile.`);
   }
 
+  // Tile emit order. 'row' (default) = row-major, what BG tilemaps want.
+  // 'sprite' = column-major (top-to-bottom, then next column right), the order
+  // multi-cell hardware sprites are read on Genesis/Lynx — so a single sprite
+  // frame packs into ready-to-DMA tiles instead of needing a manual reshuffle.
+  const spriteOrder = args.tileOrder === "sprite";
   for (let t = 0; t < totalTiles; t++) {
-    const tx = t % tilesAcross;
-    const ty = Math.floor(t / tilesAcross);
+    const tx = spriteOrder ? Math.floor(t / tilesDown) : (t % tilesAcross);
+    const ty = spriteOrder ? (t % tilesDown) : Math.floor(t / tilesAcross);
 
     /** @type {[number,number,number][]} */
     const tilePixels = new Array(64);

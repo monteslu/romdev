@@ -907,25 +907,36 @@ export function registerPlatformTools(server, z, sessionKey) {
     "platforms also return a suggested palette. Image width/height must be multiples of 8. Good for " +
     "demakes (rip art from one platform, re-encode for another) — combine with patchRom or your source. " +
     "DEFAULT writes tiles.bin (+ palette.bin if a palette is produced) into outputDir and returns paths; pass " +
-    "inline:true to get tilesBase64/paletteHex in the response (you must pass one or the other).",
+    "inline:true to get tilesBase64/paletteHex in the response (you must pass one or the other). " +
+    "Pass `pngPath` when the image is already on disk — the server reads it directly, so you never pay base64 " +
+    "tokens (and avoid the corruption you'd get hand-forwarding a big base64 blob). " +
+    "For multi-cell SPRITES (Genesis/Lynx etc.) pass `tileOrder:'sprite'` — hardware reads a sprite's tiles " +
+    "COLUMN-major (top-to-bottom, then right), which is NOT how a BG tileset is laid out (row-major).",
     {
       platform: z.string(),
-      pngBase64: z.string(),
+      pngBase64: z.string().optional().describe("Base64-encoded PNG. Prefer `pngPath` when the image is on disk — server reads it, no base64 token cost."),
+      pngPath: z.string().optional().describe("Absolute path to a PNG file on disk. Preferred over pngBase64 — server reads the file directly."),
       maxTiles: z.number().int().min(1).max(8192).default(512),
+      tileOrder: z.enum(["row", "sprite"]).default("row").describe("'row' (default) = row-major, the order BG tilemaps want. 'sprite' = column-major (top-to-bottom then right), the order multi-cell hardware sprites read on Genesis/Lynx/etc. Use 'sprite' to pack a PNG sprite frame into ready-to-DMA sprite tiles. Ignored for MSX."),
       outputDir: z.string().optional().describe("Directory to write tiles.bin (+ palette.bin). Required unless inline:true."),
       inline: z.boolean().default(false).describe("If true, return tilesBase64/paletteBase64/paletteHex in the response instead of writing to disk. Default false — then outputDir is required."),
     },
-    safeTool(async ({ platform, pngBase64, maxTiles, outputDir, inline }) => {
+    safeTool(async ({ platform, pngBase64, pngPath, maxTiles, tileOrder, outputDir, inline }) => {
       if (!inline && !outputDir) {
         throw new Error("convertImageToTiles: pass outputDir (write tiles.bin/palette.bin to disk, returns paths) or inline:true (return base64 in the response).");
       }
+      if (!pngBase64 && !pngPath) {
+        throw new Error("convertImageToTiles: pass pngPath (a PNG on disk — preferred) or pngBase64.");
+      }
+      // Resolve the PNG bytes once: from disk (preferred) or from base64.
+      const pngBuf = pngPath ? await readFile(pngPath) : Buffer.from(pngBase64, "base64");
       // MSX screen-2 is a special case: a tile is TWO parallel 8-byte tables
       // (pattern bits + per-row fg/bg color), not one tile blob. Emit both
       // streams (pattern.bin + color.bin) instead of the generic tiles.bin.
       if (platform === "msx") {
         const { PNG } = await import("pngjs");
         const { encodeMsxScreen2Tiles } = await import("../../platforms/msx/tiles.js");
-        const png = Buffer.from(pngBase64, "base64");
+        const png = pngBuf;
         const img = PNG.sync.read(png);
         if (img.width % 8 || img.height % 8) {
           throw new Error(`convertImageToTiles(msx): image ${img.width}x${img.height} must be a multiple of 8 in both dimensions.`);
@@ -964,8 +975,8 @@ export function registerPlatformTools(server, z, sessionKey) {
         return jsonContent(msxOut);
       }
       const { imageToTiles } = await import("../../platforms/common/image-to-tiles.js");
-      const png = Buffer.from(pngBase64, "base64");
-      const r = imageToTiles(platform, png, { maxTiles });
+      const png = pngBuf;
+      const r = imageToTiles(platform, png, { maxTiles, tileOrder });
       // Indexed-PNG / palette validation. Catches the most common
       // newbie failure mode: paint in 24-bit RGB → silent color shift.
       const warnings = await validateImagePalette(platform, png);
