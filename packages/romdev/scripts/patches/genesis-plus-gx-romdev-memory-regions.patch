@@ -1,8 +1,8 @@
 diff --git a/core/m68k/m68kcpu.c b/core/m68k/m68kcpu.c
-index 36112a5..cf1f0f9 100644
+index 36112a5..4bac13f 100644
 --- a/core/m68k/m68kcpu.c
 +++ b/core/m68k/m68kcpu.c
-@@ -31,6 +31,86 @@ static int irq_latency;
+@@ -31,6 +31,102 @@ static int irq_latency;
  
  m68ki_cpu_core m68k;
  
@@ -38,6 +38,22 @@ index 36112a5..cf1f0f9 100644
 +volatile int  romdev_pc_hit     = 0;        /* set by the execute hook, cleared by the host */
 +unsigned int  romdev_pc_last_pc = 0xFFFFFFFF;
 +unsigned int  romdev_pc_hits    = 0;
++/* captureBefore: when 1, the breakpoint fires BEFORE executing the target
++ * instruction (default) so getCPUState reads the ENTRY registers; the existing
++ * before-dispatch fire already does this for a plain address breakpoint, so this
++ * flag is informational/host-symmetry. (Single-step still advances one insn.) */
++int           romdev_pc_capture_before = 1;
++
++/* romdev INSTRUCTION WATCHDOG — the fix for "callSubroutine hung". A standalone-
++ * driven routine (e.g. a decompressor fed a slightly-wrong A0) can loop FOREVER
++ * inside a single m68k_run / retro_run frame, so the host's per-FRAME maxFrames
++ * never gets a turn and the whole WASM hangs. This counts dispatched instructions
++ * and force-stops (sets romdev_pc_hit + romdev_pc_watchdog) when the budget is
++ * exceeded — so a runaway returns control with the final PC/regs intact instead
++ * of hanging. romdev_pc_wd_limit 0 = disabled. */
++unsigned int  romdev_pc_wd_limit = 0;       /* max instructions before force-stop (0 = off) */
++unsigned int  romdev_pc_wd_count = 0;       /* instructions executed since arm */
++volatile int  romdev_pc_watchdog = 0;       /* set when the watchdog tripped */
 +
 +/* romdev RANGE watch (discovery): log EVERY {pc,addr,value} that reads or writes
 + * an address in [lo,hi] over a window — not stop-on-first. Hooked into the same
@@ -89,10 +105,25 @@ index 36112a5..cf1f0f9 100644
  
  /* ======================================================================== */
  /* =============================== CALLBACKS ============================== */
-@@ -284,6 +364,44 @@ void m68k_run(unsigned int cycles)
+@@ -284,6 +380,59 @@ void m68k_run(unsigned int cycles)
  
    while (m68k.cycles < cycles)
    {
++    /* romdev instruction WATCHDOG: force-stop a runaway (the callSubroutine hang).
++     * Counts dispatched instructions; on overflow, fire the breakpoint with the
++     * watchdog flag so the host gets the final PC/regs instead of hanging. */
++    if (romdev_pc_wd_limit && !romdev_pc_hit)
++    {
++      if (++romdev_pc_wd_count >= romdev_pc_wd_limit)
++      {
++        romdev_pc_last_pc = REG_PC;
++        romdev_pc_hit = 1;
++        romdev_pc_watchdog = 1;
++        m68k.cycles = cycles;
++        break;
++      }
++    }
++
 +    /* romdev PC coverage log (discovery): record each DISTINCT in-window PC about
 +     * to execute. Cheap when disabled (one int test). */
 +    if (romdev_cov_enabled
@@ -481,10 +512,10 @@ index 74d5053..c7e7ba4 100644
  /****************************************************************************
   * Get all registers in given buffer
 diff --git a/libretro/libretro.c b/libretro/libretro.c
-index 798c6cc..7352394 100644
+index 798c6cc..95ea974 100644
 --- a/libretro/libretro.c
 +++ b/libretro/libretro.c
-@@ -3743,6 +3743,323 @@ void retro_unload_game(void)
+@@ -3743,6 +3743,340 @@ void retro_unload_game(void)
  
  unsigned retro_get_region(void) { return vdp_pal ? RETRO_REGION_PAL : RETRO_REGION_NTSC; }
  
@@ -571,6 +602,10 @@ index 798c6cc..7352394 100644
 +extern unsigned int  romdev_pc_last_pc;
 +extern unsigned int  romdev_pc_hits;
 +
++extern unsigned int  romdev_pc_wd_limit;
++extern unsigned int  romdev_pc_wd_count;
++extern int           romdev_pc_watchdog;
++
 +void romdev_pcbreak_set(unsigned int addr, int enabled, int step)
 +{
 +   romdev_pc_addr = addr;
@@ -581,18 +616,31 @@ index 798c6cc..7352394 100644
 +   romdev_pc_hit = 0;
 +   romdev_pc_last_pc = 0xFFFFFFFF;
 +   romdev_pc_hits = 0;
++   romdev_pc_watchdog = 0;
++   romdev_pc_wd_count = 0;
 +}
 +
-+/* Fills out5: [enabled, addr, hit, lastPC, hits]. Pass clearHit to re-arm. */
-+void romdev_pcbreak_get(unsigned int *out5, int clearHit)
++/* Fills out6: [enabled, addr, hit, lastPC, hits, watchdogTripped]. clearHit re-arms. */
++void romdev_pcbreak_get(unsigned int *out6, int clearHit)
 +{
-+   if (!out5) return;
-+   out5[0] = (unsigned int)romdev_pc_enabled;
-+   out5[1] = romdev_pc_addr;
-+   out5[2] = (unsigned int)romdev_pc_hit;
-+   out5[3] = romdev_pc_last_pc;
-+   out5[4] = romdev_pc_hits;
-+   if (clearHit) { romdev_pc_hit = 0; }
++   if (!out6) return;
++   out6[0] = (unsigned int)romdev_pc_enabled;
++   out6[1] = romdev_pc_addr;
++   out6[2] = (unsigned int)romdev_pc_hit;
++   out6[3] = romdev_pc_last_pc;
++   out6[4] = romdev_pc_hits;
++   out6[5] = (unsigned int)romdev_pc_watchdog;
++   if (clearHit) { romdev_pc_hit = 0; romdev_pc_watchdog = 0; romdev_pc_wd_count = 0; }
++}
++
++/* Arm the instruction watchdog (force-stop a runaway after `limit` instructions;
++ * 0 = disable). The host sets this before driving callSubroutine so a runaway
++ * codec returns control instead of hanging. */
++void romdev_watchdog_set(unsigned int limit)
++{
++   romdev_pc_wd_limit = limit;
++   romdev_pc_wd_count = 0;
++   romdev_pc_watchdog = 0;
 +}
 +
 +/* romdev register read/write — the inverse of getCPUState, used by the host's
@@ -808,7 +856,7 @@ index 798c6cc..7352394 100644
  void *retro_get_memory_data(unsigned id)
  {
     switch (id)
-@@ -3751,6 +4068,35 @@ void *retro_get_memory_data(unsigned id)
+@@ -3751,6 +4085,35 @@ void *retro_get_memory_data(unsigned id)
           return sram.on ? sram.sram : NULL;
        case RETRO_MEMORY_SYSTEM_RAM:
           return work_ram;
@@ -844,7 +892,7 @@ index 798c6cc..7352394 100644
        default:
           return NULL;
     }
-@@ -3802,6 +4148,21 @@ size_t retro_get_memory_size(unsigned id)
+@@ -3802,6 +4165,21 @@ size_t retro_get_memory_size(unsigned id)
              return 0x2000; /* 8KB internal RAM */
        }
  

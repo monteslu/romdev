@@ -777,20 +777,27 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     "callSubroutine",
     "Drive the ROM's OWN subroutine and run until it returns — the RE primitive for compressed assets. Set up the CPU " +
     "(registers via `regs` by reg-id, PC=`pc`), push a sentinel return address, and run until the routine RTSes back. " +
-    "SANDBOXED by default (snapshots + restores full core state, so the live game is untouched). The classic use: drive " +
-    "a game's decompressor (A0=source, A1=dest) and then readMemory the dest buffer — turning 'reimplement an " +
-    "undocumented codec' into one call. Returns { returned, framesRun }. After it returns, readMemory the buffer the " +
-    "routine wrote (it's still in core RAM until you step on; with sandbox:true it's restored, so set sandbox:false OR " +
-    "read inside the same flow — prefer sandbox:false + a follow-up readMemory for codecs, since the dst buffer IS the " +
-    "result you want). Supported where the core exposes register-write (feature-detected; notSupported otherwise).",
+    "SANDBOXED off by default so the dst buffer it wrote stays live for readMemory. The classic use: drive a game's " +
+    "decompressor (A0=source, A1=dest), then readMemory the dst — turning 'reimplement an undocumented codec' into one " +
+    "call. NEVER HANGS: an instruction WATCHDOG (`maxInstructions`) force-stops a runaway (e.g. a codec fed a wrong A0 " +
+    "that loops forever) and returns PROGRESS — `finalPC` + `finalRegs` (A0/A1/D0/D1/PC/SP) + `watchdog:true` — so you " +
+    "can tell 'wrong A0' from 'needs a preset reg' from 'legitimately long' instead of a black-box false. Use `stopAtPC` " +
+    "to halt at a mid-routine PC and read the PARTIAL output (see the format without a full decompress). Use `presetMemory` " +
+    "for codecs that read a global from RAM (a dest stride / mode flag) before the call. Supported on all 14 platforms.",
     {
-      pc: z.number().int().min(0).describe("Entry PC of the subroutine (e.g. 0x263C44)."),
+      pc: z.number().int().min(0).describe("Entry PC of the subroutine (e.g. 0x263C44). Can be a WRAPPER entry that sets up regs then tail-calls (JMPs) the inner routine — the sentinel-return is detected from the final RTS regardless of tail-calls."),
       regs: regSchema,
-      sentinelPC: z.number().int().min(0).default(0).describe("Return address pushed on the stack; the run stops when PC reaches it. Default 0 (a vector address unlikely to execute mid-run). Override if it collides with real code."),
-      maxFrames: z.number().int().min(1).max(100000).default(600).describe("Cap so a runaway routine can't hang."),
-      sandbox: z.boolean().default(false).describe("Snapshot+restore core state around the call (default FALSE for codecs — you usually want the dst buffer left in RAM to readMemory afterward). Set true to leave the live game untouched."),
+      sentinelPC: z.number().int().min(0).default(0).describe("Return address pushed on the stack; the run stops when PC reaches it. Default 0 (vector area, unlikely mid-run). Override if it collides with real code."),
+      stopAtPC: z.number().int().min(0).optional().describe("Instead of waiting for the sentinel return, STOP when PC reaches this address and return the partial output — for 'run into the codec, stop at a known point, see what it produced.'"),
+      presetMemory: z.array(z.object({
+        addr: z.number().int().min(0).describe("CPU address to write before the call."),
+        hex: z.string().describe("Bytes as hex (e.g. '00FF')."),
+      })).optional().describe("Memory writes applied before the call — for codecs that read a global (dest stride, mode flag) from RAM, not just registers."),
+      maxFrames: z.number().int().min(1).max(100000).default(600).describe("Frame cap (the outer bound)."),
+      maxInstructions: z.number().int().min(1000).optional().describe("Instruction watchdog budget — the REAL cap that stops a runaway inside a frame (default ~maxFrames*500k). Raise it for a legitimately huge decompress; lower it to fail fast while probing the right A0."),
+      sandbox: z.boolean().default(false).describe("Snapshot+restore core state around the call (default FALSE — you want the dst buffer left in RAM to readMemory). Set true to leave the live game untouched."),
     },
-    safeTool(async ({ pc, regs, sentinelPC, maxFrames, sandbox }) => {
+    safeTool(async ({ pc, regs, sentinelPC, stopAtPC, presetMemory, maxFrames, maxInstructions, sandbox }) => {
       const host = getHost(sessionKey);
       if (!host.setRegSupported || !host.setRegSupported()) {
         return jsonContent({ returned: false, notSupported: true,
@@ -798,12 +805,25 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       }
       const numRegs = {};
       for (const [k, v] of Object.entries(regs ?? {})) numRegs[Number(k)] = v >>> 0;
-      const r = host.callSubroutine({ pc, regs: numRegs, sentinelPC, maxFrames, sandbox });
+      const r = host.callSubroutine({
+        pc, regs: numRegs, sentinelPC, stopAtPC,
+        presetMemory: (presetMemory ?? []).map((m) => ({ addr: m.addr, hex: m.hex })),
+        maxFrames, ...(maxInstructions ? { maxInstructions } : {}), sandbox,
+      });
+      const note = r.returned
+        ? "Routine RETURNED. readMemory the buffer it wrote (e.g. the decompressor's A1 dest) now — sandbox:false leaves it live. (regs by reg-id: m68k 8=A0,9=A1,0=D0.)"
+        : r.watchdog
+          ? "WATCHDOG tripped (ran the instruction budget without returning) — almost always a wrong entry setup, not a long routine. Check finalPC (where it's spinning) + finalRegs (is A0 where you set it, or did it walk off?). Common fixes: correct A0 to the real block start (with its length header), add a presetMemory the codec reads, or pass a WRAPPER entryPC that sets up dest. Raise maxInstructions only if you're sure it's legitimately huge."
+          : r.stoppedAtPC
+            ? `Stopped at ${r.stoppedAtPC} (your stopAtPC) with PARTIAL output — readMemory the dst to see what's been written so far.`
+            : "Did not return within maxFrames (and the watchdog didn't trip) — try a larger maxFrames/maxInstructions or check the setup. finalPC/finalRegs show where it ended.";
       return jsonContent({
         returned: r.returned, framesRun: r.framesRun, sandbox,
-        note: r.returned
-          ? "Routine returned. If it wrote a buffer (e.g. a decompressor's A1 dest), readMemory that address now (use sandbox:false so it's still live). callSubroutine sets regs by reg-id: m68k 8=A0,9=A1."
-          : "Routine did NOT return within maxFrames — it may loop, expect different setup, or the sentinelPC collided with real code. Increase maxFrames or pick a different sentinelPC.",
+        ...(r.watchdog ? { watchdog: true, reason: r.reason } : {}),
+        ...(r.stoppedAtPC ? { stoppedAtPC: r.stoppedAtPC } : {}),
+        ...(r.finalPC ? { finalPC: r.finalPC } : {}),
+        ...(r.finalRegs ? { finalRegs: r.finalRegs } : {}),
+        note,
       });
     }),
   );
@@ -946,13 +966,16 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       frames: z.number().int().min(1).max(6000).default(120),
       vramDest: z.number().int().min(0).optional().describe("If set, only return DMAs whose VRAM destination falls within ±`destWindow` of this address."),
       destWindow: z.number().int().min(0).default(0x40).describe("Match window around vramDest (default 64 bytes ≈ 1 tile)."),
+      dedupe: z.boolean().default(true).describe("Collapse identical DMAs (same dest+source+length) to ONE entry with an `occurrences` count. ON by default — a full match-load fires the SAME per-frame refresh thousands of times; dedupe turns 7000 events into a handful of distinct uploads."),
+      sourceFilter: z.enum(["all", "rom-only", "ram-only"]).default("all").describe("'rom-only' drops the RAM→VRAM per-frame sprite/scroll refresh (source >= a ROM/RAM split) — the noise. 'ram-only' keeps only those. Use 'rom-only' to find a compressed asset DMA'd straight from cart ROM."),
       pressDuring: z.array(z.object({
         frame: z.number().int().min(0), button: z.string(),
         port: z.number().int().min(0).max(3).default(0), holdFrames: z.number().int().min(1).default(2),
       })).optional().describe("Drive to the screen that uploads the graphic."),
       romPreviewBytes: z.number().int().min(0).max(64).default(0).describe("Bytes of the ROM source to preview per DMA (0 = none)."),
+      limit: z.number().int().min(1).max(2000).default(200).describe("Max DMA entries to return (after dedupe/filter)."),
     },
-    safeTool(async ({ frames, vramDest, destWindow, pressDuring, romPreviewBytes }) => {
+    safeTool(async ({ frames, vramDest, destWindow, dedupe, sourceFilter, pressDuring, romPreviewBytes, limit }) => {
       const host = getHost(sessionKey);
       if (!host.dmaWatchSupported || !host.dmaWatchSupported()) {
         return jsonContent({ notSupported: true, dmas: [],
@@ -967,28 +990,50 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       if (romPreviewBytes > 0) { try { rom = host.getCartRom(); } catch { /* no preview */ } }
       // VDP code low bits: 1=VRAM, 3=CRAM, 5=VSRAM (write codes). Decode the target.
       const targetOf = (code) => { const c = code & 0x0F; return c === 1 ? "VRAM" : c === 3 ? "CRAM" : c === 5 ? "VSRAM" : "VRAM?"; };
+      // Genesis 68k bus: ROM is the low address space (< $400000 typically), work
+      // RAM is $E00000-$FFFFFF. A DMA `source` is a 68k byte address — split on the
+      // RAM window so 'rom-only' drops the RAM→VRAM sprite/scroll refresh.
+      const isRam = (src) => (src >>> 0) >= 0xE00000;
       let dmas = r.dmas;
       if (vramDest !== undefined) dmas = dmas.filter((d) => Math.abs((d.vramDest >>> 0) - vramDest) <= destWindow);
-      const out = dmas.map((d) => {
+      if (sourceFilter === "rom-only") dmas = dmas.filter((d) => !isRam(d.source));
+      else if (sourceFilter === "ram-only") dmas = dmas.filter((d) => isRam(d.source));
+      let collapsedCount = 0;
+      if (dedupe) {
+        const seen = new Map();
+        for (const d of dmas) {
+          const k = `${d.vramDest >>> 0}:${d.source >>> 0}:${d.lengthWords}:${d.code}`;
+          if (seen.has(k)) { seen.get(k).occurrences++; collapsedCount++; }
+          else seen.set(k, { ...d, occurrences: 1 });
+        }
+        dmas = [...seen.values()];
+      }
+      const totalDistinct = dmas.length;
+      const out = dmas.slice(0, limit).map((d) => {
         const o = {
           vramDest: "$" + (d.vramDest >>> 0).toString(16).toUpperCase(),
           source: "0x" + (d.source >>> 0).toString(16).toUpperCase(),
           lengthWords: d.lengthWords, lengthBytes: d.lengthWords * 2,
           target: targetOf(d.code),
+          from: isRam(d.source) ? "RAM" : "ROM",
+          ...(dedupe ? { occurrences: d.occurrences } : {}),
         };
-        if (rom && rom.bytes && (d.source >>> 0) < rom.bytes.length) {
+        if (rom && rom.bytes && !isRam(d.source) && (d.source >>> 0) < rom.bytes.length) {
           const a = d.source >>> 0, e = Math.min(a + romPreviewBytes, rom.bytes.length);
           o.romPreview = Array.from(rom.bytes.subarray(a, e), (b) => b.toString(16).padStart(2, "0")).join("");
         }
         return o;
       });
       return attachObserverFrame(jsonContent({
-        total: r.total, returned: out.length, truncated: r.truncated,
+        totalEvents: r.total, distinctDmas: totalDistinct, returned: out.length,
+        ...(dedupe && collapsedCount ? { collapsed: collapsedCount } : {}),
+        ...(r.truncated ? { coreBufferTruncated: true } : {}),
         ...(vramDest !== undefined ? { filteredToVramDest: "$" + vramDest.toString(16).toUpperCase(), destWindow } : {}),
+        ...(sourceFilter !== "all" ? { sourceFilter } : {}),
         dmas: out,
-        note: "Each entry is a mem→VDP DMA: `source` is the ROM byte offset the graphic was copied from — edit the tiles THERE. " +
-          "Filter by vramDest to pin the exact upload for the tile you see on screen. " +
-          (r.truncated ? "TRUNCATED — narrow frames." : ""),
+        note: "`source` is the 68k byte address the tiles were copied from — for a ROM source (`from:ROM`) edit the tiles THERE. " +
+          "dedupe collapses the per-frame refresh; sourceFilter:'rom-only' drops the RAM→VRAM sprite/scroll noise (use it to find a cart-ROM asset DMA). " +
+          (totalDistinct > limit ? `Showing ${out.length}/${totalDistinct} distinct — raise limit or narrow vramDest.` : ""),
       }), host);
     }),
   );

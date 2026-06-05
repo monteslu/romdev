@@ -30,9 +30,12 @@ const toJSON = (res) => { assert.equal(res.isError, undefined, "isError: " + JSO
 const SRC = `
 #include <genesis.h>
 void reg_copy(void);
+void spin_forever(void);
 asm("   .globl reg_copy\\nreg_copy:\\n   move.w (%a0)+,(%a1)+\\n   dbra %d0,reg_copy\\n   rts\\n");
+asm("   .globl spin_forever\\nspin_forever:\\n   bra spin_forever\\n   rts\\n");
 const u16 srcblob[4] = {0xCAFE,0xBABE,0x1122,0x3344};
 volatile u16 dst[4];
+void* keep[2] = { (void*)reg_copy, (void*)spin_forever }; // reference so both link (don't CALL spin)
 int main(bool h){
   VDP_drawText("re",14,12);
   reg_copy();                                  // referenced so it links
@@ -68,8 +71,9 @@ test("Genesis RE primitives: callSubroutine + watchRange + logPCRange + watchDma
   //    still happening (DMAs fire at boot; once settled there are none). ──
   const dma = toJSON(await client.callTool({ name: "watchDma", arguments: { frames: 120 } }));
   assert.equal(dma.notSupported, undefined, "watchDma notSupported");
-  assert.ok(dma.total > 0, "watchDma caught no DMAs: " + JSON.stringify(dma));
+  assert.ok(dma.totalEvents > 0, "watchDma caught no DMAs: " + JSON.stringify(dma));
   assert.ok(dma.dmas[0].vramDest && dma.dmas[0].source, "watchDma entry missing vramDest/source");
+  assert.ok(typeof dma.dmas[0].from === "string", "watchDma entry should report from:ROM/RAM");
 
   toJSON(await client.callTool({ name: "stepFrames", arguments: { frames: 60 } }));
 
@@ -112,8 +116,23 @@ test("Genesis RE primitives: callSubroutine + watchRange + logPCRange + watchDma
   }));
   assert.equal(cs.notSupported, undefined, "callSubroutine notSupported");
   assert.equal(cs.returned, true, "callSubroutine did not return: " + JSON.stringify(cs));
+  assert.notEqual(cs.watchdog, true, "normal routine should NOT trip the watchdog: " + JSON.stringify(cs));
   const dstAfter = toJSON(await client.callTool({ name: "readMemory", arguments: { region: "system_ram", offset: dstOff, length: 8 } }));
   // gpgx work-RAM is host-LE word-byte-swapped, so CAFE BABE 1122 3344 reads as
   // fecabeba22114433. Assert the swapped form (proves the copy ran correctly).
   assert.equal(dstAfter.hex.toLowerCase(), "fecabeba22114433", "callSubroutine copy wrong: " + dstAfter.hex);
+
+  // ── the WATCHDOG: an infinite-loop routine must NOT hang — it returns
+  //    { returned:false, watchdog:true, finalPC } with the spin address. This is
+  //    the fix for the agent's black-box hang (now: progress on timeout). ──
+  const spin = symAddr(map, "spin_forever");
+  assert.ok(spin, "couldn't find spin_forever in the map");
+  const wd = toJSON(await client.callTool({
+    name: "callSubroutine",
+    arguments: { pc: spin, maxFrames: 30, maxInstructions: 200000, sandbox: false },
+  }));
+  assert.equal(wd.returned, false, "spin should not 'return': " + JSON.stringify(wd));
+  assert.equal(wd.watchdog, true, "watchdog must trip on an infinite loop (no hang): " + JSON.stringify(wd));
+  assert.ok(wd.finalPC, "watchdog must report finalPC (where it's stuck): " + JSON.stringify(wd));
+  assert.ok(wd.finalRegs, "watchdog must report finalRegs: " + JSON.stringify(wd));
 });
