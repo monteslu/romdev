@@ -13,19 +13,24 @@ const __dirname = path.dirname(__filename);
 
 const DOC_PLATFORMS = ["nes", "gb", "gbc", "snes", "genesis", "sms", "gg", "lynx", "atari7800", "atari2600", "c64", "gba"];
 
-// We can't easily spin up a full McpServer in a unit test; instead we
-// shim a minimal server interface that records the registered tools so
-// we can invoke them as plain functions. This matches how the other
-// tool tests in this repo work.
+// listPlatformDocs/getPlatformDoc were consolidated into the `platform` tool
+// (platform({op:'docs'/'doc'})); their logic now lives in the exported *Core
+// functions. This adapter re-exposes the old method names (wrapping the plain
+// listPlatformDocsCore result in {content:[{text}]}) so the existing test bodies
+// + assertions are unchanged.
+import { jsonContent, safeTool } from "../util.js";
+import { listPlatformDocsCore, getPlatformDocCore } from "./platform-docs.js";
+
 function makeShim() {
-  const tools = {};
   return {
-    server: {
-      tool(name, _desc, _schema, fn) {
-        tools[name] = fn;
-      },
+    server: { tool() {} },
+    tools: {
+      // safeTool() preserves the old contract: thrown errors come back as
+      // {isError:true} content (the consolidated `platform` tool wraps the
+      // cores with safeTool too, so this matches production behavior).
+      listPlatformDocs: safeTool(async (a) => jsonContent(await listPlatformDocsCore(a))),
+      getPlatformDoc: safeTool(async (a) => getPlatformDocCore(a)),
     },
-    tools,
   };
 }
 
