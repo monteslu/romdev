@@ -16,6 +16,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
+import Fuse from "fuse.js";
 
 // The cheat index lives in the romdev_game_codes package (kept separate so the
 // main package stays small and the DB versions on its own cadence). Resolve its
@@ -61,6 +62,41 @@ async function loadIndex(platform) {
   return idx;
 }
 
+// Per-platform Fuse index, built lazily and cached. We do NOT let Fuse search
+// the raw No-Intro names directly — those are dominated by region/revision tags
+// (`(World)`, `(USA, Europe)`, `(Rev A)`) that swamp the fuzzy distance. Instead
+// we index the TAG-STRIPPED baseName as the search key (Fuse handles typos +
+// word-order/substring fuzz; baseName handles the tag noise), and keep the raw
+// `game` name + `cheats` count on each record for display. Same library +
+// ignoreLocation:true config loukai uses for media search.
+const _fuseCache = new Map(); // platform → Fuse | null
+async function getFuse(platform) {
+  if (_fuseCache.has(platform)) return _fuseCache.get(platform);
+  const idx = await loadIndex(platform);
+  if (!idx || !idx.games) { _fuseCache.set(platform, null); return null; }
+  const records = Object.keys(idx.games).map((game) => ({
+    game,                       // raw No-Intro name (for display/return)
+    base: baseName(game),       // tag-stripped key Fuse searches
+    cheats: (idx.games[game] || []).length,
+  }));
+  const fuse = new Fuse(records, {
+    keys: ["base"],
+    threshold: 0.3,        // 0 = exact, 1 = match anything (loukai's media-search default)
+    ignoreLocation: true,  // match anywhere in the name, not just the start
+    includeScore: true,    // Fuse score is a DISTANCE: 0 = perfect, 1 = worst
+    findAllMatches: true,
+    minMatchCharLength: 2,
+  });
+  _fuseCache.set(platform, fuse);
+  return fuse;
+}
+
+// Fuse returns a distance (0 best). Convert to a 0..1 SIMILARITY for our API
+// (1 best) so the returned `score` keeps its old meaning for callers.
+function simFromFuse(distance) {
+  return Math.round((1 - (distance ?? 1)) * 100) / 100;
+}
+
 // Normalize a name for fuzzy comparison: lowercase, drop extension, collapse
 // whitespace. We do NOT strip region/revision tags — those distinguish dumps
 // (USA vs Japan have different addresses), so an EXACT match must keep them.
@@ -85,19 +121,6 @@ function baseName(name) {
     .trim();
 }
 
-/** Token set of a base name, for overlap scoring. */
-function tokenSet(name) {
-  return new Set(baseName(name).split(" ").filter(Boolean));
-}
-
-/** Jaccard overlap (0..1) between two token sets. */
-function tokenScore(a, b) {
-  if (!a.size || !b.size) return 0;
-  let inter = 0;
-  for (const t of a) if (b.has(t)) inter++;
-  return inter / (a.size + b.size - inter);
-}
-
 /**
  * Fuzzy-search a platform's cheat index by game name. Returns the best-matching
  * game names + cheat counts WITHOUT dumping the whole DB — so an agent can find
@@ -114,25 +137,21 @@ export async function searchCheatGames({ platform, query, limit = 12, minScore =
   if (!idx || !idx.games) {
     return { platform, query, matches: [], gameCount: 0, note: `No bundled cheat index for platform '${platform}'.` };
   }
-  const qTok = tokenSet(query);
-  const qBase = baseName(query);
   const names = Object.keys(idx.games);
-  const scored = [];
-  for (const n of names) {
-    const nBase = baseName(n);
-    let score = tokenScore(qTok, tokenSet(n));
-    // Boost substring containment either way (handles partial queries + abbrevs).
-    if (qBase && (nBase.includes(qBase) || qBase.includes(nBase))) score = Math.max(score, 0.6);
-    if (score >= minScore) scored.push({ game: n, score: Math.round(score * 100) / 100, cheats: (idx.games[n] || []).length });
-  }
-  scored.sort((a, b) => b.score - a.score || a.game.length - b.game.length);
-  const matches = scored.slice(0, limit);
+  const fuse = await getFuse(platform);
+  // Search the tag-stripped query against the tag-stripped baseName index.
+  const results = fuse.search(baseName(query));
+  const matches = results
+    .map((r) => ({ game: r.item.game, score: simFromFuse(r.score), cheats: r.item.cheats }))
+    .filter((m) => m.score >= minScore)
+    .sort((a, b) => b.score - a.score || a.game.length - b.game.length)
+    .slice(0, limit);
   return {
     platform, query, matches,
     gameCount: idx.gameCount ?? names.length,
     note: matches.length === 0
       ? `No game in the ${platform} cheat DB (${names.length} games) is close to "${query}". Try fewer/looser words.`
-      : `${matches.length} candidate(s) by name-overlap. Pass an exact \`game\` to gameCheats (it also fuzzy-matches now). Score is name similarity, not a content guarantee — verify a label before patching.`,
+      : `${matches.length} candidate(s) by fuzzy name match (region/revision tags ignored, typo-tolerant). Pass an exact \`game\` to gameCheats (it also fuzzy-matches). Score is name similarity, not a content guarantee — verify a label before patching.`,
   };
 }
 
@@ -178,23 +197,21 @@ export async function lookupCheats({ platform, romName, fileName, bytes }) {
     }
   }
 
-  // 3. FUZZY fallback: tag-stripped token-overlap. Catches the common failure
-  //    where identifyRom's name differs from the DB key by a region/revision tag
-  //    or punctuation ("NBA Jam - Tournament Edition (World)" vs a (USA) dump or
-  //    a missing hyphen) — the entry IS in the DB, just under a sibling name.
+  // 3. FUZZY fallback (Fuse over the tag-stripped baseName). Catches the common
+  //    failure where identifyRom's name differs from the DB key by a region/
+  //    revision tag or punctuation ("NBA Jam - Tournament Edition (World)" vs a
+  //    (USA) dump or a missing hyphen), AND now typos — the entry IS in the DB,
+  //    just under a sibling name. Stricter threshold than searchCheats: this
+  //    auto-PICKS an entry, so require a strong (≤0.4 distance → ≥0.6 sim) match.
   let fuzzyAlternatives = [];
   if (!hit) {
     const q = romName || fileName;
     if (q) {
-      const qTok = tokenSet(q), qBase = baseName(q);
-      const ranked = [];
-      for (const n of names) {
-        const nBase = baseName(n);
-        let score = tokenScore(qTok, tokenSet(n));
-        if (qBase && (nBase.includes(qBase) || qBase.includes(nBase))) score = Math.max(score, 0.6);
-        if (score >= 0.5) ranked.push({ n, score });
-      }
-      ranked.sort((a, b) => b.score - a.score || a.n.length - b.n.length);
+      const fuse = await getFuse(platform);
+      const ranked = fuse.search(baseName(q))
+        .map((r) => ({ n: r.item.game, score: simFromFuse(r.score) }))
+        .filter((r) => r.score >= 0.6)
+        .sort((a, b) => b.score - a.score || a.n.length - b.n.length);
       if (ranked.length) {
         hit = ranked[0].n;
         confidence = "fuzzy";

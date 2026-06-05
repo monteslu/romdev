@@ -127,3 +127,18 @@ test("searchCheatGames: a nonsense query returns no matches, not garbage", async
   const r = await searchCheatGames({ platform: "genesis", query: "zzqxqzznotagame" });
   assert.equal(r.matches.length, 0);
 });
+
+test("searchCheatGames: tolerates a character-level TYPO (Fuse, not just token overlap)", async () => {
+  // 'tournmant' / 'editon' are misspelled — the old token-Jaccard matcher would
+  // miss these (different tokens, no overlap); Fuse's fuzzy distance catches them.
+  const r = await searchCheatGames({ platform: "genesis", query: "nba jam tournmant editon" });
+  assert.ok(r.matches.length > 0, "typo'd query should still find candidates");
+  assert.match(r.matches[0].game, /NBA Jam - Tournament Edition/);
+});
+
+test("lookupCheats: a typo'd ROM name still fuzzy-matches the real entry", async () => {
+  const r = await lookupCheats({ platform: "genesis", romName: "NBA Jam Tournmant Editon" });
+  assert.equal(r.matched, true);
+  assert.equal(r.confidence, "fuzzy");
+  assert.match(r.game, /NBA Jam - Tournament Edition/);
+});
