@@ -276,8 +276,9 @@
     "_comment": "GCC-family cross-toolchains \u2014 NOT covered by the light build image; need a native cross-gcc bootstrap. Pins recorded for completeness.",
     "binutils": {
       "kind": "tarball",
-      "version": "UNVERIFIED-from-build-script",
-      "license": "GPL-3.0"
+      "version": "2.42",
+      "license": "GPL-3.0",
+      "note": "binutils-2.42. Built to WASM for THREE targets: m68k-elf (Genesis: build-m68k-wasm-tools.sh), arm-none-eabi (GBA: build-arm-wasm-tools.sh), and z80-elf (SMS/GG/MSX/GB/GBC disassembly+reassembly: build-z80-binutils-wasm.sh — one z80-elf serves both Z80 and gbz80 via -march/-m). Each ships as/ld/objcopy/objdump."
     },
     "gcc": {
       "kind": "tarball",
