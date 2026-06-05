@@ -105,6 +105,34 @@ the copy reads from, then `findWriter` on THAT.
 
 ---
 
+## 5b. To READ a register at an instruction — execution breakpoints (all 14)
+
+When the value you want is computed in a register (not a flat table) — e.g. a
+decoder does `move.b (a0),d0` and `a0` holds the source pointer — stop the CPU
+AT that instruction and read the register. This is the "infer for hours → read
+the answer in 3 calls" move:
+
+```
+findWriter({address})            → a real, instruction-aligned PC (or use a
+                                   disasm label / runUntilRead as the anchor)
+runUntilPC({address: thatPC})    → CPU FROZEN exactly at the instruction
+getCPUState({platform})          → registers.A0 (etc.) — the live value you need
+readCartRom / readMemory at [A0] → follow the pointer
+```
+
+Companion tools (all 14 platforms; feature-detect, `notSupported` if a core
+lacks it — only PC Engine, which has no findWriter, but its breakpoints work):
+- **`runUntilRead({address})`** — the read-side mirror of findWriter: the EXACT
+  instruction that READ an address (who *consumes* a value). Use it to anchor on
+  a known data byte and find its reader.
+- **`stepInstruction()`** — CPU single-step; pair with `getCPUState` to watch
+  registers change one instruction at a time through a routine.
+
+Also: a breakpoint PC is a **guaranteed instruction boundary** — feed it to
+`disassembleRom({startAddress})` to avoid the mid-instruction-garbage trap.
+
+---
+
 ## 6. Driving menus (the real wall-clock sink)
 
 Use `navigate({steps:[{button, maxWaitFrames}]})` — it advances on **screen
@@ -131,6 +159,9 @@ transition.
 | Is a "table" really ASCII/code | `classifyRegion` |
 | Confirm a patch is in the running ROM | `readCartRom` |
 | Where is this byte written / why not | `findWriter` (no write ⇒ source is bulk-copied) |
+| Read a register AT an instruction | `runUntilPC({address})` → freeze → `getCPUState` |
+| Which instruction READ a byte | `runUntilRead({address})` (read-side findWriter) |
+| Single-step the CPU | `stepInstruction` (+ `getCPUState` to watch regs) |
 | Where did a VRAM graphic come from (Genesis) | `traceVramSource` (ROM offset of the DMA source) |
 | Drive a menu fast | `navigate` (advances on screen change) |
 | Free RAM map for a known game | `gameCheats` / `searchCheats` |
