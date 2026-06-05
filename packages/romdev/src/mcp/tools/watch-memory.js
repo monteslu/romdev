@@ -461,7 +461,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       if (!host.watchpointSupported || !host.watchpointSupported()) {
         return jsonContent({
           found: false, notSupported: true, address: "$" + address.toString(16).toUpperCase(),
-          note: "This core build has no instruction-level write watchpoint (currently NES/fceumm only). " +
+          note: "This core build has no instruction-level write watchpoint (shipped on all 14 platforms — update the core package if you see this; only PC Engine lacked it before 0.6.0). " +
             "Use watchMemory/runUntilWrite here — their pc is frame-sampled, so cross-check the value trace.",
         });
       }
@@ -611,7 +611,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       if (!host.pcBreakSupported || !host.pcBreakSupported()) {
         return jsonContent({
           hit: false, notSupported: true, address: "$" + address.toString(16).toUpperCase(),
-          note: "This core build has no PC breakpoint yet (Genesis/genesis_plus_gx today; other cores as they're patched). " +
+          note: "This core build has no PC breakpoint (shipped on all 14 platforms as of 0.5.0 — update the core package if you see this). " +
             "Interim: use runUntilWrite/findWriter to anchor on a write, or stepFrames + getCPUState sampling.",
         });
       }
@@ -679,7 +679,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       if (!host.readWatchSupported || !host.readWatchSupported()) {
         return jsonContent({
           hit: false, notSupported: true, address: "$" + address.toString(16).toUpperCase(),
-          note: "This core build has no read watchpoint yet (Genesis/genesis_plus_gx today; other cores as patched).",
+          note: "This core build has no read watchpoint (shipped on all 14 platforms as of 0.5.0 — update the core package if you see this).",
         });
       }
       const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
@@ -734,7 +734,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       if (!host.pcBreakSupported || !host.pcBreakSupported()) {
         return jsonContent({
           stepped: false, notSupported: true,
-          note: "This core build has no single-step yet (Genesis/genesis_plus_gx today; other cores as patched).",
+          note: "This core build has no single-step (shipped on all 14 platforms as of 0.5.0 — update the core package if you see this).",
         });
       }
       const r = host.stepInstruction();
@@ -762,7 +762,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     safeTool(async ({ regId, value }) => {
       const host = getHost(sessionKey);
       if (!host.setRegSupported || !host.setRegSupported()) {
-        return jsonContent({ notSupported: true, note: "This core build has no register-write yet (rebuild with romdev_setreg)." });
+        return jsonContent({ notSupported: true, note: "This core build has no register-write (shipped on all 14 platforms as of 0.6.0 — update the core package if you see this)." });
       }
       host.setReg(regId, value >>> 0);
       const now = host.getReg(regId);
@@ -794,7 +794,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       const host = getHost(sessionKey);
       if (!host.setRegSupported || !host.setRegSupported()) {
         return jsonContent({ returned: false, notSupported: true,
-          note: "This core build has no register-write yet (rebuild with romdev_setreg). callSubroutine needs it." });
+          note: "This core build has no register-write (shipped on all 14 platforms as of 0.6.0 — update the core package). callSubroutine needs it." });
       }
       const numRegs = {};
       for (const [k, v] of Object.entries(regs ?? {})) numRegs[Number(k)] = v >>> 0;
@@ -825,7 +825,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       const host = getHost(sessionKey);
       if (!host.setRegSupported || !host.setRegSupported()) {
         return jsonContent({ returned: false, notSupported: true,
-          note: "This core build has no register-write yet (rebuild with romdev_setreg). decompressWith needs it." });
+          note: "This core build has no register-write (shipped on all 14 platforms as of 0.6.0 — update the core package). decompressWith needs it." });
       }
       const regs = { 8: sourceAddress >>> 0 };
       if (destAddress !== undefined) regs[9] = destAddress >>> 0;
@@ -865,7 +865,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       const host = getHost(sessionKey);
       if (!host.rangeWatchSupported || !host.rangeWatchSupported()) {
         return jsonContent({ notSupported: true, events: [],
-          note: "This core build has no range watch yet (rebuild with romdev_range_*). Use findWriter/runUntilRead for a single address." });
+          note: "This core build has no range watch (shipped on all 14 platforms as of 0.6.0 — update the core package). Use findWriter/runUntilRead for a single address." });
       }
       if (end < start) throw new Error("watchRange: end must be >= start.");
       // pressDuring is driven inside the frame loop; watchRange's host method owns
@@ -913,7 +913,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       const host = getHost(sessionKey);
       if (!host.rangeWatchSupported || !host.rangeWatchSupported()) {
         return jsonContent({ notSupported: true, pcs: [],
-          note: "This core build has no coverage trace yet (rebuild with romdev_cov_*)." });
+          note: "This core build has no coverage trace (shipped on all 14 platforms as of 0.6.0 — update the core package)." });
       }
       if (end < start) throw new Error("logPCRange: end must be >= start.");
       const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
