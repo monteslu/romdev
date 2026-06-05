@@ -11,6 +11,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { patchGbHeader } from "../../platforms/gb/lib/c/patch-header.js";
 import { jsonContent, safeTool } from "../util.js";
+import { starterSnippetsCore, copyStarterSnippetsCore } from "./snippets.js";
 
 /**
  * Template manifest — each template lists:
@@ -1787,62 +1788,7 @@ Compiles **C89**, not C99/C11. Stick to:
   };
 }
 
-export function registerProjectTools(server, z) {
-  server.tool(
-    "createProject",
-    "Use this to scaffold a new homebrew project directory: writes a starter main source + every runtime " +
-    "file the template needs (headers, crt0, linker .cfg) + README + .gitignore. The result is " +
-    "SELF-CONTAINED — every byte that compiles is in the dir, so it rebuilds with stock cc65/sdcc " +
-    "elsewhere with nothing else. `template` defaults to the platform's smallest visible-and-runnable " +
-    "program; most platforms also have hello_sprite/tile_engine + the genre templates (call listPlatforms " +
-    "to see each platform's set). `withSnippets:true` also drops every vetted starter snippet alongside " +
-    "main. (For a complete genre-shaped game baseline, prefer createGame.)",
-    {
-      platform: z.string().describe("Platform id: nes, c64, gb, gbc, sms, gg, atari2600, atari7800, lynx, snes, genesis, gba."),
-      name: z.string().min(1).describe("Project name (used for output binary)."),
-      path: z.string().describe("Absolute path where the project directory will be created."),
-      title: z.string().optional().describe("Optional human-readable title shown in the README."),
-      template: z.string().optional().describe("Template id. NES/GB/GBC: 'default' | 'hello_sprite' | 'tile_engine'. Other platforms with templates only have 'default' — omit this arg. Default is 'default'."),
-      overwrite: z.boolean().default(false).describe("If true, allow writing into an existing non-empty directory."),
-      withSnippets: z.boolean().default(false).describe("If true, also drop every vetted starter snippet for this platform into the project dir alongside main.c. Equivalent to calling copyStarterSnippets after createProject — saves a round trip when you want main.c + every helper without picking a genre template. Snippets that overlap with files the template's runtime already wrote are skipped."),
-    },
-    safeTool(async (args) => jsonContent(await createProjectImpl(args))),
-  );
-
-  // ── createGame — v2 genre-shaped scaffold ─────────────────────────
-  // Thin wrapper over createProjectImpl that takes a `genre` instead of
-  // a `template`. Each genre maps to a corresponding template under
-  // examples/<platform>/ and ships a known-good complete game baseline:
-  // main loop, NMI, OAM init, gameplay slot, music driver wiring. The
-  // agent fills in gameplay-specific logic on top.
-  //
-  // R21: NES + GB/GBC + SNES + Genesis with three genres each (shmup,
-  // platformer, puzzle). Per-platform extension follows demand. Recipes
-  // for other platforms can be added by registering an entry in the
-  // GENRE_MAP below and shipping matching template files under
-  // examples/<platform>/templates/.
-  server.tool(
-    "createGame",
-    "Scaffold a genre-shaped game project. Higher-level than createProject — " +
-    "picks the right template + runtime + crt0 + linker config for the genre. " +
-    "Available genres on every supported platform: 'shmup' (vertical shooter), " +
-    "'platformer' (side-scrolling + gravity, except NES which is single-screen), " +
-    "'puzzle' (match-3 falling blocks), " +
-    "'sports' (Pong — two controllers wired where the hardware supports it, " +
-    "player-vs-AI on GB/GBC), 'racing' (3-lane top-down lane-switch dodge). " +
-    "Supported platforms: nes, gb, gbc, snes, genesis, sms, gg, c64, gba, lynx, atari7800. " +
-    "Each scaffolds a complete working ROM you can build + run + screenshot " +
-    "in one round trip — fill in gameplay-specific logic on top of the " +
-    "known-good baseline.",
-    {
-      platform: z.string().describe("Platform id. Today: 'nes' | 'gb' | 'gbc' | 'snes' | 'genesis' | 'sms' | 'gg' | 'c64' | 'gba' | 'lynx' | 'atari7800'."),
-      genre: z.string().describe("Genre id: 'shmup' | 'platformer' | 'puzzle' | 'sports' | 'racing' — all five available on every supported platform."),
-      name: z.string().min(1).describe("Project name (used for output binary)."),
-      path: z.string().describe("Absolute path where the project directory will be created."),
-      title: z.string().optional().describe("Optional human-readable title shown in the README."),
-      overwrite: z.boolean().default(false).describe("If true, allow writing into an existing non-empty directory."),
-    },
-    safeTool(async ({ platform, genre, name, path: projPath, title, overwrite }) => {
+async function createGameCore({ platform, genre, name, path: projPath, title, overwrite }) {
       // The five canonical genres. A genre is available on a platform iff
       // TEMPLATES[platform] has a matching template entry — we DERIVE
       // availability from TEMPLATES rather than maintain a parallel table,
@@ -1882,7 +1828,65 @@ export function registerProjectTools(server, z) {
       const result = await createProjectImpl({
         platform, template: templateId, name, path: projPath, title, overwrite,
       });
-      return jsonContent({ ...result, genre, template: templateId });
+      return { ...result, genre, template: templateId };
+}
+
+export function registerProjectTools(server, z) {
+  server.tool(
+    "scaffold",
+    "Scaffold a new homebrew project, a genre-shaped game, or drop starter snippets. `op`: 'project' | 'game' | " +
+    "'snippets' | 'copySnippets'.\n" +
+    "'project': a new project dir — starter main source + every runtime file the template needs (headers, crt0, " +
+    "linker .cfg) + README + .gitignore, SELF-CONTAINED so it rebuilds with stock cc65/sdcc elsewhere. `template` " +
+    "defaults to the platform's smallest visible-and-runnable program (most have hello_sprite/tile_engine too). " +
+    "`withSnippets:true` also drops every vetted snippet alongside main.\n" +
+    "'game': a genre-shaped game — picks the right template + runtime + crt0 + linker for the `genre` (shmup / " +
+    "platformer / puzzle / sports / racing). Scaffolds a complete working ROM you build+run+screenshot in one " +
+    "round trip, then fill in gameplay on the known-good baseline.\n" +
+    "'snippets': browse/fetch a platform's vetted starter snippets — `mode:'list'` (names only), 'get' (one, needs " +
+    "`name`), 'getAll' (joined; path-or-inline). 'copySnippets': write every snippet straight to `destinationDir` " +
+    "(bytes never pass through context); `include` whitelists a subset.",
+    {
+      op: z.enum(["project", "game", "snippets", "copySnippets"]).describe("new project; genre game; browse/fetch snippets; or copy snippets to a dir."),
+      platform: z.string().describe("Platform id (nes, gb, gbc, snes, genesis, sms, gg, c64, gba, lynx, atari7800, ...)."),
+      name: z.string().optional().describe("op=project/game: project name (used for output binary)."),
+      path: z.string().optional().describe("op=project/game: absolute path where the project dir is created."),
+      title: z.string().optional().describe("op=project/game: human-readable title in the README."),
+      overwrite: z.boolean().default(false).describe("op=project/game: allow writing into an existing non-empty dir. (op=copySnippets defaults true — see destinationDir.)"),
+      // project
+      template: z.string().optional().describe("op=project: template id ('default' | 'hello_sprite' | 'tile_engine' on NES/GB/GBC; 'default' elsewhere)."),
+      withSnippets: z.boolean().default(false).describe("op=project: also drop every vetted snippet alongside main (= scaffold copySnippets after)."),
+      // game
+      genre: z.string().optional().describe("op=game: 'shmup' | 'platformer' | 'puzzle' | 'sports' | 'racing'."),
+      // snippets
+      mode: z.enum(["list", "get", "getAll"]).default("list").describe("op=snippets: 'list' (names), 'get' (one, needs name), 'getAll' (joined)."),
+      snippetName: z.string().optional().describe("op=snippets mode:'get': the snippet name ('read_pad') or filename ('read_pad.s')."),
+      language: z.string().optional().describe("op=snippets/copySnippets: filter 'c' | 'asm'."),
+      outputPath: z.string().optional().describe("op=snippets mode:'getAll': write the joined snippets here (or inline:true)."),
+      inline: z.boolean().default(false).describe("op=snippets mode:'getAll': return `combined` in the response instead of writing."),
+      // copySnippets
+      destinationDir: z.string().optional().describe("op=copySnippets: directory to write each snippet into (created if needed)."),
+      include: z.array(z.string()).optional().describe("op=copySnippets: whitelist of bare snippet names to copy."),
+    },
+    safeTool(async (args) => {
+      switch (args.op) {
+        case "project": {
+          if (!args.name || !args.path) throw new Error("scaffold({op:'project'}): `name` and `path` are required.");
+          return jsonContent(await createProjectImpl(args));
+        }
+        case "game": {
+          if (!args.genre || !args.name || !args.path) throw new Error("scaffold({op:'game'}): `genre`, `name`, `path` are required.");
+          return jsonContent(await createGameCore(args));
+        }
+        case "snippets":
+          // map snippetName -> name for the core's expected shape.
+          return await starterSnippetsCore({ ...args, name: args.snippetName });
+        case "copySnippets": {
+          if (!args.destinationDir) throw new Error("scaffold({op:'copySnippets'}): `destinationDir` is required.");
+          return await copyStarterSnippetsCore({ ...args, overwrite: args.overwrite ?? true });
+        }
+        default: throw new Error(`scaffold: unknown op '${args.op}'`);
+      }
     }),
   );
 

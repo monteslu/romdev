@@ -58,8 +58,8 @@ for (const c of SCAFFOLD_CHECKS) {
     const tmp = mkdtempSync(path.join(os.tmpdir(), `tpl-${c.platform}-`));
     try {
       const res = parseToolJson(await client.callTool({
-        name: "createProject",
-        arguments: { platform: c.platform, name: "demo", path: tmp, overwrite: true },
+        name: "scaffold",
+        arguments: { op: "project",  platform: c.platform, name: "demo", path: tmp, overwrite: true },
       }));
       assert.equal(res.platform, c.platform);
       const onDisk = readdirSync(tmp).sort();
@@ -88,8 +88,8 @@ test("createProject(sms) → build succeeds end-to-end", async () => {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "tpl-sms-build-"));
   try {
     parseToolJson(await client.callTool({
-      name: "createProject",
-      arguments: { platform: "sms", name: "demo", path: tmp, overwrite: true },
+      name: "scaffold",
+      arguments: { op: "project",  platform: "sms", name: "demo", path: tmp, overwrite: true },
     }));
     const sourcePath = path.join(tmp, "main.c");
     const hwPath = path.join(tmp, "sms_hw.h");
@@ -113,8 +113,8 @@ test("createProject(c64) → build succeeds end-to-end", async () => {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "tpl-c64-build-"));
   try {
     parseToolJson(await client.callTool({
-      name: "createProject",
-      arguments: { platform: "c64", name: "demo", path: tmp, overwrite: true },
+      name: "scaffold",
+      arguments: { op: "project",  platform: "c64", name: "demo", path: tmp, overwrite: true },
     }));
     const sourcePath = path.join(tmp, "main.c");
     const build = parseToolJson(await client.callTool({
@@ -135,8 +135,8 @@ test("createProject(snes, template:c_hello) → builds via PVSnesLib runtime", a
   const tmp = mkdtempSync(path.join(os.tmpdir(), "tpl-snes-c-"));
   try {
     const create = parseToolJson(await client.callTool({
-      name: "createProject",
-      arguments: { platform: "snes", template: "c_hello", name: "demo", path: tmp, overwrite: true },
+      name: "scaffold",
+      arguments: { op: "project",  platform: "snes", template: "c_hello", name: "demo", path: tmp, overwrite: true },
     }));
     // Confirm both files landed.
     const onDisk = readdirSync(tmp).sort();

@@ -146,8 +146,8 @@ test("R52 copyStarterSnippets writes files to disk + flattens lib/<lang>/", { ti
   const dst = mkdtempSync(join(tmpdir(), "r52-snip-"));
   try {
     const r = await client.callTool({
-      name: "copyStarterSnippets",
-      arguments: { platform: "gg", destinationDir: dst, language: "c" },
+      name: "scaffold",
+      arguments: { op: "copySnippets",  platform: "gg", destinationDir: dst, language: "c" },
     });
     assert.equal(r.isError, undefined, "copyStarterSnippets failed: " + JSON.stringify(r));
     const payload = JSON.parse(r.content[0].text);
@@ -279,8 +279,8 @@ test("R52 copyStarterSnippets honours include[] whitelist + counts files", { tim
   const dst = mkdtempSync(join(tmpdir(), "r52-snip-"));
   try {
     const r = await client.callTool({
-      name: "copyStarterSnippets",
-      arguments: {
+      name: "scaffold",
+      arguments: { op: "copySnippets", 
         platform: "gg",
         destinationDir: dst,
         language: "c",

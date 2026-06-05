@@ -144,46 +144,14 @@ export function registerSnippetTools(server, z) {
     return jsonContent({ ...meta, path: outPath, bytes });
   }
 
-  server.tool(
-    "starterSnippets",
-    "Use this to browse/fetch a platform's vetted starter snippets (known-good boilerplate to copy instead " +
-    "of writing from scratch). `mode:'list'` (DEFAULT) returns {name, file, language} for each — cheap, no " +
-    "file bytes. `mode:'get'` fetches one named snippet's contents (`name` required). `mode:'getAll'` joins " +
-    "every snippet into one string — DEFAULT writes that to outputPath and returns {path}; pass inline:true to " +
-    "get `combined` in the response (you must pass one or the other for getAll). Optional `language` filter " +
-    "('c'/'asm'). NOTE: to drop snippets into a project dir, prefer copyStarterSnippets (writes each snippet as " +
-    "its own file without spending your context).",
-    {
-      platform: z.string(),
-      mode: z.enum(["list", "get", "getAll"]).default("list").describe("'list' (default) = names only; 'get' = one snippet's contents (needs `name`); 'getAll' = every snippet joined."),
-      name: z.string().optional().describe("mode:'get' only — logical name ('read_pad') or filename ('read_pad.s')."),
-      language: z.string().optional().describe("Optional filter — 'c' or 'asm'."),
-      outputPath: z.string().optional().describe("mode:'getAll' only — absolute path to write the joined snippets to. Required for getAll unless inline:true."),
-      inline: z.boolean().default(false).describe("mode:'getAll' only — if true, return `combined` in the response instead of writing to disk. Default false — then outputPath is required for getAll."),
-    },
-    safeTool(async ({ platform, mode, name, language, outputPath, inline }) => {
+  // exported below as starterSnippetsCore.
+  starterSnippetsCore = async ({ platform, mode = "list", name, language, outputPath, inline }) => {
       if (mode === "get") return snippetsGet(platform, name, language);
       if (mode === "getAll") return snippetsGetAll(platform, language, outputPath, inline);
       return snippetsList(platform, language);
-    }),
-  );
+  };
 
-
-  server.tool(
-    "copyStarterSnippets",
-    "Use this to write every vetted starter snippet for a platform straight to a directory on disk — the " +
-    "bytes never pass through your context (vs. starterSnippets({mode:'getAll'}) which returns them inline). Files " +
-    "land flattened as siblings. Optional `language` filter and `include` whitelist to cherry-pick a " +
-    "subset. Overwrites by default (vetted boilerplate, not user data; `overwrite:false` to fail on " +
-    "collision).",
-    {
-      platform: z.string().describe("Platform id (e.g. 'nes', 'gg', 'snes')."),
-      destinationDir: z.string().describe("Absolute path to the directory that will receive the files. Created if it doesn't exist."),
-      language: z.string().optional().describe("Optional language filter ('c' | 'asm'). Omit to copy every language."),
-      include: z.array(z.string()).optional().describe("Optional whitelist of bare snippet names. If set, only matching snippets are copied. Example: [\"vdp_init\", \"joypad_read\"]."),
-      overwrite: z.boolean().default(true).describe("Default true — vetted boilerplate is meant to be regenerated. Pass false to fail when a destination file already exists."),
-    },
-    safeTool(async ({ platform, destinationDir, language, include, overwrite }) => {
+  copyStarterSnippetsCore = async ({ platform, destinationDir, language, include, overwrite = true }) => {
       const all = await listSnippetsForPlatform(platform);
       let filtered = language ? all.filter((s) => s.language === language) : all;
       if (include && include.length > 0) {
@@ -230,6 +198,12 @@ export function registerSnippetTools(server, z) {
                  (skipped.length ? ` (skipped ${skipped.length} existing)` : "") +
                  ` into ${destinationDir}.`,
       });
-    }),
-  );
+  };
 }
+
+// starterSnippets/copyStarterSnippets folded into the `scaffold` tool. The cores
+// are assigned inside registerSnippetTools (they close over the local helpers);
+// scaffold imports these and calls them. registerSnippetTools registers NO tools
+// now — it just wires the cores.
+export let starterSnippetsCore = async () => { throw new Error("snippet cores not initialized — registerSnippetTools must run first"); };
+export let copyStarterSnippetsCore = async () => { throw new Error("snippet cores not initialized — registerSnippetTools must run first"); };
