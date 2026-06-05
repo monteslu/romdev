@@ -324,11 +324,11 @@ const TOOL_OWNER = {
   whichTilesAreRendered: "debug",
   // assets category
   pcmToWav: "assets", recordAudio: "assets", pcmToBrr: "assets",
-  identifyRom: "assets",
+  cart: "assets",
   listRoms: "assets", patchRom: "assets", patchFile: "assets", validateRom: "assets",
   assembleSnippet: "assets", diffRoms: "assets", findFreeSpace: "assets", spliceCHR: "assets",
   findPointerTo: "assets", makeStoredBlock: "assets", relocateBlock: "assets",
-  extractCart: "assets", wrapRomFromParts: "assets",
+
   previewTileArt: "assets",
   text: "assets",
   loadTilemap: "assets", loadAsepriteSheet: "assets", loadGifAnimation: "assets", loadSpriteSheet: "assets",
