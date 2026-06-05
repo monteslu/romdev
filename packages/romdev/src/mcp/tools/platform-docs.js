@@ -54,42 +54,28 @@ async function listDocsForPlatform(platform) {
   return out;
 }
 
-export function registerPlatformDocsTools(server, z) {
-  server.tool(
-    "listPlatformDocs",
-    "List the platform-specific docs available for a given platform. Today: MENTAL_MODEL.md (one-page architecture brief — memory map, PPU/VDP, frame heartbeat, build pipeline), TROUBLESHOOTING.md (symptom→cause→fix index), and UPSTREAM_SOURCES.md (R58 — pointers to bundled library source + upstream GitHub for compilers/emulators, so you can grep for ground truth when our examples aren't enough). Read MENTAL_MODEL before writing code; read TROUBLESHOOTING when stuck; read UPSTREAM_SOURCES when you need to dig deeper than what we expose.",
-    {
-      platform: z.string().describe("Platform id (e.g. 'nes', 'genesis', 'sms')."),
-    },
-    safeTool(async ({ platform }) => {
-      // Cross-platform guides (e.g. the romhacking playbook) under a pseudo id.
+/** platform({op:'docs'}) — list the docs available for a platform. */
+export async function listPlatformDocsCore({ platform }) {
       if (GUIDES[platform]) {
         const docs = Object.keys(GUIDES[platform]).map((name) => ({ name, file: GUIDES[platform][name] }));
-        return jsonContent({
+        return {
           platform,
           docs,
-          note: `Cross-platform guide(s). Call getPlatformDoc({ platform: '${platform}', name: '${docs[0]?.name}' }) to read.`,
-        });
+          note: `Cross-platform guide(s). Call platform({ op:'doc', platform: '${platform}', name: '${docs[0]?.name}' }) to read.`,
+        };
       }
       const docs = await listDocsForPlatform(platform);
-      return jsonContent({
+      return {
         platform,
         docs,
         note: docs.length === 0
-          ? `No docs shipped for '${platform}' yet. Try a different platform or call starterSnippets for boilerplate. (For RE/patching workflow, see getPlatformDoc({platform:'romhacking', name:'playbook'}).)`
-          : `Call getPlatformDoc({ platform, name }) to read one. 'name' is 'mental_model' or 'troubleshooting'. For RE/patching workflow across platforms, see getPlatformDoc({platform:'romhacking', name:'playbook'}).`,
-      });
-    }),
-  );
+          ? `No docs shipped for '${platform}' yet. Try a different platform or scaffold for boilerplate. (For RE/patching workflow, see platform({op:'doc', platform:'romhacking', name:'playbook'}).)`
+          : `Call platform({op:'doc', platform, name}) to read one. 'name' is 'mental_model' or 'troubleshooting'. For RE/patching workflow across platforms, see platform({op:'doc', platform:'romhacking', name:'playbook'}).`,
+      };
+}
 
-  server.tool(
-    "getPlatformDoc",
-    "Fetch the full contents of a platform doc. Returns markdown verbatim — render or quote as-is. Use `name: 'mental_model'` for MENTAL_MODEL.md, `'troubleshooting'` for TROUBLESHOOTING.md, `'upstream_sources'` for UPSTREAM_SOURCES.md. Templates reference these files in their comments; this tool is how the agent actually reads them. CROSS-PLATFORM GUIDE: `getPlatformDoc({platform:'romhacking', name:'playbook'})` returns the ROM-hacking playbook — the decision tree for reverse-engineering/patching an existing ROM (find a value's address, is on-screen text a string or a bitmap, confirm a patch is live, drive menus fast). Read it before a romhack.",
-    {
-      platform: z.string().describe("Platform id, or 'romhacking' for the cross-platform RE/patching playbook."),
-      name: z.string().describe("'mental_model' | 'troubleshooting' | 'upstream_sources', or 'playbook' when platform is 'romhacking'."),
-    },
-    safeTool(async ({ platform, name }) => {
+/** platform({op:'doc'}) — full markdown of one platform doc. Returns jsonContent. */
+export async function getPlatformDocCore({ platform, name }) {
       const lower = name.toLowerCase();
       // Cross-platform guide lookup.
       if (GUIDES[platform]) {
@@ -116,11 +102,12 @@ export function registerPlatformDocsTools(server, z) {
       } catch (e) {
         if (e.code === "ENOENT") {
           throw new Error(
-            `No ${docFile} for platform '${platform}'. Call listPlatformDocs({platform}) to see what's shipped.`
+            `No ${docFile} for platform '${platform}'. Call platform({op:'docs', platform}) to see what's shipped.`
           );
         }
         throw e;
       }
-    }),
-  );
 }
+
+// listPlatformDocs/getPlatformDoc folded into the `platform` tool (op:'docs'/'doc').
+export function registerPlatformDocsTools() { /* folded into `platform` */ }

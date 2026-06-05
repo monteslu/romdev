@@ -57,7 +57,7 @@ async function startServerAndClient() {
 
 test("MCP: listPlatforms returns NES and other v1 platforms", async () => {
   const { client } = await startServerAndClient();
-  const result = await client.callTool({ name: "listPlatforms", arguments: {} });
+  const result = await client.callTool({ name: "platform", arguments: { op: "list" } });
   const text = result.content[0].text;
   const data = JSON.parse(text);
   const ids = data.platforms.map((p) => p.platform);
@@ -231,7 +231,7 @@ test("MCP: pressButton on NES does not throw", { skip: !HAS_NESTEST && "nestest.
 
 test("MCP: listToolchains includes cc65", async () => {
   const { client } = await startServerAndClient();
-  const r = await client.callTool({ name: "listToolchains", arguments: {} });
+  const r = await client.callTool({ name: "platform", arguments: { op: "toolchains" } });
   const data = JSON.parse(r.content[0].text);
   const ids = data.toolchains.map((t) => t.id);
   assert.ok(ids.includes("cc65"));

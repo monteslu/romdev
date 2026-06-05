@@ -31,6 +31,8 @@ export const MERGE_MAP = {
   state: { absorbs: ["saveState", "loadState", "listStates", "exportState", "dumpState", "diffState"], axis: "op" },
   // ── input (set/press/sequence/navigate/layout; getInputLayout folded in) ──
   input: { absorbs: ["setInput", "pressButton", "inputSequence", "navigate", "getInputLayout"], axis: "op" },
+  // ── platform (list/resolve/toolchains/docs/doc; spans platforms.js+platform-docs.js+toolchain.js) ──
+  platform: { absorbs: ["listPlatforms", "resolvePlatform", "listToolchains", "installToolchain", "listPlatformDocs", "getPlatformDoc"], axis: "op" },
 };
 
 /** Every OLD tool name that the consolidation removes (absorbed into a new tool). */

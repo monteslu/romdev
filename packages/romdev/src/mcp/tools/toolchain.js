@@ -181,40 +181,28 @@ function describeRomLayout(platform, bin) {
   return null;
 }
 
+/** platform({op:'toolchains'}) without an id — list bundled toolchains. */
+export function listToolchainsCore() {
+  return {
+    toolchains: Object.values(TOOLCHAINS).map((t) => ({
+      id: t.id,
+      displayName: t.displayName,
+      platforms: t.platforms,
+      tier: t.tier,
+      installed: t.tier === 1, // Tier-1 is always bundled
+    })),
+  };
+}
+
+/** platform({op:'toolchains', id}) — confirm one toolchain's install status (no-op in v1). */
+export function installToolchainCore({ id }) {
+  const t = TOOLCHAINS[id];
+  if (!t) throw new Error(`unknown toolchain '${id}'. Use platform({op:'toolchains'}) to see available ids.`);
+  if (t.tier === 1) return { id, installed: true, note: `toolchain '${id}' is bundled — nothing to install` };
+  throw new Error(`toolchain '${id}' is tier-2 and not yet implemented in v1`);
+}
+
 export function registerToolchainTools(server, z, sessionKey) {
-  server.tool(
-    "listToolchains",
-    "List all homebrew toolchains romdev ships with. Tier-1 toolchains are bundled WASM (no install required).",
-    {},
-    safeTool(async () => {
-      return jsonContent({
-        toolchains: Object.values(TOOLCHAINS).map((t) => ({
-          id: t.id,
-          displayName: t.displayName,
-          platforms: t.platforms,
-          tier: t.tier,
-          installed: t.tier === 1, // Tier-1 is always bundled
-        })),
-      });
-    }),
-  );
-
-  server.tool(
-    "installToolchain",
-    "Confirm a toolchain is available. In v1 all toolchains are bundled WASM, so this is a no-op that returns the installation status.",
-    {
-      id: z.string().describe("Toolchain id (e.g. 'cc65', 'rgbds')."),
-    },
-    safeTool(async ({ id }) => {
-      const t = TOOLCHAINS[id];
-      if (!t) throw new Error(`unknown toolchain '${id}'. Use listToolchains() to see available ids.`);
-      if (t.tier === 1) {
-        return textContent(`toolchain '${id}' is bundled — nothing to install`);
-      }
-      throw new Error(`toolchain '${id}' is tier-2 and not yet implemented in v1`);
-    }),
-  );
-
   server.tool(
     "buildSource",
     "Assemble or compile source code for a target platform. Pass either `source` (single file) or `sources` (multi-file project as {name: contents}). With `sources`, each entry becomes its own translation unit — for cc65 platforms (NES/C64/Atari7800/Lynx), .s/.asm files go to ca65 and .c files go to cc65; everything is linked together. Pass `linkerConfig` to override the default ld65 .cfg (useful when you need a larger ZP segment, custom mappers, or extra named segments). Returns the ROM bytes (base64) and the build log. Optionally writes the ROM to `outputPath`.",
