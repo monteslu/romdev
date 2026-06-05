@@ -150,12 +150,12 @@ test("MCP: loadState clears active cheats (documented contract)", { skip: !HAS_N
   await client.callTool({ name: "loadMedia", arguments: { platform: "nes", path: ROM_PATH } });
   await client.callTool({ name: "stepFrames", arguments: { frames: 30 } });
   await client.callTool({ name: "saveState", arguments: { name: "cp" } });
-  await client.callTool({ name: "applyCheat", arguments: { code: "0075:09" } });
+  await client.callTool({ name: "cheats", arguments: { op: "apply", code: "0075:09" } });
   // Restoring a state must clear cheats (frontend cheat state isn't in the blob).
   const r = JSON.parse((await client.callTool({ name: "loadState", arguments: { name: "cp" } })).content[0].text);
   assert.equal(r.cheatsCleared, 1, "loadState reports the cheat it cleared");
   // Re-apply: it should land in slot 0 (proving the prior cheat was gone), not slot 1.
-  const re = JSON.parse((await client.callTool({ name: "applyCheat", arguments: { code: "0075:09" } })).content[0].text);
+  const re = JSON.parse((await client.callTool({ name: "cheats", arguments: { op: "apply", code: "0075:09" } })).content[0].text);
   assert.deepEqual(re.active.map((c) => c.index), [0], "no stale cheat survived the restore");
 });
 

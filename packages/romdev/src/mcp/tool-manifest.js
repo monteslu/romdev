@@ -19,6 +19,8 @@
 export const MERGE_MAP = {
   // ── files (generic disk I/O) ──
   files: { absorbs: ["writeAsset", "readAsset", "listAssets"], axis: "op" },
+  // ── cheats (DB lookup/search + apply/clear + make) ──
+  cheats: { absorbs: ["gameCheats", "searchCheats", "applyCheat", "clearCheats", "makeCheat"], axis: "op" },
 };
 
 /** Every OLD tool name that the consolidation removes (absorbed into a new tool). */

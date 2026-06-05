@@ -320,7 +320,7 @@ const TOOL_OWNER = {
   buildSourceWithDebug: "debug", resolveSymbol: "debug", lookupAddress: "debug",
   getMemoryMap: "debug", listSymbols: "debug",
   disassemble: "debug", disassembleRom: "debug", disassembleProject: "debug", findReferences: "debug",
-  gameCheats: "debug", applyCheat: "debug", clearCheats: "debug", makeCheat: "debug",
+  cheats: "debug",
   getRenderingContext: "debug",
   inspectTile: "debug",
   whichTilesAreRendered: "debug",
