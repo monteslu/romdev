@@ -64,6 +64,10 @@ grep -rq "romdev_pcbreak_get" . 2>/dev/null && \
 # by the same patch as the pcbreak hook, gated on the round-2 sentinel export.
 grep -rq "romdev_cov_get" . 2>/dev/null && \
   BP_EXPORTS="$BP_EXPORTS"'"_romdev_setreg","_romdev_getreg","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get",'
+# WRITE watchpoint (findWriter) — geargrafx gained a clean Write funnel, so this is
+# now supported on PCE too (gated on the watchpoint export sentinel).
+grep -rq "romdev_watchpoint_get" . 2>/dev/null && \
+  BP_EXPORTS="$BP_EXPORTS"'"_romdev_watchpoint_set","_romdev_watchpoint_get",'
 EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set",'"$BP_EXPORTS"'"_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
 EXPORTED_RUNTIME='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS"]'
 

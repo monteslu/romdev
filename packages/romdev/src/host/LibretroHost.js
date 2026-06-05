@@ -1271,10 +1271,15 @@ export class LibretroHost {
 
   // ── Targeted VDP-DMA watch (item 3, Genesis only) ───────────────────────────
 
-  /** True when this core exposes the VDP-DMA log (Genesis only). */
+  /** True when VDP-DMA logging applies to the LOADED platform. The gpgx core
+   *  exports the DMA hooks, but only GENESIS has VDP DMA — SMS/GG (also gpgx) use
+   *  a different VDP with no DMA, so the hook never fires there. Gate on the
+   *  loaded platform, not just the export's presence. */
   dmaWatchSupported() {
     const mod = this.mod;
-    return !!(mod && typeof mod._romdev_dmawatch_set === "function" && typeof mod._romdev_dmawatch_get === "function");
+    const p = this.status.platform;
+    const isGenesis = p === "genesis" || p === "megadrive" || p === "md";
+    return isGenesis && !!(mod && typeof mod._romdev_dmawatch_set === "function" && typeof mod._romdev_dmawatch_get === "function");
   }
 
   /**
