@@ -82,65 +82,48 @@ export function registerLifecycleTools(server, z, sessionKey) {
 
 
   server.tool(
-    "unloadMedia",
-    "Unload the current media without disposing the host. Use this before swapping a ROM if you want to keep the core hot.",
-    {},
-    safeTool(async () => {
-      const host = getHostOrNull(sessionKey);
-      if (host) host.unloadMedia();
-      return textContent("unloaded");
-    }),
-  );
-
-  server.tool(
-    "shutdown",
-    "Tear down the current host entirely. Free all resources. A subsequent loadMedia creates a fresh host.",
-    {},
-    safeTool(async () => {
-      clearHost(sessionKey);
-      return textContent("shutdown complete");
-    }),
-  );
-
-  server.tool(
-    "reset",
-    "Reset the loaded ROM. DEFAULT is a soft reset (the console's RESET button): it calls the core's " +
-    "retro_reset, which on most cores does NOT clear work RAM — so boot-seeded variables and any state " +
-    "the game already wrote PERSIST (e.g. a current-area byte stays at its old value). For a TRUE " +
-    "power-cycle that clears RAM and re-seeds boot state, pass `hard:true` — that reloads the ROM from " +
-    "scratch (equivalent to a fresh loadMedia). Use `hard:true` when re-testing boot-time behavior " +
-    "(e.g. iterating on a boot cheat / a different seed value); a soft reset boots the PREVIOUS state.",
+    "host",
+    "Emulator host lifecycle FSM — control the running machine. `op`: 'unload' | 'shutdown' | 'reset' | 'pause' | " +
+    "'resume'. (Loading media is the separate `loadMedia` tool.)\n" +
+    "'unload': drop the current media but keep the core hot (for a fast ROM swap). 'shutdown': tear the host down " +
+    "entirely (a later loadMedia makes a fresh one).\n" +
+    "'reset': DEFAULT is a SOFT reset (the RESET button — retro_reset; on most cores does NOT clear work RAM, so " +
+    "boot-seeded variables PERSIST). Pass `hard:true` for a TRUE power-cycle that reloads the ROM from scratch and " +
+    "clears RAM + re-seeds boot state — use it when re-testing boot-time behavior (a soft reset boots the PREVIOUS " +
+    "state).\n" +
+    "'pause': halt emulation (stepFrames returns 0 until resume). 'resume': continue.",
     {
-      hard: z.boolean().default(false).describe("true = full power-cycle (reload the ROM; clears work RAM + boot-seeded state). false (default) = soft RESET-button reset (RAM persists)."),
+      op: z.enum(["unload", "shutdown", "reset", "pause", "resume"]).describe("unload media; shutdown the host; reset (soft/hard); pause; resume."),
+      hard: z.boolean().default(false).describe("op=reset: true = full power-cycle (reload the ROM; clears work RAM + boot-seeded state). false (default) = soft RESET-button reset (RAM persists)."),
     },
-    safeTool(async ({ hard }) => {
-      const host = getHost(sessionKey);
-      if (hard) {
-        const reloaded = await host.hardReset();
-        return textContent(reloaded ? "reset (hard / power-cycle — RAM cleared)" : "reset (soft — no cached ROM to reload for a hard reset)");
+    safeTool(async ({ op, hard }) => {
+      switch (op) {
+        case "unload": {
+          const host = getHostOrNull(sessionKey);
+          if (host) host.unloadMedia();
+          return textContent("unloaded");
+        }
+        case "shutdown":
+          clearHost(sessionKey);
+          return textContent("shutdown complete");
+        case "reset": {
+          const host = getHost(sessionKey);
+          if (hard) {
+            const reloaded = await host.hardReset();
+            return textContent(reloaded ? "reset (hard / power-cycle — RAM cleared)" : "reset (soft — no cached ROM to reload for a hard reset)");
+          }
+          host.reset();
+          return textContent("reset (soft — RESET button; work RAM persists, use hard:true to clear it)");
+        }
+        case "pause":
+          getHost(sessionKey).pause();
+          return textContent("paused");
+        case "resume":
+          getHost(sessionKey).resume();
+          return textContent("resumed");
+        default:
+          throw new Error(`host: unknown op '${op}'`);
       }
-      host.reset();
-      return textContent("reset (soft — RESET button; work RAM persists, use hard:true to clear it)");
-    }),
-  );
-
-  server.tool(
-    "pause",
-    "Pause emulation. Subsequent stepFrames calls return 0 until resume.",
-    {},
-    safeTool(async () => {
-      getHost(sessionKey).pause();
-      return textContent("paused");
-    }),
-  );
-
-  server.tool(
-    "resume",
-    "Resume emulation after pause.",
-    {},
-    safeTool(async () => {
-      getHost(sessionKey).resume();
-      return textContent("resumed");
     }),
   );
 
