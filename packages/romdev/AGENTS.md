@@ -4,7 +4,7 @@ You are reading this because romdev is connected. This is the orientation. Read 
 
 ## What this server does
 
-Drives the full homebrew ROM dev loop for 14 retro game platforms (NES, SNES, Game Boy, Game Boy Color, Game Boy Advance, Genesis, Sega Master System, Game Gear, Atari 2600/7800, Atari Lynx, Commodore 64, PC Engine / TurboGrafx-16, and MSX / MSX2). Build → run → screenshot → inspect → patch → iterate. Also a strong reverse-engineering kit: disassemble existing ROMs (byte-exact rebuildable projects), find the EXACT instruction that wrote a RAM byte (`findWriter`, a core-level write watchpoint), and — the cheapest RE move of all — look up cheats (`gameCheats`: a free, crowd-sourced labeled RAM/code map for known ROMs that answers "which byte holds X?" without disassembling), apply + create cheats, convert assets, study patterns from real games, drive emulator state for scripted testing. Bundled WASM toolchains and emulator cores — no system dependencies, no installs.
+Drives the full homebrew ROM dev loop for 14 retro game platforms (NES, SNES, Game Boy, Game Boy Color, Game Boy Advance, Genesis, Sega Master System, Game Gear, Atari 2600/7800, Atari Lynx, Commodore 64, PC Engine / TurboGrafx-16, and MSX / MSX2). Build → run → screenshot → inspect → patch → iterate. Also a strong reverse-engineering kit: disassemble existing ROMs into byte-exact rebuildable projects (`disassembleProject`/`findReferences` — the workhorse for any structural hack), find the EXACT instruction that wrote a RAM byte (`findWriter`, a core-level write watchpoint), and look up cheats (`gameCheats`: a free, crowd-sourced labeled RAM/code map for known ROMs — a cheap lookup that answers "which byte holds X?" when an entry exists, complementing the disassembler), apply + create cheats, convert assets, study patterns from real games, drive emulator state for scripted testing. Bundled WASM toolchains and emulator cores — no system dependencies, no installs.
 
 You drive the work. The human is a director — they may want a game, a ROM disassembly, a tool-assisted reverse-engineering session, or anything else this server can do.
 
@@ -62,31 +62,45 @@ Skip playtest only when there's clearly no human in the loop: CI runs, automated
 
 **"Disassemble this NES ROM"** is now just: `disassembleRom({path, startAddress, length})`. No discovery step.
 
-### Romhacking / reverse-engineering: start with `gameCheats` — it's a free RAM map
+### Romhacking / reverse-engineering: check `gameCheats` early — it's a free RAM map
 
-When the task is to **modify an existing game** ("give the player infinite lives",
-"change this text", "find where the score lives"), the cheapest first move is
-almost always `gameCheats({path})`, NOT disassembly. The bundled cheat database is
-a crowd-sourced **labeled memory map** for thousands of known ROMs: each RAM cheat
-is a named address (`"Infinite Health" → $00CD`), each Game Genie / code cheat is a
-named code site (address + value). It answers the most expensive RE question —
-*"which byte or routine holds X?"* — for free, in one call, before you disassemble
-or hunt with watchMemory. This is a serious RE tool, not a toy.
+When the task is to **modify an existing game**, you have two complementary
+entry tools, and which leads depends on the kind of hack:
 
-The canonical romhacking loop:
+- **`gameCheats({path})`** — the bundled cheat DB is a crowd-sourced **labeled
+  memory/code map** for thousands of known ROMs: each RAM cheat is a named address
+  (`"Infinite Health" → $00CD`), each Game Genie code is a named code site. It
+  answers *"which byte holds X?"* for free, in one call — when an entry exists.
+  Cheap to check, so check it early. But it only helps for **values it happens to
+  label**, and only for ROMs in the DB.
+- **`disassembleRom` / `disassembleProject` / `findReferences`** — the actual
+  code. This is how you understand *how* something works and the **only** path for
+  structural hacks: new logic/behavior, text, graphics, AI, anything no cheat
+  names — and for any game the cheat DB doesn't cover.
+
+**Don't treat one as a mere fallback for the other — they answer different
+questions, and running both early is normal.** A good default:
+
 1. **`identifyRom({path})`** → platform + title (sniffs zip-wrapped ROMs too).
-2. **`gameCheats({path})`** → the free labeled RAM/code map for THIS game. Filter
-   by keyword (`filter:"lives"`). Treat labels as *probable* (matched by name, not
-   verified CRC) — see step 3.
-3. **VERIFY the label** before patching: `writeMemory` the address live and watch
-   the effect, or `watchMemory`/`runUntilWrite` to confirm what touches it. Static
-   "matches the pattern" ≠ "actually runs."
-4. **Patch**: `patchFile`/`patchRom` (with `expect:` bytes so a wrong-revision
-   write is refused) — or apply the cheat live with `applyCheat` to prototype.
+2. **`gameCheats({path})`** — a fast lookup. If it names the address you need,
+   you may have just skipped a long memory hunt. If it returns nothing useful (no
+   match, or no cheat for *your* target), that's fine — move on, no time lost.
+3. **Disassemble / trace** whenever the hack is about CODE or about data the
+   cheats don't cover: `disassembleProject` for a rebuildable project,
+   `findReferences` for "what touches this address", `findWriter` for the exact
+   instruction that wrote a byte, `watchMemory`/`runUntilWrite` to find an address
+   empirically. For a no-cheats game or a logic/text/graphics change, this is
+   where the real work is — start here, don't wait on a cheat lookup.
+4. **VERIFY before patching**: `writeMemory` the address live and watch the effect
+   (cheat labels are *probable* — matched by name, not verified CRC; static
+   "matches the pattern" ≠ "actually runs").
+5. **Patch**: `patchFile`/`patchRom` with `expect:` bytes (refuses a wrong-revision
+   write) — or `applyCheat` to prototype a value change live first.
 
-Only drop to `disassembleRom` / `findReferences` / `findWriter` when cheats don't
-cover what you need (custom logic, compressed data, an address no cheat names).
-Those are powerful, but they're step 2 *after* the free map, not step 1.
+Rule of thumb: **cheats are a shortcut for finding a known value's address;
+disassembly is how you change behavior.** Most non-trivial hacks need the
+disassembler regardless — so reach for it freely, and let `gameCheats` save you a
+hunt when it can, not gate the work when it can't.
 
 **If your session ever returns a 404 "session not found"** (the server restarted), your MCP client should auto-reconnect (re-`initialize`) — and the fresh session again has every tool loaded. You don't re-arm anything. If your client does NOT auto-reconnect on 404, restart its MCP connection once; that's a client limitation, not a server step.
 
