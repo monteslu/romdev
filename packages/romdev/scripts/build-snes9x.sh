@@ -25,7 +25,7 @@ fetch_pinned cores.snes9x "$SNES9X_DIR"
 cd "$SNES9X_DIR"
 # Reset to clean state and reapply the patch idempotently. `git stash`
 # discards any prior partial apply attempts.
-git checkout -- libretro/libretro.cpp getset.h 2>/dev/null || true
+git checkout -- libretro/libretro.cpp getset.h cpuexec.cpp 2>/dev/null || true
 if ! git apply --check "$PATCH_FILE" 2>/dev/null; then
   # Patch may already be applied; check by looking for the sentinel symbol.
   if grep -q "ROMDEV_MEMORY_SNES_OAM" libretro/libretro.cpp; then
@@ -62,7 +62,7 @@ fi
 
 # Final emcc link → WASM module. Flags mirror retroemu's snes9x.sh so the
 # core stays interchangeable with the rest of our bundled libretro cores.
-EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_watchpoint_set","_romdev_watchpoint_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
+EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_watchpoint_set","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
 EXPORTED_RUNTIME='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS"]'
 
 mkdir -p "$OUT"
@@ -86,3 +86,14 @@ emcc "$CORE_LIB" \
 
 echo "snes9x_libretro staged at $OUT"
 ls -lh "$OUT/snes9x_libretro."{js,wasm}
+
+# Also stage into the carved-out binary package the registry actually resolves
+# at runtime (src/cores/registry.js → romdev-platform-snes). Without this the
+# dev tree keeps loading the OLD package copy and a rebuild appears to "do
+# nothing".
+PKG_OUT="$PROJECT_DIR/../romdev-platform-snes/wasm"
+if [ -d "$PKG_OUT" ]; then
+  cp "$OUT/snes9x_libretro.js"   "$PKG_OUT/snes9x_libretro.js"
+  cp "$OUT/snes9x_libretro.wasm" "$PKG_OUT/snes9x_libretro.wasm"
+  echo "also staged into romdev-platform-snes package: $PKG_OUT"
+fi

@@ -98,6 +98,10 @@ test("Genesis PC breakpoint + read watch + single-step (gpgx m68k)", { timeout: 
   assert.equal(stepRes.notSupported, undefined, "stepInstruction reported notSupported");
   assert.equal(stepRes.stepped, true, "single-step failed: " + JSON.stringify(stepRes));
   assert.ok(stepRes.pcRaw >= 0, "single-step returned no pc");
+  // Single-step must ADVANCE the PC past the breakpoint — not re-stop on the
+  // same (un-executed) instruction. (The countdown-arm fix; a before-dispatch
+  // fire would return the same PC.)
+  assert.notEqual(stepRes.pcRaw, writerPC, "single-step did not advance PC: " + JSON.stringify(stepRes));
 
   // 5) runUntilRead — watch a RAM address the program reads. The counter at
   //    0xFF2000 is written but `acc` lives in a register; to have a deterministic

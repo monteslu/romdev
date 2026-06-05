@@ -1,15 +1,3 @@
-# romdev patch — see README.md in this directory for full justification.
-# Exposes this core's internal memory regions (VRAM/OAM/palette/registers/etc.)
-# via retro_get_memory_data so romdev's inspect*/getCPUState/etc. tools can read
-# them. Upstream exposes only SAVE_RAM/SYSTEM_RAM. WITHOUT this patch the build
-# still succeeds but those tools return empty data (silent runtime failure).
-# git apply ignores everything above the first 'diff --git' line.
-#
-# Also adds an instruction-level WRITE WATCHPOINT: the WRITE/FF_WRITE macros in
-# cpu.cpp stamp the live sm83 `pc` when a watched address is written; libretro.cpp
-# exports romdev_watchpoint_set/get. Records the TRUE writing instruction's PC.
-# git apply ignores everything above the first 'diff --git' line.
-#
 diff --git a/libgambatte/include/gambatte.h b/libgambatte/include/gambatte.h
 index 7e5c43b..1cd0d7f 100644
 --- a/libgambatte/include/gambatte.h
@@ -28,10 +16,10 @@ index 7e5c43b..1cd0d7f 100644
  
  private:
 diff --git a/libgambatte/libretro/libretro.cpp b/libgambatte/libretro/libretro.cpp
-index 15b042c..88e9e5e 100644
+index 15b042c..7db8286 100644
 --- a/libgambatte/libretro/libretro.cpp
 +++ b/libgambatte/libretro/libretro.cpp
-@@ -2874,6 +2874,50 @@ void retro_unload_game()
+@@ -2874,6 +2874,116 @@ void retro_unload_game()
  
  unsigned retro_get_region() { return RETRO_REGION_NTSC; }
  
@@ -66,6 +54,72 @@ index 15b042c..88e9e5e 100644
 +}
 +}
 +
++/* romdev READ watchpoint (sm83) — symmetric to the write watch above. Records
++ * the sm83 `pc` of the instruction that READ a watched CPU address (hooked into
++ * the READ/FF_READ data-read macros in cpu.cpp). State lives in cpu.cpp. */
++extern "C" {
++extern unsigned long  romdev_rd_addr;
++extern int            romdev_rd_enabled;
++extern unsigned long  romdev_rd_last_pc;
++extern unsigned char  romdev_rd_last_val;
++extern unsigned long  romdev_rd_hits;
++
++void romdev_readwatch_set(unsigned addr, int enabled) {
++   romdev_rd_addr = addr;
++   romdev_rd_enabled = enabled ? 1 : 0;
++   romdev_rd_last_pc = 0xFFFFFFFF;
++   romdev_rd_last_val = 0;
++   romdev_rd_hits = 0;
++}
++
++/* Fills out5: [enabled, addr, lastPC, lastVal, hits]. */
++void romdev_readwatch_get(unsigned *out5, int clearHits) {
++   if (!out5) return;
++   out5[0] = (unsigned)romdev_rd_enabled;
++   out5[1] = (unsigned)romdev_rd_addr;
++   out5[2] = (unsigned)romdev_rd_last_pc;
++   out5[3] = (unsigned)romdev_rd_last_val;
++   out5[4] = (unsigned)romdev_rd_hits;
++   if (clearHits) { romdev_rd_hits = 0; romdev_rd_last_pc = 0xFFFFFFFF; }
++}
++}
++
++/* romdev PC BREAKPOINT (sm83 execute hook in cpu.cpp:CPU::process). The core
++ * freezes at the breakpoint PC; the host polls romdev_pcbreak_get after each
++ * retro_run frame and stops stepping once `hit` is set, then reads the registers
++ * via getCPUState. `step` arms a one-instruction single-step (ignores addr). */
++extern "C" {
++extern unsigned int  romdev_pc_addr;
++extern int           romdev_pc_enabled;
++extern volatile int  romdev_pc_step;
++extern volatile int  romdev_pc_hit;
++extern unsigned int  romdev_pc_last_pc;
++extern unsigned int  romdev_pc_hits;
++
++void romdev_pcbreak_set(unsigned addr, int enabled, int step) {
++   romdev_pc_addr = addr;
++   romdev_pc_enabled = enabled ? 1 : 0;
++   /* step is a countdown decremented once per dispatched instruction; arm it to
++    * 2 so ONE instruction executes before the stop fires (true single-step that
++    * advances the PC). See the hook in cpu.cpp. */
++   romdev_pc_step = step ? 2 : 0;
++   romdev_pc_hit = 0;
++   romdev_pc_last_pc = 0xFFFFFFFF;
++   romdev_pc_hits = 0;
++}
++
++/* Fills out5: [enabled, addr, hit, lastPC, hits]. Pass clearHit to re-arm. */
++void romdev_pcbreak_get(unsigned *out5, int clearHit) {
++   if (!out5) return;
++   out5[0] = (unsigned)romdev_pc_enabled;
++   out5[1] = (unsigned)romdev_pc_addr;
++   out5[2] = (unsigned)romdev_pc_hit;
++   out5[3] = (unsigned)romdev_pc_last_pc;
++   out5[4] = (unsigned)romdev_pc_hits;
++   if (clearHit) { romdev_pc_hit = 0; }
++}
++}
++
 +/* rom-dev-mcp extension: custom memory region IDs above libretro standard.
 + * Lets the host inspect GB/GBC PPU state for inspectSprites / inspectPalette
 + * / getCPUState. Mirrors fceumm/snes9x/gpgx patches. */
@@ -82,7 +136,7 @@ index 15b042c..88e9e5e 100644
  void *retro_get_memory_data(unsigned id)
  {
     if (rom_loaded) switch (id)
-@@ -2883,11 +2927,20 @@ void *retro_get_memory_data(unsigned id)
+@@ -2883,11 +2993,20 @@ void *retro_get_memory_data(unsigned id)
        case RETRO_MEMORY_RTC:
           return gb.rtcdata_ptr();
        case RETRO_MEMORY_SYSTEM_RAM:
@@ -105,7 +159,7 @@ index 15b042c..88e9e5e 100644
     }
  
     return 0;
-@@ -2902,14 +2955,21 @@ size_t retro_get_memory_size(unsigned id)
+@@ -2902,14 +3021,21 @@ size_t retro_get_memory_size(unsigned id)
        case RETRO_MEMORY_RTC:
           return gb.rtcdata_size();
        case RETRO_MEMORY_SYSTEM_RAM:
@@ -130,10 +184,10 @@ index 15b042c..88e9e5e 100644
  
     return 0;
 diff --git a/libgambatte/src/cpu.cpp b/libgambatte/src/cpu.cpp
-index 0fb6199..3452f15 100644
+index 0fb6199..9b706af 100644
 --- a/libgambatte/src/cpu.cpp
 +++ b/libgambatte/src/cpu.cpp
-@@ -20,6 +20,20 @@
+@@ -20,6 +20,44 @@
  #include "gambatte-memory.h"
  #include "savestate.h"
  
@@ -149,14 +203,52 @@ index 0fb6199..3452f15 100644
 +unsigned char romdev_wp_last_val = 0;
 +unsigned long romdev_wp_hits     = 0;
 +unsigned long romdev_wp_last_rom_off = 0xFFFFFFFF; /* ROM offset of the writing PC (active bank) */
++
++/* romdev instruction-level READ watchpoint (mirror of the write watch above;
++ * hooked into the READ/FF_READ data-read macros, NOT PC_READ — instruction and
++ * operand fetches aren't data accesses). Records the live `pc` of the reading
++ * instruction + the value read. Same shape as the Genesis m68k read watch. */
++unsigned long romdev_rd_addr     = 0;
++int           romdev_rd_enabled  = 0;
++unsigned long romdev_rd_last_pc  = 0xFFFFFFFF;
++unsigned char romdev_rd_last_val = 0;
++unsigned long romdev_rd_hits     = 0;
++
++/* romdev PC BREAKPOINT / single-step (sm83 execute hook in CPU::process below).
++ * When enabled and the live `pc` reaches romdev_pc_addr BEFORE an instruction is
++ * fetched, the interpreter records the PC and breaks out of its run loop so the
++ * CPU freezes EXACTLY at that PC (the instruction is NOT executed; process()
++ * writes the breakpoint pc back to pc_). romdev_pc_step forces a one-instruction
++ * stop regardless of address (single-step). The host polls romdev_pc_hit after
++ * each retro_run and stops stepping once it's set, then reads the registers. */
++unsigned int  romdev_pc_addr     = 0;
++int           romdev_pc_enabled  = 0;
++volatile int  romdev_pc_step     = 0;        /* 1 = stop after exactly one instruction */
++volatile int  romdev_pc_hit      = 0;        /* set by the execute hook, cleared by the host */
++unsigned int  romdev_pc_last_pc  = 0xFFFFFFFF;
++unsigned int  romdev_pc_hits     = 0;
 +}
 +
  namespace gambatte {
  
  CPU::CPU()
-@@ -143,8 +157,14 @@ void CPU::loadState(SaveState const &state) {
+@@ -139,12 +177,26 @@ void CPU::loadState(SaveState const &state) {
+ #define de() ( d << 8 | e )
+ #define hl() ( h << 8 | l )
+ 
+-#define READ(dest, addr) do { (dest) = mem_.read(addr, cycleCounter); cycleCounter += 4; } while (0)
++/* romdev READ watchpoint check — runs AFTER the data read so it captures the
++ * value actually returned. Mirror of ROMDEV_WP_CHECK; hooked into the data-read
++ * macros below. PC_READ (instruction/operand fetch) is deliberately NOT hooked. */
++#define ROMDEV_RD_CHECK(a, d) do { \
++		if (romdev_rd_enabled && (unsigned long)(a) == romdev_rd_addr) { \
++			romdev_rd_last_pc = pc; romdev_rd_last_val = (unsigned char)(d); romdev_rd_hits++; \
++		} \
++	} while (0)
++#define READ(dest, addr) do { (dest) = mem_.read(addr, cycleCounter); ROMDEV_RD_CHECK((addr), (dest)); cycleCounter += 4; } while (0)
  #define PC_READ(dest) do { (dest) = mem_.read(pc, cycleCounter); pc = (pc + 1) & 0xFFFF; cycleCounter += 4; } while (0)
- #define FF_READ(dest, addr) do { (dest) = mem_.ff_read(addr, cycleCounter); cycleCounter += 4; } while (0)
+-#define FF_READ(dest, addr) do { (dest) = mem_.ff_read(addr, cycleCounter); cycleCounter += 4; } while (0)
++#define FF_READ(dest, addr) do { (dest) = mem_.ff_read(addr, cycleCounter); ROMDEV_RD_CHECK(0xFF00 | ((addr) & 0xFF), (dest)); cycleCounter += 4; } while (0)
  
 -#define WRITE(addr, data) do { mem_.write(addr, data, cycleCounter); cycleCounter += 4; } while (0)
 -#define FF_WRITE(addr, data) do { mem_.ff_write(addr, data, cycleCounter); cycleCounter += 4; } while (0)
@@ -171,6 +263,57 @@ index 0fb6199..3452f15 100644
  
  #define PC_MOD(data) do { pc = data; cycleCounter += 4; } while (0)
  
+@@ -515,6 +567,50 @@ void CPU::process(unsigned long const cycles) {
+ 				cycleCounter += cycles + (-cycles & 3);
+ 			}
+ 		} else while (cycleCounter < mem_.nextEventTime()) {
++			/* romdev PC breakpoint / single-step: check BEFORE fetching the next
++			 * opcode so `pc` is the address about to execute. On a hit, save the
++			 * full CPU epilogue (pc_/a_/cycleCounter_) with `pc` UNCHANGED and
++			 * return immediately — the instruction is NOT executed, so the CPU is
++			 * frozen exactly at the breakpoint and getCPUState reads the right PC.
++			 * We return directly rather than breaking to the outer-loop tail
++			 * because that tail calls mem_.event(), which must not run mid-event
++			 * (cycleCounter < nextEventTime here). romdev_pc_step forces a stop
++			 * after exactly one instruction regardless of address (single-step). */
++			if ((romdev_pc_enabled || romdev_pc_step) && !romdev_pc_hit) {
++				/* Single-step (romdev_pc_step) is a countdown: the host arms it
++				 * with 2 = "let ONE instruction execute, then stop at the next".
++				 * We decrement once per dispatched instruction and fire when it
++				 * reaches 1 (i.e. AFTER one instruction has run), so the step
++				 * actually ADVANCES the PC rather than re-stopping on the current
++				 * instruction. A plain breakpoint (step==0) fires on address match. */
++				int stepFire = 0;
++				if (romdev_pc_step) {
++					if (--romdev_pc_step <= 0) { stepFire = 1; }
++				}
++				if (stepFire || ((romdev_pc_enabled && !romdev_pc_step)
++				                 && (unsigned int)pc == romdev_pc_addr)) {
++					romdev_pc_last_pc = pc;
++					romdev_pc_hit = 1;
++					romdev_pc_hits++;
++					romdev_pc_step = 0;   /* one-shot */
++					/* Freeze the CPU at this PC (pc_ unchanged → getCPUState reads
++					 * the breakpoint PC) but CONSUME the remaining cycle budget so
++					 * the libretro frame loop still COMPLETES this frame. Without
++					 * this, process() returns with cycleCounter < endtime and the
++					 * outer retro_run frame loop re-calls runFor forever (the next
++					 * process() sees romdev_pc_hit and the outer `while` exits
++					 * immediately, producing no frame) → infinite hang. Advancing
++					 * to the frame's endtime lets retro_run finish and return so the
++					 * host can read the hit flag and disarm. The instruction is NOT
++					 * executed; the CPU is frozen exactly at the breakpoint. */
++					pc_ = pc;
++					a_ = a;
++					cycleCounter_ = mem_.nextEventTime();
++					break;                /* leave the inner loop; outer `while`
++					                       * sees romdev_pc_hit and exits cleanly */
++				}
++			}
++
+ 			unsigned char opcode;
+ 
+ 			PC_READ(opcode);
 diff --git a/libgambatte/src/cpu.h b/libgambatte/src/cpu.h
 index 76c29de..f7bc078 100644
 --- a/libgambatte/src/cpu.h
