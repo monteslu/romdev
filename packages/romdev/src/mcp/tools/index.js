@@ -306,8 +306,7 @@ const TOOL_OWNER = {
   loadMedia: "run", unloadMedia: "run", resetCore: "run", pauseCore: "run", resumeCore: "run", listMediaKinds: "run", getMediaInfo: "run", listCores: "run",
   stepFrames: "run", screenshot: "run", stepAndScreenshot: "run",
   // input category
-  setInput: "input", pressButton: "input", inputSequence: "input",
-  getInputLayout: "input",
+  input: "input",
   // state category
   state: "state",
   // memory category

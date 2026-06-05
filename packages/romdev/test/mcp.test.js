@@ -223,10 +223,10 @@ test("MCP: pressButton on NES does not throw", { skip: !HAS_NESTEST && "nestest.
     arguments: { platform: "nes", path: ROM_PATH },
   });
   const r = await client.callTool({
-    name: "pressButton",
-    arguments: { button: "start", frames: 3 },
+    name: "input",
+    arguments: { op: "press", button: "start", frames: 3 },
   });
-  assert.equal(r.isError, undefined, `pressButton errored: ${JSON.stringify(r)}`);
+  assert.equal(r.isError, undefined, `input(press) errored: ${JSON.stringify(r)}`);
 });
 
 test("MCP: listToolchains includes cc65", async () => {
