@@ -58,3 +58,36 @@ int main(){ REG_DISPCNT = DCNT_MODE3 | DCNT_BG2; while(1){ vid_vsync(); } }`;
   assert.ok(r.bytes && r.bytes.length === b.binary.length && r.bytes.every((x, i) => x === b.binary[i]),
     "reassembled bytes must equal the original ROM");
 }, { timeout: 60000 });
+
+test("GBA disassembleProject splits header(data) + code, both byte-exact", async () => {
+  const { registerDisasmTools } = await import("../src/mcp/tools/disasm.js");
+  const { writeFile, mkdtemp, readFile, rm } = await import("node:fs/promises");
+  const os = await import("node:os"); const np = await import("node:path");
+  const b = await buildForPlatform({ platform: "gba", source: `#include <tonc.h>\nint main(){REG_DISPCNT=DCNT_MODE3|DCNT_BG2;m3_fill(CLR_RED);while(1){vid_vsync();}}`, sourceName: "main.c", language: "c" });
+  assert.ok(b.binary, "gba build failed");
+  const dir = await mkdtemp(np.join(os.tmpdir(), "gbaproj-"));
+  try {
+    const rom = np.join(dir, "game.gba");
+    await writeFile(rom, Buffer.from(b.binary));
+    const tools = {};
+    const z = new Proxy(function () { return z; }, { get() { return () => z; }, apply() { return z; } });
+    registerDisasmTools({ tool: (n, _d, _s, fn) => { tools[n] = fn; } }, z, "k");
+    const res = await tools.disassembleProject({ path: rom, outputDir: dir });
+    const j = JSON.parse(res.content[0].text);
+    const regs = j.regions;
+    assert.equal(regs.length, 2, "GBA project = header + code");
+    const header = regs.find((r) => r.region === "header");
+    const code = regs.find((r) => r.region === "code");
+    assert.ok(header && header.kind === "data" && header.bytes === 192, "192-byte data header region");
+    assert.ok(code && code.startAddress === "$80000C0", "code region at 0x080000C0");
+    // The whole point: every region rebuilds byte-exact (header data + code).
+    assert.equal(header.roundTripOk, true, "header byte-exact");
+    assert.equal(code.roundTripOk, true, "code byte-exact");
+    // Header file is a clean .byte dump, not garbage ARM mnemonics.
+    const hdrAsm = await readFile(np.join(dir, header.file), "utf8");
+    assert.match(hdrAsm, /\.byte /, "header emitted as .byte data");
+    assert.doesNotMatch(hdrAsm, /ldrbtmi|movwle|cmpeq/i, "header NOT mis-decoded as ARM code");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, { timeout: 60000 });

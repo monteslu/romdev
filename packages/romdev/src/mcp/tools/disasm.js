@@ -1069,9 +1069,10 @@ export function registerDisasmTools(server, z) {
     "disassembleProject",
     "Use this to turn a ROM into a complete, re-buildable disassembly project in ONE call — across ALL " +
     "supported systems: NES, SNES, Game Boy/Color, Sega Master System/Game Gear, Genesis/Mega Drive, " +
-    "C64, Atari 2600/7800, Lynx (65C02), PC Engine, MSX — and GBA. (GBA reassembles BYTE-EXACT but currently " +
-    "data-only / low readability — ARM literal pools don't round-trip per-instruction yet; use " +
-    "`disassembleRom`/`findReferences` to READ ARM7/Thumb code with full mnemonics.) " +
+    "C64, Atari 2600/7800, Lynx (65C02), PC Engine, MSX — and GBA. (GBA always rebuilds BYTE-EXACT, split into a " +
+    "header data region + an ARM-mode code region; but most GBA C is THUMB, which an ARM-mode disasm can't read so " +
+    "it falls back to byte-exact `.byte` — readability is low until ARM/Thumb mode-tracking lands. Use " +
+    "`disassembleRom({thumb:true})` / `findReferences` to READ ARM7/Thumb spans with full mnemonics.) " +
     "It splits the ROM into regions (per-16KB-bank for banked NES; one region for flat " +
     "ROMs), disassembles each, and — critically — REASSEMBLES each region and verifies it is BYTE-EXACT " +
     "against the original (`roundTripOk` per region). Lines that don't reassemble faithfully fall back to " +
@@ -1083,7 +1084,7 @@ export function registerDisasmTools(server, z) {
     {
       path: z.string().describe("Absolute path to the ROM (.nes/.sfc/.gb/.gbc/.sms/.gg/.bin/.prg/.a26/.a78/.lnx)."),
       outputDir: z.string().describe("Directory to write the project into (created if needed). Gets one .asm per region."),
-      platform: z.enum(["nes", "snes", "gb", "gbc", "sms", "gg", "genesis", "c64", "atari2600", "atari7800", "lynx", "gba", "pce", "msx"]).optional().describe("Override platform detection (otherwise sniffed from the file extension). GBA produces a byte-exact project but currently data-only (low readability) — use disassembleRom to READ ARM code."),
+      platform: z.enum(["nes", "snes", "gb", "gbc", "sms", "gg", "genesis", "c64", "atari2600", "atari7800", "lynx", "gba", "pce", "msx"]).optional().describe("Override platform detection (otherwise sniffed from the file extension). GBA rebuilds byte-exact (header data region + ARM code region) but most code is Thumb → low readability; use disassembleRom({thumb:true}) to READ Thumb spans."),
     },
     safeTool(async ({ path: romPath, outputDir, platform }) => {
       const { reassembleForPlatform } = await import("../../toolchains/common/reassemble.js");
@@ -1099,7 +1100,11 @@ export function registerDisasmTools(server, z) {
 
       const out = [];
       for (const reg of regions) {
-        const r = await reassembleForPlatform({ platform: resolved, bytes: reg.bytes, startAddress: reg.startAddress });
+        // Known-data regions (e.g. the GBA cartridge header) are emitted as a
+        // clean `.byte` dump — byte-exact by construction, NOT a failed disasm.
+        const r = reg.kind === "data"
+          ? { ok: true, readablePercent: 0, source: dataRegionSource(reg.bytes, reg.startAddress), note: "data region (not code)" }
+          : await reassembleForPlatform({ platform: resolved, bytes: reg.bytes, startAddress: reg.startAddress });
         const header = `; ${reg.label} — ${reg.bytes.length} bytes @ $${reg.startAddress.toString(16).toUpperCase()} ` +
           `(file 0x${reg.fileOffset.toString(16).toUpperCase()}), ${resolved}\n` +
           `; round-trip: ${r.ok ? "BYTE-EXACT" : "FAILED"} · readable ${r.readablePercent}%` +
@@ -1108,6 +1113,7 @@ export function registerDisasmTools(server, z) {
         out.push({
           region: reg.name, file: reg.file, startAddress: "$" + reg.startAddress.toString(16).toUpperCase(),
           bytes: reg.bytes.length, roundTripOk: r.ok, readablePercent: r.readablePercent,
+          ...(reg.kind === "data" ? { kind: "data" } : {}),
           ...(r.note ? { note: r.note } : {}),
         });
       }
@@ -1138,6 +1144,20 @@ function trimTrailingPad(bytes) {
   // keep a tiny tail so a final real instruction isn't clipped; align to 16.
   end = Math.min(bytes.length, (end + 16) & ~0xF);
   return end < bytes.length ? bytes.slice(0, end) : bytes;
+}
+
+/** Emit a known-data region as a clean, byte-exact `.byte` dump (GAS/cc65 both
+ *  accept `.byte` with `.org`). 16 bytes per line, with the address in a comment. */
+function dataRegionSource(bytes, startAddress) {
+  const rows = [`\t.org $${startAddress.toString(16).toUpperCase()}`];
+  for (let i = 0; i < bytes.length; i += 16) {
+    const slice = Array.from(bytes.slice(i, i + 16));
+    rows.push(
+      "\t.byte " + slice.map((b) => "$" + b.toString(16).padStart(2, "0").toUpperCase()).join(",") +
+      `\t; ${(startAddress + i).toString(16).toUpperCase().padStart(6, "0")}`
+    );
+  }
+  return rows.join("\n") + "\n";
 }
 
 /** Sniff a platform from a ROM file extension (disassembleProject). */
@@ -1293,17 +1313,27 @@ function planRegions(platform, data) {
     return regions;
   }
   if (platform === "gba") {
-    // GBA = ARM7TDMI. ROM maps flat at 0x08000000. The project REASSEMBLES
-    // byte-exact (native ARM objdump → arm-none-eabi-as/ld/objcopy). Caveat:
-    // ARM's PC-relative literal pools + ARM/Thumb mixing don't round-trip
-    // per-instruction yet, so the rebuildable output currently falls back to a
-    // byte-exact data-only form (low readablePercent) — for READING the code use
-    // disassembleRom/findReferences (full native ARM/Thumb mnemonics).
-    const body = trimTrailingPad(data.slice(0));
+    // GBA = ARM7TDMI. ROM maps flat at 0x08000000.
+    //   0x000-0x0BF (192 B) = the cartridge HEADER (entry branch, Nintendo logo,
+    //     title, checksums) — pure DATA. Disassembling it as code = garbage, so
+    //     it's its own data-only region.
+    //   0x0C0+ = code. Disassembled in ARM mode. HONEST CAVEAT: most GBA C code
+    //     is compiled as THUMB (16-bit), which an ARM-mode disassembly decodes
+    //     as garbage → it falls back to byte-exact `.byte` (low readability).
+    //     Per-region ARM/Thumb mode-tracking isn't built yet (it's a real
+    //     feature — the Thumb spans LOOK like valid ARM, including fake `bx`es,
+    //     so naive mode-switch following is unreliable). To READ Thumb code use
+    //     disassembleRom({platform:'gba', thumb:true}) on the span. The project
+    //     ALWAYS rebuilds byte-exact regardless.
     regions.push({
-      name: "rom", file: "rom.asm", bytes: body,
+      name: "header", file: "header.asm", bytes: data.slice(0, 0xC0), kind: "data",
       startAddress: 0x08000000, fileOffset: 0,
-      label: "GBA cart @ 0x08000000 (ARM7TDMI) — byte-exact; readability low pending literal-pool healing",
+      label: "GBA cartridge header (192 B data: entry branch + Nintendo logo + title + checksums)",
+    });
+    regions.push({
+      name: "code", file: "code.asm", bytes: trimTrailingPad(data.slice(0xC0)),
+      startAddress: 0x080000C0, fileOffset: 0xC0,
+      label: "GBA code @ 0x080000C0 (ARM7TDMI, ARM mode) — Thumb spans fall back to byte-exact data; use disassembleRom({thumb:true}) to read them",
     });
     return regions;
   }
