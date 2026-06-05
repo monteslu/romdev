@@ -26,7 +26,7 @@ import { resolveButtonAlias } from "./input.js";
 // of each watched frame (before stepFrames) to set the held-button state, and
 // finish() once at the end to release everything. `presses` is the sorted
 // schedule; each press holds from its `frame` for `holdFrames` frames.
-function makePressDriver(host, presses) {
+export function makePressDriver(host, presses) {
   let applied = 0;          // how many scheduled presses actually got a frame
   let lastSet = null;       // last setInput payload we pushed (to avoid churn)
   const platform = host.status?.platform;

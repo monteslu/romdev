@@ -311,6 +311,44 @@ export function decodeVDPRegs(regs) {
 const PLANE_CELLS = { 0: 32, 1: 64, 2: 64, 3: 128 };
 
 /**
+ * Decode the VDP DMA registers ($13-$17) into a source address + transfer kind.
+ *
+ * For a memory→VRAM DMA (the common "upload tiles/sprites" case) the VDP source
+ * registers hold the source as a WORD address (source/2), so the byte address
+ * the 68k read from is `(low | mid<<8 | (high&0x7F)<<16) << 1`. That byte address
+ * is in the 68k address space — for a normal cart it's a ROM offset, which is
+ * exactly "where did this graphic come from?". The top 2 bits of reg $17 select
+ * the DMA kind: 0/1 = memory→VRAM, 2 = VRAM fill, 3 = VRAM→VRAM copy.
+ *
+ * @param {Uint8Array} regs 32 VDP registers
+ * @returns {{ kind:string, sourceByteAddr:number|null, sourceByteAddrHex:string|null, lengthWords:number, lengthBytes:number }}
+ */
+export function decodeDMASource(regs) {
+  const lengthWords = regs[0x13] | (regs[0x14] << 8); // $13 low, $14 high (in words)
+  const low = regs[0x15], mid = regs[0x16], high = regs[0x17];
+  // Reg $17 top 2 bits: 0b0x = memory→VRAM, 0b10 = fill, 0b11 = copy.
+  const top = (high >> 6) & 0x3;
+  let kind;
+  if (top === 2) kind = "vram-fill";
+  else if (top === 3) kind = "vram-copy";
+  else kind = "mem-to-vram";
+
+  if (kind !== "mem-to-vram") {
+    return { kind, sourceByteAddr: null, sourceByteAddrHex: null, lengthWords, lengthBytes: lengthWords * 2 };
+  }
+  // Memory→VRAM: 23-bit word source in $15/$16/$17[0..6]; byte addr = word<<1.
+  const wordAddr = (low | (mid << 8) | ((high & 0x7f) << 16)) >>> 0;
+  const sourceByteAddr = (wordAddr << 1) >>> 0;
+  return {
+    kind,
+    sourceByteAddr,
+    sourceByteAddrHex: "0x" + sourceByteAddr.toString(16).toUpperCase().padStart(6, "0"),
+    lengthWords,
+    lengthBytes: lengthWords * 2,
+  };
+}
+
+/**
  * Decode VDP reg $10 (plane size) into {wCells, hCells}.
  * @param {number} reg10
  * @returns {{ wCells: number, hCells: number }}

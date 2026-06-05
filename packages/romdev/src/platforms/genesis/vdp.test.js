@@ -11,6 +11,7 @@ import {
   decodeGenesisSubpalette,
   rgbToGenesisColor,
   decodeVDPRegs,
+  decodeDMASource,
 } from "./vdp.js";
 
 test("rgbToGenesisColor: red/green/blue/black round-trip", () => {
@@ -118,4 +119,30 @@ test("decodeVDPRegs: extract display state + plane addresses", () => {
   assert.equal(d.bgColor.palette, 1);
   assert.equal(d.bgColor.index, 0);
   assert.equal(d.hMode, 'H40');
+});
+
+test("decodeDMASource: memory→VRAM source is the word addr << 1 (a ROM byte offset)", () => {
+  const regs = new Uint8Array(32);
+  // Length = 0x0100 words.
+  regs[0x13] = 0x00; regs[0x14] = 0x01;
+  // Source word addr = 0x10B6F0 (e.g. a tile bitmap mid-ROM). Top 2 bits of $17
+  // are 0 → memory→VRAM. byte addr = 0x10B6F0 << 1 = 0x216DE0.
+  regs[0x15] = 0xF0; regs[0x16] = 0xB6; regs[0x17] = 0x10;
+  const d = decodeDMASource(regs);
+  assert.equal(d.kind, "mem-to-vram");
+  assert.equal(d.sourceByteAddr, 0x216DE0);
+  assert.equal(d.sourceByteAddrHex, "0x216DE0");
+  assert.equal(d.lengthWords, 0x0100);
+  assert.equal(d.lengthBytes, 0x0200);
+});
+
+test("decodeDMASource: VRAM fill / copy report no source offset", () => {
+  const fill = new Uint8Array(32);
+  fill[0x17] = 0x80; // top bits 0b10 = fill
+  assert.equal(decodeDMASource(fill).kind, "vram-fill");
+  assert.equal(decodeDMASource(fill).sourceByteAddr, null);
+  const copy = new Uint8Array(32);
+  copy[0x17] = 0xC0; // top bits 0b11 = copy
+  assert.equal(decodeDMASource(copy).kind, "vram-copy");
+  assert.equal(decodeDMASource(copy).sourceByteAddr, null);
 });
