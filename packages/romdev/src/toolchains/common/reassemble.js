@@ -607,29 +607,26 @@ async function reassembleGnuNative(disasm, startAddress, original, tools, family
         return { family, source: src, bytes: r.bytes, ok: true, total: totalCode, dcLines: forced.size,
           readablePercent: totalCode ? Math.round(100 * (1 - forced.size / totalCode)) : 100 };
       }
-      // Assembled but bytes differ (and/or the length changed). Walk the emitted
-      // lines IN ORDER against the assembled output, pinning EVERY instruction
-      // whose bytes don't match. The cursor advances by each line's ORIGINAL
-      // length: a matching instruction round-tripped (and same-length, so the
-      // cursor stays aligned); a mismatching one gets pinned and we KEEP walking
-      // as if it had emitted its original-length bytes (next pass it's a `.byte`
-      // of exactly that, so the cursor re-syncs). Pinning all offenders per pass
-      // (not one) is what makes literal-heavy ARM converge in a few passes.
-      let outPos = 0, pinnedHere = false;
+      // Assembled but bytes differ (and/or length changed). Compare each line's
+      // bytes at its ABSOLUTE offset (p.addr - startAddress), NOT an accumulated
+      // cursor — the linker anchors every line at its real address, so a single
+      // line that `as` re-encoded to a different length doesn't desync the rest
+      // (the cursor-accumulation approach drifted on the first length-changer and
+      // pinned everything after it — the bug that floored literal-heavy ARM).
+      // Pin EVERY mismatching instruction this pass so it converges in a few.
+      let pinnedHere = false;
       for (let li = 0; li < lines.length; li++) {
         const p = lines[li];
-        if (!p.bytes || p.code == null) continue;       // labels/dirs emit nothing here
-        const exp = p.bytes;
-        if (forced.has(li)) { outPos += exp.length; continue; } // already data, exact length
-        let match = outPos + exp.length <= r.bytes.length;
-        if (match) for (let k = 0; k < exp.length; k++) if (r.bytes[outPos + k] !== exp[k]) { match = false; break; }
-        if (match) { outPos += exp.length; continue; }  // round-tripped this pass
-        forced.add(li); pinnedHere = true;              // pin it; assume original length for the cursor
-        outPos += exp.length;
+        if (!p.bytes || p.code == null || forced.has(li)) continue;
+        const off = p.addr - startAddress;
+        let match = off >= 0 && off + p.bytes.length <= r.bytes.length;
+        if (match) for (let k = 0; k < p.bytes.length; k++) if (r.bytes[off + k] !== p.bytes[k]) { match = false; break; }
+        if (!match) { forced.add(li); pinnedHere = true; }
       }
       if (!pinnedHere) {
-        // No single offender found (cursor walked clean but totals still differ —
-        // e.g. trailing data). Pin the next unpinned code line to make progress.
+        // Bytes all matched at their addresses but totals still differ (length
+        // mismatch with no per-line diff — e.g. a re-encode that shifted later
+        // lines). Pin the next unpinned code line to make progress.
         const n = codeIdx.find((i) => !forced.has(i));
         if (n == null) break;
         forced.add(n);
