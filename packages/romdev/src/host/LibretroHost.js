@@ -844,10 +844,12 @@ export class LibretroHost {
     if (typeof mod._romdev_pcbreak_get !== "function") {
       throw new Error("this core build does not expose the PC breakpoint.");
     }
-    const ptr = mod._malloc(20); // 5 × uint32
+    const ptr = mod._malloc(24); // up to 6 × uint32 (older cores write 5)
     try {
+      // Pre-seed slot 5 (watchdog) so a 5-element older core leaves it 0.
+      new Uint32Array(mod.HEAPU8.buffer, ptr, 6).fill(0);
       mod._romdev_pcbreak_get(ptr, clearHit ? 1 : 0);
-      const u = new Uint32Array(mod.HEAPU8.buffer, ptr, 5);
+      const u = new Uint32Array(mod.HEAPU8.buffer, ptr, 6);
       const lastPC = u[3];
       return {
         enabled: !!u[0],
@@ -855,10 +857,22 @@ export class LibretroHost {
         hit: !!u[2],
         lastPC: lastPC === 0xFFFFFFFF ? null : lastPC,
         hits: u[4],
+        watchdog: !!u[5], // the run was force-stopped by the instruction watchdog
       };
     } finally {
       mod._free(ptr);
     }
+  }
+
+  /** Arm the instruction watchdog (force-stop a runaway after `limit` instructions
+   *  so callSubroutine can't hang the WASM; 0 = disable). No-op on cores that lack
+   *  it (older builds) — the per-frame maxFrames is the fallback there. */
+  setWatchdog(limit) {
+    const mod = this._needMod();
+    if (typeof mod._romdev_watchdog_set === "function") mod._romdev_watchdog_set(limit >>> 0);
+  }
+  watchdogSupported() {
+    return !!(this.mod && typeof this.mod._romdev_watchdog_set === "function");
   }
 
   /** Arm/disarm the read watchpoint on a CPU address. */
@@ -1086,11 +1100,28 @@ export class LibretroHost {
     const {
       pc, regs = {}, spReg = prof.spReg, pcReg = prof.pcReg, sentinelPC = prof.defaultSentinel,
       sentinelBytes = prof.retBytes, maxFrames = 600, sandbox = true, capture,
+      // presetMemory: [{addr, bytes}] CPU-space writes applied before the call
+      // (codecs that read a global from RAM — a dest stride, a mode flag, etc).
+      presetMemory = [],
+      // stopAtPC: an additional PC to halt on (returns partial output even if the
+      // routine never reaches the sentinel). Use for "run into the codec, stop at
+      // a known mid-point, see what it produced so far."
+      stopAtPC,
+      // maxInstructions: the instruction watchdog budget — the real cap that
+      // prevents a runaway codec from hanging the WASM inside one frame. Default
+      // scales with maxFrames (a Genesis frame is ~hundreds of k instructions).
+      maxInstructions = maxFrames * 500000,
     } = a;
 
     const snapshot = sandbox ? this.serializeState() : null;
-    let captured, returned = false, framesRun = 0;
+    let captured, returned = false, framesRun = 0, watchdogTripped = false, stoppedAtPC = false;
     try {
+      // Apply pre-call memory writes (CPU-space).
+      for (const m of presetMemory) {
+        const bytes = m.bytes instanceof Uint8Array ? m.bytes
+          : new Uint8Array((m.hex || "").match(/../g)?.map((h) => parseInt(h, 16)) || []);
+        if (bytes.length) this.writeMemoryCpuAddr(m.addr >>> 0, bytes);
+      }
       // Set caller-supplied registers.
       for (const [id, val] of Object.entries(regs)) this.setReg(Number(id), val);
       // Push the sentinel return address per the CPU's stack discipline, then set
@@ -1127,23 +1158,64 @@ export class LibretroHost {
       }
       this.setReg(pcReg, pc >>> 0);
 
-      // Run until the routine returns to the sentinel.
-      this.setPCBreak(sentinelPC >>> 0, true, false);
+      // Arm the instruction watchdog so a runaway codec force-stops mid-frame
+      // instead of hanging the WASM (the core check between frames can't catch a
+      // tight infinite loop). The breakpoint stops on the sentinel return; if
+      // `stopAtPC` is given we break THERE instead (run-to-a-mid-point + return
+      // partial). The watchdog catches everything else.
+      this.setWatchdog(maxInstructions);
+      const target = (stopAtPC !== undefined ? stopAtPC : sentinelPC) >>> 0;
+      this.setPCBreak(target, true, false);
+      let finalState = null;
       try {
         framesRun = this._runFramesExclusive(() => {
-          if (this.getPCBreak(false).hit) { returned = true; return true; }
+          const st = this.getPCBreak(false);
+          if (st.hit) {
+            finalState = st;
+            if (st.watchdog) watchdogTripped = true;
+            else if (stopAtPC !== undefined) stoppedAtPC = true;
+            else returned = true;
+            return true;
+          }
           return false;
         }, maxFrames);
       } finally {
         this.setPCBreak(0, false, false);
-        this.getPCBreak(true);
+        this.setWatchdog(0);
+        if (!finalState) finalState = this.getPCBreak(true); else this.getPCBreak(true);
       }
-      // Capture the result from core RAM BEFORE any restore.
+      // Capture the result from core RAM BEFORE any restore — always, so a partial
+      // (watchdog/stopAtPC) result still hands back whatever the codec wrote.
       if (capture) captured = capture(this);
+      // Read the final register file + PC for progress reporting (entry-exact when
+      // the breakpoint fired before-dispatch, which is the m68k default).
+      let finalPC = finalState && finalState.lastPC != null ? finalState.lastPC : null;
+      let finalRegs = null;
+      try { finalRegs = this._readCallRegs(); } catch { /* best effort */ }
+      this._lastCallResult = { finalPC, finalRegs };
     } finally {
       if (snapshot) this.unserializeState(snapshot);
     }
-    return { returned, framesRun, ...(captured !== undefined ? { captured } : {}) };
+    const fin = this._lastCallResult || {};
+    return {
+      returned, framesRun,
+      ...(watchdogTripped ? { watchdog: true, reason: "watchdog: hit the instruction budget (likely a runaway loop — wrong A0/regs, a needed preset, or legitimately huge; raise maxInstructions or check the entry setup)" } : {}),
+      ...(stoppedAtPC ? { stoppedAtPC: "$" + (stopAtPC >>> 0).toString(16).toUpperCase() } : {}),
+      ...(fin.finalPC != null ? { finalPC: "$" + fin.finalPC.toString(16).toUpperCase(), finalPCRaw: fin.finalPC } : {}),
+      ...(fin.finalRegs ? { finalRegs: fin.finalRegs } : {}),
+      ...(captured !== undefined ? { captured } : {}),
+    };
+  }
+
+  /** Read the small set of registers most useful for callSubroutine progress
+   *  reporting (m68k A0/A1/D0/D1 + PC/SP), by reg-id, best-effort. */
+  _readCallRegs() {
+    const out = {};
+    const ids = { D0: 0, D1: 1, A0: 8, A1: 9, PC: 16, SP: 18 };
+    for (const [name, id] of Object.entries(ids)) {
+      try { out[name] = "0x" + (this.getReg(id) >>> 0).toString(16).toUpperCase(); } catch { /* skip */ }
+    }
+    return out;
   }
 
   /**

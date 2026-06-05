@@ -341,6 +341,25 @@ export async function previewTileArtCore(args) {
     throw new Error(`previewTileArt: unknown platform '${platform}'. Supported: ${Object.keys(TILE_SPECS).join(", ")}, msx`);
   }
   const bytesPerTile = (8 * 8 * spec.bpp) / 8;
+  // byteOffset: preview tiles starting at a raw BYTE offset (e.g. a watchDma /
+  // findReferences source, which is byte-exact but rarely tile-aligned). Convert
+  // to a tile index and WARN if it isn't a clean multiple of the tile size — a
+  // mid-tile start silently scrambles every tile, which is the trap the agent
+  // hit. (Takes precedence over tileStart when both are given.)
+  let alignmentWarning;
+  if (typeof args.byteOffset === "number") {
+    const rem = args.byteOffset % bytesPerTile;
+    if (rem !== 0) {
+      const lower = args.byteOffset - rem;
+      const upper = lower + bytesPerTile;
+      alignmentWarning =
+        `byteOffset 0x${args.byteOffset.toString(16).toUpperCase()} is NOT a multiple of the ${bytesPerTile}-byte ${platform} tile size ` +
+        `(${spec.bpp}bpp) — tiles will be mis-decoded. Nearest tile-aligned offsets: ` +
+        `0x${lower.toString(16).toUpperCase()} or 0x${upper.toString(16).toUpperCase()}. ` +
+        `(A DMA/findReferences source is byte-exact but rarely tile-aligned — a graphic usually starts a few bytes after a header.)`;
+    }
+    args = { ...args, tileStart: Math.floor(args.byteOffset / bytesPerTile) };
+  }
   // ── Resolve paletteFromEmulator per intent ────────────────────
   // If not explicit, homebrew → true (live palette when possible);
   // rom-hack → false (default gray ramp). Explicit value wins.
@@ -387,6 +406,7 @@ export async function previewTileArtCore(args) {
       : args.palette ? "explicit"
       : args.palettePath ? "file"
       : "default-ramp",
+    ...(alignmentWarning ? { alignmentWarning } : {}),
   };
 
   if (outputPath) {
@@ -471,6 +491,7 @@ export function registerPreviewTileTools(server, z, sessionKey) {
       tilePath: z.string().optional().describe("Path to tile dump (raw) or iNES ROM (NES auto-locates CHR)."),
       fromEmulator: z.boolean().optional().describe("Read tiles from the running emulator's live VRAM (use tileStart/tileCount to pick the range; defaults to 256 tiles from tileStart). Genesis VRAM's host-LE word byte-swap is corrected automatically. Mutually exclusive with tileBytes/tilePath."),
       tileStart: z.number().int().min(0).optional().describe("Starting tile index in the source."),
+      byteOffset: z.number().int().min(0).optional().describe("Start at a raw BYTE offset instead of a tile index — pass a watchDma/findReferences source directly. WARNS (alignmentWarning) if it's not a multiple of the platform tile size (32B Genesis 4bpp, 16B NES 2bpp, ...), with the nearest aligned offsets, so a mid-tile start doesn't silently scramble. Takes precedence over tileStart."),
       tileCount: z.number().int().min(1).max(8192).optional().describe("How many tiles to render. Default: all."),
       palette: z.array(z.any()).optional().describe("Explicit palette. NES: 4 master indices. Others: RGB triples or indices."),
       palettePath: z.string().optional().describe("Raw palette dump from disk."),
