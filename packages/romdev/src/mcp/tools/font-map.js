@@ -182,6 +182,35 @@ async function makeTilemapReader(host, platform, which) {
   return null; // no text-tile nametable on this platform
 }
 
+/**
+ * Decide whether a run of (char, tileId) reads from a live tilemap is FONT TEXT
+ * (a reusable character→tile map) or a PRE-RENDERED GRAPHIC (a name/logo drawn as
+ * a bitmap, where each cell is a unique tile). The trap a long RE session hit:
+ * NBA Jam's player names are bitmaps, so patching the ASCII string did nothing.
+ * Signals a graphic when: (1) a repeated character used a DIFFERENT tile each
+ * time (a real font reuses one tile per letter) — the direct proof; OR (2) every
+ * tile is unique AND the ids form a near-contiguous run (tiles X,X+1,X+2,… = one
+ * ripped image). `repeatedCharReuse` is null/true/false from the scan loop.
+ * @param {Array<{ch:string, tileId:number}>} reads
+ * @param {boolean|null} repeatedCharReuse
+ * @returns {{ looksLikeGraphic:boolean, reason:string|null }}
+ */
+export function detectPreRenderedGraphic(reads, repeatedCharReuse) {
+  if (repeatedCharReuse === false) {
+    return { looksLikeGraphic: true, reason: "repeated-char-different-tile" };
+  }
+  const tileIds = reads.map((r) => r.tileId);
+  const unique = new Set(tileIds);
+  const allUnique = unique.size === tileIds.length && tileIds.length >= 3;
+  const sorted = [...unique].sort((a, b) => a - b);
+  let contiguous = sorted.length >= 3;
+  for (let i = 1; i < sorted.length; i++) if (sorted[i] - sorted[i - 1] > 2) { contiguous = false; break; }
+  if (allUnique && contiguous) {
+    return { looksLikeGraphic: true, reason: "unique-contiguous-tiles" };
+  }
+  return { looksLikeGraphic: false, reason: null };
+}
+
 async function learnFontMapFromScreen({ platform, fromScreen, which = 0, alphabet, sessionKey }) {
   const host = getHost(sessionKey);
   const plat = platform ?? host.getStatus?.().platform;
@@ -193,6 +222,10 @@ async function learnFontMapFromScreen({ platform, fromScreen, which = 0, alphabe
   /** @type {Record<string, number>} */
   const fontMap = {};
   const inferredFrom = [];
+  // Track every (char, tileId) read AND the raw tile sequence, so we can detect
+  // the "this isn't font text, it's a pre-rendered graphic" case (see below).
+  const allReads = [];        // { ch, tileId }
+  let repeatedCharReuse = null; // true once we see a repeated char reuse its tile
   for (const hint of fromScreen) {
     const { text, row, col } = hint;
     if (row < 0 || row >= reader.rows) throw new Error(`learnFontMap fromScreen: row ${row} out of range (0-${reader.rows - 1} for ${plat}).`);
@@ -202,24 +235,29 @@ async function learnFontMapFromScreen({ platform, fromScreen, which = 0, alphabe
       const c = col + i;
       if (c >= reader.cols) throw new Error(`learnFontMap fromScreen: text "${text}" at col ${col} runs past the ${reader.cols}-tile row width.`);
       const tileId = reader.tile(row, c);
-      if (fontMap[ch] !== undefined && fontMap[ch] !== tileId) {
-        throw new Error(
-          `learnFontMap fromScreen: conflict on '${ch}'. An earlier hint mapped it to tile 0x${fontMap[ch].toString(16).toUpperCase()}; ` +
-          `this hint (text="${text}", row=${row}, col=${col}, position=${i}) reads tile 0x${tileId.toString(16).toUpperCase()}. ` +
-          `Check the (row,col) — inspectBackgroundMap shows the exact tile grid.`
-        );
+      // A real font reuses the SAME tile for the SAME letter. A pre-rendered
+      // graphic (the name drawn as a bitmap) uses a different tile per cell even
+      // for repeated letters — so a same-char-different-tile is NOT a conflict
+      // there, it's the tell. Record it instead of hard-erroring; decide after.
+      if (fontMap[ch] !== undefined) {
+        if (fontMap[ch] === tileId) repeatedCharReuse = true;
+        else if (repeatedCharReuse === null) repeatedCharReuse = false;
       }
-      fontMap[ch] = tileId;
+      allReads.push({ ch, tileId });
+      if (fontMap[ch] === undefined) fontMap[ch] = tileId;
       mapped += ch;
     }
     inferredFrom.push({ text, row, col, mappedChars: mapped });
   }
 
+  // ── Detect pre-rendered GRAPHIC vs font TEXT ──────────────────────────────
+  const { looksLikeGraphic } = detectPreRenderedGraphic(allReads, repeatedCharReuse);
+
   const alphabetSet = alphabet ?? "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ©";
   const unknownChars = [];
   for (const ch of alphabetSet) if (fontMap[ch] === undefined) unknownChars.push(ch);
 
-  return {
+  const result = {
     source: "live-tilemap",
     platform: plat,
     which,
@@ -230,6 +268,19 @@ async function learnFontMapFromScreen({ platform, fromScreen, which = 0, alphabe
     inferredFrom,
     note: "Tile/char IDs read from the live tilemap — they ARE the in-ROM character bytes for a game that stores text as raw tile indices. Verify with findEncodedText before patching.",
   };
+  if (looksLikeGraphic) {
+    result.likelyPreRenderedGraphic = true;
+    result.warning =
+      "⚠ These tiles look like a PRE-RENDERED GRAPHIC, not font-rendered text — " +
+      (repeatedCharReuse === false
+        ? "a repeated character used a DIFFERENT tile each time (a real font reuses one tile per letter). "
+        : "every tile is unique and the ids form a contiguous run (tiles X,X+1,X+2,… = one ripped bitmap). ") +
+      "So this on-screen text is NOT sourced from a string/font you can patch — it's an image uploaded to VRAM. " +
+      "Editing it means changing the TILE BITMAPS (the pixels), not an ASCII string. Do NOT patch a text string " +
+      "expecting this to change. To find where the graphic came from, trace the VRAM source (watch the VRAM-DMA " +
+      "source address). The fontMap below is unreliable here — it's per-cell tile ids, not a reusable character map.";
+  }
+  return result;
 }
 
 // ─── encodeTextForRom ────────────────────────────────────────────
@@ -458,7 +509,12 @@ export function registerFontMapTools(server, z, sessionKey) {
     "layer (NES 0-3; Genesis 0=A/1=B; SNES BG index; GB 0=$9800/1=$9C00). NOT available on atari2600/7800 " +
     "(race-the-beam, no nametable) or lynx/gba (bitmap framebuffer) — use ROM mode there.\n" +
     "Returns `{fontMap, learnedChars, unknownChars}` — save it as JSON and pass `fontMapPath` to " +
-    "encodeTextForRom / findEncodedText. Throws on conflicting hints (usually a wrong offset/position). Per-ROM.",
+    "encodeTextForRom / findEncodedText. Per-ROM.\n" +
+    "⚠ GRAPHIC vs FONT (live mode): if the on-screen 'text' is actually a PRE-RENDERED GRAPHIC (a name/logo drawn " +
+    "as a bitmap, not font-rendered from a string — common for player names, title logos), this tool DETECTS it " +
+    "(repeated letters use different tiles, or the tiles are a unique contiguous run) and returns " +
+    "`likelyPreRenderedGraphic:true` + a `warning`. In that case the text is NOT editable as a string — you must " +
+    "change the tile bitmaps, not patch ASCII. Heed that warning before patching a string that won't do anything.",
     {
       romPath: z.string().optional().describe("Absolute path to the ROM file. Required for ROM mode (knownStrings); not needed for live mode (fromScreen)."),
       platform: z.string().optional().describe("Platform — required for `fromScreen` live mode (selects the nametable region). Informational for ROM mode."),
