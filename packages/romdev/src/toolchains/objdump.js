@@ -103,7 +103,7 @@ export async function runObjdump(args) {
   });
   const raw = r.log ?? "";
   return {
-    asm: normalizeObjdump(raw, start),
+    asm: normalizeObjdump(raw, start, arch),
     raw,
     exitCode: r.exitCode ?? 0,
     available: true,
@@ -125,20 +125,34 @@ const LINE_RE = /^\s*([0-9a-fA-F]+):\t([0-9a-fA-F ]+?)\s*\t(.*)$/;
  *
  * @param {string} raw objdump stdout
  * @param {number} startAddress VMA of the first byte
+ * @param {string} [arch] the objdump arch — needed for byte order (see below)
  * @returns {string}
  */
-export function normalizeObjdump(raw, startAddress = 0) {
+export function normalizeObjdump(raw, startAddress = 0, arch = "") {
   const lines = raw.split("\n");
+  // ARM/Thumb are LITTLE-ENDIAN: objdump DISPLAYS each opcode word big-endian
+  // (`ea 00 00 06`) but the ROM stores it little-endian (`06 00 00 ea`). The
+  // `; ADDR bytes` comment MUST carry the true ROM byte order (the reassembly
+  // heal compares a pinned `.byte` against the original bytes). So for ARM,
+  // reverse the bytes WITHIN each objdump word-group. m68k displays big-endian
+  // = ROM order, and z80 bytes are sequential — both pass through unchanged.
+  const leWord = arch === "arm" || arch === "thumb";
   /** @type {{addr:number, bytes:string, mnem:string, ops:string}[]} */
   const rows = [];
   for (const line of lines) {
     const m = LINE_RE.exec(line);
     if (!m) continue;
     const addr = parseInt(m[1], 16);
-    // objdump groups raw bytes into words (`46fc 2700`); re-split into single
-    // space-separated bytes (`46 fc 27 00`) so the `; ADDR bytes` comment is
-    // per-byte parseable by the reassembly heal loop.
-    const bytes = (m[2].replace(/\s+/g, "").match(/../g) || []).join(" ");
+    // objdump groups raw bytes into words (`46fc 2700` / `e3a00301`). Split into
+    // per-byte (`46 fc 27 00`) so the comment is parseable; for ARM reverse each
+    // displayed word to recover little-endian ROM order.
+    const groups = m[2].trim().split(/\s+/).filter(Boolean);
+    const bytes = groups
+      .flatMap((g) => {
+        const bs = g.match(/../g) || [];
+        return leWord ? bs.reverse() : bs;
+      })
+      .join(" ");
     let text = m[3].trim();
     if (!text) continue;
     // Split mnemonic / operands.
