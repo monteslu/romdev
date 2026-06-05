@@ -49,3 +49,4 @@ publish-all.mjs
 .z80build/
 .z80build3/
 .z80build/
+a.out
