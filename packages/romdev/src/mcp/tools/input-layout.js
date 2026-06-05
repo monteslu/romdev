@@ -56,7 +56,7 @@ const HARDWARE_LAYOUTS = {
     strobe: "TH bit (bit 6) of CTRL register selects which set of buttons is read.",
     readSequence: "TH=0: read Up/Down/0/0/A/Start. TH=1: read Up/Down/Left/Right/B/C. 6-button pad uses extra TH transitions.",
     bitOrder: ["Up", "Down", "Left/0", "Right/0", "B/A", "C/Start"],
-    note: "Bit positions vary by TH state. The libretro JOYPAD maps A/B/C onto Y/B/A respectively (so libretro 'A' = Genesis A, libretro 'B' = Genesis B, libretro 'Y' = Genesis C; libretro 'C' doesn't exist).",
+    note: "Bit positions vary by TH state. genesis_plus_gx maps the Genesis face buttons A/B/C onto libretro Y/B/A respectively — so to PRESS a Genesis button via setInput: Genesis A → setInput({y:true}) (or spatial {west:true}), Genesis B → {b:true} (spatial {south:true}), Genesis C → {a:true} (spatial {east:true}). NOTE the inversion: libretro 'a' is Genesis C, NOT Genesis A. (libretro 'C' doesn't exist; the 6-button pad's X/Y/Z map to libretro x/north/l.) Use pressButton({button:'c'}) for the Genesis-native alias, or getInputLayout's faceButtons. Verified empirically against genesis_plus_gx 2026-06-05.",
     faceButtons: FACE_BUTTON_MAP.genesis,
   },
   atari2600: {

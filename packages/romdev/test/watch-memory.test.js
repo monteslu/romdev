@@ -282,7 +282,10 @@ test("pressDuring actually delivers input via setInput and reports it", async ()
   assert.equal(lastInput.input.ports[0].start, undefined, "button released after hold");
 });
 
-test("pressDuring honors platform button aliases (Genesis c -> y)", async () => {
+test("pressDuring honors platform button aliases (Genesis c -> a)", async () => {
+  // genesis_plus_gx maps Genesis A/B/C onto libretro y/b/a — so the Genesis-native
+  // 'c' alias resolves to libretro 'a' (NOT 'y'; 'y' is Genesis A). Verified
+  // empirically against the running core 2026-06-05.
   const host = makeHost({ system_ram: [0] }, () => {});
   host.status.platform = "genesis";
   setHost("test-session", host);
@@ -291,8 +294,8 @@ test("pressDuring honors platform button aliases (Genesis c -> y)", async () => 
     region: "system_ram", offset: 0, length: 1, frames: 5, onChange: "any",
     pressDuring: [{ frame: 1, button: "c", holdFrames: 2 }],
   });
-  const sawY = host.inputLog.some((e) => e.input?.ports?.[0]?.y === true);
-  assert.ok(sawY, "Genesis 'c' resolved to libretro 'y' before setInput");
+  const sawA = host.inputLog.some((e) => e.input?.ports?.[0]?.a === true);
+  assert.ok(sawA, "Genesis 'c' resolved to libretro 'a' before setInput");
 });
 
 // v15-feedback (more): compact value-vs-frame timeline for a per-frame ramp.
