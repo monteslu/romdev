@@ -149,12 +149,33 @@ export async function reassembleByteExact(disasm, startAddress, original, dialec
   for (let pass = 0; pass < maxPasses; pass++) {
     const dia = { ...dialect, __forced: forced };
     const { source } = translateParsed(parsed, startAddress, dia);
-    const out = await assemble(source);
+    const asmResult = await assemble(source, source.split("\n"));
+    // The callback returns a Uint8Array on success, or on assembler error an
+    // object { error:true, failTexts:[trimmed source lines that errored] } so the
+    // heal pins ONLY the rejected instructions — not the whole region (the
+    // failure mode that cascaded everything to data).
+    const out = asmResult instanceof Uint8Array ? asmResult : null;
     if (!out) {
-      if (forced.size >= parsed.filter((p) => p.code != null).length) {
-        return { source, bytes: null, ok: false, passes: pass + 1, dcLines: forced.size, note: "assembler rejected even the all-data fallback" };
+      let pinnedAny = false;
+      const failTexts = (asmResult && asmResult.failTexts) || [];
+      for (const ft of failTexts) {
+        // Match the failing emitted line back to a parsed code line (by its
+        // translated instruction text). Pin the first unpinned match.
+        for (let i = 0; i < parsed.length; i++) {
+          const p = parsed[i];
+          if (p.code == null || forced.has(i)) continue;
+          const native = dialect.insn(p.code);
+          if (native != null && ft.includes(native.trim())) { forced.add(i); pinnedAny = true; break; }
+        }
       }
-      parsed.forEach((p, i) => { if (p.code != null) forced.add(i); });
+      if (!pinnedAny) {
+        if (forced.size >= parsed.filter((p) => p.code != null).length) {
+          return { source, bytes: null, ok: false, passes: pass + 1, dcLines: forced.size, note: "assembler rejected even the all-data fallback" };
+        }
+        const next = parsed.findIndex((p, i) => p.code != null && !forced.has(i));
+        if (next < 0) { parsed.forEach((p, i) => { if (p.code != null) forced.add(i); }); }
+        else forced.add(next);
+      }
       continue;
     }
     if (out.length === original.length && firstDiff(original, out) < 0) {
@@ -377,10 +398,74 @@ const CPU_FAMILY = {
   sms: "z80", gg: "z80", msx: "z80",
   gb: "sm83", gbc: "sm83",
   genesis: "m68k", megadrive: "m68k", md: "m68k",
+  gba: "arm",
   // PC Engine's HuC6280 is a 65C02 superset — the 6502-family da65/ca65 path
   // reassembles it (da65 also has an explicit --cpu huc6280 mode for decode).
   pce: "6502",
 };
+
+/** GAS (GNU as) dialect — for objdump output going back into binutils `as`.
+ *  objdump and as share GNU syntax, so the instruction translation is a pure
+ *  passthrough EXCEPT normalizeObjdump rewrote numeric operands to `$hex` (our
+ *  house style) and in-range targets to `L______` labels. Convert `$hex`→`0xhex`
+ *  for GAS; labels ride through. Data → `.byte`. The heal loop pins anything
+ *  that doesn't reassemble to its exact bytes. */
+function makeGasDialect() {
+  return {
+    org: () => "\t.text", // origin set by the linker script, not GAS .org
+    dataDir: (b) => "\t.byte " + b.map((x) => "0x" + (x & 0xFF).toString(16).padStart(2, "0")).join(","),
+    labelDef: (l) => l + ":",
+    equate: (l, a) => `\t.set ${l}, 0x${a.toString(16)}`,
+    insn: (code) => {
+      if (/undefined|\bbad\b|\.dc\.|\.byte|\.word|\.short/i.test(code)) return null;
+      return code.replace(/\$([0-9A-Fa-f]+)\b/g, (_, h) => "0x" + h);
+    },
+  };
+}
+
+/** Build a GNU as→ld→objcopy assemble callback for a binutils toolchain module.
+ *  Wraps the dialect's source in a .text section at `startAddress`, links flat,
+ *  and strips to a raw binary. The linker aligns the section end (trailing zero
+ *  pad), so the callback trims the output back to `expectedLen` — the heal loop
+ *  compares against the original length and any real length change still shows
+ *  as a mid-stream diff. Same toolchain that builds the platform. */
+function makeGnuAssemble(mod, machinePrefix, outputFormat, outputArch, startAddress, expectedLen) {
+  const runAs = mod[`run${cap(machinePrefix)}As`];
+  const runLd = mod[`run${cap(machinePrefix)}Ld`];
+  const runObjcopy = mod[`run${cap(machinePrefix)}Objcopy`];
+  const fmtLines = outputFormat ? `OUTPUT_FORMAT("${outputFormat}")\nOUTPUT_ARCH(${outputArch})\n` : "";
+  const ld = `${fmtLines}ENTRY(_start)\nSECTIONS {\n  .text 0x${startAddress.toString(16)} : {\n    *(.text*)\n    *(.rodata*)\n    *(.data*)\n  }\n  /DISCARD/ : { *(.ARM.attributes) *(.comment) *(.note*) }\n}\n`;
+  return async (src) => {
+    const preamble = 3; // ".section .text", ".global _start", "_start:"
+    const wrapped = `.section .text\n.global _start\n_start:\n${src}`;
+    const a = await runAs({ source: wrapped }).catch(() => ({ object: null, log: "" }));
+    if (!a || !a.object) {
+      // Parse `as` error line numbers → the offending source lines, so the heal
+      // can pin just those instructions to data instead of dropping the region.
+      const srcLines = wrapped.split("\n");
+      const failTexts = [];
+      for (const m of (a?.log || "").matchAll(/:(\d+):\s*Error:/g)) {
+        const ln = parseInt(m[1], 10) - 1; // 0-based into srcLines
+        if (ln >= preamble && srcLines[ln]) failTexts.push(srcLines[ln].trim());
+      }
+      return { error: true, failTexts };
+    }
+    const l = await runLd({ objects: { "main.o": a.object }, linkScript: ld }).catch(() => null);
+    if (!l || !l.elf) return null;
+    const o = await runObjcopy({ elf: l.elf }).catch(() => null);
+    if (!o || !o.binary) return null;
+    let out = new Uint8Array(o.binary);
+    if (out.length > expectedLen) out = out.slice(0, expectedLen);
+    return out;
+  };
+}
+
+function cap(s) {
+  // m68k → M68k, arm → Arm (matches runM68kAs / runArmAs export names).
+  if (s === "m68k") return "M68k";
+  if (s === "arm") return "Arm";
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
 
 /**
  * @param {Object} a
@@ -395,75 +480,157 @@ export async function reassembleForPlatform(a) {
   const family = CPU_FAMILY[platform];
   if (!family) throw new Error(`reassembleForPlatform: no reassembly path for platform '${platform}'`);
 
-  // ── disassemble ──
+  // ── disassemble (NATIVE binutils objdump — no hand-rolled decoders) ──
+  // 6502/65816 use da65 (cc65's real disassembler); everything else uses the
+  // matching binutils objdump. normalizeObjdump emits romdev's house format
+  // (`<insn> ; ADDR bytes`) the heal loop's parseLine consumes.
   let disasm;
   if (family === "6502" || family === "65816") {
     const { runDa65 } = await import("../cc65/da65.js");
     const r = await runDa65({ bytes, startAddress, cpu: family === "65816" ? "65816" : "6502", options: ["--comments", "4"] });
     disasm = r.asm;
-  } else if (family === "z80") {
-    const { runZ80dasm } = await import("../z80dasm.js");
-    disasm = runZ80dasm({ bytes, startAddress }).asm;
-  } else if (family === "sm83") {
-    const { runSm83dasm } = await import("../sm83dasm.js");
-    disasm = runSm83dasm({ bytes, startAddress }).asm;
-  } else if (family === "m68k") {
-    const { runM68kdasm } = await import("../m68kdasm.js");
-    disasm = runM68kdasm({ bytes, startAddress }).asm;
-  }
-
-  // cc65 families (6502/65816): da65's output is ALREADY valid cc65 with its
-  // own equates+labels — rebuilding it via the translator/heal breaks the
-  // cc65 link. Use da65's text verbatim (+ .org) and heal in-place.
-  if (family === "6502" || family === "65816") {
+    // da65 output is already valid cc65 — heal it in place (cc65 reassembles its
+    // own syntax natively).
     return reassembleCc65Native(disasm, startAddress, bytes, family);
   }
-
-  // ── assemble callback + dialect per family (translator path: z80/sm83/m68k) ──
-  let dialect, assemble;
-  if (false) {
-    dialect = CA65;
-    const { runCa65, runLd65 } = await import("../cc65/cc65.js");
-    const cfg = `MEMORY{M:start $${startAddress.toString(16)},size $${bytes.length.toString(16)},type ro,file %O,fill yes,fillval $FF;}\nSEGMENTS{CODE:load M,type ro;}\n`;
-    assemble = async (src) => {
-      const ca = await runCa65({ source: src, target: "none" }).catch(() => null);
-      if (!ca || !ca.object) return null;
-      const ld = await runLd65({ objects: { "o.o": ca.object }, target: "none", linkerConfig: cfg }).catch(() => null);
-      return ld && ld.binary ? new Uint8Array(ld.binary) : null;
-    };
-  } else if (family === "z80") {
-    dialect = SJASM_Z80;
-    const { runSjasm } = await import("../sjasm/sjasm.js");
-    assemble = async (src) => { const s = await runSjasm({ source: src }).catch(() => null); return s && s.binary ? new Uint8Array(s.binary) : null; };
-  } else if (family === "sm83") {
-    dialect = RGBDS_SM83;
-    const { runRgbasm, runRgblink } = await import("../rgbds/rgbds.js");
-    assemble = async (src) => {
-      const o = await runRgbasm({ source: src }).catch(() => null);
-      if (!o || !o.object) return null;
-      const l = await runRgblink({ objects: { "out.o": o.object } }).catch(() => null);
-      // rgblink pads a full ROM bank; slice out our section at its address.
-      return l && l.binary ? new Uint8Array(l.binary).slice(startAddress, startAddress + bytes.length) : null;
-    };
-  } else if (family === "m68k") {
-    dialect = VASM_M68K;
-    const { runVasm68k } = await import("../vasm68k/vasm68k.js");
-    assemble = async (src) => { const v = await runVasm68k({ source: src }).catch(() => null); return v && v.binary ? new Uint8Array(v.binary) : null; };
+  // ALL non-6502 CPUs: disassemble with native objdump, reassemble with the
+  // matching native binutils `as`/`ld`/`objcopy`. objdump output IS GNU-as
+  // syntax, so there's no translation — keep its lines verbatim and pin only the
+  // instructions `as` rejects (absolute branch/PC-relative forms) to `.byte`.
+  // NO hand-rolled decoders anywhere.
+  const { runObjdump } = await import("../objdump.js");
+  if (family === "m68k") {
+    disasm = (await runObjdump({ bytes, arch: "m68k", startAddress })).asm;
+    const m = await import("../m68k-elf-gcc/gcc.js");
+    return reassembleGnuNative(disasm, startAddress, bytes,
+      { runAs: m.runM68kAs, runLd: m.runM68kLd, runObjcopy: m.runM68kObjcopy, fmtLines: `OUTPUT_FORMAT("elf32-m68k")\nOUTPUT_ARCH(m68k)\n` }, family);
   }
+  if (family === "arm") {
+    disasm = (await runObjdump({ bytes, arch: "arm", startAddress })).asm;
+    const m = await import("../arm-none-eabi-gcc/gcc.js");
+    return reassembleGnuNative(disasm, startAddress, bytes,
+      { runAs: m.runArmAs, runLd: m.runArmLd, runObjcopy: m.runArmObjcopy }, family);
+  }
+  if (family === "z80" || family === "sm83") {
+    // z80 binutils `as` handles BOTH the Z80 (-march=z80) and the Game Boy CPU
+    // (-march=gbz80) — the same objdump that disassembled them.
+    const arch = family === "sm83" ? "gbz80" : "z80";
+    disasm = (await runObjdump({ bytes, arch, startAddress })).asm;
+    const z = await import("../z80/binutils.js");
+    return reassembleGnuNative(disasm, startAddress, bytes,
+      { runAs: z.runZ80As, runObjcopy: z.runZ80Objcopy, march: arch, noLink: true }, family);
+  }
+  throw new Error(`reassembleForPlatform: no reassembly path for family '${family}'`);
+}
 
-  const res = await reassembleByteExact(disasm, startAddress, bytes, dialect, assemble, 80);
-  const codeLineCount = disasm.split(/\r?\n/).filter((l) => /;\s*[0-9A-Fa-f]{4,8}\s/.test(l)).length;
-  const readablePercent = codeLineCount ? Math.round(100 * (1 - res.dcLines / codeLineCount)) : 100;
-  return {
-    family,
-    source: res.source,
-    bytes: res.bytes,
-    ok: res.ok,
-    total: codeLineCount,
-    dcLines: res.dcLines,
-    readablePercent,
-    note: res.note,
+/**
+ * Reassemble a GNU-toolchain CPU (m68k / arm) from native objdump output using
+ * the matching binutils `as`/`ld`/`objcopy`. objdump and as share GNU syntax, so
+ * we keep objdump's instruction lines almost verbatim (only `$hex`→`0x`, our
+ * house normalization) and place a label at each in-range branch target. Heal:
+ * assemble; for any instruction `as` REJECTS (PC-relative/branch forms objdump
+ * prints absolutely), pin that line to a `.byte` of its exact bytes and retry.
+ * Floor = clean all-`.byte` (proven byte-exact). No hand-rolled de/encoding.
+ * @returns same shape as reassembleForPlatform
+ */
+async function reassembleGnuNative(disasm, startAddress, original, tools, family) {
+  // tools: { runAs, runLd, runObjcopy, fmtLines, asArgs? } — the matching
+  // binutils chain for this CPU. asArgs (e.g. for z80's -march=gbz80) ride
+  // through to the assembler call (the z80 wrapper bakes march in itself).
+  const { runAs, runLd, runObjcopy, fmtLines = "" } = tools;
+  const ld = `${fmtLines}ENTRY(_start)\nSECTIONS {\n  .text 0x${startAddress.toString(16)} : {\n    *(.text*) *(.rodata*) *(.data*)\n  }\n  /DISCARD/ : { *(.ARM.attributes) *(.comment) *(.note*) }\n}\n`;
+
+  // Parse objdump's normalized lines into {label?, code?, addr, bytes}.
+  const lines = disasm.split(/\r?\n/).map(parseLine);
+  // Which in-range addresses are branch targets (need a label def)?
+  const addrOf = new Map();
+  for (const p of lines) if (p.addr != null && p.bytes) addrOf.set(p.addr, p);
+  const codeIdx = [];
+  lines.forEach((p, i) => { if (p.code != null && p.bytes) codeIdx.push(i); });
+  const forced = new Set();
+
+  const toGas = (code) => code.replace(/\$([0-9A-Fa-f]+)\b/g, (_, h) => "0x" + h);
+
+  const build = () => {
+    const out = [".section .text", ".global _start"];
+    // No-link (z80/gbz80) path: place the section with `.org` so labels resolve
+    // to real addresses before objcopy (there's no linker to set the origin).
+    if (tools.noLink) out.push(`.org 0x${startAddress.toString(16)}`);
+    out.push("_start:");
+    for (let i = 0; i < lines.length; i++) {
+      const p = lines[i];
+      if (p.label) { out.push(p.label + ":"); continue; }
+      if (p.code != null && p.bytes) {
+        if (forced.has(i)) out.push("\t.byte " + p.bytes.map((b) => "0x" + b.toString(16).padStart(2, "0")).join(","));
+        else out.push("\t" + toGas(p.code));
+      }
+    }
+    return out.join("\n") + "\n";
   };
+  const assemble = async (src) => {
+    const a = await runAs({ source: src, march: tools.march }).catch(() => ({ object: null, log: "" }));
+    if (!a || !a.object) return { ok: false, log: a?.log || "" };
+    let elf;
+    if (tools.noLink) {
+      // z80/gbz80: `as` resolves all in-file labels (one source file, no cross-
+      // refs), and ld rejects gbz80 objects ("instruction sets incompatible").
+      // Skip ld — objcopy the assembled object straight to binary. Correct
+      // section addresses come from the `.org startAddress` the source carries.
+      elf = a.object;
+    } else {
+      const l = await runLd({ objects: { "main.o": a.object }, linkScript: ld }).catch(() => null);
+      if (!l || !l.elf) return { ok: false, log: l?.log || "" };
+      elf = l.elf;
+    }
+    const o = await runObjcopy({ elf }).catch(() => null);
+    if (!o || !o.binary) return { ok: false, log: "" };
+    let bin = new Uint8Array(o.binary);
+    if (tools.noLink) {
+      // The `.org startAddress` makes objcopy emit `startAddress` leading zero
+      // bytes (the section's offset). Slice to the real region.
+      bin = bin.slice(startAddress, startAddress + original.length);
+    } else if (bin.length > original.length) {
+      bin = bin.slice(0, original.length);
+    }
+    return { ok: true, bytes: bin };
+  };
+
+  const totalCode = codeIdx.length;
+  for (let pass = 0; pass < 80; pass++) {
+    const src = build();
+    const r = await assemble(src);
+    if (r.ok) {
+      if (r.bytes.length === original.length && firstDiff(original, r.bytes) < 0) {
+        return { family, source: src, bytes: r.bytes, ok: true, total: totalCode, dcLines: forced.size,
+          readablePercent: totalCode ? Math.round(100 * (1 - forced.size / totalCode)) : 100 };
+      }
+      // Assembled but bytes differ → pin the code line owning the first diff.
+      const d = firstDiff(original, r.bytes);
+      const off = (d < 0 ? Math.min(r.bytes.length, original.length) : d) + startAddress;
+      let owner = -1;
+      for (const i of codeIdx) { const p = lines[i]; if (p.addr <= off && off < p.addr + p.bytes.length) { owner = i; break; } if (p.addr <= off) owner = i; }
+      if (owner < 0 || forced.has(owner)) { const n = codeIdx.find((i) => !forced.has(i)); if (n == null) break; forced.add(n); }
+      else forced.add(owner);
+      continue;
+    }
+    // `as` rejected something → pin every code line whose translated text the
+    // error log names. The wrapped source has a 3-line preamble.
+    const srcLines = src.split("\n");
+    let pinned = false;
+    for (const m of (r.log || "").matchAll(/:(\d+):\s*(?:Error|Warning):/g)) {
+      const ln = parseInt(m[1], 10) - 1;
+      const text = (srcLines[ln] || "").trim();
+      for (const i of codeIdx) { if (forced.has(i)) continue; if (("\t" + toGas(lines[i].code)).trim() === text) { forced.add(i); pinned = true; break; } }
+    }
+    if (!pinned) { const n = codeIdx.find((i) => !forced.has(i)); if (n == null) break; forced.add(n); }
+  }
+  // Floor: clean all-`.byte` (proven byte-exact, no labels to perturb layout).
+  const rows = [".section .text", ".global _start", "_start:"];
+  for (let i = 0; i < original.length; i += 16) rows.push("\t.byte " + Array.from(original.slice(i, i + 16)).map((b) => "0x" + b.toString(16).padStart(2, "0")).join(","));
+  const r = await assemble(rows.join("\n") + "\n");
+  const ok = r.ok && r.bytes.length === original.length && firstDiff(original, r.bytes) < 0;
+  return { family, source: rows.join("\n") + "\n", bytes: ok ? r.bytes : null, ok, total: totalCode, dcLines: totalCode,
+    readablePercent: 0, note: ok ? "byte-exact (data-only floor — some instructions didn't round-trip)" : "could not reach byte-exact" };
 }
 
 /**

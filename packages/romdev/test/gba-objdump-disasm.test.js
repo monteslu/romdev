@@ -44,3 +44,17 @@ int main(){ REG_DISPCNT = DCNT_MODE3 | DCNT_BG2; while(1){ vid_vsync(); } }`;
   const instrLines = r.asm.split("\n").filter((l) => l.startsWith("        ") && !l.includes(".setcpu"));
   assert.ok(instrLines.length > 20, "substantial disassembly");
 }, { timeout: 60000 });
+
+import { reassembleForPlatform } from "../src/toolchains/common/reassemble.js";
+
+test("GBA disassembleProject reassembles BYTE-EXACT (data-only for now)", async () => {
+  const src = `#include <tonc.h>
+int main(){ REG_DISPCNT = DCNT_MODE3 | DCNT_BG2; while(1){ vid_vsync(); } }`;
+  const b = await buildForPlatform({ platform: "gba", source: src, sourceName: "main.c", language: "c" });
+  assert.ok(b.binary, "gba build failed");
+  const r = await reassembleForPlatform({ platform: "gba", bytes: b.binary, startAddress: 0x08000000 });
+  // The whole point: the rebuilt project produces the ORIGINAL bytes exactly.
+  assert.equal(r.ok, true, "GBA project must reassemble byte-exact");
+  assert.ok(r.bytes && r.bytes.length === b.binary.length && r.bytes.every((x, i) => x === b.binary[i]),
+    "reassembled bytes must equal the original ROM");
+}, { timeout: 60000 });

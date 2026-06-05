@@ -135,7 +135,10 @@ export function normalizeObjdump(raw, startAddress = 0) {
     const m = LINE_RE.exec(line);
     if (!m) continue;
     const addr = parseInt(m[1], 16);
-    const bytes = m[2].replace(/\s+/g, " ").trim();
+    // objdump groups raw bytes into words (`46fc 2700`); re-split into single
+    // space-separated bytes (`46 fc 27 00`) so the `; ADDR bytes` comment is
+    // per-byte parseable by the reassembly heal loop.
+    const bytes = (m[2].replace(/\s+/g, "").match(/../g) || []).join(" ");
     let text = m[3].trim();
     if (!text) continue;
     // Split mnemonic / operands.

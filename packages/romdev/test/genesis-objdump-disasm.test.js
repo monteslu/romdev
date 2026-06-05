@@ -55,7 +55,7 @@ test("normalizeObjdump shapes objdump output to romdev's asm (labels + $/offset)
   const asm = normalizeObjdump(raw, 0x200);
   assert.match(asm, /L000200:/, "in-range branch target gets an L label");
   assert.match(asm, /bras\s+L000200/, "operand rewritten to the label");
-  assert.match(asm, /; 000200 60fe/, "address + raw bytes preserved as a comment");
+  assert.match(asm, /; 000200 60 fe/, "address + raw bytes (per-byte) preserved as a comment");
 });
 
 test("disassembleRom on a built Genesis ROM yields real mnemonics, not .dc.w spam", async () => {
