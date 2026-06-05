@@ -52,7 +52,7 @@ test("NES watchdog: infinite-loop routine returns {watchdog:true} (fceumm 6502)"
   }, undefined, { timeout: 180000 }));
   assert.equal(build.ok, true, "nes build failed:\n" + build.log);
 
-  const spin = toJSON(await client.callTool({ name: "resolveSymbol", arguments: { dbg: build.dbg, name: "_spin_forever" } }));
+  const spin = toJSON(await client.callTool({ name: "symbols", arguments: { op: "resolve", dbg: build.dbg, name: "_spin_forever" } }));
   const spinAddr = spin.address;
   assert.ok(spinAddr, "couldn't resolve _spin_forever: " + JSON.stringify(spin));
 

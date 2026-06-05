@@ -94,58 +94,44 @@ function nearestSymbol(entries, pc) {
   };
 }
 
-export function registerAddressToSymbolTools(server, z) {
-  server.tool(
-    "addressToSymbol",
-    "Given a CPU address (`pc`) and a linker .map / .sym text, return the nearest preceding symbol. " +
-    "Closes the 'getCPUState gave me $01A7 — which C function is that?' gap on C-built ROMs.\n\n" +
-    "WORKFLOW:\n" +
-    "  1. buildSource({platform:\"gb\", source:..., includeSymbols:true}) → response.symbols\n" +
-    "  2. Save response.symbols to disk OR pass it as `symbolsText` inline.\n" +
-    "  3. getCPUState() returns the live PC.\n" +
-    "  4. addressToSymbol({pc, symbolsText: <map>}) → {symbol, offset, nextSymbol}\n\n" +
-    "Pass either `symbolsText` (inline) or `symbolsPath` (file on disk). Auto-detects sdld " +
-    "(`XXXX  _name` format used by SDCC) and ld65 (`al XXXX .name` VICE-style used by cc65).",
-    {
-      pc: z.number().int().min(0).max(0xFFFFFF).describe("CPU address to look up. Hex literal in JS: 0x01A7."),
-      symbolsText: z.string().optional().describe("Inline .map / .sym text (from buildSource response.symbols)."),
-      symbolsPath: z.string().optional().describe("Absolute path to a .map / .sym file. Mutually exclusive with symbolsText."),
-    },
-    safeTool(async ({ pc, symbolsText, symbolsPath }) => {
+/** op:'addr' on the `symbols` tool — PC → nearest preceding symbol from a .map/.sym. */
+export async function addressToSymbolCore({ pc, symbolsText, symbolsPath }) {
       let text = symbolsText;
       if (!text && symbolsPath) {
         text = await readFile(symbolsPath, "utf-8");
       }
       if (!text) {
         throw new Error(
-          "addressToSymbol: pass either `symbolsText` (inline) or `symbolsPath` (file). " +
-          "Capture them via `buildSource({..., includeSymbols: true})`."
+          "symbols({op:'addr'}): pass either `symbolsText` (inline) or `symbolsPath` (file). " +
+          "Capture them via `build({..., includeSymbols: true})`."
         );
       }
       const entries = parseAuto(text);
       if (entries.length === 0) {
-        return jsonContent({
+        return {
           pc: "$" + pc.toString(16).toUpperCase().padStart(4, "0"),
           symbolsLength: text.length,
           symbol: null,
           note: "Couldn't parse any symbols from the input. Expected either SDCC sdld format (`XXXX  _name`) or ld65 VICE format (`al XXXX .name`).",
-        });
+        };
       }
       const result = nearestSymbol(entries, pc);
       if (!result) {
-        return jsonContent({
+        return {
           pc: "$" + pc.toString(16).toUpperCase().padStart(4, "0"),
           symbolsLength: text.length,
           symbol: null,
           note: `PC $${pc.toString(16).toUpperCase()} is below the lowest symbol ($${entries[0].address.toString(16).toUpperCase()}). Probably ROM header / boot stub.`,
-        });
+        };
       }
-      return jsonContent({
+      return {
         pc: "$" + pc.toString(16).toUpperCase().padStart(4, "0"),
         pcDec: pc,
         ...result,
         symbolsParsed: entries.length,
-      });
-    }),
-  );
+      };
+}
+
+// Legacy no-op shim removed: addressToSymbol is now symbols({op:'addr'}).
+export function registerAddressToSymbolTools() { /* folded into the `symbols` tool */
 }
