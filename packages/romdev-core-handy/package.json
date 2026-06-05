@@ -1,6 +1,6 @@
 {
   "name": "romdev-core-handy",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Handy libretro core (Atari Lynx) for romdev, bundled as WASM.",
   "type": "module",
   "main": "index.js",
