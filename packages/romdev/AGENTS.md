@@ -895,7 +895,9 @@ The biggest mistake agents make on this server is reading binary files into thei
 - `imageToTilemap({ platform, pngPath, outputDir })` — full-screen PNG → deduped tiles + tilemap + palette, input from disk, output to disk. **This is the tool for splash/title screens** (see the splash-screen section below). Supported: nes, snes, genesis, sms, gg, gb, gbc, c64.
 - `screenshot({ path })` — writes PNG to disk, skips inline payload. For a quick "did it change?" sanity check, add `scale: 0.5` (nearest-neighbor, pixel-art-safe) — ~75% fewer image tokens; reserve full resolution for when you actually need pixel detail.
 - `extractSpriteSheet({ outputPath })` — same
-- `pcmToBrr({ pcmPath, outputPath })` — same
+- `convertImageToTiles({ platform, pngPath, outputDir })` — PNG → native tile bytes, input from disk. Pass `tileOrder:'sprite'` for COLUMN-major (Genesis/Lynx multi-cell hardware-sprite order) instead of the default row-major.
+- `pcmToBrr({ pcmPath, outputPath })` — same (SNES BRR)
+- `wavToXgm2Pcm({ wavPath, name, outputCPath })` — GENESIS: WAV → XGM2 PCM (8-bit signed mono, 13.3 kHz / 6.65 half-rate, 256-padded) + a 256-aligned C array you `#include` and play with `XGM2_playPCM`. Bakes in the format rules so you don't botch sign/rate/alignment/padding.
 
 When a tool has `path` and `base64` variants, prefer `path`. The server runs on the same machine; both sides share the filesystem. There's no reason to round-trip 50KB of base64 through your prompt.
 
