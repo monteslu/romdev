@@ -25,6 +25,8 @@ export const MERGE_MAP = {
   text: { absorbs: ["learnFontMap", "encodeTextForRom", "findEncodedText"], axis: "op" },
   // ── symbols (name↔addr, memory map, PC→symbol). buildSourceWithDebug stays for `build`. ──
   symbols: { absorbs: ["resolveSymbol", "lookupAddress", "getMemoryMap", "listSymbols", "addressToSymbol"], axis: "op" },
+  // ── disasm (raw bytes / ROM / project / references) ──
+  disasm: { absorbs: ["disassemble", "disassembleRom", "disassembleProject", "findReferences"], axis: "target" },
 };
 
 /** Every OLD tool name that the consolidation removes (absorbed into a new tool). */

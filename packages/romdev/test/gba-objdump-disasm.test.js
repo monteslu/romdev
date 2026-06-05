@@ -72,7 +72,7 @@ test("GBA disassembleProject splits header(data) + code, both byte-exact", async
     const tools = {};
     const z = new Proxy(function () { return z; }, { get() { return () => z; }, apply() { return z; } });
     registerDisasmTools({ tool: (n, _d, _s, fn) => { tools[n] = fn; } }, z, "k");
-    const res = await tools.disassembleProject({ path: rom, outputDir: dir });
+    const res = await tools.disasm({ target: "project", path: rom, outputDir: dir });
     const j = JSON.parse(res.content[0].text);
     const regs = j.regions;
     assert.equal(regs.length, 2, "GBA project = header + code");
