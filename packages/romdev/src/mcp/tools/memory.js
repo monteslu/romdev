@@ -314,7 +314,127 @@ export function registerMemoryTools(server, z, sessionKey) {
       });
     }),
   );
+
+  // ── searchValue / searchNext — the iterative RAM value search (Cheat Engine /
+  //    RetroArch cheat-search workflow). THE primitive for "the screen shows X;
+  //    find its RAM address." Seed with searchValue, then narrow each time the
+  //    value changes with op:'eq'|'changed'|'unchanged'|'gt'|'lt'|'inc'|'dec'.
+  //    The candidate list lives per session (keyed by `name`); each narrow reads
+  //    the region fresh and keeps only candidates that still satisfy the op.
+  server.tool(
+    "searchValue",
+    "Find the RAM address(es) holding a value — the iterative 'cheat search' every RE workflow needs (find the " +
+    "score / timer / health / record-id / stat). Seeds a candidate list, then you NARROW it with searchNext as " +
+    "the value changes in-game, exactly like Cheat Engine / RetroArch. Far better than snapshotMemory+diffMemory " +
+    "for this (which floods you with every byte gameplay churns). " +
+    "WORKFLOW: (1) `searchValue({value: 7, size: 1})` while the screen shows 7 → all addresses currently holding " +
+    "7. (2) make the value change in-game (lose a life → 6), then `searchNext({op:'eq', value: 6})` → only " +
+    "addresses that are NOW 6 AND were a candidate. Repeat until 1-2 remain. (3) confirm with writeMemory + watch " +
+    "the screen. " +
+    "If you don't know the new value, use op-only narrows: `searchNext({op:'dec'})` (value went down), " +
+    "`'inc'`, `'changed'`, `'unchanged'`. `size` is 1/2/4 bytes (uses the region's endianness). Works on EVERY " +
+    "platform — defaults to `system_ram` (the CPU's work RAM). Returns `{candidates, count, searchId, sample}`.",
+    {
+      value: z.number().int().describe("The value the screen currently shows (e.g. the score, a stat, lives). Interpreted as a `size`-byte unsigned int in the region's byte order."),
+      size: z.number().int().min(1).max(4).default(1).describe("Value width in bytes: 1 (most stats/lives/health), 2 (scores/timers), 4 (big counters)."),
+      region: z.enum(REGIONS).default("system_ram").describe("Where to search. Default system_ram (the CPU work RAM where game state lives). Use save_ram, snes_aram, etc. for special cases."),
+      name: z.string().default("default").describe("Search session label — searchNext narrows the same name. Run independent searches in parallel with different names."),
+      maxCandidates: z.number().int().min(1).max(8192).default(64).describe("Cap the candidate addresses RETURNED (the full list is kept server-side for narrowing); `count` is the true total."),
+    },
+    safeTool(async ({ value, size, region, name, maxCandidates }) => {
+      const host = getHost(sessionKey);
+      const info = REGION_INFO[region] ?? {};
+      const little = (info.endianness ?? genericEndianness(host.status.platform)) !== "big";
+      const buf = host.readMemory(region, 0, regionLength(host, region, 0));
+      const read = (i) => readUint(buf, i, size, little);
+      const candidates = [];
+      for (let i = 0; i + size <= buf.length; i++) {
+        if (read(i) === (value >>> 0)) candidates.push(i);
+      }
+      searchSessions(sessionKey).set(name, { region, size, little, addrs: Uint32Array.from(candidates) });
+      return jsonContent({
+        searchId: name, region, size,
+        count: candidates.length,
+        candidates: candidates.slice(0, maxCandidates).map((a) => "0x" + a.toString(16)),
+        note: candidates.length === 0
+          ? "0 matches — wrong size? (try size:2 for a score). Or the value isn't in this region (try a different region) or is stored offset/encoded."
+          : candidates.length === 1
+          ? "1 candidate — likely THE address. Confirm with writeMemory({region, offset, bytes}) and watch the screen."
+          : "Make the value change in-game, then searchNext({name, op:'eq', value:<new>}) to narrow. Repeat until 1-2 remain.",
+      });
+    }),
+  );
+
+  server.tool(
+    "searchNext",
+    "Narrow an active searchValue candidate list against the CURRENT memory. Call after the value changed in " +
+    "game. `op`: 'eq' (candidates now equal to `value`), 'changed'/'unchanged' (vs the previous search read), " +
+    "'inc'/'dec' (went up/down), 'gt'/'lt' (now greater/less than `value`). 'eq'/'gt'/'lt' need `value`; the " +
+    "others don't (they compare to the previous snapshot). Returns the narrowed `{candidates, count}` — repeat " +
+    "until 1-2 remain, then confirm with writeMemory. This is the loop that turns 'somewhere in 8KB of RAM' into " +
+    "an exact address in a few steps.",
+    {
+      op: z.enum(["eq", "changed", "unchanged", "inc", "dec", "gt", "lt"]).describe("How to narrow: eq=now equals `value`; changed/unchanged vs the last read; inc/dec=went up/down; gt/lt=now >/< `value`."),
+      value: z.number().int().optional().describe("Required for op 'eq'/'gt'/'lt' — the value now shown on screen."),
+      name: z.string().default("default").describe("Which searchValue session to narrow (the `name` you seeded with)."),
+      maxCandidates: z.number().int().min(1).max(8192).default(64),
+    },
+    safeTool(async ({ op, value, name, maxCandidates }) => {
+      const host = getHost(sessionKey);
+      const s = searchSessions(sessionKey).get(name);
+      if (!s) throw new Error(`searchNext: no active search named '${name}'. Call searchValue({value, name}) first.`);
+      if ((op === "eq" || op === "gt" || op === "lt") && value === undefined) {
+        throw new Error(`searchNext: op '${op}' needs a \`value\` (the number now on screen).`);
+      }
+      const buf = host.readMemory(s.region, 0, regionLength(host, s.region, 0));
+      const read = (i) => readUint(buf, i, s.size, s.little);
+      const v = (value ?? 0) >>> 0;
+      const kept = [];
+      for (const a of s.addrs) {
+        const cur = read(a);
+        const prev = s.prev ? s.prev.get(a) : undefined;
+        let ok = false;
+        switch (op) {
+          case "eq":        ok = cur === v; break;
+          case "gt":        ok = cur > v; break;
+          case "lt":        ok = cur < v; break;
+          case "changed":   ok = prev !== undefined && cur !== prev; break;
+          case "unchanged": ok = prev !== undefined && cur === prev; break;
+          case "inc":       ok = prev !== undefined && cur > prev; break;
+          case "dec":       ok = prev !== undefined && cur < prev; break;
+        }
+        if (ok) kept.push(a);
+      }
+      // Remember this read so the next op:'changed'/'inc'/'dec' has a baseline.
+      const prevMap = new Map();
+      for (const a of kept) prevMap.set(a, read(a));
+      s.addrs = Uint32Array.from(kept);
+      s.prev = prevMap;
+      searchSessions(sessionKey).set(name, s);
+      return jsonContent({
+        searchId: name, op, count: kept.length,
+        candidates: kept.slice(0, maxCandidates).map((a) => "0x" + a.toString(16) + "=" + read(a)),
+        note: kept.length === 0
+          ? "0 left — narrowed too far (wrong op, or the value moved between reads). Re-seed with searchValue."
+          : kept.length <= 2
+          ? "Down to 1-2 — confirm: writeMemory({region, offset, bytes}) and watch the screen change."
+          : "Still multiple — change the value again and searchNext to keep narrowing.",
+      });
+    }),
+  );
 }
+
+/** Read a `size`-byte unsigned int from `buf` at `i`, given endianness. */
+function readUint(buf, i, size, little) {
+  let v = 0;
+  if (little) { for (let k = size - 1; k >= 0; k--) v = (v << 8) | buf[i + k]; }
+  else { for (let k = 0; k < size; k++) v = (v << 8) | buf[i + k]; }
+  return v >>> 0;
+}
+
+/** Per-session searchValue candidate lists. Keyed by sessionKey → name → state. */
+const _searchSessions = new Map();
+function searchSessions(key) { let m = _searchSessions.get(key); if (!m) { m = new Map(); _searchSessions.set(key, m); } return m; }
 
 // Per-session snapshot stores for diffMemory / diffState. Keyed by sessionKey so
 // multi-session servers don't cross-contaminate baselines.

@@ -2,7 +2,7 @@ import path from "node:path";
 import { readFile } from "node:fs/promises";
 import { getHost } from "../state.js";
 import { jsonContent, safeTool } from "../util.js";
-import { lookupCheats } from "../../cheats/lookup.js";
+import { lookupCheats, searchCheatGames } from "../../cheats/lookup.js";
 import { encodeForDevice, nativeDevicesFor, decodeCode } from "../../cheats/gamegenie.js";
 
 // Per-platform cheat address space (for makeCheat validation). A Game Genie
@@ -99,10 +99,13 @@ export function registerCheatTools(server, z, sessionKey) {
     "LABELED CODE SITE (address + value + compare). It answers the most expensive RE question — 'which byte/" +
     "routine holds X?' — for free. Returns { matched, confidence, game, platform, crc32, entries:[{desc, code, " +
     "parts:[{address,value,compare?,kind:'ram'|'code'}]}], note }. " +
-    "CONFIDENCE/TRUST: a match is by No-Intro NAME or filename, NOT a verified CRC identification — so it is a " +
-    "PROBABLE match. The labels are very likely right, but a different region/revision can use different " +
-    "addresses. VERIFY a label before trusting it for a patch (apply the cheat and observe, or check the address " +
-    "in live memory with readMemory/watchMemory). Pass `apply` to also enable matched cheats live (see applyCheat).",
+    "CONFIDENCE/TRUST: a match is by No-Intro NAME, filename, or FUZZY name similarity, NOT a verified CRC " +
+    "identification — so it is a PROBABLE match. The labels are very likely right, but a different region/revision " +
+    "can use different addresses (on a fuzzy match, `alternatives` lists sibling dumps — pick your region). VERIFY " +
+    "a label before trusting it for a patch (apply the cheat and observe, or check the address in live memory with " +
+    "readMemory/watchMemory). If this returns no match but you believe the game has cheats, call " +
+    "`searchCheats({platform, query})` to fuzzy-search the DB by name. Pass `apply` to also enable matched cheats " +
+    "live (see applyCheat).",
     {
       path: z.string().describe("Absolute path to the ROM file. Platform + name are sniffed from it (override with `platform`)."),
       platform: z.enum([...SUPPORTED]).optional().describe("Override platform detection."),
@@ -166,6 +169,25 @@ export function registerCheatTools(server, z, sessionKey) {
         });
       }
       return jsonContent(res);
+    }),
+  );
+
+  // ── searchCheats — fuzzy game-name search in the cheat DB ─────────────
+  server.tool(
+    "searchCheats",
+    "Fuzzy-search the bundled cheat DB by GAME NAME for a platform — find the right entry when you don't have the " +
+    "exact No-Intro title (abbreviations, missing region tags, different revision). Returns the best-matching game " +
+    "names + their cheat counts (NOT the cheats themselves — your context stays clean; then call gameCheats with " +
+    "the chosen game). Solves 'I know this game has cheats but gameCheats said no match': the DB key is often a " +
+    "sibling region/revision of your ROM's name. e.g. query 'nba jam tournament' → \"NBA Jam - Tournament Edition " +
+    "(World)\" (138 cheats). Returns { matches:[{game, score, cheats}], gameCount, note }.",
+    {
+      platform: z.enum([...SUPPORTED]).describe("Platform to search (nes, genesis, snes, gb, ...)."),
+      query: z.string().describe("Free-text game name — any form: 'NBA Jam TE', 'sonic 2', 'zelda link to the past'. Tags/region/punctuation are ignored."),
+      limit: z.number().int().min(1).max(50).default(12).describe("Max results (default 12)."),
+    },
+    safeTool(async ({ platform, query, limit }) => {
+      return jsonContent(await searchCheatGames({ platform, query, limit }));
     }),
   );
 

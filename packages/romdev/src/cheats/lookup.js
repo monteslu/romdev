@@ -50,9 +50,77 @@ async function loadIndex(platform) {
 
 // Normalize a name for fuzzy comparison: lowercase, drop extension, collapse
 // whitespace. We do NOT strip region/revision tags — those distinguish dumps
-// (USA vs Japan have different addresses), so they must match.
+// (USA vs Japan have different addresses), so an EXACT match must keep them.
 function normalize(name) {
   return name.toLowerCase().replace(/\.[a-z0-9]+$/i, "").replace(/\s+/g, " ").trim();
+}
+
+// A "base name" with region/revision/dump tags stripped — for FUZZY matching
+// only. "(World)", "(USA, Europe)", "(Rev A)", "[!]", "(Action Replay)" etc. are
+// dropped and separators normalized, so "NBA Jam - Tournament Edition (World)",
+// "NBA Jam Tournament Edition", and "NBA Jam - Tournament Edition (USA) (Rev 1)"
+// collapse to the same key. Used as a fallback when exact match fails.
+function baseName(name) {
+  return name
+    .toLowerCase()
+    .replace(/\.[a-z0-9]+$/i, "")          // extension
+    .replace(/\([^)]*\)/g, " ")            // (World), (Rev A), (USA, Europe), ...
+    .replace(/\[[^\]]*\]/g, " ")           // [!], [b1], ...
+    .replace(/[-_:]/g, " ")                // separators
+    .replace(/[^a-z0-9 ]/g, " ")           // punctuation
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Token set of a base name, for overlap scoring. */
+function tokenSet(name) {
+  return new Set(baseName(name).split(" ").filter(Boolean));
+}
+
+/** Jaccard overlap (0..1) between two token sets. */
+function tokenScore(a, b) {
+  if (!a.size || !b.size) return 0;
+  let inter = 0;
+  for (const t of a) if (b.has(t)) inter++;
+  return inter / (a.size + b.size - inter);
+}
+
+/**
+ * Fuzzy-search a platform's cheat index by game name. Returns the best-matching
+ * game names + cheat counts WITHOUT dumping the whole DB — so an agent can find
+ * "NBA Jam Tournament" → the real entry without a huge context load.
+ * @param {object} a
+ * @param {string} a.platform
+ * @param {string} a.query
+ * @param {number} [a.limit]
+ * @param {number} [a.minScore]
+ * @returns {Promise<{platform:string, query:string, matches:Array<{game:string, score:number, cheats:number}>, gameCount:number, note:string}>}
+ */
+export async function searchCheatGames({ platform, query, limit = 12, minScore = 0.25 }) {
+  const idx = await loadIndex(platform);
+  if (!idx || !idx.games) {
+    return { platform, query, matches: [], gameCount: 0, note: `No bundled cheat index for platform '${platform}'.` };
+  }
+  const qTok = tokenSet(query);
+  const qBase = baseName(query);
+  const names = Object.keys(idx.games);
+  const scored = [];
+  for (const n of names) {
+    const nBase = baseName(n);
+    let score = tokenScore(qTok, tokenSet(n));
+    // Boost substring containment either way (handles partial queries + abbrevs).
+    if (qBase && (nBase.includes(qBase) || qBase.includes(nBase))) score = Math.max(score, 0.6);
+    if (score >= minScore) scored.push({ game: n, score: Math.round(score * 100) / 100, cheats: (idx.games[n] || []).length });
+  }
+  scored.sort((a, b) => b.score - a.score || a.game.length - b.game.length);
+  const matches = scored.slice(0, limit);
+  return {
+    platform, query, matches,
+    gameCount: idx.gameCount ?? names.length,
+    note: matches.length === 0
+      ? `No game in the ${platform} cheat DB (${names.length} games) is close to "${query}". Try fewer/looser words.`
+      : `${matches.length} candidate(s) by name-overlap. Pass an exact \`game\` to gameCheats (it also fuzzy-matches now). Score is name similarity, not a content guarantee — verify a label before patching.`,
+  };
 }
 
 /**
@@ -97,31 +165,67 @@ export async function lookupCheats({ platform, romName, fileName, bytes }) {
     }
   }
 
+  // 3. FUZZY fallback: tag-stripped token-overlap. Catches the common failure
+  //    where identifyRom's name differs from the DB key by a region/revision tag
+  //    or punctuation ("NBA Jam - Tournament Edition (World)" vs a (USA) dump or
+  //    a missing hyphen) — the entry IS in the DB, just under a sibling name.
+  let fuzzyAlternatives = [];
+  if (!hit) {
+    const q = romName || fileName;
+    if (q) {
+      const qTok = tokenSet(q), qBase = baseName(q);
+      const ranked = [];
+      for (const n of names) {
+        const nBase = baseName(n);
+        let score = tokenScore(qTok, tokenSet(n));
+        if (qBase && (nBase.includes(qBase) || qBase.includes(nBase))) score = Math.max(score, 0.6);
+        if (score >= 0.5) ranked.push({ n, score });
+      }
+      ranked.sort((a, b) => b.score - a.score || a.n.length - b.n.length);
+      if (ranked.length) {
+        hit = ranked[0].n;
+        confidence = "fuzzy";
+        // Surface a few sibling matches (other regions/revisions) so the agent
+        // can pick the right dump — addresses can differ across regions.
+        fuzzyAlternatives = ranked.slice(0, 6).map((r) => r.n);
+      }
+    }
+  }
+
   if (!hit) {
     return {
       matched: false, confidence: "none", platform,
       ...(crc ? { crc32: crc } : {}),
       note: `No cheat-DB entry matched this ROM in the bundled '${platform}' index ` +
         `(${names.length} games). It may be an unlisted dump, a homebrew/WIP ROM, ` +
-        `or a name/revision the DB doesn't carry.`,
+        `or a name/revision the DB doesn't carry. Try searchCheats({platform, query}) ` +
+        `with a looser name if you think it should be there.`,
     };
   }
 
+  const howMatched = confidence === "name" ? "No-Intro name"
+    : confidence === "filename" ? "filename"
+    : "fuzzy name similarity (tags stripped)";
   return {
     matched: true,
     confidence,
     game: hit,
     platform,
     ...(crc ? { crc32: crc } : {}),
+    ...(fuzzyAlternatives.length > 1 ? { alternatives: fuzzyAlternatives } : {}),
     entries: idx.games[hit],
-    // CRITICAL honesty: a name/filename match is NOT a positive identification.
+    // CRITICAL honesty: a name/filename/fuzzy match is NOT a positive identification.
     note:
-      "PROBABLE MATCH by " + (confidence === "name" ? "No-Intro name" : "filename") +
+      "PROBABLE MATCH by " + howMatched +
       " — NOT a verified (CRC) identification. The cheat labels are very likely " +
       "correct for this game, but a different ROM revision/region can use different " +
       "addresses. Verify a label (e.g. apply the cheat and observe, or check the " +
       "address in live memory) before relying on it for a patch. crc32 is provided " +
-      "for your own cross-check.",
+      "for your own cross-check." +
+      (confidence === "fuzzy"
+        ? " NOTE: this was a FUZZY match — the exact dump name didn't match the DB, so I picked the closest title" +
+          (fuzzyAlternatives.length > 1 ? `; \`alternatives\` lists sibling region/revision entries — pick the one matching your ROM's region, addresses can differ.` : ".")
+        : ""),
   };
 }
 
