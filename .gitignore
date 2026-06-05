@@ -46,3 +46,4 @@ packages/romdev/src/toolchains/*/wasm/
 # the public project. (scripts/verify-wasm.mjs stays tracked — the packages'
 # prepublishOnly guard references it.)
 publish-all.mjs
+.z80build/

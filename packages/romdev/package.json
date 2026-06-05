@@ -64,7 +64,7 @@
     "romdev-toolchain-cc65": "0.1.1",
     "romdev-toolchain-m68k-gcc": "0.2.0",
     "romdev-toolchain-rgbds": "0.1.0",
-    "romdev-toolchain-sdcc": "0.1.0",
+    "romdev-toolchain-sdcc": "0.2.0",
     "romdev-toolchain-vasm": "0.1.0",
     "socket.io": "^4.8.3",
     "yauzl": "^3.3.1",

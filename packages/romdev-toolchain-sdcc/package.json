@@ -1,7 +1,7 @@
 {
   "name": "romdev-toolchain-sdcc",
-  "version": "0.1.0",
-  "description": "SDCC toolchain (sdcc / sdasgb / sdasz80 / sdld / mcpp) for romdev, bundled as WASM.",
+  "version": "0.2.0",
+  "description": "SDCC toolchain (sdcc / sdasgb / sdasz80 / sdld / mcpp) for romdev, bundled as WASM + z80/gbz80 disassembly (objdump).",
   "type": "module",
   "main": "index.js",
   "exports": {

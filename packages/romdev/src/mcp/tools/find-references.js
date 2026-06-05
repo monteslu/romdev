@@ -254,18 +254,26 @@ export async function findReferencesCore({ path, platform, address, mapper, maxR
   } else if (resolved === "sms" || resolved === "gg") {
     // SMS: disasm slot 0+1 ($0000-$7FFF, fixed in the sega mapper).
     // Slot 2 ($8000-$BFFF) is banked — skip cross-bank scanning for now.
+    // Native z80 objdump (fixes (ix+d)/(iy+d) display); JS fallback.
     const bytes = data.slice(0, Math.min(data.length, 0x8000));
-    const { runZ80dasm } = await import("../../toolchains/z80dasm.js");
-    const r = runZ80dasm({ bytes, startAddress: 0x0000 });
-    asm = r.asm;
+    const { runObjdump, objdumpAvailable } = await import("../../toolchains/objdump.js");
+    if (objdumpAvailable("z80")) {
+      asm = (await runObjdump({ bytes, arch: "z80", startAddress: 0x0000 })).asm;
+    } else {
+      const { runZ80dasm } = await import("../../toolchains/z80dasm.js");
+      asm = runZ80dasm({ bytes, startAddress: 0x0000 }).asm;
+    }
   } else if (resolved === "gb" || resolved === "gbc") {
-    // GB: bank 0 + bank 1 default ($0000-$7FFF). Higher banks are
-    // game-mapper-controlled — agents pass `bank` to disasm a specific
-    // bank but findReferences sticks to the fixed-mapping region.
+    // GB: bank 0 + bank 1 default ($0000-$7FFF). SM83 via binutils' gbz80
+    // machine (native); JS fallback. Higher banks need disassembleRom + bank.
     const bytes = data.slice(0, Math.min(data.length, 0x8000));
-    const { runSm83dasm } = await import("../../toolchains/sm83dasm.js");
-    const r = runSm83dasm({ bytes, startAddress: 0x0000 });
-    asm = r.asm;
+    const { runObjdump, objdumpAvailable } = await import("../../toolchains/objdump.js");
+    if (objdumpAvailable("gbz80")) {
+      asm = (await runObjdump({ bytes, arch: "gbz80", startAddress: 0x0000 })).asm;
+    } else {
+      const { runSm83dasm } = await import("../../toolchains/sm83dasm.js");
+      asm = runSm83dasm({ bytes, startAddress: 0x0000 }).asm;
+    }
   } else if (resolved === "atari2600") {
     // 2600 cart maps to $F000-$FFFF (top of 4 KB bank). For larger
     // banked carts we scan the last 4 KB which is what's typically
@@ -323,9 +331,13 @@ export async function findReferencesCore({ path, platform, address, mapper, maxR
     const hdr = data.length >= 2 && data[0] === 0x41 && data[1] === 0x42;
     const base = hdr ? 16 : 0;
     const bytes = data.slice(base, Math.min(data.length, base + 0x8000));
-    const { runZ80dasm } = await import("../../toolchains/z80dasm.js");
-    const r = runZ80dasm({ bytes, startAddress: 0x4000 + base });
-    asm = r.asm;
+    const { runObjdump, objdumpAvailable } = await import("../../toolchains/objdump.js");
+    if (objdumpAvailable("z80")) {
+      asm = (await runObjdump({ bytes, arch: "z80", startAddress: 0x4000 + base })).asm;
+    } else {
+      const { runZ80dasm } = await import("../../toolchains/z80dasm.js");
+      asm = runZ80dasm({ bytes, startAddress: 0x4000 + base }).asm;
+    }
   } else if (resolved === "gba") {
     // GBA = ARM7TDMI, ROM maps flat at 0x08000000. Disassemble as ARM (the
     // default; Thumb regions need disassembleRom with thumb:true). Native

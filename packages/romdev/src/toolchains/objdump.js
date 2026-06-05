@@ -54,8 +54,16 @@ const ARCHES = {
     extraArgs: ["-M", "force-thumb"],
   }),
   z80: () => ({
-    glue: resolveGlue("romdev-toolchain-sdcc", "z80-objdump.mjs", "z80"),
+    // SMS / Game Gear / MSX — plain Z80. binutils' z80 objdump (ships in the
+    // sdcc toolchain package, which already serves Z80 builds).
+    glue: resolveGlue("romdev-toolchain-sdcc", "z80-elf-objdump.mjs", "z80"),
     machine: "z80",
+  }),
+  gbz80: () => ({
+    // Game Boy / Color — SM83 / LR35902. The SAME z80 binutils objdump handles
+    // it via the gbz80 machine (binutils z80-dis.c has full INSS_GBZ80 support).
+    glue: resolveGlue("romdev-toolchain-sdcc", "z80-elf-objdump.mjs", "z80"),
+    machine: "gbz80",
   }),
 };
 

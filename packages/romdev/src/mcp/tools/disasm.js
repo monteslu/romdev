@@ -930,21 +930,31 @@ export function registerDisasmTools(server, z) {
         const r = await runObjdump({ bytes: mapped.bytes, arch: archMode, startAddress });
         asm = r.asm; exitCode = r.exitCode;
       } else if (cpuFamily === "z80") {
-        const { runZ80dasm } = await import("../../toolchains/z80dasm.js");
-        const r = runZ80dasm({ bytes: mapped.bytes, startAddress });
-        asm = r.asm;
-        exitCode = r.exitCode;
-        if (labels.length > 0) {
-          asm = injectVectorLabels(asm, labels);
+        // SMS/GG/MSX = Z80. Prefer native binutils z80 objdump (fixes the
+        // (ix+d)/(iy+d) displacement display + edge cases); JS fallback.
+        const { runObjdump, objdumpAvailable } = await import("../../toolchains/objdump.js");
+        if (objdumpAvailable("z80")) {
+          const r = await runObjdump({ bytes: mapped.bytes, arch: "z80", startAddress });
+          asm = r.asm; exitCode = r.exitCode;
+        } else {
+          const { runZ80dasm } = await import("../../toolchains/z80dasm.js");
+          const r = runZ80dasm({ bytes: mapped.bytes, startAddress });
+          asm = r.asm; exitCode = r.exitCode;
         }
+        if (labels.length > 0) asm = injectVectorLabels(asm, labels);
       } else if (cpuFamily === "sm83") {
-        const { runSm83dasm } = await import("../../toolchains/sm83dasm.js");
-        const r = runSm83dasm({ bytes: mapped.bytes, startAddress });
-        asm = r.asm;
-        exitCode = r.exitCode;
-        if (labels.length > 0) {
-          asm = injectVectorLabels(asm, labels);
+        // GB/GBC = SM83 (LR35902). binutils' z80 objdump handles it via the
+        // gbz80 machine (full INSS_GBZ80 support); JS fallback otherwise.
+        const { runObjdump, objdumpAvailable } = await import("../../toolchains/objdump.js");
+        if (objdumpAvailable("gbz80")) {
+          const r = await runObjdump({ bytes: mapped.bytes, arch: "gbz80", startAddress });
+          asm = r.asm; exitCode = r.exitCode;
+        } else {
+          const { runSm83dasm } = await import("../../toolchains/sm83dasm.js");
+          const r = runSm83dasm({ bytes: mapped.bytes, startAddress });
+          asm = r.asm; exitCode = r.exitCode;
         }
+        if (labels.length > 0) asm = injectVectorLabels(asm, labels);
       } else {
         if (labels.length > 0 || dataRangesInWindow.length > 0 || mapped.cpu !== "6502") {
           info = buildInfoFile({
