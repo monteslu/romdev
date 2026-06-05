@@ -13,6 +13,7 @@ That's the whole setup. Everything — emulator cores, assemblers, C compilers, 
 A coding agent connects over [MCP](https://modelcontextprotocol.io/) and gets a tool surface for the full homebrew loop:
 
 - **Building** — bundled per-platform toolchains (cc65, SDCC, RGBDS, asar, vasm, SGDK, PVSnesLib, libtonc, …) compiled to WebAssembly. The agent writes source, compiles it, and gets a real ROM.
+- **Asset conversion** — turn external art and audio into native data without leaving the server: PNG → platform tiles/tilemaps (`convertImageToTiles`, `imageToTilemap` — row-major or hardware sprite order), PNG quantize-to-palette, sprite-sheet/Aseprite/GIF loaders, and audio importers (`pcmToBrr` for SNES, `wavToXgm2Pcm` for Genesis XGM2 PCM). Path-in, native-data-out.
 - **Running** — load the ROM into an emulated console (libretro cores as WASM) and step through it frame by frame.
 - **Seeing** — capture the framebuffer as a PNG and hand it to the agent.
 - **Driving** — emit controller input, run input scripts, replay sequences.
