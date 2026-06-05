@@ -93,38 +93,19 @@ const MAKE_CHEAT_PLATFORMS = [
 // addresses it won't get.
 const APPLY_ONLY_INDEX = new Set(["gba"]);
 
-export function registerCheatTools(server, z, sessionKey) {
-  // ── gameCheats — read-only lookup ─────────────────────────────────────
-  server.tool(
-    "gameCheats",
-    "Look up the KNOWN cheats for a ROM from the bundled cheat database and return THIS GAME'S entries only " +
-    "(never the whole DB — your context stays clean). For romhacking/RE this is a free, crowd-sourced MAP: each " +
-    "RAM cheat is a LABELED RAM ADDRESS (e.g. \"Infinite Magic\" → $00CD) and each Game Genie/ROM cheat is a " +
-    "LABELED CODE SITE (address + value + compare). It answers the most expensive RE question — 'which byte/" +
-    "routine holds X?' — for free. Returns { matched, confidence, game, platform, crc32, entries:[{desc, code, " +
-    "parts:[{address,value,compare?,kind:'ram'|'code'}]}], note }. " +
-    "CONFIDENCE/TRUST: a match is by No-Intro NAME, filename, or FUZZY name similarity, NOT a verified CRC " +
-    "identification — so it is a PROBABLE match. The labels are very likely right, but a different region/revision " +
-    "can use different addresses (on a fuzzy match, `alternatives` lists sibling dumps — pick your region). VERIFY " +
-    "a label before trusting it for a patch (apply the cheat and observe, or check the address in live memory with " +
-    "readMemory/watchMemory). If this returns no match but you believe the game has cheats, call " +
-    "`searchCheats({platform, query})` to fuzzy-search the DB by name. Pass `apply` to also enable matched cheats " +
-    "live (see applyCheat).",
-    {
-      path: z.string().describe("Absolute path to the ROM file. Platform + name are sniffed from it (override with `platform`)."),
-      platform: z.enum([...SUPPORTED]).optional().describe("Override platform detection."),
-      filter: z.string().optional().describe("Case-insensitive substring to filter cheat descriptions (e.g. 'lives', 'health') — cuts a long list to the relevant ones."),
-      kind: z.enum(["ram", "code", "all"]).default("all").describe("Return only RAM-variable cheats, only ROM/code cheats, or all (default). RAM cheats are labeled variables; code cheats are labeled patch sites."),
-    },
-    safeTool(async ({ path: romPath, platform, filter, kind = "all" }) => {
+// ── *Core functions: one per cheat operation. The `cheats` tool routes to them.
+//    Stateful ops take sessionKey so getHost(sessionKey) resolves the live host.
+
+/** op:'lookup' — read-only DB lookup of a ROM's known cheats. */
+export async function cheatsLookupCore({ path: romPath, platform, filter, kind = "all" }) {
       const mod = await import("../../rom-id/identifier.js");
       const id = await mod.identifyFile(romPath).catch(() => null);
       const plat = platform ?? id?.platform;
       if (!plat || !SUPPORTED.has(plat)) {
-        return jsonContent({
+        return {
           matched: false, confidence: "none", platform: plat ?? "unknown",
           note: `No bundled cheat index for platform '${plat ?? "unknown"}'. Supported: ${[...SUPPORTED].join(", ")}.`,
-        });
+        };
       }
       const bytes = await readFile(romPath).catch(() => null);
       const fileName = path.basename(romPath);
@@ -162,7 +143,7 @@ export function registerCheatTools(server, z, sessionKey) {
             };
           }),
         }));
-        return jsonContent({
+        return {
           ...res,
           entryCount: pretty.length,
           totalInGame: res.entries.length,
@@ -170,49 +151,18 @@ export function registerCheatTools(server, z, sessionKey) {
           ...(APPLY_ONLY_INDEX.has(plat) ? {
             mapNote: `${plat.toUpperCase()} source cheats are encrypted (Code Breaker / GameShark), so the addresses are NOT descrambled — these entries are APPLY-ONLY: the labeled \`code\` works with applyCheat (the core decodes it live), but \`parts\` carry no usable address, so this is not a labeled-address RE map the way NES/GB/etc. indexes are.`,
           } : {}),
-        });
+        };
       }
-      return jsonContent(res);
-    }),
-  );
+      return res;
+}
 
-  // ── searchCheats — fuzzy game-name search in the cheat DB ─────────────
-  server.tool(
-    "searchCheats",
-    "Fuzzy-search the bundled cheat DB by GAME NAME for a platform — find the right entry when you don't have the " +
-    "exact No-Intro title (abbreviations, missing region tags, different revision). Returns the best-matching game " +
-    "names + their cheat counts (NOT the cheats themselves — your context stays clean; then call gameCheats with " +
-    "the chosen game). Solves 'I know this game has cheats but gameCheats said no match': the DB key is often a " +
-    "sibling region/revision of your ROM's name. e.g. query 'nba jam tournament' → \"NBA Jam - Tournament Edition " +
-    "(World)\" (138 cheats). Returns { matches:[{game, score, cheats}], gameCount, note }.",
-    {
-      platform: z.enum([...SUPPORTED]).describe("Platform to search (nes, genesis, snes, gb, ...)."),
-      query: z.string().describe("Free-text game name — any form: 'NBA Jam TE', 'sonic 2', 'zelda link to the past'. Tags/region/punctuation are ignored."),
-      limit: z.number().int().min(1).max(50).default(12).describe("Max results (default 12)."),
-    },
-    safeTool(async ({ platform, query, limit }) => {
-      return jsonContent(await searchCheatGames({ platform, query, limit }));
-    }),
-  );
+/** op:'search' — fuzzy game-name search in the cheat DB. */
+export async function cheatsSearchCore({ platform, query, limit }) {
+      return await searchCheatGames({ platform, query, limit });
+}
 
-  // ── applyCheat — enable a cheat live (non-destructive) ────────────────
-  server.tool(
-    "applyCheat",
-    "Apply a cheat to the LOADED game and play with it on — the fun-bonus / 'what does this do' tool. Works two " +
-    "ways: pass a raw `code` (e.g. '00C7:FF', 'SXIOPO', 'AJ9T-CA5Y') for any platform the core understands, OR " +
-    "pass `desc` to apply a matched entry from gameCheats by its description. " +
-    "NON-DESTRUCTIVE — exactly how RetroArch does it: the code is applied in volatile CORE state (a per-frame RAM " +
-    "write for RAM cheats; an in-core read-intercept for ROM cheats). The ROM file on disk is NEVER modified, and " +
-    "reset / loadState / clearCheats removes it. Also a great VERIFIER: apply a gameCheats label, screenshot, and " +
-    "confirm the effect to prove the address is right. Returns the active-cheat list.",
-    {
-      code: z.string().optional().describe("Raw cheat code string (ADDR:VAL or a Game Genie code). The core decodes it. Provide `code` OR `desc`."),
-      desc: z.string().optional().describe("Description of a cheat from the matched game (requires `path` to look it up). Case-insensitive substring; the first match is applied."),
-      path: z.string().optional().describe("ROM path — required with `desc` to look the cheat up in the DB."),
-      index: z.number().int().min(0).optional().describe("Cheat slot to use (default: next free slot). Reuse a slot to replace it."),
-      enabled: z.boolean().default(true).describe("false disables the slot instead of enabling."),
-    },
-    safeTool(async ({ code, desc, path: romPath, index, enabled = true }) => {
+/** op:'apply' — enable a cheat live (non-destructive, volatile core state). */
+export async function cheatsApplyCore({ code, desc, path: romPath, index, enabled = true }, sessionKey) {
       const host = getHost(sessionKey);
       if (!host.cheatsSupported || !host.cheatsSupported()) {
         throw new Error("The loaded core does not expose the cheat interface. (Older core build — rebuild with cheat exports.)");
@@ -247,7 +197,7 @@ export function registerCheatTools(server, z, sessionKey) {
       const slot = index != null ? index : host.listActiveCheats().length;
       // Still install it (the raw poke may be what the user wants), but warn.
       host.setCheat(slot, codeToApply, enabled);
-      return jsonContent({
+      return {
         applied: enabled,
         slot,
         code: codeToApply,
@@ -263,44 +213,18 @@ export function registerCheatTools(server, z, sessionKey) {
           "Applied in volatile core state — the ROM file is untouched; reset / loadState / clearCheats removes it. " +
           "Screenshot to see the effect (and to verify the cheat's address label is correct). " +
           "`appliedAs` tells you how it went in: 'ram' poke, 'rom' read-intercept, 'raw' core-decoded code, or 'rom-unencodable' (a ROM address that couldn't be made into a working ROM patch).",
-      });
-    }),
-  );
+      };
+}
 
-  // ── clearCheats — remove all active cheats ────────────────────────────
-  server.tool(
-    "clearCheats",
-    "Remove ALL active cheats from the loaded game (calls the core's cheat-reset). Non-destructive — the ROM was " +
-    "never modified; this just clears the volatile core-side cheat state. Returns the now-empty active list.",
-    {},
-    safeTool(async () => {
+/** op:'clear' — remove ALL active cheats (volatile core-side reset). */
+export async function cheatsClearCore(_args, sessionKey) {
       const host = getHost(sessionKey);
       if (host.clearCheats) host.clearCheats();
-      return jsonContent({ cleared: true, active: host.listActiveCheats ? host.listActiveCheats() : [] });
-    }),
-  );
+      return { cleared: true, active: host.listActiveCheats ? host.listActiveCheats() : [] };
+}
 
-  // ── makeCheat — CREATE a new cheat code from an address + value ───────
-  server.tool(
-    "makeCheat",
-    "CREATE a brand-new cheat code from an address + value (the inverse of decoding). Turn a byte you found — " +
-    "via runUntilWrite/watchMemory/gameCheats — into a shareable code, for ANY ROM including your own homebrew/WIP " +
-    "(no database entry needed). Emits the code for the platform's NATIVE cheat DEVICE — and labels it, so it's " +
-    "never falsely called 'Game Genie': NES/Genesis = Game Genie; SNES = Pro Action Replay (+ Game Genie); GB/GBC " +
-    "= Game Genie (ROM) + GameShark (RAM); SMS/GG = Action Replay. Always also returns the raw ADDR:VAL form. Each " +
-    "generated code is round-trip `verified` (decoded back and confirmed to reproduce your address/value). " +
-    "RAM cheat: give `address` + `value`. ROM/code cheat: also give `compare` (the byte currently at that ROM " +
-    "address — read it first), yielding the device's ROM-patch form. Apply the result with applyCheat to confirm. " +
-    "NON-DESTRUCTIVE — nothing is written to any ROM file.",
-    {
-      platform: z.enum([...MAKE_CHEAT_PLATFORMS]).describe("Target platform (all 14 tier-1 systems). Selects which cheat device(s) the code is encoded for; platforms without a native letter-code device (atari2600/7800, lynx, gba, c64, pce, msx) get a verified raw ADDR:VAL code that applyCheat passes straight to the core. See tool description."),
-      address: z.number().int().min(0).describe("Address to cheat. RAM cheats: the RAM address (e.g. 0x00CD / SNES 0x7E0DBF). ROM cheats: the ROM address of the byte to patch."),
-      value: z.number().int().min(0).max(255).optional().describe("Replacement byte value (0-255). Provide `value` OR `values`."),
-      values: z.array(z.number().int().min(0).max(255)).min(1).max(64).optional().describe("Batch: make a code for each value at the same address/compare in one call (e.g. values:[2,3] to offer two strengths). Returns `variants:[{value, codes, raw}]`."),
-      compare: z.number().int().min(0).max(255).optional().describe("ROM cheats only: the byte CURRENTLY at `address` (read it first). Its presence selects the device's ROM-patch form (e.g. 8-char NES Game Genie)."),
-      device: z.enum(["game-genie", "pro-action-replay", "gameshark", "action-replay", "raw"]).optional().describe("Force a specific device's encoding. Default: the platform's native device(s)."),
-    },
-    safeTool(async ({ platform, address, value, values, compare, device }) => {
+/** op:'make' — CREATE a new cheat code from an address + value. */
+export async function cheatsMakeCore({ platform, address, value, values, compare, device }) {
       const range = GG_ADDR_RANGE[platform];
       const devices = device ? [device] : nativeDevicesFor(platform);
 
@@ -340,19 +264,19 @@ export function registerCheatTools(server, z, sessionKey) {
       // Batch form: one entry per value.
       if (values && values.length) {
         const variants = values.map(buildFor);
-        return jsonContent({
+        return {
           ...common,
           variants,
           note: (compare != null ? "ROM/code patches" : "RAM cheats") + " for " + platform + " at " + common.address +
-            " across " + values.length + " values. Each variant carries device codes + raw. Apply any with applyCheat({code}).",
-        });
+            " across " + values.length + " values. Each variant carries device codes + raw. Apply any with cheats({op:'apply', code}).",
+        };
       }
 
       // Single-value form (back-compat).
       if (value == null) throw new Error("makeCheat: provide `value` (single) or `values` (batch).");
       const built = buildFor(value);
       const primary = built.codes[0]?.code || built.raw;
-      return jsonContent({
+      return {
         ...common,
         value: built.value,
         codes: built.codes,
@@ -360,8 +284,58 @@ export function registerCheatTools(server, z, sessionKey) {
         ...(built.rangeNote ? { rangeNote: built.rangeNote } : {}),
         note: (compare != null ? "ROM/code patch" : "RAM cheat") + " for " + platform + ". " +
           "Devices: " + (built.codes.length ? built.codes.map((c) => `${c.device} ${c.code}`).join(", ") + ", " : "") + "raw " + built.raw + ". " +
-          "Apply to confirm: applyCheat({ code: \"" + primary + "\" }). Non-destructive — no ROM file is touched.",
-      });
+          "Apply to confirm: cheats({op:'apply', code: \"" + primary + "\" }). Non-destructive — no ROM file is touched.",
+      };
+}
+
+export function registerCheatTools(server, z, sessionKey) {
+  server.tool(
+    "cheats",
+    "Cheat lookup / search / apply / create — the cheat workflow for the loaded ROM. `op`: " +
+    "'lookup' (THIS game's known cheats from the bundled DB — a free crowd-sourced MAP: each RAM cheat is a " +
+    "LABELED RAM ADDRESS, each Game Genie/ROM cheat a LABELED CODE SITE; answers 'which byte holds X?' for free), " +
+    "'search' (fuzzy-find a game by NAME when you don't have the exact No-Intro title — returns game names + cheat " +
+    "counts, then lookup the chosen one), 'apply' (enable a cheat on the LOADED game — pass a raw `code` or a `desc` " +
+    "from lookup), 'clear' (remove all active cheats), 'make' (CREATE a shareable code from an address+value). " +
+    "TRUST: lookup matches by NAME/fuzzy similarity, NOT a verified CRC — a PROBABLE match. Labels are usually " +
+    "right, but a different region/revision can use different addresses — VERIFY before patching (apply + observe, " +
+    "or check the address in live memory with memory/watch). " +
+    "apply is NON-DESTRUCTIVE (volatile core state, exactly like RetroArch — the ROM file is never modified; reset / " +
+    "loadState / clear removes it) and a great VERIFIER (apply a label, screenshot, confirm the address). " +
+    "make emits the platform's NATIVE device code (never falsely 'Game Genie': NES/Genesis=Game Genie; SNES=Pro " +
+    "Action Replay+GG; GB/GBC=Game Genie(ROM)+GameShark(RAM); SMS/GG=Action Replay) + the raw ADDR:VAL, round-trip " +
+    "`verified`; RAM cheat = address+value, ROM/code cheat = also `compare` (the byte currently there — read it first).",
+    {
+      op: z.enum(["lookup", "search", "apply", "clear", "make"]).describe("lookup THIS game's DB cheats; search the DB by game name; apply a cheat live; clear all cheats; make a new code."),
+      // lookup
+      path: z.string().optional().describe("op=lookup/apply(+desc): absolute ROM path. lookup sniffs platform+name from it."),
+      filter: z.string().optional().describe("op=lookup: case-insensitive substring filter on cheat descriptions."),
+      kind: z.enum(["ram", "code", "all"]).default("all").describe("op=lookup: RAM-variable cheats, ROM/code cheats, or all (default)."),
+      // search
+      query: z.string().optional().describe("op=search: free-text game name — any form; tags/region/punctuation ignored."),
+      limit: z.number().int().min(1).max(50).default(12).describe("op=search: max results (default 12)."),
+      // apply
+      code: z.string().optional().describe("op=apply: raw cheat code (ADDR:VAL or a Game Genie code). Provide code OR desc."),
+      desc: z.string().optional().describe("op=apply: description of a matched cheat (requires `path`). First substring match is applied."),
+      index: z.number().int().min(0).optional().describe("op=apply: cheat slot (default: next free slot). Reuse a slot to replace it."),
+      enabled: z.boolean().default(true).describe("op=apply: false disables the slot instead of enabling."),
+      // make / search / lookup share `platform`
+      platform: z.enum([...MAKE_CHEAT_PLATFORMS]).optional().describe("op=lookup: override platform detection. op=search/make: REQUIRED — the target platform (all 14 tier-1)."),
+      address: z.number().int().min(0).optional().describe("op=make: address to cheat (RAM addr, or the ROM addr to patch)."),
+      value: z.number().int().min(0).max(255).optional().describe("op=make: replacement byte (0-255). Provide value OR values."),
+      values: z.array(z.number().int().min(0).max(255)).min(1).max(64).optional().describe("op=make: batch — a code per value at the same address. Returns variants[]."),
+      compare: z.number().int().min(0).max(255).optional().describe("op=make: ROM cheats only — the byte CURRENTLY at `address` (read it first). Selects the device's ROM-patch form."),
+      device: z.enum(["game-genie", "pro-action-replay", "gameshark", "action-replay", "raw"]).optional().describe("op=make: force a specific device's encoding. Default: the platform's native device(s)."),
+    },
+    safeTool(async (args) => {
+      switch (args.op) {
+        case "lookup": return jsonContent(await cheatsLookupCore(args));
+        case "search": return jsonContent(await cheatsSearchCore(args));
+        case "apply":  return jsonContent(await cheatsApplyCore(args, sessionKey));
+        case "clear":  return jsonContent(await cheatsClearCore(args, sessionKey));
+        case "make":   return jsonContent(await cheatsMakeCore(args));
+        default: throw new Error(`cheats: unknown op '${args.op}'`);
+      }
     }),
   );
 }
