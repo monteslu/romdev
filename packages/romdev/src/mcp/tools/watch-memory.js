@@ -746,4 +746,250 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       }), host);
     }),
   );
+
+  // ── register write/read + callSubroutine / decompressWith (item 1) ──────────
+  // reg-id convention (m68k family): 0..7=D0..D7, 8..15=A0..A7, 16=PC, 17=SR, 18=SP.
+
+  server.tool(
+    "setRegister",
+    "Write a single CPU register by romdev reg-id (the inverse of getCPUState) — for setting up a callSubroutine by hand, " +
+    "forcing a code path, or fixing up state at a breakpoint. m68k reg-ids: 0-7=D0-D7, 8-15=A0-A7, 16=PC, 17=SR, 18=SP. " +
+    "Returns the new value (read back). notSupported where the core lacks register-write.",
+    {
+      regId: z.number().int().min(0).max(31).describe("romdev reg-id (m68k: 0-7=D, 8-15=A, 16=PC, 17=SR, 18=SP)."),
+      value: z.number().int().describe("32-bit value to write."),
+    },
+    safeTool(async ({ regId, value }) => {
+      const host = getHost(sessionKey);
+      if (!host.setRegSupported || !host.setRegSupported()) {
+        return jsonContent({ notSupported: true, note: "This core build has no register-write yet (rebuild with romdev_setreg)." });
+      }
+      host.setReg(regId, value >>> 0);
+      const now = host.getReg(regId);
+      return jsonContent({ regId, value: "0x" + (now >>> 0).toString(16).toUpperCase(), valueRaw: now });
+    }),
+  );
+  const regSchema = z.record(z.string(), z.number().int()).optional().describe(
+    "Registers to set before the call, keyed by romdev reg-id (m68k: 0-7=D0-D7, 8-15=A0-A7, 16=PC, 17=SR, 18=SP). " +
+    "e.g. {\"8\":2863118} sets A0. PC is set from the `pc` arg, not here.");
+
+  server.tool(
+    "callSubroutine",
+    "Drive the ROM's OWN subroutine and run until it returns — the RE primitive for compressed assets. Set up the CPU " +
+    "(registers via `regs` by reg-id, PC=`pc`), push a sentinel return address, and run until the routine RTSes back. " +
+    "SANDBOXED by default (snapshots + restores full core state, so the live game is untouched). The classic use: drive " +
+    "a game's decompressor (A0=source, A1=dest) and then readMemory the dest buffer — turning 'reimplement an " +
+    "undocumented codec' into one call. Returns { returned, framesRun }. After it returns, readMemory the buffer the " +
+    "routine wrote (it's still in core RAM until you step on; with sandbox:true it's restored, so set sandbox:false OR " +
+    "read inside the same flow — prefer sandbox:false + a follow-up readMemory for codecs, since the dst buffer IS the " +
+    "result you want). Supported where the core exposes register-write (feature-detected; notSupported otherwise).",
+    {
+      pc: z.number().int().min(0).describe("Entry PC of the subroutine (e.g. 0x263C44)."),
+      regs: regSchema,
+      sentinelPC: z.number().int().min(0).default(0).describe("Return address pushed on the stack; the run stops when PC reaches it. Default 0 (a vector address unlikely to execute mid-run). Override if it collides with real code."),
+      maxFrames: z.number().int().min(1).max(100000).default(600).describe("Cap so a runaway routine can't hang."),
+      sandbox: z.boolean().default(false).describe("Snapshot+restore core state around the call (default FALSE for codecs — you usually want the dst buffer left in RAM to readMemory afterward). Set true to leave the live game untouched."),
+    },
+    safeTool(async ({ pc, regs, sentinelPC, maxFrames, sandbox }) => {
+      const host = getHost(sessionKey);
+      if (!host.setRegSupported || !host.setRegSupported()) {
+        return jsonContent({ returned: false, notSupported: true,
+          note: "This core build has no register-write yet (rebuild with romdev_setreg). callSubroutine needs it." });
+      }
+      const numRegs = {};
+      for (const [k, v] of Object.entries(regs ?? {})) numRegs[Number(k)] = v >>> 0;
+      const r = host.callSubroutine({ pc, regs: numRegs, sentinelPC, maxFrames, sandbox });
+      return jsonContent({
+        returned: r.returned, framesRun: r.framesRun, sandbox,
+        note: r.returned
+          ? "Routine returned. If it wrote a buffer (e.g. a decompressor's A1 dest), readMemory that address now (use sandbox:false so it's still live). callSubroutine sets regs by reg-id: m68k 8=A0,9=A1."
+          : "Routine did NOT return within maxFrames — it may loop, expect different setup, or the sentinelPC collided with real code. Increase maxFrames or pick a different sentinelPC.",
+      });
+    }),
+  );
+
+  server.tool(
+    "decompressWith",
+    "Convenience wrapper over callSubroutine for the common decompressor shape: call the routine at `entryPC` with " +
+    "A0=sourceAddress (and optionally A1=destAddress), run until it returns. Then readMemory `destAddress` to get the " +
+    "decompressed bytes. For the NBA Jam-style 'name + portrait are LZ-compressed' wall: point this at the game's own " +
+    "decompressor and capture the output instead of reverse-engineering the codec. Genesis/m68k reg convention (A0=8, " +
+    "A1=9); other cores map their source/dest arg registers per platform. notSupported where the core lacks register-write.",
+    {
+      entryPC: z.number().int().min(0).describe("Decompressor entry PC."),
+      sourceAddress: z.number().int().min(0).describe("Compressed-source address → loaded into A0 (reg-id 8 on m68k)."),
+      destAddress: z.number().int().min(0).optional().describe("Destination buffer address → loaded into A1 (reg-id 9). Omit if the routine picks its own dest."),
+      maxFrames: z.number().int().min(1).max(100000).default(600),
+    },
+    safeTool(async ({ entryPC, sourceAddress, destAddress, maxFrames }) => {
+      const host = getHost(sessionKey);
+      if (!host.setRegSupported || !host.setRegSupported()) {
+        return jsonContent({ returned: false, notSupported: true,
+          note: "This core build has no register-write yet (rebuild with romdev_setreg). decompressWith needs it." });
+      }
+      const regs = { 8: sourceAddress >>> 0 };
+      if (destAddress !== undefined) regs[9] = destAddress >>> 0;
+      const r = host.callSubroutine({ pc: entryPC, regs, sentinelPC: 0, maxFrames, sandbox: false });
+      return jsonContent({
+        returned: r.returned, framesRun: r.framesRun,
+        ...(destAddress !== undefined ? { destAddress: "$" + (destAddress >>> 0).toString(16).toUpperCase() } : {}),
+        note: r.returned
+          ? `Decompressor returned. readMemory at ${destAddress !== undefined ? "$" + (destAddress >>> 0).toString(16).toUpperCase() : "the routine's dest"} to get the decompressed bytes (the live core ran the game's own codec — no codec reimplementation needed).`
+          : "Decompressor did NOT return within maxFrames. Confirm entryPC is the routine start, A0=source is right, and bump maxFrames. (Some codecs expect more setup regs — use callSubroutine with the full regs map.)",
+      });
+    }),
+  );
+
+  // ── Range watch + coverage trace (item 2, discovery) ────────────────────────
+
+  server.tool(
+    "watchRange",
+    "DISCOVERY: log EVERY instruction that reads or writes ANYWHERE in [start,end] over `frames` — not stop-on-first. " +
+    "The fix for 'I don't know which PC touches this'. Returns a list of {pc,address,value}. Use it to find an unknown " +
+    "renderer/reader: watch the whole name pool / a struct / a flag region and SEE every PC that hits it, instead of " +
+    "probing single addresses. Pair with disassembleRom on the returned PCs. (Frame-window + ring-buffered: a huge range " +
+    "over many frames can overflow the buffer — `truncated:true` says so; narrow the range or frames.) notSupported where " +
+    "the core lacks the watch hook.",
+    {
+      start: z.number().int().min(0).describe("Low CPU address of the watched range."),
+      end: z.number().int().min(0).describe("High CPU address (inclusive)."),
+      kind: z.enum(["read", "write", "both"]).default("both").describe("Watch reads, writes, or both."),
+      frames: z.number().int().min(1).max(6000).default(120).describe("Frames to run while logging."),
+      pressDuring: z.array(z.object({
+        frame: z.number().int().min(0), button: z.string(),
+        port: z.number().int().min(0).max(3).default(0), holdFrames: z.number().int().min(1).default(2),
+      })).optional().describe("Drive input while watching (reach the screen/state that touches the range)."),
+      limit: z.number().int().min(1).max(2000).default(200).describe("Max events to return (the full count is in `total`)."),
+    },
+    safeTool(async ({ start, end, kind, frames, pressDuring, limit }) => {
+      const host = getHost(sessionKey);
+      if (!host.rangeWatchSupported || !host.rangeWatchSupported()) {
+        return jsonContent({ notSupported: true, events: [],
+          note: "This core build has no range watch yet (rebuild with romdev_range_*). Use findWriter/runUntilRead for a single address." });
+      }
+      if (end < start) throw new Error("watchRange: end must be >= start.");
+      // pressDuring is driven inside the frame loop; watchRange's host method owns
+      // stepping, so for now apply presses up front if any (simple: hold for the run).
+      const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
+      const pressDriver = makePressDriver(host, presses);
+      if (presses.length) pressDriver.applyForFrame(0);
+      const r = host.watchRange(start, end, kind, frames);
+      pressDriver.finish();
+      const events = r.events.slice(0, limit).map((e) => ({
+        pc: "$" + e.pc.toString(16).toUpperCase(),
+        address: "$" + e.address.toString(16).toUpperCase(),
+        value: "0x" + e.value.toString(16).toUpperCase().padStart(2, "0"),
+      }));
+      // distinct PCs are the actionable summary
+      const distinctPCs = [...new Set(r.events.map((e) => e.pc))].slice(0, 64)
+        .map((p) => "$" + p.toString(16).toUpperCase());
+      return attachObserverFrame(jsonContent({
+        range: "$" + start.toString(16).toUpperCase() + "..$" + end.toString(16).toUpperCase(),
+        kind, total: r.total, returned: events.length, truncated: r.truncated,
+        distinctPCs, events,
+        note: "distinctPCs is the actionable summary — each is a routine that touches this range; disassembleRom one to identify the renderer/reader. " +
+          (r.truncated ? "TRUNCATED: more events than the buffer held — narrow `start..end` or `frames` for the full set." : ""),
+      }), host);
+    }),
+  );
+
+  server.tool(
+    "logPCRange",
+    "DISCOVERY (coverage trace): record every DISTINCT PC executed within [start,end] over `frames` — 'what code runs " +
+    "here?'. The RE way to FIND an unknown routine: log execution in the bank where you suspect the renderer lives " +
+    "during the moment it draws, then disassembleRom the PCs. Returns { pcs:[...], distinct, total }. notSupported where " +
+    "the core lacks the execute hook.",
+    {
+      start: z.number().int().min(0).describe("Low CPU address of the coverage window."),
+      end: z.number().int().min(0).describe("High CPU address (inclusive)."),
+      frames: z.number().int().min(1).max(6000).default(120),
+      pressDuring: z.array(z.object({
+        frame: z.number().int().min(0), button: z.string(),
+        port: z.number().int().min(0).max(3).default(0), holdFrames: z.number().int().min(1).default(2),
+      })).optional(),
+      limit: z.number().int().min(1).max(4000).default(512),
+    },
+    safeTool(async ({ start, end, frames, pressDuring, limit }) => {
+      const host = getHost(sessionKey);
+      if (!host.rangeWatchSupported || !host.rangeWatchSupported()) {
+        return jsonContent({ notSupported: true, pcs: [],
+          note: "This core build has no coverage trace yet (rebuild with romdev_cov_*)." });
+      }
+      if (end < start) throw new Error("logPCRange: end must be >= start.");
+      const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
+      const pressDriver = makePressDriver(host, presses);
+      if (presses.length) pressDriver.applyForFrame(0);
+      const r = host.logPCRange(start, end, frames);
+      pressDriver.finish();
+      const pcs = r.pcs.slice(0, limit).map((p) => "$" + p.toString(16).toUpperCase());
+      return attachObserverFrame(jsonContent({
+        window: "$" + start.toString(16).toUpperCase() + "..$" + end.toString(16).toUpperCase(),
+        distinct: r.distinct, total: r.total, returned: pcs.length, truncated: r.truncated,
+        pcs,
+        note: "Each PC is code that EXECUTED in this window. disassembleRom them to find the routine you're hunting. " +
+          (r.truncated ? "TRUNCATED — narrow the window for the full distinct set." : ""),
+      }), host);
+    }),
+  );
+
+  // ── Targeted VDP-DMA watch (item 3, Genesis only) ───────────────────────────
+
+  server.tool(
+    "watchDma",
+    "GENESIS ONLY. Log every mem→VDP DMA over `frames` with its VRAM DESTINATION, ROM SOURCE, length, and code — the " +
+    "targeted answer to 'which DMA wrote the tile at VRAM 0xNNNN, and where in ROM did it come from?'. This is the " +
+    "precise version of traceVramSource (which is frame-sampled and dest-agnostic): filter the returned list by " +
+    "`vramDest` to find the exact source of a name/portrait/logo bitmap that's DMA'd (so findWriter can't catch it). " +
+    "Returns { dmas:[{vramDest, source, lengthWords, lengthBytes, code, target}] }. notSupported on non-Genesis cores " +
+    "(VDP DMA is a Genesis concept — use findWriter for CPU writes elsewhere).",
+    {
+      frames: z.number().int().min(1).max(6000).default(120),
+      vramDest: z.number().int().min(0).optional().describe("If set, only return DMAs whose VRAM destination falls within ±`destWindow` of this address."),
+      destWindow: z.number().int().min(0).default(0x40).describe("Match window around vramDest (default 64 bytes ≈ 1 tile)."),
+      pressDuring: z.array(z.object({
+        frame: z.number().int().min(0), button: z.string(),
+        port: z.number().int().min(0).max(3).default(0), holdFrames: z.number().int().min(1).default(2),
+      })).optional().describe("Drive to the screen that uploads the graphic."),
+      romPreviewBytes: z.number().int().min(0).max(64).default(0).describe("Bytes of the ROM source to preview per DMA (0 = none)."),
+    },
+    safeTool(async ({ frames, vramDest, destWindow, pressDuring, romPreviewBytes }) => {
+      const host = getHost(sessionKey);
+      if (!host.dmaWatchSupported || !host.dmaWatchSupported()) {
+        return jsonContent({ notSupported: true, dmas: [],
+          note: "watchDma is Genesis-only (VDP DMA). On other platforms use findWriter (CPU writes) or the platform's source tracer." });
+      }
+      const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
+      const pressDriver = makePressDriver(host, presses);
+      if (presses.length) pressDriver.applyForFrame(0);
+      const r = host.watchDma(frames);
+      pressDriver.finish();
+      let rom = null;
+      if (romPreviewBytes > 0) { try { rom = host.getCartRom(); } catch { /* no preview */ } }
+      // VDP code low bits: 1=VRAM, 3=CRAM, 5=VSRAM (write codes). Decode the target.
+      const targetOf = (code) => { const c = code & 0x0F; return c === 1 ? "VRAM" : c === 3 ? "CRAM" : c === 5 ? "VSRAM" : "VRAM?"; };
+      let dmas = r.dmas;
+      if (vramDest !== undefined) dmas = dmas.filter((d) => Math.abs((d.vramDest >>> 0) - vramDest) <= destWindow);
+      const out = dmas.map((d) => {
+        const o = {
+          vramDest: "$" + (d.vramDest >>> 0).toString(16).toUpperCase(),
+          source: "0x" + (d.source >>> 0).toString(16).toUpperCase(),
+          lengthWords: d.lengthWords, lengthBytes: d.lengthWords * 2,
+          target: targetOf(d.code),
+        };
+        if (rom && rom.bytes && (d.source >>> 0) < rom.bytes.length) {
+          const a = d.source >>> 0, e = Math.min(a + romPreviewBytes, rom.bytes.length);
+          o.romPreview = Array.from(rom.bytes.subarray(a, e), (b) => b.toString(16).padStart(2, "0")).join("");
+        }
+        return o;
+      });
+      return attachObserverFrame(jsonContent({
+        total: r.total, returned: out.length, truncated: r.truncated,
+        ...(vramDest !== undefined ? { filteredToVramDest: "$" + vramDest.toString(16).toUpperCase(), destWindow } : {}),
+        dmas: out,
+        note: "Each entry is a mem→VDP DMA: `source` is the ROM byte offset the graphic was copied from — edit the tiles THERE. " +
+          "Filter by vramDest to pin the exact upload for the tile you see on screen. " +
+          (r.truncated ? "TRUNCATED — narrow frames." : ""),
+      }), host);
+    }),
+  );
 }
