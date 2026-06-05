@@ -82,8 +82,26 @@ export function genesisImageToTilemap(args) {
   //    if it fits (line ∪ tileColors ≤ 16), merge; else open a new line.
   //    Color index 0 within a line is reserved as transparent/background.
   const lines = []; // each: Set<genesisWord>, with the backdrop word forced at idx 0
-  const backdrop = [...distinct.entries()].sort((a, b) => b[1] - a[1])[0][0]; // most common
+  const backdropEntry = [...distinct.entries()].sort((a, b) => b[1] - a[1])[0];
+  const backdrop = backdropEntry[0]; // most common
   const tilePalLine = new Int8Array(tilesAcross * tilesDown).fill(-1);
+
+  // FOOTGUN GUARD: the most-common color is forced to palette index 0, which is
+  // TRANSPARENT on a scroll plane (it shows the hardware backdrop, not the
+  // color). For a full-screen BG whose dominant color is a visible fill (e.g. a
+  // white/blue sky), this silently renders that area as the backdrop color
+  // (usually black) in-game. Warn — and the fix is one call: set that color as
+  // the hardware backdrop so index 0 actually shows it.
+  {
+    const r0 = backdrop & 7, g0 = (backdrop >> 3) & 7, b0 = (backdrop >> 6) & 7;
+    const dominantFrac = backdropEntry[1] / (png.width * png.height);
+    if ((r0 || g0 || b0) && dominantFrac >= 0.15) {
+      const hex = "#" + [r0, g0, b0].map((c) => Math.round((c / 7) * 255).toString(16).padStart(2, "0")).join("");
+      warnings.push(
+        `palette index 0 = a VISIBLE color (~${hex}, ${Math.round(dominantFrac * 100)}% of the image) — on a scroll PLANE index 0 is TRANSPARENT and shows the hardware backdrop (usually black), so this area will render wrong in-game. Fix: call VDP_setBackgroundColor() with this color's CRAM slot (palette-line*16 + 0) so the backdrop matches, OR recolor so index 0 is an intentional transparent/background color.`
+      );
+    }
+  }
 
   // Sort tiles by descending color count so the hard ones grab lines first.
   const order = [...tileColorSets.keys()].sort((a, b) => tileColorSets[b].size - tileColorSets[a].size);

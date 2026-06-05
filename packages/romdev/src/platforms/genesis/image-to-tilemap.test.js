@@ -64,6 +64,25 @@ test("round-trips a 16-color image: decoded tiles reproduce source colors", () =
   assert.deepEqual([pr, pg, pb], [0, 0, 0], "top-left pixel round-trips to black");
 });
 
+test("warns when a VISIBLE dominant color lands at transparent palette index 0", () => {
+  // A mostly-white "sky" (dominant) with a small dark strip. The most-common
+  // color (white) gets forced to index 0 = transparent on a plane → footgun.
+  const png = makePng((x, y) => (y < 200 ? [255, 255, 255] : [0, 0, 0]));
+  const r = genesisImageToTilemap({ pngBytes: png });
+  assert.ok(
+    r.warnings.some((w) => /index 0 = a VISIBLE color/i.test(w) && /VDP_setBackgroundColor/.test(w)),
+    `expected an index-0 transparency warning, got: ${JSON.stringify(r.warnings)}`
+  );
+});
+
+test("does NOT warn when the dominant color is black (a sane index-0)", () => {
+  // Black dominant → index 0 = black = the usual transparent/backdrop; no footgun.
+  const png = makePng((x, y) => (y < 200 ? [0, 0, 0] : [255, 0, 0]));
+  const r = genesisImageToTilemap({ pngBytes: png });
+  assert.ok(!r.warnings.some((w) => /index 0 = a VISIBLE color/i.test(w)),
+    `black index-0 should not warn, got: ${JSON.stringify(r.warnings)}`);
+});
+
 test("packed 4bpp layout: high nibble = left pixel", () => {
   // Make a 320×224 image where the left pixel of every 2-px pair is white
   // and the right is black, so each packed byte = 0xF0 (idx 15 << 4 | 0).
