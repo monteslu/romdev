@@ -8,16 +8,26 @@ import { jsonContent, safeTool } from "../util.js";
 // Exported so watchMemory/runUntilWrite's `pressDuring` resolves aliases the
 // same way the standalone pressButton tool does.
 export function resolveButtonAlias(button, platform) {
+  // Only the platform-NATIVE aliases (c / 1 / 2) are remapped here; raw
+  // libretro names (a/b/x/y) and spatial names (north/east/south/west) pass
+  // through unchanged so pressButton stays consistent with setInput.
+  //
+  // genesis_plus_gx maps the Genesis face buttons A/B/C onto libretro y/b/a
+  // respectively (verified empirically against the running core 2026-06-05),
+  // so the Genesis-native button C is libretro 'a'. (Earlier this mapped
+  // c→y, which actually pressed Genesis A — the inverted bug a feedback agent
+  // hit when SGDK BUTTON_A wouldn't fire. Genesis A/B are libretro y/b, reached
+  // via setInput({y/b}) or the spatial east/south/west names.)
   if (platform === "genesis" || platform === "megadrive" || platform === "md") {
-    if (button === "c") return "y";   // Genesis C = libretro Y
+    if (button === "c") return "a";   // Genesis C = libretro A
   }
   if (platform === "sms" || platform === "gg") {
     if (button === "1") return "a";
     if (button === "2") return "b";
   }
   // If a native alias wasn't resolved for this platform, fall back to a sane
-  // default so the call doesn't silently press nothing: c→y, 1→a, 2→b.
-  if (button === "c") return "y";
+  // default so the call doesn't silently press nothing. (Genesis C → libretro a.)
+  if (button === "c") return "a";
   if (button === "1") return "a";
   if (button === "2") return "b";
   return button;
@@ -63,6 +73,11 @@ export function registerInputTools(server, z, sessionKey) {
     "Set controller state for the next frames. State persists until changed (held buttons stay held). " +
     "Shape: { ports: [{ a: true, start: false, ... }, { ... }] }. Use getInputLayout({platform}) " +
     "to see which buttons exist on this platform (NES has no x/y, Genesis has no l/r, etc). " +
+    "FACE-BUTTON NAMING: the raw libretro names (a/b/x/y) are NOT the platform's printed button labels — " +
+    "e.g. on Genesis, genesis_plus_gx maps Genesis A/B/C onto libretro y/b/a, so setInput({a:true}) presses " +
+    "Genesis C, and Genesis A (SGDK BUTTON_A) is setInput({y:true}). To avoid this trap, prefer the SPATIAL names " +
+    "(north/east/south/west — resolved per platform) for one button, or use pressButton({button:'a'|'b'|'c'|...}) " +
+    "which takes platform-native aliases. getInputLayout({platform}).faceButtons gives the exact spatial→libretro map. " +
     "Returns `requested` = the held-button state you asked for. NOTE: `requested` is what you SET, NOT proof the " +
     "emulated pad saw it — the game only reads the pad when ITS code polls, which may be a specific frame in a " +
     "state machine. If a press doesn't take (e.g. a title waiting on Start), re-apply setInput IMMEDIATELY before " +
@@ -86,7 +101,9 @@ export function registerInputTools(server, z, sessionKey) {
   server.tool(
     "pressButton",
     "Convenience: press a single named button for N frames then release. Drives a single port (default port 0). " +
-    "Accepts platform-native button aliases: Genesis `c` → libretro `y` (Genesis A/B/C map to libretro a/b/y); SMS/GG `1`/`2` → `a`/`b`. The alias is resolved from the loaded platform.",
+    "The SIMPLEST way to press one platform-native button — prefer it over hand-mapping a libretro name in setInput. " +
+    "Accepts platform-native aliases resolved from the loaded platform: Genesis `c` → libretro `a` (genesis_plus_gx maps Genesis A/B/C onto libretro y/b/a — so Genesis A is libretro `y`, B is `b`, C is `a`; NOTE libretro `a` is Genesis C, not A); SMS/GG `1`/`2` → `a`/`b`. " +
+    "Spatial names also work and are unambiguous (east/south/west). Use getInputLayout({platform}).faceButtons for the exact map.",
     {
       button: z.enum([
         "up", "down", "left", "right",

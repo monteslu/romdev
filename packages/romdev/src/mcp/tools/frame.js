@@ -108,7 +108,7 @@ function hsvToRgb(h, s, v) {
 export function registerFrameTools(server, z, sessionKey) {
   server.tool(
     "stepFrames",
-    "Advance emulation by N frames as fast as possible — NO real-time pacing, NO audio sync, NO vsync. Cores run at WASM speed: NES ~6-15k fps, SNES/Genesis ~2-5k fps, GB ~10k+ fps. That means stepFrames(3600) = 1 minute of game time in ~5-30ms (cheaper than a screenshot). Don't be timid: skip past title screens with stepFrames(300), advance through a level with stepFrames(7200) = 2 minutes, etc. Prefer ONE big call over many small ones. Returns the new frame count and framebuffer dimensions. Default 1 frame.",
+    "Advance emulation by N frames as fast as possible — NO real-time pacing, NO audio sync, NO vsync. Cores run at WASM speed: NES ~6-15k fps, SNES/Genesis ~2-5k fps, GB ~10k+ fps. That means stepFrames(3600) = 1 minute of game time in ~5-30ms (cheaper than a screenshot). Don't be timid: skip past title screens with stepFrames(300), advance through a level with stepFrames(7200) = 2 minutes, etc. Prefer ONE big call over many small ones. Returns the new frame count and framebuffer dimensions. Default 1 frame. TIP: if your very next call is a screenshot (the drive-then-look loop), use `stepAndScreenshot` instead to fold both into one round trip.",
     {
       frames: z.number().int().min(1).max(1_000_000).default(1).describe("Number of frames to step (1-1,000,000). Don't be conservative — 36000 frames (10 min) typically completes in <1s."),
     },
@@ -237,7 +237,8 @@ export function registerFrameTools(server, z, sessionKey) {
     "`inline:true` to get the image in the response instead (you MUST pass one or the other). `format:'png'` " +
     "(default) = real frame, exact colors; `format:'ascii'` = lossy chafa text render for agents that can't " +
     "view images. `overlayBoxes:true` (png) draws a colored box around each visible sprite (SNES+NES). ASCII " +
-    "grid/symbol/color knobs are in the param hints.",
+    "grid/symbol/color knobs are in the param hints. TIP: if you just stepped frames to reach this moment, " +
+    "`stepAndScreenshot` does the step + this capture in one call — use it for the drive-then-look loop.",
     {
       format: z.enum(["png", "ascii"]).default("png").describe("'png' (default) = real image. 'ascii' = lossy text render for environments that can't show images."),
       path: z.string().optional().describe("Absolute path to write to (PNG bytes or ANSI text per format). Required unless inline:true."),
