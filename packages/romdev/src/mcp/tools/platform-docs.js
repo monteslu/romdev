@@ -25,6 +25,13 @@ const PLATFORMS_ROOT = path.resolve(__dirname, "..", "..", "platforms");
 /** Known doc-file names. Add new ones here when shipping more. */
 const DOC_FILES = ["MENTAL_MODEL.md", "TROUBLESHOOTING.md", "UPSTREAM_SOURCES.md"];
 
+// Cross-platform GUIDES (not tied to one platform). Surfaced through the same
+// getPlatformDoc tool under a pseudo-platform id so agents have one way to read
+// docs. e.g. getPlatformDoc({platform:'romhacking', name:'playbook'}).
+const GUIDES = {
+  romhacking: { playbook: "_guides/ROMHACKING_PLAYBOOK.md" },
+};
+
 /**
  * For a single platform, list which docs exist on disk.
  *
@@ -55,26 +62,43 @@ export function registerPlatformDocsTools(server, z) {
       platform: z.string().describe("Platform id (e.g. 'nes', 'genesis', 'sms')."),
     },
     safeTool(async ({ platform }) => {
+      // Cross-platform guides (e.g. the romhacking playbook) under a pseudo id.
+      if (GUIDES[platform]) {
+        const docs = Object.keys(GUIDES[platform]).map((name) => ({ name, file: GUIDES[platform][name] }));
+        return jsonContent({
+          platform,
+          docs,
+          note: `Cross-platform guide(s). Call getPlatformDoc({ platform: '${platform}', name: '${docs[0]?.name}' }) to read.`,
+        });
+      }
       const docs = await listDocsForPlatform(platform);
       return jsonContent({
         platform,
         docs,
         note: docs.length === 0
-          ? `No docs shipped for '${platform}' yet. Try a different platform or call starterSnippets for boilerplate.`
-          : `Call getPlatformDoc({ platform, name }) to read one. 'name' is 'mental_model' or 'troubleshooting'.`,
+          ? `No docs shipped for '${platform}' yet. Try a different platform or call starterSnippets for boilerplate. (For RE/patching workflow, see getPlatformDoc({platform:'romhacking', name:'playbook'}).)`
+          : `Call getPlatformDoc({ platform, name }) to read one. 'name' is 'mental_model' or 'troubleshooting'. For RE/patching workflow across platforms, see getPlatformDoc({platform:'romhacking', name:'playbook'}).`,
       });
     }),
   );
 
   server.tool(
     "getPlatformDoc",
-    "Fetch the full contents of a platform doc. Returns markdown verbatim — render or quote as-is. Use `name: 'mental_model'` for MENTAL_MODEL.md, `'troubleshooting'` for TROUBLESHOOTING.md, `'upstream_sources'` for UPSTREAM_SOURCES.md. Templates reference these files in their comments; this tool is how the agent actually reads them.",
+    "Fetch the full contents of a platform doc. Returns markdown verbatim — render or quote as-is. Use `name: 'mental_model'` for MENTAL_MODEL.md, `'troubleshooting'` for TROUBLESHOOTING.md, `'upstream_sources'` for UPSTREAM_SOURCES.md. Templates reference these files in their comments; this tool is how the agent actually reads them. CROSS-PLATFORM GUIDE: `getPlatformDoc({platform:'romhacking', name:'playbook'})` returns the ROM-hacking playbook — the decision tree for reverse-engineering/patching an existing ROM (find a value's address, is on-screen text a string or a bitmap, confirm a patch is live, drive menus fast). Read it before a romhack.",
     {
-      platform: z.string().describe("Platform id."),
-      name: z.string().describe("'mental_model' | 'troubleshooting' | 'upstream_sources'."),
+      platform: z.string().describe("Platform id, or 'romhacking' for the cross-platform RE/patching playbook."),
+      name: z.string().describe("'mental_model' | 'troubleshooting' | 'upstream_sources', or 'playbook' when platform is 'romhacking'."),
     },
     safeTool(async ({ platform, name }) => {
       const lower = name.toLowerCase();
+      // Cross-platform guide lookup.
+      if (GUIDES[platform]) {
+        const rel = GUIDES[platform][lower];
+        if (!rel) throw new Error(`unknown guide '${name}' for '${platform}'. Valid: ${Object.keys(GUIDES[platform]).join(", ")}.`);
+        const full = path.join(PLATFORMS_ROOT, rel);
+        const contents = await readFile(full, "utf-8");
+        return jsonContent({ platform, name: lower, file: rel, contents });
+      }
       let docFile;
       if (lower === "mental_model" || lower === "mental-model" || lower === "mentalmodel") {
         docFile = "MENTAL_MODEL.md";

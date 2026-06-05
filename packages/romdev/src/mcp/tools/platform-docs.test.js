@@ -75,6 +75,28 @@ test("getPlatformDoc rejects unknown name", async () => {
   assert.match(r.content[0].text, /unknown doc/);
 });
 
+test("getPlatformDoc serves the cross-platform romhacking playbook", async () => {
+  const { registerPlatformDocsTools } = await import("./platform-docs.js");
+  const { server, tools } = makeShim();
+  const z = { string: () => ({ describe: () => ({}) }) };
+  registerPlatformDocsTools(server, z);
+
+  // listPlatformDocs surfaces it under the pseudo-platform.
+  const list = JSON.parse((await tools.listPlatformDocs({ platform: "romhacking" })).content[0].text);
+  assert.ok(list.docs.some((d) => d.name === "playbook"), "playbook not listed");
+
+  const r = await tools.getPlatformDoc({ platform: "romhacking", name: "playbook" });
+  const parsed = JSON.parse(r.content[0].text);
+  assert.equal(parsed.platform, "romhacking");
+  assert.equal(parsed.name, "playbook");
+  // Hits the key decision-tree points the feedback asked for.
+  assert.match(parsed.contents, /searchValue/);
+  assert.match(parsed.contents, /readCartRom/);
+  assert.match(parsed.contents, /pre-rendered/i);
+  assert.match(parsed.contents, /classifyRegion/);
+  assert.ok(parsed.contents.length > 1500, "playbook too short");
+});
+
 test("getPlatformDoc returns helpful error for platform with no doc", async () => {
   const { registerPlatformDocsTools } = await import("./platform-docs.js");
   const { server, tools } = makeShim();
