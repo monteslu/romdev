@@ -56,9 +56,12 @@ font-rendered from an ASCII string. Patching the ASCII string then does nothing.
    string. Do not patch any ASCII string you found; it isn't the source.
 2. If it IS font-rendered, find the string with `findEncodedText` /
    `encodeTextForRom` and patch that.
-3. To find where a graphic/text was sourced from: watch the destination region
-   (VRAM) — if `findWriter` reports no per-byte write, the tiles were
-   bulk-copied/DMA'd from ROM; the SOURCE is what you patch (see §4).
+3. To find where a graphic/text was sourced from: on **Genesis**, `traceVramSource`
+   — drive to the screen that shows the graphic, and it reports the ROM offset(s)
+   the tiles were DMA'd from (decoded from the VDP DMA registers). Edit the tile
+   bitmaps at that offset, not any string. (Elsewhere: if `findWriter` on the VRAM
+   destination reports no per-byte write, the tiles were bulk-copied/DMA'd from
+   ROM; the SOURCE is what you patch — see §4/§5.)
 
 ---
 
@@ -128,6 +131,7 @@ transition.
 | Is a "table" really ASCII/code | `classifyRegion` |
 | Confirm a patch is in the running ROM | `readCartRom` |
 | Where is this byte written / why not | `findWriter` (no write ⇒ source is bulk-copied) |
+| Where did a VRAM graphic come from (Genesis) | `traceVramSource` (ROM offset of the DMA source) |
 | Drive a menu fast | `navigate` (advances on screen change) |
 | Free RAM map for a known game | `gameCheats` / `searchCheats` |
 | Safe patch | `patchFile`/`patchRom` with `expect` |
