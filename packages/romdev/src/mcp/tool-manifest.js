@@ -39,6 +39,8 @@ export const MERGE_MAP = {
   frame: { absorbs: ["stepFrames", "screenshot", "stepAndScreenshot"], axis: "op" },
   // ── scaffold (project/game + snippets; patchGbHeader stays standalone in project.js) ──
   scaffold: { absorbs: ["createProject", "createGame", "starterSnippets", "copyStarterSnippets"], axis: "op" },
+  // ── cart (identify/extract/wrap; identifyRom from rom-id.js, rest from cart-parts.js) ──
+  cart: { absorbs: ["identifyRom", "extractCart", "wrapRomFromParts"], axis: "op" },
 };
 
 /** Every OLD tool name that the consolidation removes (absorbed into a new tool). */
