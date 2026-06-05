@@ -1,8 +1,8 @@
 diff --git a/core/m68k/m68kcpu.c b/core/m68k/m68kcpu.c
-index 36112a5..b5dc914 100644
+index 36112a5..cf1f0f9 100644
 --- a/core/m68k/m68kcpu.c
 +++ b/core/m68k/m68kcpu.c
-@@ -31,6 +31,39 @@ static int irq_latency;
+@@ -31,6 +31,86 @@ static int irq_latency;
  
  m68ki_cpu_core m68k;
  
@@ -39,13 +39,67 @@ index 36112a5..b5dc914 100644
 +unsigned int  romdev_pc_last_pc = 0xFFFFFFFF;
 +unsigned int  romdev_pc_hits    = 0;
 +
++/* romdev RANGE watch (discovery): log EVERY {pc,addr,value} that reads or writes
++ * an address in [lo,hi] over a window — not stop-on-first. Hooked into the same
++ * read/write paths as the single-address watch. Ring buffer; host drains it. */
++#define ROMDEV_RANGE_CAP 4096
++unsigned int  romdev_range_lo      = 0;
++unsigned int  romdev_range_hi      = 0;
++int           romdev_range_enabled = 0;
++int           romdev_range_mode    = 0;     /* 1=read, 2=write, 3=both */
++unsigned int  romdev_range_pc  [ROMDEV_RANGE_CAP];
++unsigned int  romdev_range_addr[ROMDEV_RANGE_CAP];
++unsigned char romdev_range_val [ROMDEV_RANGE_CAP];
++unsigned int  romdev_range_count   = 0;     /* total events seen (may exceed CAP) */
++unsigned int  romdev_range_stored  = 0;     /* events actually stored (<= CAP) */
++
++/* romdev PC COVERAGE log (discovery): record DISTINCT PCs executed within an
++ * address window [lo,hi] over a window of frames — "what code runs here?". Linear
++ * de-dup against the stored set (cheap for the small windows this targets). */
++#define ROMDEV_COV_CAP 8192
++unsigned int  romdev_cov_lo      = 0;
++unsigned int  romdev_cov_hi      = 0;
++int           romdev_cov_enabled = 0;
++unsigned int  romdev_cov_pcs[ROMDEV_COV_CAP];
++unsigned int  romdev_cov_count   = 0;       /* distinct PCs stored (<= CAP) */
++unsigned int  romdev_cov_total   = 0;       /* total in-range dispatches seen */
++
++/* Append one range-watch event (called from the read/write hooks via the macro
++ * in m68kcpu.h). */
++void romdev_range_log(unsigned int pc, unsigned int addr, unsigned char val)
++{
++   romdev_range_count++;
++   if (romdev_range_stored < ROMDEV_RANGE_CAP) {
++      romdev_range_pc  [romdev_range_stored] = pc;
++      romdev_range_addr[romdev_range_stored] = addr;
++      romdev_range_val [romdev_range_stored] = val;
++      romdev_range_stored++;
++   }
++}
++
++/* Record a distinct in-window PC for the coverage log. */
++void romdev_cov_log(unsigned int pc)
++{
++   unsigned int i;
++   romdev_cov_total++;
++   for (i = 0; i < romdev_cov_count; i++) if (romdev_cov_pcs[i] == pc) return;
++   if (romdev_cov_count < ROMDEV_COV_CAP) romdev_cov_pcs[romdev_cov_count++] = pc;
++}
++
  
  /* ======================================================================== */
  /* =============================== CALLBACKS ============================== */
-@@ -284,6 +317,37 @@ void m68k_run(unsigned int cycles)
+@@ -284,6 +364,44 @@ void m68k_run(unsigned int cycles)
  
    while (m68k.cycles < cycles)
    {
++    /* romdev PC coverage log (discovery): record each DISTINCT in-window PC about
++     * to execute. Cheap when disabled (one int test). */
++    if (romdev_cov_enabled
++        && (unsigned int)REG_PC >= romdev_cov_lo
++        && (unsigned int)REG_PC <= romdev_cov_hi)
++      romdev_cov_log(REG_PC);
++
 +    /* romdev PC breakpoint / single-step: check BEFORE dispatching the next
 +     * instruction so REG_PC is the address about to execute. On a hit, freeze
 +     * here (break out of the loop) — the CPU state is now exactly at the
@@ -81,10 +135,10 @@ index 36112a5..b5dc914 100644
      m68ki_trace_t1() /* auto-disable (see m68kcpu.h) */
  
 diff --git a/core/m68k/m68kcpu.h b/core/m68k/m68kcpu.h
-index b702173..ff96120 100644
+index b702173..4771cfa 100644
 --- a/core/m68k/m68kcpu.h
 +++ b/core/m68k/m68kcpu.h
-@@ -674,6 +674,34 @@ INLINE uint m68ki_read_16(uint address);
+@@ -674,6 +674,49 @@ INLINE uint m68ki_read_16(uint address);
  INLINE uint m68ki_read_32(uint address);
  
  /* Write to the current data space */
@@ -116,29 +170,47 @@ index b702173..ff96120 100644
 +    } \
 +  } while (0)
 +
++/* romdev RANGE watch (discovery): log every {pc,addr,val} touching [lo,hi].
++ * `w` is 1 for a write, 0 for a read; romdev_range_mode 1=read 2=write 3=both. */
++extern unsigned int  romdev_range_lo, romdev_range_hi;
++extern int           romdev_range_enabled, romdev_range_mode;
++extern void          romdev_range_log(unsigned int pc, unsigned int addr, unsigned char val);
++extern int           romdev_cov_enabled;
++extern unsigned int  romdev_cov_lo, romdev_cov_hi;
++extern void          romdev_cov_log(unsigned int pc);
++#define ROMDEV_RANGE_M68K(a, v, w) do { \
++    if (romdev_range_enabled && (romdev_range_mode & ((w) ? 2 : 1)) \
++        && (unsigned int)(a) >= romdev_range_lo && (unsigned int)(a) <= romdev_range_hi) { \
++      romdev_range_log(REG_PC, (unsigned int)(a), (unsigned char)(v)); \
++    } \
++  } while (0)
++
  INLINE void m68ki_write_8(uint address, uint value);
  INLINE void m68ki_write_16(uint address, uint value);
  INLINE void m68ki_write_32(uint address, uint value);
-@@ -861,6 +889,8 @@ INLINE uint m68ki_read_8(uint address)
+@@ -861,6 +904,9 @@ INLINE uint m68ki_read_8(uint address)
    if (temp->read8) val = (*temp->read8)(ADDRESS_68K(address));
    else val = READ_BYTE(temp->base, (address) & 0xffff);
  
 +  ROMDEV_RD_M68K(address, val);
++  ROMDEV_RANGE_M68K(address, val, 0);
 +
  #ifdef HOOK_CPU
    if (UNLIKELY(cpu_hook))
      cpu_hook(HOOK_M68K_R, 1, address, val);
-@@ -881,6 +911,9 @@ INLINE uint m68ki_read_16(uint address)
+@@ -881,6 +927,11 @@ INLINE uint m68ki_read_16(uint address)
    if (temp->read16) val = (*temp->read16)(ADDRESS_68K(address));
    else val = *(uint16 *)(temp->base + ((address) & 0xffff));
  
 +  ROMDEV_RD_M68K(address, val >> 8);
 +  ROMDEV_RD_M68K(address + 1, val);
++  ROMDEV_RANGE_M68K(address, val >> 8, 0);
++  ROMDEV_RANGE_M68K(address + 1, val, 0);
 +
  #ifdef HOOK_CPU
    if (UNLIKELY(cpu_hook))
      cpu_hook(HOOK_M68K_R, 2, address, val);
-@@ -905,6 +938,11 @@ INLINE uint m68ki_read_32(uint address)
+@@ -905,6 +956,15 @@ INLINE uint m68ki_read_32(uint address)
    if (temp->read16) val |= (*temp->read16)(ADDRESS_68K(address+2));
    else val |= m68k_read_immediate_16(address+2);
  
@@ -146,29 +218,36 @@ index b702173..ff96120 100644
 +  ROMDEV_RD_M68K(address + 1, val >> 16);
 +  ROMDEV_RD_M68K(address + 2, val >> 8);
 +  ROMDEV_RD_M68K(address + 3, val);
++  ROMDEV_RANGE_M68K(address,     val >> 24, 0);
++  ROMDEV_RANGE_M68K(address + 1, val >> 16, 0);
++  ROMDEV_RANGE_M68K(address + 2, val >> 8,  0);
++  ROMDEV_RANGE_M68K(address + 3, val,       0);
 +
  #ifdef HOOK_CPU
    if (UNLIKELY(cpu_hook))
      cpu_hook(HOOK_M68K_R, 4, address, val);
-@@ -917,6 +955,7 @@ INLINE void m68ki_write_8(uint address, uint value)
+@@ -917,6 +977,8 @@ INLINE void m68ki_write_8(uint address, uint value)
  {
    cpu_memory_map *temp;
  
 +  ROMDEV_WP_M68K(address, value);
++  ROMDEV_RANGE_M68K(address, value, 1);
    m68ki_set_fc(FLAG_S | FUNCTION_CODE_USER_DATA) /* auto-disable (see m68kcpu.h) */
  
  #ifdef HOOK_CPU
-@@ -933,6 +972,9 @@ INLINE void m68ki_write_16(uint address, uint value)
+@@ -933,6 +995,11 @@ INLINE void m68ki_write_16(uint address, uint value)
  {
    cpu_memory_map *temp;
  
 +  /* word write covers address and address+1 */
 +  ROMDEV_WP_M68K(address, value >> 8);
 +  ROMDEV_WP_M68K(address + 1, value);
++  ROMDEV_RANGE_M68K(address, value >> 8, 1);
++  ROMDEV_RANGE_M68K(address + 1, value, 1);
    m68ki_set_fc(FLAG_S | FUNCTION_CODE_USER_DATA) /* auto-disable (see m68kcpu.h) */
    m68ki_check_address_error(address, MODE_WRITE, FLAG_S | FUNCTION_CODE_USER_DATA); /* auto-disable (see m68kcpu.h) */
  
-@@ -950,6 +992,11 @@ INLINE void m68ki_write_32(uint address, uint value)
+@@ -950,6 +1017,15 @@ INLINE void m68ki_write_32(uint address, uint value)
  {
    cpu_memory_map *temp;
  
@@ -177,9 +256,83 @@ index b702173..ff96120 100644
 +  ROMDEV_WP_M68K(address + 1, value >> 16);
 +  ROMDEV_WP_M68K(address + 2, value >> 8);
 +  ROMDEV_WP_M68K(address + 3, value);
++  ROMDEV_RANGE_M68K(address,     value >> 24, 1);
++  ROMDEV_RANGE_M68K(address + 1, value >> 16, 1);
++  ROMDEV_RANGE_M68K(address + 2, value >> 8,  1);
++  ROMDEV_RANGE_M68K(address + 3, value,       1);
    m68ki_set_fc(FLAG_S | FUNCTION_CODE_USER_DATA) /* auto-disable (see m68kcpu.h) */
    m68ki_check_address_error(address, MODE_WRITE, FLAG_S | FUNCTION_CODE_USER_DATA) /* auto-disable (see m68kcpu.h) */
  
+diff --git a/core/vdp_ctrl.c b/core/vdp_ctrl.c
+index bd454f6..091b5e1 100644
+--- a/core/vdp_ctrl.c
++++ b/core/vdp_ctrl.c
+@@ -158,6 +158,34 @@ static int *fifo_timing;        /* FIFO slots timing table */
+ static int hblank_start_cycle;  /* HBLANK flag set cycle */
+ static int hblank_end_cycle;    /* HBLANK flag clear cycle */
+ 
++/* romdev VDP-DMA log (discovery): record every mem->VDP DMA as
++ * {vramDest, source, length, code}. The agent filters by VRAM dest to answer
++ * "which DMA wrote the tile at VRAM 0xNNNN and where from?" — the targeted
++ * version of traceVramSource. Genesis-only (VDP DMA is a Genesis concept).
++ * Ring buffer; host drains it. dma_code records the VDP code reg (low bits pick
++ * VRAM/CRAM/VSRAM) so the host can tell a VRAM upload from a palette DMA. */
++#define ROMDEV_DMA_CAP 1024
++unsigned int romdev_dma_enabled = 0;
++unsigned int romdev_dma_dest[ROMDEV_DMA_CAP];
++unsigned int romdev_dma_src [ROMDEV_DMA_CAP];
++unsigned int romdev_dma_len [ROMDEV_DMA_CAP];
++unsigned int romdev_dma_code[ROMDEV_DMA_CAP];
++unsigned int romdev_dma_count  = 0;   /* total DMAs seen */
++unsigned int romdev_dma_stored = 0;   /* stored (<= CAP) */
++
++static void romdev_dma_log(unsigned int dest, unsigned int src, unsigned int len, unsigned int codeReg)
++{
++  if (!romdev_dma_enabled) return;
++  romdev_dma_count++;
++  if (romdev_dma_stored < ROMDEV_DMA_CAP) {
++    romdev_dma_dest[romdev_dma_stored] = dest;
++    romdev_dma_src [romdev_dma_stored] = src;
++    romdev_dma_len [romdev_dma_stored] = len;
++    romdev_dma_code[romdev_dma_stored] = codeReg;
++    romdev_dma_stored++;
++  }
++}
++
+  /* set Z80 or 68k interrupt lines */
+ static void (*set_irq_line)(unsigned int level);
+ static void (*set_irq_line_delay)(unsigned int level);
+@@ -3089,6 +3117,10 @@ static void vdp_dma_68k_ext(unsigned int length)
+   /* 68k bus source address */
+   uint32 source = (reg[23] << 17) | (dma_src << 1);
+ 
++  /* romdev: log this mem->VDP DMA (dest VRAM/CRAM/VSRAM addr, ROM source byte
++   * addr, length in WORDS, VDP code reg). length is the word count; *2 = bytes. */
++  romdev_dma_log((unsigned int)addr, source, length, (unsigned int)code);
++
+   do
+   {
+     /* Read data word from 68k bus */
+@@ -3124,6 +3156,9 @@ static void vdp_dma_68k_ram(unsigned int length)
+   /* 68k bus source address */
+   uint32 source = (reg[23] << 17) | (dma_src << 1);
+ 
++  /* romdev: log work-RAM→VDP DMA too (SGDK font/tile uploads stage via RAM). */
++  romdev_dma_log((unsigned int)addr, source, length, (unsigned int)code);
++
+   do
+   {
+     /* access Work-RAM by default  */
+@@ -3152,6 +3187,9 @@ static void vdp_dma_68k_io(unsigned int length)
+   /* 68k bus source address */
+   uint32 source = (reg[23] << 17) | (dma_src << 1);
+ 
++  /* romdev: log I/O-area→VDP DMA too. */
++  romdev_dma_log((unsigned int)addr, source, length, (unsigned int)code);
++
+   do
+   {
+     /* Z80 area */
 diff --git a/core/z80/z80.c b/core/z80/z80.c
 index 74d5053..616983c 100644
 --- a/core/z80/z80.c
@@ -295,10 +448,10 @@ index 74d5053..616983c 100644
  /****************************************************************************
   * Get all registers in given buffer
 diff --git a/libretro/libretro.c b/libretro/libretro.c
-index 798c6cc..64b6d11 100644
+index 798c6cc..2f6bc5d 100644
 --- a/libretro/libretro.c
 +++ b/libretro/libretro.c
-@@ -3743,6 +3743,155 @@ void retro_unload_game(void)
+@@ -3743,6 +3743,268 @@ void retro_unload_game(void)
  
  unsigned retro_get_region(void) { return vdp_pal ? RETRO_REGION_PAL : RETRO_REGION_NTSC; }
  
@@ -409,6 +562,119 @@ index 798c6cc..64b6d11 100644
 +   if (clearHit) { romdev_pc_hit = 0; }
 +}
 +
++/* romdev register read/write — the inverse of getCPUState, used by the host's
++ * callSubroutine / decompressWith (set A0=src/A1=dst/PC=entry, push a sentinel
++ * return, run to it, capture the output). romdev reg-id convention (STABLE across
++ * all cores so the host passes the same ids): 0..7 = D0..D7, 8..15 = A0..A7,
++ * 16 = PC, 17 = SR, 18 = SP. Returns 0 on success, -1 on an unknown id. */
++extern void m68k_set_reg(m68k_register_t reg, unsigned int value);
++extern unsigned int m68k_get_reg(m68k_register_t reg);
++
++int romdev_setreg(int regId, unsigned int value)
++{
++   if (regId >= 0 && regId <= 7)        { m68k_set_reg((m68k_register_t)(M68K_REG_D0 + regId),        value); return 0; }
++   if (regId >= 8 && regId <= 15)       { m68k_set_reg((m68k_register_t)(M68K_REG_A0 + (regId - 8)),  value); return 0; }
++   if (regId == 16)                     { m68k_set_reg(M68K_REG_PC, value); return 0; }
++   if (regId == 17)                     { m68k_set_reg(M68K_REG_SR, value); return 0; }
++   if (regId == 18)                     { m68k_set_reg(M68K_REG_SP, value); return 0; }
++   return -1;
++}
++
++unsigned int romdev_getreg(int regId)
++{
++   if (regId >= 0 && regId <= 7)        return m68k_get_reg((m68k_register_t)(M68K_REG_D0 + regId));
++   if (regId >= 8 && regId <= 15)       return m68k_get_reg((m68k_register_t)(M68K_REG_A0 + (regId - 8)));
++   if (regId == 16)                     return m68k_get_reg(M68K_REG_PC);
++   if (regId == 17)                     return m68k_get_reg(M68K_REG_SR);
++   if (regId == 18)                     return m68k_get_reg(M68K_REG_SP);
++   return 0;
++}
++
++/* romdev RANGE watch (discovery) — log every read/write in [lo,hi]. mode: 1=read
++ * 2=write 3=both. Arm clears the buffer. */
++extern unsigned int  romdev_range_lo, romdev_range_hi;
++extern int           romdev_range_enabled, romdev_range_mode;
++extern unsigned int  romdev_range_pc[], romdev_range_addr[];
++extern unsigned char romdev_range_val[];
++extern unsigned int  romdev_range_count, romdev_range_stored;
++
++void romdev_range_set(unsigned int lo, unsigned int hi, int mode, int enabled)
++{
++   romdev_range_lo = lo; romdev_range_hi = hi;
++   romdev_range_mode = mode ? mode : 3;
++   romdev_range_enabled = enabled ? 1 : 0;
++   romdev_range_count = 0; romdev_range_stored = 0;
++}
++
++/* Drain up to `max` events into out[] as packed triples [pc,addr,val,pc,addr,val,...]
++ * (val in the low byte of its uint32 slot). Returns events written. out2 (size 2)
++ * gets [totalSeen, stored] so the caller knows if the ring overflowed. */
++unsigned int romdev_range_get(unsigned int *out, unsigned int max, unsigned int *out2)
++{
++   unsigned int i, n = romdev_range_stored;
++   if (out2) { out2[0] = romdev_range_count; out2[1] = romdev_range_stored; }
++   if (!out) return 0;
++   if (n > max) n = max;
++   for (i = 0; i < n; i++) {
++      out[i*3 + 0] = romdev_range_pc[i];
++      out[i*3 + 1] = romdev_range_addr[i];
++      out[i*3 + 2] = (unsigned int)romdev_range_val[i];
++   }
++   return n;
++}
++
++/* romdev PC COVERAGE log (discovery) — distinct in-window PCs over a run. */
++extern int           romdev_cov_enabled;
++extern unsigned int  romdev_cov_lo, romdev_cov_hi;
++extern unsigned int  romdev_cov_pcs[], romdev_cov_count, romdev_cov_total;
++
++void romdev_cov_set(unsigned int lo, unsigned int hi, int enabled)
++{
++   romdev_cov_lo = lo; romdev_cov_hi = hi;
++   romdev_cov_enabled = enabled ? 1 : 0;
++   romdev_cov_count = 0; romdev_cov_total = 0;
++}
++
++/* Copy up to `max` distinct PCs into out[]. out2 (size 2) gets [distinct,total]. */
++unsigned int romdev_cov_get(unsigned int *out, unsigned int max, unsigned int *out2)
++{
++   unsigned int i, n = romdev_cov_count;
++   if (out2) { out2[0] = romdev_cov_count; out2[1] = romdev_cov_total; }
++   if (!out) return 0;
++   if (n > max) n = max;
++   for (i = 0; i < n; i++) out[i] = romdev_cov_pcs[i];
++   return n;
++}
++
++/* romdev VDP-DMA log (discovery, Genesis-only) — record every mem->VDP DMA
++ * {vramDest, romSource, lengthWords, vdpCode}; the host filters by VRAM dest. */
++extern unsigned int romdev_dma_enabled;
++extern unsigned int romdev_dma_dest[], romdev_dma_src[], romdev_dma_len[], romdev_dma_code[];
++extern unsigned int romdev_dma_count, romdev_dma_stored;
++
++void romdev_dmawatch_set(int enabled)
++{
++   romdev_dma_enabled = enabled ? 1 : 0;
++   romdev_dma_count = 0; romdev_dma_stored = 0;
++}
++
++/* Drain up to `max` DMAs as packed quads [dest,src,lenWords,code,...].
++ * out2 (size 2) gets [totalSeen, stored]. */
++unsigned int romdev_dmawatch_get(unsigned int *out, unsigned int max, unsigned int *out2)
++{
++   unsigned int i, n = romdev_dma_stored;
++   if (out2) { out2[0] = romdev_dma_count; out2[1] = romdev_dma_stored; }
++   if (!out) return 0;
++   if (n > max) n = max;
++   for (i = 0; i < n; i++) {
++      out[i*4 + 0] = romdev_dma_dest[i];
++      out[i*4 + 1] = romdev_dma_src[i];
++      out[i*4 + 2] = romdev_dma_len[i];
++      out[i*4 + 3] = romdev_dma_code[i];
++   }
++   return n;
++}
++
 +/* rom-dev-mcp extension: custom memory region IDs above libretro standard.
 + * Mirrors fceumm + snes9x patches. Exposes Genesis sound/video chip state
 + * so inspectSprites / inspectPalette / getCPUState / etc. can read live
@@ -454,7 +720,7 @@ index 798c6cc..64b6d11 100644
  void *retro_get_memory_data(unsigned id)
  {
     switch (id)
-@@ -3751,6 +3900,35 @@ void *retro_get_memory_data(unsigned id)
+@@ -3751,6 +4013,35 @@ void *retro_get_memory_data(unsigned id)
           return sram.on ? sram.sram : NULL;
        case RETRO_MEMORY_SYSTEM_RAM:
           return work_ram;
@@ -490,7 +756,7 @@ index 798c6cc..64b6d11 100644
        default:
           return NULL;
     }
-@@ -3802,6 +3980,21 @@ size_t retro_get_memory_size(unsigned id)
+@@ -3802,6 +4093,21 @@ size_t retro_get_memory_size(unsigned id)
              return 0x2000; /* 8KB internal RAM */
        }
  

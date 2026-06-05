@@ -1019,6 +1019,227 @@ export class LibretroHost {
     return { pc: st.lastPC, hit: st.hit };
   }
 
+  // ── Register write + callSubroutine (item 1) ────────────────────────────────
+  // romdev reg-id convention (stable across all patched cores): for the m68k
+  // family 0..7=D0..D7, 8..15=A0..A7, 16=PC, 17=SR, 18=SP. Other CPU families map
+  // their own registers onto the same id space (documented per core).
+
+  /** True when this core build exposes register-write + callSubroutine. */
+  setRegSupported() {
+    const mod = this.mod;
+    return !!(mod && typeof mod._romdev_setreg === "function" && typeof mod._romdev_getreg === "function");
+  }
+
+  /** Write one CPU register by romdev reg-id. */
+  setReg(regId, value) {
+    const mod = this._needMod();
+    if (typeof mod._romdev_setreg !== "function") {
+      throw new Error("register write not supported by this core (rebuild with romdev_setreg).");
+    }
+    mod._romdev_setreg(regId | 0, value >>> 0);
+  }
+
+  /** Read one CPU register by romdev reg-id. */
+  getReg(regId) {
+    const mod = this._needMod();
+    if (typeof mod._romdev_getreg !== "function") {
+      throw new Error("register read not supported by this core (rebuild with romdev_getreg).");
+    }
+    return mod._romdev_getreg(regId | 0) >>> 0;
+  }
+
+  /**
+   * Call a subroutine in the live core and run until it returns: set the given
+   * registers (by romdev reg-id), push a SENTINEL return address on the stack,
+   * set PC, then run with a PC breakpoint armed on the sentinel until the routine
+   * RTSes back to it. Sandboxed by default — snapshots full core state first and
+   * restores it after, so the live game is untouched (the dst buffer the routine
+   * wrote is captured into a savestate-independent copy? no — it lives in core
+   * RAM; the caller reads it via readMemory BEFORE restore by passing a `capture`
+   * callback). Returns { returned, framesRun, finalRegs } (+ whatever `capture`
+   * returns). The general primitive behind decompressWith / "drive the ROM's own
+   * codec." regIds map per the convention above. sentinelPC must be an address
+   * that won't otherwise be executed (default: 0 — the ROM's reset/0 vector area,
+   * unlikely mid-run; override if it collides).
+   *
+   * @param {object} a
+   * @param {number} a.pc            entry PC of the subroutine
+   * @param {Record<number,number>} a.regs  reg-id → value to set before the call
+   * @param {number} [a.spReg=18]    the reg-id of the stack pointer (m68k: 18)
+   * @param {number} [a.pcReg=16]    the reg-id of the program counter (m68k: 16)
+   * @param {number} [a.sentinelPC=0] return address pushed on the stack (4 bytes for m68k)
+   * @param {number} [a.sentinelBytes=4] how wide the return address is on the stack
+   * @param {number} [a.maxFrames=600] cap so a runaway can't hang
+   * @param {boolean} [a.sandbox=true] snapshot+restore around the call
+   * @param {(host:LibretroHost)=>any} [a.capture] read result from core RAM BEFORE restore
+   */
+  callSubroutine(a) {
+    const mod = this._needMod();
+    if (!this.status.loaded) throw new Error("no media loaded");
+    if (!this.setRegSupported()) {
+      throw new Error("callSubroutine not supported by this core (rebuild with romdev_setreg/romdev_getreg).");
+    }
+    if (!this.pcBreakSupported()) {
+      throw new Error("callSubroutine needs the PC breakpoint (romdev_pcbreak) too.");
+    }
+    const {
+      pc, regs = {}, spReg = 18, pcReg = 16, sentinelPC = 0,
+      sentinelBytes = 4, maxFrames = 600, sandbox = true, capture,
+    } = a;
+
+    const snapshot = sandbox ? this.serializeState() : null;
+    let captured, returned = false, framesRun = 0;
+    try {
+      // Set caller-supplied registers.
+      for (const [id, val] of Object.entries(regs)) this.setReg(Number(id), val);
+      // Push the sentinel return address: SP -= width, write it there, set SP.
+      let sp = this.getReg(spReg) >>> 0;
+      sp = (sp - sentinelBytes) >>> 0;
+      // m68k is big-endian; write the return address as `sentinelBytes` big-endian
+      // bytes into work RAM at sp. (system_ram covers the 68k work-RAM window for
+      // the address range a normal SP uses on Genesis: $FF0000-$FFFFFF.)
+      const buf = new Uint8Array(sentinelBytes);
+      for (let i = 0; i < sentinelBytes; i++) buf[i] = (sentinelPC >>> (8 * (sentinelBytes - 1 - i))) & 0xFF;
+      this.writeMemoryCpuAddr(sp, buf);
+      this.setReg(spReg, sp);
+      this.setReg(pcReg, pc >>> 0);
+
+      // Run until the routine RTSes back to the sentinel.
+      this.setPCBreak(sentinelPC >>> 0, true, false);
+      try {
+        framesRun = this._runFramesExclusive(() => {
+          if (this.getPCBreak(false).hit) { returned = true; return true; }
+          return false;
+        }, maxFrames);
+      } finally {
+        this.setPCBreak(0, false, false);
+        this.getPCBreak(true);
+      }
+      // Capture the result from core RAM BEFORE any restore.
+      if (capture) captured = capture(this);
+    } finally {
+      if (snapshot) this.unserializeState(snapshot);
+    }
+    return { returned, framesRun, ...(captured !== undefined ? { captured } : {}) };
+  }
+
+  /** Write bytes to a CPU address (resolves the platform's CPU-space→region map).
+   *  Used by callSubroutine to seed the stack. Genesis: $FF0000-$FFFFFF → system_ram. */
+  writeMemoryCpuAddr(cpuAddr, bytes) {
+    // Genesis 68k work RAM is $FF0000-$FFFFFF, mirrored; system_ram offset =
+    // cpuAddr & 0xFFFF. Other platforms add their own mapping as setReg lands.
+    if (this.status.platform === "genesis" || this.status.platform === "megadrive" || this.status.platform === "md") {
+      this.writeMemory("system_ram", cpuAddr & 0xFFFF, bytes);
+      return;
+    }
+    // Fallback: treat cpuAddr as a system_ram offset.
+    this.writeMemory("system_ram", cpuAddr, bytes);
+  }
+
+  // ── Range watch + PC coverage (item 2, discovery) ───────────────────────────
+
+  /** True when this core exposes the range watch + coverage log. */
+  rangeWatchSupported() {
+    const mod = this.mod;
+    return !!(mod && typeof mod._romdev_range_set === "function" && typeof mod._romdev_cov_set === "function");
+  }
+
+  /**
+   * Run `frames` frames logging EVERY read/write touching [lo,hi] (mode 1=read,
+   * 2=write, 3=both) — the list-all-hits discovery tool. Returns
+   * { events:[{pc,address,value}], total, stored, truncated }.
+   */
+  watchRange(lo, hi, mode, frames) {
+    const mod = this._needMod();
+    if (!this.status.loaded) throw new Error("no media loaded");
+    if (!this.rangeWatchSupported()) throw new Error("range watch not supported by this core.");
+    const m = mode === "read" ? 1 : mode === "write" ? 2 : 3;
+    mod._romdev_range_set(lo >>> 0, hi >>> 0, m, 1);
+    try {
+      this._runFramesExclusive(() => false, frames);
+    } finally {
+      // leave armed=0 after draining
+    }
+    // Drain: out2=[total,stored]; out=packed triples.
+    const CAP = 4096;
+    const outPtr = mod._malloc(CAP * 3 * 4);
+    const out2Ptr = mod._malloc(8);
+    try {
+      const n = mod._romdev_range_get(outPtr, CAP, out2Ptr);
+      const out2 = new Uint32Array(mod.HEAPU8.buffer, out2Ptr, 2);
+      const total = out2[0], stored = out2[1];
+      const u = new Uint32Array(mod.HEAPU8.buffer, outPtr, n * 3);
+      const events = [];
+      for (let i = 0; i < n; i++) events.push({ pc: u[i * 3], address: u[i * 3 + 1], value: u[i * 3 + 2] & 0xFF });
+      mod._romdev_range_set(0, 0, 0, 0); // disarm
+      return { events, total, stored, truncated: total > stored };
+    } finally {
+      mod._free(outPtr); mod._free(out2Ptr);
+    }
+  }
+
+  /**
+   * Run `frames` frames recording every DISTINCT PC executed within [lo,hi] — the
+   * coverage trace ("what code runs here?"). Returns { pcs:[...], distinct, total, truncated }.
+   */
+  logPCRange(lo, hi, frames) {
+    const mod = this._needMod();
+    if (!this.status.loaded) throw new Error("no media loaded");
+    if (!this.rangeWatchSupported()) throw new Error("coverage trace not supported by this core.");
+    mod._romdev_cov_set(lo >>> 0, hi >>> 0, 1);
+    this._runFramesExclusive(() => false, frames);
+    const CAP = 8192;
+    const outPtr = mod._malloc(CAP * 4);
+    const out2Ptr = mod._malloc(8);
+    try {
+      const n = mod._romdev_cov_get(outPtr, CAP, out2Ptr);
+      const out2 = new Uint32Array(mod.HEAPU8.buffer, out2Ptr, 2);
+      const distinct = out2[0], total = out2[1];
+      const u = new Uint32Array(mod.HEAPU8.buffer, outPtr, n);
+      const pcs = Array.from(u.slice(0, n));
+      mod._romdev_cov_set(0, 0, 0); // disarm
+      return { pcs, distinct, total, truncated: distinct > n };
+    } finally {
+      mod._free(outPtr); mod._free(out2Ptr);
+    }
+  }
+
+  // ── Targeted VDP-DMA watch (item 3, Genesis only) ───────────────────────────
+
+  /** True when this core exposes the VDP-DMA log (Genesis only). */
+  dmaWatchSupported() {
+    const mod = this.mod;
+    return !!(mod && typeof mod._romdev_dmawatch_set === "function" && typeof mod._romdev_dmawatch_get === "function");
+  }
+
+  /**
+   * Run `frames` frames logging every mem→VDP DMA. Returns
+   * { dmas:[{vramDest, source, lengthWords, code}], total, stored, truncated }.
+   * The caller filters by vramDest. Genesis-only.
+   */
+  watchDma(frames) {
+    const mod = this._needMod();
+    if (!this.status.loaded) throw new Error("no media loaded");
+    if (!this.dmaWatchSupported()) throw new Error("VDP-DMA watch not supported by this core (Genesis only).");
+    mod._romdev_dmawatch_set(1);
+    this._runFramesExclusive(() => false, frames);
+    const CAP = 1024;
+    const outPtr = mod._malloc(CAP * 4 * 4);
+    const out2Ptr = mod._malloc(8);
+    try {
+      const n = mod._romdev_dmawatch_get(outPtr, CAP, out2Ptr);
+      const out2 = new Uint32Array(mod.HEAPU8.buffer, out2Ptr, 2);
+      const total = out2[0], stored = out2[1];
+      const u = new Uint32Array(mod.HEAPU8.buffer, outPtr, n * 4);
+      const dmas = [];
+      for (let i = 0; i < n; i++) dmas.push({ vramDest: u[i * 4], source: u[i * 4 + 1], lengthWords: u[i * 4 + 2], code: u[i * 4 + 3] });
+      mod._romdev_dmawatch_set(0); // disarm
+      return { dmas, total, stored, truncated: total > stored };
+    } finally {
+      mod._free(outPtr); mod._free(out2Ptr);
+    }
+  }
+
   pause() {
     this.status.paused = true;
   }
