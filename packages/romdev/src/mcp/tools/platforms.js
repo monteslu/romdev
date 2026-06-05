@@ -2,6 +2,8 @@ import { CORES, listAvailableCores, resolveCore } from "../../cores/registry.js"
 import { TOOLCHAINS } from "../../toolchains/registry.js";
 import { getLanguageOptions } from "../../toolchains/index.js";
 import { jsonContent, safeTool } from "../util.js";
+import { listToolchainsCore, installToolchainCore } from "./toolchain.js";
+import { listPlatformDocsCore, getPlatformDocCore } from "./platform-docs.js";
 
 // Per-platform quirks the agent should know up front. Surfaced via
 // listPlatforms so they don't have to re-discover via failed builds.
@@ -65,12 +67,8 @@ const PLATFORM_QUIRKS = {
   },
 };
 
-export function registerPlatformTools(server, z) {
-  server.tool(
-    "listPlatforms",
-    "List every retro platform romdev can run. For each platform: emulator core, toolchain(s), the available programming languages (with the documented default), and any platform-specific quirks. Use this first to discover what's possible — and to check whether a non-default language is available before asking buildSource for it.",
-    {},
-    safeTool(async () => {
+/** op:'list' — every platform with core/toolchains/languages/quirks. */
+export function listPlatformsCore() {
       const available = new Set(listAvailableCores());
       const platforms = Object.entries(CORES).map(([id, info]) => {
         const toolchains = Object.values(TOOLCHAINS)
@@ -83,31 +81,59 @@ export function registerPlatformTools(server, z) {
           coreAvailable: available.has(id),
           toolchains,
         };
-        // Surface the language matrix: defaultLanguage + per-language
-        // {toolchain, available, note}. Lets agents see "I can ask for C
-        // on Genesis but the SGDK toolchain isn't bundled yet" without
-        // trial-and-error. Defaults are chosen for vibe-coding (smallest
-        // toolchain, fastest build, best LLM fluency) — picky users
-        // override via the `language` parameter on buildSource.
         const langs = getLanguageOptions(id);
         if (langs) entry.languages = langs;
         if (PLATFORM_QUIRKS[id]) entry.quirks = PLATFORM_QUIRKS[id];
         return entry;
       });
-      return jsonContent({ platforms });
-    }),
-  );
+      return { platforms };
+}
 
-  server.tool(
-    "resolvePlatform",
-    "Return the resolved core paths for a platform (debugging aid).",
-    {
-      platform: z.string().describe("Platform id (e.g. 'nes', 'gb', 'genesis')."),
-    },
-    safeTool(async ({ platform }) => {
+/** op:'resolve' — resolved core paths for a platform (debugging aid). */
+export function resolvePlatformCore({ platform }) {
       const r = resolveCore(platform);
       if (!r) throw new Error(`no core available for platform '${platform}'`);
-      return jsonContent(r);
+      return r;
+}
+
+export function registerPlatformTools(server, z) {
+  server.tool(
+    "platform",
+    "Platform/toolchain/docs discovery — what romdev can run and how. `op`: 'list' | 'resolve' | 'toolchains' | " +
+    "'docs' | 'doc'.\n" +
+    "'list': every platform with its emulator core, toolchain(s), available languages (+ documented default), and " +
+    "platform-specific quirks. Call this FIRST to discover what's possible + check a non-default language is " +
+    "available before asking build for it.\n" +
+    "'resolve': resolved core paths for a platform (debugging aid).\n" +
+    "'toolchains': the bundled homebrew toolchains (all Tier-1 = bundled WASM, no install). Pass `id` to confirm a " +
+    "specific toolchain's install status (a no-op in v1 — everything's bundled).\n" +
+    "'docs': the doc names available for a platform. 'doc': the full markdown of one (`name`: mental_model / " +
+    "troubleshooting / upstream_sources; `platform:'romhacking'` + `name:'playbook'` for the RE decision tree). " +
+    "Read MENTAL_MODEL before writing code, and the romhacking playbook before a hack.",
+    {
+      op: z.enum(["list", "resolve", "toolchains", "docs", "doc"]).describe("list platforms; resolve core paths; list toolchains; list a platform's docs; or read one doc."),
+      platform: z.string().optional().describe("op=resolve/docs/doc: platform id (e.g. nes, gb, genesis; 'romhacking' for the RE playbook)."),
+      id: z.string().optional().describe("op=toolchains: confirm a specific toolchain's status (e.g. 'cc65')."),
+      name: z.string().optional().describe("op=doc: which doc — mental_model | troubleshooting | upstream_sources | playbook."),
+    },
+    safeTool(async (args) => {
+      switch (args.op) {
+        case "list":    return jsonContent(listPlatformsCore());
+        case "resolve": {
+          if (!args.platform) throw new Error("platform({op:'resolve'}): `platform` is required.");
+          return jsonContent(resolvePlatformCore(args));
+        }
+        case "toolchains": return jsonContent(args.id ? installToolchainCore(args) : listToolchainsCore());
+        case "docs": {
+          if (!args.platform) throw new Error("platform({op:'docs'}): `platform` is required.");
+          return jsonContent(await listPlatformDocsCore(args));
+        }
+        case "doc": {
+          if (!args.platform || !args.name) throw new Error("platform({op:'doc'}): `platform` and `name` are required.");
+          return await getPlatformDocCore(args);
+        }
+        default: throw new Error(`platform: unknown op '${args.op}'`);
+      }
     }),
   );
 }

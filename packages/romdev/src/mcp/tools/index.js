@@ -301,7 +301,7 @@ export function registerTools(server, z, sessionKey) {
 // by registering each category into a dummy server and comparing diffs.
 const TOOL_OWNER = {
   // platforms category
-  listPlatforms: "platforms", resolvePlatform: "platforms",
+  platform: "platforms",
   // run category
   loadMedia: "run", unloadMedia: "run", resetCore: "run", pauseCore: "run", resumeCore: "run", listMediaKinds: "run", getMediaInfo: "run", listCores: "run",
   stepFrames: "run", screenshot: "run", stepAndScreenshot: "run",
@@ -338,7 +338,6 @@ const TOOL_OWNER = {
   // project category
   createProject: "project", createGame: "project",
   starterSnippets: "project",
-  listPlatformDocs: "project", getPlatformDoc: "project",
   // show category (was: advanced)
   playtest: "show", playtestStop: "show", playtestStatus: "show", playtestFramebuffer: "show",
   // advanced category
@@ -347,7 +346,7 @@ const TOOL_OWNER = {
   recordSession: "advanced",
   // entry tier itself (so describeTool works for them)
   listCategories: "entry", loadCategory: "entry", describeTool: "entry", getStatus: "entry",
-  buildSource: "entry", runSource: "entry", listToolchains: "entry", installToolchain: "entry", listRunnableFormats: "entry",
+  buildSource: "entry", runSource: "entry", listRunnableFormats: "entry",
 };
 
 function ownerCategoryOf(name) {
