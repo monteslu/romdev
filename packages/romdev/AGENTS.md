@@ -444,9 +444,9 @@ CPU *at the instruction* and read it:
   EXACT instruction PC that READ an address (who *consumes* a value).
 - **`stepInstruction()`** — CPU-level single-step; pair with `getCPUState` to watch
   registers change one instruction at a time.
-- These work on all 14 platforms (every bundled CPU family). (PC Engine has no
-  write watchpoint, so `findWriter` is unavailable there — anchor with `runUntilRead`
-  or a known code address instead.)
+- These work on all 14 platforms (every bundled CPU family) — including `findWriter`
+  (as of 0.6.0 PC Engine gained its write watchpoint, so no platform is the exception
+  anymore).
 
 ```js
 findWriter({ address:0xFF2000 }) → { pc:"$49E", ... }   // get a real instruction PC
