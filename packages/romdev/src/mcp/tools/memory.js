@@ -219,6 +219,55 @@ export function registerMemoryTools(server, z, sessionKey) {
     }),
   );
 
+  server.tool(
+    "readCartRom",
+    "Read the LOADED CARTRIDGE ROM (the program image the core is running), as hex. This is the answer to the " +
+    "basic patch-confirmation question: 'is the emulator actually running my patched bytes?' — read the offset you " +
+    "patched and check the value, instead of inferring it from on-screen behavior. " +
+    "For un-banked platforms (Genesis/Mega Drive, GB/GBC, SMS/GG, Lynx, PCE) the file offset IS the CPU ROM " +
+    "address — offset N is the byte the CPU fetches at ROM $N, so confirming 'the running ROM has MONTES at " +
+    "0x21FF00' is one call. For NES (iNES header is skipped) and SNES (copier header skipped) the BYTES are " +
+    "correct but the CPU reaches them through a mapper, so a file offset is not a flat CPU address — the response's " +
+    "`mapped:true` + `note` say so. Reads come from the image handed to the core at load (a write to a region does " +
+    "NOT change this), so it reflects exactly what was loaded/patched-on-load. " +
+    "Reads of ≤" + INLINE_HEX_LIMIT + " bytes return hex inline; larger reads need outputPath (raw bytes written there) or inline:true.",
+    {
+      offset: z.number().int().min(0).default(0).describe("Byte offset into the cart ROM image (post-header). For un-banked platforms this equals the CPU ROM address."),
+      length: z.number().int().min(1).max(1 << 20).default(16).describe("Bytes to read (default 16, max 1MB)."),
+      outputPath: z.string().optional().describe(`Absolute path to write RAW bytes to. Required for reads >${INLINE_HEX_LIMIT} bytes unless inline:true.`),
+      inline: z.boolean().default(false).describe(`For reads >${INLINE_HEX_LIMIT} bytes: return hex in the response instead of writing to disk.`),
+    },
+    safeTool(async ({ offset, length, outputPath, inline }) => {
+      const host = getHost(sessionKey);
+      const rom = host.getCartRom();
+      if (offset >= rom.bytes.length) {
+        throw new Error(`readCartRom: offset ${offset} is past the end of the ${rom.platform} ROM (size ${rom.bytes.length}, header skipped ${rom.headerSkipped}).`);
+      }
+      const end = Math.min(offset + length, rom.bytes.length);
+      const slice = rom.bytes.subarray(offset, end);
+      const meta = {
+        platform: rom.platform,
+        offset,
+        length: slice.length,
+        romSize: rom.bytes.length,
+        headerSkipped: rom.headerSkipped,
+        mapped: rom.mapped,
+        ...(rom.base ? { cpuAddress: "0x" + (rom.base + offset).toString(16).toUpperCase() } : {}),
+        note: rom.note,
+      };
+      if (slice.length > INLINE_HEX_LIMIT && !inline) {
+        const { path, bytes: written } = writeOutput(slice, { outputPath, what: "readCartRom" });
+        return jsonContent({ ...meta, path, bytes: written });
+      }
+      const hex = Array.from(slice, (b) => b.toString(16).padStart(2, "0")).join("");
+      if (outputPath) {
+        const { path, bytes: written } = writeOutput(slice, { outputPath, what: "readCartRom" });
+        return jsonContent({ ...meta, path, bytes: written, hex });
+      }
+      return jsonContent({ ...meta, hex });
+    }),
+  );
+
   // ── snapshotMemory / diffMemory — "which bytes changed across this event?" ──
   server.tool(
     "snapshotMemory",

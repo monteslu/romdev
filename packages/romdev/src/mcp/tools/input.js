@@ -127,7 +127,9 @@ export function registerInputTools(server, z, sessionKey) {
 
   server.tool(
     "inputSequence",
-    "Run a scripted sequence of frame-by-frame inputs. Each entry: { input, frames }. Useful for replays and automated tests.",
+    "Run a scripted sequence of frame-by-frame inputs. Each entry: { input, frames }. Useful for replays and automated tests. " +
+    "For MENUS, prefer `navigate` — it advances on screen-change and tells you which presses landed, instead of fixed frame waits that drift with non-deterministic attract timing. " +
+    "For a long/flaky path, reach a screen once then saveState({path}) and loadState to retry deterministically.",
     {
       steps: z.array(
         z.object({
@@ -152,6 +154,82 @@ export function registerInputTools(server, z, sessionKey) {
         stepsRun: steps.length,
         framesRun: total,
         frameCount: host.status.frameCount,
+      });
+    }),
+  );
+
+  server.tool(
+    "navigate",
+    "Drive menus FAST by advancing on SCREEN CHANGE instead of guessing frame counts. Each step presses a button " +
+    "(single port 0), releases it, then steps frames UNTIL the framebuffer changes (or maxWaitFrames is hit) — and " +
+    "reports per step whether the press was actually CONSUMED (did the screen react). This is the fix for the " +
+    "'menus are a slow, flaky 3-call loop and presses get silently dropped' problem: one call walks a whole menu " +
+    "path and tells you exactly which presses landed. " +
+    "Each step: { button, holdFrames=2, maxWaitFrames=120, settleFrames=2 }. After the press it waits for the " +
+    "screen to change (transition/animation), then `settleFrames` more so the next read is stable. " +
+    "`consumed:false` on a step means the screen never changed — the game didn't react (wrong screen, press " +
+    "dropped, or it only polls on a specific frame); re-run that step or hold longer. " +
+    "Accepts the same native aliases as pressButton (Genesis c→y, SMS/GG 1/2→a/b). " +
+    "TIP for flaky paths: reach a known screen once, saveState({path}), then loadState to retry the next leg " +
+    "deterministically instead of re-driving the whole attract sequence.",
+    {
+      steps: z.array(
+        z.object({
+          button: z.enum([
+            "up", "down", "left", "right",
+            "north", "east", "south", "west",
+            "a", "b", "x", "y",
+            "l", "r", "l2", "r2", "l3", "r3",
+            "start", "select",
+            "c", "1", "2",
+          ]).describe("Button to press for this step (single port 0)."),
+          holdFrames: z.number().int().min(1).max(60).default(2).describe("Frames to hold the button before release (default 2)."),
+          maxWaitFrames: z.number().int().min(1).max(1200).default(120).describe("After release, wait at MOST this many frames for the screen to change (default 120 ≈ 2s). If it never changes, the step reports consumed:false."),
+          settleFrames: z.number().int().min(0).max(60).default(2).describe("Extra frames to step once the screen HAS changed, to let the transition/animation settle before the next step (default 2)."),
+        }),
+      ).min(1).max(64),
+    },
+    safeTool(async ({ steps }) => {
+      const host = getHost(sessionKey);
+      const platform = host.status.platform;
+      const results = [];
+      let totalFrames = 0;
+      for (const step of steps) {
+        const resolved = resolveButtonAlias(step.button, platform);
+        const before = host.framebufferHash();
+        // Press + hold.
+        const pressed = { ports: [{}, {}] };
+        pressed.ports[0][resolved] = true;
+        host.setInput(pressed);
+        host.stepFrames(step.holdFrames);
+        totalFrames += step.holdFrames;
+        // Release, then wait for the screen to react.
+        host.setInput({ ports: [{}, {}] });
+        host.stepFrames(1);
+        totalFrames += 1;
+        let waited = 0, consumed = false;
+        for (let i = 0; i < step.maxWaitFrames; i++) {
+          host.stepFrames(1);
+          waited++; totalFrames++;
+          if (host.framebufferHash() !== before) { consumed = true; break; }
+        }
+        if (consumed && step.settleFrames) {
+          host.stepFrames(step.settleFrames);
+          totalFrames += step.settleFrames;
+        }
+        results.push({
+          button: step.button,
+          ...(resolved !== step.button ? { resolvedTo: resolved } : {}),
+          consumed,
+          framesWaited: waited,
+        });
+      }
+      const dropped = results.filter((r) => !r.consumed).length;
+      return jsonContent({
+        steps: results,
+        framesRun: totalFrames,
+        frameCount: host.status.frameCount,
+        ...(dropped ? { droppedPresses: dropped, note: `${dropped} step(s) had consumed:false — the screen never changed after the press (wrong screen / press dropped / game polls input on a specific frame). Re-run those steps, increase holdFrames, or reach the screen via saveState/loadState.` } : {}),
       });
     }),
   );
