@@ -62,14 +62,14 @@ export function resolveCheatCodeForApply(rawCode, platform) {
 }
 
 // Platforms that have a bundled cheat INDEX (a DB to look up with gameCheats).
-// These are exactly the platforms the romdev-cheats package ships an index for
+// These are exactly the platforms the romdev_game_codes package ships an index for
 // (the romdev platforms the community cheats tree actually covers). All tier-1
 // cores expose retro_cheat_set, so applyCheat/makeCheat work everywhere (see
 // MAKE_CHEAT_PLATFORMS) — this set is specifically about a shipped DB to look
 // up. C64 is intentionally absent: the libretro-database cheats tree has no
 // "Commodore - 64" folder (zero source cheats), so there is nothing to index —
 // makeCheat still works on C64 via raw ADDR:VAL codes. (Source of truth for the
-// list is romdev-cheats' listPlatforms(); kept inline here to avoid a load at
+// list is romdev_game_codes' listPlatforms(); kept inline here to avoid a load at
 // module init.)
 const SUPPORTED = new Set([
   "nes", "gb", "gbc", "snes", "genesis", "sms", "gg",

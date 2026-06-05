@@ -19,7 +19,7 @@ read that platform's `getPlatformDoc({platform, name:'mental_model'})`.
    not the whole job — combine with disassembly below.
 3. `getMemoryMap({platform})` / the platform MENTAL_MODEL for the layout.
 
-The cheat DB is bundled (`romdev-cheats`). Do **not** scan the user's disk for
+The cheat DB is bundled (`romdev_game_codes`). Do **not** scan the user's disk for
 `.cht` files — if it's not in the bundled DB, treat it as absent and RE it.
 
 ---

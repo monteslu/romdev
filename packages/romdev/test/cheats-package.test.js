@@ -1,14 +1,14 @@
-// The cheat DB lives in its own package (romdev-cheats). These guards verify
+// The cheat DB lives in its own package (romdev_game_codes). These guards verify
 // romdev resolves it, lazy-loads ONE platform at a time, carries exactly the
 // supported platforms the community cheats tree covers (incl. the two newest,
 // PCE + MSX), and correctly OMITS C64 (no source cheats).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { loadPlatformIndex, hasPlatform, listPlatforms } from "romdev-cheats";
+import { loadPlatformIndex, hasPlatform, listPlatforms } from "romdev_game_codes";
 import { lookupCheats, searchCheatGames } from "../src/cheats/lookup.js";
 
-test("romdev-cheats resolves and lists the bundled platforms", () => {
+test("romdev_game_codes resolves and lists the bundled platforms", () => {
   const plats = listPlatforms();
   // 13 = the 14 romdev platforms minus C64 (no community cheat folder).
   for (const p of ["nes", "gb", "gbc", "gba", "snes", "genesis", "sms", "gg", "atari2600", "atari7800", "lynx", "pce", "msx"]) {

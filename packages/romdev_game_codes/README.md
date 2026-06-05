@@ -1,8 +1,9 @@
-# romdev-cheats
+# romdev_game_codes
 
-The bundled cheat database for [romdev](https://github.com/monteslu/romdev),
-split into its own package so the main `romdev-mcp` package stays small and the
-database can grow and version independently.
+The bundled game-code / cheat database for
+[romdev](https://github.com/monteslu/romdev), split into its own package so the
+main `romdev-mcp` package stays small and the database can grow and version
+independently.
 
 It is a **data package** — no runtime logic of its own beyond a tiny lazy
 loader. `romdev-mcp` depends on it and resolves it at runtime, then reads **one
@@ -38,7 +39,7 @@ Raw `ADDR:VAL` pokes via `makeCheat` still work on C64 in romdev.)
 ## API
 
 ```js
-import { loadPlatformIndex, hasPlatform, listPlatforms, indexDir } from "romdev-cheats";
+import { loadPlatformIndex, hasPlatform, listPlatforms, indexDir } from "romdev_game_codes";
 
 if (hasPlatform("genesis")) {
   const idx = await loadPlatformIndex("genesis"); // { platform, source, gameCount, games }

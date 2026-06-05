@@ -32,7 +32,7 @@ and a cleaner package split.
 
 ### Added — platforms / data
 - **PC Engine** and **MSX** cheat-database coverage (397 + 377 games).
-- **`romdev-cheats`** — the cheat database is now its own package (lazy-loaded one
+- **`romdev_game_codes`** — the cheat database is now its own package (lazy-loaded one
   platform at a time), shrinking the main package while letting the DB grow
   independently. Still a required dependency, so `npx romdev-mcp` ships with cheats.
 

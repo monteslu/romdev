@@ -1,7 +1,7 @@
 {
-  "name": "romdev-cheats",
+  "name": "romdev_game_codes",
   "version": "0.1.0",
-  "description": "Bundled cheat database for romdev — pre-parsed per-platform cheat index (libretro-database lineage), lazy-loaded one platform at a time.",
+  "description": "Bundled game-code/cheat database for romdev — a pre-parsed per-platform labeled RAM/code map (libretro-database lineage), lazy-loaded one platform at a time.",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -20,7 +20,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/monteslu/romdev.git",
-    "directory": "packages/romdev-cheats"
+    "directory": "packages/romdev_game_codes"
   },
   "homepage": "https://github.com/monteslu/romdev#readme",
   "bugs": {

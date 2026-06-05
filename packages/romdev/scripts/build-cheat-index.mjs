@@ -6,8 +6,8 @@
 // <source-cht-dir> is a directory of `<platform>/<game>.cht` files (e.g. a
 // RetroDECK/Batocera/RetroArch cheats folder). We map each supported platform's
 // DB folder name → our platform id, parse every .cht, decode each code, and
-// emit ONE compressed-shape JSON per platform into the romdev-cheats package
-// (packages/romdev-cheats/index/<plat>.json).
+// emit ONE compressed-shape JSON per platform into the romdev_game_codes package
+// (packages/romdev_game_codes/index/<plat>.json).
 //
 // The emitted index is what ships: a name→entries map. At runtime gameCheats
 // loads only the matched game's entry list, never the whole file into context.
@@ -23,9 +23,9 @@ import { parseCht, splitCombo } from "../src/cheats/parse-cht.js";
 import { decodeWithDevice } from "../src/cheats/gamegenie.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// The cheat index ships as its own package (romdev-cheats) so the main package
-// stays small and the DB can grow/version independently. Emit there by default.
-const OUT_DEFAULT = path.join(__dirname, "..", "..", "romdev-cheats", "index");
+// The cheat index ships as its own package (romdev_game_codes) so the main
+// package stays small and the DB can grow/version independently. Emit there.
+const OUT_DEFAULT = path.join(__dirname, "..", "..", "romdev_game_codes", "index");
 
 // DB folder name (No-Intro/RetroArch convention) → { platform, decimalAddrVal? }.
 // We only ingest folders for platforms romdev actually supports AND that the
