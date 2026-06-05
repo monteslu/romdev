@@ -334,10 +334,10 @@ index bd454f6..091b5e1 100644
    {
      /* Z80 area */
 diff --git a/core/z80/z80.c b/core/z80/z80.c
-index 74d5053..616983c 100644
+index 74d5053..c7e7ba4 100644
 --- a/core/z80/z80.c
 +++ b/core/z80/z80.c
-@@ -220,6 +220,18 @@ unsigned char (*z80_readmem)(unsigned int address);
+@@ -220,6 +220,26 @@ unsigned char (*z80_readmem)(unsigned int address);
  void (*z80_writeport)(unsigned int port, unsigned char data);
  unsigned char (*z80_readport)(unsigned int port);
  
@@ -353,10 +353,18 @@ index 74d5053..616983c 100644
 +extern unsigned int  romdev_pc_last_pc;
 +extern unsigned int  romdev_pc_hits;
 +
++/* romdev PC COVERAGE log (discovery) — shared globals (defined in
++ * core/m68k/m68kcpu.c). For SMS/GG the Z80 is the active CPU; the coverage hook
++ * in z80_run records each DISTINCT in-window Z80 PC about to execute. Consults
++ * the SAME romdev_cov_* globals the m68k path uses (one CPU per platform). */
++extern int           romdev_cov_enabled;
++extern unsigned int  romdev_cov_lo, romdev_cov_hi;
++extern void          romdev_cov_log(unsigned int pc);
++
  static UINT32 EA;
  
  static UINT8 SZ[256];       /* zero and sign flags */
-@@ -627,12 +639,46 @@ INLINE void BURNODD(int cycles, int opcodes, int cyclesum)
+@@ -627,12 +647,64 @@ INLINE void BURNODD(int cycles, int opcodes, int cyclesum)
  /***************************************************************
   * Read a byte from given memory location
   ***************************************************************/
@@ -371,12 +379,26 @@ index 74d5053..616983c 100644
 +extern unsigned int  romdev_rd_last_pc;
 +extern unsigned char romdev_rd_last_val;
 +extern unsigned int  romdev_rd_hits;
++
++/* romdev RANGE watch (discovery) — shared globals (defined in core/m68k/m68kcpu.c).
++ * Logs EVERY {pc,addr,value} touching [lo,hi] over a window (not stop-on-first).
++ * For SMS/GG the Z80 is the active CPU; consults the SAME romdev_range_* globals
++ * the m68k path uses (only one CPU runs per platform). mode 1=read 2=write 3=both.
++ * Hooked into the Z80 DATA read (RM, w=0) and write (WM, w=1) paths, mirroring the
++ * round-1 read/write watch. */
++extern unsigned int  romdev_range_lo, romdev_range_hi;
++extern int           romdev_range_enabled, romdev_range_mode;
++extern void          romdev_range_log(unsigned int pc, unsigned int addr, unsigned char val);
 +#define RM(addr) romdev_z80_rm((addr))
 +INLINE unsigned char romdev_z80_rm(unsigned int addr)
 +{
 +  unsigned char v = z80_readmem(addr);
 +  if (romdev_rd_enabled && (unsigned int)addr == romdev_rd_addr) {
 +    romdev_rd_last_pc = PC; romdev_rd_last_val = v; romdev_rd_hits++;
++  }
++  if (romdev_range_enabled && (romdev_range_mode & 1)
++      && (unsigned int)addr >= romdev_range_lo && (unsigned int)addr <= romdev_range_hi) {
++    romdev_range_log(PC, (unsigned int)addr, v);
 +  }
 +  return v;
 +}
@@ -400,15 +422,26 @@ index 74d5053..616983c 100644
 +      romdev_wp_last_pc = PC; romdev_wp_last_val = (unsigned char)(value); romdev_wp_hits++; \
 +      romdev_wp_last_pc_ptr = z80_readmap[(PC) >> 10] ? z80_readmap[(PC) >> 10] + (PC) : 0; \
 +    } \
++    if (romdev_range_enabled && (romdev_range_mode & 2) \
++        && (unsigned int)(addr) >= romdev_range_lo && (unsigned int)(addr) <= romdev_range_hi) { \
++      romdev_range_log(PC, (unsigned int)(addr), (unsigned char)(value)); \
++    } \
 +    z80_writemem((addr),(value)); \
 +  } while (0)
  
  /***************************************************************
   * Read a word from given memory location
-@@ -3421,6 +3467,32 @@ void z80_run(unsigned int cycles)
+@@ -3421,6 +3493,39 @@ void z80_run(unsigned int cycles)
  {
    while( Z80.cycles < cycles )
    {
++    /* romdev PC coverage log (discovery, SMS/GG): record each DISTINCT in-window
++     * Z80 PC about to execute. Cheap when disabled (one int test). */
++    if (romdev_cov_enabled
++        && (unsigned int)PC >= romdev_cov_lo
++        && (unsigned int)PC <= romdev_cov_hi)
++      romdev_cov_log(PC);
++
 +    /* romdev PC breakpoint / single-step (SMS/GG): check BEFORE fetching the
 +     * next opcode so PC is the address about to execute. On a hit, freeze the
 +     * CPU here (PC untouched → the instruction is NOT executed) and CONSUME the
@@ -438,7 +471,7 @@ index 74d5053..616983c 100644
      /* check for IRQs before each instruction */
      if (Z80.irq_state && IFF1 && !Z80.after_ei)
      {
-@@ -3432,7 +3504,7 @@ void z80_run(unsigned int cycles)
+@@ -3432,7 +3537,7 @@ void z80_run(unsigned int cycles)
      R++;
      EXEC_INLINE(op,ROP());
    }
@@ -448,10 +481,10 @@ index 74d5053..616983c 100644
  /****************************************************************************
   * Get all registers in given buffer
 diff --git a/libretro/libretro.c b/libretro/libretro.c
-index 798c6cc..2f6bc5d 100644
+index 798c6cc..7352394 100644
 --- a/libretro/libretro.c
 +++ b/libretro/libretro.c
-@@ -3743,6 +3743,268 @@ void retro_unload_game(void)
+@@ -3743,6 +3743,323 @@ void retro_unload_game(void)
  
  unsigned retro_get_region(void) { return vdp_pal ? RETRO_REGION_PAL : RETRO_REGION_NTSC; }
  
@@ -563,15 +596,68 @@ index 798c6cc..2f6bc5d 100644
 +}
 +
 +/* romdev register read/write — the inverse of getCPUState, used by the host's
-+ * callSubroutine / decompressWith (set A0=src/A1=dst/PC=entry, push a sentinel
-+ * return, run to it, capture the output). romdev reg-id convention (STABLE across
-+ * all cores so the host passes the same ids): 0..7 = D0..D7, 8..15 = A0..A7,
-+ * 16 = PC, 17 = SR, 18 = SP. Returns 0 on success, -1 on an unknown id. */
++ * callSubroutine / decompressWith (set args + PC=entry, push a sentinel return,
++ * run to it, capture the output). gpgx emulates TWO CPUs: the m68k (Genesis) and
++ * the Z80 (SMS/GG/Mark III). We dispatch on the loaded system: `system_hw`
++ * (declared in system.h via shared.h) carries SYSTEM_MD/SYSTEM_PBC for Genesis
++ * and SYSTEM_SMS/SYSTEM_GG/etc for the 8-bit machines. The idiom used throughout
++ * this file is `(system_hw & SYSTEM_PBC) == SYSTEM_MD` for "this is a Genesis/MD"
++ * — its negation selects the Z80 systems (same dispatch getCPUState mirrors when
++ * it reads SMS_Z80_REGS vs GENESIS_M68K).
++ *
++ * reg-id conventions (STABLE per CPU, the host passes the same ids per platform):
++ *   m68k:  0..7 = D0..D7, 8..15 = A0..A7, 16 = PC, 17 = SR, 18 = SP.
++ *   Z80:   0=A 1=F 2=B 3=C 4=D 5=E 6=H 7=L 8=IX 9=IY 16=PC 18=SP.
++ * Returns 0 on success, -1 on an unknown id. The Z80 register file is the live
++ * `Z80` global (Z80_Regs; PAIR unions — .b.h/.b.l byte access, .w.l word). */
 +extern void m68k_set_reg(m68k_register_t reg, unsigned int value);
 +extern unsigned int m68k_get_reg(m68k_register_t reg);
 +
++/* true when the active system runs the Z80 (SMS / GG / Mark III), not the m68k. */
++#define ROMDEV_ACTIVE_IS_Z80() (((system_hw) & SYSTEM_PBC) != SYSTEM_MD)
++
++static int romdev_setreg_z80(int regId, unsigned int value)
++{
++   switch (regId) {
++      case 0:  Z80.af.b.h = (unsigned char)value; return 0;  /* A */
++      case 1:  Z80.af.b.l = (unsigned char)value; return 0;  /* F */
++      case 2:  Z80.bc.b.h = (unsigned char)value; return 0;  /* B */
++      case 3:  Z80.bc.b.l = (unsigned char)value; return 0;  /* C */
++      case 4:  Z80.de.b.h = (unsigned char)value; return 0;  /* D */
++      case 5:  Z80.de.b.l = (unsigned char)value; return 0;  /* E */
++      case 6:  Z80.hl.b.h = (unsigned char)value; return 0;  /* H */
++      case 7:  Z80.hl.b.l = (unsigned char)value; return 0;  /* L */
++      case 8:  Z80.ix.w.l = (unsigned short)value; return 0; /* IX */
++      case 9:  Z80.iy.w.l = (unsigned short)value; return 0; /* IY */
++      case 16: Z80.pc.w.l = (unsigned short)value; return 0; /* PC */
++      case 18: Z80.sp.w.l = (unsigned short)value; return 0; /* SP */
++      default: return -1;
++   }
++}
++
++static unsigned int romdev_getreg_z80(int regId)
++{
++   switch (regId) {
++      case 0:  return Z80.af.b.h;  /* A */
++      case 1:  return Z80.af.b.l;  /* F */
++      case 2:  return Z80.bc.b.h;  /* B */
++      case 3:  return Z80.bc.b.l;  /* C */
++      case 4:  return Z80.de.b.h;  /* D */
++      case 5:  return Z80.de.b.l;  /* E */
++      case 6:  return Z80.hl.b.h;  /* H */
++      case 7:  return Z80.hl.b.l;  /* L */
++      case 8:  return Z80.ix.w.l;  /* IX */
++      case 9:  return Z80.iy.w.l;  /* IY */
++      case 16: return Z80.pc.w.l;  /* PC */
++      case 18: return Z80.sp.w.l;  /* SP */
++      default: return 0;
++   }
++}
++
 +int romdev_setreg(int regId, unsigned int value)
 +{
++   if (ROMDEV_ACTIVE_IS_Z80())
++      return romdev_setreg_z80(regId, value);
 +   if (regId >= 0 && regId <= 7)        { m68k_set_reg((m68k_register_t)(M68K_REG_D0 + regId),        value); return 0; }
 +   if (regId >= 8 && regId <= 15)       { m68k_set_reg((m68k_register_t)(M68K_REG_A0 + (regId - 8)),  value); return 0; }
 +   if (regId == 16)                     { m68k_set_reg(M68K_REG_PC, value); return 0; }
@@ -582,6 +668,8 @@ index 798c6cc..2f6bc5d 100644
 +
 +unsigned int romdev_getreg(int regId)
 +{
++   if (ROMDEV_ACTIVE_IS_Z80())
++      return romdev_getreg_z80(regId);
 +   if (regId >= 0 && regId <= 7)        return m68k_get_reg((m68k_register_t)(M68K_REG_D0 + regId));
 +   if (regId >= 8 && regId <= 15)       return m68k_get_reg((m68k_register_t)(M68K_REG_A0 + (regId - 8)));
 +   if (regId == 16)                     return m68k_get_reg(M68K_REG_PC);
@@ -720,7 +808,7 @@ index 798c6cc..2f6bc5d 100644
  void *retro_get_memory_data(unsigned id)
  {
     switch (id)
-@@ -3751,6 +4013,35 @@ void *retro_get_memory_data(unsigned id)
+@@ -3751,6 +4068,35 @@ void *retro_get_memory_data(unsigned id)
           return sram.on ? sram.sram : NULL;
        case RETRO_MEMORY_SYSTEM_RAM:
           return work_ram;
@@ -756,7 +844,7 @@ index 798c6cc..2f6bc5d 100644
        default:
           return NULL;
     }
-@@ -3802,6 +4093,21 @@ size_t retro_get_memory_size(unsigned id)
+@@ -3802,6 +4148,21 @@ size_t retro_get_memory_size(unsigned id)
              return 0x2000; /* 8KB internal RAM */
        }
  

@@ -28,11 +28,21 @@
 # runUntilRead. (This core has no write watchpoint.)
 # git apply ignores everything above the first 'diff --git' line.
 #
+#
+# RE primitives round 2: register read/write (romdev_setreg/getreg forwarding to
+# HuC6280_State A/X/Y/S/P/PC Register Get/SetValue; 6502/65C02 reg-ids 0=A 1=X 2=Y
+# 3=P 4=SP(=S) 16=PC), a RANGE WATCH logging every {pc,addr,value} in [lo,hi]
+# (hooks in Memory::Read AND Memory::Write — unlike the round-1 read-only watch,
+# this core HAS a clean Write funnel so range-write/findWriter ARE supported on
+# PCE; exports romdev_range_set/get), and a PC COVERAGE log of distinct in-window
+# PCs (hook in HuC6280::RunInstruction before the opcode fetch; exports
+# romdev_cov_set/get). Ring-buffer state lives in libretro.cpp.
+#
 diff --git a/platforms/libretro/libretro.cpp b/platforms/libretro/libretro.cpp
-index 131c841..517a934 100644
+index 131c841..70f5fce 100644
 --- a/platforms/libretro/libretro.cpp
 +++ b/platforms/libretro/libretro.cpp
-@@ -447,6 +447,176 @@ bool retro_unserialize(const void *data, size_t size)
+@@ -447,6 +447,299 @@ bool retro_unserialize(const void *data, size_t size)
      return core->LoadState(reinterpret_cast<const u8*>(data), size);
  }
  
@@ -102,6 +112,129 @@ index 131c841..517a934 100644
 +    out5[3] = romdev_pc_last_pc;
 +    out5[4] = romdev_pc_hits;
 +    if (clearHit) { romdev_pc_hit = 0; }
++}
++
++/* ---- romdev RE primitives round 2 (HuC6280 = 65C02 superset) -----------
++ * Register read/write (inverse of getCPUState — powers setRegister /
++ * callSubroutine), a RANGE WATCH logging every {pc,addr,value} touching [lo,hi]
++ * (hooks in Memory::Read AND Memory::Write — unlike round 1, this core HAS a
++ * clean write funnel so range-write IS supported), and a PC COVERAGE log of
++ * distinct in-window PCs (hook in HuC6280::RunInstruction). 6502/65C02 reg-id
++ * convention (STABLE): 0=A 1=X 2=Y 3=P(status) 4=SP(=S) 16=PC. The HuC6280_State
++ * holds pointers to Register objects (Get/SetValue); reg access forwards there. */
++
++int romdev_setreg(int regId, unsigned int value)
++{
++    if (!core) return -1;
++    HuC6280::HuC6280_State* st = core->GetHuC6280()->GetState();
++    switch (regId) {
++        case 0:  if (st->A)  st->A->SetValue((u8)value);   return 0;  /* A */
++        case 1:  if (st->X)  st->X->SetValue((u8)value);   return 0;  /* X */
++        case 2:  if (st->Y)  st->Y->SetValue((u8)value);   return 0;  /* Y */
++        case 3:  if (st->P)  st->P->SetValue((u8)value);   return 0;  /* P (status) */
++        case 4:  if (st->S)  st->S->SetValue((u8)value);   return 0;  /* SP (= S) */
++        case 16: if (st->PC) st->PC->SetValue((u16)value); return 0;  /* PC */
++        default: return -1;
++    }
++}
++
++unsigned int romdev_getreg(int regId)
++{
++    if (!core) return 0;
++    HuC6280::HuC6280_State* st = core->GetHuC6280()->GetState();
++    switch (regId) {
++        case 0:  return st->A  ? (unsigned int)st->A->GetValue()  : 0;
++        case 1:  return st->X  ? (unsigned int)st->X->GetValue()  : 0;
++        case 2:  return st->Y  ? (unsigned int)st->Y->GetValue()  : 0;
++        case 3:  return st->P  ? (unsigned int)st->P->GetValue()  : 0;
++        case 4:  return st->S  ? (unsigned int)st->S->GetValue()  : 0;
++        case 16: return st->PC ? (unsigned int)st->PC->GetValue() : 0;
++        default: return 0;
++    }
++}
++
++/* RANGE watch state + ring buffer (CAP 4096). mode 1=read 2=write 3=both.
++ * The hooks in Memory::Read / Memory::Write (memory_inline.h) call
++ * romdev_range_log; the recorded pc is the HuC6280 PC (executing instruction).
++ * Still inside the round-1 extern "C" block; the single closing } follows below. */
++#define ROMDEV_RANGE_CAP 4096
++unsigned int  romdev_range_lo      = 0;
++unsigned int  romdev_range_hi      = 0;
++int           romdev_range_enabled = 0;
++int           romdev_range_mode    = 0;
++unsigned int  romdev_range_pc  [ROMDEV_RANGE_CAP];
++unsigned int  romdev_range_addr[ROMDEV_RANGE_CAP];
++unsigned char romdev_range_val [ROMDEV_RANGE_CAP];
++unsigned int  romdev_range_count   = 0;
++unsigned int  romdev_range_stored  = 0;
++
++void romdev_range_log(unsigned int pc, unsigned int addr, unsigned char val)
++{
++    romdev_range_count++;
++    if (romdev_range_stored < ROMDEV_RANGE_CAP) {
++        romdev_range_pc  [romdev_range_stored] = pc;
++        romdev_range_addr[romdev_range_stored] = addr;
++        romdev_range_val [romdev_range_stored] = val;
++        romdev_range_stored++;
++    }
++}
++
++void romdev_range_set(unsigned int lo, unsigned int hi, int mode, int enabled)
++{
++    romdev_range_lo = lo; romdev_range_hi = hi;
++    romdev_range_mode = mode ? mode : 3;
++    romdev_range_enabled = enabled ? 1 : 0;
++    romdev_range_count = 0; romdev_range_stored = 0;
++}
++
++/* Drain up to `max` events into out[] as packed triples [pc,addr,val,...].
++ * out2 (size 2) gets [totalSeen, stored]. */
++unsigned int romdev_range_get(unsigned int *out, unsigned int max, unsigned int *out2)
++{
++    unsigned int i, n = romdev_range_stored;
++    if (out2) { out2[0] = romdev_range_count; out2[1] = romdev_range_stored; }
++    if (!out) return 0;
++    if (n > max) n = max;
++    for (i = 0; i < n; i++) {
++        out[i*3 + 0] = romdev_range_pc[i];
++        out[i*3 + 1] = romdev_range_addr[i];
++        out[i*3 + 2] = (unsigned int)romdev_range_val[i];
++    }
++    return n;
++}
++
++/* PC COVERAGE state + linear-dedup buffer (CAP 8192). Hook in HuC6280::RunInstruction. */
++#define ROMDEV_COV_CAP 8192
++unsigned int  romdev_cov_lo      = 0;
++unsigned int  romdev_cov_hi      = 0;
++int           romdev_cov_enabled = 0;
++unsigned int  romdev_cov_pcs[ROMDEV_COV_CAP];
++unsigned int  romdev_cov_count   = 0;
++unsigned int  romdev_cov_total   = 0;
++
++void romdev_cov_log(unsigned int pc)
++{
++    unsigned int i;
++    romdev_cov_total++;
++    for (i = 0; i < romdev_cov_count; i++) if (romdev_cov_pcs[i] == pc) return;
++    if (romdev_cov_count < ROMDEV_COV_CAP) romdev_cov_pcs[romdev_cov_count++] = pc;
++}
++
++void romdev_cov_set(unsigned int lo, unsigned int hi, int enabled)
++{
++    romdev_cov_lo = lo; romdev_cov_hi = hi;
++    romdev_cov_enabled = enabled ? 1 : 0;
++    romdev_cov_count = 0; romdev_cov_total = 0;
++}
++
++unsigned int romdev_cov_get(unsigned int *out, unsigned int max, unsigned int *out2)
++{
++    unsigned int i, n = romdev_cov_count;
++    if (out2) { out2[0] = romdev_cov_count; out2[1] = romdev_cov_total; }
++    if (!out) return 0;
++    if (n > max) n = max;
++    for (i = 0; i < n; i++) out[i] = romdev_cov_pcs[i];
++    return n;
 +}
 +}
 +
@@ -209,7 +342,7 @@ index 131c841..517a934 100644
  void *retro_get_memory_data(unsigned id)
  {
      switch (id)
-@@ -457,6 +627,18 @@ void *retro_get_memory_data(unsigned id)
+@@ -457,6 +750,18 @@ void *retro_get_memory_data(unsigned id)
              return core->GetMemory()->GetWorkingRAM();
          case RETRO_MEMORY_VIDEO_RAM:
              return (u8*)core->GetHuC6270_1()->GetVRAM();
@@ -228,7 +361,7 @@ index 131c841..517a934 100644
      }
  
      return NULL;
-@@ -472,6 +654,18 @@ size_t retro_get_memory_size(unsigned id)
+@@ -472,6 +777,18 @@ size_t retro_get_memory_size(unsigned id)
              return core->GetMemory()->GetWorkingRAMSize();
          case RETRO_MEMORY_VIDEO_RAM:
              return HUC6270_VRAM_SIZE * 2;
@@ -287,10 +420,10 @@ index 3caa541..11767c8 100644
          while (!stop);
  
 diff --git a/src/huc6280_inline.h b/src/huc6280_inline.h
-index c2e449d..52f339b 100644
+index c2e449d..f9c70fd 100644
 --- a/src/huc6280_inline.h
 +++ b/src/huc6280_inline.h
-@@ -28,8 +28,51 @@
+@@ -28,8 +28,68 @@
  #include "memory.h"
  #include "trace_logger.h"
  
@@ -311,10 +444,27 @@ index c2e449d..52f339b 100644
 +extern volatile int  romdev_pc_hit;
 +extern unsigned int  romdev_pc_last_pc;
 +extern unsigned int  romdev_pc_hits;
++
++/* romdev RE round 2: PC COVERAGE log (distinct in-window PCs). State + the
++ * dedup buffer live in libretro.cpp; the hook below records m_PC before the
++ * opcode fetch when coverage is armed and m_PC is in [lo,hi]. */
++extern int           romdev_cov_enabled;
++extern unsigned int  romdev_cov_lo, romdev_cov_hi;
++extern void          romdev_cov_log(unsigned int pc);
 +}
 +
  INLINE u32 HuC6280::RunInstruction(bool* instruction_completed)
  {
++    /* romdev PC coverage log (discovery): record each DISTINCT in-window PC about
++     * to execute. Checked BEFORE the opcode fetch, so m_PC is the address of the
++     * instruction about to run. Cheap when disabled (one int test). */
++    if (romdev_cov_enabled)
++    {
++        unsigned int cov_pc = m_PC.GetValue();
++        if (cov_pc >= romdev_cov_lo && cov_pc <= romdev_cov_hi)
++            romdev_cov_log(cov_pc);
++    }
++
 +    /* romdev PC breakpoint / single-step: checked BEFORE the opcode fetch, so
 +     * m_PC is the address of the instruction about to execute. On a hit (or
 +     * single-step countdown reaching 0) freeze the CPU at this PC: record it,
@@ -355,10 +505,10 @@ index d10af22..2a089c8 100644
      bool TryPeek(u16 address, u8 bank, u8* value);
      void Write(u16 address, u8 value, bool block_transfer = false);
 diff --git a/src/memory_inline.h b/src/memory_inline.h
-index 62659bf..72b2bf5 100644
+index 62659bf..9f6d8c5 100644
 --- a/src/memory_inline.h
 +++ b/src/memory_inline.h
-@@ -33,7 +33,31 @@
+@@ -33,7 +33,43 @@
  #include "sf2_mapper.h"
  #include "arcade_card_mapper.h"
  
@@ -373,6 +523,14 @@ index 62659bf..72b2bf5 100644
 +extern unsigned int  romdev_rd_last_pc;
 +extern unsigned char romdev_rd_last_val;
 +extern unsigned int  romdev_rd_hits;
++
++/* romdev RE round 2: RANGE watch (read+write log over [lo,hi]) state lives in
++ * libretro.cpp; the read hook below and the write hook in Memory::Write call
++ * romdev_range_log. mode 1=read 2=write 3=both. The recorded pc is the HuC6280
++ * PC (the executing instruction). */
++extern unsigned int  romdev_range_lo, romdev_range_hi;
++extern int           romdev_range_enabled, romdev_range_mode;
++extern void          romdev_range_log(unsigned int pc, unsigned int addr, unsigned char val);
 +}
 +
  INLINE u8 Memory::Read(u16 address, bool block_transfer)
@@ -383,6 +541,10 @@ index 62659bf..72b2bf5 100644
 +        romdev_rd_last_val = romdev_rd_value;
 +        romdev_rd_hits++;
 +    }
++    if (romdev_range_enabled && (romdev_range_mode & 1)
++        && (unsigned int)address >= romdev_range_lo && (unsigned int)address <= romdev_range_hi) {
++        romdev_range_log(m_huc6280->GetState()->PC->GetValue(), (unsigned int)address, romdev_rd_value);
++    }
 +    return romdev_rd_value;
 +}
 +
@@ -390,3 +552,18 @@ index 62659bf..72b2bf5 100644
  {
  #if defined(GG_TESTING)
      return m_test_memory[address];
+@@ -207,6 +243,14 @@ INLINE void Memory::Write(u16 address, u8 value, bool block_transfer)
+     return;
+ #endif
+ 
++    /* romdev RANGE watch (write side) — log every {pc,addr,value} writing an
++     * address in [lo,hi]. This core HAS a clean Write funnel, so range-write /
++     * findWriter ARE supported on PCE (round 1 only had a read watch). */
++    if (romdev_range_enabled && (romdev_range_mode & 2)
++        && (unsigned int)address >= romdev_range_lo && (unsigned int)address <= romdev_range_hi) {
++        romdev_range_log(m_huc6280->GetState()->PC->GetValue(), (unsigned int)address, value);
++    }
++
+     GG_CHECK_MEMORY_BREAKPOINT(m_huc6280, HuC6280::HuC6280_BREAKPOINT_TYPE_CPU_ADDRESS, address, false);
+ 
+     u8 mpr_index = address >> 13;

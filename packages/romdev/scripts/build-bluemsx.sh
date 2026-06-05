@@ -68,7 +68,13 @@ grep -rq "romdev_watchpoint_get" libretro.c Src/ 2>/dev/null && WP_EXPORTS='"_ro
 # exports in libretro.c) — drive runUntilPC / runUntilRead / stepInstruction.
 BP_EXPORTS=""
 grep -rq "romdev_pcbreak_get" libretro.c Src/ 2>/dev/null && BP_EXPORTS='"_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_readwatch_set","_romdev_readwatch_get",'
-EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set",'"$WP_EXPORTS"''"$BP_EXPORTS"'"_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
+# RE primitives round 2: register read/write (callSubroutine/setRegister) +
+# range-watch (watchRange) + PC-coverage (logPCRange). Z80/R800 hooks in
+# Src/Z80/R800.c, exports in libretro.c. Same reg-id convention as the other Z80
+# cores (0=A 1=F 2=B 3=C 4=D 5=E 6=H 7=L 8=IX 9=IY 16=PC 18=SP).
+RE2_EXPORTS=""
+grep -rq "romdev_setreg" libretro.c Src/ 2>/dev/null && RE2_EXPORTS='"_romdev_setreg","_romdev_getreg","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get",'
+EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set",'"$WP_EXPORTS"''"$BP_EXPORTS"''"$RE2_EXPORTS"'"_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
 EXPORTED_RUNTIME='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS"]'
 
 mkdir -p "$OUT"

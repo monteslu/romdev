@@ -1,6 +1,6 @@
 {
   "name": "romdev-core-geargrafx",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Geargrafx libretro core (PC Engine / TurboGrafx-16) for romdev, bundled as WASM.",
   "type": "module",
   "main": "index.js",
