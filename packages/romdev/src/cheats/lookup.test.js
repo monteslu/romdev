@@ -36,6 +36,19 @@ test("parseCht drops entries with no usable code", () => {
   assert.equal(parseCht(txt).entries.length, 0);
 });
 
+test("parseCht decimalAddrVal converts the newer MSX struct form (decimal) to hex", () => {
+  // RetroArch MSX .cht: cheatK_address/value are DECIMAL with no cheatK_code.
+  // 11552 -> 0x2D20, 1 -> 0x1, so the emitted code must be the hex "2d20:1".
+  const txt = [
+    'cheat0_desc = "stage (1-32)"',
+    'cheat0_address = "11552"',
+    'cheat0_value = "1"',
+  ].join("\n");
+  assert.equal(parseCht(txt, { decimalAddrVal: true }).entries[0].code, "2d20:1");
+  // Without the flag the same numbers are taken verbatim (legacy hex-field form).
+  assert.equal(parseCht(txt).entries[0].code, "11552:1");
+});
+
 test("splitCombo splits +-joined multi-codes", () => {
   assert.deepEqual(splitCombo("AAAA+BBBB+CCCC"), ["AAAA", "BBBB", "CCCC"]);
   assert.deepEqual(splitCombo("00C7:FF"), ["00C7:FF"]);

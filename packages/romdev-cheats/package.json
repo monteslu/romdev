@@ -1,0 +1,30 @@
+{
+  "name": "romdev-cheats",
+  "version": "0.1.0",
+  "description": "Bundled cheat database for romdev — pre-parsed per-platform cheat index (libretro-database lineage), lazy-loaded one platform at a time.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./index/*": "./index/*"
+  },
+  "files": [
+    "index.js",
+    "index",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monteslu/romdev.git",
+    "directory": "packages/romdev-cheats"
+  },
+  "homepage": "https://github.com/monteslu/romdev#readme",
+  "bugs": {
+    "url": "https://github.com/monteslu/romdev/issues"
+  },
+  "author": "Luis Montes"
+}

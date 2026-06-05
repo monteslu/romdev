@@ -17,7 +17,20 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 
-const INDEX_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "index");
+// The cheat index lives in the romdev-cheats package (kept separate so the main
+// package stays small and the DB versions on its own cadence). Resolve its
+// index/ directory once via the package's module URL — same pattern the core
+// registry uses (import.meta.resolve). Fall back to a sibling ./index dir for
+// dev checkouts where the package isn't linked yet.
+function resolveIndexDir() {
+  try {
+    const pkgUrl = import.meta.resolve("romdev-cheats");
+    return path.join(path.dirname(fileURLToPath(pkgUrl)), "index");
+  } catch {
+    return path.join(path.dirname(fileURLToPath(import.meta.url)), "index");
+  }
+}
+const INDEX_DIR = resolveIndexDir();
 
 // CRC32 (IEEE) — computed but currently informational (no DAT to verify
 // against). Returned in the result so callers/users can cross-check externally.
