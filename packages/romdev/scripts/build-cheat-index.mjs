@@ -6,7 +6,8 @@
 // <source-cht-dir> is a directory of `<platform>/<game>.cht` files (e.g. a
 // RetroDECK/Batocera/RetroArch cheats folder). We map each supported platform's
 // DB folder name → our platform id, parse every .cht, decode each code, and
-// emit ONE compressed-shape JSON per platform into src/cheats/index/<plat>.json.
+// emit ONE compressed-shape JSON per platform into the romdev-cheats package
+// (packages/romdev-cheats/index/<plat>.json).
 //
 // The emitted index is what ships: a name→entries map. At runtime gameCheats
 // loads only the matched game's entry list, never the whole file into context.
@@ -22,21 +23,31 @@ import { parseCht, splitCombo } from "../src/cheats/parse-cht.js";
 import { decodeWithDevice } from "../src/cheats/gamegenie.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const OUT_DEFAULT = path.join(__dirname, "..", "src", "cheats", "index");
+// The cheat index ships as its own package (romdev-cheats) so the main package
+// stays small and the DB can grow/version independently. Emit there by default.
+const OUT_DEFAULT = path.join(__dirname, "..", "..", "romdev-cheats", "index");
 
-// DB folder name (No-Intro/RetroArch convention) → our platform id.
+// DB folder name (No-Intro/RetroArch convention) → { platform, decimalAddrVal? }.
+// We only ingest folders for platforms romdev actually supports AND that the
+// RetroArch/RetroDECK cheats tree actually carries.
 const PLATFORM_DIRS = {
-  "Nintendo - Nintendo Entertainment System": "nes",
-  "Nintendo - Game Boy": "gb",
-  "Nintendo - Game Boy Color": "gbc",
-  "Nintendo - Super Nintendo Entertainment System": "snes",
-  "Sega - Mega Drive - Genesis": "genesis",
-  "Sega - Master System - Mark III": "sms",
-  "Sega - Game Gear": "gg",
-  "Atari - 2600": "atari2600",
-  "Atari - 7800": "atari7800",
-  "Atari - Lynx": "lynx",
-  "Nintendo - Game Boy Advance": "gba",
+  "Nintendo - Nintendo Entertainment System": { platform: "nes" },
+  "Nintendo - Game Boy": { platform: "gb" },
+  "Nintendo - Game Boy Color": { platform: "gbc" },
+  "Nintendo - Super Nintendo Entertainment System": { platform: "snes" },
+  "Sega - Mega Drive - Genesis": { platform: "genesis" },
+  "Sega - Master System - Mark III": { platform: "sms" },
+  "Sega - Game Gear": { platform: "gg" },
+  "Atari - 2600": { platform: "atari2600" },
+  "Atari - 7800": { platform: "atari7800" },
+  "Atari - Lynx": { platform: "lynx" },
+  "Nintendo - Game Boy Advance": { platform: "gba" },
+  // PCE/TG-16: classic ADDR:VAL (hex) form, same as the older platforms.
+  "NEC - PC Engine - TurboGrafx 16": { platform: "pce" },
+  // MSX: newer RetroArch struct form — cheatK_address/cheatK_value are DECIMAL
+  // (no cheatK_code), so convert to hex ADDR:VAL on parse. (The "(fMSX core)"
+  // sibling folder is a near-duplicate; we ingest the canonical one.)
+  "Microsoft - MSX - MSX2 - MSX2P - MSX Turbo R": { platform: "msx", decimalAddrVal: true },
   // C64: the libretro-database cheats tree ships NO "Commodore - 64" folder
   // (zero source cheats), so there is no index to build. makeCheat (raw
   // ADDR:VAL via vice's retro_cheat_set) still works on C64 — see cheats.js.
@@ -50,7 +61,7 @@ function classify(decoded) {
   return "ram";
 }
 
-async function buildPlatform(srcDir, dbDirName, platform) {
+async function buildPlatform(srcDir, dbDirName, platform, parseOpts = {}) {
   const dir = path.join(srcDir, dbDirName);
   let files;
   try {
@@ -64,7 +75,7 @@ async function buildPlatform(srcDir, dbDirName, platform) {
     const gameName = file.replace(/\.cht$/i, "");
     let txt;
     try { txt = await readFile(path.join(dir, file), "utf8"); } catch { continue; }
-    const { entries } = parseCht(txt);
+    const { entries } = parseCht(txt, parseOpts);
     const out = [];
     for (const e of entries) {
       const codes = splitCombo(e.code);
@@ -101,8 +112,9 @@ async function main() {
   await mkdir(outDir, { recursive: true });
 
   const summary = [];
-  for (const [dbDir, platform] of Object.entries(PLATFORM_DIRS)) {
-    const res = await buildPlatform(srcDir, dbDir, platform);
+  for (const [dbDir, spec] of Object.entries(PLATFORM_DIRS)) {
+    const { platform, ...parseOpts } = spec;
+    const res = await buildPlatform(srcDir, dbDir, platform, parseOpts);
     if (!res) { summary.push(`${platform}: (source folder absent)`); continue; }
     const outPath = path.join(outDir, `${platform}.json`);
     // Compact: no pretty-printing — this ships, size matters.

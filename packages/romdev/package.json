@@ -48,6 +48,7 @@
     "romdev-core-handy": "0.2.1",
     "romdev-core-prosystem": "0.3.0",
     "romdev-core-vice": "0.3.0",
+    "romdev-cheats": "0.1.0",
     "romdev-platform-atari2600": "0.3.0",
     "romdev-platform-gba": "0.2.1",
     "romdev-platform-snes": "0.3.0",

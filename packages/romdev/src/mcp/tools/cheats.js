@@ -62,24 +62,28 @@ export function resolveCheatCodeForApply(rawCode, platform) {
 }
 
 // Platforms that have a bundled cheat INDEX (a DB to look up with gameCheats).
-// All 12 tier-1 cores expose retro_cheat_set, so applyCheat/makeCheat work
-// everywhere (see MAKE_CHEAT_PLATFORMS) — these are specifically the ones with
-// a shipped index. C64 is intentionally absent: the libretro-database cheats
-// tree has no "Commodore - 64" folder (zero source cheats), so there is nothing
-// to index — makeCheat still works on C64 via raw ADDR:VAL codes.
+// These are exactly the platforms the romdev-cheats package ships an index for
+// (the romdev platforms the community cheats tree actually covers). All tier-1
+// cores expose retro_cheat_set, so applyCheat/makeCheat work everywhere (see
+// MAKE_CHEAT_PLATFORMS) — this set is specifically about a shipped DB to look
+// up. C64 is intentionally absent: the libretro-database cheats tree has no
+// "Commodore - 64" folder (zero source cheats), so there is nothing to index —
+// makeCheat still works on C64 via raw ADDR:VAL codes. (Source of truth for the
+// list is romdev-cheats' listPlatforms(); kept inline here to avoid a load at
+// module init.)
 const SUPPORTED = new Set([
   "nes", "gb", "gbc", "snes", "genesis", "sms", "gg",
-  "atari2600", "atari7800", "lynx", "gba",
+  "atari2600", "atari7800", "lynx", "gba", "pce", "msx",
 ]);
 
 // Platforms makeCheat can CREATE a code for. Every tier-1 core decodes raw
-// ADDR:VAL via retro_cheat_set, so this is all 12 — even C64 (no DB index) and
-// gba/lynx (DB is apply-only). Native-device encoding (Game Genie / PAR /
-// GameShark / Action Replay) is added per platform by nativeDevicesFor(); the
-// rest get a verified raw code.
+// ADDR:VAL via retro_cheat_set, so this is all 14 — even C64 (no DB index) and
+// gba/lynx/pce/msx (DB is apply-only / raw-poke). Native-device encoding (Game
+// Genie / PAR / GameShark / Action Replay) is added per platform by
+// nativeDevicesFor(); the rest get a verified raw code.
 const MAKE_CHEAT_PLATFORMS = [
   "nes", "gb", "gbc", "snes", "genesis", "sms", "gg",
-  "atari2600", "atari7800", "lynx", "gba", "c64",
+  "atari2600", "atari7800", "lynx", "gba", "c64", "pce", "msx",
 ];
 
 // gameCheats indexes whose codes are predominantly ENCRYPTED at the source
@@ -289,7 +293,7 @@ export function registerCheatTools(server, z, sessionKey) {
     "address — read it first), yielding the device's ROM-patch form. Apply the result with applyCheat to confirm. " +
     "NON-DESTRUCTIVE — nothing is written to any ROM file.",
     {
-      platform: z.enum([...MAKE_CHEAT_PLATFORMS]).describe("Target platform (all 12 tier-1 systems). Selects which cheat device(s) the code is encoded for; platforms without a native letter-code device (atari2600/7800, lynx, gba, c64) get a verified raw ADDR:VAL code that applyCheat passes straight to the core. See tool description."),
+      platform: z.enum([...MAKE_CHEAT_PLATFORMS]).describe("Target platform (all 14 tier-1 systems). Selects which cheat device(s) the code is encoded for; platforms without a native letter-code device (atari2600/7800, lynx, gba, c64, pce, msx) get a verified raw ADDR:VAL code that applyCheat passes straight to the core. See tool description."),
       address: z.number().int().min(0).describe("Address to cheat. RAM cheats: the RAM address (e.g. 0x00CD / SNES 0x7E0DBF). ROM cheats: the ROM address of the byte to patch."),
       value: z.number().int().min(0).max(255).optional().describe("Replacement byte value (0-255). Provide `value` OR `values`."),
       values: z.array(z.number().int().min(0).max(255)).min(1).max(64).optional().describe("Batch: make a code for each value at the same address/compare in one call (e.g. values:[2,3] to offer two strengths). Returns `variants:[{value, codes, raw}]`."),

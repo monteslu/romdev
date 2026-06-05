@@ -11,8 +11,19 @@
 // into an address/value (and classifying ram vs code) is a SEPARATE step
 // (gamegenie.js) so the parser stays format-only and testable in isolation.
 
-/** Parse `.cht` text → { count, entries: [{ index, desc, code, enable }] }. */
-export function parseCht(text) {
+/**
+ * Parse `.cht` text → { count, entries: [{ index, desc, code, enable }] }.
+ * @param {string} text
+ * @param {object} [opts]
+ * @param {boolean} [opts.decimalAddrVal] When an entry uses the newer
+ *   `cheatK_address`/`cheatK_value` struct form (no `cheatK_code`), interpret
+ *   those numbers as DECIMAL and emit a hex `ADDR:VAL` code. RetroArch's MSX
+ *   (and a few other newer cores') .cht files store address/value in decimal;
+ *   the rest of our pipeline (decodeRaw) reads `ADDR:VAL` as hex, so we convert
+ *   here. Default false (legacy files already write hex in the address field).
+ */
+export function parseCht(text, opts = {}) {
+  const decimalAddrVal = !!opts.decimalAddrVal;
   const entries = new Map(); // index → partial entry
   let declaredCount = null;
 
@@ -55,7 +66,17 @@ export function parseCht(text) {
     .map((e) => {
       let code = e.code;
       if (!code && e.address != null && e.value != null) {
-        code = `${e.address}:${e.value}`;
+        if (decimalAddrVal) {
+          // Newer struct form stores decimal address/value; emit hex ADDR:VAL
+          // so the downstream hex decoder (decodeRaw) reads it correctly.
+          const a = parseInt(e.address, 10);
+          const v = parseInt(e.value, 10);
+          code = (Number.isNaN(a) || Number.isNaN(v))
+            ? null
+            : `${a.toString(16)}:${v.toString(16)}`;
+        } else {
+          code = `${e.address}:${e.value}`;
+        }
       }
       return { index: e.index, desc: e.desc ?? "", code: code ?? "", enable: !!e.enable };
     })
