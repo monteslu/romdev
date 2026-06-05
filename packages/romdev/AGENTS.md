@@ -273,6 +273,13 @@ Different platforms have different levels of MCP-exposed debugging — different
 > RAM globals or need a mid-routine halt),
 > **`watchRange`** (log EVERY read/write hitting an address range — discovery),
 > **`logPCRange`** (coverage trace — distinct PCs executed in a window),
+> **the RE-INJECT trio** (put an edited asset BACK, all 14): **`findPointerTo`**
+> (find every pointer to a ROM offset — Genesis 32-bit BE, SNES LoROM/HiROM, GBA
+> 0x08000000+offset incl. literal pools, banked 8-bit 16-bit-LE aliases),
+> **`makeStoredBlock`** (wrap raw bytes so the game's OWN decompressor expands them
+> verbatim — GBA LZ77 / SNES LC_LZ2 / SMS+MSX RLE / NES PackBits / `raw` for the
+> uncompressed-graphics systems; Nemesis + C64 crunchers honestly refused), and
+> **`relocateBlock`** (write to free space + repoint),
 > `gameCheats`/`searchCheats`/`applyCheat`/`makeCheat` (cheat
 > lookup/apply/create), `getCPUState`, `searchValue`/`searchNext`/`readCartRom`/`classifyRegion`,
 > `snapshotMemory`/`diffMemory`/`diffState`, `watchMemory`/`runUntilWrite`.

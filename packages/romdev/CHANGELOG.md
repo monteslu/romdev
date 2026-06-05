@@ -2,6 +2,41 @@
 
 All notable changes to `romdev-mcp`. Dates are release dates.
 
+## 0.9.0
+
+The RE-INJECT path (Blocker 2 from the decompress feedback) — the round-trip
+side of a ROM hack. You could already FIND any asset; now you can put an edited
+copy BACK in a form the game accepts, on all 14 platforms.
+
+### Added
+- **`makeStoredBlock({ platform, rawHex|rawBytes, format })`** — wrap raw bytes so
+  the game's OWN decompressor expands them VERBATIM, via each format's literal/
+  raw-copy escape. No need to write a compressor. Formats: GBA BIOS LZ77 (flag
+  byte 0x00 = 8 literals), SNES LC_LZ2 (command 000 direct-copy + 0xFF end),
+  SMS/GG + MSX RLE (0x80|n literal run), NES PackBits/Konami-RLE, and `raw` (no
+  wrapper) for the systems that store graphics uncompressed (Lynx/2600/7800,
+  often PCE, NES CHR-ROM). HONEST limits, surfaced in the tool: Genesis Nemesis
+  (Huffman) and C64 crunchers (Exomizer/pucrunch) have NO clean stored escape and
+  are not offered; Genesis Kosinski is offered but flagged EXPERIMENTAL (the
+  end-terminator varies by decompressor — self-verify). Output is proven to
+  round-trip both against reference decompressors AND, for GBA, against the REAL
+  BIOS LZ77 (SWI 0x11) running live under mgba.
+- **`findPointerTo({ path, romOffset })`** — find every pointer in a ROM that
+  references a byte offset, using the platform-correct encoding: Genesis 32-bit
+  BE (= ROM offset, 1:1 at $000000); SNES 16-bit (bank-implied) / 24-bit long LE
+  via LoROM/HiROM (auto-detected); GBA 32-bit LE = 0x08000000+offset (value-
+  search-complete — catches literal pools AND tables in one pass); NES/GB/SMS/PCE
+  /etc 16-bit LE CPU addresses with their bank-window aliases (page-ambiguous —
+  correlate with the nearby bank-set). The missing piece for redirecting a loader.
+- **`relocateBlock({ path, newHex, toOffset, pointerOffset })`** — write an edited
+  block to free ROM space (pair with findFreeSpace) and repoint a pointer at it,
+  with the platform-correct pointer encoding. `dryRun:true` previews the writes.
+  The safe "don't overwrite in place" move when an edit changes size.
+
+The full round-trip: watchDma/findWriter locate the block → callSubroutine
+decompresses it (now hang-proof) → edit → makeStoredBlock → findFreeSpace →
+relocateBlock writes + repoints → verify in the emulator.
+
 ## 0.8.0
 
 The `callSubroutine` instruction **watchdog is now on every CPU core** — the
