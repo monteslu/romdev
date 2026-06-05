@@ -64,6 +64,13 @@ Skip playtest only when there's clearly no human in the loop: CI runs, automated
 
 ### Romhacking / reverse-engineering: check `gameCheats` early — it's a free RAM map
 
+> **Doing a romhack? Read the playbook first:** `getPlatformDoc({platform:'romhacking', name:'playbook'})`
+> — the full decision tree (find a value's address with `searchValue`, tell whether
+> on-screen text is a string or a pre-rendered bitmap, confirm a patch is live with
+> `readCartRom`, drive menus fast with `navigate`, avoid the "found table that's
+> really ASCII" trap with `classifyRegion`). It encodes the traps below so you don't
+> rediscover them the hard way.
+
 When the task is to **modify an existing game**, you have two complementary
 entry tools, and which leads depends on the kind of hack:
 
