@@ -885,6 +885,13 @@ Two tools that save real time and frustration:
 
 `setInput` accepts an Xbox-shaped controller: D-pad, 4 face buttons (use `north/east/south/west` for portable code — they translate per platform), shoulders (`l/r`), triggers (`l2/r2`), sticks (`l3/r3`), plus `start`/`select`. Older platforms are subsets — `getInputLayout` tells you which buttons are real. Pressing a non-existent button is a silent no-op.
 
+⚠ **The raw libretro names `a`/`b`/`x`/`y` are NOT the platform's printed button labels — and on the three genesis_plus_gx platforms (Genesis, SMS, Game Gear) they're INVERTED.** Verified live across all 14 platforms:
+- **Genesis**: gpgx maps Genesis A/B/C onto libretro **y/b/a** — so `setInput({a:true})` presses Genesis **C**, and Genesis A (SGDK `BUTTON_A`) is `{y:true}` / `{west:true}`.
+- **SMS / Game Gear**: button 1 (TL, main fire) is libretro **b**, button 2 (TR) is libretro **a** — so `{a:true}` presses button 2, not 1.
+- **Every other core maps straight through** (`{a}`→A, `{b}`→B): NES, GB/GBC, SNES (incl. x/y/l/r), GBA, PC Engine (a=I, b=II), MSX (a=trig 1), Lynx (a=A). C64 + Atari 2600 are single-fire — fire is `{b}`/`{south}`, `{a}` is a no-op. Atari 7800 boots in 1-button mode (both fires read INPT4) until you enable 2-button mode.
+
+**The safe habit: use the spatial names (`north/east/south/west`) or `pressButton({button:'a'|'b'|'c'|'1'|'2'})` — both resolve to the correct physical button per platform.** Reach for raw `a`/`b` only when you mean the literal libretro id. `getInputLayout({platform}).faceButtons` is the authoritative per-platform map; each platform's MENTAL_MODEL has a "Driving input over MCP" note.
+
 ## Starter snippets
 
 `starterSnippets({ platform })` (default `mode:'list'`) and `starterSnippets({ platform, mode:'get', name })` give you vetted boilerplate — reset routine, `read_pad`, OAM DMA, palette upload, nametable clear. Each snippet's comments encode foot-guns prior agent sessions already hit. Always check what's available for your platform before writing platform-specific boilerplate from scratch. NES, SNES, SMS, GG, GB/GBC, Genesis, GBA, C64, Atari 7800 all have substantial snippet libraries.

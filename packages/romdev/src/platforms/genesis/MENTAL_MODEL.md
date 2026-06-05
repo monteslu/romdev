@@ -148,6 +148,29 @@ BUTTON_RIGHT= 0x0008    BUTTON_START = 0x0080
 `JOY_1` is the first controller, `JOY_2` the second. Edge-detect by
 xor-ing this frame against last frame and AND-ing with the new state.
 
+### Driving input over MCP — the Genesis button map is INVERTED ⚠
+
+When you drive the game headlessly with `setInput`/`pressButton`, the raw
+libretro button names are **NOT** the Genesis A/B/C labels. genesis_plus_gx
+maps the printed Genesis buttons **A/B/C onto libretro y/b/a** (verified live
+against the core). So:
+
+| You want (SGDK)   | `setInput({…})`                    | spatial name |
+|-------------------|-------------------------------------|--------------|
+| `BUTTON_A`        | `{ y: true }`                       | `{ west: true }`  |
+| `BUTTON_B`        | `{ b: true }`                       | `{ south: true }` |
+| `BUTTON_C`        | `{ a: true }`                       | `{ east: true }`  |
+| `BUTTON_START`    | `{ start: true }`                   | —            |
+| X / Y / Z (6-btn) | `{ x: true }` / `{ north: true }` / `{ l: true }` | — |
+
+**The trap:** `setInput({ a: true })` presses Genesis **C**, *not* A — so an
+SGDK jump bound to `BUTTON_A` won't fire from `{a:true}`. Use `{ y: true }` (or
+the spatial `{ west: true }`) for `BUTTON_A`. The **spatial names**
+(north/east/south/west) and `pressButton({button:'c'})` resolve correctly per
+platform — prefer them over raw a/b/x/y. `getInputLayout({platform:'genesis'})`
+returns the exact map in `faceButtons`. (This inversion is a genesis_plus_gx
+quirk shared by SMS + Game Gear; NES/SNES/GB/GBA/etc. are NOT inverted.)
+
 ## Sound
 
 The Genesis has *two* sound chips:

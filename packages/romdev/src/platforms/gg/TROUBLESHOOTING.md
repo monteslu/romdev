@@ -26,6 +26,20 @@ If you copied an SMS scaffold that uses PAUSE-as-START semantics
 (SMS pause button is at port $DD bit 4 IIRC), it won't work on GG;
 swap to JOY_START.
 
+## "I drive the game with setInput but the fire/action button doesn't fire"
+
+The GG button map is **inverted** vs the libretro names (same genesis_plus_gx
+core as SMS). Button 1 (main fire) is libretro **b**, button 2 is libretro **a**
+— so `setInput({a:true})` presses button **2**, not button 1 (`JOY_B1`).
+
+Fix:
+- Button 1 (`JOY_B1`) → `setInput({ports:[{b:true}]})` or `{west:true}`
+- Button 2 (`JOY_B2`) → `{a:true}` / `{east:true}`
+- START → `{start:true}`
+
+Prefer spatial names or `pressButton({button:'1'|'2'})`.
+`getInputLayout({platform:'gg'})` has the full map.
+
 ## "Sound only comes out of one speaker"
 
 GG has a stereo control register at port `$06` that the SMS doesn't

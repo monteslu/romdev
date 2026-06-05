@@ -14,6 +14,22 @@ way: if you passed `language:"asm"`, drop it; if your source has no `.c`
 filename AND no obvious C tokens, pass `language:"c"` explicitly. (Reverse case:
 a `.s` asm file builds via vasm68k — that's correct.)
 
+## "I drive the game with setInput but the jump/action button doesn't fire"
+
+The Genesis button map is **inverted** vs the libretro names. genesis_plus_gx
+maps Genesis A/B/C onto libretro **y/b/a** — so `setInput({a:true})` presses
+Genesis **C**, not A. An SGDK action bound to `BUTTON_A` (the usual jump) won't
+fire from `{a:true}`.
+
+Fix — press the button you actually mean:
+- `BUTTON_A` → `setInput({ports:[{y:true}]})` or spatial `{west:true}`
+- `BUTTON_B` → `{b:true}` / `{south:true}`
+- `BUTTON_C` → `{a:true}` / `{east:true}`
+
+Prefer the spatial names or `pressButton({button:'c'})` (they resolve correctly
+per platform). `getInputLayout({platform:'genesis'})` has the full map. (Note:
+`setInput` takes a `ports` array — `{ports:[{y:true}]}`, not a bare `{y:true}`.)
+
 ## "ROM builds but the screen is blank / black"
 
 The Genesis VDP starts in forced-blank state. SGDK's sega.s + libmd

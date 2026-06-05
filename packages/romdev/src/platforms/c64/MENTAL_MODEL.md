@@ -105,6 +105,15 @@ a specific reason not to. Reading PRB clashes with keyboard scanning,
 which is what the KERNAL's IRQ uses to update key state every
 1/60 sec — you'd get garbled input from your jiffy timer.
 
+### Driving input over MCP
+
+The C64 joystick has **one** fire button. Over MCP press it with
+`setInput({ b: true })` or the spatial `setInput({ south: true })` — both clear
+`$DC00` bit 4 (verified live against vice). `setInput({ a: true })` is a **no-op**
+(no second button — not in `getInputLayout`'s `physicalButtons`). So drive fire
+with `b`/`south`, plus the d-pad. ⚠ A cc65 `.prg` only starts after BASIC
+auto-`RUN`s it — step ~70+ frames past load before input/reads register.
+
 ## SID — three voices of fame
 
 Three voices at $D400-$D418. Per-voice:

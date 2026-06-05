@@ -77,8 +77,12 @@ screen. Keep at least one (2+ byte) global. See TROUBLESHOOTING.md.
 - `convertImageToTiles({ platform: "pce" })` — PNG → 4bpp HuC6270 tiles (the
   "planar-pairs" layout: 32 B/tile, 16 B plane 0+1 then 16 B plane 2+3). Returns
   a suggested 16-color palette too. DMA the bytes to your VRAM pattern base.
-- `getInputLayout({ platform: "pce" })` — the 2-button pad (I=east/'a',
-  II=west/'b', Run=start, Select=select) + how the joyport scan works.
+- `getInputLayout({ platform: "pce" })` — the 2-button pad + how the joyport
+  scan works. **Driving input over MCP:** geargrafx maps `setInput` straight
+  through (verified live, no inversion): `{a}`→button I, `{b}`→button II,
+  `{start}`→Run, `{select}`→Select; spatial east→I, west→II. So
+  `setInput({ a: true })` presses button I as expected — unlike the
+  genesis_plus_gx platforms, there's no surprise here.
 
 ## Debugging tools
 
