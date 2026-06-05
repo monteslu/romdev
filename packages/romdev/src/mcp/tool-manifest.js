@@ -37,6 +37,8 @@ export const MERGE_MAP = {
   host: { absorbs: ["unloadMedia", "shutdown", "reset", "pause", "resume"], axis: "op" },
   // ── frame (step/screenshot/stepAndShot; stepInstruction folds in with the watch domain) ──
   frame: { absorbs: ["stepFrames", "screenshot", "stepAndScreenshot"], axis: "op" },
+  // ── scaffold (project/game + snippets; patchGbHeader stays standalone in project.js) ──
+  scaffold: { absorbs: ["createProject", "createGame", "starterSnippets", "copyStarterSnippets"], axis: "op" },
 };
 
 /** Every OLD tool name that the consolidation removes (absorbed into a new tool). */

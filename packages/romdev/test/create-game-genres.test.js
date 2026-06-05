@@ -35,8 +35,8 @@ for (const genre of ["shmup", "platformer", "puzzle"]) {
     const tmp = mkdtempSync(path.join(os.tmpdir(), `genre-${genre}-`));
     try {
       const create = toJSON(await client.callTool({
-        name: "createGame",
-        arguments: { platform: "nes", genre, name: "demo", path: tmp, overwrite: true },
+        name: "scaffold",
+        arguments: { op: "game",  platform: "nes", genre, name: "demo", path: tmp, overwrite: true },
       }));
       assert.equal(create.platform, "nes");
       assert.equal(create.genre, genre);
@@ -85,8 +85,8 @@ test("createGame rejects unsupported platform with a clear message", async () =>
     // batariBasic templates for it later, update this test to use
     // another holdout.
     const res = await client.callTool({
-      name: "createGame",
-      arguments: { platform: "atari2600", genre: "shmup", name: "x", path: tmp, overwrite: true },
+      name: "scaffold",
+      arguments: { op: "game",  platform: "atari2600", genre: "shmup", name: "x", path: tmp, overwrite: true },
     });
     assert.equal(res.isError, true);
     assert.match(res.content[0].text, /no genre scaffolds for platform 'atari2600'/);
@@ -100,8 +100,8 @@ test("createGame rejects unsupported genre with a clear message", async () => {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "genre-bad2-"));
   try {
     const res = await client.callTool({
-      name: "createGame",
-      arguments: { platform: "nes", genre: "rpg", name: "x", path: tmp, overwrite: true },
+      name: "scaffold",
+      arguments: { op: "game",  platform: "nes", genre: "rpg", name: "x", path: tmp, overwrite: true },
     });
     assert.equal(res.isError, true);
     assert.match(res.content[0].text, /genre 'rpg' not supported/);

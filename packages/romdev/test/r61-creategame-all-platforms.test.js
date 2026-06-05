@@ -50,8 +50,8 @@ test("R61 createGame: every genre-capable platform scaffolds all 5 genres", { ti
       const tmp = mkdtempSync(path.join(os.tmpdir(), `r59-${platform}-${genre}-`));
       try {
         const r = toJSON(await client.callTool({
-          name: "createGame",
-          arguments: { platform, genre, name: "demo", path: tmp, overwrite: true },
+          name: "scaffold",
+          arguments: { op: "game",  platform, genre, name: "demo", path: tmp, overwrite: true },
         }));
         assert.equal(r.platform, platform, `${platform}/${genre}: platform mismatch`);
         assert.equal(r.genre, genre, `${platform}/${genre}: genre mismatch`);
@@ -70,8 +70,8 @@ test("R61 createGame: platforms with no genre templates are rejected with the fu
   const client = await startClient();
   for (const platform of NON_GENRE_PLATFORMS) {
     const res = await client.callTool({
-      name: "createGame",
-      arguments: { platform, genre: "platformer", name: "demo", path: os.tmpdir() },
+      name: "scaffold",
+      arguments: { op: "game",  platform, genre: "platformer", name: "demo", path: os.tmpdir() },
     });
     assert.equal(res.isError, true, `${platform}: expected an error`);
     const msg = res.content[0].text;
@@ -87,8 +87,8 @@ test("R61 createGame: platforms with no genre templates are rejected with the fu
 test("R61 createGame: unknown genre rejected with the platform's available genres", async () => {
   const client = await startClient();
   const res = await client.callTool({
-    name: "createGame",
-    arguments: { platform: "c64", genre: "fighting", name: "demo", path: os.tmpdir() },
+    name: "scaffold",
+    arguments: { op: "game",  platform: "c64", genre: "fighting", name: "demo", path: os.tmpdir() },
   });
   assert.equal(res.isError, true);
   const msg = res.content[0].text;

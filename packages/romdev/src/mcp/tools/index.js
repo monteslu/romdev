@@ -336,8 +336,7 @@ const TOOL_OWNER = {
   captureMetaSprite: "assets", renderMetaSpritePreview: "assets", groupVisibleSprites: "assets", emitMetaSpriteRenderer: "assets", validateGenesisTiles: "assets", extractSpriteFromScreenshot: "assets", previewVisibleSprites: "assets",
   getLospecPalette: "assets",
   // project category
-  createProject: "project", createGame: "project",
-  starterSnippets: "project",
+  scaffold: "project",
   // show category (was: advanced)
   playtest: "show", playtestStop: "show", playtestStatus: "show", playtestFramebuffer: "show",
   // advanced category
