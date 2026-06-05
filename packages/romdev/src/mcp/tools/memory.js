@@ -1,6 +1,7 @@
 import { getHost } from "../state.js";
 import { MemoryRegionToRetro } from "../../host/types.js";
 import { jsonContent, safeTool, textContent, writeOutput } from "../util.js";
+import { classifyBytes } from "./classify-region.js";
 
 // Small reads stay inline (hex) for ergonomics; large reads must go to disk
 // (raw bytes) unless inline:true. The common case — peeking a few bytes of
@@ -312,6 +313,30 @@ export function registerMemoryTools(server, z, sessionKey) {
         currentSize: now.length,
         note: "State blobs are core-internal — for the actual changed RAM addresses use snapshotMemory/diffMemory.",
       });
+    }),
+  );
+
+  // ── classifyRegion — "what kind of data is at this offset?" ──────────────
+  server.tool(
+    "classifyRegion",
+    "Heuristically classify the bytes at an offset — BEFORE you trust a 'found table'. Kills the classic RE " +
+    "trap: a run of values that 'matches' the stats you want is often ASCII TEXT (e.g. bytes 82/79/68 = 'R'/'O'/" +
+    "'D' from a taunt string, not a stat table) or code. Returns `{looksLike: 'ascii-text'|'high-entropy'|" +
+    "'sparse-or-tiledata'|'structured-data'|'unknown', printableRatio, entropy, zeroRatio, longestAsciiRun, " +
+    "asciiPreview, confidence, note}`. If `looksLike` is 'ascii-text', a 'data table' overlapping this offset is " +
+    "almost certainly a coincidence — do NOT patch it as a table. Use on any region (system_ram, video_ram, or " +
+    "the cart ROM region) at any offset. Cheap; run it whenever a candidate offset 'looks right' to confirm it's " +
+    "actually the kind of data you think.",
+    {
+      region: z.enum(REGIONS).default("system_ram"),
+      offset: z.number().int().min(0).default(0),
+      length: z.number().int().min(4).max(65536).default(256).describe("Bytes to classify from offset (default 256). Use the suspected table's length."),
+    },
+    safeTool(async ({ region, offset, length }) => {
+      const host = getHost(sessionKey);
+      const bytes = host.readMemory(region, offset, length);
+      const cls = classifyBytes(bytes, { bigEndian: genericEndianness(host.status.platform) === "big" });
+      return jsonContent({ region, offset: "0x" + offset.toString(16), length: bytes.length, ...cls });
     }),
   );
 
