@@ -43,7 +43,7 @@ Skip playtest only when there's clearly no human in the loop: CI runs, automated
 
 ## Tool surface: everything is loaded — just call the tool
 
-**All ~101 tools are registered and callable from session init. You do NOT need `loadCategory` first.** If you see a tool name anywhere in this doc or via `listCategories`, you can call it right now.
+**All ~130 tools are registered and callable from session init. You do NOT need `loadCategory` first.** If you see a tool name anywhere in this doc or via `listCategories`, you can call it right now.
 
 (We used to lazy-load tools behind `loadCategory` to keep the surface small. It caused more harm than good — agents burned round-trips re-loading categories and got confused about what was callable. So the full surface loads up front. If a server is explicitly run in lean mode — `ROMDEV_LEAN_TOOLS=1` — then only an entry tier loads and you arm the rest with `loadCategory`; that's the exception, not the default.)
 
