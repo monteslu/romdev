@@ -18,6 +18,7 @@ export const toolchain = {
   "m68k-elf-as": { gluePath: path.join(WASM, "m68k-elf-as.mjs") },
   "m68k-elf-ld": { gluePath: path.join(WASM, "m68k-elf-ld.mjs") },
   "m68k-elf-objcopy": { gluePath: path.join(WASM, "m68k-elf-objcopy.mjs") },
+  "m68k-elf-objdump": { gluePath: path.join(WASM, "m68k-elf-objdump.mjs") },
   "sjasm": { gluePath: path.join(WASM, "sjasm.js") },
   "bintos": { gluePath: path.join(WASM, "bintos.js") },
 };

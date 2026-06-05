@@ -165,6 +165,32 @@ if [ ! -f "$ROOT/build-wasm-binutils/gas/as-new.wasm" ]; then
 fi
 
 # ── 5. Wrap + stage the artifacts ───────────────────────────────────
-# TODO: emcc-wrap each tool to be MODULARIZE'd + EXPORT_NAME'd, then copy
-# into $OUT.  This step is what gets us a callable createCc1816() etc.
-echo "Stage 2 build complete. Artifacts in build-wasm-*/. Wrap step pending."
+# Each binutils program is re-linked through emcc with our standard
+# MODULARIZE / EXPORT_ES6 knobs into a callable factory (.mjs + .wasm),
+# then staged into the romdev-toolchain-m68k-gcc package's wasm/ dir.
+#
+# objdump is the m68k DISASSEMBLER (`-D -b binary -m m68k`). It replaces the
+# old hand-rolled JS m68kdasm — binutils decodes the full ISA with correct
+# instruction lengths (the JS one dropped move-sr/mul/div and desynced).
+BINUTILS_WASM="$ROOT/build-wasm-binutils/binutils"
+PKG_OUT="$PROJECT_DIR/../romdev-toolchain-m68k-gcc/wasm"
+
+wrap_tool() {
+  local target="$1"      # make target inside binutils/ (e.g. objdump, objcopy)
+  local out_name="$2"    # m68k-elf-<tool>
+  local export_name="$3" # createM68k<Tool>
+  echo "  wrapping $target → $out_name.{mjs,wasm}"
+  ( cd "$BINUTILS_WASM" && rm -f "$target" "$target.wasm" && \
+    emmake make "$target" \
+      LDFLAGS="-O2 -g0 -s MODULARIZE=1 -s EXPORT_NAME=$export_name -s EXPORT_ES6=1 -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=134217728 -s EXIT_RUNTIME=1 -s INVOKE_RUN=0 -s ENVIRONMENT=node -s EXPORTED_RUNTIME_METHODS=[\"callMain\",\"FS\"]" )
+  # The glue embeds one literal "<target>.wasm" reference — rename it to the
+  # staged basename so locateFile resolves next to the .mjs.
+  sed "s/${target}\.wasm/${out_name}.wasm/g" "$BINUTILS_WASM/$target" > "$PKG_OUT/$out_name.mjs"
+  cp "$BINUTILS_WASM/$target.wasm" "$PKG_OUT/$out_name.wasm"
+}
+
+wrap_tool objdump m68k-elf-objdump createM68kObjdump
+# (as/ld/objcopy/cc1 were staged by the original ad-hoc wrap; re-add here if
+#  regenerating the whole package.)
+
+echo "Stage 2 complete. m68k-elf-objdump staged into $PKG_OUT/."
