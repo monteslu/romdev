@@ -1091,9 +1091,9 @@ export function registerDisasmTools(server, z) {
     "disassembleProject",
     "Use this to turn a ROM into a complete, re-buildable disassembly project in ONE call — across ALL " +
     "supported systems: NES, SNES, Game Boy/Color, Sega Master System/Game Gear, Genesis/Mega Drive, " +
-    "C64, Atari 2600/7800, and Lynx (65C02). (GBA: `disassembleProject` needs a byte-exact REASSEMBLE step " +
-    "that isn't wired for ARM yet, but `disassembleRom`/`findReferences` DO disassemble GBA via native ARM " +
-    "objdump — use those to read ARM7/Thumb code.) " +
+    "C64, Atari 2600/7800, Lynx (65C02), PC Engine, MSX — and GBA. (GBA reassembles BYTE-EXACT but currently " +
+    "data-only / low readability — ARM literal pools don't round-trip per-instruction yet; use " +
+    "`disassembleRom`/`findReferences` to READ ARM7/Thumb code with full mnemonics.) " +
     "It splits the ROM into regions (per-16KB-bank for banked NES; one region for flat " +
     "ROMs), disassembles each, and — critically — REASSEMBLES each region and verifies it is BYTE-EXACT " +
     "against the original (`roundTripOk` per region). Lines that don't reassemble faithfully fall back to " +
@@ -1105,7 +1105,7 @@ export function registerDisasmTools(server, z) {
     {
       path: z.string().describe("Absolute path to the ROM (.nes/.sfc/.gb/.gbc/.sms/.gg/.bin/.prg/.a26/.a78/.lnx)."),
       outputDir: z.string().describe("Directory to write the project into (created if needed). Gets one .asm per region."),
-      platform: z.enum(["nes", "snes", "gb", "gbc", "sms", "gg", "genesis", "c64", "atari2600", "atari7800", "lynx", "gba"]).optional().describe("Override platform detection (otherwise sniffed from the file extension). 'gba' is accepted only to return the explicit unsupported-ARM message."),
+      platform: z.enum(["nes", "snes", "gb", "gbc", "sms", "gg", "genesis", "c64", "atari2600", "atari7800", "lynx", "gba", "pce", "msx"]).optional().describe("Override platform detection (otherwise sniffed from the file extension). GBA produces a byte-exact project but currently data-only (low readability) — use disassembleRom to READ ARM code."),
     },
     safeTool(async ({ path: romPath, outputDir, platform }) => {
       const { reassembleForPlatform } = await import("../../toolchains/common/reassemble.js");
@@ -1174,10 +1174,8 @@ function sniffPlatformFromPath(p) {
   if (/\.a78$/i.test(p)) return "atari7800";
   if (/\.prg$/i.test(p)) return "c64";
   if (/\.(lnx|lyx)$/i.test(p)) return "lynx";
+  if (/\.gba$/i.test(p)) return "gba";
   if (/\.(gen|md|bin)$/i.test(p)) return "genesis";
-  // .gba is deliberately NOT sniffed: disassembleProject has no ARM7TDMI
-  // reassembler, so a GBA ROM cannot round-trip byte-exact here (see the
-  // explicit error in planRegions). Pass platform:'gba' to get that message.
   return null;
 }
 
@@ -1317,17 +1315,19 @@ function planRegions(platform, data) {
     return regions;
   }
   if (platform === "gba") {
-    // GBA is ARM7TDMI (ARM + Thumb). romdev ships NO ARM disassembler or
-    // reassembler, so disassembleProject cannot produce a byte-exact,
-    // re-buildable project for it — that would require an ARM7 da/ca pair this
-    // toolset doesn't have. This is a NOTED skip, not a silent one.
-    throw new Error(
-      "disassembleProject does not support GBA: it is ARM7TDMI (ARM/Thumb), and romdev " +
-      "has no ARM disassembler/reassembler, so it cannot produce a byte-exact rebuildable " +
-      "project. All other 13 tier-1 systems are supported. For GBA, use an external ARM " +
-      "toolchain (arm-none-eabi-objdump / Ghidra / mgba's own debugger); romdev's live " +
-      "debug tools (readMemory/watchMemory/findWriter/getRenderingContext) DO work on GBA.",
-    );
+    // GBA = ARM7TDMI. ROM maps flat at 0x08000000. The project REASSEMBLES
+    // byte-exact (native ARM objdump → arm-none-eabi-as/ld/objcopy). Caveat:
+    // ARM's PC-relative literal pools + ARM/Thumb mixing don't round-trip
+    // per-instruction yet, so the rebuildable output currently falls back to a
+    // byte-exact data-only form (low readablePercent) — for READING the code use
+    // disassembleRom/findReferences (full native ARM/Thumb mnemonics).
+    const body = trimTrailingPad(data.slice(0));
+    regions.push({
+      name: "rom", file: "rom.asm", bytes: body,
+      startAddress: 0x08000000, fileOffset: 0,
+      label: "GBA cart @ 0x08000000 (ARM7TDMI) — byte-exact; readability low pending literal-pool healing",
+    });
+    return regions;
   }
   return regions;
 }
