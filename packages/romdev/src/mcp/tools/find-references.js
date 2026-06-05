@@ -370,25 +370,6 @@ export async function findReferencesCore({ path, platform, address, mapper, maxR
   };
 }
 
-export function registerFindReferencesTools(server, z) {
-  server.tool(
-    "findReferences",
-    "Use this before changing a routine to answer \"what else calls or reads this address?\" — scans the " +
-    "ROM's code (via the disassembler) for operands matching a target CPU address and classifies each as " +
-    "call/jump/branch/read/write/use; also walks the vector table. Supported: nes, snes, sms, gg, gb, gbc, " +
-    "atari2600, atari7800, c64, genesis. LIMITATION: only direct addressing is matched — indirect jumps " +
-    "(`jmp ($XXXX)`), jump tables, and computed jsr's are NOT found; on banked ROMs it scans one bank, so " +
-    "cross-bank references can be missed.",
-    {
-      path: z.string().describe("Absolute path to the ROM file."),
-      platform: z.enum(["nes", "snes", "sms", "gg", "gb", "gbc", "atari2600", "atari7800", "c64", "genesis"]).optional().describe("Override platform detection."),
-      address: z.number().int().min(0).max(0xFFFFFF).describe("Target CPU address — find references TO this address."),
-      mapper: z.enum(["lorom", "hirom"]).optional().describe("SNES only: override mapper detection."),
-      maxRefsReturned: z.number().int().min(1).max(2048).default(256),
-    },
-    safeTool(async (args) => {
-      const r = await findReferencesCore(args);
-      return jsonContent(r);
-    }),
-  );
-}
+// findReferences folded into the `disasm` tool as target:'references' (the core,
+// findReferencesCore above, is imported by disasm.js's router).
+export function registerFindReferencesTools() { /* folded into `disasm` */ }

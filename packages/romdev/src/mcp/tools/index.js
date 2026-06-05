@@ -318,7 +318,7 @@ const TOOL_OWNER = {
   getPlatformPalettePng: "debug", imageToTilemap: "debug",
   getCPUState: "debug", getAudioState: "debug",
   buildSourceWithDebug: "debug", symbols: "debug",
-  disassemble: "debug", disassembleRom: "debug", disassembleProject: "debug", findReferences: "debug",
+  disasm: "debug",
   cheats: "debug",
   getRenderingContext: "debug",
   inspectTile: "debug",

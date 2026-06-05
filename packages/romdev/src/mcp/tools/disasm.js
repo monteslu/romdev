@@ -5,6 +5,7 @@ import nodePath from "node:path";
 import { jsonContent, safeTool, writeOutput } from "../util.js";
 import { parseSymbols, buildSymbolMap } from "../../toolchains/common/symbols.js";
 import { registersForPlatform } from "../../platforms/common/registers.js";
+import { findReferencesCore } from "./find-references.js";
 
 // ── Per-platform CPU-address → file-offset mappers ────────────────
 // Each returns { bytes, fileOffset, cpu, notes } given the full ROM
@@ -581,29 +582,7 @@ export function mapC64Address(data, cpuAddr, length, bank = 0) {
   };
 }
 
-export function registerDisasmTools(server, z) {
-  server.tool(
-    "disassemble",
-    "Disassemble a chunk of raw bytes using cc65's da65. Provide bytes as `path` (a file on disk — preferred, " +
-    "no base64 round-trip) OR `base64`. Defaults to 6502 / NES $8000. Supports 6502, 65c02, 65sc02, 65816, " +
-    "huc6280. Emits `.org <startAddress>` by default so the output re-assembles through ca65 (addOrigin:false " +
-    "to skip). Pass `symbolsPath`/`symbolsText` to annotate with labels (WLA .sym / cc65 .lbl). " +
-    "NOTE: this is the RAW path — for a ROM file you want mapper-aware disassembly with `; @0xNNNN` file-offset " +
-    "annotations and auto-tagged vectors, use `disassembleRom` instead. " +
-    "DEFAULT writes asm to outputPath and returns {path, bytes}; pass inline:true to get the asm in the response.",
-    {
-      path: z.string().optional().describe("Absolute path to a raw binary file to disassemble. Provide this OR `base64`. Preferred — avoids a base64 round-trip."),
-      base64: z.string().optional().describe("Base64 of the bytes to disassemble. Provide this OR `path`."),
-      startAddress: z.number().int().min(0).max(0xffffff).default(0x8000).describe("Address of the first byte (e.g. 0x8000 for NES PRG)."),
-      cpu: z.enum(["6502", "65c02", "65sc02", "65816", "huc6280"]).default("6502"),
-      addOrigin: z.boolean().default(true).describe("Prepend `.org <startAddress>` so the asm re-assembles through ca65 unmodified (absolute branch targets otherwise fail with 'Range error'). Set false when feeding a linker config that sets the origin."),
-      symbolsPath: z.string().optional().describe("Optional path to a symbol file (asar .sym, cc65 .lbl). Auto-detect format from extension."),
-      symbolsText: z.string().optional().describe("Optional inline symbol-file text. If both this and symbolsPath are given, symbolsPath wins."),
-      symbolsFormat: z.enum(["wla", "cc65-lbl"]).optional().describe("Explicit symbol-file format override (when filename and content are ambiguous)."),
-      outputPath: z.string().optional().describe("Absolute path to write the asm text to. Required unless inline:true."),
-      inline: z.boolean().default(false).describe("If true, return the asm text in the response instead of writing to disk. Default false — then outputPath is required."),
-    },
-    safeTool(async ({ path: inPath, base64, startAddress, cpu, addOrigin = true, symbolsPath, symbolsText, symbolsFormat, outputPath, inline }) => {
+async function disassembleCore({ path: inPath, base64, startAddress = 0x8000, cpu = "6502", addOrigin = true, symbolsPath, symbolsText, symbolsFormat, outputPath, inline }) {
       if (!inline && !outputPath) {
         throw new Error("disassemble: pass outputPath (write the asm to disk, returns {path}) or inline:true (return the asm in the response).");
       }
@@ -657,40 +636,9 @@ export function registerDisasmTools(server, z) {
       }
       const { path } = writeOutput(asm, { outputPath, what: "disassembly asm" });
       return jsonContent({ ...meta, path, asmBytes: asm.length });
-    }),
-  );
+}
 
-  server.tool(
-    "disassembleRom",
-    "Use this to read what an existing ROM file does: mapper-aware disassembly with agent-friendly " +
-    "annotations (auto-tagged reset/nmi/irq vectors, hardware register names on operands, and per-line " +
-    "`; @0xNNNN` file offsets ready for patchFile — NES reports both .nes and PRG offsets). Platform is " +
-    "sniffed from the extension (NES/SNES/SMS/GG/GB/GBC/Atari 2600/7800/C64/Genesis/GBA) or pass `platform`. " +
-    "GBA = ARM7TDMI via native binutils objdump (ARM by default, `thumb:true` for Thumb code). " +
-    "Use `endAddress`/`untilReturn` to grab exactly one routine, `dataRanges` to mark non-code, and " +
-    "`outputPath` to write big disassemblies to disk instead of inline. (For raw bytes you already have, " +
-    "use `disassemble`.) See param hints for the rest.",
-    {
-      path: z.string().describe("Absolute path to a ROM file (.nes / .sfc / .smc / .gba)."),
-      platform: z.enum(["nes", "snes", "sms", "gg", "gb", "gbc", "atari2600", "atari7800", "c64", "genesis", "gba", "pce", "msx", "lynx"]).optional().describe("Override platform detection. Omit to sniff from file extension."),
-      bank: z.number().int().min(0).max(255).optional().describe("Which switchable ROM bank to map into the banked slot before disassembling. NES (mapper>0): maps 16KB PRG bank N at $8000-$BFFF (a $C000+ startAddress still reads the fixed top bank). GB/GBC: maps the bank at $4000-$7FFF (default bank 1). Lets you disassemble UxROM/MMC1/MMC3 bank N without slicing the ROM by hand."),
-      thumb: z.boolean().default(false).describe("GBA only: disassemble as THUMB (16-bit) code instead of ARM (32-bit). GBA code mixes both; pass true for a region you know is Thumb."),
-      startAddress: z.number().int().min(0).max(0xffffffff).default(0x8000).describe("CPU address to start at. NES: $8000-$FFFF. SNES: $008000-$FFFFFF. GBA: ROM maps at 0x08000000 (the default 0x8000 is auto-bumped to 0x08000000 for GBA)."),
-      length: z.number().int().min(1).max(65536).optional().describe("Bytes to disassemble. Default 256. Mutually exclusive with endAddress."),
-      endAddress: z.number().int().min(0).max(0xffffff).optional().describe("CPU end address (inclusive). Alternative to length — useful when disassembling 'from X to Y'."),
-      untilReturn: z.boolean().default(false).describe("Stop at the first rts/rti/rtl/bare-jmp encountered in the output. Use to grab exactly one routine after locating its entry via auto-tagged labels."),
-      mapper: z.enum(["lorom", "hirom"]).optional().describe("SNES only: override mapper detection (header-less homebrew defaults to lorom)."),
-      dataRanges: z.array(z.object({
-        start: z.number().int().min(0).max(0xffffff).describe("CPU address (start of data range)."),
-        length: z.number().int().min(1).describe("Length in bytes."),
-      })).optional().describe("Address ranges to treat as DATA (emitted as `.byte` tables instead of disassembled as code). Use for sprite/tile/lookup tables embedded in the code stream."),
-      autoLabelVectors: z.boolean().default(true).describe("Pre-seed reset/nmi/irq labels from the vector table. Hugely improves orientation in unknown ROMs."),
-      annotateRegisters: z.boolean().default(true).describe("Append `; PPUMASK` etc. to operands that hit a known hardware register."),
-      annotateFileOffsets: z.boolean().default(true).describe("Append `; @0xNNNN` to every disassembled line — direct file offset for patchFile."),
-      addOrigin: z.boolean().default(true).describe("Prepend a `.org <startAddress>` directive (6502/cc65 output) so the asm RE-ASSEMBLES UNMODIFIED through ca65 — without it, absolute branch targets fail relocatable assembly with 'Range error'. Set false only when feeding a multi-segment linker config that sets the origin itself."),
-      outputPath: z.string().optional().describe("Absolute path. If set, writes the raw asm to disk and returns `{outputPath, length, bytes}` instead of inline asm. Use for large disassemblies."),
-    },
-    safeTool(async (args) => {
+async function disassembleRomCore(args) {
       const {
         path: romPath, platform, mapper,
         untilReturn, dataRanges,
@@ -1062,31 +1010,9 @@ export function registerDisasmTools(server, z) {
       }
 
       return jsonContent({ ...baseResult, ok: true, asm });
-    }),
-  );
+}
 
-  server.tool(
-    "disassembleProject",
-    "Use this to turn a ROM into a complete, re-buildable disassembly project in ONE call — across ALL " +
-    "supported systems: NES, SNES, Game Boy/Color, Sega Master System/Game Gear, Genesis/Mega Drive, " +
-    "C64, Atari 2600/7800, Lynx (65C02), PC Engine, MSX — and GBA. (GBA always rebuilds BYTE-EXACT, split into a " +
-    "header data region + an ARM-mode code region; but most GBA C is THUMB, which an ARM-mode disasm can't read so " +
-    "it falls back to byte-exact `.byte` — readability is low until ARM/Thumb mode-tracking lands. Use " +
-    "`disassembleRom({thumb:true})` / `findReferences` to READ ARM7/Thumb spans with full mnemonics.) " +
-    "It splits the ROM into regions (per-16KB-bank for banked NES; one region for flat " +
-    "ROMs), disassembles each, and — critically — REASSEMBLES each region and verifies it is BYTE-EXACT " +
-    "against the original (`roundTripOk` per region). Lines that don't reassemble faithfully fall back to " +
-    "`.byte`/`db` data, so the output ALWAYS rebuilds to the original bytes; `readablePercent` reports how " +
-    "much came back as real instructions vs data. Each `.asm` has a provenance header and is ready to edit + " +
-    "rebuild. Writes everything under `outputDir`. (Per-CPU reassembler: cc65 for 6502/65816, sjasm for Z80, " +
-    "rgbds for GB, vasm for 68k.) NOTE: SNES currently emits byte-exact DATA-ONLY (low readablePercent) — " +
-    "instruction-level SNES is a known follow-up; the bytes are still correct.",
-    {
-      path: z.string().describe("Absolute path to the ROM (.nes/.sfc/.gb/.gbc/.sms/.gg/.bin/.prg/.a26/.a78/.lnx)."),
-      outputDir: z.string().describe("Directory to write the project into (created if needed). Gets one .asm per region."),
-      platform: z.enum(["nes", "snes", "gb", "gbc", "sms", "gg", "genesis", "c64", "atari2600", "atari7800", "lynx", "gba", "pce", "msx"]).optional().describe("Override platform detection (otherwise sniffed from the file extension). GBA rebuilds byte-exact (header data region + ARM code region) but most code is Thumb → low readability; use disassembleRom({thumb:true}) to READ Thumb spans."),
-    },
-    safeTool(async ({ path: romPath, outputDir, platform }) => {
+async function disassembleProjectCore({ path: romPath, outputDir, platform }) {
       const { reassembleForPlatform } = await import("../../toolchains/common/reassemble.js");
       const data = new Uint8Array(await readFile(romPath));
       const resolved = platform ?? sniffPlatformFromPath(romPath);
@@ -1131,6 +1057,67 @@ export function registerDisasmTools(server, z) {
           ? `All ${out.length} region(s) round-trip BYTE-EXACT (avg ${avgReadable}% disassembled as instructions, the rest as .byte data). Edit the .asm files and rebuild.`
           : `Some regions did NOT round-trip byte-exact — see regions[].note.`,
       });
+}
+
+export function registerDisasmTools(server, z) {
+  server.tool(
+    "disasm",
+    "Disassemble code — raw bytes, a whole ROM (mapper-aware), a full re-buildable project, or find references to " +
+    "an address. `target`: 'bytes' | 'rom' | 'project' | 'references'.\n" +
+    "'bytes' = RAW da65 over a chunk (path/base64), 6502-family CPU via `cpu`; emits `.org` so it re-assembles.\n" +
+    "'rom' = mapper-aware ROM disassembly with agent annotations: auto-tagged reset/nmi/irq vectors, hardware " +
+    "register names on operands, per-line `; @0xNNNN` file offsets ready for romPatch (NES reports .nes AND PRG " +
+    "offsets). Platform sniffed from extension. GBA=ARM7TDMI (ARM by default, `thumb:true` for Thumb). Use " +
+    "`endAddress`/`untilReturn` for one routine, `dataRanges` to mark non-code, `bank` for a banked slot.\n" +
+    "'project' = turn a ROM into a complete re-buildable disassembly in one call across all systems; splits into " +
+    "regions, REASSEMBLES each and verifies BYTE-EXACT (`roundTripOk`); non-faithful lines fall back to `.byte` so " +
+    "it ALWAYS rebuilds; `readablePercent` reports instruction-vs-data. (SNES is byte-exact data-only for now.)\n" +
+    "'references' = scan a ROM's code for operands matching a CPU `address` and classify each (call/jump/branch/" +
+    "read/write); also walks the vector table. LIMITATION: direct addressing only (indirect/computed jumps + " +
+    "cross-bank refs are missed).",
+    {
+      target: z.enum(["bytes", "rom", "project", "references"]).describe("bytes = raw chunk; rom = mapper-aware ROM; project = full rebuildable disasm; references = find refs to an address."),
+      // shared
+      path: z.string().optional().describe("target=bytes: raw binary path. target=rom/project/references: the ROM file path."),
+      base64: z.string().optional().describe("target=bytes: base64 of the bytes (OR `path`)."),
+      platform: z.enum(["nes", "snes", "sms", "gg", "gb", "gbc", "atari2600", "atari7800", "c64", "genesis", "gba", "pce", "msx", "lynx"]).optional().describe("target=rom/project/references: override platform (else sniffed from extension)."),
+      startAddress: z.number().int().min(0).max(0xffffffff).default(0x8000).describe("target=bytes/rom: address of the first byte (GBA auto-bumped to 0x08000000)."),
+      length: z.number().int().min(1).max(65536).optional().describe("target=rom: bytes to disassemble (default 256; mutually exclusive with endAddress)."),
+      addOrigin: z.boolean().default(true).describe("target=bytes/rom: prepend `.org` so the asm re-assembles through ca65."),
+      outputPath: z.string().optional().describe("target=bytes/rom: write asm to disk and return {path}; required for bytes unless inline:true."),
+      inline: z.boolean().default(false).describe("target=bytes: return asm in the response instead of writing to disk."),
+      // bytes
+      cpu: z.enum(["6502", "65c02", "65sc02", "65816", "huc6280"]).default("6502").describe("target=bytes: CPU dialect for da65."),
+      symbolsPath: z.string().optional().describe("target=bytes: symbol file (asar .sym / cc65 .lbl) to annotate with labels."),
+      symbolsText: z.string().optional().describe("target=bytes: inline symbol-file text."),
+      symbolsFormat: z.enum(["wla", "cc65-lbl"]).optional().describe("target=bytes: explicit symbol-file format override."),
+      // rom
+      bank: z.number().int().min(0).max(255).optional().describe("target=rom: switchable ROM bank to map before disassembling (NES mapper>0 / GB banked)."),
+      thumb: z.boolean().default(false).describe("target=rom: GBA — disassemble as THUMB (16-bit) instead of ARM."),
+      endAddress: z.number().int().min(0).max(0xffffff).optional().describe("target=rom: CPU end address (inclusive); alternative to length."),
+      untilReturn: z.boolean().default(false).describe("target=rom: stop at the first rts/rti/rtl/bare-jmp — grab one routine."),
+      mapper: z.enum(["lorom", "hirom"]).optional().describe("target=rom/references: SNES mapper override (header-less homebrew defaults lorom)."),
+      dataRanges: z.array(z.object({
+        start: z.number().int().min(0).max(0xffffff),
+        length: z.number().int().min(1),
+      })).optional().describe("target=rom: address ranges to emit as `.byte` data instead of code."),
+      autoLabelVectors: z.boolean().default(true).describe("target=rom: pre-seed reset/nmi/irq labels from the vector table."),
+      annotateRegisters: z.boolean().default(true).describe("target=rom: append `; PPUMASK` etc. to operands hitting a known hardware register."),
+      annotateFileOffsets: z.boolean().default(true).describe("target=rom: append `; @0xNNNN` file offset to every line (for romPatch)."),
+      // project
+      outputDir: z.string().optional().describe("target=project: directory to write the project into (one .asm per region)."),
+      // references
+      address: z.number().int().min(0).max(0xFFFFFF).optional().describe("target=references: the CPU address to find references TO."),
+      maxRefsReturned: z.number().int().min(1).max(2048).default(256).describe("target=references: cap the references returned."),
+    },
+    safeTool(async (args) => {
+      switch (args.target) {
+        case "bytes":      return await disassembleCore(args);
+        case "rom":        return await disassembleRomCore(args);
+        case "project":    return await disassembleProjectCore(args);
+        case "references": return jsonContent(await findReferencesCore(args));
+        default: throw new Error(`disasm: unknown target '${args.target}'`);
+      }
     }),
   );
 }

@@ -11,11 +11,20 @@ import path from "node:path";
 import { existsSync } from "node:fs";
 import { registerDisasmTools } from "../src/mcp/tools/disasm.js";
 
-// Capture the registered handlers.
+// Capture the registered handlers. Post-consolidation there's ONE `disasm` tool
+// with a `target` axis; this adapter re-exposes the old per-tool method names
+// (mapping to disasm({target})) so the existing test bodies + assertions are
+// unchanged.
 function handlers() {
   const map = {};
   registerDisasmTools({ tool: (n, _d, _s, h) => { map[n] = h; } }, z);
-  return map;
+  const disasm = map.disasm;
+  return {
+    disassemble:        (a) => disasm({ target: "bytes", ...a }),
+    disassembleRom:     (a) => disasm({ target: "rom", ...a }),
+    disassembleProject: (a) => disasm({ target: "project", ...a }),
+    findReferences:     (a) => disasm({ target: "references", ...a }),
+  };
 }
 const parse = (res) => JSON.parse(res.content.find((c) => c.type === "text").text);
 
