@@ -1,16 +1,35 @@
 {
   "name": "romdev-core-bluemsx",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "blueMSX libretro core (MSX / MSX2) for romdev, bundled as WASM. Ships C-BIOS (open-source MSX BIOS) so no proprietary ROM is required.",
   "type": "module",
   "main": "index.js",
-  "exports": { ".": "./index.js", "./wasm/*": "./wasm/*", "./bios/*": "./bios/*" },
-  "files": ["index.js", "wasm", "bios", "README.md"],
-  "engines": { "node": ">=24" },
+  "exports": {
+    ".": "./index.js",
+    "./wasm/*": "./wasm/*",
+    "./bios/*": "./bios/*"
+  },
+  "files": [
+    "index.js",
+    "wasm",
+    "bios",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
   "license": "BSD-3-Clause",
-  "repository": { "type": "git", "url": "git+https://github.com/monteslu/romdev.git", "directory": "packages/romdev-core-bluemsx" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monteslu/romdev.git",
+    "directory": "packages/romdev-core-bluemsx"
+  },
   "homepage": "https://github.com/monteslu/romdev#readme",
-  "bugs": { "url": "https://github.com/monteslu/romdev/issues" },
+  "bugs": {
+    "url": "https://github.com/monteslu/romdev/issues"
+  },
   "author": "Luis Montes",
-  "scripts": { "prepublishOnly": "node ../../scripts/verify-wasm.mjs" }
+  "scripts": {
+    "prepublishOnly": "node ../../scripts/verify-wasm.mjs"
+  }
 }

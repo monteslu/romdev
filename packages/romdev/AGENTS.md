@@ -58,7 +58,7 @@ Skip playtest only when there's clearly no human in the loop: CI runs, automated
 - `assets` — convert PNGs to tiles, WAVs to BRR, identify ROMs, plus the hacking toolkit (`patchFile`, `assembleSnippet`, `diffRoms`, `findFreeSpace`, `spliceCHR`, `extractCart`, `wrapRomFromParts`)
 - `project` — starter snippets per platform
 - `show` — `playtest` (open the live SDL window for a human), `playtestStop`, `playtestStatus`, `playtestFramebuffer` (capture exactly what the human's window shows)
-- `advanced` — runUntil, watchMemory / runUntilWrite, **`findWriter`** (the EXACT instruction that wrote a byte, via a core watchpoint — fixes the frame-sampled-PC problem), **`runUntilPC`** (execution breakpoint — freeze the CPU AT an instruction and read its registers), **`runUntilRead`** (the EXACT instruction that read a byte), **`stepInstruction`** (CPU single-step) — Genesis today, more cores as patched; input recording
+- `advanced` — runUntil, watchMemory / runUntilWrite, **`findWriter`** (the EXACT instruction that wrote a byte, via a core watchpoint — fixes the frame-sampled-PC problem), **`runUntilPC`** (execution breakpoint — freeze the CPU AT an instruction and read its registers), **`runUntilRead`** (the EXACT instruction that read a byte), **`stepInstruction`** (CPU single-step) — all 14 platforms; input recording
 
 **"Disassemble this NES ROM"** is now just: `disassembleRom({path, startAddress, length})`. No discovery step.
 
@@ -422,7 +422,7 @@ runUntilWrite({ region:"system_ram", offset:0x03B6, maxFrames:300,
   → { pc: "$E3AF" (frame-sampled), changes:[{ before:31, after:32 }] }
 ```
 
-**Execution breakpoints (Genesis today) — read the register at the instruction.**
+**Execution breakpoints (all 14 platforms) — read the register at the instruction.**
 When the answer isn't a flat table but a value computed in a register, stop the
 CPU *at the instruction* and read it:
 - **`runUntilPC({ address, maxFrames, pressDuring })`** — runs until the CPU PC
@@ -434,8 +434,9 @@ CPU *at the instruction* and read it:
   EXACT instruction PC that READ an address (who *consumes* a value).
 - **`stepInstruction()`** — CPU-level single-step; pair with `getCPUState` to watch
   registers change one instruction at a time.
-- These are Genesis (genesis_plus_gx) for now and return `{ notSupported:true }`
-  on cores not yet patched — the gpgx m68k patch is the template for the rest.
+- These work on all 14 platforms (every bundled CPU family). (PC Engine has no
+  write watchpoint, so `findWriter` is unavailable there — anchor with `runUntilRead`
+  or a known code address instead.)
 
 ```js
 findWriter({ address:0xFF2000 }) → { pc:"$49E", ... }   // get a real instruction PC

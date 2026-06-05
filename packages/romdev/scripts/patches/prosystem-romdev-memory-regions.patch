@@ -8,13 +8,20 @@
 # Also adds an instruction-level WRITE WATCHPOINT (6502): memory_Write in
 # core/Memory.c records sally_pc when a watched address is written; libretro.c
 # exports romdev_watchpoint_set/get.
+#
+# Also adds an instruction-level READ WATCHPOINT (memory_Read in core/Memory.c)
+# and an execution-level PC BREAKPOINT / single-step (the hook in
+# core/Sally.c:sally_ExecuteInstruction freezes the CPU at a target PC; the
+# per-frame loop in core/ProSystem.c drains the cycle budget on a hit so
+# retro_run still returns). libretro.c exports romdev_readwatch_set/get and
+# romdev_pcbreak_set/get — these power runUntilRead / runUntilPC / stepInstruction.
 # git apply ignores everything above the first 'diff --git' line.
 #
 diff --git a/core/Memory.c b/core/Memory.c
-index cb12bd3..d72f295 100644
+index cb12bd3..198f8ff 100644
 --- a/core/Memory.c
 +++ b/core/Memory.c
-@@ -30,6 +30,14 @@
+@@ -30,6 +30,24 @@
  #include "Cartridge.h"
  #include "Tia.h"
  #include "Riot.h"
@@ -26,10 +33,57 @@ index cb12bd3..d72f295 100644
 +unsigned int  romdev_wp_last_pc  = 0xFFFFFFFF;
 +unsigned char romdev_wp_last_val = 0;
 +unsigned int  romdev_wp_hits     = 0;
++
++/* romdev instruction-level READ watchpoint state (mirror of the write watch;
++ * hook at the tail of memory_Read). Records the 6502 PC (sally_pc.w) of the
++ * instruction that READ a watched address, the value read, and a hit count.
++ * Exported via romdev_readwatch_* in libretro.c. */
++unsigned int  romdev_rd_addr     = 0;
++int           romdev_rd_enabled  = 0;
++unsigned int  romdev_rd_last_pc  = 0xFFFFFFFF;
++unsigned char romdev_rd_last_val = 0;
++unsigned int  romdev_rd_hits     = 0;
  
  uint8_t memory_ram[MEMORY_SIZE] = {0};
  uint8_t memory_rom[MEMORY_SIZE] = {0};
-@@ -83,6 +91,9 @@ uint8_t memory_Read(uint16_t address)
+@@ -62,27 +80,42 @@ uint16_t memory_souper_GetRamAddress(uint16_t address)
+ 
+ uint8_t memory_Read(uint16_t address)
+ {
++   uint8_t romdev_rd_value;
+    switch ( address )
+    {
+       case INTIM:
+       case INTIM | 0x2:
+          memory_ram[INTFLG] &= 0x7f;
+-         return memory_ram[INTIM];
++         romdev_rd_value = memory_ram[INTIM];
++         goto romdev_rd_done;
+       case INTFLG:
+       case INTFLG | 0x2:
+          memory_ram[INTFLG] &= 0x7f;
+-         return memory_ram[INTFLG];
++         romdev_rd_value = memory_ram[INTFLG];
++         goto romdev_rd_done;
+       default:
+          if(cartridge_type == CARTRIDGE_TYPE_SOUPER && address >= 0x4000 && address < 0x8000)
+-            return memory_souper_ram[memory_souper_GetRamAddress(address)];
++         {
++            romdev_rd_value = memory_souper_ram[memory_souper_GetRamAddress(address)];
++            goto romdev_rd_done;
++         }
+          break;
+    }
+ 
+-   return memory_ram[address];
++   romdev_rd_value = memory_ram[address];
++
++romdev_rd_done:
++   if (romdev_rd_enabled && (unsigned int)address == romdev_rd_addr) {
++      romdev_rd_last_pc = sally_pc.w; romdev_rd_last_val = romdev_rd_value; romdev_rd_hits++;
++   }
++   return romdev_rd_value;
+ }
  
  void memory_Write(uint16_t address, uint8_t data)
  {
@@ -39,8 +93,117 @@ index cb12bd3..d72f295 100644
     if(!memory_rom[address])
     {
        switch(address)
+diff --git a/core/ProSystem.c b/core/ProSystem.c
+index 753035e..e43551e 100644
+--- a/core/ProSystem.c
++++ b/core/ProSystem.c
+@@ -42,6 +42,13 @@ static uint32_t prosystem_cycles = 0;
+ uint16_t prosystem_frequency     = 60;
+ uint16_t prosystem_scanlines     = 262;
+ 
++/* romdev PC breakpoint hit flag — set by the execute hook in core/Sally.c when
++ * the CPU reaches the breakpoint PC. On a hit sally_ExecuteInstruction returns
++ * WITHOUT advancing PC or consuming cycles, so the per-frame cycle loops below
++ * would spin forever; we must drain the budget and break out so retro_run still
++ * returns this frame (leaving it incomplete = infinite hang). */
++extern volatile int romdev_pc_hit;
++
+ void prosystem_Reset(void)
+ {
+    if(!cartridge_IsLoaded())
+@@ -87,6 +94,7 @@ void prosystem_ExecuteFrame(const uint8_t* input)
+       while(prosystem_cycles < 28)
+       {
+          cycles = sally_ExecuteInstruction();
++         if(romdev_pc_hit) { prosystem_cycles = 456; break; }
+          prosystem_cycles += (cycles << 2);
+ 
+          if(riot_timing)
+@@ -99,6 +107,7 @@ void prosystem_ExecuteFrame(const uint8_t* input)
+             break;
+          }
+       }
++      if(romdev_pc_hit) break;
+ 
+       cycles = maria_RenderScanline();
+       if(cartridge_flags & CARTRIDGE_CYCLE_STEALING_MASK)
+@@ -107,6 +116,7 @@ void prosystem_ExecuteFrame(const uint8_t* input)
+       while(prosystem_cycles < 456)
+       {
+          cycles = sally_ExecuteInstruction();
++         if(romdev_pc_hit) { prosystem_cycles = 456; break; }
+          prosystem_cycles += (cycles << 2);
+          if(riot_timing)
+             riot_UpdateTimer(cycles);
+@@ -118,6 +128,7 @@ void prosystem_ExecuteFrame(const uint8_t* input)
+             break;
+          }
+       }
++      if(romdev_pc_hit) break;
+       tia_Process(2);
+       if(cartridge_pokey)
+          pokey_Process(2);
+diff --git a/core/Sally.c b/core/Sally.c
+index dede0ca..1f7944b 100644
+--- a/core/Sally.c
++++ b/core/Sally.c
+@@ -34,6 +34,25 @@ uint8_t sally_p = 0;
+ uint8_t sally_s = 0;
+ pair sally_pc = {0};
+ 
++/* romdev PC BREAKPOINT / single-step (6502 execute hook in
++ * sally_ExecuteInstruction below). When enabled and the 6502 PC about to
++ * execute (sally_pc.w, BEFORE the opcode fetch) equals romdev_pc_addr, the hook
++ * sets romdev_pc_hit and returns WITHOUT executing — the CPU is frozen exactly
++ * at that PC. prosystem_ExecuteFrame (core/ProSystem.c) sees the hit flag after
++ * each instruction and drains the remaining per-frame cycle budget so retro_run
++ * finishes (leaving the frame incomplete = infinite hang). The host polls
++ * romdev_pcbreak_get after each retro_run frame, stops stepping once hit is set,
++ * then reads the register file via getCPUState. romdev_pc_step arms a
++ * per-instruction countdown (host arms to 2 = "let ONE instruction execute,
++ * then stop") so single-step ADVANCES the PC instead of re-stopping on the
++ * current un-executed instruction. Exported via romdev_pcbreak_* in libretro.c. */
++unsigned int  romdev_pc_addr    = 0;
++int           romdev_pc_enabled = 0;
++int           romdev_pc_step    = 0;
++volatile int  romdev_pc_hit     = 0;
++unsigned int  romdev_pc_last_pc = 0xFFFFFFFF;
++unsigned int  romdev_pc_hits    = 0;
++
+ static uint8_t sally_opcode;
+ static pair sally_address;
+ static uint32_t sally_cycles;
+@@ -754,6 +773,28 @@ void sally_Reset(void)
+ 
+ uint32_t sally_ExecuteInstruction(void)
+ {
++   /* romdev PC breakpoint / single-step: checked here, BEFORE the opcode fetch,
++    * so sally_pc.w is the address of the instruction about to execute. On a hit
++    * (or single-step countdown reaching 0) freeze the CPU at this PC: record it,
++    * set the hit flag, return WITHOUT executing or advancing PC, and report 0
++    * cycles. The frame loop drains the remaining cycle budget on the hit flag so
++    * retro_run still returns. Gated on !romdev_pc_hit so a held breakpoint
++    * doesn't re-fire while the host reads state and disarms. */
++   if ((romdev_pc_enabled || romdev_pc_step) && !romdev_pc_hit)
++   {
++      int stepFire = 0;
++      if (romdev_pc_step) { if (--romdev_pc_step <= 0) stepFire = 1; }
++      if (stepFire || ((romdev_pc_enabled && !romdev_pc_step)
++                       && (unsigned int)sally_pc.w == romdev_pc_addr))
++      {
++         romdev_pc_last_pc = sally_pc.w;   /* leave PC frozen exactly here */
++         romdev_pc_hit = 1;
++         romdev_pc_hits++;
++         romdev_pc_step = 0;               /* one-shot */
++         return 0;
++      }
++   }
++
+    sally_opcode = memory_Read(sally_pc.w++);
+    sally_cycles = SALLY_CYCLES[sally_opcode];
+ 
 diff --git a/core/libretro.c b/core/libretro.c
-index 3e4dbdb..58d2d94 100644
+index 3e4dbdb..177797e 100644
 --- a/core/libretro.c
 +++ b/core/libretro.c
 @@ -28,6 +28,7 @@
@@ -51,7 +214,7 @@ index 3e4dbdb..58d2d94 100644
  
  #ifdef _3DS
  extern void* linearMemAlign(size_t size, size_t alignment);
-@@ -614,15 +615,63 @@ unsigned retro_get_region(void)
+@@ -614,15 +615,128 @@ unsigned retro_get_region(void)
      return cartridge_region == REGION_NTSC ? RETRO_REGION_NTSC : RETRO_REGION_PAL;
  }
  
@@ -81,6 +244,71 @@ index 3e4dbdb..58d2d94 100644
 +    out5[3] = (unsigned int)romdev_wp_last_val;
 +    out5[4] = romdev_wp_hits;
 +    if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; }
++}
++
++/* romdev READ watchpoint (6502) — symmetric to the write watch above. Records
++ * the 6502 PC of the instruction that READ a watched address (hooked in
++ * core/Memory.c:memory_Read, the mirror of the write hook). State defined there. */
++extern unsigned int  romdev_rd_addr;
++extern int           romdev_rd_enabled;
++extern unsigned int  romdev_rd_last_pc;
++extern unsigned char romdev_rd_last_val;
++extern unsigned int  romdev_rd_hits;
++
++void romdev_readwatch_set(unsigned int addr, int enabled)
++{
++    romdev_rd_addr = addr;
++    romdev_rd_enabled = enabled ? 1 : 0;
++    romdev_rd_last_pc = 0xFFFFFFFF;
++    romdev_rd_last_val = 0;
++    romdev_rd_hits = 0;
++}
++
++/* Fills out5: [enabled, addr, lastPC, lastVal, hits]. */
++void romdev_readwatch_get(unsigned int *out5, int clearHits)
++{
++    if (!out5) return;
++    out5[0] = (unsigned int)romdev_rd_enabled;
++    out5[1] = romdev_rd_addr;
++    out5[2] = romdev_rd_last_pc;
++    out5[3] = (unsigned int)romdev_rd_last_val;
++    out5[4] = romdev_rd_hits;
++    if (clearHits) { romdev_rd_hits = 0; romdev_rd_last_pc = 0xFFFFFFFF; }
++}
++
++/* romdev PC BREAKPOINT (6502 execute hook in core/Sally.c:sally_ExecuteInstruction).
++ * Freezes the CPU exactly at the breakpoint PC; the host polls romdev_pcbreak_get
++ * after each retro_run frame, stops stepping once hit is set, then reads registers
++ * via getCPUState. `step` arms a one-instruction single-step (ignores addr). */
++extern unsigned int  romdev_pc_addr;
++extern int           romdev_pc_enabled;
++extern int           romdev_pc_step;
++extern volatile int  romdev_pc_hit;
++extern unsigned int  romdev_pc_last_pc;
++extern unsigned int  romdev_pc_hits;
++
++void romdev_pcbreak_set(unsigned int addr, int enabled, int step)
++{
++    romdev_pc_addr = addr;
++    romdev_pc_enabled = enabled ? 1 : 0;
++    /* step is a per-instruction countdown; arm to 2 so ONE instruction executes
++     * before the stop fires (true single-step that advances the PC). */
++    romdev_pc_step = step ? 2 : 0;
++    romdev_pc_hit = 0;
++    romdev_pc_last_pc = 0xFFFFFFFF;
++    romdev_pc_hits = 0;
++}
++
++/* Fills out5: [enabled, addr, hit, lastPC, hits]. Pass clearHit to re-arm. */
++void romdev_pcbreak_get(unsigned int *out5, int clearHit)
++{
++    if (!out5) return;
++    out5[0] = (unsigned int)romdev_pc_enabled;
++    out5[1] = romdev_pc_addr;
++    out5[2] = (unsigned int)romdev_pc_hit;
++    out5[3] = romdev_pc_last_pc;
++    out5[4] = romdev_pc_hits;
++    if (clearHit) { romdev_pc_hit = 0; }
 +}
 +
  unsigned retro_api_version(void)
@@ -115,7 +343,7 @@ index 3e4dbdb..58d2d94 100644
      return NULL;
  }
  
-@@ -630,6 +679,8 @@ size_t retro_get_memory_size(unsigned id)
+@@ -630,6 +744,8 @@ size_t retro_get_memory_size(unsigned id)
  {
      if ( id == RETRO_MEMORY_SYSTEM_RAM )
          return MEMORY_SIZE;

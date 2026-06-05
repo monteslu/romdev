@@ -18,14 +18,93 @@
 #   PCE_CPU_REGS   0x1A4   snapshot     PC/A/X/Y/S/P + timer/irq
 #   PCE_PSG_REGS   0x1A5   snapshot     6 PSG channels + main amplitude + LFO
 #
+# Also adds an execution-level PC BREAKPOINT / single-step and an
+# instruction-level READ WATCHPOINT (HuC6280 = 65C02 superset). The hook in
+# HuC6280::RunInstruction (huc6280_inline.h) freezes the CPU at a target PC; the
+# per-frame loop in geargrafx_core_inline.h drains on the hit flag so retro_run
+# returns. Memory::Read (memory_inline.h, body moved to ReadInternal) records the
+# reading PC for the read watch. libretro.cpp exports romdev_pcbreak_set/get and
+# romdev_readwatch_set/get — these power runUntilPC / stepInstruction /
+# runUntilRead. (This core has no write watchpoint.)
+# git apply ignores everything above the first 'diff --git' line.
+#
 diff --git a/platforms/libretro/libretro.cpp b/platforms/libretro/libretro.cpp
-index 131c841..72ea007 100644
+index 131c841..517a934 100644
 --- a/platforms/libretro/libretro.cpp
 +++ b/platforms/libretro/libretro.cpp
-@@ -447,6 +447,107 @@ bool retro_unserialize(const void *data, size_t size)
+@@ -447,6 +447,176 @@ bool retro_unserialize(const void *data, size_t size)
      return core->LoadState(reinterpret_cast<const u8*>(data), size);
  }
  
++/* ---- romdev execution breakpoint + read watchpoint (HuC6280) ----------
++ * The HuC6280 is a 65C02 superset; these mirror the 6502 impl on the other
++ * romdev cores. State lives here (C linkage); the hooks live in the core:
++ *   - PC break / single-step: HuC6280::RunInstruction (huc6280_inline.h) freezes
++ *     the CPU at the target PC; the per-frame loop in geargrafx_core_inline.h
++ *     drains on romdev_pc_hit so retro_run returns.
++ *   - read watch: Memory::Read (memory_inline.h) records the reading PC.
++ * Exported as romdev_pcbreak_set/get + romdev_readwatch_set/get — these power
++ * runUntilPC / stepInstruction / runUntilRead. (This core has no write watch.) */
++extern "C" {
++unsigned int  romdev_rd_addr     = 0;
++int           romdev_rd_enabled  = 0;
++unsigned int  romdev_rd_last_pc  = 0xFFFFFFFF;
++unsigned char romdev_rd_last_val = 0;
++unsigned int  romdev_rd_hits     = 0;
++
++void romdev_readwatch_set(unsigned int addr, int enabled)
++{
++    romdev_rd_addr = addr;
++    romdev_rd_enabled = enabled ? 1 : 0;
++    romdev_rd_last_pc = 0xFFFFFFFF;
++    romdev_rd_last_val = 0;
++    romdev_rd_hits = 0;
++}
++
++/* Fills out5: [enabled, addr, lastPC, lastVal, hits]. */
++void romdev_readwatch_get(unsigned int *out5, int clearHits)
++{
++    if (!out5) return;
++    out5[0] = (unsigned int)romdev_rd_enabled;
++    out5[1] = romdev_rd_addr;
++    out5[2] = romdev_rd_last_pc;
++    out5[3] = (unsigned int)romdev_rd_last_val;
++    out5[4] = romdev_rd_hits;
++    if (clearHits) { romdev_rd_hits = 0; romdev_rd_last_pc = 0xFFFFFFFF; }
++}
++
++unsigned int  romdev_pc_addr    = 0;
++int           romdev_pc_enabled = 0;
++int           romdev_pc_step    = 0;
++volatile int  romdev_pc_hit     = 0;
++unsigned int  romdev_pc_last_pc = 0xFFFFFFFF;
++unsigned int  romdev_pc_hits    = 0;
++
++void romdev_pcbreak_set(unsigned int addr, int enabled, int step)
++{
++    romdev_pc_addr = addr;
++    romdev_pc_enabled = enabled ? 1 : 0;
++    /* step is a per-instruction countdown; arm to 2 so ONE instruction executes
++     * before the stop fires (true single-step that advances the PC). */
++    romdev_pc_step = step ? 2 : 0;
++    romdev_pc_hit = 0;
++    romdev_pc_last_pc = 0xFFFFFFFF;
++    romdev_pc_hits = 0;
++}
++
++/* Fills out5: [enabled, addr, hit, lastPC, hits]. Pass clearHit to re-arm. */
++void romdev_pcbreak_get(unsigned int *out5, int clearHit)
++{
++    if (!out5) return;
++    out5[0] = (unsigned int)romdev_pc_enabled;
++    out5[1] = romdev_pc_addr;
++    out5[2] = (unsigned int)romdev_pc_hit;
++    out5[3] = romdev_pc_last_pc;
++    out5[4] = romdev_pc_hits;
++    if (clearHit) { romdev_pc_hit = 0; }
++}
++}
++
 +/* ---- romdev memory-region exposure (PC Engine) ----------------------- */
 +#define ROMDEV_MEMORY_PCE_VDC_VRAM    0x1A0
 +#define ROMDEV_MEMORY_PCE_VDC_SATB    0x1A1
@@ -130,7 +209,7 @@ index 131c841..72ea007 100644
  void *retro_get_memory_data(unsigned id)
  {
      switch (id)
-@@ -457,6 +558,18 @@ void *retro_get_memory_data(unsigned id)
+@@ -457,6 +627,18 @@ void *retro_get_memory_data(unsigned id)
              return core->GetMemory()->GetWorkingRAM();
          case RETRO_MEMORY_VIDEO_RAM:
              return (u8*)core->GetHuC6270_1()->GetVRAM();
@@ -149,7 +228,7 @@ index 131c841..72ea007 100644
      }
  
      return NULL;
-@@ -472,6 +585,18 @@ size_t retro_get_memory_size(unsigned id)
+@@ -472,6 +654,18 @@ size_t retro_get_memory_size(unsigned id)
              return core->GetMemory()->GetWorkingRAMSize();
          case RETRO_MEMORY_VIDEO_RAM:
              return HUC6270_VRAM_SIZE * 2;
@@ -168,3 +247,146 @@ index 131c841..72ea007 100644
      }
  
      return 0;
+diff --git a/src/geargrafx_core_inline.h b/src/geargrafx_core_inline.h
+index 3caa541..11767c8 100644
+--- a/src/geargrafx_core_inline.h
++++ b/src/geargrafx_core_inline.h
+@@ -30,6 +30,14 @@
+ #include "cdrom_audio.h"
+ #include "adpcm.h"
+ 
++/* romdev PC breakpoint hit flag (defined in libretro.cpp). When the execute hook
++ * in HuC6280::RunInstruction freezes the CPU at a breakpoint, RunInstruction
++ * returns 0 cycles WITHOUT advancing PC, so the per-frame loops below would spin
++ * forever (m_frame_ready never set). We must break out on the hit flag so
++ * RunToVBlank returns and retro_run completes (leaving the frame incomplete =
++ * infinite hang). */
++extern "C" { extern volatile int romdev_pc_hit; }
++
+ INLINE bool GeargrafxCore::RunToVBlank(u8* frame_buffer, s16* sample_buffer, int* sample_count, GG_Debug_Run* debug)
+ {
+     if (m_paused || !m_media->IsReady())
+@@ -113,6 +121,9 @@ bool GeargrafxCore::RunToVBlankTemplate(u8* frame_buffer, s16* sample_buffer, in
+                         stop = true;
+                 }
+             }
++
++            if (romdev_pc_hit)   /* romdev PC breakpoint — end the frame here */
++                stop = true;
+         }
+         while (!stop);
+ 
+@@ -137,6 +148,9 @@ bool GeargrafxCore::RunToVBlankTemplate(u8* frame_buffer, s16* sample_buffer, in
+             stop = m_frame_ready;
+             if (ClockHardware<is_cdrom, is_sgx>(remaining_cycles))
+                 stop = true;
++
++            if (romdev_pc_hit)   /* romdev PC breakpoint — end the frame here */
++                stop = true;
+         }
+         while (!stop);
+ 
+diff --git a/src/huc6280_inline.h b/src/huc6280_inline.h
+index c2e449d..52f339b 100644
+--- a/src/huc6280_inline.h
++++ b/src/huc6280_inline.h
+@@ -28,8 +28,51 @@
+ #include "memory.h"
+ #include "trace_logger.h"
+ 
++/* romdev PC BREAKPOINT / single-step state (defined in libretro.cpp). When
++ * enabled and the HuC6280 PC about to execute (m_PC, BEFORE the opcode fetch)
++ * equals romdev_pc_addr, RunInstruction sets romdev_pc_hit and returns WITHOUT
++ * executing — the CPU is frozen exactly at that PC. The per-frame loop in
++ * geargrafx_core_inline.h breaks on the hit flag so RunToVBlank returns and
++ * retro_run finishes (leaving the frame incomplete = infinite hang). The host
++ * polls romdev_pcbreak_get after each retro_run frame, stops stepping once hit
++ * is set, then reads registers via getCPUState. romdev_pc_step arms a
++ * per-instruction countdown (host arms to 2 = "let ONE instruction execute,
++ * then stop") so single-step ADVANCES the PC. Exported via romdev_pcbreak_*. */
++extern "C" {
++extern unsigned int  romdev_pc_addr;
++extern int           romdev_pc_enabled;
++extern int           romdev_pc_step;
++extern volatile int  romdev_pc_hit;
++extern unsigned int  romdev_pc_last_pc;
++extern unsigned int  romdev_pc_hits;
++}
++
+ INLINE u32 HuC6280::RunInstruction(bool* instruction_completed)
+ {
++    /* romdev PC breakpoint / single-step: checked BEFORE the opcode fetch, so
++     * m_PC is the address of the instruction about to execute. On a hit (or
++     * single-step countdown reaching 0) freeze the CPU at this PC: record it,
++     * set the hit flag, and return 0 cycles WITHOUT executing or advancing PC.
++     * The frame loop drains on the hit flag so retro_run still returns. Gated on
++     * !romdev_pc_hit so a held breakpoint doesn't re-fire while the host reads
++     * state and disarms. */
++    if ((romdev_pc_enabled || romdev_pc_step) && !romdev_pc_hit)
++    {
++        int stepFire = 0;
++        if (romdev_pc_step) { if (--romdev_pc_step <= 0) stepFire = 1; }
++        if (stepFire || ((romdev_pc_enabled && !romdev_pc_step)
++                         && (unsigned int)m_PC.GetValue() == romdev_pc_addr))
++        {
++            romdev_pc_last_pc = m_PC.GetValue();   /* leave PC frozen exactly here */
++            romdev_pc_hit = 1;
++            romdev_pc_hits++;
++            romdev_pc_step = 0;                    /* one-shot */
++            if (IsValidPointer(instruction_completed))
++                *instruction_completed = true;
++            return 0;
++        }
++    }
++
+ #if !defined(GG_DISABLE_DISASSEMBLER)
+     m_memory_breakpoint_hit = false;
+     m_cpu_breakpoint_hit = false;
+diff --git a/src/memory.h b/src/memory.h
+index d10af22..2a089c8 100644
+--- a/src/memory.h
++++ b/src/memory.h
+@@ -56,6 +56,7 @@ public:
+     void Init();
+     void Reset();
+     u8 Read(u16 address, bool block_transfer = false);
++    u8 ReadInternal(u16 address, bool block_transfer);  /* romdev: real read body; Read() wraps it to apply the read watchpoint. */
+     bool TryPeek(u16 address, u8* value);
+     bool TryPeek(u16 address, u8 bank, u8* value);
+     void Write(u16 address, u8 value, bool block_transfer = false);
+diff --git a/src/memory_inline.h b/src/memory_inline.h
+index 62659bf..72b2bf5 100644
+--- a/src/memory_inline.h
++++ b/src/memory_inline.h
+@@ -33,7 +33,31 @@
+ #include "sf2_mapper.h"
+ #include "arcade_card_mapper.h"
+ 
++/* romdev instruction-level READ watchpoint state (defined in libretro.cpp).
++ * Records the HuC6280 PC of the instruction that READ a watched CPU address.
++ * Read() wraps the real body (ReadInternal) so every CPU/data read funnels
++ * through one capture point regardless of which bank/hardware path serves it.
++ * Exported via romdev_readwatch_* in libretro.cpp. */
++extern "C" {
++extern unsigned int  romdev_rd_addr;
++extern int           romdev_rd_enabled;
++extern unsigned int  romdev_rd_last_pc;
++extern unsigned char romdev_rd_last_val;
++extern unsigned int  romdev_rd_hits;
++}
++
+ INLINE u8 Memory::Read(u16 address, bool block_transfer)
++{
++    u8 romdev_rd_value = ReadInternal(address, block_transfer);
++    if (romdev_rd_enabled && (unsigned int)address == romdev_rd_addr) {
++        romdev_rd_last_pc = m_huc6280->GetState()->PC->GetValue();
++        romdev_rd_last_val = romdev_rd_value;
++        romdev_rd_hits++;
++    }
++    return romdev_rd_value;
++}
++
++INLINE u8 Memory::ReadInternal(u16 address, bool block_transfer)
+ {
+ #if defined(GG_TESTING)
+     return m_test_memory[address];

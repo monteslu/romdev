@@ -26,10 +26,17 @@ fetch_pinned cores.geargrafx "$DIR"
 
 cd "$DIR"
 if [ -n "${PATCH_REL:-}" ] && [ -f "$PATCH_FILE" ]; then
-  git checkout -- platforms/libretro/libretro.cpp src/memory.cpp 2>/dev/null || true
+  # Reset every file the patch touches: libretro.cpp (memory regions + the
+  # pcbreak/readwatch exports), src/memory.{h,_inline.h} (Read→ReadInternal +
+  # read-watch hook), src/huc6280_inline.h (PC-break execute hook), and
+  # src/geargrafx_core_inline.h (per-frame budget drain on hit) — so a clean
+  # re-apply always works.
+  git checkout -- platforms/libretro/libretro.cpp \
+    src/memory.h src/memory_inline.h src/huc6280_inline.h \
+    src/geargrafx_core_inline.h 2>/dev/null || true
   if git apply --recount --check "$PATCH_FILE" 2>/dev/null; then
     git apply --recount "$PATCH_FILE"; echo "Applied $PATCH_FILE"
-  elif grep -rq "romdev_watchpoint_set" platforms/libretro/ 2>/dev/null; then
+  elif grep -rq "romdev_pcbreak_set" platforms/libretro/ 2>/dev/null; then
     echo "Patch already present (sentinel found); skipping apply."
   else
     echo "WARNING: region patch failed to apply; building STOCK core." >&2
@@ -47,9 +54,13 @@ CORE_LIB=$(find . -maxdepth 1 -name "*_libretro_emscripten.bc" -print -quit)
 [ -z "$CORE_LIB" ] && { echo "FATAL: geargrafx build produced no .bc archive." >&2; exit 1; }
 mv "$CORE_LIB" "${CORE_LIB%.bc}.a"; CORE_LIB="${CORE_LIB%.bc}.a"
 
-WP_EXPORTS=""
-grep -rq "romdev_watchpoint_get" . 2>/dev/null && WP_EXPORTS='"_romdev_watchpoint_set","_romdev_watchpoint_get",'
-EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set",'"$WP_EXPORTS"'"_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
+# Execution breakpoint + read watchpoint exports (this core has no WRITE watch).
+# Added when the patch's pcbreak hook is present in the built tree.
+BP_EXPORTS=""
+# cwd here is $LIBRETRO (platforms/libretro); libretro.cpp holds the exports.
+grep -rq "romdev_pcbreak_get" . 2>/dev/null && \
+  BP_EXPORTS='"_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get",'
+EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set",'"$BP_EXPORTS"'"_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
 EXPORTED_RUNTIME='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS"]'
 
 mkdir -p "$OUT"
