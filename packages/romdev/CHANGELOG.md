@@ -64,9 +64,10 @@ register that held the answer. Every bundled CPU family now has it:
 - Single-step is a per-instruction countdown so it ADVANCES the PC; on a hit the
   core consumes its frame cycle budget (PC frozen) so `retro_run` still completes —
   no mid-frame hang.
-- **PC Engine caveat:** geargrafx has no write watchpoint, so `findWriter` is
-  unavailable there — but `runUntilPC` / `runUntilRead` / `stepInstruction` work.
-  (Use `runUntilRead` or a known code address as the anchor instead of findWriter.)
+- **PC Engine caveat (fixed in 0.6.0):** at 0.5.0 geargrafx had no write
+  watchpoint, so `findWriter` was unavailable there (the breakpoint tools worked).
+  0.6.0 adds the write watchpoint to geargrafx, so `findWriter` works on PC Engine
+  too — all 14 platforms now.
 - **`runUntilPC({address, maxFrames, pressDuring})`** — runs until the m68k PC
   reaches `address`, then STOPS with the CPU frozen EXACTLY at that instruction
   (the core's execute loop bails mid-frame on the hit). Then `getCPUState` reads

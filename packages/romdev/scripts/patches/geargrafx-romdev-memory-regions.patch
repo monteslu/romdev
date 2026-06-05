@@ -1,48 +1,8 @@
-# romdev memory-region exposure for the Geargrafx (PC Engine / TurboGrafx-16)
-# libretro core.
-#
-# Exposes the HuC6270 VDC (VRAM already wired to VIDEO_RAM, plus the sprite
-# attribute table SATB and the 20-entry VDC register file), the HuC6260 VCE
-# 9-bit-GRB color table (palette), and a HuC6280 CPU register snapshot — all via
-# retro_get_memory_data so romdev's inspect*/getCPUState/inspectPalette/
-# inspectSprites tools can read them. The core ships clean public accessors
-# (GetHuC6270_1()/GetHuC6260()/GetHuC6280()), so VRAM/SATB/regs/palette return
-# live pointers; only the CPU state (a struct of scattered pointers) is snapshotted
-# into a static buffer, mirroring the gpgx ym2612/z80 precedent.
-#
-# Region IDs (romdev 0x1A0 block, must match src/host/types.js):
-#   PCE_VDC_VRAM   0x1A0   u16[0x8000]  = 64 KB   (also wired to RETRO_MEMORY_VIDEO_RAM)
-#   PCE_VDC_SATB   0x1A1   u16[0x100]   = 512 B   sprite attribute table
-#   PCE_VDC_REGS   0x1A2   u16[20]      = 40 B    VDC register file
-#   PCE_VCE_PALETTE 0x1A3  u16[512]     = 1024 B  color table (9-bit GRB), 256 BG + 256 SPR
-#   PCE_CPU_REGS   0x1A4   snapshot     PC/A/X/Y/S/P + timer/irq
-#   PCE_PSG_REGS   0x1A5   snapshot     6 PSG channels + main amplitude + LFO
-#
-# Also adds an execution-level PC BREAKPOINT / single-step and an
-# instruction-level READ WATCHPOINT (HuC6280 = 65C02 superset). The hook in
-# HuC6280::RunInstruction (huc6280_inline.h) freezes the CPU at a target PC; the
-# per-frame loop in geargrafx_core_inline.h drains on the hit flag so retro_run
-# returns. Memory::Read (memory_inline.h, body moved to ReadInternal) records the
-# reading PC for the read watch. libretro.cpp exports romdev_pcbreak_set/get and
-# romdev_readwatch_set/get — these power runUntilPC / stepInstruction /
-# runUntilRead. (This core has no write watchpoint.)
-# git apply ignores everything above the first 'diff --git' line.
-#
-#
-# RE primitives round 2: register read/write (romdev_setreg/getreg forwarding to
-# HuC6280_State A/X/Y/S/P/PC Register Get/SetValue; 6502/65C02 reg-ids 0=A 1=X 2=Y
-# 3=P 4=SP(=S) 16=PC), a RANGE WATCH logging every {pc,addr,value} in [lo,hi]
-# (hooks in Memory::Read AND Memory::Write — unlike the round-1 read-only watch,
-# this core HAS a clean Write funnel so range-write/findWriter ARE supported on
-# PCE; exports romdev_range_set/get), and a PC COVERAGE log of distinct in-window
-# PCs (hook in HuC6280::RunInstruction before the opcode fetch; exports
-# romdev_cov_set/get). Ring-buffer state lives in libretro.cpp.
-#
 diff --git a/platforms/libretro/libretro.cpp b/platforms/libretro/libretro.cpp
-index 131c841..70f5fce 100644
+index 131c841..88467be 100644
 --- a/platforms/libretro/libretro.cpp
 +++ b/platforms/libretro/libretro.cpp
-@@ -447,6 +447,299 @@ bool retro_unserialize(const void *data, size_t size)
+@@ -447,6 +447,331 @@ bool retro_unserialize(const void *data, size_t size)
      return core->LoadState(reinterpret_cast<const u8*>(data), size);
  }
  
@@ -81,6 +41,38 @@ index 131c841..70f5fce 100644
 +    out5[3] = (unsigned int)romdev_rd_last_val;
 +    out5[4] = romdev_rd_hits;
 +    if (clearHits) { romdev_rd_hits = 0; romdev_rd_last_pc = 0xFFFFFFFF; }
++}
++
++/* romdev WRITE watchpoint (findWriter) — the EXACT instruction PC that WROTE a
++ * watched address. This core has a clean Memory::Write funnel, so findWriter is
++ * supported on PC Engine. Set by the write hook in memory_inline.h. */
++unsigned int  romdev_wp_addr     = 0;
++int           romdev_wp_enabled  = 0;
++unsigned int  romdev_wp_last_pc  = 0xFFFFFFFF;
++unsigned char romdev_wp_last_val = 0;
++unsigned int  romdev_wp_hits     = 0;
++
++void romdev_watchpoint_set(unsigned int addr, int enabled)
++{
++    romdev_wp_addr = addr;
++    romdev_wp_enabled = enabled ? 1 : 0;
++    romdev_wp_last_pc = 0xFFFFFFFF;
++    romdev_wp_last_val = 0;
++    romdev_wp_hits = 0;
++}
++
++/* Fills out6: [enabled, addr, lastPC, lastVal, hits, prgOffset]. prgOffset is
++ * 0xFFFFFFFF (HuC6280 PC is a flat banked CPU address; no separate ROM offset). */
++void romdev_watchpoint_get(unsigned int *out6, int clearHits)
++{
++    if (!out6) return;
++    out6[0] = (unsigned int)romdev_wp_enabled;
++    out6[1] = romdev_wp_addr;
++    out6[2] = romdev_wp_last_pc;
++    out6[3] = (unsigned int)romdev_wp_last_val;
++    out6[4] = romdev_wp_hits;
++    out6[5] = 0xFFFFFFFF;
++    if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; }
 +}
 +
 +unsigned int  romdev_pc_addr    = 0;
@@ -342,7 +334,7 @@ index 131c841..70f5fce 100644
  void *retro_get_memory_data(unsigned id)
  {
      switch (id)
-@@ -457,6 +750,18 @@ void *retro_get_memory_data(unsigned id)
+@@ -457,6 +782,18 @@ void *retro_get_memory_data(unsigned id)
              return core->GetMemory()->GetWorkingRAM();
          case RETRO_MEMORY_VIDEO_RAM:
              return (u8*)core->GetHuC6270_1()->GetVRAM();
@@ -361,7 +353,7 @@ index 131c841..70f5fce 100644
      }
  
      return NULL;
-@@ -472,6 +777,18 @@ size_t retro_get_memory_size(unsigned id)
+@@ -472,6 +809,18 @@ size_t retro_get_memory_size(unsigned id)
              return core->GetMemory()->GetWorkingRAMSize();
          case RETRO_MEMORY_VIDEO_RAM:
              return HUC6270_VRAM_SIZE * 2;
@@ -505,10 +497,10 @@ index d10af22..2a089c8 100644
      bool TryPeek(u16 address, u8 bank, u8* value);
      void Write(u16 address, u8 value, bool block_transfer = false);
 diff --git a/src/memory_inline.h b/src/memory_inline.h
-index 62659bf..9f6d8c5 100644
+index 62659bf..002e2fe 100644
 --- a/src/memory_inline.h
 +++ b/src/memory_inline.h
-@@ -33,7 +33,43 @@
+@@ -33,7 +33,49 @@
  #include "sf2_mapper.h"
  #include "arcade_card_mapper.h"
  
@@ -531,6 +523,12 @@ index 62659bf..9f6d8c5 100644
 +extern unsigned int  romdev_range_lo, romdev_range_hi;
 +extern int           romdev_range_enabled, romdev_range_mode;
 +extern void          romdev_range_log(unsigned int pc, unsigned int addr, unsigned char val);
++/* romdev WRITE watchpoint (findWriter) state — defined in libretro.cpp. */
++extern unsigned int  romdev_wp_addr;
++extern int           romdev_wp_enabled;
++extern unsigned int  romdev_wp_last_pc;
++extern unsigned char romdev_wp_last_val;
++extern unsigned int  romdev_wp_hits;
 +}
 +
  INLINE u8 Memory::Read(u16 address, bool block_transfer)
@@ -552,16 +550,22 @@ index 62659bf..9f6d8c5 100644
  {
  #if defined(GG_TESTING)
      return m_test_memory[address];
-@@ -207,6 +243,14 @@ INLINE void Memory::Write(u16 address, u8 value, bool block_transfer)
+@@ -207,6 +249,20 @@ INLINE void Memory::Write(u16 address, u8 value, bool block_transfer)
      return;
  #endif
  
 +    /* romdev RANGE watch (write side) — log every {pc,addr,value} writing an
-+     * address in [lo,hi]. This core HAS a clean Write funnel, so range-write /
-+     * findWriter ARE supported on PCE (round 1 only had a read watch). */
++     * address in [lo,hi]. This core HAS a clean Write funnel, so range-write AND
++     * findWriter are supported on PCE (round 1 only had a read watch). */
 +    if (romdev_range_enabled && (romdev_range_mode & 2)
 +        && (unsigned int)address >= romdev_range_lo && (unsigned int)address <= romdev_range_hi) {
 +        romdev_range_log(m_huc6280->GetState()->PC->GetValue(), (unsigned int)address, value);
++    }
++    /* romdev WRITE watchpoint (findWriter) — single watched address. */
++    if (romdev_wp_enabled && (unsigned int)address == romdev_wp_addr) {
++        romdev_wp_last_pc  = m_huc6280->GetState()->PC->GetValue();
++        romdev_wp_last_val = value;
++        romdev_wp_hits++;
 +    }
 +
      GG_CHECK_MEMORY_BREAKPOINT(m_huc6280, HuC6280::HuC6280_BREAKPOINT_TYPE_CPU_ADDRESS, address, false);
