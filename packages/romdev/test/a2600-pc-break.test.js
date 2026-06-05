@@ -128,7 +128,7 @@ test("Atari 2600 PC breakpoint + read watch + single-step (stella2014 6502)", { 
   assert.equal(load.loaded, true, "loadMedia failed: " + JSON.stringify(load));
 
   // Boot past reset into the main loop.
-  toJSON(await client.callTool({ name: "stepFrames", arguments: { frames: 30 } }));
+  toJSON(await client.callTool({ name: "frame", arguments: { op: "step",  frames: 30 } }));
 
   // 1) findWriter on the counter → the EXACT instruction PC that writes it.
   const fw = toJSON(await client.callTool({

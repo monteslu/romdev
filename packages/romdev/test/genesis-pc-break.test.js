@@ -63,7 +63,7 @@ test("Genesis PC breakpoint + read watch + single-step (gpgx m68k)", { timeout: 
   assert.equal(load.loaded, true, "loadMedia failed: " + JSON.stringify(load));
 
   // Let it boot past SGDK init into the main loop.
-  toJSON(await client.callTool({ name: "stepFrames", arguments: { frames: 120 } }));
+  toJSON(await client.callTool({ name: "frame", arguments: { op: "step",  frames: 120 } }));
 
   // 1) findWriter on 0xFF2000 → the EXACT instruction PC that writes the counter.
   //    (Confirms the write watchpoint still works AND gives us a real bp target.)

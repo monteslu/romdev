@@ -71,7 +71,7 @@ test("PC Engine PC breakpoint + read watch + single-step (geargrafx HuC6280)", {
   assert.equal(load.loaded, true, "loadMedia failed: " + JSON.stringify(load));
 
   // Boot past crt0 into the main loop.
-  toJSON(await client.callTool({ name: "stepFrames", arguments: { frames: 60 } }));
+  toJSON(await client.callTool({ name: "frame", arguments: { op: "step",  frames: 60 } }));
 
   // 1) Discover a real instruction PC self-referentially. geargrafx has NO write
   //    watchpoint (so findWriter is unavailable here), but it DOES have the read

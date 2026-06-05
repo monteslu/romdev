@@ -61,7 +61,7 @@ test("C64 PC breakpoint + read watch + single-step (vice 6510)", { timeout: 2400
   assert.equal(load.loaded, true, "loadMedia failed: " + JSON.stringify(load));
 
   // C64 BASIC auto-RUN takes many frames before our program reaches its loop.
-  toJSON(await client.callTool({ name: "stepFrames", arguments: { frames: 150 } }));
+  toJSON(await client.callTool({ name: "frame", arguments: { op: "step",  frames: 150 } }));
 
   // 1) findWriter on the scratch byte → the EXACT 6510 instruction PC writing it.
   const fw = toJSON(await client.callTool({

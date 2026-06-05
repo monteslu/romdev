@@ -71,7 +71,7 @@ test("Atari 7800 PC breakpoint + read watch + single-step (prosystem 6502)", { t
   assert.equal(load.loaded, true, "loadMedia failed: " + JSON.stringify(load));
 
   // Boot past reset into the main loop.
-  toJSON(await client.callTool({ name: "stepFrames", arguments: { frames: 60 } }));
+  toJSON(await client.callTool({ name: "frame", arguments: { op: "step",  frames: 60 } }));
 
   // 1) findWriter on the counter → the EXACT instruction PC that writes it.
   const fw = toJSON(await client.callTool({

@@ -55,7 +55,7 @@ test("SNES PC breakpoint + read watch + single-step (snes9x 65816)", { timeout: 
   }));
   assert.equal(load.loaded, true, "loadMedia failed: " + JSON.stringify(load));
 
-  toJSON(await client.callTool({ name: "stepFrames", arguments: { frames: 60 } }));
+  toJSON(await client.callTool({ name: "frame", arguments: { op: "step",  frames: 60 } }));
 
   // 1) findWriter on $7E0010 → the exact 65816 instruction PC.
   const fw = toJSON(await client.callTool({

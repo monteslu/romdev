@@ -86,8 +86,7 @@ test("MCP: load NES rom, step frames, screenshot returns valid PNG", { skip: !HA
   // stepAndScreenshot — inline:true to get the image in the response
   // (default writes to a path; this test asserts the inline image shape).
   const shot = await client.callTool({
-    name: "stepAndScreenshot",
-    arguments: { frames: 60, inline: true },
+    name: "frame", arguments: { op: "stepAndShot",  frames: 60, inline: true },
   });
   assert.equal(shot.isError, undefined, `stepAndScreenshot errored: ${JSON.stringify(shot)}`);
   const img = shot.content.find((c) => c.type === "image");
@@ -107,7 +106,7 @@ test("MCP: save state, step further, load state restores frame count", { skip: !
     name: "loadMedia",
     arguments: { platform: "nes", path: ROM_PATH },
   });
-  await client.callTool({ name: "stepFrames", arguments: { frames: 30 } });
+  await client.callTool({ name: "frame", arguments: { op: "step",  frames: 30 } });
 
   const save = await client.callTool({
     name: "state",
@@ -115,7 +114,7 @@ test("MCP: save state, step further, load state restores frame count", { skip: !
   });
   assert.equal(save.isError, undefined);
 
-  await client.callTool({ name: "stepFrames", arguments: { frames: 100 } });
+  await client.callTool({ name: "frame", arguments: { op: "step",  frames: 100 } });
   const statusAfter = await client.callTool({ name: "getStatus", arguments: {} });
   const afterFrames = JSON.parse(statusAfter.content[0].text).frameCount;
   assert.equal(afterFrames, 130);
@@ -148,7 +147,7 @@ test("MCP: save state, step further, load state restores frame count", { skip: !
 test("MCP: loadState clears active cheats (documented contract)", { skip: !HAS_NESTEST && "nestest.nes not present" }, async () => {
   const { client } = await startServerAndClient();
   await client.callTool({ name: "loadMedia", arguments: { platform: "nes", path: ROM_PATH } });
-  await client.callTool({ name: "stepFrames", arguments: { frames: 30 } });
+  await client.callTool({ name: "frame", arguments: { op: "step",  frames: 30 } });
   await client.callTool({ name: "state", arguments: { op: "save", name: "cp" } });
   await client.callTool({ name: "cheats", arguments: { op: "apply", code: "0075:09" } });
   // Restoring a state must clear cheats (frontend cheat state isn't in the blob).
@@ -162,7 +161,7 @@ test("MCP: loadState clears active cheats (documented contract)", { skip: !HAS_N
 test("MCP: exportState copies a slot to disk without touching the live host", { skip: !HAS_NESTEST && "nestest.nes not present" }, async () => {
   const { client } = await startServerAndClient();
   await client.callTool({ name: "loadMedia", arguments: { platform: "nes", path: ROM_PATH } });
-  await client.callTool({ name: "stepFrames", arguments: { frames: 30 } });
+  await client.callTool({ name: "frame", arguments: { op: "step",  frames: 30 } });
   await client.callTool({ name: "state", arguments: { op: "save", name: "slot1" } });
   const before = JSON.parse((await client.callTool({ name: "getStatus", arguments: {} })).content[0].text).frameCount;
   const out = path.join(os.tmpdir(), `romdev-export-${before}.state`);
@@ -182,7 +181,7 @@ test("MCP: readMemory returns 16 bytes from NES system RAM", { skip: !HAS_NESTES
     name: "loadMedia",
     arguments: { platform: "nes", path: ROM_PATH },
   });
-  await client.callTool({ name: "stepFrames", arguments: { frames: 10 } });
+  await client.callTool({ name: "frame", arguments: { op: "step",  frames: 10 } });
   const r = await client.callTool({
     name: "readMemory",
     arguments: { region: "system_ram", offset: 0, length: 16 },
@@ -197,10 +196,10 @@ test("MCP: readMemory returns 16 bytes from NES system RAM", { skip: !HAS_NESTES
 test("MCP: findWriter captures the instruction-level write PC (watchpoint)", { skip: !HAS_NESTEST && "nestest.nes not present" }, async () => {
   const { client } = await startServerAndClient();
   await client.callTool({ name: "loadMedia", arguments: { platform: "nes", path: ROM_PATH } });
-  await client.callTool({ name: "stepFrames", arguments: { frames: 60 } });
+  await client.callTool({ name: "frame", arguments: { op: "step",  frames: 60 } });
   // Find a RAM address the ROM actually writes, so the watchpoint is sure to fire.
   const before = JSON.parse((await client.callTool({ name: "readMemory", arguments: { region: "system_ram", offset: 0, length: 0x100 } })).content[0].text).hex;
-  await client.callTool({ name: "stepFrames", arguments: { frames: 5 } });
+  await client.callTool({ name: "frame", arguments: { op: "step",  frames: 5 } });
   const after = JSON.parse((await client.callTool({ name: "readMemory", arguments: { region: "system_ram", offset: 0, length: 0x100 } })).content[0].text).hex;
   let addr = -1;
   for (let i = 0; i < 0x100; i++) {

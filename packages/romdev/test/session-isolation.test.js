@@ -89,7 +89,7 @@ test("two MCP sessions own independent hosts; loadMedia in one is invisible to t
   // guarantee different RAM contents from a passive ROM at frame 0, but
   // we CAN confirm independent screenshot pipelines: step A 60 frames,
   // B 0 frames, then read each frame counter from getStatus.
-  await a.callTool({ name: "stepFrames", arguments: { frames: 60 } });
+  await a.callTool({ name: "frame", arguments: { op: "step",  frames: 60 } });
   const sA = JSON.parse((await a.callTool({ name: "getStatus", arguments: {} })).content[0].text);
   const sB = JSON.parse((await b.callTool({ name: "getStatus", arguments: {} })).content[0].text);
   assert.equal(sA.frameCount, 60, "A frameCount: " + sA.frameCount);

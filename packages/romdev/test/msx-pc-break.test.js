@@ -84,7 +84,7 @@ test("MSX PC breakpoint + read watch + single-step (blueMSX Z80)", { timeout: 24
 
   // C-BIOS shows its logo ~150 frames before it CALLs the cart INIT; step well
   // past that so the loop is live.
-  toJSON(await client.callTool({ name: "stepFrames", arguments: { frames: 260 } }));
+  toJSON(await client.callTool({ name: "frame", arguments: { op: "step",  frames: 260 } }));
 
   // 1) findWriter on RAM → the EXACT instruction PC that writes the counter.
   const fw = toJSON(await client.callTool({

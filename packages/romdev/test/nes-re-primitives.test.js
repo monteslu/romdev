@@ -40,7 +40,7 @@ test("NES RE primitives: setRegister + watchRange + logPCRange (fceumm 6502)", {
     name: "loadMedia", arguments: { platform: "nes", path: build.binaryPath },
   }));
   assert.equal(load.loaded, true, "loadMedia failed: " + JSON.stringify(load));
-  toJSON(await client.callTool({ name: "stepFrames", arguments: { frames: 30 } }));
+  toJSON(await client.callTool({ name: "frame", arguments: { op: "step",  frames: 30 } }));
 
   // setRegister round-trips (6502 reg-id 0 = A).
   const sr = toJSON(await client.callTool({ name: "setRegister", arguments: { regId: 0, value: 0x42 } }));

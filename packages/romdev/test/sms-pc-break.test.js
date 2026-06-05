@@ -81,7 +81,7 @@ test("SMS PC breakpoint + read watch + single-step (gpgx Z80)", { timeout: 24000
   assert.equal(load.loaded, true, "loadMedia failed: " + JSON.stringify(load));
 
   // Boot into the main loop.
-  toJSON(await client.callTool({ name: "stepFrames", arguments: { frames: 120 } }));
+  toJSON(await client.callTool({ name: "frame", arguments: { op: "step",  frames: 120 } }));
 
   // 1) findWriter on RAM → the EXACT Z80 instruction PC that writes the counter.
   //    (Confirms the Z80 write watch works AND gives a real bp target.)

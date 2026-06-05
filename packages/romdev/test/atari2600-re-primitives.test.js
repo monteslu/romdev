@@ -28,7 +28,7 @@ test("atari2600 RE primitives: setRegister + watchRange + logPCRange (6502)", { 
   assert.equal(build.ok, true, "atari2600 build failed:\n" + build.log);
   const load = toJSON(await client.callTool({ name: "loadMedia", arguments: { platform: "atari2600", path: build.binaryPath } }));
   assert.equal(load.loaded, true, "loadMedia failed: " + JSON.stringify(load));
-  toJSON(await client.callTool({ name: "stepFrames", arguments: { frames: 10 } }));
+  toJSON(await client.callTool({ name: "frame", arguments: { op: "step",  frames: 10 } }));
 
   const sr = toJSON(await client.callTool({ name: "setRegister", arguments: { regId: 0, value: 0x42 } }));
   assert.equal(sr.notSupported, undefined, "setRegister notSupported on atari2600");

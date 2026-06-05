@@ -136,8 +136,7 @@ test("R44 NES music: ROM boots in fceumm + runs for 60 frames without crashing",
   // Step 60 frames + screenshot. If the ROM crashed at boot fceumm would still
   // produce a frame, but we also assert that the screenshot decoded.
   const shot = await client.callTool({
-    name: "stepAndScreenshot",
-    arguments: { frames: 60, inline: true },
+    name: "frame", arguments: { op: "stepAndShot",  frames: 60, inline: true },
   });
   assert.equal(shot.isError, undefined, "stepAndScreenshot failed: " + JSON.stringify(shot));
   const img = shot.content.find((c) => c.type === "image");

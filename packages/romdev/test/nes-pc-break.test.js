@@ -50,7 +50,7 @@ test("NES PC breakpoint + read watch + single-step (fceumm 6502)", { timeout: 18
   }));
   assert.equal(load.loaded, true, "loadMedia failed: " + JSON.stringify(load));
 
-  toJSON(await client.callTool({ name: "stepFrames", arguments: { frames: 30 } }));
+  toJSON(await client.callTool({ name: "frame", arguments: { op: "step",  frames: 30 } }));
 
   // 1) findWriter on $10 → the EXACT 6502 instruction PC that writes the counter.
   const fw = toJSON(await client.callTool({

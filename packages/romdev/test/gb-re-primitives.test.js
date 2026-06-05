@@ -54,7 +54,7 @@ test("GB RE primitives: setRegister + watchRange + logPCRange + callSubroutine (
   assert.equal(load.loaded, true, "loadMedia failed: " + JSON.stringify(load));
 
   // Let the ROM reach its main loop so the per-frame write is live.
-  toJSON(await client.callTool({ name: "stepFrames", arguments: { frames: 60 } }));
+  toJSON(await client.callTool({ name: "frame", arguments: { op: "step",  frames: 60 } }));
 
   // ── item 1: setRegister round-trips (reg-id 0 = A on SM83) ──
   const sr = toJSON(await client.callTool({ name: "setRegister", arguments: { regId: 0, value: 0xA5 } }));

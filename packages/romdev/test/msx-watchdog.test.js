@@ -97,7 +97,7 @@ test("MSX callSubroutine watchdog: infinite loop returns watchdog:true, no hang 
 
   // C-BIOS shows its logo ~150 frames before it CALLs the cart INIT; step well
   // past that so the cart (and its ROM) is live.
-  toJSON(await client.callTool({ name: "stepFrames", arguments: { frames: 260 } }));
+  toJSON(await client.callTool({ name: "frame", arguments: { op: "step",  frames: 260 } }));
 
   // callSubroutine into the ROM spin loop. The watchdog MUST trip — no hang.
   // sandbox:false because blueMSX's _retro_serialize traps in this headless build

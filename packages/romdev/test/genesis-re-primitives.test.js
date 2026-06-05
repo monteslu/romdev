@@ -75,7 +75,7 @@ test("Genesis RE primitives: callSubroutine + watchRange + logPCRange + watchDma
   assert.ok(dma.dmas[0].vramDest && dma.dmas[0].source, "watchDma entry missing vramDest/source");
   assert.ok(typeof dma.dmas[0].from === "string", "watchDma entry should report from:ROM/RAM");
 
-  toJSON(await client.callTool({ name: "stepFrames", arguments: { frames: 60 } }));
+  toJSON(await client.callTool({ name: "frame", arguments: { op: "step",  frames: 60 } }));
 
   // dst lives in work RAM; SGDK placed it at the $E0FF00xx mirror → system_ram
   // offset = low 16 bits. The .bss line gives 0xE0FF00xx; use 0x48 (matches the

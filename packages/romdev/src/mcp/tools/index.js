@@ -304,7 +304,7 @@ const TOOL_OWNER = {
   platform: "platforms",
   // run category
   loadMedia: "run", host: "run",
-  stepFrames: "run", screenshot: "run", stepAndScreenshot: "run",
+  frame: "run",
   // input category
   input: "input",
   // state category
