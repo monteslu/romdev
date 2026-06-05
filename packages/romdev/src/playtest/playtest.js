@@ -546,7 +546,11 @@ export async function playtest(args) {
     // inspect-while-paused experiment. stepFrames already returns 0 when
     // paused; skipping setInput too is what makes `pause` mean "stop fighting
     // me". The render block below runs unconditionally.
-    const paused = !!h.status.paused;
+    // `paused` (the agent's pause) OR `_renderTickSuspended` (a breakpoint/watch
+    // tool is driving the core exclusively this instant) → render only, don't
+    // step. The latter prevents this 60fps tick from racing a runUntilPC loop and
+    // stepping the CPU past the breakpoint between its iterations.
+    const paused = !!h.status.paused || !!h._renderTickSuspended;
     // Read controller state for each slot independently. Slot 0 = port 0
     // (player 1), slot 1 = port 1 (player 2). Each slot's input is built
     // into its own port object; the agent's setInput is overwritten each

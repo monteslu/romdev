@@ -43,6 +43,7 @@ export function installObserverMiddleware(server, sessionKey) {
       // top-level property names intact.
       const argsSummary = summarizeForLog(args);
       let event;
+      let frameProvider = null; // deferred framebuffer thunk (encoded async below)
       if (thrown) {
         event = {
           type: "call",
@@ -76,6 +77,16 @@ export function installObserverMiddleware(server, sessionKey) {
           sidebandAnsi = result._observerAnsi;
           delete result._observerAnsi;
         }
+        // DEFERRED frame provider (breakpoint/watch tools): a thunk that renders
+        // the host's current framebuffer to PNG. We do NOT call it here — that
+        // would put the encode on the AGENT's critical path. We strip it from the
+        // agent-visible result now and rasterize it ASYNCHRONOUSLY below, after
+        // the response has gone out, so the human's livestream still sees the
+        // frame at zero cost to the agent.
+        if (result && typeof result === "object" && typeof result._observerFrameProvider === "function") {
+          frameProvider = result._observerFrameProvider;
+          delete result._observerFrameProvider;
+        }
         const inlineImages = extractImages(result);
         const images = inlineImages.length > 0 ? inlineImages : sidebandImages;
         const resultSummary = summarizeForLog(result);
@@ -97,6 +108,22 @@ export function installObserverMiddleware(server, sessionKey) {
       // Fire-and-forget — emit is synchronous + we don't block the
       // tool response on observer delivery.
       try { observer.push(event); } catch { /* never let observer kill the tool */ }
+
+      // Deferred frame: encode + push the PNG AFTER the agent's response goes
+      // out, so the (expensive) rasterize never delays the tool. setImmediate
+      // yields the response first; a separate `call_frame` event carries the
+      // image for the human's livestream. Best-effort — never throws into the
+      // tool path. (Only breakpoint/watch tools set a provider.)
+      if (frameProvider) {
+        setImmediate(() => {
+          try {
+            const img = frameProvider();
+            if (img) {
+              observer.push({ type: "call_frame", sessionKey, ts: startedAt, tool: name, images: [img] });
+            }
+          } catch { /* livestream is best-effort; never affects the agent */ }
+        });
+      }
 
       if (thrown) throw thrown;
       return result;

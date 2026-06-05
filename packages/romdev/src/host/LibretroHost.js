@@ -899,8 +899,49 @@ export class LibretroHost {
    * { hit, frame, pc?, hits? }. On hit the registers are readable via getCPUState.
    * The breakpoint is auto-disarmed after the run so normal stepping resumes.
    */
-  runUntilPC(address, maxFrames = 600) {
+  /**
+   * Drive `_retro_run()` in a tight loop while making THIS call the sole driver
+   * of the core. If a playtest window is open, its 60fps setInterval tick is
+   * ALSO calling stepFrames(1) on this same shared host — two drivers racing
+   * would let the tick step past a breakpoint between our iterations and corrupt
+   * frame timing. The playtest tick skips stepping whenever `status.paused`, so
+   * we mark the host paused for the duration (and restore the prior state after),
+   * giving us exclusive control. We drive `_retro_run()` directly here rather
+   * than via stepFrames() precisely because stepFrames() no-ops while paused.
+   * The window keeps RENDERING the frozen frame, so the human still sees state.
+   * @param {(i:number)=>boolean} body called per frame; return true to stop early.
+   * @param {number} maxFrames
+   * @returns {number} frames actually run
+   */
+  _runFramesExclusive(body, maxFrames) {
     const mod = this._needMod();
+    // Suspend ONLY the playtest window's render-tick stepping for the duration —
+    // not `status.paused` (the agent's pause is a separate concept, and the core
+    // run must be identical whether or not the user paused). The playtest tick
+    // checks `_renderTickSuspended` and renders-only while it's set; we own the
+    // core's frame advance here so the two never race past a breakpoint.
+    const prevSuspended = this._renderTickSuspended;
+    this._renderTickSuspended = true;
+    let framesRun = 0;
+    try {
+      for (let i = 0; i < maxFrames; i++) {
+        mod._retro_run();
+        this.status.frameCount++;
+        framesRun++;
+        if (body(i)) break;
+      }
+    } finally {
+      this._renderTickSuspended = prevSuspended;
+      if (this.state.lastFrame) {
+        this.status.fbWidth = this.state.lastFrame.width;
+        this.status.fbHeight = this.state.lastFrame.height;
+      }
+    }
+    return framesRun;
+  }
+
+  runUntilPC(address, maxFrames = 600) {
+    this._needMod();
     if (!this.status.loaded) throw new Error("no media loaded");
     if (!this.pcBreakSupported()) {
       throw new Error("PC breakpoint not supported by this core (Genesis today; other cores as patched).");
@@ -909,20 +950,13 @@ export class LibretroHost {
     let hit = false;
     let framesRun = 0;
     try {
-      for (let i = 0; i < maxFrames; i++) {
-        mod._retro_run();
-        this.status.frameCount++;
-        framesRun++;
-        const st = this.getPCBreak(false);
-        if (st.hit) { hit = true; break; }
-      }
+      framesRun = this._runFramesExclusive(() => {
+        if (this.getPCBreak(false).hit) { hit = true; return true; }
+        return false;
+      }, maxFrames);
     } finally {
       // Disarm so subsequent stepFrames/runUntil* run normally.
       this.setPCBreak(0, false, false);
-      if (this.state.lastFrame) {
-        this.status.fbWidth = this.state.lastFrame.width;
-        this.status.fbHeight = this.state.lastFrame.height;
-      }
     }
     const st = this.getPCBreak(true); // read final state + clear hit
     return {
@@ -939,7 +973,7 @@ export class LibretroHost {
    * completes the frame it was found in. Returns { hit, frame, pc?, value?, hits? }.
    */
   runUntilRead(address, maxFrames = 600) {
-    const mod = this._needMod();
+    this._needMod();
     if (!this.status.loaded) throw new Error("no media loaded");
     if (!this.readWatchSupported()) {
       throw new Error("read watchpoint not supported by this core (Genesis today; other cores as patched).");
@@ -948,19 +982,12 @@ export class LibretroHost {
     let hit = false;
     let framesRun = 0;
     try {
-      for (let i = 0; i < maxFrames; i++) {
-        mod._retro_run();
-        this.status.frameCount++;
-        framesRun++;
-        const st = this.getReadWatch(false);
-        if (st.hits > 0) { hit = true; break; }
-      }
+      framesRun = this._runFramesExclusive(() => {
+        if (this.getReadWatch(false).hits > 0) { hit = true; return true; }
+        return false;
+      }, maxFrames);
     } finally {
       this.setReadWatch(0, false);
-      if (this.state.lastFrame) {
-        this.status.fbWidth = this.state.lastFrame.width;
-        this.status.fbHeight = this.state.lastFrame.height;
-      }
     }
     const st = this.getReadWatch(true);
     return {
@@ -978,23 +1005,16 @@ export class LibretroHost {
    * single-step, the finest granularity the core exposes.
    */
   stepInstruction() {
-    const mod = this._needMod();
+    this._needMod();
     if (!this.status.loaded) throw new Error("no media loaded");
     if (!this.pcBreakSupported()) {
       throw new Error("single-step not supported by this core (Genesis today; other cores as patched).");
     }
     this.setPCBreak(0, false, true); // step mode (one-shot)
-    try {
-      // The step fires on the very next instruction; one frame is more than
-      // enough for the core to dispatch it.
-      mod._retro_run();
-      this.status.frameCount++;
-    } finally {
-      if (this.state.lastFrame) {
-        this.status.fbWidth = this.state.lastFrame.width;
-        this.status.fbHeight = this.state.lastFrame.height;
-      }
-    }
+    // Exclusive driver (suspends the playtest tick); the step fires on the very
+    // next instruction, so one frame is more than enough for the core to dispatch
+    // it. Stop after that one frame regardless.
+    this._runFramesExclusive(() => true, 1);
     const st = this.getPCBreak(true);
     return { pc: st.lastPC, hit: st.hit };
   }

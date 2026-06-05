@@ -280,8 +280,12 @@
           }
         }, 15000);
       }
-    } else if (ev.type === "call") {
-      s.events.push(ev);
+    } else if (ev.type === "call" || ev.type === "call_frame") {
+      // `call_frame` is a deferred image pushed AFTER a tool returned (e.g. a
+      // breakpoint/watch tool that advanced the emulator but didn't return an
+      // image to the agent) — rendered async so it never slowed the agent. It
+      // carries only images; the matching `call` event already logged the call.
+      if (ev.type === "call") s.events.push(ev);
       if (ev.images && ev.images.length) {
         for (const img of ev.images) {
           // One latest image per "tool" (kind = tool name); ev.tool
