@@ -1,8 +1,8 @@
 diff --git a/cpuexec.cpp b/cpuexec.cpp
-index aa43b2f..5d588c7 100644
+index aa43b2f..fdcfff5 100644
 --- a/cpuexec.cpp
 +++ b/cpuexec.cpp
-@@ -19,6 +19,27 @@
+@@ -19,6 +19,37 @@
  
  static inline void S9xReschedule (void);
  
@@ -18,6 +18,16 @@ index aa43b2f..5d588c7 100644
 +extern unsigned int  romdev_pc_last_pc;
 +extern unsigned int  romdev_pc_hits;
 +
++/* romdev INSTRUCTION WATCHDOG — the fix for "callSubroutine hung". A standalone-
++ * driven routine (e.g. a decompressor fed a wrong pointer) can loop FOREVER
++ * inside a single S9xMainLoop / retro_run frame, so the host's per-FRAME
++ * maxFrames never gets a turn and the WASM hangs. The hook below counts
++ * dispatched instructions and force-stops (sets romdev_pc_hit + the watchdog
++ * flag) when the budget is exceeded. State defined in libretro.cpp. */
++extern unsigned int  romdev_pc_wd_limit;
++extern unsigned int  romdev_pc_wd_count;
++extern volatile int  romdev_pc_watchdog;
++
 +/* romdev PC COVERAGE log (discovery): record DISTINCT in-window PCs about to
 + * execute. State + the de-dup helper live in libretro.cpp; the hook below sits
 + * at the same dispatch point as the pc-break check (Registers.PBPC is the
@@ -30,10 +40,27 @@ index aa43b2f..5d588c7 100644
  void S9xMainLoop (void)
  {
  	#define CHECK_FOR_IRQ_CHANGE() \
-@@ -135,6 +156,42 @@ void S9xMainLoop (void)
+@@ -135,6 +166,59 @@ void S9xMainLoop (void)
  			break;
  		}
  
++		/* romdev instruction WATCHDOG: force-stop a runaway (the callSubroutine
++		 * hang). Counts dispatched instructions; on overflow, fire the breakpoint
++		 * with the watchdog flag so the host gets the final PC instead of hanging.
++		 * Checked FIRST, at the same dispatch point as the pc-break — Registers.PBPC
++		 * is the about-to-execute instruction; stop the same way the pc-break does
++		 * (break out of S9xMainLoop, leaving PBPC frozen on the un-executed insn). */
++		if (romdev_pc_wd_limit && !romdev_pc_hit)
++		{
++			if (++romdev_pc_wd_count >= romdev_pc_wd_limit)
++			{
++				romdev_pc_last_pc = Registers.PBPC & 0xffffff;
++				romdev_pc_hit = 1;
++				romdev_pc_watchdog = 1;
++				break;
++			}
++		}
++
 +		/* romdev PC coverage log (discovery): record each DISTINCT in-window PC
 +		 * about to execute. Registers.PBPC is the address of the next opcode.
 +		 * Cheap when disabled (one int test). */
@@ -203,7 +230,7 @@ index ec55ea9..3fddf5e 100644
  	if ((Address & mask) == mask)
  	{
 diff --git a/libretro/libretro.cpp b/libretro/libretro.cpp
-index d381c61..fd399ae 100644
+index d381c61..b432654 100644
 --- a/libretro/libretro.cpp
 +++ b/libretro/libretro.cpp
 @@ -6,6 +6,7 @@
@@ -214,7 +241,7 @@ index d381c61..fd399ae 100644
  #include "gfx.h"
  #include "snapshot.h"
  #include "controls.h"
-@@ -2029,6 +2030,247 @@ unsigned retro_get_region()
+@@ -2029,6 +2030,267 @@ unsigned retro_get_region()
      return Settings.PAL ? RETRO_REGION_PAL : RETRO_REGION_NTSC;
  }
  
@@ -292,6 +319,14 @@ index d381c61..fd399ae 100644
 +unsigned int  romdev_pc_last_pc = 0xFFFFFFFF;
 +unsigned int  romdev_pc_hits    = 0;
 +
++/* romdev INSTRUCTION WATCHDOG state (the callSubroutine-hang fix). The hook in
++ * cpuexec.cpp:S9xMainLoop counts dispatched instructions and force-stops when the
++ * budget is exceeded so a runaway returns control with the final PC instead of
++ * hanging. romdev_pc_wd_limit 0 = disabled. */
++unsigned int  romdev_pc_wd_limit = 0;       /* max instructions before force-stop (0 = off) */
++unsigned int  romdev_pc_wd_count = 0;       /* instructions executed since arm */
++volatile int  romdev_pc_watchdog = 0;       /* set when the watchdog tripped */
++
 +void romdev_pcbreak_set(unsigned int addr, int enabled, int step) {
 +   romdev_pc_addr = addr;
 +   romdev_pc_enabled = enabled ? 1 : 0;
@@ -301,17 +336,29 @@ index d381c61..fd399ae 100644
 +   romdev_pc_hit = 0;
 +   romdev_pc_last_pc = 0xFFFFFFFF;
 +   romdev_pc_hits = 0;
++   romdev_pc_watchdog = 0;
++   romdev_pc_wd_count = 0;
 +}
 +
-+/* Fills out5: [enabled, addr, hit, lastPC, hits]. Pass clearHit to re-arm. */
-+void romdev_pcbreak_get(unsigned int *out5, int clearHit) {
-+   if (!out5) return;
-+   out5[0] = (unsigned int)romdev_pc_enabled;
-+   out5[1] = romdev_pc_addr;
-+   out5[2] = (unsigned int)romdev_pc_hit;
-+   out5[3] = romdev_pc_last_pc;
-+   out5[4] = romdev_pc_hits;
-+   if (clearHit) { romdev_pc_hit = 0; }
++/* Fills out6: [enabled, addr, hit, lastPC, hits, watchdogTripped]. clearHit re-arms. */
++void romdev_pcbreak_get(unsigned int *out6, int clearHit) {
++   if (!out6) return;
++   out6[0] = (unsigned int)romdev_pc_enabled;
++   out6[1] = romdev_pc_addr;
++   out6[2] = (unsigned int)romdev_pc_hit;
++   out6[3] = romdev_pc_last_pc;
++   out6[4] = romdev_pc_hits;
++   out6[5] = (unsigned int)romdev_pc_watchdog;
++   if (clearHit) { romdev_pc_hit = 0; romdev_pc_watchdog = 0; romdev_pc_wd_count = 0; }
++}
++
++/* Arm the instruction watchdog (force-stop a runaway after `limit` instructions;
++ * 0 = disable). The host sets this before driving callSubroutine so a runaway
++ * routine returns control instead of hanging. */
++void romdev_watchdog_set(unsigned int limit) {
++   romdev_pc_wd_limit = limit;
++   romdev_pc_wd_count = 0;
++   romdev_pc_watchdog = 0;
 +}
 +
 +/* ── romdev register read/write (65816) ──────────────────────────────────────
@@ -462,7 +509,7 @@ index d381c61..fd399ae 100644
  void* retro_get_memory_data(unsigned type)
  {
      void* data;
-@@ -2051,6 +2293,18 @@ void* retro_get_memory_data(unsigned type)
+@@ -2051,6 +2313,18 @@ void* retro_get_memory_data(unsigned type)
          case RETRO_MEMORY_VIDEO_RAM:
          data = Memory.VRAM;
          break;
@@ -481,7 +528,7 @@ index d381c61..fd399ae 100644
          //case RETRO_MEMORY_ROM:
          //	data = Memory.ROM;
          //	break;
-@@ -2085,6 +2339,18 @@ size_t retro_get_memory_size(unsigned type)
+@@ -2085,6 +2359,18 @@ size_t retro_get_memory_size(unsigned type)
          case RETRO_MEMORY_VIDEO_RAM:
              size = 64 * 1024;
              break;

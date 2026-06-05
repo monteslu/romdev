@@ -20,10 +20,10 @@ index 7e5c43b..4530bc7 100644
  
  private:
 diff --git a/libgambatte/libretro/libretro.cpp b/libgambatte/libretro/libretro.cpp
-index 15b042c..318debf 100644
+index 15b042c..eba6af7 100644
 --- a/libgambatte/libretro/libretro.cpp
 +++ b/libgambatte/libretro/libretro.cpp
-@@ -2874,6 +2874,192 @@ void retro_unload_game()
+@@ -2874,6 +2874,208 @@ void retro_unload_game()
  
  unsigned retro_get_region() { return RETRO_REGION_NTSC; }
  
@@ -100,6 +100,10 @@ index 15b042c..318debf 100644
 +extern unsigned int  romdev_pc_last_pc;
 +extern unsigned int  romdev_pc_hits;
 +
++extern unsigned int  romdev_pc_wd_limit;
++extern unsigned int  romdev_pc_wd_count;
++extern volatile int  romdev_pc_watchdog;
++
 +void romdev_pcbreak_set(unsigned addr, int enabled, int step) {
 +   romdev_pc_addr = addr;
 +   romdev_pc_enabled = enabled ? 1 : 0;
@@ -110,17 +114,29 @@ index 15b042c..318debf 100644
 +   romdev_pc_hit = 0;
 +   romdev_pc_last_pc = 0xFFFFFFFF;
 +   romdev_pc_hits = 0;
++   romdev_pc_watchdog = 0;
++   romdev_pc_wd_count = 0;
 +}
 +
-+/* Fills out5: [enabled, addr, hit, lastPC, hits]. Pass clearHit to re-arm. */
-+void romdev_pcbreak_get(unsigned *out5, int clearHit) {
-+   if (!out5) return;
-+   out5[0] = (unsigned)romdev_pc_enabled;
-+   out5[1] = (unsigned)romdev_pc_addr;
-+   out5[2] = (unsigned)romdev_pc_hit;
-+   out5[3] = (unsigned)romdev_pc_last_pc;
-+   out5[4] = (unsigned)romdev_pc_hits;
-+   if (clearHit) { romdev_pc_hit = 0; }
++/* Fills out6: [enabled, addr, hit, lastPC, hits, watchdogTripped]. clearHit re-arms. */
++void romdev_pcbreak_get(unsigned *out6, int clearHit) {
++   if (!out6) return;
++   out6[0] = (unsigned)romdev_pc_enabled;
++   out6[1] = (unsigned)romdev_pc_addr;
++   out6[2] = (unsigned)romdev_pc_hit;
++   out6[3] = (unsigned)romdev_pc_last_pc;
++   out6[4] = (unsigned)romdev_pc_hits;
++   out6[5] = (unsigned)romdev_pc_watchdog;
++   if (clearHit) { romdev_pc_hit = 0; romdev_pc_watchdog = 0; romdev_pc_wd_count = 0; }
++}
++
++/* Arm the instruction watchdog (force-stop a runaway after `limit` instructions;
++ * 0 = disable). The host sets this before driving callSubroutine so a runaway
++ * routine returns control instead of hanging. */
++void romdev_watchdog_set(unsigned limit) {
++   romdev_pc_wd_limit = limit;
++   romdev_pc_wd_count = 0;
++   romdev_pc_watchdog = 0;
 +}
 +}
 +
@@ -216,7 +232,7 @@ index 15b042c..318debf 100644
  void *retro_get_memory_data(unsigned id)
  {
     if (rom_loaded) switch (id)
-@@ -2883,11 +3069,20 @@ void *retro_get_memory_data(unsigned id)
+@@ -2883,11 +3085,20 @@ void *retro_get_memory_data(unsigned id)
        case RETRO_MEMORY_RTC:
           return gb.rtcdata_ptr();
        case RETRO_MEMORY_SYSTEM_RAM:
@@ -239,7 +255,7 @@ index 15b042c..318debf 100644
     }
  
     return 0;
-@@ -2902,14 +3097,21 @@ size_t retro_get_memory_size(unsigned id)
+@@ -2902,14 +3113,21 @@ size_t retro_get_memory_size(unsigned id)
        case RETRO_MEMORY_RTC:
           return gb.rtcdata_size();
        case RETRO_MEMORY_SYSTEM_RAM:
@@ -264,10 +280,10 @@ index 15b042c..318debf 100644
  
     return 0;
 diff --git a/libgambatte/src/cpu.cpp b/libgambatte/src/cpu.cpp
-index 0fb6199..e3a4308 100644
+index 0fb6199..f32ede2 100644
 --- a/libgambatte/src/cpu.cpp
 +++ b/libgambatte/src/cpu.cpp
-@@ -20,6 +20,93 @@
+@@ -20,6 +20,104 @@
  #include "gambatte-memory.h"
  #include "savestate.h"
  
@@ -307,6 +323,17 @@ index 0fb6199..e3a4308 100644
 +volatile int  romdev_pc_hit      = 0;        /* set by the execute hook, cleared by the host */
 +unsigned int  romdev_pc_last_pc  = 0xFFFFFFFF;
 +unsigned int  romdev_pc_hits     = 0;
++
++/* romdev INSTRUCTION WATCHDOG — the fix for "callSubroutine hung". A standalone-
++ * driven routine (e.g. a decompressor fed a wrong pointer) can loop FOREVER
++ * inside a single CPU::process / retro_run frame, so the host's per-FRAME
++ * maxFrames never gets a turn and the WASM hangs. The hook in CPU::process counts
++ * dispatched instructions and force-stops (sets romdev_pc_hit + the watchdog
++ * flag) when the budget is exceeded — so a runaway returns control with the final
++ * PC intact instead of hanging. romdev_pc_wd_limit 0 = disabled. */
++unsigned int  romdev_pc_wd_limit = 0;       /* max instructions before force-stop (0 = off) */
++unsigned int  romdev_pc_wd_count = 0;       /* instructions executed since arm */
++volatile int  romdev_pc_watchdog = 0;       /* set when the watchdog tripped */
 +
 +/* romdev RE round 2 — RANGE watch (discovery): log EVERY {pc,addr,value} that
 + * reads or writes an address in [lo,hi] over a window — not stop-on-first. Hooked
@@ -361,7 +388,7 @@ index 0fb6199..e3a4308 100644
  namespace gambatte {
  
  CPU::CPU()
-@@ -130,6 +217,57 @@ void CPU::loadState(SaveState const &state) {
+@@ -130,6 +228,57 @@ void CPU::loadState(SaveState const &state) {
  	skip_ = state.cpu.skip;
  }
  
@@ -419,7 +446,7 @@ index 0fb6199..e3a4308 100644
  // The main reasons for the use of macros is to more conveniently be able to tweak
  // which variables are local and which are not, combined with the fact that at the
  // time they were written GCC had a tendency to not be able to keep hot variables
-@@ -139,12 +277,35 @@ void CPU::loadState(SaveState const &state) {
+@@ -139,12 +288,35 @@ void CPU::loadState(SaveState const &state) {
  #define de() ( d << 8 | e )
  #define hl() ( h << 8 | l )
  
@@ -459,10 +486,29 @@ index 0fb6199..e3a4308 100644
  
  #define PC_MOD(data) do { pc = data; cycleCounter += 4; } while (0)
  
-@@ -515,6 +676,58 @@ void CPU::process(unsigned long const cycles) {
+@@ -515,6 +687,77 @@ void CPU::process(unsigned long const cycles) {
  				cycleCounter += cycles + (-cycles & 3);
  			}
  		} else while (cycleCounter < mem_.nextEventTime()) {
++			/* romdev instruction WATCHDOG: force-stop a runaway (the callSubroutine
++			 * hang). Counts dispatched instructions; on overflow, fire the breakpoint
++			 * with the watchdog flag so the host gets the final PC instead of hanging.
++			 * Checked FIRST, before the opcode fetch, so `pc` is the about-to-execute
++			 * instruction; freeze + drain the cycle budget exactly like the pc-break
++			 * (so the libretro frame loop completes this frame instead of re-calling
++			 * runFor forever). The instruction is NOT executed. */
++			if (romdev_pc_wd_limit && !romdev_pc_hit) {
++				if (++romdev_pc_wd_count >= romdev_pc_wd_limit) {
++					romdev_pc_last_pc = pc;
++					romdev_pc_hit = 1;
++					romdev_pc_watchdog = 1;
++					pc_ = pc;
++					a_ = a;
++					cycleCounter_ = mem_.nextEventTime();
++					break;
++				}
++			}
++
 +			/* romdev RE round 2 — PC coverage log (discovery): record each DISTINCT
 +			 * in-window PC about to execute. `pc` is the address of the next opcode
 +			 * (before PC_READ). Cheap when disabled (one int test). */

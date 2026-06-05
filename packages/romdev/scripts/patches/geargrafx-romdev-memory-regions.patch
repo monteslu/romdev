@@ -2,7 +2,7 @@ diff --git a/platforms/libretro/libretro.cpp b/platforms/libretro/libretro.cpp
 index 131c841..88467be 100644
 --- a/platforms/libretro/libretro.cpp
 +++ b/platforms/libretro/libretro.cpp
-@@ -447,6 +447,331 @@ bool retro_unserialize(const void *data, size_t size)
+@@ -447,6 +447,359 @@ bool retro_unserialize(const void *data, size_t size)
      return core->LoadState(reinterpret_cast<const u8*>(data), size);
  }
  
@@ -82,6 +82,17 @@ index 131c841..88467be 100644
 +unsigned int  romdev_pc_last_pc = 0xFFFFFFFF;
 +unsigned int  romdev_pc_hits    = 0;
 +
++/* romdev INSTRUCTION WATCHDOG (HuC6280): a runaway routine (e.g. a codec fed a
++ * wrong arg that loops forever) can spin entirely inside a single retro_run
++ * frame, so the host's per-FRAME maxFrames never gets a turn and the whole WASM
++ * hangs. The hook in HuC6280::RunInstruction counts dispatched instructions and
++ * force-stops (sets romdev_pc_hit + romdev_pc_watchdog) when the budget is
++ * exceeded — so a runaway returns control with the final PC intact instead of
++ * hanging. romdev_pc_wd_limit 0 = disabled. */
++unsigned int  romdev_pc_wd_limit = 0;       /* max instructions before force-stop (0 = off) */
++unsigned int  romdev_pc_wd_count = 0;       /* instructions executed since arm */
++volatile int  romdev_pc_watchdog = 0;       /* set when the watchdog tripped */
++
 +void romdev_pcbreak_set(unsigned int addr, int enabled, int step)
 +{
 +    romdev_pc_addr = addr;
@@ -92,18 +103,31 @@ index 131c841..88467be 100644
 +    romdev_pc_hit = 0;
 +    romdev_pc_last_pc = 0xFFFFFFFF;
 +    romdev_pc_hits = 0;
++    romdev_pc_watchdog = 0;
++    romdev_pc_wd_count = 0;
 +}
 +
-+/* Fills out5: [enabled, addr, hit, lastPC, hits]. Pass clearHit to re-arm. */
-+void romdev_pcbreak_get(unsigned int *out5, int clearHit)
++/* Fills out6: [enabled, addr, hit, lastPC, hits, watchdogTripped]. clearHit re-arms. */
++void romdev_pcbreak_get(unsigned int *out6, int clearHit)
 +{
-+    if (!out5) return;
-+    out5[0] = (unsigned int)romdev_pc_enabled;
-+    out5[1] = romdev_pc_addr;
-+    out5[2] = (unsigned int)romdev_pc_hit;
-+    out5[3] = romdev_pc_last_pc;
-+    out5[4] = romdev_pc_hits;
-+    if (clearHit) { romdev_pc_hit = 0; }
++    if (!out6) return;
++    out6[0] = (unsigned int)romdev_pc_enabled;
++    out6[1] = romdev_pc_addr;
++    out6[2] = (unsigned int)romdev_pc_hit;
++    out6[3] = romdev_pc_last_pc;
++    out6[4] = romdev_pc_hits;
++    out6[5] = (unsigned int)romdev_pc_watchdog;
++    if (clearHit) { romdev_pc_hit = 0; romdev_pc_watchdog = 0; romdev_pc_wd_count = 0; }
++}
++
++/* Arms the instruction watchdog: force-stop after `limit` instructions (limit
++ * 0 = disable). The host sets this before driving callSubroutine so a runaway
++ * codec returns control instead of hanging. */
++void romdev_watchdog_set(unsigned int limit)
++{
++    romdev_pc_wd_limit = limit;
++    romdev_pc_wd_count = 0;
++    romdev_pc_watchdog = 0;
 +}
 +
 +/* ---- romdev RE primitives round 2 (HuC6280 = 65C02 superset) -----------
@@ -334,7 +358,7 @@ index 131c841..88467be 100644
  void *retro_get_memory_data(unsigned id)
  {
      switch (id)
-@@ -457,6 +782,18 @@ void *retro_get_memory_data(unsigned id)
+@@ -457,6 +810,18 @@ void *retro_get_memory_data(unsigned id)
              return core->GetMemory()->GetWorkingRAM();
          case RETRO_MEMORY_VIDEO_RAM:
              return (u8*)core->GetHuC6270_1()->GetVRAM();
@@ -353,7 +377,7 @@ index 131c841..88467be 100644
      }
  
      return NULL;
-@@ -472,6 +809,18 @@ size_t retro_get_memory_size(unsigned id)
+@@ -472,6 +837,18 @@ size_t retro_get_memory_size(unsigned id)
              return core->GetMemory()->GetWorkingRAMSize();
          case RETRO_MEMORY_VIDEO_RAM:
              return HUC6270_VRAM_SIZE * 2;
@@ -415,7 +439,7 @@ diff --git a/src/huc6280_inline.h b/src/huc6280_inline.h
 index c2e449d..f9c70fd 100644
 --- a/src/huc6280_inline.h
 +++ b/src/huc6280_inline.h
-@@ -28,8 +28,68 @@
+@@ -28,8 +28,97 @@
  #include "memory.h"
  #include "trace_logger.h"
  
@@ -437,6 +461,14 @@ index c2e449d..f9c70fd 100644
 +extern unsigned int  romdev_pc_last_pc;
 +extern unsigned int  romdev_pc_hits;
 +
++/* romdev INSTRUCTION WATCHDOG: counts dispatched instructions and force-stops
++ * (sets romdev_pc_hit + romdev_pc_watchdog) when the budget is exceeded so a
++ * runaway routine returns control with the final PC intact instead of hanging
++ * the WASM. romdev_pc_wd_limit 0 = disabled. */
++extern unsigned int  romdev_pc_wd_limit;
++extern unsigned int  romdev_pc_wd_count;
++extern volatile int  romdev_pc_watchdog;
++
 +/* romdev RE round 2: PC COVERAGE log (distinct in-window PCs). State + the
 + * dedup buffer live in libretro.cpp; the hook below records m_PC before the
 + * opcode fetch when coverage is armed and m_PC is in [lo,hi]. */
@@ -455,6 +487,24 @@ index c2e449d..f9c70fd 100644
 +        unsigned int cov_pc = m_PC.GetValue();
 +        if (cov_pc >= romdev_cov_lo && cov_pc <= romdev_cov_hi)
 +            romdev_cov_log(cov_pc);
++    }
++
++    /* romdev INSTRUCTION WATCHDOG: checked BEFORE the opcode fetch, so m_PC is the
++     * address of the instruction about to execute. Counts dispatched instructions;
++     * on overflow, fire the breakpoint with the watchdog flag so the host gets the
++     * final PC instead of hanging. The frame loop drains on romdev_pc_hit so
++     * retro_run returns. Gated on !romdev_pc_hit so a held break doesn't re-fire. */
++    if (romdev_pc_wd_limit && !romdev_pc_hit)
++    {
++        if (++romdev_pc_wd_count >= romdev_pc_wd_limit)
++        {
++            romdev_pc_last_pc = m_PC.GetValue();   /* leave PC frozen exactly here */
++            romdev_pc_hit = 1;
++            romdev_pc_watchdog = 1;
++            if (IsValidPointer(instruction_completed))
++                *instruction_completed = true;
++            return 0;
++        }
 +    }
 +
 +    /* romdev PC breakpoint / single-step: checked BEFORE the opcode fetch, so

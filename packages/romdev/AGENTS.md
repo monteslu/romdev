@@ -266,7 +266,11 @@ Different platforms have different levels of MCP-exposed debugging — different
 > instruction and read its registers), **`runUntilRead`** (the exact PC that read
 > a byte — read-side mirror of findWriter), **`stepInstruction`** (CPU single-step),
 > **`setRegister`** (write a CPU register), **`callSubroutine`/`decompressWith`**
-> (drive the ROM's OWN routine — e.g. its decompressor — and capture the output),
+> (drive the ROM's OWN routine — e.g. its decompressor — and capture the output;
+> a per-instruction watchdog on **every CPU core** force-stops a runaway routine
+> and returns `{watchdog:true, finalPC, finalRegs}` instead of hanging — pass
+> `maxInstructions` for the budget, `presetMemory`/`stopAtPC` for codecs that read
+> RAM globals or need a mid-routine halt),
 > **`watchRange`** (log EVERY read/write hitting an address range — discovery),
 > **`logPCRange`** (coverage trace — distinct PCs executed in a window),
 > `gameCheats`/`searchCheats`/`applyCheat`/`makeCheat` (cheat

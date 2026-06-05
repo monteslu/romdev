@@ -37,7 +37,7 @@
 # opcode fetch; exports romdev_cov_set/get). Ring-buffer state lives in libretro.cpp.
 #
 diff --git a/libretro/libretro.cpp b/libretro/libretro.cpp
-index ad4efd7..dbe797b 100644
+index ad4efd7..a5729fd 100644
 --- a/libretro/libretro.cpp
 +++ b/libretro/libretro.cpp
 @@ -995,6 +995,10 @@ void retro_get_system_av_info(struct retro_system_av_info *info)
@@ -69,7 +69,7 @@ index ad4efd7..dbe797b 100644
        for (int lcv = 1; lcv < retro_overclock; lcv++)
           lynx->Overclock();
     }
-@@ -1292,16 +1307,285 @@ unsigned retro_get_region(void)
+@@ -1292,16 +1307,310 @@ unsigned retro_get_region(void)
     return RETRO_REGION_NTSC;
  }
  
@@ -147,6 +147,18 @@ index ad4efd7..dbe797b 100644
 +unsigned int  romdev_pc_last_pc  = 0xFFFFFFFF;
 +unsigned int  romdev_pc_hits     = 0;
 +
++/* romdev INSTRUCTION WATCHDOG — the fix for "callSubroutine hung". A standalone-
++ * driven routine (e.g. a decompressor fed a slightly-wrong A) can loop FOREVER
++ * inside a single retro_run frame, so the host's per-FRAME cap never gets a turn
++ * and the whole WASM hangs. This counts dispatched instructions and force-stops
++ * (sets romdev_pc_hit + romdev_pc_watchdog) when the budget is exceeded — so a
++ * runaway returns control with the final PC intact instead of hanging. The check
++ * lives in C65C02::Update() at the SAME spot as the pc-break, placed FIRST.
++ * romdev_pc_wd_limit 0 = disabled. */
++unsigned int  romdev_pc_wd_limit = 0;        /* max instructions before force-stop (0 = off) */
++unsigned int  romdev_pc_wd_count = 0;        /* instructions executed since arm */
++volatile int  romdev_pc_watchdog = 0;        /* set when the watchdog tripped */
++
 +void romdev_pcbreak_set(unsigned int addr, int enabled, int step)
 +{
 +   romdev_pc_addr = addr;
@@ -157,18 +169,31 @@ index ad4efd7..dbe797b 100644
 +   romdev_pc_hit = 0;
 +   romdev_pc_last_pc = 0xFFFFFFFF;
 +   romdev_pc_hits = 0;
++   romdev_pc_watchdog = 0;
++   romdev_pc_wd_count = 0;
 +}
 +
-+/* Fills out5: [enabled, addr, hit, lastPC, hits]. Pass clearHit to re-arm. */
-+void romdev_pcbreak_get(unsigned int *out5, int clearHit)
++/* Fills out6: [enabled, addr, hit, lastPC, hits, watchdogTripped]. clearHit re-arms. */
++void romdev_pcbreak_get(unsigned int *out6, int clearHit)
 +{
-+   if (!out5) return;
-+   out5[0] = (unsigned int)romdev_pc_enabled;
-+   out5[1] = romdev_pc_addr;
-+   out5[2] = (unsigned int)romdev_pc_hit;
-+   out5[3] = romdev_pc_last_pc;
-+   out5[4] = romdev_pc_hits;
-+   if (clearHit) { romdev_pc_hit = 0; }
++   if (!out6) return;
++   out6[0] = (unsigned int)romdev_pc_enabled;
++   out6[1] = romdev_pc_addr;
++   out6[2] = (unsigned int)romdev_pc_hit;
++   out6[3] = romdev_pc_last_pc;
++   out6[4] = romdev_pc_hits;
++   out6[5] = (unsigned int)romdev_pc_watchdog;
++   if (clearHit) { romdev_pc_hit = 0; romdev_pc_watchdog = 0; romdev_pc_wd_count = 0; }
++}
++
++/* Arm the instruction watchdog (force-stop a runaway after `limit` instructions;
++ * 0 = disable). The host sets this before driving callSubroutine so a runaway
++ * routine returns control instead of hanging the whole WASM. */
++void romdev_watchdog_set(unsigned int limit)
++{
++   romdev_pc_wd_limit = limit;
++   romdev_pc_wd_count = 0;
++   romdev_pc_watchdog = 0;
 +}
 +
 +/* ─── romdev RE primitives round 2 (Lynx 65C02) ───────────────────────────────
@@ -360,10 +385,10 @@ index ad4efd7..dbe797b 100644
     return 0;
  }
 diff --git a/lynx/c65c02.h b/lynx/c65c02.h
-index 0fdea74..a1c4e59 100644
+index 0fdea74..b928b7d 100644
 --- a/lynx/c65c02.h
 +++ b/lynx/c65c02.h
-@@ -65,9 +65,75 @@
+@@ -65,9 +65,84 @@
  //#define CPU_PEEKW(m)			(mSystem.PeekW_CPU(m))
  //#define CPU_POKE(m1,m2)			(mSystem.Poke_CPU(m1,m2))
  
@@ -408,6 +433,15 @@ index 0fdea74..a1c4e59 100644
 +extern unsigned int  romdev_pc_last_pc;
 +extern unsigned int  romdev_pc_hits;
 +
++/* romdev INSTRUCTION WATCHDOG (the callSubroutine-hang fix). Counted in
++ * C65C02::Update() at the SAME spot as the pc-break, placed FIRST: when the
++ * dispatched-instruction budget is exceeded it freezes mPC and sets
++ * romdev_pc_hit + romdev_pc_watchdog so the frame loop ends instead of spinning
++ * forever. State lives in libretro.cpp; 0 = disabled. */
++extern unsigned int  romdev_pc_wd_limit;
++extern unsigned int  romdev_pc_wd_count;
++extern volatile int  romdev_pc_watchdog;
++
 +/* romdev RE round 2: RANGE watch (read+write log over [lo,hi]) + PC COVERAGE.
 + * State + the ring buffers live in libretro.cpp; the CPU_PEEK / CPU_POKE hooks
 + * below and the Update() hook call these. mode 1=read 2=write 3=both; recorded
@@ -441,10 +475,29 @@ index 0fdea74..a1c4e59 100644
  
  
  enum
-@@ -248,6 +314,37 @@ class C65C02
+@@ -248,6 +323,56 @@ class C65C02
           //
           if(gSystemCPUSleep) return;
  
++         /* romdev instruction WATCHDOG: force-stop a runaway (the callSubroutine
++          * hang). Checked FIRST, HERE before the opcode fetch, so mPC is the
++          * address of the instruction about to execute. On overflow we freeze the
++          * CPU exactly here (mPC un-incremented), set romdev_pc_hit so the
++          * libretro frame loop consumes the remaining frame budget and retro_run
++          * returns instead of spinning forever, and flag romdev_pc_watchdog so the
++          * host learns it tripped. Gated on !romdev_pc_hit so it doesn't re-fire
++          * while the host reads state and disarms. Cheap when disabled. */
++         if(romdev_pc_wd_limit && !romdev_pc_hit)
++         {
++            if(++romdev_pc_wd_count >= romdev_pc_wd_limit)
++            {
++               romdev_pc_last_pc = (unsigned int)mPC;  /* frozen here, un-executed */
++               romdev_pc_hit = 1;
++               romdev_pc_watchdog = 1;
++               return;                                 /* do NOT fetch/execute */
++            }
++         }
++
 +         /* romdev PC coverage log (discovery): record each DISTINCT in-window PC
 +          * about to execute. Checked HERE, before the opcode fetch, so mPC is the
 +          * address of the instruction about to run. Cheap when disabled. */
