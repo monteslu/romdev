@@ -33,6 +33,8 @@ export const MERGE_MAP = {
   input: { absorbs: ["setInput", "pressButton", "inputSequence", "navigate", "getInputLayout"], axis: "op" },
   // ── platform (list/resolve/toolchains/docs/doc; spans platforms.js+platform-docs.js+toolchain.js) ──
   platform: { absorbs: ["listPlatforms", "resolvePlatform", "listToolchains", "installToolchain", "listPlatformDocs", "getPlatformDoc"], axis: "op" },
+  // ── host (unload/shutdown/reset/pause/resume FSM; loadMedia + getStatus stay separate) ──
+  host: { absorbs: ["unloadMedia", "shutdown", "reset", "pause", "resume"], axis: "op" },
 };
 
 /** Every OLD tool name that the consolidation removes (absorbed into a new tool). */

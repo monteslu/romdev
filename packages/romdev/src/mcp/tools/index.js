@@ -303,7 +303,7 @@ const TOOL_OWNER = {
   // platforms category
   platform: "platforms",
   // run category
-  loadMedia: "run", unloadMedia: "run", resetCore: "run", pauseCore: "run", resumeCore: "run", listMediaKinds: "run", getMediaInfo: "run", listCores: "run",
+  loadMedia: "run", host: "run",
   stepFrames: "run", screenshot: "run", stepAndScreenshot: "run",
   // input category
   input: "input",
