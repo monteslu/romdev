@@ -39,6 +39,7 @@ import { registerFontMapTools } from "./font-map.js";
 import { registerDisasmTools } from "./disasm.js";
 import { registerFindReferencesTools } from "./find-references.js";
 import { registerRenderingContextTools } from "./rendering-context.js";
+import { registerTraceVramSourceTools } from "./trace-vram-source.js";
 import { registerRunUntilTools } from "./run-until.js";
 import { registerWatchMemoryTools } from "./watch-memory.js";
 import { registerWhichTilesTools } from "./which-tiles.js";
@@ -110,6 +111,7 @@ const CATEGORIES = [
       registerDisasmTools(s, z, k);            // disassemble, disassembleRom
       registerFindReferencesTools(s, z, k);    // findReferences
       registerRenderingContextTools(s, z, k);  // getRenderingContext
+      registerTraceVramSourceTools(s, z, k);   // traceVramSource (Genesis VRAM-DMA source)
       registerTileInspectTools(s, z, k);       // tile/CHR inspection helpers
       registerWhichTilesTools(s, z, k);        // whichTilesAreRendered
       registerAddressToSymbolTools(s, z, k);   // addressToSymbol — PC → C function name
