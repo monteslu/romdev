@@ -5,6 +5,7 @@
 
 import { jsonContent, safeTool } from "../util.js";
 import { resolveIntent } from "../../platforms/common/intent.js";
+import { inspectPaletteCore, getPlatformMasterPaletteCore } from "./platform-tools.js";
 
 /** lospec.com hosts each palette at https://lospec.com/palette-list/<id>.json. */
 const LOSPEC_URL_BASE = "https://lospec.com/palette-list";
@@ -140,17 +141,46 @@ async function getNesMasterSnap() {
   throw new Error("getLospecPalette: internal — snapToNesMasterPublic not exported from sprite-pipeline.js");
 }
 
-export function registerLospecTools(server, z, _sessionKey) {
+export function registerLospecTools(server, z, sessionKey) {
   server.tool(
-    "getLospecPalette",
-    "Fetch a CC0 retro palette from lospec.com by URL slug. Optionally snap each color to a target platform's hardware master palette (today: NES; other platforms returned verbatim). " +
-    "Feeds straight into `quantizePngForPlatform({palette})` for 'I want my game to use this Lospec palette' workflows.\n\n" +
-    "Examples of common slugs: 'kirokaze-gameboy', 'pico-8', 'sweetie-16', 'endesga-32', 'nostalgia-16'. " +
-    "Find the slug from the palette's lospec.com URL: https://lospec.com/palette-list/<slug>.",
+    "palette",
+    "Color palettes — read the running ROM's live palette, get a platform's master palette, or fetch a Lospec " +
+    "palette. `source`: 'live' | 'platformMaster' | 'lospec'.\n" +
+    "'live': the loaded ROM's ACTIVE palette as a normalized {index,r,g,b}[] list + a PNG swatch sheet. NES (32: " +
+    "16 BG + 16 sprite; `area`/`subPalette` filters), SNES (256, BGR555), Genesis (64 = 4 sub-palettes×16, grouped), " +
+    "GB/GBC, SMS/GG, Atari 2600 (4 active, beam-raced snapshot), 7800, C64 (16 fixed), GBA (256 BG + 256 OBJ). " +
+    "The color list is ALWAYS returned; the swatch PNG is path-or-inline.\n" +
+    "'platformMaster': the platform's full hardware master palette as `png` (default — the ImageMagick -remap " +
+    "target), `lospec` JSON (LibreSprite), or `hex` text. `outputPath` writes to disk.\n" +
+    "'lospec': a CC0 palette from lospec.com by `id` slug (e.g. 'kirokaze-gameboy', 'pico-8'); `asPlatform` snaps " +
+    "each color to that platform's master (NES today). Feeds quantize.",
     {
-      id: z.string().describe("Lospec palette slug (lowercase letters / digits / hyphens). From the URL of the palette's lospec page."),
-      asPlatform: z.string().optional().describe("Optional. Snap each color to this platform's hardware master palette via nearest-neighbour. Today only 'nes' has a tabulated master; other platforms return colors verbatim with a note."),
+      source: z.enum(["live", "platformMaster", "lospec"]).describe("live = running ROM's palette; platformMaster = hardware master; lospec = a lospec.com palette."),
+      platform: z.string().optional().describe("source=live: override platform (else loaded host). source=platformMaster: REQUIRED."),
+      // live
+      area: z.enum(["bg", "sprite", "all"]).default("all").describe("source=live NES: 'bg' (0-15), 'sprite' (16-31), 'all' (default). GBA: bg/sprite banks."),
+      subPalette: z.number().int().min(0).max(3).optional().describe("source=live NES: return just one 4-entry sub-palette within `area`."),
+      outputPath: z.string().optional().describe("source=live: write the swatch PNG here (or inline:true). source=platformMaster: write the result here."),
+      inline: z.boolean().default(false).describe("source=live: return the swatch image in the response instead of writing to disk."),
+      // platformMaster
+      format: z.enum(["png", "lospec", "hex"]).default("png").describe("source=platformMaster: 'png' (swatch, default) / 'lospec' (JSON) / 'hex' (one #RRGGBB per line)."),
+      // lospec
+      id: z.string().optional().describe("source=lospec: the palette slug (lowercase/digits/hyphens) from its lospec.com URL."),
+      asPlatform: z.string().optional().describe("source=lospec: snap each color to this platform's master (NES today)."),
     },
-    safeTool(async (args) => jsonContent(await getLospecPaletteImpl(args))),
+    safeTool(async (args) => {
+      switch (args.source) {
+        case "live":           return await inspectPaletteCore(args, sessionKey);
+        case "platformMaster": {
+          if (!args.platform) throw new Error("palette({source:'platformMaster'}): `platform` is required.");
+          return await getPlatformMasterPaletteCore(args);
+        }
+        case "lospec": {
+          if (!args.id) throw new Error("palette({source:'lospec'}): `id` (the slug) is required.");
+          return jsonContent(await getLospecPaletteImpl(args));
+        }
+        default: throw new Error(`palette: unknown source '${args.source}'`);
+      }
+    }),
   );
 }
