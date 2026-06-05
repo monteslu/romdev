@@ -2,6 +2,7 @@ import { getHost } from "../state.js";
 import { MemoryRegionToRetro } from "../../host/types.js";
 import { jsonContent, safeTool, textContent, writeOutput } from "../util.js";
 import { classifyBytes } from "./classify-region.js";
+import { clusterChanges } from "./diff-cluster.js";
 
 // Small reads stay inline (hex) for ergonomics; large reads must go to disk
 // (raw bytes) unless inline:true. The common case — peeking a few bytes of
@@ -241,40 +242,69 @@ export function registerMemoryTools(server, z, sessionKey) {
 
   server.tool(
     "diffMemory",
-    "Compare a region against an earlier snapshotMemory baseline and return ONLY the bytes that CHANGED: " +
-    "`changes:[{offset, before, after}]` (hex), plus `changedCount`. This is the direct answer to 'which bytes " +
-    "did this event touch?' — e.g. snapshot system_ram, walk into a door, diffMemory → the handful of state " +
-    "bytes the door handler wrote (area id, phase, flags) instead of eyeballing two 2KB hex dumps. Reads the " +
-    "SAME offset/length the snapshot covered.",
+    "Compare a region against an earlier snapshotMemory baseline and return the bytes that CHANGED. The direct " +
+    "answer to 'which bytes did this event touch?' — snapshot system_ram, walk into a door, diffMemory → the " +
+    "state bytes the door handler wrote. " +
+    "DEFAULT view is a CLUSTERED SUMMARY (not raw rows) so a gameplay diff that churns thousands of bytes doesn't " +
+    "flood your context: `clusters:[{start, end, bytes, stride?}]` groups adjacent changes into ranges, and when " +
+    "the ranges are evenly spaced it reports the stride (e.g. '4 islands at stride 0x80' = likely a player-struct " +
+    "array — each entity's record). `view:'raw'` returns the per-byte {offset,before,after} list (capped by " +
+    "maxChanges) for when you need exact bytes. Reads the SAME offset/length the snapshot covered.",
     {
       region: z.enum(REGIONS),
       name: z.string().default("default").describe("Which snapshotMemory baseline to diff against (same name you snapshotted with)."),
-      maxChanges: z.number().int().min(1).max(65536).default(4096).describe("Cap the changes list (default 4096) so a wholesale change doesn't flood the response; `changedCount` is always the true total."),
+      view: z.enum(["summary", "raw"]).default("summary").describe("'summary' (default) = clustered changed-ranges + stride detection (context-safe). 'raw' = the full per-byte change list."),
+      maxChanges: z.number().int().min(1).max(65536).default(4096).describe("raw view only: cap the per-byte list (changedCount is always the true total)."),
+      maxClusters: z.number().int().min(1).max(4096).default(64).describe("summary view: cap the cluster list (clusterCount is the true total)."),
+      gap: z.number().int().min(1).max(256).default(4).describe("summary view: merge changed bytes into one cluster if they're within this many bytes of each other (default 4)."),
     },
-    safeTool(async ({ region, name, maxChanges }) => {
+    safeTool(async ({ region, name, view, maxChanges, maxClusters, gap }) => {
       const host = getHost(sessionKey);
       const snap = memSnapshots(sessionKey).get(snapKey(region, name));
       if (!snap) throw new Error(`diffMemory: no snapshot named '${name}' for region '${region}'. Call snapshotMemory({region, name}) first.`);
       const now = host.readMemory(region, snap.offset, snap.bytes.length);
-      const changes = [];
-      let changedCount = 0;
-      for (let i = 0; i < snap.bytes.length; i++) {
-        if (snap.bytes[i] !== now[i]) {
-          changedCount++;
-          if (changes.length < maxChanges) {
-            changes.push({
-              offset: "0x" + (snap.offset + i).toString(16).toUpperCase(),
-              offsetDec: snap.offset + i,
-              before: snap.bytes[i].toString(16).padStart(2, "0"),
-              after: now[i].toString(16).padStart(2, "0"),
-            });
-          }
-        }
+
+      // Collect changed offsets once.
+      const changedOffsets = [];
+      for (let i = 0; i < snap.bytes.length; i++) if (snap.bytes[i] !== now[i]) changedOffsets.push(i);
+      const changedCount = changedOffsets.length;
+
+      if (view === "raw") {
+        const changes = changedOffsets.slice(0, maxChanges).map((i) => ({
+          offset: "0x" + (snap.offset + i).toString(16).toUpperCase(),
+          offsetDec: snap.offset + i,
+          before: snap.bytes[i].toString(16).padStart(2, "0"),
+          after: now[i].toString(16).padStart(2, "0"),
+        }));
+        return jsonContent({
+          region, name, view, baseOffset: snap.offset, length: snap.bytes.length,
+          changedCount, changes,
+          ...(changedCount > changes.length ? { truncated: true, note: `${changedCount} bytes changed; showing first ${changes.length} (raise maxChanges).` } : {}),
+        });
       }
+
+      // SUMMARY: cluster adjacent changes (within `gap`) into ranges + stride.
+      const { clusters, stride } = clusterChanges(changedOffsets.map((i) => snap.offset + i), { gap });
+      const strideNote = stride !== null
+        ? `${clusters.length} change-islands evenly spaced at stride 0x${stride.toString(16)} — likely a struct/entity ARRAY (each island = one record's changed fields).`
+        : null;
+      const out = clusters.slice(0, maxClusters).map((c) => ({
+        start: "0x" + c.startDec.toString(16).toUpperCase(),
+        end: "0x" + c.endDec.toString(16).toUpperCase(),
+        span: c.endDec - c.startDec + 1,
+        bytes: c.bytes,
+      }));
       return jsonContent({
-        region, name, baseOffset: snap.offset, length: snap.bytes.length,
-        changedCount, changes,
-        ...(changedCount > changes.length ? { truncated: true, note: `${changedCount} bytes changed; showing first ${changes.length} (raise maxChanges for more).` } : {}),
+        region, name, view, baseOffset: snap.offset, length: snap.bytes.length,
+        changedCount, clusterCount: clusters.length,
+        clusters: out,
+        ...(stride !== null ? { stride: "0x" + stride.toString(16), strideHint: strideNote } : {}),
+        ...(clusters.length > out.length ? { truncated: true } : {}),
+        note: changedCount === 0
+          ? "Nothing changed."
+          : `${changedCount} bytes changed in ${clusters.length} cluster(s). ` +
+            (stride !== null ? strideNote + " " : "") +
+            "Use view:'raw' for exact before/after bytes (or narrow with a tighter event window). For 'find the address of value X' use searchValue, not diff.",
       });
     }),
   );
