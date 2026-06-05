@@ -2,6 +2,33 @@
 
 All notable changes to `romdev-mcp`. Dates are release dates.
 
+## 0.4.0
+
+Native disassemblers across the board, GBA disassembly unlocked, and smarter
+cheat search.
+
+### Changed — real disassemblers replace the hand-rolled ones
+All four hand-rolled JS instruction decoders are replaced by **native GNU
+binutils disassemblers compiled to WASM** (the same binutils we already build for
+each toolchain — we just ship `objdump` alongside `as`/`ld`/`objcopy`). The JS
+decoders dropped real instructions and (on m68k) desynced the byte stream into
+garbage — the "useless binary" a Genesis RE session hit.
+- **m68k (Genesis)** → `m68k-elf-objdump`. The JS decoder dropped move-sr / muls /
+  divu and mis-sized the fallback; a real ROM now disassembles cleanly.
+- **Z80 (SMS / Game Gear / MSX)** → binutils z80 `objdump` (fixes the
+  (ix+d)/(iy+d) displacement display + edge cases).
+- **SM83 (Game Boy / Color)** → the same z80 objdump via its `gbz80` machine.
+- The pure-JS decoders remain as a fallback when the WASM isn't resolvable.
+
+### Added
+- **GBA disassembly** (the 14th platform, previously rejected) — `disassembleRom`
+  and `findReferences` now disassemble ARM7/Thumb via native `arm-none-eabi-objdump`
+  (ARM by default, `thumb:true` for Thumb code). `disassembleProject` still
+  excludes GBA (no byte-exact ARM reassembly yet).
+- **Cheat search** now uses `fuse.js` over tag-stripped game names — adds
+  character-level typo tolerance on top of the existing region/revision-tag and
+  word-order robustness.
+
 ## 0.3.1
 
 Homebrew/asset-import polish from a Genesis platformer session, plus a Genesis

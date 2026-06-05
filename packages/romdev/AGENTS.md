@@ -54,7 +54,7 @@ Skip playtest only when there's clearly no human in the loop: CI runs, automated
 - `input` — drive controllers, look up hardware bit layouts. `navigate` walks menus by advancing on SCREEN CHANGE (not fixed frames) and reports whether each press was consumed — the fast, reliable way to script a UI.
 - `state` — savestates and forensic state inspection (`saveState`, `loadState`, `exportState` a slot to disk without touching the live host, `listStates`, `dumpState`)
 - `memory` — read/write VRAM/OAM/CGRAM/ARAM and other regions (all 14 platforms). `readMemory` takes `offsets:[…]` to batch scattered reads in one call. **`searchValue`/`searchNext`** = the Cheat-Engine value-search loop ("find the address of X, narrow as X changes"). **`readCartRom`** reads the loaded cart image to confirm a patch is live. **`classifyRegion`** says whether bytes look like ASCII/code/tile-data (kills the "found table that's really a string" trap). `snapshotMemory` + `diffMemory` answer "which bytes changed across this event?" (diff defaults to a clustered summary with stride detection); `diffState` is the coarse whole-machine version.
-- `debug` — inspectSprites, inspectPalette, getCPUState (all 14), getAudioState (the 12 systems with a sound chip — all but Atari 2600/7800), getRenderingContext, findWriter (write watchpoint, all 14), **`traceVramSource`** (Genesis: which ROM offset a VRAM graphic was DMA'd from), **disassemble**/disassembleProject (13 — not GBA's ARM7), symbol lookup, whichTilesAreRendered, addressToSymbol, plus **cheats** (`gameCheats` = a free labeled RAM/code map for known ROMs, `searchCheats` to fuzzy-find a game by name, `applyCheat`/`clearCheats` non-destructively, `makeCheat` to create codes)
+- `debug` — inspectSprites, inspectPalette, getCPUState (all 14), getAudioState (the 12 systems with a sound chip — all but Atari 2600/7800), getRenderingContext, findWriter (write watchpoint, all 14), **`traceVramSource`** (Genesis: which ROM offset a VRAM graphic was DMA'd from), **disassemble**/disassembleRom/findReferences (ALL 14 — native binutils objdump per CPU, incl. GBA ARM7/Thumb; only the byte-exact disassembleProject excludes GBA), symbol lookup, whichTilesAreRendered, addressToSymbol, plus **cheats** (`gameCheats` = a free labeled RAM/code map for known ROMs, `searchCheats` to fuzzy-find a game by name, `applyCheat`/`clearCheats` non-destructively, `makeCheat` to create codes)
 - `assets` — convert PNGs to tiles, WAVs to BRR, identify ROMs, plus the hacking toolkit (`patchFile`, `assembleSnippet`, `diffRoms`, `findFreeSpace`, `spliceCHR`, `extractCart`, `wrapRomFromParts`)
 - `project` — starter snippets per platform
 - `show` — `playtest` (open the live SDL window for a human), `playtestStop`, `playtestStatus`, `playtestFramebuffer` (capture exactly what the human's window shows)
@@ -709,8 +709,10 @@ DD/FD/DDCB/FDCB). Annotations are post-processing in both paths.
 **entire ROM into a complete, re-buildable project in one call**, across 13 of
 the 14 systems (NES, SNES, GB/GBC, SMS/GG, Genesis, C64, Atari 2600/7800,
 **Lynx** — 65C02, **PC Engine** — HuC6280, and **MSX** — Z80; byte-exact).
-**GBA is the sole exception** (ARM7TDMI has no bundled disassembler —
-`platform:'gba'` returns an explicit message pointing to external ARM tools):
+**GBA is the sole exception** here: ARM7/Thumb DISASSEMBLES fine via
+`disassembleRom`/`findReferences` (native ARM objdump), but `disassembleProject`
+needs a byte-exact ARM REASSEMBLE step that isn't wired yet — `platform:'gba'`
+returns a message pointing you at disassembleRom instead:
 
 ```js
 disassembleProject({ path: "game.nes", outputDir: "./game-disasm" })
