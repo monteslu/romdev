@@ -115,4 +115,16 @@ test("Genesis PC breakpoint + read watch + single-step (gpgx m68k)", { timeout: 
   }));
   assert.equal(rd.notSupported, undefined, "runUntilRead reported notSupported — read-watch patch missing?");
   assert.ok(typeof rd.hit === "boolean", "runUntilRead returned no hit field: " + JSON.stringify(rd));
+
+  // 6) runUntilPC drives the core via _runFramesExclusive, which suspends the
+  //    playtest window's render-tick (so a 60fps tick can't race past the
+  //    breakpoint) WITHOUT touching the agent's `status.paused`. A second
+  //    runUntilPC must still hit cleanly (no residue), and the host must not be
+  //    left paused.
+  const bp2 = toJSON(await client.callTool({
+    name: "runUntilPC", arguments: { address: writerPC, maxFrames: 300 },
+  }));
+  assert.equal(bp2.hit, true, "second runUntilPC did not hit (exclusive-run left residue): " + JSON.stringify(bp2));
+  const status = toJSON(await client.callTool({ name: "getStatus", arguments: {} }));
+  assert.equal(status.paused, false, "runUntilPC must not leave the host paused");
 });

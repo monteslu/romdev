@@ -20,6 +20,28 @@ import { getCPUState } from "../../host/cpu-state.js";
 import { MemoryRegionToRetro } from "../../host/types.js";
 import { resolveButtonAlias } from "./input.js";
 
+// Let a human watching /livestream (or a playtest window) SEE what a
+// breakpoint/watch tool just did — the frozen breakpoint frame, the state when a
+// write was caught — even though the AGENT gets only a small JSON result.
+//
+// CRITICAL: this must NOT slow the agent down. The PNG encode is the expensive
+// part, so we do NOT encode here on the tool's critical path. Instead we attach a
+// `_observerFrameProvider` thunk (just captures the host ref — free) and the
+// observer wrapper encodes it ASYNCHRONOUSLY, after the agent's response has
+// already gone out. The provider is stripped from the agent-visible result. The
+// frame is captured by reference now (correct frozen state) but rasterized later.
+function attachObserverFrame(json, host) {
+  json._observerFrameProvider = () => {
+    try {
+      const shot = host.screenshot(); // { pngBase64, width, height }
+      return shot && shot.pngBase64
+        ? { kind: "image", mimeType: "image/png", base64: shot.pngBase64 }
+        : null;
+    } catch { return null; }
+  };
+  return json;
+}
+
 // Drive scheduled `pressDuring` input through the host's ONLY input API
 // (setInput) — the watch loop owns stepFrames, so this must never advance the
 // emulator itself. Returns a stateful driver: call applyForFrame(i) at the top
@@ -476,7 +498,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       const bankInfo = (prgOffset != null)
         ? { prgOffset: "0x" + prgOffset.toString(16).toUpperCase(), bank: Math.floor(prgOffset / 0x4000) }
         : null;
-      return jsonContent({
+      return attachObserverFrame(jsonContent({
         found: true,
         address: "$" + address.toString(16).toUpperCase(),
         pc: result.lastPC != null ? "$" + result.lastPC.toString(16).toUpperCase() : null,
@@ -490,7 +512,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
           (bankInfo
             ? `pc is in PRG bank ${bankInfo.bank} (prg offset ${bankInfo.prgOffset}) — disassembleRom({ startAddress: ${result.lastPC != null ? "0x" + result.lastPC.toString(16) : "pc"}, bank: ${bankInfo.bank} }) targets the exact bank (no fixed-bank $FF padding).`
             : `disassembleRom({ startAddress: ${result.lastPC != null ? "0x" + result.lastPC.toString(16) : "pc"} }) to see it. On a banked mapper a $8000-$BFFF pc may be in a switchable bank — pass the right \`bank\`.`),
-      });
+      }), host);
     }),
   );
 
@@ -533,7 +555,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
           const pc = tryGetPC(host);
           const frameAbs = startFrame + i + 1;
           pressDriver.finish();
-          return jsonContent({
+          return attachObserverFrame(jsonContent({
             written: true,
             frame: frameAbs,
             frameRelative: i + 1,
@@ -550,7 +572,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
             hint: pc != null
               ? `disassembleRom near ${hexPC(pc)} is a STARTING point — but if this ROM writes from an NMI/IRQ handler, ${hexPC(pc)} is likely the interrupted idle loop, not the writer. Cross-check with the value trace.`
               : "PC was not available — check that getCPUState is wired for this platform.",
-          });
+          }), host);
         }
         prev = cur;
       }
@@ -610,15 +632,15 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         host.setPCBreak(0, false, false); // disarm
       }
       if (!hit) {
-        return jsonContent({
+        return attachObserverFrame(jsonContent({
           hit: false, address: "$" + address.toString(16).toUpperCase(), framesRun,
           ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
           note: "PC never reached that address within maxFrames. Either the code path didn't execute (drive it with pressDuring " +
             "to reach the right game state), or the address isn't an instruction boundary (a mid-instruction address never matches REG_PC).",
-        });
+        }), host);
       }
       const fin = host.getPCBreak(true); // clear hit
-      return jsonContent({
+      return attachObserverFrame(jsonContent({
         hit: true,
         address: "$" + address.toString(16).toUpperCase(),
         pc: last.lastPC != null ? "$" + last.lastPC.toString(16).toUpperCase() : null,
@@ -630,7 +652,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         note: "CPU is FROZEN at this instruction. Call getCPUState({platform:'genesis'}) to read all registers at this exact " +
           "moment (the value you want — e.g. an address register holding a source pointer — is live now), then readMemory/readCartRom " +
           "at that pointer. stepInstruction to single-step, or stepFrames/resume to continue.",
-      });
+      }), host);
     }),
   );
 
@@ -684,7 +706,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         });
       }
       const fin = host.getReadWatch(true);
-      return jsonContent({
+      return attachObserverFrame(jsonContent({
         hit: true,
         address: "$" + address.toString(16).toUpperCase(),
         pc: last.lastPC != null ? "$" + last.lastPC.toString(16).toUpperCase() : null,
@@ -695,7 +717,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         hits: fin.hits,
         ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
         note: "pc is the EXACT instruction that read this address. disassembleRom({ startAddress: pc }) to see it.",
-      });
+      }), host);
     }),
   );
 
@@ -716,12 +738,12 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         });
       }
       const r = host.stepInstruction();
-      return jsonContent({
+      return attachObserverFrame(jsonContent({
         stepped: true,
         pc: r.pc != null ? "$" + r.pc.toString(16).toUpperCase() : null,
         pcRaw: r.pc,
         note: "CPU is frozen one instruction later. getCPUState to read registers; stepInstruction again to keep stepping.",
-      });
+      }), host);
     }),
   );
 }
