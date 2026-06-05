@@ -28,6 +28,18 @@
 #   m68k template). romdev_pc_step is a per-instruction countdown the host arms to
 #   2 so single-step ADVANCES the PC.
 #
+# RE primitives round 2 (register read/write + range-watch + PC-coverage):
+#   Adds the cross-core RE round-2 exports to the Z80/R800 path. romdev_setreg/
+#   romdev_getreg map the STABLE Z80 reg-id convention (0=A 1=F 2=B 3=C 4=D 5=E
+#   6=H 7=L 8=IX 9=IY 16=PC 18=SP) onto the R800 active register bank
+#   (cpu->regs, via boardInfo.cpuRef) — drives callSubroutine/setRegister.
+#   romdev_range_set/get logs EVERY {pc,addr,value} touching [lo,hi] (readMem/
+#   writeMem data hooks, mode 1=read 2=write 3=both) for watchRange; romdev_cov_
+#   set/get records DISTINCT in-window PCs (a coverage check at the top of the
+#   r800Execute/r800ExecuteUntil loops, beside the PC-break check) for logPCRange.
+#   State lives in Src/Z80/R800.c; the six exports in libretro.c. Build script
+#   adds them to EXPORTED_FUNCTIONS via RE2_EXPORTS.
+#
 diff --git a/Src/SoundChips/AY8910.c b/Src/SoundChips/AY8910.c
 index 3e74ec9..b564d1d 100644
 --- a/Src/SoundChips/AY8910.c
@@ -126,10 +138,10 @@ index cc6cbf5..8c1bab2 100644
  extern void RefreshScreen(int);
  
 diff --git a/Src/Z80/R800.c b/Src/Z80/R800.c
-index e3dd190..eee05a9 100644
+index e3dd190..1d95d20 100644
 --- a/Src/Z80/R800.c
 +++ b/Src/Z80/R800.c
-@@ -42,6 +42,64 @@ static UInt8  ZSPXYTable[256];
+@@ -42,6 +42,122 @@ static UInt8  ZSPXYTable[256];
  static UInt8  ZSPHTable[256];
  static UInt16 DAATable[0x800];
  
@@ -165,6 +177,64 @@ index e3dd190..eee05a9 100644
 +unsigned char romdev_wp_last_val = 0;
 +unsigned int  romdev_wp_hits     = 0;
 +
++/* ---- romdev RE primitives round 2 (Z80 / R800) ---------------------- */
++/* RANGE watch (discovery): log EVERY {pc,addr,value} that reads or writes an
++ * address in [lo,hi] over a window — not stop-on-first. Hooked into the same
++ * readMem/writeMem data paths as the single-address watch (opcode fetches via
++ * readOpcode are deliberately NOT hooked). Ring buffer; host drains it. */
++#define ROMDEV_RANGE_CAP 4096
++unsigned int  romdev_range_lo      = 0;
++unsigned int  romdev_range_hi      = 0;
++int           romdev_range_enabled = 0;
++int           romdev_range_mode    = 0;     /* 1=read, 2=write, 3=both */
++unsigned int  romdev_range_pc  [ROMDEV_RANGE_CAP];
++unsigned int  romdev_range_addr[ROMDEV_RANGE_CAP];
++unsigned char romdev_range_val [ROMDEV_RANGE_CAP];
++unsigned int  romdev_range_count   = 0;     /* total events seen (may exceed CAP) */
++unsigned int  romdev_range_stored  = 0;     /* events actually stored (<= CAP) */
++
++/* PC COVERAGE log (discovery): record DISTINCT Z80 PCs executed within an
++ * address window [lo,hi] over a run of frames — "what code runs here?". Linear
++ * de-dup against the stored set (cheap for the small windows this targets). */
++#define ROMDEV_COV_CAP 8192
++unsigned int  romdev_cov_lo      = 0;
++unsigned int  romdev_cov_hi      = 0;
++int           romdev_cov_enabled = 0;
++unsigned int  romdev_cov_pcs[ROMDEV_COV_CAP];
++unsigned int  romdev_cov_count   = 0;       /* distinct PCs stored (<= CAP) */
++unsigned int  romdev_cov_total   = 0;       /* total in-range dispatches seen */
++
++/* Append one range-watch event (called from the readMem/writeMem hooks). */
++void romdev_range_log(unsigned int pc, unsigned int addr, unsigned char val)
++{
++    romdev_range_count++;
++    if (romdev_range_stored < ROMDEV_RANGE_CAP) {
++        romdev_range_pc  [romdev_range_stored] = pc;
++        romdev_range_addr[romdev_range_stored] = addr;
++        romdev_range_val [romdev_range_stored] = val;
++        romdev_range_stored++;
++    }
++}
++
++/* Record a distinct in-window PC for the coverage log. */
++void romdev_cov_log(unsigned int pc)
++{
++    unsigned int i;
++    romdev_cov_total++;
++    for (i = 0; i < romdev_cov_count; i++) if (romdev_cov_pcs[i] == pc) return;
++    if (romdev_cov_count < ROMDEV_COV_CAP) romdev_cov_pcs[romdev_cov_count++] = pc;
++}
++
++/* romdev PC coverage check (discovery): record each DISTINCT in-window PC about
++ * to execute. Placed alongside the PC-break check at the top of the run loop so
++ * r800->regs.PC.W is the address about to dispatch. Cheap when disabled. */
++#define ROMDEV_COV_CHECK(r800) do { \
++    if (romdev_cov_enabled \
++        && (unsigned int)(r800)->regs.PC.W >= romdev_cov_lo \
++        && (unsigned int)(r800)->regs.PC.W <= romdev_cov_hi) \
++        romdev_cov_log((r800)->regs.PC.W); \
++} while (0)
++
 +/* romdev PC breakpoint / single-step check. Placed at the top of each run-loop
 + * iteration, BEFORE the next opcode is fetched, so r800->regs.PC.W is the
 + * address about to execute. On a hit it freezes the CPU at that PC (the
@@ -194,7 +264,7 @@ index e3dd190..eee05a9 100644
  
  static void cb(R800* r800);
  static void dd(R800* r800);
-@@ -179,9 +237,19 @@ static void writePort(R800* r800, UInt16 port, UInt8 value) {
+@@ -179,9 +295,25 @@ static void writePort(R800* r800, UInt16 port, UInt8 value) {
  }
  
  static UInt8 readMem(R800* r800, UInt16 address) {
@@ -211,11 +281,17 @@ index e3dd190..eee05a9 100644
 +        romdev_rd_last_val = romdev_v;
 +        romdev_rd_hits++;
 +    }
++    /* romdev RANGE watch: log every in-[lo,hi] data read {pc,addr,val}. */
++    if (romdev_range_enabled && (romdev_range_mode & 1)
++        && (unsigned int)address >= romdev_range_lo
++        && (unsigned int)address <= romdev_range_hi) {
++        romdev_range_log(r800->regs.PC.W, (unsigned int)address, romdev_v);
++    }
 +    return romdev_v;
  }
  
  static UInt8 readOpcode(R800* r800, UInt16 address) {
-@@ -196,6 +264,13 @@ static UInt8 readOpcode(R800* r800, UInt16 address) {
+@@ -196,6 +328,19 @@ static UInt8 readOpcode(R800* r800, UInt16 address) {
  static void writeMem(R800* r800, UInt16 address, UInt8 value) {
      delayMem(r800);
      r800->cachePage = 0xffff;
@@ -226,22 +302,30 @@ index e3dd190..eee05a9 100644
 +        romdev_wp_last_val = value;
 +        romdev_wp_hits++;
 +    }
++    /* romdev RANGE watch: log every in-[lo,hi] data write {pc,addr,val}. */
++    if (romdev_range_enabled && (romdev_range_mode & 2)
++        && (unsigned int)address >= romdev_range_lo
++        && (unsigned int)address <= romdev_range_hi) {
++        romdev_range_log(r800->regs.PC.W, (unsigned int)address, value);
++    }
      r800->writeMemory(r800->ref, address, value);
  
  #ifdef ENABLE_WATCHPOINTS
-@@ -6076,6 +6151,8 @@ void r800Execute(R800* r800) {
+@@ -6076,6 +6221,9 @@ void r800Execute(R800* r800) {
          }
  #endif
  
++        ROMDEV_COV_CHECK(r800);
 +        ROMDEV_PCBREAK_CHECK(r800);
 +
          executeInstruction(r800, readOpcode(r800, r800->regs.PC.W++));
  
          if (r800->regs.halt)
-@@ -6169,9 +6246,11 @@ void r800ExecuteUntil(R800* r800, UInt32 endTime) {
+@@ -6169,9 +6317,12 @@ void r800ExecuteUntil(R800* r800, UInt32 endTime) {
          }
  #endif
  
++        ROMDEV_COV_CHECK(r800);
 +        ROMDEV_PCBREAK_CHECK(r800);
 +
          executeInstruction(r800, readOpcode(r800, r800->regs.PC.W++));
@@ -252,10 +336,10 @@ index e3dd190..eee05a9 100644
              r800->regs.iff1 >>= iff1;
          }
 diff --git a/libretro.c b/libretro.c
-index f583a99..b6c8470 100644
+index f583a99..64935c2 100644
 --- a/libretro.c
 +++ b/libretro.c
-@@ -1838,16 +1838,179 @@ unsigned retro_get_region(void)
+@@ -1838,16 +1838,284 @@ unsigned retro_get_region(void)
           return RETRO_REGION_NTSC;
     }
  }
@@ -400,6 +484,111 @@ index f583a99..b6c8470 100644
 +   out6[4] = romdev_wp_hits;
 +   out6[5] = 0xFFFFFFFF;
 +   if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; }
++}
++
++/* ---- romdev RE primitives round 2 (Z80 / R800) ---------------------- */
++/* register read/write — the inverse of getCPUState, used by the host's
++ * callSubroutine / decompressWith (set args + PC=entry, push a sentinel return,
++ * run to it, capture the output). Z80 reg-id convention (STABLE across all cores
++ * so the host passes the same ids): 0=A 1=F 2=B 3=C 4=D 5=E 6=H 7=L 8=IX 9=IY
++ * 16=PC 18=SP. Maps onto the R800 active register bank (cpu->regs). Returns 0 on
++ * success, -1 on an unknown id. */
++int romdev_setreg(int regId, unsigned int value)
++{
++   R800* cpu = (R800*)boardInfo.cpuRef;
++   if (!cpu) return -1;
++   switch (regId) {
++      case 0:  cpu->regs.AF.B.h = (unsigned char)value; return 0;  /* A */
++      case 1:  cpu->regs.AF.B.l = (unsigned char)value; return 0;  /* F */
++      case 2:  cpu->regs.BC.B.h = (unsigned char)value; return 0;  /* B */
++      case 3:  cpu->regs.BC.B.l = (unsigned char)value; return 0;  /* C */
++      case 4:  cpu->regs.DE.B.h = (unsigned char)value; return 0;  /* D */
++      case 5:  cpu->regs.DE.B.l = (unsigned char)value; return 0;  /* E */
++      case 6:  cpu->regs.HL.B.h = (unsigned char)value; return 0;  /* H */
++      case 7:  cpu->regs.HL.B.l = (unsigned char)value; return 0;  /* L */
++      case 8:  cpu->regs.IX.W = (unsigned short)value;  return 0;  /* IX */
++      case 9:  cpu->regs.IY.W = (unsigned short)value;  return 0;  /* IY */
++      case 16: cpu->regs.PC.W = (unsigned short)value;  return 0;  /* PC */
++      case 18: cpu->regs.SP.W = (unsigned short)value;  return 0;  /* SP */
++      default: return -1;
++   }
++}
++
++unsigned int romdev_getreg(int regId)
++{
++   R800* cpu = (R800*)boardInfo.cpuRef;
++   if (!cpu) return 0;
++   switch (regId) {
++      case 0:  return cpu->regs.AF.B.h;  /* A */
++      case 1:  return cpu->regs.AF.B.l;  /* F */
++      case 2:  return cpu->regs.BC.B.h;  /* B */
++      case 3:  return cpu->regs.BC.B.l;  /* C */
++      case 4:  return cpu->regs.DE.B.h;  /* D */
++      case 5:  return cpu->regs.DE.B.l;  /* E */
++      case 6:  return cpu->regs.HL.B.h;  /* H */
++      case 7:  return cpu->regs.HL.B.l;  /* L */
++      case 8:  return cpu->regs.IX.W;    /* IX */
++      case 9:  return cpu->regs.IY.W;    /* IY */
++      case 16: return cpu->regs.PC.W;    /* PC */
++      case 18: return cpu->regs.SP.W;    /* SP */
++      default: return 0;
++   }
++}
++
++/* RANGE watch (discovery) — log every read/write in [lo,hi]. mode: 1=read
++ * 2=write 3=both. Arm clears the buffer. State + hooks live in Src/Z80/R800.c. */
++extern unsigned int  romdev_range_lo, romdev_range_hi;
++extern int           romdev_range_enabled, romdev_range_mode;
++extern unsigned int  romdev_range_pc[], romdev_range_addr[];
++extern unsigned char romdev_range_val[];
++extern unsigned int  romdev_range_count, romdev_range_stored;
++
++void romdev_range_set(unsigned int lo, unsigned int hi, int mode, int enabled)
++{
++   romdev_range_lo = lo; romdev_range_hi = hi;
++   romdev_range_mode = mode ? mode : 3;
++   romdev_range_enabled = enabled ? 1 : 0;
++   romdev_range_count = 0; romdev_range_stored = 0;
++}
++
++/* Drain up to `max` events into out[] as packed triples [pc,addr,val,...] (val
++ * in the low byte of its uint32 slot). Returns events written. out2 (size 2)
++ * gets [totalSeen, stored] so the caller knows if the ring overflowed. */
++unsigned int romdev_range_get(unsigned int *out, unsigned int max, unsigned int *out2)
++{
++   unsigned int i, n = romdev_range_stored;
++   if (out2) { out2[0] = romdev_range_count; out2[1] = romdev_range_stored; }
++   if (!out) return 0;
++   if (n > max) n = max;
++   for (i = 0; i < n; i++) {
++      out[i*3 + 0] = romdev_range_pc[i];
++      out[i*3 + 1] = romdev_range_addr[i];
++      out[i*3 + 2] = (unsigned int)romdev_range_val[i];
++   }
++   return n;
++}
++
++/* PC COVERAGE log (discovery) — distinct in-window PCs over a run. */
++extern int           romdev_cov_enabled;
++extern unsigned int  romdev_cov_lo, romdev_cov_hi;
++extern unsigned int  romdev_cov_pcs[], romdev_cov_count, romdev_cov_total;
++
++void romdev_cov_set(unsigned int lo, unsigned int hi, int enabled)
++{
++   romdev_cov_lo = lo; romdev_cov_hi = hi;
++   romdev_cov_enabled = enabled ? 1 : 0;
++   romdev_cov_count = 0; romdev_cov_total = 0;
++}
++
++/* Copy up to `max` distinct PCs into out[]. out2 (size 2) gets [distinct,total]. */
++unsigned int romdev_cov_get(unsigned int *out, unsigned int max, unsigned int *out2)
++{
++   unsigned int i, n = romdev_cov_count;
++   if (out2) { out2[0] = romdev_cov_count; out2[1] = romdev_cov_total; }
++   if (!out) return 0;
++   if (n > max) n = max;
++   for (i = 0; i < n; i++) out[i] = romdev_cov_pcs[i];
++   return n;
 +}
 +
  void *retro_get_memory_data(unsigned id)

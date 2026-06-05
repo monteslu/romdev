@@ -17,8 +17,16 @@
 # romdev_pcbreak_set/get — these power runUntilRead / runUntilPC / stepInstruction.
 # git apply ignores everything above the first 'diff --git' line.
 #
+#
+# RE primitives round 2: register read/write (romdev_setreg/getreg forwarding to
+# M6502::romdevSetReg/GetReg which touch the private A/X/Y/PS/SP/PC; 6502 reg-ids
+# 0=A 1=X 2=Y 3=P 4=SP 16=PC), a RANGE WATCH logging every {pc,addr,value} in
+# [lo,hi] (hooks in M6502::peek / M6502::poke; exports romdev_range_set/get), and
+# a PC COVERAGE log of distinct in-window PCs (hook in M6502::execute before the
+# opcode fetch; exports romdev_cov_set/get). Ring-buffer state lives in libretro.cxx.
+#
 diff --git a/libretro.cxx b/libretro.cxx
-index 15c6d12..1ec0e20 100644
+index 15c6d12..1ea790d 100644
 --- a/libretro.cxx
 +++ b/libretro.cxx
 @@ -28,6 +28,7 @@
@@ -29,7 +37,7 @@ index 15c6d12..1ec0e20 100644
  #include "Version.hxx"
  
  #include "Stubs.hxx"
-@@ -1248,16 +1249,127 @@ unsigned retro_get_region(void)
+@@ -1248,16 +1249,232 @@ unsigned retro_get_region(void)
     return RETRO_REGION_NTSC;
  }
  
@@ -127,6 +135,111 @@ index 15c6d12..1ec0e20 100644
 +   out5[4] = romdev_pc_hits;
 +   if (clearHit) { romdev_pc_hit = 0; }
 +}
++
++/* ─── romdev RE primitives round 2 ────────────────────────────────────────────
++ * Register read/write (inverse of getCPUState — powers setRegister /
++ * callSubroutine), a RANGE WATCH logging every {pc,addr,value} touching [lo,hi]
++ * (hooks in M6502::peek/poke), and a PC COVERAGE log of distinct in-window PCs
++ * (hook in M6502::execute). 6502 reg-id convention (STABLE): 0=A 1=X 2=Y 3=P
++ * 4=SP 16=PC; reg access is forwarded to M6502::romdevSetReg/GetReg (private
++ * members). Range/cov ring-buffer state lives below; the hooks in M6502.cxx
++ * touch it via romdev_range_log / romdev_cov_log. */
++
++int romdev_setreg(int regId, unsigned int value)
++{
++   if (!console) return -1;
++   return console->system().m6502().romdevSetReg(regId, value);
++}
++
++unsigned int romdev_getreg(int regId)
++{
++   if (!console) return 0;
++   return console->system().m6502().romdevGetReg(regId);
++}
++
++/* RANGE watch state + ring buffer (CAP 4096). mode 1=read 2=write 3=both. */
++#define ROMDEV_RANGE_CAP 4096
++unsigned int  romdev_range_lo      = 0;
++unsigned int  romdev_range_hi      = 0;
++int           romdev_range_enabled = 0;
++int           romdev_range_mode    = 0;
++unsigned int  romdev_range_pc  [ROMDEV_RANGE_CAP];
++unsigned int  romdev_range_addr[ROMDEV_RANGE_CAP];
++unsigned char romdev_range_val [ROMDEV_RANGE_CAP];
++unsigned int  romdev_range_count   = 0;
++unsigned int  romdev_range_stored  = 0;
++
++/* Append one range-watch event (called from the M6502::peek/poke hooks). */
++void romdev_range_log(unsigned int pc, unsigned int addr, unsigned char val)
++{
++   romdev_range_count++;
++   if (romdev_range_stored < ROMDEV_RANGE_CAP) {
++      romdev_range_pc  [romdev_range_stored] = pc;
++      romdev_range_addr[romdev_range_stored] = addr;
++      romdev_range_val [romdev_range_stored] = val;
++      romdev_range_stored++;
++   }
++}
++
++void romdev_range_set(unsigned int lo, unsigned int hi, int mode, int enabled)
++{
++   romdev_range_lo = lo; romdev_range_hi = hi;
++   romdev_range_mode = mode ? mode : 3;
++   romdev_range_enabled = enabled ? 1 : 0;
++   romdev_range_count = 0; romdev_range_stored = 0;
++}
++
++/* Drain up to `max` events into out[] as packed triples [pc,addr,val,...].
++ * out2 (size 2) gets [totalSeen, stored]. Returns events written. */
++unsigned int romdev_range_get(unsigned int *out, unsigned int max, unsigned int *out2)
++{
++   unsigned int i, n = romdev_range_stored;
++   if (out2) { out2[0] = romdev_range_count; out2[1] = romdev_range_stored; }
++   if (!out) return 0;
++   if (n > max) n = max;
++   for (i = 0; i < n; i++) {
++      out[i*3 + 0] = romdev_range_pc[i];
++      out[i*3 + 1] = romdev_range_addr[i];
++      out[i*3 + 2] = (unsigned int)romdev_range_val[i];
++   }
++   return n;
++}
++
++/* PC COVERAGE state + linear-dedup buffer (CAP 8192). */
++#define ROMDEV_COV_CAP 8192
++unsigned int  romdev_cov_lo      = 0;
++unsigned int  romdev_cov_hi      = 0;
++int           romdev_cov_enabled = 0;
++unsigned int  romdev_cov_pcs[ROMDEV_COV_CAP];
++unsigned int  romdev_cov_count   = 0;
++unsigned int  romdev_cov_total   = 0;
++
++/* Record a distinct in-window PC (called from the M6502::execute hook). */
++void romdev_cov_log(unsigned int pc)
++{
++   unsigned int i;
++   romdev_cov_total++;
++   for (i = 0; i < romdev_cov_count; i++) if (romdev_cov_pcs[i] == pc) return;
++   if (romdev_cov_count < ROMDEV_COV_CAP) romdev_cov_pcs[romdev_cov_count++] = pc;
++}
++
++void romdev_cov_set(unsigned int lo, unsigned int hi, int enabled)
++{
++   romdev_cov_lo = lo; romdev_cov_hi = hi;
++   romdev_cov_enabled = enabled ? 1 : 0;
++   romdev_cov_count = 0; romdev_cov_total = 0;
++}
++
++/* Copy up to `max` distinct PCs into out[]. out2 (size 2) gets [distinct,total]. */
++unsigned int romdev_cov_get(unsigned int *out, unsigned int max, unsigned int *out2)
++{
++   unsigned int i, n = romdev_cov_count;
++   if (out2) { out2[0] = romdev_cov_count; out2[1] = romdev_cov_total; }
++   if (!out) return 0;
++   if (n > max) n = max;
++   for (i = 0; i < n; i++) out[i] = romdev_cov_pcs[i];
++   return n;
++}
 +}
 +
  unsigned retro_api_version(void)
@@ -157,7 +270,7 @@ index 15c6d12..1ec0e20 100644
        default: return NULL;
     }
  }
-@@ -1267,6 +1379,8 @@ size_t retro_get_memory_size(unsigned id)
+@@ -1267,6 +1484,8 @@ size_t retro_get_memory_size(unsigned id)
     switch (id)
     {
        case RETRO_MEMORY_SYSTEM_RAM: return 128;
@@ -167,10 +280,10 @@ index 15c6d12..1ec0e20 100644
     }
  }
 diff --git a/stella/src/emucore/M6502.cxx b/stella/src/emucore/M6502.cxx
-index 9dfde89..9bbb002 100644
+index 9dfde89..bd95a43 100644
 --- a/stella/src/emucore/M6502.cxx
 +++ b/stella/src/emucore/M6502.cxx
-@@ -103,6 +103,17 @@ void M6502::reset()
+@@ -103,6 +103,28 @@ void M6502::reset()
  }
  
  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -183,17 +296,32 @@ index 9dfde89..9bbb002 100644
 +extern unsigned int  romdev_rd_last_pc;
 +extern unsigned char romdev_rd_last_val;
 +extern unsigned int  romdev_rd_hits;
++
++/* romdev RE round 2: RANGE watch (read/write log over [lo,hi]) + PC COVERAGE.
++ * State + the ring buffers live in libretro.cxx; the hooks in peek/poke/execute
++ * below call these loggers. mode 1=read 2=write 3=both. The recorded pc is this
++ * M6502's PC (the executing instruction). */
++extern unsigned int  romdev_range_lo, romdev_range_hi;
++extern int           romdev_range_enabled, romdev_range_mode;
++extern void          romdev_range_log(unsigned int pc, unsigned int addr, unsigned char val);
++extern int           romdev_cov_enabled;
++extern unsigned int  romdev_cov_lo, romdev_cov_hi;
++extern void          romdev_cov_log(unsigned int pc);
 +}
 +
  inline uInt8 M6502::peek(uInt16 address, uInt8 flags)
  {
    ////////////////////////////////////////////////
-@@ -116,14 +127,30 @@ inline uInt8 M6502::peek(uInt16 address, uInt8 flags)
+@@ -116,14 +138,38 @@ inline uInt8 M6502::peek(uInt16 address, uInt8 flags)
    mySystem->incrementCycles(mySystemCyclesPerProcessorCycle);
  
    uInt8 result = mySystem->peek(address, flags);
 +  if (romdev_rd_enabled && (unsigned int)address == romdev_rd_addr) {
 +    romdev_rd_last_pc = PC; romdev_rd_last_val = result; romdev_rd_hits++;
++  }
++  if (romdev_range_enabled && (romdev_range_mode & 1)
++      && (unsigned int)address >= romdev_range_lo && (unsigned int)address <= romdev_range_hi) {
++    romdev_range_log(PC, (unsigned int)address, result);
 +  }
    myLastAccessWasRead = true;
    myLastPeekAddress = address;
@@ -216,10 +344,14 @@ index 9dfde89..9bbb002 100644
 +  if (romdev_wp_enabled && (unsigned int)address == romdev_wp_addr) {
 +    romdev_wp_last_pc = PC; romdev_wp_last_val = value; romdev_wp_hits++;
 +  }
++  if (romdev_range_enabled && (romdev_range_mode & 2)
++      && (unsigned int)address >= romdev_range_lo && (unsigned int)address <= romdev_range_hi) {
++    romdev_range_log(PC, (unsigned int)address, value);
++  }
    ////////////////////////////////////////////////
    // TODO - move this logic directly into CartAR
    if(address != myLastAddress)
-@@ -140,6 +167,23 @@ inline void M6502::poke(uInt16 address, uInt8 value)
+@@ -140,6 +186,23 @@ inline void M6502::poke(uInt16 address, uInt8 value)
  }
  
  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -243,10 +375,17 @@ index 9dfde89..9bbb002 100644
  bool M6502::execute(uInt32 number)
  {
    // Clear all of the execution status bits except for the fatal error bit
-@@ -153,6 +197,29 @@ bool M6502::execute(uInt32 number)
+@@ -153,6 +216,36 @@ bool M6502::execute(uInt32 number)
        uInt16 operandAddress = 0, intermediateAddress = 0;
        uInt8 operand = 0;
  
++      // romdev PC coverage log (discovery): record each DISTINCT in-window PC
++      // about to execute. Checked here, BEFORE the opcode fetch, so PC is the
++      // address of the instruction about to run. Cheap when disabled.
++      if (romdev_cov_enabled
++          && (unsigned int)PC >= romdev_cov_lo && (unsigned int)PC <= romdev_cov_hi)
++        romdev_cov_log((unsigned int)PC);
++
 +      // romdev PC breakpoint / single-step: checked here, BEFORE the opcode
 +      // fetch, so PC is the address of the instruction about to execute. On a
 +      // hit (or single-step countdown reaching 0) freeze the CPU at this PC:
@@ -274,10 +413,10 @@ index 9dfde89..9bbb002 100644
        myLastPeekAddress = myLastPokeAddress = myDataAddressForPoke = 0;
  
 diff --git a/stella/src/emucore/M6502.hxx b/stella/src/emucore/M6502.hxx
-index 79b50ee..7ecd246 100644
+index 79b50ee..f9460d3 100644
 --- a/stella/src/emucore/M6502.hxx
 +++ b/stella/src/emucore/M6502.hxx
-@@ -114,6 +114,18 @@ class M6502 : public Serializable
+@@ -114,6 +114,46 @@ class M6502 : public Serializable
      */
      uInt16 getPC() const { return PC; }
  
@@ -291,6 +430,34 @@ index 79b50ee..7ecd246 100644
 +      out[4] = Y;
 +      out[5] = PS();
 +      out[6] = SP;
++    }
++
++    /* rom-dev-mcp RE round 2: register read/write (the inverse of snapshot —
++     * powers setRegister / callSubroutine). 6502 reg-id convention (STABLE across
++     * all cores): 0=A, 1=X, 2=Y, 3=P(status), 4=SP, 16=PC. PS()/PS(uInt8) are the
++     * status get/set; A/X/Y/SP/PC are private so this method (a class member)
++     * does the access. setreg returns 0 ok / -1 unknown. */
++    int romdevSetReg(int regId, unsigned int value) {
++      switch (regId) {
++        case 0:  A  = (uInt8)value;          return 0;  /* A */
++        case 1:  X  = (uInt8)value;          return 0;  /* X */
++        case 2:  Y  = (uInt8)value;          return 0;  /* Y */
++        case 3:  PS((uInt8)value);           return 0;  /* P (status) */
++        case 4:  SP = (uInt8)value;          return 0;  /* SP */
++        case 16: PC = (uInt16)value;         return 0;  /* PC */
++        default: return -1;
++      }
++    }
++    unsigned int romdevGetReg(int regId) const {
++      switch (regId) {
++        case 0:  return (unsigned int)A;
++        case 1:  return (unsigned int)X;
++        case 2:  return (unsigned int)Y;
++        case 3:  return (unsigned int)PS();
++        case 4:  return (unsigned int)SP;
++        case 16: return (unsigned int)PC;
++        default: return 0;
++      }
 +    }
 +
      /**
