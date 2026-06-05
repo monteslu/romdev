@@ -563,4 +563,165 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       });
     }),
   );
+
+  server.tool(
+    "runUntilPC",
+    "Run until the CPU's program counter reaches `address`, then STOP with the CPU frozen EXACTLY at that instruction " +
+    "— a real execution breakpoint. This is the RE primitive for 'read the register at this instruction': break at the " +
+    "instruction, then call `getCPUState` to read the full register file at that exact moment (e.g. break at a decoder's " +
+    "`move.b (a0),d0` and read A0 to get the source address — one read instead of hours of inference). Arms a core-level " +
+    "PC breakpoint, runs up to `maxFrames` (driving any `pressDuring` input), and stops mid-frame on the first hit; the " +
+    "breakpoint auto-disarms after. Returns { hit, pc, frame, framesRun, hits }. After a hit the emulator stays frozen at " +
+    "the PC — call getCPUState / readMemory to inspect, then stepFrames/resume to continue. " +
+    "Supported where the core exposes the romdev PC breakpoint (Genesis today; more cores as patched) — returns notSupported otherwise.",
+    {
+      address: z.number().int().min(0).describe("CPU address of the instruction to break on (e.g. 0x2A3FD4). Must be an instruction boundary."),
+      maxFrames: z.number().int().min(1).max(1_000_000).default(600).describe("Max frames to run while waiting for the PC to be reached."),
+      pressDuring: z.array(z.object({
+        frame: z.number().int().min(0),
+        button: z.string(),
+        port: z.number().int().min(0).max(3).default(0),
+        holdFrames: z.number().int().min(1).default(2),
+      })).optional().describe("Schedule input while running (e.g. navigate a menu so the code path that hits this PC actually executes)."),
+    },
+    safeTool(async ({ address, maxFrames, pressDuring }) => {
+      const host = getHost(sessionKey);
+      if (!host.pcBreakSupported || !host.pcBreakSupported()) {
+        return jsonContent({
+          hit: false, notSupported: true, address: "$" + address.toString(16).toUpperCase(),
+          note: "This core build has no PC breakpoint yet (Genesis/genesis_plus_gx today; other cores as they're patched). " +
+            "Interim: use runUntilWrite/findWriter to anchor on a write, or stepFrames + getCPUState sampling.",
+        });
+      }
+      const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
+      const pressDriver = makePressDriver(host, presses);
+      host.setPCBreak(address, true, false);
+      let hit = false, framesRun = 0, last = null;
+      try {
+        for (let i = 0; i < maxFrames; i++) {
+          pressDriver.applyForFrame(i);
+          host.stepFrames(1);
+          framesRun++;
+          const st = host.getPCBreak(false);
+          if (st.hit) { hit = true; last = st; break; }
+        }
+      } finally {
+        pressDriver.finish();
+        host.setPCBreak(0, false, false); // disarm
+      }
+      if (!hit) {
+        return jsonContent({
+          hit: false, address: "$" + address.toString(16).toUpperCase(), framesRun,
+          ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
+          note: "PC never reached that address within maxFrames. Either the code path didn't execute (drive it with pressDuring " +
+            "to reach the right game state), or the address isn't an instruction boundary (a mid-instruction address never matches REG_PC).",
+        });
+      }
+      const fin = host.getPCBreak(true); // clear hit
+      return jsonContent({
+        hit: true,
+        address: "$" + address.toString(16).toUpperCase(),
+        pc: last.lastPC != null ? "$" + last.lastPC.toString(16).toUpperCase() : null,
+        pcRaw: last.lastPC,
+        frame: host.status.frameCount,
+        framesRun,
+        hits: fin.hits,
+        ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
+        note: "CPU is FROZEN at this instruction. Call getCPUState({platform:'genesis'}) to read all registers at this exact " +
+          "moment (the value you want — e.g. an address register holding a source pointer — is live now), then readMemory/readCartRom " +
+          "at that pointer. stepInstruction to single-step, or stepFrames/resume to continue.",
+      });
+    }),
+  );
+
+  server.tool(
+    "runUntilRead",
+    "Run until the CPU READS a watched address, then stop — the read-side mirror of findWriter. Returns the EXACT instruction " +
+    "PC that read the byte (captured in the CPU read path). Use it to find who consumes a value: e.g. watch a ROM name-table " +
+    "entry and learn which routine reads it, or watch a flag and find its reader. Arms a core-level READ watchpoint, runs up to " +
+    "`maxFrames` (driving `pressDuring`), and returns { hit, pc, value, frame, hits }. Unlike runUntilPC it does NOT freeze " +
+    "mid-frame — it records the reading PC and finishes the current frame. " +
+    "Supported where the core exposes the romdev read watchpoint (Genesis today) — returns notSupported otherwise.",
+    {
+      address: z.number().int().min(0).describe("CPU address to watch for reads (e.g. a ROM/RAM byte you want to find the consumer of)."),
+      maxFrames: z.number().int().min(1).max(1_000_000).default(600).describe("Max frames to run while waiting for a read."),
+      pressDuring: z.array(z.object({
+        frame: z.number().int().min(0),
+        button: z.string(),
+        port: z.number().int().min(0).max(3).default(0),
+        holdFrames: z.number().int().min(1).default(2),
+      })).optional().describe("Schedule input while running (drive the game to the state that reads this address)."),
+    },
+    safeTool(async ({ address, maxFrames, pressDuring }) => {
+      const host = getHost(sessionKey);
+      if (!host.readWatchSupported || !host.readWatchSupported()) {
+        return jsonContent({
+          hit: false, notSupported: true, address: "$" + address.toString(16).toUpperCase(),
+          note: "This core build has no read watchpoint yet (Genesis/genesis_plus_gx today; other cores as patched).",
+        });
+      }
+      const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
+      const pressDriver = makePressDriver(host, presses);
+      host.setReadWatch(address, true);
+      let hit = false, framesRun = 0, last = null;
+      try {
+        for (let i = 0; i < maxFrames; i++) {
+          pressDriver.applyForFrame(i);
+          host.stepFrames(1);
+          framesRun++;
+          const st = host.getReadWatch(false);
+          if (st.hits > 0) { hit = true; last = st; break; }
+        }
+      } finally {
+        pressDriver.finish();
+        host.setReadWatch(0, false);
+      }
+      if (!hit) {
+        return jsonContent({
+          hit: false, address: "$" + address.toString(16).toUpperCase(), framesRun,
+          ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
+          note: "Address was not read within maxFrames. Drive the game to the state that reads it (pressDuring), or increase maxFrames.",
+        });
+      }
+      const fin = host.getReadWatch(true);
+      return jsonContent({
+        hit: true,
+        address: "$" + address.toString(16).toUpperCase(),
+        pc: last.lastPC != null ? "$" + last.lastPC.toString(16).toUpperCase() : null,
+        pcRaw: last.lastPC,
+        value: "0x" + (last.lastValue & 0xFF).toString(16).toUpperCase().padStart(2, "0"),
+        frame: host.status.frameCount,
+        framesRun,
+        hits: fin.hits,
+        ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
+        note: "pc is the EXACT instruction that read this address. disassembleRom({ startAddress: pc }) to see it.",
+      });
+    }),
+  );
+
+  server.tool(
+    "stepInstruction",
+    "Execute exactly ONE CPU instruction and stop (CPU-level single-step) — finer than stepFrames. Freezes the CPU right " +
+    "after the instruction; returns { pc } = the address the CPU is now poised at. Pair with getCPUState to watch registers " +
+    "change one instruction at a time while tracing a routine. Supported where the core exposes the romdev PC breakpoint " +
+    "(Genesis today) — returns notSupported otherwise. (One step advances the frame's other subsystems minimally; it's a " +
+    "CPU single-step, the finest granularity the core exposes.)",
+    {},
+    safeTool(async () => {
+      const host = getHost(sessionKey);
+      if (!host.pcBreakSupported || !host.pcBreakSupported()) {
+        return jsonContent({
+          stepped: false, notSupported: true,
+          note: "This core build has no single-step yet (Genesis/genesis_plus_gx today; other cores as patched).",
+        });
+      }
+      const r = host.stepInstruction();
+      return jsonContent({
+        stepped: true,
+        pc: r.pc != null ? "$" + r.pc.toString(16).toUpperCase() : null,
+        pcRaw: r.pc,
+        note: "CPU is frozen one instruction later. getCPUState to read registers; stepInstruction again to keep stepping.",
+      });
+    }),
+  );
 }

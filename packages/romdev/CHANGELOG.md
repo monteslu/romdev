@@ -2,6 +2,36 @@
 
 All notable changes to `romdev-mcp`. Dates are release dates.
 
+## 0.5.0
+
+Execution breakpoints land on Genesis — the RE primitive that turns "infer for
+hours" into "read the register." Adds `runUntilPC`, `runUntilRead`, and
+`stepInstruction` (Genesis/genesis_plus_gx today; other cores as their CPUs are
+patched, same pattern as the write watchpoint). Requires `romdev-core-gpgx@0.5.0`.
+
+### Added — PC breakpoint + read watchpoint + single-step (Genesis)
+The symmetric gaps next to `findWriter` (a core-level WRITE watchpoint), requested
+by an agent who could disassemble a name-decoder but couldn't read the one address
+register that held the answer.
+- **`runUntilPC({address, maxFrames, pressDuring})`** — runs until the m68k PC
+  reaches `address`, then STOPS with the CPU frozen EXACTLY at that instruction
+  (the core's execute loop bails mid-frame on the hit). Then `getCPUState` reads
+  the full register file at that precise moment — e.g. break at a decoder's
+  `move.b (a0),d0` and read `A0` to get the source pointer in one shot.
+- **`runUntilRead({address, ...})`** — the read-side mirror of `findWriter`:
+  returns the EXACT instruction PC that READ a watched address (find who *consumes*
+  a value, not just who writes it).
+- **`stepInstruction()`** — CPU-level single-step (finer than `stepFrames`); pair
+  with `getCPUState` to watch registers change one instruction at a time.
+- All three feature-detect per core and return `notSupported` where the core lacks
+  the patch. Genesis is wired now; the gpgx m68k patch (`romdev_pcbreak_*` /
+  `romdev_readwatch_*`) is the template for the remaining cores.
+
+### Fixed
+- `build-genesis-plus-gx.sh` now stages the rebuilt core into BOTH `src/cores/wasm`
+  AND the `romdev-core-gpgx` package (which the registry actually resolves at
+  runtime) — a rebuild no longer silently loads the old package copy.
+
 ## 0.4.1
 
 Fixes inverted controller-button mapping on the three genesis_plus_gx platforms
