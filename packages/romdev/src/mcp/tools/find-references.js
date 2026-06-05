@@ -293,16 +293,22 @@ export async function findReferencesCore({ path, platform, address, mapper, maxR
     asm = r.asm;
   } else if (resolved === "genesis") {
     // Genesis ROM maps 1:1 to 68000 $000000+. Disassemble from the reset
-    // vector ($000004) to EOF (capped to keep the pure-JS pass bounded on
-    // big carts). The m68k disassembler emits $XXXXXX absolute operands and
-    // L______ labels that scanAsmForReferences matches.
-    const { runM68kdasm } = await import("../../toolchains/m68kdasm.js");
+    // vector ($000004) to EOF (capped to keep the pass bounded on big carts).
+    // Prefer the native binutils m68k objdump (complete ISA, correct lengths —
+    // the pure-JS decoder dropped move-sr / mul / div and desynced the stream);
+    // fall back to it only if the objdump WASM isn't resolvable.
     const resetPc = (data[4] << 24 | data[5] << 16 | data[6] << 8 | data[7]) >>> 0;
     const start = resetPc < data.length ? resetPc : 0x200;
     const CAP = 512 * 1024; // scan up to 512 KB of code
     const bytes = data.slice(start, Math.min(data.length, start + CAP));
-    const r = runM68kdasm({ bytes, startAddress: start });
-    asm = r.asm;
+    const { runObjdump, objdumpAvailable } = await import("../../toolchains/objdump.js");
+    if (objdumpAvailable("m68k")) {
+      const r = await runObjdump({ bytes, arch: "m68k", startAddress: start });
+      asm = r.asm;
+    } else {
+      const { runM68kdasm } = await import("../../toolchains/m68kdasm.js");
+      asm = runM68kdasm({ bytes, startAddress: start }).asm;
+    }
   } else if (resolved === "pce") {
     // PC Engine HuCard: HuC6280 (65C02 superset). da65 has an explicit huc6280
     // CPU mode. The cart maps to the top of the address space (no header).

@@ -889,10 +889,18 @@ export function registerDisasmTools(server, z) {
       let asm;
       let exitCode = 0;
       if (cpuFamily === "m68k") {
-        const { runM68kdasm } = await import("../../toolchains/m68kdasm.js");
-        const r = runM68kdasm({ bytes: mapped.bytes, startAddress });
-        asm = r.asm;
-        exitCode = r.exitCode;
+        // Prefer the native binutils m68k objdump (complete ISA, no .dc.w
+        // gaps / stream desync). Fall back to the pure-JS decoder only if the
+        // objdump WASM isn't resolvable (dev checkout without the package).
+        const { runObjdump, objdumpAvailable } = await import("../../toolchains/objdump.js");
+        if (objdumpAvailable("m68k")) {
+          const r = await runObjdump({ bytes: mapped.bytes, arch: "m68k", startAddress });
+          asm = r.asm; exitCode = r.exitCode;
+        } else {
+          const { runM68kdasm } = await import("../../toolchains/m68kdasm.js");
+          const r = runM68kdasm({ bytes: mapped.bytes, startAddress });
+          asm = r.asm; exitCode = r.exitCode;
+        }
         if (labels.length > 0) asm = injectVectorLabels(asm, labels);
       } else if (cpuFamily === "z80") {
         const { runZ80dasm } = await import("../../toolchains/z80dasm.js");
