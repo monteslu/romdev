@@ -1,6 +1,6 @@
 {
   "name": "romdev-mcp",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "MCP server giving coding agents full control of homebrew ROM development AND reverse-engineering/romhacking across 14 retro platforms (NES, SNES, GB, Genesis, Atari, C64, PC Engine, MSX, ...) via WASM libretro cores.",
   "type": "module",
   "main": "src/mcp/server.js",

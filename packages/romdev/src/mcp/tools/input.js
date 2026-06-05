@@ -22,11 +22,15 @@ export function resolveButtonAlias(button, platform) {
     if (button === "c") return "a";   // Genesis C = libretro A
   }
   if (platform === "sms" || platform === "gg") {
-    if (button === "1") return "a";
-    if (button === "2") return "b";
+    // genesis_plus_gx maps SMS/GG button 1 (TL) → libretro 'b' and button 2 (TR)
+    // → libretro 'a' (verified empirically against the running gpgx core
+    // 2026-06-05 — same a↔primary inversion as the Genesis A/B/C → y/b/a map).
+    if (button === "1") return "b";   // button 1 (TL) = libretro B
+    if (button === "2") return "a";   // button 2 (TR) = libretro A
   }
   // If a native alias wasn't resolved for this platform, fall back to a sane
-  // default so the call doesn't silently press nothing. (Genesis C → libretro a.)
+  // default so the call doesn't silently press nothing. (Genesis C → libretro a;
+  // for non-gpgx platforms 1→a/2→b is the libretro-standard order.)
   if (button === "c") return "a";
   if (button === "1") return "a";
   if (button === "2") return "b";
@@ -102,7 +106,7 @@ export function registerInputTools(server, z, sessionKey) {
     "pressButton",
     "Convenience: press a single named button for N frames then release. Drives a single port (default port 0). " +
     "The SIMPLEST way to press one platform-native button — prefer it over hand-mapping a libretro name in setInput. " +
-    "Accepts platform-native aliases resolved from the loaded platform: Genesis `c` → libretro `a` (genesis_plus_gx maps Genesis A/B/C onto libretro y/b/a — so Genesis A is libretro `y`, B is `b`, C is `a`; NOTE libretro `a` is Genesis C, not A); SMS/GG `1`/`2` → `a`/`b`. " +
+    "Accepts platform-native aliases resolved from the loaded platform: Genesis `c` → libretro `a` (genesis_plus_gx maps Genesis A/B/C onto libretro y/b/a — so Genesis A is libretro `y`, B is `b`, C is `a`; NOTE libretro `a` is Genesis C, not A); SMS/GG `1`/`2` → libretro `b`/`a` (same gpgx inversion — button 1/TL is libretro `b`). " +
     "Spatial names also work and are unambiguous (east/south/west). Use getInputLayout({platform}).faceButtons for the exact map.",
     {
       button: z.enum([
