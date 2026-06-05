@@ -92,7 +92,7 @@ The `platformer` scaffold side-scrolls (hardware camera + per-platform column st
 - **`romdev-core-*`** (8) — shared emulator cores: `fceumm`, `gambatte`, `gpgx`, `vice`, `handy`, `prosystem`, `geargrafx` (PC Engine), `bluemsx` (MSX).
 - **`romdev-platform-*`** (3) — self-contained platform bundles where the core + compiler are used by no one else: `snes`, `gba`, `atari2600`.
 - **`romdev-toolchain-*`** (5) — shared compilers: `cc65`, `sdcc`, `m68k-gcc`, `vasm`, `rgbds`.
-- **`romdev-cheats`** (1) — the bundled cheat database (~30 MB of pre-parsed cheats for thousands of known ROMs across 13 platforms). Split out so the main package stays small and the DB grows on its own cadence; lazy-loaded one platform at a time.
+- **`romdev_game_codes`** (1) — the bundled game-code / cheat database (~30 MB of pre-parsed cheats for thousands of known ROMs across 13 platforms). Split out so the main package stays small and the DB grows on its own cadence; lazy-loaded one platform at a time.
 
 `romdev-mcp` resolves each core/compiler from its package lazily — a toolchain's WASM is only loaded into memory the first time you build for that platform, so booting the server is fast and a session only pays for the platforms it actually uses. WASM is a **build output**: it ships via the npm packages, not committed to this git repo (which holds the source, recipes, and version pins). See [packages/romdev/BUILDING.md](./packages/romdev/BUILDING.md) for the platform × core × toolchain matrix and how the wasm is built (a pinned Emscripten container).
 

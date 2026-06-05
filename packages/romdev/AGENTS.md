@@ -488,7 +488,7 @@ for ROM cheats), the ROM file on disk is NEVER touched, and `reset` / `loadState
 SNES, Genesis, SMS/GG, Atari 2600/7800, **Lynx**, **GBA**, **PC Engine**, **MSX** —
 every tier-1 system except **C64** (the cheat database ships no C64 entries, so
 there's nothing to look up; `makeCheat` still works on C64). The DB is its own
-package (`romdev-cheats`), lazy-loaded per platform; `searchCheats({platform,
+package (`romdev_game_codes`), lazy-loaded per platform; `searchCheats({platform,
 query})` fuzzy-finds a game by name. One caveat: **GBA** DB cheats are
 Code Breaker / GameShark (encrypted), so they're **apply-only** — the `code`
 applies live, but the address isn't descrambled into a labeled map the way the
