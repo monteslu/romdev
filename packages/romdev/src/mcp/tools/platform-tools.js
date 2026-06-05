@@ -15,6 +15,7 @@ import { imageContent, jsonContent, safeTool, textContent } from "../util.js";
 // helpers) and exported as live bindings. registerPlatformTools must run first.
 export let inspectPaletteCore = async () => { throw new Error("platform-tools cores not initialized — registerPlatformTools must run first"); };
 export let getPlatformMasterPaletteCore = async () => { throw new Error("platform-tools cores not initialized — registerPlatformTools must run first"); };
+export let getAudioStateCore = async () => { throw new Error("platform-tools cores not initialized — registerPlatformTools must run first"); };
 
 // Image-output contract: a PNG image goes to disk (path) OR comes back
 // inline (inline:true). No path + not inline → error. The structured
@@ -448,32 +449,7 @@ export function registerPlatformTools(server, z, sessionKey) {
     throw new Error(`getAudioState: unknown chip '${chip}'. Use 'nes' (NES 2A03), 'gb' (Game Boy/GBC), 'gba' (GBA), 'dsp' (SNES), 'psg' (Genesis/SMS/GG SN76489), 'ym2612' (Genesis FM), 'sid' (C64), or 'mikey' (Lynx).`);
   }
 
-  server.tool(
-    "getAudioState",
-    "Use this to debug sound or transcribe music: decode a sound chip's live state. `chip:'nes'` (NES 2A03) " +
-    "returns per-channel {pulse1, pulse2, triangle, noise, dmc} with timer→freq→midi note name, duty, volume, " +
-    "and `playing` — decodes the $4000-$4017 register file directly, so you get a frame-accurate note timeline " +
-    "for ANY NES game without reverse-engineering its private sound driver. `chip:'dsp'` (SNES S-DSP) returns " +
-    "per-voice vol/pitch/adsr + `env` (internal envelope — 0 = silent regardless of vol) + `bufLastSamples` " +
-    "(nonzero proves the voice is producing audio) + `flg`; distinguishes 'never produced output' from 'muted " +
-    "by mixer.' GOTCHA: S-DSP FLG is $6C, KOFF is $5C (many refs swap them); power-on FLG=$E0 means your driver " +
-    "MUST clear bit 6. `chip:'psg'` (Genesis/SMS SN76489) returns 3 tone + 1 noise channel state. " +
-    "`chip:'ym2612'` (Genesis FM) returns a raw-blob snapshot (gpgx's struct isn't safely per-channel " +
-    "decodable) — useful for frame-to-frame diffing. `chip:'gb'` (Game Boy/GBC) and `chip:'gba'` (GBA) decode " +
-    "the DMG-style APU: 2 pulse + wave + noise with timer→freq→note (GBA adds 2 DMA FIFO channels). " +
-    "`chip:'sid'` (C64 6581/8580) returns 3 voices {waveform, freq→note, ADSR, pulse-width} + filter. " +
-    "`chip:'mikey'` (Lynx) returns the 4 Mikey audio channels {volume, freq→note, LFSR}. " +
-    "`chip:'pce'` (PC Engine HuC6280 PSG) returns 6 wavetable channels (freq/volume/wave; ch 4-5 noise). " +
-    "`chip:'ay8910'` (MSX AY-3-8910) returns 3 square channels (tone→Hz, amplitude, tone/noise enable) + " +
-    "noise + envelope. ALL 14 tier-1 " +
-    "systems now have a sound-chip decoder. Mirrors getCPUState({cpu}). To capture a note timeline " +
-    "over time, pair with watchMemory (region:'nes_apu_regs', onChange:'reset') or recordSession.",
-    {
-      chip: z.enum(["nes", "gb", "gba", "dsp", "psg", "ym2612", "sid", "mikey", "pce", "ay8910"]).describe("Which sound chip: 'nes' (NES 2A03 APU), 'gb' (Game Boy/GBC DMG APU — 2 pulse + wave + noise), 'gba' (GBA — DMG PSG + 2 DMA FIFO), 'dsp' (SNES S-DSP), 'psg' (Genesis/SMS/GG SN76489), 'ym2612' (Genesis FM), 'sid' (C64 6581/8580 — 3 voices + filter), 'mikey' (Lynx Mikey — 4 channels), 'pce' (PC Engine HuC6280 PSG — 6 wavetable channels, ch 4/5 noise), 'ay8910' (MSX AY-3-8910 — 3 square + noise + envelope)."),
-    },
-    safeTool(async ({ chip }) => jsonContent(readAudioChip(chip))),
-  );
-
+  getAudioStateCore = async ({ chip }) => jsonContent(readAudioChip(chip));
 
   server.tool(
     "inspectSprites",

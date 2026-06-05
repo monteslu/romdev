@@ -43,6 +43,8 @@ export const MERGE_MAP = {
   cart: { absorbs: ["identifyRom", "extractCart", "wrapRomFromParts"], axis: "op" },
   // ── palette (live/platformMaster/lospec; spans platform-tools.js + lospec.js) ──
   palette: { absorbs: ["inspectPalette", "getPlatformPalettePng", "getLospecPalette"], axis: "source" },
+  // ── audioDebug (inspect/record; getAudioState from platform-tools.js, recordAudio from audio.js; pcmToBrr/wavToXgm2Pcm stay) ──
+  audioDebug: { absorbs: ["getAudioState", "recordAudio"], axis: "op" },
 };
 
 /** Every OLD tool name that the consolidation removes (absorbed into a new tool). */

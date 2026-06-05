@@ -315,7 +315,7 @@ const TOOL_OWNER = {
   inspectPatternTiles: "debug", inspectSprites: "debug",
   inspectBackgroundMap: "debug", convertImageToTiles: "debug",
   imageToTilemap: "debug",
-  getCPUState: "debug", getAudioState: "debug",
+  getCPUState: "debug", audioDebug: "debug",
   buildSourceWithDebug: "debug", symbols: "debug",
   disasm: "debug",
   cheats: "debug",
@@ -323,7 +323,7 @@ const TOOL_OWNER = {
   inspectTile: "debug",
   whichTilesAreRendered: "debug",
   // assets category
-  pcmToWav: "assets", recordAudio: "assets", pcmToBrr: "assets",
+  pcmToBrr: "assets", wavToXgm2Pcm: "assets",
   cart: "assets",
   listRoms: "assets", patchRom: "assets", patchFile: "assets", validateRom: "assets",
   assembleSnippet: "assets", diffRoms: "assets", findFreeSpace: "assets", spliceCHR: "assets",

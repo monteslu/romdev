@@ -5,6 +5,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { jsonContent, safeTool } from "../util.js";
+import { getAudioStateCore } from "./platform-tools.js";
 
 export function registerAudioTools(server, z, sessionKey) {
   server.tool(
@@ -119,34 +120,43 @@ export function registerAudioTools(server, z, sessionKey) {
     }),
   );
 
+  const inputShape = z.object({
+    up: z.boolean().optional(), down: z.boolean().optional(),
+    left: z.boolean().optional(), right: z.boolean().optional(),
+    a: z.boolean().optional(), b: z.boolean().optional(),
+    x: z.boolean().optional(), y: z.boolean().optional(),
+    l: z.boolean().optional(), r: z.boolean().optional(),
+    start: z.boolean().optional(), select: z.boolean().optional(),
+  });
+
   server.tool(
-    "recordAudio",
-    "Capture audio output from the currently running emulator and write it as a WAV file. " +
-    "Steps the emulator for `frames` frames while accumulating the audio samples it emits, " +
-    "then drains the buffer to a 16-bit signed stereo WAV. Useful for: 'did my SFX actually " +
-    "play?' debugging (record, listen, hear silence or beep), regression-testing audio " +
-    "across builds, capturing audio for non-realtime analysis. Sample rate is whatever the " +
-    "core emits — typically 32000 Hz (SNES SPC), 48000 Hz (most cores), or 44100 (some). " +
-    "NOTE: a WAV is for a HUMAN to HEAR — an agent can't listen to it. To programmatically " +
-    "ASSERT a chip is doing something, use getAudioState (per-channel register decode on the " +
-    "12 systems with a sound chip). Caveat: getAudioState does NOT yet expose Genesis XGM2 " +
-    "PCM-channel activity, so 'did this sampled SFX fire' on Genesis is still record-and-listen.",
+    "audioDebug",
+    "Debug sound / transcribe music on the running ROM. `op`: 'inspect' | 'record'.\n" +
+    "'inspect': decode a sound CHIP's live per-channel state — frame-accurate, no driver RE. `chip`: 'nes' (2A03: " +
+    "pulse1/2/triangle/noise/dmc, timer→note/duty/vol/playing), 'gb'/'gba' (DMG APU; GBA + 2 DMA FIFO), 'dsp' " +
+    "(SNES S-DSP per-voice vol/pitch/adsr + `env` 0=silent + `bufLastSamples` proves audio + `flg`), 'psg' " +
+    "(Genesis/SMS SN76489), 'ym2612' (Genesis FM raw-blob for diffing), 'sid' (C64), 'mikey' (Lynx), 'pce' (PCE " +
+    "PSG 6ch), 'ay8910' (MSX). All 14 systems. **GOTCHA: S-DSP FLG is $6C, KOFF is $5C (many refs swap them); " +
+    "power-on FLG=$E0 → your driver MUST clear bit 6.** To ASSERT, use this; pair with watch(region:'nes_apu_regs').\n" +
+    "'record': capture audio to a WAV over `frames` frames (`setInputs` to hold a button, e.g. 'press B for SFX'). " +
+    "Sample rate is whatever the core emits (32000 SNES SPC / 48000 most / 44100). **A WAV is for a HUMAN to HEAR — " +
+    "an agent can't listen; use op:'inspect' to assert.** Caveat: inspect doesn't expose Genesis XGM2 PCM, so " +
+    "'did this sampled SFX fire' on Genesis is still record-and-listen.",
     {
-      frames: z.number().int().min(1).max(60000).default(180).describe("How many emulator frames to capture. 60 = 1 second at NTSC."),
-      path: z.string().describe("Absolute path to write the WAV file to."),
-      setInputs: z
-        .array(z.object({
-          up: z.boolean().optional(), down: z.boolean().optional(),
-          left: z.boolean().optional(), right: z.boolean().optional(),
-          a: z.boolean().optional(), b: z.boolean().optional(),
-          x: z.boolean().optional(), y: z.boolean().optional(),
-          l: z.boolean().optional(), r: z.boolean().optional(),
-          start: z.boolean().optional(), select: z.boolean().optional(),
-        }))
-        .max(2).optional()
-        .describe("Optional input state to hold during the recording. Useful for 'press B to fire SFX' captures."),
+      op: z.enum(["inspect", "record"]).describe("inspect a sound chip's live state; or record audio to a WAV."),
+      chip: z.enum(["nes", "gb", "gba", "dsp", "psg", "ym2612", "sid", "mikey", "pce", "ay8910"]).optional().describe("op=inspect: which sound chip to decode (all 14 systems mapped)."),
+      frames: z.number().int().min(1).max(60000).default(180).describe("op=record: emulator frames to capture (60 = 1s NTSC)."),
+      path: z.string().optional().describe("op=record: absolute path to write the WAV file to."),
+      setInputs: z.array(inputShape).max(2).optional().describe("op=record: input state to hold during the recording (e.g. press B to fire SFX)."),
     },
-    safeTool(async ({ frames, path: outPath, setInputs }) => {
+    safeTool(async (args) => {
+      if (args.op === "inspect") {
+        if (!args.chip) throw new Error("audioDebug({op:'inspect'}): `chip` is required.");
+        return await getAudioStateCore(args);
+      }
+      if (args.op !== "record") throw new Error(`audioDebug: unknown op '${args.op}'`);
+      if (!args.path) throw new Error("audioDebug({op:'record'}): `path` is required.");
+      const { frames, path: outPath, setInputs } = args;
       const { getHost } = await import("../state.js");
       const host = getHost(sessionKey);
       if (!host.status.platform) {
