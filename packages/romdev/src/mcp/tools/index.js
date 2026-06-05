@@ -309,7 +309,7 @@ const TOOL_OWNER = {
   setInput: "input", pressButton: "input", inputSequence: "input",
   getInputLayout: "input",
   // state category
-  saveState: "state", loadState: "state", exportState: "state", listStates: "state", dumpState: "state",
+  state: "state",
   // memory category
   readMemory: "memory", writeMemory: "memory",
   // debug category
