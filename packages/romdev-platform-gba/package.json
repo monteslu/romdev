@@ -1,7 +1,7 @@
 {
   "name": "romdev-platform-gba",
-  "version": "0.2.1",
-  "description": "Game Boy Advance binaries for romdev: mGBA emulator core + arm-none-eabi-gcc toolchain (cc1 / as / ld / objcopy) (WASM). These ship together because nothing else uses them.",
+  "version": "0.3.0",
+  "description": "Game Boy Advance binaries for romdev: mGBA emulator core + arm-none-eabi-gcc toolchain (cc1 / as / ld / objcopy) (WASM). These ship together because nothing else uses them + ARM/Thumb disassembly (objdump).",
   "type": "module",
   "main": "index.js",
   "exports": {

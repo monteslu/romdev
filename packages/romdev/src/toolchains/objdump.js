@@ -42,12 +42,14 @@ const ARCHES = {
     machine: "m68k",
   }),
   arm: () => ({
-    glue: resolveGlue("romdev-toolchain-arm-gcc", "arm-none-eabi-objdump.mjs", "arm-none-eabi-gcc"),
+    // ARM/Thumb binutils ships in romdev-platform-gba (the GBA platform bundles
+    // the arm-none-eabi toolchain — same place as/ld/objcopy live).
+    glue: resolveGlue("romdev-platform-gba", "arm-none-eabi-objdump.mjs", "arm-none-eabi-gcc"),
     machine: "arm",
   }),
   thumb: () => ({
-    // Thumb is the same objdump with a different disassembler flavor.
-    glue: resolveGlue("romdev-toolchain-arm-gcc", "arm-none-eabi-objdump.mjs", "arm-none-eabi-gcc"),
+    // Thumb is the same objdump with the force-thumb disassembler flavor.
+    glue: resolveGlue("romdev-platform-gba", "arm-none-eabi-objdump.mjs", "arm-none-eabi-gcc"),
     machine: "arm",
     extraArgs: ["-M", "force-thumb"],
   }),

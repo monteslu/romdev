@@ -279,6 +279,10 @@ wrap_tool "$ROOT/build-wasm-gcc/gcc/cc1"                  "cc1-arm"             
 wrap_tool "$ROOT/build-wasm-binutils/gas/as-new"          "arm-none-eabi-as"    "createArmAs"
 wrap_tool "$ROOT/build-wasm-binutils/ld/ld-new"           "arm-none-eabi-ld"    "createArmLd"
 wrap_tool "$ROOT/build-wasm-binutils/binutils/objcopy"    "arm-none-eabi-objcopy" "createArmObjcopy"
+# objdump = the ARM/Thumb DISASSEMBLER (`-D -b binary -m arm`, +`-M force-thumb`).
+# Unlocks GBA disassembly (the platform was previously rejected for lack of an
+# ARM disassembler). Ships in romdev-platform-gba alongside as/ld/objcopy.
+wrap_tool "$ROOT/build-wasm-binutils/binutils/objdump"    "arm-none-eabi-objdump" "createArmObjdump"
 
 echo ""
 echo "Stage 2 complete. Artifacts:"

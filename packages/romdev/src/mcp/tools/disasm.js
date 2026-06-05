@@ -665,15 +665,17 @@ export function registerDisasmTools(server, z) {
     "Use this to read what an existing ROM file does: mapper-aware disassembly with agent-friendly " +
     "annotations (auto-tagged reset/nmi/irq vectors, hardware register names on operands, and per-line " +
     "`; @0xNNNN` file offsets ready for patchFile — NES reports both .nes and PRG offsets). Platform is " +
-    "sniffed from the extension (NES/SNES/SMS/GG/GB/GBC/Atari 2600/7800/C64/Genesis) or pass `platform`. " +
+    "sniffed from the extension (NES/SNES/SMS/GG/GB/GBC/Atari 2600/7800/C64/Genesis/GBA) or pass `platform`. " +
+    "GBA = ARM7TDMI via native binutils objdump (ARM by default, `thumb:true` for Thumb code). " +
     "Use `endAddress`/`untilReturn` to grab exactly one routine, `dataRanges` to mark non-code, and " +
     "`outputPath` to write big disassemblies to disk instead of inline. (For raw bytes you already have, " +
     "use `disassemble`.) See param hints for the rest.",
     {
-      path: z.string().describe("Absolute path to a ROM file (.nes / .sfc / .smc)."),
-      platform: z.enum(["nes", "snes", "sms", "gg", "gb", "gbc", "atari2600", "atari7800", "c64", "genesis", "pce", "msx"]).optional().describe("Override platform detection. Omit to sniff from file extension."),
+      path: z.string().describe("Absolute path to a ROM file (.nes / .sfc / .smc / .gba)."),
+      platform: z.enum(["nes", "snes", "sms", "gg", "gb", "gbc", "atari2600", "atari7800", "c64", "genesis", "gba", "pce", "msx"]).optional().describe("Override platform detection. Omit to sniff from file extension."),
       bank: z.number().int().min(0).max(255).optional().describe("Which switchable ROM bank to map into the banked slot before disassembling. NES (mapper>0): maps 16KB PRG bank N at $8000-$BFFF (a $C000+ startAddress still reads the fixed top bank). GB/GBC: maps the bank at $4000-$7FFF (default bank 1). Lets you disassemble UxROM/MMC1/MMC3 bank N without slicing the ROM by hand."),
-      startAddress: z.number().int().min(0).max(0xffffff).default(0x8000).describe("CPU address to start at. NES: $8000-$FFFF. SNES: $008000-$FFFFFF (bank-prefixed)."),
+      thumb: z.boolean().default(false).describe("GBA only: disassemble as THUMB (16-bit) code instead of ARM (32-bit). GBA code mixes both; pass true for a region you know is Thumb."),
+      startAddress: z.number().int().min(0).max(0xffffffff).default(0x8000).describe("CPU address to start at. NES: $8000-$FFFF. SNES: $008000-$FFFFFF. GBA: ROM maps at 0x08000000 (the default 0x8000 is auto-bumped to 0x08000000 for GBA)."),
       length: z.number().int().min(1).max(65536).optional().describe("Bytes to disassemble. Default 256. Mutually exclusive with endAddress."),
       endAddress: z.number().int().min(0).max(0xffffff).optional().describe("CPU end address (inclusive). Alternative to length — useful when disassembling 'from X to Y'."),
       untilReturn: z.boolean().default(false).describe("Stop at the first rts/rti/rtl/bare-jmp encountered in the output. Use to grab exactly one routine after locating its entry via auto-tagged labels."),
@@ -715,6 +717,7 @@ export function registerDisasmTools(server, z) {
         /\.a26$/i.test(romPath) ? "atari2600" :
         /\.a78$/i.test(romPath) ? "atari7800" :
         /\.prg$/i.test(romPath) ? "c64" :
+        /\.gba$/i.test(romPath) ? "gba" :
         /\.(gen|md|bin)$/i.test(romPath) ? "genesis" :
         null
       );
@@ -724,6 +727,7 @@ export function registerDisasmTools(server, z) {
       const cpuFamily = (resolved === "sms" || resolved === "gg") ? "z80"
                       : (resolved === "gb" || resolved === "gbc") ? "sm83"
                       : (resolved === "genesis") ? "m68k"
+                      : (resolved === "gba") ? "arm"
                       : "6502";
 
       // Resolve length: endAddress wins over length; default 256.
@@ -749,8 +753,21 @@ export function registerDisasmTools(server, z) {
         startAddress = (data[4] << 24 | data[5] << 16 | data[6] << 8 | data[7]) >>> 0;
         if (startAddress >= data.length) startAddress = 0x200; // fallback
       }
+      // GBA ROM maps flat at 0x08000000; the cart entry is at file offset 0
+      // (a branch over the 192-byte header). Default to disassembling from the
+      // start of ROM in 0x08000000 space when the caller left the 6502 default.
+      if (resolved === "gba" && startAddress === 0x8000 && args.endAddress === undefined) {
+        startAddress = 0x08000000;
+      }
 
-      const mapped = resolved === "snes"
+      const mapped = resolved === "gba"
+        ? (() => {
+            const base = 0x08000000;
+            const off = (startAddress >>> 0) - base;
+            if (off < 0 || off >= data.length) throw new Error(`GBA: startAddress $${startAddress.toString(16)} is outside ROM (maps 0x08000000..0x08000000+${data.length}).`);
+            return { bytes: data.slice(off, Math.min(data.length, off + length)), fileOffset: off, cpu: "arm" };
+          })()
+        : resolved === "snes"
         ? mapSnesAddress(data, startAddress, length, mapper)
         : resolved === "sms" || resolved === "gg"
           ? mapSmsAddress(data, startAddress, length)
@@ -902,6 +919,16 @@ export function registerDisasmTools(server, z) {
           asm = r.asm; exitCode = r.exitCode;
         }
         if (labels.length > 0) asm = injectVectorLabels(asm, labels);
+      } else if (cpuFamily === "arm") {
+        // GBA = ARM7TDMI. Native binutils ARM objdump (ships in
+        // romdev-platform-gba). `thumb:true` switches to the Thumb decoder.
+        const { runObjdump, objdumpAvailable } = await import("../../toolchains/objdump.js");
+        const archMode = args.thumb ? "thumb" : "arm";
+        if (!objdumpAvailable(archMode)) {
+          throw new Error("GBA disassembly needs the ARM objdump WASM (romdev-platform-gba). Install/build it, or use external arm-none-eabi-objdump.");
+        }
+        const r = await runObjdump({ bytes: mapped.bytes, arch: archMode, startAddress });
+        asm = r.asm; exitCode = r.exitCode;
       } else if (cpuFamily === "z80") {
         const { runZ80dasm } = await import("../../toolchains/z80dasm.js");
         const r = runZ80dasm({ bytes: mapped.bytes, startAddress });
@@ -1054,8 +1081,9 @@ export function registerDisasmTools(server, z) {
     "disassembleProject",
     "Use this to turn a ROM into a complete, re-buildable disassembly project in ONE call — across ALL " +
     "supported systems: NES, SNES, Game Boy/Color, Sega Master System/Game Gear, Genesis/Mega Drive, " +
-    "C64, Atari 2600/7800, and Lynx (65C02). (GBA is NOT supported — ARM7TDMI has no bundled disassembler; " +
-    "passing platform:'gba' returns an explicit message pointing to external ARM tools.) " +
+    "C64, Atari 2600/7800, and Lynx (65C02). (GBA: `disassembleProject` needs a byte-exact REASSEMBLE step " +
+    "that isn't wired for ARM yet, but `disassembleRom`/`findReferences` DO disassemble GBA via native ARM " +
+    "objdump — use those to read ARM7/Thumb code.) " +
     "It splits the ROM into regions (per-16KB-bank for banked NES; one region for flat " +
     "ROMs), disassembles each, and — critically — REASSEMBLES each region and verifies it is BYTE-EXACT " +
     "against the original (`roundTripOk` per region). Lines that don't reassemble faithfully fall back to " +
