@@ -595,7 +595,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     "PC breakpoint, runs up to `maxFrames` (driving any `pressDuring` input), and stops mid-frame on the first hit; the " +
     "breakpoint auto-disarms after. Returns { hit, pc, frame, framesRun, hits }. After a hit the emulator stays frozen at " +
     "the PC — call getCPUState / readMemory to inspect, then stepFrames/resume to continue. " +
-    "Supported where the core exposes the romdev PC breakpoint (Genesis today; more cores as patched) — returns notSupported otherwise.",
+    "Supported on all 14 platforms (every CPU family); returns notSupported only if the core package is out of date.",
     {
       address: z.number().int().min(0).describe("CPU address of the instruction to break on (e.g. 0x2A3FD4). Must be an instruction boundary."),
       maxFrames: z.number().int().min(1).max(1_000_000).default(600).describe("Max frames to run while waiting for the PC to be reached."),
@@ -663,7 +663,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     "entry and learn which routine reads it, or watch a flag and find its reader. Arms a core-level READ watchpoint, runs up to " +
     "`maxFrames` (driving `pressDuring`), and returns { hit, pc, value, frame, hits }. Unlike runUntilPC it does NOT freeze " +
     "mid-frame — it records the reading PC and finishes the current frame. " +
-    "Supported where the core exposes the romdev read watchpoint (Genesis today) — returns notSupported otherwise.",
+    "Supported on all 14 platforms; returns notSupported only if the core package is out of date.",
     {
       address: z.number().int().min(0).describe("CPU address to watch for reads (e.g. a ROM/RAM byte you want to find the consumer of)."),
       maxFrames: z.number().int().min(1).max(1_000_000).default(600).describe("Max frames to run while waiting for a read."),
@@ -726,7 +726,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     "Execute exactly ONE CPU instruction and stop (CPU-level single-step) — finer than stepFrames. Freezes the CPU right " +
     "after the instruction; returns { pc } = the address the CPU is now poised at. Pair with getCPUState to watch registers " +
     "change one instruction at a time while tracing a routine. Supported where the core exposes the romdev PC breakpoint " +
-    "(Genesis today) — returns notSupported otherwise. (One step advances the frame's other subsystems minimally; it's a " +
+    "Supported on all 14 platforms. (One step advances the frame's other subsystems minimally; it's a " +
     "CPU single-step, the finest granularity the core exposes.)",
     {},
     safeTool(async () => {
