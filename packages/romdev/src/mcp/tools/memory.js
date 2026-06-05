@@ -358,42 +358,7 @@ export function registerMemoryTools(server, z, sessionKey) {
     }),
   );
 
-  server.tool(
-    "diffState",
-    "Like diffMemory but for the WHOLE machine: snapshot the serialized save-state, and diff returns whether it " +
-    "changed + a byte-delta count. Coarser than diffMemory (the state blob is core-internal, not a clean memory " +
-    "map) — use diffMemory for 'which RAM bytes' and diffState for a quick 'did anything at all change across " +
-    "this?' Pass mode:'snapshot' to capture, mode:'diff' to compare.",
-    {
-      name: z.string().default("default").describe("State snapshot label."),
-      mode: z.enum(["snapshot", "diff"]).describe("'snapshot' captures the current state as the baseline; 'diff' compares the current state to it."),
-    },
-    safeTool(async ({ name, mode }) => {
-      const host = getHost(sessionKey);
-      const store = stateSnapshots(sessionKey);
-      if (mode === "snapshot") {
-        const blob = host.serializeState();
-        store.set(name, Uint8Array.from(blob));
-        return jsonContent({ name, mode, size: blob.length, note: "State baseline captured — trigger your event, then diffState({name, mode:'diff'})." });
-      }
-      const base = store.get(name);
-      if (!base) throw new Error(`diffState: no state snapshot named '${name}'. Call diffState({name, mode:'snapshot'}) first.`);
-      const now = host.serializeState();
-      let differingBytes = 0;
-      const len = Math.min(base.length, now.length);
-      for (let i = 0; i < len; i++) if (base[i] !== now[i]) differingBytes++;
-      const sizeChanged = base.length !== now.length;
-      return jsonContent({
-        name, mode,
-        changed: differingBytes > 0 || sizeChanged,
-        differingBytes,
-        sizeChanged,
-        baselineSize: base.length,
-        currentSize: now.length,
-        note: "State blobs are core-internal — for the actual changed RAM addresses use snapshotMemory/diffMemory.",
-      });
-    }),
-  );
+  // diffState moved to the `state` tool (state({op:'diff'})).
 
   // ── classifyRegion — "what kind of data is at this offset?" ──────────────
   server.tool(

@@ -27,6 +27,8 @@ export const MERGE_MAP = {
   symbols: { absorbs: ["resolveSymbol", "lookupAddress", "getMemoryMap", "listSymbols", "addressToSymbol"], axis: "op" },
   // ── disasm (raw bytes / ROM / project / references) ──
   disasm: { absorbs: ["disassemble", "disassembleRom", "disassembleProject", "findReferences"], axis: "target" },
+  // ── state (save/load/list/export/dump/diff; diffState moved here from memory.js) ──
+  state: { absorbs: ["saveState", "loadState", "listStates", "exportState", "dumpState", "diffState"], axis: "op" },
 };
 
 /** Every OLD tool name that the consolidation removes (absorbed into a new tool). */
