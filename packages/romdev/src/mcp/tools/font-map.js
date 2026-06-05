@@ -496,93 +496,67 @@ async function findEncodedTextCore({ romPath, text, fontMap, fontMapPath, platfo
 
 export function registerFontMapTools(server, z, sessionKey) {
   server.tool(
-    "learnFontMap",
-    "Use this to infer a ROM's custom character→tile-ID map (most retro games use their own font " +
-    "encoding) instead of reverse-engineering it by hand. TWO modes:\n" +
+    "text",
+    "Custom-font text workflow for ROM hacking — learn a game's character→tile encoding, then encode/find strings. " +
+    "`op`: 'learn' | 'encode' | 'find'.\n" +
+    "'learn' infers a ROM's custom char→tile-ID map (most retro games use their own font encoding). TWO modes:\n" +
     "• ROM mode (`knownStrings:[{text, offset}]`): you found the text's bytes in the ROM file.\n" +
-    "• LIVE mode (`fromScreen:[{text, row, col}]`): the text is RENDERED on screen RIGHT NOW — read the tile " +
-    "IDs straight from the live nametable at a tile position (row,col in 8×8 tiles from the top-left). This " +
-    "solves the chicken-and-egg where you'd need the ROM offset (the thing you're hunting) to learn the map: " +
-    "inspectBackgroundMap shows you where the text is on screen, and this reads the tile IDs there. Live mode " +
-    "works on every tilemap platform — NES, SNES, Genesis, GB/GBC, SMS/GG, C64 — each reading its own live " +
-    "BG map (the active base is resolved from the VDP/PPU registers). `which` selects the nametable/plane/BG " +
-    "layer (NES 0-3; Genesis 0=A/1=B; SNES BG index; GB 0=$9800/1=$9C00). NOT available on atari2600/7800 " +
-    "(race-the-beam, no nametable) or lynx/gba (bitmap framebuffer) — use ROM mode there.\n" +
-    "Returns `{fontMap, learnedChars, unknownChars}` — save it as JSON and pass `fontMapPath` to " +
-    "encodeTextForRom / findEncodedText. Per-ROM.\n" +
-    "⚠ GRAPHIC vs FONT (live mode): if the on-screen 'text' is actually a PRE-RENDERED GRAPHIC (a name/logo drawn " +
-    "as a bitmap, not font-rendered from a string — common for player names, title logos), this tool DETECTS it " +
-    "(repeated letters use different tiles, or the tiles are a unique contiguous run) and returns " +
-    "`likelyPreRenderedGraphic:true` + a `warning`. In that case the text is NOT editable as a string — you must " +
-    "change the tile bitmaps, not patch ASCII. Heed that warning before patching a string that won't do anything.",
+    "• LIVE mode (`fromScreen:[{text, row, col}]`): the text is RENDERED on screen now — reads tile IDs straight " +
+    "from the live nametable at a tile (row,col). Solves the chicken-and-egg where you'd need the ROM offset to " +
+    "learn the map. Live mode works on NES/SNES/Genesis/GB/GBC/SMS/GG/C64; NOT atari2600/7800 (race-the-beam) or " +
+    "lynx/gba (bitmap fb) — use ROM mode there. `which` selects the nametable/plane/BG layer.\n" +
+    "⚠ GRAPHIC vs FONT (live mode): if on-screen 'text' is actually a PRE-RENDERED GRAPHIC (a name/logo drawn as a " +
+    "bitmap, not font-rendered — common for player names, title logos), 'learn' DETECTS it (repeated letters use " +
+    "different tiles, or the tiles are a unique contiguous run) and returns `likelyPreRenderedGraphic:true` + a " +
+    "`warning`. Then the text is NOT editable as a string — change the tile bitmaps, not ASCII. Heed it before " +
+    "patching a string that won't do anything.\n" +
+    "'encode' is the inverse — text → ROM bytes (hex AND base64, ready for romPatch). Unknown chars fall back to " +
+    "`unknownChar` (default 0xFC = NES blank tile) and are listed in `unknownChars[]`.\n" +
+    "'find' locates a string in a ROM via the map — decodes surrounding context and flags a likely length-prefix " +
+    "byte before each match (catches the off-by-one where text has a leading length byte). Returns `fileOffset` " +
+    "(raw .nes), `prgFileOffset` (header-stripped), and the NES bank-aware `cpuAddress` + `bank` (pass both to " +
+    "disasm on a banked ROM).",
     {
-      romPath: z.string().optional().describe("Absolute path to the ROM file. Required for ROM mode (knownStrings); not needed for live mode (fromScreen)."),
-      platform: z.string().optional().describe("Platform — required for `fromScreen` live mode (selects the nametable region). Informational for ROM mode."),
+      op: z.enum(["learn", "encode", "find"]).describe("learn a font map; encode text→bytes; find a string in a ROM."),
+      // shared
+      romPath: z.string().optional().describe("op=learn(ROM mode)/find: absolute path to the ROM file."),
+      platform: z.string().optional().describe("op=learn: required for `fromScreen` live mode. op=find: enum nes|snes|genesis|megadrive|md|gb|gbc — enables CPU-address translation."),
+      text: z.string().optional().describe("op=encode: the text to encode. op=find: the text to search for."),
+      fontMap: z.record(z.string(), z.number().int().min(0).max(255)).optional().describe("op=encode/find: inline char→byte map (from a prior learn)."),
+      fontMapPath: z.string().optional().describe("op=encode/find: JSON file with the font map ({fontMap:{...}} or a bare {ch:byte} object)."),
+      // learn
       knownStrings: z.array(z.object({
         text: z.string().describe("The string you can see rendered in-game."),
-        offset: z.number().int().min(0).describe("File offset where those bytes live in the ROM (find via findEncodedText hints or inspection)."),
-      })).optional().describe("ROM mode hints: text + its ROM file offset. One or more covers more of the alphabet."),
+        offset: z.number().int().min(0).describe("File offset where those bytes live in the ROM."),
+      })).optional().describe("op=learn ROM mode: text + its ROM file offset. One or more covers more of the alphabet."),
       fromScreen: z.array(z.object({
         text: z.string().describe("The string visible on screen now."),
-        row: z.number().int().min(0).describe("Tile row of the text's first character (8px tiles from the top — e.g. row 13)."),
+        row: z.number().int().min(0).describe("Tile row of the first character (8px tiles from the top)."),
         col: z.number().int().min(0).describe("Tile column of the first character (8px tiles from the left)."),
-      })).optional().describe("LIVE mode hints: text + its tile (row,col) in the rendered nametable. Reads tile IDs from live VRAM — no ROM offset needed."),
-      which: z.number().int().min(0).max(3).default(0).describe("NES live mode: which nametable (0-3). Default 0."),
-      alphabet: z.string().optional().describe("Which characters to track in unknownChars[]. Default: A-Z, 0-9, space, ©."),
+      })).optional().describe("op=learn LIVE mode: text + its tile (row,col) in the rendered nametable. No ROM offset needed."),
+      which: z.number().int().min(0).max(3).default(0).describe("op=learn NES live mode: which nametable (0-3). Default 0."),
+      alphabet: z.string().optional().describe("op=learn: which characters to track in unknownChars[]. Default A-Z, 0-9, space, ©."),
+      // encode
+      unknownChar: z.number().int().min(0).max(255).optional().describe("op=encode: fallback byte for chars not in the map. Default 0xFC (NES blank-tile convention)."),
+      // find
+      maxResults: z.number().int().min(1).max(256).default(16).describe("op=find: max matches to return."),
     },
     safeTool(async (args) => {
-      if (args.fromScreen && args.fromScreen.length) {
-        const r = await learnFontMapFromScreen({ ...args, sessionKey });
-        return jsonContent(r);
+      switch (args.op) {
+        case "learn": {
+          if (args.fromScreen && args.fromScreen.length) {
+            return jsonContent(await learnFontMapFromScreen({ ...args, sessionKey }));
+          }
+          if (!args.knownStrings || !args.knownStrings.length) {
+            throw new Error("text({op:'learn'}): pass `knownStrings:[{text, offset}]` (ROM mode) or `fromScreen:[{text, row, col}]` (live mode).");
+          }
+          if (!args.romPath) throw new Error("text({op:'learn'}): `knownStrings` (ROM mode) needs `romPath`.");
+          return jsonContent(await learnFontMapCore(args));
+        }
+        case "encode": return jsonContent(await encodeTextForRomCore(args));
+        case "find":   return jsonContent(await findEncodedTextCore(args));
+        default: throw new Error(`text: unknown op '${args.op}'`);
       }
-      if (!args.knownStrings || !args.knownStrings.length) {
-        throw new Error("learnFontMap: pass `knownStrings:[{text, offset}]` (ROM mode) or `fromScreen:[{text, row, col}]` (live mode).");
-      }
-      if (!args.romPath) throw new Error("learnFontMap: `knownStrings` (ROM mode) needs `romPath`.");
-      const r = await learnFontMapCore(args);
-      return jsonContent(r);
-    }),
-  );
-
-  server.tool(
-    "encodeTextForRom",
-    "Encode a text string to ROM bytes using a font map. Inverse of learnFontMap. Returns hex AND " +
-    "base64, ready to feed directly into patchFile.hex / patchFile.base64.\n\n" +
-    "Unknown characters fall back to `unknownChar` (default 0xFC = NES blank tile) and are listed " +
-    "in `unknownChars[]` so you can investigate. For non-NES platforms with a different blank " +
-    "convention, pass an explicit `unknownChar`.",
-    {
-      text: z.string().describe("The text to encode."),
-      fontMap: z.record(z.string(), z.number().int().min(0).max(255)).optional().describe("Inline char→byte map."),
-      fontMapPath: z.string().optional().describe("JSON file containing the font map (either {fontMap:{...}} or a bare {ch:byte} object)."),
-      unknownChar: z.number().int().min(0).max(255).optional().describe("Fallback byte for characters not in the map. Default 0xFC (NES blank-tile convention)."),
-    },
-    safeTool(async (args) => {
-      const r = await encodeTextForRomCore(args);
-      return jsonContent(r);
-    }),
-  );
-
-  server.tool(
-    "findEncodedText",
-    "Use this to locate a text string in a ROM via a font map (from learnFontMap) — decodes surrounding " +
-    "context bytes and flags a likely length-prefix byte before each match (catches the classic off-by-one " +
-    "where text has a leading length byte and overwriting past it corrupts the next command). Returns both " +
-    "`fileOffset` (raw .nes, for patching the .nes file) and `prgFileOffset` (header-stripped, for prg.bin " +
-    "from extractCart), plus the NES bank-aware `cpuAddress` + `bank`: cpuAddress is the real in-bank 6502 " +
-    "address ($8000-$BFFF for a switchable bank, $C000-$FFFF for the fixed top bank), and `bank` is its 16KB " +
-    "PRG bank — pass them together to disassembleRom({ startAddress: cpuAddress, bank }) on a banked ROM.",
-    {
-      romPath: z.string().describe("Absolute path to the ROM."),
-      text: z.string().describe("Text to search for."),
-      fontMap: z.record(z.string(), z.number().int().min(0).max(255)).optional(),
-      fontMapPath: z.string().optional(),
-      platform: z.enum(["nes", "snes", "genesis", "megadrive", "md", "gb", "gbc"]).optional().describe("Optional — enables CPU-address translation. NES/GB/GBC return a bank-aware in-bank cpuAddress + `bank` (16KB banks); Genesis returns a flat cpuAddress (= file offset). SNES is mapper-dependent (LoROM/HiROM) so cpuAddress is left null — use prgFileOffset/fileOffset."),
-      maxResults: z.number().int().min(1).max(256).default(16),
-    },
-    safeTool(async (args) => {
-      const r = await findEncodedTextCore(args);
-      return jsonContent(r);
     }),
   );
 }
