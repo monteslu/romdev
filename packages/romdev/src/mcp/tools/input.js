@@ -1,5 +1,6 @@
 import { getHost } from "../state.js";
 import { jsonContent, safeTool } from "../util.js";
+import { getInputLayoutCore } from "./input-layout.js";
 
 // Resolve a platform-native button alias to the libretro button the host
 // understands. Genesis pads have A/B/C (+ X/Y/Z on 6-button) which libretro
@@ -69,101 +70,37 @@ function buttonShape(z) {
     );
 }
 
-export function registerInputTools(server, z, sessionKey) {
-  const port = buttonShape(z);
+// ── *Core functions for the `input` tool ──
 
-  server.tool(
-    "setInput",
-    "Set controller state for the next frames. State persists until changed (held buttons stay held). " +
-    "Shape: { ports: [{ a: true, start: false, ... }, { ... }] }. Use getInputLayout({platform}) " +
-    "to see which buttons exist on this platform (NES has no x/y, Genesis has no l/r, etc). " +
-    "FACE-BUTTON NAMING: the raw libretro names (a/b/x/y) are NOT the platform's printed button labels — " +
-    "e.g. on Genesis, genesis_plus_gx maps Genesis A/B/C onto libretro y/b/a, so setInput({a:true}) presses " +
-    "Genesis C, and Genesis A (SGDK BUTTON_A) is setInput({y:true}). To avoid this trap, prefer the SPATIAL names " +
-    "(north/east/south/west — resolved per platform) for one button, or use pressButton({button:'a'|'b'|'c'|...}) " +
-    "which takes platform-native aliases. getInputLayout({platform}).faceButtons gives the exact spatial→libretro map. " +
-    "Returns `requested` = the held-button state you asked for. NOTE: `requested` is what you SET, NOT proof the " +
-    "emulated pad saw it — the game only reads the pad when ITS code polls, which may be a specific frame in a " +
-    "state machine. If a press doesn't take (e.g. a title waiting on Start), re-apply setInput IMMEDIATELY before " +
-    "the stepFrames/watchMemory that should consume it, and verify by reading the game's held-buttons RAM byte " +
-    "(or that the expected state transition happened) — not by this echo.",
-    {
-      ports: z.array(port).min(1).max(2).describe(
-        "Per-port input. Index 0 = port 0, index 1 = port 1. " +
-        "Example: [{ a: true, right: true }] holds A+Right on port 0."
-      ),
-    },
-    safeTool(async ({ ports }) => {
+/** op:'set' — set held controller state (persists until changed). */
+function inputSetCore({ ports }, sessionKey) {
       getHost(sessionKey).setInput({ ports });
-      // Echo the REQUESTED held state (the buttons set true), per port. This is
-      // what was set, NOT a guarantee the emulated pad saw it — see description.
       const requested = ports.map((p) => Object.keys(p).filter((k) => p[k] === true));
-      return jsonContent({ inputSet: true, requested });
-    }),
-  );
+      return { inputSet: true, requested };
+}
 
-  server.tool(
-    "pressButton",
-    "Convenience: press a single named button for N frames then release. Drives a single port (default port 0). " +
-    "The SIMPLEST way to press one platform-native button — prefer it over hand-mapping a libretro name in setInput. " +
-    "Accepts platform-native aliases resolved from the loaded platform: Genesis `c` → libretro `a` (genesis_plus_gx maps Genesis A/B/C onto libretro y/b/a — so Genesis A is libretro `y`, B is `b`, C is `a`; NOTE libretro `a` is Genesis C, not A); SMS/GG `1`/`2` → libretro `b`/`a` (same gpgx inversion — button 1/TL is libretro `b`). " +
-    "Spatial names also work and are unambiguous (east/south/west). Use getInputLayout({platform}).faceButtons for the exact map.",
-    {
-      button: z.enum([
-        "up", "down", "left", "right",
-        "north", "east", "south", "west",
-        "a", "b", "x", "y",
-        "l", "r", "l2", "r2", "l3", "r3",
-        "start", "select",
-        // platform-native aliases (resolved per loaded platform below)
-        "c", "1", "2",
-      ]),
-      frames: z.number().int().min(1).max(600).default(2).describe("How many frames to hold the button."),
-      port: z.number().int().min(0).max(1).default(0),
-    },
-    safeTool(async ({ button, frames, port: p }) => {
+/** op:'press' — press one named button N frames then release (port 0 default). */
+function inputPressCore({ button, frames = 2, port: p = 0 }, sessionKey) {
       const host = getHost(sessionKey);
       const resolved = resolveButtonAlias(button, host.status.platform);
       const pressed = { ports: [{}, {}] };
       pressed.ports[p][resolved] = true;
       host.setInput(pressed);
       host.stepFrames(frames);
-      // Release.
       host.setInput({ ports: [{}, {}] });
       host.stepFrames(1);
-      return jsonContent({
+      return {
         button,
         ...(resolved !== button ? { resolvedTo: resolved } : {}),
-        // `frames` = held frames (matches the requested arg + its documented
-        // default). The press also advances ONE extra frame to register the
-        // release, so the total frames stepped is `frames + 1` — reported
-        // separately so the held count matches what the caller asked for.
         frames,
         releaseFrames: 1,
         framesStepped: frames + 1,
         frameCount: host.status.frameCount,
-      });
-    }),
-  );
+      };
+}
 
-  server.tool(
-    "inputSequence",
-    "Run a scripted sequence of frame-by-frame inputs. Each entry: { input, frames }. Useful for replays and automated tests. " +
-    "For MENUS, prefer `navigate` — it advances on screen-change and tells you which presses landed, instead of fixed frame waits that drift with non-deterministic attract timing. " +
-    "For a long/flaky path, reach a screen once then saveState({path}) and loadState to retry deterministically.",
-    {
-      steps: z.array(
-        z.object({
-          input: z
-            .object({
-              ports: z.array(buttonShape(z)).min(1).max(2),
-            })
-            .describe("Input state to set for this step."),
-          frames: z.number().int().min(1).max(10000).default(1),
-        }),
-      ).min(1).max(1000),
-    },
-    safeTool(async ({ steps }) => {
+/** op:'sequence' — scripted frame-by-frame inputs (ports shape per step). */
+function inputSequenceCore({ steps }, sessionKey) {
       const host = getHost(sessionKey);
       let total = 0;
       for (const step of steps) {
@@ -171,46 +108,11 @@ export function registerInputTools(server, z, sessionKey) {
         host.stepFrames(step.frames);
         total += step.frames;
       }
-      return jsonContent({
-        stepsRun: steps.length,
-        framesRun: total,
-        frameCount: host.status.frameCount,
-      });
-    }),
-  );
+      return { stepsRun: steps.length, framesRun: total, frameCount: host.status.frameCount };
+}
 
-  server.tool(
-    "navigate",
-    "Drive menus FAST by advancing on SCREEN CHANGE instead of guessing frame counts. Each step presses a button " +
-    "(single port 0), releases it, then steps frames UNTIL the framebuffer changes (or maxWaitFrames is hit) — and " +
-    "reports per step whether the press was actually CONSUMED (did the screen react). This is the fix for the " +
-    "'menus are a slow, flaky 3-call loop and presses get silently dropped' problem: one call walks a whole menu " +
-    "path and tells you exactly which presses landed. " +
-    "Each step: { button, holdFrames=2, maxWaitFrames=120, settleFrames=2 }. After the press it waits for the " +
-    "screen to change (transition/animation), then `settleFrames` more so the next read is stable. " +
-    "`consumed:false` on a step means the screen never changed — the game didn't react (wrong screen, press " +
-    "dropped, or it only polls on a specific frame); re-run that step or hold longer. " +
-    "Accepts the same native aliases as pressButton (Genesis c→y, SMS/GG 1/2→a/b). " +
-    "TIP for flaky paths: reach a known screen once, saveState({path}), then loadState to retry the next leg " +
-    "deterministically instead of re-driving the whole attract sequence.",
-    {
-      steps: z.array(
-        z.object({
-          button: z.enum([
-            "up", "down", "left", "right",
-            "north", "east", "south", "west",
-            "a", "b", "x", "y",
-            "l", "r", "l2", "r2", "l3", "r3",
-            "start", "select",
-            "c", "1", "2",
-          ]).describe("Button to press for this step (single port 0)."),
-          holdFrames: z.number().int().min(1).max(60).default(2).describe("Frames to hold the button before release (default 2)."),
-          maxWaitFrames: z.number().int().min(1).max(1200).default(120).describe("After release, wait at MOST this many frames for the screen to change (default 120 ≈ 2s). If it never changes, the step reports consumed:false."),
-          settleFrames: z.number().int().min(0).max(60).default(2).describe("Extra frames to step once the screen HAS changed, to let the transition/animation settle before the next step (default 2)."),
-        }),
-      ).min(1).max(64),
-    },
-    safeTool(async ({ steps }) => {
+/** op:'navigate' — drive menus by advancing on SCREEN CHANGE; reports consumed per step. */
+function inputNavigateCore({ steps }, sessionKey) {
       const host = getHost(sessionKey);
       const platform = host.status.platform;
       const results = [];
@@ -218,13 +120,11 @@ export function registerInputTools(server, z, sessionKey) {
       for (const step of steps) {
         const resolved = resolveButtonAlias(step.button, platform);
         const before = host.framebufferHash();
-        // Press + hold.
         const pressed = { ports: [{}, {}] };
         pressed.ports[0][resolved] = true;
         host.setInput(pressed);
         host.stepFrames(step.holdFrames);
         totalFrames += step.holdFrames;
-        // Release, then wait for the screen to react.
         host.setInput({ ports: [{}, {}] });
         host.stepFrames(1);
         totalFrames += 1;
@@ -246,12 +146,83 @@ export function registerInputTools(server, z, sessionKey) {
         });
       }
       const dropped = results.filter((r) => !r.consumed).length;
-      return jsonContent({
+      return {
         steps: results,
         framesRun: totalFrames,
         frameCount: host.status.frameCount,
-        ...(dropped ? { droppedPresses: dropped, note: `${dropped} step(s) had consumed:false — the screen never changed after the press (wrong screen / press dropped / game polls input on a specific frame). Re-run those steps, increase holdFrames, or reach the screen via saveState/loadState.` } : {}),
-      });
+        ...(dropped ? { droppedPresses: dropped, note: `${dropped} step(s) had consumed:false — the screen never changed after the press (wrong screen / press dropped / game polls input on a specific frame). Re-run those steps, increase holdFrames, or reach the screen via state save/load.` } : {}),
+      };
+}
+
+const BUTTON_ENUM = [
+  "up", "down", "left", "right",
+  "north", "east", "south", "west",
+  "a", "b", "x", "y",
+  "l", "r", "l2", "r2", "l3", "r3",
+  "start", "select",
+  "c", "1", "2",
+];
+
+export function registerInputTools(server, z, sessionKey) {
+  const port = buttonShape(z);
+  server.tool(
+    "input",
+    "Drive the controller — set/hold buttons, press one, run a scripted sequence, or walk a menu by screen-change. " +
+    "`op`: 'set' | 'press' | 'sequence' | 'navigate' | 'layout'.\n" +
+    "'set': hold controller state (persists until changed) via `ports:[{a:true,...},{...}]`.\n" +
+    "'press': press one named `button` for `frames` then release (port 0 default) — the simplest single press.\n" +
+    "'sequence': scripted frame-by-frame `steps:[{input:{ports}, frames}]` for replays/tests.\n" +
+    "'navigate': walk a menu FAST by advancing on SCREEN CHANGE — `steps:[{button, holdFrames, maxWaitFrames, " +
+    "settleFrames}]`; reports `consumed` per step (false = the screen never reacted: wrong screen / press dropped / " +
+    "game polls on a specific frame). The fix for slow flaky menu loops.\n" +
+    "'layout': the platform's input register format + which buttons physically exist (call BEFORE writing input " +
+    "code or choosing controls).\n" +
+    "FACE-BUTTON TRAP: raw libretro names (a/b/x/y) are NOT the printed labels — Genesis maps A/B/C onto libretro " +
+    "y/b/a, so set({a:true}) presses Genesis C and Genesis A is {y:true}. Prefer SPATIAL names (north/east/south/" +
+    "west) or press/navigate's native aliases (Genesis c→a-internally, SMS/GG 1/2→b/a). layout.faceButtons has the " +
+    "exact map. NOTE on 'set': `requested` is what you SET, NOT proof the pad saw it — the game only reads input " +
+    "when ITS code polls; re-apply immediately before the consuming stepFrames and verify via the held-buttons RAM " +
+    "byte, not this echo.",
+    {
+      op: z.enum(["set", "press", "sequence", "navigate", "layout"]).describe("set/hold; press one button; run a sequence; navigate a menu; or get the input layout."),
+      // set
+      ports: z.array(port).min(1).max(2).optional().describe("op=set: per-port input. [{a:true,right:true}] holds A+Right on port 0."),
+      // press
+      button: z.enum(BUTTON_ENUM).optional().describe("op=press: the button to press (platform-native aliases + spatial names accepted)."),
+      frames: z.number().int().min(1).max(600).default(2).describe("op=press: frames to hold the button."),
+      port: z.number().int().min(0).max(1).default(0).describe("op=press: which port (default 0)."),
+      // sequence
+      steps: z.array(z.any()).optional().describe("op=sequence: [{input:{ports:[...]}, frames}]. op=navigate: [{button, holdFrames?, maxWaitFrames?, settleFrames?}]. (Two distinct step shapes by op.)"),
+      // layout
+      platform: z.string().optional().describe("op=layout: platform id (nes, gb, snes, genesis, ...)."),
+    },
+    safeTool(async (args) => {
+      switch (args.op) {
+        case "set": {
+          if (!args.ports) throw new Error("input({op:'set'}): `ports` is required.");
+          return jsonContent(inputSetCore(args, sessionKey));
+        }
+        case "press": {
+          if (!args.button) throw new Error("input({op:'press'}): `button` is required.");
+          return jsonContent(inputPressCore(args, sessionKey));
+        }
+        case "sequence": {
+          if (!args.steps) throw new Error("input({op:'sequence'}): `steps` is required.");
+          return jsonContent(inputSequenceCore(args, sessionKey));
+        }
+        case "navigate": {
+          if (!args.steps) throw new Error("input({op:'navigate'}): `steps` is required.");
+          // Fill per-step defaults the old navigate schema provided.
+          const steps = args.steps.map((s) => ({ holdFrames: 2, maxWaitFrames: 120, settleFrames: 2, ...s }));
+          return jsonContent(inputNavigateCore({ steps }, sessionKey));
+        }
+        case "layout": {
+          if (!args.platform) throw new Error("input({op:'layout'}): `platform` is required.");
+          return jsonContent(getInputLayoutCore(args));
+        }
+        default: throw new Error(`input: unknown op '${args.op}'`);
+      }
     }),
   );
 }
+

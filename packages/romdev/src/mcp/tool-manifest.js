@@ -29,6 +29,8 @@ export const MERGE_MAP = {
   disasm: { absorbs: ["disassemble", "disassembleRom", "disassembleProject", "findReferences"], axis: "target" },
   // ── state (save/load/list/export/dump/diff; diffState moved here from memory.js) ──
   state: { absorbs: ["saveState", "loadState", "listStates", "exportState", "dumpState", "diffState"], axis: "op" },
+  // ── input (set/press/sequence/navigate/layout; getInputLayout folded in) ──
+  input: { absorbs: ["setInput", "pressButton", "inputSequence", "navigate", "getInputLayout"], axis: "op" },
 };
 
 /** Every OLD tool name that the consolidation removes (absorbed into a new tool). */

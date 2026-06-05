@@ -205,31 +205,27 @@ const PHYSICAL_BUTTONS = {
   msx:       ["up", "down", "left", "right", "east", "west"],                      // joystick + 2 triggers
 };
 
-export function registerInputLayoutTools(server, z) {
-  server.tool(
-    "getInputLayout",
-    "Return the platform's hardware input register format, button bit ordering, libretro id mapping, and the set of buttons that are physically present on this platform. Use this BEFORE writing input-reading asm code OR before deciding what controls your game will use — saves you from probing empirically AND from binding to a button that doesn't exist on the target platform.",
-    {
-      platform: z.string().describe("Platform id (nes, gb, gbc, snes, genesis, atari2600, c64, ...)."),
-    },
-    safeTool(async ({ platform }) => {
+/** op:'layout' on the `input` tool — platform input register format + physical buttons. */
+export function getInputLayoutCore({ platform }) {
       const layout = HARDWARE_LAYOUTS[platform];
       if (!layout) {
         throw new Error(`no input layout documented for platform '${platform}'. Supported: ${Object.keys(HARDWARE_LAYOUTS).join(", ")}`);
       }
-      return jsonContent({
+      return {
         platform,
         ...layout,
         physicalButtons: PHYSICAL_BUTTONS[platform] ?? [],
-        controllerModel: "romdev uses an Xbox-shaped baseline for setInput: dpad + 4 face buttons (north/east/south/west) + l/r/l2/r2 + l3/r3 sticks + start/select. Older platforms are subsets — physicalButtons lists what's actually wired. Pressing a button not in that list is a silent no-op.",
+        controllerModel: "romdev uses an Xbox-shaped baseline for input: dpad + 4 face buttons (north/east/south/west) + l/r/l2/r2 + l3/r3 sticks + start/select. Older platforms are subsets — physicalButtons lists what's actually wired. Pressing a button not in that list is a silent no-op.",
         libretroJoypadIds: LIBRETRO_JOYPAD_IDS,
         hardwareBits: HARDWARE_BITS[platform] ?? null,
         hardwareBitsCaveat:
-          "libretroJoypadIds are PROTOCOL ids for the setInput MCP tool; they are NOT the bit positions a ROM reads from the hardware register. " +
+          "libretroJoypadIds are PROTOCOL ids for the input tool; they are NOT the bit positions a ROM reads from the hardware register. " +
           "hardwareBits gives the actual register bits a ROM tests (e.g. SNES: `lda $4218 ; bit #$1000` for start). " +
           "Confusing the two silently breaks input handling — verified by the rom-games agent's 30-min bisection that prompted this field.",
         note2: "Names from libretroJoypadIds work universally. Spatial face-button names (north/east/south/west) translate to the right physical button per platform — east is A on NES/SNES, C on Genesis. Prefer spatial names in cross-platform code.",
-      });
-    }),
-  );
+      };
+}
+
+// getInputLayout folded into the `input` tool as input({op:'layout'}).
+export function registerInputLayoutTools() { /* folded into `input` */
 }
