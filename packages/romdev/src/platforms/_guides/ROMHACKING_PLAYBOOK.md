@@ -32,7 +32,7 @@ thousands of bytes and you'll drown).
 1. `searchValue({value, size, region})` — seed candidates equal to the current
    on-screen value. `region` defaults to `system_ram`.
 2. Change the value in-game (take damage, score a point), then
-   `searchNext({op:'eq', value})` — or `op:'gt'|'lt'|'changed'|'unchanged'|
+   `searchNext({compare:'eq', value})` — or `compare:'gt'|'lt'|'changed'|'unchanged'|
    'inc'|'dec'` when you don't know the new value. Repeat until a handful remain.
 3. Confirm: `writeMemory` the candidate and watch the screen react.
 

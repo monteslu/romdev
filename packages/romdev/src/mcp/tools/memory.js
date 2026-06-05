@@ -432,10 +432,10 @@ export function registerMemoryTools(server, z, sessionKey) {
     "the value changes in-game, exactly like Cheat Engine / RetroArch. Far better than snapshotMemory+diffMemory " +
     "for this (which floods you with every byte gameplay churns). " +
     "WORKFLOW: (1) `searchValue({value: 7, size: 1})` while the screen shows 7 → all addresses currently holding " +
-    "7. (2) make the value change in-game (lose a life → 6), then `searchNext({op:'eq', value: 6})` → only " +
+    "7. (2) make the value change in-game (lose a life → 6), then `searchNext({compare:'eq', value: 6})` → only " +
     "addresses that are NOW 6 AND were a candidate. Repeat until 1-2 remain. (3) confirm with writeMemory + watch " +
     "the screen. " +
-    "If you don't know the new value, use op-only narrows: `searchNext({op:'dec'})` (value went down), " +
+    "If you don't know the new value, use compare-only narrows: `searchNext({compare:'dec'})` (value went down), " +
     "`'inc'`, `'changed'`, `'unchanged'`. `size` is 1/2/4 bytes (uses the region's endianness). Works on EVERY " +
     "platform — defaults to `system_ram` (the CPU's work RAM). Returns `{candidates, count, searchId, sample}`.",
     {
@@ -464,7 +464,7 @@ export function registerMemoryTools(server, z, sessionKey) {
           ? "0 matches — wrong size? (try size:2 for a score). Or the value isn't in this region (try a different region) or is stored offset/encoded."
           : candidates.length === 1
           ? "1 candidate — likely THE address. Confirm with writeMemory({region, offset, bytes}) and watch the screen."
-          : "Make the value change in-game, then searchNext({name, op:'eq', value:<new>}) to narrow. Repeat until 1-2 remain.",
+          : "Make the value change in-game, then searchNext({name, compare:'eq', value:<new>}) to narrow. Repeat until 1-2 remain.",
       });
     }),
   );
@@ -472,23 +472,23 @@ export function registerMemoryTools(server, z, sessionKey) {
   server.tool(
     "searchNext",
     "Narrow an active searchValue candidate list against the CURRENT memory. Call after the value changed in " +
-    "game. `op`: 'eq' (candidates now equal to `value`), 'changed'/'unchanged' (vs the previous search read), " +
+    "game. `compare`: 'eq' (candidates now equal to `value`), 'changed'/'unchanged' (vs the previous search read), " +
     "'inc'/'dec' (went up/down), 'gt'/'lt' (now greater/less than `value`). 'eq'/'gt'/'lt' need `value`; the " +
     "others don't (they compare to the previous snapshot). Returns the narrowed `{candidates, count}` — repeat " +
     "until 1-2 remain, then confirm with writeMemory. This is the loop that turns 'somewhere in 8KB of RAM' into " +
     "an exact address in a few steps.",
     {
-      op: z.enum(["eq", "changed", "unchanged", "inc", "dec", "gt", "lt"]).describe("How to narrow: eq=now equals `value`; changed/unchanged vs the last read; inc/dec=went up/down; gt/lt=now >/< `value`."),
-      value: z.number().int().optional().describe("Required for op 'eq'/'gt'/'lt' — the value now shown on screen."),
+      compare: z.enum(["eq", "changed", "unchanged", "inc", "dec", "gt", "lt"]).describe("How to narrow: eq=now equals `value`; changed/unchanged vs the last read; inc/dec=went up/down; gt/lt=now >/< `value`."),
+      value: z.number().int().optional().describe("Required for compare 'eq'/'gt'/'lt' — the value now shown on screen."),
       name: z.string().default("default").describe("Which searchValue session to narrow (the `name` you seeded with)."),
       maxCandidates: z.number().int().min(1).max(8192).default(64),
     },
-    safeTool(async ({ op, value, name, maxCandidates }) => {
+    safeTool(async ({ compare, value, name, maxCandidates }) => {
       const host = getHost(sessionKey);
       const s = searchSessions(sessionKey).get(name);
       if (!s) throw new Error(`searchNext: no active search named '${name}'. Call searchValue({value, name}) first.`);
-      if ((op === "eq" || op === "gt" || op === "lt") && value === undefined) {
-        throw new Error(`searchNext: op '${op}' needs a \`value\` (the number now on screen).`);
+      if ((compare === "eq" || compare === "gt" || compare === "lt") && value === undefined) {
+        throw new Error(`searchNext: compare '${compare}' needs a \`value\` (the number now on screen).`);
       }
       const buf = host.readMemory(s.region, 0, regionLength(host, s.region, 0));
       const read = (i) => readUint(buf, i, s.size, s.little);
@@ -498,7 +498,7 @@ export function registerMemoryTools(server, z, sessionKey) {
         const cur = read(a);
         const prev = s.prev ? s.prev.get(a) : undefined;
         let ok = false;
-        switch (op) {
+        switch (compare) {
           case "eq":        ok = cur === v; break;
           case "gt":        ok = cur > v; break;
           case "lt":        ok = cur < v; break;
@@ -509,14 +509,14 @@ export function registerMemoryTools(server, z, sessionKey) {
         }
         if (ok) kept.push(a);
       }
-      // Remember this read so the next op:'changed'/'inc'/'dec' has a baseline.
+      // Remember this read so the next compare:'changed'/'inc'/'dec' has a baseline.
       const prevMap = new Map();
       for (const a of kept) prevMap.set(a, read(a));
       s.addrs = Uint32Array.from(kept);
       s.prev = prevMap;
       searchSessions(sessionKey).set(name, s);
       return jsonContent({
-        searchId: name, op, count: kept.length,
+        searchId: name, compare, count: kept.length,
         candidates: kept.slice(0, maxCandidates).map((a) => "0x" + a.toString(16) + "=" + read(a)),
         note: kept.length === 0
           ? "0 left — narrowed too far (wrong op, or the value moved between reads). Re-seed with searchValue."
