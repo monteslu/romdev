@@ -1,32 +1,5 @@
-# romdev patch — see README.md in this directory for full justification.
-# Exposes this core's internal memory regions (VRAM/OAM/palette/registers/etc.)
-# via retro_get_memory_data so romdev's inspect*/getCPUState/etc. tools can read
-# them. Upstream exposes only SAVE_RAM/SYSTEM_RAM. WITHOUT this patch the build
-# still succeeds but those tools return empty data (silent runtime failure).
-# git apply ignores everything above the first 'diff --git' line.
-#
-# Also adds an instruction-level WRITE WATCHPOINT (6502): M6502::poke records the
-# CPU PC when a watched address is written; libretro.cxx exports
-# romdev_watchpoint_set/get.
-#
-# Also adds an instruction-level READ WATCHPOINT (M6502::peek) and an
-# execution-level PC BREAKPOINT / single-step (the hook in M6502::execute sets
-# StopExecutionBit on a hit — the same path stella's debugger uses to break
-# mid-frame, so TIA::update's endFrame() runs and retro_run returns instead of
-# hanging). libretro.cxx exports romdev_readwatch_set/get and
-# romdev_pcbreak_set/get — these power runUntilRead / runUntilPC / stepInstruction.
-# git apply ignores everything above the first 'diff --git' line.
-#
-#
-# RE primitives round 2: register read/write (romdev_setreg/getreg forwarding to
-# M6502::romdevSetReg/GetReg which touch the private A/X/Y/PS/SP/PC; 6502 reg-ids
-# 0=A 1=X 2=Y 3=P 4=SP 16=PC), a RANGE WATCH logging every {pc,addr,value} in
-# [lo,hi] (hooks in M6502::peek / M6502::poke; exports romdev_range_set/get), and
-# a PC COVERAGE log of distinct in-window PCs (hook in M6502::execute before the
-# opcode fetch; exports romdev_cov_set/get). Ring-buffer state lives in libretro.cxx.
-#
 diff --git a/libretro.cxx b/libretro.cxx
-index 15c6d12..1ea790d 100644
+index 15c6d12..d823515 100644
 --- a/libretro.cxx
 +++ b/libretro.cxx
 @@ -28,6 +28,7 @@
@@ -37,7 +10,7 @@ index 15c6d12..1ea790d 100644
  #include "Version.hxx"
  
  #include "Stubs.hxx"
-@@ -1248,16 +1249,232 @@ unsigned retro_get_region(void)
+@@ -1248,16 +1249,257 @@ unsigned retro_get_region(void)
     return RETRO_REGION_NTSC;
  }
  
@@ -112,6 +85,18 @@ index 15c6d12..1ea790d 100644
 +unsigned int  romdev_pc_last_pc = 0xFFFFFFFF;
 +unsigned int  romdev_pc_hits    = 0;
 +
++/* romdev INSTRUCTION WATCHDOG — the fix for "callSubroutine hung". A standalone-
++ * driven routine (e.g. a decompressor fed a slightly-wrong pointer) can loop
++ * FOREVER inside a single M6502::execute / retro_run frame, so the host's per-
++ * FRAME maxFrames never gets a turn and the whole WASM hangs. M6502::execute
++ * counts dispatched instructions and force-stops (sets romdev_pc_hit +
++ * romdev_pc_watchdog + StopExecutionBit) when the budget is exceeded — so a
++ * runaway returns control with the final PC intact instead of hanging.
++ * romdev_pc_wd_limit 0 = disabled. */
++unsigned int  romdev_pc_wd_limit = 0;       /* max instructions before force-stop (0 = off) */
++unsigned int  romdev_pc_wd_count = 0;       /* instructions executed since arm */
++volatile int  romdev_pc_watchdog = 0;       /* set when the watchdog tripped */
++
 +void romdev_pcbreak_set(unsigned int addr, int enabled, int step)
 +{
 +   romdev_pc_addr = addr;
@@ -122,18 +107,31 @@ index 15c6d12..1ea790d 100644
 +   romdev_pc_hit = 0;
 +   romdev_pc_last_pc = 0xFFFFFFFF;
 +   romdev_pc_hits = 0;
++   romdev_pc_watchdog = 0;
++   romdev_pc_wd_count = 0;
 +}
 +
-+/* Fills out5: [enabled, addr, hit, lastPC, hits]. Pass clearHit to re-arm. */
-+void romdev_pcbreak_get(unsigned int *out5, int clearHit)
++/* Fills out6: [enabled, addr, hit, lastPC, hits, watchdogTripped]. clearHit re-arms. */
++void romdev_pcbreak_get(unsigned int *out6, int clearHit)
 +{
-+   if (!out5) return;
-+   out5[0] = (unsigned int)romdev_pc_enabled;
-+   out5[1] = romdev_pc_addr;
-+   out5[2] = (unsigned int)romdev_pc_hit;
-+   out5[3] = romdev_pc_last_pc;
-+   out5[4] = romdev_pc_hits;
-+   if (clearHit) { romdev_pc_hit = 0; }
++   if (!out6) return;
++   out6[0] = (unsigned int)romdev_pc_enabled;
++   out6[1] = romdev_pc_addr;
++   out6[2] = (unsigned int)romdev_pc_hit;
++   out6[3] = romdev_pc_last_pc;
++   out6[4] = romdev_pc_hits;
++   out6[5] = (unsigned int)romdev_pc_watchdog;
++   if (clearHit) { romdev_pc_hit = 0; romdev_pc_watchdog = 0; romdev_pc_wd_count = 0; }
++}
++
++/* Arm the instruction watchdog (force-stop a runaway after `limit` instructions;
++ * 0 = disable). The host sets this before driving callSubroutine so a runaway
++ * routine returns control instead of hanging the whole WASM. */
++void romdev_watchdog_set(unsigned int limit)
++{
++   romdev_pc_wd_limit = limit;
++   romdev_pc_wd_count = 0;
++   romdev_pc_watchdog = 0;
 +}
 +
 +/* ─── romdev RE primitives round 2 ────────────────────────────────────────────
@@ -270,7 +268,7 @@ index 15c6d12..1ea790d 100644
        default: return NULL;
     }
  }
-@@ -1267,6 +1484,8 @@ size_t retro_get_memory_size(unsigned id)
+@@ -1267,6 +1509,8 @@ size_t retro_get_memory_size(unsigned id)
     switch (id)
     {
        case RETRO_MEMORY_SYSTEM_RAM: return 128;
@@ -280,7 +278,7 @@ index 15c6d12..1ea790d 100644
     }
  }
 diff --git a/stella/src/emucore/M6502.cxx b/stella/src/emucore/M6502.cxx
-index 9dfde89..bd95a43 100644
+index 9dfde89..b7e7b50 100644
 --- a/stella/src/emucore/M6502.cxx
 +++ b/stella/src/emucore/M6502.cxx
 @@ -103,6 +103,28 @@ void M6502::reset()
@@ -351,7 +349,7 @@ index 9dfde89..bd95a43 100644
    ////////////////////////////////////////////////
    // TODO - move this logic directly into CartAR
    if(address != myLastAddress)
-@@ -140,6 +186,23 @@ inline void M6502::poke(uInt16 address, uInt8 value)
+@@ -140,6 +186,27 @@ inline void M6502::poke(uInt16 address, uInt8 value)
  }
  
  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -370,15 +368,36 @@ index 9dfde89..bd95a43 100644
 +extern volatile int  romdev_pc_hit;
 +extern unsigned int  romdev_pc_last_pc;
 +extern unsigned int  romdev_pc_hits;
++
++extern unsigned int  romdev_pc_wd_limit;
++extern unsigned int  romdev_pc_wd_count;
++extern volatile int  romdev_pc_watchdog;
 +}
 +
  bool M6502::execute(uInt32 number)
  {
    // Clear all of the execution status bits except for the fatal error bit
-@@ -153,6 +216,36 @@ bool M6502::execute(uInt32 number)
+@@ -153,6 +220,53 @@ bool M6502::execute(uInt32 number)
        uInt16 operandAddress = 0, intermediateAddress = 0;
        uInt8 operand = 0;
  
++      // romdev instruction WATCHDOG: force-stop a runaway (the callSubroutine
++      // hang). Checked FIRST, BEFORE the opcode fetch, so PC is the address of
++      // the instruction about to execute. On overflow, fire the breakpoint with
++      // the watchdog flag and set StopExecutionBit so the frame ends cleanly
++      // (retro_run returns) instead of hanging.
++      if (romdev_pc_wd_limit && !romdev_pc_hit)
++      {
++        if (++romdev_pc_wd_count >= romdev_pc_wd_limit)
++        {
++          romdev_pc_last_pc = PC;            // leave PC frozen exactly here
++          romdev_pc_hit = 1;
++          romdev_pc_watchdog = 1;
++          myExecutionStatus |= StopExecutionBit;
++          break;
++        }
++      }
++
 +      // romdev PC coverage log (discovery): record each DISTINCT in-window PC
 +      // about to execute. Checked here, BEFORE the opcode fetch, so PC is the
 +      // address of the instruction about to run. Cheap when disabled.

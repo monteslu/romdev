@@ -58,14 +58,28 @@
 #    gprs[ARM_PC] + WORD_SIZE — the SAME value the PC breakpoint uses, so coverage
 #    PCs line up with runUntilPC. Ring buffer CAP 8192. libretro.c exports
 #    romdev_cov_set/get (out2 = [distinct,total]) for logPCRange.
+# 8) INSTRUCTION WATCHDOG (ARM7TDMI) — the fix for "callSubroutine hung". A host-
+#    driven routine (e.g. a decompressor fed a wrong reg) can loop FOREVER inside a
+#    single _GBACoreRunFrame, so the host's per-FRAME cap never gets a turn and the
+#    whole WASM hangs. romdev_watchdog_check in src/arm/arm.c counts dispatched
+#    instructions and, when the budget (romdev_pc_wd_limit) is exceeded, records the
+#    final PC and sets romdev_pc_hit + romdev_pc_watchdog — then the run loop ends
+#    the frame the SAME way the PC breakpoint does (romdev_end_frame: bump
+#    cpu->cycles, NO processEvents — so the VBlank IRQ never fires and rewrites the
+#    frozen PC). The check is placed FIRST in every run loop the PC breakpoint is in
+#    (ARMRun single-step path + ARMRunLoop Thumb/ARM step loops) so a runaway can't
+#    outrun it, and it gates the fast-path bypass. romdev_pcbreak_get now reports a
+#    6th word (watchdogTripped); libretro.c exports romdev_watchdog_set(limit)
+#    (0 = disable). The host arms it before driving callSubroutine.
 #
 # git apply ignores everything above the first 'diff --git' line.
 #
+
 diff --git a/src/arm/arm.c b/src/arm/arm.c
-index 0b92d7f..550bdd7 100644
+index 0b92d7f..faf9a74 100644
 --- a/src/arm/arm.c
 +++ b/src/arm/arm.c
-@@ -9,6 +9,169 @@
+@@ -9,6 +9,203 @@
  #include <mgba/internal/arm/isa-inlines.h>
  #include <mgba/internal/arm/isa-thumb.h>
  
@@ -96,6 +110,19 @@ index 0b92d7f..550bdd7 100644
 +volatile int      romdev_pc_hit      = 0;        /* set by the hook, cleared by the host */
 +unsigned int      romdev_pc_last_pc  = 0xFFFFFFFF;
 +unsigned int      romdev_pc_hits     = 0;
++
++/* romdev INSTRUCTION WATCHDOG — the fix for "callSubroutine hung". A standalone-
++ * driven routine (e.g. a decompressor fed a wrong reg) can loop FOREVER inside a
++ * single _GBACoreRunFrame, so the host's per-FRAME maxFrames never gets a turn
++ * and the whole WASM hangs. This counts dispatched instructions and force-stops
++ * (sets romdev_pc_hit + romdev_pc_watchdog) when the budget is exceeded — so a
++ * runaway returns control with the final PC intact instead of hanging. On a trip
++ * it ends the frame EXACTLY like the PC breakpoint does (romdev_end_frame: bump
++ * cpu->cycles WITHOUT processEvents, so the VBlank IRQ never fires and rewrites
++ * the frozen PC). romdev_pc_wd_limit 0 = disabled. */
++unsigned int      romdev_pc_wd_limit = 0;        /* max instructions before force-stop (0 = off) */
++unsigned int      romdev_pc_wd_count = 0;        /* instructions executed since arm */
++volatile int      romdev_pc_watchdog = 0;        /* set when the watchdog tripped */
 +
 +/* One GBA video frame is VIDEO_TOTAL_LENGTH (280896) master cycles; we don't
 + * include the GBA headers here (arm.c is the generic ARM core), so use a value
@@ -148,6 +175,27 @@ index 0b92d7f..550bdd7 100644
 +		romdev_pc_hit = 1;
 +		romdev_pc_hits++;
 +		romdev_pc_step = 0; /* one-shot */
++		return 1;
++	}
++	return 0;
++}
++
++/* romdev INSTRUCTION WATCHDOG check (ARM7TDMI): returns nonzero when the dispatch
++ * budget is exceeded for the instruction about to execute at raw PC `pcRaw`. On a
++ * trip it records the PC and sets romdev_pc_hit + romdev_pc_watchdog so the host
++ * sees the same hit-flag the PC breakpoint uses (with the watchdog bit set). The
++ * CALLER must end the frame with romdev_end_frame() — NOT processEvents — so the
++ * frozen PC isn't clobbered by a VBlank IRQ. Gated on !romdev_pc_hit so it fires
++ * once. Cheap when disabled (one int test). Counts BEFORE the PC-break check so a
++ * runaway can't outrun it. */
++static inline int romdev_watchdog_check(unsigned int pcRaw) {
++	if (!romdev_pc_wd_limit || romdev_pc_hit) {
++		return 0;
++	}
++	if (++romdev_pc_wd_count >= romdev_pc_wd_limit) {
++		romdev_pc_last_pc = pcRaw;
++		romdev_pc_hit = 1;
++		romdev_pc_watchdog = 1;
 +		return 1;
 +	}
 +	return 0;
@@ -235,7 +283,7 @@ index 0b92d7f..550bdd7 100644
  void ARMSetPrivilegeMode(struct ARMCore* cpu, enum PrivilegeMode mode) {
  	if (mode == cpu->privilegeMode) {
  		// Not switching modes after all
-@@ -230,6 +393,23 @@ void ARMRun(struct ARMCore* cpu) {
+@@ -230,6 +427,33 @@ void ARMRun(struct ARMCore* cpu) {
  	while (cpu->cycles >= cpu->nextEvent) {
  		cpu->irqh.processEvents(cpu);
  	}
@@ -245,6 +293,16 @@ index 0b92d7f..550bdd7 100644
 +	{
 +		unsigned int width = (cpu->executionMode == MODE_THUMB) ? WORD_SIZE_THUMB : WORD_SIZE_ARM;
 +		romdev_cov_check(cpu->gprs[ARM_PC] + width);
++	}
++	/* romdev instruction WATCHDOG (FIRST — before the pc-break) so a runaway can't
++	 * outrun it. Ends the frame the SAME way the pc-break does (romdev_end_frame,
++	 * NO processEvents) so the frozen PC isn't rewritten by a VBlank IRQ. */
++	if (romdev_pc_wd_limit && !romdev_pc_hit) {
++		unsigned int width = (cpu->executionMode == MODE_THUMB) ? WORD_SIZE_THUMB : WORD_SIZE_ARM;
++		if (romdev_watchdog_check(cpu->gprs[ARM_PC] + width)) {
++			romdev_end_frame(cpu);
++			return;
++		}
 +	}
 +	if ((romdev_pc_enabled || romdev_pc_step) && !romdev_pc_hit) {
 +		unsigned int width = (cpu->executionMode == MODE_THUMB) ? WORD_SIZE_THUMB : WORD_SIZE_ARM;
@@ -259,15 +317,16 @@ index 0b92d7f..550bdd7 100644
  	if (cpu->executionMode == MODE_THUMB) {
  		ThumbStep(cpu);
  	} else {
-@@ -241,12 +421,62 @@ void ARMRun(struct ARMCore* cpu) {
+@@ -241,12 +465,75 @@ void ARMRun(struct ARMCore* cpu) {
  }
  
  void ARMRunLoop(struct ARMCore* cpu) {
-+	/* romdev breakpoint/coverage fast-path bypass: when nothing is armed (no PC
-+	 * breakpoint, no single-step, no coverage log), run the stock tight loops
-+	 * untouched (zero overhead on the hot path). Coverage gates the fast path too
-+	 * so its per-instruction hook below actually runs when armed. */
-+	if (!romdev_pc_enabled && !romdev_pc_step && !romdev_pc_hit && !romdev_cov_enabled) {
++	/* romdev breakpoint/coverage/watchdog fast-path bypass: when nothing is armed
++	 * (no PC breakpoint, no single-step, no coverage log, no watchdog), run the
++	 * stock tight loops untouched (zero overhead on the hot path). Coverage AND the
++	 * watchdog gate the fast path too so their per-instruction hooks below actually
++	 * run when armed. */
++	if (!romdev_pc_enabled && !romdev_pc_step && !romdev_pc_hit && !romdev_cov_enabled && !romdev_pc_wd_limit) {
 +		if (cpu->executionMode == MODE_THUMB) {
 +			while (cpu->cycles < cpu->nextEvent) {
 +				ThumbStep(cpu);
@@ -306,6 +365,12 @@ index 0b92d7f..550bdd7 100644
  	if (cpu->executionMode == MODE_THUMB) {
  		while (cpu->cycles < cpu->nextEvent) {
 +			romdev_cov_check(cpu->gprs[ARM_PC] + WORD_SIZE_THUMB);
++			/* romdev WATCHDOG: FIRST, before the pc-break, so a runaway can't outrun
++			 * it. Same frame-end as the pc-break (no processEvents → no PC rewrite). */
++			if (romdev_watchdog_check(cpu->gprs[ARM_PC] + WORD_SIZE_THUMB)) {
++				romdev_end_frame(cpu);
++				return;
++			}
 +			if (romdev_pcbreak_check(cpu->gprs[ARM_PC] + WORD_SIZE_THUMB)) {
 +				romdev_end_frame(cpu);
 +				return;
@@ -315,6 +380,12 @@ index 0b92d7f..550bdd7 100644
  	} else {
  		while (cpu->cycles < cpu->nextEvent) {
 +			romdev_cov_check(cpu->gprs[ARM_PC] + WORD_SIZE_ARM);
++			/* romdev WATCHDOG: FIRST, before the pc-break, so a runaway can't outrun
++			 * it. Same frame-end as the pc-break (no processEvents → no PC rewrite). */
++			if (romdev_watchdog_check(cpu->gprs[ARM_PC] + WORD_SIZE_ARM)) {
++				romdev_end_frame(cpu);
++				return;
++			}
 +			if (romdev_pcbreak_check(cpu->gprs[ARM_PC] + WORD_SIZE_ARM)) {
 +				romdev_end_frame(cpu);
 +				return;
@@ -467,10 +538,10 @@ index 27e289c..15f3b3c 100644
  	int wait = 0;
  	uint16_t oldValue;
 diff --git a/src/platform/libretro/libretro.c b/src/platform/libretro/libretro.c
-index 4b05a42..0ebf66a 100644
+index 4b05a42..7c0acf8 100644
 --- a/src/platform/libretro/libretro.c
 +++ b/src/platform/libretro/libretro.c
-@@ -2269,6 +2269,204 @@ unsigned retro_get_region(void) {
+@@ -2269,6 +2269,222 @@ unsigned retro_get_region(void) {
  	return RETRO_REGION_NTSC; // TODO: This isn't strictly true
  }
  
@@ -542,6 +613,10 @@ index 4b05a42..0ebf66a 100644
 +extern unsigned int  romdev_pc_last_pc;
 +extern unsigned int  romdev_pc_hits;
 +
++extern unsigned int  romdev_pc_wd_limit;
++extern unsigned int  romdev_pc_wd_count;
++extern int           romdev_pc_watchdog;
++
 +void romdev_pcbreak_set(unsigned int addr, int enabled, int step) {
 +	romdev_pc_addr = addr;
 +	romdev_pc_enabled = enabled ? 1 : 0;
@@ -551,17 +626,31 @@ index 4b05a42..0ebf66a 100644
 +	romdev_pc_hit = 0;
 +	romdev_pc_last_pc = 0xFFFFFFFF;
 +	romdev_pc_hits = 0;
++	romdev_pc_watchdog = 0;
++	romdev_pc_wd_count = 0;
 +}
 +
-+/* Fills out5: [enabled, addr, hit, lastPC, hits]. Pass clearHit to re-arm. */
-+void romdev_pcbreak_get(unsigned int* out5, int clearHit) {
-+	if (!out5) return;
-+	out5[0] = (unsigned int) romdev_pc_enabled;
-+	out5[1] = romdev_pc_addr;
-+	out5[2] = (unsigned int) romdev_pc_hit;
-+	out5[3] = romdev_pc_last_pc;
-+	out5[4] = romdev_pc_hits;
-+	if (clearHit) { romdev_pc_hit = 0; }
++/* Fills out6: [enabled, addr, hit, lastPC, hits, watchdogTripped]. clearHit re-arms. */
++void romdev_pcbreak_get(unsigned int* out6, int clearHit) {
++	if (!out6) return;
++	out6[0] = (unsigned int) romdev_pc_enabled;
++	out6[1] = romdev_pc_addr;
++	out6[2] = (unsigned int) romdev_pc_hit;
++	out6[3] = romdev_pc_last_pc;
++	out6[4] = romdev_pc_hits;
++	out6[5] = (unsigned int) romdev_pc_watchdog;
++	if (clearHit) { romdev_pc_hit = 0; romdev_pc_watchdog = 0; romdev_pc_wd_count = 0; }
++}
++
++/* Arm the instruction watchdog (force-stop a runaway after `limit` instructions;
++ * 0 = disable). The host sets this before driving callSubroutine so a runaway
++ * routine returns control instead of hanging the WASM. State + the run-loop hook
++ * live in src/arm/arm.c (ends the frame via romdev_end_frame — no VBlank IRQ, so
++ * the frozen PC isn't rewritten). */
++void romdev_watchdog_set(unsigned int limit) {
++	romdev_pc_wd_limit = limit;
++	romdev_pc_wd_count = 0;
++	romdev_pc_watchdog = 0;
 +}
 +
 +/* romdev register read/write (GBA ARM7) — the inverse of getCPUState, used by the
@@ -675,7 +764,7 @@ index 4b05a42..0ebf66a 100644
  void retro_set_controller_port_device(unsigned port, unsigned device) {
  	UNUSED(port);
  	UNUSED(device);
-@@ -2327,6 +2525,20 @@ void* retro_get_memory_data(unsigned id) {
+@@ -2327,6 +2543,20 @@ void* retro_get_memory_data(unsigned id) {
  			break;
  		}
  		break;
@@ -696,7 +785,7 @@ index 4b05a42..0ebf66a 100644
  	default:
  		break;
  	}
-@@ -2373,6 +2585,16 @@ size_t retro_get_memory_size(unsigned id) {
+@@ -2373,6 +2603,16 @@ size_t retro_get_memory_size(unsigned id) {
  		return GB_SIZE_WORKING_RAM;
  	case RETRO_MEMORY_VIDEO_RAM:
  		return GBA_SIZE_VRAM;

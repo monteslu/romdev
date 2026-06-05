@@ -26,7 +26,7 @@ cd "$VICE_DIR"
 PATCH_FILE="$PROJECT_DIR/scripts/patches/vice-romdev-memory-regions.patch"
 if [ -f "$PATCH_FILE" ]; then
   # Normalize CRLF → LF on the file(s) we patch.
-  sed -i 's/\r$//' libretro/libretro-core.c vice/src/maincpu.c || true
+  sed -i 's/\r$//' libretro/libretro-core.c vice/src/maincpu.c vice/src/6510core.c || true
   if grep -q 'ROMDEV_MEMORY_C64' libretro/libretro-core.c; then
     echo "romdev patch already applied — skipping."
   else
@@ -104,7 +104,7 @@ emcc "$CORE_LIB" \
   -s ALLOW_MEMORY_GROWTH=1 \
   -s INITIAL_MEMORY=67108864 -s MAXIMUM_MEMORY=536870912 \
   -s ALLOW_TABLE_GROWTH=1 \
-  -s 'EXPORTED_FUNCTIONS=["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_watchpoint_set","_romdev_watchpoint_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_setreg","_romdev_getreg","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]' \
+  -s 'EXPORTED_FUNCTIONS=["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_watchpoint_set","_romdev_watchpoint_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_watchdog_set","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_setreg","_romdev_getreg","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]' \
   -s 'EXPORTED_RUNTIME_METHODS=["FS","ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue"]' \
   -s FORCE_FILESYSTEM=1 \
   -s INVOKE_RUN=0 \

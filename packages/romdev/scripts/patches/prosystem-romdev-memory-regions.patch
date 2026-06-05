@@ -1,31 +1,3 @@
-# romdev patch — see README.md in this directory for full justification.
-# Exposes this core's internal memory regions (VRAM/OAM/palette/registers/etc.)
-# via retro_get_memory_data so romdev's inspect*/getCPUState/etc. tools can read
-# them. Upstream exposes only SAVE_RAM/SYSTEM_RAM. WITHOUT this patch the build
-# still succeeds but those tools return empty data (silent runtime failure).
-# git apply ignores everything above the first 'diff --git' line.
-#
-# Also adds an instruction-level WRITE WATCHPOINT (6502): memory_Write in
-# core/Memory.c records sally_pc when a watched address is written; libretro.c
-# exports romdev_watchpoint_set/get.
-#
-# Also adds an instruction-level READ WATCHPOINT (memory_Read in core/Memory.c)
-# and an execution-level PC BREAKPOINT / single-step (the hook in
-# core/Sally.c:sally_ExecuteInstruction freezes the CPU at a target PC; the
-# per-frame loop in core/ProSystem.c drains the cycle budget on a hit so
-# retro_run still returns). libretro.c exports romdev_readwatch_set/get and
-# romdev_pcbreak_set/get — these power runUntilRead / runUntilPC / stepInstruction.
-# git apply ignores everything above the first 'diff --git' line.
-#
-#
-# RE primitives round 2: register read/write (romdev_setreg/getreg — the inverse
-# of getCPUState, powers setRegister/callSubroutine; 6502 reg-ids 0=A 1=X 2=Y
-# 3=P 4=SP 16=PC onto sally_a/x/y/p/s + sally_pc.w), a RANGE WATCH that logs
-# every {pc,addr,value} touching [lo,hi] (hooks in core/Memory.c memory_Read /
-# memory_Write, exports romdev_range_set/get), and a PC COVERAGE log of distinct
-# in-window PCs (hook in core/Sally.c:sally_ExecuteInstruction before the opcode
-# fetch, exports romdev_cov_set/get). State + ring buffers live in core/Memory.c.
-#
 diff --git a/core/Memory.c b/core/Memory.c
 index cb12bd3..0e10ee0 100644
 --- a/core/Memory.c
@@ -216,10 +188,10 @@ index 753035e..e43551e 100644
        if(cartridge_pokey)
           pokey_Process(2);
 diff --git a/core/Sally.c b/core/Sally.c
-index dede0ca..169f5b8 100644
+index dede0ca..f956ed8 100644
 --- a/core/Sally.c
 +++ b/core/Sally.c
-@@ -34,6 +34,25 @@ uint8_t sally_p = 0;
+@@ -34,6 +34,36 @@ uint8_t sally_p = 0;
  uint8_t sally_s = 0;
  pair sally_pc = {0};
  
@@ -242,10 +214,21 @@ index dede0ca..169f5b8 100644
 +unsigned int  romdev_pc_last_pc = 0xFFFFFFFF;
 +unsigned int  romdev_pc_hits    = 0;
 +
++/* romdev INSTRUCTION WATCHDOG — the fix for "callSubroutine hung". A standalone-
++ * driven routine (e.g. a decompressor fed a slightly-wrong pointer) can loop
++ * FOREVER inside a single prosystem_ExecuteFrame / retro_run frame, so the host's
++ * per-FRAME maxFrames never gets a turn and the whole WASM hangs. This counts
++ * dispatched instructions and force-stops (sets romdev_pc_hit + romdev_pc_watchdog)
++ * when the budget is exceeded — so a runaway returns control with the final PC
++ * intact instead of hanging. romdev_pc_wd_limit 0 = disabled. */
++unsigned int  romdev_pc_wd_limit = 0;       /* max instructions before force-stop (0 = off) */
++unsigned int  romdev_pc_wd_count = 0;       /* instructions executed since arm */
++volatile int  romdev_pc_watchdog = 0;       /* set when the watchdog tripped */
++
  static uint8_t sally_opcode;
  static pair sally_address;
  static uint32_t sally_cycles;
-@@ -752,8 +771,44 @@ void sally_Reset(void)
+@@ -752,8 +782,60 @@ void sally_Reset(void)
     sally_pc.w = 0;
  }
  
@@ -257,6 +240,22 @@ index dede0ca..169f5b8 100644
 +
  uint32_t sally_ExecuteInstruction(void)
  {
++   /* romdev instruction WATCHDOG: force-stop a runaway (the callSubroutine hang).
++    * Checked FIRST, BEFORE the opcode fetch, so sally_pc.w is the address of the
++    * instruction about to execute. On overflow, fire the breakpoint with the
++    * watchdog flag and return 0 cycles WITHOUT executing — the per-frame loop
++    * drains its budget on romdev_pc_hit so retro_run returns instead of hanging. */
++   if (romdev_pc_wd_limit && !romdev_pc_hit)
++   {
++      if (++romdev_pc_wd_count >= romdev_pc_wd_limit)
++      {
++         romdev_pc_last_pc = sally_pc.w;   /* leave PC frozen exactly here */
++         romdev_pc_hit = 1;
++         romdev_pc_watchdog = 1;
++         return 0;
++      }
++   }
++
 +   /* romdev PC coverage log (discovery): record each DISTINCT in-window PC about
 +    * to execute. Checked here, BEFORE the opcode fetch, so sally_pc.w is the
 +    * address of the instruction about to run. Cheap when disabled (one int test). */
@@ -291,7 +290,7 @@ index dede0ca..169f5b8 100644
     sally_cycles = SALLY_CYCLES[sally_opcode];
  
 diff --git a/core/libretro.c b/core/libretro.c
-index 3e4dbdb..9cf19c4 100644
+index 3e4dbdb..b7d8ab8 100644
 --- a/core/libretro.c
 +++ b/core/libretro.c
 @@ -28,6 +28,7 @@
@@ -302,7 +301,7 @@ index 3e4dbdb..9cf19c4 100644
  
  #ifdef _3DS
  extern void* linearMemAlign(size_t size, size_t alignment);
-@@ -614,15 +615,219 @@ unsigned retro_get_region(void)
+@@ -614,15 +615,236 @@ unsigned retro_get_region(void)
      return cartridge_region == REGION_NTSC ? RETRO_REGION_NTSC : RETRO_REGION_PAL;
  }
  
@@ -375,6 +374,10 @@ index 3e4dbdb..9cf19c4 100644
 +extern unsigned int  romdev_pc_last_pc;
 +extern unsigned int  romdev_pc_hits;
 +
++extern unsigned int  romdev_pc_wd_limit;
++extern unsigned int  romdev_pc_wd_count;
++extern volatile int  romdev_pc_watchdog;
++
 +void romdev_pcbreak_set(unsigned int addr, int enabled, int step)
 +{
 +    romdev_pc_addr = addr;
@@ -385,18 +388,31 @@ index 3e4dbdb..9cf19c4 100644
 +    romdev_pc_hit = 0;
 +    romdev_pc_last_pc = 0xFFFFFFFF;
 +    romdev_pc_hits = 0;
++    romdev_pc_watchdog = 0;
++    romdev_pc_wd_count = 0;
 +}
 +
-+/* Fills out5: [enabled, addr, hit, lastPC, hits]. Pass clearHit to re-arm. */
-+void romdev_pcbreak_get(unsigned int *out5, int clearHit)
++/* Fills out6: [enabled, addr, hit, lastPC, hits, watchdogTripped]. clearHit re-arms. */
++void romdev_pcbreak_get(unsigned int *out6, int clearHit)
 +{
-+    if (!out5) return;
-+    out5[0] = (unsigned int)romdev_pc_enabled;
-+    out5[1] = romdev_pc_addr;
-+    out5[2] = (unsigned int)romdev_pc_hit;
-+    out5[3] = romdev_pc_last_pc;
-+    out5[4] = romdev_pc_hits;
-+    if (clearHit) { romdev_pc_hit = 0; }
++    if (!out6) return;
++    out6[0] = (unsigned int)romdev_pc_enabled;
++    out6[1] = romdev_pc_addr;
++    out6[2] = (unsigned int)romdev_pc_hit;
++    out6[3] = romdev_pc_last_pc;
++    out6[4] = romdev_pc_hits;
++    out6[5] = (unsigned int)romdev_pc_watchdog;
++    if (clearHit) { romdev_pc_hit = 0; romdev_pc_watchdog = 0; romdev_pc_wd_count = 0; }
++}
++
++/* Arm the instruction watchdog (force-stop a runaway after `limit` instructions;
++ * 0 = disable). The host sets this before driving callSubroutine so a runaway
++ * routine returns control instead of hanging the whole WASM. */
++void romdev_watchdog_set(unsigned int limit)
++{
++    romdev_pc_wd_limit = limit;
++    romdev_pc_wd_count = 0;
++    romdev_pc_watchdog = 0;
 +}
 +
 +/* ─── romdev RE primitives round 2 ────────────────────────────────────────────
@@ -522,7 +538,7 @@ index 3e4dbdb..9cf19c4 100644
      return NULL;
  }
  
-@@ -630,6 +835,8 @@ size_t retro_get_memory_size(unsigned id)
+@@ -630,6 +852,8 @@ size_t retro_get_memory_size(unsigned id)
  {
      if ( id == RETRO_MEMORY_SYSTEM_RAM )
          return MEMORY_SIZE;

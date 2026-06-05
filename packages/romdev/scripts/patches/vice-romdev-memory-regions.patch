@@ -36,7 +36,7 @@ diff --git a/libretro/libretro-core.c b/libretro/libretro-core.c
 index 82bd2fb..cf51c23 100644
 --- a/libretro/libretro-core.c
 +++ b/libretro/libretro-core.c
-@@ -8639,6 +8639,194 @@ unsigned retro_get_region(void)
+@@ -8639,6 +8639,215 @@ unsigned retro_get_region(void)
     }
  }
  
@@ -112,6 +112,13 @@ index 82bd2fb..cf51c23 100644
 +extern unsigned int  romdev_pc_last_pc;
 +extern unsigned int  romdev_pc_hits;
 +
++/* romdev INSTRUCTION WATCHDOG (6510): force-stop after a budget of instructions
++ * so a runaway routine returns control with the final PC instead of hanging the
++ * WASM. State defined in maincpu.c; the hook lives in 6510core.c. */
++extern unsigned int  romdev_pc_wd_limit;
++extern unsigned int  romdev_pc_wd_count;
++extern volatile int  romdev_pc_watchdog;
++
 +void romdev_pcbreak_set(unsigned int addr, int enabled, int step)
 +{
 +   romdev_pc_addr = addr;
@@ -122,18 +129,31 @@ index 82bd2fb..cf51c23 100644
 +   romdev_pc_hit = 0;
 +   romdev_pc_last_pc = 0xFFFFFFFF;
 +   romdev_pc_hits = 0;
++   romdev_pc_watchdog = 0;
++   romdev_pc_wd_count = 0;
 +}
 +
-+/* Fills out5: [enabled, addr, hit, lastPC, hits]. Pass clearHit to re-arm. */
-+void romdev_pcbreak_get(unsigned int *out5, int clearHit)
++/* Fills out6: [enabled, addr, hit, lastPC, hits, watchdogTripped]. clearHit re-arms. */
++void romdev_pcbreak_get(unsigned int *out6, int clearHit)
 +{
-+   if (!out5) return;
-+   out5[0] = (unsigned int)romdev_pc_enabled;
-+   out5[1] = romdev_pc_addr;
-+   out5[2] = (unsigned int)romdev_pc_hit;
-+   out5[3] = romdev_pc_last_pc;
-+   out5[4] = romdev_pc_hits;
-+   if (clearHit) { romdev_pc_hit = 0; }
++   if (!out6) return;
++   out6[0] = (unsigned int)romdev_pc_enabled;
++   out6[1] = romdev_pc_addr;
++   out6[2] = (unsigned int)romdev_pc_hit;
++   out6[3] = romdev_pc_last_pc;
++   out6[4] = romdev_pc_hits;
++   out6[5] = (unsigned int)romdev_pc_watchdog;
++   if (clearHit) { romdev_pc_hit = 0; romdev_pc_watchdog = 0; romdev_pc_wd_count = 0; }
++}
++
++/* Arms the instruction watchdog: force-stop after `limit` instructions (limit
++ * 0 = disable). The host sets this before driving callSubroutine so a runaway
++ * codec returns control instead of hanging. */
++void romdev_watchdog_set(unsigned int limit)
++{
++   romdev_pc_wd_limit = limit;
++   romdev_pc_wd_count = 0;
++   romdev_pc_watchdog = 0;
 +}
 +
 +/* ─── romdev RE primitives round 2 (C64 6510) ─────────────────────────────────
@@ -231,7 +251,7 @@ index 82bd2fb..cf51c23 100644
  bool retro_load_game_special(unsigned type, const struct retro_game_info *info, size_t num)
  {
     (void)type;
-@@ -8810,17 +8998,105 @@ bool retro_unserialize(const void *data_, size_t size)
+@@ -8810,17 +9019,105 @@ bool retro_unserialize(const void *data_, size_t size)
     return false;
  }
  
@@ -345,7 +365,7 @@ diff --git a/vice/src/6510core.c b/vice/src/6510core.c
 index a109492..e7b41e9 100644
 --- a/vice/src/6510core.c
 +++ b/vice/src/6510core.c
-@@ -2374,6 +2374,42 @@ static const uint8_t rewind_fetch_tab[] = {
+@@ -2374,6 +2374,58 @@ static const uint8_t rewind_fetch_tab[] = {
  
          SET_LAST_ADDR(reg_pc);
  
@@ -359,6 +379,21 @@ index a109492..e7b41e9 100644
 +            && (unsigned int)reg_pc >= romdev_cov_lo
 +            && (unsigned int)reg_pc <= romdev_cov_hi) {
 +            romdev_cov_log((unsigned int)reg_pc);
++        }
++
++        /* romdev INSTRUCTION WATCHDOG (6510). Checked HERE, before the opcode
++         * fetch, so reg_pc is the address of the instruction about to execute.
++         * Counts dispatched instructions; on overflow, fire the breakpoint with
++         * the watchdog flag (freeze reg_pc, set romdev_pc_hit, clear
++         * retro_renderloop) so the host gets the final PC instead of hanging. */
++        if (romdev_pc_wd_limit && !romdev_pc_hit) {
++            if (++romdev_pc_wd_count >= romdev_pc_wd_limit) {
++                romdev_pc_last_pc = (unsigned int)reg_pc;  /* frozen, un-executed */
++                romdev_pc_hit = 1;
++                romdev_pc_watchdog = 1;
++                retro_renderloop = 0;      /* end retro_run's frame loop */
++                return;                    /* freeze: do NOT fetch/execute */
++            }
 +        }
 +
 +        /* romdev PC breakpoint / single-step (6510). Checked HERE, before the
@@ -392,7 +427,7 @@ diff --git a/vice/src/maincpu.c b/vice/src/maincpu.c
 index 14cf0b1..a757af1 100644
 --- a/vice/src/maincpu.c
 +++ b/vice/src/maincpu.c
-@@ -58,6 +58,87 @@
+@@ -58,6 +58,98 @@
  #define EXIT_FAILURE 1
  #endif
  
@@ -430,6 +465,17 @@ index 14cf0b1..a757af1 100644
 +volatile int  romdev_pc_hit      = 0;
 +unsigned int  romdev_pc_last_pc  = 0xFFFFFFFF;
 +unsigned int  romdev_pc_hits     = 0;
++
++/* romdev INSTRUCTION WATCHDOG (6510): a runaway routine (e.g. a codec fed a wrong
++ * arg that loops forever) can spin entirely inside a single maincpu_mainloop()
++ * call, so retro_run's frame loop never returns and the whole WASM hangs. The
++ * hook in 6510core.c counts dispatched instructions and force-stops (sets
++ * romdev_pc_hit + romdev_pc_watchdog, clears retro_renderloop) when the budget is
++ * exceeded — so a runaway returns control with the final PC intact instead of
++ * hanging. romdev_pc_wd_limit 0 = disabled. */
++unsigned int  romdev_pc_wd_limit = 0;       /* max instructions before force-stop (0 = off) */
++unsigned int  romdev_pc_wd_count = 0;       /* instructions executed since arm */
++volatile int  romdev_pc_watchdog = 0;       /* set when the watchdog tripped */
 +extern unsigned retro_renderloop;
 +
 +/* romdev RE round 2 (6510): RANGE watch (log every {pc,addr,value} in [lo,hi];
@@ -480,7 +526,7 @@ index 14cf0b1..a757af1 100644
  log_t maincpu_log = LOG_DEFAULT;
  
  /* MACHINE_STUFF should define/undef
-@@ -143,12 +224,36 @@ log_t maincpu_log = LOG_DEFAULT;
+@@ -143,12 +235,36 @@ log_t maincpu_log = LOG_DEFAULT;
  
  #ifndef STORE
  #define STORE(addr, value) \
@@ -519,7 +565,7 @@ index 14cf0b1..a757af1 100644
  #endif
  
  #ifndef STORE_ZERO
-@@ -292,6 +397,15 @@ mos6510dtv_regs_t maincpu_regs;
+@@ -292,6 +408,15 @@ mos6510dtv_regs_t maincpu_regs;
  mos6510_regs_t maincpu_regs;
  #endif
  
@@ -535,7 +581,7 @@ index 14cf0b1..a757af1 100644
  static int maincpu_jammed = 0;
  
  /* ------------------------------------------------------------------------- */
-@@ -530,9 +644,16 @@ void maincpu_mainloop(void)
+@@ -530,9 +655,16 @@ void maincpu_mainloop(void)
  #ifndef C64DTV
      /* Notice that using a struct for these would make it a lot slower (at
         least, on gcc 2.7.2.x).  */
@@ -555,7 +601,7 @@ index 14cf0b1..a757af1 100644
  #else
      static int reg_a_read_idx = 0;
      static int reg_a_write_idx = 0;
-@@ -565,8 +686,6 @@ void maincpu_mainloop(void)
+@@ -565,8 +697,6 @@ void maincpu_mainloop(void)
      } while (0);
  #define reg_y_read dtv_registers[reg_y_idx]
  #endif
@@ -564,7 +610,7 @@ index 14cf0b1..a757af1 100644
      static uint8_t flag_n = 0;
      static uint8_t flag_z = 0;
  #ifndef NEED_REG_PC
-@@ -639,7 +758,13 @@ if (!retro_mainloop)
+@@ -639,7 +769,13 @@ if (!retro_mainloop)
  
  #define GLOBAL_REGS maincpu_regs
  
@@ -578,7 +624,7 @@ index 14cf0b1..a757af1 100644
  
          maincpu_int_status->num_dma_per_opcode = 0;
  
-@@ -769,7 +894,13 @@ void maincpu_mainloop(void)
+@@ -769,7 +905,13 @@ void maincpu_mainloop(void)
  
  #define GLOBAL_REGS maincpu_regs
  

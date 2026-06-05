@@ -59,7 +59,7 @@ mv "$CORE_LIB" "${CORE_LIB%.bc}.a"; CORE_LIB="${CORE_LIB%.bc}.a"
 BP_EXPORTS=""
 # cwd here is $LIBRETRO (platforms/libretro); libretro.cpp holds the exports.
 grep -rq "romdev_pcbreak_get" . 2>/dev/null && \
-  BP_EXPORTS='"_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get",'
+  BP_EXPORTS='"_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_watchdog_set",'
 # RE primitives round 2 (register read/write + range-watch + PC-coverage) — added
 # by the same patch as the pcbreak hook, gated on the round-2 sentinel export.
 grep -rq "romdev_cov_get" . 2>/dev/null && \
@@ -84,3 +84,13 @@ emcc "$CORE_LIB" \
 
 echo "geargrafx_libretro staged at $OUT"
 ls -lh "$OUT/geargrafx_libretro."{js,wasm}
+
+# Also mirror into the local src/cores/wasm copy (transition / dev fallback the
+# registry uses when the package isn't resolvable) so a rebuild updates BOTH and
+# the dev tree never loads a stale local core.
+SRC_OUT="$PROJECT_DIR/src/cores/wasm"
+if [ -d "$SRC_OUT" ]; then
+  cp "$OUT/geargrafx_libretro.js"   "$SRC_OUT/geargrafx_libretro.js"
+  cp "$OUT/geargrafx_libretro.wasm" "$SRC_OUT/geargrafx_libretro.wasm"
+  echo "also staged into src/cores/wasm: $SRC_OUT"
+fi

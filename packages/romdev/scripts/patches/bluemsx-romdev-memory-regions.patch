@@ -28,6 +28,18 @@
 #   m68k template). romdev_pc_step is a per-instruction countdown the host arms to
 #   2 so single-step ADVANCES the PC.
 #
+# Instruction WATCHDOG (callSubroutine can't hang anymore):
+#   A standalone-driven routine (e.g. a decompressor fed a wrong arg) can loop
+#   FOREVER inside one r800Execute / retro_run frame, so the host's per-FRAME cap
+#   never runs and the whole WASM hangs. ROMDEV_WATCHDOG_CHECK (in Src/Z80/R800.c,
+#   FIRST in BOTH run loops, before the PC-break check) counts dispatched
+#   instructions and force-stops at romdev_pc_wd_limit — sets romdev_pc_hit +
+#   romdev_pc_watchdog and ends the frame the SAME way the PC-break does
+#   (terminate=1; break). libretro.c exports romdev_watchdog_set(limit) (the host
+#   arms it before callSubroutine; 0 = off) and pcbreak_get now reports the
+#   watchdog-tripped flag in out6[5]. Build script adds _romdev_watchdog_set to
+#   EXPORTED_FUNCTIONS via WD_EXPORTS.
+#
 # RE primitives round 2 (register read/write + range-watch + PC-coverage):
 #   Adds the cross-core RE round-2 exports to the Z80/R800 path. romdev_setreg/
 #   romdev_getreg map the STABLE Z80 reg-id convention (0=A 1=F 2=B 3=C 4=D 5=E
@@ -138,10 +150,10 @@ index cc6cbf5..8c1bab2 100644
  extern void RefreshScreen(int);
  
 diff --git a/Src/Z80/R800.c b/Src/Z80/R800.c
-index e3dd190..1d95d20 100644
+index e3dd190..ece6cb4 100644
 --- a/Src/Z80/R800.c
 +++ b/Src/Z80/R800.c
-@@ -42,6 +42,122 @@ static UInt8  ZSPXYTable[256];
+@@ -42,6 +42,152 @@ static UInt8  ZSPXYTable[256];
  static UInt8  ZSPHTable[256];
  static UInt16 DAATable[0x800];
  
@@ -162,6 +174,18 @@ index e3dd190..1d95d20 100644
 +volatile int  romdev_pc_hit     = 0;        /* set by the execute hook, cleared by the host */
 +unsigned int  romdev_pc_last_pc = 0xFFFFFFFF;
 +unsigned int  romdev_pc_hits    = 0;
++
++/* romdev INSTRUCTION WATCHDOG — the fix for "callSubroutine hung". A standalone-
++ * driven routine (e.g. a decompressor fed a slightly-wrong arg) can loop FOREVER
++ * inside a single r800Execute / retro_run frame, so the host's per-FRAME maxFrames
++ * never gets a turn and the whole WASM hangs. This counts dispatched instructions
++ * and force-stops (sets romdev_pc_hit + romdev_pc_watchdog) when the budget is
++ * exceeded — so a runaway returns control with the final PC intact instead of
++ * hanging. romdev_pc_wd_limit 0 = disabled. Checked in the SAME run-loop spot as
++ * the PC-break hook (ROMDEV_PCBREAK_CHECK), but FIRST. */
++unsigned int  romdev_pc_wd_limit = 0;       /* max instructions before force-stop (0 = off) */
++unsigned int  romdev_pc_wd_count = 0;       /* instructions executed since arm */
++volatile int  romdev_pc_watchdog = 0;       /* set when the watchdog tripped */
 +
 +/* READ watchpoint (data reads). */
 +unsigned int  romdev_rd_addr     = 0;
@@ -235,6 +259,24 @@ index e3dd190..1d95d20 100644
 +        romdev_cov_log((r800)->regs.PC.W); \
 +} while (0)
 +
++/* romdev INSTRUCTION WATCHDOG check: force-stop a runaway (the callSubroutine
++ * hang). Placed at the top of each run-loop iteration, BEFORE the PC-break check,
++ * so r800->regs.PC.W is the address about to dispatch. Counts dispatched
++ * instructions; on overflow it fires the breakpoint with the watchdog flag and
++ * ends the frame the SAME way the PC-break does (terminate=1; break) so the host
++ * gets the final PC instead of hanging. Cheap when disabled (one int test). */
++#define ROMDEV_WATCHDOG_CHECK(r800) do { \
++    if (romdev_pc_wd_limit && !romdev_pc_hit) { \
++        if (++romdev_pc_wd_count >= romdev_pc_wd_limit) { \
++            romdev_pc_last_pc = (r800)->regs.PC.W; \
++            romdev_pc_hit = 1; \
++            romdev_pc_watchdog = 1; \
++            (r800)->terminate = 1; \
++            break; \
++        } \
++    } \
++} while (0)
++
 +/* romdev PC breakpoint / single-step check. Placed at the top of each run-loop
 + * iteration, BEFORE the next opcode is fetched, so r800->regs.PC.W is the
 + * address about to execute. On a hit it freezes the CPU at that PC (the
@@ -264,7 +306,7 @@ index e3dd190..1d95d20 100644
  
  static void cb(R800* r800);
  static void dd(R800* r800);
-@@ -179,9 +295,25 @@ static void writePort(R800* r800, UInt16 port, UInt8 value) {
+@@ -179,9 +325,25 @@ static void writePort(R800* r800, UInt16 port, UInt8 value) {
  }
  
  static UInt8 readMem(R800* r800, UInt16 address) {
@@ -291,7 +333,7 @@ index e3dd190..1d95d20 100644
  }
  
  static UInt8 readOpcode(R800* r800, UInt16 address) {
-@@ -196,6 +328,19 @@ static UInt8 readOpcode(R800* r800, UInt16 address) {
+@@ -196,6 +358,19 @@ static UInt8 readOpcode(R800* r800, UInt16 address) {
  static void writeMem(R800* r800, UInt16 address, UInt8 value) {
      delayMem(r800);
      r800->cachePage = 0xffff;
@@ -311,20 +353,22 @@ index e3dd190..1d95d20 100644
      r800->writeMemory(r800->ref, address, value);
  
  #ifdef ENABLE_WATCHPOINTS
-@@ -6076,6 +6221,9 @@ void r800Execute(R800* r800) {
+@@ -6076,6 +6251,10 @@ void r800Execute(R800* r800) {
          }
  #endif
  
++        ROMDEV_WATCHDOG_CHECK(r800);
 +        ROMDEV_COV_CHECK(r800);
 +        ROMDEV_PCBREAK_CHECK(r800);
 +
          executeInstruction(r800, readOpcode(r800, r800->regs.PC.W++));
  
          if (r800->regs.halt)
-@@ -6169,9 +6317,12 @@ void r800ExecuteUntil(R800* r800, UInt32 endTime) {
+@@ -6169,9 +6348,13 @@ void r800ExecuteUntil(R800* r800, UInt32 endTime) {
          }
  #endif
  
++        ROMDEV_WATCHDOG_CHECK(r800);
 +        ROMDEV_COV_CHECK(r800);
 +        ROMDEV_PCBREAK_CHECK(r800);
 +
@@ -336,10 +380,10 @@ index e3dd190..1d95d20 100644
              r800->regs.iff1 >>= iff1;
          }
 diff --git a/libretro.c b/libretro.c
-index f583a99..64935c2 100644
+index f583a99..495def8 100644
 --- a/libretro.c
 +++ b/libretro.c
-@@ -1838,16 +1838,284 @@ unsigned retro_get_region(void)
+@@ -1838,16 +1838,301 @@ unsigned retro_get_region(void)
           return RETRO_REGION_NTSC;
     }
  }
@@ -402,6 +446,10 @@ index f583a99..64935c2 100644
 +extern unsigned int  romdev_pc_last_pc;
 +extern unsigned int  romdev_pc_hits;
 +
++extern unsigned int  romdev_pc_wd_limit;
++extern unsigned int  romdev_pc_wd_count;
++extern int           romdev_pc_watchdog;
++
 +extern unsigned int  romdev_rd_addr;
 +extern int           romdev_rd_enabled;
 +extern unsigned int  romdev_rd_last_pc;
@@ -425,18 +473,31 @@ index f583a99..64935c2 100644
 +   romdev_pc_hit = 0;
 +   romdev_pc_last_pc = 0xFFFFFFFF;
 +   romdev_pc_hits = 0;
++   romdev_pc_watchdog = 0;
++   romdev_pc_wd_count = 0;
 +}
 +
-+/* Fills out5: [enabled, addr, hit, lastPC, hits]. Pass clearHit to re-arm. */
-+void romdev_pcbreak_get(unsigned int *out5, int clearHit)
++/* Fills out6: [enabled, addr, hit, lastPC, hits, watchdogTripped]. clearHit re-arms. */
++void romdev_pcbreak_get(unsigned int *out6, int clearHit)
 +{
-+   if (!out5) return;
-+   out5[0] = (unsigned int)romdev_pc_enabled;
-+   out5[1] = romdev_pc_addr;
-+   out5[2] = (unsigned int)romdev_pc_hit;
-+   out5[3] = romdev_pc_last_pc;
-+   out5[4] = romdev_pc_hits;
-+   if (clearHit) { romdev_pc_hit = 0; }
++   if (!out6) return;
++   out6[0] = (unsigned int)romdev_pc_enabled;
++   out6[1] = romdev_pc_addr;
++   out6[2] = (unsigned int)romdev_pc_hit;
++   out6[3] = romdev_pc_last_pc;
++   out6[4] = romdev_pc_hits;
++   out6[5] = (unsigned int)romdev_pc_watchdog;
++   if (clearHit) { romdev_pc_hit = 0; romdev_pc_watchdog = 0; romdev_pc_wd_count = 0; }
++}
++
++/* Arm the instruction watchdog (force-stop a runaway after `limit` instructions;
++ * 0 = disable). The host sets this before driving callSubroutine so a runaway
++ * routine returns control instead of hanging. State + hook live in Src/Z80/R800.c. */
++void romdev_watchdog_set(unsigned int limit)
++{
++   romdev_pc_wd_limit = limit;
++   romdev_pc_wd_count = 0;
++   romdev_pc_watchdog = 0;
 +}
 +
 +/* READ watchpoint. */

@@ -2,6 +2,58 @@
 
 All notable changes to `romdev-mcp`. Dates are release dates.
 
+## 0.8.0
+
+The `callSubroutine` instruction **watchdog is now on every CPU core** — the
+0.7.0 hang-fix was the Genesis reference; this round fans the core-side hook out
+to the other ten CPUs so a runaway routine never hangs the WASM on any platform.
+Requires the bumped core packages.
+
+### Changed — watchdog on all cores
+- The instruction WATCHDOG (force-stop a runaway routine at a host-set budget,
+  return `{watchdog:true, finalPC, finalRegs}` instead of hanging `_retro_run`) is
+  now built into all eleven CPU cores: m68k+Z80 (gpgx, 0.7.0), 6502 (fceumm),
+  SM83 (gambatte), 65816 (snes9x), ARM7TDMI (mgba), 65C02 (handy), 6510 (vice),
+  6502 (prosystem), 6507 (stella2014), HuC6280 (geargrafx), Z80 (bluemsx). Each
+  core: a per-instruction counter in the CPU dispatch loop that, at the limit,
+  freezes the PC + sets the same `romdev_pc_hit` the breakpoint uses (so
+  `retro_run` drains the frame and returns), reports the trip as a 6th element of
+  `romdev_pcbreak_get`, and exports `romdev_watchdog_set`. mgba ends the frame via
+  a cycle-budget bump and NEVER `processEvents` (so the VBlank IRQ can't rewrite
+  the frozen PC). Why it must be in each core: WASM is single-threaded synchronous,
+  so a JS timeout can't interrupt a routine spinning inside one `_retro_run` frame.
+- `callSubroutine` / `decompressWith` now return progress-on-timeout (Blocker 1
+  from the decompress feedback) on EVERY platform, not just Genesis.
+- Verified per core with a dedicated watchdog test (an infinite-loop routine trips
+  the watchdog, reports `finalPC`, and does NOT hang). 593/593 green.
+
+## 0.7.0
+
+Reverse-engineering follow-ups from the NBA Jam (Genesis) agent's decompress
+feedback. Genesis reference for the hang-fix (the watchdog is a core hook — it
+fans out to every core in 0.8.0); the JS-layer fixes (watchDma, previewTileArt)
+are all-platform.
+
+### Added — `callSubroutine` no longer hangs (Blocker 1)
+- **Instruction watchdog** (`romdev_watchdog_set`, gpgx m68k): force-stops a
+  runaway routine (e.g. a codec fed a wrong A0 that loops forever) so it can't
+  hang `_retro_run`. `callSubroutine` arms it and on timeout returns PROGRESS —
+  `finalPC` (where it's stuck) + `finalRegs` (A0/A1/D0/D1/PC/SP) + `watchdog:true`
+  + a `reason` — instead of an opaque `returned:false`.
+- **`presetMemory`** param — seed RAM globals a codec reads before running it.
+- **`stopAtPC`** param — halt mid-routine and return the partial output.
+- **`maxInstructions`** param — the real (instruction-count) budget. Tail-call /
+  JMP-wrapper routines are handled (the final RTS is what's detected).
+
+### Changed
+- **`watchDma`** — `dedupe:true` collapses the per-frame VRAM refresh (7000+ events
+  → a handful + an `occurrences` count); `sourceFilter:'rom-only'|'ram-only'` drops
+  the RAM→VRAM sprite noise; adds `from:ROM/RAM` and `limit`. Fixes the token-cap
+  flood the agent hit twice.
+- **`previewTileArt`** — `byteOffset` param (preview straight from a raw DMA /
+  `findReferences` source) with an `alignmentWarning` + nearest-aligned offsets
+  when it isn't a multiple of the tile size — the silent-scramble trap.
+
 ## 0.6.0
 
 Reverse-engineering round 2 — the tools that collapse the two walls a real
