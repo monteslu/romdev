@@ -32,6 +32,7 @@ import { registerSymbolTools } from "./symbols.js";
 import { registerRomIdTools } from "./rom-id.js";
 import { registerDiffRomsTools } from "./diff-roms.js";
 import { registerFreeSpaceTools } from "./free-space.js";
+import { registerReinjectTools } from "./reinject.js";
 import { registerSpliceChrTools } from "./splice-chr.js";
 import { registerCartPartsTools } from "./cart-parts.js";
 import { registerPreviewTileTools } from "./preview-tile.js";
@@ -122,7 +123,7 @@ const CATEGORIES = [
     name: "assets",
     description: "Convert PNGs to platform tile formats, encode WAVs to BRR, scan ROMs to identify them.",
     useWhen: ["importing graphics or audio assets", "checking what a ROM file is"],
-    register: (s, z, k) => { registerAssetTools(s, z, k); registerAudioTools(s, z, k); registerRomIdTools(s, z, k); registerDiffRomsTools(s, z, k); registerFreeSpaceTools(s, z, k); registerSpliceChrTools(s, z, k); registerCartPartsTools(s, z, k); registerPreviewTileTools(s, z, k); registerFontMapTools(s, z, k); registerArtLoaderTools(s, z, k); registerSpritePipelineTools(s, z, k); registerLospecTools(s, z, k); registerMetaSpriteTools(s, z, k); },
+    register: (s, z, k) => { registerAssetTools(s, z, k); registerAudioTools(s, z, k); registerRomIdTools(s, z, k); registerDiffRomsTools(s, z, k); registerFreeSpaceTools(s, z, k); registerReinjectTools(s, z, k); registerSpliceChrTools(s, z, k); registerCartPartsTools(s, z, k); registerPreviewTileTools(s, z, k); registerFontMapTools(s, z, k); registerArtLoaderTools(s, z, k); registerSpritePipelineTools(s, z, k); registerLospecTools(s, z, k); registerMetaSpriteTools(s, z, k); },
   },
   {
     name: "project",
@@ -329,6 +330,7 @@ const TOOL_OWNER = {
   identifyRom: "assets",
   listRoms: "assets", patchRom: "assets", patchFile: "assets", validateRom: "assets",
   assembleSnippet: "assets", diffRoms: "assets", findFreeSpace: "assets", spliceCHR: "assets",
+  findPointerTo: "assets", makeStoredBlock: "assets", relocateBlock: "assets",
   extractCart: "assets", wrapRomFromParts: "assets",
   previewTileArt: "assets",
   learnFontMap: "assets", encodeTextForRom: "assets", findEncodedText: "assets",

@@ -154,6 +154,37 @@ pushes a sentinel return, and runs until it returns. Most of these formats have 
 you can usually craft a replacement by hand. (sandbox:false leaves the dest buffer
 live for readMemory; sandbox:true restores the game untouched.)
 
+## 5e. Re-inject an edited asset — the round-trip (don't reimplement the compressor)
+
+Once you can SEE the decompressed bytes (5c) and you've edited them, put them BACK
+in a form the game accepts — without writing an encoder:
+
+```
+makeStoredBlock({ platform, rawHex, format })  → bytes the game's OWN decompressor
+                                                  expands VERBATIM (literal/raw escape)
+findFreeSpace({ path })                        → an unused $FF/$00 run to write into
+relocateBlock({ path, newHex, toOffset,        → write the block to free space AND
+               pointerOffset })                  repoint the loader's pointer at it
+findPointerTo({ path, romOffset })             → find that pointer in the first place
+```
+
+- **`makeStoredBlock`** uses the format's stored/literal escape: GBA BIOS LZ77,
+  SNES LC_LZ2 (direct-copy), SMS/MSX RLE, NES PackBits, or `raw` (no wrapper) for
+  the many systems that store graphics uncompressed (Lynx/2600/7800, often PCE,
+  NES CHR-ROM). It honestly REFUSES Nemesis (Genesis Huffman) and C64 crunchers —
+  those have no hand-authorable stored block; decompress→edit→re-crunch instead.
+  Kosinski is offered but EXPERIMENTAL — always verify.
+- **Verify the stored block** by running the game's own decompressor on it with
+  `callSubroutine({ pc: codecEntryPC, regs: { A0: yourBlockAddr, A1: destAddr } })`
+  and comparing the output to your payload. (This is exactly the 5c step in reverse;
+  it's how you confirm the format guess before you ship the patch.)
+- **`findPointerTo`** computes the platform-correct pointer encoding (Genesis 32-bit
+  BE = ROM offset; SNES 16/24-bit LE via LoROM/HiROM; GBA 0x08000000+offset; banked
+  8-bit 16-bit-LE CPU addresses) and scans the ROM. On banked systems a 16-bit hit
+  is page-ambiguous — pair it with the nearby bank-set instruction.
+- **`relocateBlock`** with `dryRun:true` previews the writes before touching the file.
+  The safe move when your edit changed size (can't fit in place).
+
 ## 5d. Find the UNKNOWN routine — discovery (the other half)
 
 Breakpoints are great once you KNOW the address. To FIND it:
@@ -201,6 +232,8 @@ transition.
 | Single-step the CPU | `stepInstruction` (+ `getCPUState` to watch regs) |
 | Set a CPU register | `setRegister({regId, value})` |
 | Decompress a compressed asset | `decompressWith` / `callSubroutine` (run the ROM's own codec) |
+| Re-inject edited bytes the game accepts | `makeStoredBlock` (verbatim-expand block) → `findFreeSpace` → `relocateBlock` |
+| Find the pointer that loads an asset | `findPointerTo({romOffset})` |
 | FIND the unknown routine touching X | `watchRange({start,end})` (all hits) / `logPCRange` (coverage) |
 | Which DMA wrote a VRAM tile + its source (Genesis) | `watchDma({vramDest})` |
 | Where did a VRAM graphic come from (Genesis) | `traceVramSource` (ROM offset of the DMA source) |
