@@ -905,56 +905,20 @@ export function registerDisasmTools(server, z) {
 
       let asm;
       let exitCode = 0;
-      if (cpuFamily === "m68k") {
-        // Prefer the native binutils m68k objdump (complete ISA, no .dc.w
-        // gaps / stream desync). Fall back to the pure-JS decoder only if the
-        // objdump WASM isn't resolvable (dev checkout without the package).
+      // Non-6502 CPUs disassemble through the native binutils objdump for that
+      // ISA (m68k / arm+thumb / z80 / gbz80). The objdump WASM ships in the
+      // matching toolchain package (a hard dependency), so it's always present.
+      if (cpuFamily === "m68k" || cpuFamily === "arm" || cpuFamily === "z80" || cpuFamily === "sm83") {
         const { runObjdump, objdumpAvailable } = await import("../../toolchains/objdump.js");
-        if (objdumpAvailable("m68k")) {
-          const r = await runObjdump({ bytes: mapped.bytes, arch: "m68k", startAddress });
-          asm = r.asm; exitCode = r.exitCode;
-        } else {
-          const { runM68kdasm } = await import("../../toolchains/m68kdasm.js");
-          const r = runM68kdasm({ bytes: mapped.bytes, startAddress });
-          asm = r.asm; exitCode = r.exitCode;
+        const arch = cpuFamily === "arm" ? (args.thumb ? "thumb" : "arm")
+          : cpuFamily === "sm83" ? "gbz80"
+          : cpuFamily; // m68k / z80
+        if (!objdumpAvailable(arch)) {
+          throw new Error(`disassembly needs the ${arch} objdump WASM (in the matching romdev toolchain package). Reinstall the toolchain package.`);
         }
-        if (labels.length > 0) asm = injectVectorLabels(asm, labels);
-      } else if (cpuFamily === "arm") {
-        // GBA = ARM7TDMI. Native binutils ARM objdump (ships in
-        // romdev-platform-gba). `thumb:true` switches to the Thumb decoder.
-        const { runObjdump, objdumpAvailable } = await import("../../toolchains/objdump.js");
-        const archMode = args.thumb ? "thumb" : "arm";
-        if (!objdumpAvailable(archMode)) {
-          throw new Error("GBA disassembly needs the ARM objdump WASM (romdev-platform-gba). Install/build it, or use external arm-none-eabi-objdump.");
-        }
-        const r = await runObjdump({ bytes: mapped.bytes, arch: archMode, startAddress });
+        const r = await runObjdump({ bytes: mapped.bytes, arch, startAddress });
         asm = r.asm; exitCode = r.exitCode;
-      } else if (cpuFamily === "z80") {
-        // SMS/GG/MSX = Z80. Prefer native binutils z80 objdump (fixes the
-        // (ix+d)/(iy+d) displacement display + edge cases); JS fallback.
-        const { runObjdump, objdumpAvailable } = await import("../../toolchains/objdump.js");
-        if (objdumpAvailable("z80")) {
-          const r = await runObjdump({ bytes: mapped.bytes, arch: "z80", startAddress });
-          asm = r.asm; exitCode = r.exitCode;
-        } else {
-          const { runZ80dasm } = await import("../../toolchains/z80dasm.js");
-          const r = runZ80dasm({ bytes: mapped.bytes, startAddress });
-          asm = r.asm; exitCode = r.exitCode;
-        }
-        if (labels.length > 0) asm = injectVectorLabels(asm, labels);
-      } else if (cpuFamily === "sm83") {
-        // GB/GBC = SM83 (LR35902). binutils' z80 objdump handles it via the
-        // gbz80 machine (full INSS_GBZ80 support); JS fallback otherwise.
-        const { runObjdump, objdumpAvailable } = await import("../../toolchains/objdump.js");
-        if (objdumpAvailable("gbz80")) {
-          const r = await runObjdump({ bytes: mapped.bytes, arch: "gbz80", startAddress });
-          asm = r.asm; exitCode = r.exitCode;
-        } else {
-          const { runSm83dasm } = await import("../../toolchains/sm83dasm.js");
-          const r = runSm83dasm({ bytes: mapped.bytes, startAddress });
-          asm = r.asm; exitCode = r.exitCode;
-        }
-        if (labels.length > 0) asm = injectVectorLabels(asm, labels);
+        if (labels.length > 0 && cpuFamily !== "arm") asm = injectVectorLabels(asm, labels);
       } else {
         if (labels.length > 0 || dataRangesInWindow.length > 0 || mapped.cpu !== "6502") {
           info = buildInfoFile({
