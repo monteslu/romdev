@@ -30,6 +30,15 @@ and a cleaner package split.
 - **ROM-hacking playbook** — cross-platform RE/patching decision tree, readable via
   `getPlatformDoc({platform:'romhacking', name:'playbook'})`.
 
+### Added — homebrew / asset import (Genesis platformer session feedback)
+- **`wavToXgm2Pcm`** — convert a WAV (or raw s16le PCM) into a Genesis XGM2 PCM
+  sample: 8-bit signed mono, 13.3 kHz (or 6.65 half-rate), 256-byte-padded, plus a
+  256-aligned C array + `<NAME>_LEN` define ready to `#include` and `XGM2_playPCM`.
+  Bakes in the fiddly sign/rate/alignment/padding rules.
+- **`convertImageToTiles`** now takes `pngPath` (reads the PNG from disk — no base64
+  token cost or hand-forwarding corruption) and `tileOrder:'sprite'` (column-major,
+  the order multi-cell hardware sprites read on Genesis/Lynx).
+
 ### Added — platforms / data
 - **PC Engine** and **MSX** cheat-database coverage (397 + 377 games).
 - **`romdev_game_codes`** — the cheat database is now its own package (lazy-loaded one
@@ -48,10 +57,16 @@ and a cleaner package split.
 - **`screenshot`** with `inline:true` now also writes a temp PNG and returns its
   path, so follow-up ImageMagick crops don't ENOENT.
 - **`gameCheats`** fuzzy-matches a ROM name to the DB (region/revision tag tolerant).
+- **`imageToTilemap`** (Genesis) now warns when a visible dominant color is forced
+  to palette index 0 (transparent on a scroll plane → renders as the backdrop).
 
 ### Fixed
 - **Genesis CRAM color decode** — colors rendered blue-on-black; the decoder now
   reads the packed 9-bit little-endian CRAM correctly.
+- **Genesis `inspectSprites` size/position** — a 32×32 sprite decoded as 8×8 (and
+  x/y/tile/palette could be wrong) because the SAT words were read big-endian;
+  gpgx stores VRAM host-little-endian (byte-swapped). Fixed in the live sprite,
+  plane-preview, and which-tiles decoders.
 
 ## 0.2.0
 

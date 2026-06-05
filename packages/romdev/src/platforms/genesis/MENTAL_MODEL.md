@@ -169,10 +169,26 @@ SND_PSG_*  // legacy 4-channel PSG playback
 Hand-rolling YM2612 register pokes is possible but rarely worth it
 unless you're building a music engine.
 
+**Sampled SFX (PCM):** XGM2 plays 8-bit signed PCM samples on its PCM channels
+(`XGM2_playPCM(sample, len, SOUND_PCM_CH1)` /
+`XGM2_playPCMEx(..., priority, halfRate, loop)`). The sample format is strict and
+easy to botch by hand — let **`wavToXgm2Pcm`** do it (path in → ready C array +
+`<NAME>_LEN` out). The rules it enforces:
+- **8-bit SIGNED** mono (not unsigned — a wrong sign is silent garbage).
+- **13.3 kHz** native, or **6.65 kHz** with `halfRate` (then play with
+  `XGM2_playPCMEx(..., TRUE, ...)`).
+- length padded to a **multiple of 256 bytes** (zero = silence).
+- the sample buffer must be **256-byte aligned** in ROM —
+  `__attribute__((aligned(256)))` (the emitted C does this for you).
+
 **Debugging sound:** `getAudioState({chip:"ym2612"})` returns a raw-blob snapshot
 of the FM chip (gpgx's struct isn't safely per-channel decodable — useful for
 frame-to-frame diffing), and `getAudioState({chip:"psg"})` decodes the SN76489
-(3 tone + 1 noise channel state, same chip as SMS/GG).
+(3 tone + 1 noise channel state, same chip as SMS/GG). To check a sample actually
+played, `recordAudio` writes a WAV you (a human) can listen to — there is **no**
+headless per-PCM-channel "is it playing" readout for Genesis yet (it would need a
+core patch to expose the XGM2 Z80 driver state), so audio verification here is
+record-and-listen, not assert.
 
 ## ROM layout
 

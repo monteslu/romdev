@@ -56,13 +56,81 @@ export function registerAudioTools(server, z, sessionKey) {
   // their game's needs.)
 
   server.tool(
+    "wavToXgm2Pcm",
+    "Convert an external WAV (or raw s16le PCM) clip into a GENESIS XGM2 PCM sample — the exact format SGDK's " +
+    "XGM2 driver plays with XGM2_playPCM/XGM2_playPCMEx. Bakes in the fiddly rules so you don't botch them: " +
+    "8-bit SIGNED mono, resampled to 13.3 kHz (or 6.65 kHz with halfRate:true), length zero-padded to a multiple " +
+    "of 256 bytes. " +
+    "By default it also emits a ready-to-#include C array (`__attribute__((aligned(256)))` — the buffer MUST be " +
+    "256-byte aligned in ROM) plus a `<NAME>_LEN` define, so you just #include it and call " +
+    "`XGM2_playPCM(name, NAME_LEN, SOUND_PCM_CH1)`. " +
+    "Input: `wavPath` (a .wav on disk — preferred) or `wavBase64`; for headerless audio pass `format:'pcm16'` + " +
+    "`pcmRate`. Output: pass `outputCPath` to write a .c file (returns the path), or get `cSource` inline; the raw " +
+    "`pcmBase64`/`pcmPath` (just the bytes) is also available if you'd rather bintos it yourself.",
+    {
+      wavPath: z.string().optional().describe("Absolute path to a .wav file (preferred — server reads it, no base64 cost)."),
+      wavBase64: z.string().optional().describe("Base64-encoded WAV bytes (use wavPath when on disk)."),
+      name: z.string().default("pcm_sample").describe("C identifier for the emitted array (e.g. 'sfx_jump'). The length define is <NAME>_LEN."),
+      halfRate: z.boolean().default(false).describe("Encode for 6.65 kHz (XGM2_playPCMEx halfRate=TRUE) instead of the 13.3 kHz native rate. Halves ROM size at lower fidelity."),
+      format: z.enum(["wav", "pcm16"]).default("wav").describe("'wav' (default) parses the RIFF header. 'pcm16' = raw 16-bit signed LE mono — then pass pcmRate."),
+      pcmRate: z.number().int().min(1).optional().describe("Source sample rate (Hz) — REQUIRED for format:'pcm16' so it can resample to the XGM2 rate."),
+      outputCPath: z.string().optional().describe("Write the C source (array + LEN define) to this absolute path and return path-only."),
+      outputPcmPath: z.string().optional().describe("Also/instead write the raw padded PCM bytes (.pcm) here."),
+    },
+    safeTool(async ({ wavPath, wavBase64, name, halfRate, format, pcmRate, outputCPath, outputPcmPath }) => {
+      const { wavToXgm2Pcm, emitXgm2PcmC } = await import("../../platforms/genesis/xgm2-pcm.js");
+      let inputBytes;
+      if (wavPath) inputBytes = await readFile(wavPath);
+      else if (wavBase64) inputBytes = Buffer.from(wavBase64, "base64");
+      else throw new Error("wavToXgm2Pcm: pass wavPath (preferred) or wavBase64.");
+
+      const r = wavToXgm2Pcm(inputBytes, { halfRate, format, pcmRate });
+      const cSource = emitXgm2PcmC(r.pcm, name, r.rate);
+      const meta = {
+        platform: "genesis",
+        name,
+        rate: r.rate,
+        sourceRate: r.sourceRate,
+        sampleCount: r.sampleCount,
+        paddedBytes: r.paddedBytes,
+        durationSeconds: Math.round(r.durationSeconds * 1000) / 1000,
+        lenDefine: `${name.toUpperCase()}_LEN`,
+        note: `8-bit signed mono @ ${r.rate} Hz, padded to ${r.paddedBytes} B (256-aligned). ` +
+          `#include the C, then XGM2_playPCM(${name}, ${name.toUpperCase()}_LEN, SOUND_PCM_CH1)` +
+          (halfRate ? " — encoded HALF-RATE, play with XGM2_playPCMEx(..., /*halfRate*/TRUE, ...)." : "."),
+      };
+      const out = { ...meta };
+      if (outputCPath) {
+        await mkdir(path.dirname(outputCPath), { recursive: true });
+        await writeFile(outputCPath, cSource);
+        out.cPath = outputCPath;
+      } else {
+        out.cSource = cSource;
+      }
+      if (outputPcmPath) {
+        await mkdir(path.dirname(outputPcmPath), { recursive: true });
+        await writeFile(outputPcmPath, Buffer.from(r.pcm));
+        out.pcmPath = outputPcmPath;
+      } else if (outputCPath) {
+        // C went to disk; also offer the raw bytes inline (small after padding).
+        out.pcmBase64 = Buffer.from(r.pcm).toString("base64");
+      }
+      return jsonContent(out);
+    }),
+  );
+
+  server.tool(
     "recordAudio",
     "Capture audio output from the currently running emulator and write it as a WAV file. " +
     "Steps the emulator for `frames` frames while accumulating the audio samples it emits, " +
     "then drains the buffer to a 16-bit signed stereo WAV. Useful for: 'did my SFX actually " +
     "play?' debugging (record, listen, hear silence or beep), regression-testing audio " +
     "across builds, capturing audio for non-realtime analysis. Sample rate is whatever the " +
-    "core emits — typically 32000 Hz (SNES SPC), 48000 Hz (most cores), or 44100 (some).",
+    "core emits — typically 32000 Hz (SNES SPC), 48000 Hz (most cores), or 44100 (some). " +
+    "NOTE: a WAV is for a HUMAN to HEAR — an agent can't listen to it. To programmatically " +
+    "ASSERT a chip is doing something, use getAudioState (per-channel register decode on the " +
+    "12 systems with a sound chip). Caveat: getAudioState does NOT yet expose Genesis XGM2 " +
+    "PCM-channel activity, so 'did this sampled SFX fire' on Genesis is still record-and-listen.",
     {
       frames: z.number().int().min(1).max(60000).default(180).describe("How many emulator frames to capture. 60 = 1 second at NTSC."),
       path: z.string().describe("Absolute path to write the WAV file to."),
