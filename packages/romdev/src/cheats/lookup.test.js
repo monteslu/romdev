@@ -74,3 +74,43 @@ test("lookupCheats: unsupported/absent platform index → graceful none", async 
   assert.equal(r.matched, false);
   assert.equal(r.confidence, "none");
 });
+
+// ── Fuzzy game-name matching (the NBA Jam TE regression) ──────────────────
+// A client's ROM "NBA Jam - Tournament Edition (World) (Rev A)" / a (USA) dump /
+// the abbreviation failed to match even though the entry IS in the DB under
+// "NBA Jam - Tournament Edition (World)". Exact match was too brittle; the fuzzy
+// fallback (tag-stripped token overlap) must catch these.
+import { searchCheatGames } from "./lookup.js";
+
+test("lookupCheats: fuzzy-matches NBA Jam TE name variants to the real DB entry", async () => {
+  for (const name of [
+    "NBA Jam Tournament Edition",                    // missing hyphen + region
+    "NBA Jam - Tournament Edition (USA, Europe)",     // different region tag
+    "NBA Jam - Tournament Edition (World) (Rev A)",   // extra revision tag
+  ]) {
+    const r = await lookupCheats({ platform: "genesis", romName: name });
+    assert.equal(r.matched, true, `should fuzzy-match "${name}"`);
+    assert.match(r.game, /NBA Jam - Tournament Edition/);
+    assert.ok(r.entries && r.entries.length > 0, "should return the cheat entries");
+    assert.equal(r.confidence, "fuzzy");
+  }
+});
+
+test("lookupCheats: an exact name still matches as 'name' (not downgraded to fuzzy)", async () => {
+  const r = await lookupCheats({ platform: "genesis", romName: "NBA Jam - Tournament Edition (World)" });
+  assert.equal(r.matched, true);
+  assert.equal(r.confidence, "name");
+});
+
+test("searchCheatGames: fuzzy query ranks the right game first, no full-DB dump", async () => {
+  const r = await searchCheatGames({ platform: "genesis", query: "nba jam tournament" });
+  assert.ok(r.matches.length > 0, "should return candidates");
+  assert.match(r.matches[0].game, /NBA Jam - Tournament Edition/);
+  assert.ok(r.matches[0].cheats > 0, "candidate should report its cheat count");
+  assert.ok(r.matches.length <= 12, "must not dump the whole DB");
+});
+
+test("searchCheatGames: a nonsense query returns no matches, not garbage", async () => {
+  const r = await searchCheatGames({ platform: "genesis", query: "zzqxqzznotagame" });
+  assert.equal(r.matches.length, 0);
+});
