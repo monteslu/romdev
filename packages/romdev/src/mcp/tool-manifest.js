@@ -23,6 +23,8 @@ export const MERGE_MAP = {
   cheats: { absorbs: ["gameCheats", "searchCheats", "applyCheat", "clearCheats", "makeCheat"], axis: "op" },
   // ── text (custom-font learn/encode/find for romhacking) ──
   text: { absorbs: ["learnFontMap", "encodeTextForRom", "findEncodedText"], axis: "op" },
+  // ── symbols (name↔addr, memory map, PC→symbol). buildSourceWithDebug stays for `build`. ──
+  symbols: { absorbs: ["resolveSymbol", "lookupAddress", "getMemoryMap", "listSymbols", "addressToSymbol"], axis: "op" },
 };
 
 /** Every OLD tool name that the consolidation removes (absorbed into a new tool). */

@@ -9,6 +9,7 @@
 
 import { writeFileSync } from "node:fs";
 import { jsonContent, safeTool, writeOutput } from "../util.js";
+import { addressToSymbolCore } from "./address-to-symbol.js";
 
 // Tail length kept inline when a big log is written to a sibling file.
 const LOG_TAIL = 1200;
@@ -180,14 +181,13 @@ export function registerSymbolTools(server, z) {
     }),
   );
 
-  server.tool(
-    "resolveSymbol",
-    "Look up the memory address of a C or assembly symbol in a cc65 .dbg file. C symbols (e.g. 'score') become '_score' in the .dbg, so try both spellings. Returns the address (decimal) and a few neighbors for context.",
-    {
-      dbg: z.string().describe("Contents of the .dbg file (from buildSourceWithDebug)."),
-      name: z.string().describe("Symbol name to look up."),
-    },
-    safeTool(async ({ dbg, name }) => {
+  registerSymbolsTool(server, z);
+}
+
+// ── *Core functions for the `symbols` tool ──
+
+/** op:'resolve' — symbol name → address in a cc65 .dbg. */
+export async function resolveSymbolCore({ dbg, name }) {
       const { parseDbg, DbgIndex } = await import("../../toolchains/cc65/dbgparse.js");
       const idx = new DbgIndex(parseDbg(dbg));
       const addr = idx.addressOf(name);
@@ -195,56 +195,41 @@ export function registerSymbolTools(server, z) {
         const cAlt = "_" + name;
         const a2 = idx.addressOf(cAlt);
         if (a2 !== null) {
-          return jsonContent({
+          return {
             name: cAlt,
             address: a2,
             hex: "$" + a2.toString(16).padStart(4, "0").toUpperCase(),
             note: `Resolved as cc65 C symbol '${cAlt}' (you asked for '${name}').`,
-          });
+          };
         }
       }
       if (addr === null) {
         throw new Error(`no symbol named '${name}' in this .dbg`);
       }
-      return jsonContent({
+      return {
         name,
         address: addr,
         hex: "$" + addr.toString(16).padStart(4, "0").toUpperCase(),
-      });
-    }),
-  );
+      };
+}
 
-  server.tool(
-    "lookupAddress",
-    "Find the symbol whose value is closest at-or-below the given address — i.e. 'which function/variable does this address fall inside?'.",
-    {
-      dbg: z.string(),
-      address: z.number().int().min(0),
-    },
-    safeTool(async ({ dbg, address }) => {
+/** op:'lookup' — address → the symbol whose value is closest at-or-below it (cc65 .dbg). */
+export async function lookupAddressCore({ dbg, address }) {
       const { parseDbg, DbgIndex } = await import("../../toolchains/cc65/dbgparse.js");
       const idx = new DbgIndex(parseDbg(dbg));
       const sym = idx.symbolAt(address);
       if (!sym) throw new Error(`no symbol at-or-below address ${address}`);
-      return jsonContent({
+      return {
         address,
         hex: "$" + address.toString(16).padStart(4, "0").toUpperCase(),
         symbol: sym.name,
         symbolAddress: sym.addr,
         offset: address - sym.addr,
-      });
-    }),
-  );
+      };
+}
 
-  server.tool(
-    "getMemoryMap",
-    "Categorized layout of where the linker placed your variables and code. Groups symbols by memory region (zeropage / system RAM / code / data) and lists each one with its address. Use this AFTER buildSourceWithDebug to find out where your variables landed — saves you from probing system_ram empirically. Accepts EITHER a cc65 `.dbg` (NES, C64, Atari 7800, Lynx, PCE) via `dbg`, OR an sdld `.map` (the Z80 family: GB, GBC, SMS, GG, MSX) via `map` — pass whichever buildSourceWithDebug returned (the `symbols` field on SDCC builds IS the .map). NES example: cc65 reserves zeropage bytes $00-$01 for its runtime, so your first .res variable lands at $02.",
-    {
-      dbg: z.string().optional().describe("Contents of the cc65 `.dbg` file (NES/C64/Atari7800/Lynx/PCE builds). Pass this OR `map`."),
-      map: z.string().optional().describe("Contents of the sdld `.map` file (GB/GBC/SMS/GG/MSX builds — it's the `symbols` field from buildSourceWithDebug). Pass this OR `dbg`."),
-      platform: z.string().optional().describe("Platform id — adds region labels (zeropage, system RAM, etc.) per platform conventions."),
-    },
-    safeTool(async ({ dbg, map, platform }) => {
+/** op:'map' — categorized layout of where the linker placed code+vars (cc65 .dbg OR sdld .map). */
+export async function getMemoryMapCore({ dbg, map, platform }) {
       // Per-platform region boundaries (CPU memory map). cc65 6502 targets +
       // the Z80 family (SDCC) — both keyed the same way.
       const regionsByPlatform = {
@@ -308,7 +293,7 @@ export function registerSymbolTools(server, z) {
         });
       }
 
-      return jsonContent({
+      return {
         platform: platform ?? null,
         format,
         regions: regions.map((r) => ({
@@ -317,22 +302,15 @@ export function registerSymbolTools(server, z) {
         })),
         symbolsByRegion: grouped,
         totalSymbols: all.length,
-      });
-    }),
-  );
+      };
+}
 
-  server.tool(
-    "listSymbols",
-    "List every symbol with an address in a cc65 .dbg, sorted by address. Useful for getting an overview of memory layout — where CODE, BSS, and individual variables live.",
-    {
-      dbg: z.string(),
-      max: z.number().int().min(1).max(10000).default(200).describe("Maximum number of symbols to return."),
-    },
-    safeTool(async ({ dbg, max }) => {
+/** op:'list' — every symbol with an address in a cc65 .dbg, sorted by address. */
+export async function listSymbolsCore({ dbg, max = 200 }) {
       const { parseDbg, DbgIndex } = await import("../../toolchains/cc65/dbgparse.js");
       const idx = new DbgIndex(parseDbg(dbg));
       const all = idx.listSymbols();
-      return jsonContent({
+      return {
         total: all.length,
         returned: Math.min(max, all.length),
         symbols: all.slice(0, max).map((s) => ({
@@ -341,7 +319,48 @@ export function registerSymbolTools(server, z) {
           hex: "$" + s.addr.toString(16).padStart(4, "0").toUpperCase(),
           kind: s.kind,
         })),
-      });
+      };
+}
+
+function registerSymbolsTool(server, z) {
+  server.tool(
+    "symbols",
+    "Symbol/linker-map lookups for C/asm-built ROMs — resolve names ↔ addresses and see the memory layout. " +
+    "`op`: 'resolve' | 'lookup' | 'map' | 'list' | 'addr'.\n" +
+    "'resolve' (name→address, cc65 .dbg): C symbols become '_score' in the .dbg, so try both spellings.\n" +
+    "'lookup' (address→symbol, cc65 .dbg): which function/variable does this address fall inside?\n" +
+    "'map' (categorized layout): groups symbols by memory region (zeropage / system RAM / code / data) so you find " +
+    "where your variables landed without probing system_ram. Accepts a cc65 `.dbg` (NES/C64/Atari7800/Lynx/PCE) " +
+    "OR an sdld `.map` (GB/GBC/SMS/GG/MSX — the `symbols` field on SDCC builds). NES: cc65 reserves ZP $00-$01, so " +
+    "your first .res variable lands at $02.\n" +
+    "'list' (cc65 .dbg): every symbol sorted by address — a layout overview.\n" +
+    "'addr' (PC→nearest preceding symbol from a .map/.sym): closes 'getCPUState gave me $01A7 — which C function?'. " +
+    "Pass `symbolsText` (inline, from build({includeSymbols:true})) or `symbolsPath`. Auto-detects sdld " +
+    "(`XXXX  _name`) and ld65 VICE (`al XXXX .name`).",
+    {
+      op: z.enum(["resolve", "lookup", "map", "list", "addr"]).describe("resolve name→addr; lookup addr→sym; map = layout by region; list all; addr = PC→nearest symbol."),
+      // cc65 .dbg ops
+      dbg: z.string().optional().describe("op=resolve/lookup/list, and op=map (cc65 path): contents of the .dbg file from build({output:'romWithDebug'})."),
+      name: z.string().optional().describe("op=resolve: the symbol name to look up."),
+      address: z.number().int().min(0).optional().describe("op=lookup: the address to find the enclosing symbol for."),
+      max: z.number().int().min(1).max(10000).default(200).describe("op=list: maximum symbols to return."),
+      // map (also takes dbg above)
+      map: z.string().optional().describe("op=map (SDCC path): contents of the sdld .map file (GB/GBC/SMS/GG/MSX). Pass this OR dbg."),
+      platform: z.string().optional().describe("op=map: platform id — adds region labels per platform conventions."),
+      // addr
+      pc: z.number().int().min(0).max(0xFFFFFF).optional().describe("op=addr: CPU address to look up (e.g. 0x01A7)."),
+      symbolsText: z.string().optional().describe("op=addr: inline .map/.sym text (from build response.symbols)."),
+      symbolsPath: z.string().optional().describe("op=addr: absolute path to a .map/.sym file. Mutually exclusive with symbolsText."),
+    },
+    safeTool(async (args) => {
+      switch (args.op) {
+        case "resolve": return jsonContent(await resolveSymbolCore(args));
+        case "lookup":  return jsonContent(await lookupAddressCore(args));
+        case "map":     return jsonContent(await getMemoryMapCore(args));
+        case "list":    return jsonContent(await listSymbolsCore(args));
+        case "addr":    return jsonContent(await addressToSymbolCore(args));
+        default: throw new Error(`symbols: unknown op '${args.op}'`);
+      }
     }),
   );
 }
