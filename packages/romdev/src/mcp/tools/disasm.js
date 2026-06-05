@@ -672,7 +672,7 @@ export function registerDisasmTools(server, z) {
     "use `disassemble`.) See param hints for the rest.",
     {
       path: z.string().describe("Absolute path to a ROM file (.nes / .sfc / .smc / .gba)."),
-      platform: z.enum(["nes", "snes", "sms", "gg", "gb", "gbc", "atari2600", "atari7800", "c64", "genesis", "gba", "pce", "msx"]).optional().describe("Override platform detection. Omit to sniff from file extension."),
+      platform: z.enum(["nes", "snes", "sms", "gg", "gb", "gbc", "atari2600", "atari7800", "c64", "genesis", "gba", "pce", "msx", "lynx"]).optional().describe("Override platform detection. Omit to sniff from file extension."),
       bank: z.number().int().min(0).max(255).optional().describe("Which switchable ROM bank to map into the banked slot before disassembling. NES (mapper>0): maps 16KB PRG bank N at $8000-$BFFF (a $C000+ startAddress still reads the fixed top bank). GB/GBC: maps the bank at $4000-$7FFF (default bank 1). Lets you disassemble UxROM/MMC1/MMC3 bank N without slicing the ROM by hand."),
       thumb: z.boolean().default(false).describe("GBA only: disassemble as THUMB (16-bit) code instead of ARM (32-bit). GBA code mixes both; pass true for a region you know is Thumb."),
       startAddress: z.number().int().min(0).max(0xffffffff).default(0x8000).describe("CPU address to start at. NES: $8000-$FFFF. SNES: $008000-$FFFFFF. GBA: ROM maps at 0x08000000 (the default 0x8000 is auto-bumped to 0x08000000 for GBA)."),
@@ -718,6 +718,7 @@ export function registerDisasmTools(server, z) {
         /\.a78$/i.test(romPath) ? "atari7800" :
         /\.prg$/i.test(romPath) ? "c64" :
         /\.gba$/i.test(romPath) ? "gba" :
+        /\.(lnx|lyx)$/i.test(romPath) ? "lynx" :
         /\.(gen|md|bin)$/i.test(romPath) ? "genesis" :
         null
       );
@@ -759,8 +760,21 @@ export function registerDisasmTools(server, z) {
       if (resolved === "gba" && startAddress === 0x8000 && args.endAddress === undefined) {
         startAddress = 0x08000000;
       }
+      // Lynx: 65C02 cart image (after a 64-byte "LYNX" header). Homebrew runs
+      // from $0200, not the $8000 6502 default — auto-bump when unspecified.
+      if (resolved === "lynx" && startAddress === 0x8000 && args.endAddress === undefined) {
+        startAddress = 0x0200;
+      }
 
-      const mapped = resolved === "gba"
+      const mapped = resolved === "lynx"
+        ? (() => {
+            const hasHdr = data.length >= 64 && data[0] === 0x4c && data[1] === 0x59 && data[2] === 0x4e && data[3] === 0x58; // "LYNX"
+            const base = hasHdr ? 64 : 0;
+            const off = base + (startAddress - 0x0200); // flat image loaded at $0200
+            if (off < base || off >= data.length) throw new Error(`Lynx: startAddress $${startAddress.toString(16)} is outside the cart image.`);
+            return { bytes: data.slice(off, Math.min(data.length, off + length)), fileOffset: off, cpu: "6502" };
+          })()
+        : resolved === "gba"
         ? (() => {
             const base = 0x08000000;
             const off = (startAddress >>> 0) - base;

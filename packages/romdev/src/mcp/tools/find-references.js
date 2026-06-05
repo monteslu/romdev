@@ -289,6 +289,15 @@ export async function findReferencesCore({ path, platform, address, mapper, maxR
     const { runDa65 } = await import("../../toolchains/cc65/da65.js");
     const r = await runDa65({ bytes: mapped.bytes, startAddress: loadAddr, cpu: "6502", options: ["--comments", "4"] });
     asm = r.asm;
+  } else if (resolved === "lynx") {
+    // Lynx = 65C02 cart image after a 64-byte "LYNX" header; homebrew runs at
+    // $0200. Strip the header and disassemble the flat image as 6502-family.
+    const hasHdr = data.length >= 64 && data[0] === 0x4c && data[1] === 0x59 && data[2] === 0x4e && data[3] === 0x58;
+    const base = hasHdr ? 64 : 0;
+    const bytes = data.slice(base);
+    const { runDa65 } = await import("../../toolchains/cc65/da65.js");
+    const r = await runDa65({ bytes, startAddress: 0x0200, cpu: "6502", options: ["--comments", "4"] });
+    asm = r.asm;
   } else if (resolved === "genesis") {
     // Genesis ROM maps 1:1 to 68000 $000000+. Disassemble from the reset
     // vector ($000004) to EOF (capped to keep the pass bounded on big carts).
