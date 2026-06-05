@@ -19,10 +19,12 @@ export function registerRomIdTools(server, z, sessionKey) {
     "Use this on an unknown ROM/zip to figure out which platform it's for (and decide which core to load). " +
     "Handles zip-wrapped ROMs. Pass `path` (file on disk) OR `base64` (bytes, no disk). Returns " +
     "{ platform, format, title, mapper, region, sizes, notes, confidence, source }. " +
-    "ROMHACKING/RE NEXT STEP: once you know the ROM, call `gameCheats({path})` — the bundled cheat DB is a " +
-    "FREE, crowd-sourced labeled memory map (each cheat names a RAM address or code site, e.g. \"Infinite " +
-    "Lives\" → $00C5). It answers the single most expensive RE question — 'which byte/routine holds X?' — " +
-    "for free, before you disassemble or hunt with watchMemory. Do this FIRST on any romhacking task.",
+    "ROMHACKING/RE: two complementary next steps — (1) `gameCheats({path})` is a FREE labeled memory/code " +
+    "map (each cheat names a RAM address or code site, e.g. \"Infinite Lives\" → $00C5) — a cheap lookup that " +
+    "answers 'which byte holds X?' when an entry exists; check it early. (2) `disassembleRom`/" +
+    "`disassembleProject`/`findReferences` are how you change BEHAVIOR (logic, text, graphics) and the only " +
+    "path when the game has no cheats or the hack isn't a simple value. Cheats save a hunt; the disassembler " +
+    "does the structural work — most non-trivial hacks need it regardless.",
     {
       path: z.string().optional().describe("Absolute path to a .nes/.gb/.sfc/.bin/.zip/etc. file. Provide this OR `base64`."),
       base64: z.string().optional().describe("Base64-encoded ROM bytes. Provide this OR `path`."),
