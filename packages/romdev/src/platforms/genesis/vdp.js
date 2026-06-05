@@ -47,6 +47,11 @@ export function decodeSAT(sat) {
   const sprites = [];
   for (let i = 0; i < 80; i++) {
     const off = i * 8;
+    // NOTE: this decoder expects the SAT in LOGICAL (big-endian VDP) byte order.
+    // The LIVE path (inspectSprites) does NOT use this — it uses
+    // decodeGenesisSprites() in host/gpgx-state.js, which reads gpgx's raw VRAM
+    // (host-LE word-byte-swapped) and accounts for the swap there. Keep this one
+    // logical so it stays a clean reference / unit-testable in isolation.
     const rawY = (sat[off] << 8) | sat[off + 1];
     const sizeByte = sat[off + 2];
     const link = sat[off + 3] & 0x7F;
@@ -457,7 +462,9 @@ export function snapshotPlaneMap(host, opts = {}) {
   for (let cy = 0; cy < hCells; cy++) {
     for (let cx = 0; cx < wCells; cx++) {
       const entryOff = base + (cy * wCells + cx) * 2;
-      const word = (vram[entryOff] << 8) | vram[entryOff + 1];
+      // gpgx VRAM is host-LE word-byte-swapped — read the name-table entry
+      // little-endian (low byte first) or tile/pal/flip all decode wrong.
+      const word = (vram[entryOff + 1] << 8) | vram[entryOff];
       const tileIdx = word & 0x7FF;
       const hFlip = !!(word & 0x800);
       const vFlip = !!(word & 0x1000);
@@ -515,7 +522,8 @@ export function genesisTileUsage(host) {
     const used = new Set();
     for (let i = 0; i < wCells * hCells; i++) {
       const o = base + i * 2;
-      used.add(((vram[o] << 8) | vram[o + 1]) & 0x7FF);
+      // LE: gpgx VRAM words are host-byte-swapped (see plane decoder above).
+      used.add(((vram[o + 1] << 8) | vram[o]) & 0x7FF);
     }
     return [...used].sort((a, b) => a - b);
   };
@@ -527,7 +535,8 @@ export function genesisTileUsage(host) {
   const sat = vram.subarray(satBase, satBase + 640);
   const sprites = new Set();
   for (let i = 0; i < 80; i++) {
-    const attr = (sat[i * 8 + 4] << 8) | sat[i * 8 + 5];
+    // LE: gpgx SAT words are host-byte-swapped (same as the name table).
+    const attr = (sat[i * 8 + 5] << 8) | sat[i * 8 + 4];
     sprites.add(attr & 0x07FF);
   }
 

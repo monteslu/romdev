@@ -278,10 +278,17 @@ export function decodeGenesisSprites(vram, vdpRegs) {
     visited.add(slot);
     const off = (baseAddr + slot * 8) & 0xFFFF;
     if (off + 8 > 0x10000) break;
-    const yWord = (vram[off] << 8) | vram[off + 1];
-    const sizeLinkWord = (vram[off + 2] << 8) | vram[off + 3];
-    const tileWord = (vram[off + 4] << 8) | vram[off + 5];
-    const xWord = (vram[off + 6] << 8) | vram[off + 7];
+    // gpgx stores VRAM as 16-bit words in HOST (little-endian) byte order, so
+    // each logical VDP word's two bytes are SWAPPED in this raw buffer. Read the
+    // SAT words little-endian (low byte first). Verified live: a 32×32 sprite's
+    // size/link word is bytes `00 0f` here = logical 0x0F00; reading it BE gave
+    // 0x000F → wrong 8×8 size + bogus link 15. The same swap applies to Y/X/attr
+    // (Y bytes `e4 00` = logical 0x00E4 = 228). Previously these were read BE,
+    // which mis-decoded sprite size/link (and would corrupt X/Y for X≥256/Y≥256).
+    const yWord = (vram[off + 1] << 8) | vram[off];
+    const sizeLinkWord = (vram[off + 3] << 8) | vram[off + 2];
+    const tileWord = (vram[off + 5] << 8) | vram[off + 4];
+    const xWord = (vram[off + 7] << 8) | vram[off + 6];
 
     const sizeH = (sizeLinkWord >> 8) & 0x3;        // bits 8-9
     const sizeW = (sizeLinkWord >> 10) & 0x3;       // bits 10-11
