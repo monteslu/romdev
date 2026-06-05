@@ -200,6 +200,22 @@ JOY_B2    0x20
 
 Edge-detect by AND'ing `pad & !prev`.
 
+### Driving input over MCP — the SMS button map is INVERTED ⚠
+
+genesis_plus_gx (the SMS core) maps the two face buttons onto libretro the
+*opposite* way you'd guess (verified live against the core):
+
+| Physical button | `setInput({…})`  | spatial / native |
+|-----------------|-------------------|------------------|
+| Button 1 (TL, main fire) | `{ b: true }` | `{ west: true }` · `pressButton({button:'1'})` |
+| Button 2 (TR)            | `{ a: true }` | `{ east: true }` · `pressButton({button:'2'})` |
+
+**The trap:** `setInput({ a: true })` presses **button 2**, not button 1. For
+the main fire (button 1 / `JOY_B1`) use `{ b: true }` or the spatial
+`{ west: true }`. The **spatial names** and `pressButton({button:'1'|'2'})`
+resolve correctly — prefer them over raw a/b. `getInputLayout({platform:'sms'})`
+has the exact map. (Same genesis_plus_gx inversion as Genesis + Game Gear.)
+
 ## Sound
 
 PSG (SN76489) on port $7F. 4 channels: 3 square waves + 1 noise.

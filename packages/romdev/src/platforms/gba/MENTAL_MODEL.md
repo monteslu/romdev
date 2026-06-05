@@ -103,6 +103,13 @@ REG_KEYINPUT (read-only): bits ACTIVE-LOW (0 = pressed)
 libgba wraps this: `KEY_A`, `KEY_B`, etc. masks; `REG_KEYS` returns
 the inverted byte so pressed = 1.
 
+### Driving input over MCP
+
+mGBA maps `setInput` button names **straight through** — verified live, no
+inversion: `{a}`→A, `{b}`→B, `{l}`→L, `{r}`→R, `{start}`/`{select}`, plus the
+d-pad. So `setInput({ a: true })` presses GBA A as expected — unlike the
+genesis_plus_gx platforms (Genesis/SMS/GG), there's no surprise here.
+
 ## Sound
 
 Two parallel paths:

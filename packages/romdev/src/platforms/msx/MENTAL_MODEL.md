@@ -94,7 +94,10 @@ exactly this.
   that's the classic MSX constraint. DMA pattern.bin to the pattern-generator
   base and color.bin to the color-table base (getRenderingContext shows both).
 - `getInputLayout({ platform: "msx" })` — the joystick path via BIOS GTSTCK
-  ($00D5) + GTTRIG ($00D8); trigger 1 = 'a' (east), trigger 2 = 'b' (west).
+  ($00D5) + GTTRIG ($00D8). **Driving input over MCP:** bluemsx maps `setInput`
+  straight through (verified live, no inversion): `{a}`→trigger 1 (east),
+  `{b}`→trigger 2 (west). So `setInput({ a: true })` presses trigger 1 as
+  expected — unlike the genesis_plus_gx platforms, there's no surprise here.
 
 ## Debugging tools
 

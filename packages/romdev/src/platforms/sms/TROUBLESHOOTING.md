@@ -3,6 +3,22 @@
 When something's broken. Read MENTAL_MODEL.md first for the
 "what's going on" version (via `getPlatformDoc({platform:"sms", name:"mental_model"})`).
 
+## "I drive the game with setInput but the fire/action button doesn't fire"
+
+The SMS/GG button map is **inverted** vs the libretro names. genesis_plus_gx
+maps button 1 (TL, the main fire) onto libretro **b** and button 2 (TR) onto
+libretro **a** — so `setInput({a:true})` presses button **2**, not button 1
+(`JOY_B1`).
+
+Fix — press the button you actually mean:
+- Button 1 (main fire, `JOY_B1`) → `setInput({ports:[{b:true}]})` or `{west:true}`
+- Button 2 (`JOY_B2`) → `{a:true}` / `{east:true}`
+
+Prefer the spatial names or `pressButton({button:'1'|'2'})` (they resolve
+correctly per platform). `getInputLayout({platform:'sms'})` has the full map.
+(Note: `setInput` takes a `ports` array — `{ports:[{b:true}]}`, not a bare
+`{b:true}`. Same inversion on Game Gear.)
+
 ## "ROM builds but the screen is blank / black"
 
 The VDP starts with display disabled (R1 bit 6 = 0). You have to

@@ -178,6 +178,19 @@ NMI handler uses:
 Each VRAM queue entry costs 3 PPU writes + bookkeeping ≈ 15 cycles.
 At 24 entries per queue, that's ~360 cycles. Comfortably within budget.
 
+## Input
+
+The ROM reads the pad by strobing `$4016` (write 1 then 0) then reading 8 bits
+in order A, B, Select, Start, Up, Down, Left, Right (bit 0 of each read).
+
+### Driving input over MCP
+
+fceumm maps `setInput` button names **straight through** — verified live, no
+inversion: `{a}`→A, `{b}`→B, `{select}`/`{start}`, plus the d-pad. The spatial
+names also resolve (east→A, west→B). So `setInput({ a: true })` presses NES A as
+expected — unlike the genesis_plus_gx platforms (Genesis/SMS/GG), there's no
+surprise here.
+
 ## What `createProject` copies into your project
 
 `createProject({platform:"nes", template:"hello_sprite"|"tile_engine"|"default"})`

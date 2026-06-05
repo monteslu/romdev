@@ -214,6 +214,15 @@ The Lynx has a 4-direction d-pad + 2 face buttons (A, B) + 2
 etc. There's no second controller — Lynx had a ComLynx link cable
 for multi-Lynx multiplayer but no second controller on one unit.
 
+### Driving input over MCP
+
+handy maps `setInput` button names **straight through** — verified live, no
+inversion: `{a}`→A (outer), `{b}`→B (inner). Spatial east→A, south→B; Opt1/Opt2
+map to `{start}`/`{select}`. So `setInput({ a: true })` presses Lynx A as
+expected. ⚠ Note: the Lynx hardware register `$FCB0` is **active-HIGH** (1 =
+pressed, opposite most platforms) — that only matters if you read the register
+directly; the `setInput` names themselves are normal.
+
 ## Color
 
 16-color palette per frame at `$FDA0` (BG) + `$FDB0` (intensity).

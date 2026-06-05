@@ -107,6 +107,22 @@ $00   GG-specific: bit 7 = START button (active low)
 $01-$05  GG-specific: link cable, sound balance, etc.
 ```
 
+### Driving input over MCP — the button map is INVERTED ⚠
+
+Game Gear runs on genesis_plus_gx, which maps the two face buttons onto libretro
+the *opposite* of the obvious way (verified live against the core — same as SMS):
+
+| Physical button | `setInput({…})`  | spatial / native |
+|-----------------|-------------------|------------------|
+| Button 1 (main fire) | `{ b: true }` | `{ west: true }` · `pressButton({button:'1'})` |
+| Button 2             | `{ a: true }` | `{ east: true }` · `pressButton({button:'2'})` |
+| START               | `{ start: true }` | — |
+
+**The trap:** `setInput({ a: true })` presses **button 2**, not button 1. For the
+main fire use `{ b: true }` / `{ west: true }`. Prefer spatial names or
+`pressButton({button:'1'|'2'})` over raw a/b. `getInputLayout({platform:'gg'})`
+has the exact map.
+
 ## Audio
 
 SN76489 PSG — same chip as SMS + Genesis. 4 channels: 3 squares + 1 noise.

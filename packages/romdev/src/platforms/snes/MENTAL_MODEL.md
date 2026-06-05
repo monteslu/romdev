@@ -177,6 +177,14 @@ KEY_R      BIT(4)         KEY_SELECT BIT(13)
 
 Edge-detect by `(pad & KEY) && !(prev & KEY)`.
 
+### Driving input over MCP
+
+snes9x maps `setInput` button names **straight through** — verified live, no
+inversion: `{a}`→A, `{b}`→B, `{x}`→X, `{y}`→Y, `{l}`→L, `{r}`→R, plus the d-pad
+and `{start}`/`{select}`. The spatial names also resolve (east→A, south→B,
+north→X, west→Y). So `setInput({ b: true })` presses SNES B as expected — unlike
+the genesis_plus_gx platforms (Genesis/SMS/GG), there's no surprise here.
+
 ## Sound
 
 The S-DSP is driven by the SPC700, a separate 8-bit CPU running its

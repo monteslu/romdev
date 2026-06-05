@@ -173,6 +173,14 @@ PAD_* masks in `gb_runtime.h` match this layout. Counter-intuitive
 because d-pad is in the HIGH nybble, but that's the layout that fell
 out of "row select bit determines nybble".
 
+### Driving input over MCP
+
+gambatte maps `setInput` button names **straight through** — verified live, no
+inversion: `{a}`→A, `{b}`→B, `{start}`/`{select}`, plus the d-pad. The spatial
+names also resolve (east→A, west→B). So `setInput({ a: true })` presses GB A as
+expected — unlike the genesis_plus_gx platforms (Genesis/SMS/GG), there's no
+surprise here. (Same for **GBC** — it shares the gambatte core.)
+
 ## What `createProject` copies into your project
 
 `createProject({platform:"gb"|"gbc", template:...})` writes these files

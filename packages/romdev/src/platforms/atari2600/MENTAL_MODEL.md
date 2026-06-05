@@ -139,6 +139,15 @@ $0D   INPT5  P2 fire button
 Active low — invert after read. For SWCHA, bit 7 = P1 up, bit 6 =
 P1 down, bit 5 = P1 left, bit 4 = P1 right.
 
+### Driving input over MCP
+
+The 2600 joystick has **one** fire button. Over MCP it's pressed with
+`setInput({ b: true })` or the spatial `setInput({ south: true })` — both clear
+`INPT4` bit 7 (verified live against stella). `setInput({ a: true })` is a **no-op**
+(the 2600 pad has no second button — it's not in `getInputLayout`'s
+`physicalButtons`). So drive fire with `b`/`south`, plus the d-pad
+up/down/left/right.
+
 ## Audio
 
 Two voices, very simple:

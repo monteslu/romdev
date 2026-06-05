@@ -139,6 +139,18 @@ void main(void) {
 }
 ```
 
+## Input
+
+Joypad is identical to DMG — `JOYP` ($FF00), row-select multiplex, active-low
+(see the GB mental model for the read sequence).
+
+### Driving input over MCP
+
+gambatte maps `setInput` button names **straight through** — verified live, no
+inversion: `{a}`→A, `{b}`→B, `{start}`/`{select}`, plus the d-pad (spatial
+east→A, west→B). So `setInput({ a: true })` presses GBC A as expected — unlike
+the genesis_plus_gx platforms (Genesis/SMS/GG), there's no surprise here.
+
 ## Scaffolds
 
 All GB scaffolds (`shmup`, `platformer`, `puzzle`, `sports`, `racing`,

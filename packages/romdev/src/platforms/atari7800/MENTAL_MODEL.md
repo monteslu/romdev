@@ -248,6 +248,24 @@ Fire button on `INPT4` at `$0C`, also active low.
 Console switches (reset, select, pause, B/W, difficulty) on
 `SWCHB` at `$282`.
 
+### Driving input over MCP — the 2-button-mode footgun ⚠
+
+`setInput` button names map to the two ProLine fire buttons as (verified live
+against prosystem + its `Riot.c`):
+
+| `setInput({…})` | physical button | register (2-button mode) |
+|-----------------|-----------------|--------------------------|
+| `{ a: true }`   | right / button 2 | `INPT0` ($08), active-HIGH bit 7 |
+| `{ b: true }`   | left / button 1  | `INPT1` ($09), active-HIGH bit 7 |
+
+**The trap:** the 7800 **boots in 1-BUTTON mode** (SWCHB bit 2 set). In that mode
+*both* `{a}` and `{b}` read through `INPT4` ($0C, active-low) and INPT0/INPT1 stay
+dead — so if you read INPT0/1 expecting two buttons before enabling 2-button mode,
+you'll see nothing. Enable 2-button mode (drive CTLSWB bit 2 as output → SWCHB
+bit 2 = 0) to split the two fires onto INPT0/INPT1. The right/left *semantics*
+match the layout (a=right, b=left); the button presses are correct in both modes.
+`getInputLayout({platform:'atari7800'})` documents both modes.
+
 ## Audio
 
 The 7800 still has the TIA audio chip from the 2600 — 2 channels,
