@@ -1,21 +1,8 @@
-# romdev patch — see README.md in this directory for full justification.
-# Exposes this core's internal memory regions (VRAM/OAM/palette/registers/etc.)
-# via retro_get_memory_data so romdev's inspect*/getCPUState/etc. tools can read
-# them. Upstream exposes only SAVE_RAM/SYSTEM_RAM. WITHOUT this patch the build
-# still succeeds but those tools return empty data (silent runtime failure).
-# git apply ignores everything above the first 'diff --git' line.
-#
-# Also adds an instruction-level WRITE WATCHPOINT for the m68k (Genesis): the
-# m68ki_write_8 path in core/m68k/m68kcpu.h stamps REG_PC when a watched address
-# is written; libretro.c exports romdev_watchpoint_set/get. (Genesis only; the
-# shared Z80 used for SMS/GG is a separate write path, not yet hooked.)
-# git apply ignores everything above the first 'diff --git' line.
-#
 diff --git a/core/m68k/m68kcpu.c b/core/m68k/m68kcpu.c
-index 36112a5..7b3fb3d 100644
+index 36112a5..235868d 100644
 --- a/core/m68k/m68kcpu.c
 +++ b/core/m68k/m68kcpu.c
-@@ -31,6 +31,18 @@ static int irq_latency;
+@@ -31,6 +31,39 @@ static int irq_latency;
  
  m68ki_cpu_core m68k;
  
@@ -31,14 +18,65 @@ index 36112a5..7b3fb3d 100644
 + * a flat 24-bit PC, so it leaves this 0 and reports no bank.) */
 +unsigned char *romdev_wp_last_pc_ptr = 0;
 +
++/* romdev instruction-level READ watchpoint state (mirror of the write watch;
++ * hook in m68ki_read_8/16/32 in m68kcpu.h). Records REG_PC of the instruction
++ * that READ a watched address. */
++unsigned int  romdev_rd_addr     = 0;
++int           romdev_rd_enabled  = 0;
++unsigned int  romdev_rd_last_pc  = 0xFFFFFFFF;
++unsigned char romdev_rd_last_val = 0;
++unsigned int  romdev_rd_hits     = 0;
++
++/* romdev PC breakpoint (m68k execute hook in m68k_run below). When enabled and
++ * REG_PC reaches romdev_pc_addr at instruction dispatch, romdev_pc_hit is set
++ * and m68k_run breaks out of its loop so the CPU freezes exactly at that PC —
++ * the host then reads the full register file via getCPUState. romdev_pc_step
++ * forces a one-instruction stop regardless of address (single-step). */
++unsigned int  romdev_pc_addr    = 0;
++int           romdev_pc_enabled = 0;
++int           romdev_pc_step    = 0;        /* 1 = stop after exactly one instruction */
++volatile int  romdev_pc_hit     = 0;        /* set by the execute hook, cleared by the host */
++unsigned int  romdev_pc_last_pc = 0xFFFFFFFF;
++unsigned int  romdev_pc_hits    = 0;
++
  
  /* ======================================================================== */
  /* =============================== CALLBACKS ============================== */
+@@ -284,6 +317,29 @@ void m68k_run(unsigned int cycles)
+ 
+   while (m68k.cycles < cycles)
+   {
++    /* romdev PC breakpoint / single-step: check BEFORE dispatching the next
++     * instruction so REG_PC is the address about to execute. On a hit, freeze
++     * here (break out of the loop) — the CPU state is now exactly at the
++     * breakpoint and the host reads the registers. romdev_pc_step stops after
++     * exactly one instruction regardless of address. */
++    if (romdev_pc_enabled || romdev_pc_step)
++    {
++      if (romdev_pc_step || (unsigned int)REG_PC == romdev_pc_addr)
++      {
++        romdev_pc_last_pc = REG_PC;
++        romdev_pc_hit = 1;
++        romdev_pc_hits++;
++        romdev_pc_step = 0;     /* single-step is one-shot */
++        /* Mark the CPU "caught up" for this frame so the per-line scheduler in
++         * system.c doesn't immediately re-enter m68k_run and step past the
++         * breakpoint. REG_PC is left untouched, so the CPU is frozen exactly at
++         * the breakpoint; the rest of the frame runs with the 68k idle. The
++         * host sees romdev_pc_hit after retro_run and stops stepping. */
++        m68k.cycles = cycles;
++        break;                  /* leave the CPU frozen at this PC */
++      }
++    }
++
+     /* Set tracing accodring to T1. */
+     m68ki_trace_t1() /* auto-disable (see m68kcpu.h) */
+ 
 diff --git a/core/m68k/m68kcpu.h b/core/m68k/m68kcpu.h
-index b702173..3d3b965 100644
+index b702173..ff96120 100644
 --- a/core/m68k/m68kcpu.h
 +++ b/core/m68k/m68kcpu.h
-@@ -674,6 +674,20 @@ INLINE uint m68ki_read_16(uint address);
+@@ -674,6 +674,34 @@ INLINE uint m68ki_read_16(uint address);
  INLINE uint m68ki_read_32(uint address);
  
  /* Write to the current data space */
@@ -56,10 +94,55 @@ index b702173..3d3b965 100644
 +    } \
 +  } while (0)
 +
++/* romdev instruction-level READ watchpoint (m68k). Records REG_PC of the
++ * instruction that READ a watched address. Mirror of ROMDEV_WP_M68K, hooked
++ * into m68ki_read_8/16/32. Defined in m68kcpu.c; exported via libretro.c. */
++extern unsigned int  romdev_rd_addr;
++extern int           romdev_rd_enabled;
++extern unsigned int  romdev_rd_last_pc;
++extern unsigned char romdev_rd_last_val;
++extern unsigned int  romdev_rd_hits;
++#define ROMDEV_RD_M68K(a, v) do { \
++    if (romdev_rd_enabled && (unsigned int)(a) == romdev_rd_addr) { \
++      romdev_rd_last_pc = REG_PC; romdev_rd_last_val = (unsigned char)(v); romdev_rd_hits++; \
++    } \
++  } while (0)
++
  INLINE void m68ki_write_8(uint address, uint value);
  INLINE void m68ki_write_16(uint address, uint value);
  INLINE void m68ki_write_32(uint address, uint value);
-@@ -917,6 +931,7 @@ INLINE void m68ki_write_8(uint address, uint value)
+@@ -861,6 +889,8 @@ INLINE uint m68ki_read_8(uint address)
+   if (temp->read8) val = (*temp->read8)(ADDRESS_68K(address));
+   else val = READ_BYTE(temp->base, (address) & 0xffff);
+ 
++  ROMDEV_RD_M68K(address, val);
++
+ #ifdef HOOK_CPU
+   if (UNLIKELY(cpu_hook))
+     cpu_hook(HOOK_M68K_R, 1, address, val);
+@@ -881,6 +911,9 @@ INLINE uint m68ki_read_16(uint address)
+   if (temp->read16) val = (*temp->read16)(ADDRESS_68K(address));
+   else val = *(uint16 *)(temp->base + ((address) & 0xffff));
+ 
++  ROMDEV_RD_M68K(address, val >> 8);
++  ROMDEV_RD_M68K(address + 1, val);
++
+ #ifdef HOOK_CPU
+   if (UNLIKELY(cpu_hook))
+     cpu_hook(HOOK_M68K_R, 2, address, val);
+@@ -905,6 +938,11 @@ INLINE uint m68ki_read_32(uint address)
+   if (temp->read16) val |= (*temp->read16)(ADDRESS_68K(address+2));
+   else val |= m68k_read_immediate_16(address+2);
+ 
++  ROMDEV_RD_M68K(address,     val >> 24);
++  ROMDEV_RD_M68K(address + 1, val >> 16);
++  ROMDEV_RD_M68K(address + 2, val >> 8);
++  ROMDEV_RD_M68K(address + 3, val);
++
+ #ifdef HOOK_CPU
+   if (UNLIKELY(cpu_hook))
+     cpu_hook(HOOK_M68K_R, 4, address, val);
+@@ -917,6 +955,7 @@ INLINE void m68ki_write_8(uint address, uint value)
  {
    cpu_memory_map *temp;
  
@@ -67,7 +150,7 @@ index b702173..3d3b965 100644
    m68ki_set_fc(FLAG_S | FUNCTION_CODE_USER_DATA) /* auto-disable (see m68kcpu.h) */
  
  #ifdef HOOK_CPU
-@@ -933,6 +948,9 @@ INLINE void m68ki_write_16(uint address, uint value)
+@@ -933,6 +972,9 @@ INLINE void m68ki_write_16(uint address, uint value)
  {
    cpu_memory_map *temp;
  
@@ -77,7 +160,7 @@ index b702173..3d3b965 100644
    m68ki_set_fc(FLAG_S | FUNCTION_CODE_USER_DATA) /* auto-disable (see m68kcpu.h) */
    m68ki_check_address_error(address, MODE_WRITE, FLAG_S | FUNCTION_CODE_USER_DATA); /* auto-disable (see m68kcpu.h) */
  
-@@ -950,6 +968,11 @@ INLINE void m68ki_write_32(uint address, uint value)
+@@ -950,6 +992,11 @@ INLINE void m68ki_write_32(uint address, uint value)
  {
    cpu_memory_map *temp;
  
@@ -119,10 +202,10 @@ index 74d5053..619770b 100644
  /***************************************************************
   * Read a word from given memory location
 diff --git a/libretro/libretro.c b/libretro/libretro.c
-index 798c6cc..be5631a 100644
+index 798c6cc..b6461fb 100644
 --- a/libretro/libretro.c
 +++ b/libretro/libretro.c
-@@ -3743,6 +3743,90 @@ void retro_unload_game(void)
+@@ -3743,6 +3743,153 @@ void retro_unload_game(void)
  
  unsigned retro_get_region(void) { return vdp_pal ? RETRO_REGION_PAL : RETRO_REGION_NTSC; }
  
@@ -166,6 +249,69 @@ index 798c6cc..be5631a 100644
 +   out6[4] = romdev_wp_hits;
 +   out6[5] = prgOff;
 +   if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; romdev_wp_last_pc_ptr = 0; }
++}
++
++/* romdev READ watchpoint (m68k) — symmetric to the write watch above. Records
++ * the m68k REG_PC of the instruction that READ a watched address. Genesis only
++ * (the shared Z80 read path is not hooked). */
++extern unsigned int  romdev_rd_addr;
++extern int           romdev_rd_enabled;
++extern unsigned int  romdev_rd_last_pc;
++extern unsigned char romdev_rd_last_val;
++extern unsigned int  romdev_rd_hits;
++
++void romdev_readwatch_set(unsigned int addr, int enabled)
++{
++   romdev_rd_addr = addr;
++   romdev_rd_enabled = enabled ? 1 : 0;
++   romdev_rd_last_pc = 0xFFFFFFFF;
++   romdev_rd_last_val = 0;
++   romdev_rd_hits = 0;
++}
++
++/* Fills out5: [enabled, addr, lastPC, lastVal, hits]. */
++void romdev_readwatch_get(unsigned int *out5, int clearHits)
++{
++   if (!out5) return;
++   out5[0] = (unsigned int)romdev_rd_enabled;
++   out5[1] = romdev_rd_addr;
++   out5[2] = romdev_rd_last_pc;
++   out5[3] = (unsigned int)romdev_rd_last_val;
++   out5[4] = romdev_rd_hits;
++   if (clearHits) { romdev_rd_hits = 0; romdev_rd_last_pc = 0xFFFFFFFF; }
++}
++
++/* romdev PC BREAKPOINT (m68k execute hook in m68kcpu.c:m68k_run). The core
++ * freezes at the breakpoint PC; the host polls romdev_pcbreak_get after each
++ * retro_run frame and stops stepping once hit is set, then reads the registers
++ * via getCPUState. `step` arms a one-instruction single-step (ignores addr). */
++extern unsigned int  romdev_pc_addr;
++extern int           romdev_pc_enabled;
++extern int           romdev_pc_step;
++extern volatile int  romdev_pc_hit;
++extern unsigned int  romdev_pc_last_pc;
++extern unsigned int  romdev_pc_hits;
++
++void romdev_pcbreak_set(unsigned int addr, int enabled, int step)
++{
++   romdev_pc_addr = addr;
++   romdev_pc_enabled = enabled ? 1 : 0;
++   romdev_pc_step = step ? 1 : 0;
++   romdev_pc_hit = 0;
++   romdev_pc_last_pc = 0xFFFFFFFF;
++   romdev_pc_hits = 0;
++}
++
++/* Fills out5: [enabled, addr, hit, lastPC, hits]. Pass clearHit to re-arm. */
++void romdev_pcbreak_get(unsigned int *out5, int clearHit)
++{
++   if (!out5) return;
++   out5[0] = (unsigned int)romdev_pc_enabled;
++   out5[1] = romdev_pc_addr;
++   out5[2] = (unsigned int)romdev_pc_hit;
++   out5[3] = romdev_pc_last_pc;
++   out5[4] = romdev_pc_hits;
++   if (clearHit) { romdev_pc_hit = 0; }
 +}
 +
 +/* rom-dev-mcp extension: custom memory region IDs above libretro standard.
@@ -213,7 +359,7 @@ index 798c6cc..be5631a 100644
  void *retro_get_memory_data(unsigned id)
  {
     switch (id)
-@@ -3751,6 +3835,35 @@ void *retro_get_memory_data(unsigned id)
+@@ -3751,6 +3898,35 @@ void *retro_get_memory_data(unsigned id)
           return sram.on ? sram.sram : NULL;
        case RETRO_MEMORY_SYSTEM_RAM:
           return work_ram;
@@ -249,7 +395,7 @@ index 798c6cc..be5631a 100644
        default:
           return NULL;
     }
-@@ -3802,6 +3915,21 @@ size_t retro_get_memory_size(unsigned id)
+@@ -3802,6 +3978,21 @@ size_t retro_get_memory_size(unsigned id)
              return 0x2000; /* 8KB internal RAM */
        }
  

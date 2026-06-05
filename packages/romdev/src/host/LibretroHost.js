@@ -808,6 +808,197 @@ export class LibretroHost {
     }
   }
 
+  // ── PC breakpoint + read watchpoint + single-step (core-side, exact) ────────
+  // Symmetric to the write watchpoint. The PC breakpoint freezes the CPU at the
+  // target instruction mid-frame (the core's execute loop bails on hit); the
+  // read watchpoint records the PC that READ an address. Both require a core
+  // patched with the romdev_pcbreak_*/romdev_readwatch_* exports (Genesis today;
+  // other cores as they're patched). Capability is feature-detected per core.
+
+  /** True when this core build exposes the PC breakpoint + single-step. */
+  pcBreakSupported() {
+    const mod = this.mod;
+    return !!(mod && typeof mod._romdev_pcbreak_set === "function" && typeof mod._romdev_pcbreak_get === "function");
+  }
+
+  /** True when this core build exposes the instruction-level read watchpoint. */
+  readWatchSupported() {
+    const mod = this.mod;
+    return !!(mod && typeof mod._romdev_readwatch_set === "function" && typeof mod._romdev_readwatch_get === "function");
+  }
+
+  /** Arm/disarm the PC breakpoint. `step:true` arms a one-instruction
+   *  single-step (the address is ignored). One breakpoint at a time. */
+  setPCBreak(address, enabled = true, step = false) {
+    const mod = this._needMod();
+    if (typeof mod._romdev_pcbreak_set !== "function") {
+      throw new Error("this core build does not expose the PC breakpoint (rebuild with romdev_pcbreak_* exports).");
+    }
+    mod._romdev_pcbreak_set(address >>> 0, enabled ? 1 : 0, step ? 1 : 0);
+  }
+
+  /** Read the breakpoint state: { enabled, address, hit, lastPC, hits }.
+   *  lastPC is null until a hit. Pass clearHit to re-arm (clears the hit flag). */
+  getPCBreak(clearHit = false) {
+    const mod = this._needMod();
+    if (typeof mod._romdev_pcbreak_get !== "function") {
+      throw new Error("this core build does not expose the PC breakpoint.");
+    }
+    const ptr = mod._malloc(20); // 5 × uint32
+    try {
+      mod._romdev_pcbreak_get(ptr, clearHit ? 1 : 0);
+      const u = new Uint32Array(mod.HEAPU8.buffer, ptr, 5);
+      const lastPC = u[3];
+      return {
+        enabled: !!u[0],
+        address: u[1],
+        hit: !!u[2],
+        lastPC: lastPC === 0xFFFFFFFF ? null : lastPC,
+        hits: u[4],
+      };
+    } finally {
+      mod._free(ptr);
+    }
+  }
+
+  /** Arm/disarm the read watchpoint on a CPU address. */
+  setReadWatch(address, enabled = true) {
+    const mod = this._needMod();
+    if (typeof mod._romdev_readwatch_set !== "function") {
+      throw new Error("this core build does not expose the read watchpoint (rebuild with romdev_readwatch_* exports).");
+    }
+    mod._romdev_readwatch_set(address >>> 0, enabled ? 1 : 0);
+  }
+
+  /** Read the read-watchpoint state: { enabled, address, lastPC, lastValue, hits }. */
+  getReadWatch(clearHits = false) {
+    const mod = this._needMod();
+    if (typeof mod._romdev_readwatch_get !== "function") {
+      throw new Error("this core build does not expose the read watchpoint.");
+    }
+    const ptr = mod._malloc(20); // 5 × uint32
+    try {
+      mod._romdev_readwatch_get(ptr, clearHits ? 1 : 0);
+      const u = new Uint32Array(mod.HEAPU8.buffer, ptr, 5);
+      const lastPC = u[2];
+      return {
+        enabled: !!u[0],
+        address: u[1],
+        lastPC: lastPC === 0xFFFFFFFF ? null : lastPC,
+        lastValue: u[3] & 0xFF,
+        hits: u[4],
+      };
+    } finally {
+      mod._free(ptr);
+    }
+  }
+
+  /**
+   * Run until the CPU PC reaches `address` (or until `maxFrames` frames elapse),
+   * then stop with the CPU frozen exactly at that instruction. Returns
+   * { hit, frame, pc?, hits? }. On hit the registers are readable via getCPUState.
+   * The breakpoint is auto-disarmed after the run so normal stepping resumes.
+   */
+  runUntilPC(address, maxFrames = 600) {
+    const mod = this._needMod();
+    if (!this.status.loaded) throw new Error("no media loaded");
+    if (!this.pcBreakSupported()) {
+      throw new Error("PC breakpoint not supported by this core (Genesis today; other cores as patched).");
+    }
+    this.setPCBreak(address, true, false);
+    let hit = false;
+    let framesRun = 0;
+    try {
+      for (let i = 0; i < maxFrames; i++) {
+        mod._retro_run();
+        this.status.frameCount++;
+        framesRun++;
+        const st = this.getPCBreak(false);
+        if (st.hit) { hit = true; break; }
+      }
+    } finally {
+      // Disarm so subsequent stepFrames/runUntil* run normally.
+      this.setPCBreak(0, false, false);
+      if (this.state.lastFrame) {
+        this.status.fbWidth = this.state.lastFrame.width;
+        this.status.fbHeight = this.state.lastFrame.height;
+      }
+    }
+    const st = this.getPCBreak(true); // read final state + clear hit
+    return {
+      hit,
+      frame: this.status.frameCount,
+      framesRun,
+      ...(hit ? { pc: st.lastPC, hits: st.hits } : {}),
+    };
+  }
+
+  /**
+   * Run until a watched address is READ (or maxFrames elapse). Unlike the PC
+   * break this does NOT freeze mid-frame — it records the reading PC and the run
+   * completes the frame it was found in. Returns { hit, frame, pc?, value?, hits? }.
+   */
+  runUntilRead(address, maxFrames = 600) {
+    const mod = this._needMod();
+    if (!this.status.loaded) throw new Error("no media loaded");
+    if (!this.readWatchSupported()) {
+      throw new Error("read watchpoint not supported by this core (Genesis today; other cores as patched).");
+    }
+    this.setReadWatch(address, true);
+    let hit = false;
+    let framesRun = 0;
+    try {
+      for (let i = 0; i < maxFrames; i++) {
+        mod._retro_run();
+        this.status.frameCount++;
+        framesRun++;
+        const st = this.getReadWatch(false);
+        if (st.hits > 0) { hit = true; break; }
+      }
+    } finally {
+      this.setReadWatch(0, false);
+      if (this.state.lastFrame) {
+        this.status.fbWidth = this.state.lastFrame.width;
+        this.status.fbHeight = this.state.lastFrame.height;
+      }
+    }
+    const st = this.getReadWatch(true);
+    return {
+      hit,
+      frame: this.status.frameCount,
+      framesRun,
+      ...(hit ? { pc: st.lastPC, value: st.lastValue, hits: st.hits } : {}),
+    };
+  }
+
+  /**
+   * Execute exactly ONE CPU instruction and stop (single-step). Freezes the CPU
+   * right after the stepped instruction. Returns { pc } — the PC the CPU is now
+   * poised at. Note: a frame may advance other subsystems; this is a CPU-level
+   * single-step, the finest granularity the core exposes.
+   */
+  stepInstruction() {
+    const mod = this._needMod();
+    if (!this.status.loaded) throw new Error("no media loaded");
+    if (!this.pcBreakSupported()) {
+      throw new Error("single-step not supported by this core (Genesis today; other cores as patched).");
+    }
+    this.setPCBreak(0, false, true); // step mode (one-shot)
+    try {
+      // The step fires on the very next instruction; one frame is more than
+      // enough for the core to dispatch it.
+      mod._retro_run();
+      this.status.frameCount++;
+    } finally {
+      if (this.state.lastFrame) {
+        this.status.fbWidth = this.state.lastFrame.width;
+        this.status.fbHeight = this.state.lastFrame.height;
+      }
+    }
+    const st = this.getPCBreak(true);
+    return { pc: st.lastPC, hit: st.hit };
+  }
+
   pause() {
     this.status.paused = true;
   }
