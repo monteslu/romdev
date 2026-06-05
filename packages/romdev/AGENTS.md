@@ -258,17 +258,18 @@ For maintainers: the platform / core / patch / region-ID matrix and the recipe f
 
 ## Deep debug tooling status per platform
 
-Different platforms have different levels of MCP-exposed debugging — different hardware needs different tools, and we've patched the cores where it's been worth it. The generic shapes — `getCPUState`, `inspectSprites`, `inspectPalette`, `getRenderingContext`, `findWriter` — are wired for **all 12 tier-1 systems** (each platform's adapter reads its native hardware and normalizes to the common shape); `getAudioState` covers the **10 with a sound chip** (all but Atari 2600/7800). A few are honest hardware-shaped exceptions, noted inline below (the Lynx has no fixed OAM so inspectSprites returns the SCB list head; GBA has no bundled disassembler). Coverage detail per platform:
+Different platforms have different levels of MCP-exposed debugging — different hardware needs different tools, and we've patched the cores where it's been worth it. The generic shapes — `getCPUState`, `findWriter`, `disassembleRom`/`findReferences` (except GBA), `searchValue`/`readCartRom`/`classifyRegion`, cheats — work on **all 14 platforms**. The deep per-platform inspectors (`inspectSprites`, `inspectPalette`, `getRenderingContext`, `getAudioState`) are detailed for **12 systems** below; **PC Engine and MSX** currently have the generic shapes + their core's native regions but not yet the full custom-inspector treatment (extend by patching their cores per the snes9x/gpgx pattern). `getAudioState` covers the **12 with a sound chip** (all but Atari 2600/7800). A few are honest hardware-shaped exceptions, noted inline below (the Lynx has no fixed OAM so inspectSprites returns the SCB list head; GBA has no bundled disassembler). Coverage detail per platform:
 
-> **Universal across ALL 12 platforms below:** `findWriter` (the core-level
-> instruction write watchpoint — the exact PC that wrote a RAM byte, all 12 CPU
-> families), `gameCheats`/`applyCheat`/`makeCheat` (cheat lookup/apply/create),
-> `getCPUState` / `getRenderingContext`, `snapshotMemory`/`diffMemory`/`diffState`,
-> `watchMemory`/`runUntilWrite`, and `getAudioState` for the 10 systems with a
-> sound chip (all but Atari 2600/7800). `disassembleRom` + `findReferences` +
-> `disassembleProject` cover 11 — **GBA is the one exception** (ARM7TDMI has no
-> bundled disassembler; its live-debug tools all work, only static disasm doesn't).
-> The per-platform notes below cover the platform-SPECIFIC inspectors + chips.
+> **Universal across ALL 14 platforms:** `findWriter` (the core-level
+> instruction write watchpoint — the exact PC that wrote a RAM byte, all 14 CPU
+> families), `gameCheats`/`searchCheats`/`applyCheat`/`makeCheat` (cheat
+> lookup/apply/create), `getCPUState`, `searchValue`/`searchNext`/`readCartRom`/`classifyRegion`,
+> `snapshotMemory`/`diffMemory`/`diffState`, `watchMemory`/`runUntilWrite`.
+> `getAudioState` covers the 12 systems with a sound chip (all but Atari 2600/7800).
+> `disassembleRom` + `findReferences` + `disassembleProject` cover 13 — **GBA is
+> the one exception** (ARM7TDMI has no bundled disassembler; its live-debug tools
+> all work, only static disasm doesn't). The per-platform notes below cover the
+> platform-SPECIFIC inspectors + chips (PC Engine + MSX: generic shapes only so far).
 
 - **SNES** (snes9x patched): inspectSprites, inspectPalette, getCPUState({cpu:'main'|'spc700'}), getDspState (full per-voice + master mixer), readMemory regions for OAM/CGRAM/ARAM/FillRAM. Audio + video both deeply introspectable.
 - **NES** (fceumm patched): inspectSprites, inspectPalette, getCPUState (6502), getRenderingContext (PPUCTRL/PPUMASK decoded → active CHR bank + file offset), readMemory regions for OAM/Palette/Nametables/CHR/CPU_REGS/PPU_REGS/APU_REGS.
@@ -398,10 +399,11 @@ of precision:
     → { found:true, pc:"$AF85", value:"0x81", hits:19 }
   disassembleRom({ path, startAddress: 0xAF85 })   // → the real store instruction
   ```
-  Supported on **all 12 tier-1 systems** — NES, GB/GBC, Genesis, SMS/GG, SNES,
-  Atari 2600/7800, C64, Lynx (65C02), and GBA (ARM7) — every bundled CPU family.
-  On a banked mapper a `$8000-$BFFF` pc may be in a switchable bank; findWriter
-  reports the `bank` (NES/GB/SMS-GG) so you can pass it to `disassembleRom`.
+  Supported on **all 14 tier-1 systems** — NES, GB/GBC, Genesis, SMS/GG, SNES,
+  Atari 2600/7800, C64, Lynx (65C02), PC Engine (HuC6280), MSX (Z80), and GBA
+  (ARM7) — every bundled CPU family. On a banked mapper a `$8000-$BFFF` pc may be
+  in a switchable bank; findWriter reports the `bank` (NES/GB/SMS-GG) so you can
+  pass it to `disassembleRom`.
 - **`watchMemory` / `runUntilWrite` — cross-platform, frame-sampled.** Step until
   the byte changes; the returned `pc` is a frame-boundary sample (a lead, not a
   guarantee under interrupts — cross-check the value trace). Use on non-NES, or
@@ -482,14 +484,16 @@ is the RESET button and leaves work RAM (and boot-seeded state) intact.
 invincibility, etc. It is **NON-DESTRUCTIVE**, exactly like RetroArch: the cheat
 lives in volatile core state (a per-frame RAM write, or an in-core read-intercept
 for ROM cheats), the ROM file on disk is NEVER touched, and `reset` / `loadState`
-/ `clearCheats` removes it. **`gameCheats` DB coverage (11/12):** NES, GB/GBC,
-SNES, Genesis, SMS/GG, Atari 2600/7800, **Lynx**, **GBA** — every tier-1 system
-except **C64** (the cheat database ships no C64 entries, so there's nothing to
-look up; `makeCheat` still works on C64). One caveat: **GBA** DB cheats are
+/ `clearCheats` removes it. **`gameCheats` DB coverage (13/14):** NES, GB/GBC,
+SNES, Genesis, SMS/GG, Atari 2600/7800, **Lynx**, **GBA**, **PC Engine**, **MSX** —
+every tier-1 system except **C64** (the cheat database ships no C64 entries, so
+there's nothing to look up; `makeCheat` still works on C64). The DB is its own
+package (`romdev-cheats`), lazy-loaded per platform; `searchCheats({platform,
+query})` fuzzy-finds a game by name. One caveat: **GBA** DB cheats are
 Code Breaker / GameShark (encrypted), so they're **apply-only** — the `code`
 applies live, but the address isn't descrambled into a labeled map the way the
 other systems are (the response says so via `mapNote`). **`applyCheat` /
-`makeCheat` work on all 12.** Unmatched ROMs (homebrew, your own WIP, an
+`makeCheat` work on all 14.** Unmatched ROMs (homebrew, your own WIP, an
 unlisted dump) return `matched:false` with a clear reason — the tool never
 guesses.
 
@@ -518,9 +522,9 @@ confirmed; the encoders round-trip 100% against the full DB — NES/Genesis/GB/G
 Game Genie, SNES Game Genie + PAR, GB GameShark). Force a specific device with
 `device:`. A RAM cheat needs just `address`+`value`; a ROM patch adds `compare`
 (the byte currently there). Nothing is ever written to a ROM file.
-**`makeCheat` works on all 12 tier-1 systems** — the systems with no native
-letter-code device (Atari 2600/7800, Lynx, GBA, C64) get a verified raw
-`ADDR:VAL` code that `applyCheat` passes straight to the core.
+**`makeCheat` works on all 14 tier-1 systems** — the systems with no native
+letter-code device (Atari 2600/7800, Lynx, GBA, C64, PC Engine, MSX) get a
+verified raw `ADDR:VAL` code that `applyCheat` passes straight to the core.
 
 ```js
 makeCheat({ platform:"snes", address:0x7E0DBF, value:0x63 })
@@ -702,11 +706,11 @@ DD/FD/DDCB/FDCB). Annotations are post-processing in both paths.
 ### Whole-ROM, rebuildable projects — `disassembleProject`
 
 `disassembleRom` gives you one routine as text. `disassembleProject` turns an
-**entire ROM into a complete, re-buildable project in one call**, across 11 of
-the 12 systems (NES, SNES, GB/GBC, SMS/GG, Genesis, C64, Atari 2600/7800, and
-**Lynx** — 65C02, byte-exact). **GBA is the sole exception** (ARM7TDMI has no
-bundled disassembler — `platform:'gba'` returns an explicit message pointing to
-external ARM tools):
+**entire ROM into a complete, re-buildable project in one call**, across 13 of
+the 14 systems (NES, SNES, GB/GBC, SMS/GG, Genesis, C64, Atari 2600/7800,
+**Lynx** — 65C02, **PC Engine** — HuC6280, and **MSX** — Z80; byte-exact).
+**GBA is the sole exception** (ARM7TDMI has no bundled disassembler —
+`platform:'gba'` returns an explicit message pointing to external ARM tools):
 
 ```js
 disassembleProject({ path: "game.nes", outputDir: "./game-disasm" })
