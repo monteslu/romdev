@@ -1,6 +1,6 @@
 {
   "name": "romdev-core-gambatte",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "gambatte libretro core (Game Boy / Game Boy Color) for romdev, bundled as WASM.",
   "type": "module",
   "main": "index.js",

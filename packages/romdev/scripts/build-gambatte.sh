@@ -103,7 +103,7 @@ if [ -n "$LIBRETRO_COMMON" ]; then
   fi
 fi
 
-EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_watchpoint_set","_romdev_watchpoint_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
+EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_watchpoint_set","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
 EXPORTED_RUNTIME='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS"]'
 
 mkdir -p "$OUT"
@@ -127,3 +127,14 @@ emcc "$CORE_LIB" \
 
 echo "gambatte_libretro staged at $OUT"
 ls -lh "$OUT/gambatte_libretro."{js,wasm}
+
+# Also stage into the carved-out binary package the registry actually resolves
+# at runtime (src/cores/registry.js → romdev-core-gambatte). Without this the
+# dev tree keeps loading the OLD package copy and a rebuild appears to "do
+# nothing".
+PKG_OUT="$PROJECT_DIR/../romdev-core-gambatte/wasm"
+if [ -d "$PKG_OUT" ]; then
+  cp "$OUT/gambatte_libretro.js"   "$PKG_OUT/gambatte_libretro.js"
+  cp "$OUT/gambatte_libretro.wasm" "$PKG_OUT/gambatte_libretro.wasm"
+  echo "also staged into romdev-core-gambatte package: $PKG_OUT"
+fi

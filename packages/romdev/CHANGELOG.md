@@ -4,15 +4,21 @@ All notable changes to `romdev-mcp`. Dates are release dates.
 
 ## 0.5.0
 
-Execution breakpoints land on Genesis — the RE primitive that turns "infer for
-hours" into "read the register." Adds `runUntilPC`, `runUntilRead`, and
-`stepInstruction` (Genesis/genesis_plus_gx today; other cores as their CPUs are
-patched, same pattern as the write watchpoint). Requires `romdev-core-gpgx@0.5.0`.
+Execution breakpoints — the RE primitive that turns "infer for hours" into "read
+the register." Adds `runUntilPC`, `runUntilRead`, and `stepInstruction`, live on
+**Genesis, NES, Game Boy/Color, and SNES** (more cores rolling out, same pattern
+as the write watchpoint). Requires the matching core packages: `romdev-core-gpgx`,
+`romdev-core-fceumm`, `romdev-core-gambatte` @ 0.5.0 and `romdev-platform-snes` @ 0.4.0.
 
-### Added — PC breakpoint + read watchpoint + single-step (Genesis)
+### Added — PC breakpoint + read watchpoint + single-step
 The symmetric gaps next to `findWriter` (a core-level WRITE watchpoint), requested
 by an agent who could disassemble a name-decoder but couldn't read the one address
-register that held the answer.
+register that held the answer. Now on 4 CPU families:
+- **Genesis** (m68k, genesis_plus_gx), **NES** (6502, fceumm), **Game Boy / Color**
+  (SM83, gambatte), **SNES** (65816, snes9x). Each core gains the same
+  `romdev_pcbreak_*` / `romdev_readwatch_*` exports (the gpgx m68k patch is the
+  template); the host + MCP layer is core-agnostic and feature-detects, returning
+  `notSupported` on cores not yet patched.
 - **`runUntilPC({address, maxFrames, pressDuring})`** — runs until the m68k PC
   reaches `address`, then STOPS with the CPU frozen EXACTLY at that instruction
   (the core's execute loop bails mid-frame on the hit). Then `getCPUState` reads

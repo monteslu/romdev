@@ -1,5 +1,5 @@
 diff --git a/core/m68k/m68kcpu.c b/core/m68k/m68kcpu.c
-index 36112a5..235868d 100644
+index 36112a5..b5dc914 100644
 --- a/core/m68k/m68kcpu.c
 +++ b/core/m68k/m68kcpu.c
 @@ -31,6 +31,39 @@ static int irq_latency;
@@ -42,7 +42,7 @@ index 36112a5..235868d 100644
  
  /* ======================================================================== */
  /* =============================== CALLBACKS ============================== */
-@@ -284,6 +317,29 @@ void m68k_run(unsigned int cycles)
+@@ -284,6 +317,37 @@ void m68k_run(unsigned int cycles)
  
    while (m68k.cycles < cycles)
    {
@@ -51,14 +51,22 @@ index 36112a5..235868d 100644
 +     * here (break out of the loop) — the CPU state is now exactly at the
 +     * breakpoint and the host reads the registers. romdev_pc_step stops after
 +     * exactly one instruction regardless of address. */
-+    if (romdev_pc_enabled || romdev_pc_step)
++    if ((romdev_pc_enabled || romdev_pc_step) && !romdev_pc_hit)
 +    {
-+      if (romdev_pc_step || (unsigned int)REG_PC == romdev_pc_addr)
++      /* Single-step (romdev_pc_step) is a countdown the host arms to 2 = "let
++       * ONE instruction execute, then stop at the next" — decremented once per
++       * dispatched instruction, fires at 1 so the PC actually ADVANCES (a
++       * before-dispatch fire would re-stop on the same instruction). A plain
++       * breakpoint (step==0) fires on address match. */
++      int stepFire = 0;
++      if (romdev_pc_step) { if (--romdev_pc_step <= 0) stepFire = 1; }
++      if (stepFire || ((romdev_pc_enabled && !romdev_pc_step)
++                       && (unsigned int)REG_PC == romdev_pc_addr))
 +      {
 +        romdev_pc_last_pc = REG_PC;
 +        romdev_pc_hit = 1;
 +        romdev_pc_hits++;
-+        romdev_pc_step = 0;     /* single-step is one-shot */
++        romdev_pc_step = 0;     /* one-shot */
 +        /* Mark the CPU "caught up" for this frame so the per-line scheduler in
 +         * system.c doesn't immediately re-enter m68k_run and step past the
 +         * breakpoint. REG_PC is left untouched, so the CPU is frozen exactly at
@@ -202,10 +210,10 @@ index 74d5053..619770b 100644
  /***************************************************************
   * Read a word from given memory location
 diff --git a/libretro/libretro.c b/libretro/libretro.c
-index 798c6cc..b6461fb 100644
+index 798c6cc..64b6d11 100644
 --- a/libretro/libretro.c
 +++ b/libretro/libretro.c
-@@ -3743,6 +3743,153 @@ void retro_unload_game(void)
+@@ -3743,6 +3743,155 @@ void retro_unload_game(void)
  
  unsigned retro_get_region(void) { return vdp_pal ? RETRO_REGION_PAL : RETRO_REGION_NTSC; }
  
@@ -296,7 +304,9 @@ index 798c6cc..b6461fb 100644
 +{
 +   romdev_pc_addr = addr;
 +   romdev_pc_enabled = enabled ? 1 : 0;
-+   romdev_pc_step = step ? 1 : 0;
++   /* step is a per-instruction countdown; arm to 2 so ONE instruction executes
++    * before the stop fires (true single-step that advances the PC). */
++   romdev_pc_step = step ? 2 : 0;
 +   romdev_pc_hit = 0;
 +   romdev_pc_last_pc = 0xFFFFFFFF;
 +   romdev_pc_hits = 0;
@@ -359,7 +369,7 @@ index 798c6cc..b6461fb 100644
  void *retro_get_memory_data(unsigned id)
  {
     switch (id)
-@@ -3751,6 +3898,35 @@ void *retro_get_memory_data(unsigned id)
+@@ -3751,6 +3900,35 @@ void *retro_get_memory_data(unsigned id)
           return sram.on ? sram.sram : NULL;
        case RETRO_MEMORY_SYSTEM_RAM:
           return work_ram;
@@ -395,7 +405,7 @@ index 798c6cc..b6461fb 100644
        default:
           return NULL;
     }
-@@ -3802,6 +3978,21 @@ size_t retro_get_memory_size(unsigned id)
+@@ -3802,6 +3980,21 @@ size_t retro_get_memory_size(unsigned id)
              return 0x2000; /* 8KB internal RAM */
        }
  
