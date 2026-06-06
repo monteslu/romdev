@@ -2,6 +2,52 @@
 
 All notable changes to `romdev-mcp`. Dates are release dates.
 
+## 0.11.0
+
+Genesis music + the symbol/build/audio gaps from the v0.6.0 agent feedback.
+
+### Added
+- **`encodeAudio({ target:'xgm2', vgmPath|vgmBase64, name, system })`** — compile a
+  `.vgm`/`.vgz` to a COMPILED Genesis XGM2 blob + a 256-aligned C array you
+  `#include` and `XGM2_play()`. `XGM2_play()` needs a compiled blob (split FM/PSG
+  streams + sample table), not raw VGM — this does that compile. It's a pure-JS
+  port of SGDK's Java `xgm2tool` (new package **`romdev-xgm2`**); no Java/jar, no
+  native binary. PSG-only tracks coexist with `xgm2pcm` SFX. Verified end-to-end
+  (VGM → ROM → gpgx plays real audio).
+- **Genesis/GBA symbol resolution.** `symbols({op:'resolve'|'lookup'|'list'|'map'|'addr'})`
+  now parses the GNU ld `.map` that `build({output:'romWithDebug'})` produces for
+  Genesis (m68k) and GBA (ARM), in addition to cc65 `.dbg` and SDCC sdld `.map`.
+  So a C global's name → address → `memory({op:'read'})` is a 1-byte headless
+  assertion on every buildable platform (and the SDCC targets gained
+  resolve/lookup/list, which they lacked before). Genesis work-RAM symbols come
+  back with a `ramOffset` + a ready `system_ram` read recipe.
+- **`audioDebug({ op:'inspect', frames:N })` trace mode** — steps N frames,
+  samples the chip each frame, returns a per-channel note-timeline (value
+  transitions) to assert a melody headlessly. Single-frame snapshot stays the
+  default (omit `frames`).
+- **`build({ output:'project', path, platform })` builds a C/SGDK directory.**
+  Now discovers `main.c` (C / SGDK Genesis / GBA / cc65-C / SDCC-C) or
+  `main.s`/`main.asm` and links every source in the dir — no per-iteration file
+  manifest. Binary assets (`.bin/.chr/.pcm/.brr/.vgm/...`) fold in automatically.
+
+### Fixed
+- Genesis music docs named the wrong tool/API. Corrected to `XGM2_play` (there is
+  no `XGM2_startPlay` in R58), the compiled-blob requirement, and that the legacy
+  `xgmtool`/`.xgc`/`XGM_*` is a DIFFERENT format.
+
+## 0.10.0
+
+Tool-surface consolidation: **132 narrow tools → 34 domain tools.** Every tool is
+now a small verb with a typed operation axis (`memory({op})`, `build({output})`,
+`breakpoint({on})`, `sprites({op})`, `disasm({target})`, `romPatch({op})`, …) —
+never a generic `action: functionName` dispatcher. No capability lost; every old
+tool is reached as an operation on a richer domain tool. Cuts the dump-all token
+cost ~4× and keeps the surface under the soft tool-cap of clients like Cursor/
+Copilot. The progressive-disclosure path (`loadCategory`/`describeTool`/lean mode)
+was removed too — every tool registers at session init, so `tools/list` returns
+the full surface immediately. See AGENTS.md "Tool surface" for the new names and
+the rename map.
+
 ## 0.9.0
 
 The RE-INJECT path (Blocker 2 from the decompress feedback) — the round-trip
