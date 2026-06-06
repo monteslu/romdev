@@ -46,8 +46,8 @@ void main(void) { while (1) {} }
 test("runSource: first call in a session attaches the playtest hint", { timeout: 60000 }, async () => {
   const client = await startClient();
   const res = await client.callTool({
-    name: "runSource",
-    arguments: { platform: "nes", source: NES_TINY, frames: 2 },
+    name: "build",
+    arguments: { output: "run",  platform: "nes", source: NES_TINY, frames: 2 },
   });
   const parsed = parseToolJson(res);
   assert.equal(parsed.ok, true, "build should succeed:\n" + JSON.stringify(parsed, null, 2));
@@ -59,13 +59,13 @@ test("runSource: second call in the same session does NOT attach the hint", { ti
   const client = await startClient();
   // First call primes the gate.
   parseToolJson(await client.callTool({
-    name: "runSource",
-    arguments: { platform: "nes", source: NES_TINY, frames: 2 },
+    name: "build",
+    arguments: { output: "run",  platform: "nes", source: NES_TINY, frames: 2 },
   }));
   // Second call must omit hint.
   const r2 = await client.callTool({
-    name: "runSource",
-    arguments: { platform: "nes", source: NES_TINY, frames: 2 },
+    name: "build",
+    arguments: { output: "run",  platform: "nes", source: NES_TINY, frames: 2 },
   });
   const parsed2 = parseToolJson(r2);
   assert.equal(parsed2.ok, true);

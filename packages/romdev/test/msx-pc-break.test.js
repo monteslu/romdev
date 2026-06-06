@@ -67,8 +67,8 @@ test("MSX PC breakpoint + read watch + single-step (blueMSX Z80)", { timeout: 24
   const client = await startClient();
 
   const build = toJSON(await client.callTool({
-    name: "buildSource",
-    arguments: {
+    name: "build",
+    arguments: { output: "rom", 
       platform: "msx",
       language: "c",
       sources: { "main.c": MAIN, "msx_crt0.s": CRT0 },

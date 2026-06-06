@@ -48,8 +48,8 @@ test("vibe loop: build NES C with cc65, run in fceumm, screenshot", async () => 
   const romPath = path.join(tmp, "hello.nes");
 
   const build = await client.callTool({
-    name: "buildSource",
-    arguments: {
+    name: "build",
+    arguments: { output: "rom", 
       platform: "nes",
       source: NES_C,
       outputPath: romPath,

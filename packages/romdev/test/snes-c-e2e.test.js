@@ -34,8 +34,8 @@ test("buildSource({platform:'snes', language:'c'}) (default pvsneslib) → loada
   // R18 default: pvsneslib:true → idiomatic SNES C, PVSnesLib runtime linked.
   // Output is ≥ 32KB (PVSnesLib hdr.asm declares ROMBANKS 8 = 256KB allotted).
   const build = toJSON(await client.callTool({
-    name: "buildSource",
-    arguments: {
+    name: "build",
+    arguments: { output: "rom", 
       platform: "snes",
       language: "c",
       source: "int counter = 7; int main(void) { counter += 1; return counter; }",

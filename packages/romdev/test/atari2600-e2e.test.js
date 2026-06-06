@@ -115,8 +115,8 @@ test("vibe loop: build 2600 ROM with dasm, run in stella, screenshot", async () 
 
   // Build the ROM via MCP.
   const build = await client.callTool({
-    name: "buildSource",
-    arguments: {
+    name: "build",
+    arguments: { output: "rom", 
       platform: "atari2600",
       source: ATARI_PROGRAM,
       outputPath: romPath,

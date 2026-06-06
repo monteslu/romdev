@@ -24,7 +24,7 @@ const SRC = "#include <stdint.h>\nvolatile uint8_t c;\nint main(void){ for(;;){ 
 
 test("lynx RE primitives: setRegister + watchRange + logPCRange (65C02)", { timeout: 200000 }, async () => {
   const client = await startClient();
-  const build = toJSON(await client.callTool({ name: "buildSource", arguments: { platform: "lynx", source: SRC } }, undefined, { timeout: 200000 }));
+  const build = toJSON(await client.callTool({ name: "build", arguments: { output: "rom",  platform: "lynx", source: SRC } }, undefined, { timeout: 200000 }));
   assert.equal(build.ok, true, "lynx build failed:\n" + build.log);
   const load = toJSON(await client.callTool({ name: "loadMedia", arguments: { platform: "lynx", path: build.binaryPath } }));
   assert.equal(load.loaded, true, "loadMedia failed: " + JSON.stringify(load));

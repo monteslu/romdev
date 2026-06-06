@@ -33,7 +33,7 @@ test("NES RE primitives: setRegister + watchRange + logPCRange (fceumm 6502)", {
   const client = await startClient();
 
   const build = toJSON(await client.callTool({
-    name: "buildSource", arguments: { platform: "nes", source: SRC },
+    name: "build", arguments: { output: "rom",  platform: "nes", source: SRC },
   }, undefined, { timeout: 180000 }));
   assert.equal(build.ok, true, "nes build failed:\n" + build.log);
   const load = toJSON(await client.callTool({

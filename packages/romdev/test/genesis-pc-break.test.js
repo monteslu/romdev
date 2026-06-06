@@ -52,8 +52,8 @@ test("Genesis PC breakpoint + read watch + single-step (gpgx m68k)", { timeout: 
   const client = await startClient();
 
   const build = toJSON(await client.callTool({
-    name: "buildSource",
-    arguments: { platform: "genesis", language: "c", source: SRC },
+    name: "build",
+    arguments: { output: "rom",  platform: "genesis", language: "c", source: SRC },
   }, undefined, { timeout: 240000 }));
   assert.equal(build.ok, true, "genesis build failed:\n" + build.log);
 

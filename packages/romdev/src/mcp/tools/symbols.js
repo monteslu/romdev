@@ -32,28 +32,9 @@ function siblings(romPath) {
   return { dbg: `${base}.dbg`, map: `${base}.map`, log: `${base}.build.log` };
 }
 
-export function registerSymbolTools(server, z) {
-  server.tool(
-    "buildSourceWithDebug",
-    "Like buildSource but also returns linker debug info for resolveSymbol / lookupAddress / getMemoryMap. " +
-    "cc65 platforms (NES, C64, Atari 7800, Lynx, PCE) produce a `.dbg`; SDCC platforms (GB, GBC, SMS, GG, " +
-    "MSX, Coleco, ZXSpectrum) produce an sdld `.map`. Feed EITHER to getMemoryMap (dbg: or map:) for a " +
-    "categorized layout — no manual grepping needed. " +
-    "DEFAULT writes the ROM + debug file + (large) log to disk and returns `{binaryPath, dbgPath|mapPath, " +
-    "logPath}`; pass `inline:true` to get `binaryBase64` + the debug text + full log in context instead. " +
-    "Accepts `source` (single) or `sources` (multi-file map).",
-    {
-      platform: z.string(),
-      source: z.string().optional(),
-      sources: z.record(z.string(), z.string()).optional(),
-      includes: z.record(z.string(), z.string()).optional(),
-      linkerConfig: z.string().optional(),
-      crt0: z.string().optional().describe("SDCC platforms only — custom crt0 .s source. Mirror of buildSource's crt0 arg."),
-      codeLoc: z.number().optional().describe("SDCC platforms only — code segment address. Default 0x150 on GB/GBC, 0x0000 on others."),
-      outputPath: z.string().optional().describe("Absolute path to write the ROM (e.g. your project dir). The .dbg/.map and build log are written alongside it. REQUIRED unless inline:true."),
-      inline: z.boolean().default(false).describe("If true, return binaryBase64 + the debug text (dbg/mapText) + full log in the response instead of writing to disk. Default false — and then outputPath is required."),
-    },
-    safeTool(async ({ platform, source, sources, includes, linkerConfig, crt0, codeLoc, outputPath, inline }) => {
+// build({output:'romWithDebug'}) — the cc65 .dbg / sdld .map / m68k ELF-map
+// build. Exported core; the `build` router (toolchain.js) calls it.
+export async function buildSourceWithDebugCore({ platform, source, sources, includes, linkerConfig, crt0, codeLoc, outputPath, inline = false }) {
       const CC65_TARGETS = ["nes", "c64", "atari7800", "lynx"];
       const SDCC_TARGETS = ["gb", "gbc", "sms", "gg"];
       const M68K_TARGETS = ["genesis"];
@@ -175,12 +156,14 @@ export function registerSymbolTools(server, z) {
       }
 
       throw new Error(
-        `buildSourceWithDebug supports cc65 targets (${CC65_TARGETS.join(", ")}), ` +
+        `build({output:'romWithDebug'}) supports cc65 targets (${CC65_TARGETS.join(", ")}), ` +
         `SDCC targets (${SDCC_TARGETS.join(", ")}), and m68k targets (${M68K_TARGETS.join(", ")}); got '${platform}'`
       );
-    }),
-  );
+}
 
+export function registerSymbolTools(server, z) {
+  // buildSourceWithDebug is now build({output:'romWithDebug'}) — registered by
+  // the `build` router in toolchain.js (imports buildSourceWithDebugCore).
   registerSymbolsTool(server, z);
 }
 

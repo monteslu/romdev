@@ -51,7 +51,7 @@ test("Lynx PC breakpoint + read watch + single-step (handy 65C02)", { timeout: 1
   const client = await startClient();
 
   const build = toJSON(await client.callTool({
-    name: "buildSource", arguments: { platform: "lynx", language: "c", source: SRC },
+    name: "build", arguments: { output: "rom",  platform: "lynx", language: "c", source: SRC },
   }, undefined, { timeout: 180000 }));
   assert.equal(build.ok, true, "lynx build failed:\n" + (build.log || JSON.stringify(build)).slice(-600));
 

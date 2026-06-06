@@ -54,7 +54,7 @@ test("Genesis RE primitives: callSubroutine + watchRange + logPCRange + watchDma
   const client = await startClient();
 
   const build = toJSON(await client.callTool({
-    name: "buildSourceWithDebug", arguments: { platform: "genesis", language: "c", source: SRC, inline: true },
+    name: "build", arguments: { output: "romWithDebug",  platform: "genesis", language: "c", source: SRC, inline: true },
   }, undefined, { timeout: 240000 }));
   assert.equal(build.ok, true, "build failed:\n" + build.log);
   const map = build.mapText || build.symbols || "";

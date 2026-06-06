@@ -44,7 +44,7 @@ test("GB RE primitives: setRegister + watchRange + logPCRange + callSubroutine (
   const client = await startClient();
 
   const build = toJSON(await client.callTool({
-    name: "buildSource", arguments: { platform: "gb", language: "c", source: SRC },
+    name: "build", arguments: { output: "rom",  platform: "gb", language: "c", source: SRC },
   }, undefined, { timeout: 240000 }));
   assert.equal(build.ok, true, "gb build failed:\n" + build.log);
 

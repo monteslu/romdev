@@ -171,7 +171,7 @@ export function registerTools(server, z, sessionKey) {
       const categories = disclosure.listCategories();
       return jsonContent({
         categories,
-        entryTier: ["listCategories", "loadCategory", "describeTool", "getStatus", "buildSource", "playtest", "playtestStop", "playtestStatus"],
+        entryTier: ["listCategories", "loadCategory", "describeTool", "getStatus", "build", "playtest", "playtestStop", "playtestStatus"],
         powerUserHint: "Call loadCategory({category:\"all\"}) to register every category at once — skips the discovery dance for capable agents.",
         humanInTheLoopHint: "Iterate INTERNALLY on screenshots first (runSource returns one inline; stepAndScreenshot/screenshot re-shoot the live host) — don't open a window to debug. Once the game actually boots and shows the feature you're working on, call playtest({}) so your human can watch and play it live. playtest is entry-tier (no loadCategory needed). Opening a window on a black screen or a crash just wastes the human's attention — show them something that works.",
       });
@@ -312,7 +312,7 @@ const TOOL_OWNER = {
   tiles: "debug", sprites: "debug",
   background: "debug", encodeArt: "assets",
   cpu: "debug", audioDebug: "debug",
-  buildSourceWithDebug: "debug", symbols: "debug",
+  symbols: "debug",
   disasm: "debug",
   cheats: "debug",
   inspectTile: "debug",
@@ -336,7 +336,7 @@ const TOOL_OWNER = {
   recordSession: "advanced",
   // entry tier itself (so describeTool works for them)
   listCategories: "entry", loadCategory: "entry", describeTool: "entry", getStatus: "entry",
-  buildSource: "entry", runSource: "entry", listRunnableFormats: "entry",
+  build: "entry", listRunnableFormats: "entry",
 };
 
 function ownerCategoryOf(name) {

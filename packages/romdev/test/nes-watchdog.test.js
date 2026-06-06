@@ -47,8 +47,8 @@ test("NES watchdog: infinite-loop routine returns {watchdog:true} (fceumm 6502)"
   const client = await startClient();
 
   const build = toJSON(await client.callTool({
-    name: "buildSourceWithDebug",
-    arguments: { platform: "nes", sources: { "main.c": MAIN_C, "spin.s": SPIN_S }, inline: true },
+    name: "build",
+    arguments: { output: "romWithDebug",  platform: "nes", sources: { "main.c": MAIN_C, "spin.s": SPIN_S }, inline: true },
   }, undefined, { timeout: 180000 }));
   assert.equal(build.ok, true, "nes build failed:\n" + build.log);
 
