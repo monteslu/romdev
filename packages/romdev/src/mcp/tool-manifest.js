@@ -45,6 +45,8 @@ export const MERGE_MAP = {
   palette: { absorbs: ["inspectPalette", "getPlatformPalettePng", "getLospecPalette"], axis: "source" },
   // ── audioDebug (inspect/record; getAudioState from platform-tools.js, recordAudio from audio.js; pcmToBrr/wavToXgm2Pcm stay) ──
   audioDebug: { absorbs: ["getAudioState", "recordAudio"], axis: "op" },
+  // ── sprites (inspect OAM + meta-sprite pipeline; inspectSprites from platform-tools.js, rest from metasprite-tools.js; validateGenesisTiles stays for encodeArt) ──
+  sprites: { absorbs: ["inspectSprites", "groupVisibleSprites", "previewVisibleSprites", "captureMetaSprite", "renderMetaSpritePreview", "emitMetaSpriteRenderer", "extractSpriteFromScreenshot"], axis: "op" },
 };
 
 /** Every OLD tool name that the consolidation removes (absorbed into a new tool). */

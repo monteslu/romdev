@@ -7,13 +7,21 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { z } from "zod";
 import { registerPlatformTools } from "../src/mcp/tools/platform-tools.js";
+import { registerMetaSpriteTools } from "../src/mcp/tools/metasprite-tools.js";
 import { _setHostForTest } from "../src/mcp/state.js";
 
-// Capture specific tool handlers out of registerPlatformTools.
+// Capture tool handlers. inspectSprites moved into the consolidated `sprites`
+// tool (sprites({op:'inspect'})); inspectBackgroundMap stays in
+// registerPlatformTools. Register both with the SAME sessionKey so the
+// sprites router's live-binding inspectSpritesCore is wired before use, then
+// expose an inspectSprites(args) adapter so these (frozen) assertions are
+// unchanged.
 function handlers() {
   const map = {};
   const server = { tool(name, _desc, _schema, h) { map[name] = h; } };
   registerPlatformTools(server, z, "pt-test");
+  registerMetaSpriteTools(server, z, "pt-test");
+  map.inspectSprites = (args) => map.sprites({ op: "inspect", ...args });
   return map;
 }
 
