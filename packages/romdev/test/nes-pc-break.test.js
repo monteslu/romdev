@@ -54,7 +54,7 @@ test("NES PC breakpoint + read watch + single-step (fceumm 6502)", { timeout: 18
 
   // 1) findWriter on $10 → the EXACT 6502 instruction PC that writes the counter.
   const fw = toJSON(await client.callTool({
-    name: "findWriter", arguments: { address: 0x10, maxFrames: 300 },
+    name: "breakpoint", arguments: { on: "write",  address: 0x10, maxFrames: 300 },
   }));
   assert.equal(fw.found, true, "findWriter didn't catch the $10 write: " + JSON.stringify(fw));
   const writerPC = fw.pcRaw;
@@ -62,7 +62,7 @@ test("NES PC breakpoint + read watch + single-step (fceumm 6502)", { timeout: 18
 
   // 2) runUntilPC → freeze the CPU at that exact instruction.
   const bp = toJSON(await client.callTool({
-    name: "runUntilPC", arguments: { address: writerPC, maxFrames: 300 },
+    name: "breakpoint", arguments: { on: "pc",  address: writerPC, maxFrames: 300 },
   }));
   assert.equal(bp.notSupported, undefined, "PC breakpoint notSupported — core patch missing?");
   assert.equal(bp.hit, true, "runUntilPC did not hit: " + JSON.stringify(bp));
@@ -83,7 +83,7 @@ test("NES PC breakpoint + read watch + single-step (fceumm 6502)", { timeout: 18
 
   // 5) runUntilRead is wired and returns a clean shape.
   const rd = toJSON(await client.callTool({
-    name: "runUntilRead", arguments: { address: 0x10, maxFrames: 60 },
+    name: "breakpoint", arguments: { on: "read",  address: 0x10, maxFrames: 60 },
   }));
   assert.equal(rd.notSupported, undefined, "runUntilRead notSupported — read-watch patch missing?");
   assert.ok(typeof rd.hit === "boolean", "runUntilRead returned no hit field: " + JSON.stringify(rd));

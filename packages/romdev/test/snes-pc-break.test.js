@@ -59,7 +59,7 @@ test("SNES PC breakpoint + read watch + single-step (snes9x 65816)", { timeout: 
 
   // 1) findWriter on $7E0010 → the exact 65816 instruction PC.
   const fw = toJSON(await client.callTool({
-    name: "findWriter", arguments: { address: 0x7E0010, maxFrames: 300 },
+    name: "breakpoint", arguments: { on: "write",  address: 0x7E0010, maxFrames: 300 },
   }));
   assert.equal(fw.found, true, "findWriter didn't catch the $7E2000 write: " + JSON.stringify(fw));
   const writerPC = fw.pcRaw;
@@ -67,7 +67,7 @@ test("SNES PC breakpoint + read watch + single-step (snes9x 65816)", { timeout: 
 
   // 2) runUntilPC → freeze the CPU at that instruction.
   const bp = toJSON(await client.callTool({
-    name: "runUntilPC", arguments: { address: writerPC, maxFrames: 300 },
+    name: "breakpoint", arguments: { on: "pc",  address: writerPC, maxFrames: 300 },
   }));
   assert.equal(bp.notSupported, undefined, "PC breakpoint notSupported — core patch missing?");
   assert.equal(bp.hit, true, "runUntilPC did not hit: " + JSON.stringify(bp));
@@ -88,7 +88,7 @@ test("SNES PC breakpoint + read watch + single-step (snes9x 65816)", { timeout: 
 
   // 5) runUntilRead wired + clean shape.
   const rd = toJSON(await client.callTool({
-    name: "runUntilRead", arguments: { address: 0x7E0010, maxFrames: 60 },
+    name: "breakpoint", arguments: { on: "read",  address: 0x7E0010, maxFrames: 60 },
   }));
   assert.equal(rd.notSupported, undefined, "runUntilRead notSupported — read-watch patch missing?");
   assert.ok(typeof rd.hit === "boolean", "runUntilRead returned no hit field: " + JSON.stringify(rd));

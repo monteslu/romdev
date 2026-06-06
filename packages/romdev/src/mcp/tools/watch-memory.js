@@ -437,27 +437,9 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     }),
   );
 
-  server.tool(
-    "findWriter",
-    "Find the EXACT instruction that writes a RAM byte — the precise answer to 'which code wrote $XX?', fixing the " +
-    "frame-sampled-PC limitation of watchMemory/runUntilWrite. Arms a core-level WRITE WATCHPOINT on `address` (a " +
-    "CPU address, e.g. 0x00CD), steps up to `maxFrames`, and returns the writing instruction's PC captured INSIDE " +
-    "the CPU write path — correct even for NMI/IRQ-driven writes (where the frame-sampled pc is just the idle loop). " +
-    "Returns { found, address, pc, value, hits, framesStepped }. Then `disassembleRom({ startAddress: pc })` lands " +
-    "you on the real store instruction. Supported on ALL bundled CPU cores: NES, GB/GBC, Genesis, SMS/GG, SNES, " +
-    "Atari 2600, Atari 7800, and C64 (6502/sm83/m68k/z80/65816/6510). (A core without the watchpoint would return " +
-    "notSupported.) On banked mappers a $8000-$BFFF pc may be in a switchable bank — disassemble with the right `bank`.",
-    {
-      address: z.number().int().min(0).describe("CPU address to watch for writes (e.g. 0x00CD). For NES, low RAM CPU address == system_ram offset."),
-      maxFrames: z.number().int().min(1).max(1_000_000).default(600).describe("Max frames to step while waiting for a write."),
-      pressDuring: z.array(z.object({
-        frame: z.number().int().min(0),
-        button: z.string(),
-        port: z.number().int().min(0).max(3).default(0),
-        holdFrames: z.number().int().min(1).default(2),
-      })).optional().describe("Schedule input while waiting (e.g. press A to trigger the write you're hunting)."),
-    },
-    safeTool(async ({ address, maxFrames, pressDuring }) => {
+  // breakpoint({on:write|read|pc}) STOP-on-first. on:write precision:exact=bpFindWriter
+  // (core watchpoint, true PC under IRQ), precision:sampled=bpRunUntilWrite (frame PC).
+  async function bpFindWriter({ address, maxFrames = 600, pressDuring }) {
       const host = getHost(sessionKey);
       if (!host.watchpointSupported || !host.watchpointSupported()) {
         return jsonContent({
@@ -514,32 +496,9 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
             ? `pc is in PRG bank ${bankInfo.bank} (prg offset ${bankInfo.prgOffset}) — disassembleRom({ startAddress: ${result.lastPC != null ? "0x" + result.lastPC.toString(16) : "pc"}, bank: ${bankInfo.bank} }) targets the exact bank (no fixed-bank $FF padding).`
             : `disassembleRom({ startAddress: ${result.lastPC != null ? "0x" + result.lastPC.toString(16) : "pc"} }) to see it. On a banked mapper a $8000-$BFFF pc may be in a switchable bank — pass the right \`bank\`.`),
       }), host);
-    }),
-  );
+  }
 
-  server.tool(
-    "runUntilWrite",
-    "Step the emulator forward until a target byte changes, then stop. Convenience wrapper around watchMemory " +
-    "with stopOnFirst=true. Returns the writing frame + before/after values + the CPU PC sampled at that frame boundary. " +
-    "CAVEAT: the returned `pc` is a frame-boundary sample, NOT the writing instruction — for NMI/IRQ-driven writes (common on " +
-    "NES/GB) it is usually the interrupted main-thread PC (often an idle loop), not the writer. Use it as a lead and confirm " +
-    "against the value trace; `disassembleRom` near that PC is a starting point, not a guaranteed hit. " +
-    "**If you need the EXACT writing instruction, use `findWriter` instead** — it uses a core-level watchpoint that captures " +
-    "the real writer's PC even under interrupts (all platforms). " +
-    "(No screenshot is returned — call `screenshot` separately if you need the resulting frame.)",
-    {
-      region: z.enum(MEMORY_REGIONS),
-      offset: z.number().int().min(0),
-      length: z.number().int().min(1).max(4096).default(1),
-      maxFrames: z.number().int().min(1).max(1_000_000).default(600),
-      pressDuring: z.array(z.object({
-        frame: z.number().int().min(0),
-        button: z.string(),
-        port: z.number().int().min(0).max(3).default(0),
-        holdFrames: z.number().int().min(1).default(2),
-      })).optional(),
-    },
-    safeTool(async ({ region, offset, length, maxFrames, pressDuring }) => {
+  async function bpRunUntilWrite({ region, offset, length = 1, maxFrames = 600, pressDuring }) {
       const host = getHost(sessionKey);
       const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
       const pressDriver = makePressDriver(host, presses);
@@ -584,30 +543,9 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
         note: "Target byte was not written within maxFrames. Try increasing maxFrames or driving the game with pressDuring.",
       });
-    }),
-  );
+  }
 
-  server.tool(
-    "runUntilPC",
-    "Run until the CPU's program counter reaches `address`, then STOP with the CPU frozen EXACTLY at that instruction " +
-    "— a real execution breakpoint. This is the RE primitive for 'read the register at this instruction': break at the " +
-    "instruction, then call `getCPUState` to read the full register file at that exact moment (e.g. break at a decoder's " +
-    "`move.b (a0),d0` and read A0 to get the source address — one read instead of hours of inference). Arms a core-level " +
-    "PC breakpoint, runs up to `maxFrames` (driving any `pressDuring` input), and stops mid-frame on the first hit; the " +
-    "breakpoint auto-disarms after. Returns { hit, pc, frame, framesRun, hits }. After a hit the emulator stays frozen at " +
-    "the PC — call getCPUState / readMemory to inspect, then stepFrames/resume to continue. " +
-    "Supported on all 14 platforms (every CPU family); returns notSupported only if the core package is out of date.",
-    {
-      address: z.number().int().min(0).describe("CPU address of the instruction to break on (e.g. 0x2A3FD4). Must be an instruction boundary."),
-      maxFrames: z.number().int().min(1).max(1_000_000).default(600).describe("Max frames to run while waiting for the PC to be reached."),
-      pressDuring: z.array(z.object({
-        frame: z.number().int().min(0),
-        button: z.string(),
-        port: z.number().int().min(0).max(3).default(0),
-        holdFrames: z.number().int().min(1).default(2),
-      })).optional().describe("Schedule input while running (e.g. navigate a menu so the code path that hits this PC actually executes)."),
-    },
-    safeTool(async ({ address, maxFrames, pressDuring }) => {
+  async function bpRunUntilPC({ address, maxFrames = 600, pressDuring }) {
       const host = getHost(sessionKey);
       if (!host.pcBreakSupported || !host.pcBreakSupported()) {
         return jsonContent({
@@ -650,32 +588,13 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         framesRun,
         hits: fin.hits,
         ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
-        note: "CPU is FROZEN at this instruction. Call getCPUState({platform:'genesis'}) to read all registers at this exact " +
-          "moment (the value you want — e.g. an address register holding a source pointer — is live now), then readMemory/readCartRom " +
-          "at that pointer. stepInstruction to single-step, or stepFrames/resume to continue.",
+        note: "CPU is FROZEN at this instruction. Call cpu({op:'read'}) to read all registers at this exact " +
+          "moment (the value you want — e.g. an address register holding a source pointer — is live now), then memory({op:'read'/'readCart'}) " +
+          "at that pointer. frame({op:'stepInstruction'}) to single-step, or frame({op:'step'})/host({op:'resume'}) to continue.",
       }), host);
-    }),
-  );
+  }
 
-  server.tool(
-    "runUntilRead",
-    "Run until the CPU READS a watched address, then stop — the read-side mirror of findWriter. Returns the EXACT instruction " +
-    "PC that read the byte (captured in the CPU read path). Use it to find who consumes a value: e.g. watch a ROM name-table " +
-    "entry and learn which routine reads it, or watch a flag and find its reader. Arms a core-level READ watchpoint, runs up to " +
-    "`maxFrames` (driving `pressDuring`), and returns { hit, pc, value, frame, hits }. Unlike runUntilPC it does NOT freeze " +
-    "mid-frame — it records the reading PC and finishes the current frame. " +
-    "Supported on all 14 platforms; returns notSupported only if the core package is out of date.",
-    {
-      address: z.number().int().min(0).describe("CPU address to watch for reads (e.g. a ROM/RAM byte you want to find the consumer of)."),
-      maxFrames: z.number().int().min(1).max(1_000_000).default(600).describe("Max frames to run while waiting for a read."),
-      pressDuring: z.array(z.object({
-        frame: z.number().int().min(0),
-        button: z.string(),
-        port: z.number().int().min(0).max(3).default(0),
-        holdFrames: z.number().int().min(1).default(2),
-      })).optional().describe("Schedule input while running (drive the game to the state that reads this address)."),
-    },
-    safeTool(async ({ address, maxFrames, pressDuring }) => {
+  async function bpRunUntilRead({ address, maxFrames = 600, pressDuring }) {
       const host = getHost(sessionKey);
       if (!host.readWatchSupported || !host.readWatchSupported()) {
         return jsonContent({
@@ -719,6 +638,63 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
         note: "pc is the EXACT instruction that read this address. disassembleRom({ startAddress: pc }) to see it.",
       }), host);
+  }
+
+  server.tool(
+    "breakpoint",
+    "STOP-on-first dynamic breakpoints — run until a condition hits, then stop. One tool keyed by `on`. (For LOG-ALL " +
+    "coverage over many frames use `watch`; for a value-predicate closure use `runUntil`.)\n" +
+    "• on:'write' — break when a CPU `address` is written. **`precision` is the key axis here:**\n" +
+    "    – precision:'exact' (default) — arms a core-level WRITE WATCHPOINT and returns the writing instruction's PC " +
+    "captured INSIDE the CPU write path — **correct even for NMI/IRQ-driven writes** (where a frame sample is just the idle loop). " +
+    "The precise answer to 'which code wrote $XX?'. On banked NES mappers it also reports the prg bank.\n" +
+    "    – precision:'sampled' — the cheap wrapper: steps until a memory `region`/`offset` byte changes and returns the PC " +
+    "**sampled at the frame boundary**. **CAVEAT: that PC is NOT the writing instruction — under interrupts it's usually the " +
+    "interrupted main-thread PC (an idle loop), a LIE. Use 'exact' when you need the real writer.**\n" +
+    "• on:'read' — break when the CPU READS `address` (the read-side mirror of on:'write' exact): the EXACT instruction PC that " +
+    "read the byte. Finds who CONSUMES a value. Does NOT freeze mid-frame — records the PC and finishes the frame.\n" +
+    "• on:'pc' — break when the PC reaches `address`, freezing the CPU EXACTLY at that instruction (a real execution breakpoint). " +
+    "**The RE primitive for 'read the register at this instruction': break, then cpu({op:'read'}) the live register file** " +
+    "(e.g. break at a decoder's `move.b (a0),d0` and read A0 = the source address). After a hit the CPU stays FROZEN mid-frame — " +
+    "inspect, then frame({op:'step'/'stepInstruction'}) to continue. (on:'read'/'write' finish the frame; on:'pc' freezes.)\n" +
+    "All supported on every CPU core; out-of-date core packages return notSupported.",
+    {
+      on: z.enum(["write", "read", "pc"])
+        .describe("write=break on a write to address (precision:exact=true writer PC / sampled=frame PC, a lie under IRQ); read=break on a read (exact PC, who consumes it); pc=break when PC reaches address (freezes mid-instruction)."),
+      precision: z.enum(["exact", "sampled"]).default("exact")
+        .describe("on:'write' ONLY. exact=core watchpoint, the real writing instruction PC even under interrupts (uses `address`). sampled=cheap frame-boundary PC (uses region/offset/length) — NOT the writer under IRQ. Ignored for on:read/pc (always exact)."),
+      address: z.number().int().min(0).optional().describe("on:'write' exact / on:'read' / on:'pc' — the CPU address to break on (a write target, a read target, or an instruction boundary). Required for those."),
+      region: z.enum(MEMORY_REGIONS).optional().describe("on:'write' precision:'sampled' — the memory region whose byte to watch for change."),
+      offset: z.number().int().min(0).optional().describe("on:'write' precision:'sampled' — offset within the region."),
+      length: z.number().int().min(1).max(4096).default(1).describe("on:'write' precision:'sampled' — bytes to watch from offset."),
+      maxFrames: z.number().int().min(1).max(1_000_000).default(600).describe("Max frames to run while waiting for the condition."),
+      pressDuring: z.array(z.object({
+        frame: z.number().int().min(0),
+        button: z.string(),
+        port: z.number().int().min(0).max(3).default(0),
+        holdFrames: z.number().int().min(1).default(2),
+      })).optional().describe("Schedule input while waiting (drive the game to the state that triggers the condition)."),
+    },
+    safeTool(async (args) => {
+      switch (args.on) {
+        case "write": {
+          if (args.precision === "sampled") {
+            if (!args.region || args.offset == null) throw new Error("breakpoint({on:'write', precision:'sampled'}): `region` and `offset` are required.");
+            return await bpRunUntilWrite(args);
+          }
+          if (args.address == null) throw new Error("breakpoint({on:'write', precision:'exact'}): `address` is required.");
+          return await bpFindWriter(args);
+        }
+        case "read": {
+          if (args.address == null) throw new Error("breakpoint({on:'read'}): `address` is required.");
+          return await bpRunUntilRead(args);
+        }
+        case "pc": {
+          if (args.address == null) throw new Error("breakpoint({on:'pc'}): `address` is required.");
+          return await bpRunUntilPC(args);
+        }
+        default: throw new Error(`breakpoint: unknown on '${args.on}'`);
+      }
     }),
   );
 

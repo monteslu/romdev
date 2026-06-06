@@ -65,7 +65,7 @@ test("Lynx PC breakpoint + read watch + single-step (handy 65C02)", { timeout: 1
 
   // 1) findWriter on the scratch byte → the EXACT 65C02 instruction PC writing it.
   const fw = toJSON(await client.callTool({
-    name: "findWriter", arguments: { address: SCRATCH, maxFrames: 300 },
+    name: "breakpoint", arguments: { on: "write",  address: SCRATCH, maxFrames: 300 },
   }));
   assert.equal(fw.found, true, "findWriter didn't catch the 0x8000 write: " + JSON.stringify(fw));
   const writerPC = fw.pcRaw;
@@ -73,7 +73,7 @@ test("Lynx PC breakpoint + read watch + single-step (handy 65C02)", { timeout: 1
 
   // 2) runUntilPC → freeze the CPU at that exact instruction.
   const bp = toJSON(await client.callTool({
-    name: "runUntilPC", arguments: { address: writerPC, maxFrames: 300 },
+    name: "breakpoint", arguments: { on: "pc",  address: writerPC, maxFrames: 300 },
   }));
   assert.equal(bp.notSupported, undefined, "PC breakpoint notSupported — core patch missing?");
   assert.equal(bp.hit, true, "runUntilPC did not hit: " + JSON.stringify(bp));
@@ -95,7 +95,7 @@ test("Lynx PC breakpoint + read watch + single-step (handy 65C02)", { timeout: 1
   // 5) runUntilRead — the scratch byte is read every loop (RMW), so the read
   //    watch must fire and report a reader PC.
   const rd = toJSON(await client.callTool({
-    name: "runUntilRead", arguments: { address: SCRATCH, maxFrames: 120 },
+    name: "breakpoint", arguments: { on: "read",  address: SCRATCH, maxFrames: 120 },
   }));
   assert.equal(rd.notSupported, undefined, "runUntilRead notSupported — read-watch patch missing?");
   assert.equal(rd.hit, true, "runUntilRead did not catch the 0x8000 read: " + JSON.stringify(rd));

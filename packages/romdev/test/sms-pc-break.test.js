@@ -86,7 +86,7 @@ test("SMS PC breakpoint + read watch + single-step (gpgx Z80)", { timeout: 24000
   // 1) findWriter on RAM → the EXACT Z80 instruction PC that writes the counter.
   //    (Confirms the Z80 write watch works AND gives a real bp target.)
   const fw = toJSON(await client.callTool({
-    name: "findWriter", arguments: { address: RAM, maxFrames: 300 },
+    name: "breakpoint", arguments: { on: "write",  address: RAM, maxFrames: 300 },
   }));
   assert.equal(fw.found, true, "findWriter didn't catch the RAM write: " + JSON.stringify(fw));
   assert.ok(fw.pcRaw > 0, "findWriter returned no pc");
@@ -94,7 +94,7 @@ test("SMS PC breakpoint + read watch + single-step (gpgx Z80)", { timeout: 24000
 
   // 2) runUntilPC on that PC → must freeze the Z80 exactly there.
   const bp = toJSON(await client.callTool({
-    name: "runUntilPC", arguments: { address: writerPC, maxFrames: 300 },
+    name: "breakpoint", arguments: { on: "pc",  address: writerPC, maxFrames: 300 },
   }));
   assert.equal(bp.notSupported, undefined, "PC breakpoint reported notSupported — core patch missing?");
   assert.equal(bp.hit, true, "runUntilPC did not hit the writer PC: " + JSON.stringify(bp));
@@ -116,7 +116,7 @@ test("SMS PC breakpoint + read watch + single-step (gpgx Z80)", { timeout: 24000
 
   // 5) runUntilRead on RAM — the program reads it back each iteration.
   const rd = toJSON(await client.callTool({
-    name: "runUntilRead", arguments: { address: RAM, maxFrames: 300 },
+    name: "breakpoint", arguments: { on: "read",  address: RAM, maxFrames: 300 },
   }));
   assert.equal(rd.notSupported, undefined, "runUntilRead reported notSupported — read-watch patch missing?");
   assert.equal(rd.hit, true, "runUntilRead did not catch the RAM read: " + JSON.stringify(rd));

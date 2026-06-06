@@ -68,7 +68,7 @@ test("Genesis PC breakpoint + read watch + single-step (gpgx m68k)", { timeout: 
   // 1) findWriter on 0xFF2000 → the EXACT instruction PC that writes the counter.
   //    (Confirms the write watchpoint still works AND gives us a real bp target.)
   const fw = toJSON(await client.callTool({
-    name: "findWriter", arguments: { address: 0xFF2000, maxFrames: 300 },
+    name: "breakpoint", arguments: { on: "write",  address: 0xFF2000, maxFrames: 300 },
   }));
   assert.equal(fw.found, true, "findWriter didn't catch the 0xFF2000 write: " + JSON.stringify(fw));
   assert.ok(fw.pcRaw > 0, "findWriter returned no pc");
@@ -76,7 +76,7 @@ test("Genesis PC breakpoint + read watch + single-step (gpgx m68k)", { timeout: 
 
   // 2) runUntilPC on that PC → must freeze the CPU exactly there.
   const bp = toJSON(await client.callTool({
-    name: "runUntilPC", arguments: { address: writerPC, maxFrames: 300 },
+    name: "breakpoint", arguments: { on: "pc",  address: writerPC, maxFrames: 300 },
   }));
   assert.equal(bp.notSupported, undefined, "PC breakpoint reported notSupported — core patch missing?");
   assert.equal(bp.hit, true, "runUntilPC did not hit the writer PC: " + JSON.stringify(bp));
@@ -111,7 +111,7 @@ test("Genesis PC breakpoint + read watch + single-step (gpgx m68k)", { timeout: 
   //    crash and reports notSupported:false). A positive-hit read test would need
   //    a known read address; the mechanism is shared with runUntilPC above.
   const rd = toJSON(await client.callTool({
-    name: "runUntilRead", arguments: { address: 0xFF2000, maxFrames: 30 },
+    name: "breakpoint", arguments: { on: "read",  address: 0xFF2000, maxFrames: 30 },
   }));
   assert.equal(rd.notSupported, undefined, "runUntilRead reported notSupported — read-watch patch missing?");
   assert.ok(typeof rd.hit === "boolean", "runUntilRead returned no hit field: " + JSON.stringify(rd));
@@ -122,7 +122,7 @@ test("Genesis PC breakpoint + read watch + single-step (gpgx m68k)", { timeout: 
   //    runUntilPC must still hit cleanly (no residue), and the host must not be
   //    left paused.
   const bp2 = toJSON(await client.callTool({
-    name: "runUntilPC", arguments: { address: writerPC, maxFrames: 300 },
+    name: "breakpoint", arguments: { on: "pc",  address: writerPC, maxFrames: 300 },
   }));
   assert.equal(bp2.hit, true, "second runUntilPC did not hit (exclusive-run left residue): " + JSON.stringify(bp2));
   const status = toJSON(await client.callTool({ name: "getStatus", arguments: {} }));
