@@ -108,7 +108,7 @@ test("SMS PC breakpoint + read watch + single-step (gpgx Z80)", { timeout: 24000
   assert.ok(pcField !== undefined, "getCPUState returned no PC field: " + JSON.stringify(regs).slice(0, 200));
 
   // 4) stepInstruction must ADVANCE the PC past the breakpoint. (Countdown fix.)
-  const stepRes = toJSON(await client.callTool({ name: "stepInstruction", arguments: {} }));
+  const stepRes = toJSON(await client.callTool({ name: "frame", arguments: { op: "stepInstruction" } }));
   assert.equal(stepRes.notSupported, undefined, "stepInstruction reported notSupported");
   assert.equal(stepRes.stepped, true, "single-step failed: " + JSON.stringify(stepRes));
   assert.ok(stepRes.pcRaw >= 0, "single-step returned no pc");

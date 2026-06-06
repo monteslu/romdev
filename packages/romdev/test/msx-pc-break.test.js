@@ -111,7 +111,7 @@ test("MSX PC breakpoint + read watch + single-step (blueMSX Z80)", { timeout: 24
 
   // 4) stepInstruction must ADVANCE the PC past the breakpoint — not re-stop on
   //    the same (un-executed) instruction. (The countdown-arm fix.)
-  const stepRes = toJSON(await client.callTool({ name: "stepInstruction", arguments: {} }));
+  const stepRes = toJSON(await client.callTool({ name: "frame", arguments: { op: "stepInstruction" } }));
   assert.equal(stepRes.notSupported, undefined, "stepInstruction reported notSupported");
   assert.equal(stepRes.stepped, true, "single-step failed: " + JSON.stringify(stepRes));
   assert.ok(stepRes.pcRaw >= 0, "single-step returned no pc");

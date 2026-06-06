@@ -87,7 +87,7 @@ test("C64 PC breakpoint + read watch + single-step (vice 6510)", { timeout: 2400
   assert.ok(pcField !== undefined, "getCPUState returned no PC: " + JSON.stringify(regs).slice(0, 200));
 
   // 4) stepInstruction must ADVANCE the PC (not re-stop on the same instruction).
-  const stepRes = toJSON(await client.callTool({ name: "stepInstruction", arguments: {} }));
+  const stepRes = toJSON(await client.callTool({ name: "frame", arguments: { op: "stepInstruction" } }));
   assert.equal(stepRes.notSupported, undefined, "stepInstruction notSupported");
   assert.equal(stepRes.stepped, true, "single-step failed: " + JSON.stringify(stepRes));
   assert.notEqual(stepRes.pcRaw, writerPC, "single-step did not advance PC: " + JSON.stringify(stepRes));

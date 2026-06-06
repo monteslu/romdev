@@ -35,8 +35,8 @@ export const MERGE_MAP = {
   platform: { absorbs: ["listPlatforms", "resolvePlatform", "listToolchains", "installToolchain", "listPlatformDocs", "getPlatformDoc"], axis: "op" },
   // ── host (unload/shutdown/reset/pause/resume FSM; loadMedia + getStatus stay separate) ──
   host: { absorbs: ["unloadMedia", "shutdown", "reset", "pause", "resume"], axis: "op" },
-  // ── frame (step/screenshot/stepAndShot; stepInstruction folds in with the watch domain) ──
-  frame: { absorbs: ["stepFrames", "screenshot", "stepAndScreenshot"], axis: "op" },
+  // ── frame (step/screenshot/stepAndShot/stepInstruction; stepInstruction folded from watch-memory.js) ──
+  frame: { absorbs: ["stepFrames", "screenshot", "stepAndScreenshot", "stepInstruction"], axis: "op" },
   // ── scaffold (project/game + snippets; patchGbHeader stays standalone in project.js) ──
   scaffold: { absorbs: ["createProject", "createGame", "starterSnippets", "copyStarterSnippets"], axis: "op" },
   // ── cart (identify/extract/wrap; identifyRom from rom-id.js, rest from cart-parts.js) ──

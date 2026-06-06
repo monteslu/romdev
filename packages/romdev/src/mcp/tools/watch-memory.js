@@ -50,6 +50,25 @@ function attachObserverFrame(json, host) {
 // of each watched frame (before stepFrames) to set the held-button state, and
 // finish() once at the end to release everything. `presses` is the sorted
 // schedule; each press holds from its `frame` for `holdFrames` frames.
+// frame({op:'stepInstruction'}) — execute exactly ONE CPU instruction and stop.
+// Exported so the `frame` router (frame.js) can call it; takes sessionKey.
+export async function stepInstructionCore(sessionKey) {
+  const host = getHost(sessionKey);
+  if (!host.pcBreakSupported || !host.pcBreakSupported()) {
+    return jsonContent({
+      stepped: false, notSupported: true,
+      note: "This core build has no single-step (shipped on all 14 platforms as of 0.5.0 — update the core package if you see this).",
+    });
+  }
+  const r = host.stepInstruction();
+  return attachObserverFrame(jsonContent({
+    stepped: true,
+    pc: r.pc != null ? "$" + r.pc.toString(16).toUpperCase() : null,
+    pcRaw: r.pc,
+    note: "CPU is frozen one instruction later. cpu({op:'read'}) to read registers; frame({op:'stepInstruction'}) again to keep stepping.",
+  }), host);
+}
+
 export function makePressDriver(host, presses) {
   let applied = 0;          // how many scheduled presses actually got a frame
   let lastSet = null;       // last setInput payload we pushed (to avoid churn)
@@ -660,31 +679,8 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     }),
   );
 
-  server.tool(
-    "stepInstruction",
-    "Execute exactly ONE CPU instruction and stop (CPU-level single-step) — finer than stepFrames. Freezes the CPU right " +
-    "after the instruction; returns { pc } = the address the CPU is now poised at. Pair with getCPUState to watch registers " +
-    "change one instruction at a time while tracing a routine. Supported where the core exposes the romdev PC breakpoint " +
-    "Supported on all 14 platforms. (One step advances the frame's other subsystems minimally; it's a " +
-    "CPU single-step, the finest granularity the core exposes.)",
-    {},
-    safeTool(async () => {
-      const host = getHost(sessionKey);
-      if (!host.pcBreakSupported || !host.pcBreakSupported()) {
-        return jsonContent({
-          stepped: false, notSupported: true,
-          note: "This core build has no single-step (shipped on all 14 platforms as of 0.5.0 — update the core package if you see this).",
-        });
-      }
-      const r = host.stepInstruction();
-      return attachObserverFrame(jsonContent({
-        stepped: true,
-        pc: r.pc != null ? "$" + r.pc.toString(16).toUpperCase() : null,
-        pcRaw: r.pc,
-        note: "CPU is frozen one instruction later. getCPUState to read registers; stepInstruction again to keep stepping.",
-      }), host);
-    }),
-  );
+  // stepInstruction folded into frame({op:'stepInstruction'}) (frame.js, which
+  // imports stepInstructionCore). Nothing registered here.
 
   // ── register write/read + callSubroutine / decompressWith (item 1) ──────────
   // reg-id convention (m68k family): 0..7=D0..D7, 8..15=A0..A7, 16=PC, 17=SR, 18=SP.

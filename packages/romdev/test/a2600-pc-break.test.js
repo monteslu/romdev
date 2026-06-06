@@ -154,7 +154,7 @@ test("Atari 2600 PC breakpoint + read watch + single-step (stella2014 6502)", { 
   assert.ok(pcField !== undefined, "getCPUState returned no PC field: " + JSON.stringify(regs).slice(0, 200));
 
   // 4) Single-step must ADVANCE the PC past the breakpoint (the countdown fix).
-  const stepRes = toJSON(await client.callTool({ name: "stepInstruction", arguments: {} }));
+  const stepRes = toJSON(await client.callTool({ name: "frame", arguments: { op: "stepInstruction" } }));
   assert.equal(stepRes.notSupported, undefined, "stepInstruction reported notSupported");
   assert.equal(stepRes.stepped, true, "single-step failed: " + JSON.stringify(stepRes));
   assert.ok(stepRes.pcRaw >= 0, "single-step returned no pc");
