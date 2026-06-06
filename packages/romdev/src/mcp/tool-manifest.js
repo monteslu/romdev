@@ -71,6 +71,10 @@ export const MERGE_MAP = {
   romPatch: { absorbs: ["patchFile", "patchRom", "spliceCHR", "relocateBlock", "makeStoredBlock", "findFreeSpace", "findPointerTo", "diffRoms"], axis: "op" },
   // ── catalog (orient; listCategories + getStatus, both entry-tier in index.js) ──
   catalog: { absorbs: ["listCategories", "getStatus"], axis: "op" },
+  // ── playtest (show-a-human window FSM; all 4 from playtest.js). ENTRY-TIER. ──
+  playtest: { absorbs: ["playtestStop", "playtestStatus", "playtestFramebuffer"], axis: "op" },
+  // ── encodeAudio (external clip → native sample format; pcmToBrr + wavToXgm2Pcm from audio.js) ──
+  encodeAudio: { absorbs: ["pcmToBrr", "wavToXgm2Pcm"], axis: "target" },
 };
 
 /** Every OLD tool name that the consolidation removes (absorbed into a new tool). */

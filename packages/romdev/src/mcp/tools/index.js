@@ -188,7 +188,7 @@ export function registerTools(server, z, sessionKey) {
       const categories = disclosure.listCategories();
       return jsonContent({
         categories,
-        entryTier: ["catalog", "loadCategory", "describeTool", "build", "playtest", "playtestStop", "playtestStatus"],
+        entryTier: ["catalog", "loadCategory", "describeTool", "build", "playtest"],
         powerUserHint: "Call loadCategory({category:\"all\"}) to register every category at once — skips the discovery dance for capable agents.",
         humanInTheLoopHint: "Iterate INTERNALLY on screenshots first (build({output:'run'}) returns one inline; frame({op:'screenshot'/'stepAndShot'}) re-shoots the live host) — don't open a window to debug. Once the game actually boots and shows the feature you're working on, call playtest({}) so your human can watch and play it live. playtest is entry-tier. Opening a window on a black screen or a crash just wastes the human's attention — show them something that works.",
       });
@@ -313,7 +313,7 @@ const TOOL_OWNER = {
   cheats: "debug",
   inspectTile: "debug",
   // assets category
-  pcmToBrr: "assets", wavToXgm2Pcm: "assets",
+  encodeAudio: "assets",
   cart: "assets",
   listRoms: "assets", romPatch: "assets", validateRom: "assets",
   assembleSnippet: "assets",
@@ -324,7 +324,7 @@ const TOOL_OWNER = {
   // project category
   scaffold: "project",
   // show category (was: advanced)
-  playtest: "show", playtestStop: "show", playtestStatus: "show", playtestFramebuffer: "show",
+  playtest: "show",
   // advanced category
   runUntil: "advanced",
   watch: "advanced", breakpoint: "advanced", dmaTrace: "advanced",

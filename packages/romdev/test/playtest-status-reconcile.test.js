@@ -69,14 +69,14 @@ function parseToolJson(res) {
 
 test("playtestStatus reports running:false when no window is open", async () => {
   const client = await startClient();
-  const res = await client.callTool({ name: "playtestStatus", arguments: {} });
+  const res = await client.callTool({ name: "playtest", arguments: { op: "status" } });
   const parsed = parseToolJson(res);
   assert.equal(parsed.running, false, "no window → running must be false, not a stale truthy value");
 });
 
 test("playtestStop is a clean no-op when no window is open", async () => {
   const client = await startClient();
-  const res = await client.callTool({ name: "playtestStop", arguments: {} });
+  const res = await client.callTool({ name: "playtest", arguments: { op: "stop" } });
   const text = res.content.find((c) => c.type === "text")?.text ?? "";
   assert.match(text, /no playtest window open/i);
 });
@@ -115,7 +115,7 @@ test("playtestFramebuffer errors cleanly when no playtest window is open", async
   // window it must return a structured error pointing at screenshot(), NOT
   // throw or silently capture the agent's active host.
   const client = await startClient();
-  const res = await client.callTool({ name: "playtestFramebuffer", arguments: { inline: true } });
+  const res = await client.callTool({ name: "playtest", arguments: { op: "framebuffer", inline: true } });
   const parsed = parseToolJson(res);
   assert.equal(parsed.ok, false);
   assert.match(parsed.error, /no playtest window open/i);
