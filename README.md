@@ -3,10 +3,10 @@
 **Vibe-code real retro games.** One command, and your coding agent can make actual working ROMs for NES, SNES, Game Boy, Genesis, Atari, Commodore 64, and more — that run on RetroArch, native emulators, flash carts, and real hardware. No SDK installs. No emulator setup. No PATH fiddling. No "this only works on Linux."
 
 ```
-npx romdev-mcp
+npx romdevtools
 ```
 
-That's the whole setup. Everything — emulator cores, assemblers, C compilers, starter libraries, example projects, hardware reference docs — ships as bundled WebAssembly and data via npm. Same on Linux, Windows, and macOS (Node 24+).
+That's the whole setup. Everything — emulators, assemblers, C compilers, starter libraries, example projects, hardware reference docs — ships as bundled WebAssembly and data via npm. Same on Linux, Windows, and macOS (Node 24+).
 
 ## Features
 
@@ -18,7 +18,7 @@ A coding agent connects over [MCP](https://modelcontextprotocol.io/) and gets a 
 - **Seeing** — capture the framebuffer as a PNG and hand it to the agent.
 - **Driving** — emit controller input, run input scripts, replay sequences.
 - **Inspecting** — read CPU/video/save RAM, watch memory, disassemble, inspect sprites/palettes/tilemaps, read CPU + sound-chip state.
-- **Reverse-engineering & romhacking** — a full RE toolkit for modifying existing games: iterative value search (`searchValue`/`searchNext`, the Cheat-Engine loop), `classifyRegion` (is this "table" really ASCII?), `findWriter` (the exact instruction that wrote a byte), `readCartRom` (confirm a patch is live in the running image), `navigate` (drive menus by screen-change), `traceVramSource` (Genesis: which ROM offset a graphic was DMA'd from), a bundled cheat database as a free labeled RAM map, and a cross-platform [ROM-hacking playbook](packages/romdev/src/platforms/_guides/ROMHACKING_PLAYBOOK.md) (`getPlatformDoc({platform:'romhacking', name:'playbook'})`).
+- **Reverse-engineering & romhacking** — a full RE toolkit for modifying existing games: iterative value search (`searchValue`/`searchNext`, the Cheat-Engine loop), `classifyRegion` (is this "table" really ASCII?), `findWriter` (the exact instruction that wrote a byte), `readCartRom` (confirm a patch is live in the running image), `navigate` (drive menus by screen-change), `traceVramSource` (Genesis: which ROM offset a graphic was DMA'd from), a bundled cheat database as a free labeled RAM map, and a cross-platform [ROM-hacking playbook](packages/romdevtools/src/platforms/_guides/ROMHACKING_PLAYBOOK.md) (`getPlatformDoc({platform:'romhacking', name:'playbook'})`).
 - **Saving/restoring** — named save states for try-this-then-undo workflows.
 
 The deliverable is **the ROM**, not the tool: a standard, hardware-valid `.nes`/`.gba`/`.md`/… that runs anywhere ROMs run. The bundled WASM cores are the *dev instrument* (build → observe → iterate), not the distribution runtime.
@@ -32,7 +32,7 @@ your agent <--MCP--> romdev server <-> WASM libretro core <-> your game
 ## Who is it for?
 
 - **Coding agents.** The primary user — every capability is an MCP tool.
-- **Non-developers making a game with an AI's help.** Run `npx romdev-mcp`, point your agent at it, describe the game you want.
+- **Non-developers making a game with an AI's help.** Run `npx romdevtools`, point your agent at it, describe the game you want.
 - **Homebrew developers** who want a tighter loop than reload-the-emulator-by-hand. The same MCP tools drive great from a TUI, Inspector, or script.
 
 ## Supported systems — pick your platform
@@ -87,22 +87,22 @@ The `platformer` scaffold side-scrolls (hardware camera + per-platform column st
 
 ## How it's packaged
 
-`romdev` is a small **monorepo** of npm packages. The thing you install is `romdev-mcp`; it hard-depends on a set of `romdev-*` binary packages that carry the WebAssembly:
+`romdev` is a small **monorepo** of npm packages. The thing you install is `romdevtools`; it hard-depends on a set of `romdev-*` binary packages that carry the WebAssembly:
 
-- **[`romdev-mcp`](./packages/romdev)** — the MCP server, all generic tools, scaffolds, runtime/library source, debug helpers, and the `romdev-mcp` / `romdev-mcp-cli` binaries. The fast-churning layer; ships **zero wasm**.
+- **[`romdevtools`](./packages/romdevtools)** — the tool server (HTTP routes + Agent Skill + MCP), all generic tools, scaffolds, runtime/library source, debug helpers, and the `romdevtools` / `romdev-mcp` (alias) / `romdevtools-cli` binaries. The fast-churning layer; ships **zero wasm**.
 - **`romdev-core-*`** (8) — shared emulator cores: `fceumm`, `gambatte`, `gpgx`, `vice`, `handy`, `prosystem`, `geargrafx` (PC Engine), `bluemsx` (MSX).
 - **`romdev-platform-*`** (3) — self-contained platform bundles where the core + compiler are used by no one else: `snes`, `gba`, `atari2600`.
 - **`romdev-toolchain-*`** (5) — shared compilers: `cc65`, `sdcc`, `m68k-gcc`, `vasm`, `rgbds`.
 - **`romdev_game_codes`** (1) — the bundled game-code / cheat database (~30 MB of pre-parsed cheats for thousands of known ROMs across 13 platforms). Split out so the main package stays small and the DB grows on its own cadence; lazy-loaded one platform at a time.
 
-`romdev-mcp` resolves each core/compiler from its package lazily — a toolchain's WASM is only loaded into memory the first time you build for that platform, so booting the server is fast and a session only pays for the platforms it actually uses. WASM is a **build output**: it ships via the npm packages, not committed to this git repo (which holds the source, recipes, and version pins). See [packages/romdev/BUILDING.md](./packages/romdev/BUILDING.md) for the platform × core × toolchain matrix and how the wasm is built (a pinned Emscripten container).
+`romdevtools` resolves each core/compiler from its package lazily — a toolchain's WASM is only loaded into memory the first time you build for that platform, so booting the server is fast and a session only pays for the platforms it actually uses. WASM is a **build output**: it ships via the npm packages, not committed to this git repo (which holds the source, recipes, and version pins). See [packages/romdevtools/BUILDING.md](./packages/romdevtools/BUILDING.md) for the platform × core × toolchain matrix and how the wasm is built (a pinned Emscripten container).
 
 ## Connect
 
 Boot the server (it stays in the foreground — `Ctrl-C` to stop):
 
 ```bash
-npx romdev-mcp      # MCP server on http://127.0.0.1:7331/mcp
+npx romdevtools      # tool server on http://127.0.0.1:7331/mcp
 ```
 
 The first run downloads the cores/toolchains; later runs start instantly from the npm cache. An **optional observer** for watching tool calls live is at `http://127.0.0.1:7331/livestream` — purely for humans, no agent needs it.
@@ -173,7 +173,7 @@ npm install
 npm test            # runs each package's tests
 ```
 
-The bundled WASM is built from pinned upstream source in a reproducible Emscripten container — see [packages/romdev/BUILDING.md](./packages/romdev/BUILDING.md). You only need to rebuild it when bumping an upstream version or adding a platform; day-to-day work uses the already-built wasm in the binary packages.
+The bundled WASM is built from pinned upstream source in a reproducible Emscripten container — see [packages/romdevtools/BUILDING.md](./packages/romdevtools/BUILDING.md). You only need to rebuild it when bumping an upstream version or adding a platform; day-to-day work uses the already-built wasm in the binary packages.
 
 ## License
 

@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import { buildToolRegistry, runTool, toolJsonSchema } from "../src/http/tool-registry.js";
 import { buildOpenApi } from "../src/http/routes.js";
 import { buildSkillDoc, skillToolReference, mcpPreamble, skillPreamble } from "../src/http/skill-doc.js";
-import { swaggerHtml } from "../src/http/swagger.js";
+import { swaggerHtml, swaggerAsset } from "../src/http/swagger.js";
 
 test("registry harvests all 34 tools with handler + schema", () => {
   const reg = buildToolRegistry(randomUUID());
@@ -89,6 +89,28 @@ test("skill doc: frontmatter + skill preamble + body + tool reference; no MCP me
   assert.ok(!/\bMCP\b/.test(md), "skill doc must not mention MCP");
 });
 
+test("sanitizer scrubs MCP-connection FRAMING from the body (not just the literal 'MCP')", () => {
+  // The real AGENTS.md is written for the MCP channel ("connected", "this server",
+  // "connect your agent"). None of that should reach the skill surface.
+  const agentsLike = [
+    "# romdev — Agent guide",
+    "",
+    "You are reading this because romdev is connected. This is the orientation.",
+    "",
+    "## What this server does",
+    "Drives the build loop. Anything else this server can do.",
+    "These MCP tools run in-process. Restart its MCP connection once if needed.",
+    "When in doubt, connect your agent and go.",
+  ].join("\n");
+  const md = buildSkillDoc({ registry: buildToolRegistry("__meta__"), agentsBody: agentsLike, version: "1.0.0" });
+  assert.ok(!/\bMCP\b/.test(md), "no literal MCP");
+  assert.ok(!/you are reading this because romdev is connected/i.test(md), "no 'connected' intro");
+  assert.ok(!/connect your agent/i.test(md), "no 'connect your agent'");
+  assert.ok(!/this server/i.test(md), "no 'this server' connection framing");
+  assert.ok(!/restart its MCP connection|MCP connection/i.test(md), "no reconnect instruction");
+  assert.match(md, /## What romdev does/, "header re-framed to 'What romdev does'");
+});
+
 test("channel preambles are disjoint: mcp mentions MCP-calling, skill mentions routes; neither mentions the other", () => {
   assert.match(mcpPreamble, /register at session init|call any by name/i);
   assert.ok(!/POST \/tool/.test(mcpPreamble), "mcp preamble has no HTTP routes");
@@ -96,11 +118,22 @@ test("channel preambles are disjoint: mcp mentions MCP-calling, skill mentions r
   assert.ok(!/\bMCP\b/.test(skillPreamble), "skill preamble has no MCP");
 });
 
-test("swagger HTML renders the title + points at the spec", () => {
+test("swagger HTML renders the title, points at the spec, and uses NO CDN (local assets only)", () => {
   const html = swaggerHtml({ specUrl: "/openapi.json", title: "romdev API" });
   assert.match(html, /<title>romdev API<\/title>/);
   assert.match(html, /\/openapi\.json/);
   assert.match(html, /\/romdev-skill\.md/, "offline fallback links the skill doc");
+  // self-hosted: references our local /documentation/* assets, never a CDN.
+  assert.match(html, /\/documentation\/swagger-ui\.css/);
+  assert.match(html, /\/documentation\/swagger-ui-bundle\.js/);
+  assert.ok(!/cdn|jsdelivr|https?:\/\//i.test(html), "no external/CDN URLs in the docs page");
+});
+
+test("swagger assets are served from bundled swagger-ui-dist (offline), path-traversal blocked", () => {
+  assert.ok(swaggerAsset("swagger-ui.css")?.length > 1000, "css served from local dist");
+  assert.ok(swaggerAsset("swagger-ui-bundle.js")?.length > 1000, "js served from local dist");
+  assert.equal(swaggerAsset("../package.json"), null, "no path traversal");
+  assert.equal(swaggerAsset("evil.js"), null, "only known asset names");
 });
 
 test("skillToolReference lists every tool with its POST params", () => {

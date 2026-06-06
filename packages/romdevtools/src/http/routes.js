@@ -18,7 +18,7 @@
 import { randomUUID } from "node:crypto";
 import { buildToolRegistry, runTool, toolJsonSchema } from "./tool-registry.js";
 import { skillPreamble, skillToolReference, buildSkillDoc } from "./skill-doc.js";
-import { swaggerHtml } from "./swagger.js";
+import { swaggerHtml, swaggerAsset } from "./swagger.js";
 import { log } from "../mcp/log.js";
 
 const SESSION_HEADER = "x-romdev-session";
@@ -109,9 +109,17 @@ export function mountHttpToolRoutes(app, opts = {}) {
     res.json(buildOpenApi(metaRegistry, version));
   });
 
-  // ── GET /documentation (Swagger UI) ───────────────────────────────────────
+  // ── GET /documentation (Swagger UI, served entirely from bundled assets) ──
   app.get("/documentation", (req, res) => {
     res.type("html").send(swaggerHtml({ specUrl: "/openapi.json", title: "romdev API" }));
+  });
+  // Serve the swagger-ui-dist CSS/JS from local node_modules — NO CDN.
+  app.get("/documentation/:asset", (req, res) => {
+    const buf = swaggerAsset(req.params.asset);
+    if (!buf) { res.status(404).type("text/plain").send("not found"); return; }
+    res.type(req.params.asset.endsWith(".css") ? "text/css" : "application/javascript");
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.send(buf);
   });
 
   // ── GET /romdev-skill.md ──────────────────────────────────────────────────

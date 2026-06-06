@@ -4,7 +4,7 @@
 //
 // WHY: @kmamal/sdl ships its binary (dist/sdl.node) via its OWN `install`
 // lifecycle script, NOT in the npm tarball. When romdev-mcp is installed as a
-// transitive dependency — most notably under `npx romdev-mcp` — npm skips that
+// transitive dependency — most notably under `npx romdevtools` — npm skips that
 // nested install script, so the binary is never fetched and `playtest` can
 // never open a window. romdev-mcp's own postinstall (this file) DOES run under
 // npx, so we run @kmamal/sdl's installer ourselves.
@@ -64,13 +64,13 @@ async function main() {
       env: { ...process.env, npm_config_build_from_source: "false", npm_config_build_from_source_all: "false" },
     });
     if (existsSync(sdlNode)) {
-      console.log("[romdev-mcp] fetched @kmamal/sdl native binary for playtest.");
+      console.log("[romdevtools] fetched @kmamal/sdl native binary for playtest.");
     }
   } catch (e) {
     // Soft-fail: the playtest tool self-heals at runtime, and every headless
     // tool works regardless. Don't break the install over an optional window.
     console.warn(
-      "[romdev-mcp] note: couldn't pre-fetch the @kmamal/sdl playtest binary " +
+      "[romdevtools] note: couldn't pre-fetch the @kmamal/sdl playtest binary " +
       `(${e?.message ?? e}). The interactive playtest window may need a one-time ` +
       `\`node "${installScript}"\` — headless build/run/screenshot are unaffected.`,
     );

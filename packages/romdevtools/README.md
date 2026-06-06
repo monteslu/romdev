@@ -3,37 +3,43 @@
 The entry point for **romdev** — vibe-code real retro games. Lets a coding agent build, run, and inspect actual homebrew ROMs (NES, SNES, Game Boy, Genesis, Atari, C64, GBA, and more) with one command.
 
 ```bash
-npx romdev-mcp
+npx romdevtools
 ```
 
-This package is the [Model Context Protocol](https://modelcontextprotocol.io/) server and CLI. It contains all the JavaScript — the MCP tool surface, the WASM libretro host, the per-platform scaffolds, runtime/library source, and debug helpers — but **no emulator or compiler WASM itself.** Those ship in the `romdev-*` binary packages this package depends on, and are loaded on demand the first time you build or run a given platform.
+That's it — one command starts the local romdev **tool server** (no global install, no host compiler/emulator). Point any coding agent at it three ways:
+
+- **Plain HTTP** — `POST http://127.0.0.1:7331/tool/{name}`; browse/try every tool at `/documentation`.
+- **Agent Skill** — `GET /romdev-skill.md` (the [Agent Skills](https://agentskills.io) standard; ~100 tokens until invoked).
+- **MCP** — it's also a [Model Context Protocol](https://modelcontextprotocol.io/) server at `/mcp` for clients that want it.
+
+This package contains all the JavaScript — the tool surface, the WASM emulator host, the per-platform scaffolds, runtime/library source, and debug helpers — but **no emulator or compiler WASM itself.** Those ship in the `romdev-*` binary packages it depends on, loaded on demand the first time you build or run a given platform.
 
 > For the full project — what romdev is, the supported-platform matrix, how the pieces fit together, and how to develop on it — see the [repository README](https://github.com/monteslu/romdev#readme).
 
 ## What's in this package
 
 - **`bin`**
-  - `romdev-mcp` → the MCP server (`src/mcp/server.js`). Streamable-HTTP transport on `http://127.0.0.1:7331/mcp` by default (`PORT` / `HOST` to override).
-  - `romdev-mcp-cli` → a smoke/utility CLI, incl. `romdev-mcp-cli play <rom>` (SDL window, hot-plug controllers).
+  - `romdevtools` → the tool server (`src/mcp/server.js`). Serves the HTTP tool routes, `/documentation`, `/romdev-skill.md`, and an MCP endpoint on `http://127.0.0.1:7331` by default (`PORT` / `HOST` to override). `romdev-mcp` is kept as an alias of the same command.
+  - `romdevtools-cli` → a smoke/utility CLI, incl. `romdevtools-cli play <rom>` (SDL window, hot-plug controllers).
 - **`src/`** — the server, MCP tools, WASM host, core/toolchain resolvers, per-platform memory interpretation, and bundled library/runtime source (cc65 libs, PVSnesLib, SGDK, libtonc/libgba, hUGEDriver, …) that scaffolded projects link against.
 - **`examples/`** — per-platform starter projects and genre scaffolds.
 
 ## Dependencies
 
-`romdev-mcp` hard-depends (exact-pinned) on the binary/data packages it needs, so a single install gets a matched, tested set:
+`romdevtools` hard-depends (exact-pinned) on the binary/data packages it needs, so a single install gets a matched, tested set:
 
 - Cores: `romdev-core-{fceumm,gambatte,gpgx,vice,handy,prosystem,geargrafx,bluemsx}`
 - Platforms: `romdev-platform-{snes,gba,atari2600}`
 - Toolchains: `romdev-toolchain-{cc65,sdcc,m68k-gcc,vasm,rgbds}`
 - Data: `romdev_game_codes` — the bundled game-code / cheat database (a free labeled RAM/code map for thousands of known ROMs), split out so it can grow independently. Lazy-loaded one platform at a time.
 
-`@kmamal/sdl` is used only by `playtest()` / `romdev-mcp-cli play` (the live window). It ships its native binary via its own install script, which npm skips when romdev is a transitive dep (e.g. under `npx`) — so romdev's `postinstall` fetches it, and `playtest()` also self-heals at runtime if the binary is still missing (downloading the prebuilt before the first window open). Either way, if the binary can't be fetched (offline/locked-down network), the headless server is unaffected — only the live window degrades, and the error tells you the one command to fix it.
+`@kmamal/sdl` is used only by `playtest()` / `romdevtools-cli play` (the live window). It ships its native binary via its own install script, which npm skips when romdev is a transitive dep (e.g. under `npx`) — so romdev's `postinstall` fetches it, and `playtest()` also self-heals at runtime if the binary is still missing (downloading the prebuilt before the first window open). Either way, if the binary can't be fetched (offline/locked-down network), the headless server is unaffected — only the live window degrades, and the error tells you the one command to fix it.
 
 ## Connect
 
 ```bash
-npx romdev-mcp
-# then, e.g. for Claude Code:
+npx romdevtools
+# then, e.g. for Claude Code (MCP):
 claude mcp add --transport http romdev http://127.0.0.1:7331/mcp
 ```
 
@@ -41,18 +47,22 @@ It's a standard **streamable-HTTP** MCP server at `http://127.0.0.1:7331/mcp`. F
 
 Agents: the server delivers [`AGENTS.md`](./AGENTS.md) as connection-time instructions — the workflow guide for the full tool surface. Or just connect your agent and call `catalog({op:'categories'})` to explore the tools live (and `catalog({op:'whatsNew'})` for the recent CHANGELOG + a rename table if you're resuming work against an older version).
 
-## Don't want MCP? Use HTTP or a Skill
+## Prefer not to use MCP? Use HTTP or a Skill
 
-Run the server (`npx romdev-mcp`) but **skip wiring it into your agent's MCP
+Most agents support MCP, but you don't have to use it. Run the server
+(`npx romdevtools`) and **skip wiring it into your agent's MCP
 config** — no `claude mcp add`, no `mcp.json` entry, no MCP client at all. The
 same 34 tools are reachable over plain HTTP / as an Agent Skill against the
 running server:
 
 - **Plain HTTP:** `POST http://127.0.0.1:7331/tool/{name}` with the args as a JSON
   body; the response is JSON. Browse/try every tool at **`/documentation`**
-  (Swagger UI), or get the machine spec at **`/openapi.json`**. For stateful work
-  (load → step → read) the first call returns an `x-romdev-session` header — echo
-  it on later calls to keep the same emulator session.
+  (Swagger UI, served locally — no CDN), or get the machine spec at
+  **`/openapi.json`**. For stateful work (load → step → read) the first call
+  returns an `x-romdev-session` header — echo it on later calls to keep the same
+  emulator session. romdev runs **locally** and tool path args (`path`,
+  `outputPath`, …) are **local filesystem paths**, not uploads — pass absolute
+  paths on the same machine.
 - **Agent Skill:** **`GET /romdev-skill.md`** is a portable [Agent
   Skills](https://agentskills.io) `SKILL.md` (works in Claude Code, opencode,
   OpenClaw, Hermes, …). Drop it in your agent's skills dir; it costs ~100 tokens
@@ -60,7 +70,7 @@ running server:
   `POST /tool/{name}` calls.
 
 Both are generated from the same tool registry as the MCP surface, so they never
-drift. **You still run the server** — `npx romdev-mcp` (it hosts the
+drift. **You still run the server** — `npx romdevtools` (it hosts the
 emulators/toolchains in-process and serves these routes on :7331). What the
 HTTP/skill path removes is the *MCP client/protocol and its always-on context
 cost* — not the server. There's no separate install beyond romdev itself, and

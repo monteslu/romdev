@@ -1,14 +1,27 @@
 # Changelog
 
-All notable changes to `romdev-mcp`. Dates are release dates.
+All notable changes to `romdevtools`. Dates are release dates.
+(Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
+the `romdev-mcp` bin is kept as an alias.)
 
 ## 0.13.0
 
-**A no-MCP HTTP surface + an Agent Skill — drive romdev without an MCP client.**
-For users wary of MCP (setup, always-on context cost, server lifecycle) the same
-34 tools are now reachable over plain HTTP and as a portable SKILL.md, all
-generated from the one tool registry (no duplication). Same Express app, same
-localhost trust, per-agent dynamic sessions.
+**Renamed `romdev-mcp` → `romdevtools` + a plain-HTTP tool surface and an Agent
+Skill, so you can drive the same tools without using MCP.** Most agents support
+MCP; some people just prefer not to (setup, always-on context cost, server
+lifecycle). The same 34 tools are now reachable three ways — MCP, plain HTTP,
+and a portable SKILL.md — all generated from the one tool registry (no
+duplication). Same Express app, same localhost trust, per-agent dynamic sessions.
+
+### Changed (rename + robustness)
+- **Package `romdev-mcp` → `romdevtools`**; primary command is now `npx
+  romdevtools`. `romdev-mcp` stays a bin alias of the same server, so existing
+  `npx romdev-mcp` / MCP configs keep working. CLI bin → `romdevtools-cli`.
+- **Server fails loudly on a bad bind.** The primary HTTP listener now handles
+  `error`: a taken port prints a clear "port N in use — use a different port"
+  message to stderr and exits non-zero, and the success banner only prints on a
+  real bind (previously it could print "listening…" + exit 0 while not bound).
+  `GET /healthz` now returns `version` (so a saved skill can detect staleness).
 
 ### Added
 - **`POST /tool/{name}`** — run any tool over plain HTTP; JSON body = the args,

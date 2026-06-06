@@ -345,7 +345,9 @@ async function main() {
   // Healthcheck endpoint — handy for verifying the server is up without
   // doing a full MCP handshake.
   app.get("/healthz", (req, res) => {
-    res.json({ ok: true, sessions: transports.size });
+    // `version` lets a saved skill / HTTP client detect staleness against the
+    // running server (the skill doc tells agents to compare it to its metadata).
+    res.json({ ok: true, version: PKG_VERSION, sessions: transports.size });
   });
 
   // ── HTTP tool surface (the non-MCP way to drive romdev) ───────────────────
@@ -388,10 +390,30 @@ async function main() {
   // and `localhost` is what users actually type, so advertise that. For an
   // explicit non-loopback HOST, show exactly what was bound.
   const bannerHost = isDefaultLoopback ? "localhost" : host;
-  const httpServer = app.listen(port, bindHosts[0], () => {
+  const httpServer = app.listen(port, bindHosts[0]);
+  // FAIL LOUDLY on a bad bind (commonly: port already in use). The primary
+  // listener's 'error' event would otherwise be unhandled — and because
+  // app.listen()'s success callback fires before the async EADDRINUSE arrives,
+  // the process could print a "listening…" banner and exit 0 while NOT actually
+  // bound (silent failure). So we print the banner ONLY from the 'listening'
+  // event (fires after a real bind) and exit non-zero on 'error' — `npx
+  // romdevtools` runs in the foreground, so the user sees exactly what happened.
+  httpServer.on("error", (e) => {
+    if (e && e.code === "EADDRINUSE") {
+      log.error(`romdev: port ${port} is already in use — another romdev server (or some other process) is on it.`);
+      log.error(`Fix: stop the other process, or run on a different port: PORT=7332 npx romdevtools  (or --port 7332).`);
+    } else if (e && e.code === "EACCES") {
+      log.error(`romdev: not allowed to bind port ${port} (privileged port?). Use a port >= 1024.`);
+    } else {
+      log.error(`romdev: failed to start HTTP server on ${bannerHost}:${port}: ${e?.message ?? e}`);
+    }
+    process.exit(1);
+  });
+  httpServer.on("listening", () => {
     log.info(`romdev listening on http://${bannerHost}:${port}/mcp`);
     log.info("");
-    log.info(`no-MCP / skills:        http://${bannerHost}:${port}/documentation`);
+    log.info(`prefer a skill?  save:  http://${bannerHost}:${port}/romdev-skill.md`);
+    log.info(`browse/try the tools:   http://${bannerHost}:${port}/documentation`);
     log.info(`optional observer:      http://${bannerHost}:${port}/livestream`);
     log.info("");
     log.info("connect your coding agent: https://github.com/monteslu/romdev#connect");

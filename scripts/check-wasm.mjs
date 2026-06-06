@@ -39,7 +39,7 @@ const pkgName = (() => {
 function fail(msg) {
   console.error(`\n✖ check-wasm: ${pkgName} — ${msg}`);
   console.error("  Refusing to publish a package with missing/stub wasm.");
-  console.error("  Build the wasm first (see packages/romdev/scripts/build-*.sh)");
+  console.error("  Build the wasm first (see packages/romdevtools/scripts/build-*.sh)");
   console.error("  and publish from a working tree that has the built artifacts.\n");
   process.exit(1);
 }

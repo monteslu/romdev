@@ -167,7 +167,7 @@ export function registerPlaytestTools(server, z, sessionKey) {
               "binary isn't installed: " + (e?.message ?? String(e)) + ". " +
               (kind === "install-failed"
                 ? "An automatic install was attempted but failed (often a network/proxy block on the GitHub release download). "
-                : "(This is common under `npx romdev-mcp` — npm skips @kmamal/sdl's install script that fetches the binary; the server tried to self-heal but the binary is still absent.) ") +
+                : "(This is common under `npx romdevtools` — npm skips @kmamal/sdl's install script that fetches the binary; the server tried to self-heal but the binary is still absent.) ") +
               fix + "This is a one-time native-addon fix, NOT a display/desktop " +
               "issue." + headlessNote,
             fixCommand: e?.fixCmd ?? null,
