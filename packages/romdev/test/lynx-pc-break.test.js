@@ -81,7 +81,7 @@ test("Lynx PC breakpoint + read watch + single-step (handy 65C02)", { timeout: 1
 
   // 3) getCPUState reads the live 65C02 registers at the frozen instruction.
   const regs = toJSON(await client.callTool({
-    name: "getCPUState", arguments: { platform: "lynx" },
+    name: "cpu", arguments: { op: "read",  platform: "lynx" },
   }));
   const pcField = regs.pc ?? regs.PC ?? regs.registers?.PC;
   assert.ok(pcField !== undefined, "getCPUState returned no PC: " + JSON.stringify(regs).slice(0, 200));

@@ -57,6 +57,8 @@ export const MERGE_MAP = {
   importArt: { absorbs: ["loadAsepriteSheet", "loadGifAnimation", "loadSpriteSheet", "loadTilemap", "crossPlatformSpriteImport"], axis: "from" },
   // ── memory (read/write/search; all 8 from memory.js) ──
   memory: { absorbs: ["readMemory", "writeMemory", "readCartRom", "snapshotMemory", "diffMemory", "classifyRegion", "searchValue", "searchNext"], axis: "op" },
+  // ── cpu (read/drive; getCPUState from platform-tools.js, setRegister/callSubroutine/decompressWith from watch-memory.js) ──
+  cpu: { absorbs: ["getCPUState", "setRegister", "callSubroutine", "decompressWith"], axis: "op" },
 };
 
 /** Every OLD tool name that the consolidation removes (absorbed into a new tool). */

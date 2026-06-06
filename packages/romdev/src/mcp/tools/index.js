@@ -311,7 +311,7 @@ const TOOL_OWNER = {
   // debug category
   tiles: "debug", sprites: "debug",
   background: "debug", encodeArt: "assets",
-  getCPUState: "debug", audioDebug: "debug",
+  cpu: "debug", audioDebug: "debug",
   buildSourceWithDebug: "debug", symbols: "debug",
   disasm: "debug",
   cheats: "debug",

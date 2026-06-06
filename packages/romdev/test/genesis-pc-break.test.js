@@ -84,7 +84,7 @@ test("Genesis PC breakpoint + read watch + single-step (gpgx m68k)", { timeout: 
 
   // 3) With the CPU frozen at that instruction, getCPUState reads the live regs.
   const regs = toJSON(await client.callTool({
-    name: "getCPUState", arguments: { platform: "genesis", cpu: "main" },
+    name: "cpu", arguments: { op: "read",  platform: "genesis", cpu: "main" },
   }));
   // The decoded PC should match the breakpoint (allowing the tool's own format).
   const pcField = regs.pc ?? regs.PC ?? regs.regs?.pc;

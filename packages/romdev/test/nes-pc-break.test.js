@@ -70,7 +70,7 @@ test("NES PC breakpoint + read watch + single-step (fceumm 6502)", { timeout: 18
 
   // 3) getCPUState reads the live 6502 registers at the frozen instruction.
   const regs = toJSON(await client.callTool({
-    name: "getCPUState", arguments: { platform: "nes" },
+    name: "cpu", arguments: { op: "read",  platform: "nes" },
   }));
   assert.ok((regs.pc ?? regs.PC ?? regs.registers?.PC) !== undefined,
     "getCPUState returned no PC: " + JSON.stringify(regs).slice(0, 160));

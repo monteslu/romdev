@@ -21,6 +21,7 @@ export let inspectBackgroundMapCore = async () => { throw new Error("platform-to
 export let inspectPatternTilesCore = async () => { throw new Error("platform-tools cores not initialized — registerPlatformTools must run first"); };
 export let convertImageToTilesCore = async () => { throw new Error("platform-tools cores not initialized — registerPlatformTools must run first"); };
 export let imageToTilemapCore = async () => { throw new Error("platform-tools cores not initialized — registerPlatformTools must run first"); };
+export let getCPUStateCore = async () => { throw new Error("platform-tools cores not initialized — registerPlatformTools must run first"); };
 
 // Image-output contract: a PNG image goes to disk (path) OR comes back
 // inline (inline:true). No path + not inline → error. The structured
@@ -340,19 +341,8 @@ export function registerPlatformTools(server, z, sessionKey) {
       throw new Error(`inspectPalette not yet wired for platform '${p}'. Supported: nes, snes, genesis, sms, gg, gb, gbc, atari2600, atari7800, c64, gba, lynx, pce, msx.`);
   };
 
-  server.tool(
-    "getCPUState",
-    "Use this to read a CPU's {pc, registers, flags, sp}. Main CPU is wired for ALL 14 tier-1 systems: " +
-    "nes, snes, genesis, sms, gg, gb, gbc, atari2600, atari7800, c64, lynx (65C02), gba (ARM7TDMI — " +
-    "16 gprs + cpsr/spsr, plus execPc that accounts for ARM pipeline prefetch), pce (HuC6280) and msx " +
-    "(Z80). Secondary CPUs via `cpu`: " +
-    "`spc700` (SNES audio — tells 'stuck in IPL' vs 'running' vs 'crashed into garbage ARAM') and `z80` " +
-    "(Genesis sound — held in reset until the 68k releases it via $A11100, so a fresh boot reads all-zero).",
-    {
-      platform: z.string().optional(),
-      cpu: z.enum(["main", "spc700", "z80"]).default("main").describe("Which CPU to inspect. main = platform's primary CPU. spc700 = SNES audio CPU (SNES only). z80 = Genesis sound CPU (Genesis only — held in reset until the 68k releases it, so may read all-zero on a fresh boot)."),
-    },
-    safeTool(async ({ platform, cpu }) => {
+  // getCPUState → cpu({op:'read'}) (router in watch-memory.js). Live-binding core.
+  getCPUStateCore = async ({ platform, cpu = "main" }) => {
       const host = getHost(sessionKey);
       const p = resolvePlatform(host, platform);
       const state = getCPUState(host, p, cpu);
@@ -360,8 +350,7 @@ export function registerPlatformTools(server, z, sessionKey) {
         throw new Error(`getCPUState: no decoder for platform '${p}' cpu '${cpu}'. Main CPU is wired for nes, snes, genesis, sms, gg, gb, gbc, atari2600, atari7800, c64, lynx, gba. Secondary CPUs: snes 'spc700' (genesis 'z80' not yet decoded).`);
       }
       return jsonContent({ platform: p, cpu, ...state });
-    }),
-  );
+  };
 
   // ── getAudioState — unified sound-chip introspection ──────────────
   // One tool, `chip` enum discriminator (mirrors getCPUState({cpu})).

@@ -69,12 +69,12 @@ test("SNES RE primitives: setRegister + watchRange + logPCRange (+callSubroutine
   // ── item 1: setRegister round-trips ──
   // regId 0 = A (16-bit accumulator). Write 0xCAFE, read it back (A.W is uint16,
   // so the value is masked to 16 bits — assert the masked form).
-  const sr = toJSON(await client.callTool({ name: "setRegister", arguments: { regId: 0, value: 0xCAFE } }));
+  const sr = toJSON(await client.callTool({ name: "cpu", arguments: { op: "setReg",  regId: 0, value: 0xCAFE } }));
   assert.equal(sr.notSupported, undefined, "setRegister notSupported — romdev_setreg missing?");
   assert.equal((sr.valueRaw & 0xFFFF), 0xCAFE, "setRegister(A) didn't round-trip: " + JSON.stringify(sr));
 
   // X (regId 1) too, to exercise a second mapping.
-  const srX = toJSON(await client.callTool({ name: "setRegister", arguments: { regId: 1, value: 0x1234 } }));
+  const srX = toJSON(await client.callTool({ name: "cpu", arguments: { op: "setReg",  regId: 1, value: 0x1234 } }));
   assert.equal((srX.valueRaw & 0xFFFF), 0x1234, "setRegister(X) didn't round-trip: " + JSON.stringify(srX));
 
   // ── item 2a: watchRange logs writes to $7E0010 with pc/addr/value ──
@@ -114,11 +114,11 @@ test("SNES RE primitives: setRegister + watchRange + logPCRange (+callSubroutine
   // romdev_setreg(PC) refreshes the fetch pointer via S9xSetPCBase so a set PC
   // genuinely redirects execution. Set PC to the writer instruction, single-step,
   // and confirm the PC advanced from there (i.e. it ran that code, not stale code).
-  const setPc = toJSON(await client.callTool({ name: "setRegister", arguments: { regId: 16, value: writerPC } }));
+  const setPc = toJSON(await client.callTool({ name: "cpu", arguments: { op: "setReg",  regId: 16, value: writerPC } }));
   assert.equal(setPc.notSupported, undefined, "setRegister(PC) notSupported");
   assert.equal((setPc.valueRaw & 0xFFFFFF), (writerPC & 0xFFFFFF), "setRegister(PC) didn't take: " + JSON.stringify(setPc));
   // getCPUState should now report PC at the writer (proves PBPC + fetch ptr moved).
-  const regsNow = toJSON(await client.callTool({ name: "getCPUState", arguments: { platform: "snes", cpu: "main" } }));
+  const regsNow = toJSON(await client.callTool({ name: "cpu", arguments: { op: "read",  platform: "snes", cpu: "main" } }));
   const pcNow = (regsNow.pcRaw ?? regsNow.pc ?? regsNow.PC ?? regsNow.registers?.PC);
   // Single-step from the set PC; the PC must advance (the set address executed).
   const step = toJSON(await client.callTool({ name: "stepInstruction", arguments: {} }));
@@ -137,8 +137,8 @@ test("SNES RE primitives: setRegister + watchRange + logPCRange (+callSubroutine
   let csStatus;
   try {
     const csRes = await client.callTool({
-      name: "callSubroutine",
-      arguments: { pc: writerPC, regs: { 0: 0x55 }, maxFrames: 30, sandbox: true },
+      name: "cpu",
+      arguments: { op: "call",  pc: writerPC, regs: { 0: 0x55 }, maxFrames: 30, sandbox: true },
     });
     csStatus = csRes.isError
       ? { isError: true, text: csRes.content?.[0]?.text }

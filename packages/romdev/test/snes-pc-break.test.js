@@ -75,7 +75,7 @@ test("SNES PC breakpoint + read watch + single-step (snes9x 65816)", { timeout: 
 
   // 3) getCPUState reads the live 65816 registers at the frozen instruction.
   const regs = toJSON(await client.callTool({
-    name: "getCPUState", arguments: { platform: "snes", cpu: "main" },
+    name: "cpu", arguments: { op: "read",  platform: "snes", cpu: "main" },
   }));
   assert.ok((regs.pc ?? regs.PC ?? regs.registers?.PC) !== undefined,
     "getCPUState returned no PC: " + JSON.stringify(regs).slice(0, 160));

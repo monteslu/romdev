@@ -78,8 +78,8 @@ test("SNES watchdog: a non-returning routine trips the watchdog, no hang (snes9x
   // the sentinel, so the run must terminate via the watchdog (returned:false,
   // watchdog:true) with a finalPC — never hang.
   const wd = toJSON(await client.callTool({
-    name: "callSubroutine",
-    arguments: { pc: writerPC, maxFrames: 30, maxInstructions: 200000, sandbox: true },
+    name: "cpu",
+    arguments: { op: "call",  pc: writerPC, maxFrames: 30, maxInstructions: 200000, sandbox: true },
   }));
   assert.equal(wd.notSupported, undefined, "callSubroutine notSupported (watchdog export missing?)");
   assert.equal(wd.returned, false, "non-returning routine should not 'return': " + JSON.stringify(wd));

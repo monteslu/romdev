@@ -148,7 +148,7 @@ test("Atari 2600 PC breakpoint + read watch + single-step (stella2014 6502)", { 
 
   // 3) With the CPU frozen, getCPUState reads the live regs.
   const regs = toJSON(await client.callTool({
-    name: "getCPUState", arguments: { platform: "atari2600" },
+    name: "cpu", arguments: { op: "read",  platform: "atari2600" },
   }));
   const pcField = regs.pc ?? regs.PC ?? regs.regs?.pc;
   assert.ok(pcField !== undefined, "getCPUState returned no PC field: " + JSON.stringify(regs).slice(0, 200));

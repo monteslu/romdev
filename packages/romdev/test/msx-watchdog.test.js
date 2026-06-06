@@ -104,8 +104,8 @@ test("MSX callSubroutine watchdog: infinite loop returns watchdog:true, no hang 
   // (a pre-existing core quirk, unrelated to the watchdog). maxFrames is sized so
   // the 200k-instruction budget is reached (blueMSX runs ~4.5k Z80 insns/frame).
   const wd = toJSON(await client.callTool({
-    name: "callSubroutine",
-    arguments: { pc: spin, maxFrames: 60, maxInstructions: 200000, sandbox: false },
+    name: "cpu",
+    arguments: { op: "call",  pc: spin, maxFrames: 60, maxInstructions: 200000, sandbox: false },
   }));
   assert.equal(wd.notSupported, undefined, "callSubroutine notSupported — core patch missing?");
   assert.equal(wd.returned, false, "spin should not 'return': " + JSON.stringify(wd));

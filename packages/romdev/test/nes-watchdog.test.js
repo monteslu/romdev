@@ -65,8 +65,8 @@ test("NES watchdog: infinite-loop routine returns {watchdog:true} (fceumm 6502)"
   // The WATCHDOG: drive the infinite-loop routine. It must NOT hang — it returns
   // { returned:false, watchdog:true, finalPC=spinAddr }.
   const wd = toJSON(await client.callTool({
-    name: "callSubroutine",
-    arguments: { pc: spinAddr, maxFrames: 30, maxInstructions: 200000, sandbox: false },
+    name: "cpu",
+    arguments: { op: "call",  pc: spinAddr, maxFrames: 30, maxInstructions: 200000, sandbox: false },
   }));
   assert.equal(wd.notSupported, undefined, "callSubroutine notSupported (watchdog export missing?)");
   assert.equal(wd.returned, false, "spin should not 'return': " + JSON.stringify(wd));
@@ -83,8 +83,8 @@ test("NES watchdog: infinite-loop routine returns {watchdog:true} (fceumm 6502)"
   // _spin_forever's second instruction is an `rts` at spinAddr+3 — call THAT to
   // get a clean immediate return, proving the watchdog doesn't false-trip.
   const ret = toJSON(await client.callTool({
-    name: "callSubroutine",
-    arguments: { pc: (spinAddr + 3), maxFrames: 30, maxInstructions: 200000, sandbox: true },
+    name: "cpu",
+    arguments: { op: "call",  pc: (spinAddr + 3), maxFrames: 30, maxInstructions: 200000, sandbox: true },
   }));
   assert.equal(ret.returned, true, "rts routine should return: " + JSON.stringify(ret));
   assert.notEqual(ret.watchdog, true, "normal routine should NOT trip the watchdog: " + JSON.stringify(ret));

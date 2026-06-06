@@ -19,6 +19,7 @@ import { jsonContent, safeTool } from "../util.js";
 import { getCPUState } from "../../host/cpu-state.js";
 import { MemoryRegionToRetro } from "../../host/types.js";
 import { resolveButtonAlias } from "./input.js";
+import { getCPUStateCore } from "./platform-tools.js";
 
 // Let a human watching /livestream (or a playtest window) SEE what a
 // breakpoint/watch tool just did — the frozen breakpoint frame, the state when a
@@ -750,16 +751,14 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
   // ── register write/read + callSubroutine / decompressWith (item 1) ──────────
   // reg-id convention (m68k family): 0..7=D0..D7, 8..15=A0..A7, 16=PC, 17=SR, 18=SP.
 
-  server.tool(
-    "setRegister",
-    "Write a single CPU register by romdev reg-id (the inverse of getCPUState) — for setting up a callSubroutine by hand, " +
-    "forcing a code path, or fixing up state at a breakpoint. m68k reg-ids: 0-7=D0-D7, 8-15=A0-A7, 16=PC, 17=SR, 18=SP. " +
-    "Returns the new value (read back). notSupported where the core lacks register-write.",
-    {
-      regId: z.number().int().min(0).max(31).describe("romdev reg-id (m68k: 0-7=D, 8-15=A, 16=PC, 17=SR, 18=SP)."),
-      value: z.number().int().describe("32-bit value to write."),
-    },
-    safeTool(async ({ regId, value }) => {
+  // cpu({op:read|setReg|call|decompress}) router. op:read -> getCPUStateCore
+  // (platform-tools.js). The other 3 are closure impls below (they need the
+  // per-session host). regSchema is shared by the call op.
+  const regSchema = z.record(z.string(), z.number().int()).optional().describe(
+    "op:call — registers to set before the call, keyed by romdev reg-id (m68k: 0-7=D0-D7, 8-15=A0-A7, 16=PC, 17=SR, 18=SP). " +
+    "e.g. {\"8\":2863118} sets A0. PC is set from the `pc` arg, not here.");
+
+  async function cpuSetReg({ regId, value }) {
       const host = getHost(sessionKey);
       if (!host.setRegSupported || !host.setRegSupported()) {
         return jsonContent({ notSupported: true, note: "This core build has no register-write (shipped on all 14 platforms as of 0.6.0 — update the core package if you see this)." });
@@ -767,37 +766,9 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       host.setReg(regId, value >>> 0);
       const now = host.getReg(regId);
       return jsonContent({ regId, value: "0x" + (now >>> 0).toString(16).toUpperCase(), valueRaw: now });
-    }),
-  );
-  const regSchema = z.record(z.string(), z.number().int()).optional().describe(
-    "Registers to set before the call, keyed by romdev reg-id (m68k: 0-7=D0-D7, 8-15=A0-A7, 16=PC, 17=SR, 18=SP). " +
-    "e.g. {\"8\":2863118} sets A0. PC is set from the `pc` arg, not here.");
+  }
 
-  server.tool(
-    "callSubroutine",
-    "Drive the ROM's OWN subroutine and run until it returns — the RE primitive for compressed assets. Set up the CPU " +
-    "(registers via `regs` by reg-id, PC=`pc`), push a sentinel return address, and run until the routine RTSes back. " +
-    "SANDBOXED off by default so the dst buffer it wrote stays live for readMemory. The classic use: drive a game's " +
-    "decompressor (A0=source, A1=dest), then readMemory the dst — turning 'reimplement an undocumented codec' into one " +
-    "call. NEVER HANGS: an instruction WATCHDOG (`maxInstructions`) force-stops a runaway (e.g. a codec fed a wrong A0 " +
-    "that loops forever) and returns PROGRESS — `finalPC` + `finalRegs` (A0/A1/D0/D1/PC/SP) + `watchdog:true` — so you " +
-    "can tell 'wrong A0' from 'needs a preset reg' from 'legitimately long' instead of a black-box false. Use `stopAtPC` " +
-    "to halt at a mid-routine PC and read the PARTIAL output (see the format without a full decompress). Use `presetMemory` " +
-    "for codecs that read a global from RAM (a dest stride / mode flag) before the call. Supported on all 14 platforms.",
-    {
-      pc: z.number().int().min(0).describe("Entry PC of the subroutine (e.g. 0x263C44). Can be a WRAPPER entry that sets up regs then tail-calls (JMPs) the inner routine — the sentinel-return is detected from the final RTS regardless of tail-calls."),
-      regs: regSchema,
-      sentinelPC: z.number().int().min(0).default(0).describe("Return address pushed on the stack; the run stops when PC reaches it. Default 0 (vector area, unlikely mid-run). Override if it collides with real code."),
-      stopAtPC: z.number().int().min(0).optional().describe("Instead of waiting for the sentinel return, STOP when PC reaches this address and return the partial output — for 'run into the codec, stop at a known point, see what it produced.'"),
-      presetMemory: z.array(z.object({
-        addr: z.number().int().min(0).describe("CPU address to write before the call."),
-        hex: z.string().describe("Bytes as hex (e.g. '00FF')."),
-      })).optional().describe("Memory writes applied before the call — for codecs that read a global (dest stride, mode flag) from RAM, not just registers."),
-      maxFrames: z.number().int().min(1).max(100000).default(600).describe("Frame cap (the outer bound)."),
-      maxInstructions: z.number().int().min(1000).optional().describe("Instruction watchdog budget — the REAL cap that stops a runaway inside a frame (default ~maxFrames*500k). Raise it for a legitimately huge decompress; lower it to fail fast while probing the right A0."),
-      sandbox: z.boolean().default(false).describe("Snapshot+restore core state around the call (default FALSE — you want the dst buffer left in RAM to readMemory). Set true to leave the live game untouched."),
-    },
-    safeTool(async ({ pc, regs, sentinelPC, stopAtPC, presetMemory, maxFrames, maxInstructions, sandbox }) => {
+  async function cpuCall({ pc, regs, sentinelPC = 0, stopAtPC, presetMemory, maxFrames = 600, maxInstructions, sandbox = false }) {
       const host = getHost(sessionKey);
       if (!host.setRegSupported || !host.setRegSupported()) {
         return jsonContent({ returned: false, notSupported: true,
@@ -825,23 +796,9 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         ...(r.finalRegs ? { finalRegs: r.finalRegs } : {}),
         note,
       });
-    }),
-  );
+  }
 
-  server.tool(
-    "decompressWith",
-    "Convenience wrapper over callSubroutine for the common decompressor shape: call the routine at `entryPC` with " +
-    "A0=sourceAddress (and optionally A1=destAddress), run until it returns. Then readMemory `destAddress` to get the " +
-    "decompressed bytes. For the NBA Jam-style 'name + portrait are LZ-compressed' wall: point this at the game's own " +
-    "decompressor and capture the output instead of reverse-engineering the codec. Genesis/m68k reg convention (A0=8, " +
-    "A1=9); other cores map their source/dest arg registers per platform. notSupported where the core lacks register-write.",
-    {
-      entryPC: z.number().int().min(0).describe("Decompressor entry PC."),
-      sourceAddress: z.number().int().min(0).describe("Compressed-source address → loaded into A0 (reg-id 8 on m68k)."),
-      destAddress: z.number().int().min(0).optional().describe("Destination buffer address → loaded into A1 (reg-id 9). Omit if the routine picks its own dest."),
-      maxFrames: z.number().int().min(1).max(100000).default(600),
-    },
-    safeTool(async ({ entryPC, sourceAddress, destAddress, maxFrames }) => {
+  async function cpuDecompress({ entryPC, sourceAddress, destAddress, maxFrames = 600 }) {
       const host = getHost(sessionKey);
       if (!host.setRegSupported || !host.setRegSupported()) {
         return jsonContent({ returned: false, notSupported: true,
@@ -855,8 +812,71 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         ...(destAddress !== undefined ? { destAddress: "$" + (destAddress >>> 0).toString(16).toUpperCase() } : {}),
         note: r.returned
           ? `Decompressor returned. readMemory at ${destAddress !== undefined ? "$" + (destAddress >>> 0).toString(16).toUpperCase() : "the routine's dest"} to get the decompressed bytes (the live core ran the game's own codec — no codec reimplementation needed).`
-          : "Decompressor did NOT return within maxFrames. Confirm entryPC is the routine start, A0=source is right, and bump maxFrames. (Some codecs expect more setup regs — use callSubroutine with the full regs map.)",
+          : "Decompressor did NOT return within maxFrames. Confirm entryPC is the routine start, A0=source is right, and bump maxFrames. (Some codecs expect more setup regs — use cpu({op:'call'}) with the full regs map.)",
       });
+  }
+
+  server.tool(
+    "cpu",
+    "Read or drive a CPU, one tool keyed by `op`.\n" +
+    "• op:'read' — read a CPU's {pc, registers, flags, sp}. Main CPU wired for all 14 tier-1 systems (nes, snes, " +
+    "genesis, sms, gg, gb, gbc, atari2600, atari7800, c64, lynx, gba (ARM7TDMI: 16 gprs + cpsr/spsr + execPc for " +
+    "pipeline prefetch), pce, msx). Secondary CPUs via `cpu`: 'spc700' (SNES audio — 'stuck in IPL' vs 'running' vs " +
+    "'crashed'), 'z80' (Genesis sound — held in reset until the 68k releases it via $A11100, so a fresh boot reads all-zero).\n" +
+    "• op:'setReg' — write a single register by romdev reg-id (the inverse of op:'read'). **m68k reg-ids: 0-7=D0-D7, " +
+    "8-15=A0-A7, 16=PC, 17=SR, 18=SP.** Returns the value read back. notSupported where the core lacks register-write.\n" +
+    "• op:'call' — drive the ROM's OWN subroutine and run until it returns — the RE primitive for compressed assets. Set " +
+    "up the CPU (`regs` by reg-id, PC=`pc`), push a sentinel return, run until RTS. **SANDBOXED off by default so the dst " +
+    "buffer it wrote stays live for memory({op:'read'}).** Classic use: drive a decompressor (A0=source, A1=dest) then read " +
+    "the dst. **NEVER HANGS: an instruction WATCHDOG (`maxInstructions`) force-stops a runaway and returns PROGRESS — " +
+    "finalPC + finalRegs + watchdog:true — so you can tell 'wrong A0' from 'needs a preset' from 'legitimately long'.** " +
+    "`stopAtPC` halts mid-routine for partial output; `presetMemory` for codecs that read a global from RAM first.\n" +
+    "• op:'decompress' — convenience wrapper over op:'call' for the common decompressor shape: call `entryPC` with " +
+    "A0=`sourceAddress` (and optionally A1=`destAddress`), run until it returns, then read `destAddress`. For the " +
+    "NBA-Jam-style 'name + portrait are LZ-compressed' wall: point it at the game's own decompressor.",
+    {
+      op: z.enum(["read", "setReg", "call", "decompress"])
+        .describe("read=CPU registers/flags; setReg=write one register; call=drive a subroutine until it returns; decompress=call shortcut (A0=source, A1=dest)."),
+      // read
+      platform: z.string().optional().describe("op:read — override platform; defaults to the loaded ROM."),
+      cpu: z.enum(["main", "spc700", "z80"]).default("main").describe("op:read — which CPU: main (primary), spc700 (SNES audio), z80 (Genesis sound)."),
+      // setReg
+      regId: z.number().int().min(0).max(31).optional().describe("op:setReg — romdev reg-id (m68k: 0-7=D, 8-15=A, 16=PC, 17=SR, 18=SP)."),
+      value: z.number().int().optional().describe("op:setReg — 32-bit value to write."),
+      // call
+      pc: z.number().int().min(0).optional().describe("op:call — entry PC of the subroutine (may be a WRAPPER that sets up regs then tail-calls; sentinel-return is detected from the final RTS regardless)."),
+      regs: regSchema,
+      sentinelPC: z.number().int().min(0).default(0).describe("op:call — return address pushed on the stack; the run stops when PC reaches it. Default 0 (vector area). Override if it collides with real code."),
+      stopAtPC: z.number().int().min(0).optional().describe("op:call — STOP when PC reaches this address and return the partial output instead of waiting for the sentinel return."),
+      presetMemory: z.array(z.object({
+        addr: z.number().int().min(0).describe("CPU address to write before the call."),
+        hex: z.string().describe("Bytes as hex (e.g. '00FF')."),
+      })).optional().describe("op:call — memory writes applied before the call (codecs that read a global from RAM, not just registers)."),
+      maxFrames: z.number().int().min(1).max(100000).default(600).describe("op:call/decompress — frame cap (the outer bound)."),
+      maxInstructions: z.number().int().min(1000).optional().describe("op:call — instruction watchdog budget (the REAL cap; default ~maxFrames*500k). Raise for a huge decompress; lower to fail fast while probing the right A0."),
+      sandbox: z.boolean().default(false).describe("op:call — snapshot+restore core state around the call (default FALSE — you want the dst buffer left live to read). True leaves the live game untouched."),
+      // decompress
+      entryPC: z.number().int().min(0).optional().describe("op:decompress — decompressor entry PC."),
+      sourceAddress: z.number().int().min(0).optional().describe("op:decompress — compressed-source address → A0 (reg-id 8 on m68k)."),
+      destAddress: z.number().int().min(0).optional().describe("op:decompress — destination buffer address → A1 (reg-id 9). Omit if the routine picks its own dest."),
+    },
+    safeTool(async (args) => {
+      switch (args.op) {
+        case "read":     return await getCPUStateCore(args);
+        case "setReg": {
+          if (args.regId == null || args.value == null) throw new Error("cpu({op:'setReg'}): `regId` and `value` are required.");
+          return await cpuSetReg(args);
+        }
+        case "call": {
+          if (args.pc == null) throw new Error("cpu({op:'call'}): `pc` (entry PC) is required.");
+          return await cpuCall(args);
+        }
+        case "decompress": {
+          if (args.entryPC == null || args.sourceAddress == null) throw new Error("cpu({op:'decompress'}): `entryPC` and `sourceAddress` are required.");
+          return await cpuDecompress(args);
+        }
+        default: throw new Error(`cpu: unknown op '${args.op}'`);
+      }
     }),
   );
 
