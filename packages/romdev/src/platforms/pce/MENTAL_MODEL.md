@@ -12,8 +12,8 @@ romdev ships a **hardware helper library** (`src/platforms/pce/lib/c/`:
 `psg_tone()` instead of poking VDC/VCE registers by hand. cc65 has **no** sprite
 library, so this lib is how you get pixels on screen.
 
-The fastest way to a working game: **`createProject({ platform: "pce", template:
-"sprite_move" })`** (also `music_sfx`, `catch_game`). It drops a complete,
+The fastest way to a working game: **`scaffold({op:'project', platform: "pce", template:
+"sprite_move"})`** (also `music_sfx`, `catch_game`). It drops a complete,
 *building* project — a verified playable example + the helper lib + docs. Read
 the example's `main.c`, then change it. The examples live in `examples/pce/`.
 
@@ -59,7 +59,7 @@ drives interrupt-based code.
 
 ## Build pipeline
 
-`buildSource({ platform: "pce" })` → cc65 (C89) → ca65 → ld65 with `pce.cfg`
+`build({output:'rom', platform: "pce"})` → cc65 (C89) → ca65 → ld65 with `pce.cfg`
 → a HuCard `.pce` image. The fastest visible output is cc65's **conio** text
 library (`#include <conio.h>`): `clrscr()` inits the VDC+VCE and uploads a font,
 `cputs()`/`gotoxy()` draw text. The `hello_pce.c` starter snippet does exactly
@@ -74,25 +74,25 @@ screen. Keep at least one (2+ byte) global. See TROUBLESHOOTING.md.
 
 ## Art + input
 
-- `convertImageToTiles({ platform: "pce" })` — PNG → 4bpp HuC6270 tiles (the
+- `encodeArt({stage:'tiles', platform: "pce"})` — PNG → 4bpp HuC6270 tiles (the
   "planar-pairs" layout: 32 B/tile, 16 B plane 0+1 then 16 B plane 2+3). Returns
   a suggested 16-color palette too. DMA the bytes to your VRAM pattern base.
-- `getInputLayout({ platform: "pce" })` — the 2-button pad + how the joyport
+- `input({op:'layout', platform: "pce"})` — the 2-button pad + how the joyport
   scan works. **Driving input over MCP:** geargrafx maps `input({op:'set'})` straight
   through (verified live, no inversion): `{a}`→button I, `{b}`→button II,
   `{start}`→Run, `{select}`→Select; spatial east→I, west→II. So
-  `setInput({ a: true })` presses button I as expected — unlike the
+  `input({op:'set', a: true})` presses button I as expected — unlike the
   genesis_plus_gx platforms, there's no surprise here.
 
 ## Debugging tools
 
-- `getCPUState()` — HuC6280 PC/A/X/Y/S/P + flags + timer/IRQ state.
-- `getRenderingContext()` — VDC R5 screen-enable, BG scroll, SATB source.
-- `inspectPalette()` — VCE 512-entry 9-bit GRB (area:'bg'|'sprite').
-- `inspectSprites()` — SATB 64 sprites (x/y/tile/palette/size/flip).
-- `getMemoryMap()` — where cc65 placed your variables (after buildSourceWithDebug).
-- `getAudioState({ chip: "pce" })` — the HuC6280 PSG: 6 wavetable channels
+- `cpu({op:'read'})` — HuC6280 PC/A/X/Y/S/P + flags + timer/IRQ state.
+- `background({view:'renderState'})` — VDC R5 screen-enable, BG scroll, SATB source.
+- `palette({source:'live'})` — VCE 512-entry 9-bit GRB (area:'bg'|'sprite').
+- `sprites({op:'inspect'})` — SATB 64 sprites (x/y/tile/palette/size/flip).
+- `symbols({op:'map'})` — where cc65 placed your variables (after buildSourceWithDebug).
+- `audioDebug({op:'inspect', chip: "pce"})` — the HuC6280 PSG: 6 wavetable channels
   (per-channel freq/volume/wave; channels 4-5 can also do noise) + main amplitude
   + LFO.
-- `readMemory()` regions: `pce_vdc_vram`, `pce_vdc_satb`, `pce_vdc_regs`,
+- `memory({op:'read'})` regions: `pce_vdc_vram`, `pce_vdc_satb`, `pce_vdc_regs`,
   `pce_vce_palette`, `pce_cpu_regs`, `pce_psg_regs`.

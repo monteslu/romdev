@@ -205,15 +205,15 @@ Edge-detect by AND'ing `pad & !prev`.
 genesis_plus_gx (the SMS core) maps the two face buttons onto libretro the
 *opposite* way you'd guess (verified live against the core):
 
-| Physical button | `setInput({…})`  | spatial / native |
+| Physical button | `input({op:'set', …})`  | spatial / native |
 |-----------------|-------------------|------------------|
-| Button 1 (TL, main fire) | `{ b: true }` | `{ west: true }` · `pressButton({button:'1'})` |
-| Button 2 (TR)            | `{ a: true }` | `{ east: true }` · `pressButton({button:'2'})` |
+| Button 1 (TL, main fire) | `{ b: true }` | `{ west: true }` · `input({op:'press', button:'1'})` |
+| Button 2 (TR)            | `{ a: true }` | `{ east: true }` · `input({op:'press', button:'2'})` |
 
-**The trap:** `setInput({ a: true })` presses **button 2**, not button 1. For
+**The trap:** `input({op:'set', a: true})` presses **button 2**, not button 1. For
 the main fire (button 1 / `JOY_B1`) use `{ b: true }` or the spatial
-`{ west: true }`. The **spatial names** and `pressButton({button:'1'|'2'})`
-resolve correctly — prefer them over raw a/b. `getInputLayout({platform:'sms'})`
+`{ west: true }`. The **spatial names** and `input({op:'press', button:'1'|'2'})`
+resolve correctly — prefer them over raw a/b. `input({op:'layout', platform:'sms'})`
 has the exact map. (Same genesis_plus_gx inversion as Genesis + Game Gear.)
 
 ## Sound
@@ -226,7 +226,7 @@ A full driver is beyond the scope of these scaffolds. For
 playable SFX, manually pulse $7F with the latch-register byte
 followed by data bytes. Real games ship a music driver in WRAM.
 
-**Debugging sound:** `getAudioState({chip:"psg"})` decodes the live SN76489 —
+**Debugging sound:** `audioDebug({op:'inspect', chip:"psg"})` decodes the live SN76489 —
 3 tone + 1 noise channel state (the same gpgx PSG region serves SMS/GG/Genesis).
 
 ## Cartridge layout
@@ -245,7 +245,7 @@ setup that lets vblank IRQs fire.
 
 ## Build pipeline
 
-When you call `buildSource({platform:"sms", language:"c"})`:
+When you call `build({output:'rom', platform:"sms", language:"c"})`:
 
 1. SDCC (z80 port) compiles each `.c` → `.rel` object.
 2. `sms_crt0.s` is auto-injected as the startup file (assembled to

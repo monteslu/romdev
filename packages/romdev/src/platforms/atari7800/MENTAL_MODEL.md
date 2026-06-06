@@ -250,10 +250,10 @@ Console switches (reset, select, pause, B/W, difficulty) on
 
 ### Driving input over MCP — the 2-button-mode footgun ⚠
 
-`setInput` button names map to the two ProLine fire buttons as (verified live
+`input({op:'set'})` button names map to the two ProLine fire buttons as (verified live
 against prosystem + its `Riot.c`):
 
-| `setInput({…})` | physical button | register (2-button mode) |
+| `input({op:'set', …})` | physical button | register (2-button mode) |
 |-----------------|-----------------|--------------------------|
 | `{ a: true }`   | right / button 2 | `INPT0` ($08), active-HIGH bit 7 |
 | `{ b: true }`   | left / button 1  | `INPT1` ($09), active-HIGH bit 7 |
@@ -264,7 +264,7 @@ dead — so if you read INPT0/1 expecting two buttons before enabling 2-button m
 you'll see nothing. Enable 2-button mode (drive CTLSWB bit 2 as output → SWCHB
 bit 2 = 0) to split the two fires onto INPT0/INPT1. The right/left *semantics*
 match the layout (a=right, b=left); the button presses are correct in both modes.
-`getInputLayout({platform:'atari7800'})` documents both modes.
+`input({op:'layout', platform:'atari7800'})` documents both modes.
 
 ## Audio
 
@@ -315,7 +315,7 @@ don't write the header yourself.
 
 ## Build pipeline
 
-When you call `buildSource({platform:"atari7800", language:"c"})`:
+When you call `build({output:'rom', platform:"atari7800", language:"c"})`:
 
 1. cc65 compiles your `.c` to 6502 `.s`.
 2. ca65 assembles each `.s` to `.o`.

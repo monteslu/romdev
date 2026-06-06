@@ -34,7 +34,7 @@ hit several classic NES foot-guns the hard way:
 
 3. **cc65 reserves the first 2 zeropage bytes** for its runtime, so your
    first `.res 1` declaration lands at `$02`, not `$00`. Use the
-   `getMemoryMap` MCP tool to find your variables' actual addresses
+   `symbols({op:'map'})` MCP tool to find your variables' actual addresses
    instead of probing empirically.
 
 These snippets sidestep all of that.

@@ -1,7 +1,7 @@
 # Atari 7800 — troubleshooting
 
 When something's broken. Read MENTAL_MODEL.md first
-(via `getPlatformDoc({platform:"atari7800", name:"mental_model"})`)
+(via `platform({op:'doc', platform:"atari7800", name:"mental_model"})`)
 for the "what's going on" version — the 7800 is the architectural outlier
 of the bundled platforms and most "wait, why?" moments come from
 expecting it to behave like a NES.

@@ -17,23 +17,23 @@ for exactly this reason — don't delete it until you have real globals.
 
 ## Black screen, no link error
 
-The HuC6270 VDC's display is OFF. Call `getRenderingContext()`:
+The HuC6270 VDC's display is OFF. Call `background({view:'renderState'})`:
 - `bgEnable:false, spEnable:false` → VDC register R5 (CR) bits 7/6 are clear.
   If you're using conio, `clrscr()` should enable it — make sure you called it
-  and that the program didn't crash before reaching it (check `getCPUState().pc`).
+  and that the program didn't crash before reaching it (check `cpu({op:'read'}).pc`).
 - Using raw VDC writes? Set R5 bit 7 (BG) and/or bit 6 (SPR) and load a BAT +
   tiles into VRAM first.
 
 ## Text/tiles show but colors are wrong
 
 The HuC6260 VCE palette is **9-bit GRB** (`0bGGG_RRR_BBB`), NOT RGB and NOT the
-Genesis BGR layout. Each channel is 3 bits (0-7). `inspectPalette()` decodes it
+Genesis BGR layout. Each channel is 3 bits (0-7). `palette({source:'live'})` decodes it
 correctly — compare its `hex` values against what you wrote. Remember slot 0 of
 each 16-color sub-palette is transparent.
 
 ## Sprites invisible
 
-- `inspectSprites()` shows `visible:false` for all → they're parked off-screen
+- `sprites({op:'inspect'})` shows `visible:false` for all → they're parked off-screen
   (Y = -64 means the SATB entry is zeroed; the VDC's Y is stored +64).
 - Sprites present but not drawn → VDC R5 bit 6 (SPR enable) is clear, or the
   SATB hasn't been DMA'd from VRAM (the VDC copies it from the address in R19).
@@ -42,7 +42,7 @@ each 16-color sub-palette is transparent.
 
 ## Program builds but PC is stuck / garbage
 
-`getCPUState()` shows the HuC6280 PC. If it's spinning in a tight range you're
+`cpu({op:'read'})` shows the HuC6280 PC. If it's spinning in a tight range you're
 probably in your intended idle loop. If it's in ROM vector territory unexpectedly,
 you likely hit a BRK or an unhandled IRQ — check that you didn't enable a VDC IRQ
 (R5 bits 2-3) without an ISR.

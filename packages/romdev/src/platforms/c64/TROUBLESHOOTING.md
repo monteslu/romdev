@@ -1,7 +1,7 @@
 # Commodore 64 — troubleshooting
 
 When something's broken. Read MENTAL_MODEL.md first
-(via `getPlatformDoc({platform:"c64", name:"mental_model"})`).
+(via `platform({op:'doc', platform:"c64", name:"mental_model"})`).
 
 ## "Screen is blank or filled with the wrong characters"
 

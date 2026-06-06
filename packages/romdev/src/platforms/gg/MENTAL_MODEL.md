@@ -112,15 +112,15 @@ $01-$05  GG-specific: link cable, sound balance, etc.
 Game Gear runs on genesis_plus_gx, which maps the two face buttons onto libretro
 the *opposite* of the obvious way (verified live against the core — same as SMS):
 
-| Physical button | `setInput({…})`  | spatial / native |
+| Physical button | `input({op:'set', …})`  | spatial / native |
 |-----------------|-------------------|------------------|
-| Button 1 (main fire) | `{ b: true }` | `{ west: true }` · `pressButton({button:'1'})` |
-| Button 2             | `{ a: true }` | `{ east: true }` · `pressButton({button:'2'})` |
+| Button 1 (main fire) | `{ b: true }` | `{ west: true }` · `input({op:'press', button:'1'})` |
+| Button 2             | `{ a: true }` | `{ east: true }` · `input({op:'press', button:'2'})` |
 | START               | `{ start: true }` | — |
 
-**The trap:** `setInput({ a: true })` presses **button 2**, not button 1. For the
+**The trap:** `input({op:'set', a: true})` presses **button 2**, not button 1. For the
 main fire use `{ b: true }` / `{ west: true }`. Prefer spatial names or
-`pressButton({button:'1'|'2'})` over raw a/b. `getInputLayout({platform:'gg'})`
+`input({op:'press', button:'1'|'2'})` over raw a/b. `input({op:'layout', platform:'gg'})`
 has the exact map.
 
 ## Audio
@@ -137,7 +137,7 @@ channels route to the right speaker, bits 4-7 = same for left).
 Defaults to mono — write `0xFF` for "all channels to both speakers"
 explicitly.
 
-**Debugging sound:** `getAudioState({chip:"psg"})` decodes the live SN76489 —
+**Debugging sound:** `audioDebug({op:'inspect', chip:"psg"})` decodes the live SN76489 —
 3 tone + 1 noise channel state (the same gpgx PSG region serves GG/SMS/Genesis).
 
 ## Frame heartbeat

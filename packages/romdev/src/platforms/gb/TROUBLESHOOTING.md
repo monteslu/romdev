@@ -168,17 +168,17 @@ at $0150. If you see code in that window, either:
 
 A few high-leverage tools you might not know exist:
 
-- **`inspectSprites({platform:"gbc"})`** — pretty-prints all 40 OAM
+- **`sprites({op:'inspect', platform:"gbc"})`** — pretty-prints all 40 OAM
   slots showing which are on-screen + tile index + attributes.
-- **`inspectBackgroundMap({platform:"gbc", render:true})`** — renders
+- **`background({view:'map', platform:"gbc", render:true})`** — renders
   the BG map as a PNG so you can see what tiles the LCD is reading.
-- **`inspectPalette({platform:"gbc"})`** — shows BG and OBJ palettes
+- **`palette({source:'live', platform:"gbc"})`** — shows BG and OBJ palettes
   as colors instead of raw BGR555 bytes.
-- **`getCPUState({})`** — PC + registers, useful when you suspect a
+- **`cpu({op:'read'})`** — PC + registers, useful when you suspect a
   hang.
-- **`watchMemory({region:"gb_oam", offset:0, length:4})`** — trace
+- **`watch({on:'mem', region:"gb_oam", offset:0, length:4})`** — trace
   every write to OAM slot 0, returns the PC that wrote it.
-- **`stepFrames({frames:3600})`** — runs a full minute of game time
+- **`frame({op:'step', frames:3600})`** — runs a full minute of game time
   in milliseconds. Don't be conservative with frame counts when
   hunting bugs.
 

@@ -1,7 +1,7 @@
 # Atari 2600 / VCS — troubleshooting
 
 When something's broken. Read MENTAL_MODEL.md first
-(via `getPlatformDoc({platform:"atari2600", name:"mental_model"})`).
+(via `platform({op:'doc', platform:"atari2600", name:"mental_model"})`).
 
 ## "Screen rolls / shimmers / wrong height"
 

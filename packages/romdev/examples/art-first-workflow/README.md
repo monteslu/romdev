@@ -13,7 +13,7 @@ shelling out from the agent.
 | Draw sprites | [LibreSprite](https://libresprite.github.io/) | GPLv2 (Aseprite fork) | `.ase` |
 | Design levels | [Tiled](https://www.mapeditor.org/) | BSD-2 | `.tmj` (JSON) |
 | Animate | LibreSprite (export GIF) or any GIF editor | various | `.gif` |
-| Build ROM | romdev `loadAsepriteSheet` / `loadTilemap` / `loadGifAnimation` | MIT | platform tiles |
+| Build ROM | romdev `importArt({from:'aseprite'})` / `importArt({from:'tiled'})` / `importArt({from:'gif'})` | MIT | platform tiles |
 
 Every tool runs on Linux/Mac/Windows. No native dependencies, no
 build steps, no agent shell scripts.
@@ -84,7 +84,7 @@ artist's frame durations in LibreSprite, not hardcoded in code.
    tiles (e.g. 32×30 for a full NES screen).
 2. **New Tileset** → image-based → point at the tileset PNG you
    exported from LibreSprite (you can also use the rendered tiles from
-   `loadAsepriteSheet` after writing to disk).
+   `importArt({from:'aseprite'})` after writing to disk).
 3. Paint tiles on the **bg** layer.
 4. Add an **Object Layer** named e.g. `spawns`. Drop named point
    objects: `player_start`, `door_north`, `chest`. Each can carry
@@ -200,6 +200,6 @@ ImageMagick installs.
 - **GIF disposal**: omggif (our parser) doesn't apply disposal. Export
   GIFs with `Disposal: Replace` for full-frame sprite animations.
 - **Indexed PNG colors must match the platform palette** (±8/channel
-  tolerance). If `convertImageToTiles` warns about colors outside the
+  tolerance). If `encodeArt({stage:'tiles'})` warns about colors outside the
   palette, the editor exported them slightly drifted by sRGB gamma —
-  re-export, or re-pick the palette with `getPlatformPalettePng`.
+  re-export, or re-pick the palette with `palette({source:'platformMaster'})`.

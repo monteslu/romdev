@@ -118,7 +118,7 @@ bit 7     BG-over-OBJ priority
 Identical to DMG — same 4-channel APU. `sound_init` / `sound_play_tone`
 / `sound_play_noise` / `sound_off` from `gb_runtime.h` work unchanged
 on GBC. See the GB MENTAL_MODEL.md for the channel layout.
-`getAudioState({chip:"gb"})` decodes the live APU on GBC too.
+`audioDebug({op:'inspect', chip:"gb"})` decodes the live APU on GBC too.
 
 ## Frame heartbeat
 
@@ -148,7 +148,7 @@ Joypad is identical to DMG — `JOYP` ($FF00), row-select multiplex, active-low
 
 gambatte maps `input({op:'set'})` button names **straight through** — verified live, no
 inversion: `{a}`→A, `{b}`→B, `{start}`/`{select}`, plus the d-pad (spatial
-east→A, west→B). So `setInput({ a: true })` presses GBC A as expected — unlike
+east→A, west→B). So `input({op:'set', a: true})` presses GBC A as expected — unlike
 the genesis_plus_gx platforms (Genesis/SMS/GG), there's no surprise here.
 
 ## Scaffolds

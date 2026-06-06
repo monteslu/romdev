@@ -1,7 +1,7 @@
 # Game Gear — troubleshooting
 
 When something's broken. Read MENTAL_MODEL.md first
-(`getPlatformDoc({platform:"gg", name:"mental_model"})`).
+(`platform({op:'doc', platform:"gg", name:"mental_model"})`).
 
 ## "ROM runs but content is off the screen"
 
@@ -30,15 +30,15 @@ swap to JOY_START.
 
 The GG button map is **inverted** vs the libretro names (same genesis_plus_gx
 core as SMS). Button 1 (main fire) is libretro **b**, button 2 is libretro **a**
-— so `setInput({a:true})` presses button **2**, not button 1 (`JOY_B1`).
+— so `input({op:'set', a:true})` presses button **2**, not button 1 (`JOY_B1`).
 
 Fix:
-- Button 1 (`JOY_B1`) → `setInput({ports:[{b:true}]})` or `{west:true}`
+- Button 1 (`JOY_B1`) → `input({op:'set', ports:[{b:true}]})` or `{west:true}`
 - Button 2 (`JOY_B2`) → `{a:true}` / `{east:true}`
 - START → `{start:true}`
 
-Prefer spatial names or `pressButton({button:'1'|'2'})`.
-`getInputLayout({platform:'gg'})` has the full map.
+Prefer spatial names or `input({op:'press', button:'1'|'2'})`.
+`input({op:'layout', platform:'gg'})` has the full map.
 
 ## "Sound only comes out of one speaker"
 

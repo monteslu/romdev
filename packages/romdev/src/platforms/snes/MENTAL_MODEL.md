@@ -115,9 +115,9 @@ optimize:
    Invaders" stable path = static ship-angle frames + explicit asteroid
    tiles + all palettes uploaded + fixed slots + a low sprite budget.
 5. **Verify with the tools, don't guess.** After a build that should show
-   sprites, call `getRenderingContext({platform:'snes'})` (it now decodes
+   sprites, call `background({view:'renderState', platform:'snes'})` (it now decodes
    OBSEL: OBJ size, tile base, and whether the OBJ layer is enabled on the
-   main screen via TM) and `inspectSprites({platform:'snes'})` (per-sprite
+   main screen via TM) and `sprites({op:'inspect', platform:'snes'})` (per-sprite
    `renderable` vs hidden, resolved `tileVramAddr`, `cgramPaletteRange`, and
    uninitialized-palette warnings). If `renderableCount` is 0 but you placed
    sprites, the answer is right there: OBJ layer off in TM, all sprites
@@ -182,7 +182,7 @@ Edge-detect by `(pad & KEY) && !(prev & KEY)`.
 snes9x maps `input({op:'set'})` button names **straight through** — verified live, no
 inversion: `{a}`→A, `{b}`→B, `{x}`→X, `{y}`→Y, `{l}`→L, `{r}`→R, plus the d-pad
 and `{start}`/`{select}`. The spatial names also resolve (east→A, south→B,
-north→X, west→Y). So `setInput({ b: true })` presses SNES B as expected — unlike
+north→X, west→Y). So `input({op:'set', b: true})` presses SNES B as expected — unlike
 the genesis_plus_gx platforms (Genesis/SMS/GG), there's no surprise here.
 
 ## Sound
@@ -202,7 +202,7 @@ spcPlay(0);                 /* trigger SFX channel 0 */
 (Hand-authoring SPC drivers is hard. For SFX, PVSnesLib's PSG-style
 helpers are the canonical entry point.)
 
-**Debugging sound:** `getAudioState({chip:"dsp"})` decodes the live S-DSP —
+**Debugging sound:** `audioDebug({op:'inspect', chip:"dsp"})` decodes the live S-DSP —
 per-voice vol/pitch/ADSR + `env` (0 = silent regardless of vol) + `bufLastSamples`
 (nonzero proves the voice is producing audio) + `flg`; it distinguishes "never
 produced output" from "muted by mixer." GOTCHA: S-DSP FLG is $6C, KOFF is $5C
@@ -227,7 +227,7 @@ PVSnesLib's `hdr.asm` fills these in.
 
 ## Where the SDK lives (and how to read it)
 
-`createProject({platform:"snes"})` ships the FULL PVSnesLib source +
+`scaffold({op:'project', platform:"snes"})` ships the FULL PVSnesLib source +
 header tree into the new project at `vendor/pvsneslib/`. So when
 your code does `#include <snes.h>`, those headers come from
 `vendor/pvsneslib/include/`:
@@ -256,7 +256,7 @@ library it's calling instead of inferring from header comments.
 
 ## Build pipeline
 
-When you call `buildSource({platform:"snes", language:"c"})`:
+When you call `build({output:'rom', platform:"snes", language:"c"})`:
 
 1. `tcc-65816` (TinyCC fork → WASM) compiles each `.c` → `.asm`
    (wla-65816 syntax).

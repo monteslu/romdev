@@ -30,6 +30,36 @@ A few quirks worth knowing:
   write "SEGA" to $A14000 within the first few seconds, or the
   console refuses to start the VDP. SGDK's sega.s does this.
 
+## Reading your C globals headlessly — assert state, don't screenshot ⭐
+
+Every "did the score go up / did HP drop / did the level change?" check is one
+byte of RAM, not a screenshot. Build with debug, resolve the symbol, read it:
+
+```
+b   = build({output:'romWithDebug', platform:'genesis', source, inline:true})
+sym = symbols({op:'resolve', map: b.mapText, name:'score'})
+// → { address:0xE0FF004A, ramOffset:0x4A, readHint:"... region:'system_ram', offset:0x4a ..." }
+memory({op:'read', region:'system_ram', offset: sym.ramOffset, length:2})
+```
+
+- **SGDK links work-RAM through the $E0FF0000 mirror** (hardware mirrors $FF0000
+  across the high bus). The emulator exposes that 64 KB as `system_ram`, indexed
+  by the **low 16 bits** of the symbol address — `symbols({op:'resolve'})` hands
+  you that `ramOffset` + the exact `memory({op:'read'})` recipe, so you never
+  compute the mirror by hand.
+- **`static` file-local globals resolve too** (SGDK emits per-symbol sections).
+  A non-`static` global that's never *read* can be optimised away at -O2 — mark
+  game-state vars you inspect `volatile` (you want that anyway).
+- **Genesis WRAM is host-LE word-byte-swapped** in gpgx, so a 16-bit value reads
+  with its two bytes swapped at the offset (0x1234 → bytes `34 12`). Read the
+  word and account for it, or read single bytes.
+- **PC → which function?** `symbols({op:'addr', pc, symbolsText: b.mapText})` maps
+  a live `cpu({op:'read'}).pc` to the enclosing C function.
+
+This replaces ~20 verification screenshots a session with 1-byte reads.
+`memory({op:'snapshot'})` + `memory({op:'diff'})` before/after an event answers
+"which bytes did this touch?" when you don't know the symbol yet.
+
 ## VDP (Video Display Processor) — separate bus
 
 The VDP has its own VRAM (64 KB), CRAM (128 bytes), VSRAM (80 bytes).
@@ -76,10 +106,10 @@ direct-VDP path if you only need static images.
 **Lifting a character from another Genesis ROM:** a visible character is
 usually several SAT entries (multi-cell hardware sprites) referencing
 non-contiguous VRAM tiles in column-major order. Don't crop a screenshot
-or a tile sheet — use `captureMetaSprite({platform:"genesis", slots|rect})`
+or a tile sheet — use `sprites({op:'capture', platform:"genesis", slots|rect})`
 which reads the live SAT, copies the referenced tiles in hardware order,
 and emits tiles + palette + layout + an SGDK `_draw()` helper. Use
-`groupVisibleSprites` first to find which slots form one character. See
+`sprites({op:'group'})` first to find which slots form one character. See
 AGENTS.md → "Lifting a Genesis CHARACTER".
 
 ## Tiles
@@ -92,7 +122,7 @@ data starts at `TILE_USER_INDEX`. Upload tiles via `VDP_loadTileData()`
 (DMA or CPU push, depending on the `TransferMethod` arg).
 
 **Converting an image to tiles** (sprite sheet, or a full-screen
-splash/title image): use the `imageToTilemap` MCP tool — it produces
+splash/title image): use the `encodeArt({stage:'tilemap'})` MCP tool — it produces
 correct 4bpp packed tiles + tilemap + palette and a preview PNG in one
 call. **Do not hand-encode a full-screen picture** as `u32[8]` arrays;
 that's the #1 way to get a "right shapes, all-red, choppy" splash
@@ -150,12 +180,12 @@ xor-ing this frame against last frame and AND-ing with the new state.
 
 ### Driving input over MCP — the Genesis button map is INVERTED ⚠
 
-When you drive the game headlessly with `setInput`/`pressButton`, the raw
+When you drive the game headlessly with `input({op:'set'})`/`input({op:'press'})`, the raw
 libretro button names are **NOT** the Genesis A/B/C labels. genesis_plus_gx
 maps the printed Genesis buttons **A/B/C onto libretro y/b/a** (verified live
 against the core). So:
 
-| You want (SGDK)   | `setInput({…})`                    | spatial name |
+| You want (SGDK)   | `input({op:'set'})`                    | spatial name |
 |-------------------|-------------------------------------|--------------|
 | `BUTTON_A`        | `{ y: true }`                       | `{ west: true }`  |
 | `BUTTON_B`        | `{ b: true }`                       | `{ south: true }` |
@@ -163,11 +193,11 @@ against the core). So:
 | `BUTTON_START`    | `{ start: true }`                   | —            |
 | X / Y / Z (6-btn) | `{ x: true }` / `{ north: true }` / `{ l: true }` | — |
 
-**The trap:** `setInput({ a: true })` presses Genesis **C**, *not* A — so an
+**The trap:** `input({op:'set'})` presses Genesis **C**, *not* A — so an
 SGDK jump bound to `BUTTON_A` won't fire from `{a:true}`. Use `{ y: true }` (or
 the spatial `{ west: true }`) for `BUTTON_A`. The **spatial names**
-(north/east/south/west) and `pressButton({button:'c'})` resolve correctly per
-platform — prefer them over raw a/b/x/y. `getInputLayout({platform:'genesis'})`
+(north/east/south/west) and `input({op:'press'})` resolve correctly per
+platform — prefer them over raw a/b/x/y. `input({op:'layout', platform:'genesis'})`
 returns the exact map in `faceButtons`. (This inversion is a genesis_plus_gx
 quirk shared by SMS + Game Gear; NES/SNES/GB/GBA/etc. are NOT inverted.)
 
@@ -195,7 +225,7 @@ unless you're building a music engine.
 **Sampled SFX (PCM):** XGM2 plays 8-bit signed PCM samples on its PCM channels
 (`XGM2_playPCM(sample, len, SOUND_PCM_CH1)` /
 `XGM2_playPCMEx(..., priority, halfRate, loop)`). The sample format is strict and
-easy to botch by hand — let **`wavToXgm2Pcm`** do it (path in → ready C array +
+easy to botch by hand — let **`encodeAudio({target:'xgm2pcm'})`** do it (path in → ready C array +
 `<NAME>_LEN` out). The rules it enforces:
 - **8-bit SIGNED** mono (not unsigned — a wrong sign is silent garbage).
 - **13.3 kHz** native, or **6.65 kHz** with `halfRate` (then play with
@@ -204,11 +234,11 @@ easy to botch by hand — let **`wavToXgm2Pcm`** do it (path in → ready C arra
 - the sample buffer must be **256-byte aligned** in ROM —
   `__attribute__((aligned(256)))` (the emitted C does this for you).
 
-**Debugging sound:** `getAudioState({chip:"ym2612"})` returns a raw-blob snapshot
+**Debugging sound:** `audioDebug({op:'inspect'})` returns a raw-blob snapshot
 of the FM chip (gpgx's struct isn't safely per-channel decodable — useful for
-frame-to-frame diffing), and `getAudioState({chip:"psg"})` decodes the SN76489
+frame-to-frame diffing), and `audioDebug({op:'inspect'})` decodes the SN76489
 (3 tone + 1 noise channel state, same chip as SMS/GG). To check a sample actually
-played, `recordAudio` writes a WAV you (a human) can listen to — there is **no**
+played, `audioDebug({op:'record'})` writes a WAV you (a human) can listen to — there is **no**
 headless per-PCM-channel "is it playing" readout for Genesis yet (it would need a
 core patch to expose the XGM2 Z80 driver state), so audio verification here is
 record-and-listen, not assert.
@@ -228,7 +258,7 @@ build pipeline computes the checksum on link.
 
 ## Where the SDK lives (and how to read it)
 
-`createProject({platform:"genesis"})` ships the full SGDK include
+`scaffold({op:'project', platform:"genesis"})` ships the full SGDK include
 tree into the new project at `vendor/sgdk/`. So when your code does
 `#include <genesis.h>`, those headers come from
 `vendor/sgdk/include/`:
@@ -252,7 +282,7 @@ calling instead of guessing from header comments.
 
 ## Build pipeline
 
-When you call `buildSource({platform:"genesis", language:"c"})`:
+When you call `build({output:'rom'})`:
 
 1. `cc1-m68k` (gcc 14.2.0 C frontend, WASM) compiles your `.c` →
    `.s` assembly.

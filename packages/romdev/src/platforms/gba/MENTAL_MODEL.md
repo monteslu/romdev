@@ -107,7 +107,7 @@ the inverted byte so pressed = 1.
 
 mGBA maps `input({op:'set'})` button names **straight through** — verified live, no
 inversion: `{a}`→A, `{b}`→B, `{l}`→L, `{r}`→R, `{start}`/`{select}`, plus the
-d-pad. So `setInput({ a: true })` presses GBA A as expected — unlike the
+d-pad. So `input({op:'set', a: true})` presses GBA A as expected — unlike the
 genesis_plus_gx platforms (Genesis/SMS/GG), there's no surprise here.
 
 ## Sound
@@ -123,7 +123,7 @@ libgba sound API in `gba_sound.h` covers the tone channels but the
 DMA-driven PCM streaming is something you'd typically pair with
 maxmod (separate library, not bundled here).
 
-**Debugging sound:** `getAudioState({chip:"gba"})` decodes the live APU —
+**Debugging sound:** `audioDebug({op:'inspect', chip:"gba"})` decodes the live APU —
 per-channel freq→note/duty/volume for the 4 tone channels plus the 2 Direct
 Sound FIFO states. Pair with `sprites({op:'inspect'})`/`palette({source:'live'})`/
 `background({view:'renderState'})`/`cpu({op:'read'})` (ARM7) and `breakpoint({on:'write'})` for the rest of the
@@ -178,7 +178,7 @@ fine without it.
 
 ## Build pipeline
 
-When you call `buildSource({platform:"gba", language:"c"})`:
+When you call `build({output:'rom', platform:"gba", language:"c"})`:
 
 1. `cc1-arm` (gcc 14.2.0 C frontend, WASM) compiles your `.c` → `.s`
    ARM assembly (Thumb-interwork mode, `-mcpu=arm7tdmi`).

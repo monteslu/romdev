@@ -1,7 +1,7 @@
 # GB / GBC C runtime + headers
 
 These are the source files that back the GB/GBC C templates. They're
-**not** auto-injected at build time — `createProject({platform:"gb"|"gbc",
+**not** auto-injected at build time — `scaffold({op:'project', platform:"gb"|"gbc",
 template:"..."})` copies them into your project directory so the
 project is self-describing. Build calls then point at your project's
 copy of these files via `sourcesPaths` / `includePaths` / `crt0Path`.
