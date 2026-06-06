@@ -58,7 +58,7 @@ test("GB PC breakpoint + read watch + single-step (gambatte sm83)", { timeout: 2
 
   // 1) findWriter on 0xC000 → exact writing instruction PC.
   const fw = toJSON(await client.callTool({
-    name: "findWriter", arguments: { address: 0xC000, maxFrames: 300 },
+    name: "breakpoint", arguments: { on: "write",  address: 0xC000, maxFrames: 300 },
   }));
   assert.equal(fw.found, true, "findWriter didn't catch the 0xC000 write: " + JSON.stringify(fw));
   const writerPC = fw.pcRaw;
@@ -66,7 +66,7 @@ test("GB PC breakpoint + read watch + single-step (gambatte sm83)", { timeout: 2
 
   // 2) runUntilPC → freeze exactly there.
   const bp = toJSON(await client.callTool({
-    name: "runUntilPC", arguments: { address: writerPC, maxFrames: 300 },
+    name: "breakpoint", arguments: { on: "pc",  address: writerPC, maxFrames: 300 },
   }));
   assert.equal(bp.notSupported, undefined, "PC breakpoint notSupported — patch missing?");
   assert.equal(bp.hit, true, "runUntilPC did not hit: " + JSON.stringify(bp));
@@ -91,7 +91,7 @@ test("GB PC breakpoint + read watch + single-step (gambatte sm83)", { timeout: 2
 
   // 5) runUntilRead on 0xC002 (g_r is read every loop) → must hit.
   const rd = toJSON(await client.callTool({
-    name: "runUntilRead", arguments: { address: 0xC002, maxFrames: 120 },
+    name: "breakpoint", arguments: { on: "read",  address: 0xC002, maxFrames: 120 },
   }));
   assert.equal(rd.notSupported, undefined, "runUntilRead notSupported — read-watch patch missing?");
   assert.equal(rd.hit, true, "runUntilRead did not catch the 0xC002 read: " + JSON.stringify(rd));

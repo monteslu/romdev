@@ -75,7 +75,7 @@ test("Atari 7800 PC breakpoint + read watch + single-step (prosystem 6502)", { t
 
   // 1) findWriter on the counter → the EXACT instruction PC that writes it.
   const fw = toJSON(await client.callTool({
-    name: "findWriter", arguments: { address: COUNTER, maxFrames: 300 },
+    name: "breakpoint", arguments: { on: "write",  address: COUNTER, maxFrames: 300 },
   }));
   assert.equal(fw.found, true, "findWriter didn't catch the $1800 write: " + JSON.stringify(fw));
   assert.ok(fw.pcRaw > 0, "findWriter returned no pc");
@@ -83,7 +83,7 @@ test("Atari 7800 PC breakpoint + read watch + single-step (prosystem 6502)", { t
 
   // 2) runUntilPC on that PC → must freeze the CPU exactly there.
   const bp = toJSON(await client.callTool({
-    name: "runUntilPC", arguments: { address: writerPC, maxFrames: 300 },
+    name: "breakpoint", arguments: { on: "pc",  address: writerPC, maxFrames: 300 },
   }));
   assert.equal(bp.notSupported, undefined, "PC breakpoint reported notSupported — core patch missing?");
   assert.equal(bp.hit, true, "runUntilPC did not hit the writer PC: " + JSON.stringify(bp));
@@ -107,7 +107,7 @@ test("Atari 7800 PC breakpoint + read watch + single-step (prosystem 6502)", { t
   // 5) runUntilRead on the counter — the program reads $1800 each frame, so this
   //    is a positive hit. Confirms the read-watch hook in memory_Read fires.
   const rd = toJSON(await client.callTool({
-    name: "runUntilRead", arguments: { address: COUNTER, maxFrames: 120 },
+    name: "breakpoint", arguments: { on: "read",  address: COUNTER, maxFrames: 120 },
   }));
   assert.equal(rd.notSupported, undefined, "runUntilRead reported notSupported — read-watch patch missing?");
   assert.equal(rd.hit, true, "runUntilRead did not catch the $1800 read: " + JSON.stringify(rd));

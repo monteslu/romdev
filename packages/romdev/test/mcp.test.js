@@ -206,7 +206,7 @@ test("MCP: findWriter captures the instruction-level write PC (watchpoint)", { s
     if (before.slice(i * 2, i * 2 + 2) !== after.slice(i * 2, i * 2 + 2)) { addr = i; break; }
   }
   if (addr < 0) return; // no zero-page write in this window — nothing to assert
-  const r = await client.callTool({ name: "findWriter", arguments: { address: addr, maxFrames: 120 } });
+  const r = await client.callTool({ name: "breakpoint", arguments: { on: "write",  address: addr, maxFrames: 120 } });
   assert.equal(r.isError, undefined, `findWriter errored: ${JSON.stringify(r)}`);
   const w = JSON.parse(r.content[0].text);
   assert.equal(w.found, true, `findWriter should catch a write to $${addr.toString(16)}`);

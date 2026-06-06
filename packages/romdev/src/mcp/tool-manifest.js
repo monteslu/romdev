@@ -59,6 +59,8 @@ export const MERGE_MAP = {
   memory: { absorbs: ["readMemory", "writeMemory", "readCartRom", "snapshotMemory", "diffMemory", "classifyRegion", "searchValue", "searchNext"], axis: "op" },
   // ── cpu (read/drive; getCPUState from platform-tools.js, setRegister/callSubroutine/decompressWith from watch-memory.js) ──
   cpu: { absorbs: ["getCPUState", "setRegister", "callSubroutine", "decompressWith"], axis: "op" },
+  // ── breakpoint (STOP-on-first; all 4 from watch-memory.js) ──
+  breakpoint: { absorbs: ["findWriter", "runUntilWrite", "runUntilPC", "runUntilRead"], axis: "on" },
 };
 
 /** Every OLD tool name that the consolidation removes (absorbed into a new tool). */

@@ -78,7 +78,7 @@ test("PC Engine PC breakpoint + read watch + single-step (geargrafx HuC6280)", {
   //    watchpoint — runUntilRead on the counter the program reads each frame
   //    returns the EXACT reading-instruction PC, a stable breakpoint target.
   const rdSeed = toJSON(await client.callTool({
-    name: "runUntilRead", arguments: { address: COUNTER, maxFrames: 300 },
+    name: "breakpoint", arguments: { on: "read",  address: COUNTER, maxFrames: 300 },
   }));
   assert.equal(rdSeed.notSupported, undefined, "runUntilRead reported notSupported — read-watch patch missing?");
   assert.equal(rdSeed.hit, true, "runUntilRead didn't catch the $1F00 read: " + JSON.stringify(rdSeed));
@@ -87,7 +87,7 @@ test("PC Engine PC breakpoint + read watch + single-step (geargrafx HuC6280)", {
 
   // 2) runUntilPC on that PC → must freeze the CPU exactly there.
   const bp = toJSON(await client.callTool({
-    name: "runUntilPC", arguments: { address: seedPC, maxFrames: 300 },
+    name: "breakpoint", arguments: { on: "pc",  address: seedPC, maxFrames: 300 },
   }));
   assert.equal(bp.notSupported, undefined, "PC breakpoint reported notSupported — core patch missing?");
   assert.equal(bp.hit, true, "runUntilPC did not hit the seed PC: " + JSON.stringify(bp));
@@ -110,7 +110,7 @@ test("PC Engine PC breakpoint + read watch + single-step (geargrafx HuC6280)", {
 
   // 5) runUntilRead on the counter — the program reads $1F00 each frame: positive hit.
   const rd = toJSON(await client.callTool({
-    name: "runUntilRead", arguments: { address: COUNTER, maxFrames: 120 },
+    name: "breakpoint", arguments: { on: "read",  address: COUNTER, maxFrames: 120 },
   }));
   assert.equal(rd.notSupported, undefined, "runUntilRead reported notSupported — read-watch patch missing?");
   assert.equal(rd.hit, true, "runUntilRead did not catch the $1F00 read: " + JSON.stringify(rd));

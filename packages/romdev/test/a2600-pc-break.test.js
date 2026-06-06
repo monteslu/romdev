@@ -132,7 +132,7 @@ test("Atari 2600 PC breakpoint + read watch + single-step (stella2014 6502)", { 
 
   // 1) findWriter on the counter → the EXACT instruction PC that writes it.
   const fw = toJSON(await client.callTool({
-    name: "findWriter", arguments: { address: COUNTER, maxFrames: 120 },
+    name: "breakpoint", arguments: { on: "write",  address: COUNTER, maxFrames: 120 },
   }));
   assert.equal(fw.found, true, "findWriter didn't catch the $80 write: " + JSON.stringify(fw));
   assert.ok(fw.pcRaw > 0, "findWriter returned no pc");
@@ -140,7 +140,7 @@ test("Atari 2600 PC breakpoint + read watch + single-step (stella2014 6502)", { 
 
   // 2) runUntilPC on that PC → must freeze the CPU exactly there.
   const bp = toJSON(await client.callTool({
-    name: "runUntilPC", arguments: { address: writerPC, maxFrames: 120 },
+    name: "breakpoint", arguments: { on: "pc",  address: writerPC, maxFrames: 120 },
   }));
   assert.equal(bp.notSupported, undefined, "PC breakpoint reported notSupported — core patch missing?");
   assert.equal(bp.hit, true, "runUntilPC did not hit the writer PC: " + JSON.stringify(bp));
@@ -162,7 +162,7 @@ test("Atari 2600 PC breakpoint + read watch + single-step (stella2014 6502)", { 
 
   // 5) runUntilRead on the counter — the program reads $80 each frame: positive hit.
   const rd = toJSON(await client.callTool({
-    name: "runUntilRead", arguments: { address: COUNTER, maxFrames: 60 },
+    name: "breakpoint", arguments: { on: "read",  address: COUNTER, maxFrames: 60 },
   }));
   assert.equal(rd.notSupported, undefined, "runUntilRead reported notSupported — read-watch patch missing?");
   assert.equal(rd.hit, true, "runUntilRead did not catch the $80 read: " + JSON.stringify(rd));
