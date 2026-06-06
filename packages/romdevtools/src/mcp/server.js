@@ -410,10 +410,10 @@ async function main() {
     process.exit(1);
   });
   httpServer.on("listening", () => {
-    log.info(`romdev listening on http://${bannerHost}:${port}/mcp`);
+    log.info("");
+    log.info(`romdev (version ${PKG_VERSION}) listening on http://${bannerHost}:${port}/mcp`);
     log.info("");
     log.info(`prefer a skill?  save:  http://${bannerHost}:${port}/romdev-skill.md`);
-    log.info(`browse/try the tools:   http://${bannerHost}:${port}/documentation`);
     log.info(`optional observer:      http://${bannerHost}:${port}/livestream`);
     log.info("");
     log.info("connect your coding agent: https://github.com/monteslu/romdev#connect");

@@ -60,8 +60,21 @@ import { jsonContent, safeTool, withClearToolErrors } from "../util.js";
 import { getHostOrNull, setDisclosure } from "../state.js";
 import { MERGE_MAP } from "../tool-manifest.js";
 import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+
+// Package version — surfaced by catalog({op:'status'|'whatsNew'}) so an agent can
+// check the running romdev version with a plain TOOL CALL (works over MCP AND the
+// HTTP/skill surface), e.g. to detect a saved skill is stale. (GET /healthz also
+// reports it for non-tool HTTP clients.)
+const PKG_VERSION = (() => {
+  try {
+    return JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "package.json"), "utf8")).version;
+  } catch {
+    return "0.0.0";
+  }
+})();
 
 // catalog({op:'whatsNew'}): the recent CHANGELOG + an old→new RENAME TABLE
 // derived from MERGE_MAP (the single source of truth for the consolidation), so
@@ -91,6 +104,7 @@ async function buildWhatsNew() {
     changelog = sections.slice(0, 3).join("## ").trim();
   } catch { /* changelog not present in this install */ }
   return {
+    romdevVersion: PKG_VERSION,
     note: "Pre-1.0 the tool surface is consolidated freely with NO deprecated aliases. If a tool name from an older handoff is missing, it's almost certainly now an `op` (or other axis) on a domain tool — find it below, then read that tool's description for the exact op enum and params.",
     renameTable: renames,
     axisLegend: "Every domain tool is keyed by ONE axis: op (most), output (build), on (breakpoint), target (disasm), view (background), source (palette), stage (encodeArt), from (importArt). The value names the operation, e.g. romPatch({op:'findPointer'}).",
@@ -215,7 +229,7 @@ export function registerTools(server, z, sessionKey) {
     "• op:'whatsNew' — the recent CHANGELOG + an OLD→NEW tool RENAME TABLE. Call this FIRST if you're resuming work from a handoff written against an older server: pre-1.0 the surface is consolidated freely (no deprecated aliases), so a name you remember may now be an `op` on a domain tool. This maps them in one read instead of probing each tool.",
     {
       op: z.enum(["categories", "status", "whatsNew"]).default("categories")
-        .describe("categories=tool-category catalog; status=live session snapshot (host/platform/frameCount/media); whatsNew=recent CHANGELOG + old→new tool rename table."),
+        .describe("categories=tool-category catalog; status=live session snapshot (romdevVersion + host/platform/frameCount/media — call this to check the running version, e.g. is a saved skill stale); whatsNew=recent CHANGELOG + old→new tool rename table."),
     },
     safeTool(async ({ op = "categories" }) => {
       if (op === "whatsNew") {
@@ -228,6 +242,7 @@ export function registerTools(server, z, sessionKey) {
           ? { ...host.getStatus() }
           : { loaded: false, hint: "no host yet; call loadMedia (in category 'run') to load a ROM" };
         return jsonContent({
+          romdevVersion: PKG_VERSION,
           ...base,
           loadedCategories: cats.filter((c) => c.loaded).map((c) => c.name),
           unloadedCategories: cats.filter((c) => !c.loaded).map((c) => c.name),
@@ -235,6 +250,7 @@ export function registerTools(server, z, sessionKey) {
       }
       const categories = disclosure.listCategories();
       return jsonContent({
+        romdevVersion: PKG_VERSION,
         categories,
         note: "Every tool registers at session init — this catalog is just a map grouped by purpose, NOT a gate. Call any tool by name directly.",
         humanInTheLoopHint: "Iterate INTERNALLY on screenshots first (build({output:'run'}) returns one inline; frame({op:'screenshot'/'stepAndShot'}) re-shoots the live host) — don't open a window to debug. Once the game actually boots and shows the feature you're working on, call playtest({}) so your human can watch and play it live. Opening a window on a black screen or a crash just wastes the human's attention — show them something that works.",
