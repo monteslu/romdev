@@ -310,8 +310,7 @@ const TOOL_OWNER = {
   readMemory: "memory", writeMemory: "memory",
   // debug category
   tiles: "debug", sprites: "debug",
-  background: "debug", convertImageToTiles: "debug",
-  imageToTilemap: "debug",
+  background: "debug", encodeArt: "assets",
   getCPUState: "debug", audioDebug: "debug",
   buildSourceWithDebug: "debug", symbols: "debug",
   disasm: "debug",
@@ -326,8 +325,7 @@ const TOOL_OWNER = {
 
   text: "assets",
   loadTilemap: "assets", loadAsepriteSheet: "assets", loadGifAnimation: "assets", loadSpriteSheet: "assets",
-  cropSpriteSheet: "assets", quantizePngForPlatform: "assets", crossPlatformSpriteImport: "assets",
-  validateGenesisTiles: "assets",
+  crossPlatformSpriteImport: "assets",
   palette: "debug",
   // project category
   scaffold: "project",

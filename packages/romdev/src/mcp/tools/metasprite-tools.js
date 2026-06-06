@@ -241,21 +241,16 @@ export function registerMetaSpriteTools(server, z, sessionKey) {
       }
     }),
   );
+}
 
-  server.tool(
-    "validateGenesisTiles",
-    "Validate generated Genesis 4bpp tile data and/or palette against the VDP's hard limits — catches the 'builds fine, renders garbage' asset bug (a 17th color leaking a palette index > 15 into the tile words, or a palette line with more than 16 colors). Pass `tileDataPath` (raw 4bpp .bin) and/or `paletteJson` (array of lines, each an array of colors). Returns {ok, errors[], warnings[], stats}.",
-    {
-      tileDataPath: z.string().optional().describe("Absolute path to raw 4bpp Genesis tile bytes (multiple of 32). Each pixel must be a palette index 0-15."),
-      paletteJson: z.array(z.any()).optional().describe("Palette as lines: an array of lines, each an array of colors (any form). Flags any line with >16 colors."),
-      maxPaletteIndex: z.number().int().min(0).max(15).default(15).describe("Highest palette index the art may use (default 15 = full 16-color line; pass 14 if you reserve index 15)."),
-    },
-    safeTool(async ({ tileDataPath, paletteJson, maxPaletteIndex }) => {
-      const { validateGenesisTiles } = await import("../../platforms/genesis/vdp.js");
-      let tileData;
-      if (tileDataPath) tileData = new Uint8Array(await readFile(tileDataPath));
-      const r = validateGenesisTiles({ tileData, palette: paletteJson, maxPaletteIndex });
-      return jsonContent(r);
-    }),
-  );
+/**
+ * encodeArt({stage:'validate'}) — validate Genesis 4bpp tile data/palette
+ * against the VDP's hard limits. Exported so the `encodeArt` router
+ * (sprite-pipeline.js) can call it. Returns a plain object.
+ */
+export async function validateGenesisTilesCore({ tileDataPath, paletteJson, maxPaletteIndex = 15 }) {
+  const { validateGenesisTiles } = await import("../../platforms/genesis/vdp.js");
+  let tileData;
+  if (tileDataPath) tileData = new Uint8Array(await readFile(tileDataPath));
+  return validateGenesisTiles({ tileData, palette: paletteJson, maxPaletteIndex });
 }
