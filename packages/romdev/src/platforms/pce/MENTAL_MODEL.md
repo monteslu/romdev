@@ -43,12 +43,12 @@ The **HuC6270 VDC** owns 64 KB of VRAM (word-addressed) and the display:
 - 64 hardware **sprites** via the SATB (Sprite Attribute Table), 16/32 wide ×
   16/32/64 tall. The SATB is DMA'd from VRAM (source in R19).
 - VDC register **R5 (CR)** is the master switch: bit 7 = BG enable, bit 6 = SPR
-  enable. If both are clear you see only the backdrop color. `getRenderingContext`
+  enable. If both are clear you see only the backdrop color. `background({view:'renderState'})`
   reads this and tells you.
 
 The **HuC6260 VCE** owns color: a 512-entry table (256 BG + 256 SPR sub-palette
 slots), each a **9-bit GRB** value (`0bGGG_RRR_BBB`, 3 bits per channel). Slot 0
-of every 16-color sub-palette is transparent/backdrop. `inspectPalette` decodes it.
+of every 16-color sub-palette is transparent/backdrop. `palette({source:'live'})` decodes it.
 
 ## Frame heartbeat
 
@@ -78,7 +78,7 @@ screen. Keep at least one (2+ byte) global. See TROUBLESHOOTING.md.
   "planar-pairs" layout: 32 B/tile, 16 B plane 0+1 then 16 B plane 2+3). Returns
   a suggested 16-color palette too. DMA the bytes to your VRAM pattern base.
 - `getInputLayout({ platform: "pce" })` — the 2-button pad + how the joyport
-  scan works. **Driving input over MCP:** geargrafx maps `setInput` straight
+  scan works. **Driving input over MCP:** geargrafx maps `input({op:'set'})` straight
   through (verified live, no inversion): `{a}`→button I, `{b}`→button II,
   `{start}`→Run, `{select}`→Select; spatial east→I, west→II. So
   `setInput({ a: true })` presses button I as expected — unlike the

@@ -50,7 +50,7 @@ coordinates. An 8×8 sprite at OAM `(X=48, Y=24)` appears at the
 To center a sprite on screen: target OAM `(48 + 76, 24 + 68)` for
 roughly visible center, not `(80, 72)`.
 
-The `inspectSprites` tool's X/Y fields report hardware coords too —
+The `sprites({op:'inspect'})` tool's X/Y fields report hardware coords too —
 match them up with hardware-coord arithmetic, not visible-coord.
 
 ### SAT $D0 terminator — still a hazard if you write $D0 yourself
@@ -68,7 +68,7 @@ touch stay invisible AND don't kill the renderer. You only have
 to worry about $D0 if you write it explicitly — e.g. to stop
 sprite scanning early as an optimisation.
 
-If sprites past a certain slot are missing in `inspectSprites`,
+If sprites past a certain slot are missing in `sprites({op:'inspect'})`,
 check the live OAM Y bytes for $D0 in a slot before them. That's
 still the diagnosis; the runtime just doesn't create the problem
 on its own anymore.
@@ -87,7 +87,7 @@ If you want sprite tiles in their own bank at $2000, set
 upload sprite tiles to $0000 alongside BG tiles (just make sure
 they don't collide).
 
-The `inspectSprites` tool's `spriteTileDataBase` field reports the
+The `sprites({op:'inspect'})` tool's `spriteTileDataBase` field reports the
 address the VDP is actually reading from — trust that over any
 comment.
 

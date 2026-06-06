@@ -65,7 +65,7 @@ SDCC emits code that writes to the **return address** instead of `dst`,
 corrupting the stack → the CPU jumps to garbage and crashes (you'll see
 `PC` stuck around `$002B`, `SP` corrupt). The build SUCCEEDS and the ROM
 boots, so it looks like a logic bug — but it's codegen. Symptom: sprites/
-tiles never appear, OAM stays zero, `getCPUState` shows a wild PC.
+tiles never appear, OAM stays zero, `cpu({op:'read'})` shows a wild PC.
 
 **Fix — use the bundled helper, never a raw `dst[i]=src[i]` loop to VRAM:**
 ```c
@@ -73,7 +73,7 @@ memcpy_vram(dst, src, 16);   // ships in gb_runtime.c — does the copy safely
 ```
 `memcpy_vram()` is in every GB/GBC project's `gb_runtime.c`. Any time you copy
 bytes into VRAM ($8000-$9FFF) or another `__xdata` region, call it instead of
-hand-rolling a for-loop. (`buildSource` with `lint:"strict"` will also flag the
+hand-rolling a for-loop. (`build({output:'rom'})` with `lint:"strict"` will also flag the
 raw pattern as a preflight error.)
 
 ## ⚠ "Loop never ends / all code after a loop is dead" — uint8 loop-bound trap
@@ -90,7 +90,7 @@ the cross-platform note: [[sdcc-uint8-loop-bound-trap]].
 ## "Wrong colors on GBC"
 
 1. **`$0143` is not $80.** This is the CGB-mode header byte.
-   `buildSource` / `runSource` set it automatically from the platform —
+   `build({output:'rom'})` / `build({output:'run'})` set it automatically from the platform —
    build with `platform:"gbc"` and it's $80/$C0; build with
    `platform:"gb"` and it stays $00 (DMG). So if colors are wrong, first
    check you didn't build this as a `.gb` ROM — rebuild with

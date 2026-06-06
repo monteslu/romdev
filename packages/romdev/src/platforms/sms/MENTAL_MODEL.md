@@ -136,10 +136,10 @@ buffer in WRAM and uploads it to the SAT each vblank.
    have to worry about $D0 if you write it explicitly — e.g. as an
    early-out optimisation.
 
-   If sprites past a certain slot are missing in `inspectSprites`,
+   If sprites past a certain slot are missing in `sprites({op:'inspect'})`,
    check the live OAM Y bytes for $D0 in a slot before them.
 
-`inspectSprites` shows the live OAM bytes + reports
+`sprites({op:'inspect'})` shows the live OAM bytes + reports
 `spriteTileDataBase` — trust it over comments when sprites misbehave.
 
 ### R6 sprite-tile-base default: $0000, NOT $2000

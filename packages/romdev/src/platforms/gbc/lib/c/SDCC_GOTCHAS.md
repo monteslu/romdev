@@ -110,7 +110,7 @@ If you need to write a custom VRAM block-copy:
 
 This is independent of the R26 OAM-alignment fix (`shadow_oam __at
 (0xC100)`) and the header CGB-flag fix (now applied automatically by
-`buildSource` / `runSource`, not a manual `patchGbHeader` step). All
+`build({output:'rom'})` / `build({output:'run'})`, not a manual `patchGbHeader` step). All
 three are silent-failure bugs that look like "did my changes even
 land?" and need different fixes.
 

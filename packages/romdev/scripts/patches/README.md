@@ -18,9 +18,9 @@ git; we fetch it, apply these, build, and ship only the resulting `.wasm`.
 **One shared reason.** Every libretro core exposes a fixed set of memory
 regions through `retro_get_memory_data(id)` / `retro_get_memory_size(id)` —
 usually just `SAVE_RAM` and `SYSTEM_RAM`. romdev's inspection tools
-(`inspectSprites`, `inspectPalette`, `inspectBackgroundMap`, `getCPUState`,
-`getPsgState`, `getDspState`, `getYm2612State`, `dumpState`, `watchMemory`,
-`readMemory` against named regions, …) need to read the emulator's *internal*
+(`sprites({op:'inspect'})`, `palette({source:'live'})`, `background({view:'map'})`, `cpu({op:'read'})`,
+`getPsgState`, `getDspState`, `getYm2612State`, `state({op:'dump'})`, `watch({on:'mem'})`,
+`memory({op:'read'})` against named regions, …) need to read the emulator's *internal*
 state — VRAM, OAM, palette/CGRAM, PPU/VDP/TIA/VIC registers, sound-chip
 registers, CPU registers — which upstream does **not** expose.
 

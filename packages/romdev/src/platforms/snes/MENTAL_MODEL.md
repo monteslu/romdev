@@ -102,7 +102,7 @@ optimize:
    line 2 but you only uploaded line 0, line 2 is whatever was in CGRAM
    (usually zero) → garbage/transparent. Either upload all the lines you
    use, or point every sprite at line 0 until art is in. (This is the #1
-   bug — `inspectSprites` now WARNS when a renderable sprite references an
+   bug — `sprites({op:'inspect'})` now WARNS when a renderable sprite references an
    all-zero OBJ palette line.)
 3. **Know your OBJ VRAM rules.** OBSEL picks the OBJ tile base (a page in
    VRAM, in 0x2000-word steps) and the small/large size pair. A 16×16 OBJ
@@ -179,7 +179,7 @@ Edge-detect by `(pad & KEY) && !(prev & KEY)`.
 
 ### Driving input over MCP
 
-snes9x maps `setInput` button names **straight through** — verified live, no
+snes9x maps `input({op:'set'})` button names **straight through** — verified live, no
 inversion: `{a}`→A, `{b}`→B, `{x}`→X, `{y}`→Y, `{l}`→L, `{r}`→R, plus the d-pad
 and `{start}`/`{select}`. The spatial names also resolve (east→A, south→B,
 north→X, west→Y). So `setInput({ b: true })` presses SNES B as expected — unlike
