@@ -28,7 +28,7 @@ RAM-size bytes, and the CGB flag at $0143 ($00 for `.gb`, $80/$C0 for
 Reach for header tooling only when working with a ROM the build pipeline
 didn't produce, or to override a field:
 
-- `patchGbHeader({path: "out.gb"})` — MCP tool (loadCategory:"project").
+- `patchGbHeader({path: "out.gb"})` — MCP tool.
   Fixes up / overrides the header of an existing ROM on disk (title, cart
   type, ROM/RAM size, CGB flag, etc.).
 - `node patch-header.js out.gb` — standalone Node script, copied into
@@ -51,7 +51,8 @@ didn't produce, or to override a field:
 Bootstrap a working game-loop skeleton with `scaffold({op:'project'})`:
 
 ```js
-createProject({
+scaffold({
+  op:       'project',
   platform: "gbc",
   template: "tile_engine",   // or "hello_sprite", or "default"
   name:     "mygame",
@@ -91,7 +92,8 @@ speed: smaller TUs rebuild faster. Use `sourcesPaths` (or `sources` for
 inline text) when it helps:
 
 ```js
-buildSource({
+build({
+  output: 'rom',
   platform: "gbc",
   language: "c",
   sourcesPaths: {

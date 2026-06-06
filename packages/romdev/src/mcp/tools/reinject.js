@@ -526,7 +526,7 @@ const hexB = (bytes) => Array.from(bytes).map((b) => b.toString(16).toUpperCase(
 // ───────────────────────────────────────────────────────────────────────────
 // findPointerTo — scan a ROM for pointers that reference a byte offset.
 // ───────────────────────────────────────────────────────────────────────────
-export async function findPointerToCore({ path, platform, romOffset, mapper, maxHitsReturned = 256 }) {
+export async function findPointerToCore({ path, platform, romOffset, mapper, maxHitsReturned = 256, widths, suppressShadows = true }) {
   const data = new Uint8Array(await readFile(path));
   const plat = platform ?? detectPlatform(path);
   if (!plat) throw new Error(`findPointerTo: could not detect platform for '${path}'. Pass platform explicitly.`);
@@ -536,7 +536,12 @@ export async function findPointerToCore({ path, platform, romOffset, mapper, max
     throw new Error(`findPointerTo: romOffset ${hex6(romOffset)} is outside the ROM (${data.length} bytes).`);
   }
 
-  const forms = plat === "snes" ? entry.forms(romOffset, data, mapper) : entry.forms(romOffset, data);
+  let forms = plat === "snes" ? entry.forms(romOffset, data, mapper) : entry.forms(romOffset, data);
+  // `widths` filter (e.g. [4] = only 32-bit pointers) — the agent's request to
+  // skip the narrower forms that mostly produce shadow hits on Genesis/GBA.
+  if (Array.isArray(widths) && widths.length) {
+    forms = forms.filter((f) => widths.includes(f.width));
+  }
   const hits = [];
   for (const form of forms) {
     const needle = encodeInt(form.value, form.width, form.endian);
@@ -552,24 +557,59 @@ export async function findPointerToCore({ path, platform, romOffset, mapper, max
       });
     }
   }
-  // Sort by file offset; dedupe identical (atOffset,pointerValue).
+  // Sort by file offset.
   hits.sort((a, b) => a.atOffsetDec - b.atOffsetDec);
+
+  // Shadow suppression: a narrower hit that is the byte-overlap of a wider hit
+  // at the SAME pointer isn't a distinct reference — e.g. a 24-bit BE hit at N+1
+  // inside a 32-bit BE hit at N (the low 3 bytes). Drop those so the agent doesn't
+  // hand-dedupe by halving the list. A hit is a shadow only when ALL hold:
+  //   - strictly narrower width, same endian as the wider hit;
+  //   - located at the overlap position (BE: the narrow low bytes sit at the END
+  //     of the wide span, N+(wideW-narrowW); LE: at the START, N);
+  //   - the narrow VALUE equals the wider value's low `narrowW` bytes (the bytes
+  //     that actually overlap). The value guard prevents falsely suppressing two
+  //     coincidentally co-located but DIFFERENT pointers (today genesis/snes only
+  //     encode one value per call, but the guard makes the rule safe to extend).
+  const valOf = (h) => parseInt(String(h.pointerValue).replace(/^0x/i, ""), 16) >>> 0;
+  const lowMask = (w) => (w >= 4 ? 0xFFFFFFFF : ((1 << (w * 8)) >>> 0) - 1) >>> 0;
+  let shadowsRemoved = 0;
+  let kept = hits;
+  if (suppressShadows && hits.length > 1) {
+    const isShadowOf = (narrow) =>
+      hits.some((w) =>
+        w.width > narrow.width &&
+        w.endian === narrow.endian &&
+        (w.endian === "be"
+          ? narrow.atOffsetDec === w.atOffsetDec + (w.width - narrow.width)
+          : narrow.atOffsetDec === w.atOffsetDec) &&
+        // the narrow value must be the wide value's overlapping low bytes
+        valOf(narrow) === ((valOf(w) & lowMask(narrow.width)) >>> 0));
+    kept = hits.filter((h) => {
+      if (isShadowOf(h)) { shadowsRemoved++; return false; }
+      return true;
+    });
+  }
 
   return {
     path,
     platform: plat,
     romOffset: hex6(romOffset),
     searchedForms: forms.map((f) => ({ value: "0x" + (f.value >>> 0).toString(16).toUpperCase(), width: f.width, endian: f.endian, note: f.note })),
-    hitsFound: hits.length,
-    hits: hits.slice(0, maxHitsReturned),
-    truncated: hits.length > maxHitsReturned
-      ? `${hits.length - maxHitsReturned} more hits (raise maxHitsReturned).`
+    hitsFound: kept.length,
+    ...(shadowsRemoved ? { shadowsSuppressed: shadowsRemoved } : {}),
+    ...(suppressShadows ? {} : { shadowSuppression: "off" }),
+    hits: kept.slice(0, maxHitsReturned),
+    truncated: kept.length > maxHitsReturned
+      ? `${kept.length - maxHitsReturned} more hits (raise maxHitsReturned).`
       : undefined,
-    note: hits.length === 0
+    note: kept.length === 0
       ? "No pointer found. The reference may be computed/indirect, in a different bank's window, or the data may be reached via an index+base rather than an absolute pointer."
       : (plat === "nes" || plat === "gb" || plat === "gbc" || plat === "sms" || plat === "gg" || plat === "pce")
         ? "Banked system: a 16-bit pointer value is page-ambiguous. Correlate each hit with the nearby bank/page-set instruction (or the known active bank) to confirm it's the real reference."
-        : undefined,
+        : (shadowsRemoved
+          ? `Dropped ${shadowsRemoved} narrower shadow hit(s) that were the tail of a wider pointer (pass suppressShadows:false to see them, or widths:[4] to search only 32-bit forms).`
+          : undefined),
   };
 }
 

@@ -384,8 +384,17 @@ index 74d5053..c7e7ba4 100644
 +extern unsigned int  romdev_pc_last_pc;
 +extern unsigned int  romdev_pc_hits;
 +
++/* romdev instruction WATCHDOG — shared globals (defined in core/m68k/m68kcpu.c).
++ * On SMS/GG the Z80 is the active CPU, so the same counter the m68k path uses is
++ * incremented per dispatched Z80 instruction; on overflow it fires the
++ * breakpoint with the watchdog flag so callSubroutine can't hang on a Z80
++ * free-run (a wrong-entry wrapper that falls back into the game's main loop). */
++extern unsigned int  romdev_pc_wd_limit;
++extern unsigned int  romdev_pc_wd_count;
++extern volatile int  romdev_pc_watchdog;
++
 +/* romdev PC COVERAGE log (discovery) — shared globals (defined in
-+ * core/m68k/m68kcpu.c). For SMS/GG the Z80 is the active CPU; the coverage hook
++ * core/m68k/m68kcpu.c). For SMS/GG the Z80 is the active CPU, so the coverage hook
 + * in z80_run records each DISTINCT in-window Z80 PC about to execute. Consults
 + * the SAME romdev_cov_* globals the m68k path uses (one CPU per platform). */
 +extern int           romdev_cov_enabled;
@@ -466,6 +475,23 @@ index 74d5053..c7e7ba4 100644
  {
    while( Z80.cycles < cycles )
    {
++    /* romdev instruction WATCHDOG (SMS/GG: Z80 is the active CPU). Mirror of the
++     * m68k_run watchdog so a Z80 callSubroutine free-run (wrong-entry wrapper that
++     * falls back into the game's main loop) force-stops instead of hanging until
++     * the per-frame cap. Counts dispatched Z80 instructions; on overflow fires the
++     * breakpoint with the watchdog flag so the host gets final PC/regs. */
++    if (romdev_pc_wd_limit && !romdev_pc_hit)
++    {
++      if (++romdev_pc_wd_count >= romdev_pc_wd_limit)
++      {
++        romdev_pc_last_pc = PC;
++        romdev_pc_hit = 1;
++        romdev_pc_watchdog = 1;
++        Z80.cycles = cycles;   /* consume the frame so retro_run returns */
++        break;                 /* leave the CPU frozen at this PC */
++      }
++    }
++
 +    /* romdev PC coverage log (discovery, SMS/GG): record each DISTINCT in-window
 +     * Z80 PC about to execute. Cheap when disabled (one int test). */
 +    if (romdev_cov_enabled

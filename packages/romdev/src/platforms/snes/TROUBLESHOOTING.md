@@ -57,7 +57,7 @@ palfont:
 
 Then build with both files:
 ```js
-buildSource({platform:"snes", language:"c",
+build({output:'rom', platform:"snes", language:"c",
   sources: {"main.c": ..., "data.asm": ...}});
 ```
 
@@ -102,7 +102,7 @@ Common causes, in the order the tools will point you to:
 5. **No sprite tile data uploaded.** `oamInitGfxSet` is the canonical
    "upload sprite tiles + palette to VRAM" call. Forget it and OAM points at
    garbage tiles. `sprites({op:'inspect'})`'s `tileVramAddr` tells you where the
-   sprite's tile is — cross-check with `tiles({as:'png'})` at that base.
+   sprite's tile is — cross-check with `tiles({op:'png'})` at that base.
 
 See MENTAL_MODEL.md → "The OBJ stable-path recipe" for the layout that
 avoids all five.

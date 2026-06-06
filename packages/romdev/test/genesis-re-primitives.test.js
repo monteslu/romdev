@@ -134,4 +134,20 @@ test("Genesis RE primitives: callSubroutine + watchRange + logPCRange + watchDma
   assert.equal(wd.watchdog, true, "watchdog must trip on an infinite loop (no hang): " + JSON.stringify(wd));
   assert.ok(wd.finalPC, "watchdog must report finalPC (where it's stuck): " + JSON.stringify(wd));
   assert.ok(wd.finalRegs, "watchdog must report finalRegs: " + JSON.stringify(wd));
+
+  // ── REGRESSION (v0.6.0 NBA-Jam nit #2): the DEFAULT watchdog budget must trip
+  //    on a non-returning routine BEFORE maxFrames is exhausted. The old default
+  //    (maxFrames*500k) was always larger than maxFrames-worth of real m68k
+  //    execution, so a wrong-entry free-run silently hit maxFrames with
+  //    watchdog:false — the agent couldn't tell "wrong entry" from "long routine".
+  //    The default is now a fixed 4M, which any real codec clears but a free-run
+  //    trips in ~tens of frames. Pass NO maxInstructions here — that's the point. ──
+  const wdDefault = toJSON(await client.callTool({
+    name: "cpu",
+    arguments: { op: "call",  pc: spin, maxFrames: 600, sandbox: false },
+  }));
+  assert.equal(wdDefault.watchdog, true,
+    "DEFAULT budget must trip the watchdog (not fall to maxFrames): " + JSON.stringify(wdDefault));
+  assert.ok(wdDefault.framesRun < 600,
+    "watchdog should trip BEFORE maxFrames=600 on the default budget: " + JSON.stringify(wdDefault));
 });

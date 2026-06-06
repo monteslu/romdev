@@ -176,7 +176,8 @@ multiple `.c` files via `sourcesPaths` helps with iteration speed
 easier to navigate. It's not a workaround anymore, just good hygiene.
 
 ```js
-buildSource({
+build({
+  output: 'rom',
   platform: "gbc",
   language: "c",
   sourcesPaths: {

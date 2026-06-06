@@ -817,7 +817,7 @@ const SGDK_RUNTIME_DIRS = [
   { src: "lib/sgdk/include", dst: "include" },
   // R58b: ship the full SGDK src tree into the project. Agent can grep
   // it directly instead of guessing what SPR_addSprite / VDP_drawText /
-  // JOY_readJoypad / XGM2_startPlay actually do. SGDK is compiled FROM this
+  // JOY_readJoypad / XGM2_play actually do. SGDK is compiled FROM this
   // source by the build (no prebuilt libmd.a).
   { src: "lib/sgdk/src", dst: "vendor/sgdk/src" },
   // res/: the generated libres (default font/logo) + its source (.res + PNGs)

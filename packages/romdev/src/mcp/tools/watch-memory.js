@@ -721,7 +721,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
           ? "WATCHDOG tripped (ran the instruction budget without returning) — almost always a wrong entry setup, not a long routine. Check finalPC (where it's spinning) + finalRegs (is A0 where you set it, or did it walk off?). Common fixes: correct A0 to the real block start (with its length header), add a presetMemory the codec reads, or pass a WRAPPER entryPC that sets up dest. Raise maxInstructions only if you're sure it's legitimately huge."
           : r.stoppedAtPC
             ? `Stopped at ${r.stoppedAtPC} (your stopAtPC) with PARTIAL output — readMemory the dst to see what's been written so far.`
-            : "Did not return within maxFrames (and the watchdog didn't trip) — try a larger maxFrames/maxInstructions or check the setup. finalPC/finalRegs show where it ended.";
+            : "Did not return within maxFrames AND the watchdog didn't trip — this usually means the entry FELL BACK INTO THE GAME (a wrapper PC with a wrong source, so it never reaches the sentinel) and the game is just free-running. finalPC is inside the main loop, not your routine. Re-check the entry PC (use the routine body, not a wrapper) and the source regs; or lower maxInstructions to fail fast while probing. Bump maxFrames/maxInstructions only if you're sure it's a legitimately huge decompress.";
       return jsonContent({
         returned: r.returned, framesRun: r.framesRun, sandbox,
         ...(r.watchdog ? { watchdog: true, reason: r.reason } : {}),
@@ -753,6 +753,11 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
   server.tool(
     "cpu",
     "Read or drive a CPU, one tool keyed by `op`.\n" +
+    "OP CHEAT-SHEET (the params each op uses): " +
+    "read → {cpu?, platform?}; " +
+    "setReg → {regId, value}; " +
+    "call → {pc, regs?, sandbox?, maxInstructions?, sentinelPC?, stopAtPC?, presetMemory?, maxFrames?}; " +
+    "decompress → {entryPC, sourceAddress, destAddress?, maxFrames?}.\n" +
     "• op:'read' — read a CPU's {pc, registers, flags, sp}. Main CPU wired for all 14 tier-1 systems (nes, snes, " +
     "genesis, sms, gg, gb, gbc, atari2600, atari7800, c64, lynx, gba (ARM7TDMI: 16 gprs + cpsr/spsr + execPc for " +
     "pipeline prefetch), pce, msx). Secondary CPUs via `cpu`: 'spc700' (SNES audio — 'stuck in IPL' vs 'running' vs " +

@@ -1,6 +1,6 @@
 {
   "name": "romdev-core-gpgx",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Genesis Plus GX libretro core (Genesis / Master System / Game Gear) for romdev, bundled as WASM.",
   "type": "module",
   "main": "index.js",

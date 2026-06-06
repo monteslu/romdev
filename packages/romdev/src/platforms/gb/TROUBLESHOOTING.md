@@ -9,8 +9,7 @@ five things.
 
 **Cause #1: LCD is off.** `LCDC.7 = 0` means the screen never updates.
 ```js
-loadCategory({category:"memory"})
-readMemory({region:"gb_io", offset:0x40, length:1})  // LCDC byte
+memory({op:'read', region:"gb_io", offset:0x40, length:1})  // LCDC byte
 // 0x80+ = on, 0x00-0x7F = off
 ```
 
@@ -19,8 +18,7 @@ readMemory({region:"gb_io", offset:0x40, length:1})  // LCDC byte
 returns immediately. If you've inlined your own `while (LY < 144)`
 wait, replace it with `wait_vblank()` from `gb_runtime.h`.
 ```js
-loadCategory({category:"debug"})
-getCPUState({})  // PC stuck inside your wait loop? You hit this bug.
+cpu({op:'read'})  // PC stuck inside your wait loop? You hit this bug.
 ```
 
 **Cause #3: BG and OBJ both disabled.** `LCDC` must have bit 0 (BG on)
@@ -35,7 +33,7 @@ Check in this order:
    screen Y + 16, so the top edge of the screen is OAM Y=16. Same for X
    (hardware X = screen X + 8, off-screen = X<8 or X>=168).
    ```js
-   readMemory({region:"gb_oam", offset:0, length:16})
+   memory({op:'read', region:"gb_oam", offset:0, length:16})
    // bytes 0..3 = slot 0: [Y, X, tile, attr]
    ```
 2. **Tile index points at unuploaded VRAM.** If your tile data is at
@@ -46,8 +44,7 @@ Check in this order:
 4. **OAM DMA never ran.** You staged the sprite in `shadow_oam[]` but
    forgot to call `oam_dma_flush()` each vblank.
    ```js
-   loadCategory({category:"debug"})
-   inspectSprites({platform:"gbc"})   // shows what the LCD sees right now
+   sprites({op:'inspect', platform:"gbc"})   // shows what the LCD sees right now
    ```
 
 ## ⚠ "Sprites/tiles never show AND the CPU crashed (PC near $002B)" — the #1 SDCC footgun
@@ -129,8 +126,7 @@ the cross-platform note: [[sdcc-uint8-loop-bound-trap]].
    deeply or putting huge arrays on the stack, you can hit $C000 and
    corrupt initialized globals.
    ```js
-   loadCategory({category:"debug"})
-   getCPUState({})   // check SP
+   cpu({op:'read'})   // check SP
    ```
 3. **`halt` without `IE`.** A bare `halt` with no enabled interrupts
    on DMG can deadlock or skip an instruction (the halt-bug). The
@@ -178,7 +174,7 @@ A few high-leverage tools you might not know exist:
   hang.
 - **`watch({on:'mem', region:"gb_oam", offset:0, length:4})`** — trace
   every write to OAM slot 0, returns the PC that wrote it.
-- **`frame({op:'step', frames:3600})`** — runs a full minute of game time
+- **`frame({op:'step', count:3600})`** — runs a full minute of game time
   in milliseconds. Don't be conservative with frame counts when
   hunting bugs.
 
@@ -207,7 +203,8 @@ Cribbed from `examples/gbc/templates/tile_engine.c` — start a fresh
 game from that template with:
 
 ```js
-createProject({
+scaffold({
+  op: 'project',
   platform: "gbc",
   template: "tile_engine",
   name: "mygame",

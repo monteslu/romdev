@@ -472,7 +472,7 @@ async function previewMsxScreen2(args, d) {
   return { ...result, pngBase64: buf.toString("base64") };
 }
 
-// previewTileArt folded into the `tiles` tool (tiles({as:'preview'}), in
+// previewTileArt folded into the `tiles` tool (tiles({op:'preview'}), in
 // tile-inspect.js). The router imports previewTileArtCore from this module;
 // nothing is registered here anymore.
 export function registerPreviewTileTools() {}

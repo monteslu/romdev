@@ -183,10 +183,10 @@ call:
 ```
 # 1. Source must be 320×224.
 # 2. Quantize to the Genesis palette:
-getPlatformPalettePng({ platform:"genesis", format:"png", outputPath:"/tmp/gen_pal.png" })
+palette({ source:'platformMaster', platform:"genesis", format:"png", outputPath:"/tmp/gen_pal.png" })
 magick splash.png -dither FloydSteinberg -remap /tmp/gen_pal.png splash_q.png
 # 3. Convert:
-imageToTilemap({ platform:"genesis", pngPath:"splash_q.png", outputDir:"splash_out/" })
+encodeArt({ stage:'tilemap', platform:"genesis", pngPath:"splash_q.png", outputDir:"splash_out/" })
 ```
 
 You get `splash_out/chr.bin` (deduped tiles), `nametable.bin`

@@ -203,61 +203,67 @@ async function tilesAsciiArt(sessionKey, { platform, start = 0, count = 16, path
 export function registerTileInspectTools(server, z, sessionKey) {
   server.tool(
     "tiles",
-    "DECODE & render tile / CHR / pattern-table / VRAM bytes, one tool keyed by `as`. " +
+    "DECODE & render tile / CHR / pattern-table / VRAM bytes, one tool keyed by `op`. " +
+    "OP CHEAT-SHEET (params each op uses): " +
+    "png → {platform?, path?, bank?|offset?, scale?, bpp?, tileBaseByte?, paletteBase?, paletteIndex?, tileCount?, tilesPerRow?, intent?, outputPath?|inline?}; " +
+    "pixels → {tileIndex, platform?, path?, logicalPixels?}; " +
+    "fingerprints → {start?, count?, platform?, path?}; " +
+    "ascii → {start?, count?, platform?, path?}; " +
+    "preview → {tileBytes|tilePath|fromEmulator, platform, palette?|paletteFromEmulator?, tileStart?|byteOffset?, tilesPerRow?, intent?}.\n" +
     "`source`: pass `path` to read from a ROM/CHR file on disk (iNES auto-locates CHR, raw .chr/.bin read as-is); " +
     "omit `path` to read the running emulator's pattern table / VRAM. **Every read reports `source:'file'|'emulator'`.** " +
     "**GENESIS NOTE: genesis-plus-gx stores VRAM as 16-bit words in host (little-endian) byte order, so raw video_ram " +
-    "bytes have each word's two bytes swapped vs the VDP-logical layout. `as:pixels/fingerprints/ascii` UN-SWAP this for " +
+    "bytes have each word's two bytes swapped vs the VDP-logical layout. `op:pixels/fingerprints/ascii` UN-SWAP this for " +
     "the live emulator by default (`logicalPixels:true`); response reports `byteSwapCorrected`. No effect on file sources.**\n" +
-    "• as:'png' — render tiles as a PNG sheet. No `path` → the running emulator (CHR-ROM cores read the iNES file; CHR-RAM " +
+    "• op:'png' — render tiles as a PNG sheet. No `path` → the running emulator (CHR-ROM cores read the iNES file; CHR-RAM " +
     "cores read live VRAM — blank tiles mean nothing uploaded yet). `path` set → render FROM a ROM file on disk (point at " +
     "the data with `bank` (NES, easiest) or raw `offset`; **`intent:homebrew` colors from the live/default palette, " +
     "`intent:rom-hack` stays grayscale — intent REQUIRED for file extraction**; CHR-RAM carts have no file graphics). " +
     "SNES `bpp/tileBaseByte/paletteBase`, Genesis `paletteIndex`, `tileCount/scale`. PNG writes `outputPath` or `inline`.\n" +
-    "• as:'pixels' — decode ONE tile to its 64 pixel indices (row-major) + stats/ascii/histogram. Exact byte-level analysis, no visual budget. (`tileIndex` required.)\n" +
-    "• as:'fingerprints' — scan `start`..`start+count` tiles → one {idx,hash,nonzero,uniqueColors} each. Find blank/duplicate/distinct tiles fast (pure byte arithmetic), no PNG.\n" +
-    "• as:'ascii' — render `start`..`start+count` tiles as ASCII art blocks. Precise text-based inspection/diffs.\n" +
-    "• as:'preview' — preview tile BYTES against a palette as a PNG — pure compositing, no build/load/screenshot cycle. Author bytes → preview → iterate → patchFile. Source: `tileBytes` (base64) | `tilePath` | `fromEmulator:true` (live VRAM; Genesis byte-swap handled). Palette: explicit `palette` or `paletteFromEmulator:true` (NES/SNES/Genesis), else gray ramp. **intent steers the palette default.**",
+    "• op:'pixels' — decode ONE tile to its 64 pixel indices (row-major) + stats/ascii/histogram. Exact byte-level analysis, no visual budget. (`tileIndex` required.)\n" +
+    "• op:'fingerprints' — scan `start`..`start+count` tiles → one {idx,hash,nonzero,uniqueColors} each. Find blank/duplicate/distinct tiles fast (pure byte arithmetic), no PNG.\n" +
+    "• op:'ascii' — render `start`..`start+count` tiles as ASCII art blocks. Precise text-based inspection/diffs.\n" +
+    "• op:'preview' — preview tile BYTES against a palette as a PNG — pure compositing, no build/load/screenshot cycle. Author bytes → preview → iterate → patchFile. Source: `tileBytes` (base64) | `tilePath` | `fromEmulator:true` (live VRAM; Genesis byte-swap handled). Palette: explicit `palette` or `paletteFromEmulator:true` (NES/SNES/Genesis), else gray ramp. **intent steers the palette default.**",
     {
-      as: z.enum(["png", "pixels", "fingerprints", "ascii", "preview"])
+      op: z.enum(["png", "pixels", "fingerprints", "ascii", "preview"])
         .describe("png=PNG sheet (live VRAM, or a ROM file via path); pixels=one tile's 64 indices; fingerprints=hash scan; ascii=ASCII art; preview=composite arbitrary tileBytes against a palette."),
-      platform: z.string().optional().describe("Override platform; defaults to the loaded ROM. REQUIRED for as:'png' file extraction (path) and as:'preview', and when reading pixels/fingerprints/ascii from `path`."),
-      path: z.string().optional().describe("as:png/pixels/fingerprints/ascii — read tile bytes from this ROM/CHR file instead of the running emulator (the `source` selector)."),
-      logicalPixels: z.boolean().default(true).describe("as:pixels/fingerprints/ascii, Genesis emulator source only: un-swap host-LE 16-bit VRAM words to VDP render order (default true). No effect elsewhere."),
-      // as:pixels
-      tileIndex: z.number().int().min(0).max(8191).optional().describe("as:pixels — which tile to decode."),
-      // as:fingerprints / as:ascii ranges
-      start: z.number().int().min(0).default(0).describe("as:fingerprints/ascii — first tile index."),
-      count: z.number().int().min(1).max(8192).optional().describe("as:fingerprints (≤8192, default 256) / as:ascii (≤64, default 16) — how many tiles to scan. as:png file extraction — tile count (default 256)."),
-      // as:png shared
-      scale: z.number().int().min(1).max(16).default(1).describe("as:png — integer nearest-neighbor upscale (the default 8×8 strip is tiny inline; scale:4 → 32×32 per tile)."),
-      bpp: z.union([z.literal(2), z.literal(4), z.literal(8)]).default(4).describe("as:png SNES only: tile bit-depth (Mode 1 BG1/BG2 = 4bpp default, BG3 = 2bpp). snes9x can't auto-detect."),
-      tileBaseByte: z.number().int().min(0).default(0).describe("as:png SNES only: byte offset into VRAM of tile 0 (BG character base)."),
-      paletteBase: z.number().int().min(0).max(255).default(0).describe("as:png SNES only: CGRAM index of color 0 of the sub-palette used to colorize the sheet."),
-      paletteIndex: z.number().int().min(0).max(15).default(0).describe("as:png Genesis live (0-3) / as:png file extraction (NES 0-7, SNES 0-15, Genesis 0-3) / as:preview subpalette index."),
-      tileCount: z.number().int().min(0).default(0).describe("as:png SNES/Genesis live only: how many tiles to render (0 = fill VRAM from tileBaseByte)."),
-      // as:png file extraction (path)
-      offset: z.number().int().min(0).optional().describe("as:png file (path): raw byte offset into the ROM file. Use `bank` when possible."),
-      bank: z.number().int().min(0).max(127).optional().describe("as:png file (path) NES: 4 KB CHR bank index (0 = first 4 KB). Conflicts with `offset`."),
-      paletteFromEmulator: z.boolean().optional().describe("as:png file extraction / as:preview — color using the live emulator palette (NES/SNES/Genesis). Default from `intent`."),
-      tilesPerRow: z.number().int().min(1).max(64).default(16).describe("as:png file extraction / as:preview — tiles per row in the sheet."),
-      // as:preview
-      tileBytes: z.string().optional().describe("as:preview — base64 of raw tile bytes."),
-      tilePath: z.string().optional().describe("as:preview — path to a tile dump (raw) or iNES ROM (NES auto-locates CHR)."),
-      fromEmulator: z.boolean().optional().describe("as:preview — read tiles from the running emulator's live VRAM (tileStart/tileCount pick the range). Genesis byte-swap handled. Mutually exclusive with tileBytes/tilePath."),
-      tileStart: z.number().int().min(0).optional().describe("as:preview — starting tile index in the source."),
-      byteOffset: z.number().int().min(0).optional().describe("as:preview — start at a raw BYTE offset instead of a tile index (pass a watchDma/findReferences source directly). WARNS on misalignment. Takes precedence over tileStart."),
-      palette: z.array(z.any()).optional().describe("as:preview — explicit palette (NES: 4 master indices; others: RGB triples or indices)."),
-      palettePath: z.string().optional().describe("as:preview — raw palette dump from disk."),
+      platform: z.string().optional().describe("Override platform; defaults to the loaded ROM. REQUIRED for op:'png' file extraction (path) and op:'preview', and when reading pixels/fingerprints/ascii from `path`."),
+      path: z.string().optional().describe("op:png/pixels/fingerprints/ascii — read tile bytes from this ROM/CHR file instead of the running emulator (the `source` selector)."),
+      logicalPixels: z.boolean().default(true).describe("op:pixels/fingerprints/ascii, Genesis emulator source only: un-swap host-LE 16-bit VRAM words to VDP render order (default true). No effect elsewhere."),
+      // op:pixels
+      tileIndex: z.number().int().min(0).max(8191).optional().describe("op:pixels — which tile to decode."),
+      // op:fingerprints / op:ascii ranges
+      start: z.number().int().min(0).default(0).describe("op:fingerprints/ascii — first tile index."),
+      count: z.number().int().min(1).max(8192).optional().describe("op:fingerprints (≤8192, default 256) / op:ascii (≤64, default 16) — how many tiles to scan. op:png file extraction — tile count (default 256)."),
+      // op:png shared
+      scale: z.number().int().min(1).max(16).default(1).describe("op:png — integer nearest-neighbor upscale (the default 8×8 strip is tiny inline; scale:4 → 32×32 per tile)."),
+      bpp: z.union([z.literal(2), z.literal(4), z.literal(8)]).default(4).describe("op:png SNES only: tile bit-depth (Mode 1 BG1/BG2 = 4bpp default, BG3 = 2bpp). snes9x can't auto-detect."),
+      tileBaseByte: z.number().int().min(0).default(0).describe("op:png SNES only: byte offset into VRAM of tile 0 (BG character base)."),
+      paletteBase: z.number().int().min(0).max(255).default(0).describe("op:png SNES only: CGRAM index of color 0 of the sub-palette used to colorize the sheet."),
+      paletteIndex: z.number().int().min(0).max(15).default(0).describe("op:png Genesis live (0-3) / op:png file extraction (NES 0-7, SNES 0-15, Genesis 0-3) / op:preview subpalette index."),
+      tileCount: z.number().int().min(0).default(0).describe("op:png SNES/Genesis live only: how many tiles to render (0 = fill VRAM from tileBaseByte)."),
+      // op:png file extraction (path)
+      offset: z.number().int().min(0).optional().describe("op:png file (path): raw byte offset into the ROM file. Use `bank` when possible."),
+      bank: z.number().int().min(0).max(127).optional().describe("op:png file (path) NES: 4 KB CHR bank index (0 = first 4 KB). Conflicts with `offset`."),
+      paletteFromEmulator: z.boolean().optional().describe("op:png file extraction / op:preview — color using the live emulator palette (NES/SNES/Genesis). Default from `intent`."),
+      tilesPerRow: z.number().int().min(1).max(64).default(16).describe("op:png file extraction / op:preview — tiles per row in the sheet."),
+      // op:preview
+      tileBytes: z.string().optional().describe("op:preview — base64 of raw tile bytes."),
+      tilePath: z.string().optional().describe("op:preview — path to a tile dump (raw) or iNES ROM (NES auto-locates CHR)."),
+      fromEmulator: z.boolean().optional().describe("op:preview — read tiles from the running emulator's live VRAM (tileStart/tileCount pick the range). Genesis byte-swap handled. Mutually exclusive with tileBytes/tilePath."),
+      tileStart: z.number().int().min(0).optional().describe("op:preview — starting tile index in the source."),
+      byteOffset: z.number().int().min(0).optional().describe("op:preview — start at a raw BYTE offset instead of a tile index (pass a watchDma/findReferences source directly). WARNS on misalignment. Takes precedence over tileStart."),
+      palette: z.array(z.any()).optional().describe("op:preview — explicit palette (NES: 4 master indices; others: RGB triples or indices)."),
+      palettePath: z.string().optional().describe("op:preview — raw palette dump from disk."),
       // shared output
-      outputPath: z.string().optional().describe("as:png/preview — write the PNG here (as:png defaults to disk unless inline; as:preview returns inline if omitted)."),
-      inline: z.boolean().default(false).describe("as:png — return the image in the response instead of writing to disk."),
+      outputPath: z.string().optional().describe("op:png/preview — write the PNG here (op:png defaults to disk unless inline; op:preview returns inline if omitted)."),
+      inline: z.boolean().default(false).describe("op:png — return the image in the response instead of writing to disk."),
       intent: intentZod(z),
     },
     safeTool(async (args) => {
-      switch (args.as) {
+      switch (args.op) {
         case "pixels": {
-          if (args.tileIndex == null) throw new Error("tiles({as:'pixels'}): `tileIndex` is required.");
+          if (args.tileIndex == null) throw new Error("tiles({op:'pixels'}): `tileIndex` is required.");
           return await tilesPixels(sessionKey, args);
         }
         case "fingerprints": return await tilesFingerprints(sessionKey, { ...args, count: args.count ?? 256 });
@@ -266,7 +272,7 @@ export function registerTileInspectTools(server, z, sessionKey) {
           // path → render from a ROM file (richer extractSpriteSheet path);
           // no path → live VRAM pattern tables (inspectPatternTiles).
           if (args.path) {
-            if (!args.platform) throw new Error("tiles({as:'png'}) with `path`: `platform` is required for file extraction.");
+            if (!args.platform) throw new Error("tiles({op:'png'}) with `path`: `platform` is required for file extraction.");
             return await extractSpriteSheetCore({ ...args, count: args.count || 256 }, sessionKey);
           }
           return await inspectPatternTilesCore(args);
@@ -278,7 +284,7 @@ export function registerTileInspectTools(server, z, sessionKey) {
           }
           return jsonContent(r);
         }
-        default: throw new Error(`tiles: unknown as '${args.as}'`);
+        default: throw new Error(`tiles: unknown op '${args.op}'`);
       }
     }),
   );

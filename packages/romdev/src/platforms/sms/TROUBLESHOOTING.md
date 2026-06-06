@@ -95,7 +95,7 @@ Three things to check:
    needs `0x80 | (chan << 5) | (vol & 0x0F)` etc., then the data
    bytes. Random write order = silent or random noise.
 3. **Audio is disabled in some emulator save-state restores.** Try
-   `reset()` first before debugging.
+   `host({op:'reset'})` first before debugging.
 
 ## "Game Gear ROM boots black / wrong colors"
 

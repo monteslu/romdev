@@ -113,22 +113,22 @@ AT that instruction and read the register. This is the "infer for hours → read
 the answer in 3 calls" move:
 
 ```
-findWriter({address})            → a real, instruction-aligned PC (or use a
-                                   disasm label / runUntilRead as the anchor)
-runUntilPC({address: thatPC})    → CPU FROZEN exactly at the instruction
-getCPUState({platform})          → registers.A0 (etc.) — the live value you need
-readCartRom / readMemory at [A0] → follow the pointer
+breakpoint({on:'write', address})         → a real, instruction-aligned PC (or use a
+                                   disasm label / breakpoint({on:'read'}) as the anchor)
+breakpoint({on:'pc', address: thatPC})    → CPU FROZEN exactly at the instruction
+cpu({op:'read', platform})       → registers.A0 (etc.) — the live value you need
+memory({op:'readCart'}) / memory({op:'read'}) at [A0] → follow the pointer
 ```
 
 Companion tools (all 14 platforms; feature-detect, `notSupported` if a core
 lacks a hook):
-- **`breakpoint({on:'read', address})`** — the read-side mirror of findWriter: the EXACT
+- **`breakpoint({on:'read', address})`** — the read-side mirror of `breakpoint({on:'write'})`: the EXACT
   instruction that READ an address (who *consumes* a value). Use it to anchor on
   a known data byte and find its reader.
 - **`frame({op:'stepInstruction'})`** — CPU single-step; pair with `cpu({op:'read'})` to watch
   registers change one instruction at a time through a routine.
-- **`cpu({op:'setReg', regId, value})`** — write a CPU register (inverse of getCPUState;
-  for setting up a callSubroutine by hand or forcing a path).
+- **`cpu({op:'setReg', regId, value})`** — write a CPU register (inverse of `cpu({op:'read'})`;
+  for setting up a `cpu({op:'call'})` by hand or forcing a path).
 
 Also: a breakpoint PC is a **guaranteed instruction boundary** — feed it to
 `disasm({target:'rom', startAddress})` to avoid the mid-instruction-garbage trap.
@@ -143,8 +143,8 @@ reimplement the codec. Find the game's decompressor (trace a DMA/copy back to it
 or `watch({on:'pc'})`/`breakpoint({on:'read'})` near the asset), then RUN it:
 
 ```
-decompressWith({ entryPC, sourceAddress, destAddress })  → runs the codec
-readMemory at destAddress                                → the decompressed bytes
+cpu({op:'decompress', entryPC, sourceAddress, destAddress })  → runs the codec
+memory({op:'read'}) at destAddress                       → the decompressed bytes
 ```
 
 Or the general form for any reg-args routine — `cpu({op:'call', pc, regs})` sets
@@ -152,7 +152,7 @@ the registers (m68k 8=A0, 9=A1, 0=D0; per-CPU reg-ids in `cpu({op:'setReg'})`'s 
 pushes a sentinel return, and runs until it returns. Most of these formats have a
 "stored/uncompressed" escape opcode, so once you can SEE the decompressed output
 you can usually craft a replacement by hand. (sandbox:false leaves the dest buffer
-live for readMemory; sandbox:true restores the game untouched.)
+live for `memory({op:'read'})`; sandbox:true restores the game untouched.)
 
 ## 5e. Re-inject an edited asset — the round-trip (don't reimplement the compressor)
 
@@ -160,12 +160,12 @@ Once you can SEE the decompressed bytes (5c) and you've edited them, put them BA
 in a form the game accepts — without writing an encoder:
 
 ```
-makeStoredBlock({ platform, rawHex, format })  → bytes the game's OWN decompressor
-                                                  expands VERBATIM (literal/raw escape)
-findFreeSpace({ path })                        → an unused $FF/$00 run to write into
-relocateBlock({ path, newHex, toOffset,        → write the block to free space AND
-               pointerOffset })                  repoint the loader's pointer at it
-findPointerTo({ path, romOffset })             → find that pointer in the first place
+romPatch({ op:'makeStored', platform, rawHex, format })  → bytes the game's OWN decompressor
+                                                            expands VERBATIM (literal/raw escape)
+romPatch({ op:'findFree', path })                        → an unused $FF/$00 run to write into
+romPatch({ op:'relocate', path, newHex, toOffset,        → write the block to free space AND
+           pointerOffset })                                repoint the loader's pointer at it
+romPatch({ op:'findPointer', path, romOffset })          → find that pointer in the first place
 ```
 
 - **`romPatch({op:'makeStored'})`** uses the format's stored/literal escape: GBA BIOS LZ77,
@@ -180,8 +180,11 @@ findPointerTo({ path, romOffset })             → find that pointer in the firs
   it's how you confirm the format guess before you ship the patch.)
 - **`romPatch({op:'findPointer'})`** computes the platform-correct pointer encoding (Genesis 32-bit
   BE = ROM offset; SNES 16/24-bit LE via LoROM/HiROM; GBA 0x08000000+offset; banked
-  8-bit 16-bit-LE CPU addresses) and scans the ROM. On banked systems a 16-bit hit
-  is page-ambiguous — pair it with the nearby bank-set instruction.
+  8-bit 16-bit-LE CPU addresses) and scans the ROM. On the multi-width systems
+  (Genesis/SNES) the narrower form's byte-shadow of a wider hit is suppressed by
+  default (`shadowsSuppressed` in the result) — pass `suppressShadows:false` for raw
+  or `widths:[4]` to search only the widest form. On banked systems a 16-bit hit is
+  page-ambiguous — pair it with the nearby bank-set instruction.
 - **`romPatch({op:'relocate'})`** with `dryRun:true` previews the writes before touching the file.
   The safe move when your edit changed size (can't fit in place).
 
@@ -194,7 +197,7 @@ Breakpoints are great once you KNOW the address. To FIND it:
   addresses. `distinctPCs` is the actionable summary.
 - **`watch({on:'pc', start, end, frames})`** — coverage trace: every DISTINCT PC that
   EXECUTED in an address window. "What code runs in this bank during the scoreboard
-  draw?" → disassembleRom the PCs it returns.
+  draw?" → `disasm({target:'rom'})` the PCs it returns.
 - **`dmaTrace({precision:'exact', vramDest})`** (Genesis) — which DMA wrote the tile at a VRAM dest,
   and the ROM SOURCE it came from. The targeted version of `dmaTrace({precision:'sampled'})`; the
   way to catch a DMA'd (not CPU-written) name/portrait bitmap `breakpoint({on:'write'})` can't see.
@@ -203,7 +206,7 @@ Breakpoints are great once you KNOW the address. To FIND it:
 
 ## 6. Driving menus (the real wall-clock sink)
 
-Use `navigate({steps:[{button, maxWaitFrames}]})` — it advances on **screen
+Use `input({op:'navigate', steps:[{button, maxWaitFrames}]})` — it advances on **screen
 change**, not fixed frames, and reports per step whether the press was
 `consumed` (the screen reacted). `consumed:false` = the press didn't land
 (wrong screen / dropped / game polls input on a specific frame) — re-run it or
@@ -228,7 +231,7 @@ transition.
 | Confirm a patch is in the running ROM | `memory({op:'readCart'})` |
 | Where is this byte written / why not | `breakpoint({on:'write'})` (no write ⇒ source is bulk-copied) |
 | Read a register AT an instruction | `breakpoint({on:'pc', address})` → freeze → `cpu({op:'read'})` |
-| Which instruction READ a byte | `breakpoint({on:'read', address})` (read-side findWriter) |
+| Which instruction READ a byte | `breakpoint({on:'read', address})` (read-side `breakpoint({on:'write'})`) |
 | Single-step the CPU | `frame({op:'stepInstruction'})` (+ `cpu({op:'read'})` to watch regs) |
 | Set a CPU register | `cpu({op:'setReg', regId, value})` |
 | Decompress a compressed asset | `cpu({op:'decompress'})` / `cpu({op:'call'})` (run the ROM's own codec) |
@@ -237,6 +240,6 @@ transition.
 | FIND the unknown routine touching X | `watch({on:'range', start,end})` (all hits) / `watch({on:'pc'})` (coverage) |
 | Which DMA wrote a VRAM tile + its source (Genesis) | `dmaTrace({precision:'exact', vramDest})` |
 | Where did a VRAM graphic come from (Genesis) | `dmaTrace({precision:'sampled'})` (ROM offset of the DMA source) |
-| Drive a menu fast | `navigate` (advances on screen change) |
+| Drive a menu fast | `input({op:'navigate'})` (advances on screen change) |
 | Free RAM map for a known game | `cheats({op:'lookup'})` / `cheats({op:'search'})` |
 | Safe patch | `romPatch({op:'write'})`/`romPatch({op:'writeMany'})` with `expect` |
