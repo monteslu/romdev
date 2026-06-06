@@ -116,14 +116,177 @@ export function registerAudioTools(server, z, sessionKey) {
       return jsonContent(out);
   }
 
+  // encodeAudio({target:'maxmod'}) — tracker module (.xm/.mod/.it/.s3m) → GBA Maxmod soundbank.
+  async function encMaxmod({ modulePath, moduleBase64, name = "soundbank", outputBinPath, outputHeaderPath }) {
+      const { soundbankFromModule, detectModuleFormat } = await import("romdev-maxmod");
+      let modBytes;
+      if (modulePath) modBytes = new Uint8Array(await readFile(modulePath));
+      else if (moduleBase64) modBytes = new Uint8Array(Buffer.from(moduleBase64, "base64"));
+      else throw new Error("encodeAudio({target:'maxmod'}): pass `modulePath` (.xm/.mod/.it/.s3m) or `moduleBase64`.");
+      const fmt = detectModuleFormat(modBytes);
+      if (!fmt) throw new Error("encodeAudio({target:'maxmod'}): unrecognized module — expected a .xm/.mod/.it/.s3m tracker module.");
+      let bin, header;
+      try {
+        ({ bin, header } = soundbankFromModule(modBytes, { name }));
+      } catch (e) {
+        throw new Error(`encodeAudio({target:'maxmod'}): conversion failed: ${e.message}. Confirm the input is a valid ${fmt.toUpperCase()} module.`);
+      }
+      const out = {
+        platform: "gba",
+        format: fmt,
+        name,
+        soundbankBytes: bin.length,
+        header,
+        note: `Maxmod soundbank (${bin.length} B) — byte-identical to mmutil. Link the .bin as your soundbank, mmInitDefault() it, then mmStart(MOD_${name.toUpperCase()}, MM_PLAY_LOOP). The .h #defines (MOD_${name.toUpperCase()}, MSL_*) are in \`header\`.`,
+      };
+      if (outputBinPath) {
+        await mkdir(path.dirname(outputBinPath), { recursive: true });
+        await writeFile(outputBinPath, Buffer.from(bin));
+        out.binPath = outputBinPath;
+      } else {
+        out.soundbankBase64 = Buffer.from(bin).toString("base64");
+      }
+      if (outputHeaderPath) {
+        await mkdir(path.dirname(outputHeaderPath), { recursive: true });
+        await writeFile(outputHeaderPath, header);
+        out.headerPath = outputHeaderPath;
+      }
+      return jsonContent(out);
+  }
+
+  // encodeAudio({target:'famitone'}) — FamiTracker .txt export → NES FamiTone2 ca65 data.
+  async function encFamitone({ txtPath, txt, name = "music", outputAsmPath, noWarnings = false, keepInstruments = false }) {
+      const { emitFamiTone2, isFamiTrackerTextExport } = await import("romdev-famitone");
+      let source = txt;
+      if (!source && txtPath) source = await readFile(txtPath, "utf8");
+      if (!source) throw new Error("encodeAudio({target:'famitone'}): pass `txtPath` (a FamiTracker text export) or `txt`.");
+      if (!isFamiTrackerTextExport(source)) {
+        throw new Error("encodeAudio({target:'famitone'}): input is not a FamiTracker text export (File→Export Text in FamiTracker/Dn-FamiTracker). Got something else.");
+      }
+      let asm;
+      try {
+        asm = emitFamiTone2(source, { name, noWarnings, keepInstruments });
+      } catch (e) {
+        throw new Error(`encodeAudio({target:'famitone'}): conversion failed: ${e.message}. ` +
+          `If it's an "Unsupported effect", FamiTone2 only supports a subset (no sweep, limited fx) — pass noWarnings:true to skip unsupported effects, or remove them in FamiTracker.`);
+      }
+      const out = {
+        platform: "nes",
+        name,
+        note: `FamiTone2 ca65 data for '${name}'. Assemble alongside the bundled famitone2.s driver; FamiToneInit(${name}_music_data) then FamiToneMusicPlay(songIndex). (text2data -ca65 compatible.)`,
+      };
+      if (outputAsmPath) {
+        await mkdir(path.dirname(outputAsmPath), { recursive: true });
+        await writeFile(outputAsmPath, asm);
+        out.asmPath = outputAsmPath;
+      } else {
+        out.asmSource = asm;
+      }
+      return jsonContent(out);
+  }
+
+  // encodeAudio({target:'spc'}) — a note/duration song → the SNES apu_blob row table.
+  async function encSpcSong({ song, base = "C4", baseP = 0x1000, defaultTicks = 16, outputAsmPath, outputBinPath }) {
+      const { compileSong } = await import("../../platforms/snes/song.js");
+      if (!song) throw new Error("encodeAudio({target:'spc'}): pass `song` — { rows:[ {note,ticks} | \"C4:16\" ... ] }.");
+      const spec = typeof song === "string" ? JSON.parse(song) : song;
+      // allow base/baseP/defaultTicks either on the song or as top-level args
+      const merged = { base, baseP, defaultTicks, ...spec };
+      let result;
+      try {
+        result = compileSong(merged);
+      } catch (e) {
+        throw new Error(`encodeAudio({target:'spc'}): ${e.message}`);
+      }
+      const { bytes, rows, asm } = result;
+      const out = {
+        platform: "snes",
+        rows,
+        tableBytes: bytes.length,
+        note: `SNES song table (${rows} rows, ${bytes.length} B) for the apu_blob driver's voice-1 music engine. ` +
+          `Paste the \`asm\` at the 'song:' label in lib/audio/apu_blob.asm and rebuild apu_blob.bin (scripts/build-apu-blob.js), ` +
+          `or write the raw bytes into ARAM \$5000. Each row = [ticks, DSP-pitch-lo, DSP-pitch-hi]; \$00 loops. ` +
+          `Single voice, re-triggers the loaded BRR sample at each note's pitch (P = baseP * 2^(semitones/12)).`,
+      };
+      if (outputAsmPath) {
+        await mkdir(path.dirname(outputAsmPath), { recursive: true });
+        await writeFile(outputAsmPath, asm);
+        out.asmPath = outputAsmPath;
+      } else {
+        out.asmSource = asm;
+      }
+      if (outputBinPath) {
+        await mkdir(path.dirname(outputBinPath), { recursive: true });
+        await writeFile(outputBinPath, Buffer.from(bytes));
+        out.binPath = outputBinPath;
+      } else {
+        out.tableBase64 = Buffer.from(bytes).toString("base64");
+      }
+      return jsonContent(out);
+  }
+
+  // encodeAudio({target: gg|sms|c64|lynx|atari7800}) — a note/duration song → that
+  // platform's bundled-driver note table. Each platforms/<p>/song.js exports
+  // compileSong() returning { bytes, cSource, rows } in the driver's exact format.
+  const SYNTH_SONG = {
+    gg:        { mod: "../../platforms/gg/song.js",        platform: "gg",        chip: "SN76489 PSG", paste: "the songN[] arrays in gg_music.c" },
+    sms:       { mod: "../../platforms/sms/song.js",       platform: "sms",       chip: "SN76489 PSG", paste: "the mel*_freq/mel*_len arrays in sms_music.c (+ set track_len)" },
+    c64:       { mod: "../../platforms/c64/song.js",       platform: "c64",       chip: "SID",         paste: "the melody/bass/harmony[] Note arrays in c64_music.c" },
+    lynx:      { mod: "../../platforms/lynx/song.js",      platform: "lynx",      chip: "Mikey",       paste: "the song byte stream lynx_music.c feeds lynx_snd_play()" },
+    atari7800: { mod: "../../platforms/atari7800/song.js", platform: "atari7800", chip: "TIA",         paste: "the voice table(s) in atari7800_music.c" },
+    gb:        { mod: "../../platforms/gb/song.js",        platform: "gb",        chip: "GB APU (hUGEDriver)",  paste: "the huge_song_t + pattern arrays in song_data.c" },
+    gbc:       { mod: "../../platforms/gbc/song.js",       platform: "gbc",       chip: "GB APU (hUGEDriver)",  paste: "the huge_song_t + pattern arrays in song_data.c" },
+  };
+  async function encSynthSong(target, { song, base, baseP, defaultTicks, name, outputBinPath, outputCPath }) {
+      const info = SYNTH_SONG[target];
+      const { compileSong } = await import(info.mod);
+      if (!song) throw new Error(`encodeAudio({target:'${target}'}): pass \`song\` — { rows:[ {note,...} | "C4:16" ... ] }.`);
+      const spec = typeof song === "string" ? JSON.parse(song) : song;
+      const merged = { ...(base !== undefined ? { base } : {}), ...(baseP !== undefined ? { baseP } : {}),
+        ...(defaultTicks !== undefined ? { defaultTicks } : {}), ...(name ? { name } : {}), ...spec };
+      let r;
+      try { r = compileSong(merged); }
+      catch (e) { throw new Error(`encodeAudio({target:'${target}'}): ${e.message}`); }
+      const cSource = r.cSource ?? r.asm ?? "";
+      const out = {
+        platform: info.platform,
+        chip: info.chip,
+        rows: r.rows,
+        tableBytes: r.bytes ? r.bytes.length : undefined,
+        note: `${info.platform.toUpperCase()} song (${r.rows} rows) for the bundled ${info.chip} driver. Paste \`cSource\` over ${info.paste}, or write the raw \`tableBytes\` into the driver's table.` +
+          (r.snapped ? ` (TIA has only 32 pitches — some notes snapped to the nearest; see the C comments.)` : ``),
+      };
+      if (outputCPath) {
+        await mkdir(path.dirname(outputCPath), { recursive: true });
+        await writeFile(outputCPath, cSource);
+        out.cPath = outputCPath;
+      } else {
+        out.cSource = cSource;
+      }
+      if (r.bytes) {
+        if (outputBinPath) {
+          await mkdir(path.dirname(outputBinPath), { recursive: true });
+          await writeFile(outputBinPath, Buffer.from(r.bytes));
+          out.binPath = outputBinPath;
+        } else {
+          out.tableBase64 = Buffer.from(r.bytes).toString("base64");
+        }
+      }
+      return jsonContent(out);
+  }
+
   server.tool(
     "encodeAudio",
     "Encode an external audio clip into a platform's native sample/music format, one tool keyed by `target`.\n" +
     "• target:'brr' — raw 16-bit signed PCM (mono, LE) → SNES BRR (the SPC700's only sample format; 9-byte blocks ready to DMA into ARAM). Input `pcmBase64` or `pcmPath` (.pcm/.raw; strip the WAV header first if your source is .wav). `loop` sets the LOOP bit. Output `brrPath` (via `outputPath`) or `brrBase64`.\n" +
     "• target:'xgm2pcm' — WAV (or raw s16le PCM) → GENESIS XGM2 PCM SAMPLE (SGDK's XGM2_playPCM, for SFX). Bakes the fiddly rules: 8-bit SIGNED mono, resampled to 13.3 kHz (or 6.65 kHz with `halfRate`), zero-padded to a multiple of 256 bytes. Emits a ready-to-#include 256-byte-aligned C array + `<NAME>_LEN` define by default. Input `wavPath`/`wavBase64` (or `format:'pcm16'` + `pcmRate` for headerless). Output `outputCPath` (.c) / `cSource` inline / `outputPcmPath` (raw .pcm).\n" +
-    "• target:'xgm2' — **GENESIS MUSIC: a `.vgm`/`.vgz` log → a COMPILED XGM2 blob you `XGM2_play()`.** This is the music sibling of xgm2pcm (which is sample SFX). `XGM2_play()` needs a compiled blob (split FM/PSG streams + sample table), NOT raw VGM — this does that compile (a pure-JS port of SGDK's `xgm2tool`; no Java). Emits a 256-aligned C array + `<NAME>_LEN`. PSG-only tracks coexist with XGM2 PCM SFX. Input `vgmPath` (.vgm/.vgz) or `vgmBase64`; `system` forces NTSC/PAL timing.",
+    "• target:'xgm2' — **GENESIS MUSIC: a `.vgm`/`.vgz` log → a COMPILED XGM2 blob you `XGM2_play()`.** This is the music sibling of xgm2pcm (which is sample SFX). `XGM2_play()` needs a compiled blob (split FM/PSG streams + sample table), NOT raw VGM — this does that compile (a pure-JS port of SGDK's `xgm2tool`; no Java). Emits a 256-aligned C array + `<NAME>_LEN`. PSG-only tracks coexist with XGM2 PCM SFX. Input `vgmPath` (.vgm/.vgz) or `vgmBase64`; `system` forces NTSC/PAL timing.\n" +
+    "• target:'maxmod' — **GBA MUSIC: a tracker module (`.xm`/`.mod`/`.it`/`.s3m`) → a Maxmod SOUNDBANK** (.bin + .h). Pure-JS port of devkitPro `mmutil`, BYTE-IDENTICAL to it. Link the .bin as your soundbank, `mmInitDefault()`, then `mmStart(MOD_<NAME>, MM_PLAY_LOOP)`. Input `modulePath` or `moduleBase64`; output `outputBinPath` (+ `outputHeaderPath` for the .h) or inline base64 + `header`.\n" +
+    "• target:'famitone' — **NES MUSIC: a FamiTracker text export (`.txt`) → FamiTone2 ca65 data.** Pure-JS port of `text2data` (text2data -ca65 compatible). Assemble with the bundled famitone2.s driver; `FamiToneInit(<name>_music_data)` then `FamiToneMusicPlay(song)`. Input `txtPath` or `txt` (the File→Export Text output from FamiTracker/Dn-FamiTracker); output `outputAsmPath` or inline `asmSource`.\n" +
+    "• target:'spc' — **SNES MUSIC: a simple note/duration `song` → the bundled apu_blob driver's row table.** Single voice; each note re-triggers the loaded BRR sample at its pitch (P = baseP·2^(semitones/12)). `song` = `{ rows:[ {note:\"C4\", ticks:16} | \"C4:16\" | {p:0x0400, ticks:16} ] }` with `base` (note the sample sounds at `baseP`, default C4) + `baseP` (default 0x1000). Output `outputAsmPath` (paste at the apu_blob.asm `song:` label, rebuild apu_blob.bin) or raw `tableBase64`/`outputBinPath` for ARAM $5000.\n" +
+    "• target:'gg'|'sms'|'c64'|'lynx'|'atari7800'|'gb'|'gbc' — **synth-chip MUSIC: a note/duration `song` → that platform's bundled-driver note table.** Most take `{ rows:[{note,dur/ticks}|\"C4:16\"] }`; **gb/gbc are MULTI-channel hUGEDriver** so they take `{ ticksPerRow?, channels:[ {rows:[\"C5\",\"-\"(sustain),\".\"(rest)]}, ... ] }` (1-4 channels). Note→native pitch per chip: gg/sms=SN76489 10-bit divider, c64=SID 16-bit freq word (3 voices), lynx=Mikey note index, atari7800=TIA 5-bit AUDF (32 pitches → snapped), gb/gbc=hUGE note index (C3..B8). Emits a drop-in `cSource` (paste over the demo song in <plat>_music.c / song_data.c) + raw `tableBase64`/`outputCPath`/`outputBinPath`. **These chips SYNTHESIZE — they play notes, not your recording; for arbitrary audio see the MUSIC_SOURCING guide (transcribe first).**",
     {
-      target: z.enum(["brr", "xgm2pcm", "xgm2"]).describe("brr=SNES BRR sample; xgm2pcm=Genesis XGM2 PCM sample SFX; xgm2=Genesis XGM2 MUSIC from a VGM (SGDK XGM2_play)."),
+      target: z.enum(["brr", "xgm2pcm", "xgm2", "maxmod", "famitone", "spc", "gg", "sms", "c64", "lynx", "atari7800", "gb", "gbc"]).describe("SAMPLE: brr=SNES BRR; xgm2pcm=Genesis PCM SFX. MUSIC: xgm2=Genesis (VGM); maxmod=GBA (tracker module); famitone=NES (FamiTracker txt); spc=SNES note-song; gg/sms/c64/lynx/atari7800/gb/gbc=synth note-song → that driver's table."),
       // brr
       pcmBase64: z.string().optional().describe("target:'brr' — base64 raw 16-bit signed PCM (mono, LE)."),
       pcmPath: z.string().optional().describe("target:'brr' — absolute path to a raw PCM file (preferred over pcmBase64)."),
@@ -131,7 +294,7 @@ export function registerAudioTools(server, z, sessionKey) {
       // xgm2pcm
       wavPath: z.string().optional().describe("target:'xgm2pcm' — absolute path to a .wav (preferred)."),
       wavBase64: z.string().optional().describe("target:'xgm2pcm' — base64 WAV bytes."),
-      name: z.string().default("pcm_sample").describe("target:'xgm2pcm' — C identifier for the emitted array (length define is <NAME>_LEN)."),
+      name: z.string().default("pcm_sample").describe("target:'xgm2pcm'/'xgm2'/'maxmod'/'famitone' — C/asm identifier for the emitted data (xgm2pcm length define is <NAME>_LEN; maxmod → MOD_<NAME>; famitone → <NAME>_music_data)."),
       halfRate: z.boolean().default(false).describe("target:'xgm2pcm' — encode for 6.65 kHz (XGM2_playPCMEx halfRate=TRUE); halves ROM size."),
       format: z.enum(["wav", "pcm16"]).default("wav").describe("target:'xgm2pcm' — 'wav' (parse RIFF) or 'pcm16' (raw s16le mono; then pass pcmRate)."),
       pcmRate: z.number().int().min(1).optional().describe("target:'xgm2pcm' — source sample rate (Hz), REQUIRED for format:'pcm16'."),
@@ -141,15 +304,35 @@ export function registerAudioTools(server, z, sessionKey) {
       vgmPath: z.string().optional().describe("target:'xgm2' — absolute path to a .vgm or gzipped .vgz Mega Drive music log."),
       vgmBase64: z.string().optional().describe("target:'xgm2' — base64 .vgm/.vgz bytes."),
       system: z.enum(["ntsc", "pal"]).optional().describe("target:'xgm2' — force the timing flag (VGM offset 0x24): ntsc=60, pal=50. Omit to keep the VGM's own value."),
-      outputBinPath: z.string().optional().describe("target:'xgm2' — also/instead write the raw XGM2 blob (.xgc) here."),
+      outputBinPath: z.string().optional().describe("target:'xgm2' — write the raw XGM2 blob (.xgc) here. target:'maxmod' — write the soundbank .bin here."),
+      // maxmod (GBA music)
+      modulePath: z.string().optional().describe("target:'maxmod' — absolute path to a tracker module (.xm/.mod/.it/.s3m)."),
+      moduleBase64: z.string().optional().describe("target:'maxmod' — base64 module bytes."),
+      outputHeaderPath: z.string().optional().describe("target:'maxmod' — write the soundbank .h (MOD_/MSL_ defines) here."),
+      // famitone (NES music)
+      txtPath: z.string().optional().describe("target:'famitone' — absolute path to a FamiTracker text export (.txt)."),
+      txt: z.string().optional().describe("target:'famitone' — the FamiTracker text export contents inline."),
+      outputAsmPath: z.string().optional().describe("target:'famitone' — write the ca65 .s music data here."),
+      noWarnings: z.boolean().default(false).describe("target:'famitone' — skip (instead of erroring on) effects FamiTone2 doesn't support."),
+      keepInstruments: z.boolean().default(false).describe("target:'famitone' — don't remove unused instruments (text2data -keep_instruments)."),
+      // spc (SNES song)
+      song: z.any().optional().describe("target:'spc' — the song: { rows:[ {note:'C4',ticks:16} | 'C4:16' | {p:0x400,ticks:16} ], base?, baseP?, defaultTicks? }. Accepts an object or a JSON string."),
+      base: z.union([z.string(), z.number()]).optional().describe("target:'spc' — the note (e.g. 'C4') or absolute semitone the sample sounds at baseP. Default 'C4'."),
+      baseP: z.number().int().optional().describe("target:'spc' — DSP pitch P at which the sample plays `base`. Default 0x1000 (sample's native rate)."),
+      defaultTicks: z.number().int().optional().describe("target:'spc' — ticks for shorthand rows that omit a duration. Default 16."),
       // shared
       outputPath: z.string().optional().describe("target:'brr' — write the .brr here and return path-only."),
     },
     safeTool(async (args) => {
       switch (args.target) {
-        case "brr":     return await encBrr(args);
-        case "xgm2pcm": return await encXgm(args);
-        case "xgm2":    return await encXgm2Music(args);
+        case "brr":      return await encBrr(args);
+        case "xgm2pcm":  return await encXgm(args);
+        case "xgm2":     return await encXgm2Music(args);
+        case "maxmod":   return await encMaxmod(args);
+        case "famitone": return await encFamitone(args);
+        case "spc":      return await encSpcSong(args);
+        case "gg": case "sms": case "c64": case "lynx": case "atari7800": case "gb": case "gbc":
+          return await encSynthSong(args.target, args);
         default: throw new Error(`encodeAudio: unknown target '${args.target}'`);
       }
     }),

@@ -2,6 +2,41 @@
 
 All notable changes to `romdev-mcp`. Dates are release dates.
 
+## 0.12.0
+
+**Music compilers for 9 systems** — `encodeAudio` grew from 3 to 13 targets, so an
+agent can compile real music into a game on nearly every platform with no external
+tools. Each target emits exactly what that platform's bundled sound driver plays.
+
+### Added
+- **`encodeAudio({ target:'maxmod' })`** — GBA: a tracker module (`.xm`/`.mod`/
+  `.it`/`.s3m`) → a Maxmod **soundbank** (.bin + .h). A faithful pure-JS port of
+  devkitPro `mmutil` (new package **`romdev-maxmod`**), **byte-identical to real
+  mmutil** (verified on .xm/.mod/.it). No devkitPro, no native binary.
+- **`encodeAudio({ target:'famitone' })`** — NES: a FamiTracker text export
+  (`.txt`) → FamiTone2 ca65 data. A faithful pure-JS port of `text2data` (new
+  package **`romdev-famitone`**), byte-exact vs `text2data -ca65`. `noWarnings`/
+  `keepInstruments` flags. Plays via the bundled famitone2.s driver.
+- **`encodeAudio({ target: 'spc'|'gg'|'sms'|'c64'|'lynx'|'atari7800'|'gb'|'gbc' })`**
+  — a note/duration `song` → that platform's bundled-driver note table (in-process,
+  no new packages). Note→native pitch per chip: SNES DSP pitch, SN76489 divider
+  (gg/sms), SID freq word (c64, 3 voices), Mikey note index (lynx), TIA AUDF
+  (atari7800, 32-pitch snap), hUGE note index (gb/gbc, multi-channel hUGEDriver).
+  Emits a drop-in `cSource` + raw table bytes. Each verified against its driver's
+  own pre-baked note values (e.g. A4=440 → GG divider 254 = the driver's NOTE_A4).
+- **`MUSIC_SOURCING.md` guide** — the per-system recipe for turning chiptune /
+  tracker / VGM **or arbitrary audio (WAV/MP3)** into game music: ffmpeg → sample
+  encoders for the sample-capable systems (Genesis/SNES/GBA), and the open-source
+  transcription chain (Basic Pitch → FamiStudio/OpenMPT/mid2vgm → these compilers)
+  for the synth-only chips, with the honest "synth chips play notes, not your
+  recording" caveat.
+
+### Notes
+- The MCP surface stays **34 tools** — every new compiler is a `target` on the
+  existing `encodeAudio`, not a new tool.
+- PCE and MSX have no bundled music driver yet, so they're not covered (they'd
+  need a driver written first, not just a compiler).
+
 ## 0.11.0
 
 Genesis music + the symbol/build/audio gaps from the v0.6.0 agent feedback, plus
