@@ -414,6 +414,7 @@ async function main() {
     log.info(`romdev (version ${PKG_VERSION}) listening on http://${bannerHost}:${port}/mcp`);
     log.info("");
     log.info(`prefer a skill?  save:  http://${bannerHost}:${port}/romdev-skill.md`);
+    log.info("");
     log.info(`optional observer:      http://${bannerHost}:${port}/livestream`);
     log.info("");
     log.info("connect your coding agent: https://github.com/monteslu/romdev#connect");
