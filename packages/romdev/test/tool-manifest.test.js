@@ -46,9 +46,11 @@ test("manifest: no tool is absorbed by two different consolidated tools (no dupe
   }
 });
 
-test("tool-count budget: surface is shrinking, never above the start (132)", async () => {
-  // Final target is ~34; while consolidation lands this guards against ACCIDENTAL
-  // GROWTH. Tighten the ceiling toward 35 as domains land.
+test("tool-count budget: consolidated surface stays small (<=42)", async () => {
+  // Consolidation landed: 132 -> 40. The ceiling now GUARDS the win — a new
+  // capability must be a PARAMETER on an existing tool, not a new top-level
+  // tool. If you truly need a new tool, add it to MERGE_MAP (as unchanged) AND
+  // bump this ceiling deliberately, in the same PR, so the growth is visible.
   const live = await liveToolNames();
-  assert.ok(live.size <= 132, `tool count ${live.size} exceeds the pre-consolidation 132 — did a tool get added without merging?`);
+  assert.ok(live.size <= 42, `tool count ${live.size} exceeds the consolidated budget of 42 — a new capability should be a PARAMETER on an existing tool, not a new tool. If a new tool is genuinely warranted, bump this ceiling deliberately.`);
 });
