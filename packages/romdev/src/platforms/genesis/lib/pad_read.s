@@ -26,11 +26,11 @@
 ; homebrew supports 3-button and treats 6-button as "ignore extras."
 ;
 ; ** Important libretro gotcha: ** genesis_plus_gx (and most cores) read
-; the controller via setInput() ONCE PER FRAME via retro_input_poll +
+; the controller via input({op:'set'})() ONCE PER FRAME via retro_input_poll +
 ; retro_input_state. The hardware semantics above are emulated; the
 ; first read on a fresh-loaded ROM may return all-zeros because the
-; agent's setInput hasn't been called yet. Don't bug-hunt this; just
-; step a frame after setInput before reading.
+; agent's input({op:'set'}) hasn't been called yet. Don't bug-hunt this; just
+; step a frame after input({op:'set'}) before reading.
 
 PAD1_DATA  equ $A10003
 PAD1_CTRL  equ $A10009

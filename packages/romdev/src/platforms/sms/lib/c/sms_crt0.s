@@ -6,7 +6,7 @@
 ;; standard SMS interrupt vectors, sets SP to $DFF0, calls main().
 ;;
 ;; Use via:
-;;   buildSource({
+;;   build({output:'rom'})({
 ;;     platform: "sms",
 ;;     sources: {
 ;;       "main.c": ...,

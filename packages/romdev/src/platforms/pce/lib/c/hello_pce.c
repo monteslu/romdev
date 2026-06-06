@@ -3,7 +3,7 @@
  *
  * Boots to a guaranteed-VISIBLE screen using cc65's conio (text) library, which
  * initializes the HuC6270 VDC + HuC6260 VCE for you and uploads a font to VRAM.
- * Build with: buildSource({ platform: "pce" })  (language defaults to C).
+ * Build with: build({output:'rom'})({ platform: "pce" })  (language defaults to C).
  *
  * FOOTGUN — the empty-BSS crt0 trap (cc65 pce/crt0.s line 84):
  *   The PCE crt0 clears .bss with `tii __BSS_RUN__, __BSS_RUN__+1, __BSS_SIZE__-1`.

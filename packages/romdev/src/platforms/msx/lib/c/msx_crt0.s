@@ -17,7 +17,7 @@
 ;;
 ;; Build it as the FIRST object so its _HEADER area lands at $4000. romdev links
 ;; _CODE at $4010; this header occupies $4000-$400F. Pass via:
-;;   buildSource({ platform:"msx", sources:{ "main.c":..., "msx_crt0.s":<this> },
+;;   build({output:'rom'})({ platform:"msx", sources:{ "main.c":..., "msx_crt0.s":<this> },
 ;;                 crt0: ".module empty\n" })   // empty stock crt0
 ;;
 ;; C-BIOS shows its logo for ~2-3s, THEN CALLs INIT — step >= 240 frames before

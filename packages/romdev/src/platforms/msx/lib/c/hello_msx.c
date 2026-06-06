@@ -8,7 +8,7 @@
  *
  * Build with the cartridge crt0 (msx_crt0.s), which emits the "AB" ROM header
  * at $4000 and points INIT at this code:
- *   buildSource({ platform:"msx",
+ *   build({output:'rom'})({ platform:"msx",
  *     sources: { "main.c": <this>, "msx_crt0.s": <the crt0> },
  *     crt0: ".module empty\n" })           // empty stock crt0
  *

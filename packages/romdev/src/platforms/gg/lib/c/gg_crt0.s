@@ -15,7 +15,7 @@
 ;; SP to $DFF0, calls main().
 ;;
 ;; Use via:
-;;   buildSource({
+;;   build({output:'rom'})({
 ;;     platform: "gg",
 ;;     sources: {
 ;;       "main.c": ...,

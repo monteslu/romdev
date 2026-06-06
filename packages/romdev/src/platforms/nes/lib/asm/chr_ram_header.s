@@ -1,7 +1,7 @@
 ; chr_ram_header.s — replace cc65's default HEADER + skip the NESfont
 ; CHARS bundle, so the cart boots in CHR-RAM mode.
 ;
-; USE WITH: buildSource({platform:"nes", linkerConfig:"chr-ram", ...})
+; USE WITH: build({output:'rom'})({platform:"nes", linkerConfig:"chr-ram", ...})
 ;   That preset's nes/chr-ram.cfg drops the ROM2/CHARS memory region.
 ;   Without this header file, the link would fail because the stock
 ;   crt0.s emits its own HEADER (chr=1) AND .forceimport NESfont (which
