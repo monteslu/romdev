@@ -28,8 +28,11 @@ export const mcpPreamble = [
 export const skillPreamble = [
   "romdev gives you homebrew retro game development + reverse-engineering for ~14 platforms (NES, SNES, Game Boy, Genesis, GBA, Atari, C64, and more) — build, run, screenshot, inspect, patch, disassemble, convert assets, drive emulators.",
   "",
+  "## Prerequisite: the romdev server must be running",
+  "romdev bundles every compiler + emulator as WASM and runs them in-process — but that engine lives in the romdev SERVER, which must be started once: `npx romdev-mcp` (it listens on http://localhost:7331; no other install, no host gcc/emulator needed). These routes drive that running server. If a call gets connection-refused, the server isn't running — start it with `npx romdev-mcp`.",
+  "",
   "## How to call romdev",
-  "Each capability is an HTTP route on the romdev server (default http://localhost:7331):",
+  "Each capability is an HTTP route on the running romdev server (default http://localhost:7331):",
   "  • POST /tool/{name}  — run a tool. The JSON request body is the arguments. The response is JSON.",
   "  • GET  /tool/{name}/schema — that tool's JSON Schema (the exact parameters + types).",
   "  • GET  /openapi.json — the full machine-readable API; GET /documentation — a browsable console.",
