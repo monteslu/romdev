@@ -167,19 +167,18 @@ export function registerInputTools(server, z, sessionKey) {
   const port = buttonShape(z);
   server.tool(
     "input",
-    "Drive the controller — set/hold buttons, press one, run a scripted sequence, or walk a menu by screen-change. " +
-    "`op`: 'set' | 'press' | 'sequence' | 'navigate' | 'layout'.\n" +
+    "Drive the controller. `op`: 'set' | 'press' | 'sequence' | 'navigate' | 'layout'.\n" +
     "'set': hold controller state (persists until changed) via `ports:[{a:true,...},{...}]`.\n" +
-    "'press': press one named `button` for `frames` then release (port 0 default) — the simplest single press.\n" +
+    "'press': press one named `button` for `frames` then release (port 0 default).\n" +
     "'sequence': scripted frame-by-frame `steps:[{input:{ports}, frames}]` for replays/tests.\n" +
-    "'navigate': walk a menu FAST by advancing on SCREEN CHANGE — `steps:[{button, holdFrames, maxWaitFrames, " +
-    "settleFrames}]`; reports `consumed` per step (false = the screen never reacted: wrong screen / press dropped / " +
-    "game polls on a specific frame). The fix for slow flaky menu loops.\n" +
+    "'navigate': walk a menu by advancing on SCREEN CHANGE — `steps:[{button, holdFrames?, maxWaitFrames?, " +
+    "settleFrames?}]`; reports `consumed` per step (false = the screen never reacted: wrong screen / press dropped / " +
+    "game polls on a specific frame).\n" +
     "'layout': the platform's input register format + which buttons physically exist (call BEFORE writing input " +
     "code or choosing controls).\n" +
     "FACE-BUTTON TRAP: raw libretro names (a/b/x/y) are NOT the printed labels — Genesis maps A/B/C onto libretro " +
     "y/b/a, so set({a:true}) presses Genesis C and Genesis A is {y:true}. Prefer SPATIAL names (north/east/south/" +
-    "west) or press/navigate's native aliases (Genesis c→a-internally, SMS/GG 1/2→b/a). layout.faceButtons has the " +
+    "west) or press/navigate's native aliases (Genesis c→a internally, SMS/GG 1/2→b/a). layout.faceButtons has the " +
     "exact map. NOTE on 'set': `requested` is what you SET, NOT proof the pad saw it — the game only reads input " +
     "when ITS code polls; re-apply immediately before the consuming stepFrames and verify via the held-buttons RAM " +
     "byte, not this echo.",

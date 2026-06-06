@@ -672,8 +672,8 @@ export function registerArtLoaderTools(server, z, sessionKey) {
     "importArt",
     "Import art from an editor file or a source ROM into the target platform's native tile bytes, one tool keyed by `from`. " +
     "Shared spine: `platform` (controls the tile encoding — NES planar 2bpp, GB interleaved 2bpp, SNES planar-pairs 4bpp, Genesis packed 4bpp, ...), " +
-    "`outputDir` (write blobs to disk instead of base64-inlining), and for the editor formats `emit:'raw'|'c'|'ca65'|'rgbasm'` " +
-    "(raw=base64; c=`const unsigned char tiles[]`; ca65=`.byte $NN` cc65/NES; rgbasm=`db $NN` GB/GBC — each tile preceded by a slice-naming comment) " +
+    "`outputDir` (write blobs to disk instead of base64-inlining), and for the editor formats `emit` " +
+    "(c=`const unsigned char tiles[]`; ca65=`.byte $NN` for cc65/NES; rgbasm=`db $NN` for GB/GBC — each tile preceded by a slice-naming comment) " +
     "+ `emitDefines` (name→tile-id constants). All editor loaders dedup tiles and return tile_bytes + per-frame/slice/cell `tile_indices`.\n" +
     "• from:'aseprite' — parse a LibreSprite/Aseprite `.ase` (`path`). Each slice (or each frame if no slices, via `slice_strategy`) becomes a named tile group; tags → named frame ranges with delays. Indexed mode preserves the artist's palette.\n" +
     "• from:'gif' — decode a GIF (`path`) to per-frame tile data + delays. `frame_indices` extracts a subset. (omggif doesn't apply GIF disposal — export with Disposal:Replace.)\n" +

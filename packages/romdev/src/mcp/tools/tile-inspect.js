@@ -204,12 +204,14 @@ export function registerTileInspectTools(server, z, sessionKey) {
   server.tool(
     "tiles",
     "DECODE & render tile / CHR / pattern-table / VRAM bytes, one tool keyed by `op`. " +
-    "OP CHEAT-SHEET (params each op uses): " +
-    "png → {platform?, path?, bank?|offset?, scale?, bpp?, tileBaseByte?, paletteBase?, paletteIndex?, tileCount?, tilesPerRow?, intent?, outputPath?|inline?}; " +
+    "`intent` is REQUIRED on EVERY call (no default); it only changes output for the file/preview palette path but the schema demands it always. " +
+    "OP CHEAT-SHEET (params each op uses, plus the required `intent`): " +
+    "png live VRAM → {platform?, scale?, bpp?, tileBaseByte?, paletteBase?, paletteIndex?, tileCount?, outputPath?|inline?}; " +
+    "png file → {platform, path, bank?|offset?, count?, paletteIndex?, paletteFromEmulator?, tilesPerRow?, outputPath?}; " +
     "pixels → {tileIndex, platform?, path?, logicalPixels?}; " +
-    "fingerprints → {start?, count?, platform?, path?}; " +
-    "ascii → {start?, count?, platform?, path?}; " +
-    "preview → {tileBytes|tilePath|fromEmulator, platform, palette?|paletteFromEmulator?, tileStart?|byteOffset?, tilesPerRow?, intent?}.\n" +
+    "fingerprints → {start?, count?, platform?, path?, logicalPixels?}; " +
+    "ascii → {start?, count?, platform?, path?, logicalPixels?}; " +
+    "preview → {tileBytes|tilePath|fromEmulator, platform, palette?|paletteFromEmulator?|palettePath?, paletteIndex?, tileStart?|byteOffset?, tileCount?, tilesPerRow?, scale?, outputPath?}.\n" +
     "`source`: pass `path` to read from a ROM/CHR file on disk (iNES auto-locates CHR, raw .chr/.bin read as-is); " +
     "omit `path` to read the running emulator's pattern table / VRAM. **Every read reports `source:'file'|'emulator'`.** " +
     "**GENESIS NOTE: genesis-plus-gx stores VRAM as 16-bit words in host (little-endian) byte order, so raw video_ram " +
@@ -217,13 +219,13 @@ export function registerTileInspectTools(server, z, sessionKey) {
     "the live emulator by default (`logicalPixels:true`); response reports `byteSwapCorrected`. No effect on file sources.**\n" +
     "• op:'png' — render tiles as a PNG sheet. No `path` → the running emulator (CHR-ROM cores read the iNES file; CHR-RAM " +
     "cores read live VRAM — blank tiles mean nothing uploaded yet). `path` set → render FROM a ROM file on disk (point at " +
-    "the data with `bank` (NES, easiest) or raw `offset`; **`intent:homebrew` colors from the live/default palette, " +
-    "`intent:rom-hack` stays grayscale — intent REQUIRED for file extraction**; CHR-RAM carts have no file graphics). " +
+    "the data with `bank` (NES, easiest) or raw `offset`; for file extraction **`intent:homebrew` colors from the live/default palette, " +
+    "`intent:rom-hack` stays grayscale**; CHR-RAM carts have no file graphics). " +
     "SNES `bpp/tileBaseByte/paletteBase`, Genesis `paletteIndex`, `tileCount/scale`. PNG writes `outputPath` or `inline`.\n" +
     "• op:'pixels' — decode ONE tile to its 64 pixel indices (row-major) + stats/ascii/histogram. Exact byte-level analysis, no visual budget. (`tileIndex` required.)\n" +
     "• op:'fingerprints' — scan `start`..`start+count` tiles → one {idx,hash,nonzero,uniqueColors} each. Find blank/duplicate/distinct tiles fast (pure byte arithmetic), no PNG.\n" +
     "• op:'ascii' — render `start`..`start+count` tiles as ASCII art blocks. Precise text-based inspection/diffs.\n" +
-    "• op:'preview' — preview tile BYTES against a palette as a PNG — pure compositing, no build/load/screenshot cycle. Author bytes → preview → iterate → patchFile. Source: `tileBytes` (base64) | `tilePath` | `fromEmulator:true` (live VRAM; Genesis byte-swap handled). Palette: explicit `palette` or `paletteFromEmulator:true` (NES/SNES/Genesis), else gray ramp. **intent steers the palette default.**",
+    "• op:'preview' — composite tile BYTES against a palette to a PNG, no build/load/screenshot cycle. Author bytes → preview → iterate → patchFile. Source: `tileBytes` (base64) | `tilePath` | `fromEmulator:true` (live VRAM; Genesis byte-swap handled). Palette: explicit `palette`, `palettePath`, or `paletteFromEmulator:true` (NES/SNES/Genesis/PCE/MSX — GB/GBC not wired, pass explicit `palette`), else gray ramp. intent steers the palette default.",
     {
       op: z.enum(["png", "pixels", "fingerprints", "ascii", "preview"])
         .describe("png=PNG sheet (live VRAM, or a ROM file via path); pixels=one tile's 64 indices; fingerprints=hash scan; ascii=ASCII art; preview=composite arbitrary tileBytes against a palette."),

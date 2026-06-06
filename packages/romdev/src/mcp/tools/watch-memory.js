@@ -617,7 +617,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         framesRun,
         hits: fin.hits,
         ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
-        note: "pc is the EXACT instruction that read this address. disassembleRom({ startAddress: pc }) to see it.",
+        note: "pc is the EXACT instruction that read this address. disasm({ target:'rom', startAddress: pc }) to see it.",
       }), host);
   }
 
@@ -706,7 +706,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       const host = getHost(sessionKey);
       if (!host.setRegSupported || !host.setRegSupported()) {
         return jsonContent({ returned: false, notSupported: true,
-          note: "This core build has no register-write (shipped on all 14 platforms as of 0.6.0 — update the core package). callSubroutine needs it." });
+          note: "This core build has no register-write (shipped on all 14 platforms as of 0.6.0 — update the core package). cpu({op:'call'}) needs it." });
       }
       const numRegs = {};
       for (const [k, v] of Object.entries(regs ?? {})) numRegs[Number(k)] = v >>> 0;
@@ -847,7 +847,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         range: "$" + start.toString(16).toUpperCase() + "..$" + end.toString(16).toUpperCase(),
         kind, total: r.total, returned: events.length, truncated: r.truncated,
         distinctPCs, events,
-        note: "distinctPCs is the actionable summary — each is a routine that touches this range; disassembleRom one to identify the renderer/reader. " +
+        note: "distinctPCs is the actionable summary — each is a routine that touches this range; disasm({target:'rom'}) one to identify the renderer/reader. " +
           (r.truncated ? "TRUNCATED: more events than the buffer held — narrow `start..end` or `frames` for the full set." : ""),
       }), host);
   }
@@ -869,7 +869,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         window: "$" + start.toString(16).toUpperCase() + "..$" + end.toString(16).toUpperCase(),
         distinct: r.distinct, total: r.total, returned: pcs.length, truncated: r.truncated,
         pcs,
-        note: "Each PC is code that EXECUTED in this window. disassembleRom them to find the routine you're hunting. " +
+        note: "Each PC is code that EXECUTED in this window. disasm({target:'rom'}) them to find the routine you're hunting. " +
           (r.truncated ? "TRUNCATED — narrow the window for the full distinct set." : ""),
       }), host);
   }
@@ -878,7 +878,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     "watch",
     "LOG-ALL dynamic tracing — run N frames and log EVERY hit (not stop-on-first; for stop-on-first use `breakpoint`). One tool keyed by `on`.\n" +
     "• on:'mem' — the power tool: answer 'what code is touching this RAM byte?' OR extract a frame-accurate event timeline (music-driver note onsets, physics arcs). Reports every frame that changed a watched byte as {frame,offset,before,after,pc}. " +
-    "POWER FEATURES: `ranges:[{region,offset,length,label}]` watches MANY disjoint regions in ONE pass (identical frames); `onChange:'reset'|'increase'|'decrease'|'any'` edge filter (reset = counter-reload = the note-onset signal); `valueFilter:{min,max}`; `format:'series'` = compact columnar value-vs-frame curve (~10× smaller for a ramp); `sampleEvery`; `groupByPC` (collapse by sampled PC); `cheatLabels` (auto-name addresses from the cheat DB); `outputPath` streams all events as NDJSON. " +
+    "Extras: `ranges:[{region,offset,length,label}]` watches MANY disjoint regions in ONE pass (identical frames); `onChange:'reset'|'increase'|'decrease'|'any'` edge filter (reset = counter-reload = the note-onset signal); `valueFilter:{min,max}`; `format:'series'` = compact columnar value-vs-frame curve (~10× smaller for a ramp); `sampleEvery`; `groupByPC` (collapse by sampled PC); `cheatLabels` (auto-name addresses from the cheat DB); `outputPath` streams all events as NDJSON; `stopOnFirst` exits on the first match. " +
     "**CAVEAT: frame-level, not instruction-level (last value per frame); the sampled `pc` is a frame-boundary sample — for ISR-driven writes use breakpoint({on:'write', precision:'exact'}) for the real writer.**\n" +
     "• on:'range' — DISCOVERY: log EVERY instruction that reads or writes ANYWHERE in [start,end]. The fix for 'I don't know which PC touches this'. Returns {pc,address,value}[] + the actionable distinctPCs. (Ring-buffered: `truncated:true` if it overflows.)\n" +
     "• on:'pc' — DISCOVERY (coverage trace): record every DISTINCT PC executed within [start,end] — 'what code runs here?'. Log execution in the bank where you suspect the renderer lives during the moment it draws, then disassemble the PCs.",

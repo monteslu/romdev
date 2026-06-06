@@ -669,7 +669,7 @@ export function registerPlatformTools(server, z, sessionKey) {
         return jsonContent({
           platform: p,
           ...clampSlots(sprites),
-          note: "PC Engine SATB: 64 sprites, 16/32 wide × 16/32/64 tall. `tile` is the pattern code (16×16 cells in VRAM). `palette` 0-15 indexes the 16 SPR sub-palettes (inspectPalette area:'sprite'). priority bit = in-front-of-BG.",
+          note: "PC Engine SATB: 64 sprites, 16/32 wide × 16/32/64 tall. `tile` is the pattern code (16×16 cells in VRAM). `palette` 0-15 indexes the 16 SPR sub-palettes (palette({source:'live'}) area:'sprite'). priority bit = in-front-of-BG.",
         });
       }
 
@@ -839,7 +839,7 @@ export function registerPlatformTools(server, z, sessionKey) {
           platform: "msx", mode: "screen2",
           tilesAcross, tilesDown, totalTiles: tilesAcross * tilesDown,
           patternBytes: pattern.length, colorBytes: color.length,
-          note: "MSX screen-2 tiles = TWO tables: pattern.bin (1bpp, bit7=leftmost) and color.bin (per-row high-nibble=fg, low-nibble=bg color index into the fixed 16-color TMS9918 palette). DMA pattern.bin to the pattern-generator base and color.bin to the color-table base (see getRenderingContext for those VRAM addresses). Each 8-pixel ROW is limited to 2 colors — that's the classic MSX constraint.",
+          note: "MSX screen-2 tiles = TWO tables: pattern.bin (1bpp, bit7=leftmost) and color.bin (per-row high-nibble=fg, low-nibble=bg color index into the fixed 16-color TMS9918 palette). DMA pattern.bin to the pattern-generator base and color.bin to the color-table base (see background({view:'renderState'}) for those VRAM addresses). Each 8-pixel ROW is limited to 2 colors — that's the classic MSX constraint.",
         };
         if (inline) {
           msxOut.patternBase64 = Buffer.from(pattern).toString("base64");

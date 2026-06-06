@@ -291,20 +291,22 @@ export async function cheatsMakeCore({ platform, address, value, values, compare
 export function registerCheatTools(server, z, sessionKey) {
   server.tool(
     "cheats",
-    "Cheat lookup / search / apply / create — the cheat workflow for the loaded ROM. `op`: " +
-    "'lookup' (THIS game's known cheats from the bundled DB — a free crowd-sourced MAP: each RAM cheat is a " +
-    "LABELED RAM ADDRESS, each Game Genie/ROM cheat a LABELED CODE SITE; answers 'which byte holds X?' for free), " +
+    "Cheat lookup / search / apply / create for the loaded ROM. `op`: " +
+    "'lookup' (THIS game's known cheats from the bundled DB — returns labeled RAM addresses + Game Genie/ROM code " +
+    "sites, so it answers 'which byte holds X?' for free); " +
     "'search' (fuzzy-find a game by NAME when you don't have the exact No-Intro title — returns game names + cheat " +
-    "counts, then lookup the chosen one), 'apply' (enable a cheat on the LOADED game — pass a raw `code` or a `desc` " +
-    "from lookup), 'clear' (remove all active cheats), 'make' (CREATE a shareable code from an address+value). " +
+    "counts, then lookup the chosen one); " +
+    "'apply' (enable a cheat on the LOADED game — pass a raw `code` or a `desc` from lookup); " +
+    "'clear' (remove all active cheats); 'make' (CREATE a shareable code from an address+value). " +
     "TRUST: lookup matches by NAME/fuzzy similarity, NOT a verified CRC — a PROBABLE match. Labels are usually " +
-    "right, but a different region/revision can use different addresses — VERIFY before patching (apply + observe, " +
-    "or check the address in live memory with memory/watch). " +
-    "apply is NON-DESTRUCTIVE (volatile core state, exactly like RetroArch — the ROM file is never modified; reset / " +
-    "loadState / clear removes it) and a great VERIFIER (apply a label, screenshot, confirm the address). " +
-    "make emits the platform's NATIVE device code (never falsely 'Game Genie': NES/Genesis=Game Genie; SNES=Pro " +
-    "Action Replay+GG; GB/GBC=Game Genie(ROM)+GameShark(RAM); SMS/GG=Action Replay) + the raw ADDR:VAL, round-trip " +
-    "`verified`; RAM cheat = address+value, ROM/code cheat = also `compare` (the byte currently there — read it first).",
+    "right, but a different region/revision can use different addresses — VERIFY before patching: apply + observe, " +
+    "or check the address in live memory with memory/watch. " +
+    "apply is NON-DESTRUCTIVE (volatile core state; reset / loadState / clear removes it, the ROM file is never " +
+    "touched), so it doubles as the verifier — apply a label, screenshot, confirm. " +
+    "make emits the platform's NATIVE device code (not always 'Game Genie': NES/Genesis=Game Genie; SNES=Pro " +
+    "Action Replay+GG; GB/GBC=Game Genie(ROM)+GameShark(RAM); SMS/GG=Action Replay) plus the raw ADDR:VAL, all " +
+    "round-trip `verified`. RAM cheat = address+value; ROM/code cheat = also `compare` (the byte currently there — " +
+    "read it first).",
     {
       op: z.enum(["lookup", "search", "apply", "clear", "make"]).describe("lookup THIS game's DB cheats; search the DB by game name; apply a cheat live; clear all cheats; make a new code."),
       // lookup

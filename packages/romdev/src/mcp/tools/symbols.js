@@ -351,21 +351,28 @@ export async function listSymbolsCore({ dbg, map, max = 200 }) {
 function registerSymbolsTool(server, z) {
   server.tool(
     "symbols",
-    "Symbol/linker-map lookups for C/asm-built ROMs — resolve names ↔ addresses and see the memory layout, on EVERY " +
-    "platform with a debug build. `op`: 'resolve' | 'lookup' | 'map' | 'list' | 'addr'.\n" +
-    "DEBUG SOURCE (pass ONE; build({output:'romWithDebug'}) returns the right one): `dbg` = cc65 `.dbg` " +
-    "(NES/C64/Atari7800/Lynx/PCE); `map` = a linker map — auto-detects sdld `.map` (GB/GBC/SMS/GG/MSX) vs GNU ld `.map` " +
-    "(Genesis/m68k, the `mapText`/`symbols` field). So resolve/lookup/list/map all work across ALL 14 platforms now.\n" +
-    "'resolve' (name→address): the 1-call headless-assertion enabler — resolve a C global, then memory({op:'read'}) it. " +
+    "Symbol/linker-map lookups for C/asm-built ROMs — resolve names ↔ addresses and see the memory layout. " +
+    "`op`: 'resolve' | 'lookup' | 'map' | 'list' | 'addr'.\n" +
+    "DEBUG SOURCE for resolve/lookup/map/list (pass ONE; build({output:'romWithDebug'}) returns the right one): " +
+    "`dbg` = cc65 `.dbg` (NES/C64/Atari7800/Lynx/PCE); `map` = a linker map — auto-detects sdld `.map` " +
+    "(GB/GBC/SMS/GG/MSX) vs GNU ld `.map` (Genesis/m68k, the `mapText`/`symbols` field). So resolve/lookup/map/list " +
+    "cover 11 platforms (those listed). The 'addr' op is broader — it parses ANY sdld/ld65-VICE/GNU-ld map text, so it " +
+    "also reaches dasm (Atari 2600) and GBA/ARM.\n" +
+    "OP CHEAT-SHEET: resolve {dbg|map, name}; lookup {dbg|map, address}; map {dbg|map, platform?}; list {dbg|map, max?}; " +
+    "addr {pc, symbolsText|symbolsPath}.\n" +
+    "'resolve' (name→address): resolve a C global, then memory({op:'read'}) it for headless assertions. " +
     "**GENESIS: a work-RAM symbol comes back with `ramOffset` (the low 16 bits) + a `readHint` — read it via " +
-    "memory({op:'read', region:'system_ram', offset:ramOffset}).** cc65 C symbols become '_score' in the .dbg (tried automatically).\n" +
+    "memory({op:'read', region:'system_ram', offset:ramOffset}).** cc65 C symbols become '_score' in the .dbg (the " +
+    "underscored spelling is tried automatically).\n" +
     "'lookup' (address→symbol): which function/variable does this address fall inside?\n" +
-    "'map' (categorized layout): groups symbols by memory region (zeropage / system RAM / work_ram_mirror / code / data) " +
-    "so you find where variables landed without probing RAM. NES: cc65 reserves ZP $00-$01, so your first .res var lands at $02.\n" +
-    "'list': every symbol sorted by address — a layout overview.\n" +
-    "'addr' (PC→nearest preceding symbol): closes 'cpu({op:'read'}) gave me $01A7 — which C function?' on EVERY platform. " +
-    "Pass `symbolsText` (inline, from build({includeSymbols:true}) or the romWithDebug map) or `symbolsPath`. Auto-detects sdld " +
-    "(`XXXX  _name`, GB/GBC/SMS/GG/MSX), ld65 VICE (`al XXXX .name`, cc65), and GNU ld maps (Genesis/m68k + GBA/ARM).",
+    "'map' (categorized layout): groups symbols by CPU memory region (zeropage / stack / system RAM / ROM / " +
+    "work-RAM mirror / 'other') so you find where variables landed without probing RAM. Pass `platform` for the region " +
+    "labels. NES: cc65 reserves ZP $00-$01, so your first .res var lands at $02.\n" +
+    "'list': every symbol sorted by address.\n" +
+    "'addr' (PC→nearest preceding symbol): answers 'cpu({op:'read'}) gave me $01A7 — which C function?'. " +
+    "Pass `pc` plus `symbolsText` (inline, from build({includeSymbols:true}) or the romWithDebug map) or `symbolsPath`. " +
+    "Auto-detects GNU ld (Genesis/m68k + GBA/ARM), sdld (`XXXX  _name`, GB/GBC/SMS/GG/MSX), and ld65 VICE " +
+    "(`al XXXX .name`, cc65/dasm).",
     {
       op: z.enum(["resolve", "lookup", "map", "list", "addr"]).describe("resolve name→addr; lookup addr→sym; map = layout by region; list all; addr = PC→nearest symbol."),
       dbg: z.string().optional().describe("op=resolve/lookup/list/map: cc65 .dbg text from build({output:'romWithDebug'}) (NES/C64/Atari7800/Lynx/PCE). Pass this OR `map`."),

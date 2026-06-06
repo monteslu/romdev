@@ -253,20 +253,18 @@ export function registerFrameTools(server, z, sessionKey) {
   server.tool(
     "frame",
     "Advance the emulator and capture frames. `op`: 'step' | 'screenshot' | 'stepAndShot' | 'stepInstruction'.\n" +
-    "'step': advance N `frames` as fast as possible — NO pacing/audio/vsync. Cores run at WASM speed (NES ~6-15k " +
-    "fps, SNES/Genesis ~2-5k, GB ~10k+), so frames:3600 = 1 min of game time in ~5-30ms (cheaper than a " +
-    "screenshot). Don't be timid — skip a title with 300, a level with 7200; prefer ONE big call.\n" +
+    "'step': advance N `frames` as fast as possible — NO pacing/audio/vsync. Cores run at WASM speed, so frames:3600 " +
+    "(1 min of game time) finishes in ~5-30ms, cheaper than a screenshot. Don't be timid — skip a title with 300, a " +
+    "level with 7200; prefer ONE big call.\n" +
     "'screenshot': capture the latest frame. `format:'png'` (default, exact colors) or `'ascii'` (lossy chafa text " +
-    "render for agents that can't view images). `overlayBoxes` (png) draws a box per visible sprite (SNES+NES); " +
-    "`scale` (0<≤1) downscales (~75% fewer image tokens at 0.5 for routine 'did it change?' checks); ascii cols/" +
-    "rows/symbols/colors knobs in the param hints. " +
-    "**CHEAP VERIFY: for a binary pass/fail check (did the theme change? is the sprite there? did the HUD tick?) prefer " +
-    "scale:0.5 or format:'ascii' — and BETTER, read the one byte of state directly: symbols({op:'resolve', name}) → " +
-    "memory({op:'read'}) is a 1-byte assertion that costs no image tokens at all (works on every C platform incl. Genesis/GBA now).**\n" +
-    "'stepAndShot': step + screenshot in ONE round-trip — the drive-then-look loop.\n" +
-    "'stepInstruction': execute exactly ONE CPU instruction and stop (CPU-level single-step, finer than 'step'). Freezes " +
-    "the CPU right after the instruction; returns { pc }. Pair with cpu({op:'read'}) to watch registers change one " +
-    "instruction at a time while tracing a routine.\n" +
+    "render for agents that can't view images). `overlayBoxes` (png) draws a box per visible sprite (SNES+NES only); " +
+    "`scale` (0<≤1) downscales (~75% fewer image tokens at 0.5); ascii cols/rows/symbols/colors knobs in the param hints. " +
+    "**CHEAP VERIFY: for a binary pass/fail check (theme changed? sprite present? HUD ticked?) prefer scale:0.5 or " +
+    "format:'ascii' — BETTER, read the byte directly: symbols({op:'resolve', name}) → memory({op:'read'}) is a 1-byte " +
+    "assertion that costs zero image tokens.**\n" +
+    "'stepAndShot': step + screenshot in ONE round-trip — the drive-then-look loop. (No overlayBoxes/scale here — png only.)\n" +
+    "'stepInstruction': execute exactly ONE CPU instruction and stop (finer than 'step'); freezes the CPU one " +
+    "instruction later and returns { pc }. Pair with cpu({op:'read'}) to watch registers change while tracing a routine.\n" +
     "IMAGE CONTRACT (screenshot/stepAndShot): the image goes to `path` (default, returns {path}) OR inline:true — " +
     "you MUST pass one. Keeps PNGs out of context unless asked.",
     {

@@ -370,7 +370,7 @@ export function registerMemoryTools(server, z, sessionKey) {
     "OP CHEAT-SHEET (params each op uses): " +
     "read → {region, offset?, length?|offsets?, outputPath?|inline?}; " +
     "write → {region, offset, hex|base64}; " +
-    "readCart → {offset?, length?}; " +
+    "readCart → {offset?, length?, outputPath?|inline?}; " +
     "snapshot → {region, name, offset?, length?}; " +
     "diff → {region, name, view?}; " +
     "classify → {region?, offset?, length?}; " +
@@ -382,7 +382,7 @@ export function registerMemoryTools(server, z, sessionKey) {
     "• op:'snapshot' — capture a baseline of `region` (server RAM, keyed by `name`) to later diff. The 'which bytes did THIS event touch?' workflow: snapshot → trigger event → op:'diff'.\n" +
     "• op:'diff' — compare a region against a snapshot baseline → the CHANGED bytes. DEFAULT `view:'summary'` is a CLUSTERED summary (+ stride detection — '4 islands at stride 0x80' = a struct array) so a churny gameplay diff doesn't flood context; `view:'raw'` = the per-byte before/after list.\n" +
     "• op:'classify' — heuristically classify the bytes at an offset BEFORE you trust a 'found table'. **Kills the classic trap: a run that 'matches' your stats is often ASCII TEXT (bytes 82/79/68 = 'ROD' from a taunt string) or code.** Returns looksLike/printableRatio/entropy/asciiPreview/confidence.\n" +
-    "• op:'search' — seed the iterative RAM value search (Cheat Engine / RetroArch style): all addresses currently holding `value` (`size` 1/2/4 bytes, region's endianness). The primitive for 'the screen shows X, find its RAM address.' Far better than snapshot+diff for this.\n" +
+    "• op:'search' — seed the iterative RAM value search (Cheat Engine / RetroArch style): all addresses currently holding `value` (`size` 1/2/4 bytes, region's endianness). The primitive for 'the screen shows X, find its RAM address' — better than snapshot+diff for this.\n" +
     "• op:'searchNext' — narrow the active candidate list against CURRENT memory. `compare`: 'eq'/'gt'/'lt' (need `value`), 'changed'/'unchanged'/'inc'/'dec' (vs the previous read). Repeat until 1-2 remain, then confirm with op:'write'.",
     {
       op: z.enum(["read", "write", "readCart", "snapshot", "diff", "classify", "search", "searchNext"])

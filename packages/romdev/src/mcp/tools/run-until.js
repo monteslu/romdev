@@ -42,7 +42,10 @@ export function registerRunUntilTools(server, z, sessionKey) {
 
   server.tool(
     "runUntil",
-    "Step the emulator forward until a condition holds, or until maxFrames is reached. Use this instead of polling stepFrames + readMemory yourself — saves many round trips for 'play until X happens' workflows. Returns {conditionMet, framesStepped, finalValue?}.",
+    "Step the emulator forward until a condition holds, or until maxFrames is reached. Use this instead of polling stepFrames + readMemory yourself for 'play until X happens' workflows. " +
+      "condition.type is one of: 'memory' (byte at region/offset equals/notEquals a value, or mask hits when byte & mask is nonzero); 'memoryChanged' (any byte in offset..offset+length differs from start-of-call); 'framebufferChanged' (any pixel differs from start-of-call); 'framebufferPixel' (pixel x,y equals/notEquals an [r,g,b]). " +
+      "checkEvery throttles condition checks (and is the step batch size), so the actual stop frame can overshoot by up to checkEvery-1. " +
+      "Returns {conditionMet, framesStepped, finalValue} (finalValue is null when the condition was not met).",
     {
       condition: z.discriminatedUnion("type", [
         memoryCondition,

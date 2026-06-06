@@ -148,8 +148,9 @@ export function registerLospecTools(server, z, sessionKey) {
     "palette. `source`: 'live' | 'platformMaster' | 'lospec'.\n" +
     "'live': the loaded ROM's ACTIVE palette as a normalized {index,r,g,b}[] list + a PNG swatch sheet. NES (32: " +
     "16 BG + 16 sprite; `area`/`subPalette` filters), SNES (256, BGR555), Genesis (64 = 4 sub-palettes×16, grouped), " +
-    "GB/GBC, SMS/GG, Atari 2600 (4 active, beam-raced snapshot), 7800, C64 (16 fixed), GBA (256 BG + 256 OBJ). " +
-    "The color list is ALWAYS returned; the swatch PNG is path-or-inline.\n" +
+    "GB/GBC, SMS/GG, Atari 2600 (4 active, beam-raced snapshot), 7800, C64 (16 fixed), GBA (256 BG + 256 OBJ; `area` " +
+    "picks the bank), Lynx (16, Mikey), PCE (512 = 256 BG + 256 SPR; `area` picks the bank), MSX (16, V9938 or fixed " +
+    "TMS9918). The color list is ALWAYS returned; the swatch PNG is path-or-inline.\n" +
     "'platformMaster': the platform's full hardware master palette as `png` (default — the ImageMagick -remap " +
     "target), `lospec` JSON (LibreSprite), or `hex` text. `outputPath` writes to disk.\n" +
     "'lospec': a CC0 palette from lospec.com by `id` slug (e.g. 'kirokaze-gameboy', 'pico-8'); `asPlatform` snaps " +

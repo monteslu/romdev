@@ -774,25 +774,27 @@ export function registerRenderingContextTools(server, z, sessionKey) {
   server.tool(
     "background",
     "Background/tilemap inspection + render state, one tool keyed by `view`.\n" +
-    "• view:'map' — see the loaded ROM's background tile map. NES render:false returns DECODED structured data: " +
+    "• view:'map' — the loaded ROM's background tile map. NES render:false returns DECODED structured data: " +
     "a per-tile `tiles` grid, a per-tile `subPaletteGrid` (BG sub-palette 0-3, already decoded from the attribute " +
     "table so you never hand-decode the 2-bit-per-16×16-block format), and `distinctTiles`. `region:{x,y,w,h}` " +
     "(tiles) clips it; `attributesOnly:true` returns just the sub-palette grid + raw attr bytes; `tilesOnly:true` " +
     "just the tile grid (mutually exclusive). NES render:true returns a PNG composite. GB/GBC/SMS/GG/Genesis " +
     "return a PNG of the full BG plane/nametable (scroll shown but NOT applied); `which`/`window`/`plane` select " +
-    "the map. SNES needs the BG params (`tilemapBaseByte`/`tileBaseByte`/`bpp`/`mapWidth`/`mapHeight`) — snes9x " +
-    "doesn't expose PPU registers, so they default to a Mode-1 BG1 best-guess. PNG paths default to writing " +
-    "`outputPath` (or `inline:true`).\n" +
+    "the map. SNES returns a PNG but needs the BG params (`tilemapBaseByte`/`tileBaseByte`/`bpp`/`mapWidth`/`mapHeight`); " +
+    "they default to a Mode-1 BG1 best-guess — get the real ones from view:'renderState' first. " +
+    "Image paths require `outputPath` (or `inline:true`).\n" +
     "• view:'renderState' — decode the current PPU/VDP rendering state into structured fields + a plain-English " +
-    "`summary[]`. The big win: it tells you WHICH CHR/tile bank BG and sprites are fetching from right now, plus " +
-    "the file offset ready for patchFile — so you don't patch the wrong half of CHR. (NES decodes PPUCTRL/MASK/" +
-    "STATUS bit-by-bit + derived `chrFileOffsetForActiveBgBank`; for banked mappers, live `readMemory('nes_chr',...)` " +
-    "is authoritative.) `area` limits the summary. GOTCHA: step past startup (stepFrames(120)+) first — power-on " +
-    "PPU state is zeros and won't match the title screen.\n" +
+    "`summary[]`, including WHICH CHR/tile bank BG and sprites are fetching from right now plus the file offset " +
+    "ready for patchFile (so you don't patch the wrong half of CHR). NES decodes PPUCTRL/MASK/STATUS bit-by-bit + " +
+    "derived `chrFileOffsetForActiveBgBank` (for banked mappers, live `readMemory('nes_chr',...)` is authoritative). " +
+    "SNES decodes BG mode/layer tilemap+char bases/OBSEL from the snes_fillram register shadow. `area` limits the " +
+    "summary (bg/sprites/window/all). GOTCHA: step past startup (stepFrames(120)+) first — power-on PPU/VDP state " +
+    "won't match the title screen.\n" +
     "• view:'rendered' — map tile IDs → game assets: walk the current frame's BG nametable + OAM and return the set " +
     "of tile IDs actually being drawn ({background, sprite, combined}, each with ids/idsHex/ranges). ROM-hack trick: " +
     "call it at the title screen, then again in gameplay, and SUBTRACT the sets — what's unique to gameplay is your " +
-    "in-game art. SNES: pass `snesTilemapBaseByte` for BG (snes9x hides the PPU regs).",
+    "in-game art. SNES auto-scans every enabled BG layer from the live PPU registers; pass `snesTilemapBaseByte` " +
+    "(+`snesMapWidth`/`snesMapHeight`) only to scan one specific tilemap instead.",
     {
       view: z.enum(["map", "renderState", "rendered"])
         .describe("map=BG tilemap (decoded grid or PNG); renderState=decoded PPU/VDP state + which CHR bank is active; rendered=tile IDs actually drawn this frame."),

@@ -514,8 +514,9 @@ export function registerFontMapTools(server, z, sessionKey) {
     "`unknownChar` (default 0xFC = NES blank tile) and are listed in `unknownChars[]`.\n" +
     "'find' locates a string in a ROM via the map — decodes surrounding context and flags a likely length-prefix " +
     "byte before each match (catches the off-by-one where text has a leading length byte). Returns `fileOffset` " +
-    "(raw .nes), `prgFileOffset` (header-stripped), and the NES bank-aware `cpuAddress` + `bank` (pass both to " +
-    "disasm on a banked ROM).",
+    "(raw .nes), `prgFileOffset` (NES header-stripped), and a bank-aware `cpuAddress` when `platform` is " +
+    "nes/gb/gbc/genesis (+ `bank` on nes/gb/gbc — pass both to disasm on a banked ROM). SNES cpuAddress is left " +
+    "null (LoROM/HiROM mapper-dependent); use fileOffset there.",
     {
       op: z.enum(["learn", "encode", "find"]).describe("learn a font map; encode text→bytes; find a string in a ROM."),
       // shared

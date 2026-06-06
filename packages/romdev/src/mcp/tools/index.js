@@ -210,7 +210,7 @@ export function registerTools(server, z, sessionKey) {
   server.tool(
     "catalog",
     "Orient yourself, keyed by `op`.\n" +
-    "• op:'categories' (default) — the catalog of tool categories, each {name, description, useWhen[], loaded}. NOTE: by default this server registers EVERY tool at session start — you do NOT need to load anything before calling a tool. This is just a map of what exists, grouped by purpose. (Only in lean mode, ROMDEV_LEAN_TOOLS=1, are non-entry tools deferred.)\n" +
+    "• op:'categories' (default) — the catalog of tool categories, each {name, description, useWhen[], loaded}. This server registers EVERY tool at session start, so this is just a map grouped by purpose for orientation, NOT a gate — you do NOT need to load anything before calling a tool.\n" +
     "• op:'status' — a snapshot of the current session: which platform's core/ROM is in the running host (if any), current frame count, last-loaded media, loaded categories. Call this when you've lost context across many tool calls and want to re-ground.\n" +
     "• op:'whatsNew' — the recent CHANGELOG + an OLD→NEW tool RENAME TABLE. Call this FIRST if you're resuming work from a handoff written against an older server: pre-1.0 the surface is consolidated freely (no deprecated aliases), so a name you remember may now be an `op` on a domain tool. This maps them in one read instead of probing each tool.",
     {
