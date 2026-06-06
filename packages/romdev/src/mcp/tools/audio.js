@@ -77,13 +77,53 @@ export function registerAudioTools(server, z, sessionKey) {
       return jsonContent(out);
   }
 
+  // encodeAudio({target:'xgm2'}) — VGM music → compiled GENESIS XGM2 blob (SGDK XGM2_play).
+  async function encXgm2Music({ vgmPath, vgmBase64, name = "music", system = null, packed = true, outputCPath, outputBinPath }) {
+      const { vgmToXgm2C } = await import("romdev-xgm2");
+      let vgmBytes;
+      if (vgmPath) vgmBytes = await readFile(vgmPath);
+      else if (vgmBase64) vgmBytes = Buffer.from(vgmBase64, "base64");
+      else throw new Error("encodeAudio({target:'xgm2'}): pass `vgmPath` (a .vgm/.vgz on disk) or `vgmBase64`.");
+
+      let result;
+      try {
+        result = vgmToXgm2C(vgmBytes, name, { packed, system });
+      } catch (e) {
+        throw new Error(`encodeAudio({target:'xgm2'}): VGM→XGM2 conversion failed: ${e.message}. Confirm the input is a valid Mega Drive .vgm (SN76489 PSG and/or YM2612 FM).`);
+      }
+      const { blob, cSource, lenDefine } = result;
+
+      const out = {
+        platform: "genesis",
+        name,
+        xgm2Bytes: blob.length,
+        lenDefine,
+        note: `Compiled XGM2 music (${blob.length} B, 256-aligned). #include the C, then XGM2_play(${name}). ` +
+          `(PSG-only tracks coexist with XGM2 PCM SFX from encodeAudio({target:'xgm2pcm'}).)`,
+      };
+      if (outputCPath) {
+        await mkdir(path.dirname(outputCPath), { recursive: true });
+        await writeFile(outputCPath, cSource);
+        out.cPath = outputCPath;
+      } else {
+        out.cSource = cSource;
+      }
+      if (outputBinPath) {
+        await mkdir(path.dirname(outputBinPath), { recursive: true });
+        await writeFile(outputBinPath, Buffer.from(blob));
+        out.binPath = outputBinPath;
+      }
+      return jsonContent(out);
+  }
+
   server.tool(
     "encodeAudio",
-    "Encode an external audio clip into a platform's native sample format, one tool keyed by `target`.\n" +
+    "Encode an external audio clip into a platform's native sample/music format, one tool keyed by `target`.\n" +
     "• target:'brr' — raw 16-bit signed PCM (mono, LE) → SNES BRR (the SPC700's only sample format; 9-byte blocks ready to DMA into ARAM). Input `pcmBase64` or `pcmPath` (.pcm/.raw; strip the WAV header first if your source is .wav). `loop` sets the LOOP bit. Output `brrPath` (via `outputPath`) or `brrBase64`.\n" +
-    "• target:'xgm2pcm' — WAV (or raw s16le PCM) → GENESIS XGM2 PCM (SGDK's XGM2_playPCM format). Bakes the fiddly rules: 8-bit SIGNED mono, resampled to 13.3 kHz (or 6.65 kHz with `halfRate`), zero-padded to a multiple of 256 bytes. Emits a ready-to-#include 256-byte-aligned C array + `<NAME>_LEN` define by default. Input `wavPath`/`wavBase64` (or `format:'pcm16'` + `pcmRate` for headerless). Output `outputCPath` (.c) / `cSource` inline / `outputPcmPath` (raw .pcm).",
+    "• target:'xgm2pcm' — WAV (or raw s16le PCM) → GENESIS XGM2 PCM SAMPLE (SGDK's XGM2_playPCM, for SFX). Bakes the fiddly rules: 8-bit SIGNED mono, resampled to 13.3 kHz (or 6.65 kHz with `halfRate`), zero-padded to a multiple of 256 bytes. Emits a ready-to-#include 256-byte-aligned C array + `<NAME>_LEN` define by default. Input `wavPath`/`wavBase64` (or `format:'pcm16'` + `pcmRate` for headerless). Output `outputCPath` (.c) / `cSource` inline / `outputPcmPath` (raw .pcm).\n" +
+    "• target:'xgm2' — **GENESIS MUSIC: a `.vgm`/`.vgz` log → a COMPILED XGM2 blob you `XGM2_play()`.** This is the music sibling of xgm2pcm (which is sample SFX). `XGM2_play()` needs a compiled blob (split FM/PSG streams + sample table), NOT raw VGM — this does that compile (a pure-JS port of SGDK's `xgm2tool`; no Java). Emits a 256-aligned C array + `<NAME>_LEN`. PSG-only tracks coexist with XGM2 PCM SFX. Input `vgmPath` (.vgm/.vgz) or `vgmBase64`; `system` forces NTSC/PAL timing.",
     {
-      target: z.enum(["brr", "xgm2pcm"]).describe("brr=SNES BRR sample; xgm2pcm=Genesis XGM2 PCM sample (SGDK)."),
+      target: z.enum(["brr", "xgm2pcm", "xgm2"]).describe("brr=SNES BRR sample; xgm2pcm=Genesis XGM2 PCM sample SFX; xgm2=Genesis XGM2 MUSIC from a VGM (SGDK XGM2_play)."),
       // brr
       pcmBase64: z.string().optional().describe("target:'brr' — base64 raw 16-bit signed PCM (mono, LE)."),
       pcmPath: z.string().optional().describe("target:'brr' — absolute path to a raw PCM file (preferred over pcmBase64)."),
@@ -95,8 +135,13 @@ export function registerAudioTools(server, z, sessionKey) {
       halfRate: z.boolean().default(false).describe("target:'xgm2pcm' — encode for 6.65 kHz (XGM2_playPCMEx halfRate=TRUE); halves ROM size."),
       format: z.enum(["wav", "pcm16"]).default("wav").describe("target:'xgm2pcm' — 'wav' (parse RIFF) or 'pcm16' (raw s16le mono; then pass pcmRate)."),
       pcmRate: z.number().int().min(1).optional().describe("target:'xgm2pcm' — source sample rate (Hz), REQUIRED for format:'pcm16'."),
-      outputCPath: z.string().optional().describe("target:'xgm2pcm' — write the C source here and return path-only."),
+      outputCPath: z.string().optional().describe("target:'xgm2pcm'/'xgm2' — write the C source here and return path-only."),
       outputPcmPath: z.string().optional().describe("target:'xgm2pcm' — also/instead write the raw padded PCM bytes here."),
+      // xgm2 (music)
+      vgmPath: z.string().optional().describe("target:'xgm2' — absolute path to a .vgm or gzipped .vgz Mega Drive music log."),
+      vgmBase64: z.string().optional().describe("target:'xgm2' — base64 .vgm/.vgz bytes."),
+      system: z.enum(["ntsc", "pal"]).optional().describe("target:'xgm2' — force the timing flag (VGM offset 0x24): ntsc=60, pal=50. Omit to keep the VGM's own value."),
+      outputBinPath: z.string().optional().describe("target:'xgm2' — also/instead write the raw XGM2 blob (.xgc) here."),
       // shared
       outputPath: z.string().optional().describe("target:'brr' — write the .brr here and return path-only."),
     },
@@ -104,6 +149,7 @@ export function registerAudioTools(server, z, sessionKey) {
       switch (args.target) {
         case "brr":     return await encBrr(args);
         case "xgm2pcm": return await encXgm(args);
+        case "xgm2":    return await encXgm2Music(args);
         default: throw new Error(`encodeAudio: unknown target '${args.target}'`);
       }
     }),
