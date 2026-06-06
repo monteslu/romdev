@@ -127,14 +127,5 @@ export function registerLifecycleTools(server, z, sessionKey) {
     }),
   );
 
-  server.tool(
-    "getStatus",
-    "Get the current state of the host: platform, loaded media, frame count, paused state, framebuffer dimensions.",
-    {},
-    safeTool(async () => {
-      const host = getHostOrNull(sessionKey);
-      if (!host) return jsonContent({ loaded: false });
-      return jsonContent(host.getStatus());
-    }),
-  );
+  // getStatus folded into catalog({op:'status'}) (entry-tier, in index.js).
 }

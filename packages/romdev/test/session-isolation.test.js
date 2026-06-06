@@ -56,12 +56,12 @@ test("two MCP sessions own independent hosts; loadMedia in one is invisible to t
   assert.equal(loadA.isError, undefined, "session A loadMedia failed");
 
   // Session B has no host yet — getStatus should report loaded:false.
-  const statusB = await b.callTool({ name: "getStatus", arguments: {} });
+  const statusB = await b.callTool({ name: "catalog", arguments: { op: "status" } });
   const parsedB = JSON.parse(statusB.content[0].text);
   assert.equal(parsedB.loaded, false, "session B sees A's loaded media — leak: " + JSON.stringify(parsedB));
 
   // Session A's status confirms it DOES have media.
-  const statusA = await a.callTool({ name: "getStatus", arguments: {} });
+  const statusA = await a.callTool({ name: "catalog", arguments: { op: "status" } });
   const parsedA = JSON.parse(statusA.content[0].text);
   assert.equal(parsedA.loaded, true, "session A lost its media");
   assert.equal(parsedA.platform, "nes");
@@ -90,8 +90,8 @@ test("two MCP sessions own independent hosts; loadMedia in one is invisible to t
   // we CAN confirm independent screenshot pipelines: step A 60 frames,
   // B 0 frames, then read each frame counter from getStatus.
   await a.callTool({ name: "frame", arguments: { op: "step",  frames: 60 } });
-  const sA = JSON.parse((await a.callTool({ name: "getStatus", arguments: {} })).content[0].text);
-  const sB = JSON.parse((await b.callTool({ name: "getStatus", arguments: {} })).content[0].text);
+  const sA = JSON.parse((await a.callTool({ name: "catalog", arguments: { op: "status" } })).content[0].text);
+  const sB = JSON.parse((await b.callTool({ name: "catalog", arguments: { op: "status" } })).content[0].text);
   assert.equal(sA.frameCount, 60, "A frameCount: " + sA.frameCount);
   assert.equal(sB.frameCount, 0,  "B frameCount: " + sB.frameCount + " — bleed-through from A");
 });

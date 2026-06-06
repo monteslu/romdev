@@ -69,6 +69,8 @@ export const MERGE_MAP = {
   build: { absorbs: ["buildSource", "buildSourceWithDebug", "buildProject", "runSource"], axis: "output" },
   // ── romPatch (8-op ROM-hack toolkit; patchFile/patchRom from rom-id.js, spliceCHR from splice-chr.js, relocateBlock/makeStoredBlock/findPointerTo from reinject.js, findFreeSpace from free-space.js, diffRoms from diff-roms.js) ──
   romPatch: { absorbs: ["patchFile", "patchRom", "spliceCHR", "relocateBlock", "makeStoredBlock", "findFreeSpace", "findPointerTo", "diffRoms"], axis: "op" },
+  // ── catalog (orient; listCategories + getStatus, both entry-tier in index.js) ──
+  catalog: { absorbs: ["listCategories", "getStatus"], axis: "op" },
 };
 
 /** Every OLD tool name that the consolidation removes (absorbed into a new tool). */
