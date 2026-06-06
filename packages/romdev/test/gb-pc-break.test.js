@@ -83,7 +83,7 @@ test("GB PC breakpoint + read watch + single-step (gambatte sm83)", { timeout: 2
   assert.equal(pcNum, writerPC, "getCPUState PC != frozen PC (pc-writeback gotcha!): " + JSON.stringify(regs).slice(0, 200));
 
   // 4) stepInstruction single-steps.
-  const stepRes = toJSON(await client.callTool({ name: "stepInstruction", arguments: {} }));
+  const stepRes = toJSON(await client.callTool({ name: "frame", arguments: { op: "stepInstruction" } }));
   assert.equal(stepRes.notSupported, undefined, "stepInstruction notSupported");
   assert.equal(stepRes.stepped, true, "single-step failed: " + JSON.stringify(stepRes));
   assert.notEqual(stepRes.pcRaw, writerPC, "single-step did not advance PC: " + JSON.stringify(stepRes));

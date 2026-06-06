@@ -5,6 +5,7 @@ import { PNG } from "pngjs";
 import { getHost } from "../state.js";
 import { imageContent, jsonContent, safeTool } from "../util.js";
 import { decodeOAM, decodePpuRegs, ppuRegsPopulated } from "../../platforms/snes/ppu.js";
+import { stepInstructionCore } from "./watch-memory.js";
 
 // Get the platform's visible sprites in the generic shape, or null if
 // not supported. Drives the screenshot overlay AND any future agents
@@ -251,7 +252,7 @@ export function registerFrameTools(server, z, sessionKey) {
 
   server.tool(
     "frame",
-    "Advance the emulator and capture frames. `op`: 'step' | 'screenshot' | 'stepAndShot'.\n" +
+    "Advance the emulator and capture frames. `op`: 'step' | 'screenshot' | 'stepAndShot' | 'stepInstruction'.\n" +
     "'step': advance N `frames` as fast as possible — NO pacing/audio/vsync. Cores run at WASM speed (NES ~6-15k " +
     "fps, SNES/Genesis ~2-5k, GB ~10k+), so frames:3600 = 1 min of game time in ~5-30ms (cheaper than a " +
     "screenshot). Don't be timid — skip a title with 300, a level with 7200; prefer ONE big call.\n" +
@@ -260,10 +261,13 @@ export function registerFrameTools(server, z, sessionKey) {
     "`scale` (0<≤1) downscales (~75% fewer image tokens at 0.5 for routine 'did it change?' checks); ascii cols/" +
     "rows/symbols/colors knobs in the param hints.\n" +
     "'stepAndShot': step + screenshot in ONE round-trip — the drive-then-look loop.\n" +
+    "'stepInstruction': execute exactly ONE CPU instruction and stop (CPU-level single-step, finer than 'step'). Freezes " +
+    "the CPU right after the instruction; returns { pc }. Pair with cpu({op:'read'}) to watch registers change one " +
+    "instruction at a time while tracing a routine.\n" +
     "IMAGE CONTRACT (screenshot/stepAndShot): the image goes to `path` (default, returns {path}) OR inline:true — " +
     "you MUST pass one. Keeps PNGs out of context unless asked.",
     {
-      op: z.enum(["step", "screenshot", "stepAndShot"]).describe("step frames; capture a screenshot; or step+capture in one call."),
+      op: z.enum(["step", "screenshot", "stepAndShot", "stepInstruction"]).describe("step frames; capture a screenshot; step+capture in one call; or single-step one CPU instruction."),
       frames: z.number().int().min(1).max(1_000_000).default(1).describe("op=step/stepAndShot: frames to advance (1-1,000,000). Don't be conservative — 36000 (10 min) usually completes in <1s."),
       format: z.enum(["png", "ascii"]).default("png").describe("op=screenshot: 'png' (default, real image) or 'ascii' (lossy text render)."),
       path: z.string().optional().describe("op=screenshot/stepAndShot: absolute path to write to (required unless inline:true)."),
@@ -277,9 +281,10 @@ export function registerFrameTools(server, z, sessionKey) {
     },
     safeTool(async (args) => {
       switch (args.op) {
-        case "step":        return doStep(args);
-        case "screenshot":  return doScreenshot(args);
-        case "stepAndShot": return doStepAndShot(args);
+        case "step":            return doStep(args);
+        case "screenshot":      return doScreenshot(args);
+        case "stepAndShot":     return doStepAndShot(args);
+        case "stepInstruction": return await stepInstructionCore(sessionKey);
         default: throw new Error(`frame: unknown op '${args.op}'`);
       }
     }),

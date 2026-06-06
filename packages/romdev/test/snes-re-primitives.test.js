@@ -121,7 +121,7 @@ test("SNES RE primitives: setRegister + watchRange + logPCRange (+callSubroutine
   const regsNow = toJSON(await client.callTool({ name: "cpu", arguments: { op: "read",  platform: "snes", cpu: "main" } }));
   const pcNow = (regsNow.pcRaw ?? regsNow.pc ?? regsNow.PC ?? regsNow.registers?.PC);
   // Single-step from the set PC; the PC must advance (the set address executed).
-  const step = toJSON(await client.callTool({ name: "stepInstruction", arguments: {} }));
+  const step = toJSON(await client.callTool({ name: "frame", arguments: { op: "stepInstruction" } }));
   assert.equal(step.notSupported, undefined, "stepInstruction notSupported");
   assert.equal(step.stepped, true, "single-step from set PC failed: " + JSON.stringify(step));
   assert.notEqual(step.pcRaw, writerPC, "PC did not advance from the set address — S9xSetPCBase refresh failed: " + JSON.stringify(step));

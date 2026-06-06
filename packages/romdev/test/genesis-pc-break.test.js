@@ -94,7 +94,7 @@ test("Genesis PC breakpoint + read watch + single-step (gpgx m68k)", { timeout: 
   //    SOURCE isn't a fixed addr, so instead prove the read watch fires on a
   //    known-read address — 0xFF2000 is also read-back-free, so watch the ROM
   //    read path via the write target is not ideal. Simpler: single-step works.
-  const stepRes = toJSON(await client.callTool({ name: "stepInstruction", arguments: {} }));
+  const stepRes = toJSON(await client.callTool({ name: "frame", arguments: { op: "stepInstruction" } }));
   assert.equal(stepRes.notSupported, undefined, "stepInstruction reported notSupported");
   assert.equal(stepRes.stepped, true, "single-step failed: " + JSON.stringify(stepRes));
   assert.ok(stepRes.pcRaw >= 0, "single-step returned no pc");
