@@ -29,6 +29,8 @@ import { GifReader } from "omggif";
 
 import { jsonContent, safeTool } from "../util.js";
 import { rgbaToTiles } from "../../platforms/common/image-to-tiles.js";
+import { intentZod } from "../../platforms/common/intent.js";
+import { crossPlatformSpriteImportImpl } from "./sprite-pipeline.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────
 
@@ -665,76 +667,77 @@ async function loadSpriteSheetImpl({ pngPath, manifestPath, platform, outputDir,
 
 // ─── MCP tool registration ───────────────────────────────────────
 
-export function registerArtLoaderTools(server, z) {
+export function registerArtLoaderTools(server, z, sessionKey) {
   server.tool(
-    "loadTilemap",
-    "Parse a Tiled `.tmj` JSON map and return its layers + object placements as platform-native bytes. " +
-    "Use when your level/map was authored in Tiled (https://www.mapeditor.org/, BSD-licensed). " +
-    "Tile layers come back as a per-cell `data` blob (1 or 2 bytes per cell after subtracting the tileset's firstgid) " +
-    "+ an `empty_mask` bitfield so 'no tile' is distinguishable from 'tile 0'. Object layers come back as " +
-    "named arrays of {x,y,w,h,name,type,properties} — useful for declaring spawn points / triggers in the editor. " +
-    "If your Tiled map uses zstd compression, re-export with zlib/gzip/uncompressed. Pass `outputDir` to write " +
-    "blobs to disk instead of returning base64 inline.",
+    "importArt",
+    "Import art from an editor file or a source ROM into the target platform's native tile bytes, one tool keyed by `from`. " +
+    "Shared spine: `platform` (controls the tile encoding — NES planar 2bpp, GB interleaved 2bpp, SNES planar-pairs 4bpp, Genesis packed 4bpp, ...), " +
+    "`outputDir` (write blobs to disk instead of base64-inlining), and for the editor formats `emit:'raw'|'c'|'ca65'|'rgbasm'` " +
+    "(raw=base64; c=`const unsigned char tiles[]`; ca65=`.byte $NN` cc65/NES; rgbasm=`db $NN` GB/GBC — each tile preceded by a slice-naming comment) " +
+    "+ `emitDefines` (name→tile-id constants). All editor loaders dedup tiles and return tile_bytes + per-frame/slice/cell `tile_indices`.\n" +
+    "• from:'aseprite' — parse a LibreSprite/Aseprite `.ase` (`path`). Each slice (or each frame if no slices, via `slice_strategy`) becomes a named tile group; tags → named frame ranges with delays. Indexed mode preserves the artist's palette.\n" +
+    "• from:'gif' — decode a GIF (`path`) to per-frame tile data + delays. `frame_indices` extracts a subset. (omggif doesn't apply GIF disposal — export with Disposal:Replace.)\n" +
+    "• from:'texturepacker' — import a TexturePacker-style PNG+JSON sheet (`pngPath`+`manifestPath`; LibreSprite: Export Sprite Sheet > JSON-Hash). Named deduped tile groups per frame; `meta.frameTags` surfaced; `dedup:'merge'|'preserve'|'preserve-blanks'` (preserve keeps a fixed slot-per-slice grid).\n" +
+    "• from:'tiled' — parse a Tiled `.tmj` map (`path`). Tile layers → per-cell `data` blob (+ `empty_mask` so 'no tile' ≠ 'tile 0'); object layers → named {x,y,w,h,name,type,properties} arrays for spawn points/triggers. (zstd-compressed maps: re-export zlib/gzip/uncompressed.)\n" +
+    "• from:'rom' — the demake lift: extract a rectangular tile-grid region from ANOTHER platform's ROM and re-encode it for `platform` in one call (extract+crop+quantize+optional manifest). Source: `sourceBank` (NES, easiest) or `sourceOffset`; `sourceTileX/Y/W/H` index the rendered grid. For a real multi-sprite character use sprites({op:'capture'}) instead.",
     {
-      path: z.string().describe("Absolute path to the .tmj file."),
-      platform: z.string().describe("Target platform id (informational — tilemaps are platform-agnostic byte streams; the platform is recorded but doesn't change the layout)."),
-      outputDir: z.string().optional().describe("If given, write data/empty blobs as <layerName>.{data,empty}.bin in this directory. Otherwise data is returned base64-inline."),
+      from: z.enum(["aseprite", "gif", "texturepacker", "tiled", "rom"])
+        .describe("aseprite=.ase file; gif=GIF animation; texturepacker=PNG+JSON sheet; tiled=.tmj map; rom=lift a tile region from a source ROM (demake)."),
+      platform: z.string().describe("Target platform id — controls the tile byte encoding. (from:'rom' = the TARGET platform; pass the source platform as `sourcePlatform`.)"),
+      outputDir: z.string().optional().describe("Write tile blobs to disk here instead of returning base64 inline (editor formats)."),
+      emit: z.enum(["raw", "c", "ca65", "rgbasm"]).default("raw").describe("from:aseprite/gif/texturepacker — output format for tile_bytes."),
+      emitDefines: z.boolean().default(false).describe("from:aseprite/texturepacker (emit≠'raw') — also emit name→tile-id defines in the chosen syntax."),
+      // editor-file inputs
+      path: z.string().optional().describe("from:aseprite/gif/tiled — absolute path to the .ase / .gif / .tmj file."),
+      pngPath: z.string().optional().describe("from:texturepacker — absolute path to the sheet .png."),
+      manifestPath: z.string().optional().describe("from:texturepacker — absolute path to the sheet .json (TexturePacker-style)."),
+      slice_strategy: z.enum(["slices", "frames", "grid"]).default("slices").describe("from:aseprite — chop the canvas by 'slices' (default), 'frames', or 'grid' (not yet implemented)."),
+      frame_indices: z.array(z.number().int().min(0)).optional().describe("from:gif — subset of frame indices to extract (default: all)."),
+      dedup: z.enum(["merge", "preserve", "preserve-blanks"]).default("merge").describe("from:texturepacker — 'merge' (default, collapse identical tiles), 'preserve' (fixed slot per slice), 'preserve-blanks' (dedup non-blank, unique slot per blank)."),
+      // from:'rom' (cross-platform demake lift)
+      sourceRom: z.string().optional().describe("from:rom — absolute path to the source ROM file."),
+      sourcePlatform: z.string().optional().describe("from:rom — source platform id (nes, gb, gbc, snes, sms, gg, genesis, ...)."),
+      sourceBank: z.number().int().min(0).optional().describe("from:rom NES: 4 KB CHR bank index. Conflicts with sourceOffset."),
+      sourceOffset: z.number().int().min(0).optional().describe("from:rom — raw byte offset into the ROM for tile data (non-NES sources, unless sourceBank)."),
+      sourceTileX: z.number().int().min(0).optional().describe("from:rom — leftmost tile column of the source region."),
+      sourceTileY: z.number().int().min(0).optional().describe("from:rom — topmost tile row of the source region."),
+      sourceTileW: z.number().int().min(1).optional().describe("from:rom — width of the region in tile cells."),
+      sourceTileH: z.number().int().min(1).optional().describe("from:rom — height of the region in tile cells."),
+      outputPng: z.string().optional().describe("from:rom — absolute path to write the quantized output PNG."),
+      outputManifest: z.string().optional().describe("from:rom — optional TexturePacker-style manifest path (required to feed into a later from:'texturepacker' import)."),
+      quantizeMode: z.enum(["frequency", "luminance", "platform-master"]).optional().describe("from:rom — palette quantization strategy (default from intent; rom-hack SKIPS quantize entirely)."),
+      tilesPerRow: z.number().int().min(1).max(64).default(16).describe("from:rom — source bank grid layout before cropping (16 matches the extract default)."),
+      namePrefix: z.string().default("tile").describe("from:rom — per-frame name prefix in the emitted manifest."),
+      paletteFromEmulator: z.boolean().optional().describe("from:rom — color the source extract from the live emulator palette (NES/SNES/Genesis; needs a loaded ROM matching sourcePlatform). Default from intent."),
+      paletteIndex: z.number().int().min(0).max(15).default(0).describe("from:rom — subpalette index for the source-side live-palette read (NES 0-7, SNES 0-15, Genesis 0-3)."),
+      intent: intentZod(z).optional().describe("from:rom ONLY (REQUIRED there) — 'homebrew' (live/default palette + platform-master quantize) or 'rom-hack' (grayscale, frequency quantize, source bytes preserved). The editor formats ignore it."),
     },
-    safeTool(async (args) => jsonContent(await loadTilemapImpl(args))),
-  );
-
-  server.tool(
-    "loadAsepriteSheet",
-    "Parse a LibreSprite / Aseprite `.ase` file (https://libresprite.github.io/, GPLv2 fork of pre-EULA Aseprite) " +
-    "and return a deduped tile bank + named tile groups for the target platform. Each slice (or each frame if " +
-    "no slices) becomes an entry in `tiles` with `tile_indices` pointing into `tile_bytes`. Tags become named " +
-    "frame ranges with per-frame delays. Indexed (.ase color mode = indexed) input preserves the artist's " +
-    "palette via paletteHint; RGBA mode falls back to nearest-neighbour against the platform master palette. " +
-    "Pass `outputDir` to write the tile blob to disk.",
-    {
-      path: z.string().describe("Absolute path to the .ase file."),
-      platform: z.string().describe("Target platform — controls the tile byte encoding (NES planar 2bpp, GB interleaved 2bpp, SNES planar-pairs 4bpp, Genesis packed 4bpp, etc.)."),
-      slice_strategy: z.enum(["slices", "frames", "grid"]).default("slices").describe("How to chop the canvas: 'slices' (default) uses named slices from the .ase, 'frames' treats each animation frame as one slice, 'grid' is not yet implemented."),
-      outputDir: z.string().optional().describe("If given, write `tiles.bin` here and return its path instead of base64."),
-      emit: z.enum(["raw", "c", "ca65", "rgbasm"]).default("raw").describe("Output format for `tile_bytes`. See loadSpriteSheet for the full description."),
-      emitDefines: z.boolean().default(false).describe("Emit name→tile-id defines in the chosen syntax. See loadSpriteSheet."),
-    },
-    safeTool(async (args) => jsonContent(await loadAsepriteSheetImpl(args))),
-  );
-
-  server.tool(
-    "loadGifAnimation",
-    "Decode a GIF and return per-frame platform-native tile data. Every editor (LibreSprite, GIMP, Pixelorama, " +
-    "etc.) exports GIF. Returns a single deduped `tile_bytes` blob + `frame_tile_indices[frame][cell]` pointing " +
-    "into it + per-frame delays. Note: omggif (the parser we use) doesn't apply GIF disposal; export with " +
-    "Disposal: Replace if your frames replace the previous one entirely. Pass `frame_indices` to extract only " +
-    "specific frames.",
-    {
-      path: z.string().describe("Absolute path to the .gif file."),
-      platform: z.string().describe("Target platform — controls the tile byte encoding."),
-      frame_indices: z.array(z.number().int().min(0)).optional().describe("Optional. Subset of frame indices to extract. Default: all frames."),
-      outputDir: z.string().optional().describe("If given, write `tiles.bin` here instead of returning base64 inline."),
-      emit: z.enum(["raw", "c", "ca65", "rgbasm"]).default("raw").describe("Output format for `tile_bytes`. See loadSpriteSheet."),
-    },
-    safeTool(async (args) => jsonContent(await loadGifAnimationImpl(args))),
-  );
-
-  server.tool(
-    "loadSpriteSheet",
-    "Use this to import a TexturePacker-style PNG+JSON sprite sheet (LibreSprite: File > Export Sprite " +
-    "Sheet > JSON-Hash). Returns named, deduped tile groups per frame in the platform's tile encoding; " +
-    "animation tags from `meta.frameTags` are surfaced; indexed PNGs keep the artist's palette. Both hash " +
-    "and array manifest shapes work, and the manifest is minimal — only `frames` with per-entry " +
-    "`frame:{x,y,w,h}` is required (all other TexturePacker fields are optional/ignored).",
-    {
-      pngPath: z.string().describe("Absolute path to the sheet .png."),
-      manifestPath: z.string().describe("Absolute path to the sheet .json (TexturePacker-style)."),
-      platform: z.string().describe("Target platform — controls the tile byte encoding."),
-      outputDir: z.string().optional().describe("If given, write `tiles.bin` here instead of returning base64."),
-      emit: z.enum(["raw", "c", "ca65", "rgbasm"]).default("raw").describe("Output format for `tile_bytes`. 'raw' (default) returns base64. 'c' emits a `const unsigned char tiles[]` array. 'ca65' emits `.byte $NN` lines (cc65/NES). 'rgbasm' emits `db $NN` lines (Game Boy / GBC). Each tile is preceded by a comment naming the slices that map to it."),
-      emitDefines: z.boolean().default(false).describe("If true (and emit≠'raw'), include a `defines` field with name→tile-id constants in the chosen syntax (`#define T_FOO 0` for C, `T_FOO = 0` for ca65, `T_FOO EQU 0` for rgbasm). Drops straight into a header."),
-      dedup: z.enum(["merge", "preserve", "preserve-blanks"]).default("merge").describe("Tile-deduplication strategy. 'merge' (default) — collapse byte-identical tiles to one bank slot (ROM-size optimal). 'preserve' — every tile gets its own slot, regardless of content equality. Use when you need a fixed N-slot grid where slot K always = slot K (e.g. animation frames where slot index = frame index). 'preserve-blanks' — dedup non-blank tiles, but blank tiles each get a unique slot."),
-    },
-    safeTool(async (args) => jsonContent(await loadSpriteSheetImpl(args))),
+    safeTool(async (args) => {
+      switch (args.from) {
+        case "aseprite": {
+          if (!args.path) throw new Error("importArt({from:'aseprite'}): `path` (the .ase file) is required.");
+          return jsonContent(await loadAsepriteSheetImpl(args));
+        }
+        case "gif": {
+          if (!args.path) throw new Error("importArt({from:'gif'}): `path` (the .gif file) is required.");
+          return jsonContent(await loadGifAnimationImpl(args));
+        }
+        case "texturepacker": {
+          if (!args.pngPath || !args.manifestPath) throw new Error("importArt({from:'texturepacker'}): `pngPath` and `manifestPath` are required.");
+          return jsonContent(await loadSpriteSheetImpl(args));
+        }
+        case "tiled": {
+          if (!args.path) throw new Error("importArt({from:'tiled'}): `path` (the .tmj file) is required.");
+          return jsonContent(await loadTilemapImpl(args));
+        }
+        case "rom": {
+          if (!args.sourceRom || !args.sourcePlatform) throw new Error("importArt({from:'rom'}): `sourceRom` and `sourcePlatform` are required.");
+          if (!args.outputPng) throw new Error("importArt({from:'rom'}): `outputPng` is required.");
+          // crossPlatformSpriteImportImpl expects `targetPlatform`; map our spine `platform` onto it.
+          return jsonContent(await crossPlatformSpriteImportImpl({ ...args, targetPlatform: args.platform, sessionKey }));
+        }
+        default: throw new Error(`importArt: unknown from '${args.from}'`);
+      }
+    }),
   );
 }

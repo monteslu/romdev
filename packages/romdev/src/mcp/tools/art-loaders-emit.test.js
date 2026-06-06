@@ -64,8 +64,8 @@ test("loadSpriteSheet emit='c' produces a C array with tile-name comments", asyn
   try {
     const { pngPath, manifestPath } = makeTwoTileSheet(dir);
     const r = toJSON(await client.callTool({
-      name: "loadSpriteSheet",
-      arguments: { pngPath, manifestPath, platform: "gb", emit: "c" },
+      name: "importArt",
+      arguments: { from: "texturepacker", pngPath, manifestPath, platform: "gb", emit: "c" },
     }));
     assert.equal(r.emit, "c");
     assert.ok(r.tile_source, "no tile_source emitted");
@@ -85,8 +85,8 @@ test("loadSpriteSheet emit='rgbasm' produces db lines suitable for RGBDS", async
   try {
     const { pngPath, manifestPath } = makeTwoTileSheet(dir);
     const r = toJSON(await client.callTool({
-      name: "loadSpriteSheet",
-      arguments: { pngPath, manifestPath, platform: "gb", emit: "rgbasm" },
+      name: "importArt",
+      arguments: { from: "texturepacker", pngPath, manifestPath, platform: "gb", emit: "rgbasm" },
     }));
     assert.match(r.tile_source, /^\s*db \$[0-9a-fA-F]{2}/m);
     assert.match(r.tile_source, /; tile 0/);
@@ -101,8 +101,8 @@ test("loadSpriteSheet emit='ca65' + emitDefines emits both source + defines", as
   try {
     const { pngPath, manifestPath } = makeTwoTileSheet(dir);
     const r = toJSON(await client.callTool({
-      name: "loadSpriteSheet",
-      arguments: { pngPath, manifestPath, platform: "nes", emit: "ca65", emitDefines: true },
+      name: "importArt",
+      arguments: { from: "texturepacker", pngPath, manifestPath, platform: "nes", emit: "ca65", emitDefines: true },
     }));
     assert.match(r.tile_source, /^\s*\.byte \$[0-9a-fA-F]{2}/m);
     assert.ok(r.defines, "expected defines field");
@@ -137,14 +137,14 @@ test("loadSpriteSheet dedup='preserve': every named slice gets a unique tile slo
     }));
     // Default merge → 1 unique tile.
     const merge = toJSON(await client.callTool({
-      name: "loadSpriteSheet",
-      arguments: { pngPath, manifestPath, platform: "gb" },
+      name: "importArt",
+      arguments: { from: "texturepacker", pngPath, manifestPath, platform: "gb" },
     }));
     assert.equal(merge.tile_count, 1, "merge should collapse to 1 tile");
     // Preserve → 2 unique tiles (one per slice).
     const preserve = toJSON(await client.callTool({
-      name: "loadSpriteSheet",
-      arguments: { pngPath, manifestPath, platform: "gb", dedup: "preserve" },
+      name: "importArt",
+      arguments: { from: "texturepacker", pngPath, manifestPath, platform: "gb", dedup: "preserve" },
     }));
     assert.equal(preserve.tile_count, 2, "preserve should keep 2 distinct slots");
     assert.notEqual(preserve.tiles.a.tile_indices[0], preserve.tiles.b.tile_indices[0]);
@@ -159,8 +159,8 @@ test("loadSpriteSheet emit='raw' (default) is unchanged from pre-R15 behavior", 
   try {
     const { pngPath, manifestPath } = makeTwoTileSheet(dir);
     const r = toJSON(await client.callTool({
-      name: "loadSpriteSheet",
-      arguments: { pngPath, manifestPath, platform: "gb" },
+      name: "importArt",
+      arguments: { from: "texturepacker", pngPath, manifestPath, platform: "gb" },
     }));
     assert.equal(r.emit, undefined, "no emit field when default");
     assert.equal(r.tile_source, undefined, "no tile_source field when emit:raw");

@@ -324,8 +324,7 @@ const TOOL_OWNER = {
   findPointerTo: "assets", makeStoredBlock: "assets", relocateBlock: "assets",
 
   text: "assets",
-  loadTilemap: "assets", loadAsepriteSheet: "assets", loadGifAnimation: "assets", loadSpriteSheet: "assets",
-  crossPlatformSpriteImport: "assets",
+  importArt: "assets",
   palette: "debug",
   // project category
   scaffold: "project",
