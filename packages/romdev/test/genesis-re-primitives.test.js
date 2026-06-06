@@ -109,7 +109,7 @@ test("Genesis RE primitives: callSubroutine + watchRange + logPCRange + watchDma
 
   // ── item 1: callSubroutine drives reg_copy and the copy lands (run LAST — it
   //    hijacks the CPU; sandbox:false leaves it at the sentinel) ──
-  await client.callTool({ name: "writeMemory", arguments: { region: "system_ram", offset: dstOff, hex: "0000000000000000" } });
+  await client.callTool({ name: "memory", arguments: { op: "write", region: "system_ram", offset: dstOff, hex: "0000000000000000" } });
   const cs = toJSON(await client.callTool({
     name: "callSubroutine",
     arguments: { pc: regCopy, regs: { 8: srcblob, 9: dstCpu, 0: 3 }, maxFrames: 60, sandbox: false },
@@ -117,7 +117,7 @@ test("Genesis RE primitives: callSubroutine + watchRange + logPCRange + watchDma
   assert.equal(cs.notSupported, undefined, "callSubroutine notSupported");
   assert.equal(cs.returned, true, "callSubroutine did not return: " + JSON.stringify(cs));
   assert.notEqual(cs.watchdog, true, "normal routine should NOT trip the watchdog: " + JSON.stringify(cs));
-  const dstAfter = toJSON(await client.callTool({ name: "readMemory", arguments: { region: "system_ram", offset: dstOff, length: 8 } }));
+  const dstAfter = toJSON(await client.callTool({ name: "memory", arguments: { op: "read", region: "system_ram", offset: dstOff, length: 8 } }));
   // gpgx work-RAM is host-LE word-byte-swapped, so CAFE BABE 1122 3344 reads as
   // fecabeba22114433. Assert the swapped form (proves the copy ran correctly).
   assert.equal(dstAfter.hex.toLowerCase(), "fecabeba22114433", "callSubroutine copy wrong: " + dstAfter.hex);

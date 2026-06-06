@@ -61,7 +61,7 @@ test("Atari 7800 callSubroutine watchdog force-stops an infinite loop (prosystem
   toJSON(await client.callTool({ name: "frame", arguments: { op: "step",  frames: 60 } }));
 
   const mem = toJSON(await client.callTool({
-    name: "readMemory", arguments: { region: "system_ram", offset: PTR, length: 2 },
+    name: "memory", arguments: { op: "read", region: "system_ram", offset: PTR, length: 2 },
   }));
   const bytes = mem.hex ? mem.hex.match(/../g).map((h) => parseInt(h, 16)) : null;
   assert.ok(bytes && bytes.length >= 2, "readMemory $1800 returned no bytes: " + JSON.stringify(mem));
