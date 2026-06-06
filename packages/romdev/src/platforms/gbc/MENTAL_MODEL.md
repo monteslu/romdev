@@ -13,7 +13,7 @@ runtime + tools, but a custom build that bypasses them hits exactly
 the same wall.
 
 1. **Cartridge header must be FULLY patched, not just logo + checksums.**
-   `buildSource` / `runSource` do this for you at build time: every byte
+   `build({output:'rom'})` / `build({output:'run'})` do this for you at build time: every byte
    at $0134..$014C is filled, and on `platform:"gbc"` the CGB flag at
    $0143 is set to $80 (CGB-aware + DMG-compatible). You do **not** run
    `patchGbHeader` on a freshly built ROM. Reach for `patchGbHeader` only
@@ -68,8 +68,8 @@ The CGB boot ROM checks header byte **`$0143`**:
 - `$80` → CGB-enhanced mode (color works, DMG-compat fallback)
 - `$C0` → CGB-only mode (refuses to boot on a DMG)
 
-**Every bundled GBC scaffold is built with `$0143 = $80`** — `buildSource`
-/ `runSource` set this automatically at build time when `platform:"gbc"`,
+**Every bundled GBC scaffold is built with `$0143 = $80`** — `build({output:'rom'})`
+/ `build({output:'run'})` set this automatically at build time when `platform:"gbc"`,
 so a freshly built `.gbc` boots in color with no extra step. (Build it as
 `platform:"gb"` instead and the flag stays `$00` → DMG green-shade mode,
 and OCPS/BCPS writes do nothing.)
@@ -146,7 +146,7 @@ Joypad is identical to DMG — `JOYP` ($FF00), row-select multiplex, active-low
 
 ### Driving input over MCP
 
-gambatte maps `setInput` button names **straight through** — verified live, no
+gambatte maps `input({op:'set'})` button names **straight through** — verified live, no
 inversion: `{a}`→A, `{b}`→B, `{start}`/`{select}`, plus the d-pad (spatial
 east→A, west→B). So `setInput({ a: true })` presses GBC A as expected — unlike
 the genesis_plus_gx platforms (Genesis/SMS/GG), there's no surprise here.

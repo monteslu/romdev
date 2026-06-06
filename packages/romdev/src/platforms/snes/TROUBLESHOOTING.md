@@ -79,20 +79,20 @@ wrong — they read the live PPU registers (OBSEL/TM) and OAM/CGRAM:
 
 Common causes, in the order the tools will point you to:
 
-1. **OBJ layer disabled on the main screen.** `getRenderingContext`'s
+1. **OBJ layer disabled on the main screen.** `background({view:'renderState'})`'s
    `obj.enabledMain` is false → you never set TM ($212c) bit 4. In
    PVSnesLib `setScreenOn()` + the OAM helpers normally handle this; if you
    poked registers directly you may have clobbered it.
 2. **You called `oamSet()` but not `oamUpdate()`.** PVSnesLib's `oamSet`
    writes a RAM-side shadow buffer; `oamUpdate()` DMAs it to OAM. Without
-   it the PPU sees stale OAM. (`inspectSprites` reads real OAM, so if it
+   it the PPU sees stale OAM. (`sprites({op:'inspect'})` reads real OAM, so if it
    shows your sprite but the screen doesn't, this is it.)
 3. **Sprite Y is in the off-screen range.** Y≥$E0 is the "hide" convention;
-   `inspectSprites` reports those as `renderable:false` with
+   `sprites({op:'inspect'})` reports those as `renderable:false` with
    `hiddenReason:"parked off-screen-top"`. A sprite you forgot to position
    may sit at Y=0 (visible) or wherever uninitialized OAM left it.
 4. **Garbage / flashing colors = unintended OBJ palette line.** You used
-   palette line 1..3 but only uploaded line 0. `inspectSprites` WARNS via
+   palette line 1..3 but only uploaded line 0. `sprites({op:'inspect'})` WARNS via
    `uninitializedObjPalettes` / `suspiciousObjPalettes` (+ `objPaletteReport`)
    — and it catches MORE than all-zero lines: a line that's a flat fill, a
    smooth default-looking ramp, or simply referenced *above* the contiguous
@@ -101,8 +101,8 @@ Common causes, in the order the tools will point you to:
    sprites at an authored line.
 5. **No sprite tile data uploaded.** `oamInitGfxSet` is the canonical
    "upload sprite tiles + palette to VRAM" call. Forget it and OAM points at
-   garbage tiles. `inspectSprites`'s `tileVramAddr` tells you where the
-   sprite's tile is — cross-check with `inspectPatternTiles` at that base.
+   garbage tiles. `sprites({op:'inspect'})`'s `tileVramAddr` tells you where the
+   sprite's tile is — cross-check with `tiles({as:'png'})` at that base.
 
 See MENTAL_MODEL.md → "The OBJ stable-path recipe" for the layout that
 avoids all five.
@@ -204,5 +204,5 @@ It's not yet bundled in romdev's WASM toolchain. Workflow:
    .incbin "mysprite.pal"
    ```
 
-(romdev's `buildSource` accepts binary `.pic` / `.pal` blobs
+(romdev's `build({output:'rom'})` accepts binary `.pic` / `.pal` blobs
 as sibling resources.)

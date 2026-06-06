@@ -36,11 +36,11 @@ Mikey handles:
   `joy_read(JOY_1)` + `JOY_LEFT/RIGHT/UP/DOWN/BTN_1/BTN_2` macros.
 
 **Live debug:** `getAudioState({chip:"mikey"})` decodes the 4 audio voices
-(volume, period→freq→note, LFSR state); `inspectPalette` reads the 16-entry
-palette; `getRenderingContext` shows DISPCTL + the display base address;
-`getCPUState` reads the 65C02; `findWriter` is the write watchpoint. **Sprites
+(volume, period→freq→note, LFSR state); `palette({source:'live'})` reads the 16-entry
+palette; `background({view:'renderState'})` shows DISPCTL + the display base address;
+`cpu({op:'read'})` reads the 65C02; `breakpoint({on:'write'})` is the write watchpoint. **Sprites
 are the exception** — the Lynx has no fixed OAM (sprites are SCB linked lists
-walked by Suzy), so `inspectSprites` returns the SCB list head ($FC10/$FC11) and
+walked by Suzy), so `sprites({op:'inspect'})` returns the SCB list head ($FC10/$FC11) and
 you walk the chain over `system_ram`, rather than reading a sprite table.
 
 ## Frame heartbeat (cc65 + tgi)
@@ -216,12 +216,12 @@ for multi-Lynx multiplayer but no second controller on one unit.
 
 ### Driving input over MCP
 
-handy maps `setInput` button names **straight through** — verified live, no
+handy maps `input({op:'set'})` button names **straight through** — verified live, no
 inversion: `{a}`→A (outer), `{b}`→B (inner). Spatial east→A, south→B; Opt1/Opt2
 map to `{start}`/`{select}`. So `setInput({ a: true })` presses Lynx A as
 expected. ⚠ Note: the Lynx hardware register `$FCB0` is **active-HIGH** (1 =
 pressed, opposite most platforms) — that only matters if you read the register
-directly; the `setInput` names themselves are normal.
+directly; the `input({op:'set'})` names themselves are normal.
 
 ## Color
 

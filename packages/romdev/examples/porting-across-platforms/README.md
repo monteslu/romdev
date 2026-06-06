@@ -52,8 +52,8 @@ sprites, on the constrained ones).
    The game logic is the same C; the `stage_sprites()` / draw routine is what
    changes per platform.
 3. **Read the platform's `MENTAL_MODEL.md` + `TROUBLESHOOTING.md`** (via
-   `getPlatformDoc`) before writing its render layer — they lead with that
+   `platform({op:'doc'})`) before writing its render layer — they lead with that
    platform's specific footgun.
-4. **Verify visually, not just by exit code.** `runSource` returns a screenshot;
-   `inspectSprites` / `getRenderingContext` / `readMemory` turn "blank screen"
+4. **Verify visually, not just by exit code.** `build({output:'run'})` returns a screenshot;
+   `sprites({op:'inspect'})` / `background({view:'renderState'})` / `memory({op:'read'})` turn "blank screen"
    into a concrete diagnosis. "It compiled" means nothing until you see a frame.

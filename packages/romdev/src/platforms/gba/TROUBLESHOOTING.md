@@ -5,7 +5,7 @@ When something's broken. Read MENTAL_MODEL.md first
 
 ## ⚠️ ROM compiles + loads but the screen never updates (frozen on frame 1)
 
-**Single most common GBA gotcha.** Symptom: `runSource` returns a
+**Single most common GBA gotcha.** Symptom: `build({output:'run'})` returns a
 black screen (or only the very first frame's contents, never any
 sprite/animation update). You added `VBlankIntrWait()` to the main
 loop — but the BIOS function halts the CPU **forever** waiting for a
@@ -82,7 +82,7 @@ the libsysbase dependency.
 #### 0. Just use the default libtonc runtime (easiest)
 
 `tte_write("Hello\n")` works out of the box. Drop the `runtime: "libgba"`
-flag from your `buildSource` call and use `#include <tonc.h>` instead
+flag from your `build({output:'rom'})` call and use `#include <tonc.h>` instead
 of `#include <gba.h>`.
 
 #### 1. mGBA's BIOS debug interface (works on either runtime)
@@ -129,7 +129,7 @@ iprintf "just works."
 ## Adding sound to a scaffold
 
 Both runtimes bundle `gba_sfx.h` + `gba_sfx.c` next to your `main.c`
-(courtesy of `createProject`). The shape:
+(courtesy of `scaffold({op:'project'})`). The shape:
 
 ```c
 #include "gba_sfx.h"
@@ -245,6 +245,6 @@ is identical either way; just smaller bundle.
 
 ## "Save states don't work on `.gba` ROMs"
 
-mGBA save states work — `saveState` / `loadState` MCP tools should
+mGBA save states work — `state({op:'save'})` / `state({op:'load'})` MCP tools should
 function on any loaded GBA ROM. If you find a specific game where they
 don't, file an issue — most likely a mGBA-side bug, not ours.

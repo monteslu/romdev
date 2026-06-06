@@ -18,7 +18,7 @@ The build succeeds and the ROM boots, so it looks like a logic bug, but it's
 codegen — `PC` ends up stuck near `$002B`, sprites/tiles never appear, OAM
 stays zero. **Fix:** use the bundled `memcpy_vram(dst, src, n)` (in every
 project's `gb_runtime.c`) for ALL copies into VRAM/`__xdata`, never a raw
-for-loop. `buildSource` with `lint:"strict"` also flags the raw pattern.
+for-loop. `build({output:'rom'})` with `lint:"strict"` also flags the raw pattern.
 
 ## ⚠ "Loop never ends / dead code after a loop" — uint8 loop-bound trap
 
@@ -48,7 +48,7 @@ LCDC = LCDC_LCD_ON | LCDC_OBJ_ON | LCDC_TILE_DATA_LO;   /* THEN turn on */
 ```
 Also make sure `oam_dma_init_hram()` ran (lcd_init_default does it) so the DMA
 routine executes from HRAM. The bundled `hello_sprite` template shows this exact
-order. Diagnose with `inspectSprites` / `getRenderingContext` if a screenshot is
+order. Diagnose with `sprites({op:'inspect'})` / `background({view:'renderState'})` if a screenshot is
 just flat color.
 
 ## "ROM boots into green-shade DMG mode, not color"
@@ -56,7 +56,7 @@ just flat color.
 Header byte `$0143` isn't `$80`. The CGB boot ROM checks this byte
 and falls back to DMG mode when it's `$00`.
 
-When you build with `platform:"gbc"`, `buildSource` / `runSource`
+When you build with `platform:"gbc"`, `build({output:'rom'})` / `build({output:'run'})`
 **auto-fix the header** — Nintendo logo, header + global checksums,
 and `$0143 = $80` (CGB-enhanced) — so a freshly built `.gbc` already
 boots in color. You do **not** call `patchGbHeader` for that.

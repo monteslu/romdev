@@ -13,7 +13,7 @@ check these first. All five have shipped fixes in the bundled runtime
 + tools, but a custom build that bypasses them hits exactly the same wall.
 
 1. **Cartridge header must be FULLY patched, not just logo + checksums.**
-   `buildSource` / `runSource` do this for you at build time (they run
+   `build({output:'rom'})` / `build({output:'run'})` do this for you at build time (they run
    rgbfix on the linked ROM): valid Nintendo logo, header + global
    checksums, cart type / ROM-RAM size, and the CGB flag at $0143 — set
    to $00 for `.gb` and $80/$C0 for `.gbc`. Getting $0143 wrong is the
@@ -119,7 +119,7 @@ running a CGB-aware ROM, the DMG registers are ignored.
 - `0x80` = CGB-aware, DMG-compatible (recommended default)
 - `0xC0` = CGB-only (won't boot on DMG)
 
-You normally don't touch this byte by hand: `buildSource` / `runSource`
+You normally don't touch this byte by hand: `build({output:'rom'})` / `build({output:'run'})`
 set it from the platform you build for ($00 for `platform:"gb"`, $80/$C0
 for `platform:"gbc"`). To force a value, set it in your `gb_crt0.s`
 header section, or call `patchGbHeader({path, cgb:true})` on the built
@@ -175,13 +175,13 @@ out of "row select bit determines nybble".
 
 ### Driving input over MCP
 
-gambatte maps `setInput` button names **straight through** — verified live, no
+gambatte maps `input({op:'set'})` button names **straight through** — verified live, no
 inversion: `{a}`→A, `{b}`→B, `{start}`/`{select}`, plus the d-pad. The spatial
 names also resolve (east→A, west→B). So `setInput({ a: true })` presses GB A as
 expected — unlike the genesis_plus_gx platforms (Genesis/SMS/GG), there's no
 surprise here. (Same for **GBC** — it shares the gambatte core.)
 
-## What `createProject` copies into your project
+## What `scaffold({op:'project'})` copies into your project
 
 `createProject({platform:"gb"|"gbc", template:...})` writes these files
 into your project directory. **They're yours** — every byte that compiles
@@ -198,8 +198,8 @@ is in the repo. Edit, fork, replace; nothing is auto-injected at build time.
 | `README.md` | Build invocation + "rebuild outside MCP" instructions. |
 
 Build calls explicitly reference these files via `sourcesPaths` /
-`includePaths` / `crt0Path` + `codeLoc: 0x150`. `buildSource` /
-`runSource` then fix up the cart header automatically (logo, checksums,
+`includePaths` / `crt0Path` + `codeLoc: 0x150`. `build({output:'rom'})` /
+`build({output:'run'})` then fix up the cart header automatically (logo, checksums,
 CGB flag), so the ROM loads under gambatte with no extra step. Use
 `patchGbHeader({path})` (MCP tool) or `node patch-header.js <rom>` (CLI)
 only on a ROM the build pipeline didn't produce. See your project's

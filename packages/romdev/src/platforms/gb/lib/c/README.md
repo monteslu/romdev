@@ -18,7 +18,7 @@ Just `#include "gb_hardware.h"` and (optionally) `#include "gb_runtime.h"` —
 both work in any GB/GBC C build the agent submits. Caller-supplied files
 of the same name win on collision, so you can override.
 
-**Cart header is auto-fixed at build time.** `buildSource` / `runSource`
+**Cart header is auto-fixed at build time.** `build({output:'rom'})` / `build({output:'run'})`
 run rgbfix on the linked GB/GBC ROM — valid Nintendo logo at $0104,
 header checksum at $014D, global checksum at $014E, cartridge-type /
 RAM-size bytes, and the CGB flag at $0143 ($00 for `.gb`, $80/$C0 for
@@ -32,7 +32,7 @@ didn't produce, or to override a field:
   Fixes up / overrides the header of an existing ROM on disk (title, cart
   type, ROM/RAM size, CGB flag, etc.).
 - `node patch-header.js out.gb` — standalone Node script, copied into
-  every GB project by `createProject`. Same logic, no MCP needed.
+  every GB project by `scaffold({op:'project'})`. Same logic, no MCP needed.
 - `rgbfix -v -p 0 out.gb` — what the build pipeline runs under the hood;
   RGBDS asm projects can invoke it directly.
 
@@ -48,7 +48,7 @@ didn't produce, or to override a field:
 
 ## Project templates
 
-Bootstrap a working game-loop skeleton with `createProject`:
+Bootstrap a working game-loop skeleton with `scaffold({op:'project'})`:
 
 ```js
 createProject({
@@ -76,7 +76,7 @@ diagnosed as an emscripten stack overflow on 2026-05-25; fixed at the
 build level. Patterns that used to require `unroll.h` workarounds
 compile cleanly now.
 
-`buildSource` runs a **pre-flight linter** that catches C89 violations
+`build({output:'rom'})` runs a **pre-flight linter** that catches C89 violations
 (mid-block declarations, C99 inline for-loop counters) before SDCC's
 own misleading error messages. Hits come back as warnings in the
 `issues[]` array tagged `stage: "lint"`.

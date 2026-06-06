@@ -72,7 +72,7 @@ Check in this order:
    accepting the boundary.
 
 3. **PPUMASK.0 is "greyscale mode."** Set it accidentally and every
-   color is mapped to nearest grey. Check via `getRenderingContext`.
+   color is mapped to nearest grey. Check via `background({view:'renderState'})`.
    ```js
    getRenderingContext({})    // "grayscale" should be false
    ```
@@ -153,9 +153,9 @@ and tiny structs — it's not style, it's the 512 B ceiling.)
 
 On NES, the NMI handler DMAs `shadow_oam` → real OAM at the *start* of
 each vblank, so sprites you stage on frame N first appear when frame
-N+1 renders. `runSource` now steps one extra frame on NES before the
+N+1 renders. `build({output:'run'})` now steps one extra frame on NES before the
 screenshot so it matches your staged OAM — but if you script frames
-manually (`stepFrames` then `screenshot`), add one extra `stepFrames(1)`
+manually (`frame({op:'step'})` then `frame({op:'screenshot'})`), add one extra `stepFrames(1)`
 after staging to see the current sprite positions.
 
 ## "readMemory(nes_chr) returns same bytes for offset 0 and offset 4096"
@@ -168,7 +168,7 @@ is running a stale WASM:
 # Check the timestamp of the bundled fceumm wasm in your install:
 stat -c '%y' node_modules/romdev-core-fceumm/wasm/fceumm_libretro.wasm
 ```
-Workaround if you can't restart: `inspectPatternTiles` reads CHR
+Workaround if you can't restart: `tiles({as:'png'})` reads CHR
 via a different path and was unaffected throughout.
 
 ## "Globals read garbage / `_nmi_counter` never advances"

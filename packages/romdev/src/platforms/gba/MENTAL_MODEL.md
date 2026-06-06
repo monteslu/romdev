@@ -6,8 +6,8 @@ this is the "what's going on" version.
 
 ## Runtimes (R28)
 
-Two C runtimes ship bundled. Pass `runtime:` to `buildSource` /
-`runSource` to pick:
+Two C runtimes ship bundled. Pass `runtime:` to `build({output:'rom'})` /
+`build({output:'run'})` to pick:
 
 - **`"libtonc"` (default)** — Tonc-tutorial aligned. `#include <tonc.h>`,
   TTE (Tonc Text Engine) for text via `tte_init_chr4c_default` +
@@ -105,7 +105,7 @@ the inverted byte so pressed = 1.
 
 ### Driving input over MCP
 
-mGBA maps `setInput` button names **straight through** — verified live, no
+mGBA maps `input({op:'set'})` button names **straight through** — verified live, no
 inversion: `{a}`→A, `{b}`→B, `{l}`→L, `{r}`→R, `{start}`/`{select}`, plus the
 d-pad. So `setInput({ a: true })` presses GBA A as expected — unlike the
 genesis_plus_gx platforms (Genesis/SMS/GG), there's no surprise here.
@@ -125,8 +125,8 @@ maxmod (separate library, not bundled here).
 
 **Debugging sound:** `getAudioState({chip:"gba"})` decodes the live APU —
 per-channel freq→note/duty/volume for the 4 tone channels plus the 2 Direct
-Sound FIFO states. Pair with `inspectSprites`/`inspectPalette`/
-`getRenderingContext`/`getCPUState` (ARM7) and `findWriter` for the rest of the
+Sound FIFO states. Pair with `sprites({op:'inspect'})`/`palette({source:'live'})`/
+`background({view:'renderState'})`/`cpu({op:'read'})` (ARM7) and `breakpoint({on:'write'})` for the rest of the
 live-debug loop.
 
 **For scaffold-level sfx**, the libtonc runtime ships a minimal

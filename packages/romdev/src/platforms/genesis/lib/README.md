@@ -137,7 +137,7 @@ then `loadCategory({category:"debug"})`:
 | `readMemory({region:"genesis_z80_ram"})` | 8 KB Z80 sound CPU RAM |
 | `dumpState({path})` | Full savestate blob for forensic inspection |
 
-Pair `screenshot({overlayBoxes:true})` with `inspectSprites` for
+Pair `screenshot({overlayBoxes:true})` with `sprites({op:'inspect'})` for
 "is the GPU rendering sprites where I think they are" visual debugging.
 
 ## ROM file extension

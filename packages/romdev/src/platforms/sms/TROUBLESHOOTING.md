@@ -16,7 +16,7 @@ Fix — press the button you actually mean:
 
 Prefer the spatial names or `pressButton({button:'1'|'2'})` (they resolve
 correctly per platform). `getInputLayout({platform:'sms'})` has the full map.
-(Note: `setInput` takes a `ports` array — `{ports:[{b:true}]}`, not a bare
+(Note: `input({op:'set'})` takes a `ports` array — `{ports:[{b:true}]}`, not a bare
 `{b:true}`. Same inversion on Game Gear.)
 
 ## "ROM builds but the screen is blank / black"
@@ -127,7 +127,7 @@ matters.
 ## "Save states don't restore VDP state"
 
 genesis_plus_gx (which we use for SMS) snapshots VDP/CRAM/VRAM
-fully. If you find a sprite missing after `loadState`, the cause
+fully. If you find a sprite missing after `state({op:'load'})`, the cause
 is usually game-side: your shadow OAM lives in WRAM, which IS
 snapshotted, but your `oam_dma_flush`/`sms_sat_upload`-equivalent
 fires *next frame* — so the very first frame after load may show
