@@ -43,7 +43,6 @@ import { registerRenderingContextTools } from "./rendering-context.js";
 import { registerTraceVramSourceTools } from "./trace-vram-source.js";
 import { registerRunUntilTools } from "./run-until.js";
 import { registerWatchMemoryTools } from "./watch-memory.js";
-import { registerWhichTilesTools } from "./which-tiles.js";
 import { registerAddressToSymbolTools } from "./address-to-symbol.js";
 import { registerRecordTools } from "./record.js";
 import { registerTileInspectTools } from "./tile-inspect.js";
@@ -111,10 +110,9 @@ const CATEGORIES = [
       registerSymbolTools(s, z, k);            // buildSourceWithDebug, resolveSymbol, lookupAddress, ...
       registerDisasmTools(s, z, k);            // disassemble, disassembleRom
       registerFindReferencesTools(s, z, k);    // findReferences
-      registerRenderingContextTools(s, z, k);  // getRenderingContext
+      registerRenderingContextTools(s, z, k);  // background{view} (map/renderState/rendered)
       registerTraceVramSourceTools(s, z, k);   // traceVramSource (Genesis VRAM-DMA source)
       registerTileInspectTools(s, z, k);       // tile/CHR inspection helpers
-      registerWhichTilesTools(s, z, k);        // whichTilesAreRendered
       registerAddressToSymbolTools(s, z, k);   // addressToSymbol — PC → C function name
       registerCheatTools(s, z, k);             // gameCheats (labeled RAM/code map), applyCheat, clearCheats
     },
@@ -313,15 +311,13 @@ const TOOL_OWNER = {
   readMemory: "memory", writeMemory: "memory",
   // debug category
   inspectPatternTiles: "debug", sprites: "debug",
-  inspectBackgroundMap: "debug", convertImageToTiles: "debug",
+  background: "debug", convertImageToTiles: "debug",
   imageToTilemap: "debug",
   getCPUState: "debug", audioDebug: "debug",
   buildSourceWithDebug: "debug", symbols: "debug",
   disasm: "debug",
   cheats: "debug",
-  getRenderingContext: "debug",
   inspectTile: "debug",
-  whichTilesAreRendered: "debug",
   // assets category
   pcmToBrr: "assets", wavToXgm2Pcm: "assets",
   cart: "assets",

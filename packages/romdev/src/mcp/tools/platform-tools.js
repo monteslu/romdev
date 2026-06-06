@@ -17,6 +17,7 @@ export let inspectPaletteCore = async () => { throw new Error("platform-tools co
 export let getPlatformMasterPaletteCore = async () => { throw new Error("platform-tools cores not initialized — registerPlatformTools must run first"); };
 export let getAudioStateCore = async () => { throw new Error("platform-tools cores not initialized — registerPlatformTools must run first"); };
 export let inspectSpritesCore = async () => { throw new Error("platform-tools cores not initialized — registerPlatformTools must run first"); };
+export let inspectBackgroundMapCore = async () => { throw new Error("platform-tools cores not initialized — registerPlatformTools must run first"); };
 
 // Image-output contract: a PNG image goes to disk (path) OR comes back
 // inline (inline:true). No path + not inline → error. The structured
@@ -719,42 +720,10 @@ export function registerPlatformTools(server, z, sessionKey) {
       throw new Error(`inspectSprites not yet wired for platform '${p}'. Supported: nes, snes, genesis, sms, gg, gb, gbc, atari2600, atari7800, c64, gba, pce, msx. (Lynx returns the SCB list head — it has no fixed OAM.)`);
   };
 
-  server.tool(
-    "inspectBackgroundMap",
-    "Use this to see the loaded ROM's background tile map. NES render:false returns DECODED structured data — " +
-    "a per-tile `tiles` grid, a per-tile `subPaletteGrid` (BG sub-palette 0-3, already decoded from the " +
-    "attribute table so you never hand-decode the 2-bit-per-16×16-block format), and `distinctTiles`. Pass " +
-    "`region:{x,y,w,h}` (in tiles) to get just a sub-rectangle, or `attributesOnly:true` for just the " +
-    "sub-palette grid + raw attr bytes. NES render:true returns a PNG composite. GB/GBC/SMS/GG/Genesis return " +
-    "a PNG composite of the full BG plane/nametable (scroll shown but NOT applied). `which`/`window`/`plane` " +
-    "select the map. SNES needs the BG params (`tilemapBaseByte`/`tileBaseByte`/`bpp`/`mapWidth`/`mapHeight`) " +
-    "because snes9x doesn't expose PPU registers — they default to a Mode-1 BG1 best-guess. " +
-    "For PNG paths (NES render:true, GB/GBC/Genesis/SMS/GG/SNES): DEFAULT writes the PNG to outputPath and " +
-    "returns {imagePath}; pass inline:true for the image in the response. NES render:false is small when " +
-    "`region`/`attributesOnly` is used; for a full-screen decode pass `outputPath` to write the grids to disk.",
-    {
-      platform: z.string().optional(),
-      outputPath: z.string().optional().describe("PNG paths: absolute path for the composite PNG (required unless inline:true). NES render:false: if given, write the full decoded JSON (tiles+subPaletteGrid) here and return only a compact summary + distinctTiles."),
-      inline: z.boolean().default(false).describe("If true, return the BG image in the response instead of writing to disk (image-producing paths only). Default false."),
-      render: z.boolean().default(false).describe("NES: if true, return a rendered PNG composite instead of decoded structured data. GB/GBC/Genesis: always renders a PNG; this flag is ignored."),
-      region: z.object({
-        x: z.number().int().min(0).max(31),
-        y: z.number().int().min(0).max(29),
-        w: z.number().int().min(1).max(32),
-        h: z.number().int().min(1).max(30),
-      }).optional().describe("NES render:false only: return just this tile sub-rectangle (clipped to 32×30). Omit for the whole nametable. Slashes payload when you only care about one region."),
-      attributesOnly: z.boolean().default(false).describe("NES render:false only: return just the decoded subPaletteGrid + raw attribute table (no tiles grid). Smallest payload for 'which sub-palette does this region use?'. Mutually exclusive with tilesOnly."),
-      tilesOnly: z.boolean().default(false).describe("NES render:false only: return just the tile-index grid + distinctTiles (no subPalette annotation). Cheapest 'what tiles are here?' read. Mutually exclusive with attributesOnly."),
-      which: z.number().int().min(0).max(1).default(0).describe("NES: which 1KB nametable (0 = $2000, 1 = $2400). GB/GBC: 0 = $9800 (default), 1 = $9C00."),
-      window: z.boolean().default(false).describe("GB/GBC only: if true, render the Window tile map base (follows LCDC.6) instead of the BG map base."),
-      plane: z.enum(["A", "B"]).default("A").describe("Genesis only: which scroll plane to render — 'A' (default) or 'B'."),
-      tilemapBaseByte: z.number().int().min(0).default(0).describe("SNES only: byte offset into VRAM of the BG tilemap (BGxSC base). Default 0. snes9x doesn't expose PPU regs so this can't be auto-detected — pass your game's BG1 tilemap address."),
-      tileBaseByte: z.number().int().min(0).default(0).describe("SNES only: byte offset into VRAM of tile 0 (the BG character base / BGxNBA). Default 0."),
-      bpp: z.union([z.literal(2), z.literal(4), z.literal(8)]).default(4).describe("SNES only: tile bit-depth. Mode 1 BG1/BG2 = 4bpp (default), BG3 = 2bpp."),
-      mapWidth: z.union([z.literal(32), z.literal(64)]).default(32).describe("SNES only: tilemap width in tiles (32 or 64, per BGxSC size bits)."),
-      mapHeight: z.union([z.literal(32), z.literal(64)]).default(32).describe("SNES only: tilemap height in tiles (32 or 64)."),
-    },
-    safeTool(async ({ platform, render, region, attributesOnly, tilesOnly, which, window, plane, tilemapBaseByte, tileBaseByte, bpp, mapWidth, mapHeight, outputPath, inline }) => {
+  // inspectBackgroundMap lives in the `background` tool (rendering-context.js)
+  // now — extracted here as a live-binding core so the router can call it
+  // without disturbing the other handlers registerPlatformTools owns.
+  inspectBackgroundMapCore = async ({ platform, render, region, attributesOnly, tilesOnly, which, window, plane, tilemapBaseByte, tileBaseByte, bpp, mapWidth, mapHeight, outputPath, inline }) => {
       const host = getHost(sessionKey);
       const p = resolvePlatform(host, platform);
       if (attributesOnly && tilesOnly) {
@@ -858,8 +827,7 @@ export function registerPlatformTools(server, z, sessionKey) {
         return emitImage(r.png, `SNES BG map composite (${r.width}×${r.height}, ${r.mapWidth}×${r.mapHeight} tiles, ${r.bpp}bpp, tilemap@0x${tilemapBaseByte.toString(16)}, tiles@0x${tileBaseByte.toString(16)}). ${r.note}`);
       }
       throw new Error(`inspectBackgroundMap not yet implemented for platform '${p}'`);
-    }),
-  );
+  };
 
   server.tool(
     "convertImageToTiles",
