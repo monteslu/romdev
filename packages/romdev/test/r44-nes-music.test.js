@@ -99,7 +99,6 @@ test("R44 NES music: ROM boots in fceumm + runs for 60 frames without crashing",
   const [ct, st] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "r44-c", version: "0.0.1" }, { capabilities: {} });
   await Promise.all([server.connect(st), client.connect(ct)]);
-  await client.callTool({ name: "loadCategory", arguments: { category: "all" } });
 
   // Build via buildForPlatform directly (faster than going through buildSource).
   const { buildForPlatform } = await import("../src/toolchains/index.js");

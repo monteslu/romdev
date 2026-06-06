@@ -17,7 +17,6 @@ async function startClient() {
   const [ct, st] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "snes-pc-break-client", version: "0.0.1" }, { capabilities: {} });
   await Promise.all([server.connect(st), client.connect(ct)]);
-  await client.callTool({ name: "loadCategory", arguments: { category: "all" } });
   return client;
 }
 

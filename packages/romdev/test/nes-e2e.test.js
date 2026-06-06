@@ -37,7 +37,6 @@ async function startServerAndClient() {
   await Promise.all([server.connect(serverT), client.connect(clientT)]);
   // Progressive disclosure: deferred categories aren't auto-loaded.
   // Tests need the full tool surface; mirror the power-user "all" flow.
-  await client.callTool({ name: "loadCategory", arguments: { category: "all" } });
   return client;
 }
 

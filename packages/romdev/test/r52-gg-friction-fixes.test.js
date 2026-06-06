@@ -141,7 +141,6 @@ test("R52 copyStarterSnippets writes files to disk + flattens lib/<lang>/", { ti
   const [ct, st] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "r52-c", version: "0.0.1" }, { capabilities: {} });
   await Promise.all([server.connect(st), client.connect(ct)]);
-  await client.callTool({ name: "loadCategory", arguments: { category: "all" } });
 
   const dst = mkdtempSync(join(tmpdir(), "r52-snip-"));
   try {
@@ -274,7 +273,6 @@ test("R52 copyStarterSnippets honours include[] whitelist + counts files", { tim
   const [ct, st] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "r52b-c", version: "0.0.1" }, { capabilities: {} });
   await Promise.all([server.connect(st), client.connect(ct)]);
-  await client.callTool({ name: "loadCategory", arguments: { category: "all" } });
 
   const dst = mkdtempSync(join(tmpdir(), "r52-snip-"));
   try {

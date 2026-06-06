@@ -50,7 +50,6 @@ async function startServerAndClient() {
   // (listPlatforms is in 'platforms', loadMedia is in 'run', etc.).
   // Load everything so tests can call any tool by name — mirrors the
   // power-user `loadCategory({category:"all"})` escape hatch.
-  await client.callTool({ name: "loadCategory", arguments: { category: "all" } });
 
   return { server, client };
 }
