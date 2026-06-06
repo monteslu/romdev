@@ -1108,9 +1108,29 @@ export class LibretroHost {
       // a known mid-point, see what it produced so far."
       stopAtPC,
       // maxInstructions: the instruction watchdog budget — the real cap that
-      // prevents a runaway codec from hanging the WASM inside one frame. Default
-      // scales with maxFrames (a Genesis frame is ~hundreds of k instructions).
-      maxInstructions = maxFrames * 500000,
+      // catches a runaway, whether it's a tight infinite loop OR a wrong-setup
+      // entry (e.g. a WRAPPER PC with a bad source) that falls back into the
+      // game's own main loop and free-runs forever instead of returning.
+      //
+      // The budget MUST trip BEFORE maxFrames is exhausted on such a free-run —
+      // otherwise the run silently hits maxFrames and the agent can't tell
+      // "wrong entry" from "legitimately long." Two failure modes the default
+      // has to dodge, and why it's PER-CPU rather than a flat constant:
+      //   • too LOW relative to a real codec → cuts off a legit decompress.
+      //   • too HIGH relative to maxFrames-worth of execution → never trips
+      //     before the frame cap. A flat 4M does this on the ~1MHz 8-bit CPUs
+      //     (6507/6510 run only ~3-3.8M instructions in 600 frames), so the
+      //     watchdog could never fire there.
+      // Derive it from the CPU's instrPerFrame (set in _cpuCallProfile): 80% of
+      // maxFrames-worth, capped at 4M for the fast cores (GBA/Genesis). Any real
+      // decompressor finishes in <~1M instructions on every one of these CPUs,
+      // so even the slow-CPU floor (~2.9M for c64/atari2600) keeps 2-3x headroom
+      // while guaranteeing the watchdog beats the frame cap. Callers who KNOW a
+      // routine is genuinely huge pass an explicit maxInstructions to override.
+      maxInstructions = Math.max(
+        200_000,
+        Math.min(4_000_000, Math.floor(maxFrames * (prof.instrPerFrame ?? 50000) * 0.8)),
+      ),
     } = a;
 
     const snapshot = sandbox ? this.serializeState() : null;
@@ -1230,38 +1250,55 @@ export class LibretroHost {
    */
   _cpuCallProfile() {
     const p = this.status.platform;
+    // `instrPerFrame`: a CONSERVATIVE estimate of how many instructions one frame
+    // of this CPU executes (clock ÷ avg-cycles-per-instr ÷ ~60fps). Used to size
+    // the callSubroutine watchdog budget so it trips BEFORE the per-frame cap even
+    // on the slow ~1MHz 8-bit CPUs (a fixed 4M never trips inside 600 frames on a
+    // 6507/6510 — only ~3-3.8M instructions run in 600 frames there). Real codecs
+    // finish in <~1M instructions on any of these, so 0.8×maxFrames×instrPerFrame
+    // still clears a legit decompress with margin. See the watchdog budget below.
     switch (p) {
       case "genesis": case "megadrive": case "md":
         // m68k: SP=18, PC=16; RTS pops a 4-byte big-endian return; work RAM
         // $FF0000-$FFFFFF → system_ram (& 0xFFFF). Sentinel 0 (vector area).
-        return { spReg: 18, pcReg: 16, retBytes: 4, retBigEndian: true, defaultSentinel: 0, ramMask: 0xFFFF };
+        // 7.67MHz / ~10 cyc/instr / 60 ≈ 12.8k; use 50k (tight loops are denser).
+        return { spReg: 18, pcReg: 16, retBytes: 4, retBigEndian: true, defaultSentinel: 0, ramMask: 0xFFFF, instrPerFrame: 50000 };
       case "nes": case "atari2600": case "atari7800": case "lynx": case "c64": case "pce":
         // 6502/65C02/HuC6280/6510: A=0,X=1,Y=2,P=3,SP=4,PC=16. RTS pops 2 bytes
         // (PCL,PCH) from the $0100 page. system_ram is the low RAM; the stack page
         // $0100-$01FF maps to system_ram offset 0x100-0x1FF on most of these.
-        return { spReg: 4, pcReg: 16, retBytes: 2, retBigEndian: true, defaultSentinel: 0, stackPage: 0x100, ramMask: 0xFFFF, retAdjust: -1 };
+        // The slowest cores live here (atari2600 6507 ~1.19MHz, c64 6510 ~1MHz):
+        // ~5-6k instr/frame → 600 frames ≈ 3-3.8M, BELOW a flat 4M. 6k keeps the
+        // per-CPU budget under the frame cap so the watchdog actually trips.
+        return { spReg: 4, pcReg: 16, retBytes: 2, retBigEndian: true, defaultSentinel: 0, stackPage: 0x100, ramMask: 0xFFFF, retAdjust: -1, instrPerFrame: 6000 };
       case "gb": case "gbc":
         // SM83: PC=16, SP=18. CALL/RET push 2 little-endian bytes, predecrement
         // SP. Stack lives in WRAM ($C000-$DFFF, also high RAM); SP & 0x1FFF →
         // system_ram (the 8KB WRAM window). Sentinel 0 (rst vector area).
-        return { spReg: 18, pcReg: 16, retBytes: 2, retBigEndian: false, defaultSentinel: 0, ramMask: 0x1FFF };
+        // 4.19MHz / ~10 cyc / 60 ≈ 7k.
+        return { spReg: 18, pcReg: 16, retBytes: 2, retBigEndian: false, defaultSentinel: 0, ramMask: 0x1FFF, instrPerFrame: 8000 };
       case "snes":
         // 65816: SP=4, PC=16. A long subroutine (JSL/RTL) pushes a 3-byte return
         // (the 65816 stack is in bank 0, page-relative is the 8-bit/16-bit S). We
         // push 3 bytes at the 16-bit S in bank 0 (predecrement); WRAM low mirror.
-        return { spReg: 4, pcReg: 16, retBytes: 3, retBigEndian: false, defaultSentinel: 0, ramMask: 0x1FFF, retAdjust: -1 };
+        // ~3.58MHz / ~6 cyc / 60 ≈ 10k.
+        return { spReg: 4, pcReg: 16, retBytes: 3, retBigEndian: false, defaultSentinel: 0, ramMask: 0x1FFF, retAdjust: -1, instrPerFrame: 12000 };
       case "sms": case "gg": case "msx":
         // Z80: PC=16, SP=18. CALL/RET push 2 LE bytes predecrement. Work RAM
         // window varies (SMS $C000-$DFFF → sms low RAM); SP & 0x1FFF.
-        return { spReg: 18, pcReg: 16, retBytes: 2, retBigEndian: false, defaultSentinel: 0, ramMask: 0x1FFF };
+        // 3.58MHz / ~7 cyc / 60 ≈ 8.5k (tight JR-loops denser → use 7k floor).
+        // NOTE: on SMS/GG the Z80 is the active CPU and the gpgx watchdog counter
+        // is wired into z80_run as of the matching core patch (was m68k-only).
+        return { spReg: 18, pcReg: 16, retBytes: 2, retBigEndian: false, defaultSentinel: 0, ramMask: 0x1FFF, instrPerFrame: 7000 };
       case "gba":
         // ARM7TDMI: SP=r13 (reg-id 13), PC=r15 (reg-id 15). No implicit return-on-
         // stack (BL uses LR). callSubroutine on ARM would set LR=sentinel instead
         // of pushing — handled by the ARM branch (lrReg). EWRAM mapping.
-        return { spReg: 13, pcReg: 15, retBytes: 4, retBigEndian: false, defaultSentinel: 0, ramMask: 0x3FFFF, lrReg: 14 };
+        // 16.78MHz / ~2 cyc / 60 ≈ 140k → the fixed 4M cap applies first.
+        return { spReg: 13, pcReg: 15, retBytes: 4, retBigEndian: false, defaultSentinel: 0, ramMask: 0x3FFFF, lrReg: 14, instrPerFrame: 140000 };
       default:
         // Unknown — m68k-shaped fallback (Genesis defaults).
-        return { spReg: 18, pcReg: 16, retBytes: 4, retBigEndian: true, defaultSentinel: 0, ramMask: 0xFFFF };
+        return { spReg: 18, pcReg: 16, retBytes: 4, retBigEndian: true, defaultSentinel: 0, ramMask: 0xFFFF, instrPerFrame: 50000 };
     }
   }
 

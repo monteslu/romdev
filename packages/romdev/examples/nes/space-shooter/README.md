@@ -10,7 +10,8 @@ any specific commercial title.)
 ## Build
 
 ```
-buildSource({
+build({
+  output: 'rom',
   platform: "nes",
   language: "c",
   sources: { "main.c": ..., "nes_runtime.c": ... },

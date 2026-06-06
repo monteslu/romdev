@@ -50,7 +50,7 @@ export const MERGE_MAP = {
   // ── background (tilemap/render-state; inspectBackgroundMap from platform-tools.js, getRenderingContext from rendering-context.js, whichTilesAreRendered from which-tiles.js) ──
   background: { absorbs: ["inspectBackgroundMap", "getRenderingContext", "whichTilesAreRendered"], axis: "view" },
   // ── tiles (decode/render tile bytes; inspectPatternTiles from platform-tools.js, getTile/tileFingerprints/tilesAscii from tile-inspect.js, extractSpriteSheet from rom-id.js, previewTileArt from preview-tile.js) ──
-  tiles: { absorbs: ["inspectPatternTiles", "getTile", "tileFingerprints", "tilesAscii", "extractSpriteSheet", "previewTileArt"], axis: "as" },
+  tiles: { absorbs: ["inspectPatternTiles", "getTile", "tileFingerprints", "tilesAscii", "extractSpriteSheet", "previewTileArt"], axis: "op" },
   // ── encodeArt (PNG→native art; convertImageToTiles+imageToTilemap from platform-tools.js, quantizePngForPlatform+cropSpriteSheet from sprite-pipeline.js, validateGenesisTiles from metasprite-tools.js) ──
   encodeArt: { absorbs: ["convertImageToTiles", "imageToTilemap", "quantizePngForPlatform", "cropSpriteSheet", "validateGenesisTiles"], axis: "stage" },
   // ── importArt (editor-file/ROM → native tiles; load* from art-loaders.js, crossPlatformSpriteImport from sprite-pipeline.js as from:'rom') ──

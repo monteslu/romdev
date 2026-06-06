@@ -124,7 +124,7 @@ Ergonomic exceptions:
 - **Small reads stay inline.** `memory({op:'read'})` of ≤4 KB returns hex inline with no path needed (peeking a few RAM/OAM/palette bytes is the common case). Only large reads require a path/inline.
 - **`build({output:'run'})` returns its screenshot inline by default** — its whole purpose is "build + run + show me." Pass `screenshotPath` only if your client can't display inline images.
 
-**On images specifically:** the `inline:true` image is only useful if YOUR client actually delivers inline images to you — some clients silently drop or down-convert image content. If you're not certain you can see them, **work from the structured data instead**: `sprites({op:'inspect'})` / `palette({source:'live'})` / `background({view:'renderState'})` always return their decoded JSON (sprite lists, palette entries, render flags) regardless of inline/path, and `screenshot({format:'ascii'})` gives a text render. The inline PNG is an opt-in luxury, not the primary signal.
+**On images specifically:** the `inline:true` image is only useful if YOUR client actually delivers inline images to you — some clients silently drop or down-convert image content. If you're not certain you can see them, **work from the structured data instead**: `sprites({op:'inspect'})` / `palette({source:'live'})` / `background({view:'renderState'})` always return their decoded JSON (sprite lists, palette entries, render flags) regardless of inline/path, and `frame({op:'screenshot', format:'ascii'})` gives a text render. The inline PNG is an opt-in luxury, not the primary signal.
 
 ## Trust hierarchy — where to find ground truth (R58 + R58b)
 
@@ -214,7 +214,7 @@ disagree with behavior, trust the library source over the example.
 
 ### Which path to use
 
-- **Just need a working game** → Path A. Use createGame, iterate.
+- **Just need a working game** → Path A. Use `scaffold({op:'game'})`, iterate.
 - **Hit a bug or unexpected behavior** → switch to Path B.
 - **Don't know which** → start in Path A; if iterations fail to
   converge after 2-3 attempts, you're hitting something path A
@@ -267,19 +267,23 @@ For maintainers: the platform / core / patch / region-ID matrix and the recipe f
 
 ## Deep debug tooling status per platform
 
-Different platforms have different levels of MCP-exposed debugging — different hardware needs different tools, and we've patched the cores where it's been worth it. The generic shapes — `cpu({op:'read'})`, `breakpoint({on:'write'})`, `disasm({target:'rom'})`/`disasm({target:'references'})`/`disasm({target:'project'})`, `memory({op:'search'})`/`memory({op:'readCart'})`/`memory({op:'classify'})`, cheats — work on **all 14 platforms** (disassembly via native binutils `objdump` compiled to WASM, one per CPU family — incl. GBA ARM7/Thumb). The deep per-platform inspectors (`sprites({op:'inspect'})`, `palette({source:'live'})`, `background({view:'renderState'})`, `audioDebug({op:'inspect'})`) are detailed for **12 systems** below; **PC Engine and MSX** currently have the generic shapes + their core's native regions but not yet the full custom-inspector treatment (extend by patching their cores per the snes9x/gpgx pattern). `audioDebug({op:'inspect'})` covers the **12 with a sound chip** (all but Atari 2600/7800). A few are honest hardware-shaped exceptions, noted inline below (the Lynx has no fixed OAM so inspectSprites returns the SCB list head). Coverage detail per platform:
+Different platforms have different levels of MCP-exposed debugging — different hardware needs different tools, and we've patched the cores where it's been worth it. The generic shapes — `cpu({op:'read'})`, `breakpoint({on:'write'})`, `disasm({target:'rom'})`/`disasm({target:'references'})`/`disasm({target:'project'})`, `memory({op:'search'})`/`memory({op:'readCart'})`/`memory({op:'classify'})`, cheats — work on **all 14 platforms** (disassembly via native binutils `objdump` compiled to WASM, one per CPU family — incl. GBA ARM7/Thumb). The deep per-platform inspectors (`sprites({op:'inspect'})`, `palette({source:'live'})`, `background({view:'renderState'})`, `audioDebug({op:'inspect'})`) are detailed for **12 systems** below; **PC Engine and MSX** currently have the generic shapes + their core's native regions but not yet the full custom-inspector treatment (extend by patching their cores per the snes9x/gpgx pattern). `audioDebug({op:'inspect'})` covers the **12 with a sound chip** (all but Atari 2600/7800). A few are honest hardware-shaped exceptions, noted inline below (the Lynx has no fixed OAM so `sprites({op:'inspect'})` returns the SCB list head). Coverage detail per platform:
 
 > **Universal across ALL 14 platforms:** `breakpoint({on:'write'})` (the core-level
 > instruction write watchpoint — the exact PC that wrote a RAM byte, all 14 CPU
 > families), **`breakpoint({on:'pc'})`** (execution breakpoint — freeze the CPU AT an
 > instruction and read its registers), **`breakpoint({on:'read'})`** (the exact PC that read
-> a byte — read-side mirror of findWriter), **`frame({op:'stepInstruction'})`** (CPU single-step),
+> a byte — read-side mirror of `breakpoint({on:'write'})`), **`frame({op:'stepInstruction'})`** (CPU single-step),
 > **`cpu({op:'setReg'})`** (write a CPU register), **`cpu({op:'call'})`/`cpu({op:'decompress'})`**
 > (drive the ROM's OWN routine — e.g. its decompressor — and capture the output;
-> a per-instruction watchdog on **every CPU core** force-stops a runaway routine
-> and returns `{watchdog:true, finalPC, finalRegs}` instead of hanging — pass
-> `maxInstructions` for the budget, `presetMemory`/`stopAtPC` for codecs that read
-> RAM globals or need a mid-routine halt),
+> a per-instruction watchdog on **every CPU core** (m68k, 6502/6507/6510/65c02/65816,
+> z80 incl. SMS/GG, sm83, arm7tdmi, huc6280) force-stops a runaway routine and
+> returns `{watchdog:true, finalPC, finalRegs}` instead of hanging. It catches BOTH
+> a tight infinite loop AND a wrong-entry FREE-RUN (a wrapper PC with a bad source
+> that falls back into the game's main loop): the default budget is PER-CPU, sized
+> to trip before the frame cap on the slow ~1MHz cores too. Pass `maxInstructions`
+> to override the budget, `presetMemory`/`stopAtPC` for codecs that read RAM globals
+> or need a mid-routine halt),
 > **`watch({on:'range'})`** (log EVERY read/write hitting an address range — discovery),
 > **`watch({on:'pc'})`** (coverage trace — distinct PCs executed in a window),
 > **the RE-INJECT trio** (put an edited asset BACK, all 14): **`romPatch({op:'findPointer'})`**
@@ -302,17 +306,17 @@ Different platforms have different levels of MCP-exposed debugging — different
 > `as`/`ld`/`objcopy`. The per-platform notes below cover the platform-SPECIFIC
 > inspectors + chips (PC Engine + MSX: generic shapes only so far).
 
-- **SNES** (snes9x patched): inspectSprites, inspectPalette, getCPUState({cpu:'main'|'spc700'}), getDspState (full per-voice + master mixer), readMemory regions for OAM/CGRAM/ARAM/FillRAM. Audio + video both deeply introspectable.
-- **NES** (fceumm patched): inspectSprites, inspectPalette, getCPUState (6502), getRenderingContext (PPUCTRL/PPUMASK decoded → active CHR bank + file offset), readMemory regions for OAM/Palette/Nametables/CHR/CPU_REGS/PPU_REGS/APU_REGS.
-- **Genesis** (gpgx patched): inspectSprites, inspectPalette, getCPUState({cpu:'main'}) for 68K, getYm2612State (limited — internal struct), getPsgState, readMemory regions for CRAM/VSRAM/VDP_REGS/Z80_RAM/M68K/YM2612/PSG/VRAM.
-- **SMS / Game Gear** (gpgx patched): inspectSprites (SAT decode + sprite-sheet PNG), inspectPalette (6-bit BGR for SMS, 12-bit BGR for GG), inspectPatternTiles (4bpp interleaved, 16KB VRAM as 512-tile sheet), getCPUState (Z80 — A/F/BC/DE/HL/IX/IY/shadows + flags + interrupt state), getAudioState({chip:'psg'}) (SN76489 — 3 tone + 1 noise; same gpgx region as Genesis), getRenderingContext (VDP regs → name table / BG-tile / sprite-tile / SAT addresses + scroll + display state), readMemory regions for sms_vram, sms_cram, sms_vdp_regs, sms_z80_regs (gg_vram, gg_cram for Game Gear's 64-byte palette). disassembleRom + findReferences + disassembleProject run through the native binutils z80 `objdump` (WASM, `-m z80`) with full prefix coverage (CB/ED/DD/FD/DDCB/FDCB) and the same auto-label / register-annotation / file-offset / untilReturn pipeline as NES/SNES.
-- **Game Boy / Game Boy Color** (gambatte patched): inspectSprites (40-sprite OAM decode + sprite-sheet PNG with sprite-priority + h/v flip), inspectPalette (DMG: BGP/OBP0/OBP1 byte decode → 4 shades each; GBC: 64-byte BCPS/OCPS palette RAM → 8 palettes × 4 colors BGR555), inspectPatternTiles (384 tiles from $8000-$97FF), getCPUState (SM83 — A/F/BC/DE/HL + flags + IME/halt), getAudioState({chip:'gb'}) (DMG APU — 2 pulse + wave + noise with timer→freq→note, sweep, duty, panning), getRenderingContext (LCDC bit-by-bit, scroll, LY/LYC, window, GBC extras: VRAM bank / KEY1 / BCPS/OCPS index), readMemory regions for gb_vram, gb_oam, gb_io, gb_hram, gb_bgpdata, gb_objpdata, gb_cpu_regs. disassembleRom + findReferences + disassembleProject route through the native binutils z80 `objdump` in its `gbz80` machine (WASM, `-m gbz80`) — full CB-prefix coverage + SM83-specific opcodes (`ld (hl+),a`, `ldh`, `reti`, `ld hl,sp+e8`). One z80-elf binutils serves both plain Z80 (SMS/GG/MSX) and the GB CPU.
+- **SNES** (snes9x patched): `sprites({op:'inspect'})`, `palette({source:'live'})`, `cpu({op:'read', cpu:'main'|'spc700'})`, getDspState (full per-voice + master mixer), `memory({op:'read'})` regions for OAM/CGRAM/ARAM/FillRAM. Audio + video both deeply introspectable.
+- **NES** (fceumm patched): `sprites({op:'inspect'})`, `palette({source:'live'})`, `cpu({op:'read'})` (6502), `background({view:'renderState'})` (PPUCTRL/PPUMASK decoded → active CHR bank + file offset), `memory({op:'read'})` regions for OAM/Palette/Nametables/CHR/CPU_REGS/PPU_REGS/APU_REGS.
+- **Genesis** (gpgx patched): `sprites({op:'inspect'})`, `palette({source:'live'})`, `cpu({op:'read', cpu:'main'})` for 68K, getYm2612State (limited — internal struct), getPsgState, `memory({op:'read'})` regions for CRAM/VSRAM/VDP_REGS/Z80_RAM/M68K/YM2612/PSG/VRAM.
+- **SMS / Game Gear** (gpgx patched): `sprites({op:'inspect'})` (SAT decode + sprite-sheet PNG), `palette({source:'live'})` (6-bit BGR for SMS, 12-bit BGR for GG), `tiles({op:'png'})` (4bpp interleaved, 16KB VRAM as 512-tile sheet), `cpu({op:'read'})` (Z80 — A/F/BC/DE/HL/IX/IY/shadows + flags + interrupt state), `audioDebug({op:'inspect', chip:'psg'})` (SN76489 — 3 tone + 1 noise; same gpgx region as Genesis), `background({view:'renderState'})` (VDP regs → name table / BG-tile / sprite-tile / SAT addresses + scroll + display state), `memory({op:'read'})` regions for sms_vram, sms_cram, sms_vdp_regs, sms_z80_regs (gg_vram, gg_cram for Game Gear's 64-byte palette). `disasm({target:'rom'})` + `disasm({target:'references'})` + `disasm({target:'project'})` run through the native binutils z80 `objdump` (WASM, `-m z80`) with full prefix coverage (CB/ED/DD/FD/DDCB/FDCB) and the same auto-label / register-annotation / file-offset / untilReturn pipeline as NES/SNES.
+- **Game Boy / Game Boy Color** (gambatte patched): `sprites({op:'inspect'})` (40-sprite OAM decode + sprite-sheet PNG with sprite-priority + h/v flip), `palette({source:'live'})` (DMG: BGP/OBP0/OBP1 byte decode → 4 shades each; GBC: 64-byte BCPS/OCPS palette RAM → 8 palettes × 4 colors BGR555), `tiles({op:'png'})` (384 tiles from $8000-$97FF), `cpu({op:'read'})` (SM83 — A/F/BC/DE/HL + flags + IME/halt), `audioDebug({op:'inspect', chip:'gb'})` (DMG APU — 2 pulse + wave + noise with timer→freq→note, sweep, duty, panning), `background({view:'renderState'})` (LCDC bit-by-bit, scroll, LY/LYC, window, GBC extras: VRAM bank / KEY1 / BCPS/OCPS index), `memory({op:'read'})` regions for gb_vram, gb_oam, gb_io, gb_hram, gb_bgpdata, gb_objpdata, gb_cpu_regs. `disasm({target:'rom'})` + `disasm({target:'references'})` + `disasm({target:'project'})` route through the native binutils z80 `objdump` in its `gbz80` machine (WASM, `-m gbz80`) — full CB-prefix coverage + SM83-specific opcodes (`ld (hl+),a`, `ldh`, `reti`, `ld hl,sp+e8`). One z80-elf binutils serves both plain Z80 (SMS/GG/MSX) and the GB CPU.
   - **Toolchains:** default is **C** via SDCC's sm83 port (same SDCC that powers SMS/GG/MSX/Coleco). For hand-tuned asm, pass `language:"asm"` to route through RGBDS. The C path uses `__sfr __at 0xFFNN` to bind GB I/O regs; helper headers under `src/platforms/gb/lib/c/gb_hardware.h` define LCDC/STAT/SCY/SCX/LY/BGP/OBP0/OBP1/etc. for both DMG and CGB. The SDCC 4.4.0 codegen quirk (`for (;;) { switch + write to __sfr }` crashes the register allocator) applies — use `do { ... } while (1)` and table-lookup writes instead.
-- **Atari 2600** (stella2014 patched): inspectPalette (NTSC 128-color palette PNG; current background luma+hue extracted from TIA snapshot), inspectSprites (no OAM — returns the 5 graphics objects state P0/P1/M0/M1/Ball + a current-scanline PNG showing TIA composition), getCPUState (6502 — A/X/Y/P/SP/PC from the M6502 internal regs), getRenderingContext (decodes the 32-byte TIA snapshot into playfield/sprite/colors), readMemory regions for `system_ram` (128 bytes of RIOT RAM), `a26_tia_regs` (32-byte TIA snapshot), `a26_cpu_regs` (7-byte 6502 snapshot). disassembleRom + findReferences anchor to the top of the bank ($F000-$FFFF) with vector-table labels (NMI/RESET/IRQ at $FFFA).
-- **Atari 7800** (prosystem patched): inspectPalette (256-color master PNG; MARIA palette block at $20-$3F decoded into 8 palettes × 3 colors + backdrop), inspectSprites (no OAM — returns the MARIA control regs + the DPP display-list-list pointer for the agent to walk), getCPUState (6502 — A/X/Y/P/SP/PC from prosystem's sally globals), getRenderingContext (MARIA CTRL bits + DPP + CHARBASE + dlistPtr), readMemory regions for `system_ram` (the entire 64KB 6502 address space — MARIA regs, RAM, ROM all visible) + `a78_cpu_regs`. disassembleRom + findReferences default to the top 16KB ($C000-$FFFF) where the reset vector lands.
-- **Commodore 64** (vice patched): inspectPalette (the 16-color hardware-fixed palette PNG + current border/background/extra-bg indices decoded from VIC-II regs), inspectSprites (8 MOBs decoded into the generic shape with X/Y/color/multicolor/expand-X/expand-Y/priority + the screen-RAM sprite-data pointers at $07F8 so the agent can locate sprite pixel blocks), getCPUState (6510 — A/X/Y/P/SP/PC from a `#define`-aliased live register file + the I/O port at $0001 decoded into LORAM/HIRAM/CHAREN), getAudioState({chip:'sid'}) (6581/8580 — 3 voices {waveform, freq→note, pulse-width, ADSR} + filter cutoff/resonance/mode), getRenderingContext (VIC-II regs decoded into mode/scroll/colors/sprites, VIC bank from CIA2 $DD00, absolute screen + char base addresses), readMemory regions for `system_ram` (64 KB RAM), `c64_color_ram` (1 KB), `c64_vic_regs` (64 B), `c64_sid_regs` (29 B via sid_peek), `c64_cia1_regs`/`c64_cia2_regs` (16 B each from `c_cia[]`), `c64_cpu_regs` (7 B). disassembleRom + findReferences accept `.prg` files (2-byte load-address header) and the C64 register annotation table for VIC-II / SID / CIA registers. Starter snippets cover vic_init / sprite_table / sid_play / read_joystick / basic_stub.
-- **Game Boy Advance** (mgba patched): inspectSprites (128 OAM sprites → generic shape with shape/size, 9-bit signed X, affine/hidden, tile/palette/priority), inspectPalette (256 BG + 256 OBJ 15-bit BGR555, `area:'bg'|'sprite'`), getCPUState (ARM7TDMI — 16 gprs r0-r15 + cpsr/spsr + mode + ARM/THUMB, plus `execPc` adjusted for pipeline prefetch), getAudioState({chip:'gba'}) (4 DMG PSG channels + 2 Direct Sound DMA FIFOs, master/bias), getRenderingContext (DISPCNT bg-mode + per-BG enable/priority/char-base/map-base/color-mode, forced-blank, OBJ enable), readMemory regions for `gba_cpu_regs`, `gba_io_regs` (the IO page — video AND audio regs), `gba_palette`, `gba_oam`, plus system_ram/video_ram/save_ram. disassembleRom + findReferences + disassembleProject run through the native binutils `arm-none-eabi-objdump` (WASM) — ARM by default, `thumb:true` for Thumb code; the byte-exact project reassembles through `arm-none-eabi-as`/`ld`/`objcopy`. (Note: GBA C compiles mostly to Thumb reached via an ARM crt0 stub, so an ARM-mode disasm of a full ROM decodes the Thumb spans as `.byte` — still byte-exact, just less readable until ARM/Thumb mode-tracking lands.)
-- **Atari Lynx** (handy patched): inspectPalette (16-entry 12-bit Mikey palette → RGB), getCPUState (65C02 — A/X/Y/P/SP/PC + flags), getAudioState({chip:'mikey'}) (4 channels — volume, timer→freq→note, 12-bit LFSR state), getRenderingContext (DISPCTL DMA-enable/flip/color-mode + display base address), readMemory regions for `lynx_cpu_regs`, `lynx_hw_regs` (the $FC00-$FDFF Suzy+Mikey window — sprite engine regs, LCD control, audio, palette), plus system_ram. **inspectSprites is a special case:** the Lynx has NO fixed OAM — sprites are SCB (Sprite Control Block) linked lists in RAM walked by Suzy, so inspectSprites returns the SCB list head (SCBNEXT $FC10/$FC11) and instructions to walk the chain over system_ram rather than a sprite table.
+- **Atari 2600** (stella2014 patched): `palette({source:'live'})` (NTSC 128-color palette PNG; current background luma+hue extracted from TIA snapshot), `sprites({op:'inspect'})` (no OAM — returns the 5 graphics objects state P0/P1/M0/M1/Ball + a current-scanline PNG showing TIA composition), `cpu({op:'read'})` (6502 — A/X/Y/P/SP/PC from the M6502 internal regs), `background({view:'renderState'})` (decodes the 32-byte TIA snapshot into playfield/sprite/colors), `memory({op:'read'})` regions for `system_ram` (128 bytes of RIOT RAM), `a26_tia_regs` (32-byte TIA snapshot), `a26_cpu_regs` (7-byte 6502 snapshot). `disasm({target:'rom'})` + `disasm({target:'references'})` anchor to the top of the bank ($F000-$FFFF) with vector-table labels (NMI/RESET/IRQ at $FFFA).
+- **Atari 7800** (prosystem patched): `palette({source:'live'})` (256-color master PNG; MARIA palette block at $20-$3F decoded into 8 palettes × 3 colors + backdrop), `sprites({op:'inspect'})` (no OAM — returns the MARIA control regs + the DPP display-list-list pointer for the agent to walk), `cpu({op:'read'})` (6502 — A/X/Y/P/SP/PC from prosystem's sally globals), `background({view:'renderState'})` (MARIA CTRL bits + DPP + CHARBASE + dlistPtr), `memory({op:'read'})` regions for `system_ram` (the entire 64KB 6502 address space — MARIA regs, RAM, ROM all visible) + `a78_cpu_regs`. `disasm({target:'rom'})` + `disasm({target:'references'})` default to the top 16KB ($C000-$FFFF) where the reset vector lands.
+- **Commodore 64** (vice patched): `palette({source:'live'})` (the 16-color hardware-fixed palette PNG + current border/background/extra-bg indices decoded from VIC-II regs), `sprites({op:'inspect'})` (8 MOBs decoded into the generic shape with X/Y/color/multicolor/expand-X/expand-Y/priority + the screen-RAM sprite-data pointers at $07F8 so the agent can locate sprite pixel blocks), `cpu({op:'read'})` (6510 — A/X/Y/P/SP/PC from a `#define`-aliased live register file + the I/O port at $0001 decoded into LORAM/HIRAM/CHAREN), `audioDebug({op:'inspect', chip:'sid'})` (6581/8580 — 3 voices {waveform, freq→note, pulse-width, ADSR} + filter cutoff/resonance/mode), `background({view:'renderState'})` (VIC-II regs decoded into mode/scroll/colors/sprites, VIC bank from CIA2 $DD00, absolute screen + char base addresses), `memory({op:'read'})` regions for `system_ram` (64 KB RAM), `c64_color_ram` (1 KB), `c64_vic_regs` (64 B), `c64_sid_regs` (29 B via sid_peek), `c64_cia1_regs`/`c64_cia2_regs` (16 B each from `c_cia[]`), `c64_cpu_regs` (7 B). `disasm({target:'rom'})` + `disasm({target:'references'})` accept `.prg` files (2-byte load-address header) and the C64 register annotation table for VIC-II / SID / CIA registers. Starter snippets cover vic_init / sprite_table / sid_play / read_joystick / basic_stub.
+- **Game Boy Advance** (mgba patched): `sprites({op:'inspect'})` (128 OAM sprites → generic shape with shape/size, 9-bit signed X, affine/hidden, tile/palette/priority), `palette({source:'live'})` (256 BG + 256 OBJ 15-bit BGR555, `area:'bg'|'sprite'`), `cpu({op:'read'})` (ARM7TDMI — 16 gprs r0-r15 + cpsr/spsr + mode + ARM/THUMB, plus `execPc` adjusted for pipeline prefetch), `audioDebug({op:'inspect', chip:'gba'})` (4 DMG PSG channels + 2 Direct Sound DMA FIFOs, master/bias), `background({view:'renderState'})` (DISPCNT bg-mode + per-BG enable/priority/char-base/map-base/color-mode, forced-blank, OBJ enable), `memory({op:'read'})` regions for `gba_cpu_regs`, `gba_io_regs` (the IO page — video AND audio regs), `gba_palette`, `gba_oam`, plus system_ram/video_ram/save_ram. `disasm({target:'rom'})` + `disasm({target:'references'})` + `disasm({target:'project'})` run through the native binutils `arm-none-eabi-objdump` (WASM) — ARM by default, `thumb:true` for Thumb code; the byte-exact project reassembles through `arm-none-eabi-as`/`ld`/`objcopy`. (Note: GBA C compiles mostly to Thumb reached via an ARM crt0 stub, so an ARM-mode disasm of a full ROM decodes the Thumb spans as `.byte` — still byte-exact, just less readable until ARM/Thumb mode-tracking lands.)
+- **Atari Lynx** (handy patched): `palette({source:'live'})` (16-entry 12-bit Mikey palette → RGB), `cpu({op:'read'})` (65C02 — A/X/Y/P/SP/PC + flags), `audioDebug({op:'inspect', chip:'mikey'})` (4 channels — volume, timer→freq→note, 12-bit LFSR state), `background({view:'renderState'})` (DISPCTL DMA-enable/flip/color-mode + display base address), `memory({op:'read'})` regions for `lynx_cpu_regs`, `lynx_hw_regs` (the $FC00-$FDFF Suzy+Mikey window — sprite engine regs, LCD control, audio, palette), plus system_ram. **`sprites({op:'inspect'})` is a special case:** the Lynx has NO fixed OAM — sprites are SCB (Sprite Control Block) linked lists in RAM walked by Suzy, so `sprites({op:'inspect'})` returns the SCB list head (SCBNEXT $FC10/$FC11) and instructions to walk the chain over system_ram rather than a sprite table.
 - **MSX, ColecoVision**: standard system_ram + save_ram + video_ram. Deeper introspection not yet added — extend by patching their cores following the snes9x/gpgx/fceumm/vice pattern (see scripts/patches/).
 
 Starter snippets per platform live under `src/platforms/<platform>/lib/`. Discover via `scaffold({op:'snippets', platform})` (default `mode:'list'`), fetch one via `scaffold({op:'snippets', platform, mode:'get', name})`. SNES + NES + Genesis + SMS + Game Boy + Atari 2600 + Atari 7800 have substantial snippet libraries; others are minimal.
@@ -344,10 +348,11 @@ build response `romLayout` / `log` states what was applied.
 
 **`build({output:'run'})` is the primary tool.** It does build + load + run + screenshot
 in a single call, returning the image inline. Reach for it before any 4-call
-sequence of buildSource → loadMedia → stepFrames → screenshot.
+sequence of build({output:'rom'}) → loadMedia → frame({op:'step'}) → frame({op:'screenshot'}).
 
 ```js
-runSource({
+build({
+  output: "run",
   platform: "gbc",
   source: /* your C or asm */,
   frames: 60,
@@ -379,7 +384,7 @@ When `build({output:'run'})` is too coarse, the long-form workflow:
 1. `build({output:'rom', platform, source})` → get a ROM as base64 bytes
 2. `loadMediaBytes({ platform, base64 })` → load without disk I/O
 3. `frame({op:'step', frames: N})` or `runUntil({ condition })` → advance time
-4. `screenshot()` for vibes, `tiles({as:'pixels'})`/`tiles({as:'fingerprints'})` for byte-precise work, `memory({op:'read'})` for game state
+4. `frame({op:'screenshot'})` for vibes, `tiles({op:'pixels'})`/`tiles({op:'fingerprints'})` for byte-precise work, `memory({op:'read'})` for game state
 5. `input({op:'set'})` / `input({op:'press'})` / `input({op:'sequence'})` to drive the game
 6. `state({op:'save'}, "checkpoint")` / `state({op:'load'}, "checkpoint")` for try/undo
 
@@ -394,8 +399,8 @@ Every build tool returns `issues: [{file, line, col, severity, message, stage}, 
 The full byte-patch loop is six MCP calls, no custom scripts:
 
 ```js
-identifyRom({ path })                              // 1. what is it?
-disassembleRom({ path, startAddress, untilReturn:true })
+cart({op:'identify', path })                       // 1. what is it?
+disasm({target:'rom', path, startAddress, untilReturn:true })
                                                    // 2. find the target
                                                    //    (auto-tagged reset/nmi/irq labels,
                                                    //     HW register names, file-offset
@@ -404,16 +409,16 @@ disassembleRom({ path, startAddress, untilReturn:true })
                                                    //     mapper-aware addresses)
 assembleSnippet({ cpu, origin, code: "lda #$00\nrts" })
                                                    // 3. encode replacement bytes
-writeMemory({ region:"system_ram", offset:0xRAM, hex })
+memory({op:'write', region:"system_ram", offset:0xRAM, hex })
                                                    // 4. VERIFY first — write the value
                                                    //    on the live emulator, watch for
                                                    //    the expected behavior. Cheaper than
                                                    //    a wrong patch.
-patchFile({ path, offset, hex, expect: "<current bytes>" })
+romPatch({op:'write', path, offset, hex, expect: "<current bytes>" })
                                                    // 5. patch with safety check —
                                                    //    refuses if existing bytes differ
-diffRoms({ platform, a: original, b: patched })    // 6. verify the patch landed
-loadMedia({ platform, path: patched }) → screenshot()  // 7. run it
+romPatch({op:'diff', platform, a: original, b: patched })    // 6. verify the patch landed
+loadMedia({ platform, path: patched }) → frame({op:'screenshot'})  // 7. run it
 ```
 
 **Finding which CODE wrote a byte.** Static disasm reading is the slow part —
@@ -426,28 +431,28 @@ of precision:
   (the common NES case, where a frame-sampled PC is just the idle loop). This is
   the right tool when you need the actual writer.
   ```js
-  findWriter({ address: 0x00CD, maxFrames: 300, pressDuring:[{ frame:30, button:"A" }] })
+  breakpoint({ on:'write', address: 0x00CD, maxFrames: 300, pressDuring:[{ frame:30, button:"A" }] })
     → { found:true, pc:"$AF85", value:"0x81", hits:19 }
-  disassembleRom({ path, startAddress: 0xAF85 })   // → the real store instruction
+  disasm({ target:'rom', path, startAddress: 0xAF85 })   // → the real store instruction
   ```
   Supported on **all 14 tier-1 systems** — NES, GB/GBC, Genesis, SMS/GG, SNES,
   Atari 2600/7800, C64, Lynx (65C02), PC Engine (HuC6280), MSX (Z80), and GBA
   (ARM7) — every bundled CPU family. On a banked mapper a `$8000-$BFFF` pc may be
-  in a switchable bank; findWriter reports the `bank` (NES/GB/SMS-GG) so you can
+  in a switchable bank; `breakpoint({on:'write'})` reports the `bank` (NES/GB/SMS-GG) so you can
   pass it to `disasm({target:'rom'})`.
 - **`watch({on:'mem'})` / `breakpoint({on:'write',precision:'sampled'})` — cross-platform, frame-sampled.** Step until
   the byte changes; the returned `pc` is a frame-boundary sample (a lead, not a
   guarantee under interrupts — cross-check the value trace). Use on non-NES, or
   for the value timeline.
 - **`memory({op:'snapshot'})` + `memory({op:'diff'})` — "which bytes did THIS event touch?"** When
-  you don't yet know the address: snapshotMemory before the event, trigger it
-  (pressButton/stepFrames), then diffMemory — you get just the changed offsets
+  you don't yet know the address: `memory({op:'snapshot'})` before the event, trigger it
+  (`input({op:'press'})`/`frame({op:'step'})`), then `memory({op:'diff'})` — you get just the changed offsets
   with before/after, no eyeballing two RAM dumps. The fast way to find an area-id
   / phase / flag byte a transition writes. (`state({op:'diff'})` is the coarse
   whole-machine "did anything change?" version.)
 
 ```js
-runUntilWrite({ region:"system_ram", offset:0x03B6, maxFrames:300,
+breakpoint({ on:'write', precision:'sampled', region:"system_ram", offset:0x03B6, maxFrames:300,
                 pressDuring:[{ frame:30, button:"A" }] })
   → { pc: "$E3AF" (frame-sampled), changes:[{ before:31, after:32 }] }
 ```
@@ -469,9 +474,9 @@ CPU *at the instruction* and read it:
   anymore).
 
 ```js
-findWriter({ address:0xFF2000 }) → { pc:"$49E", ... }   // get a real instruction PC
-runUntilPC({ address:0x49E })    → { hit:true, pc:"$49E" }   // CPU frozen here
-getCPUState({ platform:"genesis", cpu:"main" })             // → registers.A0 = the pointer
+breakpoint({ on:'write', address:0xFF2000 }) → { pc:"$49E", ... }   // get a real instruction PC
+breakpoint({ on:'pc', address:0x49E })       → { hit:true, pc:"$49E" }   // CPU frozen here
+cpu({ op:'read', platform:"genesis", cpu:"main" })             // → registers.A0 = the pointer
 ```
 
 All in the `assets` category except `disasm({target:'rom'})` (in `debug`); the breakpoint
@@ -485,7 +490,7 @@ addresses and code sites**. Call `cheats({op:'lookup', path})` FIRST — for a m
 game it returns that game's cheats with the address decoded out of each one:
 
 ```js
-gameCheats({ path: "Rygar (USA).nes" })
+cheats({ op:'lookup', path: "Rygar (USA).nes" })
 // → { matched:true, confidence:"name", game:"Rygar (USA)", crc32:"...",
 //     entries:[
 //       { desc:"Infinite Magic Attack", code:"00CD:FF",
@@ -515,29 +520,29 @@ likely right, but a different region/revision can use different addresses. The
 confirmation is to apply it and watch:
 
 ```js
-applyCheat({ path:"Rygar (USA).nes", desc:"Infinite Magic Attack" })  // enable it live
-screenshot()                                                          // see the effect → label confirmed
+cheats({ op:'apply', path:"Rygar (USA).nes", desc:"Infinite Magic Attack" })  // enable it live
+frame({ op:'screenshot' })                                            // see the effect → label confirmed
 // or apply a RAW code from anywhere:
-applyCheat({ code:"00CD:FF" })          // RAM poke → appliedAs:"ram"
-applyCheat({ code:"SXIOPO" })           // Game Genie (core decodes it)
-applyCheat({ code:"C06C:0C:26" })       // raw ROM patch → auto-re-encoded to a read-intercept (appliedAs:"rom", reencodedFrom)
-clearCheats()                           // remove all
+cheats({ op:'apply', code:"00CD:FF" })          // RAM poke → appliedAs:"ram"
+cheats({ op:'apply', code:"SXIOPO" })           // Game Genie (core decodes it)
+cheats({ op:'apply', code:"C06C:0C:26" })       // raw ROM patch → auto-re-encoded to a read-intercept (appliedAs:"rom", reencodedFrom)
+cheats({ op:'clear' })                          // remove all
 ```
 
 **`appliedAs` tells you how it went in** — `"ram"` (per-frame poke), `"rom"` (in-core
 read-intercept), `"raw"` (core-decoded device code), or `"rom-unencodable"` (a ROM
 address that couldn't be made into a working ROM patch — likely a no-op; add a COMPARE
 byte). A raw `ADDR:VAL:COMPARE` on a ROM address would otherwise silently no-op as a RAM
-poke, so applyCheat transparently re-encodes it to the platform's ROM-patch device (NES/
+poke, so `cheats({op:'apply'})` transparently re-encodes it to the platform's ROM-patch device (NES/
 Genesis/GB Game Genie, SNES Game Genie — NOT Pro Action Replay, which is RAM). **Boot-time
 cheats:** pass `loadMedia({ cheats:[…] })` to apply codes BEFORE frame 0 (iterating on a
-boot-seeded value), and use `reset({ hard:true })` for a true power-cycle — plain `reset`
+boot-seeded value), and use `host({op:'reset', hard:true})` for a true power-cycle — plain `host({op:'reset'})`
 is the RESET button and leaves work RAM (and boot-seeded state) intact.
 
 `cheats({op:'apply'})` is also just **fun** — play any matched game with infinite lives,
 invincibility, etc. It is **NON-DESTRUCTIVE**, exactly like RetroArch: the cheat
 lives in volatile core state (a per-frame RAM write, or an in-core read-intercept
-for ROM cheats), the ROM file on disk is NEVER touched, and `reset` / `state({op:'load'})`
+for ROM cheats), the ROM file on disk is NEVER touched, and `host({op:'reset'})` / `state({op:'load'})`
 / `cheats({op:'clear'})` removes it. **`cheats({op:'lookup'})` DB coverage (13/14):** NES, GB/GBC,
 SNES, Genesis, SMS/GG, Atari 2600/7800, **Lynx**, **GBA**, **PC Engine**, **MSX** —
 every tier-1 system except **C64** (the cheat database ships no C64 entries, so
@@ -558,14 +563,14 @@ ROM, **including your own homebrew/WIP** where no DB entry exists. This closes
 the loop with the byte-hunting tools:
 
 ```js
-runUntilWrite({ region:"system_ram", offset:0xCD })   // 1. find the byte (or use gameCheats)
-makeCheat({ platform:"nes", address:0x00CD, value:0xFF })
+breakpoint({ on:'write', precision:'sampled', region:"system_ram", offset:0xCD })   // 1. find the byte (or use cheats({op:'lookup'}))
+cheats({ op:'make', platform:"nes", address:0x00CD, value:0xFF })
 //   → { raw:"CD:FF", note:"RAM cheat...", ... }            // 2. RAM poke → raw code
 // For a ROM/Game-Genie patch, read the current byte and pass it as `compare`:
-readMemory({ region:"prg_rom", offset:0x8E20 })          //   (current byte = 0x85)
-makeCheat({ platform:"nes", address:0x8E20, value:0xA5, compare:0x85 })
+memory({ op:'read', region:"prg_rom", offset:0x8E20 })          //   (current byte = 0x85)
+cheats({ op:'make', platform:"nes", address:0x8E20, value:0xA5, compare:0x85 })
 //   → { gameGenie:"SZZAETSA", verified:true, raw:"8E20:A5:85", ... }
-applyCheat({ code:"SZZAETSA" }) → screenshot()           // 3. confirm it works
+cheats({ op:'apply', code:"SZZAETSA" }) → frame({ op:'screenshot' })           // 3. confirm it works
 ```
 
 `cheats({op:'make'})` encodes for the platform's NATIVE device(s) and **labels each one**
@@ -581,7 +586,7 @@ letter-code device (Atari 2600/7800, Lynx, GBA, C64, PC Engine, MSX) get a
 verified raw `ADDR:VAL` code that `cheats({op:'apply'})` passes straight to the core.
 
 ```js
-makeCheat({ platform:"snes", address:0x7E0DBF, value:0x63 })
+cheats({ op:'make', platform:"snes", address:0x7E0DBF, value:0x63 })
 //   → { codes:[ {device:"pro-action-replay", code:"7E0DBF63", verified:true},
 //               {device:"game-genie", code:"17D8-9EE8", verified:true} ],
 //       raw:"7E0DBF:63", ... }
@@ -610,9 +615,9 @@ hand-deriving the table:
 - **`text({op:'encode'})`** — text + map → bytes, ready for `romPatch({op:'write'})`.
 
 ```js
-learnFontMap({ fromScreen:[{ text:"START", row:13, col:11 }] })   // read tiles off the live screen
-findEncodedText({ romPath, text:"MOUNTAIN", fontMap })            // → offsets + bank + context
-encodeTextForRom({ text:"NEW TEXT ", fontMap }) → patchFile(...)  // rewrite it
+text({ op:'learn', fromScreen:[{ text:"START", row:13, col:11 }] })   // read tiles off the live screen
+text({ op:'find', romPath, text:"MOUNTAIN", fontMap })            // → offsets + bank + context
+text({ op:'encode', text:"NEW TEXT ", fontMap }) → romPatch({ op:'write', ... })  // rewrite it
 ```
 
 **Tools for hacking, by category:**
@@ -657,8 +662,8 @@ encodeTextForRom({ text:"NEW TEXT ", fontMap }) → patchFile(...)  // rewrite i
 - `cheats({op:'make', platform, address, value, compare?, style})` — CREATE a new
   cheat code from an address+value (the inverse of decoding). Returns a
   Game Genie letter code + the raw ADDR:VAL, with a `verified` round-trip
-  check. Works on any ROM incl. homebrew/WIP. Pair with runUntilWrite/
-  gameCheats (find the byte) → makeCheat (encode) → applyCheat (confirm).
+  check. Works on any ROM incl. homebrew/WIP. Pair with `breakpoint({on:'write',precision:'sampled'})`/
+  `cheats({op:'lookup'})` (find the byte) → `cheats({op:'make'})` (encode) → `cheats({op:'apply'})` (confirm).
 - `watch({on:'mem', region, offset, length, frames, pressDuring})` /
   `breakpoint({on:'write', precision:'sampled', region, offset, maxFrames, pressDuring})` — frame-level
   memory-write trace. Reports every change with PC, so you can map a
@@ -673,14 +678,14 @@ encodeTextForRom({ text:"NEW TEXT ", fontMap }) → patchFile(...)  // rewrite i
   (NES: header.bin/prg.bin/chr.bin; SNES: copier_header + rom + internal
   header; Genesis: vectors/header/body; GB: boot/header/body) plus a
   manifest.json with mapper, mirroring, etc.
-- `cart({op:'wrap', platform, ...})` — counterpart to extractCart.
+- `cart({op:'wrap', platform, ...})` — counterpart to `cart({op:'extract'})`.
   Emits `wrapperSource` (.s) + `linkerConfig` (cc65 ld65 cfg) ready
-  for buildSource. Per-platform templates.
+  for `build({output:'rom'})`. Per-platform templates.
 - `disasm({target:'rom'})` — see "Disassembler" section below for the full
   annotation set.
 
 For graphics swaps specifically:
-- `tiles({as:'png', source:'path', platform, path, bank, paletteFromEmulator, paletteIndex})`
+- `tiles({op:'png', source:'path', platform, path, bank, paletteFromEmulator, paletteIndex})`
   from a source game → PNG of its tiles. `bank: N` (NES 4 KB CHR bank
   index) replaces magic file-offset math. `paletteFromEmulator: true`
   + `paletteIndex` colors the export with the live game palette
@@ -692,19 +697,19 @@ For graphics swaps specifically:
   target platform's tile format. Combines extract + crop + quantize +
   optional manifest. Under `intent:"homebrew"` reads the live source
   palette automatically (same `paletteFromEmulator` semantics as
-  `tiles({as:'png',source:'path'})`); under `intent:"rom-hack"` preserves source
+  `tiles({op:'png',source:'path'})`); under `intent:"rom-hack"` preserves source
   bytes verbatim. Output PNG + manifest feed straight into
   `importArt({from:'texturepacker'})`.
 - `encodeArt({stage:'tiles', platform, pngBase64})` → target-platform tile bytes
 - `romPatch({op:'spliceCHR'})` to write them into the CHR region of your target ROM
-  (handles the convertImageToTiles + patchFile composition in one call)
+  (handles the `encodeArt({stage:'tiles'})` + `romPatch({op:'write'})` composition in one call)
 
 ## Disassembler
 
 `disasm({target:'rom'})` ships with every annotation enabled by default:
 
 ```js
-disassembleRom({path, platform:"nes", startAddress:0xC184,
+disasm({target:'rom', path, platform:"nes", startAddress:0xC184,
                 length:64, untilReturn:true})
 // →
 //   reset:  sei                  ; C184 78        x  @0x194 (prg @0x184)
@@ -731,9 +736,9 @@ What you get:
   tables built in. `annotateRegisters:false`.
 - **File-offset comments** (`; @0xNNNN`) on every disassembled line —
   mapper-aware, so $C184 on NROM-128 correctly reports `@0x194`. Direct
-  input to `patchFile.offset`. For NES iNES files, the header-stripped
+  input to `romPatch({op:'write'})`'s `offset`. For NES iNES files, the header-stripped
   PRG offset is ALSO reported (`@0x194 (prg @0x184)`) so you can patch
-  either the `.nes` file or `prg.bin` from extractCart without doing
+  either the `.nes` file or `prg.bin` from `cart({op:'extract'})` without doing
   the -16 math. `annotateFileOffsets:false` to turn off.
 - **Mapper-aware addressing**: NROM-128 mirror at $C000, MMC1/MMC3/UxROM
   top bank fixed at $C000, SMS sega-mapper slot-0/1/2 1:1 file mapping,
@@ -769,7 +774,7 @@ Each region disassembles through the CPU's native objdump and reassembles throug
 the matching native `as`/`ld`/`objcopy`, so the round-trip is guaranteed byte-for-byte:
 
 ```js
-disassembleProject({ path: "game.nes", outputDir: "./game-disasm" })
+disasm({ target:'project', path: "game.nes", outputDir: "./game-disasm" })
 // → { ok, platform, regions:[{file, startAddress, roundTripOk, readablePercent}],
 //     roundTrip:{ allByteExact, failed:[] }, readablePercentAvg }
 ```
@@ -806,8 +811,8 @@ Caveats worth knowing up front:
 
 ## CHR/tile tools — file vs emulator source
 
-`tiles({as:'pixels'})`, `tiles({as:'png'})`, `tiles({as:'png',source:'path'})`, `tiles({as:'fingerprints'})`,
-and `tiles({as:'ascii'})` all accept an optional `path` arg:
+`tiles({op:'pixels'})`, `tiles({op:'png'})`, `tiles({op:'png',source:'path'})`, `tiles({op:'fingerprints'})`,
+and `tiles({op:'ascii'})` all accept an optional `path` arg:
 - **With `path` set**: reads CHR straight from a file (iNES auto-locates
   CHR; raw `.chr`/`.bin` files read as-is). Use to survey assets BEFORE
   loading. Response reports `source: "file"`.
@@ -819,7 +824,7 @@ and `tiles({as:'ascii'})` all accept an optional `path` arg:
 The full "take game X on platform A, make it on platform B" pipeline:
 
 1. Study source: `loadMedia({ platform: A, path })`, `recordSession`, `disasm({target:'rom'})`
-2. Rip art: `tiles({as:'png', source:'path', platform: A, path})` returns a PNG sheet
+2. Rip art: `tiles({op:'png', source:'path', platform: A, path})` returns a PNG sheet
 3. Recook art: `encodeArt({stage:'tiles', platform: B, pngBase64})` re-encodes in B's tile format and bit depth
 4. Write target game: `build({output:'run', platform: B, source})` for fast iteration
 5. Embed converted art: `romPatch({op:'writeMany'})` to inject the new CHR/tile bytes
@@ -828,7 +833,7 @@ The tile codec handles 4 bit-layouts × 4 bit-depths. NES↔GB is byte-exact at 
 
 ### Lifting a CHARACTER (not a rectangular tile region) — use meta-sprite capture
 
-`tiles({as:'png',source:'path'})` / `encodeArt({stage:'crop'})` / `importArt({from:'rom'})` work on **rectangular tile-grid regions**. That is the WRONG model for a real character, which is built from **multiple independent hardware sprites** (OAM/SAT entries), each with its own position, size, tile index, palette, flips, priority, and a non-contiguous tile range. Cropping a screenshot or a tile sheet looks right and then renders as garbage in-game because the hardware multi-cell tile order differs per platform (Genesis is column-major; SNES large OBJ + NES/GB 8×16 are their own orders). The meta-sprite tools handle all of it. Works on **genesis, snes, nes, gb, gbc, sms, gg** (C64 MOBs are 24×21 bitmaps, not tiles — not supported):
+`tiles({op:'png',source:'path'})` / `encodeArt({stage:'crop'})` / `importArt({from:'rom'})` work on **rectangular tile-grid regions**. That is the WRONG model for a real character, which is built from **multiple independent hardware sprites** (OAM/SAT entries), each with its own position, size, tile index, palette, flips, priority, and a non-contiguous tile range. Cropping a screenshot or a tile sheet looks right and then renders as garbage in-game because the hardware multi-cell tile order differs per platform (Genesis is column-major; SNES large OBJ + NES/GB 8×16 are their own orders). The meta-sprite tools handle all of it. Works on **genesis, snes, nes, gb, gbc, sms, gg** (C64 MOBs are 24×21 bitmaps, not tiles — not supported):
 
 1. `loadMedia` → step / press to a frame where the character is fully on screen (NOT a menu — if no sprites are up, captures come back empty).
 2. `sprites({op:'group', platform})` → clusters on-screen OAM/SAT entries into objects, largest-first (usually the player). Pick a group's `slots`.
@@ -842,9 +847,9 @@ This keeps the lifted asset faithful to the source ROM's hardware composition in
 
 You have two modes. Pick per task:
 
-**Image mode** — `frame({op:'screenshot'})`, `tiles({as:'png'})`, `background({view:'map', render: true})`, `palette({source:'live'})`. Returns PNGs. Best for aesthetic judgment ("does this look right?", "did the explosion play?").
+**Image mode** — `frame({op:'screenshot'})`, `tiles({op:'png'})`, `background({view:'map', render: true})`, `palette({source:'live'})`. Returns PNGs. Best for aesthetic judgment ("does this look right?", "did the explosion play?").
 
-**Text mode** — `tiles({as:'pixels'})`, `tiles({as:'ascii'})`, `tiles({as:'fingerprints'})`, `memory({op:'read'})`. Returns structured data or ASCII art. Best for precise comparison ("is this tile blank?", "did $00F4 change between frame 60 and 90?", "find all tiles whose hash matches X").
+**Text mode** — `tiles({op:'pixels'})`, `tiles({op:'ascii'})`, `tiles({op:'fingerprints'})`, `memory({op:'read'})`. Returns structured data or ASCII art. Best for precise comparison ("is this tile blank?", "did $00F4 change between frame 60 and 90?", "find all tiles whose hash matches X").
 
 Both work fine. Image mode is more flexible but burns more tokens per call. Use text mode for scans and diffs, image mode for "does this look like Mario?" questions.
 
@@ -866,11 +871,11 @@ OAM format: bytes per sprite are `[y, tileIndex, attributes, x]`.
 
 ## Save-state semantics
 
-`state({op:'save'}, name)` / `state({op:'load'}, name)` slots are **in-memory** and discarded on `shutdown` or new media. To persist a state across sessions:
+`state({op:'save'}, name)` / `state({op:'load'}, name)` slots are **in-memory** and discarded on `host({op:'shutdown'})` or new media. To persist a state across sessions:
 - `state({op:'save', path})` writes the CURRENT live host to a file directly.
 - `state({op:'export', fromSlot, path})` copies an EXISTING in-memory slot (e.g. one the human saved with a playtest emulator-hotkey — it appears in `state({op:'list'})`) to a file **without disturbing the live host** (no pause/resume needed). Reload either with `state({op:'load', path})`.
 
-`state({op:'load'})` removes any active cheats (a save-state blob doesn't carry frontend cheat state) and reports `cheatsCleared`. `reset()` resets the frame counter + core state (and clears cheats) but keeps the loaded ROM.
+`state({op:'load'})` removes any active cheats (a save-state blob doesn't carry frontend cheat state) and reports `cheatsCleared`. `host({op:'reset'})` resets the frame counter + core state (and clears cheats) but keeps the loaded ROM.
 
 ## Project scaffolding
 
@@ -880,7 +885,7 @@ Three shapes, pick the one that matches what you're doing:
 
 - **`scaffold({op:'project', ..., withSnippets: true})`** — same as above, **plus** drops every vetted starter snippet for the platform alongside main.c. Use when you want "main.c + every helper file ready to edit" in one shot, without picking a genre. Snippets that overlap with the template's runtime are skipped (no double-writes). Response includes `snippetsCopied: string[]`.
 
-- **`scaffold({op:'game', platform, genre})`** — genre-shaped scaffold (`shmup` / `platformer` / `puzzle` / `sports` / `racing`). Higher-level than createProject — picks the right template + runtime + crt0 + linker config for the genre. Available on **NES, GB, GBC, SNES, Genesis, SMS, GG, C64, GBA, Lynx, Atari 7800** — i.e. every platform that has genre templates. Availability is derived from the registered templates (not a hardcoded list), so the error message for an unsupported platform always names the current set; Atari 2600 (asm-only) + MSX + ColecoVision (bring-up only) have no genre scaffolds and are rejected. Ships a complete working ROM with state machine + sprite allocation + sound wired — fill in gameplay logic on top. **Want a side-scroller? Use `genre:"platformer"`** — and on every platform EXCEPT NES the scaffold already side-scrolls: a hardware camera follows the player (SCX/$D016/R8/BG?HOFS/REG_BG?HOFS/bgSetScroll depending on platform), with software tile-column streaming where the world is wider than one nametable/plane. NES is still single-screen (platforms drawn as sprites); to make it scroll, draw platforms into the background nametables + `ppu_scroll(camX,0)` (it flips the PPUCTRL nametable-select bit past 256 px) + stream columns past 512 px. Each platformer's `describe` text gives the per-platform specifics; the scroll-register details live in the platform's MENTAL_MODEL.md "Horizontal scrolling" section.
+- **`scaffold({op:'game', platform, genre})`** — genre-shaped scaffold (`shmup` / `platformer` / `puzzle` / `sports` / `racing`). Higher-level than `scaffold({op:'project'})` — picks the right template + runtime + crt0 + linker config for the genre. Available on **NES, GB, GBC, SNES, Genesis, SMS, GG, C64, GBA, Lynx, Atari 7800** — i.e. every platform that has genre templates. Availability is derived from the registered templates (not a hardcoded list), so the error message for an unsupported platform always names the current set; Atari 2600 (asm-only) + MSX + ColecoVision (bring-up only) have no genre scaffolds and are rejected. Ships a complete working ROM with state machine + sprite allocation + sound wired — fill in gameplay logic on top. **Want a side-scroller? Use `genre:"platformer"`** — and on every platform EXCEPT NES the scaffold already side-scrolls: a hardware camera follows the player (SCX/$D016/R8/BG?HOFS/REG_BG?HOFS/bgSetScroll depending on platform), with software tile-column streaming where the world is wider than one nametable/plane. NES is still single-screen (platforms drawn as sprites); to make it scroll, draw platforms into the background nametables + `ppu_scroll(camX,0)` (it flips the PPUCTRL nametable-select bit past 256 px) + stream columns past 512 px. Each platformer's `describe` text gives the per-platform specifics; the scroll-register details live in the platform's MENTAL_MODEL.md "Horizontal scrolling" section.
 
 Then iterate with `build({output:'run'})` against the source you read from `path/main.*`.
 
@@ -933,7 +938,7 @@ When you don't know the symbol yet, `memory({op:'snapshot'})` → trigger the ev
 
 ## Common gotchas
 
-- **CHR-RAM vs CHR-ROM**: Most NES homebrew uses CHR-RAM. CHR tools (`tiles({as:'pixels'})`, `tiles({as:'png'})`, `tiles({as:'fingerprints'})`, `tiles({as:'ascii'})`, `tiles({as:'png',source:'path'})`) all accept an optional `path` arg — pass it to read CHR from the iNES file (CHR-ROM carts), omit to read live CHR-RAM from the running emulator. Response always reports `source: "file" | "emulator"`. NES homebrew built with `linkerConfig:"chr-ram"` has no CHR in the file — must read from the emulator after upload.
+- **CHR-RAM vs CHR-ROM**: Most NES homebrew uses CHR-RAM. CHR tools (`tiles({op:'pixels'})`, `tiles({op:'png'})`, `tiles({op:'fingerprints'})`, `tiles({op:'ascii'})`, `tiles({op:'png',source:'path'})`) all accept an optional `path` arg — pass it to read CHR from the iNES file (CHR-ROM carts), omit to read live CHR-RAM from the running emulator. Response always reports `source: "file" | "emulator"`. NES homebrew built with `linkerConfig:"chr-ram"` has no CHR in the file — must read from the emulator after upload.
 - **Mapper-aware addressing**: NES NROM 16KB carts mirror PRG at $8000 and $C000 (`disasm({target:'rom'})` reports the canonical $C000+ addresses since that's where the reset vector points). Banked mappers (MMC1/MMC3/UxROM) have the top 16KB fixed at $C000 with bank 0 at $8000 by default — pass a startAddress in the right range to disassemble a different bank.
 - **C64 isn't a console**: media is `.prg` / `.d64` / `.t64`, not "ROM". `loadMedia` takes a `mediaKind` arg; auto-defaults are usually right.
 - **Atari 5200 build works but doesn't run**: cc65 produces .a52 files, but our atari800 core needs Asyncify which isn't yet wired into the host. Use Atari 7800 or Lynx if you want a 6502 platform that actually runs.
@@ -956,7 +961,7 @@ Two tools that save real time and frustration:
 - **SMS / Game Gear**: button 1 (TL, main fire) is libretro **b**, button 2 (TR) is libretro **a** — so `{a:true}` presses button 2, not 1.
 - **Every other core maps straight through** (`{a}`→A, `{b}`→B): NES, GB/GBC, SNES (incl. x/y/l/r), GBA, PC Engine (a=I, b=II), MSX (a=trig 1), Lynx (a=A). C64 + Atari 2600 are single-fire — fire is `{b}`/`{south}`, `{a}` is a no-op. Atari 7800 boots in 1-button mode (both fires read INPT4) until you enable 2-button mode.
 
-**The safe habit: use the spatial names (`north/east/south/west`) or `input({op:'press', button:'a'|'b'|'c'|'1'|'2'})` — both resolve to the correct physical button per platform.** Reach for raw `a`/`b` only when you mean the literal libretro id. `getInputLayout({platform}).faceButtons` is the authoritative per-platform map; each platform's MENTAL_MODEL has a "Driving input over MCP" note.
+**The safe habit: use the spatial names (`north/east/south/west`) or `input({op:'press', button:'a'|'b'|'c'|'1'|'2'})` — both resolve to the correct physical button per platform.** Reach for raw `a`/`b` only when you mean the literal libretro id. `input({op:'layout', platform}).faceButtons` is the authoritative per-platform map; each platform's MENTAL_MODEL has a "Driving input over MCP" note.
 
 ## Starter snippets
 
@@ -978,7 +983,7 @@ The biggest mistake agents make on this server is reading binary files into thei
 - `build({ output:'rom', sourcePath, binaryIncludePaths, includePaths, outputPath })` — paths in AND a path back out (`binaryPath`). Inline base64 only on opt-in `inline: true`. (Or `build({output:'project', path})` to build a whole dir without a manifest.)
 - `encodeArt({ stage:'tilemap', platform, pngPath, outputDir })` — full-screen PNG → deduped tiles + tilemap + palette, input from disk, output to disk. **This is the tool for splash/title screens** (see the splash-screen section below). Supported: nes, snes, genesis, sms, gg, gb, gbc, c64.
 - `frame({ op:'screenshot', path })` — writes PNG to disk, skips inline payload. For a quick "did it change?" sanity check, add `scale: 0.5` (nearest-neighbor, pixel-art-safe) — ~75% fewer image tokens; reserve full resolution for when you actually need pixel detail. **Cheaper still: `symbols({op:'resolve'})` → `memory({op:'read'})` reads the one byte of state with zero image tokens (see Symbol-aware debugging).**
-- `tiles({ as:'png', source:'path', outputPath })` — render a ROM file's tiles to a PNG sheet
+- `tiles({ op:'png', source:'path', outputPath })` — render a ROM file's tiles to a PNG sheet
 - `encodeArt({ stage:'tiles', platform, pngPath, outputDir })` — PNG → native tile bytes, input from disk. Pass `tileOrder:'sprite'` for COLUMN-major (Genesis/Lynx multi-cell hardware-sprite order) instead of the default row-major.
 - `encodeAudio({ target:'brr', pcmPath, outputPath })` — SNES BRR (the SPC700's only sample format)
 - `encodeAudio({ target:'xgm2pcm', wavPath, name, outputCPath })` — GENESIS sample SFX: WAV → XGM2 PCM (8-bit signed mono, 13.3 kHz / 6.65 half-rate, 256-padded) + a 256-aligned C array you `#include` and play with `XGM2_playPCM`. Bakes in the format rules so you don't botch sign/rate/alignment/padding.
@@ -1017,12 +1022,12 @@ The correct workflow (all platforms with a tilemap — nes, snes, **genesis**, s
 1. **Size the source** to the platform's screen: Genesis **320×224**, NES/SNES/SMS 256×224/256×192, GB 160×144, C64 320×200.
 2. **Quantize to the platform palette** so colors land on hardware-displayable values:
    ```
-   getPlatformPalettePng({ platform:"genesis", format:"png", outputPath:"/tmp/pal.png" })
+   palette({ source:'platformMaster', platform:"genesis", format:"png", outputPath:"/tmp/pal.png" })
    magick splash.png -dither FloydSteinberg -remap /tmp/pal.png splash_q.png
    ```
 3. **Convert in one call:**
    ```
-   imageToTilemap({ platform:"genesis", pngPath:"splash_q.png", outputDir:"out/" })
+   encodeArt({ stage:'tilemap', platform:"genesis", pngPath:"splash_q.png", outputDir:"out/" })
    ```
    You get `out/chr.bin` (deduped tiles), `out/nametable.bin` (tilemap entries), `out/palette.bin`, and `out/preview.png`. **Look at `preview.png`** — it's the tool re-rendering its own output, so if the preview is correct your in-game result will be too. If the preview is wrong, the input PNG is the problem, not the encode.
 4. **Wire it in:** DMA `chr.bin` to VRAM, load `palette.bin` into CRAM/CGRAM, write `nametable.bin` to your BG plane base. The response `note` tells you the exact sizes + where each blob goes per platform.
@@ -1044,10 +1049,10 @@ A few platform-tool quirks worth knowing up front:
   - **The bundled `gb_crt0.s` is now actually linked.** Pre-r54 a fundamental bug in `buildZ80C` was shipping the raw .s text to sdld as if pre-assembled — sdld silently rejected it and fell back to SDCC's stock sm83 crt0 (no GB cart boot, no IRQ vectors). Map showed no `init` symbol, $0000 was $FF, $0100 was $FF. Every GB ROM ran on stock crt0 invisibly. Fixed by auto-detecting .s source vs .rel object and running it through sdasgb first. Post-fix: `init` at $0150, entry $0100 = `00 c3 50 01` (nop; jp $0150), reset vector $0000 = $C9. **This was the root cause for #14 audio AND part of why every previous "runtime should work OOTB" round still felt friction-heavy.**
   - **GB/GBC C builds now auto-fix the header at build time** (rgbfix runs inside `build({output:'rom'})`): Nintendo logo at $0104, header checksum at $014D, global checksum, and the CGB flag at $0143 ($00 for `.gb`, $C0 for `.gbc`). You no longer need to call `patchGbHeader` manually — the ROM `build({output:'rom'})` hands back boots on real hardware as-is. `patchGbHeader({path})` still exists if you want to override title / cart type / RAM size / etc. on an existing file.
   - **`shadow_oam` is pinned at $C100** in the bundled `gb_runtime.c` via `__at(0xC100)`. OAM DMA reads ONLY the high byte and copies 160 bytes from `$XX00` — a plain `uint8_t my_oam[160]` may land at $C017 and DMA garbage. If you roll your own OAM buffer, pick an address with `0x00` low byte (e.g. $C200) and pass it directly to `oam_dma_copy`.
-  - **Call `enable_vblank_irq()` once at boot.** Without it, `wait_vblank()` busy-polls `LY` which updates only at WASM stepFrames quantum boundaries → game loop runs at ~1/30 intended speed on the emulator. After enable, `wait_vblank()` compiles to `HALT` + vblank IRQ wake (~10 cycles per frame).
+  - **Call `enable_vblank_irq()` once at boot.** Without it, `wait_vblank()` busy-polls `LY` which updates only at WASM `frame({op:'step'})` quantum boundaries → game loop runs at ~1/30 intended speed on the emulator. After enable, `wait_vblank()` compiles to `HALT` + vblank IRQ wake (~10 cycles per frame).
   - **Use `memcpy_vram(dst, src, n)` for VRAM bulk writes**, NOT raw `(uint8_t*)0x8000` casts — SDCC sm83 may elide the latter as dead code. The bundled `gb_hardware.h` declares every $FFxx register as `volatile`-typed so direct writes like `BGP = 0xE4;` are fine; the hazard is only on cast-through-pointer block copies.
   - **`background({view:'map', platform:"gb"})` now renders a 256×256 PNG of the BG plane.** Pass `which: 1` for $9C00 map base, `window: true` to render the Window map instead. Returns `mapBase` + `mode` + `scy/scx` so you can see where the visible 160×144 region falls.
-  - **`memory({op:'read', region:"video_ram"})` doesn't work on GB** — gambatte exposes VRAM as `gb_vram` (not the generic libretro id). r54 errors now suggest this directly. Also: `gb_oam`, `gb_io`, `gb_hram`, `gb_bgpdata`, `gb_objpdata`, `gb_cpu_regs`. `tiles({as:'png'})` / `background({view:'map'})` / `sprites({op:'inspect'})` abstract over this.
+  - **`memory({op:'read', region:"video_ram"})` doesn't work on GB** — gambatte exposes VRAM as `gb_vram` (not the generic libretro id). r54 errors now suggest this directly. Also: `gb_oam`, `gb_io`, `gb_hram`, `gb_bgpdata`, `gb_objpdata`, `gb_cpu_regs`. `tiles({op:'png'})` / `background({view:'map'})` / `sprites({op:'inspect'})` abstract over this.
 - **SMS / Game Gear VDP footguns** (R53 cleanup, full detail in `platform({op:'doc', platform:"gg"|"sms", name:"mental_model"})`):
   - **8 sprites per scanline** is a hard VDP limit. Extra sprites on the same Y row silently drop — symptom: "first 8 letters of CATCH THE COIN render, rest vanish." Split text across multiple Y rows OR draw it via the BG name table (no per-line limit).
   - **GG OAM coords are hardware-space, NOT visible-space.** The libretro screenshot returns the 160×144 visible region but OAM bytes are still 256×192 hw-coord. Visible region = OAM x∈[48,207], y∈[24,167]. `sprites({op:'inspect'})` reports hardware coords too.

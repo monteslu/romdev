@@ -83,7 +83,8 @@ mode combination is invalid for the 68000," not "your CPU is too old."
 The fastest loop (works for most Genesis dev):
 
 ```js
-runSource({
+build({
+  output: 'run',
   platform: "genesis",
   source: /* your .s contents */,
   frames: 60,                    // step 60 frames after load
@@ -97,7 +98,8 @@ faster after the core is warm).
 For multi-file projects use the `sources` map:
 
 ```js
-runSource({
+build({
+  output: 'run',
   platform: "genesis",
   sources: { "main.s": mainText, "music.s": musicText },
   frames: 60,
@@ -107,7 +109,8 @@ runSource({
 For projects with binary assets (tiles, palettes, music data):
 
 ```js
-buildSource({
+build({
+  output: 'rom',
   platform: "genesis",
   sourcePath: "/abs/path/main.s",
   binaryIncludePaths: {
@@ -122,8 +125,8 @@ Source can then `incbin "tiles.bin"` directly.
 
 ## Debugging tools available
 
-Genesis has full debugging parity with SNES — see `catalog({op:'categories'})`
-then `loadCategory({category:"debug"})`:
+Genesis has full debugging parity with SNES — all tools are loaded at session
+start (see `catalog({op:'categories'})` for the map):
 
 | Tool | What it gives you |
 |---|---|
@@ -137,7 +140,7 @@ then `loadCategory({category:"debug"})`:
 | `memory({op:'read', region:"genesis_z80_ram"})` | 8 KB Z80 sound CPU RAM |
 | `state({op:'dump', path})` | Full savestate blob for forensic inspection |
 
-Pair `screenshot({overlayBoxes:true})` with `sprites({op:'inspect'})` for
+Pair `frame({op:'screenshot', overlayBoxes:true})` with `sprites({op:'inspect'})` for
 "is the GPU rendering sprites where I think they are" visual debugging.
 
 ## ROM file extension

@@ -11,8 +11,7 @@ undefined. Symptom: a single ugly color (often $0F → grey-ish or
 $00) fills the screen. Fix: `palette_load(palette)` BEFORE
 `ppu_on_all()`.
 ```js
-loadCategory({category:"memory"})
-readMemory({region:"nes_palette", offset:0, length:32})
+memory({op:'read', region:"nes_palette", offset:0, length:32})
 // Expect non-random bytes 0..0x3F.
 ```
 
@@ -20,8 +19,7 @@ readMemory({region:"nes_palette", offset:0, length:32})
 doesn't render. `ppu_on_all()` sets bit 3 (BG) + bit 4 (sprites) =
 $1E.
 ```js
-loadCategory({category:"debug"})
-getRenderingContext({})
+background({view:'renderState'})
 // Look for "bgVisible: true, spritesVisible: true".
 ```
 
@@ -37,7 +35,7 @@ Check in this order:
    Hardware Y = screen Y - 1, so the top edge of the screen is
    OAM Y=0 (i.e. screen Y=1).
    ```js
-   readMemory({region:"nes_oam", offset:0, length:16})
+   memory({op:'read', region:"nes_oam", offset:0, length:16})
    // bytes 0..3 = slot 0: [Y, tile, attr, X]
    ```
 
@@ -51,7 +49,7 @@ Check in this order:
    $FF and resets `oam_index` to 0. You must call `oam_spr` AFTER
    `oam_clear`.
    ```js
-   inspectSprites({})    // shows which slots are visible
+   sprites({op:'inspect'})    // shows which slots are visible
    ```
 
 5. **The Y off-by-one bug.** `oam_spr` subtracts 1 from Y to convert
@@ -74,7 +72,7 @@ Check in this order:
 3. **PPUMASK.0 is "greyscale mode."** Set it accidentally and every
    color is mapped to nearest grey. Check via `background({view:'renderState'})`.
    ```js
-   getRenderingContext({})    // "grayscale" should be false
+   background({view:'renderState'})    // "grayscale" should be false
    ```
 
 ## "Game freezes / locks up"
@@ -82,14 +80,14 @@ Check in this order:
 1. **NMI vector points at $0000.** If you replaced the crt0 and
    didn't define `nmi:`, the CPU jumps to garbage and hangs.
    ```js
-   readMemory({region:"system_ram", ...})    // or:
+   memory({op:'read', region:"system_ram", ...})    // or:
    xxd file.nes | tail -1                    // last 6 bytes = NMI, RESET, IRQ
    ```
 
 2. **`ppu_wait_nmi()` spinning forever.** That means NMI never fires.
    Check that PPUCTRL bit 7 is set:
    ```js
-   getRenderingContext({})    // "nmiEnabled" should be true
+   background({view:'renderState'})    // "nmiEnabled" should be true
    ```
    If not, `ppu_on_all()` or `ppu_on_bg()` should set it. If you wrote
    to PPUCTRL manually with bit 7 off, you've disabled NMI.
@@ -123,7 +121,7 @@ for (;;) {
 }
 ```
 
-## "BG tile visible in inspectPatternTiles but not on screen"
+## "BG tile visible in tiles({op:'png'}) but not on screen"
 
 The NES PPU renders 240 scanlines but most TVs (and our
 framebuffer output) crop to 224. Nametable row 0 (PPU $2000-$201F,
@@ -149,7 +147,7 @@ prefer `uint8_t` over `int`, bit-pack flags, use small fixed arrays,
 avoid large `static` buffers. (This is why "NES-shaped C" uses bitmasks
 and tiny structs — it's not style, it's the 512 B ceiling.)
 
-## "runSource screenshot looks one frame behind my sprites"
+## "build({output:'run'}) screenshot looks one frame behind my sprites"
 
 On NES, the NMI handler DMAs `shadow_oam` → real OAM at the *start* of
 each vblank, so sprites you stage on frame N first appear when frame
@@ -158,7 +156,7 @@ screenshot so it matches your staged OAM — but if you script frames
 manually (`frame({op:'step'})` then `frame({op:'screenshot'})`), add one extra `frame({op:'step'}, 1)`
 after staging to see the current sprite positions.
 
-## "readMemory(nes_chr) returns same bytes for offset 0 and offset 4096"
+## "memory({op:'read'}, nes_chr) returns same bytes for offset 0 and offset 4096"
 
 Was a real bug in R59 of the fceumm patch — `memory({op:'read'}, nes_chr)`
 collapsed all 8 1KB pages into copies of the first page on NROM.
@@ -168,7 +166,7 @@ is running a stale WASM:
 # Check the timestamp of the bundled fceumm wasm in your install:
 stat -c '%y' node_modules/romdev-core-fceumm/wasm/fceumm_libretro.wasm
 ```
-Workaround if you can't restart: `tiles({as:'png'})` reads CHR
+Workaround if you can't restart: `tiles({op:'png'})` reads CHR
 via a different path and was unaffected throughout.
 
 ## "Globals read garbage / `_nmi_counter` never advances"
@@ -183,7 +181,7 @@ just wrote, but `_nmi_counter` increments are lost and any
 
 Diagnostic:
 ```js
-readMemory({region:"system_ram", offset:0x6000, length:16})
+memory({op:'read', region:"system_ram", offset:0x6000, length:16})
 // All $FF or matching the last value you wrote = open bus.
 ```
 
@@ -208,10 +206,10 @@ showing mostly `$FF` is the EXPECTED state, not a bug.
 
 Sentinel test that proves DMA works:
 ```js
-pause()
-writeMemory({region:"system_ram", offset:0x0200, hex:"42".repeat(256)})
-resume(); stepFrames({frames:1})
-readMemory({region:"nes_oam", offset:0, length:16})
+host({op:'pause'})
+memory({op:'write', region:"system_ram", offset:0x0200, hex:"42".repeat(256)})
+host({op:'resume'}); frame({op:'step', count:1})
+memory({op:'read', region:"nes_oam", offset:0, length:16})
 // All $42 → DMA copies the source page faithfully. Working as designed.
 // All $FF → real DMA bug. Escalate.
 ```
@@ -290,7 +288,7 @@ A few high-leverage tools you might not know exist:
 - **`cpu({op:'read'})`** — PC + flags. Use when you suspect a hang.
 - **`watch({on:'mem', region:"nes_oam", offset:0, length:4})`** — trace
   every write to OAM slot 0, returns the PC that wrote it.
-- **`frame({op:'step', frames:3600})`** — runs 1 minute of game time in
+- **`frame({op:'step', count:3600})`** — runs 1 minute of game time in
   milliseconds. Don't be conservative.
 
 ## Mental model + boot order

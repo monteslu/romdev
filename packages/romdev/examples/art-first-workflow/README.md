@@ -27,11 +27,11 @@ or generate one matching your target platform:
 
 ```js
 // MCP call
-getPlatformPalettePng({ platform: "nes", format: "hex", outputPath: "palette.hex" })
+palette({ source:'platformMaster', platform: "nes", format: "hex", outputPath: "palette.hex" })
 // → palette.hex (one #RRGGBB per line)
 
 // Or for direct import into LibreSprite:
-getPlatformPalettePng({ platform: "nes", format: "lospec", outputPath: "palette.json" })
+palette({ source:'platformMaster', platform: "nes", format: "lospec", outputPath: "palette.json" })
 // → palette.json with {name, author, colors:[hex_no_hash]}
 ```
 
@@ -52,7 +52,8 @@ getPlatformPalettePng({ platform: "nes", format: "lospec", outputPath: "palette.
 
 ```js
 // MCP call — returns tile bytes + named groups + tags
-loadAsepriteSheet({
+importArt({
+  from: 'aseprite',
   path: "sprites.ase",
   platform: "nes",
   outputDir: "build",
@@ -95,7 +96,8 @@ artist's frame durations in LibreSprite, not hardcoded in code.
 ### 5. Load the level into your game
 
 ```js
-loadTilemap({
+importArt({
+  from: 'tiled',
   path: "level1.tmj",
   platform: "nes",
   outputDir: "build",
@@ -131,7 +133,8 @@ Got an animated GIF from anywhere (LibreSprite, GIMP, Pixelorama,
 ScreenToGif)? Parse it the same way:
 
 ```js
-loadGifAnimation({
+importArt({
+  from: 'gif',
   path: "explosion.gif",
   platform: "nes",
   outputDir: "build",
@@ -146,7 +149,8 @@ Or a TexturePacker-style PNG+JSON sheet (what LibreSprite's
 "Export Sprite Sheet" makes):
 
 ```js
-loadSpriteSheet({
+importArt({
+  from: 'texturepacker',
   pngPath: "sheet.png",
   manifestPath: "sheet.json",
   platform: "nes",

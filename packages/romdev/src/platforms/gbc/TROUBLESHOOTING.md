@@ -62,7 +62,7 @@ and `$0143 = $80` (CGB-enhanced) — so a freshly built `.gbc` already
 boots in color. You do **not** call `patchGbHeader` for that.
 
 ```js
-runSource({ platform: "gbc", language: "c", ... });  /* header auto-fixed */
+build({ output: 'run', platform: "gbc", language: "c", ... });  /* header auto-fixed */
 ```
 
 If you instead see green-shade DMG mode, the ROM was almost certainly

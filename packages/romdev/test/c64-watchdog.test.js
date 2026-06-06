@@ -97,4 +97,17 @@ test("C64 watchdog force-stops an infinite loop (vice 6510)", { timeout: 180000 
   host.setWatchdog(0);
   const cleared = host.getPCBreak(true);
   assert.equal(cleared.watchdog, false, "watchdog flag did not clear after disarm+clearHit");
+
+  // REGRESSION (v0.6.0 cross-system gap): the DEFAULT budget must trip on a
+  // slow ~1MHz CPU before the per-frame cap. A flat 4M NEVER tripped here — the
+  // 6510 runs only ~3.18M instructions in 600 frames, so 4M needed ~755 frames.
+  // The per-CPU default (≈0.8*600*6000 ≈ 2.88M for the 6502 family) trips around
+  // frame ~480. Drive callSubroutine at the live spin PC with NO maxInstructions.
+  const spinPC = (finalPC >>> 0);
+  const wd = host.callSubroutine({ pc: spinPC, maxFrames: 600, sandbox: true });
+  assert.equal(wd.watchdog, true,
+    "DEFAULT C64 budget must trip the watchdog, not fall to maxFrames (the slow-CPU fix): " + JSON.stringify(wd));
+  assert.ok(wd.framesRun < 600,
+    "watchdog should trip before maxFrames=600 on the default 6510 budget: " + JSON.stringify(wd));
+  console.log("c64 DEFAULT-budget watchdog: framesRun=" + wd.framesRun + " (< 600)");
 });

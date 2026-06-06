@@ -50,7 +50,7 @@ function resolvePlatform(host, requested) {
 }
 
 export function registerPlatformTools(server, z, sessionKey) {
-  // inspectPatternTiles lives in the `tiles` tool (tiles({as:'png'}), in
+  // inspectPatternTiles lives in the `tiles` tool (tiles({op:'png'}), in
   // tile-inspect.js) now — extracted here as a live-binding core. Reads the
   // running emulator's pattern tables / VRAM (or an iNES file via `path`).
   inspectPatternTilesCore = async ({ platform, path: romPath, bpp = 4, tileBaseByte = 0, paletteBase = 0, paletteIndex = 0, tileCount = 0, scale = 1, outputPath, inline }) => {

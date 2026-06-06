@@ -162,6 +162,41 @@ test("findPointerTo + relocateBlock plant/find/repoint a 32-bit pointer (Genesis
   assert.ok(fp2.hits.some((h) => h.atOffsetDec === 0x100), "repointed pointer not found");
 });
 
+// ── shadow suppression + widths filter (v0.6.0 NBA-Jam nit #1) ──────────────
+// Genesis emits a 32-bit BE form AND a 24-bit BE form. A 32-bit hit at N has the
+// same low-3-bytes as a 24-bit hit at N+1 (the tail), which doubled the agent's
+// hit list. Default suppresses that shadow; suppressShadows:false / widths control it.
+test("findPointerTo: 24-bit shadow of a 32-bit hit is suppressed by default (Genesis)", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "reinject-shadow-"));
+  const rom = new Uint8Array(0x10000);
+  const target = 0x4000;
+  // Plant the 32-bit BE pointer at 0x200; its low 3 bytes (00 40 00) are also a
+  // valid 24-bit BE pointer to 0x4000 starting at 0x201 — the shadow.
+  rom.set(encodeInt(target, 4, "be"), 0x200);
+  const romPath = path.join(dir, "shadow.md");
+  await writeFile(romPath, Buffer.from(rom));
+
+  // Default (suppression ON): only the 32-bit hit at 0x200 survives; the 24-bit
+  // shadow at 0x201 is dropped and counted.
+  const on = await findPointerToCore({ path: romPath, platform: "genesis", romOffset: target });
+  const wide = on.hits.find((h) => h.atOffsetDec === 0x200 && h.width === 4);
+  const shadow = on.hits.find((h) => h.atOffsetDec === 0x201 && h.width === 3);
+  assert.ok(wide, "32-bit hit must survive: " + JSON.stringify(on.hits));
+  assert.ok(!shadow, "24-bit shadow at N+1 must be suppressed by default: " + JSON.stringify(on.hits));
+  assert.ok(on.shadowsSuppressed >= 1, "shadowsSuppressed must report the drop: " + JSON.stringify(on));
+
+  // suppressShadows:false → the raw 24-bit shadow reappears.
+  const off = await findPointerToCore({ path: romPath, platform: "genesis", romOffset: target, suppressShadows: false });
+  assert.ok(off.hits.some((h) => h.atOffsetDec === 0x201 && h.width === 3),
+    "raw mode must show the 24-bit shadow: " + JSON.stringify(off.hits));
+  assert.equal(off.shadowsSuppressed, undefined, "raw mode reports no suppression count");
+
+  // widths:[4] → only 32-bit forms searched; the 24-bit form never even runs.
+  const only32 = await findPointerToCore({ path: romPath, platform: "genesis", romOffset: target, widths: [4] });
+  assert.ok(only32.hits.every((h) => h.width === 4), "widths:[4] must return only 32-bit hits: " + JSON.stringify(only32.hits));
+  assert.ok(only32.hits.some((h) => h.atOffsetDec === 0x200), "widths:[4] must still find the real pointer");
+});
+
 test("findPointerTo GBA: 32-bit LE 0x08000000+offset (value-search-complete)", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "reinject-gba-"));
   const rom = new Uint8Array(0x8000);

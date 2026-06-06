@@ -236,10 +236,10 @@ was all `$FF` when NMI fired" — NOT "DMA broken."
 
 Sentinel test that proves DMA works before opening a bug:
 ```js
-pause()
-writeMemory({region:"system_ram", offset:0x0200, hex:"42".repeat(256)})
-resume(); stepFrames({frames:1})
-readMemory({region:"nes_oam", offset:0, length:16})
+host({op:'pause'})
+memory({op:'write', region:"system_ram", offset:0x0200, hex:"42".repeat(256)})
+host({op:'resume'}); frame({op:'step', count:1})
+memory({op:'read', region:"nes_oam", offset:0, length:16})
 // All $42 → DMA fine. All $FF → real DMA bug.
 ```
 

@@ -367,7 +367,16 @@ export function registerMemoryTools(server, z, sessionKey) {
     "Read / write / search the core's memory regions, one tool keyed by `op`. " +
     "`region` is the single canonical enum (system_ram, save_ram, video_ram, rtc; NES nes_nametables/nes_palette/nes_oam/nes_chr; " +
     "SNES snes_oam/snes_cgram/snes_aram/snes_fillram; Genesis genesis_cram/vsram/vdp_regs/z80_ram/...). The response carries each region's endianness + wordSize.\n" +
-    `• op:'read' — bytes as a \`hex\` string. ≤${INLINE_HEX_LIMIT}B come back inline; >${INLINE_HEX_LIMIT}B need \`outputPath\` (RAW bytes written → {path,bytes}) or \`inline:true\`. BATCH: \`offsets\` (addresses or {offset,length}) reads many non-contiguous spots in ONE call → reads:[{offset,length,hex}]. (Genesis video_ram is raw host-LE word-swapped — not a direct tile map; use tiles({as:'pixels'}).)\n` +
+    "OP CHEAT-SHEET (params each op uses): " +
+    "read → {region, offset?, length?|offsets?, outputPath?|inline?}; " +
+    "write → {region, offset, hex|base64}; " +
+    "readCart → {offset?, length?}; " +
+    "snapshot → {region, name, offset?, length?}; " +
+    "diff → {region, name, view?}; " +
+    "classify → {region?, offset?, length?}; " +
+    "search → {value, size?, region?}; " +
+    "searchNext → {compare, value?}.\n" +
+    `• op:'read' — bytes as a \`hex\` string. ≤${INLINE_HEX_LIMIT}B come back inline; >${INLINE_HEX_LIMIT}B need \`outputPath\` (RAW bytes written → {path,bytes}) or \`inline:true\`. BATCH: \`offsets\` (addresses or {offset,length}) reads many non-contiguous spots in ONE call → reads:[{offset,length,hex}]. (Genesis video_ram is raw host-LE word-swapped — not a direct tile map; use tiles({op:'pixels'}).)\n` +
     "• op:'write' — pass payload as `hex` (e.g. 'deadbeef') OR `base64` — **NOT `data`, `bytes`, or an array (those are REJECTED with guidance).** hex for byte patterns, base64 for binary blobs.\n" +
     "• op:'readCart' — read the LOADED CARTRIDGE ROM image ('is the emulator running my patched bytes?'). For un-banked platforms (Genesis/GB/SMS/Lynx/PCE) the file `offset` IS the CPU ROM address; **NES/SNES skip the header and reach bytes through a mapper, so `mapped:true`+note say the offset is not a flat CPU address.**\n" +
     "• op:'snapshot' — capture a baseline of `region` (server RAM, keyed by `name`) to later diff. The 'which bytes did THIS event touch?' workflow: snapshot → trigger event → op:'diff'.\n" +

@@ -40,13 +40,22 @@ export function registerRomIdTools(server, z, sessionKey) {
     "Patch / re-inject / inspect a ROM file on disk, one tool keyed by `op`. The ROM-hack toolkit. " +
     "**`expect=` (the bytes you think are there now) on every write guards the classic wrong-revision-corruption footgun — highly recommended.** " +
     "Spine: `{path, platform}`. **TIP: before patching, prove the byte matters by forcing it live with memory({op:'write'}) on the running emulator (static disasm can't tell 'matches the pattern' from 'actually runs').**\n" +
+    "OP CHEAT-SHEET (the params each op uses, beyond the {path, platform} spine): " +
+    "write → {offset, hex|base64, expect?, outputPath?, allowExpand?}; " +
+    "writeMany → {input, output, writes[]}; " +
+    "spliceCHR → {pngBase64, tileIndex, bank?|chrFileOffset?, paletteHint?, expect?}; " +
+    "relocate → {newHex|newBase64, toOffset, pointerOffset?, pointerWidth?, pointerEndian?, pointerValue?, dryRun?}; " +
+    "makeStored → {rawHex|rawBytes, format, interleave?}; " +
+    "findFree → {minLength, fillBytes?, start?, end?}; " +
+    "findPointer → {romOffset, mapper?, widths?, suppressShadows?, maxHitsReturned?}; " +
+    "diff → {a, b, maxChangesReturned?}.\n" +
     "• op:'write' — write N bytes into any binary file at `offset` (the generic splicer: PRG patches, CHR splices, SNES tile/sample injection). `hex`|`base64`, `expect`, `allowExpand` (grow the file — default OFF; most hacks must NOT change size or headers/mapper break), `outputPath` (else in place).\n" +
     "• op:'writeMany' — apply a LIST of {offset, hex|base64} `writes` from `input` ROM to `output`.\n" +
     "• op:'spliceCHR' — inject a PNG's tiles into a CHR region (`pngBase64`, `tileIndex`, `bank`, `chrFileOffset`, `paletteHint`, `expect`).\n" +
     "• op:'relocate' — write an edited block to free ROM space and repoint a pointer at it (the safe 'don't overwrite in place' move when an edit changes size). `newHex`|`newBase64`, `toOffset` (from op:'findFree'), `pointerOffset` (from op:'findPointer'), `pointerWidth`/`pointerEndian`/`pointerValue`, `dryRun`.\n" +
     "• op:'makeStored' — wrap raw bytes so the game's OWN decompressor expands them VERBATIM (edit tiles → makeStored → write, no compressor needed). `rawHex`|`rawBytes`, `format` (raw/lz77-literal/lz2-direct/sega-rle/konami-rle/...), `interleave`. ALWAYS verify via cpu({op:'call'}) on the game's decompressor.\n" +
     "• op:'findFree' — find a run of free space to relocate into. `minLength`, `fillBytes`, `start`, `end`.\n" +
-    "• op:'findPointer' — find every pointer in the ROM that references `romOffset` (platform-correct encoding), the missing piece for redirecting a loader. `mapper` (SNES). On banked 8-bit systems a 16-bit pointer is page-ambiguous — correlate with the bank-set instruction.\n" +
+    "• op:'findPointer' — find every pointer in the ROM that references `romOffset` (platform-correct encoding), the missing piece for redirecting a loader. `mapper` (SNES). On wide systems (Genesis/GBA) a 32-bit hit's low bytes also match the narrower form one byte over — those tail SHADOWS are suppressed by default (see `shadowsSuppressed`); pass `suppressShadows:false` for raw, or `widths:[4]` to search only 32-bit forms. On banked 8-bit systems a 16-bit pointer is page-ambiguous — correlate with the bank-set instruction.\n" +
     "• op:'diff' — diff two ROMs (`a`, `b`) → the changed byte ranges. `maxChangesReturned`.",
     {
       op: z.enum(["write", "writeMany", "spliceCHR", "relocate", "makeStored", "findFree", "findPointer", "diff"])
@@ -97,6 +106,8 @@ export function registerRomIdTools(server, z, sessionKey) {
       romOffset: z.number().int().min(0).optional().describe("op:findPointer — the ROM FILE offset you want to find pointers TO."),
       mapper: z.enum(["lorom", "hirom"]).optional().describe("op:findPointer — SNES only: override mapper detection."),
       maxHitsReturned: z.number().int().min(1).max(2048).default(256).describe("op:findPointer — cap the hits returned."),
+      widths: z.array(z.number().int().min(2).max(4)).optional().describe("op:findPointer — only search these pointer byte-widths (e.g. [4] = 32-bit only, skipping the narrower forms that mostly produce shadow hits on Genesis/GBA)."),
+      suppressShadows: z.boolean().default(true).describe("op:findPointer — drop a narrower hit when it's the TAIL of a wider hit at the same pointer (e.g. the 24-bit shadow at N+1 of a 32-bit hit at N). Default true; pass false to see every raw form hit. `shadowsSuppressed` reports the count."),
       // diff
       a: z.string().optional().describe("op:diff — path to ROM A."),
       b: z.string().optional().describe("op:diff — path to ROM B."),
@@ -156,11 +167,11 @@ export function registerRomIdTools(server, z, sessionKey) {
     }),
   );
 
-  // extractSpriteSheet folded into the `tiles` tool (tiles({as:'png', source:'path'})).
+  // extractSpriteSheet folded into the `tiles` tool (tiles({op:'png', source:'path'})).
 }
 
 /**
- * tiles({as:'png'}) over a ROM FILE ON DISK — render tiles to a PNG sheet.
+ * tiles({op:'png'}) over a ROM FILE ON DISK — render tiles to a PNG sheet.
  * Exported so the `tiles` router (tile-inspect.js) can call it. The live-VRAM
  * PNG path is inspectPatternTilesCore; this is the file-source path.
  */

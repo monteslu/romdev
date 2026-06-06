@@ -44,7 +44,7 @@ Writes during those modes are silently dropped. Safe write windows:
   bit 1-0 = 0 to detect it. Used for HDMA-style streaming on GBC.
 
 The "screen flashes white when uploading mid-frame" bug is almost
-always missing this. `tiles({as:'png'})` shows you exactly what
+always missing this. `tiles({op:'png'})` shows you exactly what
 landed in VRAM — if it's empty after your upload, the LCD was on.
 
 ### 2. OAM DMA must run from HRAM
@@ -79,7 +79,7 @@ fixed 4-shade ramp. So "tile pixel = 0" is whatever shade BGP's low
 
 This is why the same tile data looks completely different in different
 games — they all use 4 shades, but the BGP mapping varies. To preview
-art, use `tiles({as:'preview', platform:"gb", ...})` with an explicit
+art, use `tiles({op:'preview', platform:"gb", ...})` with an explicit
 palette, or `paletteFromEmulator:true` after loading.
 
 ### 5. GBC adds banked VRAM + KEY1 double-speed + 32-color palette

@@ -4,9 +4,19 @@ All notable changes to `romdev-mcp`. Dates are release dates.
 
 ## 0.11.0
 
-Genesis music + the symbol/build/audio gaps from the v0.6.0 agent feedback.
+Genesis music + the symbol/build/audio gaps from the v0.6.0 agent feedback, plus
+the consolidation-review follow-ups (axis consistency, op cheat-sheets, a
+discoverable rename table).
 
 ### Added
+- **`catalog({op:'whatsNew'})`** — the recent CHANGELOG + an OLD→NEW tool RENAME
+  TABLE (derived from the consolidation MERGE_MAP). Resuming a handoff written
+  against an older server? Call this first: pre-1.0 the surface consolidates
+  freely with no deprecated aliases, so a remembered name is usually now an `op`
+  on a domain tool — this maps all ~124 of them in one read instead of probing.
+- **Per-op "cheat-sheet" lines** at the top of the fat domain tools (`cpu`,
+  `romPatch`, `memory`, `tiles`): a one-line `op → {params}` map so you can see a
+  single op's signature without reading the whole merged param blob.
 - **`encodeAudio({ target:'xgm2', vgmPath|vgmBase64, name, system })`** — compile a
   `.vgm`/`.vgz` to a COMPILED Genesis XGM2 blob + a 256-aligned C array you
   `#include` and `XGM2_play()`. `XGM2_play()` needs a compiled blob (split FM/PSG
@@ -30,10 +40,43 @@ Genesis music + the symbol/build/audio gaps from the v0.6.0 agent feedback.
   `main.s`/`main.asm` and links every source in the dir — no per-iteration file
   manifest. Binary assets (`.bin/.chr/.pcm/.brr/.vgm/...`) fold in automatically.
 
+### Changed (breaking — pre-1.0, no aliases)
+- **`tiles` is now keyed by `op`, not `as`.** Every other domain tool keys on
+  `op`; `tiles({as:...})` was the lone exception and agents reflexively typed
+  `tiles({op:...})` and ate a round-trip. Now consistent: `tiles({op:'png'|
+  'pixels'|'fingerprints'|'ascii'|'preview'})`. The old `as` key is rejected.
+
 ### Fixed
 - Genesis music docs named the wrong tool/API. Corrected to `XGM2_play` (there is
   no `XGM2_startPlay` in R58), the compiled-blob requirement, and that the legacy
   `xgmtool`/`.xgc`/`XGM_*` is a DIFFERENT format.
+- **`romPatch({op:'findPointer'})` no longer doubles its hit list with shadows.**
+  On the multi-width systems (Genesis: 32+24-bit BE; SNES: 16+24-bit LE) a wider
+  hit shares its low bytes with the narrower form one position over — the byte
+  shadow. Those are now suppressed by default (`shadowsSuppressed` reports the
+  count); `suppressShadows:false` shows the raw set and a new `widths:[4]` filter
+  searches only the widest form. The suppression matches on offset-overlap AND
+  pointer-value (so two coincidentally co-located but distinct pointers are never
+  falsely merged). The other 12 platforms emit a single width, so this is a
+  verified no-op there. (NBA-Jam-TE agent nit: 20 hits → the 10 distinct
+  relocation handles, no hand-dedupe.)
+- **`cpu({op:'call'})` watchdog now trips on a wrong-entry free-run, not just a
+  tight loop — on EVERY CPU.** Two cross-system gaps fixed:
+  - The default budget was `maxFrames*500k`, always larger than `maxFrames`-worth
+    of real execution, so a wrapper PC with a bad source that fell back into the
+    game's main loop silently hit `maxFrames` with `watchdog:false`. The default
+    is now **per-CPU** (`0.8 × maxFrames × instrPerFrame`, capped at 4M) so it
+    trips before the frame cap on the fast cores AND the slow ~1MHz 8-bit CPUs
+    (a flat 4M never tripped within 600 frames on the 6507/6510 — they run only
+    ~3–3.8M instructions in that span). Real codecs finish in <~1M instructions,
+    so even the slow-CPU floor keeps 2–3× headroom. The not-returned message now
+    names the wrapper/free-run case.
+  - **The instruction watchdog is now wired into the gpgx `z80_run` loop, not
+    just `m68k_run`** — so it actually fires on **SMS/GG** (where the Z80 is the
+    active CPU). Before, `callSubroutine` armed a watchdog that could never trip
+    on SMS/GG (the counter only incremented on the m68k), so a Z80 free-run fell
+    to `maxFrames`. Requires the rebuilt `romdev-core-gpgx` WASM. (NBA-Jam-TE
+    agent nit, generalized to all 14 platforms.)
 
 ## 0.10.0
 
