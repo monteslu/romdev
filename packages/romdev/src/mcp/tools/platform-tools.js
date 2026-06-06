@@ -19,6 +19,8 @@ export let getAudioStateCore = async () => { throw new Error("platform-tools cor
 export let inspectSpritesCore = async () => { throw new Error("platform-tools cores not initialized — registerPlatformTools must run first"); };
 export let inspectBackgroundMapCore = async () => { throw new Error("platform-tools cores not initialized — registerPlatformTools must run first"); };
 export let inspectPatternTilesCore = async () => { throw new Error("platform-tools cores not initialized — registerPlatformTools must run first"); };
+export let convertImageToTilesCore = async () => { throw new Error("platform-tools cores not initialized — registerPlatformTools must run first"); };
+export let imageToTilemapCore = async () => { throw new Error("platform-tools cores not initialized — registerPlatformTools must run first"); };
 
 // Image-output contract: a PNG image goes to disk (path) OR comes back
 // inline (inline:true). No path + not inline → error. The structured
@@ -808,31 +810,8 @@ export function registerPlatformTools(server, z, sessionKey) {
       throw new Error(`inspectBackgroundMap not yet implemented for platform '${p}'`);
   };
 
-  server.tool(
-    "convertImageToTiles",
-    "Use this to convert a PNG to a platform's native tile-byte format — raw tiles, no tilemap (use " +
-    "imageToTilemap for a full picture with screen/attribute data). Supported: nes, gb, gbc, sms, gg, " +
-    "snes, genesis, atari7800, c64, pce — each with its native bit-depth/layout; programmable-palette " +
-    "platforms also return a suggested palette. MSX is supported too but returns TWO streams " +
-    "(pattern.bin + color.bin for screen-2's per-row 2-color format) instead of one tiles.bin. " +
-    "platforms also return a suggested palette. Image width/height must be multiples of 8. Good for " +
-    "demakes (rip art from one platform, re-encode for another) — combine with patchRom or your source. " +
-    "DEFAULT writes tiles.bin (+ palette.bin if a palette is produced) into outputDir and returns paths; pass " +
-    "inline:true to get tilesBase64/paletteHex in the response (you must pass one or the other). " +
-    "Pass `pngPath` when the image is already on disk — the server reads it directly, so you never pay base64 " +
-    "tokens (and avoid the corruption you'd get hand-forwarding a big base64 blob). " +
-    "For multi-cell SPRITES (Genesis/Lynx etc.) pass `tileOrder:'sprite'` — hardware reads a sprite's tiles " +
-    "COLUMN-major (top-to-bottom, then right), which is NOT how a BG tileset is laid out (row-major).",
-    {
-      platform: z.string(),
-      pngBase64: z.string().optional().describe("Base64-encoded PNG. Prefer `pngPath` when the image is on disk — server reads it, no base64 token cost."),
-      pngPath: z.string().optional().describe("Absolute path to a PNG file on disk. Preferred over pngBase64 — server reads the file directly."),
-      maxTiles: z.number().int().min(1).max(8192).default(512),
-      tileOrder: z.enum(["row", "sprite"]).default("row").describe("'row' (default) = row-major, the order BG tilemaps want. 'sprite' = column-major (top-to-bottom then right), the order multi-cell hardware sprites read on Genesis/Lynx/etc. Use 'sprite' to pack a PNG sprite frame into ready-to-DMA sprite tiles. Ignored for MSX."),
-      outputDir: z.string().optional().describe("Directory to write tiles.bin (+ palette.bin). Required unless inline:true."),
-      inline: z.boolean().default(false).describe("If true, return tilesBase64/paletteBase64/paletteHex in the response instead of writing to disk. Default false — then outputDir is required."),
-    },
-    safeTool(async ({ platform, pngBase64, pngPath, maxTiles, tileOrder, outputDir, inline }) => {
+  // convertImageToTiles → encodeArt({stage:'tiles'}) (router in sprite-pipeline.js).
+  convertImageToTilesCore = async ({ platform, pngBase64, pngPath, maxTiles = 512, tileOrder = "row", outputDir, inline }) => {
       if (!inline && !outputDir) {
         throw new Error("convertImageToTiles: pass outputDir (write tiles.bin/palette.bin to disk, returns paths) or inline:true (return base64 in the response).");
       }
@@ -933,8 +912,7 @@ export function registerPlatformTools(server, z, sessionKey) {
         out.note = "PC Engine HuC6270 4bpp 'planar-pairs' layout (32 B/tile, same as SNES: 16 B plane 0+1, then 16 B plane 2+3). DMA the tile bytes into VRAM at your BG/SPR pattern base. `paletteHex` is a suggested 16-color set — pack each to the VCE's 9-bit GRB at use time. (MSX returns pattern.bin/color.bin instead — see its branch.)";
       }
       return jsonContent(out);
-    }),
-  );
+  };
 
   // ---- Background image conversion (platform-generic) -------------------
   // Convention: caller already resized + dithered the image into the
@@ -989,27 +967,8 @@ export function registerPlatformTools(server, z, sessionKey) {
       });
   };
 
-  server.tool(
-    "imageToTilemap",
-    "Use this to render a large PNG (title screen, cutscene, status panel, world map) from tiles: returns " +
-    "tile graphics + tilemap (NES nametable / SNES tilemap / GB BG map / C64 screen RAM / PCE BAT / MSX " +
-    "screen-2 name+pattern+color tables) + per-cell palette/attribute + palette table, with tile dedup " +
-    "(h/v-flip aware where the platform's map supports it). Supported: nes, snes, genesis, " +
-    "sms, gg, gb, gbc, c64, pce, msx. PREREQUISITE: the PNG must already be sized to the platform's native screen and " +
-    "quantized to its palette (see getPlatformPalettePng) — per-platform cell/bpp details are in the " +
-    "platform's MENTAL_MODEL.md. Pass `pngPath` (preferred) or `pngBase64`; pass `outputDir` to write " +
-    "chr/nametable/attr/palette/preview to disk instead of base64-inlining them.",
-    {
-      platform: z.string().describe("Target platform id."),
-      pngBase64: z.string().optional().describe("Base64-encoded PNG. Use `pngPath` instead when the image is already on disk to keep your context small."),
-      pngPath: z.string().optional().describe("Absolute path to a PNG file on disk. Preferred over pngBase64 — server reads the file directly."),
-      outputDir: z.string().optional().describe("Directory to write chr.bin, nametable.bin, attr.bin, palette.bin, preview.png into. When set, the response omits the base64 fields and returns paths instead. Created if it doesn't exist."),
-      maxTiles: z.number().int().min(1).max(4096).optional().describe("Cap on unique tiles (only used when dedup=true). Defaults to the platform's pattern-table limit (NES: 256)."),
-      backdrop: z.number().int().min(0).optional().describe("Force a specific master-palette index for the universal backdrop. If omitted, the most-common color is used."),
-      dedup: z.boolean().default(true).describe("If true (default), collapse identical tile bitmaps to one CHR entry."),
-      singlePalette: z.boolean().default(false).describe("If true, every attribute cell uses one identical palette. Limits the image to 4 total colors."),
-    },
-    safeTool(async ({ platform, pngBase64, pngPath, outputDir, maxTiles, backdrop, dedup, singlePalette }) => {
+  // imageToTilemap → encodeArt({stage:'tilemap'}) (router in sprite-pipeline.js).
+  imageToTilemapCore = async ({ platform, pngBase64, pngPath, outputDir, maxTiles, backdrop, dedup = true, singlePalette = false }) => {
       let pngBytes;
       if (pngPath) {
         pngBytes = await readFile(pngPath);
@@ -1092,8 +1051,7 @@ export function registerPlatformTools(server, z, sessionKey) {
             (r._genesis?.warnings?.length ? " WARNINGS: " + r._genesis.warnings.slice(0, 3).join(" ") : "")
           : "Pass outputDir next call to skip inline base64 and get back paths instead.",
       });
-    }),
-  );
+  };
 }
 
 /**
