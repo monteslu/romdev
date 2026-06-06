@@ -259,7 +259,10 @@ export function registerFrameTools(server, z, sessionKey) {
     "'screenshot': capture the latest frame. `format:'png'` (default, exact colors) or `'ascii'` (lossy chafa text " +
     "render for agents that can't view images). `overlayBoxes` (png) draws a box per visible sprite (SNES+NES); " +
     "`scale` (0<≤1) downscales (~75% fewer image tokens at 0.5 for routine 'did it change?' checks); ascii cols/" +
-    "rows/symbols/colors knobs in the param hints.\n" +
+    "rows/symbols/colors knobs in the param hints. " +
+    "**CHEAP VERIFY: for a binary pass/fail check (did the theme change? is the sprite there? did the HUD tick?) prefer " +
+    "scale:0.5 or format:'ascii' — and BETTER, read the one byte of state directly: symbols({op:'resolve', name}) → " +
+    "memory({op:'read'}) is a 1-byte assertion that costs no image tokens at all (works on every C platform incl. Genesis/GBA now).**\n" +
     "'stepAndShot': step + screenshot in ONE round-trip — the drive-then-look loop.\n" +
     "'stepInstruction': execute exactly ONE CPU instruction and stop (CPU-level single-step, finer than 'step'). Freezes " +
     "the CPU right after the instruction; returns { pc }. Pair with cpu({op:'read'}) to watch registers change one " +

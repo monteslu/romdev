@@ -19,6 +19,7 @@
 
 import { readFile } from "node:fs/promises";
 import { jsonContent, safeTool } from "../util.js";
+import { parseGnuLdMap, isGnuLdMap } from "../../toolchains/gnu-ld-map.js";
 
 function parseSdldStyle(text) {
   const out = [];
@@ -60,8 +61,14 @@ function parseLd65Sym(text) {
 }
 
 function parseAuto(text) {
-  // Try sdld first (most common, simplest), then ld65 .sym format.
-  let entries = parseSdldStyle(text);
+  // GNU ld map first (its "Linker script and memory map" header is unmistakable —
+  // and its addresses would otherwise be mis-read by the sdld regex), then sdld,
+  // then ld65 VICE .sym. This is what gives Genesis/m68k + GBA/ARM a PC→function
+  // path ("cpu({op:'read'}) gave me $01A7 — which C function?").
+  let entries = isGnuLdMap(text)
+    ? parseGnuLdMap(text).map((s) => ({ address: s.address, name: s.name, rawName: s.name }))
+    : [];
+  if (entries.length === 0) entries = parseSdldStyle(text);
   if (entries.length === 0) entries = parseLd65Sym(text);
   entries.sort((a, b) => a.address - b.address);
   return entries;
@@ -82,15 +89,16 @@ function nearestSymbol(entries, pc) {
   if (best < 0) return null;
   const sym = entries[best];
   const next = entries[best + 1];
+  const hex = (a) => "$" + a.toString(16).toUpperCase().padStart(a > 0xffff ? 8 : 4, "0");
   return {
     symbol: sym.name,
     rawSymbol: sym.rawName,
-    symbolAddress: "$" + sym.address.toString(16).toUpperCase().padStart(4, "0"),
+    symbolAddress: hex(sym.address),
     symbolAddressDec: sym.address,
     offset: pc - sym.address,
     offsetHex: "+0x" + (pc - sym.address).toString(16).toUpperCase(),
     nextSymbol: next ? next.name : null,
-    nextSymbolAddress: next ? "$" + next.address.toString(16).toUpperCase().padStart(4, "0") : null,
+    nextSymbolAddress: next ? hex(next.address) : null,
   };
 }
 

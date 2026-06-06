@@ -565,44 +565,10 @@ export function registerToolchainTools(server, z, sessionKey) {
       };
   }
 
-  async function buildProjectImpl({ path: projPath, platform, outputPath }) {
-      const entries = await readdir(projPath, { withFileTypes: true });
-      const files = entries.filter((e) => e.isFile());
-
-      const sourceCandidates = ["main.asm", "main.s"];
-      const mainEntry = files.find((f) => sourceCandidates.includes(f.name));
-      if (!mainEntry) {
-        throw new Error(
-          `no main.asm or main.s found in ${projPath}. v1 looks for one of those as the entry point.`,
-        );
-      }
-      const source = await readFile(path.join(projPath, mainEntry.name), "utf-8");
-      /** @type {Record<string, string>} */
-      const includes = {};
-      for (const f of files) {
-        if (f.name === mainEntry.name) continue;
-        if (/\.(asm|s|inc|h)$/i.test(f.name)) {
-          includes[f.name] = await readFile(path.join(projPath, f.name), "utf-8");
-        }
-      }
-
-      const result = await buildForPlatform({ platform, source, includes });
-      if (outputPath && result.binary) {
-        await writeFile(outputPath, result.binary);
-      }
-      // Gate the log next to the output ROM when one exists; otherwise return
-      // its tail + size (the log is a byproduct — never throw over it).
-      const logSibling = outputPath && result.binary ? `${outputPath}.build.log` : null;
-      return jsonContent({
-        ok: result.ok,
-        toolchain: result.toolchain,
-        exitCode: result.exitCode,
-        binaryBytes: result.binary ? result.binary.length : 0,
-        outputPath: outputPath && result.binary ? outputPath : null,
-        ...(await logField(result.log, false, logSibling, result.ok)),
-        issues: result.issues ?? [],
-      });
-  }
+  // build({output:'project'}) — build a project DIRECTORY (no per-call manifest).
+  // Discovers main.c (C/SGDK/GBA/cc65 C) or main.s/main.asm (asm) and links
+  // every source in the dir. Delegates to the module-scope buildProjectCore.
+  const buildProjectImpl = (args) => buildProjectCore(args);
 
   // ── the `build` router ──────────────────────────────────────────────────
   const sourcesShape = z.record(z.string(), z.string());
@@ -623,7 +589,7 @@ export function registerToolchainTools(server, z, sessionKey) {
     "• output:'rom' (default) — assemble or compile `source` (single) / `sources` ({name:contents}) / `sourcePath` / `sourcesPaths`. Returns the ROM (path by default; `inline:true` for binaryBase64) + build log. **`binaryIncludes`/`binaryIncludePaths` (base64/path CHR-ROM, music blobs for `.incbin`) — WITHOUT them no game with external assets builds.** `includes`/`includePaths` for `.include`d text. `linkerConfig` (cc65; NES preset 'chr-ram-runtime' RECOMMENDED). `crt0`/`crt0Path`/`codeLoc`/`dataLoc` (SDCC). `runtime`/`maxmod`/`rebuildSdk` (GBA/Genesis SDK). **`lint:'strict'` fails the build on SDCC crash-pattern warnings BEFORE the compiler runs (the uint8 loop-bound trap); 'advisory' (default) just lists them.** **`includeSymbols:true` returns the .map text inline on a PLAIN rom build — distinct from output:'romWithDebug' which writes .dbg/.map FILES.** Language is inferred from extension/content — usually OMIT `language`.\n" +
     "• output:'romWithDebug' — like 'rom' but also emits linker debug info for the `symbols` tool: cc65 → `.dbg`, SDCC → sdld `.map`, Genesis m68k → GNU ld map (find where a RAM var landed). DEFAULT writes ROM + debug file + log to disk (`outputPath` required unless `inline:true`).\n" +
     "• output:'run' — BUILD + LOAD + RUN + SCREENSHOT in one round trip — the fastest iteration loop. Same build args; runs `frames` frames and returns the screenshot INLINE. `holdInputs` holds controller state; `screenshotPath` writes the PNG to disk instead; `projectName` titles the playtest window.\n" +
-    "• output:'project' — build all source files in a project directory (`path`): reads main.asm/main.s + all .asm/.s/.inc/.h as includes.",
+    "• output:'project' — build a project DIRECTORY (`path`) without re-passing the file manifest each call. Entry point is `main.c` (C/SGDK Genesis, GBA, cc65/SDCC C) OR `main.s`/`main.asm` (asm). Every `.c`/`.s`/`.asm` in the dir is a translation unit (linked together), every `.h`/`.inc` an include, and `.bin/.chr/.pcm/.brr/.vgm/...` become binaryIncludes (for `.incbin`). Iterate an on-disk project by re-calling with just `{path, platform}`.",
     {
       output: z.enum(["rom", "romWithDebug", "run", "project"])
         .describe("rom=produce a ROM (default); romWithDebug=ROM + .dbg/.map debug files; run=build+load+run+screenshot; project=build a project directory."),
@@ -673,4 +639,82 @@ export function registerToolchainTools(server, z, sessionKey) {
       }
     }),
   );
+}
+
+/**
+ * build({output:'project'}) — build a project DIRECTORY (no per-call manifest).
+ * Module-scope + exported so it's unit-testable. Discovers main.c (C/SGDK/GBA/
+ * cc65 C) or main.s/main.asm (asm) and links every source in the dir. Returns
+ * a jsonContent payload (the router calls it via safeTool, which turns a throw —
+ * e.g. no entry point — into an {isError:true} result).
+ */
+export async function buildProjectCore({ path: projPath, platform, outputPath }) {
+  const entries = await readdir(projPath, { withFileTypes: true });
+  const files = entries.filter((e) => e.isFile());
+
+  // Entry point: a C project uses main.c (SGDK/Genesis, GBA, cc65/SDCC C); an
+  // asm project uses main.s / main.asm. Pick whichever exists — so the SAME
+  // dir-build works for C/SGDK Genesis projects, not just asm/cc65.
+  const hasC = files.some((f) => f.name === "main.c");
+  const hasAsm = files.some((f) => f.name === "main.s" || f.name === "main.asm");
+  if (!hasC && !hasAsm) {
+    throw new Error(
+      `no entry point in ${projPath}: expected main.c (C/SGDK/GBA/cc65 project) or main.s / main.asm (asm project). ` +
+      `Found: ${files.map((f) => f.name).join(", ") || "(empty)"}.`
+    );
+  }
+
+  // Every .c/.s/.asm is its own translation unit (linked together — cc65 routes
+  // .c→cc65 + .s→ca65; SDCC/SGDK/GBA compile every .c). Every .h/.inc is an
+  // include (NOT a TU). Binary assets become binaryIncludes so .incbin survives.
+  /** @type {Record<string,string>} */ const sources = {};
+  /** @type {Record<string,string>} */ const includes = {};
+  /** @type {Record<string,string>} */ const binaryIncludes = {};
+  for (const f of files) {
+    const n = f.name;
+    if (/\.(c|s|asm)$/i.test(n))    sources[n] = await readFile(path.join(projPath, n), "utf-8");
+    else if (/\.(h|inc)$/i.test(n)) includes[n] = await readFile(path.join(projPath, n), "utf-8");
+    else if (/\.(bin|chr|pcm|brr|vgm|xgm|nsf|raw|pal)$/i.test(n)) {
+      binaryIncludes[n] = (await readFile(path.join(projPath, n))).toString("base64");
+    }
+  }
+
+  // Route through resolveLinkerConfig like build({output:'rom'}) so cc65 presets
+  // + support sources still apply for a dir-built cc65 project.
+  const { cfg: resolvedLinkerConfig, supportSources } = await resolveLinkerConfig(platform, undefined);
+  const mergedSources = Object.keys(supportSources).length ? { ...supportSources, ...sources } : sources;
+
+  // Single-source toolchains (dasm/atari2600, vasm/asm) take `source`, not the
+  // multi-TU `sources` map. When the dir has exactly one source file and no
+  // preset support sources, pass it as `source` so those targets still build
+  // (the original asm-only buildProject behavior).
+  const srcNames = Object.keys(sources);
+  const singleSource = srcNames.length === 1 && Object.keys(supportSources).length === 0;
+  const result = await buildForPlatform({
+    platform,
+    ...(singleSource
+      ? { source: sources[srcNames[0]], sourceName: srcNames[0] }
+      : { sources: mergedSources }),
+    includes: Object.keys(includes).length ? includes : undefined,
+    binaryIncludes: Object.keys(binaryIncludes).length ? binaryIncludes : undefined,
+    linkerConfig: resolvedLinkerConfig,
+  });
+  if (outputPath && result.binary) {
+    await mkdir(path.dirname(outputPath), { recursive: true });
+    await writeFile(outputPath, result.binary);
+  }
+  const logSibling = outputPath && result.binary ? `${outputPath}.build.log` : null;
+  return jsonContent({
+    ok: result.ok,
+    toolchain: result.toolchain,
+    exitCode: result.exitCode,
+    binaryBytes: result.binary ? result.binary.length : 0,
+    outputPath: outputPath && result.binary ? outputPath : null,
+    sourcesBuilt: Object.keys(sources),
+    ...(Object.keys(binaryIncludes).length ? { binaryIncludes: Object.keys(binaryIncludes) } : {}),
+    romLayout: describeRomLayout(platform, result.binary),
+    ...(result.stage ? { stage: result.stage } : {}),
+    ...(await logField(result.log, false, logSibling, result.ok)),
+    issues: result.issues ?? [],
+  });
 }
