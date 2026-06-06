@@ -12,8 +12,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { PNG } from "pngjs";
 import { getHostOrNull } from "../state.js";
-import { imageContent, jsonContent, safeTool, textContent } from "../util.js";
-import { intentZod } from "../../platforms/common/intent.js";
 
 import { decodeTile } from "../../platforms/common/tile-decode.js";
 import { TILE_SPECS } from "../../platforms/common/image-to-tiles.js";
@@ -474,45 +472,7 @@ async function previewMsxScreen2(args, d) {
   return { ...result, pngBase64: buf.toString("base64") };
 }
 
-export function registerPreviewTileTools(server, z, sessionKey) {
-  server.tool(
-    "previewTileArt",
-    "Use this to preview tile bytes against a palette as a PNG — pure compositing, no build/load/screenshot " +
-    "cycle. Author bytes → preview → iterate → patchFile once they look right. Cross-platform via " +
-    "`platform` (nes/gb/gbc/sms/gg/snes/genesis/gba, each native encoding). Tile source: `tileBytes` " +
-    "(base64) or `tilePath` (raw dump or iNES ROM; `tileStart`/`tileCount` to slice) or `fromEmulator:true` " +
-    "(read tiles straight from the running emulator's VRAM — answer 'do my just-uploaded tiles look right?' " +
-    "in one call, no readMemory→encode round-trip; Genesis VRAM byte-swap handled for you). Palette: explicit " +
-    "`palette` or `paletteFromEmulator:true` (NES/SNES/Genesis — preview against the real game palette " +
-    "without rebuilding; defaults to a gray ramp). See param hints for palettePath / paletteIndex.",
-    {
-      platform: z.enum(["nes", "gb", "gbc", "sms", "gg", "snes", "genesis", "megadrive", "md", "gba", "atari2600", "atari7800", "c64", "lynx", "pce", "msx"]),
-      tileBytes: z.string().optional().describe("Base64 of raw tile bytes."),
-      tilePath: z.string().optional().describe("Path to tile dump (raw) or iNES ROM (NES auto-locates CHR)."),
-      fromEmulator: z.boolean().optional().describe("Read tiles from the running emulator's live VRAM (use tileStart/tileCount to pick the range; defaults to 256 tiles from tileStart). Genesis VRAM's host-LE word byte-swap is corrected automatically. Mutually exclusive with tileBytes/tilePath."),
-      tileStart: z.number().int().min(0).optional().describe("Starting tile index in the source."),
-      byteOffset: z.number().int().min(0).optional().describe("Start at a raw BYTE offset instead of a tile index — pass a watchDma/findReferences source directly. WARNS (alignmentWarning) if it's not a multiple of the platform tile size (32B Genesis 4bpp, 16B NES 2bpp, ...), with the nearest aligned offsets, so a mid-tile start doesn't silently scramble. Takes precedence over tileStart."),
-      tileCount: z.number().int().min(1).max(8192).optional().describe("How many tiles to render. Default: all."),
-      palette: z.array(z.any()).optional().describe("Explicit palette. NES: 4 master indices. Others: RGB triples or indices."),
-      palettePath: z.string().optional().describe("Raw palette dump from disk."),
-      paletteIndex: z.number().int().min(0).max(15).optional().describe("Subpalette index when source has multiple (NES 0-7, SNES 0-15, Genesis 0-3)."),
-      paletteFromEmulator: z.boolean().optional().describe("Pull live palette from the running emulator. Default comes from `intent`: homebrew → true (falls back to per-platform default palette if no ROM is loaded); rom-hack → false (grayscale ramp)."),
-      tilesPerRow: z.number().int().min(1).max(64).default(16),
-      scale: z.number().int().min(1).max(8).default(1).describe("Pixel scale factor (1 = native)."),
-      outputPath: z.string().optional().describe("Write PNG to disk; otherwise return inline base64."),
-      intent: intentZod(z),
-    },
-    safeTool(async (args) => {
-      const r = await previewTileArtCore({ ...args, sessionKey });
-      if (r.pngBase64) {
-        return {
-          content: [
-            imageContent(r.pngBase64),
-            textContent(JSON.stringify({ ...r, pngBase64: undefined })),
-          ],
-        };
-      }
-      return jsonContent(r);
-    }),
-  );
-}
+// previewTileArt folded into the `tiles` tool (tiles({as:'preview'}), in
+// tile-inspect.js). The router imports previewTileArtCore from this module;
+// nothing is registered here anymore.
+export function registerPreviewTileTools() {}

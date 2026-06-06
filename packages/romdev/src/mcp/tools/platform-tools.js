@@ -18,6 +18,7 @@ export let getPlatformMasterPaletteCore = async () => { throw new Error("platfor
 export let getAudioStateCore = async () => { throw new Error("platform-tools cores not initialized — registerPlatformTools must run first"); };
 export let inspectSpritesCore = async () => { throw new Error("platform-tools cores not initialized — registerPlatformTools must run first"); };
 export let inspectBackgroundMapCore = async () => { throw new Error("platform-tools cores not initialized — registerPlatformTools must run first"); };
+export let inspectPatternTilesCore = async () => { throw new Error("platform-tools cores not initialized — registerPlatformTools must run first"); };
 
 // Image-output contract: a PNG image goes to disk (path) OR comes back
 // inline (inline:true). No path + not inline → error. The structured
@@ -46,31 +47,10 @@ function resolvePlatform(host, requested) {
 }
 
 export function registerPlatformTools(server, z, sessionKey) {
-  server.tool(
-    "inspectPatternTiles",
-    "Render tile/sprite art (pattern tables, CHR, tile RAM — terminology varies per platform) as " +
-    "a PNG. NES: returns 256×128 of both 4KB CHR banks.\n\n" +
-    "Source selection (cross-tool consistent with getTile / extractSpriteSheet):\n" +
-    "  • No `path` set → reads from the running emulator. CHR-ROM cores read the iNES file " +
-    "    on disk; CHR-RAM cores read the live VRAM (whatever the game has uploaded).\n" +
-    "  • `path` set → reads directly from a ROM file on disk (no running emulator needed). " +
-    "    Use this for surveying assets BEFORE loading.\n\n" +
-    "Response includes `source: \"file\" | \"emulator\"` and a textual note so you always know which. " +
-    "DEFAULT writes the PNG to outputPath and returns the JSON + {imagePath}; pass inline:true to get the image " +
-    "in the response (you must pass one or the other). The structured JSON is always returned.",
-    {
-      platform: z.string().optional().describe("Override platform; defaults to currently loaded."),
-      path: z.string().optional().describe("Optional ROM file. If set, reads CHR from disk instead of the running emulator."),
-      bpp: z.union([z.literal(2), z.literal(4), z.literal(8)]).default(4).describe("SNES only: bits-per-pixel of the tiles (2/4/8). Mode 1 BG1/BG2 are 4bpp (default), BG3 is 2bpp. snes9x doesn't expose PPU regs so this can't be auto-detected."),
-      tileBaseByte: z.number().int().min(0).default(0).describe("SNES only: byte offset into VRAM of tile 0 (the BG's character base). Default 0."),
-      paletteBase: z.number().int().min(0).max(255).default(0).describe("SNES only: CGRAM index of color 0 of the sub-palette used to colorize the sheet. Default 0."),
-      paletteIndex: z.number().int().min(0).max(3).default(0).describe("Genesis only: which CRAM sub-palette (0-3) to colorize the tile sheet with. Default 0."),
-      tileCount: z.number().int().min(0).default(0).describe("SNES/Genesis only: how many tiles to render. 0 (default) fills VRAM from tileBaseByte."),
-      scale: z.number().int().min(1).max(16).default(1).describe("Integer upscale factor (nearest-neighbor, keeps pixels crisp). The default 8×8-tile strip renders each tile small/unreadable inline — scale:4 makes each tile 32×32. Use when inspecting a few tiles by eye."),
-      outputPath: z.string().optional().describe("Absolute path to write the PNG to. Required unless inline:true."),
-      inline: z.boolean().default(false).describe("If true, return the image in the response instead of writing to disk. Default false — then outputPath is required."),
-    },
-    safeTool(async ({ platform, path: romPath, bpp, tileBaseByte, paletteBase, paletteIndex, tileCount, scale = 1, outputPath, inline }) => {
+  // inspectPatternTiles lives in the `tiles` tool (tiles({as:'png'}), in
+  // tile-inspect.js) now — extracted here as a live-binding core. Reads the
+  // running emulator's pattern tables / VRAM (or an iNES file via `path`).
+  inspectPatternTilesCore = async ({ platform, path: romPath, bpp = 4, tileBaseByte = 0, paletteBase = 0, paletteIndex = 0, tileCount = 0, scale = 1, outputPath, inline }) => {
       requireImageTarget(outputPath, inline, "inspectPatternTiles");
       // Integer nearest-neighbor upscale of a PNG — keeps pixel-art tiles crisp
       // while making a small tile strip actually readable inline.
@@ -183,8 +163,7 @@ export function registerPlatformTools(server, z, sessionKey) {
         });
       }
       throw new Error(`inspectPatternTiles not yet implemented for platform '${p}'`);
-    }),
-  );
+  };
 
   // inspectPaletteCore: palette({source:'live'}). Module-scope so the `palette`
   // router (in lospec.js) can import it; takes sessionKey for getHost.
