@@ -473,7 +473,9 @@ export async function buildForPlatform(args) {
         ok: r.ok,
         binary: r.binary,
         listing: "",
-        symbols: "",
+        // GNU ld map (name→address) so symbols({op:'resolve'/...}) works on GBA
+        // too — same as Genesis/m68k. buildGbaC returns it from runArmLd.
+        symbols: r.symbols ?? "",
         log: r.log,
         issues: parseBuildLog(r.log),
         exitCode: r.exitCode,

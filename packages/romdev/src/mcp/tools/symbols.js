@@ -169,45 +169,104 @@ export function registerSymbolTools(server, z) {
 
 // ── *Core functions for the `symbols` tool ──
 
-/** op:'resolve' — symbol name → address in a cc65 .dbg. */
-export async function resolveSymbolCore({ dbg, name }) {
-      const { parseDbg, DbgIndex } = await import("../../toolchains/cc65/dbgparse.js");
-      const idx = new DbgIndex(parseDbg(dbg));
-      const addr = idx.addressOf(name);
-      if (addr === null && !name.startsWith("_")) {
-        const cAlt = "_" + name;
-        const a2 = idx.addressOf(cAlt);
-        if (a2 !== null) {
-          return {
-            name: cAlt,
-            address: a2,
-            hex: "$" + a2.toString(16).padStart(4, "0").toUpperCase(),
-            note: `Resolved as cc65 C symbol '${cAlt}' (you asked for '${name}').`,
-          };
-        }
-      }
-      if (addr === null) {
-        throw new Error(`no symbol named '${name}' in this .dbg`);
-      }
-      return {
-        name,
-        address: addr,
-        hex: "$" + addr.toString(16).padStart(4, "0").toUpperCase(),
-      };
+/**
+ * Load a normalized symbol list from whichever debug format the caller passed:
+ * cc65 `.dbg`, SDCC sdld `.map`, OR GNU ld `.map` (Genesis/m68k). Auto-detects
+ * the map flavor. Returns `{ name, addr, kind, ramOffset? }[]`. This is what
+ * gave Genesis/m68k C globals a name→address path (was cc65-only before).
+ */
+async function loadSymbolList({ dbg, map }) {
+  if (dbg) {
+    const { parseDbg, DbgIndex } = await import("../../toolchains/cc65/dbgparse.js");
+    const idx = new DbgIndex(parseDbg(dbg));
+    return { format: "cc65-dbg", symbols: idx.listSymbols() }; // {name, addr, kind}
+  }
+  if (map) {
+    const { isGnuLdMap, parseGnuLdMap } = await import("../../toolchains/gnu-ld-map.js");
+    if (isGnuLdMap(map)) {
+      // Genesis / m68k-elf. C symbols have NO leading underscore here.
+      const syms = parseGnuLdMap(map).map((s) => ({
+        name: s.name, addr: s.address, kind: "symbol", ramOffset: s.ramOffset,
+      }));
+      return { format: "gnu-ld-map", symbols: syms };
+    }
+    const { parseSdldMap } = await import("../../toolchains/sdcc/sdcc.js");
+    const syms = parseSdldMap(map).map((s) => ({
+      name: s.name.replace(/^_/, ""), addr: s.address, kind: "symbol", file: s.file,
+    }));
+    return { format: "sdld-map", symbols: syms };
+  }
+  throw new Error(
+    "symbols: pass `dbg` (cc65 .dbg — NES/C64/Atari7800/Lynx/PCE) or `map` " +
+    "(sdld .map for GB/GBC/SMS/GG/MSX, OR GNU ld .map for Genesis). " +
+    "build({output:'romWithDebug'}) returns the right one for your platform."
+  );
 }
 
-/** op:'lookup' — address → the symbol whose value is closest at-or-below it (cc65 .dbg). */
-export async function lookupAddressCore({ dbg, address }) {
-      const { parseDbg, DbgIndex } = await import("../../toolchains/cc65/dbgparse.js");
-      const idx = new DbgIndex(parseDbg(dbg));
-      const sym = idx.symbolAt(address);
-      if (!sym) throw new Error(`no symbol at-or-below address ${address}`);
+/** Format an address as `$XXXX` hex (pad to at least 4 digits). */
+function hexAddr(a) {
+  const w = a > 0xffff ? 8 : 4;
+  return "$" + a.toString(16).toUpperCase().padStart(w, "0");
+}
+
+/** Annotate a Genesis work-RAM-mirror symbol with the system_ram read offset. */
+function ramReadHint(sym) {
+  if (sym.ramOffset == null) return {};
+  return {
+    ramOffset: sym.ramOffset,
+    readHint: `Genesis work-RAM mirror — read it with memory({op:'read', region:'system_ram', offset:0x${sym.ramOffset.toString(16)}}) (the low 16 bits of the address).`,
+  };
+}
+
+/** op:'resolve' — symbol name → address. cc65 .dbg, sdld .map, OR GNU ld .map (Genesis). */
+export async function resolveSymbolCore({ dbg, map, name }) {
+      // cc65 .dbg keeps its bespoke index (it understands the '_name' C alias).
+      if (dbg && !map) {
+        const { parseDbg, DbgIndex } = await import("../../toolchains/cc65/dbgparse.js");
+        const idx = new DbgIndex(parseDbg(dbg));
+        let addr = idx.addressOf(name);
+        let resolvedName = name;
+        if (addr === null && !name.startsWith("_")) {
+          const a2 = idx.addressOf("_" + name);
+          if (a2 !== null) { addr = a2; resolvedName = "_" + name; }
+        }
+        if (addr === null) throw new Error(`no symbol named '${name}' in this .dbg`);
+        return {
+          name: resolvedName, address: addr, hex: hexAddr(addr),
+          ...(resolvedName !== name ? { note: `Resolved as cc65 C symbol '${resolvedName}' (you asked for '${name}').` } : {}),
+        };
+      }
+      // sdld / GNU ld map path.
+      const { format, symbols } = await loadSymbolList({ dbg, map });
+      let hit = symbols.find((s) => s.name === name);
+      // SDCC strips the leading underscore on load; a caller passing '_score' still matches.
+      if (!hit && name.startsWith("_")) hit = symbols.find((s) => s.name === name.slice(1));
+      if (!hit) throw new Error(`no symbol named '${name}' in this ${format}.`);
+      return { name: hit.name, address: hit.addr, hex: hexAddr(hit.addr), format, ...ramReadHint(hit) };
+}
+
+/** op:'lookup' — address → the symbol whose value is closest at-or-below it. cc65 .dbg, sdld/GNU .map. */
+export async function lookupAddressCore({ dbg, map, address }) {
+      if (dbg && !map) {
+        const { parseDbg, DbgIndex } = await import("../../toolchains/cc65/dbgparse.js");
+        const idx = new DbgIndex(parseDbg(dbg));
+        const sym = idx.symbolAt(address);
+        if (!sym) throw new Error(`no symbol at-or-below address ${address}`);
+        return {
+          address, hex: hexAddr(address),
+          symbol: sym.name, symbolAddress: sym.addr, offset: address - sym.addr,
+        };
+      }
+      const { format, symbols } = await loadSymbolList({ dbg, map });
+      // Nearest symbol at-or-below `address`.
+      let best = null;
+      for (const s of symbols) {
+        if (s.addr <= address && (!best || s.addr > best.addr)) best = s;
+      }
+      if (!best) throw new Error(`no symbol at-or-below address ${address} in this ${format}.`);
       return {
-        address,
-        hex: "$" + address.toString(16).padStart(4, "0").toUpperCase(),
-        symbol: sym.name,
-        symbolAddress: sym.addr,
-        offset: address - sym.addr,
+        address, hex: hexAddr(address), format,
+        symbol: best.name, symbolAddress: best.addr, offset: address - best.addr,
       };
 }
 
@@ -231,30 +290,13 @@ export async function getMemoryMapCore({ dbg, map, platform }) {
         gg:        [{name:"rom",lo:0,hi:0xbfff},{name:"work_ram",lo:0xc000,hi:0xdfff},{name:"ram_mirror",lo:0xe000,hi:0xffff}],
         // MSX cartridge: BIOS low, cart at $4000-$BFFF, work RAM $C000-$FFFF.
         msx:       [{name:"bios",lo:0,hi:0x3fff},{name:"cart_rom",lo:0x4000,hi:0xbfff},{name:"work_ram",lo:0xc000,hi:0xffff}],
+        // Genesis (m68k-elf GNU ld map): ROM low, work-RAM mirror at $E0FF0000
+        // (= the emulator's `system_ram`, offset = low 16 bits of the symbol addr).
+        genesis:   [{name:"rom",lo:0,hi:0x3fffff},{name:"work_ram_mirror",lo:0xe0ff0000,hi:0xe0ffffff}],
       };
 
-      // Parse symbols from whichever format was supplied.
-      let all;
-      let format;
-      if (dbg) {
-        const { parseDbg, DbgIndex } = await import("../../toolchains/cc65/dbgparse.js");
-        const idx = new DbgIndex(parseDbg(dbg));
-        all = idx.listSymbols();   // { name, addr, kind }
-        format = "cc65-dbg";
-      } else if (map) {
-        const { parseSdldMap } = await import("../../toolchains/sdcc/sdcc.js");
-        // parseSdldMap → { address, name, file }. Normalize to the dbg shape and
-        // strip the leading underscore C symbols carry so callers compare to C names.
-        all = parseSdldMap(map).map((s) => ({
-          name: s.name.replace(/^_/, ""),
-          addr: s.address,
-          kind: "symbol",
-          file: s.file,
-        }));
-        format = "sdld-map";
-      } else {
-        throw new Error("getMemoryMap: pass either `dbg` (cc65 .dbg — NES/C64/Atari7800/Lynx/PCE) or `map` (sdld .map — GB/GBC/SMS/GG/MSX). buildSourceWithDebug returns one of them.");
-      }
+      // Parse symbols from whichever format was supplied (auto-detects sdld vs GNU ld).
+      const { format, symbols: all } = await loadSymbolList({ dbg, map });
 
       const regions = (platform && regionsByPlatform[platform]) || [];
       const labelFor = (addr) => {
@@ -288,19 +330,20 @@ export async function getMemoryMapCore({ dbg, map, platform }) {
       };
 }
 
-/** op:'list' — every symbol with an address in a cc65 .dbg, sorted by address. */
-export async function listSymbolsCore({ dbg, max = 200 }) {
-      const { parseDbg, DbgIndex } = await import("../../toolchains/cc65/dbgparse.js");
-      const idx = new DbgIndex(parseDbg(dbg));
-      const all = idx.listSymbols();
+/** op:'list' — every symbol sorted by address. cc65 .dbg, sdld .map, OR GNU ld .map (Genesis). */
+export async function listSymbolsCore({ dbg, map, max = 200 }) {
+      const { format, symbols } = await loadSymbolList({ dbg, map });
+      const all = symbols.slice().sort((a, b) => a.addr - b.addr);
       return {
+        format,
         total: all.length,
         returned: Math.min(max, all.length),
         symbols: all.slice(0, max).map((s) => ({
           name: s.name,
           address: s.addr,
-          hex: "$" + s.addr.toString(16).padStart(4, "0").toUpperCase(),
+          hex: hexAddr(s.addr),
           kind: s.kind,
+          ...(s.ramOffset != null ? { ramOffset: s.ramOffset } : {}),
         })),
       };
 }
@@ -308,28 +351,29 @@ export async function listSymbolsCore({ dbg, max = 200 }) {
 function registerSymbolsTool(server, z) {
   server.tool(
     "symbols",
-    "Symbol/linker-map lookups for C/asm-built ROMs — resolve names ↔ addresses and see the memory layout. " +
-    "`op`: 'resolve' | 'lookup' | 'map' | 'list' | 'addr'.\n" +
-    "'resolve' (name→address, cc65 .dbg): C symbols become '_score' in the .dbg, so try both spellings.\n" +
-    "'lookup' (address→symbol, cc65 .dbg): which function/variable does this address fall inside?\n" +
-    "'map' (categorized layout): groups symbols by memory region (zeropage / system RAM / code / data) so you find " +
-    "where your variables landed without probing system_ram. Accepts a cc65 `.dbg` (NES/C64/Atari7800/Lynx/PCE) " +
-    "OR an sdld `.map` (GB/GBC/SMS/GG/MSX — the `symbols` field on SDCC builds). NES: cc65 reserves ZP $00-$01, so " +
-    "your first .res variable lands at $02.\n" +
-    "'list' (cc65 .dbg): every symbol sorted by address — a layout overview.\n" +
-    "'addr' (PC→nearest preceding symbol from a .map/.sym): closes 'getCPUState gave me $01A7 — which C function?'. " +
-    "Pass `symbolsText` (inline, from build({includeSymbols:true})) or `symbolsPath`. Auto-detects sdld " +
-    "(`XXXX  _name`) and ld65 VICE (`al XXXX .name`).",
+    "Symbol/linker-map lookups for C/asm-built ROMs — resolve names ↔ addresses and see the memory layout, on EVERY " +
+    "platform with a debug build. `op`: 'resolve' | 'lookup' | 'map' | 'list' | 'addr'.\n" +
+    "DEBUG SOURCE (pass ONE; build({output:'romWithDebug'}) returns the right one): `dbg` = cc65 `.dbg` " +
+    "(NES/C64/Atari7800/Lynx/PCE); `map` = a linker map — auto-detects sdld `.map` (GB/GBC/SMS/GG/MSX) vs GNU ld `.map` " +
+    "(Genesis/m68k, the `mapText`/`symbols` field). So resolve/lookup/list/map all work across ALL 14 platforms now.\n" +
+    "'resolve' (name→address): the 1-call headless-assertion enabler — resolve a C global, then memory({op:'read'}) it. " +
+    "**GENESIS: a work-RAM symbol comes back with `ramOffset` (the low 16 bits) + a `readHint` — read it via " +
+    "memory({op:'read', region:'system_ram', offset:ramOffset}).** cc65 C symbols become '_score' in the .dbg (tried automatically).\n" +
+    "'lookup' (address→symbol): which function/variable does this address fall inside?\n" +
+    "'map' (categorized layout): groups symbols by memory region (zeropage / system RAM / work_ram_mirror / code / data) " +
+    "so you find where variables landed without probing RAM. NES: cc65 reserves ZP $00-$01, so your first .res var lands at $02.\n" +
+    "'list': every symbol sorted by address — a layout overview.\n" +
+    "'addr' (PC→nearest preceding symbol): closes 'cpu({op:'read'}) gave me $01A7 — which C function?' on EVERY platform. " +
+    "Pass `symbolsText` (inline, from build({includeSymbols:true}) or the romWithDebug map) or `symbolsPath`. Auto-detects sdld " +
+    "(`XXXX  _name`, GB/GBC/SMS/GG/MSX), ld65 VICE (`al XXXX .name`, cc65), and GNU ld maps (Genesis/m68k + GBA/ARM).",
     {
       op: z.enum(["resolve", "lookup", "map", "list", "addr"]).describe("resolve name→addr; lookup addr→sym; map = layout by region; list all; addr = PC→nearest symbol."),
-      // cc65 .dbg ops
-      dbg: z.string().optional().describe("op=resolve/lookup/list, and op=map (cc65 path): contents of the .dbg file from build({output:'romWithDebug'})."),
-      name: z.string().optional().describe("op=resolve: the symbol name to look up."),
+      dbg: z.string().optional().describe("op=resolve/lookup/list/map (cc65 path): contents of the .dbg from build({output:'romWithDebug'}) — NES/C64/Atari7800/Lynx/PCE. Pass this OR `map`."),
+      map: z.string().optional().describe("op=resolve/lookup/list/map (linker-map path): the .map text — auto-detects sdld (GB/GBC/SMS/GG/MSX) vs GNU ld (Genesis/m68k). The `mapText`/`symbols` field on build({output:'romWithDebug'}). Pass this OR `dbg`."),
+      name: z.string().optional().describe("op=resolve: the symbol name to look up (C name — no leading underscore needed; both spellings tried)."),
       address: z.number().int().min(0).optional().describe("op=lookup: the address to find the enclosing symbol for."),
       max: z.number().int().min(1).max(10000).default(200).describe("op=list: maximum symbols to return."),
-      // map (also takes dbg above)
-      map: z.string().optional().describe("op=map (SDCC path): contents of the sdld .map file (GB/GBC/SMS/GG/MSX). Pass this OR dbg."),
-      platform: z.string().optional().describe("op=map: platform id — adds region labels per platform conventions."),
+      platform: z.string().optional().describe("op=map: platform id — adds region labels per platform conventions (incl. genesis work-RAM mirror)."),
       // addr
       pc: z.number().int().min(0).max(0xFFFFFF).optional().describe("op=addr: CPU address to look up (e.g. 0x01A7)."),
       symbolsText: z.string().optional().describe("op=addr: inline .map/.sym text (from build response.symbols)."),

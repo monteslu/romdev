@@ -87,7 +87,12 @@ const SYSBASE_DIR = path.resolve(__dirname, "..", "..", "platforms", "gba", "lib
  */
 export async function buildGbaC(args) {
   const headers = args.headers ?? {};
-  const cc1Options = args.cc1Options ?? ["-O2", "-mthumb"];
+  // -ffunction-sections/-fdata-sections give every function + global (incl.
+  // `static` file-local ones) its own section, so the GNU ld map carries a
+  // per-symbol `.bss.<name>`/`.data.<name>` line — that's what lets
+  // symbols({op:'resolve'}) turn a static C global's name into an address on GBA
+  // (same as SGDK does for Genesis). Pure metadata; no codegen change to what's kept.
+  const cc1Options = args.cc1Options ?? ["-O2", "-mthumb", "-ffunction-sections", "-fdata-sections"];
   const sources = normalizeGbaSources(args);
   const binaryIncludes = args.binaryIncludes ?? {};
 
@@ -336,7 +341,7 @@ async function buildWithLibtonc({ sources, headers, cc1Options, binaryIncludes =
     return { ok: false, binary: null, log, exitCode: objcopy.exitCode || 1, stage: "objcopy", runtime: "libtonc", ...(objcopy.crash ? { crash: objcopy.crash } : {}) };
   }
 
-  return { ok: true, binary: objcopy.binary, log, exitCode: 0, stage: "done", runtime: "libtonc", ...(sdkWarnings.length ? { sdkEditIgnored: sdkWarnings } : {}) };
+  return { ok: true, binary: objcopy.binary, log, exitCode: 0, stage: "done", runtime: "libtonc", ...(ld.map ? { symbols: ld.map } : {}), ...(sdkWarnings.length ? { sdkEditIgnored: sdkWarnings } : {}) };
 }
 
 /**
@@ -506,6 +511,7 @@ async function buildWithLibgba({ sources, headers, cc1Options, rebuildSdk = fals
     exitCode: 0,
     stage: "done",
     runtime: "libgba",
+    ...(ld.map ? { symbols: ld.map } : {}),
     ...(sdkWarnings.length ? { sdkEditIgnored: sdkWarnings } : {}),
   };
 }
@@ -556,7 +562,7 @@ SECTIONS { .text : { *(.text*) *(.rodata*) } > ROM }
     return { ok: false, binary: null, log, exitCode: objcopy.exitCode || 1, stage: "objcopy", runtime: "minimal", ...(objcopy.crash ? { crash: objcopy.crash } : {}) };
   }
 
-  return { ok: true, binary: objcopy.binary, log, exitCode: 0, stage: "done", runtime: "minimal" };
+  return { ok: true, binary: objcopy.binary, log, exitCode: 0, stage: "done", runtime: "minimal", ...(ld.map ? { symbols: ld.map } : {}) };
 }
 
 /**

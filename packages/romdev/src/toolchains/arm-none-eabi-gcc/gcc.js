@@ -156,6 +156,10 @@ export async function runArmLd(args) {
   const argv = [
     "-T", "/work/gba.ld",
     "-o", "/work/main.elf",
+    // Emit a GNU ld map so symbols({op:'resolve'/'lookup'/'list'/'map'}) can turn
+    // a C global's name into an address (parsed by gnu-ld-map.js) — same as the
+    // m68k/Genesis path. Without this the GBA build returns no symbol table.
+    "-Map=/work/main.map",
     ...libraryPaths.flatMap((p) => ["-L", p]),
     ...Object.keys(objects).map((n) => "/work/" + n),
     ...libraries.map((l) => `-l${l}`),
@@ -165,12 +169,16 @@ export async function runArmLd(args) {
     gluePath: armGlue("arm-none-eabi-ld.mjs"),
     argv,
     inputFiles,
-    outputFiles: [{ vfsPath: "/work/main.elf", encoding: "base64" }],
+    outputFiles: [
+      { vfsPath: "/work/main.elf", encoding: "base64" },
+      { vfsPath: "/work/main.map", encoding: "utf8" },
+    ],
   });
   return {
     log: r.log,
     exitCode: r.exitCode,
     elf: getOutputBytes(r, "/work/main.elf"),
+    map: getOutputText(r, "/work/main.map") || null,
     ...(r.crash ? { crash: r.crash, stage: "crash" } : {}),
   };
 }
