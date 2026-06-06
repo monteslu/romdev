@@ -47,6 +47,8 @@ export const MERGE_MAP = {
   audioDebug: { absorbs: ["getAudioState", "recordAudio"], axis: "op" },
   // ── sprites (inspect OAM + meta-sprite pipeline; inspectSprites from platform-tools.js, rest from metasprite-tools.js; validateGenesisTiles stays for encodeArt) ──
   sprites: { absorbs: ["inspectSprites", "groupVisibleSprites", "previewVisibleSprites", "captureMetaSprite", "renderMetaSpritePreview", "emitMetaSpriteRenderer", "extractSpriteFromScreenshot"], axis: "op" },
+  // ── background (tilemap/render-state; inspectBackgroundMap from platform-tools.js, getRenderingContext from rendering-context.js, whichTilesAreRendered from which-tiles.js) ──
+  background: { absorbs: ["inspectBackgroundMap", "getRenderingContext", "whichTilesAreRendered"], axis: "view" },
 };
 
 /** Every OLD tool name that the consolidation removes (absorbed into a new tool). */

@@ -6,7 +6,7 @@
 // gameplay, menu) and build their own tile-to-content map.
 
 import { getHost } from "../state.js";
-import { jsonContent, safeTool } from "../util.js";
+import { jsonContent } from "../util.js";
 
 function resolvePlatform(host, requested) {
   const p = requested ?? host.status.platform;
@@ -41,21 +41,10 @@ function summariseTileSet(ids) {
   };
 }
 
-export function registerWhichTilesTools(server, z, sessionKey) {
-  server.tool(
-    "whichTilesAreRendered",
-    "Use this to map tile IDs → game assets: walks the current frame's BG nametable + OAM and returns the " +
-    "set of tile IDs actually being drawn ({background, sprite, combined}, each with ids/idsHex/ranges). " +
-    "ROM-hack trick: call it at the title screen, then again in gameplay, and SUBTRACT the sets — what's " +
-    "unique to gameplay is your in-game art. Supported: nes, snes (pass `snesTilemapBaseByte` for BG — " +
-    "snes9x hides the PPU regs), gb, gbc, sms, gg, genesis, c64.",
-    {
-      platform: z.string().optional(),
-      snesTilemapBaseByte: z.number().int().min(0).optional().describe("SNES only: byte offset into VRAM of a BG tilemap (BGxSC base). If set, its referenced tile IDs are added to `background`. snes9x can't auto-detect this."),
-      snesMapWidth: z.union([z.literal(32), z.literal(64)]).default(32).describe("SNES only: tilemap width in tiles (with snesTilemapBaseByte)."),
-      snesMapHeight: z.union([z.literal(32), z.literal(64)]).default(32).describe("SNES only: tilemap height in tiles (with snesTilemapBaseByte)."),
-    },
-    safeTool(async ({ platform, snesTilemapBaseByte, snesMapWidth, snesMapHeight }) => {
+// whichTilesAreRendered now lives in the `background` tool (background({view:'rendered'}),
+// in rendering-context.js). Its handler body is exported as a core; the router
+// passes its own sessionKey through.
+export async function whichTilesAreRenderedCore({ platform, snesTilemapBaseByte, snesMapWidth = 32, snesMapHeight = 32, sessionKey }) {
       const host = getHost(sessionKey);
       const p = resolvePlatform(host, platform);
       const bg = new Set();
@@ -188,6 +177,4 @@ export function registerWhichTilesTools(server, z, sessionKey) {
         combined: summariseTileSet(combined),
         note: "Sample at multiple game states (title / gameplay / menu) and diff the sets to map tile IDs → game assets.",
       });
-    }),
-  );
 }

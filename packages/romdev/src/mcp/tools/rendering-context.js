@@ -10,6 +10,8 @@
 import { readFileSync } from "node:fs";
 import { getHost } from "../state.js";
 import { jsonContent, safeTool } from "../util.js";
+import { inspectBackgroundMapCore } from "./platform-tools.js";
+import { whichTilesAreRenderedCore } from "./which-tiles.js";
 
 /**
  * Decode the active rendering context for NES. Returns {nes: {...}, summary, area}.
@@ -761,24 +763,74 @@ async function atari7800Context(host, area) {
 }
 
 export function registerRenderingContextTools(server, z, sessionKey) {
+  // rect shape for view:'map' region clipping (NES).
+  const regionShape = z.object({
+    x: z.number().int().min(0).max(31),
+    y: z.number().int().min(0).max(29),
+    w: z.number().int().min(1).max(32),
+    h: z.number().int().min(1).max(30),
+  });
+
   server.tool(
-    "getRenderingContext",
-    "Use this to decode the loaded ROM's current rendering state into structured fields + a plain-English " +
-    "`summary[]`. The big win: it tells you WHICH CHR/tile bank BG and sprites are fetching from right now, " +
-    "plus the file offset ready for patchFile — so you don't patch the wrong half of CHR. (NES decodes " +
-    "PPUCTRL/MASK/STATUS bit-by-bit + derived `chrFileOffsetForActiveBgBank`; for banked mappers, live " +
-    "`readMemory('nes_chr',...)` is authoritative.) GOTCHA: step past startup (stepFrames(120)+) first — " +
-    "power-on PPU state is zeros and won't match the title screen.",
+    "background",
+    "Background/tilemap inspection + render state, one tool keyed by `view`.\n" +
+    "• view:'map' — see the loaded ROM's background tile map. NES render:false returns DECODED structured data: " +
+    "a per-tile `tiles` grid, a per-tile `subPaletteGrid` (BG sub-palette 0-3, already decoded from the attribute " +
+    "table so you never hand-decode the 2-bit-per-16×16-block format), and `distinctTiles`. `region:{x,y,w,h}` " +
+    "(tiles) clips it; `attributesOnly:true` returns just the sub-palette grid + raw attr bytes; `tilesOnly:true` " +
+    "just the tile grid (mutually exclusive). NES render:true returns a PNG composite. GB/GBC/SMS/GG/Genesis " +
+    "return a PNG of the full BG plane/nametable (scroll shown but NOT applied); `which`/`window`/`plane` select " +
+    "the map. SNES needs the BG params (`tilemapBaseByte`/`tileBaseByte`/`bpp`/`mapWidth`/`mapHeight`) — snes9x " +
+    "doesn't expose PPU registers, so they default to a Mode-1 BG1 best-guess. PNG paths default to writing " +
+    "`outputPath` (or `inline:true`).\n" +
+    "• view:'renderState' — decode the current PPU/VDP rendering state into structured fields + a plain-English " +
+    "`summary[]`. The big win: it tells you WHICH CHR/tile bank BG and sprites are fetching from right now, plus " +
+    "the file offset ready for patchFile — so you don't patch the wrong half of CHR. (NES decodes PPUCTRL/MASK/" +
+    "STATUS bit-by-bit + derived `chrFileOffsetForActiveBgBank`; for banked mappers, live `readMemory('nes_chr',...)` " +
+    "is authoritative.) `area` limits the summary. GOTCHA: step past startup (stepFrames(120)+) first — power-on " +
+    "PPU state is zeros and won't match the title screen.\n" +
+    "• view:'rendered' — map tile IDs → game assets: walk the current frame's BG nametable + OAM and return the set " +
+    "of tile IDs actually being drawn ({background, sprite, combined}, each with ids/idsHex/ranges). ROM-hack trick: " +
+    "call it at the title screen, then again in gameplay, and SUBTRACT the sets — what's unique to gameplay is your " +
+    "in-game art. SNES: pass `snesTilemapBaseByte` for BG (snes9x hides the PPU regs).",
     {
-      platform: z.string().optional().describe("Override platform; defaults to currently loaded ROM."),
-      area: z.enum(["bg", "sprites", "window", "all"]).default("all").describe("Limit summary to a subset of renderer state."),
+      view: z.enum(["map", "renderState", "rendered"])
+        .describe("map=the BG tilemap (decoded grid or PNG); renderState=decoded PPU/VDP state + which CHR bank is active; rendered=the set of tile IDs actually drawn this frame."),
+      platform: z.string().optional().describe("Override platform; defaults to the loaded ROM."),
+      // view:'renderState'
+      area: z.enum(["bg", "sprites", "window", "all"]).default("all").describe("view:renderState — limit summary to a subset of renderer state."),
+      // view:'map' shared
+      outputPath: z.string().optional().describe("view:map PNG paths: absolute path for the composite PNG (required unless inline). NES render:false: if given, write the full decoded JSON (tiles+subPaletteGrid) here and return a compact summary + distinctTiles."),
+      inline: z.boolean().default(false).describe("view:map: return the BG image in the response instead of writing to disk (image-producing paths only)."),
+      render: z.boolean().default(false).describe("view:map NES: if true, return a rendered PNG composite instead of decoded structured data. GB/GBC/Genesis: always renders a PNG; ignored."),
+      region: regionShape.optional().describe("view:map NES render:false only: return just this tile sub-rectangle (clipped to 32×30). Omit for the whole nametable."),
+      attributesOnly: z.boolean().default(false).describe("view:map NES render:false only: return just the decoded subPaletteGrid + raw attribute table. Mutually exclusive with tilesOnly."),
+      tilesOnly: z.boolean().default(false).describe("view:map NES render:false only: return just the tile-index grid + distinctTiles. Mutually exclusive with attributesOnly."),
+      which: z.number().int().min(0).max(1).default(0).describe("view:map NES: which 1KB nametable (0 = $2000, 1 = $2400). GB/GBC: 0 = $9800 (default), 1 = $9C00."),
+      window: z.boolean().default(false).describe("view:map GB/GBC only: render the Window tile map base (follows LCDC.6) instead of the BG map base."),
+      plane: z.enum(["A", "B"]).default("A").describe("view:map Genesis only: which scroll plane to render — 'A' (default) or 'B'."),
+      // view:'map' SNES + view:'rendered' SNES
+      tilemapBaseByte: z.number().int().min(0).default(0).describe("view:map SNES only: byte offset into VRAM of the BG tilemap (BGxSC base). Default 0. snes9x can't auto-detect — pass your game's BG1 tilemap address."),
+      tileBaseByte: z.number().int().min(0).default(0).describe("view:map SNES only: byte offset into VRAM of tile 0 (the BG character base / BGxNBA). Default 0."),
+      bpp: z.union([z.literal(2), z.literal(4), z.literal(8)]).default(4).describe("view:map SNES only: tile bit-depth. Mode 1 BG1/BG2 = 4bpp (default), BG3 = 2bpp."),
+      mapWidth: z.union([z.literal(32), z.literal(64)]).default(32).describe("view:map SNES only: tilemap width in tiles (32 or 64)."),
+      mapHeight: z.union([z.literal(32), z.literal(64)]).default(32).describe("view:map SNES only: tilemap height in tiles (32 or 64)."),
+      snesTilemapBaseByte: z.number().int().min(0).optional().describe("view:rendered SNES only: byte offset into VRAM of a BG tilemap (BGxSC base). Its referenced tile IDs are added to `background`. snes9x can't auto-detect this."),
+      snesMapWidth: z.union([z.literal(32), z.literal(64)]).default(32).describe("view:rendered SNES only: tilemap width in tiles (with snesTilemapBaseByte)."),
+      snesMapHeight: z.union([z.literal(32), z.literal(64)]).default(32).describe("view:rendered SNES only: tilemap height in tiles (with snesTilemapBaseByte)."),
     },
     safeTool(async (args) => {
-      // sessionKey is captured from the registerRenderingContextTools
-      // closure — pass it through so getRenderingContextCore can resolve
-      // the per-session host (round 26 fix; was `sessionKey is not defined`).
-      const r = await getRenderingContextCore({ ...args, sessionKey });
-      return jsonContent(r);
+      switch (args.view) {
+        case "map":         return await inspectBackgroundMapCore(args);
+        case "renderState": {
+          // Pass sessionKey through so getRenderingContextCore can resolve the
+          // per-session host (round 26 fix; was `sessionKey is not defined`).
+          const r = await getRenderingContextCore({ ...args, sessionKey });
+          return jsonContent(r);
+        }
+        case "rendered":    return await whichTilesAreRenderedCore({ ...args, sessionKey });
+        default: throw new Error(`background: unknown view '${args.view}'`);
+      }
     }),
   );
 }

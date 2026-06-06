@@ -8,20 +8,23 @@ import assert from "node:assert/strict";
 import { z } from "zod";
 import { registerPlatformTools } from "../src/mcp/tools/platform-tools.js";
 import { registerMetaSpriteTools } from "../src/mcp/tools/metasprite-tools.js";
+import { registerRenderingContextTools } from "../src/mcp/tools/rendering-context.js";
 import { _setHostForTest } from "../src/mcp/state.js";
 
-// Capture tool handlers. inspectSprites moved into the consolidated `sprites`
-// tool (sprites({op:'inspect'})); inspectBackgroundMap stays in
-// registerPlatformTools. Register both with the SAME sessionKey so the
-// sprites router's live-binding inspectSpritesCore is wired before use, then
-// expose an inspectSprites(args) adapter so these (frozen) assertions are
+// Capture tool handlers. Both inspectSprites and inspectBackgroundMap moved into
+// consolidated tools: sprites({op:'inspect'}) and background({view:'map'}). Their
+// cores are live-binding exports from platform-tools.js, so register
+// registerPlatformTools FIRST (assigns the cores), then the routers. Same
+// sessionKey throughout. The two adapters keep these (frozen) assertions
 // unchanged.
 function handlers() {
   const map = {};
   const server = { tool(name, _desc, _schema, h) { map[name] = h; } };
-  registerPlatformTools(server, z, "pt-test");
-  registerMetaSpriteTools(server, z, "pt-test");
+  registerPlatformTools(server, z, "pt-test");        // assigns inspectSpritesCore + inspectBackgroundMapCore
+  registerMetaSpriteTools(server, z, "pt-test");       // sprites router
+  registerRenderingContextTools(server, z, "pt-test"); // background router
   map.inspectSprites = (args) => map.sprites({ op: "inspect", ...args });
+  map.inspectBackgroundMap = (args) => map.background({ view: "map", ...args });
   return map;
 }
 
