@@ -38,6 +38,8 @@ import { log } from "./log.js";
 import { attachObserver } from "../observer/server.js";
 import { installObserverMiddleware } from "../observer/tool-wrap.js";
 import { observer } from "../observer/bus.js";
+import { mountHttpToolRoutes } from "../http/routes.js";
+import { mcpPreamble } from "../http/skill-doc.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -52,17 +54,25 @@ const PKG_VERSION = (() => {
   }
 })();
 
-async function loadInstructions() {
+// AGENTS.md is the CHANNEL-NEUTRAL body (workflow knowledge, footguns, per-platform
+// docs) — it must not contain "how to connect / how to call" prose, because that
+// differs per delivery channel. The MCP channel prepends mcpPreamble ("call the
+// MCP tools…", never mentions HTTP routes); the skill channel (GET /romdev-skill.md)
+// prepends skillPreamble ("POST /tool/{name}…", never mentions MCP). Both live in
+// src/http/skill-doc.js so neither leaks into the other surface.
+async function loadAgentsBody() {
   try {
     const agentsPath = path.resolve(__dirname, "..", "..", "AGENTS.md");
     return await readFile(agentsPath, "utf-8");
   } catch {
-    return [
-      "romdev: homebrew retro game development + reverse-engineering for coding agents.",
-      "All ~34 tools register at session init — call any by name directly, no loading step. Each is a domain VERB with an operation axis: memory({op}), build({output}), breakpoint({on}), cpu({op}), sprites({op}), tiles({op}), disasm({target}), romPatch({op}), ...",
-      "catalog({op:'categories'}) maps the tools by purpose (a guide, not a gate); catalog({op:'status'}) is a session re-orient.",
-    ].join("\n");
+    return "";
   }
+}
+
+/** MCP connection instructions = mcpPreamble + the shared AGENTS body. */
+async function loadInstructions() {
+  const body = await loadAgentsBody();
+  return body ? `${mcpPreamble}\n\n${body}` : mcpPreamble;
 }
 
 function buildMcpServer(instructions, sessionKey) {
@@ -338,6 +348,15 @@ async function main() {
     res.json({ ok: true, sessions: transports.size });
   });
 
+  // ── HTTP tool surface (the non-MCP way to drive romdev) ───────────────────
+  // POST /tool/:name + /openapi.json + /documentation + /romdev-skill.md, all
+  // generated from the same tool registry the MCP path uses. Same Express app,
+  // same localhost trust, per-agent dynamic sessions. Lets MCP-wary users (or
+  // agents that prefer the Agent Skills standard) use romdev with near-zero
+  // always-on context — the skill metadata is ~100 tokens until invoked.
+  const agentsBody = await loadAgentsBody();
+  mountHttpToolRoutes(app, { agentsBody, version: PKG_VERSION, idleMs: SESSION_IDLE_MS });
+
   // JSON-RPC-shaped error handler. Without this, body-parser failures
   // (e.g. PayloadTooLargeError) return HTML, which MCP clients can't parse.
   app.use((err, req, res, next) => {
@@ -372,6 +391,7 @@ async function main() {
   const httpServer = app.listen(port, bindHosts[0], () => {
     log.info(`romdev listening on http://${bannerHost}:${port}/mcp`);
     log.info("");
+    log.info(`no-MCP / skills:        http://${bannerHost}:${port}/documentation`);
     log.info(`optional observer:      http://${bannerHost}:${port}/livestream`);
     log.info("");
     log.info("connect your coding agent: https://github.com/monteslu/romdev#connect");

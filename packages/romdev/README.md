@@ -41,6 +41,25 @@ It's a standard **streamable-HTTP** MCP server at `http://127.0.0.1:7331/mcp`. F
 
 Agents: the server delivers [`AGENTS.md`](./AGENTS.md) as connection-time instructions — the workflow guide for the full tool surface. Or just connect your agent and call `catalog({op:'categories'})` to explore the tools live (and `catalog({op:'whatsNew'})` for the recent CHANGELOG + a rename table if you're resuming work against an older version).
 
+## Don't want MCP? Use HTTP or a Skill
+
+The same 34 tools are also reachable without an MCP client — same server, no extra setup:
+
+- **Plain HTTP:** `POST http://127.0.0.1:7331/tool/{name}` with the args as a JSON
+  body; the response is JSON. Browse/try every tool at **`/documentation`**
+  (Swagger UI), or get the machine spec at **`/openapi.json`**. For stateful work
+  (load → step → read) the first call returns an `x-romdev-session` header — echo
+  it on later calls to keep the same emulator session.
+- **Agent Skill:** **`GET /romdev-skill.md`** is a portable [Agent
+  Skills](https://agentskills.io) `SKILL.md` (works in Claude Code, opencode,
+  OpenClaw, Hermes, …). Drop it in your agent's skills dir; it costs ~100 tokens
+  until invoked (vs always-on MCP tool defs), then teaches the workflows + the
+  `POST /tool/{name}` calls.
+
+Both are generated from the same tool registry as the MCP surface, so they never
+drift. (romdev still hosts the emulators/toolchains in-process — the HTTP/skill
+path drives that same engine; it doesn't need a separate install.)
+
 ## License
 
 romdev's code is **MIT**, and **the games you build are yours — including to
