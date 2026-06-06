@@ -34,12 +34,12 @@ test("lynx RE primitives: setRegister + watchRange + logPCRange (65C02)", { time
   assert.equal(sr.notSupported, undefined, "setRegister notSupported on lynx");
   assert.equal((sr.valueRaw & 0xFF), 0x42, "setRegister (A) didn't round-trip: " + JSON.stringify(sr));
 
-  const wr = toJSON(await client.callTool({ name: "watchRange", arguments: { start: 144, end: 144, kind: "write", frames: 10, limit: 10 } }));
+  const wr = toJSON(await client.callTool({ name: "watch", arguments: { on: "range",  start: 144, end: 144, kind: "write", frames: 10, limit: 10 } }));
   assert.equal(wr.notSupported, undefined, "watchRange notSupported on lynx");
   assert.ok(wr.total > 0, "watchRange caught no writes: " + JSON.stringify(wr));
   assert.ok(wr.distinctPCs.length > 0, "watchRange returned no PCs");
 
-  const cov = toJSON(await client.callTool({ name: "logPCRange", arguments: { start: 512, end: 16383, frames: 10 } }));
+  const cov = toJSON(await client.callTool({ name: "watch", arguments: { on: "pc",  start: 512, end: 16383, frames: 10 } }));
   assert.equal(cov.notSupported, undefined, "logPCRange notSupported on lynx");
   assert.ok(cov.distinct > 0, "logPCRange found no PCs: " + JSON.stringify(cov));
 });

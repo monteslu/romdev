@@ -61,6 +61,8 @@ export const MERGE_MAP = {
   cpu: { absorbs: ["getCPUState", "setRegister", "callSubroutine", "decompressWith"], axis: "op" },
   // ── breakpoint (STOP-on-first; all 4 from watch-memory.js) ──
   breakpoint: { absorbs: ["findWriter", "runUntilWrite", "runUntilPC", "runUntilRead"], axis: "on" },
+  // ── watch (LOG-ALL; all 3 from watch-memory.js) ──
+  watch: { absorbs: ["watchMemory", "watchRange", "logPCRange"], axis: "on" },
 };
 
 /** Every OLD tool name that the consolidation removes (absorbed into a new tool). */

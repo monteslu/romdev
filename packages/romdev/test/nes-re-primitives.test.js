@@ -49,7 +49,7 @@ test("NES RE primitives: setRegister + watchRange + logPCRange (fceumm 6502)", {
 
   // watchRange catches the per-frame write to $20 with pc/addr/value.
   const wr = toJSON(await client.callTool({
-    name: "watchRange", arguments: { start: 0x20, end: 0x20, kind: "write", frames: 10, limit: 10 },
+    name: "watch", arguments: { on: "range",  start: 0x20, end: 0x20, kind: "write", frames: 10, limit: 10 },
   }));
   assert.equal(wr.notSupported, undefined, "watchRange notSupported on fceumm");
   assert.ok(wr.total > 0, "watchRange caught no writes to $20: " + JSON.stringify(wr));
@@ -57,7 +57,7 @@ test("NES RE primitives: setRegister + watchRange + logPCRange (fceumm 6502)", {
 
   // logPCRange returns distinct executed PCs in the PRG area.
   const cov = toJSON(await client.callTool({
-    name: "logPCRange", arguments: { start: 0x8000, end: 0xFFFF, frames: 10 },
+    name: "watch", arguments: { on: "pc",  start: 0x8000, end: 0xFFFF, frames: 10 },
   }));
   assert.equal(cov.notSupported, undefined, "logPCRange notSupported on fceumm");
   assert.ok(cov.distinct > 0, "logPCRange found no PCs: " + JSON.stringify(cov));
