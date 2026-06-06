@@ -17,7 +17,10 @@ import path from "node:path";
 
 function tileHandlers() {
   const map = {};
+  // getTile is now tiles({as:'pixels'}). registerTileInspectTools registers the
+  // consolidated `tiles` router; adapt so these (frozen) assertions are unchanged.
   registerTileInspectTools({ tool: (n, _d, _s, h) => { map[n] = h; } }, z, "gt-test");
+  map.getTile = (args) => map.tiles({ as: "pixels", ...args });
   return map;
 }
 const parse = (res) => JSON.parse(res.content.find((c) => c.type === "text").text);

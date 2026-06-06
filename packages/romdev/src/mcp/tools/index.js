@@ -35,7 +35,6 @@ import { registerFreeSpaceTools } from "./free-space.js";
 import { registerReinjectTools } from "./reinject.js";
 import { registerSpliceChrTools } from "./splice-chr.js";
 import { registerCartPartsTools } from "./cart-parts.js";
-import { registerPreviewTileTools } from "./preview-tile.js";
 import { registerFontMapTools } from "./font-map.js";
 import { registerDisasmTools } from "./disasm.js";
 import { registerFindReferencesTools } from "./find-references.js";
@@ -112,7 +111,7 @@ const CATEGORIES = [
       registerFindReferencesTools(s, z, k);    // findReferences
       registerRenderingContextTools(s, z, k);  // background{view} (map/renderState/rendered)
       registerTraceVramSourceTools(s, z, k);   // traceVramSource (Genesis VRAM-DMA source)
-      registerTileInspectTools(s, z, k);       // tile/CHR inspection helpers
+      registerTileInspectTools(s, z, k);       // tiles{as} (png/pixels/fingerprints/ascii/preview)
       registerAddressToSymbolTools(s, z, k);   // addressToSymbol — PC → C function name
       registerCheatTools(s, z, k);             // gameCheats (labeled RAM/code map), applyCheat, clearCheats
     },
@@ -121,7 +120,7 @@ const CATEGORIES = [
     name: "assets",
     description: "Convert PNGs to platform tile formats, encode WAVs to BRR, scan ROMs to identify them.",
     useWhen: ["importing graphics or audio assets", "checking what a ROM file is"],
-    register: (s, z, k) => { registerAssetTools(s, z, k); registerAudioTools(s, z, k); registerRomIdTools(s, z, k); registerDiffRomsTools(s, z, k); registerFreeSpaceTools(s, z, k); registerReinjectTools(s, z, k); registerSpliceChrTools(s, z, k); registerCartPartsTools(s, z, k); registerPreviewTileTools(s, z, k); registerFontMapTools(s, z, k); registerArtLoaderTools(s, z, k); registerSpritePipelineTools(s, z, k); registerLospecTools(s, z, k); registerMetaSpriteTools(s, z, k); },
+    register: (s, z, k) => { registerAssetTools(s, z, k); registerAudioTools(s, z, k); registerRomIdTools(s, z, k); registerDiffRomsTools(s, z, k); registerFreeSpaceTools(s, z, k); registerReinjectTools(s, z, k); registerSpliceChrTools(s, z, k); registerCartPartsTools(s, z, k); registerFontMapTools(s, z, k); registerArtLoaderTools(s, z, k); registerSpritePipelineTools(s, z, k); registerLospecTools(s, z, k); registerMetaSpriteTools(s, z, k); },
   },
   {
     name: "project",
@@ -310,7 +309,7 @@ const TOOL_OWNER = {
   // memory category
   readMemory: "memory", writeMemory: "memory",
   // debug category
-  inspectPatternTiles: "debug", sprites: "debug",
+  tiles: "debug", sprites: "debug",
   background: "debug", convertImageToTiles: "debug",
   imageToTilemap: "debug",
   getCPUState: "debug", audioDebug: "debug",
@@ -325,7 +324,6 @@ const TOOL_OWNER = {
   assembleSnippet: "assets", diffRoms: "assets", findFreeSpace: "assets", spliceCHR: "assets",
   findPointerTo: "assets", makeStoredBlock: "assets", relocateBlock: "assets",
 
-  previewTileArt: "assets",
   text: "assets",
   loadTilemap: "assets", loadAsepriteSheet: "assets", loadGifAnimation: "assets", loadSpriteSheet: "assets",
   cropSpriteSheet: "assets", quantizePngForPlatform: "assets", crossPlatformSpriteImport: "assets",

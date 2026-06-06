@@ -9,7 +9,11 @@
 
 import { readFile } from "node:fs/promises";
 import { getHostOrNull, getHost } from "../state.js";
-import { jsonContent, safeTool } from "../util.js";
+import { jsonContent, imageContent, textContent, safeTool } from "../util.js";
+import { inspectPatternTilesCore } from "./platform-tools.js";
+import { extractSpriteSheetCore } from "./rom-id.js";
+import { previewTileArtCore } from "./preview-tile.js";
+import { intentZod } from "../../platforms/common/intent.js";
 
 /** Pick the right memory region for the platform's tile data. */
 function tileRegion(platform) {
@@ -98,147 +102,184 @@ function needsGenesisUnswap(src, logicalPixels) {
   return logicalPixels && src.source === "emulator" && src.platform === "genesis";
 }
 
+// ── tiles op implementations (as:pixels|fingerprints|ascii) ─────────────
+// Bodies of the former getTile/tileFingerprints/tilesAscii, verbatim. They
+// share the module-scope source/swap helpers above.
+
+async function tilesPixels(sessionKey, { platform, tileIndex, path, logicalPixels = true }) {
+  const { decodeTile, tileStats, tileToAscii } = await import("../../platforms/common/tile-decode.js");
+  const { TILE_SPECS } = await import("../../platforms/common/image-to-tiles.js");
+  const src = await resolveTileSource(platform, path, sessionKey);
+  const spec = TILE_SPECS[src.platform];
+  const bytesPerTile = (8 * 8 * spec.bpp) / 8;
+  let bytes = readTileBytes(src, tileIndex * bytesPerTile, bytesPerTile);
+  const swap = needsGenesisUnswap(src, logicalPixels);
+  if (swap) bytes = genesisVramUnswap(bytes);
+  const pixels = decodeTile(src.platform, bytes, 0);
+  const stats = tileStats(pixels);
+  return jsonContent({
+    platform: src.platform,
+    source: src.source,
+    ...(src.sourcePath ? { sourcePath: src.sourcePath } : {}),
+    tileIndex,
+    bpp: spec.bpp,
+    ...(src.platform === "genesis" && src.source === "emulator" ? { byteSwapCorrected: swap } : {}),
+    pixels: Array.from(pixels),
+    ascii: tileToAscii(pixels, spec.maxColors),
+    hash: stats.hash,
+    nonzero: stats.nonzero,
+    uniqueColors: stats.uniqueColors,
+    histogram: stats.histogram,
+  });
+}
+
+async function tilesFingerprints(sessionKey, { platform, start = 0, count = 256, path, logicalPixels = true }) {
+  const { decodeTile, tileStats } = await import("../../platforms/common/tile-decode.js");
+  const { TILE_SPECS } = await import("../../platforms/common/image-to-tiles.js");
+  const src = await resolveTileSource(platform, path, sessionKey);
+  const spec = TILE_SPECS[src.platform];
+  const bytesPerTile = (8 * 8 * spec.bpp) / 8;
+  const swap = needsGenesisUnswap(src, logicalPixels);
+  const fingerprints = [];
+  for (let i = 0; i < count; i++) {
+    const idx = start + i;
+    let bytes;
+    try {
+      bytes = readTileBytes(src, idx * bytesPerTile, bytesPerTile);
+    } catch {
+      break;
+    }
+    if (!bytes || bytes.length < bytesPerTile) break;
+    if (swap) bytes = genesisVramUnswap(bytes);
+    const pixels = decodeTile(src.platform, bytes, 0);
+    const s = tileStats(pixels);
+    fingerprints.push({
+      idx,
+      hash: s.hash,
+      nonzero: s.nonzero,
+      uniqueColors: s.uniqueColors,
+    });
+  }
+  return jsonContent({
+    platform: src.platform,
+    source: src.source,
+    ...(src.sourcePath ? { sourcePath: src.sourcePath } : {}),
+    bpp: spec.bpp,
+    count: fingerprints.length,
+    fingerprints,
+  });
+}
+
+async function tilesAsciiArt(sessionKey, { platform, start = 0, count = 16, path, logicalPixels = true }) {
+  const { decodeTile, tileToAscii } = await import("../../platforms/common/tile-decode.js");
+  const { TILE_SPECS } = await import("../../platforms/common/image-to-tiles.js");
+  const src = await resolveTileSource(platform, path, sessionKey);
+  const spec = TILE_SPECS[src.platform];
+  const bytesPerTile = (8 * 8 * spec.bpp) / 8;
+  const swap = needsGenesisUnswap(src, logicalPixels);
+  const blocks = [];
+  for (let i = 0; i < count; i++) {
+    const idx = start + i;
+    let bytes;
+    try {
+      bytes = readTileBytes(src, idx * bytesPerTile, bytesPerTile);
+    } catch {
+      break;
+    }
+    if (!bytes || bytes.length < bytesPerTile) break;
+    if (swap) bytes = genesisVramUnswap(bytes);
+    const pixels = decodeTile(src.platform, bytes, 0);
+    blocks.push(`tile ${idx}:\n${tileToAscii(pixels, spec.maxColors)}`);
+  }
+  return jsonContent({
+    platform: src.platform,
+    source: src.source,
+    ...(src.sourcePath ? { sourcePath: src.sourcePath } : {}),
+    count: blocks.length,
+    ascii: blocks.join("\n\n"),
+  });
+}
+
 export function registerTileInspectTools(server, z, sessionKey) {
   server.tool(
-    "getTile",
-    "Decode a single tile and return its 64 pixel indices (top-left, row-major). Use for exact " +
-    "byte-level analysis instead of inspectPatternTiles (which returns a PNG you have to view " +
-    "visually).\n\n" +
-    "Source selection: pass `path` to read CHR bytes from a file on disk (iNES files auto-locate " +
-    "CHR, raw .chr files are read as-is). Omit `path` to read from the running emulator's pattern " +
-    "table / VRAM. The response always reports `source: \"file\" | \"emulator\"` so you know which.\n\n" +
-    "GENESIS NOTE: genesis-plus-gx stores VRAM as 16-bit words in host (little-endian) byte order, " +
-    "so raw video_ram bytes have each word's two bytes swapped vs the VDP-logical layout (readMemory " +
-    "exposes those raw bytes too). By default getTile UN-SWAPS this for the live emulator so `pixels` " +
-    "are in true render order; pass `logicalPixels:false` to see the raw host byte order instead. " +
-    "The response reports `byteSwapCorrected:true` when the un-swap was applied.",
+    "tiles",
+    "DECODE & render tile / CHR / pattern-table / VRAM bytes, one tool keyed by `as`. " +
+    "`source`: pass `path` to read from a ROM/CHR file on disk (iNES auto-locates CHR, raw .chr/.bin read as-is); " +
+    "omit `path` to read the running emulator's pattern table / VRAM. **Every read reports `source:'file'|'emulator'`.** " +
+    "**GENESIS NOTE: genesis-plus-gx stores VRAM as 16-bit words in host (little-endian) byte order, so raw video_ram " +
+    "bytes have each word's two bytes swapped vs the VDP-logical layout. `as:pixels/fingerprints/ascii` UN-SWAP this for " +
+    "the live emulator by default (`logicalPixels:true`); response reports `byteSwapCorrected`. No effect on file sources.**\n" +
+    "• as:'png' — render tiles as a PNG sheet. No `path` → the running emulator (CHR-ROM cores read the iNES file; CHR-RAM " +
+    "cores read live VRAM — blank tiles mean nothing uploaded yet). `path` set → render FROM a ROM file on disk (point at " +
+    "the data with `bank` (NES, easiest) or raw `offset`; **`intent:homebrew` colors from the live/default palette, " +
+    "`intent:rom-hack` stays grayscale — intent REQUIRED for file extraction**; CHR-RAM carts have no file graphics). " +
+    "SNES `bpp/tileBaseByte/paletteBase`, Genesis `paletteIndex`, `tileCount/scale`. PNG writes `outputPath` or `inline`.\n" +
+    "• as:'pixels' — decode ONE tile to its 64 pixel indices (row-major) + stats/ascii/histogram. Exact byte-level analysis, no visual budget. (`tileIndex` required.)\n" +
+    "• as:'fingerprints' — scan `start`..`start+count` tiles → one {idx,hash,nonzero,uniqueColors} each. Find blank/duplicate/distinct tiles fast (pure byte arithmetic), no PNG.\n" +
+    "• as:'ascii' — render `start`..`start+count` tiles as ASCII art blocks. Precise text-based inspection/diffs.\n" +
+    "• as:'preview' — preview tile BYTES against a palette as a PNG — pure compositing, no build/load/screenshot cycle. Author bytes → preview → iterate → patchFile. Source: `tileBytes` (base64) | `tilePath` | `fromEmulator:true` (live VRAM; Genesis byte-swap handled). Palette: explicit `palette` or `paletteFromEmulator:true` (NES/SNES/Genesis), else gray ramp. **intent steers the palette default.**",
     {
-      platform: z.string().optional().describe("Required when reading from `path` (no running emulator to sniff from)."),
-      tileIndex: z.number().int().min(0).max(8191),
-      path: z.string().optional().describe("Absolute path to a ROM file (.nes auto-finds CHR) or raw .chr/.bin. Omit to read from the running emulator."),
-      logicalPixels: z.boolean().default(true).describe("Genesis emulator source only: un-swap the host-LE 16-bit VRAM words so pixels match VDP render order (default true — the byte order you almost always want). Set false to inspect the raw host bytes. No effect on other platforms or file sources."),
+      as: z.enum(["png", "pixels", "fingerprints", "ascii", "preview"])
+        .describe("png=PNG sheet (live VRAM, or a ROM file via path); pixels=one tile's 64 indices; fingerprints=hash scan; ascii=ASCII art; preview=composite arbitrary tileBytes against a palette."),
+      platform: z.string().optional().describe("Override platform; defaults to the loaded ROM. REQUIRED for as:'png' file extraction (path) and as:'preview', and when reading pixels/fingerprints/ascii from `path`."),
+      path: z.string().optional().describe("as:png/pixels/fingerprints/ascii — read tile bytes from this ROM/CHR file instead of the running emulator (the `source` selector)."),
+      logicalPixels: z.boolean().default(true).describe("as:pixels/fingerprints/ascii, Genesis emulator source only: un-swap host-LE 16-bit VRAM words to VDP render order (default true). No effect elsewhere."),
+      // as:pixels
+      tileIndex: z.number().int().min(0).max(8191).optional().describe("as:pixels — which tile to decode."),
+      // as:fingerprints / as:ascii ranges
+      start: z.number().int().min(0).default(0).describe("as:fingerprints/ascii — first tile index."),
+      count: z.number().int().min(1).max(8192).optional().describe("as:fingerprints (≤8192, default 256) / as:ascii (≤64, default 16) — how many tiles to scan. as:png file extraction — tile count (default 256)."),
+      // as:png shared
+      scale: z.number().int().min(1).max(16).default(1).describe("as:png — integer nearest-neighbor upscale (the default 8×8 strip is tiny inline; scale:4 → 32×32 per tile)."),
+      bpp: z.union([z.literal(2), z.literal(4), z.literal(8)]).default(4).describe("as:png SNES only: tile bit-depth (Mode 1 BG1/BG2 = 4bpp default, BG3 = 2bpp). snes9x can't auto-detect."),
+      tileBaseByte: z.number().int().min(0).default(0).describe("as:png SNES only: byte offset into VRAM of tile 0 (BG character base)."),
+      paletteBase: z.number().int().min(0).max(255).default(0).describe("as:png SNES only: CGRAM index of color 0 of the sub-palette used to colorize the sheet."),
+      paletteIndex: z.number().int().min(0).max(15).default(0).describe("as:png Genesis live (0-3) / as:png file extraction (NES 0-7, SNES 0-15, Genesis 0-3) / as:preview subpalette index."),
+      tileCount: z.number().int().min(0).default(0).describe("as:png SNES/Genesis live only: how many tiles to render (0 = fill VRAM from tileBaseByte)."),
+      // as:png file extraction (path)
+      offset: z.number().int().min(0).optional().describe("as:png file (path): raw byte offset into the ROM file. Use `bank` when possible."),
+      bank: z.number().int().min(0).max(127).optional().describe("as:png file (path) NES: 4 KB CHR bank index (0 = first 4 KB). Conflicts with `offset`."),
+      paletteFromEmulator: z.boolean().optional().describe("as:png file extraction / as:preview — color using the live emulator palette (NES/SNES/Genesis). Default from `intent`."),
+      tilesPerRow: z.number().int().min(1).max(64).default(16).describe("as:png file extraction / as:preview — tiles per row in the sheet."),
+      // as:preview
+      tileBytes: z.string().optional().describe("as:preview — base64 of raw tile bytes."),
+      tilePath: z.string().optional().describe("as:preview — path to a tile dump (raw) or iNES ROM (NES auto-locates CHR)."),
+      fromEmulator: z.boolean().optional().describe("as:preview — read tiles from the running emulator's live VRAM (tileStart/tileCount pick the range). Genesis byte-swap handled. Mutually exclusive with tileBytes/tilePath."),
+      tileStart: z.number().int().min(0).optional().describe("as:preview — starting tile index in the source."),
+      byteOffset: z.number().int().min(0).optional().describe("as:preview — start at a raw BYTE offset instead of a tile index (pass a watchDma/findReferences source directly). WARNS on misalignment. Takes precedence over tileStart."),
+      palette: z.array(z.any()).optional().describe("as:preview — explicit palette (NES: 4 master indices; others: RGB triples or indices)."),
+      palettePath: z.string().optional().describe("as:preview — raw palette dump from disk."),
+      // shared output
+      outputPath: z.string().optional().describe("as:png/preview — write the PNG here (as:png defaults to disk unless inline; as:preview returns inline if omitted)."),
+      inline: z.boolean().default(false).describe("as:png — return the image in the response instead of writing to disk."),
+      intent: intentZod(z),
     },
-    safeTool(async ({ platform, tileIndex, path, logicalPixels = true }) => {
-      const { decodeTile, tileStats, tileToAscii } = await import("../../platforms/common/tile-decode.js");
-      const { TILE_SPECS } = await import("../../platforms/common/image-to-tiles.js");
-      const src = await resolveTileSource(platform, path, sessionKey);
-      const spec = TILE_SPECS[src.platform];
-      const bytesPerTile = (8 * 8 * spec.bpp) / 8;
-      let bytes = readTileBytes(src, tileIndex * bytesPerTile, bytesPerTile);
-      const swap = needsGenesisUnswap(src, logicalPixels);
-      if (swap) bytes = genesisVramUnswap(bytes);
-      const pixels = decodeTile(src.platform, bytes, 0);
-      const stats = tileStats(pixels);
-      return jsonContent({
-        platform: src.platform,
-        source: src.source,
-        ...(src.sourcePath ? { sourcePath: src.sourcePath } : {}),
-        tileIndex,
-        bpp: spec.bpp,
-        ...(src.platform === "genesis" && src.source === "emulator" ? { byteSwapCorrected: swap } : {}),
-        pixels: Array.from(pixels),
-        ascii: tileToAscii(pixels, spec.maxColors),
-        hash: stats.hash,
-        nonzero: stats.nonzero,
-        uniqueColors: stats.uniqueColors,
-        histogram: stats.histogram,
-      });
-    }),
-  );
-
-  server.tool(
-    "tileFingerprints",
-    "Scan tiles and return one fingerprint per tile: {idx, hash, nonzero, uniqueColors}. Quickly " +
-    "find blank tiles, duplicates, and visually-distinct sprites without rendering every tile to " +
-    "PNG. Fast — pure byte arithmetic.\n\n" +
-    "Source selection: pass `path` to read from a CHR file on disk, omit for the running emulator. " +
-    "Response reports `source: \"file\" | \"emulator\"`.",
-    {
-      platform: z.string().optional(),
-      start: z.number().int().min(0).default(0).describe("First tile index."),
-      count: z.number().int().min(1).max(8192).default(256),
-      path: z.string().optional().describe("Optional ROM or CHR file. Omit to read from the running emulator."),
-      logicalPixels: z.boolean().default(true).describe("Genesis emulator source only: un-swap host-LE VRAM words to VDP render order (default true)."),
-    },
-    safeTool(async ({ platform, start, count, path, logicalPixels = true }) => {
-      const { decodeTile, tileStats } = await import("../../platforms/common/tile-decode.js");
-      const { TILE_SPECS } = await import("../../platforms/common/image-to-tiles.js");
-      const src = await resolveTileSource(platform, path, sessionKey);
-      const spec = TILE_SPECS[src.platform];
-      const bytesPerTile = (8 * 8 * spec.bpp) / 8;
-      const swap = needsGenesisUnswap(src, logicalPixels);
-      const fingerprints = [];
-      for (let i = 0; i < count; i++) {
-        const idx = start + i;
-        let bytes;
-        try {
-          bytes = readTileBytes(src, idx * bytesPerTile, bytesPerTile);
-        } catch {
-          break;
+    safeTool(async (args) => {
+      switch (args.as) {
+        case "pixels": {
+          if (args.tileIndex == null) throw new Error("tiles({as:'pixels'}): `tileIndex` is required.");
+          return await tilesPixels(sessionKey, args);
         }
-        if (!bytes || bytes.length < bytesPerTile) break;
-        if (swap) bytes = genesisVramUnswap(bytes);
-        const pixels = decodeTile(src.platform, bytes, 0);
-        const s = tileStats(pixels);
-        fingerprints.push({
-          idx,
-          hash: s.hash,
-          nonzero: s.nonzero,
-          uniqueColors: s.uniqueColors,
-        });
-      }
-      return jsonContent({
-        platform: src.platform,
-        source: src.source,
-        ...(src.sourcePath ? { sourcePath: src.sourcePath } : {}),
-        bpp: spec.bpp,
-        count: fingerprints.length,
-        fingerprints,
-      });
-    }),
-  );
-
-  server.tool(
-    "tilesAscii",
-    "Render a range of tiles as ASCII art instead of PNG. Best for precise inspection or text-" +
-    "based comparisons. Returns one block per tile separated by newlines.\n\n" +
-    "Source selection: pass `path` for a CHR file on disk, omit for the running emulator. Response " +
-    "reports `source: \"file\" | \"emulator\"`.",
-    {
-      platform: z.string().optional(),
-      start: z.number().int().min(0).default(0),
-      count: z.number().int().min(1).max(64).default(16),
-      path: z.string().optional().describe("Optional ROM or CHR file."),
-      logicalPixels: z.boolean().default(true).describe("Genesis emulator source only: un-swap host-LE VRAM words to VDP render order (default true)."),
-    },
-    safeTool(async ({ platform, start, count, path, logicalPixels = true }) => {
-      const { decodeTile, tileToAscii } = await import("../../platforms/common/tile-decode.js");
-      const { TILE_SPECS } = await import("../../platforms/common/image-to-tiles.js");
-      const src = await resolveTileSource(platform, path, sessionKey);
-      const spec = TILE_SPECS[src.platform];
-      const bytesPerTile = (8 * 8 * spec.bpp) / 8;
-      const swap = needsGenesisUnswap(src, logicalPixels);
-      const blocks = [];
-      for (let i = 0; i < count; i++) {
-        const idx = start + i;
-        let bytes;
-        try {
-          bytes = readTileBytes(src, idx * bytesPerTile, bytesPerTile);
-        } catch {
-          break;
+        case "fingerprints": return await tilesFingerprints(sessionKey, { ...args, count: args.count ?? 256 });
+        case "ascii":        return await tilesAsciiArt(sessionKey, { ...args, count: args.count ?? 16 });
+        case "png": {
+          // path → render from a ROM file (richer extractSpriteSheet path);
+          // no path → live VRAM pattern tables (inspectPatternTiles).
+          if (args.path) {
+            if (!args.platform) throw new Error("tiles({as:'png'}) with `path`: `platform` is required for file extraction.");
+            return await extractSpriteSheetCore({ ...args, count: args.count || 256 }, sessionKey);
+          }
+          return await inspectPatternTilesCore(args);
         }
-        if (!bytes || bytes.length < bytesPerTile) break;
-        if (swap) bytes = genesisVramUnswap(bytes);
-        const pixels = decodeTile(src.platform, bytes, 0);
-        blocks.push(`tile ${idx}:\n${tileToAscii(pixels, spec.maxColors)}`);
+        case "preview": {
+          const r = await previewTileArtCore({ ...args, sessionKey });
+          if (r.pngBase64) {
+            return { content: [imageContent(r.pngBase64), textContent(JSON.stringify({ ...r, pngBase64: undefined }))] };
+          }
+          return jsonContent(r);
+        }
+        default: throw new Error(`tiles: unknown as '${args.as}'`);
       }
-      return jsonContent({
-        platform: src.platform,
-        source: src.source,
-        ...(src.sourcePath ? { sourcePath: src.sourcePath } : {}),
-        count: blocks.length,
-        ascii: blocks.join("\n\n"),
-      });
     }),
   );
 }

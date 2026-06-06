@@ -91,26 +91,15 @@ export function registerRomIdTools(server, z, sessionKey) {
     }),
   );
 
-  server.tool(
-    "extractSpriteSheet",
-    "Use this to render tiles FROM A ROM FILE ON DISK as a PNG sheet. Point at the tile data with `bank` " +
-    "(NES, easiest) or a raw `offset` (SNES/GB/others — graphics can live anywhere; scan in 1-4 KB steps). " +
-    "Default palette is grayscale; `paletteFromEmulator:true` (+ `paletteIndex`) colors it like the real " +
-    "in-game art for editing. `outputPath` writes the PNG to disk instead of inline. For LIVE graphics " +
-    "from a running emulator (or CHR-RAM carts, which have no graphics in the file), use inspectPatternTiles.",
-    {
-      platform: z.string().describe("Platform id (nes, gb, gbc, snes, genesis, sms, gg, gba, atari7800, lynx)."),
-      path: z.string().describe("Absolute path to the ROM file."),
-      offset: z.number().int().min(0).optional().describe("Raw byte offset in the ROM file. Use `bank` instead when possible — it's much easier."),
-      bank: z.number().int().min(0).max(127).optional().describe("NES: 4 KB CHR bank index (0 = first 4 KB of CHR, 1 = next, ...). Translates to the right file offset for you. Conflicts with `offset` — use one or the other."),
-      count: z.number().int().min(1).max(8192).default(256),
-      tilesPerRow: z.number().int().min(1).max(64).default(16),
-      paletteFromEmulator: z.boolean().optional().describe("Color the export using the live emulator palette (NES/SNES/Genesis). Requires a loaded ROM. Default comes from `intent`: homebrew → true if a ROM is loaded, fall back to per-platform default palette otherwise; rom-hack → false (grayscale)."),
-      paletteIndex: z.number().int().min(0).max(15).default(0).describe("Subpalette index when paletteFromEmulator is true. NES: 0-7 (0-3 = BG, 4-7 = sprite); SNES: 0-15; Genesis: 0-3."),
-      outputPath: z.string().optional().describe("If set, write the sprite-sheet PNG to this absolute path and return `path` instead of the inline image. Useful when you'll just `extractSpriteSheet → patchRom` without ever viewing the PNG."),
-      intent: intentZod(z),
-    },
-    safeTool(async ({ platform, path: romPath, offset, bank, count, tilesPerRow, paletteFromEmulator, paletteIndex, outputPath, intent }) => {
+  // extractSpriteSheet folded into the `tiles` tool (tiles({as:'png', source:'path'})).
+}
+
+/**
+ * tiles({as:'png'}) over a ROM FILE ON DISK — render tiles to a PNG sheet.
+ * Exported so the `tiles` router (tile-inspect.js) can call it. The live-VRAM
+ * PNG path is inspectPatternTilesCore; this is the file-source path.
+ */
+export async function extractSpriteSheetCore({ platform, path: romPath, offset, bank, count = 256, tilesPerRow = 16, paletteFromEmulator, paletteIndex = 0, outputPath, intent }, sessionKey) {
       const d = resolveIntent(intent);
       const { readFile } = await import("node:fs/promises");
       // R15: atari2600 has no tile region — sprites are raw bitmap rows scattered
@@ -209,8 +198,6 @@ export function registerRomIdTools(server, z, sessionKey) {
           { type: "text", text: `${note} Palette: ${paletteSource}. Intent: ${d.intent}.` },
         ],
       };
-    }),
-  );
 }
 
 /**
