@@ -13,7 +13,7 @@
 ;      then jumps it.
 ;
 ; This MCP server provides:
-;   - `buildSource({platform:"spc700", source})` — assembles standalone
+;   - `build({output:'rom'})({platform:"spc700", source})` — assembles standalone
 ;     SPC700 code to a flat raw binary (no SNES header, no padding).
 ;     Write your driver in arch-spc700 .asm, build separately, then
 ;     `.incbin` the resulting .bin into your SNES main.asm.
@@ -36,7 +36,7 @@
 ;
 ;   ; Late in ROM, the asset blobs.
 ;   spc_image:
-;     incbin "spc_driver.bin"      ; from buildSource(platform:"spc700")
+;     incbin "spc_driver.bin"      ; from build({output:'rom'})(platform:"spc700")
 ;   spc_image_end:
 ;
 ;   brr_shoot:

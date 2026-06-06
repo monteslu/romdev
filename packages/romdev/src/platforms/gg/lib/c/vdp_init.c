@@ -10,7 +10,7 @@
  * which is BACKWARDS. R6 bit 2 (the SA13 select) is CLEAR in 0xFB, so
  * sprite tiles read from $0000 (sharing the bank with BG tiles). To
  * separate sprite tiles to $2000, set R6 = 0xFF instead. The
- * inspectSprites tool's spriteTileDataBase field will show you the
+ * sprites({op:'inspect'}) tool's spriteTileDataBase field will show you the
  * real address the VDP is reading from.
  *
  * After loading assets, enable display by re-writing R1 with bit 6 set:

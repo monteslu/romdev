@@ -60,7 +60,7 @@ void    wait_vblank(void);
 /* Switch wait_vblank() from busy-poll-LY to HALT-driven (interrupt
  * wake). Strongly recommended — busy-poll wait_vblank runs at ~1/30
  * intended speed on the WASM emulator because LY only updates at
- * stepFrames quantum boundaries. Call once at boot after lcd_init_*.
+ * frame({op:'step'}) quantum boundaries. Call once at boot after lcd_init_*.
  * Safe to call before lcd_init_default (the HALT path checks LCDC
  * before sleeping).
  *

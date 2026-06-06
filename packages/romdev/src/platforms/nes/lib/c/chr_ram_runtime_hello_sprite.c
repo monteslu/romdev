@@ -6,7 +6,7 @@
  * point for any sprite-driven game.
  *
  * Build with:
- *   buildSource({platform:"nes", linkerConfig:"chr-ram-runtime",
+ *   build({output:'rom'})({platform:"nes", linkerConfig:"chr-ram-runtime",
  *                sources:{"main.c": <this>, "nes_runtime.c": <runtime>},
  *                includes:{"nes_runtime.h": <header>}})
  *
