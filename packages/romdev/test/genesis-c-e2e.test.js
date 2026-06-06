@@ -32,8 +32,8 @@ function toJSON(res) {
 test("buildSource({platform:'genesis', language:'c'}) → loadable Genesis ROM", { timeout: 180000 }, async () => {
   const client = await startClient();
   const build = toJSON(await client.callTool({
-    name: "buildSource",
-    arguments: {
+    name: "build",
+    arguments: { output: "rom", 
       platform: "genesis",
       language: "c",
       source: "int counter = 7; int main(void) { counter += 1; return counter; }",

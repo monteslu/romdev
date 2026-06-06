@@ -94,8 +94,8 @@ test("createProject(sms) → build succeeds end-to-end", async () => {
     const sourcePath = path.join(tmp, "main.c");
     const hwPath = path.join(tmp, "sms_hw.h");
     const build = parseToolJson(await client.callTool({
-      name: "buildSource",
-      arguments: {
+      name: "build",
+      arguments: { output: "rom", 
         platform: "sms",
         sourcePath,
         includePaths: { "sms_hw.h": hwPath },
@@ -118,8 +118,8 @@ test("createProject(c64) → build succeeds end-to-end", async () => {
     }));
     const sourcePath = path.join(tmp, "main.c");
     const build = parseToolJson(await client.callTool({
-      name: "buildSource",
-      arguments: { platform: "c64", sourcePath },
+      name: "build",
+      arguments: { output: "rom",  platform: "c64", sourcePath },
     }));
     assert.equal(build.ok, true, "c64 build failed:\n" + build.log);
     assert.ok(build.binaryBytes > 0);
@@ -147,8 +147,8 @@ test("createProject(snes, template:c_hello) → builds via PVSnesLib runtime", a
     const mainC = readFileSync(path.join(tmp, "main.c"), "utf-8");
     const dataAsm = readFileSync(path.join(tmp, "data.asm"), "utf-8");
     const build = parseToolJson(await client.callTool({
-      name: "buildSource",
-      arguments: {
+      name: "build",
+      arguments: { output: "rom", 
         platform: "snes",
         language: "c",
         sources: { "main.c": mainC, "data.asm": dataAsm },

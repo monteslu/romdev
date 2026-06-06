@@ -65,6 +65,8 @@ export const MERGE_MAP = {
   watch: { absorbs: ["watchMemory", "watchRange", "logPCRange"], axis: "on" },
   // ── dmaTrace (Genesis VDP-DMA; watchDma from watch-memory.js, traceVramSource from trace-vram-source.js) ──
   dmaTrace: { absorbs: ["watchDma", "traceVramSource"], axis: "precision" },
+  // ── build (compile/run; buildSource/buildProject/runSource from toolchain.js, buildSourceWithDebug from symbols.js). ENTRY-TIER. ──
+  build: { absorbs: ["buildSource", "buildSourceWithDebug", "buildProject", "runSource"], axis: "output" },
 };
 
 /** Every OLD tool name that the consolidation removes (absorbed into a new tool). */

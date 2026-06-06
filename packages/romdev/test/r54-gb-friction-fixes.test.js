@@ -473,10 +473,10 @@ test("R54 #8: buildSourceWithDebug accepts GB and returns mapText", { timeout: 1
 
   const main = `void main(void) { volatile unsigned char x; x = 42; for (;;) ; }\n`;
   const r = await client.callTool({
-    name: "buildSourceWithDebug",
+    name: "build",
     // inline:true → mapText + log come back in the response (default writes
     // ROM/.map/log to disk and requires outputPath).
-    arguments: { platform: "gb", source: main, inline: true },
+    arguments: { output: "romWithDebug", platform: "gb", source: main, inline: true },
   });
   assert.equal(r.isError, undefined, "buildSourceWithDebug failed: " + JSON.stringify(r));
   const payload = JSON.parse(r.content[0].text);

@@ -51,7 +51,7 @@ test("C64 PC breakpoint + read watch + single-step (vice 6510)", { timeout: 2400
   const client = await startClient();
 
   const build = toJSON(await client.callTool({
-    name: "buildSource", arguments: { platform: "c64", language: "c", source: SRC },
+    name: "build", arguments: { output: "rom",  platform: "c64", language: "c", source: SRC },
   }, undefined, { timeout: 180000 }));
   assert.equal(build.ok, true, "c64 build failed:\n" + (build.log || JSON.stringify(build)).slice(-600));
 

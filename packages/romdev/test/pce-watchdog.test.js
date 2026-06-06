@@ -53,7 +53,7 @@ test("PCE watchdog force-stops an infinite loop (geargrafx HuC6280)", { timeout:
   const client = await startClient();
 
   const build = toJSON(await client.callTool({
-    name: "buildSource", arguments: { platform: "pce", language: "c", source: SRC },
+    name: "build", arguments: { output: "rom",  platform: "pce", language: "c", source: SRC },
   }, undefined, { timeout: 180000 }));
   assert.equal(build.ok, true, "pce build failed:\n" + (build.log || JSON.stringify(build)).slice(-600));
 

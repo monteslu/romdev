@@ -55,8 +55,8 @@ for (const genre of ["shmup", "platformer", "puzzle"]) {
       // ── Build the scaffold end-to-end ─────────────────────────────
       const cfgContents = readFileSync(path.join(tmp, "chr-ram-runtime.cfg"), "utf-8");
       const build = toJSON(await client.callTool({
-        name: "buildSource",
-        arguments: {
+        name: "build",
+        arguments: { output: "rom", 
           platform: "nes",
           sourcesPaths: {
             "main.c":         path.join(tmp, "main.c"),

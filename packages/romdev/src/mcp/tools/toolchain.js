@@ -9,6 +9,7 @@ import { resetHost, getDisclosure } from "../state.js";
 import { PLATFORM_VIRTUAL_EXT } from "../../host/LibretroHost.js";
 import { imageContent, jsonContent, safeTool, textContent } from "../util.js";
 import { isPlaytestRunning } from "./playtest.js";
+import { buildSourceWithDebugCore } from "./symbols.js";
 import { log as serverLog } from "../log.js";
 
 // Record a build outcome into the /log ring buffer so a failed build's stage +
@@ -203,59 +204,7 @@ export function installToolchainCore({ id }) {
 }
 
 export function registerToolchainTools(server, z, sessionKey) {
-  server.tool(
-    "buildSource",
-    "Assemble or compile source code for a target platform. Pass either `source` (single file) or `sources` (multi-file project as {name: contents}). With `sources`, each entry becomes its own translation unit — for cc65 platforms (NES/C64/Atari7800/Lynx), .s/.asm files go to ca65 and .c files go to cc65; everything is linked together. Pass `linkerConfig` to override the default ld65 .cfg (useful when you need a larger ZP segment, custom mappers, or extra named segments). Returns the ROM bytes (base64) and the build log. Optionally writes the ROM to `outputPath`.",
-    {
-      platform: z.string().describe("Target platform id (e.g. 'nes', 'atari2600')."),
-      language: z.string().optional().describe("Optional language override (e.g. 'c', 'asm', 'basic'). USUALLY OMIT IT: when omitted, the language is inferred from your source — its filename extension (a .c sourcePath / .c key in `sources` → C; .s/.asm → asm) or, lacking a filename, from the source content (#include / int main → C). Only the truly ambiguous case falls back to the platform's documented default (see listPlatforms() {defaultLanguage}). So on dual-language platforms like Genesis (C via SGDK + m68k-elf-gcc, or asm via vasm68k) you can just hand it a .c file and it builds as C. Set this explicitly only to force a non-default toolchain."),
-      source: z.string().optional().describe("Single source file contents (shortcut). PREFER `sourcePath` for files already on disk — keeps your context small across iterations."),
-      sourcePath: z.string().optional().describe("Absolute path to a single source file on disk. Server reads from disk; you don't need to pump the file's contents through your context window. Mutually exclusive with `source`."),
-      sources: z
-        .record(z.string(), z.string())
-        .optional()
-        .describe("Multi-file project: filename → source. e.g. {'main.s': '...', 'aliens.s': '...'}"),
-      sourcesPaths: z
-        .record(z.string(), z.string())
-        .optional()
-        .describe("Path-based equivalent of `sources`: map of virtual filename → absolute file path. Server reads each from disk. Mutually exclusive with `sources` (mix-and-match across the two not supported)."),
-      includes: z
-        .record(z.string(), z.string())
-        .optional()
-        .describe("Optional virtual filename → contents map for `.include`d files (NOT separate translation units)."),
-      binaryIncludes: z
-        .record(z.string(), z.string())
-        .optional()
-        .describe("Like `includes` but for binary blobs (CHR ROM, music data, etc.). Each value is base64-encoded bytes. Use this for files referenced by `.incbin` so they survive transport without UTF-8 mangling. PREFER `binaryIncludePaths` for files already on disk — avoids loading the base64 into your context."),
-      binaryIncludePaths: z
-        .record(z.string(), z.string())
-        .optional()
-        .describe("Path-based equivalent of binaryIncludes: map of virtual filename → absolute file path. The server reads the file directly. Use this instead of binaryIncludes when the source is already on disk — the agent doesn't have to read the bytes into its own context just to forward them."),
-      includePaths: z
-        .record(z.string(), z.string())
-        .optional()
-        .describe("Path-based equivalent of `includes` (text files). Server reads from disk and writes into the build sandbox as UTF-8."),
-      crt0: z.string().optional().describe("SDCC platforms only. Source contents of a custom crt0.s — server assembles it via sdasgb/sdasz80 and links INSTEAD of SDCC's stock crt0.rel. For SMS and GG, the bundled platform crt0 (src/platforms/<plat>/lib/c/<plat>_crt0.s) is auto-injected when this arg is omitted (stock SDCC crt0 halts before reaching main on those targets). For GB/GBC pass `gb_crt0` contents explicitly + codeLoc:0x150. Provide your own here when you want a project-specific reset vector / IRQ handler."),
-      crt0Path: z.string().optional().describe("Path-based equivalent of `crt0` — server reads the .s file from disk."),
-      codeLoc: z.coerce.number().int().optional().describe("SDCC platforms: the load address for _CODE. Defaults to $0000. The bundled GB/GBC `gb_crt0.s` reserves $0100-$014F for the cartridge header window and expects _CODE at $0150 — pass `codeLoc: 336` (0x150) when using it. ZX Spectrum default is $8000."),
-      dataLoc: z.coerce.number().int().optional().describe("SDCC platforms: the load address for _DATA (WRAM)."),
-      options: z.array(z.string()).optional().describe("Extra toolchain CLI options."),
-      linkerConfig: z
-        .string()
-        .optional()
-        .describe("ld65 linker config (cc65 platforms only). Either:\n" +
-          "  - NES named preset: 'chr-ram-runtime' (RECOMMENDED — bundles the full crt0 with iNES header, NMI handler with OAM DMA + scroll setup, and defines `_shadow_oam` at $0200. Pair with nes_runtime.c). 'chr-ram' is the bare-bones variant with a `nmi: rti` stub and no `_shadow_oam` — only use if you're providing your own NMI handler AND your own shadow OAM definition.\n" +
-          "  - Full .cfg contents as a string (overrides per-target default).\n" +
-          "Leave empty for the default config (NES default = CHR-ROM with bundled NESfont)."),
-      outputPath: z.string().optional().describe("Absolute path. If given, the ROM is written here AND returned by path (not inline). When omitted, the ROM is written to a temp file and that path is returned; pass `inline: true` to instead get the base64 in the response."),
-      inline: z.boolean().default(false).describe("If true, include the full ROM as binaryBase64 in the response. Default false — agents pay context for big payloads, and the ROM is on local disk anyway."),
-      includeSymbols: z.boolean().default(false).describe("If true, include the toolchain's symbol/map output in the response (e.g. sdld's .map for SDCC builds, ld65's .sym for cc65). When false, only `symbolsBytes` is reported and the actual symbol text is dropped — call `addressToSymbol` to look up specific PCs without loading the whole map. Maps can be 30+ KB on real games."),
-      lint: z.enum(["advisory", "strict"]).default("advisory").describe("How to treat pre-flight lint warnings (SDCC platforms only). 'advisory' (default): warnings appear in `issues[]` but the build proceeds normally. 'strict': any lint warning fails the build with ok:false + stage:'lint', forcing you to fix patterns BEFORE the compiler runs. Use 'strict' when you want SDCC crash patterns to be hard errors instead of advisory hints."),
-      runtime: z.string().optional().describe("GBA only: runtime selector — 'libtonc' (default), 'libgba' (devkitPro SDK), or 'none' (bare gcc + newlib). See src/platforms/gba/MENTAL_MODEL.md."),
-      maxmod: z.boolean().optional().describe("GBA only: link against maxmod for music tracks (libmm.a). Default false. Caller must still call mmInit(...) + mmStart(...) + hook mmVBlank in the IRQ table."),
-      rebuildSdk: z.boolean().optional().describe("GBA + Genesis only: COMPILE the bundled SDK (libtonc/libgba/maxmod/SGDK) from its vendored source instead of linking the fast prebuilt cache seed. Default false (uses the seed — a few seconds). Pass true ONLY if you edited the SDK's own source under vendor/ (or want to verify the seed reproduces from source) — it's ~20-40s the first time, then disk-cached. If you edited SDK source WITHOUT this flag, the build still succeeds with the seed but returns an `sdkEditIgnored` warning telling you your edits weren't compiled."),
-    },
-    safeTool(async ({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, crt0, crt0Path, codeLoc, dataLoc, options, linkerConfig, outputPath, inline, includeSymbols, lint, runtime, maxmod, rebuildSdk }) => {
+  async function buildSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, crt0, crt0Path, codeLoc, dataLoc, options, linkerConfig, outputPath, inline = false, includeSymbols = false, lint = "advisory", runtime, maxmod, rebuildSdk }) {
       // Reject conflicting inline vs path args — fail loud, not silent.
       if (source != null && sourcePath != null) {
         throw new Error("buildSource: pass either `source` OR `sourcePath`, not both.");
@@ -445,52 +394,9 @@ export function registerToolchainTools(server, z, sessionKey) {
         }
       }
       return jsonContent(payload);
-    }),
-  );
+  }
 
-  server.tool(
-    "runSource",
-    "BUILD + LOAD + RUN + SCREENSHOT in one round trip — the fastest agent iteration loop. Pass `source` (single file) or `sources` (multi-file project); compiles for `platform`, loads the binary into the matching core without touching disk, runs `frames` frames, and returns the screenshot INLINE (this tool's whole point is to show you the result). Optionally hold controller input via `holdInputs`. If your client can't display inline images, pass `screenshotPath` to write the PNG to disk and get a path back instead.",
-    {
-      platform: z.string(),
-      language: z.string().optional().describe("See buildSource — 'c' or 'asm'. GBA only supports 'c' today."),
-      source: z.string().optional(),
-      sourcePath: z.string().optional().describe("Path-based equivalent of `source`. See buildSource."),
-      sources: z.record(z.string(), z.string()).optional(),
-      sourcesPaths: z.record(z.string(), z.string()).optional().describe("Path-based equivalent of `sources`."),
-      includes: z.record(z.string(), z.string()).optional(),
-      binaryIncludes: z.record(z.string(), z.string()).optional(),
-      binaryIncludePaths: z.record(z.string(), z.string()).optional().describe("Path-based binaryIncludes — see buildSource."),
-      includePaths: z.record(z.string(), z.string()).optional(),
-      runtime: z.string().optional().describe("See buildSource — GBA runtime selector: 'libtonc' (default), 'libgba', or 'none'."),
-      maxmod: z.boolean().optional().describe("GBA only: link against maxmod for music tracks (libmm.a). Default false. Caller must still call mmInit(...) + mmStart(...) + hook mmVBlank in the IRQ table."),
-      rebuildSdk: z.boolean().optional().describe("See buildSource — GBA + Genesis: compile the bundled SDK from source instead of the fast prebuilt seed. Only needed if you edited the SDK's own vendored source."),
-      crt0: z.string().optional().describe("See buildSource — custom crt0.s contents (SDCC platforms only)."),
-      crt0Path: z.string().optional().describe("Path-based crt0 — see buildSource."),
-      codeLoc: z.coerce.number().int().optional().describe("See buildSource — _CODE load address (SDCC platforms)."),
-      dataLoc: z.coerce.number().int().optional().describe("See buildSource — _DATA load address (SDCC platforms)."),
-      linkerConfig: z.string().optional(),
-      frames: z.number().int().min(1).max(100000).default(60),
-      holdInputs: z
-        .array(
-          z.object({
-            up: z.boolean().optional(), down: z.boolean().optional(),
-            left: z.boolean().optional(), right: z.boolean().optional(),
-            a: z.boolean().optional(), b: z.boolean().optional(),
-            x: z.boolean().optional(), y: z.boolean().optional(),
-            l: z.boolean().optional(), r: z.boolean().optional(),
-            l2: z.boolean().optional(), r2: z.boolean().optional(),
-            l3: z.boolean().optional(), r3: z.boolean().optional(),
-            start: z.boolean().optional(), select: z.boolean().optional(),
-          }),
-        )
-        .max(2)
-        .optional()
-        .describe("Per-port input state to hold during the run. Index 0 = port 0."),
-      screenshotPath: z.string().optional().describe("If set, write the result screenshot to this path and return {screenshotPath} instead of the inline image. Use this if your client can't display inline images. Default: the screenshot comes back inline (runSource's whole point is to show you the result)."),
-      projectName: z.string().optional().describe("Optional name for this build (e.g. your game's name). Used as the playtest window title so the human can tell which game they're looking at; otherwise the window falls back to the platform name. Has no effect on the ROM."),
-    },
-    safeTool(async ({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, runtime, maxmod, rebuildSdk, crt0, crt0Path, codeLoc, dataLoc, linkerConfig, frames, holdInputs, screenshotPath, projectName }) => {
+  async function runSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, runtime, maxmod, rebuildSdk, crt0, crt0Path, codeLoc, dataLoc, linkerConfig, frames = 60, holdInputs, screenshotPath, projectName }) {
       const { buildForPlatform } = await import("../../toolchains/index.js");
       const resolved = resolveCore(platform);
       if (!resolved) throw new Error(`no core available for platform '${platform}'`);
@@ -657,18 +563,9 @@ export function registerToolchainTools(server, z, sessionKey) {
           { type: "text", text: JSON.stringify(summary, null, 2) },
         ],
       };
-    }),
-  );
+  }
 
-  server.tool(
-    "buildProject",
-    "Build all source files in a project directory and produce a ROM. Reads `main.asm` (or `main.s`) plus all `.asm`/`.s`/`.inc` files in the directory as includes.",
-    {
-      path: z.string().describe("Absolute path to the project directory."),
-      platform: z.string().describe("Target platform id."),
-      outputPath: z.string().optional().describe("Absolute path for the output ROM."),
-    },
-    safeTool(async ({ path: projPath, platform, outputPath }) => {
+  async function buildProjectImpl({ path: projPath, platform, outputPath }) {
       const entries = await readdir(projPath, { withFileTypes: true });
       const files = entries.filter((e) => e.isFile());
 
@@ -705,6 +602,75 @@ export function registerToolchainTools(server, z, sessionKey) {
         ...(await logField(result.log, false, logSibling, result.ok)),
         issues: result.issues ?? [],
       });
+  }
+
+  // ── the `build` router ──────────────────────────────────────────────────
+  const sourcesShape = z.record(z.string(), z.string());
+  const holdInputShape = z.object({
+    up: z.boolean().optional(), down: z.boolean().optional(),
+    left: z.boolean().optional(), right: z.boolean().optional(),
+    a: z.boolean().optional(), b: z.boolean().optional(),
+    x: z.boolean().optional(), y: z.boolean().optional(),
+    l: z.boolean().optional(), r: z.boolean().optional(),
+    l2: z.boolean().optional(), r2: z.boolean().optional(),
+    l3: z.boolean().optional(), r3: z.boolean().optional(),
+    start: z.boolean().optional(), select: z.boolean().optional(),
+  });
+
+  server.tool(
+    "build",
+    "Compile/assemble source for a target platform, one tool keyed by `output`. The universal build verb.\n" +
+    "• output:'rom' (default) — assemble or compile `source` (single) / `sources` ({name:contents}) / `sourcePath` / `sourcesPaths`. Returns the ROM (path by default; `inline:true` for binaryBase64) + build log. **`binaryIncludes`/`binaryIncludePaths` (base64/path CHR-ROM, music blobs for `.incbin`) — WITHOUT them no game with external assets builds.** `includes`/`includePaths` for `.include`d text. `linkerConfig` (cc65; NES preset 'chr-ram-runtime' RECOMMENDED). `crt0`/`crt0Path`/`codeLoc`/`dataLoc` (SDCC). `runtime`/`maxmod`/`rebuildSdk` (GBA/Genesis SDK). **`lint:'strict'` fails the build on SDCC crash-pattern warnings BEFORE the compiler runs (the uint8 loop-bound trap); 'advisory' (default) just lists them.** **`includeSymbols:true` returns the .map text inline on a PLAIN rom build — distinct from output:'romWithDebug' which writes .dbg/.map FILES.** Language is inferred from extension/content — usually OMIT `language`.\n" +
+    "• output:'romWithDebug' — like 'rom' but also emits linker debug info for the `symbols` tool: cc65 → `.dbg`, SDCC → sdld `.map`, Genesis m68k → GNU ld map (find where a RAM var landed). DEFAULT writes ROM + debug file + log to disk (`outputPath` required unless `inline:true`).\n" +
+    "• output:'run' — BUILD + LOAD + RUN + SCREENSHOT in one round trip — the fastest iteration loop. Same build args; runs `frames` frames and returns the screenshot INLINE. `holdInputs` holds controller state; `screenshotPath` writes the PNG to disk instead; `projectName` titles the playtest window.\n" +
+    "• output:'project' — build all source files in a project directory (`path`): reads main.asm/main.s + all .asm/.s/.inc/.h as includes.",
+    {
+      output: z.enum(["rom", "romWithDebug", "run", "project"])
+        .describe("rom=produce a ROM (default); romWithDebug=ROM + .dbg/.map debug files; run=build+load+run+screenshot; project=build a project directory."),
+      platform: z.string().describe("Target platform id (e.g. 'nes', 'genesis')."),
+      language: z.string().optional().describe("Language override ('c'/'asm'/'basic'). USUALLY OMIT — inferred from source extension/content; only the ambiguous case falls to the platform default."),
+      // source inputs (rom/romWithDebug/run)
+      source: z.string().optional().describe("Single source file contents. PREFER `sourcePath` for files on disk."),
+      sourcePath: z.string().optional().describe("Absolute path to a single source file (server reads it). Mutually exclusive with `source`."),
+      sources: sourcesShape.optional().describe("Multi-file project: filename → source ({'main.s':'...', 'aliens.s':'...'})."),
+      sourcesPaths: sourcesShape.optional().describe("Path-based `sources`: virtual filename → absolute path. Mutually exclusive with `sources`."),
+      includes: sourcesShape.optional().describe("Virtual filename → contents for `.include`d files (NOT separate translation units)."),
+      includePaths: sourcesShape.optional().describe("Path-based `includes` (text files; server reads from disk)."),
+      binaryIncludes: sourcesShape.optional().describe("Like `includes` but BINARY blobs (CHR ROM, music) as base64, for `.incbin`. PREFER `binaryIncludePaths` for on-disk files."),
+      binaryIncludePaths: sourcesShape.optional().describe("Path-based `binaryIncludes`: virtual filename → absolute path (server reads the bytes)."),
+      crt0: z.string().optional().describe("SDCC platforms — custom crt0.s source (assembled via sdasgb/sdasz80, linked instead of the stock crt0). SMS/GG auto-inject the bundled crt0 when omitted; GB/GBC pass gb_crt0 + codeLoc:0x150."),
+      crt0Path: z.string().optional().describe("Path-based `crt0`."),
+      codeLoc: z.coerce.number().int().optional().describe("SDCC — _CODE load address (default $0000; GB/GBC bundled crt0 wants 0x150)."),
+      dataLoc: z.coerce.number().int().optional().describe("SDCC — _DATA (WRAM) load address."),
+      options: z.array(z.string()).optional().describe("output:'rom' — extra toolchain CLI options."),
+      linkerConfig: z.string().optional().describe("ld65 linker config (cc65). NES preset 'chr-ram-runtime' (RECOMMENDED — full crt0 + iNES header + NMI w/ OAM DMA + `_shadow_oam` at $0200) or 'chr-ram' (bare nmi:rti stub), or full .cfg contents."),
+      runtime: z.string().optional().describe("GBA — runtime selector: 'libtonc' (default), 'libgba', or 'none'."),
+      maxmod: z.boolean().optional().describe("GBA — link against maxmod for music (libmm.a). Caller still calls mmInit/mmStart + hooks mmVBlank."),
+      rebuildSdk: z.boolean().optional().describe("GBA + Genesis — compile the bundled SDK (libtonc/libgba/maxmod/SGDK) from vendored source instead of the prebuilt seed (~20-40s). Only if you edited SDK source (else an `sdkEditIgnored` warning fires)."),
+      lint: z.enum(["advisory", "strict"]).default("advisory").describe("output:'rom' SDCC — 'advisory' (default, warnings in issues[]) or 'strict' (any lint warning fails the build with stage:'lint' BEFORE the compiler runs — the SDCC crash-pattern guard)."),
+      includeSymbols: z.boolean().default(false).describe("output:'rom' — include the toolchain's symbol/map text inline (sdld .map / cc65 .sym). False = only symbolsBytes (call symbols/addressToSymbol to look up a PC). Maps can be 30+ KB."),
+      // run-only
+      frames: z.number().int().min(1).max(100000).default(60).describe("output:'run' — frames to run before the screenshot (default 60)."),
+      holdInputs: z.array(holdInputShape).max(2).optional().describe("output:'run' — per-port input state to hold during the run (index 0 = port 0)."),
+      screenshotPath: z.string().optional().describe("output:'run' — write the result screenshot here and return {screenshotPath} instead of the inline image (for clients that can't show inline images)."),
+      projectName: z.string().optional().describe("output:'run' — name for the playtest window title (no effect on the ROM)."),
+      // project-only
+      path: z.string().optional().describe("output:'project' — absolute path to the project directory."),
+      // shared output
+      outputPath: z.string().optional().describe("output:'rom'/'romWithDebug'/'project' — absolute path to write the ROM (romWithDebug writes .dbg/.map/.log alongside; REQUIRED for romWithDebug unless inline). output:'rom' omitted → temp file path returned (or inline:true for base64)."),
+      inline: z.boolean().default(false).describe("output:'rom'/'romWithDebug' — return binaryBase64 (+ debug text for romWithDebug) in the response instead of writing to disk."),
+    },
+    safeTool(async (args) => {
+      switch (args.output) {
+        case "rom":          return await buildSourceImpl(args);
+        case "run":          return await runSourceImpl(args);
+        case "project": {
+          if (!args.path) throw new Error("build({output:'project'}): `path` (the project directory) is required.");
+          return await buildProjectImpl(args);
+        }
+        case "romWithDebug": return await buildSourceWithDebugCore(args);
+        default: throw new Error(`build: unknown output '${args.output}'`);
+      }
     }),
   );
 }

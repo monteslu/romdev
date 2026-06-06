@@ -60,8 +60,8 @@ test("PC Engine PC breakpoint + read watch + single-step (geargrafx HuC6280)", {
   const client = await startClient();
 
   const build = toJSON(await client.callTool({
-    name: "buildSource",
-    arguments: { platform: "pce", language: "c", source: SRC },
+    name: "build",
+    arguments: { output: "rom",  platform: "pce", language: "c", source: SRC },
   }, undefined, { timeout: 150000 }));
   assert.equal(build.ok, true, "pce build failed:\n" + build.log);
 

@@ -55,7 +55,7 @@ test("SNES watchdog: a non-returning routine trips the watchdog, no hang (snes9x
   const client = await startClient();
 
   const build = toJSON(await client.callTool({
-    name: "buildSource", arguments: { platform: "snes", language: "c", source: SRC },
+    name: "build", arguments: { output: "rom",  platform: "snes", language: "c", source: SRC },
   }, undefined, { timeout: 240000 }));
   assert.equal(build.ok, true, "snes build failed:\n" + build.log);
 

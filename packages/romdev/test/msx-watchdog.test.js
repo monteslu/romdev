@@ -76,8 +76,8 @@ test("MSX callSubroutine watchdog: infinite loop returns watchdog:true, no hang 
   const client = await startClient();
 
   const build = toJSON(await client.callTool({
-    name: "buildSource",
-    arguments: {
+    name: "build",
+    arguments: { output: "rom", 
       platform: "msx",
       language: "c",
       sources: { "main.c": MAIN, "msx_crt0.s": CRT0 },

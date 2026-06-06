@@ -117,8 +117,8 @@ test("Atari 2600 PC breakpoint + read watch + single-step (stella2014 6502)", { 
   const client = await startClient();
 
   const build = toJSON(await client.callTool({
-    name: "buildSource",
-    arguments: { platform: "atari2600", source: SRC },
+    name: "build",
+    arguments: { output: "rom",  platform: "atari2600", source: SRC },
   }, undefined, { timeout: 150000 }));
   assert.equal(build.ok, true, "atari2600 build failed:\n" + build.log);
 

@@ -48,7 +48,7 @@ test("Atari 7800 callSubroutine watchdog force-stops an infinite loop (prosystem
   const client = await startClient();
 
   const build = toJSON(await client.callTool({
-    name: "buildSource", arguments: { platform: "atari7800", language: "c", source: SRC },
+    name: "build", arguments: { output: "rom",  platform: "atari7800", language: "c", source: SRC },
   }, undefined, { timeout: 150000 }));
   assert.equal(build.ok, true, "atari7800 build failed:\n" + build.log);
 

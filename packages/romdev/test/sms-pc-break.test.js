@@ -70,8 +70,8 @@ test("SMS PC breakpoint + read watch + single-step (gpgx Z80)", { timeout: 24000
   // the Z80 would never run.
   const outputPath = path.join(tmpdir(), `romdev-sms-pcbreak-${process.pid}.sms`);
   const build = toJSON(await client.callTool({
-    name: "buildSource",
-    arguments: { platform: "sms", language: "c", source: MAIN, outputPath },
+    name: "build",
+    arguments: { output: "rom",  platform: "sms", language: "c", source: MAIN, outputPath },
   }, undefined, { timeout: 240000 }));
   assert.equal(build.ok, true, "sms build failed:\n" + build.log);
 
