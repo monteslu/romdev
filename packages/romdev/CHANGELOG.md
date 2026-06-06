@@ -2,6 +2,37 @@
 
 All notable changes to `romdev-mcp`. Dates are release dates.
 
+## 0.13.0
+
+**A no-MCP HTTP surface + an Agent Skill — drive romdev without an MCP client.**
+For users wary of MCP (setup, always-on context cost, server lifecycle) the same
+34 tools are now reachable over plain HTTP and as a portable SKILL.md, all
+generated from the one tool registry (no duplication). Same Express app, same
+localhost trust, per-agent dynamic sessions.
+
+### Added
+- **`POST /tool/{name}`** — run any tool over plain HTTP; JSON body = the args,
+  JSON response = the result. Same handlers, same strict validation, same clean
+  errors as MCP (bad enum / wrong type / "unknown parameter 'addr' — did you mean
+  'offset'?"). Sticky emulator sessions via an `x-romdev-session` header (the
+  first call returns one; echo it to keep a host across load→step→read); omit it
+  for one-shot file tools. No auth (localhost, same model as `/mcp`).
+- **`GET /openapi.json`** — OpenAPI 3.1 for every `/tool/{name}`, request schemas
+  via zod→JSON-Schema (the same conversion MCP `tools/list` uses).
+- **`GET /documentation`** — Swagger UI over the spec: a live "try it" console.
+- **`GET /tool/{name}/schema`** — that tool's JSON Schema (a validator on demand).
+- **`GET /romdev-skill.md`** — the Agent Skills open-standard SKILL.md
+  (frontmatter + workflow guide + generated tool reference). ~100 tokens of
+  name+description until invoked vs the always-on MCP tool defs — the on-demand
+  context win. Works in Claude Code, opencode, OpenClaw, Hermes, etc. unchanged.
+
+### Changed
+- **AGENTS.md is now channel-neutral.** The "how to call" prose lives in per-
+  channel preambles (`src/http/skill-doc.js`): the MCP connection text =
+  mcpPreamble + AGENTS body ("call the MCP tools…", no routes); the skill doc =
+  skillPreamble + sanitized AGENTS body + tool reference ("POST /tool/{name}…",
+  no MCP). Neither surface mentions the other (enforced by a test).
+
 ## 0.12.0
 
 **Music compilers for 9 systems** — `encodeAudio` grew from 3 to 13 targets, so an
