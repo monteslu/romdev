@@ -128,7 +128,9 @@ Three layered things to check:
 
 1. **YM2612 is muted at reset.** SGDK's XGM2_init() unmutes it; if
    you're using XGM2, just call `XGM2_init()` once before
-   `XGM2_startPlay()`.
+   `XGM2_play()`. (The R58 driver fn is `XGM2_play`, not `XGM2_startPlay` —
+   and feed it a COMPILED XGM2 blob from `encodeAudio({target:'xgm2', vgmPath})`,
+   not raw VGM.)
 2. **Z80 reset/busreq isn't released.** If you bypass SGDK's sound
    API and want to write YM2612 registers directly, you must first
    write 1 to `$A11200` (Z80 reset off) and 0 to `$A11100` (busreq
@@ -206,11 +208,15 @@ First choice for any PNG → tiles+tilemap+palette conversion: the
 **`encodeArt({stage:'tilemap'})` MCP tool** (see the splash-screen section above). It
 needs no native tools and produces ready-to-DMA blobs.
 
-The full SGDK helper-tool suite (`rescomp`, `bintos`, `convsym`,
-`xgmtool`) isn't yet ported to WASM. You can still use these tools
-**natively** on a build machine to produce the .bin / .o / .pal /
-.tileset blobs, then drop them into your romdev project as
-binary `extraSources` — the romdev build will just incbin them.
+Some SGDK helper tools (`rescomp`, `bintos`, `convsym`) aren't ported to WASM;
+you can run them natively on a build machine to produce .bin / .o / .pal /
+.tileset blobs, then drop them into your romdev project as binary includes — the
+build will just incbin them.
+
+**Music is covered, though:** VGM→XGM2 compilation (SGDK's Java `xgm2tool`) is
+ported to pure JS and exposed as `encodeAudio({target:'xgm2', vgmPath, name})`
+— it emits a 256-aligned C array you `#include` and `XGM2_play()`. No native
+tool / Java needed. (PCM SFX: `encodeAudio({target:'xgm2pcm'})`.)
 
 For a handful of hand-drawn tiles, you can also author them as
 `u32[8]` arrays in C (4bpp tile format = 8 rows × 4 bytes each, two

@@ -32,13 +32,14 @@ The Genesis has TWO audio chips:
 - **SN76489 PSG** (3 squares + 1 noise) — what our `genesis_sfx`
   wrapper drives via SGDK's `PSG_*` helpers
 - **YM2612 FM synth** (6 channels of 4-op FM) — driven by the Z80
-  side via SGDK's XGM2 driver (precompiled `.xgc` blobs)
+  side via SGDK's XGM2 driver (compiled XGM2 blobs)
 
 The Z80 sound CPU runs a separate program (XGM2 driver) loaded into
 Z80 RAM at boot. To get music: compose in DefleMask or similar →
-export `.vgm` → convert to `.xgc` via SGDK's `xgmtool` → `.incbin`
-into a C array → `XGM2_startPlay(music)`. The bundled `xgm2_demo.c`
-template shows this end-to-end.
+export `.vgm` → compile to XGM2 with `encodeAudio({target:'xgm2', vgmPath, name})`
+(a pure-JS port of SGDK's Java `xgm2tool`; emits a 256-aligned C array) → `#include`
+→ `XGM2_play(music)`. (The driver fn is `XGM2_play`; the older C `xgmtool`/`.xgc`
+is the LEGACY `XGM_*` v1 format — different driver, don't mix.)
 
 For YM2612 register-level work: https://www.smspower.org/Development/YM2612
 
@@ -48,5 +49,5 @@ For YM2612 register-level work: https://www.smspower.org/Development/YM2612
 - "What does `SPR_addSprite` actually queue?" → `sgdk/src/sprite_eng.c`
 - "Why does `JOY_readJoypad(JOY_1)` not see Start?" → `sgdk/src/joy.c`
   (controller polling) + Plutiedev's joypad doc
-- "How does XGM2_startPlay sync with vblank?" → `sgdk/src/snd/xgm2.c`
+- "How does XGM2_play sync with vblank?" → `sgdk/src/snd/xgm2.c`
 - "VDP register X does what?" → md.railgun.works VDP reference
