@@ -1,7 +1,7 @@
 # Super Nintendo / Super Famicom — troubleshooting
 
 When something's broken. Read MENTAL_MODEL.md first for the "what's
-going on" version (via `getPlatformDoc({platform:"snes", name:"mental_model"})`).
+going on" version (via `platform({op:'doc', platform:"snes", name:"mental_model"})`).
 
 ## "ROM builds but the screen is black / forced blank"
 
@@ -69,9 +69,9 @@ a PNG → `.pic` + `.pal`, then `.incbin` them in `data.asm`.
 **Diagnose first, don't guess.** Two tool calls tell you exactly what's
 wrong — they read the live PPU registers (OBSEL/TM) and OAM/CGRAM:
 
-- `getRenderingContext({platform:'snes'})` → `snes.obj.enabledMain` (is the
+- `background({view:'renderState', platform:'snes'})` → `snes.obj.enabledMain` (is the
   OBJ layer even on in TM?), `snes.obj.size`, `snes.obj.tileBaseByte`.
-- `inspectSprites({platform:'snes'})` → `renderableCount` (how many are
+- `sprites({op:'inspect', platform:'snes'})` → `renderableCount` (how many are
   actually on-screen vs parked), each sprite's `renderable`/`hiddenReason`,
   resolved `tileVramAddr` + `cgramPaletteRange`, and **`warnings` for any
   renderable sprite pointing at an all-zero (never-uploaded) OBJ palette

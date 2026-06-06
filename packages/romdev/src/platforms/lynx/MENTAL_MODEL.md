@@ -35,7 +35,7 @@ Mikey handles:
 - **Joystick** — read via SWITCHES register at `$FCB0`. cc65 provides
   `joy_read(JOY_1)` + `JOY_LEFT/RIGHT/UP/DOWN/BTN_1/BTN_2` macros.
 
-**Live debug:** `getAudioState({chip:"mikey"})` decodes the 4 audio voices
+**Live debug:** `audioDebug({op:'inspect', chip:"mikey"})` decodes the 4 audio voices
 (volume, period→freq→note, LFSR state); `palette({source:'live'})` reads the 16-entry
 palette; `background({view:'renderState'})` shows DISPCTL + the display base address;
 `cpu({op:'read'})` reads the 65C02; `breakpoint({on:'write'})` is the write watchpoint. **Sprites
@@ -218,7 +218,7 @@ for multi-Lynx multiplayer but no second controller on one unit.
 
 handy maps `input({op:'set'})` button names **straight through** — verified live, no
 inversion: `{a}`→A (outer), `{b}`→B (inner). Spatial east→A, south→B; Opt1/Opt2
-map to `{start}`/`{select}`. So `setInput({ a: true })` presses Lynx A as
+map to `{start}`/`{select}`. So `input({op:'set', a: true})` presses Lynx A as
 expected. ⚠ Note: the Lynx hardware register `$FCB0` is **active-HIGH** (1 =
 pressed, opposite most platforms) — that only matters if you read the register
 directly; the `input({op:'set'})` names themselves are normal.

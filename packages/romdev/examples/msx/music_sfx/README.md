@@ -35,4 +35,4 @@ Verified on the bluemsx core: chA cycles 6 distinct note periods, chB 3 bass
 periods, chC stays silent until the trigger is held then sweeps through 17
 descending periods. Screenshots before/after a held trigger confirm the ring
 indicator flips white → red and the sequencer beat lights — see
-`getAudioState({chip:"ay8910"})` and `readMemory("msx_psg_regs", …)`.
+`audioDebug({op:'inspect', chip:"ay8910"})` and `memory({op:'read'}, "msx_psg_regs", …)`.

@@ -177,13 +177,13 @@ out of "row select bit determines nybble".
 
 gambatte maps `input({op:'set'})` button names **straight through** — verified live, no
 inversion: `{a}`→A, `{b}`→B, `{start}`/`{select}`, plus the d-pad. The spatial
-names also resolve (east→A, west→B). So `setInput({ a: true })` presses GB A as
+names also resolve (east→A, west→B). So `input({op:'set', a: true})` presses GB A as
 expected — unlike the genesis_plus_gx platforms (Genesis/SMS/GG), there's no
 surprise here. (Same for **GBC** — it shares the gambatte core.)
 
 ## What `scaffold({op:'project'})` copies into your project
 
-`createProject({platform:"gb"|"gbc", template:...})` writes these files
+`scaffold({op:'project', platform:"gb"|"gbc", template:...})` writes these files
 into your project directory. **They're yours** — every byte that compiles
 is in the repo. Edit, fork, replace; nothing is auto-injected at build time.
 
@@ -212,7 +212,7 @@ README for the exact incantation.
   "beep on event" SFX pattern using the GB APU's 4 channels (2 square,
   triangle/wave, noise). For sequenced multi-channel music, roll your own
   or use raw `NR*` register names from `gb_hardware.h`. To debug it,
-  `getAudioState({chip:"gb"})` decodes the live APU — per-channel
+  `audioDebug({op:'inspect', chip:"gb"})` decodes the live APU — per-channel
   freq→note/duty/volume/sweep, straight from the `NR*` registers.
 - Window layer — `LCDC.5` + `WX`/`WY` registers, no helpers.
 - MBC1/MBC3/MBC5 bank switching — every ROM bundled is 32 KB ROM-only.

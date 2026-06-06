@@ -142,9 +142,9 @@ P1 down, bit 5 = P1 left, bit 4 = P1 right.
 ### Driving input over MCP
 
 The 2600 joystick has **one** fire button. Over MCP it's pressed with
-`setInput({ b: true })` or the spatial `setInput({ south: true })` — both clear
-`INPT4` bit 7 (verified live against stella). `setInput({ a: true })` is a **no-op**
-(the 2600 pad has no second button — it's not in `getInputLayout`'s
+`input({op:'set', b: true})` or the spatial `input({op:'set', south: true})` — both clear
+`INPT4` bit 7 (verified live against stella). `input({op:'set', a: true})` is a **no-op**
+(the 2600 pad has no second button — it's not in `input({op:'layout'})`'s
 `physicalButtons`). So drive fire with `b`/`south`, plus the d-pad
 up/down/left/right.
 
@@ -186,7 +186,7 @@ take care of itself.
 
 ## Build pipeline
 
-When you call `buildSource({platform:"atari2600", source: ...})`:
+When you call `build({output:'rom', platform:"atari2600", source: ...})`:
 
 1. dasm assembles the .asm directly to a flat 4 KB binary.
 2. The result is `.a26` — loadable in stella (`loadMedia`).

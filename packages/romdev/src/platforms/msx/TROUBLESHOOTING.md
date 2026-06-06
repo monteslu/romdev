@@ -26,7 +26,7 @@ Two possibilities:
 
 ## Display is off (border color only) after INIT runs
 
-The V9938 display-enable bit is clear. `getRenderingContext()` shows
+The V9938 display-enable bit is clear. `background({view:'renderState'})` shows
 `screenEnabled:false` → VDP R1 bit 6 is 0. Call **INITXT ($006C)** (or your
 mode-set BIOS routine) which sets the screen mode AND enables display. Raw VDP
 users: set R1 bit 6.
@@ -44,13 +44,13 @@ users: set R1 bit 6.
 ## Colors wrong on an MSX2 bitmap screen
 
 The V9938 palette is **9-bit GRB** packed as `red=(v>>4)&7, green=v&7,
-blue=(v>>8)&7`, each ×255/7 — NOT RGB. `inspectPalette()` decodes it (it reports
+blue=(v>>8)&7`, each ×255/7 — NOT RGB. `palette({source:'live'})` decodes it (it reports
 `paletteSource: "v9938"` vs `"tms9918"`). On MSX1/TMS9918 modes the palette is
 fixed hardware colors — you choose indices, not RGB.
 
 ## Sprites invisible
 
-- `inspectSprites()` shows the VRAM sprite-attribute table (base from R5/R11).
+- `sprites({op:'inspect'})` shows the VRAM sprite-attribute table (base from R5/R11).
   A Y value of **208 ($D0)** terminates the list — sprites after it are off.
 - MSX sprites have no flip bits; priority is by slot order (slot 0 = frontmost).
 - Sprite size/magnify come from VDP R1 bits 0-1 (8×8 vs 16×16, ×1 vs ×2).

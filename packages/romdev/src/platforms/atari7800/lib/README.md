@@ -23,7 +23,7 @@ Files
 Toolchain
 ---------
 
-Build via `buildSource({ platform: "atari7800", source: "..." })`. Server
+Build via `build({output:'rom', platform: "atari7800", source: "..."})`. Server
 spawns cc65 with the bundled `atari7800.cfg`. The MCP server invokes
 the prosystem libretro core to run the result.
 

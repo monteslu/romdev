@@ -106,7 +106,7 @@ of writing attributes by hand.
   transparent for sprites, NOT backdrop)
 
 The NES color table is a fixed 64-entry list (palette index 0..$3F)
-indexing into hardware colors. See `getPlatformPalettePng({platform:"nes"})`
+indexing into hardware colors. See `palette({source:'platformMaster', platform:"nes"})`
 for the full table.
 
 ## NMI (vblank interrupt)
@@ -185,15 +185,15 @@ in order A, B, Select, Start, Up, Down, Left, Right (bit 0 of each read).
 
 ### Driving input over MCP
 
-fceumm maps `setInput` button names **straight through** — verified live, no
+fceumm maps `input({op:'set'})` button names **straight through** — verified live, no
 inversion: `{a}`→A, `{b}`→B, `{select}`/`{start}`, plus the d-pad. The spatial
-names also resolve (east→A, west→B). So `setInput({ a: true })` presses NES A as
+names also resolve (east→A, west→B). So `input({op:'set', a: true})` presses NES A as
 expected — unlike the genesis_plus_gx platforms (Genesis/SMS/GG), there's no
 surprise here.
 
-## What `createProject` copies into your project
+## What `scaffold({op:'project'})` copies into your project
 
-`createProject({platform:"nes", template:"hello_sprite"|"tile_engine"|"default"})`
+`scaffold({op:'project', platform:"nes", template:"hello_sprite"|"tile_engine"|"default"})`
 writes these files into your project directory. **They're yours** — every
 byte that compiles is in the repo. Edit, fork, replace; nothing is auto-injected
 at build time.
@@ -230,7 +230,7 @@ prompts at **row 27** or earlier.
 
 The bundled crt0 writes `$FF` to every byte of `_shadow_oam`
 ($0200-$02FF) at boot — canonical sprite-Y off-screen sentinel.
-`readMemory(nes_oam)` returning all `$FF` after a few frames can
+`memory({op:'read'}, nes_oam)` returning all `$FF` after a few frames can
 mean "DMA copied the source page faithfully because the source
 was all `$FF` when NMI fired" — NOT "DMA broken."
 
@@ -295,12 +295,12 @@ incorrectly aligned."
   channels. For multi-channel sequenced music with envelopes / vibrato /
   pattern playback, roll your own — famitone2 is the standard NES sound
   driver but isn't bundled.
-  - **Debugging / transcribing sound:** `getAudioState({chip:"nes"})` decodes
+  - **Debugging / transcribing sound:** `audioDebug({op:'inspect', chip:"nes"})` decodes
     the live APU register file ($4000-$4017) into per-channel
     {pulse1, pulse2, triangle, noise, dmc} with note names, freq, duty and
     volume — use it to confirm "is my channel actually playing the pitch I
     think?" To capture a note timeline over time (e.g. to port a tune to
-    another platform), watch the registers: `watchMemory({region:"nes_apu_regs",
+    another platform), watch the registers: `watch({on:'mem', region:"nes_apu_regs",
     onChange:"reset", outputPath:...})` logs each note onset, or
     `recordSession({memorySamples:[{region:"nes_apu_regs",...}], sampleEvery:1,
     memoryOutputPath:...})` streams per-frame samples to disk.

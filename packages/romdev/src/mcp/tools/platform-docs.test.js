@@ -94,11 +94,11 @@ test("getPlatformDoc serves the cross-platform romhacking playbook", async () =>
   const parsed = JSON.parse(r.content[0].text);
   assert.equal(parsed.platform, "romhacking");
   assert.equal(parsed.name, "playbook");
-  // Hits the key decision-tree points the feedback asked for.
-  assert.match(parsed.contents, /searchValue/);
-  assert.match(parsed.contents, /readCartRom/);
+  // Hits the key decision-tree points the feedback asked for (consolidated tool names).
+  assert.match(parsed.contents, /memory\(\{op:'search'\}\)/);
+  assert.match(parsed.contents, /memory\(\{op:'readCart'\}\)/);
   assert.match(parsed.contents, /pre-rendered/i);
-  assert.match(parsed.contents, /classifyRegion/);
+  assert.match(parsed.contents, /memory\(\{op:'classify'\}\)/);
   assert.ok(parsed.contents.length > 1500, "playbook too short");
 });
 

@@ -108,9 +108,9 @@ which is what the KERNAL's IRQ uses to update key state every
 ### Driving input over MCP
 
 The C64 joystick has **one** fire button. Over MCP press it with
-`setInput({ b: true })` or the spatial `setInput({ south: true })` — both clear
-`$DC00` bit 4 (verified live against vice). `setInput({ a: true })` is a **no-op**
-(no second button — not in `getInputLayout`'s `physicalButtons`). So drive fire
+`input({op:'set', b: true})` or the spatial `input({op:'set', south: true})` — both clear
+`$DC00` bit 4 (verified live against vice). `input({op:'set', a: true})` is a **no-op**
+(no second button — not in `input({op:'layout'})`'s `physicalButtons`). So drive fire
 with `b`/`south`, plus the d-pad. ⚠ A cc65 `.prg` only starts after BASIC
 auto-`RUN`s it — step ~70+ frames past load before input/reads register.
 
@@ -127,7 +127,7 @@ Global `SID_VOL_MODE` ($D418) holds master volume + filter routing
 bits. SID is famous for sounding incredible with very little code — see
 the `sid_play.s` starter snippet.
 
-**Debugging sound:** `getAudioState({chip:"sid"})` decodes all 3 voices live —
+**Debugging sound:** `audioDebug({op:'inspect', chip:"sid"})` decodes all 3 voices live —
 waveform, freq→note, pulse-width, ADSR — plus the filter cutoff/resonance/mode.
 Handy for verifying a `sid_play` routine is actually gating notes.
 
@@ -159,7 +159,7 @@ The C64 has no dedicated vblank interrupt by default. Two approaches:
 
 ## Build pipeline
 
-When you call `buildSource({platform:"c64", language:"c"})`:
+When you call `build({output:'rom', platform:"c64", language:"c"})`:
 
 1. cc65 compiles your `.c` → 6502 `.s`.
 2. ca65 assembles each `.s` → `.o`.

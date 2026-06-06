@@ -6,7 +6,7 @@ building an SMS ROM with romdev."
 ## Language: C is the default
 
 SDCC 4.4.0 + the bundled SMS-specific crt0 (`c/sms_crt0.s`) give you a
-clean C development path. `buildSource({platform:"sms", source: <C>})`
+clean C development path. `build({output:'rom', platform:"sms", source: <C>})`
 auto-injects the crt0 so your `main()` runs as the cartridge reset
 handler with a proper vector table + IM 1 + SP=$DFF0.
 
@@ -86,7 +86,7 @@ invisible — you waste a sprite slot.
 
 CRAM bytes are 2-2-2 BGR. So $3F is white (all channels max), $3 is
 pure red, $C is pure green, $30 is pure blue. Don't pass 0xFFFFFF and
-expect white — it'll truncate to $3F. Use `getPlatformPalettePng({platform:"sms"})`
+expect white — it'll truncate to $3F. Use `palette({source:'platformMaster', platform:"sms"})`
 to see all 64 distinct colors and dither input art against them with
 imagemagick.
 
@@ -113,5 +113,5 @@ hand-authored palette tables need the platform-correct encoding.
 | R9 | BG Y scroll | 0 = no scroll |
 | R10 | Line IRQ counter | $FF = disabled |
 
-Decode the live values via `getRenderingContext({})` — it returns the
+Decode the live values via `background({view:'renderState'})` — it returns the
 fully-shifted base addresses so you don't redo the math.

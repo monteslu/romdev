@@ -69,7 +69,7 @@ are gone from the linter.
 [`../src/platforms/gb/lib/c/unroll.h`](../src/platforms/gb/lib/c/unroll.h)
 provides `UNROLL_N` macros (N ∈ {2,3,4,5,6,7,8,10,12,16,18,20,24,32,40,64}).
 Originally the workaround for the now-fixed SDCC sm83 crash family.
-**Not copied into projects by `createProject` anymore.** If you want
+**Not copied into projects by `scaffold({op:'project'})` anymore.** If you want
 to use it, fetch via `getStarterSnippet({platform:"gb", name:"unroll",
 language:"c"})` and add to your repo manually.
 

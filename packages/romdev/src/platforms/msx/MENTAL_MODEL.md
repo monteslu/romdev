@@ -12,8 +12,8 @@ romdev ships a **hardware helper library** (`src/platforms/msx/lib/c/`:
 `msx_psg_tone()` in plain C. It uses DIRECT Z80 I/O ports (the reliable path —
 NOT fragile inline-asm BIOS wrappers).
 
-The fastest way to a working game: **`createProject({ platform: "msx", template:
-"sprite_move" })`** (also `music_sfx`, `catch_game`). It drops a complete,
+The fastest way to a working game: **`scaffold({op:'project', platform: "msx", template:
+"sprite_move"})`** (also `music_sfx`, `catch_game`). It drops a complete,
 *building* project — a verified playable example + the helper lib + the cart
 crt0 + docs. Read the example's `main.c`, then change it. Examples live in
 `examples/msx/`. **Gotcha:** read joystick **port 1** (`msx_read_joystick(1)`) —
@@ -61,16 +61,16 @@ your `main.c` together with it (`crt0:'.module empty\n'`).
 VRAM up to 128 KB. The VDP has 64 registers (`msx_vdp_regs`) + 16 status
 registers (`msx_vdp_status`):
 - **R1 bit 6** is the master display enable. If clear, you see only the border
-  color. `getRenderingContext()` reads this.
+  color. `background({view:'renderState'})` reads this.
 - Screen mode is selected by M1-M5 bits across R0/R1. Text (screen 0/1), tiled
   (screen 2), and MSX2 bitmap (screen 4+) modes have different VRAM table layouts;
-  `getRenderingContext()` decodes the mode and the pattern/color/sprite table base
+  `background({view:'renderState'})` decodes the mode and the pattern/color/sprite table base
   addresses for you.
 - **Palette:** on MSX2 bitmap modes, 16 programmable entries (`msx_palette`),
   each a **9-bit GRB** value. On MSX1/TMS9918 modes the palette is a fixed
-  16-color hardware set. `inspectPalette()` picks the right source automatically.
+  16-color hardware set. `palette({source:'live'})` picks the right source automatically.
 - **Sprites:** up to 32, defined in a VRAM sprite-attribute table (base from R5/
-  R11). Y=208 ($D0) terminates the list. `inspectSprites()` reads it.
+  R11). Y=208 ($D0) terminates the list. `sprites({op:'inspect'})` reads it.
 
 ## Frame heartbeat
 
@@ -80,7 +80,7 @@ can hook it or just poll.
 
 ## Build pipeline
 
-`buildSource({ platform: "msx" })` → SDCC (z80, C89) → sdasz80 → sdld with your
+`build({output:'rom', platform: "msx"})` → SDCC (z80, C89) → sdasz80 → sdld with your
 `msx_crt0.s` → a 32 KB `$4000`-based cartridge image. The fastest visible output
 is BIOS calls: **INITXT ($006C)** (40-col text mode + clear + enable display),
 **CHPUT ($00A2)** (print the char in register A). The `hello_msx.c` starter does
@@ -88,28 +88,28 @@ exactly this.
 
 ## Art + input
 
-- `convertImageToTiles({ platform: "msx" })` — PNG → MSX screen-2 tiles. Returns
+- `encodeArt({stage:'tiles', platform: "msx"})` — PNG → MSX screen-2 tiles. Returns
   TWO streams: `pattern.bin` (1bpp) + `color.bin` (per-row fg/bg nibbles into the
   fixed 16-color TMS9918 palette). Each 8-pixel row is limited to 2 colors —
   that's the classic MSX constraint. DMA pattern.bin to the pattern-generator
   base and color.bin to the color-table base (getRenderingContext shows both).
-- `getInputLayout({ platform: "msx" })` — the joystick path via BIOS GTSTCK
-  ($00D5) + GTTRIG ($00D8). **Driving input over MCP:** bluemsx maps `setInput`
+- `input({op:'layout', platform: "msx"})` — the joystick path via BIOS GTSTCK
+  ($00D5) + GTTRIG ($00D8). **Driving input over MCP:** bluemsx maps `input({op:'set'})`
   straight through (verified live, no inversion): `{a}`→trigger 1 (east),
-  `{b}`→trigger 2 (west). So `setInput({ a: true })` presses trigger 1 as
+  `{b}`→trigger 2 (west). So `input({op:'set', a: true})` presses trigger 1 as
   expected — unlike the genesis_plus_gx platforms, there's no surprise here.
 
 ## Debugging tools
 
-- `getCPUState()` — Z80 PC/SP/AF/BC/DE/HL/IX/IY + shadow regs + flags + IFF/IM.
-- `getRenderingContext()` — VDP R1 display-enable, screen mode, VRAM table bases.
-- `inspectPalette()` — V9938 9-bit GRB (or TMS9918 fixed) 16 entries.
-- `inspectSprites()` — VRAM sprite-attribute table, up to 32 sprites.
-- `getMemoryMap({ map })` — pass the sdld `.map` (the `symbols` field from
+- `cpu({op:'read'})` — Z80 PC/SP/AF/BC/DE/HL/IX/IY + shadow regs + flags + IFF/IM.
+- `background({view:'renderState'})` — VDP R1 display-enable, screen mode, VRAM table bases.
+- `palette({source:'live'})` — V9938 9-bit GRB (or TMS9918 fixed) 16 entries.
+- `sprites({op:'inspect'})` — VRAM sprite-attribute table, up to 32 sprites.
+- `symbols({op:'map', map})` — pass the sdld `.map` (the `symbols` field from
   buildSourceWithDebug) to see where SDCC placed your variables/code, grouped by
   region (bios / cart_rom / work_ram).
-- `getAudioState({ chip: "ay8910" })` — the AY-3-8910 PSG: 3 square-wave
+- `audioDebug({op:'inspect', chip: "ay8910"})` — the AY-3-8910 PSG: 3 square-wave
   channels (tone period→Hz, amplitude, tone/noise enable) + a shared noise
   generator + the envelope (period + shape bits).
-- `readMemory()` regions: `msx_vram`, `msx_vdp_regs`, `msx_vdp_status`,
+- `memory({op:'read'})` regions: `msx_vram`, `msx_vdp_regs`, `msx_vdp_status`,
   `msx_palette`, `msx_cpu_regs`, `msx_psg_regs`, plus `system_ram` (work RAM).

@@ -1,7 +1,7 @@
 # Game Boy Advance — troubleshooting
 
 When something's broken. Read MENTAL_MODEL.md first
-(via `getPlatformDoc({platform:"gba", name:"mental_model"})`).
+(via `platform({op:'doc', platform:"gba", name:"mental_model"})`).
 
 ## ⚠️ ROM compiles + loads but the screen never updates (frozen on frame 1)
 

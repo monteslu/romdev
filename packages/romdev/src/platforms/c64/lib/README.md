@@ -27,7 +27,7 @@ Files
 Toolchain
 ---------
 
-Build via `buildSource({ platform: "c64", source: <C or asm> })`. cc65
+Build via `build({output:'rom', platform: "c64", source: <C or asm>})`. cc65
 auto-sniffs C vs asm; for explicit control pass `language: "c"` or `"asm"`.
 
 Foot-guns

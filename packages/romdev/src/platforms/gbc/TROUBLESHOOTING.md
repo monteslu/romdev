@@ -1,6 +1,6 @@
 # Game Boy Color — troubleshooting
 
-Read MENTAL_MODEL.md first (`getPlatformDoc({platform:"gbc",
+Read MENTAL_MODEL.md first (`platform({op:'doc', platform:"gbc",
 name:"mental_model"})`). Most DMG-era troubleshooting from GB applies
 unchanged — including the **two SDCC sm83 codegen footguns below**, which are
 the #1 cause of a clean-building GBC C game that boots but never renders.

@@ -155,12 +155,12 @@ On NES, the NMI handler DMAs `shadow_oam` → real OAM at the *start* of
 each vblank, so sprites you stage on frame N first appear when frame
 N+1 renders. `build({output:'run'})` now steps one extra frame on NES before the
 screenshot so it matches your staged OAM — but if you script frames
-manually (`frame({op:'step'})` then `frame({op:'screenshot'})`), add one extra `stepFrames(1)`
+manually (`frame({op:'step'})` then `frame({op:'screenshot'})`), add one extra `frame({op:'step'}, 1)`
 after staging to see the current sprite positions.
 
 ## "readMemory(nes_chr) returns same bytes for offset 0 and offset 4096"
 
-Was a real bug in R59 of the fceumm patch — `readMemory(nes_chr)`
+Was a real bug in R59 of the fceumm patch — `memory({op:'read'}, nes_chr)`
 collapsed all 8 1KB pages into copies of the first page on NROM.
 Fixed in R61 (2026-05-27). If you still see this, your MCP server
 is running a stale WASM:
@@ -203,7 +203,7 @@ of 2026-05-27.
 Probably not. The crt0's init loop writes `$FF` to all 256 bytes
 of `_shadow_oam @ $0200` at boot (canonical sprite-Y off-screen
 sentinel). If your game only populates a few slots, the rest stay
-`$FF` and OAM DMA faithfully copies them. `readMemory(nes_oam)`
+`$FF` and OAM DMA faithfully copies them. `memory({op:'read'}, nes_oam)`
 showing mostly `$FF` is the EXPECTED state, not a bug.
 
 Sentinel test that proves DMA works:
@@ -279,24 +279,24 @@ xxd -l 16 file.nes
 
 A few high-leverage tools you might not know exist:
 
-- **`inspectSprites({})`** — pretty-prints all 64 OAM slots with
+- **`sprites({op:'inspect'})`** — pretty-prints all 64 OAM slots with
   visible/hidden status, tile, attr, position.
-- **`inspectBackgroundMap({render:true})`** — composites the active
+- **`background({view:'map', render:true})`** — composites the active
   nametable as a PNG.
-- **`inspectPalette({})`** — shows the loaded palette as RGB colors,
+- **`palette({source:'live'})`** — shows the loaded palette as RGB colors,
   not raw bytes.
-- **`getRenderingContext({})`** — decodes PPUCTRL/PPUMASK/PPUSTATUS
+- **`background({view:'renderState'})`** — decodes PPUCTRL/PPUMASK/PPUSTATUS
   + "what bank are BG/sprites fetching from right now".
-- **`getCPUState({})`** — PC + flags. Use when you suspect a hang.
-- **`watchMemory({region:"nes_oam", offset:0, length:4})`** — trace
+- **`cpu({op:'read'})`** — PC + flags. Use when you suspect a hang.
+- **`watch({on:'mem', region:"nes_oam", offset:0, length:4})`** — trace
   every write to OAM slot 0, returns the PC that wrote it.
-- **`stepFrames({frames:3600})`** — runs 1 minute of game time in
+- **`frame({op:'step', frames:3600})`** — runs 1 minute of game time in
   milliseconds. Don't be conservative.
 
 ## Mental model + boot order
 
 See [`MENTAL_MODEL.md`](MENTAL_MODEL.md) for the architecture
-overview (fetch via `getPlatformDoc({platform:"nes", name:"mental_model"})`).
+overview (fetch via `platform({op:'doc', platform:"nes", name:"mental_model"})`).
 The canonical "boots cleanly + shows a sprite" sequence is:
 
 ```

@@ -122,20 +122,20 @@ Source can then `incbin "tiles.bin"` directly.
 
 ## Debugging tools available
 
-Genesis has full debugging parity with SNES — see `listCategories()`
+Genesis has full debugging parity with SNES — see `catalog({op:'categories'})`
 then `loadCategory({category:"debug"})`:
 
 | Tool | What it gives you |
 |---|---|
-| `inspectSprites({platform:"genesis"})` | 80-sprite linked-list decoded to {slot, x, y, tile, palette, priority, flipH, flipV, size, visible} |
-| `inspectPalette({platform:"genesis"})` | All 64 CRAM colors decoded to {r, g, b} + a PNG swatch sheet |
-| `getCPUState({platform:"genesis", cpu:"main"})` | 68K state: D0-D7, A0-A7, PC, flags NZVCXST, intMask |
-| `getPsgState({platform:"genesis"})` | PSG channels: 3 tone + 1 noise |
-| `getYm2612State({platform:"genesis"})` | YM2612 raw snapshot (decoder is limited; raw blob diff-able) |
-| `readMemory({region:"genesis_cram"})` | 128 B CRAM raw |
-| `readMemory({region:"genesis_vdp_regs"})` | 32 VDP registers |
-| `readMemory({region:"genesis_z80_ram"})` | 8 KB Z80 sound CPU RAM |
-| `dumpState({path})` | Full savestate blob for forensic inspection |
+| `sprites({op:'inspect', platform:"genesis"})` | 80-sprite linked-list decoded to {slot, x, y, tile, palette, priority, flipH, flipV, size, visible} |
+| `palette({source:'live', platform:"genesis"})` | All 64 CRAM colors decoded to {r, g, b} + a PNG swatch sheet |
+| `cpu({op:'read', platform:"genesis", cpu:"main"})` | 68K state: D0-D7, A0-A7, PC, flags NZVCXST, intMask |
+| `audioDebug({op:'inspect', chip:'psg'})` | PSG channels: 3 tone + 1 noise |
+| `audioDebug({op:'inspect', chip:'ym2612'})` | YM2612 raw snapshot (decoder is limited; raw blob diff-able) |
+| `memory({op:'read', region:"genesis_cram"})` | 128 B CRAM raw |
+| `memory({op:'read', region:"genesis_vdp_regs"})` | 32 VDP registers |
+| `memory({op:'read', region:"genesis_z80_ram"})` | 8 KB Z80 sound CPU RAM |
+| `state({op:'dump', path})` | Full savestate blob for forensic inspection |
 
 Pair `screenshot({overlayBoxes:true})` with `sprites({op:'inspect'})` for
 "is the GPU rendering sprites where I think they are" visual debugging.

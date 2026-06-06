@@ -1,7 +1,7 @@
 # Sega Genesis / Mega Drive — troubleshooting
 
 When something's broken. Read MENTAL_MODEL.md first for the "what's
-going on" version (via `getPlatformDoc({platform:"genesis", name:"mental_model"})`).
+going on" version (via `platform({op:'doc', platform:"genesis", name:"mental_model"})`).
 
 ## "My C build is throwing 68000 assembler errors (identifier expected / missing reset vector)"
 
@@ -17,18 +17,18 @@ a `.s` asm file builds via vasm68k — that's correct.)
 ## "I drive the game with setInput but the jump/action button doesn't fire"
 
 The Genesis button map is **inverted** vs the libretro names. genesis_plus_gx
-maps Genesis A/B/C onto libretro **y/b/a** — so `setInput({a:true})` presses
+maps Genesis A/B/C onto libretro **y/b/a** — so `input({op:'set', a:true})` presses
 Genesis **C**, not A. An SGDK action bound to `BUTTON_A` (the usual jump) won't
 fire from `{a:true}`.
 
 Fix — press the button you actually mean:
-- `BUTTON_A` → `setInput({ports:[{y:true}]})` or spatial `{west:true}`
+- `BUTTON_A` → `input({op:'set', ports:[{y:true}]})` or spatial `{west:true}`
 - `BUTTON_B` → `{b:true}` / `{south:true}`
 - `BUTTON_C` → `{a:true}` / `{east:true}`
 
-Prefer the spatial names or `pressButton({button:'c'})` (they resolve correctly
-per platform). `getInputLayout({platform:'genesis'})` has the full map. (Note:
-`setInput` takes a `ports` array — `{ports:[{y:true}]}`, not a bare `{y:true}`.)
+Prefer the spatial names or `input({op:'press', button:'c'})` (they resolve correctly
+per platform). `input({op:'layout', platform:'genesis'})` has the full map. (Note:
+`input({op:'set'})` takes a `ports` array — `{ports:[{y:true}]}`, not a bare `{y:true}`.)
 
 ## "ROM builds but the screen is blank / black"
 
@@ -173,7 +173,7 @@ stride / nibble packing was off. The high nibble of each byte is the
 LEFT pixel; each nibble is a 0..15 index into a 16-color CRAM line,
 not a color.
 
-**Don't hand-roll it. Use the `imageToTilemap` MCP tool** — it dedupes
+**Don't hand-roll it. Use the `encodeArt({stage:'tilemap'})` MCP tool** — it dedupes
 tiles, bin-packs colors across the 4 palette lines, and emits correct
 4bpp packed bytes + a 16-bit-BE name-table + the CRAM palette in one
 call:
@@ -195,7 +195,7 @@ result. Then DMA `chr.bin` to VRAM, load `palette.bin` into CRAM, and
 write `nametable.bin` to your Plane A base (set plane width = 64 cells).
 The tool response `note` restates the exact sizes + destinations.
 
-If `imageToTilemap` returns `genesis.warnings[]` about cells with >16
+If `encodeArt({stage:'tilemap'})` returns `genesis.warnings[]` about cells with >16
 colors, your source crams too many colors into one 8×8 cell (the VDP's
 hard limit) — re-author those regions or accept the per-cell
 approximation.
@@ -203,7 +203,7 @@ approximation.
 ## "I want to use SGDK's image converter / `bmp.h` / .bmp loading"
 
 First choice for any PNG → tiles+tilemap+palette conversion: the
-**`imageToTilemap` MCP tool** (see the splash-screen section above). It
+**`encodeArt({stage:'tilemap'})` MCP tool** (see the splash-screen section above). It
 needs no native tools and produces ready-to-DMA blobs.
 
 The full SGDK helper-tool suite (`rescomp`, `bintos`, `convsym`,

@@ -49,7 +49,7 @@ Files
 Toolchain
 ---------
 
-Build via `buildSource({ platform: "atari2600", source: "..." })`. Server
+Build via `build({output:'rom', platform: "atari2600", source: "..."})`. Server
 spawns `dasm` (bundled WASM) and emits a `.bin` ready for `loadRomFromPath`.
 
 Foot-guns

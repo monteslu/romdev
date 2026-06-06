@@ -5,19 +5,19 @@ from real sessions (the traps below cost hours each). Read this once before a
 romhack; it tells you which tool to reach for at each fork so you don't thrash.
 
 Cross-platform. For platform specifics (memory map, VDP/PPU, byte order) also
-read that platform's `getPlatformDoc({platform, name:'mental_model'})`.
+read that platform's `platform({op:'doc', platform, name:'mental_model'})`.
 
 ---
 
 ## 0. Orient first (one minute, saves an hour)
 
-1. `identifyRom({path})` — name, platform, CRC, copier-header/zip handling.
-2. `gameCheats({path})` — if the bundled DB has this game, the cheat list **is a
+1. `cart({op:'identify', path})` — name, platform, CRC, copier-header/zip handling.
+2. `cheats({op:'lookup', path})` — if the bundled DB has this game, the cheat list **is a
    free RAM map**: labeled addresses for lives/score/timer/stats. This is the
-   single best head start. No match? `searchCheats({platform, query})` with a
+   single best head start. No match? `cheats({op:'search', platform, query})` with a
    loose name (fuzzy) before assuming it's absent. Cheats are a STARTING point,
    not the whole job — combine with disassembly below.
-3. `getMemoryMap({platform})` / the platform MENTAL_MODEL for the layout.
+3. `symbols({op:'map', platform})` / the platform MENTAL_MODEL for the layout.
 
 The cheat DB is bundled (`romdev_game_codes`). Do **not** scan the user's disk for
 `.cht` files — if it's not in the bundled DB, treat it as absent and RE it.
@@ -29,10 +29,10 @@ The cheat DB is bundled (`romdev_game_codes`). Do **not** scan the user's disk f
 Use the iterative value search — **not** a full-RAM diff (gameplay churns
 thousands of bytes and you'll drown).
 
-1. `searchValue({value, size, region})` — seed candidates equal to the current
+1. `memory({op:'search', value, size, region})` — seed candidates equal to the current
    on-screen value. `region` defaults to `system_ram`.
 2. Change the value in-game (take damage, score a point), then
-   `searchNext({compare:'eq', value})` — or `compare:'gt'|'lt'|'changed'|'unchanged'|
+   `memory({op:'searchNext', compare:'eq', value})` — or `compare:'gt'|'lt'|'changed'|'unchanged'|
    'inc'|'dec'` when you don't know the new value. Repeat until a handful remain.
 3. Confirm: `memory({op:'write'})` the candidate and watch the screen react.
 
@@ -70,7 +70,7 @@ font-rendered from an ASCII string. Patching the ASCII string then does nothing.
 The taunt-string trap: bytes 82/79/68 looked like a stat table but were the
 ASCII `"ROD"` inside `"FROM DOWNTOWN"`. A coincidence will ship a broken patch.
 
-`classifyRegion({region, offset, length})` →
+`memory({op:'classify', region, offset, length})` →
 `ascii-text | high-entropy | sparse-or-tiledata | structured-data | unknown`
 with printableRatio/entropy. If it says **ascii-text**, your "table" is probably
 a string — find a terminator / font map before treating the bytes as values.
@@ -79,9 +79,9 @@ a string — find a terminator / font map before treating the bytes as values.
 
 ## 4. To confirm a patch is actually live, read the cart ROM
 
-`readCartRom({offset, length})` reads the loaded program image. For un-banked
+`memory({op:'readCart', offset, length})` reads the loaded program image. For un-banked
 platforms (Genesis/Mega Drive, GB/GBC, SMS/GG, PCE, Lynx) the **file offset IS
-the CPU ROM address** — `readCartRom({offset:0x21FF00})` answers "does the
+the CPU ROM address** — `memory({op:'readCart', offset:0x21FF00})` answers "does the
 running ROM have my bytes at 0x21FF00?" in one call. (NES/SNES: bytes are
 correct but mapper-banked — `mapped:true` in the response; map a CPU PC→offset
 via `breakpoint({on:'write'})`'s prgOffset/bank.)
@@ -96,7 +96,7 @@ bytes) — it catches a hex/dec or wrong-offset mistake before you corrupt the R
 
 ## 5. To find where a byte is written (or why it isn't)
 
-`findWriter({address})` captures the exact instruction that writes an address.
+`breakpoint({on:'write', address})` captures the exact instruction that writes an address.
 If it returns `found:false` even after driving the game, the region is likely
 **rebuilt as a block** (sprite/OAM shadow, display list, VRAM) — copied/DMA'd
 from a SOURCE struct rather than written in place. Don't conclude "the address
@@ -122,16 +122,16 @@ readCartRom / readMemory at [A0] → follow the pointer
 
 Companion tools (all 14 platforms; feature-detect, `notSupported` if a core
 lacks a hook):
-- **`runUntilRead({address})`** — the read-side mirror of findWriter: the EXACT
+- **`breakpoint({on:'read', address})`** — the read-side mirror of findWriter: the EXACT
   instruction that READ an address (who *consumes* a value). Use it to anchor on
   a known data byte and find its reader.
-- **`stepInstruction()`** — CPU single-step; pair with `cpu({op:'read'})` to watch
+- **`frame({op:'stepInstruction'})`** — CPU single-step; pair with `cpu({op:'read'})` to watch
   registers change one instruction at a time through a routine.
-- **`setRegister({regId, value})`** — write a CPU register (inverse of getCPUState;
+- **`cpu({op:'setReg', regId, value})`** — write a CPU register (inverse of getCPUState;
   for setting up a callSubroutine by hand or forcing a path).
 
 Also: a breakpoint PC is a **guaranteed instruction boundary** — feed it to
-`disassembleRom({startAddress})` to avoid the mid-instruction-garbage trap.
+`disasm({target:'rom', startAddress})` to avoid the mid-instruction-garbage trap.
 
 ---
 
@@ -147,7 +147,7 @@ decompressWith({ entryPC, sourceAddress, destAddress })  → runs the codec
 readMemory at destAddress                                → the decompressed bytes
 ```
 
-Or the general form for any reg-args routine — `callSubroutine({ pc, regs })` sets
+Or the general form for any reg-args routine — `cpu({op:'call', pc, regs})` sets
 the registers (m68k 8=A0, 9=A1, 0=D0; per-CPU reg-ids in `cpu({op:'setReg'})`'s docs),
 pushes a sentinel return, and runs until it returns. Most of these formats have a
 "stored/uncompressed" escape opcode, so once you can SEE the decompressed output
@@ -175,7 +175,7 @@ findPointerTo({ path, romOffset })             → find that pointer in the firs
   those have no hand-authorable stored block; decompress→edit→re-crunch instead.
   Kosinski is offered but EXPERIMENTAL — always verify.
 - **Verify the stored block** by running the game's own decompressor on it with
-  `callSubroutine({ pc: codecEntryPC, regs: { A0: yourBlockAddr, A1: destAddr } })`
+  `cpu({op:'call', pc: codecEntryPC, regs: { A0: yourBlockAddr, A1: destAddr }})`
   and comparing the output to your payload. (This is exactly the 5c step in reverse;
   it's how you confirm the format guess before you ship the patch.)
 - **`romPatch({op:'findPointer'})`** computes the platform-correct pointer encoding (Genesis 32-bit
@@ -188,14 +188,14 @@ findPointerTo({ path, romOffset })             → find that pointer in the firs
 ## 5d. Find the UNKNOWN routine — discovery (the other half)
 
 Breakpoints are great once you KNOW the address. To FIND it:
-- **`watchRange({ start, end, kind })`** — log EVERY `{pc,address,value}` that reads
+- **`watch({on:'range', start, end, kind})`** — log EVERY `{pc,address,value}` that reads
   or writes anywhere in a range (not stop-on-first). Watch the whole name pool / a
   struct / a flag region and SEE every PC that touches it, instead of probing single
   addresses. `distinctPCs` is the actionable summary.
-- **`logPCRange({ start, end, frames })`** — coverage trace: every DISTINCT PC that
+- **`watch({on:'pc', start, end, frames})`** — coverage trace: every DISTINCT PC that
   EXECUTED in an address window. "What code runs in this bank during the scoreboard
   draw?" → disassembleRom the PCs it returns.
-- **`watchDma({ vramDest })`** (Genesis) — which DMA wrote the tile at a VRAM dest,
+- **`dmaTrace({precision:'exact', vramDest})`** (Genesis) — which DMA wrote the tile at a VRAM dest,
   and the ROM SOURCE it came from. The targeted version of `dmaTrace({precision:'sampled'})`; the
   way to catch a DMA'd (not CPU-written) name/portrait bitmap `breakpoint({on:'write'})` can't see.
 
@@ -209,7 +209,7 @@ change**, not fixed frames, and reports per step whether the press was
 (wrong screen / dropped / game polls input on a specific frame) — re-run it or
 hold longer. This is 5-10x faster than the press→step→screenshot loop.
 
-For a long/flaky path: reach a known screen once, `saveState({path})`, then
+For a long/flaky path: reach a known screen once, `state({op:'save', path})`, then
 `state({op:'load'})` to retry the next leg deterministically instead of re-driving the
 whole attract sequence each time. `input({op:'set'})`'s `requested` echo is what you SET,
 not proof the pad saw it — verify via the held-buttons RAM byte or a state
@@ -227,15 +227,15 @@ transition.
 | Is a "table" really ASCII/code | `memory({op:'classify'})` |
 | Confirm a patch is in the running ROM | `memory({op:'readCart'})` |
 | Where is this byte written / why not | `breakpoint({on:'write'})` (no write ⇒ source is bulk-copied) |
-| Read a register AT an instruction | `runUntilPC({address})` → freeze → `cpu({op:'read'})` |
-| Which instruction READ a byte | `runUntilRead({address})` (read-side findWriter) |
+| Read a register AT an instruction | `breakpoint({on:'pc', address})` → freeze → `cpu({op:'read'})` |
+| Which instruction READ a byte | `breakpoint({on:'read', address})` (read-side findWriter) |
 | Single-step the CPU | `frame({op:'stepInstruction'})` (+ `cpu({op:'read'})` to watch regs) |
-| Set a CPU register | `setRegister({regId, value})` |
+| Set a CPU register | `cpu({op:'setReg', regId, value})` |
 | Decompress a compressed asset | `cpu({op:'decompress'})` / `cpu({op:'call'})` (run the ROM's own codec) |
 | Re-inject edited bytes the game accepts | `romPatch({op:'makeStored'})` (verbatim-expand block) → `romPatch({op:'findFree'})` → `romPatch({op:'relocate'})` |
-| Find the pointer that loads an asset | `findPointerTo({romOffset})` |
-| FIND the unknown routine touching X | `watchRange({start,end})` (all hits) / `watch({on:'pc'})` (coverage) |
-| Which DMA wrote a VRAM tile + its source (Genesis) | `watchDma({vramDest})` |
+| Find the pointer that loads an asset | `romPatch({op:'findPointer', romOffset})` |
+| FIND the unknown routine touching X | `watch({on:'range', start,end})` (all hits) / `watch({on:'pc'})` (coverage) |
+| Which DMA wrote a VRAM tile + its source (Genesis) | `dmaTrace({precision:'exact', vramDest})` |
 | Where did a VRAM graphic come from (Genesis) | `dmaTrace({precision:'sampled'})` (ROM offset of the DMA source) |
 | Drive a menu fast | `navigate` (advances on screen change) |
 | Free RAM map for a known game | `cheats({op:'lookup'})` / `cheats({op:'search'})` |

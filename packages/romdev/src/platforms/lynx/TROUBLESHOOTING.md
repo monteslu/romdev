@@ -1,6 +1,6 @@
 # Atari Lynx — troubleshooting
 
-Read MENTAL_MODEL.md first (`getPlatformDoc({platform:"lynx",
+Read MENTAL_MODEL.md first (`platform({op:'doc', platform:"lynx",
 name:"mental_model"})`).
 
 ## "ROM loads but screen is black / no display"
