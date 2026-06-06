@@ -17,6 +17,7 @@
 import { z } from "zod";
 import { registerTools } from "../mcp/tools/index.js";
 import { withClearToolErrors } from "../mcp/util.js";
+import { observer, summarizeForLog, extractImages } from "../observer/bus.js";
 
 /**
  * Build a tool registry for a given session key. Each entry's handler closes
@@ -86,8 +87,27 @@ export function buildToolRegistry(sessionKey) {
  * @param {object} args  the request body
  * @returns {Promise<{ok:true, result:any}|{ok:false, error:string}>}
  */
-export async function runTool(tool, args) {
+export async function runTool(tool, args, sessionKey) {
   const a = args ?? {};
+  const startedAt = Date.now();
+  // Emit the SAME `call` event the MCP path's observer middleware emits, so the
+  // /livestream view updates for HTTP/skill tool calls too (the MCP path wraps
+  // server.tool with installObserverMiddleware; the HTTP path runs handlers
+  // directly, so we emit here — the single HTTP execution chokepoint).
+  const emit = (extra) => {
+    try {
+      observer.push({
+        type: "call",
+        sessionKey: sessionKey ?? "http",
+        ts: startedAt,
+        tool: tool.name,
+        args: summarizeForLog(a),
+        durationMs: Date.now() - startedAt,
+        ...extra,
+      });
+    } catch { /* never let the observer kill a tool call */ }
+  };
+
   // Parse against the strict schema if we have a built zod object.
   const schema = tool.inputSchema;
   if (schema && typeof schema === "object" && "_def" in schema && typeof schema.safeParse === "function") {
@@ -96,6 +116,7 @@ export async function runTool(tool, args) {
       // surface the friendly first-issue message (withClearToolErrors / global map)
       const issue = parsed.error?.issues?.[0];
       const msg = (issue && issue.message) || "invalid arguments";
+      emit({ ok: false, error: msg });
       return { ok: false, error: msg };
     }
   }
@@ -104,18 +125,25 @@ export async function runTool(tool, args) {
     // Unwrap the MCP content envelope to plain JSON for HTTP clients.
     if (r && r.isError) {
       const text = r.content?.[0]?.text ?? "tool error";
+      emit({ ok: false, error: text });
       return { ok: false, error: text };
     }
+    const images = extractImages(r);
     const text = r?.content?.[0]?.text;
     if (typeof text === "string") {
       // most tools return jsonContent(...) → text is JSON; parse it back so the
       // HTTP response is real JSON, not a JSON-string-in-a-field.
-      try { return { ok: true, result: JSON.parse(text) }; }
-      catch { return { ok: true, result: { text } }; }
+      let parsed;
+      try { parsed = JSON.parse(text); } catch { parsed = { text }; }
+      emit({ ok: true, result: summarizeForLog(parsed), ...(images.length ? { images } : {}) });
+      return { ok: true, result: parsed };
     }
     // image / multi-part content: hand back the raw content array.
-    return { ok: true, result: r?.content ? { content: r.content } : (r ?? {}) };
+    const result = r?.content ? { content: r.content } : (r ?? {});
+    emit({ ok: true, result: summarizeForLog(result), ...(images.length ? { images } : {}) });
+    return { ok: true, result };
   } catch (e) {
+    emit({ ok: false, error: e?.message ?? String(e) });
     return { ok: false, error: e?.message ?? String(e) };
   }
 }

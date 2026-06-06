@@ -19,6 +19,7 @@ import { randomUUID } from "node:crypto";
 import { buildToolRegistry, runTool, toolJsonSchema } from "./tool-registry.js";
 import { skillPreamble, skillToolReference, buildSkillDoc } from "./skill-doc.js";
 import { swaggerHtml, swaggerAsset } from "./swagger.js";
+import { observer } from "../observer/bus.js";
 import { log } from "../mcp/log.js";
 
 const SESSION_HEADER = "x-romdev-session";
@@ -40,12 +41,16 @@ export function mountHttpToolRoutes(app, opts = {}) {
   /** @type {Map<string, {registry: Map<string,any>, lastSeen: number}>} */
   const sessions = new Map();
 
-  function getSession(sessionKey) {
+  function getSession(sessionKey, { sticky = false } = {}) {
     let s = sessions.get(sessionKey);
     if (!s) {
-      s = { registry: buildToolRegistry(sessionKey), lastSeen: Date.now() };
+      s = { registry: buildToolRegistry(sessionKey), lastSeen: Date.now(), sticky };
       sessions.set(sessionKey, s);
       log.debug(`[http] session ${sessionKey.slice(0, 8)} created (${sessions.size} active)`);
+      // Surface sticky sessions in /livestream (like the MCP path does on init).
+      // Ephemeral one-shot sessions are NOT registered (they'd spam connect/
+      // disconnect); their individual `call` events still show in the stream.
+      if (sticky) { try { observer.sessionConnected(sessionKey); } catch {} }
     } else {
       s.lastSeen = Date.now();
     }
@@ -58,6 +63,7 @@ export function mountHttpToolRoutes(app, opts = {}) {
     for (const [key, s] of sessions) {
       if (now - s.lastSeen > idleMs) {
         sessions.delete(key);
+        if (s.sticky) { try { observer.sessionDisconnected(key); } catch {} }
         log.debug(`[http] session ${key.slice(0, 8)} reaped (idle)`);
       }
     }
@@ -78,9 +84,10 @@ export function mountHttpToolRoutes(app, opts = {}) {
       sessionKey = randomUUID();
       ephemeral = true;
     }
-    const { registry } = getSession(sessionKey);
+    const { registry } = getSession(sessionKey, { sticky: !ephemeral });
     const tool = registry.get(name);
     if (!tool) {
+      if (ephemeral) sessions.delete(sessionKey);
       res.status(404).json({
         error: `Unknown tool '${name}'. GET /openapi.json or /romdev-skill.md for the list.`,
       });
@@ -88,7 +95,7 @@ export function mountHttpToolRoutes(app, opts = {}) {
     }
     // echo the session id so the agent can reuse it (esp. when we minted one)
     res.setHeader(SESSION_HEADER, sessionKey);
-    const out = await runTool(tool, req.body);
+    const out = await runTool(tool, req.body, sessionKey);
     if (ephemeral) {
       // drop the ephemeral session immediately (no sticky host wanted)
       sessions.delete(sessionKey);

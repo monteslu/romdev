@@ -11,6 +11,27 @@ import { buildToolRegistry, runTool, toolJsonSchema } from "../src/http/tool-reg
 import { buildOpenApi } from "../src/http/routes.js";
 import { buildSkillDoc, skillToolReference, mcpPreamble, skillPreamble } from "../src/http/skill-doc.js";
 import { swaggerHtml, swaggerAsset } from "../src/http/swagger.js";
+import { observer } from "../src/observer/bus.js";
+
+test("runTool emits observer `call` events so /livestream updates for HTTP/skill calls", async () => {
+  const reg = buildToolRegistry("sess-live");
+  const got = [];
+  const onEvent = (e) => { if (e.type === "call") got.push(e); };
+  observer.on("event", onEvent);
+  try {
+    await runTool(reg.get("catalog"), { op: "status" }, "sess-live");   // ok
+    await runTool(reg.get("catalog"), { op: "bogus" }, "sess-live");    // error
+  } finally {
+    observer.off?.("event", onEvent);
+  }
+  const mine = got.filter((e) => e.sessionKey === "sess-live");
+  assert.ok(mine.length >= 2, "two call events emitted");
+  assert.equal(mine[0].tool, "catalog");
+  assert.equal(mine[0].ok, true);
+  assert.equal(typeof mine[0].durationMs, "number");
+  assert.equal(mine[1].ok, false, "error call emits ok:false");
+  assert.match(mine[1].error, /must be one of/);
+});
 
 test("registry harvests all 34 tools with handler + schema", () => {
   const reg = buildToolRegistry(randomUUID());
