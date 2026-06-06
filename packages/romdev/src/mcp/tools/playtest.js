@@ -102,30 +102,8 @@ export function isPlaytestRunning(sessionKey) {
 }
 
 export function registerPlaytestTools(server, z, sessionKey) {
-  server.tool(
-    "playtest",
-    "Use this to open a native SDL window so a HUMAN can watch and play the loaded ROM — the 'show a " +
-    "person' tool, NOT your build-iteration loop. Only call it once the game is worth a human's eyes (boots, " +
-    "renders, the feature is visible). FOR YOUR OWN BUILD TESTING use screenshots instead (runSource / " +
-    "stepAndScreenshot / screenshot) — a window on a black screen or crash just wastes the human's " +
-    "attention. BEST FOR (beyond demos): diagnosing a USER-REPORTED bug — when the human already has a repro, " +
-    "hand them the window, let them drive to the exact moment, then inspect the SAME live host in real time " +
-    "(readMemory / watchMemory / inspectSprites / dumpState, with pause/resume to freeze a moving state). " +
-    "That beats blindly re-deriving a state headless across reboots. Once open, every other tool keeps working " +
-    "against the SAME live host (snapshot mid-play, dump state, restore a saveState while they play). " +
-    "INPUT/STEPPING WHILE OPEN: the window's own loop drives the emulator — each tick it rebuilds controller " +
-    "state from the human's gamepad+keyboard and calls setInput, then steps one frame. So your `setInput` is " +
-    "OVERWRITTEN on the next tick (the human's input wins; they are NOT merged with yours), and the window — " +
-    "not you — owns stepFrames. To inspect a moving state, `pause` (halts the tick loop, freezing input AND " +
-    "stepping) → readMemory/watchMemory/dumpState → `resume`. Reads don't need a pause; only deterministic " +
-    "stepping or agent-driven input do. " +
-    "Requires @kmamal/sdl; stays open until closed or playtestStop. See the `aspect` param for window shape.",
-    {
-      scale: z.number().int().min(1).max(8).default(3).describe("Integer upscale factor for the window."),
-      title: z.string().optional().describe("Window title."),
-      aspect: z.enum(["fb", "tv", "core"]).default("tv").describe("Initial window shape. 'tv' (DEFAULT) = 'how a player saw the hardware' — 4:3 for consoles (NES/SNES/Genesis/SMS/Atari/C64); native LCD aspect for handhelds (GB/GBC 10:9 = 160×144 NOT stretched; GG ~6:5; Lynx 4:3; GBA 3:2). This is what looks correct on a real display (raw square pixels make most consoles look squished — NES renders ~8% too narrow). 'fb' = raw framebuffer * scale, square pixels, exact dev-time geometry — use when you want pixel-accurate framebuffer dimensions, not the player-visible shape. 'core' honors the core's reported display_aspect_ratio (often non-4:3 — Genesis H40 reports ~10:7). The user can resize; letterbox preserves the chosen aspect. NOTE: 'tv' looks up the platform from the running host, so always pass the correct `platform` arg to loadMedia (`platform:\"gbc\"` not `\"gb\"` for a CGB game) or 'tv' falls back to the framebuffer aspect."),
-    },
-    safeTool(async ({ scale, title, aspect }) => {
+  // op:'open' — open (or reuse) the SDL window for this session.
+  async function ptOpen({ scale = 3, title, aspect = "tv" }) {
       // No preflight display checks. We just attempt to open the SDL window and
       // report whatever SDL says — env-var guessing (DISPLAY/WAYLAND_DISPLAY)
       // is Linux-only and wrong on macOS/Windows, where those vars are never
@@ -243,28 +221,17 @@ export function registerPlaytestTools(server, z, sessionKey) {
                 "plugged in later is picked up automatically.",
             }
           : {}),
-        note: "Window is open and the render loop runs in the background. Other MCP tools (screenshot, readMemory, pause, stepFrames, saveState, ...) act on the same live host. Call playtestStop to close the window.",
+        note: "Window is open and the render loop runs in the background. Other MCP tools (frame, memory, host pause/resume, state, ...) act on the same live host. Call playtest({op:'stop'}) to close the window.",
       });
-    }),
-  );
+  }
 
-  server.tool(
-    "playtestStop",
-    "Close the live playtest window for THIS session (if one is open). The emulator host stays loaded and you can keep using all the other tools. Other agents' windows are unaffected.",
-    {},
-    safeTool(async () => {
+  // op:'stop' — close this session's window.
+  async function ptStop() {
       return textContent(stopPlaytestForSession(sessionKey) ? "playtest window closed" : "no playtest window open");
-    }),
-  );
+  }
 
-  server.tool(
-    "playtestStatus",
-    "Check whether a playtest window is currently open, what ROM it's showing, and how many frames have " +
-    "elapsed. ALSO reports `activeHostMatchesWindow`: false means a `runSource`/`loadMedia` since the window " +
-    "opened swapped the session's active host, so `screenshot()` (which reads the active host) no longer shows " +
-    "what the human sees — use `playtestFramebuffer` to capture the human's actual window.",
-    {},
-    safeTool(async () => {
+  // op:'status' — is a window open, what's it showing, does it match the active host?
+  async function ptStatus() {
       // reconcileSession() probes the real SDL window and tears down a dead
       // one — so a window killed without a 'close' event reports running:false
       // instead of lying forever (the post-restart / compositor-kill case).
@@ -300,27 +267,15 @@ export function registerPlaytestTools(server, z, sessionKey) {
         activeFrameCount: activeHost?.status?.frameCount ?? null,
         activeHostMatchesWindow: matches,
         ...(matches ? {} : {
-          hint: "The active host diverged from the playtest window (a runSource/" +
-            "loadMedia swapped it). screenshot() now shows the active host, NOT " +
-            "what the human sees. Call playtestFramebuffer to capture the human's window.",
+          hint: "The active host diverged from the playtest window (a build({output:'run'})/" +
+            "loadMedia swapped it). frame({op:'screenshot'}) now shows the active host, NOT " +
+            "what the human sees. Call playtest({op:'framebuffer'}) to capture the human's window.",
         }),
       });
-    }),
-  );
+  }
 
-  server.tool(
-    "playtestFramebuffer",
-    "Capture the EXACT framebuffer the human is looking at in the playtest window — the raw emulator frame, " +
-    "not an OS screenshot of the scaled window. Use this instead of `screenshot()` when a playtest window is " +
-    "open and you need to see what the USER sees: `screenshot()` reads the session's active host, which a " +
-    "`runSource`/`loadMedia` rebuild may have swapped away from the window's host. This always reads the " +
-    "window's own host. DEFAULT writes the PNG to `path` and returns `{path,...}`; pass `inline:true` to get " +
-    "the image in the response. Errors cleanly if no playtest window is open.",
-    {
-      path: z.string().optional().describe("Absolute path to write the PNG to. Required unless inline:true."),
-      inline: z.boolean().default(false).describe("If true, return the image in the response instead of writing to disk. Default false — then `path` is required."),
-    },
-    safeTool(async ({ path: outPath, inline }) => {
+  // op:'framebuffer' — capture the EXACT frame the human's window shows.
+  async function ptFramebuffer({ path: outPath, inline }) {
       if (!reconcileSession(sessionKey)) {
         return jsonContent({
           ok: false,
@@ -361,6 +316,46 @@ export function registerPlaytestTools(server, z, sessionKey) {
           { type: "text", text: `playtest framebuffer ${frame.width}x${frame.height} — ${frame.loadedMediaPath ?? "<memory>"} @ frame ${frame.frameCount}` },
         ],
       };
+  }
+
+  server.tool(
+    "playtest",
+    "Show the loaded ROM to a HUMAN in a native SDL window, one tool keyed by `op`. The 'show a person' tool, " +
+    "NOT your build-iteration loop — for your OWN testing use frame({op:'screenshot'}) / build({output:'run'}).\n" +
+    "• op:'open' (default) — open (or reuse this session's) window. Only call it once the game is worth a human's " +
+    "eyes (boots, renders, the feature is visible) — a window on a black screen/crash just wastes their attention. " +
+    "BEST FOR diagnosing a USER-REPORTED bug: hand them the window, let them drive to the exact moment, then " +
+    "inspect the SAME live host in real time (memory/watch/sprites/state, with host({op:'pause'/'resume'}) to freeze " +
+    "a moving state). Once open, every other tool keeps working against the same live host. INPUT/STEPPING WHILE " +
+    "OPEN: the window's loop owns the emulator — each tick it rebuilds controller state from the human's gamepad+" +
+    "keyboard and calls setInput then steps a frame, so your input({op:'set'}) is OVERWRITTEN on the next tick " +
+    "(the human wins) and the window — not you — owns stepping. To inspect a moving state, host({op:'pause'}) → " +
+    "read → host({op:'resume'}). Requires @kmamal/sdl. `scale`/`title`/`aspect` shape the window.\n" +
+    "• op:'stop' — close THIS session's window (the host stays loaded; other agents' windows unaffected).\n" +
+    "• op:'status' — is a window open, what ROM/frame it shows, and `activeHostMatchesWindow` (false = a build/" +
+    "loadMedia swapped the active host, so frame({op:'screenshot'}) no longer shows what the human sees — use op:'framebuffer').\n" +
+    "• op:'framebuffer' — capture the EXACT framebuffer the human's window shows (the window's own host, not the " +
+    "active host frame({op:'screenshot'}) reads). `path` (default) or `inline:true`.",
+    {
+      op: z.enum(["open", "stop", "status", "framebuffer"]).default("open")
+        .describe("open=show the ROM to a human (default); stop=close this session's window; status=is it open + does it match the active host; framebuffer=capture what the human sees."),
+      scale: z.number().int().min(1).max(8).default(3).describe("op:open — integer upscale factor for the window."),
+      title: z.string().optional().describe("op:open — window title."),
+      aspect: z.enum(["fb", "tv", "core"]).default("tv").describe("op:open — initial window shape. 'tv' (DEFAULT) = how a player saw the hardware (4:3 consoles; native LCD for handhelds — GB/GBC 10:9 not stretched, GG ~6:5, Lynx 4:3, GBA 3:2). 'fb' = raw framebuffer × scale (square pixels, dev geometry). 'core' honors the core's display_aspect_ratio. NOTE: 'tv' reads the platform from the running host, so pass the correct `platform` to loadMedia (gbc not gb for a CGB game) or it falls back to the fb aspect."),
+      path: z.string().optional().describe("op:framebuffer — absolute path to write the PNG to. Required unless inline:true."),
+      inline: z.boolean().default(false).describe("op:framebuffer — return the image in the response instead of writing to disk."),
+    },
+    safeTool(async (args) => {
+      switch (args.op ?? "open") {
+        case "open":        return await ptOpen(args);
+        case "stop":        return await ptStop();
+        case "status":      return await ptStatus();
+        case "framebuffer": {
+          if (!args.inline && !args.path) throw new Error("playtest({op:'framebuffer'}): pass `path` (where to write the PNG) or `inline:true`.");
+          return await ptFramebuffer(args);
+        }
+        default: throw new Error(`playtest: unknown op '${args.op}'`);
+      }
     }),
   );
 }

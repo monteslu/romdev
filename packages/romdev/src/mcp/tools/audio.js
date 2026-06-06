@@ -8,24 +8,8 @@ import { jsonContent, safeTool } from "../util.js";
 import { getAudioStateCore } from "./platform-tools.js";
 
 export function registerAudioTools(server, z, sessionKey) {
-  server.tool(
-    "pcmToBrr",
-    "Encode raw 16-bit signed PCM audio (mono, little-endian) into SNES BRR format. " +
-    "BRR is the SNES SPC700's only sample format — every sound effect and instrument " +
-    "on the system goes through it. Output is a Uint8Array of 9-byte BRR blocks ready " +
-    "to be uploaded into ARAM by your SPC driver. Pair this with the 'minimal-spc' or " +
-    "'snesmod' audio engines from getAudioEngine to actually hear the sound. " +
-    "Input: pass `pcmBase64` (raw s16le bytes), OR `pcmPath` (.pcm/.raw file on disk). " +
-    "If your source audio is a .wav, first strip the WAV header — every byte after the " +
-    "'data' chunk's 8-byte preamble is raw PCM. Output: `brrPath` (server writes a .brr) " +
-    "or `brrBase64` (inline). Pass `outputPath` to control where the .brr lands.",
-    {
-      pcmBase64: z.string().optional().describe("Base64-encoded raw 16-bit signed PCM (mono, little-endian)."),
-      pcmPath: z.string().optional().describe("Absolute path to a raw PCM file on disk. Preferred over pcmBase64."),
-      outputPath: z.string().optional().describe("If given, write the .brr to this absolute path and return path-only."),
-      loop: z.boolean().default(false).describe("If true, set the LOOP bit on the final block so the sample repeats. For one-shot SFX leave false; for sustained tones / drones / instruments set true."),
-    },
-    safeTool(async ({ pcmBase64, pcmPath, outputPath, loop }) => {
+  // encodeAudio({target:'brr'}) — raw PCM → SNES BRR.
+  async function encBrr({ pcmBase64, pcmPath, outputPath, loop = false }) {
       const { pcmToBrr } = await import("../../platforms/snes/brr.js");
       let pcmBytes;
       if (pcmPath) {
@@ -49,36 +33,10 @@ export function registerAudioTools(server, z, sessionKey) {
         return jsonContent({ ...meta, brrPath: outputPath });
       }
       return jsonContent({ ...meta, brrBase64: Buffer.from(brr).toString("base64") });
-    }),
-  );
+  }
 
-  // (no getAudioEngine — driver design is part of the work, not part of the
-  // toolchain. Authors write their own SPC stub + 65816 IPL upload to fit
-  // their game's needs.)
-
-  server.tool(
-    "wavToXgm2Pcm",
-    "Convert an external WAV (or raw s16le PCM) clip into a GENESIS XGM2 PCM sample — the exact format SGDK's " +
-    "XGM2 driver plays with XGM2_playPCM/XGM2_playPCMEx. Bakes in the fiddly rules so you don't botch them: " +
-    "8-bit SIGNED mono, resampled to 13.3 kHz (or 6.65 kHz with halfRate:true), length zero-padded to a multiple " +
-    "of 256 bytes. " +
-    "By default it also emits a ready-to-#include C array (`__attribute__((aligned(256)))` — the buffer MUST be " +
-    "256-byte aligned in ROM) plus a `<NAME>_LEN` define, so you just #include it and call " +
-    "`XGM2_playPCM(name, NAME_LEN, SOUND_PCM_CH1)`. " +
-    "Input: `wavPath` (a .wav on disk — preferred) or `wavBase64`; for headerless audio pass `format:'pcm16'` + " +
-    "`pcmRate`. Output: pass `outputCPath` to write a .c file (returns the path), or get `cSource` inline; the raw " +
-    "`pcmBase64`/`pcmPath` (just the bytes) is also available if you'd rather bintos it yourself.",
-    {
-      wavPath: z.string().optional().describe("Absolute path to a .wav file (preferred — server reads it, no base64 cost)."),
-      wavBase64: z.string().optional().describe("Base64-encoded WAV bytes (use wavPath when on disk)."),
-      name: z.string().default("pcm_sample").describe("C identifier for the emitted array (e.g. 'sfx_jump'). The length define is <NAME>_LEN."),
-      halfRate: z.boolean().default(false).describe("Encode for 6.65 kHz (XGM2_playPCMEx halfRate=TRUE) instead of the 13.3 kHz native rate. Halves ROM size at lower fidelity."),
-      format: z.enum(["wav", "pcm16"]).default("wav").describe("'wav' (default) parses the RIFF header. 'pcm16' = raw 16-bit signed LE mono — then pass pcmRate."),
-      pcmRate: z.number().int().min(1).optional().describe("Source sample rate (Hz) — REQUIRED for format:'pcm16' so it can resample to the XGM2 rate."),
-      outputCPath: z.string().optional().describe("Write the C source (array + LEN define) to this absolute path and return path-only."),
-      outputPcmPath: z.string().optional().describe("Also/instead write the raw padded PCM bytes (.pcm) here."),
-    },
-    safeTool(async ({ wavPath, wavBase64, name, halfRate, format, pcmRate, outputCPath, outputPcmPath }) => {
+  // encodeAudio({target:'xgm2pcm'}) — WAV/PCM → Genesis XGM2 PCM sample.
+  async function encXgm({ wavPath, wavBase64, name = "pcm_sample", halfRate = false, format = "wav", pcmRate, outputCPath, outputPcmPath }) {
       const { wavToXgm2Pcm, emitXgm2PcmC } = await import("../../platforms/genesis/xgm2-pcm.js");
       let inputBytes;
       if (wavPath) inputBytes = await readFile(wavPath);
@@ -117,6 +75,37 @@ export function registerAudioTools(server, z, sessionKey) {
         out.pcmBase64 = Buffer.from(r.pcm).toString("base64");
       }
       return jsonContent(out);
+  }
+
+  server.tool(
+    "encodeAudio",
+    "Encode an external audio clip into a platform's native sample format, one tool keyed by `target`.\n" +
+    "• target:'brr' — raw 16-bit signed PCM (mono, LE) → SNES BRR (the SPC700's only sample format; 9-byte blocks ready to DMA into ARAM). Input `pcmBase64` or `pcmPath` (.pcm/.raw; strip the WAV header first if your source is .wav). `loop` sets the LOOP bit. Output `brrPath` (via `outputPath`) or `brrBase64`.\n" +
+    "• target:'xgm2pcm' — WAV (or raw s16le PCM) → GENESIS XGM2 PCM (SGDK's XGM2_playPCM format). Bakes the fiddly rules: 8-bit SIGNED mono, resampled to 13.3 kHz (or 6.65 kHz with `halfRate`), zero-padded to a multiple of 256 bytes. Emits a ready-to-#include 256-byte-aligned C array + `<NAME>_LEN` define by default. Input `wavPath`/`wavBase64` (or `format:'pcm16'` + `pcmRate` for headerless). Output `outputCPath` (.c) / `cSource` inline / `outputPcmPath` (raw .pcm).",
+    {
+      target: z.enum(["brr", "xgm2pcm"]).describe("brr=SNES BRR sample; xgm2pcm=Genesis XGM2 PCM sample (SGDK)."),
+      // brr
+      pcmBase64: z.string().optional().describe("target:'brr' — base64 raw 16-bit signed PCM (mono, LE)."),
+      pcmPath: z.string().optional().describe("target:'brr' — absolute path to a raw PCM file (preferred over pcmBase64)."),
+      loop: z.boolean().default(false).describe("target:'brr' — set the LOOP bit on the final block (sustained tones/instruments)."),
+      // xgm2pcm
+      wavPath: z.string().optional().describe("target:'xgm2pcm' — absolute path to a .wav (preferred)."),
+      wavBase64: z.string().optional().describe("target:'xgm2pcm' — base64 WAV bytes."),
+      name: z.string().default("pcm_sample").describe("target:'xgm2pcm' — C identifier for the emitted array (length define is <NAME>_LEN)."),
+      halfRate: z.boolean().default(false).describe("target:'xgm2pcm' — encode for 6.65 kHz (XGM2_playPCMEx halfRate=TRUE); halves ROM size."),
+      format: z.enum(["wav", "pcm16"]).default("wav").describe("target:'xgm2pcm' — 'wav' (parse RIFF) or 'pcm16' (raw s16le mono; then pass pcmRate)."),
+      pcmRate: z.number().int().min(1).optional().describe("target:'xgm2pcm' — source sample rate (Hz), REQUIRED for format:'pcm16'."),
+      outputCPath: z.string().optional().describe("target:'xgm2pcm' — write the C source here and return path-only."),
+      outputPcmPath: z.string().optional().describe("target:'xgm2pcm' — also/instead write the raw padded PCM bytes here."),
+      // shared
+      outputPath: z.string().optional().describe("target:'brr' — write the .brr here and return path-only."),
+    },
+    safeTool(async (args) => {
+      switch (args.target) {
+        case "brr":     return await encBrr(args);
+        case "xgm2pcm": return await encXgm(args);
+        default: throw new Error(`encodeAudio: unknown target '${args.target}'`);
+      }
     }),
   );
 
