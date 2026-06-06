@@ -66,6 +66,7 @@
     "romdev-toolchain-rgbds": "0.1.0",
     "romdev-toolchain-sdcc": "0.2.0",
     "romdev-toolchain-vasm": "0.1.0",
+    "romdev-xgm2": "0.1.0",
     "socket.io": "^4.8.3",
     "yauzl": "^3.3.1",
     "zod": "^4.4.3"

@@ -1,0 +1,31 @@
+{
+  "name": "romdev-xgm2",
+  "version": "0.1.0",
+  "description": "Pure-JS VGM → XGM2 music converter for Sega Genesis / Mega Drive (SGDK XGM2 driver). A faithful port of SGDK's xgm2tool — no Java, no native binary. Parses a .vgm and emits a compiled XGM2 blob you .incbin into a ROM and play with XGM2_play().",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monteslu/romdev.git",
+    "directory": "packages/romdev-xgm2"
+  },
+  "homepage": "https://github.com/monteslu/romdev#readme",
+  "bugs": {
+    "url": "https://github.com/monteslu/romdev/issues"
+  },
+  "author": "Luis Montes",
+  "scripts": {
+    "test": "node --test"
+  }
+}
