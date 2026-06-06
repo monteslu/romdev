@@ -43,7 +43,10 @@ Agents: the server delivers [`AGENTS.md`](./AGENTS.md) as connection-time instru
 
 ## Don't want MCP? Use HTTP or a Skill
 
-The same 34 tools are also reachable without an MCP client — same server, no extra setup:
+Run the server (`npx romdev-mcp`) but **skip wiring it into your agent's MCP
+config** — no `claude mcp add`, no `mcp.json` entry, no MCP client at all. The
+same 34 tools are reachable over plain HTTP / as an Agent Skill against the
+running server:
 
 - **Plain HTTP:** `POST http://127.0.0.1:7331/tool/{name}` with the args as a JSON
   body; the response is JSON. Browse/try every tool at **`/documentation`**
@@ -57,8 +60,11 @@ The same 34 tools are also reachable without an MCP client — same server, no e
   `POST /tool/{name}` calls.
 
 Both are generated from the same tool registry as the MCP surface, so they never
-drift. (romdev still hosts the emulators/toolchains in-process — the HTTP/skill
-path drives that same engine; it doesn't need a separate install.)
+drift. **You still run the server** — `npx romdev-mcp` (it hosts the
+emulators/toolchains in-process and serves these routes on :7331). What the
+HTTP/skill path removes is the *MCP client/protocol and its always-on context
+cost* — not the server. There's no separate install beyond romdev itself, and
+never a host `gcc` or emulator.
 
 ## License
 
