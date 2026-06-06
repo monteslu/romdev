@@ -71,8 +71,8 @@ test("Atari 7800 callSubroutine watchdog force-stops an infinite loop (prosystem
   // Drive the infinite-loop routine. With a modest instruction budget the
   // watchdog MUST trip and return — no hang.
   const r = toJSON(await client.callTool({
-    name: "callSubroutine",
-    arguments: { pc: spinPC, maxInstructions: 200000, maxFrames: 600, sandbox: true },
+    name: "cpu",
+    arguments: { op: "call",  pc: spinPC, maxInstructions: 200000, maxFrames: 600, sandbox: true },
   }, undefined, { timeout: 60000 }));
 
   assert.equal(r.returned, false, "infinite loop should NOT report returned:true: " + JSON.stringify(r));

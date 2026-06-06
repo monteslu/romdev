@@ -81,7 +81,7 @@ test("C64 PC breakpoint + read watch + single-step (vice 6510)", { timeout: 2400
 
   // 3) getCPUState reads the live 6510 registers at the frozen instruction.
   const regs = toJSON(await client.callTool({
-    name: "getCPUState", arguments: { platform: "c64" },
+    name: "cpu", arguments: { op: "read",  platform: "c64" },
   }));
   const pcField = regs.pc ?? regs.PC ?? regs.registers?.PC;
   assert.ok(pcField !== undefined, "getCPUState returned no PC: " + JSON.stringify(regs).slice(0, 200));

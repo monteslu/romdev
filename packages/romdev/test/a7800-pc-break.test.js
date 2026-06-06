@@ -91,7 +91,7 @@ test("Atari 7800 PC breakpoint + read watch + single-step (prosystem 6502)", { t
 
   // 3) With the CPU frozen, getCPUState reads the live regs (PC must match bp).
   const regs = toJSON(await client.callTool({
-    name: "getCPUState", arguments: { platform: "atari7800" },
+    name: "cpu", arguments: { op: "read",  platform: "atari7800" },
   }));
   const pcField = regs.pc ?? regs.PC ?? regs.regs?.pc;
   assert.ok(pcField !== undefined, "getCPUState returned no PC field: " + JSON.stringify(regs).slice(0, 200));

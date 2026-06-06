@@ -102,7 +102,7 @@ test("SMS PC breakpoint + read watch + single-step (gpgx Z80)", { timeout: 24000
 
   // 3) With the CPU frozen, getCPUState reads the live Z80 regs.
   const regs = toJSON(await client.callTool({
-    name: "getCPUState", arguments: { platform: "sms" },
+    name: "cpu", arguments: { op: "read",  platform: "sms" },
   }));
   const pcField = regs.pc ?? regs.PC ?? regs.regs?.pc;
   assert.ok(pcField !== undefined, "getCPUState returned no PC field: " + JSON.stringify(regs).slice(0, 200));

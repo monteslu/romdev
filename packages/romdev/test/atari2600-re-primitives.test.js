@@ -30,7 +30,7 @@ test("atari2600 RE primitives: setRegister + watchRange + logPCRange (6502)", { 
   assert.equal(load.loaded, true, "loadMedia failed: " + JSON.stringify(load));
   toJSON(await client.callTool({ name: "frame", arguments: { op: "step",  frames: 10 } }));
 
-  const sr = toJSON(await client.callTool({ name: "setRegister", arguments: { regId: 0, value: 0x42 } }));
+  const sr = toJSON(await client.callTool({ name: "cpu", arguments: { op: "setReg",  regId: 0, value: 0x42 } }));
   assert.equal(sr.notSupported, undefined, "setRegister notSupported on atari2600");
   assert.equal((sr.valueRaw & 0xFF), 0x42, "setRegister (A) didn't round-trip: " + JSON.stringify(sr));
 

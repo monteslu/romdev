@@ -104,7 +104,7 @@ test("MSX PC breakpoint + read watch + single-step (blueMSX Z80)", { timeout: 24
 
   // 3) With the CPU frozen at that instruction, getCPUState reads the live regs.
   const regs = toJSON(await client.callTool({
-    name: "getCPUState", arguments: { platform: "msx" },
+    name: "cpu", arguments: { op: "read",  platform: "msx" },
   }));
   const pcField = regs.pc ?? regs.PC ?? regs.regs?.pc;
   assert.ok(pcField !== undefined, "getCPUState returned no PC field: " + JSON.stringify(regs).slice(0, 200));

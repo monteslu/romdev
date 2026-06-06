@@ -96,7 +96,7 @@ test("PC Engine PC breakpoint + read watch + single-step (geargrafx HuC6280)", {
 
   // 3) With the CPU frozen, getCPUState reads the live regs.
   const regs = toJSON(await client.callTool({
-    name: "getCPUState", arguments: { platform: "pce" },
+    name: "cpu", arguments: { op: "read",  platform: "pce" },
   }));
   const pcField = regs.pc ?? regs.PC ?? regs.regs?.pc;
   assert.ok(pcField !== undefined, "getCPUState returned no PC field: " + JSON.stringify(regs).slice(0, 200));

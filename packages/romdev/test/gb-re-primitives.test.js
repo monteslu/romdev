@@ -57,12 +57,12 @@ test("GB RE primitives: setRegister + watchRange + logPCRange + callSubroutine (
   toJSON(await client.callTool({ name: "frame", arguments: { op: "step",  frames: 60 } }));
 
   // ── item 1: setRegister round-trips (reg-id 0 = A on SM83) ──
-  const sr = toJSON(await client.callTool({ name: "setRegister", arguments: { regId: 0, value: 0xA5 } }));
+  const sr = toJSON(await client.callTool({ name: "cpu", arguments: { op: "setReg",  regId: 0, value: 0xA5 } }));
   assert.equal(sr.notSupported, undefined, "setRegister notSupported — romdev_setreg missing?");
   assert.equal((sr.valueRaw & 0xFF), 0xA5, "setRegister (A) didn't round-trip: " + JSON.stringify(sr));
 
   // setRegister of F (reg-id 1) must round-trip through the split flag fields.
-  const srF = toJSON(await client.callTool({ name: "setRegister", arguments: { regId: 1, value: 0xB0 } }));
+  const srF = toJSON(await client.callTool({ name: "cpu", arguments: { op: "setReg",  regId: 1, value: 0xB0 } }));
   // SM83 F low nibble is always 0; 0xB0 = Z + N + C set, H clear.
   assert.equal((srF.valueRaw & 0xF0), 0xB0, "setRegister (F) didn't round-trip: " + JSON.stringify(srF));
 
@@ -95,8 +95,8 @@ test("GB RE primitives: setRegister + watchRange + logPCRange + callSubroutine (
   //          response means the gate failed; any other outcome means setreg +
   //          pcbreak were both detected. So we assert NOT-notSupported.
   const csRes = await client.callTool({
-    name: "callSubroutine",
-    arguments: { pc: 0x0100, regs: {}, maxFrames: 30, sandbox: true },
+    name: "cpu",
+    arguments: { op: "call",  pc: 0x0100, regs: {}, maxFrames: 30, sandbox: true },
   });
   if (!csRes.isError) {
     const cs = JSON.parse(csRes.content[0].text);

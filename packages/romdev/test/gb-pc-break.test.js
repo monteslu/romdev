@@ -75,7 +75,7 @@ test("GB PC breakpoint + read watch + single-step (gambatte sm83)", { timeout: 2
 
   // 3) getCPUState reads live regs at the frozen PC.
   const regs = toJSON(await client.callTool({
-    name: "getCPUState", arguments: { platform: "gb" },
+    name: "cpu", arguments: { op: "read",  platform: "gb" },
   }));
   const pcField = regs.pc ?? regs.PC ?? regs.regs?.pc;
   assert.ok(pcField !== undefined, "getCPUState returned no PC: " + JSON.stringify(regs).slice(0, 200));

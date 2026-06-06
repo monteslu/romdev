@@ -103,7 +103,7 @@ test("Genesis RE primitives: callSubroutine + watchRange + logPCRange + watchDma
   assert.ok(cov.distinct > 0, "logPCRange found no PCs: " + JSON.stringify(cov));
 
   // ── item 1: setRegister round-trips ──
-  const sr = toJSON(await client.callTool({ name: "setRegister", arguments: { regId: 8, value: 0xDEADBEEF } }));
+  const sr = toJSON(await client.callTool({ name: "cpu", arguments: { op: "setReg",  regId: 8, value: 0xDEADBEEF } }));
   assert.equal(sr.notSupported, undefined, "setRegister notSupported — romdev_setreg missing?");
   assert.equal((sr.valueRaw >>> 0), 0xDEADBEEF, "setRegister didn't take");
 
@@ -111,8 +111,8 @@ test("Genesis RE primitives: callSubroutine + watchRange + logPCRange + watchDma
   //    hijacks the CPU; sandbox:false leaves it at the sentinel) ──
   await client.callTool({ name: "memory", arguments: { op: "write", region: "system_ram", offset: dstOff, hex: "0000000000000000" } });
   const cs = toJSON(await client.callTool({
-    name: "callSubroutine",
-    arguments: { pc: regCopy, regs: { 8: srcblob, 9: dstCpu, 0: 3 }, maxFrames: 60, sandbox: false },
+    name: "cpu",
+    arguments: { op: "call",  pc: regCopy, regs: { 8: srcblob, 9: dstCpu, 0: 3 }, maxFrames: 60, sandbox: false },
   }));
   assert.equal(cs.notSupported, undefined, "callSubroutine notSupported");
   assert.equal(cs.returned, true, "callSubroutine did not return: " + JSON.stringify(cs));
@@ -128,8 +128,8 @@ test("Genesis RE primitives: callSubroutine + watchRange + logPCRange + watchDma
   const spin = symAddr(map, "spin_forever");
   assert.ok(spin, "couldn't find spin_forever in the map");
   const wd = toJSON(await client.callTool({
-    name: "callSubroutine",
-    arguments: { pc: spin, maxFrames: 30, maxInstructions: 200000, sandbox: false },
+    name: "cpu",
+    arguments: { op: "call",  pc: spin, maxFrames: 30, maxInstructions: 200000, sandbox: false },
   }));
   assert.equal(wd.returned, false, "spin should not 'return': " + JSON.stringify(wd));
   assert.equal(wd.watchdog, true, "watchdog must trip on an infinite loop (no hang): " + JSON.stringify(wd));
