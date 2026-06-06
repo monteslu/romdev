@@ -63,6 +63,8 @@ export const MERGE_MAP = {
   breakpoint: { absorbs: ["findWriter", "runUntilWrite", "runUntilPC", "runUntilRead"], axis: "on" },
   // ── watch (LOG-ALL; all 3 from watch-memory.js) ──
   watch: { absorbs: ["watchMemory", "watchRange", "logPCRange"], axis: "on" },
+  // ── dmaTrace (Genesis VDP-DMA; watchDma from watch-memory.js, traceVramSource from trace-vram-source.js) ──
+  dmaTrace: { absorbs: ["watchDma", "traceVramSource"], axis: "precision" },
 };
 
 /** Every OLD tool name that the consolidation removes (absorbed into a new tool). */

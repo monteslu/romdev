@@ -332,7 +332,7 @@ const TOOL_OWNER = {
   playtest: "show", playtestStop: "show", playtestStatus: "show", playtestFramebuffer: "show",
   // advanced category
   runUntil: "advanced",
-  watch: "advanced", breakpoint: "advanced",
+  watch: "advanced", breakpoint: "advanced", dmaTrace: "advanced",
   recordSession: "advanced",
   // entry tier itself (so describeTool works for them)
   listCategories: "entry", loadCategory: "entry", describeTool: "entry", getStatus: "entry",

@@ -69,7 +69,7 @@ test("Genesis RE primitives: callSubroutine + watchRange + logPCRange + watchDma
 
   // ── item 3 FIRST: watchDma must run while the SGDK boot tile/font uploads are
   //    still happening (DMAs fire at boot; once settled there are none). ──
-  const dma = toJSON(await client.callTool({ name: "watchDma", arguments: { frames: 120 } }));
+  const dma = toJSON(await client.callTool({ name: "dmaTrace", arguments: { precision: "exact", frames: 120 } }));
   assert.equal(dma.notSupported, undefined, "watchDma notSupported");
   assert.ok(dma.totalEvents > 0, "watchDma caught no DMAs: " + JSON.stringify(dma));
   assert.ok(dma.dmas[0].vramDest && dma.dmas[0].source, "watchDma entry missing vramDest/source");
