@@ -15,7 +15,6 @@ async function startClient() {
   const [ct, st] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "lynx-re-client", version: "0.0.1" }, { capabilities: {} });
   await Promise.all([server.connect(st), client.connect(ct)]);
-  await client.callTool({ name: "loadCategory", arguments: { category: "all" } });
   return client;
 }
 const toJSON = (res) => { assert.equal(res.isError, undefined, "isError: " + JSON.stringify(res)); return JSON.parse(res.content[0].text); };

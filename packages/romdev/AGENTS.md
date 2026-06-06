@@ -20,7 +20,7 @@ This rule is about **compilers and emulators only** — NOT about content tools.
 
 ### romdev also packs assets in-server — reach for these first
 
-Asset conversion is bundled too, so you often don't need the host tools at all. First-class tools: `encodeArt({stage:'tiles'})`, `encodeArt({stage:'tilemap'})`, `encodeArt({stage:'quantize'})`, `palette({source:'platformMaster'})`, `palette({source:'lospec'})`, `encodeArt({stage:'validate'})`, the loaders `importArt({from:'texturepacker'})` / `importArt({from:'aseprite'})` / `importArt({from:'gif'})` / `importArt({from:'tiled'})`, and helpers like `sprites({op:'capture'})` / `importArt({from:'rom'})`. The canonical quantize→tile→pack path lives here — `loadCategory({category:"assets"})` to see it. Typical flow: paint pixels in a host editor (or generate a PNG), then `encodeArt({stage:'quantize'})` → `encodeArt({stage:'tiles'})` to get platform-native tiles. (You can do the whole thing in-server too when the art is procedural.)
+Asset conversion is bundled too, so you often don't need the host tools at all. First-class tools: `encodeArt({stage:'tiles'})`, `encodeArt({stage:'tilemap'})`, `encodeArt({stage:'quantize'})`, `palette({source:'platformMaster'})`, `palette({source:'lospec'})`, `encodeArt({stage:'validate'})`, the loaders `importArt({from:'texturepacker'})` / `importArt({from:'aseprite'})` / `importArt({from:'gif'})` / `importArt({from:'tiled'})`, and helpers like `sprites({op:'capture'})` / `importArt({from:'rom'})`. The canonical quantize→tile→pack path lives here. Typical flow: paint pixels in a host editor (or generate a PNG), then `encodeArt({stage:'quantize'})` → `encodeArt({stage:'tiles'})` to get platform-native tiles. (You can do the whole thing in-server too when the art is procedural.)
 
 ### Native-addon prompts are a packaging bug — never compile on the host
 
@@ -31,8 +31,8 @@ A couple of optional features load a native Node addon (most notably the `playte
 If a human is sitting next to you during this session — and that's most sessions in practice — open the playtest window as soon as your first build succeeds. `playtest()` opens a native SDL window that runs your ROM live and accepts USB gamepads (hot-plugged controllers are picked up automatically). It returns **immediately** — the render loop runs in the background, so you keep calling other tools while the human plays. Every other MCP tool keeps working against that same running ROM, and **`build({output:'run'})`/`loadMedia` rebuilds update the window in place** — the window follows your latest build, no relaunch and no crash on rebuild. A human sitting next to you should be **playing the game** while you iterate, not watching screenshots scroll past.
 
 ```
-loadCategory({category:"show"})  // registers playtest / playtestStop / playtestStatus / playtestFramebuffer
-playtest()                       // opens the SDL window (returns immediately)
+playtest()                       // opens the SDL window (returns immediately). op:'open' is the default;
+                                 // playtest({op:'stop'|'status'|'framebuffer'}) close / check / capture-what-the-human-sees
 ```
 
 After that, keep iterating with `build({output:'run'})` / `build({output:'rom'})` / readMemory / screenshot exactly as before — they all act on the live emulator the user is playing. Because the window and `screenshot()` read the **same** live host, what you screenshot is what the human sees. (If you ever need to be explicit — e.g. to double-check the human's exact frame — `playtestFramebuffer()` captures the window's framebuffer directly, with `source`/`loadedMediaPath`/`frameCount` metadata.)
@@ -43,9 +43,9 @@ Skip playtest only when there's clearly no human in the loop: CI runs, automated
 
 ## Tool surface: everything is loaded — just call the tool
 
-**All ~40 tools are registered and callable from session init. You do NOT need `loadCategory` first.** If you see a tool name anywhere in this doc or via `catalog({op:'categories'})`, you can call it right now. Each tool is a small VERB with an operation axis — `memory({op})`, `build({output})`, `sprites({op})`, `breakpoint({on})`, `cpu({op})` — so the whole surface is a few dozen names, not a few hundred.
+**All ~34 tools are registered and callable from session init — there is no loading step.** If you see a tool name anywhere in this doc or via `catalog({op:'categories'})`, you can call it right now. Each tool is a small VERB with an operation axis — `memory({op})`, `build({output})`, `sprites({op})`, `breakpoint({on})`, `cpu({op})` — so the whole surface is a few dozen names, not a few hundred.
 
-(We used to lazy-load tools behind `loadCategory` to keep the surface small. It caused more harm than good — agents burned round-trips re-loading categories and got confused about what was callable. So the full surface loads up front. If a server is explicitly run in lean mode — `ROMDEV_LEAN_TOOLS=1` — then only an entry tier loads and you arm the rest with `loadCategory`; that's the exception, not the default.)
+(We used to lazy-load tools behind a `loadCategory` call. It caused more harm than good — agents burned round-trips re-loading categories, and dynamic registration never propagated reliably to clients anyway. The consolidation shrank the surface enough that the entire thing loads up front; the old `loadCategory`/`describeTool` discovery tools are gone.)
 
 `catalog({op:'categories'})` still exists as a **map of what's available, grouped by purpose** — useful for discovery, not a gate:
 

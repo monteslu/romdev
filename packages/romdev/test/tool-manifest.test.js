@@ -15,11 +15,10 @@ import { MERGE_MAP, absorbedToolNames, consolidatedToolNames } from "../src/mcp/
 
 async function liveToolNames() {
   const s = new McpServer({ name: "m", version: "0.0.1" }, { capabilities: { tools: {} } });
-  registerTools(s, z);
+  registerTools(s, z); // registers EVERY tool up front — no loadCategory dance anymore
   const [ct, st] = InMemoryTransport.createLinkedPair();
   const c = new Client({ name: "mc", version: "0.0.1" }, { capabilities: {} });
   await Promise.all([s.connect(st), c.connect(ct)]);
-  await c.callTool({ name: "loadCategory", arguments: { category: "all" } });
   const list = await c.listTools();
   return new Set(list.tools.map((t) => t.name));
 }
@@ -46,11 +45,12 @@ test("manifest: no tool is absorbed by two different consolidated tools (no dupe
   }
 });
 
-test("tool-count budget: consolidated surface stays small (<=42)", async () => {
-  // Consolidation landed: 132 -> 40. The ceiling now GUARDS the win — a new
-  // capability must be a PARAMETER on an existing tool, not a new top-level
-  // tool. If you truly need a new tool, add it to MERGE_MAP (as unchanged) AND
-  // bump this ceiling deliberately, in the same PR, so the growth is visible.
+test("tool-count budget: consolidated surface stays small (<=35)", async () => {
+  // Consolidation landed: 132 -> 34 (the progressive-disclosure path was deleted
+  // too — every tool registers up front). The ceiling now GUARDS the win — a new
+  // capability must be a PARAMETER on an existing tool, not a new top-level tool.
+  // If a new tool is genuinely warranted, add it to MERGE_MAP AND bump this
+  // ceiling deliberately, in the same PR, so the growth is visible.
   const live = await liveToolNames();
-  assert.ok(live.size <= 42, `tool count ${live.size} exceeds the consolidated budget of 42 — a new capability should be a PARAMETER on an existing tool, not a new tool. If a new tool is genuinely warranted, bump this ceiling deliberately.`);
+  assert.ok(live.size <= 35, `tool count ${live.size} exceeds the consolidated budget of 35 — a new capability should be a PARAMETER on an existing tool, not a new tool. If a new tool is genuinely warranted, bump this ceiling deliberately.`);
 });

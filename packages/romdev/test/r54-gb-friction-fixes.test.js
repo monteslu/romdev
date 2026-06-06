@@ -469,7 +469,6 @@ test("R54 #8: buildSourceWithDebug accepts GB and returns mapText", { timeout: 1
   const [ct, st] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "r54-debug-c", version: "0.0.1" }, { capabilities: {} });
   await Promise.all([server.connect(st), client.connect(ct)]);
-  await client.callTool({ name: "loadCategory", arguments: { category: "all" } });
 
   const main = `void main(void) { volatile unsigned char x; x = 42; for (;;) ; }\n`;
   const r = await client.callTool({

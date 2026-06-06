@@ -58,10 +58,9 @@ async function loadInstructions() {
     return await readFile(agentsPath, "utf-8");
   } catch {
     return [
-      "romdev: homebrew retro game development for coding agents.",
-      "Progressive disclosure: you see ~5 entry-tier tools by default. Call listCategories() to discover the other ~60 tools (debug, memory, assets, etc.).",
-      "loadCategory({category:'<name>'}) registers a tier; loadCategory({category:'all'}) registers everything in one call.",
-      "Non-game tasks (disassemble a ROM, convert assets, drive an existing emulator session) all live in deferred categories — call listCategories first.",
+      "romdev: homebrew retro game development + reverse-engineering for coding agents.",
+      "All ~34 tools register at session init — call any by name directly, no loading step. Each is a domain VERB with an operation axis: memory({op}), build({output}), breakpoint({on}), cpu({op}), sprites({op}), tiles({as}), disasm({target}), romPatch({op}), ...",
+      "catalog({op:'categories'}) maps the tools by purpose (a guide, not a gate); catalog({op:'status'}) is a session re-orient.",
     ].join("\n");
   }
 }

@@ -39,7 +39,6 @@ async function startSession() {
   const [clientT, serverT] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "iso-test", version: "0.0.1" }, { capabilities: {} });
   await Promise.all([server.connect(serverT), client.connect(clientT)]);
-  await client.callTool({ name: "loadCategory", arguments: { category: "all" } });
   return client;
 }
 

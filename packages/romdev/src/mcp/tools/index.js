@@ -1,18 +1,17 @@
-// Register MCP tools on the server, with progressive disclosure.
+// Register MCP tools on the server.
 //
-// Entry tier (always loaded at session init):
-//   - listCategories, loadCategory  → discover + load additional tools
-//   - describeTool                  → introspect a tool's schema/usage
-//   - getStatus                     → cheap "what's loaded right now?" re-orient
-//   - buildSource                   → universal build verb (every workflow needs)
-//   - playtest / playtestStop / playtestStatus → open a live window for the
-//       human ASAP. The server exists to get games in front of people, so the
-//       human-visibility tools must never sit behind a loadCategory call.
+// The surface is ~34 consolidated domain tools (memory({op}), build({output}),
+// breakpoint({on}), …) and EVERY one registers at session init. There is no
+// progressive-disclosure / lean mode anymore: the dynamic loadCategory dance
+// never propagated reliably to clients (they don't re-read tools/list after a
+// list_changed notification), and the consolidated surface is small enough that
+// loading it all up front is simply correct. `catalog({op:'categories'})` still
+// exposes the category map for orientation — it's a guide, not a gate.
 //
-// Everything else lives in deferred categories. Agents call
-// `loadCategory({category:"debug"})` to register the debug tier into
-// their session. `loadCategory({category:"all"})` is the power-user
-// escape hatch — registers everything in one call.
+// The CATEGORIES array below still groups tools by purpose (used by catalog and
+// by the internal one-shot "build succeeded → consider playtest" hint), and
+// `disclosure.loadCategory("all")` is the internal "register every category"
+// helper — NOT a user-facing tool.
 //
 // Design principle "narrow at entry, deep once in": categories don't
 // gate access; they organize discoverability. Once loaded, primitives
@@ -188,65 +187,17 @@ export function registerTools(server, z, sessionKey) {
       const categories = disclosure.listCategories();
       return jsonContent({
         categories,
-        entryTier: ["catalog", "loadCategory", "describeTool", "build", "playtest"],
-        powerUserHint: "Call loadCategory({category:\"all\"}) to register every category at once — skips the discovery dance for capable agents.",
-        humanInTheLoopHint: "Iterate INTERNALLY on screenshots first (build({output:'run'}) returns one inline; frame({op:'screenshot'/'stepAndShot'}) re-shoots the live host) — don't open a window to debug. Once the game actually boots and shows the feature you're working on, call playtest({}) so your human can watch and play it live. playtest is entry-tier. Opening a window on a black screen or a crash just wastes the human's attention — show them something that works.",
+        note: "Every tool registers at session init — this catalog is just a map grouped by purpose, NOT a gate. Call any tool by name directly.",
+        humanInTheLoopHint: "Iterate INTERNALLY on screenshots first (build({output:'run'}) returns one inline; frame({op:'screenshot'/'stepAndShot'}) re-shoots the live host) — don't open a window to debug. Once the game actually boots and shows the feature you're working on, call playtest({}) so your human can watch and play it live. Opening a window on a black screen or a crash just wastes the human's attention — show them something that works.",
       });
     }),
   );
 
-  // loadCategory: register the deferred tools for one (or all) categories.
-  // Response includes the full tool schemas just registered, so the agent
-  // can call them immediately without waiting for tools/list_changed to
-  // propagate to its client (which is async).
-  server.tool(
-    "loadCategory",
-    "Register a tool category into your session. After this call the returned tools are callable immediately — no need to wait for tools/list_changed. Pass `category:\"all\"` to load every category in one call (power-user escape hatch). Idempotent: re-loading a loaded category is safe.\n\n" +
-    "RESPONSE: by default returns just {name, description} per tool to keep the response small (loading the full 65-tool surface with schemas can exceed the tool-output cap). Call `describeTool({name})` to get the full schema for a specific tool when you need it. Pass `verbose:true` to get full schemas inline — only useful if you're confident the response will fit.",
-    {
-      category: z.string().describe("Category name from listCategories(), or 'all' to load everything."),
-      verbose: z.boolean().default(false).describe("If true, include each tool's full parameter schema in the response (large). Default: brief {name, description} only — call describeTool for individual schemas."),
-    },
-    safeTool(async ({ category, verbose }) => {
-      const r = disclosure.loadCategory(category, { verbose });
-      return jsonContent({
-        loaded: r.loaded,
-        alreadyLoaded: r.alreadyLoaded,
-        toolsRegistered: r.tools.length,
-        tools: r.tools,
-        hint: r.tools.length > 0
-          ? `${r.tools.length} tools are now callable. Call them by name directly; don't wait for tools/list_changed.${verbose ? "" : " Call describeTool({name}) for a tool's full schema."}`
-          : `Category was already loaded; nothing new registered.`,
-      });
-    }),
-  );
-
-  // describeTool: get a tool's schema + description without crawling internals.
-  server.tool(
-    "describeTool",
-    "Return the full schema, description, and parameters of a named tool. Use this when listCategories or loadCategory shows you a tool name but you want to know what params it takes before calling it.",
-    {
-      name: z.string().describe("Exact tool name (case-sensitive)."),
-    },
-    safeTool(async ({ name }) => {
-      const desc = disclosure.describe(name);
-      if (!desc) {
-        // Structured error: name the category that owns this tool, if any,
-        // so the agent knows what to load. The category index lives in
-        // TOOL_OWNER below; we keep it in sync with the register fns.
-        const owner = ownerCategoryOf(name);
-        if (owner) {
-          throw new Error(
-            `tool '${name}' is not loaded in this session. ` +
-            `It belongs to category '${owner}'. ` +
-            `Call loadCategory({category:"${owner}"}) to register it, then call describeTool again.`
-          );
-        }
-        throw new Error(`unknown tool '${name}'. Call listCategories() to see what's available.`);
-      }
-      return jsonContent(desc);
-    }),
-  );
+  // loadCategory + describeTool DELETED with the progressive-disclosure path:
+  // the whole surface is ~34 tools now and every one registers at session init,
+  // so the dynamic lean-mode dance (which never worked reliably — clients don't
+  // re-read tools/list after list_changed) has no reason to exist. `catalog`
+  // still exposes the category map for orientation. (See the consolidation.)
 
   // getStatus is now catalog({op:'status'}).
 
@@ -276,15 +227,15 @@ export function registerTools(server, z, sessionKey) {
   //
   // So by default we register EVERY category at session init. listCategories
   // / loadCategory still exist (idempotent, harmless) for clients that probe
-  // them, and a token-constrained client can opt back into lean mode with
-  // ROMDEV_LEAN_TOOLS=1 (only the entry tier loads; agent calls loadCategory
-  // as needed).
-  if (process.env.ROMDEV_LEAN_TOOLS !== "1") {
-    try {
-      disclosure.loadCategory("all");
-    } catch (e) {
-      console.error("[mcp] auto-load-all failed (continuing with entry tier):", e?.message ?? e);
-    }
+  // Register EVERY category now — there is no lean/deferred mode anymore. The
+  // surface is small enough (~34 tools) that loading it all up front is the
+  // right call (the dynamic loadCategory dance never propagated reliably to
+  // clients). `disclosure.loadCategory("all")` is just the internal "register
+  // all categories" helper here, not a user-facing tool.
+  try {
+    disclosure.loadCategory("all");
+  } catch (e) {
+    console.error("[mcp] category registration failed:", e?.message ?? e);
   }
 }
 
@@ -329,8 +280,8 @@ const TOOL_OWNER = {
   runUntil: "advanced",
   watch: "advanced", breakpoint: "advanced", dmaTrace: "advanced",
   recordSession: "advanced",
-  // entry tier itself (so describeTool works for them)
-  catalog: "entry", loadCategory: "entry", describeTool: "entry",
+  // entry tier itself
+  catalog: "entry",
   build: "entry", listRunnableFormats: "entry",
 };
 
