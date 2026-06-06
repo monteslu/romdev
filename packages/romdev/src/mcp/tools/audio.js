@@ -121,31 +121,42 @@ export function registerAudioTools(server, z, sessionKey) {
   server.tool(
     "audioDebug",
     "Debug sound / transcribe music on the running ROM. `op`: 'inspect' | 'record'.\n" +
-    "'inspect': decode a sound CHIP's live per-channel state — frame-accurate, no driver RE. `chip`: 'nes' (2A03: " +
+    "'inspect': decode a sound CHIP's per-channel state — no driver RE. `chip`: 'nes' (2A03: " +
     "pulse1/2/triangle/noise/dmc, timer→note/duty/vol/playing), 'gb'/'gba' (DMG APU; GBA + 2 DMA FIFO), 'dsp' " +
     "(SNES S-DSP per-voice vol/pitch/adsr + `env` 0=silent + `bufLastSamples` proves audio + `flg`), 'psg' " +
     "(Genesis/SMS SN76489), 'ym2612' (Genesis FM raw-blob for diffing), 'sid' (C64), 'mikey' (Lynx), 'pce' (PCE " +
     "PSG 6ch), 'ay8910' (MSX). All 14 systems. **GOTCHA: S-DSP FLG is $6C, KOFF is $5C (many refs swap them); " +
-    "power-on FLG=$E0 → your driver MUST clear bit 6.** To ASSERT, use this; pair with watch(region:'nes_apu_regs').\n" +
+    "power-on FLG=$E0 → your driver MUST clear bit 6.**\n" +
+    "Single-frame by default (a snapshot — can't assert a melody). **Pass `frames:N` to TRACE: it steps N frames, " +
+    "samples the chip each frame, and returns a per-channel `timeline` (frequency/attenuation/note over time, " +
+    "de-duplicated to transitions) — a headless NOTE-TIMELINE you can assert a tune on without a WAV.** `sampleEvery` " +
+    "thins it; `setInputs` holds input during the trace. To ASSERT, use this; pair with watch(region:'nes_apu_regs').\n" +
     "'record': capture audio to a WAV over `frames` frames (`setInputs` to hold a button, e.g. 'press B for SFX'). " +
     "Sample rate is whatever the core emits (32000 SNES SPC / 48000 most / 44100). **A WAV is for a HUMAN to HEAR — " +
-    "an agent can't listen; use op:'inspect' to assert.** Caveat: inspect doesn't expose Genesis XGM2 PCM, so " +
-    "'did this sampled SFX fire' on Genesis is still record-and-listen.",
+    "an agent can't listen. To verify a TUNE/melody headlessly: either op:'inspect' with `frames` (the chip note-" +
+    "timeline above), or record the WAV and run a local FFT/Goertzel pass on it to pull the pitch contour.** Caveat: " +
+    "inspect doesn't expose Genesis XGM2 PCM, so 'did this sampled SFX fire' on Genesis is still record-and-FFT.",
     {
-      op: z.enum(["inspect", "record"]).describe("inspect a sound chip's live state; or record audio to a WAV."),
+      op: z.enum(["inspect", "record"]).describe("inspect a sound chip's live state (single-frame, or a frames trace); or record audio to a WAV."),
       chip: z.enum(["nes", "gb", "gba", "dsp", "psg", "ym2612", "sid", "mikey", "pce", "ay8910"]).optional().describe("op=inspect: which sound chip to decode (all 14 systems mapped)."),
-      frames: z.number().int().min(1).max(60000).default(180).describe("op=record: emulator frames to capture (60 = 1s NTSC)."),
+      frames: z.number().int().min(1).max(60000).optional().describe("op=record: emulator frames to capture (default 180 = 3s NTSC). op=inspect: if set, TRACE the chip over N frames into a per-channel timeline; OMIT for a single-frame snapshot."),
+      sampleEvery: z.number().int().min(1).default(1).describe("op=inspect trace: keep only every Nth frame's sample (thins a long trace). Transitions are always preserved between kept frames."),
       path: z.string().optional().describe("op=record: absolute path to write the WAV file to."),
-      setInputs: z.array(inputShape).max(2).optional().describe("op=record: input state to hold during the recording (e.g. press B to fire SFX)."),
+      setInputs: z.array(inputShape).max(2).optional().describe("op=record / op=inspect trace: input state to hold during the run (e.g. press B to fire SFX)."),
     },
     safeTool(async (args) => {
       if (args.op === "inspect") {
         if (!args.chip) throw new Error("audioDebug({op:'inspect'}): `chip` is required.");
+        // frames set → trace the chip over time into a note-timeline; else single-frame snapshot.
+        if (args.frames != null && args.frames > 0) {
+          return await traceAudioChip(sessionKey, args);
+        }
         return await getAudioStateCore(args);
       }
       if (args.op !== "record") throw new Error(`audioDebug: unknown op '${args.op}'`);
       if (!args.path) throw new Error("audioDebug({op:'record'}): `path` is required.");
-      const { frames, path: outPath, setInputs } = args;
+      const { path: outPath, setInputs } = args;
+      const frames = args.frames ?? 180;
       const { getHost } = await import("../state.js");
       const host = getHost(sessionKey);
       if (!host.status.platform) {
@@ -202,6 +213,88 @@ export function registerAudioTools(server, z, sessionKey) {
       });
     }),
   );
+}
+
+// ── audioDebug({op:'inspect', frames}) — chip note-timeline ──────────────────
+// The numeric per-channel fields worth tracking over time, in priority order.
+// A chip decode returns channels under various keys (tones/voices/pulses/...);
+// we time-series whichever of these fields each channel object exposes.
+const TRACE_FIELDS = ["note", "frequency", "freq", "period", "attenuation", "volume", "vol", "playing", "enabled", "key", "env"];
+
+/** Pull the per-channel state out of a chip decode into a flat {channelKey: {field:val}} map. */
+function channelsOf(state) {
+  const out = {};
+  for (const [k, v] of Object.entries(state)) {
+    if (Array.isArray(v) && v.length && typeof v[0] === "object") {
+      // e.g. tones:[{...}], voices:[{...}], pulses:[{...}]
+      v.forEach((ch, i) => {
+        const picked = {};
+        for (const f of TRACE_FIELDS) if (ch[f] !== undefined) picked[f] = ch[f];
+        if (Object.keys(picked).length) out[`${k}[${i}]`] = picked;
+      });
+    } else if (v && typeof v === "object" && !Array.isArray(v)) {
+      // e.g. noise:{...}
+      const picked = {};
+      for (const f of TRACE_FIELDS) if (v[f] !== undefined) picked[f] = v[f];
+      if (Object.keys(picked).length) out[k] = picked;
+    }
+  }
+  return out;
+}
+
+/**
+ * Trace a sound chip over `frames` frames → a per-channel timeline of value
+ * TRANSITIONS (so a held note is one entry, not N). The headless note-timeline
+ * an agent can assert a melody on without recording a WAV.
+ */
+async function traceAudioChip(sessionKey, { chip, platform, frames, sampleEvery = 1, setInputs }) {
+  const { getHost } = await import("../state.js");
+  const host = getHost(sessionKey);
+  if (!host.status.platform) throw new Error("audioDebug({op:'inspect', frames}): no media loaded — call loadMedia first.");
+
+  if (setInputs && setInputs.length > 0) host.setInput({ ports: setInputs });
+
+  // getAudioStateCore returns jsonContent({...}); pull the structured object.
+  const decode = async () => {
+    const r = await getAudioStateCore({ chip, platform });
+    const txt = r.content?.find?.((c) => c.type === "text")?.text;
+    return txt ? JSON.parse(txt) : {};
+  };
+
+  // Per-channel timeline: list of { frame, ...changedFields } whenever a field changes.
+  const timelines = {};
+  const lastSeen = {};
+  const startFrame = host.status.frameCount;
+  for (let i = 0; i < frames; i++) {
+    host.stepFrames(1);
+    if (i % sampleEvery !== 0 && i !== frames - 1) continue;
+    const chans = channelsOf(await decode());
+    for (const [chKey, fields] of Object.entries(chans)) {
+      const prev = lastSeen[chKey];
+      // Record an entry only when something this channel reports changed.
+      const changed = !prev || TRACE_FIELDS.some((f) => fields[f] !== undefined && fields[f] !== prev[f]);
+      if (changed) {
+        (timelines[chKey] ??= []).push({ frame: i, ...fields });
+        lastSeen[chKey] = fields;
+      }
+    }
+  }
+  if (setInputs && setInputs.length > 0) host.setInput({ ports: [{}, {}] });
+
+  const transitions = Object.values(timelines).reduce((n, t) => n + t.length, 0);
+  return jsonContent({
+    chip,
+    framesTraced: frames,
+    startFrame,
+    endFrame: host.status.frameCount,
+    ...(sampleEvery > 1 ? { sampleEvery } : {}),
+    channels: Object.keys(timelines),
+    transitions,
+    timeline: timelines,
+    note: transitions === 0
+      ? "No channel state changed across the trace — either nothing is playing (check op:'inspect' single-frame first), or your driver writes the chip less often than sampled. For PCM-only Genesis SFX (XGM2 PCM), inspect can't see it — record + FFT instead."
+      : `Per-channel note-timeline: each entry is a value TRANSITION at frame N (held notes collapse to one entry). Assert your melody on the 'frequency'/'note' sequence per channel; compare frame deltas for rhythm.`,
+  });
 }
 
 /**

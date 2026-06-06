@@ -210,17 +210,26 @@ The Genesis has *two* sound chips:
   the PSG-only path.
 - **SN76489** (PSG) — same chip as the SMS. 3 square + 1 noise.
 
-SGDK exposes both via the XGM2 driver. For SFX/music:
+SGDK exposes both via the XGM2 driver. For music:
 
 ```c
-extern const u8 my_music[];  // XGM2-format track
-XGM2_startPlay(my_music);
+extern const u8 my_music[];   // COMPILED XGM2 blob (.incbin'd) — NOT raw VGM
+XGM2_play(my_music);          // the R58 fn is XGM2_play (there is NO XGM2_startPlay)
 XGM2_stop();
-SND_PSG_*  // legacy 4-channel PSG playback
 ```
 
-Hand-rolling YM2612 register pokes is possible but rarely worth it
-unless you're building a music engine.
+**Genesis music how-to (the whole path):** author a `.vgm` (any tracker/VGM
+export), then **compile it to XGM2** — `XGM2_play()` needs a *compiled* blob
+(split FM/PSG streams + a sample table), not raw VGM. romdev does the compile
+for you with **`encodeAudio({target:'xgm2', vgmPath, name})`** → a ready-to-`#include`
+256-aligned C array + `<NAME>_LEN`. Then `XGM2_play(name)`. (The compiler is a
+pure-JS port of SGDK's `xgm2tool` — no Java/jar to install.) For PSG-only tunes
+this coexists with XGM2 *PCM* SFX (`encodeAudio({target:'xgm2pcm'})`); for FM
+music it uses the YM2612.
+
+NOTE: the legacy `xgmtool` / `.xgc` / `XGM_*` driver is a DIFFERENT, older format
+— don't feed an `.xgc` to `XGM2_load`/`XGM2_play`, it'll misparse. Use the XGM2
+path above. Hand-rolling YM2612 register pokes is possible but rarely worth it.
 
 **Sampled SFX (PCM):** XGM2 plays 8-bit signed PCM samples on its PCM channels
 (`XGM2_playPCM(sample, len, SOUND_PCM_CH1)` /
