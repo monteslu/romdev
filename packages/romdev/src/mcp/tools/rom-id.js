@@ -1,6 +1,10 @@
 import { imageContent, jsonContent, safeTool } from "../util.js";
 import { intentZod, resolveIntent } from "../../platforms/common/intent.js";
 import { getDefaultPalette, DEFAULT_PALETTES } from "../../platforms/common/default-palette.js";
+import { spliceChrCore } from "./splice-chr.js";
+import { relocateBlockCore, makeStoredBlockCore, findPointerToCore, PLATFORM_REGISTRY } from "./reinject.js";
+import { findFreeSpaceCore } from "./free-space.js";
+import { diffRomsCore } from "./diff-roms.js";
 
 /** cart({op:'identify'}) — sniff an unknown ROM/zip's platform. Returns jsonContent. */
 export async function identifyRomCore({ path: filePath, base64, hint }) {
@@ -14,53 +18,114 @@ export async function identifyRomCore({ path: filePath, base64, hint }) {
     return jsonContent(await mod.identifyFile(filePath));
 }
 
+// romPatch({op:'write'}) — write N bytes into a file at an offset.
+export async function patchFileCore({ path: filePath, offset, hex, base64, expect, outputPath, allowExpand }) {
+  const { patchFile } = await import("../../rom-id/patch.js");
+  return await patchFile({ path: filePath, outputPath, offset, hex, base64, expect, allowExpand });
+}
+
+// romPatch({op:'writeMany'}) — apply a list of writes to a ROM file.
+export async function patchRomCore({ input, output, writes, allowExpand }) {
+  const { patchRomFile } = await import("../../rom-id/patch.js");
+  return await patchRomFile({ input, output, writes, allowExpand });
+}
+
 export function registerRomIdTools(server, z, sessionKey) {
-  // identifyRom folded into the `cart` tool (cart({op:'identify'})).
+  // identifyRom folded into `cart`; patchFile/patchRom/spliceCHR/relocate/etc.
+  // folded into the `romPatch` tool (router below).
+  const PLATFORMS = Object.keys(PLATFORM_REGISTRY);
 
   server.tool(
-    "patchFile",
-    "Use this to write N bytes into any binary file at a byte offset — the generic ROM-hack splicer " +
-    "(PRG patches, CHR splices, SNES tile/sample injection, etc.). Pass `expect` (the bytes you think " +
-    "are there now) and the write is refused on mismatch — catches the classic \"patched the wrong " +
-    "region/revision\" silent-corruption footgun; highly recommended. `allowExpand:true` to grow the file. " +
-    "TIP: before patching, prove the byte matters by forcing it live with writeMemory on the running " +
-    "emulator (or find the writer via watchMemory/runUntilWrite) — static disasm can't tell \"matches the " +
-    "pattern\" from \"actually runs.\"",
+    "romPatch",
+    "Patch / re-inject / inspect a ROM file on disk, one tool keyed by `op`. The ROM-hack toolkit. " +
+    "**`expect=` (the bytes you think are there now) on every write guards the classic wrong-revision-corruption footgun — highly recommended.** " +
+    "Spine: `{path, platform}`. **TIP: before patching, prove the byte matters by forcing it live with memory({op:'write'}) on the running emulator (static disasm can't tell 'matches the pattern' from 'actually runs').**\n" +
+    "• op:'write' — write N bytes into any binary file at `offset` (the generic splicer: PRG patches, CHR splices, SNES tile/sample injection). `hex`|`base64`, `expect`, `allowExpand` (grow the file — default OFF; most hacks must NOT change size or headers/mapper break), `outputPath` (else in place).\n" +
+    "• op:'writeMany' — apply a LIST of {offset, hex|base64} `writes` from `input` ROM to `output`.\n" +
+    "• op:'spliceCHR' — inject a PNG's tiles into a CHR region (`pngBase64`, `tileIndex`, `bank`, `chrFileOffset`, `paletteHint`, `expect`).\n" +
+    "• op:'relocate' — write an edited block to free ROM space and repoint a pointer at it (the safe 'don't overwrite in place' move when an edit changes size). `newHex`|`newBase64`, `toOffset` (from op:'findFree'), `pointerOffset` (from op:'findPointer'), `pointerWidth`/`pointerEndian`/`pointerValue`, `dryRun`.\n" +
+    "• op:'makeStored' — wrap raw bytes so the game's OWN decompressor expands them VERBATIM (edit tiles → makeStored → write, no compressor needed). `rawHex`|`rawBytes`, `format` (raw/lz77-literal/lz2-direct/sega-rle/konami-rle/...), `interleave`. ALWAYS verify via cpu({op:'call'}) on the game's decompressor.\n" +
+    "• op:'findFree' — find a run of free space to relocate into. `minLength`, `fillBytes`, `start`, `end`.\n" +
+    "• op:'findPointer' — find every pointer in the ROM that references `romOffset` (platform-correct encoding), the missing piece for redirecting a loader. `mapper` (SNES). On banked 8-bit systems a 16-bit pointer is page-ambiguous — correlate with the bank-set instruction.\n" +
+    "• op:'diff' — diff two ROMs (`a`, `b`) → the changed byte ranges. `maxChangesReturned`.",
     {
-      path: z.string().describe("Absolute path to the file to modify."),
-      offset: z.number().int().min(0).describe("Byte offset where the write begins (file offset, not CPU address)."),
-      hex: z.string().optional().describe("Bytes to write, as hex (e.g. 'EA EA' or 'EAEA' — whitespace + commas tolerated)."),
-      base64: z.string().optional().describe("Bytes to write, as base64. Use this for large payloads."),
-      expect: z.string().optional().describe("Hex of the bytes you EXPECT to find at `offset` right now. If they don't match, the write is refused with a diff. Highly recommended for any patch you want to be re-runnable safely."),
-      outputPath: z.string().optional().describe("Write result to a different path (preserves the original). If omitted, the file is modified in place."),
-      allowExpand: z.boolean().default(false).describe("Permit the write to extend past EOF (file grows). Default false — most ROM hacks must NOT change size or the headers + mapper layout break."),
+      op: z.enum(["write", "writeMany", "spliceCHR", "relocate", "makeStored", "findFree", "findPointer", "diff"])
+        .describe("write=N bytes at an offset; writeMany=a list of writes; spliceCHR=PNG tiles into CHR; relocate=write a block to free space + repoint; makeStored=wrap bytes for the game's decompressor; findFree=find free space; findPointer=find pointers to an offset; diff=diff two ROMs."),
+      path: z.string().optional().describe("op:write/spliceCHR/relocate/findFree/findPointer — absolute path to the ROM/file."),
+      platform: z.enum(PLATFORMS).optional().describe("op:findPointer/relocate/makeStored/findFree/spliceCHR/diff — platform (often inferred from extension where optional)."),
+      offset: z.number().int().min(0).optional().describe("op:write — byte offset where the write begins (file offset, not CPU address)."),
+      hex: z.string().optional().describe("op:write — bytes to write as hex (whitespace/commas tolerated)."),
+      base64: z.string().optional().describe("op:write — bytes to write as base64 (large payloads)."),
+      expect: z.string().optional().describe("op:write/spliceCHR — hex of the bytes you EXPECT at the target now; the write is refused on mismatch (wrong-revision guard)."),
+      outputPath: z.string().optional().describe("op:write/relocate — write the result here instead of in place."),
+      allowExpand: z.boolean().default(false).describe("op:write/writeMany — permit the write to extend past EOF (file grows). Default false."),
+      // writeMany
+      input: z.string().optional().describe("op:writeMany — source ROM path."),
+      output: z.string().optional().describe("op:writeMany — destination path for the patched ROM."),
+      writes: z.array(z.object({
+        offset: z.number().int().min(0),
+        hex: z.string().optional(),
+        base64: z.string().optional(),
+      })).min(1).optional().describe("op:writeMany — one or more {offset, hex|base64} writes."),
+      // spliceCHR
+      pngBase64: z.string().optional().describe("op:spliceCHR — base64 PNG whose tiles to inject."),
+      tileIndex: z.number().int().min(0).optional().describe("op:spliceCHR — first CHR tile slot to write."),
+      bank: z.number().int().min(0).optional().describe("op:spliceCHR — NES CHR bank index."),
+      chrFileOffset: z.number().int().min(0).optional().describe("op:spliceCHR — explicit CHR region file offset (overrides bank)."),
+      paletteHint: z.array(z.any()).optional().describe("op:spliceCHR — palette to map the PNG colors to indices."),
+      // relocate
+      newHex: z.string().optional().describe("op:relocate — edited block bytes as hex. Pass this OR newBase64."),
+      newBase64: z.string().optional().describe("op:relocate — edited block bytes as base64."),
+      toOffset: z.number().int().min(0).optional().describe("op:relocate — file offset to WRITE the block at (a run from op:'findFree')."),
+      pointerOffset: z.number().int().min(0).optional().describe("op:relocate — file offset of the pointer to REWRITE (from op:'findPointer'). Omit to only write the block."),
+      pointerWidth: z.number().int().min(2).max(4).optional().describe("op:relocate — pointer byte width (default 4 for Genesis/GBA, 2 otherwise)."),
+      pointerEndian: z.enum(["le", "be"]).optional().describe("op:relocate — pointer endianness (default 'be' for Genesis, 'le' otherwise)."),
+      pointerValue: z.number().int().min(0).optional().describe("op:relocate — override the pointer value to write (else derived from toOffset). Needed when the loader expects a CPU address."),
+      dryRun: z.boolean().default(false).describe("op:relocate — preview the writes without modifying any file."),
+      // makeStored
+      rawHex: z.string().optional().describe("op:makeStored — bytes to store as hex. Pass this OR rawBytes."),
+      rawBytes: z.array(z.number().int().min(0).max(255)).optional().describe("op:makeStored — bytes to store as a number array."),
+      format: z.string().optional().describe("op:makeStored — stored-block format (default 'raw'; lz77-literal/lz2-direct/sega-rle/konami-rle/packbits/kosinski-literal). Call with an invalid format to see the platform's list."),
+      interleave: z.number().int().min(1).max(8).optional().describe("op:makeStored — SMS/GG sega-rle only: deinterleave factor (4 for tiles)."),
+      // findFree
+      minLength: z.number().int().min(1).optional().describe("op:findFree — minimum free-run length to find."),
+      fillBytes: z.array(z.number().int().min(0).max(255)).optional().describe("op:findFree — the filler byte(s) that mark free space (default platform-typical)."),
+      start: z.number().int().min(0).optional().describe("op:findFree — restrict the search to start at this offset."),
+      end: z.number().int().min(0).optional().describe("op:findFree — restrict the search to end at this offset."),
+      maxRunsReturned: z.number().int().min(1).max(2048).default(256).describe("op:findFree — cap the free-runs returned (sorted longest-first)."),
+      // findPointer
+      romOffset: z.number().int().min(0).optional().describe("op:findPointer — the ROM FILE offset you want to find pointers TO."),
+      mapper: z.enum(["lorom", "hirom"]).optional().describe("op:findPointer — SNES only: override mapper detection."),
+      maxHitsReturned: z.number().int().min(1).max(2048).default(256).describe("op:findPointer — cap the hits returned."),
+      // diff
+      a: z.string().optional().describe("op:diff — path to ROM A."),
+      b: z.string().optional().describe("op:diff — path to ROM B."),
+      maxChangesReturned: z.number().int().min(1).max(2048).default(256).describe("op:diff — cap the change ranges returned."),
     },
-    safeTool(async ({ path: filePath, offset, hex, base64, expect, outputPath, allowExpand }) => {
-      const { patchFile } = await import("../../rom-id/patch.js");
-      const r = await patchFile({ path: filePath, outputPath, offset, hex, base64, expect, allowExpand });
-      return jsonContent(r);
-    }),
-  );
-
-  server.tool(
-    "patchRom",
-    "Apply a list of byte writes to a ROM file on disk and write the result. Use for agent-authored ROM hacks: read an existing ROM, decide what to change, patch it out. By default, writes past EOF error; pass allowExpand:true to grow the ROM.",
-    {
-      input: z.string().describe("Source ROM path."),
-      output: z.string().describe("Destination path for the patched ROM."),
-      writes: z.array(
-        z.object({
-          offset: z.number().int().min(0).describe("Absolute byte offset into the ROM."),
-          hex: z.string().optional().describe("Hex string of bytes to write."),
-          base64: z.string().optional().describe("Base64-encoded bytes to write."),
-        }),
-      ).min(1).describe("One or more {offset, hex|base64} writes to apply."),
-      allowExpand: z.boolean().default(false).describe("Allow the ROM to grow if writes extend past EOF."),
-    },
-    safeTool(async ({ input, output, writes, allowExpand }) => {
-      const { patchRomFile } = await import("../../rom-id/patch.js");
-      const r = await patchRomFile({ input, output, writes, allowExpand });
-      return jsonContent(r);
+    safeTool(async (args) => {
+      switch (args.op) {
+        case "write": {
+          if (!args.path || args.offset == null) throw new Error("romPatch({op:'write'}): `path` and `offset` are required.");
+          return jsonContent(await patchFileCore(args));
+        }
+        case "writeMany": {
+          if (!args.input || !args.output || !args.writes) throw new Error("romPatch({op:'writeMany'}): `input`, `output`, and `writes` are required.");
+          return jsonContent(await patchRomCore(args));
+        }
+        case "spliceCHR":   return jsonContent(await spliceChrCore(args));
+        case "relocate":    return jsonContent(await relocateBlockCore(args));
+        case "makeStored":  return jsonContent(await makeStoredBlockCore(args));
+        case "findFree":    return jsonContent(await findFreeSpaceCore(args));
+        case "findPointer": {
+          if (!args.path || args.romOffset == null) throw new Error("romPatch({op:'findPointer'}): `path` and `romOffset` are required.");
+          return jsonContent(await findPointerToCore(args));
+        }
+        case "diff": {
+          if (!args.a || !args.b) throw new Error("romPatch({op:'diff'}): `a` and `b` (the two ROM paths) are required.");
+          return jsonContent(await diffRomsCore({ ...args, aPath: args.a, bPath: args.b }));
+        }
+        default: throw new Error(`romPatch: unknown op '${args.op}'`);
+      }
     }),
   );
 

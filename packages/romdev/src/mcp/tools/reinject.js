@@ -686,71 +686,7 @@ export async function relocateBlockCore({
   };
 }
 
-export function registerReinjectTools(server, z) {
-  const PLATFORMS = Object.keys(PLATFORM_REGISTRY);
+// findPointerTo/makeStoredBlock/relocateBlock folded into the `romPatch` tool
+// (rom-id.js, which imports their cores). Nothing registered here anymore.
+export function registerReinjectTools() {}
 
-  server.tool(
-    "findPointerTo",
-    "Find every pointer in a ROM that references a given byte offset — the missing piece for redirecting a " +
-    "loader at an edited copy of an asset. Computes the platform-correct pointer ENCODING (Genesis 32-bit BE = " +
-    "ROM offset; SNES 16/24-bit LE via LoROM/HiROM; GBA 32-bit LE = 0x08000000+offset incl. literal pools; " +
-    "NES/GB/SMS/etc 16-bit LE CPU addresses with bank-window aliases) and scans the whole ROM for those bytes. " +
-    "Returns each hit's file offset + the matched form. NOTE on banked 8-bit systems (NES/GB/SMS/PCE): a 16-bit " +
-    "pointer value is page-ambiguous — correlate each hit with the nearby bank-set instruction. Workflow: " +
-    "watchDma/findWriter locate the compressed block → findPointerTo finds what points at it → relocateBlock " +
-    "repoints it at your edited copy. All 14 platforms.",
-    {
-      path: z.string().describe("Absolute path to the ROM file."),
-      platform: z.enum(PLATFORMS).optional().describe("Override platform detection (else inferred from extension)."),
-      romOffset: z.number().int().min(0).describe("The ROM FILE offset you want to find pointers TO (e.g. a compressed block start from callSubroutine's A0)."),
-      mapper: z.enum(["lorom", "hirom"]).optional().describe("SNES only: override mapper detection."),
-      maxHitsReturned: z.number().int().min(1).max(2048).default(256),
-    },
-    safeTool(async (args) => jsonContent(await findPointerToCore(args))),
-  );
-
-  server.tool(
-    "makeStoredBlock",
-    "Wrap raw bytes so the game's OWN decompressor expands them VERBATIM — the highest-value re-inject primitive. " +
-    "Edit tiles → makeStoredBlock → patchFile, with NO need to write a compressor. Uses each format's literal/" +
-    "raw-copy escape: GBA BIOS LZ77 (flag byte 0x00 = 8 literals), SNES LC_LZ2 (command 000 = direct copy + 0xFF " +
-    "end), SMS/MSX RLE (0x80|n literal run), NES PackBits/Konami-RLE, and 'raw' (no wrapper) for the many systems " +
-    "that store graphics uncompressed (Lynx/2600/7800, often PCE/NES-CHR). HONEST LIMITS: Genesis Nemesis (Huffman) " +
-    "and C64 crunchers (Exomizer/pucrunch) have NO clean stored escape — not offered; Genesis Kosinski is offered " +
-    "but EXPERIMENTAL (terminator varies — self-verify). ALWAYS verify by running the game's decompressor on the " +
-    "output via callSubroutine and comparing to your payload. All 14 platforms (most via 'raw').",
-    {
-      platform: z.enum(PLATFORMS).describe("Target platform."),
-      rawHex: z.string().optional().describe("The bytes to store, as a hex string (e.g. 'DEADBEEF'). Pass this OR rawBytes."),
-      rawBytes: z.array(z.number().int().min(0).max(255)).optional().describe("The bytes to store, as a number array. Pass this OR rawHex."),
-      format: z.string().optional().describe("Stored-block format. Default 'raw'. Per-platform options: GBA lz77-literal; SNES lz2-direct; SMS/GG sega-rle; MSX konami-rle; NES packbits/konami-rle; Genesis kosinski-literal (experimental). Call with an invalid format to see the platform's valid list."),
-      interleave: z.number().int().min(1).max(8).optional().describe("SMS/GG sega-rle only: deinterleave factor for a block-wrapped run (4 for tiles)."),
-    },
-    safeTool(async (args) => jsonContent(await makeStoredBlockCore(args))),
-  );
-
-  server.tool(
-    "relocateBlock",
-    "Write an edited block to free ROM space and repoint a pointer at it — the safe 'don't overwrite in place' " +
-    "move when your edit changes size or you want to keep the original. Writes newBytes at toOffset (use findFreeSpace " +
-    "to pick a spot), then if you pass pointerOffset, rewrites the pointer there to reference toOffset using the " +
-    "platform-correct encoding (Genesis 32-bit BE, others 16-bit LE by default; override with pointerWidth/" +
-    "pointerEndian/pointerValue). Pass dryRun:true to preview the writes without touching the file. Workflow: " +
-    "makeStoredBlock → findFreeSpace → relocateBlock (toOffset = a free run) → findPointerTo (find the loader's " +
-    "pointer) → relocateBlock again with pointerOffset to repoint. All 14 platforms.",
-    {
-      path: z.string().describe("Absolute path to the ROM file (written in place unless outputPath is given)."),
-      platform: z.enum(PLATFORMS).optional().describe("Override platform detection."),
-      newHex: z.string().optional().describe("The edited block bytes as hex (e.g. from makeStoredBlock.hex). Pass this OR newBase64."),
-      newBase64: z.string().optional().describe("The edited block bytes as base64 (e.g. makeStoredBlock.base64). Pass this OR newHex."),
-      toOffset: z.number().int().min(0).describe("File offset to WRITE the block at — typically a run from findFreeSpace."),
-      pointerOffset: z.number().int().min(0).optional().describe("File offset of the pointer to REWRITE (from findPointerTo). Omit to only write the block."),
-      pointerWidth: z.number().int().min(2).max(4).optional().describe("Pointer byte width. Default 4 for Genesis/GBA, 2 otherwise."),
-      pointerEndian: z.enum(["le", "be"]).optional().describe("Pointer endianness. Default 'be' for Genesis, 'le' otherwise."),
-      pointerValue: z.number().int().min(0).optional().describe("Override the pointer value to write (else derived from toOffset via the platform's pointer form). Needed when the loader expects a CPU address rather than a raw file offset."),
-      outputPath: z.string().optional().describe("Write the patched ROM here instead of in place."),
-      dryRun: z.boolean().default(false).describe("Preview the writes without modifying any file."),
-    },
-    safeTool(async (args) => jsonContent(await relocateBlockCore(args))),
-  );
-}

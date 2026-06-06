@@ -10,7 +10,6 @@
 // reuses the same logic as disassembleRom's mapper math.
 
 import { readFile } from "node:fs/promises";
-import { jsonContent, safeTool } from "../util.js";
 
 const MAX_CONTIGUOUS_GAP = 16;
 
@@ -390,23 +389,6 @@ export async function diffRomsCore({ platform, aPath, bPath, maxChangesReturned 
   };
 }
 
-export function registerDiffRomsTools(server, z) {
-  server.tool(
-    "diffRoms",
-    "Use this to confirm \"did my patch land where I thought\": compares two same-platform ROMs and " +
-    "returns a per-region change summary with mapper-aware CPU addresses (not `cmp -l`'s useless octal " +
-    "offsets). Each changed range gives file offset, region (PRG/CHR/header), CPU address, tile index for " +
-    "CHR changes, and before/after hex. The confirm step in the find offset → patchFile (with expect) → " +
-    "diffRoms → run loop. Region tags on nes/snes/genesis/gb/gbc; other platforms get a raw byte diff.",
-    {
-      platform: z.enum(["nes", "snes", "genesis", "megadrive", "md", "gb", "gbc", "sms", "gg", "atari2600", "a2600", "atari7800", "a7800", "c64"]).describe("Platform — needed for region detection + CPU address translation."),
-      a: z.string().describe("Absolute path to the first (typically original) ROM."),
-      b: z.string().describe("Absolute path to the second (typically patched) ROM."),
-      maxChangesReturned: z.number().int().min(1).max(4096).default(256).describe("Cap on number of contiguous change runs returned. Default 256 keeps responses small while still covering most patch workflows."),
-    },
-    safeTool(async ({ platform, a, b, maxChangesReturned }) => {
-      const r = await diffRomsCore({ platform, aPath: a, bPath: b, maxChangesReturned });
-      return jsonContent(r);
-    }),
-  );
-}
+// diffRoms folded into the `romPatch` tool (romPatch({op:'diff'}), rom-id.js,
+// which imports diffRomsCore). Nothing registered here.
+export function registerDiffRomsTools() {}
