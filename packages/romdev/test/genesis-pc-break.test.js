@@ -125,6 +125,6 @@ test("Genesis PC breakpoint + read watch + single-step (gpgx m68k)", { timeout: 
     name: "breakpoint", arguments: { on: "pc",  address: writerPC, maxFrames: 300 },
   }));
   assert.equal(bp2.hit, true, "second runUntilPC did not hit (exclusive-run left residue): " + JSON.stringify(bp2));
-  const status = toJSON(await client.callTool({ name: "getStatus", arguments: {} }));
+  const status = toJSON(await client.callTool({ name: "catalog", arguments: { op: "status" } }));
   assert.equal(status.paused, false, "runUntilPC must not leave the host paused");
 });

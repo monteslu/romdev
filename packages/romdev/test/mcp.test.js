@@ -115,7 +115,7 @@ test("MCP: save state, step further, load state restores frame count", { skip: !
   assert.equal(save.isError, undefined);
 
   await client.callTool({ name: "frame", arguments: { op: "step",  frames: 100 } });
-  const statusAfter = await client.callTool({ name: "getStatus", arguments: {} });
+  const statusAfter = await client.callTool({ name: "catalog", arguments: { op: "status" } });
   const afterFrames = JSON.parse(statusAfter.content[0].text).frameCount;
   assert.equal(afterFrames, 130);
 
@@ -130,7 +130,7 @@ test("MCP: save state, step further, load state restores frame count", { skip: !
   // at cp1; only our power-on counter is monotonic (documented).
   const restoreBody = JSON.parse(restore.content[0].text);
   assert.equal(restoreBody.rendered, true, "loadState renders one frame by default");
-  const afterRestore = JSON.parse((await client.callTool({ name: "getStatus", arguments: {} })).content[0].text).frameCount;
+  const afterRestore = JSON.parse((await client.callTool({ name: "catalog", arguments: { op: "status" } })).content[0].text).frameCount;
   assert.equal(afterRestore, 131, "render:true stepped exactly one frame");
 
   // render:false restores WITHOUT advancing — for callers who need the core
@@ -140,7 +140,7 @@ test("MCP: save state, step further, load state restores frame count", { skip: !
     arguments: { op: "load", name: "cp1", render: false },
   });
   assert.equal(JSON.parse(restoreNoRender.content[0].text).rendered, false);
-  const afterNoRender = JSON.parse((await client.callTool({ name: "getStatus", arguments: {} })).content[0].text).frameCount;
+  const afterNoRender = JSON.parse((await client.callTool({ name: "catalog", arguments: { op: "status" } })).content[0].text).frameCount;
   assert.equal(afterNoRender, 131, "render:false did not advance the frame counter");
 });
 
@@ -163,14 +163,14 @@ test("MCP: exportState copies a slot to disk without touching the live host", { 
   await client.callTool({ name: "loadMedia", arguments: { platform: "nes", path: ROM_PATH } });
   await client.callTool({ name: "frame", arguments: { op: "step",  frames: 30 } });
   await client.callTool({ name: "state", arguments: { op: "save", name: "slot1" } });
-  const before = JSON.parse((await client.callTool({ name: "getStatus", arguments: {} })).content[0].text).frameCount;
+  const before = JSON.parse((await client.callTool({ name: "catalog", arguments: { op: "status" } })).content[0].text).frameCount;
   const out = path.join(os.tmpdir(), `romdev-export-${before}.state`);
   const r = JSON.parse((await client.callTool({ name: "state", arguments: { op: "export", fromSlot: "slot1", path: out } })).content[0].text);
   assert.equal(r.exported, true);
   assert.ok(r.bytes > 0);
   assert.ok(existsSync(out), "the state file was written");
   // Live host untouched: frame counter unchanged by the export.
-  const after = JSON.parse((await client.callTool({ name: "getStatus", arguments: {} })).content[0].text).frameCount;
+  const after = JSON.parse((await client.callTool({ name: "catalog", arguments: { op: "status" } })).content[0].text).frameCount;
   assert.equal(after, before, "exportState did not advance/disturb the live host");
   rmSync(out, { force: true });
 });

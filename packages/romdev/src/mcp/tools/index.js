@@ -162,18 +162,35 @@ export function registerTools(server, z, sessionKey) {
   setDisclosure(disclosure);
 
   // ---- ALWAYS-LOADED ENTRY TIER ----
-  // listCategories: what's available?
+  // catalog: what categories exist + the live session snapshot.
   server.tool(
-    "listCategories",
-    "Return the catalog of tool categories. Each entry has {name, description, useWhen[], loaded}. NOTE: by default this server registers EVERY tool at session start — you do NOT need to call loadCategory before using a tool; they're all callable already. This catalog is just a map of what exists, grouped by purpose. (Only if the server is running in lean mode, ROMDEV_LEAN_TOOLS=1, are non-entry tools deferred — then loadCategory registers them.)",
-    {},
-    safeTool(async () => {
+    "catalog",
+    "Orient yourself, keyed by `op`.\n" +
+    "• op:'categories' (default) — the catalog of tool categories, each {name, description, useWhen[], loaded}. NOTE: by default this server registers EVERY tool at session start — you do NOT need to load anything before calling a tool. This is just a map of what exists, grouped by purpose. (Only in lean mode, ROMDEV_LEAN_TOOLS=1, are non-entry tools deferred.)\n" +
+    "• op:'status' — a snapshot of the current session: which platform's core/ROM is in the running host (if any), current frame count, last-loaded media, loaded categories. Call this when you've lost context across many tool calls and want to re-ground.",
+    {
+      op: z.enum(["categories", "status"]).default("categories")
+        .describe("categories=the tool-category catalog; status=the live session snapshot (host/platform/frameCount/media)."),
+    },
+    safeTool(async ({ op = "categories" }) => {
+      if (op === "status") {
+        const host = getHostOrNull(sessionKey);
+        const cats = disclosure.listCategories();
+        const base = host
+          ? { ...host.getStatus() }
+          : { loaded: false, hint: "no host yet; call loadMedia (in category 'run') to load a ROM" };
+        return jsonContent({
+          ...base,
+          loadedCategories: cats.filter((c) => c.loaded).map((c) => c.name),
+          unloadedCategories: cats.filter((c) => !c.loaded).map((c) => c.name),
+        });
+      }
       const categories = disclosure.listCategories();
       return jsonContent({
         categories,
-        entryTier: ["listCategories", "loadCategory", "describeTool", "getStatus", "build", "playtest", "playtestStop", "playtestStatus"],
+        entryTier: ["catalog", "loadCategory", "describeTool", "build", "playtest", "playtestStop", "playtestStatus"],
         powerUserHint: "Call loadCategory({category:\"all\"}) to register every category at once — skips the discovery dance for capable agents.",
-        humanInTheLoopHint: "Iterate INTERNALLY on screenshots first (runSource returns one inline; stepAndScreenshot/screenshot re-shoot the live host) — don't open a window to debug. Once the game actually boots and shows the feature you're working on, call playtest({}) so your human can watch and play it live. playtest is entry-tier (no loadCategory needed). Opening a window on a black screen or a crash just wastes the human's attention — show them something that works.",
+        humanInTheLoopHint: "Iterate INTERNALLY on screenshots first (build({output:'run'}) returns one inline; frame({op:'screenshot'/'stepAndShot'}) re-shoots the live host) — don't open a window to debug. Once the game actually boots and shows the feature you're working on, call playtest({}) so your human can watch and play it live. playtest is entry-tier. Opening a window on a black screen or a crash just wastes the human's attention — show them something that works.",
       });
     }),
   );
@@ -231,30 +248,9 @@ export function registerTools(server, z, sessionKey) {
     }),
   );
 
-  // getStatus: cheap re-orient. Returns what's loaded, what session looks like.
-  server.tool(
-    "getStatus",
-    "Return a snapshot of the current session: which categories are loaded, which platform's core/ROM is in the running host (if any), current frame count, last-loaded media. Call this when you've lost context across many tool calls and want to re-ground before proceeding.",
-    {},
-    safeTool(async () => {
-      const host = getHostOrNull(sessionKey);
-      const cats = disclosure.listCategories();
-      // Flatten host status to top-level so legacy callers (and the
-      // old lifecycle getStatus shape) keep working — `frameCount`,
-      // `loaded`, `platform`, etc. live where they always did. PD
-      // metadata (loadedCategories) is additive on the side.
-      const base = host
-        ? { ...host.getStatus() }
-        : { loaded: false, hint: "no host yet; call loadMedia (in category 'run') to load a ROM" };
-      return jsonContent({
-        ...base,
-        loadedCategories: cats.filter((c) => c.loaded).map((c) => c.name),
-        unloadedCategories: cats.filter((c) => !c.loaded).map((c) => c.name),
-      });
-    }),
-  );
+  // getStatus is now catalog({op:'status'}).
 
-  // buildSource is the universal build verb. Almost every workflow
+  // build is the universal build verb. Almost every workflow
   // starts with "build my ROM," so we register it at entry tier
   // unconditionally — but the rest of the toolchain category stays
   // deferred (runSource, listToolchains, etc.).
@@ -334,7 +330,7 @@ const TOOL_OWNER = {
   watch: "advanced", breakpoint: "advanced", dmaTrace: "advanced",
   recordSession: "advanced",
   // entry tier itself (so describeTool works for them)
-  listCategories: "entry", loadCategory: "entry", describeTool: "entry", getStatus: "entry",
+  catalog: "entry", loadCategory: "entry", describeTool: "entry",
   build: "entry", listRunnableFormats: "entry",
 };
 
