@@ -74,13 +74,14 @@ test("R23f crossPlatformSpriteImport propagates live source palette under intent
       // the live palette automatically.
       const outPng = path.join(dir, "lift.png");
       const res = await client.callTool({
-        name: "crossPlatformSpriteImport",
+        name: "importArt",
         arguments: {
+          from: "rom",
           sourceRom: ROM_PATH,
           sourcePlatform: "nes",
           sourceBank: 0,
           sourceTileX: 0, sourceTileY: 0, sourceTileW: 4, sourceTileH: 2,
-          targetPlatform: "gbc",
+          platform: "gbc",
           outputPng: outPng,
           intent: "homebrew",
           paletteIndex: 0,  // BG palette 0 — nestest writes a non-grayscale palette here
@@ -139,13 +140,14 @@ test("R23f crossPlatformSpriteImport intent:rom-hack still uses grayscale (no re
 
       const outPng = path.join(dir, "lift.png");
       const res = await client.callTool({
-        name: "crossPlatformSpriteImport",
+        name: "importArt",
         arguments: {
+          from: "rom",
           sourceRom: ROM_PATH,
           sourcePlatform: "nes",
           sourceBank: 0,
           sourceTileX: 0, sourceTileY: 0, sourceTileW: 4, sourceTileH: 2,
-          targetPlatform: "gbc",
+          platform: "gbc",
           outputPng: outPng,
           intent: "rom-hack",
         },
@@ -170,13 +172,14 @@ test("R23f crossPlatformSpriteImport with explicit paletteFromEmulator:true requ
     try {
       const outPng = path.join(dir, "lift.png");
       const res = await client.callTool({
-        name: "crossPlatformSpriteImport",
+        name: "importArt",
         arguments: {
+          from: "rom",
           sourceRom: ROM_PATH,
           sourcePlatform: "nes",
           sourceBank: 0,
           sourceTileX: 0, sourceTileY: 0, sourceTileW: 2, sourceTileH: 2,
-          targetPlatform: "gbc",
+          platform: "gbc",
           outputPng: outPng,
           intent: "homebrew",
           paletteFromEmulator: true,  // explicit — should error w/o ROM

@@ -617,35 +617,8 @@ export function registerSpritePipelineTools(server, z, sessionKey) {
       }
     }),
   );
-
-  server.tool(
-    "crossPlatformSpriteImport",
-    "Use this to lift a sprite region from one platform's ROM into another platform's tile format in ONE " +
-    "call (e.g. 'put Mario into my GBC game') — combines extractSpriteSheet + crop + quantizePngForPlatform " +
-    "+ optional manifest, feeding straight into loadSpriteSheet. Source: `sourceBank` (NES, easiest) or " +
-    "`sourceOffset` (SNES/GB/GBC/Genesis); `sourceTileX/Y/W/H` index into the rendered grid. NOTE: this is " +
-    "for a rectangular tile-grid region — for a real multi-sprite character use captureMetaSprite.",
-    {
-      sourceRom: z.string().describe("Absolute path to the source ROM file."),
-      sourcePlatform: z.string().describe("Source platform id (nes, gb, gbc, snes, sms, gg, genesis, ...)."),
-      sourceBank: z.number().int().min(0).optional().describe("NES: 4 KB CHR bank index. Conflicts with sourceOffset — use one."),
-      sourceOffset: z.number().int().min(0).optional().describe("Raw byte offset into the ROM for tile data. Required for non-NES sources unless using sourceBank."),
-      sourceTileX: z.number().int().min(0).describe("Leftmost tile column of the source region (0 = leftmost in the rendered grid)."),
-      sourceTileY: z.number().int().min(0).describe("Topmost tile row of the source region."),
-      sourceTileW: z.number().int().min(1).describe("Width of the region in tile cells."),
-      sourceTileH: z.number().int().min(1).describe("Height of the region in tile cells."),
-      targetPlatform: z.string().describe("Target platform id — the output is quantized to this platform's per-subpalette limit."),
-      outputPng: z.string().describe("Absolute path to write the quantized output PNG."),
-      outputManifest: z.string().optional().describe("Optional: absolute path to write a TexturePacker-style manifest naming each tile slot. Required if you'll feed it into loadSpriteSheet."),
-      quantizeMode: z.enum(["frequency", "luminance", "platform-master"]).optional().describe("Palette quantization strategy. See quantizePngForPlatform. Default comes from `intent` (homebrew → platform-master, rom-hack → frequency). Under intent:'rom-hack' the quantize step is SKIPPED entirely — source bytes are preserved verbatim and this arg is ignored."),
-      tilesPerRow: z.number().int().min(1).max(64).default(16).describe("Source bank layout — how the tile bytes get rendered into a grid before cropping. 16 matches extractSpriteSheet's default."),
-      namePrefix: z.string().default("tile").describe("Per-frame name prefix in the emitted manifest (default 'tile' → tile_0_0, tile_0_1, ...)."),
-      paletteFromEmulator: z.boolean().optional().describe("Color the SOURCE extract using the live emulator palette (NES/SNES/Genesis). Requires a loaded ROM matching `sourcePlatform`. Default comes from `intent`: homebrew → true (live palette when a ROM is loaded, per-platform default otherwise); rom-hack → false (grayscale). Set explicitly to override the intent default. Matches the same flag on extractSpriteSheet."),
-      paletteIndex: z.number().int().min(0).max(15).default(0).describe("Subpalette index for the source-side live-palette read (NES: 0-7, 0-3 = BG, 4-7 = sprite; SNES: 0-15; Genesis: 0-3). Only used when the source palette is read from the emulator. Matches the same arg on extractSpriteSheet."),
-      intent: intentZod(z),
-    },
-    safeTool(async (args) => jsonContent(await crossPlatformSpriteImportImpl({ ...args, sessionKey }))),
-  );
+  // crossPlatformSpriteImport folded into the `importArt` tool
+  // (importArt({from:'rom'}), in art-loaders.js). The impl stays exported below.
 }
 
 // Exports for tests + cross-tool reuse.

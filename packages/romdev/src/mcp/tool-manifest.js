@@ -53,6 +53,8 @@ export const MERGE_MAP = {
   tiles: { absorbs: ["inspectPatternTiles", "getTile", "tileFingerprints", "tilesAscii", "extractSpriteSheet", "previewTileArt"], axis: "as" },
   // ── encodeArt (PNG→native art; convertImageToTiles+imageToTilemap from platform-tools.js, quantizePngForPlatform+cropSpriteSheet from sprite-pipeline.js, validateGenesisTiles from metasprite-tools.js) ──
   encodeArt: { absorbs: ["convertImageToTiles", "imageToTilemap", "quantizePngForPlatform", "cropSpriteSheet", "validateGenesisTiles"], axis: "stage" },
+  // ── importArt (editor-file/ROM → native tiles; load* from art-loaders.js, crossPlatformSpriteImport from sprite-pipeline.js as from:'rom') ──
+  importArt: { absorbs: ["loadAsepriteSheet", "loadGifAnimation", "loadSpriteSheet", "loadTilemap", "crossPlatformSpriteImport"], axis: "from" },
 };
 
 /** Every OLD tool name that the consolidation removes (absorbed into a new tool). */
