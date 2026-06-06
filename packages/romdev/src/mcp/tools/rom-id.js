@@ -37,26 +37,26 @@ export function registerRomIdTools(server, z, sessionKey) {
 
   server.tool(
     "romPatch",
-    "Patch / re-inject / inspect a ROM file on disk, one tool keyed by `op`. The ROM-hack toolkit. " +
+    "Patch / re-inject / inspect a ROM file on disk, one tool keyed by `op`. " +
     "**`expect=` (the bytes you think are there now) on every write guards the classic wrong-revision-corruption footgun — highly recommended.** " +
     "Spine: `{path, platform}`. **TIP: before patching, prove the byte matters by forcing it live with memory({op:'write'}) on the running emulator (static disasm can't tell 'matches the pattern' from 'actually runs').**\n" +
     "OP CHEAT-SHEET (the params each op uses, beyond the {path, platform} spine): " +
     "write → {offset, hex|base64, expect?, outputPath?, allowExpand?}; " +
-    "writeMany → {input, output, writes[]}; " +
-    "spliceCHR → {pngBase64, tileIndex, bank?|chrFileOffset?, paletteHint?, expect?}; " +
-    "relocate → {newHex|newBase64, toOffset, pointerOffset?, pointerWidth?, pointerEndian?, pointerValue?, dryRun?}; " +
+    "writeMany → {input, output, writes[], allowExpand?}; " +
+    "spliceCHR → {pngBase64, tileIndex, bank?|chrFileOffset?, paletteHint?, expect?, outputPath?, allowExpand?}; " +
+    "relocate → {newHex|newBase64, toOffset, pointerOffset?, pointerWidth?, pointerEndian?, pointerValue?, outputPath?, dryRun?}; " +
     "makeStored → {rawHex|rawBytes, format, interleave?}; " +
-    "findFree → {minLength, fillBytes?, start?, end?}; " +
+    "findFree → {minLength, fillBytes?, start?, end?, maxRunsReturned?}; " +
     "findPointer → {romOffset, mapper?, widths?, suppressShadows?, maxHitsReturned?}; " +
     "diff → {a, b, maxChangesReturned?}.\n" +
-    "• op:'write' — write N bytes into any binary file at `offset` (the generic splicer: PRG patches, CHR splices, SNES tile/sample injection). `hex`|`base64`, `expect`, `allowExpand` (grow the file — default OFF; most hacks must NOT change size or headers/mapper break), `outputPath` (else in place).\n" +
+    "• op:'write' — write N bytes into any binary file at `offset` (the generic splicer: PRG patches, CHR splices, SNES tile/sample injection). `allowExpand` grows the file — default OFF; most hacks must NOT change size or headers/mapper break. `outputPath` else writes in place.\n" +
     "• op:'writeMany' — apply a LIST of {offset, hex|base64} `writes` from `input` ROM to `output`.\n" +
-    "• op:'spliceCHR' — inject a PNG's tiles into a CHR region (`pngBase64`, `tileIndex`, `bank`, `chrFileOffset`, `paletteHint`, `expect`).\n" +
-    "• op:'relocate' — write an edited block to free ROM space and repoint a pointer at it (the safe 'don't overwrite in place' move when an edit changes size). `newHex`|`newBase64`, `toOffset` (from op:'findFree'), `pointerOffset` (from op:'findPointer'), `pointerWidth`/`pointerEndian`/`pointerValue`, `dryRun`.\n" +
-    "• op:'makeStored' — wrap raw bytes so the game's OWN decompressor expands them VERBATIM (edit tiles → makeStored → write, no compressor needed). `rawHex`|`rawBytes`, `format` (raw/lz77-literal/lz2-direct/sega-rle/konami-rle/...), `interleave`. ALWAYS verify via cpu({op:'call'}) on the game's decompressor.\n" +
-    "• op:'findFree' — find a run of free space to relocate into. `minLength`, `fillBytes`, `start`, `end`.\n" +
-    "• op:'findPointer' — find every pointer in the ROM that references `romOffset` (platform-correct encoding), the missing piece for redirecting a loader. `mapper` (SNES). On wide systems (Genesis/GBA) a 32-bit hit's low bytes also match the narrower form one byte over — those tail SHADOWS are suppressed by default (see `shadowsSuppressed`); pass `suppressShadows:false` for raw, or `widths:[4]` to search only 32-bit forms. On banked 8-bit systems a 16-bit pointer is page-ambiguous — correlate with the bank-set instruction.\n" +
-    "• op:'diff' — diff two ROMs (`a`, `b`) → the changed byte ranges. `maxChangesReturned`.",
+    "• op:'spliceCHR' — inject a PNG's tiles into a CHR region.\n" +
+    "• op:'relocate' — write an edited block to free ROM space and repoint a pointer at it (the safe 'don't overwrite in place' move when an edit changes size). `toOffset` from op:'findFree'; `pointerOffset` from op:'findPointer' (omit to only write the block). `pointerValue` overrides the written value when the loader expects a CPU address, not a file offset. `dryRun` previews the writes.\n" +
+    "• op:'makeStored' — wrap raw bytes so the game's OWN decompressor expands them VERBATIM (edit tiles → makeStored → write, no compressor needed). `format` (raw/lz77-literal/lz2-direct/sega-rle/konami-rle/packbits/kosinski-literal; invalid → returns the platform's list). ALWAYS verify via cpu({op:'call'}) on the game's decompressor.\n" +
+    "• op:'findFree' — find a run of free space to relocate into (`fillBytes` defaults to [0xFF, 0x00]).\n" +
+    "• op:'findPointer' — find every pointer in the ROM that references `romOffset` (platform-correct encoding), the missing piece for redirecting a loader. `mapper` overrides SNES detection. On wide systems (Genesis/GBA) a 32-bit hit's low bytes also match the narrower form one byte over — those tail SHADOWS are suppressed by default (count in `shadowsSuppressed`); pass `suppressShadows:false` for raw, or `widths:[4]` to search only 32-bit forms. On banked 8-bit systems a 16-bit pointer is page-ambiguous — correlate with the bank-set instruction.\n" +
+    "• op:'diff' — diff two ROMs (`a`, `b`) → the changed byte ranges.",
     {
       op: z.enum(["write", "writeMany", "spliceCHR", "relocate", "makeStored", "findFree", "findPointer", "diff"])
         .describe("write=N bytes at an offset; writeMany=a list of writes; spliceCHR=PNG tiles into CHR; relocate=write a block to free space + repoint; makeStored=wrap bytes for the game's decompressor; findFree=find free space; findPointer=find pointers to an offset; diff=diff two ROMs."),

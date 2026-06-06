@@ -33,8 +33,9 @@ export function registerRecordTools(server, z, sessionKey) {
 
   server.tool(
     "recordSession",
-    "Run the loaded ROM for N frames, capturing inputs and observations (screenshots + optional memory dumps) at regular intervals. Returns a timeline the agent can analyze. Inputs can either be held for the whole session or vary by a scripted list of {atFrame, ports} entries. " +
-    "When includeScreenshots is true: DEFAULT writes each sample's PNG to outputDir/frame-<n>.png and puts screenshotPath in the timeline; pass inline:true to get screenshotBase64 in each entry instead (you must pass one or the other). With includeScreenshots:false, no path is needed.",
+    "Run the loaded ROM for N frames, sampling screenshots and/or memory every sampleEvery frames. Returns a timeline the agent can analyze. Inputs are either held for the whole session (holdInputs) or scripted as {atFrame, ports} entries each held until the next (inputScript). " +
+    "Screenshots (includeScreenshots, default true): pass outputDir to write frame-<n>.png per sample (timeline gets screenshotPath), OR inline:true to embed screenshotBase64 per entry — one is required. Set includeScreenshots:false for memory-only runs. " +
+    "Memory (memorySamples): accepts the full readMemory region set incl. hardware registers (nes_apu_regs, etc.); hex appears per-sample in the timeline. For dense sampling (sampleEvery:1 over a long loop, e.g. APU regs across a music loop) add memoryOutputPath to stream rows to NDJSON on disk and keep the hex OUT of context — the response returns a compact summary {path, rows, regions, valueRanges} instead.",
     {
       frames: z.number().int().min(1).max(36000).default(300).describe("Total frames to run."),
       sampleEvery: z.number().int().min(1).max(600).default(30).describe("Capture a sample (screenshot and/or memory) every N frames."),

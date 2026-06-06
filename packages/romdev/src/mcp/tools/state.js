@@ -144,8 +144,7 @@ function diffStateCore({ name = "default", snapOrDiff }, sessionKey) {
 export function registerStateTools(server, z, sessionKey) {
   server.tool(
     "state",
-    "Save-state lifecycle for the emulator — snapshot/restore/list/export/dump/diff. `op`: 'save' | 'load' | " +
-    "'list' | 'export' | 'dump' | 'diff'.\n" +
+    "Save-state lifecycle for the emulator. `op`: 'save' | 'load' | 'list' | 'export' | 'dump' | 'diff'.\n" +
     "'save': `name` = fast in-memory slot (LOST on server restart / new session), `path` = disk blob that SURVIVES " +
     "across sessions — reload via op:'load'. Multi-session RE: save once at the state you care about, reload it " +
     "every session instead of re-running loadMedia + hundreds of stepFrames.\n" +

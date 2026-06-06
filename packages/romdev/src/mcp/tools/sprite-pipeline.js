@@ -546,15 +546,16 @@ export function registerSpritePipelineTools(server, z, sessionKey) {
   server.tool(
     "encodeArt",
     "Encode a PNG into a platform's native art format, one tool keyed by `stage` — the PNG→tiles pipeline. " +
-    "Spine: `platform`, `pngPath` (preferred — server reads it, no base64 token cost) or `pngBase64`, `outputDir`/`inline`. " +
+    "tiles/tilemap read `pngPath` (preferred — server reads it, no base64 token cost) or `pngBase64`, write to `outputDir` (or `inline`). " +
+    "quantize/crop instead take `path` (source PNG) + `outputPath`. " +
     "**Image width & height must be multiples of 8.** **GENESIS: a 17th color (palette index > 15) leaking into the tile " +
     "words builds fine but renders GARBAGE — run stage:'validate' on generated Genesis tiles.**\n" +
     "• stage:'quantize' — reduce an RGBA PNG to a platform's per-subpalette color limit, emit an indexed PNG (with a PLTE " +
     "loadSpriteSheet picks up). The bridge from 'imported with another platform's colors' to 'lands with the right index " +
-    "layout'. `mode`: frequency | luminance (index 0 = lightest backdrop) | platform-master (NES snap). `maxColors` overrides the per-platform default. (`outputPath` required.)\n" +
-    "• stage:'crop' — crop a rectangular region of tile CELLS (not pixels; `tileSize` default 8) out of an existing tile-grid PNG (e.g. pull one sprite out of an extracted CHR bank). Preserves PLTE via nearest-neighbour remap. (`tileX/Y/W/H`, `outputPath` required.)\n" +
+    "layout'. `mode`: frequency | luminance (index 0 = lightest backdrop) | platform-master (NES snap). `maxColors` overrides the per-platform default. (`platform`, `path`, `outputPath` required.)\n" +
+    "• stage:'crop' — crop a rectangular region of tile CELLS (not pixels; `tileSize` default 8) out of an existing tile-grid PNG (e.g. pull one sprite out of an extracted CHR bank). Preserves PLTE via nearest-neighbour remap. Platform-agnostic. (`path`, `tileX/Y/W/H`, `outputPath` required.)\n" +
     "• stage:'tiles' — convert a PNG to native tile bytes — raw tiles, no tilemap. Programmable-palette platforms also return a suggested palette. MSX returns TWO streams (pattern.bin + color.bin for screen-2's per-row 2-color format). For multi-cell SPRITES (Genesis/Lynx) pass `tileOrder:'sprite'` — hardware reads a sprite's tiles COLUMN-major (top-to-bottom then right), NOT the row-major BG layout. Writes tiles.bin (+ palette.bin) to outputDir, or inline.\n" +
-    "• stage:'tilemap' — render a large PNG (title screen, world map) to tile graphics + tilemap (NES nametable / SNES tilemap / GB BG map / C64 screen RAM / PCE BAT / MSX name+pattern+color) + per-cell palette/attribute + palette table, with flip-aware tile dedup. PREREQUISITE: the PNG must already be sized to the platform's native screen and quantized to its palette. `dedup`/`singlePalette`/`backdrop`/`maxTiles`.\n" +
+    "• stage:'tilemap' — render a large PNG (title screen, world map) to tile graphics + tilemap (the platform's screen-map form: NES nametable, SNES/SMS/GG tilemap, Genesis/GB/GBC BG map, C64 screen RAM, PCE BAT, MSX name+pattern+color) + per-cell palette/attribute + palette table, with flip-aware tile dedup. NOT 2600/7800 (no fixed tilemap — errors). PREREQUISITE: the PNG must already be sized to the platform's native screen and quantized to its palette. `dedup`/`singlePalette`/`backdrop`/`maxTiles`.\n" +
     "• stage:'validate' — validate generated Genesis 4bpp tile data and/or palette against the VDP's hard limits — catches the 'builds fine, renders garbage' bug. `tileDataPath` (raw 4bpp .bin) and/or `paletteJson` (lines of colors). Returns {ok, errors[], warnings[], stats}.",
     {
       stage: z.enum(["quantize", "crop", "tiles", "tilemap", "validate"])

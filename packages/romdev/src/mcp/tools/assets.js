@@ -61,7 +61,7 @@ export async function listFilesCore({ path: dirPath, pattern }) {
 export function registerAssetTools(server, z) {
   server.tool(
     "files",
-    "Generic file I/O on disk for agent artifacts — save/read/list arbitrary files (a generated PNG, a backup ROM, a notes file, a work-in-progress source). `op:'read'|'write'|'list'`. " +
+    "Generic file I/O on disk for arbitrary agent artifacts (a generated PNG, a backup ROM, a notes file, a work-in-progress source). `op:'read'|'write'|'list'`. " +
     "`write` takes `text` (utf-8) OR `base64` (binary) and creates parent dirs. `read` returns `text` or `base64` per `as`, with a default 64 KB cap so a bare read can't dump a huge file into your context — if larger, it returns a note telling you to raise `maxBytes` (up to 10 MB) deliberately. `list` enumerates a directory with an optional case-insensitive `pattern` substring filter.",
     {
       op: z.enum(["read", "write", "list"]).describe("which file op to run."),

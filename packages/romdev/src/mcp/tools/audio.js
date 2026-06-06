@@ -277,7 +277,7 @@ export function registerAudioTools(server, z, sessionKey) {
 
   server.tool(
     "encodeAudio",
-    "Encode an external audio clip into a platform's native sample/music format, one tool keyed by `target`.\n" +
+    "Encode an external audio clip into a platform's native sample/music format, keyed by `target`.\n" +
     "• target:'brr' — raw 16-bit signed PCM (mono, LE) → SNES BRR (the SPC700's only sample format; 9-byte blocks ready to DMA into ARAM). Input `pcmBase64` or `pcmPath` (.pcm/.raw; strip the WAV header first if your source is .wav). `loop` sets the LOOP bit. Output `brrPath` (via `outputPath`) or `brrBase64`.\n" +
     "• target:'xgm2pcm' — WAV (or raw s16le PCM) → GENESIS XGM2 PCM SAMPLE (SGDK's XGM2_playPCM, for SFX). Bakes the fiddly rules: 8-bit SIGNED mono, resampled to 13.3 kHz (or 6.65 kHz with `halfRate`), zero-padded to a multiple of 256 bytes. Emits a ready-to-#include 256-byte-aligned C array + `<NAME>_LEN` define by default. Input `wavPath`/`wavBase64` (or `format:'pcm16'` + `pcmRate` for headerless). Output `outputCPath` (.c) / `cSource` inline / `outputPcmPath` (raw .pcm).\n" +
     "• target:'xgm2' — **GENESIS MUSIC: a `.vgm`/`.vgz` log → a COMPILED XGM2 blob you `XGM2_play()`.** This is the music sibling of xgm2pcm (which is sample SFX). `XGM2_play()` needs a compiled blob (split FM/PSG streams + sample table), NOT raw VGM — this does that compile (a pure-JS port of SGDK's `xgm2tool`; no Java). Emits a 256-aligned C array + `<NAME>_LEN`. PSG-only tracks coexist with XGM2 PCM SFX. Input `vgmPath` (.vgm/.vgz) or `vgmBase64`; `system` forces NTSC/PAL timing.\n" +
@@ -362,9 +362,9 @@ export function registerAudioTools(server, z, sessionKey) {
     "thins it; `setInputs` holds input during the trace. To ASSERT, use this; pair with watch(region:'nes_apu_regs').\n" +
     "'record': capture audio to a WAV over `frames` frames (`setInputs` to hold a button, e.g. 'press B for SFX'). " +
     "Sample rate is whatever the core emits (32000 SNES SPC / 48000 most / 44100). **A WAV is for a HUMAN to HEAR — " +
-    "an agent can't listen. To verify a TUNE/melody headlessly: either op:'inspect' with `frames` (the chip note-" +
-    "timeline above), or record the WAV and run a local FFT/Goertzel pass on it to pull the pitch contour.** Caveat: " +
-    "inspect doesn't expose Genesis XGM2 PCM, so 'did this sampled SFX fire' on Genesis is still record-and-FFT.",
+    "an agent can't listen; to verify a melody headlessly, prefer op:'inspect' with `frames`, or run a local FFT/" +
+    "Goertzel pass on the WAV to pull the pitch contour.** Caveat: inspect can't see Genesis XGM2 PCM, so 'did this " +
+    "sampled SFX fire' on Genesis is still record-and-FFT.",
     {
       op: z.enum(["inspect", "record"]).describe("inspect a sound chip's live state (single-frame, or a frames trace); or record audio to a WAV."),
       chip: z.enum(["nes", "gb", "gba", "dsp", "psg", "ym2612", "sid", "mikey", "pce", "ay8910"]).optional().describe("op=inspect: which sound chip to decode (all 14 systems mapped)."),

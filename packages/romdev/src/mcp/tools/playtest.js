@@ -320,17 +320,16 @@ export function registerPlaytestTools(server, z, sessionKey) {
 
   server.tool(
     "playtest",
-    "Show the loaded ROM to a HUMAN in a native SDL window, one tool keyed by `op`. The 'show a person' tool, " +
-    "NOT your build-iteration loop — for your OWN testing use frame({op:'screenshot'}) / build({output:'run'}).\n" +
+    "Show the loaded ROM to a HUMAN in a native SDL window, one tool keyed by `op`. For your OWN build-iteration " +
+    "testing use frame({op:'screenshot'}) / build({output:'run'}) instead.\n" +
     "• op:'open' (default) — open (or reuse this session's) window. Only call it once the game is worth a human's " +
     "eyes (boots, renders, the feature is visible) — a window on a black screen/crash just wastes their attention. " +
     "BEST FOR diagnosing a USER-REPORTED bug: hand them the window, let them drive to the exact moment, then " +
-    "inspect the SAME live host in real time (memory/watch/sprites/state, with host({op:'pause'/'resume'}) to freeze " +
-    "a moving state). Once open, every other tool keeps working against the same live host. INPUT/STEPPING WHILE " +
-    "OPEN: the window's loop owns the emulator — each tick it rebuilds controller state from the human's gamepad+" +
-    "keyboard and calls setInput then steps a frame, so your input({op:'set'}) is OVERWRITTEN on the next tick " +
-    "(the human wins) and the window — not you — owns stepping. To inspect a moving state, host({op:'pause'}) → " +
-    "read → host({op:'resume'}). Requires @kmamal/sdl. `scale`/`title`/`aspect` shape the window.\n" +
+    "inspect the SAME live host in real time (memory/watch/sprites/state). Every other tool keeps working against " +
+    "that live host while the window is open. FOOTGUN — the window's loop owns input AND stepping: each tick it " +
+    "rebuilds controller state from the human's gamepad+keyboard, calls setInput, then steps a frame, so your " +
+    "input({op:'set'}) is OVERWRITTEN on the next tick (the human wins). To inspect a moving state freeze it first: " +
+    "host({op:'pause'}) → read → host({op:'resume'}). Requires @kmamal/sdl. `scale`/`title`/`aspect` shape the window.\n" +
     "• op:'stop' — close THIS session's window (the host stays loaded; other agents' windows unaffected).\n" +
     "• op:'status' — is a window open, what ROM/frame it shows, and `activeHostMatchesWindow` (false = a build/" +
     "loadMedia swapped the active host, so frame({op:'screenshot'}) no longer shows what the human sees — use op:'framebuffer').\n" +

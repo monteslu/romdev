@@ -594,12 +594,14 @@ export function registerCartPartsTools(server, z) {
     "'identify': sniff an unknown ROM/zip's platform (which core to load). Handles zip-wrapped ROMs; `path` OR " +
     "`base64` (+`hint` ext for headerless). Returns {platform, format, title, mapper, region, sizes, confidence}. " +
     "RE next steps: cheats({op:'lookup'}) is a free labeled memory/code map; disasm is how you change behavior.\n" +
-    "'extract': split a ROM into its standard parts (NES header/prg/chr/trainer + a mapper/mirroring manifest; " +
-    "SNES/Genesis/GB/GBC header/body) — auto-detects format, no `dd skip=`. Pairs with 'wrap' for a round-trip " +
-    "(extract → romPatch a part → wrap → build). path-or-inline.\n" +
-    "'wrap': generate a build-ready wrapper source (+ NES linker config) that reassembles parts back into a cart. " +
-    "NES auto-generates the iNES header from mapper+mirror (chrPath:null for CHR-RAM). Per-platform part paths in " +
-    "the param hints.",
+    "'extract': split a ROM into its standard parts + a manifest (auto-detects format from extension, no `dd skip=`). " +
+    "Per platform: NES header/prg/chr/trainer (+mapper/mirroring); SNES copier-header/rom/internal-header; " +
+    "Genesis vectors/header/body; GB/GBC boot/header/body; SMS/GG pre-header/sega-header/body; " +
+    "Atari 2600/7800 body/vectors (7800 +A78 header); C64 load-address/body. path-or-inline. " +
+    "Round-trips with 'wrap' (extract → romPatch a part → wrap → build).\n" +
+    "'wrap': generate a build-ready wrapper source (+ NES linker config; null for other platforms) that reassembles " +
+    "parts back into a cart. NES auto-generates the iNES header from mapper+mirror (chrPath:null for CHR-RAM; only " +
+    "prgBanks 1/2 = NROM-128/256). Per-platform part paths in the param hints (pass `romPath` for a one-shot whole-body incbin).",
     {
       op: z.enum(["identify", "extract", "wrap"]).describe("identify the ROM's platform; extract into parts; wrap parts back into a cart."),
       // identify

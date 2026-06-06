@@ -1068,10 +1068,12 @@ export function registerDisasmTools(server, z) {
     "'rom' = mapper-aware ROM disassembly with agent annotations: auto-tagged reset/nmi/irq vectors, hardware " +
     "register names on operands, per-line `; @0xNNNN` file offsets ready for romPatch (NES reports .nes AND PRG " +
     "offsets). Platform sniffed from extension. GBA=ARM7TDMI (ARM by default, `thumb:true` for Thumb). Use " +
-    "`endAddress`/`untilReturn` for one routine, `dataRanges` to mark non-code, `bank` for a banked slot.\n" +
+    "`endAddress`/`untilReturn` for one routine, `dataRanges` to mark non-code, `bank` for a banked slot. " +
+    "pce/msx are 'project'-only here — 'rom' doesn't map them yet.\n" +
     "'project' = turn a ROM into a complete re-buildable disassembly in one call across all systems; splits into " +
     "regions, REASSEMBLES each and verifies BYTE-EXACT (`roundTripOk`); non-faithful lines fall back to `.byte` so " +
-    "it ALWAYS rebuilds; `readablePercent` reports instruction-vs-data. (SNES is byte-exact data-only for now.)\n" +
+    "it ALWAYS rebuilds; `readablePercent` reports instruction-vs-data. (SNES 65816 usually lands at the byte-exact " +
+    "data-only floor — its `.a8/.i8` width state desyncs when instructions and pinned `.byte` mix.)\n" +
     "'references' = scan a ROM's code for operands matching a CPU `address` and classify each (call/jump/branch/" +
     "read/write); also walks the vector table. LIMITATION: direct addressing only (indirect/computed jumps + " +
     "cross-bank refs are missed).",

@@ -64,11 +64,12 @@ export function registerLifecycleTools(server, z, sessionKey) {
 
   server.tool(
     "loadMedia",
-    "Use this to load a ROM/disk/tape/program into a fresh host — resolves the right libretro core " +
-    "automatically. Pass `path` (file on disk) OR `base64` (ROM bytes — e.g. straight from buildSource, " +
-    "no disk write, for a fast iteration loop). Pass `cheats` to apply codes BEFORE the first frame — for " +
-    "boot-time cheat testing (e.g. iterating on a Game Genie code that changes a value the reset code reads) " +
-    "in one call instead of loadMedia + applyCheat.",
+    "Load a ROM/disk/tape/program into a fresh host — resolves the libretro core automatically. " +
+    "Pass `path` (file on disk) OR `base64` (ROM bytes — e.g. straight from buildSource, no disk write, " +
+    "for a fast iteration loop). `cheats` apply BEFORE the first frame (one call instead of loadMedia + " +
+    "applyCheat), so a boot-time code that changes a value the reset code reads is in effect from frame 0. " +
+    "NOTE: framebuffer dimensions are omitted until you stepFrames — the pre-boot default does not match the " +
+    "real output resolution.",
     {
       platform: z.string().describe("Platform id (e.g. 'nes', 'gb', 'c64'). Use listPlatforms() to discover."),
       path: z.string().optional().describe("Absolute path to the media file. Provide this OR `base64`."),
@@ -83,8 +84,8 @@ export function registerLifecycleTools(server, z, sessionKey) {
 
   server.tool(
     "host",
-    "Emulator host lifecycle FSM — control the running machine. `op`: 'unload' | 'shutdown' | 'reset' | 'pause' | " +
-    "'resume'. (Loading media is the separate `loadMedia` tool.)\n" +
+    "Emulator host lifecycle. `op`: 'unload' | 'shutdown' | 'reset' | 'pause' | 'resume'. " +
+    "(Loading media is the separate `loadMedia` tool.)\n" +
     "'unload': drop the current media but keep the core hot (for a fast ROM swap). 'shutdown': tear the host down " +
     "entirely (a later loadMedia makes a fresh one).\n" +
     "'reset': DEFAULT is a SOFT reset (the RESET button — retro_reset; on most cores does NOT clear work RAM, so " +

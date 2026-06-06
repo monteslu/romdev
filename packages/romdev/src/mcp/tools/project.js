@@ -1844,7 +1844,7 @@ export function registerProjectTools(server, z) {
     "platformer / puzzle / sports / racing). Scaffolds a complete working ROM you build+run+screenshot in one " +
     "round trip, then fill in gameplay on the known-good baseline.\n" +
     "'snippets': browse/fetch a platform's vetted starter snippets — `mode:'list'` (names only), 'get' (one, needs " +
-    "`name`), 'getAll' (joined; path-or-inline). 'copySnippets': write every snippet straight to `destinationDir` " +
+    "`snippetName`), 'getAll' (joined; needs `outputPath` or `inline:true`). 'copySnippets': write every snippet straight to `destinationDir` " +
     "(bytes never pass through context); `include` whitelists a subset.",
     {
       op: z.enum(["project", "game", "snippets", "copySnippets"]).describe("new project; genre game; browse/fetch snippets; or copy snippets to a dir."),
