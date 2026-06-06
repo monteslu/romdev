@@ -67,7 +67,7 @@ test("SNES watchdog: a non-returning routine trips the watchdog, no hang (snes9x
 
   // Discover a live PC inside the main loop via the per-frame write to $7E0010.
   const wr = toJSON(await client.callTool({
-    name: "watchRange", arguments: { start: 0x7E0010, end: 0x7E0010, kind: "write", frames: 10, limit: 20 },
+    name: "watch", arguments: { on: "range",  start: 0x7E0010, end: 0x7E0010, kind: "write", frames: 10, limit: 20 },
   }));
   assert.equal(wr.notSupported, undefined, "watchRange notSupported on snes9x");
   assert.ok(wr.distinctPCs?.length > 0, "watchRange found no writer PC: " + JSON.stringify(wr));

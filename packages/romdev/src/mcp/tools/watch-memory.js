@@ -169,47 +169,9 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     valueFilter: z.object({ min: z.number().int().min(0).max(255).optional(), max: z.number().int().min(0).max(255).optional() }).optional().describe("Per-range value window; overrides the call-wide `valueFilter` for THIS range."),
   });
 
-  server.tool(
-    "watchMemory",
-    "Use this to answer 'what code is touching this RAM byte?' (without an instruction tracer) OR to extract a " +
-    "frame-accurate event timeline (e.g. music-driver note onsets). Runs N frames and reports every frame that " +
-    "changed a watched byte as {frame, offset, before, after, pc} — the pc tells you which disasm line to patch. " +
-    "POWER FEATURES: (1) `ranges:[{region,offset,length,label}]` watches MULTIPLE disjoint regions in ONE pass " +
-    "(all sampled on identical frames — no separate passes, no offline correlation). (2) `onChange` filters by " +
-    "edge: 'reset' (value jumped UP — the canonical note-onset signal for countdown counters), 'increase', " +
-    "'decrease', 'any'. (3) `valueFilter:{min,max}` keeps only changes whose new value is in range. (4) " +
-    "`outputPath` streams ALL events to disk as NDJSON and returns a compact summary — use it for dense watches " +
-    "(thousands of frames) so the full log never floods your context. A countdown-and-reset counter watched with " +
-    "onChange:'reset' goes from ~7000 noise events to a sparse onset list directly. " +
-    "CAVEAT: frame-level, not instruction-level — if a frame writes a byte several times you see only the last " +
-    "value (enough to find the code path, not cycle-exact tracing). Cross-platform.",
-    {
-      // Single-range args (back-compat). Ignored when `ranges` is given.
-      region: z.enum(MEMORY_REGIONS).optional().describe("Memory region to watch — the SAME canonical set readMemory accepts (incl. hardware registers like nes_apu_regs, genesis_ym2612, c64_sid_regs). Omit when using `ranges`."),
-      offset: z.number().int().min(0).default(0).describe("First byte of the watched range (single-range mode)."),
-      length: z.number().int().min(1).max(4096).default(1).describe("How many bytes to watch (single-range mode, default 1)."),
-      ranges: z.array(rangeShape).min(1).max(16).optional().describe("Watch several disjoint ranges in one pass. When given, `region`/`offset`/`length` are ignored. Each event carries its range's `label`. Ideal for music drivers, or tracing a state machine where a slow state byte and a noisy per-frame counter live in different bytes. Each range entry may OVERRIDE the call-wide filters with its own `onChange`/`sampleEvery`/`valueFilter` — so you can keep every transition of a slow state byte while sampling or suppressing a fast free-running counter in the SAME pass (the fix for one noisy byte burying the signal)."),
-      frames: z.number().int().min(1).max(1_000_000).default(600).describe("How many frames to run (default 600 = ~10s NTSC)."),
-      stopOnFirst: z.boolean().default(false).describe("If true, stop on the first detected (and filter-passing) change instead of running the full duration."),
-      onChange: z.enum(["any", "increase", "decrease", "reset"]).default("any").describe("Edge filter. 'any' = every change (default). 'increase'/'decrease' = directional. 'reset' = value jumped UP vs prev (counter reload — the note-onset signal for countdown-based music drivers)."),
-      valueFilter: z.object({
-        min: z.number().int().min(0).max(255).optional(),
-        max: z.number().int().min(0).max(255).optional(),
-      }).optional().describe("Keep only changes whose NEW byte value is within [min,max]. Combine with onChange to catch e.g. only large reloads."),
-      maxEvents: z.number().int().min(1).max(100_000).default(256).describe("Cap on RETURNED events; surplus dropped with a `truncated` flag. When `outputPath` is set, ALL matching events are written to the file regardless of this cap (the cap only bounds the inline preview). NOTE: with `format:\"series\"` this caps SAMPLES PER OFFSET and downsamples (keeps an evenly-spaced subset spanning the whole window) instead of truncating, so the series always reaches the last frame."),
-      format: z.enum(["events", "series"]).default("events").describe("Output shape. 'events' (default) = one verbose object per change. 'series' = COMPACT columnar: per watched offset return parallel `frames:[...]` + `values:[...]` arrays (the value-vs-frame curve) with the repeated region/label/pc boilerplate hoisted into a one-time header. Use 'series' for a dense single-byte timeline — physics arcs, animation counters, a value ramp that changes every frame — where you want the trajectory cheaply, not N fat rows. ~10× smaller for a monotonic ramp. Drops `pc` (use groupByPC/'events' if you need per-change PCs)."),
-      cheatLabels: z.string().optional().describe("Absolute path to the loaded ROM. When given, any watched RAM address that the bundled cheat DB has a label for is auto-annotated with that label (e.g. watching $00CD on Rygar tags events `Infinite Magic Attack`) — free semantic names from the crowd-sourced cheat map. Only annotates RAM-class regions where offset == CPU address (system_ram); a PROBABLE match (see gameCheats), so treat labels as strong hints, not gospel."),
-      sampleEvery: z.number().int().min(1).default(1).describe("Keep only every Nth filter-passing change (1 = all). A cheap 'I want the trend, not every delta' knob — e.g. sampleEvery:4 on a per-frame ramp returns a quarter of the points, still spanning the full window. Applies in both 'events' and 'series' formats; combine with format:'series' for the most compact dense-timeline output."),
-      groupByPC: z.boolean().default(false).describe("Collapse events by the sampled PC: return `byPC[]` = {pc, hits, firstFrame, lastFrame, offsets} (one row per PC seen at a write's frame boundary) instead of thousands of raw rows, and cap the inline `events[]` to a tiny sample (≤8). CAVEAT: `pc` is sampled at the frame boundary, NOT the writing instruction — for NMI/IRQ-driven writes (common on NES/GB) it is usually the interrupted main-thread PC (often an idle loop), so byPC rows can all collapse onto one idle-loop PC. Good for 'how often / which PCs', unreliable as 'which code wrote it' under interrupts — use `findWriter` for the EXACT writer. Composes with onChange/valueFilter; full per-event log still streams to `outputPath` if set."),
-      outputPath: z.string().optional().describe("If given, stream every filter-passing event to this path as NDJSON (one JSON object per line) and return a compact summary {path, eventCount, ...} plus a small inline preview (first maxEvents). Use for long watches so the full event log never enters your context."),
-      pressDuring: z.array(z.object({
-        frame: z.number().int().min(0).describe("Frame on which to press."),
-        button: z.string().describe("Button name (see input-layout.js)."),
-        port: z.number().int().min(0).max(3).default(0),
-        holdFrames: z.number().int().min(1).default(2),
-      })).optional().describe("Schedule button presses while watching, so the agent can simulate user input mid-watch."),
-    },
-    safeTool(async ({ region, offset = 0, length = 1, ranges, frames = 600, stopOnFirst = false, onChange = "any", valueFilter, maxEvents = 256, format = "events", sampleEvery = 1, groupByPC = false, outputPath, pressDuring, cheatLabels }) => {
+  // watch({on:mem|range|pc}) LOG-ALL. on:mem=watchMem (the power tool below),
+  // on:range=wRange, on:pc=wLogPC.
+  async function watchMem({ region, offset = 0, length = 1, ranges, frames = 600, stopOnFirst = false, onChange = "any", valueFilter, maxEvents = 256, format = "events", sampleEvery = 1, groupByPC = false, outputPath, pressDuring, cheatLabels }) {
       const host = getHost(sessionKey);
 
       // Normalize to a list of ranges. Single-range mode requires `region`.
@@ -434,8 +396,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       }
 
       return jsonContent({ ...base, events: preview, ...(sampleEvery > 1 ? { sampleEvery } : {}) });
-    }),
-  );
+  }
 
   // breakpoint({on:write|read|pc}) STOP-on-first. on:write precision:exact=bpFindWriter
   // (core watchpoint, true PC under IRQ), precision:sampled=bpRunUntilWrite (frame PC).
@@ -858,32 +819,13 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
 
   // ── Range watch + coverage trace (item 2, discovery) ────────────────────────
 
-  server.tool(
-    "watchRange",
-    "DISCOVERY: log EVERY instruction that reads or writes ANYWHERE in [start,end] over `frames` — not stop-on-first. " +
-    "The fix for 'I don't know which PC touches this'. Returns a list of {pc,address,value}. Use it to find an unknown " +
-    "renderer/reader: watch the whole name pool / a struct / a flag region and SEE every PC that hits it, instead of " +
-    "probing single addresses. Pair with disassembleRom on the returned PCs. (Frame-window + ring-buffered: a huge range " +
-    "over many frames can overflow the buffer — `truncated:true` says so; narrow the range or frames.) notSupported where " +
-    "the core lacks the watch hook.",
-    {
-      start: z.number().int().min(0).describe("Low CPU address of the watched range."),
-      end: z.number().int().min(0).describe("High CPU address (inclusive)."),
-      kind: z.enum(["read", "write", "both"]).default("both").describe("Watch reads, writes, or both."),
-      frames: z.number().int().min(1).max(6000).default(120).describe("Frames to run while logging."),
-      pressDuring: z.array(z.object({
-        frame: z.number().int().min(0), button: z.string(),
-        port: z.number().int().min(0).max(3).default(0), holdFrames: z.number().int().min(1).default(2),
-      })).optional().describe("Drive input while watching (reach the screen/state that touches the range)."),
-      limit: z.number().int().min(1).max(2000).default(200).describe("Max events to return (the full count is in `total`)."),
-    },
-    safeTool(async ({ start, end, kind, frames, pressDuring, limit }) => {
+  async function wRange({ start, end, kind = "both", frames = 120, pressDuring, limit = 200 }) {
       const host = getHost(sessionKey);
       if (!host.rangeWatchSupported || !host.rangeWatchSupported()) {
         return jsonContent({ notSupported: true, events: [],
-          note: "This core build has no range watch (shipped on all 14 platforms as of 0.6.0 — update the core package). Use findWriter/runUntilRead for a single address." });
+          note: "This core build has no range watch (shipped on all 14 platforms as of 0.6.0 — update the core package). Use breakpoint({on:'write'/'read'}) for a single address." });
       }
-      if (end < start) throw new Error("watchRange: end must be >= start.");
+      if (end < start) throw new Error("watch({on:'range'}): end must be >= start.");
       // pressDuring is driven inside the frame loop; watchRange's host method owns
       // stepping, so for now apply presses up front if any (simple: hold for the run).
       const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
@@ -906,32 +848,15 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         note: "distinctPCs is the actionable summary — each is a routine that touches this range; disassembleRom one to identify the renderer/reader. " +
           (r.truncated ? "TRUNCATED: more events than the buffer held — narrow `start..end` or `frames` for the full set." : ""),
       }), host);
-    }),
-  );
+  }
 
-  server.tool(
-    "logPCRange",
-    "DISCOVERY (coverage trace): record every DISTINCT PC executed within [start,end] over `frames` — 'what code runs " +
-    "here?'. The RE way to FIND an unknown routine: log execution in the bank where you suspect the renderer lives " +
-    "during the moment it draws, then disassembleRom the PCs. Returns { pcs:[...], distinct, total }. notSupported where " +
-    "the core lacks the execute hook.",
-    {
-      start: z.number().int().min(0).describe("Low CPU address of the coverage window."),
-      end: z.number().int().min(0).describe("High CPU address (inclusive)."),
-      frames: z.number().int().min(1).max(6000).default(120),
-      pressDuring: z.array(z.object({
-        frame: z.number().int().min(0), button: z.string(),
-        port: z.number().int().min(0).max(3).default(0), holdFrames: z.number().int().min(1).default(2),
-      })).optional(),
-      limit: z.number().int().min(1).max(4000).default(512),
-    },
-    safeTool(async ({ start, end, frames, pressDuring, limit }) => {
+  async function wLogPC({ start, end, frames = 120, pressDuring, limit = 512 }) {
       const host = getHost(sessionKey);
       if (!host.rangeWatchSupported || !host.rangeWatchSupported()) {
         return jsonContent({ notSupported: true, pcs: [],
           note: "This core build has no coverage trace (shipped on all 14 platforms as of 0.6.0 — update the core package)." });
       }
-      if (end < start) throw new Error("logPCRange: end must be >= start.");
+      if (end < start) throw new Error("watch({on:'pc'}): end must be >= start.");
       const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
       const pressDriver = makePressDriver(host, presses);
       if (presses.length) pressDriver.applyForFrame(0);
@@ -945,6 +870,61 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         note: "Each PC is code that EXECUTED in this window. disassembleRom them to find the routine you're hunting. " +
           (r.truncated ? "TRUNCATED — narrow the window for the full distinct set." : ""),
       }), host);
+  }
+
+  server.tool(
+    "watch",
+    "LOG-ALL dynamic tracing — run N frames and log EVERY hit (not stop-on-first; for stop-on-first use `breakpoint`). One tool keyed by `on`.\n" +
+    "• on:'mem' — the power tool: answer 'what code is touching this RAM byte?' OR extract a frame-accurate event timeline (music-driver note onsets, physics arcs). Reports every frame that changed a watched byte as {frame,offset,before,after,pc}. " +
+    "POWER FEATURES: `ranges:[{region,offset,length,label}]` watches MANY disjoint regions in ONE pass (identical frames); `onChange:'reset'|'increase'|'decrease'|'any'` edge filter (reset = counter-reload = the note-onset signal); `valueFilter:{min,max}`; `format:'series'` = compact columnar value-vs-frame curve (~10× smaller for a ramp); `sampleEvery`; `groupByPC` (collapse by sampled PC); `cheatLabels` (auto-name addresses from the cheat DB); `outputPath` streams all events as NDJSON. " +
+    "**CAVEAT: frame-level, not instruction-level (last value per frame); the sampled `pc` is a frame-boundary sample — for ISR-driven writes use breakpoint({on:'write', precision:'exact'}) for the real writer.**\n" +
+    "• on:'range' — DISCOVERY: log EVERY instruction that reads or writes ANYWHERE in [start,end]. The fix for 'I don't know which PC touches this'. Returns {pc,address,value}[] + the actionable distinctPCs. (Ring-buffered: `truncated:true` if it overflows.)\n" +
+    "• on:'pc' — DISCOVERY (coverage trace): record every DISTINCT PC executed within [start,end] — 'what code runs here?'. Log execution in the bank where you suspect the renderer lives during the moment it draws, then disassemble the PCs.",
+    {
+      on: z.enum(["mem", "range", "pc"])
+        .describe("mem=watch a RAM byte/ranges for value changes over frames (the power tool); range=log every read/write PC in [start,end]; pc=coverage trace of distinct PCs executed in [start,end]."),
+      // on:'mem'
+      region: z.enum(MEMORY_REGIONS).optional().describe("on:'mem' single-range — the region to watch (same canonical set memory uses, incl. nes_apu_regs, genesis_ym2612, c64_sid_regs). Omit when using `ranges`."),
+      offset: z.number().int().min(0).default(0).describe("on:'mem' single-range — first byte of the watched range."),
+      length: z.number().int().min(1).max(4096).default(1).describe("on:'mem' single-range — bytes to watch (default 1)."),
+      ranges: z.array(rangeShape).min(1).max(16).optional().describe("on:'mem' — watch several disjoint ranges in one pass (region/offset/length ignored). Each event carries its range's `label`; each range may OVERRIDE call-wide `onChange`/`sampleEvery`/`valueFilter` (keep a slow state byte while suppressing a noisy counter in the same pass)."),
+      onChange: z.enum(["any", "increase", "decrease", "reset"]).default("any").describe("on:'mem' edge filter. 'any' (default); 'increase'/'decrease' directional; 'reset' = value jumped UP (counter reload — the note-onset signal)."),
+      valueFilter: z.object({ min: z.number().int().min(0).max(255).optional(), max: z.number().int().min(0).max(255).optional() }).optional().describe("on:'mem' — keep only changes whose NEW value is within [min,max]."),
+      maxEvents: z.number().int().min(1).max(100_000).default(256).describe("on:'mem' — cap RETURNED events (outputPath gets ALL). With format:'series' caps SAMPLES PER OFFSET and downsamples to span the full window."),
+      format: z.enum(["events", "series"]).default("events").describe("on:'mem' — 'events' (verbose per change) or 'series' (compact columnar frames[]/values[] curve, ~10× smaller for a ramp; drops pc)."),
+      sampleEvery: z.number().int().min(1).default(1).describe("on:'mem' — keep only every Nth filter-passing change (trend, not every delta)."),
+      groupByPC: z.boolean().default(false).describe("on:'mem' — collapse events by sampled PC into byPC[]. CAVEAT: that PC is frame-boundary-sampled, NOT the writer under interrupts — use breakpoint({on:'write', precision:'exact'}) for the EXACT writer."),
+      cheatLabels: z.string().optional().describe("on:'mem' — absolute path to the loaded ROM; auto-annotate watched system_ram addresses from the bundled cheat DB (a PROBABLE match — strong hints, not gospel)."),
+      stopOnFirst: z.boolean().default(false).describe("on:'mem' — stop on the first filter-passing change instead of running the full duration. (For a true stop-on-first breakpoint, prefer the `breakpoint` tool.)"),
+      // on:'range'
+      kind: z.enum(["read", "write", "both"]).default("both").describe("on:'range' — watch reads, writes, or both."),
+      // on:'range' / on:'pc' window
+      start: z.number().int().min(0).optional().describe("on:'range'/'pc' — low CPU address of the window."),
+      end: z.number().int().min(0).optional().describe("on:'range'/'pc' — high CPU address (inclusive)."),
+      // shared
+      frames: z.number().int().min(1).max(1_000_000).default(600).describe("Frames to run while logging (on:'range'/'pc' cap at 6000, default 120; on:'mem' default 600)."),
+      limit: z.number().int().min(1).max(4000).default(200).describe("on:'range' (≤2000) / on:'pc' (≤4000) — max events/PCs returned (full count in `total`)."),
+      outputPath: z.string().optional().describe("on:'mem' — stream every filter-passing event to this path as NDJSON + return a compact summary. Use for long watches so the full log never enters your context."),
+      pressDuring: z.array(z.object({
+        frame: z.number().int().min(0),
+        button: z.string(),
+        port: z.number().int().min(0).max(3).default(0),
+        holdFrames: z.number().int().min(1).default(2),
+      })).optional().describe("Schedule input while watching (drive the game to the state that touches the watched bytes/range)."),
+    },
+    safeTool(async (args) => {
+      switch (args.on) {
+        case "mem":   return await watchMem(args);
+        case "range": {
+          if (args.start == null || args.end == null) throw new Error("watch({on:'range'}): `start` and `end` are required.");
+          return await wRange({ ...args, frames: args.frames ?? 120, limit: args.limit ?? 200 });
+        }
+        case "pc": {
+          if (args.start == null || args.end == null) throw new Error("watch({on:'pc'}): `start` and `end` are required.");
+          return await wLogPC({ ...args, frames: args.frames ?? 120, limit: args.limit ?? 512 });
+        }
+        default: throw new Error(`watch: unknown on '${args.on}'`);
+      }
     }),
   );
 

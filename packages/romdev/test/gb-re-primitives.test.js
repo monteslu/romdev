@@ -68,7 +68,7 @@ test("GB RE primitives: setRegister + watchRange + logPCRange + callSubroutine (
 
   // ── item 2a: watchRange logs writes to 0xC000 with pc/addr/value ──
   const wr = toJSON(await client.callTool({
-    name: "watchRange", arguments: { start: 0xC000, end: 0xC000, kind: "write", frames: 10, limit: 20 },
+    name: "watch", arguments: { on: "range",  start: 0xC000, end: 0xC000, kind: "write", frames: 10, limit: 20 },
   }));
   assert.equal(wr.notSupported, undefined, "watchRange notSupported");
   assert.ok(wr.total > 0, "watchRange caught no writes to 0xC000: " + JSON.stringify(wr));
@@ -77,7 +77,7 @@ test("GB RE primitives: setRegister + watchRange + logPCRange + callSubroutine (
 
   // ── item 2b: logPCRange returns distinct executed PCs in the ROM bank window ──
   const cov = toJSON(await client.callTool({
-    name: "logPCRange", arguments: { start: 0x0000, end: 0x7FFF, frames: 10 },
+    name: "watch", arguments: { on: "pc",  start: 0x0000, end: 0x7FFF, frames: 10 },
   }));
   assert.equal(cov.notSupported, undefined, "logPCRange notSupported");
   assert.ok(cov.distinct > 0, "logPCRange found no PCs: " + JSON.stringify(cov));

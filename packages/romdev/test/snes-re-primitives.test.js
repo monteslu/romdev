@@ -80,7 +80,7 @@ test("SNES RE primitives: setRegister + watchRange + logPCRange (+callSubroutine
   // ── item 2a: watchRange logs writes to $7E0010 with pc/addr/value ──
   // (Run BEFORE the destructive callSubroutine probe — it hijacks the CPU.)
   const wr = toJSON(await client.callTool({
-    name: "watchRange", arguments: { start: 0x7E0010, end: 0x7E0010, kind: "write", frames: 10, limit: 20 },
+    name: "watch", arguments: { on: "range",  start: 0x7E0010, end: 0x7E0010, kind: "write", frames: 10, limit: 20 },
   }));
   assert.equal(wr.notSupported, undefined, "watchRange notSupported — romdev_range_* missing?");
   assert.ok(wr.total > 0, "watchRange caught no writes to $7E0010: " + JSON.stringify(wr));
@@ -99,7 +99,7 @@ test("SNES RE primitives: setRegister + watchRange + logPCRange (+callSubroutine
   const covLo = writerPC & 0xFFF000;
   const covHi = covLo + 0x0FFF;
   const cov = toJSON(await client.callTool({
-    name: "logPCRange", arguments: { start: covLo, end: covHi, frames: 10 },
+    name: "watch", arguments: { on: "pc",  start: covLo, end: covHi, frames: 10 },
   }));
   assert.equal(cov.notSupported, undefined, "logPCRange notSupported — romdev_cov_* missing?");
   assert.ok(cov.distinct > 0, "logPCRange found no PCs in the writer window: " + JSON.stringify(cov));

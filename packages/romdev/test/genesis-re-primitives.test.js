@@ -89,7 +89,7 @@ test("Genesis RE primitives: callSubroutine + watchRange + logPCRange + watchDma
 
   // ── item 2a: watchRange logs writes to $FF2000 with pc/addr/value ──
   const wr = toJSON(await client.callTool({
-    name: "watchRange", arguments: { start: 0xFF2000, end: 0xFF2001, kind: "write", frames: 10, limit: 10 },
+    name: "watch", arguments: { on: "range",  start: 0xFF2000, end: 0xFF2001, kind: "write", frames: 10, limit: 10 },
   }));
   assert.equal(wr.notSupported, undefined, "watchRange notSupported");
   assert.ok(wr.total > 0, "watchRange caught no writes: " + JSON.stringify(wr));
@@ -97,7 +97,7 @@ test("Genesis RE primitives: callSubroutine + watchRange + logPCRange + watchDma
 
   // ── item 2b: logPCRange returns distinct executed PCs ──
   const cov = toJSON(await client.callTool({
-    name: "logPCRange", arguments: { start: 0x200, end: 0x2000, frames: 10 },
+    name: "watch", arguments: { on: "pc",  start: 0x200, end: 0x2000, frames: 10 },
   }));
   assert.equal(cov.notSupported, undefined, "logPCRange notSupported");
   assert.ok(cov.distinct > 0, "logPCRange found no PCs: " + JSON.stringify(cov));

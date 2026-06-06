@@ -47,16 +47,18 @@ import { _setHostForTest } from "../src/mcp/state.js";
 
 const setHost = (key, host) => _setHostForTest(key, host);
 
-// Capture the watchMemory handler out of registerWatchMemoryTools.
+// Capture the consolidated `watch` handler out of registerWatchMemoryTools.
+// watchMemory is now watch({on:'mem'}); inject `on:'mem'` so these (frozen)
+// assertions call it with the same watchMemory-style args.
 function getWatchHandler() {
   let handler;
   const fakeServer = {
     tool(name, _desc, _schema, h) {
-      if (name === "watchMemory") handler = h;
+      if (name === "watch") handler = h;
     },
   };
   registerWatchMemoryTools(fakeServer, z, "test-session");
-  return handler;
+  return (args) => handler({ on: "mem", ...args });
 }
 
 function parseResult(res) {
