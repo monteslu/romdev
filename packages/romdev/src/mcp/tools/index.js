@@ -319,9 +319,8 @@ const TOOL_OWNER = {
   // assets category
   pcmToBrr: "assets", wavToXgm2Pcm: "assets",
   cart: "assets",
-  listRoms: "assets", patchRom: "assets", patchFile: "assets", validateRom: "assets",
-  assembleSnippet: "assets", diffRoms: "assets", findFreeSpace: "assets", spliceCHR: "assets",
-  findPointerTo: "assets", makeStoredBlock: "assets", relocateBlock: "assets",
+  listRoms: "assets", romPatch: "assets", validateRom: "assets",
+  assembleSnippet: "assets",
 
   text: "assets",
   importArt: "assets",

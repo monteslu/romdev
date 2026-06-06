@@ -8,7 +8,6 @@
 // being overwritten.
 
 import { readFile } from "node:fs/promises";
-import { jsonContent, safeTool } from "../util.js";
 
 /**
  * Tile size in bytes per platform.
@@ -186,30 +185,6 @@ function parseRgb(input) {
   throw new Error(`paletteHint entry must be "#RRGGBB" or [r,g,b]; got ${JSON.stringify(input)}`);
 }
 
-export function registerSpliceChrTools(server, z) {
-  server.tool(
-    "spliceCHR",
-    "Use this to drop new tile art into a ROM's CHR: encodes a PNG to platform-native tile bytes and " +
-    "splices it at a tile slot in one call (replaces read-CHR + convertImageToTiles + patchFile). " +
-    "Set `expect` to the current bytes for a safety check — the splice refuses if the CHR doesn't match. " +
-    "PNG width/height must be multiples of 8. For a full tilemap+attribute pass use imageToTilemap; " +
-    "spliceCHR is the surgical \"overwrite tile slot N\" tool. See the param hints for slot selection " +
-    "(bank/chrFileOffset) and palette quantization (paletteHint).",
-    {
-      path: z.string().describe("Absolute path to the ROM/CHR file."),
-      platform: z.enum(["nes", "gb", "gbc", "sms", "gg", "snes", "genesis", "megadrive", "md"]).describe("Tile encoding format."),
-      pngBase64: z.string().describe("Base64 of the PNG with new tile graphics."),
-      tileIndex: z.number().int().min(0).describe("Zero-based tile slot in the CHR region. NES tiles are 16 bytes each; sprite bank usually starts at tile 0."),
-      bank: z.number().int().min(0).max(127).optional().describe("NES: 4 KB CHR bank index (replaces the file-offset math). Mutually exclusive with chrFileOffset."),
-      chrFileOffset: z.number().int().min(0).optional().describe("Override CHR base offset. Auto-detected for iNES files; required for GB/GBC and other platforms where CHR lives at arbitrary PRG offsets."),
-      paletteHint: z.array(z.union([z.string(), z.array(z.number()).length(3)])).optional().describe("Optional RGB→palette-index map (e.g. ['#0000BC', '#0000FC', '#3CBCFC', '#FCFCFC'] for NES 2bpp). Pixel RGB is matched nearest-neighbor against the hint, the matched index is the encoded value. Skip the default quantization — recommended when you painted with the game's palette."),
-      expect: z.string().optional().describe("Hex of the bytes you expect at the splice point. Highly recommended — without it, a stale tileIndex silently corrupts adjacent graphics. Typical chain: extractSpriteSheet (capture old tile bytes) → spliceCHR with expect=those bytes → safe to retry."),
-      outputPath: z.string().optional().describe("Write the patched ROM to a different path (preserves the source). If omitted, modifies in place."),
-      allowExpand: z.boolean().default(false).describe("Permit the write to grow the file. Almost always false — CHR splices must not change ROM size."),
-    },
-    safeTool(async (args) => {
-      const r = await spliceChrCore(args);
-      return jsonContent(r);
-    }),
-  );
-}
+// spliceCHR folded into the `romPatch` tool (romPatch({op:'spliceCHR'}),
+// rom-id.js, which imports spliceChrCore). Nothing registered here.
+export function registerSpliceChrTools() {}

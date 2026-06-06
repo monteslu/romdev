@@ -67,6 +67,8 @@ export const MERGE_MAP = {
   dmaTrace: { absorbs: ["watchDma", "traceVramSource"], axis: "precision" },
   // ── build (compile/run; buildSource/buildProject/runSource from toolchain.js, buildSourceWithDebug from symbols.js). ENTRY-TIER. ──
   build: { absorbs: ["buildSource", "buildSourceWithDebug", "buildProject", "runSource"], axis: "output" },
+  // ── romPatch (8-op ROM-hack toolkit; patchFile/patchRom from rom-id.js, spliceCHR from splice-chr.js, relocateBlock/makeStoredBlock/findPointerTo from reinject.js, findFreeSpace from free-space.js, diffRoms from diff-roms.js) ──
+  romPatch: { absorbs: ["patchFile", "patchRom", "spliceCHR", "relocateBlock", "makeStoredBlock", "findFreeSpace", "findPointerTo", "diffRoms"], axis: "op" },
 };
 
 /** Every OLD tool name that the consolidation removes (absorbed into a new tool). */
