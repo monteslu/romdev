@@ -16,6 +16,7 @@ import { imageContent, jsonContent, safeTool, textContent } from "../util.js";
 export let inspectPaletteCore = async () => { throw new Error("platform-tools cores not initialized — registerPlatformTools must run first"); };
 export let getPlatformMasterPaletteCore = async () => { throw new Error("platform-tools cores not initialized — registerPlatformTools must run first"); };
 export let getAudioStateCore = async () => { throw new Error("platform-tools cores not initialized — registerPlatformTools must run first"); };
+export let inspectSpritesCore = async () => { throw new Error("platform-tools cores not initialized — registerPlatformTools must run first"); };
 
 // Image-output contract: a PNG image goes to disk (path) OR comes back
 // inline (inline:true). No path + not inline → error. The structured
@@ -451,19 +452,10 @@ export function registerPlatformTools(server, z, sessionKey) {
 
   getAudioStateCore = async ({ chip }) => jsonContent(readAudioChip(chip));
 
-  server.tool(
-    "inspectSprites",
-    "List the loaded ROM's active sprite table in a generic {slot,x,y,tile,palette,priority,flipH,flipV,size:{w,h},visible}[] shape. Supported: NES (64 sprites), SNES (128 sprites with hi-table X/size). Generic across platforms — each platform's adapter reads its native OAM and normalizes to this shape so cross-platform sprite debugging is one tool call. " +
-    "Use `maxSlots` to return only the first N slots (e.g. maxSlots:8 for the active-piece + preview sprites) — shrinks the response when you don't need all 64/128. " +
-    "The sprite JSON is ALWAYS returned. On platforms that also render a sprite PNG (sms/gg, gb/gbc, atari2600/7800): DEFAULT writes the PNG to outputPath and returns {imagePath}; pass inline:true to get the image in the response (you must pass one or the other on those platforms). NES/SNES/Genesis/C64 are JSON-only — no path needed.",
-    {
-      platform: z.string().optional(),
-      maxSlots: z.number().int().min(1).max(128).optional().describe("Return only the first N sprite slots (in OAM order). Omit for all. e.g. maxSlots:8 = the active piece + next preview on most games."),
-      slots: z.array(z.number().int().min(0).max(127)).optional().describe("Return only these specific slot indices (non-contiguous OK, e.g. [0,1,2,3,8,9]). Takes precedence over maxSlots. Use when the slots you care about aren't the first N."),
-      outputPath: z.string().optional().describe("Absolute path to write the sprite PNG to (only platforms that produce one). Required on those platforms unless inline:true."),
-      inline: z.boolean().default(false).describe("If true, return the sprite image in the response instead of writing to disk (only platforms that produce one). Default false."),
-    },
-    safeTool(async ({ platform, maxSlots, slots, outputPath, inline }) => {
+  // inspectSprites lives in the `sprites` tool (metasprite-tools.js) now —
+  // extracted here as a live-binding core so the router can call it without
+  // disturbing the other handlers registerPlatformTools owns.
+  inspectSpritesCore = async ({ platform, maxSlots, slots, outputPath, inline }) => {
       const host = getHost(sessionKey);
       const p = resolvePlatform(host, platform);
       // Generic slot filter, applied by each platform branch before returning.
@@ -725,8 +717,7 @@ export function registerPlatformTools(server, z, sessionKey) {
       }
 
       throw new Error(`inspectSprites not yet wired for platform '${p}'. Supported: nes, snes, genesis, sms, gg, gb, gbc, atari2600, atari7800, c64, gba, pce, msx. (Lynx returns the SCB list head — it has no fixed OAM.)`);
-    }),
-  );
+  };
 
   server.tool(
     "inspectBackgroundMap",
