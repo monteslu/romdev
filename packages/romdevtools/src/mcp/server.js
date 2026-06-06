@@ -411,7 +411,7 @@ async function main() {
   });
   httpServer.on("listening", () => {
     log.info("");
-    log.info(`romdev (version ${PKG_VERSION}) listening on http://${bannerHost}:${port}/mcp`);
+    log.info(`romdev (v${PKG_VERSION}) listening on http://${bannerHost}:${port}/mcp`);
     log.info("");
     log.info(`prefer a skill?  save:  http://${bannerHost}:${port}/romdev-skill.md`);
     log.info("");
