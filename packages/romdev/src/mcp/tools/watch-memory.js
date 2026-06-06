@@ -20,6 +20,7 @@ import { getCPUState } from "../../host/cpu-state.js";
 import { MemoryRegionToRetro } from "../../host/types.js";
 import { resolveButtonAlias } from "./input.js";
 import { getCPUStateCore } from "./platform-tools.js";
+import { traceVramSourceCore } from "./trace-vram-source.js";
 
 // Let a human watching /livestream (or a playtest window) SEE what a
 // breakpoint/watch tool just did — the frozen breakpoint frame, the state when a
@@ -928,34 +929,14 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     }),
   );
 
-  // ── Targeted VDP-DMA watch (item 3, Genesis only) ───────────────────────────
-
-  server.tool(
-    "watchDma",
-    "GENESIS ONLY. Log every mem→VDP DMA over `frames` with its VRAM DESTINATION, ROM SOURCE, length, and code — the " +
-    "targeted answer to 'which DMA wrote the tile at VRAM 0xNNNN, and where in ROM did it come from?'. This is the " +
-    "precise version of traceVramSource (which is frame-sampled and dest-agnostic): filter the returned list by " +
-    "`vramDest` to find the exact source of a name/portrait/logo bitmap that's DMA'd (so findWriter can't catch it). " +
-    "Returns { dmas:[{vramDest, source, lengthWords, lengthBytes, code, target}] }. notSupported on non-Genesis cores " +
-    "(VDP DMA is a Genesis concept — use findWriter for CPU writes elsewhere).",
-    {
-      frames: z.number().int().min(1).max(6000).default(120),
-      vramDest: z.number().int().min(0).optional().describe("If set, only return DMAs whose VRAM destination falls within ±`destWindow` of this address."),
-      destWindow: z.number().int().min(0).default(0x40).describe("Match window around vramDest (default 64 bytes ≈ 1 tile)."),
-      dedupe: z.boolean().default(true).describe("Collapse identical DMAs (same dest+source+length) to ONE entry with an `occurrences` count. ON by default — a full match-load fires the SAME per-frame refresh thousands of times; dedupe turns 7000 events into a handful of distinct uploads."),
-      sourceFilter: z.enum(["all", "rom-only", "ram-only"]).default("all").describe("'rom-only' drops the RAM→VRAM per-frame sprite/scroll refresh (source >= a ROM/RAM split) — the noise. 'ram-only' keeps only those. Use 'rom-only' to find a compressed asset DMA'd straight from cart ROM."),
-      pressDuring: z.array(z.object({
-        frame: z.number().int().min(0), button: z.string(),
-        port: z.number().int().min(0).max(3).default(0), holdFrames: z.number().int().min(1).default(2),
-      })).optional().describe("Drive to the screen that uploads the graphic."),
-      romPreviewBytes: z.number().int().min(0).max(64).default(0).describe("Bytes of the ROM source to preview per DMA (0 = none)."),
-      limit: z.number().int().min(1).max(2000).default(200).describe("Max DMA entries to return (after dedupe/filter)."),
-    },
-    safeTool(async ({ frames, vramDest, destWindow, dedupe, sourceFilter, pressDuring, romPreviewBytes, limit }) => {
+  // ── dmaTrace (item 3, Genesis only) ─────────────────────────────────────────
+  // precision:exact = dmaExact (watchDma, per-DMA core log), precision:sampled =
+  // traceVramSourceCore (frame-sampled, dest-agnostic).
+  async function dmaExact({ frames = 120, vramDest, destWindow = 0x40, dedupe = true, sourceFilter = "all", pressDuring, romPreviewBytes = 0, limit = 200 }) {
       const host = getHost(sessionKey);
       if (!host.dmaWatchSupported || !host.dmaWatchSupported()) {
         return jsonContent({ notSupported: true, dmas: [],
-          note: "watchDma is Genesis-only (VDP DMA). On other platforms use findWriter (CPU writes) or the platform's source tracer." });
+          note: "dmaTrace is Genesis-only (VDP DMA). On other platforms use breakpoint({on:'write'}) (CPU writes) or the platform's source tracer." });
       }
       const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
       const pressDriver = makePressDriver(host, presses);
@@ -1011,6 +992,44 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
           "dedupe collapses the per-frame refresh; sourceFilter:'rom-only' drops the RAM→VRAM sprite/scroll noise (use it to find a cart-ROM asset DMA). " +
           (totalDistinct > limit ? `Showing ${out.length}/${totalDistinct} distinct — raise limit or narrow vramDest.` : ""),
       }), host);
+  }
+
+  server.tool(
+    "dmaTrace",
+    "GENESIS ONLY — trace mem→VDP DMAs (the answer to 'this name/portrait/logo is a pre-rendered bitmap DMA'd into VRAM — " +
+    "WHERE in ROM?', which breakpoint({on:'write'}) can't catch). Keyed by `precision`.\n" +
+    "• precision:'exact' (default) — log every mem→VDP DMA with its VRAM DESTINATION, ROM SOURCE, length, and code. " +
+    "Filter by `vramDest` (±`destWindow`) to find the exact source of a specific tile. `dedupe` collapses the per-frame " +
+    "refresh (7000 events → a handful); `sourceFilter:'rom-only'` drops the RAM→VRAM sprite/scroll noise. " +
+    "**Catches a second DMA in the same frame that the sampled mode misses.**\n" +
+    "• precision:'sampled' — the cheap frame-sampled tracer: reads the VDP DMA source registers ($15-$17) once per frame " +
+    "and logs each DISTINCT mem→VRAM source as a ROM byte offset. **HONEST LIMIT: two DMAs in the SAME frame may show only " +
+    "one source — narrow the window around when the graphic appears. dest-agnostic (no vramDest filter).**",
+    {
+      precision: z.enum(["exact", "sampled"]).default("exact")
+        .describe("exact=per-DMA core log with VRAM dest + ROM source (catches same-frame DMAs); sampled=frame-sampled source-register read (cheaper, may miss two DMAs in one frame, dest-agnostic)."),
+      frames: z.number().int().min(1).max(6000).default(120).describe("Frames to step while tracing (default 120 ≈ 2s)."),
+      pressDuring: z.array(z.object({
+        frame: z.number().int().min(0),
+        button: z.string(),
+        port: z.number().int().min(0).max(3).default(0),
+        holdFrames: z.number().int().min(1).default(2),
+      })).optional().describe("Drive input to the screen that uploads the graphic."),
+      romPreviewBytes: z.number().int().min(0).max(64).default(0).describe("Bytes of the ROM source to preview per DMA (exact default 0; sampled default 16)."),
+      // precision:'exact' only
+      vramDest: z.number().int().min(0).optional().describe("precision:'exact' — only return DMAs whose VRAM destination is within ±`destWindow` of this address."),
+      destWindow: z.number().int().min(0).default(0x40).describe("precision:'exact' — match window around vramDest (default 64 bytes ≈ 1 tile)."),
+      dedupe: z.boolean().default(true).describe("precision:'exact' — collapse identical DMAs (same dest+source+length) to one entry with an `occurrences` count (default on)."),
+      sourceFilter: z.enum(["all", "rom-only", "ram-only"]).default("all").describe("precision:'exact' — 'rom-only' drops the RAM→VRAM per-frame refresh noise; 'ram-only' keeps only it."),
+      limit: z.number().int().min(1).max(2000).default(200).describe("precision:'exact' — max DMA entries to return (after dedupe/filter)."),
+      // precision:'sampled' only
+      minLengthBytes: z.number().int().min(0).max(65536).default(0).describe("precision:'sampled' — ignore DMAs shorter than this many bytes (filters tiny scroll/sprite updates so graphic uploads stand out)."),
+    },
+    safeTool(async (args) => {
+      if (args.precision === "sampled") {
+        return await traceVramSourceCore({ ...args, romPreviewBytes: args.romPreviewBytes || 16, sessionKey });
+      }
+      return await dmaExact(args);
     }),
   );
 }
