@@ -601,11 +601,11 @@ export function registerCartPartsTools(server, z) {
     "NES auto-generates the iNES header from mapper+mirror (chrPath:null for CHR-RAM). Per-platform part paths in " +
     "the param hints.",
     {
-      op: z.enum(["identify", "extract", "wrap"]).describe("identify the ROM's platform; extract into parts; or wrap parts back into a cart."),
+      op: z.enum(["identify", "extract", "wrap"]).describe("identify the ROM's platform; extract into parts; wrap parts back into a cart."),
       // identify
       path: z.string().optional().describe("op=identify/extract: absolute path to the ROM file."),
       base64: z.string().optional().describe("op=identify: base64 ROM bytes (OR path)."),
-      hint: z.string().optional().describe("op=identify: with base64, the filename extension (e.g. '.nes') to disambiguate headerless formats."),
+      hint: z.string().optional().describe("op=identify: with base64, filename extension (e.g. '.nes') to disambiguate headerless formats."),
       // extract / wrap
       platform: z.enum(["nes", "snes", "genesis", "megadrive", "md", "gb", "gbc", "sms", "gg", "atari2600", "a2600", "atari7800", "a7800", "c64"]).optional().describe("op=extract: override detection. op=wrap: REQUIRED — the target platform."),
       outputDir: z.string().optional().describe("op=extract: directory to write the parts (+ manifest.json). Required unless inline:true."),
@@ -615,14 +615,14 @@ export function registerCartPartsTools(server, z) {
       chrPath: z.string().nullable().optional().describe("op=wrap NES: path to CHR bytes; null for CHR-RAM carts."),
       mapper: z.number().int().min(0).max(255).optional().describe("op=wrap NES: iNES mapper number (default 0 NROM)."),
       mirror: z.enum(["horizontal", "vertical", "four-screen"]).optional().describe("op=wrap NES: nametable mirroring."),
-      prgBanks: z.number().int().min(1).max(255).optional().describe("op=wrap NES: PRG bank count (16KB each)."),
+      prgBanks: z.number().int().min(1).max(255).optional().describe("op=wrap NES: PRG bank count (16KB each); only 1 (NROM-128) or 2 (NROM-256) supported, default 1."),
       chrBanks: z.number().int().min(0).max(255).optional().describe("op=wrap NES: CHR bank count (8KB each); 0 = CHR-RAM."),
       // wrap — SNES
-      romPath: z.string().optional().describe("op=wrap SNES: path to the ROM body."),
+      romPath: z.string().optional().describe("op=wrap SNES/SMS/GG/Atari 2600/Atari 7800/C64: whole-ROM body for a one-shot incbin (skips the per-part paths)."),
       copierHeaderPath: z.string().optional().describe("op=wrap SNES: path to a 512B copier header to prepend."),
       // wrap — Genesis / GB / SMS-GG / Atari / C64
-      headerPath: z.string().optional().describe("op=wrap Genesis/GB: header bytes."),
-      bodyPath: z.string().optional().describe("op=wrap Genesis/GB: ROM body."),
+      headerPath: z.string().optional().describe("op=wrap Genesis/GB/SMS/GG: header bytes."),
+      bodyPath: z.string().optional().describe("op=wrap Genesis/GB/SMS/GG/Atari 2600/Atari 7800/C64: ROM body."),
       bootPath: z.string().optional().describe("op=wrap GB/GBC: boot/jump bytes at $0000-$00FF."),
       preHeaderPath: z.string().optional().describe("op=wrap SMS/GG: code in $0000-$7FEF (required for 32KB+ standard-header carts)."),
       vectorsPath: z.string().optional().describe("op=wrap Genesis (256B vector table) / Atari 2600,7800 (6-byte vectors at $FFFA-$FFFF)."),

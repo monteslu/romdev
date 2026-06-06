@@ -228,36 +228,36 @@ export function registerTileInspectTools(server, z, sessionKey) {
       op: z.enum(["png", "pixels", "fingerprints", "ascii", "preview"])
         .describe("png=PNG sheet (live VRAM, or a ROM file via path); pixels=one tile's 64 indices; fingerprints=hash scan; ascii=ASCII art; preview=composite arbitrary tileBytes against a palette."),
       platform: z.string().optional().describe("Override platform; defaults to the loaded ROM. REQUIRED for op:'png' file extraction (path) and op:'preview', and when reading pixels/fingerprints/ascii from `path`."),
-      path: z.string().optional().describe("op:png/pixels/fingerprints/ascii — read tile bytes from this ROM/CHR file instead of the running emulator (the `source` selector)."),
-      logicalPixels: z.boolean().default(true).describe("op:pixels/fingerprints/ascii, Genesis emulator source only: un-swap host-LE 16-bit VRAM words to VDP render order (default true). No effect elsewhere."),
+      path: z.string().optional().describe("op:png/pixels/fingerprints/ascii — read tile bytes from this ROM/CHR file instead of the emulator (iNES auto-locates CHR, raw .chr/.bin read as-is)."),
+      logicalPixels: z.boolean().default(true).describe("op:pixels/fingerprints/ascii, Genesis emulator source only: un-swap host-LE 16-bit VRAM words to VDP render order. No effect on file sources or other platforms."),
       // op:pixels
       tileIndex: z.number().int().min(0).max(8191).optional().describe("op:pixels — which tile to decode."),
       // op:fingerprints / op:ascii ranges
       start: z.number().int().min(0).default(0).describe("op:fingerprints/ascii — first tile index."),
-      count: z.number().int().min(1).max(8192).optional().describe("op:fingerprints (≤8192, default 256) / op:ascii (≤64, default 16) — how many tiles to scan. op:png file extraction — tile count (default 256)."),
+      count: z.number().int().min(1).max(8192).optional().describe("How many tiles. op:fingerprints (default 256) / op:ascii (default 16, keep small) / op:png file extraction (default 256)."),
       // op:png shared
-      scale: z.number().int().min(1).max(16).default(1).describe("op:png — integer nearest-neighbor upscale (the default 8×8 strip is tiny inline; scale:4 → 32×32 per tile)."),
+      scale: z.number().int().min(1).max(16).default(1).describe("op:png (live VRAM) / op:preview — integer nearest-neighbor upscale (default 1; 8×8 is tiny inline, scale:4 → 32×32 per tile). Ignored by op:png file extraction."),
       bpp: z.union([z.literal(2), z.literal(4), z.literal(8)]).default(4).describe("op:png SNES only: tile bit-depth (Mode 1 BG1/BG2 = 4bpp default, BG3 = 2bpp). snes9x can't auto-detect."),
       tileBaseByte: z.number().int().min(0).default(0).describe("op:png SNES only: byte offset into VRAM of tile 0 (BG character base)."),
-      paletteBase: z.number().int().min(0).max(255).default(0).describe("op:png SNES only: CGRAM index of color 0 of the sub-palette used to colorize the sheet."),
+      paletteBase: z.number().int().min(0).max(255).default(0).describe("op:png SNES only: CGRAM index of the sub-palette's color 0 used to colorize the sheet."),
       paletteIndex: z.number().int().min(0).max(15).default(0).describe("op:png Genesis live (0-3) / op:png file extraction (NES 0-7, SNES 0-15, Genesis 0-3) / op:preview subpalette index."),
-      tileCount: z.number().int().min(0).default(0).describe("op:png SNES/Genesis live only: how many tiles to render (0 = fill VRAM from tileBaseByte)."),
+      tileCount: z.number().int().min(0).default(0).describe("How many tiles to render. op:png SNES/Genesis live (0 = fill VRAM; SNES starts from tileBaseByte). op:preview also reads it (fromEmulator default 256; file/inline default = rest of source)."),
       // op:png file extraction (path)
-      offset: z.number().int().min(0).optional().describe("op:png file (path): raw byte offset into the ROM file. Use `bank` when possible."),
-      bank: z.number().int().min(0).max(127).optional().describe("op:png file (path) NES: 4 KB CHR bank index (0 = first 4 KB). Conflicts with `offset`."),
-      paletteFromEmulator: z.boolean().optional().describe("op:png file extraction / op:preview — color using the live emulator palette (NES/SNES/Genesis). Default from `intent`."),
+      offset: z.number().int().min(0).optional().describe("op:png file (path): raw byte offset into the ROM file. Prefer `bank` when possible."),
+      bank: z.number().int().min(0).max(127).optional().describe("op:png file (path) NES only: 4 KB CHR bank index (0 = first 4 KB). Takes precedence over `offset`."),
+      paletteFromEmulator: z.boolean().optional().describe("op:png file extraction / op:preview — color with the live emulator palette (NES/SNES/Genesis, +PCE/MSX for preview). Default from `intent`."),
       tilesPerRow: z.number().int().min(1).max(64).default(16).describe("op:png file extraction / op:preview — tiles per row in the sheet."),
       // op:preview
       tileBytes: z.string().optional().describe("op:preview — base64 of raw tile bytes."),
       tilePath: z.string().optional().describe("op:preview — path to a tile dump (raw) or iNES ROM (NES auto-locates CHR)."),
       fromEmulator: z.boolean().optional().describe("op:preview — read tiles from the running emulator's live VRAM (tileStart/tileCount pick the range). Genesis byte-swap handled. Mutually exclusive with tileBytes/tilePath."),
       tileStart: z.number().int().min(0).optional().describe("op:preview — starting tile index in the source."),
-      byteOffset: z.number().int().min(0).optional().describe("op:preview — start at a raw BYTE offset instead of a tile index (pass a watchDma/findReferences source directly). WARNS on misalignment. Takes precedence over tileStart."),
+      byteOffset: z.number().int().min(0).optional().describe("op:preview — start at a raw BYTE offset instead of a tile index (pass a dmaTrace / disasm-references source directly). WARNS on misalignment. Takes precedence over tileStart."),
       palette: z.array(z.any()).optional().describe("op:preview — explicit palette (NES: 4 master indices; others: RGB triples or indices)."),
       palettePath: z.string().optional().describe("op:preview — raw palette dump from disk."),
       // shared output
-      outputPath: z.string().optional().describe("op:png/preview — write the PNG here (op:png defaults to disk unless inline; op:preview returns inline if omitted)."),
-      inline: z.boolean().default(false).describe("op:png — return the image in the response instead of writing to disk."),
+      outputPath: z.string().optional().describe("op:png/preview — write the PNG to this path. op:png live VRAM REQUIRES outputPath or inline (no default). op:png file extraction + op:preview: omit to return the image inline."),
+      inline: z.boolean().default(false).describe("op:png live VRAM only — return the image in the response instead of writing to disk (file extraction/preview return inline whenever outputPath is omitted)."),
       intent: intentZod(z),
     },
     safeTool(async (args) => {

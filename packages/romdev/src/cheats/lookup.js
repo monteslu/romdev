@@ -151,7 +151,7 @@ export async function searchCheatGames({ platform, query, limit = 12, minScore =
     gameCount: idx.gameCount ?? names.length,
     note: matches.length === 0
       ? `No game in the ${platform} cheat DB (${names.length} games) is close to "${query}". Try fewer/looser words.`
-      : `${matches.length} candidate(s) by fuzzy name match (region/revision tags ignored, typo-tolerant). Pass an exact \`game\` to gameCheats (it also fuzzy-matches). Score is name similarity, not a content guarantee — verify a label before patching.`,
+      : `${matches.length} candidate(s) by fuzzy name match (region/revision tags ignored, typo-tolerant). Pass an exact \`game\` to cheats({op:'lookup'}) (it also fuzzy-matches). Score is name similarity, not a content guarantee — verify a label before patching.`,
   };
 }
 

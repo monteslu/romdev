@@ -1091,10 +1091,10 @@ export class LibretroHost {
     const mod = this._needMod();
     if (!this.status.loaded) throw new Error("no media loaded");
     if (!this.setRegSupported()) {
-      throw new Error("callSubroutine not supported by this core (rebuild with romdev_setreg/romdev_getreg).");
+      throw new Error("cpu({op:'call'}) not supported by this core (rebuild with romdev_setreg/romdev_getreg).");
     }
     if (!this.pcBreakSupported()) {
-      throw new Error("callSubroutine needs the PC breakpoint (romdev_pcbreak) too.");
+      throw new Error("cpu({op:'call'}) needs the PC breakpoint (romdev_pcbreak) too.");
     }
     const prof = this._cpuCallProfile();
     const {

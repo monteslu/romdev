@@ -55,7 +55,7 @@ async function resolveChrBase(path, platform, explicitOffset) {
     const off = 16 + prgSize;
     const chrSize = data[5] * 8192;
     if (chrSize === 0) {
-      throw new Error(`spliceCHR: iNES ROM '${path}' has CHR-RAM (no CHR-ROM in the file). Use buildSource to generate CHR via your asm source.`);
+      throw new Error(`spliceCHR: iNES ROM '${path}' has CHR-RAM (no CHR-ROM in the file). Use build({output:'rom'}) to generate CHR via your asm source.`);
     }
     return { fileOffset: off, chrSize, note: `iNES CHR-ROM bank @ file offset ${off}, ${chrSize} bytes` };
   }

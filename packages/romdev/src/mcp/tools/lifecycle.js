@@ -71,11 +71,11 @@ export function registerLifecycleTools(server, z, sessionKey) {
     "in one call instead of loadMedia + applyCheat.",
     {
       platform: z.string().describe("Platform id (e.g. 'nes', 'gb', 'c64'). Use listPlatforms() to discover."),
-      path: z.string().optional().describe("Absolute path to the media file on disk. Provide this OR `base64`."),
-      base64: z.string().optional().describe("Base64-encoded ROM/disk/tape/program bytes. Provide this OR `path`."),
-      mediaKind: z.enum(MEDIA_KINDS).optional().describe("Media type. Defaults to 'cartridge' for consoles and 'program' for C64."),
+      path: z.string().optional().describe("Absolute path to the media file. Provide this OR `base64`."),
+      base64: z.string().optional().describe("Base64-encoded media bytes. Provide this OR `path`."),
+      mediaKind: z.enum(MEDIA_KINDS).optional().describe("Default 'cartridge' for consoles, 'program' for C64."),
       virtualName: z.string().optional().describe("With `base64`: virtual filename shown to cores that fopen() the path (default '/rom')."),
-      cheats: z.array(z.string()).max(64).optional().describe("Cheat codes to apply before the first frame (Game Genie / raw ADDR:VAL[:COMPARE] / native device codes). Same handling as applyCheat — a raw ROM-address code is re-encoded to a read-intercept so it doesn't silently no-op. Returns a per-code `cheats:[{code, appliedAs, applied}]` report. Use for boot-time cheat testing."),
+      cheats: z.array(z.string()).max(64).optional().describe("Codes applied before the first frame (Game Genie / raw ADDR:VAL[:COMPARE] / native device codes). A raw ROM-address code is re-encoded to a read-intercept so it doesn't silently no-op. Returns a per-code `cheats:[{code, appliedAs, applied}]` report."),
     },
     safeTool(doLoadMedia),
   );

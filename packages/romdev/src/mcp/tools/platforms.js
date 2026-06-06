@@ -111,9 +111,9 @@ export function registerPlatformTools(server, z) {
     "troubleshooting / upstream_sources; `platform:'romhacking'` + `name:'playbook'` for the RE decision tree). " +
     "Read MENTAL_MODEL before writing code, and the romhacking playbook before a hack.",
     {
-      op: z.enum(["list", "resolve", "toolchains", "docs", "doc"]).describe("list platforms; resolve core paths; list toolchains; list a platform's docs; or read one doc."),
+      op: z.enum(["list", "resolve", "toolchains", "docs", "doc"]).describe("list=platforms; resolve=core paths; toolchains; docs=a platform's doc names; doc=read one doc."),
       platform: z.string().optional().describe("op=resolve/docs/doc: platform id (e.g. nes, gb, genesis; 'romhacking' for the RE playbook)."),
-      id: z.string().optional().describe("op=toolchains: confirm a specific toolchain's status (e.g. 'cc65')."),
+      id: z.string().optional().describe("op=toolchains: a specific toolchain's install status (e.g. 'cc65')."),
       name: z.string().optional().describe("op=doc: which doc — mental_model | troubleshooting | upstream_sources | playbook."),
     },
     safeTool(async (args) => {

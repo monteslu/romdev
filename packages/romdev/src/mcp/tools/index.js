@@ -56,7 +56,7 @@ import { registerPlatformDocsTools } from "./platform-docs.js";
 import { registerAudioTools } from "./audio.js";
 import { registerCheatTools } from "./cheats.js";
 import { createDisclosure } from "../disclosure.js";
-import { jsonContent, safeTool } from "../util.js";
+import { jsonContent, safeTool, withClearToolErrors } from "../util.js";
 import { getHostOrNull, setDisclosure } from "../state.js";
 import { MERGE_MAP } from "../tool-manifest.js";
 import { readFile } from "node:fs/promises";
@@ -192,6 +192,12 @@ export function registerTools(server, z, sessionKey) {
   // Tests and other in-process callers may omit sessionKey — mint one so
   // host state is still isolated per registerTools() call.
   if (!sessionKey) sessionKey = randomUUID();
+  // Clear validation errors for EVERY tool registered below: turns the SDK's
+  // raw JSON validation dump into a plain sentence and catches unknown/misspelled
+  // params (which the SDK otherwise drops silently). One wrap, all 34 tools.
+  // This is what lets the param descriptions stay terse — the guidance lives in
+  // the error (paid only on a bad call), not in every agent's initial context.
+  server = withClearToolErrors(server, z);
   // ---- entry-tier disclosure manager ----
   const disclosure = createDisclosure(server, z, CATEGORIES, sessionKey);
   // Share with tool handlers outside this module (toolchain.js etc.) so
@@ -209,7 +215,7 @@ export function registerTools(server, z, sessionKey) {
     "• op:'whatsNew' — the recent CHANGELOG + an OLD→NEW tool RENAME TABLE. Call this FIRST if you're resuming work from a handoff written against an older server: pre-1.0 the surface is consolidated freely (no deprecated aliases), so a name you remember may now be an `op` on a domain tool. This maps them in one read instead of probing each tool.",
     {
       op: z.enum(["categories", "status", "whatsNew"]).default("categories")
-        .describe("categories=the tool-category catalog; status=the live session snapshot (host/platform/frameCount/media); whatsNew=recent CHANGELOG + old→new tool rename table (read this when resuming an old handoff)."),
+        .describe("categories=tool-category catalog; status=live session snapshot (host/platform/frameCount/media); whatsNew=recent CHANGELOG + old→new tool rename table."),
     },
     safeTool(async ({ op = "categories" }) => {
       if (op === "whatsNew") {

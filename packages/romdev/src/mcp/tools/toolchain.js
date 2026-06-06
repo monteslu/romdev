@@ -207,13 +207,13 @@ export function registerToolchainTools(server, z, sessionKey) {
   async function buildSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, crt0, crt0Path, codeLoc, dataLoc, options, linkerConfig, outputPath, inline = false, includeSymbols = false, lint = "advisory", runtime, maxmod, rebuildSdk }) {
       // Reject conflicting inline vs path args — fail loud, not silent.
       if (source != null && sourcePath != null) {
-        throw new Error("buildSource: pass either `source` OR `sourcePath`, not both.");
+        throw new Error("build({output:'rom'}): pass either `source` OR `sourcePath`, not both.");
       }
       if (sources != null && sourcesPaths != null) {
-        throw new Error("buildSource: pass either `sources` OR `sourcesPaths`, not both.");
+        throw new Error("build({output:'rom'}): pass either `sources` OR `sourcesPaths`, not both.");
       }
       if (crt0 != null && crt0Path != null) {
-        throw new Error("buildSource: pass either `crt0` OR `crt0Path`, not both.");
+        throw new Error("build({output:'rom'}): pass either `crt0` OR `crt0Path`, not both.");
       }
       // crt0Path → crt0 source.
       if (crt0Path) {
@@ -402,13 +402,13 @@ export function registerToolchainTools(server, z, sessionKey) {
       if (!resolved) throw new Error(`no core available for platform '${platform}'`);
 
       if (source != null && sourcePath != null) {
-        throw new Error("runSource: pass either `source` OR `sourcePath`, not both.");
+        throw new Error("build({output:'run'}): pass either `source` OR `sourcePath`, not both.");
       }
       if (sources != null && sourcesPaths != null) {
-        throw new Error("runSource: pass either `sources` OR `sourcesPaths`, not both.");
+        throw new Error("build({output:'run'}): pass either `sources` OR `sourcesPaths`, not both.");
       }
       if (crt0 != null && crt0Path != null) {
-        throw new Error("runSource: pass either `crt0` OR `crt0Path`, not both.");
+        throw new Error("build({output:'run'}): pass either `crt0` OR `crt0Path`, not both.");
       }
       if (crt0Path) {
         crt0 = await readFile(crt0Path, "utf-8");
@@ -594,36 +594,36 @@ export function registerToolchainTools(server, z, sessionKey) {
       output: z.enum(["rom", "romWithDebug", "run", "project"])
         .describe("rom=produce a ROM (default); romWithDebug=ROM + .dbg/.map debug files; run=build+load+run+screenshot; project=build a project directory."),
       platform: z.string().describe("Target platform id (e.g. 'nes', 'genesis')."),
-      language: z.string().optional().describe("Language override ('c'/'asm'/'basic'). USUALLY OMIT — inferred from source extension/content; only the ambiguous case falls to the platform default."),
+      language: z.string().optional().describe("Language override ('c'/'asm'/'basic'). USUALLY OMIT — inferred from source extension/content; only the ambiguous case falls to the platform default. Ignored by output:'romWithDebug' (C only)."),
       // source inputs (rom/romWithDebug/run)
-      source: z.string().optional().describe("Single source file contents. PREFER `sourcePath` for files on disk."),
-      sourcePath: z.string().optional().describe("Absolute path to a single source file (server reads it). Mutually exclusive with `source`."),
-      sources: sourcesShape.optional().describe("Multi-file project: filename → source ({'main.s':'...', 'aliens.s':'...'})."),
-      sourcesPaths: sourcesShape.optional().describe("Path-based `sources`: virtual filename → absolute path. Mutually exclusive with `sources`."),
+      source: z.string().optional().describe("Single source file contents. PREFER `sourcePath` for on-disk files."),
+      sourcePath: z.string().optional().describe("Absolute path to a single source file (server reads it). Mutually exclusive with `source`. NOT read by output:'romWithDebug' — use `source` there."),
+      sources: sourcesShape.optional().describe("Multi-file project: filename → contents ({'main.s':'...', 'aliens.s':'...'})."),
+      sourcesPaths: sourcesShape.optional().describe("Path-based `sources`: virtual filename → absolute path. Mutually exclusive with `sources`. NOT read by output:'romWithDebug'."),
       includes: sourcesShape.optional().describe("Virtual filename → contents for `.include`d files (NOT separate translation units)."),
-      includePaths: sourcesShape.optional().describe("Path-based `includes` (text files; server reads from disk)."),
-      binaryIncludes: sourcesShape.optional().describe("Like `includes` but BINARY blobs (CHR ROM, music) as base64, for `.incbin`. PREFER `binaryIncludePaths` for on-disk files."),
-      binaryIncludePaths: sourcesShape.optional().describe("Path-based `binaryIncludes`: virtual filename → absolute path (server reads the bytes)."),
-      crt0: z.string().optional().describe("SDCC platforms — custom crt0.s source (assembled via sdasgb/sdasz80, linked instead of the stock crt0). SMS/GG auto-inject the bundled crt0 when omitted; GB/GBC pass gb_crt0 + codeLoc:0x150."),
-      crt0Path: z.string().optional().describe("Path-based `crt0`."),
+      includePaths: sourcesShape.optional().describe("Path-based `includes` (text files; server reads them). NOT read by output:'romWithDebug'."),
+      binaryIncludes: sourcesShape.optional().describe("Like `includes` but BINARY blobs (CHR ROM, music) as base64, for `.incbin`. PREFER `binaryIncludePaths`. NOT read by output:'romWithDebug'."),
+      binaryIncludePaths: sourcesShape.optional().describe("Path-based `binaryIncludes`: virtual filename → absolute path (server reads the bytes). NOT read by output:'romWithDebug'."),
+      crt0: z.string().optional().describe("SDCC platforms — custom crt0.s source (assembled via sdasgb/sdasz80, linked instead of the stock crt0). SMS/GG auto-inject the bundled crt0 when omitted; GB/GBC pass gb_crt0 + codeLoc:0x150. (romWithDebug reads `crt0` but NOT `crt0Path`.)"),
+      crt0Path: z.string().optional().describe("Path-based `crt0`. NOT read by output:'romWithDebug' — pass `crt0` there."),
       codeLoc: z.coerce.number().int().optional().describe("SDCC — _CODE load address (default $0000; GB/GBC bundled crt0 wants 0x150)."),
-      dataLoc: z.coerce.number().int().optional().describe("SDCC — _DATA (WRAM) load address."),
+      dataLoc: z.coerce.number().int().optional().describe("SDCC — _DATA (WRAM) load address (default $C000 on Z80). NOT read by output:'romWithDebug'."),
       options: z.array(z.string()).optional().describe("output:'rom' — extra toolchain CLI options."),
-      linkerConfig: z.string().optional().describe("ld65 linker config (cc65). NES preset 'chr-ram-runtime' (RECOMMENDED — full crt0 + iNES header + NMI w/ OAM DMA + `_shadow_oam` at $0200) or 'chr-ram' (bare nmi:rti stub), or full .cfg contents."),
-      runtime: z.string().optional().describe("GBA — runtime selector: 'libtonc' (default), 'libgba', or 'none'."),
-      maxmod: z.boolean().optional().describe("GBA — link against maxmod for music (libmm.a). Caller still calls mmInit/mmStart + hooks mmVBlank."),
-      rebuildSdk: z.boolean().optional().describe("GBA + Genesis — compile the bundled SDK (libtonc/libgba/maxmod/SGDK) from vendored source instead of the prebuilt seed (~20-40s). Only if you edited SDK source (else an `sdkEditIgnored` warning fires)."),
-      lint: z.enum(["advisory", "strict"]).default("advisory").describe("output:'rom' SDCC — 'advisory' (default, warnings in issues[]) or 'strict' (any lint warning fails the build with stage:'lint' BEFORE the compiler runs — the SDCC crash-pattern guard)."),
-      includeSymbols: z.boolean().default(false).describe("output:'rom' — include the toolchain's symbol/map text inline (sdld .map / cc65 .sym). False = only symbolsBytes (call symbols/addressToSymbol to look up a PC). Maps can be 30+ KB."),
+      linkerConfig: z.string().optional().describe("ld65 linker config (cc65). NES preset 'chr-ram-runtime' (RECOMMENDED — full crt0 + iNES header + NMI w/ OAM DMA + `_shadow_oam` at $0200) or 'chr-ram' (bare nmi:rti stub), or full .cfg contents. Preset NAMES only resolve on output:'rom'/'run'; output:'romWithDebug' takes raw .cfg contents only."),
+      runtime: z.string().optional().describe("GBA — runtime: 'libtonc' (default), 'libgba', or 'none'."),
+      maxmod: z.boolean().optional().describe("GBA — link maxmod for music (libmm.a). You still call mmInit/mmStart + hook mmVBlank."),
+      rebuildSdk: z.boolean().optional().describe("GBA + Genesis — rebuild the bundled SDK (libtonc/libgba/maxmod/SGDK) from vendored source instead of the prebuilt seed (~20-40s). Only if you edited SDK source (else an `sdkEditIgnored` warning fires)."),
+      lint: z.enum(["advisory", "strict"]).default("advisory").describe("output:'rom' SDCC — 'advisory' (default, warnings in issues[]) or 'strict' (any lint warning fails the build with stage:'lint' before the compiler runs — the SDCC crash-pattern guard)."),
+      includeSymbols: z.boolean().default(false).describe("output:'rom' — return the toolchain's symbol/map text inline (sdld .map / cc65 .sym). False = only symbolsBytes (call symbols/addressToSymbol to look up a PC). Maps can be 30+ KB."),
       // run-only
       frames: z.number().int().min(1).max(100000).default(60).describe("output:'run' — frames to run before the screenshot (default 60)."),
       holdInputs: z.array(holdInputShape).max(2).optional().describe("output:'run' — per-port input state to hold during the run (index 0 = port 0)."),
-      screenshotPath: z.string().optional().describe("output:'run' — write the result screenshot here and return {screenshotPath} instead of the inline image (for clients that can't show inline images)."),
-      projectName: z.string().optional().describe("output:'run' — name for the playtest window title (no effect on the ROM)."),
+      screenshotPath: z.string().optional().describe("output:'run' — write the screenshot here and return {screenshotPath} instead of the inline image (for clients that can't show inline images)."),
+      projectName: z.string().optional().describe("output:'run' — playtest window title (no effect on the ROM)."),
       // project-only
       path: z.string().optional().describe("output:'project' — absolute path to the project directory."),
       // shared output
-      outputPath: z.string().optional().describe("output:'rom'/'romWithDebug'/'project' — absolute path to write the ROM (romWithDebug writes .dbg/.map/.log alongside; REQUIRED for romWithDebug unless inline). output:'rom' omitted → temp file path returned (or inline:true for base64)."),
+      outputPath: z.string().optional().describe("output:'rom'/'romWithDebug'/'project' — absolute path to write the ROM (romWithDebug writes .dbg/.map/.log alongside; REQUIRED for romWithDebug unless inline:true). output:'rom' omitted → temp-file path returned (or inline:true for base64)."),
       inline: z.boolean().default(false).describe("output:'rom'/'romWithDebug' — return binaryBase64 (+ debug text for romWithDebug) in the response instead of writing to disk."),
     },
     safeTool(async (args) => {

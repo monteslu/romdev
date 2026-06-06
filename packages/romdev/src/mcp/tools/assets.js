@@ -64,16 +64,16 @@ export function registerAssetTools(server, z) {
     "Generic file I/O on disk for agent artifacts — save/read/list arbitrary files (a generated PNG, a backup ROM, a notes file, a work-in-progress source). `op:'read'|'write'|'list'`. " +
     "`write` takes `text` (utf-8) OR `base64` (binary) and creates parent dirs. `read` returns `text` or `base64` per `as`, with a default 64 KB cap so a bare read can't dump a huge file into your context — if larger, it returns a note telling you to raise `maxBytes` (up to 10 MB) deliberately. `list` enumerates a directory with an optional case-insensitive `pattern` substring filter.",
     {
-      op: z.enum(["read", "write", "list"]).describe("read a file, write a file, or list a directory."),
-      path: z.string().describe("Absolute path: the file to read/write, or the directory to list."),
+      op: z.enum(["read", "write", "list"]).describe("which file op to run."),
+      path: z.string().describe("Absolute path: file to read/write, or directory to list."),
       // write
       text: z.string().optional().describe("op=write: UTF-8 text content (pass this OR base64)."),
-      base64: z.string().optional().describe("op=write: base64-encoded binary content (pass this OR text)."),
+      base64: z.string().optional().describe("op=write: base64 binary content (pass this OR text)."),
       // read
-      as: z.enum(["text", "base64"]).default("text").describe("op=read: return the file as utf-8 'text' (default) or 'base64'."),
-      maxBytes: z.number().int().min(1).max(10_000_000).default(65_536).describe("op=read: max bytes to read (default 64 KB). Raise deliberately for larger files (up to 10 MB)."),
+      as: z.enum(["text", "base64"]).default("text").describe("op=read: return as 'text' (utf-8, default) or 'base64'."),
+      maxBytes: z.number().int().min(1).max(10_000_000).default(65_536).describe("op=read: max bytes (default 64 KB, max 10 MB). Over-cap reads return a note, not content."),
       // list
-      pattern: z.string().optional().describe("op=list: case-insensitive substring filter applied to filenames."),
+      pattern: z.string().optional().describe("op=list: case-insensitive substring filter on filenames."),
     },
     safeTool(async (args) => {
       switch (args.op) {

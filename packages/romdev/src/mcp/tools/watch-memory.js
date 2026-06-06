@@ -180,12 +180,12 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     region: z.enum(MEMORY_REGIONS),
     offset: z.number().int().min(0),
     length: z.number().int().min(1).max(4096).default(1),
-    label: z.string().optional().describe("Optional name echoed on every event from this range — lets you tell disjoint ranges apart in one stream."),
+    label: z.string().optional().describe("Name echoed on every event from this range — tells disjoint ranges apart in one stream."),
     // Per-range overrides of the call-wide filters. The whole point: in a
     // multi-range watch, keep EVERY transition of a slow state byte while
     // sampling/suppressing a fast free-running counter in the SAME pass.
     onChange: z.enum(["any", "increase", "decrease", "reset"]).optional().describe("Per-range edge filter; overrides the call-wide `onChange` for THIS range only."),
-    sampleEvery: z.number().int().min(1).optional().describe("Per-range downsample: keep every Nth change from THIS range (e.g. 8 to thin a noisy per-frame counter while other ranges stay full)."),
+    sampleEvery: z.number().int().min(1).optional().describe("Per-range downsample: keep every Nth change from THIS range (e.g. 8 to thin a noisy counter while other ranges stay full)."),
     valueFilter: z.object({ min: z.number().int().min(0).max(255).optional(), max: z.number().int().min(0).max(255).optional() }).optional().describe("Per-range value window; overrides the call-wide `valueFilter` for THIS range."),
   });
 
@@ -644,8 +644,8 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         .describe("write=break on a write to address (precision:exact=true writer PC / sampled=frame PC, a lie under IRQ); read=break on a read (exact PC, who consumes it); pc=break when PC reaches address (freezes mid-instruction)."),
       precision: z.enum(["exact", "sampled"]).default("exact")
         .describe("on:'write' ONLY. exact=core watchpoint, the real writing instruction PC even under interrupts (uses `address`). sampled=cheap frame-boundary PC (uses region/offset/length) — NOT the writer under IRQ. Ignored for on:read/pc (always exact)."),
-      address: z.number().int().min(0).optional().describe("on:'write' exact / on:'read' / on:'pc' — the CPU address to break on (a write target, a read target, or an instruction boundary). Required for those."),
-      region: z.enum(MEMORY_REGIONS).optional().describe("on:'write' precision:'sampled' — the memory region whose byte to watch for change."),
+      address: z.number().int().min(0).optional().describe("on:'write' exact / on:'read' / on:'pc' — CPU address to break on (write target, read target, or instruction boundary). Required for those."),
+      region: z.enum(MEMORY_REGIONS).optional().describe("on:'write' precision:'sampled' — region whose byte to watch for change."),
       offset: z.number().int().min(0).optional().describe("on:'write' precision:'sampled' — offset within the region."),
       length: z.number().int().min(1).max(4096).default(1).describe("on:'write' precision:'sampled' — bytes to watch from offset."),
       maxFrames: z.number().int().min(1).max(1_000_000).default(600).describe("Max frames to run while waiting for the condition."),
@@ -785,7 +785,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       // call
       pc: z.number().int().min(0).optional().describe("op:call — entry PC of the subroutine (may be a WRAPPER that sets up regs then tail-calls; sentinel-return is detected from the final RTS regardless)."),
       regs: regSchema,
-      sentinelPC: z.number().int().min(0).default(0).describe("op:call — return address pushed on the stack; the run stops when PC reaches it. Default 0 (vector area). Override if it collides with real code."),
+      sentinelPC: z.number().int().min(0).default(0).describe("op:call — return address pushed on the stack; run stops when PC reaches it. Default 0 (vector area); override if it collides with real code."),
       stopAtPC: z.number().int().min(0).optional().describe("op:call — STOP when PC reaches this address and return the partial output instead of waiting for the sentinel return."),
       presetMemory: z.array(z.object({
         addr: z.number().int().min(0).describe("CPU address to write before the call."),
@@ -896,7 +896,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       format: z.enum(["events", "series"]).default("events").describe("on:'mem' — 'events' (verbose per change) or 'series' (compact columnar frames[]/values[] curve, ~10× smaller for a ramp; drops pc)."),
       sampleEvery: z.number().int().min(1).default(1).describe("on:'mem' — keep only every Nth filter-passing change (trend, not every delta)."),
       groupByPC: z.boolean().default(false).describe("on:'mem' — collapse events by sampled PC into byPC[]. CAVEAT: that PC is frame-boundary-sampled, NOT the writer under interrupts — use breakpoint({on:'write', precision:'exact'}) for the EXACT writer."),
-      cheatLabels: z.string().optional().describe("on:'mem' — absolute path to the loaded ROM; auto-annotate watched system_ram addresses from the bundled cheat DB (a PROBABLE match — strong hints, not gospel)."),
+      cheatLabels: z.string().optional().describe("on:'mem' — absolute path to the loaded ROM; auto-annotate watched RAM-region addresses (system_ram/*_ram/*_wram/gb_hram) from the bundled cheat DB (a PROBABLE match — strong hints, not gospel)."),
       stopOnFirst: z.boolean().default(false).describe("on:'mem' — stop on the first filter-passing change instead of running the full duration. (For a true stop-on-first breakpoint, prefer the `breakpoint` tool.)"),
       // on:'range'
       kind: z.enum(["read", "write", "both"]).default("both").describe("on:'range' — watch reads, writes, or both."),
@@ -904,8 +904,8 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       start: z.number().int().min(0).optional().describe("on:'range'/'pc' — low CPU address of the window."),
       end: z.number().int().min(0).optional().describe("on:'range'/'pc' — high CPU address (inclusive)."),
       // shared
-      frames: z.number().int().min(1).max(1_000_000).default(600).describe("Frames to run while logging (on:'range'/'pc' cap at 6000, default 120; on:'mem' default 600)."),
-      limit: z.number().int().min(1).max(4000).default(200).describe("on:'range' (≤2000) / on:'pc' (≤4000) — max events/PCs returned (full count in `total`)."),
+      frames: z.number().int().min(1).max(1_000_000).default(600).describe("Frames to run while logging (default 600). on:'range'/'pc' windows are usually short (~120) — pass a smaller value to keep the ring buffer from overflowing."),
+      limit: z.number().int().min(1).max(4000).default(200).describe("on:'range'/'pc' — max events/PCs returned (default 200; full count is in `total`)."),
       outputPath: z.string().optional().describe("on:'mem' — stream every filter-passing event to this path as NDJSON + return a compact summary. Use for long watches so the full log never enters your context."),
       pressDuring: z.array(z.object({
         frame: z.number().int().min(0),
@@ -1018,9 +1018,9 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       })).optional().describe("Drive input to the screen that uploads the graphic."),
       romPreviewBytes: z.number().int().min(0).max(64).default(0).describe("Bytes of the ROM source to preview per DMA (exact default 0; sampled default 16)."),
       // precision:'exact' only
-      vramDest: z.number().int().min(0).optional().describe("precision:'exact' — only return DMAs whose VRAM destination is within ±`destWindow` of this address."),
+      vramDest: z.number().int().min(0).optional().describe("precision:'exact' — keep only DMAs whose VRAM destination is within ±`destWindow` of this address."),
       destWindow: z.number().int().min(0).default(0x40).describe("precision:'exact' — match window around vramDest (default 64 bytes ≈ 1 tile)."),
-      dedupe: z.boolean().default(true).describe("precision:'exact' — collapse identical DMAs (same dest+source+length) to one entry with an `occurrences` count (default on)."),
+      dedupe: z.boolean().default(true).describe("precision:'exact' — collapse identical DMAs (same dest+source+length+code) to one entry with an `occurrences` count (default on)."),
       sourceFilter: z.enum(["all", "rom-only", "ram-only"]).default("all").describe("precision:'exact' — 'rom-only' drops the RAM→VRAM per-frame refresh noise; 'ram-only' keeps only it."),
       limit: z.number().int().min(1).max(2000).default(200).describe("precision:'exact' — max DMA entries to return (after dedupe/filter)."),
       // precision:'sampled' only
