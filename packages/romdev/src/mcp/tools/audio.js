@@ -292,19 +292,19 @@ export function registerAudioTools(server, z, sessionKey) {
       pcmPath: z.string().optional().describe("target:'brr' — absolute path to a raw PCM file (preferred over pcmBase64)."),
       loop: z.boolean().default(false).describe("target:'brr' — set the LOOP bit on the final block (sustained tones/instruments)."),
       // xgm2pcm
-      wavPath: z.string().optional().describe("target:'xgm2pcm' — absolute path to a .wav (preferred)."),
-      wavBase64: z.string().optional().describe("target:'xgm2pcm' — base64 WAV bytes."),
-      name: z.string().default("pcm_sample").describe("target:'xgm2pcm'/'xgm2'/'maxmod'/'famitone' — C/asm identifier for the emitted data (xgm2pcm length define is <NAME>_LEN; maxmod → MOD_<NAME>; famitone → <NAME>_music_data)."),
+      wavPath: z.string().optional().describe("target:'xgm2pcm' — absolute path to a .wav (or raw s16le if format:'pcm16'); preferred over wavBase64."),
+      wavBase64: z.string().optional().describe("target:'xgm2pcm' — base64 WAV (or raw s16le) bytes."),
+      name: z.string().default("pcm_sample").describe("xgm2pcm/xgm2/maxmod/famitone/gg/sms/c64/lynx/atari7800/gb/gbc — C/asm identifier for the emitted data (xgm2pcm define <NAME>_LEN; maxmod → MOD_<NAME>; famitone → <NAME>_music_data). NOT used by target:'spc'."),
       halfRate: z.boolean().default(false).describe("target:'xgm2pcm' — encode for 6.65 kHz (XGM2_playPCMEx halfRate=TRUE); halves ROM size."),
       format: z.enum(["wav", "pcm16"]).default("wav").describe("target:'xgm2pcm' — 'wav' (parse RIFF) or 'pcm16' (raw s16le mono; then pass pcmRate)."),
       pcmRate: z.number().int().min(1).optional().describe("target:'xgm2pcm' — source sample rate (Hz), REQUIRED for format:'pcm16'."),
-      outputCPath: z.string().optional().describe("target:'xgm2pcm'/'xgm2' — write the C source here and return path-only."),
+      outputCPath: z.string().optional().describe("xgm2pcm/xgm2/gg/sms/c64/lynx/atari7800/gb/gbc — write the C source here and return path-only (else cSource is inline)."),
       outputPcmPath: z.string().optional().describe("target:'xgm2pcm' — also/instead write the raw padded PCM bytes here."),
       // xgm2 (music)
       vgmPath: z.string().optional().describe("target:'xgm2' — absolute path to a .vgm or gzipped .vgz Mega Drive music log."),
       vgmBase64: z.string().optional().describe("target:'xgm2' — base64 .vgm/.vgz bytes."),
       system: z.enum(["ntsc", "pal"]).optional().describe("target:'xgm2' — force the timing flag (VGM offset 0x24): ntsc=60, pal=50. Omit to keep the VGM's own value."),
-      outputBinPath: z.string().optional().describe("target:'xgm2' — write the raw XGM2 blob (.xgc) here. target:'maxmod' — write the soundbank .bin here."),
+      outputBinPath: z.string().optional().describe("xgm2 — write the raw XGM2 blob (.xgc) here. maxmod — the soundbank .bin. spc/gg/sms/c64/lynx/atari7800/gb/gbc — the raw note-table bytes."),
       // maxmod (GBA music)
       modulePath: z.string().optional().describe("target:'maxmod' — absolute path to a tracker module (.xm/.mod/.it/.s3m)."),
       moduleBase64: z.string().optional().describe("target:'maxmod' — base64 module bytes."),
@@ -312,12 +312,12 @@ export function registerAudioTools(server, z, sessionKey) {
       // famitone (NES music)
       txtPath: z.string().optional().describe("target:'famitone' — absolute path to a FamiTracker text export (.txt)."),
       txt: z.string().optional().describe("target:'famitone' — the FamiTracker text export contents inline."),
-      outputAsmPath: z.string().optional().describe("target:'famitone' — write the ca65 .s music data here."),
+      outputAsmPath: z.string().optional().describe("famitone — write the ca65 .s music data here. spc — write the apu_blob song-table asm here (paste at the 'song:' label)."),
       noWarnings: z.boolean().default(false).describe("target:'famitone' — skip (instead of erroring on) effects FamiTone2 doesn't support."),
       keepInstruments: z.boolean().default(false).describe("target:'famitone' — don't remove unused instruments (text2data -keep_instruments)."),
       // spc (SNES song)
-      song: z.any().optional().describe("target:'spc' — the song: { rows:[ {note:'C4',ticks:16} | 'C4:16' | {p:0x400,ticks:16} ], base?, baseP?, defaultTicks? }. Accepts an object or a JSON string."),
-      base: z.union([z.string(), z.number()]).optional().describe("target:'spc' — the note (e.g. 'C4') or absolute semitone the sample sounds at baseP. Default 'C4'."),
+      song: z.any().optional().describe("spc + all synth targets (gg/sms/c64/lynx/atari7800/gb/gbc) — the song; object or JSON string. spc/single-voice shape: { rows:[ {note:'C4',ticks:16} | 'C4:16' | {p:0x400,ticks:16} ], base?, baseP?, defaultTicks? }. gb/gbc use the multi-channel shape (see tool description)."),
+      base: z.union([z.string(), z.number()]).optional().describe("target:'spc' — note ('C4') or absolute semitone the sample sounds at baseP. Default 'C4'."),
       baseP: z.number().int().optional().describe("target:'spc' — DSP pitch P at which the sample plays `base`. Default 0x1000 (sample's native rate)."),
       defaultTicks: z.number().int().optional().describe("target:'spc' — ticks for shorthand rows that omit a duration. Default 16."),
       // shared
@@ -369,9 +369,9 @@ export function registerAudioTools(server, z, sessionKey) {
       op: z.enum(["inspect", "record"]).describe("inspect a sound chip's live state (single-frame, or a frames trace); or record audio to a WAV."),
       chip: z.enum(["nes", "gb", "gba", "dsp", "psg", "ym2612", "sid", "mikey", "pce", "ay8910"]).optional().describe("op=inspect: which sound chip to decode (all 14 systems mapped)."),
       frames: z.number().int().min(1).max(60000).optional().describe("op=record: emulator frames to capture (default 180 = 3s NTSC). op=inspect: if set, TRACE the chip over N frames into a per-channel timeline; OMIT for a single-frame snapshot."),
-      sampleEvery: z.number().int().min(1).default(1).describe("op=inspect trace: keep only every Nth frame's sample (thins a long trace). Transitions are always preserved between kept frames."),
-      path: z.string().optional().describe("op=record: absolute path to write the WAV file to."),
-      setInputs: z.array(inputShape).max(2).optional().describe("op=record / op=inspect trace: input state to hold during the run (e.g. press B to fire SFX)."),
+      sampleEvery: z.number().int().min(1).default(1).describe("op=inspect trace: sample the chip only every Nth frame (thins a long trace; the last frame is always sampled). Changes on skipped frames surface at the next sampled frame, so >1 loses fine timing — keep at 1 to catch every transition."),
+      path: z.string().optional().describe("op=record: absolute path to write the WAV (required for record)."),
+      setInputs: z.array(inputShape).max(2).optional().describe("op=record / op=inspect trace: button state to hold for the whole run, one entry per controller port ([P1] or [P1,P2]); e.g. [{b:true}] to fire SFX. Released after the run."),
     },
     safeTool(async (args) => {
       if (args.op === "inspect") {

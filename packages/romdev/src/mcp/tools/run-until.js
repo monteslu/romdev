@@ -38,7 +38,7 @@ export function registerRunUntilTools(server, z, sessionKey) {
     y: z.number().int().min(0),
     equals: z.array(z.number().int().min(0).max(255)).length(3).optional(),
     notEquals: z.array(z.number().int().min(0).max(255)).length(3).optional(),
-  }).describe("Stop when pixel (x, y) matches a target color.");
+  }).describe("Stop when pixel (x, y) matches equals (or differs from notEquals); color is [r,g,b], each 0-255.");
 
   server.tool(
     "runUntil",

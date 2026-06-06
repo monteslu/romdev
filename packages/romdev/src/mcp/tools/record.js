@@ -37,7 +37,7 @@ export function registerRecordTools(server, z, sessionKey) {
     "When includeScreenshots is true: DEFAULT writes each sample's PNG to outputDir/frame-<n>.png and puts screenshotPath in the timeline; pass inline:true to get screenshotBase64 in each entry instead (you must pass one or the other). With includeScreenshots:false, no path is needed.",
     {
       frames: z.number().int().min(1).max(36000).default(300).describe("Total frames to run."),
-      sampleEvery: z.number().int().min(1).max(600).default(30).describe("Capture a screenshot every N frames."),
+      sampleEvery: z.number().int().min(1).max(600).default(30).describe("Capture a sample (screenshot and/or memory) every N frames."),
       holdInputs: z.array(inputShape).max(2).optional(),
       inputScript: z
         .array(
@@ -58,11 +58,11 @@ export function registerRecordTools(server, z, sessionKey) {
           }),
         )
         .optional()
-        .describe("Memory regions to sample at each capture point. Accepts the full readMemory region set (incl. nes_apu_regs and other hardware registers). Tip: with sampleEvery:1 + memoryOutputPath this becomes a per-frame telemetry stream (e.g. APU registers over a music loop) with no hex flooding your context."),
+        .describe("Memory regions to sample at each capture point. Accepts the full readMemory region set (incl. nes_apu_regs and other hardware registers). Tip: sampleEvery:1 + memoryOutputPath gives a per-frame telemetry stream (e.g. APU registers over a music loop) without flooding context with hex."),
       includeScreenshots: z.boolean().default(true).describe("If false, skip PNG capture (just memory samples)."),
       outputDir: z.string().optional().describe("Directory to write per-sample PNGs (frame-<n>.png). Required when includeScreenshots is true unless inline:true."),
       inline: z.boolean().default(false).describe("If true, embed screenshotBase64 in each timeline entry instead of writing PNGs to disk. Default false — then outputDir is required when includeScreenshots is true."),
-      memoryOutputPath: z.string().optional().describe("If given, write the per-sample memory readings to this path as newline-delimited JSON (one row per sample point) and OMIT the bulky `memory` field from the returned timeline — you get back a compact summary {path, rows, regions, valueRanges} instead. Use this for dense per-frame sampling (sampleEvery:1 over a long loop) so ~200KB of hex never enters your context. Mirrors the disk-by-default pattern of screenshots/readMemory."),
+      memoryOutputPath: z.string().optional().describe("If set, write per-sample memory to this path as newline-delimited JSON (one row per sample) and OMIT the bulky per-sample `memory` from the timeline — returns a compact summary {path, rows, regions, valueRanges} instead. Use for dense sampling (sampleEvery:1 over a long loop) so ~200KB of hex never enters context."),
     },
     safeTool(async ({ frames, sampleEvery, holdInputs, inputScript, memorySamples, includeScreenshots, outputDir, inline, memoryOutputPath }) => {
       const host = getHost(sessionKey);

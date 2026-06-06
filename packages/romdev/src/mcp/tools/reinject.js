@@ -409,7 +409,7 @@ function buildStored(format, payload, opts = {}) {
     case "lz2-direct":  return storedSnesLz2(payload);
     case "kosinski-literal": return storedKosinskiLiteral(payload);
     default:
-      throw new Error(`makeStoredBlock: unknown format '${format}'`);
+      throw new Error(`romPatch({op:'makeStored'}): unknown format '${format}'`);
   }
 }
 
@@ -485,7 +485,7 @@ function storedKosinskiLiteral(payload) {
   // Documented terminator: a full match with count 0 → 00 F8 00.
   out.push(0x00, 0xF8, 0x00);
   return { bytes: Uint8Array.from(out), experimental: true,
-    note: "EXPERIMENTAL Kosinski all-literal (16-bit LE descriptor, bit 1 = literal). The exact end-terminator varies by decompressor — self-verify via a callSubroutine round-trip through the game's own routine before shipping." };
+    note: "EXPERIMENTAL Kosinski all-literal (16-bit LE descriptor, bit 1 = literal). The exact end-terminator varies by decompressor — self-verify via a cpu({op:'call'}) round-trip through the game's own routine before shipping." };
 }
 
 export {
@@ -529,11 +529,11 @@ const hexB = (bytes) => Array.from(bytes).map((b) => b.toString(16).toUpperCase(
 export async function findPointerToCore({ path, platform, romOffset, mapper, maxHitsReturned = 256, widths, suppressShadows = true }) {
   const data = new Uint8Array(await readFile(path));
   const plat = platform ?? detectPlatform(path);
-  if (!plat) throw new Error(`findPointerTo: could not detect platform for '${path}'. Pass platform explicitly.`);
+  if (!plat) throw new Error(`romPatch({op:'findPointer'}): could not detect platform for '${path}'. Pass platform explicitly.`);
   const entry = PLATFORM_REGISTRY[plat];
-  if (!entry || !entry.forms) throw new Error(`findPointerTo: platform '${plat}' not supported.`);
+  if (!entry || !entry.forms) throw new Error(`romPatch({op:'findPointer'}): platform '${plat}' not supported.`);
   if (romOffset < 0 || romOffset >= data.length) {
-    throw new Error(`findPointerTo: romOffset ${hex6(romOffset)} is outside the ROM (${data.length} bytes).`);
+    throw new Error(`romPatch({op:'findPointer'}): romOffset ${hex6(romOffset)} is outside the ROM (${data.length} bytes).`);
   }
 
   let forms = plat === "snes" ? entry.forms(romOffset, data, mapper) : entry.forms(romOffset, data);
@@ -618,23 +618,23 @@ export async function findPointerToCore({ path, platform, romOffset, mapper, max
 // ───────────────────────────────────────────────────────────────────────────
 export async function makeStoredBlockCore({ platform, rawHex, rawBytes, format, interleave }) {
   const entry = PLATFORM_REGISTRY[platform];
-  if (!entry) throw new Error(`makeStoredBlock: unknown platform '${platform}'.`);
+  if (!entry) throw new Error(`romPatch({op:'makeStored'}): unknown platform '${platform}'.`);
   // Accept hex string or byte array.
   let payload;
   if (rawHex != null) {
     const clean = rawHex.replace(/[^0-9a-fA-F]/g, "");
-    if (clean.length % 2 !== 0) throw new Error("makeStoredBlock: rawHex must be an even number of hex digits.");
+    if (clean.length % 2 !== 0) throw new Error("romPatch({op:'makeStored'}): rawHex must be an even number of hex digits.");
     payload = Uint8Array.from(clean.match(/../g)?.map((h) => parseInt(h, 16)) ?? []);
   } else if (Array.isArray(rawBytes)) {
     payload = Uint8Array.from(rawBytes);
   } else {
-    throw new Error("makeStoredBlock: pass rawHex (hex string) or rawBytes (number array).");
+    throw new Error("romPatch({op:'makeStored'}): pass rawHex (hex string) or rawBytes (number array).");
   }
-  if (payload.length === 0) throw new Error("makeStoredBlock: empty payload.");
+  if (payload.length === 0) throw new Error("romPatch({op:'makeStored'}): empty payload.");
 
   const fmt = format ?? "raw";
   if (!entry.formats.includes(fmt)) {
-    throw new Error(`makeStoredBlock: format '${fmt}' is not valid for ${platform}. Valid: ${entry.formats.join(", ")}. ${entry.note}`);
+    throw new Error(`romPatch({op:'makeStored'}): format '${fmt}' is not valid for ${platform}. Valid: ${entry.formats.join(", ")}. ${entry.note}`);
   }
   const result = buildStored(fmt, payload, { interleave });
 

@@ -162,13 +162,13 @@ export function registerStateTools(server, z, sessionKey) {
     {
       op: z.enum(["save", "load", "list", "export", "dump", "diff"]).describe("save/load a state; list slots; export a slot to disk; dump the raw blob; diff the whole machine."),
       name: z.string().min(1).optional().describe("op=save/load: in-memory slot name. op=diff: snapshot label (default 'default')."),
-      path: z.string().optional().describe("op=save: also write the blob here (survives restarts). op=load: restore from this disk blob. op=dump: write the raw blob here."),
+      path: z.string().optional().describe("op=save: also write the blob here (survives restarts). op=load: restore from this disk blob. op=export/dump: write the blob here (required)."),
       // load
       render: z.boolean().default(true).describe("op=load: step one frame after restoring so the framebuffer reflects it (fixes the stale-screenshot footgun). false = stay at the exact restored instant."),
       // export
-      fromSlot: z.string().min(1).optional().describe("op=export: name of the in-memory slot to copy to disk."),
+      fromSlot: z.string().min(1).optional().describe("op=export: in-memory slot to copy to disk (required)."),
       // dump
-      findHex: z.string().optional().describe("op=dump: hex byte-pattern (no spaces/0x) to search for in the blob — returns every offset. Locate sentinel bytes you wrote."),
+      findHex: z.string().optional().describe("op=dump: even-length hex byte-pattern to grep the blob for (ws/underscores ok, no 0x prefix) — returns every offset. Locate sentinel bytes you wrote."),
       maxMatches: z.number().int().min(1).max(1000).default(32).describe("op=dump: cap on returned offsets when findHex is set."),
       // diff
       snapOrDiff: z.enum(["snapshot", "diff"]).optional().describe("op=diff: 'snapshot' captures the current state as baseline; 'diff' compares to it."),

@@ -184,11 +184,11 @@ export function registerInputTools(server, z, sessionKey) {
     "when ITS code polls; re-apply immediately before the consuming stepFrames and verify via the held-buttons RAM " +
     "byte, not this echo.",
     {
-      op: z.enum(["set", "press", "sequence", "navigate", "layout"]).describe("set/hold; press one button; run a sequence; navigate a menu; or get the input layout."),
+      op: z.enum(["set", "press", "sequence", "navigate", "layout"]).describe("set/hold buttons; press one button; run a sequence; navigate a menu; or get the input layout."),
       // set
       ports: z.array(port).min(1).max(2).optional().describe("op=set: per-port input. [{a:true,right:true}] holds A+Right on port 0."),
       // press
-      button: z.enum(BUTTON_ENUM).optional().describe("op=press: the button to press (platform-native aliases + spatial names accepted)."),
+      button: z.enum(BUTTON_ENUM).optional().describe("op=press: button to press (native aliases + spatial names accepted)."),
       frames: z.number().int().min(1).max(600).default(2).describe("op=press: frames to hold the button."),
       port: z.number().int().min(0).max(1).default(0).describe("op=press: which port (default 0)."),
       // sequence

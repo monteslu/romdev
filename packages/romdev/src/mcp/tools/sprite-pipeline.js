@@ -562,21 +562,21 @@ export function registerSpritePipelineTools(server, z, sessionKey) {
       platform: z.string().optional().describe("Target platform id. Required for quantize/tiles/tilemap (validate is Genesis-only; crop is platform-agnostic)."),
       // shared PNG inputs (tiles/tilemap)
       pngBase64: z.string().optional().describe("stage:tiles/tilemap — base64 PNG. Prefer `pngPath`."),
-      pngPath: z.string().optional().describe("stage:tiles/tilemap — absolute path to a PNG on disk (server reads it; no base64 cost)."),
+      pngPath: z.string().optional().describe("stage:tiles/tilemap — absolute path to a PNG on disk (no base64 cost)."),
       // quantize/crop single-file input
       path: z.string().optional().describe("stage:quantize/crop — absolute path to the source PNG."),
-      outputPath: z.string().optional().describe("stage:quantize/crop — absolute path to write the output PNG (required for those stages)."),
-      outputDir: z.string().optional().describe("stage:tiles (tiles.bin/palette.bin) / stage:tilemap (chr/nametable/attr/palette/preview) — output directory. Required for tiles unless inline."),
+      outputPath: z.string().optional().describe("stage:quantize/crop — absolute path to write the output PNG (required)."),
+      outputDir: z.string().optional().describe("stage:tiles (tiles.bin/palette.bin) / stage:tilemap (chr/nametable/attr/palette/preview) — output dir. Required for tiles unless inline."),
       inline: z.boolean().default(false).describe("stage:tiles — return base64 in the response instead of writing to disk."),
       // quantize
       mode: z.enum(["frequency", "luminance", "platform-master"]).optional().describe("stage:quantize — palette strategy. Default from `intent` (homebrew → platform-master, rom-hack → frequency)."),
       maxColors: z.number().int().min(1).max(256).optional().describe("stage:quantize — override the per-platform default (SNES 2bpp=4, 8bpp=256)."),
       // crop
-      tileX: z.number().int().min(0).optional().describe("stage:crop — leftmost tile column to include (0 = leftmost)."),
-      tileY: z.number().int().min(0).optional().describe("stage:crop — topmost tile row to include (0 = topmost)."),
-      tileW: z.number().int().min(1).optional().describe("stage:crop — width of the crop region in tile cells."),
-      tileH: z.number().int().min(1).optional().describe("stage:crop — height of the crop region in tile cells."),
-      tileSize: z.number().int().min(1).max(64).default(8).describe("stage:crop — side length of a tile cell in pixels (8 for nearly every platform)."),
+      tileX: z.number().int().min(0).optional().describe("stage:crop — leftmost tile column to include (0 = first)."),
+      tileY: z.number().int().min(0).optional().describe("stage:crop — topmost tile row to include (0 = first)."),
+      tileW: z.number().int().min(1).optional().describe("stage:crop — crop width in tile cells."),
+      tileH: z.number().int().min(1).optional().describe("stage:crop — crop height in tile cells."),
+      tileSize: z.number().int().min(1).max(64).default(8).describe("stage:crop — tile cell side length in pixels (8 for nearly every platform)."),
       // tiles
       tileOrder: z.enum(["row", "sprite"]).default("row").describe("stage:tiles — 'row' (default, BG tilemap order) or 'sprite' (column-major, the order multi-cell hardware sprites read on Genesis/Lynx). Ignored for MSX."),
       // tiles + tilemap caps
@@ -586,7 +586,7 @@ export function registerSpritePipelineTools(server, z, sessionKey) {
       dedup: z.boolean().default(true).describe("stage:tilemap — collapse identical tile bitmaps to one CHR entry (default true)."),
       singlePalette: z.boolean().default(false).describe("stage:tilemap — every attribute cell uses one identical palette (limits to 4 total colors)."),
       // validate
-      tileDataPath: z.string().optional().describe("stage:validate — absolute path to raw 4bpp Genesis tile bytes (multiple of 32; each pixel an index 0-15)."),
+      tileDataPath: z.string().optional().describe("stage:validate — absolute path to raw 4bpp Genesis tile bytes (length a multiple of 32; each pixel an index 0-15)."),
       paletteJson: z.array(z.any()).optional().describe("stage:validate — palette as lines (array of lines, each an array of colors). Flags any line with >16 colors."),
       maxPaletteIndex: z.number().int().min(0).max(15).default(15).describe("stage:validate — highest palette index the art may use (default 15; pass 14 if you reserve index 15)."),
       intent: intentZod(z),

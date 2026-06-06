@@ -520,21 +520,21 @@ export function registerFontMapTools(server, z, sessionKey) {
       op: z.enum(["learn", "encode", "find"]).describe("learn a font map; encode text→bytes; find a string in a ROM."),
       // shared
       romPath: z.string().optional().describe("op=learn(ROM mode)/find: absolute path to the ROM file."),
-      platform: z.string().optional().describe("op=learn: required for `fromScreen` live mode. op=find: enum nes|snes|genesis|megadrive|md|gb|gbc — enables CPU-address translation."),
-      text: z.string().optional().describe("op=encode: the text to encode. op=find: the text to search for."),
+      platform: z.string().optional().describe("op=learn: required for `fromScreen` live mode. op=find: nes|gb|gbc|genesis|megadrive|md enables bank-aware CPU-address translation (snes left null — mapper-dependent; use fileOffset)."),
+      text: z.string().optional().describe("op=encode: text to encode. op=find: text to search for."),
       fontMap: z.record(z.string(), z.number().int().min(0).max(255)).optional().describe("op=encode/find: inline char→byte map (from a prior learn)."),
       fontMapPath: z.string().optional().describe("op=encode/find: JSON file with the font map ({fontMap:{...}} or a bare {ch:byte} object)."),
       // learn
       knownStrings: z.array(z.object({
         text: z.string().describe("The string you can see rendered in-game."),
-        offset: z.number().int().min(0).describe("File offset where those bytes live in the ROM."),
+        offset: z.number().int().min(0).describe("ROM file offset of those bytes."),
       })).optional().describe("op=learn ROM mode: text + its ROM file offset. One or more covers more of the alphabet."),
       fromScreen: z.array(z.object({
         text: z.string().describe("The string visible on screen now."),
         row: z.number().int().min(0).describe("Tile row of the first character (8px tiles from the top)."),
         col: z.number().int().min(0).describe("Tile column of the first character (8px tiles from the left)."),
       })).optional().describe("op=learn LIVE mode: text + its tile (row,col) in the rendered nametable. No ROM offset needed."),
-      which: z.number().int().min(0).max(3).default(0).describe("op=learn NES live mode: which nametable (0-3). Default 0."),
+      which: z.number().int().min(0).max(3).default(0).describe("op=learn live mode: nametable (NES 0-3) / BG-map select (GB 0=$9800 1=$9C00) / plane (Genesis 0=A 1=B) / BG layer (SNES). Ignored on SMS/GG/C64. Default 0."),
       alphabet: z.string().optional().describe("op=learn: which characters to track in unknownChars[]. Default A-Z, 0-9, space, ©."),
       // encode
       unknownChar: z.number().int().min(0).max(255).optional().describe("op=encode: fallback byte for chars not in the map. Default 0xFC (NES blank-tile convention)."),

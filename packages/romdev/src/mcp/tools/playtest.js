@@ -291,7 +291,7 @@ export function registerPlaytestTools(server, z, sessionKey) {
         return jsonContent({
           ok: false,
           error: "playtest window has no loaded host right now (mid-rebuild?)",
-          hint: "A runSource/loadMedia may be swapping the host this instant — retry in a moment.",
+          hint: "A build({output:'run'})/loadMedia may be swapping the host this instant — retry in a moment.",
         });
       }
       const meta = {

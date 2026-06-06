@@ -271,11 +271,11 @@ export function registerFrameTools(server, z, sessionKey) {
     "you MUST pass one. Keeps PNGs out of context unless asked.",
     {
       op: z.enum(["step", "screenshot", "stepAndShot", "stepInstruction"]).describe("step frames; capture a screenshot; step+capture in one call; or single-step one CPU instruction."),
-      frames: z.number().int().min(1).max(1_000_000).default(1).describe("op=step/stepAndShot: frames to advance (1-1,000,000). Don't be conservative — 36000 (10 min) usually completes in <1s."),
+      frames: z.number().int().min(1).max(1_000_000).default(1).describe("op=step/stepAndShot: frames to advance (1-1,000,000). 36000 (10 min) usually completes in <1s — don't be conservative."),
       format: z.enum(["png", "ascii"]).default("png").describe("op=screenshot: 'png' (default, real image) or 'ascii' (lossy text render)."),
       path: z.string().optional().describe("op=screenshot/stepAndShot: absolute path to write to (required unless inline:true)."),
       inline: z.boolean().default(false).describe("op=screenshot/stepAndShot: return the image in the response instead of writing to disk."),
-      overlayBoxes: z.boolean().default(false).describe("op=screenshot png: draw colored sprite-bounding-box overlays (SNES+NES)."),
+      overlayBoxes: z.boolean().default(false).describe("op=screenshot png: draw a colored bounding box per visible sprite (SNES+NES only)."),
       scale: z.number().gt(0).max(1).optional().describe("op=screenshot png: downscale factor (0<scale≤1, nearest-neighbor). 0.5 ≈ 75% fewer image tokens."),
       cols: z.number().int().min(4).max(640).optional().describe("op=screenshot ascii: terminal columns (default fb_width/16)."),
       rows: z.number().int().min(4).max(480).optional().describe("op=screenshot ascii: terminal rows (default fb_height/16)."),

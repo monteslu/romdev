@@ -1078,7 +1078,7 @@ export function registerDisasmTools(server, z) {
     {
       target: z.enum(["bytes", "rom", "project", "references"]).describe("bytes = raw chunk; rom = mapper-aware ROM; project = full rebuildable disasm; references = find refs to an address."),
       // shared
-      path: z.string().optional().describe("target=bytes: raw binary path. target=rom/project/references: the ROM file path."),
+      path: z.string().optional().describe("target=bytes: raw binary path. target=rom/project/references: ROM file path."),
       base64: z.string().optional().describe("target=bytes: base64 of the bytes (OR `path`)."),
       platform: z.enum(["nes", "snes", "sms", "gg", "gb", "gbc", "atari2600", "atari7800", "c64", "genesis", "gba", "pce", "msx", "lynx"]).optional().describe("target=rom/project/references: override platform (else sniffed from extension)."),
       startAddress: z.number().int().min(0).max(0xffffffff).default(0x8000).describe("target=bytes/rom: address of the first byte (GBA auto-bumped to 0x08000000)."),
@@ -1088,14 +1088,14 @@ export function registerDisasmTools(server, z) {
       inline: z.boolean().default(false).describe("target=bytes: return asm in the response instead of writing to disk."),
       // bytes
       cpu: z.enum(["6502", "65c02", "65sc02", "65816", "huc6280"]).default("6502").describe("target=bytes: CPU dialect for da65."),
-      symbolsPath: z.string().optional().describe("target=bytes: symbol file (asar .sym / cc65 .lbl) to annotate with labels."),
+      symbolsPath: z.string().optional().describe("target=bytes: symbol file to annotate with labels (asar/WLA .sym or cc65 .lbl)."),
       symbolsText: z.string().optional().describe("target=bytes: inline symbol-file text."),
       symbolsFormat: z.enum(["wla", "cc65-lbl"]).optional().describe("target=bytes: explicit symbol-file format override."),
       // rom
-      bank: z.number().int().min(0).max(255).optional().describe("target=rom: switchable ROM bank to map before disassembling (NES mapper>0 / GB banked)."),
+      bank: z.number().int().min(0).max(255).optional().describe("target=rom: switchable ROM bank to map into the windowed slot (NES mapper>0 $8000 / GB $4000; also 2600/7800/c64)."),
       thumb: z.boolean().default(false).describe("target=rom: GBA — disassemble as THUMB (16-bit) instead of ARM."),
       endAddress: z.number().int().min(0).max(0xffffff).optional().describe("target=rom: CPU end address (inclusive); alternative to length."),
-      untilReturn: z.boolean().default(false).describe("target=rom: stop at the first rts/rti/rtl/bare-jmp — grab one routine."),
+      untilReturn: z.boolean().default(false).describe("target=rom: stop at the first return/unconditional-jump (rts/rti/rtl/jmp, or ret/reti/jp per CPU) — grab one routine."),
       mapper: z.enum(["lorom", "hirom"]).optional().describe("target=rom/references: SNES mapper override (header-less homebrew defaults lorom)."),
       dataRanges: z.array(z.object({
         start: z.number().int().min(0).max(0xffffff),
@@ -1107,7 +1107,7 @@ export function registerDisasmTools(server, z) {
       // project
       outputDir: z.string().optional().describe("target=project: directory to write the project into (one .asm per region)."),
       // references
-      address: z.number().int().min(0).max(0xFFFFFF).optional().describe("target=references: the CPU address to find references TO."),
+      address: z.number().int().min(0).max(0xFFFFFF).optional().describe("target=references: CPU address to find references TO."),
       maxRefsReturned: z.number().int().min(1).max(2048).default(256).describe("target=references: cap the references returned."),
     },
     safeTool(async (args) => {

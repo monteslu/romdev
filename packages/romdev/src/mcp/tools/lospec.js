@@ -159,9 +159,9 @@ export function registerLospecTools(server, z, sessionKey) {
       platform: z.string().optional().describe("source=live: override platform (else loaded host). source=platformMaster: REQUIRED."),
       // live
       area: z.enum(["bg", "sprite", "all"]).default("all").describe("source=live NES: 'bg' (0-15), 'sprite' (16-31), 'all' (default). GBA: bg/sprite banks."),
-      subPalette: z.number().int().min(0).max(3).optional().describe("source=live NES: return just one 4-entry sub-palette within `area`."),
-      outputPath: z.string().optional().describe("source=live: write the swatch PNG here (or inline:true). source=platformMaster: write the result here."),
-      inline: z.boolean().default(false).describe("source=live: return the swatch image in the response instead of writing to disk."),
+      subPalette: z.number().int().min(0).max(3).optional().describe("source=live NES: one 4-entry sub-palette within `area`."),
+      outputPath: z.string().optional().describe("source=live: write the swatch PNG here (or inline:true). source=platformMaster: write output here."),
+      inline: z.boolean().default(false).describe("source=live: return the swatch image inline instead of writing to disk."),
       // platformMaster
       format: z.enum(["png", "lospec", "hex"]).default("png").describe("source=platformMaster: 'png' (swatch, default) / 'lospec' (JSON) / 'hex' (one #RRGGBB per line)."),
       // lospec

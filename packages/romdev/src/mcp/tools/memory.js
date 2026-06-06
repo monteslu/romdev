@@ -389,7 +389,7 @@ export function registerMemoryTools(server, z, sessionKey) {
         .describe("read=bytes→hex; write=hex/base64→region; readCart=loaded cart ROM image; snapshot=capture a baseline; diff=changed bytes vs a baseline; classify=what kind of data is here; search=seed a value search; searchNext=narrow it."),
       region: z.enum(REGIONS).optional().describe("Memory region. Required for read/write/snapshot/diff; defaults to system_ram for classify/search. (readCart targets the cart ROM image, not a region.)"),
       offset: z.number().int().min(0).default(0).describe("Byte offset within the region (read/write/snapshot/classify) or the cart ROM image (readCart)."),
-      length: z.number().int().min(1).max(1 << 20).optional().describe("Bytes to read (op:read max 65536; op:readCart default 16, max 1MB; op:snapshot default whole region from offset; op:classify default 256, min 4)."),
+      length: z.number().int().min(1).max(1 << 20).optional().describe("Bytes to read (max 1MB). op:read default 1; op:readCart default 16; op:snapshot default = whole region from offset; op:classify default 256."),
       offsets: offsetsShape.optional().describe("op:read BATCH — a list of addresses (each read `length` bytes, default 1) or {offset,length} objects → reads:[{offset,length,hex}]. Takes precedence over offset/length."),
       // write
       hex: z.string().optional().describe("op:write — hex string, e.g. 'deadbeef' (even length)."),
@@ -409,7 +409,7 @@ export function registerMemoryTools(server, z, sessionKey) {
       compare: z.enum(["eq", "changed", "unchanged", "inc", "dec", "gt", "lt"]).optional().describe("op:searchNext — eq=now equals `value`; changed/unchanged vs the last read; inc/dec=went up/down; gt/lt=now >/< `value`."),
       maxCandidates: z.number().int().min(1).max(8192).default(64).describe("op:search/searchNext — cap the candidates RETURNED (the full list is kept server-side; `count` is the true total)."),
       // shared output
-      outputPath: z.string().optional().describe(`op:read/readCart — write RAW bytes here. Required for reads >${INLINE_HEX_LIMIT}B unless inline. For small reads it's honored too (writes file AND returns hex), so a 'snapshot RAM to disk then diff two files' flow works at any size. (Not used with offsets.)`),
+      outputPath: z.string().optional().describe(`op:read/readCart — write RAW bytes here. Required for reads >${INLINE_HEX_LIMIT}B unless inline. Small reads honor it too (writes file AND returns hex), so 'dump to disk then diff two files' works at any size. (Ignored with offsets.)`),
       inline: z.boolean().default(false).describe(`op:read/readCart — for reads >${INLINE_HEX_LIMIT}B, return the hex in the response instead of writing to disk.`),
     },
     safeTool(async (args) => {

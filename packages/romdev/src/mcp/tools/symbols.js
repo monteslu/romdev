@@ -368,16 +368,16 @@ function registerSymbolsTool(server, z) {
     "(`XXXX  _name`, GB/GBC/SMS/GG/MSX), ld65 VICE (`al XXXX .name`, cc65), and GNU ld maps (Genesis/m68k + GBA/ARM).",
     {
       op: z.enum(["resolve", "lookup", "map", "list", "addr"]).describe("resolve name→addr; lookup addr→sym; map = layout by region; list all; addr = PC→nearest symbol."),
-      dbg: z.string().optional().describe("op=resolve/lookup/list/map (cc65 path): contents of the .dbg from build({output:'romWithDebug'}) — NES/C64/Atari7800/Lynx/PCE. Pass this OR `map`."),
-      map: z.string().optional().describe("op=resolve/lookup/list/map (linker-map path): the .map text — auto-detects sdld (GB/GBC/SMS/GG/MSX) vs GNU ld (Genesis/m68k). The `mapText`/`symbols` field on build({output:'romWithDebug'}). Pass this OR `dbg`."),
-      name: z.string().optional().describe("op=resolve: the symbol name to look up (C name — no leading underscore needed; both spellings tried)."),
-      address: z.number().int().min(0).optional().describe("op=lookup: the address to find the enclosing symbol for."),
-      max: z.number().int().min(1).max(10000).default(200).describe("op=list: maximum symbols to return."),
-      platform: z.string().optional().describe("op=map: platform id — adds region labels per platform conventions (incl. genesis work-RAM mirror)."),
+      dbg: z.string().optional().describe("op=resolve/lookup/list/map: cc65 .dbg text from build({output:'romWithDebug'}) (NES/C64/Atari7800/Lynx/PCE). Pass this OR `map`."),
+      map: z.string().optional().describe("op=resolve/lookup/list/map: .map text (build's `mapText`/`symbols`) — auto-detects sdld (GB/GBC/SMS/GG/MSX) vs GNU ld (Genesis/m68k). Pass this OR `dbg`."),
+      name: z.string().optional().describe("op=resolve: symbol name (C name; no leading underscore needed — both spellings tried)."),
+      address: z.number().int().min(0).optional().describe("op=lookup: address whose enclosing symbol to find."),
+      max: z.number().int().min(1).max(10000).default(200).describe("op=list: max symbols to return (default 200)."),
+      platform: z.string().optional().describe("op=map: platform id — adds per-platform region labels (incl. genesis work-RAM mirror)."),
       // addr
       pc: z.number().int().min(0).max(0xFFFFFF).optional().describe("op=addr: CPU address to look up (e.g. 0x01A7)."),
-      symbolsText: z.string().optional().describe("op=addr: inline .map/.sym text (from build response.symbols)."),
-      symbolsPath: z.string().optional().describe("op=addr: absolute path to a .map/.sym file. Mutually exclusive with symbolsText."),
+      symbolsText: z.string().optional().describe("op=addr: inline .map/.sym text (build's `symbols`). Takes precedence over symbolsPath."),
+      symbolsPath: z.string().optional().describe("op=addr: path to a .map/.sym file (used only if symbolsText absent)."),
     },
     safeTool(async (args) => {
       switch (args.op) {

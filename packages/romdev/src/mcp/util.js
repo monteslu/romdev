@@ -83,3 +83,273 @@ export function safeTool(fn) {
     }
   };
 }
+
+// ── Clear tool-call validation errors ───────────────────────────────────────
+// The MCP SDK validates args against the registered zod schema BEFORE our
+// handler runs, and on failure throws a raw JSON dump ("Input validation error:
+// [{...}]"). It also silently DROPS unknown keys (so `addr` instead of `offset`
+// fails silently). Param descriptions can't fix either — and they cost every
+// agent context on every connect. So instead we keep param docs terse and put
+// the guidance in the ERROR (paid only by the agent who errs, only when it errs).
+//
+// `validateArgs(shape, args, toolName)` runs OUR own check first and throws a
+// plain-sentence Error (caught by safeTool → errorContent) for: bad enum value,
+// wrong type, missing required field, and unknown/misspelled param (with a
+// "did you mean" nearest-match). Tool handlers call it at the top; the registered
+// SDK schema is kept permissive so this layer is the one that speaks.
+
+/**
+ * Wrap an McpServer's `tool()` so every registered tool gets clear validation
+ * errors instead of the SDK's raw JSON dump — and unknown/misspelled params are
+ * caught (the SDK strips them silently by default). Call ONCE at the top of
+ * registerTools(): `server = withClearToolErrors(server, z)`.
+ *
+ * Mechanism (zod v4 + MCP SDK): the SDK builds `z.object(shape)` from the shape
+ * we pass, safeParses the args, and surfaces `issues[0].message`. We instead
+ * register a `.strict()` object carrying a custom `error` map that returns a
+ * plain sentence per issue (enum/type/missing/unknown-key with "did you mean").
+ * So the SDK's own validator emits good text — no ordering fight, no per-tool code.
+ *
+ * @param {any} server  the McpServer
+ * @param {any} z       the zod module
+ * @returns {any} the same server (tool() now wrapped)
+ */
+/** Install the global zod error map once (idempotent). Field-level issues
+ *  (bad enum, wrong type, missing required) go through this on the SDK's parse
+ *  path, which doesn't pass a per-call error option. Object-level issues
+ *  (unrecognized_keys) are handled per-schema in strictFriendlyObject (it has
+ *  the valid-key list for "did you mean"). */
+let _zodErrorConfigured = false;
+function installGlobalZodErrors(z) {
+  if (_zodErrorConfigured || typeof z.config !== "function") return;
+  _zodErrorConfigured = true;
+  z.config({
+    customError: (issue) => {
+      const path = (issue.path && issue.path.length ? issue.path.join(".") : null);
+      switch (issue.code) {
+        case "invalid_value":
+        case "invalid_enum_value": {
+          const opts = issue.values || issue.options || [];
+          if (!opts.length || !path) return undefined;
+          return `'${path}' must be one of: ${opts.join(" | ")}.`;
+        }
+        case "invalid_type": {
+          if (!path) return undefined;
+          if (issue.input === undefined) return `missing required parameter '${path}'.`;
+          return `'${path}' must be a ${issue.expected}.`;
+        }
+        default:
+          return undefined; // zod default (incl. unrecognized_keys, handled per-schema)
+      }
+    },
+  });
+}
+
+export function withClearToolErrors(server, z) {
+  installGlobalZodErrors(z);
+  const origTool = server.tool.bind(server);
+  server.tool = (name, ...rest) => {
+    // Register normally (the SDK requires a RAW shape as inputSchema and builds
+    // z.object(shape) itself — passing a built object is rejected). THEN patch
+    // the stored tool's inputSchema to a `.strict()` object carrying a custom
+    // error map. Both validation AND tools/list go through the stored schema
+    // (the SDK calls normalizeObjectSchema(tool.inputSchema) for each), so this
+    // makes the SDK itself: (a) reject unknown/misspelled params (.strict) with
+    // a "did you mean", and (b) emit a clean sentence for bad enum / wrong type
+    // / missing — instead of its raw JSON dump. No ordering fight; the param
+    // descriptions can stay terse because the guidance lives in the error.
+    const shapeIdx = rest.findIndex(
+      (x) => x && typeof x === "object" && !Array.isArray(x) && !("_def" in x) &&
+        Object.values(x).some((v) => v && typeof v === "object" && "_def" in v),
+    );
+    const shape = shapeIdx >= 0 ? rest[shapeIdx] : null;
+    const result = origTool(name, ...rest);
+    if (shape) {
+      try {
+        const reg = server._registeredTools && server._registeredTools[name];
+        if (reg) reg.inputSchema = strictFriendlyObject(z, shape, name);
+      } catch { /* if the SDK internals shift, fall back to the SDK's own errors */ }
+    }
+    return result;
+  };
+  return server;
+}
+
+/**
+ * Build a `.strict()` z.object from a tool's shape whose validation issues each
+ * render as a clear sentence (unknown-key "did you mean", enum options, missing
+ * required, wrong type). Used by withClearToolErrors to replace the stored schema.
+ * @param {any} z
+ * @param {Record<string, any>} shape
+ * @param {string} toolName
+ */
+function strictFriendlyObject(z, shape, toolName) {
+  const validKeys = Object.keys(shape);
+  const errorMap = (issue) => {
+    switch (issue.code) {
+      case "unrecognized_keys": {
+        const bad = (issue.keys && issue.keys[0]) || "?";
+        const hint = suggestKey(bad, validKeys);
+        return `${toolName}: unknown parameter '${bad}'.` +
+          (hint ? ` Did you mean '${hint}'?` : "") +
+          ` Valid: ${validKeys.join(", ")}.`;
+      }
+      case "invalid_value":
+      case "invalid_enum_value": {
+        const opts = issue.values || issue.options || [];
+        const path = (issue.path && issue.path.length ? issue.path.join(".") : "value");
+        return `${toolName}: '${path}' must be one of: ${opts.join(" | ")}.`;
+      }
+      case "invalid_type": {
+        const path = (issue.path && issue.path.length ? issue.path.join(".") : "value");
+        if (issue.input === undefined || issue.received === "undefined") {
+          return `${toolName}: missing required parameter '${path}'. Valid params: ${validKeys.join(", ")}.`;
+        }
+        return `${toolName}: '${path}' must be a ${issue.expected}.`;
+      }
+      default:
+        return undefined; // zod's default message for anything else
+    }
+  };
+  return z.object(shape, { error: errorMap }).strict();
+}
+
+/** Levenshtein distance (small, for "did you mean" suggestions). */
+function editDistance(a, b) {
+  const m = a.length, n = b.length;
+  if (!m) return n; if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, i) => i);
+  let cur = new Array(n + 1);
+  for (let i = 1; i <= m; i++) {
+    cur[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+    }
+    [prev, cur] = [cur, prev];
+  }
+  return prev[n];
+}
+
+// Conceptual aliases agents reach for reflexively that are NOT close typos of
+// the real param name (edit-distance won't catch addr→offset). Suggested only
+// when the real key is actually valid for the tool.
+const PARAM_ALIASES = {
+  addr: ["offset", "address"], address: ["offset"], pos: ["offset"], position: ["offset"],
+  len: ["length"], size: ["length"], count: ["length", "count"], num: ["count"],
+  data: ["hex", "base64", "bytes"], bytes: ["hex", "base64"], buf: ["base64"], buffer: ["base64"],
+  file: ["path"], filepath: ["path"], filename: ["path"], src: ["path", "source"], dest: ["path", "outputPath"],
+  out: ["outputPath"], output: ["outputPath"], rom: ["path"],
+  reg: ["regId"], register: ["regId"], val: ["value"], pc: ["pc", "address"],
+  freq: ["frequency"], chan: ["channel"], plat: ["platform"], sys: ["system"], op: ["op"],
+};
+
+/** Nearest valid key to `bad`: a known conceptual alias first, else a close typo. */
+function suggestKey(bad, valid) {
+  const lb = bad.toLowerCase();
+  const validLower = new Set(valid.map((v) => v.toLowerCase()));
+  // 1) conceptual alias → the first candidate that's actually a valid key here.
+  for (const cand of (PARAM_ALIASES[lb] || [])) {
+    if (validLower.has(cand.toLowerCase())) {
+      return valid.find((v) => v.toLowerCase() === cand.toLowerCase());
+    }
+  }
+  // 2) closest typo within a tight threshold.
+  let best = null, bestD = Infinity;
+  for (const k of valid) {
+    const d = editDistance(lb, k.toLowerCase());
+    if (d < bestD) { bestD = d; best = k; }
+  }
+  return best != null && bestD <= Math.max(2, Math.ceil(best.length * 0.4)) ? best : null;
+}
+
+/** Pull the enum option list out of a zod schema (v3/v4), or null. */
+function enumValues(zodType) {
+  const d = zodType?._def;
+  if (!d) return null;
+  // zod v3: ZodEnum has .values / _def.values; v4 similar
+  if (Array.isArray(zodType.options)) return zodType.options;
+  if (Array.isArray(d.values)) return d.values;
+  if (d.entries && typeof d.entries === "object") return Object.values(d.entries);
+  return null;
+}
+
+/**
+ * Validate a tool call's args against the tool's zod SHAPE (the plain object of
+ * field→zodType passed to server.tool) and throw clear, actionable errors.
+ * Returns the args unchanged on success (the handler keeps using them).
+ *
+ * @param {Record<string, any>} shape  the zod shape object (field → zodType)
+ * @param {Record<string, any>} args   the incoming arguments
+ * @param {string} toolName            for the message prefix
+ * @returns {Record<string, any>} args
+ */
+export function validateArgs(shape, args, toolName) {
+  const a = args ?? {};
+  const validKeys = Object.keys(shape);
+  const validSet = new Set(validKeys);
+
+  // 1) Unknown / misspelled params — the silent-drop footgun.
+  for (const k of Object.keys(a)) {
+    if (!validSet.has(k)) {
+      const hint = suggestKey(k, validKeys);
+      throw new Error(
+        `${toolName}: unknown parameter '${k}'.` +
+        (hint ? ` Did you mean '${hint}'?` : "") +
+        ` Valid: ${validKeys.join(", ")}.`,
+      );
+    }
+  }
+
+  // 2) Per-field: enum membership + required presence + coarse type.
+  for (const key of validKeys) {
+    const zt = shape[key];
+    const present = a[key] !== undefined && a[key] !== null;
+    const optional = isOptionalZod(zt);
+    if (!present) {
+      if (!optional && !hasDefault(zt)) {
+        throw new Error(`${toolName}: missing required parameter '${key}'. Valid params: ${validKeys.join(", ")}.`);
+      }
+      continue;
+    }
+    const opts = enumValues(unwrapZod(zt));
+    if (opts && !opts.includes(a[key])) {
+      throw new Error(
+        `${toolName}: '${key}' must be one of: ${opts.join(" | ")} (got ${JSON.stringify(a[key])}).`,
+      );
+    }
+  }
+  return a;
+}
+
+/** Peel optional/default/nullable wrappers to reach the inner zod type. */
+function unwrapZod(zt) {
+  let t = zt;
+  for (let i = 0; i < 6 && t?._def; i++) {
+    const tn = t._def.typeName || t._def.type;
+    if (tn === "ZodOptional" || tn === "optional" || tn === "ZodDefault" || tn === "default" ||
+        tn === "ZodNullable" || tn === "nullable") {
+      t = t._def.innerType ?? t._def.type ?? t.unwrap?.();
+    } else break;
+  }
+  return t;
+}
+
+/** True if a zod type is optional (or nullable). */
+function isOptionalZod(zt) {
+  try { return zt?.isOptional?.() === true || zt?.isNullable?.() === true; }
+  catch { return false; }
+}
+
+/** True if a zod type carries a default (so absence is fine). */
+function hasDefault(zt) {
+  let t = zt;
+  for (let i = 0; i < 6 && t?._def; i++) {
+    const tn = t._def.typeName || t._def.type;
+    if (tn === "ZodDefault" || tn === "default") return true;
+    if (tn === "ZodOptional" || tn === "optional" || tn === "ZodNullable" || tn === "nullable") {
+      t = t._def.innerType ?? t._def.type ?? t.unwrap?.();
+    } else break;
+  }
+  return false;
+}

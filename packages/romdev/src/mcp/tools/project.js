@@ -1852,7 +1852,7 @@ export function registerProjectTools(server, z) {
       name: z.string().optional().describe("op=project/game: project name (used for output binary)."),
       path: z.string().optional().describe("op=project/game: absolute path where the project dir is created."),
       title: z.string().optional().describe("op=project/game: human-readable title in the README."),
-      overwrite: z.boolean().default(false).describe("op=project/game: allow writing into an existing non-empty dir. (op=copySnippets defaults true — see destinationDir.)"),
+      overwrite: z.boolean().default(false).describe("op=project/game: allow writing into an existing non-empty dir. op=copySnippets: overwrite existing files (else skip them)."),
       // project
       template: z.string().optional().describe("op=project: template id ('default' | 'hello_sprite' | 'tile_engine' on NES/GB/GBC; 'default' elsewhere)."),
       withSnippets: z.boolean().default(false).describe("op=project: also drop every vetted snippet alongside main (= scaffold copySnippets after)."),
@@ -1860,7 +1860,7 @@ export function registerProjectTools(server, z) {
       genre: z.string().optional().describe("op=game: 'shmup' | 'platformer' | 'puzzle' | 'sports' | 'racing'."),
       // snippets
       mode: z.enum(["list", "get", "getAll"]).default("list").describe("op=snippets: 'list' (names), 'get' (one, needs name), 'getAll' (joined)."),
-      snippetName: z.string().optional().describe("op=snippets mode:'get': the snippet name ('read_pad') or filename ('read_pad.s')."),
+      snippetName: z.string().optional().describe("op=snippets mode:'get': snippet name ('read_pad') or filename ('read_pad.s')."),
       language: z.string().optional().describe("op=snippets/copySnippets: filter 'c' | 'asm'."),
       outputPath: z.string().optional().describe("op=snippets mode:'getAll': write the joined snippets here (or inline:true)."),
       inline: z.boolean().default(false).describe("op=snippets mode:'getAll': return `combined` in the response instead of writing."),
