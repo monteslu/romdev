@@ -183,10 +183,10 @@ test("MCP: readMemory returns 16 bytes from NES system RAM", { skip: !HAS_NESTES
   });
   await client.callTool({ name: "frame", arguments: { op: "step",  frames: 10 } });
   const r = await client.callTool({
-    name: "readMemory",
-    arguments: { region: "system_ram", offset: 0, length: 16 },
+    name: "memory",
+    arguments: { op: "read", region: "system_ram", offset: 0, length: 16 },
   });
-  assert.equal(r.isError, undefined, `readMemory errored: ${JSON.stringify(r)}`);
+  assert.equal(r.isError, undefined, `memory(read) errored: ${JSON.stringify(r)}`);
   const data = JSON.parse(r.content[0].text);
   assert.equal(data.region, "system_ram");
   assert.equal(data.length, 16);
@@ -198,9 +198,9 @@ test("MCP: findWriter captures the instruction-level write PC (watchpoint)", { s
   await client.callTool({ name: "loadMedia", arguments: { platform: "nes", path: ROM_PATH } });
   await client.callTool({ name: "frame", arguments: { op: "step",  frames: 60 } });
   // Find a RAM address the ROM actually writes, so the watchpoint is sure to fire.
-  const before = JSON.parse((await client.callTool({ name: "readMemory", arguments: { region: "system_ram", offset: 0, length: 0x100 } })).content[0].text).hex;
+  const before = JSON.parse((await client.callTool({ name: "memory", arguments: { op: "read", region: "system_ram", offset: 0, length: 0x100 } })).content[0].text).hex;
   await client.callTool({ name: "frame", arguments: { op: "step",  frames: 5 } });
-  const after = JSON.parse((await client.callTool({ name: "readMemory", arguments: { region: "system_ram", offset: 0, length: 0x100 } })).content[0].text).hex;
+  const after = JSON.parse((await client.callTool({ name: "memory", arguments: { op: "read", region: "system_ram", offset: 0, length: 0x100 } })).content[0].text).hex;
   let addr = -1;
   for (let i = 0; i < 0x100; i++) {
     if (before.slice(i * 2, i * 2 + 2) !== after.slice(i * 2, i * 2 + 2)) { addr = i; break; }

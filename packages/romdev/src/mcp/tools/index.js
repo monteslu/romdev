@@ -307,7 +307,7 @@ const TOOL_OWNER = {
   // state category
   state: "state",
   // memory category
-  readMemory: "memory", writeMemory: "memory",
+  memory: "memory",
   // debug category
   tiles: "debug", sprites: "debug",
   background: "debug", encodeArt: "assets",

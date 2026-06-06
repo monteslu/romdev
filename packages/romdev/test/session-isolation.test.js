@@ -67,10 +67,10 @@ test("two MCP sessions own independent hosts; loadMedia in one is invisible to t
   assert.equal(parsedA.platform, "nes");
 
   // Session B trying to read memory should fail — no host. A SHOULD succeed.
-  const memB = await b.callTool({ name: "readMemory", arguments: { region: "system_ram", offset: 0, length: 16 } });
+  const memB = await b.callTool({ name: "memory", arguments: { op: "read", region: "system_ram", offset: 0, length: 16 } });
   assert.equal(memB.isError, true, "session B's readMemory must error — no media loaded in B");
 
-  const memA = await a.callTool({ name: "readMemory", arguments: { region: "system_ram", offset: 0, length: 16 } });
+  const memA = await a.callTool({ name: "memory", arguments: { op: "read", region: "system_ram", offset: 0, length: 16 } });
   assert.equal(memA.isError, undefined, "session A's readMemory failed: " + JSON.stringify(memA));
 
   // Only session A actually instantiated a host (loadMedia creates one).

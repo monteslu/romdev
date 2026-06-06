@@ -77,28 +77,11 @@ function genericEndianness(platform) {
   }
 }
 
-export function registerMemoryTools(server, z, sessionKey) {
-  server.tool(
-    "readMemory",
-    "Read bytes from one of the core's memory regions, returned as a `hex` string. " +
-    `Reads of ≤${INLINE_HEX_LIMIT} bytes always come back inline as hex (the common case — peeking RAM/OAM/palette). ` +
-    `For reads >${INLINE_HEX_LIMIT} bytes you MUST pass either outputPath (the RAW bytes are written there and you get ` +
-    "back {path, bytes}) or inline:true (the hex comes back in the response). " +
-    "Generic regions: system_ram, save_ram, video_ram, rtc. NES extras (fceumm): nes_nametables, nes_palette, nes_oam, nes_chr. " +
-    "SNES extras (snes9x): snes_oam (544B incl. hi-table), snes_cgram (512B BGR555), snes_aram (64KB SPC700 RAM), snes_fillram (32KB PPU/DMA register shadow). " +
-    "BATCH: pass `offsets` (an array of addresses, or {offset,length} objects) to read several non-contiguous spots in ONE call — returns `reads:[{offset,length,hex}]`. Use this for scattered fields (e.g. player state at $0492, X at $0512, Y at $04F2) instead of one call each.",
-    {
-      region: z.enum(REGIONS),
-      offset: z.number().int().min(0).default(0),
-      length: z.number().int().min(1).max(65536).optional().describe("Number of bytes to read (max 65536). Default 1. Ignored when `offsets` is given."),
-      offsets: z.array(z.union([
-        z.number().int().min(0),
-        z.object({ offset: z.number().int().min(0), length: z.number().int().min(1).max(65536).default(1) }),
-      ])).min(1).max(256).optional().describe("BATCH read: a list of addresses (each read as `length` bytes, default 1) or {offset,length} objects. Returns `reads:[{offset,length,hex}]` in order — one round-trip for many non-contiguous reads. Takes precedence over the single offset/length."),
-      outputPath: z.string().optional().describe(`Absolute path to write the RAW bytes to. Required for reads >${INLINE_HEX_LIMIT} bytes (unless inline:true). For SMALL reads it's honored too when given — writes the file AND returns hex inline — so a "snapshot RAM to disk, then diff two files" flow works at any size. (Not used with \`offsets\`.)`),
-      inline: z.boolean().default(false).describe(`For reads >${INLINE_HEX_LIMIT} bytes: if true, return the hex string in the response instead of writing to disk. Default false — then outputPath is required for large reads.`),
-    },
-    safeTool(async ({ region, offset, length, offsets, outputPath, inline }) => {
+// ── memory op implementations ───────────────────────────────────────────
+// Each function is the body of one former narrow tool, verbatim. The `memory`
+// router dispatches on `op`. They share the module-scope helpers below.
+
+async function memRead(sessionKey, { region, offset = 0, length, offsets, outputPath, inline }) {
       const host = getHost(sessionKey);
       const info0 = REGION_INFO[region] ?? {};
       const endianness0 = info0.endianness ?? genericEndianness(host.status.platform);
@@ -168,25 +151,9 @@ export function registerMemoryTools(server, z, sessionKey) {
         return jsonContent({ ...meta, path, bytes: written, hex });
       }
       return jsonContent({ ...meta, hex });
-    }),
-  );
+}
 
-  server.tool(
-    "writeMemory",
-    "Write bytes into one of the core's memory regions. Pass payload as `hex` (e.g. 'deadbeef') OR `base64` — NOT `data`, `bytes`, or an array. Examples: `writeMemory({region:'system_ram', offset:0x200, hex:'42'})` writes one byte; `writeMemory({region:'nes_oam', offset:0, hex:'42'.repeat(256)})` fills shadow OAM with $42. Use `hex` for byte-level patterns (most common), `base64` for binary blobs (sprite tiles, palettes, etc.).",
-    {
-      region: z.enum(REGIONS),
-      offset: z.number().int().min(0).default(0),
-      hex: z.string().optional().describe("Hex string, e.g. 'deadbeef' = 4 bytes. Must have even length."),
-      base64: z.string().optional().describe("Base64-encoded bytes — use for binary blobs (sprite/palette/tile data) that aren't convenient to write as hex."),
-      // Common-mistake catchers: these accept anything, then fail loudly
-      // with guidance pointing at hex/base64. Without them, an agent
-      // passing data:[1,2,3] hits "hex or base64 required" and may not
-      // realize the param name was wrong.
-      data: z.any().optional().describe("REJECTED — pass `hex` (string) or `base64` (string) instead. Arrays are not accepted."),
-      bytes: z.any().optional().describe("REJECTED — pass `hex` (string) or `base64` (string) instead."),
-    },
-    safeTool(async ({ region, offset, hex, base64, data, bytes: bytesArg }) => {
+async function memWrite(sessionKey, { region, offset = 0, hex, base64, data, bytes: bytesArg }) {
       if (data !== undefined || bytesArg !== undefined) {
         const wrongName = data !== undefined ? "data" : "bytes";
         const hint = Array.isArray(data ?? bytesArg)
@@ -216,28 +183,9 @@ export function registerMemoryTools(server, z, sessionKey) {
       }
       getHost(sessionKey).writeMemory(region, offset, buf);
       return textContent(`wrote ${buf.length} bytes to ${region}+${offset}`);
-    }),
-  );
+}
 
-  server.tool(
-    "readCartRom",
-    "Read the LOADED CARTRIDGE ROM (the program image the core is running), as hex. This is the answer to the " +
-    "basic patch-confirmation question: 'is the emulator actually running my patched bytes?' — read the offset you " +
-    "patched and check the value, instead of inferring it from on-screen behavior. " +
-    "For un-banked platforms (Genesis/Mega Drive, GB/GBC, SMS/GG, Lynx, PCE) the file offset IS the CPU ROM " +
-    "address — offset N is the byte the CPU fetches at ROM $N, so confirming 'the running ROM has MONTES at " +
-    "0x21FF00' is one call. For NES (iNES header is skipped) and SNES (copier header skipped) the BYTES are " +
-    "correct but the CPU reaches them through a mapper, so a file offset is not a flat CPU address — the response's " +
-    "`mapped:true` + `note` say so. Reads come from the image handed to the core at load (a write to a region does " +
-    "NOT change this), so it reflects exactly what was loaded/patched-on-load. " +
-    "Reads of ≤" + INLINE_HEX_LIMIT + " bytes return hex inline; larger reads need outputPath (raw bytes written there) or inline:true.",
-    {
-      offset: z.number().int().min(0).default(0).describe("Byte offset into the cart ROM image (post-header). For un-banked platforms this equals the CPU ROM address."),
-      length: z.number().int().min(1).max(1 << 20).default(16).describe("Bytes to read (default 16, max 1MB)."),
-      outputPath: z.string().optional().describe(`Absolute path to write RAW bytes to. Required for reads >${INLINE_HEX_LIMIT} bytes unless inline:true.`),
-      inline: z.boolean().default(false).describe(`For reads >${INLINE_HEX_LIMIT} bytes: return hex in the response instead of writing to disk.`),
-    },
-    safeTool(async ({ offset, length, outputPath, inline }) => {
+async function memReadCart(sessionKey, { offset = 0, length = 16, outputPath, inline }) {
       const host = getHost(sessionKey);
       const rom = host.getCartRom();
       if (offset >= rom.bytes.length) {
@@ -265,52 +213,20 @@ export function registerMemoryTools(server, z, sessionKey) {
         return jsonContent({ ...meta, path, bytes: written, hex });
       }
       return jsonContent({ ...meta, hex });
-    }),
-  );
+}
 
-  // ── snapshotMemory / diffMemory — "which bytes changed across this event?" ──
-  server.tool(
-    "snapshotMemory",
-    "Capture a baseline of a memory region (kept in server RAM, keyed by `name`) so you can later diffMemory " +
-    "against it. The workflow for 'which bytes did THIS event touch?': snapshotMemory before the event, trigger " +
-    "it (pressButton/stepFrames/etc.), then diffMemory after — you get just the changed offsets, no manual " +
-    "before/after hex comparison. Snapshots are per-session and overwrite on reuse of the same name.",
-    {
-      region: z.enum(REGIONS),
-      name: z.string().default("default").describe("Snapshot label — diffMemory uses the same name to compare. Take several (e.g. 'before-door', 'before-load') in one session."),
-      offset: z.number().int().min(0).default(0),
-      length: z.number().int().min(1).max(65536).optional().describe("Bytes to snapshot from offset (default: the whole region from offset)."),
-    },
-    safeTool(async ({ region, name, offset, length }) => {
+// ── snapshotMemory / diffMemory — "which bytes changed across this event?" ──
+async function memSnapshot(sessionKey, { region, name = "default", offset = 0, length }) {
       const host = getHost(sessionKey);
       const bytes = host.readMemory(region, offset, length ?? regionLength(host, region, offset));
       memSnapshots(sessionKey).set(snapKey(region, name), { offset, bytes: Uint8Array.from(bytes) });
-      return jsonContent({ region, name, offset, length: bytes.length, note: "Baseline captured — trigger your event, then diffMemory({region, name}) for the changed bytes." });
-    }),
-  );
+      return jsonContent({ region, name, offset, length: bytes.length, note: "Baseline captured — trigger your event, then memory({op:'diff', region, name}) for the changed bytes." });
+}
 
-  server.tool(
-    "diffMemory",
-    "Compare a region against an earlier snapshotMemory baseline and return the bytes that CHANGED. The direct " +
-    "answer to 'which bytes did this event touch?' — snapshot system_ram, walk into a door, diffMemory → the " +
-    "state bytes the door handler wrote. " +
-    "DEFAULT view is a CLUSTERED SUMMARY (not raw rows) so a gameplay diff that churns thousands of bytes doesn't " +
-    "flood your context: `clusters:[{start, end, bytes, stride?}]` groups adjacent changes into ranges, and when " +
-    "the ranges are evenly spaced it reports the stride (e.g. '4 islands at stride 0x80' = likely a player-struct " +
-    "array — each entity's record). `view:'raw'` returns the per-byte {offset,before,after} list (capped by " +
-    "maxChanges) for when you need exact bytes. Reads the SAME offset/length the snapshot covered.",
-    {
-      region: z.enum(REGIONS),
-      name: z.string().default("default").describe("Which snapshotMemory baseline to diff against (same name you snapshotted with)."),
-      view: z.enum(["summary", "raw"]).default("summary").describe("'summary' (default) = clustered changed-ranges + stride detection (context-safe). 'raw' = the full per-byte change list."),
-      maxChanges: z.number().int().min(1).max(65536).default(4096).describe("raw view only: cap the per-byte list (changedCount is always the true total)."),
-      maxClusters: z.number().int().min(1).max(4096).default(64).describe("summary view: cap the cluster list (clusterCount is the true total)."),
-      gap: z.number().int().min(1).max(256).default(4).describe("summary view: merge changed bytes into one cluster if they're within this many bytes of each other (default 4)."),
-    },
-    safeTool(async ({ region, name, view, maxChanges, maxClusters, gap }) => {
+async function memDiff(sessionKey, { region, name = "default", view = "summary", maxChanges = 4096, maxClusters = 64, gap = 4 }) {
       const host = getHost(sessionKey);
       const snap = memSnapshots(sessionKey).get(snapKey(region, name));
-      if (!snap) throw new Error(`diffMemory: no snapshot named '${name}' for region '${region}'. Call snapshotMemory({region, name}) first.`);
+      if (!snap) throw new Error(`memory({op:'diff'}): no snapshot named '${name}' for region '${region}'. Call memory({op:'snapshot', region, name}) first.`);
       const now = host.readMemory(region, snap.offset, snap.bytes.length);
 
       // Collect changed offsets once.
@@ -353,64 +269,27 @@ export function registerMemoryTools(server, z, sessionKey) {
           ? "Nothing changed."
           : `${changedCount} bytes changed in ${clusters.length} cluster(s). ` +
             (stride !== null ? strideNote + " " : "") +
-            "Use view:'raw' for exact before/after bytes (or narrow with a tighter event window). For 'find the address of value X' use searchValue, not diff.",
+            "Use view:'raw' for exact before/after bytes (or narrow with a tighter event window). For 'find the address of value X' use memory({op:'search'}), not diff.",
       });
-    }),
-  );
+}
 
-  // diffState moved to the `state` tool (state({op:'diff'})).
+// diffState lives in the `state` tool (state({op:'diff'})).
 
-  // ── classifyRegion — "what kind of data is at this offset?" ──────────────
-  server.tool(
-    "classifyRegion",
-    "Heuristically classify the bytes at an offset — BEFORE you trust a 'found table'. Kills the classic RE " +
-    "trap: a run of values that 'matches' the stats you want is often ASCII TEXT (e.g. bytes 82/79/68 = 'R'/'O'/" +
-    "'D' from a taunt string, not a stat table) or code. Returns `{looksLike: 'ascii-text'|'high-entropy'|" +
-    "'sparse-or-tiledata'|'structured-data'|'unknown', printableRatio, entropy, zeroRatio, longestAsciiRun, " +
-    "asciiPreview, confidence, note}`. If `looksLike` is 'ascii-text', a 'data table' overlapping this offset is " +
-    "almost certainly a coincidence — do NOT patch it as a table. Use on any region (system_ram, video_ram, or " +
-    "the cart ROM region) at any offset. Cheap; run it whenever a candidate offset 'looks right' to confirm it's " +
-    "actually the kind of data you think.",
-    {
-      region: z.enum(REGIONS).default("system_ram"),
-      offset: z.number().int().min(0).default(0),
-      length: z.number().int().min(4).max(65536).default(256).describe("Bytes to classify from offset (default 256). Use the suspected table's length."),
-    },
-    safeTool(async ({ region, offset, length }) => {
+// ── classifyRegion — "what kind of data is at this offset?" ──────────────
+async function memClassify(sessionKey, { region = "system_ram", offset = 0, length = 256 }) {
       const host = getHost(sessionKey);
       const bytes = host.readMemory(region, offset, length);
       const cls = classifyBytes(bytes, { bigEndian: genericEndianness(host.status.platform) === "big" });
       return jsonContent({ region, offset: "0x" + offset.toString(16), length: bytes.length, ...cls });
-    }),
-  );
+}
 
-  // ── searchValue / searchNext — the iterative RAM value search (Cheat Engine /
-  //    RetroArch cheat-search workflow). THE primitive for "the screen shows X;
-  //    find its RAM address." Seed with searchValue, then narrow each time the
-  //    value changes with op:'eq'|'changed'|'unchanged'|'gt'|'lt'|'inc'|'dec'.
-  //    The candidate list lives per session (keyed by `name`); each narrow reads
-  //    the region fresh and keeps only candidates that still satisfy the op.
-  server.tool(
-    "searchValue",
-    "Find the RAM address(es) holding a value — the iterative 'cheat search' every RE workflow needs (find the " +
-    "score / timer / health / record-id / stat). Seeds a candidate list, then you NARROW it with searchNext as " +
-    "the value changes in-game, exactly like Cheat Engine / RetroArch. Far better than snapshotMemory+diffMemory " +
-    "for this (which floods you with every byte gameplay churns). " +
-    "WORKFLOW: (1) `searchValue({value: 7, size: 1})` while the screen shows 7 → all addresses currently holding " +
-    "7. (2) make the value change in-game (lose a life → 6), then `searchNext({compare:'eq', value: 6})` → only " +
-    "addresses that are NOW 6 AND were a candidate. Repeat until 1-2 remain. (3) confirm with writeMemory + watch " +
-    "the screen. " +
-    "If you don't know the new value, use compare-only narrows: `searchNext({compare:'dec'})` (value went down), " +
-    "`'inc'`, `'changed'`, `'unchanged'`. `size` is 1/2/4 bytes (uses the region's endianness). Works on EVERY " +
-    "platform — defaults to `system_ram` (the CPU's work RAM). Returns `{candidates, count, searchId, sample}`.",
-    {
-      value: z.number().int().describe("The value the screen currently shows (e.g. the score, a stat, lives). Interpreted as a `size`-byte unsigned int in the region's byte order."),
-      size: z.number().int().min(1).max(4).default(1).describe("Value width in bytes: 1 (most stats/lives/health), 2 (scores/timers), 4 (big counters)."),
-      region: z.enum(REGIONS).default("system_ram").describe("Where to search. Default system_ram (the CPU work RAM where game state lives). Use save_ram, snes_aram, etc. for special cases."),
-      name: z.string().default("default").describe("Search session label — searchNext narrows the same name. Run independent searches in parallel with different names."),
-      maxCandidates: z.number().int().min(1).max(8192).default(64).describe("Cap the candidate addresses RETURNED (the full list is kept server-side for narrowing); `count` is the true total."),
-    },
-    safeTool(async ({ value, size, region, name, maxCandidates }) => {
+// ── searchValue / searchNext — the iterative RAM value search (Cheat Engine /
+//    RetroArch cheat-search workflow). THE primitive for "the screen shows X;
+//    find its RAM address." Seed with op:'search', then narrow each time the
+//    value changes with op:'searchNext' (compare:'eq'|'changed'|'unchanged'|'gt'|'lt'|'inc'|'dec').
+//    The candidate list lives per session (keyed by `name`); each narrow reads
+//    the region fresh and keeps only candidates that still satisfy the compare.
+async function memSearch(sessionKey, { value, size = 1, region = "system_ram", name = "default", maxCandidates = 64 }) {
       const host = getHost(sessionKey);
       const info = REGION_INFO[region] ?? {};
       const little = (info.endianness ?? genericEndianness(host.status.platform)) !== "big";
@@ -428,30 +307,15 @@ export function registerMemoryTools(server, z, sessionKey) {
         note: candidates.length === 0
           ? "0 matches — wrong size? (try size:2 for a score). Or the value isn't in this region (try a different region) or is stored offset/encoded."
           : candidates.length === 1
-          ? "1 candidate — likely THE address. Confirm with writeMemory({region, offset, bytes}) and watch the screen."
-          : "Make the value change in-game, then searchNext({name, compare:'eq', value:<new>}) to narrow. Repeat until 1-2 remain.",
+          ? "1 candidate — likely THE address. Confirm with memory({op:'write', region, offset, hex}) and watch the screen."
+          : "Make the value change in-game, then memory({op:'searchNext', name, compare:'eq', value:<new>}) to narrow. Repeat until 1-2 remain.",
       });
-    }),
-  );
+}
 
-  server.tool(
-    "searchNext",
-    "Narrow an active searchValue candidate list against the CURRENT memory. Call after the value changed in " +
-    "game. `compare`: 'eq' (candidates now equal to `value`), 'changed'/'unchanged' (vs the previous search read), " +
-    "'inc'/'dec' (went up/down), 'gt'/'lt' (now greater/less than `value`). 'eq'/'gt'/'lt' need `value`; the " +
-    "others don't (they compare to the previous snapshot). Returns the narrowed `{candidates, count}` — repeat " +
-    "until 1-2 remain, then confirm with writeMemory. This is the loop that turns 'somewhere in 8KB of RAM' into " +
-    "an exact address in a few steps.",
-    {
-      compare: z.enum(["eq", "changed", "unchanged", "inc", "dec", "gt", "lt"]).describe("How to narrow: eq=now equals `value`; changed/unchanged vs the last read; inc/dec=went up/down; gt/lt=now >/< `value`."),
-      value: z.number().int().optional().describe("Required for compare 'eq'/'gt'/'lt' — the value now shown on screen."),
-      name: z.string().default("default").describe("Which searchValue session to narrow (the `name` you seeded with)."),
-      maxCandidates: z.number().int().min(1).max(8192).default(64),
-    },
-    safeTool(async ({ compare, value, name, maxCandidates }) => {
+async function memSearchNext(sessionKey, { compare, value, name = "default", maxCandidates = 64 }) {
       const host = getHost(sessionKey);
       const s = searchSessions(sessionKey).get(name);
-      if (!s) throw new Error(`searchNext: no active search named '${name}'. Call searchValue({value, name}) first.`);
+      if (!s) throw new Error(`memory({op:'searchNext'}): no active search named '${name}'. Call memory({op:'search', value, name}) first.`);
       if ((compare === "eq" || compare === "gt" || compare === "lt") && value === undefined) {
         throw new Error(`searchNext: compare '${compare}' needs a \`value\` (the number now on screen).`);
       }
@@ -487,8 +351,85 @@ export function registerMemoryTools(server, z, sessionKey) {
           ? "0 left — narrowed too far (wrong op, or the value moved between reads). Re-seed with searchValue."
           : kept.length <= 2
           ? "Down to 1-2 — confirm: writeMemory({region, offset, bytes}) and watch the screen change."
-          : "Still multiple — change the value again and searchNext to keep narrowing.",
+          : "Still multiple — change the value again and memory({op:'searchNext'}) to keep narrowing.",
       });
+}
+
+export function registerMemoryTools(server, z, sessionKey) {
+  // Shared sub-shapes reused across ops.
+  const offsetsShape = z.array(z.union([
+    z.number().int().min(0),
+    z.object({ offset: z.number().int().min(0), length: z.number().int().min(1).max(65536).default(1) }),
+  ])).min(1).max(256);
+
+  server.tool(
+    "memory",
+    "Read / write / search the core's memory regions, one tool keyed by `op`. " +
+    "`region` is the single canonical enum (system_ram, save_ram, video_ram, rtc; NES nes_nametables/nes_palette/nes_oam/nes_chr; " +
+    "SNES snes_oam/snes_cgram/snes_aram/snes_fillram; Genesis genesis_cram/vsram/vdp_regs/z80_ram/...). The response carries each region's endianness + wordSize.\n" +
+    `• op:'read' — bytes as a \`hex\` string. ≤${INLINE_HEX_LIMIT}B come back inline; >${INLINE_HEX_LIMIT}B need \`outputPath\` (RAW bytes written → {path,bytes}) or \`inline:true\`. BATCH: \`offsets\` (addresses or {offset,length}) reads many non-contiguous spots in ONE call → reads:[{offset,length,hex}]. (Genesis video_ram is raw host-LE word-swapped — not a direct tile map; use tiles({as:'pixels'}).)\n` +
+    "• op:'write' — pass payload as `hex` (e.g. 'deadbeef') OR `base64` — **NOT `data`, `bytes`, or an array (those are REJECTED with guidance).** hex for byte patterns, base64 for binary blobs.\n" +
+    "• op:'readCart' — read the LOADED CARTRIDGE ROM image ('is the emulator running my patched bytes?'). For un-banked platforms (Genesis/GB/SMS/Lynx/PCE) the file `offset` IS the CPU ROM address; **NES/SNES skip the header and reach bytes through a mapper, so `mapped:true`+note say the offset is not a flat CPU address.**\n" +
+    "• op:'snapshot' — capture a baseline of `region` (server RAM, keyed by `name`) to later diff. The 'which bytes did THIS event touch?' workflow: snapshot → trigger event → op:'diff'.\n" +
+    "• op:'diff' — compare a region against a snapshot baseline → the CHANGED bytes. DEFAULT `view:'summary'` is a CLUSTERED summary (+ stride detection — '4 islands at stride 0x80' = a struct array) so a churny gameplay diff doesn't flood context; `view:'raw'` = the per-byte before/after list.\n" +
+    "• op:'classify' — heuristically classify the bytes at an offset BEFORE you trust a 'found table'. **Kills the classic trap: a run that 'matches' your stats is often ASCII TEXT (bytes 82/79/68 = 'ROD' from a taunt string) or code.** Returns looksLike/printableRatio/entropy/asciiPreview/confidence.\n" +
+    "• op:'search' — seed the iterative RAM value search (Cheat Engine / RetroArch style): all addresses currently holding `value` (`size` 1/2/4 bytes, region's endianness). The primitive for 'the screen shows X, find its RAM address.' Far better than snapshot+diff for this.\n" +
+    "• op:'searchNext' — narrow the active candidate list against CURRENT memory. `compare`: 'eq'/'gt'/'lt' (need `value`), 'changed'/'unchanged'/'inc'/'dec' (vs the previous read). Repeat until 1-2 remain, then confirm with op:'write'.",
+    {
+      op: z.enum(["read", "write", "readCart", "snapshot", "diff", "classify", "search", "searchNext"])
+        .describe("read=bytes→hex; write=hex/base64→region; readCart=loaded cart ROM image; snapshot=capture a baseline; diff=changed bytes vs a baseline; classify=what kind of data is here; search=seed a value search; searchNext=narrow it."),
+      region: z.enum(REGIONS).optional().describe("Memory region. Required for read/write/snapshot/diff; defaults to system_ram for classify/search. (readCart targets the cart ROM image, not a region.)"),
+      offset: z.number().int().min(0).default(0).describe("Byte offset within the region (read/write/snapshot/classify) or the cart ROM image (readCart)."),
+      length: z.number().int().min(1).max(1 << 20).optional().describe("Bytes to read (op:read max 65536; op:readCart default 16, max 1MB; op:snapshot default whole region from offset; op:classify default 256, min 4)."),
+      offsets: offsetsShape.optional().describe("op:read BATCH — a list of addresses (each read `length` bytes, default 1) or {offset,length} objects → reads:[{offset,length,hex}]. Takes precedence over offset/length."),
+      // write
+      hex: z.string().optional().describe("op:write — hex string, e.g. 'deadbeef' (even length)."),
+      base64: z.string().optional().describe("op:write — base64 bytes (binary blobs)."),
+      data: z.any().optional().describe("op:write — REJECTED. Pass `hex` (string) or `base64` (string), not an array."),
+      bytes: z.any().optional().describe("op:write — REJECTED. Pass `hex` (string) or `base64` (string)."),
+      // snapshot/diff/search session label
+      name: z.string().default("default").describe("op:snapshot/diff — baseline label (same name to compare). op:search/searchNext — search-session label (narrow the same name; run independent searches with different names)."),
+      // diff
+      view: z.enum(["summary", "raw"]).default("summary").describe("op:diff — 'summary' (default, clustered ranges + stride) or 'raw' (per-byte before/after)."),
+      maxChanges: z.number().int().min(1).max(65536).default(4096).describe("op:diff raw view — cap the per-byte list (changedCount is the true total)."),
+      maxClusters: z.number().int().min(1).max(4096).default(64).describe("op:diff summary view — cap the cluster list (clusterCount is the true total)."),
+      gap: z.number().int().min(1).max(256).default(4).describe("op:diff summary view — merge changed bytes within this many bytes into one cluster (default 4)."),
+      // search / searchNext
+      value: z.number().int().optional().describe("op:search — the value the screen shows now. op:searchNext — required for compare 'eq'/'gt'/'lt'."),
+      size: z.number().int().min(1).max(4).default(1).describe("op:search — value width in bytes: 1 (stats/lives), 2 (scores/timers), 4 (big counters)."),
+      compare: z.enum(["eq", "changed", "unchanged", "inc", "dec", "gt", "lt"]).optional().describe("op:searchNext — eq=now equals `value`; changed/unchanged vs the last read; inc/dec=went up/down; gt/lt=now >/< `value`."),
+      maxCandidates: z.number().int().min(1).max(8192).default(64).describe("op:search/searchNext — cap the candidates RETURNED (the full list is kept server-side; `count` is the true total)."),
+      // shared output
+      outputPath: z.string().optional().describe(`op:read/readCart — write RAW bytes here. Required for reads >${INLINE_HEX_LIMIT}B unless inline. For small reads it's honored too (writes file AND returns hex), so a 'snapshot RAM to disk then diff two files' flow works at any size. (Not used with offsets.)`),
+      inline: z.boolean().default(false).describe(`op:read/readCart — for reads >${INLINE_HEX_LIMIT}B, return the hex in the response instead of writing to disk.`),
+    },
+    safeTool(async (args) => {
+      switch (args.op) {
+        case "read":       return await memRead(sessionKey, args);
+        case "write": {
+          if (!args.region) throw new Error("memory({op:'write'}): `region` is required.");
+          return await memWrite(sessionKey, args);
+        }
+        case "readCart":   return await memReadCart(sessionKey, args);
+        case "snapshot": {
+          if (!args.region) throw new Error("memory({op:'snapshot'}): `region` is required.");
+          return await memSnapshot(sessionKey, args);
+        }
+        case "diff": {
+          if (!args.region) throw new Error("memory({op:'diff'}): `region` is required.");
+          return await memDiff(sessionKey, args);
+        }
+        case "classify":   return await memClassify(sessionKey, args);
+        case "search": {
+          if (args.value == null) throw new Error("memory({op:'search'}): `value` is required.");
+          return await memSearch(sessionKey, args);
+        }
+        case "searchNext": {
+          if (!args.compare) throw new Error("memory({op:'searchNext'}): `compare` is required.");
+          return await memSearchNext(sessionKey, args);
+        }
+        default: throw new Error(`memory: unknown op '${args.op}'`);
+      }
     }),
   );
 }
@@ -509,10 +450,7 @@ function searchSessions(key) { let m = _searchSessions.get(key); if (!m) { m = n
 // multi-session servers don't cross-contaminate baselines.
 /** @type {Map<string, Map<string, {offset:number, bytes:Uint8Array}>>} */
 const _memSnaps = new Map();
-/** @type {Map<string, Map<string, Uint8Array>>} */
-const _stateSnaps = new Map();
 function memSnapshots(key) { let m = _memSnaps.get(key); if (!m) { m = new Map(); _memSnaps.set(key, m); } return m; }
-function stateSnapshots(key) { let m = _stateSnaps.get(key); if (!m) { m = new Map(); _stateSnaps.set(key, m); } return m; }
 const snapKey = (region, name) => region + " " + name;
 
 /** Bytes from `offset` to the end of the region — for a whole-region snapshot

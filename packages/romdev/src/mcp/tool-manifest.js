@@ -55,6 +55,8 @@ export const MERGE_MAP = {
   encodeArt: { absorbs: ["convertImageToTiles", "imageToTilemap", "quantizePngForPlatform", "cropSpriteSheet", "validateGenesisTiles"], axis: "stage" },
   // ── importArt (editor-file/ROM → native tiles; load* from art-loaders.js, crossPlatformSpriteImport from sprite-pipeline.js as from:'rom') ──
   importArt: { absorbs: ["loadAsepriteSheet", "loadGifAnimation", "loadSpriteSheet", "loadTilemap", "crossPlatformSpriteImport"], axis: "from" },
+  // ── memory (read/write/search; all 8 from memory.js) ──
+  memory: { absorbs: ["readMemory", "writeMemory", "readCartRom", "snapshotMemory", "diffMemory", "classifyRegion", "searchValue", "searchNext"], axis: "op" },
 };
 
 /** Every OLD tool name that the consolidation removes (absorbed into a new tool). */
