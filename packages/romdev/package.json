@@ -1,6 +1,6 @@
 {
   "name": "romdev-mcp",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "MCP server giving coding agents full control of homebrew ROM development AND reverse-engineering/romhacking across 14 retro platforms (NES, SNES, GB, Genesis, Atari, C64, PC Engine, MSX, ...) via WASM libretro cores.",
   "type": "module",
   "main": "src/mcp/server.js",
@@ -49,7 +49,6 @@
     "fuse.js": "^7.4.1",
     "omggif": "^1.0.10",
     "pngjs": "^7.0.0",
-    "romdev_game_codes": "0.1.0",
     "romdev-core-bluemsx": "0.4.0",
     "romdev-core-fceumm": "0.7.0",
     "romdev-core-gambatte": "0.7.0",
@@ -58,6 +57,8 @@
     "romdev-core-handy": "0.5.0",
     "romdev-core-prosystem": "0.6.0",
     "romdev-core-vice": "0.6.0",
+    "romdev-famitone": "0.1.0",
+    "romdev-maxmod": "0.1.0",
     "romdev-platform-atari2600": "0.6.0",
     "romdev-platform-gba": "0.6.0",
     "romdev-platform-snes": "0.6.0",
@@ -67,6 +68,7 @@
     "romdev-toolchain-sdcc": "0.2.0",
     "romdev-toolchain-vasm": "0.1.0",
     "romdev-xgm2": "0.1.0",
+    "romdev_game_codes": "0.1.0",
     "socket.io": "^4.8.3",
     "yauzl": "^3.3.1",
     "zod": "^4.4.3"
