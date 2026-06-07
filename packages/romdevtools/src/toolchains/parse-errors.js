@@ -41,10 +41,12 @@ export function parseBuildLog(log) {
     } else if (/^vasm/.test(baseStage)) {
       issues.push(...parseVasm(text));
     } else if (/^sdcc$|^sdasz80$|^sdasgb$|^sdld$|^mcpp$/.test(baseStage)) {
-      // SDCC family: sdcc / sdasz80 / sdasgb / sdld / mcpp emit cc65-style
-      // `file:line: severity: msg` errors. Tag with the actual originating
-      // tool, not "asar" (the old fallback was wrong).
+      // SDCC family: sdcc / sdasz80 / sdasgb / sdld / mcpp. Some diagnostics use
+      // the cc65-style `file:line: Error: msg`; SDCC's frontend ALSO emits a
+      // keyword-less form — `main.c:2: syntax error: token -> ';' ; column 44`
+      // and `main.c:N: warning NNN: msg` — which parseCc65Like misses. Run both.
       issues.push(...parseCc65Like(text, baseStage));
+      issues.push(...parseSdcc(text, baseStage));
     } else if (/^wla|^wlalink|^wladx/.test(baseStage)) {
       // SNES C path: wla-65816 assembler + wlalink linker. wlalink floods a
       // symbol-table dump on failure — parseWla extracts just the diagnostics.
@@ -117,6 +119,57 @@ function parseCc65Like(text, stage) {
       col: m.groups.col ? parseInt(m.groups.col, 10) : undefined,
       message: m.groups.msg.trim().replace(/\x1b\[[0-9;]*m/g, ""),
       stage,
+    });
+  }
+  return out;
+}
+
+// SDCC's keyword-less diagnostics that parseCc65Like (which requires an explicit
+// "Error:"/"Warning:" word) doesn't catch:
+//   /work/main.c:2: syntax error: token -> ';' ; column 44
+//   /work/main.c:7: warning 112: function 'foo' implicit declaration
+//   /work/main.c:9: error 20: undefined identifier 'x'
+// We classify by the leading word after `file:line:` (syntax error / error / warning).
+function parseSdcc(text, stage) {
+  const out = [];
+  const re = /^(?<file>[^\n:]+):(?<line>\d+):\s*(?<kind>syntax error|error(?:\s+\d+)?|warning(?:\s+\d+)?):?\s*(?<msg>.*)$/gm;
+  let m;
+  while ((m = re.exec(text))) {
+    const kind = m.groups.kind.toLowerCase();
+    // Skip the forms parseCc65Like already caught ("Error:" capitalized w/ colon)
+    // — this regex is case-insensitive on `error`/`warning`, but parseCc65Like
+    // only matches when a colon immediately follows the keyword AND it's
+    // capitalized; SDCC's lowercase keyword-less form is what we add here.
+    const severity = kind.startsWith("warning") ? "warning"
+      : (kind.startsWith("error") || kind === "syntax error") ? "error" : "info";
+    const message = kind === "syntax error"
+      ? ("syntax error: " + m.groups.msg).trim().replace(/\s*;\s*$/, "")
+      : m.groups.msg.trim();
+    out.push({
+      severity,
+      file: m.groups.file,
+      line: parseInt(m.groups.line, 10),
+      message: message.replace(/\x1b\[[0-9;]*m/g, ""),
+      stage,
+    });
+  }
+  // sdld/ASlink linker diagnostics have NO file:line — they reference a symbol +
+  // module. The most common is an undefined symbol (a call to a function that was
+  // never defined/linked). Without parsing these the agent sees "build failed"
+  // with no reason in issues[] (the error lived only in the raw log).
+  //   ?ASlink-Warning-Undefined Global '_foo' referenced by module '_main'
+  //   ?ASlink-Error-...
+  const linkRe = /^\?ASlink-(?<sev>Warning|Error)-(?<msg>.+)$/gm;
+  let lm;
+  while ((lm = linkRe.exec(text))) {
+    const msg = lm.groups.msg.trim();
+    // An "Undefined Global" is effectively an error even though ASlink labels it
+    // a warning — the ROM won't run. Promote it so the agent treats it as fatal.
+    const isUndef = /undefined\s+global/i.test(msg);
+    out.push({
+      severity: lm.groups.sev === "Error" || isUndef ? "error" : "warning",
+      message: "linker: " + msg,
+      stage: "sdld",
     });
   }
   return out;
