@@ -18,7 +18,7 @@ import { toolJsonSchema } from "./tool-registry.js";
  */
 export const mcpPreamble = [
   "romdev: homebrew retro game development + reverse-engineering for coding agents.",
-  "All ~34 tools register at session init — call any by name directly, no loading step. Each is a domain VERB with an operation axis: memory({op}), build({output}), breakpoint({on}), cpu({op}), sprites({op}), tiles({op}), disasm({target}), romPatch({op}), …",
+  "All ~32 tools register at session init — call any by name directly, no loading step. Each is a domain VERB with an operation axis: memory({op}), build({output}), breakpoint({on}), cpu({op}), sprites({op}), tiles({op}), disasm({target}), romPatch({op}), …",
   "catalog({op:'categories'}) maps the tools by purpose (a guide, not a gate); catalog({op:'status'}) is a session re-orient.",
 ].join("\n");
 

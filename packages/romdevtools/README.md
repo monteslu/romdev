@@ -52,7 +52,7 @@ Agents: the server delivers [`AGENTS.md`](./AGENTS.md) as connection-time instru
 Most agents support MCP, but you don't have to use it. Run the server
 (`npx romdevtools`) and **skip wiring it into your agent's MCP
 config** — no `claude mcp add`, no `mcp.json` entry, no MCP client at all. The
-same 34 tools are reachable over plain HTTP / as an Agent Skill against the
+same 32 tools are reachable over plain HTTP / as an Agent Skill against the
 running server:
 
 - **Plain HTTP:** `POST http://127.0.0.1:7331/tool/{name}` with the args as a JSON

@@ -1,6 +1,6 @@
 // Register MCP tools on the server.
 //
-// The surface is ~34 consolidated domain tools (memory({op}), build({output}),
+// The surface is ~32 consolidated domain tools (memory({op}), build({output}),
 // breakpoint({on}), …) and EVERY one registers at session init. There is no
 // progressive-disclosure / lean mode anymore: the dynamic loadCategory dance
 // never propagated reliably to clients (they don't re-read tools/list after a
@@ -208,7 +208,7 @@ export function registerTools(server, z, sessionKey) {
   if (!sessionKey) sessionKey = randomUUID();
   // Clear validation errors for EVERY tool registered below: turns the SDK's
   // raw JSON validation dump into a plain sentence and catches unknown/misspelled
-  // params (which the SDK otherwise drops silently). One wrap, all 34 tools.
+  // params (which the SDK otherwise drops silently). One wrap, all 32 tools.
   // This is what lets the param descriptions stay terse — the guidance lives in
   // the error (paid only on a bad call), not in every agent's initial context.
   server = withClearToolErrors(server, z);
@@ -259,7 +259,7 @@ export function registerTools(server, z, sessionKey) {
   );
 
   // loadCategory + describeTool DELETED with the progressive-disclosure path:
-  // the whole surface is ~34 tools now and every one registers at session init,
+  // the whole surface is ~32 tools now and every one registers at session init,
   // so the dynamic lean-mode dance (which never worked reliably — clients don't
   // re-read tools/list after list_changed) has no reason to exist. `catalog`
   // still exposes the category map for orientation. (See the consolidation.)
@@ -293,7 +293,7 @@ export function registerTools(server, z, sessionKey) {
   // So by default we register EVERY category at session init. listCategories
   // / loadCategory still exist (idempotent, harmless) for clients that probe
   // Register EVERY category now — there is no lean/deferred mode anymore. The
-  // surface is small enough (~34 tools) that loading it all up front is the
+  // surface is small enough (~32 tools) that loading it all up front is the
   // right call (the dynamic loadCategory dance never propagated reliably to
   // clients). `disclosure.loadCategory("all")` is just the internal "register
   // all categories" helper here, not a user-facing tool.

@@ -43,7 +43,7 @@ Skip playtest only when there's clearly no human in the loop: CI runs, automated
 
 ## Tool surface: everything is loaded — just call the tool
 
-**All ~34 tools are registered and callable from session init — there is no loading step.** If you see a tool name anywhere in this doc or via `catalog({op:'categories'})`, you can call it right now. Each tool is a small VERB with an operation axis — `memory({op})`, `build({output})`, `sprites({op})`, `breakpoint({on})`, `cpu({op})` — so the whole surface is a few dozen names, not a few hundred.
+**All ~32 tools are registered and callable from session init — there is no loading step.** If you see a tool name anywhere in this doc or via `catalog({op:'categories'})`, you can call it right now. Each tool is a small VERB with an operation axis — `memory({op})`, `build({output})`, `sprites({op})`, `breakpoint({on})`, `cpu({op})` — so the whole surface is a few dozen names, not a few hundred.
 
 (We used to lazy-load tools behind a `loadCategory` call. It caused more harm than good — agents burned round-trips re-loading categories, and dynamic registration never propagated reliably to clients anyway. The consolidation shrank the surface enough that the entire thing loads up front; the old `loadCategory`/`describeTool` discovery tools are gone.)
 

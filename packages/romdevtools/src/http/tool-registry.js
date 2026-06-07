@@ -1,7 +1,7 @@
 // Tool registry harvester — the single source the HTTP route/skill/OpenAPI
 // surfaces build from.
 //
-// The MCP path registers 34 tools via registerTools(server, z, sessionKey),
+// The MCP path registers 32 tools via registerTools(server, z, sessionKey),
 // where `server` is an McpServer and each handler closes over `sessionKey` for
 // per-session host isolation. The HTTP surfaces (POST /tool/{name},
 // /skills/romdev/SKILL.md, /openapi.json, /documentation) want the EXACT same handlers,
