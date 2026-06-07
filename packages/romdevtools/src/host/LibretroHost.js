@@ -43,6 +43,21 @@ const PLATFORM_CORE_OPTIONS = {
   // `… - C-BIOS` machine tree ships in romdev-core-bluemsx/bios and is mirrored
   // into the wasm FS as the system dir (see loadMedia + resolveSystemDir).
   msx: { bluemsx_msxtype: "MSX2+ - C-BIOS" },
+  // VICE mounts a .d64/.tap/.crt but, with autostart off, just sits at the BASIC
+  // `READY.` prompt — the agent would see a blue boot screen, not the game. Force
+  // autostart so a disk/tape image runs the first program automatically (same as
+  // typing LOAD"*",8,1 : RUN). warp-during-autostart skips the slow 1541 load so
+  // the game is up in a fraction of the wall-clock. A bare .prg is injected and
+  // run directly by the core regardless of this; it matters for disk/tape/cart.
+  c64: {
+    vice_autostart: "enabled",
+    vice_autoloadwarp: "enabled",
+    vice_warp_boost: "enabled",
+    // Leave the mounted disk WRITABLE so a save-capable game can write its save
+    // files back into the .d64 (VICE updates the in-FS image in place). Without
+    // this a game's SAVE silently fails / errors — defeating disk-save support.
+    vice_floppy_write_protection: "disabled",
+  },
 };
 
 /**
@@ -188,7 +203,11 @@ export class LibretroHost {
   async loadMedia(args) {
     const mod = this._needMod();
     const { platform } = args;
-    const mediaKind = args.mediaKind ?? defaultMediaKind(platform);
+    // Derive the kind from the file/virtual extension when the caller didn't say
+    // — so a C64 .d64 reports mediaKind:"disk" (writable save target) vs a .prg
+    // "program". For an in-memory load, the virtualName carries the ext.
+    const kindExt = path.extname(args.path || args.virtualName || "");
+    const mediaKind = args.mediaKind ?? defaultMediaKind(platform, kindExt);
 
     // Apply per-platform core option defaults BEFORE retro_load_game.
     // Most cores work with their option defaults; a few need explicit
@@ -1456,8 +1475,12 @@ export class LibretroHost {
           `save_ram is always empty here, there's no save file to read/write.`;
       }
       if (plat === "c64") {
-        return `C64 saves are DISK-based, not cartridge SRAM, so save_ram is empty. ` +
-          `Use a full-machine savestate: state({op:'save'/'load', path}).`;
+        return `C64 has no cartridge battery SRAM — games saved by writing FILES to a ` +
+          `floppy disk (.d64). romdev CAN load & run .d64 disk images (loadMedia({platform:'c64', ` +
+          `path:'x.d64'}) — it autostarts) and pack a built .prg into a distributable disk ` +
+          `(cart({op:'packDisk'})). In-emulator disk WRITES (a game's own SAVE) are not yet ` +
+          `persisted back out of the core. For reliable persistence here use a full-machine ` +
+          `savestate: state({op:'save'/'load', path}).`;
       }
       return `save_ram is empty on platform '${plat}': this CART has no battery save ` +
         `(check cart({op:'identify'}).saveRam.hasBattery — many ROMs use passwords or no save). ` +

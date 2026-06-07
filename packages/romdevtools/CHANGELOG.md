@@ -4,6 +4,41 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.17.0
+
+**C64 disk images — load real games & ship yours as `.d64`.** The Commodore
+brand relaunched in 2025/26 (the FPGA Commodore 64 Ultimate / C64C Ultimate, on
+the original 1986 tooling) and the homebrew/demo scene is booming — and that
+world ships and loads games as **`.d64` disk images / `.crt` carts**, not bare
+`.prg`. romdev was C64-`.prg`-only; now it handles disks end to end. No new
+top-level tool and no core rebuild — the bundled VICE already does the work; the
+gap was romdev's loader.
+
+### Added
+- **Load & run disk/tape/cart:** `loadMedia({platform:'c64', path:'game.d64'})`
+  now accepts `.d64/.t64/.tap/.crt/.g64`. VICE attaches the disk to drive 8 and
+  **autostarts** it (= `LOAD"*",8,1 : RUN`) under warp (~100 frames vs sitting
+  at the BASIC `READY.` prompt). New c64 core-option defaults wire this up
+  (`vice_autostart` + `vice_autoloadwarp` + `vice_warp_boost`, write-protection
+  off). `status.mediaKind` now reflects the real medium (`disk`/`tape`/
+  `cartridge`/`program`) instead of always `program` — `defaultMediaKind` is
+  extension-aware.
+- **Distribute as a disk:** `cart({op:'packDisk', prgPath})` wraps a built
+  `.prg` into an autostart-able `.d64` (a pure-JS 1541 codec — no `c1541`
+  dependency; exact `.prg` round-trip, standard 174848-byte image). `cart({op:
+  'extract'})` on a `.d64` lists the directory; pass `name:` to pull a file off
+  the disk. So the full create→build→distribute loop produces the format the new
+  hardware and the scene actually load.
+
+### Known limit
+- **In-emulator disk WRITES (a running game's own SAVE) are not yet persisted
+  back out of the core.** The write succeeds inside VICE but this WASM build
+  doesn't flush the modified image to the (MEM)FS on detach, and VICE exposes no
+  disk memory region. Loading/running/distributing disks is unaffected. The
+  honest C64 `save_ram` n/a message says so; for reliable persistence use a
+  full-machine savestate (`state({op:'save'/'load', path})`). A core patch to
+  add a disk export/flush entry point is tracked as a follow-up.
+
 ## 0.15.0
 
 **Scaffold audit: every scaffold on every platform now builds AND renders.** Two
@@ -111,8 +146,7 @@ savestate) is now fully supported, with NO new top-level tool:
 - **Presence:** `cart({op:'identify'})` now returns `saveRam:{hasBattery, bytes}`
   (from the iNES battery flag / GB cart-type) so an agent knows a save exists.
 - **Honest "no save":** empty `save_ram` now says *why* — "this cart has no battery
-  save" / "Atari 2600/7800 & Lynx never had cartridge saves" / "C64 saves are disk-
-  based" — instead of a generic "core didn't expose it." (Confirmed via research +
+  save" / "Atari 2600/7800 & Lynx never had cartridge saves" / "C64 has no battery SRAM (disk/.prg)" — instead of a generic "core didn't expose it." (Confirmed via research +
   core source: no core patches were needed; earlier "broken" readings were
   password-game test carts like Metroid, which correctly have no battery.)
 
