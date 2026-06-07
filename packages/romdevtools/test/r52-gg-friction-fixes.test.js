@@ -54,7 +54,7 @@ test("R52 GG default template is the new visible-and-runnable one (not the count
   // bumped a global byte forever.
   assert.match(def, /vdp_init\s*\(/, "default.c: must call vdp_init()");
   assert.match(def, /load_palette\s*\(/, "default.c: must load a palette");
-  assert.match(def, /load_tile\s*\(/, "default.c: must load tile data");
+  assert.match(def, /load_tiles?\s*\(/, "default.c: must load tile data (load_tile/load_tiles)");
   assert.match(def, /wait_vblank\s*\(/, "default.c: must wait for vblank");
   assert.match(def, /vdp_write_reg\s*\(\s*1\s*,\s*0xE0\s*\)/i,
     "default.c: must enable display (R1 = 0xE0) — otherwise screen stays black");
