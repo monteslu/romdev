@@ -6,6 +6,129 @@ import { getHost } from "../state.js";
 import { imageContent, jsonContent, safeTool } from "../util.js";
 import { decodeOAM, decodePpuRegs, ppuRegsPopulated } from "../../platforms/snes/ppu.js";
 import { stepInstructionCore } from "./watch-memory.js";
+import { getRenderingContextCore } from "./rendering-context.js";
+
+// Normalize each platform's render-context into a CONSERVATIVE renderEnabled
+// (true | false | null). null = "can't tell from the registers" — verify never
+// asserts renderDisabled on null, so a platform we can't decode just relies on
+// the pixel check. This is the cross-platform contract for frame({op:'verify'}).
+function pickRenderFlags(ctx) {
+  const p = ctx.platform;
+  try {
+    if (p === "nes") {
+      const m = ctx.nes && ctx.nes.ppumask;
+      if (!m) return { renderEnabled: null };
+      return { renderEnabled: !!(m.bgVisible || m.spritesVisible) };
+    }
+    if (p === "snes") {
+      const s = ctx.snes;
+      if (!s || !s.ppuRegistersAvailable) return { renderEnabled: null }; // regs not live yet
+      if (s.forcedBlank) return { renderEnabled: false };
+      if (s.brightness === 0) return { renderEnabled: false };
+      return { renderEnabled: true };
+    }
+    if (p === "genesis" || p === "megadrive" || p === "md") {
+      return { renderEnabled: ctx.displayEnabled == null ? null : !!ctx.displayEnabled };
+    }
+    if (p === "sms" || p === "gg") {
+      return { renderEnabled: ctx.screenEnabled == null ? null : !!ctx.screenEnabled };
+    }
+    if (p === "gb" || p === "gbc") {
+      const l = ctx.gb && ctx.gb.lcdc ? ctx.gb.lcdc : ctx.lcdc;
+      if (!l) return { renderEnabled: null };
+      return { renderEnabled: !!l.lcdEnable };
+    }
+    if (p === "gba") {
+      if (ctx.forcedBlank) return { renderEnabled: false };
+      const anyBg = Array.isArray(ctx.displayBg) && ctx.displayBg.some(Boolean);
+      return { renderEnabled: !!(anyBg || ctx.displayObj) };
+    }
+    if (p === "pce") {
+      return { renderEnabled: ctx.screenEnabled == null ? null : !!ctx.screenEnabled };
+    }
+    if (p === "msx") {
+      return { renderEnabled: ctx.screenEnabled == null ? null : !!ctx.screenEnabled };
+    }
+    // atari2600 / atari7800 / lynx: no single reliable display-enable bit — let
+    // the pixel check carry it; don't false-assert.
+    return { renderEnabled: null };
+  } catch {
+    return { renderEnabled: null };
+  }
+}
+
+/**
+ * The cross-platform render-health computation behind frame({op:'verify'}).
+ * Exported so tests can drive it per platform without the MCP wrapper.
+ * @returns plain object {verified, frame, platform, pixels, render, issues?, note}
+ */
+export async function computeVerify(host, frames, sessionKey) {
+  const platform = host.status.platform;
+  if (frames && frames > 0) host.stepFrames(frames);
+  const frameCount = host.status.frameCount;
+
+  // --- pixel content check (platform-agnostic) ---
+  const { width, height, rgba } = host.screenshotRgba();
+  const counts = new Map();
+  const total = width * height;
+  for (let i = 0; i + 3 < rgba.length; i += 4) {
+    const key = (rgba[i] << 16) | (rgba[i + 1] << 8) | rgba[i + 2];
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  let topColor = 0, topCount = 0;
+  for (const [c, n] of counts) if (n > topCount) { topCount = n; topColor = c; }
+  const distinctColors = counts.size;
+  const dominantFraction = total ? topCount / total : 1;
+  const nonDominant = total - topCount;
+  const pixels = {
+    width, height,
+    distinctColors,
+    dominantColor: "#" + topColor.toString(16).padStart(6, "0"),
+    dominantPct: Math.round(dominantFraction * 1000) / 10,
+    nonDominantPixels: nonDominant,
+  };
+
+  // --- render-enable / NMI verdict (reused, per-platform) ---
+  let render;
+  try {
+    const ctx = await getRenderingContextCore({ platform, area: "all", sessionKey });
+    render = { summary: ctx.summary || [], ...pickRenderFlags(ctx) };
+  } catch (e) {
+    render = { summary: [`(render-context decode unavailable for '${platform}': ${e.message})`], renderEnabled: null };
+  }
+
+  // --- frame-0 guard: report raw, no verdict (never cry wolf on boot) ---
+  if (frameCount === 0) {
+    return {
+      verified: null, unsettled: true, frame: 0, platform,
+      note: "No frame has been stepped yet — render state is the pre-boot default and not meaningful. " +
+        "Step frames first (frame({op:'step'}) or pass `frames`), then verify.",
+      pixels, render,
+    };
+  }
+
+  // --- fuse into a verdict + issues[] ---
+  const issues = [];
+  if (distinctColors <= 1) {
+    issues.push({ check: "blankScreen", detail: `the entire framebuffer is one color (${pixels.dominantColor}) — nothing is being drawn.` });
+  } else if (dominantFraction >= 0.995) {
+    issues.push({ check: "nearlyBlank", detail: `${pixels.dominantPct}% of the screen is a single color (${pixels.dominantColor}); only ${nonDominant} px differ — likely a backdrop with almost no content.` });
+  }
+  if (render && render.renderEnabled === false) {
+    issues.push({ check: "renderDisabled", detail: `display output is disabled per the ${platform} registers: ${render.summary[0] || "see render.summary"}.` });
+  }
+
+  const ok = issues.length === 0;
+  return {
+    verified: ok,
+    frame: frameCount,
+    platform,
+    ...(ok
+      ? { note: `Frame ${frameCount}: rendering looks alive (${distinctColors} colors, ${Math.round((100 - pixels.dominantPct) * 10) / 10}% of the screen is non-backdrop).` }
+      : { issues, note: "Rendering looks broken — see issues[]. For per-platform thresholds + the full checklist, getPlatformDoc({platform, doc:'mental_model'})." }),
+    pixels, render,
+  };
+}
 
 // Get the platform's visible sprites in the generic shape, or null if
 // not supported. Drives the screenshot overlay AND any future agents
@@ -231,6 +354,22 @@ export function registerFrameTools(server, z, sessionKey) {
       return shootPng({ path: outPath, inline, overlayBoxes, scale });
   }
 
+  // op:'verify' — one-call "did the game actually render / is it alive?" health
+  // check for agents debugging WITHOUT vision. Fuses two independent signals:
+  //   1. the render-enable/NMI verdict from getRenderingContext (per-platform
+  //      register decode — already correct, reused not re-derived), and
+  //   2. a pixel-level content check on the live framebuffer (is the screen
+  //      actually showing more than one flat color?).
+  // Frame-0 guard: before any frame is stepped, report the raw condition WITHOUT
+  // an editorial verdict (so the header never "cries wolf" on boot).
+  async function doVerify({ frames }) {
+    const host = getHost(sessionKey);
+    if (!host.status.platform || !host.status.loaded) {
+      throw new Error("frame({op:'verify'}): no media loaded — loadMedia or build({output:'run'}) first.");
+    }
+    return jsonContent(await computeVerify(host, frames, sessionKey));
+  }
+
   async function doStepAndShot({ frames, path: outPath, inline }) {
       requireImageTarget(outPath, inline, "frame({op:'stepAndShot'})");
       const host = getHost(sessionKey);
@@ -252,7 +391,7 @@ export function registerFrameTools(server, z, sessionKey) {
 
   server.tool(
     "frame",
-    "Advance the emulator and capture frames. `op`: 'step' | 'screenshot' | 'stepAndShot' | 'stepInstruction'.\n" +
+    "Advance the emulator and capture frames. `op`: 'step' | 'screenshot' | 'stepAndShot' | 'stepInstruction' | 'verify'.\n" +
     "'step': advance N `frames` as fast as possible — NO pacing/audio/vsync. Cores run at WASM speed, so frames:3600 " +
     "(1 min of game time) finishes in ~5-30ms, cheaper than a screenshot. Don't be timid — skip a title with 300, a " +
     "level with 7200; prefer ONE big call.\n" +
@@ -265,10 +404,18 @@ export function registerFrameTools(server, z, sessionKey) {
     "'stepAndShot': step + screenshot in ONE round-trip — the drive-then-look loop. (No overlayBoxes/scale here — png only.)\n" +
     "'stepInstruction': execute exactly ONE CPU instruction and stop (finer than 'step'); freezes the CPU one " +
     "instruction later and returns { pc }. Pair with cpu({op:'read'}) to watch registers change while tracing a routine.\n" +
+    "'verify': one-call 'is the game actually rendering / alive?' health check WITHOUT vision — for the spiral where an " +
+    "agent can't see the screen and doesn't know if a black frame means broken. Pass `frames` to boot-then-check in one " +
+    "call. Fuses (1) a pixel-content scan of the live framebuffer (distinctColors, dominant-color %) and (2) the " +
+    "per-platform render-ENABLE/NMI decode (reused from the rendering-context decoder — works on all 14 platforms). " +
+    "Returns {verified:true|false|null, issues[], pixels, render}. verified:null + unsettled when no frame has been " +
+    "stepped yet (it won't cry wolf on boot — step first). issues[] flags blankScreen/nearlyBlank/renderDisabled. " +
+    "renderDisabled is only raised when the registers SAY so (never on an undecodable platform). Pass/fail with no " +
+    "image tokens; for WHAT to fix, getPlatformDoc({platform, doc:'mental_model'}).\n" +
     "IMAGE CONTRACT (screenshot/stepAndShot): the image goes to `path` (default, returns {path}) OR inline:true — " +
     "you MUST pass one. Keeps PNGs out of context unless asked.",
     {
-      op: z.enum(["step", "screenshot", "stepAndShot", "stepInstruction"]).describe("step frames; capture a screenshot; step+capture in one call; or single-step one CPU instruction."),
+      op: z.enum(["step", "screenshot", "stepAndShot", "stepInstruction", "verify"]).describe("step frames; capture a screenshot; step+capture in one call; single-step one CPU instruction; or verify the game is actually rendering/alive (no vision needed)."),
       frames: z.number().int().min(1).max(1_000_000).default(1).describe("op=step/stepAndShot: frames to advance (1-1,000,000). 36000 (10 min) usually completes in <1s — don't be conservative."),
       format: z.enum(["png", "ascii"]).default("png").describe("op=screenshot: 'png' (default, real image) or 'ascii' (lossy text render)."),
       path: z.string().optional().describe("op=screenshot/stepAndShot: absolute path to write to (required unless inline:true)."),
@@ -286,6 +433,7 @@ export function registerFrameTools(server, z, sessionKey) {
         case "screenshot":      return doScreenshot(args);
         case "stepAndShot":     return doStepAndShot(args);
         case "stepInstruction": return await stepInstructionCore(sessionKey);
+        case "verify":          return await doVerify(args);
         default: throw new Error(`frame: unknown op '${args.op}'`);
       }
     }),

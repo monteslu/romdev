@@ -4,6 +4,39 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.19.0
+
+**Two one-stop-shop features for agents — both fold into existing tools, both
+work on all 14 platforms.**
+
+### Added — `frame({op:'verify'})`: "is the game actually rendering / alive?"
+A one-call render-health check for agents debugging WITHOUT vision (the spiral
+where a black frame might be broken *or* fine and you can't tell). Pass `frames`
+to boot-then-check in one call. Fuses two independent signals: a platform-agnostic
+pixel-content scan of the live framebuffer (distinctColors, dominant-color %) and
+the per-platform render-ENABLE/NMI decode (reused from the rendering-context
+decoder — covers all 14 platforms). Returns `{verified:true|false|null, issues[],
+pixels, render}`:
+- `verified:null` + `unsettled` before any frame is stepped (frame-0 guard — never
+  cries wolf on boot; step first).
+- `issues[]` flags `blankScreen` / `nearlyBlank` / `renderDisabled`. `renderDisabled`
+  is ONLY raised when the registers say so (never on a platform we can't decode —
+  there the pixel check carries the verdict).
+- Pass/fail with zero image tokens; for WHAT to fix, getPlatformDoc(mental_model).
+- Verified across all 14 platforms (`frame-verify-allplatforms.test.js`): the
+  verdict is internally consistent everywhere, and it correctly flags genuinely
+  blank scaffolds as broken. Implements the locked `renderHealth` spec, folded
+  into `frame` rather than a new top-level tool.
+
+### Added — `watch({on:'range'/'pc', fromState|fromStatePath})`: trace from a moment
+The range/PC tracers can now restore a savestate FIRST, so the log runs from a
+known, repeatable point (jump to the boss fight, then see exactly what writes HP)
+instead of from wherever the live session happens to be. `fromState` = an in-memory
+slot (state({op:'save', name})); `fromStatePath` = a savestate file on disk
+(relative paths resolve to the ROM dir). Deterministic — same state → identical
+trace. Platform-agnostic (rides the existing all-14-platform range/PC watch).
+Result echoes `restoredFrom`. Tests in `watch-fromstate.test.js`.
+
 ## 0.18.1
 
 **C64: a game's OWN in-game disk SAVE works — and always did.** 0.18.0 shipped

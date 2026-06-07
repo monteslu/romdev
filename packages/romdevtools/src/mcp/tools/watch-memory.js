@@ -12,7 +12,7 @@
 // touching this byte and what does the screen look like after," not a complete
 // CPU trace. Instruction-level tracing would need core-side breakpoint hooks.
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
 import path from "node:path";
 import { getHost } from "../state.js";
 import { jsonContent, safeTool } from "../util.js";
@@ -21,6 +21,30 @@ import { MemoryRegionToRetro } from "../../host/types.js";
 import { resolveButtonAlias } from "./input.js";
 import { getCPUStateCore } from "./platform-tools.js";
 import { traceVramSourceCore } from "./trace-vram-source.js";
+import { resolveStatePath } from "./state.js";
+
+// Restore a savestate (in-memory slot `fromState` OR disk file `fromStatePath`)
+// before a trace, so on:'range'/'pc' run from a known moment. Returns a small
+// {slot|path} descriptor for the response, or null if neither was given.
+// Throws a clear error if both are given or the restore fails.
+async function maybeRestoreState(host, fromState, fromStatePath) {
+  if (fromState && fromStatePath) {
+    throw new Error("watch: provide `fromState` (slot) OR `fromStatePath` (file), not both.");
+  }
+  if (fromStatePath) {
+    const resolved = resolveStatePath(fromStatePath, host);
+    let blob;
+    try { blob = new Uint8Array(await readFile(resolved)); }
+    catch (e) { throw new Error(`watch: can't read fromStatePath '${resolved}': ${e.message}`); }
+    host.unserializeState(blob);
+    return { path: resolved };
+  }
+  if (fromState) {
+    host.loadState(fromState); // throws if the slot doesn't exist
+    return { slot: fromState };
+  }
+  return null;
+}
 
 // Let a human watching /livestream (or a playtest window) SEE what a
 // breakpoint/watch tool just did — the frozen breakpoint frame, the state when a
@@ -899,13 +923,17 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
 
   // ── Range watch + coverage trace (item 2, discovery) ────────────────────────
 
-  async function wRange({ start, end, kind = "both", frames = 120, pressDuring, limit = 200 }) {
+  async function wRange({ start, end, kind = "both", frames = 120, pressDuring, limit = 200, fromState, fromStatePath }) {
       const host = getHost(sessionKey);
       if (!host.rangeWatchSupported || !host.rangeWatchSupported()) {
         return jsonContent({ notSupported: true, events: [],
           note: "This core build has no range watch (shipped on all 14 platforms as of 0.6.0 — update the core package). Use breakpoint({on:'write'/'read'}) for a single address." });
       }
       if (end < start) throw new Error("watch({on:'range'}): end must be >= start.");
+      // Optionally restore a savestate FIRST, so the trace runs from a known
+      // moment (the deterministic "jump to the boss fight, then see what writes
+      // HP" loop) instead of from wherever the live session happens to be.
+      const stateInfo = await maybeRestoreState(host, fromState, fromStatePath);
       // pressDuring is driven inside the frame loop; watchRange's host method owns
       // stepping, so for now apply presses up front if any (simple: hold for the run).
       const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
@@ -924,19 +952,21 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       return attachObserverFrame(jsonContent({
         range: "$" + start.toString(16).toUpperCase() + "..$" + end.toString(16).toUpperCase(),
         kind, total: r.total, returned: events.length, truncated: r.truncated,
+        ...(stateInfo ? { restoredFrom: stateInfo } : {}),
         distinctPCs, events,
         note: "distinctPCs is the actionable summary — each is a routine that touches this range; disasm({target:'rom'}) one to identify the renderer/reader. " +
           (r.truncated ? "TRUNCATED: more events than the buffer held — narrow `start..end` or `frames` for the full set." : ""),
       }), host);
   }
 
-  async function wLogPC({ start, end, frames = 120, pressDuring, limit = 512 }) {
+  async function wLogPC({ start, end, frames = 120, pressDuring, limit = 512, fromState, fromStatePath }) {
       const host = getHost(sessionKey);
       if (!host.rangeWatchSupported || !host.rangeWatchSupported()) {
         return jsonContent({ notSupported: true, pcs: [],
           note: "This core build has no coverage trace (shipped on all 14 platforms as of 0.6.0 — update the core package)." });
       }
       if (end < start) throw new Error("watch({on:'pc'}): end must be >= start.");
+      const stateInfo = await maybeRestoreState(host, fromState, fromStatePath);
       const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
       const pressDriver = makePressDriver(host, presses);
       if (presses.length) pressDriver.applyForFrame(0);
@@ -946,6 +976,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       return attachObserverFrame(jsonContent({
         window: "$" + start.toString(16).toUpperCase() + "..$" + end.toString(16).toUpperCase(),
         distinct: r.distinct, total: r.total, returned: pcs.length, truncated: r.truncated,
+        ...(stateInfo ? { restoredFrom: stateInfo } : {}),
         pcs,
         note: "Each PC is code that EXECUTED in this window. disasm({target:'rom'}) them to find the routine you're hunting. " +
           (r.truncated ? "TRUNCATED — narrow the window for the full distinct set." : ""),
@@ -958,8 +989,8 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     "• on:'mem' — the power tool: answer 'what code is touching this RAM byte?' OR extract a frame-accurate event timeline (music-driver note onsets, physics arcs). Reports every frame that changed a watched byte as {frame,offset,before,after,pc}. " +
     "Extras: `ranges:[{region,offset,length,label}]` watches MANY disjoint regions in ONE pass (identical frames); `onChange:'reset'|'increase'|'decrease'|'any'` edge filter (reset = counter-reload = the note-onset signal); `valueFilter:{min,max}`; `format:'series'` = compact columnar value-vs-frame curve (~10× smaller for a ramp); `sampleEvery`; `groupByPC` (collapse by sampled PC); `cheatLabels` (auto-name addresses from the cheat DB); `outputPath` streams all events as NDJSON; `stopOnFirst` exits on the first match. " +
     "**CAVEAT: frame-level, not instruction-level (last value per frame); the sampled `pc` is a frame-boundary sample — for ISR-driven writes use breakpoint({on:'write', precision:'exact'}) for the real writer.**\n" +
-    "• on:'range' — DISCOVERY: log EVERY instruction that reads or writes ANYWHERE in [start,end]. The fix for 'I don't know which PC touches this'. Returns {pc,address,value}[] + the actionable distinctPCs. (Ring-buffered: `truncated:true` if it overflows.)\n" +
-    "• on:'pc' — DISCOVERY (coverage trace): record every DISTINCT PC executed within [start,end] — 'what code runs here?'. Log execution in the bank where you suspect the renderer lives during the moment it draws, then disassemble the PCs.\n" +
+    "• on:'range' — DISCOVERY: log EVERY instruction that reads or writes ANYWHERE in [start,end]. The fix for 'I don't know which PC touches this'. Returns {pc,address,value}[] + the actionable distinctPCs. (Ring-buffered: `truncated:true` if it overflows.) `fromState`/`fromStatePath` restores a savestate FIRST so the trace runs from a known moment (jump to the boss, then see what writes HP) — deterministic + repeatable.\n" +
+    "• on:'pc' — DISCOVERY (coverage trace): record every DISTINCT PC executed within [start,end] — 'what code runs here?'. Log execution in the bank where you suspect the renderer lives during the moment it draws, then disassemble the PCs. Also takes `fromState`/`fromStatePath` to trace from a restored moment.\n" +
     "• on:'dma' — GENESIS ONLY: trace mem→VDP DMAs (the answer to 'this name/portrait/logo is a pre-rendered bitmap DMA'd into VRAM — WHERE in ROM?', which on:'write' can't catch). `precision:'exact'` (default) logs every mem→VDP DMA with its VRAM DESTINATION + ROM SOURCE + length (filter by `vramDest`±`destWindow`; `dedupe` collapses the per-frame refresh; `sourceFilter:'rom-only'` drops RAM→VRAM noise; catches a same-frame second DMA). `precision:'sampled'` is the cheap frame-sampled source-register read (may miss two DMAs in one frame, dest-agnostic). On non-Genesis cores returns `notSupported`.",
     {
       on: z.enum(["mem", "range", "pc", "dma"])
@@ -1000,6 +1031,8 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         port: z.number().int().min(0).max(3).default(0),
         holdFrames: z.number().int().min(1).default(2),
       })).optional().describe("Schedule input while watching (drive the game to the state that touches the watched bytes/range, or uploads the graphic for on:'dma')."),
+      fromState: z.string().optional().describe("on:'range'/'pc' — restore an in-memory savestate SLOT (from state({op:'save', name})) BEFORE tracing, so the log runs from a known moment (jump to the boss fight, then see what writes HP). Deterministic + repeatable."),
+      fromStatePath: z.string().optional().describe("on:'range'/'pc' — like fromState but restore from a savestate FILE on disk (state({op:'save', path})). Relative path resolves against the loaded ROM's dir."),
     },
     safeTool(async (args) => {
       switch (args.on) {
