@@ -15,6 +15,24 @@ function fakePrg(n = 300) {
   return b;
 }
 
+// REGRESSION: a directory entry whose name is in HIGH-BIT PETSCII (0xC1..0xDA =
+// A..Z) — how the C64 KERNAL SAVE actually stores filenames. readDirectory used
+// to drop those bytes, so an emulator-written "SCORE" read back as an empty name
+// and the file looked missing. This is the bug that hid working in-game saves.
+test("readDirectory decodes high-bit PETSCII filenames (KERNAL SAVE style)", () => {
+  const d64 = prgToD64(fakePrg(400), { name: "GAME" });
+  // hand-write a 2nd dir entry at track 18 sector 1, slot 1, name "SCORE" in
+  // high-bit PETSCII (S=0xD3,C=0xC3,O=0xCF,R=0xD2,E=0xC5).
+  const t18s1 = (17 * 21 + 1) * 256;          // track 18, sector 1 byte offset
+  const slot1 = t18s1 + 2 + 32;               // first entry at +2, second at +34
+  d64[slot1 + 0] = 0x82;                       // closed PRG (type byte)
+  d64[slot1 + 1] = 1; d64[slot1 + 2] = 4;     // dummy first track/sector
+  const score = [0xd3, 0xc3, 0xcf, 0xd2, 0xc5]; // "SCORE" in high-bit PETSCII
+  for (let i = 0; i < 16; i++) d64[slot1 + 3 + i] = i < score.length ? score[i] : 0xa0; // name at +3
+  const dir = readDirectory(d64);
+  assert.ok(dir.find((e) => e.name === "SCORE"), `expected SCORE, got ${JSON.stringify(dir.map((d) => d.name))}`);
+});
+
 test("prgToD64 produces a standard 174848-byte 35-track image", () => {
   const d64 = prgToD64(fakePrg(), { name: "GAME" });
   assert.equal(d64.length, D64_IMAGE_SIZE);

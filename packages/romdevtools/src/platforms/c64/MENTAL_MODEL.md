@@ -176,16 +176,16 @@ disk IS the save, so romdev exposes the LIVE mounted `.d64` for save/restore
   `state({op:'putDiskFile', path:'progress.prg', name:'PROGRESS'})` writes one PRG
   file via the drive. Read it back with `exportDisk` or `cart({op:'extract'})`.
 
-These work on the standard 35-track 1541 `.d64` (174848 bytes). They go through
-the drive's file system directly, so they persist regardless of the cycle-exact
-serial-bus quirks.
+These work on the standard 35-track 1541 `.d64` (174848 bytes).
 
-> ⚠ A game's OWN in-emulator `SAVE` (the KERNAL SAVE routine, mid-run) does not
-> yet auto-persist to the disk in this WASM build — the emulated 1541 serial-bus
-> write stalls. So drive the save from the host: let the game compute its save in
-> RAM, read it with `memory`, and write it with `putDiskFile`; or capture the
-> whole disk with `exportDisk`. For a pure "resume exactly here" snapshot, a
-> full-machine savestate (`state({op:'save'/'load', path})`) also works.
+**A game's OWN in-emulator `SAVE` works too.** When a running program does a
+KERNAL `SAVE` to drive 8, VICE commits it into the live disk image (true-drive
+GCR write-back) — so after the game saves, `state({op:'exportDisk', path})`
+captures a `.d64` that includes the new file, and you can re-load it later to
+resume. (The on-disk filename is stored in PETSCII; romdev's reader decodes it.)
+So the normal flow is just: run the game, let it save, `exportDisk` to persist.
+`putDiskFile`/`importDisk` are for *injecting* a save from outside (a save a
+player made elsewhere), not a requirement for the game's own saves.
 
 ## Frame heartbeat
 

@@ -64,12 +64,25 @@ function petsciiName(name, len = 16) {
   return out;
 }
 
-/** Convert PETSCII (as stored) back to a trimmed ASCII string. */
+/**
+ * Convert a PETSCII directory name (as stored on disk) back to a trimmed ASCII
+ * string. Filenames written by the C64 KERNAL SAVE use the DEFAULT uppercase
+ * charset, where letters A–Z are 0xC1–0xDA (high bit set), not 0x41–0x5A — so we
+ * must translate that range, otherwise an emulator-written "SCORE" reads as
+ * empty. (Our own prgToD64 writes plain 0x41–0x5A; both must decode.)
+ */
 function asciiFromPetscii(bytes) {
   let s = "";
   for (const b of bytes) {
     if (b === 0xa0 || b === 0x00) break; // shifted-space pad / terminator
-    s += b >= 0x20 && b <= 0x5f ? String.fromCharCode(b) : "";
+    if (b >= 0xc1 && b <= 0xda) {
+      s += String.fromCharCode(b - 0x80);          // PETSCII upper A–Z (0xC1..) → ASCII
+    } else if (b >= 0x20 && b <= 0x5f) {
+      s += String.fromCharCode(b);                 // plain ASCII / digits / punctuation
+    } else if (b >= 0x61 && b <= 0x7a) {
+      s += String.fromCharCode(b - 0x20);          // PETSCII lower-as-upper → ASCII upper
+    }
+    // anything else (graphics chars etc.) is dropped from the readable name
   }
   return s.trim();
 }

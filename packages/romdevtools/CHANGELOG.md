@@ -4,6 +4,28 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.18.1
+
+**C64: a game's OWN in-game disk SAVE works — and always did.** 0.18.0 shipped
+the disk ops with a "known limit" claiming a running game's KERNAL `SAVE` doesn't
+persist in WASM. That was WRONG — the cause was a bug in romdev's `.d64`
+*directory reader*, not the emulator: the C64 KERNAL stores filenames in high-bit
+PETSCII (A–Z = 0xC1–0xDA), and `readDirectory` dropped those bytes, so an
+emulator-written `SCORE` parsed as an empty name and looked missing. VICE was
+committing the save to the live disk the whole time (true-drive GCR write-back).
+
+### Fixed
+- **`readDirectory`/`extractFile` decode high-bit PETSCII filenames** (and
+  lower-as-upper) — so files a game saves (KERNAL SAVE) are visible, not just
+  files romdev's own `prgToD64` wrote (which used plain ASCII). Verified end to
+  end: a cc65 program does `cbm_save("SCORE",8,…)`, and `exportDisk` reads the
+  `SCORE` file back with the right bytes. Locked by a regression test in
+  `d64.test.js` + a transparent-save test in `c64-disk-save.test.js`.
+- The 0.18.0 "Known limit" is **retracted**: run the game, let it save, then
+  `state({op:'exportDisk', path})` captures a `.d64` that includes the save.
+  Docs + the `save_ram` n/a message corrected. (Confirmed against the native
+  vice-libretro core in RetroDECK, which produces a byte-identical saved disk.)
+
 ## 0.18.0
 
 **C64 disk SAVES — the floppy is the C64 save medium, and romdev now reads/writes

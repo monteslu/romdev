@@ -1559,11 +1559,10 @@ export class LibretroHost {
       }
       if (plat === "c64") {
         return `C64 has no cartridge battery SRAM — the C64 save medium is the FLOPPY (.d64), ` +
-          `not save_ram (so save_ram is empty, as expected). Use the disk: ` +
-          `state({op:'exportDisk', path}) snapshots the live .d64 (incl. anything the game saved), ` +
-          `state({op:'importDisk', path}) / state({op:'putDiskFile', path}) write a save back in. ` +
-          `(A game's own mid-run KERNAL SAVE doesn't auto-persist in this WASM build — drive it ` +
-          `from the host via putDiskFile, or use a full-machine savestate state({op:'save'/'load'}).)`;
+          `not save_ram (so save_ram is empty, as expected). A game's own KERNAL SAVE writes ` +
+          `into the live disk; capture it with state({op:'exportDisk', path}) (the .d64 then ` +
+          `includes the saved file, re-loadable to resume). Inject an outside save with ` +
+          `state({op:'importDisk', path}) or state({op:'putDiskFile', path}).`;
       }
       return `save_ram is empty on platform '${plat}': this CART has no battery save ` +
         `(check cart({op:'identify'}).saveRam.hasBattery — many ROMs use passwords or no save). ` +
