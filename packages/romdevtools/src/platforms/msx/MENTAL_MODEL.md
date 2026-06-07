@@ -106,7 +106,7 @@ exactly this.
 - `palette({source:'live'})` — V9938 9-bit GRB (or TMS9918 fixed) 16 entries.
 - `sprites({op:'inspect'})` — VRAM sprite-attribute table, up to 32 sprites.
 - `symbols({op:'map', map})` — pass the sdld `.map` (the `symbols` field from
-  buildSourceWithDebug) to see where SDCC placed your variables/code, grouped by
+  build({output:'romWithDebug'})) to see where SDCC placed your variables/code, grouped by
   region (bios / cart_rom / work_ram).
 - `audioDebug({op:'inspect', chip: "ay8910"})` — the AY-3-8910 PSG: 3 square-wave
   channels (tone period→Hz, amplitude, tone/noise enable) + a shared noise

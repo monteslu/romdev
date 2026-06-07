@@ -139,16 +139,19 @@ palfont:
   assert.ok(r.binary.length >= 32 * 1024);
 });
 
-test("buildSnesC rejects multi-C-file builds with a clear error", async () => {
-  await assert.rejects(
-    buildSnesC({
-      sources: {
-        "main.c": "int main(void) { return 0; }",
-        "other.c": "int helper(void) { return 1; }",
-      },
-    }),
-    /multiple \.c files/,
-  );
+test("buildSnesC compiles + links multiple C files (genre scaffolds ship main.c + snes_sfx.c)", { timeout: 120000 }, async () => {
+  // main.c calls a function defined in a SECOND C TU — both must compile to
+  // separate .obj and link. (Was previously rejected; the genre scaffolds rely
+  // on this. The SCAFFOLDS themselves #include the sibling, but the builder must
+  // also support real multi-TU so the dir-build recipe has a correct fallback.)
+  const r = await buildSnesC({
+    sources: {
+      "main.c": "extern int helper(void); int main(void){ volatile int x = helper(); (void)x; for(;;); return 0; }",
+      "other.c": "int helper(void){ return 1; }",
+    },
+  });
+  assert.equal(r.ok, true, "multi-C build failed:\n" + (r.log || "").slice(-500));
+  assert.ok(r.binary && r.binary.length > 0, "no ROM produced");
 });
 
 test("buildSnesC pvsneslib:false (minimum-viable) still works for bare main", async () => {

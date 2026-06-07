@@ -12,7 +12,7 @@
  * authored .pic + .pal works equivalently).
  *
  * Build via romdev:
- *   buildSource({
+ *   build({ output: "rom", 
  *     platform: "snes", language: "c",
  *     sources: {
  *       "main.c":   <this file>,

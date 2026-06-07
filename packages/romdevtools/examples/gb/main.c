@@ -1,7 +1,7 @@
 /* ── Hello, Game Boy in C — SDCC sm83 port ─────────────────────────
  * Minimal: cycle the BG palette on every vblank.
  *
- * Build: buildSource({ platform: "gb", source: <this file>, language: "c" })
+ * Build: build({ output: "rom",  platform: "gb", source: <this file>, language: "c" })
  *
  * SDCC 4.4.0 codegen quirks to avoid in `__sfr __at` register-heavy
  * code:

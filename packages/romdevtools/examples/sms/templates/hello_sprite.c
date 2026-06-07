@@ -11,7 +11,7 @@
  *   - 64 sprite slots × 4 bytes (Y / X / tile / unused)
  *
  * Multi-file project — main.c plus the runtime .c files. Build with:
- *   buildSource({platform:"sms", language:"c",
+ *   build({ output: "rom", platform:"sms", language:"c",
  *                sources: { "main.c": ..., "vdp_init.c": ..., ... },
  *                includes: { "sms_hw.h": ... }})
  *

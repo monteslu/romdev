@@ -20,7 +20,7 @@
 ;   - nmi_safe.asm: vblank handler skeleton
 ;
 ; BUILD: complete LoROM image, no extra options needed.
-;   buildSource({ platform: "snes", source: /* this file */ });
+;   build({ output: "rom",  platform: "snes", source: /* this file */ });
 
 lorom
 

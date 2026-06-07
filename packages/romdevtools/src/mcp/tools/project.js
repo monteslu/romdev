@@ -3,7 +3,7 @@
 // Policy (2026-05-25): no auto-injection at build time. createProject copies
 // every file the template depends on (runtime, headers, crt0, linker .cfg)
 // into the project directory. The project is then self-contained — any
-// `buildSource` / `runSource` call points at the project's own files via
+// `build({output:'run'})` call points at the project's own files via
 // sources/sourcesPaths/includePaths/crt0/linkerConfig args. If you take
 // the project elsewhere and rebuild with cc65/sdcc directly, every byte
 // that compiles is in the directory.
@@ -1086,7 +1086,7 @@ TEMPLATES.gba = {
     runtimeDirs: GBA_LIBTONC_RUNTIME_DIRS,
     lang: GBA_TONC_LANG,
     ext: ".gba",
-    describe: "Idiomatic Tonc-tutorial GBA C starter. #include <tonc.h>, TTE (Tonc Text Engine) draws 'Hello, Tonc!' on BG0 in MODE_0. Matches what every published GBA C tutorial at gbadev.net teaches. libtonc is compiled from its vendored source by the build (a fast prebuilt seed by default; pass rebuildSdk:true if you edit the SDK source) — the project gets the headers + gba_crt0 + linker script. Build with buildSource({platform:'gba', language:'c'}) — defaults to runtime:'libtonc'.",
+    describe: "Idiomatic Tonc-tutorial GBA C starter. #include <tonc.h>, TTE (Tonc Text Engine) draws 'Hello, Tonc!' on BG0 in MODE_0. Matches what every published GBA C tutorial at gbadev.net teaches. libtonc is compiled from its vendored source by the build (a fast prebuilt seed by default; pass rebuildSdk:true if you edit the SDK source) — the project gets the headers + gba_crt0 + linker script. Build with build({output:'run', platform:'gba', language:'c'}) — defaults to runtime:'libtonc'.",
   },
   tonc_hello_sprite: {
     main: "templates/tonc_hello_sprite.c",
@@ -1144,10 +1144,10 @@ TEMPLATES.gba = {
     runtimeDirs: GBA_LIBGBA_RUNTIME_DIRS,
     lang: GBA_LIBGBA_LANG,
     ext: ".gba",
-    describe: "Alternate GBA C starter using devkitPro's libgba SDK. MODE_3 framebuffer + red pixel. Pass runtime:'libgba' to buildSource — or just use the Tonc path (gba_hello_tonc) which is better aligned with what published tutorials teach.",
+    describe: "Alternate GBA C starter using devkitPro's libgba SDK. MODE_3 framebuffer + red pixel. Pass runtime:'libgba' to build({output:'run'}) — or just use the Tonc path (gba_hello_tonc) which is better aligned with what published tutorials teach.",
   },
   // R34: maxmod music demo. Ships a hand-authored CC0 chiptune.xm +
-  // its pre-built soundbank.bin. buildSource must be called with
+  // its pre-built soundbank.bin. build({output:'run'}) must be called with
   // `maxmod: true` AND binaryIncludes:{ "soundbank.bin": <bytes> } —
   // the buildGbaC layer auto-emits a `.incbin "soundbank.bin"` asm
   // stub exposing the soundbank under the global symbol soundbank_bin.
@@ -1173,7 +1173,7 @@ TEMPLATES.gba = {
     ext: ".gba",
     maxmod: true,
     binaryIncludes: ["soundbank.bin"],
-    describe: "Maxmod music demo (Tonc + libmm). Plays a CC0 chiptune.xm soundbank via mmInitDefault + mmStart + mmFrame, with START toggling pause. Pass `maxmod:true` AND `binaryIncludes:{\"soundbank.bin\": <bytes>}` to buildSource. The .xm source + generator script + pre-built soundbank.bin all ship in the project — edit and re-run mmutil to swap the tune.",
+    describe: "Maxmod music demo (Tonc + libmm). Plays a CC0 chiptune.xm soundbank via mmInitDefault + mmStart + mmFrame, with START toggling pause. Pass `maxmod:true` AND `binaryIncludes:{\"soundbank.bin\": <bytes>}` to build({output:'run'}). The .xm source + generator script + pre-built soundbank.bin all ship in the project — edit and re-run mmutil to swap the tune.",
   },
 };
 
@@ -1558,11 +1558,11 @@ Compiles **C89**, not C99/C11. Stick to:
     const incLines = runtimeHeaders.length > 0
       ? runtimeHeaders.map((h) => `    "${h.dst}":  "${h.dst}",`).join("\n")
       : "";
-    buildBlock = "```js\nrunSource({\n  platform: \"" + platform + "\",\n  sourcesPaths: {\n" + srcLines + "\n  },\n" + (incLines ? "  includePaths: {\n" + incLines + "\n  },\n" : "") + "  linkerConfig: /* contents of " + tmpl.linkerConfig.dst + " */,\n  frames: 60,\n})\n```";
+    buildBlock = "```js\nbuild({\n  output: \"run\",\n  platform: \"" + platform + "\",\n  sourcesPaths: {\n" + srcLines + "\n  },\n" + (incLines ? "  includePaths: {\n" + incLines + "\n  },\n" : "") + "  linkerConfig: /* contents of " + tmpl.linkerConfig.dst + " */,\n  frames: 240,\n})\n```";
   } else if (isSdccSm83) {
-    // GB / GBC (SDCC sm83). runSource BUILDS + RUNS + SCREENSHOTS in one
-    // call AND auto-fixes the cartridge header (Nintendo logo, header +
-    // global checksums, CGB flag on .gbc) — no manual patchGbHeader step.
+    // GB / GBC (SDCC sm83). build({output:'run'}) BUILDS + RUNS + SCREENSHOTS
+    // in one call AND auto-fixes the cartridge header (Nintendo logo, header +
+    // global checksums, CGB flag on .gbc) — no manual header-patch step.
     // Derive sources/includes from the template's runtime list so extra
     // .c files (e.g. music_demo's hUGEDriver) are listed too.
     const runtimeCs = (tmpl?.runtime ?? []).filter((r) => /\.c$/i.test(r.dst));
@@ -1573,7 +1573,7 @@ Compiles **C89**, not C99/C11. Stick to:
       ? runtimeHeaders.map((h) => `    "${h.dst}": "${h.dst}",`).join("\n")
       : "";
     buildBlock =
-      "```js\nrunSource({\n" +
+      "```js\nbuild({\n  output: \"run\",\n" +
       "  platform: \"" + platform + "\",\n" +
       "  sourcesPaths: {\n" + srcLines + "\n  },\n" +
       (incLines ? "  includePaths: {\n" + incLines + "\n  },\n" : "") +
@@ -1581,7 +1581,7 @@ Compiles **C89**, not C99/C11. Stick to:
       "  codeLoc: 0x150,\n" +
       "  frames: 60,\n" +
       "})\n```\n\n" +
-      "`runSource` auto-fixes the GB/GBC cartridge header (logo, checksums, " +
+      "`build({output:\"run\"})` auto-fixes the GB/GBC cartridge header (logo, checksums, " +
       "CGB flag) — you do **not** call a header patch for a freshly built " +
       "ROM. Use `romPatch({op:'gbHeader'})` only to fix up an existing/external " +
       "ROM on disk or to override header fields (title, cart type, ROM/RAM size).";
@@ -1589,12 +1589,12 @@ Compiles **C89**, not C99/C11. Stick to:
     const inc = runtimeHeaders.length > 0
       ? `\n  includePaths: { ${runtimeHeaders.map((h) => `"${h.dst}": "${h.dst}"`).join(", ")} },`
       : "";
-    buildBlock = "```js\nrunSource({\n  platform: \"" + platform + "\",\n  sourcePath: \"" + mainFilename + "\"," + inc + "\n  frames: 60,\n})\n```";
+    buildBlock = "```js\nbuild({\n  output: \"run\",\n  platform: \"" + platform + "\",\n  sourcePath: \"" + mainFilename + "\"," + inc + "\n  frames: 240,\n})\n```";
   } else if (platform === "c64") {
     const inc = runtimeHeaders.length > 0
       ? `\n  includePaths: { ${runtimeHeaders.map((h) => `"${h.dst}": "${h.dst}"`).join(", ")} },`
       : "";
-    buildBlock = "```js\nrunSource({\n  platform: \"c64\",\n  sourcePath: \"" + mainFilename + "\"," + inc + "\n  frames: 60,\n})\n```";
+    buildBlock = "```js\nbuild({\n  output: \"run\",\n  platform: \"c64\",\n  sourcePath: \"" + mainFilename + "\"," + inc + "\n  frames: 240,\n})\n```";
   } else if (platform === "snes" && /\.c$/i.test(mainFilename)) {
     // R19b: SNES C-mode template (PVSnesLib runtime auto-linked). Multi-file
     // build with sibling .asm providing data symbols (tilfont/palfont).
@@ -1631,7 +1631,7 @@ Compiles **C89**, not C99/C11. Stick to:
       .join("\n");
 
     buildBlock =
-      "```js\nrunSource({\n" +
+      "```js\nbuild({\n  output: \"run\",\n" +
       "  platform: \"snes\",\n" +
       "  language: \"c\",\n" +
       "  sourcesPaths: {\n" + sourceLines + "\n  },\n" +
@@ -1672,12 +1672,12 @@ Compiles **C89**, not C99/C11. Stick to:
       const incLine = runtimeHs.length > 0
         ? `\n  includePaths: {\n${runtimeHs.map((r) => `    "${r.dst}": "${r.dst}",`).join("\n")}\n  },`
         : "";
-      buildBlock = "```js\nrunSource({\n  platform: \"" + platform + "\",\n  language: \"c\",\n  sourcesPaths: {\n" + srcLines + "\n  }," + incLine + "\n  frames: 60,\n})\n```";
+      buildBlock = "```js\nbuild({\n  output: \"run\",\n  platform: \"" + platform + "\",\n  language: \"c\",\n  sourcesPaths: {\n" + srcLines + "\n  }," + incLine + "\n  frames: 240,\n})\n```";
     } else {
       const inc = runtimeAsmIncludes.length > 0
         ? `\n  includePaths: { ${runtimeAsmIncludes.map((r) => `"${r.dst}": "${r.dst}"`).join(", ")} },`
         : "";
-      buildBlock = "```js\nrunSource({\n  platform: \"" + platform + "\",\n  sourcePath: \"" + mainFilename + "\"," + inc + "\n  frames: 60,\n})\n```";
+      buildBlock = "```js\nbuild({\n  output: \"run\",\n  platform: \"" + platform + "\",\n  sourcePath: \"" + mainFilename + "\"," + inc + "\n  frames: 240,\n})\n```";
     }
   } else if (platform === "gba") {
     // GBA libtonc / libgba runtimes ship gba_sfx.{h,c} as a tiny DMG-APU
@@ -1692,12 +1692,12 @@ Compiles **C89**, not C99/C11. Stick to:
       const incLine = runtimeHs.length > 0
         ? `\n  includePaths: {\n${runtimeHs.map((r) => `    "${r.dst}": "${r.dst}",`).join("\n")}\n  },`
         : "";
-      buildBlock = "```js\nrunSource({\n  platform: \"gba\",\n  language: \"c\",\n  sourcesPaths: {\n" + srcLines + "\n  }," + incLine + "\n  frames: 60,\n})\n```";
+      buildBlock = "```js\nbuild({\n  output: \"run\",\n  platform: \"gba\",\n  language: \"c\",\n  sourcesPaths: {\n" + srcLines + "\n  }," + incLine + "\n  frames: 240,\n})\n```";
     } else {
-      buildBlock = "```js\nrunSource({ platform: \"gba\", language: \"c\", sourcePath: \"" + mainFilename + "\", frames: 60 })\n```";
+      buildBlock = "```js\nbuild({ output: \"run\", platform: \"gba\", language: \"c\", sourcePath: \"" + mainFilename + "\", frames: 240 })\n```";
     }
   } else {
-    buildBlock = "```js\nrunSource({ platform: \"" + platform + "\", sourcePath: \"" + mainFilename + "\", frames: 60 })\n```";
+    buildBlock = "```js\nbuild({ output: \"run\", platform: \"" + platform + "\", sourcePath: \"" + mainFilename + "\", frames: 240 })\n```";
   }
 
   let filesSection = `## Files\n\n- \`${mainFilename}\` — your game's entry point.\n`;
@@ -1714,7 +1714,7 @@ Compiles **C89**, not C99/C11. Stick to:
   }
   filesSection += `\nEvery byte that compiles into your ROM is in this directory. If you move the repo somewhere else, you don't need to install anything from romdev to rebuild it — the compiler binaries are the only external dependency.\n\n`;
 
-  const readme = `# ${title ?? name}\n\nA ${lang} project for ${platform}, scaffolded by romdev.\n\n${tmpl?.describe ? tmpl.describe + "\n\n" : ""}${filesSection}${c89Note}## Build + run with romdev\n\n${buildBlock}\n\n## Iterating\n\n- Edit \`${mainFilename}\` (or any of the runtime / crt0 / cfg files — they're yours).\n- Call \`runSource\` to see your changes. It builds + loads + runs + screenshots in one round trip.\n- Inspect at byte level: \`readMemory\`, \`inspectSprites\`, \`inspectPalette\`, \`inspectBackgroundMap({render:true})\`.\n- Open a playtest window for human eyes: \`loadCategory({category:"show"}); playtest({});\` — returns immediately, the window follows your rebuilds, and the emulator stays live for every other tool.\n`;
+  const readme = `# ${title ?? name}\n\nA ${lang} project for ${platform}, scaffolded by romdev.\n\n${tmpl?.describe ? tmpl.describe + "\n\n" : ""}${filesSection}${c89Note}## Build + run with romdev\n\n${buildBlock}\n\n## Iterating\n\n- Edit \`${mainFilename}\` (or any of the runtime / crt0 / cfg files — they're yours).\n- Call \`build({output:"run", ...})\` to see your changes. It builds + loads + runs + screenshots in one round trip.\n- Inspect at byte level: \`memory({op:"read"})\`, \`sprites({op:"inspect"})\`, \`palette({source:"live"})\`, \`background({view:"rendered"})\`.\n- Open a playtest window for human eyes: \`playtest({op:"open"})\` — returns immediately, the window follows your rebuilds, and the emulator stays live for every other tool.\n`;
   await fs.writeFile(path.join(projPath, "README.md"), readme, "utf-8");
   writtenFiles.push("README.md");
 
@@ -1783,7 +1783,7 @@ Compiles **C89**, not C99/C11. Stick to:
     snippetsCopied: withSnippets ? snippetFiles : null,
     sourceFile: path.join(projPath, mainFilename),
     toolchain: lang,
-    nextStep: `Edit ${path.join(projPath, mainFilename)} and call runSource with sourcesPaths/includePaths pointing at the project's files. Everything you need is in the directory — nothing is hidden.`,
+    nextStep: `Edit ${path.join(projPath, mainFilename)} and call build({output:"run", ...}) with sourcesPaths/includePaths pointing at the project's files (see the README's "Build + run" block for the exact call). Everything you need is in the directory — nothing is hidden.`,
   };
 }
 

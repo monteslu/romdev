@@ -148,13 +148,9 @@ function normalizeSnesSources(args) {
     if (cFiles.length === 0) {
       throw new Error("buildSnesC: `sources` must include at least one .c file.");
     }
-    if (cFiles.length > 1) {
-      throw new Error(
-        `buildSnesC: multiple .c files in sources (${cFiles.join(", ")}). ` +
-        `Today only one .c file is supported per build — combine via #include or wait for ` +
-        `multi-TU support. .asm/.s siblings work fine.`,
-      );
-    }
+    // Multiple .c files ARE supported: buildWithPvSnesLib compiles each to its
+    // own .obj (tcc→wla) and links them all (Stage 1 + Stage 3). The genre
+    // scaffolds ship main.c + snes_sfx.c and rely on this.
     return args.sources;
   }
   if (typeof args.source === "string") {

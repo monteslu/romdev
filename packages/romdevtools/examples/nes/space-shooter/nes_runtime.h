@@ -1,5 +1,5 @@
 /* ── nes_runtime.h — neslib-shaped runtime for cc65 NES builds ───
- * Auto-included on every `buildSource({platform:"nes", language:"c"})`.
+ * Auto-included on every `build({ output: "rom", platform:"nes", language:"c"})`.
  *
  * API mirrors Shiru's neslib so existing tutorials port cleanly:
  *

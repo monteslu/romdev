@@ -28,6 +28,11 @@
   #status { font-size: 11px; color: #888; margin-left: auto; }
   #status.connected { color: #4caf50; }
   #status.disconnected { color: #f44336; }
+  #log-session {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px; color: #6cb6ff; padding: 2px 0 8px;
+    word-break: break-all;
+  }
   #tabs {
     display: flex; flex-wrap: wrap; gap: 4px;
     padding: 6px 12px; background: #111; border-bottom: 1px solid #333;
@@ -189,6 +194,7 @@
   </div>
   <div id="log-pane">
     <h2>Activity log</h2>
+    <div id="log-session"></div>
     <div id="log-list"></div>
   </div>
 </div>
@@ -201,6 +207,7 @@
   const tabsEl = document.getElementById("tabs");
   const imageListEl = document.getElementById("image-list");
   const logListEl = document.getElementById("log-list");
+  const logSessionEl = document.getElementById("log-session");
   const emptyEl = document.getElementById("empty");
 
   // Per-session state.
@@ -351,10 +358,22 @@
       tab.className = "tab" + (k === activeSessionKey ? " active" : "")
         + (!s.connected ? " disconnected" : "");
       tab.onclick = () => selectTab(k);
-      tab.innerHTML = `<span>${k.slice(0, 8)}</span>`
-        + (s.unseen > 0 && k !== activeSessionKey
-            ? ` <span class="badge">${s.unseen}</span>` : "");
-      if (!s.connected) tab.title = "session closed";
+      // Show the FULL session id — agents pick descriptive ids (e.g.
+      // "scaffold-nes-platformer") and truncating to 8 chars collapsed distinct
+      // tasks into identical-looking tabs ("scaffold" × N). Cap very long ids in
+      // the middle so the meaningful head+tail both show; full id in the tooltip.
+      const label = k.length > 28 ? k.slice(0, 18) + "…" + k.slice(-8) : k;
+      const labelSpan = document.createElement("span");
+      labelSpan.textContent = label;
+      tab.appendChild(labelSpan);
+      if (s.unseen > 0 && k !== activeSessionKey) {
+        const badge = document.createElement("span");
+        badge.className = "badge";
+        badge.textContent = String(s.unseen);
+        tab.appendChild(document.createTextNode(" "));
+        tab.appendChild(badge);
+      }
+      tab.title = s.connected ? k : `${k} (session closed)`;
       tabsEl.appendChild(tab);
     }
   }
@@ -504,6 +523,17 @@
 
   function renderLog() {
     logListEl.innerHTML = "";
+    // Full session id above the log — the tab label can be middle-truncated, so
+    // this is the one place that always shows the EXACT id you're looking at.
+    if (logSessionEl) {
+      if (activeSessionKey) {
+        logSessionEl.textContent = "session: " + activeSessionKey;
+        logSessionEl.style.display = "";
+      } else {
+        logSessionEl.textContent = "";
+        logSessionEl.style.display = "none";
+      }
+    }
     if (!activeSessionKey) return;
     const s = sessions.get(activeSessionKey);
     // Newest first — easier to scan when working live.

@@ -4,7 +4,7 @@
 // directly: writes screen codes into screen RAM, sets per-cell colors
 // in color RAM, and cycles the border color in a main loop.
 //
-// Build: buildSource({ platform: "c64", source: <this file>, language: "c" })
+// Build: build({ output: "rom",  platform: "c64", source: <this file>, language: "c" })
 
 #include <stdint.h>
 

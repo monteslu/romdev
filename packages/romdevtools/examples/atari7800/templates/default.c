@@ -34,7 +34,7 @@
  * the 4KB of internal RAM.
  *
  * ── Build ───────────────────────────────────────────────────────
- *   buildSource({ platform: "atari7800", sources: { "main.c": ... } })
+ *   build({ output: "rom",  platform: "atari7800", sources: { "main.c": ... } })
  */
 #include <stdint.h>
 #include "atari7800_sfx.h"

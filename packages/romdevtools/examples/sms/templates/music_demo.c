@@ -12,7 +12,7 @@
  * them by name-table index).
  *
  * Build via createProject({platform:"sms", template:"music_demo"}) or
- * buildSource({platform:"sms", language:"c", sources:{ "main.c": ...,
+ * build({ output: "rom", platform:"sms", language:"c", sources:{ "main.c": ...,
  * "sms_music.c": ... , ...runtime... }}).
  */
 

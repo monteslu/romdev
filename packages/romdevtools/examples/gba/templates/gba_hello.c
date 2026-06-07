@@ -5,7 +5,7 @@
  * pixel that moves left/right via the d-pad.
  *
  * Build via romdev:
- *   buildSource({platform:"gba", language:"c", runtime:"libgba",
+ *   build({ output: "rom", platform:"gba", language:"c", runtime:"libgba",
  *                source: <this file>})
  *
  * NOTE: the DEFAULT GBA runtime is libtonc (use `tonc_hello.c` instead
