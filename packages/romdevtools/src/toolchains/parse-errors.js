@@ -62,11 +62,18 @@ export function parseBuildLog(log) {
       // Tag everything with the (possibly empty) actual stage name so an
       // assembler error doesn't mistakenly report as "asar" on a non-SNES
       // build.
+      // Try EVERY parser — some toolchains (vasm genesis-asm) emit no
+      // "--- stage ---" marker, so the whole log lands here unnamed; if we skip
+      // a parser the error is silently swallowed (issues[] empty on a real
+      // failure). Include vasm + sdcc + wla, which the old fallback omitted.
       const tag = baseStage || "unknown";
       issues.push(...parseCc65Like(text, tag));
+      issues.push(...parseSdcc(text, tag));
       issues.push(...parseDasm(text));
       issues.push(...parseAsar(text, tag));
       issues.push(...parseRgbds(text, tag));
+      issues.push(...parseVasm(text));
+      issues.push(...parseWla(text, tag));
       issues.push(...parseGnuToolchain(text, tag));
     }
   }
@@ -301,13 +308,15 @@ function parseWla(text, stage = "wla") {
 // vasm example:
 //   error 22 in line 5 of "/work/main.s": ...
 //   warning 1003 in line 8 of "main.s": ...
+//   fatal error 13 in line 1 of "/work/main.s": could not open <x.bin> for input
+//     (← a MISSING incbin asset: the #1 thing an agent forgets to pass)
 function parseVasm(text) {
   const out = [];
-  const re = /^(?<sev>error|warning)\s+\d+\s+in\s+line\s+(?<line>\d+)\s+of\s+"(?<file>[^"]+)":\s*(?<msg>.+)$/gm;
+  const re = /^(?<sev>fatal error|error|warning)\s+\d+\s+in\s+line\s+(?<line>\d+)\s+of\s+"(?<file>[^"]+)":\s*(?<msg>.+)$/gm;
   let m;
   while ((m = re.exec(text))) {
     out.push({
-      severity: m.groups.sev,
+      severity: m.groups.sev === "warning" ? "warning" : "error",
       file: m.groups.file,
       line: parseInt(m.groups.line, 10),
       message: m.groups.msg.trim(),
