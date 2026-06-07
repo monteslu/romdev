@@ -883,6 +883,12 @@ OAM format: bytes per sprite are `[y, tileIndex, attributes, x]`.
 - `state({op:'export', fromSlot, path})` copies an EXISTING in-memory slot (e.g. one the human saved with a playtest emulator-hotkey — it appears in `state({op:'list'})`) to a file **without disturbing the live host** (no pause/resume needed). Reload either with `state({op:'load', path})`.
 - **`path` resolution:** a RELATIVE `path` resolves against the **loaded ROM's directory** (so `path:"states/start.state"` lands next to your ROM), an absolute path is used as-is; the result echoes `resolvedPath` when they differ. (It is NOT resolved against the server's CWD.)
 
+**SRAM (the cartridge BATTERY SAVE FILE — distinct from a savestate).** A savestate is the whole machine; SRAM is just the bytes a real cart keeps on its battery (the in-game save). romdev exposes it three ways, all on existing tools:
+- **Live read/write:** `memory({op:'read'/'write', region:'save_ram'})` — poke/inspect the running game's save RAM.
+- **Persist the `.sav`:** `state({op:'exportSram', path})` writes the save file; `state({op:'importSram', path})` loads one back (edit a save offline, or inject one a player made elsewhere). Same relative-path-resolves-to-ROM-dir rule.
+- **Presence:** `cart({op:'identify'})` returns `saveRam:{hasBattery, bytes}` so you know whether a save even exists before reaching for it.
+- **No battery save?** Many carts use passwords or no save (and Atari 2600/7800 + Lynx never had cartridge saves; C64 saves are disk-based). `save_ram` is empty there and the tools say so plainly — use a full-machine savestate (`state({op:'save'/'load'})`) instead.
+
 `state({op:'load'})` removes any active cheats (a save-state blob doesn't carry frontend cheat state) and reports `cheatsCleared`. `host({op:'reset'})` resets the frame counter + core state (and clears cheats) but keeps the loaded ROM.
 
 ## Project scaffolding
