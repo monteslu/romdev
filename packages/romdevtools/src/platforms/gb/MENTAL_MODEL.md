@@ -4,6 +4,16 @@ One page. Read once before you write your first game. The
 TROUBLESHOOTING.md alongside this file is for when something's broken;
 this is the "what's going on" version.
 
+## Blank screen? Verify rendering first (no vision needed)
+
+Compiles clean but nothing on screen? Call **`frame({op:'verify', frames:60})`** —
+one call fuses a framebuffer pixel scan with the live LCDC and returns
+`{verified:true|false|null, issues[]}`. `renderDisabled` = LCD off (LCDC.7 clear);
+`blankScreen`/`nearlyBlank` with LCD on = nothing in the BG map / OAM / palette
+(check the footguns below + read `memory({op:'read', region:'gb_vram'})`);
+`verified:null` = step a frame first. Zero image tokens, frame-0-guarded — use it
+as the first move when a change "did nothing."
+
 ## Five silent-failure footguns to know before you start (R26 + R27)
 
 If your ROM compiles cleanly but doesn't render — or sprites land in
