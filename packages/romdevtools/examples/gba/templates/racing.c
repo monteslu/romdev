@@ -15,6 +15,20 @@
 #include <tonc.h>
 #include "gba_sfx.h"
 
+/* draw a 5-digit score WITHOUT tte_printf (broken in this libtonc — GBA-1). */
+static void draw_score(int x, unsigned v) {
+    char buf[24];
+    int i, n = 0;
+    buf[n++]='#'; buf[n++]='{'; buf[n++]='P'; buf[n++]=':';
+    if (x >= 100) buf[n++] = '0' + (x/100)%10;
+    if (x >= 10)  buf[n++] = '0' + (x/10)%10;
+    buf[n++] = '0' + x%10;
+    buf[n++]=','; buf[n++]='8'; buf[n++]='}';
+    for (i = 4; i >= 0; i--) { buf[n+i] = '0' + (v % 10); v /= 10; }
+    n += 5; buf[n] = 0;
+    tte_write(buf);
+}
+
 #define LANE_LEFT_X    56
 #define LANE_MID_X    116
 #define LANE_RIGHT_X  176
@@ -169,7 +183,7 @@ int main(void) {
         oam_copy(oam_mem, obj_buffer, 1 + MAX_OBSTACLES);
 
         tte_erase_rect(160 + 6*8, 8, 160 + 11*8, 16);
-        tte_printf("#{P:%d,8}%05d", 160 + 6*8, score);
+        draw_score(160 + 6*8, score);
     }
     return 0;
 }

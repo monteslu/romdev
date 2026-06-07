@@ -96,6 +96,7 @@ void vdc_set_reg(u8 reg, u16 val);              /* select reg, write 16-bit valu
 void vram_set_write_addr(u16 addr);             /* point MAWR + arm VWR streaming */
 void vram_write(u16 addr, const u16 *data, u16 n); /* upload n words to VRAM[addr] */
 void vce_set_color(u16 idx, u16 grb);           /* set VCE palette entry (0..511) */
+void vdc_init(void);      /* program VDC display timing (256x224 NTSC); auto-run by *_enable */
 void bg_enable(void);     /* VDC R5: background on + VBlank IRQ (so waitvsync works) */
 void spr_enable(void);    /* VDC R5: sprites on    + VBlank IRQ                      */
 void disp_enable(void);   /* VDC R5: BG + SPR + VBlank IRQ on at once                */

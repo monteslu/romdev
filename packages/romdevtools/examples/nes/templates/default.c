@@ -13,7 +13,10 @@
 
 #include "nes_runtime.h"
 
-static const uint8_t bg_colors[4] = { 0x0F, 0x01, 0x21, 0x31 };
+/* 4 VISIBLE hues — never 0x0F (black), so a screenshot on ANY phase of the
+ * cycle shows a non-black backdrop (NES-2: the old cycle started on + passed
+ * through black, so a fresh agent's screenshot could land on a "blank" frame). */
+static const uint8_t bg_colors[4] = { 0x21, 0x01, 0x11, 0x31 };
 
 void main(void) {
   uint8_t palette[32];

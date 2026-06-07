@@ -70,17 +70,43 @@ void vblank_irq_enable(void) {
     vdc_set_reg(VDC_CR, _pce_cr);
 }
 
+/* Program the VDC display-timing registers for a standard NTSC 256x224 (H32)
+ * screen. WITHOUT this the geargrafx core falls back to power-on register
+ * defaults that composite the 32-row BAT into the display DOUBLED (the scene
+ * drawn twice, top + bottom halves, with a black right margin) — the PCE-1
+ * "doubled picture" bug. Values match cc65's pce.lib / standard PCE homebrew:
+ *   MWR  R9  = 32x32 virtual screen, 256px-wide BAT
+ *   HSR  R10 / HDR R11 = 256px (32 char) horizontal display
+ *   VPR  R12 / VDW R13 / VCR R14 = 224-line vertical window
+ * Called automatically the first time the display is enabled (idempotent). */
+static u8 _pce_vdc_inited = 0;
+void vdc_init(void) {
+    if (_pce_vdc_inited) return;
+    _pce_vdc_inited = 1;
+    vdc_set_reg(VDC_MWR, 0x0010);  /* 32x32 virtual map, 256px BAT          */
+    vdc_set_reg(VDC_BXR, 0x0000);  /* BG X scroll = 0                       */
+    vdc_set_reg(VDC_BYR, 0x0000);  /* BG Y scroll = 0                       */
+    vdc_set_reg(VDC_HSR, 0x0202);  /* horizontal sync width/start           */
+    vdc_set_reg(VDC_HDR, 0x031F);  /* horizontal display = 32 chars (256px) */
+    vdc_set_reg(VDC_VPR, 0x0F02);  /* vertical sync                         */
+    vdc_set_reg(VDC_VDW, 0x00DF);  /* vertical display = 224 lines           */
+    vdc_set_reg(VDC_VCR, 0x00EE);  /* vertical display end                  */
+}
+
 void bg_enable(void) {
+    vdc_init();
     _pce_cr |= (VDC_CR_BG_ON | VDC_CR_VBLANK_IRQ);
     vdc_set_reg(VDC_CR, _pce_cr);
 }
 
 void spr_enable(void) {
+    vdc_init();
     _pce_cr |= (VDC_CR_SPR_ON | VDC_CR_VBLANK_IRQ);
     vdc_set_reg(VDC_CR, _pce_cr);
 }
 
 void disp_enable(void) {
+    vdc_init();
     _pce_cr |= (VDC_CR_BG_ON | VDC_CR_SPR_ON | VDC_CR_VBLANK_IRQ);
     vdc_set_reg(VDC_CR, _pce_cr);
 }
