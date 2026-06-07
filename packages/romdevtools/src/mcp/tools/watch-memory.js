@@ -104,6 +104,61 @@ export function makePressDriver(host, presses) {
 // never disagree again.
 const MEMORY_REGIONS = /** @type {[string, ...string[]]} */ (Object.keys(MemoryRegionToRetro));
 
+// Abort-guard for input-driven watchpoint runs: sample caller-named bytes each
+// frame; the FIRST one to change stops the run with {label,addr,before,after}.
+// Lets a derailed driven scenario (player died, scene flipped) return immediately
+// with WHY, instead of burning all maxFrames on a meaningless miss.
+function makeAbortGuard(host, abortIf) {
+  const specs = Array.isArray(abortIf) ? abortIf : [];
+  const watched = specs.map((s, i) => {
+    const region = s.region ?? "system_ram";
+    const offset = s.offset ?? 0;
+    let before;
+    try { before = host.readMemory(region, offset, 1)[0]; } catch { before = null; }
+    const addr = "$" + (offset >>> 0).toString(16).toUpperCase();
+    return { region, offset, addr, label: s.label ?? `${region}${addr}`, before };
+  }).filter((w) => w.before != null);
+  return {
+    count: watched.length,
+    check() {
+      for (const w of watched) {
+        let now;
+        try { now = host.readMemory(w.region, w.offset, 1)[0]; } catch { continue; }
+        if (now !== w.before) {
+          return {
+            label: w.label, addr: w.addr,
+            before: "0x" + w.before.toString(16).padStart(2, "0").toUpperCase(),
+            after: "0x" + now.toString(16).padStart(2, "0").toUpperCase(),
+          };
+        }
+      }
+      return null;
+    },
+  };
+}
+
+// No-hit note for bpFindWriter. The full "two reasons" explainer (~100 tokens)
+// is useful ONCE; as a repeated payload it's pure overhead (v0.15.0 feedback
+// #2b). Emit the long form only on the first miss per MCP session, a one-liner
+// after.
+const _bpNoHitSeen = new Set();
+function noHitNote(sessionKey) {
+  const short = "No per-byte CPU write to that address within maxFrames. Either the event didn't fire " +
+    "(raise maxFrames / drive it with pressDuring; add abortIf to stop early if the scenario derails), " +
+    "OR the region is rebuilt as a BLOCK (OAM/display-list/VRAM bulk-copy or DMA) so no single instruction " +
+    "writes it — watch the SOURCE struct the copy reads from instead.";
+  if (_bpNoHitSeen.has(sessionKey)) return short;
+  _bpNoHitSeen.add(sessionKey);
+  return "No per-byte CPU write to that address within maxFrames. Two common reasons: " +
+    "(1) the event didn't fire — increase maxFrames or drive the game with pressDuring to trigger it " +
+    "(and pass `abortIf` to abort early + say why if a driven run derails, e.g. the player dies). " +
+    "(2) this region is rebuilt as a BLOCK rather than written field-by-field — sprite/OAM shadow tables, " +
+    "display lists, and VRAM are typically bulk-copied (memcpy/loop) or DMA'd from a SOURCE struct elsewhere, " +
+    "so no single instruction writes this exact byte. In that case the address you want is the SOURCE: watch " +
+    "the struct the copy reads from (find it with searchValue on the live value), or for graphics trace the " +
+    "DMA/copy source (Genesis VRAM DMA source is in VDP regs). 'Address is wrong' is usually case (2), not a bad address.";
+}
+
 function tryGetPC(host) {
   try {
     const platform = host.status?.platform;
@@ -420,7 +475,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
 
   // breakpoint({on:write|read|pc}) STOP-on-first. on:write precision:exact=bpFindWriter
   // (core watchpoint, true PC under IRQ), precision:sampled=bpRunUntilWrite (frame PC).
-  async function bpFindWriter({ address, maxFrames = 600, pressDuring }) {
+  async function bpFindWriter({ address, maxFrames = 600, pressDuring, abortIf }) {
       const host = getHost(sessionKey);
       if (!host.watchpointSupported || !host.watchpointSupported()) {
         return jsonContent({
@@ -432,26 +487,44 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       host.setWatchpoint(address, true);
       const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
       const pressDriver = makePressDriver(host, presses);
+      // Abort-guard: sample caller-named "still valid?" bytes each frame; if any
+      // changes, a driven run that DERAILED (player died → title screen, scene
+      // flipped, …) stops immediately instead of burning all maxFrames and
+      // returning a meaningless found:false. (v0.15.0 feedback #2.)
+      const guard = makeAbortGuard(host, abortIf);
       let result = null;
+      let aborted = null;
       for (let i = 0; i < maxFrames; i++) {
         pressDriver.applyForFrame(i);
         host.stepFrames(1);
         const w = host.getWatchpoint();
         if (w.hits > 0) { result = { ...w, framesStepped: i + 1 }; break; }
+        const ab = guard.check();
+        if (ab) { aborted = { ...ab, framesStepped: i + 1 }; break; }
       }
       pressDriver.finish();
       host.setWatchpoint(address, false); // disarm
+      if (aborted) {
+        return jsonContent({
+          found: false, aborted: true, abortedBy: aborted.label,
+          abortAddress: aborted.addr, before: aborted.before, after: aborted.after,
+          framesStepped: aborted.framesStepped,
+          ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
+          note: `Run aborted early: the watched abort byte ${aborted.label} (${aborted.addr}) changed ` +
+            `${aborted.before}→${aborted.after} at frame ${aborted.framesStepped}, so the driven scenario left the ` +
+            `expected state (e.g. player died / scene changed) before the write fired. The found:false is NOT a real ` +
+            `miss — fix the input plan or pick a different start state, then re-run.`,
+        });
+      }
       if (!result) {
         return jsonContent({
           found: false, address: "$" + address.toString(16).toUpperCase(), framesStepped: maxFrames,
           ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
-          note: "No per-byte CPU write to that address within maxFrames. Two common reasons: " +
-            "(1) the event didn't fire — increase maxFrames or drive the game with pressDuring to trigger it. " +
-            "(2) this region is rebuilt as a BLOCK rather than written field-by-field — sprite/OAM shadow tables, " +
-            "display lists, and VRAM are typically bulk-copied (memcpy/loop) or DMA'd from a SOURCE struct elsewhere, " +
-            "so no single instruction writes this exact byte. In that case the address you want is the SOURCE: watch " +
-            "the struct the copy reads from (find it with searchValue on the live value), or for graphics trace the " +
-            "DMA/copy source (Genesis VRAM DMA source is in VDP regs). 'Address is wrong' is usually case (2), not a bad address.",
+          ...(abortIf && abortIf.length ? { abortIfArmed: guard.count } : {}),
+          // One-line hint by default; the full "two reasons" explainer is verbose
+          // boilerplate as a repeated payload (v0.15.0 feedback #2b) — gated to the
+          // FIRST miss per session.
+          note: noHitNote(sessionKey),
         });
       }
       // When the core reports a PRG-ROM offset for the PC (fceumm/NES), it
@@ -655,6 +728,11 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         port: z.number().int().min(0).max(3).default(0),
         holdFrames: z.number().int().min(1).default(2),
       })).optional().describe("Schedule input while waiting (drive the game to the state that triggers the condition)."),
+      abortIf: z.array(z.object({
+        region: z.enum(MEMORY_REGIONS).optional().describe("memory region (default system_ram)"),
+        offset: z.number().int().min(0).describe("byte offset within the region"),
+        label: z.string().optional().describe("human name for this guard byte"),
+      })).optional().describe("on:'write' exact — ABORT GUARD for a pressDuring run: caller-named 'is this scenario still valid?' bytes (e.g. the area/scene id, the player object-active flag). If ANY changes mid-run the watchpoint stops IMMEDIATELY and returns {aborted:true, abortedBy, before, after} — so a driven scenario that derailed (player died → title screen) doesn't burn all maxFrames and return a meaningless found:false. Each is sampled once per frame (cheap)."),
     },
     safeTool(async (args) => {
       switch (args.on) {

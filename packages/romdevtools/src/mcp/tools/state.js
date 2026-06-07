@@ -3,6 +3,21 @@ import path from "node:path";
 import { getHost } from "../state.js";
 import { jsonContent, safeTool } from "../util.js";
 
+// Resolve a state-file `path`. An ABSOLUTE path is used as-is. A RELATIVE path
+// is resolved against the LOADED ROM's directory (the agent's mental model is
+// "save states live next to my ROM") — NOT the server's CWD, which is opaque to
+// the caller and was a silent ENOENT footgun (v0.15.0 feedback #1). Falls back
+// to CWD only when no ROM path is known (e.g. ROM loaded from base64).
+export function resolveStatePath(p, host) {
+  if (!p || path.isAbsolute(p)) return p;
+  const media = host?.status?.mediaPath;
+  // mediaPath is "<memory…>" for base64 loads — not a real dir; skip those.
+  if (media && !media.startsWith("<") && path.isAbsolute(media)) {
+    return path.resolve(path.dirname(media), p);
+  }
+  return path.resolve(p);
+}
+
 // Per-session state-diff baselines (op:'diff'). Module-local; keyed by sessionKey.
 const _stateDiffSnaps = new Map();
 function stateDiffSnapshots(key) {
@@ -19,16 +34,17 @@ async function saveStateCore({ name, path: outPath }, sessionKey) {
       const host = getHost(sessionKey);
       const done = [];
       if (name) { host.saveState(name); done.push(`slot '${name}'`); }
-      if (outPath) {
+      const resolvedOut = outPath ? resolveStatePath(outPath, host) : null;
+      if (resolvedOut) {
         const blob = host.serializeState();
-        await mkdir(path.dirname(outPath), { recursive: true });
-        await writeFile(outPath, blob);
-        done.push(`${blob.length} bytes → ${outPath}`);
+        await mkdir(path.dirname(resolvedOut), { recursive: true });
+        await writeFile(resolvedOut, blob);
+        done.push(`${blob.length} bytes → ${resolvedOut}`);
       }
       return {
         saved: true,
         ...(name ? { name } : {}),
-        ...(outPath ? { path: outPath } : {}),
+        ...(resolvedOut ? { path: resolvedOut, ...(resolvedOut !== outPath ? { resolvedPath: resolvedOut } : {}) } : {}),
         platform: host.status.platform,
         note: `Saved ${done.join(" + ")}.` + (outPath ? " Restore across sessions with state({op:'load', path}) after loading the same ROM." : ""),
       };
@@ -38,12 +54,14 @@ async function saveStateCore({ name, path: outPath }, sessionKey) {
 async function exportStateCore({ fromSlot, path: outPath }, sessionKey) {
       const host = getHost(sessionKey);
       const blob = host.getStateBlob(fromSlot); // throws if the slot is missing — no host disturbance
-      await mkdir(path.dirname(outPath), { recursive: true });
-      await writeFile(outPath, blob);
+      const resolvedOut = resolveStatePath(outPath, host);
+      await mkdir(path.dirname(resolvedOut), { recursive: true });
+      await writeFile(resolvedOut, blob);
       return {
         exported: true,
         fromSlot,
-        path: outPath,
+        path: resolvedOut,
+        ...(resolvedOut !== outPath ? { resolvedPath: resolvedOut } : {}),
         bytes: blob.length,
         platform: host.status.platform,
         note: "Copied the slot to disk; the live host was not touched (no pause/resume needed).",
@@ -56,8 +74,9 @@ async function loadStateCore({ name, path: inPath, render = true }, sessionKey) 
       if (name && inPath) throw new Error("state({op:'load'}): provide `name` OR `path`, not both.");
       const host = getHost(sessionKey);
       let cheatsCleared = 0;
-      if (inPath) {
-        const blob = new Uint8Array(await readFile(inPath));
+      const resolvedIn = inPath ? resolveStatePath(inPath, host) : null;
+      if (resolvedIn) {
+        const blob = new Uint8Array(await readFile(resolvedIn));
         cheatsCleared = host.unserializeState(blob) || 0;
       } else {
         cheatsCleared = host.loadState(name) || 0;
@@ -66,7 +85,7 @@ async function loadStateCore({ name, path: inPath, render = true }, sessionKey) 
       if (render) { host.renderOneFrame(); rendered = true; }
       return {
         loaded: true,
-        ...(inPath ? { path: inPath } : { name }),
+        ...(resolvedIn ? { path: resolvedIn, ...(resolvedIn !== inPath ? { resolvedPath: resolvedIn } : {}) } : { name }),
         platform: host.status.platform,
         rendered,
         ...(host.status.paused && rendered ? { renderedWhilePaused: true } : {}),
@@ -161,7 +180,7 @@ export function registerStateTools(server, z, sessionKey) {
     {
       op: z.enum(["save", "load", "list", "export", "dump", "diff"]).describe("save/load a state; list slots; export a slot to disk; dump the raw blob; diff the whole machine."),
       name: z.string().min(1).optional().describe("op=save/load: in-memory slot name. op=diff: snapshot label (default 'default')."),
-      path: z.string().optional().describe("op=save: also write the blob here (survives restarts). op=load: restore from this disk blob. op=export/dump: write the blob here (required)."),
+      path: z.string().optional().describe("op=save: also write the blob here (survives restarts). op=load: restore from this disk blob. op=export/dump: write the blob here (required). A RELATIVE path resolves against the loaded ROM's directory (NOT the server CWD); an absolute path is used as-is. The result echoes `resolvedPath` when they differ."),
       // load
       render: z.boolean().default(true).describe("op=load: step one frame after restoring so the framebuffer reflects it (fixes the stale-screenshot footgun). false = stay at the exact restored instant."),
       // export
