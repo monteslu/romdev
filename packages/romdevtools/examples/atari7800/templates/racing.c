@@ -17,6 +17,8 @@
 #define P0C1      (*(volatile uint8_t*)0x21)
 #define P0C2      (*(volatile uint8_t*)0x22)
 #define P0C3      (*(volatile uint8_t*)0x23)
+#define P1C1      (*(volatile uint8_t*)0x25)
+#define P2C1      (*(volatile uint8_t*)0x29)
 #define MSTAT     (*(volatile uint8_t*)0x28)
 #define DPPH      (*(volatile uint8_t*)0x2C)
 #define DPPL      (*(volatile uint8_t*)0x30)
@@ -43,6 +45,37 @@ MK_DL(dl_row0); MK_DL(dl_row1); MK_DL(dl_row2); MK_DL(dl_row3);
 MK_DL(dl_row4); MK_DL(dl_row5); MK_DL(dl_row6); MK_DL(dl_row7);
 
 static uint8_t dl_empty[2] = { 0, 0 };
+
+/* ── Background road ──────────────────────────────────────────────
+ * Without a full-screen drawable the display list emits only the car
+ * and ~99% of the screen stays the flat BACKGRND colour (reads as
+ * "blank"). Each road zone draws three full-width segments: grass on
+ * the left (palette 1), the grey road down the centre (palette 2),
+ * grass on the right (palette 1). Width = byte[3] low 5 bits (32-n);
+ * high 3 bits = palette. */
+static const uint8_t band_pix[16] = {
+  0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,
+  0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55
+};
+/* 8 bytes (32 px) grass @ x0, 16 bytes (64 px) road @ x32,
+ * 8 bytes (32 px) grass @ x96, terminator. */
+static uint8_t dl_road[16] = {
+  0, 0x40, 0, (1 << 5) | 24, 0,
+  0, 0x40, 0, (2 << 5) | 16, 32,
+  0, 0x40, 0, (1 << 5) | 24, 96,
+  0
+};
+
+static void set_road_addr(void) {
+  uint16_t a = (uint16_t)(uintptr_t)band_pix;
+  dl_road[0]  = dl_road[5]  = dl_road[10] = (uint8_t)(a & 0xFF);
+  dl_road[2]  = dl_road[7]  = dl_road[12] = (uint8_t)(a >> 8);
+}
+
+static uint16_t bg_zone_dl(int zone) {
+  if (zone >= 16 && zone < 220) return (uint16_t)(uintptr_t)dl_road;
+  return (uint16_t)(uintptr_t)dl_empty;
+}
 
 #define DLL_ZONES 243
 static uint8_t dll[DLL_ZONES * 3];
@@ -71,7 +104,6 @@ static void set_x(uint8_t x) {
 }
 
 static void build_dll(void) {
-  uint16_t empty = (uint16_t)(uintptr_t)dl_empty;
   int i;
   for (i = 0; i < DLL_ZONES; i++) {
     uint16_t dl;
@@ -85,7 +117,7 @@ static void build_dll(void) {
       case 5: dl = (uint16_t)(uintptr_t)dl_row5; break;
       case 6: dl = (uint16_t)(uintptr_t)dl_row6; break;
       case 7: dl = (uint16_t)(uintptr_t)dl_row7; break;
-      default: dl = empty; break;
+      default: dl = bg_zone_dl(i); break;
     }
     set_dll_entry(i, dl);
   }
@@ -110,13 +142,16 @@ void main(void) {
   set_dl_addr(dl_row7, car_row7);
 
   lane = 1;
+  set_road_addr();
   set_x(lane_xs[lane]);
   build_dll();
 
-  BACKGRND = 0x88;
-  P0C1     = 0x46;
+  BACKGRND = 0x88;   /* sky/horizon */
+  P0C1     = 0x46;   /* car */
   P0C2     = 0x0F;
   P0C3     = 0x36;
+  P1C1     = 0xC8;   /* roadside grass (green) */
+  P2C1     = 0x06;   /* road surface (grey) */
   CHARBASE = 0;
   OFFSET   = 0;
 

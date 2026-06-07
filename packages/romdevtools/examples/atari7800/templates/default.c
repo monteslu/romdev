@@ -43,6 +43,8 @@
 #define P0C1      (*(volatile uint8_t*)0x21)
 #define P0C2      (*(volatile uint8_t*)0x22)
 #define P0C3      (*(volatile uint8_t*)0x23)
+#define P1C1      (*(volatile uint8_t*)0x25)
+#define P2C1      (*(volatile uint8_t*)0x29)
 #define MSTAT     (*(volatile uint8_t*)0x28)
 #define DPPH      (*(volatile uint8_t*)0x2C)
 #define DPPL      (*(volatile uint8_t*)0x30)
@@ -91,6 +93,43 @@ MK_DL(dl_row4); MK_DL(dl_row5); MK_DL(dl_row6); MK_DL(dl_row7);
  * at dp+1; if it's 0, the parse loop exits immediately. */
 static uint8_t dl_empty[2] = { 0, 0 };
 
+/* ── Background playfield ─────────────────────────────────────────
+ * Without a full-screen drawable the display list emits only the one
+ * sprite above and ~99% of the screen stays the flat BACKGRND colour
+ * (reads as "blank"). These full-width bands fill every non-sprite
+ * zone with scenery so the frame has real content.
+ *
+ * One scanline of solid pixels lives in ROM (band_pix). A single DL
+ * drawable is at most 32 bytes = 128 px wide, so a full 160-px line
+ * needs TWO drawables. Width encoding (byte[3] low 5 bits) = 32-bytes;
+ * high 3 bits = palette: field uses palette 1, ground uses palette 2.
+ */
+static const uint8_t band_pix[32] = {
+  0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,
+  0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55
+};
+#define MK_BAND(name, pal) static uint8_t name[11] = { \
+  0, 0x40, 0, ((pal) << 5) | 0,  0,    /* 128 px @ x0   */ \
+  0, 0x40, 0, ((pal) << 5) | 24, 128,  /* 32 px  @ x128 */ \
+  0 }
+MK_BAND(dl_field, 1);
+MK_BAND(dl_ground, 2);
+#define GROUND_ZONE 188
+
+static void set_band_addr(uint8_t* dl) {
+  uint16_t a = (uint16_t)(uintptr_t)band_pix;
+  dl[0] = dl[5] = (uint8_t)(a & 0xFF);
+  dl[2] = dl[7] = (uint8_t)(a >> 8);
+}
+
+/* Background DL for a non-sprite zone: sky (empty) up top, field in the
+ * middle, ground at the bottom. */
+static uint16_t bg_zone_dl(int zone) {
+  if (zone >= GROUND_ZONE) return (uint16_t)(uintptr_t)dl_ground;
+  if (zone >= 28)          return (uint16_t)(uintptr_t)dl_field;
+  return (uint16_t)(uintptr_t)dl_empty;
+}
+
 /* DLL: one entry per visible scanline + the 10-line top overscan
  * MARIA walks BEFORE the visible area begins. NTSC display area =
  * scanlines 16..258 = 243 lines.
@@ -130,8 +169,11 @@ static void vblank_wait(void) {
 
 void main(void) {
   uint16_t dll_addr;
-  uint16_t empty_dl = (uint16_t)(uintptr_t)dl_empty;
   int i;
+
+  /* Point the background bands at their shared ROM pixel row. */
+  set_band_addr(dl_field);
+  set_band_addr(dl_ground);
 
   /* Patch each row's DL to point at its sprite-data row. */
   set_dl_addr(dl_row0, sprite_row0);
@@ -143,9 +185,9 @@ void main(void) {
   set_dl_addr(dl_row6, sprite_row6);
   set_dl_addr(dl_row7, sprite_row7);
 
-  /* Build the DLL: empty zones everywhere except the 8 sprite rows. */
+  /* Build the DLL: background scenery everywhere except the 8 sprite rows. */
   for (i = 0; i < DLL_ZONES; i++) {
-    uint16_t dl_ptr = empty_dl;
+    uint16_t dl_ptr = bg_zone_dl(i);
     if      (i == SPRITE_Y + 0) dl_ptr = (uint16_t)(uintptr_t)dl_row0;
     else if (i == SPRITE_Y + 1) dl_ptr = (uint16_t)(uintptr_t)dl_row1;
     else if (i == SPRITE_Y + 2) dl_ptr = (uint16_t)(uintptr_t)dl_row2;
@@ -158,10 +200,12 @@ void main(void) {
   }
 
   /* Palette + background. Atari NTSC palette: HHHL nibble form. */
-  BACKGRND = 0x88;   /* light blue */
-  P0C1     = 0x46;   /* orange-red */
+  BACKGRND = 0x88;   /* light blue sky */
+  P0C1     = 0x46;   /* orange-red (sprite) */
   P0C2     = 0x0F;   /* white */
   P0C3     = 0x36;   /* pink */
+  P1C1     = 0xC8;   /* field green (background band) */
+  P2C1     = 0x14;   /* ground brown (background band) */
   CHARBASE = 0;
   OFFSET   = 0;
 

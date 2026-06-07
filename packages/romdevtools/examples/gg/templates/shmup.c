@@ -15,6 +15,7 @@ extern void gg_vdp_display_on(void);
 extern void gg_vdp_set_addr(uint16_t addr, uint8_t prefix);
 extern void gg_load_palette(const uint8_t *palette);
 extern void gg_load_tiles(uint16_t vram_dest, const uint8_t *src, uint16_t byte_count);
+extern void gg_set_tilemap_cell(uint8_t row, uint8_t col, uint8_t tile_idx, uint8_t attr);
 extern void gg_vblank_wait(void);
 extern uint8_t gg_joypad_read(void);
 extern void gg_sprite_init(void);
@@ -52,13 +53,54 @@ extern void gg_sat_upload(void);
  * array left the sprite palette (entries 16-31) reading past the array = garbage
  * = invisible sprites.) */
 static const uint8_t palette[64] = {
-  /* BG 0-15: entry 0 = dark navy backdrop */
-  0x20,0x02, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
+  /* BG 0-15: 0 = backdrop, 1 = deep space blue, 2 = lighter space blue,
+   * 3 = star white. */
+  0x20,0x02, 0x30,0x04, 0x80,0x08, 0xFF,0x0F, 0,0, 0,0, 0,0, 0,0,
   0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
   /* SPRITE 16-31: 16=transparent, 17=white, 18=yellow, 19=red */
   0,0, 0xFF,0x0F, 0xFF,0x00, 0x0F,0x00, 0,0, 0,0, 0,0, 0,0,
   0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
 };
+
+/* Three BG tiles for the starfield, loaded into the BG tile bank at
+ * $0000:
+ *   tile 0 = deep space (solid colour 1)
+ *   tile 1 = lighter space band (solid colour 2)
+ *   tile 2 = space with a star (mostly colour 1, one colour-3 pixel) */
+static const uint8_t bg_tiles[96] = {
+  /* tile 0 = deep space (colour 1 → plane 0 set) */
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  /* tile 1 = lighter band (colour 2 → plane 1 set) */
+  0x00,0xFF,0x00,0x00, 0x00,0xFF,0x00,0x00,
+  0x00,0xFF,0x00,0x00, 0x00,0xFF,0x00,0x00,
+  0x00,0xFF,0x00,0x00, 0x00,0xFF,0x00,0x00,
+  0x00,0xFF,0x00,0x00, 0x00,0xFF,0x00,0x00,
+  /* tile 2 = deep space + a star: row 3 col 3 = colour 3 (planes 0+1),
+   * everything else colour 1 (plane 0). */
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  0xFF,0x00,0x00,0x00, 0xFF,0x10,0x00,0x00,
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+};
+
+/* Paint the visible viewport with a banded starfield so the screen is
+ * clearly space, not a flat backdrop. Visible name-table region is cols
+ * 6..25, rows 3..20. BG tile bank is $0000. */
+static void draw_starfield(void) {
+  uint8_t row, col;
+  for (row = 0; row < 28; row++)
+    for (col = 0; col < 32; col++) gg_set_tilemap_cell(row, col, 0, 0);
+  for (row = 3; row <= 20; row++) {
+    for (col = 6; col <= 25; col++) {
+      uint8_t t = (row & 2) ? 1 : 0;             /* alternating depth bands */
+      if (((row * 7 + col * 5) & 7) == 0) t = 2; /* sparse stars */
+      gg_set_tilemap_cell(row, col, t, 0);
+    }
+  }
+}
 
 static const uint8_t sprite_tiles[32 * 3] = {
   /* T_SHIP — diamond using colour 1 (white) */
@@ -121,7 +163,9 @@ void main(void) {
 
   gg_vdp_init();
   gg_load_palette(palette);
-  gg_load_tiles(0x2000, sprite_tiles, 32 * 3);
+  gg_load_tiles(0x0000, bg_tiles, 96);          /* BG tiles → BG bank $0000 */
+  gg_load_tiles(0x2000, sprite_tiles, 32 * 3);  /* sprite tiles → $2000 */
+  draw_starfield();
 
   /* Start the ship centered, near the bottom of the VISIBLE region. */
   player.x = (uint8_t)(VIS_X0 + VIS_W / 2 - 4); player.y = (uint8_t)(VIS_Y1 - 16); player.alive = 1;
