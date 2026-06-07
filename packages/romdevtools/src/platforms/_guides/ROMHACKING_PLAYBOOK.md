@@ -56,7 +56,7 @@ font-rendered from an ASCII string. Patching the ASCII string then does nothing.
    string. Do not patch any ASCII string you found; it isn't the source.
 2. If it IS font-rendered, find the string with `text({op:'find'})` /
    `text({op:'encode'})` and patch that.
-3. To find where a graphic/text was sourced from: on **Genesis**, `dmaTrace({precision:'sampled'})`
+3. To find where a graphic/text was sourced from: on **Genesis**, `watch({on:'dma', precision:'sampled'})`
    — drive to the screen that shows the graphic, and it reports the ROM offset(s)
    the tiles were DMA'd from (decoded from the VDP DMA registers). Edit the tile
    bitmaps at that offset, not any string. (Elsewhere: if `breakpoint({on:'write'})` on the VRAM
@@ -198,8 +198,8 @@ Breakpoints are great once you KNOW the address. To FIND it:
 - **`watch({on:'pc', start, end, frames})`** — coverage trace: every DISTINCT PC that
   EXECUTED in an address window. "What code runs in this bank during the scoreboard
   draw?" → `disasm({target:'rom'})` the PCs it returns.
-- **`dmaTrace({precision:'exact', vramDest})`** (Genesis) — which DMA wrote the tile at a VRAM dest,
-  and the ROM SOURCE it came from. The targeted version of `dmaTrace({precision:'sampled'})`; the
+- **`watch({on:'dma', precision:'exact', vramDest})`** (Genesis) — which DMA wrote the tile at a VRAM dest,
+  and the ROM SOURCE it came from. The targeted version of `watch({on:'dma', precision:'sampled'})`; the
   way to catch a DMA'd (not CPU-written) name/portrait bitmap `breakpoint({on:'write'})` can't see.
 
 ---
@@ -238,8 +238,8 @@ transition.
 | Re-inject edited bytes the game accepts | `romPatch({op:'makeStored'})` (verbatim-expand block) → `romPatch({op:'findFree'})` → `romPatch({op:'relocate'})` |
 | Find the pointer that loads an asset | `romPatch({op:'findPointer', romOffset})` |
 | FIND the unknown routine touching X | `watch({on:'range', start,end})` (all hits) / `watch({on:'pc'})` (coverage) |
-| Which DMA wrote a VRAM tile + its source (Genesis) | `dmaTrace({precision:'exact', vramDest})` |
-| Where did a VRAM graphic come from (Genesis) | `dmaTrace({precision:'sampled'})` (ROM offset of the DMA source) |
+| Which DMA wrote a VRAM tile + its source (Genesis) | `watch({on:'dma', precision:'exact', vramDest})` |
+| Where did a VRAM graphic come from (Genesis) | `watch({on:'dma', precision:'sampled'})` (ROM offset of the DMA source) |
 | Drive a menu fast | `input({op:'navigate'})` (advances on screen change) |
 | Free RAM map for a known game | `cheats({op:'lookup'})` / `cheats({op:'search'})` |
 | Safe patch | `romPatch({op:'write'})`/`romPatch({op:'writeMany'})` with `expect` |

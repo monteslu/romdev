@@ -5,17 +5,18 @@
 //   GET  /tool/:name/schema   that tool's JSON Schema (a validator on demand)
 //   GET  /openapi.json        OpenAPI 3.1 spec for every /tool/:name route
 //   GET  /documentation       Swagger UI over /openapi.json (live "try it" console)
-//   GET  /romdev-skill.md     the SKILL.md (Agent Skills open standard) — channel
-//                             doc that drives the routes, never mentions MCP
+//   GET  /skills/romdev/SKILL.md  the SKILL.md (Agent Skills open standard) — the
+//                             channel doc that drives the routes, never mentions
+//                             MCP. Also at /romdev/SKILL.md and /romdev-skill.md.
 //
-// Sessions: each agent gets its own session dynamically, same isolation as MCP.
-// First call with no x-romdev-session → mint one, return it in the response
-// header; the agent echoes it on later calls (sticky host across load→step→read).
-// A call with no header gets an ephemeral per-request session (fine for pure-file
-// tools; stateful host work should keep the header). No auth — localhost trust,
-// same as /mcp (the app already mounts localhostHostValidation()).
+// Sessions: each agent picks its own stable id and sends it as x-romdev-session
+// on EVERY call (same per-agent host isolation as MCP). The header is REQUIRED —
+// no header → 401 (we don't auto-mint a throwaway session; that silently dropped
+// the loaded ROM and surfaced as "No ROM loaded" later). First use of an id
+// creates the session, reuse keeps the host across load→step→read, different ids
+// isolate different agents. No auth beyond that — localhost trust, same as /mcp
+// (the app already mounts localhostHostValidation()).
 
-import { randomUUID } from "node:crypto";
 import { buildToolRegistry, runTool, toolJsonSchema } from "./tool-registry.js";
 import { skillPreamble, skillToolReference, buildSkillDoc } from "./skill-doc.js";
 import { swaggerHtml, swaggerAsset } from "./swagger.js";
@@ -77,31 +78,38 @@ export function mountHttpToolRoutes(app, opts = {}) {
   // ── POST /tool/:name ──────────────────────────────────────────────────────
   app.post("/tool/:name", async (req, res) => {
     const name = req.params.name;
-    // session: sticky if header present, ephemeral otherwise.
-    let sessionKey = req.headers[SESSION_HEADER];
-    let ephemeral = false;
+    // Session model: the AGENT picks its own stable, task-descriptive id and
+    // sends it as x-romdev-session on EVERY call — first use creates the session,
+    // reuse keeps the same host/state (load→step→read), and different ids isolate
+    // different agents. NO HEADER → 401: we don't auto-mint a throwaway session
+    // (that silently dropped the loaded ROM and surfaced as "No ROM loaded" two
+    // calls later). Requiring the header up front turns that silent footgun into
+    // a loud, fixable 401.
+    const sessionKey = req.headers[SESSION_HEADER];
     if (typeof sessionKey !== "string" || !sessionKey) {
-      sessionKey = randomUUID();
-      ephemeral = true;
-    }
-    const { registry } = getSession(sessionKey, { sticky: !ephemeral });
-    const tool = registry.get(name);
-    if (!tool) {
-      if (ephemeral) sessions.delete(sessionKey);
-      res.status(404).json({
-        error: `Unknown tool '${name}'. GET /openapi.json or /romdev-skill.md for the list.`,
+      res.status(401).json({
+        error: "Missing required `x-romdev-session` header. Pick ONE stable, " +
+          "task-descriptive id for yourself (e.g. 'nes-platformer-build') and send " +
+          "it on EVERY call — it's your per-session emulator key (the ROM you load " +
+          "lives under it; the next call only sees it with the SAME id) and the " +
+          "label shown in the /livestream observer. Several agents share one server " +
+          "by each using a different id.",
       });
       return;
     }
-    // echo the session id so the agent can reuse it (esp. when we minted one)
+    const { registry } = getSession(sessionKey, { sticky: true });
+    const tool = registry.get(name);
+    if (!tool) {
+      res.status(404).json({
+        error: `Unknown tool '${name}'. GET /openapi.json or /skills/romdev/SKILL.md for the list.`,
+      });
+      return;
+    }
+    // echo the session id back (convenience for clients that log it)
     res.setHeader(SESSION_HEADER, sessionKey);
     const out = await runTool(tool, req.body, sessionKey);
-    if (ephemeral) {
-      // drop the ephemeral session immediately (no sticky host wanted)
-      sessions.delete(sessionKey);
-    }
     if (out.ok) res.json(out.result);
-    else res.status(400).json({ error: out.error });
+    else res.status(400).json(out.result ?? { error: out.error });
   });
 
   // ── GET /tool/:name/schema ────────────────────────────────────────────────
@@ -129,17 +137,26 @@ export function mountHttpToolRoutes(app, opts = {}) {
     res.send(buf);
   });
 
-  // ── GET /romdev-skill.md ──────────────────────────────────────────────────
-  app.get("/romdev-skill.md", (req, res) => {
+  // ── GET /skills/romdev/SKILL.md (primary) + aliases ───────────────────────
+  // Agents store skills on disk as skills/<name>/SKILL.md (a dir named after the
+  // skill, canonical file SKILL.md). We serve the same doc at several paths so
+  // the URL matches wherever the agent saved it:
+  //   /skills/romdev/SKILL.md  — primary: full disk mirror (~/.claude/skills/romdev/SKILL.md)
+  //   /romdev/SKILL.md         — alias: the <name>/SKILL.md tail
+  //   /romdev-skill.md         — alias: flat form (older refs)
+  const serveSkill = (req, res) => {
     const md = buildSkillDoc({
       registry: metaRegistry,
       agentsBody: opts.agentsBody ?? "",
       version,
     });
     res.type("text/markdown").send(md);
-  });
+  };
+  app.get("/skills/romdev/SKILL.md", serveSkill);
+  app.get("/romdev/SKILL.md", serveSkill);
+  app.get("/romdev-skill.md", serveSkill); // alias
 
-  log.debug("[http] tool surface mounted: POST /tool/:name, /openapi.json, /documentation, /romdev-skill.md");
+  log.debug("[http] tool surface mounted: POST /tool/:name, /openapi.json, /documentation, /skills/romdev/SKILL.md");
   return { sessions, stop: () => clearInterval(reaper) };
 }
 
@@ -165,13 +182,14 @@ export function buildOpenApi(registry, version) {
         },
         responses: {
           200: { description: "Tool result (JSON).", content: { "application/json": { schema: { type: "object" } } } },
-          400: { description: "Validation or tool error.", content: { "application/json": { schema: { type: "object", properties: { error: { type: "string" } } } } } },
+          400: { description: "Validation or tool error (the action did not succeed).", content: { "application/json": { schema: { type: "object", properties: { error: { type: "string" } } } } } },
+          401: { description: "Missing required x-romdev-session header.", content: { "application/json": { schema: { type: "object", properties: { error: { type: "string" } } } } } },
           404: { description: "Unknown tool." },
         },
         parameters: [{
-          name: SESSION_HEADER, in: "header", required: false,
+          name: SESSION_HEADER, in: "header", required: true,
           schema: { type: "string" },
-          description: "Per-agent session id. Omit on the first call to get one back in the response header; echo it on later calls to keep a sticky emulator session (load→step→read). Omit entirely for one-shot pure-file tools.",
+          description: "REQUIRED. Per-agent session id — pick one stable, UNIQUE, task-DESCRIPTIVE string (e.g. 'nes-platformer-build', 'zelda-romhack-text') and send it on EVERY call. It's the per-session emulator key (load→step→read state lives under it) AND the label shown in the /livestream observer, so a descriptive id tells a watching human which task each call belongs to. Several agents share one server safely by each using a different id. Missing → 401.",
         }],
       },
     };
@@ -181,7 +199,7 @@ export function buildOpenApi(registry, version) {
     info: {
       title: "romdev HTTP tool API",
       version,
-      description: "Plain-HTTP surface for romdev's retro-game-dev tools — the non-MCP way to drive the same tools. Generated from the tool registry. See /romdev-skill.md for the workflow guide.",
+      description: "Plain-HTTP surface for romdev's retro-game-dev tools — the non-MCP way to drive the same tools. Generated from the tool registry. See /skills/romdev/SKILL.md for the workflow guide.",
     },
     servers: [{ url: "/" }],
     paths,

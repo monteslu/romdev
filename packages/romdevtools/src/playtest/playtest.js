@@ -148,8 +148,33 @@ async function getSdl() {
   try {
     const ns = await import("@kmamal/sdl");
     _sdlModule = ns.default || ns;
+    // GROUND-TRUTH visibility check (cross-platform, NOT env-var guessing):
+    // SDL picks a video driver at init. With no presentable surface (no desktop
+    // session, no Xvfb, headless box) it falls back to "offscreen"/"dummy" —
+    // createWindow then SUCCEEDS and audio plays, but nothing appears on any
+    // physical screen. That's the silent "agent says the window's up, user sees
+    // nothing (but hears sound)" failure. We catch it HERE by asking SDL which
+    // driver it actually selected — works the same on Linux/macOS/Windows, and
+    // correctly ALLOWS a real offscreen X server (Xvfb reports "x11", not
+    // "offscreen"). Headless rendering (screenshot/runSource) never calls this,
+    // so offscreen stays perfectly fine for everything except opening a window
+    // for a human.
+    const driver = _sdlModule?.info?.drivers?.video?.current;
+    if (driver === "offscreen" || driver === "dummy") {
+      throw tag(new Error(
+        `SDL selected the "${driver}" video driver — there is no presentable display, ` +
+        "so a playtest window would render but never appear on a physical screen " +
+        "(you'd hear audio but see nothing). The server must run where it has a real " +
+        "display: start it from a terminal INSIDE your logged-in desktop session " +
+        "(`npx romdevtools`), then point your agent at that server. (A server spawned " +
+        "by your agent host, over plain SSH, or from a tty/headless box has no display. " +
+        "A virtual display like Xvfb works too — it reports as the real driver, not " +
+        "\"offscreen\".)",
+      ), "no-display");
+    }
     return _sdlModule;
   } catch (e) {
+    if (e?.sdlKind) throw e; // already-tagged (e.g. the offscreen check above)
     const isModuleErr = e?.code === "ERR_MODULE_NOT_FOUND" ||
       /sdl\.node|dist[\\/]/.test(e?.message || "");
     throw tag(new Error(e?.message ?? String(e)),

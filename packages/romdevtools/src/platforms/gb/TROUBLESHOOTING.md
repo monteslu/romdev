@@ -92,7 +92,7 @@ the cross-platform note: [[sdcc-uint8-loop-bound-trap]].
    `platform:"gb"` and it stays $00 (DMG). So if colors are wrong, first
    check you didn't build this as a `.gb` ROM — rebuild with
    `platform:"gbc"`. (To force a value on an existing ROM: set it in your
-   `gb_crt0.s` header section, run `patchGbHeader({path:"out.gbc"})`, or
+   `gb_crt0.s` header section, run `romPatch({op:'gbHeader', path:"out.gbc"})`, or
    run `node patch-header.js out.gbc`.) Verify:
    ```sh
    xxd -s 0x143 -l 1 out.gbc      # expect: 80

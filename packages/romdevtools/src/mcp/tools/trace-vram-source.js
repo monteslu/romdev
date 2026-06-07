@@ -19,7 +19,7 @@ import { jsonContent } from "../util.js";
 import { decodeDMASource } from "../../platforms/genesis/vdp.js";
 import { makePressDriver } from "./watch-memory.js";
 
-// traceVramSource → dmaTrace({precision:'sampled'}) (router in watch-memory.js).
+// traceVramSource → watch({on:'dma', precision:'sampled'}) (router in watch-memory.js).
 // Exported core; the router passes its own sessionKey.
 export async function traceVramSourceCore({ frames = 120, pressDuring, romPreviewBytes = 16, minLengthBytes = 0, sessionKey }) {
       const host = getHost(sessionKey);
@@ -76,6 +76,6 @@ export async function traceVramSourceCore({ frames = 120, pressDuring, romPrevie
       });
 }
 
-// traceVramSource is registered as dmaTrace({precision:'sampled'}) by the
-// `dmaTrace` router in watch-memory.js (which imports traceVramSourceCore).
+// traceVramSource is reached via watch({on:'dma', precision:'sampled'}) by the
+// `watch` tool in watch-memory.js (which imports traceVramSourceCore).
 export function registerTraceVramSourceTools() {}

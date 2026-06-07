@@ -343,7 +343,7 @@ const TOOL_OWNER = {
   playtest: "show",
   // advanced category
   runUntil: "advanced",
-  watch: "advanced", breakpoint: "advanced", dmaTrace: "advanced",
+  watch: "advanced", breakpoint: "advanced",
   recordSession: "advanced",
   // entry tier itself
   catalog: "entry",

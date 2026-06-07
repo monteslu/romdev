@@ -20,7 +20,7 @@ check these first. All five have shipped fixes in the bundled runtime
    classic white-screen: a stray $FF pad there trips CGB mode on a DMG
    ROM so BGP/OBP* writes are ignored. Because the build sets it from the
    platform you chose, a freshly built ROM is correct with **no manual
-   step**. Call `patchGbHeader` only to fix up an existing/external ROM
+   step**. Call `romPatch({op:'gbHeader'})` only to fix up an existing/external ROM
    or override a field (title, cart type, ROM/RAM size, CGB flag).
 
 2. **OAM shadow buffer must be page-aligned.** OAM DMA copies 160 bytes
@@ -122,7 +122,7 @@ running a CGB-aware ROM, the DMG registers are ignored.
 You normally don't touch this byte by hand: `build({output:'rom'})` / `build({output:'run'})`
 set it from the platform you build for ($00 for `platform:"gb"`, $80/$C0
 for `platform:"gbc"`). To force a value, set it in your `gb_crt0.s`
-header section, or call `patchGbHeader({path, cgb:true})` on the built
+header section, or call `romPatch({op:'gbHeader', path, cgb:true})` on the built
 ROM (it auto-detects the `.gbc` extension; the standalone
 `patch-header.js` script does the same).
 
@@ -201,7 +201,7 @@ Build calls explicitly reference these files via `sourcesPaths` /
 `includePaths` / `crt0Path` + `codeLoc: 0x150`. `build({output:'rom'})` /
 `build({output:'run'})` then fix up the cart header automatically (logo, checksums,
 CGB flag), so the ROM loads under gambatte with no extra step. Use
-`patchGbHeader({path})` (MCP tool) or `node patch-header.js <rom>` (CLI)
+`romPatch({op:'gbHeader', path})` (romdev tool) or `node patch-header.js <rom>` (CLI)
 only on a ROM the build pipeline didn't produce. See your project's
 README for the exact incantation.
 

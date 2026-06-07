@@ -9,7 +9,7 @@ npx romdevtools
 That's it — one command starts the local romdev **tool server** (no global install, no host compiler/emulator). Point any coding agent at it three ways:
 
 - **Plain HTTP** — `POST http://127.0.0.1:7331/tool/{name}`; browse/try every tool at `/documentation`.
-- **Agent Skill** — `GET /romdev-skill.md` (the [Agent Skills](https://agentskills.io) standard; ~100 tokens until invoked).
+- **Agent Skill** — `GET /skills/romdev/SKILL.md` (the [Agent Skills](https://agentskills.io) standard; save it to your skills dir as `skills/romdev/SKILL.md`; ~100 tokens until invoked).
 - **MCP** — it's also a [Model Context Protocol](https://modelcontextprotocol.io/) server at `/mcp` for clients that want it.
 
 This package contains all the JavaScript — the tool surface, the WASM emulator host, the per-platform scaffolds, runtime/library source, and debug helpers — but **no emulator or compiler WASM itself.** Those ship in the `romdev-*` binary packages it depends on, loaded on demand the first time you build or run a given platform.
@@ -19,7 +19,7 @@ This package contains all the JavaScript — the tool surface, the WASM emulator
 ## What's in this package
 
 - **`bin`**
-  - `romdevtools` → the tool server (`src/mcp/server.js`). Serves the HTTP tool routes, `/documentation`, `/romdev-skill.md`, and an MCP endpoint on `http://127.0.0.1:7331` by default (`PORT` / `HOST` to override). `romdev-mcp` is kept as an alias of the same command.
+  - `romdevtools` → the tool server (`src/mcp/server.js`). Serves the HTTP tool routes, `/documentation`, `/skills/romdev/SKILL.md`, and an MCP endpoint on `http://127.0.0.1:7331` by default (`PORT` / `HOST` to override). `romdev-mcp` is kept as an alias of the same command.
   - `romdevtools-cli` → a smoke/utility CLI, incl. `romdevtools-cli play <rom>` (SDL window, hot-plug controllers).
 - **`src/`** — the server, MCP tools, WASM host, core/toolchain resolvers, per-platform memory interpretation, and bundled library/runtime source (cc65 libs, PVSnesLib, SGDK, libtonc/libgba, hUGEDriver, …) that scaffolded projects link against.
 - **`examples/`** — per-platform starter projects and genre scaffolds.
@@ -58,12 +58,17 @@ running server:
 - **Plain HTTP:** `POST http://127.0.0.1:7331/tool/{name}` with the args as a JSON
   body; the response is JSON. Browse/try every tool at **`/documentation`**
   (Swagger UI, served locally — no CDN), or get the machine spec at
-  **`/openapi.json`**. For stateful work (load → step → read) the first call
-  returns an `x-romdev-session` header — echo it on later calls to keep the same
-  emulator session. romdev runs **locally** and tool path args (`path`,
-  `outputPath`, …) are **local filesystem paths**, not uploads — pass absolute
-  paths on the same machine.
-- **Agent Skill:** **`GET /romdev-skill.md`** is a portable [Agent
+  **`/openapi.json`**. **The agent picks its own session id** and sends it as the
+  `x-romdev-session` header on every call — it's **required** (no header → `401`;
+  the server won't silently run you in a throwaway session). Make it unique and
+  task-descriptive (e.g. `nes-platformer-build`), since it's also the label shown
+  in the `/livestream` observer. The emulator host is per-session, so the same id
+  keeps your ROM across calls, and several agents can share one server by each
+  using a different id. A call that fails returns a non-2xx (4xx) with the reason
+  in the body — never a 200 that hides an error. romdev runs **locally** and tool
+  path args (`path`, `outputPath`, …) are **local filesystem paths**, not uploads
+  — pass absolute paths on the same machine.
+- **Agent Skill:** **`GET /skills/romdev/SKILL.md`** is a portable [Agent
   Skills](https://agentskills.io) `SKILL.md` (works in Claude Code, opencode,
   OpenClaw, Hermes, …). Drop it in your agent's skills dir; it costs ~100 tokens
   until invoked (vs always-on MCP tool defs), then teaches the workflows + the

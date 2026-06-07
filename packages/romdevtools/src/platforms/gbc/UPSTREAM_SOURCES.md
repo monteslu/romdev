@@ -7,7 +7,7 @@ the color-aware scaffolds; everything below is in lockstep with
 the GB tree.
 
 CGB-specific:
-- `patchGbHeader({cgb: true})` sets $0143 = $80 → gambatte boots
+- `romPatch({op:'gbHeader', cgb: true})` sets $0143 = $80 → gambatte boots
   in CGB mode with color palette RAM active
 - VRAM bank 1 (selected via VBK = $FF4F) holds per-tile attribute
   bytes (palette index, H/V flip, BG-OAM priority)
@@ -53,7 +53,7 @@ upstream README. Songs are exported from hUGETracker
 - "OAM DMA wedges sprites" → see `MENTAL_MODEL.md` § R26 footguns +
   `gb_runtime.c` `oam_dma_copy` implementation
 - "BGP write does nothing" → check $0143 (CGB flag) via
-  `patchGbHeader` + Pan Docs § "The Cartridge Header"
+  `romPatch({op:'gbHeader'})` + Pan Docs § "The Cartridge Header"
 - "How does hUGEDriver process a song row?" → `hUGEDriver.c`
   `hUGE_dosound` body — fully readable
 - "Why is gambatte refusing my ROM?" → check the header, then

@@ -121,37 +121,58 @@ function baseName(name) {
     .trim();
 }
 
+// The platforms that ship a bundled cheat index — the set searchCheatGames sweeps
+// when no `platform` is given. (Kept in step with cheats.js SUPPORTED; C64 has no
+// source cheats so it has no index.)
+const INDEXED_PLATFORMS = [
+  "nes", "gb", "gbc", "snes", "genesis", "sms", "gg",
+  "atari2600", "atari7800", "lynx", "gba", "pce", "msx",
+];
+
 /**
- * Fuzzy-search a platform's cheat index by game name. Returns the best-matching
- * game names + cheat counts WITHOUT dumping the whole DB — so an agent can find
- * "NBA Jam Tournament" → the real entry without a huge context load.
+ * Fuzzy-search the cheat DB by game NAME. Each match carries the `platform` it
+ * was found on, so the caller never has to know the console up front. By default
+ * this searches EVERY indexed platform (the natural ask: "find a game's cheats"
+ * — you shouldn't have to name the device); pass `platform` only to scope the
+ * search to one console. Returns best-matching game names + cheat counts WITHOUT
+ * dumping the whole DB.
  * @param {object} a
- * @param {string} a.platform
  * @param {string} a.query
+ * @param {string} [a.platform]  optional — restrict to one platform; omit to search all
  * @param {number} [a.limit]
  * @param {number} [a.minScore]
- * @returns {Promise<{platform:string, query:string, matches:Array<{game:string, score:number, cheats:number}>, gameCount:number, note:string}>}
+ * @returns {Promise<{platform:string|null, query:string, matches:Array<{game:string, platform:string, score:number, cheats:number}>, gameCount:number, note:string}>}
  */
 export async function searchCheatGames({ platform, query, limit = 12, minScore = 0.25 }) {
-  const idx = await loadIndex(platform);
-  if (!idx || !idx.games) {
+  const platforms = platform ? [platform] : INDEXED_PLATFORMS;
+  let scored = [];
+  let gameCount = 0;
+  let missing = [];
+  for (const plat of platforms) {
+    const idx = await loadIndex(plat);
+    if (!idx || !idx.games) { missing.push(plat); continue; }
+    gameCount += idx.gameCount ?? Object.keys(idx.games).length;
+    const fuse = await getFuse(plat);
+    if (!fuse) continue;
+    for (const r of fuse.search(baseName(query))) {
+      const score = simFromFuse(r.score);
+      if (score >= minScore) scored.push({ game: r.item.game, platform: plat, score, cheats: r.item.cheats });
+    }
+  }
+  // When scoped to one platform and that platform has no index at all, say so.
+  if (platform && missing.length) {
     return { platform, query, matches: [], gameCount: 0, note: `No bundled cheat index for platform '${platform}'.` };
   }
-  const names = Object.keys(idx.games);
-  const fuse = await getFuse(platform);
-  // Search the tag-stripped query against the tag-stripped baseName index.
-  const results = fuse.search(baseName(query));
-  const matches = results
-    .map((r) => ({ game: r.item.game, score: simFromFuse(r.score), cheats: r.item.cheats }))
-    .filter((m) => m.score >= minScore)
+  const matches = scored
     .sort((a, b) => b.score - a.score || a.game.length - b.game.length)
     .slice(0, limit);
+  const scope = platform ? `the ${platform} cheat DB` : `the cheat DB (all ${platforms.length - missing.length} platforms)`;
   return {
-    platform, query, matches,
-    gameCount: idx.gameCount ?? names.length,
+    platform: platform ?? null,
+    query, matches, gameCount,
     note: matches.length === 0
-      ? `No game in the ${platform} cheat DB (${names.length} games) is close to "${query}". Try fewer/looser words.`
-      : `${matches.length} candidate(s) by fuzzy name match (region/revision tags ignored, typo-tolerant). Pass an exact \`game\` to cheats({op:'lookup'}) (it also fuzzy-matches). Score is name similarity, not a content guarantee — verify a label before patching.`,
+      ? `No game in ${scope} (${gameCount} games) is close to "${query}". Try fewer/looser words.`
+      : `${matches.length} candidate(s) by fuzzy name match across ${platform ? "1 platform" : "all platforms"} (each match shows its \`platform\`; region/revision tags ignored, typo-tolerant). To read a game's cheats, call cheats({op:'lookup', platform, game}) with the match's own platform. Score is name similarity, not a content guarantee — verify a label before patching.`,
   };
 }
 

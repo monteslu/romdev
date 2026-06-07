@@ -57,7 +57,7 @@ const PKG_VERSION = (() => {
 // AGENTS.md is the CHANNEL-NEUTRAL body (workflow knowledge, footguns, per-platform
 // docs) — it must not contain "how to connect / how to call" prose, because that
 // differs per delivery channel. The MCP channel prepends mcpPreamble ("call the
-// MCP tools…", never mentions HTTP routes); the skill channel (GET /romdev-skill.md)
+// MCP tools…", never mentions HTTP routes); the skill channel (GET /skills/romdev/SKILL.md)
 // prepends skillPreamble ("POST /tool/{name}…", never mentions MCP). Both live in
 // src/http/skill-doc.js so neither leaks into the other surface.
 async function loadAgentsBody() {
@@ -351,7 +351,7 @@ async function main() {
   });
 
   // ── HTTP tool surface (the non-MCP way to drive romdev) ───────────────────
-  // POST /tool/:name + /openapi.json + /documentation + /romdev-skill.md, all
+  // POST /tool/:name + /openapi.json + /documentation + /skills/romdev/SKILL.md, all
   // generated from the same tool registry the MCP path uses. Same Express app,
   // same localhost trust, per-agent dynamic sessions. Lets MCP-wary users (or
   // agents that prefer the Agent Skills standard) use romdev with near-zero
@@ -413,7 +413,7 @@ async function main() {
     log.info("");
     log.info(`romdev (v${PKG_VERSION}) listening on http://${bannerHost}:${port}/mcp`);
     log.info("");
-    log.info(`prefer a skill?  save:  http://${bannerHost}:${port}/romdev-skill.md`);
+    log.info(`prefer a skill?  save:  http://${bannerHost}:${port}/skills/romdev/SKILL.md`);
     log.info("");
     log.info(`optional observer:      http://${bannerHost}:${port}/livestream`);
     log.info("");
