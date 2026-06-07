@@ -4,6 +4,69 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.15.0
+
+**Scaffold audit: every scaffold on every platform now builds AND renders.** Two
+independent multi-agent audits found the documented "scaffold then build the dir"
+happy path was broken on most platforms, and that many scaffolds built but
+rendered blank. Both are fixed — verified 115/115 templates build via the dir
+path, and every genre game renders recognizable content. This matters most for
+weaker agents: the first build now succeeds, so they build on a working example
+instead of assuming the server is broken and installing their own tools.
+
+### Fixed — project-directory build (the linchpin)
+- **`build({output:'run'|'project', path})` now works on EVERY platform.** It was
+  0/8 on GB/GBC/NES/Genesis and 0/5 on Atari 2600 via the natural path. The
+  dir-builder used to glob every file as a source; it now applies a per-platform
+  recipe that matches a hand-written build: routes the crt0 correctly (GB/GBC
+  `gb_crt0.s` via the cart-header path — no more `Multiple definition of gsinit`),
+  applies the linker preset (NES `chr-ram-runtime` — no more `Missing memory area
+  'OAM'`), skips SDK intermediates (Genesis `sega.preprocessed.s`, the SNES SPC700
+  driver, any `*.upstream.*`), wires the GBA runtime (libtonc/libgba/maxmod by
+  what the source includes), routes `#include`d C/asm siblings as includes, and
+  bundles every incbin asset (`.xgc`/`.vgz`/…). `output:'run'` accepts `path` too
+  (build+load+run+screenshot a dir in one call). One shared code path so the two
+  build routes can't drift. Locked in by `scaffold-build-happypath.test.js`.
+- **SNES multi-`.c` builds** (genre scaffolds ship `main.c` + `snes_sfx.c`) — the
+  stale single-`.c` guard in `buildSnesC` is removed (the link path already
+  handled multiple TUs).
+
+### Fixed — scaffolds rendered blank/wrong (now show content)
+- **SMS/GG**: `vdp_init` R6 default 0xFB→0xFF — sprite tiles now read from $2000
+  where scaffolds upload them (were reading the empty $0000 bank → invisible). GG
+  also: 64-byte GG palette format (scaffolds shipped 32) + visible-window coords.
+- **Genesis**: genre scaffolds now call `VDP_linkSprites` (the SAT link bytes were
+  0 = end-of-list → only slot 0 drew); shmup enemies spread across the field.
+- **SNES**: `sports`/`racing` `oamSet` now uses byte offsets (`slot<<2`); a real
+  4bpp console font is embedded (the stub made all text black) + the BG-base /
+  text-offset / `consoleVblank` wiring fixed → c_hello/puzzle/platformer show text.
+- **Lynx**: `platformer`/`puzzle`/`sports`/`racing` use the `while(tgi_busy()){}` +
+  full-screen `tgi_bar` clear (were black via bare `tgi_clear()`).
+- **C64**: genre sprite data moved $0800→$2000 (it collided with the $0801 `.prg`
+  load → `sports` crashed to BASIC, sprites corrupt).
+- **NES**: the bundled runtime no longer races the OAM-DMA — `oam_clear` resets the
+  index and `ppu_wait_nmi` hides unused slots after staging, so sprite-light
+  scaffolds no longer flicker to black; `default` backdrop no longer cycles to black.
+- **PCE**: `pce_video.c` now programs the VDC display timing (NTSC 256×224) — fixes
+  the vertically-doubled picture.
+- **GBA**: per-frame `tte_printf("%05d")` (broken in the bundled libtonc — garbles +
+  wedges the loop) replaced with a hand-built score string + `tte_write`.
+- **Atari 2600**: `paddle` kernel rebuilt to a 2-line kernel (the per-line work
+  overflowed a 76-cycle scanline → ~250 lines, no vsync lock); now stable at 210.
+
+### Changed
+- **Doc-drift swept**: every agent-facing `runSource`/`buildSource` → the current
+  `build({output:'run'|'rom'})`, dead tool names (`loadCategory`, `inspectSprites`,
+  …) → the consolidated forms, across the scaffold README emitter, `nextStep`,
+  examples, platform docs, and `.cfg` comments. Emitted scaffold-README `frames`
+  60→240 (60 caught the boot logo on some platforms → false "blank").
+- **Thin genres** given a BG world (Genesis sports court / racing road, NES racing
+  road, SNES sports/racing) so they read as the genre, not objects on black.
+- **Missing-genre error** for msx/pce/atari2600 now names the working project
+  templates instead of a bare "default".
+- The `uint8-loop-bound` preflight lint is scope-aware (no longer false-flags a
+  `uint16_t` loop counter that shares a name with a `uint8_t` in another function).
+
 ## 0.14.0
 
 **Two platform-specific top-level tools folded into their domain verbs, a
