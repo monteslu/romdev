@@ -78,7 +78,7 @@ R1 = 0x80   display OFF, vblank IRQ off, 192-line
 R2 = 0xFF   name table at $3800
 R4 = 0xFF   BG tile data at $0000
 R5 = 0xFF   sprite attr table at $3F00
-R6 = 0xFB   sprite tile data at $0000 (NOT $2000 — see footgun below)
+R6 = 0xFF   sprite tile data at $2000 (own bank; scaffolds upload here)
 R7 = 0x00   border colour
 ```
 
@@ -142,19 +142,19 @@ buffer in WRAM and uploads it to the SAT each vblank.
 `sprites({op:'inspect'})` shows the live OAM bytes + reports
 `spriteTileDataBase` — trust it over comments when sprites misbehave.
 
-### R6 sprite-tile-base default: $0000, NOT $2000
+### R6 sprite-tile-base: default is $2000 (0xFF)
 
-`sms_vdp_init()` sets R6 = 0xFB. R6 bit 2 is the SA13 select for
-sprite tile data — and bit 2 is **CLEAR** in 0xFB. That means
-sprite tiles read from `$0000-$1FFF`, **sharing the bank with BG
-tiles**. Many references (including older comments in our own
-`vdp_init.c` and `load_tiles.c`, since fixed) say "R6=0xFB → sprite
-tiles at $2000" — that's wrong.
+`sms_vdp_init()` sets R6 = 0xFF. R6 bit 2 is the SA13 select for
+sprite tile data — bit 2 is **SET** in 0xFF, so sprite tiles read
+from `$2000-$3FFF`, their **own bank** separate from BG tiles at
+$0000. This matches every bundled scaffold, which uploads sprite
+tiles to `$2000` (`sms_load_tiles(0x2000, …)`) — default and
+scaffolds agree, so sprites render.
 
-If you want sprite tiles in their own bank at $2000, set
-`vdp_write_reg(6, 0xFF)` AND upload tiles to VRAM $2000. Otherwise
-upload sprite tiles to $0000 alongside BG tiles (just make sure
-they don't collide).
+Watch the bit: 0xFB has SA13 **CLEAR** = sprite tiles at $0000
+(shared with the BG bank). If you set R6=0xFB you MUST upload your
+sprite tiles to $0000 too, or the VDP reads the empty/BG bank and
+every sprite is invisible.
 
 ## Palette (CRAM)
 

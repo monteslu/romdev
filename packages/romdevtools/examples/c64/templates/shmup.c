@@ -176,7 +176,7 @@ void main(void) {
         if (aabb(&bullets[i], &enemies[j])) {
           bullets[i].alive = 0;
           enemies[j].alive = 0;
-          if (score < 65500) score += 10;
+          if (score < 65500u) score += 10;
           sfx_noise(8);
           break;
         }

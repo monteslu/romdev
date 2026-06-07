@@ -196,7 +196,7 @@ int main(bool hard) {
                 if (p1_bullets[i].alive && aabb(&p1_bullets[i], &enemies[j])) {
                     p1_bullets[i].alive = FALSE;
                     enemies[j].alive = FALSE;
-                    if (score_p1 < 65500) score_p1 += 10;
+                    if (score_p1 < 65500u) score_p1 += 10;
                     sfx_noise(8);
                     break;
                 }
@@ -206,7 +206,7 @@ int main(bool hard) {
                 if (p2_bullets[i].alive && aabb(&p2_bullets[i], &enemies[j])) {
                     p2_bullets[i].alive = FALSE;
                     enemies[j].alive = FALSE;
-                    if (score_p2 < 65500) score_p2 += 10;
+                    if (score_p2 < 65500u) score_p2 += 10;
                     sfx_noise(8);
                     break;
                 }

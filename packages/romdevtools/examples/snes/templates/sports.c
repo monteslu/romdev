@@ -16,6 +16,10 @@
 extern char tilfont, palfont;
 extern char tilsprite, palsprite;
 
+/* consoleVblank() copies the dirty text tilemap to VRAM during VBlank.
+ * No public prototype in console.h, so declare it; call once per frame. */
+extern void consoleVblank(void);
+
 #define COURT_TOP   16
 #define COURT_BOT   208
 #define PADDLE_H    24
@@ -59,6 +63,25 @@ static void render_scores(void) {
     consoleDrawText(24, 2, buf);
 }
 
+/* Draw a Pong court out of font glyphs on the text BG (no extra tile
+ * data needed): a dashed rail across the top and bottom of the playfield
+ * plus a dashed centre net. The text grid is 32x28 cells (8px each). */
+#define COURT_NET_COL  16
+#define COURT_ROW_TOP  4
+#define COURT_ROW_BOT  23
+static void draw_court(void) {
+    char rail[29];
+    u16 i;
+    for (i = 0; i < 28; i++) rail[i] = '-';
+    rail[28] = 0;
+    consoleDrawText(2, COURT_ROW_TOP, rail);
+    consoleDrawText(2, COURT_ROW_BOT, rail);
+    /* Dashed centre net: a ':' every other row between the rails. */
+    for (i = COURT_ROW_TOP + 1; i < COURT_ROW_BOT; i += 2) {
+        consoleDrawText(COURT_NET_COL, i, ":");
+    }
+}
+
 int main(void) {
     u16 p1, p2;
     u16 i, slot;
@@ -66,9 +89,13 @@ int main(void) {
 
     consoleSetTextMapPtr(0x6800);
     consoleSetTextGfxPtr(0x3000);
-    consoleSetTextOffset(0x0100);
+    consoleSetTextOffset(0x0000);   /* tile index = (char-0x20); font is at the BG char base */
     consoleInitText(0, 16 * 2, &tilfont, &palfont);
     setMode(BG_MODE1, 0);
+    /* consoleInitText DMAs the font but does NOT set the PPU BG base
+     * registers — point BG0 at the same font ($3000) + map ($6800). */
+    bgSetGfxPtr(0, 0x3000);
+    bgSetMapPtr(0, 0x6800, SC_32x32);
     bgSetDisable(1);
     bgSetDisable(2);
 
@@ -77,6 +104,7 @@ int main(void) {
     consoleDrawText(2, 1, "P1");
     consoleDrawText(28, 1, "P2");
     consoleDrawText(6, 26, "UP/DOWN MOVES YOUR PADDLE");
+    draw_court();   /* dashed rails + centre net (font glyphs, no extra tiles) */
 
     /* Hide all OAM slots initially. */
     for (i = 0; i < 7; i++) oamSet(SPR(i), 0, 240, 3, 0, 0, 0, 0);
@@ -98,6 +126,7 @@ int main(void) {
         oamUpdate();
         render_scores();
         WaitForVBlank();
+        consoleVblank();
 
         p1 = padsCurrent(0);
         p2 = padsCurrent(1);

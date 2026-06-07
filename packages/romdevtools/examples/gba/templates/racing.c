@@ -163,7 +163,7 @@ int main(void) {
                 }
             }
 
-            if (score < 65500) score++;
+            if (score < 65500u) score++;
         }
 
         /* Sprite slots: 0 = player, 1..4 = obstacles. */

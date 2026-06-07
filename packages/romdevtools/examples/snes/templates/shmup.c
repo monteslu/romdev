@@ -32,6 +32,10 @@
 extern char tilfont, palfont;
 extern char tilsprite, palsprite;
 
+/* consoleVblank() copies the dirty text tilemap to VRAM during VBlank.
+ * No public prototype in console.h, so declare it; call once per frame. */
+extern void consoleVblank(void);
+
 /* OAM is addressed by BYTE OFFSET; sprite slot N = offset N*4. */
 #define SPR(slot) ((slot) << 2)
 
@@ -112,15 +116,14 @@ int main(void) {
 
     consoleSetTextMapPtr(0x6800);
     consoleSetTextGfxPtr(0x3000);
-    consoleSetTextOffset(0x0100);
+    consoleSetTextOffset(0x0000);   /* tile index = (char-0x20); font is at the BG char base */
     consoleInitText(0, 16 * 2, &tilfont, &palfont);
     setMode(BG_MODE1, 0);
-    /* Disable ALL BG layers and render on a solid backdrop — the same
-     * clean approach the `default` template uses. (BG0 was the text-console
-     * layer, but its stub font rendered as a garbage checkerboard; until a
-     * real pvsneslibfont .pic is dropped in for an on-BG HUD, a clean
-     * sprite-only screen looks far better than garbage tiles.) */
-    bgSetDisable(0);
+    /* BG0 is the text-console HUD layer. consoleInitText DMAs the font
+     * but does NOT set the PPU BG base registers — point BG0 at the same
+     * font ($3000) + map ($6800) so the HUD text renders. */
+    bgSetGfxPtr(0, 0x3000);
+    bgSetMapPtr(0, 0x6800, SC_32x32);
     bgSetDisable(1);
     bgSetDisable(2);
     setPaletteColor(0, RGB5(0, 0, 6));   /* dark-blue backdrop (CGRAM 0) */
@@ -194,6 +197,7 @@ int main(void) {
 
         render_score();
         WaitForVBlank();
+        consoleVblank();
     }
     return 0;
 }

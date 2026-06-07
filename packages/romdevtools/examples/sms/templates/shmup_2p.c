@@ -199,7 +199,7 @@ void main(void) {
         if (p1_bullets[i].alive && aabb(&p1_bullets[i], &enemies[j])) {
           p1_bullets[i].alive = 0;
           enemies[j].alive = 0;
-          if (score_p1 < 65500) score_p1 = (uint16_t)(score_p1 + 10);
+          if (score_p1 < 65500u) score_p1 = (uint16_t)(score_p1 + 10);
           sfx_noise(8);
           break;
         }
@@ -209,7 +209,7 @@ void main(void) {
         if (p2_bullets[i].alive && aabb(&p2_bullets[i], &enemies[j])) {
           p2_bullets[i].alive = 0;
           enemies[j].alive = 0;
-          if (score_p2 < 65500) score_p2 = (uint16_t)(score_p2 + 10);
+          if (score_p2 < 65500u) score_p2 = (uint16_t)(score_p2 + 10);
           sfx_noise(8);
           break;
         }

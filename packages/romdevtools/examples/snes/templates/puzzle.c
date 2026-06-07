@@ -16,6 +16,10 @@
 
 extern char tilfont, palfont;
 
+/* consoleVblank() copies the dirty text tilemap to VRAM during VBlank.
+ * No public prototype in console.h, so declare it; call once per frame. */
+extern void consoleVblank(void);
+
 #define COLS 6
 #define ROWS 12
 
@@ -136,9 +140,13 @@ int main(void) {
 
     consoleSetTextMapPtr(0x6800);
     consoleSetTextGfxPtr(0x3000);
-    consoleSetTextOffset(0x0100);
+    consoleSetTextOffset(0x0000);   /* tile index = (char-0x20); font is at the BG char base */
     consoleInitText(0, 16 * 2, &tilfont, &palfont);
     setMode(BG_MODE1, 0);
+    /* consoleInitText DMAs the font but does NOT set the PPU BG base
+     * registers — point BG0 at the same font ($3000) + map ($6800). */
+    bgSetGfxPtr(0, 0x3000);
+    bgSetMapPtr(0, 0x6800, SC_32x32);
     bgSetDisable(1);
     bgSetDisable(2);
 
@@ -176,6 +184,7 @@ int main(void) {
             prev = pad;
             render_score();
             WaitForVBlank();
+            consoleVblank();
             continue;
         }
         prev = pad;
@@ -194,6 +203,7 @@ int main(void) {
         draw_piece(0);
         render_score();
         WaitForVBlank();
+        consoleVblank();
     }
     return 0;
 }

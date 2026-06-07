@@ -68,13 +68,53 @@ export function lintSdccSource(source, file = "main.c", opts = {}) {
   // CONSERVATIVE: only flag when we can SEE the counter declared u8 and
   // the bound is a constant we can evaluate — never guess.
   {
-    // Collect names declared as 8-bit ints anywhere in the file.
-    const u8re = /\b(?:unsigned\s+char|char|u8|uint8_t|uint8|int8_t|int8|signed\s+char)\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*;/g;
-    const u8names = new Set();
-    let dm;
-    while ((dm = u8re.exec(source))) {
-      for (const n of dm[1].split(",")) u8names.add(n.trim());
+    // Build a SCOPE-AWARE map of where each name is declared and at what
+    // width. A name like `i` is commonly re-declared in several functions
+    // — some as uint8_t, some as uint16_t. A flat "is this name ever u8"
+    // set wrongly flags the uint16_t loop just because a DIFFERENT
+    // function declared its own `i` as uint8_t (the SMS/GG default
+    // scaffold false-positive). Instead we record EVERY declaration's
+    // line + width, then for each loop consult the nearest declaration of
+    // the counter that appears ABOVE the loop — i.e. the one actually in
+    // scope — and only flag it when that declaration is 8-bit.
+    //
+    // decls: Map<name, Array<{line:number, u8:boolean}>>  (line is 1-based)
+    const decls = new Map();
+    const addDecl = (names, line, u8) => {
+      for (const raw of names.split(",")) {
+        const n = raw.trim();
+        if (!n) continue;
+        if (!decls.has(n)) decls.set(n, []);
+        decls.get(n).push({ line, u8 });
+      }
+    };
+    const u8re   = /\b(?:unsigned\s+char|char|u8|uint8_t|uint8|int8_t|int8|signed\s+char)\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*;/;
+    // 16-bit-or-wider integer declarations (and float/double, which also
+    // can't overflow at 255). Anything not 8-bit is "wide" for our purpose.
+    const wideRe = /\b(?:unsigned\s+(?:short|int|long)|signed\s+(?:short|int|long)|short|int|long|u16|u32|u64|uint16_t|uint16|int16_t|int16|uint32_t|uint32|int32_t|int32|uint64_t|uint64|int64_t|int64|size_t|ptrdiff_t)\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*;/;
+    for (let i = 0; i < lines.length; i++) {
+      const code = lines[i].replace(/\/\/.*$/, "").replace(/\/\*.*?\*\//g, "");
+      const m8 = code.match(u8re);
+      if (m8) { addDecl(m8[1], i + 1, true); continue; }
+      const mw = code.match(wideRe);
+      if (mw) addDecl(mw[1], i + 1, false);
     }
+    // Is the counter declared 8-bit in the scope visible at `loopLine`?
+    // Use the NEAREST declaration above the loop. If the nearest visible
+    // declaration is wide (uint16_t etc.), the loop is fine.
+    const counterIsU8AtLine = (counter, loopLine) => {
+      const ds = decls.get(counter);
+      if (!ds) return false;
+      let best = null;
+      for (const d of ds) {
+        if (d.line <= loopLine && (best === null || d.line > best.line)) best = d;
+      }
+      // No declaration above the loop (e.g. param/global declared after, or
+      // out-of-order) — fall back to "flag only if EVERY decl is u8" so we
+      // never wolf-cry on a name that is also declared wide somewhere.
+      if (best === null) return ds.every((d) => d.u8);
+      return best.u8;
+    };
     const evalConst = (expr) => {
       // Only literals and pure `A * B [* C]` products of decimal/hex ints.
       const t = expr.trim();
@@ -91,7 +131,7 @@ export function lintSdccSource(source, file = "main.c", opts = {}) {
       const m = code.match(/\bfor\s*\([^;]*;\s*([A-Za-z_]\w*)\s*<\s*([^;]+?)\s*;/);
       if (!m) continue;
       const [, counter, boundExpr] = m;
-      if (!u8names.has(counter)) continue;
+      if (!counterIsU8AtLine(counter, i + 1)) continue;
       const bound = evalConst(boundExpr);
       if (bound !== null && bound > 255) {
         issues.push({

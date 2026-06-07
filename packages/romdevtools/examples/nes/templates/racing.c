@@ -56,6 +56,26 @@ static const uint8_t tile_digits[10 * 16] = {
 #define T_CAR_ENEMY 2
 #define T_DIGIT0    3
 
+/* ── Background road tiles ───────────────────────────────────────────
+ * Default PPUCTRL ($90) reads BG patterns from pattern table 1 ($1000),
+ * so these go to CHR $1000+ and are indexed independently of the sprite
+ * tiles above. Colour 1 (white, BG palette 0) draws the markings; the
+ * grey backdrop (colour 0) is the road surface.
+ *
+ * BG_T_EDGE: a solid 2px vertical stripe — the road shoulder line.
+ * BG_T_LANE: a 2px vertical dash (on for 4 rows, off for 4) — the
+ *            dashed centre lane marking when stacked down a column. */
+#define BG_T_EDGE   1
+#define BG_T_LANE   2
+static const uint8_t bg_tile_edge[16] = {
+  0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18,   /* plane 0 (colour bit 0) */
+  0,    0,    0,    0,    0,    0,    0,    0,
+};
+static const uint8_t bg_tile_lane[16] = {
+  0x18, 0x18, 0x18, 0x18, 0x00, 0x00, 0x00, 0x00,   /* dash: 4 on, 4 off */
+  0,    0,    0,    0,    0,    0,    0,    0,
+};
+
 static const uint8_t palette[32] = {
   /* BG palettes — light grey backdrop simulates road */
   0x10, 0x30, 0x16, 0x12,
@@ -91,6 +111,29 @@ static uint8_t player_lane;
 static uint8_t aabb(Car *a, Car *b) {
   return a->x < b->x + 8 && a->x + 8 > b->x
       && a->y < b->y + 8 && a->y + 8 > b->y;
+}
+
+/* Draw the static road into nametable 0 ($2000): solid shoulder lines on
+ * the outside of the outer lanes and dashed dividers between the three
+ * lanes. PPU must be OFF — call from init (uses vram_unsafe_set). Tile
+ * columns: lanes sit at 11/15/19, so dividers go at 13/17 and shoulders
+ * just outside at 9/21. */
+#define ROAD_TOP_ROW   2
+#define ROAD_BOT_ROW   27
+#define ROAD_EDGE_L    9
+#define ROAD_EDGE_R    21
+#define ROAD_DIV_1     13
+#define ROAD_DIV_2     17
+static void draw_road(void) {
+  uint8_t row;
+  uint16_t base;
+  for (row = ROAD_TOP_ROW; row <= ROAD_BOT_ROW; row++) {
+    base = (uint16_t)(0x2000 + (uint16_t)row * 32);
+    vram_unsafe_set((uint16_t)(base + ROAD_EDGE_L), BG_T_EDGE);
+    vram_unsafe_set((uint16_t)(base + ROAD_EDGE_R), BG_T_EDGE);
+    vram_unsafe_set((uint16_t)(base + ROAD_DIV_1),  BG_T_LANE);
+    vram_unsafe_set((uint16_t)(base + ROAD_DIV_2),  BG_T_LANE);
+  }
 }
 
 static void reset_run(void) {
@@ -138,7 +181,13 @@ void main(void) {
   chr_ram_upload(T_CAR_ENEMY * 16, tile_car_enemy, 16);
   chr_ram_upload(T_DIGIT0    * 16, tile_digits,    sizeof(tile_digits));
 
+  /* BG road tiles live in pattern table 1 ($1000) — that's where the
+   * default PPUCTRL ($90) tells the PPU to read background patterns. */
+  chr_ram_upload((uint16_t)(0x1000 + BG_T_EDGE * 16), bg_tile_edge, 16);
+  chr_ram_upload((uint16_t)(0x1000 + BG_T_LANE * 16), bg_tile_lane, 16);
+
   palette_load(palette);
+  draw_road();          /* paint the static road while the PPU is off */
   oam_clear();
   ppu_on_all();
   sound_init();
@@ -198,6 +247,6 @@ void main(void) {
       }
     }
 
-    if (score < 65500) score++;
+    if (score < 65500u) score++;
   }
 }

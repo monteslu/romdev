@@ -1,21 +1,22 @@
-/* ── hello_sprite.c — SMS starter (one sprite + d-pad) ──────────────
+/* ── hello_sprite.c — Game Gear starter (one sprite + d-pad) ────────
  *
- * Drives one sprite around the SMS screen with the directional pad.
- * Uses the bundled SMS runtime helpers (gg_vdp_init, gg_load_tiles,
- * gg_load_palette, sms_sprite_*, gg_vblank_wait, gg_joypad_read).
+ * Drives one sprite around the Game Gear screen with the directional
+ * pad. Uses the bundled GG runtime helpers (gg_vdp_init, gg_load_tiles,
+ * gg_load_palette, gg_sprite_*, gg_vblank_wait, gg_joypad_read).
  *
- * SMS hardware notes the templates assume:
- *   - 256×192 visible area in mode 4
+ * GG hardware notes the templates assume:
+ *   - 256×192 internal frame; only the centered 160×144 region SHOWS.
+ *     Keep gameplay sprites inside [VIS_X0..VIS_X1] x [VIS_Y0..VIS_Y1].
  *   - Sprite attribute table at VRAM $3F00 (configured by gg_vdp_init)
- *   - Sprite tile data at VRAM $2000 (R6 = 0xFB)
+ *   - Sprite tile data at VRAM $2000 (R6 = 0xFF → SA13 set → $2000)
  *   - 64 sprite slots × 4 bytes (Y / X / tile / unused)
  *
  * Multi-file project — main.c plus the runtime .c files. Build with:
- *   build({ output: "rom", platform:"sms", language:"c",
+ *   build({ output: "rom", platform:"gg", language:"c",
  *                sources: { "main.c": ..., "vdp_init.c": ..., ... },
  *                includes: { "gg_hw.h": ... }})
  *
- * createProject({platform:"sms", template:"hello_sprite"}) copies all
+ * createProject({platform:"gg", template:"hello_sprite"}) copies all
  * the bits into your project tree.
  */
 #include "gg_hw.h"
@@ -34,15 +35,28 @@ extern void gg_sprite_init(void);
 extern void gg_sprite_set(uint8_t slot, uint8_t x, uint8_t y, uint8_t tile);
 extern void gg_sat_upload(void);
 
-/* BG palette: backdrop blue + yellow. Sprite palette (entries 16-31)
- * we set white at index 17 so our sprite is visible.
- * SMS CRAM is 2-2-2 BGR: 0x00=black, 0x3F=white. */
-static const uint8_t palette[32] = {
-  0x10,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
-  0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
-  0x00,0x3F,0x00,0x00, 0x00,0x00,0x00,0x00,
-  0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
+/* GG palette = 32 entries × 2 bytes (4-4-4 BGR LE): low=(g<<4)|r, high=b.
+ * Entries 0-15 = BG, 16-31 = SPRITE. gg_load_palette reads 64 bytes, so a
+ * 32-byte SMS-style array leaves the sprite palette (16-31) reading past the
+ * array = garbage = INVISIBLE sprites. Sprite colour index N uses entry 16+N,
+ * so sprite colour 1 = entry 17 (white here). */
+static const uint8_t palette[64] = {
+  /* BG 0-15: entry 0 = dark navy backdrop */
+  0x20,0x02, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
+  0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
+  /* SPRITE 16-31: 16=transparent, 17=white */
+  0,0, 0xFF,0x0F, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
+  0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
 };
+
+/* ── Game Gear visible viewport ──────────────────────────────────────
+ * Sprite OAM uses SMS HARDWARE coordinates (256x192 space), but the GG
+ * LCD only shows the CENTER 160x144. Keep the sprite inside this box or
+ * it's placed "correctly" in hardware yet INVISIBLE on screen. */
+#define VIS_X0  48
+#define VIS_Y0  24
+#define VIS_X1  207   /* 48 + 160 - 1 */
+#define VIS_Y1  167   /* 24 + 144 - 1 */
 
 /* One 8×8 sprite tile (4bpp interleaved). Filled square in color 1. */
 static const uint8_t sprite_tile[32] = {
@@ -53,8 +67,8 @@ static const uint8_t sprite_tile[32] = {
 };
 
 void main(void) {
-  uint8_t x = 124;   /* mid-screen X */
-  uint8_t y = 88;    /* mid-screen Y */
+  uint8_t x = (VIS_X0 + VIS_X1) / 2;   /* center of the visible window */
+  uint8_t y = (VIS_Y0 + VIS_Y1) / 2;
   uint8_t prev = 0;
 
   gg_vdp_init();
@@ -80,10 +94,11 @@ void main(void) {
     gg_sat_upload();
 
     pad = gg_joypad_read();
-    if (pad & JOY_LEFT  && x > 0)       x = (uint8_t)(x - 2);
-    if (pad & JOY_RIGHT && x < 248)     x = (uint8_t)(x + 2);
-    if (pad & JOY_UP    && y > 0)       y = (uint8_t)(y - 2);
-    if (pad & JOY_DOWN  && y < 184)     y = (uint8_t)(y + 2);
+    /* Clamp to the visible window so the sprite never slides off-screen. */
+    if (pad & JOY_LEFT  && x > VIS_X0)      x = (uint8_t)(x - 2);
+    if (pad & JOY_RIGHT && x < VIS_X1 - 8)  x = (uint8_t)(x + 2);
+    if (pad & JOY_UP    && y > VIS_Y0)      y = (uint8_t)(y - 2);
+    if (pad & JOY_DOWN  && y < VIS_Y1 - 8)  y = (uint8_t)(y + 2);
     prev = pad;
     (void)prev;
   } while (1);

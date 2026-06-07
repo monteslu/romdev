@@ -217,93 +217,100 @@ MAIN:
   STA AUDV0
 .sfx_done:
 
-  ; Position P0 horizontally at column 16 (race-the-beam delay)
+  ; ── Position P0 / P1 / HMOVE — exactly 3 WSYNC-bounded lines ───────
+  ; CRITICAL: every RESPx write AND the STA HMOVE must complete inside
+  ; the 76-cycle scanline that began with its STA WSYNC. A DEX/BNE delay
+  ; loop costs 5 cycles/iteration, so the loop count must be small enough
+  ; that RESPx still lands before the line ends. The old code used
+  ; LDX #38 (~189 cycles = 2.5 scanlines!) with no WSYNC before RESP1/
+  ; HMOVE, so it emitted ~2-3 UNCOUNTED scanlines past the 262 budget →
+  ; ~265 lines/frame → vsync never locks (rolling magenta band). HMOVE
+  ; was also issued mid-line; it must follow a fresh WSYNC.
+
+  ; Line 1 of 3: coarse-position P0 (left, ~column 16)
   STA WSYNC
-  LDA #1
-  STA WSYNC
-  LDX #15
+  LDX #5
 .p0d:
   DEX
-  BNE .p0d
+  BNE .p0d           ; ~24 cycles in → P0 lands near the left edge
   STA RESP0
-  ; Position P1 at column 144
+  ; Line 2 of 3: coarse-position P1 (right, ~column 132)
   STA WSYNC
-  LDX #38
+  LDX #13
 .p1d:
   DEX
-  BNE .p1d
+  BNE .p1d           ; ~64 cycles in (< 76) → P1 lands near the right
   STA RESP1
+  ; Line 3 of 3: apply HMOVE on a FRESH line, right after WSYNC
+  STA WSYNC
   STA HMOVE
 
   LDA #0
   STA VBLANK
 
-  ; ── Visible (192 lines) ───────────────────────────────────────────
+  ; ── Visible (192 lines) — TWO-LINE KERNEL ─────────────────────────
+  ; CRITICAL: a single scanline is only 76 CPU cycles. The full per-line
+  ; render here (playfield walls + P0 + P1 + ball, each a SEC/SBC/CMP +
+  ; conditional store) is ~88 cycles — it does NOT fit in one line. In a
+  ; 1-line kernel each WSYNC iteration then spills past the line boundary,
+  ; so 192 iterations stretch to ~232 emitted lines → ~250-line frame →
+  ; vsync never locks (rolling magenta band — THE bug).
+  ;
+  ; The fix is the standard 2600 "2-line kernel": each loop pass renders
+  ; TWO scanlines and splits the work across two WSYNCs, doubling the
+  ; budget to ~152 cycles. 96 passes × 2 lines = 192 visible lines.
+  ; Y counts 192→2 in steps of 2; paddles/ball move in 2px steps (fine
+  ; for Pong). The branchless "LDA #off / CMP / BCS skip / LDA #on" form
+  ; also drops the JMPs the old code paid every line.
   LDY #192
 .draw:
+  ; ---- first line of the pair: playfield walls + left paddle ----
   STA WSYNC
-  TYA
-  ; Top-bottom walls: lines 0..3 and 188..191 draw a full-width PF
-  CMP #4
-  BCS .nottop
-  LDA #$FF
-  STA PF0
-  STA PF1
-  STA PF2
-  JMP .pf_done
-.nottop:
-  CMP #188
-  BCC .notbot
-  LDA #$FF
-  STA PF0
-  STA PF1
-  STA PF2
-  JMP .pf_done
-.notbot:
+  ; Top + bottom walls: full-width PF on the outer rows (Y>=189 / Y<5)
   LDA #0
+  CPY #189
+  BCS .wall
+  CPY #5
+  BCS .nowall
+.wall:
+  LDA #$FF
+.nowall:
   STA PF0
   STA PF1
   STA PF2
-.pf_done:
   ; Left paddle: 8 lines starting at P0_Y
   TYA
   SEC
   SBC P0_Y
   CMP #8
-  BCS .p0blank
-  LDA #$FF
-  STA GRP0
-  JMP .p0done
-.p0blank:
   LDA #0
+  BCS .p0off
+  LDA #$FF
+.p0off:
   STA GRP0
-.p0done:
+  ; ---- second line of the pair: right paddle + ball ----
+  STA WSYNC
   ; Right paddle: 8 lines starting at P1_Y
   TYA
   SEC
   SBC P1_Y
   CMP #8
-  BCS .p1blank
-  LDA #$FF
-  STA GRP1
-  JMP .p1done
-.p1blank:
   LDA #0
+  BCS .p1off
+  LDA #$FF
+.p1off:
   STA GRP1
-.p1done:
   ; Ball: 2 lines starting at BALL_Y
   TYA
   SEC
   SBC BALL_Y
   CMP #2
-  BCS .blblank
-  LDA #2
-  STA ENABL
-  JMP .bldone
-.blblank:
   LDA #0
+  BCS .bloff
+  LDA #2
+.bloff:
   STA ENABL
-.bldone:
+  DEY
   DEY
   BNE .draw
 

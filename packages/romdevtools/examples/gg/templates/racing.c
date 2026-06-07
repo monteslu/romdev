@@ -24,18 +24,31 @@ extern void    gg_sprite_init(void);
 extern void    gg_sprite_set(uint8_t slot, uint8_t x, uint8_t y, uint8_t tile);
 extern void    gg_sat_upload(void);
 
-#define LANE_LEFT_X    72
-#define LANE_MID_X    124
-#define LANE_RIGHT_X  176
-#define PLAYER_Y      160
+/* ── Game Gear visible viewport ──────────────────────────────────────
+ * Only the centered 160x144 of the 256x192 frame shows. Lanes and the
+ * player must sit inside [VIS_X0..VIS_X1] x [VIS_Y0..VIS_Y1]. */
+#define VIS_X0         48
+#define VIS_Y0         24
+#define VIS_X1         207   /* 48 + 160 - 1 */
+#define VIS_Y1         167   /* 24 + 144 - 1 */
+
+#define LANE_LEFT_X    (VIS_X0 + 28)    /* 76  */
+#define LANE_MID_X     ((VIS_X0 + VIS_X1) / 2 - 4)  /* ~123 */
+#define LANE_RIGHT_X   (VIS_X1 - 36)    /* 171 */
+#define PLAYER_Y       (VIS_Y1 - 16)
 #define MAX_OBSTACLES   4
 
-static const uint8_t palette[32] = {
-  0x10, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-  /* Sprite palette: white (1), red (2) */
-  0x00, 0x3F, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+/* GG palette = 32 entries × 2 bytes (4-4-4 BGR LE): low=(g<<4)|r, high=b.
+ * gg_load_palette reads 64 bytes; a 32-byte array leaves the sprite palette
+ * (entries 16-31) reading garbage = invisible sprites. Sprite colour 1 = entry
+ * 17 (white), colour 2 = entry 18 (red). */
+static const uint8_t palette[64] = {
+  /* BG 0-15: entry 0 = dark navy backdrop */
+  0x20,0x02, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
+  0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
+  /* SPRITE 16-31: 16=transparent, 17=white, 18=red */
+  0,0, 0xFF,0x0F, 0x0F,0x00, 0,0, 0,0, 0,0, 0,0, 0,0,
+  0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
 };
 
 /* Two sprite tiles — player (colour 1) + enemy (colour 2). */
@@ -86,7 +99,7 @@ static void spawn_obstacle(void) {
   for (i = 0; i < MAX_OBSTACLES; i++) {
     if (!obstacles[i].alive) {
       obstacles[i].x = lane_x[(spawn_timer * 13) % 3];
-      obstacles[i].y = 0;
+      obstacles[i].y = VIS_Y0;   /* enter at the top of the visible window */
       obstacles[i].alive = 1;
       return;
     }
@@ -142,7 +155,7 @@ void main(void) {
     for (i = 0; i < MAX_OBSTACLES; i++) {
       if (!obstacles[i].alive) continue;
       obstacles[i].y = (uint8_t)(obstacles[i].y + step);
-      if (obstacles[i].y >= 184) obstacles[i].alive = 0;
+      if (obstacles[i].y >= VIS_Y1) obstacles[i].alive = 0;  /* off visible bottom */
     }
 
     spawn_timer = (uint8_t)(spawn_timer + 1);

@@ -28,6 +28,11 @@
 
 extern char tilfont, palfont;
 
+/* consoleVblank() copies the dirty text tilemap to VRAM during VBlank.
+ * It has no public prototype in console.h, so declare it here. Call it
+ * once per frame (after WaitForVBlank) or via nmiSet(consoleVblank). */
+extern void consoleVblank(void);
+
 int main(void) {
     /* ── 1. PVSnesLib text-mode setup ─────────────────────────────
      * Map + tile-data + palette-offset addresses are conventions —
@@ -36,14 +41,19 @@ int main(void) {
      */
     consoleSetTextMapPtr(0x6800);
     consoleSetTextGfxPtr(0x3000);
-    consoleSetTextOffset(0x0100);
+    consoleSetTextOffset(0x0000);   /* tile index = (char-0x20); font is at the BG char base */
     consoleInitText(0, 16 * 2, &tilfont, &palfont);
 
     /* ── 2. Pick a BG mode ────────────────────────────────────────
      * BG_MODE1 = 16-color BG0/BG1 + 4-color BG2. Good default.
+     * consoleInitText only DMAs the font/palette to VRAM — it does NOT
+     * program the PPU BG base registers, so point BG0 at the same font
+     * ($3000) + map ($6800) addresses we gave the console above.
      * Disable BG1 / BG2 since we only use BG0 for text here.
      */
     setMode(BG_MODE1, 0);
+    bgSetGfxPtr(0, 0x3000);
+    bgSetMapPtr(0, 0x6800, SC_32x32);
     bgSetDisable(1);
     bgSetDisable(2);
 
@@ -66,6 +76,7 @@ int main(void) {
      */
     while (1) {
         WaitForVBlank();
+        consoleVblank();   /* flush any consoleDrawText changes to VRAM */
     }
     return 0;
 }

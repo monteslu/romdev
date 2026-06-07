@@ -35,7 +35,7 @@ void gg_vdp_init(void) {
     0xFF,  /* R3:  color table (ignored in M4) */
     0xFF,  /* R4:  BG tile data at $0000 */
     0xFF,  /* R5:  sprite attr table at $3F00 */
-    0xFB,  /* R6:  sprite tile data at $0000 (set 0xFF for $2000) */
+    0xFF,  /* R6:  sprite tile data at $2000 (SA13 set; scaffolds upload here) */
     0x00,  /* R7:  border = sprite palette entry 0 */
     0x00,  /* R8:  BG X scroll */
     0x00,  /* R9:  BG Y scroll */

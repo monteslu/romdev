@@ -118,7 +118,7 @@ static void lock_piece(void) {
                 grid[r][c]     = 0;
                 grid[r][c + 1] = 0;
                 grid[r][c + 2] = 0;
-                if (score < 65500) score += 30;
+                if (score < 65500u) score += 30;
             }
         }
     }
