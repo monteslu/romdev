@@ -25,16 +25,19 @@ extern uint8_t gg_joypad_read(void);
 #define T_R     1
 #define T_G     2
 #define T_B     3
+#define T_WALL  4   /* well border         */
+#define T_FIELD 5   /* empty well interior */
 
 static const uint8_t palette[32] = {
-  /* BG palette: backdrop black, red, green, blue */
-  0x00,0x03,0x0C,0x30, 0x00,0x00,0x00,0x00,
+  /* BG palette: 0 backdrop navy, 1 red, 2 green, 3 blue, 4 wall grey,
+   * 5 dim field blue */
+  0x10,0x03,0x0C,0x30, 0x15,0x14, 0x00,0x00,
   0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
   0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
   0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
 };
 
-static const uint8_t bg_tiles[32 * 4] = {
+static const uint8_t bg_tiles[32 * 6] = {
   /* T_BLANK */
   0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
   0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
@@ -53,6 +56,16 @@ static const uint8_t bg_tiles[32 * 4] = {
   0xFF,0xFF,0x00,0x00, 0xFF,0xFF,0x00,0x00,
   0xFF,0xFF,0x00,0x00, 0xFF,0xFF,0x00,0x00,
   0xFF,0xFF,0x00,0x00, 0xFF,0xFF,0x00,0x00,
+  /* T_WALL — colour 4 fill (plane 2 set) */
+  0x00,0x00,0xFF,0x00, 0x00,0x00,0xFF,0x00,
+  0x00,0x00,0xFF,0x00, 0x00,0x00,0xFF,0x00,
+  0x00,0x00,0xFF,0x00, 0x00,0x00,0xFF,0x00,
+  0x00,0x00,0xFF,0x00, 0x00,0x00,0xFF,0x00,
+  /* T_FIELD — colour 5 fill (planes 0+2 set) = dim field */
+  0xFF,0x00,0xFF,0x00, 0xFF,0x00,0xFF,0x00,
+  0xFF,0x00,0xFF,0x00, 0xFF,0x00,0xFF,0x00,
+  0xFF,0x00,0xFF,0x00, 0xFF,0x00,0xFF,0x00,
+  0xFF,0x00,0xFF,0x00, 0xFF,0x00,0xFF,0x00,
 };
 
 static uint8_t grid[ROWS][COLS];
@@ -76,13 +89,30 @@ static uint8_t tile_for(uint8_t c) {
   if (c == 1) return T_R;
   if (c == 2) return T_G;
   if (c == 3) return T_B;
-  return T_BLANK;
+  return T_FIELD;   /* empty cell shows the dim well interior, not backdrop */
 }
 
+/* GG shows only the centered cols 6..25 / rows 3..20. Place the 6×12 grid
+ * at tilemap cols 7..12, rows 4..15 so the whole well sits inside that
+ * visible band. */
 static void draw_cell(int8_t col, int8_t row, uint8_t cell) {
   if (row < 0 || row >= ROWS) return;
-  /* Centre the 6-col grid; +7 columns left margin, +1 row top margin. */
-  gg_set_tilemap_cell((uint8_t)(row + 1), (uint8_t)(col + 7), tile_for(cell), 0);
+  gg_set_tilemap_cell((uint8_t)(row + 4), (uint8_t)(col + 7), tile_for(cell), 0);
+}
+
+/* Draw the well: a grey border frame around the 6×12 play field with a dim
+ * field interior, so the playfield is clearly visible even when empty. The
+ * grid maps cell (col,row) -> tilemap (row+4, col+7) = rows 4..15 cols 7..12.
+ * Frame the perimeter at rows 3..16, cols 6..13 — inside the GG viewport. */
+static void draw_well(void) {
+  uint8_t r, c;
+  for (r = 3; r <= 16; r++) {
+    for (c = 6; c <= 13; c++) {
+      uint8_t t = T_FIELD;
+      if (r == 3 || r == 16 || c == 6 || c == 13) t = T_WALL;
+      gg_set_tilemap_cell(r, c, t, 0);
+    }
+  }
 }
 
 static void draw_grid(void) {
@@ -151,7 +181,7 @@ void main(void) {
 
   gg_vdp_init();
   gg_load_palette(palette);
-  gg_load_tiles(0x0000, bg_tiles, 32 * 4);
+  gg_load_tiles(0x0000, bg_tiles, 32 * 6);
 
   for (r = 0; r < 24; r++) for (c = 0; c < 32; c++) gg_set_tilemap_cell(r, c, T_BLANK, 0);
   for (r = 0; r < ROWS; r++) for (c = 0; c < COLS; c++) grid[r][c] = 0;
@@ -159,6 +189,7 @@ void main(void) {
   score = 0;
   fall_timer = 0;
   new_piece();
+  draw_well();
   draw_grid();
 
   sfx_init();

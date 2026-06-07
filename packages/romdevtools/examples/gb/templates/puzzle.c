@@ -21,8 +21,22 @@
 #define T_R     1
 #define T_G     2
 #define T_B     3
+#define T_WALL  4
 
-static const uint8_t tile_blank[16] = { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 };
+/* tile_blank is the EMPTY-cell / backdrop tile. It is NOT all-zero: a
+ * subtle dither (colour 0 + faint colour 1) so the empty playfield and the
+ * area around the well read as a textured surface, never one flat colour
+ * (the #1 GB "why is it blank" footgun). Locked blocks / the active piece
+ * overdraw it with the R/G/B shape tiles. */
+static const uint8_t tile_blank[16] = {
+    0x00,0x00, 0x22,0x00, 0x00,0x00, 0x88,0x00,
+    0x00,0x00, 0x22,0x00, 0x00,0x00, 0x88,0x00,
+};
+/* Well frame: a solid colour-2 border drawn around the play area. */
+static const uint8_t tile_wall[16] = {
+    0xFF,0xFF, 0xFF,0xFF, 0xFF,0xFF, 0xFF,0xFF,
+    0xFF,0xFF, 0xFF,0xFF, 0xFF,0xFF, 0xFF,0xFF,
+};
 /* Three distinct tile shapes (since GB BG is 2bpp, we differentiate
  * by *shape*, not colour-on-CGB). The CGB palette path could give us
  * real colours; for DMG-compatibility we use shape. */
@@ -131,6 +145,20 @@ static void upload_tile(uint8_t slot, const uint8_t *src) {
     for (i = 0; i < 16; i++) dst[i] = src[i];
 }
 
+/* Draw the well frame around the 6×12 play area. Grid cells live at
+ * map[(row+1)*32 + (col+7)] (rows 1..12, cols 7..12), so the frame is the
+ * column to each side (6 and 13) and the floor row just below (row 13). */
+static void draw_well(void) {
+    uint8_t *map = (uint8_t *)0x9800;
+    uint8_t r;
+    for (r = 1; r <= 12; r++) {
+        map[r * 32 + 6]  = T_WALL;   /* left wall  */
+        map[r * 32 + 13] = T_WALL;   /* right wall */
+    }
+    for (r = 6; r <= 13; r++)
+        map[13 * 32 + r] = T_WALL;   /* floor      */
+}
+
 void main(void) {
     uint8_t pad, prev = 0, fall_rate, t;
     int16_t r, c;
@@ -145,6 +173,7 @@ void main(void) {
     upload_tile(T_R,     tile_r);
     upload_tile(T_G,     tile_g);
     upload_tile(T_B,     tile_b);
+    upload_tile(T_WALL,  tile_wall);
 
     BCPS = 0x80;
     for (i = 0; i < 4; i++) {
@@ -165,6 +194,7 @@ void main(void) {
     score = 0;
     fall_timer = 0;
     new_piece();
+    draw_well();
     draw_grid();
 
     LCDC = LCDC_LCD_ON | LCDC_BG_ON | LCDC_TILE_DATA_LO;

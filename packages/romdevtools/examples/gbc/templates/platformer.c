@@ -28,9 +28,26 @@ static const uint8_t tile_platform[16] = {
     0xFF,0xFF, 0x80,0x80, 0x80,0x80, 0x80,0x80,
     0x80,0x80, 0x80,0x80, 0x80,0x80, 0xFF,0xFF,
 };
+/* ── Backdrop tiles ───────────────────────────────────────────────────
+ * Fill the whole world so the screen is never one flat colour (the #1 GB
+ * "why is it blank" footgun). tile_sky is a sparse dot pattern over the
+ * sky; tile_ground is a textured dirt fill under the floor line. */
+static const uint8_t tile_sky[16] = {
+    0x00,0x00, 0x00,0x00, 0x00,0x00, 0x20,0x20,
+    0x00,0x00, 0x00,0x00, 0x02,0x02, 0x00,0x00,
+};
+static const uint8_t tile_ground[16] = {
+    0xFF,0x00, 0xDB,0x24, 0xFF,0x00, 0x6D,0x92,
+    0xFF,0x00, 0xDB,0x24, 0xFF,0x00, 0x6D,0x92,
+};
+#define T_BLANK    0
+#define T_PLATFORM 2
+#define T_SKY      3
+#define T_GROUND   4
 
 static const uint16_t obj_palette[4] = { 0x7FFF, 0x001F, 0x03E0, 0x7C00 };
-static const uint16_t bg_palette[4]  = { 0x7FFF, 0x5294, 0x294A, 0x0000 };
+/* BG palette: 0 sky-blue, 1 mid, 2 dirt-dark, 3 near-black detail. */
+static const uint16_t bg_palette[4]  = { 0x7E10, 0x5294, 0x114A, 0x0000 };
 
 typedef struct { int16_t x, y, w, h; } Rect;
 
@@ -74,8 +91,10 @@ static void paint_platforms(void) {
     const Rect *p;
     /* k MUST be uint16_t: 32*18 = 576 > 255, so a uint8_t counter would
      * never reach the bound and this loop would spin forever (the BG map
-     * never clears, main() never starts). Classic SDCC limited-range trap. */
-    for (k = 0; k < 32 * 18; k++) map[k] = 0; /* blank tile slot 0 */
+     * never clears, main() never starts). Classic SDCC limited-range trap.
+     * Fill sky above the floor line (row 16 = y 128) and textured ground
+     * at and below it, so the whole world is a real scene, not blank. */
+    for (k = 0; k < 32 * 18; k++) map[k] = (k >= 16 * 32) ? T_GROUND : T_SKY;
     for (i = 0; i < N_PLATFORMS; i++) {
         p = &platforms[i];
         cx = p->x >> 3;
@@ -84,7 +103,7 @@ static void paint_platforms(void) {
         ch = (p->h + 7) >> 3;
         for (j = 0; j < cw; j++) {
             if (cx + j < 32 && cy < 32)
-                map[cy * 32 + cx + j] = 2; /* tile slot 2 = platform */
+                map[cy * 32 + cx + j] = T_PLATFORM; /* platform top edge */
         }
     }
 }
@@ -111,6 +130,8 @@ void main(void) {
     upload_tile(0, tile_blank);
     upload_tile(1, tile_player);
     upload_tile(2, tile_platform);
+    upload_tile(T_SKY,    tile_sky);
+    upload_tile(T_GROUND, tile_ground);
 
     OCPS = 0x80;
     for (i = 0; i < 4; i++) {

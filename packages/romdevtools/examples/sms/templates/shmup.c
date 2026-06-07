@@ -15,6 +15,7 @@ extern void sms_vdp_display_on(void);
 extern void sms_vdp_set_addr(uint16_t addr, uint8_t prefix);
 extern void sms_load_palette(const uint8_t *palette);
 extern void sms_load_tiles(uint16_t vram_dest, const uint8_t *src, uint16_t byte_count);
+extern void sms_set_tilemap_cell(uint8_t row, uint8_t col, uint8_t tile_idx, uint8_t attr);
 extern void sms_vblank_wait(void);
 extern uint8_t sms_joypad_read(void);
 extern void sms_sprite_init(void);
@@ -29,12 +30,48 @@ extern void sms_sat_upload(void);
 #define T_ENEMY  2
 
 static const uint8_t palette[32] = {
-  0x10,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
+  /* BG: 0 = backdrop, 1 = deep space blue, 2 = lighter space blue, 3 = star white */
+  0x10,0x08,0x20,0x3F, 0x00,0x00,0x00,0x00,
   0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
   /* Sprite palette: white, yellow, red */
   0x00,0x3F,0x0F,0x03, 0x00,0x00,0x00,0x00,
   0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
 };
+
+/* Three BG tiles for the starfield, loaded into the BG tile bank at $0000:
+ *   tile 0 = deep space (solid colour 1)
+ *   tile 1 = lighter space band (solid colour 2)
+ *   tile 2 = space with a star (mostly colour 1, one colour-3 pixel) */
+static const uint8_t bg_tiles[96] = {
+  /* tile 0 = deep space (colour 1 -> plane 0 set) */
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  /* tile 1 = lighter band (colour 2 -> plane 1 set) */
+  0x00,0xFF,0x00,0x00, 0x00,0xFF,0x00,0x00,
+  0x00,0xFF,0x00,0x00, 0x00,0xFF,0x00,0x00,
+  0x00,0xFF,0x00,0x00, 0x00,0xFF,0x00,0x00,
+  0x00,0xFF,0x00,0x00, 0x00,0xFF,0x00,0x00,
+  /* tile 2 = deep space + a star: row 3 col 3 = colour 3 (planes 0+1) */
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  0xFF,0x00,0x00,0x00, 0xFF,0x10,0x00,0x00,
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+};
+
+/* Paint the whole 32x24 SMS screen with a banded starfield so the screen
+ * is clearly space, not a flat backdrop. BG tile bank is $0000. */
+static void draw_starfield(void) {
+  uint8_t row, col;
+  for (row = 0; row < 24; row++) {
+    for (col = 0; col < 32; col++) {
+      uint8_t t = (row & 2) ? 1 : 0;             /* alternating depth bands */
+      if (((row * 7 + col * 5) & 7) == 0) t = 2; /* sparse stars */
+      sms_set_tilemap_cell(row, col, t, 0);
+    }
+  }
+}
 
 static const uint8_t sprite_tiles[32 * 3] = {
   /* T_SHIP — diamond using colour 1 (white) */
@@ -96,7 +133,9 @@ void main(void) {
 
   sms_vdp_init();
   sms_load_palette(palette);
-  sms_load_tiles(0x2000, sprite_tiles, 32 * 3);
+  sms_load_tiles(0x0000, bg_tiles, 96);          /* BG tiles -> BG bank $0000 */
+  sms_load_tiles(0x2000, sprite_tiles, 32 * 3);  /* sprite tiles -> $2000 */
+  draw_starfield();
 
   player.x = 120; player.y = 160; player.alive = 1;
   {

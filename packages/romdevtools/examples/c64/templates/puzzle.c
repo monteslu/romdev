@@ -40,6 +40,35 @@ static void wait_vblank(void) {
   while (PEEK(VIC_RASTER) >= 250) { }
 }
 
+/* Paint the playfield surround so the board reads as a real puzzle screen
+ * instead of a tiny well floating in a black void: a dithered backdrop fills
+ * the whole 40x25 matrix (two dark blues, so two colours share the screen
+ * and neither dominates), then a bright frame is drawn one cell outside the
+ * 6x12 well, and the well interior is cleared to black so the falling blocks
+ * pop. Call ONCE before draw_grid(); draw_grid() owns the interior after. */
+static void draw_field(void) {
+  uint16_t i;
+  uint8_t r, c;
+  int8_t  fr, fc;
+  for (i = 0; i < 1000; i++) {
+    SCREEN[i] = 0xA0;                       /* solid block backdrop */
+    COLORS[i] = ((i ^ (i >> 5)) & 1) ? 0x06 : 0x0E;  /* blue / light blue */
+  }
+  /* Bright frame one cell outside the well. */
+  for (fc = -1; fc <= COLS; fc++) {
+    r = (uint8_t)(GRID_R - 1);       SCREEN[r * 40 + GRID_C + fc] = 0xA0; COLORS[r * 40 + GRID_C + fc] = 0x01;
+    r = (uint8_t)(GRID_R + ROWS);    SCREEN[r * 40 + GRID_C + fc] = 0xA0; COLORS[r * 40 + GRID_C + fc] = 0x01;
+  }
+  for (fr = -1; fr <= ROWS; fr++) {
+    r = (uint8_t)(GRID_R + fr);
+    SCREEN[r * 40 + GRID_C - 1]   = 0xA0; COLORS[r * 40 + GRID_C - 1]   = 0x01;
+    SCREEN[r * 40 + GRID_C + COLS] = 0xA0; COLORS[r * 40 + GRID_C + COLS] = 0x01;
+  }
+  /* Clear the well interior to black so colored blocks stand out. */
+  for (r = 0; r < ROWS; r++)
+    for (c = 0; c < COLS; c++) SCREEN[(GRID_R + r) * 40 + GRID_C + c] = ' ';
+}
+
 static uint8_t rng_pick(void) {
   rng = rng * 1103515245u + 12345u;
   return (uint8_t)(1 + (rng >> 16) % 3);
@@ -131,14 +160,15 @@ static void lock_piece(void) {
 
 void main(void) {
   uint8_t r, c, pad, prev = 0, fall_rate, t;
-  POKE(VIC_BORDER, 0x00);
-  POKE(VIC_BG0,    0x00);
+  POKE(VIC_BORDER, 0x06);   /* blue border frames the playfield */
+  POKE(VIC_BG0,    0x00);   /* black well interior so blocks pop */
 
   for (r = 0; r < ROWS; r++)
     for (c = 0; c < COLS; c++) grid[r][c] = 0;
 
   score = 0; fall_timer = 0;
   sfx_init();
+  draw_field();             /* paint the textured surround + well frame */
   new_piece();
   draw_grid();
 

@@ -53,12 +53,39 @@ static const uint8_t tile_block_b[16] = {
   0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
   0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
 };
+/* BG scenery tiles — painted into the nametable so the playfield reads as a
+ * real machine on boot (without them the screen is just sprites on flat
+ * black). All live in the BACKGROUND pattern table ($1000); the block tiles
+ * above are sprites ($0000).
+ *
+ *   BG_WALL  — solid bordered block (idx 1, steel blue): the well frame.
+ *   BG_BRICK — a brick/dither pattern (idx 2) tiling the cabinet wall that
+ *              surrounds the well, so the whole screen is covered.
+ *   BG_INNER — a faint grid speck (idx 3) lining the inside of the well so
+ *              empty cells read as a recessed playfield, not a black hole. */
+static const uint8_t tile_wall[16] = {
+  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+  0,    0,    0,    0,    0,    0,    0,    0,
+};
+static const uint8_t tile_brick[16] = {
+  0,    0,    0,    0,    0,    0,    0,    0,        /* plane 0 clear */
+  0xFF, 0x80, 0x80, 0x80, 0xFF, 0x08, 0x08, 0x08,   /* plane 1 → colour 2 brick */
+};
+static const uint8_t tile_inner[16] = {
+  0x88, 0x00, 0x00, 0x00, 0x88, 0x00, 0x00, 0x00,   /* plane 0 specks */
+  0x88, 0x00, 0x00, 0x00, 0x88, 0x00, 0x00, 0x00,   /* plane 1 too → colour 3 */
+};
+#define BG_WALL  1   /* BG tile index 1 → uploaded to $1010 */
+#define BG_BRICK 2   /* BG tile index 2 → uploaded to $1020 */
+#define BG_INNER 3   /* BG tile index 3 → uploaded to $1030 */
 
 static const uint8_t palette[32] = {
-  0x0F, 0x10, 0x20, 0x30,
-  0x0F, 0x10, 0x20, 0x30,
-  0x0F, 0x10, 0x20, 0x30,
-  0x0F, 0x10, 0x20, 0x30,
+  /* BG0: backdrop near-black, wall = steel blue (idx1), brick = brown
+   * (idx2), inner grid = dark grey (idx3). */
+  0x0F, 0x11, 0x17, 0x00,
+  0x0F, 0x11, 0x17, 0x00,
+  0x0F, 0x11, 0x17, 0x00,
+  0x0F, 0x11, 0x17, 0x00,
   /* Sprite palette 0: idx1=red, idx2=green, idx3=blue */
   0x0F, 0x16, 0x1A, 0x12,
   0x0F, 0x16, 0x1A, 0x12,
@@ -156,11 +183,45 @@ void main(void) {
   int8_t  i;
 
   ppu_off();
-  chr_ram_upload(0x0000, tile_blank,    16);
-  chr_ram_upload(0x0010, tile_block_r,  16);
+  chr_ram_upload(0x0000, tile_blank,    16);  /* sprite slot 0 */
+  chr_ram_upload(0x0010, tile_block_r,  16);  /* sprite slots 1..3 */
   chr_ram_upload(0x0020, tile_block_g,  16);
   chr_ram_upload(0x0030, tile_block_b,  16);
+  chr_ram_upload(0x1010, tile_wall,     16);  /* BG slot 1 (background table) */
+  chr_ram_upload(0x1020, tile_brick,    16);  /* BG slot 2 (cabinet wall)     */
+  chr_ram_upload(0x1030, tile_inner,    16);  /* BG slot 3 (well interior)    */
   palette_load(palette);
+
+  /* Draw the cabinet + well into the nametable while rendering is off
+   * (vram_unsafe_set = raw PPU write; the friendly tile_set queue would
+   * deadlock before ppu_on). The grid is 6 wide × 12 tall at pixel origin
+   * (80,16) → tile cols 10..15, rows 2..13; frame it one cell out. We first
+   * tile the WHOLE screen with brick (the machine cabinet), then carve the
+   * recessed well interior, then stamp the steel-blue frame on top — so the
+   * screen is fully covered instead of sprites floating on black. */
+  {
+    uint16_t gx0 = ORIGIN_X / 8, gy0 = ORIGIN_Y / 8;     /* 10, 2  */
+    uint16_t gx1 = gx0 + GRID_W, gy1 = gy0 + GRID_H;     /* 16, 14 (exclusive) */
+    uint16_t cc, rr;
+    /* whole-screen cabinet brick */
+    for (rr = 0; rr < 30; rr++)
+      for (cc = 0; cc < 32; cc++)
+        vram_unsafe_set((uint16_t)(0x2000 + rr * 32 + cc), BG_BRICK);
+    /* recessed well interior (inside the frame) */
+    for (rr = gy0; rr < gy1; rr++)
+      for (cc = gx0; cc < gx1; cc++)
+        vram_unsafe_set((uint16_t)(0x2000 + rr * 32 + cc), BG_INNER);
+    /* steel frame one cell out around the well */
+    for (cc = gx0 - 1; cc <= gx1; cc++) {
+      vram_unsafe_set((uint16_t)(0x2000 + (gy0 - 1) * 32 + cc), BG_WALL); /* top    */
+      vram_unsafe_set((uint16_t)(0x2000 + gy1 * 32 + cc), BG_WALL);       /* bottom */
+    }
+    for (rr = gy0 - 1; rr <= gy1; rr++) {
+      vram_unsafe_set((uint16_t)(0x2000 + rr * 32 + (gx0 - 1)), BG_WALL); /* left   */
+      vram_unsafe_set((uint16_t)(0x2000 + rr * 32 + gx1), BG_WALL);       /* right  */
+    }
+  }
+
   oam_clear();
   ppu_on_all();
   sound_init();

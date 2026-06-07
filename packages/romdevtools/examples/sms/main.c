@@ -47,9 +47,10 @@ static void vdp_init(void) {
 }
 
 /* ─── Palette + tile data ─────────────────────────────────────────── */
-/* SMS CRAM: 2-2-2 BGR. Entry 0 = backdrop. */
+/* SMS CRAM: 2-2-2 BGR. Entry 0 = backdrop. Entries: 1 = yellow 'H',
+ * 2 = blue panel, 3 = dark-blue panel (the checkerboard fill colours). */
 static const uint8_t palette[32] = {
-  0x30, 0x0F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,   /* BG: blue, yellow */
+  0x10, 0x0F, 0x30, 0x14, 0x00, 0x00, 0x00, 0x00,   /* BG: backdrop, yellow, blue, dk-blue */
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,   /* sprite palette unused */
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -68,6 +69,23 @@ static const uint8_t tile_h[32] = {
   0x00, 0x00, 0x00, 0x00,
 };
 
+/* Tile 2 = solid colour 2 (blue), tile 3 = solid colour 3 (dark blue).
+ * The whole 32×24 screen is painted as a 2-colour checkerboard so the
+ * screen is obviously not blank and no single colour dominates. Plane 1
+ * set → colour 2; planes 0+1 set → colour 3. */
+static const uint8_t tile_fill2[32] = {
+  0x00, 0xFF, 0x00, 0x00,  0x00, 0xFF, 0x00, 0x00,
+  0x00, 0xFF, 0x00, 0x00,  0x00, 0xFF, 0x00, 0x00,
+  0x00, 0xFF, 0x00, 0x00,  0x00, 0xFF, 0x00, 0x00,
+  0x00, 0xFF, 0x00, 0x00,  0x00, 0xFF, 0x00, 0x00,
+};
+static const uint8_t tile_fill3[32] = {
+  0xFF, 0xFF, 0x00, 0x00,  0xFF, 0xFF, 0x00, 0x00,
+  0xFF, 0xFF, 0x00, 0x00,  0xFF, 0xFF, 0x00, 0x00,
+  0xFF, 0xFF, 0x00, 0x00,  0xFF, 0xFF, 0x00, 0x00,
+  0xFF, 0xFF, 0x00, 0x00,  0xFF, 0xFF, 0x00, 0x00,
+};
+
 /* ─── Upload helpers ──────────────────────────────────────────────── */
 static void load_palette(void) {
   uint8_t i;
@@ -77,16 +95,27 @@ static void load_palette(void) {
 
 static void load_tile(void) {
   uint8_t i;
-  /* Tile 1 at VRAM offset 32 (= tile_idx * 32). Tile 0 left blank. */
+  /* Tile 1 = 'H' at VRAM offset 32 (= tile_idx * 32). Tile 0 left blank. */
   vdp_set_addr(32, VDP_VRAM_WRITE);
   for (i = 0; i < 32; i++) PORT_VDP_DATA = tile_h[i];
+  /* Tile 2 = blue fill (offset 64), tile 3 = dark-blue fill (offset 96). */
+  vdp_set_addr(64, VDP_VRAM_WRITE);
+  for (i = 0; i < 32; i++) PORT_VDP_DATA = tile_fill2[i];
+  vdp_set_addr(96, VDP_VRAM_WRITE);
+  for (i = 0; i < 32; i++) PORT_VDP_DATA = tile_fill3[i];
 }
 
+/* Paint the whole 32×24 visible screen as a blue/dark-blue checkerboard so
+ * the screen is obviously not blank and no single colour dominates. */
 static void clear_name_table(void) {
-  uint16_t i;
+  uint8_t row, col;
   vdp_set_addr(0x3800, VDP_VRAM_WRITE);
-  /* 32 cols × 28 rows × 2 bytes = 1792 entries. */
-  for (i = 0; i < 1792; i++) PORT_VDP_DATA = 0;
+  for (row = 0; row < 24; row++) {
+    for (col = 0; col < 32; col++) {
+      PORT_VDP_DATA = ((row ^ col) & 1) ? 2 : 3;   /* checkerboard tiles 2/3 */
+      PORT_VDP_DATA = 0;                            /* attr: BG palette, no flip */
+    }
+  }
 }
 
 static void place_h(void) {

@@ -29,6 +29,8 @@
 #define T_CAR_EN   (TILE_USER_INDEX + 1)
 #define T_LANE     (TILE_USER_INDEX + 2)   /* dashed lane divider (BG_B) */
 #define T_EDGE     (TILE_USER_INDEX + 3)   /* solid road edge      (BG_B) */
+#define T_GRASS    (TILE_USER_INDEX + 4)   /* roadside backdrop    (BG_A) */
+#define T_ASPHALT  (TILE_USER_INDEX + 5)   /* road surface backdrop(BG_A) */
 
 static const u32 tile_car_p1[8] = {
     0x01111110, 0x11111111, 0x12222221, 0x11111111,
@@ -51,6 +53,18 @@ static const u32 tile_edge[8] = {
     0x00000022, 0x00000022, 0x00000022, 0x00000022,
     0x00000022, 0x00000022, 0x00000022, 0x00000022,
 };
+/* Roadside grass (colour 5) with a couple of darker tufts (colour 6) so
+ * it isn't a flat fill — tiled down both shoulders on BG_A. */
+static const u32 tile_grass[8] = {
+    0x55555555, 0x55556555, 0x55555555, 0x65555555,
+    0x55555555, 0x55555565, 0x55555555, 0x55655555,
+};
+/* Road asphalt (colour 6) with faint speckle (colour 5) — tiled across
+ * the driving surface on BG_A, behind the BG_B lane markings + cars. */
+static const u32 tile_asphalt[8] = {
+    0x66666666, 0x66666566, 0x66666666, 0x56666666,
+    0x66666666, 0x66666656, 0x66666666, 0x66566666,
+};
 
 /* The road lives on BG_B (8×8 cells). Two dashed dividers sit between the
  * three lanes; solid edges frame the outermost lanes. */
@@ -61,15 +75,28 @@ static const u32 tile_edge[8] = {
 #define ROAD_EDGE_L    ((LANE_LEFT_X  - 12) / 8)
 #define ROAD_EDGE_R    ((LANE_RIGHT_X + 12) / 8)
 
+/* Far plane (BG_A): grass shoulders + asphalt driving surface, tiled
+ * across the whole 40x28 screen so the road no longer floats on black.
+ * Drawn at low priority; the BG_B markings + sprite cars sit on top. */
+static void draw_backdrop(void) {
+    s16 r, c;
+    for (r = 0; r < 28; r++)
+        for (c = 0; c < 40; c++) {
+            u16 t = (c >= ROAD_EDGE_L && c <= ROAD_EDGE_R) ? T_ASPHALT : T_GRASS;
+            VDP_setTileMapXY(BG_A, TILE_ATTR_FULL(PAL0, 0, 0, 0, t), c, r);
+        }
+}
+
 static void draw_road(void) {
     s16 r;
     for (r = ROAD_TOP_ROW; r <= ROAD_BOT_ROW; r++) {
-        /* Left edge (stripe on its right), right edge (hflipped). */
-        VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL0, 0, 0, 0, T_EDGE), ROAD_EDGE_L, r);
-        VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL0, 0, 0, 1, T_EDGE), ROAD_EDGE_R, r);
+        /* Left edge (stripe on its right), right edge (hflipped). HIGH
+         * priority so the markings sit above the BG_A asphalt backdrop. */
+        VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL0, 1, 0, 0, T_EDGE), ROAD_EDGE_L, r);
+        VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL0, 1, 0, 1, T_EDGE), ROAD_EDGE_R, r);
         /* Two dashed lane dividers. */
-        VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL0, 0, 0, 0, T_LANE), LANE_DIV1_COL, r);
-        VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL0, 0, 0, 0, T_LANE), LANE_DIV2_COL, r);
+        VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL0, 1, 0, 0, T_LANE), LANE_DIV1_COL, r);
+        VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL0, 1, 0, 0, T_LANE), LANE_DIV2_COL, r);
     }
 }
 
@@ -125,18 +152,24 @@ static void render_score(void) {
 int main(bool hard) {
     (void)hard;
 
-    /* PAL0 = player (white + blue trim). PAL1 = enemy (red + dark). */
+    /* PAL0 = player (white + blue trim) + road backdrop. PAL1 = enemy. */
     PAL_setColor(0 + 1, 0x0EEE);    /* white body */
     PAL_setColor(0 + 2, 0x0AAA);    /* roof grey */
+    PAL_setColor(0 + 5, 0x0260);    /* roadside grass */
+    PAL_setColor(0 + 6, 0x0222);    /* asphalt grey   */
     PAL_setColor(16 + 3, 0x000E);   /* enemy red */
     PAL_setColor(16 + 4, 0x0666);   /* enemy roof */
 
-    VDP_loadTileData(tile_car_p1,    T_CAR_P1, 1, DMA);
-    VDP_loadTileData(tile_car_enemy, T_CAR_EN, 1, DMA);
-    VDP_loadTileData(tile_lane,      T_LANE,   1, DMA);
-    VDP_loadTileData(tile_edge,      T_EDGE,   1, DMA);
+    VDP_loadTileData(tile_car_p1,    T_CAR_P1,  1, DMA);
+    VDP_loadTileData(tile_car_enemy, T_CAR_EN,  1, DMA);
+    VDP_loadTileData(tile_lane,      T_LANE,    1, DMA);
+    VDP_loadTileData(tile_edge,      T_EDGE,    1, DMA);
+    VDP_loadTileData(tile_grass,     T_GRASS,   1, DMA);
+    VDP_loadTileData(tile_asphalt,   T_ASPHALT, 1, DMA);
 
-    /* Draw the static road (edges + dashed lane dividers) once on BG_B. */
+    /* Draw the grass+asphalt backdrop (BG_A) then the road markings on
+     * BG_B over it. */
+    draw_backdrop();
     draw_road();
 
     VDP_drawText("SCORE", 28, 2);

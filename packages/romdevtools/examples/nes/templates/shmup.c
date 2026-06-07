@@ -38,10 +38,34 @@ static const uint8_t tile_enemy[16] = {
   0x81, 0x42, 0x24, 0xFF, 0xFF, 0x24, 0x42, 0x81,  /* plane 0 — spider-ish */
   0,    0,    0,    0,    0,    0,    0,    0,
 };
+/* BG starfield tiles — painted across the whole nametable so the screen
+ * reads as a real "space" scene on boot instead of flat black. They live in
+ * the BACKGROUND pattern table ($1000), separate from the sprite tiles above
+ * (the runtime puts BG at $1000, sprites at $0000).
+ *
+ *   BG_DUST  — a faint checkerboard "space dust" that tiles seamlessly; the
+ *              base layer that covers the whole field so it never reads blank.
+ *   BG_STAR  — three small stars (colour 1) sprinkled over the dust.
+ *   BG_BRITE — a single bright + star (colour 2) for the rare close star. */
+static const uint8_t tile_dust[16] = {
+  0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA,  /* plane 0: checker (idx 1) */
+  0,    0,    0,    0,    0,    0,    0,    0,
+};
+static const uint8_t tile_star[16] = {
+  0x00, 0x08, 0x00, 0x42, 0x00, 0x00, 0x20, 0x01,  /* plane 0: four small stars */
+  0,    0,    0,    0,    0,    0,    0,    0,
+};
+static const uint8_t tile_brite[16] = {
+  0x00, 0x00, 0x10, 0x38, 0x10, 0x00, 0x00, 0x00,  /* plane 0: + arms (idx ... ) */
+  0x00, 0x00, 0x10, 0x38, 0x10, 0x00, 0x00, 0x00,  /* plane 1 set too → colour 3 */
+};
+#define BG_DUST  1   /* BG tile index 1 → uploaded to $1010 */
+#define BG_STAR  2   /* BG tile index 2 → uploaded to $1020 */
+#define BG_BRITE 3   /* BG tile index 3 → uploaded to $1030 */
 
 /* ── Palette ─────────────────────────────────────────────────────── */
 static const uint8_t palette[32] = {
-  /* BG (unused but PPU reads $3F00 backdrop) */
+  /* BG0: backdrop near-black, star colour = dim white */
   0x0F, 0x10, 0x20, 0x30,
   0x0F, 0x10, 0x20, 0x30,
   0x0F, 0x10, 0x20, 0x30,
@@ -126,13 +150,38 @@ void main(void) {
 
   ppu_off();
 
-  /* Upload tile data — blank in slot 0 + 3 sprite tiles in slots 1..3. */
+  /* Upload tile data — blank in slot 0 + 3 sprite tiles in slots 1..3,
+   * all in the SPRITE pattern table ($0000). */
   chr_ram_upload(0x0000, tile_blank,  16);
   chr_ram_upload(0x0010, tile_ship,   16);
   chr_ram_upload(0x0020, tile_bullet, 16);
   chr_ram_upload(0x0030, tile_enemy,  16);
+  /* Upload the starfield tiles to the BACKGROUND pattern table
+   * ($1010/$1020/$1030 = BG slots 1/2/3). */
+  chr_ram_upload(0x1010, tile_dust,   16);
+  chr_ram_upload(0x1020, tile_star,   16);
+  chr_ram_upload(0x1030, tile_brite,  16);
 
   palette_load(palette);
+
+  /* Paint a full starfield directly into the nametable while the PPU is off
+   * (vram_unsafe_set = raw write; tile_set's NMI queue would deadlock
+   * before ppu_on). Every one of the 32×30 cells gets the faint "dust" base,
+   * with small stars sprinkled every few cells and the odd bright star — a
+   * deterministic scatter so the backdrop is unambiguously "space", densely
+   * filled rather than flat black. */
+  {
+    uint16_t r, cc;
+    uint8_t tile;
+    for (r = 0; r < 30; r++) {
+      for (cc = 0; cc < 32; cc++) {
+        tile = BG_DUST;                              /* base dust everywhere */
+        if (((r * 5 + cc * 3) % 7) == 0) tile = BG_STAR;   /* sprinkle stars */
+        if (((r * 3 + cc * 7) % 23) == 0) tile = BG_BRITE; /* rare bright one */
+        vram_unsafe_set((uint16_t)(0x2000 + r * 32 + cc), tile);
+      }
+    }
+  }
 
   oam_clear();
   ppu_on_all();

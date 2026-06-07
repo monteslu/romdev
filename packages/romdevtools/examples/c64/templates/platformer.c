@@ -96,10 +96,24 @@ static void render_view(uint8_t coarseCol) {
       uint16_t off = (uint16_t)r * 40 + sc;
       if (wc < WORLD_COLS && world_is_wall((uint8_t)wc, r)) {
         SCREEN[off] = 0xA0;          /* reverse-space solid block */
-        COLORS[off] = 0x0C;          /* mid grey */
+        COLORS[off] = 0x0C;          /* mid grey platform */
+      } else if (r >= 22) {
+        /* Ground fill below the floor row: dithered earth so the lower
+         * band reads as solid terrain, not void. */
+        SCREEN[off] = 0xA0;
+        COLORS[off] = (((uint8_t)wc ^ r) & 1) ? 0x09 : 0x08;  /* brown / orange */
       } else {
-        SCREEN[off] = 0x20;          /* space */
-        COLORS[off] = 0x06;          /* bg color */
+        /* Textured sky so two colours share the backdrop and neither the
+         * sky nor the border dominates the frame. Sparse '.' stars on a
+         * coarse lattice add detail; reverse-space everywhere else gives a
+         * filled (non-blank) sky band that scrolls with the world. */
+        if (((wc * 3u + r * 7u) % 23u) == 0u) {
+          SCREEN[off] = 0x2E;        /* '.' distant detail */
+          COLORS[off] = 0x01;        /* white */
+        } else {
+          SCREEN[off] = 0xA0;        /* solid block sky */
+          COLORS[off] = (((uint8_t)wc ^ (r >> 1)) & 1) ? 0x06 : 0x0E;  /* blue / light blue */
+        }
       }
     }
   }
@@ -133,8 +147,8 @@ void main(void) {
   copy_sprite(0, player_sprite);
   SPRITE_POINTERS[0] = 0x80;  /* $2000/64 */
   POKE(VIC_SPR_COL(0), 0x07);  /* yellow player */
-  POKE(VIC_BORDER, 0x06);      /* dark blue */
-  POKE(VIC_BG0,    0x06);
+  POKE(VIC_BORDER, 0x00);      /* black border frames the scene */
+  POKE(VIC_BG0,    0x06);      /* sky-blue (shows through any gaps) */
 
   render_view(0);              /* paint the initial 40-col view */
 

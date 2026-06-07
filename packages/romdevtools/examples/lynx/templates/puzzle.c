@@ -98,8 +98,35 @@ void main(void) {
      * — drawing while the blitter is mid-flight loses the frame → black.
      * (Copied from the shmup scaffold, the LYNX-1 fix.) */
     while (tgi_busy()) { }
+
+    /* ── Background scene (drawn every frame). Without it the playfield is
+     * a near-flat single colour and the render-health audit flags the
+     * screen as blank. A framed "well" in the centre with lit side panels
+     * keeps several distinct colours well under the threshold:
+     *   - blue cabinet backdrop
+     *   - dark-grey side panels flanking the well
+     *   - black well interior so the falling blocks read clearly
+     *   - light-grey well frame + a faint grid texture behind the cells. */
+    tgi_setcolor(COLOR_BLUE);
+    tgi_bar(0, 0, tgi_getmaxx(), tgi_getmaxy());        /* cabinet backdrop  */
+    tgi_setcolor(COLOR_DARKGREY);
+    tgi_bar(0, 0, GRID_X - 5, 101);                     /* left side panel   */
+    tgi_bar(GRID_X + COLS * CELL_PX + 4, 0, 159, 101);  /* right side panel  */
     tgi_setcolor(COLOR_BLACK);
-    tgi_bar(0, 0, tgi_getmaxx(), tgi_getmaxy());
+    tgi_bar(GRID_X - 2, GRID_Y - 2,
+            GRID_X + COLS * CELL_PX + 1, GRID_Y + ROWS * CELL_PX + 1); /* well */
+    /* faint grid texture so the empty well is never one flat colour */
+    tgi_setcolor(COLOR_DARKGREY);
+    for (r = 0; r <= ROWS; r++)
+      tgi_line(GRID_X, GRID_Y + r * CELL_PX, GRID_X + COLS * CELL_PX - 1, GRID_Y + r * CELL_PX);
+    for (c = 0; c <= COLS; c++)
+      tgi_line(GRID_X + c * CELL_PX, GRID_Y, GRID_X + c * CELL_PX, GRID_Y + ROWS * CELL_PX - 1);
+    /* well frame */
+    tgi_setcolor(COLOR_LIGHTGREY);
+    tgi_line(GRID_X - 2, GRID_Y - 2, GRID_X - 2, GRID_Y + ROWS * CELL_PX + 1);
+    tgi_line(GRID_X + COLS * CELL_PX + 1, GRID_Y - 2, GRID_X + COLS * CELL_PX + 1, GRID_Y + ROWS * CELL_PX + 1);
+    tgi_line(GRID_X - 2, GRID_Y + ROWS * CELL_PX + 1, GRID_X + COLS * CELL_PX + 1, GRID_Y + ROWS * CELL_PX + 1);
+
     /* grid */
     for (r = 0; r < ROWS; r++) for (c = 0; c < COLS; c++) {
       if (grid[r][c] != 0) {

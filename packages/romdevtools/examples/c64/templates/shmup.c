@@ -19,6 +19,9 @@
 #define POKE(addr, val) (*(volatile uint8_t*)(addr) = (val))
 #define PEEK(addr)      (*(volatile uint8_t*)(addr))
 
+#define SCREEN ((volatile uint8_t*)0x0400)
+#define COLORS ((volatile uint8_t*)0xD800)
+
 #define SPRITE_POINTERS  ((volatile uint8_t*)0x07F8)
 #define SPRITE_DATA_BASE 0x2000  /* sprite N data at $2000 + N*64 — NOT $0800,
                                   * which collides with the $0801 .prg load (C64-1) */
@@ -105,6 +108,28 @@ static void wait_vblank(void) {
   while (PEEK(VIC_RASTER) >= 250) { }
 }
 
+/* Paint a deep-space backdrop into the 40x25 character matrix so the
+ * playfield reads as space instead of a flat black void. Every cell gets
+ * a dithered "nebula" char (reverse-space 0xA0) in one of two dark blues,
+ * so two colours share the screen and no single colour dominates. A sparse
+ * scatter of bright '.' stars (drawn as a normal glyph over the dither)
+ * adds twinkle. Cosmetic only — sprites still move over the top. */
+static void draw_starfield(void) {
+  uint16_t i;
+  uint8_t r, c;
+  for (i = 0; i < 1000; i++) {
+    SCREEN[i] = 0xA0;                       /* solid block fills the cell  */
+    COLORS[i] = ((i ^ (i >> 5)) & 1) ? 0x06 : 0x0B;  /* blue / dark grey   */
+  }
+  /* Scatter stars on a coarse lattice so ~1 in 12 cells twinkles. */
+  for (r = 1; r < 25; r += 3) {
+    for (c = (uint8_t)(r * 5u % 7u); c < 40; c += 7) {
+      SCREEN[r * 40 + c] = 0x2E;            /* '.' star glyph              */
+      COLORS[r * 40 + c] = ((r + c) & 1) ? 0x01 : 0x0F;  /* white / l.grey */
+    }
+  }
+}
+
 static void copy_sprite(uint8_t slot, const uint8_t *data) {
   uint8_t i;
   volatile uint8_t *dst = (volatile uint8_t*)(SPRITE_DATA_BASE + slot * 64);
@@ -130,8 +155,9 @@ void main(void) {
   for (i = 0; i < MAX_BULLETS; i++) POKE(VIC_SPR_COL(SLOT_BULLET0 + i), 0x01);  /* white */
   for (i = 0; i < MAX_ENEMIES; i++) POKE(VIC_SPR_COL(SLOT_ENEMY0  + i), 0x02);  /* red */
 
-  POKE(VIC_BORDER, 0x00);
-  POKE(VIC_BG0, 0x00);
+  POKE(VIC_BORDER, 0x00);   /* black border frames the starfield */
+  POKE(VIC_BG0, 0x06);      /* deep-blue space background */
+  draw_starfield();         /* paint the textured space backdrop */
 
   player.x = 152; player.y = 200; player.alive = 1;
   for (i = 0; i < MAX_BULLETS; i++) bullets[i].alive = 0;

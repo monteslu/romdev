@@ -11,6 +11,9 @@
 #define POKE(addr, val) (*(volatile uint8_t*)(addr) = (val))
 #define PEEK(addr)      (*(volatile uint8_t*)(addr))
 
+#define SCREEN ((volatile uint8_t*)0x0400)
+#define COLORS ((volatile uint8_t*)0xD800)
+
 #define JOY_UP    0x01
 #define JOY_DOWN  0x02
 
@@ -39,6 +42,30 @@ static void wait_vblank(void) {
   while (PEEK(VIC_RASTER) >= 250) { }
 }
 
+/* Paint a Pong court into the 40x25 character matrix so the table reads as
+ * a real court instead of a flat black void: a dithered green playfield
+ * (two greens, so two colours share the screen and neither dominates),
+ * solid top/bottom boundary rails, and a dashed centre net. Cosmetic only —
+ * the paddle/ball sprites move over the top. */
+static void draw_court(void) {
+  uint16_t i;
+  uint8_t r, c;
+  /* Dithered green playfield fills every cell. */
+  for (i = 0; i < 1000; i++) {
+    SCREEN[i] = 0xA0;                       /* solid block */
+    COLORS[i] = ((i ^ (i >> 5)) & 1) ? 0x05 : 0x09;  /* green / brown    */
+  }
+  /* Top + bottom boundary rails (rows 1 and 23) in white. */
+  for (c = 0; c < 40; c++) {
+    SCREEN[1 * 40 + c]  = 0xA0; COLORS[1 * 40 + c]  = 0x01;
+    SCREEN[23 * 40 + c] = 0xA0; COLORS[23 * 40 + c] = 0x01;
+  }
+  /* Dashed centre net (column 20). */
+  for (r = 2; r < 23; r++) {
+    if (r & 1) { SCREEN[r * 40 + 20] = 0xA0; COLORS[r * 40 + 20] = 0x01; }
+  }
+}
+
 static void copy_sprite(uint8_t slot, const uint8_t *data) {
   uint8_t i;
   volatile uint8_t *dst = (volatile uint8_t*)(0x2000 + slot * 64);  /* $2000, not $0800 (collides w/ $0801 .prg) */
@@ -63,8 +90,9 @@ void main(void) {
   POKE(VIC_SPR_COL(1), 0x01);
   POKE(VIC_SPR_COL(2), 0x07);  /* yellow ball */
 
-  POKE(VIC_BORDER, 0x00);
-  POKE(VIC_BG0,    0x00);
+  POKE(VIC_BORDER, 0x00);   /* black border frames the court */
+  POKE(VIC_BG0,    0x05);   /* green court background */
+  draw_court();             /* paint the textured Pong court */
 
   /* P1 paddle on left, P2 on right. */
   POKE(VIC_SPRITE_X(0), 30);
