@@ -31,6 +31,7 @@
 
 extern char tilfont, palfont;
 extern char tilsprite, palsprite;
+extern char tilbg, palbg;       /* wallpaper tile + palette (data.asm) */
 
 /* consoleVblank() copies the dirty text tilemap to VRAM during VBlank.
  * No public prototype in console.h, so declare it; call once per frame. */
@@ -38,6 +39,10 @@ extern void consoleVblank(void);
 
 /* OAM is addressed by BYTE OFFSET; sprite slot N = offset N*4. */
 #define SPR(slot) ((slot) << 2)
+
+/* BG1 wallpaper map: a full 32×32 screen of the 4-colour tile so the
+ * playfield reads as a real backdrop, not flat blank. Filled at runtime. */
+static u16 bg_map[32 * 32];
 
 #define MAX_BULLETS 6
 #define MAX_ENEMIES 6
@@ -124,7 +129,21 @@ int main(void) {
      * font ($3000) + map ($6800) so the HUD text renders. */
     bgSetGfxPtr(0, 0x3000);
     bgSetMapPtr(0, 0x6800, SC_32x32);
-    bgSetDisable(1);
+
+    /* BG1 = full-screen wallpaper so the playfield never reads as blank.
+     * Tiles → VRAM $2000, map → VRAM $4000 (clear of sprites $0000 and the
+     * console gfx $3000 / map $6800). One 8×8 tile = 32 bytes of gfx +
+     * 32 bytes of palette. */
+    bgInitTileSet(1, (u8 *)&tilbg, (u8 *)&palbg,
+                  1,            /* load palbg into CGRAM palette block 1 */
+                  32, 32, BG_16COLORS, 0x2000);
+    /* Every map entry: tile 0, palette block 1 (bits 10-12 = 1 → 0x0400),
+     * so the wallpaper uses palbg and leaves the console font palette
+     * (block 0) untouched — HUD text stays white/legible. */
+    for (i = 0; i < 32 * 32; i++) bg_map[i] = 0x0400;
+    bgInitMapSet(1, (u8 *)bg_map, sizeof(bg_map), SC_32x32, 0x4000);
+    bgSetEnable(1);
+
     bgSetDisable(2);
     setPaletteColor(0, RGB5(0, 0, 6));   /* dark-blue backdrop (CGRAM 0) */
 

@@ -34,6 +34,27 @@ static const uint8_t tile_ball[16] = {
   0x00, 0x3C, 0x7E, 0x7E, 0x7E, 0x7E, 0x3C, 0x00,
   0,    0,    0,    0,    0,    0,    0,    0,
 };
+/* BG court tiles (background pattern table $1000), so the court reads as a
+ * real Pong arena on boot instead of sprites on flat black:
+ *   BG_WALL  — solid bar (idx1 white): the top/bottom rails.
+ *   BG_NET   — dashed vertical bar (idx1 white): the centre net.
+ *   BG_FLOOR — a faint court-floor hatch (idx2 green) tiled across the whole
+ *              playfield so the arena surface is covered, not black. */
+static const uint8_t tile_wall[16] = {
+  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+  0,    0,    0,    0,    0,    0,    0,    0,
+};
+static const uint8_t tile_net[16] = {
+  0x18, 0x18, 0x00, 0x00, 0x18, 0x18, 0x00, 0x00,  /* dashed vertical bar */
+  0,    0,    0,    0,    0,    0,    0,    0,
+};
+static const uint8_t tile_floor[16] = {
+  0,    0,    0,    0,    0,    0,    0,    0,        /* plane 0 clear */
+  0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55,   /* plane 1 → colour 2 checker */
+};
+#define BG_WALL  1   /* BG slot 1 → $1010 */
+#define BG_NET   2   /* BG slot 2 → $1020 */
+#define BG_FLOOR 3   /* BG slot 3 → $1030 */
 /* Digits 0-9 (3 wide × 5 tall, padded to 8×8). Used for the score HUD. */
 static const uint8_t tile_digits[10 * 16] = {
   /* 0 */ 0xE0,0xA0,0xA0,0xA0,0xE0,0x00,0x00,0x00, 0,0,0,0,0,0,0,0,
@@ -55,11 +76,12 @@ static const uint8_t tile_digits[10 * 16] = {
 #define T_DIGIT0  3   /* digits live at slots 3..12 */
 
 static const uint8_t palette[32] = {
-  /* BG palettes — only the backdrop matters here */
-  0x0F, 0x30, 0x10, 0x00,
-  0x0F, 0x30, 0x10, 0x00,
-  0x0F, 0x30, 0x10, 0x00,
-  0x0F, 0x30, 0x10, 0x00,
+  /* BG0: backdrop near-black, court walls/net = white (idx1),
+   * court-floor hatch = dark green (idx2) */
+  0x0F, 0x30, 0x1A, 0x00,
+  0x0F, 0x30, 0x1A, 0x00,
+  0x0F, 0x30, 0x1A, 0x00,
+  0x0F, 0x30, 0x1A, 0x00,
   /* Sprite palettes */
   0x0F, 0x30, 0x16, 0x12,  /* sp0: white paddle */
   0x0F, 0x30, 0x16, 0x12,  /* sp1: white ball   */
@@ -103,13 +125,36 @@ void main(void) {
 
   ppu_off();
 
-  /* Upload tiles. */
+  /* Upload sprite tiles (sprite pattern table $0000). */
   chr_ram_upload(T_BLANK   * 16, tile_blank,  16);
   chr_ram_upload(T_PADDLE  * 16, tile_paddle, 16);
   chr_ram_upload(T_BALL    * 16, tile_ball,   16);
   chr_ram_upload(T_DIGIT0  * 16, tile_digits, sizeof(tile_digits));
+  /* Upload court tiles to the BACKGROUND pattern table ($1010..$1030). */
+  chr_ram_upload(0x1010, tile_wall,  16);
+  chr_ram_upload(0x1020, tile_net,   16);
+  chr_ram_upload(0x1030, tile_floor, 16);
 
   palette_load(palette);
+
+  /* Paint the court into the nametable while rendering is off
+   * (vram_unsafe_set = raw write). First carpet the whole playfield with the
+   * green floor hatch so the arena surface is covered, then lay the top/
+   * bottom rails (rows 1 and 27) and the dashed centre net (column 15) on
+   * top. Without the floor the screen is just sprites on flat black. */
+  {
+    uint16_t cc, rr;
+    for (rr = 0; rr < 30; rr++)
+      for (cc = 0; cc < 32; cc++)
+        vram_unsafe_set((uint16_t)(0x2000 + rr * 32 + cc), BG_FLOOR);
+    for (cc = 0; cc < 32; cc++) {
+      vram_unsafe_set((uint16_t)(0x2000 + 1 * 32 + cc),  BG_WALL);  /* top rail (y≈8)   */
+      vram_unsafe_set((uint16_t)(0x2000 + 27 * 32 + cc), BG_WALL);  /* bottom rail(y≈216)*/
+    }
+    for (rr = 2; rr < 27; rr++)
+      vram_unsafe_set((uint16_t)(0x2000 + rr * 32 + 15), BG_NET);   /* centre net       */
+  }
+
   oam_clear();
   ppu_on_all();
   sound_init();

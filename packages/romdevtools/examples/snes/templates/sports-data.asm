@@ -323,4 +323,26 @@ palsprite:
 .db $00, $00, $00, $00, $00, $00, $00, $00
 .db $00, $00, $00, $00, $00, $00, $00, $00
 
+; ── Background wallpaper (one 8x8 4bpp tile, 4 solid colour quadrants) ──
+; Tiled across BG1 it paints the whole screen in four muted colours so the
+; playfield never reads as a flat/blank backdrop. Quadrant->colour: TL=1,
+; TR=2, BL=3, BR=4. 4bpp plane order: bytes 0-15 = rows 0-7 plane0/plane1
+; pairs, bytes 16-31 = rows 0-7 plane2/plane3 pairs.
+tilbg:
+.db $F0, $0F, $F0, $0F, $F0, $0F, $F0, $0F   ; rows 0-3: p0=left  p1=right
+.db $F0, $F0, $F0, $F0, $F0, $F0, $F0, $F0   ; rows 4-7: p0+p1 = left
+.db $00, $00, $00, $00, $00, $00, $00, $00   ; rows 0-3: p2/p3 = 0
+.db $0F, $00, $0F, $00, $0F, $00, $0F, $00   ; rows 4-7: p2 = right
+
+palbg:
+; 16-colour BG palette; only 1-4 used (the four wallpaper quadrant tones).
+.db $00, $00          ; 0 unused (BG fully opaque)
+.db $C4, $30          ; 1 dark blue
+.db $42, $29          ; 2 dark teal
+.db $88, $30          ; 3 dark purple
+.db $C6, $24          ; 4 dark slate
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00
+
 .ends

@@ -23,6 +23,8 @@ void main(void) {
   uint8_t game_over = 0;
   uint8_t joy, i;
   uint32_t rng = 1;
+  uint8_t scroll = 0;   /* animates the road dashes so the track moves */
+  int16_t y;
 
   tgi_install(&lynx_160_102_16_tgi);
   tgi_init();
@@ -36,14 +38,37 @@ void main(void) {
      * — drawing while the blitter is mid-flight loses the frame → black.
      * (Copied from the shmup scaffold, the LYNX-1 fix.) */
     while (tgi_busy()) { }
-    tgi_setcolor(COLOR_BLACK);
-    tgi_bar(0, 0, tgi_getmaxx(), tgi_getmaxy());
-    /* lane lines */
+
+    /* ── Background scene (drawn every frame). Without it the track is a
+     * near-flat single colour and the render-health audit flags the
+     * screen as blank. A full road with grass shoulders + animated lane
+     * dashes keeps several distinct colours well under the threshold:
+     *   - green grass shoulders on both sides
+     *   - mid-grey tarmac with darker-grey lane bands
+     *   - white scrolling centre dashes + solid edge lines. */
+    tgi_setcolor(COLOR_GREEN);
+    tgi_bar(0, 0, tgi_getmaxx(), tgi_getmaxy());        /* grass base        */
+    tgi_setcolor(COLOR_GREY);
+    tgi_bar(20, 0, 148, 101);                           /* tarmac            */
+    /* darker lane bands so the road isn't one flat grey */
     tgi_setcolor(COLOR_DARKGREY);
-    tgi_line(28, 0, 28, 101);
-    tgi_line(72, 0, 72, 101);
-    tgi_line(116, 0, 116, 101);
-    tgi_line(160, 0, 160, 101);
+    tgi_bar(20, 0, 53, 101);
+    tgi_bar(96, 0, 128, 101);
+    /* solid road edges */
+    tgi_setcolor(COLOR_WHITE);
+    tgi_line(20, 0, 20, 101);
+    tgi_line(148, 0, 148, 101);
+    /* animated dashed lane dividers (scroll downward) */
+    for (y = (int16_t)scroll - 12; y < 102; y += 12) {
+      tgi_bar(53, (unsigned)(y < 0 ? 0 : y), 55, (unsigned)(y + 6 > 101 ? 101 : y + 6));
+      tgi_bar(96, (unsigned)(y < 0 ? 0 : y), 98, (unsigned)(y + 6 > 101 ? 101 : y + 6));
+    }
+    /* grass rumble strips for extra colour texture */
+    tgi_setcolor(COLOR_LIGHTGREEN);
+    for (y = (int16_t)scroll - 8; y < 102; y += 16) {
+      tgi_bar(0,   (unsigned)(y < 0 ? 0 : y), 6,   (unsigned)(y + 6 > 101 ? 101 : y + 6));
+      tgi_bar(153, (unsigned)(y < 0 ? 0 : y), 159, (unsigned)(y + 6 > 101 ? 101 : y + 6));
+    }
 
     tgi_setcolor(COLOR_YELLOW);
     tgi_bar((unsigned)player.x - 4, (unsigned)player.y - 4, (unsigned)player.x + 4, (unsigned)player.y + 4);
@@ -53,6 +78,8 @@ void main(void) {
     }
     tgi_updatedisplay();
     sfx_update();
+
+    scroll += 2; if (scroll >= 12) scroll -= 12;   /* advance road dashes */
 
     if (game_over > 0) {
       game_over--;

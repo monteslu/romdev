@@ -30,8 +30,22 @@
 #define T_SHIP   (TILE_USER_INDEX + 1)
 #define T_BULLET (TILE_USER_INDEX + 2)
 #define T_ENEMY  (TILE_USER_INDEX + 3)
+#define T_SPACE  (TILE_USER_INDEX + 4)   /* nebula backdrop A (BG_B) */
+#define T_STARS  (TILE_USER_INDEX + 5)   /* nebula backdrop B (BG_B) */
 
 static const u32 tile_blank[8]  = { 0,0,0,0,0,0,0,0 };
+/* Deep-space backdrop tiled across BG_B so the playfield isn't a flat
+ * black void. Two distinct nebula blocks are checkerboarded so no single
+ * colour dominates the screen: T_SPACE is colour-4 nebula with colour-5
+ * star dots; T_STARS swaps the roles (colour-5 field, colour-4 dots). */
+static const u32 tile_space[8]  = {
+    0x44444444, 0x44455444, 0x44444444, 0x54444445,
+    0x44444444, 0x44455444, 0x44444444, 0x54444445,
+};
+static const u32 tile_stars[8]  = {
+    0x55555555, 0x55544555, 0x55555555, 0x45555554,
+    0x55555555, 0x55544555, 0x55555555, 0x45555554,
+};
 static const u32 tile_ship[8]   = {
     0x00011000, 0x00011000, 0x00111100, 0x00111100,
     0x01111110, 0x01111110, 0x11111111, 0x11000011,
@@ -102,8 +116,10 @@ int main(bool hard) {
 
     /* PAL0 — used by player + font */
     PAL_setColor(0 + 1, 0x0EEE); /* ship white */
-    /* PAL1 — bullet */
+    /* PAL1 — bullet + space backdrop */
     PAL_setColor(16 + 2, 0x00EE); /* bullet yellow */
+    PAL_setColor(16 + 4, 0x0600); /* nebula deep blue  */
+    PAL_setColor(16 + 5, 0x0402); /* nebula violet     */
     /* PAL2 — enemy */
     PAL_setColor(32 + 3, 0x000E); /* enemy red */
 
@@ -113,6 +129,20 @@ int main(bool hard) {
     VDP_loadTileData(tile_ship,   T_SHIP,   1, DMA);
     VDP_loadTileData(tile_bullet, T_BULLET, 1, DMA);
     VDP_loadTileData(tile_enemy,  T_ENEMY,  1, DMA);
+    VDP_loadTileData(tile_space,  T_SPACE,  1, DMA);
+    VDP_loadTileData(tile_stars,  T_STARS,  1, DMA);
+
+    /* Fill the far plane (BG_B) with the space backdrop so the screen
+     * isn't an empty black void; sprinkle denser star clusters for
+     * variety. Sprites (ship/bullets/enemies) always draw above the
+     * planes, so the gameplay reads on top of this with no priority
+     * juggling. */
+    for (u16 cy = 0; cy < 28; cy++)
+        for (u16 cx = 0; cx < 40; cx++)
+            VDP_setTileMapXY(BG_B,
+                TILE_ATTR_FULL(PAL1, 0, 0, 0,
+                    ((cx ^ cy) & 1) ? T_STARS : T_SPACE),
+                cx, cy);
 
     player.x = 152; player.y = 180; player.alive = TRUE;
     for (u16 i = 0; i < MAX_BULLETS; i++) bullets[i].alive = FALSE;

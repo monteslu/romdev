@@ -11,6 +11,7 @@ extern void    gg_vdp_init(void);
 extern void    gg_vdp_display_on(void);
 extern void    gg_load_palette(const uint8_t *palette);
 extern void    gg_load_tiles(uint16_t vram_dest, const uint8_t *src, uint16_t byte_count);
+extern void    gg_set_tilemap_cell(uint8_t row, uint8_t col, uint8_t tile_idx, uint8_t attr);
 extern void    gg_vblank_wait(void);
 extern uint8_t gg_joypad_read(void);
 extern void    gg_sprite_init(void);
@@ -37,8 +38,8 @@ extern void    gg_sat_upload(void);
  * (entries 16-31) reading garbage = invisible sprites. Sprite colour 1 = entry
  * 17 (white). */
 static const uint8_t palette[64] = {
-  /* BG 0-15: entry 0 = dark navy backdrop */
-  0x20,0x02, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
+  /* BG 0-15: 0 = dark navy backdrop, 1 = court green, 2 = court line white */
+  0x20,0x02, 0x60,0x00, 0xFF,0x0F, 0,0, 0,0, 0,0, 0,0, 0,0,
   0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
   /* SPRITE 16-31: 16=transparent, 17=white */
   0,0, 0xFF,0x0F, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
@@ -51,6 +52,42 @@ static const uint8_t tile_solid[32] = {
   0xFF, 0x00, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00,
   0xFF, 0x00, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00,
 };
+
+/* Three BG tiles for the court, loaded into the BG tile bank at $0000:
+ *   tile 0 = court green (colour 1), tile 1 = court line / border
+ *   (colour 2 = white), tile 2 = dashed net (colour 2 stripe on green). */
+static const uint8_t bg_tiles[96] = {
+  /* tile 0 = court green (colour 1 -> plane 0 set) */
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  /* tile 1 = court line / border (colour 2 -> plane 1 set) */
+  0x00,0xFF,0x00,0x00, 0x00,0xFF,0x00,0x00,
+  0x00,0xFF,0x00,0x00, 0x00,0xFF,0x00,0x00,
+  0x00,0xFF,0x00,0x00, 0x00,0xFF,0x00,0x00,
+  0x00,0xFF,0x00,0x00, 0x00,0xFF,0x00,0x00,
+  /* tile 2 = net: centre column colour 2, rest colour 1 (green) */
+  0xFF,0x18,0x00,0x00, 0xFF,0x18,0x00,0x00,
+  0xFF,0x18,0x00,0x00, 0xFF,0x18,0x00,0x00,
+  0xFF,0x18,0x00,0x00, 0xFF,0x18,0x00,0x00,
+  0xFF,0x18,0x00,0x00, 0xFF,0x18,0x00,0x00,
+};
+
+/* Paint the court inside the GG visible region (cols 6..25, rows 3..20):
+ * green field, white border lines around the perimeter, dashed net down
+ * the centre column. BG tile bank is $0000. */
+static void draw_court(void) {
+  uint8_t row, col;
+  for (row = 3; row <= 20; row++) {
+    for (col = 6; col <= 25; col++) {
+      uint8_t t = 0;                                   /* green field        */
+      if (row == 3 || row == 20 || col == 6 || col == 25) t = 1; /* border  */
+      else if (col == 15 && (row & 1)) t = 2;          /* dashed centre net  */
+      gg_set_tilemap_cell(row, col, t, 0);
+    }
+  }
+}
 
 static int16_t p1y, p2y, bx, by;
 static int8_t  bdx, bdy;
@@ -76,7 +113,13 @@ void main(void) {
   uint8_t i;
   gg_vdp_init();
   gg_load_palette(palette);
-  gg_load_tiles(0x2000, tile_solid, 32);
+  gg_load_tiles(0x0000, bg_tiles, 96);      /* BG court tiles -> BG bank $0000 */
+  gg_load_tiles(0x2000, tile_solid, 32);    /* paddle/ball sprite tile -> $2000 */
+  {
+    uint8_t r, c;
+    for (r = 0; r < 28; r++) for (c = 0; c < 32; c++) gg_set_tilemap_cell(r, c, 0, 0);
+  }
+  draw_court();
   gg_sprite_init();
   sfx_init();
   gg_vdp_display_on();

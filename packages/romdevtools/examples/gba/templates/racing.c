@@ -47,6 +47,29 @@ static const u32 tile_car_enemy[8] = {
     0x33333333, 0x34444443, 0x33333333, 0x03300330,
 };
 
+/* ── Road backdrop tiles (4bpp) ──────────────────────────────────────
+ * Fill the whole BG0 with a road scene instead of a flat black screen:
+ *   tile 4 = grass roadside (palette index 5, with darker tufts 6)
+ *   tile 5 = asphalt road   (palette index 7)
+ *   tile 6 = asphalt + a centred white lane dash (index 8)
+ *   tile 7 = road edge line (white index 8 down the left column) */
+static const u32 tile_grass[8] = {
+    0x55555555, 0x55655555, 0x55555555, 0x55556555,
+    0x55555555, 0x65555555, 0x55555555, 0x55555655,
+};
+static const u32 tile_road[8] = {
+    0x77777777, 0x77777777, 0x77777777, 0x77777777,
+    0x77777777, 0x77777777, 0x77777777, 0x77777777,
+};
+static const u32 tile_road_dash[8] = {
+    0x77877877, 0x77877877, 0x77877877, 0x77877877,
+    0x77777777, 0x77777777, 0x77777777, 0x77777777,
+};
+static const u32 tile_road_edge[8] = {
+    0x87777778, 0x87777778, 0x87777778, 0x87777778,
+    0x87777778, 0x87777778, 0x87777778, 0x87777778,
+};
+
 typedef struct { s16 x, y; u16 alive; } Car;
 
 static OBJ_ATTR obj_buffer[128];
@@ -100,6 +123,43 @@ int main(void) {
     tonccpy(&tile_mem[4][TILE_CAR_P1], tile_car_p1,    sizeof(tile_car_p1));
     tonccpy(&tile_mem[4][TILE_CAR_EN], tile_car_enemy, sizeof(tile_car_enemy));
 
+    /* ── Road backdrop on BG0 ────────────────────────────────────────
+     * Paint a full-screen road scene (grass shoulders + asphalt + lane
+     * dashes) so the track doesn't read as a blank black screen. BG
+     * palette: 5 grass / 6 grass-tuft / 7 asphalt / 8 white lines. Tile
+     * data → char-block 0, map → screen-block 28 (clear of TTE on
+     * char-block 2 / screen-block 30). BG0 is lowest priority so the
+     * cars draw in front. The 240-px screen is 30 tiles wide; the road
+     * occupies columns 5..24 with grass on either shoulder. */
+    pal_bg_mem[0]  = CLR_BLACK;
+    pal_bg_mem[5]  = RGB15(4, 16, 5);   /* grass            */
+    pal_bg_mem[6]  = RGB15(2, 11, 3);   /* darker grass tuft*/
+    pal_bg_mem[7]  = RGB15(7, 7, 8);    /* asphalt          */
+    pal_bg_mem[8]  = CLR_WHITE;         /* lane / edge lines*/
+    tonccpy(&tile_mem[0][4], tile_grass,     sizeof(tile_grass));
+    tonccpy(&tile_mem[0][5], tile_road,      sizeof(tile_road));
+    tonccpy(&tile_mem[0][6], tile_road_dash, sizeof(tile_road_dash));
+    tonccpy(&tile_mem[0][7], tile_road_edge, sizeof(tile_road_edge));
+    REG_BG0CNT = BG_CBB(0) | BG_SBB(28) | BG_REG_32x32 | BG_4BPP | BG_PRIO(3);
+    {
+        SCR_ENTRY *map = se_mem[28];
+        for (int ty = 0; ty < 32; ty++) {
+            for (int tx = 0; tx < 32; tx++) {
+                int tile;
+                if (tx < 5 || tx > 24) {
+                    tile = 4;                       /* grass shoulder      */
+                } else if (tx == 5 || tx == 24) {
+                    tile = 7;                       /* white road edge     */
+                } else if ((tx == 11 || tx == 18) && (ty & 1)) {
+                    tile = 6;                       /* dashed lane divider */
+                } else {
+                    tile = 5;                       /* plain asphalt       */
+                }
+                map[ty * 32 + tx] = SE_BUILD(tile, 0, 0, 0);
+            }
+        }
+    }
+
     oam_init(obj_buffer, 128);
 
     /* IRQ setup — required for VBlankIntrWait() to function. */
@@ -108,9 +168,11 @@ int main(void) {
 
     sfx_init();
 
-    /* TTE for score + hint. */
-    tte_init_chr4c_default(0, BG_CBB(0) | BG_SBB(31));
-    REG_DISPCNT = DCNT_MODE0 | DCNT_BG0 | DCNT_OBJ | DCNT_OBJ_1D;
+    /* TTE for score + hint on BG1 (BG0 holds the road). char-block 2 /
+     * screen-block 30; priority 0 → text in front of everything. */
+    tte_init_chr4c_default(1, BG_CBB(2) | BG_SBB(30));
+    REG_BG1CNT |= BG_PRIO(0);
+    REG_DISPCNT = DCNT_MODE0 | DCNT_BG0 | DCNT_BG1 | DCNT_OBJ | DCNT_OBJ_1D;
     tte_write("#{P:160,8}SCORE 00000");
     tte_write("#{P:64,150}L/R MOVES LANE");
 

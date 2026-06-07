@@ -18,6 +18,7 @@ extern void    sms_vdp_init(void);
 extern void    sms_vdp_display_on(void);
 extern void    sms_load_palette(const uint8_t *palette);
 extern void    sms_load_tiles(uint16_t vram_dest, const uint8_t *src, uint16_t byte_count);
+extern void    sms_set_tilemap_cell(uint8_t row, uint8_t col, uint8_t tile_idx, uint8_t attr);
 extern void    sms_vblank_wait(void);
 extern uint8_t sms_joypad_read(void);
 extern void    sms_sprite_init(void);
@@ -31,12 +32,46 @@ extern void    sms_sat_upload(void);
 #define MAX_OBSTACLES   4
 
 static const uint8_t palette[32] = {
-  0x10, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  /* BG: 0 = dark navy backdrop, 1 = grass green, 2 = road grey */
+  0x10, 0x08, 0x16, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   /* Sprite palette: white (1), red (2) */
   0x00, 0x3F, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
+
+/* Three BG tiles for the track, loaded into the BG tile bank at $0000:
+ *   tile 0 = blank (backdrop), tile 1 = grass (colour 1), tile 2 = road
+ *   (colour 2). The track fills the whole 32x24 SMS screen so the display
+ *   is a clear road scene, not a flat backdrop. */
+static const uint8_t bg_tiles[96] = {
+  /* BG tile 0 = blank */
+  0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+  0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+  /* BG tile 1 = grass (colour 1 -> plane 0 set) */
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  /* BG tile 2 = road (colour 2 -> plane 1 set) */
+  0x00,0xFF,0x00,0x00, 0x00,0xFF,0x00,0x00,
+  0x00,0xFF,0x00,0x00, 0x00,0xFF,0x00,0x00,
+  0x00,0xFF,0x00,0x00, 0x00,0xFF,0x00,0x00,
+  0x00,0xFF,0x00,0x00, 0x00,0xFF,0x00,0x00,
+};
+
+/* Paint the whole 32x24 SMS screen: grey road down the centre lanes,
+ * green grass on the shoulders. BG tile bank is $0000. The road spans the
+ * three lanes (player X 72..184 -> roughly cols 8..23). */
+static void draw_track(void) {
+  uint8_t row, col;
+  for (row = 0; row < 24; row++) {
+    for (col = 0; col < 32; col++) {
+      uint8_t road = (col >= 8 && col <= 23);
+      sms_set_tilemap_cell(row, col, road ? 2 : 1, 0);
+    }
+  }
+}
 
 /* Two sprite tiles — player (colour 1) + enemy (colour 2). */
 static const uint8_t tiles[64] = {
@@ -97,7 +132,9 @@ void main(void) {
   uint8_t i;
   sms_vdp_init();
   sms_load_palette(palette);
-  sms_load_tiles(0x2000, tiles, 64);
+  sms_load_tiles(0x0000, bg_tiles, 96);   /* BG tiles -> BG bank $0000 */
+  sms_load_tiles(0x2000, tiles, 64);      /* sprite tiles -> sprite bank $2000 */
+  draw_track();
   sms_sprite_init();
   sfx_init();
   sms_vdp_display_on();

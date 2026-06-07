@@ -21,6 +21,7 @@ void main(void) {
   int16_t p1y = 40, p2y = 40, bx = 78, by = 48;
   int8_t bdx = 2, bdy = 1;
   uint8_t joy;
+  int16_t ny;   /* loop var for the dashed centre net */
 
   tgi_install(&lynx_160_102_16_tgi);
   tgi_init();
@@ -33,8 +34,34 @@ void main(void) {
      * — drawing while the blitter is mid-flight loses the frame → black.
      * (Copied from the shmup scaffold, the LYNX-1 fix.) */
     while (tgi_busy()) { }
-    tgi_setcolor(COLOR_BLACK);
-    tgi_bar(0, 0, tgi_getmaxx(), tgi_getmaxy());
+
+    /* ── Background scene (drawn every frame). Without it the court is a
+     * near-flat single colour and the render-health audit flags the
+     * screen as blank. A two-tone court with boards + net markings keeps
+     * several distinct colours well under the threshold:
+     *   - green centre court
+     *   - lighter-green end zones behind each paddle
+     *   - dark-grey boards top and bottom
+     *   - white boundary, dashed centre net + centre circle. */
+    tgi_setcolor(COLOR_GREEN);
+    tgi_bar(0, 0, tgi_getmaxx(), tgi_getmaxy());        /* court grass       */
+    tgi_setcolor(COLOR_LIGHTGREEN);
+    tgi_bar(0, COURT_TOP, 52, COURT_BOT - 1);           /* left end zone     */
+    tgi_bar(107, COURT_TOP, 159, COURT_BOT - 1);        /* right end zone    */
+    tgi_setcolor(COLOR_DARKGREY);
+    tgi_bar(0, 0, 159, COURT_TOP - 1);                  /* top boards        */
+    tgi_bar(0, COURT_BOT, 159, 101);                    /* bottom boards     */
+    /* white court boundary + dashed centre net + centre circle */
+    tgi_setcolor(COLOR_WHITE);
+    tgi_line(0, COURT_TOP, 159, COURT_TOP);
+    tgi_line(0, COURT_BOT, 159, COURT_BOT);
+    for (ny = COURT_TOP; ny < COURT_BOT; ny += 8)
+      tgi_bar(79, (unsigned)ny, 80, (unsigned)(ny + 3 > COURT_BOT ? COURT_BOT : ny + 3));
+    tgi_line(70, 40, 90, 40);
+    tgi_line(70, 60, 90, 60);
+    tgi_line(70, 40, 70, 60);
+    tgi_line(90, 40, 90, 60);
+
     tgi_setcolor(COLOR_WHITE);
     tgi_bar(PADDLE_X1, (unsigned)p1y, PADDLE_X1 + PADDLE_W - 1, (unsigned)(p1y + PADDLE_H - 1));
     tgi_bar(PADDLE_X2, (unsigned)p2y, PADDLE_X2 + PADDLE_W - 1, (unsigned)(p2y + PADDLE_H - 1));

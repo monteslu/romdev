@@ -29,8 +29,23 @@
 #define T_RED   (TILE_USER_INDEX + 1)
 #define T_GREEN (TILE_USER_INDEX + 2)
 #define T_BLUE  (TILE_USER_INDEX + 3)
+#define T_BG    (TILE_USER_INDEX + 4)   /* full-screen backdrop (BG_A) */
+#define T_WELL  (TILE_USER_INDEX + 5)   /* play-well backdrop (BG_A)   */
 
 static const u32 tile_blank[8] = { 0,0,0,0,0,0,0,0 };
+/* Backdrop block for the far plane: a framed cell (colour 4 border /
+ * colour 5 fill) tiled across the whole screen so the playfield no
+ * longer floats on a flat black backdrop. */
+static const u32 tile_bg[8] = {
+    0x44444444, 0x45555554, 0x45555554, 0x45555554,
+    0x45555554, 0x45555554, 0x45555554, 0x44444444,
+};
+/* A darker, recessed cell drawn behind the play column so the well reads
+ * as an inset board rather than part of the surrounding wall. */
+static const u32 tile_well[8] = {
+    0x44444444, 0x40000004, 0x40000004, 0x40000004,
+    0x40000004, 0x40000004, 0x40000004, 0x44444444,
+};
 static const u32 tile_red[8]   = {
     0x11111111, 0x11111111, 0x11111111, 0x11111111,
     0x11111111, 0x11111111, 0x11111111, 0x11111111,
@@ -91,8 +106,11 @@ static void draw_cell(s16 col, s16 row) {
     /* Each grid cell is CELL_PX/8 = 2 tiles square. */
     for (u16 dy = 0; dy < 2; dy++) {
         for (u16 dx = 0; dx < 2; dx++) {
+            /* Cells use the EMPTY-or-coloured tile. Empty cells stay
+             * transparent so the BG_A well backdrop shows through; filled
+             * cells are HIGH priority so they sit above that backdrop. */
             VDP_setTileMapXY(BG_B,
-                TILE_ATTR_FULL(pal_for(v), 0, 0, 0, tile_for(v)),
+                TILE_ATTR_FULL(pal_for(v), v ? 1 : 0, 0, 0, tile_for(v)),
                 col * 2 + dx + 6,
                 row * 2 + dy + 1);
         }
@@ -116,7 +134,7 @@ static void draw_piece(s16 col, s16 row, bool clear) {
         for (u16 dy = 0; dy < 2; dy++)
             for (u16 dx = 0; dx < 2; dx++)
                 VDP_setTileMapXY(BG_B,
-                    TILE_ATTR_FULL(pal_for(v), 0, 0, 0, tile_for(v)),
+                    TILE_ATTR_FULL(pal_for(v), v ? 1 : 0, 0, 0, tile_for(v)),
                     col * 2 + dx + 6,
                     r   * 2 + dy + 1);
     }
@@ -166,15 +184,31 @@ static void render_score(void) {
 int main(bool hard) {
     (void)hard;
 
-    /* Palette 1: tile colours for red/green/blue cells. */
+    /* Palette 1: tile colours for red/green/blue cells + the backdrop. */
     PAL_setColor(16 + 1, 0x000E); /* red */
     PAL_setColor(16 + 2, 0x00E0); /* green */
     PAL_setColor(16 + 3, 0x0E00); /* blue */
+    PAL_setColor(16 + 4, 0x0420); /* backdrop wall border */
+    PAL_setColor(16 + 5, 0x0610); /* backdrop wall fill   */
 
     VDP_loadTileData(tile_blank, T_BLANK, 1, DMA);
     VDP_loadTileData(tile_red,   T_RED,   1, DMA);
     VDP_loadTileData(tile_green, T_GREEN, 1, DMA);
     VDP_loadTileData(tile_blue,  T_BLUE,  1, DMA);
+    VDP_loadTileData(tile_bg,    T_BG,    1, DMA);
+    VDP_loadTileData(tile_well,  T_WELL,  1, DMA);
+
+    /* Far plane (BG_A): tile the whole 40x28 screen with the wall block,
+     * then recess the 12x24-cell play column so the grid sits in an inset
+     * well. The grid (BG_B) draws over this with HIGH priority. */
+    for (u16 cy = 0; cy < 28; cy++)
+        for (u16 cx = 0; cx < 40; cx++)
+            VDP_setTileMapXY(BG_A,
+                TILE_ATTR_FULL(PAL1, 0, 0, 0, T_BG), cx, cy);
+    for (u16 cy = 1; cy <= 24; cy++)
+        for (u16 cx = 6; cx <= 17; cx++)
+            VDP_setTileMapXY(BG_A,
+                TILE_ATTR_FULL(PAL1, 0, 0, 0, T_WELL), cx, cy);
 
     for (s16 r = 0; r < ROWS; r++)
         for (s16 c = 0; c < COLS; c++)

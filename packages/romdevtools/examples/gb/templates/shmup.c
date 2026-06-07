@@ -25,6 +25,24 @@ static const uint8_t tile_ship[16] = {
     0x18,0x18, 0x3C,0x3C, 0x7E,0x7E, 0xFF,0xFF,
     0xFF,0xFF, 0x7E,0x7E, 0x3C,0x3C, 0x18,0x18,
 };
+/* ── BG tiles (starfield) ─────────────────────────────────────────────
+ * The background is a real scrolling-looking starfield so the screen is
+ * never one flat colour (LCDC_BG_ON below — drop it and the screen reads
+ * as blank, the #1 GB "why is it blank" footgun).
+ *   tile_space — a 50/50 dither of colour 0 (dark) + colour 1, so even an
+ *                empty patch of space mixes two palette shades and never
+ *                lets one colour dominate the frame.
+ *   tile_star  — a bright colour-3 "+" star on the dithered field. */
+static const uint8_t tile_space[16] = {
+    0x55,0x00, 0xAA,0x00, 0x55,0x00, 0xAA,0x00,
+    0x55,0x00, 0xAA,0x00, 0x55,0x00, 0xAA,0x00,
+};
+static const uint8_t tile_star[16] = {
+    0x10,0x10, 0x10,0x10, 0x54,0x54, 0x38,0x38,
+    0x54,0x54, 0x10,0x10, 0x10,0x10, 0x00,0x00,
+};
+#define T_SPACE 4
+#define T_STAR  5
 static const uint8_t tile_bullet[16] = {
     0x00,0x00, 0x18,0x18, 0x3C,0x3C, 0x3C,0x3C,
     0x3C,0x3C, 0x3C,0x3C, 0x18,0x18, 0x00,0x00,
@@ -86,6 +104,17 @@ static void upload_tile(uint8_t slot, const uint8_t *src) {
     for (i = 0; i < 16; i++) dst[i] = src[i];
 }
 
+/* Paint a starfield into BG map 0 ($9800): fill the visible 20×18 with the
+ * dithered space tile, then scatter bright stars on a fixed pseudo-pattern
+ * so the field reads as deep space rather than a flat colour. */
+static void draw_starfield(void) {
+    uint8_t *bg = BG_MAP_0;
+    uint8_t r, c;
+    for (r = 0; r < 18; r++)
+        for (c = 0; c < 20; c++)
+            bg[r * 32 + c] = ((r * 7 + c * 5) % 11 == 0) ? T_STAR : T_SPACE;
+}
+
 void main(void) {
     uint8_t pad, prev = 0;
     uint8_t i, j;
@@ -97,12 +126,20 @@ void main(void) {
     upload_tile(1, tile_ship);
     upload_tile(2, tile_bullet);
     upload_tile(3, tile_enemy);
+    upload_tile(T_SPACE, tile_space);
+    upload_tile(T_STAR,  tile_star);
+
+    /* DMG BG palette: 0 dark, 1 mid-dark, 2 light, 3 white — the dithered
+     * space tile mixes shades 0+1 (deep space), stars use shade 3 (white). */
+    BGP = 0xE4;
 
     OCPS = 0x80;
     for (i = 0; i < 4; i++) {
         OCPD = (uint8_t)(obj_palette[i] & 0xFF);
         OCPD = (uint8_t)((obj_palette[i] >> 8) & 0xFF);
     }
+
+    draw_starfield();
 
     player.x = 76; player.y = 130; player.alive = 1;
     for (i = 0; i < MAX_BULLETS; i++) bullets[i].alive = 0;
@@ -111,7 +148,7 @@ void main(void) {
     spawn_timer = 0;
 
     oam_clear();
-    LCDC = LCDC_LCD_ON | LCDC_OBJ_ON | LCDC_TILE_DATA_LO;
+    LCDC = LCDC_LCD_ON | LCDC_BG_ON | LCDC_OBJ_ON | LCDC_TILE_DATA_LO;
     sound_init();
 
     while (1) {

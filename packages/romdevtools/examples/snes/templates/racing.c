@@ -12,10 +12,15 @@
 
 extern char tilfont, palfont;
 extern char tilsprite, palsprite;
+extern char tilbg, palbg;       /* wallpaper tile + palette (data.asm) */
 
 /* consoleVblank() copies the dirty text tilemap to VRAM during VBlank.
  * No public prototype in console.h, so declare it; call once per frame. */
 extern void consoleVblank(void);
+
+/* BG1 wallpaper map: a full 32x32 screen of the 4-colour tile so the
+ * playfield reads as a real backdrop, not flat blank. Filled at runtime. */
+static u16 bg_map[32 * 32];
 
 #define LANE_LEFT_X    72
 #define LANE_MID_X    124
@@ -103,6 +108,7 @@ static void draw_road(void) {
 int main(void) {
     u16 pad;
     u8 i;
+    u16 bi;
     s16 step;
 
     consoleSetTextMapPtr(0x6800);
@@ -114,7 +120,17 @@ int main(void) {
      * registers — point BG0 at the same font ($3000) + map ($6800). */
     bgSetGfxPtr(0, 0x3000);
     bgSetMapPtr(0, 0x6800, SC_32x32);
-    bgSetDisable(1);
+
+    /* BG1 = full-screen wallpaper so the playfield never reads as blank.
+     * Tiles -> VRAM $2000, map -> VRAM $4000 (clear of sprites $0000 and
+     * the console gfx $3000 / map $6800). Map entries use palette block 1
+     * (0x0400) so the wallpaper palette doesn't disturb the console font
+     * palette in block 0 (HUD/road text stays legible). */
+    bgInitTileSet(1, (u8 *)&tilbg, (u8 *)&palbg, 1,
+                  32, 32, BG_16COLORS, 0x2000);
+    for (bi = 0; bi < 32 * 32; bi++) bg_map[bi] = 0x0400;
+    bgInitMapSet(1, (u8 *)bg_map, sizeof(bg_map), SC_32x32, 0x4000);
+    bgSetEnable(1);
     bgSetDisable(2);
 
     /* 2 sprite tiles × 32 bytes = 64 bytes */

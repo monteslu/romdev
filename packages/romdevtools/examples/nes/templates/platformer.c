@@ -28,7 +28,7 @@
 
 #include "nes_runtime.h"
 
-/* ── Tiles: player idle/jump + platform block ────────────────────── */
+/* ── Tiles: player idle/jump + platform block (SPRITES, table $0000) ── */
 static const uint8_t tile_blank[16] = { 0 };
 static const uint8_t tile_player_idle[16] = {
   0x3C, 0x7E, 0xFF, 0xFF, 0xFF, 0xFF, 0x7E, 0x3C,  /* plane 0 — round blob */
@@ -43,12 +43,46 @@ static const uint8_t tile_platform[16] = {
   0,    0,    0,    0,    0,    0,    0,    0,
 };
 
+/* ── BG scenery tiles (BACKGROUND pattern table $1000) ────────────────
+ * Painted into the nametable so the world reads as a real outdoor scene on
+ * boot (sky + clouds + dirt) instead of sprites floating on flat black. The
+ * BG backdrop colour (palette[0]) is sky blue, so the colours used here are
+ * cloud white (idx1), dirt brown (idx2) and grass green (idx3).
+ *
+ *   BG_CLOUD — a puffy cloud (idx1) dotted across the upper sky.
+ *   BG_DIRT  — solid dirt fill (idx2) for the ground band.
+ *   BG_GRASS — a grass-topped dirt tile (idx3 cap over idx2) for the
+ *              surface row of the ground. */
+#define BG_CLOUD  1   /* BG tile index 1 → uploaded to $1010 */
+#define BG_DIRT   2   /* BG tile index 2 → uploaded to $1020 */
+#define BG_GRASS  3   /* BG tile index 3 → uploaded to $1030 */
+static const uint8_t bg_tile_cloud[16] = {
+  0x00, 0x18, 0x3C, 0x7E, 0x7E, 0x00, 0x00, 0x00,  /* plane 0 → cloud (idx1) */
+  0,    0,    0,    0,    0,    0,    0,    0,
+};
+static const uint8_t bg_tile_dirt[16] = {
+  0,    0,    0,    0,    0,    0,    0,    0,        /* plane 0 clear  */
+  0xFF, 0xFF, 0xEF, 0xFF, 0xFF, 0xFE, 0xFF, 0xFF,   /* plane 1 → dirt (idx2) */
+};
+static const uint8_t bg_tile_grass[16] = {
+  0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  /* plane0: top 2 rows on */
+  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,  /* plane1: all rows on   */
+};  /* rows 0-1 → both planes = idx3 (grass cap); rows 2-7 → plane1 = idx2 (dirt) */
+
 static const uint8_t palette[32] = {
-  0x0F, 0x10, 0x20, 0x30,
-  0x0F, 0x10, 0x20, 0x30,
-  0x0F, 0x10, 0x20, 0x30,
-  0x0F, 0x10, 0x20, 0x30,
-  0x0F, 0x21, 0x32, 0x30,  /* sp0: player — blue */
+  /* BG0: sky-blue backdrop, cloud white (idx1), dirt brown (idx2),
+   * grass green (idx3) */
+  0x21, 0x30, 0x17, 0x2A,
+  0x21, 0x30, 0x17, 0x2A,
+  0x21, 0x30, 0x17, 0x2A,
+  0x21, 0x30, 0x17, 0x2A,
+  /* The universal backdrop ($3F00) is MIRRORED at $3F10 — the sprite
+   * palette-0 colour-0 slot. palette_load writes all 32 bytes in order, so
+   * byte 16 (this slot) is the LAST write to that mirror and therefore wins.
+   * Keep it equal to the BG backdrop (sky blue) or the sky renders as
+   * whatever colour-0 you put here, not the BG[0] above. (Sprite colour 0 is
+   * transparent regardless, so this never affects how sprites draw.) */
+  0x21, 0x21, 0x32, 0x30,  /* sp0: player — blue (colour 0 = backdrop mirror) */
   0x0F, 0x18, 0x28, 0x38,  /* sp1: platforms — green */
   0x0F, 0x16, 0x06, 0x36,
   0x0F, 0x2A, 0x1A, 0x0A,
@@ -102,7 +136,32 @@ void main(void) {
   chr_ram_upload(0x0020, tile_player_jump,  16);
   chr_ram_upload(0x0030, tile_platform,     16);
 
+  /* BG scenery tiles go in pattern table 1 ($1000) — where the default
+   * PPUCTRL points the background fetch. */
+  chr_ram_upload(0x1010, bg_tile_cloud, 16);
+  chr_ram_upload(0x1020, bg_tile_dirt,  16);
+  chr_ram_upload(0x1030, bg_tile_grass, 16);
+
   palette_load(palette);
+
+  /* Paint the outdoor scene into the nametable while rendering is off
+   * (vram_unsafe_set = raw write; tile_set's NMI queue would deadlock before
+   * ppu_on). Sky-blue backdrop shows through the empty upper rows; we dot
+   * clouds across it, cap the ground with a grass row, and fill the bottom
+   * band with solid dirt. The sprite platforms still draw on top of this. */
+  {
+    uint16_t r, c;
+    /* clouds scattered through the upper sky (rows 2..9) */
+    for (r = 2; r < 10; r++)
+      for (c = (uint16_t)((r * 3) % 6); c < 32; c += 6)
+        vram_unsafe_set((uint16_t)(0x2000 + r * 32 + c), BG_CLOUD);
+    /* grass cap row + solid dirt to the bottom of the screen */
+    for (c = 0; c < 32; c++)
+      vram_unsafe_set((uint16_t)(0x2000 + 24 * 32 + c), BG_GRASS);
+    for (r = 25; r < 30; r++)
+      for (c = 0; c < 32; c++)
+        vram_unsafe_set((uint16_t)(0x2000 + r * 32 + c), BG_DIRT);
+  }
 
   oam_clear();
   ppu_on_all();

@@ -15,10 +15,15 @@
 #include "snes_sfx.c"
 
 extern char tilfont, palfont;
+extern char tilbg, palbg;       /* wallpaper tile + palette (data.asm) */
 
 /* consoleVblank() copies the dirty text tilemap to VRAM during VBlank.
  * No public prototype in console.h, so declare it; call once per frame. */
 extern void consoleVblank(void);
+
+/* BG1 wallpaper map: a full 32x32 screen of the 4-colour tile so the
+ * playfield reads as a real backdrop, not flat blank. Filled at runtime. */
+static u16 bg_map[32 * 32];
 
 #define COLS 6
 #define ROWS 12
@@ -136,6 +141,7 @@ static void render_score(void) {
 int main(void) {
     s16 r, c;
     u16 pad, prev = 0, fall_rate;
+    u16 i;
     u8 t;
 
     consoleSetTextMapPtr(0x6800);
@@ -147,7 +153,17 @@ int main(void) {
      * registers — point BG0 at the same font ($3000) + map ($6800). */
     bgSetGfxPtr(0, 0x3000);
     bgSetMapPtr(0, 0x6800, SC_32x32);
-    bgSetDisable(1);
+
+    /* BG1 = full-screen wallpaper so the playfield never reads as blank.
+     * Tiles -> VRAM $2000, map -> VRAM $4000 (clear of sprites $0000 and
+     * the console gfx $3000 / map $6800). Map entries use palette block 1
+     * (0x0400) so the wallpaper palette doesn't disturb the console font
+     * palette in block 0 (HUD/grid text stays legible). */
+    bgInitTileSet(1, (u8 *)&tilbg, (u8 *)&palbg, 1,
+                  32, 32, BG_16COLORS, 0x2000);
+    for (i = 0; i < 32 * 32; i++) bg_map[i] = 0x0400;
+    bgInitMapSet(1, (u8 *)bg_map, sizeof(bg_map), SC_32x32, 0x4000);
+    bgSetEnable(1);
     bgSetDisable(2);
 
     for (r = 0; r < ROWS; r++)

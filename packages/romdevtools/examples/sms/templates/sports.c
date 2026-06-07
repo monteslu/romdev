@@ -20,6 +20,7 @@ extern void    sms_vdp_init(void);
 extern void    sms_vdp_display_on(void);
 extern void    sms_load_palette(const uint8_t *palette);
 extern void    sms_load_tiles(uint16_t vram_dest, const uint8_t *src, uint16_t byte_count);
+extern void    sms_set_tilemap_cell(uint8_t row, uint8_t col, uint8_t tile_idx, uint8_t attr);
 extern void    sms_vblank_wait(void);
 extern uint8_t sms_joypad_read(void);
 extern uint8_t sms_joypad_read_p2(void);
@@ -35,7 +36,8 @@ extern void    sms_sat_upload(void);
 #define PADDLE_X2   232
 
 static const uint8_t palette[32] = {
-  0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  /* BG: 0 = backdrop, 1 = court green, 2 = court line / net white */
+  0x10, 0x08, 0x3F, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   /* Sprite palette: white at idx 1 */
   0x00, 0x3F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -48,6 +50,43 @@ static const uint8_t tile_solid[32] = {
   0xFF, 0x00, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00,
   0xFF, 0x00, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00,
 };
+
+/* Three BG tiles for the court, loaded into the BG tile bank at $0000:
+ *   tile 0 = court green (solid colour 1)
+ *   tile 1 = court line / border (solid colour 2 = white)
+ *   tile 2 = dashed net (colour 2 vertical stripe on green) */
+static const uint8_t bg_tiles[96] = {
+  /* tile 0 = court green (colour 1 -> plane 0 set) */
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  /* tile 1 = court line / border (colour 2 -> plane 1 set) */
+  0x00,0xFF,0x00,0x00, 0x00,0xFF,0x00,0x00,
+  0x00,0xFF,0x00,0x00, 0x00,0xFF,0x00,0x00,
+  0x00,0xFF,0x00,0x00, 0x00,0xFF,0x00,0x00,
+  0x00,0xFF,0x00,0x00, 0x00,0xFF,0x00,0x00,
+  /* tile 2 = net: centre column colour 2, rest colour 1 (green) */
+  0xFF,0x18,0x00,0x00, 0xFF,0x18,0x00,0x00,
+  0xFF,0x18,0x00,0x00, 0xFF,0x18,0x00,0x00,
+  0xFF,0x18,0x00,0x00, 0xFF,0x18,0x00,0x00,
+  0xFF,0x18,0x00,0x00, 0xFF,0x18,0x00,0x00,
+};
+
+/* Paint the whole 32x24 court: green field, white top/bottom border lines,
+ * and a dashed net down the centre column. BG tile bank is $0000. */
+static void draw_court(void) {
+  uint8_t row, col;
+  for (row = 0; row < 24; row++) {
+    for (col = 0; col < 32; col++) {
+      uint8_t t = 0;                              /* green field          */
+      if (row <= 1 || row >= 22) t = 1;           /* white top/bottom lines */
+      else if (col == 1 || col == 30) t = 1;      /* white sidelines        */
+      else if (col == 16) t = 2;                  /* solid centre net       */
+      sms_set_tilemap_cell(row, col, t, 0);
+    }
+  }
+}
 
 static int16_t p1y, p2y, bx, by;
 static int8_t  bdx, bdy;
@@ -72,7 +111,9 @@ void main(void) {
   uint8_t i;
   sms_vdp_init();
   sms_load_palette(palette);
-  sms_load_tiles(0x2000, tile_solid, 32);
+  sms_load_tiles(0x0000, bg_tiles, 96);     /* BG court tiles -> BG bank $0000 */
+  sms_load_tiles(0x2000, tile_solid, 32);   /* paddle/ball sprite tile -> $2000 */
+  draw_court();
   sms_sprite_init();
   sfx_init();
   sms_vdp_display_on();

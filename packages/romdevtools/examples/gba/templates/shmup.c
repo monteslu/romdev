@@ -64,6 +64,20 @@ static const u32 tile_enemy[8] = {
     0x33333333, 0x03333330, 0x30000003, 0x03000030,
 };
 
+/* ── Starfield backdrop tiles (4bpp) ─────────────────────────────────
+ * Two space-coloured fill tiles (palette indices 4 and 5) laid in
+ * vertical bands so the whole BG is filled — NOT a flat blank backdrop.
+ * A handful of star pixels (index 6) are punched into each tile so the
+ * field reads as space rather than a solid block. */
+static const u32 tile_star_a[8] = {
+    0x44464444, 0x44444444, 0x46444444, 0x44444644,
+    0x44444444, 0x64444444, 0x44444444, 0x44446444,
+};
+static const u32 tile_star_b[8] = {
+    0x55555555, 0x55655555, 0x55555555, 0x55555565,
+    0x65555555, 0x55555555, 0x55556555, 0x55555555,
+};
+
 typedef struct { s16 x, y; u16 alive; } Obj;
 
 static OBJ_ATTR obj_buffer[128];
@@ -114,6 +128,27 @@ int main(void) {
     pal_obj_bank[1][2] = CLR_YELLOW;  /* bullets */
     pal_obj_bank[2][3] = CLR_RED;     /* enemies */
 
+    /* ── Starfield backdrop on BG0 ───────────────────────────────────
+     * Fill the whole screen with a banded space backdrop + scattered
+     * stars so the playfield doesn't read as a blank black screen. BG
+     * palette indices 4/5 = the two space bands, 6 = star colour. Tile
+     * data → char-block 0, map → screen-block 28 (clear of TTE on
+     * char-block 2 / screen-block 30). BG0 sits at the lowest priority
+     * so the ship/bullets/enemies draw in front of it. */
+    pal_bg_mem[0] = CLR_BLACK;
+    pal_bg_mem[4] = RGB15(1, 2, 7);    /* dark space band   */
+    pal_bg_mem[5] = RGB15(2, 3, 10);   /* lighter band      */
+    pal_bg_mem[6] = RGB15(28, 28, 31); /* stars             */
+    tonccpy(&tile_mem[0][4], tile_star_a, sizeof(tile_star_a));
+    tonccpy(&tile_mem[0][5], tile_star_b, sizeof(tile_star_b));
+    REG_BG0CNT = BG_CBB(0) | BG_SBB(28) | BG_REG_32x32 | BG_4BPP | BG_PRIO(3);
+    {
+        SCR_ENTRY *map = se_mem[28];
+        for (int ty = 0; ty < 32; ty++)
+            for (int tx = 0; tx < 32; tx++)
+                map[ty * 32 + tx] = SE_BUILD(4 + ((ty >> 1) & 1), 0, 0, 0);
+    }
+
     oam_init(obj_buffer, 128);
 
     /* IRQ setup — required for VBlankIntrWait() to function. */
@@ -128,10 +163,12 @@ int main(void) {
     score = 0;
     spawn_timer = 0;
 
-    /* TTE on BG0 at screen-block 31, char-block 0. Renders into VRAM
-     * tile map — no libsysbase / iprintf dependency. */
-    tte_init_chr4c_default(0, BG_CBB(0) | BG_SBB(31));
-    REG_DISPCNT = DCNT_MODE0 | DCNT_BG0 | DCNT_OBJ | DCNT_OBJ_1D;
+    /* TTE on BG1 at screen-block 30, char-block 2 (BG0 holds the
+     * starfield). Renders into VRAM tile map — no libsysbase / iprintf
+     * dependency. BG1 priority 0 → score/hint text in front. */
+    tte_init_chr4c_default(1, BG_CBB(2) | BG_SBB(30));
+    REG_BG1CNT |= BG_PRIO(0);
+    REG_DISPCNT = DCNT_MODE0 | DCNT_BG0 | DCNT_BG1 | DCNT_OBJ | DCNT_OBJ_1D;
     tte_write("#{P:8,8}SCORE 00000");
     tte_write("#{P:8,144}D-PAD MOVE  A FIRE");
 

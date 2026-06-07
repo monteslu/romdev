@@ -28,6 +28,31 @@ static const uint8_t tile_solid[16] = {
   0xFF,0xFF, 0xFF,0xFF, 0xFF,0xFF, 0xFF,0xFF,
 };
 
+/* ── BG tiles (the court) ──────────────────────────────────────────────
+ * A real playfield behind the paddles so the screen is never one flat
+ * colour (LCDC_BG_ON below — drop it and it reads as blank, the #1 GB
+ * "why is it blank" footgun).
+ *   tile_court  — a 50/50 dither of palette colours 0 + 1 (the green turf),
+ *                 so even an empty patch mixes two shades and never
+ *                 dominates the frame.
+ *   tile_net    — a dashed vertical centre-net stripe (colour 2).
+ *   tile_wall   — a solid colour-2 border for the top / bottom rails. */
+static const uint8_t tile_court[16] = {
+  0x55,0x55, 0xAA,0xAA, 0x55,0x55, 0xAA,0xAA,
+  0x55,0x55, 0xAA,0xAA, 0x55,0x55, 0xAA,0xAA,
+};
+static const uint8_t tile_net[16] = {
+  0x18,0x18, 0x18,0x18, 0x00,0x00, 0x00,0x00,
+  0x18,0x18, 0x18,0x18, 0x00,0x00, 0x00,0x00,
+};
+static const uint8_t tile_wall[16] = {
+  0x00,0x00, 0xFF,0xFF, 0xFF,0xFF, 0x00,0x00,
+  0x00,0x00, 0xFF,0xFF, 0xFF,0xFF, 0x00,0x00,
+};
+#define T_COURT 2
+#define T_NET   3
+#define T_WALL  4
+
 static const uint16_t obj_palette[4] = { 0x7FFF, 0x001F, 0x03E0, 0x7C00 };
 static const uint16_t bg_palette[4]  = { 0x2104, 0x294A, 0x4631, 0x7FFF };  /* deep court green */
 
@@ -58,6 +83,21 @@ static void upload_tile(uint8_t slot, const uint8_t *src) {
   for (i = 0; i < 16; i++) dst[i] = src[i];
 }
 
+/* Paint the Pong court into BG map 0 ($9800): dithered turf everywhere,
+ * solid top/bottom rails, and a dashed net down the centre column. */
+static void draw_court(void) {
+  uint8_t *bg = BG_MAP_0;
+  uint8_t r, c, t;
+  for (r = 0; r < 18; r++) {
+    for (c = 0; c < 20; c++) {
+      if (r == 0 || r == 17)      t = T_WALL;          /* top / bottom rail */
+      else if (c == 9 || c == 10) t = (r & 1) ? T_NET : T_COURT; /* net dashes */
+      else                        t = T_COURT;
+      bg[r * 32 + c] = t;
+    }
+  }
+}
+
 void main(void) {
   uint8_t pad;
   uint8_t i;
@@ -68,6 +108,9 @@ void main(void) {
 
   upload_tile(0, tile_blank);
   upload_tile(1, tile_solid);
+  upload_tile(T_COURT, tile_court);
+  upload_tile(T_NET,   tile_net);
+  upload_tile(T_WALL,  tile_wall);
 
   OCPS = 0x80;
   for (i = 0; i < 4; i++) {
@@ -80,8 +123,9 @@ void main(void) {
     BCPD = (uint8_t)((bg_palette[i] >> 8) & 0xFF);
   }
 
+  draw_court();
   oam_clear();
-  LCDC = LCDC_LCD_ON | LCDC_OBJ_ON | LCDC_TILE_DATA_LO;
+  LCDC = LCDC_LCD_ON | LCDC_BG_ON | LCDC_OBJ_ON | LCDC_TILE_DATA_LO;
   sound_init();
 
   reset_match();

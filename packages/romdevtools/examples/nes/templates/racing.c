@@ -59,14 +59,22 @@ static const uint8_t tile_digits[10 * 16] = {
 /* ── Background road tiles ───────────────────────────────────────────
  * Default PPUCTRL ($90) reads BG patterns from pattern table 1 ($1000),
  * so these go to CHR $1000+ and are indexed independently of the sprite
- * tiles above. Colour 1 (white, BG palette 0) draws the markings; the
- * grey backdrop (colour 0) is the road surface.
+ * tiles above. The grey backdrop (colour 0) is the road surface; colour 1
+ * (white) draws the markings, colour 2 (green) the grass, colour 3 the
+ * dark seam in the tarmac.
  *
- * BG_T_EDGE: a solid 2px vertical stripe — the road shoulder line.
- * BG_T_LANE: a 2px vertical dash (on for 4 rows, off for 4) — the
- *            dashed centre lane marking when stacked down a column. */
+ * BG_T_EDGE:  a solid 2px vertical stripe — the road shoulder line.
+ * BG_T_LANE:  a 2px vertical dash (on 4 rows / off 4) — the dashed centre
+ *             lane marking when stacked down a column.
+ * BG_T_GRASS: a textured green roadside (colour 2 hatch) so the area
+ *             outside the shoulders isn't flat — fills the screen sides.
+ * BG_T_ROAD:  a faint tarmac texture (a couple of colour-3 specks) tiled
+ *             across the driving surface so the road doesn't read as one
+ *             solid grey block. */
 #define BG_T_EDGE   1
 #define BG_T_LANE   2
+#define BG_T_GRASS  3
+#define BG_T_ROAD   4
 static const uint8_t bg_tile_edge[16] = {
   0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18,   /* plane 0 (colour bit 0) */
   0,    0,    0,    0,    0,    0,    0,    0,
@@ -75,13 +83,21 @@ static const uint8_t bg_tile_lane[16] = {
   0x18, 0x18, 0x18, 0x18, 0x00, 0x00, 0x00, 0x00,   /* dash: 4 on, 4 off */
   0,    0,    0,    0,    0,    0,    0,    0,
 };
+static const uint8_t bg_tile_grass[16] = {
+  0,    0,    0,    0,    0,    0,    0,    0,        /* plane 0 clear */
+  0xEE, 0xBB, 0xEE, 0xBB, 0xEE, 0xBB, 0xEE, 0xBB,   /* plane 1 → colour 2 hatch */
+};
+static const uint8_t bg_tile_road[16] = {
+  0x00, 0x00, 0x10, 0x00, 0x00, 0x08, 0x00, 0x00,   /* plane 0 specks */
+  0x00, 0x00, 0x10, 0x00, 0x00, 0x08, 0x00, 0x00,   /* plane 1 too → colour 3 */
+};
 
 static const uint8_t palette[32] = {
-  /* BG palettes — light grey backdrop simulates road */
-  0x10, 0x30, 0x16, 0x12,
-  0x10, 0x30, 0x16, 0x12,
-  0x10, 0x30, 0x16, 0x12,
-  0x10, 0x30, 0x16, 0x12,
+  /* BG palettes — light grey backdrop simulates road; idx2 = grass green */
+  0x10, 0x30, 0x1A, 0x00,
+  0x10, 0x30, 0x1A, 0x00,
+  0x10, 0x30, 0x1A, 0x00,
+  0x10, 0x30, 0x1A, 0x00,
   /* Sprite palettes */
   0x10, 0x21, 0x16, 0x30,   /* sp0: blue car (P1) */
   0x10, 0x16, 0x21, 0x30,   /* sp1: red enemy */
@@ -125,8 +141,22 @@ static uint8_t aabb(Car *a, Car *b) {
 #define ROAD_DIV_1     13
 #define ROAD_DIV_2     17
 static void draw_road(void) {
-  uint8_t row;
+  uint8_t row, col;
   uint16_t base;
+  /* Fill the WHOLE nametable so nothing reads as flat colour: grass on the
+   * roadside (outside the shoulders) and a faint tarmac texture on the
+   * driving surface. Then stamp the shoulder + lane markings on top. */
+  for (row = 0; row < 30; row++) {
+    base = (uint16_t)(0x2000 + (uint16_t)row * 32);
+    for (col = 0; col < 32; col++) {
+      if (col < ROAD_EDGE_L || col > ROAD_EDGE_R) {
+        vram_unsafe_set((uint16_t)(base + col), BG_T_GRASS);   /* roadside */
+      } else if (((row + col) & 3) == 0) {
+        vram_unsafe_set((uint16_t)(base + col), BG_T_ROAD);    /* tarmac speck */
+      }
+      /* else leave colour-0 grey road surface */
+    }
+  }
   for (row = ROAD_TOP_ROW; row <= ROAD_BOT_ROW; row++) {
     base = (uint16_t)(0x2000 + (uint16_t)row * 32);
     vram_unsafe_set((uint16_t)(base + ROAD_EDGE_L), BG_T_EDGE);
@@ -183,8 +213,10 @@ void main(void) {
 
   /* BG road tiles live in pattern table 1 ($1000) — that's where the
    * default PPUCTRL ($90) tells the PPU to read background patterns. */
-  chr_ram_upload((uint16_t)(0x1000 + BG_T_EDGE * 16), bg_tile_edge, 16);
-  chr_ram_upload((uint16_t)(0x1000 + BG_T_LANE * 16), bg_tile_lane, 16);
+  chr_ram_upload((uint16_t)(0x1000 + BG_T_EDGE  * 16), bg_tile_edge,  16);
+  chr_ram_upload((uint16_t)(0x1000 + BG_T_LANE  * 16), bg_tile_lane,  16);
+  chr_ram_upload((uint16_t)(0x1000 + BG_T_GRASS * 16), bg_tile_grass, 16);
+  chr_ram_upload((uint16_t)(0x1000 + BG_T_ROAD  * 16), bg_tile_road,  16);
 
   palette_load(palette);
   draw_road();          /* paint the static road while the PPU is off */
