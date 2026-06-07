@@ -156,6 +156,6 @@ void main(void) {
       }
     }
 
-    if (score < 65500) score = (uint16_t)(score + 1);
+    if (score < 65500u) score = (uint16_t)(score + 1);
   } while (1);
 }

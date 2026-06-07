@@ -36,14 +36,17 @@ extern void gg_sprite_init(void);
 extern void gg_sprite_set(uint8_t slot, uint8_t x, uint8_t y, uint8_t tile);
 extern void gg_sat_upload(void);
 
-/* Background = black. Sprite palette (entries 16+):
- *   16 = transparent backdrop, 17 = white, 18 = green, 19 = red.
- * CRAM bytes on SMS/GG are 2-2-2 BGR. */
-static const uint8_t palette[32] = {
-  0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
-  0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
-  0x00,0x3F,0x0C,0x03, 0x00,0x00,0x00,0x00,
-  0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
+/* GG palette = 32 entries × 2 bytes (4-4-4 BGR LE): low=(g<<4)|r, high=b.
+ * gg_load_palette reads 64 bytes; a 32-byte array leaves the sprite palette
+ * (entries 16-31) reading garbage = invisible sprites. Sprite palette:
+ *   16 = transparent, 17 = white, 18 = green, 19 = red. */
+static const uint8_t palette[64] = {
+  /* BG 0-15: entry 0 = dark navy backdrop */
+  0x20,0x02, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
+  0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
+  /* SPRITE 16-31: 16=transparent, 17=white, 18=green, 19=red */
+  0,0, 0xFF,0x0F, 0xF0,0x00, 0x0F,0x00, 0,0, 0,0, 0,0, 0,0,
+  0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
 };
 
 /* Three 8×8 sprite tiles, 4bpp interleaved (4 planes × 8 rows):

@@ -13,6 +13,10 @@
 extern char tilfont, palfont;
 extern char tilsprite, palsprite;
 
+/* consoleVblank() copies the dirty text tilemap to VRAM during VBlank.
+ * No public prototype in console.h, so declare it; call once per frame. */
+extern void consoleVblank(void);
+
 #define LANE_LEFT_X    72
 #define LANE_MID_X    124
 #define LANE_RIGHT_X  176
@@ -74,6 +78,28 @@ static void render_score(void) {
     consoleDrawText(22, 2, buf);
 }
 
+/* Draw the road out of font glyphs on the text BG (no extra tile data):
+ * solid '|' shoulder lines outside the outer lanes and dashed ':' lane
+ * dividers between the three lanes. Lanes sit at text cols 9/15/22, so
+ * dividers go at 12/18 and shoulders at 7/24. Text grid is 32x28. */
+#define ROAD_TOP_ROW   4
+#define ROAD_BOT_ROW   24
+#define ROAD_EDGE_L    7
+#define ROAD_EDGE_R    24
+#define ROAD_DIV_1     12
+#define ROAD_DIV_2     18
+static void draw_road(void) {
+    u8 r;
+    for (r = ROAD_TOP_ROW; r <= ROAD_BOT_ROW; r++) {
+        consoleDrawText(ROAD_EDGE_L, r, "|");
+        consoleDrawText(ROAD_EDGE_R, r, "|");
+        if (r & 1) {
+            consoleDrawText(ROAD_DIV_1, r, ":");
+            consoleDrawText(ROAD_DIV_2, r, ":");
+        }
+    }
+}
+
 int main(void) {
     u16 pad;
     u8 i;
@@ -81,9 +107,13 @@ int main(void) {
 
     consoleSetTextMapPtr(0x6800);
     consoleSetTextGfxPtr(0x3000);
-    consoleSetTextOffset(0x0100);
+    consoleSetTextOffset(0x0000);   /* tile index = (char-0x20); font is at the BG char base */
     consoleInitText(0, 16 * 2, &tilfont, &palfont);
     setMode(BG_MODE1, 0);
+    /* consoleInitText DMAs the font but does NOT set the PPU BG base
+     * registers — point BG0 at the same font ($3000) + map ($6800). */
+    bgSetGfxPtr(0, 0x3000);
+    bgSetMapPtr(0, 0x6800, SC_32x32);
     bgSetDisable(1);
     bgSetDisable(2);
 
@@ -92,6 +122,7 @@ int main(void) {
 
     consoleDrawText(2, 2, "SCORE");
     consoleDrawText(6, 26, "L/R SWITCH LANES");
+    draw_road();   /* shoulder lines + dashed lane dividers (font glyphs) */
 
     /* Hide all OAM. */
     for (i = 0; i < 1 + MAX_OBSTACLES; i++) oamSet(SPR(i), 0, 240, 3, 0, 0, 0, 0);
@@ -111,6 +142,7 @@ int main(void) {
         oamUpdate();
         render_score();
         WaitForVBlank();
+        consoleVblank();
 
         pad = padsCurrent(0);
 

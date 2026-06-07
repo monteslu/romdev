@@ -62,7 +62,7 @@ static void lock_piece(void) {
       a = grid[r][c]; b = grid[r][c+1]; d = grid[r][c+2];
       if (a != 0 && a == b && b == d) {
         grid[r][c] = 0; grid[r][c+1] = 0; grid[r][c+2] = 0;
-        if (score < 65500) score += 30;
+        if (score < 65500u) score += 30;
         sfx_tone(0, 60, 10);
       }
     }

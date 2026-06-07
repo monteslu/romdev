@@ -32,12 +32,43 @@
 
 #define T_PADDLE    (TILE_USER_INDEX + 0)
 #define T_BALL      (TILE_USER_INDEX + 1)
+#define T_RAIL      (TILE_USER_INDEX + 2)   /* solid court rail (BG_B) */
+#define T_NET       (TILE_USER_INDEX + 3)   /* dashed centre-line segment */
 
 /* 4bpp 8×8 tile, all colour 1 → solid white block. */
 static const u32 tile_solid[8] = {
     0x11111111, 0x11111111, 0x11111111, 0x11111111,
     0x11111111, 0x11111111, 0x11111111, 0x11111111,
 };
+
+/* Centre-net segment: a 2px-wide vertical dash down the middle of an 8×8
+ * tile (colour 1 in the centre columns, transparent elsewhere). Stacked
+ * down the court's centre column it reads as a dashed Pong net. */
+static const u32 tile_net[8] = {
+    0x00011000, 0x00011000, 0x00011000, 0x00000000,
+    0x00011000, 0x00011000, 0x00011000, 0x00000000,
+};
+
+/* The court lives on BG_B (cells are 8×8): top + bottom rails plus a
+ * dashed centre net. 320px = 40 cols, COURT_TOP/BOT are pixel rows. */
+#define COURT_COL_L   (PADDLE_X1 / 8)
+#define COURT_COL_R   (PADDLE_X2 / 8)
+#define COURT_ROW_TOP (COURT_TOP / 8)
+#define COURT_ROW_BOT (COURT_BOT / 8 - 1)
+#define COURT_NET_COL (COURT_W / 16)
+
+static void draw_court(void) {
+    s16 c, r;
+    /* Top + bottom rails span the playfield width. */
+    for (c = COURT_COL_L; c <= COURT_COL_R; c++) {
+        VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL0, 0, 0, 0, T_RAIL), c, COURT_ROW_TOP);
+        VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL0, 0, 0, 0, T_RAIL), c, COURT_ROW_BOT);
+    }
+    /* Dashed centre net between the rails. */
+    for (r = COURT_ROW_TOP + 1; r < COURT_ROW_BOT; r++) {
+        VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL0, 0, 0, 0, T_NET), COURT_NET_COL, r);
+    }
+}
 
 static s16 p1y, p2y;       /* paddle top Y, pixels */
 static s16 bx, by;         /* ball top-left, pixels */
@@ -77,6 +108,11 @@ int main(bool hard) {
 
     VDP_loadTileData(tile_solid, T_PADDLE, 1, DMA);
     VDP_loadTileData(tile_solid, T_BALL,   1, DMA);
+    VDP_loadTileData(tile_solid, T_RAIL,   1, DMA);
+    VDP_loadTileData(tile_net,   T_NET,    1, DMA);
+
+    /* Draw the static court (rails + centre net) once on BG_B. */
+    draw_court();
 
     VDP_drawText("PLAYER 1", 2, 1);
     VDP_drawText("PLAYER 2", 28, 1);

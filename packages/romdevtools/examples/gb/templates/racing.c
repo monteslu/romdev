@@ -153,6 +153,6 @@ void main(void) {
         break;
       }
     }
-    if (score < 65500) score++;
+    if (score < 65500u) score++;
   }
 }

@@ -95,21 +95,18 @@ test("R52 createGame supports platform:'gg' (all 5 genres)", async () => {
   }
 });
 
-test("R52 R6 sprite-tile-base comment corrected on GG + SMS (not '$2000')", async () => {
+test("R6 sprite-tile-base defaults to $2000 (0xFF) — matches where scaffolds upload", async () => {
+  // SUPERSEDES the original R52 assertion. The audit found the real fix is the
+  // OPPOSITE: every scaffold uploads sprite tiles to $2000 (load_tiles(0x2000,…)),
+  // so vdp_init must default R6=0xFF (SA13 set → sprite tiles read from $2000).
+  // The old R6=0xFB ($0000) baseline left sprites reading the empty BG bank →
+  // invisible on every GG/SMS sprite scaffold.
   for (const p of ["gg", "sms"]) {
     const init = await readSrc(`src/platforms/${p}/lib/c/vdp_init.c`);
-    // The fixed comment line is something like
-    //   "R6:  sprite tile data at $0000 (set 0xFF for $2000)".
-    // The buggy line was just "sprite tile data at $2000".
-    assert.match(init, /sprite tile data at \$0000/,
-      `${p}/vdp_init.c: R6 comment should say "$0000" (R6=0xFB clears SA13)`);
-    assert.doesNotMatch(init, /R6.*sprite tile data at \$2000(?!.*0xFF)/,
-      `${p}/vdp_init.c: still has the old "tiles at $2000" claim on R6`);
-
-    // load_tiles example also corrected (used to say `0x2000, my_tiles, ... // sprite bank`).
-    const load = await readSrc(`src/platforms/${p}/lib/c/load_tiles.c`);
-    assert.match(load, /load_tiles\(0x0000/,
-      `${p}/load_tiles.c: example should target 0x0000 to match the default R6`);
+    assert.match(init, /0xFF,\s*\/\*\s*R6/,
+      `${p}/vdp_init.c: R6 must default to 0xFF (sprite tiles at $2000, where scaffolds upload)`);
+    assert.match(init, /sprite tile data at \$2000/,
+      `${p}/vdp_init.c: R6 comment should document $2000 (the new default)`);
   }
 });
 
@@ -118,13 +115,13 @@ test("R52 GG MENTAL_MODEL documents the four GG footguns", async () => {
   assert.match(doc, /8 sprites per scanline/i,        "missing 8-sprites-per-scanline note");
   assert.match(doc, /\$D0/,                            "missing SAT $D0 terminator note");
   assert.match(doc, /hardware[\s-]+space/i,            "missing OAM hardware-vs-visible coord note");
-  assert.match(doc, /R6.*\$0000/,                      "missing R6 = $0000 correction");
+  assert.match(doc, /R6.*\$2000/,                      "missing R6 = $2000 default note");
 });
 
 test("R52 SMS MENTAL_MODEL documents the shared SMS/GG footguns", async () => {
   const doc = await readSrc("src/platforms/sms/MENTAL_MODEL.md");
   assert.match(doc, /\$D0/,                "missing SAT $D0 terminator note");
-  assert.match(doc, /R6.*\$0000/,          "missing R6 = $0000 correction");
+  assert.match(doc, /R6.*\$2000/,          "missing R6 = $2000 default note");
   // 8-sprites note already existed pre-R52 but should still be present after our edits.
   assert.match(doc, /8 sprites per scanline/i, "8-sprites-per-scanline note should remain");
 });

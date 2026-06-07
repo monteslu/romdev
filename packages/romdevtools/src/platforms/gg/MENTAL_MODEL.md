@@ -73,19 +73,20 @@ check the live OAM Y bytes for $D0 in a slot before them. That's
 still the diagnosis; the runtime just doesn't create the problem
 on its own anymore.
 
-### R6 sprite-tile-base default: $0000, NOT $2000
+### R6 sprite-tile-base: default is $2000 (0xFF)
 
-`gg_vdp_init()` sets R6 = 0xFB. R6 bit 2 is the SA13 select for
-sprite tile data — and bit 2 is **CLEAR** in 0xFB. That means
-sprite tiles read from `$0000-$1FFF`, **sharing the bank with BG
-tiles**. Many references (including the older comments we just
-fixed in `vdp_init.c` and `load_tiles.c`) say "R6=0xFB → sprite
-tiles at $2000" — that's wrong.
+`gg_vdp_init()` sets R6 = 0xFF. R6 bit 2 is the SA13 select for
+sprite tile data — bit 2 is **SET** in 0xFF, so sprite tiles read
+from `$2000-$3FFF`, in their **own bank** separate from BG tiles at
+$0000. This is the baseline because every bundled scaffold uploads
+its sprite tiles to `$2000` (`gg_load_tiles(0x2000, …)`) — the
+default and the scaffolds match, so sprites Just Show Up.
 
-If you want sprite tiles in their own bank at $2000, set
-`vdp_write_reg(6, 0xFF)` AND upload tiles to VRAM $2000. Otherwise
-upload sprite tiles to $0000 alongside BG tiles (just make sure
-they don't collide).
+Watch the bit: 0xFB has SA13 **CLEAR** = sprite tiles at $0000
+(sharing the BG bank). If you ever set R6=0xFB you MUST also upload
+your sprite tiles to $0000, or the VDP reads the empty/BG bank and
+every sprite is invisible — the classic GG/SMS "my sprites don't
+show up" trap.
 
 The `sprites({op:'inspect'})` tool's `spriteTileDataBase` field reports the
 address the VDP is actually reading from — trust that over any

@@ -1810,10 +1810,21 @@ async function createGameCore({ platform, genre, name, path: projPath, title, ov
         ? CANONICAL_GENRES.filter((g) => platformTemplates[g])
         : [];
       if (availableGenres.length === 0) {
+        // Point at the real, working project templates each genre-less
+        // platform actually ships, so the agent has a concrete next step
+        // instead of a bare "default".
+        const PROJECT_TEMPLATE_HINTS = {
+          msx: "default, sprite_move, music_sfx, catch_game",
+          pce: "default, sprite_move, music_sfx, catch_game",
+          atari2600: "default, single_screen, paddle, mini_invaders, music_demo",
+        };
+        const hint = PROJECT_TEMPLATE_HINTS[platform];
         throw new Error(
           `createGame: no genre scaffolds for platform '${platform}' yet. ` +
           `Supported platforms: ${genrePlatforms.join(", ") || "(none)"}. ` +
-          `For other platforms, use createProject({platform, template:"default"}) and build up from there.`
+          (hint
+            ? `For ${platform}, use createProject({platform:"${platform}", template:"..."}) with one of: ${hint}.`
+            : `For other platforms, use createProject({platform, template:"default"}) and build up from there.`)
         );
       }
       if (!availableGenres.includes(genre)) {

@@ -30,15 +30,28 @@ extern void gg_sat_upload(void);
 
 #define T_OPEN  0
 #define T_WALL  1
-#define T_SPR   0   /* sprite tile uses sprite-tile-bank (R6=0xFB) */
+#define T_SPR   0   /* sprite tile uses sprite-tile-bank (R6=0xFF → $2000) */
 
-static const uint8_t palette[32] = {
-  /* BG palette: backdrop blue, wall colour 1 dark grey, colour 2 light grey */
-  0x10,0x14,0x2A,0x00, 0x00,0x00,0x00,0x00,
-  0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
-  /* Sprite palette: white at idx 1 */
-  0x00,0x3F,0x00,0x00, 0x00,0x00,0x00,0x00,
-  0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
+/* ── Game Gear visible viewport ──────────────────────────────────────
+ * The 32x24 name table fills the whole 256x192 frame, but only the
+ * centered 160x144 SHOWS: fetch pixels [VIS_X0..VIS_X1] x [VIS_Y0..VIS_Y1]
+ * (tile columns 6..25, rows 3..20). Place the player sprite inside it. */
+#define VIS_X0  48
+#define VIS_Y0  24
+#define VIS_X1  207   /* 48 + 160 - 1 */
+#define VIS_Y1  167   /* 24 + 144 - 1 */
+
+/* GG palette = 32 entries × 2 bytes (4-4-4 BGR LE): low=(g<<4)|r, high=b.
+ * gg_load_palette reads 64 bytes; a 32-byte array leaves the sprite palette
+ * (entries 16-31) reading garbage = invisible sprites. BG colour 1 = entry 1
+ * (dark grey wall); sprite colour 1 = entry 17 (white player). */
+static const uint8_t palette[64] = {
+  /* BG 0-15: entry 0 = dark navy backdrop, entry 1 = dark grey wall */
+  0x20,0x02, 0x66,0x06, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
+  0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
+  /* SPRITE 16-31: 16=transparent, 17=white player */
+  0,0, 0xFF,0x0F, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
+  0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
 };
 
 static const uint8_t bg_tiles[32 * 2] = {
@@ -92,7 +105,8 @@ static uint8_t solid_at(int16_t px, int16_t py) {
 }
 
 void main(void) {
-  int16_t px = 16, py = 16;
+  /* Start the player inside the visible window (tile ~10,10 = pixel 80,80). */
+  int16_t px = 80, py = 80;
 
   gg_vdp_init();
   gg_load_palette(palette);

@@ -40,13 +40,27 @@ extern void gg_sat_upload(void);
 #define SCREEN_W   160                /* GG visible window is 160 px wide */
 #define VIS_ROWS   24
 
-static const uint8_t palette[32] = {
-  /* BG: backdrop blue, wall mid-grey */
-  0x10,0x14,0x00,0x00, 0x00,0x00,0x00,0x00,
-  0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
-  /* Sprite: player red */
-  0x00,0x03,0x00,0x00, 0x00,0x00,0x00,0x00,
-  0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
+/* ── Game Gear visible viewport ──────────────────────────────────────
+ * Only the centered 160x144 of the 256x192 frame shows. The BG is
+ * scrolled so world column camX/8 appears at fetch pixel VIS_X0, and the
+ * player sprite is drawn at (worldX - camX) + VIS_X0 so it stays aligned
+ * with the BG inside the visible window. */
+#define VIS_X0     48
+#define VIS_Y0     24
+#define VIS_X1     207   /* 48 + 160 - 1 */
+#define VIS_Y1     167   /* 24 + 144 - 1 */
+
+/* GG palette = 32 entries × 2 bytes (4-4-4 BGR LE): low=(g<<4)|r, high=b.
+ * gg_load_palette reads 64 bytes; a 32-byte array leaves the sprite palette
+ * (entries 16-31) reading garbage = invisible sprites. BG colour 1 = entry 1
+ * (mid-grey wall); sprite colour 1 = entry 17 (white player). */
+static const uint8_t palette[64] = {
+  /* BG 0-15: entry 0 = dark navy backdrop, entry 1 = mid-grey wall */
+  0x20,0x02, 0xAA,0x0A, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
+  0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
+  /* SPRITE 16-31: 16=transparent, 17=white player */
+  0,0, 0xFF,0x0F, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
+  0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
 };
 
 static const uint8_t bg_tiles[32 * 2] = {
@@ -123,7 +137,10 @@ static void paint_initial(void) {
 }
 
 void main(void) {
-  int16_t px = 16 << 4, py = 64 << 4;
+  /* Start above the x=32..88 platform (world y=144) so the player lands on
+   * it inside the GG visible vertical band [VIS_Y0..VIS_Y1], not on the
+   * floor at world y=176 which sits just below the visible window. */
+  int16_t px = 48 << 4, py = 96 << 4;
   int16_t vx = 0, vy = 0;
   int16_t camX = 0, lastCamCol = 0;
   uint8_t prev = 0;
@@ -170,13 +187,18 @@ void main(void) {
     while (camCol > lastCamCol) { lastCamCol++; paint_column(lastCamCol + 31); }
     while (camCol < lastCamCol) { lastCamCol--; paint_column(lastCamCol); }
 
-    gg_vdp_write_reg(8, (uint8_t)(-camX & 0xFF));
+    /* Scroll so world column (camX/8) lands at fetch pixel VIS_X0 — the
+     * left edge of the GG visible window. (SMS shows the whole 256-px
+     * fetch and uses R8 = -camX; the GG only shows the centered 160-px
+     * crop, so we bias by +VIS_X0.) */
+    gg_vdp_write_reg(8, (uint8_t)((VIS_X0 - camX) & 0xFF));
 
-    /* Player drawn in SCREEN space. The GG visible window starts 48 px
-     * into the 256-px fetch, but the SAT X is in full-frame coords and
-     * R8 shifts both alike, so worldX - camX lands the sprite correctly
-     * relative to the scrolled BG. */
-    sx = ipx - camX;
+    /* Player X is biased into the visible window so it stays pinned to the
+     * horizontally-scrolled BG: sx = (worldX - camX) + VIS_X0. The BG is
+     * NOT vertically scrolled (R9 = 0), so world rows map 1:1 to fetch rows
+     * and the player Y needs no bias — world Y already lands in the visible
+     * band [VIS_Y0..VIS_Y1] for the level layout below. */
+    sx = (ipx - camX) + VIS_X0;
     gg_sprite_set(0, (uint8_t)sx, (uint8_t)ipy, 0);
     gg_sat_upload();
 

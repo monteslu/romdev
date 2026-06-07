@@ -161,7 +161,7 @@ int main(bool hard) {
                 if (aabb_hit(&bullets[i], &enemies[j])) {
                     bullets[i].alive = FALSE;
                     enemies[j].alive = FALSE;
-                    if (score < 65500) score += 10;
+                    if (score < 65500u) score += 10;
                     sfx_noise(8);   /* explosion */
                     break;
                 }

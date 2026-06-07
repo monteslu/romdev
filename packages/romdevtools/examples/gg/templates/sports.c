@@ -17,19 +17,32 @@ extern void    gg_sprite_init(void);
 extern void    gg_sprite_set(uint8_t slot, uint8_t x, uint8_t y, uint8_t tile);
 extern void    gg_sat_upload(void);
 
-#define COURT_TOP   8
-#define COURT_BOT   184
+/* ── Game Gear visible viewport ──────────────────────────────────────
+ * Only the centered 160x144 of the 256x192 frame shows. Keep the whole
+ * court inside [VIS_X0..VIS_X1] x [VIS_Y0..VIS_Y1] or it's off-screen. */
+#define VIS_X0      48
+#define VIS_Y0      24
+#define VIS_X1      207   /* 48 + 160 - 1 */
+#define VIS_Y1      167   /* 24 + 144 - 1 */
+
+#define COURT_TOP   VIS_Y0
+#define COURT_BOT   VIS_Y1
 #define PADDLE_H    24
 #define BALL_SIZE   8
-#define PADDLE_X1   16
-#define PADDLE_X2   232
+#define PADDLE_X1   (VIS_X0 + 8)    /* near the visible left edge   */
+#define PADDLE_X2   (VIS_X1 - 16)   /* near the visible right edge  */
 
-static const uint8_t palette[32] = {
-  0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-  /* Sprite palette: white at idx 1 */
-  0x00, 0x3F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+/* GG palette = 32 entries × 2 bytes (4-4-4 BGR LE): low=(g<<4)|r, high=b.
+ * gg_load_palette reads 64 bytes; a 32-byte array leaves the sprite palette
+ * (entries 16-31) reading garbage = invisible sprites. Sprite colour 1 = entry
+ * 17 (white). */
+static const uint8_t palette[64] = {
+  /* BG 0-15: entry 0 = dark navy backdrop */
+  0x20,0x02, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
+  0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
+  /* SPRITE 16-31: 16=transparent, 17=white */
+  0,0, 0xFF,0x0F, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
+  0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
 };
 
 static const uint8_t tile_solid[32] = {
@@ -45,15 +58,16 @@ static uint8_t score_p1, score_p2;
 static uint8_t serve_timer;
 
 static void serve_ball(uint8_t to_left) {
-  bx = 124;
-  by = 90;
+  bx = (VIS_X0 + VIS_X1) / 2;
+  by = (VIS_Y0 + VIS_Y1) / 2;
   bdx = to_left ? -2 : 2;
   bdy = ((score_p1 + score_p2) & 1) ? -1 : 1;
   serve_timer = 30;
 }
 
 static void reset_match(void) {
-  p1y = 84; p2y = 84;
+  p1y = (VIS_Y0 + VIS_Y1) / 2 - PADDLE_H / 2;
+  p2y = p1y;
   score_p1 = 0; score_p2 = 0;
   serve_ball(0);
 }
@@ -130,8 +144,8 @@ void main(void) {
         sfx_tone(0, 250, 3);
       }
 
-      if (bx < 4)   { if (score_p2 < 9) score_p2++; sfx_noise(20); serve_ball(0); }
-      if (bx > 252) { if (score_p1 < 9) score_p1++; sfx_tone(0, 180, 16); serve_ball(1); }
+      if (bx < VIS_X0)        { if (score_p2 < 9) score_p2++; sfx_noise(20); serve_ball(0); }
+      if (bx > VIS_X1 - BALL_SIZE) { if (score_p1 < 9) score_p1++; sfx_tone(0, 180, 16); serve_ball(1); }
     }
   } while (1);
 }

@@ -27,6 +27,8 @@
 
 #define T_CAR_P1   (TILE_USER_INDEX + 0)
 #define T_CAR_EN   (TILE_USER_INDEX + 1)
+#define T_LANE     (TILE_USER_INDEX + 2)   /* dashed lane divider (BG_B) */
+#define T_EDGE     (TILE_USER_INDEX + 3)   /* solid road edge      (BG_B) */
 
 static const u32 tile_car_p1[8] = {
     0x01111110, 0x11111111, 0x12222221, 0x11111111,
@@ -36,6 +38,40 @@ static const u32 tile_car_enemy[8] = {
     0x03333330, 0x33333333, 0x34444443, 0x33333333,
     0x33333333, 0x34444443, 0x33333333, 0x03300330,
 };
+/* Dashed lane-divider segment (colour 2 = grey): a 2px dash in the
+ * centre columns, on/off vertically so a stacked column reads as a
+ * dashed road centre-line. */
+static const u32 tile_lane[8] = {
+    0x00022000, 0x00022000, 0x00022000, 0x00000000,
+    0x00000000, 0x00022000, 0x00022000, 0x00022000,
+};
+/* Solid 2px road-edge stripe (colour 2 = grey) down the right side of
+ * the tile — used on the left rail; mirrored (hflip) for the right. */
+static const u32 tile_edge[8] = {
+    0x00000022, 0x00000022, 0x00000022, 0x00000022,
+    0x00000022, 0x00000022, 0x00000022, 0x00000022,
+};
+
+/* The road lives on BG_B (8×8 cells). Two dashed dividers sit between the
+ * three lanes; solid edges frame the outermost lanes. */
+#define ROAD_TOP_ROW   1
+#define ROAD_BOT_ROW   26
+#define LANE_DIV1_COL  ((LANE_LEFT_X + 8 + LANE_MID_X)  / 16)
+#define LANE_DIV2_COL  ((LANE_MID_X  + 8 + LANE_RIGHT_X) / 16)
+#define ROAD_EDGE_L    ((LANE_LEFT_X  - 12) / 8)
+#define ROAD_EDGE_R    ((LANE_RIGHT_X + 12) / 8)
+
+static void draw_road(void) {
+    s16 r;
+    for (r = ROAD_TOP_ROW; r <= ROAD_BOT_ROW; r++) {
+        /* Left edge (stripe on its right), right edge (hflipped). */
+        VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL0, 0, 0, 0, T_EDGE), ROAD_EDGE_L, r);
+        VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL0, 0, 0, 1, T_EDGE), ROAD_EDGE_R, r);
+        /* Two dashed lane dividers. */
+        VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL0, 0, 0, 0, T_LANE), LANE_DIV1_COL, r);
+        VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL0, 0, 0, 0, T_LANE), LANE_DIV2_COL, r);
+    }
+}
 
 typedef struct { s16 x, y; bool alive; } Car;
 
@@ -97,6 +133,11 @@ int main(bool hard) {
 
     VDP_loadTileData(tile_car_p1,    T_CAR_P1, 1, DMA);
     VDP_loadTileData(tile_car_enemy, T_CAR_EN, 1, DMA);
+    VDP_loadTileData(tile_lane,      T_LANE,   1, DMA);
+    VDP_loadTileData(tile_edge,      T_EDGE,   1, DMA);
+
+    /* Draw the static road (edges + dashed lane dividers) once on BG_B. */
+    draw_road();
 
     VDP_drawText("SCORE", 28, 2);
     VDP_drawText("L/R MOVES LANE", 13, 27);
@@ -149,7 +190,7 @@ int main(bool hard) {
                 }
             }
 
-            if (score < 65500) score++;
+            if (score < 65500u) score++;
         }
 
         /* SAT update — player + up to 4 obstacles = 5 sprites. */
