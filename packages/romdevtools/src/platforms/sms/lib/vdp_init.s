@@ -40,7 +40,7 @@ _vdp_init_regs:
         .db $FF                  ; R3: color table — M4 ignores
         .db $FF                  ; R4: BG tile data — M4: bit 2 selects $0000 vs $2000
         .db $FF                  ; R5: sprite attr table base ($3F00 = $7E << 7)
-        .db $FB                  ; R6: sprite tile data — bit 2 selects bank ($2000 here)
+        .db $FF                  ; R6: sprite tile data at $2000 (SA13 set; scaffolds upload here)
         .db $00                  ; R7: border color = sprite palette entry 0
         .db $00                  ; R8: BG X scroll
         .db $00                  ; R9: BG Y scroll

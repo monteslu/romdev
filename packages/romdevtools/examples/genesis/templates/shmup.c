@@ -81,11 +81,15 @@ static void fire_bullet(void) {
     }
 }
 
+static u16 spawn_seed;  /* free-running, advances every spawn (NOT spawn_timer,
+                         * which is always 28 at the spawn call → one column) */
 static void spawn_enemy(void) {
     for (u16 i = 0; i < MAX_ENEMIES; i++) {
         if (!enemies[i].alive) {
-            /* Cheap deterministic-but-varying x — wraps every 7 spawns. */
-            enemies[i].x = ((spawn_timer * 37) & 0xFF) % (320 - 16) + 8;
+            /* Cheap LCG-ish spread across the playfield so enemies don't all
+             * descend in a single column. */
+            spawn_seed = (u16)(spawn_seed * 1103 + 12345);
+            enemies[i].x = (s16)((spawn_seed >> 4) % (320 - 16) + 8);
             enemies[i].y = -8;
             enemies[i].alive = TRUE;
             return;
@@ -177,6 +181,11 @@ int main(bool hard) {
             VDP_setSprite(7 + i, enemies[i].x, ey, SPRITE_SIZE(1, 1),
                           TILE_ATTR_FULL(PAL2, 1, 0, 0, T_ENEMY));
         }
+        /* CHAIN the sprite linked list before uploading: VDP_setSprite does NOT
+         * set the link byte, and the SAT link bytes init to 0 (= "end of list"),
+         * so the VDP's sprite walk stops after slot 0 → only ONE sprite draws.
+         * VDP_linkSprites(0, N) links slots 0..N-1 so all N render. */
+        VDP_linkSprites(0, 1 + MAX_BULLETS + MAX_ENEMIES);
         VDP_updateSprites(1 + MAX_BULLETS + MAX_ENEMIES, DMA);
 
         render_score();

@@ -3,15 +3,17 @@
  * Writes the 11 mode-4 registers to a sane baseline:
  *   display OFF, vblank IRQ off, 192-line mode 4, name table at $3800,
  *   BG tile data at $0000, sprite attr table at $3F00, sprite tile data
- *   at $0000 (R6=0xFB → SA13 clear → tiles read from $0000-$1FFF). Call
+ *   at $2000 (R6=0xFF → SA13 set → tiles read from $2000-$3FFF). Call
  *   once after reset before uploading palette/tiles/map.
  *
- * Footgun: many SMS/GG references say "R6=0xFB → sprite tiles at $2000"
- * which is BACKWARDS. R6 bit 2 (the SA13 select) is CLEAR in 0xFB, so
- * sprite tiles read from $0000 (sharing the bank with BG tiles). To
- * separate sprite tiles to $2000, set R6 = 0xFF instead. The
- * sprites({op:'inspect'}) tool's spriteTileDataBase field will show you the
- * real address the VDP is reading from.
+ * Sprite-tile base: R6 bit 2 (SA13) selects $0000 (clear) vs $2000 (set).
+ * We default to R6=0xFF ($2000) because EVERY bundled scaffold uploads its
+ * sprite tiles to $2000 (gg_load_tiles(0x2000, ...)) — so the baseline must
+ * match what consumers do, or sprites read from the empty/BG bank and render
+ * invisible. (Many SMS/GG references say "R6=0xFB → $2000", which is backwards:
+ * 0xFB has SA13 CLEAR = $0000.) If you instead keep sprite tiles in the BG
+ * bank at $0000, set R6=0xFB. sprites({op:'inspect'}) → spriteTileDataBase
+ * shows the address the VDP is actually reading from.
  *
  * After loading assets, enable display by re-writing R1 with bit 6 set:
  *   gg_vdp_display_on();

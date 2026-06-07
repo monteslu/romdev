@@ -49,7 +49,7 @@ static void wait_vblank(void) {
 
 static void copy_sprite(uint8_t slot, const uint8_t *data) {
   uint8_t i;
-  volatile uint8_t *dst = (volatile uint8_t*)(0x0800 + slot * 64);
+  volatile uint8_t *dst = (volatile uint8_t*)(0x2000 + slot * 64);  /* $2000, not $0800 (collides w/ $0801 .prg) */
   for (i = 0; i < 64; i++) dst[i] = data[i];
 }
 
@@ -75,8 +75,8 @@ void main(void) {
   uint8_t i, pad;
   POKE(VIC_SPR_ENA, 0);
   copy_sprite(0, car_sprite);
-  SPRITE_POINTERS[0] = 0x20;
-  for (i = 0; i < MAX_OBS; i++) SPRITE_POINTERS[1 + i] = 0x20;
+  SPRITE_POINTERS[0] = 0x80;  /* $2000/64 */
+  for (i = 0; i < MAX_OBS; i++) SPRITE_POINTERS[1 + i] = 0x80;
   POKE(VIC_SPR_COL(0), 0x07);  /* yellow player */
   for (i = 0; i < MAX_OBS; i++) POKE(VIC_SPR_COL(1 + i), 0x02);  /* red obstacles */
   POKE(VIC_BORDER, 0x00);

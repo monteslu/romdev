@@ -20,7 +20,8 @@
 #define PEEK(addr)      (*(volatile uint8_t*)(addr))
 
 #define SPRITE_POINTERS  ((volatile uint8_t*)0x07F8)
-#define SPRITE_DATA_BASE 0x0800  /* sprite N data at $0800 + N*64 */
+#define SPRITE_DATA_BASE 0x2000  /* sprite N data at $2000 + N*64 — NOT $0800,
+                                  * which collides with the $0801 .prg load (C64-1) */
 
 #define JOY_UP    0x01
 #define JOY_DOWN  0x02
@@ -121,9 +122,9 @@ void main(void) {
 
   /* Sprite pointers: slot N points at /64 index into the VIC bank.
    * Default bank = $0000-$3FFF. $0800 / 64 = 32 = $20. */
-  SPRITE_POINTERS[SLOT_PLAYER] = 0x20;
-  for (i = 0; i < MAX_BULLETS; i++) SPRITE_POINTERS[SLOT_BULLET0 + i] = 0x21;
-  for (i = 0; i < MAX_ENEMIES; i++) SPRITE_POINTERS[SLOT_ENEMY0 + i] = 0x22;
+  SPRITE_POINTERS[SLOT_PLAYER] = 0x80;  /* $2000/64 */
+  for (i = 0; i < MAX_BULLETS; i++) SPRITE_POINTERS[SLOT_BULLET0 + i] = 0x81;
+  for (i = 0; i < MAX_ENEMIES; i++) SPRITE_POINTERS[SLOT_ENEMY0 + i] = 0x82;
 
   POKE(VIC_SPR_COL(SLOT_PLAYER), 0x07);  /* yellow */
   for (i = 0; i < MAX_BULLETS; i++) POKE(VIC_SPR_COL(SLOT_BULLET0 + i), 0x01);  /* white */
