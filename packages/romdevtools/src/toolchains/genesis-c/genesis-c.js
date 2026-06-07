@@ -264,6 +264,12 @@ async function buildWithSgdk({ sources, headers, binaryIncludes, cc1Options, reb
     "-fdata-sections",
     ...cc1Options,
   ];
+  // USER source gets warnings on so the agent SEES its bugs (unused vars,
+  // implicit decls, …) parsed into structured issues[]. The SGDK runtime is
+  // compiled WITHOUT these (sgdkCc1Options) — we can't fix SDK warnings and they'd
+  // bury the agent's own. -Wno-unused-parameter avoids the common `(void)hard`
+  // scaffold-param noise.
+  const userCc1Options = [...sgdkCc1Options, "-Wall", "-Wextra", "-Wno-unused-parameter"];
 
   // ── Stage A: gather SGDK headers (visible to tcc via tcc-style flat mount) ──
   // cc1's -iquote /work picks up sibling files mounted alongside main.c.
@@ -280,7 +286,7 @@ async function buildWithSgdk({ sources, headers, binaryIncludes, cc1Options, reb
     const cc = await runCc1m68k({
       source: sources[cName],
       headers: tccHeaders,
-      options: sgdkCc1Options,
+      options: userCc1Options,
     });
     log += `--- cc1 (${cName}) ---\n` + (cc.log || "(ok)") + "\n";
     if (cc.exitCode !== 0 || !cc.asmSource) {
@@ -469,12 +475,14 @@ async function buildMinimal(args) {
   // ── Stage 1: compile each .c file via cc1 → .s ─────────────────
   /** @type {Record<string, Uint8Array>} */
   const userObjs = {};
+  // User .c gets warnings on (minimal path has no SDK to flood). See buildWithSgdk.
+  const userCc1Options = [...cc1Options, "-Wall", "-Wextra", "-Wno-unused-parameter"];
   const cFiles = Object.keys(sources).filter((n) => /\.c$/i.test(n));
   for (const cName of cFiles) {
     const cc = await runCc1m68k({
       source: sources[cName],
       headers,
-      options: cc1Options,
+      options: userCc1Options,
     });
     log += `--- cc1 (${cName}) ---\n` + (cc.log || "(ok)") + "\n";
     if (cc.exitCode !== 0 || !cc.asmSource) {

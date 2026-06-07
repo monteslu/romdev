@@ -92,7 +92,12 @@ export async function buildGbaC(args) {
   // per-symbol `.bss.<name>`/`.data.<name>` line — that's what lets
   // symbols({op:'resolve'}) turn a static C global's name into an address on GBA
   // (same as SGDK does for Genesis). Pure metadata; no codegen change to what's kept.
-  const cc1Options = args.cc1Options ?? ["-O2", "-mthumb", "-ffunction-sections", "-fdata-sections"];
+  // -Wall -Wextra so the agent SEES warnings (unused vars, implicit decls,
+  // sign-compare, etc.) — they're parsed into structured issues[]. Without these
+  // gcc is silent and agents build blind. -Wno-unused-parameter keeps the common
+  // intentional `(void)`-style scaffold params from being noise. Applied to USER
+  // .c only (the libtonc/maxmod SDK is a prebuilt seed, not recompiled here).
+  const cc1Options = args.cc1Options ?? ["-O2", "-mthumb", "-ffunction-sections", "-fdata-sections", "-Wall", "-Wextra", "-Wno-unused-parameter"];
   const sources = normalizeGbaSources(args);
   const binaryIncludes = args.binaryIncludes ?? {};
 

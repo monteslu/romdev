@@ -257,7 +257,14 @@ export function parseRamUsage(mapText) {
  * @param {string} [args.linkerConfig] custom ld65 .cfg (overrides per-target default)
  */
 export async function buildC(args) {
-  const ccOpts = args.debug ? ["-g"] : [];
+  // Enable cc65's high-value warnings so the agent SEES real bugs (parsed into
+  // structured issues[]). These are the valid cc65 -W names that catch actual
+  // mistakes; unused-param is left off (scaffold callbacks commonly ignore
+  // params). cc65's warning set is thin to begin with, but errors always surface
+  // and these are pure upside. (NOTE: cc65 errors on an unknown -W name, so this
+  // list is verified valid against the bundled cc65.)
+  const ccWarn = ["-W", "unused-var,unused-func,unused-label,const-comparison,struct-param,pointer-sign"];
+  const ccOpts = args.debug ? ["-g", ...ccWarn] : [...ccWarn];
   const caOpts = args.debug ? ["-g"] : [];
   const sources = normalizeSources(args, "main.c");
 

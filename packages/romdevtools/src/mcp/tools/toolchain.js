@@ -68,6 +68,7 @@ const LOG_TAIL = 1200;
 // stays visible. Left intact on failure (timing can matter when diagnosing a
 // hang/OOM). The full untrimmed log is still written to logPath when spilled.
 export function denoiseSuccessLog(log) {
+  if (typeof log !== "string") return log ?? "";
   const lines = log.split("\n");
   const kept = [];
   let inTiming = false;
@@ -657,7 +658,18 @@ export function registerToolchainTools(server, z, sessionKey) {
     },
     safeTool(async (args) => {
       switch (args.output) {
-        case "rom":          return await buildSourceImpl(args);
+        case "rom": {
+          // `build({output:'rom', path})` (a project dir, no explicit sources) is
+          // the natural "build my scaffolded dir to a ROM file" call. Route it to
+          // the dir builder (same recipe as output:'project'/'run') — otherwise it
+          // fell into buildSourceImpl with no source and crashed on an undefined
+          // log. With path AND explicit sources, the sources win (manual build).
+          if (args.path && args.source == null && args.sources == null &&
+              args.sourcePath == null && args.sourcesPaths == null) {
+            return await buildProjectImpl(args);
+          }
+          return await buildSourceImpl(args);
+        }
         case "run":          return await runSourceImpl(args);
         case "project": {
           if (!args.path) throw new Error("build({output:'project'}): `path` (the project directory) is required.");
