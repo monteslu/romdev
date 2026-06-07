@@ -111,9 +111,14 @@ MAIN:
   STA VSYNC
 
   ; ── VBLANK (37 lines) — game logic ────────────────────────────────
+  ; 34 here + the 3 STA WSYNC in the P0/P1 positioning block below = 37 VBLANK
+  ; lines total. (Bug fix: this loop used to be 37 AND the positioning added 3
+  ; more → 265 scanlines/frame → the TV/emulator can't lock vsync → rolling /
+  ; black picture. Exactly 262 lines = 3 VSYNC + 37 VBLANK + 192 visible + 30
+  ; overscan; the positioning WSYNCs MUST be counted against the 37.)
   LDA #2
   STA VBLANK
-  LDX #37
+  LDX #34
 .vb:
   STA WSYNC
   DEX

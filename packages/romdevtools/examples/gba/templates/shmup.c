@@ -29,6 +29,26 @@
 #define TILE_BULLET 2
 #define TILE_ENEMY  3
 
+/* Draw a 5-digit score at pixel (x,8) WITHOUT tte_printf. The bundled libtonc's
+ * tte_printf with a %d/%05d conversion is broken (it routes through a vsnprintf
+ * path that isn't wired in this build — it garbles the output AND wedges the
+ * game loop when called per-frame, GBA-1). We build the string ourselves and
+ * use tte_write, which processes the #{P:x,y} position command but does NO
+ * format conversion → safe every frame. */
+static void draw_score(int x, unsigned v) {
+    char buf[24];
+    int i, n = 0;
+    /* "#{P:<x>,8}" position command, then 5 decimal digits. */
+    buf[n++]='#'; buf[n++]='{'; buf[n++]='P'; buf[n++]=':';
+    if (x >= 100) buf[n++] = '0' + (x/100)%10;
+    if (x >= 10)  buf[n++] = '0' + (x/10)%10;
+    buf[n++] = '0' + x%10;
+    buf[n++]=','; buf[n++]='8'; buf[n++]='}';
+    for (i = 4; i >= 0; i--) { buf[n+i] = '0' + (v % 10); v /= 10; }
+    n += 5; buf[n] = 0;
+    tte_write(buf);
+}
+
 /* 4bpp tiles (8 rows × 32 bits each = 32 bytes). Each nibble is a
  * palette index. Index 0 = transparent. */
 static const u32 tile_ship[8] = {
@@ -188,10 +208,9 @@ int main(void) {
 
         oam_copy(oam_mem, obj_buffer, 128);
 
-        /* Score: 5-digit ASCII via TTE printf. Tte handles VRAM tile
-         * writes — safe to call once per frame. */
+        /* Score: 5 digits via draw_score (NOT tte_printf — see GBA-1). */
         tte_erase_rect(8 + 6*8, 8, 8 + 11*8, 16);
-        tte_printf("#{P:%d,8}%05d", 8 + 6*8, score);
+        draw_score(8 + 6*8, score);
     }
     return 0;
 }

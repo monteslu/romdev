@@ -59,9 +59,11 @@ int main(void) {
     tte_write("Hello, Tonc!\n");
     tte_write("Built with romdev\n");
 
-    /* Formatted output without needing iprintf or libsysbase. */
-    int year = 2026;
-    tte_printf("#{P:32,80}Year: %d\n", year);
+    /* NOTE: tte_printf with a %d/%05d conversion is broken in this libtonc
+     * build (it garbles output + can wedge the loop — GBA-1). For dynamic
+     * numbers, build the string yourself and tte_write it (see the genre
+     * scaffolds' draw_score). For static text just tte_write a literal: */
+    tte_write("#{P:32,80}Year: 2026\n");
 
     /* Game loop. VBlankIntrWait() halts the CPU until next vblank —
      * saves battery on real hardware. */

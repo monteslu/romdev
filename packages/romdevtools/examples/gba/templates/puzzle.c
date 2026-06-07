@@ -22,6 +22,20 @@
 #include <tonc.h>
 #include "gba_sfx.h"
 
+/* draw a 5-digit score WITHOUT tte_printf (broken in this libtonc — GBA-1). */
+static void draw_score(int x, unsigned v) {
+    char buf[24];
+    int i, n = 0;
+    buf[n++]='#'; buf[n++]='{'; buf[n++]='P'; buf[n++]=':';
+    if (x >= 100) buf[n++] = '0' + (x/100)%10;
+    if (x >= 10)  buf[n++] = '0' + (x/10)%10;
+    buf[n++] = '0' + x%10;
+    buf[n++]=','; buf[n++]='8'; buf[n++]='}';
+    for (i = 4; i >= 0; i--) { buf[n+i] = '0' + (v % 10); v /= 10; }
+    n += 5; buf[n] = 0;
+    tte_write(buf);
+}
+
 #define COLS 6
 #define ROWS 12
 
@@ -211,7 +225,7 @@ int main(void) {
             new_piece();
             prev = now;
             tte_erase_rect(88 + 6*8, 8, 88 + 11*8, 16);
-            tte_printf("#{P:%d,8}%05d", 88 + 6*8, score);
+            draw_score(88 + 6*8, score);
             continue;
         }
         prev = now;
@@ -231,7 +245,7 @@ int main(void) {
         draw_piece(piece_x, piece_y, 0);
 
         tte_erase_rect(88 + 6*8, 8, 88 + 11*8, 16);
-        tte_printf("#{P:%d,8}%05d", 88 + 6*8, score);
+        draw_score(88 + 6*8, score);
     }
     return 0;
 }

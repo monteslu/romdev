@@ -56,6 +56,7 @@ volatile uint8_t nmi_counter = 0;
  * (so OAM segment placement at $0200 is linker-enforced). oam_index
  * tracks the next free slot for oam_spr(). */
 static uint8_t oam_index = 0;
+static void oam_hide_unused(void);  /* fwd decl — used by ppu_wait_nmi (NES-1) */
 
 /* ── VRAM write queue ─────────────────────────────────────────────
  * Each entry is { hi, lo, byte }. NMI walks the queue, writes
@@ -130,7 +131,12 @@ void ppu_wait_vblank(void) {
 }
 
 void ppu_wait_nmi(void) {
-  uint8_t target = (uint8_t)(nmi_counter + 1);
+  uint8_t target;
+  /* Hide last frame's now-unused sprite slots BEFORE waiting, so the buffer
+   * the NMI's OAM-DMA copies is fully staged (live slots written by oam_spr,
+   * stale slots parked off-screen) — never a half-cleared buffer (NES-1). */
+  oam_hide_unused();
+  target = (uint8_t)(nmi_counter + 1);
   while (nmi_counter != target) { /* spin */ }
 }
 
@@ -159,15 +165,31 @@ void palette_load(const uint8_t *pal32) {
 
 /* ── OAM ──────────────────────────────────────────────────────── */
 
+/* High-water mark: the largest oam_index reached last frame. Lets us blank
+ * ONLY the slots a frame stopped using, instead of the whole 256-byte buffer
+ * every frame. */
+static uint8_t oam_high = 0;
+
 void oam_clear(void) {
-  uint16_t i;
-  for (i = 0; i < 256; i += 4) {
-    shadow_oam[i] = 0xFF;             /* Y off-screen */
-    shadow_oam[i + 1] = 0;            /* tile */
-    shadow_oam[i + 2] = 0;            /* attr */
-    shadow_oam[i + 3] = 0;            /* X */
-  }
+  /* NES-1 FIX: do NOT blank the whole shadow buffer here. The old full clear
+   * wrote slot 0's Y=$FF FIRST and took ~hundreds of cycles; if the NMI's
+   * OAM-DMA fired mid-clear it copied a HALF-CLEARED buffer → the live sprite
+   * vanished every other frame (the classic "sprite flickers to black"
+   * sprite-light scaffold bug). Instead we just reset the staging index here;
+   * ppu_wait_nmi() hides the slots this frame stopped using, so the DMA only
+   * ever sees a fully-staged buffer. */
   oam_index = 0;
+}
+
+/* Hide slots [oam_index .. oam_high] (the ones used last frame but not this
+ * frame) by parking their Y off-screen. Called from ppu_wait_nmi AFTER the
+ * game has staged its live sprites, so live slots are never blanked. */
+static void oam_hide_unused(void) {
+  uint16_t i;
+  for (i = oam_index; i < (uint16_t)oam_high + 4 && i < 256; i += 4) {
+    shadow_oam[i] = 0xFF;             /* Y off-screen */
+  }
+  oam_high = oam_index;
 }
 
 void oam_spr(uint8_t x, uint8_t y, uint8_t tile, uint8_t attr) {
