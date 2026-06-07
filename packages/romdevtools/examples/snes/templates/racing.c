@@ -19,6 +19,10 @@ extern char tilsprite, palsprite;
 #define PLAYER_Y      180
 #define MAX_OBSTACLES   4
 
+/* oamSet's FIRST arg is a BYTE OFFSET into OAM (slot N → N*4), not a slot
+ * number — passing the raw slot corrupts OAM → black/garbled (SNES-1). */
+#define SPR(slot) ((slot) << 2)
+
 typedef struct { s16 x, y; u8 alive; } Car;
 
 static Car player;
@@ -90,7 +94,7 @@ int main(void) {
     consoleDrawText(6, 26, "L/R SWITCH LANES");
 
     /* Hide all OAM. */
-    for (i = 0; i < 1 + MAX_OBSTACLES; i++) oamSet(i, 0, 240, 3, 0, 0, 0, 0);
+    for (i = 0; i < 1 + MAX_OBSTACLES; i++) oamSet(SPR(i), 0, 240, 3, 0, 0, 0, 0);
 
     setScreenOn();
     sfx_init();
@@ -99,10 +103,10 @@ int main(void) {
 
     while (1) {
         /* Stage OAM. */
-        oamSet(0, player.x, player.y, 3, 0, 0, 0, 0);
+        oamSet(SPR(0), player.x, player.y, 3, 0, 0, 0, 0);
         for (i = 0; i < MAX_OBSTACLES; i++) {
             u16 ey = obstacles[i].alive ? obstacles[i].y : 240;
-            oamSet((u16)(1 + i), obstacles[i].x, ey, 3, 0, 0, 32, 0);
+            oamSet(SPR((u16)(1 + i)), obstacles[i].x, ey, 3, 0, 0, 1, 0); /* gfxoffset = tile INDEX 1 (SNES-5; was 32) */
         }
         oamUpdate();
         render_score();

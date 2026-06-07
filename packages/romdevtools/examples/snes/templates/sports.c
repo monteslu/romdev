@@ -23,6 +23,12 @@ extern char tilsprite, palsprite;
 #define PADDLE_X1   16
 #define PADDLE_X2   232
 
+/* oamSet's FIRST arg is a BYTE OFFSET into OAM, not a slot number: slot N lives
+ * at byte offset N*4. Passing the raw slot writes every sprite into OAM bytes
+ * 0-9, corrupting each other → black/garbled screen. (The shmup scaffold gets
+ * this right; sports/racing did not — SNES-1.) */
+#define SPR(slot) ((slot) << 2)
+
 static s16 p1y, p2y, bx, by;
 static s8  bdx, bdy;
 static u16 score_p1, score_p2;
@@ -73,7 +79,7 @@ int main(void) {
     consoleDrawText(6, 26, "UP/DOWN MOVES YOUR PADDLE");
 
     /* Hide all OAM slots initially. */
-    for (i = 0; i < 7; i++) oamSet(i, 0, 240, 3, 0, 0, 0, 0);
+    for (i = 0; i < 7; i++) oamSet(SPR(i), 0, 240, 3, 0, 0, 0, 0);
 
     setScreenOn();
     sfx_init();
@@ -83,12 +89,12 @@ int main(void) {
         slot = 0;
         /* Left paddle = 3 stacked 8×8 sprites */
         for (i = 0; i < PADDLE_H / 8; i++) {
-            oamSet(slot++, PADDLE_X1, (u16)(p1y + i * 8), 3, 0, 0, 0, 0);
+            oamSet(SPR(slot++), PADDLE_X1, (u16)(p1y + i * 8), 3, 0, 0, 0, 0);
         }
         for (i = 0; i < PADDLE_H / 8; i++) {
-            oamSet(slot++, PADDLE_X2, (u16)(p2y + i * 8), 3, 0, 0, 0, 0);
+            oamSet(SPR(slot++), PADDLE_X2, (u16)(p2y + i * 8), 3, 0, 0, 0, 0);
         }
-        oamSet(slot++, bx, by, 3, 0, 0, 0, 0);
+        oamSet(SPR(slot++), bx, by, 3, 0, 0, 0, 0);
         oamUpdate();
         render_scores();
         WaitForVBlank();

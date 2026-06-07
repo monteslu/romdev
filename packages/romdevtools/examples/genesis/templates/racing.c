@@ -160,6 +160,9 @@ int main(bool hard) {
             VDP_setSprite(slot++, obstacles[i].x, ey, SPRITE_SIZE(1, 1),
                           TILE_ATTR_FULL(PAL1, 1, 0, 0, T_CAR_EN));
         }
+        /* Link slots 0..slot-1 so the VDP's SAT walk draws all of them — without
+         * this the link bytes stay 0 (= end-of-list) and only slot 0 renders. */
+        VDP_linkSprites(0, slot);
         VDP_updateSprites(slot, DMA);
 
         render_score();

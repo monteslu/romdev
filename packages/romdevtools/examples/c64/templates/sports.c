@@ -41,7 +41,7 @@ static void wait_vblank(void) {
 
 static void copy_sprite(uint8_t slot, const uint8_t *data) {
   uint8_t i;
-  volatile uint8_t *dst = (volatile uint8_t*)(0x0800 + slot * 64);
+  volatile uint8_t *dst = (volatile uint8_t*)(0x2000 + slot * 64);  /* $2000, not $0800 (collides w/ $0801 .prg) */
   for (i = 0; i < 64; i++) dst[i] = data[i];
 }
 
@@ -56,9 +56,9 @@ void main(void) {
   copy_sprite(0, paddle_sprite);
   copy_sprite(1, paddle_sprite);
   copy_sprite(2, ball_sprite);
-  SPRITE_POINTERS[0] = 0x20;
-  SPRITE_POINTERS[1] = 0x21;
-  SPRITE_POINTERS[2] = 0x22;
+  SPRITE_POINTERS[0] = 0x80;  /* $2000/64 */
+  SPRITE_POINTERS[1] = 0x81;
+  SPRITE_POINTERS[2] = 0x82;
   POKE(VIC_SPR_COL(0), 0x01);  /* white */
   POKE(VIC_SPR_COL(1), 0x01);
   POKE(VIC_SPR_COL(2), 0x07);  /* yellow ball */

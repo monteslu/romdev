@@ -43,7 +43,13 @@ void main(void) {
   sfx_init();
 
   for (;;) {
-    tgi_clear();
+    /* Lynx frame loop: WAIT for the blitter, then clear with a full-screen
+     * tgi_bar (NOT tgi_clear, which leaves the back page stale on this core)
+     * — drawing while the blitter is mid-flight loses the frame → black.
+     * (Copied from the shmup scaffold, the LYNX-1 fix.) */
+    while (tgi_busy()) { }
+    tgi_setcolor(COLOR_BLACK);
+    tgi_bar(0, 0, tgi_getmaxx(), tgi_getmaxy());
     tgi_setcolor(COLOR_GREY);
     for (i = 0; i < N_PLATFORMS; i++) {
       tgi_bar(platforms[i].x, platforms[i].y, platforms[i].x + platforms[i].w - 1, platforms[i].y + platforms[i].h - 1);

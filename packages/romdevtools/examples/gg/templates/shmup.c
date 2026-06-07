@@ -46,12 +46,18 @@ extern void gg_sat_upload(void);
 #define T_BULLET 1
 #define T_ENEMY  2
 
-static const uint8_t palette[32] = {
-  0x10,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
-  0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
-  /* Sprite palette: white, yellow, red */
-  0x00,0x3F,0x0F,0x03, 0x00,0x00,0x00,0x00,
-  0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
+/* GG palette = 32 entries × 2 bytes (4-4-4 BGR LE): low=(g<<4)|r, high=b.
+ * Entries 0-15 = BG, 16-31 = SPRITE. (The earlier 32-byte SMS-style array was
+ * the GG #1 invisible-sprite bug: gg_load_palette reads 64 bytes, so a 32-byte
+ * array left the sprite palette (entries 16-31) reading past the array = garbage
+ * = invisible sprites.) */
+static const uint8_t palette[64] = {
+  /* BG 0-15: entry 0 = dark navy backdrop */
+  0x20,0x02, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
+  0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
+  /* SPRITE 16-31: 16=transparent, 17=white, 18=yellow, 19=red */
+  0,0, 0xFF,0x0F, 0xFF,0x00, 0x0F,0x00, 0,0, 0,0, 0,0, 0,0,
+  0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
 };
 
 static const uint8_t sprite_tiles[32 * 3] = {

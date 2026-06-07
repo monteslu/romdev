@@ -80,7 +80,7 @@ static void wait_vblank(void) {
 
 static void copy_sprite(uint8_t slot, const uint8_t *data) {
   uint8_t i;
-  volatile uint8_t *dst = (volatile uint8_t*)(0x0800 + slot * 64);
+  volatile uint8_t *dst = (volatile uint8_t*)(0x2000 + slot * 64);  /* $2000, not $0800 (collides w/ $0801 .prg) */
   for (i = 0; i < 64; i++) dst[i] = data[i];
 }
 
@@ -131,7 +131,7 @@ void main(void) {
 
   POKE(VIC_SPR_ENA, 0);
   copy_sprite(0, player_sprite);
-  SPRITE_POINTERS[0] = 0x20;
+  SPRITE_POINTERS[0] = 0x80;  /* $2000/64 */
   POKE(VIC_SPR_COL(0), 0x07);  /* yellow player */
   POKE(VIC_BORDER, 0x06);      /* dark blue */
   POKE(VIC_BG0,    0x06);

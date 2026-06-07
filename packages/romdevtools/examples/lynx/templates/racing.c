@@ -31,7 +31,13 @@ void main(void) {
   for (i = 0; i < MAX_OBS; i++) obs[i].alive = 0;
 
   for (;;) {
-    tgi_clear();
+    /* Lynx frame loop: WAIT for the blitter, then clear with a full-screen
+     * tgi_bar (NOT tgi_clear, which leaves the back page stale on this core)
+     * — drawing while the blitter is mid-flight loses the frame → black.
+     * (Copied from the shmup scaffold, the LYNX-1 fix.) */
+    while (tgi_busy()) { }
+    tgi_setcolor(COLOR_BLACK);
+    tgi_bar(0, 0, tgi_getmaxx(), tgi_getmaxy());
     /* lane lines */
     tgi_setcolor(COLOR_DARKGREY);
     tgi_line(28, 0, 28, 101);
