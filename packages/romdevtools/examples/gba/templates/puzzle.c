@@ -60,6 +60,14 @@ static const u32 tile_blue[8] = {
     0x33333333, 0x33333333, 0x33333333, 0x33333333,
     0x33333333, 0x33333333, 0x33333333, 0x33333333,
 };
+/* Backdrop tile (colour index 4 = steel grey): a dither so the whole screen
+ * reads as a "cabinet" behind the playfield instead of flat black — a lone
+ * 6x12 grid floating on black looks blank to a human (frame verify <92%). */
+static const u32 tile_back[8] = {
+    0x40404040, 0x04040404, 0x40404040, 0x04040404,
+    0x40404040, 0x04040404, 0x40404040, 0x04040404,
+};
+#define TILE_BACK 4
 
 static u8 grid[ROWS][COLS];
 
@@ -92,7 +100,7 @@ static int tile_for(u8 cell) {
         case 1: return TILE_RED;
         case 2: return TILE_GREEN;
         case 3: return TILE_BLUE;
-        default: return TILE_BLANK;
+        default: return TILE_BACK;   /* empty cell shows the backdrop, not black */
     }
 }
 
@@ -168,15 +176,19 @@ int main(void) {
     pal_bg_mem[1] = CLR_RED;
     pal_bg_mem[2] = CLR_LIME;
     pal_bg_mem[3] = CLR_BLUE;
+    pal_bg_mem[4] = RGB15(6, 6, 9);   /* steel grey backdrop */
 
     /* BG tile graphics in char-block 3 (separate from TTE which used 2). */
     tonccpy(&tile_mem[3][TILE_RED],   tile_red,   sizeof(tile_red));
     tonccpy(&tile_mem[3][TILE_GREEN], tile_green, sizeof(tile_green));
     tonccpy(&tile_mem[3][TILE_BLUE],  tile_blue,  sizeof(tile_blue));
+    tonccpy(&tile_mem[3][TILE_BACK],  tile_back,  sizeof(tile_back));
 
-    /* Clear screen-block 28 (BG0 map). */
+    /* Fill screen-block 28 (BG0 map) with the backdrop tile so the whole
+     * screen is covered; the grid cells draw over it. (A blank/black map left
+     * the playfield floating on black — reads as blank.) */
     SCR_ENTRY *map = se_mem[28];
-    for (int i = 0; i < 32 * 32; i++) map[i] = SE_BUILD(TILE_BLANK, 0, 0, 0);
+    for (int i = 0; i < 32 * 32; i++) map[i] = SE_BUILD(TILE_BACK, 0, 0, 0);
 
     REG_BG0CNT = BG_CBB(3) | BG_SBB(28) | BG_REG_32x32 | BG_4BPP | BG_PRIO(0);
     /* Bump TTE's BG1 to a LOWER priority so the grid (BG0, prio 0) renders

@@ -35,6 +35,22 @@ static const u32 tile_solid_1[8] = {
     0x11111111, 0x11111111, 0x11111111, 0x11111111,
     0x11111111, 0x11111111, 0x11111111, 0x11111111,
 };
+/* BG court tiles (4bpp). The court fills BG1 so the arena isn't flat black
+ * (paddles+ball alone on black read as blank to a human — frame verify <92%).
+ *   TILE_COURT (idx1 green): the playing surface, tiled across the screen.
+ *   TILE_NET   (idx2 white): a dashed vertical centre net. */
+#define TILE_COURT 1
+#define TILE_NET   2
+/* Court surface as a two-green checkerboard (idx1 + idx3) so no single colour
+ * dominates the screen — a flat one-colour court still trips the blank check. */
+static const u32 tile_court[8] = {
+    0x11331133, 0x11331133, 0x11331133, 0x11331133,
+    0x33113311, 0x33113311, 0x33113311, 0x33113311,
+};
+static const u32 tile_net[8] = {
+    0x00022000, 0x00022000, 0x00000000, 0x00000000,
+    0x00022000, 0x00022000, 0x00000000, 0x00000000,
+};
 
 static OBJ_ATTR obj_buffer[128];
 
@@ -76,9 +92,27 @@ int main(void) {
 
     sfx_init();
 
-    /* TTE for scores + hint. */
+    /* TTE for scores + hint (BG0). */
     tte_init_chr4c_default(0, BG_CBB(0) | BG_SBB(31));
-    REG_DISPCNT = DCNT_MODE0 | DCNT_BG0 | DCNT_OBJ | DCNT_OBJ_1D;
+
+    /* Court background on BG1 so the arena reads as a real Pong court, not
+     * flat black. Tiles in char-block 1, map in screen-block 29. */
+    pal_bg_mem[1] = RGB15(2, 12, 4);   /* court green (light) */
+    pal_bg_mem[2] = CLR_WHITE;          /* net                */
+    pal_bg_mem[3] = RGB15(1, 8, 3);    /* court green (dark)  */
+    tonccpy(&tile_mem[1][TILE_COURT], tile_court, sizeof(tile_court));
+    tonccpy(&tile_mem[1][TILE_NET],   tile_net,   sizeof(tile_net));
+    {
+        SCR_ENTRY *cmap = se_mem[29];
+        int tx, ty;
+        for (ty = 0; ty < 32; ty++)
+            for (tx = 0; tx < 32; tx++)
+                cmap[ty * 32 + tx] = SE_BUILD(
+                    (tx == 15) ? TILE_NET : TILE_COURT, 0, 0, 0);
+    }
+    REG_BG1CNT = BG_CBB(1) | BG_SBB(29) | BG_REG_32x32 | BG_4BPP | BG_PRIO(3);
+
+    REG_DISPCNT = DCNT_MODE0 | DCNT_BG0 | DCNT_BG1 | DCNT_OBJ | DCNT_OBJ_1D;
     tte_write("#{P:16,2}P1");
     tte_write("#{P:208,2}P2");
     tte_write("#{P:36,150}UP/DOWN MOVES YOUR PADDLE");
