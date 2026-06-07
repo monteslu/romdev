@@ -67,6 +67,37 @@ instead of assuming the server is broken and installing their own tools.
 - The `uint8-loop-bound` preflight lint is scope-aware (no longer false-flags a
   `uint16_t` loop counter that shares a name with a `uint8_t` in another function).
 
+## 0.16.0
+
+**Build diagnostics: agents were building blind — errors AND warnings now reach
+the response as structured `issues[]`.** An agent can only fix what the toolchain
+tells it, where it tells it. Audited the whole build surface and closed the gaps
+so diagnostics (file/line/message/stage) come back in the tool result, not buried
+in the raw log. (Also bumps a doc count: the surface is 32 tools after 0.15.0's
+dmaTrace→watch / patchGbHeader→romPatch consolidation; stale "34" references in
+the docs + source comments updated.)
+
+### Fixed
+- **Warnings were OFF.** No C compiler was being asked for them. gcc (GBA/Genesis)
+  now compiles USER source with `-Wall -Wextra -Wno-unused-parameter` (the bundled
+  SDK stays warning-free so its noise doesn't bury the agent's); cc65 enables its
+  valid high-value `-W` set. So unused vars, implicit declarations, etc. are now
+  emitted and surfaced.
+- **Swallowed errors now structured:** SDCC's keyword-less `file:line: syntax
+  error: …` and `warning NNN: …` (GB/GBC/SMS/MSX previously returned an empty
+  `issues[]` on a syntax error); the sdld/ASlink `Undefined Global '_x'` link
+  error; vasm errors (Genesis asm emits no stage marker, so they hit the
+  fallback, which had skipped the vasm parser); and a **missing `incbin` asset**
+  — the #1 thing an agent forgets to pass — now reports `could not open <x.bin>`
+  with the exact filename.
+- **Fixed a build crash that ate the real error:** `build({output:'rom', path})`
+  fell into the source builder with no source and threw "Cannot read properties
+  of undefined (reading 'split')" instead of the compiler error; it now routes to
+  the project-dir builder like `output:'run'`/`'project'`.
+- Verified live across all 14 platforms; a `parse-errors-coverage` test locks the
+  formats in. (Known limit: asar/SNES-asm only yields a wrapper "aborted"
+  message — its WASM build aborts without printing line info.)
+
 ## 0.14.0
 
 **Two platform-specific top-level tools folded into their domain verbs, a
