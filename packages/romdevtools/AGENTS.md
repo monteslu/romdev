@@ -58,7 +58,7 @@ Skip playtest only when there's clearly no human in the loop: CI runs, automated
 - `assets` — convert PNGs to tiles (`encodeArt`/`importArt`), WAVs to BRR, identify ROMs (`cart({op:'identify'})`), plus the hacking toolkit (`romPatch({op})` — write/writeMany/spliceCHR/relocate/makeStored/findFree/findPointer/diff, `assembleSnippet`, `cart({op:'extract'})`, `cart({op:'wrap'})`)
 - `project` — starter snippets per platform
 - `show` — `playtest({op})`: `op:'open'` opens the live SDL window for a human, `op:'stop'` closes it, `op:'status'` reports liveness, `op:'framebuffer'` captures exactly what the human's window shows
-- `advanced` — `runUntil`, **`watch({on:'mem'|'range'|'pc'})`** (LOG-ALL tracing), **`breakpoint({on:'write'})`** (the EXACT instruction that wrote a byte, via a core watchpoint — fixes the frame-sampled-PC problem; `precision:'sampled'` is the cheap frame-PC version), **`breakpoint({on:'pc'})`** (execution breakpoint — freeze the CPU AT an instruction and read its registers), **`breakpoint({on:'read'})`** (the EXACT instruction that read a byte), **`frame({op:'stepInstruction'})`** (CPU single-step) — all 14 platforms; input recording
+- `advanced` — `runUntil`, **`watch({on:'mem'|'range'|'pc'})`** (LOG-ALL tracing), **`breakpoint({on:'write'})`** (the EXACT instruction that wrote a byte, via a core watchpoint — fixes the frame-sampled-PC problem; `precision:'sampled'` is the cheap frame-PC version; on a `pressDuring` run pass **`abortIf:[{region,offset,label}]`** to stop early if the driven scenario derails — a guard byte changing returns `{aborted, abortedBy, before, after}` instead of burning all `maxFrames` on a meaningless `found:false`), **`breakpoint({on:'pc'})`** (execution breakpoint — freeze the CPU AT an instruction and read its registers), **`breakpoint({on:'read'})`** (the EXACT instruction that read a byte), **`frame({op:'stepInstruction'})`** (CPU single-step) — all 14 platforms; input recording
 
 **"Disassemble this NES ROM"** is now just: `disasm({target:'rom', path, startAddress, length})`. No discovery step.
 
@@ -881,6 +881,7 @@ OAM format: bytes per sprite are `[y, tileIndex, attributes, x]`.
 `state({op:'save'}, name)` / `state({op:'load'}, name)` slots are **in-memory** and discarded on `host({op:'shutdown'})` or new media. To persist a state across sessions:
 - `state({op:'save', path})` writes the CURRENT live host to a file directly.
 - `state({op:'export', fromSlot, path})` copies an EXISTING in-memory slot (e.g. one the human saved with a playtest emulator-hotkey — it appears in `state({op:'list'})`) to a file **without disturbing the live host** (no pause/resume needed). Reload either with `state({op:'load', path})`.
+- **`path` resolution:** a RELATIVE `path` resolves against the **loaded ROM's directory** (so `path:"states/start.state"` lands next to your ROM), an absolute path is used as-is; the result echoes `resolvedPath` when they differ. (It is NOT resolved against the server's CWD.)
 
 `state({op:'load'})` removes any active cheats (a save-state blob doesn't carry frontend cheat state) and reports `cheatsCleared`. `host({op:'reset'})` resets the frame counter + core state (and clears cheats) but keeps the loaded ROM.
 
