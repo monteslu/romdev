@@ -1,8 +1,8 @@
 /* ── gba_hello.c — Game Boy Advance libgba starter ──────────────────
  *
  * Idiomatic GBA C against the devkitPro libgba SDK — same shape every
- * published devkitARM tutorial uses. Mode 3 framebuffer, draws a red
- * pixel that moves left/right via the d-pad.
+ * published devkitARM tutorial uses. Mode 3 (240×160 bitmap) framebuffer:
+ * draws a navy sky + green ground + a yellow box you move with the d-pad.
  *
  * Build via romdev:
  *   build({ output: "rom", platform:"gba", language:"c", runtime:"libgba",
@@ -35,7 +35,22 @@
 
 #include <gba.h>
 
+#define SCR_W 240
+#define SCR_H 160
+#define BOX   16          /* movable box size in pixels */
+
+/* Fill a solid rectangle in the Mode-3 framebuffer. */
+static void fill_rect(int x, int y, int w, int h, u16 color) {
+    int yy, xx;
+    for (yy = y; yy < y + h; yy++)
+        for (xx = x; xx < x + w; xx++)
+            MODE3_FB[yy][xx] = color;
+}
+
 int main(void) {
+    int x = (SCR_W - BOX) / 2;
+    int y = (SCR_H - BOX) / 2;
+
     /* MODE_3: 240×160 framebuffer, 15-bit color, BG2 = the framebuffer. */
     REG_DISPCNT = MODE_3 | BG2_ON;
 
@@ -43,22 +58,25 @@ int main(void) {
     irqInit();
     irqEnable(IRQ_VBLANK);
 
-    int x = 120;
-    int y = 80;
-
     while (1) {
         VBlankIntrWait();
 
         /* Read d-pad. REG_KEYINPUT is active-LOW (bit clear = pressed).
          * Invert + mask to get "is pressed" semantics. */
         u16 keys = ~REG_KEYINPUT & 0x3FF;
-        if ((keys & KEY_LEFT)  && x > 0)   x--;
-        if ((keys & KEY_RIGHT) && x < 239) x++;
-        if ((keys & KEY_UP)    && y > 0)   y--;
-        if ((keys & KEY_DOWN)  && y < 159) y++;
+        if ((keys & KEY_LEFT)  && x > 0)            x -= 2;
+        if ((keys & KEY_RIGHT) && x < SCR_W - BOX)  x += 2;
+        if ((keys & KEY_UP)    && y > 0)            y -= 2;
+        if ((keys & KEY_DOWN)  && y < SCR_H - BOX)  y += 2;
 
-        /* Trail effect: don't erase, just keep drawing. */
-        MODE3_FB[y][x] = RGB5(31, 0, 0);
+        /* Draw a recognizable scene every frame:
+         *   - a navy sky filling the whole framebuffer (so it is
+         *     obviously NOT a blank screen),
+         *   - a green ground strip along the bottom,
+         *   - a yellow d-pad-movable box. */
+        fill_rect(0, 0,        SCR_W, SCR_H,      RGB5(2, 4, 12));   /* sky    */
+        fill_rect(0, SCR_H-32, SCR_W, 32,         RGB5(4, 18, 4));   /* ground */
+        fill_rect(x, y,        BOX,   BOX,        RGB5(31, 31, 0));  /* box    */
     }
     return 0;
 }

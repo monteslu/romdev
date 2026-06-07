@@ -18,6 +18,7 @@ extern void    gg_vdp_init(void);
 extern void    gg_vdp_display_on(void);
 extern void    gg_load_palette(const uint8_t *palette);
 extern void    gg_load_tiles(uint16_t vram_dest, const uint8_t *src, uint16_t byte_count);
+extern void    gg_set_tilemap_cell(uint8_t row, uint8_t col, uint8_t tile_idx, uint8_t attr);
 extern void    gg_vblank_wait(void);
 extern uint8_t gg_joypad_read(void);
 extern void    gg_sprite_init(void);
@@ -40,15 +41,36 @@ extern void    gg_sat_upload(void);
 
 /* GG palette = 32 entries × 2 bytes (4-4-4 BGR LE): low=(g<<4)|r, high=b.
  * gg_load_palette reads 64 bytes; a 32-byte array leaves the sprite palette
- * (entries 16-31) reading garbage = invisible sprites. Sprite colour 1 = entry
- * 17 (white), colour 2 = entry 18 (red). */
+ * (entries 16-31) reading garbage = invisible sprites. BG colour 1 = grass
+ * green, BG colour 2 = road grey. Sprite colour 1 = entry 17 (white),
+ * colour 2 = entry 18 (red). */
 static const uint8_t palette[64] = {
-  /* BG 0-15: entry 0 = dark navy backdrop */
-  0x20,0x02, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
+  /* BG 0-15: 0 = dark navy backdrop, 1 = grass green, 2 = road grey */
+  0x20,0x02, 0x60,0x00, 0x66,0x06, 0,0, 0,0, 0,0, 0,0, 0,0,
   0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
   /* SPRITE 16-31: 16=transparent, 17=white, 18=red */
   0,0, 0xFF,0x0F, 0x0F,0x00, 0,0, 0,0, 0,0, 0,0, 0,0,
   0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
+};
+
+/* Three BG tiles for the track, loaded into the BG tile bank at $0000:
+ *   tile 0 = blank (all zeros → shows the backdrop colour)
+ *   tile 1 = solid grass (colour 1)
+ *   tile 2 = solid road  (colour 2) */
+static const uint8_t bg_tiles[96] = {
+  /* BG tile 0 = blank */
+  0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+  0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+  /* BG tile 1 = grass (colour 1 → plane 0 set) */
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  0xFF,0x00,0x00,0x00, 0xFF,0x00,0x00,0x00,
+  /* BG tile 2 = road (colour 2 → plane 1 set) */
+  0x00,0xFF,0x00,0x00, 0x00,0xFF,0x00,0x00,
+  0x00,0xFF,0x00,0x00, 0x00,0xFF,0x00,0x00,
+  0x00,0xFF,0x00,0x00, 0x00,0xFF,0x00,0x00,
+  0x00,0xFF,0x00,0x00, 0x00,0xFF,0x00,0x00,
 };
 
 /* Two sprite tiles — player (colour 1) + enemy (colour 2). */
@@ -64,6 +86,28 @@ static const uint8_t tiles[64] = {
   0x00,0x7E,0x00,0x00, 0x00,0x42,0x00,0x00,
   0x00,0x7E,0x00,0x00, 0x00,0x66,0x00,0x00,
 };
+
+/* Paint the visible viewport: grey road down the centre lanes, green
+ * grass on the shoulders. Visible name-table region is cols 6..25,
+ * rows 3..20 (the centered 160×144). BG tile bank is $0000. */
+#define VIS_COL_MIN  6
+#define VIS_COL_MAX 25
+#define VIS_ROW_MIN  3
+#define VIS_ROW_MAX 20
+static void draw_track(void) {
+  uint8_t row, col;
+  /* Blank the whole 32×28 name table to backdrop (tile 0). */
+  for (row = 0; row < 28; row++)
+    for (col = 0; col < 32; col++) gg_set_tilemap_cell(row, col, 0, 0);
+  /* Paint the visible viewport: road (tile 2) down the central lanes,
+   * grass (tile 1) on the shoulders. */
+  for (row = VIS_ROW_MIN; row <= VIS_ROW_MAX; row++) {
+    for (col = VIS_COL_MIN; col <= VIS_COL_MAX; col++) {
+      uint8_t road = (col >= VIS_COL_MIN + 4 && col <= VIS_COL_MAX - 4);
+      gg_set_tilemap_cell(row, col, road ? 2 : 1, 0);
+    }
+  }
+}
 
 typedef struct { uint8_t x, y, alive; } Car;
 
@@ -110,7 +154,9 @@ void main(void) {
   uint8_t i;
   gg_vdp_init();
   gg_load_palette(palette);
-  gg_load_tiles(0x2000, tiles, 64);
+  gg_load_tiles(0x0000, bg_tiles, 96);   /* BG tiles → BG bank $0000 */
+  gg_load_tiles(0x2000, tiles, 64);      /* sprite tiles → sprite bank $2000 */
+  draw_track();
   gg_sprite_init();
   sfx_init();
   gg_vdp_display_on();

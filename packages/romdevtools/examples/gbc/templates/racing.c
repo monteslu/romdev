@@ -1,10 +1,17 @@
-/* ── racing.c — Game Boy top-down racing scaffold ──────────────────
+/* ── racing.c — Game Boy Color top-down racing scaffold ────────────
  *
- * Endless 3-lane top-down dodge for the Game Boy. LEFT/RIGHT switches
- * lanes (edge-detected), obstacles slide down at speed = 2 + score/500
- * (capped). Collision triggers a 60-frame freeze + auto-reset.
+ * Endless 3-lane top-down dodge for the Game Boy Color. LEFT/RIGHT
+ * switches lanes (edge-detected), obstacles slide down at speed =
+ * 2 + score/500 (capped). Collision triggers a 60-frame freeze +
+ * auto-reset.
  *
- * Game Boy screen is 160×144 — 3 lanes centred around x = {48, 80, 112}.
+ * Game Boy screen is 160×144 — 3 lanes centred around x = {40, 76, 112}.
+ *
+ * The road is a real CGB-coloured background: green grass shoulders down
+ * each side, grey asphalt across the playfield, dashed white lane lines
+ * between the lanes (BG palette via BCPS/BCPD; LCDC bit 0 = BG ON — drop
+ * it and the screen is a flat colour, the #1 GB "why is it blank"
+ * footgun). Cars are colour sprites (OCPS/OCPD) on top.
  */
 
 #include "gb_hardware.h"
@@ -16,7 +23,7 @@
 #define PLAYER_Y      120
 #define MAX_OBSTACLES   4
 
-static const uint8_t tile_blank[16] = { 0 };
+/* ── Sprite tiles (cars) ──────────────────────────────────────────── */
 static const uint8_t tile_car_p1[16] = {
   0x3C,0x00, 0x7E,0x00, 0x42,0x00, 0x7E,0x00,
   0x7E,0x00, 0x42,0x00, 0x7E,0x00, 0x66,0x00,
@@ -26,8 +33,43 @@ static const uint8_t tile_car_en[16] = {
   0x00,0x7E, 0x00,0x42, 0x00,0x7E, 0x00,0x66,
 };
 
-static const uint16_t obj_palette[4] = { 0x7FFF, 0x7FFF, 0x001F, 0x03E0 };
-static const uint16_t bg_palette[4]  = { 0x1842, 0x2945, 0x4A53, 0x7FFF };  /* asphalt → lane lines */
+/* ── BG tiles (road) ──────────────────────────────────────────────── */
+/* 2bpp: row N = byte 2N (low plane) + byte 2N+1 (high plane).
+ *   asphalt  — all colour 2 (grey)
+ *   grass    — all colour 1 (green)
+ *   laneA/B  — dashed colour-3 (white) lane line, two phases for dashes */
+static const uint8_t tile_asphalt[16] = {
+  0x00,0xFF, 0x00,0xFF, 0x00,0xFF, 0x00,0xFF,
+  0x00,0xFF, 0x00,0xFF, 0x00,0xFF, 0x00,0xFF,
+};
+static const uint8_t tile_grass[16] = {
+  0xFF,0x00, 0xFF,0x00, 0xFF,0x00, 0xFF,0x00,
+  0xFF,0x00, 0xFF,0x00, 0xFF,0x00, 0xFF,0x00,
+};
+/* lane line = a 2px-wide colour-3 stripe down the centre of the cell;
+ * phase A draws the top half, phase B the bottom half → dashes. */
+static const uint8_t tile_laneA[16] = {
+  0x18,0x18, 0x18,0x18, 0x18,0x18, 0x18,0x18,
+  0x00,0xFF, 0x00,0xFF, 0x00,0xFF, 0x00,0xFF,
+};
+static const uint8_t tile_laneB[16] = {
+  0x00,0xFF, 0x00,0xFF, 0x00,0xFF, 0x00,0xFF,
+  0x18,0x18, 0x18,0x18, 0x18,0x18, 0x18,0x18,
+};
+
+/* CGB palettes (BGR555).
+ * BG palette 0: 0 unused, 1 green grass, 2 grey asphalt, 3 white line. */
+static const uint16_t bg_palette[4]  = { 0x0000, 0x0320, 0x4210, 0x7FFF };
+/* OBJ palette 0: 0 transparent, 1 white (player), 2 red (enemy), 3 green. */
+static const uint16_t obj_palette[4] = { 0x0000, 0x7FFF, 0x001F, 0x03E0 };
+
+/* Tile indices in VRAM. Sprites and BG share the $8000 table here. */
+#define T_CAR_P1   1
+#define T_CAR_EN   2
+#define T_ASPHALT  3
+#define T_GRASS    4
+#define T_LANE_A   5
+#define T_LANE_B   6
 
 typedef struct { int16_t x, y; uint8_t alive; } Car;
 
@@ -76,6 +118,24 @@ static void upload_tile(uint8_t slot, const uint8_t *src) {
   for (i = 0; i < 16; i++) dst[i] = src[i];
 }
 
+/* Paint the road into BG map 0 ($9800). 20×18 visible cells:
+ *   col 0       = grass shoulder (left)
+ *   col 19      = grass shoulder (right)
+ *   cols 1..18  = asphalt, with dashed lane lines at the two lane
+ *                 boundaries (cols 6 and 12). Dashes alternate per row. */
+static void draw_road(void) {
+  uint8_t *bg = BG_MAP_0;
+  uint8_t r, c, t;
+  for (r = 0; r < 18; r++) {
+    for (c = 0; c < 20; c++) {
+      if (c == 0 || c == 19)      t = T_GRASS;
+      else if (c == 6 || c == 12) t = (r & 1) ? T_LANE_A : T_LANE_B;
+      else                        t = T_ASPHALT;
+      bg[r * 32 + c] = t;
+    }
+  }
+}
+
 void main(void) {
   uint8_t pad;
   uint8_t i;
@@ -84,23 +144,29 @@ void main(void) {
   lcd_init_default();
   LCDC = 0;
 
-  upload_tile(0, tile_blank);
-  upload_tile(1, tile_car_p1);
-  upload_tile(2, tile_car_en);
+  upload_tile(T_CAR_P1,  tile_car_p1);
+  upload_tile(T_CAR_EN,  tile_car_en);
+  upload_tile(T_ASPHALT, tile_asphalt);
+  upload_tile(T_GRASS,   tile_grass);
+  upload_tile(T_LANE_A,  tile_laneA);
+  upload_tile(T_LANE_B,  tile_laneB);
 
-  OCPS = 0x80;
-  for (i = 0; i < 4; i++) {
-    OCPD = (uint8_t)(obj_palette[i] & 0xFF);
-    OCPD = (uint8_t)((obj_palette[i] >> 8) & 0xFF);
-  }
+  /* CGB palettes. */
   BCPS = 0x80;
   for (i = 0; i < 4; i++) {
     BCPD = (uint8_t)(bg_palette[i] & 0xFF);
     BCPD = (uint8_t)((bg_palette[i] >> 8) & 0xFF);
   }
+  OCPS = 0x80;
+  for (i = 0; i < 4; i++) {
+    OCPD = (uint8_t)(obj_palette[i] & 0xFF);
+    OCPD = (uint8_t)((obj_palette[i] >> 8) & 0xFF);
+  }
+
+  draw_road();
 
   oam_clear();
-  LCDC = LCDC_LCD_ON | LCDC_OBJ_ON | LCDC_TILE_DATA_LO;
+  LCDC = LCDC_LCD_ON | LCDC_BG_ON | LCDC_OBJ_ON | LCDC_TILE_DATA_LO;
   sound_init();
 
   reset_run();
@@ -111,13 +177,13 @@ void main(void) {
 
     /* Stage OAM — player + obstacles. */
     for (i = 0; i < 40; i++) oam_set(i, 0, 0, 0, 0);
-    oam_set(0, (uint8_t)(player.y + 16), (uint8_t)(player.x + 8), 1, 0);
+    oam_set(0, (uint8_t)(player.y + 16), (uint8_t)(player.x + 8), T_CAR_P1, 0);
     for (i = 0; i < MAX_OBSTACLES; i++) {
       if (obstacles[i].alive) {
         oam_set((uint8_t)(1 + i),
                 (uint8_t)(obstacles[i].y + 16),
                 (uint8_t)(obstacles[i].x + 8),
-                2, 0);
+                T_CAR_EN, 0);
       }
     }
     oam_dma_flush();

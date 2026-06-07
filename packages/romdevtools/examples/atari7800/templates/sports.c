@@ -21,6 +21,8 @@
 #define P0C1      (*(volatile uint8_t*)0x21)
 #define P0C2      (*(volatile uint8_t*)0x22)
 #define P0C3      (*(volatile uint8_t*)0x23)
+#define P1C1      (*(volatile uint8_t*)0x25)
+#define P2C1      (*(volatile uint8_t*)0x29)
 #define MSTAT     (*(volatile uint8_t*)0x28)
 #define DPPH      (*(volatile uint8_t*)0x2C)
 #define DPPL      (*(volatile uint8_t*)0x30)
@@ -60,6 +62,29 @@ static uint8_t scanline_dls[PLAY_LINES * DL_BYTES_PER_LINE];
 
 static uint8_t dl_empty[2] = { 0, 0 };
 
+/* ── Court border bands ───────────────────────────────────────────
+ * The court itself (per-scanline DLs below) only draws two thin
+ * paddles + a ball, so on a black screen ~99% of the frame is blank.
+ * Fill the zones above and below the court with full-width bands so
+ * the court is framed by visible walls. A single DL drawable is at
+ * most 32 bytes = 128 px wide, so a full 160-px line needs TWO
+ * drawables. Width = byte[3] low 5 bits (32-n); high 3 bits = palette. */
+static const uint8_t band_pix[32] = {
+  0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,
+  0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55
+};
+#define MK_BAND(name, pal) static uint8_t name[11] = { \
+  0, 0x40, 0, ((pal) << 5) | 0,  0,    /* 128 px @ x0   */ \
+  0, 0x40, 0, ((pal) << 5) | 24, 128,  /* 32 px  @ x128 */ \
+  0 }
+MK_BAND(dl_wall, 1);
+
+static void set_band_addr(uint8_t* dl) {
+  uint16_t a = (uint16_t)(uintptr_t)band_pix;
+  dl[0] = dl[5] = (uint8_t)(a & 0xFF);
+  dl[2] = dl[7] = (uint8_t)(a >> 8);
+}
+
 #define DLL_ZONES 243
 static uint8_t dll[DLL_ZONES * 3];
 
@@ -92,19 +117,23 @@ static uint8_t emit_obj(uint8_t* dl, uint8_t off, uint16_t data_addr,
 
 /* Rebuild ALL scanline DLs + DLL based on current object positions. */
 static void rebuild(void) {
+  uint16_t wall = (uint16_t)(uintptr_t)dl_wall;
   uint16_t empty = (uint16_t)(uintptr_t)dl_empty;
   uint16_t solid = (uint16_t)(uintptr_t)solid_row;
   int line;
   int i;
 
-  /* DLL: point each play-area line at its scanline DL slot; everything
-   * else at the empty DL. */
+  /* DLL: point each play-area line at its scanline DL slot; frame the
+   * court with full-width wall bands above and below, leaving a thin
+   * empty gutter right at the court edges. */
   for (i = 0; i < DLL_ZONES; i++) {
     if (i >= COURT_TOP && i < COURT_BOT) {
       uint16_t dlp = (uint16_t)(uintptr_t)&scanline_dls[(i - COURT_TOP) * DL_BYTES_PER_LINE];
       set_dll_entry(i, dlp);
+    } else if (i >= COURT_TOP - 8 && i < COURT_BOT + 8) {
+      set_dll_entry(i, empty);   /* small gutter around the court */
     } else {
-      set_dll_entry(i, empty);
+      set_dll_entry(i, wall);
     }
   }
 
@@ -151,13 +180,15 @@ void main(void) {
   p1y = 110; p2y = 110;
   serve_ball(0);
 
-  BACKGRND = 0x00;   /* black */
-  P0C1     = 0x0F;   /* white sprite */
+  BACKGRND = 0x00;   /* black court */
+  P0C1     = 0x0F;   /* white paddles + ball */
   P0C2     = 0x0F;
   P0C3     = 0x0F;
+  P1C1     = 0x48;   /* court walls (blue) */
   CHARBASE = 0;
   OFFSET   = 0;
 
+  set_band_addr(dl_wall);
   rebuild();
 
   dll_addr = (uint16_t)(uintptr_t)dll;
