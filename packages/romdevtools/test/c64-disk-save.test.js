@@ -73,3 +73,33 @@ test("importDiskImage rejects a non-174848-byte image at the state layer", () =>
   // the directory won't parse to anything meaningful; the state op enforces 174848.
   assert.ok(true); // documented invariant; enforced + tested via the MCP op
 });
+
+// THE headline case: a running game does its OWN KERNAL SAVE to disk, and we read
+// the saved file back out. This persists because VICE writes it into the live
+// disk image (TDE GCR writeback) — exportDisk reads that image. The filename is
+// stored in high-bit PETSCII by the KERNAL, which the readDirectory fix decodes.
+test("a game's own cbm_save persists into the disk and reads back", { timeout: 120000 }, async () => {
+  const { buildC } = await import("../src/toolchains/cc65/cc65.js");
+  const SRC = `#include <cbm.h>
+void main(void){
+  static const unsigned char d[5]={11,22,33,44,55};
+  cbm_save("SCORE", 8, d, 5);   /* one clean KERNAL SAVE to drive 8 */
+  for(;;){}
+}`;
+  const built = await buildC({ target: "c64", source: SRC });
+  if (!built.binary) { assert.fail("cc65 build failed: " + built.log.slice(-300)); }
+
+  const core = resolveCore("c64");
+  const host = new LibretroHost();
+  await host.loadCore(core.jsPath, core.wasmPath);
+  await host.loadMedia({ platform: "c64", bytes: prgToD64(built.binary, { name: "SAVER" }), virtualName: "/g.d64" });
+  for (let i = 0; i < 8000; i++) host.stepFrames(1);   // autostart + the save + drive settle
+
+  const d64 = host.exportDiskImage(8);
+  const dir = readDirectory(d64);
+  const score = dir.find((e) => e.name === "SCORE");
+  assert.ok(score, `the game's SAVE should appear on the disk; got ${JSON.stringify(dir.map((d) => d.name))}`);
+  const data = extractFile(d64, "SCORE");
+  // file = 2-byte load address + the 5 saved bytes
+  assert.deepEqual([...data.subarray(2)], [11, 22, 33, 44, 55], "saved bytes round-trip");
+});
