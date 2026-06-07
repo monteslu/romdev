@@ -98,6 +98,24 @@ the docs + source comments updated.)
   formats in. (Known limit: asar/SNES-asm only yields a wrapper "aborted"
   message — its WASM build aborts without printing line info.)
 
+### Added — SRAM (cartridge battery save) support, folded into existing tools
+The cartridge battery SAVE FILE (in-game saves — distinct from a whole-machine
+savestate) is now fully supported, with NO new top-level tool:
+- **Live read/write** already worked via `memory({region:'save_ram'})` on every
+  battery-capable core (NES/GB/GBC/SNES/Genesis/GBA — verified against each core's
+  source; they all expose RETRO_MEMORY_SAVE_RAM).
+- **Persist the `.sav`:** `state({op:'exportSram', path})` / `{op:'importSram', path}`
+  dump/restore the battery RAM as a real save file (relative path → ROM dir, size-
+  mismatch guard, zero-pad-smaller). The save-editor / inject-a-save capability that
+  previously forced agents out to local tooling.
+- **Presence:** `cart({op:'identify'})` now returns `saveRam:{hasBattery, bytes}`
+  (from the iNES battery flag / GB cart-type) so an agent knows a save exists.
+- **Honest "no save":** empty `save_ram` now says *why* — "this cart has no battery
+  save" / "Atari 2600/7800 & Lynx never had cartridge saves" / "C64 saves are disk-
+  based" — instead of a generic "core didn't expose it." (Confirmed via research +
+  core source: no core patches were needed; earlier "broken" readings were
+  password-game test carts like Metroid, which correctly have no battery.)
+
 ### Fixed / Added — v0.15.0 session feedback
 - **`state` file `path` resolution.** A RELATIVE `path` (save/load/export) used to
   resolve against the server's CWD → silent ENOENT (and the docs use relative

@@ -98,6 +98,77 @@ function listStatesCore(_args, sessionKey) {
   return { states: getHost(sessionKey).listStates() };
 }
 
+// SRAM presence: the battery-backed cartridge save RAM size for the loaded ROM
+// (0 = this cart/system has no battery save). Used by exportSram/importSram and
+// surfaced so an agent knows whether a save file even exists.
+function sramSize(host) {
+  try { return host.regionSize("save_ram"); } catch { return 0; }
+}
+
+/** op:'exportSram' — write the cartridge's battery SAVE RAM to a .sav file.
+ * This is the actual save-game file (distinct from a whole-machine savestate):
+ * the bytes a real cart keeps on its battery. Empty on a no-battery cart. */
+async function exportSramCore({ path: outPath }, sessionKey) {
+  const host = getHost(sessionKey);
+  const size = sramSize(host);
+  if (!size) {
+    throw new Error(
+      `state({op:'exportSram'}): the loaded ROM has no battery save RAM ` +
+      `(platform '${host.status.platform}', size 0). Either this cart has no battery ` +
+      `save, or this system never had cartridge saves (Atari 2600/7800, Lynx; C64 saves ` +
+      `are disk-based). Use state({op:'save', path}) for a full-machine savestate instead.`);
+  }
+  const blob = host.readMemory("save_ram", 0, size);
+  const resolved = resolveStatePath(outPath, host);
+  await mkdir(path.dirname(resolved), { recursive: true });
+  await writeFile(resolved, Buffer.from(blob));
+  return {
+    exportedSram: true,
+    path: resolved,
+    ...(resolved !== outPath ? { resolvedPath: resolved } : {}),
+    bytes: size,
+    platform: host.status.platform,
+    note: "Wrote the cartridge's battery SAVE RAM (the .sav save-game file). Restore with " +
+      "state({op:'importSram', path}) after loading the same ROM. This is the SAVE FILE, " +
+      "not a savestate — edit it offline (it's raw SRAM) or inject one a player made elsewhere.",
+  };
+}
+
+/** op:'importSram' — load a .sav file back into the cartridge's battery SAVE RAM. */
+async function importSramCore({ path: inPath }, sessionKey) {
+  const host = getHost(sessionKey);
+  const size = sramSize(host);
+  if (!size) {
+    throw new Error(
+      `state({op:'importSram'}): the loaded ROM has no battery save RAM ` +
+      `(platform '${host.status.platform}', size 0) — nowhere to load a .sav into.`);
+  }
+  const resolved = resolveStatePath(inPath, host);
+  const blob = new Uint8Array(await readFile(resolved));
+  if (blob.length !== size) {
+    // Size mismatch is the classic wrong-game/wrong-region footgun — surface it,
+    // but allow a smaller blob (zero-pad) since some dumps trim trailing zeros.
+    if (blob.length > size) {
+      throw new Error(
+        `state({op:'importSram'}): .sav is ${blob.length} bytes but this cart's SAVE RAM is ${size} ` +
+        `— too large (wrong game/region?). Refusing to truncate.`);
+    }
+  }
+  host.writeMemory("save_ram", 0, blob);
+  return {
+    importedSram: true,
+    path: resolved,
+    ...(resolved !== inPath ? { resolvedPath: resolved } : {}),
+    bytes: blob.length,
+    sramSize: size,
+    ...(blob.length < size ? { zeroPadded: size - blob.length } : {}),
+    platform: host.status.platform,
+    note: "Loaded the .sav into the cartridge's battery SAVE RAM. The running game sees it " +
+      "on its next save-RAM read (some games re-read only on a load/menu). " +
+      (blob.length < size ? `Blob was smaller than SRAM (${blob.length}<${size}); the tail kept its prior bytes.` : ""),
+  };
+}
+
 /** op:'dump' — raw libretro blob to disk for forensic inspection (+ optional findHex). */
 async function dumpStateCore({ path: outPath, findHex, maxMatches = 32 }, sessionKey) {
       const host = getHost(sessionKey);
@@ -178,7 +249,7 @@ export function registerStateTools(server, z, sessionKey) {
     "'list': named in-memory slots. 'diff': whole-machine 'did ANYTHING change?' (coarser than memory diff) — " +
     "snapOrDiff:'snapshot' captures, 'diff' compares.",
     {
-      op: z.enum(["save", "load", "list", "export", "dump", "diff"]).describe("save/load a state; list slots; export a slot to disk; dump the raw blob; diff the whole machine."),
+      op: z.enum(["save", "load", "list", "export", "dump", "diff", "exportSram", "importSram"]).describe("save/load a savestate (whole machine); list slots; export a slot to disk; dump the raw blob; diff the whole machine. SRAM (the cartridge BATTERY SAVE FILE, distinct from a savestate): exportSram writes the .sav, importSram loads one back."),
       name: z.string().min(1).optional().describe("op=save/load: in-memory slot name. op=diff: snapshot label (default 'default')."),
       path: z.string().optional().describe("op=save: also write the blob here (survives restarts). op=load: restore from this disk blob. op=export/dump: write the blob here (required). A RELATIVE path resolves against the loaded ROM's directory (NOT the server CWD); an absolute path is used as-is. The result echoes `resolvedPath` when they differ."),
       // load
@@ -208,6 +279,14 @@ export function registerStateTools(server, z, sessionKey) {
         case "diff": {
           if (!args.snapOrDiff) throw new Error("state({op:'diff'}): `snapOrDiff` ('snapshot' or 'diff') is required.");
           return jsonContent(diffStateCore(args, sessionKey));
+        }
+        case "exportSram": {
+          if (!args.path) throw new Error("state({op:'exportSram'}): `path` (where to write the .sav) is required.");
+          return jsonContent(await exportSramCore(args, sessionKey));
+        }
+        case "importSram": {
+          if (!args.path) throw new Error("state({op:'importSram'}): `path` (the .sav to load) is required.");
+          return jsonContent(await importSramCore(args, sessionKey));
         }
         default: throw new Error(`state: unknown op '${args.op}'`);
       }

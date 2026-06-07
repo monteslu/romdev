@@ -107,6 +107,7 @@ function parseINes(b) {
   if (f6 & 0x04) notes.push("trainer present");
   if (f6 & 0x08) notes.push("four-screen VRAM");
 
+  const hasBattery = !!(f6 & 0x02);
   return {
     platform: "nes",
     format: ".nes",
@@ -117,6 +118,10 @@ function parseINes(b) {
       chr: chrBanks * 8192,
       total: b.length,
     },
+    // Battery-backed cartridge SAVE RAM: present iff the iNES battery flag is set
+    // (8 KB is the standard PRG-RAM window). Read/write live via
+    // memory({region:'save_ram'}); persist with state({op:'exportSram'/'importSram'}).
+    saveRam: { hasBattery, bytes: hasBattery ? 8192 : 0 },
     notes: [...notes, `mirroring: ${mirroring}`],
     confidence: 1,
   };
@@ -208,6 +213,13 @@ function parseGameBoy(b) {
     0x1E: "MBC5+RUMBLE+RAM+BATTERY", 0xFC: "Pocket Camera", 0xFE: "HuC3", 0xFF: "HuC1+RAM+BATTERY",
   };
 
+  // Battery save = cart type whose name carries BATTERY. MBC2 has 512×4 bits of
+  // internal RAM (ramSizeCode is 0 but it still saves), so treat it specially.
+  const typeName = cartTypeNames[cartType] ?? "";
+  const hasBattery = /BATTERY/.test(typeName);
+  const isMbc2 = cartType === 0x05 || cartType === 0x06;
+  const saveBytes = hasBattery ? (isMbc2 ? 512 : Math.max(ramSize, 0)) : 0;
+
   return {
     platform,
     format: isGbc ? ".gbc" : ".gb",
@@ -215,6 +227,9 @@ function parseGameBoy(b) {
     region,
     mapper: cartTypeNames[cartType] ?? `0x${cartType.toString(16)}`,
     sizes: { rom: romSize, ram: ramSize, total: b.length },
+    // Battery-backed cartridge SAVE RAM (the .sav). Read/write live via
+    // memory({region:'save_ram'}); persist with state({op:'exportSram'/'importSram'}).
+    saveRam: { hasBattery, bytes: saveBytes },
     notes: [
       isGbc ? "Game Boy Color cartridge" : "Original Game Boy cartridge",
       sgbFlag === 0x03 && "supports Super Game Boy enhancements",

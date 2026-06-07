@@ -1448,6 +1448,22 @@ export class LibretroHost {
    */
   _emptyRegionError(region) {
     const plat = this.status && this.status.platform;
+    // SRAM gets an honest, specific answer: empty save_ram almost always means
+    // "this cart/system has no battery save," NOT "the core is broken."
+    if (region === "save_ram") {
+      if (["atari2600", "atari7800", "lynx"].includes(plat)) {
+        return `'${plat}' has no cartridge battery saves (the hardware never supported them) — ` +
+          `save_ram is always empty here, there's no save file to read/write.`;
+      }
+      if (plat === "c64") {
+        return `C64 saves are DISK-based, not cartridge SRAM, so save_ram is empty. ` +
+          `Use a full-machine savestate: state({op:'save'/'load', path}).`;
+      }
+      return `save_ram is empty on platform '${plat}': this CART has no battery save ` +
+        `(check cart({op:'identify'}).saveRam.hasBattery — many ROMs use passwords or no save). ` +
+        `If you expected a save, confirm the cart header marks it battery-backed. ` +
+        `For a full-machine snapshot regardless of SRAM, use state({op:'save'/'load', path}).`;
+    }
     const suggestions = {
       // platform → { generic-region-name: "use this instead" }
       gb:    { video_ram: "gb_vram",  save_ram: "save_ram (likely empty on cartless ROMs — try gb_oam / gb_io / gb_hram for non-VRAM state)" },
