@@ -11,6 +11,66 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { jsonContent, safeTool } from "../util.js";
 import { identifyRomCore } from "./rom-id.js";
+import { prgToD64, readDirectory as readD64Dir, extractFile as extractD64File } from "../../platforms/c64/d64.js";
+
+// ─── C64 .d64 disk image ──────────────────────────────────────────
+//
+// The C64 world ships and loads games as .d64 disk images (the new Commodore 64
+// Ultimate FPGA hardware + the homebrew/demo scene), not as bare .prg files. A
+// cc65 build emits a .prg; packDisk wraps it into a distributable, autostart-able
+// .d64. Extract on a .d64 lists/pulls its files back out.
+
+/**
+ * Pack a built .prg into a .d64 disk image (the distribution format).
+ * @param {{prgPath?:string, bodyPath?:string, romPath?:string, base64?:string,
+ *          outputPath?:string, name?:string, diskName?:string, inline?:boolean}} args
+ */
+export async function packDiskCore(args) {
+  const src = args.prgPath || args.bodyPath || args.romPath;
+  let prg;
+  if (args.base64) prg = new Uint8Array(Buffer.from(args.base64, "base64"));
+  else if (src) prg = new Uint8Array(await readFile(src));
+  else throw new Error("cart({op:'packDisk'}): provide `prgPath` (the built .prg) or `base64`.");
+
+  const name = (args.name || (src ? path.basename(src).replace(/\.[^.]+$/, "") : "GAME"))
+    .toUpperCase().replace(/[^A-Z0-9 ]/g, "").slice(0, 16) || "GAME";
+  const d64 = prgToD64(prg, { name, diskName: args.diskName || name });
+
+  if (args.inline) {
+    return { packed: true, format: "d64", name, bytes: d64.length, base64: Buffer.from(d64).toString("base64") };
+  }
+  const out = args.outputPath
+    || (src ? src.replace(/\.[^.]+$/, "") + ".d64" : null);
+  if (!out) throw new Error("cart({op:'packDisk'}): `outputPath` required (or pass `prgPath` to derive it, or inline:true).");
+  await writeFile(out, Buffer.from(d64));
+  return {
+    packed: true, format: "d64", name, bytes: d64.length, path: out,
+    note: "Autostart-able 1541 disk image. Load it with loadMedia({platform:'c64', path}) — it boots the program automatically. This is the format the Commodore 64 Ultimate hardware and the homebrew scene load.",
+  };
+}
+
+/** Read a .d64's directory + (optionally) extract a file. */
+export async function extractDiskCore(args) {
+  const data = new Uint8Array(await readFile(args.path));
+  const dir = readD64Dir(data);
+  const result = { format: "d64", path: args.path, files: dir };
+  // If a specific file was named, also return its bytes.
+  const which = args.name;
+  if (which != null) {
+    const bytes = extractD64File(data, which);
+    if (!bytes) throw new Error(`cart({op:'extract'}) .d64: no file '${which}' on the disk (have: ${dir.map((d) => d.name).join(", ") || "none"}).`);
+    if (args.inline) result.file = { name: which, bytes: bytes.length, base64: Buffer.from(bytes).toString("base64") };
+    else {
+      const out = args.outputDir
+        ? path.join(args.outputDir, which.replace(/[^A-Za-z0-9._-]/g, "_") + ".prg")
+        : args.path.replace(/\.d64$/i, "") + "." + which.replace(/[^A-Za-z0-9._-]/g, "_") + ".prg";
+      if (args.outputDir) await mkdir(args.outputDir, { recursive: true });
+      await writeFile(out, Buffer.from(bytes));
+      result.file = { name: which, bytes: bytes.length, path: out };
+    }
+  }
+  return result;
+}
 
 // ─── extractCart ──────────────────────────────────────────────────
 
@@ -590,7 +650,7 @@ function wrapC64({ loadAddress, bodyPath, romPath }) {
 export function registerCartPartsTools(server, z) {
   server.tool(
     "cart",
-    "Cartridge container ops — identify / split / reassemble a ROM file. `op`: 'identify' | 'extract' | 'wrap'.\n" +
+    "Cartridge container ops — identify / split / reassemble a ROM file. `op`: 'identify' | 'extract' | 'wrap' | 'packDisk'.\n" +
     "'identify': sniff an unknown ROM/zip's platform (which core to load). Handles zip-wrapped ROMs; `path` OR " +
     "`base64` (+`hint` ext for headerless). Returns {platform, format, title, mapper, region, sizes, confidence}. " +
     "RE next steps: cheats({op:'lookup'}) is a free labeled memory/code map; disasm is how you change behavior.\n" +
@@ -601,9 +661,13 @@ export function registerCartPartsTools(server, z) {
     "Round-trips with 'wrap' (extract → romPatch a part → wrap → build).\n" +
     "'wrap': generate a build-ready wrapper source (+ NES linker config; null for other platforms) that reassembles " +
     "parts back into a cart. NES auto-generates the iNES header from mapper+mirror (chrPath:null for CHR-RAM; only " +
-    "prgBanks 1/2 = NROM-128/256). Per-platform part paths in the param hints (pass `romPath` for a one-shot whole-body incbin).",
+    "prgBanks 1/2 = NROM-128/256). Per-platform part paths in the param hints (pass `romPath` for a one-shot whole-body incbin).\n" +
+    "'packDisk' (C64): wrap a built `.prg` (`prgPath` or `base64`) into a distributable, autostart-able `.d64` disk " +
+    "image — the format the new Commodore 64 Ultimate hardware and the homebrew/demo scene actually load. " +
+    "Writes `<prg>.d64` (or `outputPath`/`inline`). loadMedia({platform:'c64', path:<.d64>}) boots it directly. " +
+    "(extract on a `.d64` lists its directory; pass `name` to pull one file off the disk.)",
     {
-      op: z.enum(["identify", "extract", "wrap"]).describe("identify the ROM's platform; extract into parts; wrap parts back into a cart."),
+      op: z.enum(["identify", "extract", "wrap", "packDisk"]).describe("identify the ROM's platform; extract into parts (or list/pull files from a C64 .d64); wrap parts back into a cart; packDisk wraps a C64 .prg into a distributable .d64 disk image."),
       // identify
       path: z.string().optional().describe("op=identify/extract: absolute path to the ROM file."),
       base64: z.string().optional().describe("op=identify: base64 ROM bytes (OR path)."),
@@ -631,18 +695,26 @@ export function registerCartPartsTools(server, z) {
       a78HeaderPath: z.string().optional().describe("op=wrap Atari 7800: the 128-byte A78 header (if present)."),
       bodyBytes: z.number().int().min(1).optional().describe("op=wrap Atari 7800: size of the 6502 image body (computes the cart origin; default 0xC000)."),
       loadAddress: z.number().int().min(0).max(0xFFFF).optional().describe("op=wrap C64: load address (default 0x0801)."),
+      // packDisk (C64 .d64)
+      name: z.string().optional().describe("op=packDisk: disk file name (PETSCII, ≤16 chars; default from prgPath). op=extract .d64: a file to pull off the disk."),
+      diskName: z.string().optional().describe("op=packDisk: disk label (≤16 chars; default = name)."),
+      outputPath: z.string().optional().describe("op=extract: dir for parts (+ manifest.json). op=packDisk: .d64 output path (default: prgPath with a .d64 extension). Required unless inline:true."),
     },
     safeTool(async (args) => {
       switch (args.op) {
         case "identify": return await identifyRomCore(args);
         case "extract": {
           if (!args.path) throw new Error("cart({op:'extract'}): `path` is required.");
+          // A .d64 is a disk image (a container of files), not a flat cart —
+          // route it to the disk reader so extract lists/pulls its contents.
+          if (/\.d64$/i.test(args.path)) return jsonContent(await extractDiskCore(args));
           return jsonContent(await extractCartCore(args));
         }
         case "wrap": {
           if (!args.platform) throw new Error("cart({op:'wrap'}): `platform` is required.");
           return jsonContent(await wrapRomFromPartsCore(args));
         }
+        case "packDisk": return jsonContent(await packDiskCore(args));
         default: throw new Error(`cart: unknown op '${args.op}'`);
       }
     }),

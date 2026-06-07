@@ -145,6 +145,29 @@ stub that does a `SYS` to the C entry point.
 For game ROMs you typically just let the user load the .prg into the
 emulator and the rest takes care of itself.
 
+## Disk images (.d64) — loading real games & distributing yours
+
+A bare `.prg` is fine for dev iteration, but the real C64 world — the new
+Commodore 64 Ultimate / C64C Ultimate FPGA hardware and the homebrew/demo
+scene — ships and loads games as **`.d64` disk images** (and `.crt` carts /
+`.tap` tapes). romdev handles them:
+
+- **Load & run a disk/cart/tape:** `loadMedia({platform:'c64', path:'game.d64'})`
+  (also `.t64 .tap .crt .g64`). VICE attaches it to drive 8 and **autostarts**
+  it (equivalent to `LOAD"*",8,1 : RUN`) under warp — give it a few hundred
+  frames to finish the emulated 1541 load, then it's running. `mediaKind` in
+  status reports `disk` / `tape` / `cartridge` / `program` so you know what you
+  loaded.
+- **Distribute YOUR game as a disk:** build your `.prg` as usual, then
+  `cart({op:'packDisk', prgPath:'game.prg'})` → an autostart-able `game.d64`
+  in the exact format the Ultimate hardware and the scene load. (`cart({op:
+  'extract', path:'x.d64'})` lists a disk's files; add `name:` to pull one out.)
+
+**In-game SAVE (writing to disk):** the C64 has no battery SRAM; games save by
+writing files to the disk. romdev can load/run/distribute disks, but a running
+game's own disk WRITES are not yet persisted back out of the core — for reliable
+persistence use a full-machine savestate (`state({op:'save'/'load', path})`).
+
 ## Frame heartbeat
 
 The C64 has no dedicated vblank interrupt by default. Two approaches:
@@ -166,7 +189,9 @@ When you call `build({output:'rom', platform:"c64", language:"c"})`:
 3. ld65 links + the bundled c64.cfg → `.prg` with a 2-byte load-address
    header.
 
-Loadable via vice_x64 (`loadMedia`).
+Loadable via vice_x64 (`loadMedia`). To ship it the way the scene/hardware
+loads games, wrap the `.prg` into a `.d64`: `cart({op:'packDisk', prgPath})`
+(see "Disk images" above).
 
 ## Horizontal scrolling (for side-scrollers)
 

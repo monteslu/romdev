@@ -1,5 +1,4 @@
 import { resolveCore } from "../../cores/registry.js";
-import { defaultMediaKind } from "../../host/index.js";
 import { clearHost, getHost, getHostOrNull, resetHost } from "../state.js";
 import { jsonContent, safeTool, textContent } from "../util.js";
 import { resolveCheatCodeForApply } from "./cheats.js";
@@ -19,7 +18,10 @@ export function registerLifecycleTools(server, z, sessionKey) {
     await host.loadMedia({
       platform,
       ...(bytes ? { bytes, virtualName } : { path }),
-      mediaKind: mediaKind ?? defaultMediaKind(platform),
+      // Only force a mediaKind when the caller picked one; otherwise let the host
+      // derive it from the file extension (a C64 .d64 → "disk", .tap → "tape",
+      // .prg → "program") so status reports the kind honestly.
+      ...(mediaKind ? { mediaKind } : {}),
     });
 
     // Pre-seed cheats BEFORE the first frame — so a boot-time cheat (e.g. a Game

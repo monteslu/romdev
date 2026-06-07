@@ -223,18 +223,25 @@ export const MemoryRegionToRetro = {
  */
 
 /**
- * Default mediaKind for a platform when caller doesn't specify.
- * Consoles default to cartridge; C64 defaults to program (`.prg`).
+ * Default mediaKind for a platform when caller doesn't specify. Consoles default
+ * to cartridge; C64 depends on the file kind — a `.d64`/`.g64`/`.d71`/`.d81` is a
+ * disk, a `.tap` is a tape, a `.crt` is a cartridge, and a bare `.prg`/`.p00` is
+ * a program injected directly. The extension is passed when known (loadMedia has
+ * it) so disk/tape images report honestly in status() and the agent knows a
+ * writable disk exists for saves.
  * @param {string} platform
+ * @param {string} [ext] lower- or mixed-case file extension incl. dot, e.g. ".d64"
  * @returns {MediaKind}
  */
-export function defaultMediaKind(platform) {
-  switch (platform) {
-    case "c64":
-      return "program";
-    default:
-      return "cartridge";
+export function defaultMediaKind(platform, ext) {
+  if (platform === "c64") {
+    const e = (ext || "").toLowerCase();
+    if (/\.(d64|g64|d71|d81|d80|d82|nib)$/.test(e)) return "disk";
+    if (/\.(tap|t64)$/.test(e)) return "tape";
+    if (/\.(crt|bin)$/.test(e)) return "cartridge";
+    return "program"; // .prg / .p00 / unknown → injected program
   }
+  return "cartridge";
 }
 
 /**
