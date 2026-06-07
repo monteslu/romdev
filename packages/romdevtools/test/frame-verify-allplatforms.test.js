@@ -84,7 +84,10 @@ for (const [platform, template] of PLATFORMS) {
           assert.ok(v.pixels.distinctColors <= 1, `${platform}: blankScreen claimed but ${v.pixels.distinctColors} colors`);
         }
         if (checks.includes("nearlyBlank")) {
-          assert.ok(v.pixels.dominantPct >= 99.5, `${platform}: nearlyBlank claimed but dominant=${v.pixels.dominantPct}%`);
+          // Threshold mirrors NEARLY_BLANK_DOMINANT (0.92) in frame.js — a screen
+          // where one color fills >=92% reads as blank to a human even though
+          // something rendered.
+          assert.ok(v.pixels.dominantPct >= 92, `${platform}: nearlyBlank claimed but dominant=${v.pixels.dominantPct}%`);
         }
         if (checks.includes("renderDisabled")) {
           assert.equal(v.render.renderEnabled, false, `${platform}: renderDisabled claimed but renderEnabled=${v.render.renderEnabled}`);

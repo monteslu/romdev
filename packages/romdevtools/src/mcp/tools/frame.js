@@ -5,7 +5,7 @@ import { PNG } from "pngjs";
 import { getHost } from "../state.js";
 import { imageContent, jsonContent, safeTool } from "../util.js";
 import { decodeOAM, decodePpuRegs, ppuRegsPopulated } from "../../platforms/snes/ppu.js";
-import { stepInstructionCore } from "./watch-memory.js";
+import { stepInstructionCore, attachObserverFrame } from "./watch-memory.js";
 import { getRenderingContextCore } from "./rendering-context.js";
 
 // Normalize each platform's render-context into a CONSERVATIVE renderEnabled
@@ -56,6 +56,16 @@ function pickRenderFlags(ctx) {
     return { renderEnabled: null };
   }
 }
+
+/**
+ * Dominant-color fraction at/above which a screen reads as "blank" to a
+ * human even though *something* technically rendered. Set to 0.92 (one color
+ * filling >=92% of the screen) — empirically the perceptual threshold where a
+ * backdrop-with-a-lone-sprite still looks empty. Below this, there's enough
+ * on-screen content that a person sees a populated frame. (Truly one/two-color
+ * frames are caught separately by the distinctColors<=1 blankScreen check.)
+ */
+const NEARLY_BLANK_DOMINANT = 0.92;
 
 /**
  * The cross-platform render-health computation behind frame({op:'verify'}).
@@ -111,8 +121,8 @@ export async function computeVerify(host, frames, sessionKey) {
   const issues = [];
   if (distinctColors <= 1) {
     issues.push({ check: "blankScreen", detail: `the entire framebuffer is one color (${pixels.dominantColor}) — nothing is being drawn.` });
-  } else if (dominantFraction >= 0.995) {
-    issues.push({ check: "nearlyBlank", detail: `${pixels.dominantPct}% of the screen is a single color (${pixels.dominantColor}); only ${nonDominant} px differ — likely a backdrop with almost no content.` });
+  } else if (dominantFraction >= NEARLY_BLANK_DOMINANT) {
+    issues.push({ check: "nearlyBlank", detail: `${pixels.dominantPct}% of the screen is a single color (${pixels.dominantColor}); only ${nonDominant} px differ — a backdrop with almost no content reads as blank to a human even though something rendered. Add visible content (a tilemap/background, more sprites) until <${Math.round(NEARLY_BLANK_DOMINANT * 100)}% is one color.` });
   }
   if (render && render.renderEnabled === false) {
     issues.push({ check: "renderDisabled", detail: `display output is disabled per the ${platform} registers: ${render.summary[0] || "see render.summary"}.` });
@@ -367,7 +377,14 @@ export function registerFrameTools(server, z, sessionKey) {
     if (!host.status.platform || !host.status.loaded) {
       throw new Error("frame({op:'verify'}): no media loaded — loadMedia or build({output:'run'}) first.");
     }
-    return jsonContent(await computeVerify(host, frames, sessionKey));
+    const json = jsonContent(await computeVerify(host, frames, sessionKey));
+    // verify's whole job is "look at the screen" — so push the exact frame it
+    // judged to the human's /livestream. Deferred provider: the PNG encode
+    // happens async after the agent's (JSON-only) response goes out, at zero
+    // cost to the agent. computeVerify already stepped the frames, so the
+    // host's current framebuffer IS the verified frame.
+    attachObserverFrame(json, host);
+    return json;
   }
 
   async function doStepAndShot({ frames, path: outPath, inline }) {
