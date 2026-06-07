@@ -128,7 +128,32 @@ export async function runTool(tool, args, sessionKey) {
       emit({ ok: false, error: text });
       return { ok: false, error: text };
     }
-    const images = extractImages(r);
+    // Observer sidebands — identical to the MCP observer middleware (tool-wrap.js),
+    // because the HTTP path runs handlers directly and would otherwise drop them:
+    //   • _observerImages — a frame the tool wrote to DISK instead of returning
+    //     inline (e.g. screenshot({path:...})); surface it to /livestream anyway.
+    //   • _observerFrameProvider — a DEFERRED framebuffer thunk (frame({op:'verify'}),
+    //     watch/breakpoint tools): the tool advanced/looked at the emulator but
+    //     returns JSON-only to the caller. We encode the PNG ASYNC (setImmediate,
+    //     after the HTTP response goes out) and push it as a `call_frame` event so
+    //     the human's livestream sees the frame at zero cost to the caller.
+    // Strip both from the caller-visible result before it's serialized.
+    let sidebandImages = [];
+    let frameProvider = null;
+    if (r && typeof r === "object") {
+      if (Array.isArray(r._observerImages)) { sidebandImages = r._observerImages; delete r._observerImages; }
+      if (typeof r._observerFrameProvider === "function") { frameProvider = r._observerFrameProvider; delete r._observerFrameProvider; }
+    }
+    if (frameProvider) {
+      setImmediate(() => {
+        try {
+          const img = frameProvider();
+          if (img) observer.push({ type: "call_frame", sessionKey: sessionKey ?? "http", ts: startedAt, tool: tool.name, images: [img] });
+        } catch { /* livestream is best-effort; never affects the caller */ }
+      });
+    }
+    const inlineImages = extractImages(r);
+    const images = inlineImages.length > 0 ? inlineImages : sidebandImages;
     const text = r?.content?.[0]?.text;
     if (typeof text === "string") {
       // most tools return jsonContent(...) → text is JSON; parse it back so the

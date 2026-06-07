@@ -56,7 +56,7 @@ async function maybeRestoreState(host, fromState, fromStatePath) {
 // observer wrapper encodes it ASYNCHRONOUSLY, after the agent's response has
 // already gone out. The provider is stripped from the agent-visible result. The
 // frame is captured by reference now (correct frozen state) but rasterized later.
-function attachObserverFrame(json, host) {
+export function attachObserverFrame(json, host) {
   json._observerFrameProvider = () => {
     try {
       const shot = host.screenshot(); // { pngBase64, width, height }
