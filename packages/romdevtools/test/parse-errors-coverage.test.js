@@ -63,6 +63,22 @@ test("gcc/cc1 unused-variable warning (needs -Wall) → structured", () => {
   assert.ok(w, "gcc unused-var warning not parsed: " + JSON.stringify(iss));
 });
 
+test("vasm error → structured, even with NO `--- stage ---` marker (genesis-asm path)", () => {
+  // vasm output has no stage marker, so the whole log hits the unknown-stage
+  // fallback — which used to skip parseVasm and swallow the error.
+  const log = 'error 2 in line 1 of "/work/main.s": unknown mnemonic <bogus>\n>  bogus d0,d1';
+  const iss = parseBuildLog(log);
+  const e = find(iss, (i) => i.severity === "error" && i.stage === "vasm");
+  assert.ok(e && e.line === 1 && /unknown mnemonic/.test(e.message), JSON.stringify(iss));
+});
+
+test("vasm `fatal error … could not open <x.bin>` (missing incbin asset) → structured", () => {
+  const log = 'fatal error 13 in line 1 of "/work/main.s": could not open <art.bin> for input\naborting...';
+  const iss = parseBuildLog(log);
+  const e = find(iss, (i) => i.severity === "error" && /could not open <art\.bin>/.test(i.message));
+  assert.ok(e, "missing-incbin (the #1 agent mistake) not surfaced: " + JSON.stringify(iss));
+});
+
 test("dasm assembler error → structured (dasm's `file (line): error:` format)", () => {
   const log = "--- dasm ---\nmain.asm (2): error: Unknown Mnemonic 'BOGUS'.\n";
   const iss = parseBuildLog(log);
