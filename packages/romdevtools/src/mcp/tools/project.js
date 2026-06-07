@@ -9,7 +9,6 @@
 // that compiles is in the directory.
 
 import { readFile, writeFile } from "node:fs/promises";
-import { patchGbHeader } from "../../platforms/gb/lib/c/patch-header.js";
 import { jsonContent, safeTool } from "../util.js";
 import { starterSnippetsCore, copyStarterSnippetsCore } from "./snippets.js";
 
@@ -320,7 +319,7 @@ TEMPLATES.gbc = {
   default: {
     main: "templates/default.c", runtime: GBC_RUNTIME,
     lang: GBC_LANG, ext: ".gbc",
-    describe: "Minimal GBC starter. Same shape as the GB default but ROM extension .gbc — patchGbHeader sets $0143=$80 so gambatte boots in CGB mode.",
+    describe: "Minimal GBC starter. Same shape as the GB default but ROM extension .gbc — the GB-header patch sets $0143=$80 so gambatte boots in CGB mode.",
   },
   hello_sprite: {
     main: "templates/hello_sprite.c", runtime: GBC_RUNTIME,
@@ -1583,9 +1582,9 @@ Compiles **C89**, not C99/C11. Stick to:
       "  frames: 60,\n" +
       "})\n```\n\n" +
       "`runSource` auto-fixes the GB/GBC cartridge header (logo, checksums, " +
-      "CGB flag) — you do **not** call `patchGbHeader` for a freshly built " +
-      "ROM. Use `patchGbHeader` only to fix up an existing/external ROM on " +
-      "disk or to override header fields (title, cart type, ROM/RAM size).";
+      "CGB flag) — you do **not** call a header patch for a freshly built " +
+      "ROM. Use `romPatch({op:'gbHeader'})` only to fix up an existing/external " +
+      "ROM on disk or to override header fields (title, cart type, ROM/RAM size).";
   } else if (isSdccZ80) {
     const inc = runtimeHeaders.length > 0
       ? `\n  includePaths: { ${runtimeHeaders.map((h) => `"${h.dst}": "${h.dst}"`).join(", ")} },`
@@ -1890,50 +1889,6 @@ export function registerProjectTools(server, z) {
     }),
   );
 
-  server.tool(
-    "patchGbHeader",
-    "Use this to write a complete, valid GB/GBC cartridge header into a ROM: Nintendo boot logo, EVERY " +
-    "header byte ($0134-$014C — title, CGB flag, cart type, ROM/RAM size, etc.) with ROM-only defaults, " +
-    "plus the header + global checksums. SDCC-path equivalent of `rgbfix -v -p 0`. Fills ALL bytes " +
-    "deliberately: leaving the CGB flag as the linker's $FF pad makes gambatte enter CGB mode and ignore " +
-    "DMG palette writes → white screen. Also shipped as `patch-header.js` in every GB/GBC project for use " +
-    "outside MCP.",
-    {
-      path: z.string().describe("Absolute path to the .gb / .gbc ROM file. Patched in place unless outputPath is given."),
-      outputPath: z.string().optional().describe("If given, write the patched ROM here instead of overwriting."),
-      cgb: z.boolean().optional().describe("If true, sets the CGB flag at $0143 to $80 (CGB-aware + DMG-compatible). If omitted, auto-detects from .gbc extension; default for plain .gb is false (DMG-only)."),
-      title: z.string().optional().describe("Cartridge title, up to 11 chars at $0134..$013E. Uppercased + zero-padded. Default = zero-fill."),
-      cartType: z.number().int().min(0).max(0xFF).optional().describe("Cart-type byte at $0147. Default $00 (ROM-only). Common alternatives: $01=MBC1, $03=MBC1+RAM+BAT, $11=MBC3, $13=MBC3+RAM+BAT, $19=MBC5."),
-      romSize: z.number().int().min(0).max(0xFF).optional().describe("ROM-size byte at $0148. Default $00 (32 KB / 2 banks). 1=64KB, 2=128KB, 3=256KB, 4=512KB, 5=1MB, 6=2MB, 7=4MB."),
-      ramSize: z.number().int().min(0).max(0xFF).optional().describe("RAM-size byte at $0149. Default $00 (none). $02=8KB, $03=32KB. Only meaningful with battery-backed MBC."),
-      destination: z.number().int().min(0).max(0xFF).optional().describe("Destination at $014A. Default $01 (non-Japan). $00 = Japan."),
-    },
-    safeTool(async ({ path: inPath, outputPath, cgb, title, cartType, romSize, ramSize, destination }) => {
-      const rom = new Uint8Array(await readFile(inPath));
-      const cgbFlag = cgb ?? (/\.gbc$/i.test(inPath) || (outputPath && /\.gbc$/i.test(outputPath)));
-      patchGbHeader(rom, { cgb: cgbFlag, title, cartType, romSize, ramSize, destination });
-      const outPath = outputPath ?? inPath;
-      await writeFile(outPath, rom);
-      return jsonContent({
-        path: outPath,
-        bytes: rom.length,
-        cgb: !!cgbFlag,
-        patched: [
-          "nintendo_logo@$0104..$0133",
-          "title@$0134..$013E",
-          `cgb_flag@$0143=${cgbFlag ? "$80" : "$00"}`,
-          "licensee@$0144..$0145=$00$00",
-          "sgb_flag@$0146=$00",
-          `cart_type@$0147=$${(cartType ?? 0).toString(16).padStart(2, "0").toUpperCase()}`,
-          `rom_size@$0148=$${(romSize ?? 0).toString(16).padStart(2, "0").toUpperCase()}`,
-          `ram_size@$0149=$${(ramSize ?? 0).toString(16).padStart(2, "0").toUpperCase()}`,
-          `destination@$014A=$${(destination ?? 1).toString(16).padStart(2, "0").toUpperCase()}`,
-          "old_licensee@$014B=$33",
-          "rom_version@$014C=$00",
-          "header_checksum@$014D",
-          "global_checksum@$014E..$014F",
-        ],
-      });
-    }),
-  );
+  // patchGbHeader was folded into romPatch({op:'gbHeader'}) (rom-id.js) — it's a
+  // ROM-file patch op, same family as romPatch's other ops, not a scaffold tool.
 }

@@ -4,7 +4,7 @@
 // The MCP path registers 34 tools via registerTools(server, z, sessionKey),
 // where `server` is an McpServer and each handler closes over `sessionKey` for
 // per-session host isolation. The HTTP surfaces (POST /tool/{name},
-// /romdev-skill.md, /openapi.json, /documentation) want the EXACT same handlers,
+// /skills/romdev/SKILL.md, /openapi.json, /documentation) want the EXACT same handlers,
 // schemas, and clean-error behavior — just reached over plain HTTP.
 //
 // Rather than duplicate anything, we run the same registration against a minimal
@@ -135,6 +135,18 @@ export async function runTool(tool, args, sessionKey) {
       // HTTP response is real JSON, not a JSON-string-in-a-field.
       let parsed;
       try { parsed = JSON.parse(text); } catch { parsed = { text }; }
+      // TRANSPORT-UNIFORM FAILURE MAPPING: a tool can signal failure either by
+      // throwing (→ isError above) OR by RETURNING a failure-shaped result
+      // ({ok:false} / {error} / {opened:false} / {applied:false} ...). On REST,
+      // a 200 with a failure in the body is invisible — the caller sees success
+      // and never reads the body. So we detect a failure-shaped result here and
+      // map it to ok:false (→ HTTP 400) for EVERY tool, no per-tool special-
+      // casing. (`notSupported`/`matched:false` are NOT failures — see below.)
+      if (looksLikeFailure(parsed)) {
+        const err = parsed.error ?? parsed.message ?? "tool reported failure";
+        emit({ ok: false, error: err });
+        return { ok: false, error: err, result: parsed };
+      }
       emit({ ok: true, result: summarizeForLog(parsed), ...(images.length ? { images } : {}) });
       return { ok: true, result: parsed };
     }
@@ -146,6 +158,33 @@ export async function runTool(tool, args, sessionKey) {
     emit({ ok: false, error: e?.message ?? String(e) });
     return { ok: false, error: e?.message ?? String(e) };
   }
+}
+
+// A RETURNED result is a FAILURE (→ non-2xx) when it carries an explicit failure
+// signal: a `false` on a verb-status flag, or a top-level `error` string. This is
+// the single rule that makes every tool behave the same on the transport — a tool
+// can fail by throwing or by returning one of these, and either way the caller
+// gets a non-2xx it can't ignore.
+//
+// NOT failures (these are valid ANSWERS / STATE, stay 2xx):
+//   • notSupported:true — the feature genuinely isn't on this platform/core
+//   • matched:false / found:false / hit:false — a lookup whose answer is "no"
+//   • looksLikeGraphic:false — a classification result
+//   • loaded:false / paused:false — STATE fields (is a ROM loaded? is it paused?),
+//     not "the action failed". This is why the flag list is DELIBERATELY narrow:
+//     only generic verdict flags + a couple of unambiguous action verbs. Anything
+//     else that wants to signal failure must do it with a top-level `error` string
+//     (or throw) — both of which are unambiguous.
+const FAILURE_FLAGS = ["ok", "success", "opened", "applied"];
+function looksLikeFailure(parsed) {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+  // A top-level error string is unambiguous.
+  if (typeof parsed.error === "string" && parsed.error) return true;
+  // A generic verdict / unambiguous-action flag explicitly set to false.
+  for (const f of FAILURE_FLAGS) {
+    if (parsed[f] === false) return true;
+  }
+  return false;
 }
 
 /**

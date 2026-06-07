@@ -56,7 +56,7 @@ export function swaggerHtml(opts = {}) {
     <p>Loading interactive docs… If this doesn't render, the raw OpenAPI spec is at
        <a href="${specUrl}"><code>${specUrl}</code></a>, every tool is callable via
        <code>POST /tool/{name}</code>, and the workflow guide is at
-       <a href="/romdev-skill.md"><code>/romdev-skill.md</code></a>.</p>
+       <a href="/skills/romdev/SKILL.md"><code>/skills/romdev/SKILL.md</code></a>.</p>
   </div>
   <div id="swagger-ui"></div>
   <script src="${base}/swagger-ui-bundle.js"></script>

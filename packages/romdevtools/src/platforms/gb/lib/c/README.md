@@ -23,12 +23,12 @@ run rgbfix on the linked GB/GBC ROM — valid Nintendo logo at $0104,
 header checksum at $014D, global checksum at $014E, cartridge-type /
 RAM-size bytes, and the CGB flag at $0143 ($00 for `.gb`, $80/$C0 for
 `.gbc`). A freshly built ROM boots on hardware and strict cores with
-**no extra step** — you do not call `patchGbHeader` after a normal build.
+**no extra step** — you do not call `romPatch({op:'gbHeader'})` after a normal build.
 
 Reach for header tooling only when working with a ROM the build pipeline
 didn't produce, or to override a field:
 
-- `patchGbHeader({path: "out.gb"})` — MCP tool.
+- `romPatch({op:'gbHeader', path: "out.gb"})` — romdev tool.
   Fixes up / overrides the header of an existing ROM on disk (title, cart
   type, ROM/RAM size, CGB flag, etc.).
 - `node patch-header.js out.gb` — standalone Node script, copied into

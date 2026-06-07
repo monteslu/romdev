@@ -59,7 +59,7 @@ and falls back to DMG mode when it's `$00`.
 When you build with `platform:"gbc"`, `build({output:'rom'})` / `build({output:'run'})`
 **auto-fix the header** — Nintendo logo, header + global checksums,
 and `$0143 = $80` (CGB-enhanced) — so a freshly built `.gbc` already
-boots in color. You do **not** call `patchGbHeader` for that.
+boots in color. You do **not** call `romPatch({op:'gbHeader'})` for that.
 
 ```js
 build({ output: 'run', platform: "gbc", language: "c", ... });  /* header auto-fixed */
@@ -67,7 +67,7 @@ build({ output: 'run', platform: "gbc", language: "c", ... });  /* header auto-f
 
 If you instead see green-shade DMG mode, the ROM was almost certainly
 built with `platform:"gb"` (so the CGB flag stayed `$00`). Rebuild with
-`platform:"gbc"`. Reach for `patchGbHeader` only to fix up an existing /
+`platform:"gbc"`. Reach for `romPatch({op:'gbHeader'})` only to fix up an existing /
 externally built `.gbc` whose header was never set, or to override a
 header field (e.g. force `cgb:false`).
 
@@ -106,12 +106,12 @@ Without the attribute writes, every BG tile defaults to palette 0.
 ## "Game ran on Game Boy emulator but not on Game Boy Color emulator"
 
 `loadMedia({platform:"gbc", path})` expects gambatte in CGB mode. If
-your ROM was built with `platform:"gb"` (no patchGbHeader) the file
+your ROM was built with `platform:"gb"` (no gbHeader patch) the file
 extension is `.gb` and the header CGB byte is $00, so gambatte starts
 in DMG mode. To switch a DMG ROM to CGB:
 
 1. Rename / re-extension to `.gbc`
-2. Run `patchGbHeader({path:"out.gbc"})` — also fixes the global
+2. Run `romPatch({op:'gbHeader', path:"out.gbc"})` — also fixes the global
    checksum that the boot ROM checks
 
 ## "Sound is the same as DMG"
@@ -125,7 +125,7 @@ sound channels or extra waveforms.
 The bundled GBC scaffolds all fit in 32 KB (single bank, no MBC).
 For larger projects use an MBC (memory bank controller). MBC1 / MBC3
 work in gambatte; set the `$0147` cartridge type byte accordingly.
-patchGbHeader doesn't set this — you write it from your asm/C.
+romPatch({op:'gbHeader'}) doesn't set this — you write it from your asm/C.
 
 ## "Frame heartbeat feels janky / slow"
 

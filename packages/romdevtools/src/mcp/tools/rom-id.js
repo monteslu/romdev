@@ -30,6 +30,41 @@ export async function patchRomCore({ input, output, writes, allowExpand }) {
   return await patchRomFile({ input, output, writes, allowExpand });
 }
 
+// romPatch({op:'gbHeader'}) — write a complete valid GB/GBC cartridge header
+// (logo + every header byte + header/global checksums) into a ROM file. Folded
+// in from the old standalone patchGbHeader tool. Also shipped as patch-header.js
+// in every GB/GBC project for use outside romdev.
+export async function gbHeaderCore({ path: inPath, outputPath, cgb, title, cartType, romSize, ramSize, destination }) {
+  if (!inPath) throw new Error("romPatch({op:'gbHeader'}): `path` (the .gb/.gbc ROM) is required.");
+  const { readFile, writeFile } = await import("node:fs/promises");
+  const { patchGbHeader } = await import("../../platforms/gb/lib/c/patch-header.js");
+  const rom = new Uint8Array(await readFile(inPath));
+  const cgbFlag = cgb ?? (/\.gbc$/i.test(inPath) || (outputPath && /\.gbc$/i.test(outputPath)));
+  patchGbHeader(rom, { cgb: cgbFlag, title, cartType, romSize, ramSize, destination });
+  const outPath = outputPath ?? inPath;
+  await writeFile(outPath, rom);
+  return {
+    path: outPath,
+    bytes: rom.length,
+    cgb: !!cgbFlag,
+    patched: [
+      "nintendo_logo@$0104..$0133",
+      "title@$0134..$013E",
+      `cgb_flag@$0143=${cgbFlag ? "$80" : "$00"}`,
+      "licensee@$0144..$0145=$00$00",
+      "sgb_flag@$0146=$00",
+      `cart_type@$0147=$${(cartType ?? 0).toString(16).padStart(2, "0").toUpperCase()}`,
+      `rom_size@$0148=$${(romSize ?? 0).toString(16).padStart(2, "0").toUpperCase()}`,
+      `ram_size@$0149=$${(ramSize ?? 0).toString(16).padStart(2, "0").toUpperCase()}`,
+      `destination@$014A=$${(destination ?? 1).toString(16).padStart(2, "0").toUpperCase()}`,
+      "old_licensee@$014B=$33",
+      "rom_version@$014C=$00",
+      "header_checksum@$014D",
+      "global_checksum@$014E..$014F",
+    ],
+  };
+}
+
 export function registerRomIdTools(server, z, sessionKey) {
   // identifyRom folded into `cart`; patchFile/patchRom/spliceCHR/relocate/etc.
   // folded into the `romPatch` tool (router below).
@@ -48,7 +83,8 @@ export function registerRomIdTools(server, z, sessionKey) {
     "makeStored → {rawHex|rawBytes, format, interleave?}; " +
     "findFree → {minLength, fillBytes?, start?, end?, maxRunsReturned?}; " +
     "findPointer → {romOffset, mapper?, widths?, suppressShadows?, maxHitsReturned?}; " +
-    "diff → {a, b, maxChangesReturned?}.\n" +
+    "diff → {a, b, maxChangesReturned?}; " +
+    "gbHeader → {path, outputPath?, cgb?, title?, cartType?, romSize?, ramSize?, destination?}.\n" +
     "• op:'write' — write N bytes into any binary file at `offset` (the generic splicer: PRG patches, CHR splices, SNES tile/sample injection). `allowExpand` grows the file — default OFF; most hacks must NOT change size or headers/mapper break. `outputPath` else writes in place.\n" +
     "• op:'writeMany' — apply a LIST of {offset, hex|base64} `writes` from `input` ROM to `output`.\n" +
     "• op:'spliceCHR' — inject a PNG's tiles into a CHR region.\n" +
@@ -56,10 +92,11 @@ export function registerRomIdTools(server, z, sessionKey) {
     "• op:'makeStored' — wrap raw bytes so the game's OWN decompressor expands them VERBATIM (edit tiles → makeStored → write, no compressor needed). `format` (raw/lz77-literal/lz2-direct/sega-rle/konami-rle/packbits/kosinski-literal; invalid → returns the platform's list). ALWAYS verify via cpu({op:'call'}) on the game's decompressor.\n" +
     "• op:'findFree' — find a run of free space to relocate into (`fillBytes` defaults to [0xFF, 0x00]).\n" +
     "• op:'findPointer' — find every pointer in the ROM that references `romOffset` (platform-correct encoding), the missing piece for redirecting a loader. `mapper` overrides SNES detection. On wide systems (Genesis/GBA) a 32-bit hit's low bytes also match the narrower form one byte over — those tail SHADOWS are suppressed by default (count in `shadowsSuppressed`); pass `suppressShadows:false` for raw, or `widths:[4]` to search only 32-bit forms. On banked 8-bit systems a 16-bit pointer is page-ambiguous — correlate with the bank-set instruction.\n" +
-    "• op:'diff' — diff two ROMs (`a`, `b`) → the changed byte ranges.",
+    "• op:'diff' — diff two ROMs (`a`, `b`) → the changed byte ranges.\n" +
+    "• op:'gbHeader' — GAME BOY / GBC ONLY: write a complete, valid GB/GBC cartridge header into a ROM at `path` — Nintendo boot logo, every header byte ($0134-$014C: title, CGB flag, cart type, ROM/RAM size, …) with ROM-only defaults, plus the header + global checksums. The SDCC-path equivalent of `rgbfix -v -p 0`, for fixing up an externally built / hand-assembled GB ROM. (A normal build({output:'rom'/'run'}) already does this — you do NOT call gbHeader on a freshly built ROM.) Leaving the CGB flag as the linker's $FF pad makes gambatte enter CGB mode and white-screen, so this fills it deliberately.",
     {
-      op: z.enum(["write", "writeMany", "spliceCHR", "relocate", "makeStored", "findFree", "findPointer", "diff"])
-        .describe("write=N bytes at an offset; writeMany=a list of writes; spliceCHR=PNG tiles into CHR; relocate=write a block to free space + repoint; makeStored=wrap bytes for the game's decompressor; findFree=find free space; findPointer=find pointers to an offset; diff=diff two ROMs."),
+      op: z.enum(["write", "writeMany", "spliceCHR", "relocate", "makeStored", "findFree", "findPointer", "diff", "gbHeader"])
+        .describe("write=N bytes at an offset; writeMany=a list of writes; spliceCHR=PNG tiles into CHR; relocate=write a block to free space + repoint; makeStored=wrap bytes for the game's decompressor; findFree=find free space; findPointer=find pointers to an offset; diff=diff two ROMs; gbHeader=write a valid GB/GBC cartridge header + checksums."),
       path: z.string().optional().describe("op:write/spliceCHR/relocate/findFree/findPointer — absolute path to the ROM/file."),
       platform: z.enum(PLATFORMS).optional().describe("op:findPointer/relocate/makeStored/spliceCHR/diff — platform (inferred from extension except makeStored, which requires it)."),
       offset: z.number().int().min(0).optional().describe("op:write — file offset to write at (NOT a CPU address)."),
@@ -112,6 +149,13 @@ export function registerRomIdTools(server, z, sessionKey) {
       a: z.string().optional().describe("op:diff — path to ROM A."),
       b: z.string().optional().describe("op:diff — path to ROM B."),
       maxChangesReturned: z.number().int().min(1).max(2048).default(256).describe("op:diff — cap the change ranges returned."),
+      // gbHeader (path + outputPath reuse the spine fields above)
+      cgb: z.boolean().optional().describe("op:gbHeader — if true, sets the CGB flag at $0143 to $80 (CGB-aware + DMG-compatible). If omitted, auto-detects from a .gbc extension; default for plain .gb is false (DMG-only)."),
+      title: z.string().optional().describe("op:gbHeader — cartridge title, up to 11 chars at $0134..$013E. Uppercased + zero-padded. Default = zero-fill."),
+      cartType: z.number().int().min(0).max(0xFF).optional().describe("op:gbHeader — cart-type byte at $0147. Default $00 (ROM-only). Common: $01=MBC1, $03=MBC1+RAM+BAT, $11=MBC3, $13=MBC3+RAM+BAT, $19=MBC5."),
+      romSize: z.number().int().min(0).max(0xFF).optional().describe("op:gbHeader — ROM-size byte at $0148. Default $00 (32 KB / 2 banks). 1=64KB, 2=128KB, 3=256KB, 4=512KB, 5=1MB, 6=2MB, 7=4MB."),
+      ramSize: z.number().int().min(0).max(0xFF).optional().describe("op:gbHeader — RAM-size byte at $0149. Default $00 (none). $02=8KB, $03=32KB. Only meaningful with battery-backed MBC."),
+      destination: z.number().int().min(0).max(0xFF).optional().describe("op:gbHeader — destination at $014A. Default $01 (non-Japan). $00 = Japan."),
     },
     safeTool(async (args) => {
       switch (args.op) {
@@ -135,6 +179,7 @@ export function registerRomIdTools(server, z, sessionKey) {
           if (!args.a || !args.b) throw new Error("romPatch({op:'diff'}): `a` and `b` (the two ROM paths) are required.");
           return jsonContent(await diffRomsCore({ ...args, aPath: args.a, bPath: args.b }));
         }
+        case "gbHeader":    return jsonContent(await gbHeaderCore(args));
         default: throw new Error(`romPatch: unknown op '${args.op}'`);
       }
     }),

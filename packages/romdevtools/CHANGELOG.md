@@ -4,6 +4,67 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.14.0
+
+**Two platform-specific top-level tools folded into their domain verbs, a
+device-free cheat search, and skill-surface polish.** Pre-1.0 the surface keeps
+consolidating with no deprecated aliases (call `catalog({op:'whatsNew'})` for the
+live OLD→NEW map), so the tool count drops 34 → 32.
+
+### Changed (breaking — pre-1.0, no aliases)
+- **`patchGbHeader` → `romPatch({op:'gbHeader'})`.** It's a ROM-file patch, same
+  family as romPatch's other ops — not a standalone Game-Boy tool. Same params
+  (path/outputPath/cgb/title/cartType/romSize/ramSize/destination), same output.
+- **`dmaTrace` → `watch({on:'dma'})`.** The Genesis VDP-DMA trace is a log-all
+  trace like `watch`'s on:'mem'/'range'/'pc' — now a fourth `on`. Same
+  `precision:'exact'|'sampled'` + filters.
+- **`cheats({op:'search'})` no longer needs `platform`.** Omit it and the search
+  sweeps EVERY indexed platform; each match reports its own `platform`. You don't
+  have to know the console to find a game's cheats. Pass `platform` only to scope
+  the search to one console.
+
+### Added
+- **`GET /skills/romdev/SKILL.md`** is now the primary skill URL — it mirrors the
+  on-disk path agents save skills to (`~/.claude/skills/romdev/SKILL.md`) exactly.
+  `/romdev/SKILL.md` and the flat `/romdev-skill.md` are kept as aliases.
+- **The `/livestream` observer header now links to `/documentation`** (the live
+  Swagger console), so a human watching can jump to the API docs.
+
+### Fixed (HTTP transport — failures are now unmissable)
+- **A failed tool call returns a non-2xx, never a 200 with the error in the body.**
+  Tools that signal failure by RETURNING a failure-shaped result ({ok:false} /
+  {opened:false} / {applied:false} / a top-level `error`) — not just by throwing —
+  now map to HTTP 400 uniformly for EVERY tool. Before, e.g. `playtest` returning
+  `{opened:false}` came back 200, so an agent driving the REST/skill surface saw
+  "success," never read the body, and reported "window's up!" while no window
+  existed. (Valid "no"/state answers — `notSupported`, `matched:false`,
+  `loaded:false` — correctly stay 200.) A failed `playtest` window-open also now
+  logs to the server console so a human at the terminal sees it regardless.
+- **`x-romdev-session` is now REQUIRED — a missing header returns 401**, instead
+  of the server auto-minting a throwaway one-shot session (which silently dropped
+  the loaded ROM and surfaced as "No ROM loaded" a couple calls later). The 401
+  message tells the agent to pick one stable id and send it every call.
+
+### Fixed (playtest — no more invisible windows)
+- **`playtest({op:'open'})` now FAILS LOUDLY when there's no real display** instead
+  of reporting `opened:true` for a window nothing can see. If the server's SDL
+  comes up on the `offscreen`/`dummy` video driver (no desktop session — server
+  started over SSH, from a tty, before the desktop login, or as a headless agent
+  subprocess), the window would render and play audio but never appear on a
+  screen. We now detect the selected driver via SDL itself
+  (`sdl.info.drivers.video.current`) — ground truth, cross-platform (Linux/macOS/
+  Windows), and it correctly ALLOWS a virtual display like Xvfb (reports `x11`,
+  not `offscreen`). On the offscreen case the open throws (→ 400 / MCP error) with
+  the exact fix: run the server from inside your logged-in desktop session.
+  Headless tools (screenshot/runSource/inspect) are unaffected — offscreen stays
+  fine for everything except opening a window for a human.
+
+### Changed
+- **The skill/HTTP session docs now coach a UNIQUE, task-descriptive
+  `x-romdev-session` id** (e.g. `nes-platformer-build`) — the id is the label a
+  human sees in `/livestream`, and it's how several agents share one server
+  without clobbering each other's emulator host.
+
 ## 0.13.0
 
 **Renamed `romdev-mcp` → `romdevtools` + a plain-HTTP tool surface and an Agent
@@ -34,7 +95,7 @@ duplication). Same Express app, same localhost trust, per-agent dynamic sessions
   via zod→JSON-Schema (the same conversion MCP `tools/list` uses).
 - **`GET /documentation`** — Swagger UI over the spec: a live "try it" console.
 - **`GET /tool/{name}/schema`** — that tool's JSON Schema (a validator on demand).
-- **`GET /romdev-skill.md`** — the Agent Skills open-standard SKILL.md
+- **`GET /skills/romdev/SKILL.md`** — the Agent Skills open-standard SKILL.md
   (frontmatter + workflow guide + generated tool reference). ~100 tokens of
   name+description until invoked vs the always-on MCP tool defs — the on-demand
   context win. Works in Claude Code, opencode, OpenClaw, Hermes, etc. unchanged.

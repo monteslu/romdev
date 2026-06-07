@@ -16,7 +16,7 @@ the same wall.
    `build({output:'rom'})` / `build({output:'run'})` do this for you at build time: every byte
    at $0134..$014C is filled, and on `platform:"gbc"` the CGB flag at
    $0143 is set to $80 (CGB-aware + DMG-compatible). You do **not** run
-   `patchGbHeader` on a freshly built ROM. Reach for `patchGbHeader` only
+   `romPatch({op:'gbHeader'})` on a freshly built ROM. Reach for `romPatch({op:'gbHeader'})` only
    to fix up an existing / externally built ROM whose header was never
    set, or to override a field — e.g. starting from a `.gb` ROM and
    wanting CGB color, pass `cgb: true` explicitly.
@@ -161,11 +161,11 @@ the only differences at build time are:
 
 - ROM extension: `.gbc` (vs `.gb`)
 - the build sets `$0143 = $80` to flip CGB mode on (automatic when you
-  build with `platform:"gbc"` — no manual `patchGbHeader` step)
+  build with `platform:"gbc"` — no manual `romPatch({op:'gbHeader'})` step)
 - gambatte core accepts both DMG + CGB-mode ROMs
 
 For new GBC code that wants to be CGB-only (no DMG fallback) set the
-CGB byte to `$C0` instead of `$80` — `patchGbHeader({path, cgb:true})`
+CGB byte to `$C0` instead of `$80` — `romPatch({op:'gbHeader', path, cgb:true})`
 on the built ROM can override it.
 
 ## Horizontal scrolling (for side-scrollers)

@@ -23,12 +23,14 @@ export function getHost(sessionKey) {
   if (!host) {
     throw new Error(
       "No ROM loaded in this session — call loadMedia({path}) first. " +
-      "If you WERE mid-session and just got reconnected (the server restarted, " +
-      "or your session expired and your client re-initialized): the emulator " +
-      "state is held in server memory only, so it did not survive — just " +
-      "re-run loadMedia({path}) with the ROM you were working on (it's still on " +
-      "disk) to pick back up. Re-applying any in-progress changes means " +
-      "rebuilding/reloading; a fresh boot is the recovery point.",
+      "If you DID loadMedia and still see this, your calls are landing in DIFFERENT " +
+      "sessions: over plain HTTP/skill you must send the SAME `x-romdev-session` " +
+      "header on every call (pick one stable id and reuse it) — a new/missing id is " +
+      "a fresh empty session each time. " +
+      "If you WERE mid-session and just got reconnected (the server restarted or " +
+      "your session expired): emulator state is held in server memory only, so it " +
+      "did not survive — re-run loadMedia({path}) with your ROM (still on disk) to " +
+      "pick back up. A fresh boot is the recovery point.",
     );
   }
   return host;

@@ -254,7 +254,7 @@ export function registerTileInspectTools(server, z, sessionKey) {
       tilePath: z.string().optional().describe("op:preview — path to a tile dump (raw) or iNES ROM (NES auto-locates CHR)."),
       fromEmulator: z.boolean().optional().describe("op:preview — read tiles from the running emulator's live VRAM (tileStart/tileCount pick the range). Genesis byte-swap handled. Mutually exclusive with tileBytes/tilePath."),
       tileStart: z.number().int().min(0).optional().describe("op:preview — starting tile index in the source."),
-      byteOffset: z.number().int().min(0).optional().describe("op:preview — start at a raw BYTE offset instead of a tile index (pass a dmaTrace / disasm-references source directly). WARNS on misalignment. Takes precedence over tileStart."),
+      byteOffset: z.number().int().min(0).optional().describe("op:preview — start at a raw BYTE offset instead of a tile index (pass a watch({on:'dma'}) / disasm-references source directly). WARNS on misalignment. Takes precedence over tileStart."),
       palette: z.array(z.any()).optional().describe("op:preview — explicit palette (NES: 4 master indices; others: RGB triples or indices)."),
       palettePath: z.string().optional().describe("op:preview — raw palette dump from disk."),
       // shared output

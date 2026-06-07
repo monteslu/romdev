@@ -294,8 +294,9 @@ export function registerCheatTools(server, z, sessionKey) {
     "Cheat lookup / search / apply / create for the loaded ROM. `op`: " +
     "'lookup' (THIS game's known cheats from the bundled DB — returns labeled RAM addresses + Game Genie/ROM code " +
     "sites, so it answers 'which byte holds X?' for free); " +
-    "'search' (fuzzy-find a game by NAME when you don't have the exact No-Intro title — returns game names + cheat " +
-    "counts, then lookup the chosen one); " +
+    "'search' (fuzzy-find a game by NAME when you don't have the exact No-Intro title — searches ALL platforms by " +
+    "default and each match reports its own `platform`, so you don't need to know the console; pass `platform` only " +
+    "to scope it. Returns game names + cheat counts; then lookup the chosen one with its platform); " +
     "'apply' (enable a cheat on the LOADED game — pass a raw `code` or a `desc` from lookup); " +
     "'clear' (remove all active cheats); 'make' (CREATE a shareable code from an address+value). " +
     "TRUST: lookup matches by NAME/fuzzy similarity, NOT a verified CRC — a PROBABLE match. Labels are usually " +
@@ -322,7 +323,7 @@ export function registerCheatTools(server, z, sessionKey) {
       index: z.number().int().min(0).optional().describe("op=apply: cheat slot (default: next free slot). Reuse a slot to replace it."),
       enabled: z.boolean().default(true).describe("op=apply: false disables the slot instead of enabling."),
       // make / search / lookup share `platform`
-      platform: z.enum([...MAKE_CHEAT_PLATFORMS]).optional().describe("op=lookup: override platform detection. op=search/make: REQUIRED — the target platform (all 14 tier-1)."),
+      platform: z.enum([...MAKE_CHEAT_PLATFORMS]).optional().describe("op=lookup: override platform detection. op=search: OPTIONAL — omit to search ALL platforms (each match returns its own `platform`); pass one only to scope the search. op=make: REQUIRED — the target platform (all 14 tier-1)."),
       address: z.number().int().min(0).optional().describe("op=make: address to cheat (RAM addr, or the ROM addr to patch)."),
       value: z.number().int().min(0).max(255).optional().describe("op=make: replacement byte (0-255). Provide value OR values."),
       values: z.array(z.number().int().min(0).max(255)).min(1).max(64).optional().describe("op=make: batch — a code per value at the same address. Returns variants[]."),

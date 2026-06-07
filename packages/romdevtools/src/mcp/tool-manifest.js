@@ -37,7 +37,7 @@ export const MERGE_MAP = {
   host: { absorbs: ["unloadMedia", "shutdown", "reset", "pause", "resume"], axis: "op" },
   // ── frame (step/screenshot/stepAndShot/stepInstruction; stepInstruction folded from watch-memory.js) ──
   frame: { absorbs: ["stepFrames", "screenshot", "stepAndScreenshot", "stepInstruction"], axis: "op" },
-  // ── scaffold (project/game + snippets; patchGbHeader stays standalone in project.js) ──
+  // ── scaffold (project/game + snippets; patchGbHeader folded into romPatch op:'gbHeader') ──
   scaffold: { absorbs: ["createProject", "createGame", "starterSnippets", "copyStarterSnippets"], axis: "op" },
   // ── cart (identify/extract/wrap; identifyRom from rom-id.js, rest from cart-parts.js) ──
   cart: { absorbs: ["identifyRom", "extractCart", "wrapRomFromParts"], axis: "op" },
@@ -61,14 +61,14 @@ export const MERGE_MAP = {
   cpu: { absorbs: ["getCPUState", "setRegister", "callSubroutine", "decompressWith"], axis: "op" },
   // ── breakpoint (STOP-on-first; all 4 from watch-memory.js) ──
   breakpoint: { absorbs: ["findWriter", "runUntilWrite", "runUntilPC", "runUntilRead"], axis: "on" },
-  // ── watch (LOG-ALL; all 3 from watch-memory.js) ──
-  watch: { absorbs: ["watchMemory", "watchRange", "logPCRange"], axis: "on" },
-  // ── dmaTrace (Genesis VDP-DMA; watchDma from watch-memory.js, traceVramSource from trace-vram-source.js) ──
-  dmaTrace: { absorbs: ["watchDma", "traceVramSource"], axis: "precision" },
+  // ── watch (LOG-ALL; watchMemory/watchRange/logPCRange + Genesis VDP-DMA trace
+  //    on:'dma' from watchDma/traceVramSource — all from watch-memory.js +
+  //    trace-vram-source.js. dmaTrace was folded in as watch({on:'dma'}).) ──
+  watch: { absorbs: ["watchMemory", "watchRange", "logPCRange", "watchDma", "traceVramSource"], axis: "on" },
   // ── build (compile/run; buildSource/buildProject/runSource from toolchain.js, buildSourceWithDebug from symbols.js). ENTRY-TIER. ──
   build: { absorbs: ["buildSource", "buildSourceWithDebug", "buildProject", "runSource"], axis: "output" },
-  // ── romPatch (8-op ROM-hack toolkit; patchFile/patchRom from rom-id.js, spliceCHR from splice-chr.js, relocateBlock/makeStoredBlock/findPointerTo from reinject.js, findFreeSpace from free-space.js, diffRoms from diff-roms.js) ──
-  romPatch: { absorbs: ["patchFile", "patchRom", "spliceCHR", "relocateBlock", "makeStoredBlock", "findFreeSpace", "findPointerTo", "diffRoms"], axis: "op" },
+  // ── romPatch (9-op ROM-hack toolkit; patchFile/patchRom from rom-id.js, spliceCHR from splice-chr.js, relocateBlock/makeStoredBlock/findPointerTo from reinject.js, findFreeSpace from free-space.js, diffRoms from diff-roms.js, patchGbHeader as op:'gbHeader') ──
+  romPatch: { absorbs: ["patchFile", "patchRom", "spliceCHR", "relocateBlock", "makeStoredBlock", "findFreeSpace", "findPointerTo", "diffRoms", "patchGbHeader"], axis: "op" },
   // ── catalog (orient; listCategories + getStatus, both entry-tier in index.js) ──
   catalog: { absorbs: ["listCategories", "getStatus"], axis: "op" },
   // ── playtest (show-a-human window FSM; all 4 from playtest.js). ENTRY-TIER. ──

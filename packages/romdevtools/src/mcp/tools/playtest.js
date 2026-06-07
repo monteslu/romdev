@@ -7,6 +7,7 @@ import { writeFile } from "node:fs/promises";
 
 import { getHost, getHostOrNull } from "../state.js";
 import { imageContent, jsonContent, safeTool, textContent } from "../util.js";
+import { log } from "../log.js";
 
 // Playtest windows are PER SESSION: the MCP server is multi-session (one server
 // serves several agents at once), and the same user can have 2-3 different games
@@ -104,14 +105,13 @@ export function isPlaytestRunning(sessionKey) {
 export function registerPlaytestTools(server, z, sessionKey) {
   // op:'open' — open (or reuse) the SDL window for this session.
   async function ptOpen({ scale = 3, title, aspect = "tv" }) {
-      // No preflight display checks. We just attempt to open the SDL window and
-      // report whatever SDL says — env-var guessing (DISPLAY/WAYLAND_DISPLAY)
-      // is Linux-only and wrong on macOS/Windows, where those vars are never
-      // set even with a full GUI session. SDL's createWindow already knows
-      // whether it can draw on any platform; the try/catch below surfaces the
-      // real error.
       const host = getHost(sessionKey);
       const loadedMediaPath = host.status?.mediaPath ?? null;
+      // No env-var preflight here — the GROUND-TRUTH "is there a real display?"
+      // check lives in loadSdl() (it asks SDL which video driver it selected and
+      // throws sdlKind:"no-display" if it's offscreen/dummy). That's cross-
+      // platform and doesn't false-bark on valid offscreen setups like Xvfb.
+      // The try/catch below surfaces it (and the binary errors) uniformly.
       if (reconcileSession(sessionKey)) {
         // THIS session already has a window open. We don't open a second one for
         // the same session — it shares this session's live host — so report the
@@ -153,44 +153,55 @@ export function registerPlaytestTools(server, z, sessionKey) {
           "stepFrames / pressButton) still works against the live ROM — only " +
           "the interactive window is affected.";
 
-        if (kind === "missing-binary" || kind === "install-failed") {
+        // A failed window-open is a REAL FAILURE — THROW it, don't return a soft
+        // {opened:false} object. Returning success-shaped JSON made the failure
+        // invisible on the REST/skill surface (HTTP 200 = "it worked"), so an
+        // agent driving the routes would report "window's up!" while no window
+        // exists. Thrown → safeTool tags isError → runTool maps it to HTTP 400
+        // (REST) and a tool error (MCP). We also log to the server console so a
+        // human watching the terminal sees it even if the agent buries the error.
+        let reason, message;
+        if (kind === "no-display") {
+          // GROUND TRUTH: SDL came up on the offscreen/dummy driver — there is no
+          // physical screen to show the window on (it would render + play audio
+          // but be invisible). loadSdl()'s message already says exactly this + the
+          // fix; pass it straight through.
+          reason = "no-display";
+          message = (e?.message ?? String(e)) + headlessNote;
+        } else if (kind === "missing-binary" || kind === "install-failed") {
           // Native-addon problem, NOT a display problem.
           const fix = e?.fixCmd
             ? `Run: ${e.fixCmd} (then restart the server). `
             : "Reinstall @kmamal/sdl so its prebuilt binary is fetched. ";
-          return jsonContent({
-            opened: false,
-            reason: "sdl-binary-missing",
-            platform: process.platform,
-            message:
-              "The playtest window couldn't open because the @kmamal/sdl native " +
-              "binary isn't installed: " + (e?.message ?? String(e)) + ". " +
-              (kind === "install-failed"
-                ? "An automatic install was attempted but failed (often a network/proxy block on the GitHub release download). "
-                : "(This is common under `npx romdevtools` — npm skips @kmamal/sdl's install script that fetches the binary; the server tried to self-heal but the binary is still absent.) ") +
-              fix + "This is a one-time native-addon fix, NOT a display/desktop " +
-              "issue." + headlessNote,
-            fixCommand: e?.fixCmd ?? null,
-            loadedMediaPath,
-          });
-        }
-
-        // A genuine SDL init / display failure (e.g. no video device, no
-        // desktop session). NOW the desktop-session advice is the right call.
-        return jsonContent({
-          opened: false,
-          reason: "sdl-error",
-          platform: process.platform,
-          message:
+          reason = "sdl-binary-missing";
+          message =
+            "The playtest window couldn't open because the @kmamal/sdl native " +
+            "binary isn't installed: " + (e?.message ?? String(e)) + ". " +
+            (kind === "install-failed"
+              ? "An automatic install was attempted but failed (often a network/proxy block on the GitHub release download). "
+              : "(This is common under `npx romdevtools` — npm skips @kmamal/sdl's install script that fetches the binary; the server tried to self-heal but the binary is still absent.) ") +
+            fix + "This is a one-time native-addon fix, NOT a display/desktop " +
+            "issue." + headlessNote;
+        } else {
+          // A genuine SDL init / display failure (no video device / no desktop
+          // session). The desktop-session advice is the right call here.
+          reason = "sdl-error";
+          message =
             "Couldn't open the SDL playtest window: " + (e?.message ?? String(e)) +
             ". SDL initialized but couldn't get a display. This usually means the " +
             "server has no access to a logged-in desktop session — e.g. it was " +
             "spawned as an MCP subprocess by your agent host, or runs over plain " +
             "SSH/headless. The reliable fix: run the server yourself in a terminal " +
             "inside your desktop session, then connect your agent to it." +
-            headlessNote + " You can also open the built ROM in any standalone emulator.",
-          loadedMediaPath,
-        });
+            headlessNote + " You can also open the built ROM in any standalone emulator.";
+        }
+        // Server-console breadcrumb (stderr) so a human at the terminal sees the
+        // failure regardless of whether the agent relays the tool error.
+        log.error(`playtest: window failed to open (${reason}) — ${e?.fixCmd ? "fix: " + e.fixCmd : message.slice(0, 120)}`);
+        const err = new Error(message);
+        err.reason = reason;
+        if (e?.fixCmd) err.fixCommand = e.fixCmd;
+        throw err;
       }
       // Detach so process doesn't hang on the closed promise. Only clear THIS
       // session's slot, and only if it still points at this same session (a
@@ -284,7 +295,9 @@ export function registerPlaytestTools(server, z, sessionKey) {
         });
       }
       if (!inline && !outPath) {
-        return jsonContent({ ok: false, error: "pass `path` (where to write the PNG) or `inline:true`." });
+        // Usage error → throw so REST returns 400 (not a 200 with ok:false the
+        // caller might ignore).
+        throw new Error("playtest framebuffer: pass `path` (where to write the PNG) or `inline:true`.");
       }
       const frame = sessions.get(sessionKey).captureFrame();
       if (!frame) {

@@ -881,10 +881,11 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     "Extras: `ranges:[{region,offset,length,label}]` watches MANY disjoint regions in ONE pass (identical frames); `onChange:'reset'|'increase'|'decrease'|'any'` edge filter (reset = counter-reload = the note-onset signal); `valueFilter:{min,max}`; `format:'series'` = compact columnar value-vs-frame curve (~10× smaller for a ramp); `sampleEvery`; `groupByPC` (collapse by sampled PC); `cheatLabels` (auto-name addresses from the cheat DB); `outputPath` streams all events as NDJSON; `stopOnFirst` exits on the first match. " +
     "**CAVEAT: frame-level, not instruction-level (last value per frame); the sampled `pc` is a frame-boundary sample — for ISR-driven writes use breakpoint({on:'write', precision:'exact'}) for the real writer.**\n" +
     "• on:'range' — DISCOVERY: log EVERY instruction that reads or writes ANYWHERE in [start,end]. The fix for 'I don't know which PC touches this'. Returns {pc,address,value}[] + the actionable distinctPCs. (Ring-buffered: `truncated:true` if it overflows.)\n" +
-    "• on:'pc' — DISCOVERY (coverage trace): record every DISTINCT PC executed within [start,end] — 'what code runs here?'. Log execution in the bank where you suspect the renderer lives during the moment it draws, then disassemble the PCs.",
+    "• on:'pc' — DISCOVERY (coverage trace): record every DISTINCT PC executed within [start,end] — 'what code runs here?'. Log execution in the bank where you suspect the renderer lives during the moment it draws, then disassemble the PCs.\n" +
+    "• on:'dma' — GENESIS ONLY: trace mem→VDP DMAs (the answer to 'this name/portrait/logo is a pre-rendered bitmap DMA'd into VRAM — WHERE in ROM?', which on:'write' can't catch). `precision:'exact'` (default) logs every mem→VDP DMA with its VRAM DESTINATION + ROM SOURCE + length (filter by `vramDest`±`destWindow`; `dedupe` collapses the per-frame refresh; `sourceFilter:'rom-only'` drops RAM→VRAM noise; catches a same-frame second DMA). `precision:'sampled'` is the cheap frame-sampled source-register read (may miss two DMAs in one frame, dest-agnostic). On non-Genesis cores returns `notSupported`.",
     {
-      on: z.enum(["mem", "range", "pc"])
-        .describe("mem=watch a RAM byte/ranges for value changes over frames (the power tool); range=log every read/write PC in [start,end]; pc=coverage trace of distinct PCs executed in [start,end]."),
+      on: z.enum(["mem", "range", "pc", "dma"])
+        .describe("mem=watch a RAM byte/ranges for value changes over frames (the power tool); range=log every read/write PC in [start,end]; pc=coverage trace of distinct PCs executed in [start,end]; dma=Genesis-only mem→VDP DMA source/dest trace."),
       // on:'mem'
       region: z.enum(MEMORY_REGIONS).optional().describe("on:'mem' single-range — the region to watch (same canonical set memory uses, incl. nes_apu_regs, genesis_ym2612, c64_sid_regs). Omit when using `ranges`."),
       offset: z.number().int().min(0).default(0).describe("on:'mem' single-range — first byte of the watched range."),
@@ -907,12 +908,20 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       frames: z.number().int().min(1).max(1_000_000).default(600).describe("Frames to run while logging (default 600). on:'range'/'pc' windows are usually short (~120) — pass a smaller value to keep the ring buffer from overflowing."),
       limit: z.number().int().min(1).max(4000).default(200).describe("on:'range'/'pc' — max events/PCs returned (default 200; full count is in `total`)."),
       outputPath: z.string().optional().describe("on:'mem' — stream every filter-passing event to this path as NDJSON + return a compact summary. Use for long watches so the full log never enters your context."),
+      // on:'dma' (Genesis VDP DMA trace)
+      precision: z.enum(["exact", "sampled"]).default("exact").describe("on:'dma' — exact=per-DMA core log with VRAM dest + ROM source (catches same-frame DMAs); sampled=frame-sampled source-register read (cheaper, may miss two DMAs in one frame, dest-agnostic)."),
+      vramDest: z.number().int().min(0).optional().describe("on:'dma' precision:'exact' — keep only DMAs whose VRAM destination is within ±`destWindow` of this address."),
+      destWindow: z.number().int().min(0).default(0x40).describe("on:'dma' precision:'exact' — match window around vramDest (default 64 bytes ≈ 1 tile)."),
+      dedupe: z.boolean().default(true).describe("on:'dma' precision:'exact' — collapse identical DMAs (same dest+source+length+code) to one entry with an `occurrences` count (default on)."),
+      sourceFilter: z.enum(["all", "rom-only", "ram-only"]).default("all").describe("on:'dma' precision:'exact' — 'rom-only' drops the RAM→VRAM per-frame refresh noise; 'ram-only' keeps only it."),
+      romPreviewBytes: z.number().int().min(0).max(64).default(0).describe("on:'dma' — bytes of the ROM source to preview per DMA (exact default 0; sampled default 16)."),
+      minLengthBytes: z.number().int().min(0).max(65536).default(0).describe("on:'dma' precision:'sampled' — ignore DMAs shorter than this many bytes (filters tiny scroll/sprite updates so graphic uploads stand out)."),
       pressDuring: z.array(z.object({
         frame: z.number().int().min(0),
         button: z.string(),
         port: z.number().int().min(0).max(3).default(0),
         holdFrames: z.number().int().min(1).default(2),
-      })).optional().describe("Schedule input while watching (drive the game to the state that touches the watched bytes/range)."),
+      })).optional().describe("Schedule input while watching (drive the game to the state that touches the watched bytes/range, or uploads the graphic for on:'dma')."),
     },
     safeTool(async (args) => {
       switch (args.on) {
@@ -925,19 +934,27 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
           if (args.start == null || args.end == null) throw new Error("watch({on:'pc'}): `start` and `end` are required.");
           return await wLogPC({ ...args, frames: args.frames ?? 120, limit: args.limit ?? 512 });
         }
+        case "dma": {
+          const a = { ...args, frames: args.frames ?? 120, limit: args.limit ?? 200 };
+          if (a.precision === "sampled") {
+            return await traceVramSourceCore({ ...a, romPreviewBytes: a.romPreviewBytes || 16, sessionKey });
+          }
+          return await dmaExact(a);
+        }
         default: throw new Error(`watch: unknown on '${args.on}'`);
       }
     }),
   );
 
-  // ── dmaTrace (item 3, Genesis only) ─────────────────────────────────────────
+  // ── watch({on:'dma'}) helpers (Genesis only) ────────────────────────────────
   // precision:exact = dmaExact (watchDma, per-DMA core log), precision:sampled =
-  // traceVramSourceCore (frame-sampled, dest-agnostic).
+  // traceVramSourceCore (frame-sampled, dest-agnostic). Routed by the `watch`
+  // tool's switch (case 'dma'); folded in from the old standalone dmaTrace tool.
   async function dmaExact({ frames = 120, vramDest, destWindow = 0x40, dedupe = true, sourceFilter = "all", pressDuring, romPreviewBytes = 0, limit = 200 }) {
       const host = getHost(sessionKey);
       if (!host.dmaWatchSupported || !host.dmaWatchSupported()) {
         return jsonContent({ notSupported: true, dmas: [],
-          note: "dmaTrace is Genesis-only (VDP DMA). On other platforms use breakpoint({on:'write'}) (CPU writes) or the platform's source tracer." });
+          note: "watch({on:'dma'}) is Genesis-only (VDP DMA). On other platforms use breakpoint({on:'write'}) (CPU writes) or the platform's source tracer." });
       }
       const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
       const pressDriver = makePressDriver(host, presses);
@@ -994,43 +1011,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
           (totalDistinct > limit ? `Showing ${out.length}/${totalDistinct} distinct — raise limit or narrow vramDest.` : ""),
       }), host);
   }
-
-  server.tool(
-    "dmaTrace",
-    "GENESIS ONLY — trace mem→VDP DMAs (the answer to 'this name/portrait/logo is a pre-rendered bitmap DMA'd into VRAM — " +
-    "WHERE in ROM?', which breakpoint({on:'write'}) can't catch). Keyed by `precision`.\n" +
-    "• precision:'exact' (default) — log every mem→VDP DMA with its VRAM DESTINATION, ROM SOURCE, length, and code. " +
-    "Filter by `vramDest` (±`destWindow`) to find the exact source of a specific tile. `dedupe` collapses the per-frame " +
-    "refresh (7000 events → a handful); `sourceFilter:'rom-only'` drops the RAM→VRAM sprite/scroll noise. " +
-    "**Catches a second DMA in the same frame that the sampled mode misses.**\n" +
-    "• precision:'sampled' — the cheap frame-sampled tracer: reads the VDP DMA source registers ($15-$17) once per frame " +
-    "and logs each DISTINCT mem→VRAM source as a ROM byte offset. **HONEST LIMIT: two DMAs in the SAME frame may show only " +
-    "one source — narrow the window around when the graphic appears. dest-agnostic (no vramDest filter).**",
-    {
-      precision: z.enum(["exact", "sampled"]).default("exact")
-        .describe("exact=per-DMA core log with VRAM dest + ROM source (catches same-frame DMAs); sampled=frame-sampled source-register read (cheaper, may miss two DMAs in one frame, dest-agnostic)."),
-      frames: z.number().int().min(1).max(6000).default(120).describe("Frames to step while tracing (default 120 ≈ 2s)."),
-      pressDuring: z.array(z.object({
-        frame: z.number().int().min(0),
-        button: z.string(),
-        port: z.number().int().min(0).max(3).default(0),
-        holdFrames: z.number().int().min(1).default(2),
-      })).optional().describe("Drive input to the screen that uploads the graphic."),
-      romPreviewBytes: z.number().int().min(0).max(64).default(0).describe("Bytes of the ROM source to preview per DMA (exact default 0; sampled default 16)."),
-      // precision:'exact' only
-      vramDest: z.number().int().min(0).optional().describe("precision:'exact' — keep only DMAs whose VRAM destination is within ±`destWindow` of this address."),
-      destWindow: z.number().int().min(0).default(0x40).describe("precision:'exact' — match window around vramDest (default 64 bytes ≈ 1 tile)."),
-      dedupe: z.boolean().default(true).describe("precision:'exact' — collapse identical DMAs (same dest+source+length+code) to one entry with an `occurrences` count (default on)."),
-      sourceFilter: z.enum(["all", "rom-only", "ram-only"]).default("all").describe("precision:'exact' — 'rom-only' drops the RAM→VRAM per-frame refresh noise; 'ram-only' keeps only it."),
-      limit: z.number().int().min(1).max(2000).default(200).describe("precision:'exact' — max DMA entries to return (after dedupe/filter)."),
-      // precision:'sampled' only
-      minLengthBytes: z.number().int().min(0).max(65536).default(0).describe("precision:'sampled' — ignore DMAs shorter than this many bytes (filters tiny scroll/sprite updates so graphic uploads stand out)."),
-    },
-    safeTool(async (args) => {
-      if (args.precision === "sampled") {
-        return await traceVramSourceCore({ ...args, romPreviewBytes: args.romPreviewBytes || 16, sessionKey });
-      }
-      return await dmaExact(args);
-    }),
-  );
+  // dmaExact + traceVramSourceCore are reached via watch({on:'dma'}) above —
+  // dmaTrace was folded into `watch` (it's a log-all VDP-DMA trace, same family
+  // as on:'mem'/'range'/'pc'), so there's no separate top-level tool.
 }

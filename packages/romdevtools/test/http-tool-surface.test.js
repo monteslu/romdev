@@ -1,4 +1,4 @@
-// HTTP tool surface — POST /tool/:name + /openapi.json + /romdev-skill.md +
+// HTTP tool surface — POST /tool/:name + /openapi.json + /romdev/SKILL.md +
 // /tool/:name/schema, all generated from the one tool registry. Tests the
 // generators + the runTool validate-then-run path directly (no live server
 // needed); a couple assert the registry/handler wiring end to end.
@@ -33,9 +33,12 @@ test("runTool emits observer `call` events so /livestream updates for HTTP/skill
   assert.match(mine[1].error, /must be one of/);
 });
 
-test("registry harvests all 34 tools with handler + schema", () => {
+test("registry harvests the full consolidated tool surface with handler + schema", () => {
   const reg = buildToolRegistry(randomUUID());
-  assert.equal(reg.size, 34);
+  // Don't hardcode the count (it shifts as tools consolidate — e.g. dmaTrace→
+  // watch({on:'dma'}), patchGbHeader→romPatch({op:'gbHeader'})). Just guard the
+  // budget ceiling the manifest test owns, and a sane floor.
+  assert.ok(reg.size >= 28 && reg.size <= 35, `tool count ${reg.size} outside the consolidated 28..35 range`);
   for (const [name, t] of reg) {
     assert.equal(typeof t.handler, "function", `${name} has a handler`);
     const js = toolJsonSchema(t.inputSchema);
@@ -143,7 +146,7 @@ test("swagger HTML renders the title, points at the spec, and uses NO CDN (local
   const html = swaggerHtml({ specUrl: "/openapi.json", title: "romdev API" });
   assert.match(html, /<title>romdev API<\/title>/);
   assert.match(html, /\/openapi\.json/);
-  assert.match(html, /\/romdev-skill\.md/, "offline fallback links the skill doc");
+  assert.match(html, /\/romdev\/SKILL\.md/, "offline fallback links the skill doc");
   // self-hosted: references our local /documentation/* assets, never a CDN.
   assert.match(html, /\/documentation\/swagger-ui\.css/);
   assert.match(html, /\/documentation\/swagger-ui-bundle\.js/);
