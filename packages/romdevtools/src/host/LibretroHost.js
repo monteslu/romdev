@@ -695,6 +695,89 @@ export class LibretroHost {
     mod.HEAPU8.set(bytes, ptr + offset);
   }
 
+  // ── C64 disk image read/write (VICE) ───────────────────────────────────────
+  // The VICE WASM core takes content in-memory and exposes no disk memory region,
+  // so these go through dedicated core exports that read/write the LIVE mounted
+  // 1541 disk_image_t directly (see scripts/patches/vice-romdev-memory-regions.patch).
+  // Only the standard 35-track 1541 .d64 (174848 bytes) is supported. unit 8.
+
+  /** True if the loaded core exposes the romdev disk read/write exports. */
+  diskImageSupported() {
+    const mod = this.mod;
+    return !!(mod && typeof mod._romdev_disk_export === "function"
+                  && typeof mod._romdev_disk_import === "function");
+  }
+
+  /**
+   * Read the LIVE mounted disk image out as a flat .d64.
+   * @param {number} [unit] drive unit (default 8)
+   * @returns {Uint8Array} the .d64 bytes (copied out of WASM memory)
+   */
+  exportDiskImage(unit = 8) {
+    const mod = this._needMod();
+    if (typeof mod._romdev_disk_export !== "function") {
+      throw new Error("this core build does not expose disk export (C64/VICE only).");
+    }
+    const len = mod._romdev_disk_export(unit >>> 0, 0) >>> 0;
+    if (!len) {
+      throw new Error("no disk image mounted on this unit, or it is not a 35-track .d64. " +
+        "Load a .d64 with loadMedia({platform:'c64', path}) first.");
+    }
+    const ptr = mod._romdev_disk_ptr();
+    // copy out — the core buffer is reused on the next export
+    return mod.HEAPU8.slice(ptr, ptr + len);
+  }
+
+  /**
+   * Write a flat .d64 back into the LIVE mounted disk image (sector by sector).
+   * @param {Uint8Array} bytes a 174848-byte .d64
+   * @param {number} [unit] drive unit (default 8)
+   * @returns {number} bytes written
+   */
+  importDiskImage(bytes, unit = 8) {
+    const mod = this._needMod();
+    if (typeof mod._romdev_disk_import !== "function") {
+      throw new Error("this core build does not expose disk import (C64/VICE only).");
+    }
+    const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    const ptr = mod._malloc(data.length);
+    try {
+      mod.HEAPU8.set(data, ptr);
+      const n = mod._romdev_disk_import(ptr, data.length >>> 0, unit >>> 0, 0) >>> 0;
+      if (!n) throw new Error("disk import failed — no writable .d64 mounted on this unit.");
+      return n;
+    } finally {
+      mod._free(ptr);
+    }
+  }
+
+  /**
+   * Write ONE PRG file (name + bytes incl. its 2-byte load address) straight into
+   * the LIVE mounted disk via the vdrive — the "inject a save" primitive.
+   * @param {string} name file name (PETSCII, ≤16 chars)
+   * @param {Uint8Array} bytes the PRG file bytes (load address + body)
+   * @param {number} [unit] drive unit (default 8)
+   */
+  putDiskFile(name, bytes, unit = 8) {
+    const mod = this._needMod();
+    if (typeof mod._romdev_disk_putfile !== "function") {
+      throw new Error("this core build does not expose disk putfile (C64/VICE only).");
+    }
+    const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    const nameBytes = Buffer.from(String(name) + "\0", "latin1");
+    const namePtr = mod._malloc(nameBytes.length);
+    const dataPtr = mod._malloc(data.length || 1);
+    try {
+      mod.HEAPU8.set(nameBytes, namePtr);
+      mod.HEAPU8.set(data, dataPtr);
+      const rc = mod._romdev_disk_putfile(unit >>> 0, namePtr, dataPtr, data.length >>> 0);
+      if (rc !== 0) throw new Error(`disk putfile failed (rc=${rc}) — no writable .d64 mounted, or the disk is full.`);
+    } finally {
+      mod._free(namePtr);
+      mod._free(dataPtr);
+    }
+  }
+
   reset() {
     const mod = this._needMod();
     mod._retro_reset();
@@ -1475,12 +1558,12 @@ export class LibretroHost {
           `save_ram is always empty here, there's no save file to read/write.`;
       }
       if (plat === "c64") {
-        return `C64 has no cartridge battery SRAM — games saved by writing FILES to a ` +
-          `floppy disk (.d64). romdev CAN load & run .d64 disk images (loadMedia({platform:'c64', ` +
-          `path:'x.d64'}) — it autostarts) and pack a built .prg into a distributable disk ` +
-          `(cart({op:'packDisk'})). In-emulator disk WRITES (a game's own SAVE) are not yet ` +
-          `persisted back out of the core. For reliable persistence here use a full-machine ` +
-          `savestate: state({op:'save'/'load', path}).`;
+        return `C64 has no cartridge battery SRAM — the C64 save medium is the FLOPPY (.d64), ` +
+          `not save_ram (so save_ram is empty, as expected). Use the disk: ` +
+          `state({op:'exportDisk', path}) snapshots the live .d64 (incl. anything the game saved), ` +
+          `state({op:'importDisk', path}) / state({op:'putDiskFile', path}) write a save back in. ` +
+          `(A game's own mid-run KERNAL SAVE doesn't auto-persist in this WASM build — drive it ` +
+          `from the host via putDiskFile, or use a full-machine savestate state({op:'save'/'load'}).)`;
       }
       return `save_ram is empty on platform '${plat}': this CART has no battery save ` +
         `(check cart({op:'identify'}).saveRam.hasBattery — many ROMs use passwords or no save). ` +

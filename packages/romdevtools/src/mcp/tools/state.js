@@ -169,6 +169,82 @@ async function importSramCore({ path: inPath }, sessionKey) {
   };
 }
 
+/** op:'exportDisk' — write the LIVE mounted C64 .d64 disk image to a file.
+ * The C64 analogue of exportSram: a game saves by writing files to its disk, and
+ * this snapshots the whole disk (incl. any saves the game wrote). C64/VICE only. */
+async function exportDiskCore({ path: outPath, unit = 8 }, sessionKey) {
+  const host = getHost(sessionKey);
+  if (!host.diskImageSupported || !host.diskImageSupported()) {
+    throw new Error("state({op:'exportDisk'}): disk images are a C64 feature (VICE). " +
+      `The loaded platform is '${host.status.platform}'.`);
+  }
+  const blob = host.exportDiskImage(unit); // throws if no .d64 mounted
+  const resolved = resolveStatePath(outPath, host);
+  await mkdir(path.dirname(resolved), { recursive: true });
+  await writeFile(resolved, Buffer.from(blob));
+  return {
+    exportedDisk: true,
+    path: resolved,
+    ...(resolved !== outPath ? { resolvedPath: resolved } : {}),
+    bytes: blob.length,
+    unit,
+    note: "Wrote the LIVE 1541 disk image (.d64) — the C64 save medium. Re-load it later " +
+      "with loadMedia({platform:'c64', path}) (it autostarts), or push it back into a " +
+      "running session with state({op:'importDisk', path}). This captures any files the " +
+      "game wrote to disk.",
+  };
+}
+
+/** op:'importDisk' — write a .d64 file back into the LIVE mounted C64 disk image. */
+async function importDiskCore({ path: inPath, unit = 8 }, sessionKey) {
+  const host = getHost(sessionKey);
+  if (!host.diskImageSupported || !host.diskImageSupported()) {
+    throw new Error("state({op:'importDisk'}): disk images are a C64 feature (VICE). " +
+      `The loaded platform is '${host.status.platform}'.`);
+  }
+  const resolved = resolveStatePath(inPath, host);
+  const blob = new Uint8Array(await readFile(resolved));
+  if (blob.length !== 174848) {
+    throw new Error(`state({op:'importDisk'}): '${resolved}' is ${blob.length} bytes — not a ` +
+      `standard 174848-byte 35-track .d64. Only that format round-trips through the live drive.`);
+  }
+  const n = host.importDiskImage(blob, unit);
+  return {
+    importedDisk: true,
+    path: resolved,
+    ...(resolved !== inPath ? { resolvedPath: resolved } : {}),
+    bytes: n,
+    unit,
+    note: "Wrote the .d64 into the running C64's mounted disk. The game sees it on its next " +
+      "disk access (a load/menu). Use this to inject a save disk a player made elsewhere.",
+  };
+}
+
+/** op:'putDiskFile' — write ONE PRG file into the LIVE mounted C64 disk (inject a save). */
+async function putDiskFileCore({ path: inPath, name, unit = 8 }, sessionKey) {
+  const host = getHost(sessionKey);
+  if (!host.diskImageSupported || !host.diskImageSupported()) {
+    throw new Error("state({op:'putDiskFile'}): disk files are a C64 feature (VICE). " +
+      `The loaded platform is '${host.status.platform}'.`);
+  }
+  if (!inPath) throw new Error("state({op:'putDiskFile'}): `path` (the file to write) is required.");
+  const resolved = resolveStatePath(inPath, host);
+  const blob = new Uint8Array(await readFile(resolved));
+  // file name on disk: explicit `name`, else the source basename (sans extension), uppercased
+  const fname = (name || path.basename(resolved).replace(/\.[^.]+$/, ""))
+    .toUpperCase().replace(/[^A-Z0-9 ]/g, "").slice(0, 16) || "FILE";
+  host.putDiskFile(fname, blob, unit);
+  return {
+    wroteDiskFile: true,
+    name: fname,
+    path: resolved,
+    bytes: blob.length,
+    unit,
+    note: "Wrote one PRG file into the running C64's mounted disk via the drive. Read the " +
+      "whole disk back with state({op:'exportDisk', path}) or cart({op:'extract'}).",
+  };
+}
+
 /** op:'dump' — raw libretro blob to disk for forensic inspection (+ optional findHex). */
 async function dumpStateCore({ path: outPath, findHex, maxMatches = 32 }, sessionKey) {
       const host = getHost(sessionKey);
@@ -249,8 +325,9 @@ export function registerStateTools(server, z, sessionKey) {
     "'list': named in-memory slots. 'diff': whole-machine 'did ANYTHING change?' (coarser than memory diff) — " +
     "snapOrDiff:'snapshot' captures, 'diff' compares.",
     {
-      op: z.enum(["save", "load", "list", "export", "dump", "diff", "exportSram", "importSram"]).describe("save/load a savestate (whole machine); list slots; export a slot to disk; dump the raw blob; diff the whole machine. SRAM (the cartridge BATTERY SAVE FILE, distinct from a savestate): exportSram writes the .sav, importSram loads one back."),
-      name: z.string().min(1).optional().describe("op=save/load: in-memory slot name. op=diff: snapshot label (default 'default')."),
+      op: z.enum(["save", "load", "list", "export", "dump", "diff", "exportSram", "importSram", "exportDisk", "importDisk", "putDiskFile"]).describe("save/load a savestate (whole machine); list slots; export a slot to disk; dump the raw blob; diff the whole machine. SRAM (the cartridge BATTERY SAVE FILE, distinct from a savestate): exportSram writes the .sav, importSram loads one back. C64 DISK (VICE; the C64 save medium is a floppy, not battery SRAM): exportDisk writes the live .d64, importDisk pushes a .d64 back into the running drive, putDiskFile injects one PRG file into the live disk."),
+      name: z.string().min(1).optional().describe("op=save/load: in-memory slot name. op=diff: snapshot label (default 'default'). op=putDiskFile: file name on the disk (≤16 chars; default = source basename)."),
+      unit: z.number().int().min(8).max(11).default(8).describe("op=exportDisk/importDisk/putDiskFile (C64): drive unit (default 8)."),
       path: z.string().optional().describe("op=save: also write the blob here (survives restarts). op=load: restore from this disk blob. op=export/dump: write the blob here (required). A RELATIVE path resolves against the loaded ROM's directory (NOT the server CWD); an absolute path is used as-is. The result echoes `resolvedPath` when they differ."),
       // load
       render: z.boolean().default(true).describe("op=load: step one frame after restoring so the framebuffer reflects it (fixes the stale-screenshot footgun). false = stay at the exact restored instant."),
@@ -287,6 +364,18 @@ export function registerStateTools(server, z, sessionKey) {
         case "importSram": {
           if (!args.path) throw new Error("state({op:'importSram'}): `path` (the .sav to load) is required.");
           return jsonContent(await importSramCore(args, sessionKey));
+        }
+        case "exportDisk": {
+          if (!args.path) throw new Error("state({op:'exportDisk'}): `path` (where to write the .d64) is required.");
+          return jsonContent(await exportDiskCore(args, sessionKey));
+        }
+        case "importDisk": {
+          if (!args.path) throw new Error("state({op:'importDisk'}): `path` (the .d64 to load) is required.");
+          return jsonContent(await importDiskCore(args, sessionKey));
+        }
+        case "putDiskFile": {
+          if (!args.path) throw new Error("state({op:'putDiskFile'}): `path` (the PRG file to inject) is required.");
+          return jsonContent(await putDiskFileCore(args, sessionKey));
         }
         default: throw new Error(`state: unknown op '${args.op}'`);
       }
