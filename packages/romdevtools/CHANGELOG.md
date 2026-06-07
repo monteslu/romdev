@@ -4,6 +4,41 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.18.0
+
+**C64 disk SAVES — the floppy is the C64 save medium, and romdev now reads/writes
+it on the live disk.** 0.17.0 added loading/running/distributing `.d64` disks;
+this adds save/restore, the C64 analogue of SRAM `exportSram`/`importSram` (the
+C64 has no battery RAM — games save by writing files to the floppy, so the disk
+IS the save).
+
+### Added — `state` disk ops (C64 / VICE)
+- **`state({op:'exportDisk', path})`** — write the LIVE mounted 1541 `.d64` to a
+  file (captures any files the game wrote to disk). Re-load it with `loadMedia`
+  (autostarts) or push it back with `importDisk`.
+- **`state({op:'importDisk', path})`** — write a `.d64` back into the running
+  drive (inject a save disk made elsewhere). Enforces the standard 174848-byte
+  35-track format.
+- **`state({op:'putDiskFile', path, name})`** — inject ONE PRG file straight into
+  the live disk via the drive's filesystem (the "write a save" primitive).
+- Backed by new VICE core exports (`romdev_disk_export`/`import`/`putfile`) that
+  operate on the live `disk_image_t` directly — captured in the reproducible
+  `vice-romdev-memory-regions.patch` (verified by a from-scratch re-fetch+build).
+  New `LibretroHost` methods: `exportDiskImage`/`importDiskImage`/`putDiskFile`/
+  `diskImageSupported`. Locked by `c64-disk-save.test.js`.
+
+### Known limit
+- A game's OWN mid-run KERNAL `SAVE` does not yet auto-persist to disk in this
+  WASM build (the emulated 1541 serial-bus write stalls). Drive saves from the
+  host instead (`putDiskFile` / capture with `exportDisk`), or use a full-machine
+  savestate. The C64 `save_ram` n/a message now points at the disk ops.
+
+### Reproducibility hardening
+- Every upstream pin in `versions.json` is now a full commit SHA or a verified
+  sha256 — closed two gaps: **cc65** was pinned to the mutable tag `V2.19`
+  (→ resolved to SHA `555282497c…`), and **sdcc** carried an unfilled
+  `UNVERIFIED-…` sha256 (→ real `ae8c1216…`). Zero weak pins remain.
+
 ## 0.17.0
 
 **C64 disk images — load real games & ship yours as `.d64`.** The Commodore

@@ -163,10 +163,29 @@ scene — ships and loads games as **`.d64` disk images** (and `.crt` carts /
   in the exact format the Ultimate hardware and the scene load. (`cart({op:
   'extract', path:'x.d64'})` lists a disk's files; add `name:` to pull one out.)
 
-**In-game SAVE (writing to disk):** the C64 has no battery SRAM; games save by
-writing files to the disk. romdev can load/run/distribute disks, but a running
-game's own disk WRITES are not yet persisted back out of the core — for reliable
-persistence use a full-machine savestate (`state({op:'save'/'load', path})`).
+## Disk SAVES (the C64 save medium)
+
+The C64 has no battery SRAM — games save by **writing files to the floppy**. The
+disk IS the save, so romdev exposes the LIVE mounted `.d64` for save/restore
+(the C64 analogue of SRAM `exportSram`/`importSram`):
+
+- **Snapshot the disk** (captures any files the game wrote): `state({op:
+  'exportDisk', path:'save.d64'})`. Re-load it later with `loadMedia` (autostarts)
+  or push it back into a running session with `state({op:'importDisk', path})`.
+- **Inject a save file** a player made elsewhere, straight into the running disk:
+  `state({op:'putDiskFile', path:'progress.prg', name:'PROGRESS'})` writes one PRG
+  file via the drive. Read it back with `exportDisk` or `cart({op:'extract'})`.
+
+These work on the standard 35-track 1541 `.d64` (174848 bytes). They go through
+the drive's file system directly, so they persist regardless of the cycle-exact
+serial-bus quirks.
+
+> ⚠ A game's OWN in-emulator `SAVE` (the KERNAL SAVE routine, mid-run) does not
+> yet auto-persist to the disk in this WASM build — the emulated 1541 serial-bus
+> write stalls. So drive the save from the host: let the game compute its save in
+> RAM, read it with `memory`, and write it with `putDiskFile`; or capture the
+> whole disk with `exportDisk`. For a pure "resume exactly here" snapshot, a
+> full-machine savestate (`state({op:'save'/'load', path})`) also works.
 
 ## Frame heartbeat
 

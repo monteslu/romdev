@@ -32,11 +32,41 @@
 # maincpu.c before 6510core.c is #included. Patch is pure-LF on ADDED lines.
 # git apply ignores everything above the first 'diff --git' line.
 #
+#
+# C64 DISK IMAGE READ/WRITE (round 3): exposes the LIVE mounted 1541 disk image
+# for host-side save/restore, since the libretro VICE WASM build takes content
+# in-memory (no fullpath FS write-back) and exposes no disk memory region. Adds
+# to libretro/libretro-core.c (after the romdev_cov_* block, before
+# retro_load_game_special):
+#   * romdev_disk_export(unit,drive)  — flushes the vdrive BAM/dir, then reads
+#     every sector of the live disk_image_t into a static buffer; returns the
+#     .d64 length. romdev_disk_ptr() returns the buffer.
+#   * romdev_disk_import(data,len,unit,drive) — writes a flat .d64 back into the
+#     live image, sector by sector (disk_image_write_sector).
+#   * romdev_disk_putfile(unit,name,data,len) — writes ONE PRG file into the live
+#     image via the vdrive (vdrive_iec_open/write/close), bypassing the C64
+#     KERNAL/serial bus (whose multi-byte disk WRITE does not complete in this
+#     WASM build). This is the host-side "inject a save" primitive.
+#   * needs #include "vdrive-iec.h" + "vdrive-bam.h" (added near "vdrive.h").
+# Only the standard 35-track 1541 .d64 (174848 bytes) round-trips. Build exports:
+# add _romdev_disk_export/_ptr/_import/_putfile to EXPORTED_FUNCTIONS in
+# scripts/build-vice.sh. git apply ignores everything above the first
+# 'diff --git' line.
+#
 diff --git a/libretro/libretro-core.c b/libretro/libretro-core.c
-index 82bd2fb..cf51c23 100644
+index 82bd2fb..cfdbc49 100644
 --- a/libretro/libretro-core.c
 +++ b/libretro/libretro-core.c
-@@ -8639,6 +8639,215 @@ unsigned retro_get_region(void)
+@@ -19,6 +19,8 @@
+ #include "diskimage.h"
+ #include "fsdevice.h"
+ #include "vdrive.h"
++#include "vdrive-iec.h"
++#include "vdrive-bam.h"
+ #include "vdrive-internal.h"
+ #include "charset.h"
+ #include "attach.h"
+@@ -8639,6 +8641,333 @@ unsigned retro_get_region(void)
     }
  }
  
@@ -248,10 +278,129 @@ index 82bd2fb..cf51c23 100644
 +   return n;
 +}
 +
++/* ===================== romdev C64 disk image read/write ====================
++ * The libretro VICE core takes content in-memory (need_fullpath but no FS write-
++ * back) and exposes no disk memory region, so romdev reads/writes the LIVE
++ * mounted disk_image_t directly. These are the host-side disk-save primitives
++ * (snapshot a disk; inject a save/disk), the C64 analogue of SRAM export/import.
++ *   romdev_disk_export(unit,drive)  → flat .d64 into romdev_disk_buf; returns len
++ *   romdev_disk_ptr()               → pointer to that buffer
++ *   romdev_disk_import(data,len,..) → write a flat .d64 back into the disk
++ *   romdev_disk_putfile(unit,name,data,len) → write ONE PRG file into the disk
++ * Only the standard 35-track 1541 .d64 (174848 bytes) round-trips through here. */
++#define ROMDEV_DISK_MAXLEN (174848u)
++static unsigned char romdev_disk_buf[ROMDEV_DISK_MAXLEN];
++
++/* Resolve the live disk image for a unit: prefer the GCR drive's image (what the
++ * running C64 uses with True Drive Emulation), else the vdrive's. */
++static disk_image_t *romdev_live_image(unsigned int unit)
++{
++   disk_image_t *image = NULL;
++   if (unit >= 8 && (unit - 8) < NUM_DISK_UNITS && diskunit_context[unit - 8]) {
++      drive_t *drv = diskunit_context[unit - 8]->drives[0];
++      if (drv && drv->image) image = drv->image;
++   }
++   if (image == NULL) image = file_system_get_image(unit, 0);
++   return image;
++}
++
++unsigned int romdev_disk_export(unsigned int unit, unsigned int drive)
++{
++   disk_image_t *image;
++   vdrive_t *vdrive;
++   disk_addr_t dadr;
++   unsigned int track, sector, spt, off = 0;
++   (void)drive;
++
++   /* Commit the vdrive's cached BAM/directory to the image before reading. */
++   vdrive = file_system_get_vdrive(unit);
++   if (vdrive && vdrive->image) {
++      vdrive_close_all_channels(vdrive);
++      vdrive_flush(unit);
++   }
++
++   image = romdev_live_image(unit);
++   if (image == NULL || image->media.fsimage == NULL) return 0;
++   if (image->type != DISK_IMAGE_TYPE_D64) return 0;
++
++   for (track = 1; track <= image->tracks; track++) {
++      spt = disk_image_sector_per_track(image->type, track);
++      for (sector = 0; sector < spt; sector++) {
++         if (off + 256u > ROMDEV_DISK_MAXLEN) return off;
++         dadr.track = track; dadr.sector = sector;
++         if (disk_image_read_sector(image, romdev_disk_buf + off, &dadr) < 0)
++            memset(romdev_disk_buf + off, 0, 256);
++         off += 256u;
++      }
++   }
++   return off;
++}
++
++const unsigned char *romdev_disk_ptr(void) { return romdev_disk_buf; }
++
++unsigned int romdev_disk_import(const unsigned char *data, unsigned int len,
++                                unsigned int unit, unsigned int drive)
++{
++   disk_image_t *image;
++   disk_addr_t dadr;
++   unsigned int track, sector, spt, off = 0;
++   (void)drive;
++   if (data == NULL || len == 0) return 0;
++   image = romdev_live_image(unit);
++   if (image == NULL || image->media.fsimage == NULL) return 0;
++   if (image->type != DISK_IMAGE_TYPE_D64 || image->read_only) return 0;
++   for (track = 1; track <= image->tracks; track++) {
++      spt = disk_image_sector_per_track(image->type, track);
++      for (sector = 0; sector < spt; sector++) {
++         if (off + 256u > len) return off;
++         dadr.track = track; dadr.sector = sector;
++         if (disk_image_write_sector(image, data + off, &dadr) < 0) return off;
++         off += 256u;
++      }
++   }
++   return off;
++}
++
++/* Write ONE PRG-type file (name + bytes incl. its 2-byte load address) straight
++ * into the live disk via the vdrive, bypassing the C64 KERNAL/serial bus. The
++ * host-side "inject a save" primitive. Returns 0 ok, negative on error. */
++int romdev_disk_putfile(unsigned int unit, const char *fname,
++                        const unsigned char *data, unsigned int len)
++{
++   vdrive_t *vdrive;
++   disk_image_t *image;
++   char namebuf[40];
++   int n, st;
++   unsigned int i;
++   if (unit < 8 || unit >= 8 + NUM_DISK_UNITS || !fname || !data) return -1;
++   vdrive = file_system_get_vdrive(unit);
++   if (!vdrive) return -2;
++   image = romdev_live_image(unit);
++   if (!image) return -3;
++   if (vdrive->image != image)
++      vdrive_attach_image(image, unit, 0, vdrive);
++   if (!vdrive->image) return -4;
++
++   n = 0;
++   for (i = 0; fname[i] && n < 28; i++) namebuf[n++] = fname[i];
++   namebuf[n++] = ','; namebuf[n++] = 'P'; namebuf[n++] = ','; namebuf[n++] = 'W';
++   namebuf[n] = 0;
++
++   st = vdrive_iec_open(vdrive, (const uint8_t *)namebuf, (unsigned int)n, 2, NULL);
++   if (st != SERIAL_OK) return -100 - st;
++   for (i = 0; i < len; i++) {
++      st = vdrive_iec_write(vdrive, data[i], 2);
++      if (st != SERIAL_OK && st != SERIAL_EOF) { vdrive_iec_close(vdrive, 2); return -200 - (st & 0x7f); }
++   }
++   vdrive_iec_close(vdrive, 2);
++   vdrive_flush(unit);
++   return 0;
++}
++
  bool retro_load_game_special(unsigned type, const struct retro_game_info *info, size_t num)
  {
     (void)type;
-@@ -8810,17 +9019,105 @@ bool retro_unserialize(const void *data_, size_t size)
+@@ -8810,17 +9139,105 @@ bool retro_unserialize(const void *data_, size_t size)
     return false;
  }
  
@@ -362,10 +511,10 @@ index 82bd2fb..cf51c23 100644
  }
  
 diff --git a/vice/src/6510core.c b/vice/src/6510core.c
-index a109492..e7b41e9 100644
+index a109492..c82f6e8 100644
 --- a/vice/src/6510core.c
 +++ b/vice/src/6510core.c
-@@ -2374,6 +2374,58 @@ static const uint8_t rewind_fetch_tab[] = {
+@@ -2374,6 +2374,57 @@ static const uint8_t rewind_fetch_tab[] = {
  
          SET_LAST_ADDR(reg_pc);
  
@@ -424,7 +573,7 @@ index a109492..e7b41e9 100644
           * "jammed" - however, our code may rely on FETCH_OPCODE being called
           * here, so we can not simply skip it. What we do instead is remembering
 diff --git a/vice/src/maincpu.c b/vice/src/maincpu.c
-index 14cf0b1..a757af1 100644
+index 14cf0b1..8842119 100644
 --- a/vice/src/maincpu.c
 +++ b/vice/src/maincpu.c
 @@ -58,6 +58,98 @@
