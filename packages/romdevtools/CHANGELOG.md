@@ -98,6 +98,22 @@ the docs + source comments updated.)
   formats in. (Known limit: asar/SNES-asm only yields a wrapper "aborted"
   message — its WASM build aborts without printing line info.)
 
+### Fixed / Added — v0.15.0 session feedback
+- **`state` file `path` resolution.** A RELATIVE `path` (save/load/export) used to
+  resolve against the server's CWD → silent ENOENT (and the docs use relative
+  paths). It now resolves against the LOADED ROM's directory ("states live next to
+  my ROM"); absolute paths are used as-is; the result echoes `resolvedPath`.
+- **Abort-guard on input-driven `breakpoint({on:'write', precision:'exact'})`.** New
+  `abortIf:[{region,offset,label}]` — caller-named "is this scenario still valid?"
+  bytes. If any changes mid-run (player died → title screen, scene flipped) the
+  watchpoint stops IMMEDIATELY and returns `{aborted:true, abortedBy, before,
+  after}` instead of burning all `maxFrames` and returning a meaningless
+  `found:false`. Collapses the derailed-run recovery (breakpoint → screenshot →
+  N× memory read → reload) into one informative call.
+- **No-hit note is now once-per-session.** `breakpoint` on:write used to repeat a
+  ~100-token "two common reasons" explainer on every miss; the full form now fires
+  only on the first miss per session, a one-liner after.
+
 ## 0.14.0
 
 **Two platform-specific top-level tools folded into their domain verbs, a
