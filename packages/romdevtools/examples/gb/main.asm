@@ -4,7 +4,7 @@
 ; it to the BG map, enables the LCD, then loops reading joypad and
 ; scrolling the BG. Build with:
 ;
-;   buildSource({platform:"gb", source: <this>})
+;   build({ output: "rom", platform:"gb", source: <this>})
 ;
 ; rgbfix gets applied automatically by buildForPlatform so the header
 ; checksum is valid.

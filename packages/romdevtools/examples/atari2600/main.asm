@@ -3,7 +3,7 @@
 ; standard NTSC frame timing (3 vsync + 37 vblank + 192 visible + 30
 ; overscan). Read joystick to move the sprite.
 ;
-; Build: buildSource({ platform: "atari2600", source: <this file> })
+; Build: build({ output: "rom",  platform: "atari2600", source: <this file> })
 
   processor 6502
   org $F000

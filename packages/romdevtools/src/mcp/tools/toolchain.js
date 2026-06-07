@@ -293,7 +293,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         codeLoc,
         dataLoc,
       });
-      logBuildResult("buildSource", platform, result);
+      logBuildResult("build:rom", platform, result);
       // lint:"strict" — if any lint warning fired, fail the build with
       // stage:"lint" so the agent must fix patterns before iterating.
       // We mutate the result rather than re-running because the lint
@@ -396,10 +396,39 @@ export function registerToolchainTools(server, z, sessionKey) {
       return jsonContent(payload);
   }
 
-  async function runSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, runtime, maxmod, rebuildSdk, crt0, crt0Path, codeLoc, dataLoc, linkerConfig, frames = 60, holdInputs, screenshotPath, projectName }) {
+  async function runSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, runtime, maxmod, rebuildSdk, crt0, crt0Path, codeLoc, dataLoc, linkerConfig, path: projPath, frames = 60, holdInputs, screenshotPath, projectName }) {
       const { buildForPlatform } = await import("../../toolchains/index.js");
       const resolved = resolveCore(platform);
       if (!resolved) throw new Error(`no core available for platform '${platform}'`);
+
+      // PROJECT-DIR run: `build({output:'run', path})` with no explicit sources →
+      // read the scaffolded dir via the per-platform recipe (same as
+      // output:'project'), then run it. This is the documented "iterate on a dir"
+      // happy path; without it, output:'run' + path errored ("requires source").
+      const noExplicitSources = source == null && sourcePath == null && sources == null && sourcesPaths == null;
+      if (projPath && noExplicitSources) {
+        const r = await readProjectDir(projPath, platform);
+        includes = { ...(includes ?? {}), ...r.includes };
+        binaryIncludes = { ...(binaryIncludes ?? {}), ...r.binaryIncludes };
+        if (r.crt0 != null) crt0 = r.crt0;
+        if (r.codeLoc != null) codeLoc = r.codeLoc;
+        if (r.linkerConfig != null && linkerConfig == null) linkerConfig = r.linkerConfig;
+        if (r.runtime != null && runtime == null) runtime = r.runtime;
+        if (r.maxmod != null && maxmod == null) maxmod = r.maxmod;
+        // Single-source toolchains (dasm/atari2600, vasm/asm) need `source`, not
+        // a `sources` map. Collapse a lone source so those targets build via the
+        // dir path too. (resolveLinkerConfig support-sources, if any, force the
+        // map form below.)
+        const srcNames = Object.keys(r.sources);
+        if (srcNames.length === 1 && r.crt0 == null && r.linkerConfig == null) {
+          // Leave `source` null and set sourcePath — runSourceImpl reads it +
+          // derives sourceName (extension) for language inference. Single-source
+          // targets (dasm/vasm) require this form, not a `sources` map.
+          sourcePath = path.join(projPath, srcNames[0]);
+        } else {
+          sources = r.sources;
+        }
+      }
 
       if (source != null && sourcePath != null) {
         throw new Error("build({output:'run'}): pass either `source` OR `sourcePath`, not both.");
@@ -474,7 +503,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         codeLoc,
         dataLoc,
       });
-      logBuildResult("runSource", platform, build);
+      logBuildResult("build:run", platform, build);
       if (!build.ok || !build.binary) {
         // runSource builds in-memory (no ROM path), so a large failure log
         // has nowhere to land — gate it to a tail + size rather than dumping
@@ -521,10 +550,10 @@ export function registerToolchainTools(server, z, sessionKey) {
       if (!isPlaytestRunning(sessionKey) && !playtestHintGiven.has(sessionKey)) {
         playtestHintGiven.add(sessionKey);
         hint = "No playtest window is open. If a human is watching, consider " +
-               "`loadCategory({category:\"show\"})` then `playtest()` so they can " +
-               "play this ROM live while you keep iterating with runSource " +
-               "(rebuilds update the live game in place). Skip if this session " +
-               "is headless (CI / batch / automated).";
+               "`playtest({op:\"open\"})` so they can play this ROM live while you " +
+               "keep iterating with build({output:\"run\"}) (rebuilds update the " +
+               "live game in place). Skip if this session is headless " +
+               "(CI / batch / automated).";
       }
 
       const summary = {
@@ -648,13 +677,107 @@ export function registerToolchainTools(server, z, sessionKey) {
  * a jsonContent payload (the router calls it via safeTool, which turns a throw —
  * e.g. no entry point — into an {isError:true} result).
  */
-export async function buildProjectCore({ path: projPath, platform, outputPath }) {
+/**
+ * Per-platform recipe for building a SCAFFOLDED project directory. Given the
+ * platform + the list of filenames present, decide which file (if any) is a crt0
+ * that must be routed via `crt0`/`codeLoc` (not linked as a plain TU), which
+ * linker preset to apply, which SDK runtime to select, and which files to SKIP
+ * (preset-supplied crt0s, SDK intermediates). This is the single source of truth
+ * that makes `build({output:'project'|'run', path})` match what the scaffold
+ * README's hand-written build call does.
+ * @param {string} platform
+ * @param {string[]} names  filenames present in the project dir
+ */
+export function projectBuildRecipe(platform, names) {
+  const has = (n) => names.includes(n);
+  /** @type {{crt0File:string|null, codeLoc:number|undefined, linkerConfig:string|undefined, runtime:string|undefined, maxmod:boolean|undefined, skip:Set<string>, includeAsC:Set<string>}} */
+  const r = { crt0File: null, codeLoc: undefined, linkerConfig: undefined, runtime: undefined, maxmod: undefined, skip: new Set(), includeAsC: new Set() };
+
+  // Reference/upstream sources ship for grepping, not compiling (e.g. GB
+  // music_demo's hUGEDriver.upstream.asm — the .c port is what builds). Skip
+  // any *.upstream.* on every platform.
+  for (const n of names) if (/\.upstream\./i.test(n)) r.skip.add(n);
+
+  if (platform === "gb" || platform === "gbc") {
+    // GB/GBC ship gb_crt0.s — it MUST go via crt0+codeLoc:0x150, never as a
+    // source (SDCC emits its own gsinit → "Multiple definition of gsinit").
+    if (has("gb_crt0.s")) { r.crt0File = "gb_crt0.s"; r.codeLoc = 0x150; }
+  } else if (platform === "nes") {
+    // A SCAFFOLDED NES project ships nes_runtime.c + a crt0 + a .cfg and needs
+    // the chr-ram-runtime preset (it defines the OAM/CHARS segments + a NMI with
+    // OAM-DMA; without it: "Missing memory area 'OAM'"). The preset SUPPLIES its
+    // own crt0 + expects nes_runtime.c, so skip the scaffold's crt0/.cfg (the
+    // preset replaces them). A BARE hand-rolled NES dir (no scaffold crt0/.cfg)
+    // is left alone — forcing the preset there would demand runtime symbols it
+    // doesn't have. Detect "scaffolded" by the presence of a crt0 or .cfg.
+    const looksScaffolded = names.some((n) => /crt0.*\.s$/i.test(n) || /\.cfg$/i.test(n));
+    if (looksScaffolded) {
+      r.linkerConfig = "chr-ram-runtime";
+      for (const n of names) {
+        if (/crt0.*\.s$/i.test(n) || /\.cfg$/i.test(n)) r.skip.add(n);
+      }
+    }
+  } else if (platform === "sms" || platform === "gg") {
+    // SMS/GG auto-inject their bundled crt0 inside buildForPlatform — so the
+    // scaffold's own *_crt0.s would be a DUPLICATE. Skip it.
+    for (const n of names) if (/_crt0\.s$/i.test(n)) r.skip.add(n);
+  } else if (platform === "genesis" || platform === "megadrive" || platform === "md") {
+    // SGDK supplies sega startup + rom header. The scaffold dir may contain
+    // generated intermediates (sega.s, sega.preprocessed.s, rom_header.*, and an
+    // out/ build dir) that must NOT be recompiled — sega.preprocessed.s refs a
+    // missing out/rom_header.bin and aborts the build.
+    for (const n of names) {
+      if (/^sega(\.preprocessed)?\.s$/i.test(n) || /^rom_header\./i.test(n) || /\.preprocessed\.s$/i.test(n)) r.skip.add(n);
+    }
+  } else if (platform === "snes") {
+    const asmEntry = has("main.asm") && !has("main.c"); // asar asm template
+    if (asmEntry) {
+      // SNES asar asm template: main.asm `.include`s its siblings
+      // (lorom_header/reset_init/cgram_upload.asm). asar takes ONE source +
+      // resolves .include from the includes mount — so route non-main .asm as
+      // includes, leaving main.asm the single source.
+      for (const n of names) {
+        if (/\.asm$/i.test(n) && n !== "main.asm") r.includeAsC.add(n);
+      }
+    } else {
+      // SNES (PVSnesLib/tcc) C scaffolds combine C via `#include "snes_sfx.c"`
+      // from main.c — a single TU. A non-main .c is an INCLUDE (tcc must find it
+      // for the #include), NOT a separate source TU (which would double-define).
+      // (data.asm / snes_sfx_data.asm stay real wla sources, compiled + linked.)
+      for (const n of names) {
+        if (/\.c$/i.test(n) && n !== "main.c") r.includeAsC.add(n);
+      }
+    }
+    // The SPC700 audio driver sources (spc_driver.asm, apu_blob.asm) are 65816-
+    // INCOMPATIBLE SPC700 asm used OFFLINE to regenerate apu_blob.bin — the
+    // scaffold already ships the built .bin (incbin'd by snes_sfx_data.asm).
+    // Compiling them as 65816 sources fails ("Cannot process spc700"). Skip them.
+    for (const n of names) {
+      if (n === "spc_driver.asm" || n === "apu_blob.asm") r.skip.add(n);
+    }
+  } else if (platform === "gba") {
+    // GBA: default runtime is libtonc; a soundbank.bin means the maxmod path.
+    // The libgba-vs-libtonc choice needs the source CONTENT (which header it
+    // includes), so buildProjectCore refines r.runtime after reading main.c.
+    r.runtime = "libtonc";
+    if (has("soundbank.bin")) r.maxmod = true;
+  }
+  return r;
+}
+
+/**
+ * Read a scaffolded project DIRECTORY into the build inputs, applying the
+ * per-platform recipe (crt0 routing, linker preset, runtime, skip-list) and
+ * the GBA runtime content-sniff. The SINGLE source of truth shared by
+ * build({output:'project'}) and build({output:'run', path}) — so the two paths
+ * can never drift. Returns crt0 as RAW source text (callers assemble it).
+ * @param {string} projPath
+ * @param {string} platform
+ */
+export async function readProjectDir(projPath, platform) {
   const entries = await readdir(projPath, { withFileTypes: true });
   const files = entries.filter((e) => e.isFile());
 
-  // Entry point: a C project uses main.c (SGDK/Genesis, GBA, cc65/SDCC C); an
-  // asm project uses main.s / main.asm. Pick whichever exists — so the SAME
-  // dir-build works for C/SGDK Genesis projects, not just asm/cc65.
   const hasC = files.some((f) => f.name === "main.c");
   const hasAsm = files.some((f) => f.name === "main.s" || f.name === "main.asm");
   if (!hasC && !hasAsm) {
@@ -664,40 +787,81 @@ export async function buildProjectCore({ path: projPath, platform, outputPath })
     );
   }
 
-  // Every .c/.s/.asm is its own translation unit (linked together — cc65 routes
-  // .c→cc65 + .s→ca65; SDCC/SGDK/GBA compile every .c). Every .h/.inc is an
-  // include (NOT a TU). Binary assets become binaryIncludes so .incbin survives.
+  // Per-platform PROJECT RECIPE — see projectBuildRecipe. Globbing every file as
+  // a source is what broke GB (gsinit double-def), NES (no OAM/CHARS), Genesis
+  // (sega.preprocessed.s). The recipe routes crt0 / preset / runtime / skips so
+  // the dir build matches the hand-written build({output:'run'}) call.
+  const recipe = projectBuildRecipe(platform, files.map((f) => f.name));
+
   /** @type {Record<string,string>} */ const sources = {};
   /** @type {Record<string,string>} */ const includes = {};
   /** @type {Record<string,string>} */ const binaryIncludes = {};
+  let crt0 = null;
   for (const f of files) {
     const n = f.name;
+    if (recipe.skip.has(n)) continue;
+    if (recipe.crt0File === n) { crt0 = await readFile(path.join(projPath, n), "utf-8"); continue; }
+    // includeAsC: a .c that's `#include`d by another TU (e.g. SNES main.c
+    // includes snes_sfx.c) — make it an include, NOT a separate source TU.
+    if (recipe.includeAsC.has(n)) { includes[n] = await readFile(path.join(projPath, n), "utf-8"); continue; }
     if (/\.(c|s|asm)$/i.test(n))    sources[n] = await readFile(path.join(projPath, n), "utf-8");
     else if (/\.(h|inc)$/i.test(n)) includes[n] = await readFile(path.join(projPath, n), "utf-8");
-    else if (/\.(bin|chr|pcm|brr|vgm|xgm|nsf|raw|pal)$/i.test(n)) {
+    else if (/\.(bin|chr|pcm|brr|vgm|vgz|xgm|xgc|xgm2|esf|tfi|eif|nsf|raw|pal|map|tmx|spc|wav|gbs)$/i.test(n)) {
+      // Any binary asset an .incbin might reference. (.xgc = compiled XGM2 blob,
+      // .vgz/.esf/etc = music driver inputs.) Missing one = "file not found: X".
       binaryIncludes[n] = (await readFile(path.join(projPath, n))).toString("base64");
     }
   }
 
-  // Route through resolveLinkerConfig like build({output:'rom'}) so cc65 presets
-  // + support sources still apply for a dir-built cc65 project.
-  const { cfg: resolvedLinkerConfig, supportSources } = await resolveLinkerConfig(platform, undefined);
+  // GBA runtime refinement: libgba if the entry includes <gba.h>, else the
+  // libtonc default the recipe set.
+  let runtime = recipe.runtime;
+  if (platform === "gba" && sources["main.c"] && /#\s*include\s*[<"]gba\.h[>"]/.test(sources["main.c"])) {
+    runtime = "libgba";
+  }
+
+  return { sources, includes, binaryIncludes, crt0, codeLoc: recipe.codeLoc, linkerConfig: recipe.linkerConfig, runtime, maxmod: recipe.maxmod };
+}
+
+export async function buildProjectCore({ path: projPath, platform, outputPath }) {
+  const { sources, includes, binaryIncludes, crt0, codeLoc, linkerConfig, runtime, maxmod } = await readProjectDir(projPath, platform);
+
+  // Linker preset: the recipe names it (e.g. NES 'chr-ram-runtime', which ships
+  // the OAM/CHARS segments + its own crt0). resolveLinkerConfig also returns any
+  // preset support sources (the preset crt0) — those merge into the sources.
+  const { cfg: resolvedLinkerConfig, supportSources } = await resolveLinkerConfig(platform, linkerConfig);
   const mergedSources = Object.keys(supportSources).length ? { ...supportSources, ...sources } : sources;
+
+  // Assemble a routed crt0 (SDCC sm83/z80) into a .rel, exactly like the
+  // output:'rom'/'run' path — passing it as `crt0` (NOT a source TU) is what
+  // avoids the gsinit double-definition on GB/GBC.
+  let crt0Rel;
+  if (crt0) {
+    const isSm83 = platform === "gb" || platform === "gbc";
+    const { runSdasgb, runSdasz80 } = await import("../../toolchains/sdcc/sdcc.js");
+    const asm = isSm83 ? await runSdasgb({ source: crt0 }) : await runSdasz80({ source: crt0 });
+    if (!asm.rel) throw new Error(`crt0 assembly failed:\n${asm.log}`);
+    crt0Rel = asm.rel;
+  }
 
   // Single-source toolchains (dasm/atari2600, vasm/asm) take `source`, not the
   // multi-TU `sources` map. When the dir has exactly one source file and no
   // preset support sources, pass it as `source` so those targets still build
   // (the original asm-only buildProject behavior).
   const srcNames = Object.keys(sources);
-  const singleSource = srcNames.length === 1 && Object.keys(supportSources).length === 0;
+  const singleSource = srcNames.length === 1 && Object.keys(supportSources).length === 0 && !crt0Rel;
   const result = await buildForPlatform({
     platform,
+    runtime,
+    maxmod,
     ...(singleSource
       ? { source: sources[srcNames[0]], sourceName: srcNames[0] }
       : { sources: mergedSources }),
     includes: Object.keys(includes).length ? includes : undefined,
     binaryIncludes: Object.keys(binaryIncludes).length ? binaryIncludes : undefined,
     linkerConfig: resolvedLinkerConfig,
+    crt0: crt0Rel,
+    codeLoc,
   });
   if (outputPath && result.binary) {
     await mkdir(path.dirname(outputPath), { recursive: true });

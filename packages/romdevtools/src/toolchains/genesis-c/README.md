@@ -23,7 +23,7 @@ once the WASM artifacts ship. Pipeline shape:
 - **WASM port of cc1/as/ld (stage 2)**: pending.
 - **SGDK native build against the cross-toolchain (stage 3)**: pending.
 - **JS driver `buildGenesisC()`**: pending.
-- **buildSource wiring**: pending.
+- **build({output:'rom'}) wiring**: pending.
 
 ## Why a 3-stage build
 

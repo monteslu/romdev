@@ -140,7 +140,7 @@ Overflow it and there's no error — your globals quietly collide with
 the stack or shadow OAM → corrupted state, sprites that flicker to
 garbage, random crashes.
 
-**Check the `ramUsage` field in the buildSource/runSource response** —
+**Check the `ramUsage` field in the build response** —
 it lists your BSS / DATA / ZEROPAGE segment sizes from the linker map.
 If BSS+DATA is approaching the config's RAM region, shrink your state:
 prefer `uint8_t` over `int`, bit-pack flags, use small fixed arrays,

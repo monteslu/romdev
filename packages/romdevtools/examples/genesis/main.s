@@ -10,7 +10,7 @@
 ;   7. Enable display and park forever.
 ;
 ; BUILD:
-;   buildSource({ platform: "genesis", source: /* this file */ });
+;   build({ output: "rom",  platform: "genesis", source: /* this file */ });
 ;
 ; vasm syntax gotchas (in case you go beyond this scaffold):
 ;   - NO space after commas in operands: `move.w #$2700, sr` FAILS.

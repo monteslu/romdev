@@ -68,7 +68,10 @@ for (const c of SCAFFOLD_CHECKS) {
       // README should mention romdev + the right toolchain.
       const readme = readFileSync(path.join(tmp, "README.md"), "utf-8");
       assert.ok(/romdev/.test(readme), "README missing romdev reference");
-      assert.ok(/runSource|buildSource/.test(readme), "README missing build verb");
+      // The build verb is `build({output:'run'|'rom'})` (the consolidated tool).
+      // It must NOT cite the removed runSource/buildSource names (doc drift).
+      assert.ok(/build\(\{?\s*output/.test(readme), "README missing build({output:...}) verb");
+      assert.ok(!/runSource|buildSource/.test(readme), "README still cites removed runSource/buildSource");
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

@@ -9,9 +9,9 @@
  *   5. Enables the PPU and loops forever (NMI does all the real work).
  *
  * BUILD: this file expects linkerConfig: "chr-ram" so the CHR-RAM
- * region is writable at runtime. Pass it to buildSource:
+ * region is writable at runtime. Pass it to build:
  *
- *   buildSource({
+ *   build({ output: "rom", 
  *     platform: "nes",
  *     language: "c",
  *     linkerConfig: "chr-ram",

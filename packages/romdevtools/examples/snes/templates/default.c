@@ -17,7 +17,7 @@
  *
  * Sibling `data.asm` provides the sprite tile + palette bytes.
  * Build:
- *   buildSource({
+ *   build({ output: "rom", 
  *     platform:"snes", language:"c",
  *     sourcesPaths:{"main.c":"...","data.asm":"..."},
  *   })

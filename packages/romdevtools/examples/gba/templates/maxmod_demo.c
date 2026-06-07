@@ -10,7 +10,7 @@
  *   4. mmStart(MOD_<NAME>_FROM_HEADER, mode) to begin playback.
  *
  * Build via romdev:
- *   buildSource({
+ *   build({ output: "rom", 
  *     platform: "gba",
  *     language: "c",
  *     source:   <this file>,

@@ -90,7 +90,7 @@ screen. Keep at least one (2+ byte) global. See TROUBLESHOOTING.md.
 - `background({view:'renderState'})` — VDC R5 screen-enable, BG scroll, SATB source.
 - `palette({source:'live'})` — VCE 512-entry 9-bit GRB (area:'bg'|'sprite').
 - `sprites({op:'inspect'})` — SATB 64 sprites (x/y/tile/palette/size/flip).
-- `symbols({op:'map'})` — where cc65 placed your variables (after buildSourceWithDebug).
+- `symbols({op:'map'})` — where cc65 placed your variables (after build({output:'romWithDebug'})).
 - `audioDebug({op:'inspect', chip: "pce"})` — the HuC6280 PSG: 6 wavetable channels
   (per-channel freq/volume/wave; channels 4-5 can also do noise) + main amplitude
   + LFO.

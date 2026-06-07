@@ -1,4 +1,4 @@
-// Round-trip every shipped Genesis starter snippet through buildSource
+// Round-trip every shipped Genesis starter snippet through build({output:'rom'})
 // to guarantee they're vasm68k-valid. vasm rejects subtle syntax (e.g.
 // space after comma in operands); without this test we'd happily ship
 // snippets that don't assemble — bug #48 from the rom-games agent.

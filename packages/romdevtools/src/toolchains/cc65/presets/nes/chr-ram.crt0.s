@@ -91,7 +91,7 @@ _exit:  jsr     donelib
 ;       rti
 ;
 ;   ; then DELETE the `nmi: rti` line below from this crt0 (or load a
-;   ; modified crt0 via your own buildSource sources entry).
+;   ; modified crt0 via your own build({output:'rom'}) sources entry).
 
 .segment "STARTUP"
 

@@ -7,7 +7,7 @@
 ;   - palette 0 entry 0 = backdrop (blue here), entry 1 = yellow
 ;
 ; Build with:
-;   buildSource({platform:"gbc", source: <this>})
+;   build({ output: "rom", platform:"gbc", source: <this>})
 ;
 ; rgbfix is invoked automatically to fix the header checksums.
 

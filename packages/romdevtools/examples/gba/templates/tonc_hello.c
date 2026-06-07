@@ -5,7 +5,7 @@
  * canonical "Hello GBA" pattern from gbadev.net/tonc.
  *
  * Build via romdev:
- *   buildSource({platform:"gba", language:"c", source: <this file>})
+ *   build({ output: "rom", platform:"gba", language:"c", source: <this file>})
  *
  * (defaults to runtime:"libtonc" — pass {runtime:"libgba"} to use
  *  devkitPro's libgba instead, or {runtime:"none"} for bare gcc.)

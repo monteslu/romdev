@@ -10,7 +10,7 @@
  *
  * The note tables live in atari7800_music.c — they ARE the song.
  *
- * Build: buildSource({ platform: "atari7800", template: "music_demo" })
+ * Build: build({ output: "rom",  platform: "atari7800", template: "music_demo" })
  */
 #include <stdint.h>
 #include "atari7800_music.h"

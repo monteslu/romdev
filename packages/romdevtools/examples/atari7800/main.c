@@ -1,6 +1,6 @@
 // ── Hello, Atari 7800 — MARIA bring-up + single sprite ──────────────
 //
-// Build: buildSource({ platform: "atari7800", source: <this file>,
+// Build: build({ output: "rom",  platform: "atari7800", source: <this file>,
 //                      language: "c" })
 //
 // Sets up a minimal display list, paints the background blue and renders
