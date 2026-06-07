@@ -211,6 +211,21 @@ Build calls explicitly point at these files via `sourcesPaths` /
 `includePaths` + `linkerConfig: <contents of chr-ram-runtime.cfg>`. The
 project README shows the exact incantation.
 
+## Blank screen? Verify rendering before you guess (no vision needed)
+
+If the screen looks black/blank, don't iterate blind — call
+**`frame({op:'verify', frames:60})`**. One call fuses a framebuffer pixel scan
+with the live PPU registers and tells you `{verified:true|false|null, issues[]}`:
+- `renderDisabled` → PPUMASK has BG+sprites off (footgun, see below) — set
+  PPUMASK bits 3/4.
+- `blankScreen`/`nearlyBlank` but render IS enabled → the PPU is on but nothing's
+  in the nametable/OAM/palette: check the loop-order + OAM-DMA footguns below, and
+  read the raw regions (`memory({op:'read', region:'nes_nametables'/'nes_oam'/'nes_palette'})`).
+- `verified:null` (unsettled) → you haven't stepped a frame yet; step first.
+
+It won't false-fire on boot, and it costs zero image tokens. Use it as the first
+move whenever a change "did nothing" on screen.
+
 ## Five footguns to know before you start
 
 Read these BEFORE writing your game-loop. Each one cost a previous
