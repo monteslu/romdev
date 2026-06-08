@@ -107,10 +107,13 @@ int main(void) {
     consoleDrawText( 9, 12, "|64");
     consoleDrawText(17, 12, "|128");
     consoleDrawText(25, 12, "|192");
-    sfx_init();
 
     oamSet(0, 32, 100, 3, 0, 0, 0, 0);
+    /* Screen ON first, THEN sound. sfx_init() must run AFTER setScreenOn()
+     * (snes_sfx.h:63) — if the SPC stalls before the screen is on you get a
+     * black/forced-blank screen forever. */
     setScreenOn();
+    sfx_init();
 
     while (1) {
         pad = padsCurrent(0);

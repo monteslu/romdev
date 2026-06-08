@@ -26,16 +26,22 @@
 #include "snes_sfx.c"
 
 extern char tilfont, palfont;
+extern char tilbg, palbg;       /* wallpaper tile + palette (data.asm) */
 
 /* consoleVblank() copies the dirty text tilemap to VRAM during VBlank.
  * No public prototype in console.h, so declare it; call once per frame. */
 extern void consoleVblank(void);
+
+/* BG1 wallpaper map: a full 32x32 screen of the 4-colour tile so the
+ * screen never reads as a flat/blank backdrop. Filled at runtime. */
+static u16 bg_map[32 * 32];
 
 int main(void) {
     u16 pad;
     u16 prev = 0;
     u16 frame = 0;
     u8 music_running;
+    u16 i;
 
     /* ── Text-mode setup (PVSnesLib convention) ─────────────────── */
     consoleSetTextMapPtr(0x6800);
@@ -47,11 +53,18 @@ int main(void) {
      * registers — point BG0 at the same font ($3000) + map ($6800). */
     bgSetGfxPtr(0, 0x3000);
     bgSetMapPtr(0, 0x6800, SC_32x32);
-    bgSetDisable(1);
-    bgSetDisable(2);
 
-    /* ── Upload SPC driver + sample bank + song table to ARAM ──── */
-    sfx_init();
+    /* BG1 = full-screen wallpaper so the screen never reads as blank.
+     * Tiles -> VRAM $2000, map -> VRAM $4000 (clear of the console gfx
+     * $3000 / map $6800). Map entries use palette block 1 (0x0400) so the
+     * wallpaper palette doesn't disturb the console font palette in block 0
+     * (HUD text stays legible). */
+    bgInitTileSet(1, (u8 *)&tilbg, (u8 *)&palbg, 1,
+                  32, 32, BG_16COLORS, 0x2000);
+    for (i = 0; i < 32 * 32; i++) bg_map[i] = 0x0400;
+    bgInitMapSet(1, (u8 *)bg_map, sizeof(bg_map), SC_32x32, 0x4000);
+    bgSetEnable(1);
+    bgSetDisable(2);
 
     consoleDrawText( 8, 6,  "SNES MUSIC DEMO");
     consoleDrawText( 3, 11, "B    = SHOOT SFX");
@@ -59,6 +72,11 @@ int main(void) {
     consoleDrawText( 3, 15, "STRT = PLAY MUSIC");
 
     setScreenOn();
+
+    /* Upload SPC driver + sample bank + song table to ARAM. sfx_init() must
+     * run AFTER setScreenOn() (snes_sfx.h:63) — if the SPC stalls before the
+     * screen is on you get a black/forced-blank screen forever. */
+    sfx_init();
 
     /* Auto-start music. */
     sfx_music_play();

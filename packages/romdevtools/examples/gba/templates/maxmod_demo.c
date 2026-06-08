@@ -47,6 +47,19 @@ extern const u8 soundbank_bin[];
  * Adjust if you regenerate with a differently-named .xm. */
 #define MOD_CHIPTUNE 0
 
+/* ── Backdrop tiles (4bpp) ───────────────────────────────────────────
+ * Two solid-colour tiles so we can lay a two-tone checkerboard across the
+ * whole BG1 map. Without a filled backdrop the screen is just the black
+ * backdrop colour plus a few text glyphs — which reads as "blank". */
+static const u32 tile_solid1[8] = {
+    0x11111111, 0x11111111, 0x11111111, 0x11111111,
+    0x11111111, 0x11111111, 0x11111111, 0x11111111,
+};
+static const u32 tile_solid2[8] = {
+    0x22222222, 0x22222222, 0x22222222, 0x22222222,
+    0x22222222, 0x22222222, 0x22222222, 0x22222222,
+};
+
 int main(void) {
     /* ── IRQ setup ── Maxmod requires mmVBlank() in the VBlank slot.
      * Without this, the mixer DMA buffers never get swapped and audio
@@ -55,9 +68,30 @@ int main(void) {
     irq_init(NULL);
     irq_add(II_VBLANK, mmVBlank);
 
-    /* TTE setup so we can show a status banner. Standard Tonc setup. */
+    /* ── Filled checkerboard backdrop on BG1 ─────────────────────────
+     * Lay a two-tone checkerboard across the whole 32x32 BG1 map so the
+     * frame has real content behind the text instead of a flat black
+     * backdrop (which reads as "blank"). Tiles → char-block 1, map →
+     * screen-block 28 — clear of TTE's char-block 0 / screen-block 31. */
+    pal_bg_mem[0] = CLR_BLACK;
+    pal_bg_mem[1] = RGB15(3, 6, 14);   /* deep sky blue */
+    pal_bg_mem[2] = RGB15(2, 4, 9);    /* darker navy   */
+    tonccpy(&tile_mem[1][1], tile_solid1, sizeof(tile_solid1));
+    tonccpy(&tile_mem[1][2], tile_solid2, sizeof(tile_solid2));
+    REG_BG1CNT = BG_CBB(1) | BG_SBB(28) | BG_REG_32x32 | BG_4BPP | BG_PRIO(3);
+    {
+        SCR_ENTRY *map = se_mem[28];
+        int tx, ty;
+        for (ty = 0; ty < 32; ty++)
+            for (tx = 0; tx < 32; tx++)
+                map[ty * 32 + tx] = SE_BUILD(1 + ((tx ^ ty) & 1), 0, 0, 0);
+    }
+
+    /* TTE setup so we can show a status banner. Standard Tonc setup.
+     * TTE text on BG0 in front of the BG1 backdrop. */
     tte_init_chr4c_default(0, BG_CBB(0) | BG_SBB(31));
-    REG_DISPCNT = DCNT_MODE0 | DCNT_BG0;
+    REG_BG0CNT |= BG_PRIO(0);          /* text in front of the backdrop */
+    REG_DISPCNT = DCNT_MODE0 | DCNT_BG0 | DCNT_BG1;
 
     tte_write("#{P:24,32}");
     tte_write("Maxmod demo");

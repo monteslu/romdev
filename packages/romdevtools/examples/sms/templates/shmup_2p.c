@@ -24,6 +24,7 @@ extern void    sms_vdp_init(void);
 extern void    sms_vdp_display_on(void);
 extern void    sms_load_palette(const uint8_t *palette);
 extern void    sms_load_tiles(uint16_t vram_dest, const uint8_t *src, uint16_t byte_count);
+extern void    sms_set_tilemap_cell(uint8_t row, uint8_t col, uint8_t tile_idx, uint8_t attr);
 extern void    sms_vblank_wait(void);
 extern uint8_t sms_joypad_read(void);
 extern uint8_t sms_joypad_read_p2(void);
@@ -40,12 +41,31 @@ extern void    sms_sat_upload(void);
 #define T_ENEMY   3
 
 static const uint8_t palette[32] = {
-  0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  /* BG palette: 0 backdrop space-blue, 1 mid-blue, 2 dark-blue (starfield dither) */
+  0x10, 0x24, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   /* Sprite palette: 1 white (P1), 2 yellow (bullet), 3 red (enemy + P2 highlight) */
   0x00, 0x3F, 0x0F, 0x03, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
+
+/* One dithered BG tile (BG bank $0000): plane0=0xAA/0x55, plane1=0x55/0xAA
+ * so pixels alternate colour 1 (mid-blue) and colour 2 (dark-blue) in a fine
+ * checkerboard. Filling the name table with it gives a two-tone "space"
+ * backdrop so the screen never reads as a single flat colour. */
+static const uint8_t bg_tiles[32] = {
+  0xAA,0x55,0x00,0x00, 0x55,0xAA,0x00,0x00,
+  0xAA,0x55,0x00,0x00, 0x55,0xAA,0x00,0x00,
+  0xAA,0x55,0x00,0x00, 0x55,0xAA,0x00,0x00,
+  0xAA,0x55,0x00,0x00, 0x55,0xAA,0x00,0x00,
+};
+
+static void draw_bg(void) {
+  uint8_t row, col;
+  for (row = 0; row < 28; row++)
+    for (col = 0; col < 32; col++)
+      sms_set_tilemap_cell(row, col, 0, 0);
+}
 
 /* 4 sprite tiles back-to-back: P1 ship (col1), P2 ship (col3), bullet (col2), enemy (col3). */
 static const uint8_t sprite_tiles[32 * 4] = {
@@ -112,6 +132,9 @@ void main(void) {
   uint8_t prev1 = 0, prev2 = 0;
   sms_vdp_init();
   sms_load_palette(palette);
+  /* BG dither tile → BG bank $0000, paint the whole name table. */
+  sms_load_tiles(0x0000, bg_tiles, 32);
+  draw_bg();
   sms_load_tiles(0x2000, sprite_tiles, 32 * 4);
 
   p1.x = 80;  p1.y = 160; p1.alive = 1;

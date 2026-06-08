@@ -23,6 +23,9 @@
 
 extern const huge_song_t sample_song;
 
+/* CGB BG palette 0: backdrop colour cycles (bg_colors[shade]) while
+ * colours 1..3 stay fixed and bright, so the checkerboard backdrop below
+ * always shows several distinct colours (not a single flat field). */
 static const uint16_t bg_colors[4] = {
   0x4210,  /* dim purple */
   0x4308,  /* dim blue   */
@@ -30,20 +33,65 @@ static const uint16_t bg_colors[4] = {
   0x0017,  /* dim red    */
 };
 
+/* Two 8×8 2bpp tiles so the BG isn't a single flat colour:
+ *   tile 1 — solid colour 1
+ *   tile 2 — solid colour 2
+ * Checkerboarded across the BG map below. */
+static const uint8_t tile_solid1[16] = {
+  0xFF,0x00, 0xFF,0x00, 0xFF,0x00, 0xFF,0x00,
+  0xFF,0x00, 0xFF,0x00, 0xFF,0x00, 0xFF,0x00,
+};
+static const uint8_t tile_solid2[16] = {
+  0x00,0xFF, 0x00,0xFF, 0x00,0xFF, 0x00,0xFF,
+  0x00,0xFF, 0x00,0xFF, 0x00,0xFF, 0x00,0xFF,
+};
+
+/* Write CGB BG palette 0 with the current backdrop shade plus fixed bright
+ * colours 1..3 (blue / green / white) so the checkerboard is multi-colour. */
+static void set_bg_palette(uint8_t shade) {
+  BCPS = 0x80;            /* auto-increment, start at palette 0 colour 0 */
+  /* colour 0 — animated backdrop */
+  BCPD = (uint8_t)(bg_colors[shade] & 0xFFu);
+  BCPD = (uint8_t)((bg_colors[shade] >> 8) & 0xFFu);
+  /* colour 1 — bright blue */
+  BCPD = (uint8_t)(0x7C00u & 0xFFu);
+  BCPD = (uint8_t)((0x7C00u >> 8) & 0xFFu);
+  /* colour 2 — bright green */
+  BCPD = (uint8_t)(0x03E0u & 0xFFu);
+  BCPD = (uint8_t)((0x03E0u >> 8) & 0xFFu);
+  /* colour 3 — white */
+  BCPD = (uint8_t)(0x7FFFu & 0xFFu);
+  BCPD = (uint8_t)((0x7FFFu >> 8) & 0xFFu);
+}
+
 void main(void) {
-  uint8_t  i;
   uint8_t  shade = 0;
   uint16_t frame = 0;
+  uint8_t *bg_map;
+  uint16_t j;
 
   lcd_init_default();
-  sound_init();
+  LCDC = 0;               /* LCD off so we can write VRAM freely */
 
-  /* Write the initial CGB BG palette 0 (4 entries, same colour). */
-  BCPS = 0x80;            /* auto-increment, start at index 0 */
-  for (i = 0; i < 4; i++) {
-    BCPD = (uint8_t)(bg_colors[shade] & 0xFFu);
-    BCPD = (uint8_t)((bg_colors[shade] >> 8) & 0xFFu);
+  /* Upload two tiles to VRAM slots 1 ($8010) and 2 ($8020). Use
+   * memcpy_vram (pointer-walk) — an indexed dst[i]=src[i] loop into VRAM
+   * is miscompiled by SDCC sm83. */
+  memcpy_vram((uint8_t *)0x8010, tile_solid1, 16);
+  memcpy_vram((uint8_t *)0x8020, tile_solid2, 16);
+
+  /* Checkerboard the 32×32 BG map at $9800 with tiles 1 and 2. Pointer-walk
+   * (NOT bg_map[k]=..., which SDCC sm83 miscompiles into VRAM). */
+  bg_map = (uint8_t *)0x9800;
+  for (j = 0; j < 32u * 32u; j++) {
+    *bg_map++ = (uint8_t)((((j ^ (j >> 5)) & 1u) ? 1u : 2u));
   }
+
+  set_bg_palette(shade);
+
+  /* LCD on with BG enabled, $8000 tile-data addressing. */
+  LCDC = LCDC_LCD_ON | LCDC_BG_ON | LCDC_TILE_DATA_LO;
+
+  sound_init();
 
   hUGE_init(&sample_song);
 
@@ -53,11 +101,7 @@ void main(void) {
     frame++;
     if ((frame & 0x3F) == 0) {     /* every 64 frames ≈ 1 s */
       shade = (uint8_t)((shade + 1) & 0x03);
-      BCPS = 0x80;
-      for (i = 0; i < 4; i++) {
-        BCPD = (uint8_t)(bg_colors[shade] & 0xFFu);
-        BCPD = (uint8_t)((bg_colors[shade] >> 8) & 0xFFu);
-      }
+      set_bg_palette(shade);
     }
   }
 }

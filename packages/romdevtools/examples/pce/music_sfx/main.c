@@ -76,6 +76,32 @@ static void draw_bar(u8 active) {
     }
 }
 
+/* Paint a decorative full-screen frame so the demo reads as a real UI panel
+ * instead of a near-empty backdrop. conio only inits a backdrop + font, so an
+ * otherwise text-only screen leaves >92% of pixels one colour, which looks
+ * blank to a human. We fill the top/bottom title bands and both side borders
+ * with a block character (the labels are drawn ON TOP afterwards). PCE conio is
+ * 32 cols x 28 rows. */
+#define SCR_COLS  32
+#define SCR_ROWS  28
+static void draw_frame(void) {
+    u8 x, y;
+    /* solid top band (rows 0-1) and bottom band (rows 26-27) */
+    for (y = 0; y < SCR_ROWS; ++y) {
+        if (y < 2 || y >= SCR_ROWS - 2) {
+            for (x = 0; x < SCR_COLS; ++x) cputcxy(x, y, '#');
+        } else {
+            /* left + right vertical borders (two columns each for weight) */
+            cputcxy(0, y, '#');
+            cputcxy(1, y, '#');
+            cputcxy((u8)(SCR_COLS - 2), y, '#');
+            cputcxy((u8)(SCR_COLS - 1), y, '#');
+        }
+    }
+    /* a mid separator bar under the title so the panel has visible structure */
+    for (x = 2; x < SCR_COLS - 2; ++x) cputcxy(x, 5, '=');
+}
+
 void main(void) {
     u8  pad, prev_pad;
     u8  step;        /* current melody step 0..7              */
@@ -86,8 +112,9 @@ void main(void) {
 
     _keep[0] = 0;
 
-    /* conio: clear + enable display, then paint the static labels. */
+    /* conio: clear + enable display, paint the frame, then the static labels. */
     clrscr();
+    draw_frame();            /* visible bordered panel (not a blank backdrop)  */
     cputsxy(8, 8,  "PC ENGINE MUSIC + SFX");
     cputsxy(8, 11, "MELODY:");
     cputsxy(8, BAR_Y - 1, "STEP:");

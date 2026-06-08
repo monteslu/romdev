@@ -25,8 +25,28 @@
  * (the byte layout produced by `xgm2tool input.vgm output.xgc`). */
 extern const u8 music_xgm[];
 
+/* A backdrop block tiled across plane B so the title screen isn't a flat
+ * black void (text alone on black reads as "blank" to a human). Colour
+ * index 4 field with a colour-5 frame — both set below. */
+static const u32 tile_bg[8] = {
+    0x44444444, 0x45555554, 0x45000054, 0x45000054,
+    0x45000054, 0x45000054, 0x45555554, 0x44444444,
+};
+
+#define T_BG (TILE_USER_INDEX + 0)
+
 int main(bool hard) {
     (void)hard;
+
+    /* Plane-B backdrop colours (palette 1) + a tiled backdrop so the
+     * music-demo title screen has a visible background behind the text.
+     * Plane A (the font) draws above plane B, so the text reads on top. */
+    PAL_setColor(16 + 4, 0x0840); /* dark green field */
+    PAL_setColor(16 + 5, 0x0C60); /* lighter frame    */
+    VDP_loadTileData(tile_bg, T_BG, 1, DMA);
+    for (u16 cy = 0; cy < 28; cy++)
+        for (u16 cx = 0; cx < 40; cx++)
+            VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL1, 0, 0, 0, T_BG), cx, cy);
 
     /* Title screen text — drawn into VDP plane A's default font region. */
     VDP_drawText("XGM2 MUSIC DEMO",        12, 10);

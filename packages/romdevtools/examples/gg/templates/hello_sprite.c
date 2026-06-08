@@ -29,6 +29,7 @@ extern void gg_vdp_write_reg(uint8_t reg, uint8_t value);
 extern void gg_vdp_set_addr(uint16_t addr, uint8_t prefix);
 extern void gg_load_palette(const uint8_t *palette);
 extern void gg_load_tiles(uint16_t vram_dest, const uint8_t *src, uint16_t byte_count);
+extern void gg_set_tilemap_cell(uint8_t row, uint8_t col, uint8_t tile_idx, uint8_t attr);
 extern void gg_vblank_wait(void);
 extern uint8_t gg_joypad_read(void);
 extern void gg_sprite_init(void);
@@ -41,13 +42,32 @@ extern void gg_sat_upload(void);
  * array = garbage = INVISIBLE sprites. Sprite colour index N uses entry 16+N,
  * so sprite colour 1 = entry 17 (white here). */
 static const uint8_t palette[64] = {
-  /* BG 0-15: entry 0 = dark navy backdrop */
-  0x20,0x02, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
+  /* BG 0-15: 0 = dark navy backdrop, 1 = teal, 2 = blue (dither tones) */
+  0x20,0x02, 0xC8,0x08, 0x80,0x0C, 0,0, 0,0, 0,0, 0,0, 0,0,
   0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
   /* SPRITE 16-31: 16=transparent, 17=white */
   0,0, 0xFF,0x0F, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
   0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
 };
+
+/* One dithered BG tile (BG bank $0000): plane0/plane1 alternate so pixels
+ * flip between colour 1 (teal) and colour 2 (blue). Filling the name table
+ * with it gives a two-tone backdrop so the frame is never a flat colour —
+ * a uniform fill still reads as a blank screen. The dither fills the whole
+ * 256x192 frame, so it shows in the GG's centered 160x144 window too. */
+static const uint8_t bg_tile[32] = {
+  0xAA,0x55,0x00,0x00, 0x55,0xAA,0x00,0x00,
+  0xAA,0x55,0x00,0x00, 0x55,0xAA,0x00,0x00,
+  0xAA,0x55,0x00,0x00, 0x55,0xAA,0x00,0x00,
+  0xAA,0x55,0x00,0x00, 0x55,0xAA,0x00,0x00,
+};
+
+static void draw_bg(void) {
+  uint8_t row, col;
+  for (row = 0; row < 28; row++)
+    for (col = 0; col < 32; col++)
+      gg_set_tilemap_cell(row, col, 0, 0);
+}
 
 /* ── Game Gear visible viewport ──────────────────────────────────────
  * Sprite OAM uses SMS HARDWARE coordinates (256x192 space), but the GG
@@ -73,6 +93,9 @@ void main(void) {
 
   gg_vdp_init();
   gg_load_palette(palette);
+  /* BG dither tile → BG bank $0000, paint the whole name table. */
+  gg_load_tiles(0x0000, bg_tile, 32);
+  draw_bg();
   /* Upload one sprite tile to VRAM $2000 (sprite tile area). */
   gg_load_tiles(0x2000, sprite_tile, 32);
 

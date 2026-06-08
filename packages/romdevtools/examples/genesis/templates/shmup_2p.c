@@ -30,8 +30,22 @@
 #define T_SHIP_P2 (TILE_USER_INDEX + 2)
 #define T_BULLET  (TILE_USER_INDEX + 3)
 #define T_ENEMY   (TILE_USER_INDEX + 4)
+#define T_SPACE   (TILE_USER_INDEX + 5)   /* nebula backdrop A (BG_B) */
+#define T_STARS   (TILE_USER_INDEX + 6)   /* nebula backdrop B (BG_B) */
 
 static const u32 tile_blank[8]   = { 0,0,0,0,0,0,0,0 };
+/* Deep-space backdrop tiled across BG_B so the shared playfield isn't a
+ * flat black void. Two distinct nebula blocks are checkerboarded so no
+ * single colour dominates: T_SPACE is colour-5 nebula with colour-6 star
+ * dots; T_STARS swaps the roles. Palette 1, colours set in main(). */
+static const u32 tile_space[8]   = {
+    0x55555555, 0x55566555, 0x55555555, 0x65555556,
+    0x55555555, 0x55566555, 0x55555555, 0x65555556,
+};
+static const u32 tile_stars[8]   = {
+    0x66666666, 0x66655666, 0x66666666, 0x56666665,
+    0x66666666, 0x66655666, 0x66666666, 0x56666665,
+};
 /* P1 ship — palette 0 colour 1 (white). */
 static const u32 tile_ship_p1[8] = {
     0x00011000, 0x00011000, 0x00111100, 0x00111100,
@@ -116,6 +130,10 @@ int main(bool hard) {
     PAL_setColor(0 + 1, 0x0EEE);
     PAL_setColor(0 + 2, 0x00EE);
     PAL_setColor(0 + 4, 0x000E);
+    /* Palette 1 = space backdrop (colours 5/6, kept clear of the PAL0
+     * sprite colours so the shared planes never clash). */
+    PAL_setColor(16 + 5, 0x0600); /* nebula deep blue */
+    PAL_setColor(16 + 6, 0x0402); /* nebula violet    */
     /* Palette 2 = enemy red */
     PAL_setColor(32 + 3, 0x00EE);
 
@@ -126,6 +144,19 @@ int main(bool hard) {
     VDP_loadTileData(tile_ship_p2, T_SHIP_P2, 1, DMA);
     VDP_loadTileData(tile_bullet,  T_BULLET,  1, DMA);
     VDP_loadTileData(tile_enemy,   T_ENEMY,   1, DMA);
+    VDP_loadTileData(tile_space,   T_SPACE,   1, DMA);
+    VDP_loadTileData(tile_stars,   T_STARS,   1, DMA);
+
+    /* Fill the far plane (BG_B) with the space backdrop so the shared
+     * playfield isn't an empty black void; sprites always draw above the
+     * planes, so both ships + bullets + enemies read on top with no
+     * priority juggling. */
+    for (u16 cy = 0; cy < 28; cy++)
+        for (u16 cx = 0; cx < 40; cx++)
+            VDP_setTileMapXY(BG_B,
+                TILE_ATTR_FULL(PAL1, 0, 0, 0,
+                    ((cx ^ cy) & 1) ? T_STARS : T_SPACE),
+                cx, cy);
 
     p1.x = 100; p1.y = 180; p1.alive = TRUE;
     p2.x = 220; p2.y = 180; p2.alive = TRUE;

@@ -46,8 +46,9 @@ extern void gg_sat_upload(void);
  * (entries 16-31) reading garbage = invisible sprites. BG colour 1 = entry 1
  * (dark grey wall); sprite colour 1 = entry 17 (white player). */
 static const uint8_t palette[64] = {
-  /* BG 0-15: entry 0 = dark navy backdrop, entry 1 = dark grey wall */
-  0x20,0x02, 0x66,0x06, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
+  /* BG 0-15: 0 = dark navy backdrop, 1 = grey wall, 2 = teal floor,
+   * 3 = blue floor (the two floor-dither tones). */
+  0x20,0x02, 0x66,0x06, 0xC8,0x08, 0x80,0x0C, 0,0, 0,0, 0,0, 0,0,
   0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
   /* SPRITE 16-31: 16=transparent, 17=white player */
   0,0, 0xFF,0x0F, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
@@ -55,10 +56,15 @@ static const uint8_t palette[64] = {
 };
 
 static const uint8_t bg_tiles[32 * 2] = {
-  /* T_OPEN — blank */
-  0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
-  0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
-  /* T_WALL — bordered block */
+  /* T_OPEN — dithered floor: plane1=0xFF (colour-2 bit always on), plane0
+   * alternates 0xAA/0x55 so pixels flip between colour 2 (teal) and colour 3
+   * (blue). The open floor now fills with TWO tones instead of the backdrop,
+   * so the screen never reads as a single flat colour. */
+  0xAA,0xFF,0x00,0x00, 0x55,0xFF,0x00,0x00,
+  0xAA,0xFF,0x00,0x00, 0x55,0xFF,0x00,0x00,
+  0xAA,0xFF,0x00,0x00, 0x55,0xFF,0x00,0x00,
+  0xAA,0xFF,0x00,0x00, 0x55,0xFF,0x00,0x00,
+  /* T_WALL — bordered block (colour 1, grey) */
   0xFF,0x00,0x00,0x00, 0x81,0x00,0x00,0x00,
   0x81,0x00,0x00,0x00, 0x81,0x00,0x00,0x00,
   0x81,0x00,0x00,0x00, 0x81,0x00,0x00,0x00,

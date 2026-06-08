@@ -90,7 +90,10 @@ static void make_sprite(void) {
 }
 
 /* Draw a 32x32-cell checkerboard of TILE_A / TILE_B across the BAT. The default
- * PCE virtual screen is 32x32 cells (256x256 px), which covers the display. */
+ * PCE virtual screen is 32x32 cells (256x256 px), which covers the display.
+ * A two-colour checkerboard (green + dark teal) makes the whole playfield read
+ * as a real, visible background — a SOLID single-colour fill instead looks blank
+ * to a human (one colour covers >92% of the screen), so we alternate by cell. */
 static void fill_bat(void) {
     u16 ea = BAT_ENTRY(TILE_A_VRAM, 0);
     u16 eb = BAT_ENTRY(TILE_B_VRAM, 0);
@@ -98,7 +101,9 @@ static void fill_bat(void) {
     for (r = 0; r < 32; ++r) {
         vram_set_write_addr((u16)(BAT_VRAM + r * 32));
         for (col = 0; col < 32; ++col) {
-            e = ea;     /* solid background so the sprite stands out */
+            /* 2x2-cell checkerboard: alternates green/teal so the background is
+             * unmistakably present while the sprite still stands out clearly. */
+            e = (((r >> 1) ^ (col >> 1)) & 1) ? eb : ea;
             VDC_DATA_LO = (u8)(e & 0xFF);
             VDC_DATA_HI = (u8)(e >> 8);
         }

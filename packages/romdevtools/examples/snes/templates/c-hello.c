@@ -27,13 +27,20 @@
 #include <snes.h>
 
 extern char tilfont, palfont;
+extern char tilbg, palbg;       /* wallpaper tile + palette (data.asm) */
 
 /* consoleVblank() copies the dirty text tilemap to VRAM during VBlank.
  * It has no public prototype in console.h, so declare it here. Call it
  * once per frame (after WaitForVBlank) or via nmiSet(consoleVblank). */
 extern void consoleVblank(void);
 
+/* BG1 wallpaper map: a full 32x32 screen of the 4-colour tile so the
+ * screen never reads as a flat/blank backdrop. Filled at runtime. */
+static u16 bg_map[32 * 32];
+
 int main(void) {
+    u16 i;
+
     /* ── 1. PVSnesLib text-mode setup ─────────────────────────────
      * Map + tile-data + palette-offset addresses are conventions —
      * any free VRAM region will work, these match PVSnesLib's
@@ -54,7 +61,17 @@ int main(void) {
     setMode(BG_MODE1, 0);
     bgSetGfxPtr(0, 0x3000);
     bgSetMapPtr(0, 0x6800, SC_32x32);
-    bgSetDisable(1);
+
+    /* BG1 = full-screen wallpaper so the screen never reads as blank.
+     * Tiles -> VRAM $2000, map -> VRAM $4000 (clear of the console gfx
+     * $3000 / map $6800). Map entries use palette block 1 (0x0400) so the
+     * wallpaper palette doesn't disturb the console font palette in block 0
+     * (HUD text stays legible). */
+    bgInitTileSet(1, (u8 *)&tilbg, (u8 *)&palbg, 1,
+                  32, 32, BG_16COLORS, 0x2000);
+    for (i = 0; i < 32 * 32; i++) bg_map[i] = 0x0400;
+    bgInitMapSet(1, (u8 *)bg_map, sizeof(bg_map), SC_32x32, 0x4000);
+    bgSetEnable(1);
     bgSetDisable(2);
 
     /* ── 3. Draw text ─────────────────────────────────────────────
