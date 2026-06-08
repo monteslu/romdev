@@ -396,7 +396,7 @@ When `build({output:'run'})` is too coarse, the long-form workflow:
 2. `loadMediaBytes({ platform, base64 })` → load without disk I/O
 3. `frame({op:'step', frames: N})` or `runUntil({ condition })` → advance time
 4. `frame({op:'screenshot'})` for vibes, `tiles({op:'pixels'})`/`tiles({op:'fingerprints'})` for byte-precise work, `memory({op:'read'})` for game state
-5. `input({op:'set'})` / `input({op:'press'})` / `input({op:'sequence'})` to drive the game
+5. `input({op:'set'})` / `input({op:'press'})` / `input({op:'sequence'})` to drive the game — some platforms have extra control/input modes worth reading in their `MENTAL_MODEL.md` (e.g. C64 needs keyboard keys like F1/RUN-STOP to start many games; `input({op:'pressKey'/'typeText'/'joyport'})`)
 6. `state({op:'save'}, "checkpoint")` / `state({op:'load'}, "checkpoint")` for try/undo
 
 ## Diagnosing behavior over time (game-feel, not just "is it alive")

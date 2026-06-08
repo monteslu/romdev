@@ -107,12 +107,35 @@ which is what the KERNAL's IRQ uses to update key state every
 
 ### Driving input over MCP
 
-The C64 joystick has **one** fire button. Over MCP press it with
-`input({op:'set', b: true})` or the spatial `input({op:'set', south: true})` — both clear
-`$DC00` bit 4 (verified live against vice). `input({op:'set', a: true})` is a **no-op**
-(no second button — not in `input({op:'layout'})`'s `physicalButtons`). So drive fire
-with `b`/`south`, plus the d-pad. ⚠ A cc65 `.prg` only starts after BASIC
-auto-`RUN`s it — step ~70+ frames past load before input/reads register.
+**Joystick.** One fire button. Press it with `input({op:'set', b: true})` (or
+spatial `south`) — both clear `$DC00` bit 4 (verified live). `a` is a **no-op**
+(no second button). Drive fire with `b`/`south` + the d-pad. The joystick reads
+**port 2** by default; switch with `input({op:'joyport', joyport:1})` /
+`input({op:'joyport'})` to read it.
+
+**Keyboard (the C64-specific part — many games NEED it).** Unlike consoles, most
+C64 games (and cracktros) gate gameplay behind a KEYBOARD setup screen — **F1**
+to pick 1 player, RUN/STOP, SPACE/RETURN — that the joystick can't reach. So if a
+joystick gets you to a title/intro but not into play, you almost certainly need a
+key:
+- `input({op:'pressKey', key:'f1'})` — press one C64 key (held + auto-released).
+  Keys: `f1/f3/f5/f7`, `return`, `space`, `run/stop`, `a-z`, `0-9`, `ctrl`, `cbm`,
+  `home`, `down`, `right`, `lshift`, `rshift`.
+- `input({op:'typeText', text:'LOAD"*",8,1\rRUN\r'})` — type a string (`\r` =
+  RETURN). For BASIC commands / filenames.
+- `input({op:'layout', platform:'c64'})` lists the keyboard keys + the joyport.
+
+A typical C64 RE startup: load → step to the title → `pressKey f1` (1 player) →
+`set {b:true}` (fire to start) → step → you're in gameplay → `state({op:'save'})`.
+
+**Controller-alone (playtest):** a human in `playtest` needs no keyboard — the
+pad's spare buttons map to the C64 keys (X=Space, L2=Run/Stop, R2=Return,
+right-stick=F1/F3/F5/F7, top face=F1; d-pad+Fire=joystick). The same mapping
+applies to the agent's `setInput`, so e.g. `input({op:'set', c64_f1:true})` also
+presses F1. `playtest({op:'open'})` returns `c64Controls` to relay to the user.
+
+⚠ A cc65 `.prg` only starts after BASIC auto-`RUN`s it — step ~70+ frames past
+load before input/reads register.
 
 ## SID — three voices of fame
 
