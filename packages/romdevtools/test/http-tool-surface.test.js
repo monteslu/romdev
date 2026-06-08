@@ -114,12 +114,14 @@ test("skill doc: frontmatter + skill preamble + body + tool reference; no MCP me
 });
 
 test("sanitizer scrubs MCP-connection FRAMING from the body (not just the literal 'MCP')", () => {
-  // The real AGENTS.md is written for the MCP channel ("connected", "this server",
-  // "connect your agent"). None of that should reach the skill surface.
+  // The real AGENTS.md uses some MCP-channel framing ("this server", "connect
+  // your agent", "MCP", reconnect). None of that should reach the skill surface.
+  // (The opening line is channel-neutral now, so it's NOT scrubbed — it's fine on
+  // both channels — but any remaining MCP-only framing in the body must be.)
   const agentsLike = [
     "# romdev — Agent guide",
     "",
-    "You are reading this because romdev is connected. This is the orientation.",
+    "This is romdev's generic orientation. Read it once.",
     "",
     "## What this server does",
     "Drives the build loop. Anything else this server can do.",
@@ -128,7 +130,6 @@ test("sanitizer scrubs MCP-connection FRAMING from the body (not just the litera
   ].join("\n");
   const md = buildSkillDoc({ registry: buildToolRegistry("__meta__"), agentsBody: agentsLike, version: "1.0.0" });
   assert.ok(!/\bMCP\b/.test(md), "no literal MCP");
-  assert.ok(!/you are reading this because romdev is connected/i.test(md), "no 'connected' intro");
   assert.ok(!/connect your agent/i.test(md), "no 'connect your agent'");
   assert.ok(!/this server/i.test(md), "no 'this server' connection framing");
   assert.ok(!/restart its MCP connection|MCP connection/i.test(md), "no reconnect instruction");
