@@ -64,7 +64,7 @@ Fourteen consoles/computers, oldest → newest. They vary enormously in how hard
 
 ## Each platform ships a real SDK + sound + scaffolds
 
-Every platform has a working core, ready-made starter projects (most with **5 genre scaffolds** — shmup / platformer / puzzle / sports / racing — plus a music demo; PC Engine and MSX ship a hardware helper library + sprite/music/game example projects), a sound API, per-platform `MENTAL_MODEL.md` + `TROUBLESHOOTING.md` docs (readable in-session via `getPlatformDoc`), and debug helpers. Scaffold a project in one call with `createProject` (or `createGame` for the genre-shaped baselines).
+Every platform has a working core, ready-made starter projects, and **5 genre scaffolds** — shmup / platformer / puzzle / sports / racing — plus a music demo. (The lone exception is the Atari 2600, which ships 4: the TIA has no tilemap to draw a match-3 board, so there's no `puzzle`.) PC Engine and MSX *also* ship a hardware helper library and sprite/music example projects alongside their genre scaffolds. Each platform has a sound API, per-platform `MENTAL_MODEL.md` + `TROUBLESHOOTING.md` docs (readable in-session via `getPlatformDoc`), and debug helpers. Scaffold a project in one call with `createProject` (or `createGame` for the genre-shaped baselines).
 
 | Platform | Core | Compiler / SDK | Sound | Music engine |
 |---|---|---|---|---|
@@ -83,7 +83,7 @@ Every platform has a working core, ready-made starter projects (most with **5 ge
 | PC Engine | geargrafx | cc65 | `psg_tone` (HuC6280 PSG, 6 ch) | hand-authored PSG |
 | MSX / MSX2 | blueMSX | SDCC (z80) | `msx_psg_tone` (AY-3-8910) | hand-authored PSG |
 
-The `platformer` scaffold side-scrolls (hardware camera + per-platform column streaming) on every platform except NES (single-screen).
+The `platformer` scaffold side-scrolls (hardware camera + per-platform column streaming) on every platform except NES and the Atari 2600 — both single-screen, since neither has hardware background scroll.
 
 ## How it's packaged
 

@@ -1857,15 +1857,13 @@ async function createGameCore({ platform, genre, name, path: projPath, title, ov
         ? CANONICAL_GENRES.filter((g) => platformTemplates[g])
         : [];
       if (availableGenres.length === 0) {
-        // Point at the real, working project templates each genre-less
-        // platform actually ships, so the agent has a concrete next step
-        // instead of a bare "default".
-        const PROJECT_TEMPLATE_HINTS = {
-          msx: "default, sprite_move, music_sfx, catch_game",
-          pce: "default, sprite_move, music_sfx, catch_game",
-          atari2600: "default, single_screen, paddle, mini_invaders, music_demo",
-        };
-        const hint = PROJECT_TEMPLATE_HINTS[platform];
+        // Reached only by a platform that ships NO canonical genre yet (every
+        // tier-1 platform now ships at least one — atari2600 ships 4, the rest
+        // ship all 5 — so in practice this is the bring-up / non-genre tier).
+        // List that platform's real project templates so the agent has a
+        // concrete next step instead of a bare "default".
+        const projTemplates = platformTemplates ? Object.keys(platformTemplates) : [];
+        const hint = projTemplates.length ? projTemplates.join(", ") : null;
         throw new Error(
           `createGame: no genre scaffolds for platform '${platform}' yet. ` +
           `Supported platforms: ${genrePlatforms.join(", ") || "(none)"}. ` +

@@ -4,6 +4,54 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.20.0
+
+**Genre-scaffold parity across all 14 platforms + the MSX cartridge-boot fix +
+PCE rendering fix + a higher blank-screen bar.**
+
+### Fixed — MSX cartridges now actually boot (`scaffold` + recipe)
+Every MSX program had been booting to the C-BIOS "No cartridge found" screen:
+`retro_load_game` returned true but the cart never reached a slot. Root cause was
+NOT the wasm core, the C-BIOS, or the libretro API (all verified working against a
+commercial MSX `.rom` in the same host) — it was our **build**. `projectBuildRecipe`
+had no MSX branch, so `msx_crt0.s` was compiled as an ordinary translation unit
+*alongside* SDCC's stock CP/M-style crt0; the cartridge `"AB"` header at $4000
+got dropped and the INIT entry pointed at junk. Fix: route `msx_crt0.s` through
+the crt0 slot (`crt0File`, `codeLoc = 0x4010`), exactly like the SMS/GG recipe.
+MSX is now full tier-1.
+
+### Fixed — PC Engine "bottom half is vertical stripes" on every game
+`vdc_init` set `VDC_MWR` to `0x0010`, which per the HuC6280 VDC spec selects the
+**64×32** virtual screen, not the 32×32 the comment claimed. The BAT-clear loops
+walk stride-32, so only the top ~16 rows of the 64-wide map were cleared — the
+bottom half rendered uninitialized VRAM as vertical stripes. Set `VDC_MWR` to
+`0x0000` (true 32×32) so the clear covers the whole visible map.
+
+### Added — genre-scaffold parity (PC Engine, MSX, Atari 2600)
+PC Engine and MSX gained the full 5 canonical genre scaffolds
+(`shmup` / `platformer` / `puzzle` / `sports` / `racing`); Atari 2600 gained 4
+(no `puzzle` — the TIA has no tilemap to draw a match-3 board). Previously these
+three shipped only ~3 ad-hoc starters while the other 11 platforms had the full
+set. All 14 new scaffolds are verified rendering live (`frame({op:'verify'})` →
+`verified:true`, ≥3 distinct colors, dominant under the blank threshold). The MSX
+and PCE `platformer` scaffolds side-scroll (MSX via SCREEN 2 name-table column
+streaming; PCE via the VDC BXR register). `scaffold({op:'game'})` now works on
+all 14 platforms; only the per-(platform,genre) gaps (e.g. `atari2600` + `puzzle`)
+are rejected, with the error naming the genres that platform *does* have.
+
+### Changed — blank-screen detection bar raised to 92%
+`frame({op:'verify'})`'s `nearlyBlank` threshold went from 99.5% to **92%**
+dominant-color coverage — 88–92% of one flat color still reads as "blank" to a
+human. A sweep re-tuned the genre scaffolds across every platform to clear the
+higher bar (real backgrounds/HUD instead of a lone sprite on a flat field).
+
+### Fixed — `frame({op:'verify'})` now emits its judged frame to the livestream
+The REST/skill tool path (`runTool`) was dropping the observer image/frame
+sidebands that only the MCP middleware handled, so `verify` (and any tool that
+emits a deferred frame) never reached the `/livestream` UI over plain HTTP.
+`runTool` now mirrors the middleware: it strips the sidebands from the result and
+fires the deferred `call_frame` event.
+
 ## 0.19.0
 
 **Two one-stop-shop features for agents — both fold into existing tools, both
