@@ -2,8 +2,9 @@ import { mkdir, mkdtemp, writeFile, readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { TOOLCHAINS } from "../../toolchains/registry.js";
-import { buildForPlatform } from "../../toolchains/index.js";
+import { buildForPlatform, rankIssues } from "../../toolchains/index.js";
 import { resolveLinkerConfig } from "../../toolchains/cc65/preset-resolver.js";
+import { parseBuildLog } from "../../toolchains/parse-errors.js";
 import { inesHeaderSource, charsSource, nromFlatCfg } from "../../toolchains/cc65/ines.js";
 import { resolveCore } from "../../cores/registry.js";
 import { resetHost, getDisclosure } from "../state.js";
@@ -12,6 +13,24 @@ import { imageContent, jsonContent, safeTool, textContent } from "../util.js";
 import { isPlaytestRunning } from "./playtest.js";
 import { buildSourceWithDebugCore } from "./symbols.js";
 import { log as serverLog } from "../log.js";
+
+// crt0 (the per-platform startup stub) is assembled BEHIND the user's build.
+// When it fails the agent gets a raw assembler log — route it through the same
+// parser build() uses so the error leads with the first file:line: message
+// (the issues[]-style surfacing), full log appended for fallback.
+function crt0AssemblyError(log) {
+  const issues = parseBuildLog(log ?? "");
+  const first = issues.find((i) => i.severity === "error") ?? issues[0];
+  const headline = first
+    ? `${first.file ? first.file + ":" : ""}${first.line ? first.line + ": " : ""}${first.message}`
+    : "no structured diagnostic found";
+  return new Error(
+    `crt0 (startup stub) assembly failed: ${headline}` +
+    (issues.length > 1 ? ` (+${issues.length - 1} more)` : "") +
+    `\nThis is the bundled startup code, not your source — if it's the only error, ` +
+    `report it. Full assembler log:\n${log ?? ""}`,
+  );
+}
 
 // Record a build outcome into the /log ring buffer so a failed build's stage +
 // error tail are diagnosable later (the request was already traced; this adds
@@ -318,7 +337,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         const { runSdasgb, runSdasz80 } = await import("../../toolchains/sdcc/sdcc.js");
         const asm = isSm83 ? await runSdasgb({ source: crt0 }) : await runSdasz80({ source: crt0 });
         if (!asm.rel) {
-          throw new Error(`crt0 assembly failed:\n${asm.log}`);
+          throw crt0AssemblyError(asm.log);
         }
         crt0Rel = asm.rel;
       }
@@ -400,7 +419,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         ...(result.stage ? { stage: result.stage } : {}),
         ...(result.sdkEditIgnored ? { sdkEditIgnored: result.sdkEditIgnored } : {}),
         ...(await logField(result.log, inline, logSibling, result.ok)),
-        issues: result.issues ?? [],
+        issues: rankIssues(result.issues ?? []),
         ...(showHint ? { hint: showHint } : {}),
       };
       // When a build failed on a specific TU (multi-source SDCC build),
@@ -538,7 +557,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         const { runSdasgb, runSdasz80 } = await import("../../toolchains/sdcc/sdcc.js");
         const asm = isSm83 ? await runSdasgb({ source: crt0 }) : await runSdasz80({ source: crt0 });
         if (!asm.rel) {
-          throw new Error(`crt0 assembly failed:\n${asm.log}`);
+          throw crt0AssemblyError(asm.log);
         }
         crt0Rel2 = asm.rel;
       }
@@ -569,7 +588,7 @@ export function registerToolchainTools(server, z, sessionKey) {
           toolchain: build.toolchain,
           exitCode: build.exitCode,
           ...(await logField(build.log, false, null)),
-          issues: build.issues ?? [],
+          issues: rankIssues(build.issues ?? []),
         });
       }
 
@@ -625,7 +644,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         // Surface lint/build issues even on successful runs so agents see
         // linter warnings BEFORE the next iteration (was: runSource silently
         // ran with warnings, agent missed them, hit the crash 100 functions later).
-        ...((build.issues ?? []).length > 0 ? { issues: build.issues } : {}),
+        ...((build.issues ?? []).length > 0 ? { issues: rankIssues(build.issues) } : {}),
         ...(hint ? { hint } : {}),
       };
 
@@ -670,6 +689,7 @@ export function registerToolchainTools(server, z, sessionKey) {
   server.tool(
     "build",
     "Compile/assemble source for a target platform; one tool keyed by `output`.\n" +
+    "ON FAILURE (ok:false): READ `issues[]` FIRST — it's the structured error list ({file,line,col,severity,message,stage}) and usually names the exact line to fix. Only fall back to the raw `log` if `issues[]` is empty. Don't guess or rebuild blindly before reading it.\n" +
     "• output:'rom' (default) — assemble or compile `source` (single) / `sources` ({name:contents}) / `sourcePath` / `sourcesPaths`. Returns the ROM (path by default; `inline:true` for binaryBase64) + build log. **`binaryIncludes`/`binaryIncludePaths` (base64/path CHR-ROM, music blobs for `.incbin`) — WITHOUT them no game with external assets builds.** `includes`/`includePaths` for `.include`d text. `linkerConfig` (cc65; NES preset 'chr-ram-runtime' RECOMMENDED). `crt0`/`crt0Path`/`codeLoc`/`dataLoc` (SDCC). `runtime`/`maxmod`/`rebuildSdk` (GBA/Genesis SDK). **`lint:'strict'` fails the build (stage:'lint', no binary) if the pre-flight SDCC crash-pattern scan flags anything (e.g. the uint8 loop-bound trap); 'advisory' (default) just lists hits in issues[].** **`includeSymbols:true` returns the .map text inline on a PLAIN rom build — distinct from output:'romWithDebug' which writes .dbg/.map FILES.** Language is inferred from extension/content — usually OMIT `language`.\n" +
     "• output:'romWithDebug' — like 'rom' but also emits linker debug info for the `symbols` tool: cc65 → `.dbg`, SDCC → sdld `.map`, Genesis m68k → GNU ld map (find where a RAM var landed). DEFAULT writes ROM + debug file + log to disk (`outputPath` required unless `inline:true`).\n" +
     "• output:'run' — BUILD + LOAD + RUN + SCREENSHOT in one round trip — the fastest iteration loop. Same build args; runs `frames` frames and returns the screenshot INLINE. `holdInputs` holds controller state; `screenshotPath` writes the PNG to disk instead; `projectName` titles the playtest window.\n" +
@@ -925,7 +945,7 @@ export async function buildProjectCore({ path: projPath, platform, outputPath })
     const isSm83 = platform === "gb" || platform === "gbc";
     const { runSdasgb, runSdasz80 } = await import("../../toolchains/sdcc/sdcc.js");
     const asm = isSm83 ? await runSdasgb({ source: crt0 }) : await runSdasz80({ source: crt0 });
-    if (!asm.rel) throw new Error(`crt0 assembly failed:\n${asm.log}`);
+    if (!asm.rel) throw crt0AssemblyError(asm.log);
     crt0Rel = asm.rel;
   }
 
@@ -964,6 +984,6 @@ export async function buildProjectCore({ path: projPath, platform, outputPath })
     romLayout: describeRomLayout(platform, result.binary),
     ...(result.stage ? { stage: result.stage } : {}),
     ...(await logField(result.log, false, logSibling, result.ok)),
-    issues: result.issues ?? [],
+    issues: rankIssues(result.issues ?? []),
   });
 }
