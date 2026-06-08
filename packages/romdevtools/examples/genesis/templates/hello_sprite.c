@@ -29,6 +29,17 @@ static const u32 tile_data[8] = {
     0x11111111, 0x11111111, 0x11111111, 0x11111111,
 };
 
+/* A checkered backdrop block tiled across plane B so the screen isn't a
+ * flat black void (a lone sprite on black reads as "blank" to a human).
+ * Colour index 4 with a thin colour-5 frame — we set both below. */
+static const u32 tile_bg[8] = {
+    0x44444444, 0x45555554, 0x45000054, 0x45000054,
+    0x45000054, 0x45000054, 0x45555554, 0x44444444,
+};
+
+#define T_SPRITE (TILE_USER_INDEX + 0)
+#define T_BG     (TILE_USER_INDEX + 1)
+
 int main(bool hard) {
     (void)hard;
 
@@ -38,11 +49,22 @@ int main(bool hard) {
 
     /* Make sure sprite palette 0 entry 1 is white so we can see our
      * tile. SGDK uses 0RRR0GGG0BBB packed words (BGR, 3 bits each). */
-    PAL_setColor(1, 0x0EEE); /* near-white */
+    PAL_setColor(1, 0x0EEE); /* near-white sprite */
+    /* Plane-B backdrop colours (palette 1). */
+    PAL_setColor(16 + 4, 0x0640); /* dark teal field */
+    PAL_setColor(16 + 5, 0x0860); /* lighter frame   */
 
     /* Upload the user tile to VRAM at TILE_USER_INDEX (everything
      * below that is reserved for SGDK's font + system tiles). */
-    VDP_loadTileData(tile_data, TILE_USER_INDEX, 1, DMA);
+    VDP_loadTileData(tile_data, T_SPRITE, 1, DMA);
+    VDP_loadTileData(tile_bg,   T_BG,     1, DMA);
+
+    /* Tile plane B with the backdrop block so there's a visible
+     * background behind the sprite + text. Sprites + the font plane (A)
+     * always draw above plane B, so the d-pad sprite reads on top. */
+    for (u16 cy = 0; cy < 28; cy++)
+        for (u16 cx = 0; cx < 40; cx++)
+            VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL1, 0, 0, 0, T_BG), cx, cy);
 
     VDP_drawText("D-PAD MOVES THE SPRITE", 8, 2);
     VDP_drawText("START FOR SOFT RESET",  9, 4);
@@ -66,7 +88,7 @@ int main(bool hard) {
          * SPRITE_SIZE(1,1) = 8×8. TILE_ATTR_FULL(palette,prio,vflip,
          * hflip,tile_index). */
         VDP_setSprite(0, px, py, SPRITE_SIZE(1, 1),
-                      TILE_ATTR_FULL(PAL0, 0, 0, 0, TILE_USER_INDEX));
+                      TILE_ATTR_FULL(PAL0, 1, 0, 0, T_SPRITE));
         VDP_updateSprites(1, DMA);
 
         SYS_doVBlankProcess();

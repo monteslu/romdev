@@ -89,7 +89,7 @@ Start:
         move.w  #$0000,VDP_DATA      ; color 0: transparent / backdrop
         move.w  #$0EEE,VDP_DATA      ; color 1: white-ish ($0E in each nybble)
         move.w  #$00EE,VDP_DATA      ; color 2: yellow
-        move.w  #$0E00,VDP_DATA      ; color 3: blue (unused)
+        move.w  #$0840,VDP_DATA      ; color 3: dark teal (backdrop fill)
 
         ; -----------------------------------------------------------
         ; Upload one 4bpp tile (8x8 'H', color 2 = yellow) to VRAM at
@@ -103,6 +103,34 @@ Start:
 .tile_loop:
         move.l  (a1)+,VDP_DATA       ; each row = one longword (4 bytes)
         dbra    d0,.tile_loop
+
+        ; -----------------------------------------------------------
+        ; Upload two PATTERNED backdrop tiles (#2 and #3) to VRAM at
+        ; byte offsets $40 and $60 (VRAM cmd $40400000). Each is a teal
+        ; (color 3) field sprinkled with white (color 1) dots, with the
+        ; roles swapped between the two so that when we checkerboard them
+        ; across the plane no single colour dominates the screen — a
+        ; uniform fill still reads as "blank" to a human, so we vary it.
+        ; 16 longwords total (8 rows × 2 tiles) written back-to-back.
+        move.l  #$40400000,VDP_CTRL
+        lea     TileBgA(pc),a1
+        moveq   #16-1,d0             ; 8 rows × 2 tiles
+.bg_tile_loop:
+        move.l  (a1)+,VDP_DATA
+        dbra    d0,.bg_tile_loop
+
+        ; -----------------------------------------------------------
+        ; Fill the ENTIRE plane A name table, checkerboarding tiles #2
+        ; and #3 so there's a varied visible background behind the 'H'.
+        ; Plane A base is $C000; plane size is 64x32 = 2048 cells. VRAM
+        ; write at $C000 = cmd $40000003. d1 toggles 2↔3 each cell.
+        move.l  #$40000003,VDP_CTRL
+        move.w  #2048-1,d0           ; 2048 cells to write
+        moveq   #2,d1               ; start with tile #2
+.bg_fill_loop:
+        move.w  d1,VDP_DATA          ; tile d1 (pal 0, no flip, low pri)
+        eor.w   #$0001,d1            ; toggle 2↔3 (tile index xor 1)
+        dbra    d0,.bg_fill_loop
 
         ; -----------------------------------------------------------
         ; Place tile #1 in plane A near screen center.
@@ -159,3 +187,27 @@ TileH:
         dc.l    $20000020
         dc.l    $20000020
         dc.l    $00000000       ; row 7: blank
+
+; -----------------------------------------------------------------------
+; Two patterned backdrop tiles, 4bpp, uploaded back-to-back as #2 and #3.
+; TileBgA = teal (color 3) field with white (color 1) dots; TileBgB swaps
+; the roles (white field, teal dots). Checkerboarding them across the
+; plane keeps any single colour well under the "blank" threshold.
+TileBgA:                         ; tile #2 — teal field, white dots
+        dc.l    $33333333
+        dc.l    $33133313
+        dc.l    $33333333
+        dc.l    $13333331
+        dc.l    $33333333
+        dc.l    $33133313
+        dc.l    $33333333
+        dc.l    $13333331
+TileBgB:                         ; tile #3 — white field, teal dots
+        dc.l    $11111111
+        dc.l    $11311131
+        dc.l    $11111111
+        dc.l    $31111113
+        dc.l    $11111111
+        dc.l    $11311131
+        dc.l    $11111111
+        dc.l    $31111113

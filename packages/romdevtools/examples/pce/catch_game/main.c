@@ -27,6 +27,8 @@
 #define BAT_VRAM       0x0000   /* 32x32 background map                       */
 #define FONT_VRAM      0x1000   /* digit + glyph tiles (8x8, 16 words each)   */
 #define BLANK_VRAM     0x1000   /* tile 0 of the font = blank                 */
+#define FIELD_VRAM     0x1700   /* dim "field" BG tile (16 words), drawn behind
+                                 * the HUD so the playfield isn't a blank void  */
 #define CATCHER_VRAM   0x1800   /* catcher sprite cell (16x16 = 64 words)     */
 #define FRUIT_VRAM     0x1840   /* fruit sprite cell (16x16 = 64 words)       */
 
@@ -146,15 +148,30 @@ static void upload_sprites(void) {
     load_tiles(FRUIT_VRAM, fruit_cell, 64);
 }
 
-/* ---- clear the whole BAT to blank tiles --------------------------------- */
+/* ---- build the dim "field" BG tile -------------------------------------- */
+/* A solid 8x8 tile in BG colour index 2 (the dim field blue). Filling the BAT
+ * with this instead of blank gives the playfield a visible background — an
+ * all-blank BAT reads as a near-empty backdrop (one colour > 92% of the screen,
+ * which looks blank to a human). plane1 set = colour index 2. */
+static void upload_field(void) {
+    u16 i;
+    for (i = 0; i < 16; ++i) font_cell[i] = 0;
+    for (i = 0; i < 8; ++i) font_cell[i] = 0xFF00;  /* plane1 (hi byte) = ci 2 */
+    load_tiles(FIELD_VRAM, font_cell, 16);
+}
+
+/* ---- fill the whole BAT with the field tile (a 2x2-cell checkerboard of
+ * field/blank), behind the HUD glyphs which are written on top afterwards ---- */
 static void clear_bat(void) {
     u16 r, c;
+    u16 field = BAT_ENTRY(0, FIELD_VRAM);
     u16 blank = BAT_ENTRY(0, BLANK_VRAM);
     for (r = 0; r < 32; ++r) {
         vram_set_write_addr((u16)(BAT_VRAM + r * 32));
         for (c = 0; c < 32; ++c) {
-            VDC_DATA_LO = (u8)(blank & 0xFF);
-            VDC_DATA_HI = (u8)(blank >> 8);
+            u16 e = (((r >> 1) ^ (c >> 1)) & 1) ? blank : field;
+            VDC_DATA_LO = (u8)(e & 0xFF);
+            VDC_DATA_HI = (u8)(e >> 8);
         }
     }
 }
@@ -229,6 +246,7 @@ void main(void) {
     /* palette: backdrop, BG text colours, sprite colours */
     vce_set_color(0,   PCE_RGB(0, 0, 1));     /* backdrop: near-black blue   */
     vce_set_color(1,   PCE_RGB(7, 7, 7));     /* BG colour 1: white text     */
+    vce_set_color(2,   PCE_RGB(1, 1, 3));     /* BG colour 2: dim field blue */
     vce_set_color(256, PCE_RGB(0, 0, 0));     /* sprite transparent          */
     vce_set_color(257, PCE_RGB(2, 5, 7));     /* sprite c1: cyan (catcher 0) */
     vce_set_color(259, PCE_RGB(2, 5, 7));     /* sprite c3: cyan (catcher)   */
@@ -238,6 +256,7 @@ void main(void) {
 
     upload_font();
     upload_sprites();
+    upload_field();         /* dim field tile for a visible playfield BG       */
 
     clear_bat();
     draw_hud_labels();

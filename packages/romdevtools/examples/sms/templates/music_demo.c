@@ -29,10 +29,11 @@ extern void sms_load_tiles(uint16_t vram_dest, const uint8_t *src, uint16_t byte
 extern void sms_set_tilemap_cell(uint8_t row, uint8_t col, uint8_t tile_idx, uint8_t attr);
 extern void sms_vblank_wait(void);
 
-/* BG palette: backdrop dark blue, fg colour 1 = bright cyan, colour 2 = yellow.
- * SMS CRAM is 2-2-2 BGR — 0x30 = bright blue, 0x3F = white, 0x0F = yellow. */
+/* BG palette: backdrop dark blue, fg colour 1 = bright cyan, colour 2 = yellow,
+ * colour 3 = navy (the second dither tone behind the text).
+ * SMS CRAM is 2-2-2 BGR — 0x20 = blue, 0x3F = white/cyan, 0x0F = yellow. */
 static const uint8_t palette[32] = {
-  0x20, 0x3F, 0x0F, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x20, 0x3F, 0x0F, 0x28, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -100,7 +101,18 @@ static const uint8_t font_tiles[] = {
   0xC3,0x00,0x00,0x00, 0xC3,0x00,0x00,0x00,
   0xC3,0x00,0x00,0x00, 0xC3,0x00,0x00,0x00,
   0x66,0x00,0x00,0x00, 0x3C,0x00,0x00,0x00,
+
+  /* tile 9 — dithered BG. plane1=0xFF (colour-2 bit always on), plane0
+   * alternates 0xAA/0x55 so pixels flip between colour 2 (yellow) and
+   * colour 3 (navy). Fills the whole field with TWO tones so no single
+   * colour dominates, while the cyan (colour 1) text stays distinct. */
+  0xAA,0xFF,0x00,0x00, 0x55,0xFF,0x00,0x00,
+  0xAA,0xFF,0x00,0x00, 0x55,0xFF,0x00,0x00,
+  0xAA,0xFF,0x00,0x00, 0x55,0xFF,0x00,0x00,
+  0xAA,0xFF,0x00,0x00, 0x55,0xFF,0x00,0x00,
 };
+
+#define T_DITHER 9
 
 /* Tile indices for each char in our message — 'S' 'M' 'S' ' ' 'M' 'U'
  * 'S' 'I' 'C' ' ' 'D' 'E' 'M' 'O'. 14 cells total. */
@@ -114,9 +126,11 @@ static const uint8_t message[14] = {
 static void clear_name_table(void) {
   uint8_t row;
   uint8_t col;
+  /* Fill with the dithered BG tile (not blank) so the whole screen reads
+   * as a two-tone field and never as a blank backdrop. */
   for (row = 0; row < 28; row++) {
     for (col = 0; col < 32; col++) {
-      sms_set_tilemap_cell(row, col, 0, 0);
+      sms_set_tilemap_cell(row, col, T_DITHER, 0);
     }
   }
 }

@@ -22,7 +22,21 @@ void main(void) {
   sfx_tone(0, 80, 12);  /* boot chime */
 
   for (;;) {
-    tgi_clear();
+    /* CANONICAL LYNX FRAME LOOP — full redraw every frame:
+     *   1. WAIT for Suzy's blitter to finish the previous frame. Drawing
+     *      while it's mid-flight loses the frame → black screen. This is
+     *      the #1 "Lynx stays blank" trap (tgi_clear alone leaves the back
+     *      page stale on this core, so we clear with a full-screen bar). */
+    while (tgi_busy()) { }
+
+    /* Blue field so the screen is obviously not blank... */
+    tgi_setcolor(COLOR_BLUE);
+    tgi_bar(0, 0, tgi_getmaxx(), tgi_getmaxy());
+    /* ...with a green band so no single colour fills the whole screen. */
+    tgi_setcolor(COLOR_GREEN);
+    tgi_bar(0, 60, tgi_getmaxx(), 102);
+
+    /* The joystick-driven player square on top. */
     tgi_setcolor(COLOR_YELLOW);
     tgi_bar(x, y, x + 8, y + 8);
     tgi_setcolor(COLOR_WHITE);

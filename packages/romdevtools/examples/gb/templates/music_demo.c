@@ -29,11 +29,47 @@
  * project template). */
 extern const huge_song_t sample_song;
 
+/* Two 8×8 2bpp tiles so the BG isn't a single flat colour (a uniform
+ * screen reads >=92% one colour and fails the blank-screen check):
+ *   tile 1 — solid colour 3
+ *   tile 2 — solid colour 1
+ * We checkerboard them across the BG map below. */
+static const uint8_t tile_solid3[16] = {
+  0xFF,0xFF, 0xFF,0xFF, 0xFF,0xFF, 0xFF,0xFF,
+  0xFF,0xFF, 0xFF,0xFF, 0xFF,0xFF, 0xFF,0xFF,
+};
+static const uint8_t tile_solid1[16] = {
+  0xFF,0x00, 0xFF,0x00, 0xFF,0x00, 0xFF,0x00,
+  0xFF,0x00, 0xFF,0x00, 0xFF,0x00, 0xFF,0x00,
+};
+
 void main(void) {
   uint8_t  shade = 0;
   uint16_t frame = 0;
+  uint8_t *bg_map;
+  uint16_t j;
 
   lcd_init_default();
+  LCDC = 0;               /* LCD off so we can write VRAM freely */
+
+  /* Upload two tiles to VRAM slots 1 ($8010) and 2 ($8020). Use
+   * memcpy_vram (pointer-walk) — an indexed dst[i]=src[i] loop into VRAM
+   * is miscompiled by SDCC sm83. */
+  memcpy_vram((uint8_t *)0x8010, tile_solid3, 16);
+  memcpy_vram((uint8_t *)0x8020, tile_solid1, 16);
+
+  /* Checkerboard the 32×32 BG map at $9800 with tiles 1 and 2 so the
+   * screen shows two distinct shades. Pointer-walk (NOT bg_map[k]=...,
+   * which SDCC sm83 miscompiles into VRAM). */
+  bg_map = (uint8_t *)0x9800;
+  for (j = 0; j < 32u * 32u; j++) {
+    *bg_map++ = (uint8_t)((((j ^ (j >> 5)) & 1u) ? 1u : 2u));
+  }
+
+  /* LCD on with BG enabled, $8000 tile-data addressing so index 1 == our
+   * tile at $8010. */
+  LCDC = LCDC_LCD_ON | LCDC_BG_ON | LCDC_TILE_DATA_LO;
+
   sound_init();
 
   hUGE_init(&sample_song);

@@ -43,6 +43,37 @@ extern const unsigned char music_data[];
 
 static const unsigned char bg_colors[4] = { 0x0F, 0x01, 0x21, 0x31 };
 
+/* Two BG tiles so the backdrop isn't a single flat colour (a uniform
+ * screen reads >=92% one colour and fails the blank-screen check):
+ *   tile 1 — solid colour 1
+ *   tile 2 — solid colour 2
+ * We checkerboard them across the nametable below. NES BG fetches from
+ * $1000-$1FFF under the default PPUCTRL (bit 4 set), so BG tiles upload
+ * there. */
+static const unsigned char bg_tiles[2 * 16] = {
+  /* tile 1: solid colour 1 (plane 0 all set, plane 1 clear) */
+  0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+  /* tile 2: solid colour 2 (plane 1 all set, plane 0 clear) */
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+  0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+};
+
+/* Fill nametable 0 ($2000) with a checkerboard of tiles 1 and 2 so the
+ * screen shows two distinct colours. Attribute table left at palette 0.
+ * Caller must have the PPU off. */
+static void fill_bg(void) {
+  unsigned int addr;
+  unsigned char y, x;
+  for (y = 0; y < 30; y++) {
+    addr = 0x2000 + (unsigned int)y * 32;
+    for (x = 0; x < 32; x++) {
+      vram_unsafe_set(addr, (unsigned char)(((x ^ y) & 1) + 1));
+      ++addr;
+    }
+  }
+}
+
 void main(void) {
   unsigned char palette[32];
   unsigned char i;
@@ -50,9 +81,18 @@ void main(void) {
   unsigned char frame = 0;
 
   for (i = 0; i < 32; i++) palette[i] = bg_colors[0];
+  /* BG palette 0: backdrop black, colour 1 blue, colour 2 red — gives the
+   * checkerboard two visibly different cells. */
+  palette[0] = 0x0F;   /* $3F00 backdrop */
+  palette[1] = 0x11;   /* colour 1 — blue */
+  palette[2] = 0x16;   /* colour 2 — red  */
 
   ppu_off();
   palette_load(palette);
+  /* Upload the two BG tiles to the BG pattern table at $1000. */
+  chr_ram_upload(0x1000, bg_tiles, sizeof(bg_tiles));
+  /* Paint the checkerboard backdrop so the screen is visibly NOT blank. */
+  fill_bg();
   oam_clear();
 
   /* Start the music BEFORE rendering — FamiToneInit takes a few

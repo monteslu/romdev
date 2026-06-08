@@ -35,6 +35,19 @@ static const u32 sprite_tile[8] = {
     0x11111111, 0x11111111, 0x11111111, 0x11111111,
 };
 
+/* ── Backdrop tiles (4bpp) ───────────────────────────────────────────
+ * Two solid-colour BG tiles so we can lay a two-tone checkerboard across
+ * the whole BG0 map. Without a filled backdrop the screen is just the
+ * black backdrop colour and one tiny sprite — which reads as "blank". */
+static const u32 bg_tile1[8] = {
+    0x11111111, 0x11111111, 0x11111111, 0x11111111,
+    0x11111111, 0x11111111, 0x11111111, 0x11111111,
+};
+static const u32 bg_tile2[8] = {
+    0x22222222, 0x22222222, 0x22222222, 0x22222222,
+    0x22222222, 0x22222222, 0x22222222, 0x22222222,
+};
+
 /* Shadow OAM. Tonc's recommended pattern: allocate your own 128-slot
  * buffer in WRAM, mutate it freely each frame, then oam_copy to push
  * the changes to OAM hardware via DMA. */
@@ -81,12 +94,33 @@ int main(void) {
         ATTR2_PALBANK(0) | 0);
     obj_set_pos(&obj_buffer[0], x, y);
 
+    /* ── Filled checkerboard backdrop on BG0 ─────────────────────
+     * Lay a two-tone checkerboard across the whole 32x32 BG0 map so the
+     * frame has real content behind the sprite instead of a flat black
+     * backdrop (which reads as "blank"). BG tiles → char-block 0, map →
+     * screen-block 28 (the OBJ tiles live in char-block 4, so there's no
+     * clash). */
+    pal_bg_mem[0] = CLR_BLACK;
+    pal_bg_mem[1] = RGB15(3, 6, 14);   /* deep sky blue */
+    pal_bg_mem[2] = RGB15(2, 4, 9);    /* darker navy   */
+    tonccpy(&tile_mem[0][1], bg_tile1, sizeof(bg_tile1));
+    tonccpy(&tile_mem[0][2], bg_tile2, sizeof(bg_tile2));
+    REG_BG0CNT = BG_CBB(0) | BG_SBB(28) | BG_REG_32x32 | BG_4BPP | BG_PRIO(3);
+    {
+        SCR_ENTRY *map = se_mem[28];
+        int tx, ty;
+        for (ty = 0; ty < 32; ty++)
+            for (tx = 0; tx < 32; tx++)
+                map[ty * 32 + tx] = SE_BUILD(1 + ((tx ^ ty) & 1), 0, 0, 0);
+    }
+
     /* ── Display setup ───────────────────────────────────────────
      * DCNT_MODE0  — tiled mode (so BG0..3 are tile maps)
+     * DCNT_BG0    — enable the checkerboard backdrop
      * DCNT_OBJ    — enable sprites
      * DCNT_OBJ_1D — linear OAM tile addressing (vs the 2D matrix
      *               layout that's almost always wrong) */
-    REG_DISPCNT = DCNT_MODE0 | DCNT_OBJ | DCNT_OBJ_1D;
+    REG_DISPCNT = DCNT_MODE0 | DCNT_BG0 | DCNT_OBJ | DCNT_OBJ_1D;
 
     /* ── Game loop ───────────────────────────────────────────────
      * key_poll() updates the key state — call it once per frame.

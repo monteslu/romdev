@@ -32,6 +32,21 @@ static const uint8_t tile_data[16] = {
   0,    0,    0,    0,    0,    0,    0,    0,
 };
 
+/* Two BG tiles so the backdrop isn't a single flat colour (a uniform
+ * screen reads >=92% one colour and fails the blank-screen check):
+ *   tile 1 — solid colour 1
+ *   tile 2 — solid colour 2
+ * Checkerboarded across the nametable below. BG fetches from $1000-$1FFF
+ * under the default PPUCTRL, so these upload to the BG pattern table. */
+static const uint8_t bg_tiles[2 * 16] = {
+  /* tile 1: solid colour 1 */
+  0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+  /* tile 2: solid colour 2 */
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+  0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+};
+
 /* 32-byte palette: 4 BG palettes + 4 sprite palettes.
  * BG  index 0 ($3F00) is the universal backdrop.
  * SPR index 0 ($3F10) is transparent — always; the value is written
@@ -49,6 +64,21 @@ static const uint8_t palette[32] = {
   0x0F, 0x2A, 0x1A, 0x0A,
 };
 
+/* Fill nametable 0 ($2000) with a checkerboard of BG tiles 1 and 2 so the
+ * screen behind the sprite is visibly NOT blank. Attribute table stays at
+ * palette 0. Caller must have the PPU off. */
+static void fill_bg(void) {
+  uint16_t addr;
+  uint8_t y, x;
+  for (y = 0; y < 30; y++) {
+    addr = (uint16_t)(0x2000 + (uint16_t)y * 32);
+    for (x = 0; x < 32; x++) {
+      vram_unsafe_set(addr, (uint8_t)(((x ^ y) & 1) + 1));
+      ++addr;
+    }
+  }
+}
+
 void main(void) {
   uint8_t px = 124;       /* mid-screen X */
   uint8_t py = 110;       /* mid-screen Y */
@@ -63,6 +93,11 @@ void main(void) {
    * accidentally render garbage tiles. We use sprite-pattern table
    * at $0000-$0FFF since the default PPUCTRL has sprite_pattern=0. */
   chr_ram_upload(0x0010, tile_data, 16);
+
+  /* ── 2b. Upload BG tiles to the BG pattern table at $1000 and paint
+   * a checkerboard backdrop so the sprite isn't alone on a blank field. */
+  chr_ram_upload(0x1000, bg_tiles, sizeof(bg_tiles));
+  fill_bg();
 
   /* ── 3. Load palette ─────────────────────────────────────────── */
   palette_load(palette);

@@ -26,7 +26,19 @@ void main(void) {
   lynx_snd_play(0, (unsigned char *)demo_music);
 
   for (;;) {
-    tgi_clear();
+    /* CANONICAL LYNX FRAME LOOP — full redraw every frame: WAIT for Suzy's
+     * blitter (drawing mid-flight loses the frame → black), then clear with
+     * a full-screen bar (tgi_clear leaves the back page stale on this core)
+     * before drawing. The #1 "Lynx stays blank" trap. */
+    while (tgi_busy()) { }
+
+    /* Two colour bands so the backdrop is obviously not blank and no single
+     * colour fills the whole screen (a flat fill still reads as "blank"). */
+    tgi_setcolor(COLOR_BLUE);
+    tgi_bar(0, 0, tgi_getmaxx(), tgi_getmaxy());
+    tgi_setcolor(COLOR_PURPLE);
+    tgi_bar(0, 56, tgi_getmaxx(), 102);
+
     tgi_setcolor(COLOR_WHITE);
     tgi_outtextxy(20, 20, "LYNX MUSIC DEMO");
     tgi_setcolor(COLOR_YELLOW);

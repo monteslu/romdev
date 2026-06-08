@@ -176,10 +176,13 @@ int main(void) {
 
     consoleDrawText(14, 2, "SCORE");
     consoleDrawText(2, 26, "LR MOVE A ROT START DROP");
-    sfx_init();
     draw_grid();
 
+    /* Screen ON first, THEN sound. sfx_init() must run AFTER setScreenOn()
+     * (snes_sfx.h:63) — if the SPC stalls before the screen is on you get a
+     * black/forced-blank screen forever. */
     setScreenOn();
+    sfx_init();
 
     while (1) {
         pad = padsCurrent(0);

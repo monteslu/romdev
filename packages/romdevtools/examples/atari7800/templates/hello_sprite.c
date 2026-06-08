@@ -16,6 +16,8 @@
 #define P0C1      (*(volatile uint8_t*)0x21)
 #define P0C2      (*(volatile uint8_t*)0x22)
 #define P0C3      (*(volatile uint8_t*)0x23)
+#define P1C1      (*(volatile uint8_t*)0x25)
+#define P2C1      (*(volatile uint8_t*)0x29)
 #define MSTAT     (*(volatile uint8_t*)0x28)
 #define DPPH      (*(volatile uint8_t*)0x2C)
 #define DPPL      (*(volatile uint8_t*)0x30)
@@ -47,6 +49,42 @@ MK_DL(dl_row4); MK_DL(dl_row5); MK_DL(dl_row6); MK_DL(dl_row7);
 
 static uint8_t dl_empty[2] = { 0, 0 };
 
+/* ── Background playfield ─────────────────────────────────────────────
+ * Without a full-screen drawable the display list emits only the one
+ * sprite and ~99% of the screen stays the flat BACKGRND colour (reads as
+ * "blank"). These full-width bands fill every non-sprite zone with scenery
+ * so the frame has real content (same machinery as default.c).
+ *
+ * One scanline of solid pixels lives in ROM (band_pix). A single DL
+ * drawable is at most 32 bytes = 128 px wide, so a full 160-px line needs
+ * TWO drawables. Width (byte[3] low 5 bits) = 32-bytes; high 3 bits =
+ * palette: field uses palette 1, ground uses palette 2. */
+static const uint8_t band_pix[32] = {
+  0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,
+  0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55
+};
+#define MK_BAND(name, pal) static uint8_t name[11] = { \
+  0, 0x40, 0, ((pal) << 5) | 0,  0,    /* 128 px @ x0   */ \
+  0, 0x40, 0, ((pal) << 5) | 24, 128,  /* 32 px  @ x128 */ \
+  0 }
+MK_BAND(dl_field, 1);
+MK_BAND(dl_ground, 2);
+#define GROUND_ZONE 188
+
+static void set_band_addr(uint8_t* dl) {
+  uint16_t a = (uint16_t)(uintptr_t)band_pix;
+  dl[0] = dl[5] = (uint8_t)(a & 0xFF);
+  dl[2] = dl[7] = (uint8_t)(a >> 8);
+}
+
+/* Background DL for a non-sprite zone: sky (empty) up top, field in the
+ * middle, ground at the bottom. */
+static uint16_t bg_zone_dl(int zone) {
+  if (zone >= GROUND_ZONE) return (uint16_t)(uintptr_t)dl_ground;
+  if (zone >= 28)          return (uint16_t)(uintptr_t)dl_field;
+  return (uint16_t)(uintptr_t)dl_empty;
+}
+
 #define DLL_ZONES 243
 static uint8_t dll[DLL_ZONES * 3];
 
@@ -62,9 +100,9 @@ static void set_dll_entry(int idx, uint16_t dl_ptr) {
   dll[idx * 3 + 2] = (uint8_t)(dl_ptr & 0xFF);
 }
 
-/* Build the DLL with the sprite's 8 rows placed at DLL index sprite_y. */
+/* Build the DLL with the sprite's 8 rows placed at DLL index sprite_y;
+ * every other zone gets the background scenery band for its row. */
 static void build_dll(uint8_t sprite_y) {
-  uint16_t empty = (uint16_t)(uintptr_t)dl_empty;
   int i;
   for (i = 0; i < DLL_ZONES; i++) {
     uint16_t dl;
@@ -78,7 +116,7 @@ static void build_dll(uint8_t sprite_y) {
       case 5: dl = (uint16_t)(uintptr_t)dl_row5; break;
       case 6: dl = (uint16_t)(uintptr_t)dl_row6; break;
       case 7: dl = (uint16_t)(uintptr_t)dl_row7; break;
-      default: dl = empty; break;
+      default: dl = bg_zone_dl(i); break;   /* field/ground scenery */
     }
     set_dll_entry(i, dl);
   }
@@ -99,6 +137,10 @@ void main(void) {
   uint8_t x = 80;
   uint8_t y = 110;
 
+  /* Point the background bands at their shared ROM pixel row. */
+  set_band_addr(dl_field);
+  set_band_addr(dl_ground);
+
   /* Wire each DL's address bytes to its sprite-row data. */
   set_dl_addr(dl_row0, sprite_row0);
   set_dl_addr(dl_row1, sprite_row1);
@@ -112,10 +154,12 @@ void main(void) {
   set_x(x);
   build_dll(y);
 
-  BACKGRND = 0x88;
+  BACKGRND = 0x88;   /* light blue sky */
   P0C1     = 0x46;
   P0C2     = 0x0F;
   P0C3     = 0x36;
+  P1C1     = 0xC8;   /* field green (background band) */
+  P2C1     = 0x14;   /* ground brown (background band) */
   CHARBASE = 0;
   OFFSET   = 0;
 
