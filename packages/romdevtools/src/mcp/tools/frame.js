@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PNG } from "pngjs";
+import { resamplePng } from "../../host/framebuffer.js";
 import { getHost } from "../state.js";
 import { imageContent, jsonContent, safeTool } from "../util.js";
 import { decodeOAM, decodePpuRegs, ppuRegsPopulated } from "../../platforms/snes/ppu.js";
@@ -258,30 +259,6 @@ export function registerFrameTools(server, z, sessionKey) {
     }
   }
 
-  // Nearest-neighbor downscale of a PNG by an integer divisor. Nearest-neighbor
-  // (not averaging) is deliberate: it keeps pixel-art edges crisp and palette
-  // colors exact, so a half-size sanity-check shot still reads accurately. The
-  // PNG is fully decoded already (it's a tiny framebuffer), so this is cheap.
-  function downscalePng(pngBase64, scale) {
-    const src = PNG.sync.read(Buffer.from(pngBase64, "base64"));
-    const dw = Math.max(1, Math.round(src.width * scale));
-    const dh = Math.max(1, Math.round(src.height * scale));
-    const dst = new PNG({ width: dw, height: dh });
-    for (let y = 0; y < dh; y++) {
-      const sy = Math.min(src.height - 1, Math.floor(y / scale));
-      for (let x = 0; x < dw; x++) {
-        const sx = Math.min(src.width - 1, Math.floor(x / scale));
-        const si = (sy * src.width + sx) * 4;
-        const di = (y * dw + x) * 4;
-        dst.data[di] = src.data[si];
-        dst.data[di + 1] = src.data[si + 1];
-        dst.data[di + 2] = src.data[si + 2];
-        dst.data[di + 3] = src.data[si + 3];
-      }
-    }
-    return { base64: PNG.sync.write(dst).toString("base64"), width: dw, height: dh };
-  }
-
   // PNG capture. Writes to outPath, or returns inline when `inline`.
   async function shootPng({ path: outPath, inline, overlayBoxes, scale }) {
     const host = getHost(sessionKey);
@@ -300,16 +277,18 @@ export function registerFrameTools(server, z, sessionKey) {
         overlayInfo = { platform, spritesDrawn: 0, note: `overlay not yet supported for '${platform}'` };
       }
     }
-    // Downscale AFTER overlay so the boxes scale with the image. scale=1 (or
-    // unset) is the full-resolution default; a quarter-size shot is ~75%
-    // fewer image tokens for routine "did it change?" sanity checks.
-    if (scale && scale < 1) {
-      const small = downscalePng(pngBase64, scale);
-      pngBase64 = small.base64; width = small.width; height = small.height;
+    // Resample AFTER overlay so the boxes scale with the image. scale=1 (or
+    // unset) is the native-resolution default; scale<1 is a downscaled shot
+    // (~75% fewer image tokens for routine "did it change?" sanity checks),
+    // scale>=2 is an integer up-scale so tiny handheld targets read legibly.
+    const scaled = scale && scale !== 1;
+    if (scaled) {
+      const r = resamplePng(pngBase64, scale);
+      pngBase64 = r.base64; width = r.width; height = r.height;
     }
     if (!inline) {
       await writeFile(outPath, Buffer.from(pngBase64, "base64"));
-      const json = jsonContent({ path: outPath, width, height, ...(scale && scale < 1 ? { scale, fullWidth: shot.width, fullHeight: shot.height } : {}), overlay: overlayInfo });
+      const json = jsonContent({ path: outPath, width, height, ...(scaled ? { scale, fullWidth: shot.width, fullHeight: shot.height } : {}), overlay: overlayInfo });
       json._observerImages = [{ kind: "image", mimeType: "image/png", base64: pngBase64 }];
       return json;
     }
@@ -321,7 +300,7 @@ export function registerFrameTools(server, z, sessionKey) {
     return {
       content: [
         imageContent(pngBase64),
-        { type: "text", text: `framebuffer ${shot.width}x${shot.height}${scale && scale < 1 ? ` (scaled to ${width}x${height})` : ""}${overlayInfo ? ` (overlay: ${overlayInfo.spritesDrawn} sprites)` : ""} — also written to ${tempPath} (use this path for ImageMagick/crops; pass outputPath for a permanent location).` },
+        { type: "text", text: `framebuffer ${shot.width}x${shot.height}${scaled ? ` (scaled ${scale}x to ${width}x${height})` : ""}${overlayInfo ? ` (overlay: ${overlayInfo.spritesDrawn} sprites)` : ""} — also written to ${tempPath} (use this path for ImageMagick/crops; pass outputPath for a permanent location).` },
       ],
     };
   }
@@ -414,7 +393,7 @@ export function registerFrameTools(server, z, sessionKey) {
     "level with 7200; prefer ONE big call.\n" +
     "'screenshot': capture the latest frame. `format:'png'` (default, exact colors) or `'ascii'` (lossy chafa text " +
     "render for agents that can't view images). `overlayBoxes` (png) draws a box per visible sprite (SNES+NES only); " +
-    "`scale` (0<≤1) downscales (~75% fewer image tokens at 0.5); ascii cols/rows/symbols/colors knobs in the param hints. " +
+    "`scale` (png) resamples nearest-neighbor BOTH ways: 0<scale<1 DOWNscales (~75% fewer image tokens at 0.5), integer scale≥2 UPscales so tiny handheld targets read inline (e.g. scale:4 → GB 160x144 becomes 640x576); ascii cols/rows/symbols/colors knobs in the param hints. " +
     "**CHEAP VERIFY: for a binary pass/fail check (theme changed? sprite present? HUD ticked?) prefer scale:0.5 or " +
     "format:'ascii' — BETTER, read the byte directly: symbols({op:'resolve', name}) → memory({op:'read'}) is a 1-byte " +
     "assertion that costs zero image tokens.**\n" +
@@ -438,7 +417,7 @@ export function registerFrameTools(server, z, sessionKey) {
       path: z.string().optional().describe("op=screenshot/stepAndShot: absolute path to write to (required unless inline:true)."),
       inline: z.boolean().default(false).describe("op=screenshot/stepAndShot: return the image in the response instead of writing to disk."),
       overlayBoxes: z.boolean().default(false).describe("op=screenshot png: draw a colored bounding box per visible sprite (SNES+NES only)."),
-      scale: z.number().gt(0).max(1).optional().describe("op=screenshot png: downscale factor (0<scale≤1, nearest-neighbor). 0.5 ≈ 75% fewer image tokens."),
+      scale: z.number().gt(0).max(16).refine((s) => s <= 1 || Number.isInteger(s), { message: "scale must be 0<scale≤1 (downscale) or an integer ≥2 (upscale)" }).optional().describe("op=screenshot png: nearest-neighbor resample factor. 0<scale<1 DOWNscales (0.5 ≈ 75% fewer image tokens for cheap 'did it change?' checks); scale≥2 (integer) UPscales (nearest-neighbor — keeps pixel-art crisp) so tiny handheld targets are legible inline, e.g. scale:4 makes a GB 160x144 shot 640x576. scale=1/unset = native resolution."),
       cols: z.number().int().min(4).max(640).optional().describe("op=screenshot ascii: terminal columns (default fb_width/16)."),
       rows: z.number().int().min(4).max(480).optional().describe("op=screenshot ascii: terminal rows (default fb_height/16)."),
       symbols: z.enum(["ascii", "halfblock", "block", "quad", "sextant"]).default("ascii").describe("op=screenshot ascii: chafa symbol set."),

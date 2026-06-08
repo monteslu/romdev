@@ -113,3 +113,40 @@ export function framebufferToScreenshot(width, height, src, pitch, format) {
   const buf = framebufferToPng(width, height, src, pitch, format);
   return { width, height, pngBase64: buf.toString("base64") };
 }
+
+/**
+ * Nearest-neighbor resample of a base64 PNG by `scale`. Works BOTH directions:
+ *   scale<1  → downscale (e.g. 0.5 = half size; ~75% fewer image tokens for a
+ *              routine "did it change?" sanity check).
+ *   scale>=2 → integer up-scale (e.g. 4 = 4x size) so tiny handheld targets
+ *              (GB/GG 160x144, etc.) are legible inline without ImageMagick.
+ *
+ * Nearest-neighbor (not averaging/smoothing) is deliberate in both directions:
+ * it keeps pixel-art edges crisp and palette colors exact, so a scaled shot
+ * still reads accurately. The PNG is fully decoded already (it's a tiny
+ * framebuffer), so this is cheap. Platform-agnostic — same pixel scaling for
+ * every core.
+ *
+ * @param {string} pngBase64 source PNG, base64-encoded
+ * @param {number} scale resample factor (>0)
+ * @returns {{ base64: string, width: number, height: number }}
+ */
+export function resamplePng(pngBase64, scale) {
+  const src = PNG.sync.read(Buffer.from(pngBase64, "base64"));
+  const dw = Math.max(1, Math.round(src.width * scale));
+  const dh = Math.max(1, Math.round(src.height * scale));
+  const dst = new PNG({ width: dw, height: dh });
+  for (let y = 0; y < dh; y++) {
+    const sy = Math.min(src.height - 1, Math.floor(y / scale));
+    for (let x = 0; x < dw; x++) {
+      const sx = Math.min(src.width - 1, Math.floor(x / scale));
+      const si = (sy * src.width + sx) * 4;
+      const di = (y * dw + x) * 4;
+      dst.data[di] = src.data[si];
+      dst.data[di + 1] = src.data[si + 1];
+      dst.data[di + 2] = src.data[si + 2];
+      dst.data[di + 3] = src.data[si + 3];
+    }
+  }
+  return { base64: PNG.sync.write(dst).toString("base64"), width: dw, height: dh };
+}
