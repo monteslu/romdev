@@ -143,8 +143,9 @@ static const uint8_t rooms[ROOMS][ROWS * COLS] = {
 
 /* ── Helpers ────────────────────────────────────────────────────── */
 static void copy_to_vram(uint8_t *dst, const uint8_t *src, uint16_t n) {
-  uint16_t i;
-  for (i = 0; i < n; i++) dst[i] = src[i];
+  /* Delegate to the runtime's pointer-walk copy — an indexed dst[i]=src[i]
+   * loop into VRAM is miscompiled by SDCC sm83. */
+  memcpy_vram(dst, src, n);
 }
 
 static void load_bg_palette(void) {

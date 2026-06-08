@@ -123,6 +123,7 @@ void main(void) {
   do {
     uint8_t p1, p2;
     uint8_t slot;
+    int16_t target;
     sms_vblank_wait();
     sfx_update();
 
@@ -144,12 +145,13 @@ void main(void) {
     if ((p1 & JOY_UP)   && p1y > COURT_TOP)            p1y -= 2;
     if ((p1 & JOY_DOWN) && p1y < COURT_BOT - PADDLE_H) p1y += 2;
 
-    /* P2 input if any, otherwise AI. */
+    /* P2 input if any, otherwise AI. (`target` is declared at the top of the
+     * loop body — SDCC is C89, declarations must precede statements.) */
     if (p2 != 0) {
       if ((p2 & JOY_UP)   && p2y > COURT_TOP)            p2y -= 2;
       if ((p2 & JOY_DOWN) && p2y < COURT_BOT - PADDLE_H) p2y += 2;
     } else {
-      int16_t target = by - PADDLE_H / 2;
+      target = by - PADDLE_H / 2;
       if (p2y < target && p2y < COURT_BOT - PADDLE_H) p2y += 1;
       else if (p2y > target && p2y > COURT_TOP)       p2y -= 1;
     }

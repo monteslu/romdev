@@ -45,7 +45,9 @@ static const Rect platforms[] = {
     { 440, 120,  56,   8 },
     { 180,  52,  48,   8 },
 };
-#define N_PLATFORMS (sizeof(platforms) / sizeof(platforms[0]))
+/* (int) cast so `for (int i = 0; i < N_PLATFORMS; ...)` doesn't compare a
+ * signed counter against an unsigned size_t (-Wsign-compare). */
+#define N_PLATFORMS ((int)(sizeof(platforms) / sizeof(platforms[0])))
 
 static OBJ_ATTR obj_buffer[128];
 
