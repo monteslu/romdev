@@ -19,7 +19,14 @@ screens that joystick can't reach. The VICE core now exports
 - **`input({op:'joyport', joyport?})`** — read/set the active C64 joystick port
   (1 or 2; default 2, most games).
 - `input({op:'layout', platform:'c64'})` now reports the keyboard keys + joyport.
-(romdev-core-vice 0.7.0.)
+
+**A controller alone plays C64** (the Batocera/RetroDeck model — no physical
+keyboard needed). Spare pad buttons/stick map to the C64 keyboard keys games need
+to start: X/Space=Space, L2=Run/Stop, R2=Return, top face / right-stick =
+F1/F3/F5/F7; d-pad + Fire stay the joystick. Unified in the host so it works the
+same in the playtest window AND for the agent's headless `setInput`. No-controller
+keyboard fallback maps PC F1–F4/Space/Enter to the same C64 keys.
+`playtest({op:'open'})` on a C64 game relays the controls. (romdev-core-vice 0.7.0.)
 
 ## 0.23.0
 
