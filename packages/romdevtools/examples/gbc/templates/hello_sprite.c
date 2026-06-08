@@ -54,6 +54,8 @@ void main(void) {
   uint8_t x = 80;       /* hardware X = screen X + 8 */
   uint8_t y = 80;       /* hardware Y = screen Y + 16 */
   uint8_t i;
+  uint8_t *bg_map;
+  uint16_t j;
 
   /* ── 1. LCD off (safe whether it was on or off) ──────────────────
    * lcd_init_default() checks LCDC.7 and only waits for vblank if the
@@ -70,6 +72,13 @@ void main(void) {
    * into VRAM can be optimized away by SDCC and leave VRAM empty. See
    * TROUBLESHOOTING.md "VRAM stays empty / sprite never appears". */
   memcpy_vram((uint8_t *)0x8010, tile_data, 16);
+
+  /* ── 2b. Fill the BG tilemap so the screen isn't an empty backdrop. ──
+   * With LCDC_TILE_DATA_LO ($8000 addressing) BG tile index 1 == our tile
+   * at $8010 — so we tile the whole 32×32 BG map with it. Pointer-walk write
+   * (NOT bg_map[k]=1, which SDCC sm83 miscompiles into VRAM). */
+  bg_map = (uint8_t *)0x9800;
+  for (j = 0; j < 32u * 32u; j++) *bg_map++ = 1;
 
   /* ── 3. Object palette 0 (CGB path) ──────────────────────────────
    * OCPS bit 7 = auto-increment after each write; bits 5..3 = palette
@@ -102,9 +111,9 @@ void main(void) {
   oam_dma_flush();
 
   /* ── 5. Turn the LCD back on with BG + OBJ enabled. ──────────────
-   * LCDC bits: 0x80=LCD on, 0x02=OBJ on, 0x10=tile data at $8000.
-   * (BG remains off — we have no BG map set up.) */
-  LCDC = LCDC_LCD_ON | LCDC_OBJ_ON | LCDC_TILE_DATA_LO;
+   * LCDC bits: 0x80=LCD on, 0x01=BG on, 0x02=OBJ on, 0x10=tile data at $8000.
+   * BG is on now that we filled the BG map in step 2b. */
+  LCDC = LCDC_LCD_ON | LCDC_BG_ON | LCDC_OBJ_ON | LCDC_TILE_DATA_LO;
 
   /* ── 6. APU on — let the player beep ──────────────────────────── */
   sound_init();
