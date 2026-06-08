@@ -300,6 +300,42 @@ test("pressDuring honors platform button aliases (Genesis c -> a)", async () => 
   assert.ok(sawA, "Genesis 'c' resolved to libretro 'a' before setInput");
 });
 
+// v0.16.0-feedback (more): the input-inheritance bug. A watch with NO
+// pressDuring schedule used to push an empty [{},{}] setInput on frame 0,
+// silently neutralizing a pad held via input({op:'set'}). It must now leave
+// input ENTIRELY untouched so the held state carries through (like frame:step).
+test("watch WITHOUT pressDuring never touches setInput (inherits held input)", async () => {
+  // Simulate the user having held Right via input({op:'set'}): the host's input
+  // is "already held". The fake host's byte advances every frame regardless;
+  // the point is purely that the watch makes ZERO setInput calls.
+  const host = makeHost({ system_ram: [0] }, (f, mem) => { mem.system_ram[0] = f & 0xFF; });
+  setHost("test-session", host);
+  const handler = getWatchHandler();
+  const res = parseResult(await handler({
+    region: "system_ram", offset: 0, length: 1, frames: 20, onChange: "any",
+    // no pressDuring
+  }));
+  assert.ok(res.eventCount >= 1, "watch still ran and saw changes");
+  assert.equal(host.inputLog.length, 0,
+    "watch with no pressDuring made ZERO setInput calls — the held pad is inherited, not reset");
+});
+
+// And the converse: a pressDuring schedule STILL owns the pad (drives + releases),
+// so deterministic capture is unchanged by the inheritance fix.
+test("watch WITH pressDuring still drives and releases input", async () => {
+  const host = makeHost({ system_ram: [0] }, () => {});
+  setHost("test-session", host);
+  const handler = getWatchHandler();
+  await handler({
+    region: "system_ram", offset: 0, length: 1, frames: 10, onChange: "any",
+    pressDuring: [{ frame: 2, button: "right", holdFrames: 3 }],
+  });
+  const sawRight = host.inputLog.some((e) => e.input?.ports?.[0]?.right === true);
+  assert.ok(sawRight, "scheduled right press reached setInput");
+  const lastInput = host.inputLog[host.inputLog.length - 1];
+  assert.equal(lastInput.input.ports[0].right, undefined, "released after the hold window");
+});
+
 // v15-feedback (more): compact value-vs-frame timeline for a per-frame ramp.
 test("format:'series' returns a compact value-vs-frame curve per offset", async () => {
   // A monotonic ramp: byte = frame, changing every single frame.
