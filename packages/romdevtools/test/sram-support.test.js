@@ -6,7 +6,6 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -14,10 +13,12 @@ import path from "node:path";
 import { resolveCore } from "../src/cores/registry.js";
 import { LibretroHost } from "../src/host/LibretroHost.js";
 import { identifyFile } from "../src/rom-id/identifier.js";
+import { NES_BATTERY_ROM, A7800_HOMEBREW } from "./rom-fixtures.js";
 
-const DW = "<ROMDEV_TEST_ROM>"; // real battery RPG
+// Optional external ROM with a battery (real NES RPG). See test/rom-fixtures.js.
+const DW = NES_BATTERY_ROM;
 
-test("cart identify reports saveRam.hasBattery + bytes (NES battery cart)", { skip: !existsSync(DW) }, async () => {
+test("cart identify reports saveRam.hasBattery + bytes (NES battery cart)", { skip: !DW }, async () => {
   const id = await identifyFile(DW);
   assert.ok(id.saveRam, "no saveRam field");
   assert.equal(id.saveRam.hasBattery, true);
@@ -35,7 +36,7 @@ test("identify: a non-battery NES (password) cart reports saveRam.hasBattery=fal
   assert.equal(id.saveRam.bytes, 0);
 });
 
-test("SAVE_RAM live read/write + exportSram→importSram round-trip (NES battery)", { timeout: 120000, skip: !existsSync(DW) }, async () => {
+test("SAVE_RAM live read/write + exportSram→importSram round-trip (NES battery)", { timeout: 120000, skip: !DW }, async () => {
   const core = resolveCore("nes");
   const host = new LibretroHost();
   await host.loadCore(core.jsPath, core.wasmPath);
@@ -66,8 +67,8 @@ test("SAVE_RAM live read/write + exportSram→importSram round-trip (NES battery
 });
 
 test("empty save_ram gives an HONEST message on a no-battery system (atari7800)", { timeout: 60000 }, async () => {
-  const a78 = "<ROMDEV_TEST_ROM>";
-  if (!existsSync(a78)) return;
+  const a78 = A7800_HOMEBREW;
+  if (!a78) return;
   const core = resolveCore("atari7800");
   const host = new LibretroHost();
   await host.loadCore(core.jsPath, core.wasmPath);

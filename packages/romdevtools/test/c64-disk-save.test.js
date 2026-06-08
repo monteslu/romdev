@@ -6,14 +6,13 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
-
 import { resolveCore } from "../src/cores/registry.js";
 import { LibretroHost } from "../src/host/LibretroHost.js";
 import { prgToD64, readDirectory, extractFile } from "../src/platforms/c64/d64.js";
+import { C64_HOMEBREW_PRG } from "./rom-fixtures.js";
 
-const PRG = "<ROMDEV_TEST_ROM>";
-const have = existsSync(PRG);
+const PRG = C64_HOMEBREW_PRG;
+const have = !!PRG;
 
 async function bootDisk() {
   const { readFileSync } = await import("node:fs");
