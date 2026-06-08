@@ -49,10 +49,8 @@ function vasm68kPreflight(source) {
   const issues = [];
 
   // Check 1: source includes an org $00000000 or starts at $00 implicitly.
-  // vasm68k defaults to $00000000 if no org is given, so missing org is fine.
-  // But if an `org $00000200` (or similar) appears WITHOUT a preceding
-  // vector table, the cart is unbootable.
-  const hasOrg0 = /\borg\s+\$0+\b/i.test(source) || /\borg\s+0\b/i.test(source);
+  // vasm68k defaults to $00000000 if no org is given, so a missing org is fine;
+  // what actually breaks boot is a missing reset vector, which we check below.
   const hasReset = /\bdc\.l\s+(\$00FF[E-F][0-9A-F]{3}|_reset|reset)\b/i.test(source);
   if (!hasReset) {
     issues.push(

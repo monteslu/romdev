@@ -8,7 +8,7 @@
 // always reports `source: "file" | "emulator"` so the caller knows which.
 
 import { readFile } from "node:fs/promises";
-import { getHostOrNull, getHost } from "../state.js";
+import { getHost } from "../state.js";
 import { jsonContent, imageContent, textContent, safeTool } from "../util.js";
 import { inspectPatternTilesCore } from "./platform-tools.js";
 import { extractSpriteSheetCore } from "./rom-id.js";

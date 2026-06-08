@@ -102,8 +102,8 @@ export function decodeSnes9xDSP(state) {
       bufLastSamples.push(u >= 0x8000 ? u - 0x10000 : u);
     }
     p += 24;
-    const interpPos = state[p] | (state[p + 1] << 8); p += 2;
-    const brrAddr = state[p] | (state[p + 1] << 8); p += 2;
+    p += 2; // interpPos (decoded field, not surfaced)
+    p += 2; // brrAddr (decoded field, not surfaced)
     const env = state[p] | (state[p + 1] << 8); p += 2;
     const hiddenEnvU = state[p] | (state[p + 1] << 8); p += 2;
     const hiddenEnv = hiddenEnvU >= 0x8000 ? hiddenEnvU - 0x10000 : hiddenEnvU;

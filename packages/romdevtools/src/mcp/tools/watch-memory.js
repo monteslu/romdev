@@ -144,7 +144,7 @@ const MEMORY_REGIONS = /** @type {[string, ...string[]]} */ (Object.keys(MemoryR
 // with WHY, instead of burning all maxFrames on a meaningless miss.
 function makeAbortGuard(host, abortIf) {
   const specs = Array.isArray(abortIf) ? abortIf : [];
-  const watched = specs.map((s, i) => {
+  const watched = specs.map((s, _i) => {
     const region = s.region ?? "system_ram";
     const offset = s.offset ?? 0;
     let before;

@@ -75,7 +75,7 @@ static u16 ${v}_draw(u16 firstSlot, s16 x, s16 y, u16 baseTile) {
 }
 
 // ---- SNES (PVSnesLib oamSet-style) ----
-function emitSnes(v, layout, tiles, palette) {
+function emitSnes(v, layout, tiles, _palette) {
   const pieces = layout.pieces.map((p) => {
     // PVSnesLib oamSet: size 0=8x8/16x16 small/large per OBSEL — we expose
     // wPx/hPx and let the user pick the OBSEL pair; flip bits in attr.
@@ -99,7 +99,7 @@ const unsigned short ${v}_piece_count = ${layout.pieces.length};
 }
 
 // ---- NES (shadow-OAM bytes) ----
-function emitNes(v, layout, tiles, palette) {
+function emitNes(v, layout, tiles, _palette) {
   // NES draw = write 4 OAM bytes per cell (y, tile, attr, x). We emit pieces
   // as (x,y,tile,attr) so the user copies them into shadow OAM at their base.
   const cells = [];
@@ -127,7 +127,7 @@ const unsigned char ${v}_cell_count = ${cells.length};
 }
 
 // ---- GB/GBC (shadow-OAM bytes) ----
-function emitGb(v, layout, tiles, palette) {
+function emitGb(v, layout, tiles, _palette) {
   const cells = [];
   for (const p of layout.pieces) {
     for (let r = 0; r < p.hTiles; r++) {

@@ -51,7 +51,7 @@ function zeroRatio(bytes) {
  * @param {boolean} [opts.bigEndian] platform endianness (for pointer-table guess)
  * @returns {{ looksLike: string, printableRatio:number, entropy:number, zeroRatio:number, longestAsciiRun:number, asciiPreview:string|null, confidence:string, note:string }}
  */
-export function classifyBytes(bytes, opts = {}) {
+export function classifyBytes(bytes, _opts = {}) {
   const pr = printableRatio(bytes);
   const ent = entropy(bytes);
   const zr = zeroRatio(bytes);

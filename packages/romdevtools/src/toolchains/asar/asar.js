@@ -260,15 +260,6 @@ function lorom(fileStart, fileEnd) {
   return `${fmt(bankStart, offStart)}..${fmt(bankEnd, offEnd)} (spans banks)`;
 }
 
-function ensureDir(FS, dir) {
-  const parts = dir.split("/").filter(Boolean);
-  let cur = "";
-  for (const p of parts) {
-    cur += "/" + p;
-    try { FS.mkdir(cur); } catch {}
-  }
-}
-
 // Static analyzer for known asar landmines. Runs before the WASM call so
 // we can return a helpful error instead of letting asar abort silently.
 // Returns null when source looks clean, or a string with the diagnostic.

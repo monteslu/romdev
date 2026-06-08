@@ -147,7 +147,6 @@ test("SNES RE primitives: setRegister + watchRange + logPCRange (+callSubroutine
   }
   // The key item-1 guarantees (setRegister round-trip + PC-set-executes) are
   // asserted above; callSubroutine end-to-end on 65816 is host-layer-blocked.
-  // eslint-disable-next-line no-console
   console.log("SNES callSubroutine status (host-layer m68k-shaped; expected mismatch on 65816):",
     JSON.stringify({ ...csStatus, pcNow }));
 });

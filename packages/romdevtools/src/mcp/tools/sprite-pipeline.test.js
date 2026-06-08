@@ -129,12 +129,7 @@ test("quantizePngForPlatform(gbc, mode:luminance): sorts palette by luma so idx 
     const r = await quantizePngForPlatformImpl({ path: src, platform: "gbc", outputPath: out, mode: "luminance", intent: "homebrew" });
     assert.equal(r.paletteEntries, 4);
     // First palette entry should be the lightest.
-    const decoded = PNG.sync.read(readFileSync(out));
     // First pixel of source = black; after luminance sort, black has the highest index, not 0.
-    // The lightest source color (240,240,240) maps to index 0. The pixel for that color
-    // is at x=3 in source.
-    const idxLightest = decoded.data[3 * 4]; // first byte of last pixel
-    const idxDarkest = decoded.data[0];
     // We can verify by examining hex of paletteEntries: r.palette[0] should be the brightest.
     assert.equal(r.palette[0], "#f0f0f0");
     assert.equal(r.palette[3], "#000000");

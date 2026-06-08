@@ -17,8 +17,9 @@
 // loaders apply), exactly matching the C's `u8* data` / `u16* data` after the
 // delta decode. samp.format & SAMPF_16BIT selects which.
 
-import { SAMPF_16BIT, SAMPF_SIGNED, SAMPF_COMP, CLAMP } from './util.js';
+import { SAMPF_16BIT, SAMPF_SIGNED, CLAMP } from './util.js';
 
+// eslint-disable-next-line no-unused-vars -- NDS-only value, kept for mmutil parity
 const MAX_UNROLL_THRESHOLD = 1024; // will unroll upto 1kb more of data (NDS)
 const GBA_MIN_LOOP_SIZE = 512;
 

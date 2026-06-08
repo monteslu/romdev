@@ -127,7 +127,7 @@ async function compileSgdkRuntime(baseHeaders, cc1Options) {
   for (const [k, v] of Object.entries(localHeaders)) {
     if (/\.i80$/i.test(k)) z80Includes[path.basename(k)] = v;
   }
-  async function loadI80From(dir, rel = "") {
+  async function loadI80From(dir, _rel = "") {
     let ents;
     try { ents = await readdir(dir, { withFileTypes: true }); } catch { return; }
     for (const e of ents) {

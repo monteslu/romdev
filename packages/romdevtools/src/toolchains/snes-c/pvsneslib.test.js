@@ -30,20 +30,6 @@ int main(void) {
 }
 `;
 
-// Tiny data.asm providing tilfont + palfont symbols. Real users would
-// generate this from `gfx4snes` against an actual font PNG; we use stubs
-// so the link resolves.
-const DATA_ASM = `
-.include "hdr.asm"
-
-.section ".rodata1" superfree
-tilfont:
-.db 0, 0, 0, 0, 0, 0, 0, 0
-palfont:
-.db 0, 0, 0, 0, 0, 0, 0, 0
-.ends
-`;
-
 test("buildSnesC pvsneslib mode: links #include <snes.h> + consoleDrawText to a SNES ROM", async () => {
   // Note: the smoke test for the full include + link path uses headers
   // map for data.asm so the unresolved tilfont/palfont references resolve.

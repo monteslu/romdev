@@ -4,7 +4,6 @@
 // per-palette overrides.
 
 import { jsonContent, safeTool } from "../util.js";
-import { resolveIntent } from "../../platforms/common/intent.js";
 import { inspectPaletteCore, getPlatformMasterPaletteCore } from "./platform-tools.js";
 
 /** lospec.com hosts each palette at https://lospec.com/palette-list/<id>.json. */
@@ -59,24 +58,6 @@ async function fetchLospecPalette(id) {
     colors,
     url: `https://lospec.com/palette-list/${id}`,
   };
-}
-
-/**
- * Snap each color in `palette` to the nearest entry in `master`.
- * Used when the caller wants a lospec palette but the platform has a
- * fixed hardware palette (NES 2C02 master, etc.).
- */
-function snapToMaster(palette, master) {
-  return palette.map(([r, g, b]) => {
-    let best = master[0];
-    let bestD = Infinity;
-    for (const [mr, mg, mb] of master) {
-      const dr = r - mr, dg = g - mg, db = b - mb;
-      const d = dr * dr + dg * dg + db * db;
-      if (d < bestD) { bestD = d; best = [mr, mg, mb]; }
-    }
-    return best;
-  });
 }
 
 /**

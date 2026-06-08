@@ -14,7 +14,7 @@
 // temp file and loaded into the matching libretro core. Platform is
 // inferred from the file extension if not given.
 
-import { writeFile, mkdtemp, readdir } from "node:fs/promises";
+import { writeFile, mkdtemp } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -108,12 +108,10 @@ async function playCommand(romPath, opts) {
 
   // Extract zip if needed
   let actualPath = romPath;
-  let extracted = false;
   if (path.extname(romPath).toLowerCase() === ".zip") {
     console.error(`unzipping ${path.basename(romPath)}...`);
     const { tempPath, originalName } = await extractFirstRomFromZip(romPath);
     actualPath = tempPath;
-    extracted = true;
     console.error(`  → ${originalName} (${statSync(tempPath).size} bytes)`);
   }
 

@@ -222,7 +222,6 @@ export function readDirectory(d64) {
     const nextS = img[base + 1];
     // 8 entries per sector, 32 bytes each, first entry at +2 then every +32.
     for (let e = 0; e < 8; e++) {
-      const eb = base + 2 + e * 32 - (e === 0 ? 0 : 0);
       const entryBase = base + (e === 0 ? 2 : 2 + e * 32);
       const typeByte = img[entryBase + 0];
       if ((typeByte & 0x0f) === 0 && typeByte === 0) continue; // empty slot

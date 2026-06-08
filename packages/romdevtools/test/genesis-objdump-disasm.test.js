@@ -7,7 +7,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
-import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import { runObjdump, objdumpAvailable, normalizeObjdump } from "../src/toolchains/objdump.js";

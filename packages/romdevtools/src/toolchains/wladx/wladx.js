@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
-import { runIsolated, textFile, binaryFile, getOutputBytes, getOutputText } from "../_worker/run.js";
+import { runIsolated, textFile, binaryFile, getOutputBytes } from "../_worker/run.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

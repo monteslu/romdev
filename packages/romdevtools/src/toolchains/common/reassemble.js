@@ -20,7 +20,6 @@ const hex2 = (b) => "$" + (b & 0xFF).toString(16).padStart(2, "0").toUpperCase()
 // Label form across disassemblers: `L` + 4..8 hex digits (m68k targets can be
 // 24-bit, e.g. an $E0FF00xx RAM mirror → LE0FF0080).
 const LABEL_RE = /^(L[0-9A-Fa-f]{4,8}):\s*$/;
-const LABEL_REF_RE = /\bL[0-9A-Fa-f]{4,8}\b/g;
 
 /** Parse one disasm line into {label?, code?, bytes?[]}. */
 function parseLine(line) {

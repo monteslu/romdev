@@ -210,6 +210,7 @@ test("R54 #6: GBC default.c is distinctly the GBC starter (uses BCPS, calls out 
 
 test("R54 #9: getRenderingContextCore accepts sessionKey as a parameter", async () => {
   const { getRenderingContextCore } = await import("../src/mcp/tools/rendering-context.js");
+  assert.equal(typeof getRenderingContextCore, "function", "export is present");
   // We can't easily invoke it without a loaded host — just check the
   // function signature destructures sessionKey. Read the source.
   const src = await readSrc("src/mcp/tools/rendering-context.js");

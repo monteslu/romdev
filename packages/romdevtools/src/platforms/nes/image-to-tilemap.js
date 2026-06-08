@@ -275,6 +275,9 @@ export function nesImageToTilemap(args) {
   // unique 8×8 patterns exist naturally. Returning the unmerged result
   // gives the caller a chance to retry; just be aware nametable indices
   // > 255 will wrap on hardware.
+  // Permanently disabled (see note above) but kept as documentation of the
+  // rejected greedy-merge approach.
+  // eslint-disable-next-line no-constant-condition, no-constant-binary-expression
   if (false && dedup && tileList.length > maxTiles) {
     const tileDist = (a, b) => {
       let d = 0;

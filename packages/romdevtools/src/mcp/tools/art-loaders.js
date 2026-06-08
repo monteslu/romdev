@@ -407,7 +407,7 @@ function aseCelToRgba(cel, colorDepth, palette) {
   return rgba;
 }
 
-async function loadAsepriteSheetImpl({ path: asePath, platform, tile_size = 8, outputDir, slice_strategy = "slices", emit = "raw", emitDefines = false }) {
+async function loadAsepriteSheetImpl({ path: asePath, platform, _tile_size = 8, outputDir, slice_strategy = "slices", emit = "raw", emitDefines = false }) {
   const buf = await readFile(asePath);
   const ase = new Aseprite(buf, path.basename(asePath));
   ase.parse();

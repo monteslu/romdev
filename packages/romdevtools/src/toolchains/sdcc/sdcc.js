@@ -56,7 +56,7 @@ export const SDCC_PORTS = {
   msx:        { marg: "z80",      libDir: "z80" },
 };
 
-import { runIsolated, textFile, binaryFile, getOutputBytes, getOutputText } from "../_worker/run.js";
+import { runIsolated, textFile, getOutputText } from "../_worker/run.js";
 
 /**
  * Tag the abort/crash log with the SDCC-flavored hint pointing at the

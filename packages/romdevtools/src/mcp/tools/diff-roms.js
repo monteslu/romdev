@@ -49,7 +49,7 @@ function regionMapForRom(platform, data) {
  * live anywhere the developer wants. We tag the header so diffs there
  * are obvious.
  */
-function regionMapSms(data, platform) {
+function regionMapSms(data, _platform) {
   const regions = [];
   // Header lives at $7FF0 IF the file is at least 32 KB. Some homebrew
   // skips the header entirely (just runs from $0000) — flag with kind

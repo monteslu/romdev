@@ -23,8 +23,6 @@
 // lowest error and use that. The first block of any sample MUST use
 // filter 0 (no other choice has valid p1/p2 history).
 
-const BRR_BUF_DECODE = 16;  // samples per block
-
 /** snes9x CLAMP16: saturate to int16. */
 function clamp16(io) {
   // The macro: if int16(io) != io, io = (io >> 31) ^ 0x7FFF

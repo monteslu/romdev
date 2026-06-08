@@ -418,7 +418,7 @@ export function CONV_XM_EFFECT(fxIn, paramIn) {
           break;
         case 15: // event
           wfx = 'S'.charCodeAt(0) - cho;
-          wpm = wpm; // (C: wpm = wpm;)
+          // (C source: wpm = wpm; — a no-op, preserved as a comment)
           break;
         case 0: // set filter
           wfx = 0;
@@ -438,7 +438,7 @@ export function CONV_XM_EFFECT(fxIn, paramIn) {
 
     case 16: // Gxx set global volume
       wfx = 'V'.charCodeAt(0) - cho;
-      wpm = wpm;
+      // (C source: wpm = wpm; — a no-op)
       break;
 
     case 17: // Hxx global volume slide

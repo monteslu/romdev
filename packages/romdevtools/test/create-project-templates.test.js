@@ -136,7 +136,7 @@ test("createProject(snes, template:c_hello) → builds via PVSnesLib runtime", a
   const client = await startClient();
   const tmp = mkdtempSync(path.join(os.tmpdir(), "tpl-snes-c-"));
   try {
-    const create = parseToolJson(await client.callTool({
+    parseToolJson(await client.callTool({
       name: "scaffold",
       arguments: { op: "project",  platform: "snes", template: "c_hello", name: "demo", path: tmp, overwrite: true },
     }));

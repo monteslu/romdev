@@ -18,7 +18,6 @@
 //   - Future: vasm listings, asar symbol tables
 
 import { readFile } from "node:fs/promises";
-import { jsonContent, safeTool } from "../util.js";
 import { parseGnuLdMap, isGnuLdMap } from "../../toolchains/gnu-ld-map.js";
 
 function parseSdldStyle(text) {

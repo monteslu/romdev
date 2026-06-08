@@ -288,7 +288,7 @@ async function buildWithPvSnesLib({ sources, headers, tccOptions, wlaOptions, bi
  * Minimum-viable path (R16 original behavior). No PVSnesLib runtime;
  * bundled original crt0.asm + hdr.asm support a bare `int main()`.
  */
-async function buildMinimal({ sources, headers, tccOptions, wlaOptions, binaryIncludes = {} }) {
+async function buildMinimal({ sources, headers, tccOptions, wlaOptions, _binaryIncludes = {} }) {
   let log = "";
   const hdrAsm  = await readFile(path.join(MINIMAL_LIB_DIR, "hdr.asm"),  "utf-8");
   const crt0Asm = await readFile(path.join(MINIMAL_LIB_DIR, "crt0.asm"), "utf-8");
@@ -380,7 +380,7 @@ async function buildMinimal({ sources, headers, tccOptions, wlaOptions, binaryIn
 let _headerCache = null;
 async function loadPvSnesLibHeaders() {
   if (_headerCache) return _headerCache;
-  const { readdir, stat } = await import("node:fs/promises");
+  const { readdir } = await import("node:fs/promises");
   const out = {};
   /**
    * @param {string} dir

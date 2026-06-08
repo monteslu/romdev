@@ -140,7 +140,7 @@ async function main() {
     // in verbose mode (log.debug handles that split). This keeps the console
     // quiet in prod while /log stays rich enough to diagnose what an agent did.
     if (req.method === "POST" && req.body) {
-      const { method, id, params } = req.body;
+      const { method, params } = req.body;
       if (method === "tools/call") {
         const argKeys = params?.arguments ? Object.keys(params.arguments) : [];
         const summary = argKeys.map((k) => {

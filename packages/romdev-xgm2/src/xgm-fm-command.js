@@ -2,8 +2,6 @@
 
 import { Command } from "./command.js";
 import { getInt8, getInt24, setInt8, setInt24 } from "./util.js";
-import { YM2612State } from "./ym2612-state.js";
-import { XGMSample } from "./xgm-sample.js";
 // VGMCommand / XGM are referenced via passed-in instances; no static use needed here.
 
 /**

@@ -1214,7 +1214,7 @@ export class LibretroHost {
    * @param {(host:LibretroHost)=>any} [a.capture] read result from core RAM BEFORE restore
    */
   callSubroutine(a) {
-    const mod = this._needMod();
+    this._needMod();
     this._needMedia();
     if (!this.setRegSupported()) {
       throw new Error("cpu({op:'call'}) not supported by this core (rebuild with romdev_setreg/romdev_getreg).");

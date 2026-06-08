@@ -7,8 +7,7 @@
 // though they're not "instructions" per se.
 
 import { readFile } from "node:fs/promises";
-import { jsonContent, safeTool } from "../util.js";
-import { mapNesAddress, mapSnesAddress, mapAtari2600Address, mapAtari7800Address, mapC64Address } from "./disasm.js";
+import { mapSnesAddress, mapAtari2600Address, mapAtari7800Address, mapC64Address } from "./disasm.js";
 
 /**
  * Classify a referring instruction by its mnemonic.

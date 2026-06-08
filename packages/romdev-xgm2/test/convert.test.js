@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { vgmToXgm2, vgmToXgm2C, emitC } from "../src/index.js";
+import { vgmToXgm2, vgmToXgm2C } from "../src/index.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // The SGDK demo VGM ships in the romdev-mcp package next door.

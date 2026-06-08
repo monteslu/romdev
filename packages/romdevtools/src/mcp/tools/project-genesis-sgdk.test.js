@@ -17,14 +17,12 @@ import { mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { dirname } from "node:path";
 
 import { createProjectImpl } from "./project.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const REPO_ROOT = resolve(__dirname, "..", "..", "..");
-const SGDK_LIB = join(REPO_ROOT, "src", "platforms", "genesis", "lib", "sgdk");
 
 test("createProject genesis sgdk_hello: ships full SGDK runtime + include tree", async () => {
   const projPath = await mkdtemp(join(tmpdir(), "romdev-sgdk-create-"));

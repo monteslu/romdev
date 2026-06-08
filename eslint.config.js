@@ -19,6 +19,7 @@ export default [
       "**/wasm/**",
       "**/build/**",
       "**/.romdev-build/**",
+      "**/.claude/**",     // workflow scripts — top-level return, not project ESM
       "**/dist/**",
       // Vendored upstream SDK / lib C sources we ship but don't author.
       "packages/*/src/platforms/*/lib/**",

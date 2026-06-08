@@ -24,6 +24,7 @@ let lastSettings = "";
 // I had BLOCK=1, ASCII=2; real BLOCK=0x8, ASCII=0x4000. The bad
 // values silently picked an unrelated tag, which is why "ascii"
 // mode was still rendering Unicode block glyphs.
+/* eslint-disable no-unused-vars -- the full chafa tag enum is kept for reference; not all are used. */
 const TAG_SPACE     = 0x1;
 const TAG_SOLID     = 0x2;
 const TAG_STIPPLE   = 0x4;
@@ -35,6 +36,7 @@ const TAG_BRAILLE   = 0x800;
 const TAG_ASCII     = 0x4000;
 const TAG_SEXTANT   = 0x400000;
 const TAG_OCTANT    = 0x4000000;
+/* eslint-enable no-unused-vars */
 
 const SYMBOL_TAGS = {
   // Pure ASCII glyphs (space + printable 7-bit) — most text-shaped,

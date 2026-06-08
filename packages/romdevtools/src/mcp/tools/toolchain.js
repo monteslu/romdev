@@ -9,7 +9,7 @@ import { inesHeaderSource, charsSource, nromFlatCfg } from "../../toolchains/cc6
 import { resolveCore } from "../../cores/registry.js";
 import { resetHost, getDisclosure } from "../state.js";
 import { PLATFORM_VIRTUAL_EXT } from "../../host/LibretroHost.js";
-import { imageContent, jsonContent, safeTool, textContent } from "../util.js";
+import { imageContent, jsonContent, safeTool } from "../util.js";
 import { isPlaytestRunning } from "./playtest.js";
 import { buildSourceWithDebugCore } from "./symbols.js";
 import { log as serverLog } from "../log.js";

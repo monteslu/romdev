@@ -2,13 +2,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PNG } from "pngjs";
 
 import {
-  cropSpriteSheetImpl,
   quantizePngForPlatformImpl,
   crossPlatformSpriteImportImpl,
 } from "./sprite-pipeline.js";

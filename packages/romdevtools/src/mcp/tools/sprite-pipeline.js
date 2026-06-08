@@ -15,7 +15,6 @@ import { readFile, writeFile } from "node:fs/promises";
 import { PNG } from "pngjs";
 import { jsonContent, safeTool } from "../util.js";
 import { intentZod, resolveIntent, intentError } from "../../platforms/common/intent.js";
-import { getDefaultPalette } from "../../platforms/common/default-palette.js";
 import { convertImageToTilesCore, imageToTilemapCore } from "./platform-tools.js";
 import { validateGenesisTilesCore } from "./metasprite-tools.js";
 
@@ -542,7 +541,7 @@ async function crossPlatformSpriteImportImpl(args) {
 
 // ── Register all three tools ─────────────────────────────────────────
 
-export function registerSpritePipelineTools(server, z, sessionKey) {
+export function registerSpritePipelineTools(server, z, _sessionKey) {
   server.tool(
     "encodeArt",
     "Encode a PNG into a platform's native art format, one tool keyed by `stage` — the PNG→tiles pipeline. " +

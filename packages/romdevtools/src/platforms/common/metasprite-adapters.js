@@ -203,7 +203,7 @@ export async function gbAdapter(host, platform) {
 //  palette line (CRAM entries 16-31). Tile data base from VDP reg 6.
 // =====================================================================
 export async function smsAdapter(host, platform) {
-  const { decodeSmsTile, decodeSmsVdpRegs, decodeSmsCram, decodeGgCram, snapshotPalette } = await import("../sms/vdp.js");
+  const { decodeSmsTile, decodeSmsVdpRegs, snapshotPalette } = await import("../sms/vdp.js");
   const vramRegion = platform === "gg" ? "gg_vram" : "sms_vram";
   const vram = host.readMemory(vramRegion, 0, 0x4000);
   const regs = host.readMemory("sms_vdp_regs", 0, 16);
