@@ -97,9 +97,18 @@ export function makePressDriver(host, presses) {
   let applied = 0;          // how many scheduled presses actually got a frame
   let lastSet = null;       // last setInput payload we pushed (to avoid churn)
   const platform = host.status?.platform;
+  // When NO pressDuring schedule is given, the driver must NOT touch input at
+  // all — it leaves whatever persistent state input({op:'set'}) established in
+  // place, so a watch/breakpoint inherits the held pad exactly like
+  // frame({op:'step'}) does. (Previously applyForFrame(0) pushed an empty
+  // [{},{}] payload on the first frame, silently neutralizing a held Right+A —
+  // the v0.16.0 movement-analysis bug.) A non-empty schedule still OWNS the
+  // pad (deterministic capture): it drives the buttons and releases on finish.
+  const driven = presses.length > 0;
   return {
     applied: () => applied,
     applyForFrame(i) {
+      if (!driven) return;   // inherit persistent input({op:'set'}) state
       // Buttons whose [frame, frame+holdFrames) window covers frame i.
       const held = presses.filter((p) => i >= p.frame && i < p.frame + (p.holdFrames ?? 2));
       // Build a 2-port setInput payload from the held buttons.
@@ -114,6 +123,7 @@ export function makePressDriver(host, presses) {
       for (const p of held) { if (p.frame === i) applied++; }
     },
     finish() {
+      if (!driven) return;   // we never touched input; leave it as the caller set it
       if (lastSet !== null && lastSet !== "[{},{}]") host.setInput({ ports: [{}, {}] });
     },
   };
@@ -751,7 +761,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         button: z.string(),
         port: z.number().int().min(0).max(3).default(0),
         holdFrames: z.number().int().min(1).default(2),
-      })).optional().describe("Schedule input while waiting (drive the game to the state that triggers the condition)."),
+      })).optional().describe("Schedule input while waiting (drive the game to the state that triggers the condition). If OMITTED, this run inherits whatever input({op:'set'}) last held — same as frame({op:'step'}). If GIVEN, the schedule OWNS the pad for the whole run (a prior input({op:'set'}) is ignored); use it to drive the watched window itself."),
       abortIf: z.array(z.object({
         region: z.enum(MEMORY_REGIONS).optional().describe("memory region (default system_ram)"),
         offset: z.number().int().min(0).describe("byte offset within the region"),
@@ -1030,7 +1040,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         button: z.string(),
         port: z.number().int().min(0).max(3).default(0),
         holdFrames: z.number().int().min(1).default(2),
-      })).optional().describe("Schedule input while watching (drive the game to the state that touches the watched bytes/range, or uploads the graphic for on:'dma')."),
+      })).optional().describe("Schedule input while watching (drive the game to the state that touches the watched bytes/range, or uploads the graphic for on:'dma'). If OMITTED, this run inherits whatever input({op:'set'}) last held — same as frame({op:'step'}). If GIVEN, the schedule OWNS the pad for the whole run (a prior input({op:'set'}) is ignored)."),
       fromState: z.string().optional().describe("on:'range'/'pc' — restore an in-memory savestate SLOT (from state({op:'save', name})) BEFORE tracing, so the log runs from a known moment (jump to the boss fight, then see what writes HP). Deterministic + repeatable."),
       fromStatePath: z.string().optional().describe("on:'range'/'pc' — like fromState but restore from a savestate FILE on disk (state({op:'save', path})). Relative path resolves against the loaded ROM's dir."),
     },

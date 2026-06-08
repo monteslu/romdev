@@ -32,6 +32,9 @@ export function parseBuildLog(log) {
     const baseStage = stage.split(/\s|\(/)[0].toLowerCase();
     if (/^cc65$|^ca65$|^ld65$/.test(baseStage)) {
       issues.push(...parseCc65Like(text, baseStage));
+      // ld65's linker-level errors (segment-missing / memory-overflow) carry no
+      // file:line and slip past parseCc65Like — pick them up too.
+      if (baseStage === "ld65") issues.push(...parseLd65Linker(text, baseStage));
     } else if (/^dasm$/.test(baseStage)) {
       issues.push(...parseDasm(text));
     } else if (/^asar$/.test(baseStage)) {
@@ -68,6 +71,7 @@ export function parseBuildLog(log) {
       // failure). Include vasm + sdcc + wla, which the old fallback omitted.
       const tag = baseStage || "unknown";
       issues.push(...parseCc65Like(text, tag));
+      issues.push(...parseLd65Linker(text, tag));
       issues.push(...parseSdcc(text, tag));
       issues.push(...parseDasm(text));
       issues.push(...parseAsar(text, tag));
@@ -107,6 +111,50 @@ function splitByStage(log) {
   }
   stages.push({ stage: currentStage, text: log.slice(cursor) });
   return stages;
+}
+
+// ld65 LINKER diagnostics have NO file:line — parseCc65Like (which requires a
+// `file:line:` lead) misses them entirely, so a failed link returned issues[]
+// EMPTY even though the real error sat in the log. The common ones on a
+// mis-wired NES rebuild (wrong/absent linker config for the project's segments):
+//   ld65: Warning: Segment 'HEADER' does not exist
+//   ld65: Error: Memory area overflow in 'ROM0', segment 'CODE' (6 bytes)
+//   Error: Cannot generate most of the files due to memory area overflow
+// They appear either bare or with an `ld65:`/`ld65.exe:` tool prefix. We add a
+// short hint on the segment/overflow case (the linker config doesn't match the
+// project's segments — the exact CHR-ROM-vs-CHR-RAM mismatch agents hit).
+function parseLd65Linker(text, stage) {
+  const out = [];
+  const re = /^(?:ld65(?:\.exe)?:\s*)?(?<sev>Error|Warning):\s*(?<msg>.+)$/gm;
+  let m;
+  while ((m = re.exec(text))) {
+    const msg = m.groups.msg.trim().replace(/\x1b\[[0-9;]*m/g, "");
+    // Skip the file:line form — parseCc65Like already owns those (and a leading
+    // path would have been consumed as the message here, doubling the issue).
+    if (/^[^\s:]+:\d+:/.test(msg)) continue;
+    // Actionable hint in a SEPARATE field (matching GNU ld / sdld), not glued
+    // onto the message — two common ld65 link failures:
+    let hint;
+    if (/does not exist|overflow|Cannot generate/i.test(msg)) {
+      hint =
+        "The linker config's segments don't match the project. For an NROM " +
+        "rebuild use build({inesHeader:{...}}) or linkerConfig:'chr-rom'; otherwise " +
+        "check that your .cfg's SEGMENTS match the .segment names in your source.";
+    } else if (/unresolved external|undefined symbol/i.test(msg)) {
+      const sym = msg.match(/['"`]?(?<s>[A-Za-z_]\w*)['"`]?\s*$/)?.groups?.s;
+      hint =
+        `${sym ? `\`${sym}'` : "That symbol"} is referenced but never defined or linked. ` +
+        "Add the source/object that defines it (or the right cc65 lib for this platform) " +
+        "to your build, or check for a typo.";
+    }
+    out.push({
+      severity: m.groups.sev.toLowerCase() === "error" ? "error" : "warning",
+      message: msg,
+      stage: stage || "ld65",
+      ...(hint ? { hint } : {}),
+    });
+  }
+  return out;
 }
 
 // cc65, ca65, ld65 all use the gcc-style `file:line:col?: severity: message`.
@@ -173,10 +221,25 @@ function parseSdcc(text, stage) {
     // An "Undefined Global" is effectively an error even though ASlink labels it
     // a warning — the ROM won't run. Promote it so the agent treats it as fatal.
     const isUndef = /undefined\s+global/i.test(msg);
+    // Give the same actionable hint GNU ld's undefined-reference path gets, so
+    // the SDCC platforms (GB/GBC/SMS/GG/MSX) reach parity on the single most
+    // common link failure (forgot to include the source/runtime that defines it).
+    // SDCC mangles C symbols with a leading '_' — show the C name too.
+    let hint;
+    if (isUndef) {
+      const sym = msg.match(/global\s+['"]?(?<s>\w+)['"]?/i)?.groups?.s;
+      const cName = sym && sym.startsWith("_") ? sym.slice(1) : sym;
+      hint =
+        `${sym ? `\`${sym}'` : "That symbol"} is called but never defined or linked` +
+        `${cName && cName !== sym ? ` (the C name is \`${cName}'; SDCC prefixes an underscore)` : ""}. ` +
+        "Add the source file (or runtime/library) that defines it to your build's sources/includes, " +
+        "or check for a typo in the name.";
+    }
     out.push({
       severity: lm.groups.sev === "Error" || isUndef ? "error" : "warning",
       message: "linker: " + msg,
       stage: "sdld",
+      ...(hint ? { hint } : {}),
     });
   }
   return out;
@@ -268,12 +331,26 @@ function parseWla(text, stage = "wla") {
   const reLink = /^(?<obj>\S+\.obj):\s*(?<file>[^\s:]+):(?<line>\d+):\s*(?<phase>[A-Z_]+):\s*(?<msg>.+)$/gm;
   let m;
   while ((m = reLink.exec(text))) {
+    const rawMsg = m.groups.msg.trim();
+    // An "unknown label" reference is SNES's undefined-symbol failure — give it
+    // the same actionable hint ld65/sdld/GNU ld carry, so SNES reaches parity.
+    let hint;
+    const lbl = /unknown label\s+["'`]?(?<l>[A-Za-z_]\w*)/i.exec(rawMsg)?.groups?.l;
+    if (lbl || /reference to an unknown/i.test(rawMsg)) {
+      hint =
+        `${lbl ? `\`${lbl}'` : "That label"} is referenced but never defined or linked. ` +
+        "Add the source/object that defines it (or the right PVSnesLib runtime) to your build, " +
+        "or check for a typo.";
+    }
     out.push({
       severity: "error",
       file: m.groups.file,
       line: parseInt(m.groups.line, 10),
-      message: `${m.groups.phase}: ${m.groups.msg.trim()}`,
+      // Keep the wla internal phase name (FIX_REFERENCES, etc.) out of the
+      // agent-facing message — it's noise; the message + hint say what to do.
+      message: rawMsg,
       stage: stage === "wla" ? "wlalink" : stage,
+      ...(hint ? { hint } : {}),
     });
   }
   // wla-65816 assembler: "<file>:<line>: ERROR|WARNING: <message>"

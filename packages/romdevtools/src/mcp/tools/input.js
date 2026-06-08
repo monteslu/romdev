@@ -65,18 +65,45 @@ function buttonShape(z) {
       start: z.boolean().optional(),
       select: z.boolean().optional(),
     })
+    // passthrough (not the zod default of stripping) so a TYPO'd button name
+    // ({jump:true}, {aa:true}) survives into the handler and can be reported as
+    // ignored — instead of being silently dropped, leaving the agent believing
+    // it pressed something it didn't.
+    .passthrough()
     .describe(
       "Per-port controller state. Prefer the spatial face-button names (north/east/south/west) for cross-platform code — they map to the physical button in that compass position on each platform's controller (e.g. on NES east=A, on SNES east=A, on Genesis east=C). Raw libretro names (a/b/x/y/l/r/...) also work if you need direct control. Omitted buttons are released.",
     );
 }
 
+// Every button key portInputToMask + the spatial resolver actually honor.
+// Anything else in a `ports` object is a typo and gets reported, not pressed.
+const KNOWN_BUTTONS = new Set([
+  "up", "down", "left", "right",
+  "north", "east", "south", "west",
+  "a", "b", "x", "y", "l", "r", "l2", "r2", "l3", "r3", "start", "select",
+]);
+
 // ── *Core functions for the `input` tool ──
 
 /** op:'set' — set held controller state (persists until changed). */
 function inputSetCore({ ports }, sessionKey) {
+      // Flag any key that isn't a real button BEFORE we set input — a typo
+      // ({jump:true}) would otherwise resolve to nothing and press silently.
+      const ignoredButtons = [];
+      ports.forEach((p, port) => {
+        for (const k of Object.keys(p)) {
+          if (p[k] === true && !KNOWN_BUTTONS.has(k)) ignoredButtons.push({ port, name: k });
+        }
+      });
       getHost(sessionKey).setInput({ ports });
-      const requested = ports.map((p) => Object.keys(p).filter((k) => p[k] === true));
-      return { inputSet: true, requested };
+      const requested = ports.map((p) => Object.keys(p).filter((k) => p[k] === true && KNOWN_BUTTONS.has(k)));
+      return {
+        inputSet: true,
+        requested,
+        ...(ignoredButtons.length
+          ? { ignoredButtons, ignoredNote: `Ignored ${ignoredButtons.length} unknown button name(s) — not pressed. Valid: ${[...KNOWN_BUTTONS].join(", ")}.` }
+          : {}),
+      };
 }
 
 /** op:'press' — press one named button N frames then release (port 0 default). */
@@ -168,7 +195,10 @@ export function registerInputTools(server, z, sessionKey) {
   server.tool(
     "input",
     "Drive the controller. `op`: 'set' | 'press' | 'sequence' | 'navigate' | 'layout'.\n" +
-    "'set': hold controller state (persists until changed) via `ports:[{a:true,...},{...}]`.\n" +
+    "'set': hold controller state (persists until changed) via `ports:[{a:true,...},{...}]`. " +
+    "The held state is honored by frame({op:'step'}) AND by watch/breakpoint runs that have NO `pressDuring` " +
+    "schedule (they inherit it). If a watch/breakpoint IS given `pressDuring`, that schedule OWNS the pad for " +
+    "the run and this set state is ignored — so drive a watched window with `pressDuring`, not a prior `set`.\n" +
     "'press': press one named `button` for `frames` then release (port 0 default).\n" +
     "'sequence': scripted frame-by-frame `steps:[{input:{ports}, frames}]` for replays/tests.\n" +
     "'navigate': walk a menu by advancing on SCREEN CHANGE — `steps:[{button, holdFrames?, maxWaitFrames?, " +

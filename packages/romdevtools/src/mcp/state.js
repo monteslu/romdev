@@ -14,6 +14,24 @@ import { LibretroHost } from "../host/index.js";
 /** @type {Map<string, LibretroHost>} */
 const hosts = new Map();
 
+// What this session last loaded, kept OUTSIDE the host map so it SURVIVES a
+// host eviction (server restart / session reconnect / unload). The host itself
+// is gone in those cases, so the "No ROM loaded" error has nothing to read —
+// this is the breadcrumb that lets the error tell the agent exactly how to
+// recover ("you last loaded <X>; re-run loadMedia to pick back up") instead of
+// a generic wipe. Set by loadMedia on success; never cleared on eviction.
+/** @type {Map<string, {platform?: string, path?: string, fromBase64?: boolean}>} */
+const lastMedia = new Map();
+
+/** Record the media a session last loaded (for recovery hints). @param {string} sessionKey */
+export function rememberLastMedia(sessionKey, info) {
+  lastMedia.set(sessionKey, info);
+}
+/** @param {string} sessionKey */
+export function getLastMedia(sessionKey) {
+  return lastMedia.get(sessionKey) ?? null;
+}
+
 /**
  * @param {string} sessionKey
  * @returns {LibretroHost}
@@ -21,6 +39,24 @@ const hosts = new Map();
 export function getHost(sessionKey) {
   const host = hosts.get(sessionKey);
   if (!host) {
+    // If THIS session loaded media before, the host was evicted (restart /
+    // reconnect / unload) — lead with the exact recovery call instead of the
+    // generic "you're in the wrong session" guidance, which doesn't apply here.
+    const prev = lastMedia.get(sessionKey);
+    if (prev && (prev.path || prev.fromBase64)) {
+      const recall = prev.path
+        ? `loadMedia({ platform: "${prev.platform}", path: "${prev.path}" })`
+        : `loadMedia({ platform: "${prev.platform}", base64: ... })  (your ROM came from base64 — re-supply the bytes)`;
+      throw new Error(
+        "No ROM loaded in this session — the host was evicted (the server restarted, " +
+        "your session reconnected, or the media was unloaded). Emulator state lives in " +
+        "server memory only, so it did not survive. RECOVER by re-running your last load:\n  " +
+        recall +
+        "\nThen replay any boot/navigate steps to get back to where you were. " +
+        "(If instead you expected a DIFFERENT session, you may be sending an inconsistent " +
+        "`x-romdev-session` header — reuse one stable id on every call.)",
+      );
+    }
     throw new Error(
       "No ROM loaded in this session — call loadMedia({path}) first. " +
       "If you DID loadMedia and still see this, your calls are landing in DIFFERENT " +

@@ -1,5 +1,5 @@
 import { resolveCore } from "../../cores/registry.js";
-import { clearHost, getHost, getHostOrNull, resetHost } from "../state.js";
+import { clearHost, getHost, getHostOrNull, rememberLastMedia, resetHost } from "../state.js";
 import { jsonContent, safeTool, textContent } from "../util.js";
 import { resolveCheatCodeForApply } from "./cheats.js";
 
@@ -44,6 +44,13 @@ export function registerLifecycleTools(server, z, sessionKey) {
         }
       });
     }
+    // Remember what we loaded so a later host eviction (restart/reconnect) can
+    // tell the agent the exact loadMedia call to recover with. Survives reset.
+    rememberLastMedia(sessionKey, {
+      platform,
+      ...(bytes ? { fromBase64: true } : { path: host.status.mediaPath ?? path }),
+    });
+
     // Framebuffer dimensions are NOT known until the core has run at least one
     // frame — before that, fbWidth/fbHeight hold a pre-boot default (e.g.
     // 256×192 on Genesis) that does NOT match the real output resolution
@@ -103,7 +110,12 @@ export function registerLifecycleTools(server, z, sessionKey) {
       switch (op) {
         case "unload": {
           const host = getHostOrNull(sessionKey);
-          if (host) host.unloadMedia();
+          if (!host || !host.status.loaded) {
+            // Don't claim success when there was nothing loaded — that masks a
+            // session/state mix-up (the agent thinks it unloaded media it never had).
+            return textContent("nothing to unload — no media is loaded in this session");
+          }
+          host.unloadMedia();
           return textContent("unloaded");
         }
         case "shutdown":

@@ -59,6 +59,11 @@ id: 502 file: /work/libc.obj line: 198 type: 1 bank: 0 position: 1 section_statu
   assert.equal(issues[0].line, 18);
   assert.equal(issues[0].stage, "wlalink");
   assert.match(issues[0].message, /unknown label "this_symbol_does_not_exist"/);
+  // SNES parity: the undefined-label failure carries the same actionable hint
+  // ld65/sdld/GNU ld give, and names the offending label.
+  assert.ok(issues[0].hint, "wlalink undefined-label has a hint");
+  assert.match(issues[0].hint, /never defined or linked/);
+  assert.match(issues[0].hint, /this_symbol_does_not_exist/);
 });
 
 test("wla-65816 assembler error parses with file/line", () => {
@@ -120,4 +125,72 @@ test("Genesis: m68k gcc compiler diagnostic parses with file/line", () => {
   assert.equal(e.line, 42);
   assert.equal(e.col, 8);
   assert.match(e.message, /SPR_update/);
+});
+
+test("ld65: linker segment-missing / memory-overflow reach issues[] (not just log)", () => {
+  // v0.16.0 feedback (Jay): build({output:'project'}) on a CHR-ROM disassembly
+  // applied the stock chr-RAM nes.cfg → ld65 emitted these, but issues[] was
+  // EMPTY because they carry no file:line. They must now be captured + hinted.
+  const log = `
+--- ld65 ---
+ld65: Warning: Segment 'HEADER' does not exist
+ld65: Warning: Segment 'CHARS' does not exist
+ld65: Error: Memory area overflow in 'ROM0', segment 'CODE' (6 bytes)
+ld65: Error: Cannot generate most of the files due to memory area overflow
+`;
+  const issues = parseBuildLog(log);
+  const err = issues.find((i) => /memory area overflow/i.test(i.message));
+  assert.ok(err, "memory-overflow error must reach issues[]");
+  assert.equal(err.severity, "error");
+  assert.equal(err.stage, "ld65");
+  assert.match(err.hint, /inesHeader|chr-rom/, "hint points at the NROM-rebuild path");
+  const seg = issues.find((i) => /Segment 'HEADER' does not exist/.test(i.message));
+  assert.ok(seg, "segment-missing warning must reach issues[]");
+  assert.equal(seg.severity, "warning");
+});
+
+test("ld65: a normal file:line error is NOT double-counted by the linker pass", () => {
+  const log = `
+--- ld65 ---
+/work/main.s:12: Error: Cannot open include file 'longbranch.mac'
+`;
+  const issues = parseBuildLog(log);
+  const hits = issues.filter((i) => /Cannot open include file/.test(i.message));
+  assert.equal(hits.length, 1, "file:line error counted exactly once");
+  assert.equal(hits[0].file, "/work/main.s");
+  assert.equal(hits[0].line, 12);
+});
+
+test("sdld undefined-global gets an actionable hint (SDCC platforms parity)", () => {
+  // GB/GBC/SMS/GG/MSX: the #1 link failure is a missing source/runtime. It should
+  // get the same 'add the file that defines it' hint GNU ld already gives.
+  const log = `
+--- sdld ---
+?ASlink-Warning-Undefined Global '_sound_init' referenced by module '_main'
+`;
+  const issues = parseBuildLog(log);
+  const undef = issues.find((i) => /Undefined Global/.test(i.message));
+  assert.ok(undef, "undefined-global reaches issues[]");
+  assert.equal(undef.severity, "error", "promoted to error (ROM won't run)");
+  assert.ok(undef.hint, "has an actionable hint");
+  assert.match(undef.hint, /never defined or linked/);
+  assert.match(undef.hint, /sound_init/, "names the C symbol (underscore stripped)");
+});
+
+test("all FOUR linkers (ld65 / sdld / GNU ld / wlalink) carry a hint on an undefined symbol", () => {
+  // One per linker = full 14-platform coverage:
+  //   ld65 → NES/C64/Lynx/A2600/A7800/PCE ; sdld → GB/GBC/SMS/GG/MSX ;
+  //   GNU ld → Genesis/GBA ; wlalink → SNES.
+  const ld65 = parseBuildLog("--- ld65 ---\nld65: Error: Unresolved external `foo'")
+    .find((i) => /Unresolved external/.test(i.message));
+  assert.ok(ld65?.hint, "ld65 unresolved-external has a hint");
+  const sdld = parseBuildLog("--- sdld ---\n?ASlink-Error-Undefined Global '_foo' referenced by module '_main'")
+    .find((i) => /Undefined Global/.test(i.message));
+  assert.ok(sdld?.hint, "sdld undefined-global has a hint");
+  const gnu = parseBuildLog("--- ld ---\nmain.o: undefined reference to `foo'")
+    .find((i) => /undefined reference/.test(i.message));
+  assert.ok(gnu?.hint, "GNU ld undefined-reference has a hint");
+  const wla = parseBuildLog("--- wlalink ---\n/work/main.obj: /work/main.asm:9: FIX_REFERENCES: Reference to an unknown label \"foo\".")
+    .find((i) => /unknown label/.test(i.message));
+  assert.ok(wla?.hint, "wlalink (SNES) unknown-label has a hint");
 });

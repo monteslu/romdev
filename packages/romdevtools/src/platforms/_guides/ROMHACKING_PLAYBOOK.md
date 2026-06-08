@@ -218,6 +218,40 @@ whole attract sequence each time. `input({op:'set'})`'s `requested` echo is what
 not proof the pad saw it — verify via the held-buttons RAM byte or a state
 transition.
 
+## 6b. Iterative measurement — boot to gameplay ONCE, reload per run
+
+When you run many measurements on the same starting state (frame-by-frame
+velocity tables, per-input timing, A/B trials), do NOT replay the
+`loadMedia → step to title → press start → step into the level` preamble every
+time — that intro is often hundreds of frames and 4+ calls, and you pay it on
+every iteration. Boot once, snapshot, and reload the snapshot per run:
+
+```
+loadMedia({platform, path, cheats})         // cheats survive the save state
+frame({op:'step', frames:180})              // title renders
+input({op:'press', button:'start'})
+frame({op:'step', frames:300})              // into gameplay
+state({op:'save', name:'ready'})            // <-- the reusable starting point
+
+// then per measurement:
+state({op:'load', name:'ready'})            // 1 call instead of the whole boot
+... drive + watch ...
+```
+
+A save state captures applied cheats and the exact RAM/PPU state, so every run
+starts byte-identical — *more* repeatable than re-booting, not just cheaper. A
+named slot (`name`) lives in memory for the session; a `path` persists to disk
+across sessions. If a task says "restart before each run", a state reload
+satisfies that intent far cheaper than a fresh `loadMedia`.
+
+**Driving input through a watched run:** a `watch`/`breakpoint` with NO
+`pressDuring` inherits whatever `input({op:'set'})` last held (same as
+`frame({op:'step'})`). But if you pass `pressDuring`, that schedule OWNS the pad
+for the whole run and a prior `input({op:'set'})` is ignored — so to hold a
+button *through* a watched window, put it in `pressDuring`, not a preceding
+`set`. (This is the documented contract; the schemas of `watch`/`breakpoint`
+and `input({op:'set'})` state it too.)
+
 ---
 
 ## Quick reference
