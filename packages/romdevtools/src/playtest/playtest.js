@@ -231,6 +231,32 @@ const KEY_TO_LIBRETRO_BIT = {
   w: 11,                       // R shoulder
 };
 
+// C64-only keyboard fallback: PC key → the virtual C64 button name the host's
+// C64 layer maps to the key matrix (Space/Run-Stop/Return/F1-F7). Lets a human
+// with NO controller still reach the C64 keyboard keys games need to start.
+// (Arrows + Z give the joystick + Fire via KEY_TO_LIBRETRO_BIT above.)
+const C64_KEYBOARD_FALLBACK = {
+  f1: "c64_f1", f2: "c64_f3", f3: "c64_f5", f4: "c64_f7",  // F1-F4 → C64 F1/F3/F5/F7
+  space: "west",          // Space
+  return: "r2",           // Return (also START via the standard map — harmless)
+  escape: "l2",           // Run/Stop (note: ESC also closes — see handler order)
+};
+
+// Human-readable C64 controls (controller + keyboard), relayed to the user when
+// a C64 game is in the playtest window so they're not guessing.
+export const C64_BINDINGS_HELP = `C64 — a CONTROLLER alone is enough (no keyboard needed):
+  D-pad / Left stick   Joystick (port 2 by default)
+  Z / bottom face      Fire
+  X face / Space key   Space
+  L2                   Run/Stop
+  R2 / Enter           Return
+  Right stick  ↑/←/→/↓  F1 / F3 / F5 / F7   (the 1-player / start keys)
+  Top face             F1 (also)
+
+No controller? Keyboard fallback: Arrows = joystick, Z = Fire, F1-F4 = C64
+F1/F3/F5/F7, Space = Space, Enter = Return, ESC = Run/Stop (hold; ESC tapped
+also closes the window). Switch joystick port with input({op:'joyport'}).`;
+
 // Human-readable summary printed by --help and at playtest startup.
 export const KEYBOARD_BINDINGS_HELP = `Keyboard:
   Arrow keys           D-pad
@@ -578,6 +604,7 @@ export async function playtest(args) {
     // into its own port object; the agent's setInput is overwritten each
     // tick (matching prior behavior). Select+Start on any controller quits.
     let quit = false;
+    const isC64 = h.status?.platform === "c64";
     function readControllerInto(port, inst) {
       if (!inst) return;
       const btn = inst.buttons || {};
@@ -595,6 +622,18 @@ export async function playtest(args) {
       else if (lx < -STICK_DEADZONE) port.left = true;
       if (ly > STICK_DEADZONE) port.down = true;
       else if (ly < -STICK_DEADZONE) port.up = true;
+      // C64: the RIGHT stick selects the function keys (F1/F3/F5/F7) — the
+      // Batocera/RetroDeck convention so a controller alone reaches the keyboard
+      // keys C64 setup screens need. Emitted as virtual buttons the host's C64
+      // layer maps to the key matrix; harmless on other platforms (no mapping).
+      if (isC64) {
+        const rx = axes.rightStickX ?? 0;
+        const ry = axes.rightStickY ?? 0;
+        if (ry < -STICK_DEADZONE) port.c64_f1 = true;        // up    → F1
+        else if (ry > STICK_DEADZONE) port.c64_f7 = true;    // down  → F7
+        if (rx < -STICK_DEADZONE) port.c64_f3 = true;        // left  → F3
+        else if (rx > STICK_DEADZONE) port.c64_f5 = true;    // right → F5
+      }
     }
 
     const port0 = {};
@@ -618,6 +657,15 @@ export async function playtest(args) {
       // port 1 — that's reserved for the second physical controller.
       for (const [keyName, bit] of Object.entries(KEY_TO_LIBRETRO_BIT)) {
         if (heldKeys.has(keyName)) port0[bitToName(bit)] = true;
+      }
+      // C64 keyboard fallback (no controller / mixing): map PC keys to the C64
+      // KEYBOARD keys games need — the host's C64 layer routes these virtual
+      // button names to the key matrix. (Arrows + Z=Fire already give the
+      // joystick above.) The agent relays these to the human.
+      if (isC64) {
+        for (const [keyName, vbtn] of Object.entries(C64_KEYBOARD_FALLBACK)) {
+          if (heldKeys.has(keyName)) port0[vbtn] = true;
+        }
       }
       const isRewinding = heldKeys.has("r") && rewindBuffer.length > 0;
       if (isRewinding) {
