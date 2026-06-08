@@ -31,6 +31,8 @@
         .globl  l__INITIALIZER
         .globl  s__INITIALIZER
         .globl  s__INITIALIZED
+        .globl  s__DATA
+        .globl  l__DATA
 
 ;; ─── Reset vector at $0000 ────────────────────────────────────────
         .area _HEADER (ABS)
@@ -83,7 +85,15 @@
 ;; call main. The initializer area is filled by sdcc when it sees
 ;; global initializations.
 
+        ;; AREA ORDERING IS LOad-BEARING. `_INITIALIZER` (the ROM image of
+        ;; every value-initialised `static` global) MUST be declared in the
+        ;; ROM group here — BEFORE the `_DATA` RAM block. If it isn't, sdld
+        ;; places `_INITIALIZER` in RAM right after `_INITIALIZED`, so the
+        ;; gsinit copy below copies uninitialised RAM onto itself and every
+        ;; `static uint8_t x = 5;` boots as 0. (Bug found 2026-06-08; see the
+        ;; matching note in sms_crt0.s — both z80 crt0s were missing this.)
         .area   _HOME
+        .area   _INITIALIZER
         .area   _CODE
         .area   _GSINIT
         .area   _GSFINAL
@@ -97,6 +107,26 @@
         .area   _CODE
 
 gsinit:
+        ;; ── Zero the BSS segment (`_DATA`). ──────────────────────────
+        ;; Every uninitialised `static` global lands in `_DATA` and MUST
+        ;; read back 0 at boot. Mirrors the sm83 GB crt0's gsinit_data loop.
+        ld      bc, #l__DATA
+        ld      a, b
+        or      a, c
+        jr      Z, gsinit_bss_done
+        ld      hl, #s__DATA
+        ld      (hl), #0x00
+        ld      d, h
+        ld      e, l
+        inc     de
+        dec     bc
+        ld      a, b
+        or      a, c
+        jr      Z, gsinit_bss_done
+        ldir                            ; propagate the 0 across _DATA
+gsinit_bss_done:
+
+        ;; ── Copy `_INITIALIZER` (ROM) → `_INITIALIZED` (RAM). ────────
         ld      bc, #l__INITIALIZER
         ld      a, b
         or      a, c

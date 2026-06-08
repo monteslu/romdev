@@ -47,6 +47,19 @@ the same wall.
    `s__DATA` for `l__DATA` bytes; bring-your-own crt0 should do the
    same.
 
+6. **Don't poke a hardcoded `$C0xx` WRAM pointer for game state — it
+   overlaps your statics.** SDCC links the C runtime's data + BSS (every
+   `static` global: your PRNG seed, your grids, your scores) at the BOTTOM
+   of WRAM starting `$C000`. A `volatile uint8_t *board = (uint8_t*)0xC000;`
+   then scribbles right over `static uint32_t rng = ...;` et al. Symptom
+   looks exactly like an SDCC *codegen* bug — e.g. a 32-bit xorshift PRNG
+   that "degenerates" so every roll is identical (its seed is being
+   clobbered, not miscompiled). **Use a `static` array and let the linker
+   place it** (`static uint8_t board[78]; board[i]=p;`), or hardcode at
+   `$C200`+ and confirm with the linker map (`build({includeSymbols:true})`
+   → check `s__DATA`/`s__BSS`). Full write-up + repro in
+   `lib/c/SDCC_GOTCHAS.md` § "sm83 codegen traps in plain game logic".
+
 - **Two VRAM banks** (switched via VBK at $FF4F) — bank 0 holds tile
   pattern data, bank 1 holds per-tile BG attributes (palette index,
   H/V flip, priority, tile bank).

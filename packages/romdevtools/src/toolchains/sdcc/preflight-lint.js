@@ -210,6 +210,47 @@ export function lintSdccSource(source, file = "main.c", opts = {}) {
     });
   }
 
+  // ─── hardcoded $C000-area WRAM pointer overlaps the C statics ───
+  // SDCC links `_DATA`/`_INITIALIZED` (value-init statics) + `_BSS` (zero-init
+  // statics) at the BOTTOM of WRAM starting $C000. A program that ALSO pokes a
+  // hardcoded pointer into that low range (e.g. `(uint8_t*)0xC000`) scribbles
+  // over its own statics — the seed of a PRNG, a collision grid, the score —
+  // and the symptom looks EXACTLY like an SDCC codegen bug (a 32-bit xorshift
+  // that "degenerates" because its seed got clobbered, never a real
+  // miscompile). This was the real root cause behind a GBC Columns agent's
+  // "monochrome RNG" report (2026-06-08); the math itself compiles correctly.
+  //
+  // ONLY for the sm83/z80 GB/SMS-family, whose WRAM base is $C000. Flag the
+  // low 256 bytes ($C000-$C0FF) where _DATA/_INITIALIZED live (small projects'
+  // statics sit here; $C100 is shadow_oam; $C200+ is the documented-safe
+  // scratch floor). INFO severity — visible, not "your code is broken": a
+  // hardcoded low pointer is occasionally legitimate (e.g. you've checked the
+  // map). NEVER critical.
+  if (port === "sm83" || port === "z80") {
+    // pointer cast/decl/assignment to a $C0xx literal: `(uint8_t*)0xC000`,
+    // `uint8_t *p = (uint8_t*)0xc010;`, `p = 0xC0FF;`
+    const ptrLit = /\(\s*(?:volatile\s+|const\s+|unsigned\s+|signed\s+)*[A-Za-z_]\w*\s*\*+\s*\)\s*0x(C0[0-9a-fA-F]{2})\b/;
+    const seen = new Set();
+    for (let i = 0; i < lines.length; i++) {
+      const code = lines[i].replace(/\/\/.*$/, "").replace(/\/\*.*?\*\//g, "");
+      const m = code.match(ptrLit);
+      if (!m) continue;
+      const addr = parseInt(m[1], 16); // already the full $C0xx address
+      const key = i + ":" + addr;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      issues.push({
+        severity: "info",
+        file,
+        line: i + 1,
+        stage: "lint",
+        message: `hardcoded WRAM pointer $${addr.toString(16).toUpperCase()} overlaps the C static-data segment ($C000-)`,
+        details: `${portLabel} links your value- and zero-initialised \`static\` globals (PRNG seeds, grids, scores) at the BOTTOM of WRAM from $C000. A hardcoded pointer into $C000-$C0FF can scribble over them — the classic symptom is a PRNG/array that looks "miscompiled" (e.g. an xorshift whose seed got clobbered so every roll is identical) when the math is actually fine. Prefer a \`static\` array and let the linker place it; if you must hardcode, use $C200+ and verify with the linker map (build with includeSymbols:true → check s__DATA/s__BSS). $C100 is shadow_oam. See ${port === "sm83" ? "GB/GBC" : "SMS/GG"} SDCC_GOTCHAS.md § "sm83 codegen traps in plain game logic".`,
+        ref: "wram-static-overlap",
+      });
+    }
+  }
+
   // Mid-block declarations (rough heuristic — flags any `type name [=...] ;`
   // that appears after a non-decl, non-blank statement at deeper indent
   // than the function opening brace).

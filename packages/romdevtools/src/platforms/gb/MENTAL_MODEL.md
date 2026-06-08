@@ -72,6 +72,21 @@ check these first. All five have shipped fixes in the bundled runtime
    If you use the bundled `gb_crt0.s` you're good; if you bring your
    own, make sure gsinit zeros `_DATA`.
 
+6. **Don't poke a hardcoded `$C0xx` WRAM pointer for game state — it
+   overlaps your statics.** SDCC links the C runtime's data + BSS (every
+   `static` global: your PRNG seed, your grids, your scores) at the BOTTOM
+   of WRAM starting `$C000`. A `volatile uint8_t *board = (uint8_t*)0xC000;`
+   then scribbles right over `static uint32_t rng = ...;` et al. Symptom
+   looks exactly like an SDCC *codegen* bug — e.g. a 32-bit xorshift PRNG
+   that "degenerates" so every roll is identical (it's not miscompiling;
+   its seed is being clobbered). **Use a `static` array and let the linker
+   place it** (`static uint8_t board[78]; board[i]=p;`), or, if you must
+   hardcode, put scratch at `$C200`+ and confirm with the linker map
+   (`build({includeSymbols:true})` → check `s__DATA`/`s__BSS`; your scratch
+   must start above the end of `_BSS`). Full write-up + the
+   "is-it-really-a-miscompile" repro in
+   `lib/c/SDCC_GOTCHAS.md` § "sm83 codegen traps in plain game logic".
+
 ## Memory map you actually care about
 
 ```
@@ -81,6 +96,9 @@ $8000-$97FF  VRAM tile data — 384 tiles × 16 bytes (CGB: dual-banked, 768 tot
 $9800-$9FFF  VRAM BG maps + CGB attribute map (in bank 1)
 $A000-$BFFF  Cart RAM (mappers only; not present in 32 KB ROM-only carts)
 $C000-$DFFF  WRAM (8 KB) — your variables, your stack
+             ⚠ statics start at $C000 (rng/grids/scores live here): NEVER
+               hardcode a $C0xx pointer for game state — use a `static`
+               array; for fixed scratch use $C200+ (see footgun #6).
 $FE00-$FE9F  OAM (40 sprites × 4 bytes) — written via DMA
 $FF00       JOYP — joypad I/O
 $FF40-$FF4B I/O registers — LCDC, BGP, OBP0, OBP1, SCY, SCX, etc.
