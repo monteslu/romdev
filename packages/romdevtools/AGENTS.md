@@ -778,14 +778,17 @@ post-processing layered on the objdump output.
 `disasm({target:'rom'})` gives you one routine as text. `disasm({target:'project'})` turns an
 **entire ROM into a complete, re-buildable project in one call**, across **all 14
 systems** (NES, SNES, GB/GBC, SMS/GG, Genesis, **GBA**, C64, Atari 2600/7800,
-**Lynx** — 65C02, **PC Engine** — HuC6280, and **MSX** — Z80; always byte-exact).
+**Lynx** — 65C02, **PC Engine** — HuC6280, and **MSX** — Z80; byte-exact on 13,
+PC Engine the one current exception — see caveats).
 Each region disassembles through the CPU's native objdump and reassembles through
 the matching native `as`/`ld`/`objcopy`, so the round-trip is guaranteed byte-for-byte:
 
 ```js
 disasm({ target:'project', path: "game.nes", outputDir: "./game-disasm" })
 // → { ok, platform, regions:[{file, startAddress, roundTripOk, readablePercent}],
-//     roundTrip:{ allByteExact, failed:[] }, readablePercentAvg }
+//     roundTrip:{ allByteExact, failed:[] }, readablePercentAvg,
+//     rebuild:{ blobs:[{file,bytes}], buildCall:{...}|null, verifiable, buildDoc:"BUILD.md", notes } }
+// Writes the .asm regions + chr.bin/header blobs + BUILD.md + rebuild.json to outputDir.
 ```
 
 It splits the ROM into regions (per-16KB bank for banked NES, per-32KB bank for
@@ -797,6 +800,38 @@ files ALWAYS rebuild to the original bytes (`roundTrip.allByteExact`). The
 `readablePercent` per region tells you how much came back as real instructions
 vs. data. Each `.asm` carries a provenance + round-trip header and is ready to
 edit and rebuild with the platform's native toolchain.
+
+**It also writes the REBUILD GLUE** so the project is turnkey, not just byte-exact
+region files. Alongside the `.asm` files you get: any non-code DATA blobs the
+rebuild needs (NES CHR-ROM → `chr.bin`; the stripped Genesis/GBA/Lynx/MSX
+cartridge header → `*.bin`), a **`BUILD.md`** with the exact rebuild steps, and —
+where a one-call rebuild exists — a **`rebuild.json`** holding the precise
+`build({...})` args (absolute paths). The response carries the same under
+`rebuild: { blobs, buildCall, verifiable, buildDoc, notes }`. So the RE loop is:
+`disasm({target:'project'})` → edit a `.asm` → rebuild → `diffRoms` to confirm.
+
+Two rebuild tiers (honest — the disasm emits each CPU's native-reassembler
+syntax, which only some platforms' `build()` toolchains can consume):
+- **One-call `build()` rebuild, byte-identical** — **NES, C64, Atari 7800, Lynx**.
+  Feed `rebuild.json` straight to `build`. (NES uses the new `inesHeader` option
+  — see below. Lynx: build() yields the headerless image; prepend the shipped
+  `lnx_header.bin` for the full `.lnx`.)
+- **Native-recipe rebuild (`buildCall:null`), byte-identical, steps in `BUILD.md`**
+  — **SMS, GG, MSX, GB, GBC, Genesis, GBA, Atari 2600**. Their `build()`
+  toolchains (SDCC/RGBDS/asar/dasm/vasm) can't reassemble the disasm's ca65/GNU-as
+  syntax, so `BUILD.md` gives the proven native `as`/`ld`/`objcopy` chain.
+- **PC Engine** is the one not-yet-byte-exact case (the region trims real padding /
+  doesn't strip a copier header) — `BUILD.md` says so.
+
+**Rebuilding a commercial NES (NROM CHR-ROM) game — `build({inesHeader})`:** the
+most common NES RE rebuild. `build({output:'rom', platform:'nes', inesHeader:{
+prgBanks, chrBanks, mapper, mirroring}, sourcesPaths:{...the PRG...},
+binaryIncludePaths:{ "chr.bin":... }})` auto-emits the 16-byte iNES header + the
+CHARS segment wiring + the flat NROM `.cfg` — no hand-derived header bytes, no
+glue `.s`/`.cfg`. (`disasm({target:'project'})` puts exactly this call in
+`rebuild.json`.) For homebrew C that ships fixed tile art, `linkerConfig:"chr-rom"`
+is the segment-split equivalent. See the NES MENTAL_MODEL.md "Rebuilding a CHR-ROM
+NROM image" section.
 
 Reassembler per CPU family (all bundled WASM, no installs): **cc65** ca65/ld65
 for 6502 + 65816; native binutils **`as`/`ld`/`objcopy`** for the GNU CPUs —
@@ -816,6 +851,10 @@ Caveats worth knowing up front:
   always correct. (The 192-byte GBA header is emitted as a clean data region.)
 - Banked-NES is the strongest case — per-bank regions come back ~100%
   instructions. GB/GBC, SMS/GG, C64, and Atari are also near-100%.
+- **PC Engine** is the one platform that does NOT round-trip byte-exact yet: the
+  region trims real trailing $FF padding and doesn't strip a 512-byte copier
+  header, so the emitted region is a lossy view of the `.pce`. `BUILD.md` flags
+  this; a `planRegions` fix is the follow-up.
 - Platform is sniffed from the file extension; pass `platform:` to override.
 
 ## CHR/tile tools — file vs emulator source
