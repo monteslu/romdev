@@ -1,60 +1,5 @@
-# romdev patch — see README.md in this directory for full justification.
-# Exposes this core's internal memory regions (VRAM/OAM/palette/registers/etc.)
-# via retro_get_memory_data so romdev's inspect*/getCPUState/etc. tools can read
-# them. Upstream exposes only SAVE_RAM/SYSTEM_RAM. WITHOUT this patch the build
-# still succeeds but those tools return empty data (silent runtime failure).
-#
-# Also adds, all on the 6510 (C64 main CPU = vice/src/maincpu.c, included via
-# c64/c64cpu.c; the per-instruction interpreter is vice/src/6510core.c):
-#  * WRITE WATCHPOINT — the STORE macro records reg_pc when a watched address is
-#    written; libretro-core.c exports romdev_watchpoint_set/get (findWriter).
-#  * READ WATCHPOINT — the LOAD macro records reg_pc + value when a watched
-#    address is read; exports romdev_readwatch_set/get (runUntilRead).
-#  * EXECUTION (PC) BREAKPOINT + SINGLE-STEP — 6510core.c compares reg_pc to the
-#    armed address just before the opcode fetch (gated by ROMDEV_PCBREAK, defined
-#    only around maincpu.c's libretro per-call mainloop include so the drive CPU
-#    that also includes 6510core.c is unaffected). On a hit the CPU freezes at
-#    that instruction (returns un-executed) and clears retro_renderloop so
-#    retro_run's `while (retro_renderloop) maincpu_mainloop();` frame loop ends
-#    (otherwise it would spin forever). Single-step uses a per-instruction
-#    countdown so the PC advances. Exports romdev_pcbreak_set/get
-#    (runUntilPC / stepInstruction).
-# git apply ignores everything above the first 'diff --git' line.
-#
-#
-# RE primitives round 2: register read/write (romdev_setreg/getreg onto the
-# file-scope 6510 register globals romdev_reg_a/x/y/p/sp + reg_pc; reg-ids 0=A
-# 1=X 2=Y 3=P 4=SP 16=PC), a RANGE WATCH logging every {pc,addr,value} in [lo,hi]
-# (hooks in the STORE/LOAD macros, maincpu.c; exports romdev_range_set/get), and
-# a PC COVERAGE log of distinct in-window PCs (hook in 6510core.c at
-# SET_LAST_ADDR(reg_pc), gated by ROMDEV_PCBREAK so it only compiles in the main-
-# CPU mainloop; exports romdev_cov_set/get). Ring-buffer state defined in
-# maincpu.c before 6510core.c is #included. Patch is pure-LF on ADDED lines.
-# git apply ignores everything above the first 'diff --git' line.
-#
-#
-# C64 DISK IMAGE READ/WRITE (round 3): exposes the LIVE mounted 1541 disk image
-# for host-side save/restore, since the libretro VICE WASM build takes content
-# in-memory (no fullpath FS write-back) and exposes no disk memory region. Adds
-# to libretro/libretro-core.c (after the romdev_cov_* block, before
-# retro_load_game_special):
-#   * romdev_disk_export(unit,drive)  — flushes the vdrive BAM/dir, then reads
-#     every sector of the live disk_image_t into a static buffer; returns the
-#     .d64 length. romdev_disk_ptr() returns the buffer.
-#   * romdev_disk_import(data,len,unit,drive) — writes a flat .d64 back into the
-#     live image, sector by sector (disk_image_write_sector).
-#   * romdev_disk_putfile(unit,name,data,len) — writes ONE PRG file into the live
-#     image via the vdrive (vdrive_iec_open/write/close), bypassing the C64
-#     KERNAL/serial bus (whose multi-byte disk WRITE does not complete in this
-#     WASM build). This is the host-side "inject a save" primitive.
-#   * needs #include "vdrive-iec.h" + "vdrive-bam.h" (added near "vdrive.h").
-# Only the standard 35-track 1541 .d64 (174848 bytes) round-trips. Build exports:
-# add _romdev_disk_export/_ptr/_import/_putfile to EXPORTED_FUNCTIONS in
-# scripts/build-vice.sh. git apply ignores everything above the first
-# 'diff --git' line.
-#
 diff --git a/libretro/libretro-core.c b/libretro/libretro-core.c
-index 82bd2fb..cfdbc49 100644
+index 82bd2fb73d..f5f653019c 100644
 --- a/libretro/libretro-core.c
 +++ b/libretro/libretro-core.c
 @@ -19,6 +19,8 @@
@@ -400,7 +345,62 @@ index 82bd2fb..cfdbc49 100644
  bool retro_load_game_special(unsigned type, const struct retro_game_info *info, size_t num)
  {
     (void)type;
-@@ -8810,17 +9139,105 @@ bool retro_unserialize(const void *data_, size_t size)
+@@ -8668,6 +8997,54 @@ static void dc_sync_index(void)
+    }
+ }
+ 
++
++/* ---------------------------------------------------------------------------
++ * romdev: C64 keyboard + joyport injection for headless automation.
++ *
++ * Many C64 games (and cracktros) need KEYBOARD input — F1 to pick 1 player,
++ * RUN/STOP, SPACE/RETURN at setup screens — before joystick gameplay begins;
++ * joystick-only input can't get past them. These export an automation path
++ * the romdev host calls directly (no on-screen virtual keyboard, no host
++ * keymap): drive the C64 8x8 key matrix, feed a string into the kernal
++ * keyboard buffer, and pick the active joystick port.
++ *
++ *   romdev_key_matrix(row, col, pressed) -> assert/release one matrix cell.
++ *       (row,col) are C64 keyboard-matrix coords; e.g. RETURN=(0,1),
++ *       SPACE=(7,4), F1=(0,4), F3=(0,5), F5=(0,6), F7=(0,3), RUN/STOP=(7,7).
++ *       The romdev host owns the key-name -> (row,col) table.
++ *   romdev_kbdbuf_feed(s) -> queue a PETSCII string into the kernal keyboard
++ *       buffer (for typing LOAD/RUN/filenames). Returns kbdbuf_feed()'s result.
++ *   romdev_joyport_get() / romdev_joyport_set(port) -> the active C64 joystick
++ *       port the RetroPad drives (1 or 2). Default is 2 (most games). Setting
++ *       it locks the port so a core-option/hotkey doesn't override automation.
++ * ------------------------------------------------------------------------- */
++void romdev_key_matrix(int row, int col, int pressed)
++{
++   if (row < 0 || row > 7 || col < 0 || col > 7)
++      return;
++   keyboard_set_keyarr(row, col, pressed ? 1 : 0);
++}
++
++int romdev_kbdbuf_feed(const char *s)
++{
++   if (!s)
++      return -1;
++   return kbdbuf_feed(s);
++}
++
++int romdev_joyport_get(void)
++{
++   return (int)cur_port;
++}
++
++void romdev_joyport_set(int port)
++{
++   if (port != 1 && port != 2)
++      return;
++   cur_port = (unsigned int)port;
++   cur_port_locked = true;
++}
++
+ /* CPU traps ensure we are never saving snapshots or loading them in the middle of a cpu instruction.
+    Without this, savestate corruption occurs.
+ */
+@@ -8810,17 +9187,105 @@ bool retro_unserialize(const void *data_, size_t size)
     return false;
  }
  
@@ -511,7 +511,7 @@ index 82bd2fb..cfdbc49 100644
  }
  
 diff --git a/vice/src/6510core.c b/vice/src/6510core.c
-index a109492..c82f6e8 100644
+index a109492e75..c82f6e8ad3 100644
 --- a/vice/src/6510core.c
 +++ b/vice/src/6510core.c
 @@ -2374,6 +2374,57 @@ static const uint8_t rewind_fetch_tab[] = {
@@ -573,7 +573,7 @@ index a109492..c82f6e8 100644
           * "jammed" - however, our code may rely on FETCH_OPCODE being called
           * here, so we can not simply skip it. What we do instead is remembering
 diff --git a/vice/src/maincpu.c b/vice/src/maincpu.c
-index 14cf0b1..8842119 100644
+index 14cf0b1320..884211929c 100644
 --- a/vice/src/maincpu.c
 +++ b/vice/src/maincpu.c
 @@ -58,6 +58,98 @@
