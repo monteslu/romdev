@@ -729,6 +729,17 @@ export function projectBuildRecipe(platform, names) {
         if (/crt0.*\.s$/i.test(n) || /\.cfg$/i.test(n)) r.skip.add(n);
       }
     }
+  } else if (platform === "msx") {
+    // MSX ships msx_crt0.s — it MUST be passed AS the crt0 (replacing the stock
+    // SDCC z80 crt0.rel), NOT compiled as a plain source. The stock crt0 is a
+    // CP/M-style $0000 runtime with no MSX cartridge header; if it links, IT
+    // provides the $4010 entry (an SDCC gsinit stub = `nop nop nop ret`) and our
+    // msx_crt0.s _HEADER ("AB" + INIT pointer) gets dropped. The toolchain then
+    // synthesizes a header pointing INIT at $4010 = that stub, so the BIOS CALLs
+    // a no-op that returns immediately → "No cartridge found" (proven: real
+    // commercial ROMs boot in the same host; only our scaffolds failed). Routing
+    // msx_crt0.s through crt0 makes ITS header + init the cartridge entry.
+    if (has("msx_crt0.s")) { r.crt0File = "msx_crt0.s"; r.codeLoc = 0x4010; }
   } else if (platform === "sms" || platform === "gg") {
     // SMS/GG auto-inject their bundled crt0 inside buildForPlatform — so the
     // scaffold's own *_crt0.s would be a DUPLICATE. Skip it.
