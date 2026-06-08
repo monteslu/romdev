@@ -1422,7 +1422,7 @@ async function copyDirRecursive(fs, path, srcDir, dstDir, writtenFiles, dstPrefi
  *   handler returns: {path, platform, template, files, sourceFile,
  *   toolchain, nextStep}.
  */
-export async function createProjectImpl({ platform, name, path: projPath, title, template, overwrite = false, withSnippets = false }) {
+export async function createProjectImpl({ platform, name, path: projPath, title, template, overwrite = false, withSnippets = false, verbose = false }) {
   const fs = await import("node:fs/promises");
   const path = await import("node:path");
   const { fileURLToPath } = await import("node:url");
@@ -1768,7 +1768,12 @@ Compiles **C89**, not C99/C11. Stick to:
   }
   filesSection += `\nEvery byte that compiles into your ROM is in this directory. If you move the repo somewhere else, you don't need to install anything from romdev to rebuild it — the compiler binaries are the only external dependency.\n\n`;
 
-  const readme = `# ${title ?? name}\n\nA ${lang} project for ${platform}, scaffolded by romdev.\n\n${tmpl?.describe ? tmpl.describe + "\n\n" : ""}${filesSection}${c89Note}## Build + run with romdev\n\n${buildBlock}\n\n## Iterating\n\n- Edit \`${mainFilename}\` (or any of the runtime / crt0 / cfg files — they're yours).\n- Call \`build({output:"run", ...})\` to see your changes. It builds + loads + runs + screenshots in one round trip.\n- Inspect at byte level: \`memory({op:"read"})\`, \`sprites({op:"inspect"})\`, \`palette({source:"live"})\`, \`background({view:"rendered"})\`.\n- Open a playtest window for human eyes: \`playtest({op:"open"})\` — returns immediately, the window follows your rebuilds, and the emulator stays live for every other tool.\n`;
+  // Lead with the project-dir build — ONE call, no manifest. The verbose
+  // output:'run' + sourcesPaths form (buildBlock) is the "editing loose
+  // source" variant, shown second.
+  const projectBuildBlock =
+    "```js\nbuild({\n  output: \"project\",\n  platform: \"" + platform + "\",\n  path: \"" + projPath + "\",\n  outputPath: \"" + name + romExt + "\",\n})\n```";
+  const readme = `# ${title ?? name}\n\nA ${lang} project for ${platform}, scaffolded by romdev.\n\n${tmpl?.describe ? tmpl.describe + "\n\n" : ""}${filesSection}${c89Note}## Build + run with romdev\n\nThe whole project directory builds in ONE call — romdev infers the toolchain, crt0, and linker from the directory, so you don't pass a file manifest:\n\n${projectBuildBlock}\n\nAdd \`output:"run"\` instead of \`"project"\` to also load + run + screenshot in the same round trip. Re-run the exact same call after every edit.\n\n<details>\n<summary>Alternative: build from a hand-specified source manifest (when compiling edited loose source, not a project dir)</summary>\n\n${buildBlock}\n</details>\n\n## Iterating\n\n- Edit \`${mainFilename}\` (or any of the runtime / crt0 / cfg files — they're yours).\n- Re-run the \`build({output:"project"|"run", path})\` call above to see your changes — it builds + (for run) loads + runs + screenshots in one round trip.\n- Inspect at byte level: \`memory({op:"read"})\`, \`sprites({op:"inspect"})\`, \`palette({source:"live"})\`, \`background({view:"rendered"})\`.\n- Open a playtest window for human eyes: \`playtest({op:"open"})\` — returns immediately, the window follows your rebuilds, and the emulator stays live for every other tool.\n`;
   await fs.writeFile(path.join(projPath, "README.md"), readme, "utf-8");
   writtenFiles.push("README.md");
 
@@ -1828,19 +1833,33 @@ Compiles **C89**, not C99/C11. Stick to:
     }
   }
 
+  // Split the manifest: project-OWNED files (main.c, runtime, crt0, cfg,
+  // README…) are the only ones an agent touches; vendor/** are internal
+  // toolchain copies on disk that never enter a decision. Echoing all of
+  // them — 35 of 44 entries on NES are vendor/cc65/libsrc/*, ~270 on SGDK
+  // Genesis — was pure context noise across a matrix run. Default to a
+  // compact receipt (owned list + vendor COUNT); `verbose:true` restores the
+  // full flat list for the rare caller that wants it.
+  const ownedFiles = writtenFiles.filter((f) => !f.startsWith("vendor/"));
+  const vendorFileCount = writtenFiles.length - ownedFiles.length;
   return {
     path: projPath,
     platform,
     template: hasTemplates ? (template ?? "default") : null,
-    files: writtenFiles,
+    // The files you actually edit. Vendored toolchain copies are summarized,
+    // not listed — they're on disk under vendor/ if you ever need them.
+    files: ownedFiles,
+    fileCount: writtenFiles.length,
+    vendorFileCount,
+    ...(verbose ? { allFiles: writtenFiles } : {}),
     snippetsCopied: withSnippets ? snippetFiles : null,
     sourceFile: path.join(projPath, mainFilename),
     toolchain: lang,
-    nextStep: `Edit ${path.join(projPath, mainFilename)} and call build({output:"run", ...}) with sourcesPaths/includePaths pointing at the project's files (see the README's "Build + run" block for the exact call). Everything you need is in the directory — nothing is hidden.`,
+    nextStep: `Build the scaffold AS-IS in one call: build({output:"project", platform:"${platform}", path:"${projPath}", outputPath:"<game>.<ext>"}) — it infers the toolchain/crt0/linker from the directory, no sourcesPaths/includePaths/linkerConfig needed. Then edit ${mainFilename} and re-run the same call. (build({output:"run", ...}) with a hand-specified sourcesPaths manifest is the alternative when you're compiling edited loose source instead of a project dir.)`,
   };
 }
 
-async function createGameCore({ platform, genre, name, path: projPath, title, overwrite }) {
+async function createGameCore({ platform, genre, name, path: projPath, title, overwrite, verbose = false }) {
       // The five canonical genres. A genre is available on a platform iff
       // TEMPLATES[platform] has a matching template entry — we DERIVE
       // availability from TEMPLATES rather than maintain a parallel table,
@@ -1887,7 +1906,7 @@ async function createGameCore({ platform, genre, name, path: projPath, title, ov
       // Genre id IS the template id (they're 1:1 by construction).
       const templateId = genre;
       const result = await createProjectImpl({
-        platform, template: templateId, name, path: projPath, title, overwrite,
+        platform, template: templateId, name, path: projPath, title, overwrite, verbose,
       });
       return { ...result, genre, template: templateId };
 }
@@ -1917,6 +1936,7 @@ export function registerProjectTools(server, z) {
       // project
       template: z.string().optional().describe("op=project: template id ('default' | 'hello_sprite' | 'tile_engine' on NES/GB/GBC; 'default' elsewhere)."),
       withSnippets: z.boolean().default(false).describe("op=project: also drop every vetted snippet alongside main (= scaffold copySnippets after)."),
+      verbose: z.boolean().default(false).describe("op=project/game: echo the FULL flat file manifest (incl. vendor/** toolchain copies) as `allFiles`. Default false — the response lists only project-OWNED files you edit (`files`) plus a `vendorFileCount`, since the vendored toolchain copies are on disk and never need echoing (they're 35 of 44 entries on NES, ~270 on SGDK Genesis). Set true only if you specifically need every path in the response."),
       // game
       genre: z.string().optional().describe("op=game: 'shmup' | 'platformer' | 'puzzle' | 'sports' | 'racing'."),
       // snippets

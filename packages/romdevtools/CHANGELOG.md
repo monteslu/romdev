@@ -42,6 +42,29 @@ guidance + symptom→doc pointers. **"Read your target platform's
 a top-level rule (the footguns live there) — so the on-demand docs actually get
 read. The dynamic SKILL.md inherits all of this.
 
+### Changed — `scaffold` no longer echoes the vendored toolchain manifest
+`scaffold({op:'project'|'game'})` used to return a flat `files[]` of EVERY written
+file — including the `vendor/**` toolchain copies (35 of 44 entries on NES, ~270
+on SGDK Genesis) that an agent never touches. Across a matrix run (e.g. one game
+× every genre × every platform) that was ~100 KB of pure `vendor/` path lists in
+context with zero decision value. Now the response is a compact receipt:
+- `files` — only the project-**OWNED** files you edit (main source, runtime, crt0,
+  cfg, README).
+- `fileCount` (total written) + `vendorFileCount` (the summarized vendored copies,
+  on disk under `vendor/` if you ever need them).
+- `verbose:true` restores the full flat list as `allFiles`.
+
+This mirrors the `outputPath`/`inline` choose-your-payload pattern the snippets op
+already had. (Thanks to the agent who measured this on a 69-ROM matrix run.)
+
+### Changed — scaffold README + `nextStep` lead with `build({output:'project'})`
+The generated project README and the scaffold's `nextStep` now lead with the
+one-call **`build({output:'project', platform, path, outputPath})`** form (infers
+toolchain/crt0/linker from the directory — no `sourcesPaths`/`includePaths`/
+`linkerConfig` to hand-specify), and demote the verbose `output:'run'` + manifest
+form to a collapsed "compiling edited loose source" alternative. The project-dir
+build was already the easier path; now it's the one a fresh agent copies first.
+
 ## 0.23.0
 
 Response to real build-session feedback. Theme: bugs found, false alarms

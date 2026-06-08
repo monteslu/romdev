@@ -60,7 +60,14 @@ test("createProject genesis sgdk_hello: ships full SGDK runtime + include tree",
   // No prebuilt libmd.a is shipped anymore — the SDK source is, instead.
   assert.ok(!r.files.includes("libmd.a"), "libmd.a should NOT ship (SGDK builds from source)");
   // SGDK source must be vendored so the build can compile it + agents can read it.
-  assert.ok(r.files.some((f) => f.startsWith("vendor/sgdk/src/")), "SGDK source not vendored into project");
+  // (The default response summarizes vendor/** as a count rather than echoing the
+  // ~270 paths; the full list is under `allFiles` with verbose:true. Verify both
+  // the count AND that the source actually landed on disk.)
+  assert.ok(r.vendorFileCount > 0, "no vendor/ files reported in the count");
+  const rv = await createProjectImpl({ platform: "genesis", name: "sgdkv", path: await mkdtemp(join(tmpdir(), "sgdkv-")), template: "sgdk_hello", verbose: true });
+  assert.ok(rv.allFiles.some((f) => f.startsWith("vendor/sgdk/src/")), "verbose allFiles missing vendored SGDK source");
+  const sgdkSrcStat = await stat(join(projPath, "vendor", "sgdk", "src"));
+  assert.ok(sgdkSrcStat.isDirectory(), "SGDK source not vendored into project on disk");
 
   // include/ tree copied recursively. genesis.h is the umbrella header
   // every SGDK project includes — must be present.
