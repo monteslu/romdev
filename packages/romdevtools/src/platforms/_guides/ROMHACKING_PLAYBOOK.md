@@ -326,6 +326,48 @@ Once you know WHAT to change, the write loop is a handful of calls — no custom
 Verify-before-patch: `memory({op:'write', region:'system_ram', offset, hex})` on the LIVE emulator and
 watch the screen react — cheaper than shipping a wrong ROM patch.
 
+## 7b. Whole-ROM rebuildable disassembly — `disasm({target:'project'})`
+
+For a STRUCTURAL hack (new logic, not a byte poke), turn the whole ROM into a
+re-buildable project in one call: `disasm({target:'project', path, outputDir})`. It splits
+the ROM into regions (per-16KB bank for banked NES, per-32KB for SNES LoROM, slot0+slotX
+for GB, one flat region for SMS/Genesis/C64/Atari), disassembles each through the CPU's
+native objdump, then **reassembles + verifies byte-exact** against the original; any line
+that won't reproduce faithfully heals to a `.byte`/`db` of its real bytes, so the emitted
+`.asm` ALWAYS rebuilds (`roundTrip.allByteExact`). `readablePercent` per region tells you
+how much came back as real instructions vs. data. Alongside the `.asm` it writes the
+turnkey **rebuild glue**: data blobs (NES CHR-ROM → `chr.bin`; stripped Genesis/GBA/Lynx/MSX
+cartridge header → `*.bin`), a `BUILD.md` with the exact steps, and — where a one-call
+rebuild exists — a `rebuild.json` of the precise `build({...})` args. So the loop is
+`disasm({target:'project'})` → edit a `.asm` → rebuild → `romPatch({op:'diff'})` to confirm.
+
+**Two rebuild tiers** (the disasm emits each CPU's native-reassembler syntax — ca65 for
+6502/65816, GNU `as` for m68k/arm/z80/gbz80 — which only some `build()` toolchains consume):
+- **One-call `build()` rebuild, byte-identical** — **NES, C64, Atari 7800, Lynx**. Feed
+  `rebuild.json` straight to `build`. (Lynx: `build()` yields the headerless image; prepend
+  the shipped `lnx_header.bin` for the full `.lnx`.)
+- **Native-recipe rebuild (`buildCall:null`), byte-identical, steps in `BUILD.md`** — **SMS,
+  GG, MSX, GB, GBC, Genesis, GBA, Atari 2600**. Their `build()` toolchains (SDCC/RGBDS/asar/
+  dasm/vasm) can't reassemble ca65/GNU-as syntax, so `BUILD.md` gives the proven native
+  `as`/`ld`/`objcopy` chain.
+- **PC Engine** is the one not-yet-byte-exact case (the region trims real padding / doesn't
+  strip a copier header) — `BUILD.md` flags it.
+
+**Rebuilding a commercial NES (NROM CHR-ROM) game — `build({inesHeader})`:** the most common
+NES RE rebuild. `build({output:'rom', platform:'nes', inesHeader:{prgBanks, chrBanks, mapper,
+mirroring}, sourcesPaths:{…the PRG…}, binaryIncludePaths:{"chr.bin":…}})` auto-emits the
+16-byte iNES header + CHARS-segment wiring + flat NROM `.cfg` — no hand-derived header bytes.
+`disasm({target:'project'})` puts exactly this call in `rebuild.json`. (For homebrew C that
+ships fixed tile art, `linkerConfig:"chr-rom"` is the segment-split equivalent.)
+
+**Readability caveats** (the bytes are ALWAYS correct; only instruction-vs-`.byte` coverage
+varies): SNES and large Genesis ROMs come back byte-exact but DATA-ONLY (flat whole-ROM
+disasm of a mostly-data image heals to `.byte` — meaningful coverage needs recursive
+entry-point following, a known follow-up). GBA reads LOW because GBA C compiles mostly to
+Thumb reached via an ARM crt0 stub, so an ARM-mode disasm decodes Thumb spans as `.byte`.
+Banked-NES is the strongest case (~100% instructions); GB/GBC, SMS/GG, C64, Atari are also
+near-100%.
+
 ## 8. Graphics swaps — PNG ↔ tiles round-trip
 
 For sprite/tile edits (not text), don't hand-roll the tile-format math:

@@ -497,147 +497,32 @@ breakpoint trio (`pc`/`read`/`stepInstruction`) is in `advanced`.
 
 ## Disassembler
 
-`disasm({target:'rom'})` ships with every annotation enabled by default:
+`disasm({target:'rom'|'references'|'project'})` covers **all 14 platforms** — every CPU
+family disassembles through a native binutils disassembler compiled to WASM (no
+hand-rolled JS decoders): 6502/65816 via cc65's `da65`, Z80 (SMS/GG/MSX) + SM83
+(GB/GBC) via one z80-elf `objdump` (`-m z80` / `-m gbz80`), m68k (Genesis) via
+`m68k-elf-objdump`, ARM/Thumb (GBA) via `arm-none-eabi-objdump`. The annotations
+(vector labels / hardware-register names / file-offset comments / `untilReturn`) are
+post-processing layered on top.
 
 ```js
 disasm({target:'rom', path, platform:"nes", startAddress:0xC184,
                 length:64, untilReturn:true})
-// →
-//   reset:  sei                  ; C184 78        x  @0x194 (prg @0x184)
-//           cld                  ; C185 D8        .  @0x195 (prg @0x185)
-//           lda  #$00            ; C186 A9 00     ..  @0x196 (prg @0x186)
-//           sta  $2000           ; C188 8D 00 20  ..   @0x198 (prg @0x188) PPUCTRL
-//           ldx  #$FF            ; C18B A2 FF     ..  @0x19B (prg @0x18B)
-//           ...
+//   reset:  sei                  ; C184 78        @0x194 (prg @0x184)
+//           lda  #$00            ; C186 A9 00     @0x196 (prg @0x186)
+//           sta  $2000           ; C188 8D 00 20  @0x198 (prg @0x188) PPUCTRL
 ```
 
-What you get:
-- **Vector labels** (`reset:`, `nmi:`, `irq:`) auto-tagged from the iNES /
-  SNES / Genesis vector tables. For SMS/GG, fixed Z80 vectors are tagged:
-  `reset:` at $0000, `rst08`/`rst10`/`rst18`/`rst20`/`rst28`/`rst30:` at
-  their RST addresses, `irq:` at $0038 (SMS vblank handler), `nmi:` at
-  $0066 (pause button). For GB/GBC, the SM83 vectors get the same
-  treatment plus the dedicated IRQ vectors: `vblank:` at $0040,
-  `lcd_stat:` at $0048, `timer:` at $0050, `serial:` at $0058,
-  `joypad:` at $0060, and `entry:` at $0100. `autoLabelVectors:false`
-  to turn off.
-- **Hardware register names** (`; PPUCTRL`, `; PPUMASK`, `; SND_CHN`,
-  `; VRAM`, `; LCDC`, `; VDP_CTRL`, `; IO_PORT_A` etc) on any operand
-  that hits a known platform register. NES + SNES + Genesis + GB + SMS/GG
-  tables built in. `annotateRegisters:false`.
-- **File-offset comments** (`; @0xNNNN`) on every disassembled line —
-  mapper-aware, so $C184 on NROM-128 correctly reports `@0x194`. Direct
-  input to `romPatch({op:'write'})`'s `offset`. For NES iNES files, the header-stripped
-  PRG offset is ALSO reported (`@0x194 (prg @0x184)`) so you can patch
-  either the `.nes` file or `prg.bin` from `cart({op:'extract'})` without doing
-  the -16 math. `annotateFileOffsets:false` to turn off.
-- **Mapper-aware addressing**: NROM-128 mirror at $C000, MMC1/MMC3/UxROM
-  top bank fixed at $C000, SMS sega-mapper slot-0/1/2 1:1 file mapping,
-  GB/GBC slot 0 fixed + slot 1 banked (pass `bank` to target a non-
-  default ROM bank). No more manual `startAddress: 49152` because the
-  disassembler understood the mapping.
-- **`endAddress` alternative to `length`** — disassemble "from X to Y"
-  without computing byte count yourself.
-- **`untilReturn: true`** — truncates at the first `rts/rti/rtl/bare jmp`
-  (6502) or `ret/reti/retn/bare jp` (Z80) or `ret/reti/bare jp/jp hl`
-  (SM83). Combine with an auto-tagged `reset:` label to grab exactly
-  one routine.
-- **`dataRanges: [{start, length}]`** — mark address ranges as `.byte`
-  tables instead of bizarre disassembled "code." Useful for embedded
-  sprite tables, music data, lookup tables.
-- **`outputPath`** — writes raw asm to disk instead of returning a
-  188KB JSON wad. Returns `{outputPath, asmBytes, asmLines}` for log/inspection.
+`disasm({target:'project'})` is the **RE-rebuild workhorse**: one call turns a whole ROM
+into a byte-exact, re-buildable disassembly (per-region `.asm` + rebuild glue), faithful
+where it can be and falling back to `.byte` where it can't — so it *always* reassembles to
+the original image. That's the path for any structural hack (new logic / text / graphics).
 
-Every CPU family disassembles through a native binutils disassembler compiled to
-WASM: 6502/65816 via cc65's `da65`; Z80 (SMS/GG/MSX) + SM83 (GB/GBC) via one
-z80-elf `objdump` (`-m z80` / `-m gbz80`); m68k (Genesis) via `m68k-elf-objdump`;
-ARM/Thumb (GBA) via `arm-none-eabi-objdump`. No hand-rolled JS decoders. The
-auto-label / register-annotation / file-offset / untilReturn handling is
-post-processing layered on the objdump output.
-
-### Whole-ROM, rebuildable projects — `disasm({target:'project'})`
-
-`disasm({target:'rom'})` gives you one routine as text. `disasm({target:'project'})` turns an
-**entire ROM into a complete, re-buildable project in one call**, across **all 14
-systems** (NES, SNES, GB/GBC, SMS/GG, Genesis, **GBA**, C64, Atari 2600/7800,
-**Lynx** — 65C02, **PC Engine** — HuC6280, and **MSX** — Z80; byte-exact on 13,
-PC Engine the one current exception — see caveats).
-Each region disassembles through the CPU's native objdump and reassembles through
-the matching native `as`/`ld`/`objcopy`, so the round-trip is guaranteed byte-for-byte:
-
-```js
-disasm({ target:'project', path: "game.nes", outputDir: "./game-disasm" })
-// → { ok, platform, regions:[{file, startAddress, roundTripOk, readablePercent}],
-//     roundTrip:{ allByteExact, failed:[] }, readablePercentAvg,
-//     rebuild:{ blobs:[{file,bytes}], buildCall:{...}|null, verifiable, buildDoc:"BUILD.md", notes } }
-// Writes the .asm regions + chr.bin/header blobs + BUILD.md + rebuild.json to outputDir.
-```
-
-It splits the ROM into regions (per-16KB bank for banked NES, per-32KB bank for
-SNES LoROM, slot0+slotX for GB, one flat region for SMS/Genesis/C64/Atari),
-disassembles each, then **reassembles it and verifies the result is byte-exact
-against the original**. Any line that doesn't reassemble faithfully falls back
-to `.byte`/`db` data recovered from the address comments — so the emitted `.asm`
-files ALWAYS rebuild to the original bytes (`roundTrip.allByteExact`). The
-`readablePercent` per region tells you how much came back as real instructions
-vs. data. Each `.asm` carries a provenance + round-trip header and is ready to
-edit and rebuild with the platform's native toolchain.
-
-**It also writes the REBUILD GLUE** so the project is turnkey, not just byte-exact
-region files. Alongside the `.asm` files you get: any non-code DATA blobs the
-rebuild needs (NES CHR-ROM → `chr.bin`; the stripped Genesis/GBA/Lynx/MSX
-cartridge header → `*.bin`), a **`BUILD.md`** with the exact rebuild steps, and —
-where a one-call rebuild exists — a **`rebuild.json`** holding the precise
-`build({...})` args (absolute paths). The response carries the same under
-`rebuild: { blobs, buildCall, verifiable, buildDoc, notes }`. So the RE loop is:
-`disasm({target:'project'})` → edit a `.asm` → rebuild → `diffRoms` to confirm.
-
-Two rebuild tiers (honest — the disasm emits each CPU's native-reassembler
-syntax, which only some platforms' `build()` toolchains can consume):
-- **One-call `build()` rebuild, byte-identical** — **NES, C64, Atari 7800, Lynx**.
-  Feed `rebuild.json` straight to `build`. (NES uses the new `inesHeader` option
-  — see below. Lynx: build() yields the headerless image; prepend the shipped
-  `lnx_header.bin` for the full `.lnx`.)
-- **Native-recipe rebuild (`buildCall:null`), byte-identical, steps in `BUILD.md`**
-  — **SMS, GG, MSX, GB, GBC, Genesis, GBA, Atari 2600**. Their `build()`
-  toolchains (SDCC/RGBDS/asar/dasm/vasm) can't reassemble the disasm's ca65/GNU-as
-  syntax, so `BUILD.md` gives the proven native `as`/`ld`/`objcopy` chain.
-- **PC Engine** is the one not-yet-byte-exact case (the region trims real padding /
-  doesn't strip a copier header) — `BUILD.md` says so.
-
-**Rebuilding a commercial NES (NROM CHR-ROM) game — `build({inesHeader})`:** the
-most common NES RE rebuild. `build({output:'rom', platform:'nes', inesHeader:{
-prgBanks, chrBanks, mapper, mirroring}, sourcesPaths:{...the PRG...},
-binaryIncludePaths:{ "chr.bin":... }})` auto-emits the 16-byte iNES header + the
-CHARS segment wiring + the flat NROM `.cfg` — no hand-derived header bytes, no
-glue `.s`/`.cfg`. (`disasm({target:'project'})` puts exactly this call in
-`rebuild.json`.) For homebrew C that ships fixed tile art, `linkerConfig:"chr-rom"`
-is the segment-split equivalent. See the NES MENTAL_MODEL.md "Rebuilding a CHR-ROM
-NROM image" section.
-
-Reassembler per CPU family (all bundled WASM, no installs): **cc65** ca65/ld65
-for 6502 + 65816; native binutils **`as`/`ld`/`objcopy`** for the GNU CPUs —
-`m68k-elf` (Genesis), `arm-none-eabi` (GBA), and one `z80-elf` for both Z80
-(SMS/GG/MSX) and gbz80 (GB/GBC). objdump and `as` share GNU syntax, so objdump's
-output feeds straight back into `as` with no translation; any line the assembler
-won't reproduce exactly is healed to a `.byte` of its real bytes.
-
-Caveats worth knowing up front:
-- **SNES and large Genesis ROMs come back byte-exact but DATA-ONLY**
-  (low `readablePercent`). Flat whole-ROM disassembly of a mostly-data image
-  heals down to `.byte`; meaningful instruction coverage there needs recursive
-  entry-point following, a known follow-up. The bytes are always correct.
-- **GBA** rebuilds byte-exact but reads LOW: GBA C compiles mostly to Thumb,
-  reached via an ARM crt0 stub, so an ARM-mode disasm decodes the Thumb spans as
-  `.byte`. ARM/Thumb mode-tracking is the readability follow-up; the bytes are
-  always correct. (The 192-byte GBA header is emitted as a clean data region.)
-- Banked-NES is the strongest case — per-bank regions come back ~100%
-  instructions. GB/GBC, SMS/GG, C64, and Atari are also near-100%.
-- **PC Engine** is the one platform that does NOT round-trip byte-exact yet: the
-  region trims real trailing $FF padding and doesn't strip a 512-byte copier
-  header, so the emitted region is a lossy view of the `.pce`. `BUILD.md` flags
-  this; a `planRegions` fix is the follow-up.
-- Platform is sniffed from the file extension; pass `platform:` to override.
+The tool's own params document the flags (`untilReturn` / `dataRanges` / `endAddress` /
+`bank` / `thumb` / `outputPath`; auto vector labels + register-name + file-offset
+annotations, all on by default; NES file offsets report both `.nes` and PRG). The
+ROM-hacking playbook (`platform({op:'doc', platform:'romhacking', name:'playbook'})`) has
+the end-to-end workflow — read those rather than re-deriving the detail here.
 
 ## CHR/tile tools — file vs emulator source
 
