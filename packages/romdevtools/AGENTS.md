@@ -153,8 +153,10 @@ worry about ground truth:
    when you're scaffolding into a project dir.
 
 For most workflows, path A is all you need. Read MENTAL_MODEL.md +
-TROUBLESHOOTING.md when stuck. File a feedback round if the bundled
-examples are wrong.
+TROUBLESHOOTING.md when stuck. **When a tool call FAILS, read the error
+message and `issues[]` first — see "When a call fails" below; the error
+usually names the fix.** File a feedback round if the bundled examples
+are wrong.
 
 ### Path B — Debug when the bundled code disagrees with behavior
 
@@ -397,9 +399,12 @@ When `build({output:'run'})` is too coarse, the long-form workflow:
 5. `input({op:'set'})` / `input({op:'press'})` / `input({op:'sequence'})` to drive the game
 6. `state({op:'save'}, "checkpoint")` / `state({op:'load'}, "checkpoint")` for try/undo
 
-## Build errors
+## When a call fails: READ THE ERROR FIRST
 
-Every build tool returns `issues: [{file, line, col, severity, message, stage}, ...]`. Use that array, not the raw `log`. If `issues` is empty but `ok: false`, fall back to `log`.
+romdev errors are written FOR you — they name what went wrong AND how to recover. Read the message (and `issues[]`) before guessing, screenshotting, or retrying blindly. Two shapes:
+
+- **Build/compile failures** return `issues: [{file, line, col, severity, message, stage}, ...]` — the structured error list. Use that array, NOT the raw `log`; it almost always names the exact line. Fall back to `log` only if `issues` is empty but `ok: false`.
+- **Tool/runtime errors** (thrown) carry the recovery step in the message itself. Examples: a "No ROM loaded" error after a session reconnect echoes the EXACT `loadMedia({...})` call to restore your state; a rejected `loadMedia` names the likely cause (wrong platform / truncated / unsupported mapper) and points you at `cart({op:'identify'})`; an `input({op:'set'})` with a typo'd button returns `ignoredButtons[]` so you see it pressed nothing. Don't discard these — they're the fix.
 
 **Crash isolation (R12).** Every WASM toolchain call runs in a child worker process. If a tool aborts (`_abort()`, SIGSEGV, OOM), only the worker dies — the MCP server keeps running, all other agent sessions are unaffected, tool registration + save states + playtest windows survive. The build response surfaces as `{ ok: false, stage: "crash", log: "[crash] worker exited unexpectedly — signal=… code=…", crash: { exitCode, signal } }`. Treat `stage: "crash"` as "the toolchain blew up — log the args + source somewhere durable so it can be triaged; you can keep iterating in this session without reconnecting".
 
