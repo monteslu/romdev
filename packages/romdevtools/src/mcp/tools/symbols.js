@@ -8,6 +8,7 @@
 // caching for v1.
 
 import { writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { jsonContent, safeTool, writeOutput } from "../util.js";
 import { addressToSymbolCore } from "./address-to-symbol.js";
 
@@ -34,7 +35,7 @@ function siblings(romPath) {
 
 // build({output:'romWithDebug'}) — the cc65 .dbg / sdld .map / m68k ELF-map
 // build. Exported core; the `build` router (toolchain.js) calls it.
-export async function buildSourceWithDebugCore({ platform, source, sources, includes, linkerConfig, crt0, codeLoc, outputPath, inline = false }) {
+export async function buildSourceWithDebugCore({ platform, source, sources, includes, linkerConfig, crt0, codeLoc, outputPath, inline = false, resolveSymbols }) {
       const CC65_TARGETS = ["nes", "c64", "atari7800", "lynx"];
       const SDCC_TARGETS = ["gb", "gbc", "sms", "gg"];
       const M68K_TARGETS = ["genesis"];
@@ -42,6 +43,22 @@ export async function buildSourceWithDebugCore({ platform, source, sources, incl
         throw new Error("buildSourceWithDebug: pass outputPath (where to save the ROM; .dbg/.map/log land alongside it) or inline:true to get everything in the response.");
       }
       const sib = outputPath ? siblings(outputPath) : null;
+      // resolveSymbols:[...] — resolve just these names off the freshly-produced
+      // debug source and fold {symbols:{name:{address,hex,region?,ramOffset?}}}
+      // into the response, so the agent gets the addresses it asked for WITHOUT
+      // the 30-60KB map being dumped (or even written) anywhere it must re-read.
+      const wantResolve = Array.isArray(resolveSymbols) && resolveSymbols.length > 0;
+      const foldResolved = async (out, { dbg, map }) => {
+        if (!wantResolve) return out;
+        try {
+          const r = await resolveSymbolsBatchCore({ dbg, map, names: resolveSymbols, platform });
+          out.resolvedSymbols = r.symbols;
+          if (r.missing) out.unresolvedSymbols = r.missing;
+        } catch (e) {
+          out.resolveSymbolsError = String(e?.message ?? e);
+        }
+        return out;
+      };
 
       if (CC65_TARGETS.includes(platform)) {
         const { buildC, buildAsm } = await import("../../toolchains/cc65/cc65.js");
@@ -78,6 +95,7 @@ export async function buildSourceWithDebugCore({ platform, source, sources, incl
           if (inline) out.dbg = r.dbg;
           else out.dbgPath = writeOutput(r.dbg, { outputPath: sib.dbg, what: ".dbg" }).path;
         }
+        await foldResolved(out, { dbg: r.dbg });
         return jsonContent(out);
       }
 
@@ -116,6 +134,7 @@ export async function buildSourceWithDebugCore({ platform, source, sources, incl
           if (inline) out.mapText = r.symbols;
           else out.mapPath = writeOutput(r.symbols, { outputPath: sib.map, what: ".map" }).path;
         }
+        await foldResolved(out, { map: r.symbols });
         return jsonContent(out);
       }
 
@@ -152,6 +171,7 @@ export async function buildSourceWithDebugCore({ platform, source, sources, incl
         } else {
           out.mapNote = "No linker map produced (link likely failed — check exitCode/log).";
         }
+        await foldResolved(out, { map: r.symbols });
         return jsonContent(out);
       }
 
@@ -168,6 +188,49 @@ export function registerSymbolTools(server, z) {
 }
 
 // ── *Core functions for the `symbols` tool ──
+
+/**
+ * Resolve the on-disk `dbgPath`/`mapPath` convenience args into the inline
+ * `dbg`/`map` TEXT the core functions consume. The whole point: an agent can
+ * point at the .dbg/.map that build({output:'romWithDebug'}) wrote to disk and
+ * get back JUST the address — the 30-60KB map never enters the agent's context.
+ * Inline `dbg`/`map` always win if both are passed.
+ * @param {{dbg?:string, map?:string, dbgPath?:string, mapPath?:string}} args
+ * @returns {Promise<{dbg?:string, map?:string}>} the same args with paths read into text
+ */
+export async function loadDebugSource(args) {
+  const out = { ...args };
+  if (out.dbg == null && out.dbgPath) out.dbg = await readFile(out.dbgPath, "utf-8");
+  if (out.map == null && out.mapPath) out.map = await readFile(out.mapPath, "utf-8");
+  return out;
+}
+
+/**
+ * Resolve a list of symbol NAMES against an already-loaded debug source (cc65
+ * .dbg or sdld/GNU ld .map TEXT). Returns {name:{address,hex,region?,ramOffset?}}
+ * for each that resolves, and a `missing` list for any that don't. Powers
+ * build({resolveSymbols:[...]}) — resolve just the names you care about off the
+ * freshly-produced map WITHOUT dumping the whole map into the response.
+ * @param {{dbg?:string, map?:string, names:string[], platform?:string}} args
+ */
+export async function resolveSymbolsBatchCore({ dbg, map, names, platform }) {
+  /** @type {Record<string, {address:number, hex:string, region?:string, ramOffset?:number}>} */
+  const symbols = {};
+  /** @type {string[]} */
+  const missing = [];
+  for (const name of names) {
+    try {
+      const r = await resolveSymbolCore({ dbg, map, name, platform });
+      const entry = { address: r.address, hex: r.hex };
+      if (r.region) entry.region = r.region;
+      if (r.ramOffset != null) entry.ramOffset = r.ramOffset;
+      symbols[name] = entry;
+    } catch {
+      missing.push(name);
+    }
+  }
+  return { symbols, ...(missing.length ? { missing } : {}) };
+}
 
 /**
  * Load a normalized symbol list from whichever debug format the caller passed:
@@ -218,8 +281,14 @@ function ramReadHint(sym) {
   };
 }
 
+/** Tag a resolve result with the CPU memory region the address falls in (when platform known). */
+function regionField(platform, addr) {
+  const region = platform ? regionForAddress(platform, addr) : null;
+  return region ? { region } : {};
+}
+
 /** op:'resolve' — symbol name → address. cc65 .dbg, sdld .map, OR GNU ld .map (Genesis). */
-export async function resolveSymbolCore({ dbg, map, name }) {
+export async function resolveSymbolCore({ dbg, map, name, platform }) {
       // cc65 .dbg keeps its bespoke index (it understands the '_name' C alias).
       if (dbg && !map) {
         const { parseDbg, DbgIndex } = await import("../../toolchains/cc65/dbgparse.js");
@@ -233,6 +302,7 @@ export async function resolveSymbolCore({ dbg, map, name }) {
         if (addr === null) throw new Error(`no symbol named '${name}' in this .dbg`);
         return {
           name: resolvedName, address: addr, hex: hexAddr(addr),
+          ...regionField(platform, addr),
           ...(resolvedName !== name ? { note: `Resolved as cc65 C symbol '${resolvedName}' (you asked for '${name}').` } : {}),
         };
       }
@@ -242,7 +312,7 @@ export async function resolveSymbolCore({ dbg, map, name }) {
       // SDCC strips the leading underscore on load; a caller passing '_score' still matches.
       if (!hit && name.startsWith("_")) hit = symbols.find((s) => s.name === name.slice(1));
       if (!hit) throw new Error(`no symbol named '${name}' in this ${format}.`);
-      return { name: hit.name, address: hit.addr, hex: hexAddr(hit.addr), format, ...ramReadHint(hit) };
+      return { name: hit.name, address: hit.addr, hex: hexAddr(hit.addr), format, ...regionField(platform, hit.addr), ...ramReadHint(hit) };
 }
 
 /** op:'lookup' — address → the symbol whose value is closest at-or-below it. cc65 .dbg, sdld/GNU .map. */
@@ -270,35 +340,46 @@ export async function lookupAddressCore({ dbg, map, address }) {
       };
 }
 
+// Per-platform region boundaries (CPU memory map). cc65 6502 targets + the
+// Z80 family (SDCC) — both keyed the same way. Single source of truth shared by
+// op:'map' (getMemoryMapCore) and the build({resolveSymbols}) region tagging.
+const REGIONS_BY_PLATFORM = {
+  nes:       [{name:"zeropage",lo:0,hi:0xff},{name:"stack",lo:0x100,hi:0x1ff},{name:"system_ram",lo:0x200,hi:0x7ff},{name:"ppu_regs",lo:0x2000,hi:0x2007},{name:"apu_input",lo:0x4000,hi:0x401f},{name:"sram",lo:0x6000,hi:0x7fff},{name:"prg_rom",lo:0x8000,hi:0xffff}],
+  c64:       [{name:"zeropage",lo:0,hi:0xff},{name:"stack",lo:0x100,hi:0x1ff},{name:"system_ram",lo:0x200,hi:0x9fff},{name:"basic_rom",lo:0xa000,hi:0xbfff},{name:"io",lo:0xd000,hi:0xdfff},{name:"kernal",lo:0xe000,hi:0xffff}],
+  atari7800: [{name:"zeropage",lo:0,hi:0xff},{name:"stack",lo:0x100,hi:0x1ff},{name:"system_ram",lo:0x1800,hi:0x27ff},{name:"cart_rom",lo:0x4000,hi:0xffff}],
+  lynx:      [{name:"zeropage",lo:0,hi:0xff},{name:"stack",lo:0x100,hi:0x1ff},{name:"system_ram",lo:0x200,hi:0xfbff},{name:"hw_regs",lo:0xfc00,hi:0xffff}],
+  // PC Engine (cc65 pce target): ZP + 8KB work RAM at $2200 (the pce.cfg
+  // MAIN segment), HuCard ROM mapped high. The HuC6280 stack lives in the
+  // $21xx page via the MPR mapping.
+  pce:       [{name:"zeropage",lo:0,hi:0xff},{name:"stack",lo:0x2100,hi:0x21ff},{name:"system_ram",lo:0x2200,hi:0x3fff},{name:"hucard_rom",lo:0xe000,hi:0xffff}],
+  // Z80 family (SDCC + sdld .map). Cartridge ROM in the low half, work RAM high.
+  gb:        [{name:"rom",lo:0,hi:0x7fff},{name:"vram",lo:0x8000,hi:0x9fff},{name:"cart_ram",lo:0xa000,hi:0xbfff},{name:"work_ram",lo:0xc000,hi:0xdfff},{name:"oam",lo:0xfe00,hi:0xfe9f},{name:"io_hram",lo:0xff00,hi:0xffff}],
+  gbc:       [{name:"rom",lo:0,hi:0x7fff},{name:"vram",lo:0x8000,hi:0x9fff},{name:"cart_ram",lo:0xa000,hi:0xbfff},{name:"work_ram",lo:0xc000,hi:0xdfff},{name:"oam",lo:0xfe00,hi:0xfe9f},{name:"io_hram",lo:0xff00,hi:0xffff}],
+  sms:       [{name:"rom",lo:0,hi:0xbfff},{name:"work_ram",lo:0xc000,hi:0xdfff},{name:"ram_mirror",lo:0xe000,hi:0xffff}],
+  gg:        [{name:"rom",lo:0,hi:0xbfff},{name:"work_ram",lo:0xc000,hi:0xdfff},{name:"ram_mirror",lo:0xe000,hi:0xffff}],
+  // MSX cartridge: BIOS low, cart at $4000-$BFFF, work RAM $C000-$FFFF.
+  msx:       [{name:"bios",lo:0,hi:0x3fff},{name:"cart_rom",lo:0x4000,hi:0xbfff},{name:"work_ram",lo:0xc000,hi:0xffff}],
+  // Genesis (m68k-elf GNU ld map): ROM low, work-RAM mirror at $E0FF0000
+  // (= the emulator's `system_ram`, offset = low 16 bits of the symbol addr).
+  genesis:   [{name:"rom",lo:0,hi:0x3fffff},{name:"work_ram_mirror",lo:0xe0ff0000,hi:0xe0ffffff}],
+};
+
+/** Region NAME an address falls in for a platform, or null if unknown/out-of-range. */
+function regionForAddress(platform, addr) {
+  const regions = REGIONS_BY_PLATFORM[platform];
+  if (!regions) return null;
+  for (const r of regions) {
+    if (addr >= r.lo && addr <= r.hi) return r.name;
+  }
+  return null;
+}
+
 /** op:'map' — categorized layout of where the linker placed code+vars (cc65 .dbg OR sdld .map). */
 export async function getMemoryMapCore({ dbg, map, platform }) {
-      // Per-platform region boundaries (CPU memory map). cc65 6502 targets +
-      // the Z80 family (SDCC) — both keyed the same way.
-      const regionsByPlatform = {
-        nes:       [{name:"zeropage",lo:0,hi:0xff},{name:"stack",lo:0x100,hi:0x1ff},{name:"system_ram",lo:0x200,hi:0x7ff},{name:"ppu_regs",lo:0x2000,hi:0x2007},{name:"apu_input",lo:0x4000,hi:0x401f},{name:"sram",lo:0x6000,hi:0x7fff},{name:"prg_rom",lo:0x8000,hi:0xffff}],
-        c64:       [{name:"zeropage",lo:0,hi:0xff},{name:"stack",lo:0x100,hi:0x1ff},{name:"system_ram",lo:0x200,hi:0x9fff},{name:"basic_rom",lo:0xa000,hi:0xbfff},{name:"io",lo:0xd000,hi:0xdfff},{name:"kernal",lo:0xe000,hi:0xffff}],
-        atari7800: [{name:"zeropage",lo:0,hi:0xff},{name:"stack",lo:0x100,hi:0x1ff},{name:"system_ram",lo:0x1800,hi:0x27ff},{name:"cart_rom",lo:0x4000,hi:0xffff}],
-        lynx:      [{name:"zeropage",lo:0,hi:0xff},{name:"stack",lo:0x100,hi:0x1ff},{name:"system_ram",lo:0x200,hi:0xfbff},{name:"hw_regs",lo:0xfc00,hi:0xffff}],
-        // PC Engine (cc65 pce target): ZP + 8KB work RAM at $2200 (the pce.cfg
-        // MAIN segment), HuCard ROM mapped high. The HuC6280 stack lives in the
-        // $21xx page via the MPR mapping.
-        pce:       [{name:"zeropage",lo:0,hi:0xff},{name:"stack",lo:0x2100,hi:0x21ff},{name:"system_ram",lo:0x2200,hi:0x3fff},{name:"hucard_rom",lo:0xe000,hi:0xffff}],
-        // Z80 family (SDCC + sdld .map). Cartridge ROM in the low half, work RAM high.
-        gb:        [{name:"rom",lo:0,hi:0x7fff},{name:"vram",lo:0x8000,hi:0x9fff},{name:"cart_ram",lo:0xa000,hi:0xbfff},{name:"work_ram",lo:0xc000,hi:0xdfff},{name:"oam",lo:0xfe00,hi:0xfe9f},{name:"io_hram",lo:0xff00,hi:0xffff}],
-        gbc:       [{name:"rom",lo:0,hi:0x7fff},{name:"vram",lo:0x8000,hi:0x9fff},{name:"cart_ram",lo:0xa000,hi:0xbfff},{name:"work_ram",lo:0xc000,hi:0xdfff},{name:"oam",lo:0xfe00,hi:0xfe9f},{name:"io_hram",lo:0xff00,hi:0xffff}],
-        sms:       [{name:"rom",lo:0,hi:0xbfff},{name:"work_ram",lo:0xc000,hi:0xdfff},{name:"ram_mirror",lo:0xe000,hi:0xffff}],
-        gg:        [{name:"rom",lo:0,hi:0xbfff},{name:"work_ram",lo:0xc000,hi:0xdfff},{name:"ram_mirror",lo:0xe000,hi:0xffff}],
-        // MSX cartridge: BIOS low, cart at $4000-$BFFF, work RAM $C000-$FFFF.
-        msx:       [{name:"bios",lo:0,hi:0x3fff},{name:"cart_rom",lo:0x4000,hi:0xbfff},{name:"work_ram",lo:0xc000,hi:0xffff}],
-        // Genesis (m68k-elf GNU ld map): ROM low, work-RAM mirror at $E0FF0000
-        // (= the emulator's `system_ram`, offset = low 16 bits of the symbol addr).
-        genesis:   [{name:"rom",lo:0,hi:0x3fffff},{name:"work_ram_mirror",lo:0xe0ff0000,hi:0xe0ffffff}],
-      };
-
       // Parse symbols from whichever format was supplied (auto-detects sdld vs GNU ld).
       const { format, symbols: all } = await loadSymbolList({ dbg, map });
 
-      const regions = (platform && regionsByPlatform[platform]) || [];
+      const regions = (platform && REGIONS_BY_PLATFORM[platform]) || [];
       const labelFor = (addr) => {
         for (const r of regions) {
           if (addr >= r.lo && addr <= r.hi) return r.name;
@@ -358,8 +439,12 @@ function registerSymbolsTool(server, z) {
     "(GB/GBC/SMS/GG/MSX) vs GNU ld `.map` (Genesis/m68k, the `mapText`/`symbols` field). So resolve/lookup/map/list " +
     "cover 11 platforms (those listed). The 'addr' op is broader — it parses ANY sdld/ld65-VICE/GNU-ld map text, so it " +
     "also reaches dasm (Atari 2600) and GBA/ARM.\n" +
-    "OP CHEAT-SHEET: resolve {dbg|map, name}; lookup {dbg|map, address}; map {dbg|map, platform?}; list {dbg|map, max?}; " +
-    "addr {pc, symbolsText|symbolsPath}.\n" +
+    "**CHEAP PATH (no map in context): pass `dbgPath`/`mapPath` — an absolute path to the .dbg/.map that " +
+    "build({output:'romWithDebug'}) wrote (the `dbgPath`/`mapPath` it returned). The SERVER reads it; you get back " +
+    "JUST {address,hex,region?,ramOffset?} without the 30-60KB map ever entering your context.** (Or skip this tool " +
+    "entirely: build({resolveSymbols:[...]}) resolves names off the fresh map in one round trip.)\n" +
+    "OP CHEAT-SHEET: resolve {dbg|map|dbgPath|mapPath, name, platform?}; lookup {dbg|map|dbgPath|mapPath, address}; " +
+    "map {dbg|map|dbgPath|mapPath, platform?}; list {dbg|map|dbgPath|mapPath, max?}; addr {pc, symbolsText|symbolsPath}.\n" +
     "'resolve' (name→address): resolve a C global, then memory({op:'read'}) it for headless assertions. " +
     "**GENESIS: a work-RAM symbol comes back with `ramOffset` (the low 16 bits) + a `readHint` — read it via " +
     "memory({op:'read', region:'system_ram', offset:ramOffset}).** cc65 C symbols become '_score' in the .dbg (the " +
@@ -375,25 +460,31 @@ function registerSymbolsTool(server, z) {
     "(`al XXXX .name`, cc65/dasm).",
     {
       op: z.enum(["resolve", "lookup", "map", "list", "addr"]).describe("resolve name→addr; lookup addr→sym; map = layout by region; list all; addr = PC→nearest symbol."),
-      dbg: z.string().optional().describe("op=resolve/lookup/list/map: cc65 .dbg text from build({output:'romWithDebug'}) (NES/C64/Atari7800/Lynx/PCE). Pass this OR `map`."),
-      map: z.string().optional().describe("op=resolve/lookup/list/map: .map text (build's `mapText`/`symbols`) — auto-detects sdld (GB/GBC/SMS/GG/MSX) vs GNU ld (Genesis/m68k). Pass this OR `dbg`."),
+      dbg: z.string().optional().describe("op=resolve/lookup/list/map: cc65 .dbg text from build({output:'romWithDebug'}) (NES/C64/Atari7800/Lynx/PCE). Pass this OR `map`/`dbgPath`/`mapPath`."),
+      map: z.string().optional().describe("op=resolve/lookup/list/map: .map text (build's `mapText`/`symbols`) — auto-detects sdld (GB/GBC/SMS/GG/MSX) vs GNU ld (Genesis/m68k). Pass this OR `dbg`/`dbgPath`/`mapPath`."),
+      dbgPath: z.string().optional().describe("op=resolve/lookup/list/map: ABSOLUTE path to a cc65 .dbg on disk (the `dbgPath` build({output:'romWithDebug'}) returned). Server reads it — the map never enters your context. Inline `dbg` wins if both passed."),
+      mapPath: z.string().optional().describe("op=resolve/lookup/list/map: ABSOLUTE path to a .map on disk (the `mapPath` build({output:'romWithDebug'}) returned; sdld or GNU ld, auto-detected). Server reads it — the map never enters your context. Inline `map` wins if both passed."),
       name: z.string().optional().describe("op=resolve: symbol name (C name; no leading underscore needed — both spellings tried)."),
       address: z.number().int().min(0).optional().describe("op=lookup: address whose enclosing symbol to find."),
       max: z.number().int().min(1).max(10000).default(200).describe("op=list: max symbols to return (default 200)."),
-      platform: z.string().optional().describe("op=map: platform id — adds per-platform region labels (incl. genesis work-RAM mirror)."),
+      platform: z.string().optional().describe("op=map (region labels) / op=resolve (adds a `region` field to the result) — platform id (incl. genesis work-RAM mirror)."),
       // addr
       pc: z.number().int().min(0).max(0xFFFFFF).optional().describe("op=addr: CPU address to look up (e.g. 0x01A7)."),
       symbolsText: z.string().optional().describe("op=addr: inline .map/.sym text (build's `symbols`). Takes precedence over symbolsPath."),
       symbolsPath: z.string().optional().describe("op=addr: path to a .map/.sym file (used only if symbolsText absent)."),
     },
     safeTool(async (args) => {
-      switch (args.op) {
-        case "resolve": return jsonContent(await resolveSymbolCore(args));
-        case "lookup":  return jsonContent(await lookupAddressCore(args));
-        case "map":     return jsonContent(await getMemoryMapCore(args));
-        case "list":    return jsonContent(await listSymbolsCore(args));
-        case "addr":    return jsonContent(await addressToSymbolCore(args));
-        default: throw new Error(`symbols: unknown op '${args.op}'`);
+      // dbgPath/mapPath → read the .dbg/.map TEXT off disk so resolve/lookup/map/
+      // list work without the agent ever loading the map into context. (addr has
+      // its own symbolsPath handling.)
+      const a = args.op === "addr" ? args : { ...args, ...(await loadDebugSource(args)) };
+      switch (a.op) {
+        case "resolve": return jsonContent(await resolveSymbolCore(a));
+        case "lookup":  return jsonContent(await lookupAddressCore(a));
+        case "map":     return jsonContent(await getMemoryMapCore(a));
+        case "list":    return jsonContent(await listSymbolsCore(a));
+        case "addr":    return jsonContent(await addressToSymbolCore(a));
+        default: throw new Error(`symbols: unknown op '${a.op}'`);
       }
     }),
   );
