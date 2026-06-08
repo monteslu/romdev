@@ -53,7 +53,7 @@ export function registerPlatformTools(server, z, sessionKey) {
   // inspectPatternTiles lives in the `tiles` tool (tiles({op:'png'}), in
   // tile-inspect.js) now — extracted here as a live-binding core. Reads the
   // running emulator's pattern tables / VRAM (or an iNES file via `path`).
-  inspectPatternTilesCore = async ({ platform, path: romPath, bpp = 4, tileBaseByte = 0, paletteBase = 0, paletteIndex = 0, tileCount = 0, scale = 1, outputPath, inline }) => {
+  inspectPatternTilesCore = async ({ platform, path: romPath, bpp = 4, tileBaseByte = 0, paletteBase = 0, paletteIndex = 0, tileCount = 0, scale = 1, outputPath, inline }, callerSessionKey) => {
       requireImageTarget(outputPath, inline, "inspectPatternTiles");
       // Integer nearest-neighbor upscale of a PNG — keeps pixel-art tiles crisp
       // while making a small tile strip actually readable inline.
@@ -102,7 +102,7 @@ export function registerPlatformTools(server, z, sessionKey) {
         if (!hasChr) throw new Error(`'${romPath}' is a CHR-RAM cart — no graphics in the ROM file. Load it and call inspectPatternTiles without path.`);
         return emit(png, { platform: p, source: "file", sourcePath: romPath, width, height });
       }
-      const host = getHost(sessionKey);
+      const host = getHost(callerSessionKey ?? sessionKey);
       const p = resolvePlatform(host, platform);
       if (p === "nes") {
         const { snapshotPatternTables } = await import("../../platforms/nes/ppu.js");
@@ -342,8 +342,8 @@ export function registerPlatformTools(server, z, sessionKey) {
   };
 
   // getCPUState → cpu({op:'read'}) (router in watch-memory.js). Live-binding core.
-  getCPUStateCore = async ({ platform, cpu = "main" }) => {
-      const host = getHost(sessionKey);
+  getCPUStateCore = async ({ platform, cpu = "main" }, callerSessionKey) => {
+      const host = getHost(callerSessionKey ?? sessionKey);
       const p = resolvePlatform(host, platform);
       const state = getCPUState(host, p, cpu);
       if (!state) {
@@ -357,8 +357,8 @@ export function registerPlatformTools(server, z, sessionKey) {
   // Subsumes the old getDspState / getPsgState / getYm2612State, which
   // remain as thin deprecated aliases below for back-compat.
   /** Run the chip decoder for one chip; returns the structured JSON object. */
-  function readAudioChip(chip) {
-    const host = getHost(sessionKey);
+  function readAudioChip(chip, callerSessionKey) {
+    const host = getHost(callerSessionKey ?? sessionKey);
     if (chip === "dsp") {
       const p = resolvePlatform(host, "snes");
       const dsp = getDspState(host, p);
@@ -421,13 +421,20 @@ export function registerPlatformTools(server, z, sessionKey) {
     throw new Error(`getAudioState: unknown chip '${chip}'. Use 'nes' (NES 2A03), 'gb' (Game Boy/GBC), 'gba' (GBA), 'dsp' (SNES), 'psg' (Genesis/SMS/GG SN76489), 'ym2612' (Genesis FM), 'sid' (C64), or 'mikey' (Lynx).`);
   }
 
-  getAudioStateCore = async ({ chip }) => jsonContent(readAudioChip(chip));
+  getAudioStateCore = async ({ chip }, callerSessionKey) => jsonContent(readAudioChip(chip, callerSessionKey));
 
   // inspectSprites lives in the `sprites` tool (metasprite-tools.js) now —
   // extracted here as a live-binding core so the router can call it without
   // disturbing the other handlers registerPlatformTools owns.
-  inspectSpritesCore = async ({ platform, maxSlots, slots, outputPath, inline }) => {
-      const host = getHost(sessionKey);
+  inspectSpritesCore = async ({ platform, maxSlots, slots, outputPath, inline }, callerSessionKey) => {
+      // sessionKey MUST come from the live call, not the closure: these *Core
+      // functions are module-level `export let` bindings reassigned on every
+      // registerPlatformTools() run, so the closure's `sessionKey` is whatever
+      // session registered LAST — not the caller's. Threading it through the
+      // call args keeps each session reading its OWN host. (Same fix shape as
+      // inspectPaletteCore.) Falls back to the registration key for any caller
+      // that still invokes the old 1-arg form.
+      const host = getHost(callerSessionKey ?? sessionKey);
       const p = resolvePlatform(host, platform);
       // Generic slot filter, applied by each platform branch before returning.
       // `slots` (explicit index list) wins over `maxSlots` (first N); the
@@ -693,8 +700,8 @@ export function registerPlatformTools(server, z, sessionKey) {
   // inspectBackgroundMap lives in the `background` tool (rendering-context.js)
   // now — extracted here as a live-binding core so the router can call it
   // without disturbing the other handlers registerPlatformTools owns.
-  inspectBackgroundMapCore = async ({ platform, render, region, attributesOnly, tilesOnly, which, window, plane, tilemapBaseByte, tileBaseByte, bpp, mapWidth, mapHeight, outputPath, inline }) => {
-      const host = getHost(sessionKey);
+  inspectBackgroundMapCore = async ({ platform, render, region, attributesOnly, tilesOnly, which, window, plane, tilemapBaseByte, tileBaseByte, bpp, mapWidth, mapHeight, outputPath, inline }, callerSessionKey) => {
+      const host = getHost(callerSessionKey ?? sessionKey);
       const p = resolvePlatform(host, platform);
       if (attributesOnly && tilesOnly) {
         throw new Error("inspectBackgroundMap: attributesOnly and tilesOnly are mutually exclusive — omit both to get tiles + subPaletteGrid together.");

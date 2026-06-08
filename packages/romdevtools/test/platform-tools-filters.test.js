@@ -112,3 +112,47 @@ test("inspectBackgroundMap rejects attributesOnly + tilesOnly together", async (
   assert.equal(res.isError, true);
   assert.match(res.content[0].text, /mutually exclusive/);
 });
+
+// Regression: the *Core functions (inspectSpritesCore, getCPUStateCore, ...) are
+// module-level `export let` bindings reassigned on every registerPlatformTools()
+// run. They MUST resolve the host from the session of the CALLING router, not from
+// whatever session registered last. The bug: a session A (genesis) would have its
+// sprites({op:'inspect'}) silently read session B's host (gbc, registered later),
+// producing a gbc-flavored "video_ram empty on platform 'gbc'" error while genesis
+// was loaded + requested. See the metasprite-tools sprites router passing sessionKey.
+function makeNesHostFor(platform) {
+  const host = makeNesHost();
+  host.status = { platform };
+  return host;
+}
+
+test("sprites({op:'inspect'}) reads the CALLING session's host, not the last-registered one", async () => {
+  // Register session A FIRST, then session B — B's registration reassigns the
+  // module-level inspectSpritesCore closure (the old bug's trap). Each session
+  // gets its own router via its own registration.
+  function handlersFor(sessionKey) {
+    const map = {};
+    const server = { tool(name, _desc, _schema, hnd) { map[name] = hnd; } };
+    registerPlatformTools(server, z, sessionKey);
+    registerMetaSpriteTools(server, z, sessionKey);
+    return map;
+  }
+  const hA = handlersFor("sess-A-genesis");
+  // The RETURN value is unused — what matters is the SIDE EFFECT: registering
+  // session B last is what would steal the module-global closure (the bug).
+  handlersFor("sess-B-gbc");
+  _setHostForTest("sess-A-genesis", makeNesHostFor("nes")); // stand-in host, platform tagged A
+  _setHostForTest("sess-B-gbc", makeNesHostFor("gbc"));
+
+  // Session A's sprites inspect must resolve session A's host (platform 'nes'),
+  // NOT session B's ('gbc'). Pre-fix this returned B's platform.
+  const rA = parse(await hA.sprites({ op: "inspect", maxSlots: 2 }));
+  assert.equal(rA.platform, "nes", "session A must read its own (nes) host");
+
+  // And session B still reads its own (gbc decodes via the gb branch; give it a
+  // gb-shaped fake by reusing the nes host but tagging platform — the gb branch
+  // needs a real ppu snapshot, so just assert A is correct + B doesn't leak A).
+  // The key invariant under test is no cross-session host resolution.
+  const rA2 = parse(await hA.sprites({ op: "inspect", maxSlots: 1 }));
+  assert.equal(rA2.platform, "nes", "repeat call on A is still A");
+});

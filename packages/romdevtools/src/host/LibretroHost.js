@@ -1630,7 +1630,7 @@ export class LibretroHost {
       sms:   { video_ram: "sms_vram (or sms_cram for palette, sms_vdp_regs for VDP regs)" },
       gg:    { video_ram: "gg_vram (or gg_cram for the 64-byte 12-bit palette, sms_vdp_regs for VDP regs)" },
       snes:  { video_ram: "snes_oam (sprite OAM), snes_cgram (palette), snes_aram (SPC700), or snes_fillram (PPU/DMA reg shadow). The libretro generic 'video_ram' id isn't wired in snes9x." },
-      genesis: { video_ram: "genesis_cram / genesis_vsram / genesis_vdp_regs — the generic 'video_ram' id isn't wired in gpgx for Genesis. VRAM itself isn't exposed; use inspectPatternTiles / inspectBackgroundMap / getRenderingContext instead." },
+      genesis: { video_ram: "Genesis VRAM IS exposed via 'video_ram' (gpgx) once a ROM is loaded and a frame has run — if it reads empty, step a frame first (the SAT/sprites need the game to have written VRAM). Palette/scroll/VDP regs are genesis_cram / genesis_vsram / genesis_vdp_regs. For decoded views use inspectSprites / inspectPatternTiles / inspectBackgroundMap / getRenderingContext." },
       c64:   { video_ram: "c64_color_ram (1 KB) / c64_vic_regs / c64_sid_regs / c64_cia1_regs / c64_cia2_regs. The C64 has no separate VRAM — the VIC-II reads from main system_ram." },
     };
     const hint = suggestions[plat] && suggestions[plat][region];
