@@ -13,7 +13,11 @@
  * level fits in the scroll plane and plain VDP_setHorizontalScroll moves
  * it — a real working scroller with no streaming. For a world WIDER than
  * 512 px you additionally stream the column entering view each time camX
- * crosses an 8-px boundary (see MENTAL_MODEL.md "Horizontal scrolling").
+ * crosses an 8-px boundary (see MENTAL_MODEL.md "How Sonic-style large
+ * maps REALLY work"). For a from-scratch smooth-scroll + parallax
+ * starting point with NO per-frame tilemap writes, see the
+ * two_plane_parallax template + MENTAL_MODEL.md "Scrolling, parallax &
+ * the feel trap".
  */
 
 #include <genesis.h>

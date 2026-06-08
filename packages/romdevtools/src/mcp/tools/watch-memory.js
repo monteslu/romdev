@@ -1001,7 +1001,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     "**CAVEAT: frame-level, not instruction-level (last value per frame); the sampled `pc` is a frame-boundary sample — for ISR-driven writes use breakpoint({on:'write', precision:'exact'}) for the real writer.**\n" +
     "• on:'range' — DISCOVERY: log EVERY instruction that reads or writes ANYWHERE in [start,end]. The fix for 'I don't know which PC touches this'. Returns {pc,address,value}[] + the actionable distinctPCs. (Ring-buffered: `truncated:true` if it overflows.) `fromState`/`fromStatePath` restores a savestate FIRST so the trace runs from a known moment (jump to the boss, then see what writes HP) — deterministic + repeatable.\n" +
     "• on:'pc' — DISCOVERY (coverage trace): record every DISTINCT PC executed within [start,end] — 'what code runs here?'. Log execution in the bank where you suspect the renderer lives during the moment it draws, then disassemble the PCs. Also takes `fromState`/`fromStatePath` to trace from a restored moment.\n" +
-    "• on:'dma' — GENESIS ONLY: trace mem→VDP DMAs (the answer to 'this name/portrait/logo is a pre-rendered bitmap DMA'd into VRAM — WHERE in ROM?', which on:'write' can't catch). `precision:'exact'` (default) logs every mem→VDP DMA with its VRAM DESTINATION + ROM SOURCE + length (filter by `vramDest`±`destWindow`; `dedupe` collapses the per-frame refresh; `sourceFilter:'rom-only'` drops RAM→VRAM noise; catches a same-frame second DMA). `precision:'sampled'` is the cheap frame-sampled source-register read (may miss two DMAs in one frame, dest-agnostic). On non-Genesis cores returns `notSupported`.",
+    "• on:'dma' — GENESIS ONLY: trace mem→VDP DMAs (the answer to 'this name/portrait/logo is a pre-rendered bitmap DMA'd into VRAM — WHERE in ROM?', which on:'write' can't catch). `precision:'exact'` (default) logs every mem→VDP DMA with its VRAM DESTINATION + ROM SOURCE + length (filter by `vramDest`±`destWindow`; `dedupe` collapses the per-frame refresh; `sourceFilter:'rom-only'` drops RAM→VRAM noise; catches a same-frame second DMA). `precision:'sampled'` is the cheap frame-sampled source-register read (may miss two DMAs in one frame, dest-agnostic). `perFrame:true` switches to FEEL/PERF MODE: a per-frame timeline of VDP-DMA WORK ({frame,dmas,bytes,romBytes,ramBytes} + peakFrame + `spikes`) — the cheap 'why does horizontal movement feel choppy?' diagnostic (a per-frame byte spike = too much VDP work in the loop, e.g. a tilemap rewrite). On non-Genesis cores returns `notSupported`.",
     {
       on: z.enum(["mem", "range", "pc", "dma"])
         .describe("mem=watch a RAM byte/ranges for value changes over frames (the power tool); range=log every read/write PC in [start,end]; pc=coverage trace of distinct PCs executed in [start,end]; dma=Genesis-only mem→VDP DMA source/dest trace."),
@@ -1028,7 +1028,8 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       limit: z.number().int().min(1).max(4000).default(200).describe("on:'range'/'pc' — max events/PCs returned (default 200; full count is in `total`)."),
       outputPath: z.string().optional().describe("on:'mem' — stream every filter-passing event to this path as NDJSON + return a compact summary. Use for long watches so the full log never enters your context."),
       // on:'dma' (Genesis VDP DMA trace)
-      precision: z.enum(["exact", "sampled"]).default("exact").describe("on:'dma' — exact=per-DMA core log with VRAM dest + ROM source (catches same-frame DMAs); sampled=frame-sampled source-register read (cheaper, may miss two DMAs in one frame, dest-agnostic)."),
+      perFrame: z.boolean().default(false).describe("on:'dma' — FEEL/PERF MODE: instead of one aggregated source/dest log, return a PER-FRAME timeline of VDP-DMA WORK [{frame, dmas, bytes, romBytes, ramBytes}] + peakFrame/peakBytes. This is the cheap 'why does horizontal movement feel choppy?' answer — a frame whose DMA bytes spike (esp. romBytes, an asset re-upload) is doing too much VDP work in the loop (the classic 'I rewrote a tilemap every frame' bug). A smooth hardware-scroll loop shows a low, flat curve. Combine with `pressDuring` to correlate the spike with input (hold RIGHT, see which frames burst). No core rebuild — re-arms the DMA counter each frame."),
+      precision: z.enum(["exact", "sampled"]).default("exact").describe("on:'dma' — exact=per-DMA core log with VRAM dest + ROM source (catches same-frame DMAs); sampled=frame-sampled source-register read (cheaper, may miss two DMAs in one frame, dest-agnostic). Ignored when perFrame:true."),
       vramDest: z.number().int().min(0).optional().describe("on:'dma' precision:'exact' — keep only DMAs whose VRAM destination is within ±`destWindow` of this address."),
       destWindow: z.number().int().min(0).default(0x40).describe("on:'dma' precision:'exact' — match window around vramDest (default 64 bytes ≈ 1 tile)."),
       dedupe: z.boolean().default(true).describe("on:'dma' precision:'exact' — collapse identical DMAs (same dest+source+length+code) to one entry with an `occurrences` count (default on)."),
@@ -1057,6 +1058,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         }
         case "dma": {
           const a = { ...args, frames: args.frames ?? 120, limit: args.limit ?? 200 };
+          if (a.perFrame) return await dmaPerFrame(a);
           if (a.precision === "sampled") {
             return await traceVramSourceCore({ ...a, romPreviewBytes: a.romPreviewBytes || 16, sessionKey });
           }
@@ -1132,7 +1134,57 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
           (totalDistinct > limit ? `Showing ${out.length}/${totalDistinct} distinct — raise limit or narrow vramDest.` : ""),
       }), host);
   }
-  // dmaExact + traceVramSourceCore are reached via watch({on:'dma'}) above —
-  // dmaTrace was folded into `watch` (it's a log-all VDP-DMA trace, same family
-  // as on:'mem'/'range'/'pc'), so there's no separate top-level tool.
+
+  // watch({on:'dma', perFrame:true}) — FEEL/PERF timeline. Steps frame-by-frame,
+  // re-arming the DMA counter each frame (the core resets on arm), and reports
+  // VDP-DMA WORK per frame. The cheap, no-core-rebuild "why is movement choppy?"
+  // diagnostic: a frame whose bytes (esp. romBytes — an asset re-upload) spike is
+  // doing too much VDP work in the loop. Optionally driven by `pressDuring` so the
+  // spike correlates with input. See genesis MENTAL_MODEL "feel trap".
+  async function dmaPerFrame({ frames = 120, pressDuring, maxFrames = 600 }) {
+    const host = getHost(sessionKey);
+    if (!host.dmaWatchSupported || !host.dmaWatchSupported()) {
+      return jsonContent({ notSupported: true, frames: [],
+        note: "watch({on:'dma', perFrame}) is Genesis-only (VDP DMA). On other cores there's no VDP DMA to count." });
+    }
+    const n = Math.min(frames, maxFrames);
+    const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
+    const pressDriver = makePressDriver(host, presses);
+    const r = host.watchDmaPerFrame(n, (i) => pressDriver.applyForFrame(i));
+    pressDriver.finish();
+    const tl = r.frames;
+    // Compact: only KEEP frames that did any DMA, plus always the peak. A flat
+    // hardware-scroll loop is mostly the steady SAT refresh — summarise it.
+    const nonZero = tl.filter((f) => f.bytes > 0);
+    const avgBytes = tl.length ? Math.round(r.totalBytes / tl.length) : 0;
+    const peak = tl[r.peakFrame] || null;
+    // A spike heuristic: a frame whose bytes are >3x the average AND carries ROM
+    // source bytes (an asset upload, not the steady RAM refresh) is the smell.
+    const spikes = tl.filter((f) => avgBytes > 0 && f.bytes > avgBytes * 3 && f.romBytes > 0)
+                     .map((f) => ({ frame: f.frame, bytes: f.bytes, romBytes: f.romBytes, dmas: f.dmas }));
+    // Cap the returned per-frame rows so a long run doesn't flood context.
+    const rows = nonZero.slice(0, 240);
+    return attachObserverFrame(jsonContent({
+      perFrame: true,
+      framesRun: n,
+      totalDmas: r.totalDmas,
+      totalBytes: r.totalBytes,
+      avgBytesPerFrame: avgBytes,
+      peakFrame: r.peakFrame,
+      peakBytes: r.peakBytes,
+      ...(peak ? { peakDetail: peak } : {}),
+      framesWithDma: nonZero.length,
+      ...(spikes.length ? { spikes } : {}),
+      ...(presses.length ? { pressesApplied: pressDriver.applied() } : {}),
+      timeline: rows,
+      ...(nonZero.length > rows.length ? { timelineTruncated: nonZero.length } : {}),
+      note: "Per-frame VDP-DMA WORK. `bytes` = VRAM/CRAM/VSRAM bytes DMA'd that frame; `romBytes` = bytes copied FROM cart ROM (an asset upload), `ramBytes` = the steady RAM→VRAM sprite/scroll refresh. " +
+        "A smooth hardware-scroll loop shows a low, flat curve (mostly ramBytes ≈ the SAT refresh). " +
+        "A `spikes` entry (bytes >3x avg WITH romBytes) is the 'I rewrote a tilemap / re-uploaded tiles in the frame loop' smell — move that work to setup or stream ONE column per 8-px scroll step instead. " +
+        "Hold input with `pressDuring` to see which input bursts. CEILING: this counts DMA bytes; CPU writes to the VDP data port (VDP_setTileMapXY without DMA) are NOT DMA and aren't counted here — those need a core-side VDP-write hook (future).",
+    }), host);
+  }
+  // dmaExact + dmaPerFrame + traceVramSourceCore are reached via watch({on:'dma'})
+  // above — dmaTrace was folded into `watch` (it's a log-all VDP-DMA trace, same
+  // family as on:'mem'/'range'/'pc'), so there's no separate top-level tool.
 }

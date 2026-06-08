@@ -230,3 +230,35 @@ pixels per byte). The shipped `hello_sprite`, `tile_engine`, `shmup`,
 `platformer`, `puzzle` templates use this approach. **But never
 hand-encode a full-screen image this way** — that's the red/choppy
 failure above.
+
+## "Horizontal movement / scrolling feels choppy or judders"
+
+Almost always: **you're rewriting the tilemap in the frame loop.** The
+Genesis scrolls in HARDWARE — moving the world is two register writes
+(`VDP_setHorizontalScroll`), which cost nothing. If you instead redraw a
+plane every frame (a `VDP_fillTileMapRect` / `VDP_loadTileMap` / big
+`DMA_*` each frame), you overrun the vblank DMA budget and drop frames →
+judder. Fix: paint the planes ONCE at setup; the loop only nudges scroll
+registers + re-stages sprites. The `template:"two_plane_parallax"`
+scaffold is the known-good shape.
+
+Diagnose it without guessing (no core rebuild):
+
+- **Per-frame VDP work:** `watch({on:'dma', perFrame:true, frames:120,
+  pressDuring:[{frame:0, button:'right', holdFrames:120}]})` → a per-frame
+  `[{frame, bytes, romBytes, ramBytes}]` timeline + `spikes`. A smooth
+  loop is a LOW, FLAT curve (just the SAT/scroll refresh). A `spikes`
+  entry (bytes ≫ avg, esp. `romBytes`) IS the per-frame asset-upload /
+  tilemap-rewrite mistake. (Counts DMA bytes only — non-DMA single-cell
+  `VDP_setTileMapXY` pokes aren't counted; the expensive whole-plane work
+  always uses DMA and does show.)
+- **Motion curve:** sample the player-X + both planes' HSCROLL ($F000 in
+  `video_ram`) over 180 frames while holding a direction — see
+  MENTAL_MODEL.md "Why does horizontal movement feel choppy?". Look for
+  scroll that jumps (non-constant per-frame delta) or a camera that moves
+  while the sprite's screen-X is frozen.
+
+For a world WIDER than one 512-px plane, don't make the plane bigger and
+don't redraw it — stream ONE offscreen column per 8-px camera step
+(circular-buffer the 64-cell plane). See MENTAL_MODEL.md "How Sonic-style
+large maps REALLY work".

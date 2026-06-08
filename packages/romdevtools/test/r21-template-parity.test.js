@@ -16,7 +16,7 @@ import { dirname, resolve, join } from "node:path";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "..");
 
-const GENESIS_TEMPLATES = ["sgdk_hello", "hello_sprite", "tile_engine", "shmup", "platformer", "puzzle"];
+const GENESIS_TEMPLATES = ["sgdk_hello", "hello_sprite", "tile_engine", "shmup", "platformer", "puzzle", "two_plane_parallax"];
 const SNES_TEMPLATES = ["hello_sprite", "shmup", "platformer", "puzzle"];
 const GB_TEMPLATES = ["shmup", "platformer", "puzzle"];
 
