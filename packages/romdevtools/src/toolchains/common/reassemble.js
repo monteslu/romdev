@@ -67,7 +67,7 @@ function firstDiff(a, b) {
 //   m68k (genesis)                            → objdump → m68k-elf-as/ld/objcopy
 //   arm (gba)                                 → objdump → arm-none-eabi-as/ld/objcopy
 
-const CPU_FAMILY = {
+export const CPU_FAMILY = {
   nes: "6502", c64: "6502", atari2600: "6502", atari7800: "6502", lynx: "6502",
   snes: "65816",
   sms: "z80", gg: "z80", msx: "z80",
@@ -254,7 +254,15 @@ async function reassembleGnuNative(disasm, startAddress, original, tools, family
     if (!pinned) { const n = codeIdx.find((i) => !forced.has(i)); if (n == null) break; forced.add(n); }
   }
   // Floor: clean all-`.byte` (proven byte-exact, no labels to perturb layout).
-  const rows = [".section .text", ".global _start", "_start:"];
+  // Mirror build()'s `.org` for the no-link (z80/gbz80) path: without it,
+  // objcopy emits the section from file offset 0, and assemble()'s
+  // `bin.slice(startAddress, …)` then returns bytes that are `startAddress`-short
+  // (empty for a $4000/$8000-based region) — so any non-zero-org region (MSX
+  // $4010, GB bank1 $4000, …) silently fails the floor. The linked path sets the
+  // origin via the link script, so it must NOT carry a redundant `.org`.
+  const rows = [".section .text", ".global _start"];
+  if (tools.noLink) rows.push(`.org 0x${startAddress.toString(16)}`);
+  rows.push("_start:");
   for (let i = 0; i < original.length; i += 16) rows.push("\t.byte " + Array.from(original.slice(i, i + 16)).map((b) => "0x" + b.toString(16).padStart(2, "0")).join(","));
   const r = await assemble(rows.join("\n") + "\n");
   const ok = r.ok && r.bytes.length === original.length && firstDiff(original, r.bytes) < 0;

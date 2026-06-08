@@ -4,6 +4,58 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.21.0
+
+**NES CHR-ROM / iNES rebuild ergonomics + turnkey `disasm({target:'project'})`
+across all platforms.** Addresses the v0.16.0 feedback: rebuilding a commercial
+NROM game from its disassembly into a byte-identical `.nes` no longer needs
+hand-written iNES header bytes, a CHR-ROM `.incbin` glue source, or a 3-region
+linker `.cfg`.
+
+### Added — `build({inesHeader:{prgBanks, chrBanks, mapper, mirroring, battery?}})`
+NES NROM-rebuild convenience. Auto-emits the 16-byte iNES HEADER segment, wires
+the CHR-ROM blob (from `binaryIncludePaths`) into a CHARS segment, and
+synthesizes the flat NROM linker `.cfg` (HEADER + PRG + CHARS). The agent
+supplies only the PRG disassembly + the CHR blob — no glue `.s`/`.cfg`, no
+hand-derived header bytes. PRG start/size derive from `prgBanks` (NROM-128 →
+$C000, NROM-256 → $8000). Mutually exclusive with `linkerConfig`. Proven
+byte-identical against `nestest.nes`.
+
+### Added — `linkerConfig:"chr-rom"` NES preset
+Sibling of `chr-ram`/`chr-ram-runtime`, for homebrew C that ships FIXED tile art:
+segment split + a CHARS segment in an 8 KB ROM2 bank + a companion crt0 with an
+8 KB-CHR-ROM iNES header. (For other bank configs, prefer `inesHeader`.)
+
+### Changed — `disasm({target:'project'})` now emits a TURNKEY, rebuildable project
+Previously it wrote only byte-exact `.asm` region files. Now, per platform, it
+also writes the "rebuild glue": data blobs (NES CHR-ROM, MSX/Genesis/GBA/Lynx
+headers), a human/agent-readable `BUILD.md`, and — where a one-call rebuild
+exists — a `rebuild.json` (the exact `build()` args, absolute paths). Feed
+`rebuild.json` back to `build` and you get a byte-identical ROM.
+- **One-call `build()` rebuild (byte-identical):** NES, C64, Atari 7800, Lynx
+  (Lynx: build() yields the headerless image + a shipped `lnx_header.bin` to
+  prepend).
+- **Native-recipe (byte-identical, documented in BUILD.md):** SMS, GG, MSX, GB,
+  GBC, Genesis, GBA, Atari 2600 — the disasm emits each CPU's native-reassembler
+  syntax (ca65 for 6502/65816, GNU `as` for z80/sm83/m68k/arm), which those
+  platforms' `build()` toolchains (SDCC/RGBDS/asar/dasm/vasm) can't consume, so
+  BUILD.md gives the proven native chain.
+- **Not yet byte-exact:** PC Engine (planRegions trims real trailing padding +
+  doesn't strip a copier header — BUILD.md says so).
+
+### Fixed — disasm round-trip bugs surfaced by the rebuild work
+- `reassemble.js`'s data-only floor omitted `.org`, silently truncating any
+  region with a non-zero start address — so multi-bank GB/GBC ($4000 banks) and
+  MSX ($4010) didn't round-trip at all. The floor now mirrors the linked path's
+  origin handling.
+- `dataRegionSource` emitted `$`-prefixed hex that GNU assemblers (ARM/m68k)
+  reject (`$2E` read as an undefined symbol); it's now CPU-family-aware (`0x` hex
+  for z80/sm83/m68k/arm, `$` for 6502/65816).
+
+### Added — NES MENTAL_MODEL.md "Rebuilding a CHR-ROM NROM image" section
+The iNES header bytes decoded, CHR-ROM vs CHR-RAM, NROM-128/-256 mapping, and the
+three rebuild paths (`inesHeader` / `chr-rom` preset / `disasm({target:'project'})`).
+
 ## 0.20.0
 
 **Genre-scaffold parity across all 14 platforms + the MSX cartridge-boot fix +
