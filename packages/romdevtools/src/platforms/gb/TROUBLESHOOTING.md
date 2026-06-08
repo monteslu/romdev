@@ -1,5 +1,11 @@
 # Game Boy / Game Boy Color — symptom → fix
 
+> **A build failed? Read `issues[]` FIRST.** Every build/compile call returns
+> `issues: [{file, line, col, severity, message, stage}]` — the structured error
+> list. It almost always names the exact line to fix. Read that before matching a
+> symptom below or touching your source. Fall back to the raw `log` only if
+> `issues[]` is empty but `ok:false`.
+
 Stuck? Find your symptom below; each entry has the 1-line diagnosis and
 the MCP tool call that confirms it. **Run the diagnosis BEFORE you start
 bisecting the C source** — most "GB doesn't render" bugs are one of these

@@ -1,5 +1,11 @@
 # Game Gear — troubleshooting
 
+> **A build failed? Read `issues[]` FIRST.** Every build/compile call returns
+> `issues: [{file, line, col, severity, message, stage}]` — the structured error
+> list. It almost always names the exact line to fix. Read that before matching a
+> symptom below or touching your source. Fall back to the raw `log` only if
+> `issues[]` is empty but `ok:false`.
+
 When something's broken. Read MENTAL_MODEL.md first
 (`platform({op:'doc', platform:"gg", name:"mental_model"})`).
 
