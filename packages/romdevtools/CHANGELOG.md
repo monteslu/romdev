@@ -4,11 +4,7 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
-## 0.23.0
-
-Response to real build-session feedback. Theme: bugs found, false alarms
-removed, and — the recurring finding — **tools that already existed but agents
-couldn't find them**.
+## 0.24.0
 
 ### Added — C64 keyboard + joyport input (VICE core patch)
 An agent RE'ing C64 Uridium could reach the intro via joystick but couldn't ENTER
@@ -25,6 +21,11 @@ screens that joystick can't reach. The VICE core now exports
 - `input({op:'layout', platform:'c64'})` now reports the keyboard keys + joyport.
 (romdev-core-vice 0.7.0.)
 
+## 0.23.0
+
+Response to real build-session feedback. Theme: bugs found, false alarms
+removed, and — the recurring finding — **tools that already existed but agents
+couldn't find them**.
 
 ### Fixed — multi-tenant host cross-talk (a whole class of bugs)
 `sprites({op:'inspect', platform:'genesis'})` returned a *GBC*-flavored error while
