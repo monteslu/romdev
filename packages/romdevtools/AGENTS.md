@@ -1,6 +1,6 @@
 # romdev — Agent guide
 
-You are reading this because romdev is connected. This is the orientation. Read it once; you won't need to re-read it during a session.
+This is romdev's GENERIC orientation — read it once. The platform-specific detail (memory maps, footguns, debug tooling) lives in each platform's docs, which you fetch on demand with `platform({op:'doc'})` as you work; this doc tells you when.
 
 ## What this server does
 

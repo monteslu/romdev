@@ -28,6 +28,20 @@ same in the playtest window AND for the agent's headless `setInput`. No-controll
 keyboard fallback maps PC F1–F4/Space/Enter to the same C64 keys.
 `playtest({op:'open'})` on a C64 game relays the controls. (romdev-core-vice 0.7.0.)
 
+### Changed — leaner, less-confusing agent docs (AGENTS.md / SKILL.md)
+AGENTS.md was loaded in full every session for every platform — ~30k tokens, of
+which ~13k was platform-specific or duplicated detail an agent on one platform
+never needed (and could misapply across platforms). Cut **~31% (~9.5k tokens)**:
+- Per-platform debug-tooling detail → each platform's `MENTAL_MODEL.md`.
+- The ROM-hacking workflow → folded into the `ROMHACKING_PLAYBOOK.md` guide.
+- Toolchain landmines → per-platform `TROUBLESHOOTING.md`/`SDCC_GOTCHAS.md`.
+- Disassembler flag reference → it's already in the disasm tool's own schema.
+All reachable on demand via `platform({op:'doc'})`; AGENTS.md keeps generic
+guidance + symptom→doc pointers. **"Read your target platform's
+`platform({op:'doc', name:'mental_model'})` BEFORE you write code for it"** is now
+a top-level rule (the footguns live there) — so the on-demand docs actually get
+read. The dynamic SKILL.md inherits all of this.
+
 ## 0.23.0
 
 Response to real build-session feedback. Theme: bugs found, false alarms

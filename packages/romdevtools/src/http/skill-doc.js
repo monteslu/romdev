@@ -112,7 +112,7 @@ export function sanitizeForSkillChannel(text) {
     // there's no session-id header / reconnect / "connect your agent" step here;
     // the skillPreamble already gives the skill-appropriate intro + prereq).
     if (/Mcp-Session-Id|re-?initialize|session not found|MCP client|MCP connection|MCP sessions/i.test(line)) continue;
-    if (/you are reading this because romdev is connected|connect your (agent|coding agent)|restart its MCP connection|restart your MCP|your MCP client should/i.test(line)) continue;
+    if (/connect your (agent|coding agent)|restart its MCP connection|restart your MCP|your MCP client should/i.test(line)) continue;
 
     let l = line
       // section header that frames romdev as "a server you connect to"
