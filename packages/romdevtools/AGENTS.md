@@ -18,6 +18,16 @@ Internalize this above all else: **you never need — and must never install —
 
 This rule is about **compilers and emulators only** — NOT about content tools. ImageMagick, GIMP, Aseprite/LibreSprite, Audacity, Tiled, a tracker (FamiStudio/Deflemask), Python for a quick art script — all fine to use, and fine for the user to install. They produce **raw source art/audio** (a PNG, a sprite sheet, a `.wav`, a `.tmx`); romdev then **imports and packs** that into platform-native data. Use them freely when they help; just don't reach for a *compiler or emulator*.
 
+## The second rule: READ YOUR TARGET PLATFORM'S DOCS BEFORE YOU WRITE CODE FOR IT
+
+This doc is deliberately GENERIC — it can't hold 14 platforms' worth of detail without bloating every session. The knowledge that actually saves you — the memory map, the input/control quirks, the render-enable order, the codegen traps, the SDK's footguns — lives in each platform's docs, read on demand:
+
+- **`platform({op:'doc', platform, name:'mental_model'})`** — read this for EVERY system you're about to build or RE on, BEFORE you write code. It's a couple hundred tokens and most "why won't this work" dead-ends are a documented footgun you'd have seen there (a C64 game that needs a keyboard key to start; an SDCC WRAM-layout trap; a platform's render-enable order; gambatte exposing `gb_vram` not `video_ram`).
+- **`platform({op:'doc', platform, name:'troubleshooting'})`** — the symptom→fix list; read it the moment something's broken.
+- **`platform({op:'doc', platform:'romhacking', name:'playbook'})`** — read FIRST if you're doing a romhack/RE (the cross-platform decision tree).
+
+Skipping this is the #1 avoidable time-sink. If you find yourself flailing on platform behavior and you haven't read that platform's `mental_model`, stop and read it — the answer is almost always there.
+
 ### romdev also packs assets in-server — reach for these first
 
 Asset conversion is bundled too, so you often don't need the host tools at all. First-class tools: `encodeArt({stage:'tiles'})`, `encodeArt({stage:'tilemap'})`, `encodeArt({stage:'quantize'})`, `palette({source:'platformMaster'})`, `palette({source:'lospec'})`, `encodeArt({stage:'validate'})`, the loaders `importArt({from:'texturepacker'})` / `importArt({from:'aseprite'})` / `importArt({from:'gif'})` / `importArt({from:'tiled'})`, and helpers like `sprites({op:'capture'})` / `importArt({from:'rom'})`. The canonical quantize→tile→pack path lives here. Typical flow: paint pixels in a host editor (or generate a PNG), then `encodeArt({stage:'quantize'})` → `encodeArt({stage:'tiles'})` to get platform-native tiles. (You can do the whole thing in-server too when the art is procedural.)
@@ -152,16 +162,9 @@ worry about ground truth:
    without round-tripping bytes through your context — preferred
    when you're scaffolding into a project dir.
 
-**Before you write code for a platform, read its docs.** This doc (AGENTS.md) is
-deliberately GENERIC — the platform-specific knowledge that actually saves you
-(memory map, input/control modes, render-enable gotchas, codegen traps, the SDK's
-quirks) lives in each platform's `MENTAL_MODEL.md` + `TROUBLESHOOTING.md`, read on
-demand via **`platform({op:'doc', platform, name:'mental_model'})`** (and
-`name:'troubleshooting'`). Read the MENTAL_MODEL for every system you'll work on
-FIRST — most "why won't this work" dead-ends are a documented footgun you'd have
-seen there (e.g. a C64 game that needs a keyboard key to start, an SDCC WRAM
-layout trap, a platform's render-enable order). It's a couple hundred tokens that
-saves a long flail.
+Reminder (it's the second rule up top): **read your platform's
+`platform({op:'doc', platform, name:'mental_model'})` BEFORE you write code for
+it** — that's where the footguns that would otherwise burn your session live.
 
 For most workflows, path A is all you need. **When a tool call FAILS, read the
 error message and `issues[]` first — see "When a call fails" below; the error
