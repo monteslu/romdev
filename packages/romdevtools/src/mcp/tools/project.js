@@ -923,7 +923,15 @@ TEMPLATES.genesis = {
     runtimeDirs: SGDK_RUNTIME_DIRS,
     lang: SGDK_LANG,
     ext: ".bin",
-    describe: "SIDE-SCROLLING platformer for Genesis. Subpixel gravity + jump + land-on-top collision against a static platform list spread across a 512-px world. Camera follows the player; Plane A scrolls with the world via VDP_setHorizontalScroll, Plane B scrolls at half-rate for parallax. A=jump, d-pad=move. The world here is one 64-cell plane wide (no streaming) — for a wider world, stream the column entering view each 8-px camera step (see Genesis MENTAL_MODEL.md 'Horizontal scrolling'). Extend with enemies, goals, pickups.",
+    describe: "SIDE-SCROLLING platformer for Genesis. Subpixel gravity + jump + land-on-top collision against a static platform list spread across a 512-px world. Camera follows the player; Plane A scrolls with the world via VDP_setHorizontalScroll, Plane B scrolls at half-rate for parallax. A=jump, d-pad=move. The world here is one 64-cell plane wide (no streaming) — for a wider world, stream the column entering view each 8-px camera step (see Genesis MENTAL_MODEL.md 'How Sonic-style large maps REALLY work'). NOTE: it redraws nothing per frame (scroll is hardware) — for a from-scratch smooth-scroll/parallax starting point with ZERO loop-time tilemap writes, see template:'two_plane_parallax'. Extend with enemies, goals, pickups.",
+  },
+  two_plane_parallax: {
+    main: "templates/two_plane_parallax.c",
+    runtime: SGDK_RUNTIME,
+    runtimeDirs: SGDK_RUNTIME_DIRS,
+    lang: SGDK_LANG,
+    ext: ".bin",
+    describe: "Two-plane parallax SCROLLING scaffold — the smooth-feel starting point for a Uridium/Sonic-style side-scroller. Plane A = a painted foreground world (ground + platform blocks), Plane B = a repeated starfield, one player sprite. The frame loop does HARDWARE SCROLL ONLY (two VDP_setHorizontalScroll writes + one VDP_updateSprites) — ZERO tilemap writes per frame, which is what keeps movement smooth (rewriting a plane each frame is the #1 'choppy horizontal movement' bug). Plane B scrolls at 1/4 speed for depth. Exposes volatile g_player_x / g_cam_x so you can motion-trace it headlessly (symbols->memory->recordSession). Extend by streaming one offscreen column per 8-px camera step for worlds wider than 512 px — see Genesis MENTAL_MODEL.md 'Scrolling, parallax & the feel trap'.",
   },
   puzzle: {
     main: "templates/puzzle.c",

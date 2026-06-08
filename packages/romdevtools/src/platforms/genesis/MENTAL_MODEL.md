@@ -161,6 +161,167 @@ while (1) {
 your sprite updates never appear on screen. It's the single most
 important call in any SGDK game loop.
 
+## Scrolling, parallax & the feel trap ⭐
+
+This is the section to read before you build a side-scroller. The #1
+"my horizontal movement feels choppy/juddery" bug on Genesis is a
+software mistake, not a hardware limit:
+
+> ### ⚠️ DO NOT rewrite full tilemaps in the frame loop.
+> The Genesis scrolls in HARDWARE. Moving the world is **two register
+> writes** (`VDP_setHorizontalScroll`), which are free. If instead you
+> redraw the plane each frame (a big `VDP_setTileMapXY`/`VDP_loadTileMap`
+> burst or a per-frame DMA), you overrun vblank, drop frames, and the
+> scroll judders. **Paint the planes ONCE at setup; the loop only nudges
+> scroll registers and re-stages sprites.** Use the
+> `template:"two_plane_parallax"` scaffold as the known-good shape.
+
+### Hardware scroll, the whole loop
+
+A two-plane parallax scroller's *entire* per-frame render cost is:
+
+```c
+VDP_setHorizontalScroll(BG_A, -camX);        // foreground: 1:1 with world
+VDP_setHorizontalScroll(BG_B, -(camX >> 4)); // background: 1/16 speed = far depth
+/* ...stage sprites in SCREEN space... */
+VDP_setSprite(0, playerScreenX, playerY, SPRITE_SIZE(2,2), attr);
+VDP_updateSprites(1, DMA);                    // flush the SAT
+SYS_doVBlankProcess();                        // flush DMA queue, sync vblank
+```
+
+No `VDP_setTileMapXY` / `VDP_fillTileMapRect` / `VDP_loadTileMap` in the
+loop. Those are SETUP calls (and tiny one-off updates — a coin that
+vanishes, a door that opens). They are NOT for whole-plane runtime
+redraws. Positive `camX` scrolls the plane LEFT, so you write the
+NEGATIVE camera offset. `VDP_setVerticalScroll` is the vertical twin
+(it writes VSRAM — see `genesis_vsram`).
+
+### Logical plane size vs HARDWARE plane size
+
+A common confusion: **the Genesis has ONE shared plane-size setting for
+BOTH planes A and B** (VDP regs 16). You pick 32×32 / 64×32 / 32×64 /
+64×64 *cells* once; you do NOT get an independent size per plane. So a
+"32-cell-wide level" still lives inside a 64-cell **physical** plane if
+that's the hardware size you set — the extra cells are just offscreen
+buffer. The scroll value wraps within the physical plane
+(64 cells = 512 px), which is exactly what makes a fully-painted plane
+tile forever with no redraw. Don't fight this: pick a hardware plane
+size and treat your logical world coords separately.
+
+| Plane size (cells) | Pixels   | Use                                  |
+|--------------------|----------|--------------------------------------|
+| 32×32              | 256×256  | single-screen / small wrap           |
+| **64×32** (default)| 512×256  | horizontal scroller (one plane wide) |
+| 32×64              | 256×512  | vertical scroller                    |
+| 64×64              | 512×512  | uses the most VRAM for name tables   |
+
+### How Sonic-style large maps REALLY work (wider than one plane)
+
+You do NOT make the plane "as wide as the level," and you do NOT redraw
+the plane. The 64-cell hardware plane is a **circular buffer**: as the
+camera advances, the column scrolling OFF the left re-appears on the
+right (the scroll wraps mod 512 px). You keep the visible window full by
+updating exactly **ONE offscreen column** each time the camera crosses
+an 8-px tile boundary:
+
+```c
+// camX in pixels; world is an array wider than 512 px.
+s16 newTileCol = camX >> 3;
+if (newTileCol != lastTileCol) {
+    // the column about to enter view on the right edge:
+    s16 worldCol  = (camX + SCREEN_W) >> 3;
+    s16 planeCol  = worldCol & 63;          // wrap into the 64-cell plane
+    drawWorldColumn(planeCol, worldCol);    // ONE column, ~28 cells — tiny
+    lastTileCol = newTileCol;
+}
+```
+
+That's ~28 tile writes per 8 px of travel, not a 1792-cell plane redraw.
+The `template:"platformer"` scaffold scrolls within one plane (no
+streaming); add the column-stream above to go wider. (Real Sonic also
+splits the screen with H-blank raster effects for independent strips —
+that's an IRQ/raster topic, see the `asm` template.)
+
+## Why does horizontal movement feel choppy? — motion-trace it headlessly ⭐
+
+When movement feels off, don't trial-and-error with screenshots. Sample
+the player's world-X, the camera scroll, and the actual VDP scroll
+values over ~180 frames while holding a direction, and read the curve.
+Two signatures to look for:
+
+1. **Camera scroll changes while the sprite's screen-X barely moves**
+   (or vice-versa) → your camera-follow math is off; the world slides
+   under a frozen-looking player, or the player slides on a frozen world.
+2. **Scroll JUMPS** (non-monotone, big steps) → you're scrolling by a
+   non-constant amount per frame (variable-rate camera, or you only
+   update scroll on a tile boundary instead of every frame).
+
+The exact call — hold RIGHT, sample player-X + both planes' HSCROLL +
+VSRAM over 180 frames. Expose the player/camera vars as `volatile`
+globals so they resolve (see "Reading your C globals headlessly"); the
+HSCROLL table lives in VRAM (`video_ram`), default base **$F000**
+(`frame({op:'verify'})`'s render summary prints "H-scroll table: $Fxxx"):
+
+```js
+b   = build({output:'romWithDebug', platform:'genesis', source, inline:true,
+             resolveSymbols:['g_player_x','g_cam_x']})
+// → resolvedSymbols.g_player_x.ramOffset (system_ram offset)
+recordSession({
+  frames:180, sampleEvery:10, includeScreenshots:false,
+  holdInputs:[{right:true}],
+  memorySamples:[
+    {label:'player_x', region:'system_ram', offset: PLAYER_X_OFF, length:2},
+    {label:'cam_x',    region:'system_ram', offset: CAM_X_OFF,    length:2},
+    {label:'hscrollA', region:'video_ram',  offset:0xF000,        length:2},
+    {label:'hscrollB', region:'video_ram',  offset:0xF002,        length:2},
+    {label:'vsram',    region:'genesis_vsram', offset:0,          length:4},
+  ],
+})
+```
+
+Read the columns: `player_x` should ramp smoothly; `hscrollA` should
+move 1:1 with the camera and `hscrollB` at the parallax ratio; both
+should be **monotone** (no jumps) while RIGHT is held. ⚠ Genesis WRAM +
+VRAM read **word-byte-swapped** in gpgx (a 16-bit `0x00F0` reads as
+bytes `F0 00`) — account for the swap, or read single bytes. For a
+compact value-vs-frame curve of just the HSCROLL table use
+`watch({on:'mem', region:'video_ram', offset:0xF000, length:4,
+format:'series', pressDuring:[{frame:0, button:'right', holdFrames:180}]})`.
+
+## Is the loop doing too much VDP work? — per-frame DMA budget ⭐
+
+The render-side cause of choppy scroll is **too many VDP/DMA bytes per
+frame** (a tilemap rewrite, an asset re-upload). Measure it directly,
+no core rebuild:
+
+```js
+watch({on:'dma', perFrame:true, frames:120,
+       pressDuring:[{frame:0, button:'right', holdFrames:120}]})
+```
+
+returns a per-frame timeline `[{frame, dmas, bytes, romBytes, ramBytes}]`
+plus `avgBytesPerFrame`, `peakFrame`/`peakBytes`, and `spikes`.
+
+- A **smooth hardware-scroll loop** shows a LOW, FLAT curve — after boot
+  it's mostly the steady SAT/scroll refresh (`ramBytes`, single/low
+  double digits per frame).
+- A **`spikes` entry** (bytes ≫ average, especially `romBytes` — an
+  asset upload FROM cart ROM) is the "I rewrote a tilemap / re-uploaded
+  tiles in the frame loop" smell. Move that work to setup, or stream
+  ONE column per 8-px scroll step (above).
+
+**CEILING / what this does NOT catch:** this counts mem→VDP **DMA**
+bytes (the dominant cost). Plain CPU writes to the VDP data port —
+`VDP_setTileMapXY` without DMA, single-cell pokes — are not DMA and are
+NOT counted; catching *those* would need a core-side VDP-data-port write
+hook (a gpgx patch, not shipped). In practice the expensive per-frame
+mistakes (whole-plane fills, `VDP_loadTileMap`, big `DMA_*` transfers)
+ALL go through DMA and DO show up here, so the budget is a reliable
+choppiness diagnostic today. There is no exposed per-frame
+"vblank-cycles-used / overrun" counter either — infer overrun from the
+byte budget (DMA bandwidth in vblank is finite: ~7.6 KB to VRAM in PAL
+vblank, less in NTSC; a frame moving multiple KB to VRAM is at risk).
+
 ## Input
 
 `u16 pad = JOY_readJoypad(JOY_1)` returns a packed bitmask. The

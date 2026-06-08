@@ -1545,6 +1545,60 @@ export class LibretroHost {
     }
   }
 
+  /**
+   * Per-frame VDP-DMA timeline. Steps `frames` frames ONE AT A TIME, and for
+   * each frame reports how many mem→VDP DMAs fired + how many VRAM/CRAM/VSRAM
+   * bytes they moved. The core's `romdev_dmawatch_set(1)` RESETS its counters
+   * (see the patch), so re-arming before each single-frame step gives a clean
+   * per-frame bucket with no core rebuild — the cheap derivation of "VDP/DMA
+   * work per frame" the feel-diagnostics workflow needs.
+   *
+   * `onFrame(i)` is called at the top of each frame (before the step) so the
+   * caller can drive scheduled input. Genesis-only.
+   *
+   * Returns { frames:[{frame, dmas, words, bytes, romBytes, ramBytes}], ... }.
+   * `romBytes`/`ramBytes` split the moved bytes by source bus (ROM asset upload
+   * vs the RAM→VRAM sprite/scroll refresh) so a per-frame asset-DMA spike — the
+   * "I redrew a tilemap in the loop" smell — stands out from the steady refresh.
+   */
+  watchDmaPerFrame(frames, onFrame) {
+    const mod = this._needMod();
+    this._needMedia();
+    if (!this.dmaWatchSupported()) throw new Error("VDP-DMA watch not supported by this core (Genesis only).");
+    const CAP = 1024;
+    const outPtr = mod._malloc(CAP * 4 * 4);
+    const out2Ptr = mod._malloc(8);
+    const isRam = (src) => (src >>> 0) >= 0xE00000;
+    const out = [];
+    let peakBytes = 0, peakFrame = -1, totalBytes = 0, totalDmas = 0;
+    try {
+      for (let i = 0; i < frames; i++) {
+        if (onFrame) onFrame(i);
+        mod._romdev_dmawatch_set(1);          // arm + RESET counters for this frame
+        this._runFramesExclusive(() => false, 1);
+        const n = mod._romdev_dmawatch_get(outPtr, CAP, out2Ptr);
+        const out2 = new Uint32Array(mod.HEAPU8.buffer, out2Ptr, 2);
+        const total = out2[0];                // total DMAs this frame (>= stored)
+        const u = new Uint32Array(mod.HEAPU8.buffer, outPtr, n * 4);
+        let words = 0, romBytes = 0, ramBytes = 0;
+        for (let k = 0; k < n; k++) {
+          const src = u[k * 4 + 1], len = u[k * 4 + 2];
+          words += len;
+          if (isRam(src)) ramBytes += len * 2; else romBytes += len * 2;
+        }
+        const bytes = words * 2;
+        out.push({ frame: i, dmas: total, words, bytes, romBytes, ramBytes,
+          ...(total > n ? { coreBufferTruncated: true } : {}) });
+        totalBytes += bytes; totalDmas += total;
+        if (bytes > peakBytes) { peakBytes = bytes; peakFrame = i; }
+      }
+      mod._romdev_dmawatch_set(0);            // disarm
+      return { frames: out, totalBytes, totalDmas, peakBytes, peakFrame };
+    } finally {
+      mod._free(outPtr); mod._free(out2Ptr);
+    }
+  }
+
   pause() {
     this.status.paused = true;
   }
