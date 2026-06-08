@@ -26,9 +26,28 @@ import { runAsar } from "./asar/asar.js";
 import { runVasm68k } from "./vasm68k/vasm68k.js";
 import { runSdasz80, runSdld, ihxToBin } from "./sdcc/sdcc.js";
 import { runRgbasm, runRgblink, runRgbfix } from "./rgbds/rgbds.js";
+import { parseBuildLog } from "./parse-errors.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Build a transparent snippet-assembly error: lead with the FIRST structured
+// diagnostic (file:line: message) parsed out of the raw log — the same
+// issues[]-style surfacing build() does — instead of dumping the unparsed
+// assembler stdout and making the agent grep it. Full log still appended for
+// fallback. `where` is e.g. "ca65" / "ld65 link" / "asar".
+function asmError(where, log) {
+  const issues = parseBuildLog(log ?? "");
+  const first = issues.find((i) => i.severity === "error") ?? issues[0];
+  const headline = first
+    ? `${first.file ? first.file + ":" : ""}${first.line ? first.line + ": " : ""}${first.message}`
+    : "no structured diagnostic found";
+  return new Error(
+    `assembleSnippet[${where}] failed: ${headline}` +
+    (issues.length > 1 ? ` (+${issues.length - 1} more issue(s))` : "") +
+    `\nFix the source line above. Full assembler log:\n${log ?? ""}`,
+  );
+}
 
 /**
  * CPU dialect → assembler dispatch. Keys are also the public API.
@@ -102,7 +121,7 @@ async function assembleCa65({ origin, code }, cpu = "6502") {
 
   const asm = await runCa65({ source });
   if (!asm.object) {
-    throw new Error(`assembleSnippet[ca65]: assembly failed.\nlog:\n${asm.log ?? ""}`);
+    throw asmError("ca65", asm.log);
   }
 
   // Minimal linker config: one MEMORY block at `origin`, one SEGMENT
@@ -116,7 +135,7 @@ SEGMENTS { CODE: load = OUT, type = ro; }
     linkerConfig: cfg,
   });
   if (!linked.binary) {
-    throw new Error(`assembleSnippet[ld65]: link failed.\nlog:\n${linked.log ?? ""}`);
+    throw asmError("ld65 link", linked.log);
   }
   return { bytes: linked.binary, log: (asm.log ?? "") + (linked.log ?? "") };
 }
@@ -137,7 +156,7 @@ async function assembleAsar({ origin, code }) {
   const source = `org ${hex24}\n${code}\n`;
   const r = await runAsar({ source, baseRom, symbols: false });
   if (!r.binary) {
-    throw new Error(`assembleSnippet[asar]: assembly failed.\nlog:\n${r.log ?? ""}`);
+    throw asmError("asar", r.log);
   }
   const bin = r.binary;
   // Find first non-sentinel byte (asar may have written anywhere depending
@@ -148,7 +167,7 @@ async function assembleAsar({ origin, code }) {
     if (bin[i] !== SENTINEL) { start = i; break; }
   }
   if (start < 0) {
-    throw new Error(`assembleSnippet[asar]: no bytes written (origin 0x${origin.toString(16)})\nlog:\n${r.log ?? ""}`);
+    throw new Error(`assembleSnippet[asar]: no bytes written (origin 0x${origin.toString(16)}) — the source assembled but emitted nothing at this origin. Check the org address and that the code actually emits bytes.\nFull log:\n${r.log ?? ""}`);
   }
   let end = start + 1;
   let sentinelRun = 0;
@@ -181,7 +200,7 @@ async function assembleVasm68k({ origin, code }) {
   const source = `\torg $${origin.toString(16).toUpperCase()}\n${indented}\n`;
   const r = await runVasm68k({ source, options: ["-Fbin"] });
   if (!r.binary || (r.exitCode != null && r.exitCode !== 0)) {
-    throw new Error(`assembleSnippet[vasm68k]: assembly failed.\nlog:\n${r.log ?? ""}`);
+    throw asmError("vasm68k", r.log);
   }
   return { bytes: r.binary, log: r.log ?? "" };
 }
@@ -199,7 +218,7 @@ async function assembleSdcc({ origin, code }) {
   const source = `\t.module snippet\n\t.area _CODE\n${indented}\n`;
   const asm = await runSdasz80({ source });
   if (!asm.rel) {
-    throw new Error(`assembleSnippet[sdasz80]: assembly failed.\nlog:\n${asm.log ?? ""}`);
+    throw asmError("sdasz80", asm.log);
   }
   // Minimal empty crt0 rel: just declares _HEADER0 (zero bytes) and is
   // enough for sdld to satisfy its hardcoded crt0.rel dependency.
@@ -212,7 +231,7 @@ async function assembleSdcc({ origin, code }) {
     libraries: [],
   });
   if (!linked.ihx) {
-    throw new Error(`assembleSnippet[sdld]: link failed.\nlog:\n${linked.log ?? ""}`);
+    throw asmError("sdld link", linked.log);
   }
   const padded = ihxToBin(linked.ihx, 0x10000, 0xFF);
   // Find first and last non-FF byte from origin onwards. The snippet bytes
@@ -240,11 +259,11 @@ async function assembleRgbds({ origin, code }) {
     : `SECTION "snippet", ROMX[${sectionAt}], BANK[1]\n${code}\n`;
   const asm = await runRgbasm({ source: realSource });
   if (!asm.object) {
-    throw new Error(`assembleSnippet[rgbasm]: assembly failed.\nlog:\n${asm.log ?? ""}`);
+    throw asmError("rgbasm", asm.log);
   }
   const linked = await runRgblink({ objects: { "snippet.o": asm.object }, padValue: 0x00 });
   if (!linked.binary) {
-    throw new Error(`assembleSnippet[rgblink]: link failed.\nlog:\n${linked.log ?? ""}`);
+    throw asmError("rgblink link", linked.log);
   }
   // Slice from origin, find last non-zero byte.
   const start = useRom0 ? origin : (origin - 0x4000 + 0x4000); // bank 1 lives at file 0x4000

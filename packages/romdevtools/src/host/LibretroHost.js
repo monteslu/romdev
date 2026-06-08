@@ -301,7 +301,20 @@ export class LibretroHost {
     mod._free(infoPtr);
 
     if (!ok) {
-      throw new Error(`retro_load_game failed for ${mediaPath}`);
+      // This is the failure path for EVERY bad/wrong-platform/corrupt/
+      // unsupported-mapper image — the most common loadMedia failure. The core
+      // returns a bare false, so name the likely causes + the exact checks
+      // rather than leaving the agent with "failed".
+      throw new Error(
+        `The '${platform}' core REFUSED this ${mediaKind || "media"} ` +
+        `(${data.length} bytes${ext ? `, ${ext}` : ""}, path ${mediaPath}). ` +
+        `retro_load_game returned false — the bytes reached the core but it would not accept them. ` +
+        `Common causes: (1) wrong platform for this file (a GB ROM loaded as 'nes', etc.) — ` +
+        `confirm the platform matches the file; (2) a corrupt or TRUNCATED image — re-check the byte length; ` +
+        `(3) an unsupported mapper/board or a missing/!bad header. ` +
+        `Inspect the file with cart({op:'identify'}) to see what platform/mapper it really is, ` +
+        `then load with the matching platform.`,
+      );
     }
 
     this.status.platform = platform;
@@ -436,7 +449,7 @@ export class LibretroHost {
    */
   stepFrames(n) {
     const mod = this._needMod();
-    if (!this.status.loaded) throw new Error("no media loaded");
+    this._needMedia();
     if (this.status.paused) return 0;
     for (let i = 0; i < n; i++) {
       mod._retro_run();
@@ -455,7 +468,7 @@ export class LibretroHost {
    *  Returns the frame count after. */
   renderOneFrame() {
     const mod = this._needMod();
-    if (!this.status.loaded) throw new Error("no media loaded");
+    this._needMedia();
     mod._retro_run();
     this.status.frameCount++;
     if (this.state.lastFrame) {
@@ -594,7 +607,7 @@ export class LibretroHost {
   /** @param {string} name */
   loadState(name) {
     const snapshot = this.namedStates.get(name);
-    if (!snapshot) throw new Error(`no save state named '${name}'`);
+    if (!snapshot) throw new Error(this._noStateError(name));
     return this.unserializeState(snapshot); // returns # cheats cleared
   }
 
@@ -641,8 +654,19 @@ export class LibretroHost {
    *  disturbing the live host). Throws if the slot doesn't exist. */
   getStateBlob(name) {
     const blob = this.namedStates.get(name);
-    if (!blob) throw new Error(`no save state named '${name}'`);
+    if (!blob) throw new Error(this._noStateError(name));
     return blob;
+  }
+
+  /** Build a "no save state named X" error that lists the slots that DO exist
+   *  (or says there are none) and names the op to create one. */
+  _noStateError(name) {
+    const names = [...this.namedStates.keys()];
+    return names.length
+      ? `No save state named '${name}'. Existing in-memory slots: ${names.map((n) => `'${n}'`).join(", ")}. ` +
+        `(List them with state({op:'list'}); create one with state({op:'save', name}).)`
+      : `No save state named '${name}' — this session has NO in-memory save slots yet. ` +
+        `Create one with state({op:'save', name:'${name}'}) first (or load from disk with state({op:'load', path})).`;
   }
 
   /**
@@ -667,7 +691,7 @@ export class LibretroHost {
   readMemory(region, offset, length) {
     const mod = this._needMod();
     const id = MemoryRegionToRetro[region];
-    if (id === undefined) throw new Error(`unknown memory region '${region}'`);
+    if (id === undefined) throw new Error(this._unknownRegionError(region));
     const ptr = mod._retro_get_memory_data(id);
     const size = mod._retro_get_memory_size(id);
     if (!ptr || !size) throw new Error(this._emptyRegionError(region));
@@ -685,7 +709,7 @@ export class LibretroHost {
   writeMemory(region, offset, bytes) {
     const mod = this._needMod();
     const id = MemoryRegionToRetro[region];
-    if (id === undefined) throw new Error(`unknown memory region '${region}'`);
+    if (id === undefined) throw new Error(this._unknownRegionError(region));
     const ptr = mod._retro_get_memory_data(id);
     const size = mod._retro_get_memory_size(id);
     if (!ptr || !size) throw new Error(this._emptyRegionError(region));
@@ -1058,7 +1082,7 @@ export class LibretroHost {
 
   runUntilPC(address, maxFrames = 600) {
     this._needMod();
-    if (!this.status.loaded) throw new Error("no media loaded");
+    this._needMedia();
     if (!this.pcBreakSupported()) {
       throw new Error("PC breakpoint not supported by this core (Genesis today; other cores as patched).");
     }
@@ -1090,7 +1114,7 @@ export class LibretroHost {
    */
   runUntilRead(address, maxFrames = 600) {
     this._needMod();
-    if (!this.status.loaded) throw new Error("no media loaded");
+    this._needMedia();
     if (!this.readWatchSupported()) {
       throw new Error("read watchpoint not supported by this core (Genesis today; other cores as patched).");
     }
@@ -1122,7 +1146,7 @@ export class LibretroHost {
    */
   stepInstruction() {
     this._needMod();
-    if (!this.status.loaded) throw new Error("no media loaded");
+    this._needMedia();
     if (!this.pcBreakSupported()) {
       throw new Error("single-step not supported by this core (Genesis today; other cores as patched).");
     }
@@ -1191,7 +1215,7 @@ export class LibretroHost {
    */
   callSubroutine(a) {
     const mod = this._needMod();
-    if (!this.status.loaded) throw new Error("no media loaded");
+    this._needMedia();
     if (!this.setRegSupported()) {
       throw new Error("cpu({op:'call'}) not supported by this core (rebuild with romdev_setreg/romdev_getreg).");
     }
@@ -1427,7 +1451,7 @@ export class LibretroHost {
    */
   watchRange(lo, hi, mode, frames) {
     const mod = this._needMod();
-    if (!this.status.loaded) throw new Error("no media loaded");
+    this._needMedia();
     if (!this.rangeWatchSupported()) throw new Error("range watch not supported by this core.");
     const m = mode === "read" ? 1 : mode === "write" ? 2 : 3;
     mod._romdev_range_set(lo >>> 0, hi >>> 0, m, 1);
@@ -1460,7 +1484,7 @@ export class LibretroHost {
    */
   logPCRange(lo, hi, frames) {
     const mod = this._needMod();
-    if (!this.status.loaded) throw new Error("no media loaded");
+    this._needMedia();
     if (!this.rangeWatchSupported()) throw new Error("coverage trace not supported by this core.");
     mod._romdev_cov_set(lo >>> 0, hi >>> 0, 1);
     this._runFramesExclusive(() => false, frames);
@@ -1500,7 +1524,7 @@ export class LibretroHost {
    */
   watchDma(frames) {
     const mod = this._needMod();
-    if (!this.status.loaded) throw new Error("no media loaded");
+    this._needMedia();
     if (!this.dmaWatchSupported()) throw new Error("VDP-DMA watch not supported by this core (Genesis only).");
     mod._romdev_dmawatch_set(1);
     this._runFramesExclusive(() => false, frames);
@@ -1538,6 +1562,21 @@ export class LibretroHost {
     return this.mod;
   }
 
+  // Guard for every op that needs a loaded game. The bare "no media loaded"
+  // left the agent guessing; this names the fix (loadMedia) and the gotcha
+  // (emulator state is in-memory, so a reconnect/restart drops it). The richer
+  // session-aware recovery (echoing the exact prior loadMedia call) lives at the
+  // tool layer in state.js getHost(); this is the host-level twin.
+  _needMedia() {
+    if (!this.status.loaded) {
+      throw new Error(
+        "No media loaded — call loadMedia({platform, path}) before this op. " +
+        "(If you DID load and hit this after a reconnect/restart, the host's in-memory " +
+        "state didn't survive — re-run loadMedia with your ROM to pick back up.)",
+      );
+    }
+  }
+
   /**
    * Build a friendly error message when a memory region is empty (the
    * core didn't expose it). Includes per-platform suggestions when we
@@ -1548,6 +1587,21 @@ export class LibretroHost {
    * "my VRAM writes are being optimized away" spiral — when in fact
    * gambatte exposes VRAM as `gb_vram`, not the generic id.
    */
+  _unknownRegionError(region) {
+    // A bad region name should never leave the agent guessing — list the valid
+    // ones (the single source of truth, MemoryRegionToRetro) so it can pick the
+    // right one. The cross-platform names (system_ram / video_ram / save_ram)
+    // exist everywhere; the rest are platform-specific.
+    const valid = Object.keys(MemoryRegionToRetro).sort();
+    const common = valid.filter((r) => ["system_ram", "video_ram", "save_ram", "rom"].includes(r));
+    return (
+      `Unknown memory region '${region}'. ` +
+      `Common (most platforms): ${common.join(", ")}. ` +
+      `All registered region names: ${valid.join(", ")}. ` +
+      `(Region availability is per platform — some names only resolve on the platform that has that hardware.)`
+    );
+  }
+
   _emptyRegionError(region) {
     const plat = this.status && this.status.platform;
     // SRAM gets an honest, specific answer: empty save_ram almost always means
