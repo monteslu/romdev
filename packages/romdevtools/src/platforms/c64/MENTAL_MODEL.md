@@ -154,6 +154,54 @@ the `sid_play.s` starter snippet.
 waveform, freq→note, pulse-width, ADSR — plus the filter cutoff/resonance/mode.
 Handy for verifying a `sid_play` routine is actually gating notes.
 
+## MCP debug & inspection tooling
+
+romdev runs the C64 on a patched VICE (`vice_x64`) core that exposes deep live
+state. The inspectors all read the **running** machine — use them to confirm what
+your code actually did to the hardware, not what you think it did.
+
+**Live visual / state inspectors:**
+
+- `palette({source:'live'})` — the 16-color hardware-fixed C64 palette as a PNG,
+  plus the current border / background / extra-background color indices decoded
+  straight from the VIC-II registers.
+- `sprites({op:'inspect'})` — all 8 MOBs decoded into the generic sprite shape:
+  X/Y, color, multicolor flag, expand-X / expand-Y, priority, AND the screen-RAM
+  sprite-data pointers at `$07F8` so you can locate each sprite's pixel block in
+  the VIC bank.
+- `cpu({op:'read'})` — the 6510 registers (A/X/Y/P/SP/PC) read from a live,
+  `#define`-aliased register file, plus the `$0001` I/O port decoded into its
+  LORAM / HIRAM / CHAREN bits (so you can see which ROMs are banked in).
+- `background({view:'renderState'})` — the VIC-II registers decoded into
+  mode / scroll / colors / sprites, the VIC bank resolved from CIA2 `$DD00`, and
+  the **absolute** screen-RAM + character-base addresses (no manual bank math).
+- `audioDebug({op:'inspect', chip:'sid'})` — the SID voice/filter decode covered
+  in the SID section above.
+
+**`c64_*` memory regions** (via `memory({op:'read'})`) — exact, named windows
+onto the hardware, decoded live:
+
+| region          | size  | notes                                           |
+| --------------- | ----- | ----------------------------------------------- |
+| `system_ram`    | 64 KB | full RAM                                         |
+| `c64_color_ram` | 1 KB  | the nibble color RAM                            |
+| `c64_vic_regs`  | 64 B  | VIC-II registers                                |
+| `c64_sid_regs`  | 29 B  | SID registers (read via `sid_peek`)             |
+| `c64_cia1_regs` | 16 B  | CIA1, from the `c_cia[]` array                  |
+| `c64_cia2_regs` | 16 B  | CIA2, from the `c_cia[]` array                  |
+| `c64_cpu_regs`  | 7 B   | 6510 register file                              |
+
+**Disassembly:** `disasm({target:'rom'})` and `disasm({target:'references'})`
+accept `.prg` files (they understand the 2-byte little-endian load-address
+header), and apply the C64 register-annotation table so VIC-II / SID / CIA
+register accesses come back named rather than as bare addresses.
+
+**Starter snippets** cover `vic_init` / `sprite_table` / `sid_play` /
+`read_joystick` / `basic_stub`.
+
+Disk-image loading and disk SAVE/restore tooling have their own sections below
+("Disk images" and "Disk SAVES").
+
 ## Cartridge / load file format
 
 The .prg format is dead simple:

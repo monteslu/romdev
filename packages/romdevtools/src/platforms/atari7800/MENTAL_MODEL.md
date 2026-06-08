@@ -322,3 +322,39 @@ When you call `build({output:'rom', platform:"atari7800", language:"c"})`:
 3. ld65 links + atari7800.cfg → flat `.a78` ROM.
 
 Loadable via prosystem (`loadMedia`).
+
+## MCP debug & inspection tooling
+
+The 7800 runs on the **prosystem (patched)** core. Like the 2600 it has
+no framebuffer and no tile/sprite-attribute tables, so its inspectors
+decode MARIA's display-list machinery rather than a tilemap.
+
+What you can read:
+
+- **`palette({source:'live'})`** — a 256-color master palette PNG, with
+  the live MARIA palette block at `$20-$3F` decoded into the 8 palettes ×
+  3 colors each, plus the backdrop. This is the Atari NTSC palette shared
+  with the 2600.
+- **`sprites({op:'inspect'})`** — there is **no OAM** on the 7800. Instead
+  this returns the MARIA control registers and the **DPP** display-list-
+  list pointer, leaving the agent to walk the DLL → DL hierarchy itself
+  (the same structure described under "MARIA: the unusual one" above).
+- **`cpu({op:'read'})`** — the 6502 ("Sally") register file (A / X / Y /
+  P / SP / PC) read from prosystem's `sally` globals.
+- **`background({view:'renderState'})`** — the MARIA CTRL bits, DPP,
+  CHARBASE, and the current `dlistPtr`.
+- **`disasm({target:'rom'})`** and **`disasm({target:'references'})`** —
+  both default to the top 16 KB (`$C000-$FFFF`), where the reset vector
+  lands.
+
+Memory regions for **`memory({op:'read'})`**:
+
+| Region | Size | What it is |
+| --- | --- | --- |
+| `system_ram` | 64 KB | the *entire* 6502 address space — MARIA regs, RAM, and ROM are all visible through this one region |
+| `a78_cpu_regs` | — | the 6502 register snapshot |
+
+**No `audioDebug` inspector.** The 7800's standard audio is the same TIA
+chip carried over from the 2600 (`$15-$1A`), not a decodable PSG/FM chip,
+so there's no `audioDebug` decode. (Some carts add a POKEY, but it's
+non-standard — don't assume it's present.)

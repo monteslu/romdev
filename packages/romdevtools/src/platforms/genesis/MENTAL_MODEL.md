@@ -413,6 +413,25 @@ headless per-PCM-channel "is it playing" readout for Genesis yet (it would need 
 core patch to expose the XGM2 Z80 driver state), so audio verification here is
 record-and-listen, not assert.
 
+## MCP debug & inspection tooling
+
+The shipped genesis_plus_gx (gpgx) core is patched for live introspection.
+Video is deeply readable; the FM audio chip is only partially exposed:
+
+- **Sprites:** `sprites({op:'inspect'})` decodes the live SAT.
+- **Palette:** `palette({source:'live'})` reads live CRAM.
+- **CPU:** `cpu({op:'read', cpu:'main'})` reads the 68000.
+- **Audio (limited):** `getYm2612State` returns the YM2612's internal
+  struct as a raw blob — gpgx doesn't expose it in a safely per-channel
+  decodable form (good for frame-to-frame diffing, see "Debugging sound").
+  `getPsgState` decodes the SN76489 (3 tone + 1 noise channels).
+- **Memory regions:** `memory({op:'read'})` exposes CRAM, VSRAM, VDP_REGS,
+  Z80_RAM (the sound CPU's RAM), M68K work RAM, YM2612, PSG, and VRAM.
+  Remember the gpgx byte-swap quirk: VRAM and WRAM read host-LE
+  word-byte-swapped (a 16-bit value's two bytes are swapped at the offset)
+  — account for it or read single bytes (see "Reading your C globals
+  headlessly").
+
 ## ROM layout
 
 ```

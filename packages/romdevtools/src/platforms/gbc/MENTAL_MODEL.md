@@ -74,6 +74,27 @@ the same wall.
 - **HDMA** ($FF51-$FF55) for fast block transfers during HBlank —
   used for live tile streaming.
 
+## MCP debug & inspection tooling
+
+GBC shares the patched gambatte core with DMG, so **all the live inspectors
+and `gb_*` memory regions documented in the GB MENTAL_MODEL apply unchanged
+here** — `sprites({op:'inspect'})`, `tiles({op:'png'})`, `cpu({op:'read'})`,
+`audioDebug({op:'inspect', chip:'gb'})`, and the `gb_vram` / `gb_oam` / `gb_io`
+/ `gb_hram` / `gb_cpu_regs` regions (same gotcha: it's `gb_vram`, NOT the
+generic `video_ram`). Disassembly routes through the same `-m gbz80` objdump.
+See the GB MENTAL_MODEL for the shared gambatte debug tooling.
+
+CGB-only deltas on top of that shared set:
+
+- **`palette({source:'live'})`** on a CGB ROM decodes the **64-byte BCPS/OCPS
+  palette RAM** into **8 palettes × 4 colors in BGR555** (the DMG path that
+  decodes BGP/OBP0/OBP1 bytes is what runs on a `gb` build instead). The raw
+  CGB palette RAM is also readable directly via the **`gb_bgpdata`** (BG, 64
+  bytes) and **`gb_objpdata`** (OBJ, 64 bytes) memory regions.
+- **`background({view:'renderState'})`** reports the CGB extras the DMG path
+  doesn't have: the current **VRAM bank** (VBK), **KEY1** (double-speed state),
+  and the live **BCPS/OCPS palette index**.
+
 ## CGB vs DMG mode
 
 The CGB boot ROM checks header byte **`$0143`**:
