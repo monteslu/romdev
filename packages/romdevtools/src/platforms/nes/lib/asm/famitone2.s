@@ -8,7 +8,11 @@
 
 ;settings, uncomment or put them into your main program; the latter makes possible updates easier
 
-FT_BASE_ADR		= $0300	;page in the RAM used for FT2 variables, should be $xx00
+FT_BASE_ADR		= $0700	;page in the RAM used for FT2 variables, should be $xx00
+				;romdev: pinned to $0700 (the SNDRAM page reserved in
+				;chr-ram-runtime.cfg). $0300 — the cc65 default — overlaps
+				;the C BSS/DATA region, so FT2's per-frame writes would
+				;clobber _ppuctrl_value / NMI state and stall rendering.
 FT_TEMP			= $fd	;3 bytes in zeropage used by the library as a scratchpad
 FT_DPCM_OFF		= $fc00	;$c000..$ffc0, 64-byte steps
 FT_SFX_STREAMS	= 1		;number of sound effects played at once, 1..4
