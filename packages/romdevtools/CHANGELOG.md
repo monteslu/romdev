@@ -4,6 +4,14 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.22.1
+
+Doc-only follow-up to 0.22.0's movement-analysis feedback: the `pressDuring`
+schema on `watch` and `breakpoint` now states that entries with OVERLAPPING
+windows on the same port are OR'd into a chord (e.g. `b`+`right` held while `a`
+fires mid-window), not overwritten. The driver already behaved this way; this
+documents the guarantee so it doesn't have to be confirmed empirically.
+
 ## 0.22.0
 
 **Transparency + correctness pass: every tool failure is actionable, dangerous
