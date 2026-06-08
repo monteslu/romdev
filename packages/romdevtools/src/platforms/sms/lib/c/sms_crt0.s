@@ -22,6 +22,8 @@
         .globl  l__INITIALIZER
         .globl  s__INITIALIZER
         .globl  s__INITIALIZED
+        .globl  s__DATA
+        .globl  l__DATA
 
 ;; ─── Reset vector at $0000 ────────────────────────────────────────
         .area _HEADER (ABS)
@@ -72,7 +74,19 @@
 ;; call main. The initializer area is filled by sdcc when it sees
 ;; global initializations.
 
+        ;; AREA ORDERING IS LOad-BEARING. `_INITIALIZER` (the ROM image of
+        ;; every value-initialised `static` global) MUST be declared in the
+        ;; ROM group here — BEFORE the `_DATA` RAM block. If it isn't, sdld
+        ;; places `_INITIALIZER` in RAM right after `_INITIALIZED`, so the
+        ;; gsinit copy below copies uninitialised RAM onto itself and every
+        ;; `static uint8_t x = 5;` boots as 0. (Bug found 2026-06-08: a GBC
+        ;; Columns agent's `static uint32_t rng = 0x1357;` booted as 0, so
+        ;; the xorshift PRNG stayed 0 and every "random" roll came out the
+        ;; same — a "monochrome RNG" that looked like an SDCC codegen bug
+        ;; but was really this missing ROM placement. The sm83 GB crt0 has
+        ;; always placed _INITIALIZER in ROM; the z80 crt0s never did.)
         .area   _HOME
+        .area   _INITIALIZER
         .area   _CODE
         .area   _GSINIT
         .area   _GSFINAL
@@ -86,6 +100,32 @@
         .area   _CODE
 
 gsinit:
+        ;; ── Zero the BSS segment (`_DATA`). ──────────────────────────
+        ;; Every uninitialised `static` global lands in `_DATA` and MUST
+        ;; read back 0 at boot. Without this, `static uint8_t flag;` boots
+        ;; with whatever power-on WRAM byte was there (gambatte/gpgx leave
+        ;; garbage), and `if (flag)` spuriously fires. Mirrors the sm83 GB
+        ;; crt0's gsinit_data loop.
+        ld      bc, #l__DATA
+        ld      a, b
+        or      a, c
+        jr      Z, gsinit_bss_done
+        ld      hl, #s__DATA
+        ld      (hl), #0x00
+        ld      d, h
+        ld      e, l
+        inc     de
+        dec     bc
+        ld      a, b
+        or      a, c
+        jr      Z, gsinit_bss_done
+        ldir                            ; propagate the 0 across _DATA
+gsinit_bss_done:
+
+        ;; ── Copy `_INITIALIZER` (ROM) → `_INITIALIZED` (RAM). ────────
+        ;; The value-initialised-statics path: `static uint8_t lives = 3;`
+        ;; lives in _INITIALIZED at runtime; its initial value sits in
+        ;; _INITIALIZER in ROM (now correctly ROM-placed, see above).
         ld      bc, #l__INITIALIZER
         ld      a, b
         or      a, c

@@ -125,6 +125,49 @@ test("R55: works the same on z80 platforms (SMS/GG/MSX)", () => {
   assert.ok(c && c.severity === "warning", "z80: VRAM pointer dest still warns");
 });
 
+// ─── R56: hardcoded $C0xx WRAM pointer overlaps the C static-data segment ───
+// Found 2026-06-08: a GBC Columns agent reported a "32-bit xorshift miscompile"
+// (monochrome RNG). The math was fine; the real cause was writing game state to
+// a hardcoded $C000 pointer that overlapped SDCC's _DATA segment (where the
+// `static` PRNG seed lives), clobbering the seed. INFO-level advisory, scoped to
+// $C000-$C0FF on the sm83/z80 GB/SMS-family (WRAM base $C000).
+const findOverlap = (issues) => issues.find((i) => i.ref === "wram-static-overlap");
+
+test("R56: hardcoded (uint8_t*)0xC000 pointer flags an INFO overlap (sm83)", () => {
+  const src = "void f(void){ volatile unsigned char *board = (volatile unsigned char*)0xC000; board[0]=1; }";
+  const o = findOverlap(lintSdccSource(src, "main.c", { port: "sm83" }));
+  assert.ok(o, "hardcoded $C000 pointer should be surfaced");
+  assert.equal(o.severity, "info", "advisory only — not a hard error (a low pointer is occasionally legit)");
+  assert.notEqual(o.critical, true);
+  assert.match(o.message, /\$C000/);
+  assert.match(o.details, /static/i, "details must explain the static-data overlap");
+});
+
+test("R56: $C0FF is the top of the flagged range; $C200 scratch is NOT flagged", () => {
+  const hi = "void f(void){ unsigned char *p = (unsigned char*)0xC0FF; p[0]=1; }";
+  assert.ok(findOverlap(lintSdccSource(hi, "main.c", { port: "sm83" })), "$C0FF is in-range");
+  const safe = "void f(void){ unsigned char *w = (unsigned char*)0xC200; w[0]=1; }";
+  assert.equal(findOverlap(lintSdccSource(safe, "main.c", { port: "sm83" })), undefined,
+    "$C200 is the documented-safe scratch floor — must NOT flag");
+  // shadow_oam at $C100 is outside the static range and must not be flagged.
+  const oam = "void f(void){ unsigned char *o = (unsigned char*)0xC100; o[0]=1; }";
+  assert.equal(findOverlap(lintSdccSource(oam, "main.c", { port: "sm83" })), undefined,
+    "$C100 (shadow_oam) is outside $C000-$C0FF — not flagged");
+});
+
+test("R56: a plain `static` array is the recommended form — no overlap warning", () => {
+  const src = "static unsigned char board[78];\nvoid f(void){ board[0]=1; }";
+  assert.equal(findOverlap(lintSdccSource(src, "main.c", { port: "sm83" })), undefined,
+    "letting the linker place a static array is the safe pattern → no flag");
+});
+
+test("R56: the overlap rule fires on the z80 family too (SMS/GG share $C000 WRAM base)", () => {
+  const src = "void f(void){ unsigned char *p = (unsigned char*)0xC008; p[0]=1; }";
+  const o = findOverlap(lintSdccSource(src, "main.c", { port: "z80" }));
+  assert.ok(o && o.severity === "info", "z80 WRAM also bases at $C000");
+  assert.match(o.details, /SMS\/GG/, "z80 message points at the SMS/GG gotchas doc");
+});
+
 test("R55: lintSources threads the same classification through a sources map", () => {
   const sources = {
     "main.c": [

@@ -188,3 +188,94 @@ build({
   },
 })
 ```
+
+## sm83 codegen traps in plain game logic (WRAM integer/array code)
+
+Every footgun above is about VRAM / OAM-DMA / the cart header — the stuff
+that makes sprites vanish. This section is the opposite: **plain WRAM game
+logic** — PRNGs, collision grids, score math. Two such "miscompiles" were
+reported from a real GBC Columns build session and chased to ground here.
+**Verdict: neither was an sm83 codegen bug.** They are documented so you
+don't burn hours blaming the compiler for what is actually a memory-layout
+or static-init trap.
+
+### NOT a bug: 32-bit math / `uint32_t` shifts ≥ 16
+
+Reported: *"`static uint32_t rng=0x1357; rng ^= rng<<13; rng ^= rng>>17;
+rng ^= rng<<5;` degenerates — every `1+xorshift()%6` roll comes out the
+same (near-monochrome)."*
+
+**Reproduced on sm83: it does NOT degenerate.** A ROM that seeds the PRNG,
+calls `xorshift()` 20×, and writes `1 + (result % 6)` to WRAM reads back a
+fully-varied `5,5,5,1,5,5,4,1,3,2,1,...` — the exact sequence a reference
+implementation produces. Full 32-bit fidelity was confirmed byte-for-byte
+across several seeds (`0xDEADBEEF`, `0x00000001`, …). The `<<13` / `>>17` /
+`<<5` shifts (including the ≥16-bit right shift) and `% 6` are all correct.
+**Do not rewrite a working 32-bit xorshift into 16-bit to "dodge" this.**
+32-bit ops are bigger/slower than 16-bit on an 8-bit CPU, so prefer 16-bit
+PRNGs for *speed* — but not for correctness; both are correct.
+
+### The REAL trap behind "monochrome RNG": writing game state to a fixed
+`0xC0xx` WRAM address that overlaps your statics
+
+This is what actually produces the reported symptom. SDCC links the C
+runtime's `_DATA` / `_INITIALIZED` segment (every value-initialised
+`static`, e.g. `static uint32_t rng = 0x1357;`) **at the very bottom of
+WRAM, starting `$C000`**, with `_BSS` (zero-init statics like
+`static uint8_t grid[78];`) right after it. If your code also pokes a
+**hardcoded** `$C000`-area pointer for game state —
+
+```c
+volatile uint8_t *board = (volatile uint8_t *)0xC000;   /* DON'T */
+board[i] = piece;                 /* clobbers `rng` and friends! */
+```
+
+— you are scribbling directly over your own statics. Then `xorshift()`
+reads a trashed `rng`, the PRNG collapses, and every roll looks the same.
+It presents *exactly* like a compiler bug; it is not.
+
+**Fixes (any one):**
+- **Best — let the linker place it.** Use a `static` array and take its
+  address; never hardcode a WRAM pointer:
+  `static uint8_t board[6*13]; ... board[i] = piece;`
+- If you *must* use a fixed address, put it well clear of the runtime data:
+  `$C200`+ is safe for small projects (statics here end far below `$C100`;
+  `shadow_oam` is pinned at `$C100`). Confirm with the linker map — build
+  with `includeSymbols:true` and look at `s__DATA` / `s__BSS` (e.g.
+  `s__DATA = $C000`, `s__BSS = $C006`): your scratch RAM must start ABOVE
+  the end of `_BSS`.
+- **Diagnose it in seconds:** read `system_ram` offset 0 right after boot
+  and compare against your initialised statics' expected bytes. If a
+  `static uint32_t x = 0x1357;` doesn't read back `57 13 00 00` at its map
+  address, something is overwriting it.
+
+### NOT a bug: short `for` loop with an indexed `static` array read
+
+Reported: *"`for(i=0;i<3;i++){ if(grid[r*6+col]) return 1; }` reads the
+wrong cells (pieces lock mid-air / floating gaps); unrolling the 3
+iterations fixed it."*
+
+**Reproduced on sm83: the looped form reads the CORRECT cells.** A ROM that
+seeds `grid[]` with a sparse occupied/empty pattern and runs `collides()`
+both looped and hand-unrolled, for 8 straddling `(col,topy)` inputs, gets
+**identical, correct** results from both forms (`1,0,1,0,1,1,1,1`). The
+`grid[r*6+col]` index math and the 3-iteration loop are fine. If your real
+collision check "floats," look first at the WRAM-collision trap above (a
+clobbered `grid[]`), at off-by-one row/col limits, or at signed/unsigned
+mix-ups — not at loop codegen. **Don't pre-emptively unroll loops as a
+compiler workaround; with the stack-overflow fix in place, sm83 loops with
+indexed array reads are reliable.**
+
+### z80 (SMS/GG) ONLY — fixed: value-initialised statics booted as 0
+
+Investigating the above on the **z80** port (SMS/GG share the SDCC family)
+surfaced a real bug — but a **crt0** bug, not codegen. The bundled
+`sms_crt0.s` / `gg_crt0.s` placed `_INITIALIZER` (the ROM image of
+value-initialised statics) *after* the `_DATA` RAM block in the area list,
+so sdld put it in RAM; the gsinit `ldir` then copied uninitialised RAM onto
+itself and **every `static uint8_t x = 5;` booted as 0** (and BSS wasn't
+zeroed either). On z80 *this* is what made the xorshift PRNG monochrome
+(seed `rng` booted 0 → stayed 0). Fixed 2026-06-08 by ROM-placing
+`_INITIALIZER` + adding a `_DATA` zero loop, mirroring this sm83 crt0 (which
+was already correct — hence sm83 was never affected). If you bring your own
+z80 crt0, model gsinit on `gb_crt0.s`.
