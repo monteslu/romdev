@@ -25,11 +25,13 @@ jobs:
           node-version: 24          # repo engines floor is >=24
           cache: npm
 
-      # Root devDeps only (eslint + @eslint/js + globals). --ignore-scripts
-      # skips romdevtools' postinstall (it expects bundled wasm, absent in CI);
-      # --workspaces=false avoids pulling the 14 binary/core packages.
-      - name: Install lint deps
-        run: npm ci --ignore-scripts --workspaces=false
+      # --ignore-scripts skips romdevtools' postinstall (it expects bundled wasm,
+      # absent in CI). We DO install workspace deps (not --workspaces=false) so
+      # the pure-JS tests get romdevtools' runtime deps (zod, pngjs). The core/
+      # toolchain packages resolve from npm but stay light here — their wasm only
+      # arrives via the skipped postinstall, which the pure-JS tests don't need.
+      - name: Install deps
+        run: npm ci --ignore-scripts
 
       - name: ESLint
         run: npm run lint
