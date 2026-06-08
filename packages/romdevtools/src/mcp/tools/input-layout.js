@@ -74,6 +74,16 @@ const HARDWARE_LAYOUTS = {
     readSequence: "Bits 0-4 are Up/Down/Left/Right/Fire, active-low.",
     bitOrder: ["Up", "Down", "Left", "Right", "Fire"],
     faceButtons: FACE_BUTTON_MAP.c64,
+    // The C64 needs more than joystick: many games use KEYBOARD setup screens
+    // (F1=1 player, RUN/STOP, SPACE/RETURN) before joystick gameplay starts.
+    keyboard: {
+      note: "C64 games often need keyboard input to START (F1 to pick 1 player, fire/RETURN to begin). Joystick alone can't pass these. Use input({op:'pressKey', key}) for a single key, input({op:'typeText', text}) to type a string (LOAD/RUN/filenames).",
+      keys: ["f1", "f3", "f5", "f7", "return", "space", "run/stop", "ctrl", "cbm", "home", "down", "right", "lshift", "rshift", "0-9", "a-z"],
+    },
+    joyport: {
+      note: "The RetroPad drives ONE C64 joystick port at a time. Default is port 2 (most games). Use input({op:'joyport'}) to read it, input({op:'joyport', joyport:1|2}) to switch.",
+      default: 2,
+    },
   },
   sms: {
     register: "I/O port $DC (controllers, read via `in a,($DC)`) and $DD (port 2 high bits + reset)",

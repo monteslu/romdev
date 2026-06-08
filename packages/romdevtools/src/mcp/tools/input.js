@@ -213,17 +213,21 @@ export function registerInputTools(server, z, sessionKey) {
     "when ITS code polls; re-apply immediately before the consuming stepFrames and verify via the held-buttons RAM " +
     "byte, not this echo.",
     {
-      op: z.enum(["set", "press", "sequence", "navigate", "layout"]).describe("set/hold buttons; press one button; run a sequence; navigate a menu; or get the input layout."),
+      op: z.enum(["set", "press", "sequence", "navigate", "layout", "pressKey", "typeText", "joyport"]).describe("set/hold buttons; press one button; run a sequence; navigate a menu; get the input layout. C64-ONLY: pressKey (press a C64 KEYBOARD key — F1/Return/Space/Run-Stop — many C64 games need these to start, joystick alone can't); typeText (feed a string into the C64 keyboard buffer — LOAD/RUN/filenames); joyport (get/set which C64 joystick port the pad drives, 1 or 2; default 2)."),
       // set
       ports: z.array(port).min(1).max(2).optional().describe("op=set: per-port input. [{a:true,right:true}] holds A+Right on port 0."),
       // press
       button: z.enum(BUTTON_ENUM).optional().describe("op=press: button to press (native aliases + spatial names accepted)."),
-      frames: z.number().int().min(1).max(600).default(2).describe("op=press: frames to hold the button."),
+      frames: z.number().int().min(1).max(600).default(2).describe("op=press: frames to hold the button. op=pressKey: frames to hold the C64 key (default 4)."),
       port: z.number().int().min(0).max(1).default(0).describe("op=press: which port (default 0)."),
       // sequence
       steps: z.array(z.any()).optional().describe("op=sequence: [{input:{ports:[...]}, frames}]. op=navigate: [{button, holdFrames?, maxWaitFrames?, settleFrames?}]. (Two distinct step shapes by op.)"),
       // layout
       platform: z.string().optional().describe("op=layout: platform id (nes, gb, snes, genesis, ...)."),
+      // C64 keyboard
+      key: z.string().optional().describe("op=pressKey (C64): key name — f1/f3/f5/f7, return, space, run/stop, a-z, 0-9, ctrl, cbm, home, down, right, lshift, rshift."),
+      text: z.string().optional().describe("op=typeText (C64): string fed into the keyboard buffer; \\r / \\n become RETURN. e.g. 'LOAD\"*\",8,1\\rRUN\\r'."),
+      joyport: z.number().int().min(1).max(2).optional().describe("op=joyport (C64): set the active joystick port (1 or 2). Omit to just GET the current port. Default is 2 (most C64 games)."),
     },
     safeTool(async (args) => {
       switch (args.op) {
@@ -248,6 +252,26 @@ export function registerInputTools(server, z, sessionKey) {
         case "layout": {
           if (!args.platform) throw new Error("input({op:'layout'}): `platform` is required.");
           return jsonContent(getInputLayoutCore(args));
+        }
+        case "pressKey": {
+          if (!args.key) throw new Error("input({op:'pressKey'}): `key` is required (C64 keyboard key, e.g. 'f1', 'return', 'run/stop').");
+          const host = getHost(sessionKey);
+          const r = host.pressC64Key(args.key, args.frames ?? 4);
+          return jsonContent({ pressedKey: r.key, matrix: [r.row, r.col], frames: r.frames, frameCount: host.status.frameCount });
+        }
+        case "typeText": {
+          if (typeof args.text !== "string") throw new Error("input({op:'typeText'}): `text` is required (string fed into the C64 keyboard buffer).");
+          const host = getHost(sessionKey);
+          const rc = host.typeC64Text(args.text);
+          return jsonContent({ typed: args.text, fedResult: rc, note: "Queued into the C64 keyboard buffer — step frames so the screen editor drains it." });
+        }
+        case "joyport": {
+          const host = getHost(sessionKey);
+          if (args.joyport === undefined) {
+            return jsonContent({ joyport: host.getC64JoyPort(), note: "Active C64 joystick port. Most C64 games use port 2 (the default). Pass `joyport:1` or `joyport:2` to change it." });
+          }
+          const set = host.setC64JoyPort(args.joyport);
+          return jsonContent({ joyport: set, set: true });
         }
         default: throw new Error(`input: unknown op '${args.op}'`);
       }

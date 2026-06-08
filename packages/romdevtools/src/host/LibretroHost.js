@@ -138,6 +138,32 @@ export const PLATFORM_VIRTUAL_EXT = {
 };
 import { RETRO_DEVICE_JOYPAD } from "./retroConstants.js";
 
+// C64 keyboard matrix: key name (lowercase) → [row, col] in the 8×8 matrix the
+// KERNAL scans via CIA1. Drives romdev_key_matrix() in the VICE core. Values
+// taken from VICE's own C64 positional keymap (data/C64/sdl_pos_uk.vkm).
+// Covers the keys RE/startup flows need; extend as needed.
+const C64_KEY_MATRIX = {
+  // function keys (the common "1 player / start" selectors)
+  f1: [0, 4], f3: [0, 5], f5: [0, 6], f7: [0, 3],
+  // editing / control
+  return: [0, 1], enter: [0, 1], space: [7, 4], del: [0, 0], backspace: [0, 0],
+  "run/stop": [7, 7], runstop: [7, 7], stop: [7, 7],
+  ctrl: [7, 2], cbm: [7, 5], commodore: [7, 5],
+  lshift: [1, 7], rshift: [6, 4], home: [6, 3], clr: [6, 3],
+  // cursor keys (C64 has DOWN + RIGHT; UP/LEFT are the shifted forms — use
+  // shift+down / shift+right for those)
+  "crsr-down": [0, 7], "crsr-right": [0, 2], down: [0, 7], right: [0, 2],
+  // digits
+  "0": [4, 3], "1": [7, 0], "2": [7, 3], "3": [1, 0], "4": [1, 3],
+  "5": [2, 0], "6": [2, 3], "7": [3, 0], "8": [3, 3], "9": [4, 0],
+  // letters
+  a: [1, 2], b: [3, 4], c: [2, 4], d: [2, 2], e: [1, 6], f: [2, 5],
+  g: [3, 2], h: [3, 5], i: [4, 1], j: [4, 2], k: [4, 5], l: [5, 2],
+  m: [4, 4], n: [4, 7], o: [4, 6], p: [5, 1], q: [7, 6], r: [2, 1],
+  s: [1, 5], t: [2, 6], u: [3, 6], v: [3, 7], w: [1, 1], x: [2, 7],
+  y: [3, 1], z: [1, 4],
+};
+
 export class LibretroHost {
   /**
    * @param {Object} [opts]
@@ -800,6 +826,87 @@ export class LibretroHost {
       mod._free(namePtr);
       mod._free(dataPtr);
     }
+  }
+
+  // ── C64 keyboard + joyport (VICE core only) ──────────────────────────
+  // C64 games need KEYBOARD input (F1 = 1 player, RUN/STOP, SPACE/RETURN at
+  // setup screens) before joystick gameplay — joystick alone can't pass them.
+  // The VICE core exports romdev_key_matrix / romdev_kbdbuf_feed /
+  // romdev_joyport_* (see scripts/patches/vice-romdev-memory-regions.patch).
+
+  /** True if the loaded core exposes C64 keyboard injection (VICE only). */
+  keyboardSupported() {
+    const mod = this.mod;
+    return !!(mod && typeof mod._romdev_key_matrix === "function");
+  }
+
+  /**
+   * Press (and optionally auto-release) a single C64 key by name. Drives the
+   * C64 8×8 key matrix directly via the core. Held for `frames` then released.
+   * @param {string} key  a name from C64_KEY_MATRIX (case-insensitive)
+   * @param {number} [frames] frames to hold before release (default 4)
+   * @returns {{key:string, row:number, col:number, frames:number}}
+   */
+  pressC64Key(key, frames = 4) {
+    const mod = this._needMod();
+    if (typeof mod._romdev_key_matrix !== "function") {
+      throw new Error("this core build does not expose C64 keyboard input (C64/VICE only).");
+    }
+    const pos = C64_KEY_MATRIX[String(key).toLowerCase()];
+    if (!pos) {
+      throw new Error(
+        `unknown C64 key '${key}'. Known: ${Object.keys(C64_KEY_MATRIX).join(", ")}.`,
+      );
+    }
+    const [row, col] = pos;
+    mod._romdev_key_matrix(row, col, 1);    // press
+    this.stepFrames(Math.max(1, frames | 0));
+    mod._romdev_key_matrix(row, col, 0);    // release
+    this.stepFrames(1);
+    return { key: String(key).toLowerCase(), row, col, frames: Math.max(1, frames | 0) };
+  }
+
+  /**
+   * Feed a PETSCII string into the C64 kernal keyboard buffer (for typing
+   * LOAD/RUN/filenames). `\r` (or `\n`) becomes RETURN. Non-blocking — the
+   * kernal drains it as the screen editor runs, so step frames after.
+   * @param {string} text
+   * @returns {number} kbdbuf_feed's result (>=0 ok)
+   */
+  typeC64Text(text) {
+    const mod = this._needMod();
+    if (typeof mod._romdev_kbdbuf_feed !== "function") {
+      throw new Error("this core build does not expose C64 text input (C64/VICE only).");
+    }
+    const s = String(text).replace(/\n/g, "\r");
+    const bytes = Buffer.from(s + "\0", "latin1");
+    const ptr = mod._malloc(bytes.length);
+    try {
+      mod.HEAPU8.set(bytes, ptr);
+      return mod._romdev_kbdbuf_feed(ptr) | 0;
+    } finally {
+      mod._free(ptr);
+    }
+  }
+
+  /** Get the active C64 joystick port (1 or 2) the RetroPad drives. */
+  getC64JoyPort() {
+    const mod = this._needMod();
+    if (typeof mod._romdev_joyport_get !== "function") {
+      throw new Error("this core build does not expose C64 joyport (C64/VICE only).");
+    }
+    return mod._romdev_joyport_get() | 0;
+  }
+
+  /** Set the active C64 joystick port (1 or 2). Default is 2 (most games). */
+  setC64JoyPort(port) {
+    const mod = this._needMod();
+    if (typeof mod._romdev_joyport_set !== "function") {
+      throw new Error("this core build does not expose C64 joyport (C64/VICE only).");
+    }
+    if (port !== 1 && port !== 2) throw new Error("C64 joyport must be 1 or 2.");
+    mod._romdev_joyport_set(port | 0);
+    return port | 0;
   }
 
   reset() {
