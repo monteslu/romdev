@@ -6,9 +6,25 @@ the `romdev-mcp` bin is kept as an alias.)
 
 ## 0.23.0
 
-Response to two real build-session feedback reports (a GBC Columns clone + a
-Genesis Uridium POC). Theme: bugs found, false alarms removed, and — the recurring
-finding — **tools that already existed but agents couldn't find them**.
+Response to real build-session feedback. Theme: bugs found, false alarms
+removed, and — the recurring finding — **tools that already existed but agents
+couldn't find them**.
+
+### Added — C64 keyboard + joyport input (VICE core patch)
+An agent RE'ing C64 Uridium could reach the intro via joystick but couldn't ENTER
+gameplay — the game needs **F1** (1 player) + fire on **port 2**, and romdev's
+input was joypad-mask-only. Many C64 games gate gameplay behind KEYBOARD setup
+screens that joystick can't reach. The VICE core now exports
+`romdev_key_matrix`/`romdev_kbdbuf_feed`/`romdev_joyport_*`, surfaced as:
+- **`input({op:'pressKey', key})`** — press a C64 keyboard key (F1/F3/F5/F7,
+  Return, Space, Run/Stop, a–z, 0–9, …) by driving the C64 8×8 key matrix.
+- **`input({op:'typeText', text})`** — feed a string into the kernal keyboard
+  buffer (LOAD/RUN/filenames); `\r` → RETURN.
+- **`input({op:'joyport', joyport?})`** — read/set the active C64 joystick port
+  (1 or 2; default 2, most games).
+- `input({op:'layout', platform:'c64'})` now reports the keyboard keys + joyport.
+(romdev-core-vice 0.7.0.)
+
 
 ### Fixed — multi-tenant host cross-talk (a whole class of bugs)
 `sprites({op:'inspect', platform:'genesis'})` returned a *GBC*-flavored error while
