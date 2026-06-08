@@ -12,13 +12,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import {
   parseFamiTrackerTxt,
   isFamiTrackerTextExport,
   FamiTrackerParseError,
 } from '../src/parse-txt.js';
 
-const FIXTURES = '<ROMDEV_TEST_FIXTURES>';
+// Optional local fixtures (not in the repo — real FamiTracker exports on the
+// dev's disk). Override with FAMITONE_TEST_FIXTURES; tests skip when absent.
+const FIXTURES = process.env.FAMITONE_TEST_FIXTURES
+  || join(homedir(), 'romdev-music-port-src/famitone2d/TESTS/');
 const haveFixtures = existsSync(FIXTURES + 'TestMusic3.txt');
 const readFix = (f) => readFileSync(FIXTURES + f, 'utf8');
 

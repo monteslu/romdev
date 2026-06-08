@@ -15,6 +15,7 @@ import { resolveCore } from "../src/cores/registry.js";
 import { LibretroHost } from "../src/host/LibretroHost.js";
 import { getCPUState } from "../src/host/cpu-state.js";
 import { buildGbaC } from "../src/toolchains/gba-c/gba-c.js";
+import { LYNX_HOMEBREW } from "./rom-fixtures.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -76,9 +77,9 @@ int main(void) {
 // Lynx test boots the prebuilt sample .lnx if present (no Lynx source toolchain
 // in-tree to build one on the fly). Skips cleanly if neither core nor ROM exist.
 const LYNX_ROM_CANDIDATES = [
-  "<ROMDEV_TEST_ROM>",
+  LYNX_HOMEBREW,
   path.join(__dirname, "roms", "test.lnx"),
-];
+].filter(Boolean);
 const lynxRom = LYNX_ROM_CANDIDATES.find(existsSync);
 
 test("Lynx: patched handy exposes cpu/hw regions + getCPUState decodes 65C02", { timeout: 60000, skip: lynxRom ? false : "no Lynx test ROM present" }, async () => {

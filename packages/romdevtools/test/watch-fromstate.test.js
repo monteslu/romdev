@@ -6,7 +6,6 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -14,9 +13,10 @@ import path from "node:path";
 import { resolveCore } from "../src/cores/registry.js";
 import { resetHost, clearHost } from "../src/mcp/state.js";
 import { prgToD64 } from "../src/platforms/c64/d64.js";
+import { C64_HOMEBREW_PRG } from "./rom-fixtures.js";
 
-const PRG = "<ROMDEV_TEST_ROM>";
-const have = existsSync(PRG);
+const PRG = C64_HOMEBREW_PRG;
+const have = !!PRG;
 
 // Build a tiny in-process MCP-ish server that just records registered tools, so
 // we can call the real `watch` handler (incl. fromState) without HTTP.
