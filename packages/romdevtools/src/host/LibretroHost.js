@@ -138,6 +138,25 @@ export const PLATFORM_VIRTUAL_EXT = {
 };
 import { RETRO_DEVICE_JOYPAD } from "./retroConstants.js";
 
+// C64 controller→keyboard map (the Batocera/RetroDeck model: a CONTROLLER alone
+// plays C64 — no physical keyboard needed — by mapping spare buttons/stick to
+// the C64 keyboard keys games need at setup screens). Keyed by the button NAME
+// setInput receives (libretro + spatial names + the playtest right-stick virtual
+// buttons c64_f1..f7). The joystick itself (d-pad + Fire) is NOT here — those
+// stay a real joypad. Everything here is routed to the key matrix instead.
+//   B / south = Fire        → joystick (handled as joypad, not a key)
+//   X / west  = Space        L2 = Run/Stop   R2 / start = Return
+//   R-stick   = F1/F3/F5/F7  (playtest emits c64_f1..f7 from the right stick)
+const C64_BUTTON_KEYS = {
+  west: "space", y: "space",
+  l2: "run/stop",
+  r2: "return", start: "return",
+  c64_f1: "f1", c64_f3: "f3", c64_f5: "f5", c64_f7: "f7",
+  north: "f1", x: "f1",   // also expose F1 on the top face (1-player select is the #1 need)
+};
+// The buttons that ARE the C64 joystick (pass through to the joypad mask):
+const C64_JOY_BUTTONS = new Set(["up", "down", "left", "right", "b", "south", "a", "east"]);
+
 // C64 keyboard matrix: key name (lowercase) → [row, col] in the 8×8 matrix the
 // KERNAL scans via CIA1. Drives romdev_key_matrix() in the VICE core. Values
 // taken from VICE's own C64 positional keymap (data/C64/sdl_pos_uk.vkm).
@@ -596,10 +615,53 @@ export class LibretroHost {
   /** @param {import("./types.js").FrameInput} input */
   setInput(input) {
     const platform = this.status.platform ?? undefined;
+    // C64: route the keyboard-mapped controller buttons (Space/Run-Stop/Return/
+    // F1-F7) to the key matrix so a CONTROLLER alone can play — the
+    // Batocera/RetroDeck model. The joystick bits (d-pad + Fire) still flow to
+    // the joypad mask below. Applies to BOTH playtest and the agent's setInput.
+    if (platform === "c64" && this.mod && typeof this.mod._romdev_key_matrix === "function") {
+      this._applyC64ButtonKeys(input.ports[0] || {});
+    }
     for (let port = 0; port < this.state.inputPorts.length; port++) {
-      const portInput = input.ports[port];
+      const portInput = this._c64StripKeyButtons(input.ports[port], platform);
       this.state.inputPorts[port][0] = portInputToMask(portInput, platform);
     }
+  }
+
+  /** C64: press/release matrix keys for the held keyboard-mapped buttons on a
+   *  port, edge-tracked so a key releases when its button is no longer held. */
+  _applyC64ButtonKeys(portInput) {
+    const held = this._c64HeldKeys || (this._c64HeldKeys = new Set());
+    const want = new Set();
+    for (const [btn, key] of Object.entries(C64_BUTTON_KEYS)) {
+      if (portInput[btn] === true) want.add(key);
+    }
+    // press newly-wanted, release no-longer-wanted
+    for (const key of want) {
+      if (!held.has(key)) {
+        const pos = C64_KEY_MATRIX[key];
+        if (pos) this.mod._romdev_key_matrix(pos[0], pos[1], 1);
+        held.add(key);
+      }
+    }
+    for (const key of [...held]) {
+      if (!want.has(key)) {
+        const pos = C64_KEY_MATRIX[key];
+        if (pos) this.mod._romdev_key_matrix(pos[0], pos[1], 0);
+        held.delete(key);
+      }
+    }
+  }
+
+  /** Strip the C64 keyboard-mapped buttons out of a port so they don't ALSO
+   *  press a joystick direction/fire (only the real joystick bits remain). */
+  _c64StripKeyButtons(portInput, platform) {
+    if (platform !== "c64" || !portInput) return portInput;
+    const out = {};
+    for (const k of Object.keys(portInput)) {
+      if (C64_JOY_BUTTONS.has(k)) out[k] = portInput[k];
+    }
+    return out;
   }
 
   /** @param {string} name */

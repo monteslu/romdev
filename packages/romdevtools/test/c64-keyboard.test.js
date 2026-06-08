@@ -63,3 +63,32 @@ test("pressC64Key resolves the matrix position + auto-releases", { skip: !have, 
   assert.equal(r.frames, 4);
   assert.throws(() => host.pressC64Key("nope"), /unknown C64 key/);
 });
+
+test("controller buttons map to C64 keys via setInput (Batocera/RetroDeck model)", { skip: !have, timeout: 60000 }, async () => {
+  const host = await boot();
+  // Instrument the matrix call so we can see press/release without depending on
+  // a kernal var an autostarted game might clobber.
+  const orig = host.mod._romdev_key_matrix.bind(host.mod);
+  const calls = [];
+  host.mod._romdev_key_matrix = (r, c, p) => { calls.push([r, c, p]); return orig(r, c, p); };
+
+  // A keyboard-mapped button (west = Space, matrix (7,4)) presses the key...
+  host.setInput({ ports: [{ west: true }, {}] });
+  assert.deepEqual(calls.at(-1), [7, 4, 1], "west → Space pressed");
+  // ...and releasing it releases the key (edge-tracked).
+  calls.length = 0;
+  host.setInput({ ports: [{}, {}] });
+  assert.deepEqual(calls.at(-1), [7, 4, 0], "west released → Space released");
+
+  // The right-stick virtual button c64_f1 → F1 (0,4) — the 1-player selector.
+  calls.length = 0;
+  host.setInput({ ports: [{ c64_f1: true }, {}] });
+  assert.deepEqual(calls.at(-1), [0, 4, 1], "c64_f1 → F1 pressed");
+
+  // The JOYSTICK (d-pad + Fire) does NOT press any key — it stays a joypad.
+  host.setInput({ ports: [{}, {}] });   // release everything first
+  calls.length = 0;
+  host.setInput({ ports: [{ up: true, b: true }, {}] });
+  assert.equal(calls.length, 0, "joystick up+Fire presses no C64 key");
+  assert.notEqual(host.state.inputPorts[0][0], 0, "joystick reaches the joypad mask");
+});

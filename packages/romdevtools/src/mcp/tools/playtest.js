@@ -126,7 +126,7 @@ export function registerPlaytestTools(server, z, sessionKey) {
         });
       }
 
-      const { playtest, KEYBOARD_BINDINGS_HELP } = await import("../../playtest/playtest.js");
+      const { playtest, KEYBOARD_BINDINGS_HELP, C64_BINDINGS_HELP } = await import("../../playtest/playtest.js");
       let session;
       try {
         // Pass a live-host accessor so the window FOLLOWS rebuilds: runSource/
@@ -214,6 +214,7 @@ export function registerPlaytestTools(server, z, sessionKey) {
       // isn't left guessing which keys drive the game. (A pad hot-plugged later
       // is picked up automatically — this is just the at-open state.)
       const noController = session.controllerCount === 0;
+      const isC64 = host.status?.platform === "c64";
       return jsonContent({
         opened: true,
         reusedExistingWindow: false,
@@ -222,7 +223,21 @@ export function registerPlaytestTools(server, z, sessionKey) {
         scale,
         aspect,
         controllerCount: session.controllerCount,
-        ...(noController
+        // C64 input is non-obvious (games need keyboard keys to START), so ALWAYS
+        // relay the controls — a controller alone IS enough (spare buttons/stick
+        // map to F1/Run-Stop/Space/Return), and the keyboard fallback covers the
+        // no-controller case. This is the Batocera/RetroDeck model.
+        ...(isC64
+          ? {
+              c64Controls: C64_BINDINGS_HELP,
+              tellUser:
+                "C64 game: RELAY `c64Controls` to the user. A CONTROLLER ALONE is " +
+                "enough — they do NOT need a keyboard. Most C64 games need a " +
+                "keyboard key to START (e.g. F1 for 1 player); the pad's spare " +
+                "buttons/right-stick map to those (F1/F3/F5/F7, Space, Run/Stop, " +
+                "Return). Default joystick port is 2; change with input({op:'joyport'}).",
+            }
+          : noController
           ? {
               keyboardControls: KEYBOARD_BINDINGS_HELP,
               tellUser:
