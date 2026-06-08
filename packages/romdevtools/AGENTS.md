@@ -152,11 +152,20 @@ worry about ground truth:
    without round-tripping bytes through your context — preferred
    when you're scaffolding into a project dir.
 
-For most workflows, path A is all you need. Read MENTAL_MODEL.md +
-TROUBLESHOOTING.md when stuck. **When a tool call FAILS, read the error
-message and `issues[]` first — see "When a call fails" below; the error
-usually names the fix.** File a feedback round if the bundled examples
-are wrong.
+**Before you write code for a platform, read its docs.** This doc (AGENTS.md) is
+deliberately GENERIC — the platform-specific knowledge that actually saves you
+(memory map, input/control modes, render-enable gotchas, codegen traps, the SDK's
+quirks) lives in each platform's `MENTAL_MODEL.md` + `TROUBLESHOOTING.md`, read on
+demand via **`platform({op:'doc', platform, name:'mental_model'})`** (and
+`name:'troubleshooting'`). Read the MENTAL_MODEL for every system you'll work on
+FIRST — most "why won't this work" dead-ends are a documented footgun you'd have
+seen there (e.g. a C64 game that needs a keyboard key to start, an SDCC WRAM
+layout trap, a platform's render-enable order). It's a couple hundred tokens that
+saves a long flail.
+
+For most workflows, path A is all you need. **When a tool call FAILS, read the
+error message and `issues[]` first — see "When a call fails" below; the error
+usually names the fix.** File a feedback round if the bundled examples are wrong.
 
 ### Path B — Debug when the bundled code disagrees with behavior
 
