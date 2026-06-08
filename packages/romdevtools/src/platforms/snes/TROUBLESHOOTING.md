@@ -193,6 +193,49 @@ Expected. tcc-65816.wasm + wla-65816.wasm cold-load + compile takes
 1-2s. Subsequent builds reuse the warm worker pool (R12 crash
 isolation infrastructure). Steady-state builds are sub-second.
 
+## "asm build fails with `ok:false` and an empty/cryptic `issues[]`" (asar idioms)
+
+The `language:"asm"` SNES path runs through **asar**, which **silently crashes**
+(a heap-pointer Emscripten exit code, no diagnostic) on a handful of source
+idioms. romdev's asar wrapper has a preflight that catches the common cases and,
+when asar dies with `ok:false` and no parsed errors, retries with `--verbose` and
+synthesizes a fallback `issues[]` entry with a hint. The idioms to avoid:
+
+- **`$ - label` size expressions** (current-PC minus a label) crash asar. Use an
+  explicit `end_label - start_label` difference instead:
+  ```asm
+  ; WRONG — crashes asar silently
+  my_size = $ - my_data
+  ; RIGHT
+  my_data_end:
+  my_size = my_data_end - my_data
+  ```
+- **Opcode + operand arithmetic on an `=`-defined symbol**, e.g.
+  `STA SYMBOL + N` where `SYMBOL` is a `=` constant (not a label), can also crash
+  silently. The preflight flags the label-arithmetic-across-bank case
+  (`label-arithmetic constant`); for the rest, if you see `ok:false` with no real
+  error, suspect a `SYMBOL + N` and rewrite to a plain label or pre-compute the
+  address.
+- **Bank-border crossed.** If your `org` + `dw`/data runs past `$00FFFF` you've
+  crossed a bank boundary and the layout is wrong. Native interrupt vectors live
+  at `$FFE4-$FFEE`, emulation vectors at `$FFF4-$FFFF` — keep your header/vector
+  block where the layout expects it. Use
+  `scaffold({op:'snippets', platform:"snes", mode:"get", name:"lorom_header.asm"})`
+  for the canonical layout (and `lorom_multibank.asm` for multi-bank).
+
+(This is the asar/asm path. The default PVSnesLib **C** path goes through
+tcc-65816 + wla-65816 and has its own C89 trap, above.)
+
+## "CHR and tilemap overlap in VRAM / background renders as garbage tiles"
+
+SNES CHR (tile patterns) and the BG tilemap share the 64 KB VRAM, addressed in
+**words**. CHR starts at word `$0000`; if your CHR is 16 KB it occupies words
+`$0000-$1FFF`, so a tilemap placed at word `$2000` collides with the tail of CHR
+and you get garbage. **Put the tilemap at word `$4000` or later when your CHR is
+big.** Verify the bases with `background({view:'renderState', platform:'snes'})`
+(it decodes the BG char/map base) and cross-check the tile region with
+`tiles({op:'png'})` at the CHR base.
+
 ## "I want to use real graphics from a PNG"
 
 `gfx4snes` (the PVSnesLib companion tool) converts PNG → .pic + .pal.

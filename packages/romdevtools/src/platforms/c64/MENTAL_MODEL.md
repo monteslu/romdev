@@ -41,6 +41,12 @@ Default after boot = `$37` (all three set) — BASIC + KERNAL ROMs +
 I/O regs. Set CHAREN=0 to read the character-set bitmaps from ROM;
 set HIRAM=0 to swap KERNAL out for RAM (useful for low-memory tricks).
 
+> **cc65 zero-page starts at $02 (same cc65 trap as NES/Atari/Lynx).** cc65
+> reserves `$00-$01` (here it's also the 6510 I/O port), so your first
+> `.res 1` in `ZEROPAGE` lands at **$02**, not $00. Don't hand-write asm that
+> assumes a ZP var is at $00. Confirm with `symbols({op:'map'})` after
+> `build({output:'romWithDebug'})`.
+
 ## VIC-II — character cells, NOT tiles
 
 The C64's video chip displays 25 rows × 40 cols of 8×8 character

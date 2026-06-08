@@ -875,34 +875,50 @@ If a platform genuinely lacks a tilemap (Atari 2600 races the beam; 7800 uses di
 
 ## Known toolchain landmines
 
-A few platform-tool quirks worth knowing up front:
+Two cross-cutting notes apply broadly; the rest is platform-specific and lives in
+each platform's docs (read them for the system you're on — see below).
 
-- **asar (SNES) silent fails** on certain idioms: `$ - label` size expressions crash with a heap-pointer exit code (use `end_label - start_label` instead). Some opcode + operand arithmetic like `STA SYMBOL + N` where SYMBOL is `=`-defined also crashes silently — our preflight catches the common cases. When `ok: false, issues: []`, the wrapper now synthesizes a fallback issue with a hint.
-- **asar bank-border-crossed** can happen if your `org` + `dw` runs past $00FFFF. Native vectors are at $FFE4-$FFEE; emulation vectors at $FFF4-$FFFF. Use `scaffold({op:'snippets', platform: "snes", mode: "get", name: "lorom_header.asm"})` for the layout.
-- **cc65 (NES, C64, etc.) zero page** starts at $02. cc65 reserves $00-$01 for its runtime. Your first `.res 1` lands at $02, not $00. Use `symbols({op:'map'})` after `build({output:'romWithDebug'})` to confirm.
-- **NES pattern table cap = 256 tiles per nametable**. The tilemap index is 8-bit, so per-frame BG can use at most 256 unique tiles per pattern table. Auto-converting a busy illustration usually overflows. `encodeArt({stage:'tilemap'})` warns; the only workaround is mid-frame CHR bank switching (MMC3-class mapper).
-- **NES + GB/GBC turnkey** (R9/R10 self-contained + sound, 2026-05-25): use `scaffold({op:'project', platform, template, name, path})` to scaffold a project. The pipeline copies every file the template depends on — `{nes,gb}_runtime.{h,c}`, `gb_hardware.h`, custom `crt0.s`, linker `.cfg`, `patch-header.js` (GB) — into the project directory alongside `main.c`. **No auto-injection at build time.** Iterate the whole dir in one call with `build({output:'run', path, platform})` (or supply `sources` / `sourcesPaths` / `includes` / `includePaths` / `crt0` / `crt0Path` / `linkerConfig` / `codeLoc` explicitly when the files aren't on disk). Take the project elsewhere with stock cc65/sdcc and it builds the same way. The runtime APIs include sprites, BG, input, AND **sound** — `sound_init` / `sound_play_tone(channel, period, vol, length)` / `sound_play_noise` / `sound_off`. NES drives pulse1+pulse2+triangle+noise via $4000-$400F + $4015; GB drives the 4-channel APU via NR10-NR52. SFX-grade, fire-and-forget — for full music tracks, drop in famitone2 (NES) or your own driver. Templates: `default` (palette cycle), `hello_sprite` (sprite + d-pad + **beep on A press**), `tile_engine` (multi-room tile map). Docs: [`src/platforms/nes/MENTAL_MODEL.md`](src/platforms/nes/MENTAL_MODEL.md) + [`TROUBLESHOOTING.md`](src/platforms/nes/TROUBLESHOOTING.md); [`src/platforms/gb/MENTAL_MODEL.md`](src/platforms/gb/MENTAL_MODEL.md) + [`TROUBLESHOOTING.md`](src/platforms/gb/TROUBLESHOOTING.md). **NES sprite staging:** the bundled `nes_runtime` now handles the OAM-DMA race for you (oam_clear just resets the index; ppu_wait_nmi hides unused slots after you stage), so the old "must stage before ppu_wait_nmi" flicker trap is gone — the standard `oam_clear → oam_spr → ppu_wait_nmi` loop renders cleanly. **GB ROM header:** both asm and C builds auto-run `rgbfix` inside `build({output:'rom'/'run'})`, so the Nintendo logo + checksums + CGB flag are correct out of the box — no manual header-patch step needed (use `romPatch({op:'gbHeader'})` only to fix up an external ROM).
-- **Game Boy / GBC silent-failure footguns** (R54 cleanup, full detail in `platform({op:'doc', platform:"gb"|"gbc", name:"mental_model"})`):
-  - **The bundled `gb_crt0.s` is now actually linked.** Pre-r54 a fundamental bug in `buildZ80C` was shipping the raw .s text to sdld as if pre-assembled — sdld silently rejected it and fell back to SDCC's stock sm83 crt0 (no GB cart boot, no IRQ vectors). Map showed no `init` symbol, $0000 was $FF, $0100 was $FF. Every GB ROM ran on stock crt0 invisibly. Fixed by auto-detecting .s source vs .rel object and running it through sdasgb first. Post-fix: `init` at $0150, entry $0100 = `00 c3 50 01` (nop; jp $0150), reset vector $0000 = $C9. **This was the root cause for #14 audio AND part of why every previous "runtime should work OOTB" round still felt friction-heavy.**
-  - **GB/GBC C builds now auto-fix the header at build time** (rgbfix runs inside `build({output:'rom'})`): Nintendo logo at $0104, header checksum at $014D, global checksum, and the CGB flag at $0143 ($00 for `.gb`, $C0 for `.gbc`). You no longer need to patch the header manually — the ROM `build({output:'rom'})` hands back boots on real hardware as-is. `romPatch({op:'gbHeader', path})` still exists if you want to override title / cart type / RAM size / etc. on an existing file.
-  - **`shadow_oam` is pinned at $C100** in the bundled `gb_runtime.c` via `__at(0xC100)`. OAM DMA reads ONLY the high byte and copies 160 bytes from `$XX00` — a plain `uint8_t my_oam[160]` may land at $C017 and DMA garbage. If you roll your own OAM buffer, pick an address with `0x00` low byte (e.g. $C200) and pass it directly to `oam_dma_copy`.
-  - **Call `enable_vblank_irq()` once at boot.** Without it, `wait_vblank()` busy-polls `LY` which updates only at WASM `frame({op:'step'})` quantum boundaries → game loop runs at ~1/30 intended speed on the emulator. After enable, `wait_vblank()` compiles to `HALT` + vblank IRQ wake (~10 cycles per frame).
-  - **Use `memcpy_vram(dst, src, n)` for VRAM bulk writes**, NOT raw `(uint8_t*)0x8000` casts — SDCC sm83 may elide the latter as dead code. The bundled `gb_hardware.h` declares every $FFxx register as `volatile`-typed so direct writes like `BGP = 0xE4;` are fine; the hazard is only on cast-through-pointer block copies.
-  - **`background({view:'map', platform:"gb"})` now renders a 256×256 PNG of the BG plane.** Pass `which: 1` for $9C00 map base, `window: true` to render the Window map instead. Returns `mapBase` + `mode` + `scy/scx` so you can see where the visible 160×144 region falls.
-  - **`memory({op:'read', region:"video_ram"})` doesn't work on GB** — gambatte exposes VRAM as `gb_vram` (not the generic libretro id). r54 errors now suggest this directly. Also: `gb_oam`, `gb_io`, `gb_hram`, `gb_bgpdata`, `gb_objpdata`, `gb_cpu_regs`. `tiles({op:'png'})` / `background({view:'map'})` / `sprites({op:'inspect'})` abstract over this.
-- **SMS / Game Gear VDP footguns** (R53 cleanup, full detail in `platform({op:'doc', platform:"gg"|"sms", name:"mental_model"})`):
-  - **8 sprites per scanline** is a hard VDP limit. Extra sprites on the same Y row silently drop — symptom: "first 8 letters of CATCH THE COIN render, rest vanish." Split text across multiple Y rows OR draw it via the BG name table (no per-line limit).
-  - **GG OAM coords are hardware-space, NOT visible-space.** The libretro screenshot returns the 160×144 visible region but OAM bytes are still 256×192 hw-coord. Visible region = OAM x∈[48,207], y∈[24,167]. `sprites({op:'inspect'})` reports hardware coords too.
-  - **SAT $D0 is the renderer terminator.** R53 fixed `sms_sprite_init` / `gg_sprite_init` so they no longer fill Y with $D0 (they use $E0 now — off-screen but not the terminator). You only hit the trap if you write $D0 yourself; if sprites past a given slot are missing in `sprites({op:'inspect'})`, that's still the diagnosis.
-  - **R6 = 0xFB → sprite tiles at $0000**, not $2000 (older comments lied — fixed). Bit 2 SET = $2000, CLEAR = $0000. Trust `sprites({op:'inspect'})`' `spriteTileDataBase` field over comments.
-- **SNES CHR/tilemap can overlap in VRAM** if you put them carelessly. CHR starts at word $0000; if your CHR is 16KB the tilemap can't be at word $2000. Put tilemap at word $4000 or later when your CHR is big.
-- **SNES audio is a separate ROM build** — the Sony SPC700 coprocessor handles all sound; the main 65816 can only upload a driver + samples then send commands. Workflow: write your SPC driver in `arch spc700` .asm, `build({output:'rom', platform:"spc700", source})` to flat raw bytes, then `.incbin` the result into your main 65816 .asm + write the $BBAA handshake at $2140-$2143 to upload it. `encodeAudio({target:'brr', pcmPath, outputPath})` encodes 16-bit PCM into the SNES BRR format the SPC needs. See `src/platforms/snes/lib/audio_pipeline.asm` for the protocol overview, and the SPC driver bundled into any SNES game project scaffolded with a sound genre.
-- **All SDCC-built platforms (GB, GBC, SMS, GG, MSX, ColecoVision)** share a few SDCC-sm83 / -z80 quirks. The detailed reference is [`src/platforms/gb/lib/c/SDCC_GOTCHAS.md`](src/platforms/gb/lib/c/SDCC_GOTCHAS.md).
-  **2026-05-25: The "for-loop + function-call crash family" (`dbuf_append_str NULL` assertion) is FIXED.** It was emscripten's default 64 KB stack overflowing the static `sm83_regs[]` table at runtime — not a SDCC codegen bug. Fixed by adding `-s STACK_SIZE=8388608` to `scripts/_lib.sh`. Patterns #1..#10 / #37 / #38 / #39 from previous agent notes all compile cleanly now. You don't need `unroll.h`, you don't need to split files into ≤200-line TUs, you don't need array-of-structs refactors. Write the natural code.
-  **C89-only.** SDCC sm83 is C89. No inline `for (int i = 0; ...)`, no mid-block declarations, no compound literals. SDCC's syntax-error line is usually wrong (points at the FIRST decl after non-decl code); use the linter's line numbers instead.
-  **Pre-flight linter:** `build({output:'rom'})` runs a syntax scan before invoking SDCC. C89 violations show up in `issues[]` with `stage: "lint"` and a `ref:` pointing at the right GOTCHAS section. Pass `lint:"strict"` to fail the build on any lint hit; default is advisory. **The linter reports EVERY mid-block decl in a block**, ordinal-tagged (`#2`, `#3` etc.) so a subtle earlier decl doesn't silence the obvious later one (R53 fix). If a flagged line doesn't look like a decl to you, double-check: typedef'd names ending in `_t`, plus `struct`/`union`/`enum` declarations, all count.
-  **Multi-TU still helps iteration speed** (`sourcesPaths: {"main.c":..., "render.c":...}`): smaller TUs rebuild faster, easier to navigate. When a multi-TU build fails, the response includes `failedTU` + `compiledOK` so you know exactly which file to bisect.
-  SMS/GG: `scaffold({op:'project', platform:"sms"|"gg"})` ships `sms_crt0.s` / `gg_crt0.s` into the project automatically — these crt0s give a proper cartridge reset vector + IM 1 + stack setup before calling `main()`. SDCC's stock z80 crt0 traps `rst $08` and any VDP-touching code hangs at PC=$0007, so the bundled crt0 is mandatory for real-hardware boot. GB/GBC: see the NES + GB/GBC self-contained-project bullet above.
+- **C compilers run a pre-flight lint before the real compile.** When a build
+  fails (or even when it succeeds with warnings), read the structured `issues[]`
+  — entries with `stage:"lint"` name the exact file:line and carry a `ref:` into
+  the relevant GOTCHAS section. Pass `lint:"strict"` to FAIL the build on any
+  lint hit (default is advisory). Don't trust the raw compiler `log` line numbers
+  — they're often off-by-one; the lint line is the right one.
+- **All SDCC platforms (GB, GBC, SMS, GG, MSX, ColecoVision) are C89.** No inline
+  `for (int i = …)`, no mid-block declarations, no compound literals/designated
+  initializers — hoist every declaration to the top of its block. The lint catches
+  these; the canonical reference (plus the WRAM-layout traps that masquerade as
+  "miscompiles") is [`src/platforms/gb/lib/c/SDCC_GOTCHAS.md`](src/platforms/gb/lib/c/SDCC_GOTCHAS.md).
+
+**Platform-specific toolchain traps live in each platform's
+`MENTAL_MODEL.md` / `TROUBLESHOOTING.md` (read via
+`platform({op:'doc', platform, name:'mental_model'|'troubleshooting'})`) — read
+them for YOUR platform before you build.** By symptom:
+
+- **SNES asm `ok:false` with empty/cryptic `issues[]`** → asar silent-fail idioms
+  (`$ - label` size expr, `STA SYMBOL+N` on a `=`-constant, bank-border crossed) +
+  **CHR/tilemap VRAM overlap** (garbage BG tiles) → snes `TROUBLESHOOTING`.
+- **SNES has no sound** → audio is a SEPARATE SPC700 build (`platform:"spc700"` →
+  `.incbin` → $2140-$2143 handshake; `encodeAudio({target:'brr'})` for samples) →
+  snes `MENTAL_MODEL` "Sound" + `TROUBLESHOOTING`.
+- **Hand-asm clobbers the C runtime / a ZP var isn't where you put it** → cc65
+  zero-page starts at **$02** ($00-$01 reserved); first `.res 1` = $02. All cc65
+  platforms (NES, C64, Atari, Lynx) → nes/c64 `MENTAL_MODEL`.
+- **Busy BG art renders garbage / `encodeArt({stage:'tilemap'})` warns** → NES
+  256-unique-tiles-per-pattern-table cap → nes `MENTAL_MODEL`.
+- **GB/GBC: white screen, sprites garbage, VRAM stays empty, or "works until a
+  button is held then corrupts"** → header/CGB-flag auto-fix, `shadow_oam`
+  page-alignment, `memcpy_vram` (raw VRAM stores get elided), OAM-DMA-from-HRAM,
+  crt0 BSS-zeroing, and `gb_vram` (NOT `video_ram`) → gb `MENTAL_MODEL` footguns +
+  `SDCC_GOTCHAS`.
+- **SMS/GG: sprites past slot N vanish / text cut off / sprites invisible** →
+  8-sprites-per-scanline limit, SAT `$D0` terminator, R6 sprite-tile-base
+  ($2000 vs $0000), GG OAM hardware-vs-visible coords → sms/gg `MENTAL_MODEL`.
+
+Turnkey NES/GB/GBC projects (`scaffold({op:'project'})`) copy every runtime file
+the template needs (`*_runtime.{h,c}`, `gb_hardware.h`, crt0, linker cfg) into the
+project dir and auto-fix the cart header at build — iterate the whole dir with
+`build({output:'run', path, platform})`. Details in those platforms' MENTAL_MODELs.
 
 ## Session continuity — REUSE YOUR SESSION
 

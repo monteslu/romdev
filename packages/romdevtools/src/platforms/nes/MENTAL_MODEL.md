@@ -25,6 +25,13 @@ The cc65 runtime claims:
 - ZP $1C+ available to your game (with our chr-ram crt0)
 - `$0500-$07FF` (3 pages): cc65 C parameter stack
 
+> **cc65 zero-page starts at $02, not $00 (applies to every cc65 platform —
+> NES, C64, Atari, Lynx, …).** cc65 reserves `$00-$01` for its runtime, so your
+> first `.res 1` in the `ZEROPAGE` segment lands at **$02**, not $00. If you
+> hand-write asm that assumes a zero-page var is at $00 you'll clobber the
+> runtime. Confirm actual addresses with `symbols({op:'map'})` after
+> `build({output:'romWithDebug'})`.
+
 ## PPU memory map (separate from CPU bus!)
 
 ```
@@ -93,6 +100,15 @@ the single biggest source of NES color confusion.
 The `nes_runtime` helper `tile_set_palette(nt, x, y, palette)` does
 the read-modify-write dance and the bit-twiddling — use it instead
 of writing attributes by hand.
+
+> **256-tile cap per pattern table (the busy-image trap).** The nametable's
+> tile index is 8-bit, so a single pattern table holds at most **256 unique
+> tiles** — and a per-frame BG can therefore use at most 256 distinct tiles.
+> Auto-converting a busy full-screen illustration almost always needs more than
+> 256 unique 8×8 tiles and **overflows**; `encodeArt({stage:'tilemap'})` warns
+> when it does. The only real workaround is mid-frame CHR bank switching
+> (an MMC3-class mapper) — the bundled NROM presets can't do it, so design BG
+> art to reuse tiles (≤256 unique per table).
 
 ## Palettes
 
