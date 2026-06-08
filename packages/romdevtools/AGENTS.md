@@ -450,319 +450,50 @@ romdev errors are written FOR you — they name what went wrong AND how to recov
 
 ## ROM hacking workflow
 
-The full byte-patch loop is six MCP calls, no custom scripts:
+**The full RE/romhack workflow is the playbook — read it FIRST:**
+`platform({op:'doc', platform:'romhacking', name:'playbook'})`. It's the cross-platform
+decision tree that wires the primitives below together (with the trap each one exists
+to avoid), plus the per-asset round-trips (text, compressed assets, graphics) and a
+Quick-reference table. Don't reconstruct the flow from this summary — it's only here so
+you know the capability exists and where the detail lives.
 
-```js
-cart({op:'identify', path })                       // 1. what is it?
-disasm({target:'rom', path, startAddress, untilReturn:true })
-                                                   // 2. find the target
-                                                   //    (auto-tagged reset/nmi/irq labels,
-                                                   //     HW register names, file-offset
-                                                   //     comments — for NES, BOTH .nes and
-                                                   //     prg.bin offsets emitted —
-                                                   //     mapper-aware addresses)
-assembleSnippet({ cpu, origin, code: "lda #$00\nrts" })
-                                                   // 3. encode replacement bytes
-memory({op:'write', region:"system_ram", offset:0xRAM, hex })
-                                                   // 4. VERIFY first — write the value
-                                                   //    on the live emulator, watch for
-                                                   //    the expected behavior. Cheaper than
-                                                   //    a wrong patch.
-romPatch({op:'write', path, offset, hex, expect: "<current bytes>" })
-                                                   // 5. patch with safety check —
-                                                   //    refuses if existing bytes differ
-romPatch({op:'diff', platform, a: original, b: patched })    // 6. verify the patch landed
-loadMedia({ platform, path: patched }) → frame({op:'screenshot'})  // 7. run it
-```
+Key primitives (all bundled, all 14 tier-1 systems unless noted; full detail in the
+playbook):
 
-**Driving input through a watched run.** A `watch`/`breakpoint` with NO
-`pressDuring` INHERITS whatever `input({op:'set'})` last held — same as
-`frame({op:'step'})`. But if you pass `pressDuring`, that schedule OWNS the pad
-for the whole run and a prior `input({op:'set'})` is ignored. So to hold a button
-*through* a watched window, put it in `pressDuring` — not a preceding `set`.
+- **Find a value's RAM address** — the Cheat-Engine loop `memory({op:'search'})` →
+  `memory({op:'searchNext', compare})`, NOT a full-RAM diff. (`memory({op:'snapshot'})`+`memory({op:'diff'})`
+  answers the different question "which bytes did THIS one event touch?".)
+- **Free RAM/code map for a known game** — `cheats({op:'lookup', path})` decodes each cheat
+  into labeled addresses (`kind:ram`=variable, `kind:code`=patch site); `cheats({op:'apply'})`
+  confirms a label live + non-destructively; `cheats({op:'make'})` mints a verified shareable
+  code from a byte you found. Probable (name) match — verify before patching.
+- **Find the instruction that wrote/read a byte** — `breakpoint({on:'write', address})` returns
+  the EXACT writer (core-level watchpoint, correct under NMI/IRQ; reports `bank`);
+  `precision:'sampled'` is the lighter frame-sampled lead. `breakpoint({on:'read'})` is the
+  read-side mirror. `found:false` ⇒ the region is bulk-copied/DMA'd from a SOURCE struct.
+- **Read a register AT an instruction** — `breakpoint({on:'pc', address})` freezes the CPU →
+  `cpu({op:'read'})` for the live register file (e.g. a decoder's source pointer);
+  `frame({op:'stepInstruction'})` single-steps. The "infer for hours → read it in 3 calls" move.
+- **Discover the unknown routine** — `watch({on:'range'|'pc'})` logs every PC touching a
+  region; `watch({on:'dma'})` (Genesis) traces a graphic back to its ROM source offset.
+- **Confirm bytes / classify** — `memory({op:'readCart'})` reads the running program image
+  (un-banked: file offset = CPU address); `memory({op:'classify'})` tells a real table from
+  ASCII/code before you trust it.
+- **Edit on-screen text** — `text({op:'learn'})` infers the font map (incl. LIVE
+  `fromScreen` mode — no offset needed) and flags pre-rendered-graphic text (don't patch
+  the "string"); `text({op:'find'})`/`text({op:'encode'})` do the string round-trip.
+- **Compressed assets** — drive the ROM's OWN codec: `cpu({op:'decompress'})`/`cpu({op:'call'})`
+  to expand, then the re-inject trio `romPatch({op:'makeStored'})` (verbatim-expand block) →
+  `romPatch({op:'findFree'})` → `romPatch({op:'relocate'})`, with `romPatch({op:'findPointer'})` for the
+  loader pointer. Don't reimplement the compressor.
+- **Author/verify the patch** — `assembleSnippet({cpu, origin, code})` → bytes;
+  `romPatch({op:'write'})` (always pass `expect`); `romPatch({op:'diff'})` mapper-aware verify;
+  `disasm({target:'references'})` (static "who touches this?"); `cart({op:'extract'|'wrap'})`.
+- **Graphics swaps** — `tiles({op:'png'})`/`importArt({from:'rom'})` → edit →
+  `romPatch({op:'spliceCHR'})`; `background({view:'rendered'})` for the tile IDs drawn now.
 
-**Finding which CODE wrote a byte.** Static disasm reading is the slow part —
-multiple `cmp #$XX` instructions look identical. Don't guess. Two tools, in order
-of precision:
-
-- **`breakpoint({on:'write', address, maxFrames, pressDuring})` — the precise one (NES).**
-  Arms a core-level WRITE WATCHPOINT and returns the EXACT writing instruction's
-  PC, captured inside the CPU write path — correct even for NMI/IRQ-driven writes
-  (the common NES case, where a frame-sampled PC is just the idle loop). This is
-  the right tool when you need the actual writer.
-  ```js
-  breakpoint({ on:'write', address: 0x00CD, maxFrames: 300, pressDuring:[{ frame:30, button:"A" }] })
-    → { found:true, pc:"$AF85", value:"0x81", hits:19 }
-  disasm({ target:'rom', path, startAddress: 0xAF85 })   // → the real store instruction
-  ```
-  Supported on **all 14 tier-1 systems** — NES, GB/GBC, Genesis, SMS/GG, SNES,
-  Atari 2600/7800, C64, Lynx (65C02), PC Engine (HuC6280), MSX (Z80), and GBA
-  (ARM7) — every bundled CPU family. On a banked mapper a `$8000-$BFFF` pc may be
-  in a switchable bank; `breakpoint({on:'write'})` reports the `bank` (NES/GB/SMS-GG) so you can
-  pass it to `disasm({target:'rom'})`.
-- **`watch({on:'mem'})` / `breakpoint({on:'write',precision:'sampled'})` — cross-platform, frame-sampled.** Step until
-  the byte changes; the returned `pc` is a frame-boundary sample (a lead, not a
-  guarantee under interrupts — cross-check the value trace). Use on non-NES, or
-  for the value timeline.
-- **`memory({op:'snapshot'})` + `memory({op:'diff'})` — "which bytes did THIS event touch?"** When
-  you don't yet know the address: `memory({op:'snapshot'})` before the event, trigger it
-  (`input({op:'press'})`/`frame({op:'step'})`), then `memory({op:'diff'})` — you get just the changed offsets
-  with before/after, no eyeballing two RAM dumps. The fast way to find an area-id
-  / phase / flag byte a transition writes. (`state({op:'diff'})` is the coarse
-  whole-machine "did anything change?" version.)
-
-```js
-breakpoint({ on:'write', precision:'sampled', region:"system_ram", offset:0x03B6, maxFrames:300,
-                pressDuring:[{ frame:30, button:"A" }] })
-  → { pc: "$E3AF" (frame-sampled), changes:[{ before:31, after:32 }] }
-```
-
-**Execution breakpoints (all 14 platforms) — read the register at the instruction.**
-When the answer isn't a flat table but a value computed in a register, stop the
-CPU *at the instruction* and read it:
-- **`breakpoint({on:'pc', address, maxFrames, pressDuring})`** — runs until the CPU PC
-  reaches `address`, then FREEZES the CPU exactly there. Then `cpu({op:'read'})` reads
-  the full register file at that precise moment. The canonical RE move: break at a
-  decoder's `move.b (a0),d0`, read `A0` → the source pointer, `memory({op:'readCart'})`/
-  `memory({op:'read'})` at it. Turns "infer for hours" into ~3 calls.
-- **`breakpoint({on:'read', address, ...})`** — the read-side mirror of `breakpoint({on:'write'})`: the
-  EXACT instruction PC that READ an address (who *consumes* a value).
-- **`frame({op:'stepInstruction'})`** — CPU-level single-step; pair with `cpu({op:'read'})` to watch
-  registers change one instruction at a time.
-- These work on all 14 platforms (every bundled CPU family) — including `breakpoint({on:'write'})`
-  (as of 0.6.0 PC Engine gained its write watchpoint, so no platform is the exception
-  anymore).
-
-```js
-breakpoint({ on:'write', address:0xFF2000 }) → { pc:"$49E", ... }   // get a real instruction PC
-breakpoint({ on:'pc', address:0x49E })       → { hit:true, pc:"$49E" }   // CPU frozen here
-cpu({ op:'read', platform:"genesis", cpu:"main" })             // → registers.A0 = the pointer
-```
-
-All in the `assets` category except `disasm({target:'rom'})` (in `debug`); the breakpoint
-trio (`breakpoint({on:'pc'})`/`breakpoint({on:'read'})`/`frame({op:'stepInstruction'})`) is in `advanced`.
-
-### Before you hunt — check the cheat database (`cheats({op:'lookup'})`)
-
-For a KNOWN commercial ROM, the fastest way to find the byte is to not hunt at
-all: the bundled cheat database is a free, crowd-sourced **map of labeled RAM
-addresses and code sites**. Call `cheats({op:'lookup', path})` FIRST — for a matched
-game it returns that game's cheats with the address decoded out of each one:
-
-```js
-cheats({ op:'lookup', path: "Rygar (USA).nes" })
-// → { matched:true, confidence:"name", game:"Rygar (USA)", crc32:"...",
-//     entries:[
-//       { desc:"Infinite Magic Attack", code:"00CD:FF",
-//         parts:[{ address:"$00CD", value:"0xFF", kind:"ram" }] },   // ← labeled RAM var
-//       { desc:"Infinite Health", code:"SXUZXTSA",
-//         parts:[{ address:"$8E20", value:"0xA5", compare:"0x85", kind:"code" }] }, // ← code site
-//       ...] }
-```
-
-So "which byte holds magic?" is answered in one call: `$00CD`. A RAM cheat
-(`kind:"ram"`) is a **labeled variable**; a ROM cheat (`kind:"code"`, has a
-`compare`) is a **labeled patch site** — point `disasm({target:'rom'})` at its address
-to read the routine. Filter a long list with `filter:"health"` or `kind:"ram"`.
-
-**Device types are labeled — it's not all "Game Genie."** Each decoded part
-carries a `device` so you know exactly what you're looking at:
-`game-genie` (NES/Genesis/SNES/GB ROM patches), `pro-action-replay` (SNES — the
-most common SNES device, RAM pokes like `7E0DBF63`), `gameshark` (GB RAM),
-`action-replay` (SMS/GG), or `raw` (`ADDR:VAL`). A few formats (e.g. the SMS/GG
-Game Genie variant) are labeled with their device but left address-undecoded
-rather than guessing — honest over wrong.
-
-**Trust it like you trust disasm — verify, don't assume.** A match is by
-No-Intro name / filename, NOT a verified CRC, so it's a PROBABLE match: very
-likely right, but a different region/revision can use different addresses. The
-`note` says so explicitly. Confirm a label before patching — the cheapest
-confirmation is to apply it and watch:
-
-```js
-cheats({ op:'apply', path:"Rygar (USA).nes", desc:"Infinite Magic Attack" })  // enable it live
-frame({ op:'screenshot' })                                            // see the effect → label confirmed
-// or apply a RAW code from anywhere:
-cheats({ op:'apply', code:"00CD:FF" })          // RAM poke → appliedAs:"ram"
-cheats({ op:'apply', code:"SXIOPO" })           // Game Genie (core decodes it)
-cheats({ op:'apply', code:"C06C:0C:26" })       // raw ROM patch → auto-re-encoded to a read-intercept (appliedAs:"rom", reencodedFrom)
-cheats({ op:'clear' })                          // remove all
-```
-
-**`appliedAs` tells you how it went in** — `"ram"` (per-frame poke), `"rom"` (in-core
-read-intercept), `"raw"` (core-decoded device code), or `"rom-unencodable"` (a ROM
-address that couldn't be made into a working ROM patch — likely a no-op; add a COMPARE
-byte). A raw `ADDR:VAL:COMPARE` on a ROM address would otherwise silently no-op as a RAM
-poke, so `cheats({op:'apply'})` transparently re-encodes it to the platform's ROM-patch device (NES/
-Genesis/GB Game Genie, SNES Game Genie — NOT Pro Action Replay, which is RAM). **Boot-time
-cheats:** pass `loadMedia({ cheats:[…] })` to apply codes BEFORE frame 0 (iterating on a
-boot-seeded value), and use `host({op:'reset', hard:true})` for a true power-cycle — plain `host({op:'reset'})`
-is the RESET button and leaves work RAM (and boot-seeded state) intact.
-
-`cheats({op:'apply'})` is also just **fun** — play any matched game with infinite lives,
-invincibility, etc. It is **NON-DESTRUCTIVE**, exactly like RetroArch: the cheat
-lives in volatile core state (a per-frame RAM write, or an in-core read-intercept
-for ROM cheats), the ROM file on disk is NEVER touched, and `host({op:'reset'})` / `state({op:'load'})`
-/ `cheats({op:'clear'})` removes it. **`cheats({op:'lookup'})` DB coverage (13/14):** NES, GB/GBC,
-SNES, Genesis, SMS/GG, Atari 2600/7800, **Lynx**, **GBA**, **PC Engine**, **MSX** —
-every tier-1 system except **C64** (the cheat database ships no C64 entries, so
-there's nothing to look up; `cheats({op:'make'})` still works on C64). The DB is its own
-package (`romdev_game_codes`), lazy-loaded per platform; `cheats({op:'search', platform,
-query})` fuzzy-finds a game by name. One caveat: **GBA** DB cheats are
-Code Breaker / GameShark (encrypted), so they're **apply-only** — the `code`
-applies live, but the address isn't descrambled into a labeled map the way the
-other systems are (the response says so via `mapNote`). **`cheats({op:'apply'})` /
-`cheats({op:'make'})` work on all 14.** Unmatched ROMs (homebrew, your own WIP, an
-unlisted dump) return `matched:false` with a clear reason — the tool never
-guesses.
-
-### Creating NEW cheat codes (`cheats({op:'make'})`)
-
-The inverse of decoding: turn a byte you found into a shareable code — for ANY
-ROM, **including your own homebrew/WIP** where no DB entry exists. This closes
-the loop with the byte-hunting tools:
-
-```js
-breakpoint({ on:'write', precision:'sampled', region:"system_ram", offset:0xCD })   // 1. find the byte (or use cheats({op:'lookup'}))
-cheats({ op:'make', platform:"nes", address:0x00CD, value:0xFF })
-//   → { raw:"CD:FF", note:"RAM cheat...", ... }            // 2. RAM poke → raw code
-// For a ROM/Game-Genie patch, read the current byte and pass it as `compare`:
-memory({ op:'read', region:"prg_rom", offset:0x8E20 })          //   (current byte = 0x85)
-cheats({ op:'make', platform:"nes", address:0x8E20, value:0xA5, compare:0x85 })
-//   → { gameGenie:"SZZAETSA", verified:true, raw:"8E20:A5:85", ... }
-cheats({ op:'apply', code:"SZZAETSA" }) → frame({ op:'screenshot' })           // 3. confirm it works
-```
-
-`cheats({op:'make'})` encodes for the platform's NATIVE device(s) and **labels each one**
-— NES/Genesis → Game Genie; SNES → Pro Action Replay **and** Game Genie; GB/GBC
-→ Game Genie (ROM) + GameShark (RAM); SMS/GG → Action Replay — plus the raw
-`ADDR:VAL` always. Each generated code carries `verified:true` (decoded back and
-confirmed; the encoders round-trip 100% against the full DB — NES/Genesis/GB/GBC
-Game Genie, SNES Game Genie + PAR, GB GameShark). Force a specific device with
-`device:`. A RAM cheat needs just `address`+`value`; a ROM patch adds `compare`
-(the byte currently there). Nothing is ever written to a ROM file.
-**`cheats({op:'make'})` works on all 14 tier-1 systems** — the systems with no native
-letter-code device (Atari 2600/7800, Lynx, GBA, C64, PC Engine, MSX) get a
-verified raw `ADDR:VAL` code that `cheats({op:'apply'})` passes straight to the core.
-
-```js
-cheats({ op:'make', platform:"snes", address:0x7E0DBF, value:0x63 })
-//   → { codes:[ {device:"pro-action-replay", code:"7E0DBF63", verified:true},
-//               {device:"game-genie", code:"17D8-9EE8", verified:true} ],
-//       raw:"7E0DBF:63", ... }
-```
-
-### Editing in-game TEXT (font maps)
-
-Games store text as their own tile-index encoding (Excitebike: A=$0A; Mario:
-ASCII-offset; FF: sparse). Three tools automate the round-trip instead of
-hand-deriving the table:
-
-- **`text({op:'learn'})`** — infer the char→tile-ID map. TWO modes:
-  - ROM mode: `knownStrings:[{text, offset}]` when you found the text's bytes.
-  - **LIVE mode: `fromScreen:[{text, row, col}]`** — the text is on screen RIGHT
-    NOW; reads the tile IDs straight from the live BG map at a tile position. This
-    breaks the chicken-and-egg (you'd otherwise need the ROM offset you're
-    hunting). Works on every tilemap platform (NES/SNES/Genesis/GB/GBC/SMS/GG/C64);
-    `background({view:'map'})` shows you where the text sits. (atari2600/7800, lynx,
-    gba have no text-tile nametable → use ROM mode.)
-- **`text({op:'find', romPath, text, fontMap})`** — locate the string in the
-  ROM. Returns `fileOffset` (.nes), `prgFileOffset` (prg.bin), and a bank-aware
-  `cpuAddress` + `bank` (NES/GB/GBC in-bank address, Genesis flat; SNES is
-  mapper-dependent → use the offsets) — feed `{startAddress, bank}` to
-  `disasm({target:'rom'})`. Flags a likely length-prefix byte to avoid the classic
-  overrun.
-- **`text({op:'encode'})`** — text + map → bytes, ready for `romPatch({op:'write'})`.
-
-```js
-text({ op:'learn', fromScreen:[{ text:"START", row:13, col:11 }] })   // read tiles off the live screen
-text({ op:'find', romPath, text:"MOUNTAIN", fontMap })            // → offsets + bank + context
-text({ op:'encode', text:"NEW TEXT ", fontMap }) → romPatch({ op:'write', ... })  // rewrite it
-```
-
-**Tools for hacking, by category:**
-
-- `romPatch({op:'write', path, offset, hex, expect, allowExpand})` — generic byte
-  splicer with safety check. THE primitive — every other hack tool
-  composes through it. `expect` refuses the write if existing bytes don't
-  match, catching the silent corruption when a patch authored against
-  region A is applied to region B.
-- `assembleSnippet({cpu, origin, code})` — assemble a tiny chunk of asm
-  to raw bytes. No header, no linker config, no segments. Supports
-  `6502 / 65c02 / 65816 / 68k / z80 / sm83 / gb / gbc / huc6280`.
-  Z80 NOTE: sdas dialect requires `#` on immediates (`ld a,#5`, not
-  `ld a,5`).
-- `romPatch({op:'diff', platform, a, b})` — mapper-aware ROM diff. Reports CPU
-  addresses (NROM-128 mirrors correctly, SNES LoROM banks as `XX:XXXX`),
-  per-region tallies (PRG vs CHR vs header), and `tile: N` annotations
-  on CHR changes for direct sprite-hack identification.
-- `romPatch({op:'findFree', path, minLength, fillBytes})` — locate runs of $FF
-  or $00 for asm overlays. Sorted longest-first.
-- `disasm({target:'references', path, platform, address})` — find every instruction
-  that references a target address. Classifies refs as
-  `call/jump/branch/read/write/use/ref`. Walks the vector table too.
-  Limitation: only direct addressing modes; indirect/computed jumps
-  not detected.
-- `romPatch({op:'spliceCHR', path, platform, pngBase64, tileIndex, expect, bank, paletteHint})` —
-  composition: PNG → tile bytes → splice into CHR at tile slot N.
-  Auto-locates iNES CHR base. `expect` checks the existing tile bytes.
-  `bank: N` (NES) replaces magic file offsets; `paletteHint:["#RRGGBB",...]`
-  gives explicit RGB→palette-index mapping (skips the default quantization
-  that requires PNGs with exactly 4 distinct grayscale levels).
-- `cheats({op:'lookup', path, filter, kind})` — match a KNOWN ROM to the bundled
-  cheat DB and return THIS game's labeled RAM addresses + code sites
-  (decoded from each cheat). The free "which byte holds X?" map. Probable
-  match (name/filename, not CRC) — verify before patching.
-- `cheats({op:'apply', code | desc+path, index, enabled})` /
-  `cheats({op:'clear'})` — apply a cheat to the loaded game LIVE and
-  non-destructively (the RetroArch way: volatile core state, ROM file
-  never touched). Use a raw `code` or a matched `desc`. Doubles as the
-  cheapest way to VERIFY a `cheats({op:'lookup'})` label (apply → screenshot), and
-  as a fun-bonus (play with infinite lives, etc.).
-- `cheats({op:'make', platform, address, value, compare?, style})` — CREATE a new
-  cheat code from an address+value (the inverse of decoding). Returns a
-  Game Genie letter code + the raw ADDR:VAL, with a `verified` round-trip
-  check. Works on any ROM incl. homebrew/WIP. Pair with `breakpoint({on:'write',precision:'sampled'})`/
-  `cheats({op:'lookup'})` (find the byte) → `cheats({op:'make'})` (encode) → `cheats({op:'apply'})` (confirm).
-- `watch({on:'mem', region, offset, length, frames, pressDuring})` /
-  `breakpoint({on:'write', precision:'sampled', region, offset, maxFrames, pressDuring})` — frame-level
-  memory-write trace. Reports every change with PC, so you can map a
-  RAM byte back to the writing code path. Cross-platform. The "find
-  the byte" half of hacking, mechanized. (Reach for this when a ROM
-  ISN'T in the cheat DB, or to find a byte no cheat covers.)
-- `background({view:'rendered'})` — at the current emulator state, walk the
-  BG nametable + OAM and return the set of tile IDs actually being
-  drawn. Sample at known game states (title / gameplay / menu) and diff
-  the sets to map tile IDs to game assets without scanning sheets by eye.
-- `cart({op:'extract', path, outputDir})` — split ROM into standard parts
-  (NES: header.bin/prg.bin/chr.bin; SNES: copier_header + rom + internal
-  header; Genesis: vectors/header/body; GB: boot/header/body) plus a
-  manifest.json with mapper, mirroring, etc.
-- `cart({op:'wrap', platform, ...})` — counterpart to `cart({op:'extract'})`.
-  Emits `wrapperSource` (.s) + `linkerConfig` (cc65 ld65 cfg) ready
-  for `build({output:'rom'})`. Per-platform templates.
-- `disasm({target:'rom'})` — see "Disassembler" section below for the full
-  annotation set.
-
-For graphics swaps specifically:
-- `tiles({op:'png', source:'path', platform, path, bank, paletteFromEmulator, paletteIndex})`
-  from a source game → PNG of its tiles. `bank: N` (NES 4 KB CHR bank
-  index) replaces magic file-offset math. `paletteFromEmulator: true`
-  + `paletteIndex` colors the export with the live game palette
-  (instead of grayscale) — much easier to recognize art and edit in a
-  pixel tool.
-- `importArt({from:'rom', sourceRom, sourcePlatform, sourceBank,
-  sourceTileX/Y/W/H, targetPlatform, outputPng, intent, paletteIndex})`
-  — one-call lift of a tile region from a source game's ROM into the
-  target platform's tile format. Combines extract + crop + quantize +
-  optional manifest. Under `intent:"homebrew"` reads the live source
-  palette automatically (same `paletteFromEmulator` semantics as
-  `tiles({op:'png',source:'path'})`); under `intent:"rom-hack"` preserves source
-  bytes verbatim. Output PNG + manifest feed straight into
-  `importArt({from:'texturepacker'})`.
-- `encodeArt({stage:'tiles', platform, pngBase64})` → target-platform tile bytes
-- `romPatch({op:'spliceCHR'})` to write them into the CHR region of your target ROM
-  (handles the `encodeArt({stage:'tiles'})` + `romPatch({op:'write'})` composition in one call)
+Category placement: most live in `assets`; `disasm({target:'rom'})` is in `debug`; the
+breakpoint trio (`pc`/`read`/`stepInstruction`) is in `advanced`.
 
 ## Disassembler
 

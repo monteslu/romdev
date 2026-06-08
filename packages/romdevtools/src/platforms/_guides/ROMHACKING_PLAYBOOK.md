@@ -22,6 +22,32 @@ read that platform's `platform({op:'doc', platform, name:'mental_model'})`.
 The cheat DB is bundled (`romdev_game_codes`). Do **not** scan the user's disk for
 `.cht` files — if it's not in the bundled DB, treat it as absent and RE it.
 
+**Reading a `cheats({op:'lookup'})` hit as a RAM/code map.** Each decoded part carries an
+`address`, a `value`, a `kind` (`ram` = a labeled variable; `code` = a labeled ROM
+patch site, has a `compare`), and a `device` (`game-genie`/`pro-action-replay`/
+`gameshark`/`action-replay`/`raw`). So "which byte holds magic?" → one `lookup` call.
+Filter a long list with `filter:"health"` or `kind:"ram"`. A match is by No-Intro
+**name/filename, NOT a verified CRC** — it's PROBABLE (a different region/revision can
+move addresses), so confirm before patching. The cheapest confirmation is to apply it
+and watch: `cheats({op:'apply', path, desc})` → `frame({op:'screenshot'})`.
+
+`cheats({op:'apply'})` is non-destructive (volatile core state, the RetroArch way — the ROM
+file is never touched; `host({op:'reset'})`/`state({op:'load'})`/`cheats({op:'clear'})` removes it). It takes a
+matched `desc`, a raw `code`, or `loadMedia({cheats:[…]})` to seed codes BEFORE frame 0.
+`appliedAs` reports how it went in (`ram` poke / `rom` read-intercept / `raw` device
+code). DB coverage is 13/14 (every tier-1 system except C64); GBA cheats are
+encrypted, so apply-only (no labeled-address map — see `mapNote`).
+
+**Creating a NEW code — `cheats({op:'make', platform, address, value, compare?})`.** The inverse of
+decoding: turn a byte you found (via §1 or `breakpoint`) into a shareable, verified code,
+for ANY ROM incl. your own homebrew/WIP. A RAM cheat needs just `address`+`value`; a ROM
+patch adds `compare` (the byte currently there). It encodes for the platform's native
+device(s) and labels each (NES/Genesis → Game Genie; SNES → Pro Action Replay **and**
+Game Genie; GB/GBC → Game Genie + GameShark; SMS/GG → Action Replay) plus the raw
+`ADDR:VAL`; each carries `verified:true` (round-trips against the full DB). Systems with no
+letter-code device (Atari 2600/7800, Lynx, GBA, C64, PC Engine, MSX) get a verified raw
+code. Works on all 14. Nothing is ever written to a ROM file.
+
 ---
 
 ## 1. To find the RAM address of a value (score / timer / stat / HP / record-id)
@@ -50,12 +76,20 @@ usually a struct/entity array, each island one record.
 The #1 trap: visible names/labels are often **pre-rendered tile GRAPHICS**, not
 font-rendered from an ASCII string. Patching the ASCII string then does nothing.
 
-1. `text({op:'learn'})` on the on-screen text. If it reports
-   `likelyPreRenderedGraphic:true` (unique sequential tiles, no font reuse),
-   **stop** — the text is a bitmap. Editing it means changing tile pixels, not a
-   string. Do not patch any ASCII string you found; it isn't the source.
-2. If it IS font-rendered, find the string with `text({op:'find'})` /
-   `text({op:'encode'})` and patch that.
+1. `text({op:'learn'})` on the on-screen text — it infers the game's char→tile-ID map
+   (games use their own encoding: Excitebike A=$0A, Mario ASCII-offset, FF sparse). Two
+   modes: ROM mode `knownStrings:[{text, offset}]` when you found the bytes; **LIVE mode
+   `fromScreen:[{text, row, col}]`** reads the tile IDs straight off the live BG map at a
+   tile position (`background({view:'map'})` shows where the text sits) — this breaks the
+   chicken-and-egg of needing the offset you're still hunting. Live mode works on every
+   tilemap platform (NES/SNES/Genesis/GB/GBC/SMS/GG/C64); atari2600/7800, lynx, gba have
+   no text nametable → ROM mode only. If `learn` reports `likelyPreRenderedGraphic:true`
+   (unique sequential tiles, no font reuse), **stop** — the text is a bitmap. Editing it
+   means changing tile pixels, not a string. Do not patch any ASCII string you found.
+2. If it IS font-rendered: `text({op:'find', romPath, text, fontMap})` locates the string
+   (returns `fileOffset`, `prgFileOffset`, and a bank-aware `cpuAddress`+`bank` to feed
+   `disasm({target:'rom'})`; flags a likely length-prefix byte to avoid the overrun trap),
+   then `text({op:'encode', text, fontMap})` → bytes for `romPatch({op:'write'})`.
 3. To find where a graphic/text was sourced from: on **Genesis**, `watch({on:'dma', precision:'sampled'})`
    — drive to the screen that shows the graphic, and it reports the ROM offset(s)
    the tiles were DMA'd from (decoded from the VDP DMA registers). Edit the tile
@@ -102,6 +136,15 @@ If it returns `found:false` even after driving the game, the region is likely
 from a SOURCE struct rather than written in place. Don't conclude "the address
 is wrong." Find the source: `memory({op:'search'})` the live value to locate the struct
 the copy reads from, then `breakpoint({on:'write'})` on THAT.
+
+**Precision — exact vs sampled.** The default `breakpoint({on:'write'})` is a core-level write
+watchpoint: it returns the EXACT writing instruction's PC, captured inside the CPU write
+path — correct even for NMI/IRQ-driven writes (the common case where a frame-sampled PC
+is just the idle loop). On a banked mapper it reports the `bank` (NES/GB/SMS-GG) so you
+can pass `{startAddress, bank}` to `disasm({target:'rom'})`. The lighter
+`breakpoint({on:'write', precision:'sampled'})` (a.k.a. `watch({on:'mem'})`) steps until the byte changes
+and returns a frame-boundary PC — a lead, not a guarantee under interrupts; use it for the
+value timeline or when you just want the change history, and cross-check the value trace.
 
 ---
 
@@ -254,6 +297,59 @@ and `input({op:'set'})` state it too.)
 
 ---
 
+## 7. Authoring & verifying the byte patch
+
+Once you know WHAT to change, the write loop is a handful of calls — no custom scripts:
+
+- **`assembleSnippet({cpu, origin, code})`** — assemble a tiny asm chunk to raw bytes (no
+  header/linker/segments). CPUs: `6502 / 65c02 / 65816 / 68k / z80 / sm83 / gb / gbc /
+  huc6280`. **Z80 gotcha:** the sdas dialect requires `#` on immediates (`ld a,#5`, not
+  `ld a,5`).
+- **`romPatch({op:'write', path, offset, hex, expect})`** — the splicer THE other hack tools
+  compose through. **Always pass `expect`** (the current bytes) — it refuses the write if
+  they don't match, catching a hex/dec slip or a patch authored against region A applied to
+  region B. `allowExpand` for size-changing edits.
+- **`romPatch({op:'diff', platform, a, b})`** — mapper-aware ROM diff: reports CPU addresses
+  (NROM-128 mirrors, SNES LoROM `XX:XXXX`), per-region tallies (PRG vs CHR vs header), and
+  `tile:N` annotations on CHR changes for direct sprite-hack identification. Use it to
+  confirm a patch landed where you meant.
+- **`disasm({target:'references', path, platform, address})`** — find every instruction that
+  references a target address, classified `call/jump/branch/read/write/use/ref` (walks the
+  vector table too). The fast "who touches this?" for a STATIC image. Limitation: direct
+  addressing only — indirect/computed jumps aren't detected (use the runtime `watch`/
+  `breakpoint` tools in §5/§5d for those).
+- **`cart({op:'extract', path, outputDir})`** — split a ROM into standard parts (NES header/
+  prg/chr; SNES copier_header+rom+internal header; Genesis vectors/header/body; GB boot/
+  header/body) + a `manifest.json` (mapper, mirroring…). **`cart({op:'wrap'})`** is the inverse:
+  emits `wrapperSource` + `linkerConfig` ready for `build({output:'rom'})`.
+
+Verify-before-patch: `memory({op:'write', region:'system_ram', offset, hex})` on the LIVE emulator and
+watch the screen react — cheaper than shipping a wrong ROM patch.
+
+## 8. Graphics swaps — PNG ↔ tiles round-trip
+
+For sprite/tile edits (not text), don't hand-roll the tile-format math:
+
+- **`tiles({op:'png', source:'path', platform, path, bank, paletteFromEmulator, paletteIndex})`** —
+  a source ROM's tiles → PNG. `bank:N` (NES 4 KB CHR bank) replaces magic file-offset math;
+  `paletteFromEmulator:true`+`paletteIndex` colors the export with the LIVE palette (vs
+  grayscale) so the art is recognizable to edit.
+- **`importArt({from:'rom', sourceRom, sourcePlatform, sourceBank, sourceTileX/Y/W/H, targetPlatform,
+  outputPng, intent, paletteIndex})`** — one-call lift of a tile region from a source ROM into
+  the target platform's format (extract+crop+quantize). `intent:"homebrew"` reads the live
+  source palette; `intent:"rom-hack"` preserves source bytes verbatim.
+- **`encodeArt({stage:'tiles', platform, pngBase64})`** → target-platform tile bytes.
+- **`romPatch({op:'spliceCHR', path, platform, pngBase64, tileIndex, expect, bank, paletteHint})`** —
+  PNG → tile bytes → splice into CHR at tile slot N (auto-locates iNES CHR base; `expect`
+  checks the existing tile bytes; `paletteHint:["#RRGGBB",…]` gives explicit RGB→index
+  mapping). Composes the `encodeArt`+`romPatch({op:'write'})` step in one call.
+- **`background({view:'rendered'})`** — at the current state, the set of tile IDs actually drawn
+  (BG nametable + OAM). Sample at title/gameplay/menu and diff the sets to map tile IDs to
+  assets without scanning sheets by eye. (`romPatch({op:'findFree'})` locates $FF/$00 runs for asm
+  overlays, longest-first.)
+
+---
+
 ## Quick reference
 
 | Goal | Tool |
@@ -276,4 +372,15 @@ and `input({op:'set'})` state it too.)
 | Where did a VRAM graphic come from (Genesis) | `watch({on:'dma', precision:'sampled'})` (ROM offset of the DMA source) |
 | Drive a menu fast | `input({op:'navigate'})` (advances on screen change) |
 | Free RAM map for a known game | `cheats({op:'lookup'})` / `cheats({op:'search'})` |
+| Apply a cheat live (non-destructive) | `cheats({op:'apply'})` (verify a label / fun) |
+| Create a shareable code from a byte | `cheats({op:'make'})` (verified, all 14) |
+| Read on-screen text's tile map | `text({op:'learn', fromScreen})` (live, no offset needed) |
+| Find / encode a font-rendered string | `text({op:'find'})` → `text({op:'encode'})` |
+| Assemble asm → raw patch bytes | `assembleSnippet({cpu, origin, code})` |
+| Mapper-aware diff of two ROMs | `romPatch({op:'diff'})` (CPU addrs, CHR `tile:N`) |
+| Who references this address (static) | `disasm({target:'references'})` (direct modes only) |
+| Split / rebuild a ROM into parts | `cart({op:'extract'})` / `cart({op:'wrap'})` |
+| Swap a sprite/tile (PNG round-trip) | `tiles({op:'png'})` → edit → `romPatch({op:'spliceCHR'})` |
+| Lift art from another game's ROM | `importArt({from:'rom'})` |
+| Tile IDs actually being drawn now | `background({view:'rendered'})` |
 | Safe patch | `romPatch({op:'write'})`/`romPatch({op:'writeMany'})` with `expect` |
