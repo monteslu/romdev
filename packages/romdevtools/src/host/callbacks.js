@@ -310,10 +310,18 @@ function handleEnv(mod, state, rawCmd, dataPtr, log) {
         const semi = desc.indexOf("; ");
         if (semi >= 0) {
           const options = desc.substring(semi + 2).split("|");
+          // PRESERVE a value the host already pre-seeded (e.g. via
+          // PLATFORM_CORE_OPTIONS, set before retro_load_game). The core
+          // registering its variables must NOT clobber that override back to
+          // its own default (options[0]) — that silently reset forced options
+          // like bluemsx's machine type / cart mapper. Keep the prior value if
+          // it's still a valid option; otherwise fall back to the default.
+          const prior = state.coreVariables.get(key);
+          const keep = prior && options.includes(prior.value) ? prior.value : options[0];
           state.coreVariables.set(key, {
             description: desc.substring(0, semi),
             options,
-            value: options[0],
+            value: keep,
           });
         }
         ptr += 8;
