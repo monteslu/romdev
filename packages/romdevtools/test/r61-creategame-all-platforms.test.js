@@ -21,12 +21,28 @@ import { registerTools } from "../src/mcp/tools/index.js";
 // Kept here as the EXPECTED contract — if a platform gains/loses genre
 // templates, update this table intentionally (it's the spec).
 const CANONICAL_GENRES = ["shmup", "platformer", "puzzle", "sports", "racing"];
-const EXPECTED_PLATFORMS = [
-  "nes", "gb", "gbc", "snes", "genesis",
-  "sms", "gg", "c64", "gba", "lynx", "atari7800",
-];
-// Supported platforms that have NO genre scaffolds — createGame must reject these.
-const NON_GENRE_PLATFORMS = ["atari2600"];
+// Per-platform expected genres. All canonical-genre platforms ship the full 5
+// EXCEPT atari2600 — the TIA has no tilemap/framebuffer, so a match-3 "puzzle"
+// grid can't be rendered; it ships the 4 action genres only. Every supported
+// platform now ships at least one genre, so there is no fully genre-less
+// platform anymore (the old NON_GENRE_PLATFORMS holdout is gone).
+const EXPECTED_GENRES = {
+  nes: CANONICAL_GENRES,
+  gb: CANONICAL_GENRES,
+  gbc: CANONICAL_GENRES,
+  snes: CANONICAL_GENRES,
+  genesis: CANONICAL_GENRES,
+  sms: CANONICAL_GENRES,
+  gg: CANONICAL_GENRES,
+  c64: CANONICAL_GENRES,
+  gba: CANONICAL_GENRES,
+  lynx: CANONICAL_GENRES,
+  atari7800: CANONICAL_GENRES,
+  pce: CANONICAL_GENRES,
+  msx: CANONICAL_GENRES,
+  atari2600: ["shmup", "platformer", "sports", "racing"], // no puzzle (TIA)
+};
+const EXPECTED_PLATFORMS = Object.keys(EXPECTED_GENRES);
 
 async function startClient() {
   const server = new McpServer({ name: "r59-test", version: "0.0.1" }, { capabilities: { tools: {} } });
@@ -42,10 +58,10 @@ function toJSON(res) {
   return JSON.parse(res.content[0].text);
 }
 
-test("R61 createGame: every genre-capable platform scaffolds all 5 genres", { timeout: 60000 }, async () => {
+test("R61 createGame: every genre-capable platform scaffolds its genres", { timeout: 60000 }, async () => {
   const client = await startClient();
   for (const platform of EXPECTED_PLATFORMS) {
-    for (const genre of CANONICAL_GENRES) {
+    for (const genre of EXPECTED_GENRES[platform]) {
       const tmp = mkdtempSync(path.join(os.tmpdir(), `r59-${platform}-${genre}-`));
       try {
         const r = toJSON(await client.callTool({
@@ -65,22 +81,26 @@ test("R61 createGame: every genre-capable platform scaffolds all 5 genres", { ti
   }
 });
 
-test("R61 createGame: platforms with no genre templates are rejected with the full supported list", async () => {
+test("R61 createGame: a genre a platform lacks is rejected with that platform's available genres", async () => {
+  // Every supported platform now ships at least one genre, so there is no
+  // longer a fully genre-less platform to reject wholesale. atari2600 is the
+  // one platform that lacks a SPECIFIC canonical genre (puzzle — no TIA
+  // tilemap), so it's the honest sentinel for the per-genre rejection path.
   const client = await startClient();
-  for (const platform of NON_GENRE_PLATFORMS) {
-    const res = await client.callTool({
-      name: "scaffold",
-      arguments: { op: "game",  platform, genre: "platformer", name: "demo", path: os.tmpdir() },
-    });
-    assert.equal(res.isError, true, `${platform}: expected an error`);
-    const msg = res.content[0].text;
-    assert.match(msg, new RegExp(`no genre scaffolds for platform '${platform}'`), `${platform}: wrong error`);
-    // The error must advertise the newly-enabled platforms too — proof the
-    // supported list is derived from TEMPLATES, not the stale hardcoded 8.
-    for (const p of ["c64", "gba", "lynx"]) {
-      assert.match(msg, new RegExp(`\\b${p}\\b`), `${platform} error should list ${p} as supported`);
-    }
+  const res = await client.callTool({
+    name: "scaffold",
+    arguments: { op: "game", platform: "atari2600", genre: "puzzle", name: "demo", path: os.tmpdir() },
+  });
+  assert.equal(res.isError, true, "atari2600/puzzle: expected an error");
+  const msg = res.content[0].text;
+  assert.match(msg, /genre 'puzzle' not supported for platform 'atari2600'/);
+  // The error lists what atari2600 DOES have — derived from TEMPLATES, so this
+  // proves the available-genre list isn't a stale parallel table.
+  for (const g of ["shmup", "platformer", "sports", "racing"]) {
+    assert.match(msg, new RegExp(`\\b${g}\\b`), `atari2600 error should offer ${g}`);
   }
+  // ...and must NOT advertise the one genre it can't render.
+  assert.doesNotMatch(msg, /\bpuzzle\b(?!')/, "atari2600 must not list puzzle as available");
 });
 
 test("R61 createGame: unknown genre rejected with the platform's available genres", async () => {

@@ -74,21 +74,21 @@ for (const genre of ["shmup", "platformer", "puzzle"]) {
   });
 }
 
-test("createGame rejects unsupported platform with a clear message", async () => {
+test("createGame rejects a genre the platform lacks with a clear message", async () => {
   const client = await startClient();
   const tmp = mkdtempSync(path.join(os.tmpdir(), "genre-bad-"));
   try {
-    // R21 added GB/GBC/SNES/Genesis genre scaffolds. Atari 2600 has no
-    // C compiler so no genre scaffolds either — use it as the
-    // "definitely unsupported" sentinel platform here. If we ship
-    // batariBasic templates for it later, update this test to use
-    // another holdout.
+    // Every platform now ships at least one genre scaffold, so there's no
+    // wholesale "unsupported platform" holdout left. atari2600 is the one
+    // platform missing a SPECIFIC canonical genre — puzzle, since the TIA has
+    // no tilemap to draw a match-3 grid — so it's the honest sentinel for the
+    // per-genre rejection path.
     const res = await client.callTool({
       name: "scaffold",
-      arguments: { op: "game",  platform: "atari2600", genre: "shmup", name: "x", path: tmp, overwrite: true },
+      arguments: { op: "game",  platform: "atari2600", genre: "puzzle", name: "x", path: tmp, overwrite: true },
     });
     assert.equal(res.isError, true);
-    assert.match(res.content[0].text, /no genre scaffolds for platform 'atari2600'/);
+    assert.match(res.content[0].text, /genre 'puzzle' not supported for platform 'atari2600'/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

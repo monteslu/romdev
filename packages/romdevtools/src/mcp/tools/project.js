@@ -283,6 +283,11 @@ const TEMPLATES = {
       sprite_move: mk("sprite_move", "Joypad-controlled 16x16 sprite over a tiled background. d-pad moves the sprite; verified visible + responsive. Build up an action game from here."),
       music_sfx: mk("music_sfx", "HuC6280 PSG demo: a looping melody plus a button-fired SFX. Shows psg_tone/psg_off across the PSG's wavetable channels."),
       catch_game: mk("catch_game", "A complete tiny game: a paddle catches a falling object with the d-pad; full game loop with waitvsync(), two sprites, collision, scoring."),
+      shmup: mk("shmup", "Vertical shoot-'em-up for PC Engine. Player ship + bullet/enemy object pools, a wave spawner, AABB collisions, score HUD, scrolling-band starfield BG. d-pad flies, button I fires. The base for any action shooter."),
+      platformer: mk("platformer", "Side-scrolling platformer for PC Engine. Gravity + jump + land-on-top platform collision, a multi-screen world streamed via BG X-scroll (BXR), solid platform tiles, sub-pixel physics. d-pad moves, button I jumps."),
+      puzzle: mk("puzzle", "Match-3 / falling-block puzzle for PC Engine. A 6x12 well drawn with BG tiles, a 1x3 active piece you move/rotate/soft-drop/hard-drop, horizontal-triple clears, score. d-pad moves, I rotates, II hard-drops."),
+      sports: mk("sports", "Pong-style sports game for PC Engine. Two paddles + a bouncing ball on a netted court, score to 9, paddle-deflect physics; player 2 falls back to chase-AI when no input. d-pad moves P1."),
+      racing: mk("racing", "Top-down lane racer for PC Engine. Player car at the bottom, obstacle cars spawn from the top and slide down, LEFT/RIGHT switches lanes, speed grows with score, crash freeze + auto-reset. Scrolling road BG."),
     };
   })(),
 
@@ -299,6 +304,11 @@ const TEMPLATES = {
       sprite_move: mk("sprite_move", "Joystick-controlled sprite on a screen-2 background. d-pad moves the sprite; verified visible + responsive. The base for any action game."),
       music_sfx: mk("music_sfx", "AY-3-8910 PSG demo: a looping melody on channel A plus a trigger-fired SFX on channel C, with an on-screen indicator."),
       catch_game: mk("catch_game", "A complete tiny game: a paddle catches falling fruit with the joystick; full game loop with vblank sync, two sprites, collision, scoring."),
+      shmup: mk("shmup", "Vertical-shmup scaffold for MSX (screen 2). Player ship (sprite plane 0) + 4 bullet + 4 enemy object pools, a wave spawner, AABB collision, on-screen SCORE tiles, over a banded starfield filling the whole 32x24 name table. Joystick PORT 1 moves the ship (UP/DOWN/LEFT/RIGHT), trigger A (GTTRIG) fires; PSG blip on fire, noise-ish tone on a kill. Interrupt-free vsync via VDP status S#0. Extend with enemy fire, lives, scrolling stars."),
+      platformer: mk("platformer", "Side-scrolling platformer for MSX (screen 2). Subpixel gravity/jump/land-on-top collision against a table of platforms across a 512-px (64-cell) world, drawn by COLUMN STREAMING into the wrapping screen-2 name table as the camera follows the player; the player sprite draws in screen space. Joystick LEFT/RIGHT walks, trigger A jumps (only when grounded); PSG jump blip. Interrupt-free vsync. Extend with enemies, pickups, goal."),
+      puzzle: mk("puzzle", "Match-3 / falling-block puzzle for MSX (screen 2). A 6-wide x 12-tall well drawn with the BG tilemap (distinct R/G/B cell tiles + grey border + dim field interior so the playfield is always visible). A 1x3 active piece: joystick LEFT/RIGHT shifts, trigger A rotates the colour order, DOWN soft-drops, trigger B hard-drops; horizontal-triple clears score with a PSG chime. Interrupt-free vsync. Extend with vertical/diagonal matches, gravity-collapse, levels."),
+      sports: mk("sports", "Pong-style 2-player sports for MSX (screen 2). Court (green field + white sidelines + dashed centre net) fills the 32x24 name table; two paddles (stacked sprites) + a ball. Player 1 = joystick PORT 1 UP/DOWN; Player 2 = joystick PORT 2 UP/DOWN, falling back to chase-the-ball AI when no second pad is present so it is playable solo. Wall/paddle bounces + scoring with PSG bonks. Interrupt-free vsync. Extend with serve angles, score display, win condition."),
+      racing: mk("racing", "Top-down 3-lane racing for MSX (screen 2). Grey road + green-grass shoulders fill the name table; player car at the bottom, obstacle cars (object pool) spawn at the top and slide down. Joystick LEFT/RIGHT (edge-detected) switches lanes; obstacle speed grows with score; an AABB crash triggers a ~60-frame freeze then auto-reset, with a PSG crash tone. SCORE drawn as tiles. Interrupt-free vsync. Extend with pseudo-3D road, fuel, multiple cars."),
     };
   })(),
 };
@@ -1222,6 +1232,43 @@ TEMPLATES.atari2600 = {
     lang: "6507 assembly (dasm)",
     ext: ".a26",
     describe: "Gallery-shooter (Space-Invaders-shaped) done with the RIGHT TIA objects, not playfield 'barcode' bars: P0 = double-width cannon, P1 + NUSIZ1=%011 = a row of THREE hardware-replicated invaders (one GRP1 write draws all three), M0 = the player shot. Aliens march left/right and drop a step at the edges; fire with the joystick button. The honest 2600-idiomatic way to do this genre — extend by reusing P1 lower for shields or adding M1 as an alien bomb. Verified: marches + renders cannon/aliens/shot.",
+  },
+  // ── Genre scaffolds ───────────────────────────────────────────────
+  // The 2600 maps cleanly onto only SOME of the five canonical genres.
+  // shmup + sports are the console's native idioms (Space Invaders /
+  // Pong); racing (top-down) and platformer (single-screen) are honest,
+  // period-correct fits. puzzle (match-3) is deliberately ABSENT — see
+  // the note after this block: a 6x12 multi-colour grid is not
+  // renderable on a tilemap-less, one-COLUPF-per-line, 2-player TIA, so
+  // shipping a "puzzle" key would mean shipping something that isn't a
+  // recognizable match-3. Genre id == template key (createGame maps 1:1).
+  shmup: {
+    main: "templates/shmup.asm",
+    runtime: [],
+    lang: "6507 assembly (dasm)",
+    ext: ".a26",
+    describe: "SHMUP — the 2600's flagship genre (Space Invaders / Galaxian / Demon Attack). Gallery shooter done with the RIGHT TIA objects: P0 = double-width cannon, P1 + NUSIZ1=%011 = a row of THREE hardware-replicated invaders (one GRP1 write draws all three), M0 = the player shot. Aliens march left/right and drop a step at the edges; fire with the joystick button. Same proven body as the `mini_invaders` template. Extend with M1 as an alien bomb or reuse P1 lower for shields.",
+  },
+  sports: {
+    main: "templates/sports.asm",
+    runtime: [],
+    lang: "6507 assembly (dasm)",
+    ext: ".a26",
+    describe: "SPORTS — Pong, the 2600's archetypal sport (Combat / Video Olympics). Two 8-px paddles (P0 left, P1 right), one 2-px ball (BL), top+bottom walls via reflected playfield. Joystick UP/DOWN drives the left paddle; the right paddle is AI (chases the ball's Y). Blip on wall bounce, chime on score. Same proven body as the `paddle` template. Demonstrates multi-object positioning (RESP0/RESP1/RESBL) + the 2-line kernel. Add a real P2 on the second port (SWCHA low nibble) to make it head-to-head.",
+  },
+  racing: {
+    main: "templates/racing.asm",
+    runtime: [],
+    lang: "6507 assembly (dasm)",
+    ext: ".a26",
+    describe: "RACING — top-down vertical-scroll lane racer, the honest 2600 racing idiom (Enduro-style; pseudo-3D road projection needs a per-line table the 4 KB/76-cycle starter budget can't spare). P0 = your car near the bottom (LEFT/RIGHT to weave), reflected playfield draws the two road rails + a dashed centre line that scrolls upward to convey speed, P1 + M0 = descending traffic/hazards you must dodge. Speed (and score) ramps the longer you survive; a TIA-collision crash flashes the screen red and resets your speed. Extend with M1 as a 3rd hazard or NUSIZ1 for two-abreast traffic.",
+  },
+  platformer: {
+    main: "templates/platformer.asm",
+    runtime: [],
+    lang: "6507 assembly (dasm)",
+    ext: ".a26",
+    describe: "PLATFORMER — SINGLE-SCREEN (Pitfall! / Montezuma / Kangaroo idiom). The 2600 has NO hardware scroll, no tilemap, 128 B RAM — a smooth side-scroller is not the honest fit (real games flip whole screens). This ships the genre CORE: fixed-point gravity + a jump arc (FIRE button), and land-on-top collision tested in CODE (not TIA collision, since you must know WHICH surface to stand on) against a 4-entry platform table drawn as horizontal playfield bars (the only TIA object wide enough to be a platform). Joystick walks L/R. Extend with ladders (UP/DOWN over a ladder x-span), an enemy on P1, a thrown rock on M0, or Pitfall-style screen-flipping at the edges. NOT a scroller — single screen by design.",
   },
 };
 
