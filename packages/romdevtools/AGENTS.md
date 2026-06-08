@@ -399,6 +399,36 @@ When `build({output:'run'})` is too coarse, the long-form workflow:
 5. `input({op:'set'})` / `input({op:'press'})` / `input({op:'sequence'})` to drive the game
 6. `state({op:'save'}, "checkpoint")` / `state({op:'load'}, "checkpoint")` for try/undo
 
+## Diagnosing behavior over time (game-feel, not just "is it alive")
+
+`frame({op:'verify'})` answers "is it rendering / alive". When the screen looks
+plausible but the game is WRONG — choppy movement, a value that's off, a piece
+that locks mid-air — STOP eyeballing screenshots and trace the state. These tools
+already exist; reach for them by symptom:
+
+- **"Movement/scrolling feels choppy / camera desyncs / scroll jumps."**
+  `recordSession({frames:180, holdInputs:[{right:true}], includeScreenshots:false,
+  memorySamples:[{region, offset, length, label}]})` — holds input over N frames and
+  returns an analyzable timeline. Sample the player's screen-X + the scroll
+  registers (Genesis: `genesis_vsram` + the HSCROLL table in `video_ram`; per
+  platform varies) and look for camera scroll changing while the sprite barely
+  moves, or non-monotone deltas. `watch({on:'mem', format:'series', ranges:[...]})`
+  gives the same idea as a compact value-vs-frame CURVE per byte. (Genesis: see
+  its MENTAL_MODEL "Why does horizontal movement feel choppy?" — the usual cause
+  is rewriting tilemaps in the frame loop; `watch({on:'dma', perFrame:true})`
+  shows the per-frame DMA bytes that spike when you do.)
+- **"A computed value is wrong but the build is clean."** Don't re-read your C.
+  Resolve the variable's address and read it: `build({output:'romWithDebug',
+  resolveSymbols:["grid","score"]})` (or `symbols({op:'resolve', mapPath|dbgPath,
+  name})`) → `memory({op:'read', region, offset})`. Cheap, zero image tokens, and
+  it tells you whether the bug is your logic or your data. (sm83/z80: a "wrong
+  value" is far more often a WRAM layout collision than a miscompile — see the
+  GB/GBC SDCC_GOTCHAS "codegen traps in plain game logic".)
+- **"I can't tell what's on the background."** `background({view:'map'})` decodes
+  the BG tilemap (grid of tile indices, or a rendered PNG) — don't hand-compute
+  nametable offsets. Small handheld too tiny to read inline? `frame({op:'screenshot',
+  scale:4})` up-scales (nearest-neighbor).
+
 ## When a call fails: READ THE ERROR FIRST
 
 romdev errors are written FOR you — they name what went wrong AND how to recover. Read the message (and `issues[]`) before guessing, screenshotting, or retrying blindly. Two shapes:
