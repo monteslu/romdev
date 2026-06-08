@@ -192,3 +192,40 @@ When you call `build({output:'rom', platform:"atari2600", source: ...})`:
 2. The result is `.a26` — loadable in stella (`loadMedia`).
 
 There's no linker — dasm produces a complete cart in one pass.
+
+## MCP debug & inspection tooling
+
+The 2600 runs on the **stella2014 (patched)** core. Because the 2600 has
+no framebuffer and no standard sound chip, its inspectors look different
+from the tilemap consoles — they decode the live TIA snapshot instead.
+
+What you can read:
+
+- **`palette({source:'live'})`** — the NTSC 128-color palette as a PNG,
+  with the *current* TIA background luma+hue extracted from the live
+  snapshot so you can see what color the beam is painting right now. This
+  is the same 128-entry `HHHHLLLL` palette the 7800 uses.
+- **`sprites({op:'inspect'})`** — there is **no OAM** on the 2600, so this
+  returns the state of the 5 TIA graphics objects (P0, P1, M0, M1, Ball)
+  plus a current-scanline PNG showing how the TIA is composing that line.
+- **`cpu({op:'read'})`** — the 6502 register file (A / X / Y / P / SP / PC)
+  pulled from the M6502 core's internal regs.
+- **`background({view:'renderState'})`** — decodes the 32-byte TIA snapshot
+  into the playfield pattern, per-object enables/positions, and the color
+  registers.
+- **`disasm({target:'rom'})`** and **`disasm({target:'references'})`** —
+  both anchor to the top of the bank (`$F000-$FFFF`) and label the vector
+  table (NMI / RESET / IRQ at `$FFFA`).
+
+Memory regions for **`memory({op:'read'})`**:
+
+| Region | Size | What it is |
+| --- | --- | --- |
+| `system_ram` | 128 bytes | the RIOT RAM — that's the *entire* console RAM |
+| `a26_tia_regs` | 32 bytes | the live TIA register snapshot |
+| `a26_cpu_regs` | 7 bytes | the 6502 register snapshot |
+
+**No `audioDebug` inspector.** The 2600's sound comes from the two TIA
+audio voices (`AUDC/AUDF/AUDV` at `$15-$1A`), not a standard PSG/FM chip,
+so there's no `audioDebug` decode — read the audio state directly out of
+the `a26_tia_regs` snapshot instead.

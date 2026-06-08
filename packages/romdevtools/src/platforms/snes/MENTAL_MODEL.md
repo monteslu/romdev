@@ -208,6 +208,27 @@ per-voice vol/pitch/ADSR + `env` (0 = silent regardless of vol) + `bufLastSample
 produced output" from "muted by mixer." GOTCHA: S-DSP FLG is $6C, KOFF is $5C
 (many refs swap them); power-on FLG=$E0 means your driver MUST clear bit 6.
 
+## MCP debug & inspection tooling
+
+The shipped snes9x core is patched for deep introspection — both audio and
+video are fully readable, so you assert live state instead of guessing:
+
+- **Sprites:** `sprites({op:'inspect'})` decodes live OAM (per-sprite
+  renderable/hidden, resolved tile VRAM addr, CGRAM palette range, and the
+  uninitialized-OBJ-palette warning described under "The OBJ stable-path
+  recipe").
+- **Palette:** `palette({source:'live'})` reads live CGRAM.
+- **CPUs:** `cpu({op:'read', cpu:'main'})` for the 65816, `cpu({op:'read',
+  cpu:'spc700'})` for the sound CPU.
+- **Audio:** the S-DSP is fully decodable — full per-voice state plus the
+  master mixer (see "Debugging sound" above for `audioDebug`).
+- **Memory regions:** `memory({op:'read'})` exposes OAM, CGRAM, ARAM (SPC700
+  audio RAM), and **FillRAM**. Note the FillRAM quirk: snes9x mirrors the
+  PPU registers $2100-$213F (OBSEL/BGMODE/TM/TS/color-math, etc.) into
+  FillRAM indexed by the FULL address (e.g. `FillRAM[0x2101]` = OBSEL), so
+  the PPU register state is readable through the `snes_fillram` region — no
+  core patch needed.
+
 ## ROM layout (LoROM)
 
 ```

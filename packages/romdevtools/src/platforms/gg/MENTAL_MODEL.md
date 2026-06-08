@@ -160,6 +160,30 @@ void main(void) {
 }
 ```
 
+## MCP debug & inspection tooling
+
+Game Gear runs on the same genesis_plus_gx (gpgx, patched) core as SMS, so the
+inspectors are identical. **The canonical reference lives in the SMS
+MENTAL_MODEL** (`src/platforms/sms/MENTAL_MODEL.md`, "MCP debug & inspection
+tooling" section): `sprites({op:'inspect'})`, `tiles({op:'png'})`,
+`cpu({op:'read'})` (Z80), `background({view:'renderState'})`,
+`audioDebug({op:'inspect', chip:'psg'})` (SN76489, the shared
+SMS/GG/Genesis region), and the z80 `objdump` disasm pipeline all apply
+unchanged.
+
+Game-Gear-only deltas:
+
+- **`palette({source:'live'})`** decodes **12-bit BGR (4-4-4)**, twice the
+  depth of SMS's 6-bit. CRAM is **64 bytes** (2 little-endian bytes per
+  entry) instead of 32.
+- The Game-Gear memory regions are **`gg_vram`** and **`gg_cram`** (the
+  64-byte palette); use these instead of `sms_vram` / `sms_cram`. The
+  `sms_vdp_regs` / `sms_z80_regs` register regions are shared (same VDP and
+  Z80).
+- `sprites({op:'inspect'})` X/Y fields are reported in **256×192 hardware
+  coordinates**, not the 160×144 visible window — match them with
+  hardware-coord arithmetic (see "Sprite coords are hardware-space" above).
+
 ## Differences from SMS — quick reference
 
 - Visible 160×144 vs 256×192 — center content

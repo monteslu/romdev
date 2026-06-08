@@ -117,3 +117,30 @@ exactly this.
   generator + the envelope (period + shape bits).
 - `memory({op:'read'})` regions: `msx_vram`, `msx_vdp_regs`, `msx_vdp_status`,
   `msx_palette`, `msx_cpu_regs`, `msx_psg_regs`, plus `system_ram` (work RAM).
+
+## MCP debug & inspection tooling
+
+MSX is a **Tier-1** platform with deep introspection — the full set of
+inspectors and memory regions is listed under **"Debugging tools"** above
+(`cpu` / `background` / `palette` / `sprites` / `symbols` / `audioDebug` for
+the AY-3-8910 PSG, and the `msx_vram` / `msx_vdp_regs` / `msx_vdp_status` /
+`msx_palette` / `msx_cpu_regs` / `msx_psg_regs` / `system_ram` regions). The
+PSG-channel decode means `audioDebug({op:'inspect', chip:'ay8910'})` gives
+you the 3 square-wave channels plus the shared noise generator and envelope
+without poking at `msx_psg_regs` by hand.
+
+### ColecoVision shares this core family — but is bring-up only
+
+ColecoVision runs the same toolchain family and exposes only the **standard**
+introspection: `system_ram` + `save_ram` + `video_ram`. It has **no deep
+inspectors** (no `palette` / `sprites` / `background` / `audioDebug` decode)
+and **no MENTAL_MODEL of its own** — treat it as a bring-up target, not a
+finished Tier-1 platform.
+
+### Extending introspection (for whoever adds a platform)
+
+Deeper, decoded inspectors are not free — each is implemented by **patching
+the emulator core** to expose the extra register/VRAM regions, then wiring a
+decoder. To add deep introspection to ColecoVision (or any thin platform),
+follow the existing core-patch pattern used for snes9x / gpgx / fceumm / vice
+under **`scripts/patches/`**.

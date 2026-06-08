@@ -329,6 +329,25 @@ incorrectly aligned."
   scrolling worlds you need to manage the nametable buffer + bank
   switching yourself.
 
+## MCP debug & inspection tooling
+
+The shipped fceumm core is patched for live introspection — read state
+instead of guessing:
+
+- **Sprites:** `sprites({op:'inspect'})` decodes live OAM.
+- **Palette:** `palette({source:'live'})` reads the live 32-byte palette RAM.
+- **CPU:** `cpu({op:'read'})` reads the 6502.
+- **Background render state:** `background({view:'renderState'})` decodes
+  PPUCTRL/PPUMASK and resolves the active CHR bank (plus its file offset) —
+  this is what tells you which pattern table BG vs sprites are fetching from
+  (the bit-4 footgun above).
+- **Memory regions:** `memory({op:'read'})` exposes OAM, Palette,
+  Nametables (CIRAM — including the 2-bit-per-16x16 attribute data that
+  selects each tile group's sub-palette, decoded by `inspectBackgroundMap`),
+  CHR (live MMC1-banked CHR — don't parse the iNES file), CPU_REGS,
+  PPU_REGS, and APU_REGS (the synthesized $4000-$4017 snapshot consumed by
+  `audioDebug`).
+
 ## Rebuilding a CHR-ROM NROM image (reverse-engineering)
 
 The homebrew presets above are CHR-**RAM** (the CPU uploads tiles at runtime).

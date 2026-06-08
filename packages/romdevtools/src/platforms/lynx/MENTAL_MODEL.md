@@ -35,13 +35,39 @@ Mikey handles:
 - **Joystick** — read via SWITCHES register at `$FCB0`. cc65 provides
   `joy_read(JOY_1)` + `JOY_LEFT/RIGHT/UP/DOWN/BTN_1/BTN_2` macros.
 
-**Live debug:** `audioDebug({op:'inspect', chip:"mikey"})` decodes the 4 audio voices
-(volume, period→freq→note, LFSR state); `palette({source:'live'})` reads the 16-entry
-palette; `background({view:'renderState'})` shows DISPCTL + the display base address;
-`cpu({op:'read'})` reads the 65C02; `breakpoint({on:'write'})` is the write watchpoint. **Sprites
-are the exception** — the Lynx has no fixed OAM (sprites are SCB linked lists
-walked by Suzy), so `sprites({op:'inspect'})` returns the SCB list head ($FC10/$FC11) and
-you walk the chain over `system_ram`, rather than reading a sprite table.
+**Live debug:** the MCP inspectors (`palette` / `cpu` / `audioDebug` /
+`background` / `breakpoint`, and the SCB-list-head `sprites` special case) are
+documented in "MCP debug & inspection tooling" below.
+
+## MCP debug & inspection tooling
+
+The Lynx runs on handy (patched). The inspectors read the *live* core state —
+reach for them when a sprite or palette renders wrong and the source alone
+doesn't explain it. Details and the per-tool facts:
+
+- **`palette({source:'live'})`** — the **16-entry, 12-bit RGB** Mikey palette
+  (`$FDA0-$FDBF`) converted to RGB.
+- **`cpu({op:'read'})`** — 65C02 dump: A / X / Y / P / SP / PC plus the
+  decoded flag bits.
+- **`audioDebug({op:'inspect', chip:'mikey'})`** — the 4 Mikey voices: volume,
+  the timer→period→frequency→note chain, and the **12-bit LFSR** state.
+- **`background({view:'renderState'})`** — decodes DISPCTL: the DMA-enable,
+  flip, and color-mode bits plus the display base address.
+- **`sprites({op:'inspect'})` is the special case.** The Lynx has **no fixed
+  OAM** — sprites are **SCB (Sprite Control Block) linked lists in RAM** that
+  Suzy walks at blit time. So this tool can't return a sprite table; instead
+  it returns the **SCB list head (SCBNEXT, `$FC10`/`$FC11`)** plus
+  instructions to walk the chain yourself over `system_ram`.
+
+### Memory regions (`memory({op:'read', region:…})`)
+
+| Region          | Address / size        | Contents                                              |
+|-----------------|-----------------------|-------------------------------------------------------|
+| `lynx_cpu_regs` | —                     | 65C02 register snapshot                               |
+| `lynx_hw_regs`  | $FC00-$FDFF window     | the **Suzy + Mikey** register window — sprite-engine regs, LCD control, audio, palette |
+| `system_ram`    | 64 KB                 | full address space (also where the SCB chain lives)   |
+
+Pair these with `breakpoint({on:'write'})` for the full live-debug loop.
 
 ## Frame heartbeat (cc65 + tgi)
 

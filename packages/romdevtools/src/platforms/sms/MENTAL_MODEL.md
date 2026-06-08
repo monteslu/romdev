@@ -267,6 +267,57 @@ Loadable via genesis_plus_gx (`loadMedia`).
 - Game Gear-specific buttons add port $00 read (Start) and stereo
   PSG control on port $06.
 
+## MCP debug & inspection tooling
+
+SMS and Game Gear share the genesis_plus_gx (gpgx, patched) core, so the
+inspectors below behave identically on both. This section is the **canonical
+shared reference**; the Game Gear MENTAL_MODEL points back here and only lists
+its own deltas (12-bit CRAM, etc.). Reach for these when something renders
+wrong and you can't see why from the source alone — they read the *live* core
+state, which beats trusting comments.
+
+- **`sprites({op:'inspect'})`** — decodes the live SAT (sprite attribute
+  table) and renders a sprite-sheet PNG. Reports each slot's X/Y/tile plus
+  `spriteTileDataBase` (the VRAM address the VDP is actually fetching sprite
+  tiles from). This is the tool that catches the $D0-terminator and the
+  R6/$2000-vs-$0000 sprite-bank footguns described above — trust its bytes
+  over any comment.
+- **`palette({source:'live'})`** — reads CRAM and converts to RGB. On SMS
+  that's **6-bit BGR** (2-2-2, 32 bytes). On Game Gear it's **12-bit BGR**
+  (4-4-4, 64 bytes) — see the GG MENTAL_MODEL for that delta.
+- **`tiles({op:'png'})`** — dumps VRAM tile patterns as a sheet. The format
+  is 4bpp bitplane-interleaved (32 bytes/tile); the 16 KB VRAM renders as a
+  512-tile sheet.
+- **`cpu({op:'read'})`** — Z80 register dump: A/F, BC/DE/HL, IX/IY, the
+  shadow register set, the flag bits, and interrupt state (IM mode / IFF).
+- **`audioDebug({op:'inspect', chip:'psg'})`** — decodes the live SN76489:
+  3 tone channels + 1 noise channel. The PSG region is shared by SMS, GG, and
+  Genesis (same gpgx region).
+- **`background({view:'renderState'})`** — reads the VDP registers and reports
+  the derived addresses (name table, BG-tile base, sprite-tile base, SAT base),
+  the scroll registers, and the display-enable / mode state. Use this to
+  confirm the R2/R4/R5/R6 baseline matches where you actually uploaded data.
+
+### Memory regions (`memory({op:'read', region:…})`)
+
+| Region          | Contents                                             |
+|-----------------|------------------------------------------------------|
+| `sms_vram`      | 16 KB VRAM — tiles + name table + SAT + sprite tiles |
+| `sms_cram`      | 32-byte palette (2-2-2 BGR)                          |
+| `sms_vdp_regs`  | the 11 VDP control registers ($00-$0A)              |
+| `sms_z80_regs`  | Z80 register snapshot                                |
+| `gg_vram`       | Game Gear VRAM                                        |
+| `gg_cram`       | Game Gear 64-byte palette (4-4-4 BGR)                |
+
+### Disassembly (`disasm({target:…})`)
+
+`disasm({target:'rom'})`, `disasm({target:'references'})`, and
+`disasm({target:'project'})` all run the live ROM through the native binutils
+**z80 `objdump`** (WASM, `-m z80`). It has full prefix coverage —
+CB/ED/DD/FD/DDCB/FDCB — and feeds the same auto-label, register-annotation,
+file-offset, and `untilReturn` pipeline used by the NES and SNES
+disassemblers.
+
 ## Horizontal scrolling (for side-scrollers)
 
 The `platformer` scaffold is single-screen. To make it a side-scroller:

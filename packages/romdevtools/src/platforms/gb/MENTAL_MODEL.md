@@ -14,6 +14,62 @@ one call fuses a framebuffer pixel scan with the live LCDC and returns
 `verified:null` = step a frame first. Zero image tokens, frame-0-guarded — use it
 as the first move when a change "did nothing."
 
+## Toolchains
+
+Default is **C** via SDCC's sm83 port (the same SDCC that powers SMS/GG/MSX/
+Coleco). For hand-tuned asm, pass `language:"asm"` to route through RGBDS. The C
+path uses `__sfr __at 0xFFNN` to bind GB I/O regs; the helper headers under
+`src/platforms/gb/lib/c/gb_hardware.h` define LCDC/STAT/SCY/SCX/LY/BGP/OBP0/OBP1/
+etc. for both DMG and CGB. ⚠ SDCC 4.4.0 codegen quirk: `for (;;) { switch + write
+to __sfr }` crashes the register allocator — use `do { ... } while (1)` and
+table-lookup writes instead. (See the GB/GBC SDCC_GOTCHAS for the full set of
+sm83 codegen footguns.)
+
+## MCP debug & inspection tooling
+
+The bundled gambatte core is patched to expose deep live state — sprites,
+palettes, tiles, background/LCDC, CPU, and raw memory regions. This applies to
+**both `gb` and `gbc`** builds (one shared gambatte core).
+
+**Live inspectors (decode hardware state, no manual byte-twiddling):**
+
+- **`sprites({op:'inspect'})`** — decodes all 40 OAM slots and renders a
+  sprite-sheet PNG with sprite-priority + horizontal/vertical flip applied.
+- **`palette({source:'live'})`** — DMG path decodes the BGP / OBP0 / OBP1 bytes
+  into 4 shades each; CGB path decodes the 64-byte BCPS/OCPS palette RAM into
+  8 palettes × 4 colors in BGR555.
+- **`tiles({op:'png'})`** — renders all 384 tiles from $8000-$97FF.
+- **`cpu({op:'read'})`** — SM83 register file: A/F/BC/DE/HL + flags + IME/halt.
+- **`audioDebug({op:'inspect', chip:'gb'})`** — DMG APU decode: 2 pulse + wave
+  + noise channels, with timer→freq→note conversion, sweep, duty, and panning,
+  read straight from the live `NR*` registers.
+- **`background({view:'renderState'})`** — LCDC bit-by-bit, scroll (SCX/SCY),
+  LY/LYC, window state, plus CGB extras: current VRAM bank, KEY1, and the
+  BCPS/OCPS palette index.
+
+**Raw memory regions** via `memory({op:'read', region:...})`:
+
+| Region | Contents |
+|---|---|
+| `gb_vram` | VRAM ($8000-$9FFF) — tile data + BG maps (CGB: the active bank) |
+| `gb_oam` | OAM ($FE00-$FE9F) — 40 sprites × 4 bytes |
+| `gb_io` | I/O register page ($FF00-$FF7F) — LCDC, BGP, JOYP, CGB regs, etc. |
+| `gb_hram` | HRAM ($FF80-$FFFE) — fast scratch |
+| `gb_bgpdata` | CGB BG palette RAM (64 bytes) |
+| `gb_objpdata` | CGB OBJ palette RAM (64 bytes) |
+| `gb_cpu_regs` | SM83 register snapshot |
+
+⚠ **Gotcha: gambatte exposes `gb_vram`, NOT the generic `video_ram` region.**
+Other platforms' cores expose video memory under `video_ram`; on GB/GBC you must
+ask for `gb_vram` (and the other `gb_*` names above). A `video_ram` read here
+returns nothing.
+
+**Disassembly:** `disasm({target:'rom'})` + `disasm({target:'references'})` +
+`disasm({target:'project'})` route through the native binutils z80 `objdump` in
+its `gbz80` machine (WASM, `-m gbz80`) — full CB-prefix coverage plus the
+SM83-specific opcodes (`ld (hl+),a`, `ldh`, `reti`, `ld hl,sp+e8`). One z80-elf
+binutils serves both plain Z80 (SMS/GG/MSX) and the GB CPU.
+
 ## Five silent-failure footguns to know before you start (R26 + R27)
 
 If your ROM compiles cleanly but doesn't render — or sprites land in

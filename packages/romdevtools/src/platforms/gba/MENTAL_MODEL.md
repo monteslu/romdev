@@ -125,9 +125,9 @@ maxmod (separate library, not bundled here).
 
 **Debugging sound:** `audioDebug({op:'inspect', chip:"gba"})` decodes the live APU —
 per-channel freq→note/duty/volume for the 4 tone channels plus the 2 Direct
-Sound FIFO states. Pair with `sprites({op:'inspect'})`/`palette({source:'live'})`/
-`background({view:'renderState'})`/`cpu({op:'read'})` (ARM7) and `breakpoint({on:'write'})` for the rest of the
-live-debug loop.
+Sound FIFO states. See "MCP debug & inspection tooling" below for the rest of
+the live-debug loop (sprites / palette / background / cpu / breakpoint + the
+memory regions and disasm pipeline).
 
 **For scaffold-level sfx**, the libtonc runtime ships a minimal
 `gba_sfx.h` / `gba_sfx.c` pair (3 functions: `sfx_init`, `sfx_tone`,
@@ -135,6 +135,60 @@ live-debug loop.
 as the NES/GB scaffold sound API, so cross-platform game ports feel
 the same. All 5 GBA genre scaffolds (shmup/platformer/puzzle/sports/
 racing) use it.
+
+## MCP debug & inspection tooling
+
+GBA runs on mGBA (patched). These inspectors read the *live* core state —
+reach for them when a sprite, palette, or BG renders wrong and the source
+alone doesn't explain it. (The audio inspector is also summarized under
+"Sound" above.)
+
+- **`sprites({op:'inspect'})`** — decodes all **128 OAM sprites** into a
+  generic shape: attr0/1/2 unpacked to shape + size, **9-bit signed X**,
+  the affine and hidden flags, and tile / palette / priority.
+- **`palette({source:'live'})`** — reads the palette as **15-bit BGR555**:
+  256 BG entries + 256 OBJ entries. Pass `area:'bg'` or `area:'sprite'` to
+  pick the half.
+- **`cpu({op:'read'})`** — ARM7TDMI dump: the 16 general regs **r0-r15**,
+  `cpsr` + `spsr`, the processor mode, the ARM/THUMB state bit, and an
+  **`execPc`** field that is r15 adjusted back for the pipeline prefetch
+  (r15 reads ahead of the executing instruction, so raw r15 is misleading —
+  use `execPc` for "where am I really").
+- **`audioDebug({op:'inspect', chip:'gba'})`** — the 4 DMG-compatible PSG
+  channels (per-channel freq→note / duty / volume) plus the **2 Direct Sound
+  DMA FIFO** states, and master / bias. See "Sound" above.
+- **`background({view:'renderState'})`** — decodes DISPCNT: the BG mode, and
+  per-BG enable / priority / char-base / map-base / color-mode, the
+  forced-blank bit, and OBJ enable. Use it to confirm REG_DISPCNT and the
+  REG_BGxCNT bases match where you uploaded tiles + maps.
+
+### Memory regions (`memory({op:'read', region:…})`)
+
+| Region          | Address / size                     | Contents                                  |
+|-----------------|------------------------------------|-------------------------------------------|
+| `gba_cpu_regs`  | —                                  | ARM7TDMI register snapshot                 |
+| `gba_io_regs`   | $04000000-$040003FE (1 KB)         | the I/O page — **video AND audio** MMIO    |
+| `gba_palette`   | $05000000-$050003FF (1 KB)         | 256 BG + 256 OBJ BGR555 entries            |
+| `gba_oam`       | $07000000-$070003FF (1 KB)         | 128 sprite attribute entries (8 B each)    |
+| `system_ram`    | $02000000 EWRAM / $03000000 IWRAM  | main + on-chip work RAM                    |
+| `video_ram`     | $06000000-$06017FFF (96 KB)        | BG + sprite tile data + framebuffer        |
+| `save_ram`      | $0E000000-$0E00FFFF (64 KB)        | battery-backed SRAM                        |
+
+Pair `sprites` / `palette` / `background` / `cpu` with
+`breakpoint({on:'write'})` for the full live-debug loop.
+
+### Disassembly (`disasm({target:…})`)
+
+`disasm({target:'rom'})`, `disasm({target:'references'})`, and
+`disasm({target:'project'})` run the native binutils
+**`arm-none-eabi-objdump`** (WASM) — **ARM mode by default**, pass
+`thumb:true` for Thumb code. The byte-exact project reassembles through
+`arm-none-eabi-as` / `ld` / `objcopy`.
+
+**Gotcha (until ARM/Thumb mode-tracking lands):** GBA C compiles mostly to
+**Thumb** reached via an **ARM crt0 stub**, so an ARM-mode disasm of a full
+ROM decodes the Thumb spans as `.byte` — still byte-exact, just less readable.
+Disasm the Thumb spans with `thumb:true` to get real mnemonics.
 
 ## Frame heartbeat
 
