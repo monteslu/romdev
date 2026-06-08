@@ -1,0 +1,49 @@
+name: lint
+
+# Static-analysis gate over romdev's own JavaScript. Deliberately scoped to
+# linting (+ the pure-JS unit tests) so it runs on a clean checkout with NO
+# emulator cores / toolchains: the WASM is gitignored, so the full `npm test`
+# suite (which boots cores + builds ROMs) can't run here yet — that needs the
+# wasm-distribution decision (see internal plan D2b). Lint needs none of that.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24          # repo engines floor is >=24
+          cache: npm
+
+      # Root devDeps only (eslint + @eslint/js + globals). --ignore-scripts
+      # skips romdevtools' postinstall (it expects bundled wasm, absent in CI);
+      # --workspaces=false avoids pulling the 14 binary/core packages.
+      - name: Install lint deps
+        run: npm ci --ignore-scripts --workspaces=false
+
+      - name: ESLint
+        run: npm run lint
+
+      # The unit tests that are pure JS (no core/toolchain WASM) — cheap extra
+      # coverage on the same clean checkout. These cover the error-parsing,
+      # issue-ranking, input, and host-recovery logic. The wasm-dependent suite
+      # (cores + ROM builds) is intentionally NOT run here — see header note.
+      - name: Pure-JS unit tests
+        run: >
+          node --test
+          packages/romdevtools/src/toolchains/parse-errors.test.js
+          packages/romdevtools/test/input-button-alias.test.js
+          packages/romdevtools/test/input-ignored-buttons.test.js
+          packages/romdevtools/test/issue-ranking.test.js
+          packages/romdevtools/test/host-eviction-hint.test.js
+          packages/romdevtools/test/watch-memory.test.js
