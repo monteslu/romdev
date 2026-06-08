@@ -18,7 +18,7 @@ A coding agent connects over [MCP](https://modelcontextprotocol.io/) and gets a 
 - **Seeing** — capture the framebuffer as a PNG and hand it to the agent.
 - **Driving** — emit controller input, run input scripts, replay sequences.
 - **Inspecting** — read CPU/video/save RAM, watch memory, disassemble, inspect sprites/palettes/tilemaps, read CPU + sound-chip state.
-- **Reverse-engineering & romhacking** — a full RE toolkit for modifying existing games: iterative value search (`searchValue`/`searchNext`, the Cheat-Engine loop), `classifyRegion` (is this "table" really ASCII?), `findWriter` (the exact instruction that wrote a byte), `readCartRom` (confirm a patch is live in the running image), `navigate` (drive menus by screen-change), `traceVramSource` (Genesis: which ROM offset a graphic was DMA'd from), a bundled cheat database as a free labeled RAM map, and a cross-platform [ROM-hacking playbook](packages/romdevtools/src/platforms/_guides/ROMHACKING_PLAYBOOK.md) (`getPlatformDoc({platform:'romhacking', name:'playbook'})`).
+- **Reverse-engineering & romhacking** — a full RE toolkit for modifying existing games: iterative value search (`memory({op:'search'})` → `memory({op:'searchNext'})`, the Cheat-Engine loop), `memory({op:'classify'})` (is this "table" really ASCII?), `breakpoint({on:'write'})` (the exact instruction that wrote a byte), `memory({op:'readCart'})` (confirm a patch is live in the running image), `input({op:'navigate'})` (drive menus by screen-change), `watch({on:'dma'})` (Genesis: which ROM offset a graphic was DMA'd from), a bundled cheat database as a free labeled RAM map, and a cross-platform [ROM-hacking playbook](packages/romdevtools/src/platforms/_guides/ROMHACKING_PLAYBOOK.md) (`platform({op:'doc', platform:'romhacking', name:'playbook'})`).
 - **Saving/restoring** — named save states for try-this-then-undo workflows.
 
 The deliverable is **the ROM**, not the tool: a standard, hardware-valid `.nes`/`.gba`/`.md`/… that runs anywhere ROMs run. The bundled WASM cores are the *dev instrument* (build → observe → iterate), not the distribution runtime.
@@ -64,7 +64,7 @@ Fourteen consoles/computers, oldest → newest. They vary enormously in how hard
 
 ## Each platform ships a real SDK + sound + scaffolds
 
-Every platform has a working core, ready-made starter projects, and **5 genre scaffolds** — shmup / platformer / puzzle / sports / racing — plus a music demo. (The lone exception is the Atari 2600, which ships 4: the TIA has no tilemap to draw a match-3 board, so there's no `puzzle`.) PC Engine and MSX *also* ship a hardware helper library and sprite/music example projects alongside their genre scaffolds. Each platform has a sound API, per-platform `MENTAL_MODEL.md` + `TROUBLESHOOTING.md` docs (readable in-session via `getPlatformDoc`), and debug helpers. Scaffold a project in one call with `createProject` (or `createGame` for the genre-shaped baselines).
+Every platform has a working core, ready-made starter projects, and **5 genre scaffolds** — shmup / platformer / puzzle / sports / racing — plus a music demo. (The lone exception is the Atari 2600, which ships 4: the TIA has no tilemap to draw a match-3 board, so there's no `puzzle`.) PC Engine and MSX *also* ship a hardware helper library and sprite/music example projects alongside their genre scaffolds; Genesis adds a `two_plane_parallax` scaffold (hardware scroll, no per-frame tilemap writes). Each platform has a sound API, per-platform `MENTAL_MODEL.md` + `TROUBLESHOOTING.md` docs (readable in-session via `platform({op:'doc'})`), and debug helpers. Scaffold a project in one call with `scaffold({op:'project'})` (or `scaffold({op:'game'})` for the genre-shaped baselines). Every scaffold builds with zero warnings and renders visible content (checked via `frame({op:'verify'})`).
 
 | Platform | Core | Compiler / SDK | Sound | Music engine |
 |---|---|---|---|---|
@@ -154,9 +154,8 @@ Then just describe what you want:
 ```
 > Make me a tiny NES game where a sprite moves around the screen.
 
-[agent: createGame({platform:"nes", genre:"platformer"})]
-[agent: buildSource(...) → my-game.nes]
-[agent: loadMedia(...); stepFrames(60); screenshot()]
+[agent: scaffold({op:"game", platform:"nes", genre:"platformer"})]
+[agent: build({output:"run", platform:"nes", path}) → builds, loads, runs, screenshots in one call]
 [agent sees the result, iterates]
 ```
 
