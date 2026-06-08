@@ -83,7 +83,7 @@ static u8 _pce_vdc_inited = 0;
 void vdc_init(void) {
     if (_pce_vdc_inited) return;
     _pce_vdc_inited = 1;
-    vdc_set_reg(VDC_MWR, 0x0010);  /* 32x32 virtual map, 256px BAT          */
+    vdc_set_reg(VDC_MWR, 0x0000);  /* 32x32 virtual map (SCREEN field=000); 256px BAT. (0x10 was 64x32 — its 64-wide stride left the bottom rows as uninitialized VRAM = vertical-stripe garbage.) */
     vdc_set_reg(VDC_BXR, 0x0000);  /* BG X scroll = 0                       */
     vdc_set_reg(VDC_BYR, 0x0000);  /* BG Y scroll = 0                       */
     vdc_set_reg(VDC_HSR, 0x0202);  /* horizontal sync width/start           */

@@ -161,20 +161,22 @@ test("R23e createGame supports sports + racing on EVERY tier-1 platform", { time
   }
 });
 
-test("R23e createGame rejects sports on a platform that genuinely doesn't have it", { timeout: 10000 }, async () => {
+test("R23e createGame rejects a genre on a platform that genuinely doesn't have it", { timeout: 10000 }, async () => {
   const { createProjectImpl } = await import("../src/mcp/tools/project.js");
   const { mkdtemp } = await import("node:fs/promises");
   const { tmpdir } = await import("node:os");
   const projPath = await mkdtemp(join(tmpdir(), "r23-bad-"));
-  // Atari 2600 has only default/paddle/single_screen — no shmup/sports/etc.
+  // Atari 2600 now ships shmup/platformer/sports/racing, but NOT puzzle — the
+  // TIA has no tilemap to draw a match-3 grid. puzzle is the one canonical
+  // genre it genuinely lacks, so it's the honest "unknown template" sentinel.
   await assert.rejects(
     () => createProjectImpl({
       platform: "atari2600",
       name: "x",
       path: projPath,
-      template: "sports",
+      template: "puzzle",
       overwrite: true,
     }),
-    /Unknown template 'sports'/,
+    /Unknown template 'puzzle'/,
   );
 });
