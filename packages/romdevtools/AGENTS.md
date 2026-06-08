@@ -403,7 +403,7 @@ When `build({output:'run'})` is too coarse, the long-form workflow:
 
 romdev errors are written FOR you — they name what went wrong AND how to recover. Read the message (and `issues[]`) before guessing, screenshotting, or retrying blindly. Two shapes:
 
-- **Build/compile failures** return `issues: [{file, line, col, severity, message, stage}, ...]` — the structured error list. Use that array, NOT the raw `log`; it almost always names the exact line. Fall back to `log` only if `issues` is empty but `ok: false`.
+- **Build/compile failures** return `issues: [{file, line, col, severity, message, stage}, ...]` — the structured error list. Use that array, NOT the raw `log`; it almost always names the exact line. Fall back to `log` only if `issues` is empty but `ok: false`. `issues[]` is RANKED most-dangerous first (**critical → error → warning → info**), so read it top-down: an entry flagged `critical: true` (e.g. a `WILL HANG:` `uint8`-loop-bound trap) is a latent crash even on a build that otherwise succeeded — fix those FIRST, never skip them as "just a warning". Link errors carry no `line` but include a `hint` naming the missing symbol + how to resolve it.
 - **Tool/runtime errors** (thrown) carry the recovery step in the message itself. Examples: a "No ROM loaded" error after a session reconnect echoes the EXACT `loadMedia({...})` call to restore your state; a rejected `loadMedia` names the likely cause (wrong platform / truncated / unsupported mapper) and points you at `cart({op:'identify'})`; an `input({op:'set'})` with a typo'd button returns `ignoredButtons[]` so you see it pressed nothing. Don't discard these — they're the fix.
 
 **Crash isolation (R12).** Every WASM toolchain call runs in a child worker process. If a tool aborts (`_abort()`, SIGSEGV, OOM), only the worker dies — the MCP server keeps running, all other agent sessions are unaffected, tool registration + save states + playtest windows survive. The build response surfaces as `{ ok: false, stage: "crash", log: "[crash] worker exited unexpectedly — signal=… code=…", crash: { exitCode, signal } }`. Treat `stage: "crash"` as "the toolchain blew up — log the args + source somewhere durable so it can be triaged; you can keep iterating in this session without reconnecting".
@@ -434,6 +434,12 @@ romPatch({op:'write', path, offset, hex, expect: "<current bytes>" })
 romPatch({op:'diff', platform, a: original, b: patched })    // 6. verify the patch landed
 loadMedia({ platform, path: patched }) → frame({op:'screenshot'})  // 7. run it
 ```
+
+**Driving input through a watched run.** A `watch`/`breakpoint` with NO
+`pressDuring` INHERITS whatever `input({op:'set'})` last held — same as
+`frame({op:'step'})`. But if you pass `pressDuring`, that schedule OWNS the pad
+for the whole run and a prior `input({op:'set'})` is ignored. So to hold a button
+*through* a watched window, put it in `pressDuring` — not a preceding `set`.
 
 **Finding which CODE wrote a byte.** Static disasm reading is the slow part —
 multiple `cmp #$XX` instructions look identical. Don't guess. Two tools, in order

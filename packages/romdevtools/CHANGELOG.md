@@ -4,6 +4,64 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.22.0
+
+**Transparency + correctness pass: every tool failure is actionable, dangerous
+warnings are ranked first, and all 14 platforms' scaffolds build clean AND
+render visible content.** The theme: a coding agent should never be left guessing
+by an opaque error, never skip a crash-class warning buried in noise, and never
+copy a scaffold that ships with warnings or a blank screen.
+
+### Changed — actionable error messages across all 14 platforms
+Failures now name the fix, not just the symptom:
+- **`build`/assemble:** compile errors carry `{file, line, message, stage}`; LINK
+  errors (which have no source line) now reach `issues[]` too, each with a `hint`
+  naming the missing symbol + how to resolve it — on ALL FOUR linkers (GNU ld for
+  Genesis/GBA, ld65 for NES/C64/Lynx/A2600/A7800/PCE, sdld for GB/GBC/SMS/GG/MSX,
+  wlalink for SNES). The crt0 (startup-stub) assembly path and `assembleSnippet`
+  now surface the first `file:line: message` instead of dumping a raw log.
+- **`loadMedia`:** a refused ROM names the likely cause (wrong platform / truncated
+  / unsupported mapper) and points at `cart({op:'identify'})`.
+- **Runtime/host:** `getHost`'s "No ROM loaded" echoes the EXACT `loadMedia` call
+  to recover with after a session eviction; unknown memory region lists the valid
+  names; "no save state named X" lists the existing slots; `host({op:'unload'})`
+  no longer claims success when nothing was loaded.
+
+### Changed — build `issues[]` ranks the dangerous warnings FIRST
+A weak agent skips a lethal warning when it's buried among unused-variable noise.
+`issues[]` is now ordered **critical → error → warning → info** (stable within a
+rank) on every platform. The SDCC pre-flight lint marks the unconditional
+`uint8`-loop-bound trap as `critical: true` (it always hangs) with a `WILL HANG:`
+message; the conditional VRAM byte-copy stays a plain warning (it can't be proven
+unsafe statically, so it must not cry wolf).
+
+### Fixed — `watch`/`breakpoint` inherit held input (the movement-analysis bug)
+A `watch`/`breakpoint` run with NO `pressDuring` now inherits whatever
+`input({op:'set'})` last held — exactly like `frame({op:'step'})`. Previously the
+first frame reset the pad to neutral, silently dropping a held button. A
+`pressDuring` schedule still OWNS the pad for the run (deterministic capture).
+Documented on the `input`/`watch`/`breakpoint` schemas.
+
+### Fixed — all 130 scaffolds: zero warnings AND render visible content
+Swept every `scaffold({op:'project'})` template on all 14 platforms:
+- **Warnings 65 → 0** (was concentrated in GB/GBC/Genesis/GG/GBA/SMS), fixed at
+  the SOURCE so scaffolds model the right pattern: GB/GBC VRAM tile copies use the
+  runtime's pointer-walk `memcpy_vram` (the indexed `dst[i]=src[i]` form SDCC sm83
+  miscompiles into VRAM); Genesis builds pass `-Wno-main` (SGDK mandates
+  `int main(bool)`); GBA/GG/SMS narrowing + dead-branch fixes.
+- **Blank/broken renders 31 → 0** (verified via `frame({op:'verify'})`): added a
+  patterned background to lone-sprite/text scaffolds, and fixed real bugs found
+  along the way — **NES FamiTone2's `$0300` RAM collided with the C runtime BSS**
+  (zeroed PPUCTRL, killed rendering; the driver's RAM was relocated to `$0700`);
+  the **SNES `sfx_init()`-before-`setScreenOn()`** forced-blank trap; a **C64 cc65
+  screen-fill-loop hang** (rewritten via `memset`) + sprite-data/`$0801` overlap;
+  the **Lynx double-buffer** stale-page trap.
+
+### Added — ESLint over romdev's own JavaScript
+Flat config (`npm run lint`) catching real bugs (undefined refs, unused
+imports/vars, dupe keys, self-assignment) over the monorepo's plain-JS ESM
+sources; vendored SDK/wasm/build trees ignored. Cleaned 114 pre-existing findings.
+
 ## 0.21.0
 
 **NES CHR-ROM / iNES rebuild ergonomics + turnkey `disasm({target:'project'})`
