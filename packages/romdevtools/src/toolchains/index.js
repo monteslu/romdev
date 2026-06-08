@@ -118,6 +118,27 @@ const PLATFORM_DEFAULT_LANGUAGE = {
 };
 
 /**
+ * Order build issues by DANGER so the agent reads the lethal ones first:
+ *   critical (crash-class, e.g. the uint8 infinite-loop)  →  error  →  warning  →  info.
+ * Stable within a rank (preserves source order / file:line). Pure; no dedup.
+ * @param {Array<{severity?:string, critical?:boolean}>} issues
+ * @returns {Array} the same issues, ranked
+ */
+export function rankIssues(issues) {
+  const rank = (i) =>
+    i?.critical ? 0
+    : i?.severity === "error" ? 1
+    : i?.severity === "warning" ? 2
+    : 3;
+  // map→sort→unmap keeps it stable (Array.prototype.sort is stable in V8, but
+  // tie-break on original index to be explicit and portable).
+  return issues
+    .map((issue, idx) => ({ issue, idx }))
+    .sort((a, b) => rank(a.issue) - rank(b.issue) || a.idx - b.idx)
+    .map((x) => x.issue);
+}
+
+/**
  * Public API for the platforms tool to discover the language matrix.
  * Returns `{defaultLanguage, languages: [{language, toolchain, available, note?}]}`.
  * Returns null for platforms with no language entries (shouldn't
@@ -835,10 +856,13 @@ export async function buildForPlatform(args) {
         r.log += "\n--- MSX ROM header present (\"AB\") ---";
       }
     }
-    // Combine lint warnings with parsed build log. Lint comes first so
-    // agents see them at the top of the issues array.
+    // Combine lint warnings with parsed build log, then RANK so an agent
+    // triaging issues[] sees the dangerous ones first: crash-class (critical)
+    // → errors → plain warnings. Without this, a "WILL HANG" infinite-loop
+    // warning sits among unused-variable noise and gets skipped (the exact
+    // "agent missed the warning, hit the crash 100 functions later" failure).
     const buildIssues = parseBuildLog(r.log);
-    const issues = [...lintIssues, ...buildIssues];
+    const issues = rankIssues([...lintIssues, ...buildIssues]);
     return {
       ok: r.exitCode === 0 && binary !== null,
       binary,

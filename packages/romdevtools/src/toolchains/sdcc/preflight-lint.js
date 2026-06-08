@@ -136,10 +136,14 @@ export function lintSdccSource(source, file = "main.c", opts = {}) {
       if (bound !== null && bound > 255) {
         issues.push({
           severity: "warning",
+          // CRASH-CLASS: not cosmetic — this loop never exits and hangs the
+          // game. `critical` lifts it above ordinary warnings so an agent
+          // triaging issues[] can't miss it among unused-variable noise.
+          critical: true,
           file,
           line: i + 1,
           stage: "lint",
-          message: `uint8 loop counter '${counter}' with bound ${bound} (> 255) — infinite loop`,
+          message: `WILL HANG: uint8 loop counter '${counter}' with bound ${bound} (> 255) — infinite loop`,
           details: `A u8/uint8_t/char counter can never reach ${bound}, so this loop never exits and all code after it is dead. ${portLabel} gives no warning. Declare '${counter}' as uint16_t. See GB TROUBLESHOOTING § uint8 loop-bound trap.`,
           ref: "uint8-loop-bound",
         });
