@@ -152,12 +152,29 @@ export function lintSdccSource(source, file = "main.c", opts = {}) {
   }
 
   // ─── __xdata / VRAM byte-copy miscompile ────────────────────────
-  // SDCC sm83 miscompiles `for (i...) dst[i] = src[i];` when dst is an
+  // SDCC sm83 miscompiles `for (i...) dst[i] = src[i];` ONLY when dst is an
   // __xdata pointer (e.g. into VRAM $8000) — it writes through the return
-  // address and crashes the CPU. Hard to prove the pointer target
-  // statically, so flag the SHAPE (an array-index copy `a[i] = b[i];`
-  // inside a for-loop) as ADVISORY, pointing at memcpy_vram. Conservative:
-  // require a for-loop on the line/just above + an indexed-to-indexed copy.
+  // address and crashes the CPU. A plain WRAM array copy (`static uint8_t
+  // rb[78]; ... rb[i]=grid[i];`) is perfectly fine. The old lint flagged the
+  // SHAPE unconditionally as a "warning" — every WRAM copy in every genre
+  // scaffold cried wolf, training agents to distrust the linter. We now
+  // classify the DESTINATION identifier before deciding the severity:
+  //
+  //   • PROVABLY VRAM/__xdata  → "warning" (the real crash-class footgun)
+  //       - dst is declared as a POINTER (`type *dst`) — only pointers can
+  //         alias __xdata; an indexed write through one is the bug.
+  //       - dst is a known-VRAM name (vram*, VRAM, *vram*, bgmap, _VRAM*).
+  //       - dst is assigned from a cast/literal in $8000-$9FFF anywhere in
+  //         the source (e.g. `dst = (uint8_t*)0x9800;`).
+  //   • PLAIN RAM ARRAY        → SUPPRESS (declared `type dst[N];` here).
+  //   • UNKNOWN (bare ident,   → "info" — visible, not scary. Better to
+  //     no decl in this TU)      occasionally downgrade a real VRAM case to
+  //                              info than to keep crying wolf on WRAM.
+  //
+  // The crash cases that MATTER (the documented memcpy_vram footgun) are
+  // pointer-to-VRAM, which the "provably VRAM" path still catches as a
+  // warning.
+  const dstClass = classifyCopyDest(lines);
   for (let i = 0; i < lines.length; i++) {
     const code = lines[i].replace(/\/\/.*$/, "").replace(/\/\*.*?\*\//g, "");
     // indexed-to-indexed copy: ident[idx] = ident[idx];  (same index token)
@@ -168,13 +185,27 @@ export function lintSdccSource(source, file = "main.c", opts = {}) {
     // Require a for-loop driving this copy (this line or the 2 above).
     const ctx = (lines[i] + "\n" + (lines[i - 1] || "") + "\n" + (lines[i - 2] || ""));
     if (!/\bfor\s*\(/.test(ctx)) continue;
+    const dst = cp[1];
+    // A VRAM-suggestive NAME promotes an otherwise-unknown dest to VRAM even
+    // with no decl in this TU (e.g. `vram_buf[i] = tiles[i];`). A declared
+    // plain array still wins as "array" (suppress) — names rarely collide.
+    const klass = dstClass.get(dst) || (isVramName(dst) ? "vram" : "unknown");
+    if (klass === "array") continue; // plain WRAM array — provably safe, suppress
+    const isVram = klass === "vram";
     issues.push({
-      severity: "warning",
+      // Provably-VRAM → warning (the crash-class footgun). Unknown bare
+      // pointer → info (visible, not "your code is broken"). Never critical:
+      // even the VRAM case only miscompiles, it isn't an unconditional hang.
+      severity: isVram ? "warning" : "info",
       file,
       line: i + 1,
       stage: "lint",
-      message: `byte-copy loop \`${cp[1]}[${idx1}] = ${cp[3]}[${idx2}]\` — miscompiles if the destination is VRAM/__xdata`,
-      details: `${portLabel} miscompiles this pattern when '${cp[1]}' points into VRAM ($8000-$9FFF) or another __xdata region — it writes through the return address and crashes the CPU (PC near $002B, sprites/tiles never show). If '${cp[1]}' is a VRAM/__xdata pointer, use \`memcpy_vram(${cp[1]}, ${cp[3]}, n)\` (in gb_runtime.c) instead. Ignore if '${cp[1]}' is plain WRAM/an array. See GB TROUBLESHOOTING § the #1 SDCC footgun.`,
+      message: isVram
+        ? `byte-copy loop \`${dst}[${idx1}] = ${cp[3]}[${idx2}]\` into VRAM/__xdata — ${portLabel} miscompiles this`
+        : `byte-copy loop \`${dst}[${idx1}] = ${cp[3]}[${idx2}]\` — safe for WRAM arrays, but miscompiles if '${dst}' points into VRAM/__xdata`,
+      details: isVram
+        ? `${portLabel} miscompiles this pattern when '${dst}' points into VRAM ($8000-$9FFF) or another __xdata region — it writes through the return address and crashes the CPU (PC near $002B, sprites/tiles never show). Use \`memcpy_vram(${dst}, ${cp[3]}, n)\` (in gb_runtime.c) instead. See GB TROUBLESHOOTING § the #1 SDCC footgun.`
+        : `If '${dst}' is a plain WRAM array (\`type ${dst}[N];\`) this is FINE — ignore. ${portLabel} only miscompiles it when '${dst}' is a pointer into VRAM ($8000-$9FFF)/__xdata, where it writes through the return address and crashes the CPU. If '${dst}' is a VRAM pointer, use \`memcpy_vram(${dst}, ${cp[3]}, n)\` instead. See GB TROUBLESHOOTING § the #1 SDCC footgun.`,
       ref: "xdata-copy-miscompile",
     });
   }
@@ -205,6 +236,90 @@ export function lintSources(sources, opts = {}) {
 }
 
 // ─── helpers ───────────────────────────────────────────────────────
+
+/**
+ * Known-VRAM symbol names (GB/GBC/SMS conventions). Case-insensitive;
+ * substring "vram" matches vram_ptr / pVRAM / VRAMbase, plus the common
+ * GB BG-map / tile-data symbols. A dest with such a name is treated as a
+ * VRAM pointer even with no visible declaration.
+ * @param {string} n
+ * @returns {boolean}
+ */
+function isVramName(n) {
+  return /vram/i.test(n) || /^(?:bgmap|tilemap|tiledata|chrram|_VRAM)/i.test(n);
+}
+
+/**
+ * Classify each identifier that is the destination of a copy loop into one
+ * of: "vram" (provably a VRAM/__xdata pointer → real crash-class footgun),
+ * "array" (declared as a plain `type name[N];` RAM array → provably safe,
+ * suppress the warning), or absent (unknown — caller treats as "info").
+ *
+ * This is a whole-TU pass: a name is classified by scanning the ENTIRE
+ * source, so a `uint8_t *dst;` decl far above the loop, or a later
+ * `dst = (uint8_t*)0x9800;` assignment, still classifies it as VRAM.
+ *
+ * Precedence: VRAM wins over array (a name that is BOTH a pointer and,
+ * say, shadowed by an array elsewhere should still be treated as the
+ * dangerous case — but in practice a single name is one or the other).
+ *
+ * @param {string[]} lines  source split into lines
+ * @returns {Map<string,"vram"|"array">}
+ */
+function classifyCopyDest(lines) {
+  /** @type {Map<string,"vram"|"array">} */
+  const klass = new Map();
+  const setVram  = (n) => { klass.set(n, "vram"); };
+  const setArray = (n) => { if (klass.get(n) !== "vram") klass.set(n, "array"); };
+
+  // A literal/cast value lands in VRAM if it's 0x8000–0x9FFF.
+  const inVramRange = (hexOrDec) => {
+    const v = /^0x/i.test(hexOrDec) ? parseInt(hexOrDec, 16) : parseInt(hexOrDec, 10);
+    return Number.isFinite(v) && v >= 0x8000 && v <= 0x9fff;
+  };
+  // Type keywords that introduce a declaration (subset is fine — we only
+  // need to tell "pointer decl" from "array decl").
+  const TYPE = "(?:unsigned\\s+|signed\\s+)?(?:char|short|int|long|void|u?int(?:8|16|32|64)_t|u8|u16|u32|u64|uint8|uint16|uint32|uint64|int8|int16|int32|int64|size_t|[A-Z][A-Za-z0-9_]*_t)";
+  const QUAL = "(?:static\\s+|const\\s+|register\\s+|volatile\\s+|extern\\s+|auto\\s+|__xdata\\s+|__at\\s*\\([^)]*\\)\\s*)*";
+  // Pointer declaration: `<quals> <type> * name`  (one or more `*`).
+  const ptrDeclRe   = new RegExp(`\\b${QUAL}${TYPE}\\s*\\*+\\s*([A-Za-z_]\\w*)`, "g");
+  // Array declaration:   `<quals> <type> name[ ... ]`  (NOT a pointer).
+  const arrDeclRe   = new RegExp(`\\b${QUAL}${TYPE}\\s+([A-Za-z_]\\w*)\\s*\\[`, "g");
+  // Pointer assigned a VRAM literal/cast:  name = (cast?) 0x8xxx/0x9xxx
+  // e.g.  dst = (uint8_t*)0x9800;   p = (void*)0x8000;   q = 0x8800;
+  const vramAssignRe = /\b([A-Za-z_]\w*)\s*=\s*(?:\([^)]*\)\s*)?(0x[0-9a-fA-F]+|\d{4,})\b/g;
+  // Pointer DECL with an inline VRAM initializer:
+  //   uint8_t *dst = (uint8_t*)0x8000;
+  const ptrInitVramRe = new RegExp(`\\b${QUAL}${TYPE}\\s*\\*+\\s*([A-Za-z_]\\w*)\\s*=\\s*(?:\\([^)]*\\)\\s*)?(0x[0-9a-fA-F]+|\\d{4,})`, "g");
+
+  for (let i = 0; i < lines.length; i++) {
+    const code = lines[i].replace(/\/\/.*$/, "").replace(/\/\*.*?\*\//g, "");
+
+    // 1) pointer decl with a VRAM-range initializer → VRAM (strongest).
+    ptrInitVramRe.lastIndex = 0;
+    for (let m; (m = ptrInitVramRe.exec(code)); ) {
+      if (inVramRange(m[2])) setVram(m[1]);
+    }
+    // 2) any name assigned a VRAM-range literal/cast → VRAM.
+    vramAssignRe.lastIndex = 0;
+    for (let m; (m = vramAssignRe.exec(code)); ) {
+      if (inVramRange(m[2])) setVram(m[1]);
+    }
+    // 3) pointer declarations → VRAM-candidate (only pointers can alias
+    //    __xdata; an indexed write through one is the documented bug).
+    ptrDeclRe.lastIndex = 0;
+    for (let m; (m = ptrDeclRe.exec(code)); ) setVram(m[1]);
+    // 4) plain array declarations → safe RAM array (unless already VRAM).
+    arrDeclRe.lastIndex = 0;
+    for (let m; (m = arrDeclRe.exec(code)); ) setArray(m[1]);
+  }
+
+  // 5) name-based VRAM override: any dest named like VRAM is VRAM even if
+  //    it was (mis)classified as an array by a same-named decl elsewhere.
+  for (const n of klass.keys()) if (isVramName(n)) setVram(n);
+
+  return klass;
+}
 
 /**
  * Detect mid-block variable declarations (C89 violation). Simple state
