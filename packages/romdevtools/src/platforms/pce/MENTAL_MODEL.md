@@ -12,10 +12,15 @@ romdev ships a **hardware helper library** (`src/platforms/pce/lib/c/`:
 `psg_tone()` instead of poking VDC/VCE registers by hand. cc65 has **no** sprite
 library, so this lib is how you get pixels on screen.
 
-The fastest way to a working game: **`scaffold({op:'project', platform: "pce", template:
-"sprite_move"})`** (also `music_sfx`, `catch_game`). It drops a complete,
-*building* project — a verified playable example + the helper lib + docs. Read
-the example's `main.c`, then change it. The examples live in `examples/pce/`.
+The fastest way to a working game: **`scaffold({op:'game', platform: "pce", genre:
+"shmup"})`** — or any of `platformer` / `puzzle` / `sports` / `racing`, the full
+genre set. For a smaller starting point use **`scaffold({op:'project', platform:
+"pce", template: "sprite_move"})`** (also `music_sfx`, `catch_game`). Either drops
+a complete, *building* project — a verified playable example + the helper lib +
+docs. Read the example's `main.c`, then change it. The examples live in
+`examples/pce/`. The genre scaffolds fill the BAT (32×32 virtual screen); the
+`platformer` smooth-scrolls the background via the VDC BXR (R7) register.
+**Gotcha:** `#include <stdint.h>` for int8/16/32_t — `pce.h` only typedefs u8/u16.
 
 ## CPU — HuC6280 (a 65C02 superset)
 
