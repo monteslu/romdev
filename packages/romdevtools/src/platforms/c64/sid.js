@@ -29,8 +29,6 @@
 //   $D41B     voice 3 OSC3 readback
 //   $D41C     voice 3 ENV3 readback
 
-const WAVEFORMS = ["none", "triangle", "sawtooth", "tri+saw", "pulse", "tri+pulse", "saw+pulse", "tri+saw+pulse", "noise"];
-
 function decodeControl(byte) {
   // Decode the waveform field (top 4 bits) as a name where possible.
   const wfBits = (byte >> 4) & 0x0F;

@@ -235,14 +235,16 @@ export const ATARI7800_REGISTERS = {
   0x2E: "P3C1",      0x2F: "P3C2",      0x30: "P3C3",
   0x32: "P4C1",      0x33: "P4C2",      0x34: "P4C3",
   0x36: "P5C1",      0x37: "P5C2",      0x38: "P5C3",
-  0x3A: "P6C1",      0x3B: "P6C2",      0x3C: "P6C3",
+  0x3A: "P6C1",      0x3B: "P6C2",
+  // $3C is BOTH the MARIA control reg (CTRL) and P6C3 depending on the
+  // reference's naming convention — a JS object holds one value per key, so
+  // name it for both rather than silently dropping one.
+  0x3C: "CTRL/P6C3",
   0x3E: "P7C1",      0x3F: "P7C2",      // P7C3 lives at $40 in some refs
   // DPP (display-list pointer) lives at $84/$85
   0x84: "DPPH",      0x85: "DPPL",
   0x87: "CHARBASE",
   0x88: "OFFSET",
-  // MARIA control reg
-  0x3C: "CTRL",      // overlaps with P6C3 — convention varies; tag both
   // RIOT (6532) regs at $280
   0x0280: "SWCHA",   0x0281: "SWACNT",  0x0282: "SWCHB",   0x0283: "SWBCNT",
   0x0284: "INTIM",

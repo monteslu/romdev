@@ -16,7 +16,6 @@
 // dev wiki (citations inline).
 
 import { readFile, writeFile } from "node:fs/promises";
-import { jsonContent, safeTool } from "../util.js";
 
 // ───────────────────────────────────────────────────────────────────────────
 // Pointer encoding per platform.

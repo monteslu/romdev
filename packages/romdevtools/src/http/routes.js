@@ -18,7 +18,7 @@
 // (the app already mounts localhostHostValidation()).
 
 import { buildToolRegistry, runTool, toolJsonSchema } from "./tool-registry.js";
-import { skillPreamble, skillToolReference, buildSkillDoc } from "./skill-doc.js";
+import { buildSkillDoc } from "./skill-doc.js";
 import { swaggerHtml, swaggerAsset } from "./swagger.js";
 import { observer } from "../observer/bus.js";
 import { log } from "../mcp/log.js";

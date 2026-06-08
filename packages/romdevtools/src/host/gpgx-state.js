@@ -17,7 +17,11 @@ const formatCpuState = (s) => s;
 // entry is 5 × 4 = 20 bytes, so memory_map takes 256 × 20 = 5120 bytes.
 // After that come the fields we want.
 const M68K_BASE = 5120; // start of cpu_idle_t poll
+// M68K_POLL / M68K_CYCLES document the struct layout (consumed implicitly by the
+// next offset) — keep them named even though nothing reads them directly.
+// eslint-disable-next-line no-unused-vars
 const M68K_POLL = M68K_BASE + 0;       // 12 bytes
+// eslint-disable-next-line no-unused-vars
 const M68K_CYCLES = M68K_BASE + 12;    // 12 bytes (cycles + refresh_cycles + cycle_end)
 const M68K_DAR = M68K_BASE + 24;       // uint dar[16] — D0..D7 then A0..A7
 const M68K_PC = M68K_DAR + 64;         // uint pc

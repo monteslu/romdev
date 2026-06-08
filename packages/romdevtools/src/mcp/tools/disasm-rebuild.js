@@ -135,7 +135,7 @@ const PLANNERS = {
   // a one-call build() rebuild. planRegions strips the 2-byte load address
   // (fileOffset 2); we re-emit it via a synthesized LOADADDR segment + a custom
   // 2-area .cfg (LOADADDR then the body). PROVEN byte-identical via build().
-  c64(data, regions) {
+  c64(data, _regions) {
     const loadAddr = data[0] | (data[1] << 8);
     const bodyLen = data.length - 2;
     const loadaddrSrc =

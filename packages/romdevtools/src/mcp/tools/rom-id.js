@@ -1,5 +1,5 @@
 import { imageContent, jsonContent, safeTool } from "../util.js";
-import { intentZod, resolveIntent } from "../../platforms/common/intent.js";
+import { resolveIntent } from "../../platforms/common/intent.js";
 import { getDefaultPalette, DEFAULT_PALETTES } from "../../platforms/common/default-palette.js";
 import { spliceChrCore } from "./splice-chr.js";
 import { relocateBlockCore, makeStoredBlockCore, findPointerToCore, PLATFORM_REGISTRY } from "./reinject.js";
@@ -65,7 +65,7 @@ export async function gbHeaderCore({ path: inPath, outputPath, cgb, title, cartT
   };
 }
 
-export function registerRomIdTools(server, z, sessionKey) {
+export function registerRomIdTools(server, z, _sessionKey) {
   // identifyRom folded into `cart`; patchFile/patchRom/spliceCHR/relocate/etc.
   // folded into the `romPatch` tool (router below).
   const PLATFORMS = Object.keys(PLATFORM_REGISTRY);

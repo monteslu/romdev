@@ -16,7 +16,7 @@
 // in findEncodedText (NES/GB/GBC bank-aware, Genesis flat; SNES is mapper-
 // dependent and left to fileOffset).
 
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { jsonContent, safeTool } from "../util.js";
 import { getHost } from "../state.js";
 

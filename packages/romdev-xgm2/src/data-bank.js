@@ -1,7 +1,5 @@
 // Port of sgdk.xgm2tool.format.DataBank — a VGM data-block sample bank.
 
-import { VGMCommand } from "./vgm-command.js";
-
 export class DataBank {
   /**
    * @param {VGMCommand} command

@@ -17,7 +17,7 @@
 // This module is platform-agnostic: each toolchain passes in how to hash its
 // source, where its seed lives, and how to compile from source.
 
-import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import os from "node:os";

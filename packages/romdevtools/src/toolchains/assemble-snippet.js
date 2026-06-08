@@ -25,7 +25,7 @@ import { runCa65, runLd65 } from "./cc65/cc65.js";
 import { runAsar } from "./asar/asar.js";
 import { runVasm68k } from "./vasm68k/vasm68k.js";
 import { runSdasz80, runSdld, ihxToBin } from "./sdcc/sdcc.js";
-import { runRgbasm, runRgblink, runRgbfix } from "./rgbds/rgbds.js";
+import { runRgbasm, runRgblink } from "./rgbds/rgbds.js";
 import { parseBuildLog } from "./parse-errors.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -251,8 +251,7 @@ async function assembleSdcc({ origin, code }) {
 async function assembleRgbds({ origin, code }) {
   // rgbasm needs SECTION declarations to place code at an address.
   const sectionAt = `$${origin.toString(16).toUpperCase()}`;
-  const source = `SECTION "snippet", ROMX[${sectionAt}], BANK[0]\n${code}\n`;
-  // Actually GB has no BANK[0] for fixed ROM — use ROM0 if origin < 0x4000.
+  // GB has no BANK[0] for fixed ROM — use ROM0 if origin < 0x4000, else ROMX BANK[1].
   const useRom0 = origin < 0x4000;
   const realSource = useRom0
     ? `SECTION "snippet", ROM0[${sectionAt}]\n${code}\n`

@@ -17,9 +17,6 @@ import { createRequire } from "node:module";
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 
-// One-pixel solid-black RGBA buffer; we stretch it across the letterbox
-// bars each frame so they don't smear with leftover pixels.
-const BLACK_PIXEL = Buffer.from([0, 0, 0, 0xFF]);
 
 /**
  * Choose a default window title from the loaded host. Prefers the loaded
@@ -794,10 +791,6 @@ export async function playtest(args) {
       };
     },
   };
-}
-
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
 }
 
 function bitToName(bit) {

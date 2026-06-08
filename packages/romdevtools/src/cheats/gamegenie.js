@@ -446,7 +446,6 @@ export function decodeWithDevice(code, platform) {
 
 /** Format a raw ADDR:VAL[:COMPARE] code from decoded parts (hex, no 0x). */
 export function encodeRaw({ address, value, compare }) {
-  const h = (n, w) => (n & ((1 << (4 * w)) - 1) >>> 0).toString(16).toUpperCase().padStart(w, "0");
   const addrHex = (address >>> 0).toString(16).toUpperCase();
   const valHex = (value & 0xFF).toString(16).toUpperCase().padStart(2, "0");
   return compare != null

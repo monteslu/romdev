@@ -1528,7 +1528,7 @@ export class VGM {
     const maxDelta = Math.floor(Math.floor(44100 / this.rate) / 4);
     const keyOffTime = new Array(6);
     const keyOnTime = new Array(6);
-    let frame, i;
+    let i;
 
     delayedCommands.length = 0;
     for (i = 0; i < 6; i++) {
@@ -1537,7 +1537,6 @@ export class VGM {
     }
 
     // this method should be called after waits has been converted to frame wait
-    frame = 0;
     let ind = 0;
     while (ind < this.commands.length) {
       const command = this.commands[ind];
@@ -1557,8 +1556,6 @@ export class VGM {
           keyOffTime[i] = -1;
           keyOnTime[i] = -1;
         }
-
-        frame++;
       } else {
         if (command.isYM2612KeyWrite()) {
           const ch = command.getYM2612Channel();

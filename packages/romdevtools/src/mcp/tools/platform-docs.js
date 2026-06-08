@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { readFile, stat } from "node:fs/promises";
 
-import { jsonContent, safeTool, textContent } from "../util.js";
+import { jsonContent } from "../util.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

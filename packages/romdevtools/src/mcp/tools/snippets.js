@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { readdir, readFile, stat, mkdir, writeFile } from "node:fs/promises";
 
-import { jsonContent, safeTool, textContent, writeOutput } from "../util.js";
+import { jsonContent, textContent, writeOutput } from "../util.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -87,7 +87,7 @@ async function listSnippetsForPlatform(platform) {
   return out;
 }
 
-export function registerSnippetTools(server, z) {
+export function registerSnippetTools(_server, _z) {
   // ── Shared implementations for the three snippet modes ──────────
   async function snippetsList(platform, language) {
     const all = await listSnippetsForPlatform(platform);

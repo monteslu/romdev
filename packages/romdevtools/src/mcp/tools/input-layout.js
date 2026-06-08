@@ -3,7 +3,6 @@
 // know exactly what each bit/id means.
 
 import { FACE_BUTTON_MAP } from "../../host/types.js";
-import { jsonContent, safeTool } from "../util.js";
 
 const HARDWARE_LAYOUTS = {
   nes: {

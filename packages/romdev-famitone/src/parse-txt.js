@@ -1230,7 +1230,7 @@ function readQuotedTag(S, tag) {
  * @param {number} channels
  * @returns {{speed:number,tempo:number,pattern_length:number,order_length:number,order_loop:number,pattern:PatternStruct[]}}
  */
-function snapshotSong(so, channels) {
+function snapshotSong(so, _channels) {
   const pattern = new Array(so.order_length);
   for (let pos = 0; pos < so.order_length; ++pos) {
     const srcP = so.pattern[pos];

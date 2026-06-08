@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { PNG } from "pngjs";
 import { genesisImageToTilemap } from "./image-to-tilemap.js";
-import { decode4bppTile, decodeGenesisSubpalette, rgbToGenesisColor } from "./vdp.js";
+import { decode4bppTile, decodeGenesisSubpalette } from "./vdp.js";
 
 // Build a 320×224 PNG from a per-pixel color function (RGB triples).
 function makePng(fn) {
@@ -52,8 +52,7 @@ test("round-trips a 16-color image: decoded tiles reproduce source colors", () =
   const png = makePng((x, y) => colors[((x >> 3) % 2) + ((y >> 3) % 2) * 2]);
   const r = genesisImageToTilemap({ pngBytes: png });
 
-  // Decode palette line 0 and tile 0.
-  const pal0 = decodeGenesisSubpalette(r.palette.subarray(0, 32), 0);
+  // Decode tile 0.
   const tile0 = decode4bppTile(r.chr.subarray(0, 32));
   const entry0 = (r.nametable[0] << 8) | r.nametable[1];
   const line0 = (entry0 >> 13) & 0x3;
@@ -89,8 +88,6 @@ test("packed 4bpp layout: high nibble = left pixel", () => {
   // Use only 2 colors so they share one palette line; force white=index!=0.
   const png = makePng((x) => (x % 2 === 0 ? [255, 255, 255] : [0, 0, 0]));
   const r = genesisImageToTilemap({ pngBytes: png });
-  // Find the white index in line 0.
-  const whiteWord = rgbToGenesisColor(255, 255, 255);
   // The encoded byte for any row: high nibble = white index, low = black index.
   // Just assert the high and low nibbles differ (the left/right packing held).
   const b = r.chr[0];

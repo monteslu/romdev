@@ -131,7 +131,6 @@ function extractNes(data) {
  */
 function extractSnes(data) {
   const copierOff = (data.length % 0x8000 === 0x200) ? 0x200 : 0;
-  const loMapper = data[copierOff + 0x7FC0 + 0x15];
   const hiMapper = data[copierOff + 0xFFC0 + 0x15];
   const isLo = !(hiMapper === 0x21 || hiMapper === 0x31);
   const internalHeaderBase = copierOff + (isLo ? 0x7FC0 : 0xFFC0);

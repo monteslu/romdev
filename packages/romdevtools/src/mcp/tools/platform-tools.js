@@ -6,7 +6,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { PNG } from "pngjs";
 import { getHost } from "../state.js";
-import { imageContent, jsonContent, safeTool, textContent } from "../util.js";
+import { imageContent, jsonContent } from "../util.js";
 
 // Consolidation: several handlers in this big shared file are extracted as
 // *Core functions that the consolidated domain tools (palette/tiles/background/
@@ -37,10 +37,10 @@ import { getNesApuState } from "../../host/nes-apu-state.js";
 import { decodeGenesisPSG, decodeGenesisYM2612 } from "../../host/gpgx-state.js";
 import { decodeGbApu, decodeGbaApu } from "../../host/gb-apu-state.js";
 import { decodeC64Sid } from "../../host/c64-sid-state.js";
-import { decodeLynxMikey, decodeLynxPalette, decodeLynxRenderingContext } from "../../host/lynx-mikey-state.js";
+import { decodeLynxMikey, decodeLynxPalette } from "../../host/lynx-mikey-state.js";
 import { getPcePsgState } from "../../host/pce-psg-state.js";
 import { getMsxAyState } from "../../host/msx-ay-state.js";
-import { decodeGbaSprites, decodeGbaPalette, decodeGbaRenderingContext } from "../../host/gba-video-state.js";
+import { decodeGbaSprites, decodeGbaPalette } from "../../host/gba-video-state.js";
 
 /** Resolve the platform to inspect: explicit arg → currently loaded host. */
 function resolvePlatform(host, requested) {
@@ -119,7 +119,7 @@ export function registerPlatformTools(server, z, sessionKey) {
         // SMS tiles live in VRAM at runtime — the cart has no fixed CHR
         // region. Render all 448 tiles (the entire 16KB VRAM mapped to
         // tiles), using the live first-BG-palette so colors look right.
-        const { snapshotPatternTiles, snapshotPalette } = await import("../../platforms/sms/vdp.js");
+        const { snapshotPalette } = await import("../../platforms/sms/vdp.js");
         const { colors } = snapshotPalette(host, p);
         // Use BG palette (entries 0..15) for rendering.
         const bgPal = colors.slice(0, 16).map((c) => [c.r, c.g, c.b]);

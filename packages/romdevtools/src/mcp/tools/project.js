@@ -8,7 +8,6 @@
 // the project elsewhere and rebuild with cc65/sdcc directly, every byte
 // that compiles is in the directory.
 
-import { readFile, writeFile } from "node:fs/promises";
 import { jsonContent, safeTool } from "../util.js";
 import { starterSnippetsCore, copyStarterSnippetsCore } from "./snippets.js";
 
@@ -1776,7 +1775,6 @@ Compiles **C89**, not C99/C11. Stick to:
   // runtime tmpl.runtime list typically includes them) are skipped.
   const snippetFiles = [];
   if (withSnippets) {
-    const { listSnippetsForPlatform } = await import("./snippets.js").catch(() => ({}));
     // Inline minimal duplicate of listSnippetsForPlatform since snippets.js
     // doesn't export it. Keep this in sync with snippets.js.
     const LIB_DIR = path.join(PLATFORM_LIB_DIR, "lib");

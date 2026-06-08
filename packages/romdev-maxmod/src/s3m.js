@@ -585,7 +585,7 @@ function Load_S3M(r, fixSample) {
   r.skip8(8 + 2); // reserved space + special pointer
 
   /** @type {boolean[]} */
-  const chan_enabled = new Array(32).fill(false); // eslint-disable-line no-unused-vars
+  const chan_enabled = new Array(32).fill(false);
   for (let x = 0; x < 32; x++) {
     const chn = r.read8();
     chan_enabled[x] = (chn >> 7) !== 0;

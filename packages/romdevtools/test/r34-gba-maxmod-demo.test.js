@@ -9,7 +9,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFile, existsSync as _existsSync } from "node:fs";
+import { existsSync as _existsSync } from "node:fs";
 import { promises as fs } from "node:fs";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";

@@ -5,7 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildC, buildAsm } from "./cc65.js";
+import { buildC } from "./cc65.js";
 
 const HELLO_NES_C = `
 #include <nes.h>

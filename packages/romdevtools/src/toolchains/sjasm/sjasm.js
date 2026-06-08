@@ -5,7 +5,7 @@
 // #include that generated .h. Built by scripts/build-sjasm.sh.
 
 import { fileURLToPath } from "node:url";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import path from "node:path";
 
 const __filename = fileURLToPath(import.meta.url);

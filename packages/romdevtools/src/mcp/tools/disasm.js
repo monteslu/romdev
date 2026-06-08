@@ -208,7 +208,6 @@ function nesVectors(data) {
  */
 function snesVectors(data) {
   const copierOff = (data.length % 0x8000 === 0x200) ? 0x200 : 0;
-  const loMapper = data[copierOff + 0x7FC0 + 0x15];
   const hiMapper = data[copierOff + 0xFFC0 + 0x15];
   const isLo = !(hiMapper === 0x21 || hiMapper === 0x31);
   const headerBase = copierOff + (isLo ? 0x7FC0 : 0xFFC0);
@@ -513,7 +512,7 @@ export function mapGenesisAddress(data, cpuAddr, length) {
  *   48 KB: $4000-$FFFF (rare)
  *   144 KB SuperGame: bank-switched at $8000-$BFFF + fixed at $C000
  */
-export function mapAtari7800Address(data, cpuAddr, length, bank = 0) {
+export function mapAtari7800Address(data, cpuAddr, length, _bank = 0) {
   // Detect header. "ATARI7800" magic at offset 1.
   const hasHeader =
     data.length > 128 &&
@@ -557,7 +556,7 @@ export function mapAtari7800Address(data, cpuAddr, length, bank = 0) {
  * docs); not implemented here — pass `bank` instead and call with the raw
  * binary if you're hand-mapping.
  */
-export function mapC64Address(data, cpuAddr, length, bank = 0) {
+export function mapC64Address(data, cpuAddr, length, _bank = 0) {
   // Detect .prg by reading the load address and seeing if it makes sense.
   // (Anything is a valid load addr in theory, so we just trust the first
   // 2 bytes here.)
