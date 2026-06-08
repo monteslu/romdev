@@ -4,6 +4,71 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.23.0
+
+Response to two real build-session feedback reports (a GBC Columns clone + a
+Genesis Uridium POC). Theme: bugs found, false alarms removed, and — the recurring
+finding — **tools that already existed but agents couldn't find them**.
+
+### Fixed — multi-tenant host cross-talk (a whole class of bugs)
+`sprites({op:'inspect', platform:'genesis'})` returned a *GBC*-flavored error while
+Genesis was loaded. Root cause: `inspectSpritesCore` / `getCPUStateCore` /
+`getAudioStateCore` / `inspectBackgroundMapCore` / `inspectPatternTilesCore` were
+module-global `export let` bindings reassigned per session, each closing over THAT
+registration's `sessionKey` — so the last session to register stole the host for
+everyone. Now the caller's `sessionKey` is threaded through. Verified on all 7
+tile-based sprite platforms with sessions live simultaneously.
+
+### Fixed — SMS/GG C crt0: `static x = N;` initializers booted to 0
+Investigating two reported "silent sm83 miscompiles" (32-bit xorshift, indexed
+loop): NEITHER reproduces on GB/GBC — both produce byte-exact output. The real bug
+was a genuine **z80 crt0 defect**: `sms_crt0.s`/`gg_crt0.s` placed `_INITIALIZER`
+in RAM not ROM, so the gsinit `ldir` copied RAM onto itself → every value-static
+booted 0 and BSS wasn't zeroed. Fixed both (mirrors the correct `gb_crt0.s`).
+Re-verified all SMS/GG scaffolds still build clean + render.
+
+### Changed — lint stops crying wolf on WRAM copies
+The SDCC `xdata-copy-miscompile` warning fired on EVERY `dst[i]=src[i]` loop,
+including plain WRAM arrays (the message even said "ignore if plain WRAM") —
+training agents to ignore lint. Now: provably-VRAM dest → warning, plain RAM array
+→ suppressed, unknown → info. (Deliberately did NOT add the requested 32-bit-shift
+/ short-loop lint heuristics — they'd be false positives for non-bugs.)
+
+### Added — feedback ergonomics
+- **`frame({op:'screenshot', scale})` up-scales** (integer ≥2, nearest-neighbor)
+  for legible handheld shots (GB 160×144 → 640×576 at `scale:4`), plus the
+  existing `0<scale<1` downscale. All platforms.
+- **Cheap symbol→address:** `symbols({op:'resolve', dbgPath|mapPath, name})` reads
+  the map FILE on disk (no 63 KB round-trip through context); `build({output:
+  'romWithDebug', resolveSymbols:[...]})` folds just those addresses into the
+  result. cc65 `.dbg` / sdld `.map` / GNU ld `.map`.
+
+### Added — Genesis feel/perf diagnostics
+- **`watch({on:'dma', perFrame:true})`** — per-frame DMA-bytes timeline + spike
+  detection (catches "rewriting tilemaps in the frame loop", the #1 Genesis feel
+  bug). A hardware-scroll scaffold settles to a flat ~8 bytes/frame.
+- **`scaffold` template `two_plane_parallax`** — plane-A foreground + plane-B
+  repeated starfield + player sprite, hardware scroll only, zero loop-time tilemap
+  writes. Builds clean, renders, scrolls (verified).
+- Genesis MENTAL_MODEL/TROUBLESHOOTING: "do NOT rewrite tilemaps in the frame
+  loop", logical-vs-hardware plane size, the correct parallax loop, Sonic-style
+  column streaming, and a "why does movement feel choppy?" recipe.
+
+### Changed — discoverability (the recurring root cause)
+Several feedback "feature asks" were tools that already existed. `recordSession`
+(motion/telemetry timeline) was mislabeled in the catalog as "capture inputs for
+replay"; relabeled. New AGENTS.md "Diagnosing behavior over time (game-feel)"
+section maps symptom → existing tool (choppy movement → `recordSession`/`watch`
+series on scroll+sprite; wrong-but-clean value → `resolveSymbols` + `memory` read;
+can't-read-the-BG → `background({view:'map'})` + `screenshot scale:4`).
+
+### Other
+- `build({output:'project', path})` already defaults the gb/gbc/sms/gg/msx crt0 +
+  codeLoc — documented (the GBC agent was hand-passing them to `output:'rom'`).
+- P4 doc + a new info-level `wram-static-overlap` lint advisory (hardcoded
+  `$C000–$C0FF` pointer overlapping SDCC's static-data segment — the actual cause
+  of the reporter's "monochrome RNG").
+
 ## 0.22.1
 
 Doc-only follow-up to 0.22.0's movement-analysis feedback: the `pressDuring`
