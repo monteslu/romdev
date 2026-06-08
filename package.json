@@ -9,11 +9,18 @@
   ],
   "scripts": {
     "test": "npm test --workspaces --if-present",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "publish-all": "node publish-all.mjs",
     "publish-all:dry": "node publish-all.mjs --dry-run"
   },
   "engines": {
     "node": ">=24"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.4.1",
+    "globals": "^17.6.0"
+  }
 }
