@@ -277,7 +277,7 @@ export function registerTileInspectTools(server, z, sessionKey) {
             if (!args.platform) throw new Error("tiles({op:'png'}) with `path`: `platform` is required for file extraction.");
             return await extractSpriteSheetCore({ ...args, count: args.count || 256 }, sessionKey);
           }
-          return await inspectPatternTilesCore(args);
+          return await inspectPatternTilesCore(args, sessionKey);
         }
         case "preview": {
           const r = await previewTileArtCore({ ...args, sessionKey });

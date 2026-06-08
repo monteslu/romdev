@@ -913,7 +913,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     },
     safeTool(async (args) => {
       switch (args.op) {
-        case "read":     return await getCPUStateCore(args);
+        case "read":     return await getCPUStateCore(args, sessionKey);
         case "setReg": {
           if (args.regId == null || args.value == null) throw new Error("cpu({op:'setReg'}): `regId` and `value` are required.");
           return await cpuSetReg(args);

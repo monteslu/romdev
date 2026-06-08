@@ -380,7 +380,7 @@ export function registerAudioTools(server, z, sessionKey) {
         if (args.frames != null && args.frames > 0) {
           return await traceAudioChip(sessionKey, args);
         }
-        return await getAudioStateCore(args);
+        return await getAudioStateCore(args, sessionKey);
       }
       if (args.op !== "record") throw new Error(`audioDebug: unknown op '${args.op}'`);
       if (!args.path) throw new Error("audioDebug({op:'record'}): `path` is required.");
@@ -485,7 +485,7 @@ async function traceAudioChip(sessionKey, { chip, platform, frames, sampleEvery 
 
   // getAudioStateCore returns jsonContent({...}); pull the structured object.
   const decode = async () => {
-    const r = await getAudioStateCore({ chip, platform });
+    const r = await getAudioStateCore({ chip, platform }, sessionKey);
     const txt = r.content?.find?.((c) => c.type === "text")?.text;
     return txt ? JSON.parse(txt) : {};
   };

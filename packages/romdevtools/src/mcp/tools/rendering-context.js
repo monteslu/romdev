@@ -823,7 +823,7 @@ export function registerRenderingContextTools(server, z, sessionKey) {
     },
     safeTool(async (args) => {
       switch (args.view) {
-        case "map":         return await inspectBackgroundMapCore(args);
+        case "map":         return await inspectBackgroundMapCore(args, sessionKey);
         case "renderState": {
           // Pass sessionKey through so getRenderingContextCore can resolve the
           // per-session host (round 26 fix; was `sessionKey is not defined`).

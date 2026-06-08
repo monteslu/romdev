@@ -221,7 +221,7 @@ export function registerMetaSpriteTools(server, z, sessionKey) {
     },
     safeTool(async (args) => {
       switch (args.op) {
-        case "inspect":           return await inspectSpritesCore(args);
+        case "inspect":           return await inspectSpritesCore(args, sessionKey);
         case "group":             return await spritesGroup(sessionKey, args);
         case "preview":           return await spritesPreview(sessionKey, args);
         case "capture":           return await spritesCapture(sessionKey, { ...args, name: args.name ?? "metasprite" });
