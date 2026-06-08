@@ -100,8 +100,9 @@ static void spawn(void) {
 
 static void upload_tile(uint8_t slot, const uint8_t *src) {
     uint8_t *dst = (uint8_t *)(0x8000 + slot * 16);
-    uint8_t i;
-    for (i = 0; i < 16; i++) dst[i] = src[i];
+    /* memcpy_vram (pointer-walk) — NOT an indexed dst[i]=src[i] loop, which
+     * SDCC sm83 miscompiles when dst points into VRAM ($8000-$9FFF). */
+    memcpy_vram(dst, src, 16);
 }
 
 /* Paint a starfield into BG map 0 ($9800): fill the visible 20×18 with the

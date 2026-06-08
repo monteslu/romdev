@@ -268,8 +268,10 @@ async function buildWithSgdk({ sources, headers, binaryIncludes, cc1Options, reb
   // implicit decls, …) parsed into structured issues[]. The SGDK runtime is
   // compiled WITHOUT these (sgdkCc1Options) — we can't fix SDK warnings and they'd
   // bury the agent's own. -Wno-unused-parameter avoids the common `(void)hard`
-  // scaffold-param noise.
-  const userCc1Options = [...sgdkCc1Options, "-Wall", "-Wextra", "-Wno-unused-parameter"];
+  // scaffold-param noise. -Wno-main: SGDK MANDATES `int main(bool hardReset)`
+  // (sys.c declares it and calls main(TRUE)/main(FALSE)); GCC's -Wmain objects to
+  // the non-standard signature, but it's REQUIRED here, not a bug — so silence it.
+  const userCc1Options = [...sgdkCc1Options, "-Wall", "-Wextra", "-Wno-unused-parameter", "-Wno-main"];
 
   // ── Stage A: gather SGDK headers (visible to tcc via tcc-style flat mount) ──
   // cc1's -iquote /work picks up sibling files mounted alongside main.c.

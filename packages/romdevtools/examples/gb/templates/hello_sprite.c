@@ -60,9 +60,9 @@ void main(void) {
    * accidentally render garbage tiles that point to it. */
   vram_dst = (uint8_t *)0x8010;
   src = tile_data;
-  for (i = 0; i < 16; i++) {
-    vram_dst[i] = src[i];
-  }
+  /* memcpy_vram (pointer-walk) — NOT an indexed vram_dst[i]=src[i] loop, which
+   * SDCC sm83 miscompiles when the dest points into VRAM ($8000-$9FFF). */
+  memcpy_vram(vram_dst, src, 16);
 
   /* ── 3. Object palette 0 (CGB path) ──────────────────────────────
    * OCPS bit 7 = auto-increment after each write; bits 5..3 = palette

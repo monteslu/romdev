@@ -33,10 +33,13 @@ extern void    gg_sat_upload(void);
 #define VIS_X1         207   /* 48 + 160 - 1 */
 #define VIS_Y1         167   /* 24 + 144 - 1 */
 
-#define LANE_LEFT_X    (VIS_X0 + 28)    /* 76  */
-#define LANE_MID_X     ((VIS_X0 + VIS_X1) / 2 - 4)  /* ~123 */
-#define LANE_RIGHT_X   (VIS_X1 - 36)    /* 171 */
-#define PLAYER_Y       (VIS_Y1 - 16)
+/* Explicit (uint8_t) casts: the computed int expressions all fit in a byte,
+ * but SDCC warns (158) on the implicit int->uint8_t narrowing in the const
+ * initializers below unless the conversion is spelled out. */
+#define LANE_LEFT_X    ((uint8_t)(VIS_X0 + 28))           /* 76  */
+#define LANE_MID_X     ((uint8_t)((VIS_X0 + VIS_X1) / 2 - 4))  /* ~123 */
+#define LANE_RIGHT_X   ((uint8_t)(VIS_X1 - 36))           /* 171 */
+#define PLAYER_Y       ((uint8_t)(VIS_Y1 - 16))
 #define MAX_OBSTACLES   4
 
 /* GG palette = 32 entries × 2 bytes (4-4-4 BGR LE): low=(g<<4)|r, high=b.

@@ -127,10 +127,10 @@ void oam_dma_init_hram(void) {
     0x20, 0xFD,             /* jr nz, -3    ─┘  spin while a != 0 */
     0xC9,                   /* ret */
   };
-  uint8_t i;
-  for (i = 0; i < sizeof(stub); i++) {
-    HRAM_DMA_STUB[i] = stub[i];
-  }
+  /* Use the pointer-walk memcpy_vram (not an indexed dst[i]=src[i] loop):
+   * SDCC sm83 miscompiles the indexed form into a high-pointer like
+   * HRAM_DMA_STUB ($FF80). memcpy_vram does *d++=*s++, which is safe. */
+  memcpy_vram(HRAM_DMA_STUB, stub, sizeof(stub));
 }
 
 /* OAM DMA — copy 160 bytes from `src` to OAM ($FE00-$FE9F) via the

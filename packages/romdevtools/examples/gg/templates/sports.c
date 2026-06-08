@@ -30,8 +30,11 @@ extern void    gg_sat_upload(void);
 #define COURT_BOT   VIS_Y1
 #define PADDLE_H    24
 #define BALL_SIZE   8
-#define PADDLE_X1   (VIS_X0 + 8)    /* near the visible left edge   */
-#define PADDLE_X2   (VIS_X1 - 16)   /* near the visible right edge  */
+/* Explicit (uint8_t) casts: these fit a byte but SDCC warns (158) on the
+ * implicit int->uint8_t narrowing when the computed macro is passed to the
+ * uint8_t x/y args of gg_sprite_set. */
+#define PADDLE_X1   ((uint8_t)(VIS_X0 + 8))    /* near the visible left edge   */
+#define PADDLE_X2   ((uint8_t)(VIS_X1 - 16))   /* near the visible right edge  */
 
 /* GG palette = 32 entries × 2 bytes (4-4-4 BGR LE): low=(g<<4)|r, high=b.
  * gg_load_palette reads 64 bytes; a 32-byte array leaves the sprite palette
@@ -127,8 +130,9 @@ void main(void) {
   reset_match();
 
   do {
-    uint8_t p1, p2;
+    uint8_t p1;
     uint8_t slot;
+    int16_t target;
     gg_vblank_wait();
     sfx_update();
 
@@ -145,20 +149,14 @@ void main(void) {
     gg_sat_upload();
 
     p1 = gg_joypad_read();
-    p2 = 0;  /* GG has only one controller — always AI for the right paddle */
 
     if ((p1 & JOY_UP)   && p1y > COURT_TOP)            p1y -= 2;
     if ((p1 & JOY_DOWN) && p1y < COURT_BOT - PADDLE_H) p1y += 2;
 
-    /* P2 input if any, otherwise AI. */
-    if (p2 != 0) {
-      if ((p2 & JOY_UP)   && p2y > COURT_TOP)            p2y -= 2;
-      if ((p2 & JOY_DOWN) && p2y < COURT_BOT - PADDLE_H) p2y += 2;
-    } else {
-      int16_t target = by - PADDLE_H / 2;
-      if (p2y < target && p2y < COURT_BOT - PADDLE_H) p2y += 1;
-      else if (p2y > target && p2y > COURT_TOP)       p2y -= 1;
-    }
+    /* GG has only one controller — the right paddle is always AI. */
+    target = by - PADDLE_H / 2;
+    if (p2y < target && p2y < COURT_BOT - PADDLE_H) p2y += 1;
+    else if (p2y > target && p2y > COURT_TOP)       p2y -= 1;
 
     if (serve_timer > 0) {
       serve_timer--;
