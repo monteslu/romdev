@@ -319,13 +319,59 @@ incorrectly aligned."
     onChange:"reset", outputPath:...})` logs each note onset, or
     `recordSession({memorySamples:[{region:"nes_apu_regs",...}], sampleEvery:1,
     memoryOutputPath:...})` streams per-frame samples to disk.
-- Mapper support — only NROM-256 (32 KB PRG, no banks) is wired. For
-  MMC1/MMC3/UNROM you'll need a different linker config.
+- Mapper support — the homebrew presets target NROM (no PRG banking). For
+  MMC1/MMC3/UNROM you'll need a different linker config. (For *rebuilding* an
+  existing CHR-ROM NROM game byte-identical, see "Rebuilding a CHR-ROM NROM
+  image" below — `inesHeader` / the `chr-rom` preset / `disasm({target:'project'})`.)
 - IRQ — the IRQ vector returns. Most NES games use a custom IRQ
   handler for mid-frame scroll splits; you'll need to write that asm.
 - Multi-screen scrolling — the runtime sets one nametable; for big
   scrolling worlds you need to manage the nametable buffer + bank
   switching yourself.
+
+## Rebuilding a CHR-ROM NROM image (reverse-engineering)
+
+The homebrew presets above are CHR-**RAM** (the CPU uploads tiles at runtime).
+Most *commercial* games are CHR-**ROM**: an 8 KB (or more) bank of fixed tile
+data the PPU reads pattern tables from directly. When you rebuild a commercial
+game from its disassembly into a byte-identical `.nes`, you need the iNES
+header + the CHR-ROM blob + a linker config that concatenates HEADER + PRG +
+CHR. romdev has three ways to do this so you never hand-derive header bytes or
+write glue `.s`/`.cfg` files.
+
+**The iNES header** (16 bytes at the very start of a `.nes`): `4E 45 53 1A`
+("NES"+EOF), then byte 4 = PRG-ROM 16 KB bank count, byte 5 = CHR-ROM 8 KB bank
+count (**0 = CHR-RAM**), byte 6 = flags6 (bit0 mirroring 0=horizontal/1=vertical,
+bit1 battery, high nibble = mapper low nibble), byte 7 = flags7 (high nibble =
+mapper high nibble), bytes 8-15 = 0. NROM is mapper 0; NROM-128 = 1 PRG bank
+(maps at $C000, mirrored to $8000), NROM-256 = 2 PRG banks (maps at $8000).
+
+**1. `build({inesHeader:{...}})` — the parametric, no-glue path (recommended).**
+Pass `inesHeader: {prgBanks, chrBanks, mapper, mirroring}` and the build
+auto-emits the HEADER segment, wires your CHR blob (from `binaryIncludePaths`)
+into a CHARS segment, and uses a flat NROM `.cfg`. You supply only the PRG
+source(s) + the CHR blob:
+```
+build({ output:'rom', platform:'nes',
+        sourcesPaths:{ "prg.asm": "bank0.asm" },     // the PRG disassembly
+        binaryIncludePaths:{ "chr.bin": "chr.bin" }, // extracted CHR-ROM
+        inesHeader:{ prgBanks:2, chrBanks:1, mapper:0, mirroring:"vertical" } })
+```
+Mutually exclusive with `linkerConfig`. Works for any NROM (mapper 0, ≤2 PRG
+banks); for a banked mapper supply a linker `.cfg` that places each bank.
+
+**2. `linkerConfig:"chr-rom"` — for homebrew C that ships FIXED tile art.**
+A cc65-C preset (segment split + a CHARS segment in an 8 KB ROM2 bank). Put your
+tiles in `.segment "CHARS"` (`.incbin "tiles.chr"`) + pass the blob via
+`binaryIncludePaths`. It ships a companion crt0 with an 8 KB-CHR-ROM header. For
+other bank configs, prefer `inesHeader`.
+
+**3. `disasm({target:'project'})` — disassemble → rebuild, in two calls.**
+For NES it now extracts the CHR-ROM to `chr.bin`, writes a `rebuild.json` (the
+exact `build({inesHeader})` call, with absolute paths) and a `BUILD.md`. Feed
+`rebuild.json` straight back to `build` and you get a byte-identical ROM. This
+is the RE workhorse loop: `disasm({target:'project'})` → edit the `.asm` →
+rebuild → `diffRoms` to confirm your patch landed.
 
 ## When to drop to asm
 

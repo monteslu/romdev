@@ -4,6 +4,7 @@ import path from "node:path";
 import { TOOLCHAINS } from "../../toolchains/registry.js";
 import { buildForPlatform } from "../../toolchains/index.js";
 import { resolveLinkerConfig } from "../../toolchains/cc65/preset-resolver.js";
+import { inesHeaderSource, charsSource, nromFlatCfg } from "../../toolchains/cc65/ines.js";
 import { resolveCore } from "../../cores/registry.js";
 import { resetHost, getDisclosure } from "../state.js";
 import { PLATFORM_VIRTUAL_EXT } from "../../host/LibretroHost.js";
@@ -23,6 +24,47 @@ function logBuildResult(verb, platform, result) {
     const errTail = (result?.log || result?.err || "").slice(-1500);
     serverLog.debug(`[build] ${verb} ${platform} FAILED stage=${result?.stage ?? "?"}${errTail ? "\n" + errTail : ""}`);
   }
+}
+
+/**
+ * Apply the `inesHeader` NES NROM-rebuild convenience: synthesize the iNES HEADER
+ * segment (+ CHARS segment that .incbins the CHR blob when chrBanks>0) into the
+ * sources map and set a flat NROM linker .cfg. The agent supplies only the PRG
+ * disassembly + the CHR blob — no glue .s/.cfg, no hand-derived header bytes.
+ * Shared by build({output:'rom'|'run'}). See toolchains/cc65/ines.js.
+ *
+ * @param {{platform:string, inesHeader:any, sources:Record<string,string>|null|undefined, source:string|null|undefined, linkerConfig:string|undefined, mergedBinaryIncludes:Record<string,string>}} a
+ * @returns {{sources:Record<string,string>, source:null, linkerConfig:string}}
+ */
+function applyInesHeader({ platform, inesHeader, sources, source, linkerConfig, mergedBinaryIncludes }) {
+  if (platform !== "nes") {
+    throw new Error(`inesHeader is NES-only (iNES is the NES cartridge format); platform was '${platform}'.`);
+  }
+  if (linkerConfig) {
+    throw new Error("Pass either `inesHeader` (auto-generates the NROM .cfg) OR `linkerConfig`, not both.");
+  }
+  const chr = inesHeader.chrBanks ?? 0;
+  // A rebuild is always multi-source (PRG disassembly + synthesized header), so
+  // normalize a lone `source` into the sources map.
+  const out = sources == null
+    ? (source != null ? { "main.s": source } : {})
+    : { ...sources };
+  if (out["ines_header.s"] == null) out["ines_header.s"] = inesHeaderSource(inesHeader);
+  if (chr > 0) {
+    const binNames = Object.keys(mergedBinaryIncludes);
+    const chrName = inesHeader.chrIncbin ?? (binNames.length === 1 ? binNames[0] : undefined);
+    if (!chrName) {
+      throw new Error(
+        `inesHeader.chrBanks=${chr} needs the CHR-ROM blob: pass it via binaryIncludePaths ` +
+        `(e.g. {"chr.bin":"/path/chr.bin"}). With more than one binary include, set inesHeader.chrIncbin to its name.`
+      );
+    }
+    if (mergedBinaryIncludes[chrName] == null) {
+      throw new Error(`inesHeader.chrIncbin '${chrName}' is not among the binary includes (${binNames.join(", ") || "none"}).`);
+    }
+    if (out["ines_chars.s"] == null) out["ines_chars.s"] = charsSource(chrName);
+  }
+  return { sources: out, source: null, linkerConfig: nromFlatCfg(inesHeader) };
 }
 
 // One-shot "open playtest" hint state — per MCP session, set after the
@@ -205,7 +247,7 @@ export function installToolchainCore({ id }) {
 }
 
 export function registerToolchainTools(server, z, sessionKey) {
-  async function buildSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, crt0, crt0Path, codeLoc, dataLoc, options, linkerConfig, outputPath, inline = false, includeSymbols = false, lint = "advisory", runtime, maxmod, rebuildSdk }) {
+  async function buildSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, crt0, crt0Path, codeLoc, dataLoc, options, linkerConfig, inesHeader, outputPath, inline = false, includeSymbols = false, lint = "advisory", runtime, maxmod, rebuildSdk }) {
       // Reject conflicting inline vs path args — fail loud, not silent.
       if (source != null && sourcePath != null) {
         throw new Error("build({output:'rom'}): pass either `source` OR `sourcePath`, not both.");
@@ -251,6 +293,12 @@ export function registerToolchainTools(server, z, sessionKey) {
           const bytes = await readFile(p);
           mergedBinaryIncludes[name] = bytes.toString("base64");
         }
+      }
+      // inesHeader — NES NROM rebuild convenience (see applyInesHeader).
+      if (inesHeader) {
+        ({ sources, source, linkerConfig } = applyInesHeader({
+          platform, inesHeader, sources, source, linkerConfig, mergedBinaryIncludes,
+        }));
       }
       const { cfg: resolvedLinkerConfig, supportSources } = await resolveLinkerConfig(platform, linkerConfig);
       // Splice preset support sources (e.g. custom crt0) into the project.
@@ -397,7 +445,7 @@ export function registerToolchainTools(server, z, sessionKey) {
       return jsonContent(payload);
   }
 
-  async function runSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, runtime, maxmod, rebuildSdk, crt0, crt0Path, codeLoc, dataLoc, linkerConfig, path: projPath, frames = 60, holdInputs, screenshotPath, projectName }) {
+  async function runSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, runtime, maxmod, rebuildSdk, crt0, crt0Path, codeLoc, dataLoc, linkerConfig, inesHeader, path: projPath, frames = 60, holdInputs, screenshotPath, projectName }) {
       const { buildForPlatform } = await import("../../toolchains/index.js");
       const resolved = resolveCore(platform);
       if (!resolved) throw new Error(`no core available for platform '${platform}'`);
@@ -469,6 +517,12 @@ export function registerToolchainTools(server, z, sessionKey) {
           const bytes = await readFile(p);
           mergedBinaryIncludes[name] = bytes.toString("base64");
         }
+      }
+      // inesHeader — NES NROM rebuild convenience (see applyInesHeader).
+      if (inesHeader) {
+        ({ sources, source, linkerConfig } = applyInesHeader({
+          platform, inesHeader, sources, source, linkerConfig, mergedBinaryIncludes,
+        }));
       }
       const { cfg: resolvedLinkerConfig2, supportSources: supportSources2 } = await resolveLinkerConfig(platform, linkerConfig);
       const mergedSources2 = sources
@@ -639,7 +693,15 @@ export function registerToolchainTools(server, z, sessionKey) {
       codeLoc: z.coerce.number().int().optional().describe("SDCC — _CODE load address (default $0000; GB/GBC bundled crt0 wants 0x150)."),
       dataLoc: z.coerce.number().int().optional().describe("SDCC — _DATA (WRAM) load address (default $C000 on Z80). NOT read by output:'romWithDebug'."),
       options: z.array(z.string()).optional().describe("output:'rom' — extra toolchain CLI options."),
-      linkerConfig: z.string().optional().describe("ld65 linker config (cc65). NES preset 'chr-ram-runtime' (RECOMMENDED — full crt0 + iNES header + NMI w/ OAM DMA + `_shadow_oam` at $0200) or 'chr-ram' (bare nmi:rti stub), or full .cfg contents. Preset NAMES only resolve on output:'rom'/'run'; output:'romWithDebug' takes raw .cfg contents only."),
+      linkerConfig: z.string().optional().describe("ld65 linker config (cc65). NES presets: 'chr-ram-runtime' (RECOMMENDED for homebrew C — full crt0 + iNES header + NMI w/ OAM DMA + `_shadow_oam` at $0200), 'chr-ram' (bare nmi:rti stub), 'chr-rom' (cc65-C with FIXED CHR-ROM art — segment split + CHARS segment; supply CHR via binaryIncludePaths into a CHARS source + the header via `inesHeader`). Or full .cfg contents. Preset NAMES only resolve on output:'rom'/'run'; output:'romWithDebug' takes raw .cfg contents only. **For rebuilding a commercial NROM game from its disassembly, prefer `inesHeader` over a raw .cfg.**"),
+      inesHeader: z.object({
+        prgBanks: z.coerce.number().int().min(1).max(255).describe("16KB PRG-ROM banks (1 = NROM-128, 2 = NROM-256)."),
+        chrBanks: z.coerce.number().int().min(0).max(255).optional().describe("8KB CHR-ROM banks (0 = CHR-RAM, no CHARS segment). Default 0."),
+        mapper: z.coerce.number().int().min(0).max(255).optional().describe("iNES mapper number. Default 0 (NROM)."),
+        mirroring: z.enum(["horizontal", "vertical"]).optional().describe("Nametable mirroring. Default 'horizontal'."),
+        battery: z.boolean().optional().describe("PRG-RAM battery (flags6 bit 1). Default false."),
+        chrIncbin: z.string().optional().describe("Name of the binaryInclude holding the CHR-ROM blob to .incbin (only needed when chrBanks>0 AND there's more than one binary include; else the sole include is used)."),
+      }).optional().describe("NES iNES-header + NROM-rebuild convenience. Auto-emits the 16-byte iNES HEADER segment + (for chrBanks>0) a CHARS segment that .incbins the CHR blob (from binaryIncludePaths), and sets a flat NROM linker .cfg (HEADER+PRG+CHARS). The agent supplies ONLY the PRG disassembly source(s) + the CHR blob — no glue .s/.cfg files, no hand-derived header bytes. THE shape for rebuilding an NROM commercial game from `disasm({target:'project'})`. Mutually exclusive with `linkerConfig`."),
       runtime: z.string().optional().describe("GBA — runtime: 'libtonc' (default), 'libgba', or 'none'."),
       maxmod: z.boolean().optional().describe("GBA — link maxmod for music (libmm.a). You still call mmInit/mmStart + hook mmVBlank."),
       rebuildSdk: z.boolean().optional().describe("GBA + Genesis — rebuild the bundled SDK (libtonc/libgba/maxmod/SGDK) from vendored source instead of the prebuilt seed (~20-40s). Only if you edited SDK source (else an `sdkEditIgnored` warning fires)."),

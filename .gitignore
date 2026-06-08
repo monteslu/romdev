@@ -38,6 +38,10 @@ packages/*/wasm/
 packages/romdev/src/cores/wasm/
 packages/romdev/src/toolchains/*/wasm/
 
+# Local scratch / build-prototyping workspace — throwaway build round-trip
+# tests, disasm→rebuild proofs, etc. Never committed, never shipped.
+.romdev-build/
+
 # npm pack output
 *.tgz
 
@@ -48,5 +52,4 @@ packages/romdev/src/toolchains/*/wasm/
 publish-all.mjs
 .z80build/
 .z80build3/
-.z80build/
 a.out

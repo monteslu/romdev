@@ -1013,7 +1013,7 @@ async function disassembleRomCore(args) {
 }
 
 async function disassembleProjectCore({ path: romPath, outputDir, platform }) {
-      const { reassembleForPlatform } = await import("../../toolchains/common/reassemble.js");
+      const { reassembleForPlatform, CPU_FAMILY } = await import("../../toolchains/common/reassemble.js");
       const data = new Uint8Array(await readFile(romPath));
       const resolved = platform ?? sniffPlatformFromPath(romPath);
       if (!resolved) throw new Error(`disassembleProject: could not detect platform from '${romPath}'. Pass platform explicitly.`);
@@ -1029,7 +1029,7 @@ async function disassembleProjectCore({ path: romPath, outputDir, platform }) {
         // Known-data regions (e.g. the GBA cartridge header) are emitted as a
         // clean `.byte` dump — byte-exact by construction, NOT a failed disasm.
         const r = reg.kind === "data"
-          ? { ok: true, readablePercent: 0, source: dataRegionSource(reg.bytes, reg.startAddress), note: "data region (not code)" }
+          ? { ok: true, readablePercent: 0, source: dataRegionSource(reg.bytes, reg.startAddress, CPU_FAMILY[resolved]), note: "data region (not code)" }
           : await reassembleForPlatform({ platform: resolved, bytes: reg.bytes, startAddress: reg.startAddress });
         const header = `; ${reg.label} — ${reg.bytes.length} bytes @ $${reg.startAddress.toString(16).toUpperCase()} ` +
           `(file 0x${reg.fileOffset.toString(16).toUpperCase()}), ${resolved}\n` +
@@ -1046,6 +1046,32 @@ async function disassembleProjectCore({ path: romPath, outputDir, platform }) {
 
       const allOk = out.every((r) => r.roundTripOk);
       const avgReadable = Math.round(out.reduce((s, r) => s + r.readablePercent, 0) / out.length);
+
+      // Make the project TURNKEY: write the rebuild glue (data blobs, the exact
+      // build() call, and human-readable instructions) so it rebuilds without
+      // hand-wiring a header/CHR-blob/linker .cfg. See disasm-rebuild.js.
+      const { planRebuild } = await import("./disasm-rebuild.js");
+      const plan = planRebuild(resolved, data, regions);
+      const writtenBlobs = [];
+      for (const [name, bytes] of Object.entries(plan.blobs)) {
+        await writeFile(nodePath.join(outputDir, name), bytes);
+        writtenBlobs.push({ file: name, bytes: bytes.length });
+      }
+      // Absolutize the bare filenames in the build call so the recipe is
+      // copy-pasteable as-is.
+      const absBuild = plan.build ? absolutizeBuild(plan.build, outputDir) : null;
+      if (absBuild) {
+        await writeFile(
+          nodePath.join(outputDir, "rebuild.json"),
+          JSON.stringify(absBuild, null, 2) + "\n"
+        );
+      }
+      const buildMd = renderBuildMd({
+        platform: resolved, romPath, regions: out, blobs: writtenBlobs,
+        build: absBuild, verifiable: plan.verifiable, notes: plan.notes, allOk,
+      });
+      await writeFile(nodePath.join(outputDir, "BUILD.md"), buildMd);
+
       return jsonContent({
         ok: allOk,
         path: romPath,
@@ -1053,10 +1079,62 @@ async function disassembleProjectCore({ path: romPath, outputDir, platform }) {
         regions: out,
         roundTrip: { regions: out.length, allByteExact: allOk, failed: out.filter((r) => !r.roundTripOk).map((r) => r.region) },
         readablePercentAvg: avgReadable,
+        rebuild: {
+          blobs: writtenBlobs,
+          buildCall: absBuild,        // the exact build({...}) args to reproduce the ROM
+          verifiable: plan.verifiable, // true = expected byte-identical via that call
+          buildDoc: "BUILD.md",
+          notes: plan.notes,
+        },
         note: allOk
-          ? `All ${out.length} region(s) round-trip BYTE-EXACT (avg ${avgReadable}% disassembled as instructions, the rest as .byte data). Edit the .asm files and rebuild.`
+          ? `All ${out.length} region(s) round-trip BYTE-EXACT (avg ${avgReadable}% disassembled as instructions, the rest as .byte data). ` +
+            (absBuild
+              ? `Rebuild it with the build() call in rebuild.json / BUILD.md` +
+                (plan.verifiable ? " — expected byte-identical." : " (see notes — may need linker tweaks).")
+              : `See BUILD.md for how to rebuild.`)
           : `Some regions did NOT round-trip byte-exact — see regions[].note.`,
       });
+}
+
+/** Rewrite a planRebuild build()'s bare *Paths filenames to absolute paths. */
+function absolutizeBuild(build, outputDir) {
+  const out = { ...build };
+  for (const key of ["sourcesPaths", "binaryIncludePaths", "includePaths"]) {
+    if (out[key]) {
+      const m = {};
+      for (const [virt, file] of Object.entries(out[key])) m[virt] = nodePath.join(outputDir, file);
+      out[key] = m;
+    }
+  }
+  return out;
+}
+
+/** Human + agent readable rebuild instructions for a disassembled project. */
+function renderBuildMd({ platform, romPath, regions, blobs, build, verifiable, notes, allOk }) {
+  const lines = [];
+  lines.push(`# Rebuilding this ${platform} project`, "");
+  lines.push(`Disassembled from \`${nodePath.basename(romPath)}\` by \`disasm({target:'project'})\`.`, "");
+  lines.push("## Files", "");
+  for (const r of regions) {
+    lines.push(`- \`${r.file}\` — ${r.region}${r.kind === "data" ? " (data)" : ""}, byte-exact${r.roundTripOk === false ? " ⚠ round-trip FAILED" : ""}.`);
+  }
+  for (const b of blobs) lines.push(`- \`${b.file}\` — ${b.bytes} bytes of binary data (extracted from the ROM; do not hand-edit).`);
+  lines.push("- `rebuild.json` — the exact `build()` args below, with absolute paths.", "");
+  if (build) {
+    lines.push("## Rebuild", "");
+    if (verifiable) {
+      lines.push("This rebuilds **byte-identical** to the source ROM. Call:", "");
+    } else {
+      lines.push("Rebuild call (see Notes — may need linker adjustments for an exact match):", "");
+    }
+    lines.push("```json", JSON.stringify(build, null, 2), "```", "");
+    lines.push("Pass these as the arguments to the `build` tool. The same JSON is in `rebuild.json`.", "");
+  } else {
+    lines.push("## Rebuild", "", "No automatic rebuild recipe for this platform yet. " + notes, "");
+  }
+  if (notes) lines.push("## Notes", "", notes, "");
+  if (!allOk) lines.push("> ⚠ Some regions did not round-trip byte-exact — edit those `.asm` files before rebuilding.", "");
+  return lines.join("\n") + "\n";
 }
 
 export function registerDisasmTools(server, z) {
@@ -1137,12 +1215,23 @@ function trimTrailingPad(bytes) {
 
 /** Emit a known-data region as a clean, byte-exact `.byte` dump (GAS/cc65 both
  *  accept `.byte` with `.org`). 16 bytes per line, with the address in a comment. */
-function dataRegionSource(bytes, startAddress) {
-  const rows = [`\t.org $${startAddress.toString(16).toUpperCase()}`];
+// Emit a byte-exact `.byte` dump for a known-DATA region (e.g. a cartridge
+// header). The syntax must match the platform's reassembler: ca65/vasm
+// (6502/65816) take `$`-prefixed hex and a bare `.org $...`; GNU `as`
+// (z80/sm83/m68k/arm) take `0x` hex and reject a `$` operand (`$2E` reads as an
+// undefined symbol → the link fails). `family` comes from CPU_FAMILY; default to
+// the ca65 form for the 6502 platforms that have used this path historically.
+function dataRegionSource(bytes, startAddress, family = "6502") {
+  const gnu = family === "z80" || family === "sm83" || family === "m68k" || family === "arm";
+  const hex = (b) => (gnu ? "0x" : "$") + b.toString(16).padStart(2, "0").toUpperCase();
+  const org = gnu
+    ? `\t.org 0x${startAddress.toString(16).toUpperCase()}`
+    : `\t.org $${startAddress.toString(16).toUpperCase()}`;
+  const rows = [org];
   for (let i = 0; i < bytes.length; i += 16) {
     const slice = Array.from(bytes.slice(i, i + 16));
     rows.push(
-      "\t.byte " + slice.map((b) => "$" + b.toString(16).padStart(2, "0").toUpperCase()).join(",") +
+      "\t.byte " + slice.map(hex).join(",") +
       `\t; ${(startAddress + i).toString(16).toUpperCase().padStart(6, "0")}`
     );
   }
