@@ -131,17 +131,23 @@ MAIN:
   LDA FRAME
   AND #$01
   BNE .skipmove
+  ; SWCHA is active-LOW (0 = pressed). RE-LOAD it for each direction —
+  ; the old ASL carry-chain clobbered A with LDA P_X between shifts, so
+  ; the second ASL shifted P_X instead of SWCHA: pressing RIGHT also
+  ; "pressed" LEFT (P_X < $80 -> carry clear) and the moves cancelled.
+  ; That was the "ship/car stuck to the left edge" bug.
   LDA SWCHA
-  ASL                  ; bit7 = P0 Right
-  BCS .nr
+  AND #$80             ; bit7 = P0 Right (0 = pressed)
+  BNE .nr
   LDA P_X
   CMP #140
   BCS .nr
   INC P_X
   INC P_X
 .nr:
-  ASL                  ; bit6 = P0 Left
-  BCS .nl
+  LDA SWCHA
+  AND #$40             ; bit6 = P0 Left (0 = pressed)
+  BNE .nl
   LDA P_X
   CMP #10
   BCC .nl
@@ -220,10 +226,29 @@ MAIN:
   STA ALIEN_DIR
   LDA ALIEN_Y
   CMP #30
-  BCC .noMarch         ; already near the bottom — don't go further
+  BCC .invaded         ; reached the cannon's row — the aliens GOT YOU
   SEC
   SBC #6
   STA ALIEN_Y
+  JMP .noMarch
+.invaded:
+  ; Game over: the old code just CLAMPED here, so the aliens sat on top
+  ; of the cannon doing nothing ("gets hit by aliens which don't kill
+  ; it"). Now: harsh buzz + the wave resets to the top, like a life lost.
+  LDA #40
+  STA ALIEN_X
+  LDA #60
+  STA ALIEN_Y
+  LDA #1
+  STA ALIEN_DIR
+  LDA #$08             ; noise
+  STA AUDC0
+  LDA #$1F
+  STA AUDF0
+  LDA #$0E
+  STA AUDV0
+  LDA #20
+  STA SFX_LEFT
 .noMarch:
 
   ; sfx countdown

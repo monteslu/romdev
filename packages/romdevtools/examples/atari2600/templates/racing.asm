@@ -165,17 +165,23 @@ MAIN:
   LDA FRAME
   AND #$01
   BNE .skipmove
+  ; SWCHA is active-LOW (0 = pressed). RE-LOAD it for each direction —
+  ; the old ASL carry-chain clobbered A with LDA P_X between shifts, so
+  ; the second ASL shifted P_X instead of SWCHA: pressing RIGHT also
+  ; "pressed" LEFT (P_X < $80 -> carry clear) and the moves cancelled.
+  ; That was the "ship/car stuck to the left edge" bug.
   LDA SWCHA
-  ASL                  ; bit7 = P0 Right
-  BCS .nr
+  AND #$80             ; bit7 = P0 Right (0 = pressed)
+  BNE .nr
   LDA P_X
   CMP #128
   BCS .nr
   INC P_X
   INC P_X
 .nr:
-  ASL                  ; bit6 = P0 Left
-  BCS .nl
+  LDA SWCHA
+  AND #$40             ; bit6 = P0 Left (0 = pressed)
+  BNE .nl
   LDA P_X
   CMP #28
   BCC .nl
@@ -270,6 +276,21 @@ MAIN:
   STA E1_Y
   LDA #182
   STA E2_Y
+  ; Re-randomize BOTH lanes on crash (FRAME-derived). The old code only
+  ; reset Y, so after a crash the enemy kept its old X — crash into it
+  ; once near the left edge and it respawned in the same column forever
+  ; ("enemy car stuck to the left edge").
+  LDA FRAME
+  AND #$3F
+  CLC
+  ADC #40
+  STA E1_X
+  LDA FRAME
+  EOR #$2A
+  AND #$3F
+  CLC
+  ADC #44
+  STA E2_X
   LDA #$08             ; noisy crash
   STA AUDC0
   LDA #$1F

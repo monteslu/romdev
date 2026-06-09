@@ -162,17 +162,21 @@ MAIN:
   LDA FRAME
   AND #$01
   BNE .skipmove
+  ; SWCHA is active-LOW; RE-LOAD per direction (the old ASL carry-chain
+  ; clobbered A with LDA P_X between shifts → RIGHT also triggered LEFT
+  ; and the moves cancelled — the player couldn't move).
   LDA SWCHA
-  ASL                  ; bit7 = Right
-  BCS .nr
+  AND #$80             ; bit7 = Right (0 = pressed)
+  BNE .nr
   LDA P_X
   CMP #140
   BCS .nr
   INC P_X
   INC P_X
 .nr:
-  ASL                  ; bit6 = Left
-  BCS .nl
+  LDA SWCHA
+  AND #$40             ; bit6 = Left (0 = pressed)
+  BNE .nl
   LDA P_X
   CMP #16
   BCC .nl
@@ -212,12 +216,17 @@ MAIN:
   LDA ON_GND
   BNE .skipgrav
   DEC P_VY             ; gravity: velocity drifts toward falling each frame
-  ; clamp terminal fall speed to -8 px/frame (P_VY is signed; -8 = $F8).
+  ; Clamp terminal FALL speed to -8 px/frame — but ONLY while falling.
+  ; The old unsigned compare (CMP #$F8 / BCS keep) also caught every
+  ; POSITIVE velocity (5 < $F8 unsigned!), so the instant you jumped the
+  ; clamp slammed P_VY from +6 to -8: the whole "jump" rose 0 frames,
+  ; fell 8px and re-landed within ONE frame — jump sfx played, screen
+  ; blipped, player never left the ground.
   LDA P_VY
-  CMP #$F8             ; if P_VY (unsigned) < $F8 AND it's negative → too fast
-  BCS .vyok            ; >= $F8 (covers -8..-1 and 0..127) → keep
-  ; here P_VY is in $80..$F7 = -128..-9 → clamp to -8
-  LDA #$F8
+  BPL .vyok            ; rising (positive) → terminal clamp doesn't apply
+  CMP #$F8
+  BCS .vyok            ; -8..-1 → within terminal speed, keep
+  LDA #$F8             ; -128..-9 → clamp to -8
   STA P_VY
 .vyok:
   ; P_Y += P_VY  (signed add: sign-extend P_VY into the add)
