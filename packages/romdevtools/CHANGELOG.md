@@ -4,6 +4,17 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.27.0
+
+### Added — `breakpoint(on:'pc', captureMemory:[…])` reads named RAM at the hit
+Completes item 2 of the NES Rygar report. 0.26.0 shipped `registersAtHit` (the
+break-instant register file) but not the memory half. Now `breakpoint(on:'pc')`
+takes `captureMemory:[{region,offset,length,label}]` and returns those reads inline
+as `capturedMemory`, so register + RAM inspection at a PC collapses into ONE call —
+no follow-up `cpu`/`memory` round trips. `registersAtHit` is the true break instant
+(core snapshot); `capturedMemory` reflects the routine's RAM side effects for the
+hit frame (stable + what RE needs), documented as such.
+
 ## 0.26.0
 
 ### Fixed — NES `breakpoint(on:'pc')` now returns reliable break-instant registers
@@ -17,11 +28,8 @@ them (the schema's "CPU is FROZEN at this instruction" was wrong for NES).
   SNAPSHOTS A/X/Y/P/S at the hit instant, exposed via `romdev_pcbreak_get`.
 - **`breakpoint(on:'pc')` returns `registersAtHit`** — the reliable break-instant
   register file. The schema + hit note now steer to it and explicitly warn that a
-  live `cpu({op:'read'})` after a hit is end-of-frame state on fceumm.
-- **`breakpoint(on:'pc', captureMemory:[{region,offset,length,label}])`** reads
-  named RAM AT the hit and returns it inline as `capturedMemory` — so register +
-  RAM inspection at a PC collapses into ONE call (item 2's token win), no
-  follow-up `cpu`/`memory` round trips.
+  live `cpu({op:'read'})` after a hit is end-of-frame state on fceumm. (The
+  `captureMemory` companion that reads named RAM inline at the hit landed in 0.27.0.)
 - **NES `cpu({op:'read'})` core-internal fields relabeled** (item 3): `DB`,
   `IRQlow`, `tcount`, `count` are fceumm internals (data-bus latch / IRQ bitmask /
   cycle counters), not 6502 registers — moved out of `registers` into a labeled
