@@ -18,6 +18,7 @@ import { z } from "zod";
 import { registerTools } from "../mcp/tools/index.js";
 import { withClearToolErrors } from "../mcp/util.js";
 import { observer, summarizeForLog, extractImages } from "../observer/bus.js";
+import { getHostOrNull } from "../mcp/state.js";
 
 /**
  * Build a tool registry for a given session key. Each entry's handler closes
@@ -94,11 +95,17 @@ export async function runTool(tool, args, sessionKey) {
   // /livestream view updates for HTTP/skill tool calls too (the MCP path wraps
   // server.tool with installObserverMiddleware; the HTTP path runs handlers
   // directly, so we emit here — the single HTTP execution chokepoint).
+  // Which console this session's host currently has loaded — shown on every
+  // livestream event so a human watching a multi-agent server sees the SYSTEM
+  // (nes, genesis, …) alongside the tool, not just the session id. Best-effort.
+  let platform = null;
+  try { platform = getHostOrNull(sessionKey)?.status?.platform ?? null; } catch { /* none yet */ }
   const emit = (extra) => {
     try {
       observer.push({
         type: "call",
         sessionKey: sessionKey ?? "http",
+        platform,
         ts: startedAt,
         tool: tool.name,
         args: summarizeForLog(a),
@@ -122,6 +129,10 @@ export async function runTool(tool, args, sessionKey) {
   }
   try {
     const r = await tool.handler(a, {});
+    // Re-resolve the platform AFTER the handler: a call like loadMedia /
+    // build({output:'run'}) sets it during the call, so the post-call value
+    // correctly labels this call's event + frame (the pre-call value was null).
+    try { platform = getHostOrNull(sessionKey)?.status?.platform ?? platform; } catch { /* keep */ }
     // Unwrap the MCP content envelope to plain JSON for HTTP clients.
     if (r && r.isError) {
       const text = r.content?.[0]?.text ?? "tool error";
@@ -148,7 +159,11 @@ export async function runTool(tool, args, sessionKey) {
       setImmediate(() => {
         try {
           const img = frameProvider();
-          if (img) observer.push({ type: "call_frame", sessionKey: sessionKey ?? "http", ts: startedAt, tool: tool.name, images: [img] });
+          // re-resolve platform: a call like loadMedia sets it DURING the call, so
+          // the post-call value is the most accurate for the frame's system label.
+          let framePlatform = platform;
+          try { framePlatform = getHostOrNull(sessionKey)?.status?.platform ?? platform; } catch { /* keep */ }
+          if (img) observer.push({ type: "call_frame", sessionKey: sessionKey ?? "http", platform: framePlatform, ts: startedAt, tool: tool.name, images: [img] });
         } catch { /* livestream is best-effort; never affects the caller */ }
       });
     }
