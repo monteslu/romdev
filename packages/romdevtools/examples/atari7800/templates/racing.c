@@ -27,8 +27,11 @@
 #define CTRL      (*(volatile uint8_t*)0x3C)
 #define SWCHA     (*(volatile uint8_t*)0x280)
 
-#define JOY_LEFT  0x20
-#define JOY_RIGHT 0x10
+/* SWCHA bit order is Right(0x80)/Left(0x40)/Down(0x20)/Up(0x10) — the
+ * old 0x20/0x10 masks here were the DOWN/UP bits, so the stick's
+ * vertical axis steered horizontally. */
+#define JOY_LEFT  0x40
+#define JOY_RIGHT 0x80
 
 /* 16-pixel-wide (= 4 bytes in 160A) × 8 row car sprite. */
 static const uint8_t car_row0[4] = { 0x05, 0x55, 0x55, 0x50 };

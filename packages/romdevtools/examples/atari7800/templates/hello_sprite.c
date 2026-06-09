@@ -27,10 +27,14 @@
 #define SWCHA     (*(volatile uint8_t*)0x280)
 
 /* SWCHA bit pattern (port A, active LOW — invert before testing) */
-#define JOY_UP    0x80
-#define JOY_DOWN  0x40
-#define JOY_LEFT  0x20
-#define JOY_RIGHT 0x10
+/* SWCHA P0 nibble, active-low after the ~SWCHA invert. The bit order is
+ * Right/Left/Down/Up from bit7 down — the OLD defines here were exactly
+ * REVERSED (UP=0x80 etc.), which made up/down move the sprite left/right
+ * on every 7800 scaffold. */
+#define JOY_RIGHT 0x80
+#define JOY_LEFT  0x40
+#define JOY_DOWN  0x20
+#define JOY_UP    0x10
 
 /* 16-pixel-wide ball (= 4 bytes in 160A mode), 8 rows tall. */
 static const uint8_t sprite_row0[4] = { 0x05, 0x55, 0x55, 0x50 };

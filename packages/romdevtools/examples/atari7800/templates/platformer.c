@@ -25,10 +25,14 @@
 #define SWCHA     (*(volatile uint8_t*)0x280)
 #define INPT4     (*(volatile uint8_t*)0x0C)
 
-#define JOY_UP    0x80
-#define JOY_DOWN  0x40
-#define JOY_LEFT  0x20
-#define JOY_RIGHT 0x10
+/* SWCHA P0 nibble, active-low after the ~SWCHA invert. The bit order is
+ * Right/Left/Down/Up from bit7 down — the OLD defines here were exactly
+ * REVERSED (UP=0x80 etc.), which made up/down move the sprite left/right
+ * on every 7800 scaffold. */
+#define JOY_RIGHT 0x80
+#define JOY_LEFT  0x40
+#define JOY_DOWN  0x20
+#define JOY_UP    0x10
 
 /* 16-pixel-wide (= 4 bytes in 160A), 8 rows tall player ball. */
 static const uint8_t player_row0[4] = { 0x05, 0x55, 0x55, 0x50 };
@@ -126,10 +130,10 @@ static void vblank_wait(void) {
 }
 
 /* Physics in 4.4 fixed point — 16 = 1 px, allows half-pixel velocity. */
-#define GRAVITY    8
-#define MOVE_PX    1
-#define JUMP_VEL  (-48)
-#define MAXFALL    48
+#define GRAVITY    6
+#define MOVE_PX    2   /* 1 px/frame read as 'doesn't move' — 2 is snappy */
+#define JUMP_VEL  (-80)  /* was -48: a 10px hop over ~12 frames read as 'jumps very slowly' — this is ~27px in the same time */
+#define MAXFALL    64
 #define GROUND_Y   200   /* DLL index of the ground line */
 
 void main(void) {
