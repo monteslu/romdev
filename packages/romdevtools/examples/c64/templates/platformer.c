@@ -62,17 +62,6 @@ static const uint8_t platforms[][3] = {
 };
 #define N_PLATFORMS (sizeof(platforms) / sizeof(platforms[0]))
 
-/* Is world char-cell (col,row) a platform block? */
-static uint8_t world_is_wall(uint8_t col, uint8_t row) {
-  uint8_t i;
-  for (i = 0; i < N_PLATFORMS; i++) {
-    if (row == platforms[i][2]
-        && col >= platforms[i][0]
-        && col <  platforms[i][1]) return 1;
-  }
-  return 0;
-}
-
 static void wait_vblank(void) {
   while (PEEK(VIC_RASTER) < 250) { }
   while (PEEK(VIC_RASTER) >= 250) { }
@@ -88,33 +77,48 @@ static void copy_sprite(uint8_t slot, const uint8_t *data) {
  * starting at world column `coarseCol`. Called once per coarse-scroll step
  * (every 8 px of camera movement) — NOT every frame. */
 static void render_view(uint8_t coarseCol) {
-  uint8_t sc, r;
-  uint16_t wc;
+  uint8_t sc, r, i, c8;
+  uint16_t wc, off;
+  uint8_t wallrow[VIS_ROWS];
+  /* PERFORMANCE IS LOAD-BEARING HERE. The old version re-scanned the
+   * 10-entry platform table for EVERY CELL and computed a 16-bit modulo
+   * (a cc65 library call) per sky cell — ~2 SECONDS per re-render at
+   * 1 MHz, re-run on every 8-px coarse step. The game spent nearly all
+   * its time in here: scrolling froze, jump presses were eaten between
+   * the multi-second loop passes, and the sprite setup after the first
+   * renders didn't run for hundreds of frames. This version flags each
+   * column's platform rows ONCE (40 table scans total, not 1000) and
+   * uses mask arithmetic for the sky texture. ~20x faster. */
   for (sc = 0; sc < VIS_COLS; sc++) {
     wc = (uint16_t)coarseCol + sc;
+    c8 = (uint8_t)wc;
+    for (r = 0; r < VIS_ROWS; r++) wallrow[r] = 0;
+    if (wc < WORLD_COLS) {
+      for (i = 0; i < N_PLATFORMS; i++) {
+        if (c8 >= platforms[i][0] && c8 < platforms[i][1])
+          wallrow[platforms[i][2]] = 1;
+      }
+    }
+    off = sc;
     for (r = 0; r < VIS_ROWS; r++) {
-      uint16_t off = (uint16_t)r * 40 + sc;
-      if (wc < WORLD_COLS && world_is_wall((uint8_t)wc, r)) {
+      if (wallrow[r]) {
         SCREEN[off] = 0xA0;          /* reverse-space solid block */
         COLORS[off] = 0x0C;          /* mid grey platform */
       } else if (r >= 22) {
-        /* Ground fill below the floor row: dithered earth so the lower
-         * band reads as solid terrain, not void. */
+        /* dithered earth below the floor row */
         SCREEN[off] = 0xA0;
-        COLORS[off] = (((uint8_t)wc ^ r) & 1) ? 0x09 : 0x08;  /* brown / orange */
+        COLORS[off] = ((c8 ^ r) & 1) ? 0x09 : 0x08;  /* brown / orange */
       } else {
-        /* Textured sky so two colours share the backdrop and neither the
-         * sky nor the border dominates the frame. Sparse '.' stars on a
-         * coarse lattice add detail; reverse-space everywhere else gives a
-         * filled (non-blank) sky band that scrolls with the world. */
-        if (((wc * 3u + r * 7u) % 23u) == 0u) {
+        /* textured sky: sparse '.' stars on a cheap AND-mask lattice */
+        if (((uint8_t)(c8 + (r << 2)) & 15) == 0) {
           SCREEN[off] = 0x2E;        /* '.' distant detail */
           COLORS[off] = 0x01;        /* white */
         } else {
           SCREEN[off] = 0xA0;        /* solid block sky */
-          COLORS[off] = (((uint8_t)wc ^ (r >> 1)) & 1) ? 0x06 : 0x0E;  /* blue / light blue */
+          COLORS[off] = ((c8 ^ (r >> 1)) & 1) ? 0x06 : 0x0E;  /* blue / light blue */
         }
       }
+      off += 40;
     }
   }
 }

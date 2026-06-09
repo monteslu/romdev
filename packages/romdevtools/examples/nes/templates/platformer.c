@@ -82,7 +82,9 @@ static const uint8_t palette[32] = {
    * Keep it equal to the BG backdrop (sky blue) or the sky renders as
    * whatever colour-0 you put here, not the BG[0] above. (Sprite colour 0 is
    * transparent regardless, so this never affects how sprites draw.) */
-  0x21, 0x21, 0x32, 0x30,  /* sp0: player — blue (colour 0 = backdrop mirror) */
+  0x21, 0x16, 0x30, 0x27,  /* sp0: player — RED + white/orange trim. (Was light
+                            * blues — nearly invisible against the sky-blue
+                            * backdrop. Colour 0 stays the backdrop mirror.) */
   0x0F, 0x18, 0x28, 0x38,  /* sp1: platforms — green */
   0x0F, 0x16, 0x06, 0x36,
   0x0F, 0x2A, 0x1A, 0x0A,
@@ -113,7 +115,7 @@ static uint8_t  on_ground = 0;
 
 #define GRAVITY_Q44    1   /* +1/16 px per frame per frame */
 #define JUMP_VEL_Q44 (-40) /* initial vy → peak ~5 tile jump */
-#define MOVE_SPEED     1   /* 1 px / frame */
+#define MOVE_SPEED     2   /* px/frame — 1 read as 'moves slowly' in playtesting */
 
 /* AABB: player rect vs platform top edge (treat platform as 8 px tall). */
 static uint8_t landed_on(uint8_t pl_idx, uint8_t player_y) {

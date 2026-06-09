@@ -116,7 +116,7 @@ void main(void) {
     const Rect *p;
     const int16_t GRAVITY = 10;
     const int16_t MOVE    = 20;
-    const int16_t JUMP    = -180;
+    const int16_t JUMP    = -140;  /* was -180: ~100px peak (most of the screen) — 'jumps a little too high' */
     const int16_t MAXFALL = 280;
 
     lcd_init_default();

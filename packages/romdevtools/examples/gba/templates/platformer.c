@@ -65,18 +65,6 @@ static int on_platform(s16 px, s16 py) {
     return 0;
 }
 
-static int blocked_below(s16 px, s16 py) {
-    for (int i = 0; i < N_PLATFORMS; i++) {
-        const Rect *p = &platforms[i];
-        if (py + 8 <= p->y && py + 9 > p->y
-            && px + 8 > p->x
-            && px     < p->x + p->w) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
 int main(void) {
     /* ── BG palette (for the platform tile) ──────────────────────────
      * pal_bg_mem[i] is the BG palette. */
@@ -182,7 +170,13 @@ int main(void) {
         /* Vertical with platform-stop. */
         s32 np = py + vy;
         s16 npy = np >> 4;
-        if (vy > 0 && blocked_below(ipx, ipy)) {
+        /* THE fall-through-the-floor fix: this used to be additionally
+         * gated on blocked_below(), which only matches when a platform
+         * top is within ONE pixel of the feet — but falls reach 20 px/
+         * frame, so the (correct) crossing test below almost never got
+         * to run and the player tunnelled through every platform. The
+         * crossing test alone is the right check. */
+        if (vy > 0) {
             for (int i = 0; i < N_PLATFORMS; i++) {
                 const Rect *p = &platforms[i];
                 if (ipy + 8 <= p->y && npy + 8 >= p->y
