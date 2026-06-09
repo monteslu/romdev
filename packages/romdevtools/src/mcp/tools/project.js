@@ -351,9 +351,19 @@ TEMPLATES.gbc = {
     describe: "SIDE-SCROLLING platformer for GBC. Full CGB color palette (BG + sprite via BCPS/OCPS) over the GB side-scroller core: subpixel gravity + jump + land-on-top collision against platforms across a 256-px world (the wrapping BG map). The camera follows the player and scrolls the BG via SCX; the player sprite draws in screen space. A=jump, d-pad=move. One BG map wide (no streaming) — for a wider world, stream a new BG-map column on each 8px camera step (window for a fixed HUD). See the GBC MENTAL_MODEL.md 'Horizontal scrolling'. Extend with enemies, goals, pickups.",
   },
   puzzle: {
-    main: "templates/puzzle.c", runtime: GBC_RUNTIME,
+    main: "templates/puzzle.c",
+    runtime: [
+      ...GBC_RUNTIME,
+      { src: "lib/c/font.h", dst: "font.h" },  /* digits+A-Z 2bpp glyphs for the HUD */
+    ],
     lang: GBC_LANG, ext: ".gbc",
-    describe: "Match-3 puzzle for GBC. Three colored cells (BG palette via BCPS/BCPD), rotate + soft-drop + hard-drop + triple-clear chime.",
+    describe: "Falling-jewel matcher for GBC (the polished reference puzzle). 8x17 well, 6 jewel colors with " +
+      "real CGB palettes, matches in all 4 directions (H/V/both diagonals), gravity + cascade chains, magic " +
+      "jewel every 18th piece, level speedup, 6-digit score, title + game-over screens, SFX + toggleable " +
+      "music. Rendering: falling column + NEXT preview are OAM sprites; the locked well is BG tiles via a " +
+      "COLLECT/FLUSH vblank queue with an idle scrub (writes outside vblank silently drop on this core — " +
+      "never bypass the queue). Statics need dataLoc 0xC200 (above shadow_oam at $C100) — the project build " +
+      "recipe sets that automatically.",
   },
   sports: {
     main: "templates/sports.c", runtime: GBC_RUNTIME,

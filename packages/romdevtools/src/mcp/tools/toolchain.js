@@ -480,6 +480,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         binaryIncludes = { ...(binaryIncludes ?? {}), ...r.binaryIncludes };
         if (r.crt0 != null) crt0 = r.crt0;
         if (r.codeLoc != null) codeLoc = r.codeLoc;
+        if (r.dataLoc != null && dataLoc == null) dataLoc = r.dataLoc;
         if (r.linkerConfig != null && linkerConfig == null) linkerConfig = r.linkerConfig;
         if (r.runtime != null && runtime == null) runtime = r.runtime;
         if (r.maxmod != null && maxmod == null) maxmod = r.maxmod;
@@ -785,8 +786,8 @@ export function registerToolchainTools(server, z, sessionKey) {
  */
 export function projectBuildRecipe(platform, names) {
   const has = (n) => names.includes(n);
-  /** @type {{crt0File:string|null, codeLoc:number|undefined, linkerConfig:string|undefined, runtime:string|undefined, maxmod:boolean|undefined, skip:Set<string>, includeAsC:Set<string>}} */
-  const r = { crt0File: null, codeLoc: undefined, linkerConfig: undefined, runtime: undefined, maxmod: undefined, skip: new Set(), includeAsC: new Set() };
+  /** @type {{crt0File:string|null, codeLoc:number|undefined, dataLoc:number|undefined, linkerConfig:string|undefined, runtime:string|undefined, maxmod:boolean|undefined, skip:Set<string>, includeAsC:Set<string>}} */
+  const r = { crt0File: null, codeLoc: undefined, dataLoc: undefined, linkerConfig: undefined, runtime: undefined, maxmod: undefined, skip: new Set(), includeAsC: new Set() };
 
   // Reference/upstream sources ship for grepping, not compiling (e.g. GB
   // music_demo's hUGEDriver.upstream.asm — the .c port is what builds). Skip
@@ -796,7 +797,11 @@ export function projectBuildRecipe(platform, names) {
   if (platform === "gb" || platform === "gbc") {
     // GB/GBC ship gb_crt0.s — it MUST go via crt0+codeLoc:0x150, never as a
     // source (SDCC emits its own gsinit → "Multiple definition of gsinit").
-    if (has("gb_crt0.s")) { r.crt0File = "gb_crt0.s"; r.codeLoc = 0x150; }
+    // dataLoc 0xC200: statics start ABOVE shadow_oam ($C100-$C19F, fixed by
+    // the runtime). The sdld default of $C000 let any project with >256 bytes
+    // of statics silently overlap the OAM shadow — oam_clear() then zeroed
+    // game state (grid/RNG seed). 512 bytes of 8KB WRAM is cheap insurance.
+    if (has("gb_crt0.s")) { r.crt0File = "gb_crt0.s"; r.codeLoc = 0x150; r.dataLoc = 0xC200; }
   } else if (platform === "nes") {
     // A SCAFFOLDED NES project ships nes_runtime.c + a crt0 + a .cfg and needs
     // the chr-ram-runtime preset (it defines the OAM/CHARS segments + a NMI with
@@ -943,11 +948,11 @@ export async function readProjectDir(projPath, platform) {
     runtime = "libgba";
   }
 
-  return { sources, includes, binaryIncludes, crt0, codeLoc: recipe.codeLoc, linkerConfig: recipe.linkerConfig, runtime, maxmod: recipe.maxmod };
+  return { sources, includes, binaryIncludes, crt0, codeLoc: recipe.codeLoc, dataLoc: recipe.dataLoc, linkerConfig: recipe.linkerConfig, runtime, maxmod: recipe.maxmod };
 }
 
 export async function buildProjectCore({ path: projPath, platform, outputPath }) {
-  const { sources, includes, binaryIncludes, crt0, codeLoc, linkerConfig, runtime, maxmod } = await readProjectDir(projPath, platform);
+  const { sources, includes, binaryIncludes, crt0, codeLoc, dataLoc, linkerConfig, runtime, maxmod } = await readProjectDir(projPath, platform);
 
   // Linker preset: the recipe names it (e.g. NES 'chr-ram-runtime', which ships
   // the OAM/CHARS segments + its own crt0). resolveLinkerConfig also returns any
@@ -985,6 +990,7 @@ export async function buildProjectCore({ path: projPath, platform, outputPath })
     linkerConfig: resolvedLinkerConfig,
     crt0: crt0Rel,
     codeLoc,
+    dataLoc,
   });
   if (outputPath && result.binary) {
     await mkdir(path.dirname(outputPath), { recursive: true });
