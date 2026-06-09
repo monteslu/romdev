@@ -51,6 +51,22 @@ toolchain/crt0/linker from the directory — no `sourcesPaths`/`includePaths`/
 form to a collapsed "compiling edited loose source" alternative. The project-dir
 build was already the easier path; now it's the one a fresh agent copies first.
 
+### Fixed — SMS shmup + Atari 7800 sports scaffolds rendered with wrong colors
+Both built and booted but looked broken (a 0.24.0 matrix report flagged them):
+- **SMS shmup** rendered the starfield as blue/**GREEN** striped bands. The BG
+  palette had colour 1 = `0x08`, which in SMS 2-2-2 BGR is green (G bits), not the
+  "deep space blue" the comment claimed. Fixed to a pure-blue depth gradient
+  (`0x10/0x20/0x30`) — the bands now read as space, dominant colour went green
+  `#00aa00` → blue `#0000ad`.
+- **Atari 7800 sports** rendered a near-black playfield that looked dead. Two MARIA
+  colour-byte bugs: the court walls used `0x48` (hue 4 = RED → **pink**, not the
+  intended blue) and the court floor was `0x00` (black, indistinguishable from a
+  blank screen). Fixed to blue walls (`0x8A`, hue 8) + a dark-green court floor
+  (`0xB4`) — now reads as an actual court (dominant black → green `#008221`).
+
+Both verified by screenshot + `frame({op:'verify'})`. (These were colour-value
+bugs in the scaffold templates, not the render pipeline.)
+
 ### Removed — `catalog({op:'whatsNew'})` + the old→new tool rename table
 `whatsNew` returned a 125-entry map of pre-1.0 renamed tool names (plus, until now,
 ~1.4k tokens of inlined CHANGELOG prose) so an agent resuming an old handoff could

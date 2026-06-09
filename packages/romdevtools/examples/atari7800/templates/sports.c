@@ -180,11 +180,15 @@ void main(void) {
   p1y = 110; p2y = 110;
   serve_ball(0);
 
-  BACKGRND = 0x00;   /* black court */
+  /* MARIA color byte = (hue<<4)|lum. Court = dark green so the play area
+   * reads as an actual field (0x00 black looked like a blank/dead screen);
+   * walls = blue. NB: 0x48 is hue 4 = RED-magenta (renders PINK), not blue —
+   * blue is hue 8/9, so the walls use 0x8A. */
+  BACKGRND = 0xB4;   /* dark green court floor (hue 11) */
   P0C1     = 0x0F;   /* white paddles + ball */
   P0C2     = 0x0F;
   P0C3     = 0x0F;
-  P1C1     = 0x48;   /* court walls (blue) */
+  P1C1     = 0x8A;   /* court walls — BLUE (hue 8); was 0x48 = pink */
   CHARBASE = 0;
   OFFSET   = 0;
 
