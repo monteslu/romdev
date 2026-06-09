@@ -24,7 +24,7 @@ import { registerInputTools } from "./input.js";
 import { registerStateTools } from "./state.js";
 import { registerMemoryTools } from "./memory.js";
 import { registerToolchainTools } from "./toolchain.js";
-import { registerPlaytestTools } from "./playtest.js";
+import { registerPlaytestTools, getPlaytestHumanStatus } from "./playtest.js";
 import { registerPlatformTools as registerPlatformSpecificTools } from "./platform-tools.js";
 import { registerPlatformTools } from "./platforms.js";
 import { registerSymbolTools } from "./symbols.js";
@@ -199,9 +199,23 @@ export function registerTools(server, z, sessionKey) {
         const base = host
           ? { ...host.getStatus() }
           : { loaded: false, hint: "no host yet; call loadMedia (in category 'run') to load a ROM" };
+        // Human co-drive signals: an agent re-grounding mid-session needs to
+        // know a human is playing in a playtest window BEFORE it fights them
+        // for input/stepping (pause, or use a second session).
+        const human = getPlaytestHumanStatus(sessionKey);
         return jsonContent({
           romdevVersion: PKG_VERSION,
           ...base,
+          playtestWindowOpen: human.windowOpen,
+          ...(human.windowOpen
+            ? {
+                humanInputActive: human.humanInputActive,
+                ...(human.framesSinceHumanInput != null ? { framesSinceHumanInput: human.framesSinceHumanInput } : {}),
+                ...(human.humanInputActive
+                  ? { humanInputNote: "A human is ACTIVELY playing in the playtest window — their input overwrites yours each tick and real-time stepping races yours. host({op:'pause'}) to inspect, or use a second session (different x-romdev-session) for deterministic work." }
+                  : {}),
+              }
+            : {}),
           loadedCategories: cats.filter((c) => c.loaded).map((c) => c.name),
           unloadedCategories: cats.filter((c) => !c.loaded).map((c) => c.name),
         });

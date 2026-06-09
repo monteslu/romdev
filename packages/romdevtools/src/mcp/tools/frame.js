@@ -8,6 +8,7 @@ import { imageContent, jsonContent, safeTool } from "../util.js";
 import { decodeOAM, decodePpuRegs, ppuRegsPopulated } from "../../platforms/snes/ppu.js";
 import { stepInstructionCore, attachObserverFrame } from "./watch-memory.js";
 import { getRenderingContextCore } from "./rendering-context.js";
+import { humanCoDriveWarning } from "./playtest.js";
 
 // Normalize each platform's render-context into a CONSERVATIVE renderEnabled
 // (true | false | null). null = "can't tell from the registers" — verify never
@@ -244,10 +245,15 @@ export function registerFrameTools(server, z, sessionKey) {
   async function doStep({ frames }) {
       const host = getHost(sessionKey);
       const n = host.stepFrames(frames);
+      // Surface a co-drive conflict the moment the agent steps: a human
+      // actively playing in the playtest window means this step raced their
+      // real-time loop. Field only appears when the conflict is real.
+      const coDrive = humanCoDriveWarning(sessionKey);
       return jsonContent({
         framesRun: n,
         frameCount: host.status.frameCount,
         framebuffer: { width: host.status.fbWidth, height: host.status.fbHeight },
+        ...(coDrive ? { humanCoDriveWarning: coDrive } : {}),
       });
   }
 
@@ -371,16 +377,17 @@ export function registerFrameTools(server, z, sessionKey) {
       const host = getHost(sessionKey);
       host.stepFrames(frames);
       const shot = host.screenshot();
+      const coDrive = humanCoDriveWarning(sessionKey);
       if (!inline) {
         await writeFile(outPath, Buffer.from(shot.pngBase64, "base64"));
-        const json = jsonContent({ path: outPath, frameCount: host.status.frameCount, width: shot.width, height: shot.height });
+        const json = jsonContent({ path: outPath, frameCount: host.status.frameCount, width: shot.width, height: shot.height, ...(coDrive ? { humanCoDriveWarning: coDrive } : {}) });
         json._observerImages = [{ kind: "image", mimeType: "image/png", base64: shot.pngBase64 }];
         return json;
       }
       return {
         content: [
           imageContent(shot.pngBase64),
-          { type: "text", text: `stepped ${frames} → frame ${host.status.frameCount} (${shot.width}x${shot.height})` },
+          { type: "text", text: `stepped ${frames} → frame ${host.status.frameCount} (${shot.width}x${shot.height})${coDrive ? `\nWARNING: ${coDrive}` : ""}` },
         ],
       };
   }
