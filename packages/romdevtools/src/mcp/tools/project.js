@@ -92,7 +92,7 @@ const TEMPLATES = {
       linkerConfig: { presetSrc: "presets/nes/chr-ram-runtime.cfg", dst: "chr-ram-runtime.cfg" },
       lang: "C (cc65)",
       ext: ".nes",
-      describe: "Match-3 falling-block puzzle. 6×12 grid, 1×3 active piece (3 colors), rotate via A, soft-drop on DOWN, horizontal-triple clear.",
+      describe: "Match-3 falling-block puzzle. 6×12 grid, 1×3 active piece (3 colors), rotate via A, soft-drop on DOWN, 3+-in-a-row clears in all 4 directions (H/V/diagonals) with gravity + cascade chains.",
     },
     sports: {
       main: "templates/sports.c",
@@ -214,7 +214,7 @@ const TEMPLATES = {
       ],
       lang: "C (SDCC sm83)",
       ext: ".gb",
-      describe: "Match-3 falling-block puzzle scaffold for GB. 6×12 grid rendered via BG tilemap, 1×3 active piece (3 colours via 3 BG tile shapes), rotate via A, hard-drop on START, horizontal-triple clear.",
+      describe: "Match-3 falling-block puzzle scaffold for GB. 6×12 grid rendered via BG tilemap, 1×3 active piece (3 colours via 3 BG tile shapes), rotate via A, hard-drop on START, 3+-in-a-row clears in all 4 directions (H/V/diagonals) with gravity + cascade chains.",
     },
     sports: {
       main: "templates/sports.c",
@@ -284,7 +284,7 @@ const TEMPLATES = {
       catch_game: mk("catch_game", "A complete tiny game: a paddle catches a falling object with the d-pad; full game loop with waitvsync(), two sprites, collision, scoring."),
       shmup: mk("shmup", "Vertical shoot-'em-up for PC Engine. Player ship + bullet/enemy object pools, a wave spawner, AABB collisions, score HUD, scrolling-band starfield BG. d-pad flies, button I fires. The base for any action shooter."),
       platformer: mk("platformer", "Side-scrolling platformer for PC Engine. Gravity + jump + land-on-top platform collision, a multi-screen world streamed via BG X-scroll (BXR), solid platform tiles, sub-pixel physics. d-pad moves, button I jumps."),
-      puzzle: mk("puzzle", "Match-3 / falling-block puzzle for PC Engine. A 6x12 well drawn with BG tiles, a 1x3 active piece you move/rotate/soft-drop/hard-drop, horizontal-triple clears, score. d-pad moves, I rotates, II hard-drops."),
+      puzzle: mk("puzzle", "Match-3 / falling-block puzzle for PC Engine. A 6x12 well drawn with BG tiles, a 1x3 active piece you move/rotate/soft-drop/hard-drop, 3+-in-a-row clears (H+V) with gravity + cascade chains, score. d-pad moves, I rotates, II hard-drops."),
       sports: mk("sports", "Pong-style sports game for PC Engine. Two paddles + a bouncing ball on a netted court, score to 9, paddle-deflect physics; player 2 falls back to chase-AI when no input. d-pad moves P1."),
       racing: mk("racing", "Top-down lane racer for PC Engine. Player car at the bottom, obstacle cars spawn from the top and slide down, LEFT/RIGHT switches lanes, speed grows with score, crash freeze + auto-reset. Scrolling road BG."),
     };
@@ -305,7 +305,7 @@ const TEMPLATES = {
       catch_game: mk("catch_game", "A complete tiny game: a paddle catches falling fruit with the joystick; full game loop with vblank sync, two sprites, collision, scoring."),
       shmup: mk("shmup", "Vertical-shmup scaffold for MSX (screen 2). Player ship (sprite plane 0) + 4 bullet + 4 enemy object pools, a wave spawner, AABB collision, on-screen SCORE tiles, over a banded starfield filling the whole 32x24 name table. Joystick PORT 1 moves the ship (UP/DOWN/LEFT/RIGHT), trigger A (GTTRIG) fires; PSG blip on fire, noise-ish tone on a kill. Interrupt-free vsync via VDP status S#0. Extend with enemy fire, lives, scrolling stars."),
       platformer: mk("platformer", "Side-scrolling platformer for MSX (screen 2). Subpixel gravity/jump/land-on-top collision against a table of platforms across a 512-px (64-cell) world, drawn by COLUMN STREAMING into the wrapping screen-2 name table as the camera follows the player; the player sprite draws in screen space. Joystick LEFT/RIGHT walks, trigger A jumps (only when grounded); PSG jump blip. Interrupt-free vsync. Extend with enemies, pickups, goal."),
-      puzzle: mk("puzzle", "Match-3 / falling-block puzzle for MSX (screen 2). A 6-wide x 12-tall well drawn with the BG tilemap (distinct R/G/B cell tiles + grey border + dim field interior so the playfield is always visible). A 1x3 active piece: joystick LEFT/RIGHT shifts, trigger A rotates the colour order, DOWN soft-drops, trigger B hard-drops; horizontal-triple clears score with a PSG chime. Interrupt-free vsync. Extend with vertical/diagonal matches, gravity-collapse, levels."),
+      puzzle: mk("puzzle", "Match-3 / falling-block puzzle for MSX (screen 2). A 6-wide x 12-tall well drawn with the BG tilemap (distinct R/G/B cell tiles + grey border + dim field interior so the playfield is always visible). A 1x3 active piece: joystick LEFT/RIGHT shifts, trigger A rotates the colour order, DOWN soft-drops, trigger B hard-drops; 3+-in-a-row clears in all 4 directions with gravity + cascade chains; PSG chime per clear. Interrupt-free vsync. Extend with levels/next-piece preview."),
       sports: mk("sports", "Pong-style 2-player sports for MSX (screen 2). Court (green field + white sidelines + dashed centre net) fills the 32x24 name table; two paddles (stacked sprites) + a ball. Player 1 = joystick PORT 1 UP/DOWN; Player 2 = joystick PORT 2 UP/DOWN, falling back to chase-the-ball AI when no second pad is present so it is playable solo. Wall/paddle bounces + scoring with PSG bonks. Interrupt-free vsync. Extend with serve angles, score display, win condition."),
       racing: mk("racing", "Top-down 3-lane racing for MSX (screen 2). Grey road + green-grass shoulders fill the name table; player car at the bottom, obstacle cars (object pool) spawn at the top and slide down. Joystick LEFT/RIGHT (edge-detected) switches lanes; obstacle speed grows with score; an AABB crash triggers a ~60-frame freeze then auto-reset, with a PSG crash tone. SCORE drawn as tiles. Interrupt-free vsync. Extend with pseudo-3D road, fuel, multiple cars."),
     };
@@ -779,7 +779,7 @@ TEMPLATES.snes = {
     runtimeDirs: SNES_PVSNESLIB_VENDOR_DIRS,
     lang: "C (tcc-65816 + PVSnesLib)",
     ext: ".sfc",
-    describe: "Match-3 falling-block puzzle for SNES. 6×12 grid (text mode), rotate/soft-drop/hard-drop, horizontal-triple clear. Rotate click + clear chime via bundled SPC700 sfx.",
+    describe: "Match-3 falling-block puzzle for SNES. 6×12 grid (text mode), rotate/soft-drop/hard-drop, 3+-in-a-row clears in all 4 directions with gravity + cascade chains. Rotate click + clear chime via bundled SPC700 sfx.",
   },
   sports: {
     main: "templates/sports.c",
@@ -954,7 +954,7 @@ TEMPLATES.genesis = {
     runtimeDirs: SGDK_RUNTIME_DIRS,
     lang: SGDK_LANG,
     ext: ".bin",
-    describe: "Match-3 falling-block puzzle genre scaffold. 6×12 grid, 1×3 active piece (3 colours), rotate via A, soft-drop on DOWN, hard-drop on START, horizontal-triple clear. xorshift RNG so cell colours actually vary.",
+    describe: "Match-3 falling-block puzzle genre scaffold. 6×12 grid, 1×3 active piece (3 colours), rotate via A, soft-drop on DOWN, hard-drop on START, 3+-in-a-row clears in all 4 directions with gravity + cascade chains. xorshift RNG so cell colours actually vary.",
   },
   sports: {
     main: "templates/sports.c",
