@@ -17,9 +17,11 @@ them (the schema's "CPU is FROZEN at this instruction" was wrong for NES).
   SNAPSHOTS A/X/Y/P/S at the hit instant, exposed via `romdev_pcbreak_get`.
 - **`breakpoint(on:'pc')` returns `registersAtHit`** — the reliable break-instant
   register file. The schema + hit note now steer to it and explicitly warn that a
-  live `cpu({op:'read'})` after a hit is end-of-frame state on fceumm. (Item 1+2
-  of the report, collapsed: the snapshot is taken in the same call that detects the
-  hit, so there's no freeze-durability race and no extra round trip.)
+  live `cpu({op:'read'})` after a hit is end-of-frame state on fceumm.
+- **`breakpoint(on:'pc', captureMemory:[{region,offset,length,label}])`** reads
+  named RAM AT the hit and returns it inline as `capturedMemory` — so register +
+  RAM inspection at a PC collapses into ONE call (item 2's token win), no
+  follow-up `cpu`/`memory` round trips.
 - **NES `cpu({op:'read'})` core-internal fields relabeled** (item 3): `DB`,
   `IRQlow`, `tcount`, `count` are fceumm internals (data-bus latch / IRQ bitmask /
   cycle counters), not 6502 registers — moved out of `registers` into a labeled

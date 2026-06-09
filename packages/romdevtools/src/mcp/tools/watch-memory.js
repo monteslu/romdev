@@ -633,7 +633,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       });
   }
 
-  async function bpRunUntilPC({ address, maxFrames = 600, pressDuring }) {
+  async function bpRunUntilPC({ address, maxFrames = 600, pressDuring, captureMemory }) {
       const host = getHost(sessionKey);
       if (!host.pcBreakSupported || !host.pcBreakSupported()) {
         return jsonContent({
@@ -669,6 +669,29 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       // Snapshot the registers AT the hit BEFORE clearing (last already holds the
       // hit state; read it without clearing so registersAtHit survives).
       const atHit = last.registersAtHit ?? host.getPCBreak(false).registersAtHit ?? null;
+      // captureMemory: read the requested regions AT the hit (before we clear/step),
+      // returned inline so break→read RAM collapses into ONE call. NOTE: registers
+      // are the true break instant (core snapshot); these RAM reads are taken now —
+      // i.e. after the hit frame finished — so on run-to-frame-end cores (fceumm)
+      // they reflect the routine's RAM SIDE EFFECTS for that frame (which is what
+      // RE wants: "what did this routine touch"), not necessarily the exact byte
+      // mid-instruction. Stable + reliable; that's the property the report leaned on.
+      let capturedMemory = null;
+      if (Array.isArray(captureMemory) && captureMemory.length) {
+        capturedMemory = {};
+        for (const m of captureMemory) {
+          const label = m.label ?? `${m.region}+${m.offset}`;
+          try {
+            const bytes = host.readMemory(m.region, m.offset, m.length ?? 1);
+            capturedMemory[label] = {
+              region: m.region, offset: m.offset, length: m.length ?? 1,
+              hex: Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(""),
+            };
+          } catch (e) {
+            capturedMemory[label] = { region: m.region, offset: m.offset, error: String(e?.message ?? e) };
+          }
+        }
+      }
       const fin = host.getPCBreak(true); // clear hit
       // registersAtHit (NES/fceumm and any core that snapshots regs on hit) is the
       // RELIABLE break-instant register file. The LIVE register file (a follow-up
@@ -677,7 +700,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       // end-of-frame state. Prefer registersAtHit; only fall back to a live read on
       // cores that don't snapshot.
       const frozenNote = atHit
-        ? "registersAtHit holds the register file CAPTURED AT this instruction (A/X/Y/P/S) — use THESE, not a follow-up cpu({op:'read'}), which on NES/fceumm returns end-of-frame state, not the break instant. For a source pointer in a 16-bit reg pair, read the two ZP bytes via memory({op:'read'}). frame({op:'stepInstruction'}) to single-step from here."
+        ? "registersAtHit holds the register file CAPTURED AT this instruction (A/X/Y/P/S) — use THESE, not a follow-up cpu({op:'read'}), which on NES/fceumm returns end-of-frame state, not the break instant. For RAM at the hit, pass captureMemory:[{region,offset,length}] to get it inline (capturedMemory) in THIS call instead of a follow-up read. frame({op:'stepInstruction'}) to single-step from here."
         : "This core does not snapshot registers at the hit. cpu({op:'read'}) reflects the CPU state now; on cores that run-to-frame-end (fceumm) that is NOT the break instant — prefer the RAM side effects (memory({op:'read'})) over the live register file.";
       return attachObserverFrame(jsonContent({
         hit: true,
@@ -685,6 +708,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         pc: last.lastPC != null ? "$" + last.lastPC.toString(16).toUpperCase() : null,
         pcRaw: last.lastPC,
         ...(atHit ? { registersAtHit: atHit } : {}),
+        ...(capturedMemory ? { capturedMemory } : {}),
         frame: host.status.frameCount,
         framesRun,
         hits: fin.hits,
@@ -780,6 +804,12 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         offset: z.number().int().min(0).describe("byte offset within the region"),
         label: z.string().optional().describe("human name for this guard byte"),
       })).optional().describe("on:'write' exact — ABORT GUARD for a pressDuring run: caller-named 'is this scenario still valid?' bytes (e.g. the area/scene id, the player object-active flag). If ANY changes mid-run the watchpoint stops IMMEDIATELY and returns {aborted:true, abortedBy, before, after} — so a driven scenario that derailed (player died → title screen) doesn't burn all maxFrames and return a meaningless found:false. Each is sampled once per frame (cheap)."),
+      captureMemory: z.array(z.object({
+        region: z.enum(MEMORY_REGIONS).describe("memory region to read"),
+        offset: z.number().int().min(0).describe("byte offset within the region"),
+        length: z.number().int().min(1).max(256).default(1).describe("bytes to read"),
+        label: z.string().optional().describe("human name for this read (else 'region+offset')"),
+      })).optional().describe("on:'pc' — read these memory regions AT the hit and return them inline as `capturedMemory` (collapses break→read-RAM into ONE call, the token win). Pair with `registersAtHit` to get the routine's register + RAM state in a single round trip (e.g. capture the ZP pointer bytes a decoder just wrote). NOTE: registersAtHit is the true break instant (core snapshot); these RAM reads are taken after the hit frame finishes, so on run-to-frame-end cores (fceumm) they're the routine's RAM side effects for that frame — stable + reliable, which is exactly what RE needs."),
     },
     safeTool(async (args) => {
       switch (args.on) {
