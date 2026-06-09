@@ -6,6 +6,19 @@ the `romdev-mcp` bin is kept as an alias.)
 
 ## 0.27.0
 
+### Changed — `screenshot` scale docs: native is the accurate default, upscale adds no detail
+The `scale` param's docs oversold integer UPscaling as making tiny handheld shots
+"legible." That was misleading: nearest-neighbor upscale just duplicates pixels —
+it adds **no information** the native frame doesn't already have, costs more image
+tokens, and since VLM vision encoders resize every input to their own fixed
+resolution it may not change what the model sees (and can slightly degrade it via a
+bicubic downscale of stretched pixels). Reworded the param + tool description to
+lead with **native (`scale:1`, the default) = perfect pixels = the accurate
+representation**, keep the genuinely-useful DOWNscale (`<1`, fewer tokens for
+"did it change?" checks), and frame upscale honestly as a last resort for clients
+that can't zoom a small image. (No behavior change — `scale` was already opt-in and
+defaulted to native; this is the docs telling the truth about it.)
+
 ### Added — `breakpoint(on:'pc', captureMemory:[…])` reads named RAM at the hit
 Completes item 2 of the NES Rygar report. 0.26.0 shipped `registersAtHit` (the
 break-instant register file) but not the memory half. Now `breakpoint(on:'pc')`
