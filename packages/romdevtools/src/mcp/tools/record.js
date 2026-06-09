@@ -44,11 +44,12 @@ export function registerRecordTools(server, z, sessionKey) {
         .array(
           z.object({
             atFrame: z.number().int().min(0),
-            ports: z.array(inputShape).max(2),
+            ports: z.array(inputShape).max(2).optional(),
+            keys: z.array(z.string()).optional().describe("C64-ONLY: C64 keyboard keys held from this frame until the next entry (f1/f3/f5/f7, return, space, run/stop, a-z, 0-9, …). [] releases all held keys. Unknown keys are rejected with a clear error. Lets you script a keyboard+joystick startup timeline (e.g. {atFrame:0,keys:['f1']},{atFrame:30,ports:[{b:true}]},{atFrame:90,keys:['run/stop']}) in one call."),
           }),
         )
         .optional()
-        .describe("Per-frame input changes. Each entry sets the input at `atFrame` and holds it until the next entry."),
+        .describe("Per-frame input changes. Each entry sets the input at `atFrame` (joystick `ports` and/or C64 `keys`) and holds it until the next entry. Either field is optional — a step may set just keys, just ports, or both."),
       memorySamples: z
         .array(
           z.object({
@@ -99,7 +100,12 @@ export function registerRecordTools(server, z, sessionKey) {
       while (elapsed < frames) {
         // Apply any scripted inputs whose atFrame ≤ current frame.
         while (scriptIdx < script.length && script[scriptIdx].atFrame <= elapsed) {
-          host.setInput({ ports: script[scriptIdx].ports });
+          const entry = script[scriptIdx];
+          if (entry.ports) host.setInput({ ports: entry.ports });
+          // C64 keyboard keys held from this entry until the next. Pass [] to
+          // release all. Only valid on a C64/VICE host (setC64HeldKeys throws
+          // otherwise — surfaced as a clear error, not a silent no-op).
+          if (entry.keys !== undefined) host.setC64HeldKeys(entry.keys);
           scriptIdx++;
         }
         const batch = Math.min(sampleEvery, frames - elapsed);

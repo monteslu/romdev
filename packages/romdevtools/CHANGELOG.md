@@ -6,6 +6,23 @@ the `romdev-mcp` bin is kept as an alias.)
 
 ## 0.24.0
 
+### Added — C64 input scripting + verification (RE startup-flow telemetry)
+Follow-up to the C64 keyboard work: an agent RE'ing C64 Uridium could now press
+keys, but couldn't (a) script a keyboard+joystick startup TIMELINE in one call, or
+(b) tell whether a non-responsive key reached VICE at all. Both added — no core
+rebuild (the `c64_cia1_regs` region + key matrix already existed):
+- **`recordSession` `inputScript[].keys`** — hold C64 keyboard keys from a frame
+  until the next entry, interleaved with joystick `ports`, in one deterministic
+  timeline (e.g. `{atFrame:0,keys:['f1']},{atFrame:30,ports:[{b:true}]},
+  {atFrame:60,keys:['run/stop']},{atFrame:90,keys:[]}`). `ports` is now optional
+  (a step may set just keys). Unknown keys are **rejected with a clear error**, not
+  silently ignored.
+- **`input({op:'pressKey', verify:true})`** — also samples CIA1 **`$DC00`/`$DC01`**
+  (the keyboard/joystick scan ports the KERNAL reads) **before / during (key held)
+  / after**, plus matrix coords + active joyport. Lets you distinguish "my key
+  never reached VICE" (`before==during`) from "VICE saw it but the game ignored it"
+  (they differ, no reaction) when a C64 game doesn't respond.
+
 ### Added — C64 keyboard + joyport input (VICE core patch)
 An agent RE'ing C64 Uridium could reach the intro via joystick but couldn't ENTER
 gameplay — the game needs **F1** (1 player) + fire on **port 2**, and romdev's
