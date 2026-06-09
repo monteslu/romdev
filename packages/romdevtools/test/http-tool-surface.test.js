@@ -6,6 +6,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { buildToolRegistry, runTool, toolJsonSchema } from "../src/http/tool-registry.js";
 import { buildOpenApi } from "../src/http/routes.js";
@@ -31,6 +34,32 @@ test("runTool emits observer `call` events so /livestream updates for HTTP/skill
   assert.equal(typeof mine[0].durationMs, "number");
   assert.equal(mine[1].ok, false, "error call emits ok:false");
   assert.match(mine[1].error, /must be one of/);
+  // platform field is present (null here — no ROM loaded in this session). The
+  // KEY is the field exists so the livestream can show the system; a loaded-ROM
+  // session carries the platform string (covered by the build test below).
+  assert.ok("platform" in mine[0], "call event carries a platform field (null until a ROM loads)");
+});
+
+test("observer `call` event carries the loaded platform/system (livestream shows which console)", async () => {
+  const sk = "sess-plat-" + randomUUID().slice(0, 8);
+  const reg = buildToolRegistry(sk);
+  const got = [];
+  const onEvent = (e) => { if (e.sessionKey === sk) got.push(e); };
+  observer.on("event", onEvent);
+  const dir = await mkdtemp(join(tmpdir(), "plat-ev-"));
+  try {
+    await runTool(reg.get("scaffold"), { op: "game", platform: "nes", genre: "shmup", name: "g", path: join(dir, "nes") }, sk);
+    await runTool(reg.get("build"), { output: "run", platform: "nes", path: join(dir, "nes"), frames: 20 }, sk);
+    await runTool(reg.get("frame"), { op: "verify" }, sk);
+  } finally {
+    observer.off?.("event", onEvent);
+    await rm(dir, { recursive: true, force: true });
+  }
+  // After a ROM is loaded, the call event for a frame op carries platform:'nes'
+  // (so the human watching /livestream sees the system, not just the tool name).
+  const frameEv = got.find((e) => e.tool === "frame");
+  assert.ok(frameEv, "frame call event emitted");
+  assert.equal(frameEv.platform, "nes", "frame call event carries platform:'nes'");
 });
 
 test("registry harvests the full consolidated tool surface with handler + schema", () => {
