@@ -30,8 +30,11 @@ extern void sms_sat_upload(void);
 #define T_ENEMY  2
 
 static const uint8_t palette[32] = {
-  /* BG: 0 = backdrop, 1 = deep space blue, 2 = lighter space blue, 3 = star white */
-  0x10,0x08,0x20,0x3F, 0x00,0x00,0x00,0x00,
+  /* BG: 0 = backdrop, 1 = deep space blue, 2 = lighter space blue, 3 = star white.
+   * SMS CRAM is 2-2-2 BGR (bits --BB GGRR), so PURE blue uses only the B bits:
+   * 0x10=dark, 0x20=medium, 0x30=bright. (The old 0x08 for colour 1 was G=2 =
+   * GREEN, which made the alternating starfield bands render blue/GREEN striped.) */
+  0x10,0x20,0x30,0x3F, 0x00,0x00,0x00,0x00,
   0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
   /* Sprite palette: white, yellow, red */
   0x00,0x3F,0x0F,0x03, 0x00,0x00,0x00,0x00,
