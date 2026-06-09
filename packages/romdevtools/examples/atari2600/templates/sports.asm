@@ -116,14 +116,15 @@ MAIN:
   STA VSYNC
 
   ; ── VBLANK (37 lines) — game logic ────────────────────────────────
-  ; 34 here + the 3 STA WSYNC in the P0/P1 positioning block below = 37 VBLANK
-  ; lines total. (Bug fix: this loop used to be 37 AND the positioning added 3
-  ; more → 265 scanlines/frame → the TV/emulator can't lock vsync → rolling /
-  ; black picture. Exactly 262 lines = 3 VSYNC + 37 VBLANK + 192 visible + 30
-  ; overscan; the positioning WSYNCs MUST be counted against the 37.)
+  ; 32 here + the 5 STA WSYNC in the positioning block below (P0, P1,
+  ; HMOVE, ball, ball-HMOVE) = 37 VBLANK lines total. (Bug fix history:
+  ; this loop used to be 37 AND the positioning added more → >262
+  ; scanlines/frame → the TV/emulator can't lock vsync → rolling /
+  ; black picture. Exactly 262 lines = 3 VSYNC + 37 VBLANK + 192 visible
+  ; + 30 overscan; every positioning WSYNC MUST be counted against the 37.)
   LDA #2
   STA VBLANK
-  LDX #34
+  LDX #32
 .vb:
   STA WSYNC
   DEX
@@ -133,16 +134,22 @@ MAIN:
   LDA FRAME
   AND #$01
   BNE .skip_pad
+  ; Kernel convention: Y counts 192->2 top-to-bottom, so LARGER Y is
+  ; HIGHER on screen. DOWN must therefore DECREASE P0_Y (the old code
+  ; had it backwards — stick down moved the paddle up). 2 px/frame so
+  ; the paddle isn't sluggish.
   LDA SWCHA
   ASL                 ; right (unused)
   ASL                 ; left (unused)
   ASL                 ; down
   BCS .nd
-  INC P0_Y
+  DEC P0_Y
+  DEC P0_Y
 .nd:
   ASL                 ; up
   BCS .nu
-  DEC P0_Y
+  INC P0_Y
+  INC P0_Y
 .nu:
   ; Clamp paddle within bounds
   LDA P0_Y
@@ -246,9 +253,34 @@ MAIN:
   DEX
   BNE .p1d           ; ~64 cycles in (< 76) → P1 lands near the right
   STA RESP1
-  ; Line 3 of 3: apply HMOVE on a FRESH line, right after WSYNC
+  ; Line 3: apply HMOVE on a FRESH line, right after WSYNC
   STA WSYNC
   STA HMOVE
+
+  ; Lines 4-5: position the BALL horizontally at BALL_X.
+  ; THE "ball never moves" fix: RESBL was defined but never strobed, so
+  ; the ball sat at whatever column the TIA powered up with, forever.
+  ; Standard divide-by-15 coarse strobe + HMBL fine offset, re-done every
+  ; frame so BALL_X changes actually show on screen.
+  STA WSYNC
+  LDA BALL_X
+  CLC
+  ADC #14              ; +14: compensate the loop's minimum latency
+  SEC
+.bdiv:
+  SBC #15
+  BCS .bdiv            ; A = remainder - 15 (in -15..-1)
+  STA RESBL            ; coarse: ball lands at the loop-exit column
+  EOR #$FF             ; fine: remainder -> HMBL nibble
+  ASL
+  ASL
+  ASL
+  ASL
+  STA HMBL
+  STA WSYNC
+  STA HMOVE            ; apply the fine offset on a fresh line
+  LDA #0
+  STA HMBL             ; don't re-shift on later HMOVEs
 
   LDA #0
   STA VBLANK
