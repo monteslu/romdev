@@ -727,7 +727,17 @@ export async function buildForPlatform(args) {
     // the cartridge header + reset vectors which the custom crt0 provides.
     // MSX: _CODE goes at $4010 — a cartridge maps at $4000-$BFFF and the first
     // 16 bytes are the ROM header ("AB" + INIT vector) the crt0 emits.
-    const codeLoc = args.codeLoc ?? (args.platform === "msx" ? MSX_CODE_LOC : 0x0000);
+    // SMS/GG: _CODE goes at $0100 — $0000-$00FF belongs to the crt0's ABS
+    // _HEADER area (reset + RST/IRQ/NMI vectors + _boot). The old default of
+    // $0000 linked _CODE ON TOP of the vector table: makebin emitted gsinit
+    // at $0000 and the di/im 1/SP-init/ISR vectors were GONE — it booted in a
+    // BIOS-less emulator by accident (gsinit happened to sit at the reset
+    // vector) but had no working IRQ/NMI/pause handling and was one EI away
+    // from jumping into garbage on real hardware.
+    const codeLoc = args.codeLoc ?? (
+      args.platform === "msx" ? MSX_CODE_LOC
+      : (args.platform === "sms" || args.platform === "gg") ? 0x0100
+      : 0x0000);
     const romSize = SDCC_ROM_SIZE[args.platform] ?? 32 * 1024;
 
     // crt0 + headers + sources come straight from the caller. The build
@@ -809,32 +819,51 @@ export async function buildForPlatform(args) {
     // rejected it. Checksum = sum of bytes $0000..$7FEF (everything before
     // the header), stored little-endian. GG BIOS doesn't check, but writing
     // it is harmless. Only touches ROMs that actually have the header.
-    if (binary && r.exitCode === 0 && (args.platform === "sms" || args.platform === "gg") && binary.length >= 0x8000) {
+    if (binary && r.exitCode === 0 && (args.platform === "sms" || args.platform === "gg")) {
+      // Pad to a full 32KB bank FIRST. sdld emits up to the highest used
+      // address, so a small program can come out under $8000 — which (a)
+      // skipped this whole header block before (the header guard required
+      // 32KB) and (b) odd-size ROMs misbehave on real mappers/flashcarts.
+      if (binary.length < 0x8000) {
+        const padded = new Uint8Array(0x8000);
+        padded.set(binary);
+        binary = padded;
+      }
       const hdr = 0x7FF0;
       const hasHeader = String.fromCharCode(...binary.slice(hdr, hdr + 8)) === "TMR SEGA";
+      // Region nibble is PLATFORM-SPECIFIC and load-bearing: 4 = SMS export,
+      // 7 = GG international. A .gg ROM stamped with an SMS region (3/4) makes
+      // Genesis Plus GX (RetroArch/RetroDECK's SMS+GG core) boot it in "GG
+      // running SMS software" COMPATIBILITY mode — wrong video mode + wrong
+      // CRAM format for a native-GG program → black/garbled screen on the
+      // user's device while our BIOS-less host looked fine. Size nibble $C =
+      // 32KB checksum range ($0000-$7FEF).
+      const regionSize = args.platform === "gg" ? 0x7C : 0x4C;
       if (!hasHeader) {
         // No header emitted by the crt0 → write a complete TMR SEGA header
         // into the last 16 bytes of bank 0 ($7FF0-$7FFF). Without this the
         // export (US/EU) SMS BIOS shows "SOFTWARE ERROR" and refuses to run.
         // $7FF0-$7FF7 "TMR SEGA"; $7FF8-$7FF9 reserved ($00); $7FFA-$7FFB
         // checksum (filled below); $7FFC-$7FFE product code/version (zeros
-        // ok for homebrew); $7FFF region+size = $4C (region 4 = export,
-        // size $C = 32KB, the checksum range that covers $0000-$7FEF).
+        // ok for homebrew); $7FFF region+size (see regionSize above).
         const TMR = [0x54,0x4D,0x52,0x20,0x53,0x45,0x47,0x41]; // "TMR SEGA"
         for (let i = 0; i < 8; i++) binary[hdr + i] = TMR[i];
         binary[hdr + 8] = 0x00; binary[hdr + 9] = 0x00;   // reserved
         binary[hdr + 12] = 0x00; binary[hdr + 13] = 0x00; // product code lo
         binary[hdr + 14] = 0x00;                          // product/version
-        binary[hdr + 15] = 0x4C;                          // region 4 (export) + size $C (32KB)
       }
+      // Always stamp the platform-correct region/size — a crt0-provided header
+      // with an SMS region on a .gg build has the same compat-mode problem.
+      binary[hdr + 15] = regionSize;
       // Checksum = sum of bytes $0000..$7FEF (everything before the header),
-      // stored little-endian at $7FFA. Region/size $4C declares the 32KB
-      // range, so the BIOS checksums $0000-$7FEF.
+      // stored little-endian at $7FFA. Size nibble $C declares the 32KB
+      // range, so the BIOS checksums $0000-$7FEF. (The GG BIOS doesn't
+      // checksum, but writing it is harmless and correct.)
       let sum = 0;
       for (let i = 0; i < 0x7FF0; i++) sum = (sum + binary[i]) & 0xFFFF;
       binary[0x7FFA] = sum & 0xFF;
       binary[0x7FFB] = (sum >> 8) & 0xFF;
-      r.log += `\n--- SMS header ${hasHeader ? "checksum fixed" : "written + checksummed"} ($7FFA=${sum.toString(16).toUpperCase().padStart(4,"0")}, region/size=$4C) ---`;
+      r.log += `\n--- ${args.platform.toUpperCase()} header ${hasHeader ? "checksum fixed" : "written + checksummed"} ($7FFA=${sum.toString(16).toUpperCase().padStart(4,"0")}, region/size=$${regionSize.toString(16).toUpperCase()}) ---`;
     }
     // MSX: the binary built with codeLoc=$4010 is a $4000-based page image.
     // SDCC/sdldz80 emit an ihx that, converted to bin, starts at the lowest
