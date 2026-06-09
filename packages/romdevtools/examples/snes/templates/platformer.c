@@ -35,20 +35,21 @@ static u16 bg_map[32 * 32];
 
 typedef struct { s16 x, y, w, h; } Rect;
 
-#define WORLD_W  512
+#define WORLD_W  256   /* = the 32x32 console map width, so platforms are drawable */
 #define SCREEN_W 256
 
-/* Platforms in WORLD coords, spread across the 512-px world. */
+/* Platforms in WORLD coords. The world is 256 px — exactly the 32x32
+ * console map — so every platform can be DRAWN on the text layer and
+ * scrolls 1:1 with the physics. (The old 512-px world only existed as
+ * invisible collision rects: the 32-col map can't show cols 32-63, so
+ * the player appeared to stand and jump on nothing.) */
 static const Rect platforms[] = {
-    {   0, 200, 512,  24 }, /* floor spans the world */
-    {  30, 160,  56,   8 },
-    { 110, 140,  64,   8 },
-    { 190, 110,  48,   8 },
-    {  60, 100,  32,   8 },
-    { 300, 150,  64,   8 },
-    { 400, 120,  56,   8 },
-    { 360,  84,  48,   8 },
-    { 460, 168,  48,   8 },
+    {   0, 200, 256,  24 }, /* floor spans the world */
+    {  24, 168,  56,   8 },
+    { 104, 144,  64,   8 },
+    { 184, 112,  48,   8 },
+    {  48,  96,  40,   8 },
+    { 208,  72,  40,   8 },
 };
 #define N_PLATFORMS (sizeof(platforms) / sizeof(platforms[0]))
 
@@ -103,10 +104,19 @@ int main(void) {
     consoleDrawText(2, 1, "D-PAD MOVE   A JUMP");
     /* Column markers across the BG so the hardware scroll is visible as
      * you move (the console map is 32 cells / 256 px and wraps). */
-    consoleDrawText( 1, 12, "|0");
-    consoleDrawText( 9, 12, "|64");
-    consoleDrawText(17, 12, "|128");
-    consoleDrawText(25, 12, "|192");
+    /* Draw every platform as a row of '=' on the (scrolling) text layer
+     * so the player can SEE what they're standing on. */
+    {
+        char buf[33];
+        u16 pi, k, cols;
+        for (pi = 0; pi < N_PLATFORMS; pi++) {
+            cols = platforms[pi].w / 8;
+            if (cols > 32) cols = 32;
+            for (k = 0; k < cols; k++) buf[k] = '=';
+            buf[cols] = 0;
+            consoleDrawText(platforms[pi].x / 8, platforms[pi].y / 8, buf);
+        }
+    }
 
     oamSet(0, 32, 100, 3, 0, 0, 0, 0);
     /* Screen ON first, THEN sound. sfx_init() must run AFTER setScreenOn()
