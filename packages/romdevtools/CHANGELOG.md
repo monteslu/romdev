@@ -4,13 +4,13 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
-## 0.24.0
+## 0.25.0
 
 ### Added — C64 input scripting + verification (RE startup-flow telemetry)
-Follow-up to the C64 keyboard work: an agent RE'ing C64 Uridium could now press
-keys, but couldn't (a) script a keyboard+joystick startup TIMELINE in one call, or
-(b) tell whether a non-responsive key reached VICE at all. Both added — no core
-rebuild (the `c64_cia1_regs` region + key matrix already existed):
+Follow-up to the 0.24.0 C64 keyboard work: an agent RE'ing C64 Uridium could now
+press keys, but couldn't (a) script a keyboard+joystick startup TIMELINE in one
+call, or (b) tell whether a non-responsive key reached VICE at all. Both added — no
+core rebuild (the `c64_cia1_regs` region + key matrix already existed):
 - **`recordSession` `inputScript[].keys`** — hold C64 keyboard keys from a frame
   until the next entry, interleaved with joystick `ports`, in one deterministic
   timeline (e.g. `{atFrame:0,keys:['f1']},{atFrame:30,ports:[{b:true}]},
@@ -22,6 +22,36 @@ rebuild (the `c64_cia1_regs` region + key matrix already existed):
   / after**, plus matrix coords + active joyport. Lets you distinguish "my key
   never reached VICE" (`before==during`) from "VICE saw it but the game ignored it"
   (they differ, no reaction) when a C64 game doesn't respond.
+
+### Changed — `scaffold` no longer echoes the vendored toolchain manifest
+`scaffold({op:'project'|'game'})` used to return a flat `files[]` of EVERY written
+file — including the toolchain copies (35 of 44 entries on NES, **173 of 264 on
+GBA**, ~270 on SGDK Genesis) that an agent never touches. Across a matrix run (one
+game × every genre × every platform) that was ~100 KB of pure vendored-path lists
+in context with zero decision value. Now the response is a compact receipt:
+- `files` — only the project-**OWNED** files you edit (main source, runtime, crt0,
+  cfg, README).
+- `fileCount` (total written) + `vendorFileCount` (the summarized vendored copies,
+  on disk if you ever need them).
+- `verbose:true` restores the full flat list as `allFiles`.
+
+"Owned" is classified by what a file **is**, not just a `vendor/` prefix — so it
+correctly excludes the SDK header trees the GBA (libtonc `include/`+`sysinclude/`)
+and Genesis (SGDK `include/`) toolchains drop OUTSIDE `vendor/`, plus prebuilt
+`crt*.o` / `*.a` / `*.lib`. (The initial fix used a `vendor/`-prefix denylist and
+missed exactly those two SDK platforms — caught + fixed via a 0.24.0 matrix-run
+report. GBA dropped 173→9 owned, Genesis 82→13.) Mirrors the `inline`/`outputPath`
+choose-your-payload pattern the snippets op already had.
+
+### Changed — scaffold README + `nextStep` lead with `build({output:'project'})`
+The generated project README and the scaffold's `nextStep` now lead with the
+one-call **`build({output:'project', platform, path, outputPath})`** form (infers
+toolchain/crt0/linker from the directory — no `sourcesPaths`/`includePaths`/
+`linkerConfig` to hand-specify), and demote the verbose `output:'run'` + manifest
+form to a collapsed "compiling edited loose source" alternative. The project-dir
+build was already the easier path; now it's the one a fresh agent copies first.
+
+## 0.24.0
 
 ### Added — C64 keyboard + joyport input (VICE core patch)
 An agent RE'ing C64 Uridium could reach the intro via joystick but couldn't ENTER
@@ -58,29 +88,6 @@ guidance + symptom→doc pointers. **"Read your target platform's
 `platform({op:'doc', name:'mental_model'})` BEFORE you write code for it"** is now
 a top-level rule (the footguns live there) — so the on-demand docs actually get
 read. The dynamic SKILL.md inherits all of this.
-
-### Changed — `scaffold` no longer echoes the vendored toolchain manifest
-`scaffold({op:'project'|'game'})` used to return a flat `files[]` of EVERY written
-file — including the `vendor/**` toolchain copies (35 of 44 entries on NES, ~270
-on SGDK Genesis) that an agent never touches. Across a matrix run (e.g. one game
-× every genre × every platform) that was ~100 KB of pure `vendor/` path lists in
-context with zero decision value. Now the response is a compact receipt:
-- `files` — only the project-**OWNED** files you edit (main source, runtime, crt0,
-  cfg, README).
-- `fileCount` (total written) + `vendorFileCount` (the summarized vendored copies,
-  on disk under `vendor/` if you ever need them).
-- `verbose:true` restores the full flat list as `allFiles`.
-
-This mirrors the `outputPath`/`inline` choose-your-payload pattern the snippets op
-already had. (Thanks to the agent who measured this on a 69-ROM matrix run.)
-
-### Changed — scaffold README + `nextStep` lead with `build({output:'project'})`
-The generated project README and the scaffold's `nextStep` now lead with the
-one-call **`build({output:'project', platform, path, outputPath})`** form (infers
-toolchain/crt0/linker from the directory — no `sourcesPaths`/`includePaths`/
-`linkerConfig` to hand-specify), and demote the verbose `output:'run'` + manifest
-form to a collapsed "compiling edited loose source" alternative. The project-dir
-build was already the easier path; now it's the one a fresh agent copies first.
 
 ## 0.23.0
 

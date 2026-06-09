@@ -134,6 +134,26 @@ key:
 A typical C64 RE startup: load → step to the title → `pressKey f1` (1 player) →
 `set {b:true}` (fire to start) → step → you're in gameplay → `state({op:'save'})`.
 
+**Script the whole startup in one call.** `recordSession`'s `inputScript` takes
+C64 `keys` alongside joystick `ports` — held from each entry until the next — so a
+key+joystick startup is one deterministic timeline instead of many calls:
+```js
+recordSession({ frames:600, sampleEvery:60, outputDir:'…', inputScript:[
+  { atFrame:0,  keys:['f1'] },        // 1 player
+  { atFrame:30, ports:[{ b:true }] }, // fire (port 2)
+  { atFrame:90, keys:['run/stop'] },  // start
+  { atFrame:120, keys:[] } ] })       // release
+```
+A step may set just `keys`, just `ports`, or both; `keys:[]` releases all. An
+unknown key is rejected with a clear error (not a silent no-op).
+
+**When a key seems ignored, probe it.** `input({op:'pressKey', key:'run/stop',
+verify:true})` returns the matrix coords, active joyport, and a CIA1 snapshot
+(`$DC00`/`$DC01`) **before / during (held) / after**. `before==during` ⇒ the key
+never moved the matrix line (didn't reach VICE); they differ but the game didn't
+react ⇒ it scanned a different key/port, or that screen (crack/doc/trainer)
+ignores it. This is how you tell a romdev problem from a game-flow problem.
+
 **Controller-alone (playtest):** a human in `playtest` needs no keyboard — the
 pad's spare buttons map to the C64 keys (X=Space, L2=Run/Stop, R2=Return,
 right-stick=F1/F3/F5/F7, top face=F1; d-pad+Fire=joystick). The same mapping
