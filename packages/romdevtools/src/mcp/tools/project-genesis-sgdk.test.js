@@ -70,15 +70,17 @@ test("createProject genesis sgdk_hello: ships full SGDK runtime + include tree",
   assert.ok(sgdkSrcStat.isDirectory(), "SGDK source not vendored into project on disk");
 
   // include/ tree copied recursively. genesis.h is the umbrella header
-  // every SGDK project includes — must be present.
+  // every SGDK project includes — must be present ON DISK. (The SDK header
+  // tree is classified as vendored, so it's in `allFiles`/disk, NOT the
+  // compact `files` receipt — same as the vendor/ split above.)
   const headerPath = join(projPath, "include", "genesis.h");
   const headerStat = await stat(headerPath);
   assert.ok(headerStat.isFile(), "include/genesis.h missing from project");
-  assert.ok(r.files.includes("include/genesis.h"), "files manifest missing include/genesis.h");
+  assert.ok(rv.allFiles.includes("include/genesis.h"), "verbose allFiles missing include/genesis.h");
 
   // Sample a nested-directory header (SGDK puts some headers in include/snd/
   // and include/ext/). Confirm recursion descended.
-  const nested = r.files.filter((f) => f.startsWith("include/") && f.split("/").length >= 3);
+  const nested = rv.allFiles.filter((f) => f.startsWith("include/") && f.split("/").length >= 3);
   assert.ok(nested.length > 0, "no nested include/ headers were copied — recursion broken");
 
   // main.c is the SGDK starter — should contain the canonical entry point.

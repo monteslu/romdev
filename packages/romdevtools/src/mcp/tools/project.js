@@ -1833,14 +1833,27 @@ Compiles **C89**, not C99/C11. Stick to:
     }
   }
 
-  // Split the manifest: project-OWNED files (main.c, runtime, crt0, cfg,
-  // README…) are the only ones an agent touches; vendor/** are internal
+  // Split the manifest: project-OWNED files (main.c, runtime helpers, crt0,
+  // cfg, README…) are the only ones an agent touches; the rest are internal
   // toolchain copies on disk that never enter a decision. Echoing all of
-  // them — 35 of 44 entries on NES are vendor/cc65/libsrc/*, ~270 on SGDK
-  // Genesis — was pure context noise across a matrix run. Default to a
-  // compact receipt (owned list + vendor COUNT); `verbose:true` restores the
-  // full flat list for the rare caller that wants it.
-  const ownedFiles = writtenFiles.filter((f) => !f.startsWith("vendor/"));
+  // them — 35/44 on NES (vendor/cc65/libsrc/*), 173/264 on GBA (libtonc
+  // include/+sysinclude/), ~270 on SGDK Genesis — was pure context noise
+  // across a matrix run. Default to a compact receipt (owned list + a
+  // not-owned COUNT); `verbose:true` restores the full flat list.
+  //
+  // Classify NON-owned by what it actually is, NOT just a `vendor/` prefix:
+  // the cc65 path lands under vendor/, but the GBA/Genesis SDKs drop their
+  // header trees at include/ + sysinclude/ (no vendor/ prefix) and prebuilt
+  // crt objects/archives at the root — none of which an agent edits. (R: the
+  // original `!startsWith('vendor/')` denylist missed exactly these two SDK
+  // platforms — same bug class as the original fix, second location.)
+  const isVendored = (f) =>
+    f.startsWith("vendor/") ||                    // cc65 libsrc, pvsneslib, sgdk src
+    f.startsWith("include/") ||                   // SDK header trees (libtonc/libgba/SGDK/maxmod)
+    f.startsWith("sysinclude/") ||                // libgba/libtonc system headers
+    /^crt[a-z0-9]*\.o$/i.test(f) ||               // prebuilt crt objects (crti/crtn/crtbegin/crtend)
+    /\.(a|lib)$/i.test(f);                         // prebuilt static archives
+  const ownedFiles = writtenFiles.filter((f) => !isVendored(f));
   const vendorFileCount = writtenFiles.length - ownedFiles.length;
   return {
     path: projPath,
