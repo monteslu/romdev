@@ -68,11 +68,30 @@ void main(void) {
     if (btn && !prev && grounded) { vy = -6; sfx_tone(0, 100, 6); }
     prev = btn;
 
-    vy++;
-    if (vy > 4) vy = 4;
-    py += vy;
-    if (py < 0)  py = 0;
-    if (py > 96) py = 96;
-    if (vy > 0 && on_platform(px, py)) { py = py & 0xFC; vy = 0; }
+    {
+      /* Land-on-top via a CROSSING test. The old check demanded
+       * py+6 == platform.y EXACTLY after the move — falls step up to
+       * 4px/frame, so the exact value was usually skipped (fall-through),
+       * and the `py & 0xFC` snap then broke the equality for the next
+       * frame's grounded test (couldn't jump from floating platforms). */
+      int16_t old_py = py;
+      uint8_t i;
+      vy++;
+      if (vy > 4) vy = 4;
+      py += vy;
+      if (vy > 0) {
+        for (i = 0; i < N_PLATFORMS; i++) {
+          if (old_py + 6 <= platforms[i].y && py + 6 >= platforms[i].y
+              && px + 6 > platforms[i].x
+              && px < platforms[i].x + platforms[i].w) {
+            py = platforms[i].y - 6;
+            vy = 0;
+            break;
+          }
+        }
+      }
+      if (py < 0)  py = 0;
+      if (py > 96) py = 96;
+    }
   }
 }
