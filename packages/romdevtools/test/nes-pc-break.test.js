@@ -78,6 +78,18 @@ test("NES PC breakpoint + read watch + single-step (fceumm 6502)", { timeout: 18
       `registersAtHit.${r} out of range: ${bp.registersAtHit[r]}`);
   }
 
+  // 2c) captureMemory — read named RAM AT the hit, inline, in the SAME call as
+  // the register snapshot (collapses break→cpu→memory into one call). $10 is the
+  // counter this ROM writes, so it must come back.
+  const bp2 = toJSON(await client.callTool({
+    name: "breakpoint", arguments: { on: "pc", address: writerPC, maxFrames: 300,
+      captureMemory: [{ region: "system_ram", offset: 0x10, length: 1, label: "counter" }] },
+  }));
+  assert.equal(bp2.hit, true, "2nd runUntilPC did not hit");
+  assert.ok(bp2.registersAtHit, "2nd hit missing registersAtHit");
+  assert.ok(bp2.capturedMemory && bp2.capturedMemory.counter, "captureMemory not returned inline: " + JSON.stringify(bp2));
+  assert.match(bp2.capturedMemory.counter.hex, /^[0-9a-f]{2}$/, "captured $10 byte not a hex byte: " + JSON.stringify(bp2.capturedMemory));
+
   // 3) the LIVE register file (a follow-up cpu read) is end-of-frame state on
   // fceumm — it is NOT expected to match registersAtHit. We just confirm cpu read
   // still works and that the internal fields are now under coreInternal, not regs.
