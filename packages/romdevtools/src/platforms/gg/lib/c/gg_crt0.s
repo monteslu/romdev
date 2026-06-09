@@ -37,10 +37,13 @@
 ;; ─── Reset vector at $0000 ────────────────────────────────────────
         .area _HEADER (ABS)
         .org    0x0000
+        ;; ONLY 8 BYTES fit before the RST $08 vector. The old block here
+        ;; (di/im 1/ld sp/jp = 9 bytes) overflowed into .org 0x0008, whose
+        ;; `ret` stomped the jp's high target byte -> boot jumped into
+        ;; garbage. di+im 1+jp = 6 bytes; SP setup moved to _boot below.
         di                          ; interrupts off until we're ready
         im      1                   ; mode 1 — IRQs jump to $0038
-        ld      sp, #0xDFF0         ; GG/SMS stack (top of WRAM minus 16)
-        jp      gsinit              ; skip the interrupt vector table
+        jp      _boot               ; continue past the vector table
 
 ;; ─── RST handlers (default = return) ──────────────────────────────
         .org    0x0008
@@ -79,6 +82,15 @@
 ;; NMI is vectored for safety (some homebrew loaders trigger it).
         .org    0x0066
         retn
+
+;; ─── Boot continuation (right after the NMI vector) ───────────────
+;; SP first, then the C runtime init. Lives in the ABS header area so
+;; it exists at a known address regardless of where _CODE is linked
+;; (_CODE must start at >= $0100 so it can't overwrite this table).
+        .org    0x0068
+_boot:
+        ld      sp, #0xDFF0         ; stack at top of WRAM minus 16
+        jp      gsinit
 
 ;; ─── crt0 body ────────────────────────────────────────────────────
 ;; Standard SDCC pattern: jump to a code area, run initializers, then

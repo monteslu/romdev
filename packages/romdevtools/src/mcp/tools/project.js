@@ -398,6 +398,11 @@ TEMPLATES.gbc = {
 // against. Factored to a constant so adding a new template is a one-line
 // change at the bottom.
 const SMS_RUNTIME = [
+  // The crt0 ships IN the project (like GG/MSX) so the dir is genuinely
+  // self-contained: build({output:'project'}) routes it via the crt0 channel
+  // (projectBuildRecipe), and an external stock-SDCC rebuild has the real
+  // boot stub on disk instead of silently linking SDCC's non-booting one.
+  { src: "lib/c/sms_crt0.s",      dst: "sms_crt0.s" },
   { src: "lib/c/sms_hw.h",        dst: "sms_hw.h" },
   { src: "lib/c/vdp_init.c",      dst: "vdp_init.c" },
   { src: "lib/c/load_palette.c",  dst: "load_palette.c" },

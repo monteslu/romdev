@@ -824,9 +824,17 @@ export function projectBuildRecipe(platform, names) {
     // msx_crt0.s through crt0 makes ITS header + init the cartridge entry.
     if (has("msx_crt0.s")) { r.crt0File = "msx_crt0.s"; r.codeLoc = 0x4010; }
   } else if (platform === "sms" || platform === "gg") {
-    // SMS/GG auto-inject their bundled crt0 inside buildForPlatform — so the
-    // scaffold's own *_crt0.s would be a DUPLICATE. Skip it.
-    for (const n of names) if (/_crt0\.s$/i.test(n)) r.skip.add(n);
+    // SMS/GG: route the project's *_crt0.s through the crt0 channel (like
+    // GB/MSX), NOT as a plain source TU. The OLD recipe skipped it on the
+    // belief that "buildForPlatform auto-injects the bundled crt0" — IT DOES
+    // NOT (only the output:'rom'/'run' MCP handlers auto-inject). So every
+    // output:'project' SMS/GG build linked SDCC's STOCK z80 crt0, whose boot
+    // is `ld a,#2 / rst $08 / halt` — main() never ran and every scaffold
+    // booted to a BLACK SCREEN (the RetroDECK "all broken" report; our
+    // output:'run' verifications were false-green via the other path).
+    // readProjectDir falls back to the bundled crt0 when the dir has none.
+    const crt0Name = names.find((n) => /_crt0\.s$/i.test(n));
+    if (crt0Name) r.crt0File = crt0Name;
   } else if (platform === "genesis" || platform === "megadrive" || platform === "md") {
     // SGDK supplies sega startup + rom header. The scaffold dir may contain
     // generated intermediates (sega.s, sega.preprocessed.s, rom_header.*, and an
@@ -917,6 +925,15 @@ export async function readProjectDir(projPath, platform) {
       // .vgz/.esf/etc = music driver inputs.) Missing one = "file not found: X".
       binaryIncludes[n] = (await readFile(path.join(projPath, n))).toString("base64");
     }
+  }
+
+  // SMS/GG with no crt0 file in the dir → fall back to the bundled crt0,
+  // exactly like the output:'rom'/'run' handlers do. Without this the link
+  // silently uses SDCC's stock z80 crt0, which never calls main() (black
+  // screen at boot). The SMS scaffold historically shipped without a crt0
+  // file, so this fallback is load-bearing for existing project dirs.
+  if (crt0 == null && (platform === "sms" || platform === "gg")) {
+    crt0 = await resolveAutoCrt0(platform);
   }
 
   // GBA runtime refinement: libgba if the entry includes <gba.h>, else the
