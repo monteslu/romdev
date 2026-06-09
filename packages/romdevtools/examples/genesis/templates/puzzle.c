@@ -140,26 +140,87 @@ static void draw_piece(s16 col, s16 row, bool clear) {
     }
 }
 
+/* ── match / clear / gravity core (ported from the GBC reference puzzle).
+ * The old scan was horizontal-only AND cleared cells mid-scan, so vertical
+ * and diagonal runs never cleared, 4+ runs half-cleared, and nothing ever
+ * fell afterwards ("rows don't shift down"). This marks every 3+ run in all
+ * 4 directions, clears them, applies per-column gravity, and loops so
+ * cascades chain (score scales with chain depth). */
+static u8 matched[ROWS][COLS];
+static const s8 DIRS4[4][2] = { {0,1}, {1,0}, {1,1}, {1,-1} };
+
+static u8 mark_and_count(void) {
+  u8 r, c, d, len, k, cnt;
+  u8 col;
+  s8 dr, dc;
+  int sr, sc;
+  cnt = 0;
+  for (r = 0; r < ROWS; r++) for (c = 0; c < COLS; c++) matched[r][c] = 0;
+  for (r = 0; r < ROWS; r++) {
+    for (c = 0; c < COLS; c++) {
+      col = grid[r][c];
+      if (col == 0) continue;
+      for (d = 0; d < 4; d++) {
+        dr = DIRS4[d][0]; dc = DIRS4[d][1];
+        sr = (int)r - dr; sc = (int)c - dc;
+        if (sr >= 0 && sr < ROWS && sc >= 0 && sc < COLS
+            && grid[sr][sc] == col) continue;  /* not the run's start */
+        len = 1;
+        sr = (int)r + dr; sc = (int)c + dc;
+        while (sr >= 0 && sr < ROWS && sc >= 0 && sc < COLS
+               && grid[sr][sc] == col) { len++; sr += dr; sc += dc; }
+        if (len >= 3) {
+          sr = r; sc = c;
+          for (k = 0; k < len; k++) {
+            if (!matched[sr][sc]) { matched[sr][sc] = 1; cnt++; }
+            sr += dr; sc += dc;
+          }
+        }
+      }
+    }
+  }
+  return cnt;
+}
+
+/* collapse each column so survivors rest on the floor (in place: walk
+ * from the bottom, copying gems down to a write cursor, then zero above) */
+static void apply_gravity(void) {
+  u8 c;
+  int r, w;
+  for (c = 0; c < COLS; c++) {
+    w = ROWS - 1;
+    for (r = ROWS - 1; r >= 0; r--) {
+      if (grid[r][c] != 0) { grid[w][c] = grid[r][c]; w--; }
+    }
+    for (; w >= 0; w--) grid[w][c] = 0;
+  }
+}
+
+static void resolve_board(void) {
+  u8 n, r, c, chain;
+  unsigned int amt;
+  chain = 0;
+  while (1) {
+    n = mark_and_count();
+    if (n == 0) break;
+    chain++;
+    for (r = 0; r < ROWS; r++)
+      for (c = 0; c < COLS; c++)
+        if (matched[r][c]) grid[r][c] = 0;
+    amt = (unsigned int)n * 10u;
+    if (chain > 1) amt = amt * chain;
+    if (score < 65500u) score += amt;
+    sfx_tone(0, 250, 12);  /* clear chime */
+    apply_gravity();
+  }
+}
+
 static void lock_piece(void) {
     for (u16 i = 0; i < 3; i++) {
         s16 r = piece_y + i;
         if (r >= 0 && r < ROWS) grid[r][piece_x] = piece[i];
     }
-    /* Check horizontal triples on the affected rows. */
-    for (u16 i = 0; i < 3; i++) {
-        s16 r = piece_y + i;
-        if (r < 0 || r >= ROWS) continue;
-        for (s16 c = 0; c <= COLS - 3; c++) {
-            u8 a = grid[r][c], b = grid[r][c + 1], d = grid[r][c + 2];
-            if (a != 0 && a == b && b == d) {
-                grid[r][c]     = 0;
-                grid[r][c + 1] = 0;
-                grid[r][c + 2] = 0;
-                if (score < 65500u) score += 30;
-                sfx_tone(0, 250, 12);  /* triple-clear chime */
-            }
-        }
-    }
+    resolve_board();
     draw_grid();
 }
 

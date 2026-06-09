@@ -132,8 +132,86 @@ static void spawn_piece(void) {
 }
 
 /* Lock current piece into the grid + check for match-3 horizontals. */
+/* ── match / clear / gravity core (ported from the GBC reference puzzle).
+ * The old scan was horizontal-only AND cleared cells mid-scan, so vertical
+ * and diagonal runs never cleared, 4+ runs half-cleared, and nothing ever
+ * fell afterwards ("rows don't shift down"). This marks every 3+ run in all
+ * 4 directions, clears them, applies per-column gravity, and loops so
+ * cascades chain (score scales with chain depth). */
+/* matched[] lives at $0500 — OUTSIDE the linker's RAM area ($0300-$04FF,
+ * which grid+runtime statics nearly fill; 72 more BSS bytes overflow it).
+ * $0500-$07FF is real, unused NES work RAM (hw stack is $0100, shadow OAM
+ * $0200), so an absolute pointer there is free. */
+#define matched ((uint8_t (*)[GRID_W])0x0500)
+static const int8_t DIRS4[4][2] = { {0,1}, {1,0}, {1,1}, {1,-1} };
+
+static uint8_t mark_and_count(void) {
+  uint8_t r, c, d, len, k, cnt;
+  uint8_t col;
+  int8_t dr, dc;
+  int sr, sc;
+  cnt = 0;
+  for (r = 0; r < GRID_H; r++) for (c = 0; c < GRID_W; c++) matched[r][c] = 0;
+  for (r = 0; r < GRID_H; r++) {
+    for (c = 0; c < GRID_W; c++) {
+      col = grid[r][c];
+      if (col == EMPTY) continue;
+      for (d = 0; d < 4; d++) {
+        dr = DIRS4[d][0]; dc = DIRS4[d][1];
+        sr = (int)r - dr; sc = (int)c - dc;
+        if (sr >= 0 && sr < GRID_H && sc >= 0 && sc < GRID_W
+            && grid[sr][sc] == col) continue;  /* not the run's start */
+        len = 1;
+        sr = (int)r + dr; sc = (int)c + dc;
+        while (sr >= 0 && sr < GRID_H && sc >= 0 && sc < GRID_W
+               && grid[sr][sc] == col) { len++; sr += dr; sc += dc; }
+        if (len >= 3) {
+          sr = r; sc = c;
+          for (k = 0; k < len; k++) {
+            if (!matched[sr][sc]) { matched[sr][sc] = 1; cnt++; }
+            sr += dr; sc += dc;
+          }
+        }
+      }
+    }
+  }
+  return cnt;
+}
+
+/* collapse each column so survivors rest on the floor (in place: walk
+ * from the bottom, copying gems down to a write cursor, then zero above) */
+static void apply_gravity(void) {
+  uint8_t c;
+  int r, w;
+  for (c = 0; c < GRID_W; c++) {
+    w = GRID_H - 1;
+    for (r = GRID_H - 1; r >= 0; r--) {
+      if (grid[r][c] != EMPTY) { grid[w][c] = grid[r][c]; w--; }
+    }
+    for (; w >= 0; w--) grid[w][c] = EMPTY;
+  }
+}
+
+static void resolve_board(void) {
+  uint8_t n, r, c, chain;
+  unsigned int amt;
+  chain = 0;
+  while (1) {
+    n = mark_and_count();
+    if (n == 0) break;
+    chain++;
+    for (r = 0; r < GRID_H; r++)
+      for (c = 0; c < GRID_W; c++)
+        if (matched[r][c]) grid[r][c] = EMPTY;
+    amt = (unsigned int)n * 10u;
+    if (chain > 1) amt = amt * chain;
+    (void)amt;
+    sound_play_tone(0, 0xC0, 6, 4);  /* clear chime */
+    apply_gravity();
+  }
+}
+
 static void lock_piece(void) {
-  uint8_t r, c, run, run_col;
   int8_t i;
   /* Drop the 3 cells into the grid. */
   for (i = 0; i < 3; i++) {
@@ -142,26 +220,7 @@ static void lock_piece(void) {
       grid[y][piece_x] = piece_col[i];
     }
   }
-  /* Scan each row for 3-in-a-row same color → clear. */
-  for (r = 0; r < GRID_H; r++) {
-    run = 1;
-    run_col = grid[r][0];
-    for (c = 1; c < GRID_W; c++) {
-      if (grid[r][c] == run_col && run_col != EMPTY) {
-        ++run;
-        if (run >= 3) {
-          /* Found a triple ending at c — clear back. */
-          grid[r][c]     = EMPTY;
-          grid[r][c - 1] = EMPTY;
-          grid[r][c - 2] = EMPTY;
-          sound_play_tone(0, 0x100 - (c << 4), 6, 4);
-        }
-      } else {
-        run = 1;
-        run_col = grid[r][c];
-      }
-    }
-  }
+  resolve_board();
 }
 
 /* Can the piece occupy (x, y..y+2) given the current grid? */
