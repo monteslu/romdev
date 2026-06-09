@@ -94,6 +94,13 @@ int main(void) {
      * palette in block 0 (HUD text stays legible). */
     bgInitTileSet(1, (u8 *)&tilbg, (u8 *)&palbg, 1,
                   32, 32, BG_16COLORS, 0x2000);
+
+    /* Per-genre backdrop tint — every SNES scaffold used to ship the same
+     * blue checkered wallpaper ('no variety'). Recolor the wallpaper's
+     * CGRAM entries (block 1 = entries 16+) to a sky blue scheme. */
+    setPaletteColor(0, RGB5(10,18,28));
+    setPaletteColor(17, RGB5(13,21,29));
+    setPaletteColor(18, RGB5(8,15,26));
     for (i = 0; i < 32 * 32; i++) bg_map[i] = 0x0400;
     bgInitMapSet(1, (u8 *)bg_map, sizeof(bg_map), SC_32x32, 0x4000);
     bgSetEnable(1);

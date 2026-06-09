@@ -149,6 +149,13 @@ int main(void) {
     bgInitTileSet(1, (u8 *)&tilbg, (u8 *)&palbg,
                   1,            /* load palbg into CGRAM palette block 1 */
                   32, 32, BG_16COLORS, 0x2000);
+
+    /* Per-genre backdrop tint — every SNES scaffold used to ship the same
+     * blue checkered wallpaper ('no variety'). Recolor the wallpaper's
+     * CGRAM entries (block 1 = entries 16+) to a near-black space scheme. */
+    setPaletteColor(0, RGB5(0,0,3));
+    setPaletteColor(17, RGB5(3,3,8));
+    setPaletteColor(18, RGB5(1,1,5));
     /* Every map entry: tile 0, palette block 1 (bits 10-12 = 1 → 0x0400),
      * so the wallpaper uses palbg and leaves the console font palette
      * (block 0) untouched — HUD text stays white/legible. */
@@ -157,7 +164,6 @@ int main(void) {
     bgSetEnable(1);
 
     bgSetDisable(2);
-    setPaletteColor(0, RGB5(0, 0, 6));   /* dark-blue backdrop (CGRAM 0) */
 
     /* 3 sprite tiles (ship/bullet/enemy) × 32 bytes = 96 bytes. */
     oamInitGfxSet(&tilsprite, 96, &palsprite, 32, 0,
