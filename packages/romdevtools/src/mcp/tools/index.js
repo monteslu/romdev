@@ -58,13 +58,11 @@ import { registerCheatTools } from "./cheats.js";
 import { createDisclosure } from "../disclosure.js";
 import { jsonContent, safeTool, withClearToolErrors } from "../util.js";
 import { getHostOrNull, setDisclosure } from "../state.js";
-import { MERGE_MAP } from "../tool-manifest.js";
-import { readFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-// Package version — surfaced by catalog({op:'status'|'whatsNew'}) so an agent can
+// Package version — surfaced by catalog({op:'status'}) so an agent can
 // check the running romdev version with a plain TOOL CALL (works over MCP AND the
 // HTTP/skill surface), e.g. to detect a saved skill is stale. (GET /healthz also
 // reports it for non-tool HTTP clients.)
@@ -75,42 +73,6 @@ const PKG_VERSION = (() => {
     return "0.0.0";
   }
 })();
-
-// catalog({op:'whatsNew'}): the recent CHANGELOG + an old→new RENAME TABLE
-// derived from MERGE_MAP (the single source of truth for the consolidation), so
-// an agent resuming a handoff written against an older server can re-map every
-// renamed tool in ONE read. Pre-1.0 the surface is consolidated freely with NO
-// deprecated aliases (see the consolidation), which is exactly why this exists.
-async function buildWhatsNew() {
-  // old name → "newTool({axis:'oldOpName'})". The op value is best-effort: most
-  // absorbed tools become an op whose name is a shortened form, so we surface the
-  // axis + the new tool and let the tool's own description give the exact op enum.
-  const renames = {};
-  for (const [newTool, entry] of Object.entries(MERGE_MAP)) {
-    if (entry.unchanged) continue;
-    for (const old of entry.absorbs ?? []) {
-      renames[old] = { nowOn: newTool, axis: entry.axis };
-    }
-  }
-  // Recent CHANGELOG entries (top of the file = newest). Best-effort: if the file
-  // isn't packaged in some install, return the rename table alone.
-  let changelog = null;
-  try {
-    const here = dirname(fileURLToPath(import.meta.url));
-    // src/mcp/tools/ → package root is three up.
-    const text = await readFile(join(here, "..", "..", "..", "CHANGELOG.md"), "utf8");
-    // Keep the two most recent version sections.
-    const sections = text.split(/^## /m);
-    changelog = sections.slice(0, 3).join("## ").trim();
-  } catch { /* changelog not present in this install */ }
-  return {
-    romdevVersion: PKG_VERSION,
-    note: "Pre-1.0 the tool surface is consolidated freely with NO deprecated aliases. If a tool name from an older handoff is missing, it's almost certainly now an `op` (or other axis) on a domain tool — find it below, then read that tool's description for the exact op enum and params.",
-    renameTable: renames,
-    axisLegend: "Every domain tool is keyed by ONE axis: op (most), output (build), on (breakpoint), target (disasm), view (background), source (palette), stage (encodeArt), from (importArt). The value names the operation, e.g. romPatch({op:'findPointer'}).",
-    ...(changelog ? { changelog } : { changelogNote: "CHANGELOG.md not bundled in this install." }),
-  };
-}
 
 /**
  * Categories for progressive disclosure. Each entry's `register` is the
@@ -225,16 +187,12 @@ export function registerTools(server, z, sessionKey) {
     "catalog",
     "Orient yourself, keyed by `op`.\n" +
     "• op:'categories' (default) — the catalog of tool categories, each {name, description, useWhen[], loaded}. This server registers EVERY tool at session start, so this is just a map grouped by purpose for orientation, NOT a gate — you do NOT need to load anything before calling a tool.\n" +
-    "• op:'status' — a snapshot of the current session: which platform's core/ROM is in the running host (if any), current frame count, last-loaded media, loaded categories. Call this when you've lost context across many tool calls and want to re-ground.\n" +
-    "• op:'whatsNew' — the recent CHANGELOG + an OLD→NEW tool RENAME TABLE. Call this FIRST if you're resuming work from a handoff written against an older server: pre-1.0 the surface is consolidated freely (no deprecated aliases), so a name you remember may now be an `op` on a domain tool. This maps them in one read instead of probing each tool.",
+    "• op:'status' — a snapshot of the current session: which platform's core/ROM is in the running host (if any), current frame count, last-loaded media, loaded categories. Call this when you've lost context across many tool calls and want to re-ground.",
     {
-      op: z.enum(["categories", "status", "whatsNew"]).default("categories")
-        .describe("categories=tool-category catalog; status=live session snapshot (romdevVersion + host/platform/frameCount/media — call this to check the running version, e.g. is a saved skill stale); whatsNew=recent CHANGELOG + old→new tool rename table."),
+      op: z.enum(["categories", "status"]).default("categories")
+        .describe("categories=tool-category catalog; status=live session snapshot (romdevVersion + host/platform/frameCount/media — call this to check the running version, e.g. is a saved skill stale)."),
     },
     safeTool(async ({ op = "categories" }) => {
-      if (op === "whatsNew") {
-        return jsonContent(await buildWhatsNew());
-      }
       if (op === "status") {
         const host = getHostOrNull(sessionKey);
         const cats = disclosure.listCategories();
