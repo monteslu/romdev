@@ -201,11 +201,23 @@ int main(void) {
 
         oam_copy(oam_mem, obj_buffer, 7);
 
-        /* Score digits. */
-        tte_erase_rect(28, 2, 36, 14);
-        tte_printf("#{P:28,2}%d", score_p1 % 10);
-        tte_erase_rect(220, 2, 228, 14);
-        tte_printf("#{P:220,2}%d", score_p2 % 10);
+        /* Score digits — via tte_write, NOT tte_printf. tte_printf is
+         * broken in this libtonc build (GBA-1): it crashes with an
+         * undefined-instruction exception, and since this ran EVERY
+         * frame the whole game froze on iteration 1 ("game never
+         * starts"). racing/puzzle already avoided it the same way. */
+        {
+            char sb[12];
+            sb[0]='#'; sb[1]='{'; sb[2]='P'; sb[3]=':';
+            tte_erase_rect(28, 2, 36, 14);
+            sb[4]='2'; sb[5]='8'; sb[6]=','; sb[7]='2'; sb[8]='}';
+            sb[9] = (char)('0' + (score_p1 % 10)); sb[10] = 0;
+            tte_write(sb);
+            tte_erase_rect(220, 2, 228, 14);
+            tte_write("#{P:220,2}");
+            sb[0] = (char)('0' + (score_p2 % 10)); sb[1] = 0;
+            tte_write(sb);
+        }
     }
     return 0;
 }
