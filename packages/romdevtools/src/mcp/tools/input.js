@@ -1,6 +1,16 @@
 import { getHost } from "../state.js";
 import { jsonContent, safeTool } from "../util.js";
 import { getInputLayoutCore } from "./input-layout.js";
+import { humanCoDriveWarning } from "./playtest.js";
+
+// Spreadable co-drive conflict marker for every input-driving op: while a
+// human is actively playing in this session's playtest window, their input
+// overwrites the agent's each tick — so the agent must be TOLD its press/set
+// may not take. Empty (no field) when there's no conflict.
+function coDriveFields(sessionKey) {
+  const warning = humanCoDriveWarning(sessionKey);
+  return warning ? { humanCoDriveWarning: warning } : {};
+}
 
 // Resolve a platform-native button alias to the libretro button the host
 // understands. Genesis pads have A/B/C (+ X/Y/Z on 6-button) which libretro
@@ -103,6 +113,7 @@ function inputSetCore({ ports }, sessionKey) {
         ...(ignoredButtons.length
           ? { ignoredButtons, ignoredNote: `Ignored ${ignoredButtons.length} unknown button name(s) — not pressed. Valid: ${[...KNOWN_BUTTONS].join(", ")}.` }
           : {}),
+        ...coDriveFields(sessionKey),
       };
 }
 
@@ -123,6 +134,7 @@ function inputPressCore({ button, frames = 2, port: p = 0 }, sessionKey) {
         releaseFrames: 1,
         framesStepped: frames + 1,
         frameCount: host.status.frameCount,
+        ...coDriveFields(sessionKey),
       };
 }
 
@@ -135,7 +147,7 @@ function inputSequenceCore({ steps }, sessionKey) {
         host.stepFrames(step.frames);
         total += step.frames;
       }
-      return { stepsRun: steps.length, framesRun: total, frameCount: host.status.frameCount };
+      return { stepsRun: steps.length, framesRun: total, frameCount: host.status.frameCount, ...coDriveFields(sessionKey) };
 }
 
 /** op:'navigate' — drive menus by advancing on SCREEN CHANGE; reports consumed per step. */
@@ -178,6 +190,7 @@ function inputNavigateCore({ steps }, sessionKey) {
         framesRun: totalFrames,
         frameCount: host.status.frameCount,
         ...(dropped ? { droppedPresses: dropped, note: `${dropped} step(s) had consumed:false — the screen never changed after the press (wrong screen / press dropped / game polls input on a specific frame). Re-run those steps, increase holdFrames, or reach the screen via state save/load.` } : {}),
+        ...coDriveFields(sessionKey),
       };
 }
 

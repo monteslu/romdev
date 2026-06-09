@@ -4,7 +4,30 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
-## 0.27.0
+## 0.28.0
+
+### Added — human co-drive detection: agents now KNOW when a human is playing in the playtest window
+The long-standing confusion ("they get confused when I try to play while they're
+coding") had a real mechanism: the playtest window shares the session's ONE
+emulator host with the agent, and its 60fps tick wrote the human's pad state —
+including all-zeros when nobody was pressing — over the agent's `input({op:'set'})`
+every frame. The agent had no signal a human was co-driving and no warning that
+its input was being clobbered. Now:
+- **The window only writes input while the human is actually pressing** (pad,
+  keyboard, or rewind-scrub), plus one release write after they let go. An idle
+  window no longer silently clobbers the agent's held input. The human still wins
+  the instant they press.
+- **The window tracks human activity** ("pressed within the last ~2 s" ≈ 120
+  ticks) and exposes it: `catalog({op:'status'})` reports `playtestWindowOpen` +
+  `humanInputActive` (+ `framesSinceHumanInput`), and `playtest({op:'status'})`
+  reports the same.
+- **`frame({op:'step'/'stepAndShot'})` and `input(set/press/sequence/navigate)`
+  responses carry a `humanCoDriveWarning`** while the human is actively playing,
+  telling the agent the conflict is happening NOW and pointing at the escape
+  hatches: `host({op:'pause'})` to inspect frozen, or a second session
+  (different `x-romdev-session` = fully isolated emulator) for deterministic work.
+- The playtest tool's FOOTGUN doc now describes the real contract (real-time
+  stepping always races; input only clobbered while the human presses).
 
 ### Changed — `screenshot` scale docs: native is the accurate default, upscale adds no detail
 The `scale` param's docs oversold integer UPscaling as making tiny handheld shots
@@ -18,6 +41,9 @@ representation**, keep the genuinely-useful DOWNscale (`<1`, fewer tokens for
 "did it change?" checks), and frame upscale honestly as a last resort for clients
 that can't zoom a small image. (No behavior change — `scale` was already opt-in and
 defaulted to native; this is the docs telling the truth about it.)
+(Committed during the 0.27.0 cycle but AFTER 0.27.0 published — ships in 0.28.0.)
+
+## 0.27.0
 
 ### Added — `breakpoint(on:'pc', captureMemory:[…])` reads named RAM at the hit
 Completes item 2 of the NES Rygar report. 0.26.0 shipped `registersAtHit` (the
