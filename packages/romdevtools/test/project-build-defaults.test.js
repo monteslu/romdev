@@ -36,12 +36,18 @@ test("projectBuildRecipe routes msx_crt0.s + codeLoc 0x4010; skips sms/gg duplic
   const msx = projectBuildRecipe("msx", ["main.c", "msx_crt0.s", "msx_vdp.c"]);
   assert.equal(msx.crt0File, "msx_crt0.s");
   assert.equal(msx.codeLoc, 0x4010);
-  // SMS/GG auto-inject their bundled crt0 in buildForPlatform, so the scaffold's
-  // own *_crt0.s must be SKIPPED (linking it would double-define).
+  // SMS/GG: the dir's *_crt0.s must be ROUTED through the crt0 channel.
+  // (The old recipe SKIPPED it believing buildForPlatform auto-injects a
+  // bundled crt0 — it doesn't; only the rom/run MCP handlers do. Skipping
+  // linked SDCC's stock z80 crt0, which never calls main(): every
+  // project-built SMS/GG ROM black-screened. readProjectDir falls back to
+  // the bundled crt0 when the dir has none.)
   const sms = projectBuildRecipe("sms", ["main.c", "sms_crt0.s", "vdp_init.c"]);
-  assert.ok(sms.skip.has("sms_crt0.s"), "sms scaffold crt0 should be skipped (auto-injected)");
+  assert.equal(sms.crt0File, "sms_crt0.s", "sms scaffold crt0 must be routed as crt0");
+  assert.ok(!sms.skip.has("sms_crt0.s"), "sms crt0 must NOT be skipped");
   const gg = projectBuildRecipe("gg", ["main.c", "gg_crt0.s", "vdp_init.c"]);
-  assert.ok(gg.skip.has("gg_crt0.s"), "gg scaffold crt0 should be skipped (auto-injected)");
+  assert.equal(gg.crt0File, "gg_crt0.s", "gg scaffold crt0 must be routed as crt0");
+  assert.ok(!gg.skip.has("gg_crt0.s"), "gg crt0 must NOT be skipped");
 });
 
 // ── readProjectDir surfaces those defaults from a REAL scaffolded gbc dir. ──

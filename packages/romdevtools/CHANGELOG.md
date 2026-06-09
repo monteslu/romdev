@@ -6,6 +6,56 @@ the `romdev-mcp` bin is kept as an alias.)
 
 ## 0.28.0
 
+### Fixed — scaffold overhaul from real RetroDECK/Bazzite playtesting (all 14 platforms)
+A full human playtest of every genre scaffold on real hardware surfaced clusters
+of repeated logic errors. The big ones:
+- **SMS/GG: every `build({output:'project'})` ROM black-screened** — the project
+  recipe skipped the dir's `*_crt0.s` believing `buildForPlatform` auto-injects
+  the bundled crt0 (it doesn't; only the rom/run handlers do), so SDCC's stock
+  z80 crt0 linked instead and `main()` never ran. Also: the bundled crt0's reset
+  block was 9 bytes (overflowed into the `.org 0x0008` RST slot, corrupting
+  `jp gsinit`), `_CODE` linked at `$0000` ON TOP of the vector table, and `.gg`
+  ROMs got an SMS region nibble (`$4C`) that flips Genesis-Plus-GX into SMS-compat
+  mode. Project builds now route/fall back to the bundled crt0, `_CODE` sits at
+  `$0100`, GG ROMs get region `$7C`, ROMs pad to 32KB before the TMR SEGA header,
+  and a regression test pins the boot byte + header. The SMS scaffold now ships
+  `sms_crt0.s` like GG/MSX.
+- **"All enemies spawn on the left"** (18 shmup/racing templates): spawn X/lane
+  came from `spawn_timer`, which the caller resets to 0 immediately before
+  `spawn()` — a constant. Each template now has a Galois-LFSR `rand8()`.
+- **Puzzle genre**: the gbc template is now the polished falling-jewel reference
+  game (4-direction matches, gravity + cascade chains, magic piece, SFX + music,
+  collect/flush vblank rendering, dataLoc `$C200` via the gb/gbc project recipe);
+  the DMG gb template is rebuilt around the same core; and the
+  mark/clear/gravity/cascade core is ported to all 10 other platforms (PCE: H+V
+  in its 8KB boot bank). Replaces a horizontal-only scan that missed vertical/
+  diagonal matches, half-cleared 4+ runs, and never dropped survivors.
+- **Atari 2600**: SWCHA ASL carry-chains clobbered A between shifts (pressing
+  RIGHT also "pressed" LEFT — the stuck-to-the-left-edge bug) in three templates;
+  the platformer's terminal-velocity clamp caught POSITIVE velocities (unsigned
+  CMP), killing every jump within one frame; sports' paddle axis was inverted vs
+  the kernel's Y convention and RESBL was never strobed (the ball NEVER moved
+  horizontally — per-frame div-15 + HMBL positioning added); racing re-randomizes
+  both lanes on crash; shmup aliens reaching the cannon reset the wave.
+- **Atari 7800**: the SWCHA joystick bit defines were exactly REVERSED on every
+  template (up/down steered left/right; sports' left/right moved the paddle
+  vertically). Plus speed tuning (platformer movement + jump, puzzle fall rate,
+  sports serve).
+- **Platformers**: GBA fell through every platform (the `blocked_below` gate
+  only matched a 1px window at 20px/frame fall speeds); SNES platforms are now
+  visibly drawn on the scrolled text layer (were invisible collision rects);
+  Lynx landing uses a crossing test (exact-equality check tunnelled); C64
+  `render_view` rewritten ~20x faster (a per-CELL platform scan + 16-bit modulo
+  cost ~2s per 8px scroll step at 1MHz — froze the game and ate jump presses);
+  NES player is red (was sky-blue on sky-blue) and moves 2px/frame; GB/GBC jump
+  height tamed.
+- **GBA sports "never starts"**: `tte_printf` (broken in this libtonc — the
+  documented GBA-1 issue) ran every frame and crashed with an undefined-
+  instruction exception on iteration 1. Replaced with the `tte_write` digit path
+  the other templates already use.
+- **SNES**: each genre now gets a distinct backdrop tint (every scaffold shipped
+  the same blue checkered wallpaper).
+
 ### Added — human co-drive detection: agents now KNOW when a human is playing in the playtest window
 The long-standing confusion ("they get confused when I try to play while they're
 coding") had a real mechanism: the playtest window shares the session's ONE
