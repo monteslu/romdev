@@ -31,8 +31,11 @@
 #define CTRL      (*(volatile uint8_t*)0x3C)
 #define SWCHA     (*(volatile uint8_t*)0x280)
 
-#define P1_UP    0x80
-#define P1_DOWN  0x40
+/* SWCHA bit order is Right(0x80)/Left(0x40)/Down(0x20)/Up(0x10) — the
+ * old 0x80/0x40 masks were the RIGHT/LEFT bits, so the stick's
+ * horizontal axis moved the paddle vertically. */
+#define P1_UP    0x10
+#define P1_DOWN  0x20
 #define P2_UP    0x08
 #define P2_DOWN  0x04
 
@@ -169,7 +172,7 @@ static void serve_ball(uint8_t to_left) {
   bx = 76;
   by = 120;
   bdx = to_left ? -2 : 2;
-  bdy = 1;
+  bdy = 2;             /* was 1 — the rally felt 'very slow' */
 }
 
 void main(void) {

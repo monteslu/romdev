@@ -31,10 +31,14 @@
 #define SWCHA     (*(volatile uint8_t*)0x280)
 #define INPT4     (*(volatile uint8_t*)0x0C)
 
-#define JOY_UP    0x80
-#define JOY_DOWN  0x40
-#define JOY_LEFT  0x20
-#define JOY_RIGHT 0x10
+/* SWCHA P0 nibble, active-low after the ~SWCHA invert. The bit order is
+ * Right/Left/Down/Up from bit7 down — the OLD defines here were exactly
+ * REVERSED (UP=0x80 etc.), which made up/down move the sprite left/right
+ * on every 7800 scaffold. */
+#define JOY_RIGHT 0x80
+#define JOY_LEFT  0x40
+#define JOY_DOWN  0x20
+#define JOY_UP    0x10
 
 /* Ship sprite — 16 px wide × 8 rows. */
 static const uint8_t ship_row0[4] = { 0x00, 0x05, 0x50, 0x00 };

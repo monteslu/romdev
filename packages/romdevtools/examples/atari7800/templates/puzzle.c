@@ -31,8 +31,11 @@
 #define SWCHA     (*(volatile uint8_t*)0x280)
 #define INPT4     (*(volatile uint8_t*)0x0C)
 
-#define JOY_LEFT  0x20
-#define JOY_RIGHT 0x10
+/* SWCHA bit order is Right(0x80)/Left(0x40)/Down(0x20)/Up(0x10) — the
+ * old 0x20/0x10 masks here were the DOWN/UP bits, so the stick's
+ * vertical axis steered horizontally. */
+#define JOY_LEFT  0x40
+#define JOY_RIGHT 0x80
 
 #define COLS         8
 #define CELL_W_PIX   8
@@ -181,11 +184,11 @@ void main(void) {
     if (pad & JOY_RIGHT && piece_x_col < COLS - 1) { piece_x_col++; set_x((uint8_t)(60 + piece_x_col * CELL_W_PIX)); }
 
     btn = (INPT4 & 0x80) ? 0 : 1;
-    if (btn && !prev_btn) { fall_timer = 30; sfx_tone(0, 4, 4); }
+    if (btn && !prev_btn) { fall_timer = 18; sfx_tone(0, 4, 4); }
     prev_btn = btn;
 
     fall_timer++;
-    if (fall_timer >= 30) {
+    if (fall_timer >= 18) {  /* was 30 — 'moving down very slowly' */
       fall_timer = 0;
       piece_y++;
       if (piece_y >= BOT_Y) {
