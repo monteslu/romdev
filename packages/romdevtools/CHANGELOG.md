@@ -51,6 +51,25 @@ toolchain/crt0/linker from the directory — no `sourcesPaths`/`includePaths`/
 form to a collapsed "compiling edited loose source" alternative. The project-dir
 build was already the easier path; now it's the one a fresh agent copies first.
 
+### Fixed — NES `breakpoint(on:'pc')` now returns reliable break-instant registers
+An agent RE'ing NES Rygar found that after a `pc` breakpoint hit, a follow-up
+`cpu({op:'read'})` returned the **idle-loop PC**, not the breakpoint instruction —
+the documented "break, then read the live register file" workflow gave end-of-frame
+state. Root cause: fceumm drains the cycle budget on hit but `retro_run` still
+finishes the frame, so the live X6502 registers are clobbered before the host reads
+them (the schema's "CPU is FROZEN at this instruction" was wrong for NES).
+- **fceumm core rebuild** (romdev-core-fceumm 0.8.0): the PC-break handler now
+  SNAPSHOTS A/X/Y/P/S at the hit instant, exposed via `romdev_pcbreak_get`.
+- **`breakpoint(on:'pc')` returns `registersAtHit`** — the reliable break-instant
+  register file. The schema + hit note now steer to it and explicitly warn that a
+  live `cpu({op:'read'})` after a hit is end-of-frame state on fceumm. (Item 1+2
+  of the report, collapsed: the snapshot is taken in the same call that detects the
+  hit, so there's no freeze-durability race and no extra round trip.)
+- **NES `cpu({op:'read'})` core-internal fields relabeled** (item 3): `DB`,
+  `IRQlow`, `tcount`, `count` are fceumm internals (data-bus latch / IRQ bitmask /
+  cycle counters), not 6502 registers — moved out of `registers` into a labeled
+  `coreInternal` object so they're not misread as CPU state.
+
 ### Fixed — SMS shmup + Atari 7800 sports scaffolds rendered with wrong colors
 Both built and booted but looked broken (a 0.24.0 matrix report flagged them):
 - **SMS shmup** rendered the starfield as blue/**GREEN** striped bands. The BG

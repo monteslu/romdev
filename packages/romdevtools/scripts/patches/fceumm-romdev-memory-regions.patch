@@ -118,6 +118,7 @@ index 96dece6..f99b7bf 100644
 +extern volatile int romdev_pc_hit;
 +extern uint32_t romdev_pc_last_pc;
 +extern uint32_t romdev_pc_hits;
++extern uint32_t romdev_pc_snap_a, romdev_pc_snap_x, romdev_pc_snap_y, romdev_pc_snap_p, romdev_pc_snap_s;
 +
 +extern unsigned int  romdev_pc_wd_limit;
 +extern unsigned int  romdev_pc_wd_count;
@@ -135,19 +136,35 @@ index 96dece6..f99b7bf 100644
 +   romdev_pc_hits = 0;
 +   romdev_pc_watchdog = 0;
 +   romdev_pc_wd_count = 0;
++   romdev_pc_snap_a = romdev_pc_snap_x = romdev_pc_snap_y =
++      romdev_pc_snap_p = romdev_pc_snap_s = 0xFFFFFFFF;
 +}
 +
-+/* Fills out6: [enabled, addr, hit, lastPC, hits, watchdogTripped]. clearHit re-arms. */
-+void romdev_pcbreak_get(unsigned int *out6, int clearHit)
++/* Fills out11: [enabled, addr, hit, lastPC, hits, watchdogTripped, A, X, Y, P, S].
++ * Slots 6-10 are the register file SNAPSHOT taken at the hit instant (0xFFFFFFFF
++ * until a hit) — the reliable break-instant regs, since the live X6502 regs are
++ * clobbered by the rest of the frame. Older hosts that pass a 6-word array still
++ * work (we only write what fits is the host's concern; we always write 11, so the
++ * host must allocate 11). clearHit re-arms (also clears the snapshot). */
++void romdev_pcbreak_get(unsigned int *out11, int clearHit)
 +{
-+   if (!out6) return;
-+   out6[0] = (unsigned int)romdev_pc_enabled;
-+   out6[1] = romdev_pc_addr;
-+   out6[2] = (unsigned int)romdev_pc_hit;
-+   out6[3] = romdev_pc_last_pc;
-+   out6[4] = romdev_pc_hits;
-+   out6[5] = (unsigned int)romdev_pc_watchdog;
-+   if (clearHit) { romdev_pc_hit = 0; romdev_pc_watchdog = 0; romdev_pc_wd_count = 0; }
++   if (!out11) return;
++   out11[0] = (unsigned int)romdev_pc_enabled;
++   out11[1] = romdev_pc_addr;
++   out11[2] = (unsigned int)romdev_pc_hit;
++   out11[3] = romdev_pc_last_pc;
++   out11[4] = romdev_pc_hits;
++   out11[5] = (unsigned int)romdev_pc_watchdog;
++   out11[6] = romdev_pc_snap_a;
++   out11[7] = romdev_pc_snap_x;
++   out11[8] = romdev_pc_snap_y;
++   out11[9] = romdev_pc_snap_p;
++   out11[10] = romdev_pc_snap_s;
++   if (clearHit) {
++      romdev_pc_hit = 0; romdev_pc_watchdog = 0; romdev_pc_wd_count = 0;
++      romdev_pc_snap_a = romdev_pc_snap_x = romdev_pc_snap_y =
++         romdev_pc_snap_p = romdev_pc_snap_s = 0xFFFFFFFF;
++   }
 +}
 +
 +/* Arm the instruction watchdog (force-stop a runaway after `limit` instructions;
@@ -436,6 +453,18 @@ index 61b83e0..242fcaa 100644
 +uint32_t      romdev_pc_last_pc = 0xFFFFFFFF;
 +uint32_t      romdev_pc_hits    = 0;
 +
++/* Register-file SNAPSHOT taken AT the breakpoint hit (before the instruction at
++ * the break PC executes, and before the rest of the frame — NMI etc. — clobbers
++ * the live X6502 regs). fceumm drains the cycle budget on hit but retro_run still
++ * finishes the frame, so reading X.A/X.PC AFTER retro_run returns end-of-frame
++ * state, not the break-instant state. These frozen copies are the truth the host
++ * surfaces; -1 (0xFFFFFFFF) until a hit. */
++uint32_t      romdev_pc_snap_a  = 0xFFFFFFFF;
++uint32_t      romdev_pc_snap_x  = 0xFFFFFFFF;
++uint32_t      romdev_pc_snap_y  = 0xFFFFFFFF;
++uint32_t      romdev_pc_snap_p  = 0xFFFFFFFF;
++uint32_t      romdev_pc_snap_s  = 0xFFFFFFFF;
++
 +/* romdev INSTRUCTION WATCHDOG — the fix for "callSubroutine hung". A standalone-
 + * driven routine (e.g. a decompressor fed a slightly-wrong pointer) can loop
 + * FOREVER inside a single X6502_Run / retro_run frame, so the host's per-FRAME
@@ -563,6 +592,11 @@ index 61b83e0..242fcaa 100644
 +			if (++romdev_pc_wd_count >= romdev_pc_wd_limit) {
 +				X.PC = pbackus;        /* leave CPU frozen exactly at this PC */
 +				romdev_pc_last_pc = _PC;
++				/* snapshot the register file AT the hit (regs are clobbered by the
++				 * rest of the frame before the host can read them) */
++				romdev_pc_snap_a = (uint32_t)X.A; romdev_pc_snap_x = (uint32_t)X.X;
++				romdev_pc_snap_y = (uint32_t)X.Y; romdev_pc_snap_p = (uint32_t)X.P;
++				romdev_pc_snap_s = (uint32_t)X.S;
 +				romdev_pc_hit = 1;
 +				romdev_pc_watchdog = 1;
 +				_count = 0;            /* drain the budget so the frame ends here */
@@ -598,6 +632,13 @@ index 61b83e0..242fcaa 100644
 +			                 && (uint32_t)_PC == romdev_pc_addr)) {
 +				X.PC = pbackus;        /* leave CPU frozen exactly at this PC */
 +				romdev_pc_last_pc = _PC;
++				/* snapshot the register file AT the hit — the live X6502 regs are
++				 * clobbered by the remainder of the frame (NMI/idle) before the host
++				 * can read them, so a post-retro_run getCPUState lies. These frozen
++				 * copies are what breakpoint() returns as registersAtHit. */
++				romdev_pc_snap_a = (uint32_t)X.A; romdev_pc_snap_x = (uint32_t)X.X;
++				romdev_pc_snap_y = (uint32_t)X.Y; romdev_pc_snap_p = (uint32_t)X.P;
++				romdev_pc_snap_s = (uint32_t)X.S;
 +				romdev_pc_hit = 1;
 +				romdev_pc_hits++;
 +				romdev_pc_step = 0;    /* one-shot */

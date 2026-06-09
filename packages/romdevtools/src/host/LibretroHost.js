@@ -1184,11 +1184,14 @@ export class LibretroHost {
   }
 
   // ── PC breakpoint + read watchpoint + single-step (core-side, exact) ────────
-  // Symmetric to the write watchpoint. The PC breakpoint freezes the CPU at the
-  // target instruction mid-frame (the core's execute loop bails on hit); the
-  // read watchpoint records the PC that READ an address. Both require a core
-  // patched with the romdev_pcbreak_*/romdev_readwatch_* exports (Genesis today;
-  // other cores as they're patched). Capability is feature-detected per core.
+  // Symmetric to the write watchpoint. On PC hit the core's execute loop drains
+  // the cycle budget and bails, but retro_run still finishes the frame — so the
+  // LIVE register file is end-of-frame state by the time the host reads it. Cores
+  // that snapshot the registers AT the hit (NES/fceumm: getPCBreak().registersAtHit)
+  // give the reliable break-instant regs; others expose only lastPC + the RAM side
+  // effects. The read watchpoint records the PC that READ an address. All require a
+  // core patched with the romdev_pcbreak_*/romdev_readwatch_* exports. Capability
+  // (and reg-snapshot availability) is feature-detected per core.
 
   /** True when this core build exposes the PC breakpoint + single-step. */
   pcBreakSupported() {
@@ -1219,13 +1222,22 @@ export class LibretroHost {
     if (typeof mod._romdev_pcbreak_get !== "function") {
       throw new Error("this core build does not expose the PC breakpoint.");
     }
-    const ptr = mod._malloc(24); // up to 6 × uint32 (older cores write 5)
+    const ptr = mod._malloc(44); // up to 11 × uint32 (newer fceumm writes 11: +A/X/Y/P/S snapshot)
     try {
-      // Pre-seed slot 5 (watchdog) so a 5-element older core leaves it 0.
-      new Uint32Array(mod.HEAPU8.buffer, ptr, 6).fill(0);
+      // Pre-seed all 11 slots. The reg-snapshot slots (6-10) default to
+      // 0xFFFFFFFF = "no snapshot" so a core that only writes 6 (Genesis et al.)
+      // leaves them as "unavailable" rather than 0 (a valid register value).
+      const seed = new Uint32Array(mod.HEAPU8.buffer, ptr, 11);
+      seed.fill(0); seed[6] = seed[7] = seed[8] = seed[9] = seed[10] = 0xFFFFFFFF;
       mod._romdev_pcbreak_get(ptr, clearHit ? 1 : 0);
-      const u = new Uint32Array(mod.HEAPU8.buffer, ptr, 6);
+      const u = new Uint32Array(mod.HEAPU8.buffer, ptr, 11);
       const lastPC = u[3];
+      // Register snapshot at the hit instant (fceumm). 0xFFFFFFFF = not captured
+      // (older core, or no hit yet). When present, these are the RELIABLE
+      // break-instant regs — the live X6502 regs are clobbered by end-of-frame.
+      const snap = (u[6] === 0xFFFFFFFF && u[7] === 0xFFFFFFFF)
+        ? null
+        : { A: u[6] & 0xFF, X: u[7] & 0xFF, Y: u[8] & 0xFF, P: u[9] & 0xFF, S: u[10] & 0xFF };
       return {
         enabled: !!u[0],
         address: u[1],
@@ -1233,6 +1245,7 @@ export class LibretroHost {
         lastPC: lastPC === 0xFFFFFFFF ? null : lastPC,
         hits: u[4],
         watchdog: !!u[5], // the run was force-stopped by the instruction watchdog
+        registersAtHit: snap,
       };
     } finally {
       mod._free(ptr);

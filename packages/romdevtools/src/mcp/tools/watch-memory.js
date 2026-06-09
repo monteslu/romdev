@@ -666,19 +666,30 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
             "to reach the right game state), or the address isn't an instruction boundary (a mid-instruction address never matches REG_PC).",
         }), host);
       }
+      // Snapshot the registers AT the hit BEFORE clearing (last already holds the
+      // hit state; read it without clearing so registersAtHit survives).
+      const atHit = last.registersAtHit ?? host.getPCBreak(false).registersAtHit ?? null;
       const fin = host.getPCBreak(true); // clear hit
+      // registersAtHit (NES/fceumm and any core that snapshots regs on hit) is the
+      // RELIABLE break-instant register file. The LIVE register file (a follow-up
+      // cpu({op:'read'})) is NOT reliable on fceumm: the core drains the cycle
+      // budget on hit but retro_run still finishes the frame, so the live regs are
+      // end-of-frame state. Prefer registersAtHit; only fall back to a live read on
+      // cores that don't snapshot.
+      const frozenNote = atHit
+        ? "registersAtHit holds the register file CAPTURED AT this instruction (A/X/Y/P/S) — use THESE, not a follow-up cpu({op:'read'}), which on NES/fceumm returns end-of-frame state, not the break instant. For a source pointer in a 16-bit reg pair, read the two ZP bytes via memory({op:'read'}). frame({op:'stepInstruction'}) to single-step from here."
+        : "This core does not snapshot registers at the hit. cpu({op:'read'}) reflects the CPU state now; on cores that run-to-frame-end (fceumm) that is NOT the break instant — prefer the RAM side effects (memory({op:'read'})) over the live register file.";
       return attachObserverFrame(jsonContent({
         hit: true,
         address: "$" + address.toString(16).toUpperCase(),
         pc: last.lastPC != null ? "$" + last.lastPC.toString(16).toUpperCase() : null,
         pcRaw: last.lastPC,
+        ...(atHit ? { registersAtHit: atHit } : {}),
         frame: host.status.frameCount,
         framesRun,
         hits: fin.hits,
         ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
-        note: "CPU is FROZEN at this instruction. Call cpu({op:'read'}) to read all registers at this exact " +
-          "moment (the value you want — e.g. an address register holding a source pointer — is live now), then memory({op:'read'/'readCart'}) " +
-          "at that pointer. frame({op:'stepInstruction'}) to single-step, or frame({op:'step'})/host({op:'resume'}) to continue.",
+        note: frozenNote,
       }), host);
   }
 
@@ -741,14 +752,16 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     "interrupted main-thread PC (an idle loop), a LIE. Use 'exact' when you need the real writer.**\n" +
     "• on:'read' — break when the CPU READS `address` (the read-side mirror of on:'write' exact): the EXACT instruction PC that " +
     "read the byte. Finds who CONSUMES a value. Does NOT freeze mid-frame — records the PC and finishes the frame.\n" +
-    "• on:'pc' — break when the PC reaches `address`, freezing the CPU EXACTLY at that instruction (a real execution breakpoint). " +
-    "**The RE primitive for 'read the register at this instruction': break, then cpu({op:'read'}) the live register file** " +
-    "(e.g. break at a decoder's `move.b (a0),d0` and read A0 = the source address). After a hit the CPU stays FROZEN mid-frame — " +
-    "inspect, then frame({op:'step'/'stepInstruction'}) to continue. (on:'read'/'write' finish the frame; on:'pc' freezes.)\n" +
-    "All supported on every CPU core; out-of-date core packages return notSupported.",
+    "• on:'pc' — break when the PC reaches `address` (a real execution breakpoint). " +
+    "**The RE primitive for 'read the register at this instruction': break, then use the `registersAtHit` SNAPSHOT in the hit response** " +
+    "(e.g. break at a decoder's load and read the index reg = the source offset). IMPORTANT: `registersAtHit` is the register file captured AT the break instant — " +
+    "use it, NOT a follow-up cpu({op:'read'}). On some cores (notably NES/fceumm) the core drains the cycle budget on hit but the frame still finishes, " +
+    "so a live cpu read afterward returns END-OF-FRAME registers, not the break instant. `registersAtHit` sidesteps that. The break PC is reported as `pc`/`pcRaw`; " +
+    "the RAM side effects are also reliable via memory({op:'read'}). frame({op:'stepInstruction'}) to single-step from the break. (on:'read'/'write' finish the frame.)\n" +
+    "All supported on every CPU core; `registersAtHit` is present on cores that snapshot regs (NES today); out-of-date core packages return notSupported.",
     {
       on: z.enum(["write", "read", "pc"])
-        .describe("write=break on a write to address (precision:exact=true writer PC / sampled=frame PC, a lie under IRQ); read=break on a read (exact PC, who consumes it); pc=break when PC reaches address (freezes mid-instruction)."),
+        .describe("write=break on a write to address (precision:exact=true writer PC / sampled=frame PC, a lie under IRQ); read=break on a read (exact PC, who consumes it); pc=break when PC reaches address — the hit returns `registersAtHit` (the break-instant A/X/Y/P/S on NES) + the break PC; use registersAtHit, not a follow-up cpu read (which is end-of-frame state on fceumm)."),
       precision: z.enum(["exact", "sampled"]).default("exact")
         .describe("on:'write' ONLY. exact=core watchpoint, the real writing instruction PC even under interrupts (uses `address`). sampled=cheap frame-boundary PC (uses region/offset/length) — NOT the writer under IRQ. Ignored for on:read/pc (always exact)."),
       address: z.number().int().min(0).optional().describe("on:'write' exact / on:'read' / on:'pc' — CPU address to break on (write target, read target, or instruction boundary). Required for those."),

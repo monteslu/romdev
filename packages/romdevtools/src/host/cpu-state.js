@@ -157,7 +157,18 @@ function decode6502(bytes) {
   // 6502 P flags: N V - B D I Z C  (bit 5 unused / always reads 1)
   return formatCpuState({
     pc: PC,
-    registers: { A, X, Y, S, P, DB, IRQlow, tcount, count },
+    // Only the architectural 6502 registers go in `registers`. fceumm also
+    // exposes core-internal latches/counters (data-bus latch, pending-IRQ
+    // bitmask, cycle counters) — those are NOT 6502 state and were easy to
+    // misread, so they live under `coreInternal`, clearly labeled.
+    registers: { A, X, Y, S, P },
+    coreInternal: {
+      DB,       // data-bus latch (last value on the bus) — emulator-internal
+      IRQlow,   // pending-IRQ source bitmask — emulator-internal
+      tcount,   // temporary cycle counter — emulator-internal
+      count,    // cycles remaining in the current slice — emulator-internal
+      note: "fceumm core-internal values, NOT architectural 6502 registers — don't read these as CPU state.",
+    },
     flags: {
       N: !!(P & 0x80),
       V: !!(P & 0x40),
