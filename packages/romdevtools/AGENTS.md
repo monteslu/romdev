@@ -148,10 +148,12 @@ worry about ground truth:
 
 1. **`scaffold({op:'project', platform, template, name, path})`** — drops a
    complete, self-contained project tree on disk (main.c + the
-   runtime files it needs + your `vendor/` library source for
-   reference + README + .gitignore). Build with `build({output:'run'})` against
-   the project's files; the bundled examples ARE the reference
-   implementation.
+   runtime files it needs + the vendored library source for
+   reference + README + .gitignore). The response lists only the files you EDIT
+   (`files`) + a `vendorFileCount`; pass `verbose:true` for the full manifest.
+   Build the whole dir in one call with `build({output:'project', path,
+   outputPath})` (toolchain/crt0/linker inferred — no manifest); the bundled
+   examples ARE the reference implementation.
 2. **`scaffold({op:'game', platform, genre})`** — same but picks a known-good
    genre scaffold (shmup / platformer / puzzle / sports / racing).
 3. **`scaffold({op:'snippets', platform, mode})`** (mode `list`/`get`/`getAll`)
