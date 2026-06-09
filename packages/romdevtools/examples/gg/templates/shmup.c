@@ -145,12 +145,24 @@ static void fire(void) {
   }
 }
 
+/* Galois LFSR (taps $B8), period 255 -- real per-spawn randomness.
+ * The old code derived the spawn column from spawn_timer, but the caller
+ * resets spawn_timer just before calling here, so it was CONSTANT and
+ * every enemy spawned in the same left column/lane. */
+static uint8_t rng_state = 0xA5;
+static uint8_t rand8(void) {
+  uint8_t lsb = (uint8_t)(rng_state & 1);
+  rng_state >>= 1;
+  if (lsb) rng_state ^= 0xB8;
+  return rng_state;
+}
+
 static void spawn(void) {
   uint8_t i;
   for (i = 0; i < MAX_ENEMIES; i++) {
     if (!enemies[i].alive) {
       /* Spawn across the VISIBLE width (hardware X in [VIS_X0..VIS_X1-8]). */
-      enemies[i].x = (uint8_t)(VIS_X0 + ((spawn_timer * 37u) % (VIS_W - 8)));
+      enemies[i].x = (uint8_t)(VIS_X0 + (rand8() % (VIS_W - 8)));
       enemies[i].y = VIS_Y0;   /* enter at the top of the visible region */
       enemies[i].alive = 1;
       return;

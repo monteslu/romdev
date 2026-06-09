@@ -116,11 +116,23 @@ static void reset_run(void) {
   game_over_timer = 0;
 }
 
+/* Galois LFSR (taps $B8), period 255 -- real per-spawn randomness.
+ * The old code derived the spawn column from spawn_timer, but the caller
+ * resets spawn_timer just before calling here, so it was CONSTANT and
+ * every enemy spawned in the same left column/lane. */
+static uint8_t rng_state = 0xA5;
+static uint8_t rand8(void) {
+  uint8_t lsb = (uint8_t)(rng_state & 1);
+  rng_state >>= 1;
+  if (lsb) rng_state ^= 0xB8;
+  return rng_state;
+}
+
 static void spawn_obstacle(void) {
   uint8_t i;
   for (i = 0; i < MAX_OBSTACLES; i++) {
     if (!obstacles[i].alive) {
-      obstacles[i].x = lane_x[(spawn_timer * 13) % 3];
+      obstacles[i].x = lane_x[rand8() % 3];
       obstacles[i].y = 0;
       obstacles[i].alive = 1;
       return;
