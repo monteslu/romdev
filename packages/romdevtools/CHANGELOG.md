@@ -51,6 +51,16 @@ toolchain/crt0/linker from the directory — no `sourcesPaths`/`includePaths`/
 form to a collapsed "compiling edited loose source" alternative. The project-dir
 build was already the easier path; now it's the one a fresh agent copies first.
 
+### Removed — `catalog({op:'whatsNew'})` + the old→new tool rename table
+`whatsNew` returned a 125-entry map of pre-1.0 renamed tool names (plus, until now,
+~1.4k tokens of inlined CHANGELOG prose) so an agent resuming an old handoff could
+re-map a tool that had moved. The pre-1.0 consolidation is long settled — the old
+names are git history, and no running agent carries them — so maintaining a
+forever-growing rename record (and risking it landing in context) wasn't worth it.
+Dropped the op, the `tool-manifest.js` map, and its tests. An agent that hits an
+unknown tool name now just reads the current surface (`catalog({op:'categories'})`
+or the tool list); full release notes remain in CHANGELOG.md for humans.
+
 ## 0.24.0
 
 ### Added — C64 keyboard + joyport input (VICE core patch)

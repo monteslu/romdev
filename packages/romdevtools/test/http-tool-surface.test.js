@@ -59,7 +59,7 @@ test("runTool: bad enum → clean 'must be one of' (not a JSON dump)", async () 
   const reg = buildToolRegistry(randomUUID());
   const out = await runTool(reg.get("catalog"), { op: "bogus" });
   assert.equal(out.ok, false);
-  assert.match(out.error, /'op' must be one of: categories \| status \| whatsNew/);
+  assert.match(out.error, /'op' must be one of: categories \| status/);
 });
 
 test("runTool: unknown/misspelled param → did-you-mean (not silently dropped)", async () => {
