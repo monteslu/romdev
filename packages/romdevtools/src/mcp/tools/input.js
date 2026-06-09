@@ -228,6 +228,7 @@ export function registerInputTools(server, z, sessionKey) {
       key: z.string().optional().describe("op=pressKey (C64): key name — f1/f3/f5/f7, return, space, run/stop, a-z, 0-9, ctrl, cbm, home, down, right, lshift, rshift."),
       text: z.string().optional().describe("op=typeText (C64): string fed into the keyboard buffer; \\r / \\n become RETURN. e.g. 'LOAD\"*\",8,1\\rRUN\\r'."),
       joyport: z.number().int().min(1).max(2).optional().describe("op=joyport (C64): set the active joystick port (1 or 2). Omit to just GET the current port. Default is 2 (most C64 games)."),
+      verify: z.boolean().default(false).describe("op=pressKey (C64): also sample CIA1 $DC00/$DC01 (the keyboard/joystick scan ports the KERNAL reads) BEFORE / DURING (key held) / AFTER, plus matrix coords + active joyport. Use to tell apart 'my key never reached VICE' (before==during) from 'VICE saw it but the game ignored it' (they differ but no reaction) when a C64 game doesn't respond to a key."),
     },
     safeTool(async (args) => {
       switch (args.op) {
@@ -256,6 +257,10 @@ export function registerInputTools(server, z, sessionKey) {
         case "pressKey": {
           if (!args.key) throw new Error("input({op:'pressKey'}): `key` is required (C64 keyboard key, e.g. 'f1', 'return', 'run/stop').");
           const host = getHost(sessionKey);
+          if (args.verify) {
+            const v = host.pressC64KeyVerify(args.key, args.frames ?? 4);
+            return jsonContent({ pressedKey: v.key, matrix: [v.row, v.col], frames: v.frames, joyport: v.joyport, autoReleased: v.autoReleased, cia1: v.cia1, frameCount: host.status.frameCount, note: v.note });
+          }
           const r = host.pressC64Key(args.key, args.frames ?? 4);
           return jsonContent({ pressedKey: r.key, matrix: [r.row, r.col], frames: r.frames, frameCount: host.status.frameCount });
         }

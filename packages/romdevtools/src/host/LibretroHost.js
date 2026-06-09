@@ -929,6 +929,86 @@ export class LibretroHost {
   }
 
   /**
+   * Press a C64 key like pressC64Key, but sample the machine-visible input
+   * state (CIA1 $DC00/$DC01 — the keyboard/joystick scan ports) BEFORE,
+   * DURING (key held), and AFTER (released). Lets an RE agent tell apart
+   * "my key never reached VICE" from "VICE saw it but the game didn't scan
+   * it this frame". No core change — reads the already-exposed c64_cia1_regs
+   * region ($DC00..$DC0F).
+   * @param {string} key
+   * @param {number} frames  frames to hold (sampled at the midpoint)
+   * @returns {object} matrix coords + held flag + per-phase CIA snapshots
+   */
+  pressC64KeyVerify(key, frames = 4) {
+    const mod = this._needMod();
+    if (typeof mod._romdev_key_matrix !== "function") {
+      throw new Error("this core build does not expose C64 keyboard input (C64/VICE only).");
+    }
+    const pos = C64_KEY_MATRIX[String(key).toLowerCase()];
+    if (!pos) {
+      throw new Error(`unknown C64 key '${key}'. Known: ${Object.keys(C64_KEY_MATRIX).join(", ")}.`);
+    }
+    const [row, col] = pos;
+    const held = Math.max(1, frames | 0);
+    // $DC00 = CIA1 PRA (port A — joystick 2 + keyboard col select),
+    // $DC01 = CIA1 PRB (port B — joystick 1 + keyboard row read).
+    const cia = () => {
+      try {
+        const r = this.readMemory("c64_cia1_regs", 0, 2);
+        return { DC00: r[0], DC01: r[1] };
+      } catch { return null; }
+    };
+    const before = cia();
+    mod._romdev_key_matrix(row, col, 1);          // press
+    this.stepFrames(Math.ceil(held / 2));
+    const during = cia();                          // key still held
+    this.stepFrames(Math.max(1, held - Math.ceil(held / 2)));
+    mod._romdev_key_matrix(row, col, 0);          // release
+    this.stepFrames(1);
+    const after = cia();
+    return {
+      key: String(key).toLowerCase(),
+      row, col,
+      frames: held,
+      joyport: this.getC64JoyPort?.() ?? null,
+      autoReleased: true,
+      cia1: { before, during, after },
+      note: "CIA1 $DC00 (port A) / $DC01 (port B) are the keyboard/joystick scan ports the KERNAL reads. `during` is sampled with the key held; if before==during the key never moved the matrix line (didn't reach VICE); if they differ but the game didn't react, it scanned a different key/port or that screen ignores it.",
+    };
+  }
+
+  /**
+   * Set the SET of C64 keyboard keys held down (for scripted timelines like
+   * recordSession). Diffs against the currently-held set: presses newly-added
+   * keys' matrix lines, releases removed ones. Pass [] to release all. Does NOT
+   * step frames — the caller's loop owns stepping. Unknown keys throw.
+   * @param {string[]} keys
+   * @returns {{held: string[], matrix: Array<[number,number]>}}
+   */
+  setC64HeldKeys(keys) {
+    const mod = this._needMod();
+    if (typeof mod._romdev_key_matrix !== "function") {
+      throw new Error("this core build does not expose C64 keyboard input (C64/VICE only).");
+    }
+    const want = new Set((keys ?? []).map((k) => String(k).toLowerCase()));
+    for (const k of want) {
+      if (!C64_KEY_MATRIX[k]) {
+        throw new Error(`unknown C64 key '${k}'. Known: ${Object.keys(C64_KEY_MATRIX).join(", ")}.`);
+      }
+    }
+    const have = this._c64HeldKeys ?? (this._c64HeldKeys = new Set());
+    // release keys no longer wanted
+    for (const k of have) {
+      if (!want.has(k)) { const [r, c] = C64_KEY_MATRIX[k]; mod._romdev_key_matrix(r, c, 0); have.delete(k); }
+    }
+    // press newly-added keys
+    for (const k of want) {
+      if (!have.has(k)) { const [r, c] = C64_KEY_MATRIX[k]; mod._romdev_key_matrix(r, c, 1); have.add(k); }
+    }
+    return { held: [...have], matrix: [...have].map((k) => C64_KEY_MATRIX[k]) };
+  }
+
+  /**
    * Feed a PETSCII string into the C64 kernal keyboard buffer (for typing
    * LOAD/RUN/filenames). `\r` (or `\n`) becomes RETURN. Non-blocking — the
    * kernal drains it as the screen editor runs, so step frames after.
