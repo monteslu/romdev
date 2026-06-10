@@ -121,6 +121,12 @@ async function memRead(sessionKey, { region, offset = 0, length, offsets, output
       // correct.) Use getTile (logicalPixels:true, the default) to decode tiles
       // in render order instead of un-swapping by hand.
       let note = info.note ?? null;
+      if (region === "system_ram" && host.status.platform === "genesis") {
+        note = (note ? note + " " : "") +
+          "GENESIS: normalized to CPU byte order — offset X IS the byte the 68k sees at $FF0000+X " +
+          "(the host un-swaps gpgx's word-swapped storage), so offsets line up with disassembly " +
+          "addresses and cheat-DB maps. Words are big-endian, as the meta says.";
+      }
       if (region === "video_ram" && host.status.platform === "genesis") {
         note = (note ? note + " " : "") +
           "GENESIS: these are RAW host-LE bytes — each 16-bit VRAM word's two bytes are SWAPPED " +

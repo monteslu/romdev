@@ -776,6 +776,18 @@ export class LibretroHost {
     return mod._retro_get_memory_size(id) || 0;
   }
 
+  /** gpgx stores 68k work RAM as 16-bit words in host-LE order — the CPU's
+   *  byte at $FF0000+A physically lives at work_ram[A^1] (core/macros.h
+   *  READ_BYTE/WRITE_BYTE on little-endian builds). Normalize the system_ram
+   *  region to CPU byte order here so offset X IS the byte the 68k sees at
+   *  $FF0000+X — otherwise every byte-granular tool (search, diff, write,
+   *  classify) is off-by-XOR-1 vs disassembly addresses and cheat-DB maps
+   *  (self-consistent within raw-only loops, which is why it hid; poisonous
+   *  the moment an address crosses to/from the CPU view). */
+  _byteSwapRegion(region) {
+    return region === "system_ram" && this.status.platform === "genesis";
+  }
+
   readMemory(region, offset, length) {
     const mod = this._needMod();
     const id = MemoryRegionToRetro[region];
@@ -785,6 +797,12 @@ export class LibretroHost {
     if (!ptr || !size) throw new Error(this._emptyRegionError(region));
     if (offset < 0 || offset + length > size) {
       throw new RangeError(`read out of bounds: offset=${offset} len=${length} size=${size}`);
+    }
+    if (this._byteSwapRegion(region)) {
+      const heap = mod.HEAPU8;
+      const out = new Uint8Array(length);
+      for (let i = 0; i < length; i++) out[i] = heap[ptr + ((offset + i) ^ 1)];
+      return out;
     }
     return new Uint8Array(mod.HEAPU8.buffer, ptr + offset, length).slice();
   }
@@ -803,6 +821,11 @@ export class LibretroHost {
     if (!ptr || !size) throw new Error(this._emptyRegionError(region));
     if (offset < 0 || offset + bytes.length > size) {
       throw new RangeError(`write out of bounds: offset=${offset} len=${bytes.length} size=${size}`);
+    }
+    if (this._byteSwapRegion(region)) {
+      const heap = mod.HEAPU8;
+      for (let i = 0; i < bytes.length; i++) heap[ptr + ((offset + i) ^ 1)] = bytes[i];
+      return;
     }
     mod.HEAPU8.set(bytes, ptr + offset);
   }
@@ -1263,6 +1286,61 @@ export class LibretroHost {
     return !!(this.mod && typeof this.mod._romdev_watchdog_set === "function");
   }
 
+  /** True when this core build exposes the at-hit register snapshot (gpgx). */
+  regSnapSupported() {
+    return !!(this.mod && typeof this.mod._romdev_regsnap_get === "function");
+  }
+
+  /**
+   * Read the at-hit register snapshot (gpgx Genesis/SMS/GG): the FULL register
+   * file frozen by the core hook at the instant a pc-break / watchdog /
+   * write-watch / read-watch fired. The live register file keeps running for
+   * the rest of the frame (gpgx schedules CPUs per scanline), so post-frame
+   * register reads drift hundreds of instructions past the hit — this snapshot
+   * is the truth. Returns { kind, named } or null when no hit has been
+   * snapshotted (or the core lacks the export). kind: 1=pc-break/step,
+   * 2=watchdog, 3=write-watch, 4=read-watch. `named` keys per active CPU:
+   * m68k d0-d7/a0-a7/pc/sr/sp (pc = the EXECUTING instruction's first byte);
+   * z80 a/f/b/c/d/e/h/l/ix/iy/pc/sp. Pass clear to reset the kind.
+   */
+  getRegSnapshot(clear = false) {
+    const mod = this.mod;
+    if (!mod || typeof mod._romdev_regsnap_get !== "function") return null;
+    const ptr = mod._malloc(21 * 4);
+    try {
+      mod._romdev_regsnap_get(ptr, clear ? 1 : 0);
+      const u = new Uint32Array(mod.HEAPU8.buffer, ptr, 21);
+      const kind = u[0];
+      if (!kind) return null;
+      const r = Array.from(u.subarray(2, 2 + Math.min(u[1] >>> 0, 19)));
+      let named;
+      if (this.status.platform === "genesis") {
+        named = {};
+        for (let i = 0; i < 8; i++) named["d" + i] = "$" + (r[i] >>> 0).toString(16).toUpperCase();
+        for (let i = 0; i < 8; i++) named["a" + i] = "$" + (r[8 + i] >>> 0).toString(16).toUpperCase();
+        named.pc = "$" + (r[16] >>> 0).toString(16).toUpperCase();
+        named.sr = "$" + (r[17] & 0xFFFF).toString(16).toUpperCase();
+        named.sp = "$" + (r[18] >>> 0).toString(16).toUpperCase();
+      } else {
+        const h2 = (v) => "$" + (v & 0xFF).toString(16).toUpperCase();
+        const h4 = (v) => "$" + (v & 0xFFFF).toString(16).toUpperCase();
+        named = {
+          a: h2(r[0]), f: h2(r[1]), b: h2(r[2]), c: h2(r[3]),
+          d: h2(r[4]), e: h2(r[5]), h: h2(r[6]), l: h2(r[7]),
+          ix: h4(r[8]), iy: h4(r[9]), pc: h4(r[16]), sp: h4(r[18]),
+        };
+      }
+      return { kind, named };
+    } finally {
+      mod._free(ptr);
+    }
+  }
+
+  /** True when this core build exposes the pure-CPU run (gpgx). */
+  runPureSupported() {
+    return !!(this.mod && typeof this.mod._romdev_run_pure === "function");
+  }
+
   /** Arm/disarm the read watchpoint on a CPU address. */
   setReadWatch(address, enabled = true) {
     const mod = this._needMod();
@@ -1488,6 +1566,13 @@ export class LibretroHost {
     const {
       pc, regs = {}, spReg = prof.spReg, pcReg = prof.pcReg, sentinelPC = prof.defaultSentinel,
       sentinelBytes = prof.retBytes, maxFrames = 600, sandbox = true, capture,
+      // pure: step ONLY the active CPU (no frame machinery — VDP lines, co-CPU,
+      // interrupt raising). Without it, each "frame" of the call runs the
+      // game's OWN per-frame logic concurrently (VBlank handlers via RAM
+      // vectors etc.), which can stomp the buffer the driven routine is
+      // writing — a real session diffed a CORRECT codec reimplementation
+      // against that poisoned output for hours. gpgx (Genesis/SMS/GG) only.
+      pure = false,
       // presetMemory: [{addr, bytes}] CPU-space writes applied before the call
       // (codecs that read a global from RAM — a dest stride, a mode flag, etc).
       presetMemory = [],
@@ -1576,17 +1661,48 @@ export class LibretroHost {
       this.setPCBreak(target, true, false);
       let finalState = null;
       try {
-        framesRun = this._runFramesExclusive(() => {
-          const st = this.getPCBreak(false);
-          if (st.hit) {
-            finalState = st;
-            if (st.watchdog) watchdogTripped = true;
-            else if (stopAtPC !== undefined) stoppedAtPC = true;
-            else returned = true;
-            return true;
+        if (pure) {
+          if (!this.runPureSupported()) {
+            throw new Error("cpu({op:'call', pure:true}) not supported by this core build (needs the romdev_run_pure export — gpgx Genesis/SMS/GG only for now). Re-run without pure.");
           }
-          return false;
-        }, maxFrames);
+          // Mask m68k interrupts so a PENDING VINT raised before the call can't
+          // redirect entry into the game's handler (no NEW interrupts are raised
+          // in pure mode — the system frame machinery never runs). Z80 systems
+          // need no masking: their irq line is only raised by the (not-running)
+          // frame loop. The sandbox restore (or the game's own RTE discipline)
+          // makes the IPL change invisible afterward.
+          if (this.status.platform === "genesis") {
+            this.setReg(17, (this.getReg(17) | 0x0700) & 0xFFFF);
+          }
+          // Drive the CPU in cycle chunks, checking the sentinel/watchdog
+          // between chunks. The watchdog bounds total instructions; the chunk
+          // cap is only a backstop against a watchdog-less older core.
+          const CHUNK_CYCLES = 1_000_000;
+          const maxChunks = 512;
+          for (let i = 0; i < maxChunks; i++) {
+            this.mod._romdev_run_pure(CHUNK_CYCLES);
+            const st = this.getPCBreak(false);
+            if (st.hit) {
+              finalState = st;
+              if (st.watchdog) watchdogTripped = true;
+              else if (stopAtPC !== undefined) stoppedAtPC = true;
+              else returned = true;
+              break;
+            }
+          }
+        } else {
+          framesRun = this._runFramesExclusive(() => {
+            const st = this.getPCBreak(false);
+            if (st.hit) {
+              finalState = st;
+              if (st.watchdog) watchdogTripped = true;
+              else if (stopAtPC !== undefined) stoppedAtPC = true;
+              else returned = true;
+              return true;
+            }
+            return false;
+          }, maxFrames);
+        }
       } finally {
         this.setPCBreak(0, false, false);
         this.setWatchdog(0);
@@ -1607,6 +1723,7 @@ export class LibretroHost {
     const fin = this._lastCallResult || {};
     return {
       returned, framesRun,
+      ...(pure ? { pure: true } : {}),
       ...(watchdogTripped ? { watchdog: true, reason: "watchdog: hit the instruction budget (likely a runaway loop — wrong A0/regs, a needed preset, or legitimately huge; raise maxInstructions or check the entry setup)" } : {}),
       ...(stoppedAtPC ? { stoppedAtPC: "$" + (stopAtPC >>> 0).toString(16).toUpperCase() } : {}),
       ...(fin.finalPC != null ? { finalPC: "$" + fin.finalPC.toString(16).toUpperCase(), finalPCRaw: fin.finalPC } : {}),

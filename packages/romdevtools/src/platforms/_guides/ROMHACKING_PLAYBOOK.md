@@ -159,7 +159,11 @@ the copy reads from, then `breakpoint({on:'write'})` on THAT.
 **Precision — exact vs sampled.** The default `breakpoint({on:'write'})` is a core-level write
 watchpoint: it returns the EXACT writing instruction's PC, captured inside the CPU write
 path — correct even for NMI/IRQ-driven writes (the common case where a frame-sampled PC
-is just the idle loop). On a banked mapper it reports the `bank` (NES/GB/SMS-GG) so you
+is just the idle loop). On NES and Genesis/SMS/GG the hit also carries **`registersAtHit`**
+— the register file frozen AT the hit instant. Use it instead of a follow-up
+`cpu({op:'read'})`: the live registers keep running for the rest of the frame (on gpgx
+they drift hundreds of instructions past the hit — address registers read that way are
+someone else's values). On a banked mapper it reports the `bank` (NES/GB/SMS-GG) so you
 can pass `{startAddress, bank}` to `disasm({target:'rom'})`. The lighter
 `breakpoint({on:'write', precision:'sampled'})` (a.k.a. `watch({on:'mem'})`) steps until the byte changes
 and returns a frame-boundary PC — a lead, not a guarantee under interrupts; use it for the
@@ -215,6 +219,14 @@ pushes a sentinel return, and runs until it returns. Most of these formats have 
 "stored/uncompressed" escape opcode, so once you can SEE the decompressed output
 you can usually craft a replacement by hand. (sandbox:false leaves the dest buffer
 live for `memory({op:'read'})`; sandbox:true restores the game untouched.)
+
+**Pass `pure:true` on Genesis/SMS/GG.** A non-pure call that spans frames runs the
+game's OWN frame logic concurrently (VBlank handlers via RAM vectors, music
+drivers) — which can overwrite the dest buffer mid-call and hand you poisoned
+"ground truth" (a real session spent hours diffing a CORRECT reimplementation
+against it). `pure:true` steps ONLY the CPU — no frame machinery, no interrupts —
+so the output is exactly what the routine wrote. Non-pure results carry a ⚠
+caveat whenever frame logic ran.
 
 ## 5e. Re-inject an edited asset — the round-trip (don't reimplement the compressor)
 
