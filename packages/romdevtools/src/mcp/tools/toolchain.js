@@ -266,7 +266,7 @@ export function installToolchainCore({ id }) {
 }
 
 export function registerToolchainTools(server, z, sessionKey) {
-  async function buildSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, crt0, crt0Path, codeLoc, dataLoc, options, linkerConfig, inesHeader, outputPath, inline = false, includeSymbols = false, lint = "advisory", runtime, maxmod, rebuildSdk }) {
+  async function buildSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, crt0, crt0Path, codeLoc, dataLoc, options, linkerConfig, linkerConfigPath, inesHeader, outputPath, inline = false, includeSymbols = false, lint = "advisory", runtime, maxmod, rebuildSdk }) {
       // Reject conflicting inline vs path args — fail loud, not silent.
       if (source != null && sourcePath != null) {
         throw new Error("build({output:'rom'}): pass either `source` OR `sourcePath`, not both.");
@@ -280,6 +280,12 @@ export function registerToolchainTools(server, z, sessionKey) {
       // crt0Path → crt0 source.
       if (crt0Path) {
         crt0 = await readFile(crt0Path, "utf-8");
+      }
+      // linkerConfigPath: read the .cfg from disk so a large multi-bank
+      // config (e.g. a disasm'd mapper-2 rebuild) isn't re-streamed through
+      // context on every build (0.27.0 feedback #2).
+      if (linkerConfigPath && linkerConfig == null) {
+        linkerConfig = await readFile(linkerConfigPath, "utf-8");
       }
       // Auto-inject the bundled crt0 for SMS/GG when caller didn't pass
       // one. Stock SDCC crt0 doesn't boot these targets; without this,
@@ -464,7 +470,7 @@ export function registerToolchainTools(server, z, sessionKey) {
       return jsonContent(payload);
   }
 
-  async function runSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, runtime, maxmod, rebuildSdk, crt0, crt0Path, codeLoc, dataLoc, linkerConfig, inesHeader, path: projPath, frames = 60, holdInputs, screenshotPath, projectName }) {
+  async function runSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, runtime, maxmod, rebuildSdk, crt0, crt0Path, codeLoc, dataLoc, linkerConfig, linkerConfigPath, inesHeader, path: projPath, frames = 60, holdInputs, screenshotPath, projectName }) {
       const { buildForPlatform } = await import("../../toolchains/index.js");
       const resolved = resolveCore(platform);
       if (!resolved) throw new Error(`no core available for platform '${platform}'`);
@@ -510,6 +516,9 @@ export function registerToolchainTools(server, z, sessionKey) {
       }
       if (crt0Path) {
         crt0 = await readFile(crt0Path, "utf-8");
+      }
+      if (linkerConfigPath && linkerConfig == null) {
+        linkerConfig = await readFile(linkerConfigPath, "utf-8");
       }
       // Auto-inject bundled crt0 for SMS/GG when caller didn't pass one
       // (stock SDCC crt0 doesn't boot these targets — see buildSource).
@@ -715,6 +724,7 @@ export function registerToolchainTools(server, z, sessionKey) {
       dataLoc: z.coerce.number().int().optional().describe("SDCC — _DATA (WRAM) load address (default $C000 on Z80). NOT read by output:'romWithDebug'."),
       options: z.array(z.string()).optional().describe("output:'rom' — extra toolchain CLI options."),
       linkerConfig: z.string().optional().describe("ld65 linker config (cc65). NES presets: 'chr-ram-runtime' (RECOMMENDED for homebrew C — full crt0 + iNES header + NMI w/ OAM DMA + `_shadow_oam` at $0200), 'chr-ram' (bare nmi:rti stub), 'chr-rom' (cc65-C with FIXED CHR-ROM art — segment split + CHARS segment; supply CHR via binaryIncludePaths into a CHARS source + the header via `inesHeader`). Or full .cfg contents. Preset NAMES only resolve on output:'rom'/'run'; output:'romWithDebug' takes raw .cfg contents only. **For rebuilding a commercial NROM game from its disassembly, prefer `inesHeader` over a raw .cfg.**"),
+      linkerConfigPath: z.string().optional().describe("Path-based `linkerConfig`: absolute path to a .cfg file on disk (the server reads it — the cfg never enters your context; e.g. the multi-bank cfg a banked-NES disasm project ships). Ignored when `linkerConfig` is passed inline."),
       inesHeader: z.object({
         prgBanks: z.coerce.number().int().min(1).max(255).describe("16KB PRG-ROM banks (1 = NROM-128, 2 = NROM-256)."),
         chrBanks: z.coerce.number().int().min(0).max(255).optional().describe("8KB CHR-ROM banks (0 = CHR-RAM, no CHARS segment). Default 0."),

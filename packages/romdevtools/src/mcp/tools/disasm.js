@@ -1105,6 +1105,7 @@ function absolutizeBuild(build, outputDir) {
       out[key] = m;
     }
   }
+  if (out.linkerConfigPath) out.linkerConfigPath = nodePath.join(outputDir, out.linkerConfigPath);
   return out;
 }
 

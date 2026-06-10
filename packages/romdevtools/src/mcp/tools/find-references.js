@@ -75,8 +75,9 @@ function scanAsmForReferences(asm, targetAddr, sourceLabels) {
     // Match: any `$XXXX` (or `$XX:XXXX`) in operand that resolves to target,
     // OR the LXXXX auto-label for the target address, OR a named label.
     let matched = false;
-    for (const m of operand.matchAll(/\$([0-9A-Fa-f]+)\b/g)) {
-      const v = parseInt(m[1], 16);
+    for (const m of operand.matchAll(/(#?)\$([0-9A-Fa-f]+)\b/g)) {
+      if (m[1] === "#") continue;   /* immediate (`lda #$02`) — a value, not an address */
+      const v = parseInt(m[2], 16);
       if (v === targetAddr || v === (targetAddr & 0xFFFF)) { matched = true; break; }
     }
     if (!matched && autoLabelRe.test(operand)) matched = true;
@@ -231,15 +232,36 @@ export async function findReferencesCore({ path, platform, address, mapper, maxR
     throw new Error(`findReferences: could not detect platform for '${path}'. Pass platform explicitly.`);
   }
 
-  // Disassemble the whole code area.
+  // Disassemble the whole code area. Most platforms produce one flat asm
+  // blob; banked NES produces one segment PER PRG BANK (segments[]).
   let asm;
+  /** @type {{asm: string, bank: number}[] | null} */
+  let segments = null;
   if (resolved === "nes") {
     const prgSize = data[4] * 16384;
-    const startAddress = prgSize === 16384 ? 0xC000 : 0x8000;
-    const bytes = data.slice(16, 16 + prgSize);
     const { runDa65 } = await import("../../toolchains/cc65/da65.js");
-    const r = await runDa65({ bytes, startAddress, cpu: "6502", options: ["--comments", "4"] });
-    asm = r.asm;
+    if (prgSize <= 32768) {
+      const startAddress = prgSize === 16384 ? 0xC000 : 0x8000;
+      const bytes = data.slice(16, 16 + prgSize);
+      const r = await runDa65({ bytes, startAddress, cpu: "6502", options: ["--comments", "4"] });
+      asm = r.asm;
+    } else {
+      // Banked PRG (>32KB, e.g. UxROM/MMC1/MMC3): the old code disassembled
+      // the whole PRG as ONE flat blob at $8000, which mis-addresses every
+      // bank past the first — a 128KB mapper-2 scan returned refsFound:0
+      // for bytes referenced in dozens of places (0.27.0 feedback #3).
+      // Disassemble each 16KB bank separately: switchable banks at $8000,
+      // the (conventionally fixed) last bank at $C000; tag refs with the
+      // bank index.
+      const banks = Math.floor(prgSize / 16384);
+      segments = [];
+      for (let b = 0; b < banks; b++) {
+        const bytes = data.slice(16 + b * 16384, 16 + (b + 1) * 16384);
+        const startAddress = b === banks - 1 ? 0xC000 : 0x8000;
+        const r = await runDa65({ bytes, startAddress, cpu: "6502", options: ["--comments", "4"] });
+        segments.push({ asm: r.asm, bank: b });
+      }
+    }
   } else if (resolved === "snes") {
     const mapped = mapSnesAddress(data, 0x008000, 0x8000, mapper);
     const startAddress = 0x008000;
@@ -339,7 +361,17 @@ export async function findReferencesCore({ path, platform, address, mapper, maxR
     throw new Error(`findReferences: platform '${resolved}' not supported yet.`);
   }
 
-  const refs = scanAsmForReferences(asm, address, []);
+  let refs;
+  if (segments) {
+    refs = [];
+    for (const seg of segments) {
+      for (const r of scanAsmForReferences(seg.asm, address, [])) {
+        refs.push({ ...r, prgBank: seg.bank });
+      }
+    }
+  } else {
+    refs = scanAsmForReferences(asm, address, []);
+  }
   // Add vector-table refs.
   if (resolved === "nes") {
     refs.push(...nesVectorRefs(data, address));

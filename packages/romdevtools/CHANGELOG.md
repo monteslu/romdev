@@ -77,6 +77,40 @@ of repeated logic errors. The big ones:
   respond to input, and each platform's audio was captured and RMS-checked.
   (Atari 2600 has no puzzle genre by design.)
 
+### Fixed/Added — the 0.27.0 Zanac RE feedback round (banked-NES rebuilds, A/B diff, token cuts)
+- **Banked NES `disasm({target:'project'})` now emits COMPLETE, working rebuild
+  glue** (the headline ask): a `HEADER` segment with the original 16 iNES bytes,
+  a per-bank `PRGn` segment wrapper for every bank, a multi-bank `nes_rebuild.cfg`
+  (switchable banks at `$8000`, fixed top bank at `$C000`, CHR wired when
+  present), and a `rebuild.json` `build()` call referencing all of it. Proven
+  byte-identical on a synthetic 4-bank mapper-2 ROM fed straight back to
+  `build()` — what previously took an hour of hand-written segments + cfg is
+  now zero glue. (NROM keeps the existing proven `inesHeader` one-call path.)
+- **`build({linkerConfigPath})`** reads the `.cfg` from disk so a large
+  multi-bank config never streams through context (and `rebuild.json` uses it).
+- **`disasm({target:'references'})` scans every PRG bank on banked NES** —
+  the old flat-blob-at-`$8000` disassembly returned `refsFound:0` on >32KB
+  ROMs. Refs now carry a `prgBank` tag, and `#$nn` immediates no longer count
+  as references (they're values, not addresses).
+- **`memory({op:'diffRuns'})`** — the A/B input-diff primitive: runs the same
+  start state twice under two different held inputs (savestate restore in
+  between) and returns only the divergent bytes, with run-A/run-B values for
+  small clusters. Replaces the save/run/dump/restore/run/dump/python-diff loop
+  (~6 calls + a 4KB context hit) with one call; live-verified isolating an NES
+  player-X byte.
+- **`memory({op:'read'/'readCart', outputPath, echo:false})`** returns just
+  `{path, bytes}` — no more ~4KB hex echo on a 2KB dump that was explicitly
+  routed to disk.
+- **`memory({op:'diff'})`**: summary clusters ≤8 bytes now include
+  `before`/`after` hex (no more falling back to `view:'raw'` for the values),
+  and `minDelta` filters RNG/counter wiggle.
+- **`input({op:'press'})` guarantees a released→pressed edge** (one released
+  frame first), so edge-triggered handlers (START pause) can't miss the press
+  when the button was already held.
+- **`breakpoint({on:'pc'})` misses now diagnose**: report `pcNow`, stop
+  suggesting `pressDuring` when input WAS supplied (wrong-address is then the
+  likely story), and point at `watch({on:'pc'})` coverage tracing.
+
 ### Added — human co-drive detection: agents now KNOW when a human is playing in the playtest window
 The long-standing confusion ("they get confused when I try to play while they're
 coding") had a real mechanism: the playtest window shares the session's ONE
