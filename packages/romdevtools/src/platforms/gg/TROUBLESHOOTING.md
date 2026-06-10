@@ -16,7 +16,7 @@ Anything you draw outside `(48, 24)..(207, 167)` is in the border —
 visible in headless emulator screenshots (gpgx shows the whole frame)
 but invisible on real hardware.
 
-The bundled scaffolds are direct ports of the SMS scaffolds and target
+The bundled example games are direct ports of the SMS examples and target
 the full 256×192 area. Works fine for development under gpgx; for
 shipping to a real GG, reposition sprite + tilemap content to the
 visible center.
@@ -28,7 +28,7 @@ active low), separate from the D-pad/A/B which are on `$DC` like
 SMS. `gg_joypad_read()` already merges them — START shows up in bit 7
 of the returned byte (`JOY_START` mask).
 
-If you copied an SMS scaffold that uses PAUSE-as-START semantics
+If you copied an SMS example that uses PAUSE-as-START semantics
 (SMS pause button is at port $DD bit 4 IIRC), it won't work on GG;
 swap to JOY_START.
 
@@ -85,7 +85,7 @@ two-byte little-endian CRAM entry.
 
 ## "Linking error: undefined reference to sms_joypad_read_p2"
 
-GG only has one controller. The SMS scaffolds use `sms_joypad_read_p2`
+GG only has one controller. The SMS examples use `sms_joypad_read_p2`
 for the two-controller patterns (Pong, 2P shmup). When porting, drop
 the P2 read + force `p2 = 0` so the AI fallback always engages.
 

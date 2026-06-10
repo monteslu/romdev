@@ -87,7 +87,7 @@ const CATEGORIES = [
   {
     name: "platforms",
     description: "Discover supported platforms, their cores, toolchains, and language matrices.",
-    useWhen: ["scaffolding a new project", "checking which platforms are available", "looking up a platform's default language"],
+    useWhen: ["before forking an example for a new game", "checking which platforms are available", "looking up a platform's default language"],
     register: (s, z, k) => registerPlatformTools(s, z, k), // listPlatforms, resolvePlatform
   },
   {
@@ -138,8 +138,8 @@ const CATEGORIES = [
   },
   {
     name: "project",
-    description: "Project scaffolding + starter snippets per platform.",
-    useWhen: ["starting a new game from scratch", "looking up canonical patterns like NMI handler, OAM DMA, joypad read"],
+    description: "The example-game library (fork/list/show) + starter snippets per platform.",
+    useWhen: ["starting a new game (ALWAYS fork the nearest example — never a blank file)", "looking up canonical patterns like NMI handler, OAM DMA, joypad read"],
     register: (s, z, k) => { registerProjectTools(s, z, k); registerSnippetTools(s, z, k); registerPlatformDocsTools(s, z); },
   },
   {

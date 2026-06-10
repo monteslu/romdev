@@ -13,7 +13,7 @@
 // runs a bundled rgbfix after every gb/gbc link — see the
 // "rgbfix (auto header fix)" line in build logs), so you only need this
 // script when rebuilding the project OUTSIDE romdev with stock SDCC and
-// no RGBDS installed. It's what keeps the scaffold self-contained.
+// no RGBDS installed. It's what keeps the forked project self-contained.
 //
 // The bundled gb_crt0.s reserves $0100-$014F for the header window,
 // so the bytes patched in here land on actual cartridge-header

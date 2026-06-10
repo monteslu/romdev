@@ -68,7 +68,7 @@ Skip playtest only when there's clearly no human in the loop: CI runs, automated
 - `memory` — read/write VRAM/OAM/CGRAM/ARAM and other regions (all 14 platforms). `memory({op:'read'})` takes `offsets:[…]` to batch scattered reads in one call. **`memory({op:'search'})`/`memory({op:'searchNext'})`** = the Cheat-Engine value-search loop ("find the address of X, narrow as X changes") — relative compares (`inc`/`dec`/`changed`) work as the FIRST narrow (baselines recorded at seed), and `as:'bcd'`/`as:'digits'` search packed-BCD scores and digit-per-byte HUD buffers (any constant tile base) when stored ≠ displayed. **`memory({op:'readCart'})`** reads the loaded cart image to confirm a patch is live. **`memory({op:'classify'})`** says whether bytes look like ASCII/code/tile-data (kills the "found table that's really a string" trap). `memory({op:'snapshot'})` + `memory({op:'diff'})` answer "which bytes changed across this event?" (diff defaults to a clustered summary with stride detection; small clusters carry before/after hex, `minDelta` filters churn); **`memory({op:'diffRuns', portsA, portsB?})`** answers "which byte does this INPUT drive?" in one call (same start state run twice under two inputs, only the divergent bytes return); `state({op:'diff'})` is the coarse whole-machine version. Reads routed to disk take `echo:false` to skip the inline hex.
 - `debug` — **`frame({op:'verify'})`** (NO-VISION render-health: one call answers "is the game actually rendering / alive?" on all 14 — fuses a framebuffer pixel scan with the per-platform render-enable/NMI decode; `{verified:true|false|null, issues[], pixels, render}`, frame-0-guarded so it never cries wolf on boot), `sprites({op:'inspect'})`, `palette({source:'live'})`, `cpu({op:'read'})` (all 14), `audioDebug({op:'inspect'})` (the 12 systems with a sound chip — all but Atari 2600/7800; pass `frames:N` to TRACE a per-channel note-timeline for headless melody asserts), `background({view:'renderState'})`, `breakpoint({on:'write'})` (write watchpoint, all 14; EVERY hit on EVERY platform carries `registersAtHit` — the register file frozen at the hit instant, the only honest read since live regs drift after a hit — and the CPU stays frozen until the hit is cleared), **`watch({on:'dma', precision:'sampled'})`** (Genesis: which ROM offset a VRAM graphic was DMA'd from), **`watch({on:'copy'})`** (ALL 14: every write landing in a VRAM window logged with the EXECUTING instruction's PC — the generic 'which routine uploads this graphic?'; port-based video memory hooked in-core incl. the SNES DMA path, CPU-mapped VRAM via the range log), **`disasm({target:'bytes'|'rom'|'references'|'project'})`** (ALL 14 — native binutils objdump per CPU, incl. GBA ARM7/Thumb; the byte-exact `disasm({target:'project'})` reassembles through native as/ld/objcopy; banked carts — NES mappers, SNES LoROM, GB MBC, Sega mapper, MSX megaROM, 2600 F8/F6/F4, 7800 SuperGame, >32KB HuCards — are split and reference-scanned PER BANK, refs tagged `prgBank`/`romBank`), `symbols({op})` lookup, `background({view:'rendered'})`, plus **`cheats({op})`** (`cheats({op:'lookup'})` = a free labeled RAM/code map for known ROMs, `cheats({op:'search'})` to fuzzy-find a game by name, `cheats({op:'apply'})`/`cheats({op:'clear'})` non-destructively, `cheats({op:'make'})` to create codes)
 - `assets` — convert PNGs to tiles (`encodeArt`/`importArt`), WAVs to BRR, identify ROMs (`cart({op:'identify'})`), plus the hacking toolkit (`romPatch({op})` — write/writeMany/spliceCHR/relocate/makeStored/findFree/findPointer/diff, `assembleSnippet`, `cart({op:'extract'})`, `cart({op:'wrap'})`)
-- `project` — starter snippets per platform
+- `project` — the example-game library (`examples`: list / fork / show, plus the legacy snippet ops)
 - `show` — `playtest({op})`: `op:'open'` opens the live SDL window for a human, `op:'stop'` closes it, `op:'status'` reports liveness, `op:'framebuffer'` captures exactly what the human's window shows
 - `advanced` — `runUntil`, **`watch({on:'mem'|'range'|'pc'})`** (LOG-ALL tracing; `range`/`pc` take **`fromState`**/`fromStatePath` to trace from a restored savestate moment), **`breakpoint({on:'write'})`** (the EXACT instruction that wrote a byte, via a core watchpoint — fixes the frame-sampled-PC problem; `precision:'sampled'` is the cheap frame-PC version; on a `pressDuring` run pass **`abortIf:[{region,offset,label}]`** to stop early if the driven scenario derails — a guard byte changing returns `{aborted, abortedBy, before, after}` instead of burning all `maxFrames` on a meaningless `found:false`), **`breakpoint({on:'pc'})`** (execution breakpoint — freeze the CPU AT an instruction and read its registers), **`breakpoint({on:'read'})`** (the EXACT instruction that read a byte), **`frame({op:'stepInstruction'})`** (CPU single-step) — all 14 platforms; input recording
 
@@ -142,29 +142,39 @@ Ergonomic exceptions:
 
 Two parallel paths depending on what you need:
 
-### Path A — Scaffold a working project (the dumb-model-friendly path)
+### Path A — Fork a working example game (the dumb-model-friendly path)
 
 Most agent sessions start here. You want a working ROM, not a
-research project. Use the high-level scaffolding tools and don't
-worry about ground truth:
+research project. **Never start from a blank file — fork the example
+whose CORE LOOP is nearest your game (even for a very different game),
+then modify one thing at a time, re-running `build({output:'run'})`
+after each change.** Retro bring-up is a long chain of fragile
+hardware init with zero partial credit; a working game is a
+regression oracle.
 
-1. **`scaffold({op:'project', platform, template, name, path})`** — drops a
-   complete, self-contained project tree on disk (main.c + the
-   runtime files it needs + the vendored library source for
-   reference + README + .gitignore). The response lists only the files you EDIT
+1. **`examples({op:'list', platform?})`** — the mechanics map of the
+   complete working example games (kind `game` vs minimal `reference`).
+   Pick the one whose core loop is nearest your game.
+2. **`examples({op:'fork', example:"<platform>/<name>", name, path})`** —
+   copies that example into a NEW project dir as YOUR game (sources +
+   every runtime file + crt0 + linker cfg + vendored library source +
+   README + .gitignore), renamed throughout. It builds and runs before
+   you change a line. The response lists only the files you EDIT
    (`files`) + a `vendorFileCount`; pass `verbose:true` for the full manifest.
    Build the whole dir in one call with `build({output:'project', path,
    outputPath})` (toolchain/crt0/linker inferred — no manifest); the bundled
    examples ARE the reference implementation.
-2. **`scaffold({op:'game', platform, genre})`** — same but picks a known-good
-   genre scaffold (shmup / platformer / puzzle / sports / racing).
-3. **`scaffold({op:'snippets', platform, mode})`** (mode `list`/`get`/`getAll`)
-   / **`scaffold({op:'copySnippets', platform, destinationDir})`** — fetch
+3. **`examples({op:'show', example, file?, technique?})`** — read a
+   DONOR example without forking it; `technique` extracts one marked
+   HARDWARE IDIOM block (with its dependency header) to graft into
+   your game instead of rewriting it.
+4. **`examples({op:'snippets', platform, mode})`** (mode `list`/`get`/`getAll`)
+   / **`examples({op:'copySnippets', platform, destinationDir})`** — fetch
    vetted helper files (reset routine, read_pad, OAM DMA, palette
-   upload, etc.) when building from a smaller starting point.
-   `scaffold({op:'copySnippets'})` writes the files to disk in one call
+   upload, etc.) as one-off references.
+   `examples({op:'copySnippets'})` writes the files to disk in one call
    without round-tripping bytes through your context — preferred
-   when you're scaffolding into a project dir.
+   when you're copying into a project dir.
 
 Reminder (it's the second rule up top): **read your platform's
 `platform({op:'doc', platform, name:'mental_model'})` BEFORE you write code for
@@ -188,7 +198,7 @@ order:
    All ~50-200 lines, fully readable. Read these when an API call
    isn't doing what you expect.
 3. **Your own project's `vendor/` library source** (R58b — auto-
-   copied into every project at scaffold time). The FULL source of
+   copied into every project at fork time). The FULL source of
    every library your ROM links against — `vendor/cc65/libsrc/<p>/`
    for cc65 platforms, `vendor/libtonc/src/` + `vendor/libgba/src/`
    for GBA, `vendor/pvsneslib/source/` for SNES, `vendor/sgdk/src/`
@@ -218,8 +228,8 @@ into "what the linked code actually does."
 
 The "vendor/" library source in your project is new in R58b (it was
 previously in the install only; you'd have to call
-`scaffold({op:'copySnippets'})` to pull it in). Now it lands automatically
-when you `scaffold({op:'project'})`. Round 30/31 Lynx wedges took 5 friction
+`examples({op:'copySnippets'})` to pull it in). Now it lands automatically
+when you `examples({op:'fork'})`. Round 30/31 Lynx wedges took 5 friction
 rounds partly because cc65's TGI driver source wasn't visible;
 post-R58b you can `grep -rn bar_c vendor/cc65/libsrc/lynx/` from
 inside your project directory and read the actual blitter code.
@@ -232,7 +242,7 @@ disagree with behavior, trust the library source over the example.
 
 ### Which path to use
 
-- **Just need a working game** → Path A. Use `scaffold({op:'game'})`, iterate.
+- **Just need a working game** → Path A. Fork the nearest example with `examples({op:'fork'})`, iterate.
 - **Hit a bug or unexpected behavior** → switch to Path B.
 - **Don't know which** → start in Path A; if iterations fail to
   converge after 2-3 attempts, you're hitting something path A
@@ -240,7 +250,7 @@ disagree with behavior, trust the library source over the example.
 
 ### Where files land in your project tree
 
-A scaffolded project (whether via `scaffold({op:'project'})` or `scaffold({op:'game'})`) is
+A forked project (`examples({op:'fork'})`) is
 **FLAT** for everything you author. `main.c` / `main.asm`, your
 helper modules (e.g. `gb_runtime.c`, `nes_runtime.c`,
 `atari7800_sfx.c`, `vcs_constants.h`), the platform crt0 + linker
@@ -249,13 +259,13 @@ config — all sit at the project root, next to each other. Asm
 without `-I` flags because dasm / cc65 / sdcc all default to the
 current directory.
 
-The **only** subdir you'll see at scaffold time is `vendor/` —
+The **only** subdir you'll see at fork time is `vendor/` —
 that's the read-only library source tree (cc65 libsrc, libtonc /
 libgba src, PVSnesLib source, SGDK src) auto-bundled by R58b so
 you can `grep -rn vendor/` when debugging. Don't put your own
 source under `vendor/`.
 
-So when `scaffold({op:'copySnippets'})` drops e.g. `read_joystick.asm` into
+So when `examples({op:'copySnippets'})` drops e.g. `read_joystick.asm` into
 your project dir, it lands at `./read_joystick.asm` (alongside
 `main.asm`), NOT under `./include/` or `./lib/`. Every platform
 follows the same flat layout.
@@ -263,7 +273,7 @@ follows the same flat layout.
 Because the layout is flat, **the simplest loop is `build({output:'run', path, platform})`
 (build + load + run + screenshot in one call) or `build({output:'project', path, platform})`
 (build the dir to a ROM) — no per-iteration file manifest, on EVERY platform.** Point it at
-a scaffolded directory and it does the right per-platform thing automatically: finds the
+a forked project directory and it does the right per-platform thing automatically: finds the
 entry (`main.c` for C / SGDK Genesis / GBA / cc65-C / SDCC-C, or `main.s` / `main.asm` for
 asm), routes the platform's crt0 correctly (e.g. GB/GBC `gb_crt0.s` via the cart-header path,
 not as a plain source — so no `gsinit` collision), applies the right linker preset
@@ -278,11 +288,11 @@ with explicit `sources` only when the files aren't on disk, e.g. generated in-co
 
 ## Supported platforms
 
-**14 tier-1 platforms** (build + run + screenshot + inspect + genre scaffolds + sound + music + per-platform MENTAL_MODEL.md + TROUBLESHOOTING.md):
+**14 tier-1 platforms** (build + run + screenshot + inspect + genre example games + sound + music + per-platform MENTAL_MODEL.md + TROUBLESHOOTING.md):
 
-NES, Game Boy, Game Boy Color, SNES, Genesis, Game Boy Advance, SMS, Game Gear, C64, Atari 7800, Lynx, PC Engine, MSX — all with the full `scaffold({op:'game', genre: shmup|platformer|puzzle|sports|racing})` set. The Atari 2600 is also tier-1 but ships **4** of those genres (no `puzzle` — the TIA has no tilemap to draw a match-3 board). The `platformer` scaffold side-scrolls (hardware camera + per-platform column streaming) on every tier-1 platform except NES and the Atari 2600, which are single-screen (neither has hardware background scroll). Every tier-1 platform also ships a music demo using the platform's de-facto music engine — `music_demo` for most: FamiTone2 (NES), hUGEDriver (GB/GBC), SPC700 driver (SNES), XGM2 via SGDK (Genesis), maxmod + .xm soundbank (GBA), PSG trackers (SMS/GG), SID sequencer (C64), `lynx_snd_play` (Lynx), 2-voice TIA (Atari 2600/7800); PC Engine and MSX ship theirs as `music_sfx` (HuC6280 PSG; AY-3-8910 PSG). PC Engine and MSX additionally ship a hardware helper library plus `sprite_move` / `catch_game` example projects alongside the genre scaffolds.
+NES, Game Boy, Game Boy Color, SNES, Genesis, Game Boy Advance, SMS, Game Gear, C64, Atari 7800, Lynx, PC Engine, MSX — all with the full set of forkable genre example games (`examples({op:'fork', example:'<platform>/shmup|platformer|puzzle|sports|racing', name, path})`). The Atari 2600 is also tier-1 but ships **4** of those genres (no `puzzle` — the TIA has no tilemap to draw a match-3 board). The `platformer` example side-scrolls (hardware camera + per-platform column streaming) on every tier-1 platform except NES and the Atari 2600, which are single-screen (neither has hardware background scroll). Every tier-1 platform also ships a music demo using the platform's de-facto music engine — `music_demo` for most: FamiTone2 (NES), hUGEDriver (GB/GBC), SPC700 driver (SNES), XGM2 via SGDK (Genesis), maxmod + .xm soundbank (GBA), PSG trackers (SMS/GG), SID sequencer (C64), `lynx_snd_play` (Lynx), 2-voice TIA (Atari 2600/7800); PC Engine and MSX ship theirs as `music_sfx` (HuC6280 PSG; AY-3-8910 PSG). PC Engine and MSX additionally ship a hardware helper library plus `sprite_move` / `catch_game` example projects alongside the genre examples.
 
-**Bring-up only** (build pipeline works, single `default` template, no genre scaffolds or sound/music wrappers yet): ColecoVision. Uses SDCC z80 same as SMS/GG/MSX — the genre scaffolds are queued.
+**Bring-up only** (build pipeline works, single `default` example, no genre example games or sound/music wrappers yet): ColecoVision. Uses SDCC z80 same as SMS/GG/MSX — the genre examples are queued.
 
 **Delisted** (toolchain works but core-side issue blocks the run loop): Atari 5200 (atari800 BIOS-load path), ZX Spectrum (fuse tape-load path).
 
@@ -347,7 +357,7 @@ The deep per-platform inspectors + the exact memory-region names, core quirks, a
 - **MSX** — VDP/PSG inspection or AY8910 `audioDebug`. (ColecoVision is bring-up-only: standard `system_ram`/`save_ram`/`video_ram`, no custom inspectors — extend by patching its core per the snes9x/gpgx pattern.)
 - **PC Engine** — generic shapes + the core's native regions only so far (no custom-inspector treatment yet).
 
-Starter snippets per platform live under `src/platforms/<platform>/lib/`. Discover via `scaffold({op:'snippets', platform})` (default `mode:'list'`), fetch one via `scaffold({op:'snippets', platform, mode:'get', name})`. SNES + NES + Genesis + SMS + Game Boy + Atari 2600 + Atari 7800 have substantial snippet libraries; others are minimal.
+Starter snippets per platform live under `src/platforms/<platform>/lib/`. Discover via `examples({op:'snippets', platform})` (default `mode:'list'`), fetch one via `examples({op:'snippets', platform, mode:'get', snippetName})`. SNES + NES + Genesis + SMS + Game Boy + Atari 2600 + Atari 7800 have substantial snippet libraries; others are minimal.
 
 ## ROMs are finalized for real hardware automatically
 
@@ -606,15 +616,17 @@ OAM format: bytes per sprite are `[y, tileIndex, attributes, x]`.
 
 `state({op:'load'})` removes any active cheats (a save-state blob doesn't carry frontend cheat state) and reports `cheatsCleared`. `host({op:'reset'})` resets the frame counter + core state (and clears cheats) but keeps the loaded ROM.
 
-## Project scaffolding
+## Starting a project: fork an example game
 
-Three shapes, pick the one that matches what you're doing:
+**Never start from a blank file — fork the example whose CORE LOOP is nearest your game (even for a very different game), then modify one thing at a time, re-running `build({output:'run'})` after each.** Read OTHER examples with `examples({op:'show'})` for techniques to graft. Rationale: retro bring-up is a long chain of fragile hardware init with zero partial credit; a working game is a regression oracle.
 
-- **`scaffold({op:'project', platform, name, path, template?})`** — writes a starter directory: `main.{c,asm,s}` (from `examples/<platform>/templates/`) + every runtime file the template depends on (headers, crt0, linker .cfg) + README + `.gitignore`. Self-contained: take it elsewhere and rebuild with stock cc65/sdcc, no romdev install needed. Defaults to `template:"default"` (smallest visible-and-runnable program); most tier-1 platforms also have `hello_sprite` + `tile_engine` + the 5 genre templates. **Then build it in ONE call: `build({output:'run', path:<that dir>, platform})`** — the dir build applies the platform's recipe (crt0/linker-preset/runtime/intermediate-skip) automatically, so you never hand-wire `crt0Path`/`codeLoc`/`linkerConfig`. This scaffold→build path is verified to build + render on every platform/template.
+- **`examples({op:'list', platform?})`** — the mechanics map of the example library: every example with its kind (`game` = complete working game, `reference` = minimal demo like `default` / `hello_sprite` / `tile_engine`), mechanics inventory, hardware techniques demonstrated, players, SRAM. Pick the example whose core loop is nearest your game.
 
-- **`scaffold({op:'project', ..., withSnippets: true})`** — same as above, **plus** drops every vetted starter snippet for the platform alongside main.c. Use when you want "main.c + every helper file ready to edit" in one shot, without picking a genre. Snippets that overlap with the template's runtime are skipped (no double-writes). Response includes `snippetsCopied: string[]`.
+- **`examples({op:'fork', example:"<platform>/<name>", name, path, title?, overwrite?})`** — copies that example into a NEW project dir as YOUR game: `main.{c,asm,s}` + every runtime file it depends on (headers, crt0, linker .cfg) + README + `.gitignore`, renamed throughout. Self-contained: take it elsewhere and rebuild with stock cc65/sdcc, no romdev install needed. (You can also pass `platform` + `template` instead of `example`.) **Then build it in ONE call: `build({output:'run', path:<that dir>, platform})`** — the dir build applies the platform's recipe (crt0/linker-preset/runtime/intermediate-skip) automatically, so you never hand-wire `crt0Path`/`codeLoc`/`linkerConfig`. This fork→build path is verified to build + render on every platform/example.
 
-- **`scaffold({op:'game', platform, genre})`** — genre-shaped scaffold (`shmup` / `platformer` / `puzzle` / `sports` / `racing`). Higher-level than `scaffold({op:'project'})` — picks the right template + runtime + crt0 + linker config for the genre. Available on **all 14 tier-1 platforms** (NES, GB, GBC, SNES, Genesis, SMS, GG, C64, GBA, Lynx, Atari 7800, PC Engine, MSX — full 5 each; Atari 2600 — 4, no `puzzle` since the TIA has no tilemap for a match-3 board). Availability is derived from the registered templates (not a hardcoded list), so the error message for an unsupported (platform, genre) pair always names the current set; e.g. `atari2600` + `puzzle` is rejected and the error lists the genres it *does* have. ColecoVision (bring-up only) has no genre scaffolds and is rejected wholesale. Ships a complete working ROM with state machine + sprite allocation + sound wired — fill in gameplay logic on top. **Want a side-scroller? Use `genre:"platformer"`** — and on every platform EXCEPT NES and the Atari 2600 the scaffold already side-scrolls: a hardware camera follows the player (SCX/$D016/R8/BXR/BG?HOFS/REG_BG?HOFS/bgSetScroll depending on platform), with software tile-column streaming where the world is wider than one nametable/plane. NES and the Atari 2600 are single-screen (no hardware background scroll — platforms drawn as sprites/playfield); to make NES scroll, draw platforms into the background nametables + `ppu_scroll(camX,0)` (it flips the PPUCTRL nametable-select bit past 256 px) + stream columns past 512 px. Each platformer's `describe` text gives the per-platform specifics; the scroll-register details live in the platform's MENTAL_MODEL.md "Horizontal scrolling" section.
+- The **genre example games** (`shmup` / `platformer` / `puzzle` / `sports` / `racing`) are the usual fork targets — complete working ROMs with state machine + sprite allocation + sound wired. Available on **all 14 tier-1 platforms** (NES, GB, GBC, SNES, Genesis, SMS, GG, C64, GBA, Lynx, Atari 7800, PC Engine, MSX — full 5 each; Atari 2600 — 4, no `puzzle` since the TIA has no tilemap for a match-3 board). Availability is derived from the registered examples (not a hardcoded list), so the error message for an unsupported (platform, name) pair always names the current set; e.g. `atari2600/puzzle` is rejected and the error lists the examples it *does* have. ColecoVision (bring-up only) has no genre examples. No example matches your genre exactly? Fork the NEAREST core loop and reshape it — `examples({op:'list'})` returns the genre→nearest-fork guidance. **Want a side-scroller? Fork `<platform>/platformer`** — on every platform EXCEPT NES and the Atari 2600 it already side-scrolls: a hardware camera follows the player (SCX/$D016/R8/BXR/BG?HOFS/REG_BG?HOFS/bgSetScroll depending on platform), with software tile-column streaming where the world is wider than one nametable/plane. NES and the Atari 2600 are single-screen (no hardware background scroll — platforms drawn as sprites/playfield); to make NES scroll, draw platforms into the background nametables + `ppu_scroll(camX,0)` (it flips the PPUCTRL nametable-select bit past 256 px) + stream columns past 512 px. Each platformer's `describe` text gives the per-platform specifics; the scroll-register details live in the platform's MENTAL_MODEL.md "Horizontal scrolling" section.
+
+- **`examples({op:'show', example, file?, technique?})`** — read a donor example WITHOUT forking it: a whole file, or one marked HARDWARE IDIOM block (`technique`) with the dependency header that says what the block needs to survive a transplant. Fork for the core loop; show OTHER examples for techniques to graft.
 
 Then iterate with `build({output:'run'})` against the source you read from `path/main.*`.
 
@@ -694,15 +706,13 @@ Two tools that save real time and frustration:
 
 ## Starter snippets
 
-`scaffold({op:'snippets', platform})` (default `mode:'list'`) and `scaffold({op:'snippets', platform, mode:'get', name})` give you vetted boilerplate — reset routine, `read_pad`, OAM DMA, palette upload, nametable clear. Each snippet's comments encode foot-guns prior agent sessions already hit. Always check what's available for your platform before writing platform-specific boilerplate from scratch. NES, SNES, SMS, GG, GB/GBC, Genesis, GBA, C64, Atari 7800 all have substantial snippet libraries.
+`examples({op:'snippets', platform})` (default `mode:'list'`) and `examples({op:'snippets', platform, mode:'get', snippetName})` give you vetted boilerplate — reset routine, `read_pad`, OAM DMA, palette upload, nametable clear. Each snippet's comments encode foot-guns prior agent sessions already hit. Always check what's available for your platform before writing platform-specific boilerplate from scratch. NES, SNES, SMS, GG, GB/GBC, Genesis, GBA, C64, Atari 7800 all have substantial snippet libraries. (Prefer forking + grafting from the real example games; snippets remain for one-off references.)
 
 **Three ways to actually use them:**
 
-- `scaffold({op:'snippets', platform, mode:'get', name})` — one snippet's contents, returned as a string.
-- `scaffold({op:'snippets', platform, mode:'getAll', language?})` — every snippet joined into one string. Useful for **reading**; the giant blob lands in your context (or pass `outputPath` to write it to disk instead).
-- **`scaffold({op:'copySnippets', platform, destinationDir, language?, include?})`** — writes every snippet (or a filtered subset) straight to disk. **Bytes never pass through your context.** Use this when you're scaffolding into a project dir. Flattens `lib/<lang>/foo.c` → `<destinationDir>/foo.c`. Optional `include: ["vdp_init", "joypad_read"]` whitelist for cherry-picking. Default `overwrite: true` (vetted boilerplate is meant to be regenerated).
-
-Or skip the separate call entirely: `scaffold({op:'project', withSnippets: true})` does the same thing as a one-shot.
+- `examples({op:'snippets', platform, mode:'get', snippetName})` — one snippet's contents, returned as a string.
+- `examples({op:'snippets', platform, mode:'getAll', language?})` — every snippet joined into one string. Useful for **reading**; the giant blob lands in your context (or pass `outputPath` to write it to disk instead).
+- **`examples({op:'copySnippets', platform, destinationDir, language?, include?})`** — writes every snippet (or a filtered subset) straight to disk. **Bytes never pass through your context.** Use this when you're copying into a project dir. Flattens `lib/<lang>/foo.c` → `<destinationDir>/foo.c`. Optional `include: ["vdp_init", "joypad_read"]` whitelist for cherry-picking. Default `overwrite: true` (vetted boilerplate is meant to be regenerated).
 
 ## Don't burn your own context with binary data
 
@@ -807,8 +817,8 @@ them for YOUR platform before you build.** By symptom:
   8-sprites-per-scanline limit, SAT `$D0` terminator, R6 sprite-tile-base
   ($2000 vs $0000), GG OAM hardware-vs-visible coords → sms/gg `MENTAL_MODEL`.
 
-Turnkey NES/GB/GBC projects (`scaffold({op:'project'})`) copy every runtime file
-the template needs (`*_runtime.{h,c}`, `gb_hardware.h`, crt0, linker cfg) into the
+Turnkey NES/GB/GBC projects (`examples({op:'fork'})`) copy every runtime file
+the example needs (`*_runtime.{h,c}`, `gb_hardware.h`, crt0, linker cfg) into the
 project dir and auto-fix the cart header at build — iterate the whole dir with
 `build({output:'run', path, platform})`. Details in those platforms' MENTAL_MODELs.
 

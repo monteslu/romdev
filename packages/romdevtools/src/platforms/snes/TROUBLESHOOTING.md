@@ -220,7 +220,7 @@ synthesizes a fallback `issues[]` entry with a hint. The idioms to avoid:
   crossed a bank boundary and the layout is wrong. Native interrupt vectors live
   at `$FFE4-$FFEE`, emulation vectors at `$FFF4-$FFFF` — keep your header/vector
   block where the layout expects it. Use
-  `scaffold({op:'snippets', platform:"snes", mode:"get", name:"lorom_header.asm"})`
+  `examples({op:'snippets', platform:"snes", mode:"get", snippetName:"lorom_header.asm"})`
   for the canonical layout (and `lorom_multibank.asm` for multi-bank).
 
 (This is the asar/asm path. The default PVSnesLib **C** path goes through

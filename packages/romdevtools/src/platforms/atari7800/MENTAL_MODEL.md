@@ -58,7 +58,7 @@ and DLL; you do NOT poke pixels into a framebuffer.**
   and (worse) burns enough cycles that the CPU stops getting time.
 - **Y position = which zone the object lives in.** Each zone covers
   N scanlines. To move an object up/down, you move it between
-  zones. (Or — in our scaffolds — you stamp the same sprite at
+  zones. (Or — in our example games — you stamp the same sprite at
   different row offsets within ONE zone's data block, which fakes
   Y movement.)
 - **Each DL header can pick a palette per object** (one of 8
@@ -136,7 +136,7 @@ The "loop continues" mask is `0x5F` (bits 0-4 + bit 6). Bit 5
 (indirect flag) and bit 7 (write-mode) do NOT keep the loop going
 by themselves.
 
-### 5-byte extended form (the bundled scaffolds use this)
+### 5-byte extended form (the bundled example games use this)
 
 ```
 +0  pixel-data LOW byte
@@ -195,7 +195,7 @@ scanlines for the ENTIRE display area (243 scanlines on NTSC,
 including 10 lines of top overscan before the visible area).
 
 If your DLL is shorter than 243 entries, MARIA reads past the end
-into random memory and renders garbage zones. The bundled scaffold
+into random memory and renders garbage zones. The bundled example
 allocates 243 entries × 3 bytes = 729 bytes (fits easily in 4 KB
 internal RAM) and points every zone with no objects at a shared
 `dl_empty[2] = {0, 0}` terminator.
@@ -213,11 +213,11 @@ for an 8-row sprite) unless you pack many sprites per page.
 **Easy work-around:** make every zone 1 scanline tall (offset=0)
 and use one DL entry per sprite ROW. Then `offset` is always 0, the
 address quirk goes away, and you can store sprite rows back-to-back.
-The bundled scaffold uses this pattern.
+The bundled example uses this pattern.
 
 The cost is more DLL entries (one per scanline), but at 3 bytes each
 across 243 lines = 729 bytes total — trivial RAM cost. Worth it for
-the simpler mental model on a starter scaffold.
+the simpler mental model on a starter example.
 
 ## Colour bytes (Atari NTSC palette)
 

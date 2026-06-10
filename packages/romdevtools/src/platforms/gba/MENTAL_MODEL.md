@@ -129,11 +129,11 @@ Sound FIFO states. See "MCP debug & inspection tooling" below for the rest of
 the live-debug loop (sprites / palette / background / cpu / breakpoint + the
 memory regions and disasm pipeline).
 
-**For scaffold-level sfx**, the libtonc runtime ships a minimal
+**For starter-level sfx**, the libtonc runtime ships a minimal
 `gba_sfx.h` / `gba_sfx.c` pair (3 functions: `sfx_init`, `sfx_tone`,
 `sfx_noise`) that wraps the DMG-compatible APU directly. Same shape
-as the NES/GB scaffold sound API, so cross-platform game ports feel
-the same. All 5 GBA genre scaffolds (shmup/platformer/puzzle/sports/
+as the NES/GB example sound API, so cross-platform game ports feel
+the same. All 5 GBA genre example games (shmup/platformer/puzzle/sports/
 racing) use it.
 
 ## MCP debug & inspection tooling
@@ -210,7 +210,7 @@ the first call** (`irq_init(NULL)` + `irq_add(II_VBLANK, NULL)` with
 libtonc — `irqInit(NULL)` + `irqEnable(IRQ_VBLANK)` with libgba).
 Without this, the BIOS halts the CPU forever waiting for an IRQ that
 never fires. ROM appears to compile + load but freezes on frame 1 —
-single most common GBA gotcha. Every bundled scaffold does it; copy
+single most common GBA gotcha. Every bundled example does it; copy
 the pattern.
 
 ## Cart header format

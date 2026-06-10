@@ -14,7 +14,7 @@ $E000-$FFFB  Work RAM mirror
 $FFFC-$FFFF  Mapper control registers
 ```
 
-Most 32 KB scaffolds fit in banks 0+1 and never touch the mapper.
+Most 32 KB example games fit in banks 0+1 and never touch the mapper.
 
 ## VDP (display)
 
@@ -36,7 +36,7 @@ GG VDP = SMS VDP in Mode 4, smaller visible viewport.
   OR draw the text via the BG name table (no per-line limit).
 
 **Always render gameplay content inside (48, 24)..(207, 167)** so it's
-visible on real hardware. The bundled scaffolds work without this
+visible on real hardware. The bundled example games work without this
 because gpgx shows the full framebuffer.
 
 ### Sprite coords are hardware-space, NOT visible-space
@@ -78,9 +78,9 @@ on its own anymore.
 `gg_vdp_init()` sets R6 = 0xFF. R6 bit 2 is the SA13 select for
 sprite tile data — bit 2 is **SET** in 0xFF, so sprite tiles read
 from `$2000-$3FFF`, in their **own bank** separate from BG tiles at
-$0000. This is the baseline because every bundled scaffold uploads
+$0000. This is the baseline because every bundled example uploads
 its sprite tiles to `$2000` (`gg_load_tiles(0x2000, …)`) — the
-default and the scaffolds match, so sprites Just Show Up.
+default and the examples match, so sprites Just Show Up.
 
 Watch the bit: 0xFB has SA13 **CLEAR** = sprite tiles at $0000
 (sharing the BG bank). If you ever set R6=0xFB you MUST also upload

@@ -48,7 +48,7 @@ test("observer `call` event carries the loaded platform/system (livestream shows
   observer.on("event", onEvent);
   const dir = await mkdtemp(join(tmpdir(), "plat-ev-"));
   try {
-    await runTool(reg.get("scaffold"), { op: "game", platform: "nes", genre: "shmup", name: "g", path: join(dir, "nes") }, sk);
+    await runTool(reg.get("examples"), { op: "fork", platform: "nes", template: "shmup", name: "g", path: join(dir, "nes") }, sk);
     await runTool(reg.get("build"), { output: "run", platform: "nes", path: join(dir, "nes"), frames: 20 }, sk);
     await runTool(reg.get("frame"), { op: "verify" }, sk);
   } finally {

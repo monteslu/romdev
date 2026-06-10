@@ -207,9 +207,9 @@ names also resolve (east→A, west→B). So `input({op:'set', a: true})` presses
 expected — unlike the genesis_plus_gx platforms (Genesis/SMS/GG), there's no
 surprise here.
 
-## What `scaffold({op:'project'})` copies into your project
+## What `examples({op:'fork'})` copies into your project
 
-`scaffold({op:'project', platform:"nes", template:"hello_sprite"|"tile_engine"|"default"})`
+`examples({op:'fork', example:"nes/hello_sprite"|"nes/tile_engine"|"nes/default", name, path})`
 writes these files into your project directory. **They're yours** — every
 byte that compiles is in the repo. Edit, fork, replace; nothing is auto-injected
 at build time.

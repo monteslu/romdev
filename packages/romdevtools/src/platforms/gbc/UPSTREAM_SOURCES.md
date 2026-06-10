@@ -3,7 +3,7 @@
 GBC shares its toolchain (SDCC sm83) + emulator (gambatte) + most
 of the runtime (`gb_runtime.c`, `gb_crt0.s`, `patch-header.js`,
 hUGEDriver) with DMG. The CGB tree (`src/platforms/gbc/`) holds
-the color-aware scaffolds; everything below is in lockstep with
+the color-aware example games; everything below is in lockstep with
 the GB tree.
 
 CGB-specific:

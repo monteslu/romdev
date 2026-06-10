@@ -1095,7 +1095,17 @@ export class LibretroHost {
       this.reset();
       return false;
     }
+    // Battery semantics: SAVE_RAM survives a power-cycle on a battery cart.
+    // Carry it across the reload (the reload itself zeroes it).
+    let sram = null;
+    try {
+      const size = this.regionSize("save_ram");
+      if (size > 0) sram = Uint8Array.from(this.readMemory("save_ram", 0, size));
+    } catch { /* no save_ram region on this core/cart — nothing to carry */ }
     await this.loadMedia(this._loadArgs);
+    if (sram && sram.some((b) => b !== 0)) {
+      try { this.writeMemory("save_ram", 0, sram); } catch { /* size changed */ }
+    }
     return true;
   }
 

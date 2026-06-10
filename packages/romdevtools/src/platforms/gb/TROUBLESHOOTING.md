@@ -174,7 +174,7 @@ pokes the BG map "whenever the state changes" will have SOME of those pokes
 land mid-frame and vanish: stale cells, a piece that visually lags the
 logical grid, glitches that move around as code timing shifts.
 
-The robust pattern (used by the bundled puzzle scaffolds):
+The robust pattern (used by the bundled puzzle example games):
 
 1. **COLLECT** — during the frame, don't touch VRAM. Append (addr, tile)
    pairs to a small RAM queue whenever game state changes a cell.
@@ -195,7 +195,7 @@ pokes the BG map "whenever the state changes" will have SOME of those pokes
 land mid-frame and vanish: stale cells, a piece that visually lags the
 logical grid, glitches that move around as code timing shifts.
 
-The robust pattern (used by the bundled puzzle scaffolds):
+The robust pattern (used by the bundled puzzle example games):
 
 1. **COLLECT** — during the frame, don't touch VRAM. Append (addr, tile)
    pairs to a small RAM queue whenever game state changes a cell.
@@ -247,14 +247,13 @@ Boot order that always works for GBC:
    }
 ```
 
-Cribbed from `examples/gbc/templates/tile_engine.c` — start a fresh
-game from that template with:
+Cribbed from `examples/gbc/templates/tile_engine.c` — fork that
+example into a fresh game with:
 
 ```js
-scaffold({
-  op: 'project',
-  platform: "gbc",
-  template: "tile_engine",
+examples({
+  op: 'fork',
+  example: "gbc/tile_engine",
   name: "mygame",
   path: "/abs/path/to/dir",
 });

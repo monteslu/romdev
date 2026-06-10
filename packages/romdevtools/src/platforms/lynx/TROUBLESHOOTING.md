@@ -44,7 +44,7 @@ Two things that trip agents up:
   Skipping it is the #1 "Lynx is blank" trap.
 - **Don't rely on `tgi_clear()`** to blank the screen in this
   toolchain/emulator path — use a full-screen `tgi_bar(0,0,maxx,maxy)`
-  in the background colour instead. The bundled `shmup` scaffold uses
+  in the background colour instead. The bundled `shmup` example uses
   this exact loop; copy it.
 
 ## "tgi_outtextxy renders nothing"
@@ -54,7 +54,7 @@ cc65's default TGI on Lynx ships without a font. Either:
    live in `$cc65_share/target/lynx/fonts/`.
 2. Draw your own glyphs with `tgi_bar`/`tgi_line`.
 
-The bundled scaffolds work around this by using simple rectangles
+The bundled example games work around this by using simple rectangles
 for game content + only short text strings. For game UI text, embed
 a bitmap font directly in your code.
 
@@ -93,7 +93,7 @@ cc65 is C89. No mixed declarations + code, no inline `for (uint8_t i
 = 0; ...)`, no compound literals, no // comments in some configs.
 Declare all variables at the top of each block.
 
-The bundled Lynx scaffolds are C89-clean — copy that pattern.
+The bundled Lynx example games are C89-clean — copy that pattern.
 
 ## "Compile fails: no rule to make target lynx-bll.cfg"
 

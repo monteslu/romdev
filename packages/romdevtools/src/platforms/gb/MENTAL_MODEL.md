@@ -280,9 +280,9 @@ names also resolve (east→A, west→B). So `input({op:'set', a: true})` presses
 expected — unlike the genesis_plus_gx platforms (Genesis/SMS/GG), there's no
 surprise here. (Same for **GBC** — it shares the gambatte core.)
 
-## What `scaffold({op:'project'})` copies into your project
+## What `examples({op:'fork'})` copies into your project
 
-`scaffold({op:'project', platform:"gb"|"gbc", template:...})` writes these files
+`examples({op:'fork', example:"gb/..."|"gbc/...", name, path})` writes these files
 into your project directory. **They're yours** — every byte that compiles
 is in the repo. Edit, fork, replace; nothing is auto-injected at build time.
 
@@ -340,7 +340,7 @@ Most game patterns DON'T need any of this. Try the C path first.
 
 ## Horizontal scrolling (for side-scrollers)
 
-The `platformer` scaffold is single-screen. To make it a side-scroller:
+The `platformer` example is single-screen. To make it a side-scroller:
 
 - **Hardware scroll:** write `SCX` (`$FF43`) each frame = camera X mod 256.
   The BG is a 32×32 tile map (256×256 px) that wraps, so `SCX` alone scrolls

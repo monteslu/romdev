@@ -114,7 +114,7 @@ The CGB boot ROM checks header byte **`$0143`**:
 - `$80` → CGB-enhanced mode (color works, DMG-compat fallback)
 - `$C0` → CGB-only mode (refuses to boot on a DMG)
 
-**Every bundled GBC scaffold is built with `$0143 = $80`** — `build({output:'rom'})`
+**Every bundled GBC example game is built with `$0143 = $80`** — `build({output:'rom'})`
 / `build({output:'run'})` set this automatically at build time when `platform:"gbc"`,
 so a freshly built `.gbc` boots in color with no extra step. (Build it as
 `platform:"gb"` instead and the flag stays `$00` → DMG green-shade mode,
@@ -197,12 +197,12 @@ inversion: `{a}`→A, `{b}`→B, `{start}`/`{select}`, plus the d-pad (spatial
 east→A, west→B). So `input({op:'set', a: true})` presses GBC A as expected — unlike
 the genesis_plus_gx platforms (Genesis/SMS/GG), there's no surprise here.
 
-## Scaffolds
+## Example games
 
-All GB scaffolds (`shmup`, `platformer`, `puzzle`, `sports`, `racing`,
+All GB example games (`shmup`, `platformer`, `puzzle`, `sports`, `racing`,
 `hello_sprite`, `tile_engine`) compile identically as GBC ROMs — the
 bundled GB runtime is already CGB-aware (writes OCPD/OCPS for color).
-The genre scaffolds inherit from GB via `TEMPLATES.gbc = TEMPLATES.gb`;
+The genre examples inherit from GB via `TEMPLATES.gbc = TEMPLATES.gb`;
 the only differences at build time are:
 
 - ROM extension: `.gbc` (vs `.gb`)

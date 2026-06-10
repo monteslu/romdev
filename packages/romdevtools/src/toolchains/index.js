@@ -37,7 +37,7 @@ const CC65_TARGET = {
 const LANGUAGE_TOOLCHAIN = {
   atari2600: {
     asm:    { toolchain: "dasm",         available: true },
-    basic:  { toolchain: "batariBasic",  available: false, note: "BASIC for 2600 via batariBasic — not bundled. bB's transpiler is written in Perl, which we don't ship as WASM. A port to C or JS would be a multi-day project. For now, write 2600 games in 6507 asm via dasm — the bundled scaffolds (default, paddle, single_screen) show the canonical race-the-beam pattern, and an LLM agent writes 2600 asm fluently." },
+    basic:  { toolchain: "batariBasic",  available: false, note: "BASIC for 2600 via batariBasic — not bundled. bB's transpiler is written in Perl, which we don't ship as WASM. A port to C or JS would be a multi-day project. For now, write 2600 games in 6507 asm via dasm — the bundled example games (default, paddle, single_screen) show the canonical race-the-beam pattern, and an LLM agent writes 2600 asm fluently." },
   },
   nes: {
     asm: { toolchain: "cc65",  available: true },
@@ -65,11 +65,11 @@ const LANGUAGE_TOOLCHAIN = {
   },
   snes: {
     asm: { toolchain: "asar",       available: true },
-    c:   { toolchain: "tcc816+wladx", available: true, note: "C for SNES via tcc-65816 + wla-65816 + wlalink. The PVSnesLib runtime IS bundled (built from source) and auto-linked — #include <snes.h> gives you consoleDrawText, setMode, oamSet, WaitForVBlank, etc. out of the box. `createGame`/`createProject` scaffold a complete PVSnesLib C project. Pass options.pvsneslib:false for the bare-main minimum-viable path." },
+    c:   { toolchain: "tcc816+wladx", available: true, note: "C for SNES via tcc-65816 + wla-65816 + wlalink. The PVSnesLib runtime IS bundled (built from source) and auto-linked — #include <snes.h> gives you consoleDrawText, setMode, oamSet, WaitForVBlank, etc. out of the box. `examples({op:'fork'})` gives you a complete working PVSnesLib C project. Pass options.pvsneslib:false for the bare-main minimum-viable path." },
   },
   genesis: {
     asm: { toolchain: "vasm68k",      available: true },
-    c:   { toolchain: "m68k-elf-gcc", available: true, note: "C for Genesis via gcc 14.2.0 + binutils + newlib, all compiled to WASM. The SGDK runtime IS bundled (built from source) and auto-linked — sprite engine, VDP, controller, PSG/Z80 sound, resource helpers all work; #include <genesis.h>. `createGame`/`createProject` scaffold a complete SGDK C project (the recommended path). Pass options.sgdk:false for the bare-gcc minimum-viable path." },
+    c:   { toolchain: "m68k-elf-gcc", available: true, note: "C for Genesis via gcc 14.2.0 + binutils + newlib, all compiled to WASM. The SGDK runtime IS bundled (built from source) and auto-linked — sprite engine, VDP, controller, PSG/Z80 sound, resource helpers all work; #include <genesis.h>. `examples({op:'fork'})` gives you a complete working SGDK C project (the recommended path). Pass options.sgdk:false for the bare-gcc minimum-viable path." },
   },
   gba: {
     c: { toolchain: "arm-none-eabi-gcc", available: true, note: "C for GBA via gcc 14.2.0 + binutils + newlib + libtonc 1.4.5 (default) OR libgba 0.5.4 (opt-in via runtime:\"libgba\"), all compiled to WASM (R24 + R28). #include <tonc.h> + tte_write/tte_printf works out of the box — that's the canonical Tonc-tutorial API every published GBA C resource uses. Caveat: tte_iohook (libtonc) and console.c (libgba) — the libsysbase-backed iprintf bridges — are NOT bundled. Use tte_printf directly, which is what the Tonc tutorial actually does." },
@@ -91,7 +91,7 @@ const LANGUAGE_TOOLCHAIN = {
  * Default language per platform. The choice reflects what's fastest /
  * smallest / best-matched to LLM fluency. Every platform that has a bundled
  * C compiler + runtime defaults to C — that's the canonical, productive path
- * and what `createGame`/`createProject` scaffold (cc65 for NES/C64/Atari7800/
+ * and what `examples({op:'fork'})` projects use (cc65 for NES/C64/Atari7800/
  * Lynx, SDCC for GB/GBC/SMS/GG, gcc+SGDK for Genesis, tcc+PVSnesLib for SNES,
  * gcc+libtonc for GBA). Platforms whose only bundled toolchain is an assembler
  * default to asm (Atari 2600 → dasm; SNES/Genesis keep an asm option too, but
@@ -743,10 +743,9 @@ export async function buildForPlatform(args) {
     // crt0 + headers + sources come straight from the caller. The build
     // pipeline does NOT auto-inject platform runtimes, custom crt0s,
     // or post-link header patches. Every byte that compiles is visible
-    // to the caller's repo. Use `createProject({platform, template})`
-    // to scaffold a self-contained project with the runtime files
-    // copied in, or call `getStarterSnippet` / `getAllStarterSnippets`
-    // to fetch individual pieces.
+    // to the caller's repo. Use `examples({op:'fork'})` to get a
+    // self-contained project with the runtime files copied in, or
+    // `examples({op:'snippets'/'copySnippets'})` to fetch individual pieces.
     const crt0 = args.crt0;
 
     // Pre-flight lint: scan the C sources for known SDCC C89 violations

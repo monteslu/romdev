@@ -69,7 +69,7 @@ export async function listPlatformDocsCore({ platform }) {
         platform,
         docs,
         note: docs.length === 0
-          ? `No docs shipped for '${platform}' yet. Try a different platform or scaffold for boilerplate. (For RE/patching workflow, see platform({op:'doc', platform:'romhacking', name:'playbook'}).)`
+          ? `No docs shipped for '${platform}' yet. Try a different platform, or fork an example game (examples({op:'fork'})) for boilerplate. (For RE/patching workflow, see platform({op:'doc', platform:'romhacking', name:'playbook'}).)`
           : `Call platform({op:'doc', platform, name}) to read one. 'name' is 'mental_model' or 'troubleshooting'. For RE/patching workflow across platforms, see platform({op:'doc', platform:'romhacking', name:'playbook'}).`,
       };
 }

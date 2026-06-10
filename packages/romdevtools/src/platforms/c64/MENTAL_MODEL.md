@@ -311,7 +311,7 @@ loads games, wrap the `.prg` into a `.d64`: `cart({op:'packDisk', prgPath})`
 
 ## Horizontal scrolling (for side-scrollers)
 
-The `platformer` scaffold is single-screen. C64 scrolling is the fiddliest of
+The `platformer` example is single-screen. C64 scrolling is the fiddliest of
 the platforms because the VIC-II only does a 0-7 px *fine* scroll in hardware;
 moving further is a software char-cell shift.
 

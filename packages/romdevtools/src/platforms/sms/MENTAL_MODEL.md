@@ -78,7 +78,7 @@ R1 = 0x80   display OFF, vblank IRQ off, 192-line
 R2 = 0xFF   name table at $3800
 R4 = 0xFF   BG tile data at $0000
 R5 = 0xFF   sprite attr table at $3F00
-R6 = 0xFF   sprite tile data at $2000 (own bank; scaffolds upload here)
+R6 = 0xFF   sprite tile data at $2000 (own bank; the example games upload here)
 R7 = 0x00   border colour
 ```
 
@@ -114,7 +114,7 @@ So Y bytes and X/tile pairs are split into TWO regions of the SAT.
 `src/platforms/sms/lib/c/sprite_table.c` keeps a 256-byte shadow
 buffer in WRAM and uploads it to the SAT each vblank.
 
-### Two footguns the bundled scaffolds keep hitting
+### Two footguns the bundled example games keep hitting
 
 1. **8 sprites per scanline limit.** The VDP draws up to 8 sprites per
    scanline; the 9th+ are silently dropped. If you draw a "CATCH THE
@@ -147,9 +147,9 @@ buffer in WRAM and uploads it to the SAT each vblank.
 `sms_vdp_init()` sets R6 = 0xFF. R6 bit 2 is the SA13 select for
 sprite tile data — bit 2 is **SET** in 0xFF, so sprite tiles read
 from `$2000-$3FFF`, their **own bank** separate from BG tiles at
-$0000. This matches every bundled scaffold, which uploads sprite
+$0000. This matches every bundled example, which uploads sprite
 tiles to `$2000` (`sms_load_tiles(0x2000, …)`) — default and
-scaffolds agree, so sprites render.
+examples agree, so sprites render.
 
 Watch the bit: 0xFB has SA13 **CLEAR** = sprite tiles at $0000
 (shared with the BG bank). If you set R6=0xFB you MUST upload your
@@ -222,7 +222,7 @@ PSG (SN76489) on port $7F. 4 channels: 3 square waves + 1 noise.
 Writes are byte-wise; the high bit selects "latch register" vs
 "continue previous register".
 
-A full driver is beyond the scope of these scaffolds. For
+A full driver is beyond the scope of these example games. For
 playable SFX, manually pulse $7F with the latch-register byte
 followed by data bytes. Real games ship a music driver in WRAM.
 
@@ -325,7 +325,7 @@ region per bank with a bank-by-bank native rebuild recipe in `BUILD.md`.
 
 ## Horizontal scrolling (for side-scrollers)
 
-The `platformer` scaffold is single-screen. To make it a side-scroller:
+The `platformer` example is single-screen. To make it a side-scroller:
 
 - **Hardware scroll:** write VDP register 8 (horizontal scroll) each frame =
   `-camX & 0xFF` (the reg scrolls the screen; the name table is 32×28 and

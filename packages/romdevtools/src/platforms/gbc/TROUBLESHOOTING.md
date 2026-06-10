@@ -128,7 +128,7 @@ pokes the BG map "whenever the state changes" will have SOME of those pokes
 land mid-frame and vanish: stale cells, a piece that visually lags the
 logical grid, glitches that move around as code timing shifts.
 
-The robust pattern (used by the bundled puzzle scaffolds):
+The robust pattern (used by the bundled puzzle example games):
 
 1. **COLLECT** — during the frame, don't touch VRAM. Append (addr, tile)
    pairs to a small RAM queue whenever game state changes a cell.
@@ -149,7 +149,7 @@ sound channels or extra waveforms.
 
 ## "ROM size > 32 KB needed"
 
-The bundled GBC scaffolds all fit in 32 KB (single bank, no MBC).
+The bundled GBC example games all fit in 32 KB (single bank, no MBC).
 For larger projects use an MBC (memory bank controller). MBC1 / MBC3
 work in gambatte; set the `$0147` cartridge type byte accordingly.
 romPatch({op:'gbHeader'}) doesn't set this — you write it from your asm/C.
@@ -159,11 +159,11 @@ romPatch({op:'gbHeader'}) doesn't set this — you write it from your asm/C.
 Default GBC speed is the same as DMG (~4 MHz Z80). Double-speed mode
 via KEY1 ($FF4D) doubles CPU but halves audio sample rate + breaks
 cycle-counted code. Most homebrew leaves it off; if you need the
-extra clocks, change the GB scaffold pattern to:
+extra clocks, change the GB example pattern to:
 
 ```c
 KEY1 = 1;            /* request speed switch */
 __asm__("stop");     /* arm the switch (compiler-specific syntax) */
 ```
 
-Not bundled in any scaffold — use only if you've measured a need.
+Not bundled in any example — use only if you've measured a need.
