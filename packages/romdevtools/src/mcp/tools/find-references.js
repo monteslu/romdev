@@ -7,7 +7,7 @@
 // though they're not "instructions" per se.
 
 import { readFile } from "node:fs/promises";
-import { mapSnesAddress, mapAtari2600Address, mapAtari7800Address, mapC64Address } from "./disasm.js";
+import { mapAtari2600Address, mapC64Address } from "./disasm.js";
 
 /**
  * Classify a referring instruction by its mnemonic.
@@ -232,11 +232,21 @@ export async function findReferencesCore({ path, platform, address, mapper, maxR
     throw new Error(`findReferences: could not detect platform for '${path}'. Pass platform explicitly.`);
   }
 
-  // Disassemble the whole code area. Most platforms produce one flat asm
-  // blob; banked NES produces one segment PER PRG BANK (segments[]).
+  // Disassemble the whole code area. Flat platforms produce one asm blob;
+  // BANKED carts (NES mappers, SNES LoROM, GB MBC, Sega mapper, MSX megaROM,
+  // 2600 F8/F6/F4, 7800 SuperGame, >32KB HuCards) produce one segment PER
+  // BANK (segments[]) — a flat-blob disasm mis-addresses everything past the
+  // first bank and lets instructions straddle bank edges, which corrupts the
+  // decode stream (the 0.27.0 refsFound:0 bug, fixed for NES first and now
+  // applied to every banked platform). Refs from a segment carry a bank tag.
   let asm;
   /** @type {{asm: string, bank: number}[] | null} */
   let segments = null;
+  // Bound the per-bank da65/objdump fan-out on huge carts. 64 banks covers
+  // 1MB (16KB banks) / 512KB (8KB pages) — beyond that we scan the first 64
+  // and SAY SO in notes rather than silently truncating.
+  const SEGMENT_CAP = 64;
+  let segmentsCapped = 0;
   if (resolved === "nes") {
     const prgSize = data[4] * 16384;
     const { runDa65 } = await import("../../toolchains/cc65/da65.js");
@@ -263,44 +273,122 @@ export async function findReferencesCore({ path, platform, address, mapper, maxR
       }
     }
   } else if (resolved === "snes") {
-    const mapped = mapSnesAddress(data, 0x008000, 0x8000, mapper);
-    const startAddress = 0x008000;
+    // LoROM: 32KB banks each mapped at $xx:8000. The old code disassembled
+    // ONLY the first 32KB bank — a 1MB cart's other 31 banks were invisible.
+    // Scan every 32KB bank at $8000 (absolute 16-bit operands are bank-window
+    // addresses on LoROM), tagged with the bank index.
+    const hasHeader = (data.length % 1024) === 512;
+    const body = hasHeader ? data.subarray(512) : data;
     const { runDa65 } = await import("../../toolchains/cc65/da65.js");
-    const r = await runDa65({
-      bytes: mapped.bytes, startAddress, cpu: "65816",
-      options: ["--comments", "4"],
-      info: `RANGE { START $${(startAddress & 0xFFFF).toString(16).toUpperCase()}; END $${((startAddress + mapped.bytes.length - 1) & 0xFFFF).toString(16).toUpperCase()}; TYPE Code; ADDRMODE "MX"; };\n`,
-    });
-    asm = r.asm;
+    const BANK = 0x8000;
+    const nBanks = Math.ceil(body.length / BANK);
+    const scanBanks = Math.min(nBanks, SEGMENT_CAP);
+    segmentsCapped = nBanks - scanBanks;
+    if (nBanks <= 1) {
+      const r = await runDa65({
+        bytes: body.slice(0, BANK), startAddress: 0x008000, cpu: "65816",
+        options: ["--comments", "4"],
+        info: `RANGE { START $8000; END $${(0x8000 + Math.min(body.length, BANK) - 1).toString(16).toUpperCase()}; TYPE Code; ADDRMODE "MX"; };\n`,
+      });
+      asm = r.asm;
+    } else {
+      segments = [];
+      for (let b = 0; b < scanBanks; b++) {
+        const bytes = body.slice(b * BANK, (b + 1) * BANK);
+        const r = await runDa65({
+          bytes, startAddress: 0x008000, cpu: "65816",
+          options: ["--comments", "4"],
+          info: `RANGE { START $8000; END $${(0x8000 + bytes.length - 1).toString(16).toUpperCase()}; TYPE Code; ADDRMODE "MX"; };\n`,
+        });
+        segments.push({ asm: r.asm, bank: b });
+      }
+    }
   } else if (resolved === "sms" || resolved === "gg") {
-    // SMS: disasm slot 0+1 ($0000-$7FFF, fixed in the sega mapper).
-    // Slot 2 ($8000-$BFFF) is banked — skip cross-bank scanning for now.
-    // Native binutils z80 objdump.
-    const bytes = data.slice(0, Math.min(data.length, 0x8000));
+    // Sega mapper: slots 0+1 ($0000-$7FFF) hold banks 0-1; slot 2 ($8000-
+    // $BFFF) pages in banks 2+. The old code scanned only the first 32KB —
+    // every bank past 1 was invisible. Scan bank 0 @ $0000, bank 1 @ $4000,
+    // banks 2+ @ $8000 (their pageable window), tagged with the bank index.
     const { runObjdump } = await import("../../toolchains/objdump.js");
-    asm = (await runObjdump({ bytes, arch: "z80", startAddress: 0x0000 })).asm;
+    if (data.length <= 0x8000) {
+      asm = (await runObjdump({ bytes: data.slice(0), arch: "z80", startAddress: 0x0000 })).asm;
+    } else {
+      const BANK = 0x4000;
+      const nBanks = Math.ceil(data.length / BANK);
+      const scanBanks = Math.min(nBanks, SEGMENT_CAP);
+      segmentsCapped = nBanks - scanBanks;
+      segments = [];
+      for (let b = 0; b < scanBanks; b++) {
+        const bytes = data.slice(b * BANK, (b + 1) * BANK);
+        const startAddress = b === 0 ? 0x0000 : b === 1 ? 0x4000 : 0x8000;
+        segments.push({ asm: (await runObjdump({ bytes, arch: "z80", startAddress })).asm, bank: b });
+      }
+    }
   } else if (resolved === "gb" || resolved === "gbc") {
-    // GB: bank 0 + bank 1 default ($0000-$7FFF). SM83 via binutils' gbz80
-    // machine. Higher banks need disassembleRom + bank.
-    const bytes = data.slice(0, Math.min(data.length, 0x8000));
+    // MBC banking: bank 0 fixed at $0000, banks 1+ page into $4000-$7FFF.
+    // The old code scanned only the first 32KB (banks 0-1) — a 128KB MBC1
+    // cart's other 6 banks were invisible. Scan every 16KB bank (bank 0 @
+    // $0000, banks 1+ @ $4000), tagged with the bank index.
     const { runObjdump } = await import("../../toolchains/objdump.js");
-    asm = (await runObjdump({ bytes, arch: "gbz80", startAddress: 0x0000 })).asm;
+    if (data.length <= 0x8000) {
+      asm = (await runObjdump({ bytes: data.slice(0), arch: "gbz80", startAddress: 0x0000 })).asm;
+    } else {
+      const BANK = 0x4000;
+      const nBanks = Math.ceil(data.length / BANK);
+      const scanBanks = Math.min(nBanks, SEGMENT_CAP);
+      segmentsCapped = nBanks - scanBanks;
+      segments = [];
+      for (let b = 0; b < scanBanks; b++) {
+        const bytes = data.slice(b * BANK, (b + 1) * BANK);
+        const startAddress = b === 0 ? 0x0000 : 0x4000;
+        segments.push({ asm: (await runObjdump({ bytes, arch: "gbz80", startAddress })).asm, bank: b });
+      }
+    }
   } else if (resolved === "atari2600") {
-    // 2600 cart maps to $F000-$FFFF (top of 4 KB bank). For larger
-    // banked carts we scan the last 4 KB which is what's typically
-    // resident at boot.
-    const mapped = mapAtari2600Address(data, 0xF000, 0x1000, 0);
+    // 2600 cart maps to $F000-$FFFF. Banked carts (F8=8KB, F6=16KB, F4=32KB,
+    // …) page 4KB banks into the SAME $F000 window. The old code scanned only
+    // the boot bank — fixed: scan every 4KB bank at $F000, tagged.
     const { runDa65 } = await import("../../toolchains/cc65/da65.js");
-    const r = await runDa65({ bytes: mapped.bytes, startAddress: 0xF000, cpu: "6502", options: ["--comments", "4"] });
-    asm = r.asm;
+    if (data.length <= 0x1000) {
+      const mapped = mapAtari2600Address(data, 0xF000, 0x1000, 0);
+      const r = await runDa65({ bytes: mapped.bytes, startAddress: 0xF000, cpu: "6502", options: ["--comments", "4"] });
+      asm = r.asm;
+    } else {
+      const BANK = 0x1000;
+      const nBanks = Math.ceil(data.length / BANK);
+      segments = [];
+      for (let b = 0; b < nBanks; b++) {
+        const bytes = data.slice(b * BANK, (b + 1) * BANK);
+        const r = await runDa65({ bytes, startAddress: 0xF000, cpu: "6502", options: ["--comments", "4"] });
+        segments.push({ asm: r.asm, bank: b });
+      }
+    }
   } else if (resolved === "atari7800") {
-    // 7800 cart maps to $4000-$FFFF; agents typically focus on the top
-    // 16 KB ($C000-$FFFF) where reset+main code lives.
-    const start = 0xC000;
-    const mapped = mapAtari7800Address(data, start, 0x10000 - start, 0);
+    // 7800: flat carts (≤48KB) map at the top of the address space — scan the
+    // WHOLE cart (the old code scanned only $C000-$FFFF, hiding code at
+    // $4000-$BFFF on 32/48KB carts). SuperGame banked carts (>48KB) page
+    // 16KB banks into $8000-$BFFF with the last bank fixed at $C000 — scan
+    // per-bank, tagged. A 128-byte .a78 header is stripped if present.
+    const hasA78 = data.length >= 17 &&
+      String.fromCharCode(...data.subarray(1, 10)) === "ATARI7800";
+    const cart = hasA78 ? data.subarray(128) : data;
     const { runDa65 } = await import("../../toolchains/cc65/da65.js");
-    const r = await runDa65({ bytes: mapped.bytes, startAddress: start, cpu: "6502", options: ["--comments", "4"] });
-    asm = r.asm;
+    if (cart.length <= 0xC000) {
+      const start = (0x10000 - cart.length) & 0xFFFF;
+      const r = await runDa65({ bytes: cart.slice(0), startAddress: start, cpu: "6502", options: ["--comments", "4"] });
+      asm = r.asm;
+    } else {
+      const BANK = 0x4000;
+      const nBanks = Math.ceil(cart.length / BANK);
+      const scanBanks = Math.min(nBanks, SEGMENT_CAP);
+      segmentsCapped = nBanks - scanBanks;
+      segments = [];
+      for (let b = 0; b < scanBanks; b++) {
+        const bytes = cart.slice(b * BANK, (b + 1) * BANK);
+        const startAddress = b === nBanks - 1 ? 0xC000 : 0x8000;
+        const r = await runDa65({ bytes, startAddress, cpu: "6502", options: ["--comments", "4"] });
+        segments.push({ asm: r.asm, bank: b });
+      }
+    }
   } else if (resolved === "c64") {
     // c64 .prg: 2-byte load addr + code. Disasm from the load addr through
     // EOF. For typical BASIC-stub programs that's $0801 + a few KB.
@@ -330,21 +418,58 @@ export async function findReferencesCore({ path, platform, address, mapper, maxR
     const { runObjdump } = await import("../../toolchains/objdump.js");
     asm = (await runObjdump({ bytes, arch: "m68k", startAddress: start })).asm;
   } else if (resolved === "pce") {
-    // PC Engine HuCard: HuC6280 (65C02 superset). da65 has an explicit huc6280
-    // CPU mode. The cart maps to the top of the address space (no header).
-    const body = data.slice(0);
-    const start = (0x10000 - body.length) & 0xffff;
+    // PC Engine HuCard: HuC6280 (65C02 superset), 8KB pages mapped via the
+    // MPRs. ≤32KB images map flat at the top of the address space (the old
+    // assumption — correct there). Bigger HuCards are banked: the old code
+    // computed a WRAPPED start address (garbage for >64KB) — fixed: scan
+    // every 8KB page, page 0 at $E000 (where MPR7 maps it at reset — the
+    // vectors live there), pages 1+ at $8000 (a neutral MPR4 window; the
+    // base only affects branch-target/auto-label matching, absolute operands
+    // match regardless). A 512-byte copier header is stripped if present.
+    const hasCopier = (data.length % 1024) === 512;
+    const body = hasCopier ? data.subarray(512) : data;
     const { runDa65 } = await import("../../toolchains/cc65/da65.js");
-    const r = await runDa65({ bytes: body, startAddress: start, cpu: "huc6280", options: ["--comments", "4"] });
-    asm = r.asm;
+    if (body.length <= 0x8000) {
+      const start = (0x10000 - body.length) & 0xffff;
+      const r = await runDa65({ bytes: body.slice(0), startAddress: start, cpu: "huc6280", options: ["--comments", "4"] });
+      asm = r.asm;
+    } else {
+      const PAGE = 0x2000;
+      const nPages = Math.ceil(body.length / PAGE);
+      const scanPages = Math.min(nPages, SEGMENT_CAP);
+      segmentsCapped = nPages - scanPages;
+      segments = [];
+      for (let b = 0; b < scanPages; b++) {
+        const bytes = body.slice(b * PAGE, (b + 1) * PAGE);
+        const startAddress = b === 0 ? 0xE000 : 0x8000;
+        const r = await runDa65({ bytes, startAddress, cpu: "huc6280", options: ["--comments", "4"] });
+        segments.push({ asm: r.asm, bank: b });
+      }
+    }
   } else if (resolved === "msx") {
-    // MSX cartridge maps at $4000-$BFFF; skip the 16-byte "AB" header, then
-    // disassemble the Z80 image from $4010.
+    // MSX cartridge maps at $4000-$BFFF. MegaROMs (>32KB) page 16KB banks via
+    // an ASCII16-style mapper — the old code scanned only the first 32KB.
+    // Scan bank 0 at $4000 (its fixed home, header skipped) and banks 1+ at
+    // $8000 (the conventional second window), tagged with the bank index.
     const hdr = data.length >= 2 && data[0] === 0x41 && data[1] === 0x42;
     const base = hdr ? 16 : 0;
-    const bytes = data.slice(base, Math.min(data.length, base + 0x8000));
     const { runObjdump } = await import("../../toolchains/objdump.js");
-    asm = (await runObjdump({ bytes, arch: "z80", startAddress: 0x4000 + base })).asm;
+    if (data.length <= 0x8000 + base) {
+      const bytes = data.slice(base, Math.min(data.length, base + 0x8000));
+      asm = (await runObjdump({ bytes, arch: "z80", startAddress: 0x4000 + base })).asm;
+    } else {
+      const BANK = 0x4000;
+      const nBanks = Math.ceil(data.length / BANK);
+      const scanBanks = Math.min(nBanks, SEGMENT_CAP);
+      segmentsCapped = nBanks - scanBanks;
+      segments = [];
+      for (let b = 0; b < scanBanks; b++) {
+        const skip = b === 0 ? base : 0;
+        const bytes = data.slice(b * BANK + skip, (b + 1) * BANK);
+        const startAddress = b === 0 ? 0x4000 + base : 0x8000;
+        segments.push({ asm: (await runObjdump({ bytes, arch: "z80", startAddress })).asm, bank: b });
+      }
+    }
   } else if (resolved === "gba") {
     // GBA = ARM7TDMI, ROM maps flat at 0x08000000. Disassemble as ARM (the
     // default; Thumb regions need disassembleRom with thumb:true). Native
@@ -364,9 +489,12 @@ export async function findReferencesCore({ path, platform, address, mapper, maxR
   let refs;
   if (segments) {
     refs = [];
+    // NES refs keep the shipped `prgBank` tag; other banked platforms use the
+    // platform-neutral `romBank`.
+    const bankKey = resolved === "nes" ? "prgBank" : "romBank";
     for (const seg of segments) {
       for (const r of scanAsmForReferences(seg.asm, address, [])) {
-        refs.push({ ...r, prgBank: seg.bank });
+        refs.push({ ...r, [bankKey]: seg.bank });
       }
     }
   } else {
@@ -395,9 +523,14 @@ export async function findReferencesCore({ path, platform, address, mapper, maxR
     truncated: refs.length > maxRefsReturned
       ? `${refs.length - maxRefsReturned} additional references not returned (raise maxRefsReturned).`
       : undefined,
-    notes: refs.length === 0
-      ? `No references found. Address $${address.toString(16).toUpperCase()} may be unreached, or an indirect/computed jump target.`
-      : undefined,
+    notes: [
+      refs.length === 0
+        ? `No references found. Address $${address.toString(16).toUpperCase()} may be unreached, or an indirect/computed jump target.`
+        : null,
+      segmentsCapped > 0
+        ? `Scan covered the first ${SEGMENT_CAP} banks only — ${segmentsCapped} additional bank(s) were NOT scanned (very large cart).`
+        : null,
+    ].filter(Boolean).join(" ") || undefined,
   };
 }
 

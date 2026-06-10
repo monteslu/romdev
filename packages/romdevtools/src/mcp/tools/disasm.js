@@ -1315,9 +1315,26 @@ function planRegions(platform, data) {
     return regions;
   }
   if (platform === "sms" || platform === "gg") {
-    // Z80 mapped at $0000; one region for the whole ROM (Sega mapper banks
-    // beyond 48KB are rarer in homebrew — treat as flat for now).
-    regions.push({ name: "rom", file: "rom.asm", bytes: trimTrailingPad(data.slice(0)), startAddress: 0x0000, fileOffset: 0, label: "ROM ($0000)" });
+    // Z80 mapped at $0000. ≤48KB fits the three slots flat — one region.
+    // Bigger carts use the Sega mapper: 16KB banks, banks 0-1 fixed in slots
+    // 0-1 ($0000/$4000), banks 2+ page into slot 2 ($8000) — one region per
+    // bank so instructions never straddle a bank edge and every bank gets a
+    // correct base address.
+    if (data.length <= 0xC000) {
+      regions.push({ name: "rom", file: "rom.asm", bytes: trimTrailingPad(data.slice(0)), startAddress: 0x0000, fileOffset: 0, label: "ROM ($0000)" });
+      return regions;
+    }
+    const BANK = 0x4000;
+    for (let off = 0; off < data.length; off += BANK) {
+      const idx = off / BANK;
+      const org = idx === 0 ? 0x0000 : idx === 1 ? 0x4000 : 0x8000;
+      regions.push({
+        name: `bank${idx}`, file: `bank${idx}.asm`,
+        bytes: data.slice(off, off + BANK),
+        startAddress: org, fileOffset: off,
+        label: `Sega-mapper bank ${idx}${idx < 2 ? ` (fixed $${org.toString(16).toUpperCase()})` : " (slot 2, $8000)"}`,
+      });
+    }
     return regions;
   }
   if (platform === "genesis") {
@@ -1335,12 +1352,58 @@ function planRegions(platform, data) {
     return regions;
   }
   if (platform === "atari2600") {
-    regions.push({ name: "rom", file: "rom.asm", bytes: data.slice(0), startAddress: 0xF000, fileOffset: 0, label: "4KB cart @ $F000" });
+    // 4KB carts map flat at $F000. Banked carts (F8=8KB, F6=16KB, F4=32KB)
+    // page 4KB banks into the SAME $F000 window — one region per bank.
+    if (data.length <= 0x1000) {
+      regions.push({ name: "rom", file: "rom.asm", bytes: data.slice(0), startAddress: 0xF000, fileOffset: 0, label: "4KB cart @ $F000" });
+      return regions;
+    }
+    const BANK = 0x1000;
+    for (let off = 0; off < data.length; off += BANK) {
+      const idx = off / BANK;
+      regions.push({
+        name: `bank${idx}`, file: `bank${idx}.asm`,
+        bytes: data.slice(off, off + BANK),
+        startAddress: 0xF000, fileOffset: off,
+        label: `banked cart 4KB bank ${idx} @ $F000`,
+      });
+    }
     return regions;
   }
   if (platform === "atari7800") {
-    const org = 0x10000 - data.length; // cart maps to top of address space
-    regions.push({ name: "rom", file: "rom.asm", bytes: data.slice(0), startAddress: org & 0xFFFF, fileOffset: 0, label: `cart @ $${(org & 0xFFFF).toString(16)}` });
+    // ≤48KB carts map flat at the top of the address space. SuperGame banked
+    // carts (>48KB) page 16KB banks into $8000-$BFFF with the LAST bank fixed
+    // at $C000. A 128-byte .a78 header (magic "ATARI7800" at offset 1) is
+    // split into its own data region so the cart banks stay 16KB-aligned.
+    const hasA78 = data.length >= 17 &&
+      String.fromCharCode(...data.subarray(1, 10)) === "ATARI7800";
+    const base = hasA78 ? 128 : 0;
+    const cartLen = data.length - base;
+    if (cartLen <= 0xC000) {
+      const org = 0x10000 - data.length; // header kept in-region (proven flat path)
+      regions.push({ name: "rom", file: "rom.asm", bytes: data.slice(0), startAddress: org & 0xFFFF, fileOffset: 0, label: `cart @ $${(org & 0xFFFF).toString(16)}` });
+      return regions;
+    }
+    if (hasA78) {
+      regions.push({
+        name: "a78_header", file: "a78_header.asm", bytes: data.slice(0, 128), kind: "data",
+        startAddress: 0x0000, fileOffset: 0,
+        label: ".a78 header (128 B data)",
+      });
+    }
+    const BANK = 0x4000;
+    const nBanks = Math.ceil(cartLen / BANK);
+    for (let b = 0; b < nBanks; b++) {
+      const isFixedTop = b === nBanks - 1;
+      const org = isFixedTop ? 0xC000 : 0x8000;
+      const fileOffset = base + b * BANK;
+      regions.push({
+        name: `bank${b}`, file: `bank${b}.asm`,
+        bytes: data.slice(fileOffset, fileOffset + BANK),
+        startAddress: org, fileOffset,
+        label: `SuperGame bank ${b}${isFixedTop ? " (fixed $C000)" : " (switchable $8000)"}`,
+      });
+    }
     return regions;
   }
   if (platform === "lynx") {
@@ -1364,30 +1427,83 @@ function planRegions(platform, data) {
     return regions;
   }
   if (platform === "pce") {
-    // PC Engine HuCard: the HuC6280 (65C02-family) image. cc65 pce.cfg maps the
-    // reset/IRQ vectors at $FFF6+ and the program high; homebrew typically runs
-    // from the ROM mapped at the top of the address space. Disassemble the image
-    // as a flat region from the cart base — a HuCard has no header to strip.
-    const body = trimTrailingPad(data.slice(0));
-    const org = (0x10000 - body.length) & 0xffff; // cart maps to top of space
-    regions.push({
-      name: "rom", file: "rom.asm", bytes: body,
-      startAddress: org, fileOffset: 0,
-      label: `HuCard @ $${org.toString(16)} (HuC6280)`,
-    });
+    // PC Engine HuCard: the HuC6280 (65C02-family) image, banked in 8KB pages
+    // via the MPRs. A 512-byte copier header (len % 1024 == 512) is split into
+    // its own data region. NO trailing-pad trim — HuCard $FF padding is REAL
+    // cart bytes and trimming it made the old rebuild lossy (the planner's own
+    // notes flagged this as the fix needed).
+    //   ≤32KB: flat at the top of the address space (vectors at $FFF6+ land
+    //          correctly — the proven small-HuCard assumption).
+    //   >32KB: one region per 8KB page; page 0 at $E000 (where MPR7 maps it
+    //          at reset — the vectors live there), pages 1+ at $8000 (neutral
+    //          window; bank registers decide at runtime).
+    const hasCopier = (data.length % 1024) === 512;
+    const base = hasCopier ? 512 : 0;
+    if (hasCopier) {
+      regions.push({
+        name: "copier_header", file: "copier_header.asm", bytes: data.slice(0, 512), kind: "data",
+        startAddress: 0x0000, fileOffset: 0,
+        label: "512-byte copier header (data)",
+      });
+    }
+    const body = data.subarray(base);
+    if (body.length <= 0x8000) {
+      const org = (0x10000 - body.length) & 0xffff;
+      regions.push({
+        name: "rom", file: "rom.asm", bytes: body.slice(0),
+        startAddress: org, fileOffset: base,
+        label: `HuCard @ $${org.toString(16)} (HuC6280)`,
+      });
+      return regions;
+    }
+    const PAGE = 0x2000;
+    const nPages = Math.ceil(body.length / PAGE);
+    for (let b = 0; b < nPages; b++) {
+      const org = b === 0 ? 0xE000 : 0x8000;
+      regions.push({
+        name: `page${b}`, file: `page${b}.asm`,
+        bytes: body.slice(b * PAGE, (b + 1) * PAGE),
+        startAddress: org, fileOffset: base + b * PAGE,
+        label: `HuCard 8KB page ${b}${b === 0 ? " (reset MPR7 → $E000, vectors)" : " ($8000 ASSUMED — MPRs map pages at runtime)"}`,
+      });
+    }
     return regions;
   }
   if (platform === "msx") {
     // MSX cartridge maps at $4000-$BFFF; the 16-byte "AB" header at $4000 is
-    // data (magic + INIT/STATEMENT/DEVICE/TEXT pointers), code follows. Skip the
-    // header and disassemble the Z80 image from $4010.
+    // data (magic + INIT/STATEMENT/DEVICE/TEXT pointers), code follows.
+    //   ≤32KB: skip the header, one flat region from $4010.
+    //   >32KB (megaROM): 16KB banks via an ASCII16-style mapper — bank 0 at
+    //   $4000 (header split out as a data region), banks 1+ at $8000.
     const hdr = data.length >= 2 && data[0] === 0x41 && data[1] === 0x42;
     const base = hdr ? 16 : 0;
-    regions.push({
-      name: "rom", file: "rom.asm", bytes: trimTrailingPad(data.slice(base)),
-      startAddress: 0x4000 + base, fileOffset: base,
-      label: `cart @ $${(0x4000 + base).toString(16)} (Z80)`,
-    });
+    if (data.length <= 0x8000 + base) {
+      regions.push({
+        name: "rom", file: "rom.asm", bytes: trimTrailingPad(data.slice(base)),
+        startAddress: 0x4000 + base, fileOffset: base,
+        label: `cart @ $${(0x4000 + base).toString(16)} (Z80)`,
+      });
+      return regions;
+    }
+    if (hdr) {
+      regions.push({
+        name: "ab_header", file: "ab_header.asm", bytes: data.slice(0, 16), kind: "data",
+        startAddress: 0x4000, fileOffset: 0,
+        label: `"AB" cartridge header (16 B data @ $4000)`,
+      });
+    }
+    const BANK = 0x4000;
+    const nBanks = Math.ceil(data.length / BANK);
+    for (let b = 0; b < nBanks; b++) {
+      const skip = b === 0 ? base : 0;
+      const org = b === 0 ? 0x4000 + base : 0x8000;
+      regions.push({
+        name: `bank${b}`, file: `bank${b}.asm`,
+        bytes: data.slice(b * BANK + skip, (b + 1) * BANK),
+        startAddress: org, fileOffset: b * BANK + skip,
+        label: `megaROM 16KB bank ${b}${b === 0 ? ` ($${org.toString(16)})` : " ($8000 ASSUMED — mapper pages at runtime)"}`,
+      });
+    }
     return regions;
   }
   if (platform === "gba") {
