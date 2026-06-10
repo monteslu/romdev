@@ -1371,6 +1371,76 @@ export class LibretroHost {
     return !!(this.mod && typeof this.mod._romdev_run_pure === "function");
   }
 
+  /** True when this core build exposes the interrupt block (the pure-call
+   *  primitive on cores without a separable CPU loop). */
+  irqBlockSupported() {
+    return !!(this.mod && typeof this.mod._romdev_irqblock_set === "function");
+  }
+
+  /** Suppress (or restore) interrupt DELIVERY to the active CPU. While
+   *  blocked, pending IRQ/NMI lines stay pending and no game handler can run
+   *  — the mechanism behind pure calls on cores whose CPU/video loops are
+   *  interleaved (everything except gpgx, which steps the CPU alone). */
+  setIrqBlock(on) {
+    const mod = this._needMod();
+    if (typeof mod._romdev_irqblock_set !== "function") {
+      throw new Error("this core build does not expose the interrupt block (rebuild with romdev_irqblock_set).");
+    }
+    mod._romdev_irqblock_set(on ? 1 : 0);
+  }
+
+  /** True when a pure call is possible on this platform by ANY mechanism:
+   *  a separable CPU run (gpgx), an interrupt block, or hardware with no
+   *  interrupts at all (the 2600's 6507 has no IRQ/NMI lines wired — every
+   *  call is inherently pure). */
+  pureCallSupported() {
+    return this.runPureSupported() || this.irqBlockSupported() || this.status.platform === "atari2600";
+  }
+
+  /** True when this core build exposes the VRAM-port copy trace (port-based
+   *  video memory: NES/SNES/PCE/MSX/SMS/GG/Genesis). Direct-mapped platforms
+   *  answer the same question through watchRange on the CPU-visible VRAM. */
+  vramWatchSupported() {
+    const mod = this.mod;
+    return !!(mod && typeof mod._romdev_vramwatch_set === "function" && typeof mod._romdev_vramwatch_get === "function");
+  }
+
+  /**
+   * Run `frames` frames logging every data-port write landing in the VRAM
+   * address window [lo,hi] — {vramAddr, pc, value} per event, pc being the
+   * EXECUTING instruction (during DMA on SNES, the instruction that triggered
+   * it). The "where does this graphic come from?" primitive for port-based
+   * video memory. Returns { events, total, stored, truncated }.
+   */
+  watchVram(lo, hi, frames, perFrame) {
+    const mod = this._needMod();
+    this._needMedia();
+    if (!this.vramWatchSupported()) throw new Error("VRAM copy trace not supported by this core.");
+    mod._romdev_vramwatch_set(lo >>> 0, hi >>> 0, 1);
+    try {
+      this._runFramesExclusive(perFrame ?? (() => false), frames);
+    } finally {
+      // drained below; disarm after
+    }
+    const CAP = 1024;
+    const outPtr = mod._malloc(CAP * 3 * 4);
+    const out2Ptr = mod._malloc(8);
+    try {
+      const n = mod._romdev_vramwatch_get(outPtr, CAP, out2Ptr);
+      const u = new Uint32Array(mod.HEAPU8.buffer, outPtr, n * 3);
+      const u2 = new Uint32Array(mod.HEAPU8.buffer, out2Ptr, 2);
+      const events = [];
+      for (let i = 0; i < n; i++) {
+        events.push({ vramAddr: u[i * 3], pc: u[i * 3 + 1], value: u[i * 3 + 2] & 0xFF });
+      }
+      return { events, total: u2[0], stored: u2[1], truncated: u2[0] > u2[1] };
+    } finally {
+      mod._free(outPtr);
+      mod._free(out2Ptr);
+      mod._romdev_vramwatch_set(0, 0, 0);
+    }
+  }
+
   /** Arm/disarm the read watchpoint on a CPU address. */
   setReadWatch(address, enabled = true) {
     const mod = this._needMod();
@@ -1638,6 +1708,7 @@ export class LibretroHost {
 
     const snapshot = sandbox ? this.serializeState() : null;
     let captured, returned = false, framesRun = 0, watchdogTripped = false, stoppedAtPC = false;
+    let pureMode = null;
     try {
       // Apply pre-call memory writes (CPU-space).
       for (const m of presetMemory) {
@@ -1690,17 +1761,15 @@ export class LibretroHost {
       const target = (stopAtPC !== undefined ? stopAtPC : sentinelPC) >>> 0;
       this.setPCBreak(target, true, false);
       let finalState = null;
+      let irqBlocked = false;
       try {
-        if (pure) {
-          if (!this.runPureSupported()) {
-            throw new Error("cpu({op:'call', pure:true}) not supported by this core build (needs the romdev_run_pure export — gpgx Genesis/SMS/GG only for now). Re-run without pure.");
-          }
-          // Mask m68k interrupts so a PENDING VINT raised before the call can't
-          // redirect entry into the game's handler (no NEW interrupts are raised
-          // in pure mode — the system frame machinery never runs). Z80 systems
-          // need no masking: their irq line is only raised by the (not-running)
-          // frame loop. The sandbox restore (or the game's own RTE discipline)
-          // makes the IPL change invisible afterward.
+        if (pure && this.runPureSupported()) {
+          // STRONGEST pure mode (gpgx): step ONLY the CPU — no frame machinery
+          // at all. Mask m68k interrupts so a PENDING VINT raised before the
+          // call can't redirect entry (no NEW interrupts are raised — the
+          // system loop never runs). The sandbox restore (or the game's own
+          // RTE discipline) makes the IPL change invisible afterward.
+          pureMode = "cpu-only";
           if (this.status.platform === "genesis") {
             this.setReg(17, (this.getReg(17) | 0x0700) & 0xFFFF);
           }
@@ -1721,6 +1790,24 @@ export class LibretroHost {
             }
           }
         } else {
+          if (pure) {
+            // INTERRUPT-BLOCKED pure mode (every other core): the frame
+            // machinery still runs (video/timers advance — harmless, they
+            // don't write game RAM), but interrupt DELIVERY is suppressed, so
+            // no game handler can execute. The only running game code is the
+            // routine we called — the same guarantee that matters for the
+            // output buffer. The 2600's 6507 has no interrupt lines at all,
+            // so every call there is pure by hardware.
+            if (this.irqBlockSupported()) {
+              this.setIrqBlock(true);
+              irqBlocked = true;
+              pureMode = "irq-blocked";
+            } else if (this.status.platform === "atari2600") {
+              pureMode = "no-interrupts";
+            } else {
+              throw new Error("cpu({op:'call', pure:true}) not supported by this core build (needs the romdev_irqblock_set export — update the core package).");
+            }
+          }
           framesRun = this._runFramesExclusive(() => {
             const st = this.getPCBreak(false);
             if (st.hit) {
@@ -1734,6 +1821,7 @@ export class LibretroHost {
           }, maxFrames);
         }
       } finally {
+        if (irqBlocked) { try { this.setIrqBlock(false); } catch { /* core gone */ } }
         this.setPCBreak(0, false, false);
         this.setWatchdog(0);
         if (!finalState) finalState = this.getPCBreak(true); else this.getPCBreak(true);
@@ -1753,7 +1841,7 @@ export class LibretroHost {
     const fin = this._lastCallResult || {};
     return {
       returned, framesRun,
-      ...(pure ? { pure: true } : {}),
+      ...(pure ? { pure: true, pureMode } : {}),
       ...(watchdogTripped ? { watchdog: true, reason: "watchdog: hit the instruction budget (likely a runaway loop — wrong A0/regs, a needed preset, or legitimately huge; raise maxInstructions or check the entry setup)" } : {}),
       ...(stoppedAtPC ? { stoppedAtPC: "$" + (stopAtPC >>> 0).toString(16).toUpperCase() } : {}),
       ...(fin.finalPC != null ? { finalPC: "$" + fin.finalPC.toString(16).toUpperCase(), finalPCRaw: fin.finalPC } : {}),

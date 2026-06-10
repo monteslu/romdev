@@ -914,7 +914,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       // call spanned FRAMES of emulation, the game's own per-frame logic (VBlank
       // handlers via RAM vectors, music drivers) ran CONCURRENTLY and may have
       // written over the routine's output buffer. Loud, up front, with the fix.
-      const frameLogicCaveat = (!pure && r.framesRun > 0 && (host.runPureSupported ? host.runPureSupported() : false))
+      const frameLogicCaveat = (!pure && r.framesRun > 0 && (host.pureCallSupported ? host.pureCallSupported() : false))
         ? ` ⚠ framesRun:${r.framesRun} — the game's own frame logic (VBlank handler, music driver) ran DURING this call and may have modified RAM the routine wrote; treat the output buffer as suspect. Re-run with pure:true to step ONLY the CPU (no frame machinery).`
         : (!pure && r.framesRun > 0)
           ? ` ⚠ framesRun:${r.framesRun} — the game's own frame logic ran DURING this call and may have modified RAM the routine wrote; treat the output buffer as suspect (verify visually or against a known-good slice).`
@@ -929,7 +929,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         + frameLogicCaveat;
       return jsonContent({
         returned: r.returned, framesRun: r.framesRun, sandbox,
-        ...(r.pure ? { pure: true } : {}),
+        ...(r.pure ? { pure: true, pureMode: r.pureMode } : {}),
         ...(r.watchdog ? { watchdog: true, reason: r.reason } : {}),
         ...(r.stoppedAtPC ? { stoppedAtPC: r.stoppedAtPC } : {}),
         ...(r.finalPC ? { finalPC: r.finalPC } : {}),
@@ -976,10 +976,12 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     "the dst. **NEVER HANGS: an instruction WATCHDOG (`maxInstructions`) force-stops a runaway and returns PROGRESS — " +
     "finalPC + finalRegs + watchdog:true — so you can tell 'wrong A0' from 'needs a preset' from 'legitimately long'.** " +
     "`stopAtPC` halts mid-routine for partial output; `presetMemory` for codecs that read a global from RAM first. " +
-    "**`pure:true` (Genesis/SMS/GG): step ONLY the CPU — no VDP/frame machinery, no interrupts raised — so the game's own " +
-    "VBlank logic CANNOT run concurrently and stomp the routine's output buffer.** Without pure, a call that spans frames runs " +
-    "the game's frame logic alongside your routine (the result carries a ⚠ caveat when that happened) — a real session spent " +
-    "hours diffing a CORRECT codec against that poisoned output.\n" +
+    "**`pure:true` (ALL 14 platforms): the game's own VBlank/IRQ logic CANNOT run during the call and stomp the routine's " +
+    "output buffer.** Mechanism per platform (reported as `pureMode`): Genesis/SMS/GG step ONLY the CPU ('cpu-only'); every " +
+    "other core suppresses interrupt DELIVERY for the duration ('irq-blocked' — video/timers advance harmlessly, no game " +
+    "handler executes); the 2600 has no interrupts at all ('no-interrupts'). Without pure, a call that spans frames runs " +
+    "the game's frame logic alongside your routine (the result carries a ⚠ caveat) — a real session spent " +
+    "hours diffing a CORRECT codec against that poisoned output. Prefer pure for every decompressor/codec call.\n" +
     "• op:'decompress' — convenience wrapper over op:'call' for the common decompressor shape: call `entryPC` with " +
     "A0=`sourceAddress` (and optionally A1=`destAddress`), run until it returns, then read `destAddress`. For the " +
     "NBA-Jam-style 'name + portrait are LZ-compressed' wall: point it at the game's own decompressor.",
@@ -1004,7 +1006,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       maxFrames: z.number().int().min(1).max(100000).default(600).describe("op:call/decompress — frame cap (the outer bound)."),
       maxInstructions: z.number().int().min(1000).optional().describe("op:call — instruction watchdog budget (the REAL cap; default ~maxFrames*500k). Raise for a huge decompress; lower to fail fast while probing the right A0."),
       sandbox: z.boolean().default(false).describe("op:call — snapshot+restore core state around the call (default FALSE — you want the dst buffer left live to read). True leaves the live game untouched."),
-      pure: z.boolean().default(false).describe("op:call — step ONLY the CPU (no VDP/frame machinery, no interrupts): the game's own frame logic cannot run during the call and stomp the routine's output. Genesis/SMS/GG (gpgx) only; other cores return an error explaining. Prefer this for any decompressor/codec call."),
+      pure: z.boolean().default(false).describe("op:call — guarantee the game's own frame logic CANNOT run during the call and stomp the routine's output (ALL 14 platforms; `pureMode` in the result says how: 'cpu-only' on Genesis/SMS/GG, 'irq-blocked' elsewhere, 'no-interrupts' on 2600). Prefer this for any decompressor/codec call."),
       // decompress
       entryPC: z.number().int().min(0).optional().describe("op:decompress — decompressor entry PC."),
       sourceAddress: z.number().int().min(0).optional().describe("op:decompress — compressed-source address → A0 (reg-id 8 on m68k)."),
@@ -1100,10 +1102,11 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     "**CAVEAT: frame-level, not instruction-level (last value per frame); the sampled `pc` is a frame-boundary sample — for ISR-driven writes use breakpoint({on:'write', precision:'exact'}) for the real writer.**\n" +
     "• on:'range' — DISCOVERY: log EVERY instruction that reads or writes ANYWHERE in [start,end]. The fix for 'I don't know which PC touches this'. Returns {pc,address,value}[] + the actionable distinctPCs. (Ring-buffered: `truncated:true` if it overflows.) `fromState`/`fromStatePath` restores a savestate FIRST so the trace runs from a known moment (jump to the boss, then see what writes HP) — deterministic + repeatable.\n" +
     "• on:'pc' — DISCOVERY (coverage trace): record every DISTINCT PC executed within [start,end] — 'what code runs here?'. Log execution in the bank where you suspect the renderer lives during the moment it draws, then disassemble the PCs. Also takes `fromState`/`fromStatePath` to trace from a restored moment.\n" +
-    "• on:'dma' — GENESIS ONLY: trace mem→VDP DMAs (the answer to 'this name/portrait/logo is a pre-rendered bitmap DMA'd into VRAM — WHERE in ROM?', which on:'write' can't catch). `precision:'exact'` (default) logs every mem→VDP DMA with its VRAM DESTINATION + ROM SOURCE + length (filter by `vramDest`±`destWindow`; `dedupe` collapses the per-frame refresh; `sourceFilter:'rom-only'` drops RAM→VRAM noise; catches a same-frame second DMA). `precision:'sampled'` is the cheap frame-sampled source-register read (may miss two DMAs in one frame, dest-agnostic). `perFrame:true` switches to FEEL/PERF MODE: a per-frame timeline of VDP-DMA WORK ({frame,dmas,bytes,romBytes,ramBytes} + peakFrame + `spikes`) — the cheap 'why does horizontal movement feel choppy?' diagnostic (a per-frame byte spike = too much VDP work in the loop, e.g. a tilemap rewrite). On non-Genesis cores returns `notSupported`.",
+    "• on:'dma' — GENESIS ONLY: trace mem→VDP DMAs (the answer to 'this name/portrait/logo is a pre-rendered bitmap DMA'd into VRAM — WHERE in ROM?', which on:'write' can't catch). `precision:'exact'` (default) logs every mem→VDP DMA with its VRAM DESTINATION + ROM SOURCE + length (filter by `vramDest`±`destWindow`; `dedupe` collapses the per-frame refresh; `sourceFilter:'rom-only'` drops RAM→VRAM noise; catches a same-frame second DMA). `precision:'sampled'` is the cheap frame-sampled source-register read (may miss two DMAs in one frame, dest-agnostic). `perFrame:true` switches to FEEL/PERF MODE: a per-frame timeline of VDP-DMA WORK ({frame,dmas,bytes,romBytes,ramBytes} + peakFrame + `spikes`) — the cheap 'why does horizontal movement feel choppy?' diagnostic (a per-frame byte spike = too much VDP work in the loop, e.g. a tilemap rewrite). On non-Genesis cores returns `notSupported`.\n" +
+    "• on:'copy' — ALL 14 PLATFORMS: log every write landing in a VRAM/dest address window [start,end] with the EXECUTING instruction's PC — the generic answer to 'this tile/nametable/portrait on screen: which routine uploads it?'. Port-based video memory (NES $2007, SNES $2118/19 — incl. the DMA path, PCE VWR, MSX/SMS/GG VDP data port, Genesis data port) is hooked INSIDE the core, so `start`/`end` are VRAM addresses (NES PPU $0000-$3FFF; SNES VRAM byte addr; PCE VRAM word addr; MSX/SMS/GG VRAM addr). Direct-mapped platforms (GB/GBC $8000-$9FFF, GBA 0x06000000+, C64/Lynx/7800 RAM framebuffers) route through the CPU-address range log automatically — pass CPU addresses there. Follow up with breakpoint({on:'pc', address: pc}) to get registersAtHit at the uploader.",
     {
-      on: z.enum(["mem", "range", "pc", "dma"])
-        .describe("mem=watch a RAM byte/ranges for value changes over frames (the power tool); range=log every read/write PC in [start,end]; pc=coverage trace of distinct PCs executed in [start,end]; dma=Genesis-only mem→VDP DMA source/dest trace."),
+      on: z.enum(["mem", "range", "pc", "dma", "copy"])
+        .describe("mem=watch a RAM byte/ranges for value changes over frames (the power tool); range=log every read/write PC in [start,end]; pc=coverage trace of distinct PCs executed in [start,end]; dma=Genesis-only mem→VDP DMA source/dest trace; copy=log every write landing in a VRAM address window with the EXECUTING instruction's PC (all 14 platforms — the generic 'where does this graphic come from?')."),
       // on:'mem'
       region: z.enum(MEMORY_REGIONS).optional().describe("on:'mem' single-range — the region to watch (same canonical set memory uses, incl. nes_apu_regs, genesis_ym2612, c64_sid_regs). Omit when using `ranges`."),
       offset: z.number().int().min(0).default(0).describe("on:'mem' single-range — first byte of the watched range."),
@@ -1163,10 +1166,68 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
           }
           return await dmaExact(a);
         }
+        case "copy": {
+          if (args.start == null || args.end == null) throw new Error("watch({on:'copy'}): `start` and `end` are required (the VRAM/dest address window).");
+          return await wCopy({ ...args, frames: args.frames ?? 120, limit: args.limit ?? 200 });
+        }
         default: throw new Error(`watch: unknown on '${args.on}'`);
       }
     }),
   );
+
+  // ── watch({on:'copy'}) — the generic graphics source-trace ─────────────────
+  async function wCopy({ start, end, frames = 120, limit = 200, pressDuring }) {
+      const host = getHost(sessionKey);
+      const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
+      const pressDriver = makePressDriver(host, presses);
+      if (host.vramWatchSupported && host.vramWatchSupported()) {
+        // Port-based video memory: the core hook logs {vramAddr, pc, value}
+        // with the EXECUTING instruction's PC (DMA-initiating instruction on
+        // SNES). start/end are VRAM addresses.
+        let i = 0;
+        const r = host.watchVram(start, end, frames, () => { pressDriver.applyForFrame(i++); return false; });
+        pressDriver.finish();
+        const events = r.events.slice(0, limit).map((e) => ({
+          vramAddr: "$" + e.vramAddr.toString(16).toUpperCase(),
+          pc: "$" + e.pc.toString(16).toUpperCase(),
+          pcRaw: e.pc,
+          value: "0x" + e.value.toString(16).toUpperCase().padStart(2, "0"),
+        }));
+        const distinct = [...new Set(r.events.map((e) => e.pc))].slice(0, 32)
+          .map((p) => "$" + p.toString(16).toUpperCase());
+        return jsonContent({
+          on: "copy", mode: "vram-port",
+          window: { start: "$" + start.toString(16).toUpperCase(), end: "$" + end.toString(16).toUpperCase() },
+          framesRun: frames,
+          total: r.total, stored: r.stored, truncated: r.truncated,
+          distinctPCs: distinct,
+          events,
+          note: "pc is the EXECUTING instruction that performed the upload (on SNES the instruction that " +
+            "triggered the DMA). Addresses are VRAM-space. Next: breakpoint({on:'pc', address: <pc>}) to stop " +
+            "there with registersAtHit (source pointer in the index/address regs), then disasm({target:'rom', " +
+            "startAddress: <pc>}) to read the routine." +
+            (r.truncated ? " Ring overflowed — narrow the window or lower frames." : ""),
+        });
+      }
+      // Direct-mapped video memory (GB/GBC/GBA/C64/Lynx/7800): the same
+      // question routes through the CPU-address range log — start/end are CPU
+      // addresses (e.g. GB VRAM $8000-$9FFF).
+      pressDriver.finish();
+      const out = await wRange({ start, end, frames, limit, kind: "write", pressDuring });
+      try {
+        const parsed = JSON.parse(out.content.find((c) => c.type === "text").text);
+        parsed.on = "copy";
+        parsed.mode = "cpu-mapped";
+        parsed.note = (parsed.note ? parsed.note + " " : "") +
+          "This platform's video memory is CPU-mapped, so the copy trace IS the write-range log: " +
+          "start/end are CPU addresses (GB/GBC VRAM $8000-$9FFF; GBA 0x06000000+; C64/Lynx/7800 use the " +
+          "framebuffer/display-list RAM range). pc is the executing instruction; follow up with " +
+          "breakpoint({on:'pc', address: pc}) for registersAtHit.";
+        return jsonContent(parsed);
+      } catch {
+        return out;
+      }
+  }
 
   // ── watch({on:'dma'}) helpers (Genesis only) ────────────────────────────────
   // precision:exact = dmaExact (watchDma, per-DMA core log), precision:sampled =

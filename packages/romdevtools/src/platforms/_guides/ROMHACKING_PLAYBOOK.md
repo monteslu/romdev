@@ -221,13 +221,15 @@ pushes a sentinel return, and runs until it returns. Most of these formats have 
 you can usually craft a replacement by hand. (sandbox:false leaves the dest buffer
 live for `memory({op:'read'})`; sandbox:true restores the game untouched.)
 
-**Pass `pure:true` on Genesis/SMS/GG.** A non-pure call that spans frames runs the
+**Pass `pure:true` — on every platform.** A non-pure call that spans frames runs the
 game's OWN frame logic concurrently (VBlank handlers via RAM vectors, music
 drivers) — which can overwrite the dest buffer mid-call and hand you poisoned
 "ground truth" (a real session spent hours diffing a CORRECT reimplementation
-against it). `pure:true` steps ONLY the CPU — no frame machinery, no interrupts —
-so the output is exactly what the routine wrote. Non-pure results carry a ⚠
-caveat whenever frame logic ran.
+against it). With `pure:true` the game's handlers CANNOT run: Genesis/SMS/GG step
+only the CPU (`pureMode:'cpu-only'`); everywhere else interrupt DELIVERY is
+suppressed for the duration (`'irq-blocked'` — pending lines stay pending, video
+advances harmlessly); the 2600 has no interrupts (`'no-interrupts'`). Non-pure
+results carry a ⚠ caveat whenever frame logic ran.
 
 ## 5e. Re-inject an edited asset — the round-trip (don't reimplement the compressor)
 
@@ -450,7 +452,8 @@ For sprite/tile edits (not text), don't hand-roll the tile-format math:
 | Which instruction READ a byte | `breakpoint({on:'read', address})` (read-side `breakpoint({on:'write'})`) |
 | Single-step the CPU | `frame({op:'stepInstruction'})` (+ `cpu({op:'read'})` to watch regs) |
 | Set a CPU register | `cpu({op:'setReg', regId, value})` |
-| Decompress a compressed asset | `cpu({op:'decompress'})` / `cpu({op:'call'})` (run the ROM's own codec) |
+| Decompress a compressed asset | `cpu({op:'decompress'})` / `cpu({op:'call', pure:true})` (run the ROM's own codec, interference-free) |
+| Where does this on-screen graphic come from | `watch({on:'copy', start, end})` (all 14 — writer PC per VRAM write; Genesis DMA also via `watch({on:'dma'})`) |
 | Re-inject edited bytes the game accepts | `romPatch({op:'makeStored'})` (verbatim-expand block) → `romPatch({op:'findFree'})` → `romPatch({op:'relocate'})` |
 | Find the pointer that loads an asset | `romPatch({op:'findPointer', romOffset})` |
 | FIND the unknown routine touching X | `watch({on:'range', start,end})` (all hits) / `watch({on:'pc'})` (coverage) |

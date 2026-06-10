@@ -1,8 +1,8 @@
 diff --git a/cpuexec.cpp b/cpuexec.cpp
-index aa43b2f..f7a2cd5 100644
+index aa43b2f..0d2bf81 100644
 --- a/cpuexec.cpp
 +++ b/cpuexec.cpp
-@@ -19,8 +19,74 @@
+@@ -19,8 +19,83 @@
  
  static inline void S9xReschedule (void);
  
@@ -65,6 +65,15 @@ index aa43b2f..f7a2cd5 100644
 +}
 +}
 +
++/* romdev INTERRUPT BLOCK — the pure-call primitive. While set, NMI/IRQ
++ * delivery is suppressed (pending flags stay pending), so a routine driven by
++ * callSubroutine cannot be hijacked by the game's own NMI/VBlank handlers —
++ * the frame logic that stomps output buffers. Events/PPU keep running; only
++ * CPU interrupt DISPATCH is gated. The SPC700 is effectively frozen during a
++ * pure call too: APU execution is event-driven from the frames the host is
++ * NOT stepping. */
++extern "C" int romdev_irq_block;
++
  void S9xMainLoop (void)
  {
 +	/* romdev: once a breakpoint/watchdog hit has frozen this CPU, KEEP it
@@ -77,7 +86,25 @@ index aa43b2f..f7a2cd5 100644
  	#define CHECK_FOR_IRQ_CHANGE() \
  	if (Timings.IRQFlagChanging) \
  	{ \
-@@ -135,6 +201,67 @@ void S9xMainLoop (void)
+@@ -44,7 +119,7 @@ void S9xMainLoop (void)
+ 
+ 	for (;;)
+ 	{
+-		if (CPU.NMIPending)
++		if (CPU.NMIPending && !romdev_irq_block)
+ 		{
+ 			#ifdef DEBUGGER
+ 			if (Settings.TraceHCEvent)
+@@ -78,7 +153,7 @@ void S9xMainLoop (void)
+ 			CPU.IRQLine = TRUE;
+ 		}
+ 
+-		if (CPU.IRQLine || CPU.IRQExternal)
++		if ((CPU.IRQLine || CPU.IRQExternal) && !romdev_irq_block)
+ 		{
+ 			if (CPU.WaitingForInterrupt)
+ 			{
+@@ -135,6 +210,67 @@ void S9xMainLoop (void)
  			break;
  		}
  
@@ -283,7 +310,7 @@ index ec55ea9..b1a93e4 100644
  	if ((Address & mask) == mask)
  	{
 diff --git a/libretro/libretro.cpp b/libretro/libretro.cpp
-index d381c61..3c17a2e 100644
+index d381c61..3ce0602 100644
 --- a/libretro/libretro.cpp
 +++ b/libretro/libretro.cpp
 @@ -6,6 +6,7 @@
@@ -294,7 +321,7 @@ index d381c61..3c17a2e 100644
  #include "gfx.h"
  #include "snapshot.h"
  #include "controls.h"
-@@ -2029,6 +2030,285 @@ unsigned retro_get_region()
+@@ -2029,6 +2030,333 @@ unsigned retro_get_region()
      return Settings.PAL ? RETRO_REGION_PAL : RETRO_REGION_NTSC;
  }
  
@@ -421,6 +448,54 @@ index d381c61..3c17a2e 100644
 + * 4=read-watch), out[1] = count (19), out[2..20] = registers in the
 + * romdev_setreg/getreg regId order ([0]=A [1]=X [2]=Y [3]=P [4]=S [5]=DB
 + * [6]=D [16]=PBPC-of-executing-instruction [18]=S). `clear` resets the kind. */
++/* romdev interrupt block (pure-call primitive): while set, NMI/IRQ delivery
++ * is suppressed in S9xMainLoop so a callSubroutine-driven routine cannot be
++ * hijacked by the game's own handlers. */
++int romdev_irq_block = 0;
++void romdev_irqblock_set(int on) {
++   romdev_irq_block = on ? 1 : 0;
++}
++
++/* romdev VRAM-port copy trace (hooks in ppu.h's REGISTER_2118/2119 family —
++ * CPU port writes AND the DMA path both land there). set(lo,hi,enabled) arms
++ * a VRAM byte-address window + clears the ring; get drains [vaddr,pc,val]
++ * triples, out2 = [totalSeen, stored]. */
++#define ROMDEV_VW_CAP 1024
++unsigned int  romdev_vw_lo      = 0;
++unsigned int  romdev_vw_hi      = 0;
++int           romdev_vw_enabled = 0;
++static unsigned int  romdev_vw_addr[ROMDEV_VW_CAP];
++static unsigned int  romdev_vw_pcs [ROMDEV_VW_CAP];
++static unsigned char romdev_vw_vals[ROMDEV_VW_CAP];
++static unsigned int  romdev_vw_count  = 0;
++static unsigned int  romdev_vw_stored = 0;
++void romdev_vw_log(unsigned int vaddr, unsigned int pc, unsigned char val) {
++   romdev_vw_count++;
++   if (romdev_vw_stored < ROMDEV_VW_CAP) {
++      romdev_vw_addr[romdev_vw_stored] = vaddr;
++      romdev_vw_pcs [romdev_vw_stored] = pc;
++      romdev_vw_vals[romdev_vw_stored] = val;
++      romdev_vw_stored++;
++   }
++}
++void romdev_vramwatch_set(unsigned int lo, unsigned int hi, int enabled) {
++   romdev_vw_lo = lo; romdev_vw_hi = hi;
++   romdev_vw_enabled = enabled ? 1 : 0;
++   romdev_vw_count = 0; romdev_vw_stored = 0;
++}
++unsigned int romdev_vramwatch_get(unsigned int *out, unsigned int max, unsigned int *out2) {
++   unsigned int i, n = romdev_vw_stored;
++   if (out2) { out2[0] = romdev_vw_count; out2[1] = romdev_vw_stored; }
++   if (!out) return 0;
++   if (n > max) n = max;
++   for (i = 0; i < n; i++) {
++      out[i*3 + 0] = romdev_vw_addr[i];
++      out[i*3 + 1] = romdev_vw_pcs[i];
++      out[i*3 + 2] = romdev_vw_vals[i];
++   }
++   return n;
++}
++
 +extern unsigned int romdev_snap_regs[19];
 +extern int          romdev_snap_kind;
 +void romdev_regsnap_get(unsigned int *out, int clear) {
@@ -580,7 +655,7 @@ index d381c61..3c17a2e 100644
  void* retro_get_memory_data(unsigned type)
  {
      void* data;
-@@ -2051,6 +2331,18 @@ void* retro_get_memory_data(unsigned type)
+@@ -2051,6 +2379,18 @@ void* retro_get_memory_data(unsigned type)
          case RETRO_MEMORY_VIDEO_RAM:
          data = Memory.VRAM;
          break;
@@ -599,7 +674,7 @@ index d381c61..3c17a2e 100644
          //case RETRO_MEMORY_ROM:
          //	data = Memory.ROM;
          //	break;
-@@ -2085,6 +2377,18 @@ size_t retro_get_memory_size(unsigned type)
+@@ -2085,6 +2425,18 @@ size_t retro_get_memory_size(unsigned type)
          case RETRO_MEMORY_VIDEO_RAM:
              size = 64 * 1024;
              break;
@@ -618,3 +693,87 @@ index d381c61..3c17a2e 100644
          //case RETRO_MEMORY_ROM:
          //	size = Memory.CalculatedSize;
          //	break;
+diff --git a/ppu.h b/ppu.h
+index f5b0e0a..e34c413 100644
+--- a/ppu.h
++++ b/ppu.h
+@@ -352,6 +352,23 @@ static inline void REGISTER_2104 (uint8 Byte)
+ 	}
+ #endif
+ 
++/* romdev VRAM-port COPY TRACE (state + exports in libretro.cpp): log every
++ * write landing in a watched VRAM byte-address window with the EXECUTING
++ * instruction's PC — during DMA that PC is the instruction that triggered
++ * MDMAEN, which is exactly the "which routine uploads this graphic?" answer.
++ * Hooked in all six 2118/2119 variants (CPU port writes AND the DMA path go
++ * through these). */
++extern "C" {
++extern unsigned int  romdev_vw_lo, romdev_vw_hi;
++extern int           romdev_vw_enabled;
++extern void          romdev_vw_log(unsigned int vaddr, unsigned int pc, unsigned char val);
++extern unsigned int  romdev_snes_instr_pc;
++}
++#define ROMDEV_VW_SNES(addr_, byte_) do { \
++	if (romdev_vw_enabled && (unsigned int)(addr_) >= romdev_vw_lo && (unsigned int)(addr_) <= romdev_vw_hi) \
++		romdev_vw_log((unsigned int)(addr_), romdev_snes_instr_pc, (unsigned char)(byte_)); \
++} while (0)
++
+ static inline void REGISTER_2118 (uint8 Byte)
+ {
+ 	CHECK_INBLANK();
+@@ -363,9 +380,11 @@ static inline void REGISTER_2118 (uint8 Byte)
+ 		uint32 rem = PPU.VMA.Address & PPU.VMA.Mask1;
+ 		address = (((PPU.VMA.Address & ~PPU.VMA.Mask1) + (rem >> PPU.VMA.Shift) + ((rem & (PPU.VMA.FullGraphicCount - 1)) << 3)) << 1) & 0xffff;
+ 		Memory.VRAM[address] = Byte;
++		ROMDEV_VW_SNES(address, Byte);
+ 	}
+ 	else
+ 		Memory.VRAM[address = (PPU.VMA.Address << 1) & 0xffff] = Byte;
++		ROMDEV_VW_SNES(address, Byte);
+ 
+ 	IPPU.TileCached[TILE_2BIT][address >> 4] = FALSE;
+ 	IPPU.TileCached[TILE_4BIT][address >> 5] = FALSE;
+@@ -397,6 +416,7 @@ static inline void REGISTER_2118_tile (uint8 Byte)
+ 	uint32 address = (((PPU.VMA.Address & ~PPU.VMA.Mask1) + (rem >> PPU.VMA.Shift) + ((rem & (PPU.VMA.FullGraphicCount - 1)) << 3)) << 1) & 0xffff;
+ 
+ 	Memory.VRAM[address] = Byte;
++	ROMDEV_VW_SNES(address, Byte);
+ 
+ 	IPPU.TileCached[TILE_2BIT][address >> 4] = FALSE;
+ 	IPPU.TileCached[TILE_4BIT][address >> 5] = FALSE;
+@@ -421,6 +441,7 @@ static inline void REGISTER_2118_linear (uint8 Byte)
+ 	uint32	address;
+ 
+ 	Memory.VRAM[address = (PPU.VMA.Address << 1) & 0xffff] = Byte;
++	ROMDEV_VW_SNES(address, Byte);
+ 
+ 	IPPU.TileCached[TILE_2BIT][address >> 4] = FALSE;
+ 	IPPU.TileCached[TILE_4BIT][address >> 5] = FALSE;
+@@ -470,9 +491,11 @@ static inline void REGISTER_2119 (uint8 Byte)
+ 		uint32 rem = PPU.VMA.Address & PPU.VMA.Mask1;
+ 		address = ((((PPU.VMA.Address & ~PPU.VMA.Mask1) + (rem >> PPU.VMA.Shift) + ((rem & (PPU.VMA.FullGraphicCount - 1)) << 3)) << 1) + 1) & 0xffff;
+ 		Memory.VRAM[address] = Byte;
++		ROMDEV_VW_SNES(address, Byte);
+ 	}
+ 	else
+ 		Memory.VRAM[address = ((PPU.VMA.Address << 1) + 1) & 0xffff] = Byte;
++		ROMDEV_VW_SNES(address, Byte);
+ 
+ 	IPPU.TileCached[TILE_2BIT][address >> 4] = FALSE;
+ 	IPPU.TileCached[TILE_4BIT][address >> 5] = FALSE;
+@@ -504,6 +527,7 @@ static inline void REGISTER_2119_tile (uint8 Byte)
+ 	uint32 address = ((((PPU.VMA.Address & ~PPU.VMA.Mask1) + (rem >> PPU.VMA.Shift) + ((rem & (PPU.VMA.FullGraphicCount - 1)) << 3)) << 1) + 1) & 0xffff;
+ 
+ 	Memory.VRAM[address] = Byte;
++	ROMDEV_VW_SNES(address, Byte);
+ 
+ 	IPPU.TileCached[TILE_2BIT][address >> 4] = FALSE;
+ 	IPPU.TileCached[TILE_4BIT][address >> 5] = FALSE;
+@@ -528,6 +552,7 @@ static inline void REGISTER_2119_linear (uint8 Byte)
+ 	uint32	address;
+ 
+ 	Memory.VRAM[address = ((PPU.VMA.Address << 1) + 1) & 0xffff] = Byte;
++	ROMDEV_VW_SNES(address, Byte);
+ 
+ 	IPPU.TileCached[TILE_2BIT][address >> 4] = FALSE;
+ 	IPPU.TileCached[TILE_4BIT][address >> 5] = FALSE;
