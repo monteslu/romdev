@@ -1772,7 +1772,18 @@ Compiles **C89**, not C99/C11. Stick to:
   let filesSection = `## Files\n\n- \`${mainFilename}\` — your game's entry point.\n`;
   if (tmpl?.runtime) {
     for (const { dst } of tmpl.runtime) {
-      filesSection += `- \`${dst}\` — runtime helper. **You own this** — edit or replace at will.\n`;
+      if (dst === "patch-header.js") {
+        // NOT game code — calling it a "runtime helper" implied it compiles
+        // into the ROM and confused readers. It's a standalone sidecar tool.
+        filesSection += `- \`${dst}\` — sidecar TOOL, not game code (never compiled into the ROM). ` +
+          `Stamps the Nintendo logo + header/global checksums a GB ROM needs to boot ` +
+          `(\`node patch-header.js game.gb\`) — a zero-install stand-in for RGBDS's rgbfix when you ` +
+          `rebuild OUTSIDE romdev with stock SDCC. romdev's own builds fix the header automatically.\n`;
+      } else if (dst.endsWith("_crt0.s")) {
+        filesSection += `- \`${dst}\` — startup assembly (reset/interrupt vectors, RAM init; routed as the crt0 by the project build). **You own this.**\n`;
+      } else {
+        filesSection += `- \`${dst}\` — runtime helper. **You own this** — edit or replace at will.\n`;
+      }
     }
   }
   if (tmpl?.crt0) {
