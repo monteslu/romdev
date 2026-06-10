@@ -45,7 +45,7 @@ claude mcp add --transport http romdev http://127.0.0.1:7331/mcp
 
 It's a standard **streamable-HTTP** MCP server at `http://127.0.0.1:7331/mcp`. For opencode, Codex CLI, and other clients, see **[Connect](https://github.com/monteslu/romdev#connect)** in the repository README. An optional human observer (live tool-call view) is at `/livestream`.
 
-Agents: the server delivers [`AGENTS.md`](./AGENTS.md) as connection-time instructions — the workflow guide for the full tool surface. Or just connect your agent and call `catalog({op:'categories'})` to explore the tools live (and `catalog({op:'whatsNew'})` for the recent CHANGELOG + a rename table if you're resuming work against an older version).
+Agents: the server delivers [`AGENTS.md`](./AGENTS.md) as connection-time instructions — the workflow guide for the full tool surface. Or just connect your agent and call `catalog({op:'categories'})` to explore the tools live, and `catalog({op:'status'})` for the running version + session snapshot.
 
 ## Prefer not to use MCP? Use HTTP or a Skill
 

@@ -120,6 +120,27 @@ in DMG mode. To switch a DMG ROM to CGB:
 2. Run `romPatch({op:'gbHeader', path:"out.gbc"})` — also fixes the global
    checksum that the boot ROM checks
 
+## "BG map updates randomly don't stick" / a tile updates one frame late forever
+
+The core (like real hardware mid-frame) DROPS writes to VRAM ($8000-$9FFF)
+that land outside vblank while the LCD is on — silently. A game loop that
+pokes the BG map "whenever the state changes" will have SOME of those pokes
+land mid-frame and vanish: stale cells, a piece that visually lags the
+logical grid, glitches that move around as code timing shifts.
+
+The robust pattern (used by the bundled puzzle scaffolds):
+
+1. **COLLECT** — during the frame, don't touch VRAM. Append (addr, tile)
+   pairs to a small RAM queue whenever game state changes a cell.
+2. **FLUSH** — immediately after `wait_vblank()` (right after the OAM DMA),
+   drain the queue with pure writes. No scanning, no logic — vblank is only
+   ~1140 cycles, so the flush must be writes only and bounded.
+3. **Scrub** — repaint one or two rows per frame round-robin as insurance,
+   so any cell that ever got dropped self-heals within a second.
+
+If you must write outside that structure, turn the LCD off first (only
+acceptable during init/load screens — mid-game it flashes white).
+
 ## "Sound is the same as DMG"
 
 That's correct — CGB has the **identical** 4-channel APU as DMG. The

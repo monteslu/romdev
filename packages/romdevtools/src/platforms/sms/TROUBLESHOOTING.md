@@ -118,6 +118,12 @@ If you ported an SMS ROM straight to `.gg` it'll boot and run, but
 the colours will be very dark (2-bit values reinterpreted as 4-bit)
 and the visible area is in the top-left corner.
 
+Also check the header region byte at `$7FFF` (high nibble = region,
+low nibble = size): romdev stamps `$7C` (GG international) on `.gg`
+builds, but an SMS nibble there (`$4x`) makes gpgx boot the file in
+SMS compatibility mode — wrong resolution and palette depth no matter
+what your code does.
+
 ## "ROM > 32 KB doesn't run"
 
 The default template is single-bank (32 KB). To use the Sega

@@ -92,20 +92,16 @@ the P2 read + force `p2 = 0` so the AI fallback always engages.
 The bundled GG `sports.c` already does this — copy that pattern when
 porting other SMS multiplayer code.
 
-## "Build errors mention 'TMR SEGA' or ROM header"
+## "TMR SEGA" header / ROM boots in the wrong video mode
 
-Same magic as SMS — gpgx accepts headerless ROMs fine for development.
-For real-hardware ROM-burning include a header at $7FF0:
+The build pipeline now stamps the 16-byte header at `$7FF0` automatically
+("TMR SEGA" + checksum + the region/size byte at `$7FFF`) and pads every
+image to 32 KB — you never hand-write it for romdev builds.
 
-```
-db "TMR SEGA"
-dw 0                  ; reserved
-dw 0                  ; checksum (gpgx ignores)
-db 0x00, 0x00, 0x00   ; product code BCD
-db 0x00               ; product code high + version
-db 0x40               ; region (0x40 = GG)
-db 0x4C               ; ROM size (0x4C = 32 KB)
-```
-
-The bundled scaffolds build without a header — sufficient for the
-emulator-driven workflow. Add one before shipping to a cartridge.
+The byte that matters is `$7FFF`: **high nibble = region, low nibble = ROM
+size**. romdev writes `$7C` (GG international, 32 KB) on `.gg` builds.
+If you patch a ROM by hand and leave an SMS region nibble there (`$4C` =
+SMS export), gpgx boots the `.gg` file in **SMS compatibility mode** —
+256×192 timing, SMS palette depth — and everything renders dark and
+mis-cropped even though your code is fine. Check `$7FFF` first when a GG
+ROM suddenly looks like an SMS ROM.

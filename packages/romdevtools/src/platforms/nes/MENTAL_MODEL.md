@@ -393,7 +393,11 @@ build({ output:'rom', platform:'nes',
         inesHeader:{ prgBanks:2, chrBanks:1, mapper:0, mirroring:"vertical" } })
 ```
 Mutually exclusive with `linkerConfig`. Works for any NROM (mapper 0, ≤2 PRG
-banks); for a banked mapper supply a linker `.cfg` that places each bank.
+banks). For a BANKED mapper you don't hand-write the glue anymore:
+`disasm({target:'project'})` emits a HEADER segment (the original 16 iNES
+bytes), a `.segment "PRGn"` wrapper per bank, and a multi-bank `nes_rebuild.cfg`
+(switchable banks at $8000, fixed top bank at $C000), all wired into
+`rebuild.json` via `linkerConfigPath` — a one-call byte-exact rebuild.
 
 **2. `linkerConfig:"chr-rom"` — for homebrew C that ships FIXED tile art.**
 A cc65-C preset (segment split + a CHARS segment in an 8 KB ROM2 bank). Put your
@@ -402,8 +406,11 @@ tiles in `.segment "CHARS"` (`.incbin "tiles.chr"`) + pass the blob via
 other bank configs, prefer `inesHeader`.
 
 **3. `disasm({target:'project'})` — disassemble → rebuild, in two calls.**
-For NES it now extracts the CHR-ROM to `chr.bin`, writes a `rebuild.json` (the
-exact `build({inesHeader})` call, with absolute paths) and a `BUILD.md`. Feed
+For NES it extracts the CHR-ROM to `chr.bin`, writes a `rebuild.json` (the
+exact `build({...})` call, with absolute paths) and a `BUILD.md`. NROM gets the
+`inesHeader` one-call form; BANKED mappers (UxROM/MMC1/MMC3…) get per-bank
+`PRGn` segment wrappers + the original-bytes HEADER segment + a generated
+multi-bank `.cfg` referenced via `linkerConfigPath`. Either way: feed
 `rebuild.json` straight back to `build` and you get a byte-identical ROM. This
 is the RE workhorse loop: `disasm({target:'project'})` → edit the `.asm` →
 rebuild → `diffRoms` to confirm your patch landed.

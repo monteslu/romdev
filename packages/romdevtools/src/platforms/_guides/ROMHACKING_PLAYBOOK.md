@@ -67,7 +67,17 @@ This is the Cheat-Engine/RetroArch loop. It is THE bread-and-butter primitive.
 `memory({op:'snapshot'})` + `memory({op:'diff'})` is for "which bytes did THIS one event touch?",
 not for value hunting. `memory({op:'diff'})` defaults to a **clustered summary** (ranges +
 stride) so it won't flood you — a reported stride (e.g. "islands at 0x80") is
-usually a struct/entity array, each island one record.
+usually a struct/entity array, each island one record. Small clusters (≤8 bytes) carry
+`before`/`after` hex inline, and `minDelta:N` drops |after−before| < N so RNG/counter
+wiggle disappears from the report.
+
+**"Which byte does this INPUT drive?" → `memory({op:'diffRuns'})`** — runs the same start
+state twice (savestate restore in between) under two different held inputs (`portsA` vs
+`portsB`, default released) for `frames` each, and returns only the bytes that DIVERGE
+between the runs, with run-A/run-B values on small clusters. One call replaces the whole
+save → hold → step → dump → restore → hold-other → dump → diff loop; the frame counter and
+all input-independent churn cancel out automatically. (The emulator is left at the end of
+run B.)
 
 ---
 
@@ -315,9 +325,11 @@ Once you know WHAT to change, the write loop is a handful of calls — no custom
   confirm a patch landed where you meant.
 - **`disasm({target:'references', path, platform, address})`** — find every instruction that
   references a target address, classified `call/jump/branch/read/write/use/ref` (walks the
-  vector table too). The fast "who touches this?" for a STATIC image. Limitation: direct
-  addressing only — indirect/computed jumps aren't detected (use the runtime `watch`/
-  `breakpoint` tools in §5/§5d for those).
+  vector table too). The fast "who touches this?" for a STATIC image. Banked NES is scanned
+  PER BANK (each ref carries a `prgBank` tag), zero-page direct + indexed operands match,
+  and `#$nn` immediates are excluded (values, not addresses). Limitation: direct addressing
+  only — indirect/computed jumps aren't detected (use the runtime `watch`/`breakpoint`
+  tools in §5/§5d for those).
 - **`cart({op:'extract', path, outputDir})`** — split a ROM into standard parts (NES header/
   prg/chr; SNES copier_header+rom+internal header; Genesis vectors/header/body; GB boot/
   header/body) + a `manifest.json` (mapper, mirroring…). **`cart({op:'wrap'})`** is the inverse:
@@ -343,9 +355,12 @@ rebuild exists — a `rebuild.json` of the precise `build({...})` args. So the l
 
 **Two rebuild tiers** (the disasm emits each CPU's native-reassembler syntax — ca65 for
 6502/65816, GNU `as` for m68k/arm/z80/gbz80 — which only some `build()` toolchains consume):
-- **One-call `build()` rebuild, byte-identical** — **NES, C64, Atari 7800, Lynx**. Feed
-  `rebuild.json` straight to `build`. (Lynx: `build()` yields the headerless image; prepend
-  the shipped `lnx_header.bin` for the full `.lnx`.)
+- **One-call `build()` rebuild, byte-identical** — **NES (NROM *and* banked mappers), C64,
+  Atari 7800, Lynx**. Feed `rebuild.json` straight to `build`. Banked NES projects ship a
+  HEADER segment with the original 16 iNES bytes, per-bank `PRGn` wrappers, and a generated
+  multi-bank `.cfg` referenced via `linkerConfigPath` (so the cfg never streams through
+  context). (Lynx: `build()` yields the headerless image; prepend the shipped
+  `lnx_header.bin` for the full `.lnx`.)
 - **Native-recipe rebuild (`buildCall:null`), byte-identical, steps in `BUILD.md`** — **SMS,
   GG, MSX, GB, GBC, Genesis, GBA, Atari 2600**. Their `build()` toolchains (SDCC/RGBDS/asar/
   dasm/vasm) can't reassemble ca65/GNU-as syntax, so `BUILD.md` gives the proven native
@@ -357,8 +372,10 @@ rebuild exists — a `rebuild.json` of the precise `build({...})` args. So the l
 NES RE rebuild. `build({output:'rom', platform:'nes', inesHeader:{prgBanks, chrBanks, mapper,
 mirroring}, sourcesPaths:{…the PRG…}, binaryIncludePaths:{"chr.bin":…}})` auto-emits the
 16-byte iNES header + CHARS-segment wiring + flat NROM `.cfg` — no hand-derived header bytes.
-`disasm({target:'project'})` puts exactly this call in `rebuild.json`. (For homebrew C that
-ships fixed tile art, `linkerConfig:"chr-rom"` is the segment-split equivalent.)
+`disasm({target:'project'})` puts exactly this call in `rebuild.json` for NROM; banked
+mappers get the per-bank segment + multi-bank `.cfg` form instead (see the one-call tier
+above). (For homebrew C that ships fixed tile art, `linkerConfig:"chr-rom"` is the
+segment-split equivalent.)
 
 **Readability caveats** (the bytes are ALWAYS correct; only instruction-vs-`.byte` coverage
 varies): SNES and large Genesis ROMs come back byte-exact but DATA-ONLY (flat whole-ROM
@@ -398,6 +415,7 @@ For sprite/tile edits (not text), don't hand-roll the tile-format math:
 |---|---|
 | Find a value's address | `memory({op:'search'})` → `memory({op:'searchNext'})` (NOT full-RAM diff) |
 | Which bytes did one event touch | `memory({op:'snapshot'})` → `memory({op:'diff'})` (summary) |
+| Which byte does an INPUT drive | `memory({op:'diffRuns', portsA, portsB?})` (A/B divergence, one call) |
 | Is on-screen text a string or a bitmap | `text({op:'learn'})` (reports pre-rendered graphic) |
 | Is a "table" really ASCII/code | `memory({op:'classify'})` |
 | Confirm a patch is in the running ROM | `memory({op:'readCart'})` |
