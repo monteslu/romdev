@@ -208,6 +208,60 @@ The robust pattern (used by the bundled puzzle example games):
 If you must write outside that structure, turn the LCD off first (only
 acceptable during init/load screens — mid-game it flashes white).
 
+## "My HUD scrolls with the background" / "the window ate the bottom of my screen"
+
+The window layer (WX/WY + LCDC bit 5) is the GB's fixed-HUD mechanism: it has
+no scroll registers, always draws its own map from (0,0) pinned to the screen,
+on top of the BG. Three rules, all demonstrated in the shmup example
+(`examples/gb/templates/shmup.c`, "HARDWARE IDIOM: window-layer HUD"):
+
+- **WX is screen X plus 7.** `WX=7` is the left edge. WX 0-6 produces real
+  DMG pixel-pipeline glitches; WX ≥ 167 pushes the window off-screen.
+- **The window has no height register.** From the first line it covers (WY)
+  it owns EVERY line to the bottom of the frame, full width from WX. That's
+  why GB HUDs live at the BOTTOM of the screen (`WY = 128` → lines 128-143 =
+  HUD, lines 0-127 = scrolling playfield). A top HUD needs a mid-frame
+  STAT/LYC interrupt to turn LCDC bit 5 back off — a different, fragile
+  idiom; don't fall into it by accident by setting WY=0.
+- **Sprites are NOT clipped by the window** — they draw on top of it. Despawn
+  (or Y-clamp) everything before the HUD line, or your enemies fly across
+  the score bar.
+
+Use a separate map for the window (LCDC bit 6 → $9C00) so it doesn't fight
+the BG's $9800 map.
+
+## "Hi-score doesn't persist" / save_ram is empty or all $FF
+
+Battery saves need BOTH halves:
+
+1. **The header must declare a battery cart.** The bundled `gb_crt0.s` emits
+   `$0147 = $03` (MBC1+RAM+BATTERY) and `$0149 = $02` (8 KB) as real bytes,
+   and the build's post-link header fix passes them through. The emulator
+   sizes its SAVE_RAM region from those two bytes — type $00 (ROM-only)
+   means no save_ram region at all, and writes to $A000 go nowhere.
+2. **Cart RAM is gated.** It boots DISABLED; writes are silently discarded
+   until you write `$0A` to $0000-$1FFF (any address there — it's a mapper
+   register, not memory). Write `$00` to the same range after saving
+   (battery hygiene: an enabled RAM bank can corrupt at power-off on real
+   hardware).
+
+Working pattern with magic + checksum (a fresh cart is $FF garbage — never
+trust raw bytes): shmup example, "HARDWARE IDIOM: battery SRAM". Verify
+headlessly: play to a score, force game over, `memory({op:'read',
+region:"save_ram"})` shows the record, and the hi-score still shows on the
+title after a hard reset (power cycle).
+
+## "Boot takes seconds" / a screen repaint visibly stalls the game
+
+The sm83 has no divide instruction. SDCC's software `%` / `/` costs ~700
+cycles per call — one `(r*7+c*5) % 11` in a 32×32 map fill is 2048 calls
+≈ 1.5 MILLION cycles ≈ a 1.5-second frozen boot (measured, not theoretical;
+the shmup example shipped exactly that for an hour). In any per-cell or
+per-frame loop, replace modulo patterns with running counters +
+subtract-on-overflow (see `paint_starfield` in the shmup example) and
+decimal score display with power-of-ten subtraction (`u16_to_tiles` there).
+A single `%` per event — e.g. per enemy spawn — is fine.
+
 ## Debug recipes
 
 A few high-leverage tools you might not know exist:
