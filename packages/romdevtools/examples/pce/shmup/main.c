@@ -568,7 +568,7 @@ static void boss_enter(void) {
 static void boss_die(void) {
     boss_active = 0;
     boss_flash = 0;
-    if (score < 60000) score += 500;
+    if (score < 60000u) score += 500;
     ++level;
     kills = 0;
     hud_dirty = 1;
@@ -701,7 +701,7 @@ static void update_play(void) {
                      enemies[j].x, enemies[j].y, 14, 14)) {
                 bullets[i].alive = 0;
                 enemies[j].alive = 0;
-                if (score < 60000) score += 10;
+                if (score < 60000u) score += 10;
                 ++kills;
                 hud_dirty = 1;
                 psg_tone(3, 0x040, 31);
