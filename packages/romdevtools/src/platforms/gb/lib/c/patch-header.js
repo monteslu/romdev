@@ -151,7 +151,17 @@ if (isCli) {
   const rom = new Uint8Array(readFileSync(inPath));
   // Auto-detect CGB based on file extension.
   const cgb = /\.gbc$/i.test(inPath) || /\.gbc$/i.test(outPath);
-  patchGbHeader(rom, { cgb });
+  // Battery-cart passthrough: the bundled gb_crt0.s emits the cart-type and
+  // RAM-size bytes EXPLICITLY ($0147=$03 MBC1+RAM+BATTERY, $0149=$02 8KB) so
+  // battery hi-score saves work. Preserve a known battery-MBC declaration
+  // instead of stomping it back to ROM-only; unknown/garbage bytes (a crt0
+  // that left the header window as a .ds gap) still get the safe defaults.
+  const BATTERY_TYPES = new Set([0x03, 0x06, 0x0F, 0x10, 0x13, 0x1B, 0x1E]);
+  const declType = rom.length > 0x149 ? rom[0x147] : 0x00;
+  const declRam = rom.length > 0x149 ? rom[0x149] : 0x00;
+  const cartType = BATTERY_TYPES.has(declType) ? declType : 0x00;
+  const ramSize = cartType !== 0x00 && declRam >= 0x01 && declRam <= 0x05 ? declRam : 0x00;
+  patchGbHeader(rom, { cgb, cartType, ramSize });
   writeFileSync(outPath, rom);
-  console.log(`patched ${inPath}${outPath !== inPath ? ` → ${outPath}` : ""} (${rom.length} bytes${cgb ? ", CGB" : ""})`);
+  console.log(`patched ${inPath}${outPath !== inPath ? ` → ${outPath}` : ""} (${rom.length} bytes${cgb ? ", CGB" : ""}${cartType ? `, cart $${cartType.toString(16)}+RAM` : ""})`);
 }
