@@ -38,7 +38,7 @@
 
 /* The title screen renders this — examples({op:'fork'}) stamps your game's
  * name here automatically. Keep it ≤16 chars of A-Z 0-9 space dash. */
-#define GAME_TITLE "VOID PATROL"
+#define GAME_TITLE "ION SQUALL"
 
 #define POKE(addr, val) (*(volatile uint8_t*)(addr) = (val))
 #define PEEK(addr)      (*(volatile uint8_t*)(addr))
@@ -384,6 +384,17 @@ static void draw_text(uint8_t row, uint8_t col, const char *s) {
     ++off;
   }
 }
+/* Blank the whole 40-col row, then draw `s` on it — a clean text BAND.
+ * Menu/message text sits over the starfield; drawing it raw leaves the
+ * surrounding star chars ('.' and reverse-space nebula) crowding the words.
+ * A blanked band reads cleanly on screen AND decodes cleanly from screen RAM. */
+static void draw_text_band(uint8_t row, uint8_t col, const char *s) {
+  uint8_t c;
+  volatile uint8_t *p = SCREEN + (uint16_t)row * 40;
+  for (c = 0; c < 40; c++) p[c] = 0x20;
+  draw_text(row, col, s);
+}
+
 static void draw_u16(uint8_t row, uint8_t col, uint16_t v) {
   uint8_t i, d[5];
   uint16_t off = (uint16_t)row * 40 + col;
@@ -416,20 +427,31 @@ static uint8_t field_cell(void) {
   return 0x20;                  /* empty space */
 }
 
-static void paint_field(void) {
-  uint8_t r, c;
-  uint16_t off = FIELD_TOP * 40;
+/* Refill ONE field row with fresh stars + its color-texture stripe. Used by
+ * state transitions to erase a text band (see paint_field's budget note). */
+static void repaint_field_row(uint8_t r) {
   static const uint8_t tex[8] = {
     COLOR_BLUE, COLOR_DARK_GRAY, COLOR_BLUE, COLOR_LIGHT_BLUE,
     COLOR_BLUE, COLOR_DARK_GRAY, COLOR_WHITE, COLOR_MED_GRAY,
   };
-  for (r = FIELD_TOP; r < 25; r++) {
-    for (c = 0; c < 40; c++) {
-      SCREEN[off] = field_cell();
-      COLORS[off] = tex[(uint8_t)(c + r * 3) & 7];
-      ++off;
-    }
+  uint8_t c, t = (uint8_t)(r * 3);
+  volatile uint8_t *srow = SCREEN + (uint16_t)r * 40;
+  volatile uint8_t *crow = COLORS + (uint16_t)r * 40;
+  for (c = 0; c < 40; c++) {
+    srow[c] = field_cell();
+    crow[c] = tex[(uint8_t)(c + t) & 7];
   }
+}
+
+/* BUDGET NOTE — this full repaint runs ONCE, at boot. 880 cells of cc65-
+ * generated C (function calls per cell) costs ~50 frames: a WHOLE SECOND of
+ * frozen music and ignored input if you call it on every state change (this
+ * game's original sin — the title screen ate joystick presses for ~1s).
+ * Transitions instead repaint only the rows they wrote text on
+ * (repaint_field_row), which keeps every transition inside a few frames. */
+static void paint_field(void) {
+  uint8_t r;
+  for (r = FIELD_TOP; r < 25; r++) repaint_field_row(r);
 }
 
 /* Coarse scroll: shift the playfield one char left, spawn a fresh column at
@@ -510,19 +532,32 @@ static void draw_bar_stats(void) {
   COLORS[24] = COLOR_WHITE;
 }
 
-/* ── GAME LOGIC (clay) — title / game start / game over ── */
+/* ── GAME LOGIC (clay) — title / game start / game over ──────────────────────
+ * Transition rule (see paint_field's budget note): never repaint the whole
+ * field here. The title draws its text on blanked BANDS over whatever
+ * starfield is already there; start_game erases exactly those bands back to
+ * stars. Every transition stays a few frames — music never hiccups, and a
+ * fire press is acted on (visibly) by the next frame or two. */
 static void paint_title(void) {
-  paint_field();
   draw_bar_labels();
   draw_bar_stats();
-  draw_text(7, (40 - (sizeof(GAME_TITLE) - 1)) / 2, GAME_TITLE);
-  draw_text(11, 12, "PORT 2 FIRE - 1P");
-  draw_text(13, 9, "PORT 1 FIRE - 2P CO-OP");
-  draw_text(17, 16, "HI");
+  draw_text_band(7, (40 - (sizeof(GAME_TITLE) - 1)) / 2, GAME_TITLE);
+  draw_text_band(11, 12, "PORT 2 FIRE - 1P");
+  draw_text_band(13, 9, "PORT 1 FIRE - 2P CO-OP");
+  draw_text_band(17, 16, "HI");
   draw_u16(17, 19, hiscore);
   field_d016 = D016_BAR;        /* title field holds still (text lives in it) */
   POKE(VIC_SPR_ENA, 0);
   state = ST_TITLE;
+}
+
+/* The four rows paint_title wrote text bands on (game_over's two are a
+ * subset) — start_game turns them back into starfield. */
+static void erase_text_bands(void) {
+  repaint_field_row(7);
+  repaint_field_row(11);
+  repaint_field_row(13);
+  repaint_field_row(17);
 }
 
 static void start_game(uint8_t players) {
@@ -539,21 +574,26 @@ static void start_game(uint8_t players) {
   score = 0;
   spawn_timer = 0;
   cam = 0;
-  paint_field();
+  erase_text_bands();           /* NOT paint_field — see its budget note */
   draw_bar_labels();
   draw_bar_stats();
   state = ST_PLAY;
 }
 
 static void game_over(void) {
+  /* Sprites off FIRST — this runs mid-frame (right after the bottom IRQ),
+   * and the beam redraws the screen while we're still writing the text
+   * bands below. Killing $D015 before any visible change means the one
+   * transition frame never shows sprites parked on top of the message. */
+  POKE(VIC_SPR_ENA, 0);
+  field_d016 = D016_BAR;        /* freeze the field under the message */
   if (score > hiscore) {
     hiscore = score;
     hiscore_save(hiscore);      /* the persistence seam — see its block doc */
     draw_bar_stats();
   }
-  draw_text(11, 15, "GAME OVER");
-  draw_text(13, 13, "FIRE - TITLE");
-  field_d016 = D016_BAR;        /* freeze the field under the message */
+  draw_text_band(11, 15, "GAME OVER");
+  draw_text_band(13, 13, "FIRE - TITLE");
   sfx_noise(24);
   state = ST_OVER;
 }
@@ -640,6 +680,7 @@ void main(void) {
   hiscore = hiscore_load();               /* 0 until the core save round lands */
 
   field_d016 = D016_BAR;
+  paint_field();                          /* the ONE full-field paint (boot) */
   install_raster_irq();                   /* the split + heartbeat go live */
   paint_title();
 
