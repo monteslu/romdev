@@ -32,7 +32,7 @@
 
 /* The title screen renders this — examples({op:'fork'}) stamps your game's
  * name here automatically. Keep it ≤16 chars of A-Z 0-9 space dash. */
-#define GAME_TITLE "VOID PATROL"
+#define GAME_TITLE "ASTRO PICKET"
 
 extern void    sms_vdp_init(void);
 extern void    sms_vdp_write_reg(uint8_t reg, uint8_t value);

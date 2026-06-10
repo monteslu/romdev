@@ -523,7 +523,17 @@ TEMPLATES.sms = {
     runtime: SMS_RUNTIME,
     lang: SMS_LANG,
     ext: ".sms",
-    describe: "Vertical-shmup scaffold for SMS. Player ship + 4 bullets + 4 enemies, wave spawner, AABB collisions, score (WRAM). Pre-allocated SAT slots 0/1-4/5-8.",
+    describe: "ASTRO PICKET — complete SMS vertical shooter: title shell with 1P/2P select and hi-score, simultaneous 2-ship co-op (P2 on port 1), PSG music + SFX, and the SMS signature LINE-INTERRUPT split (VDP register-10 line counter: fixed HUD strip over a scrolling starfield — the programmable cousin of the NES sprite-0 trick). Hi-score persists to Sega-mapper cart RAM on 64KB+ builds (verified); 32KB builds are honestly in-session.",
+    players: "1-2 (simultaneous co-op)",
+    sram: "Sega-mapper cart RAM at $8000 ($FFFC bit 3) on 64KB+ builds; in-session at 32KB (gpgx maps mapper RAM only above 48KB — documented in-file)",
+    mechanics: ["projectile pools", "wave spawner", "AABB collision", "2P simultaneous co-op", "title/play/game-over state machine"],
+    techniques: [
+      "VDP line-interrupt split (fixed HUD over scrolling field)",
+      "Sega-mapper cart RAM persistence ($FFFC control)",
+      "PSG tune-table music + noise SFX",
+      "SAT slot pre-allocation (no flicker)",
+      "IM1 interrupt handshake (VDP status ack discipline)",
+    ],
   },
   platformer: {
     main: "templates/platformer.c",
