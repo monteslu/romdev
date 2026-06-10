@@ -6,6 +6,15 @@ the `romdev-mcp` bin is kept as an alias.)
 
 ## 0.28.0
 
+The reverse-engineering release: the three RE primitives — break-instant
+`registersAtHit`, interference-free `pure` CPU calls, and the
+`watch({on:'copy'})` graphics source-trace — now work on ALL 14 platforms
+(every emulator core rebuilt; upstream pins unchanged, everything carried by
+the patches in `scripts/patches/`). Plus the full scaffold overhaul from real
+RetroDECK playtesting, banked-cart parity for disasm/rebuild, the value-search
+upgrades, and the playtest co-drive detection. Details per section below.
+
+
 ### Added — pure calls + the generic copy trace on ALL 14 platforms (primitives #2 and #3)
 The other two primitives from the all-platforms RE proposal, completing the
 set (registersAtHit was #1):

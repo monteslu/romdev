@@ -1,6 +1,6 @@
 {
   "name": "romdev-platform-snes",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "SNES binaries for romdev: snes9x emulator core + asar / tcc816 / wla-dx (wla-65816 + wlalink) toolchains (WASM). These ship together because nothing else uses them.",
   "type": "module",
   "main": "index.js",

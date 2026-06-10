@@ -1,6 +1,6 @@
 {
   "name": "romdev-platform-atari2600",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Atari 2600 binaries for romdev: stella2014 emulator core + dasm assembler (WASM). Atari 2600 uses both only here, so they ship together.",
   "type": "module",
   "main": "index.js",
