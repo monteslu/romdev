@@ -68,7 +68,16 @@ const TEMPLATES = {
       linkerConfig: { presetSrc: "presets/nes/chr-ram-runtime.cfg", dst: "chr-ram-runtime.cfg" },
       lang: "C (cc65)",
       ext: ".nes",
-      describe: "Vertical-scrolling shooter. Player + 4 bullets + 4 enemies, AABB collision, score counter, wave spawner.",
+      describe: "STAR PATROL — complete vertical shooter: title shell (1P/2P co-op select), shared-lives co-op, bullet/enemy pools, wave spawner, score + battery hi-score, music + SFX, sprite-0-hit split (fixed HUD over a drifting starfield).",
+      players: "1-2 (simultaneous co-op)",
+      sram: "battery hi-score at $6000 (hiscore_load/save; iNES battery bit in the crt0)",
+      mechanics: ["projectile pools", "wave spawner", "AABB collision", "shared-lives co-op", "title/play/game-over state machine"],
+      techniques: [
+        "sprite-0-hit split scroll (fixed HUD over scrolling field)",
+        "vblank-budget VRAM queue (asm drain in the crt0 NMI)",
+        "battery SRAM hi-score (magic + checksum)",
+        "CHR-RAM tile upload + 1bpp font",
+      ],
     },
     platformer: {
       main: "templates/platformer.c",
@@ -1769,7 +1778,7 @@ Compiles **C89**, not C99/C11. Stick to:
     buildBlock = "```js\nbuild({ output: \"run\", platform: \"" + platform + "\", sourcePath: \"" + mainFilename + "\", frames: 240 })\n```";
   }
 
-  let filesSection = `## Files\n\n- \`${mainFilename}\` — your game's entry point.\n`;
+  let filesSection = `- \`${mainFilename}\` — the game. Title screen, game loop, all the GAME LOGIC clay.\n`;
   if (tmpl?.runtime) {
     for (const { dst } of tmpl.runtime) {
       if (dst === "patch-header.js") {
@@ -1780,9 +1789,9 @@ Compiles **C89**, not C99/C11. Stick to:
           `(\`node patch-header.js game.gb\`) — a zero-install stand-in for RGBDS's rgbfix when you ` +
           `rebuild OUTSIDE romdev with stock SDCC. romdev's own builds fix the header automatically.\n`;
       } else if (dst.endsWith("_crt0.s")) {
-        filesSection += `- \`${dst}\` — startup assembly (reset/interrupt vectors, RAM init; routed as the crt0 by the project build). **You own this.**\n`;
+        filesSection += `- \`${dst}\` — startup assembly (reset/interrupt vectors, RAM init; routed as the crt0 by the project build). **Load-bearing**: replacing a bundled crt0 once black-screened every project on a platform for a month. Edit with the platform TROUBLESHOOTING doc open.\n`;
       } else {
-        filesSection += `- \`${dst}\` — runtime helper. **You own this** — edit or replace at will.\n`;
+        filesSection += `- \`${dst}\` — runtime library (rendering/input/sound helpers the game calls). Yours to extend; the HARDWARE IDIOM markers inside say which parts are load-bearing.\n`;
       }
     }
   }
@@ -1799,7 +1808,39 @@ Compiles **C89**, not C99/C11. Stick to:
   // source" variant, shown second.
   const projectBuildBlock =
     "```js\nbuild({\n  output: \"project\",\n  platform: \"" + platform + "\",\n  path: \"" + projPath + "\",\n  outputPath: \"" + name + romExt + "\",\n})\n```";
-  const readme = `# ${title ?? name}\n\nA ${lang} project for ${platform}, scaffolded by romdev.\n\n${tmpl?.describe ? tmpl.describe + "\n\n" : ""}${filesSection}${c89Note}## Build + run with romdev\n\nThe whole project directory builds in ONE call — romdev infers the toolchain, crt0, and linker from the directory, so you don't pass a file manifest:\n\n${projectBuildBlock}\n\nAdd \`output:"run"\` instead of \`"project"\` to also load + run + screenshot in the same round trip. Re-run the exact same call after every edit.\n\n<details>\n<summary>Alternative: build from a hand-specified source manifest (when compiling edited loose source, not a project dir)</summary>\n\n${buildBlock}\n</details>\n\n## Iterating\n\n- Edit \`${mainFilename}\` (or any of the runtime / crt0 / cfg files — they're yours).\n- Re-run the \`build({output:"project"|"run", path})\` call above to see your changes — it builds + (for run) loads + runs + screenshots in one round trip.\n- Inspect at byte level: \`memory({op:"read"})\`, \`sprites({op:"inspect"})\`, \`palette({source:"live"})\`, \`background({view:"rendered"})\`.\n- Open a playtest window for human eyes: \`playtest({op:"open"})\` — returns immediately, the window follows your rebuilds, and the emulator stays live for every other tool.\n`;
+  const readme = `# ${title ?? name}
+
+**A complete, working ${platform} game** (${lang}) — forked from the romdev \`${platform}/${template ?? "default"}\` example. It builds, runs, and renders RIGHT NOW, before you change a line.
+
+${tmpl?.describe ? tmpl.describe + "\n\n" : ""}## How to make it yours
+
+Modify ONE thing at a time and re-run the build after each change — the working game is your regression oracle (it rendered before your edit; if it stops, your last edit broke it):
+
+${projectBuildBlock}
+
+Use \`output:"run"\` to build + load + run + screenshot in one round trip. Don't start over in a blank file — retro bring-up is a chain of fragile hardware init with no partial credit; evolve this game instead, even into a very different game.
+
+## Marker legend (read before restructuring anything)
+
+- \`/* ── HARDWARE IDIOM (load-bearing) ── */\` — this code dodges a documented hardware footgun (the comment says which). **Reshape your gameplay around these regions**; if you must change one, read the cited TROUBLESHOOTING entry first. Each block's header lists what it needs (interrupt hooks, memory regions, register modes) — that's also what a transplant into another game must satisfy.
+- \`/* ── GAME LOGIC (clay) ── */\` — enemy patterns, scoring, art, tuning. **Reshape freely** — this is where your game happens.
+
+Need a technique this game doesn't have (another example does)? \`examples({op:"show", example:"<platform>/<name>", technique:"..."})\` extracts that example's marked block with its dependency header — graft it here instead of rewriting it.
+
+## Files
+
+${filesSection}${c89Note}<details>
+<summary>Alternative: build from a hand-specified source manifest (when compiling edited loose source, not a project dir)</summary>
+
+${buildBlock}
+</details>
+
+## Inspecting + playtesting
+
+- Byte level: \`memory({op:"read"})\`, \`sprites({op:"inspect"})\`, \`palette({source:"live"})\`, \`background({view:"rendered"})\`.
+- No-vision render health: \`frame({op:"verify"})\` — "is the game actually rendering?" in one call.
+- Human eyes: \`playtest({op:"open"})\` — a live window that follows your rebuilds; the emulator stays available to every other tool.
+`;
   await fs.writeFile(path.join(projPath, "README.md"), readme, "utf-8");
   writtenFiles.push("README.md");
 
@@ -1950,62 +1991,227 @@ async function createGameCore({ platform, genre, name, path: projPath, title, ov
       return { ...result, genre, template: templateId };
 }
 
+// ── The examples tool — the fork-don't-create surface (0.29.0) ──────────────
+// "Scaffold" died as a concept: there are no empty frames, only complete
+// working example games. Making a new game = forking the nearest example and
+// modifying it. See internal plan: the weak-model case for this is that retro
+// bring-up is a long conjunction of fragile steps with zero partial credit —
+// modifying a working game converts "get 15 things right" into "change 2
+// while 13 keep working", with a bisectable regression oracle.
+
+const CANONICAL_GENRES = ["shmup", "platformer", "puzzle", "sports", "racing"];
+const HANDHELDS = new Set(["gb", "gbc", "gba", "gg", "lynx"]);
+
+// Mechanics inventory per genre — what an agent learns by forking each.
+// (Hardware-technique anchors get added per-game as the Complete Game
+// Contract lands; list derives the rest from the manifest.)
+const GENRE_MECHANICS = {
+  shmup:      ["scrolling field", "projectile pools", "enemy waves + spawning", "collision (point/rect)", "score + lives"],
+  platformer: ["side-scrolling camera", "gravity + jump arc", "tile collision (walk/land/fall)", "world map"],
+  puzzle:     ["grid logic", "piece falling + lock", "match detection (4-dir)", "gravity cascades + chain scoring"],
+  sports:     ["versus court", "ball physics + paddle bounce", "2P input (second pad, AI fallback)", "serve/score states"],
+  racing:     ["forward-scrolling road", "lane steering", "obstacle spawning", "speed/crash states"],
+};
+
+// Fork guidance for genres we don't ship — points at the nearest core loop.
+const UNCOVERED_GENRE_GUIDANCE =
+  "No example matches your genre exactly? Fork the NEAREST CORE LOOP and reshape it: " +
+  "RPG/adventure → puzzle (grid + state machines) or platformer (world + camera); " +
+  "tower defense → shmup (spawning + projectiles); " +
+  "card/board game → puzzle (grid + turn logic); " +
+  "beat-em-up → platformer (movement + collision); " +
+  "pinball/breakout → sports (ball physics). " +
+  "Fork for the core loop; read other examples (op:'show') for techniques to graft.";
+
+/** "<platform>/<template>" → {platform, template}; also accepts separate args. */
+function resolveExampleId({ example, platform, template }) {
+  if (example) {
+    const m = /^([a-z0-9]+)\/(.+)$/.exec(example);
+    if (!m) throw new Error(`examples: bad example id '${example}' — use "<platform>/<name>" (e.g. "nes/shmup"). examples({op:'list'}) shows them all.`);
+    return { platform: m[1], template: m[2] };
+  }
+  if (platform && template) return { platform, template };
+  throw new Error("examples: pass `example` (\"nes/shmup\") or `platform` + `template`.");
+}
+
+/** One list entry from a TEMPLATES manifest record (defaults derived). */
+function exampleEntry(platform, templateId, tmpl) {
+  const isGame = CANONICAL_GENRES.includes(templateId);
+  const players = tmpl.players ?? (templateId === "sports" && !HANDHELDS.has(platform) ? 2 : 1);
+  return {
+    example: `${platform}/${templateId}`,
+    kind: tmpl.kind ?? (isGame ? "game" : "reference"),
+    ...(isGame ? { genre: templateId } : {}),
+    description: tmpl.describe ?? "",
+    mechanics: tmpl.mechanics ?? (isGame ? GENRE_MECHANICS[templateId] : []),
+    // Hardware techniques demonstrated, each with a file + marker anchor for
+    // op:'show' extraction — populated per-game as the contract lands.
+    techniques: tmpl.techniques ?? [],
+    players,
+    sram: tmpl.sram ?? false,
+  };
+}
+
+/** Extract HARDWARE IDIOM / GAME LOGIC marked blocks from source text. */
+function extractMarkedBlocks(text) {
+  const blocks = [];
+  const re = /\/\* ── (HARDWARE IDIOM|GAME LOGIC)([^\n]*?)── \*\/([\s\S]*?)(?=\/\* ── (?:HARDWARE IDIOM|GAME LOGIC)|$)/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    blocks.push({ kind: m[1], header: m[2].trim(), body: m[3].trimEnd() });
+  }
+  return blocks;
+}
+
 export function registerProjectTools(server, z) {
   server.tool(
-    "scaffold",
-    "Scaffold a new homebrew project, a genre-shaped game, or drop starter snippets. `op`: 'project' | 'game' | " +
+    "examples",
+    "The example-game library — complete, working, teaching-grade games per platform, and the ONLY way to start a " +
+    "new project: **never start from a blank file — fork the nearest example and modify it into your game, even a " +
+    "very different game.** (Retro bring-up is a long chain of fragile hardware init with zero partial credit; a " +
+    "working game is a regression oracle — change 2 things while 13 keep working.) `op`: 'list' | 'fork' | 'show' | " +
     "'snippets' | 'copySnippets'.\n" +
-    "'project': a new project dir — starter main source + every runtime file the template needs (headers, crt0, " +
-    "linker .cfg) + README + .gitignore, SELF-CONTAINED so it rebuilds with stock cc65/sdcc elsewhere. `template` " +
-    "defaults to the platform's smallest visible-and-runnable program (most have hello_sprite/tile_engine too). " +
-    "`withSnippets:true` also drops every vetted snippet alongside main.\n" +
-    "'game': a genre-shaped game — picks the right template + runtime + crt0 + linker for the `genre` (shmup / " +
-    "platformer / puzzle / sports / racing). Scaffolds a complete working ROM you build+run+screenshot in one " +
-    "round trip, then fill in gameplay on the known-good baseline.\n" +
-    "'snippets': browse/fetch a platform's vetted starter snippets — `mode:'list'` (names only), 'get' (one, needs " +
-    "`snippetName`), 'getAll' (joined; needs `outputPath` or `inline:true`). 'copySnippets': write every snippet straight to `destinationDir` " +
-    "(bytes never pass through context); `include` whitelists a subset.",
+    "'list': the mechanics map — every example with its kind (game vs minimal reference), mechanics inventory, " +
+    "hardware techniques demonstrated (with file+marker anchors for op:'show'), players, SRAM. Use it to pick the " +
+    "example whose CORE LOOP is nearest your game; fork that one, then op:'show' OTHER examples for techniques to graft.\n" +
+    "'fork': copy an example into a NEW project dir as YOUR game — sources + every runtime file + crt0 + linker cfg + " +
+    "README, self-contained, renamed throughout (project name, game title where the code carries one). Builds and runs " +
+    "before you change a line. Then: modify one thing at a time, re-running build({output:'run'}) after each.\n" +
+    "'show': read a donor example WITHOUT forking it — a whole file, or one marked technique block (extracted by its " +
+    "HARDWARE IDIOM marker, including the dependency header that says what the block needs to survive a transplant).\n" +
+    "'snippets'/'copySnippets': the legacy vetted-snippet library (browse/fetch/copy). Prefer forking + grafting from " +
+    "real games; snippets remain for one-off references.",
     {
-      op: z.enum(["project", "game", "snippets", "copySnippets"]).describe("new project; genre game; browse/fetch snippets; or copy snippets to a dir."),
-      platform: z.string().describe("Platform id (nes, gb, gbc, snes, genesis, sms, gg, c64, gba, lynx, atari7800, ...)."),
-      name: z.string().optional().describe("op=project/game: project name (used for output binary)."),
-      path: z.string().optional().describe("op=project/game: absolute path where the project dir is created."),
-      title: z.string().optional().describe("op=project/game: human-readable title in the README."),
-      overwrite: z.boolean().default(false).describe("op=project/game: allow writing into an existing non-empty dir. op=copySnippets: overwrite existing files (else skip them)."),
-      // project
-      template: z.string().optional().describe("op=project: template id ('default' | 'hello_sprite' | 'tile_engine' on NES/GB/GBC; 'default' elsewhere)."),
-      withSnippets: z.boolean().default(false).describe("op=project: also drop every vetted snippet alongside main (= scaffold copySnippets after)."),
-      verbose: z.boolean().default(false).describe("op=project/game: echo the FULL flat file manifest (incl. vendor/** toolchain copies) as `allFiles`. Default false — the response lists only project-OWNED files you edit (`files`) plus a `vendorFileCount`, since the vendored toolchain copies are on disk and never need echoing (they're 35 of 44 entries on NES, ~270 on SGDK Genesis). Set true only if you specifically need every path in the response."),
-      // game
-      genre: z.string().optional().describe("op=game: 'shmup' | 'platformer' | 'puzzle' | 'sports' | 'racing'."),
-      // snippets
-      mode: z.enum(["list", "get", "getAll"]).default("list").describe("op=snippets: 'list' (names), 'get' (one, needs name), 'getAll' (joined)."),
-      snippetName: z.string().optional().describe("op=snippets mode:'get': snippet name ('read_pad') or filename ('read_pad.s')."),
+      op: z.enum(["list", "fork", "show", "snippets", "copySnippets"]).describe("list the library; fork an example into your game; show donor source/technique without forking; legacy snippets."),
+      platform: z.string().optional().describe("op=list: filter to one platform. op=fork/show/snippets/copySnippets: platform id (or encode it in `example`)."),
+      example: z.string().optional().describe("op=fork/show: example id as \"<platform>/<name>\" (e.g. \"nes/shmup\", \"gb/puzzle\") — from op:'list'."),
+      template: z.string().optional().describe("op=fork/show: example name when passing `platform` separately (alias of the id's second half)."),
+      name: z.string().optional().describe("op=fork: YOUR game's name (project dir naming, output binary, and the in-game title where the example carries one). Required."),
+      path: z.string().optional().describe("op=fork: absolute path where the project dir is created. Required."),
+      title: z.string().optional().describe("op=fork: human-readable title for the README (defaults to `name`)."),
+      overwrite: z.boolean().default(false).describe("op=fork: allow writing into an existing non-empty dir. op=copySnippets: overwrite existing files."),
+      verbose: z.boolean().default(false).describe("op=fork: echo the FULL flat file manifest incl. vendor/** (default: only the files you own + a vendorFileCount)."),
+      file: z.string().optional().describe("op=show: which file of the example to read (default: the main source)."),
+      technique: z.string().optional().describe("op=show: extract ONE marked technique block whose HARDWARE IDIOM header matches this string (case-insensitive substring), instead of the whole file."),
+      // legacy snippets passthrough
+      mode: z.enum(["list", "get", "getAll"]).default("list").describe("op=snippets: 'list' (names), 'get' (one, needs snippetName), 'getAll' (joined)."),
+      snippetName: z.string().optional().describe("op=snippets mode:'get': snippet name."),
       language: z.string().optional().describe("op=snippets/copySnippets: filter 'c' | 'asm'."),
       outputPath: z.string().optional().describe("op=snippets mode:'getAll': write the joined snippets here (or inline:true)."),
-      inline: z.boolean().default(false).describe("op=snippets mode:'getAll': return `combined` in the response instead of writing."),
-      // copySnippets
-      destinationDir: z.string().optional().describe("op=copySnippets: directory to write each snippet into (created if needed)."),
-      include: z.array(z.string()).optional().describe("op=copySnippets: whitelist of bare snippet names to copy."),
+      inline: z.boolean().default(false).describe("op=snippets mode:'getAll': return `combined` inline."),
+      destinationDir: z.string().optional().describe("op=copySnippets: directory to write snippets into."),
+      include: z.array(z.string()).optional().describe("op=copySnippets: whitelist of snippet names."),
     },
     safeTool(async (args) => {
       switch (args.op) {
-        case "project": {
-          if (!args.name || !args.path) throw new Error("scaffold({op:'project'}): `name` and `path` are required.");
-          return jsonContent(await createProjectImpl(args));
+        case "list": {
+          const platforms = args.platform ? [args.platform] : Object.keys(TEMPLATES);
+          const examples = [];
+          for (const p of platforms) {
+            const t = TEMPLATES[p];
+            if (!t) continue;
+            for (const id of Object.keys(t)) examples.push(exampleEntry(p, id, t[id]));
+          }
+          // Games first (the forkable starting points), references after.
+          examples.sort((a, b) => (a.kind === b.kind ? a.example.localeCompare(b.example) : a.kind === "game" ? -1 : 1));
+          return jsonContent({
+            count: examples.length,
+            doctrine: "Fork the example whose CORE LOOP matches your game; op:'show' the others for techniques to graft. " +
+              "Ranked: nearest fork alone > fork + one graft > fork + many grafts — prefer the leftmost that gets your game made.",
+            uncoveredGenres: UNCOVERED_GENRE_GUIDANCE,
+            examples,
+          });
         }
-        case "game": {
-          if (!args.genre || !args.name || !args.path) throw new Error("scaffold({op:'game'}): `genre`, `name`, `path` are required.");
-          return jsonContent(await createGameCore(args));
+        case "fork": {
+          const { platform, template } = resolveExampleId(args);
+          if (!args.name || !args.path) throw new Error("examples({op:'fork'}): `name` and `path` are required (your game's name + where to create it).");
+          if (!TEMPLATES[platform]?.[template]) {
+            const have = TEMPLATES[platform] ? Object.keys(TEMPLATES[platform]).join(", ") : "(no examples for this platform)";
+            throw new Error(`examples({op:'fork'}): no example '${platform}/${template}'. This platform has: ${have}.`);
+          }
+          const result = await createProjectImpl({
+            platform, template, name: args.name, path: args.path, title: args.title,
+            overwrite: args.overwrite, verbose: args.verbose,
+          });
+          // Rename the game THROUGH: where the example carries a GAME_TITLE
+          // define, stamp the new name so the title screen says YOUR game
+          // (identity transfer is the cheap defense against base-game-concept
+          // leakage — an agent working on "CAVERN RUN" treats leftover shmup
+          // scoring as a bug in ITS game).
+          let titleStamped = false;
+          try {
+            const fs = await import("node:fs/promises");
+            const path = await import("node:path");
+            const stamp = String(args.name).toUpperCase().replace(/[^A-Z0-9 \-]/g, "").slice(0, 16) || "MY GAME";
+            for (const f of result.files ?? []) {
+              if (!/\.(c|h|s|asm)$/i.test(f)) continue;
+              const fp = path.join(result.path, f);
+              let src;
+              try { src = await fs.readFile(fp, "utf-8"); } catch { continue; }
+              const re = /(#define\s+GAME_TITLE\s+")[^"]*(")/;
+              if (re.test(src)) {
+                await fs.writeFile(fp, src.replace(re, `$1${stamp}$2`), "utf-8");
+                titleStamped = true;
+              }
+            }
+          } catch { /* best-effort; the fork itself succeeded */ }
+          return jsonContent({
+            ...result,
+            forkedFrom: `${platform}/${template}`,
+            template,
+            ...(CANONICAL_GENRES.includes(template) ? { genre: template } : {}),
+            ...(titleStamped ? { gameTitle: true } : {}),
+            note: `Forked ${platform}/${template} → '${args.name}'. It builds and runs RIGHT NOW — verify with the build({output:"run"}) call in its README before changing anything, then modify ONE thing at a time, re-running after each. The README's marker legend says which regions are hardware idiom (reshape gameplay around them) vs game logic (clay).`,
+          });
+        }
+        case "show": {
+          const { platform, template } = resolveExampleId(args);
+          const tmpl = TEMPLATES[platform]?.[template];
+          if (!tmpl) {
+            const have = TEMPLATES[platform] ? Object.keys(TEMPLATES[platform]).join(", ") : "(none)";
+            throw new Error(`examples({op:'show'}): no example '${platform}/${template}'. This platform has: ${have}.`);
+          }
+          const fs = await import("node:fs/promises");
+          const path = await import("node:path");
+          const { fileURLToPath } = await import("node:url");
+          const baseDir = path.dirname(fileURLToPath(import.meta.url));
+          const exDir = path.resolve(baseDir, "..", "..", "..", "examples");
+          // Default file = the template's `main` source (relative to
+          // examples/<platform>/). An explicit `file` resolves the same way.
+          const rel = args.file ?? tmpl.main;
+          if (!rel) throw new Error(`examples({op:'show'}): example '${platform}/${template}' has no default source — pass the file arg.`);
+          const fp = path.resolve(exDir, platform, rel);
+          if (!fp.startsWith(exDir)) throw new Error("examples({op:'show'}): file path escapes the examples directory.");
+          let text;
+          try { text = await fs.readFile(fp, "utf-8"); }
+          catch { throw new Error(`examples({op:'show'}): can't read '${rel}' for ${platform}/${template}.`); }
+          if (args.technique) {
+            const blocks = extractMarkedBlocks(text).filter((b) => b.kind === "HARDWARE IDIOM");
+            const hit = blocks.find((b) => b.header.toLowerCase().includes(args.technique.toLowerCase()));
+            if (!hit) {
+              return jsonContent({
+                example: `${platform}/${template}`, technique: args.technique, found: false,
+                availableTechniques: blocks.map((b) => b.header),
+                note: blocks.length
+                  ? "No HARDWARE IDIOM block matches — availableTechniques lists this file's blocks."
+                  : "This example has no marked technique blocks yet (markers land as games reach the Complete Game Contract). op:'show' without `technique` returns the whole file.",
+              });
+            }
+            return jsonContent({
+              example: `${platform}/${template}`, technique: hit.header, found: true,
+              code: hit.body,
+              note: "The block header states its DEPENDENCIES (interrupt hooks, memory regions, register modes) — satisfy those in your game before transplanting the code.",
+            });
+          }
+          return jsonContent({ example: `${platform}/${template}`, file: rel, source: text });
         }
         case "snippets":
-          // map snippetName -> name for the core's expected shape.
           return await starterSnippetsCore({ ...args, name: args.snippetName });
         case "copySnippets": {
-          if (!args.destinationDir) throw new Error("scaffold({op:'copySnippets'}): `destinationDir` is required.");
+          if (!args.destinationDir) throw new Error("examples({op:'copySnippets'}): `destinationDir` is required.");
           return await copyStarterSnippetsCore({ ...args, overwrite: args.overwrite ?? true });
         }
-        default: throw new Error(`scaffold: unknown op '${args.op}'`);
+        default: throw new Error(`examples: unknown op '${args.op}'`);
       }
     }),
   );

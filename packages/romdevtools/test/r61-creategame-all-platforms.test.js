@@ -65,8 +65,8 @@ test("R61 createGame: every genre-capable platform scaffolds its genres", { time
       const tmp = mkdtempSync(path.join(os.tmpdir(), `r59-${platform}-${genre}-`));
       try {
         const r = toJSON(await client.callTool({
-          name: "scaffold",
-          arguments: { op: "game",  platform, genre, name: "demo", path: tmp, overwrite: true },
+          name: "examples",
+          arguments: { op: "fork", platform, template: genre, name: "demo", path: tmp, overwrite: true },
         }));
         assert.equal(r.platform, platform, `${platform}/${genre}: platform mismatch`);
         assert.equal(r.genre, genre, `${platform}/${genre}: genre mismatch`);
@@ -88,12 +88,12 @@ test("R61 createGame: a genre a platform lacks is rejected with that platform's 
   // tilemap), so it's the honest sentinel for the per-genre rejection path.
   const client = await startClient();
   const res = await client.callTool({
-    name: "scaffold",
-    arguments: { op: "game", platform: "atari2600", genre: "puzzle", name: "demo", path: os.tmpdir() },
+    name: "examples",
+    arguments: { op: "fork", platform: "atari2600", template: "puzzle", name: "demo", path: os.tmpdir() },
   });
   assert.equal(res.isError, true, "atari2600/puzzle: expected an error");
   const msg = res.content[0].text;
-  assert.match(msg, /genre 'puzzle' not supported for platform 'atari2600'/);
+  assert.match(msg, /no example 'atari2600\/puzzle'/);
   // The error lists what atari2600 DOES have — derived from TEMPLATES, so this
   // proves the available-genre list isn't a stale parallel table.
   for (const g of ["shmup", "platformer", "sports", "racing"]) {
@@ -106,11 +106,11 @@ test("R61 createGame: a genre a platform lacks is rejected with that platform's 
 test("R61 createGame: unknown genre rejected with the platform's available genres", async () => {
   const client = await startClient();
   const res = await client.callTool({
-    name: "scaffold",
-    arguments: { op: "game",  platform: "c64", genre: "fighting", name: "demo", path: os.tmpdir() },
+    name: "examples",
+    arguments: { op: "fork", platform: "c64", template: "fighting", name: "demo", path: os.tmpdir() },
   });
   assert.equal(res.isError, true);
   const msg = res.content[0].text;
-  assert.match(msg, /genre 'fighting' not supported for platform 'c64'/);
+  assert.match(msg, /no example 'c64\/fighting'/);
   assert.match(msg, /shmup, platformer, puzzle, sports, racing/);
 });

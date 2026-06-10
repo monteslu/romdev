@@ -28,7 +28,12 @@
         .import         _main, zerobss, copydata
         .import         __RAM_START__, __RAM_SIZE__
         .import         __SRAM_START__, __SRAM_SIZE__
-        .import         _vram_queue_flush
+        .import         _vram_q_hi, _vram_q_lo, _vram_q_val
+        .import         _vram_queue_head, _vram_queue_len, _vram_queue_lock
+
+; Must match nes_runtime.c (QUEUE_MAX 32 ring buffer).
+QUEUE_MASK   = 31
+FLUSH_BUDGET = 16
         .import         _scroll_x, _scroll_y, _ppuctrl_value, _nmi_counter
         .importzp       c_sp
 
@@ -39,7 +44,12 @@
         .byte   $4e, $45, $53, $1a   ; "NES" + EOF
         .byte   2                    ; PRG-ROM banks (16K each) → 32K
         .byte   0                    ; CHR-ROM banks (8K each)  → 0 = CHR-RAM
-        .byte   %00000001            ; flags6 — vertical mirroring
+        .byte   %00000011            ; flags6 — vertical mirroring + BATTERY.
+                                     ; The battery bit maps persistent 8KB
+                                     ; PRG-RAM at $6000 (the save_ram region)
+                                     ; — hiscore_load/save in nes_runtime use
+                                     ; it. Benign when unused; without it,
+                                     ; $6000-$7FFF is OPEN BUS on NROM.
         .byte   %00000000            ; flags7 — mapper hi nybble
         .byte   0, 0, 0, 0, 0, 0, 0, 0
 
@@ -129,9 +139,46 @@ nmi:
         lda     #$02            ; high byte of $0200
         sta     $4014           ; PPU OAMDMA — kicks off the copy
 
-        ; Flush the VRAM queue (writes anything game code stashed via
-        ; vram_set / tile_set / tile_set_palette). PPU is unlocked here.
-        jsr     _vram_queue_flush
+        ; ── Drain the VRAM queue — IN ASSEMBLY, on purpose ──────────────
+        ; Vblank is ~2273 CPU cycles and the OAM DMA above just spent 513.
+        ; Compiled C costs 200+ cycles per queue entry, so a C flush blows
+        ; past the end of vblank — and PPUDATA writes during ACTIVE
+        ; RENDERING land at corrupted addresses (the PPU's internal v
+        ; register is busy fetching tiles; its coarse-X/fine-Y counters
+        ; shear every late write). This loop costs ~40 cycles per entry,
+        ; so FLUSH_BUDGET entries always finish safely inside vblank.
+        ; QUEUE_MASK/FLUSH_BUDGET must match nes_runtime.c's ring buffer.
+        lda     _vram_queue_lock
+        bne     @flush_done     ; a push is mid-flight — skip this vblank
+        lda     _vram_queue_len
+        beq     @flush_done
+        cmp     #FLUSH_BUDGET
+        bcc     @flush_n_ok
+        lda     #FLUSH_BUDGET
+@flush_n_ok:
+        sta     nmi_drain       ; loop counter
+        sta     nmi_drained     ; remembered for the length update
+        bit     $2002           ; reset the PPUADDR write latch
+        ldx     _vram_queue_head
+@flush_loop:
+        lda     _vram_q_hi,x
+        sta     $2006
+        lda     _vram_q_lo,x
+        sta     $2006
+        lda     _vram_q_val,x
+        sta     $2007
+        inx
+        txa
+        and     #QUEUE_MASK     ; ring wrap
+        tax
+        dec     nmi_drain
+        bne     @flush_loop
+        stx     _vram_queue_head
+        lda     _vram_queue_len
+        sec
+        sbc     nmi_drained
+        sta     _vram_queue_len
+@flush_done:
 
         ; Reset PPUADDR to $2000 (otherwise the queue's last $2006 write
         ; leaves it dangling and the PPU samples random VRAM as the BG).
@@ -172,6 +219,12 @@ irq:    rti
 _shadow_oam: .res 256
 
 ; ------------------------------------------------------------------------
+; NMI-private temporaries — deliberately NOT cc65's zp tmp1-4 (the NMI
+; would corrupt them under interrupted C code).
+.segment "BSS"
+nmi_drain:   .res 1
+nmi_drained: .res 1
+
 .segment "VECTORS"
         .word   nmi             ; $FFFA
         .word   start           ; $FFFC

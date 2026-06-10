@@ -34,8 +34,8 @@ for (const genre of ["shmup", "platformer", "puzzle"]) {
     const tmp = mkdtempSync(path.join(os.tmpdir(), `genre-${genre}-`));
     try {
       const create = toJSON(await client.callTool({
-        name: "scaffold",
-        arguments: { op: "game",  platform: "nes", genre, name: "demo", path: tmp, overwrite: true },
+        name: "examples",
+        arguments: { op: "fork", platform: "nes", template: genre, name: "demo", path: tmp, overwrite: true },
       }));
       assert.equal(create.platform, "nes");
       assert.equal(create.genre, genre);
@@ -84,11 +84,11 @@ test("createGame rejects a genre the platform lacks with a clear message", async
     // no tilemap to draw a match-3 grid — so it's the honest sentinel for the
     // per-genre rejection path.
     const res = await client.callTool({
-      name: "scaffold",
-      arguments: { op: "game",  platform: "atari2600", genre: "puzzle", name: "x", path: tmp, overwrite: true },
+      name: "examples",
+      arguments: { op: "fork", platform: "atari2600", template: "puzzle", name: "x", path: tmp, overwrite: true },
     });
     assert.equal(res.isError, true);
-    assert.match(res.content[0].text, /genre 'puzzle' not supported for platform 'atari2600'/);
+    assert.match(res.content[0].text, /no example 'atari2600\/puzzle'/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -99,11 +99,11 @@ test("createGame rejects unsupported genre with a clear message", async () => {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "genre-bad2-"));
   try {
     const res = await client.callTool({
-      name: "scaffold",
-      arguments: { op: "game",  platform: "nes", genre: "rpg", name: "x", path: tmp, overwrite: true },
+      name: "examples",
+      arguments: { op: "fork", platform: "nes", template: "rpg", name: "x", path: tmp, overwrite: true },
     });
     assert.equal(res.isError, true);
-    assert.match(res.content[0].text, /genre 'rpg' not supported/);
+    assert.match(res.content[0].text, /no example '/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

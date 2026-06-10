@@ -178,7 +178,7 @@ software mistake, not a hardware limit:
 > burst or a per-frame DMA), you overrun vblank, drop frames, and the
 > scroll judders. **Paint the planes ONCE at setup; the loop only nudges
 > scroll registers and re-stages sprites.** Use the
-> `template:"two_plane_parallax"` scaffold as the known-good shape.
+> `two_plane_parallax` example as the known-good shape.
 
 ### Hardware scroll, the whole loop
 
@@ -241,7 +241,7 @@ if (newTileCol != lastTileCol) {
 ```
 
 That's ~28 tile writes per 8 px of travel, not a 1792-cell plane redraw.
-The `template:"platformer"` scaffold scrolls within one plane (no
+The `platformer` example scrolls within one plane (no
 streaming); add the column-stream above to go wider. (Real Sonic also
 splits the screen with H-blank raster effects for independent strips —
 that's an IRQ/raster topic, see the `asm` template.)
@@ -481,7 +481,7 @@ build pipeline computes the checksum on link.
 
 ## Where the SDK lives (and how to read it)
 
-`scaffold({op:'project', platform:"genesis"})` ships the full SGDK include
+`examples({op:'fork'})` (any Genesis example) ships the full SGDK include
 tree into the new project at `vendor/sgdk/`. So when your code does
 `#include <genesis.h>`, those headers come from
 `vendor/sgdk/include/`:

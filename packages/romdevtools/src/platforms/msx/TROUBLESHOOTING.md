@@ -85,5 +85,5 @@ ticker) already do this; copy the pattern for any direct PSG access you write.
 The old `msx_crt0.s` placed the SDCC `_INITIALIZER` area in RAM, so the boot
 copy duplicated uninitialised RAM onto itself: every value-initialised static
 read 0 and BSS was never zeroed. The bundled crt0 has been fixed (ROM-placed
-`_INITIALIZER` + a BSS-zero loop). If a project scaffolded before 2026-06-09
-shows ghost zeros, refresh its `msx_crt0.s` from a new scaffold.
+`_INITIALIZER` + a BSS-zero loop). If a project forked before 2026-06-09
+shows ghost zeros, refresh its `msx_crt0.s` from a freshly forked example.

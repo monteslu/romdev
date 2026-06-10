@@ -239,8 +239,8 @@ Genesis scrolls in HARDWARE — moving the world is two register writes
 plane every frame (a `VDP_fillTileMapRect` / `VDP_loadTileMap` / big
 `DMA_*` each frame), you overrun the vblank DMA budget and drop frames →
 judder. Fix: paint the planes ONCE at setup; the loop only nudges scroll
-registers + re-stages sprites. The `template:"two_plane_parallax"`
-scaffold is the known-good shape.
+registers + re-stages sprites. The `two_plane_parallax`
+example is the known-good shape.
 
 Diagnose it without guessing (no core rebuild):
 

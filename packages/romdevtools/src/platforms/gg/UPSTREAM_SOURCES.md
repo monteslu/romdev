@@ -3,7 +3,7 @@
 GG shares its toolchain (SDCC z80) + emulator (genesis_plus_gx) +
 most of the runtime with SMS (`sms_crt0.s` ≡ `gg_crt0.s` byte-for-
 byte; PSG protocol identical). The GG tree at `src/platforms/gg/`
-holds the GG-specific scaffolds and runtime helpers; SMS docs apply
+holds the GG-specific example games and runtime helpers; SMS docs apply
 for everything else.
 
 GG-specific:

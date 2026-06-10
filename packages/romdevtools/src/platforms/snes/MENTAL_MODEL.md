@@ -253,7 +253,7 @@ PVSnesLib's `hdr.asm` fills these in.
 
 ## Where the SDK lives (and how to read it)
 
-`scaffold({op:'project', platform:"snes"})` ships the FULL PVSnesLib source +
+`examples({op:'fork'})` (any SNES example) ships the FULL PVSnesLib source +
 header tree into the new project at `vendor/pvsneslib/`. So when
 your code does `#include <snes.h>`, those headers come from
 `vendor/pvsneslib/include/`:
@@ -296,7 +296,7 @@ Loadable via snes9x (`loadMedia`).
 
 ## Horizontal scrolling (for side-scrollers)
 
-The `platformer` scaffold is single-screen. SNES scrolling is the easiest of
+The `platformer` example is single-screen. SNES scrolling is the easiest of
 the tile platforms because each BG layer has its own hardware scroll register
 and parallax is nearly free.
 
