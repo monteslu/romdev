@@ -6,6 +6,38 @@ the `romdev-mcp` bin is kept as an alias.)
 
 ## 0.28.0
 
+### Added — banked-cart parity across ALL platforms (per-bank references + rebuild glue)
+The 0.27.0 feedback round fixed per-bank reference scanning and one-call banked
+rebuild glue for NES only. Every other banked-cart platform now gets the same
+treatment:
+- **`disasm({target:'references'})` scans EVERY bank on every banked format** —
+  SNES multi-bank LoROM (was: only the first 32KB bank), GB/GBC MBC and SMS/GG
+  Sega-mapper and MSX megaROM (was: only the first 32KB), Atari 2600 F8/F6/F4
+  (was: only the boot bank), Atari 7800 (was: only the top 16KB — flat carts now
+  scan the WHOLE image, SuperGame carts per-bank), and >32KB HuCards (was: a
+  wrapped, garbage start address). Non-NES refs carry a `romBank` tag (NES keeps
+  `prgBank`). Very large carts scan the first 64 banks and SAY SO in `notes`.
+- **`disasm({target:'project'})` splits every banked format per-bank** so
+  instructions never straddle a bank edge: Sega-mapper SMS/GG (16KB banks),
+  MSX megaROMs (16KB banks + the "AB" header as its own data region), banked
+  2600 (4KB banks), 7800 SuperGame (16KB banks + the .a78 header split out),
+  >32KB HuCards (8KB pages + optional copier header split out).
+- **Atari 7800 SuperGame and PC Engine HuCards (flat AND banked) get one-call
+  byte-identical `build()` rebuilds** — their asm toolchain is cc65/ca65, the
+  same match that made NES one-call. NES-style glue: HEADER segment carrying
+  the original header bytes, per-bank segment wrappers, generated multi-bank
+  `.cfg` via `linkerConfigPath`. **PCE was previously the one honestly-LOSSY
+  case** (planRegions trimmed real $FF padding and didn't strip copier
+  headers) — both fixed, `verifiable:true` now.
+- **SMS/GG, MSX, and 2600 banked carts get per-bank native rebuild recipes**
+  (their `build()` is SDCC/DASM — can't consume the disasm syntax): per-bank
+  wrappers + cfg blobs (2600), bank-by-bank `as`/`objcopy`/`dd`/`cat` recipes
+  in `BUILD.md` (SMS/GG/MSX), all byte-exact.
+- Proven by `test/banked-parity.test.js`: synthetic banked carts on 7 platforms;
+  byte-identical one-call rebuilds verified end-to-end for 7800 SuperGame,
+  banked PCE, and flat-PCE-with-real-padding.
+
+
 ### Fixed — scaffold overhaul from real RetroDECK/Bazzite playtesting (all 14 platforms)
 A full human playtest of every genre scaffold on real hardware surfaced clusters
 of repeated logic errors. The big ones:

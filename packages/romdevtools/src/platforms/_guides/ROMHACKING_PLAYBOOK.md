@@ -325,11 +325,14 @@ Once you know WHAT to change, the write loop is a handful of calls — no custom
   confirm a patch landed where you meant.
 - **`disasm({target:'references', path, platform, address})`** — find every instruction that
   references a target address, classified `call/jump/branch/read/write/use/ref` (walks the
-  vector table too). The fast "who touches this?" for a STATIC image. Banked NES is scanned
-  PER BANK (each ref carries a `prgBank` tag), zero-page direct + indexed operands match,
-  and `#$nn` immediates are excluded (values, not addresses). Limitation: direct addressing
-  only — indirect/computed jumps aren't detected (use the runtime `watch`/`breakpoint`
-  tools in §5/§5d for those).
+  vector table too). The fast "who touches this?" for a STATIC image. EVERY banked format
+  is scanned PER BANK — NES mappers (refs carry `prgBank`), and SNES multi-bank LoROM,
+  GB/GBC MBC, SMS/GG Sega-mapper, MSX megaROM, Atari 2600 F8/F6/F4, Atari 7800 SuperGame,
+  and >32KB HuCards (refs carry `romBank`) — so a hit in bank 12 of a 128KB cart shows up,
+  not just the first bank. Zero-page direct + indexed operands match, and `#$nn` immediates
+  are excluded (values, not addresses). Limitation: direct addressing only —
+  indirect/computed jumps aren't detected (use the runtime `watch`/`breakpoint` tools in
+  §5/§5d for those).
 - **`cart({op:'extract', path, outputDir})`** — split a ROM into standard parts (NES header/
   prg/chr; SNES copier_header+rom+internal header; Genesis vectors/header/body; GB boot/
   header/body) + a `manifest.json` (mapper, mirroring…). **`cart({op:'wrap'})`** is the inverse:
@@ -342,8 +345,9 @@ watch the screen react — cheaper than shipping a wrong ROM patch.
 
 For a STRUCTURAL hack (new logic, not a byte poke), turn the whole ROM into a
 re-buildable project in one call: `disasm({target:'project', path, outputDir})`. It splits
-the ROM into regions (per-16KB bank for banked NES, per-32KB for SNES LoROM, slot0+slotX
-for GB, one flat region for SMS/Genesis/C64/Atari), disassembles each through the CPU's
+the ROM into regions (per-bank on EVERY banked format: 16KB banks for NES/GB/SMS-GG/MSX/
+7800-SuperGame, 32KB for SNES LoROM, 4KB for banked 2600, 8KB pages for >32KB HuCards;
+one flat region for Genesis/C64/Lynx/GBA and small carts), disassembles each through the CPU's
 native objdump, then **reassembles + verifies byte-exact** against the original; any line
 that won't reproduce faithfully heals to a `.byte`/`db` of its real bytes, so the emitted
 `.asm` ALWAYS rebuilds (`roundTrip.allByteExact`). `readablePercent` per region tells you
@@ -356,17 +360,17 @@ rebuild exists — a `rebuild.json` of the precise `build({...})` args. So the l
 **Two rebuild tiers** (the disasm emits each CPU's native-reassembler syntax — ca65 for
 6502/65816, GNU `as` for m68k/arm/z80/gbz80 — which only some `build()` toolchains consume):
 - **One-call `build()` rebuild, byte-identical** — **NES (NROM *and* banked mappers), C64,
-  Atari 7800, Lynx**. Feed `rebuild.json` straight to `build`. Banked NES projects ship a
-  HEADER segment with the original 16 iNES bytes, per-bank `PRGn` wrappers, and a generated
-  multi-bank `.cfg` referenced via `linkerConfigPath` (so the cfg never streams through
-  context). (Lynx: `build()` yields the headerless image; prepend the shipped
+  Atari 7800 (flat *and* SuperGame banked), Lynx, PC Engine (flat *and* banked HuCards)**.
+  Feed `rebuild.json` straight to `build`. Banked projects ship a HEADER segment with the
+  original header bytes (16 iNES / 128 .a78 / 512 copier), per-bank segment wrappers, and a
+  generated multi-bank `.cfg` referenced via `linkerConfigPath` (so the cfg never streams
+  through context). (Lynx: `build()` yields the headerless image; prepend the shipped
   `lnx_header.bin` for the full `.lnx`.)
 - **Native-recipe rebuild (`buildCall:null`), byte-identical, steps in `BUILD.md`** — **SMS,
   GG, MSX, GB, GBC, Genesis, GBA, Atari 2600**. Their `build()` toolchains (SDCC/RGBDS/asar/
   dasm/vasm) can't reassemble ca65/GNU-as syntax, so `BUILD.md` gives the proven native
-  `as`/`ld`/`objcopy` chain.
-- **PC Engine** is the one not-yet-byte-exact case (the region trims real padding / doesn't
-  strip a copier header) — `BUILD.md` flags it.
+  `as`/`ld`/`objcopy` chain — per-bank on banked carts (Sega-mapper SMS/GG, MSX megaROMs,
+  banked 2600 get per-bank wrappers + cfg blobs and a bank-by-bank recipe).
 
 **Rebuilding a commercial NES (NROM CHR-ROM) game — `build({inesHeader})`:** the most common
 NES RE rebuild. `build({output:'rom', platform:'nes', inesHeader:{prgBanks, chrBanks, mapper,
