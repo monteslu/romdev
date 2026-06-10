@@ -237,10 +237,23 @@ read:
 
 ```c
 uint8_t pad = ~SWCHA;
-if (pad & JOY_UP)    /* P1 up */
-if (pad & JOY_DOWN)  /* P1 down */
-if (pad & JOY_LEFT)  /* P1 left */
 if (pad & JOY_RIGHT) /* P1 right */
+if (pad & JOY_LEFT)  /* P1 left */
+if (pad & JOY_DOWN)  /* P1 down */
+if (pad & JOY_UP)    /* P1 up */
+```
+
+**The bit order is the #1 7800 input footgun.** From bit 7 down the P1 nibble
+is **Right ($80), Left ($40), Down ($20), Up ($10)** — same as the 2600. Defining
+`JOY_UP 0x80 … JOY_RIGHT 0x10` (the "reads naturally" order) is exactly
+REVERSED, and the symptom is bizarre enough to misdiagnose: up/down steer
+left/right and vice versa. Always:
+
+```c
+#define JOY_RIGHT 0x80
+#define JOY_LEFT  0x40
+#define JOY_DOWN  0x20
+#define JOY_UP    0x10
 ```
 
 Fire button on `INPT4` at `$0C`, also active low.

@@ -31,6 +31,18 @@ the same wall.
    cast through `volatile uint8_t *`. See `lib/c/SDCC_GOTCHAS.md`
    § "Writes to VRAM".
 
+3b. **OAM DMA goes FIRST after `wait_vblank()` — before any staging work.**
+   The vblank window is ~10 scanlines (~1140 cycles) and SDCC call overhead
+   is brutal: even a few dozen `oam_set()` CALLS before the flush push the
+   DMA out of vblank into active display, where it tears the sprites on one
+   FIXED scanline every frame (the "horizontal line a third of the way down"
+   glitch). The robust frame shape is: stage OAM/BG writes into RAM any time
+   during the frame, then `wait_vblank(); oam_dma_flush();` as the very first
+   thing, then a small bounded batch of BG map writes. One frame of sprite
+   latency is imperceptible. Also: statics belong at `dataLoc 0xC200` or
+   above (the project recipe sets this) so they can't collide with
+   `shadow_oam` at $C100.
+
 4. **OAM DMA must run from HRAM.** During the ~160 µs OAM DMA window
    the CPU can ONLY fetch from HRAM ($FF80-$FFFE). The bundled
    `oam_dma_copy()` installs a 9-byte stub at $FF80 and CALLs it; the
