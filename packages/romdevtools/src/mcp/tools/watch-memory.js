@@ -56,7 +56,7 @@ async function maybeRestoreState(host, fromState, fromStatePath) {
 // observer wrapper encodes it ASYNCHRONOUSLY, after the agent's response has
 // already gone out. The provider is stripped from the agent-visible result. The
 // frame is captured by reference now (correct frozen state) but rasterized later.
-export function attachObserverFrame(json, host) {
+export function attachObserverFrame(json, host, caption) {
   json._observerFrameProvider = () => {
     try {
       const shot = host.screenshot(); // { pngBase64, width, height }
@@ -65,6 +65,7 @@ export function attachObserverFrame(json, host) {
         : null;
     } catch { return null; }
   };
+  if (caption) json._observerFrameCaption = String(caption);
   return json;
 }
 
@@ -927,7 +928,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
             ? `Stopped at ${r.stoppedAtPC} (your stopAtPC) with PARTIAL output — readMemory the dst to see what's been written so far.`
             : "Did not return within maxFrames AND the watchdog didn't trip — this usually means the entry FELL BACK INTO THE GAME (a wrapper PC with a wrong source, so it never reaches the sentinel) and the game is just free-running. finalPC is inside the main loop, not your routine. Re-check the entry PC (use the routine body, not a wrapper) and the source regs; or lower maxInstructions to fail fast while probing. Bump maxFrames/maxInstructions only if you're sure it's a legitimately huge decompress.")
         + frameLogicCaveat;
-      return jsonContent({
+      return attachObserverFrame(jsonContent({
         returned: r.returned, framesRun: r.framesRun, sandbox,
         ...(r.pure ? { pure: true, pureMode: r.pureMode } : {}),
         ...(r.watchdog ? { watchdog: true, reason: r.reason } : {}),
@@ -935,7 +936,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         ...(r.finalPC ? { finalPC: r.finalPC } : {}),
         ...(r.finalRegs ? { finalRegs: r.finalRegs } : {}),
         note,
-      });
+      }), host, "cpu call");
   }
 
   async function cpuDecompress({ entryPC, sourceAddress, destAddress, maxFrames = 600 }) {

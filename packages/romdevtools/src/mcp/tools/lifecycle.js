@@ -2,6 +2,7 @@ import { resolveCore } from "../../cores/registry.js";
 import { clearHost, getHost, getHostOrNull, rememberLastMedia, resetHost } from "../state.js";
 import { jsonContent, safeTool, textContent } from "../util.js";
 import { resolveCheatCodeForApply } from "./cheats.js";
+import { attachObserverFrame } from "./watch-memory.js";
 
 const MEDIA_KINDS = ["cartridge", "disk", "tape", "program"];
 
@@ -58,7 +59,8 @@ export function registerLifecycleTools(server, z, sessionKey) {
     // on dimensions, so we omit it until a frame has been stepped and point the
     // caller at stepFrames instead.
     const framebufferKnown = host.status.frameCount > 0;
-    return jsonContent({
+    // Livestream: show what just loaded (the boot frame).
+    return attachObserverFrame(jsonContent({
       loaded: true,
       platform,
       core: resolved.coreName,
@@ -68,7 +70,7 @@ export function registerLifecycleTools(server, z, sessionKey) {
         ? { framebuffer: { width: host.status.fbWidth, height: host.status.fbHeight } }
         : { framebufferNote: "Framebuffer dimensions are unknown until the core runs — call stepFrames first, then getStatus (the pre-boot default does not match the real output resolution)." }),
       ...(appliedCheats ? { cheats: appliedCheats } : {}),
-    });
+    }), host, `loaded ${host.status.mediaPath ? host.status.mediaPath.split("/").pop() : platform}`);
   }
 
   server.tool(
@@ -125,10 +127,10 @@ export function registerLifecycleTools(server, z, sessionKey) {
           const host = getHost(sessionKey);
           if (hard) {
             const reloaded = await host.hardReset();
-            return textContent(reloaded ? "reset (hard / power-cycle — RAM cleared)" : "reset (soft — no cached ROM to reload for a hard reset)");
+            return attachObserverFrame(textContent(reloaded ? "reset (hard / power-cycle — RAM cleared)" : "reset (soft — no cached ROM to reload for a hard reset)"), host, "reset (hard)");
           }
           host.reset();
-          return textContent("reset (soft — RESET button; work RAM persists, use hard:true to clear it)");
+          return attachObserverFrame(textContent("reset (soft — RESET button; work RAM persists, use hard:true to clear it)"), host, "reset");
         }
         case "pause":
           getHost(sessionKey).pause();

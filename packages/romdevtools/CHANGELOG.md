@@ -4,6 +4,27 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## Unreleased (0.29.0)
+
+### Added — livestream frame coverage: see what the agent is doing
+- **Most state-changing tools now emit the post-call frame to /livestream**,
+  at zero cost to the agent (deferred PNG encode after the response goes
+  out): `frame({op:'step'})`, `input` set/press/sequence/navigate,
+  `state({op:'load'})`, `loadMedia`, `host({op:'reset'})` (soft + hard),
+  `runUntil`, `cheats({op:'apply'})`, and `cpu({op:'call'})` — joining the
+  breakpoint/watch hits, verify, and stepInstruction that already emitted.
+- **Throttled to one frame per 2s per (session, tool)**, trailing-edge: a
+  frame-step loop can't flood the stream and its LAST frame always lands;
+  different tools back-to-back all show; multiple agents on one server
+  never throttle each other.
+- **`call_frame` events carry a caption** (`step ×30`, `press start`,
+  `state load boss`, `loaded game.nes`) and the livestream UI shows it on
+  the image card — the stream reads as a narrative.
+- **To-disk renders now reach the stream too**: `tiles({op:'preview'})`,
+  `extractSpriteSheet`-style file renders, and `encodeArt` quantize/crop
+  attach the PNG as an observer sideband when routed to `outputPath` — the
+  human sees the render even though the agent only gets a path.
+
 ## 0.28.0
 
 The reverse-engineering release: the three RE primitives — break-instant

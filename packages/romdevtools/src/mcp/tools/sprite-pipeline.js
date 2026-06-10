@@ -143,6 +143,7 @@ async function cropSpriteSheetImpl({ path, tileX, tileY, tileW, tileH, tileSize 
   }
   await writeFile(outputPath, outBuf);
   return {
+    _observerImages: [{ kind: "image", mimeType: "image/png", base64: outBuf.toString("base64") }],
     path: outputPath,
     intent: d.intent,
     width: pxW,
@@ -155,6 +156,16 @@ async function cropSpriteSheetImpl({ path, tileX, tileY, tileW, tileH, tileSize 
       ? "Source PLTE preserved via nearest-neighbour remap."
       : "Source was truecolor — output is also truecolor. Use quantizePngForPlatform to reduce to an indexed palette.",
   };
+}
+
+// Lift a plain core result's livestream sideband OUT of the JSON body and
+// onto the MCP result object (it must never serialize into agent-visible text).
+function liftObserverImages(r) {
+  const sideband = r._observerImages;
+  delete r._observerImages;
+  const out = jsonContent(r);
+  if (sideband) out._observerImages = sideband;
+  return out;
 }
 
 // ── quantizePngForPlatform ──────────────────────────────────────────
@@ -247,6 +258,7 @@ async function quantizePngForPlatformImpl({ path, platform, outputPath, intent, 
   const outBuf = writeIndexedPng(png.width, png.height, indices, palette);
   await writeFile(outputPath, outBuf);
   return {
+    _observerImages: [{ kind: "image", mimeType: "image/png", base64: outBuf.toString("base64") }],
     path: outputPath,
     intent: d.intent,
     width: png.width,
@@ -596,12 +608,12 @@ export function registerSpritePipelineTools(server, z, _sessionKey) {
         case "quantize": {
           if (!args.platform) throw new Error("encodeArt({stage:'quantize'}): `platform` is required.");
           if (!args.path || !args.outputPath) throw new Error("encodeArt({stage:'quantize'}): `path` and `outputPath` are required.");
-          return jsonContent(await quantizePngForPlatformImpl(args));
+          return liftObserverImages(await quantizePngForPlatformImpl(args));
         }
         case "crop": {
           if (!args.path || !args.outputPath) throw new Error("encodeArt({stage:'crop'}): `path` and `outputPath` are required.");
           if (args.tileX == null || args.tileY == null || args.tileW == null || args.tileH == null) throw new Error("encodeArt({stage:'crop'}): `tileX`, `tileY`, `tileW`, `tileH` are required.");
-          return jsonContent(await cropSpriteSheetImpl(args));
+          return liftObserverImages(await cropSpriteSheetImpl(args));
         }
         case "tiles": {
           if (!args.platform) throw new Error("encodeArt({stage:'tiles'}): `platform` is required.");

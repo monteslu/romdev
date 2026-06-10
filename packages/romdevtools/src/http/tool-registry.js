@@ -17,7 +17,7 @@
 import { z } from "zod";
 import { registerTools } from "../mcp/tools/index.js";
 import { withClearToolErrors } from "../mcp/util.js";
-import { observer, summarizeForLog, extractImages } from "../observer/bus.js";
+import { observer, summarizeForLog, extractImages, pushObserverFrame } from "../observer/bus.js";
 import { getHostOrNull } from "../mcp/state.js";
 
 /**
@@ -151,21 +151,21 @@ export async function runTool(tool, args, sessionKey) {
     // Strip both from the caller-visible result before it's serialized.
     let sidebandImages = [];
     let frameProvider = null;
+    let frameCaption = null;
     if (r && typeof r === "object") {
       if (Array.isArray(r._observerImages)) { sidebandImages = r._observerImages; delete r._observerImages; }
       if (typeof r._observerFrameProvider === "function") { frameProvider = r._observerFrameProvider; delete r._observerFrameProvider; }
+      if (typeof r._observerFrameCaption === "string") { frameCaption = r._observerFrameCaption; delete r._observerFrameCaption; }
     }
     if (frameProvider) {
-      setImmediate(() => {
-        try {
-          const img = frameProvider();
-          // re-resolve platform: a call like loadMedia sets it DURING the call, so
-          // the post-call value is the most accurate for the frame's system label.
-          let framePlatform = platform;
-          try { framePlatform = getHostOrNull(sessionKey)?.status?.platform ?? platform; } catch { /* keep */ }
-          if (img) observer.push({ type: "call_frame", sessionKey: sessionKey ?? "http", platform: framePlatform, ts: startedAt, tool: tool.name, images: [img] });
-        } catch { /* livestream is best-effort; never affects the caller */ }
-      });
+      // Throttled to one per 2s per (session, tool), trailing-edge — same
+      // policy as the MCP path (bus.js pushObserverFrame). Platform is
+      // re-resolved at emit time (loadMedia sets it DURING the call).
+      pushObserverFrame({
+        sessionKey, tool: tool.name, ts: startedAt, platform,
+        resolvePlatform: () => { try { return getHostOrNull(sessionKey)?.status?.platform ?? platform; } catch { return platform; } },
+        ...(frameCaption ? { caption: frameCaption } : {}),
+      }, frameProvider);
     }
     const inlineImages = extractImages(r);
     const images = inlineImages.length > 0 ? inlineImages : sidebandImages;

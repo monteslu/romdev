@@ -305,13 +305,17 @@ export async function extractSpriteSheetCore({ platform, path: romPath, offset, 
         const path = await import("node:path");
         await mkdir(path.dirname(outputPath), { recursive: true });
         await writeFile(outputPath, png);
-        return jsonContent({
+        // Livestream sideband: show the rendered sheet even though the agent
+        // only gets the path.
+        const out = jsonContent({
           path: outputPath,
           intent: d.intent,
           bytes: png.length,
           paletteSource,
           note,
         });
+        out._observerImages = [{ kind: "image", mimeType: "image/png", base64: png.toString("base64") }];
+        return out;
       }
       return {
         content: [

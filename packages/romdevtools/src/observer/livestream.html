@@ -305,7 +305,8 @@
           // One latest image per "tool" (kind = tool name); ev.tool
           // identifies which inspect call produced it.
           s.latestByKind[ev.tool] = { ts: ev.ts, base64: img.base64,
-                                      mimeType: img.mimeType, tool: ev.tool, platform: ev.platform ?? null };
+                                      mimeType: img.mimeType, tool: ev.tool, platform: ev.platform ?? null,
+                                      caption: ev.caption ?? null };
         }
       }
       // screenshotAscii pushes both the PNG (above) AND the raw ANSI
@@ -416,7 +417,8 @@
       card.className = "image-card";
       const dt = new Date(img.ts).toLocaleTimeString();
       const platBadge = img.platform ? `<span class="plat">${escapeHtml(img.platform)}</span> ` : "";
-      card.innerHTML = `<div class="meta"><span>${platBadge}${escapeHtml(img.tool)}</span><span>${dt}</span></div>`;
+      const label = img.caption ? `${img.tool} — ${img.caption}` : img.tool;
+      card.innerHTML = `<div class="meta"><span>${platBadge}${escapeHtml(label)}</span><span>${dt}</span></div>`;
       const el = document.createElement("img");
       el.src = `data:${img.mimeType};base64,${img.base64}`;
       el.alt = img.tool;
