@@ -55,6 +55,27 @@ of repeated logic errors. The big ones:
   the other templates already use.
 - **SNES**: each genre now gets a distinct backdrop tint (every scaffold shipped
   the same blue checkered wallpaper).
+- **Sound everywhere**: every scaffold now has a continuous background-music
+  loop plus audible SFX, verified per platform by recording + RMS analysis.
+  Genesis/Lynx tick a melody inside `sfx_update()` (no template wiring; Lynx
+  voices 64→100), NES adds a triangle-channel melody to `nes_runtime`, PCE a
+  ch5 melody with corrected volume (the 5-bit field is ~-1.5dB/step from 31 —
+  the old 13 was -27dB, near-silence; the shmup SFX are maxed), and the SMS/GG
+  3-voice tracker that already shipped is now actually STARTED by all 11
+  templates. **MSX root cause**: `msx_crt0.s` had the same `_INITIALIZER`-in-RAM
+  bug fixed for SMS/GG (every `static x = N` booted 0) plus a BIOS-KEYINT
+  PSGADDR-latch race (PSG writes now DI/EI-guarded) — both fixed; this likely
+  also explains the reported MSX sprite flakiness.
+- **GB/GBC sports scanline tear**: the OAM DMA now fires at the vblank leading
+  edge (45 staged `oam_set` calls used to push it a third of the frame into
+  active display — the "horizontal line a 3rd of the way down" glitch).
+- Misc per-genre polish: PCE gameplay speeds, C64 racing clears the BASIC
+  startup text, C64 sports court widened to the 9-bit sprite range, MSX/Lynx
+  sports contrast, GBA puzzle well border.
+- **Verification**: all 69 existing platform×genre scaffolds were swept —
+  scaffold → project build → boot → render-health green, all 14 platforms
+  respond to input, and each platform's audio was captured and RMS-checked.
+  (Atari 2600 has no puzzle genre by design.)
 
 ### Added — human co-drive detection: agents now KNOW when a human is playing in the playtest window
 The long-standing confusion ("they get confused when I try to play while they're
