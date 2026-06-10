@@ -378,10 +378,31 @@ index b702173..5ed4e88 100644
    m68ki_check_address_error(address, MODE_WRITE, FLAG_S | FUNCTION_CODE_USER_DATA) /* auto-disable (see m68kcpu.h) */
  
 diff --git a/core/vdp_ctrl.c b/core/vdp_ctrl.c
-index bd454f6..091b5e1 100644
+index bd454f6..146c282 100644
 --- a/core/vdp_ctrl.c
 +++ b/core/vdp_ctrl.c
-@@ -158,6 +158,34 @@ static int *fifo_timing;        /* FIFO slots timing table */
+@@ -128,6 +128,20 @@ static void vdp_z80_data_w_ms(unsigned int data);
+ static void vdp_z80_data_w_gg(unsigned int data);
+ static void vdp_z80_data_w_sg(unsigned int data);
+ static void vdp_bus_w(unsigned int data);
++
++/* romdev VRAM-port COPY TRACE (state + exports in libretro.c): log every
++ * data-port write landing in a watched VRAM address window with the EXECUTING
++ * instruction's PC — the CPU-port complement of the existing DMA watch. The
++ * active CPU decides which latched PC applies (m68k on MD, Z80 on SMS/GG). */
++extern unsigned int romdev_vw_lo, romdev_vw_hi;
++extern int          romdev_vw_enabled;
++extern void         romdev_vw_log(unsigned int vaddr, unsigned int pc, unsigned char val);
++extern unsigned int romdev_m68k_instr_pc;
++extern unsigned int romdev_z80_instr_pc;
++static unsigned int romdev_vw_cpu_pc(void)
++{
++  return ((system_hw & SYSTEM_PBC) == SYSTEM_MD) ? romdev_m68k_instr_pc : romdev_z80_instr_pc;
++}
+ static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles);
+ static void vdp_dma_68k_ext(unsigned int length);
+ static void vdp_dma_68k_ram(unsigned int length);
+@@ -158,6 +172,34 @@ static int *fifo_timing;        /* FIFO slots timing table */
  static int hblank_start_cycle;  /* HBLANK flag set cycle */
  static int hblank_end_cycle;    /* HBLANK flag clear cycle */
  
@@ -416,7 +437,27 @@ index bd454f6..091b5e1 100644
   /* set Z80 or 68k interrupt lines */
  static void (*set_irq_line)(unsigned int level);
  static void (*set_irq_line_delay)(unsigned int level);
-@@ -3089,6 +3117,10 @@ static void vdp_dma_68k_ext(unsigned int length)
+@@ -2246,6 +2288,9 @@ static void vdp_bus_w(unsigned int data)
+       /* Pointer to VRAM */
+       uint16 *p = (uint16 *)&vram[index];
+ 
++      if (romdev_vw_enabled && (unsigned int)index >= romdev_vw_lo && (unsigned int)index <= romdev_vw_hi)
++        romdev_vw_log((unsigned int)index, romdev_vw_cpu_pc(), (unsigned char)(data & 0xFF));
++
+       /* Byte-swap data if A0 is set */
+       if (addr & 1)
+       {
+@@ -2729,6 +2774,9 @@ static void vdp_z80_data_w_m5(unsigned int data)
+       /* VRAM address (write low byte to even address & high byte to odd address) */
+       int index = addr ^ 1;
+ 
++      if (romdev_vw_enabled && (unsigned int)index >= romdev_vw_lo && (unsigned int)index <= romdev_vw_hi)
++        romdev_vw_log((unsigned int)index, romdev_vw_cpu_pc(), (unsigned char)(data & 0xFF));
++
+       /* Intercept writes to Sprite Attribute Table */
+       if ((index & sat_base_mask) == satb)
+       {
+@@ -3089,6 +3137,10 @@ static void vdp_dma_68k_ext(unsigned int length)
    /* 68k bus source address */
    uint32 source = (reg[23] << 17) | (dma_src << 1);
  
@@ -427,7 +468,7 @@ index bd454f6..091b5e1 100644
    do
    {
      /* Read data word from 68k bus */
-@@ -3124,6 +3156,9 @@ static void vdp_dma_68k_ram(unsigned int length)
+@@ -3124,6 +3176,9 @@ static void vdp_dma_68k_ram(unsigned int length)
    /* 68k bus source address */
    uint32 source = (reg[23] << 17) | (dma_src << 1);
  
@@ -437,7 +478,7 @@ index bd454f6..091b5e1 100644
    do
    {
      /* access Work-RAM by default  */
-@@ -3152,6 +3187,9 @@ static void vdp_dma_68k_io(unsigned int length)
+@@ -3152,6 +3207,9 @@ static void vdp_dma_68k_io(unsigned int length)
    /* 68k bus source address */
    uint32 source = (reg[23] << 17) | (dma_src << 1);
  
@@ -679,10 +720,10 @@ index 74d5053..30caf9b 100644
  /****************************************************************************
   * Get all registers in given buffer
 diff --git a/libretro/libretro.c b/libretro/libretro.c
-index 798c6cc..0fd90cf 100644
+index 798c6cc..e32b9ef 100644
 --- a/libretro/libretro.c
 +++ b/libretro/libretro.c
-@@ -3743,6 +3743,376 @@ void retro_unload_game(void)
+@@ -3743,6 +3743,419 @@ void retro_unload_game(void)
  
  unsigned retro_get_region(void) { return vdp_pal ? RETRO_REGION_PAL : RETRO_REGION_NTSC; }
  
@@ -818,6 +859,49 @@ index 798c6cc..0fd90cf 100644
 + * romdev_setreg/getreg regId order (m68k: D0-D7, A0-A7, PC-of-executing-
 + * instruction, SR, SP; Z80: A,F,B,C,D,E,H,L,IX,IY,0...,PC,0,SP). `clear`
 + * resets the kind so the next hit is distinguishable. */
++/* romdev VRAM-port copy trace (hooks in vdp_ctrl.c's data-port write paths —
++ * the CPU-port complement of romdev_dmawatch). set(lo,hi,enabled) arms a VRAM
++ * byte-address window + clears the ring; get drains [vaddr,pc,val] triples,
++ * out2 = [totalSeen, stored]. */
++#define ROMDEV_VW_CAP 1024
++unsigned int  romdev_vw_lo      = 0;
++unsigned int  romdev_vw_hi      = 0;
++int           romdev_vw_enabled = 0;
++static unsigned int  romdev_vw_addrs[ROMDEV_VW_CAP];
++static unsigned int  romdev_vw_pcs  [ROMDEV_VW_CAP];
++static unsigned char romdev_vw_vals [ROMDEV_VW_CAP];
++static unsigned int  romdev_vw_count  = 0;
++static unsigned int  romdev_vw_stored = 0;
++void romdev_vw_log(unsigned int vaddr, unsigned int pc, unsigned char val)
++{
++   romdev_vw_count++;
++   if (romdev_vw_stored < ROMDEV_VW_CAP) {
++      romdev_vw_addrs[romdev_vw_stored] = vaddr;
++      romdev_vw_pcs  [romdev_vw_stored] = pc;
++      romdev_vw_vals [romdev_vw_stored] = val;
++      romdev_vw_stored++;
++   }
++}
++void romdev_vramwatch_set(unsigned int lo, unsigned int hi, int enabled)
++{
++   romdev_vw_lo = lo; romdev_vw_hi = hi;
++   romdev_vw_enabled = enabled ? 1 : 0;
++   romdev_vw_count = 0; romdev_vw_stored = 0;
++}
++unsigned int romdev_vramwatch_get(unsigned int *out, unsigned int max, unsigned int *out2)
++{
++   unsigned int i, n = romdev_vw_stored;
++   if (out2) { out2[0] = romdev_vw_count; out2[1] = romdev_vw_stored; }
++   if (!out) return 0;
++   if (n > max) n = max;
++   for (i = 0; i < n; i++) {
++      out[i*3 + 0] = romdev_vw_addrs[i];
++      out[i*3 + 1] = romdev_vw_pcs[i];
++      out[i*3 + 2] = romdev_vw_vals[i];
++   }
++   return n;
++}
++
 +extern unsigned int  romdev_snap_regs[19];
 +extern int           romdev_snap_kind;
 +void romdev_regsnap_get(unsigned int *out, int clear)
@@ -1059,7 +1143,7 @@ index 798c6cc..0fd90cf 100644
  void *retro_get_memory_data(unsigned id)
  {
     switch (id)
-@@ -3751,6 +4121,35 @@ void *retro_get_memory_data(unsigned id)
+@@ -3751,6 +4164,35 @@ void *retro_get_memory_data(unsigned id)
           return sram.on ? sram.sram : NULL;
        case RETRO_MEMORY_SYSTEM_RAM:
           return work_ram;
@@ -1095,7 +1179,7 @@ index 798c6cc..0fd90cf 100644
        default:
           return NULL;
     }
-@@ -3802,6 +4201,21 @@ size_t retro_get_memory_size(unsigned id)
+@@ -3802,6 +4244,21 @@ size_t retro_get_memory_size(unsigned id)
              return 0x2000; /* 8KB internal RAM */
        }
  

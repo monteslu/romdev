@@ -193,7 +193,7 @@ index 753035e..e43551e 100644
        if(cartridge_pokey)
           pokey_Process(2);
 diff --git a/core/Sally.c b/core/Sally.c
-index dede0ca..6823602 100644
+index dede0ca..cc8fe6d 100644
 --- a/core/Sally.c
 +++ b/core/Sally.c
 @@ -34,6 +34,36 @@ uint8_t sally_p = 0;
@@ -331,8 +331,34 @@ index dede0ca..6823602 100644
     sally_opcode = memory_Read(sally_pc.w++);
     sally_cycles = SALLY_CYCLES[sally_opcode];
  
+@@ -1523,8 +1642,16 @@ uint32_t sally_ExecuteRES(void)
+    return 6;
+ }
+ 
++/* romdev INTERRUPT BLOCK — the pure-call primitive. While set, NMI/IRQ entry
++ * is suppressed (MARIA's DLI line is simply not taken), so a routine driven
++ * by callSubroutine cannot be hijacked by the game's display-list interrupt
++ * handlers — the frame logic that stomps output buffers. */
++int romdev_irq_block = 0;
++
+ uint32_t sally_ExecuteNMI(void)
+ {
++   if (romdev_irq_block)
++      return 0;
+    sally_Push(sally_pc.b.h);
+    sally_Push(sally_pc.b.l);
+    sally_p &= ~SALLY_FLAG.B;
+@@ -1537,7 +1664,7 @@ uint32_t sally_ExecuteNMI(void)
+ 
+ uint32_t sally_ExecuteIRQ(void)
+ {
+-   if(!(sally_p & SALLY_FLAG.I))
++   if(!(sally_p & SALLY_FLAG.I) && !romdev_irq_block)
+    {
+       sally_Push(sally_pc.b.h);
+       sally_Push(sally_pc.b.l);
 diff --git a/core/libretro.c b/core/libretro.c
-index 3e4dbdb..fbb361a 100644
+index 3e4dbdb..cdd30dd 100644
 --- a/core/libretro.c
 +++ b/core/libretro.c
 @@ -28,6 +28,7 @@
@@ -343,7 +369,7 @@ index 3e4dbdb..fbb361a 100644
  
  #ifdef _3DS
  extern void* linearMemAlign(size_t size, size_t alignment);
-@@ -614,15 +615,253 @@ unsigned retro_get_region(void)
+@@ -614,15 +615,259 @@ unsigned retro_get_region(void)
      return cartridge_region == REGION_NTSC ? RETRO_REGION_NTSC : RETRO_REGION_PAL;
  }
  
@@ -462,6 +488,12 @@ index 3e4dbdb..fbb361a 100644
 + * 1=pc-break/step 2=watchdog 3=write-watch 4=read-watch), out[1]=count(19),
 + * out[2..20]=regs in the romdev regId order ([0]=A [1]=X [2]=Y [3]=P [4]=S
 + * [16]=PC-of-executing-instruction [18]=S). `clear` resets the kind. */
++extern int romdev_irq_block;
++void romdev_irqblock_set(int on)
++{
++    romdev_irq_block = on ? 1 : 0;
++}
++
 +extern unsigned int romdev_snap_regs[19];
 +extern int          romdev_snap_kind;
 +void romdev_regsnap_get(unsigned int *out, int clear)
@@ -597,7 +629,7 @@ index 3e4dbdb..fbb361a 100644
      return NULL;
  }
  
-@@ -630,6 +869,8 @@ size_t retro_get_memory_size(unsigned id)
+@@ -630,6 +875,8 @@ size_t retro_get_memory_size(unsigned id)
  {
      if ( id == RETRO_MEMORY_SYSTEM_RAM )
          return MEMORY_SIZE;

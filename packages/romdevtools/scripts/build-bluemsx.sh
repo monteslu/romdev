@@ -71,7 +71,7 @@ grep -rq "romdev_pcbreak_get" libretro.c Src/ 2>/dev/null && BP_EXPORTS='"_romde
 # Instruction WATCHDOG (force-stop a runaway callSubroutine so it can't hang the
 # WASM). State + run-loop hook in Src/Z80/R800.c; romdev_watchdog_set in libretro.c.
 WD_EXPORTS=""
-grep -rq "romdev_watchdog_set" libretro.c Src/ 2>/dev/null && WD_EXPORTS='"_romdev_watchdog_set","_romdev_regsnap_get",'
+grep -rq "romdev_watchdog_set" libretro.c Src/ 2>/dev/null && WD_EXPORTS='"_romdev_watchdog_set","_romdev_regsnap_get","_romdev_irqblock_set","_romdev_vramwatch_set","_romdev_vramwatch_get",'
 # RE primitives round 2: register read/write (callSubroutine/setRegister) +
 # range-watch (watchRange) + PC-coverage (logPCRange). Z80/R800 hooks in
 # Src/Z80/R800.c, exports in libretro.c. Same reg-id convention as the other Z80

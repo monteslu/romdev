@@ -1,5 +1,5 @@
 diff --git a/src/drivers/libretro/libretro.c b/src/drivers/libretro/libretro.c
-index 96dece6..336e236 100644
+index 96dece6..845c077 100644
 --- a/src/drivers/libretro/libretro.c
 +++ b/src/drivers/libretro/libretro.c
 @@ -262,6 +262,17 @@ static unsigned libretro_msg_interface_version = 0;
@@ -20,7 +20,7 @@ index 96dece6..336e236 100644
  
  /* overclock the console by adding dummy scanlines to PPU loop
   * disables DMC DMA and WaveHi filling for these dummies
-@@ -3946,6 +3957,300 @@ unsigned retro_get_region(void)
+@@ -3946,6 +3957,338 @@ unsigned retro_get_region(void)
     return FSettings.PAL ? RETRO_REGION_PAL : RETRO_REGION_NTSC;
  }
  
@@ -183,6 +183,44 @@ index 96dece6..336e236 100644
 + * 4=read-watch), out[1]=count(19), out[2..20]=regs in the romdev regId order
 + * ([0]=A [1]=X [2]=Y [3]=P [4]=S [16]=PC-of-executing-instruction [18]=S).
 + * `clear` resets the kind. */
++/* romdev interrupt block (pure-call primitive — defined in x6502.c): while
++ * set, NMI/IRQ delivery is suppressed so a callSubroutine-driven routine
++ * cannot be hijacked by the game's own handlers. */
++extern int romdev_irq_block;
++void romdev_irqblock_set(int on)
++{
++   romdev_irq_block = on ? 1 : 0;
++}
++
++/* romdev VRAM-port copy trace (state in x6502.c, hook in ppu.c's $2007
++ * handler). set(lo,hi,enabled) arms a window of PPU addresses and clears the
++ * ring; get drains up to max events as [vaddr,pc,val] triples, out2 =
++ * [totalSeen, stored]. */
++extern unsigned int  romdev_vw_lo, romdev_vw_hi;
++extern int           romdev_vw_enabled;
++extern unsigned int  romdev_vw_addr[], romdev_vw_pc[];
++extern unsigned char romdev_vw_val[];
++extern unsigned int  romdev_vw_count, romdev_vw_stored;
++void romdev_vramwatch_set(unsigned int lo, unsigned int hi, int enabled)
++{
++   romdev_vw_lo = lo; romdev_vw_hi = hi;
++   romdev_vw_enabled = enabled ? 1 : 0;
++   romdev_vw_count = 0; romdev_vw_stored = 0;
++}
++unsigned int romdev_vramwatch_get(unsigned int *out, unsigned int max, unsigned int *out2)
++{
++   unsigned int i, n = romdev_vw_stored;
++   if (out2) { out2[0] = romdev_vw_count; out2[1] = romdev_vw_stored; }
++   if (!out) return 0;
++   if (n > max) n = max;
++   for (i = 0; i < n; i++) {
++      out[i*3 + 0] = romdev_vw_addr[i];
++      out[i*3 + 1] = romdev_vw_pc[i];
++      out[i*3 + 2] = romdev_vw_val[i];
++   }
++   return n;
++}
++
 +extern uint32_t romdev_snap_regs[19];
 +extern int      romdev_snap_kind;
 +void romdev_regsnap_get(unsigned int *out, int clear)
@@ -321,7 +359,7 @@ index 96dece6..336e236 100644
  void *retro_get_memory_data(unsigned type)
  {
     uint8_t* data;
-@@ -3965,6 +4270,56 @@ void *retro_get_memory_data(unsigned type)
+@@ -3965,6 +4308,56 @@ void *retro_get_memory_data(unsigned type)
        case RETRO_MEMORY_SYSTEM_RAM:
           data = RAM;
           break;
@@ -378,7 +416,7 @@ index 96dece6..336e236 100644
        default:
           data = NULL;
           break;
-@@ -3992,6 +4347,13 @@ size_t retro_get_memory_size(unsigned type)
+@@ -3992,6 +4385,13 @@ size_t retro_get_memory_size(unsigned type)
        case RETRO_MEMORY_SYSTEM_RAM:
           size = 0x800;
           break;
@@ -392,6 +430,28 @@ index 96dece6..336e236 100644
        default:
           size = 0;
           break;
+diff --git a/src/ppu.c b/src/ppu.c
+index 2a5ba88..6cabd05 100644
+--- a/src/ppu.c
++++ b/src/ppu.c
+@@ -303,9 +303,17 @@ static DECLFW(B2006) {
+ 	vtoggle ^= 1;
+ }
+ 
++/* romdev VRAM-port copy trace — state + logger in x6502.c. */
++extern unsigned int  romdev_vw_lo, romdev_vw_hi;
++extern int           romdev_vw_enabled;
++extern void          romdev_vw_log(unsigned int vaddr, unsigned int pc, unsigned char val);
++extern uint32_t      romdev_6502_instr_pc;
++
+ static DECLFW(B2007) {
+ 	uint32_t tmp = RefreshAddr & 0x3FFF;
+ 	PPUGenLatch = V;
++	if (romdev_vw_enabled && tmp >= romdev_vw_lo && tmp <= romdev_vw_hi)
++		romdev_vw_log(tmp, romdev_6502_instr_pc, V);
+ 	if (tmp < 0x2000) {
+ 		if (PPUCHRRAM & (1 << (tmp >> 10)))
+ 			VPage[tmp >> 10][tmp] = V;
 diff --git a/src/sound.c b/src/sound.c
 index e1c6438..e925205 100644
 --- a/src/sound.c
@@ -421,10 +481,10 @@ index e1c6438..e925205 100644
  static uint32_t DMCAddress = 0;
  static int32_t DMCSize = 0;
 diff --git a/src/x6502.c b/src/x6502.c
-index 61b83e0..998e507 100644
+index 61b83e0..6413582 100644
 --- a/src/x6502.c
 +++ b/src/x6502.c
-@@ -29,6 +29,155 @@
+@@ -29,6 +29,188 @@
  X6502 X;
  uint8_t encryptOpcodes =0;
  
@@ -494,6 +554,39 @@ index 61b83e0..998e507 100644
 + * X6502_Run — X.PC is only synced at loop boundaries, so mid-instruction hooks
 + * must report THIS. */
 +uint32_t      romdev_6502_instr_pc = 0xFFFFFFFF;
++/* romdev INTERRUPT BLOCK — the pure-call primitive. While set, NMI/IRQ/RESET
++ * delivery is suppressed (the lines stay pending in _IRQlow), so a routine
++ * driven by callSubroutine cannot be hijacked by the game's own NMI/IRQ
++ * handlers (the frame logic that stomps output buffers). The PPU/APU keep
++ * running — only CPU interrupt DISPATCH is gated, which is the one path that
++ * runs game code other than the called routine. */
++int           romdev_irq_block = 0;
++
++/* romdev VRAM-port COPY TRACE (the source-trace primitive for port-based
++ * video memory): log every CPU write that lands in a watched VRAM address
++ * window, with the EXECUTING instruction's PC — answers "which routine
++ * uploads this tile/nametable region?" the way watch({on:'dma'}) does on
++ * Genesis. Hooked in ppu.c's $2007 data-port handler; the vaddr is the PPU
++ * address (RefreshAddr), not a CPU address. Ring buffer; host drains it. */
++#define ROMDEV_VW_CAP 1024
++unsigned int  romdev_vw_lo      = 0;
++unsigned int  romdev_vw_hi      = 0;
++int           romdev_vw_enabled = 0;
++unsigned int  romdev_vw_addr[ROMDEV_VW_CAP];
++unsigned int  romdev_vw_pc  [ROMDEV_VW_CAP];
++unsigned char romdev_vw_val [ROMDEV_VW_CAP];
++unsigned int  romdev_vw_count   = 0;
++unsigned int  romdev_vw_stored  = 0;
++void romdev_vw_log(unsigned int vaddr, unsigned int pc, unsigned char val)
++{
++	romdev_vw_count++;
++	if (romdev_vw_stored < ROMDEV_VW_CAP) {
++		romdev_vw_addr[romdev_vw_stored] = vaddr;
++		romdev_vw_pc  [romdev_vw_stored] = pc;
++		romdev_vw_val [romdev_vw_stored] = val;
++		romdev_vw_stored++;
++	}
++}
 +static void romdev_6502_snap(int kind) {
 +	int i;
 +	for (i = 0; i < 19; i++) romdev_snap_regs[i] = 0;
@@ -580,7 +673,7 @@ index 61b83e0..998e507 100644
  uint32_t timestamp;
  uint32_t sound_timestamp;
  void FP_FASTAPASS(1) (*MapIRQHook)(int a);
-@@ -55,18 +204,41 @@ void FP_FASTAPASS(1) (*MapIRQHook)(int a);
+@@ -55,18 +237,41 @@ void FP_FASTAPASS(1) (*MapIRQHook)(int a);
  }
  
  static INLINE uint8_t RdMemNorm(uint32_t A) {
@@ -623,7 +716,7 @@ index 61b83e0..998e507 100644
  	RAM[A] = V;
  }
  
-@@ -391,6 +563,17 @@ void X6502_Run(int32_t cycles)
+@@ -391,6 +596,17 @@ void X6502_Run(int32_t cycles)
  	#undef _PC
  	#define _PC pbackus
  
@@ -641,7 +734,16 @@ index 61b83e0..998e507 100644
  	if (PAL)
  		cycles *= 15;	/* 15*4=60 */
  	else
-@@ -445,6 +628,79 @@ void X6502_Run(int32_t cycles)
+@@ -402,7 +618,7 @@ void X6502_Run(int32_t cycles)
+ 		int32_t temp;
+ 		uint8_t b1;
+ 
+-		if (_IRQlow) {
++		if (_IRQlow && !romdev_irq_block) {
+ 			if (_IRQlow & FCEU_IQRESET) {
+ 				_PC = RdMem(0xFFFC);
+ 				_PC |= RdMem(0xFFFD) << 8;
+@@ -445,6 +661,79 @@ void X6502_Run(int32_t cycles)
  		}
  
  		_PI = _P;

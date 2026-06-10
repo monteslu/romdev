@@ -1,5 +1,5 @@
 diff --git a/libretro/libretro-core.c b/libretro/libretro-core.c
-index 82bd2fb..872356c 100644
+index 82bd2fb..31c57a0 100644
 --- a/libretro/libretro-core.c
 +++ b/libretro/libretro-core.c
 @@ -19,6 +19,8 @@
@@ -11,7 +11,7 @@ index 82bd2fb..872356c 100644
  #include "vdrive-internal.h"
  #include "charset.h"
  #include "attach.h"
-@@ -8639,6 +8641,351 @@ unsigned retro_get_region(void)
+@@ -8639,6 +8641,357 @@ unsigned retro_get_region(void)
     }
  }
  
@@ -137,6 +137,12 @@ index 82bd2fb..872356c 100644
 + * 1=pc-break/step 2=watchdog 3=write-watch 4=read-watch), out[1]=count(19),
 + * out[2..20]=regs in the romdev regId order ([0]=A [1]=X [2]=Y [3]=P [4]=SP
 + * [16]=PC-of-executing-instruction [18]=SP). `clear` resets the kind. */
++extern int romdev_irq_block;
++void romdev_irqblock_set(int on)
++{
++   romdev_irq_block = on ? 1 : 0;
++}
++
 +extern unsigned int romdev_snap_regs[19];
 +extern int          romdev_snap_kind;
 +void romdev_regsnap_get(unsigned int *out, int clear)
@@ -363,7 +369,7 @@ index 82bd2fb..872356c 100644
  bool retro_load_game_special(unsigned type, const struct retro_game_info *info, size_t num)
  {
     (void)type;
-@@ -8668,6 +9015,54 @@ static void dc_sync_index(void)
+@@ -8668,6 +9021,54 @@ static void dc_sync_index(void)
     }
  }
  
@@ -418,7 +424,7 @@ index 82bd2fb..872356c 100644
  /* CPU traps ensure we are never saving snapshots or loading them in the middle of a cpu instruction.
     Without this, savestate corruption occurs.
  */
-@@ -8810,17 +9205,105 @@ bool retro_unserialize(const void *data_, size_t size)
+@@ -8810,17 +9211,105 @@ bool retro_unserialize(const void *data_, size_t size)
     return false;
  }
  
@@ -529,10 +535,36 @@ index 82bd2fb..872356c 100644
  }
  
 diff --git a/vice/src/6510core.c b/vice/src/6510core.c
-index a109492..230f8eb 100644
+index a109492..e34811c 100644
 --- a/vice/src/6510core.c
 +++ b/vice/src/6510core.c
-@@ -2374,6 +2374,73 @@ static const uint8_t rewind_fetch_tab[] = {
+@@ -2333,11 +2333,25 @@ static const uint8_t rewind_fetch_tab[] = {
+             profiling_clock_start = CLK;
+ #endif
+ 
++            /* romdev INTERRUPT BLOCK — the pure-call primitive. While set,
++             * IRQ/NMI dispatch is suppressed (lines stay pending), so a
++             * callSubroutine-driven routine cannot be hijacked by the KERNAL
++             * jiffy IRQ / raster handlers — the frame logic that stomps
++             * output buffers (and the IRQ-loader poison on packed C64
++             * software). VIC-II badlines still steal cycles normally. Main
++             * CPU only (gated by ROMDEV_PCBREAK like the other romdev hooks —
++             * the drive CPU includes this file too). */
++#ifdef ROMDEV_PCBREAK
++            if (!romdev_irq_block) {
++#endif
+             DO_INTERRUPT(pending_interrupt);
+             if (!(CPU_INT_STATUS->global_pending_int & IK_IRQ)
+                 && CPU_INT_STATUS->global_pending_int & IK_IRQPEND) {
+                 CPU_INT_STATUS->global_pending_int &= ~IK_IRQPEND;
+             }
++#ifdef ROMDEV_PCBREAK
++            }
++#endif
+             CPU_DELAY_CLK
+ 
+             PROCESS_ALARMS
+@@ -2374,6 +2388,73 @@ static const uint8_t rewind_fetch_tab[] = {
  
          SET_LAST_ADDR(reg_pc);
  
@@ -607,7 +639,7 @@ index a109492..230f8eb 100644
           * "jammed" - however, our code may rely on FETCH_OPCODE being called
           * here, so we can not simply skip it. What we do instead is remembering
 diff --git a/vice/src/maincpu.c b/vice/src/maincpu.c
-index 14cf0b1..9e4419e 100644
+index 14cf0b1..95b0929 100644
 --- a/vice/src/maincpu.c
 +++ b/vice/src/maincpu.c
 @@ -58,6 +58,98 @@
@@ -750,7 +782,7 @@ index 14cf0b1..9e4419e 100644
  #endif
  
  #ifndef STORE_ZERO
-@@ -292,6 +410,38 @@ mos6510dtv_regs_t maincpu_regs;
+@@ -292,6 +410,41 @@ mos6510dtv_regs_t maincpu_regs;
  mos6510_regs_t maincpu_regs;
  #endif
  
@@ -772,6 +804,9 @@ index 14cf0b1..9e4419e 100644
 +unsigned int romdev_snap_regs[19];
 +int          romdev_snap_kind = 0;
 +unsigned int romdev_6510_instr_pc = 0xFFFFFFFF;
++/* romdev interrupt block (pure-call primitive — gates DO_INTERRUPT in the
++ * included 6510core.c, main CPU only). */
++int romdev_irq_block = 0;
 +void romdev_6510_snap(int kind)
 +{
 +    int i;
@@ -789,7 +824,7 @@ index 14cf0b1..9e4419e 100644
  static int maincpu_jammed = 0;
  
  /* ------------------------------------------------------------------------- */
-@@ -530,9 +680,16 @@ void maincpu_mainloop(void)
+@@ -530,9 +683,16 @@ void maincpu_mainloop(void)
  #ifndef C64DTV
      /* Notice that using a struct for these would make it a lot slower (at
         least, on gcc 2.7.2.x).  */
@@ -809,7 +844,7 @@ index 14cf0b1..9e4419e 100644
  #else
      static int reg_a_read_idx = 0;
      static int reg_a_write_idx = 0;
-@@ -565,8 +722,6 @@ void maincpu_mainloop(void)
+@@ -565,8 +725,6 @@ void maincpu_mainloop(void)
      } while (0);
  #define reg_y_read dtv_registers[reg_y_idx]
  #endif
@@ -818,7 +853,7 @@ index 14cf0b1..9e4419e 100644
      static uint8_t flag_n = 0;
      static uint8_t flag_z = 0;
  #ifndef NEED_REG_PC
-@@ -639,7 +794,13 @@ if (!retro_mainloop)
+@@ -639,7 +797,13 @@ if (!retro_mainloop)
  
  #define GLOBAL_REGS maincpu_regs
  
@@ -832,7 +867,7 @@ index 14cf0b1..9e4419e 100644
  
          maincpu_int_status->num_dma_per_opcode = 0;
  
-@@ -769,7 +930,13 @@ void maincpu_mainloop(void)
+@@ -769,7 +933,13 @@ void maincpu_mainloop(void)
  
  #define GLOBAL_REGS maincpu_regs
  

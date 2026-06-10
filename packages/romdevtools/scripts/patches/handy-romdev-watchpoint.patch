@@ -37,7 +37,7 @@
 # opcode fetch; exports romdev_cov_set/get). Ring-buffer state lives in libretro.cpp.
 #
 diff --git a/libretro/libretro.cpp b/libretro/libretro.cpp
-index ad4efd7..888ba68 100644
+index ad4efd7..e886c00 100644
 --- a/libretro/libretro.cpp
 +++ b/libretro/libretro.cpp
 @@ -995,6 +995,10 @@ void retro_get_system_av_info(struct retro_system_av_info *info)
@@ -69,7 +69,7 @@ index ad4efd7..888ba68 100644
        for (int lcv = 1; lcv < retro_overclock; lcv++)
           lynx->Overclock();
     }
-@@ -1292,16 +1307,339 @@ unsigned retro_get_region(void)
+@@ -1292,16 +1307,346 @@ unsigned retro_get_region(void)
     return RETRO_REGION_NTSC;
  }
  
@@ -82,6 +82,13 @@ index ad4efd7..888ba68 100644
 +unsigned int  romdev_snap_regs[19];
 +int           romdev_snap_kind = 0;
 +unsigned int  romdev_65c02_instr_pc = 0xFFFFFFFF;
++/* romdev interrupt block (pure-call primitive — gates the IRQ dispatch in
++ * lynx/c65c02.h's Update()). */
++int           romdev_irq_block = 0;
++void romdev_irqblock_set(int on)
++{
++   romdev_irq_block = on ? 1 : 0;
++}
 +unsigned int  romdev_65c02_snap(unsigned int a, unsigned int x, unsigned int y, unsigned int ps, unsigned int sp, int kind)
 +{
 +   int i;
@@ -414,10 +421,10 @@ index ad4efd7..888ba68 100644
     return 0;
  }
 diff --git a/lynx/c65c02.h b/lynx/c65c02.h
-index 0fdea74..0752a41 100644
+index 0fdea74..2ee8bc3 100644
 --- a/lynx/c65c02.h
 +++ b/lynx/c65c02.h
-@@ -65,9 +65,96 @@
+@@ -65,9 +65,100 @@
  //#define CPU_PEEKW(m)			(mSystem.PeekW_CPU(m))
  //#define CPU_POKE(m1,m2)			(mSystem.Poke_CPU(m1,m2))
  
@@ -457,6 +464,10 @@ index 0fdea74..0752a41 100644
 +extern int           romdev_snap_kind;
 +extern unsigned int  romdev_65c02_instr_pc;
 +extern unsigned int  romdev_65c02_snap(unsigned int a, unsigned int x, unsigned int y, unsigned int ps, unsigned int sp, int kind);
++/* romdev INTERRUPT BLOCK — the pure-call primitive: while set, IRQ delivery
++ * is suppressed (Mikie keeps the line pending), so a callSubroutine-driven
++ * routine cannot be hijacked by the game's timer/video handlers. */
++extern int           romdev_irq_block;
 +
 +/* romdev PC BREAKPOINT (Lynx 65C02). Compared in C65C02::Update() just before
 + * the opcode fetch, where mPC == the address of the instruction about to
@@ -516,7 +527,16 @@ index 0fdea74..0752a41 100644
  
  
  enum
-@@ -248,6 +335,69 @@ class C65C02
+@@ -216,7 +307,7 @@ class C65C02
+ 
+          //    fprintf(stderr, "cpu update\n");
+ 
+-         if(gSystemIRQ && !mI)
++         if(gSystemIRQ && !mI && !romdev_irq_block)
+          {
+             // IRQ signal clearance is handled by CMikie::Update() as this
+             // is the only source of interrupts
+@@ -248,6 +339,69 @@ class C65C02
           //
           if(gSystemCPUSleep) return;
  

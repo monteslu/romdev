@@ -20,10 +20,10 @@ index 7e5c43b..4530bc7 100644
  
  private:
 diff --git a/libgambatte/libretro/libretro.cpp b/libgambatte/libretro/libretro.cpp
-index 15b042c..0a94800 100644
+index 15b042c..4e49b22 100644
 --- a/libgambatte/libretro/libretro.cpp
 +++ b/libgambatte/libretro/libretro.cpp
-@@ -2874,6 +2874,225 @@ void retro_unload_game()
+@@ -2874,6 +2874,232 @@ void retro_unload_game()
  
  unsigned retro_get_region() { return RETRO_REGION_NTSC; }
  
@@ -37,6 +37,13 @@ index 15b042c..0a94800 100644
 + * 3=write-watch 4=read-watch), out[1]=count(19), out[2..20]=regs in the
 + * romdev regId order ([0]=A [1]=F [2]=B [3]=C [4]=D [5]=E [6]=H [7]=L
 + * [16]=PC-of-executing-instruction [18]=SP). `clear` resets the kind. */
++/* romdev interrupt block (pure-call primitive — gates IRQ service in
++ * gambatte-memory.cpp's event loop). */
++int romdev_irq_block = 0;
++void romdev_irqblock_set(int on) {
++   romdev_irq_block = on ? 1 : 0;
++}
++
 +extern unsigned       romdev_snap_regs[19];
 +extern int            romdev_snap_kind;
 +void romdev_regsnap_get(unsigned *out, int clear) {
@@ -249,7 +256,7 @@ index 15b042c..0a94800 100644
  void *retro_get_memory_data(unsigned id)
  {
     if (rom_loaded) switch (id)
-@@ -2883,11 +3102,20 @@ void *retro_get_memory_data(unsigned id)
+@@ -2883,11 +3109,20 @@ void *retro_get_memory_data(unsigned id)
        case RETRO_MEMORY_RTC:
           return gb.rtcdata_ptr();
        case RETRO_MEMORY_SYSTEM_RAM:
@@ -272,7 +279,7 @@ index 15b042c..0a94800 100644
     }
  
     return 0;
-@@ -2902,14 +3130,21 @@ size_t retro_get_memory_size(unsigned id)
+@@ -2902,14 +3137,21 @@ size_t retro_get_memory_size(unsigned id)
        case RETRO_MEMORY_RTC:
           return gb.rtcdata_size();
        case RETRO_MEMORY_SYSTEM_RAM:
@@ -696,6 +703,35 @@ index 76c29de..7b52f43 100644
  #endif
  
  	void setVideoBuffer(video_pixel_t *videoBuf, std::ptrdiff_t pitch) {
+diff --git a/libgambatte/src/gambatte-memory.cpp b/libgambatte/src/gambatte-memory.cpp
+index c8790fc..5028a98 100644
+--- a/libgambatte/src/gambatte-memory.cpp
++++ b/libgambatte/src/gambatte-memory.cpp
+@@ -24,6 +24,8 @@
+ #include "bootloader.h"
+ #include <cstring>
+ 
++extern "C" int romdev_irq_block;
++
+ namespace gambatte {
+ 
+ Memory::Memory(Interrupter const &interrupter) :
+@@ -358,7 +360,14 @@ unsigned long Memory::event(unsigned long cc) {
+ 			intreq_.setEventTime<intevent_unhalt>(disabled_time);
+ 		}
+ 
+-		if (ime()) {
++		/* romdev INTERRUPT BLOCK — the pure-call primitive. While set, IRQ
++		 * SERVICE is suppressed (pending flags stay pending in IF), so a
++		 * routine driven by callSubroutine cannot be hijacked by the game's
++		 * own VBlank/timer handlers — the frame logic that stomps output
++		 * buffers. Video/timers keep running; only the dispatch is gated.
++		 * (Declared extern "C" at file scope above — block-scope linkage
++		 * specs are illegal and namespace scope would mangle.) */
++		if (ime() && !romdev_irq_block) {
+ 			unsigned const pendingIrqs = intreq_.pendingIrqs();
+ 			unsigned const n = pendingIrqs & -pendingIrqs;
+ 			unsigned address;
 diff --git a/libgambatte/src/gambatte-memory.h b/libgambatte/src/gambatte-memory.h
 index d82ca85..19b71d7 100644
 --- a/libgambatte/src/gambatte-memory.h

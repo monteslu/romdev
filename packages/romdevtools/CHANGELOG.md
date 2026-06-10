@@ -6,6 +6,35 @@ the `romdev-mcp` bin is kept as an alias.)
 
 ## 0.28.0
 
+### Added — pure calls + the generic copy trace on ALL 14 platforms (primitives #2 and #3)
+The other two primitives from the all-platforms RE proposal, completing the
+set (registersAtHit was #1):
+- **`cpu({op:'call', pure:true})` works everywhere.** The guarantee is the
+  same on every platform — the game's own NMI/IRQ/VBlank logic CANNOT run
+  during the call and stomp the routine's output buffer — with the mechanism
+  reported as `pureMode`: Genesis/SMS/GG step ONLY the CPU (`'cpu-only'`,
+  the gpgx separable-loop path); every other core suppresses interrupt
+  DELIVERY for the duration (`'irq-blocked'` via a new `romdev_irqblock_set`
+  export — pending lines stay pending, video/timers advance harmlessly, no
+  game handler executes); the 2600's 6507 has no interrupt lines at all
+  (`'no-interrupts'`). Proven live on NES: NMI delivery verified firing,
+  then silent under the block, then a planted routine pure-called
+  end-to-end with its write landing.
+- **`watch({on:'copy'})` — the generic "where does this graphic come
+  from?".** Logs every write landing in a VRAM/dest address window with the
+  EXECUTING instruction's PC. Port-based video memory is hooked INSIDE the
+  cores — NES $2007, SNES $2118/19 (BOTH CPU port writes and the DMA path —
+  the PC is the DMA-triggering instruction), PCE VWR, MSX VDP data port,
+  SMS/GG/Genesis VDP data port (the CPU-port complement of the Genesis DMA
+  watch). Direct-mapped platforms (GB/GBC, GBA, C64, Lynx, 7800) route
+  through the CPU-address range log automatically. Follow a hit with
+  breakpoint({on:'pc', address: pc}) for registersAtHit at the uploader.
+- Cores rebuilt again (same pins; the scripts/patches/ diffs carry
+  everything — all 11 verified to apply clean to pristine checkouts).
+- `test/pure-copy-primitives.test.js`: the 13-core irq-block/run-pure
+  feature matrix, NES NMI-delivery proof + end-to-end pure call, MSX
+  block-safety, and copy traces on NES (port), SNES (port+DMA), GB (mapped).
+
 ### Fixed/Added — registersAtHit + freeze-after-hit on ALL 14 platforms (every core rebuilt)
 The gpgx round's break-instant fixes, extended to every other core — the same
 three guarantees now hold across the whole platform matrix:

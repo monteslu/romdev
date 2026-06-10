@@ -76,7 +76,7 @@
 #
 
 diff --git a/src/arm/arm.c b/src/arm/arm.c
-index 0b92d7f..158dcfe 100644
+index 0b92d7f..3664f6d 100644
 --- a/src/arm/arm.c
 +++ b/src/arm/arm.c
 @@ -9,6 +9,232 @@
@@ -312,7 +312,25 @@ index 0b92d7f..158dcfe 100644
  void ARMSetPrivilegeMode(struct ARMCore* cpu, enum PrivilegeMode mode) {
  	if (mode == cpu->privilegeMode) {
  		// Not switching modes after all
-@@ -230,6 +456,35 @@ void ARMRun(struct ARMCore* cpu) {
+@@ -121,8 +347,16 @@ void ARMReset(struct ARMCore* cpu) {
+ 	cpu->irqh.reset(cpu);
+ }
+ 
++/* romdev INTERRUPT BLOCK — the pure-call primitive. While set, IRQ delivery
++ * to the ARM is suppressed (IF/IE flags stay pending), so a routine driven by
++ * callSubroutine cannot be hijacked by the game's own VBlank handlers — the
++ * frame logic that stomps output buffers. Video/timers keep running; only the
++ * CPU's IRQ ENTRY is gated. (SWI is NOT gated: a driven routine may
++ * legitimately call BIOS functions.) */
++int romdev_irq_block = 0;
++
+ void ARMRaiseIRQ(struct ARMCore* cpu) {
+-	if (cpu->cpsr.i) {
++	if (cpu->cpsr.i || romdev_irq_block) {
+ 		return;
+ 	}
+ 	union PSR cpsr = cpu->cpsr;
+@@ -230,6 +464,35 @@ void ARMRun(struct ARMCore* cpu) {
  	while (cpu->cycles >= cpu->nextEvent) {
  		cpu->irqh.processEvents(cpu);
  	}
@@ -348,7 +366,7 @@ index 0b92d7f..158dcfe 100644
  	if (cpu->executionMode == MODE_THUMB) {
  		ThumbStep(cpu);
  	} else {
-@@ -241,12 +496,91 @@ void ARMRun(struct ARMCore* cpu) {
+@@ -241,12 +504,91 @@ void ARMRun(struct ARMCore* cpu) {
  }
  
  void ARMRunLoop(struct ARMCore* cpu) {
@@ -592,10 +610,10 @@ index 27e289c..c40b99f 100644
  	int wait = 0;
  	uint16_t oldValue;
 diff --git a/src/platform/libretro/libretro.c b/src/platform/libretro/libretro.c
-index 4b05a42..13616e2 100644
+index 4b05a42..0c1d828 100644
 --- a/src/platform/libretro/libretro.c
 +++ b/src/platform/libretro/libretro.c
-@@ -2269,6 +2269,240 @@ unsigned retro_get_region(void) {
+@@ -2269,6 +2269,246 @@ unsigned retro_get_region(void) {
  	return RETRO_REGION_NTSC; // TODO: This isn't strictly true
  }
  
@@ -714,6 +732,12 @@ index 4b05a42..13616e2 100644
 + * out[2..20]=regs in the romdev ARM regId order ([0..15]=r0..r15, [16]=CPSR,
 + * [17]=pipeline PC of the executing instruction, [18]=r13/SP). `clear` resets
 + * the kind. */
++/* romdev interrupt block (pure-call primitive — gates ARMRaiseIRQ in arm.c). */
++extern int romdev_irq_block;
++void romdev_irqblock_set(int on) {
++	romdev_irq_block = on ? 1 : 0;
++}
++
 +extern unsigned int romdev_snap_regs[19];
 +extern int          romdev_snap_kind;
 +void romdev_regsnap_get(unsigned int *out, int clear) {
@@ -836,7 +860,7 @@ index 4b05a42..13616e2 100644
  void retro_set_controller_port_device(unsigned port, unsigned device) {
  	UNUSED(port);
  	UNUSED(device);
-@@ -2327,6 +2561,20 @@ void* retro_get_memory_data(unsigned id) {
+@@ -2327,6 +2567,20 @@ void* retro_get_memory_data(unsigned id) {
  			break;
  		}
  		break;
@@ -857,7 +881,7 @@ index 4b05a42..13616e2 100644
  	default:
  		break;
  	}
-@@ -2373,6 +2621,16 @@ size_t retro_get_memory_size(unsigned id) {
+@@ -2373,6 +2627,16 @@ size_t retro_get_memory_size(unsigned id) {
  		return GB_SIZE_WORKING_RAM;
  	case RETRO_MEMORY_VIDEO_RAM:
  		return GBA_SIZE_VRAM;

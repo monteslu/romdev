@@ -52,6 +52,17 @@
 #   State lives in Src/Z80/R800.c; the six exports in libretro.c. Build script
 #   adds them to EXPORTED_FUNCTIONS via RE2_EXPORTS.
 #
+diff --git a/Makefile.libretro b/Makefile.libretro
+index 6f412c7..5d65891 100644
+--- a/Makefile.libretro
++++ b/Makefile.libretro
+@@ -1,5 +1,5 @@
+ TARGET_NAME := bluemsx
+-CFLAGS := -std=gnu89
++CFLAGS := -std=gnu89 -fno-common -Wno-error -Wno-incompatible-function-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration
+ CXXFLAGS := -std=gnu++98
+ GIT_VERSION := " $(shell git rev-parse --short HEAD || echo unknown)"
+ ifneq ($(GIT_VERSION)," unknown")
 diff --git a/Src/SoundChips/AY8910.c b/Src/SoundChips/AY8910.c
 index 3e74ec9..b564d1d 100644
 --- a/Src/SoundChips/AY8910.c
@@ -100,7 +111,7 @@ index 01c0752..6076662 100644
  #endif
  
 diff --git a/Src/VideoChips/VDP.c b/Src/VideoChips/VDP.c
-index 8e5400d..36391fa 100644
+index 8e5400d..8a640be 100644
 --- a/Src/VideoChips/VDP.c
 +++ b/Src/VideoChips/VDP.c
 @@ -397,6 +397,25 @@ struct VDP {
@@ -129,6 +140,24 @@ index 8e5400d..36391fa 100644
  #include "SpriteLine.h"
  #include "Common.h"
  
+@@ -1131,6 +1150,17 @@ static void write(VDP* vdp, UInt16 ioPort, UInt8 value)
+         int index = MAP_VRAMINDEX(vdp, (vdp->vdpRegs[14] << 14) | vdp->vramAddress);
+         if (!(index & ~vdp->vramAccMask)) {
+             vdp->vram[index] = value;
++            {
++                /* romdev VRAM-port copy trace — log {vram addr, executing
++                 * instruction PC, value} when the write lands in the watched
++                 * window (state + exports in libretro.c; PC latch in R800.c). */
++                extern unsigned int romdev_vw_lo, romdev_vw_hi;
++                extern int romdev_vw_enabled;
++                extern void romdev_vw_log(unsigned int vaddr, unsigned int pc, unsigned char val);
++                extern unsigned int romdev_z80_instr_pc;
++                if (romdev_vw_enabled && (unsigned int)index >= romdev_vw_lo && (unsigned int)index <= romdev_vw_hi)
++                    romdev_vw_log((unsigned int)index, romdev_z80_instr_pc, value);
++            }
+ 
+             tryWatchpoint(DBGTYPE_VIDEO, index, value, vdp, peekVram);
+ //        printf("W(0x%.4x): %.2x\n", (vdp->vdpRegs[14] << 14) | vdp->vramAddress, value);
 diff --git a/Src/VideoChips/VDP.h b/Src/VideoChips/VDP.h
 index cc6cbf5..8c1bab2 100644
 --- a/Src/VideoChips/VDP.h
@@ -150,10 +179,10 @@ index cc6cbf5..8c1bab2 100644
  extern void RefreshScreen(int);
  
 diff --git a/Src/Z80/R800.c b/Src/Z80/R800.c
-index e3dd190..439b9b9 100644
+index e3dd190..bf55bc8 100644
 --- a/Src/Z80/R800.c
 +++ b/Src/Z80/R800.c
-@@ -42,6 +42,180 @@ static UInt8  ZSPXYTable[256];
+@@ -42,6 +42,185 @@ static UInt8  ZSPXYTable[256];
  static UInt8  ZSPHTable[256];
  static UInt16 DAATable[0x800];
  
@@ -207,6 +236,11 @@ index e3dd190..439b9b9 100644
 +unsigned int  romdev_snap_regs[19];
 +int           romdev_snap_kind = 0;
 +unsigned int  romdev_z80_instr_pc = 0xFFFFFFFF;
++/* romdev INTERRUPT BLOCK — the pure-call primitive. While set, INT/NMI
++ * acceptance is suppressed (the lines stay pending), so a routine driven by
++ * callSubroutine cannot be hijacked by the BIOS KEYINT / game VBlank
++ * handlers — the frame logic that stomps output buffers. */
++int           romdev_irq_block = 0;
 +static void romdev_z80_snap(R800* r800, int kind) {
 +    int i;
 +    for (i = 0; i < 19; i++) romdev_snap_regs[i] = 0;
@@ -334,7 +368,7 @@ index e3dd190..439b9b9 100644
  
  static void cb(R800* r800);
  static void dd(R800* r800);
-@@ -179,9 +353,26 @@ static void writePort(R800* r800, UInt16 port, UInt8 value) {
+@@ -179,9 +358,26 @@ static void writePort(R800* r800, UInt16 port, UInt8 value) {
  }
  
  static UInt8 readMem(R800* r800, UInt16 address) {
@@ -362,7 +396,7 @@ index e3dd190..439b9b9 100644
  }
  
  static UInt8 readOpcode(R800* r800, UInt16 address) {
-@@ -196,6 +387,20 @@ static UInt8 readOpcode(R800* r800, UInt16 address) {
+@@ -196,6 +392,20 @@ static UInt8 readOpcode(R800* r800, UInt16 address) {
  static void writeMem(R800* r800, UInt16 address, UInt8 value) {
      delayMem(r800);
      r800->cachePage = 0xffff;
@@ -383,7 +417,7 @@ index e3dd190..439b9b9 100644
      r800->writeMemory(r800->ref, address, value);
  
  #ifdef ENABLE_WATCHPOINTS
-@@ -6036,6 +6241,14 @@ SystemTime r800GetTimeTrace(R800* r800, int offset) {
+@@ -6036,6 +6246,14 @@ SystemTime r800GetTimeTrace(R800* r800, int offset) {
  
  void r800Execute(R800* r800) {
      static SystemTime lastRefreshTime = 0;
@@ -398,7 +432,7 @@ index e3dd190..439b9b9 100644
      while (!r800->terminate) {
          UInt16 address;
          int iff1 = 0;
-@@ -6076,6 +6289,14 @@ void r800Execute(R800* r800) {
+@@ -6076,6 +6294,14 @@ void r800Execute(R800* r800) {
          }
  #endif
  
@@ -413,7 +447,16 @@ index e3dd190..439b9b9 100644
          executeInstruction(r800, readOpcode(r800, r800->regs.PC.W++));
  
          if (r800->regs.halt)
-@@ -6144,6 +6365,13 @@ void r800Execute(R800* r800) {
+@@ -6086,7 +6312,7 @@ void r800Execute(R800* r800) {
+ 			continue;
+ 		}
+ 
+-        if (! ((r800->intState==INT_LOW && r800->regs.iff1)||r800->nmiEdge) ) {
++        if (! ((r800->intState==INT_LOW && r800->regs.iff1)||r800->nmiEdge) || romdev_irq_block ) {
+ 			continue;
+         }
+ 
+@@ -6144,6 +6370,13 @@ void r800Execute(R800* r800) {
  void r800ExecuteUntil(R800* r800, UInt32 endTime) {
      static SystemTime lastRefreshTime = 0;
  
@@ -427,7 +470,7 @@ index e3dd190..439b9b9 100644
      while ((Int32)(endTime - r800->systemTime) > 0) {
          UInt16 address;
          int iff1 = 0;
-@@ -6169,9 +6397,17 @@ void r800ExecuteUntil(R800* r800, UInt32 endTime) {
+@@ -6169,14 +6402,22 @@ void r800ExecuteUntil(R800* r800, UInt32 endTime) {
          }
  #endif
  
@@ -446,11 +489,26 @@ index e3dd190..439b9b9 100644
              iff1 = r800->regs.iff1 >> 1;
              r800->regs.iff1 >>= iff1;
          }
+ 
+-        if (! ((r800->intState==INT_LOW && r800->regs.iff1)||r800->nmiEdge) ) {
++        if (! ((r800->intState==INT_LOW && r800->regs.iff1)||r800->nmiEdge) || romdev_irq_block ) {
+             continue;
+         }
+ 
+@@ -6264,7 +6505,7 @@ void r800ExecuteInstruction(R800* r800) {
+         r800->regs.iff1 >>= iff1;
+     }
+ 
+-        if (! ((r800->intState==INT_LOW && r800->regs.iff1)||r800->nmiEdge) ) {
++        if (! ((r800->intState==INT_LOW && r800->regs.iff1)||r800->nmiEdge) || romdev_irq_block ) {
+         return;
+     }
+ 
 diff --git a/libretro.c b/libretro.c
-index f583a99..1eb1c26 100644
+index f583a99..b39403a 100644
 --- a/libretro.c
 +++ b/libretro.c
-@@ -1838,16 +1838,319 @@ unsigned retro_get_region(void)
+@@ -1838,16 +1838,369 @@ unsigned retro_get_region(void)
           return RETRO_REGION_NTSC;
     }
  }
@@ -573,6 +631,56 @@ index f583a99..1eb1c26 100644
 + * out[2..20]=regs in the romdev Z80 regId order ([0]=A [1]=F [2]=B [3]=C
 + * [4]=D [5]=E [6]=H [7]=L [8]=IX [9]=IY [16]=PC-of-executing-instruction
 + * [18]=SP). `clear` resets the kind. */
++/* romdev interrupt block (pure-call primitive — gates INT/NMI acceptance in
++ * R800.c's run loops). */
++extern int romdev_irq_block;
++void romdev_irqblock_set(int on)
++{
++   romdev_irq_block = on ? 1 : 0;
++}
++
++/* romdev VRAM-port copy trace (hook in VDP.c's data-port write path).
++ * set(lo,hi,enabled) arms a VRAM address window + clears the ring; get
++ * drains [vaddr,pc,val] triples, out2 = [totalSeen, stored]. */
++#define ROMDEV_VW_CAP 1024
++unsigned int  romdev_vw_lo      = 0;
++unsigned int  romdev_vw_hi      = 0;
++int           romdev_vw_enabled = 0;
++static unsigned int  romdev_vw_addrs[ROMDEV_VW_CAP];
++static unsigned int  romdev_vw_pcs  [ROMDEV_VW_CAP];
++static unsigned char romdev_vw_vals [ROMDEV_VW_CAP];
++static unsigned int  romdev_vw_count  = 0;
++static unsigned int  romdev_vw_stored = 0;
++void romdev_vw_log(unsigned int vaddr, unsigned int pc, unsigned char val)
++{
++   romdev_vw_count++;
++   if (romdev_vw_stored < ROMDEV_VW_CAP) {
++      romdev_vw_addrs[romdev_vw_stored] = vaddr;
++      romdev_vw_pcs  [romdev_vw_stored] = pc;
++      romdev_vw_vals [romdev_vw_stored] = val;
++      romdev_vw_stored++;
++   }
++}
++void romdev_vramwatch_set(unsigned int lo, unsigned int hi, int enabled)
++{
++   romdev_vw_lo = lo; romdev_vw_hi = hi;
++   romdev_vw_enabled = enabled ? 1 : 0;
++   romdev_vw_count = 0; romdev_vw_stored = 0;
++}
++unsigned int romdev_vramwatch_get(unsigned int *out, unsigned int max, unsigned int *out2)
++{
++   unsigned int i, n = romdev_vw_stored;
++   if (out2) { out2[0] = romdev_vw_count; out2[1] = romdev_vw_stored; }
++   if (!out) return 0;
++   if (n > max) n = max;
++   for (i = 0; i < n; i++) {
++      out[i*3 + 0] = romdev_vw_addrs[i];
++      out[i*3 + 1] = romdev_vw_pcs[i];
++      out[i*3 + 2] = romdev_vw_vals[i];
++   }
++   return n;
++}
++
 +extern unsigned int romdev_snap_regs[19];
 +extern int          romdev_snap_kind;
 +void romdev_regsnap_get(unsigned int *out, int clear)
