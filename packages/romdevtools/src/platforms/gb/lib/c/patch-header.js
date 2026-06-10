@@ -7,10 +7,13 @@
 //
 // WHY: most libretro GB cores (gambatte) refuse to load a ROM whose
 // Nintendo logo at $0104-$0133 doesn't match the canonical bytes or
-// whose header checksum at $014D doesn't validate. RGBDS's `rgbfix`
-// does this in the asm-build path; for SDCC-built C ROMs (which our
-// pipeline does NOT auto-patch — every byte that compiles is yours),
-// this script does the same job.
+// whose header checksum at $014D doesn't validate.
+//
+// NOTE: romdev's own build pipeline DOES auto-patch the header now (it
+// runs a bundled rgbfix after every gb/gbc link — see the
+// "rgbfix (auto header fix)" line in build logs), so you only need this
+// script when rebuilding the project OUTSIDE romdev with stock SDCC and
+// no RGBDS installed. It's what keeps the scaffold self-contained.
 //
 // The bundled gb_crt0.s reserves $0100-$014F for the header window,
 // so the bytes patched in here land on actual cartridge-header
