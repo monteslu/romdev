@@ -121,7 +121,12 @@ static uint8_t  on_ground = 0;
 static uint8_t landed_on(uint8_t pl_idx, uint8_t player_y) {
   const Platform *p = &platforms[pl_idx];
   uint8_t feet_y = player_y + 7;
-  if (feet_y < p->y || feet_y > p->y + 4) return 0;          /* not at top edge */
+  /* Window starts ONE PIXEL above the top edge: the standing snap puts the
+   * feet at p->y - 1, and gravity's sub-pixel trickle doesn't move the
+   * integer Y every frame — with the old `feet_y < p->y` cutoff the player
+   * "stood" with on_ground=0 most frames, so A-press jumps only registered
+   * on lucky frames and the idle/jump sprite flickered every frame. */
+  if (feet_y + 1 < p->y || feet_y > p->y + 4) return 0;      /* not at top edge */
   if (px + 7 < p->x) return 0;
   if (px > p->x + (p->w << 3) - 1) return 0;
   return 1;
@@ -192,6 +197,7 @@ void main(void) {
     ppu_wait_nmi();
 
     /* ── Input ──────────────────────────────────────────────── */
+    sound_music_tick();
     pad = pad_poll(0);
     if ((pad & PAD_LEFT)  && px > 8)   px -= MOVE_SPEED;
     if ((pad & PAD_RIGHT) && px < 240) px += MOVE_SPEED;

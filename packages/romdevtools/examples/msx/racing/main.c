@@ -193,6 +193,7 @@ void main(void) {
 
     for (;;) {
         vsync();
+        msx_music_tick();
 
         /* push sprites */
         slot = 0;

@@ -252,6 +252,8 @@ void main(void) {
 
     ppu_wait_nmi();
 
+    sound_music_tick();
+
     p1 = pad_poll(0);
 
     if (game_over_timer > 0) {

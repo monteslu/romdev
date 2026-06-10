@@ -118,6 +118,7 @@ void main(void) {
 
     for (;;) {
         vsync();
+        msx_music_tick();
 
         /* push sprites: left paddle (3 cells), right paddle (3), ball */
         slot = 0;

@@ -150,6 +150,8 @@ void main(void) {
 
         vsync();
 
+        msx_music_tick();
+
         ipx = (int16_t)(px >> 4);
         ipy = (int16_t)(py >> 4);
 

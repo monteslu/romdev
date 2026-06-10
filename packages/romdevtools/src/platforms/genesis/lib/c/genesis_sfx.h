@@ -42,6 +42,7 @@ void sfx_noise(u8 length_frames);
  * decrement the auto-silence countdown. Without this, notes never
  * stop ringing. */
 void sfx_update(void);
+void sfx_music(u8 on);   /* background melody loop on PSG ch2 — ON by default; 0 = off */
 
 /* Power down all PSG channels immediately. */
 void sfx_off(void);

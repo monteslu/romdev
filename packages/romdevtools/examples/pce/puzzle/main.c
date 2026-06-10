@@ -327,6 +327,7 @@ void main(void) {
     for (;;) {
         u8 fall_rate;
         waitvsync();
+        psg_music_tick();
 
         draw_piece(1);   /* erase old piece footprint                    */
 

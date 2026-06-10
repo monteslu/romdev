@@ -123,6 +123,7 @@ void main(void) {
     const int16_t MAXFALL = 280;
 
     lcd_init_default();
+    sound_init();
     enable_vblank_irq();   /* MANDATORY: HALT-driven wait_vblank. Without this,
                             * busy-poll wait_vblank runs ~1/30 speed on the WASM
                             * emulator and the game loop appears to hang. */
@@ -172,7 +173,10 @@ void main(void) {
         if (pad & PAD_RIGHT) vx =  MOVE;
 
         grounded = on_platform(ipx, ipy);
-        if ((pad & PAD_A) && !(prev & PAD_A) && grounded) vy = JUMP;
+        if ((pad & PAD_A) && !(prev & PAD_A) && grounded) {
+            vy = JUMP;
+            sound_play_tone(1, 1750, 8);    /* jump blip (ch2 square) */
+        }
         prev = pad;
 
         vy += GRAVITY;

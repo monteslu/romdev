@@ -244,6 +244,7 @@ void main(void) {
         u8 slot;
         int16_t step;
         waitvsync();
+        psg_music_tick();
 
         /* stage sprites: player + obstacles */
         slot = 0;

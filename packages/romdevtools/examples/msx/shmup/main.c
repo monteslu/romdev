@@ -224,6 +224,7 @@ void main(void) {
 
     for (;;) {
         vsync();
+        msx_music_tick();
 
         dir = msx_read_joystick(1);
         if (dir == STICK_CENTER) dir = msx_read_joystick(0);

@@ -8,6 +8,7 @@
  */
 #include "sms_hw.h"
 #include "sms_sfx.h"
+#include "sms_music.h"
 #include <stdint.h>
 
 extern void sms_vdp_init(void);
@@ -163,6 +164,8 @@ void main(void) {
 
   sms_sprite_init();
   sfx_init();
+  music_init();
+  music_play(0);   /* continuous background music ("no sound" was the playtest verdict) */
   sms_vdp_display_on();
 
   do {
@@ -170,6 +173,7 @@ void main(void) {
     uint8_t i, j;
     sms_vblank_wait();
     sfx_update();
+    music_update();
 
     /* Stage SAT for the new frame. */
     sms_sprite_set(0, player.x, player.y, T_SHIP);

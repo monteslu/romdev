@@ -181,6 +181,7 @@ void main(void) {
     ppu_wait_nmi();
 
     /* ── Input ────────────────────────────────────────────────── */
+    sound_music_tick();
     p1 = pad_poll(0);
     p2 = pad_poll(1);
 

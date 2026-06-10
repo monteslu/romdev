@@ -126,6 +126,7 @@ u8   pce_joy_read(void);   /* read pad 1 -> clean bitmask (PCE_JOY_* below)  */
 
 /* ---- sound helpers (pce_sound.c) ----------------------------------------- */
 void psg_tone(u8 chan, u16 freq, u8 vol); /* play a wavetable tone (vol 0..31) */
-void psg_off(u8 chan);                    /* silence + disable a channel        */
+void psg_off(u8 chan);
+void psg_music_tick(void);    /* call once per frame (scaffolds do) */                    /* silence + disable a channel        */
 
 #endif /* PCE_HW_H */

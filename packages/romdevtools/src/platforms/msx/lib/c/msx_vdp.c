@@ -121,6 +121,13 @@ void msx_psg_tone(uint8_t chan, uint16_t period, uint8_t vol) {
     uint8_t fine = (uint8_t)(period & 0xFF);
     uint8_t coarse = (uint8_t)((period >> 8) & 0x0F);
 
+    /* DI around the whole register sequence: the BIOS KEYINT ISR reads
+     * PSG R14 (joystick row) every frame, and it CLOBBERS the PSGADDR
+     * latch — an IRQ between our PSGADDR and PSGWRITE sent the period/
+     * volume bytes into R14 instead. Symptom: mixer set, period 0,
+     * amplitude 0 → every MSX scaffold was silent. */
+    __asm__("di");
+
     /* tone period: regs 0/1 (A), 2/3 (B), 4/5 (C) */
     PSGADDR = (uint8_t)(chan << 1);       PSGWRITE = fine;
     PSGADDR = (uint8_t)((chan << 1) + 1); PSGWRITE = coarse;
@@ -136,15 +143,53 @@ void msx_psg_tone(uint8_t chan, uint16_t period, uint8_t vol) {
     mixer &= (uint8_t)~(1 << chan);        /* tone ON for this channel       */
     PSGADDR = 7;
     PSGWRITE = mixer;
+    __asm__("ei");
 }
 
 /* Silence a PSG channel: zero its volume and re-disable its tone bit. */
 void msx_psg_off(uint8_t chan) {
     uint8_t mixer;
+    __asm__("di");                                /* same KEYINT race as above */
     PSGADDR = (uint8_t)(8 + chan); PSGWRITE = 0;  /* volume 0 */
     PSGADDR = 7;
     mixer = PSGREAD;
     mixer |= (uint8_t)(1 << chan);                /* tone OFF for this channel */
     PSGADDR = 7;
     PSGWRITE = mixer;
+    __asm__("ei");
+}
+
+/* ── background music: 16-step melody loop on PSG channel C (2) ─────
+ * Call msx_music_tick() once per frame (the scaffolds wire it in after
+ * their vsync wait); msx_music(0) turns it off. SFX use channels A/B,
+ * so effects always cut through. AY period = 1789773 / (16 * freq). */
+static const uint16_t _msx_music_per[16] = {
+    427, 339, 285, 214, 285, 339, 427, 0,    /* C4 E4 G4 C5 G4 E4 C4 -  */
+    508, 427, 339, 254, 339, 427, 508, 0,    /* A3 C4 E4 A4 E4 C4 A3 -  */
+};
+static uint8_t _msx_music_on = 1;
+static uint8_t _msx_music_step;
+static uint8_t _msx_music_timer;
+
+void msx_music(uint8_t on) {
+    _msx_music_on = on;
+    _msx_music_step = 0;
+    _msx_music_timer = 0;
+    if (!on) msx_psg_off(2);
+}
+
+void msx_music_tick(void) {
+    uint16_t p;
+    if (!_msx_music_on) return;
+    if (_msx_music_timer == 0) {
+        p = _msx_music_per[_msx_music_step & 15];
+        if (p) {
+            msx_psg_tone(2, p, 12);            /* AY volume is ~logarithmic — 9 was a whisper */
+        } else {
+            msx_psg_off(2);                    /* rest */
+        }
+        ++_msx_music_step;
+    }
+    ++_msx_music_timer;
+    if (_msx_music_timer >= 9) _msx_music_timer = 0;
 }

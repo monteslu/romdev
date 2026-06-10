@@ -54,6 +54,7 @@ void sfx_init(void);
 void sfx_tone(uint8_t channel, uint8_t period, uint8_t length_frames);
 void sfx_noise(uint8_t length_frames);
 void sfx_update(void);
+void sfx_music(uint8_t on);  /* background melody on voice 1 — ON by default; 0 = off */
 void sfx_off(void);
 
 #endif

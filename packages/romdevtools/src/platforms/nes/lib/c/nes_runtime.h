@@ -145,6 +145,8 @@ void sound_init(void);
 void sound_play_tone(uint8_t channel, uint16_t period, uint8_t vol_4bit, uint8_t length_frames);
 void sound_play_noise(uint8_t period_4bit, uint8_t vol_4bit, uint8_t length_frames);
 void sound_off(void);
+void sound_music(uint8_t on);      /* background triangle melody — ON by default; 0 = off */
+void sound_music_tick(void);       /* call once per frame (scaffolds do) */
 
 /* ── Globals ──────────────────────────────────────────────────── */
 extern uint8_t shadow_oam[256];       /* at $0200, DMA'd by NMI */
