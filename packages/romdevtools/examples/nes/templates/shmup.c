@@ -23,7 +23,7 @@
 
 /* The title screen renders this — examples({op:'fork'}) stamps your game's
  * name here automatically. Keep it ≤16 chars of A-Z 0-9 space dash. */
-#define GAME_TITLE "STAR PATROL"
+#define GAME_TITLE "NOVA SENTRY"
 
 /* ── GAME LOGIC (clay — reshape freely) ──────────────────────────────────────
  * Tile art. Each 8x8 tile = 16 bytes: 8 plane-0 rows then 8 plane-1 rows
@@ -166,8 +166,8 @@ static uint8_t hits(uint8_t ax, uint8_t ay, uint8_t bx, uint8_t by) {
 }
 
 /* ── HARDWARE IDIOM (load-bearing — reshape gameplay around this; see TROUBLESHOOTING) ──
- * Sprite-0-hit split scroll — THE classic NES technique (Super Mario Bros'
- * status bar works exactly like this). The PPU has ONE scroll for the whole
+ * Sprite-0-hit split scroll — THE classic NES technique (the fixed
+ * status bar over a scrolling field in countless NES classics). The PPU has ONE scroll for the whole
  * frame; to keep the HUD fixed while the playfield scrolls, you change the
  * scroll MID-FRAME, and sprite 0 is your timing signal:
  *
@@ -190,7 +190,18 @@ static uint8_t hits(uint8_t ax, uint8_t ay, uint8_t bx, uint8_t by) {
 #define PPUSCROLL_REG (*(volatile uint8_t *)0x2005)
 static void split_after_hud(void) {
   uint8_t timeout = 240;
-  /* sprite-0 flag clears at pre-render; wait for THIS frame's hit. */
+  /* FOOTGUN: the hit flag from the frame JUST RENDERED stays set all the
+   * way through vblank — it only clears at the next pre-render line. We're
+   * called right after ppu_wait_nmi() (i.e. inside vblank), so polling for
+   * "set" alone can exit INSTANTLY on the stale flag and the PPUSCROLL
+   * write lands during vblank — scrolling the WHOLE next frame, HUD
+   * included (a subtle shear that looks like HUD drift). The classic fix
+   * is the two-phase poll: wait for the stale flag to CLEAR (pre-render),
+   * then wait for THIS frame's hit to SET. */
+  while (PPUSTATUS_REG & 0x40) {
+    if (--timeout == 0) return;   /* flag stuck: bail, keep scroll (0,0) */
+  }
+  timeout = 240;
   while (!(PPUSTATUS_REG & 0x40)) {
     if (--timeout == 0) return;   /* rendering off / sprite-0 missing: bail */
   }
