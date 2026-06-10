@@ -456,7 +456,15 @@ session for ~2h. Fixed two ways:
   buffer you're capturing (a real session diffed a CORRECT codec
   reimplementation against that poisoned "ground truth" for hours). Prefer
   `pure:true` for every decompressor/codec call; non-pure results carry a ⚠
-  caveat when frame logic ran. (SMS/GG get the same via the shared core.)
+  caveat when frame logic ran. (SMS/GG get the same via the shared core; the
+  OTHER platforms get the same guarantee via interrupt blocking —
+  `pureMode:'irq-blocked'` — so the technique transfers everywhere.)
+- **`watch({on:'copy'})`** — the CPU-port complement of `watch({on:'dma'})`:
+  logs every data-port write landing in a VRAM window with the executing
+  instruction's PC. Use `dma` when the upload is DMA'd (most Genesis
+  graphics), `copy` when the game pokes the data port directly (the
+  "video_ram writes don't reach the renderer" class of confusion — `copy`
+  shows you who's writing and where).
 
 ## ROM layout
 
