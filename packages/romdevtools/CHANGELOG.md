@@ -6,6 +6,49 @@ the `romdev-mcp` bin is kept as an alias.)
 
 ## 0.28.0
 
+### Fixed/Added — gpgx core round (the NBA-Jam-both-consoles feedback): break-instant truth on Genesis/SMS/GG
+The first core rebuild in this release (gpgx only; pins unchanged, patch extended).
+- **`registersAtHit` on Genesis/SMS/GG** — `breakpoint({on:'pc'|'write'|'read'})`
+  hits now carry the FULL register file (m68k d0-d7/a0-a7/pc/sr/sp; z80
+  a/f/b/c/d/e/h/l/ix/iy/pc/sp) frozen by the core AT the hit instant. gpgx
+  schedules CPUs per scanline, so the live register file used to drift
+  hundreds of instructions past a hit before the host could read it — the
+  "wrong-pointer chases" that cost a real RE session ~2h. On a pc-break the
+  CPU now also stays FROZEN for the remainder of the frame (and across
+  frames until the hit is cleared), so even live reads agree.
+- **Write/read watchpoint PC is the EXECUTING instruction** — the hooks now
+  record the instruction's first-byte address latched at dispatch, not the
+  post-prefetch PC (the orb-at-$2A7216-reported-as-$2A721C off-by-one).
+  `breakpoint({on:'write'})` also renames `value`→`valueByte` (it's the one
+  byte that landed, not the operand) and explains its `hits` semantics.
+- **`cpu({op:'call', pure:true})`** — steps ONLY the active CPU (new
+  `romdev_run_pure` export): no VDP line processing, no co-CPU, no interrupts
+  raised — so the game's own VBlank logic can NOT run "concurrently" and
+  stomp the driven routine's output buffer (a real session diffed a correct
+  codec reimplementation against that poisoned output for ~1.5h). Non-pure
+  calls that spanned frames now carry a loud ⚠ caveat naming the risk and
+  the fix.
+- **Genesis `system_ram` normalized to CPU byte order** — gpgx stores 68k
+  work RAM host-LE word-swapped (`work_ram[A^1]`); the raw layout leaked
+  through every byte-granular tool. Self-consistent within search→write
+  loops (which is why it hid — even a test had the swapped bytes baked in as
+  the expected value), but off-by-XOR-1 the moment an offset crossed to/from
+  disassembly addresses or cheat-DB maps. Offset X now IS the byte the 68k
+  sees at $FF0000+X; words read big-endian as documented. This also fixes
+  `cpu({op:'call'})` sentinel pushes / `presetMemory` writes for any non-zero
+  sentinel address (the default $0 sentinel was swap-invariant, hiding it).
+- breakpoint hit responses normalize `hits` (a watchdog stop no longer
+  reports the contradictory `hit:true, hits:0`).
+- Docs: the held-input menu trick (when a `pressDuring` schedule never
+  registers on a menu screen, hold via `input({op:'set'})` and omit
+  pressDuring — runs inherit held input) is now in the breakpoint/watch tool
+  docs; the server banner prints a one-line headless note when no display is
+  available (so an agent knows before promising a playtest window).
+- `test/gpgx-registers-at-hit.test.js`: live-core coverage for all of it,
+  including a per-platform Genesis memory-read smoke (the earlier
+  "info is not defined" regression was invisible to a fake-host-only suite).
+
+
 ### Fixed/Added — value-search upgrades (from the locate-value skill review)
 - **Relative compares work as the FIRST `searchNext`.** `op:'search'` now
   baselines every candidate at seed time, so `compare:'inc'/'dec'/'changed'/

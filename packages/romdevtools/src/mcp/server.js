@@ -418,6 +418,12 @@ async function main() {
     log.info(`optional observer:      http://${bannerHost}:${port}/livestream`);
     log.info("");
     log.info("connect your coding agent: https://github.com/monteslu/romdev#connect");
+    // One conditional line so an agent knows the constraint BEFORE promising a
+    // playtest window to a human (the op itself still errors with the full fix).
+    if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
+      log.info("");
+      log.info("note: no display detected (headless) — playtest({op:'open'}) is unavailable; all other tools work.");
+    }
   });
   const extraServers = [];
   for (const h of bindHosts.slice(1)) {
