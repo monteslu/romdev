@@ -921,12 +921,26 @@ TEMPLATES.snes = {
     main: "templates/racing.c",
     extraSources: [
       { src: "templates/racing-data.asm", dst: "data.asm" },
+      { src: "templates/racing-hdr.asm", dst: "hdr.asm" },  /* battery-SRAM cart header — without it saves silently don't persist */
     ],
     runtime: SNES_SFX_RUNTIME,
     runtimeDirs: SNES_PVSNESLIB_VENDOR_DIRS,
     lang: "C (tcc-65816 + PVSnesLib)",
     ext: ".sfc",
-    describe: "Endless 3-lane top-down racer for SNES. LEFT/RIGHT switches lanes, obstacles slide down at growing speed. Two sprite tiles (player + enemy), score in BG text overlay.",
+    describe: "EMBER CIRCUIT — the Mode 7 racer: a rotating-perspective ground plane (per-scanline matrix via 5 HDMA channels + a hardware-multiply table builder rebuilt every frame) — steer to yaw the camera and the whole world swings around your car. Ring circuit with lap timing, 1P time trial, 2P relay duel (P2 on controller 2), battery-SRAM best time (header-declared, survives power cycles), SPC music + surface SFX, Mode-1 HUD strip split above the Mode 7 ground.",
+    players: "1-2 (relay duel — P1 laps, then P2 on controller 2; lower time wins)",
+    sram: "battery SRAM at $70:0000 (CARTRIDGETYPE $02 via the bundled hdr.asm; magic+checksum, magic written last), verified across hardReset",
+    mechanics: ["heading+speed driving model (fixed-point sin table)", "ring-track surface model (per-row half-width tables)", "quadrant lap counter", "lap timing + DNF cap", "persistent best time (torn-write-safe)", "title/ready/race/result state machine"],
+    techniques: [
+      "Mode 7 rotating perspective (HDMA matrix per 2-line band)",
+      "BGMODE mid-frame split (Mode 1 HUD over Mode 7 ground)",
+      "double-buffered HDMA tables flipped in vblank",
+      "S-CPU hardware multiplier from asm",
+      "Mode 7 VMAIN low/high byte streams (dmaCopyVram7)",
+      "write-twice M7 register protocol",
+      "HDMA-vs-OAM-DMA channel budgeting (PVSnesLib NMI owns ch 7)",
+      "SPC700 driver init-race avoidance",
+    ],
   },
   // R46: continuous-music demo on the SPC700 driver. Showcases
   // sfx_music_play / sfx_music_stop alongside the existing sfx_play
