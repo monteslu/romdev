@@ -31,21 +31,43 @@
  * persistence the hardware path can't back — if a future core round adds
  * HSC, wire hiscore into $1000-$17FF and it becomes real.
  *
- * Frame budget (NTSC): with ~125 emitted object-rows/frame this update is
- * deliberately ALLOWED to take two 60Hz frames (the game simulates at a
- * rock-steady 30Hz). MARIA does not care — it re-walks the same DLs every
- * frame, so a slow CPU loop never blanks or tears the whole screen. That
- * trade (object quantity vs sim rate) is THE 7800 design dial; see the
- * DMA-budget comment at the display-list pool.
+ * Frame budget (NTSC): with ~125 emitted object-rows the per-tick update
+ * fits in one 60Hz frame, stretching to two on heavy frames (collision
+ * sweep + HUD redraw) — vblank_wait() paces the sim at 60Hz, dipping to
+ * 30 under load: the classic 8-bit pattern. MARIA does not care — it
+ * re-walks the same DLs every frame, so a slow CPU loop never blanks or
+ * tears the whole screen. That budget only holds because of the
+ * #pragma optimize(on) right below — read its comment before deleting it.
+ * The trade (object quantity vs sim rate) is THE 7800 design dial; see
+ * the DMA-budget comment at the display-list pool.
  */
 
 #include <stdint.h>
 #include <string.h>
 #include "atari7800_sfx.h"
 
+/* ── HARDWARE IDIOM (load-bearing — reshape gameplay around this; see TROUBLESHOOTING) ──
+ * cc65 SHIPS WITH ITS OPTIMIZER OFF, and this toolchain does not pass -O —
+ * each translation unit must opt in. Without this pragma the unoptimized
+ * emit pass made the main loop take ~9 frames per sim tick instead of 1-2
+ * (measured: 8.8 → 1.7 frames/tick on prosystem), and every TICK-DENOMINATED
+ * timer silently stretched 4-5x in wall-clock terms: the 60-tick spawn
+ * shield lasted ~9 seconds, and its 4-ticks-hidden blink kept BOTH ships
+ * (inv[] starts equal, so they blink in sync) off screen for ~600ms at a
+ * time. That presents as "ships missing / display corruption" — but the
+ * DLL, the zone pointers, and every pool slot were byte-perfect when read
+ * back from RAM. The footgun generalizes: on a 1.79MHz 6502 the C
+ * optimizer is not a nicety, it IS the frame budget, and a too-slow loop
+ * shows up as broken GAME RULES (stretched timers, missed 1-frame input
+ * edges), not as a slow-looking screen — MARIA keeps repainting the same
+ * display lists at a rock-steady 60Hz no matter how far behind the CPU
+ * falls. If your fork feels like molasses or "ignores" short button taps,
+ * check this pragma is still here before debugging the display lists. */
+#pragma optimize(on)
+
 /* The title screen renders this — examples({op:'fork'}) stamps your game's
  * name here automatically. Keep it ≤16 chars of A-Z 0-9 space dash. */
-#define GAME_TITLE "METEOR SWARM"
+#define GAME_TITLE "COMET FLURRY"
 
 /* ── MARIA + TIA + RIOT registers (full list in MENTAL_MODEL.md) ── */
 #define BACKGRND  (*(volatile uint8_t*)0x20)
@@ -482,8 +504,12 @@ static void spawn_meteor(uint8_t i, uint8_t ytop) {
   mx[i] = (uint8_t)(x + 2);
   my[i] = ytop;
   macc[i] = 0;
-  /* speed = pixels per 4 frames; faster meteors as the score climbs */
-  mspd[i] = (uint8_t)(1 + (random8() & 3) + (score >= 200 ? 2 : score >= 80 ? 1 : 0));
+  /* speed = quarter-pixels per sim tick (1..2 base, +1/+2 as the score
+   * climbs). Tuned for the real ~45Hz tick rate the optimized loop hits:
+   * a meteor crosses the field in ~5-11s, which keeps 24 of them dense
+   * but survivable. (At 4x these speeds an IDLE ship died every ~3s —
+   * fine for a bullet hell, wrong for a teaching example.) */
+  mspd[i] = (uint8_t)(1 + (random8() & 1) + (score >= 200 ? 2 : score >= 80 ? 1 : 0));
 }
 
 /* ── GAME LOGIC (clay) — HUD: "S00000 H00000 L3" composed into the canvas ── */
@@ -590,7 +616,9 @@ static void start_game(uint8_t players) {
   shipx[1] = 92;               shipy[1] = 104;  alive[1] = two_p;
   cool[0] = cool[1] = 0;
   inv[0] = inv[1] = 60;                   /* spawn shield vs the swarm    */
-  lives = LIVES_START;
+  /* Shared arcade life pool; co-op fields two hulls against the same
+   * swarm, so the team gets two extra. */
+  lives = (uint8_t)(LIVES_START + (two_p ? 2 : 0));
   rng ^= (uint16_t)(my[0] * 251) ^ 0x1234;
   draw_hud();
   fx_start();
@@ -811,10 +839,23 @@ void main(void) {
      * is full the LAST emitters get dropped — so ships go first (the
      * player's own object must never be the one that flickers out). ── */
     field_open();
-    for (i = 0; i < 2; ++i)
-      if (alive[i] && !(inv[i] & 4))      /* inv blink = skip 4-of-8      */
+    /* Shield blink = SHIMMER, never vanish: on blink ticks draw only the
+     * ship's bottom half instead of skipping it. A skipped ship is gone
+     * from the display list for 4 ticks straight — and both inv[] timers
+     * start equal in co-op, so BOTH ships vanish on the same ticks; any
+     * single-frame look at the screen (a screenshot, a human glancing
+     * back at their seat after a hit) reads that as "the ships are gone",
+     * not as a blink. Half-drawing flickers just as loudly but keeps
+     * every object accounted for on every frame. */
+    for (i = 0; i < 2; ++i) {
+      if (!alive[i]) continue;
+      if (inv[i] && (inv[i] & 4))
+        emit_object((uint8_t)(shipy[i] + 4), 4, GFX_SHIP + 12, 3,
+                    i ? MODE_SHIP2 : MODE_SHIP1, shipx[i]);
+      else
         emit_object(shipy[i], 8, GFX_SHIP, 3,
                     i ? MODE_SHIP2 : MODE_SHIP1, shipx[i]);
+    }
     for (i = 0; i < SHOTS; ++i)
       if (sact[i]) emit_object(sy[i], 3, GFX_SHOT, 1, MODE_SHOT, sx[i]);
     for (i = 0; i < METEORS; ++i)
