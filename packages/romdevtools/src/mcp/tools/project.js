@@ -1360,7 +1360,17 @@ TEMPLATES.atari2600 = {
     runtime: [],
     lang: "6507 assembly (dasm)",
     ext: ".a26",
-    describe: "SPORTS — Pong, the 2600's archetypal sport (Combat / Video Olympics). Two 8-px paddles (P0 left, P1 right), one 2-px ball (BL), top+bottom walls via reflected playfield. Joystick UP/DOWN drives the left paddle; the right paddle is AI (chases the ball's Y). Blip on wall bounce, chime on score. Same proven body as the `paddle` template. Demonstrates multi-object positioning (RESP0/RESP1/RESBL) + the 2-line kernel. Add a real P2 on the second port (SWCHA low nibble) to make it head-to-head.",
+    describe: "RAPID RALLY — complete 2600 head-to-head paddle game: drawn title screen, 1P vs AI or 2P versus (port-1 stick drives the right paddle), rally counter, TIA SFX + title jingle, auto-return to title, IN-SESSION hi-score (no battery on real 2600 hardware — stated honestly in-source). Teaches the machine itself: 2-line kernel, RESP positioning, SWCHA re-read discipline, score-mode dual color.",
+    players: "1-2 (1P vs AI / 2P simultaneous versus)",
+    sram: "none — the 2600 has no persistent storage on real hardware; hi-score is in-session only",
+    mechanics: ["paddle versus (1P AI / 2P)", "rally counter", "score-to-limit match flow", "auto title return", "session hi-score"],
+    techniques: [
+      "2-line kernel (racing the beam)",
+      "RESP0/RESP1/RESBL coarse+HMxx fine positioning",
+      "SWCHA per-check re-read (both sticks, one register)",
+      "score-mode dual-color HUD",
+      "TIA sound effects + title jingle",
+    ],
   },
   racing: {
     main: "templates/racing.asm",
