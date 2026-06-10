@@ -6,6 +6,29 @@ the `romdev-mcp` bin is kept as an alias.)
 
 ## 0.28.0
 
+### Fixed/Added — value-search upgrades (from the locate-value skill review)
+- **Relative compares work as the FIRST `searchNext`.** `op:'search'` now
+  baselines every candidate at seed time, so `compare:'inc'/'dec'/'changed'/
+  'unchanged'` no longer silently return 0 candidates on the first narrow
+  (the footgun a real session burned rounds on and a skill had to document —
+  the "do one eq round first" workaround is obsolete).
+- **Representation-aware search** — `memory({op:'search', as:'bcd'|'digits'})`
+  for the stored≠displayed cases: `'bcd'` matches packed-BCD values (2 decimal
+  digits/byte, region endianness — classic NES scores); `'digits'` matches one
+  byte per ON-SCREEN digit at ANY constant tile base (HUD digit/tile-index
+  buffers; the base is auto-detected per candidate and reported; single-digit
+  seeds only accept base 0/0x30 to avoid matching everything). `searchNext`
+  narrows in the seed's representation automatically, including numeric
+  `inc`/`dec` on decoded values. Works on all platforms/regions (endianness
+  per region, big-endian m68k included).
+- **search/searchNext response notes fixed** — they recommended the dead
+  `searchValue` name and a `writeMemory({bytes})` form that op:'write'
+  REJECTS; now they name the live ops with a `hex` payload, mention the
+  scene-changed-mid-step empty-round trap, and point input-driven values at
+  `diffRuns`. Same stale-name fix in two `watch` tool notes.
+- `test/search-representations.test.js` covers all of it.
+
+
 ### Added — banked-cart parity across ALL platforms (per-bank references + rebuild glue)
 The 0.27.0 feedback round fixed per-bank reference scanning and one-call banked
 rebuild glue for NES only. Every other banked-cart platform now gets the same

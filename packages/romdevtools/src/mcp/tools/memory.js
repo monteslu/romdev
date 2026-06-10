@@ -377,26 +377,91 @@ async function memClassify(sessionKey, { region = "system_ram", offset = 0, leng
 //    value changes with op:'searchNext' (compare:'eq'|'changed'|'unchanged'|'gt'|'lt'|'inc'|'dec').
 //    The candidate list lives per session (keyed by `name`); each narrow reads
 //    the region fresh and keeps only candidates that still satisfy the compare.
-async function memSearch(sessionKey, { value, size = 1, region = "system_ram", name = "default", maxCandidates = 64 }) {
+/**
+ * Decode one candidate value at `i` under the search's representation.
+ *   raw    — `size`-byte unsigned int, region endianness.
+ *   bcd    — `size` bytes of packed BCD (2 decimal digits per byte, region
+ *            endianness): bytes [0x25,0x01] (LE) = 125. Returns null when any
+ *            nibble is >9 (not a BCD value).
+ *   digits — `digitLen` consecutive bytes, one DECIMAL DIGIT per byte, most
+ *            significant first (HUD order), each offset by the candidate's
+ *            constant tile base `k` (0 for raw digits, 0x30 for ASCII, or the
+ *            game's digit-tile index). Returns null when any byte fails to
+ *            decode as k+0..9.
+ * @returns {number|null}
+ */
+function decodeAt(buf, i, s, k = 0) {
+  if (s.as === "digits") {
+    if (i + s.digitLen > buf.length) return null;
+    let v = 0;
+    for (let j = 0; j < s.digitLen; j++) {
+      const d = buf[i + j] - k;
+      if (d < 0 || d > 9) return null;
+      v = v * 10 + d;
+    }
+    return v;
+  }
+  if (i + s.size > buf.length) return null;
+  const u = readUint(buf, i, s.size, s.little);
+  if (s.as === "bcd") {
+    const hex = u.toString(16);
+    if (!/^[0-9]+$/.test(hex)) return null;   // a nibble >9 → not BCD
+    return parseInt(hex, 10);
+  }
+  return u;
+}
+
+async function memSearch(sessionKey, { value, size = 1, as = "raw", region = "system_ram", name = "default", maxCandidates = 64 }) {
       const host = getHost(sessionKey);
       const info = REGION_INFO[region] ?? {};
       const little = (info.endianness ?? genericEndianness(host.status.platform)) !== "big";
       const buf = host.readMemory(region, 0, regionLength(host, region, 0));
-      const read = (i) => readUint(buf, i, size, little);
+      const digitStr = String(value >>> 0);
+      const s = { region, size, little, as, digitLen: digitStr.length };
       const candidates = [];
-      for (let i = 0; i + size <= buf.length; i++) {
-        if (read(i) === (value >>> 0)) candidates.push(i);
+      /** digits mode: per-candidate constant tile-base offset (addr → k). */
+      const kMap = as === "digits" ? new Map() : null;
+      if (as === "digits") {
+        // One byte per decimal digit, MSD first, all offset by a constant k
+        // (HUD digits are usually tile indices: k=0 raw, k=0x30 ASCII, or the
+        // font's digit base). k is derived per candidate from the first digit.
+        // Single-digit values would match EVERY byte with a free k, so they
+        // only accept the common bases.
+        const digits = Array.from(digitStr, (c) => c.charCodeAt(0) - 0x30);
+        const SINGLE_DIGIT_BASES = [0x00, 0x30];
+        for (let i = 0; i + digits.length <= buf.length; i++) {
+          const k = buf[i] - digits[0];
+          if (k < 0 || k > 255 - 9) continue;
+          if (digits.length === 1 && !SINGLE_DIGIT_BASES.includes(k)) continue;
+          let ok = true;
+          for (let j = 1; j < digits.length; j++) {
+            if (buf[i + j] !== digits[j] + k) { ok = false; break; }
+          }
+          if (ok) { candidates.push(i); kMap.set(i, k); }
+        }
+      } else {
+        for (let i = 0; i + size <= buf.length; i++) {
+          if (decodeAt(buf, i, s) === (value >>> 0)) candidates.push(i);
+        }
       }
-      searchSessions(sessionKey).set(name, { region, size, little, addrs: Uint32Array.from(candidates) });
+      // Baseline EVERY candidate at seed time so relative compares
+      // ('inc'/'dec'/'changed'/'unchanged') work as the FIRST narrow. Pre-fix,
+      // the baseline only existed after a value-based round — the first
+      // relative searchNext silently returned 0 candidates (a real session
+      // burned rounds on this; it was documented as a footgun instead of fixed).
+      const prevMap = new Map();
+      for (const a of candidates) prevMap.set(a, value >>> 0);
+      searchSessions(sessionKey).set(name, { ...s, addrs: Uint32Array.from(candidates), prev: prevMap, kMap });
       return jsonContent({
-        searchId: name, region, size,
+        searchId: name, region, size, as,
         count: candidates.length,
-        candidates: candidates.slice(0, maxCandidates).map((a) => "0x" + a.toString(16)),
+        candidates: candidates.slice(0, maxCandidates).map((a) =>
+          "0x" + a.toString(16) + (kMap && kMap.get(a) ? ` (digitBase 0x${kMap.get(a).toString(16)})` : "")),
         note: candidates.length === 0
-          ? "0 matches — wrong size? (try size:2 for a score). Or the value isn't in this region (try a different region) or is stored offset/encoded."
+          ? "0 matches — wrong size? (try size:2 for a score). Stored ≠ displayed is common: lives are often displayed−1 (re-seed with value-1), scores ÷10. Try as:'bcd' (packed BCD) or as:'digits' (one byte per on-screen digit, any constant tile base) — or a different region."
           : candidates.length === 1
           ? "1 candidate — likely THE address. Confirm with memory({op:'write', region, offset, hex}) and watch the screen."
-          : "Make the value change in-game, then memory({op:'searchNext', name, compare:'eq', value:<new>}) to narrow. Repeat until 1-2 remain.",
+          : "Change the value in-game, then memory({op:'searchNext', name, compare:'eq', value:<new>}) to narrow — or compare:'inc'/'dec'/'changed' right away (baselines are recorded at seed). Repeat until 1-2 remain.",
       });
 }
 
@@ -408,21 +473,21 @@ async function memSearchNext(sessionKey, { compare, value, name = "default", max
         throw new Error(`searchNext: compare '${compare}' needs a \`value\` (the number now on screen).`);
       }
       const buf = host.readMemory(s.region, 0, regionLength(host, s.region, 0));
-      const read = (i) => readUint(buf, i, s.size, s.little);
+      const read = (a) => decodeAt(buf, a, s, s.kMap ? s.kMap.get(a) ?? 0 : 0);
       const v = (value ?? 0) >>> 0;
       const kept = [];
       for (const a of s.addrs) {
-        const cur = read(a);
+        const cur = read(a);                       // null = no longer decodes (bcd/digits)
         const prev = s.prev ? s.prev.get(a) : undefined;
         let ok = false;
         switch (compare) {
           case "eq":        ok = cur === v; break;
-          case "gt":        ok = cur > v; break;
-          case "lt":        ok = cur < v; break;
+          case "gt":        ok = cur !== null && cur > v; break;
+          case "lt":        ok = cur !== null && cur < v; break;
           case "changed":   ok = prev !== undefined && cur !== prev; break;
           case "unchanged": ok = prev !== undefined && cur === prev; break;
-          case "inc":       ok = prev !== undefined && cur > prev; break;
-          case "dec":       ok = prev !== undefined && cur < prev; break;
+          case "inc":       ok = cur !== null && prev !== undefined && cur > prev; break;
+          case "dec":       ok = cur !== null && prev !== undefined && cur < prev; break;
         }
         if (ok) kept.push(a);
       }
@@ -436,9 +501,9 @@ async function memSearchNext(sessionKey, { compare, value, name = "default", max
         searchId: name, compare, count: kept.length,
         candidates: kept.slice(0, maxCandidates).map((a) => "0x" + a.toString(16) + "=" + read(a)),
         note: kept.length === 0
-          ? "0 left — narrowed too far (wrong op, or the value moved between reads). Re-seed with searchValue."
+          ? "0 left — narrowed too far (wrong op, or the value moved between reads — e.g. the scene changed/player died mid-step; screenshot before blaming the compare). Re-seed with memory({op:'search'})."
           : kept.length <= 2
-          ? "Down to 1-2 — confirm: writeMemory({region, offset, bytes}) and watch the screen change."
+          ? "Down to 1-2 — confirm: memory({op:'write', region, offset, hex:'..'}) and watch the screen change."
           : "Still multiple — change the value again and memory({op:'searchNext'}) to keep narrowing.",
       });
 }
@@ -462,7 +527,7 @@ export function registerMemoryTools(server, z, sessionKey) {
     "snapshot → {region, name, offset?, length?}; " +
     "diff → {region, name, view?}; " +
     "classify → {region?, offset?, length?}; " +
-    "search → {value, size?, region?}; " +
+    "search → {value, size?, as?, region?}; " +
     "searchNext → {compare, value?}.\n" +
     `• op:'read' — bytes as a \`hex\` string. ≤${INLINE_HEX_LIMIT}B come back inline; >${INLINE_HEX_LIMIT}B need \`outputPath\` (RAW bytes written → {path,bytes}) or \`inline:true\`. BATCH: \`offsets\` (addresses or {offset,length}) reads many non-contiguous spots in ONE call → reads:[{offset,length,hex}]. (Genesis video_ram is raw host-LE word-swapped — not a direct tile map; use tiles({op:'pixels'}).)\n` +
     "• op:'write' — pass payload as `hex` (e.g. 'deadbeef') OR `base64` — **NOT `data`, `bytes`, or an array (those are REJECTED with guidance).** hex for byte patterns, base64 for binary blobs.\n" +
@@ -470,8 +535,8 @@ export function registerMemoryTools(server, z, sessionKey) {
     "• op:'snapshot' — capture a baseline of `region` (server RAM, keyed by `name`) to later diff. The 'which bytes did THIS event touch?' workflow: snapshot → trigger event → op:'diff'.\n" +
     "• op:'diff' — compare a region against a snapshot baseline → the CHANGED bytes. DEFAULT `view:'summary'` is a CLUSTERED summary (+ stride detection — '4 islands at stride 0x80' = a struct array) so a churny gameplay diff doesn't flood context; `view:'raw'` = the per-byte before/after list.\n" +
     "• op:'classify' — heuristically classify the bytes at an offset BEFORE you trust a 'found table'. **Kills the classic trap: a run that 'matches' your stats is often ASCII TEXT (bytes 82/79/68 = 'ROD' from a taunt string) or code.** Returns looksLike/printableRatio/entropy/asciiPreview/confidence.\n" +
-    "• op:'search' — seed the iterative RAM value search (Cheat Engine / RetroArch style): all addresses currently holding `value` (`size` 1/2/4 bytes, region's endianness). The primitive for 'the screen shows X, find its RAM address' — better than snapshot+diff for this.\n" +
-    "• op:'searchNext' — narrow the active candidate list against CURRENT memory. `compare`: 'eq'/'gt'/'lt' (need `value`), 'changed'/'unchanged'/'inc'/'dec' (vs the previous read). Repeat until 1-2 remain, then confirm with op:'write'.",
+    "• op:'search' — seed the iterative RAM value search (Cheat Engine / RetroArch style): all addresses currently holding `value` (`size` 1/2/4 bytes, region's endianness). The primitive for 'the screen shows X, find its RAM address' — better than snapshot+diff for this. STORED ≠ DISPLAYED is common — `as:'bcd'` (packed BCD scores) and `as:'digits'` (one byte per on-screen digit at ANY constant tile base, auto-detected per candidate) search those representations directly; for displayed−1 lives or ÷10 scores just seed the transformed number.\n" +
+    "• op:'searchNext' — narrow the active candidate list against CURRENT memory. `compare`: 'eq'/'gt'/'lt' (need `value`), 'changed'/'unchanged'/'inc'/'dec' (vs the previous read — usable as the FIRST narrow too; baselines are recorded at seed). Comparisons happen in the seed's `as` representation. Repeat until 1-2 remain, then confirm with op:'write'. (For values an INPUT drives — position, velocity — op:'diffRuns' is usually one call instead of a narrowing loop.)",
     {
       op: z.enum(["read", "write", "readCart", "snapshot", "diff", "diffRuns", "classify", "search", "searchNext"])
         .describe("read=bytes→hex; write=hex/base64→region; readCart=loaded cart ROM image; snapshot=capture a baseline; diff=changed bytes vs a baseline; diffRuns=run the SAME start state twice under two different held inputs and return only the DIVERGENT bytes (THE input→RAM mapping primitive — replaces save/run/dump/restore/run/dump/python-diff); classify=what kind of data is here; search=seed a value search; searchNext=narrow it."),
@@ -497,8 +562,9 @@ export function registerMemoryTools(server, z, sessionKey) {
       portsB: z.array(z.record(z.string(), z.boolean())).max(2).optional().describe("op:diffRuns — held input for run B. Default released — A-vs-idle is the classic 'which byte does this input drive?' probe."),
       // search / searchNext
       value: z.number().int().optional().describe("op:search — the value the screen shows now. op:searchNext — required for compare 'eq'/'gt'/'lt'."),
-      size: z.number().int().min(1).max(4).default(1).describe("op:search — value width in bytes: 1 (stats/lives), 2 (scores/timers), 4 (big counters)."),
-      compare: z.enum(["eq", "changed", "unchanged", "inc", "dec", "gt", "lt"]).optional().describe("op:searchNext — eq=now equals `value`; changed/unchanged vs the last read; inc/dec=went up/down; gt/lt=now >/< `value`."),
+      size: z.number().int().min(1).max(4).default(1).describe("op:search — value width in bytes: 1 (stats/lives), 2 (scores/timers), 4 (big counters). Ignored for as:'digits' (width = the value's digit count)."),
+      as: z.enum(["raw", "bcd", "digits"]).default("raw").describe("op:search — value representation: 'raw' (binary int, region endianness), 'bcd' (packed BCD, 2 decimal digits/byte — common for NES scores), 'digits' (one byte per ON-SCREEN digit, MSD first, any constant tile base — HUD/tile-index score buffers; the matched base is reported per candidate). searchNext compares in the SAME representation automatically."),
+      compare: z.enum(["eq", "changed", "unchanged", "inc", "dec", "gt", "lt"]).optional().describe("op:searchNext — eq=now equals `value`; changed/unchanged vs the last read; inc/dec=went up/down. All of these work as the FIRST narrow too (baselines are recorded at seed). gt/lt=now >/< `value`."),
       maxCandidates: z.number().int().min(1).max(8192).default(64).describe("op:search/searchNext — cap the candidates RETURNED (the full list is kept server-side; `count` is the true total)."),
       // shared output
       outputPath: z.string().optional().describe(`op:read/readCart — write RAW bytes here. Required for reads >${INLINE_HEX_LIMIT}B unless inline. Small reads honor it too (writes file AND returns hex), so 'dump to disk then diff two files' works at any size. (Ignored with offsets.)`),
