@@ -318,6 +318,11 @@ CB/ED/DD/FD/DDCB/FDCB — and feeds the same auto-label, register-annotation,
 file-offset, and `untilReturn` pipeline used by the NES and SNES
 disassemblers.
 
+Sega-mapper banked carts (>48 KB) are handled per-bank: `references` scans
+every 16 KB bank (bank 0 @ `$0000`, bank 1 @ `$4000`, banks 2+ @ their slot-2
+window `$8000`), refs tagged `romBank`; `disasm({target:'project'})` emits one
+region per bank with a bank-by-bank native rebuild recipe in `BUILD.md`.
+
 ## Horizontal scrolling (for side-scrollers)
 
 The `platformer` scaffold is single-screen. To make it a side-scroller:

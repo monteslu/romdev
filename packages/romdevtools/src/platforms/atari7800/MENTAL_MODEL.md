@@ -356,9 +356,17 @@ What you can read:
   P / SP / PC) read from prosystem's `sally` globals.
 - **`background({view:'renderState'})`** — the MARIA CTRL bits, DPP,
   CHARBASE, and the current `dlistPtr`.
-- **`disasm({target:'rom'})`** and **`disasm({target:'references'})`** —
-  both default to the top 16 KB (`$C000-$FFFF`), where the reset vector
-  lands.
+- **`disasm({target:'rom'})`** — defaults to the top 16 KB
+  (`$C000-$FFFF`), where the reset vector lands.
+- **`disasm({target:'references'})`** — scans the WHOLE cart: flat carts
+  (≤48 KB) in one pass at their top-of-space org, SuperGame banked carts
+  (>48 KB) per 16 KB bank (last bank fixed at `$C000`, others at `$8000`),
+  refs tagged `romBank`. A 128-byte `.a78` header is stripped automatically.
+- **`disasm({target:'project'})`** — flat carts rebuild with one flat cc65
+  build; SuperGame carts get per-bank regions + NES-style glue (HEADER
+  segment with the original 128 header bytes, `BANKn` wrappers, multi-bank
+  `.cfg` via `linkerConfigPath`) — a one-call byte-identical
+  `build()` rebuild either way.
 
 Memory regions for **`memory({op:'read'})`**:
 

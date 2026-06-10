@@ -1149,12 +1149,16 @@ export function registerDisasmTools(server, z) {
     "`endAddress`/`untilReturn` for one routine, `dataRanges` to mark non-code, `bank` for a banked slot. " +
     "pce/msx are 'project'-only here — 'rom' doesn't map them yet.\n" +
     "'project' = turn a ROM into a complete re-buildable disassembly in one call across all systems; splits into " +
-    "regions, REASSEMBLES each and verifies BYTE-EXACT (`roundTripOk`); non-faithful lines fall back to `.byte` so " +
-    "it ALWAYS rebuilds; `readablePercent` reports instruction-vs-data. (SNES 65816 usually lands at the byte-exact " +
+    "regions (PER-BANK on every banked format: NES mappers, SNES LoROM, GB MBC, Sega-mapper SMS/GG, MSX megaROM, " +
+    "2600 F8/F6/F4, 7800 SuperGame, >32KB HuCards), REASSEMBLES each and verifies BYTE-EXACT (`roundTripOk`); " +
+    "non-faithful lines fall back to `.byte` so it ALWAYS rebuilds; `readablePercent` reports instruction-vs-data. " +
+    "NES/C64/7800/Lynx/PCE ship a one-call `build()` rebuild in rebuild.json (flat AND banked); the rest ship a " +
+    "proven native recipe in BUILD.md. (SNES 65816 usually lands at the byte-exact " +
     "data-only floor — its `.a8/.i8` width state desyncs when instructions and pinned `.byte` mix.)\n" +
     "'references' = scan a ROM's code for operands matching a CPU `address` and classify each (call/jump/branch/" +
-    "read/write); also walks the vector table. LIMITATION: direct addressing only (indirect/computed jumps + " +
-    "cross-bank refs are missed).",
+    "read/write); also walks the vector table. Banked carts are scanned PER BANK (all of the formats above) — " +
+    "refs carry `prgBank` (NES) / `romBank` (everything else). LIMITATION: direct addressing only " +
+    "(indirect/computed jumps are missed).",
     {
       target: z.enum(["bytes", "rom", "project", "references"]).describe("bytes = raw chunk; rom = mapper-aware ROM; project = full rebuildable disasm; references = find refs to an address."),
       // shared

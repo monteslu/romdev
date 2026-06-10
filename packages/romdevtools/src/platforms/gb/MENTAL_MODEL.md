@@ -68,7 +68,10 @@ returns nothing.
 `disasm({target:'project'})` route through the native binutils z80 `objdump` in
 its `gbz80` machine (WASM, `-m gbz80`) — full CB-prefix coverage plus the
 SM83-specific opcodes (`ld (hl+),a`, `ldh`, `reti`, `ld hl,sp+e8`). One z80-elf
-binutils serves both plain Z80 (SMS/GG/MSX) and the GB CPU.
+binutils serves both plain Z80 (SMS/GG/MSX) and the GB CPU. MBC-banked carts
+(>32 KB) are scanned per 16 KB bank by `references` (bank 0 @ `$0000`, banks
+1+ @ their `$4000` window; refs tagged `romBank`) and split per-bank by
+`disasm({target:'project'})`.
 
 ## Five silent-failure footguns to know before you start (R26 + R27)
 
