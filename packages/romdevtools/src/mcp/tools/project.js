@@ -434,13 +434,18 @@ TEMPLATES.gbc = {
       { src: "lib/c/font.h", dst: "font.h" },  /* digits+A-Z 2bpp glyphs for the HUD */
     ],
     lang: GBC_LANG, ext: ".gbc",
-    describe: "Falling-jewel matcher for GBC (the polished reference puzzle). 8x17 well, 6 jewel colors with " +
-      "real CGB palettes, matches in all 4 directions (H/V/both diagonals), gravity + cascade chains, magic " +
-      "jewel every 18th piece, level speedup, 6-digit score, title + game-over screens, SFX + toggleable " +
-      "music. Rendering: falling column + NEXT preview are OAM sprites; the locked well is BG tiles via a " +
-      "COLLECT/FLUSH vblank queue with an idle scrub (writes outside vblank silently drop on this core — " +
-      "never bypass the queue). Statics need dataLoc 0xC200 (above shadow_oam at $C100) — the project build " +
-      "recipe sets that automatically.",
+    describe: "CHROMA WELL — falling-jewel matcher (the polished reference puzzle), to the full contract: 8x15 well, 6 jewel colors as 6 REAL CGB palettes (BCPS/BCPD + the VRAM bank-1 attribute map — true per-tile color, not colorized mono), 4-direction matches with gravity cascades + chain scoring, magic jewel every 18th piece, window-layer HUD strip, persistent battery hi-score (MBC1+RAM+BATTERY SRAM, magic+checksum, verified across power cycles), title/play/game-over shell, ch1 music + ch2 SFX. The locked well paints via the COLLECT/FLUSH vblank queue (writes outside vblank silently drop — never bypass it). Statics need dataLoc 0xC200 (the project recipe sets it).",
+    players: "1 (handheld — link-cable 2P not emulatable single-instance)",
+    sram: "MBC1+RAM+BATTERY, 8KB at $A000 ($0A-gated), verified across hardReset",
+    mechanics: ["grid logic", "falling-piece matching", "gravity + cascade chains", "scoring/levels", "battery hi-score", "title/play/game-over state machine"],
+    techniques: [
+      "CGB palette RAM (BCPS/BCPD + OCPS/OCPD, mode-3 write constraint)",
+      "VRAM bank-1 attribute map (VBK per-tile palettes)",
+      "window-layer HUD",
+      "vblank COLLECT/FLUSH queue + idle scrub",
+      "OAM DMA HRAM stub",
+      "battery SRAM save ($0A enable dance)",
+    ],
   },
   sports: {
     main: "templates/sports.c", runtime: GBC_RUNTIME,
@@ -1146,7 +1151,16 @@ TEMPLATES.lynx = {
   shmup: {
     main: "templates/shmup.c", runtime: LYNX_RUNTIME, runtimeDirs: LYNX_VENDOR_DIRS,
     lang: LYNX_LANG, ext: ".lnx",
-    describe: "Vertical-shmup. Player + 4 bullets + 4 enemies (object pools), AABB collisions. MIKEY pew + boom sfx.",
+    describe: "VOID PLUNGE — complete Lynx depth-dive shooter: title shell with attract demo, in-session hi-score, and the Lynx signature — Suzy HARDWARE sprite scaling: divers grow 2px to 20px as they approach (HSIZE/VSIZE recomputed per frame from depth, hitbox tracking the hardware scale, far kills pay more). MIKEY 4-voice music + SFX. Honest 1P (ComLynx needs a second Lynx); honest no-save (handy's libretro build exposes no SAVE_RAM — probed; cart 93Cxx EEPROM is the real-hardware path, future core round).",
+    players: "1 (handheld — ComLynx multiplayer needs a second physical Lynx)",
+    sram: "none — probe: regionSize(save_ram)=0, retro_get_memory(SAVE_RAM)=NULL; cart EEPROM named in-file as the real path (future core round)",
+    mechanics: ["depth-corridor enemy dives (screen-Y as depth)", "scaled collision boxes (hitbox = hardware sprite size)", "range-weighted scoring", "projectile pool", "level ramp", "title/play/game-over state machine", "attract-mode demo"],
+    techniques: [
+      "Suzy hardware sprite scaling (SCB HSIZE/VSIZE 8.8, per-frame rescale)",
+      "raw SCB authoring (literal 4bpp data, penpal remap) via tgi_ioctl(0)",
+      "canonical TGI full-redraw loop (tgi_busy wait → draw → updatedisplay)",
+      "vblank-deferred MIKEY voice writes",
+    ],
   },
   platformer: {
     main: "templates/platformer.c", runtime: LYNX_RUNTIME, runtimeDirs: LYNX_VENDOR_DIRS,

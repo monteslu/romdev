@@ -86,11 +86,34 @@
         nop
         jp      init
 
-;; ─── Header bytes at $0104-$014F — host pipeline fills these ──────
+;; ─── Header bytes at $0104-$014F — host pipeline fills most of these ──
         .area _HEADERe (ABS)
         .org    0x0104
-        ;; 76 bytes total: Nintendo logo (48) + title (16) + flags+checksums (12)
-        .ds     0x4C
+        ;; Nintendo logo ($0104-$0133, 48 bytes) + title/manufacturer/CGB
+        ;; flag ($0134-$0143) + licensee/SGB ($0144-$0146): left as a gap —
+        ;; the post-link header fix (bundled rgbfix, or patch-header.js when
+        ;; rebuilding outside romdev) writes the canonical logo, the CGB
+        ;; flag, and both checksums.
+        .ds     0x43
+        ;; Cartridge TYPE + RAM size ($0147-$0149) are emitted EXPLICITLY so
+        ;; the post-link fix can preserve them (it reads these bytes and
+        ;; passes them through; unknown/garbage values fall back to ROM-only).
+        ;; This is the GB equivalent of the NES crt0's iNES BATTERY bit:
+        ;; declaring the cart in the boot file makes battery saves part of
+        ;; the project source, not a build flag someone has to remember.
+        ;;
+        ;;   $0147 = $03  MBC1 + RAM + BATTERY  → the core exposes the 8KB
+        ;;                at $A000-$BFFF as persistent SAVE_RAM (.srm).
+        ;;                Writes only stick after the $0A enable sequence —
+        ;;                see the SRAM HARDWARE IDIOM in the puzzle example.
+        ;;   $0148 = $00  32 KB ROM (2 banks — no banking needed)
+        ;;   $0149 = $02  8 KB cart RAM (one bank at $A000)
+        .org    0x0147
+        .db     0x03            ; cart type: MBC1+RAM+BATTERY
+        .db     0x00            ; ROM size: 32 KB
+        .db     0x02            ; RAM size: 8 KB
+        ;; $014A-$014F (destination/licensee/version/checksums): host fills.
+        .ds     0x06
 
 ;; ─── init: real boot code, lives in _CODE starting at $0150 ────────
         .area   _CODE

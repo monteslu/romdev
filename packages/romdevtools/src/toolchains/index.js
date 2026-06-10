@@ -786,10 +786,27 @@ export async function buildForPlatform(args) {
       // and RAM-size ($0149) bytes — without -m/-r, -v leaves them at the
       // linker's garbage pad (e.g. type $3C), and emulators/hardware reject
       // an unknown MBC type with "retro_load_game failed". -m 0x00 = ROM ONLY
-      // (no mapper), -r 0x00 = no cart RAM — correct for these 32KB scaffolds.
+      // (no mapper), -r 0x00 = no cart RAM — correct for plain 32KB builds.
+      //
+      // Battery-cart passthrough (0.29.0 examples): a crt0 may DECLARE the
+      // cart in the header window (the GB equivalent of the NES crt0's iNES
+      // BATTERY bit — see the gbc lib gb_crt0.s, which emits $0147=$03 /
+      // $0149=$02 for MBC1+RAM+BATTERY so hi-scores persist in SAVE_RAM).
+      // If the linked image carries a KNOWN battery-MBC type byte with a
+      // sane RAM size, pass those through to rgbfix instead of stomping
+      // them to ROM-only; anything unrecognized (linker pad garbage) still
+      // falls back to the safe ROM-only default, so crt0s that don't
+      // declare a cart behave exactly as before.
+      const BATTERY_CART_TYPES = new Set([0x03, 0x06, 0x0F, 0x10, 0x13, 0x1B, 0x1E]); // MBC1/2/3/5 +BATTERY variants
+      const declType = binary.length > 0x149 ? binary[0x147] : 0x00;
+      const declRam = binary.length > 0x149 ? binary[0x149] : 0x00;
+      const cartByte = BATTERY_CART_TYPES.has(declType) ? declType : 0x00;
+      const ramByte = cartByte !== 0x00 && declRam >= 0x01 && declRam <= 0x05 ? declRam : 0x00;
+      const mArg = "0x" + cartByte.toString(16).padStart(2, "0").toUpperCase();
+      const rArg = "0x" + ramByte.toString(16).padStart(2, "0").toUpperCase();
       const fixOpts = args.platform === "gbc"
-        ? ["-v", "-p", "0xFF", "-C", "-m", "0x00", "-r", "0x00"]
-        : ["-v", "-p", "0xFF", "-m", "0x00", "-r", "0x00"];
+        ? ["-v", "-p", "0xFF", "-C", "-m", mArg, "-r", rArg]
+        : ["-v", "-p", "0xFF", "-m", mArg, "-r", rArg];
       const fix = await runRgbfix({ rom: binary, options: fixOpts });
       if (fix.exitCode === 0 && fix.binary) {
         binary = fix.binary;
