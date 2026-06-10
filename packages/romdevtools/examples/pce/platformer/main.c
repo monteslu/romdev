@@ -167,7 +167,7 @@ static u8 on_platform(int16_t ipx, int16_t ipy) {
 
 void main(void) {
     const int16_t GRAVITY = 10;
-    const int16_t MOVE    = 22;
+    const int16_t MOVE    = 34;   /* was 22 — playtest: 'slow overall' */
     const int16_t JUMP    = -200;
     const int16_t MAXFALL = 300;
 

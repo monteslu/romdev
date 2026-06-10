@@ -284,8 +284,8 @@ void main(void) {
         pad = pce_joy_read();
 
         /* move ship */
-        if ((pad & PCE_JOY_LEFT)  && player.x > 2)   player.x -= 3;
-        if ((pad & PCE_JOY_RIGHT) && player.x < 238) player.x += 3;
+        if ((pad & PCE_JOY_LEFT)  && player.x > 2)   player.x -= 4;   /* playtest: 'slow overall' */
+        if ((pad & PCE_JOY_RIGHT) && player.x < 238) player.x += 4;
         if ((pad & PCE_JOY_UP)    && player.y > 8)   player.y -= 3;
         if ((pad & PCE_JOY_DOWN)  && player.y < 208) player.y += 3;
         if ((pad & PCE_JOY_I) && !(prev_pad & PCE_JOY_I)) fire();

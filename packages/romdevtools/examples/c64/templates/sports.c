@@ -96,7 +96,11 @@ void main(void) {
 
   /* P1 paddle on left, P2 on right. */
   POKE(VIC_SPRITE_X(0), 30);
-  POKE(VIC_SPRITE_X(1), 240);
+  /* P2 at X=310 — the right side of the REAL court. The old 240 sat only
+   * ~2/3 across the screen ("computer player too close to center"): C64
+   * sprite X is 9-bit, the extra bit lives in $D010, and the court design
+   * had been squeezed into 8 bits. */
+  POKE(VIC_SPRITE_X(1), 310 - 256);
 
   sfx_init();
   POKE(VIC_SPR_ENA, 0x07);
@@ -122,16 +126,17 @@ void main(void) {
       bdx = -bdx; sfx_tone(0, 0x40, 0x20, 3);
     }
     /* Paddle 2 collision */
-    if (bdx > 0 && bx > 232 && bx < 248 && by > p2y - 8 && by < p2y + 22) {
+    if (bdx > 0 && bx > 296 && bx < 314 && by > p2y - 8 && by < p2y + 22) {
       bdx = -bdx; sfx_tone(0, 0x40, 0x20, 3);
     }
     /* Score */
-    if (bx < 5)   { p2_score++; if (p2_score > 9) p2_score = 0; sfx_noise(20); bx = 150; by = 130; bdx = 2; }
-    if (bx > 250) { p1_score++; if (p1_score > 9) p1_score = 0; sfx_tone(0, 0x80, 0x10, 16); bx = 150; by = 130; bdx = -2; }
+    if (bx < 5)   { p2_score++; if (p2_score > 9) p2_score = 0; sfx_noise(20); bx = 170; by = 130; bdx = 2; }
+    if (bx > 330) { p1_score++; if (p1_score > 9) p1_score = 0; sfx_tone(0, 0x80, 0x10, 16); bx = 170; by = 130; bdx = -2; }
 
     POKE(VIC_SPRITE_Y(0), p1y);
     POKE(VIC_SPRITE_Y(1), p2y);
     POKE(VIC_SPRITE_X(2), (uint8_t)bx);
+    POKE(VIC_SPRITES_X8, (uint8_t)(0x02 | ((bx > 255) ? 0x04 : 0x00)));
     POKE(VIC_SPRITE_Y(2), (uint8_t)by);
   }
 }
