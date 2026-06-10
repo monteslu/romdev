@@ -76,6 +76,46 @@ void sfx_noise(u8 length_frames) {
     REG_SND4FREQ = 0xC033;
 }
 
+/* ── background music: 16-step melody loop on channel 2 ─────────────
+ * Mirrors the Genesis/NES example pattern: games get continuous music
+ * for free by calling sfx_music_tick() once per frame. The melody is a
+ * gentle A-minor arpeggio at reduced envelope volume (0xA of 0xF) so
+ * one-shot SFX on channel 1 / noise on 4 read clearly over it.
+ * Note values are GBA 11-bit frequency codes: Hz = 131072/(2048-code),
+ * code = 2048 - 131072/Hz. 0 = rest. */
+static const u16 music_code[16] = {
+    1452, 1548, 1651, 1750,   /* A3 C4 E4 A4 */
+    1714, 1651, 1548, 0,      /* G4 E4 C4  - */
+    1452, 1546, 1620, 1714,   /* A3 C4 D4 G4 */
+    1651, 1548, 1452, 0,      /* E4 C4 A3  - */
+};
+static u8 music_enabled = 1;
+static u8 music_step, music_timer;
+
+void sfx_music(u8 on) {
+    music_enabled = on;
+    music_step = 0;
+    music_timer = 0;
+    if (!on) REG_SND2CNT = 0x0000;   /* zero envelope = silence now */
+}
+
+void sfx_music_tick(void) {
+    if (!music_enabled) return;
+    if (music_timer == 0) {
+        u16 code = music_code[music_step & 15];
+        if (code) {
+            /* vol 0xA, 50% duty, length 40/64 steps (~156ms) — the
+             * length-enable auto-silences before the next note so
+             * rests actually rest. */
+            REG_SND2CNT  = (u16)(0xA080 | (64 - 40));
+            REG_SND2FREQ = (u16)(0xC000 | (code & 0x07FF));
+        }
+        music_step++;
+    }
+    music_timer++;
+    if (music_timer >= 10) music_timer = 0;   /* 6 notes/sec at 60fps */
+}
+
 void sfx_off(void) {
     REG_SNDSTAT = 0x0000;
 }
