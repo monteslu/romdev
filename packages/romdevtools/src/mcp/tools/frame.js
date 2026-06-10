@@ -249,12 +249,13 @@ export function registerFrameTools(server, z, sessionKey) {
       // actively playing in the playtest window means this step raced their
       // real-time loop. Field only appears when the conflict is real.
       const coDrive = humanCoDriveWarning(sessionKey);
-      return jsonContent({
+      // Livestream: the post-step frame (throttled to 1/2s per tool by the bus).
+      return attachObserverFrame(jsonContent({
         framesRun: n,
         frameCount: host.status.frameCount,
         framebuffer: { width: host.status.fbWidth, height: host.status.fbHeight },
         ...(coDrive ? { humanCoDriveWarning: coDrive } : {}),
-      });
+      }), host, `step ×${n}`);
   }
 
   // Contract: an image goes to disk (path) OR comes back inline (inline:true).

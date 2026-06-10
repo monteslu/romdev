@@ -2,6 +2,7 @@ import { getHost } from "../state.js";
 import { jsonContent, safeTool } from "../util.js";
 import { getInputLayoutCore } from "./input-layout.js";
 import { humanCoDriveWarning } from "./playtest.js";
+import { attachObserverFrame } from "./watch-memory.js";
 
 // Spreadable co-drive conflict marker for every input-driving op: while a
 // human is actively playing in this session's playtest window, their input
@@ -257,21 +258,21 @@ export function registerInputTools(server, z, sessionKey) {
       switch (args.op) {
         case "set": {
           if (!args.ports) throw new Error("input({op:'set'}): `ports` is required.");
-          return jsonContent(inputSetCore(args, sessionKey));
+          return attachObserverFrame(jsonContent(inputSetCore(args, sessionKey)), getHost(sessionKey), "input set");
         }
         case "press": {
           if (!args.button) throw new Error("input({op:'press'}): `button` is required.");
-          return jsonContent(inputPressCore(args, sessionKey));
+          return attachObserverFrame(jsonContent(inputPressCore(args, sessionKey)), getHost(sessionKey), `press ${args.button}`);
         }
         case "sequence": {
           if (!args.steps) throw new Error("input({op:'sequence'}): `steps` is required.");
-          return jsonContent(inputSequenceCore(args, sessionKey));
+          return attachObserverFrame(jsonContent(inputSequenceCore(args, sessionKey)), getHost(sessionKey), "input sequence");
         }
         case "navigate": {
           if (!args.steps) throw new Error("input({op:'navigate'}): `steps` is required.");
           // Fill per-step defaults the old navigate schema provided.
           const steps = args.steps.map((s) => ({ holdFrames: 2, maxWaitFrames: 120, settleFrames: 2, ...s }));
-          return jsonContent(inputNavigateCore({ steps }, sessionKey));
+          return attachObserverFrame(jsonContent(inputNavigateCore({ steps }, sessionKey)), getHost(sessionKey), "navigate");
         }
         case "layout": {
           if (!args.platform) throw new Error("input({op:'layout'}): `platform` is required.");

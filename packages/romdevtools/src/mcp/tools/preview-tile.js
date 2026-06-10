@@ -409,7 +409,10 @@ export async function previewTileArtCore(args) {
 
   if (outputPath) {
     await writeFile(outputPath, png);
-    return { ...result, outputPath, note: `${png.length} bytes of PNG written to ${outputPath}.` };
+    // Livestream sideband: the human sees the rendered sheet even though the
+    // agent only gets the path.
+    return { ...result, outputPath, note: `${png.length} bytes of PNG written to ${outputPath}.`,
+      _observerImages: [{ kind: "image", mimeType: "image/png", base64: png.toString("base64") }] };
   }
   return { ...result, pngBase64: png.toString("base64") };
 }
@@ -467,7 +470,8 @@ async function previewMsxScreen2(args, d) {
   };
   if (outputPath) {
     await writeFile(outputPath, buf);
-    return { ...result, outputPath };
+    return { ...result, outputPath,
+      _observerImages: [{ kind: "image", mimeType: "image/png", base64: buf.toString("base64") }] };
   }
   return { ...result, pngBase64: buf.toString("base64") };
 }
