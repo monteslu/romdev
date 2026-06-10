@@ -43,6 +43,7 @@ test("R26 SMS shmup_2p builds via buildForPlatform", { timeout: 180000 }, async 
     "joypad_read.c":  await readSource("src/platforms/sms/lib/c/joypad_read.c"),
     "sprite_table.c": await readSource("src/platforms/sms/lib/c/sprite_table.c"),
     "sms_sfx.c":      await readSource("src/platforms/sms/lib/c/sms_sfx.c"),
+    "sms_music.c":    await readSource("src/platforms/sms/lib/c/sms_music.c"),
   };
   const hw    = await readSource("src/platforms/sms/lib/c/sms_hw.h");
   const sfxH  = await readSource("src/platforms/sms/lib/c/sms_sfx.h");
@@ -51,7 +52,7 @@ test("R26 SMS shmup_2p builds via buildForPlatform", { timeout: 180000 }, async 
     platform: "sms",
     language: "c",
     sources: { "main.c": main, ...runtimes },
-    includes: { "sms_hw.h": hw, "sms_sfx.h": sfxH },
+    includes: { "sms_hw.h": hw, "sms_sfx.h": sfxH, "sms_music.h": await readSource("src/platforms/sms/lib/c/sms_music.h") },
   });
   assert.equal(r.ok, true, `sms/shmup_2p build failed at ${r.stage}: ${(r.log || "").slice(-300)}`);
   assert.ok(r.binary.length >= 16384, `sms/shmup_2p: ROM too small: ${r.binary.length}`);

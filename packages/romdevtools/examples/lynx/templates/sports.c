@@ -62,10 +62,13 @@ void main(void) {
     tgi_line(70, 40, 70, 60);
     tgi_line(90, 40, 90, 60);
 
-    tgi_setcolor(COLOR_WHITE);
+    /* Playtest: "needs better contrast" — yellow paddles + white ball pop
+     * against the green court far better than white-on-lightgreen +
+     * yellow-on-green did. */
+    tgi_setcolor(COLOR_YELLOW);
     tgi_bar(PADDLE_X1, (unsigned)p1y, PADDLE_X1 + PADDLE_W - 1, (unsigned)(p1y + PADDLE_H - 1));
     tgi_bar(PADDLE_X2, (unsigned)p2y, PADDLE_X2 + PADDLE_W - 1, (unsigned)(p2y + PADDLE_H - 1));
-    tgi_setcolor(COLOR_YELLOW);
+    tgi_setcolor(COLOR_WHITE);
     tgi_bar((unsigned)bx, (unsigned)by, (unsigned)(bx + BALL_SIZE - 1), (unsigned)(by + BALL_SIZE - 1));
     tgi_updatedisplay();
     sfx_update();

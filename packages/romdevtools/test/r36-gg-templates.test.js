@@ -29,10 +29,12 @@ test("R36 Game Gear tier-1 templates: all compile to valid ROMs", { timeout: 300
     "joypad_read.c":  await readSrc("src/platforms/gg/lib/c/joypad_read.c"),
     "sprite_table.c": await readSrc("src/platforms/gg/lib/c/sprite_table.c"),
     "gg_sfx.c":       await readSrc("src/platforms/gg/lib/c/gg_sfx.c"),
+    "gg_music.c":     await readSrc("src/platforms/gg/lib/c/gg_music.c"),
   };
   const includes = {
     "gg_hw.h":  await readSrc("src/platforms/gg/lib/c/gg_hw.h"),
     "gg_sfx.h": await readSrc("src/platforms/gg/lib/c/gg_sfx.h"),
+    "gg_music.h": await readSrc("src/platforms/gg/lib/c/gg_music.h"),
   };
   for (const t of GG_TEMPLATES) {
     const main = await readSrc(`examples/gg/templates/${t}.c`);

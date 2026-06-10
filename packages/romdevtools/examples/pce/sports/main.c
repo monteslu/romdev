@@ -159,7 +159,7 @@ static void draw_scores(void) {
 static void serve_ball(u8 to_left) {
     bx = 120; by = 110;
     bdx = to_left ? -2 : 2;
-    bdy = ((score_p1 + score_p2) & 1) ? -1 : 1;
+    bdy = ((score_p1 + score_p2) & 1) ? -2 : 2;   /* was ±1 — rally felt slow */
     serve_timer = 40;
 }
 
@@ -213,8 +213,8 @@ void main(void) {
         pad = pce_joy_read();
 
         /* P1 control */
-        if ((pad & PCE_JOY_UP)   && p1y > COURT_TOP)            p1y -= 3;
-        if ((pad & PCE_JOY_DOWN) && p1y < COURT_BOT - PADDLE_H) p1y += 3;
+        if ((pad & PCE_JOY_UP)   && p1y > COURT_TOP)            p1y -= 4;   /* playtest: 'slow overall' */
+        if ((pad & PCE_JOY_DOWN) && p1y < COURT_BOT - PADDLE_H) p1y += 4;
 
         /* P2 chase-AI */
         target = (int16_t)(by - PADDLE_H / 2 + BALL_SIZE / 2);

@@ -43,7 +43,7 @@ static const uint8_t TILE_LINE[8]  = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
 static const uint8_t TILE_NET[8]   = {0x18,0x18,0x00,0x00,0x18,0x18,0x00,0x00};
 
 /* colour bytes (hi fg, lo bg). 3=green(dark), 12=green(light), 15=white */
-#define COL_FIELD 0x21   /* dark green field on black             */
+#define COL_FIELD 0xC1   /* light-green-on-black field (was 0x21 medium green — muddy per the contrast playtest note) */
 #define COL_LINE  0xF1   /* white line on black                   */
 #define COL_NET   0xF2   /* white net dashes on dark-green field  */
 
@@ -126,7 +126,7 @@ void main(void) {
             msx_set_sprite(slot++, PADDLE_X1, (uint8_t)(p1y + i * 8), 0, COL_SPR);
         for (i = 0; i < PADDLE_H / 8; i++)
             msx_set_sprite(slot++, PADDLE_X2, (uint8_t)(p2y + i * 8), 0, COL_SPR);
-        msx_set_sprite(slot++, (uint8_t)bx, (uint8_t)by, 0, COL_SPR);
+        msx_set_sprite(slot++, (uint8_t)bx, (uint8_t)by, 0, 11);  /* light-yellow ball — distinct from the white paddles (contrast playtest note) */
 
         p1 = msx_read_joystick(1);
         p2 = msx_read_joystick(2);

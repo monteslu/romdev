@@ -130,15 +130,21 @@ void main(void) {
 
   while (1) {
     wait_vblank();
+    /* OAM DMA FIRST — at the leading edge of vblank. The old order staged
+     * 45 oam_set CALLS before the DMA; the SDCC call overhead pushed the
+     * DMA ~a third of the frame into ACTIVE display, so the sprites tore
+     * on one fixed scanline ("horizontal line a 3rd of the way down").
+     * Sprites now display the state staged LAST frame (1 frame of latency,
+     * imperceptible in Pong). */
+    oam_dma_flush();
 
-    /* Stage OAM: left paddle (2 stacked), right paddle (2 stacked), ball. */
-    for (i = 0; i < 40; i++) oam_set(i, 0, 0, 0, 0);
+    /* Stage next frame's OAM (RAM only — safe any time). Slots 5-39 were
+     * zeroed once by oam_clear() at boot and never change. */
     oam_set(0, (uint8_t)(p1y + 16),         (uint8_t)(PADDLE_X1 + 8), 1, 0);
     oam_set(1, (uint8_t)(p1y + 16 + 8),     (uint8_t)(PADDLE_X1 + 8), 1, 0);
     oam_set(2, (uint8_t)(p2y + 16),         (uint8_t)(PADDLE_X2 + 8), 1, 0);
     oam_set(3, (uint8_t)(p2y + 16 + 8),     (uint8_t)(PADDLE_X2 + 8), 1, 0);
     oam_set(4, (uint8_t)(by + 16),          (uint8_t)(bx + 8),        1, 0);
-    oam_dma_flush();
 
     pad = joypad_read();
     if (pad & PAD_UP    && p1y > COURT_TOP)            p1y -= 2;

@@ -105,6 +105,7 @@ test("R23e SMS sports + racing templates build via buildForPlatform", { timeout:
     "joypad_read.c":  await readSource("src/platforms/sms/lib/c/joypad_read.c"),
     "sprite_table.c": await readSource("src/platforms/sms/lib/c/sprite_table.c"),
     "sms_sfx.c":      await readSource("src/platforms/sms/lib/c/sms_sfx.c"),
+    "sms_music.c":    await readSource("src/platforms/sms/lib/c/sms_music.c"),
   };
   const hw    = await readSource("src/platforms/sms/lib/c/sms_hw.h");
   const sfxH  = await readSource("src/platforms/sms/lib/c/sms_sfx.h");
@@ -114,7 +115,7 @@ test("R23e SMS sports + racing templates build via buildForPlatform", { timeout:
       platform: "sms",
       language: "c",
       sources: { "main.c": main, ...runtimes },
-      includes: { "sms_hw.h": hw, "sms_sfx.h": sfxH },
+      includes: { "sms_hw.h": hw, "sms_sfx.h": sfxH, "sms_music.h": await readSource("src/platforms/sms/lib/c/sms_music.h") },
     });
     assert.equal(r.ok, true, `sms/${t} build failed at ${r.stage}: ${(r.log || "").slice(-300)}`);
     assert.ok(r.binary.length >= 16384, `sms/${t}: ROM too small`);

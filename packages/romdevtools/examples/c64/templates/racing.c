@@ -82,6 +82,15 @@ void main(void) {
   POKE(VIC_BORDER, 0x00);
   POKE(VIC_BG0,    0x09);  /* brown road */
 
+  /* Clear screen RAM: a .prg starts over the BASIC screen, so the
+   * KERNAL's startup text (the leftover the playtest saw at the top)
+   * stays visible until someone wipes it. */
+  {
+    uint16_t k;
+    volatile uint8_t *scr = (volatile uint8_t*)0x0400;
+    for (k = 0; k < 1000; k++) scr[k] = 0x20;
+  }
+
   player.x = LANE1_X; player.y = 220; player.alive = 1;
   for (i = 0; i < MAX_OBS; i++) obstacles[i].alive = 0;
   spawn_timer = 0;
