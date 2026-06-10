@@ -59,10 +59,19 @@ thousands of bytes and you'll drown).
    on-screen value. `region` defaults to `system_ram`.
 2. Change the value in-game (take damage, score a point), then
    `memory({op:'searchNext', compare:'eq', value})` — or `compare:'gt'|'lt'|'changed'|'unchanged'|
-   'inc'|'dec'` when you don't know the new value. Repeat until a handful remain.
+   'inc'|'dec'` when you don't know the new value. The relative compares work as the
+   FIRST narrow too (baselines are recorded at seed). Repeat until a handful remain.
 3. Confirm: `memory({op:'write'})` the candidate and watch the screen react.
 
 This is the Cheat-Engine/RetroArch loop. It is THE bread-and-butter primitive.
+
+**Stored ≠ displayed.** When a correct-looking seed returns 0, the byte usually isn't the
+raw number: seed `as:'bcd'` for packed-BCD scores (2 decimal digits per byte — very common
+on NES), or `as:'digits'` for one byte per ON-SCREEN digit at any constant tile base (HUD
+tile-index buffers; the matched base is reported per candidate, and `searchNext` keeps
+comparing in the same representation). For displayed−1 lives or ÷10 scores, just seed the
+transformed number. If an INPUT drives the value (position, velocity, charge), skip the
+loop entirely: `memory({op:'diffRuns', portsA:[{right:true}]})` isolates it in one call.
 
 `memory({op:'snapshot'})` + `memory({op:'diff'})` is for "which bytes did THIS one event touch?",
 not for value hunting. `memory({op:'diff'})` defaults to a **clustered summary** (ranges +
