@@ -81,7 +81,7 @@ function genericEndianness(platform) {
 // Each function is the body of one former narrow tool, verbatim. The `memory`
 // router dispatches on `op`. They share the module-scope helpers below.
 
-async function memRead(sessionKey, { region, offset = 0, length, offsets, outputPath, inline }) {
+async function memRead(sessionKey, { region, offset = 0, length, offsets, outputPath, inline, echo }) {
       const host = getHost(sessionKey);
       const info0 = REGION_INFO[region] ?? {};
       const endianness0 = info0.endianness ?? genericEndianness(host.status.platform);
@@ -112,7 +112,7 @@ async function memRead(sessionKey, { region, offset = 0, length, offsets, output
       // agent doesn't have to figure byte order out empirically. For
       // generic regions (system_ram etc) fall back to the loaded
       // platform's CPU endianness.
-      const info = REGION_INFO[region] ?? {};
+      const info = REGION_INFO[region] ?? {};   /* (restored — a careless replace-all removed it) */
       const endianness = info.endianness ?? genericEndianness(host.status.platform);
       // Genesis VRAM is stored by genesis-plus-gx as 16-bit words in HOST
       // (little-endian) byte order, so these raw bytes have each word's two
@@ -142,12 +142,14 @@ async function memRead(sessionKey, { region, offset = 0, length, offsets, output
         return jsonContent({ ...meta, path, bytes: written });
       }
       // Small read WITH an explicit outputPath: honor it — write the raw bytes
-      // to disk AND still return the hex inline (small, useful). The intent of
-      // passing outputPath is unambiguous; silently ignoring it broke the
-      // "snapshot RAM to a file, then diff two files" workflow.
+      // to disk AND (by default) still return the hex inline. Pass echo:false
+      // to get just {path, bytes}: a 2KB RAM dump's ~4KB hex echo was the
+      // largest avoidable token cost in a real RE session (0.27.0 feedback #4)
+      // when the whole point of outputPath was keeping it out of context.
       const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
       if (outputPath) {
         const { path, bytes: written } = writeOutput(bytes, { outputPath, what: `readMemory(${region})` });
+        if (echo === false) return jsonContent({ ...meta, path, bytes: written });
         return jsonContent({ ...meta, path, bytes: written, hex });
       }
       return jsonContent({ ...meta, hex });
@@ -185,7 +187,7 @@ async function memWrite(sessionKey, { region, offset = 0, hex, base64, data, byt
       return textContent(`wrote ${buf.length} bytes to ${region}+${offset}`);
 }
 
-async function memReadCart(sessionKey, { offset = 0, length = 16, outputPath, inline }) {
+async function memReadCart(sessionKey, { offset = 0, length = 16, outputPath, inline, echo }) {
       const host = getHost(sessionKey);
       const rom = host.getCartRom();
       if (offset >= rom.bytes.length) {
@@ -210,6 +212,7 @@ async function memReadCart(sessionKey, { offset = 0, length = 16, outputPath, in
       const hex = Array.from(slice, (b) => b.toString(16).padStart(2, "0")).join("");
       if (outputPath) {
         const { path, bytes: written } = writeOutput(slice, { outputPath, what: "readCartRom" });
+        if (echo === false) return jsonContent({ ...meta, path, bytes: written });
         return jsonContent({ ...meta, path, bytes: written, hex });
       }
       return jsonContent({ ...meta, hex });
@@ -223,15 +226,83 @@ async function memSnapshot(sessionKey, { region, name = "default", offset = 0, l
       return jsonContent({ region, name, offset, length: bytes.length, note: "Baseline captured — trigger your event, then memory({op:'diff', region, name}) for the changed bytes." });
 }
 
-async function memDiff(sessionKey, { region, name = "default", view = "summary", maxChanges = 4096, maxClusters = 64, gap = 4 }) {
+// ── diffRuns — A/B scenario diff: THE input→RAM mapping primitive ─────────
+// Runs the SAME starting state twice (savestate restore in between) under two
+// different held inputs, then diffs the two post-run memories. Replaces the
+// hand-rolled save → hold A → step → dump → restore → hold B → step → dump →
+// client-side python diff loop (~6 calls + a 4KB context hit) with ONE call
+// (0.27.0 feedback #6). The emulator is left at the END OF RUN B.
+async function memDiffRuns(sessionKey, { region, frames = 60, portsA, portsB, offset = 0, length, minDelta, maxClusters = 64, gap = 4 }) {
+      const host = getHost(sessionKey);
+      const baseline = host.serializeState();
+      let bufA, bufB;
+      try {
+        host.setInput({ ports: portsA ?? [{}] });
+        host.stepFrames(frames);
+        bufA = host.readMemory(region, offset, length ?? regionLength(host, region, offset));
+      } finally {
+        host.unserializeState(baseline);
+      }
+      host.setInput({ ports: portsB ?? [{}] });
+      host.stepFrames(frames);
+      bufB = host.readMemory(region, offset, bufA.length);
+      host.setInput({ ports: [{}] });
+
+      const divergent = [];
+      for (let i = 0; i < Math.min(bufA.length, bufB.length); i++) {
+        if (bufA[i] === bufB[i]) continue;
+        if (minDelta != null && Math.abs(bufB[i] - bufA[i]) < minDelta) continue;
+        divergent.push(offset + i);
+      }
+      const { clusters, stride } = clusterChanges(divergent, { gap });
+      const out = clusters.slice(0, maxClusters).map((c) => {
+        const entry = {
+          start: "0x" + c.startDec.toString(16).toUpperCase(),
+          end: "0x" + c.endDec.toString(16).toUpperCase(),
+          span: c.endDec - c.startDec + 1,
+          bytes: c.bytes,
+        };
+        if (c.endDec - c.startDec + 1 <= 8) {
+          let a = "", b = "";
+          for (let addr = c.startDec; addr <= c.endDec; addr++) {
+            a += bufA[addr - offset].toString(16).padStart(2, "0");
+            b += bufB[addr - offset].toString(16).padStart(2, "0");
+          }
+          entry.runA = a;
+          entry.runB = b;
+        }
+        return entry;
+      });
+      return jsonContent({
+        region, frames, offset, length: bufA.length,
+        portsA: portsA ?? [{}], portsB: portsB ?? [{}],
+        divergentCount: divergent.length,
+        clusterCount: clusters.length,
+        clusters: out,
+        ...(stride !== null ? { stride: "0x" + stride.toString(16) } : {}),
+        ...(clusters.length > out.length ? { truncated: true } : {}),
+        note: divergent.length === 0
+          ? "No divergent bytes — the two inputs produced identical memory after " + frames + " frames. Try more frames, or inputs the game actually distinguishes in this state."
+          : "Each cluster diverges between the two runs; runA/runB are the post-run bytes (small clusters only). The byte that tracks your input is usually the small cluster whose runA-vs-runB delta matches the expected movement. Emulator is left at the END OF RUN B.",
+      });
+}
+
+async function memDiff(sessionKey, { region, name = "default", view = "summary", maxChanges = 4096, maxClusters = 64, gap = 4, minDelta }) {
       const host = getHost(sessionKey);
       const snap = memSnapshots(sessionKey).get(snapKey(region, name));
       if (!snap) throw new Error(`memory({op:'diff'}): no snapshot named '${name}' for region '${region}'. Call memory({op:'snapshot', region, name}) first.`);
       const now = host.readMemory(region, snap.offset, snap.bytes.length);
 
-      // Collect changed offsets once.
+      // Collect changed offsets once. minDelta filters OUT small wiggles
+      // (|after - before| < minDelta) so "find the position byte amid OAM/RNG
+      // churn" is one cheap call instead of a raw dump + client-side filtering
+      // (0.27.0 feedback #5).
       const changedOffsets = [];
-      for (let i = 0; i < snap.bytes.length; i++) if (snap.bytes[i] !== now[i]) changedOffsets.push(i);
+      for (let i = 0; i < snap.bytes.length; i++) {
+        if (snap.bytes[i] === now[i]) continue;
+        if (minDelta != null && Math.abs(now[i] - snap.bytes[i]) < minDelta) continue;
+        changedOffsets.push(i);
+      }
       const changedCount = changedOffsets.length;
 
       if (view === "raw") {
@@ -253,12 +324,29 @@ async function memDiff(sessionKey, { region, name = "default", view = "summary",
       const strideNote = stride !== null
         ? `${clusters.length} change-islands evenly spaced at stride 0x${stride.toString(16)} — likely a struct/entity ARRAY (each island = one record's changed fields).`
         : null;
-      const out = clusters.slice(0, maxClusters).map((c) => ({
-        start: "0x" + c.startDec.toString(16).toUpperCase(),
-        end: "0x" + c.endDec.toString(16).toUpperCase(),
-        span: c.endDec - c.startDec + 1,
-        bytes: c.bytes,
-      }));
+      // Per-cluster before/after for SMALL clusters (≤8 bytes): the summary
+      // view used to give only ranges, forcing a fall back to view:'raw' to
+      // see the values (0.27.0 feedback #5). Large clusters stay range-only.
+      const out = clusters.slice(0, maxClusters).map((c) => {
+        const entry = {
+          start: "0x" + c.startDec.toString(16).toUpperCase(),
+          end: "0x" + c.endDec.toString(16).toUpperCase(),
+          span: c.endDec - c.startDec + 1,
+          bytes: c.bytes,
+        };
+        const span = c.endDec - c.startDec + 1;
+        if (span <= 8) {
+          let before = "", after = "";
+          for (let a = c.startDec; a <= c.endDec; a++) {
+            const i = a - snap.offset;
+            before += snap.bytes[i].toString(16).padStart(2, "0");
+            after += now[i].toString(16).padStart(2, "0");
+          }
+          entry.before = before;
+          entry.after = after;
+        }
+        return entry;
+      });
       return jsonContent({
         region, name, view, baseOffset: snap.offset, length: snap.bytes.length,
         changedCount, clusterCount: clusters.length,
@@ -385,8 +473,8 @@ export function registerMemoryTools(server, z, sessionKey) {
     "• op:'search' — seed the iterative RAM value search (Cheat Engine / RetroArch style): all addresses currently holding `value` (`size` 1/2/4 bytes, region's endianness). The primitive for 'the screen shows X, find its RAM address' — better than snapshot+diff for this.\n" +
     "• op:'searchNext' — narrow the active candidate list against CURRENT memory. `compare`: 'eq'/'gt'/'lt' (need `value`), 'changed'/'unchanged'/'inc'/'dec' (vs the previous read). Repeat until 1-2 remain, then confirm with op:'write'.",
     {
-      op: z.enum(["read", "write", "readCart", "snapshot", "diff", "classify", "search", "searchNext"])
-        .describe("read=bytes→hex; write=hex/base64→region; readCart=loaded cart ROM image; snapshot=capture a baseline; diff=changed bytes vs a baseline; classify=what kind of data is here; search=seed a value search; searchNext=narrow it."),
+      op: z.enum(["read", "write", "readCart", "snapshot", "diff", "diffRuns", "classify", "search", "searchNext"])
+        .describe("read=bytes→hex; write=hex/base64→region; readCart=loaded cart ROM image; snapshot=capture a baseline; diff=changed bytes vs a baseline; diffRuns=run the SAME start state twice under two different held inputs and return only the DIVERGENT bytes (THE input→RAM mapping primitive — replaces save/run/dump/restore/run/dump/python-diff); classify=what kind of data is here; search=seed a value search; searchNext=narrow it."),
       region: z.enum(REGIONS).optional().describe("Memory region. Required for read/write/snapshot/diff; defaults to system_ram for classify/search. (readCart targets the cart ROM image, not a region.)"),
       offset: z.number().int().min(0).default(0).describe("Byte offset within the region (read/write/snapshot/classify) or the cart ROM image (readCart)."),
       length: z.number().int().min(1).max(1 << 20).optional().describe("Bytes to read (max 1MB). op:read default 1; op:readCart default 16; op:snapshot default = whole region from offset; op:classify default 256."),
@@ -403,6 +491,10 @@ export function registerMemoryTools(server, z, sessionKey) {
       maxChanges: z.number().int().min(1).max(65536).default(4096).describe("op:diff raw view — cap the per-byte list (changedCount is the true total)."),
       maxClusters: z.number().int().min(1).max(4096).default(64).describe("op:diff summary view — cap the cluster list (clusterCount is the true total)."),
       gap: z.number().int().min(1).max(256).default(4).describe("op:diff summary view — merge changed bytes within this many bytes into one cluster (default 4)."),
+      minDelta: z.number().int().min(1).max(255).optional().describe("op:diff — ignore changes where |after-before| < minDelta (filters RNG/counter wiggle so a position byte that moved by the entity's speed stands out)."),
+      frames: z.number().int().min(1).max(100000).default(60).describe("op:diffRuns — frames to run EACH scenario from the same start state."),
+      portsA: z.array(z.record(z.string(), z.boolean())).max(2).optional().describe("op:diffRuns — held input for run A (e.g. [{right:true}]). Default released."),
+      portsB: z.array(z.record(z.string(), z.boolean())).max(2).optional().describe("op:diffRuns — held input for run B. Default released — A-vs-idle is the classic 'which byte does this input drive?' probe."),
       // search / searchNext
       value: z.number().int().optional().describe("op:search — the value the screen shows now. op:searchNext — required for compare 'eq'/'gt'/'lt'."),
       size: z.number().int().min(1).max(4).default(1).describe("op:search — value width in bytes: 1 (stats/lives), 2 (scores/timers), 4 (big counters)."),
@@ -411,6 +503,7 @@ export function registerMemoryTools(server, z, sessionKey) {
       // shared output
       outputPath: z.string().optional().describe(`op:read/readCart — write RAW bytes here. Required for reads >${INLINE_HEX_LIMIT}B unless inline. Small reads honor it too (writes file AND returns hex), so 'dump to disk then diff two files' works at any size. (Ignored with offsets.)`),
       inline: z.boolean().default(false).describe(`op:read/readCart — for reads >${INLINE_HEX_LIMIT}B, return the hex in the response instead of writing to disk.`),
+      echo: z.boolean().default(true).describe("op:read/readCart with outputPath — false = return only {path, bytes} with NO inline hex (keeps a 2-4KB dump out of context; the raw bytes are in the file)."),
     },
     safeTool(async (args) => {
       switch (args.op) {
@@ -423,6 +516,10 @@ export function registerMemoryTools(server, z, sessionKey) {
         case "snapshot": {
           if (!args.region) throw new Error("memory({op:'snapshot'}): `region` is required.");
           return await memSnapshot(sessionKey, args);
+        }
+        case "diffRuns": {
+          if (!args.region) throw new Error("memory({op:'diffRuns'}): `region` is required.");
+          return await memDiffRuns(sessionKey, args);
         }
         case "diff": {
           if (!args.region) throw new Error("memory({op:'diff'}): `region` is required.");

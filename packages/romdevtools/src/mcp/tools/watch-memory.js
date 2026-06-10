@@ -659,11 +659,25 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         host.setPCBreak(0, false, false); // disarm
       }
       if (!hit) {
+        // Diagnostics on a miss (0.27.0 feedback #8): a bare "drive it with
+        // pressDuring" is useless when the caller DID supply input. Report
+        // where the CPU actually is, and tailor the advice.
+        const pcNow = tryGetPC(host);
+        const drove = presses.length > 0;
         return attachObserverFrame(jsonContent({
           hit: false, address: "$" + address.toString(16).toUpperCase(), framesRun,
           ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
-          note: "PC never reached that address within maxFrames. Either the code path didn't execute (drive it with pressDuring " +
-            "to reach the right game state), or the address isn't an instruction boundary (a mid-instruction address never matches REG_PC).",
+          ...(pcNow != null ? { pcNow: "$" + pcNow.toString(16).toUpperCase() } : {}),
+          note: (drove
+            ? "PC never reached that address within maxFrames EVEN WITH the scheduled input — so this is " +
+              "likely the WRONG ADDRESS for the path that actually ran (a different routine handles it), " +
+              "or the address isn't an instruction boundary (mid-instruction never matches REG_PC). "
+            : "PC never reached that address within maxFrames. Either the code path didn't execute (drive " +
+              "it with pressDuring to reach the right game state), or the address isn't an instruction " +
+              "boundary (mid-instruction never matches REG_PC). ") +
+            (pcNow != null ? "pcNow is the frame-boundary PC (usually the idle loop). " : "") +
+            "To find which code DID run, coverage-trace the suspect range: watch({on:'pc', start, end, frames}) " +
+            "returns every distinct PC executed there; or anchor on a RAM effect with breakpoint({on:'write'}).",
         }), host);
       }
       // Snapshot the registers AT the hit BEFORE clearing (last already holds the

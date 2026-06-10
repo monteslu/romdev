@@ -121,6 +121,13 @@ function inputSetCore({ ports }, sessionKey) {
 function inputPressCore({ button, frames = 2, port: p = 0 }, sessionKey) {
       const host = getHost(sessionKey);
       const resolved = resolveButtonAlias(button, host.status.platform);
+      // GUARANTEE a released->pressed EDGE. If the button is already held
+      // (a prior input({op:'set'}) or an overlapping schedule), the game's
+      // newpress detector never fires and the press silently does nothing —
+      // the "one-shot press didn't pause the game" report (0.27.0 #7).
+      // One released frame first makes the edge unconditional.
+      host.setInput({ ports: [{}, {}] });
+      host.stepFrames(1);
       const pressed = { ports: [{}, {}] };
       pressed.ports[p][resolved] = true;
       host.setInput(pressed);
@@ -132,7 +139,8 @@ function inputPressCore({ button, frames = 2, port: p = 0 }, sessionKey) {
         ...(resolved !== button ? { resolvedTo: resolved } : {}),
         frames,
         releaseFrames: 1,
-        framesStepped: frames + 1,
+        preReleaseFrames: 1,
+        framesStepped: frames + 2,
         frameCount: host.status.frameCount,
         ...coDriveFields(sessionKey),
       };
@@ -212,7 +220,9 @@ export function registerInputTools(server, z, sessionKey) {
     "The held state is honored by frame({op:'step'}) AND by watch/breakpoint runs that have NO `pressDuring` " +
     "schedule (they inherit it). If a watch/breakpoint IS given `pressDuring`, that schedule OWNS the pad for " +
     "the run and this set state is ignored — so drive a watched window with `pressDuring`, not a prior `set`.\n" +
-    "'press': press one named `button` for `frames` then release (port 0 default).\n" +
+    "'press': press one named `button` for `frames` then release (port 0 default). Runs ONE released frame " +
+    "first so edge-triggered handlers (START pause, menu confirm) always see a fresh newpress even if the " +
+    "button was already held by a prior set.\n" +
     "'sequence': scripted frame-by-frame `steps:[{input:{ports}, frames}]` for replays/tests.\n" +
     "'navigate': walk a menu by advancing on SCREEN CHANGE — `steps:[{button, holdFrames?, maxWaitFrames?, " +
     "settleFrames?}]`; reports `consumed` per step (false = the screen never reacted: wrong screen / press dropped / " +
