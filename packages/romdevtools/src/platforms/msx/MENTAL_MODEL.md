@@ -117,6 +117,12 @@ exactly this.
   generator + the envelope (period + shape bits).
 - `memory({op:'read'})` regions: `msx_vram`, `msx_vdp_regs`, `msx_vdp_status`,
   `msx_palette`, `msx_cpu_regs`, `msx_psg_regs`, plus `system_ram` (work RAM).
+- `disasm({target:'rom'|'references'|'project'})` — native binutils z80
+  `objdump`. MegaROMs (>32 KB) are handled per 16 KB bank: `references` scans
+  bank 0 at `$4000` (after the "AB" header) and banks 1+ at `$8000` (an
+  assumed ASCII16-style window), refs tagged `romBank`;
+  `disasm({target:'project'})` splits the header into its own data region and
+  emits a bank-by-bank native rebuild recipe in `BUILD.md`.
 
 ## MCP debug & inspection tooling
 

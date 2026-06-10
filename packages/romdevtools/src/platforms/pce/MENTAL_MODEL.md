@@ -101,3 +101,12 @@ screen. Keep at least one (2+ byte) global. See TROUBLESHOOTING.md.
   + LFO.
 - `memory({op:'read'})` regions: `pce_vdc_vram`, `pce_vdc_satb`, `pce_vdc_regs`,
   `pce_vce_palette`, `pce_cpu_regs`, `pce_psg_regs`.
+- `disasm({target:'rom'|'references'|'project'})` — da65's native `huc6280`
+  CPU mode. HuCards >32 KB are handled per 8 KB page (page 0 at `$E000`,
+  where MPR7 maps it at reset — the vectors live there; pages 1+ at `$8000`,
+  an assumed window since the game's MPR writes decide at runtime).
+  `references` tags refs with `romBank`; `disasm({target:'project'})` emits
+  per-page regions + segment wrappers + a generated `.cfg`, and — because the
+  PCE asm toolchain IS cc65/ca65 — a **one-call byte-identical `build()`
+  rebuild** via `rebuild.json` (flat and banked; a 512-byte copier header is
+  split out and re-emitted as a HEADER segment).

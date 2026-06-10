@@ -215,7 +215,11 @@ What you can read:
   registers.
 - **`disasm({target:'rom'})`** and **`disasm({target:'references'})`** —
   both anchor to the top of the bank (`$F000-$FFFF`) and label the vector
-  table (NMI / RESET / IRQ at `$FFFA`).
+  table (NMI / RESET / IRQ at `$FFFA`). On banked carts (F8 = 8 KB,
+  F6 = 16 KB, F4 = 32 KB) `references` scans EVERY 4 KB bank at `$F000`,
+  refs tagged `romBank`; `disasm({target:'project'})` likewise emits one
+  region per bank plus per-bank `BANKn` wrappers and a multi-area `.cfg`
+  blob for the native ca65/ld65 rebuild.
 
 Memory regions for **`memory({op:'read'})`**:
 

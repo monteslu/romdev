@@ -222,6 +222,11 @@ video are fully readable, so you assert live state instead of guessing:
   cpu:'spc700'})` for the sound CPU.
 - **Audio:** the S-DSP is fully decodable — full per-voice state plus the
   master mixer (see "Debugging sound" above for `audioDebug`).
+- **`disasm({target:'references'})`** scans EVERY 32 KB LoROM bank (refs
+  tagged `romBank`) — a hit in bank 12 of a 1 MB cart shows up, not just
+  bank 0. `disasm({target:'project'})` likewise splits per-bank with a
+  native ca65/ld65 rebuild recipe (build() is asar, which can't consume
+  the disasm's ca65 output).
 - **Memory regions:** `memory({op:'read'})` exposes OAM, CGRAM, ARAM (SPC700
   audio RAM), and **FillRAM**. Note the FillRAM quirk: snes9x mirrors the
   PPU registers $2100-$213F (OBSEL/BGMODE/TM/TS/color-math, etc.) into
