@@ -150,10 +150,10 @@ index cc6cbf5..8c1bab2 100644
  extern void RefreshScreen(int);
  
 diff --git a/Src/Z80/R800.c b/Src/Z80/R800.c
-index e3dd190..ece6cb4 100644
+index e3dd190..439b9b9 100644
 --- a/Src/Z80/R800.c
 +++ b/Src/Z80/R800.c
-@@ -42,6 +42,152 @@ static UInt8  ZSPXYTable[256];
+@@ -42,6 +42,180 @@ static UInt8  ZSPXYTable[256];
  static UInt8  ZSPHTable[256];
  static UInt16 DAATable[0x800];
  
@@ -198,6 +198,32 @@ index e3dd190..ece6cb4 100644
 +unsigned int  romdev_wp_addr     = 0;
 +int           romdev_wp_enabled  = 0;
 +unsigned int  romdev_wp_last_pc  = 0xFFFFFFFF;
++/* romdev at-hit REGISTER SNAPSHOT (Z80/R800). The run loops re-enter after a
++ * hit, so the live register file drifts — the hooks freeze a copy at the hit
++ * instant. Layout = the romdev_getreg regId order: [0]=A [1]=F [2]=B [3]=C
++ * [4]=D [5]=E [6]=H [7]=L [8]=IX [9]=IY [16]=PC of the EXECUTING instruction's
++ * first byte [18]=SP. kind: 1=pc-break/step, 2=watchdog, 3=write-watch,
++ * 4=read-watch. */
++unsigned int  romdev_snap_regs[19];
++int           romdev_snap_kind = 0;
++unsigned int  romdev_z80_instr_pc = 0xFFFFFFFF;
++static void romdev_z80_snap(R800* r800, int kind) {
++    int i;
++    for (i = 0; i < 19; i++) romdev_snap_regs[i] = 0;
++    romdev_snap_regs[0]  = r800->regs.AF.B.h;
++    romdev_snap_regs[1]  = r800->regs.AF.B.l;
++    romdev_snap_regs[2]  = r800->regs.BC.B.h;
++    romdev_snap_regs[3]  = r800->regs.BC.B.l;
++    romdev_snap_regs[4]  = r800->regs.DE.B.h;
++    romdev_snap_regs[5]  = r800->regs.DE.B.l;
++    romdev_snap_regs[6]  = r800->regs.HL.B.h;
++    romdev_snap_regs[7]  = r800->regs.HL.B.l;
++    romdev_snap_regs[8]  = r800->regs.IX.W;
++    romdev_snap_regs[9]  = r800->regs.IY.W;
++    romdev_snap_regs[16] = romdev_z80_instr_pc;
++    romdev_snap_regs[18] = r800->regs.SP.W;
++    romdev_snap_kind = kind;
++}
 +unsigned char romdev_wp_last_val = 0;
 +unsigned int  romdev_wp_hits     = 0;
 +
@@ -269,6 +295,7 @@ index e3dd190..ece6cb4 100644
 +    if (romdev_pc_wd_limit && !romdev_pc_hit) { \
 +        if (++romdev_pc_wd_count >= romdev_pc_wd_limit) { \
 +            romdev_pc_last_pc = (r800)->regs.PC.W; \
++            romdev_z80_snap((r800), 2); \
 +            romdev_pc_hit = 1; \
 +            romdev_pc_watchdog = 1; \
 +            (r800)->terminate = 1; \
@@ -294,6 +321,7 @@ index e3dd190..ece6cb4 100644
 +        if (romdev_stepFire || ((romdev_pc_enabled && !romdev_pc_step) \
 +                                && (unsigned int)(r800)->regs.PC.W == romdev_pc_addr)) { \
 +            romdev_pc_last_pc = (r800)->regs.PC.W; \
++            romdev_z80_snap((r800), 1); \
 +            romdev_pc_hit = 1; \
 +            romdev_pc_hits++; \
 +            romdev_pc_step = 0; \
@@ -306,7 +334,7 @@ index e3dd190..ece6cb4 100644
  
  static void cb(R800* r800);
  static void dd(R800* r800);
-@@ -179,9 +325,25 @@ static void writePort(R800* r800, UInt16 port, UInt8 value) {
+@@ -179,9 +353,26 @@ static void writePort(R800* r800, UInt16 port, UInt8 value) {
  }
  
  static UInt8 readMem(R800* r800, UInt16 address) {
@@ -319,30 +347,32 @@ index e3dd190..ece6cb4 100644
 +     * through readOpcode and are deliberately not hooked). Records the live
 +     * Z80 PC of the instruction performing the read. */
 +    if (romdev_rd_enabled && (unsigned int)address == romdev_rd_addr) {
-+        romdev_rd_last_pc = r800->regs.PC.W;
++        romdev_rd_last_pc = romdev_z80_instr_pc;
 +        romdev_rd_last_val = romdev_v;
 +        romdev_rd_hits++;
++        romdev_z80_snap(r800, 4);
 +    }
 +    /* romdev RANGE watch: log every in-[lo,hi] data read {pc,addr,val}. */
 +    if (romdev_range_enabled && (romdev_range_mode & 1)
 +        && (unsigned int)address >= romdev_range_lo
 +        && (unsigned int)address <= romdev_range_hi) {
-+        romdev_range_log(r800->regs.PC.W, (unsigned int)address, romdev_v);
++        romdev_range_log(romdev_z80_instr_pc, (unsigned int)address, romdev_v);
 +    }
 +    return romdev_v;
  }
  
  static UInt8 readOpcode(R800* r800, UInt16 address) {
-@@ -196,6 +358,19 @@ static UInt8 readOpcode(R800* r800, UInt16 address) {
+@@ -196,6 +387,20 @@ static UInt8 readOpcode(R800* r800, UInt16 address) {
  static void writeMem(R800* r800, UInt16 address, UInt8 value) {
      delayMem(r800);
      r800->cachePage = 0xffff;
 +    /* romdev WRITE watchpoint (findWriter): records the live Z80 PC of the
 +     * instruction writing a watched address. */
 +    if (romdev_wp_enabled && (unsigned int)address == romdev_wp_addr) {
-+        romdev_wp_last_pc = r800->regs.PC.W;
++        romdev_wp_last_pc = romdev_z80_instr_pc;
 +        romdev_wp_last_val = value;
 +        romdev_wp_hits++;
++        romdev_z80_snap(r800, 3);
 +    }
 +    /* romdev RANGE watch: log every in-[lo,hi] data write {pc,addr,val}. */
 +    if (romdev_range_enabled && (romdev_range_mode & 2)
@@ -353,10 +383,29 @@ index e3dd190..ece6cb4 100644
      r800->writeMemory(r800->ref, address, value);
  
  #ifdef ENABLE_WATCHPOINTS
-@@ -6076,6 +6251,10 @@ void r800Execute(R800* r800) {
+@@ -6036,6 +6241,14 @@ SystemTime r800GetTimeTrace(R800* r800, int offset) {
+ 
+ void r800Execute(R800* r800) {
+     static SystemTime lastRefreshTime = 0;
++    /* romdev: once a breakpoint/watchdog hit has frozen this CPU, KEEP it
++     * frozen — re-entry would resume execution and drift the registers away
++     * from the hit. terminate ends the frame the same way the fire path does;
++     * the host clears the hit to resume. */
++    if (romdev_pc_hit) {
++        r800->terminate = 1;
++        return;
++    }
+     while (!r800->terminate) {
+         UInt16 address;
+         int iff1 = 0;
+@@ -6076,6 +6289,14 @@ void r800Execute(R800* r800) {
          }
  #endif
  
++        /* romdev: PC right now is the first byte of the instruction about to
++         * be dispatched — latch it for the mid-instruction hooks (readMem/
++         * writeMem watchpoints see an operand-advanced PC). */
++        romdev_z80_instr_pc = (unsigned int)r800->regs.PC.W;
 +        ROMDEV_WATCHDOG_CHECK(r800);
 +        ROMDEV_COV_CHECK(r800);
 +        ROMDEV_PCBREAK_CHECK(r800);
@@ -364,10 +413,28 @@ index e3dd190..ece6cb4 100644
          executeInstruction(r800, readOpcode(r800, r800->regs.PC.W++));
  
          if (r800->regs.halt)
-@@ -6169,9 +6348,13 @@ void r800ExecuteUntil(R800* r800, UInt32 endTime) {
+@@ -6144,6 +6365,13 @@ void r800Execute(R800* r800) {
+ void r800ExecuteUntil(R800* r800, UInt32 endTime) {
+     static SystemTime lastRefreshTime = 0;
+ 
++    /* romdev: frozen after a hit — consume the time slice without executing
++     * (mirror of the r800Execute guard; keeps the board loop advancing). */
++    if (romdev_pc_hit) {
++        r800->systemTime = endTime;
++        return;
++    }
++
+     while ((Int32)(endTime - r800->systemTime) > 0) {
+         UInt16 address;
+         int iff1 = 0;
+@@ -6169,9 +6397,17 @@ void r800ExecuteUntil(R800* r800, UInt32 endTime) {
          }
  #endif
  
++        /* romdev: PC right now is the first byte of the instruction about to
++         * be dispatched — latch it for the mid-instruction hooks (readMem/
++         * writeMem watchpoints see an operand-advanced PC). */
++        romdev_z80_instr_pc = (unsigned int)r800->regs.PC.W;
 +        ROMDEV_WATCHDOG_CHECK(r800);
 +        ROMDEV_COV_CHECK(r800);
 +        ROMDEV_PCBREAK_CHECK(r800);
@@ -380,10 +447,10 @@ index e3dd190..ece6cb4 100644
              r800->regs.iff1 >>= iff1;
          }
 diff --git a/libretro.c b/libretro.c
-index f583a99..495def8 100644
+index f583a99..1eb1c26 100644
 --- a/libretro.c
 +++ b/libretro.c
-@@ -1838,16 +1838,301 @@ unsigned retro_get_region(void)
+@@ -1838,16 +1838,319 @@ unsigned retro_get_region(void)
           return RETRO_REGION_NTSC;
     }
  }
@@ -498,6 +565,24 @@ index f583a99..495def8 100644
 +   romdev_pc_wd_limit = limit;
 +   romdev_pc_wd_count = 0;
 +   romdev_pc_watchdog = 0;
++}
++
++/* romdev at-hit register snapshot (defined in R800.c; captured at the instant
++ * a pc-break / watchdog / write-watch / read-watch fires). out[0]=kind (0=none
++ * 1=pc-break/step 2=watchdog 3=write-watch 4=read-watch), out[1]=count(19),
++ * out[2..20]=regs in the romdev Z80 regId order ([0]=A [1]=F [2]=B [3]=C
++ * [4]=D [5]=E [6]=H [7]=L [8]=IX [9]=IY [16]=PC-of-executing-instruction
++ * [18]=SP). `clear` resets the kind. */
++extern unsigned int romdev_snap_regs[19];
++extern int          romdev_snap_kind;
++void romdev_regsnap_get(unsigned int *out, int clear)
++{
++   int i;
++   if (!out) return;
++   out[0] = (unsigned int)romdev_snap_kind;
++   out[1] = 19;
++   for (i = 0; i < 19; i++) out[2 + i] = romdev_snap_regs[i];
++   if (clear) romdev_snap_kind = 0;
 +}
 +
 +/* READ watchpoint. */

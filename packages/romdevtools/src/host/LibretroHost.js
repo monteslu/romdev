@@ -1292,16 +1292,17 @@ export class LibretroHost {
   }
 
   /**
-   * Read the at-hit register snapshot (gpgx Genesis/SMS/GG): the FULL register
-   * file frozen by the core hook at the instant a pc-break / watchdog /
-   * write-watch / read-watch fired. The live register file keeps running for
-   * the rest of the frame (gpgx schedules CPUs per scanline), so post-frame
-   * register reads drift hundreds of instructions past the hit — this snapshot
-   * is the truth. Returns { kind, named } or null when no hit has been
-   * snapshotted (or the core lacks the export). kind: 1=pc-break/step,
-   * 2=watchdog, 3=write-watch, 4=read-watch. `named` keys per active CPU:
-   * m68k d0-d7/a0-a7/pc/sr/sp (pc = the EXECUTING instruction's first byte);
-   * z80 a/f/b/c/d/e/h/l/ix/iy/pc/sp. Pass clear to reset the kind.
+   * Read the at-hit register snapshot: the FULL register file frozen by the
+   * core hook at the instant a pc-break / watchdog / write-watch / read-watch
+   * fired. The live register file keeps running after a hit (per-scanline CPU
+   * scheduling / next-frame re-entry), so post-hit register reads drift —
+   * this snapshot is the truth. Shipped by ALL patched cores (all 14
+   * platforms). Returns { kind, named } or null when no hit has been
+   * snapshotted (or the core build predates the export). kind:
+   * 1=pc-break/step, 2=watchdog, 3=write-watch, 4=read-watch. `named` keys
+   * follow each CPU's own register file; `pc` is always the EXECUTING
+   * instruction (ARM: its pipeline PC, the same convention breakpoint
+   * addresses use). Pass clear to reset the kind.
    */
   getRegSnapshot(clear = false) {
     const mod = this.mod;
@@ -1313,21 +1314,50 @@ export class LibretroHost {
       const kind = u[0];
       if (!kind) return null;
       const r = Array.from(u.subarray(2, 2 + Math.min(u[1] >>> 0, 19)));
+      const platform = this.status.platform;
+      const h2 = (v) => "$" + (v & 0xFF).toString(16).toUpperCase();
+      const h4 = (v) => "$" + (v & 0xFFFF).toString(16).toUpperCase();
+      const hx = (v) => "$" + (v >>> 0).toString(16).toUpperCase();
       let named;
-      if (this.status.platform === "genesis") {
+      if (platform === "genesis") {
+        // m68k regId order: D0-7, A0-7, PC(instr start), SR, SP.
         named = {};
-        for (let i = 0; i < 8; i++) named["d" + i] = "$" + (r[i] >>> 0).toString(16).toUpperCase();
-        for (let i = 0; i < 8; i++) named["a" + i] = "$" + (r[8 + i] >>> 0).toString(16).toUpperCase();
-        named.pc = "$" + (r[16] >>> 0).toString(16).toUpperCase();
-        named.sr = "$" + (r[17] & 0xFFFF).toString(16).toUpperCase();
-        named.sp = "$" + (r[18] >>> 0).toString(16).toUpperCase();
-      } else {
-        const h2 = (v) => "$" + (v & 0xFF).toString(16).toUpperCase();
-        const h4 = (v) => "$" + (v & 0xFFFF).toString(16).toUpperCase();
+        for (let i = 0; i < 8; i++) named["d" + i] = hx(r[i]);
+        for (let i = 0; i < 8; i++) named["a" + i] = hx(r[8 + i]);
+        named.pc = hx(r[16]);
+        named.sr = h4(r[17]);
+        named.sp = hx(r[18]);
+      } else if (platform === "gba") {
+        // ARM regId order: r0-r15 raw, CPSR at 16, instr pipeline PC at 17, SP at 18.
+        named = {};
+        for (let i = 0; i < 16; i++) named["r" + i] = hx(r[i]);
+        named.cpsr = hx(r[16]);
+        named.pc = hx(r[17]);   // EXECUTING instruction's pipeline PC (pc-break convention)
+        named.sp = hx(r[18]);
+      } else if (platform === "snes") {
+        // 65816 regId order: A, X, Y, P, S, DB, D, …, PBPC(instr start).
+        named = {
+          a: h4(r[0]), x: h4(r[1]), y: h4(r[2]), p: h4(r[3]), s: h4(r[4]),
+          db: h2(r[5]), d: h4(r[6]), pc: hx(r[16]),
+        };
+      } else if (platform === "gb" || platform === "gbc") {
+        named = {
+          a: h2(r[0]), f: h2(r[1]), b: h2(r[2]), c: h2(r[3]),
+          d: h2(r[4]), e: h2(r[5]), h: h2(r[6]), l: h2(r[7]),
+          pc: h4(r[16]), sp: h4(r[18]),
+        };
+      } else if (platform === "sms" || platform === "gg" || platform === "msx") {
         named = {
           a: h2(r[0]), f: h2(r[1]), b: h2(r[2]), c: h2(r[3]),
           d: h2(r[4]), e: h2(r[5]), h: h2(r[6]), l: h2(r[7]),
           ix: h4(r[8]), iy: h4(r[9]), pc: h4(r[16]), sp: h4(r[18]),
+        };
+      } else {
+        // 6502 family (nes, atari2600, atari7800, c64, lynx, pce/huc6280):
+        // regId order A, X, Y, P, S, …, PC(instr start).
+        named = {
+          a: h2(r[0]), x: h2(r[1]), y: h2(r[2]), p: h2(r[3]), s: h2(r[4]),
+          pc: h4(r[16]),
         };
       }
       return { kind, named };

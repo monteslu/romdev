@@ -6,6 +6,35 @@ the `romdev-mcp` bin is kept as an alias.)
 
 ## 0.28.0
 
+### Fixed/Added — registersAtHit + freeze-after-hit on ALL 14 platforms (every core rebuilt)
+The gpgx round's break-instant fixes, extended to every other core — the same
+three guarantees now hold across the whole platform matrix:
+- **`registersAtHit` everywhere** — every breakpoint hit (pc-break, watchdog,
+  write-watch, read-watch) on every platform freezes the FULL register file at
+  the hit instant inside the core hook, exported via `romdev_regsnap_get` and
+  surfaced in the breakpoint hit response. Per-CPU register sets: 6502 family
+  (NES/2600/7800/C64/Lynx/PCE) A/X/Y/P/S/PC; 65816 (SNES) +DB/D; sm83 (GB/GBC)
+  A/F/B/C/D/E/H/L/SP; Z80 (SMS/GG/MSX) +IX/IY; m68k (Genesis) D0-7/A0-7/SR;
+  ARM7 (GBA) r0-r15/CPSR. NES previously snapshotted pc-breaks only — its
+  write/read hits now snapshot too.
+- **Freeze-after-hit everywhere** — once a hit fires, the CPU run loop stays
+  frozen (across re-entries and frames) until the host clears the hit, so even
+  live register reads agree with the snapshot. Previously each core resumed on
+  the next loop re-entry and the registers drifted.
+- **Executing-instruction PC everywhere** — write/read watchpoints and range
+  logs report the EXECUTING instruction's first byte, latched at dispatch
+  (sm83/Z80/65816/6502 PCs advance past operands mid-instruction — the same
+  off-by-one class the gpgx round fixed for m68k; GBA reports the pipeline PC,
+  matching its breakpoint-address convention).
+- Cores rebuilt: fceumm, snes9x, gambatte, mGBA, handy, vice, stella2014,
+  prosystem, geargrafx, bluemsx (pins unchanged; the romdev patches in
+  scripts/patches/ carry all of it — the whole stack reproduces from a clean
+  clone). `cpu({op:'call', pure:true})` remains gpgx-only (the other systems'
+  CPU/video loops are not separable without deeper core surgery); their calls
+  carry the ⚠ frame-logic caveat instead.
+- `test/regsnap-all-cores.test.js`: live single-step snapshot + freeze proof
+  on 10 platforms (plus the existing gpgx suite for Genesis/SMS/GG).
+
 ### Fixed/Added — gpgx core round (the NBA-Jam-both-consoles feedback): break-instant truth on Genesis/SMS/GG
 The first core rebuild in this release (gpgx only; pins unchanged, patch extended).
 - **`registersAtHit` on Genesis/SMS/GG** — `breakpoint({on:'pc'|'write'|'read'})`

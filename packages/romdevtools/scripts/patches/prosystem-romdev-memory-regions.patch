@@ -1,8 +1,8 @@
 diff --git a/core/Memory.c b/core/Memory.c
-index cb12bd3..0e10ee0 100644
+index cb12bd3..9f074c8 100644
 --- a/core/Memory.c
 +++ b/core/Memory.c
-@@ -30,6 +30,85 @@
+@@ -30,6 +30,88 @@
  #include "Cartridge.h"
  #include "Tia.h"
  #include "Riot.h"
@@ -12,6 +12,9 @@ index cb12bd3..0e10ee0 100644
 +unsigned int  romdev_wp_addr     = 0;
 +int           romdev_wp_enabled  = 0;
 +unsigned int  romdev_wp_last_pc  = 0xFFFFFFFF;
++/* at-hit snapshot helpers — defined in Sally.c (see comment there) */
++extern unsigned int romdev_sally_instr_pc;
++extern void         romdev_sally_snap(int kind);
 +unsigned char romdev_wp_last_val = 0;
 +unsigned int  romdev_wp_hits     = 0;
 +
@@ -88,7 +91,7 @@ index cb12bd3..0e10ee0 100644
  
  uint8_t memory_ram[MEMORY_SIZE] = {0};
  uint8_t memory_rom[MEMORY_SIZE] = {0};
-@@ -62,27 +141,44 @@ uint16_t memory_souper_GetRamAddress(uint16_t address)
+@@ -62,27 +144,46 @@ uint16_t memory_souper_GetRamAddress(uint16_t address)
  
  uint8_t memory_Read(uint16_t address)
  {
@@ -122,7 +125,8 @@ index cb12bd3..0e10ee0 100644
 +
 +romdev_rd_done:
 +   if (romdev_rd_enabled && (unsigned int)address == romdev_rd_addr) {
-+      romdev_rd_last_pc = sally_pc.w; romdev_rd_last_val = romdev_rd_value; romdev_rd_hits++;
++      romdev_rd_last_pc = romdev_sally_instr_pc; romdev_rd_last_val = romdev_rd_value; romdev_rd_hits++;
++      romdev_sally_snap(4);
 +   }
 +   ROMDEV_RANGE_6502(address, romdev_rd_value, 0);
 +   return romdev_rd_value;
@@ -131,7 +135,8 @@ index cb12bd3..0e10ee0 100644
  void memory_Write(uint16_t address, uint8_t data)
  {
 +   if (romdev_wp_enabled && (unsigned int)address == romdev_wp_addr) {
-+      romdev_wp_last_pc = sally_pc.w; romdev_wp_last_val = data; romdev_wp_hits++;
++      romdev_wp_last_pc = romdev_sally_instr_pc; romdev_wp_last_val = data; romdev_wp_hits++;
++      romdev_sally_snap(3);
 +   }
 +   ROMDEV_RANGE_6502(address, data, 1);
     if(!memory_rom[address])
@@ -188,7 +193,7 @@ index 753035e..e43551e 100644
        if(cartridge_pokey)
           pokey_Process(2);
 diff --git a/core/Sally.c b/core/Sally.c
-index dede0ca..f956ed8 100644
+index dede0ca..6823602 100644
 --- a/core/Sally.c
 +++ b/core/Sally.c
 @@ -34,6 +34,36 @@ uint8_t sally_p = 0;
@@ -228,7 +233,7 @@ index dede0ca..f956ed8 100644
  static uint8_t sally_opcode;
  static pair sally_address;
  static uint32_t sally_cycles;
-@@ -752,8 +782,60 @@ void sally_Reset(void)
+@@ -752,8 +782,97 @@ void sally_Reset(void)
     sally_pc.w = 0;
  }
  
@@ -238,8 +243,43 @@ index dede0ca..f956ed8 100644
 +extern unsigned int romdev_cov_lo, romdev_cov_hi;
 +extern void         romdev_cov_log(unsigned int pc);
 +
++/* romdev at-hit REGISTER SNAPSHOT (Sally 6502). The frame loop re-enters
++ * sally_ExecuteInstruction after a hit (and the live sally_* globals keep
++ * moving), so the hooks freeze a copy at the hit instant. Layout = the
++ * romdev_getreg regId order: [0]=A [1]=X [2]=Y [3]=P [4]=S [16]=PC of the
++ * EXECUTING instruction's first byte [18]=S. kind: 1=pc-break/step,
++ * 2=watchdog, 3=write-watch, 4=read-watch. */
++unsigned int romdev_snap_regs[19];
++int          romdev_snap_kind = 0;
++unsigned int romdev_sally_instr_pc = 0xFFFFFFFF;
++void romdev_sally_snap(int kind)
++{
++   int i;
++   for (i = 0; i < 19; i++) romdev_snap_regs[i] = 0;
++   romdev_snap_regs[0]  = (unsigned int)sally_a;
++   romdev_snap_regs[1]  = (unsigned int)sally_x;
++   romdev_snap_regs[2]  = (unsigned int)sally_y;
++   romdev_snap_regs[3]  = (unsigned int)sally_p;
++   romdev_snap_regs[4]  = (unsigned int)sally_s;
++   romdev_snap_regs[16] = romdev_sally_instr_pc;
++   romdev_snap_regs[18] = (unsigned int)sally_s;
++   romdev_snap_kind = kind;
++}
++
  uint32_t sally_ExecuteInstruction(void)
  {
++   /* romdev: once a breakpoint/watchdog hit has frozen this CPU, KEEP it
++    * frozen — the frame loop re-enters here, which would resume execution and
++    * drift the registers away from the hit. (The per-frame loop drains its
++    * budget on romdev_pc_hit, so returning 0 is the handled freeze path.) */
++   if (romdev_pc_hit)
++      return 0;
++
++   /* romdev: sally_pc.w right now is the first byte of the instruction about
++    * to be dispatched — latch it for the mid-instruction hooks (memory_Read/
++    * memory_Write watchpoints see an operand-advanced sally_pc). */
++   romdev_sally_instr_pc = (unsigned int)sally_pc.w;
++
 +   /* romdev instruction WATCHDOG: force-stop a runaway (the callSubroutine hang).
 +    * Checked FIRST, BEFORE the opcode fetch, so sally_pc.w is the address of the
 +    * instruction about to execute. On overflow, fire the breakpoint with the
@@ -250,6 +290,7 @@ index dede0ca..f956ed8 100644
 +      if (++romdev_pc_wd_count >= romdev_pc_wd_limit)
 +      {
 +         romdev_pc_last_pc = sally_pc.w;   /* leave PC frozen exactly here */
++         romdev_sally_snap(2);   /* freeze the register file AT the stop */
 +         romdev_pc_hit = 1;
 +         romdev_pc_watchdog = 1;
 +         return 0;
@@ -279,6 +320,7 @@ index dede0ca..f956ed8 100644
 +                       && (unsigned int)sally_pc.w == romdev_pc_addr))
 +      {
 +         romdev_pc_last_pc = sally_pc.w;   /* leave PC frozen exactly here */
++         romdev_sally_snap(1);   /* freeze the register file AT the hit */
 +         romdev_pc_hit = 1;
 +         romdev_pc_hits++;
 +         romdev_pc_step = 0;               /* one-shot */
@@ -290,7 +332,7 @@ index dede0ca..f956ed8 100644
     sally_cycles = SALLY_CYCLES[sally_opcode];
  
 diff --git a/core/libretro.c b/core/libretro.c
-index 3e4dbdb..b7d8ab8 100644
+index 3e4dbdb..fbb361a 100644
 --- a/core/libretro.c
 +++ b/core/libretro.c
 @@ -28,6 +28,7 @@
@@ -301,7 +343,7 @@ index 3e4dbdb..b7d8ab8 100644
  
  #ifdef _3DS
  extern void* linearMemAlign(size_t size, size_t alignment);
-@@ -614,15 +615,236 @@ unsigned retro_get_region(void)
+@@ -614,15 +615,253 @@ unsigned retro_get_region(void)
      return cartridge_region == REGION_NTSC ? RETRO_REGION_NTSC : RETRO_REGION_PAL;
  }
  
@@ -413,6 +455,23 @@ index 3e4dbdb..b7d8ab8 100644
 +    romdev_pc_wd_limit = limit;
 +    romdev_pc_wd_count = 0;
 +    romdev_pc_watchdog = 0;
++}
++
++/* romdev at-hit register snapshot (defined in Sally.c; captured at the instant
++ * a pc-break / watchdog / write-watch / read-watch fires). out[0]=kind (0=none
++ * 1=pc-break/step 2=watchdog 3=write-watch 4=read-watch), out[1]=count(19),
++ * out[2..20]=regs in the romdev regId order ([0]=A [1]=X [2]=Y [3]=P [4]=S
++ * [16]=PC-of-executing-instruction [18]=S). `clear` resets the kind. */
++extern unsigned int romdev_snap_regs[19];
++extern int          romdev_snap_kind;
++void romdev_regsnap_get(unsigned int *out, int clear)
++{
++    int i;
++    if (!out) return;
++    out[0] = (unsigned int)romdev_snap_kind;
++    out[1] = 19;
++    for (i = 0; i < 19; i++) out[2 + i] = romdev_snap_regs[i];
++    if (clear) romdev_snap_kind = 0;
 +}
 +
 +/* ─── romdev RE primitives round 2 ────────────────────────────────────────────
@@ -538,7 +597,7 @@ index 3e4dbdb..b7d8ab8 100644
      return NULL;
  }
  
-@@ -630,6 +852,8 @@ size_t retro_get_memory_size(unsigned id)
+@@ -630,6 +869,8 @@ size_t retro_get_memory_size(unsigned id)
  {
      if ( id == RETRO_MEMORY_SYSTEM_RAM )
          return MEMORY_SIZE;
