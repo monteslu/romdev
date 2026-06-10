@@ -838,6 +838,17 @@ export function projectBuildRecipe(platform, names) {
     // commercial ROMs boot in the same host; only our scaffolds failed). Routing
     // msx_crt0.s through crt0 makes ITS header + init the cartridge entry.
     if (has("msx_crt0.s")) { r.crt0File = "msx_crt0.s"; r.codeLoc = 0x4010; }
+  } else if (platform === "pce") {
+    // PCE example projects (they ship pce_hw.h) build on the 'rom32k' preset:
+    // a 32KB HuCard with bank 0 (STARTUP/VECTORS) FIRST in the file at $E000
+    // and banks 1-3 (CODE/RODATA) at $8000-$DFFF, where cc65's pce crt0 TAMs
+    // them before main(). cc65's stock pce.cfg is an 8KB boot bank — too small
+    // for a complete example game — and its documented 32K variant places the
+    // vectors in the LAST file bank, which a HuCard never maps at reset
+    // (verified black screen on geargrafx). An 8KB-sized program still links
+    // and boots identically under this preset, so it's safe for every
+    // pce_hw.h-style project. Bare hand-rolled dirs are left alone.
+    if (has("pce_hw.h")) r.linkerConfig = "rom32k";
   } else if (platform === "sms" || platform === "gg") {
     // SMS/GG: route the project's *_crt0.s through the crt0 channel (like
     // GB/MSX), NOT as a plain source TU. The OLD recipe skipped it on the

@@ -131,6 +131,38 @@ void set_sprite(u8 slot, u16 x, u16 y, u16 pattern, u8 palette) {
     e[3] = (u16)(0x0080 | (palette & 0x0F));       /* word3: SPBG-front + pal  */
 }
 
+/* set_sprite() with the HuC6270's LARGE-SPRITE size bits — the PCE's signature
+ * trick (sprites up to 32x64 from ONE SATB entry, where the NES needs 8+).
+ *
+ * SATB word3 (the attribute word) layout:
+ *   bit 15    Y-flip
+ *   bits13:12 CGY — sprite HEIGHT: 00=16px, 01=32px, 11=64px (10 is invalid)
+ *   bit 11    X-flip
+ *   bit  8    CGX — sprite WIDTH:  0=16px, 1=32px
+ *   bit  7    SPBG — 1 = sprite in front of background
+ *   bits 3:0  sprite sub-palette (0-15)
+ *
+ * `attr_ex` is OR'd into word3 — pass the SPR_* constants from pce_hw.h
+ * (e.g. SPR_CGX_32 | SPR_CGY_32 for a 32x32 sprite). SPBG-front is still set
+ * for you, same as set_sprite().
+ *
+ * PATTERN LAYOUT for large sprites: the hardware ignores the low bit(s) of the
+ * pattern code and fetches consecutive 16x16 cells (64 words each) instead:
+ *   32 wide:  cell N = left,  N+1 = right            (N multiple of 2)
+ *   32 tall:  row r adds 2*r:  N, N+1 / N+2, N+3     (N multiple of 4)
+ *   64 tall:  rows 0-3 add 2*r: N .. N+7             (N multiple of 8)
+ * So a 32x32 sprite's VRAM data is FOUR cells in TL, TR, BL, BR order, and
+ * its pattern code must be 4-aligned (pattern = VRAM>>6 like set_sprite). */
+void set_sprite_ex(u8 slot, u16 x, u16 y, u16 pattern, u8 palette, u16 attr_ex) {
+    u16 *e;
+    if (slot >= 64) return;
+    e = &_pce_satb[slot * 4];
+    e[0] = (u16)(y + 64);                          /* word0: Y (biased)        */
+    e[1] = (u16)(x + 32);                          /* word1: X (biased)        */
+    e[2] = (u16)((pattern & 0x3FF) << 1);          /* word2: pattern (cell<<1) */
+    e[3] = (u16)(0x0080 | (palette & 0x0F) | attr_ex); /* word3: size/flip + SPBG + pal */
+}
+
 /* Copy the shadow SATB into VRAM at PCE_SATB_VRAM, then tell the VDC to DMA it
  * into its internal sprite table (R19 = SATB source). */
 void satb_dma(void) {
