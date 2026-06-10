@@ -1,5 +1,5 @@
 diff --git a/libretro.cxx b/libretro.cxx
-index 15c6d12..d823515 100644
+index 15c6d12..32e5459 100644
 --- a/libretro.cxx
 +++ b/libretro.cxx
 @@ -28,6 +28,7 @@
@@ -10,13 +10,30 @@ index 15c6d12..d823515 100644
  #include "Version.hxx"
  
  #include "Stubs.hxx"
-@@ -1248,16 +1249,257 @@ unsigned retro_get_region(void)
+@@ -1248,16 +1249,274 @@ unsigned retro_get_region(void)
     return RETRO_REGION_NTSC;
  }
  
 +/* romdev instruction-level write watchpoint (6502) — state defined here; the
 + * hook in M6502::poke records the CPU PC when a watched address is written. */
 +extern "C" {
++/* romdev at-hit register snapshot — see M6502.cxx for the capture sites.
++ * out[0]=kind (0=none 1=pc-break/step 2=watchdog 3=write-watch 4=read-watch),
++ * out[1]=count(19), out[2..20]=regs in the romdev regId order ([0]=A [1]=X
++ * [2]=Y [3]=PS [4]=SP [16]=PC-of-executing-instruction [18]=SP). */
++unsigned int  romdev_snap_regs[19];
++int           romdev_snap_kind = 0;
++unsigned int  romdev_6507_instr_pc = 0xFFFFFFFF;
++void romdev_regsnap_get(unsigned int *out, int clear)
++{
++   int i;
++   if (!out) return;
++   out[0] = (unsigned int)romdev_snap_kind;
++   out[1] = 19;
++   for (i = 0; i < 19; i++) out[2 + i] = romdev_snap_regs[i];
++   if (clear) romdev_snap_kind = 0;
++}
++
 +unsigned int  romdev_wp_addr     = 0;
 +int           romdev_wp_enabled  = 0;
 +unsigned int  romdev_wp_last_pc  = 0xFFFFFFFF;
@@ -268,7 +285,7 @@ index 15c6d12..d823515 100644
        default: return NULL;
     }
  }
-@@ -1267,6 +1509,8 @@ size_t retro_get_memory_size(unsigned id)
+@@ -1267,6 +1526,8 @@ size_t retro_get_memory_size(unsigned id)
     switch (id)
     {
        case RETRO_MEMORY_SYSTEM_RAM: return 128;
@@ -278,10 +295,10 @@ index 15c6d12..d823515 100644
     }
  }
 diff --git a/stella/src/emucore/M6502.cxx b/stella/src/emucore/M6502.cxx
-index 9dfde89..b7e7b50 100644
+index 9dfde89..99e9bd6 100644
 --- a/stella/src/emucore/M6502.cxx
 +++ b/stella/src/emucore/M6502.cxx
-@@ -103,6 +103,28 @@ void M6502::reset()
+@@ -103,6 +103,49 @@ void M6502::reset()
  }
  
  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -305,21 +322,43 @@ index 9dfde89..b7e7b50 100644
 +extern int           romdev_cov_enabled;
 +extern unsigned int  romdev_cov_lo, romdev_cov_hi;
 +extern void          romdev_cov_log(unsigned int pc);
++
++/* romdev at-hit register snapshot (defined in libretro.cxx). Layout = the
++ * romdevGetReg regId order: [0]=A [1]=X [2]=Y [3]=PS [4]=SP [16]=PC of the
++ * EXECUTING instruction's first byte [18]=SP. kind: 1=pc-break/step,
++ * 2=watchdog, 3=write-watch, 4=read-watch. romdev_6507_instr_pc is latched at
++ * dispatch in execute() — PC advances past operands mid-instruction. */
++extern unsigned int  romdev_snap_regs[19];
++extern int           romdev_snap_kind;
++extern unsigned int  romdev_6507_instr_pc;
 +}
++#define ROMDEV_6507_SNAP(kind_) do { \
++    int snap_i_; \
++    for (snap_i_ = 0; snap_i_ < 19; snap_i_++) romdev_snap_regs[snap_i_] = 0; \
++    romdev_snap_regs[0]  = (unsigned int)A; \
++    romdev_snap_regs[1]  = (unsigned int)X; \
++    romdev_snap_regs[2]  = (unsigned int)Y; \
++    romdev_snap_regs[3]  = (unsigned int)PS(); \
++    romdev_snap_regs[4]  = (unsigned int)SP; \
++    romdev_snap_regs[16] = romdev_6507_instr_pc; \
++    romdev_snap_regs[18] = (unsigned int)SP; \
++    romdev_snap_kind = (kind_); \
++  } while (0)
 +
  inline uInt8 M6502::peek(uInt16 address, uInt8 flags)
  {
    ////////////////////////////////////////////////
-@@ -116,14 +138,38 @@ inline uInt8 M6502::peek(uInt16 address, uInt8 flags)
+@@ -116,14 +159,40 @@ inline uInt8 M6502::peek(uInt16 address, uInt8 flags)
    mySystem->incrementCycles(mySystemCyclesPerProcessorCycle);
  
    uInt8 result = mySystem->peek(address, flags);
 +  if (romdev_rd_enabled && (unsigned int)address == romdev_rd_addr) {
-+    romdev_rd_last_pc = PC; romdev_rd_last_val = result; romdev_rd_hits++;
++    romdev_rd_last_pc = romdev_6507_instr_pc; romdev_rd_last_val = result; romdev_rd_hits++;
++    ROMDEV_6507_SNAP(4);
 +  }
 +  if (romdev_range_enabled && (romdev_range_mode & 1)
 +      && (unsigned int)address >= romdev_range_lo && (unsigned int)address <= romdev_range_hi) {
-+    romdev_range_log(PC, (unsigned int)address, result);
++    romdev_range_log(romdev_6507_instr_pc, (unsigned int)address, result);
 +  }
    myLastAccessWasRead = true;
    myLastPeekAddress = address;
@@ -340,16 +379,17 @@ index 9dfde89..b7e7b50 100644
  inline void M6502::poke(uInt16 address, uInt8 value)
  {
 +  if (romdev_wp_enabled && (unsigned int)address == romdev_wp_addr) {
-+    romdev_wp_last_pc = PC; romdev_wp_last_val = value; romdev_wp_hits++;
++    romdev_wp_last_pc = romdev_6507_instr_pc; romdev_wp_last_val = value; romdev_wp_hits++;
++    ROMDEV_6507_SNAP(3);
 +  }
 +  if (romdev_range_enabled && (romdev_range_mode & 2)
 +      && (unsigned int)address >= romdev_range_lo && (unsigned int)address <= romdev_range_hi) {
-+    romdev_range_log(PC, (unsigned int)address, value);
++    romdev_range_log(romdev_6507_instr_pc, (unsigned int)address, value);
 +  }
    ////////////////////////////////////////////////
    // TODO - move this logic directly into CartAR
    if(address != myLastAddress)
-@@ -140,6 +186,27 @@ inline void M6502::poke(uInt16 address, uInt8 value)
+@@ -140,6 +209,27 @@ inline void M6502::poke(uInt16 address, uInt8 value)
  }
  
  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -377,7 +417,7 @@ index 9dfde89..b7e7b50 100644
  bool M6502::execute(uInt32 number)
  {
    // Clear all of the execution status bits except for the fatal error bit
-@@ -153,6 +220,53 @@ bool M6502::execute(uInt32 number)
+@@ -153,6 +243,70 @@ bool M6502::execute(uInt32 number)
        uInt16 operandAddress = 0, intermediateAddress = 0;
        uInt8 operand = 0;
  
@@ -386,11 +426,27 @@ index 9dfde89..b7e7b50 100644
 +      // the instruction about to execute. On overflow, fire the breakpoint with
 +      // the watchdog flag and set StopExecutionBit so the frame ends cleanly
 +      // (retro_run returns) instead of hanging.
++      // romdev: once a breakpoint/watchdog hit has frozen this CPU, KEEP it
++      // frozen — the TIA loop re-enters execute() within the frame, which
++      // would resume execution and drift the registers away from the hit.
++      // The host clears the hit to resume.
++      if (romdev_pc_hit)
++      {
++        myExecutionStatus |= StopExecutionBit;
++        break;
++      }
++
++      // romdev: PC right now is the first byte of the instruction about to be
++      // dispatched — latch it for the mid-instruction hooks (peek/poke
++      // watchpoints see an operand-advanced PC).
++      romdev_6507_instr_pc = (unsigned int)PC;
++
 +      if (romdev_pc_wd_limit && !romdev_pc_hit)
 +      {
 +        if (++romdev_pc_wd_count >= romdev_pc_wd_limit)
 +        {
 +          romdev_pc_last_pc = PC;            // leave PC frozen exactly here
++          ROMDEV_6507_SNAP(2);   // freeze the register file AT the stop
 +          romdev_pc_hit = 1;
 +          romdev_pc_watchdog = 1;
 +          myExecutionStatus |= StopExecutionBit;
@@ -420,6 +476,7 @@ index 9dfde89..b7e7b50 100644
 +                         && (unsigned int)PC == romdev_pc_addr))
 +        {
 +          romdev_pc_last_pc = PC;            // leave PC frozen exactly here
++          ROMDEV_6507_SNAP(1);   // freeze the register file AT the hit
 +          romdev_pc_hit = 1;
 +          romdev_pc_hits++;
 +          romdev_pc_step = 0;               // one-shot

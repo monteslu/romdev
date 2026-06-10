@@ -59,7 +59,7 @@ mv "$CORE_LIB" "${CORE_LIB%.bc}.a"; CORE_LIB="${CORE_LIB%.bc}.a"
 BP_EXPORTS=""
 # cwd here is $LIBRETRO (platforms/libretro); libretro.cpp holds the exports.
 grep -rq "romdev_pcbreak_get" . 2>/dev/null && \
-  BP_EXPORTS='"_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_watchdog_set",'
+  BP_EXPORTS='"_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_watchdog_set","_romdev_regsnap_get",'
 # RE primitives round 2 (register read/write + range-watch + PC-coverage) — added
 # by the same patch as the pcbreak hook, gated on the round-2 sentinel export.
 grep -rq "romdev_cov_get" . 2>/dev/null && \

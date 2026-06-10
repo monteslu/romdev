@@ -159,11 +159,12 @@ the copy reads from, then `breakpoint({on:'write'})` on THAT.
 **Precision — exact vs sampled.** The default `breakpoint({on:'write'})` is a core-level write
 watchpoint: it returns the EXACT writing instruction's PC, captured inside the CPU write
 path — correct even for NMI/IRQ-driven writes (the common case where a frame-sampled PC
-is just the idle loop). On NES and Genesis/SMS/GG the hit also carries **`registersAtHit`**
-— the register file frozen AT the hit instant. Use it instead of a follow-up
-`cpu({op:'read'})`: the live registers keep running for the rest of the frame (on gpgx
-they drift hundreds of instructions past the hit — address registers read that way are
-someone else's values). On a banked mapper it reports the `bank` (NES/GB/SMS-GG) so you
+is just the idle loop). On ALL 14 platforms, every hit (write/read/pc) also carries
+**`registersAtHit`** — the full register file frozen AT the hit instant — and the CPU
+stays FROZEN until the hit is cleared. Use registersAtHit instead of a follow-up
+`cpu({op:'read'})`: pre-0.28.0 the live registers kept running after a hit (on gpgx they
+drifted hundreds of instructions — address registers read that way were someone else's
+values). On a banked mapper it reports the `bank` (NES/GB/SMS-GG) so you
 can pass `{startAddress, bank}` to `disasm({target:'rom'})`. The lighter
 `breakpoint({on:'write', precision:'sampled'})` (a.k.a. `watch({on:'mem'})`) steps until the byte changes
 and returns a frame-boundary PC — a lead, not a guarantee under interrupts; use it for the

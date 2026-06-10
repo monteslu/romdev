@@ -1,5 +1,5 @@
 diff --git a/libretro/libretro-core.c b/libretro/libretro-core.c
-index 82bd2fb73d..f5f653019c 100644
+index 82bd2fb..872356c 100644
 --- a/libretro/libretro-core.c
 +++ b/libretro/libretro-core.c
 @@ -19,6 +19,8 @@
@@ -11,7 +11,7 @@ index 82bd2fb73d..f5f653019c 100644
  #include "vdrive-internal.h"
  #include "charset.h"
  #include "attach.h"
-@@ -8639,6 +8641,333 @@ unsigned retro_get_region(void)
+@@ -8639,6 +8641,351 @@ unsigned retro_get_region(void)
     }
  }
  
@@ -129,6 +129,24 @@ index 82bd2fb73d..f5f653019c 100644
 +   romdev_pc_wd_limit = limit;
 +   romdev_pc_wd_count = 0;
 +   romdev_pc_watchdog = 0;
++}
++
++/* romdev at-hit register snapshot (defined in maincpu.c; captured by the CPU
++ * hooks at the instant a pc-break / watchdog / write-watch / read-watch fires
++ * — the live register shadows keep moving afterward). out[0]=kind (0=none
++ * 1=pc-break/step 2=watchdog 3=write-watch 4=read-watch), out[1]=count(19),
++ * out[2..20]=regs in the romdev regId order ([0]=A [1]=X [2]=Y [3]=P [4]=SP
++ * [16]=PC-of-executing-instruction [18]=SP). `clear` resets the kind. */
++extern unsigned int romdev_snap_regs[19];
++extern int          romdev_snap_kind;
++void romdev_regsnap_get(unsigned int *out, int clear)
++{
++   int i;
++   if (!out) return;
++   out[0] = (unsigned int)romdev_snap_kind;
++   out[1] = 19;
++   for (i = 0; i < 19; i++) out[2 + i] = romdev_snap_regs[i];
++   if (clear) romdev_snap_kind = 0;
 +}
 +
 +/* ─── romdev RE primitives round 2 (C64 6510) ─────────────────────────────────
@@ -345,7 +363,7 @@ index 82bd2fb73d..f5f653019c 100644
  bool retro_load_game_special(unsigned type, const struct retro_game_info *info, size_t num)
  {
     (void)type;
-@@ -8668,6 +8997,54 @@ static void dc_sync_index(void)
+@@ -8668,6 +9015,54 @@ static void dc_sync_index(void)
     }
  }
  
@@ -400,7 +418,7 @@ index 82bd2fb73d..f5f653019c 100644
  /* CPU traps ensure we are never saving snapshots or loading them in the middle of a cpu instruction.
     Without this, savestate corruption occurs.
  */
-@@ -8810,17 +9187,105 @@ bool retro_unserialize(const void *data_, size_t size)
+@@ -8810,17 +9205,105 @@ bool retro_unserialize(const void *data_, size_t size)
     return false;
  }
  
@@ -511,14 +529,28 @@ index 82bd2fb73d..f5f653019c 100644
  }
  
 diff --git a/vice/src/6510core.c b/vice/src/6510core.c
-index a109492e75..c82f6e8ad3 100644
+index a109492..230f8eb 100644
 --- a/vice/src/6510core.c
 +++ b/vice/src/6510core.c
-@@ -2374,6 +2374,57 @@ static const uint8_t rewind_fetch_tab[] = {
+@@ -2374,6 +2374,73 @@ static const uint8_t rewind_fetch_tab[] = {
  
          SET_LAST_ADDR(reg_pc);
  
 +#ifdef ROMDEV_PCBREAK
++        /* romdev: once a breakpoint/watchdog hit has frozen this CPU, KEEP it
++         * frozen — the mainloop re-enters this body, which would resume
++         * execution and drift the registers away from the hit. The host clears
++         * the hit to resume. */
++        if (romdev_pc_hit) {
++            retro_renderloop = 0;
++            return;
++        }
++
++        /* romdev: reg_pc right now is the first byte of the instruction about
++         * to be dispatched — latch it for the mid-instruction hooks (STORE/
++         * LOAD watchpoints see an operand-advanced reg_pc). */
++        romdev_6510_instr_pc = (unsigned int)reg_pc;
++
 +        /* romdev PC coverage log (discovery): record each DISTINCT in-window PC
 +         * about to execute. Checked HERE, before the opcode fetch, so reg_pc is
 +         * the address of the instruction about to run. Gated by ROMDEV_PCBREAK so
@@ -538,6 +570,7 @@ index a109492e75..c82f6e8ad3 100644
 +        if (romdev_pc_wd_limit && !romdev_pc_hit) {
 +            if (++romdev_pc_wd_count >= romdev_pc_wd_limit) {
 +                romdev_pc_last_pc = (unsigned int)reg_pc;  /* frozen, un-executed */
++                romdev_6510_snap(2);   /* freeze the register file AT the stop */
 +                romdev_pc_hit = 1;
 +                romdev_pc_watchdog = 1;
 +                retro_renderloop = 0;      /* end retro_run's frame loop */
@@ -560,6 +593,7 @@ index a109492e75..c82f6e8ad3 100644
 +            if (romdev_stepfire || ((romdev_pc_enabled && !romdev_pc_step)
 +                                    && (unsigned int)reg_pc == romdev_pc_addr)) {
 +                romdev_pc_last_pc = (unsigned int)reg_pc;  /* frozen, un-executed */
++                romdev_6510_snap(1);   /* freeze the register file AT the hit */
 +                romdev_pc_hit = 1;
 +                romdev_pc_hits++;
 +                romdev_pc_step = 0;        /* one-shot */
@@ -573,7 +607,7 @@ index a109492e75..c82f6e8ad3 100644
           * "jammed" - however, our code may rely on FETCH_OPCODE being called
           * here, so we can not simply skip it. What we do instead is remembering
 diff --git a/vice/src/maincpu.c b/vice/src/maincpu.c
-index 14cf0b1320..884211929c 100644
+index 14cf0b1..9e4419e 100644
 --- a/vice/src/maincpu.c
 +++ b/vice/src/maincpu.c
 @@ -58,6 +58,98 @@
@@ -675,19 +709,20 @@ index 14cf0b1320..884211929c 100644
  log_t maincpu_log = LOG_DEFAULT;
  
  /* MACHINE_STUFF should define/undef
-@@ -143,12 +235,36 @@ log_t maincpu_log = LOG_DEFAULT;
+@@ -143,12 +235,38 @@ log_t maincpu_log = LOG_DEFAULT;
  
  #ifndef STORE
  #define STORE(addr, value) \
 -    (*_mem_write_tab_ptr[(addr) >> 8])((uint16_t)(addr), (uint8_t)(value))
 +    do { \
 +        if (romdev_wp_enabled && (unsigned int)(uint16_t)(addr) == romdev_wp_addr) { \
-+            romdev_wp_last_pc = reg_pc; romdev_wp_last_val = (unsigned char)(value); romdev_wp_hits++; \
++            romdev_wp_last_pc = romdev_6510_instr_pc; romdev_wp_last_val = (unsigned char)(value); romdev_wp_hits++; \
++            romdev_6510_snap(3); \
 +        } \
 +        if (romdev_range_enabled && (romdev_range_mode & 2) \
 +            && (unsigned int)(uint16_t)(addr) >= romdev_range_lo \
 +            && (unsigned int)(uint16_t)(addr) <= romdev_range_hi) { \
-+            romdev_range_log(reg_pc, (unsigned int)(uint16_t)(addr), (unsigned char)(value)); \
++            romdev_range_log(romdev_6510_instr_pc, (unsigned int)(uint16_t)(addr), (unsigned char)(value)); \
 +        } \
 +        (*_mem_write_tab_ptr[(addr) >> 8])((uint16_t)(addr), (uint8_t)(value)); \
 +    } while (0)
@@ -703,18 +738,19 @@ index 14cf0b1320..884211929c 100644
 +        unsigned int romdev_la = (unsigned int)(uint16_t)(addr); \
 +        uint8_t romdev_lv = (*_mem_read_tab_ptr[romdev_la >> 8])((uint16_t)romdev_la); \
 +        if (romdev_rd_enabled && romdev_la == romdev_rd_addr) { \
-+            romdev_rd_last_pc = reg_pc; romdev_rd_last_val = romdev_lv; romdev_rd_hits++; \
++            romdev_rd_last_pc = romdev_6510_instr_pc; romdev_rd_last_val = romdev_lv; romdev_rd_hits++; \
++            romdev_6510_snap(4); \
 +        } \
 +        if (romdev_range_enabled && (romdev_range_mode & 1) \
 +            && romdev_la >= romdev_range_lo && romdev_la <= romdev_range_hi) { \
-+            romdev_range_log(reg_pc, romdev_la, romdev_lv); \
++            romdev_range_log(romdev_6510_instr_pc, romdev_la, romdev_lv); \
 +        } \
 +        romdev_lv; \
 +    })
  #endif
  
  #ifndef STORE_ZERO
-@@ -292,6 +408,15 @@ mos6510dtv_regs_t maincpu_regs;
+@@ -292,6 +410,38 @@ mos6510dtv_regs_t maincpu_regs;
  mos6510_regs_t maincpu_regs;
  #endif
  
@@ -727,10 +763,33 @@ index 14cf0b1320..884211929c 100644
 +uint8_t romdev_reg_p = 0;
 +uint8_t romdev_reg_sp = 0;
 +
++/* romdev at-hit REGISTER SNAPSHOT (6510). The mainloop keeps running after a
++ * watchpoint hit (and re-enters after a pc-break frame ends), so the live
++ * register shadows drift past the hit — these are frozen copies captured at
++ * the hit instant. Layout = the romdev_getreg regId order: [0]=A [1]=X [2]=Y
++ * [3]=P [4]=SP [16]=PC of the EXECUTING instruction's first byte [18]=SP.
++ * kind: 1=pc-break/step, 2=watchdog, 3=write-watch, 4=read-watch. */
++unsigned int romdev_snap_regs[19];
++int          romdev_snap_kind = 0;
++unsigned int romdev_6510_instr_pc = 0xFFFFFFFF;
++void romdev_6510_snap(int kind)
++{
++    int i;
++    for (i = 0; i < 19; i++) romdev_snap_regs[i] = 0;
++    romdev_snap_regs[0]  = (unsigned int)romdev_reg_a;
++    romdev_snap_regs[1]  = (unsigned int)romdev_reg_x;
++    romdev_snap_regs[2]  = (unsigned int)romdev_reg_y;
++    romdev_snap_regs[3]  = (unsigned int)romdev_reg_p;
++    romdev_snap_regs[4]  = (unsigned int)romdev_reg_sp;
++    romdev_snap_regs[16] = romdev_6510_instr_pc;
++    romdev_snap_regs[18] = (unsigned int)romdev_reg_sp;
++    romdev_snap_kind = kind;
++}
++
  static int maincpu_jammed = 0;
  
  /* ------------------------------------------------------------------------- */
-@@ -530,9 +655,16 @@ void maincpu_mainloop(void)
+@@ -530,9 +680,16 @@ void maincpu_mainloop(void)
  #ifndef C64DTV
      /* Notice that using a struct for these would make it a lot slower (at
         least, on gcc 2.7.2.x).  */
@@ -750,7 +809,7 @@ index 14cf0b1320..884211929c 100644
  #else
      static int reg_a_read_idx = 0;
      static int reg_a_write_idx = 0;
-@@ -565,8 +697,6 @@ void maincpu_mainloop(void)
+@@ -565,8 +722,6 @@ void maincpu_mainloop(void)
      } while (0);
  #define reg_y_read dtv_registers[reg_y_idx]
  #endif
@@ -759,7 +818,7 @@ index 14cf0b1320..884211929c 100644
      static uint8_t flag_n = 0;
      static uint8_t flag_z = 0;
  #ifndef NEED_REG_PC
-@@ -639,7 +769,13 @@ if (!retro_mainloop)
+@@ -639,7 +794,13 @@ if (!retro_mainloop)
  
  #define GLOBAL_REGS maincpu_regs
  
@@ -773,7 +832,7 @@ index 14cf0b1320..884211929c 100644
  
          maincpu_int_status->num_dma_per_opcode = 0;
  
-@@ -769,7 +905,13 @@ void maincpu_mainloop(void)
+@@ -769,7 +930,13 @@ void maincpu_mainloop(void)
  
  #define GLOBAL_REGS maincpu_regs
  

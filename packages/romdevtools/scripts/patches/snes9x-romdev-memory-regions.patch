@@ -1,8 +1,8 @@
 diff --git a/cpuexec.cpp b/cpuexec.cpp
-index aa43b2f..fdcfff5 100644
+index aa43b2f..f7a2cd5 100644
 --- a/cpuexec.cpp
 +++ b/cpuexec.cpp
-@@ -19,6 +19,37 @@
+@@ -19,8 +19,74 @@
  
  static inline void S9xReschedule (void);
  
@@ -37,10 +37,47 @@ index aa43b2f..fdcfff5 100644
 +extern void          romdev_cov_log(unsigned int pc);
 +}
 +
++/* romdev at-hit REGISTER SNAPSHOT (65816). The live register file keeps
++ * moving after a breakpoint/watchpoint hit (events still process, and the
++ * next frame would resume the CPU), so the host snapshots HERE at the hit
++ * instant. Layout = the romdev_setreg/getreg regId order: [0]=A.W [1]=X.W
++ * [2]=Y.W [3]=P.W [4]=S.W [5]=DB [6]=D.W [16]=PBPC of the EXECUTING
++ * instruction's first byte [18]=S.W. kind: 1=pc-break/step, 2=watchdog,
++ * 3=write-watch, 4=read-watch. */
++extern "C" {
++unsigned int  romdev_snap_regs[19];
++int           romdev_snap_kind = 0;
++unsigned int  romdev_snes_instr_pc = 0xFFFFFFFF;
++void romdev_snes_snap (int kind)
++{
++	int i;
++	for (i = 0; i < 19; i++) romdev_snap_regs[i] = 0;
++	romdev_snap_regs[0]  = Registers.A.W;
++	romdev_snap_regs[1]  = Registers.X.W;
++	romdev_snap_regs[2]  = Registers.Y.W;
++	romdev_snap_regs[3]  = Registers.P.W;
++	romdev_snap_regs[4]  = Registers.S.W;
++	romdev_snap_regs[5]  = Registers.DB;
++	romdev_snap_regs[6]  = Registers.D.W;
++	romdev_snap_regs[16] = romdev_snes_instr_pc;
++	romdev_snap_regs[18] = Registers.S.W;
++	romdev_snap_kind = kind;
++}
++}
++
  void S9xMainLoop (void)
  {
++	/* romdev: once a breakpoint/watchdog hit has frozen this CPU, KEEP it
++	 * frozen — the host re-enters S9xMainLoop on the next frame, which would
++	 * resume execution and drift the register file away from the hit. The
++	 * host clears the hit (pcbreak_get clearHit / pcbreak_set) to resume. */
++	if (romdev_pc_hit)
++		return;
++
  	#define CHECK_FOR_IRQ_CHANGE() \
-@@ -135,6 +166,59 @@ void S9xMainLoop (void)
+ 	if (Timings.IRQFlagChanging) \
+ 	{ \
+@@ -135,6 +201,67 @@ void S9xMainLoop (void)
  			break;
  		}
  
@@ -50,11 +87,18 @@ index aa43b2f..fdcfff5 100644
 +		 * Checked FIRST, at the same dispatch point as the pc-break — Registers.PBPC
 +		 * is the about-to-execute instruction; stop the same way the pc-break does
 +		 * (break out of S9xMainLoop, leaving PBPC frozen on the un-executed insn). */
++		/* romdev: PBPC right now is the first byte of the instruction about to
++		 * be dispatched — latch it so mid-instruction hooks (write/read
++		 * watchpoints) report the EXECUTING instruction, not the drifted
++		 * operand-fetch PC. */
++		romdev_snes_instr_pc = Registers.PBPC & 0xffffff;
++
 +		if (romdev_pc_wd_limit && !romdev_pc_hit)
 +		{
 +			if (++romdev_pc_wd_count >= romdev_pc_wd_limit)
 +			{
 +				romdev_pc_last_pc = Registers.PBPC & 0xffffff;
++				romdev_snes_snap(2);   /* freeze the register file AT the stop */
 +				romdev_pc_hit = 1;
 +				romdev_pc_watchdog = 1;
 +				break;
@@ -90,6 +134,7 @@ index aa43b2f..fdcfff5 100644
 +			                 && (Registers.PBPC & 0xffffff) == (romdev_pc_addr & 0xffffff)))
 +			{
 +				romdev_pc_last_pc = Registers.PBPC & 0xffffff;
++				romdev_snes_snap(1);  /* freeze the register file AT the hit */
 +				romdev_pc_hit = 1;
 +				romdev_pc_hits++;
 +				romdev_pc_step = 0;   /* one-shot */
@@ -101,10 +146,10 @@ index aa43b2f..fdcfff5 100644
  		struct	SOpcodes	*Opcodes;
  
 diff --git a/getset.h b/getset.h
-index ec55ea9..3fddf5e 100644
+index ec55ea9..b1a93e4 100644
 --- a/getset.h
 +++ b/getset.h
-@@ -54,7 +54,73 @@ static inline int32 memory_speed (uint32 address)
+@@ -54,7 +54,81 @@ static inline int32 memory_speed (uint32 address)
  	return (TWO_CYCLES);
  }
  
@@ -139,14 +184,22 @@ index ec55ea9..3fddf5e 100644
 +		return 0x7e0000u | off;
 +	return a;
 +}
++/* The hooks record the EXECUTING instruction's first byte
++ * (romdev_snes_instr_pc, latched at dispatch in S9xMainLoop) — NOT the live
++ * PBPC, which has advanced past the operands by write time — and freeze a
++ * full register snapshot at the hit (the live file keeps moving afterward). */
++extern "C" unsigned int romdev_snes_instr_pc;
++extern "C" void romdev_snes_snap (int kind);
 +#define ROMDEV_WP_SNES(addr, val) do { \
 +		if (romdev_wp_enabled && romdev_wp_canon(addr) == romdev_wp_canon(romdev_wp_addr)) { \
-+			romdev_wp_last_pc = Registers.PBPC; romdev_wp_last_val = (unsigned char)(val); romdev_wp_hits++; \
++			romdev_wp_last_pc = romdev_snes_instr_pc; romdev_wp_last_val = (unsigned char)(val); romdev_wp_hits++; \
++			romdev_snes_snap(3); \
 +		} \
 +	} while (0)
 +#define ROMDEV_RD_SNES(addr, val) do { \
 +		if (romdev_rd_enabled && romdev_wp_canon(addr) == romdev_wp_canon(romdev_rd_addr)) { \
-+			romdev_rd_last_pc = Registers.PBPC; romdev_rd_last_val = (unsigned char)(val); romdev_rd_hits++; \
++			romdev_rd_last_pc = romdev_snes_instr_pc; romdev_rd_last_val = (unsigned char)(val); romdev_rd_hits++; \
++			romdev_snes_snap(4); \
 +		} \
 +	} while (0)
 +
@@ -179,7 +232,7 @@ index ec55ea9..3fddf5e 100644
  {
  	int		block = (Address & 0xffffff) >> MEMMAP_SHIFT;
  	uint8	*GetAddress = Memory.Map[block];
-@@ -157,6 +223,14 @@ inline uint8 S9xGetByte (uint32 Address)
+@@ -157,6 +231,14 @@ inline uint8 S9xGetByte (uint32 Address)
  	}
  }
  
@@ -194,7 +247,7 @@ index ec55ea9..3fddf5e 100644
  inline uint16 S9xGetWord (uint32 Address, enum s9xwrap_t w = WRAP_NONE)
  {
  	uint16	word;
-@@ -193,6 +267,12 @@ inline uint16 S9xGetWord (uint32 Address, enum s9xwrap_t w = WRAP_NONE)
+@@ -193,6 +275,12 @@ inline uint16 S9xGetWord (uint32 Address, enum s9xwrap_t w = WRAP_NONE)
  	if (GetAddress >= (uint8 *) CMemory::MAP_LAST)
  	{
  		word = READ_WORD(GetAddress + (Address & 0xffff));
@@ -207,7 +260,7 @@ index ec55ea9..3fddf5e 100644
  		addCyclesInMemoryAccess_x2;
  		return (word);
  	}
-@@ -319,6 +399,8 @@ inline uint16 S9xGetWord (uint32 Address, enum s9xwrap_t w = WRAP_NONE)
+@@ -319,6 +407,8 @@ inline uint16 S9xGetWord (uint32 Address, enum s9xwrap_t w = WRAP_NONE)
  
  inline void S9xSetByte (uint8 Byte, uint32 Address)
  {
@@ -216,7 +269,7 @@ index ec55ea9..3fddf5e 100644
  	int		block = (Address & 0xffffff) >> MEMMAP_SHIFT;
  	uint8	*SetAddress = Memory.WriteMap[block];
  	int32	speed = memory_speed(Address);
-@@ -425,6 +507,12 @@ inline void S9xSetByte (uint8 Byte, uint32 Address)
+@@ -425,6 +515,12 @@ inline void S9xSetByte (uint8 Byte, uint32 Address)
  
  inline void S9xSetWord (uint16 Word, uint32 Address, enum s9xwrap_t w = WRAP_NONE, enum s9xwriteorder_t o = WRITE_01)
  {
@@ -230,7 +283,7 @@ index ec55ea9..3fddf5e 100644
  	if ((Address & mask) == mask)
  	{
 diff --git a/libretro/libretro.cpp b/libretro/libretro.cpp
-index d381c61..b432654 100644
+index d381c61..3c17a2e 100644
 --- a/libretro/libretro.cpp
 +++ b/libretro/libretro.cpp
 @@ -6,6 +6,7 @@
@@ -241,7 +294,7 @@ index d381c61..b432654 100644
  #include "gfx.h"
  #include "snapshot.h"
  #include "controls.h"
-@@ -2029,6 +2030,267 @@ unsigned retro_get_region()
+@@ -2029,6 +2030,285 @@ unsigned retro_get_region()
      return Settings.PAL ? RETRO_REGION_PAL : RETRO_REGION_NTSC;
  }
  
@@ -359,6 +412,24 @@ index d381c61..b432654 100644
 +   romdev_pc_wd_limit = limit;
 +   romdev_pc_wd_count = 0;
 +   romdev_pc_watchdog = 0;
++}
++
++/* romdev at-hit register snapshot (defined in cpuexec.cpp, captured by the CPU
++ * hooks at the instant a pc-break / watchdog / write-watch / read-watch fires
++ * — the live register file keeps moving afterward, so post-frame reads lie).
++ * out[0] = kind (0=none 1=pc-break/step 2=watchdog 3=write-watch
++ * 4=read-watch), out[1] = count (19), out[2..20] = registers in the
++ * romdev_setreg/getreg regId order ([0]=A [1]=X [2]=Y [3]=P [4]=S [5]=DB
++ * [6]=D [16]=PBPC-of-executing-instruction [18]=S). `clear` resets the kind. */
++extern unsigned int romdev_snap_regs[19];
++extern int          romdev_snap_kind;
++void romdev_regsnap_get(unsigned int *out, int clear) {
++   int i;
++   if (!out) return;
++   out[0] = (unsigned int)romdev_snap_kind;
++   out[1] = 19;
++   for (i = 0; i < 19; i++) out[2 + i] = romdev_snap_regs[i];
++   if (clear) romdev_snap_kind = 0;
 +}
 +
 +/* ── romdev register read/write (65816) ──────────────────────────────────────
@@ -509,7 +580,7 @@ index d381c61..b432654 100644
  void* retro_get_memory_data(unsigned type)
  {
      void* data;
-@@ -2051,6 +2313,18 @@ void* retro_get_memory_data(unsigned type)
+@@ -2051,6 +2331,18 @@ void* retro_get_memory_data(unsigned type)
          case RETRO_MEMORY_VIDEO_RAM:
          data = Memory.VRAM;
          break;
@@ -528,7 +599,7 @@ index d381c61..b432654 100644
          //case RETRO_MEMORY_ROM:
          //	data = Memory.ROM;
          //	break;
-@@ -2085,6 +2359,18 @@ size_t retro_get_memory_size(unsigned type)
+@@ -2085,6 +2377,18 @@ size_t retro_get_memory_size(unsigned type)
          case RETRO_MEMORY_VIDEO_RAM:
              size = 64 * 1024;
              break;

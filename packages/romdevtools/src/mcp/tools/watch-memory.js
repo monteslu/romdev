@@ -569,8 +569,9 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       const bankInfo = (prgOffset != null)
         ? { prgOffset: "0x" + prgOffset.toString(16).toUpperCase(), bank: Math.floor(prgOffset / 0x4000) }
         : null;
-      // gpgx snapshots the FULL register file inside the write hook (kind 3) —
-      // the break-instant truth; the live regs drift for the rest of the frame.
+      // The core snapshots the FULL register file inside the write hook (kind 3,
+      // all 14 platforms) — the break-instant truth; the live regs keep moving
+      // after the hit.
       const wpSnap = host.getRegSnapshot ? host.getRegSnapshot(true) : null;
       const wpRegs = (wpSnap && wpSnap.kind === 3) ? wpSnap.named : null;
       return attachObserverFrame(jsonContent({
@@ -820,11 +821,11 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     "use it, NOT a follow-up cpu({op:'read'}). On some cores (notably NES/fceumm) the core drains the cycle budget on hit but the frame still finishes, " +
     "so a live cpu read afterward returns END-OF-FRAME registers, not the break instant. `registersAtHit` sidesteps that. The break PC is reported as `pc`/`pcRaw`; " +
     "the RAM side effects are also reliable via memory({op:'read'}). frame({op:'stepInstruction'}) to single-step from the break. (on:'read'/'write' finish the frame.)\n" +
-    "All supported on every CPU core; `registersAtHit` is present on cores that snapshot regs at the hit — NES (A/X/Y/P/S on on:'pc') and Genesis/SMS/GG (FULL register file on on:'pc'/'write'/'read'; gpgx schedules CPUs per scanline, so the live regs drift hundreds of instructions past the hit — registersAtHit is the only honest read). Out-of-date core packages return notSupported.\n" +
+    "All supported on every CPU core. **Every hit carries `registersAtHit` — the FULL register file frozen by the core AT the hit instant, on ALL 14 platforms and all three `on` kinds.** Use it instead of a follow-up cpu({op:'read'}): the live registers keep moving after a hit (per-scanline CPU scheduling / frame completion), so a post-hit read drifts — chasing pointer registers read that way burned a real session for hours. The hit `pc` is the EXECUTING instruction's first byte (mid-instruction hooks no longer report the operand-advanced PC). Out-of-date core packages return notSupported.\n" +
     "MENU-SCREEN INPUT TRICK: if a pressDuring schedule never registers (some menu screens poll input in a way scheduled taps miss), HOLD the button instead: input({op:'set', buttons:{...}}) BEFORE this call and OMIT pressDuring — the run inherits the held state, the menu sees the edge, and the breakpoint catches the event.",
     {
       on: z.enum(["write", "read", "pc"])
-        .describe("write=break on a write to address (precision:exact=true writer PC / sampled=frame PC, a lie under IRQ); read=break on a read (exact PC, who consumes it); pc=break when PC reaches address — the hit returns `registersAtHit` (the break-instant register file: A/X/Y/P/S on NES, full D/A/PC/SR on Genesis) + the break PC; use registersAtHit, not a follow-up cpu read (end-of-frame state)."),
+        .describe("write=break on a write to address (precision:exact=true writer PC / sampled=frame PC, a lie under IRQ); read=break on a read (exact PC, who consumes it); pc=break when PC reaches address — the hit returns `registersAtHit` (the break-instant register file, all 14 platforms) + the break PC; use registersAtHit, not a follow-up cpu read (end-of-frame state)."),
       precision: z.enum(["exact", "sampled"]).default("exact")
         .describe("on:'write' ONLY. exact=core watchpoint, the real writing instruction PC even under interrupts (uses `address`). sampled=cheap frame-boundary PC (uses region/offset/length) — NOT the writer under IRQ. Ignored for on:read/pc (always exact)."),
       address: z.number().int().min(0).optional().describe("on:'write' exact / on:'read' / on:'pc' — CPU address to break on (write target, read target, or instruction boundary). Required for those."),
