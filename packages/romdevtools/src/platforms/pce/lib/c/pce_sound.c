@@ -51,3 +51,25 @@ void psg_off(u8 chan) {
     PSG_CHAN_SELECT = chan;
     PSG_CHAN_CTRL   = 0x00;   /* bit7 clear = channel off, volume 0 */
 }
+
+/* ── background music: 8-step melody loop on channel 5 ─────────────
+ * Call psg_music_tick() once per frame (the scaffolds wire it in after
+ * their vsync wait). Deliberately MINIMAL — the PCE boot bank is 8KB
+ * and the puzzle scaffold sits within ~100 bytes of the ceiling, so
+ * there's no on/off toggle and no rests (re-trigger every note).
+ * SFX use channels 0-3; the melody never fights an effect.
+ * PCE freq is a DIVIDER: pitch ~= 3.58MHz / (32 * freq). */
+static const u16 _music_div[8] = {
+    427, 339, 285, 214, 508, 427, 339, 254,  /* C4 E4 G4 C5 A3 C4 E4 A4 */
+};
+static u8 _music_step;
+static u8 _music_timer;
+
+void psg_music_tick(void) {
+    if (_music_timer == 0) {
+        psg_tone(5, _music_div[_music_step & 7], 29);  /* PCE vol is ~-1.5dB/step from 31 — 13 was -27dB, inaudible */
+        ++_music_step;
+    }
+    ++_music_timer;
+    if (_music_timer >= 9) _music_timer = 0;
+}

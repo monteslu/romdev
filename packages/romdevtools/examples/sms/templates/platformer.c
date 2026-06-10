@@ -14,6 +14,7 @@
  */
 #include "sms_hw.h"
 #include "sms_sfx.h"
+#include "sms_music.h"
 #include <stdint.h>
 
 extern void sms_vdp_init(void);
@@ -138,6 +139,8 @@ void main(void) {
 
   sms_sprite_init();
   sfx_init();
+  music_init();
+  music_play(0);   /* continuous background music ("no sound" was the playtest verdict) */
   sms_sprite_set(0, (uint8_t)(px >> 4), (uint8_t)(py >> 4), 0);
   sms_sat_upload();
   sms_vdp_display_on();
@@ -151,6 +154,7 @@ void main(void) {
     const Rect *p;
     sms_vblank_wait();
     sfx_update();
+    music_update();
 
     ipx = px >> 4;
     ipy = py >> 4;

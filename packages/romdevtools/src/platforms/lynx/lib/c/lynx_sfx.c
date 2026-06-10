@@ -103,21 +103,57 @@ static void sfx_flush_pending(void) {
       POKE(VOICE_BASE(i) + 1, 0x80);     /* feedback off */
       POKE(VOICE_BASE(i) + 4, sfx_pending_period[i]);
       POKE(VOICE_BASE(i) + 5, 0x18);     /* RELOAD + COUNT + 16us clock */
-      POKE(VOICE_BASE(i) + 0, 64);       /* volume */
+      POKE(VOICE_BASE(i) + 0, 100);      /* volume (was 64 — read as near-silent on hardware) */
     } else if (sfx_pending_kind[i] == 2) {
       /* Noise on voice 3. */
       POKE(VOICE_BASE(i) + 7, 0x01);     /* 12-bit LFSR */
       POKE(VOICE_BASE(i) + 1, 0x95);     /* classic noise feedback */
       POKE(VOICE_BASE(i) + 4, 40);
       POKE(VOICE_BASE(i) + 5, 0x18);
-      POKE(VOICE_BASE(i) + 0, 64);
+      POKE(VOICE_BASE(i) + 0, 100);
     }
     sfx_pending_kind[i] = 0;
   }
 }
 
+/* ── background music: 16-step melody loop on voice 1 ───────────────
+ * Ticked from sfx_update() through the SAME staged-write path (R57),
+ * so every scaffold that already calls sfx_init() + sfx_update() gets
+ * continuous music for free — "no sound at all" was the Lynx playtest
+ * verdict. sfx_music(0) turns it off. SFX use voice 0 (+ noise on 3).
+ * MIKEY period at the 16us clock: freq ~= 31250 / period. */
+static const uint8_t music_period[16] = {
+    119, 95, 80, 60, 80, 95, 119, 0,    /* C4 E4 G4 C5 G4 E4 C4 -  */
+    142, 119, 95, 71, 95, 119, 142, 0,  /* A3 C4 E4 A4 E4 C4 A3 -  */
+};
+static uint8_t music_enabled = 1;
+static uint8_t music_step, music_timer;
+
+void sfx_music(uint8_t on) {
+  music_enabled = on;
+  music_step = 0;
+  music_timer = 0;
+}
+
+static void music_tick(void) {
+  uint8_t p;
+  if (!music_enabled) return;
+  if (music_timer == 0) {
+    p = music_period[music_step & 15];
+    if (p) {
+      sfx_pending_kind[1] = 1;          /* staged like any tone (R57-safe) */
+      sfx_pending_period[1] = p;
+      sfx_remaining[1] = 8;             /* hold 8 of 9 frames — articulated */
+    }
+    music_step++;
+  }
+  music_timer++;
+  if (music_timer >= 9) music_timer = 0;
+}
+
 void sfx_update(void) {
   uint8_t i;
+  music_tick();
   /* R57: flush any sfx_tone/sfx_noise requests from THIS frame. The
    * caller is expected to have just returned from tgi_updatedisplay
    * (or wait_vblank), so the synchronous timer-event sweep that handy

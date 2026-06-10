@@ -199,6 +199,7 @@ void main(void) {
         u8 slot;
         int16_t target;
         waitvsync();
+        psg_music_tick();
 
         /* stage sprites: P1 paddle (3 segs), P2 paddle (3 segs), ball */
         slot = 0;

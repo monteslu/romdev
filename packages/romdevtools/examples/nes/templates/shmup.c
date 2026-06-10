@@ -215,6 +215,7 @@ void main(void) {
     ppu_wait_nmi();
 
     /* ── Input ───────────────────────────────────────────────── */
+    sound_music_tick();
     pad = pad_poll(0);
     if ((pad & PAD_LEFT)  && ship_x > 8)   --ship_x;
     if ((pad & PAD_RIGHT) && ship_x < 240) ++ship_x;

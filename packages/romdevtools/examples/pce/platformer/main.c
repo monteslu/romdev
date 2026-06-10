@@ -210,6 +210,8 @@ void main(void) {
         const Rect *p;
 
         waitvsync();
+
+        psg_music_tick();
         pad = pce_joy_read();
 
         ipx = px >> 4;

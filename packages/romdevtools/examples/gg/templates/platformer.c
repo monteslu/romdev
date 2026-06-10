@@ -17,6 +17,7 @@
  */
 #include "gg_hw.h"
 #include "gg_sfx.h"
+#include "gg_music.h"
 #include <stdint.h>
 
 extern void gg_vdp_init(void);
@@ -163,6 +164,8 @@ void main(void) {
 
   gg_sprite_init();
   sfx_init();
+  music_init();
+  music_play(0);   /* continuous background music ("no sound" was the playtest verdict) */
   gg_sprite_set(0, (uint8_t)(px >> 4), (uint8_t)(py >> 4), 0);
   gg_sat_upload();
   gg_vdp_display_on();
@@ -176,6 +179,7 @@ void main(void) {
     const Rect *p;
     gg_vblank_wait();
     sfx_update();
+    music_update();
 
     ipx = px >> 4;
     ipy = py >> 4;

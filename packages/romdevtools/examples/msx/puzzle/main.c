@@ -264,6 +264,7 @@ void main(void) {
 
     for (;;) {
         vsync();
+        msx_music_tick();
         draw_piece(1);
 
         dir = msx_read_joystick(1);

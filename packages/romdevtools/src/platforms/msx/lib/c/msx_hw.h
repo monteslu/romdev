@@ -87,6 +87,8 @@ void    msx_clear_sprites(void);
 void    msx_vblank_wait(void);
 uint8_t msx_read_joystick(uint8_t stick);
 void    msx_psg_tone(uint8_t chan, uint16_t period, uint8_t vol);
+void    msx_music(uint8_t on);   /* background melody on channel C — ON by default; 0 = off */
+void    msx_music_tick(void);    /* call once per frame (scaffolds do) */
 void    msx_psg_off(uint8_t chan);
 
 #endif /* MSX_HW_H */

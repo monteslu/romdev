@@ -225,7 +225,7 @@ static void fire(void) {
             bullets[i].x = player.x;
             bullets[i].y = (u16)(player.y - 10);
             bullets[i].alive = 1;
-            psg_tone(2, 0x180, 26);
+            psg_tone(2, 0x180, 31);  /* max vol — playtest said too quiet */
             sfx_timer = 4;
             return;
         }
@@ -280,6 +280,7 @@ void main(void) {
 
     for (;;) {
         waitvsync();
+        psg_music_tick();
         pad = pce_joy_read();
 
         /* move ship */
@@ -318,7 +319,7 @@ void main(void) {
                     enemies[j].alive = 0;
                     if (score < 9999) score += 10;
                     draw_score();
-                    psg_tone(3, 0x040, 28);
+                    psg_tone(3, 0x040, 31);
                     sfx_timer = 6;
                     break;
                 }

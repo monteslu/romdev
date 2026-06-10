@@ -7,6 +7,7 @@
  */
 #include "sms_hw.h"
 #include "sms_sfx.h"
+#include "sms_music.h"
 #include <stdint.h>
 
 extern void sms_vdp_init(void);
@@ -253,12 +254,15 @@ void main(void) {
   draw_grid();
 
   sfx_init();
+  music_init();
+  music_play(0);   /* continuous background music ("no sound" was the playtest verdict) */
   sms_vdp_display_on();
 
   do {
     uint8_t pad, fall_rate, t;
     sms_vblank_wait();
     sfx_update();
+    music_update();
     draw_piece(1);
 
     pad = sms_joypad_read();

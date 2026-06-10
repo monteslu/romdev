@@ -7,6 +7,7 @@
  */
 #include "gg_hw.h"
 #include "gg_sfx.h"
+#include "gg_music.h"
 #include <stdint.h>
 
 extern void gg_vdp_init(void);
@@ -255,12 +256,15 @@ void main(void) {
   draw_grid();
 
   sfx_init();
+  music_init();
+  music_play(0);   /* continuous background music ("no sound" was the playtest verdict) */
   gg_vdp_display_on();
 
   do {
     uint8_t pad, fall_rate, t;
     gg_vblank_wait();
     sfx_update();
+    music_update();
     draw_piece(1);
 
     pad = gg_joypad_read();

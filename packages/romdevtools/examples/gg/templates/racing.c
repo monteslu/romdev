@@ -12,6 +12,7 @@
  */
 #include "gg_hw.h"
 #include "gg_sfx.h"
+#include "gg_music.h"
 #include <stdint.h>
 
 extern void    gg_vdp_init(void);
@@ -174,6 +175,8 @@ void main(void) {
   draw_track();
   gg_sprite_init();
   sfx_init();
+  music_init();
+  music_play(0);   /* continuous background music ("no sound" was the playtest verdict) */
   gg_vdp_display_on();
 
   reset_run();
@@ -185,6 +188,7 @@ void main(void) {
     int16_t step;
     gg_vblank_wait();
     sfx_update();
+    music_update();
 
     /* Stage SAT. */
     slot = 0;

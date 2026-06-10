@@ -317,6 +317,7 @@ void main(void) {
     ppu_wait_nmi();
 
     /* ── Input ──────────────────────────────────────────────── */
+    sound_music_tick();
     pad = pad_poll(0);
     if ((pad & PAD_LEFT)  && !(prev_pad & PAD_LEFT)  && can_place(piece_x - 1, piece_y)) --piece_x;
     if ((pad & PAD_RIGHT) && !(prev_pad & PAD_RIGHT) && can_place(piece_x + 1, piece_y)) ++piece_x;

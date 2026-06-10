@@ -330,6 +330,47 @@ void sound_init(void) {
   APUFRAMECTR = 0x40;      /* 4-step frame counter, disable frame IRQ */
 }
 
+/* ── background music: 16-step melody on the TRIANGLE channel ───────
+ * The pulse channels + noise stay free for sound_play_tone/noise SFX.
+ * Call sound_music_tick() once per frame (after ppu_wait_nmi); the
+ * scaffolds wire it in. sound_music(0) silences it. ("No sound" was
+ * the dominant NES playtest complaint — a rare 6-frame blip isn't
+ * enough; continuous triangle gives every scaffold a musical floor.)
+ * NTSC triangle period for note f ≈ 1789773/(32*f) - 1. */
+static const uint16_t music_period_tbl[16] = {
+    213, 168, 141, 106, 141, 168, 213, 0,   /* C4 E4 G4 C5 G4 E4 C4 -  */
+    253, 213, 168, 126, 168, 213, 253, 0,   /* A3 C4 E4 A4 E4 C4 A3 -  */
+};
+static uint8_t music_enabled = 1;
+static uint8_t music_step;
+static uint8_t music_timer;
+
+void sound_music(uint8_t on) {
+  music_enabled = on;
+  music_step = 0;
+  music_timer = 0;
+  if (!on) { TRI_LINEAR = 0x00; TRI_HI = 0x08; }   /* reload 0 linear → silent */
+}
+
+void sound_music_tick(void) {
+  uint16_t p;
+  if (!music_enabled) return;
+  if (music_timer == 0) {
+    p = music_period_tbl[music_step & 15];
+    if (p) {
+      TRI_LINEAR = 0xFF;                       /* halt flag + max linear: sustain */
+      TRI_LO     = (uint8_t)(p & 0xFF);
+      TRI_HI     = (uint8_t)((p >> 8) & 0x07); /* also reloads the linear counter */
+    } else {
+      TRI_LINEAR = 0x00;                       /* rest */
+      TRI_HI     = 0x08;
+    }
+    ++music_step;
+  }
+  ++music_timer;
+  if (music_timer >= 9) music_timer = 0;
+}
+
 void sound_play_tone(uint8_t channel, uint16_t period, uint8_t vol_4bit, uint8_t length_frames) {
   uint8_t len5 = length_frames & 0x1F;
   uint8_t v = vol_4bit & 0x0F;
