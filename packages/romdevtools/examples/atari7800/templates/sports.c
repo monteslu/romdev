@@ -33,11 +33,15 @@
 
 /* SWCHA bit order is Right(0x80)/Left(0x40)/Down(0x20)/Up(0x10) — the
  * old 0x80/0x40 masks were the RIGHT/LEFT bits, so the stick's
- * horizontal axis moved the paddle vertically. */
+ * horizontal axis moved the paddle vertically.
+ * Port 2 (low nibble) repeats the SAME order from bit 3 down:
+ * Right(0x08)/Left(0x04)/Down(0x02)/Up(0x01) — the previous 0x08/0x04
+ * masks here were P2's RIGHT/LEFT bits (verified bit-by-bit against
+ * prosystem 2026-06), so player 2's paddle ignored the vertical axis. */
 #define P1_UP    0x10
 #define P1_DOWN  0x20
-#define P2_UP    0x08
-#define P2_DOWN  0x04
+#define P2_UP    0x01
+#define P2_DOWN  0x02
 
 #define PADDLE_W_BYTES  1     /* 1 byte = 4 px wide in 160A */
 #define PADDLE_H       16

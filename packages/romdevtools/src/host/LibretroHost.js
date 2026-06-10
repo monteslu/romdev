@@ -1104,7 +1104,26 @@ export class LibretroHost {
     } catch { /* no save_ram region on this core/cart — nothing to carry */ }
     await this.loadMedia(this._loadArgs);
     if (sram && sram.some((b) => b !== 0)) {
-      try { this.writeMemory("save_ram", 0, sram); } catch { /* size changed */ }
+      // Restore like a frontend restores the .srm: bytes in place BEFORE the
+      // game's boot code reads them. Some cores size SAVE_RAM lazily (gpgx
+      // scans for the last non-empty byte → size 0 on a fresh boot), so fall
+      // back to the raw region pointer when the sized path refuses.
+      let restored = false;
+      try {
+        if (this.regionSize("save_ram") >= sram.length) {
+          this.writeMemory("save_ram", 0, sram);
+          restored = true;
+        }
+      } catch { /* sized path unavailable */ }
+      if (!restored) {
+        try {
+          const ptr = this.mod._retro_get_memory_data(0); // RETRO_MEMORY_SAVE_RAM
+          if (ptr) { this.mod.HEAPU8.set(sram, ptr); restored = true; }
+        } catch { /* no save buffer on this core/cart */ }
+      }
+      // loadMedia's settle frames may already have run the game's
+      // hi-score load against empty SRAM — soft-reset so boot re-reads.
+      if (restored) { try { this.reset(); } catch { /* keep the loaded state */ } }
     }
     return true;
   }

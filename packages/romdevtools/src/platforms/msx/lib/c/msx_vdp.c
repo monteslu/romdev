@@ -146,6 +146,31 @@ void msx_psg_tone(uint8_t chan, uint16_t period, uint8_t vol) {
     __asm__("ei");
 }
 
+/* Play NOISE on PSG channel 0/1/2: the AY's one shared noise generator
+ * (reg 6, 5-bit period — bigger = lower rumble) routed into this channel by
+ * clearing its noise-disable mixer bit (reg 7 bits 3-5) while setting its
+ * tone-disable bit. The classic explosion/impact voice.
+ * msx_psg_noise(chan, rate, 0) silences the channel and re-masks its noise
+ * bit (msx_psg_off only re-masks TONE — it doesn't know about noise). */
+void msx_psg_noise(uint8_t chan, uint8_t rate, uint8_t vol) {
+    uint8_t mixer;
+    __asm__("di");                                /* same KEYINT race as above */
+    if (vol) {
+        PSGADDR = 6;                              /* noise period (shared)     */
+        PSGWRITE = (uint8_t)(rate & 0x1F);
+    }
+    PSGADDR = (uint8_t)(8 + chan);
+    PSGWRITE = (uint8_t)(vol & 0x0F);
+    PSGADDR = 7;
+    mixer = PSGREAD;
+    mixer |= (uint8_t)(1 << chan);                /* tone OFF for this channel */
+    if (vol) mixer &= (uint8_t)~(1 << (3 + chan)); /* noise ON  */
+    else     mixer |= (uint8_t)(1 << (3 + chan));  /* noise OFF */
+    PSGADDR = 7;
+    PSGWRITE = mixer;
+    __asm__("ei");
+}
+
 /* Silence a PSG channel: zero its volume and re-disable its tone bit. */
 void msx_psg_off(uint8_t chan) {
     uint8_t mixer;
