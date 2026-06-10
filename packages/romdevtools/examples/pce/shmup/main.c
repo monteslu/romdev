@@ -24,7 +24,9 @@
  * 2P needs a TurboTap. The geargrafx core implements the TurboTap but ships
  * with it disabled (a core option, no headless override today), so a second
  * pad's input never reaches the game — verified by scanning all 5 multitap
- * slots while driving port-1 input. This game is therefore 1P by design.
+ * slots while driving port-1 input (force-enabling geargrafx_turbotap DOES
+ * deliver pad 2, so a future host core-option round can unlock PCE 2P).
+ * This game is therefore 1P by design.
  *
  * Frame budget (NTSC, 60fps, 7.16MHz 65C02-class CPU): the whole update
  * (6 bullets × 6 enemies + 6 × boss AABB ≈ 42 checks worst case, plus a
@@ -35,7 +37,7 @@
 
 /* The title screen renders this — examples({op:'fork'}) stamps your game's
  * name here automatically. Keep it ≤16 chars of A-Z 0-9 space dash. */
-#define GAME_TITLE "ORBIT SIEGE"
+#define GAME_TITLE "ZENITH BARRAGE"
 
 /* ── HARDWARE IDIOM (load-bearing — reshape gameplay around this; see TROUBLESHOOTING) ──
  * VRAM map (WORD addresses — the VDC is a 16-bit-word machine; a tile is 16
