@@ -74,21 +74,21 @@ for (const genre of ["shmup", "platformer", "puzzle"]) {
   });
 }
 
-test("createGame rejects a genre the platform lacks with a clear message", async () => {
+test("createGame: the 14×5 grid is complete — atari2600/puzzle now forks", async () => {
   const client = await startClient();
-  const tmp = mkdtempSync(path.join(os.tmpdir(), "genre-bad-"));
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "genre-a26puzzle-"));
   try {
-    // Every platform now ships at least one genre scaffold, so there's no
-    // wholesale "unsupported platform" holdout left. atari2600 is the one
-    // platform missing a SPECIFIC canonical genre — puzzle, since the TIA has
-    // no tilemap to draw a match-3 grid — so it's the honest sentinel for the
-    // per-genre rejection path.
+    // As of 2026-06-11 every platform ships all five canonical genres — the
+    // 2600 was the last holdout and now ships TILE TWINS (memory match-pairs,
+    // a real puzzle drawn with full-width COLUPF bands, no tilemap needed). So
+    // this previously-rejected combo now forks. (The genuinely-unsupported
+    // genre path is covered by "rejects unsupported genre" below.)
     const res = await client.callTool({
       name: "examples",
       arguments: { op: "fork", platform: "atari2600", template: "puzzle", name: "x", path: tmp, overwrite: true },
     });
-    assert.equal(res.isError, true);
-    assert.match(res.content[0].text, /no example 'atari2600\/puzzle'/);
+    assert.ok(!res.isError, `atari2600/puzzle should fork: ${res.content?.[0]?.text}`);
+    assert.match(res.content[0].text, /atari2600\/puzzle/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
