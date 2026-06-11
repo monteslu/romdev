@@ -504,7 +504,19 @@ const TEMPLATES = {
           "dual joystick ports via GTSTCK/GTTRIG",
         ],
       },
-      sports: mk("sports", "Pong-style 2-player sports for MSX (screen 2). Court (green field + white sidelines + dashed centre net) fills the 32x24 name table; two paddles (stacked sprites) + a ball. Player 1 = joystick PORT 1 UP/DOWN; Player 2 = joystick PORT 2 UP/DOWN, falling back to chase-the-ball AI when no second pad is present so it is playable solo. Wall/paddle bounces + scoring with PSG bonks. Interrupt-free vsync. Extend with serve angles, score display, win condition."),
+      sports: {
+        ...mk("sports", "SPARK SWAT — complete MSX head-to-head court sports (screen 2): title shell with 1P-vs-beatable-CPU / 2P-simultaneous-versus select (P2 = joystick port 2), first-to-5 match flow into a result screen, longest-win-streak record, PSG tune-table music + SFX, and the MSX signature — screen-2 per-row color (banded court + a one-tile net 'pulse' gradient). A +/-1 PRNG deflection spin guarantees idle 1P rallies END. Record is in-session only (bundled bluemsx build exposes no SAVE_RAM — stated honestly in-file)."),
+        players: "1-2 (1P vs beatable CPU, or 2P simultaneous versus, P2 on joystick port 2)",
+        sram: "none — core exposes no SAVE_RAM region (in-session win-streak record)",
+        mechanics: ["paddle/ball court physics", "edge-deflection angle", "beatable chase-AI CPU", "2P simultaneous versus", "first-to-5 match + result screen", "PRNG rally spin (idle matches end)", "in-session win-streak record"],
+        techniques: [
+          "screen-2 per-row color (banded court + one-tile net pulse gradient)",
+          "interrupt-free vsync via VDP S#0 poll",
+          "sprite Y=208 terminator + offscreen parking",
+          "dual joystick ports via GTSTCK/GTTRIG",
+          "PSG tune-table music + SFX",
+        ],
+      },
       racing: mk("racing", "Top-down 3-lane racing for MSX (screen 2). Grey road + green-grass shoulders fill the name table; player car at the bottom, obstacle cars (object pool) spawn at the top and slide down. Joystick LEFT/RIGHT (edge-detected) switches lanes; obstacle speed grows with score; an AABB crash triggers a ~60-frame freeze then auto-reset, with a PSG crash tone. SCORE drawn as tiles. Interrupt-free vsync. Extend with pseudo-3D road, fuel, multiple cars."),
     };
   })(),
