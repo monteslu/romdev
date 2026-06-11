@@ -909,12 +909,22 @@ TEMPLATES.snes = {
     main: "templates/puzzle.c",
     extraSources: [
       { src: "templates/puzzle-data.asm", dst: "data.asm" },
+      { src: "templates/puzzle-hdr.asm", dst: "hdr.asm" },  /* battery-SRAM cart header */
     ],
     runtime: SNES_SFX_RUNTIME,
     runtimeDirs: SNES_PVSNESLIB_VENDOR_DIRS,
     lang: "C (tcc-65816 + PVSnesLib)",
     ext: ".sfc",
-    describe: "Match-3 falling-block puzzle for SNES. 6×12 grid (text mode), rotate/soft-drop/hard-drop, 3+-in-a-row clears in all 4 directions with gravity + cascade chains. Rotate click + clear chime via bundled SPC700 sfx.",
+    describe: "JEWEL JOUST — falling-trio match-3 to the full contract: 1P marathon + 2P SIMULTANEOUS split-board versus with garbage attacks (random matchable rows with one gap — a skilled victim digs out), 4-direction clears with cascade chains, battery-SRAM hi-score at $70:0000 (bundled hdr.asm, survives power cycles), SPC music + SFX, animated title jewel stripe.",
+    players: "1-2 (2P = simultaneous versus, split boards with garbage attacks)",
+    sram: "battery SRAM at $70:0000 (CARTRIDGETYPE $02 via bundled hdr.asm; magic+checksum), verified across hardReset",
+    mechanics: ["falling-trio control", "match-3 in 4 directions", "cascade chains", "garbage attack rows", "split-board versus", "battery hi-score"],
+    techniques: [
+      "battery SRAM at $70:0000 (long-addressed asm helpers)",
+      "SPC700 init-race avoidance",
+      "BG tilemap board repaints + frozen-board game-over",
+      "telemetry block for headless verification",
+    ],
   },
   sports: {
     main: "templates/sports.c",

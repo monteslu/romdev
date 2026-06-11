@@ -1,7 +1,57 @@
-; ── puzzle-data.asm — font stubs only ─────────────────────────────
-; puzzle.c uses only consoleDrawText, so we don't need sprite tile
-; or palette data.
+; ── puzzle-data.asm — JEWEL JOUST's assembly half ────────────────────────────
+;
+; What lives here (and why it can't live in puzzle.c):
+;   1. sram_read16/sram_write16 — battery SRAM accessors. SRAM sits at
+;      $70:0000 (declared in hdr.asm — see puzzle-hdr.asm), reachable only
+;      with long (24-bit) addressing, which tcc C pointers don't emit.
+;   2. Console font + the board tileset (8 tiles 4bpp: blank, well frame,
+;      cabinet dither, empty-cell speck, three jewels) + its palette.
+;      The SAME tile data is uploaded to BOTH the BG2 char base and the OBJ
+;      char base, so the falling-trio sprites and the locked board cells are
+;      pixel-identical by construction.
+;
+; Section names must stay unique vs snes_sfx_data.asm (also linked in).
+
 .include "hdr.asm"
+
+.SECTION ".puzzle_asm" SUPERFREE
+
+; ── HARDWARE IDIOM (load-bearing — reshape gameplay around this; see TROUBLESHOOTING) ──
+; Battery SRAM accessors. SRAM is mapped at $70:0000 (LoROM, SRAMSIZE $01 in
+; puzzle-hdr.asm = 2 KB). Long addressing only — there is no SRAM mirror in
+; the program banks, which is why these are asm and not C. tcc calling
+; convention: u16 arg at 5,s (after the 4-byte rtl frame), second arg at 7,s;
+; u16 return in tcc__r0.
+
+; u16 sram_read16(u16 offset)
+sram_read16:
+    php
+    rep #$30
+    lda 5,s            ; offset
+    tax
+    sep #$20
+    lda.l $700000,x
+    sta.w tcc__r0
+    lda.l $700001,x
+    sta.w tcc__r0 + 1
+    plp
+    rtl
+
+; void sram_write16(u16 offset, u16 value)
+sram_write16:
+    php
+    rep #$30
+    lda 5,s            ; offset
+    tax
+    lda 7,s            ; value
+    sep #$20
+    sta.l $700000,x    ; low byte
+    xba
+    sta.l $700001,x    ; high byte
+    plp
+    rtl
+
+.ENDS
 
 .section ".rodata1" superfree
 
@@ -309,26 +359,71 @@ palfont:
 .db $00, $00, $00, $00, $00, $00, $00, $00
 .db $00, $00
 
-; ── Background wallpaper (one 8x8 4bpp tile, 4 solid colour quadrants) ──
-; Tiled across BG1 it paints the whole screen in four muted colours so the
-; playfield never reads as a flat/blank backdrop. Quadrant->colour: TL=1,
-; TR=2, BL=3, BR=4. 4bpp plane order: bytes 0-15 = rows 0-7 plane0/plane1
-; pairs, bytes 16-31 = rows 0-7 plane2/plane3 pairs.
-tilbg:
-.db $F0, $0F, $F0, $0F, $F0, $0F, $F0, $0F   ; rows 0-3: p0=left  p1=right
-.db $F0, $F0, $F0, $F0, $F0, $F0, $F0, $F0   ; rows 4-7: p0+p1 = left
-.db $00, $00, $00, $00, $00, $00, $00, $00   ; rows 0-3: p2/p3 = 0
-.db $0F, $00, $0F, $00, $0F, $00, $0F, $00   ; rows 4-7: p2 = right
+; ── Board tileset (8 tiles, 4bpp, 32 bytes each) ─────────────────────────────
+; 4bpp plane order per tile: bytes 0-15 = rows 0-7 as plane0/plane1 byte
+; pairs, bytes 16-31 = rows 0-7 as plane2/plane3 pairs. The pixel's colour
+; index is the 4-bit number assembled from the planes (p0 = bit 0).
+; The three jewels are the SAME round shape on different plane combinations —
+; colour index 4 / 5 / 6 — so a board cell changes colour by changing its
+; TILE, and the trio sprites reuse the very same tiles (uploaded to the OBJ
+; char base too). Layout matches puzzle.c's BG_* defines:
+;   0 blank  1 frame  2 dither  3 speck  4 jewel A  5 jewel B  6 jewel C  7 pad
+tilboard:
+; tile 0 — blank (colour 0 = transparent; the backdrop shows through)
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 1 — well frame (colour 3 = planes 0+1): ring with a notched centre
+.db $FF, $FF, $FF, $FF, $E7, $E7, $C3, $C3
+.db $C3, $C3, $E7, $E7, $FF, $FF, $FF, $FF
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 2 — cabinet dither (colour 2 = plane 1): sparse checker backdrop
+.db $00, $55, $00, $00, $00, $AA, $00, $00
+.db $00, $55, $00, $00, $00, $AA, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 3 — empty-cell speck (colour 7 = planes 0+1+2): one dim pixel so the
+; well-interior reads as a recessed playfield, not raw backdrop
+.db $00, $00, $00, $00, $00, $00, $10, $10
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $10, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 4 — jewel A, ruby (colour 4 = plane 2 only)
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $3C, $00, $7E, $00, $FF, $00, $FF, $00
+.db $FF, $00, $FF, $00, $7E, $00, $3C, $00
+; tile 5 — jewel B, emerald (colour 5 = planes 0+2)
+.db $3C, $00, $7E, $00, $FF, $00, $FF, $00
+.db $FF, $00, $FF, $00, $7E, $00, $3C, $00
+.db $3C, $00, $7E, $00, $FF, $00, $FF, $00
+.db $FF, $00, $FF, $00, $7E, $00, $3C, $00
+; tile 6 — jewel C, amber (colour 6 = planes 1+2)
+.db $00, $3C, $00, $7E, $00, $FF, $00, $FF
+.db $00, $FF, $00, $FF, $00, $7E, $00, $3C
+.db $3C, $00, $7E, $00, $FF, $00, $FF, $00
+.db $FF, $00, $FF, $00, $7E, $00, $3C, $00
+; tile 7 — pad (keeps the upload a tidy 256 bytes)
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
 
-palbg:
-; 16-colour BG palette; only 1-4 used (the four wallpaper quadrant tones).
-.db $00, $00          ; 0 unused (BG fully opaque)
-.db $C4, $30          ; 1 dark blue
-.db $42, $29          ; 2 dark teal
-.db $88, $30          ; 3 dark purple
-.db $C6, $24          ; 4 dark slate
+palboard:
+; 16-colour palette (BGR555). Loaded TWICE by puzzle.c: into CGRAM block 1
+; (BG2 map entries select it) and into OBJ palette 0 — locked cells and the
+; falling trio share these exact inks.
+.db $00, $00          ; 0 transparent (BG: backdrop shows / OBJ: see-through)
+.db $FF, $7F          ; 1 white
+.db $A4, $30          ; 2 dark navy (dither ink)
+.db $0E, $52          ; 3 steel blue (well frame)
+.db $9C, $18          ; 4 ruby      (jewel A)
+.db $45, $23          ; 5 emerald   (jewel B)
+.db $1E, $13          ; 6 amber     (jewel C)
+.db $4A, $31          ; 7 dim grey  (empty-cell speck)
 .db $00, $00, $00, $00, $00, $00, $00, $00
 .db $00, $00, $00, $00, $00, $00, $00, $00
-.db $00, $00, $00, $00, $00, $00
 
 .ends
