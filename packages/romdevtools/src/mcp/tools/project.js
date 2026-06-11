@@ -570,7 +570,17 @@ TEMPLATES.sms = {
     runtime: SMS_RUNTIME,
     lang: SMS_LANG,
     ext: ".sms",
-    describe: "SIDE-SCROLLING platformer for SMS with COLUMN STREAMING. Subpixel gravity + jump + land-on-top collision against platforms across a 512-px world. The SMS name table is only 32 cells (256 px) and wraps, so the world is streamed: the camera follows the player, writes VDP R8 (-camX) for smooth pixel scroll, and each time camX crosses an 8-px boundary it rewrites the name-table column entering from the right (or left, on retreat) with the next world column. Player sprite draws in screen space. 1=jump, d-pad=move. For a fixed HUD, lock the top rows with VDP R0 bit 6. See the SMS MENTAL_MODEL.md 'Horizontal scrolling'. Extend with enemies, goals, pickups.",
+    describe: "GULLY VAULT — side-scrolling platformer: gravity + Q4.4 sub-pixel jump physics, one-way platforms, pits and spikes, coins + distance scoring, PSG music + SFX. 2P is classic alternating turns (P2 on port B) with per-player score and lives. The SMS signature LINE-INTERRUPT split holds a fixed HUD over the scrolling level, and the 32-cell name table wraps at exactly 256 px — the level loops seamlessly with no second nametable or column streaming. Hi-score persists to Sega-mapper cart RAM on 64KB+ builds (verified incl. power-cycle); 32KB builds are honestly in-session.",
+    players: "1-2 (alternating turns, P2 on port B)",
+    sram: "Sega-mapper cart RAM at $8000 ($FFFC bit 3) on 64KB+ builds (verified across soft reset AND power-cycle); in-session at 32KB",
+    mechanics: ["gravity-jump physics (Q4.4 fixed point)", "one-way platform collision", "one-way camera with scroll wall", "pits + spike hazards", "coin + distance scoring", "alternating 2P turns with per-player lives"],
+    techniques: [
+      "VDP line-interrupt split (fixed HUD over scrolling level)",
+      "hardware-wrapping 256-px name table as a seamless looping world (R8 = -scroll_x)",
+      "Sega-mapper cart RAM persistence ($FFFC control)",
+      "PSG tune-table music + voice-2 SFX arbitration",
+      "IM1 interrupt handshake (VDP status ack discipline)",
+    ],
   },
   puzzle: {
     main: "templates/puzzle.c",
