@@ -34,6 +34,9 @@ index 96dece6..845c077 100644
 +extern uint32_t romdev_wp_last_pc;
 +extern uint8_t  romdev_wp_last_val;
 +extern uint32_t romdev_wp_hits;
++extern uint8_t  romdev_wp_last_old; /* pre-write byte (for inc/dec conditions) */
++extern int      romdev_wp_cond;     /* 0=none 1=increase 2=decrease 3=equals   */
++extern uint8_t  romdev_wp_cond_val; /* target byte for 'equals'                */
 +
 +void romdev_watchpoint_set(uint32_t addr, int enabled)
 +{
@@ -41,6 +44,25 @@ index 96dece6..845c077 100644
 +   romdev_wp_enabled = enabled ? 1 : 0;
 +   romdev_wp_last_pc = 0xFFFFFFFF;
 +   romdev_wp_last_val = 0;
++   romdev_wp_last_old = 0;
++   romdev_wp_cond = 0;
++   romdev_wp_cond_val = 0;
++   romdev_wp_hits = 0;
++}
++
++/* Value-conditioned watchpoint (0.30.0): only count/record writes that move the
++ * stored byte the chosen way — 1=increase (new>old), 2=decrease (new<old),
++ * 3=equals (new==val). Skips restoring/churn writes so the reported PC is the
++ * MEANINGFUL write, not the frame's last write. */
++void romdev_watchpoint_set_cond(uint32_t addr, int enabled, int cond, int val)
++{
++   romdev_wp_addr = addr;
++   romdev_wp_enabled = enabled ? 1 : 0;
++   romdev_wp_last_pc = 0xFFFFFFFF;
++   romdev_wp_last_val = 0;
++   romdev_wp_last_old = 0;
++   romdev_wp_cond = cond;
++   romdev_wp_cond_val = (uint8_t)val;
 +   romdev_wp_hits = 0;
 +}
 +
@@ -69,6 +91,7 @@ index 96dece6..845c077 100644
 +   out6[3] = (uint32_t)romdev_wp_last_val;
 +   out6[4] = romdev_wp_hits;
 +   out6[5] = prgOff;
++   out6[6] = (romdev_wp_hits ? (uint32_t)romdev_wp_last_old : 0xFFFFFFFF); /* pre-write byte */
 +   if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; romdev_wp_last_pc_ptr = 0; }
 +}
 +
@@ -496,7 +519,20 @@ index 61b83e0..6413582 100644
 +int      romdev_wp_enabled  = 0;
 +uint32_t romdev_wp_last_pc  = 0xFFFFFFFF;
 +uint8_t  romdev_wp_last_val = 0;
++uint8_t  romdev_wp_last_old = 0;
++int      romdev_wp_cond     = 0;
++uint8_t  romdev_wp_cond_val = 0;
 +uint32_t romdev_wp_hits     = 0;
++/* Does new value V (with old byte OLD) satisfy the active condition? cond 0 =
++ * unconditional. Used by the write hooks to skip restoring/churn writes. */
++static INLINE int romdev_wp_cond_ok(uint8_t oldv, uint8_t v) {
++	switch (romdev_wp_cond) {
++		case 1:  return v > oldv;             /* increase */
++		case 2:  return v < oldv;             /* decrease */
++		case 3:  return v == romdev_wp_cond_val; /* equals */
++		default: return 1;                    /* none */
++	}
++}
 +/* The host pointer of the PC's 2KB page at write time. Page[A>>11] is
 + * (host_ptr - A_base), so Page[PC>>11] + PC is the live host address of the
 + * writing instruction — libretro.c converts it to an absolute PRG-ROM offset
@@ -689,9 +725,14 @@ index 61b83e0..6413582 100644
  
  static INLINE void WrMemNorm(uint32_t A, uint8_t V) {
 +	if (romdev_wp_enabled && A == romdev_wp_addr) {
-+		romdev_wp_last_pc = romdev_6502_instr_pc; romdev_wp_last_val = V; romdev_wp_hits++;
-+		romdev_wp_last_pc_ptr = (romdev_6502_instr_pc >= 0x8000) ? Page[(romdev_6502_instr_pc >> 11) & 31] + romdev_6502_instr_pc : 0;
-+		romdev_6502_snap(3);
++		/* old byte = current bus read (only when a condition needs it, to avoid
++		 * a mapper read side effect on the common no-condition path). */
++		uint8_t romdev_old = romdev_wp_cond ? ARead[A](A) : 0;
++		if (romdev_wp_cond_ok(romdev_old, V)) {
++			romdev_wp_last_pc = romdev_6502_instr_pc; romdev_wp_last_val = V; romdev_wp_last_old = romdev_old; romdev_wp_hits++;
++			romdev_wp_last_pc_ptr = (romdev_6502_instr_pc >= 0x8000) ? Page[(romdev_6502_instr_pc >> 11) & 31] + romdev_6502_instr_pc : 0;
++			romdev_6502_snap(3);
++		}
 +	}
 +	ROMDEV_RANGE_6502(A, V, 1);
  	BWrite[A](A, V);
@@ -708,9 +749,12 @@ index 61b83e0..6413582 100644
  
  static INLINE void WrRAMFast(uint32_t A, uint8_t V) {
 +	if (romdev_wp_enabled && A == romdev_wp_addr) {
-+		romdev_wp_last_pc = romdev_6502_instr_pc; romdev_wp_last_val = V; romdev_wp_hits++;
-+		romdev_wp_last_pc_ptr = (romdev_6502_instr_pc >= 0x8000) ? Page[(romdev_6502_instr_pc >> 11) & 31] + romdev_6502_instr_pc : 0;
-+		romdev_6502_snap(3);
++		uint8_t romdev_old = RAM[A]; /* pre-write byte (RAM is side-effect free) */
++		if (romdev_wp_cond_ok(romdev_old, V)) {
++			romdev_wp_last_pc = romdev_6502_instr_pc; romdev_wp_last_val = V; romdev_wp_last_old = romdev_old; romdev_wp_hits++;
++			romdev_wp_last_pc_ptr = (romdev_6502_instr_pc >= 0x8000) ? Page[(romdev_6502_instr_pc >> 11) & 31] + romdev_6502_instr_pc : 0;
++			romdev_6502_snap(3);
++		}
 +	}
 +	ROMDEV_RANGE_6502(A, V, 1);
  	RAM[A] = V;

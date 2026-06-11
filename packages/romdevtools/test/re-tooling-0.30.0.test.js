@@ -16,6 +16,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { registerMemoryTools } from "../src/mcp/tools/memory.js";
+import { registerWatchMemoryTools } from "../src/mcp/tools/watch-memory.js";
 import { _setHostForTest } from "../src/mcp/state.js";
 
 const parse = (res) => JSON.parse(res.content.find((c) => c.type === "text").text);
@@ -108,6 +109,40 @@ test("#2b op:'diff' honors outputPath; echo:false returns a slim envelope", asyn
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("#4 condition:'equals' — core handles it when supported (conditionApplied)", async () => {
+  // Fake host whose watchpoint supports the condition export: it only 'hits'
+  // when the (pretend) written value equals the requested conditionValue.
+  let armedCond = null;
+  const host = {
+    status: { platform: "nes", loaded: true, frameCount: 0 },
+    watchpointSupported: () => true,
+    setWatchpoint: (_a, _en, opts) => { armedCond = opts?.condition ?? null; return { conditionApplied: !!opts?.condition }; },
+    stepFrames: () => {},
+    getWatchpoint: () => (armedCond === "equals"
+      ? { hits: 1, lastPC: 0x8123, lastValue: 0x01, lastOldValue: 0x00 }
+      : { hits: 0 }),
+    getRegSnapshot: () => null,
+  };
+  _setHostForTest("bpc", host);
+  const bp = toolHandler(registerWatchMemoryTools, "breakpoint", "bpc");
+  const r = parse(await bp({ on: "write", precision: "exact", address: 0x0528, condition: "equals", conditionValue: 1, maxFrames: 3 }));
+  assert.equal(r.found, true);
+  assert.equal(r.condition, "equals");
+  assert.equal(r.valueByte, "0x01");
+  assert.equal(r.oldValueByte, "0x00", "the core's pre-write byte is surfaced");
+  assert.ok(!("conditionAppliedBy" in r), "core handled it — not the host fallback");
+});
+
+test("#4 condition:'equals' requires conditionValue", async () => {
+  const host = { status: { platform: "nes" }, watchpointSupported: () => true,
+    setWatchpoint: () => ({ conditionApplied: false }), stepFrames: () => {}, getWatchpoint: () => ({ hits: 0 }) };
+  _setHostForTest("bpc2", host);
+  const bp = toolHandler(registerWatchMemoryTools, "breakpoint", "bpc2");
+  const res = await bp({ on: "write", precision: "exact", address: 0x10, condition: "equals" });
+  const text = res.content.find((c) => c.type === "text").text;
+  assert.match(text, /conditionValue.*required/, "missing conditionValue is reported as an error");
 });
 
 test("#2a op:'readCart' maps a banked CPU address to PRG bytes (NES)", async () => {
