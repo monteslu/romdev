@@ -1520,7 +1520,17 @@ TEMPLATES.lynx = {
   puzzle: {
     main: "templates/puzzle.c", runtime: LYNX_RUNTIME, runtimeDirs: LYNX_VENDOR_DIRS,
     lang: LYNX_LANG, ext: ".lnx",
-    describe: "Match-3 puzzle. 6×12 grid via tgi_bar. Rotate click + clear chime via MIKEY.",
+    describe: "QUARRY QUELL — complete Lynx falling-trio match-3: 1P marathon with cascade chains + ramping levels (29->5 frames/row), a 6x12 well + slim HUD fit into 160x102, 4-direction 3+ clears with multiplied cascade scoring, in-session hi-score, MIKEY 4-voice music + SFX. The Lynx signature Suzy HARDWARE sprite scaling is woven in: the trio renders as scaling SCB sprites and every match fires a clear-pop scale flash (well gems swell >1.0x then ease back). One 8x8 gem art recoloured per-draw via the SCB penpal (1 art block, 3 colours); the well repaints cell-by-cell each frame (no hardware tilemap). Honest 1P (ComLynx needs a 2nd Lynx); honest no-save (handy exposes no SAVE_RAM — probed; cart EEPROM is the real path).",
+    players: "1 (handheld — ComLynx multiplayer needs a second physical Lynx)",
+    sram: "none — probe: regionSize(save_ram)=0, retro_get_memory(SAVE_RAM)=NULL; cart EEPROM named in-file as the real path",
+    mechanics: ["falling-trio match-3", "4-direction 3+ clears", "gravity + cascade chains (multiplied score)", "ramping levels", "session hi-score", "title/play/game-over state machine"],
+    techniques: [
+      "Suzy hardware sprite scaling (SCB clear-pop flash on every match)",
+      "one art block, 3 colours via SCB penpal recolour",
+      "cell-by-cell well repaint (no hardware tilemap)",
+      "canonical TGI full-redraw loop (tgi_busy -> draw -> updatedisplay)",
+      "vblank-deferred MIKEY voice writes",
+    ],
   },
   sports: {
     main: "templates/sports.c", runtime: LYNX_RUNTIME, runtimeDirs: LYNX_VENDOR_DIRS,
