@@ -251,6 +251,9 @@ int main(void) {
      * black/forced-blank screen forever. */
     setScreenOn();
     sfx_init();
+    WaitForVBlank();   /* one frame before any SPC command — the driver seeds its
+                        * command edge-detector AFTER init returns; a same-frame
+                        * command is silently swallowed (see music_demo.c) */
 
     while (1) {
         pad = padsCurrent(0);
