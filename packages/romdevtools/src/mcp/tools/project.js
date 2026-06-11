@@ -415,7 +415,21 @@ const TEMPLATES = {
           "TurboTap 2P via joy_read(JOY_2)",
         ],
       },
-      puzzle: mk("puzzle", "Match-3 / falling-block puzzle for PC Engine. A 6x12 well drawn with BG tiles, a 1x3 active piece you move/rotate/soft-drop/hard-drop, 3+-in-a-row clears (H+V) with gravity + cascade chains, score. d-pad moves, I rotates, II hard-drops."),
+      puzzle: {
+        ...mk("puzzle", "TUMBLE TIDE — complete PC Engine falling-trio versus puzzle: title/1P-marathon/2P-simultaneous-versus shell, falling-trio match-3 (4-direction clears, gravity, cascade chains, levels), BRAM-persistent hi-score (bank $F7 TAM thunks + $1807 write-unlock, survives power cycles), PSG music + SFX. The board is the VDC BAT tilemap with whole-board repaints — the inverse of the NES vblank-queue famine (taught in-file). Real 2P simultaneous versus with garbage attacks: a cascade chain floods garbage rows into your rival's well; P2 on the TurboTap (host-enabled port 1, verified). 6x12 wells, split board in versus."),
+        players: "1-2 (2P simultaneous versus; P2 via TurboTap port 1, host-enabled — verified port-1 reaches P2)",
+        sram: "BRAM bank $F7 via the save_ram region (2KB) — checksummed record, verified across hardReset",
+        mechanics: ["falling-trio match-3", "4-direction line clears", "gravity + cascade chains (multiplied score)", "levels (1P speed-up)", "2P simultaneous versus split board", "garbage-row attacks", "BRAM-persistent hi-score"],
+        techniques: [
+          "whole-board VDC BAT repaint (vs NES vblank-queue famine)",
+          "BAT glyph font + HUD",
+          "shadow SATB + R19 vblank DMA (3 trio sprites/player)",
+          "per-colour BG sub-palettes for one cell-tile shape",
+          "TAM bank-mapping thunks from C",
+          "BRAM $1807 write-unlock",
+          "TurboTap 2P via joy_read(JOY_2)",
+        ],
+      },
       sports: mk("sports", "Pong-style sports game for PC Engine. Two paddles + a bouncing ball on a netted court, score to 9, paddle-deflect physics; player 2 falls back to chase-AI when no input. d-pad moves P1."),
       racing: mk("racing", "Top-down lane racer for PC Engine. Player car at the bottom, obstacle cars spawn from the top and slide down, LEFT/RIGHT switches lanes, speed grows with score, crash freeze + auto-reset. Scrolling road BG."),
     };
