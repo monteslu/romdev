@@ -11,7 +11,19 @@ index 36112a5..55ce1b8 100644
 +int           romdev_wp_enabled  = 0;
 +unsigned int  romdev_wp_last_pc  = 0xFFFFFFFF;
 +unsigned char romdev_wp_last_val = 0;
++unsigned char romdev_wp_last_old = 0;
++int           romdev_wp_cond     = 0;
++unsigned char romdev_wp_cond_val = 0;
 +unsigned int  romdev_wp_hits     = 0;
++/* value-condition (0.30.0): 1=increase 2=decrease 3=equals; skip churn writes. */
++int romdev_wp_cond_ok(unsigned char oldv, unsigned char v) {
++   switch (romdev_wp_cond) {
++      case 1:  return v > oldv;
++      case 2:  return v < oldv;
++      case 3:  return v == romdev_wp_cond_val;
++      default: return 1;
++   }
++}
 +/* SMS/GG only: live host pointer of the Z80 PC's page at write time (the z80.c
 + * WM hook sets it). libretro.c resolves it to a ROM offset → bank, since the
 + * SMS sega mapper pages a 16-bit Z80 PC into switchable ROM. (Genesis m68k has
@@ -259,13 +271,20 @@ index b702173..5ed4e88 100644
 +extern int           romdev_wp_enabled;
 +extern unsigned int  romdev_wp_last_pc;
 +extern unsigned char romdev_wp_last_val;
++extern unsigned char romdev_wp_last_old;
++extern int           romdev_wp_cond;
++extern unsigned char romdev_wp_cond_val;
 +extern unsigned int  romdev_wp_hits;
 +extern unsigned int  romdev_m68k_instr_pc;
 +extern void          romdev_m68k_snap(int kind);
++extern int           romdev_wp_cond_ok(unsigned char oldv, unsigned char v);
 +#define ROMDEV_WP_M68K(a, v) do { \
 +    if (romdev_wp_enabled && (unsigned int)(a) == romdev_wp_addr) { \
-+      romdev_wp_last_pc = romdev_m68k_instr_pc; romdev_wp_last_val = (unsigned char)(v); romdev_wp_hits++; \
-+      romdev_m68k_snap(3); \
++      unsigned char romdev_oldv = romdev_wp_cond ? (unsigned char)m68ki_read_8((a)) : 0; \
++      if (romdev_wp_cond_ok(romdev_oldv, (unsigned char)(v))) { \
++        romdev_wp_last_pc = romdev_m68k_instr_pc; romdev_wp_last_val = (unsigned char)(v); romdev_wp_last_old = romdev_oldv; romdev_wp_hits++; \
++        romdev_m68k_snap(3); \
++      } \
 +    } \
 +  } while (0)
 +
@@ -604,13 +623,20 @@ index 74d5053..30caf9b 100644
 +extern int           romdev_wp_enabled;
 +extern unsigned int  romdev_wp_last_pc;
 +extern unsigned char romdev_wp_last_val;
++extern unsigned char romdev_wp_last_old;
++extern int           romdev_wp_cond;
++extern unsigned char romdev_wp_cond_val;
 +extern unsigned int  romdev_wp_hits;
++extern int           romdev_wp_cond_ok(unsigned char oldv, unsigned char v);
 +extern unsigned char *romdev_wp_last_pc_ptr; /* live host ptr of the SMS/GG Z80 PC's page (for bank → ROM offset, resolved in libretro.c) */
 +#define WM(addr,value) do { \
 +    if (romdev_wp_enabled && (unsigned int)(addr) == romdev_wp_addr) { \
-+      romdev_wp_last_pc = romdev_z80_instr_pc; romdev_wp_last_val = (unsigned char)(value); romdev_wp_hits++; \
++      unsigned char romdev_oldv = romdev_wp_cond ? romdev_z80_rm((unsigned int)(addr)) : 0; \
++      if (romdev_wp_cond_ok(romdev_oldv, (unsigned char)(value))) { \
++      romdev_wp_last_pc = romdev_z80_instr_pc; romdev_wp_last_val = (unsigned char)(value); romdev_wp_last_old = romdev_oldv; romdev_wp_hits++; \
 +      romdev_wp_last_pc_ptr = z80_readmap[(romdev_z80_instr_pc) >> 10] ? z80_readmap[(romdev_z80_instr_pc) >> 10] + (romdev_z80_instr_pc) : 0; \
 +      romdev_z80_snap(3); \
++      } \
 +    } \
 +    if (romdev_range_enabled && (romdev_range_mode & 2) \
 +        && (unsigned int)(addr) >= romdev_range_lo && (unsigned int)(addr) <= romdev_range_hi) { \
@@ -734,6 +760,9 @@ index 798c6cc..e32b9ef 100644
 +extern int           romdev_wp_enabled;
 +extern unsigned int  romdev_wp_last_pc;
 +extern unsigned char romdev_wp_last_val;
++extern unsigned char romdev_wp_last_old;
++extern int           romdev_wp_cond;
++extern unsigned char romdev_wp_cond_val;
 +extern unsigned int  romdev_wp_hits;
 +
 +extern unsigned char *romdev_wp_last_pc_ptr; /* SMS/GG Z80 PC page ptr (m68kcpu.c) */
@@ -744,6 +773,22 @@ index 798c6cc..e32b9ef 100644
 +   romdev_wp_enabled = enabled ? 1 : 0;
 +   romdev_wp_last_pc = 0xFFFFFFFF;
 +   romdev_wp_last_val = 0;
++   romdev_wp_last_old = 0;
++   romdev_wp_cond = 0;
++   romdev_wp_cond_val = 0;
++   romdev_wp_hits = 0;
++   romdev_wp_last_pc_ptr = 0;
++}
++
++void romdev_watchpoint_set_cond(unsigned int addr, int enabled, int cond, int val)
++{
++   romdev_wp_addr = addr;
++   romdev_wp_enabled = enabled ? 1 : 0;
++   romdev_wp_last_pc = 0xFFFFFFFF;
++   romdev_wp_last_val = 0;
++   romdev_wp_last_old = 0;
++   romdev_wp_cond = cond;
++   romdev_wp_cond_val = (unsigned char)val;
 +   romdev_wp_hits = 0;
 +   romdev_wp_last_pc_ptr = 0;
 +}
@@ -766,6 +811,7 @@ index 798c6cc..e32b9ef 100644
 +   out6[3] = (unsigned int)romdev_wp_last_val;
 +   out6[4] = romdev_wp_hits;
 +   out6[5] = prgOff;
++   out6[6] = (romdev_wp_hits ? (unsigned int)romdev_wp_last_old : 0xFFFFFFFFu);
 +   if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; romdev_wp_last_pc_ptr = 0; }
 +}
 +
