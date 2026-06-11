@@ -949,7 +949,18 @@ TEMPLATES.c64 = {
   platformer: {
     main: "templates/platformer.c", runtime: C64_RUNTIME, runtimeDirs: C64_VENDOR_DIRS,
     lang: C64_LANG, ext: ".prg",
-    describe: "SIDE-SCROLLING platformer for C64 — the fiddliest scroll of all the platforms, done for real. 80-col (640-px) world; the VIC-II only fine-scrolls 0-7 px in hardware ($D016 low 3 bits), so coarse motion re-renders the 40 visible columns of screen RAM ($0400) + color RAM ($D800) from a world map each time the camera crosses a char boundary. 38-column mode ($D016 bit 3 clear) masks the edge garbage column. The player is a VIC-II hardware sprite drawn in screen space (with the $D010 X-MSB handled); SID jump sfx. Joystick port 2, B1 jumps. See the C64 MENTAL_MODEL.md 'Horizontal scrolling'. Extend with enemies, goals, pickups.",
+    describe: "TALUS TROT — complete C64 side-scrolling platformer: title shell (port-2 fire = 1P, port-1 fire = 2P alternating turns, per-player score/lives), gravity + Q4.4 sub-pixel jump physics, one-way platforms, pits + spikes, coins + distance scoring, raster-IRQ split (fixed score bar over a fine ($D016) + coarse (screen-RAM shift) hardware-scrolled level), 2-voice SID music with the filter sweep + SFX. In-session hi-score behind the gated persistence seam (no SAVE_RAM yet — honest no-op). KEY SCROLL FINDING: shifting both screen AND color RAM per coarse step crawls cc65; a STATIC row-based color texture + screen-RAM-only shift keeps the coarse scroll real-time (taught in-file).",
+    players: "1-2 (alternating turns; P1 on joystick port 2, P2 on port 1)",
+    sram: "none yet — VICE core has no SAVE_RAM/1541 write-back; hiscore_load/save are honest no-op seams; hi-score is in-session",
+    mechanics: ["gravity + Q4.4 sub-pixel jump", "one-way platforms", "pits + spikes (lethal)", "coins + distance scoring", "alternating-turns 2P", "title/play/game-over state machine"],
+    techniques: [
+      "raster-IRQ split (fixed bar over scrolling level)",
+      "fine ($D016) + coarse (screen-RAM shift) hardware scroll",
+      "two-layer static-color-texture trick (keeps coarse scroll real-time)",
+      "9th-X-bit sprite staging",
+      "SID filter sweep",
+      "dual joystick-port reads with keyboard-conflict idiom",
+    ],
   },
   puzzle: {
     main: "templates/puzzle.c", runtime: C64_RUNTIME, runtimeDirs: C64_VENDOR_DIRS,
