@@ -4,8 +4,8 @@
  * speed control, 2P simultaneous SPLIT-LANE VERSUS (both cars on screen at once,
  * P2 on the TurboTap's second pad), a vertically-scrolling road done the PC
  * Engine way (hardware BG Y-scroll via the VDC's BYR register), streamed
- * roadside scenery as the road wraps, crash/lives rules, persistent best
- * distance in BRAM backup memory, PSG music + SFX.
+ * roadside scenery as the road wraps, crash/lives rules, in-session best
+ * distance (a bare HuCard can't save — see the best-distance note), PSG music + SFX.
  *
  * THIS FILE IS MEANT TO BE FORKED AND MODIFIED into your own game — even a
  * very different one. The markers tell you what's what:
@@ -48,7 +48,7 @@
  *     crashes; first to use them all LOSES.
  *   1P RACE — all four lanes, UP/I accelerates, DOWN/II brakes (speed 1-4);
  *     3 crashes end the run. Persistent stat: best DISTANCE (u16, one unit =
- *     16 scrolled pixels ≈ one car length) via the BRAM record below.
+ *     16 scrolled pixels ≈ one car length); in-session only (see the note below).
  *
  * 2P, honestly: the stock PC Engine has ONE controller port; 2P needs a
  * TurboTap. The geargrafx core implements the TurboTap and the romdev host
@@ -427,73 +427,33 @@ static void advance_road(u8 px) {
     }
 }
 
-/* ── HARDWARE IDIOM (load-bearing — reshape gameplay around this; see TROUBLESHOOTING) ──
- * BRAM record persistence. The PCE's battery save is the 2KB "backup RAM" at
- * BANK $F7 (the Tennokoe / CD-interface memory) — geargrafx exposes it as the
- * libretro save_ram region, so it persists across power cycles. Two dances are
- * required, and both are footguns:
+/* ── HARDWARE TRUTH: a bare HuCard CANNOT save the best distance (in-session) ──
+ * This was researched and corrected: earlier versions wrote the best distance
+ * to BRAM ("backup RAM", bank $F7) and claimed it persisted across power
+ * cycles. That is NOT honest for a HuCard game. On REAL hardware a plain HuCard
+ * plugged into a base PC Engine / TurboGrafx-16 has NO backup RAM at all — BRAM
+ * exists ONLY when a peripheral is attached: the CD-ROM² System (2KB kept by a
+ * supercapacitor), the Tennokoe Bank HuCard, or the Memory Base 128. No
+ * commercial HuCard self-saved; they used PASSWORDS. (The often-cited Populous
+ * "ROMRAM" SRAM was the game's own working RAM, not a battery save.) An
+ * emulator like geargrafx exposes BRAM unconditionally, so the old code
+ * "worked" in emulation in a way the real machine never would.
  *
- *   1. BANK MAPPING. BRAM is not in the CPU's address space until you TAM
- *      bank $F7 into a free MPR slot. cc65's inline asm() only knows 6502
- *      mnemonics — TAM/TMA are HuC6280-only and it REJECTS them — so the two
- *      5-byte mapper thunks below are hand-assembled machine code in RAM
- *      arrays, called through a function pointer:
- *        A9 F7   LDA #$F7
- *        53 04   TAM #%00000100   ; MPR2: $4000-$5FFF = bank $F7 (BRAM)
- *        60      RTS
- *      (MPR2 is free here: cc65's crt0 only assigns MPR0/1/4-7.)
- *   2. THE WRITE LOCK. BRAM powers up WRITE-PROTECTED. Writes are silently
- *      discarded until you store $80 to $1807; store $00 to re-lock after.
- *      Forgetting the unlock is the classic "my save never sticks" bug.
- *
- * Real BRAM is SHARED by every CD-era game and managed by the System Card
- * BIOS as a directory ('HUBM' header + per-game entries). A HuCard homebrew
- * has no BIOS to call, so this example keeps one fixed checksummed record at
- * a fixed offset instead — honest and verifiable, but DON'T ship that scheme
- * on real hardware next to CD saves you care about.
- *
- * requires: nothing else touches MPR2; record layout below.              */
-static unsigned char bram_map_thunk[5]   = { 0xA9, 0xF7, 0x53, 0x04, 0x60 };
-static unsigned char bram_unmap_thunk[5] = { 0xA9, 0xF8, 0x53, 0x04, 0x60 };
-
-#define BRAM_LOCK_REG (*(volatile u8 *)0x1807)
-#define BRAM_BASE     ((volatile u8 *)0x4000)
-/* record: offset 16 = 'O','S', best lo, best hi, checksum (lo^hi^0xA5) */
-#define HS_OFF 16
-
-static void bram_map(void)   { ((void (*)(void))bram_map_thunk)(); }
-static void bram_unmap(void) { ((void (*)(void))bram_unmap_thunk)(); }
-
+ * So this game keeps an IN-SESSION best only (like the honest 2600/Lynx
+ * examples) — it survives across runs within a power-on, resets to 0 on a cold
+ * boot. To ACTUALLY persist on real hardware you would target a peripheral
+ * (BRAM behind a detect, or a CD-ROM² build) — a real-hardware feature, not a
+ * property of the cartridge.                                              */
 static u16 best_load(void) {
-    u16 v = 0;
-    bram_map();
-    if (BRAM_BASE[HS_OFF] == 'O' && BRAM_BASE[HS_OFF + 1] == 'S' &&
-        BRAM_BASE[HS_OFF + 4] == (u8)(BRAM_BASE[HS_OFF + 2] ^ BRAM_BASE[HS_OFF + 3] ^ 0xA5)) {
-        v = (u16)(BRAM_BASE[HS_OFF + 2] | (BRAM_BASE[HS_OFF + 3] << 8));
-    }
-    bram_unmap();
-    return v;
+    return 0;          /* cold boot: no persistence on a bare HuCard */
 }
 
 static void best_save(u16 v) {
-    bram_map();
-    BRAM_LOCK_REG = 0x80;                  /* unlock writes — see footgun #2 */
-    BRAM_BASE[HS_OFF]     = 'O';
-    BRAM_BASE[HS_OFF + 1] = 'S';
-    BRAM_BASE[HS_OFF + 2] = (u8)(v & 0xFF);
-    BRAM_BASE[HS_OFF + 3] = (u8)(v >> 8);
-    BRAM_BASE[HS_OFF + 4] = (u8)((v & 0xFF) ^ (v >> 8) ^ 0xA5);
-    BRAM_LOCK_REG = 0x00;                  /* re-lock                        */
-    bram_unmap();
+    (void)v;           /* in-session only — nowhere to persist on real HW */
 }
 
-/* Format-on-first-boot: if the magic is absent (fresh battery), write a valid
- * zero record immediately so the save file exists from frame one (mirrors the
- * Genesis racing template's best_init — gives a headless host a non-empty
- * save_ram region as early as possible). */
 static void best_init(void) {
-    best = best_load();
-    if (best == 0) best_save(0);
+    best = best_load();   /* always 0 — in-session best starts fresh each boot */
 }
 
 /* ── GAME LOGIC (clay) — music: a 2-channel tune ticked once per frame ──────
@@ -688,7 +648,7 @@ static void start_game(u8 versus) {
 static void game_over(void) {
     if (!two_player && dist > best) {
         best = dist;
-        best_save(best);              /* BRAM — survives a power cycle         */
+        best_save(best);              /* in-session only (no save on a bare HuCard) */
     }
     state = ST_OVER;
     prev_pads[0] = pce_joy_read();    /* swallow only the held button, not the

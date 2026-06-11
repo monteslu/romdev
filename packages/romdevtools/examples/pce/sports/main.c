@@ -3,8 +3,8 @@
  * SPIKE SURGE — a COMPLETE, working head-to-head court game (Pong lineage):
  * title screen, 1P vs a beatable CPU and 2P SIMULTANEOUS VERSUS (P1 on the
  * stock pad, P2 on the TurboTap's second pad), first-to-5 match flow with a
- * result screen, PSG music + SFX, and a persistent record (your longest win
- * streak vs the CPU) in BRAM backup memory — survives a power cycle.
+ * result screen, PSG music + SFX, and an in-session record (your longest win
+ * streak vs the CPU; a bare HuCard can't save — see the record note).
  *
  * The game: two paddles, one "pulse" bouncing between them. UP/DOWN move your
  * paddle; the pulse deflects off paddles (steeper the further from centre you
@@ -107,7 +107,7 @@ static u8  score_p1, score_p2;
 static u8  serve_timer;          /* freeze frames between points              */
 static u8  two_player;           /* title pick: 0 = vs CPU, 1 = 2P versus     */
 static u8  streak;               /* current 1P-vs-CPU win streak (RAM)        */
-static u16 best_streak;          /* persistent record — see end_match         */
+static u16 best_streak;          /* in-session record — see end_match         */
 static u8  new_record;           /* result screen shows NEW RECORD            */
 static u8  state;                /* ST_TITLE / ST_PLAY / ST_OVER              */
 static u8  prev_pad;             /* edge-triggered menu input                 */
@@ -306,69 +306,30 @@ static void draw_hud(void) {
     put_glyph(28, 0, (u8)(G_DIGIT + score_p2));
 }
 
-/* ── HARDWARE IDIOM (load-bearing — reshape gameplay around this; see TROUBLESHOOTING) ──
- * BRAM record persistence. The PCE's battery save is the 2KB "backup RAM" at
- * BANK $F7 (the Tennokoe / CD-interface memory) — geargrafx exposes it as the
- * libretro save_ram region, so it persists across power cycles. Two dances are
- * required, and both are footguns:
+/* ── HARDWARE TRUTH: a bare HuCard CANNOT save the win streak (in-session) ──
+ * This was researched and corrected: earlier versions wrote the longest 1P win
+ * streak to BRAM ("backup RAM", bank $F7) and claimed it persisted across power
+ * cycles. That is NOT honest for a HuCard game. On REAL hardware a plain HuCard
+ * plugged into a base PC Engine / TurboGrafx-16 has NO backup RAM at all — BRAM
+ * exists ONLY when a peripheral is attached: the CD-ROM² System (2KB kept by a
+ * supercapacitor), the Tennokoe Bank HuCard, or the Memory Base 128. No
+ * commercial HuCard self-saved; they used PASSWORDS. (The often-cited Populous
+ * "ROMRAM" SRAM was the game's own working RAM, not a battery save.) An
+ * emulator like geargrafx exposes BRAM unconditionally, so the old code
+ * "worked" in emulation in a way the real machine never would.
  *
- *   1. BANK MAPPING. BRAM is not in the CPU's address space until you TAM
- *      bank $F7 into a free MPR slot. cc65's inline asm() only knows 6502
- *      mnemonics — TAM/TMA are HuC6280-only and it REJECTS them — so the two
- *      5-byte mapper thunks below are hand-assembled machine code in RAM
- *      arrays, called through a function pointer:
- *        A9 F7   LDA #$F7
- *        53 04   TAM #%00000100   ; MPR2: $4000-$5FFF = bank $F7 (BRAM)
- *        60      RTS
- *      (MPR2 is free here: cc65's crt0 only assigns MPR0/1/4-7.)
- *   2. THE WRITE LOCK. BRAM powers up WRITE-PROTECTED. Writes are silently
- *      discarded until you store $80 to $1807; store $00 to re-lock after.
- *      Forgetting the unlock is the classic "my save never sticks" bug.
- *
- * Real BRAM is SHARED by every CD-era game and managed by the System Card
- * BIOS as a directory ('HUBM' header + per-game entries). A HuCard homebrew
- * has no BIOS to call, so this example keeps one fixed checksummed record at
- * a fixed offset instead — honest and verifiable, but DON'T ship that scheme
- * on real hardware next to CD saves you care about.
- *
- * Persistence choice: for a VERSUS sports game a raw hi-score is meaningless
- * (every match ends 5-x), so we persist the longest 1P win streak against the
- * CPU — the stat a returning player actually chases. 2P matches never touch it
- * (humans beating each other isn't a record).
- *
- * requires: nothing else touches MPR2; record layout below.              */
-static unsigned char bram_map_thunk[5]   = { 0xA9, 0xF7, 0x53, 0x04, 0x60 };
-static unsigned char bram_unmap_thunk[5] = { 0xA9, 0xF8, 0x53, 0x04, 0x60 };
-
-#define BRAM_LOCK_REG (*(volatile u8 *)0x1807)
-#define BRAM_BASE     ((volatile u8 *)0x4000)
-/* record: offset 16 = 'O','S', streak lo, streak hi, checksum (lo^hi^0xA5) */
-#define HS_OFF 16
-
-static void bram_map(void)   { ((void (*)(void))bram_map_thunk)(); }
-static void bram_unmap(void) { ((void (*)(void))bram_unmap_thunk)(); }
-
+ * The record we track is still the longest 1P win streak vs the CPU (a raw
+ * hi-score is meaningless when every match ends 5-x; 2P matches never touch
+ * it) — but IN-SESSION only, resetting to 0 on a cold boot like the honest
+ * 2600/Lynx examples. To ACTUALLY persist on real hardware you would target a
+ * peripheral (BRAM behind a detect, or a CD-ROM² build) — a real-hardware
+ * feature, not a property of the cartridge.                              */
 static u16 record_load(void) {
-    u16 v = 0;
-    bram_map();
-    if (BRAM_BASE[HS_OFF] == 'O' && BRAM_BASE[HS_OFF + 1] == 'S' &&
-        BRAM_BASE[HS_OFF + 4] == (u8)(BRAM_BASE[HS_OFF + 2] ^ BRAM_BASE[HS_OFF + 3] ^ 0xA5)) {
-        v = (u16)(BRAM_BASE[HS_OFF + 2] | (BRAM_BASE[HS_OFF + 3] << 8));
-    }
-    bram_unmap();
-    return v;
+    return 0;          /* cold boot: no persistence on a bare HuCard */
 }
 
 static void record_save(u16 v) {
-    bram_map();
-    BRAM_LOCK_REG = 0x80;                  /* unlock writes — see footgun #2 */
-    BRAM_BASE[HS_OFF]     = 'O';
-    BRAM_BASE[HS_OFF + 1] = 'S';
-    BRAM_BASE[HS_OFF + 2] = (u8)(v & 0xFF);
-    BRAM_BASE[HS_OFF + 3] = (u8)(v >> 8);
-    BRAM_BASE[HS_OFF + 4] = (u8)((v & 0xFF) ^ (v >> 8) ^ 0xA5);
-    BRAM_LOCK_REG = 0x00;                  /* re-lock                        */
-    bram_unmap();
+    (void)v;           /* in-session only — nowhere to persist on real HW */
 }
 
 /* ── GAME LOGIC (clay) — music: a 2-channel tune ticked once per frame ──────
@@ -525,7 +486,7 @@ static void end_match(void) {
         if (streak > best_streak) {
             best_streak = streak;
             new_record = 1;
-            record_save(best_streak);  /* BRAM — survives a power cycle */
+            record_save(best_streak);  /* in-session only (no save on a bare HuCard) */
         }
     } else if (!two_player) {
         streak = 0;                    /* the streak dies with the loss */
@@ -611,7 +572,7 @@ void main(void) {
 
     upload_art();
 
-    best_streak = record_load();   /* BRAM — 0 on first boot / bad checksum  */
+    best_streak = record_load();   /* always 0 — no persistence on a bare HuCard */
     streak = 0;
     state = ST_TITLE;
     paint_title();

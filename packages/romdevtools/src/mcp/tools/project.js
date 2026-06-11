@@ -386,10 +386,10 @@ const TEMPLATES = {
       music_sfx: mk("music_sfx", "HuC6280 PSG demo: a looping melody plus a button-fired SFX. Shows psg_tone/psg_off across the PSG's wavetable channels."),
       catch_game: mk("catch_game", "A complete tiny game: a paddle catches a falling object with the d-pad; full game loop with waitvsync(), two sprites, collision, scoring."),
       shmup: {
-        ...mk("shmup", "ZENITH BARRAGE — complete PCE vertical shooter: title shell with BRAM-persistent hi-score (bank $F7 TAM thunks + the $1807 write-unlock dance, survives power cycles), and the PCE signature — a 64x32 boss built from exactly TWO 32x32 SATB entries moving as one unit. Wave spawner, AABB collisions, 3-song PSG music + SFX, banded twinkling starfield. 1P by design: geargrafx ships TurboTap disabled, so port-2 input cannot reach the game (stated honestly in-file)."),
+        ...mk("shmup", "ZENITH BARRAGE — complete PCE vertical shooter: title shell with in-session hi-score (a bare HuCard can't save — BRAM is peripheral-only; the bank-$F7 TAM/$1807-unlock dance is documented in-file as the real-hardware path), and the PCE signature — a 64x32 boss built from exactly TWO 32x32 SATB entries moving as one unit. Wave spawner, AABB collisions, 3-song PSG music + SFX, banded twinkling starfield. 1P by design: geargrafx ships TurboTap disabled, so port-2 input cannot reach the game (stated honestly in-file)."),
         players: "1 (stock PCE has one pad port; TurboTap exists in-core but disabled — future host core-option round)",
-        sram: "BRAM bank $F7 via the save_ram region (2KB) — checksummed record, verified across hardReset",
-        mechanics: ["projectile pools", "wave spawner", "AABB collision", "multi-sprite boss with HP/phases", "lives + mercy invulnerability", "BRAM-persistent hi-score", "title/play/game-over state machine"],
+        sram: "none — a bare HuCard cannot save; BRAM (bank $F7) is PERIPHERAL-ONLY on real hardware (CD-ROM² unit / Tennokoe Bank / Memory Base 128). In-session hi-score only, like the 2600/Lynx; the BRAM mapping + write-lock are documented in-file as the real-hardware path.",
+        mechanics: ["projectile pools", "wave spawner", "AABB collision", "multi-sprite boss with HP/phases", "lives + mercy invulnerability", "in-session hi-score (HuCards can't save)", "title/play/game-over state machine"],
         techniques: [
           "HuC6270 large sprites (32x32 CGX/CGY, 4-aligned patterns)",
           "two-entry composite boss",
@@ -401,10 +401,10 @@ const TEMPLATES = {
         ],
       },
       platformer: {
-        ...mk("platformer", "GLADE DASH — complete PC Engine side-scrolling platformer: title/1P/2P-alternating-turns shell, gravity + Q4.4 sub-pixel jump physics, one-way slabs, lethal pits + spikes, coins + distance scoring, BRAM-persistent hi-score (bank $F7 TAM thunks + $1807 write-unlock, survives power cycles), 3-song PSG music + SFX. The PCE signature on top: hardware BG scroll via the BXR register with column-streaming for a 768px looping world, plus a 32x32 large multi-cell hero (one SATB entry, 4-aligned pattern) with a walk cycle. Real 2P alternating turns — the host enables the TurboTap so port-1 input reaches player 2 (verified). HONEST CAVEAT: no hardware window/raster split in the minimal lib, so the HUD is a painted band that scrolls with the world but reads continuously (a raster-IRQ BXR reset can make it truly fixed — TROUBLESHOOTING note)."),
+        ...mk("platformer", "GLADE DASH — complete PC Engine side-scrolling platformer: title/1P/2P-alternating-turns shell, gravity + Q4.4 sub-pixel jump physics, one-way slabs, lethal pits + spikes, coins + distance scoring, in-session hi-score (a bare HuCard can't save — BRAM is peripheral-only; the bank-$F7 TAM/$1807-unlock dance is documented in-file as the real-hardware path), 3-song PSG music + SFX. The PCE signature on top: hardware BG scroll via the BXR register with column-streaming for a 768px looping world, plus a 32x32 large multi-cell hero (one SATB entry, 4-aligned pattern) with a walk cycle. Real 2P alternating turns — the host enables the TurboTap so port-1 input reaches player 2 (verified). HONEST CAVEAT: no hardware window/raster split in the minimal lib, so the HUD is a painted band that scrolls with the world but reads continuously (a raster-IRQ BXR reset can make it truly fixed — TROUBLESHOOTING note)."),
         players: "1-2 (2P alternating turns; P2 via TurboTap port 1, host-enabled — verified port-1 reaches P2)",
-        sram: "BRAM bank $F7 via the save_ram region (2KB) — checksummed record, verified across hardReset",
-        mechanics: ["gravity + sub-pixel jump physics", "one-way platforms", "pits + spikes", "coins + distance scoring", "one-way scroll-wall camera", "alternating 2P turns (per-player score/lives)", "BRAM-persistent hi-score"],
+        sram: "none — a bare HuCard cannot save; BRAM (bank $F7) is PERIPHERAL-ONLY on real hardware (CD-ROM² unit / Tennokoe Bank / Memory Base 128). In-session hi-score only, like the 2600/Lynx; the BRAM mapping + write-lock are documented in-file as the real-hardware path.",
+        mechanics: ["gravity + sub-pixel jump physics", "one-way platforms", "pits + spikes", "coins + distance scoring", "one-way scroll-wall camera", "alternating 2P turns (per-player score/lives)", "in-session hi-score (HuCards can't save)"],
         techniques: [
           "hardware BG scroll (VDC BXR) + column streaming",
           "32x32 large hero sprite (CGX/CGY, 4-aligned pattern)",
@@ -416,10 +416,10 @@ const TEMPLATES = {
         ],
       },
       puzzle: {
-        ...mk("puzzle", "TUMBLE TIDE — complete PC Engine falling-trio versus puzzle: title/1P-marathon/2P-simultaneous-versus shell, falling-trio match-3 (4-direction clears, gravity, cascade chains, levels), BRAM-persistent hi-score (bank $F7 TAM thunks + $1807 write-unlock, survives power cycles), PSG music + SFX. The board is the VDC BAT tilemap with whole-board repaints — the inverse of the NES vblank-queue famine (taught in-file). Real 2P simultaneous versus with garbage attacks: a cascade chain floods garbage rows into your rival's well; P2 on the TurboTap (host-enabled port 1, verified). 6x12 wells, split board in versus."),
+        ...mk("puzzle", "TUMBLE TIDE — complete PC Engine falling-trio versus puzzle: title/1P-marathon/2P-simultaneous-versus shell, falling-trio match-3 (4-direction clears, gravity, cascade chains, levels), in-session hi-score (a bare HuCard can't save — BRAM is peripheral-only; the bank-$F7 TAM/$1807-unlock dance is documented in-file as the real-hardware path), PSG music + SFX. The board is the VDC BAT tilemap with whole-board repaints — the inverse of the NES vblank-queue famine (taught in-file). Real 2P simultaneous versus with garbage attacks: a cascade chain floods garbage rows into your rival's well; P2 on the TurboTap (host-enabled port 1, verified). 6x12 wells, split board in versus."),
         players: "1-2 (2P simultaneous versus; P2 via TurboTap port 1, host-enabled — verified port-1 reaches P2)",
-        sram: "BRAM bank $F7 via the save_ram region (2KB) — checksummed record, verified across hardReset",
-        mechanics: ["falling-trio match-3", "4-direction line clears", "gravity + cascade chains (multiplied score)", "levels (1P speed-up)", "2P simultaneous versus split board", "garbage-row attacks", "BRAM-persistent hi-score"],
+        sram: "none — a bare HuCard cannot save; BRAM (bank $F7) is PERIPHERAL-ONLY on real hardware (CD-ROM² unit / Tennokoe Bank / Memory Base 128). In-session hi-score only, like the 2600/Lynx; the BRAM mapping + write-lock are documented in-file as the real-hardware path.",
+        mechanics: ["falling-trio match-3", "4-direction line clears", "gravity + cascade chains (multiplied score)", "levels (1P speed-up)", "2P simultaneous versus split board", "garbage-row attacks", "in-session hi-score (HuCards can't save)"],
         techniques: [
           "whole-board VDC BAT repaint (vs NES vblank-queue famine)",
           "BAT glyph font + HUD",
@@ -431,10 +431,10 @@ const TEMPLATES = {
         ],
       },
       sports: {
-        ...mk("sports", "SPIKE SURGE — complete PC Engine versus court game (Pong lineage): title/1P-vs-CPU/2P-simultaneous-versus shell, first-to-5 match flow with a result screen, beatable chase-AI CPU, PRNG rally spin so idle matches provably END, BRAM-persistent best-win-streak record (bank $F7 TAM thunks + $1807 write-unlock, survives power cycles), 3-song PSG music + SFX. Real 2P simultaneous versus: P2 on the TurboTap (host-enabled port 1, verified). Court is the VDC BAT tilemap; paddles + ball are SATB sprites."),
+        ...mk("sports", "SPIKE SURGE — complete PC Engine versus court game (Pong lineage): title/1P-vs-CPU/2P-simultaneous-versus shell, first-to-5 match flow with a result screen, beatable chase-AI CPU, PRNG rally spin so idle matches provably END, in-session best-win-streak record (a bare HuCard can't save — BRAM is peripheral-only; documented in-file), 3-song PSG music + SFX. Real 2P simultaneous versus: P2 on the TurboTap (host-enabled port 1, verified). Court is the VDC BAT tilemap; paddles + ball are SATB sprites."),
         players: "1-2 (1P vs beatable CPU, or 2P simultaneous versus; P2 via TurboTap port 1, host-enabled — verified port-1 reaches P2)",
-        sram: "BRAM bank $F7 via the save_ram region (2KB) — checksummed best-win-streak record, verified across hardReset",
-        mechanics: ["paddle/ball court physics", "edge-deflection parry angle", "1P beatable chase-AI CPU", "2P simultaneous versus", "first-to-5 match + result screen", "PRNG rally spin (idle matches end)", "BRAM-persistent win-streak record"],
+        sram: "none — a bare HuCard cannot save; BRAM (bank $F7) is PERIPHERAL-ONLY on real hardware (CD-ROM² unit / Tennokoe Bank / Memory Base 128). In-session best-win-streak only, like the 2600/Lynx; the BRAM mapping + write-lock are documented in-file as the real-hardware path.",
+        mechanics: ["paddle/ball court physics", "edge-deflection parry angle", "1P beatable chase-AI CPU", "2P simultaneous versus", "first-to-5 match + result screen", "PRNG rally spin (idle matches end)", "in-session win-streak record (HuCards can't save)"],
         techniques: [
           "whole-screen VDC BAT paint (court)",
           "BAT glyph font + HUD band",
@@ -446,10 +446,10 @@ const TEMPLATES = {
         ],
       },
       racing: {
-        ...mk("racing", "PINION PURSUIT — complete PC Engine top-down road racer: title/1P-race/2P-simultaneous-split-lane-versus shell, hardware BG Y-scroll road via the VDC BYR register with per-row scenery streaming (no NES 240-wrap / SMS 224-wrap — the VDC masks BYR to the 256px BAT in hardware), 1P speed control + best-distance to BRAM (bank $F7 TAM thunks + $1807 write-unlock, survives power cycles), 2-channel PSG music + SFX. Real 2P simultaneous versus: P2 on the TurboTap (host-enabled port 1, verified). HONEST CAVEAT: no hardware window/raster split in the minimal lib, so the HUD is a SPRITE HUD (screen-space digits) and the title/result screens use a static road backdrop — only the play state scrolls."),
+        ...mk("racing", "PINION PURSUIT — complete PC Engine top-down road racer: title/1P-race/2P-simultaneous-split-lane-versus shell, hardware BG Y-scroll road via the VDC BYR register with per-row scenery streaming (no NES 240-wrap / SMS 224-wrap — the VDC masks BYR to the 256px BAT in hardware), 1P speed control + an in-session best distance (a bare HuCard can't save — BRAM is peripheral-only; the bank-$F7 TAM/$1807-unlock dance is documented in-file as the real-hardware path), 2-channel PSG music + SFX. Real 2P simultaneous versus: P2 on the TurboTap (host-enabled port 1, verified). HONEST CAVEAT: no hardware window/raster split in the minimal lib, so the HUD is a SPRITE HUD (screen-space digits) and the title/result screens use a static road backdrop — only the play state scrolls."),
         players: "1-2 (1P endless race, or 2P simultaneous split-lane versus; P2 via TurboTap port 1, host-enabled — verified port-1 reaches P2)",
-        sram: "BRAM bank $F7 via the save_ram region (2KB) — checksummed best-distance record, verified across hardReset",
-        mechanics: ["lane steering", "speed control (1P)", "traffic pool + AABB", "crash/lives", "best-distance scoring", "2P split-lane versus", "BRAM-persistent best distance"],
+        sram: "none — a bare HuCard cannot save; BRAM (bank $F7) is PERIPHERAL-ONLY on real hardware (CD-ROM² unit / Tennokoe Bank / Memory Base 128). In-session best-distance only, like the 2600/Lynx; the BRAM mapping + write-lock are documented in-file as the real-hardware path.",
+        mechanics: ["lane steering", "speed control (1P)", "traffic pool + AABB", "crash/lives", "best-distance scoring", "2P split-lane versus", "in-session best distance (HuCards can't save)"],
         techniques: [
           "hardware BG Y-scroll (VDC BYR) + per-row streaming",
           "sprite HUD digits (screen-space over a scrolling road)",

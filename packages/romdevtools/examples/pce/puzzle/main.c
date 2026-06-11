@@ -5,7 +5,8 @@
  * 6x12 wells side by side, P1 on the stock pad, P2 on the TurboTap's second
  * pad, both falling at once, where every cascade chain you score sends a TIDE
  * of garbage rows rising from the bottom of your rival's well. Score +
- * persistent hi-score (BRAM backup memory), PSG music + SFX.
+ * in-session hi-score (a bare HuCard can't save — see the hi-score note
+ * below), PSG music + SFX.
  *
  * The game: a falling-trio match-3. A vertical trio of pieces drops into a
  * well; LEFT/RIGHT move it, I/II cycle its three colours, DOWN soft-drops,
@@ -383,64 +384,30 @@ static void draw_hud(void) {
     }
 }
 
-/* ── HARDWARE IDIOM (load-bearing — reshape gameplay around this; see TROUBLESHOOTING) ──
- * BRAM hi-score persistence. The PCE's battery save is the 2KB "backup RAM"
- * at BANK $F7 (the Tennokoe / CD-interface memory) — geargrafx exposes it as
- * the libretro save_ram region, so it persists across power cycles. Two
- * dances are required, and both are footguns:
+/* ── HARDWARE TRUTH: a bare HuCard CANNOT save a hi-score (in-session only) ──
+ * This was researched and corrected: earlier versions wrote the hi-score to
+ * BRAM ("backup RAM", bank $F7) and claimed it persisted across power cycles.
+ * That is NOT honest for a HuCard game. On REAL hardware a plain HuCard plugged
+ * into a base PC Engine / TurboGrafx-16 has NO backup RAM at all — BRAM exists
+ * ONLY when a peripheral is attached: the CD-ROM² System (2KB kept by a
+ * supercapacitor), the Tennokoe Bank HuCard, or the Memory Base 128. No
+ * commercial HuCard self-saved; they used PASSWORDS. (The often-cited Populous
+ * "ROMRAM" SRAM was the game's own working RAM, not a battery save.) An
+ * emulator like geargrafx exposes BRAM unconditionally, so the old code
+ * "worked" in emulation in a way the real machine never would.
  *
- *   1. BANK MAPPING. BRAM is not in the CPU's address space until you TAM
- *      bank $F7 into a free MPR slot. cc65's inline asm() only knows 6502
- *      mnemonics — TAM/TMA are HuC6280-only and it REJECTS them — so the two
- *      5-byte mapper thunks below are hand-assembled machine code in RAM
- *      arrays, called through a function pointer:
- *        A9 F7   LDA #$F7
- *        53 04   TAM #%00000100   ; MPR2: $4000-$5FFF = bank $F7 (BRAM)
- *        60      RTS
- *      (MPR2 is free here: cc65's crt0 only assigns MPR0/1/4-7.)
- *   2. THE WRITE LOCK. BRAM powers up WRITE-PROTECTED. Writes are silently
- *      discarded until you store $80 to $1807; store $00 to re-lock after.
- *      Forgetting the unlock is the classic "my save never sticks" bug.
- *
- * Real BRAM is SHARED by every CD-era game and managed by the System Card
- * BIOS as a directory ('HUBM' header + per-game entries). A HuCard homebrew
- * has no BIOS to call, so this example keeps one fixed checksummed record at
- * a fixed offset instead — honest and verifiable, but DON'T ship that scheme
- * on real hardware next to CD saves you care about.
- *
- * requires: nothing else touches MPR2; record layout below.              */
-static unsigned char bram_map_thunk[5]   = { 0xA9, 0xF7, 0x53, 0x04, 0x60 };
-static unsigned char bram_unmap_thunk[5] = { 0xA9, 0xF8, 0x53, 0x04, 0x60 };
-
-#define BRAM_LOCK_REG (*(volatile u8 *)0x1807)
-#define BRAM_BASE     ((volatile u8 *)0x4000)
-/* record: offset 16 = 'O','S', score lo, score hi, checksum (lo^hi^0xA5) */
-#define HS_OFF 16
-
-static void bram_map(void)   { ((void (*)(void))bram_map_thunk)(); }
-static void bram_unmap(void) { ((void (*)(void))bram_unmap_thunk)(); }
-
+ * So this game keeps an IN-SESSION hi-score only (like the honest 2600/Lynx
+ * examples) — it survives game-overs within a power-on, resets to 0 on a cold
+ * boot. To make it ACTUALLY persist on real hardware you would target a
+ * peripheral: write to BRAM only after detecting one (and go through the System
+ * Card BIOS's 'HUBM' directory for CD saves), or move the game to a CD-ROM²
+ * build. Either is a real-hardware feature, not a property of the cartridge.  */
 static u16 hiscore_load(void) {
-    u16 v = 0;
-    bram_map();
-    if (BRAM_BASE[HS_OFF] == 'O' && BRAM_BASE[HS_OFF + 1] == 'S' &&
-        BRAM_BASE[HS_OFF + 4] == (u8)(BRAM_BASE[HS_OFF + 2] ^ BRAM_BASE[HS_OFF + 3] ^ 0xA5)) {
-        v = (u16)(BRAM_BASE[HS_OFF + 2] | (BRAM_BASE[HS_OFF + 3] << 8));
-    }
-    bram_unmap();
-    return v;
+    return 0;          /* cold boot: no persistence on a bare HuCard */
 }
 
 static void hiscore_save(u16 v) {
-    bram_map();
-    BRAM_LOCK_REG = 0x80;                  /* unlock writes — see footgun #2 */
-    BRAM_BASE[HS_OFF]     = 'O';
-    BRAM_BASE[HS_OFF + 1] = 'S';
-    BRAM_BASE[HS_OFF + 2] = (u8)(v & 0xFF);
-    BRAM_BASE[HS_OFF + 3] = (u8)(v >> 8);
-    BRAM_BASE[HS_OFF + 4] = (u8)((v & 0xFF) ^ (v >> 8) ^ 0xA5);
-    BRAM_LOCK_REG = 0x00;                  /* re-lock                        */
-    bram_unmap();
+    (void)v;           /* in-session only — nowhere to persist on real HW */
 }
 
 /* ── GAME LOGIC (clay) — music: a 2-channel tune ticked once per frame ──────
@@ -573,7 +540,7 @@ static void game_end(u8 who) {
     if (two_player && score[1] > best) best = score[1];
     if (best > hiscore) {
         hiscore = best;
-        hiscore_save(hiscore);   /* BRAM — survives a power cycle */
+        hiscore_save(hiscore);   /* in-session only (no save on a bare HuCard) */
     }
     loser = who;
     sfx(3, 0x500, 24);                              /* game-over rumble */
@@ -859,7 +826,7 @@ void main(void) {
 
     upload_art();
 
-    hiscore = hiscore_load();   /* BRAM — 0 on first boot / bad checksum     */
+    hiscore = hiscore_load();   /* always 0 — no persistence on a bare HuCard */
     state = ST_TITLE;
     paint_title();
     music_set(ST_TITLE);
