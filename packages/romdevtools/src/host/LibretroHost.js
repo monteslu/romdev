@@ -1227,12 +1227,26 @@ export class LibretroHost {
    * @param {number} address CPU address to watch
    * @param {boolean} [enabled=true]
    */
-  setWatchpoint(address, enabled = true) {
+  setWatchpoint(address, enabled = true, opts) {
     const mod = this._needMod();
     if (typeof mod._romdev_watchpoint_set !== "function") {
       throw new Error("this core build does not expose the write watchpoint (rebuild with romdev_watchpoint_* exports).");
     }
-    mod._romdev_watchpoint_set(address >>> 0, enabled ? 1 : 0);
+    // Value-condition (0.30.0): the core's write hook only counts/records writes
+    // that satisfy the condition so the reported PC is the MEANINGFUL write, not
+    // a restoring/churn write or just the frame's last write. Feature-detected:
+    // a core build without _romdev_watchpoint_set_cond ignores the condition
+    // (conditionApplied:false) and the tool layer falls back where it can.
+    let conditionApplied = false;
+    if (opts && opts.condition && typeof mod._romdev_watchpoint_set_cond === "function") {
+      // cond code: 1=increase, 2=decrease, 3=equals. value used by 'equals'.
+      const code = opts.condition === "increase" ? 1 : opts.condition === "decrease" ? 2 : 3;
+      mod._romdev_watchpoint_set_cond(address >>> 0, enabled ? 1 : 0, code, (opts.value ?? 0) & 0xFF);
+      conditionApplied = true;
+    } else {
+      mod._romdev_watchpoint_set(address >>> 0, enabled ? 1 : 0);
+    }
+    return { conditionApplied };
   }
 
   /** Read the watchpoint state: { enabled, address, lastPC, lastValue, hits,
@@ -1245,14 +1259,15 @@ export class LibretroHost {
     if (typeof mod._romdev_watchpoint_get !== "function") {
       throw new Error("this core build does not expose the write watchpoint.");
     }
-    const ptr = mod._malloc(24); // up to 6 × uint32 (older cores write only 5)
+    const ptr = mod._malloc(28); // up to 7 × uint32 (older cores write only 5-6)
     try {
-      // Pre-seed slot 6 so a 5-element core leaves prgOffset = "none".
-      new Uint32Array(mod.HEAPU8.buffer, ptr, 6).fill(0xFFFFFFFF);
+      // Pre-seed slots 6+7 so an older core leaves prgOffset/oldValue = "none".
+      new Uint32Array(mod.HEAPU8.buffer, ptr, 7).fill(0xFFFFFFFF);
       mod._romdev_watchpoint_get(ptr, clearHits ? 1 : 0);
-      const u = new Uint32Array(mod.HEAPU8.buffer, ptr, 6);
+      const u = new Uint32Array(mod.HEAPU8.buffer, ptr, 7);
       const lastPC = u[2];
       const prgOffset = u[5];
+      const oldValue = u[6]; // slot 7 (0.30.0): the pre-write byte, for inc/dec
       return {
         enabled: !!u[0],
         address: u[1],
@@ -1260,6 +1275,7 @@ export class LibretroHost {
         lastValue: u[3] & 0xFF,
         hits: u[4],
         ...(prgOffset !== 0xFFFFFFFF ? { prgOffset } : {}),
+        ...(oldValue !== 0xFFFFFFFF ? { lastOldValue: oldValue & 0xFF } : {}),
       };
     } finally {
       mod._free(ptr);
