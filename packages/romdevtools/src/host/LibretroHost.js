@@ -63,6 +63,19 @@ const PLATFORM_CORE_OPTIONS = {
     // files back into the .d64 (VICE updates the in-FS image in place). Without
     // this a game's SAVE silently fails / errors — defeating disk-save support.
     vice_floppy_write_protection: "disabled",
+    // TWO live C64 control ports so 2P games see player 2. The VICE core drives
+    // ONE control port per RetroPad by default (every retro port → cur_port);
+    // the per-port split only happens with the userport adapter, where the
+    // mapper does vice_port = cur_port + retro_port. With joyport=1 + a userport
+    // adapter that gives retro0→control-port-1, retro1→control-port-2 — BOTH
+    // standard ports live. Our games read P1 on control port 2 ($DC00) and P2
+    // on port 1 ($DC01); the host swaps the two retro ports below
+    // (portInputToMask C64 path) so host port 0 = P1 (control port 2) and host
+    // port 1 = P2 (control port 1), matching the universal "port 0 = player 1"
+    // convention. Verified: drives both paddles independently in 2P, 1P-vs-CPU
+    // still reachable. (Both options ship in the wasm — no core rebuild.)
+    vice_joyport: "1",
+    vice_userport_joytype: "HIT",
   },
 };
 
@@ -421,6 +434,9 @@ export class LibretroHost {
 
     // Configure controller port 0 as joypad (some cores default to NONE).
     mod._retro_set_controller_port_device(0, RETRO_DEVICE_JOYPAD);
+    // Port 1 too — needed for 2P. The C64/VICE 2P path (two live control ports)
+    // only reads RetroPad port 1 when it's registered as a joypad device.
+    mod._retro_set_controller_port_device(1, RETRO_DEVICE_JOYPAD);
 
     // ---- Settle the framebuffer to the ROM's chosen geometry ----
     //
@@ -629,7 +645,14 @@ export class LibretroHost {
       this._applyC64ButtonKeys(input.ports[0] || {});
     }
     for (let port = 0; port < this.state.inputPorts.length; port++) {
-      const portInput = this._c64StripKeyButtons(input.ports[port], platform);
+      // C64 2P port swap: with joyport=1 + userport the VICE mapper binds
+      // RetroPad 0 → C64 control port 1 and RetroPad 1 → control port 2. But
+      // our games read player 1 on control port 2 ($DC00) and player 2 on
+      // control port 1 ($DC01). So feed host port 0's input to RetroPad slot 1
+      // (→ control port 2 = P1) and host port 1's to slot 0 (→ port 1 = P2),
+      // restoring the universal "host port 0 = player 1" convention.
+      const srcPort = platform === "c64" ? (port ^ 1) : port;
+      const portInput = this._c64StripKeyButtons(input.ports[srcPort], platform);
       this.state.inputPorts[port][0] = portInputToMask(portInput, platform);
     }
   }
