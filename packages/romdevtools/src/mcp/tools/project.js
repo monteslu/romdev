@@ -517,7 +517,19 @@ const TEMPLATES = {
           "PSG tune-table music + SFX",
         ],
       },
-      racing: mk("racing", "Top-down 3-lane racing for MSX (screen 2). Grey road + green-grass shoulders fill the name table; player car at the bottom, obstacle cars (object pool) spawn at the top and slide down. Joystick LEFT/RIGHT (edge-detected) switches lanes; obstacle speed grows with score; an AABB crash triggers a ~60-frame freeze then auto-reset, with a PSG crash tone. SCORE drawn as tiles. Interrupt-free vsync. Extend with pseudo-3D road, fuel, multiple cars."),
+      racing: {
+        ...mk("racing", "TURBO TANGLE — complete MSX top-down four-lane road racer (screen 2): title shell with 1P / 2P-split-lane-versus select, 1P speed control (UP/A gas, DOWN/B brake, speed 1-4) banking DISTANCE, 3 crashes end the run; 2P versus shares one road (P1 left two lanes / P2 right two, P2 on port 2), first to wreck out loses. Per-row color signature (depth-banded thirds + a one-tile shimmer divider gradient), PSG music + SFX. HONEST: screen 2 has no scroll register, so the road motion is the marching lane-dash + roadside columns redrawn one phase-step per frame (static asphalt painted once) — taught against the NES's true BG scroll. Best distance is in-session only (bluemsx exposes no SAVE_RAM — stated in-file)."),
+        players: "1-2 (2P split-lane versus, P2 on joystick port 2)",
+        sram: "none — core exposes no SAVE_RAM region (in-session best distance)",
+        mechanics: ["lane steering", "speed control 1-4", "best-distance persistence (in-session)", "obstacle pool + AABB crashes", "crash lives", "2P split-lane versus"],
+        techniques: [
+          "software road scroll (no screen-2 hw scroll — redraw dashes/tufts per phase step)",
+          "screen-2 per-row color (banded thirds + one-tile shimmer divider)",
+          "interrupt-free vsync via VDP S#0 poll",
+          "dual joystick ports via GTSTCK/GTTRIG",
+          "PSG tune-table music + SFX",
+        ],
+      },
     };
   })(),
 };
