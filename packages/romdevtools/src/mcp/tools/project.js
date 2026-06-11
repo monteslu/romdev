@@ -522,7 +522,18 @@ TEMPLATES.gbc = {
   sports: {
     main: "templates/sports.c", runtime: GBC_RUNTIME,
     lang: GBC_LANG, ext: ".gbc",
-    describe: "Pong for GBC. Player-vs-AI (one controller). Court green BG + colored paddles + paddle-hit sfx.",
+    describe: "HUE HUSTLE — Game Boy Color versus court game (Pong lineage) to the full contract: press-start title, 1P vs a beatable chase-AI CPU, first-to-5 match flow into a result screen, a PRNG +/-1 rally spin so an idle match provably ENDS, GB APU ch1 music + ch2 SFX, window-layer fixed HUD — and the GBC SIGNATURE: TRUE per-tile color. The two paddles are told apart by distinct CGB OBJ PALETTE (azure you / red CPU via OCPS), not DMG shade; the court is a real color scene (teal floor / gold rails / violet net) as CGB palettes assigned per BG cell through the VRAM bank-1 attribute map. Longest 1P win streak persists to battery SRAM (MBC1+RAM+BATTERY, magic+checksum, verified across power cycles). HUD/result commits write bank-0 tiles only and stage text out of the vblank slice. dataLoc 0xC200. 1P by design (link-cable 2P not emulatable single-instance).",
+    players: "1 (handheld — link-cable 2P not emulatable single-instance)",
+    sram: "MBC1+RAM+BATTERY, 8KB at $A000 ($0A-gated, magic+checksum), verified across hardReset",
+    mechanics: ["paddle/ball physics with edge-deflection", "beatable chase-AI CPU", "first-to-5 match flow", "PRNG rally spin (idle match ends)", "battery win-streak record", "title/play/result state machine"],
+    techniques: [
+      "CGB OBJ palettes (OCPS) for distinct team paddles",
+      "CGB per-tile color court (bank-1 attribute map)",
+      "window-layer fixed HUD",
+      "two-phase vblank commit (bank-0-only HUD + pre-staged result text)",
+      "battery SRAM save ($0A enable dance)",
+      "xorshift16 PRNG for deterministic-versus rally break",
+    ],
   },
   racing: {
     main: "templates/racing.c", runtime: GBC_RUNTIME,
