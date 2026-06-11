@@ -1478,7 +1478,17 @@ TEMPLATES.lynx = {
   platformer: {
     main: "templates/platformer.c", runtime: LYNX_RUNTIME, runtimeDirs: LYNX_VENDOR_DIRS,
     lang: LYNX_LANG, ext: ".lnx",
-    describe: "Single-screen platformer. Subpixel gravity + jump + 5 platforms. MIKEY jump sfx.",
+    describe: "RIDGE ROMP — complete Lynx side-scrolling platformer: title shell with breathing-gem attract, gravity + Q4.4 sub-pixel jump physics, one-way platforms, lethal pits, spikes, coins + distance scoring, in-session hi-score, MIKEY 4-voice music + SFX. The Lynx signature — Suzy HARDWARE sprite scaling — runs throughout: collectible gems pulse 0.75x to 1.75x every frame (HSIZE/VSIZE in the SCB, grab box tracking the live scale) and the hero rides the same scaling SCB path. Scrolling is a software camera over a looping 384px column map (the Lynx has no hardware tilemap/scroll), redrawing the visible slice each frame. Honest 1P (ComLynx needs a second Lynx); honest no-save (handy's libretro build exposes no SAVE_RAM — probed; cart 93Cxx EEPROM is the real-hardware path, future core round).",
+    players: "1 (handheld — ComLynx multiplayer needs a second physical Lynx)",
+    sram: "none — probe: regionSize(save_ram)=0, retro_get_memory(SAVE_RAM)=NULL; cart EEPROM named in-file as the real path (future core round)",
+    mechanics: ["gravity + Q4.4 sub-pixel jump physics", "one-way platforms (4-px landing window)", "lethal pits + spikes", "coins + scaling gems (live-size grab box)", "distance scoring", "software-camera scrolling over a looping column map", "title/play/game-over state machine"],
+    techniques: [
+      "Suzy hardware sprite scaling (SCB HSIZE/VSIZE 8.8, per-frame rescale — hero + pulsing gems)",
+      "raw SCB authoring (literal 4bpp data, penpal remap) via tgi_ioctl(0)",
+      "software-camera scrolling (no hardware tilemap — redraw visible slice per frame)",
+      "canonical TGI full-redraw loop (tgi_busy wait -> draw -> updatedisplay)",
+      "vblank-deferred MIKEY voice writes",
+    ],
   },
   puzzle: {
     main: "templates/puzzle.c", runtime: LYNX_RUNTIME, runtimeDirs: LYNX_VENDOR_DIRS,
