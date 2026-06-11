@@ -609,7 +609,17 @@ TEMPLATES.sms = {
     runtime: SMS_RUNTIME,
     lang: SMS_LANG,
     ext: ".sms",
-    describe: "Match-3 falling-block scaffold. 6×12 grid rendered via BG tilemap (three distinct tile shapes for R/G/B cells), 1×3 active piece, rotate via B1, hard-drop via B2.",
+    describe: "GEODE GAMBIT — falling-trio match-3 to the full contract: 1P marathon with levels and cascade chains; 2P simultaneous split-board versus where chains send garbage rows (both wells update every frame). The board is BG tiles via sms_set_tilemap_cell — a whole well repaints in one vblank (Mode-4 has the VDP bandwidth; taught against the NES's 16-entry vblank budget). Fixed HUD under the line-IRQ split, Sega-mapper cart-RAM hi-score (verified across power-cycle on 64KB), PSG music + SFX.",
+    players: "1-2 (2P = simultaneous versus, split boards with garbage attacks)",
+    sram: "Sega-mapper cart RAM at $8000 ($FFFC bit 3) on 64KB+ builds (verified across hardReset); in-session at 32KB (gpgx maps mapper RAM only above 48KB — documented in-file)",
+    mechanics: ["falling-trio control", "match-3 in 4 directions", "cascade chains with multipliers", "garbage attack rows", "levels", "split-board simultaneous versus"],
+    techniques: [
+      "whole-well repaint via sms_set_tilemap_cell (one vblank)",
+      "VDP line-interrupt split (fixed HUD strip)",
+      "Sega-mapper cart RAM persistence ($FFFC control)",
+      "PSG music + voice-0 SFX arbitration",
+      "IM1 interrupt handshake (VDP status ack discipline)",
+    ],
   },
   sports: {
     main: "templates/sports.c",
