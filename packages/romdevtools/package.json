@@ -50,7 +50,7 @@
     "fuse.js": "^7.4.1",
     "omggif": "^1.0.10",
     "pngjs": "^7.0.0",
-    "romdev-core-bluemsx": "0.5.0",
+    "romdev-core-bluemsx": "0.6.0",
     "romdev-core-fceumm": "0.10.0",
     "romdev-core-gambatte": "0.9.0",
     "romdev-core-geargrafx": "0.6.0",
