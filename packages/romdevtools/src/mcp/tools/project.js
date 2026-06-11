@@ -1058,7 +1058,17 @@ TEMPLATES.c64 = {
   puzzle: {
     main: "templates/puzzle.c", runtime: C64_RUNTIME, runtimeDirs: C64_VENDOR_DIRS,
     lang: C64_LANG, ext: ".prg",
-    describe: "Match-3 falling-block puzzle. 6×12 grid in screen RAM (40×25 char matrix), C64 color codes. Rotate click + clear chime via SID.",
+    describe: "MAGMA MATCH — complete C64 falling-trio versus puzzle: title/1P-marathon/2P-simultaneous-versus shell, falling-trio match-3 (4-direction clears, per-column gravity, cascade chains, 9 levels), in-session hi-score behind the gated persistence seam (no SAVE_RAM yet — honest no-op), 2-voice SID music with the filter sweep + SFX, raster-IRQ split fixed HUD. The board is screen RAM ($0400) chars + color RAM ($D800) repainted via a CELL-DIFF (shadow buffers; only changed cells touch RAM) — dodging the C64 full-repaint freeze (taught in-file, the inverse of the NES vblank-queue famine). Real 2P simultaneous versus with garbage: a cascade chain erupts garbage rows into your rival's well; P1 on control port 2, P2 on control port 1.",
+    players: "1-2 (2P = simultaneous versus, split boards; P1 port 2, P2 port 1)",
+    sram: "none yet — VICE core has no SAVE_RAM/1541 write-back; hiscore_load/save are honest no-op seams; hi-score is in-session",
+    mechanics: ["falling-trio control", "match-3 in 4 directions", "cascade chains with multipliers", "garbage attack rows", "soft/hard drop + levels", "simultaneous split-board versus"],
+    techniques: [
+      "cell-diff screen/color-RAM repaint (shadow buffers; only changed cells)",
+      "raster-IRQ split fixed HUD",
+      "dual joystick-port reads with keyboard-conflict idiom",
+      "SID filter sweep",
+      "coloured border for render-health without a full-screen repaint freeze",
+    ],
   },
   sports: {
     main: "templates/sports.c", runtime: C64_RUNTIME, runtimeDirs: C64_VENDOR_DIRS,
