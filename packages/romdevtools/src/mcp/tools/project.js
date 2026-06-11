@@ -1424,7 +1424,17 @@ TEMPLATES.gba = {
     runtimeDirs: GBA_LIBTONC_RUNTIME_DIRS,
     lang: GBA_TONC_LANG,
     ext: ".gba",
-    describe: "SIDE-SCROLLING platformer for GBA (Tonc). Subpixel physics (1px = 16 subpixels), gravity + jump + land-on-top collision against platforms in a 512-px world. BG0 is a 64x32 map (whole world fits, no streaming); the camera follows the player via REG_BG0HOFS; the TTE HUD on BG1 stays fixed. For a world wider than 512 px, stream map columns as the camera advances (see GBA MENTAL_MODEL.md). Extend with enemies, goals, pickups.",
+    describe: "GEAR GROTTO — complete GBA side-scrolling platformer: press-start title with battery-persistent cartridge-SRAM hi-score ('SRAM_V' marker, byte-wide bus, magic+checksum, verified across power cycles), gravity + Q.4 sub-pixel jump physics, one-way platforms, lethal pits, coins + distance scoring, DMA/PSG music + SFX. The GBA signature is an AFFINE OBJ hazard — a spinning, scale-pulsing 32x32 gear (OAM affine slot 0, double-size, 8.8 matrix taught register-by-register). The scrolling tile level is a Mode-0 64x32 BG that wraps in hardware at 512 px (cam & 511 / col & 63) for a seamlessly looping endless run under a fixed TTE HUD. 1P by design — link-cable 2P can't be emulated single-instance (stated honestly in-file).",
+    players: "1 (handheld — link-cable 2P not emulatable single-instance)",
+    sram: "cartridge SRAM hi-score at 0x0E000000 ('SRAM_V' marker, byte-wide bus, magic+checksum; survives power cycles)",
+    mechanics: ["gravity-jump physics (Q.4 fixed point)", "one-way platform collision via column map", "endless one-way runner camera", "lethal pits", "coin pickup + distance scoring", "spinning affine gear hazard"],
+    techniques: [
+      "OAM affine sprite (slot 0, double-size, 8.8 matrix)",
+      "hardware-wrapping 64x32 BG as a seamless looping world (cam & 511)",
+      "world-anchored sprite objects recycled ahead of the camera",
+      "cartridge SRAM hi-score (SRAM_V marker + byte-wide bus)",
+      "TTE HUD on a fixed second BG",
+    ],
   },
   puzzle: {
     main: "templates/puzzle.c",
