@@ -1535,7 +1535,17 @@ TEMPLATES.lynx = {
   sports: {
     main: "templates/sports.c", runtime: LYNX_RUNTIME, runtimeDirs: LYNX_VENDOR_DIRS,
     lang: LYNX_LANG, ext: ".lnx",
-    describe: "Pong vs AI (handheld = one controller). MIKEY paddle-hit + wall-bounce + score sfx.",
+    describe: "PULSE PARRY — complete Lynx versus court game fit to 160x102: 1P vs a beatable chase-AI CPU (deflect at the paddle edge to out-angle it), first-to-5 -> result screen, a PRNG +/-1 rally spin so an idle match provably ENDS, in-session win-streak record, MIKEY 4-voice music + SFX. The Lynx signature Suzy HARDWARE sprite scaling is woven in two ways: the ball is a scaling SCB sprite whose HSIZE/VSIZE tracks its speed (fast volleys loom larger), and the result screen pops the winner glyph to ~2.0x then eases back. Honest 1P (ComLynx needs a second physical Lynx); honest no-save (handy exposes no SAVE_RAM — probed; cart EEPROM is the real path).",
+    players: "1 (handheld — ComLynx multiplayer needs a second physical Lynx)",
+    sram: "none — probe: regionSize(save_ram)=0, retro_get_memory(SAVE_RAM)=NULL; in-session win-streak; cart EEPROM named in-file as the real path",
+    mechanics: ["paddle vs ball court play", "edge-deflection angle", "beatable chase-AI CPU", "first-to-5 match flow + result screen", "PRNG rally spin (no limit cycle)", "in-session win-streak record"],
+    techniques: [
+      "Suzy hardware sprite scaling (ball scales with speed + result-screen pop)",
+      "raw SCB authoring via tgi_ioctl(0)",
+      "canonical TGI full-redraw loop (tgi_busy -> draw -> updatedisplay)",
+      "xorshift16 PRNG to break deterministic-rally limit cycles",
+      "vblank-deferred MIKEY voice writes",
+    ],
   },
   racing: {
     main: "templates/racing.c", runtime: LYNX_RUNTIME, runtimeDirs: LYNX_VENDOR_DIRS,
