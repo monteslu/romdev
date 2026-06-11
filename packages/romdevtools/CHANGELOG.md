@@ -4,7 +4,7 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
-## Unreleased (0.29.0)
+## 0.29.0 — 2026-06-11
 
 ### Examples — the complete-game library, finished & made honest
 - **The 14×5 grid is complete (70 games).** Every platform now ships all five
