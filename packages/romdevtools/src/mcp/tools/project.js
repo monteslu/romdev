@@ -476,7 +476,20 @@ const TEMPLATES = {
           "dual joystick ports via GTSTCK/GTTRIG",
         ],
       },
-      puzzle: mk("puzzle", "Match-3 / falling-block puzzle for MSX (screen 2). A 6-wide x 12-tall well drawn with the BG tilemap (distinct R/G/B cell tiles + grey border + dim field interior so the playfield is always visible). A 1x3 active piece: joystick LEFT/RIGHT shifts, trigger A rotates the colour order, DOWN soft-drops, trigger B hard-drops; 3+-in-a-row clears in all 4 directions with gravity + cascade chains; PSG chime per clear. Interrupt-free vsync. Extend with levels/next-piece preview."),
+      puzzle: {
+        ...mk("puzzle", "STOKE STACK — complete MSX falling-trio match-3 (screen 2): title shell with 1P-marathon / 2P-simultaneous-versus select (P2 = joystick port 2) and session hi-score, levels that speed the fall, cascade-chain scoring, 2P garbage attacks, PSG tune-table music + SFX, and the MSX signature — screen-2 per-row color (gem-colour-per-third one-tile trick + a one-tile ember gradient seam). Hi-score is in-session only (bundled bluemsx build exposes no SAVE_RAM — stated honestly in-file)."),
+        players: "1-2 (simultaneous versus, P2 on joystick port 2)",
+        sram: "none — core exposes no SAVE_RAM region (in-session hi-score)",
+        mechanics: ["falling-trio match-3", "4-direction runs", "cascade chains", "levels (1P speed-up)", "2P versus garbage rows", "session hi-score", "title/play/game-over state machine"],
+        techniques: [
+          "screen-2 per-row color (3 thirds + per-8x1-row bytes)",
+          "one-tile three-colour gem (colour-per-third)",
+          "single-tile ember gradient seam",
+          "interrupt-free vsync via VDP S#0 poll",
+          "sprite Y=208 terminator + offscreen parking",
+          "dual joystick ports via GTSTCK/GTTRIG",
+        ],
+      },
       sports: mk("sports", "Pong-style 2-player sports for MSX (screen 2). Court (green field + white sidelines + dashed centre net) fills the 32x24 name table; two paddles (stacked sprites) + a ball. Player 1 = joystick PORT 1 UP/DOWN; Player 2 = joystick PORT 2 UP/DOWN, falling back to chase-the-ball AI when no second pad is present so it is playable solo. Wall/paddle bounces + scoring with PSG bonks. Interrupt-free vsync. Extend with serve angles, score display, win condition."),
       racing: mk("racing", "Top-down 3-lane racing for MSX (screen 2). Grey road + green-grass shoulders fill the name table; player car at the bottom, obstacle cars (object pool) spawn at the top and slide down. Joystick LEFT/RIGHT (edge-detected) switches lanes; obstacle speed grows with score; an AABB crash triggers a ~60-frame freeze then auto-reset, with a PSG crash tone. SCORE drawn as tiles. Interrupt-free vsync. Extend with pseudo-3D road, fuel, multiple cars."),
     };
