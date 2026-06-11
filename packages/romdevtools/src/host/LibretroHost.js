@@ -43,6 +43,12 @@ const PLATFORM_CORE_OPTIONS = {
   // `… - C-BIOS` machine tree ships in romdev-core-bluemsx/bios and is mirrored
   // into the wasm FS as the system dir (see loadMedia + resolveSystemDir).
   msx: { bluemsx_msxtype: "MSX2+ - C-BIOS" },
+  // geargrafx ships with the TurboTap disabled, which makes port-1 input
+  // unreachable in-game (every pad scan slot mirrors pad 0). Enabling it
+  // costs nothing for 1P games (slot 0 still reads pad 0) and routes the
+  // host's port-1 input to pad slot 2 — PCE 2P works (probed 2026-06-10
+  // during the ZENITH BARRAGE gold round).
+  pce: { geargrafx_turbotap: "Enabled" },
   // VICE mounts a .d64/.tap/.crt but, with autostart off, just sits at the BASIC
   // `READY.` prompt — the agent would see a blue boot screen, not the game. Force
   // autostart so a disk/tape image runs the first program automatically (same as
