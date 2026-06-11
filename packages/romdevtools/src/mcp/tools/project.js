@@ -452,7 +452,17 @@ TEMPLATES.gbc = {
   shmup: {
     main: "templates/shmup.c", runtime: GBC_RUNTIME,
     lang: GBC_LANG, ext: ".gbc",
-    describe: "Vertical-shmup for GBC. Colorful sprites (white ship, yellow bullets, red enemies) and a starfield BG palette via BCPS/BCPD. Same sfx wiring as GB (sound_play_tone/noise).",
+    describe: "PHOTON DRIFT — Game Boy Color vertical shooter to the full contract: press-start title shell with battery-persistent hi-score (MBC1+RAM+BATTERY crt0 header, $0A enable dance, magic+checksum, survives power cycles), object-pool ship/bullets/enemies + wave spawner + AABB collision, GB-signature window-layer fixed HUD over an SCY-scrolled starfield — and the GBC SIGNATURE on top: TRUE per-tile color, a 4-band nebula starfield (blue/teal/green/magenta) as real CGB palettes (BCPS/BCPD) assigned per BG cell through the VRAM bank-1 attribute map, plus cyan ship / gold bullet / red enemy OBJ palettes (OCPS) — not colorized mono. GB APU music + SFX. KEY GOTCHA: HUD/text commits write bank-0 tiles only and stage text out of the vblank slice. Statics need dataLoc 0xC200. 1P by design (link-cable 2P not emulatable single-instance).",
+    players: "1 (handheld — link-cable 2P not emulatable single-instance)",
+    sram: "MBC1+RAM+BATTERY, 8KB at $A000 ($0A-gated, magic+checksum), verified across hardReset",
+    mechanics: ["projectile pools", "wave spawner", "AABB collision", "title/play/game-over state machine", "battery hi-score"],
+    techniques: [
+      "CGB per-tile color (4-band nebula starfield via bank-1 attribute map)",
+      "OBJ palettes (OCPS) for ship/bullet/enemy",
+      "window-layer fixed HUD over SCY starfield",
+      "two-phase vblank commit (bank-0-only HUD + pre-staged text)",
+      "battery SRAM save ($0A enable dance)",
+    ],
   },
   platformer: {
     main: "templates/platformer.c", runtime: GBC_RUNTIME,
