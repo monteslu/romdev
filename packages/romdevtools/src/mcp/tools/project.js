@@ -322,7 +322,17 @@ const TEMPLATES = {
       ],
       lang: "C (SDCC sm83)",
       ext: ".gb",
-      describe: "Endless 3-lane top-down racer. LEFT/RIGHT switches lanes, obstacle speed grows with score, 60-frame freeze + auto-reset on collision.",
+      describe: "TARMAC TILT — top-down vertical road racer to the full contract: press-start title (honest no-2P — link cable unemulatable single-instance), the road scrolls via SCY into a 256-px map (seamless uint8 wrap, no helper — contrast taught vs NES 240 / SMS 224 garbage-row / Genesis hardware-masked plane), four lanes, A/UP accelerate + B/DOWN brake (speed 1-4), LEFT/RIGHT lane tilt, overtaking traffic pool, 3-crash lives with invuln blink, best DISTANCE to battery SRAM (magic+checksum, verified across power cycles), window-layer HUD, GB APU music + SFX, divide-free digit math.",
+      players: "1 (handheld — link-cable 2P not emulatable single-instance)",
+      sram: "MBC1 cart RAM via the save_ram region (8KB) — crt0-declared battery cart, best-distance magic+checksum record, verified across hardReset",
+      mechanics: ["lane steering", "speed control 1-4", "overtaking traffic pool", "crash lives + invuln blink", "best-distance persistence"],
+      techniques: [
+        "SCY vertical road scroll (256-px seamless uint8 wrap)",
+        "window-layer fixed HUD",
+        "one-item-per-vblank VRAM commit queue",
+        "battery SRAM best-distance ($0A enable dance)",
+        "divide-free digit math",
+      ],
     },
     /* R45 — hUGEDriver music demo. Ships a compact SDCC-native music
      * driver with the upstream hUGEDriver function surface plus a
