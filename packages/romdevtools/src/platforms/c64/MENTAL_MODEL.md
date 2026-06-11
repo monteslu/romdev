@@ -115,9 +115,16 @@ which is what the KERNAL's IRQ uses to update key state every
 
 **Joystick.** One fire button. Press it with `input({op:'set', b: true})` (or
 spatial `south`) — both clear `$DC00` bit 4 (verified live). `a` is a **no-op**
-(no second button). Drive fire with `b`/`south` + the d-pad. The joystick reads
-**port 2** by default; switch with `input({op:'joyport', joyport:1})` /
-`input({op:'joyport'})` to read it.
+(no second button). Drive fire with `b`/`south` + the d-pad.
+
+**Two players.** BOTH C64 control ports are live at once, so 2P games just work:
+**host port 0 = player 1** (control port 2, `$DC00`) and **host port 1 = player
+2** (control port 1, `$DC01`) — the universal "port 0 = P1" convention. Pass two
+port entries: `input({op:'set', ports:[{up:true}, {down:true}]})` moves P1 up and
+P2 down independently. (Under the hood the host enables the VICE userport-adapter
+mapping so both ports route, and swaps them so P1 lands on control port 2 where
+the games read it.) The legacy `input({op:'joyport', joyport:1|2})` still selects
+which single port a ONE-stick setup drives, but you rarely need it now.
 
 **Keyboard (the C64-specific part — many games NEED it).** Unlike consoles, most
 C64 games (and cracktros) gate gameplay behind a KEYBOARD setup screen — **F1**

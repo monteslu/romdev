@@ -6,6 +6,31 @@ the `romdev-mcp` bin is kept as an alias.)
 
 ## Unreleased (0.29.0)
 
+### Examples — the complete-game library, finished & made honest
+- **The 14×5 grid is complete (70 games).** Every platform now ships all five
+  canonical genres. The last gap, the Atari 2600 puzzle, ships as **TILE TWINS**
+  — a memory match-pairs game (a real puzzle: a static, turn-based board drawn
+  as full-width COLUPF bands, the honest TIA fit — not a colored match-3 grid the
+  TIA can't render). Forkable via `examples({op:'fork', example:'atari2600/puzzle'})`.
+- **C64 games now SAVE for real — 1541 disk save.** The honest C64 medium is the
+  floppy (no battery SRAM). All 5 C64 games write a hi-score/record to a SEQ file
+  on drive 8 via the KERNAL; run from a `.d64` it commits to the live disk and
+  `state({op:'exportDisk'})` captures it (reload restores it). As a bare `.prg`
+  there's no mounted disk, so it's an honest in-session no-op. (Replaces the old
+  gated no-op seams — the VICE core already supported writable-disk write-back.)
+- **C64 two-player now works.** The VICE core drove only one control port per
+  RetroPad; host port-1 (P2) input never reached the game. Now both standard
+  control ports are live (host port 0 = P1, host port 1 = P2) — verified by
+  driving both paddles independently in the versus games.
+- **PCE save claim corrected (honesty).** A bare HuCard cannot save — BRAM is
+  peripheral-only (CD-ROM² / Tennokoe Bank / Memory Base 128) on real hardware.
+  The 5 PCE games no longer claim a battery save; they keep an honest in-session
+  hi-score, with the BRAM mapping documented in-file as the real-hardware path.
+- **Honest framing.** The examples are described as SCAFFOLDING, not showcases:
+  the gameplay is intentionally thin — their value is the working boot sequence,
+  APIs, and syntax to fork from. Superlatives dropped from the `examples` tool
+  doctrine and the generated project README.
+
 ### Added — livestream frame coverage: see what the agent is doing
 - **Most state-changing tools now emit the post-call frame to /livestream**,
   at zero cost to the agent (deferred PNG encode after the response goes
