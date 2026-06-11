@@ -1088,7 +1088,17 @@ TEMPLATES.c64 = {
   racing: {
     main: "templates/racing.c", runtime: C64_RUNTIME, runtimeDirs: C64_VENDOR_DIRS,
     lang: C64_LANG, ext: ".prg",
-    describe: "3-lane top-down racer. LEFT/RIGHT switches lanes. SID lane-switch beep + crash noise.",
+    describe: "VAPOR VECTOR — complete C64 top-down vertical road racer: title/1P-race/2P-split-lane-versus shell, vertical hardware scroll via $D011 YSCROLL fine-Y + software coarse row-shift with the static-color-texture trick (coarse shift touches only screen RAM → real-time), raster-IRQ split fixed HUD over the moving road, player cars as VIC-II hardware sprites. 1P: four lanes, UP/FIRE accelerate + DOWN brake (speed 1-5), 3 crashes end the run, best DISTANCE; 2P: real simultaneous split-lane versus (P1 control port 2 left two lanes / P2 control port 1 right two), first to wreck out loses. Persistence GATED — best is in-session only behind honest no-op seams (VICE has no SAVE_RAM). SID music + filter sweep + SFX.",
+    players: "1-2 (2P = simultaneous split-lane versus; P1 control port 2, P2 control port 1)",
+    sram: "none yet — VICE core has no SAVE_RAM/1541 write-back; best_load/best_save are honest no-op seams; best distance is in-session",
+    mechanics: ["lane steering", "speed control 1-5 (1P)", "best-distance (in-session)", "traffic dodging + crashes", "crash lives", "2P split-lane versus"],
+    techniques: [
+      "vertical hardware scroll ($D011 fine-Y + coarse row-shift, static-color-texture trick)",
+      "raster-IRQ split fixed HUD over the moving road",
+      "VIC-II hardware sprite player cars ($D000+)",
+      "dual joystick-port reads with keyboard-conflict idiom ($DC00/$DC01)",
+      "SID filter sweep + multi-voice music/SFX",
+    ],
   },
   music_demo: {
     main: "templates/music_demo.c", runtime: C64_MUSIC_RUNTIME, runtimeDirs: C64_VENDOR_DIRS,
