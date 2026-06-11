@@ -52,7 +52,7 @@
     "pngjs": "^7.0.0",
     "romdev-core-bluemsx": "0.5.0",
     "romdev-core-fceumm": "0.10.0",
-    "romdev-core-gambatte": "0.8.0",
+    "romdev-core-gambatte": "0.9.0",
     "romdev-core-geargrafx": "0.6.0",
     "romdev-core-gpgx": "0.12.0",
     "romdev-core-handy": "0.6.0",
