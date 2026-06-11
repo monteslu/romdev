@@ -430,7 +430,21 @@ const TEMPLATES = {
           "TurboTap 2P via joy_read(JOY_2)",
         ],
       },
-      sports: mk("sports", "Pong-style sports game for PC Engine. Two paddles + a bouncing ball on a netted court, score to 9, paddle-deflect physics; player 2 falls back to chase-AI when no input. d-pad moves P1."),
+      sports: {
+        ...mk("sports", "SPIKE SURGE — complete PC Engine versus court game (Pong lineage): title/1P-vs-CPU/2P-simultaneous-versus shell, first-to-5 match flow with a result screen, beatable chase-AI CPU, PRNG rally spin so idle matches provably END, BRAM-persistent best-win-streak record (bank $F7 TAM thunks + $1807 write-unlock, survives power cycles), 3-song PSG music + SFX. Real 2P simultaneous versus: P2 on the TurboTap (host-enabled port 1, verified). Court is the VDC BAT tilemap; paddles + ball are SATB sprites."),
+        players: "1-2 (1P vs beatable CPU, or 2P simultaneous versus; P2 via TurboTap port 1, host-enabled — verified port-1 reaches P2)",
+        sram: "BRAM bank $F7 via the save_ram region (2KB) — checksummed best-win-streak record, verified across hardReset",
+        mechanics: ["paddle/ball court physics", "edge-deflection parry angle", "1P beatable chase-AI CPU", "2P simultaneous versus", "first-to-5 match + result screen", "PRNG rally spin (idle matches end)", "BRAM-persistent win-streak record"],
+        techniques: [
+          "whole-screen VDC BAT paint (court)",
+          "BAT glyph font + HUD band",
+          "shadow SATB + R19 vblank DMA (7 sprites)",
+          "TAM bank-mapping thunks from C",
+          "BRAM $1807 write-unlock",
+          "PSG divider-table 2-channel music",
+          "TurboTap 2P via joy_read(JOY_2)",
+        ],
+      },
       racing: mk("racing", "Top-down lane racer for PC Engine. Player car at the bottom, obstacle cars spawn from the top and slide down, LEFT/RIGHT switches lanes, speed grows with score, crash freeze + auto-reset. Scrolling road BG."),
     };
   })(),
