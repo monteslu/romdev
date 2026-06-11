@@ -910,12 +910,22 @@ TEMPLATES.snes = {
     main: "templates/sports.c",
     extraSources: [
       { src: "templates/sports-data.asm", dst: "data.asm" },
+      { src: "templates/sports-hdr.asm", dst: "hdr.asm" },  /* battery-SRAM cart header */
     ],
     runtime: SNES_SFX_RUNTIME,
     runtimeDirs: SNES_PVSNESLIB_VENDOR_DIRS,
     lang: "C (tcc-65816 + PVSnesLib)",
     ext: ".sfc",
-    describe: "Two-player Pong on SNES. padsCurrent(0)/padsCurrent(1) wire both ports. Paddle-hit + score sfx via bundled SPC700 driver.",
+    describe: "NET SURGE — complete versus court game: title shell with 1P-vs-CPU and 2P simultaneous versus (padsCurrent(0)/(1)), first to 5 with a result screen, beatable CPU, PRNG rally spin (deterministic rallies provably end), battery-SRAM best-CPU-win-streak record, SPC music + SFX with the init-race idiom.",
+    players: "1-2 (1P vs CPU / 2P simultaneous versus)",
+    sram: "battery SRAM at $70:0000 (CARTRIDGETYPE $02 via bundled hdr.asm; magic+checksum), verified across hardReset",
+    mechanics: ["versus match flow (first-to-5, result screen)", "beatable CPU", "2P simultaneous input on both pads", "PRNG rally spin", "persistent best streak"],
+    techniques: [
+      "battery SRAM at $70:0000 (long-addressed asm helpers)",
+      "SPC700 init-race avoidance (WaitForVBlank before first command)",
+      "BG text HUD",
+      "PRNG tick to break deterministic-rally limit cycles",
+    ],
   },
   racing: {
     main: "templates/racing.c",
