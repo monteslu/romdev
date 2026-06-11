@@ -1,8 +1,8 @@
 diff --git a/core/m68k/m68kcpu.c b/core/m68k/m68kcpu.c
-index 36112a5..4bac13f 100644
+index 36112a5..55ce1b8 100644
 --- a/core/m68k/m68kcpu.c
 +++ b/core/m68k/m68kcpu.c
-@@ -31,6 +31,102 @@ static int irq_latency;
+@@ -31,6 +31,150 @@ static int irq_latency;
  
  m68ki_cpu_core m68k;
  
@@ -102,13 +102,86 @@ index 36112a5..4bac13f 100644
 +   if (romdev_cov_count < ROMDEV_COV_CAP) romdev_cov_pcs[romdev_cov_count++] = pc;
 +}
 +
++/* romdev at-hit REGISTER SNAPSHOT. gpgx schedules the CPUs per scanline, so by
++ * the time retro_run returns from a frame containing a breakpoint/watchpoint
++ * hit, the live register file is hundreds of instructions past the hit (the
++ * "register drift" that sent a real RE session chasing dead pointer values).
++ * These are frozen copies captured INSIDE the CPU hook at the hit instant.
++ * Layout = the romdev_setreg/getreg regId order: [0..7]=D0-D7, [8..15]=A0-A7,
++ * [16]=PC of the EXECUTING instruction's first byte (not the drifted prefetch
++ * PC), [17]=SR, [18]=SP. For the Z80 systems: A,F,B,C,D,E,H,L,IX,IY at 0-9,
++ * [16]=PC, [18]=SP (same ids romdev_getreg_z80 serves). kind: 0=none,
++ * 1=pc-break/step, 2=watchdog, 3=write-watch, 4=read-watch. */
++unsigned int  romdev_snap_regs[19];
++int           romdev_snap_kind = 0;
++/* First byte address of the instruction each CPU is currently executing —
++ * REG_PC/PC drift past operands during decode, so mid-instruction hooks (the
++ * write/read watchpoints) must report THIS, not the live PC. (Separate per CPU:
++ * on Genesis the sound Z80 runs concurrently with the m68k.) */
++unsigned int  romdev_m68k_instr_pc = 0xFFFFFFFF;
++unsigned int  romdev_z80_instr_pc  = 0xFFFFFFFF;
++
++void romdev_m68k_snap(int kind)
++{
++   int i;
++   for (i = 0; i < 16; i++) romdev_snap_regs[i] = m68ki_cpu.dar[i];
++   romdev_snap_regs[16] = romdev_m68k_instr_pc;
++   romdev_snap_regs[17] = m68ki_get_sr();
++   romdev_snap_regs[18] = m68ki_cpu.dar[15];   /* SP == A7 */
++   romdev_snap_kind = kind;
++}
++
++/* Pure-CPU run for callSubroutine: step ONLY the m68k — none of the per-frame
++ * system machinery (VDP line processing, Z80 co-scheduling, interrupt raising)
++ * advances, so a driven routine's output buffer can't be stomped by the game's
++ * own VBlank logic running "concurrently" (the cpu({op:'call'}) poisoning a
++ * real session diffed a CORRECT reimplementation against for hours). The cycle
++ * counters are restored afterward so normal frame scheduling is unaffected;
++ * register/RAM side effects of the executed instructions are kept. The armed
++ * pc-break sentinel / instruction watchdog still fire inside m68k_run. */
++void romdev_m68k_run_pure(unsigned int budget_cycles)
++{
++   unsigned int save_cycles  = m68k.cycles;
++   unsigned int save_end     = m68k.cycle_end;
++   unsigned int save_refresh = m68k.refresh_cycles;
++   m68k_run(m68k.cycles + budget_cycles);
++   m68k.cycles         = save_cycles;
++   m68k.cycle_end      = save_end;
++   m68k.refresh_cycles = save_refresh;
++}
++
  
  /* ======================================================================== */
  /* =============================== CALLBACKS ============================== */
-@@ -284,6 +380,59 @@ void m68k_run(unsigned int cycles)
+@@ -262,6 +406,18 @@ void m68k_run(unsigned int cycles)
+     return;
+   }
+ 
++  /* romdev: once a breakpoint/watchdog hit has frozen this CPU, KEEP it frozen
++   * for the remainder of the frame. gpgx re-enters m68k_run once per scanline,
++   * so without this the 68k resumed on the next line and the "frozen" register
++   * file drifted hundreds of instructions past the hit before the host could
++   * read it. The host clears the hit (pcbreak_get clearHit / pcbreak_set) to
++   * resume. */
++  if (romdev_pc_hit)
++  {
++    m68k.cycles = cycles;
++    return;
++  }
++
+   /* Check interrupt mask to process IRQ if needed */
+   m68ki_check_interrupts();
+ 
+@@ -284,6 +440,67 @@ void m68k_run(unsigned int cycles)
  
    while (m68k.cycles < cycles)
    {
++    /* romdev: REG_PC right now is the first byte of the instruction about to
++     * be dispatched — record it so mid-instruction hooks (write/read
++     * watchpoints, range log) can report the EXECUTING instruction instead of
++     * the drifted prefetch PC. */
++    romdev_m68k_instr_pc = REG_PC;
++
 +    /* romdev instruction WATCHDOG: force-stop a runaway (the callSubroutine hang).
 +     * Counts dispatched instructions; on overflow, fire the breakpoint with the
 +     * watchdog flag so the host gets the final PC/regs instead of hanging. */
@@ -117,6 +190,7 @@ index 36112a5..4bac13f 100644
 +      if (++romdev_pc_wd_count >= romdev_pc_wd_limit)
 +      {
 +        romdev_pc_last_pc = REG_PC;
++        romdev_m68k_snap(2);     /* freeze the register file AT the stop */
 +        romdev_pc_hit = 1;
 +        romdev_pc_watchdog = 1;
 +        m68k.cycles = cycles;
@@ -149,6 +223,7 @@ index 36112a5..4bac13f 100644
 +                       && (unsigned int)REG_PC == romdev_pc_addr))
 +      {
 +        romdev_pc_last_pc = REG_PC;
++        romdev_m68k_snap(1);    /* freeze the register file AT the hit */
 +        romdev_pc_hit = 1;
 +        romdev_pc_hits++;
 +        romdev_pc_step = 0;     /* one-shot */
@@ -166,24 +241,31 @@ index 36112a5..4bac13f 100644
      m68ki_trace_t1() /* auto-disable (see m68kcpu.h) */
  
 diff --git a/core/m68k/m68kcpu.h b/core/m68k/m68kcpu.h
-index b702173..4771cfa 100644
+index b702173..5ed4e88 100644
 --- a/core/m68k/m68kcpu.h
 +++ b/core/m68k/m68kcpu.h
-@@ -674,6 +674,49 @@ INLINE uint m68ki_read_16(uint address);
+@@ -674,6 +674,57 @@ INLINE uint m68ki_read_16(uint address);
  INLINE uint m68ki_read_32(uint address);
  
  /* Write to the current data space */
-+/* romdev instruction-level write watchpoint (m68k). Records REG_PC (the
-+ * executing instruction, give or take prefetch) when a watched address is
-+ * written. Defined in m68kcpu.c; exported to the host via libretro.c. */
++/* romdev instruction-level write watchpoint (m68k). Records the EXECUTING
++ * instruction's first-byte address (romdev_m68k_instr_pc, latched at dispatch
++ * in m68k_run) — NOT the live REG_PC, which has prefetched past the operands
++ * by write time and pointed a real session at the FOLLOWING instruction.
++ * Also freezes a full register snapshot at the hit (romdev_m68k_snap), since
++ * the live register file keeps running for the rest of the frame. Defined in
++ * m68kcpu.c; exported to the host via libretro.c. */
 +extern unsigned int  romdev_wp_addr;
 +extern int           romdev_wp_enabled;
 +extern unsigned int  romdev_wp_last_pc;
 +extern unsigned char romdev_wp_last_val;
 +extern unsigned int  romdev_wp_hits;
++extern unsigned int  romdev_m68k_instr_pc;
++extern void          romdev_m68k_snap(int kind);
 +#define ROMDEV_WP_M68K(a, v) do { \
 +    if (romdev_wp_enabled && (unsigned int)(a) == romdev_wp_addr) { \
-+      romdev_wp_last_pc = REG_PC; romdev_wp_last_val = (unsigned char)(v); romdev_wp_hits++; \
++      romdev_wp_last_pc = romdev_m68k_instr_pc; romdev_wp_last_val = (unsigned char)(v); romdev_wp_hits++; \
++      romdev_m68k_snap(3); \
 +    } \
 +  } while (0)
 +
@@ -197,7 +279,8 @@ index b702173..4771cfa 100644
 +extern unsigned int  romdev_rd_hits;
 +#define ROMDEV_RD_M68K(a, v) do { \
 +    if (romdev_rd_enabled && (unsigned int)(a) == romdev_rd_addr) { \
-+      romdev_rd_last_pc = REG_PC; romdev_rd_last_val = (unsigned char)(v); romdev_rd_hits++; \
++      romdev_rd_last_pc = romdev_m68k_instr_pc; romdev_rd_last_val = (unsigned char)(v); romdev_rd_hits++; \
++      romdev_m68k_snap(4); \
 +    } \
 +  } while (0)
 +
@@ -212,14 +295,14 @@ index b702173..4771cfa 100644
 +#define ROMDEV_RANGE_M68K(a, v, w) do { \
 +    if (romdev_range_enabled && (romdev_range_mode & ((w) ? 2 : 1)) \
 +        && (unsigned int)(a) >= romdev_range_lo && (unsigned int)(a) <= romdev_range_hi) { \
-+      romdev_range_log(REG_PC, (unsigned int)(a), (unsigned char)(v)); \
++      romdev_range_log(romdev_m68k_instr_pc, (unsigned int)(a), (unsigned char)(v)); \
 +    } \
 +  } while (0)
 +
  INLINE void m68ki_write_8(uint address, uint value);
  INLINE void m68ki_write_16(uint address, uint value);
  INLINE void m68ki_write_32(uint address, uint value);
-@@ -861,6 +904,9 @@ INLINE uint m68ki_read_8(uint address)
+@@ -861,6 +912,9 @@ INLINE uint m68ki_read_8(uint address)
    if (temp->read8) val = (*temp->read8)(ADDRESS_68K(address));
    else val = READ_BYTE(temp->base, (address) & 0xffff);
  
@@ -229,7 +312,7 @@ index b702173..4771cfa 100644
  #ifdef HOOK_CPU
    if (UNLIKELY(cpu_hook))
      cpu_hook(HOOK_M68K_R, 1, address, val);
-@@ -881,6 +927,11 @@ INLINE uint m68ki_read_16(uint address)
+@@ -881,6 +935,11 @@ INLINE uint m68ki_read_16(uint address)
    if (temp->read16) val = (*temp->read16)(ADDRESS_68K(address));
    else val = *(uint16 *)(temp->base + ((address) & 0xffff));
  
@@ -241,7 +324,7 @@ index b702173..4771cfa 100644
  #ifdef HOOK_CPU
    if (UNLIKELY(cpu_hook))
      cpu_hook(HOOK_M68K_R, 2, address, val);
-@@ -905,6 +956,15 @@ INLINE uint m68ki_read_32(uint address)
+@@ -905,6 +964,15 @@ INLINE uint m68ki_read_32(uint address)
    if (temp->read16) val |= (*temp->read16)(ADDRESS_68K(address+2));
    else val |= m68k_read_immediate_16(address+2);
  
@@ -257,7 +340,7 @@ index b702173..4771cfa 100644
  #ifdef HOOK_CPU
    if (UNLIKELY(cpu_hook))
      cpu_hook(HOOK_M68K_R, 4, address, val);
-@@ -917,6 +977,8 @@ INLINE void m68ki_write_8(uint address, uint value)
+@@ -917,6 +985,8 @@ INLINE void m68ki_write_8(uint address, uint value)
  {
    cpu_memory_map *temp;
  
@@ -266,7 +349,7 @@ index b702173..4771cfa 100644
    m68ki_set_fc(FLAG_S | FUNCTION_CODE_USER_DATA) /* auto-disable (see m68kcpu.h) */
  
  #ifdef HOOK_CPU
-@@ -933,6 +995,11 @@ INLINE void m68ki_write_16(uint address, uint value)
+@@ -933,6 +1003,11 @@ INLINE void m68ki_write_16(uint address, uint value)
  {
    cpu_memory_map *temp;
  
@@ -278,7 +361,7 @@ index b702173..4771cfa 100644
    m68ki_set_fc(FLAG_S | FUNCTION_CODE_USER_DATA) /* auto-disable (see m68kcpu.h) */
    m68ki_check_address_error(address, MODE_WRITE, FLAG_S | FUNCTION_CODE_USER_DATA); /* auto-disable (see m68kcpu.h) */
  
-@@ -950,6 +1017,15 @@ INLINE void m68ki_write_32(uint address, uint value)
+@@ -950,6 +1025,15 @@ INLINE void m68ki_write_32(uint address, uint value)
  {
    cpu_memory_map *temp;
  
@@ -295,10 +378,31 @@ index b702173..4771cfa 100644
    m68ki_check_address_error(address, MODE_WRITE, FLAG_S | FUNCTION_CODE_USER_DATA) /* auto-disable (see m68kcpu.h) */
  
 diff --git a/core/vdp_ctrl.c b/core/vdp_ctrl.c
-index bd454f6..091b5e1 100644
+index bd454f6..146c282 100644
 --- a/core/vdp_ctrl.c
 +++ b/core/vdp_ctrl.c
-@@ -158,6 +158,34 @@ static int *fifo_timing;        /* FIFO slots timing table */
+@@ -128,6 +128,20 @@ static void vdp_z80_data_w_ms(unsigned int data);
+ static void vdp_z80_data_w_gg(unsigned int data);
+ static void vdp_z80_data_w_sg(unsigned int data);
+ static void vdp_bus_w(unsigned int data);
++
++/* romdev VRAM-port COPY TRACE (state + exports in libretro.c): log every
++ * data-port write landing in a watched VRAM address window with the EXECUTING
++ * instruction's PC — the CPU-port complement of the existing DMA watch. The
++ * active CPU decides which latched PC applies (m68k on MD, Z80 on SMS/GG). */
++extern unsigned int romdev_vw_lo, romdev_vw_hi;
++extern int          romdev_vw_enabled;
++extern void         romdev_vw_log(unsigned int vaddr, unsigned int pc, unsigned char val);
++extern unsigned int romdev_m68k_instr_pc;
++extern unsigned int romdev_z80_instr_pc;
++static unsigned int romdev_vw_cpu_pc(void)
++{
++  return ((system_hw & SYSTEM_PBC) == SYSTEM_MD) ? romdev_m68k_instr_pc : romdev_z80_instr_pc;
++}
+ static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles);
+ static void vdp_dma_68k_ext(unsigned int length);
+ static void vdp_dma_68k_ram(unsigned int length);
+@@ -158,6 +172,34 @@ static int *fifo_timing;        /* FIFO slots timing table */
  static int hblank_start_cycle;  /* HBLANK flag set cycle */
  static int hblank_end_cycle;    /* HBLANK flag clear cycle */
  
@@ -333,7 +437,27 @@ index bd454f6..091b5e1 100644
   /* set Z80 or 68k interrupt lines */
  static void (*set_irq_line)(unsigned int level);
  static void (*set_irq_line_delay)(unsigned int level);
-@@ -3089,6 +3117,10 @@ static void vdp_dma_68k_ext(unsigned int length)
+@@ -2246,6 +2288,9 @@ static void vdp_bus_w(unsigned int data)
+       /* Pointer to VRAM */
+       uint16 *p = (uint16 *)&vram[index];
+ 
++      if (romdev_vw_enabled && (unsigned int)index >= romdev_vw_lo && (unsigned int)index <= romdev_vw_hi)
++        romdev_vw_log((unsigned int)index, romdev_vw_cpu_pc(), (unsigned char)(data & 0xFF));
++
+       /* Byte-swap data if A0 is set */
+       if (addr & 1)
+       {
+@@ -2729,6 +2774,9 @@ static void vdp_z80_data_w_m5(unsigned int data)
+       /* VRAM address (write low byte to even address & high byte to odd address) */
+       int index = addr ^ 1;
+ 
++      if (romdev_vw_enabled && (unsigned int)index >= romdev_vw_lo && (unsigned int)index <= romdev_vw_hi)
++        romdev_vw_log((unsigned int)index, romdev_vw_cpu_pc(), (unsigned char)(data & 0xFF));
++
+       /* Intercept writes to Sprite Attribute Table */
+       if ((index & sat_base_mask) == satb)
+       {
+@@ -3089,6 +3137,10 @@ static void vdp_dma_68k_ext(unsigned int length)
    /* 68k bus source address */
    uint32 source = (reg[23] << 17) | (dma_src << 1);
  
@@ -344,7 +468,7 @@ index bd454f6..091b5e1 100644
    do
    {
      /* Read data word from 68k bus */
-@@ -3124,6 +3156,9 @@ static void vdp_dma_68k_ram(unsigned int length)
+@@ -3124,6 +3176,9 @@ static void vdp_dma_68k_ram(unsigned int length)
    /* 68k bus source address */
    uint32 source = (reg[23] << 17) | (dma_src << 1);
  
@@ -354,7 +478,7 @@ index bd454f6..091b5e1 100644
    do
    {
      /* access Work-RAM by default  */
-@@ -3152,6 +3187,9 @@ static void vdp_dma_68k_io(unsigned int length)
+@@ -3152,6 +3207,9 @@ static void vdp_dma_68k_io(unsigned int length)
    /* 68k bus source address */
    uint32 source = (reg[23] << 17) | (dma_src << 1);
  
@@ -365,10 +489,10 @@ index bd454f6..091b5e1 100644
    {
      /* Z80 area */
 diff --git a/core/z80/z80.c b/core/z80/z80.c
-index 74d5053..c7e7ba4 100644
+index 74d5053..30caf9b 100644
 --- a/core/z80/z80.c
 +++ b/core/z80/z80.c
-@@ -220,6 +220,26 @@ unsigned char (*z80_readmem)(unsigned int address);
+@@ -220,6 +220,35 @@ unsigned char (*z80_readmem)(unsigned int address);
  void (*z80_writeport)(unsigned int port, unsigned char data);
  unsigned char (*z80_readport)(unsigned int port);
  
@@ -404,7 +528,7 @@ index 74d5053..c7e7ba4 100644
  static UINT32 EA;
  
  static UINT8 SZ[256];       /* zero and sign flags */
-@@ -627,12 +647,64 @@ INLINE void BURNODD(int cycles, int opcodes, int cyclesum)
+@@ -627,12 +656,90 @@ INLINE void BURNODD(int cycles, int opcodes, int cyclesum)
  /***************************************************************
   * Read a byte from given memory location
   ***************************************************************/
@@ -429,16 +553,41 @@ index 74d5053..c7e7ba4 100644
 +extern unsigned int  romdev_range_lo, romdev_range_hi;
 +extern int           romdev_range_enabled, romdev_range_mode;
 +extern void          romdev_range_log(unsigned int pc, unsigned int addr, unsigned char val);
++/* romdev at-hit register snapshot — shared globals (defined in m68kcpu.c; see
++ * the comment there). For the Z80 systems the snapshot follows the
++ * romdev_getreg_z80 regId order: A,F,B,C,D,E,H,L at 0-7, IX/IY at 8-9,
++ * [16]=PC of the EXECUTING instruction's first byte, [18]=SP. PC mid-
++ * instruction has advanced past fetched bytes, so hooks report
++ * romdev_z80_instr_pc (latched at dispatch in z80_run), not the live PC. */
++extern unsigned int  romdev_snap_regs[19];
++extern int           romdev_snap_kind;
++extern unsigned int  romdev_z80_instr_pc;
++
++static void romdev_z80_snap(int kind)
++{
++  int i;
++  for (i = 0; i < 19; i++) romdev_snap_regs[i] = 0;
++  romdev_snap_regs[0]  = Z80.af.b.h;  romdev_snap_regs[1] = Z80.af.b.l;
++  romdev_snap_regs[2]  = Z80.bc.b.h;  romdev_snap_regs[3] = Z80.bc.b.l;
++  romdev_snap_regs[4]  = Z80.de.b.h;  romdev_snap_regs[5] = Z80.de.b.l;
++  romdev_snap_regs[6]  = Z80.hl.b.h;  romdev_snap_regs[7] = Z80.hl.b.l;
++  romdev_snap_regs[8]  = Z80.ix.w.l;  romdev_snap_regs[9] = Z80.iy.w.l;
++  romdev_snap_regs[16] = romdev_z80_instr_pc;
++  romdev_snap_regs[18] = Z80.sp.w.l;
++  romdev_snap_kind = kind;
++}
++
 +#define RM(addr) romdev_z80_rm((addr))
 +INLINE unsigned char romdev_z80_rm(unsigned int addr)
 +{
 +  unsigned char v = z80_readmem(addr);
 +  if (romdev_rd_enabled && (unsigned int)addr == romdev_rd_addr) {
-+    romdev_rd_last_pc = PC; romdev_rd_last_val = v; romdev_rd_hits++;
++    romdev_rd_last_pc = romdev_z80_instr_pc; romdev_rd_last_val = v; romdev_rd_hits++;
++    romdev_z80_snap(4);
 +  }
 +  if (romdev_range_enabled && (romdev_range_mode & 1)
 +      && (unsigned int)addr >= romdev_range_lo && (unsigned int)addr <= romdev_range_hi) {
-+    romdev_range_log(PC, (unsigned int)addr, v);
++    romdev_range_log(romdev_z80_instr_pc, (unsigned int)addr, v);
 +  }
 +  return v;
 +}
@@ -459,22 +608,53 @@ index 74d5053..c7e7ba4 100644
 +extern unsigned char *romdev_wp_last_pc_ptr; /* live host ptr of the SMS/GG Z80 PC's page (for bank → ROM offset, resolved in libretro.c) */
 +#define WM(addr,value) do { \
 +    if (romdev_wp_enabled && (unsigned int)(addr) == romdev_wp_addr) { \
-+      romdev_wp_last_pc = PC; romdev_wp_last_val = (unsigned char)(value); romdev_wp_hits++; \
-+      romdev_wp_last_pc_ptr = z80_readmap[(PC) >> 10] ? z80_readmap[(PC) >> 10] + (PC) : 0; \
++      romdev_wp_last_pc = romdev_z80_instr_pc; romdev_wp_last_val = (unsigned char)(value); romdev_wp_hits++; \
++      romdev_wp_last_pc_ptr = z80_readmap[(romdev_z80_instr_pc) >> 10] ? z80_readmap[(romdev_z80_instr_pc) >> 10] + (romdev_z80_instr_pc) : 0; \
++      romdev_z80_snap(3); \
 +    } \
 +    if (romdev_range_enabled && (romdev_range_mode & 2) \
 +        && (unsigned int)(addr) >= romdev_range_lo && (unsigned int)(addr) <= romdev_range_hi) { \
-+      romdev_range_log(PC, (unsigned int)(addr), (unsigned char)(value)); \
++      romdev_range_log(romdev_z80_instr_pc, (unsigned int)(addr), (unsigned char)(value)); \
 +    } \
 +    z80_writemem((addr),(value)); \
 +  } while (0)
  
  /***************************************************************
   * Read a word from given memory location
-@@ -3421,6 +3493,39 @@ void z80_run(unsigned int cycles)
+@@ -3417,10 +3524,88 @@ void z80_reset(void)
+ /****************************************************************************
+  * Run until given cycle count 
+  ****************************************************************************/
++/* Pure-CPU run for callSubroutine (mirror of romdev_m68k_run_pure in
++ * m68kcpu.c): step ONLY the Z80 — no VDP line processing or interrupt raising
++ * advances, so a driven routine can't be stomped by the game's frame logic.
++ * Cycle counter restored afterward; register/RAM effects kept. */
++void romdev_z80_run_pure(unsigned int budget_cycles)
++{
++  unsigned int save_cycles = Z80.cycles;
++  z80_run(Z80.cycles + budget_cycles);
++  Z80.cycles = save_cycles;
++}
++
+ void z80_run(unsigned int cycles)
  {
++  /* romdev: once a breakpoint/watchdog hit has frozen this CPU, KEEP it frozen
++   * for the remainder of the frame (mirror of the m68k_run guard — the per-
++   * line scheduler re-enters z80_run and would otherwise drift the register
++   * file past the hit). The host clears the hit to resume. */
++  if (romdev_pc_hit)
++  {
++    Z80.cycles = cycles;
++    return;
++  }
++
    while( Z80.cycles < cycles )
    {
++    /* romdev: PC right now is the first byte of the instruction about to be
++     * dispatched — latch it for the mid-instruction hooks (WM/RM watchpoints,
++     * range log). */
++    romdev_z80_instr_pc = PC;
++
 +    /* romdev instruction WATCHDOG (SMS/GG: Z80 is the active CPU). Mirror of the
 +     * m68k_run watchdog so a Z80 callSubroutine free-run (wrong-entry wrapper that
 +     * falls back into the game's main loop) force-stops instead of hanging until
@@ -485,6 +665,7 @@ index 74d5053..c7e7ba4 100644
 +      if (++romdev_pc_wd_count >= romdev_pc_wd_limit)
 +      {
 +        romdev_pc_last_pc = PC;
++        romdev_z80_snap(2);    /* freeze the register file AT the stop */
 +        romdev_pc_hit = 1;
 +        romdev_pc_watchdog = 1;
 +        Z80.cycles = cycles;   /* consume the frame so retro_run returns */
@@ -517,6 +698,7 @@ index 74d5053..c7e7ba4 100644
 +                              && (unsigned int)PC == romdev_pc_addr))
 +      {
 +        romdev_pc_last_pc = PC;
++        romdev_z80_snap(1);        /* freeze the register file AT the hit */
 +        romdev_pc_hit = 1;
 +        romdev_pc_hits++;
 +        romdev_pc_step = 0;        /* one-shot */
@@ -528,7 +710,7 @@ index 74d5053..c7e7ba4 100644
      /* check for IRQs before each instruction */
      if (Z80.irq_state && IFF1 && !Z80.after_ei)
      {
-@@ -3432,7 +3537,7 @@ void z80_run(unsigned int cycles)
+@@ -3432,7 +3617,7 @@ void z80_run(unsigned int cycles)
      R++;
      EXEC_INLINE(op,ROP());
    }
@@ -538,10 +720,10 @@ index 74d5053..c7e7ba4 100644
  /****************************************************************************
   * Get all registers in given buffer
 diff --git a/libretro/libretro.c b/libretro/libretro.c
-index 798c6cc..95ea974 100644
+index 798c6cc..e32b9ef 100644
 --- a/libretro/libretro.c
 +++ b/libretro/libretro.c
-@@ -3743,6 +3743,340 @@ void retro_unload_game(void)
+@@ -3743,6 +3743,419 @@ void retro_unload_game(void)
  
  unsigned retro_get_region(void) { return vdp_pal ? RETRO_REGION_PAL : RETRO_REGION_NTSC; }
  
@@ -669,6 +851,70 @@ index 798c6cc..95ea974 100644
 +   romdev_pc_watchdog = 0;
 +}
 +
++/* romdev at-hit register snapshot (defined in m68kcpu.c, captured by the CPU
++ * hooks at the instant a pc-break / watchdog / write-watch / read-watch fires
++ * — the live register file drifts for the rest of the frame, so post-frame
++ * reads lie). out[0] = kind (0=none 1=pc-break/step 2=watchdog 3=write-watch
++ * 4=read-watch), out[1] = count (19), out[2..20] = registers in the
++ * romdev_setreg/getreg regId order (m68k: D0-D7, A0-A7, PC-of-executing-
++ * instruction, SR, SP; Z80: A,F,B,C,D,E,H,L,IX,IY,0...,PC,0,SP). `clear`
++ * resets the kind so the next hit is distinguishable. */
++/* romdev VRAM-port copy trace (hooks in vdp_ctrl.c's data-port write paths —
++ * the CPU-port complement of romdev_dmawatch). set(lo,hi,enabled) arms a VRAM
++ * byte-address window + clears the ring; get drains [vaddr,pc,val] triples,
++ * out2 = [totalSeen, stored]. */
++#define ROMDEV_VW_CAP 1024
++unsigned int  romdev_vw_lo      = 0;
++unsigned int  romdev_vw_hi      = 0;
++int           romdev_vw_enabled = 0;
++static unsigned int  romdev_vw_addrs[ROMDEV_VW_CAP];
++static unsigned int  romdev_vw_pcs  [ROMDEV_VW_CAP];
++static unsigned char romdev_vw_vals [ROMDEV_VW_CAP];
++static unsigned int  romdev_vw_count  = 0;
++static unsigned int  romdev_vw_stored = 0;
++void romdev_vw_log(unsigned int vaddr, unsigned int pc, unsigned char val)
++{
++   romdev_vw_count++;
++   if (romdev_vw_stored < ROMDEV_VW_CAP) {
++      romdev_vw_addrs[romdev_vw_stored] = vaddr;
++      romdev_vw_pcs  [romdev_vw_stored] = pc;
++      romdev_vw_vals [romdev_vw_stored] = val;
++      romdev_vw_stored++;
++   }
++}
++void romdev_vramwatch_set(unsigned int lo, unsigned int hi, int enabled)
++{
++   romdev_vw_lo = lo; romdev_vw_hi = hi;
++   romdev_vw_enabled = enabled ? 1 : 0;
++   romdev_vw_count = 0; romdev_vw_stored = 0;
++}
++unsigned int romdev_vramwatch_get(unsigned int *out, unsigned int max, unsigned int *out2)
++{
++   unsigned int i, n = romdev_vw_stored;
++   if (out2) { out2[0] = romdev_vw_count; out2[1] = romdev_vw_stored; }
++   if (!out) return 0;
++   if (n > max) n = max;
++   for (i = 0; i < n; i++) {
++      out[i*3 + 0] = romdev_vw_addrs[i];
++      out[i*3 + 1] = romdev_vw_pcs[i];
++      out[i*3 + 2] = romdev_vw_vals[i];
++   }
++   return n;
++}
++
++extern unsigned int  romdev_snap_regs[19];
++extern int           romdev_snap_kind;
++void romdev_regsnap_get(unsigned int *out, int clear)
++{
++   int i;
++   if (!out) return;
++   out[0] = (unsigned int)romdev_snap_kind;
++   out[1] = 19;
++   for (i = 0; i < 19; i++) out[2 + i] = romdev_snap_regs[i];
++   if (clear) romdev_snap_kind = 0;
++}
++
++
 +/* romdev register read/write — the inverse of getCPUState, used by the host's
 + * callSubroutine / decompressWith (set args + PC=entry, push a sentinel return,
 + * run to it, capture the output). gpgx emulates TWO CPUs: the m68k (Genesis) and
@@ -750,6 +996,21 @@ index 798c6cc..95ea974 100644
 +   if (regId == 17)                     return m68k_get_reg(M68K_REG_SR);
 +   if (regId == 18)                     return m68k_get_reg(M68K_REG_SP);
 +   return 0;
++}
++/* Pure-CPU run for callSubroutine: advance ONLY the active CPU by up to
++ * `budget_cycles` — no VDP line processing, no co-CPU, no interrupt sources.
++ * The armed pc-break sentinel / instruction watchdog still fire inside the
++ * run loop; the host polls romdev_pcbreak_get between chunks. Implemented in
++ * the CPU cores (cycle counters are restored there so frame scheduling is
++ * unaffected). */
++extern void romdev_m68k_run_pure(unsigned int budget_cycles);
++extern void romdev_z80_run_pure(unsigned int budget_cycles);
++void romdev_run_pure(unsigned int budget_cycles)
++{
++   if (ROMDEV_ACTIVE_IS_Z80())
++      romdev_z80_run_pure(budget_cycles);
++   else
++      romdev_m68k_run_pure(budget_cycles);
 +}
 +
 +/* romdev RANGE watch (discovery) — log every read/write in [lo,hi]. mode: 1=read
@@ -882,7 +1143,7 @@ index 798c6cc..95ea974 100644
  void *retro_get_memory_data(unsigned id)
  {
     switch (id)
-@@ -3751,6 +4085,35 @@ void *retro_get_memory_data(unsigned id)
+@@ -3751,6 +4164,35 @@ void *retro_get_memory_data(unsigned id)
           return sram.on ? sram.sram : NULL;
        case RETRO_MEMORY_SYSTEM_RAM:
           return work_ram;
@@ -918,7 +1179,7 @@ index 798c6cc..95ea974 100644
        default:
           return NULL;
     }
-@@ -3802,6 +4165,21 @@ size_t retro_get_memory_size(unsigned id)
+@@ -3802,6 +4244,21 @@ size_t retro_get_memory_size(unsigned id)
              return 0x2000; /* 8KB internal RAM */
        }
  

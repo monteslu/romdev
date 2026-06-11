@@ -4,6 +4,474 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.29.0 — 2026-06-11
+
+### Examples — the complete-game library, finished & made honest
+- **The 14×5 grid is complete (70 games).** Every platform now ships all five
+  canonical genres. The last gap, the Atari 2600 puzzle, ships as **TILE TWINS**
+  — a memory match-pairs game (a real puzzle: a static, turn-based board drawn
+  as full-width COLUPF bands, the honest TIA fit — not a colored match-3 grid the
+  TIA can't render). Forkable via `examples({op:'fork', example:'atari2600/puzzle'})`.
+- **C64 games now SAVE for real — 1541 disk save.** The honest C64 medium is the
+  floppy (no battery SRAM). All 5 C64 games write a hi-score/record to a SEQ file
+  on drive 8 via the KERNAL; run from a `.d64` it commits to the live disk and
+  `state({op:'exportDisk'})` captures it (reload restores it). As a bare `.prg`
+  there's no mounted disk, so it's an honest in-session no-op. (Replaces the old
+  gated no-op seams — the VICE core already supported writable-disk write-back.)
+- **C64 two-player now works.** The VICE core drove only one control port per
+  RetroPad; host port-1 (P2) input never reached the game. Now both standard
+  control ports are live (host port 0 = P1, host port 1 = P2) — verified by
+  driving both paddles independently in the versus games.
+- **PCE save claim corrected (honesty).** A bare HuCard cannot save — BRAM is
+  peripheral-only (CD-ROM² / Tennokoe Bank / Memory Base 128) on real hardware.
+  The 5 PCE games no longer claim a battery save; they keep an honest in-session
+  hi-score, with the BRAM mapping documented in-file as the real-hardware path.
+- **Honest framing.** The examples are described as SCAFFOLDING, not showcases:
+  the gameplay is intentionally thin — their value is the working boot sequence,
+  APIs, and syntax to fork from. Superlatives dropped from the `examples` tool
+  doctrine and the generated project README.
+
+### Added — livestream frame coverage: see what the agent is doing
+- **Most state-changing tools now emit the post-call frame to /livestream**,
+  at zero cost to the agent (deferred PNG encode after the response goes
+  out): `frame({op:'step'})`, `input` set/press/sequence/navigate,
+  `state({op:'load'})`, `loadMedia`, `host({op:'reset'})` (soft + hard),
+  `runUntil`, `cheats({op:'apply'})`, and `cpu({op:'call'})` — joining the
+  breakpoint/watch hits, verify, and stepInstruction that already emitted.
+- **Throttled to one frame per 2s per (session, tool)**, trailing-edge: a
+  frame-step loop can't flood the stream and its LAST frame always lands;
+  different tools back-to-back all show; multiple agents on one server
+  never throttle each other.
+- **`call_frame` events carry a caption** (`step ×30`, `press start`,
+  `state load boss`, `loaded game.nes`) and the livestream UI shows it on
+  the image card — the stream reads as a narrative.
+- **To-disk renders now reach the stream too**: `tiles({op:'preview'})`,
+  `extractSpriteSheet`-style file renders, and `encodeArt` quantize/crop
+  attach the PNG as an observer sideband when routed to `outputPath` — the
+  human sees the render even though the agent only gets a path.
+
+## 0.28.0
+
+The reverse-engineering release: the three RE primitives — break-instant
+`registersAtHit`, interference-free `pure` CPU calls, and the
+`watch({on:'copy'})` graphics source-trace — now work on ALL 14 platforms
+(every emulator core rebuilt; upstream pins unchanged, everything carried by
+the patches in `scripts/patches/`). Plus the full scaffold overhaul from real
+RetroDECK playtesting, banked-cart parity for disasm/rebuild, the value-search
+upgrades, and the playtest co-drive detection. Details per section below.
+
+
+### Added — pure calls + the generic copy trace on ALL 14 platforms (primitives #2 and #3)
+The other two primitives from the all-platforms RE proposal, completing the
+set (registersAtHit was #1):
+- **`cpu({op:'call', pure:true})` works everywhere.** The guarantee is the
+  same on every platform — the game's own NMI/IRQ/VBlank logic CANNOT run
+  during the call and stomp the routine's output buffer — with the mechanism
+  reported as `pureMode`: Genesis/SMS/GG step ONLY the CPU (`'cpu-only'`,
+  the gpgx separable-loop path); every other core suppresses interrupt
+  DELIVERY for the duration (`'irq-blocked'` via a new `romdev_irqblock_set`
+  export — pending lines stay pending, video/timers advance harmlessly, no
+  game handler executes); the 2600's 6507 has no interrupt lines at all
+  (`'no-interrupts'`). Proven live on NES: NMI delivery verified firing,
+  then silent under the block, then a planted routine pure-called
+  end-to-end with its write landing.
+- **`watch({on:'copy'})` — the generic "where does this graphic come
+  from?".** Logs every write landing in a VRAM/dest address window with the
+  EXECUTING instruction's PC. Port-based video memory is hooked INSIDE the
+  cores — NES $2007, SNES $2118/19 (BOTH CPU port writes and the DMA path —
+  the PC is the DMA-triggering instruction), PCE VWR, MSX VDP data port,
+  SMS/GG/Genesis VDP data port (the CPU-port complement of the Genesis DMA
+  watch). Direct-mapped platforms (GB/GBC, GBA, C64, Lynx, 7800) route
+  through the CPU-address range log automatically. Follow a hit with
+  breakpoint({on:'pc', address: pc}) for registersAtHit at the uploader.
+- Cores rebuilt again (same pins; the scripts/patches/ diffs carry
+  everything — all 11 verified to apply clean to pristine checkouts).
+- `test/pure-copy-primitives.test.js`: the 13-core irq-block/run-pure
+  feature matrix, NES NMI-delivery proof + end-to-end pure call, MSX
+  block-safety, and copy traces on NES (port), SNES (port+DMA), GB (mapped).
+
+### Fixed/Added — registersAtHit + freeze-after-hit on ALL 14 platforms (every core rebuilt)
+The gpgx round's break-instant fixes, extended to every other core — the same
+three guarantees now hold across the whole platform matrix:
+- **`registersAtHit` everywhere** — every breakpoint hit (pc-break, watchdog,
+  write-watch, read-watch) on every platform freezes the FULL register file at
+  the hit instant inside the core hook, exported via `romdev_regsnap_get` and
+  surfaced in the breakpoint hit response. Per-CPU register sets: 6502 family
+  (NES/2600/7800/C64/Lynx/PCE) A/X/Y/P/S/PC; 65816 (SNES) +DB/D; sm83 (GB/GBC)
+  A/F/B/C/D/E/H/L/SP; Z80 (SMS/GG/MSX) +IX/IY; m68k (Genesis) D0-7/A0-7/SR;
+  ARM7 (GBA) r0-r15/CPSR. NES previously snapshotted pc-breaks only — its
+  write/read hits now snapshot too.
+- **Freeze-after-hit everywhere** — once a hit fires, the CPU run loop stays
+  frozen (across re-entries and frames) until the host clears the hit, so even
+  live register reads agree with the snapshot. Previously each core resumed on
+  the next loop re-entry and the registers drifted.
+- **Executing-instruction PC everywhere** — write/read watchpoints and range
+  logs report the EXECUTING instruction's first byte, latched at dispatch
+  (sm83/Z80/65816/6502 PCs advance past operands mid-instruction — the same
+  off-by-one class the gpgx round fixed for m68k; GBA reports the pipeline PC,
+  matching its breakpoint-address convention).
+- Cores rebuilt: fceumm, snes9x, gambatte, mGBA, handy, vice, stella2014,
+  prosystem, geargrafx, bluemsx (pins unchanged; the romdev patches in
+  scripts/patches/ carry all of it — the whole stack reproduces from a clean
+  clone). `cpu({op:'call', pure:true})` remains gpgx-only (the other systems'
+  CPU/video loops are not separable without deeper core surgery); their calls
+  carry the ⚠ frame-logic caveat instead.
+- `test/regsnap-all-cores.test.js`: live single-step snapshot + freeze proof
+  on 10 platforms (plus the existing gpgx suite for Genesis/SMS/GG).
+
+### Fixed/Added — gpgx core round (the NBA-Jam-both-consoles feedback): break-instant truth on Genesis/SMS/GG
+The first core rebuild in this release (gpgx only; pins unchanged, patch extended).
+- **`registersAtHit` on Genesis/SMS/GG** — `breakpoint({on:'pc'|'write'|'read'})`
+  hits now carry the FULL register file (m68k d0-d7/a0-a7/pc/sr/sp; z80
+  a/f/b/c/d/e/h/l/ix/iy/pc/sp) frozen by the core AT the hit instant. gpgx
+  schedules CPUs per scanline, so the live register file used to drift
+  hundreds of instructions past a hit before the host could read it — the
+  "wrong-pointer chases" that cost a real RE session ~2h. On a pc-break the
+  CPU now also stays FROZEN for the remainder of the frame (and across
+  frames until the hit is cleared), so even live reads agree.
+- **Write/read watchpoint PC is the EXECUTING instruction** — the hooks now
+  record the instruction's first-byte address latched at dispatch, not the
+  post-prefetch PC (the orb-at-$2A7216-reported-as-$2A721C off-by-one).
+  `breakpoint({on:'write'})` also renames `value`→`valueByte` (it's the one
+  byte that landed, not the operand) and explains its `hits` semantics.
+- **`cpu({op:'call', pure:true})`** — steps ONLY the active CPU (new
+  `romdev_run_pure` export): no VDP line processing, no co-CPU, no interrupts
+  raised — so the game's own VBlank logic can NOT run "concurrently" and
+  stomp the driven routine's output buffer (a real session diffed a correct
+  codec reimplementation against that poisoned output for ~1.5h). Non-pure
+  calls that spanned frames now carry a loud ⚠ caveat naming the risk and
+  the fix.
+- **Genesis `system_ram` normalized to CPU byte order** — gpgx stores 68k
+  work RAM host-LE word-swapped (`work_ram[A^1]`); the raw layout leaked
+  through every byte-granular tool. Self-consistent within search→write
+  loops (which is why it hid — even a test had the swapped bytes baked in as
+  the expected value), but off-by-XOR-1 the moment an offset crossed to/from
+  disassembly addresses or cheat-DB maps. Offset X now IS the byte the 68k
+  sees at $FF0000+X; words read big-endian as documented. This also fixes
+  `cpu({op:'call'})` sentinel pushes / `presetMemory` writes for any non-zero
+  sentinel address (the default $0 sentinel was swap-invariant, hiding it).
+- breakpoint hit responses normalize `hits` (a watchdog stop no longer
+  reports the contradictory `hit:true, hits:0`).
+- Docs: the held-input menu trick (when a `pressDuring` schedule never
+  registers on a menu screen, hold via `input({op:'set'})` and omit
+  pressDuring — runs inherit held input) is now in the breakpoint/watch tool
+  docs; the server banner prints a one-line headless note when no display is
+  available (so an agent knows before promising a playtest window).
+- `test/gpgx-registers-at-hit.test.js`: live-core coverage for all of it,
+  including a per-platform Genesis memory-read smoke (the earlier
+  "info is not defined" regression was invisible to a fake-host-only suite).
+
+
+### Fixed/Added — value-search upgrades (from the locate-value skill review)
+- **Relative compares work as the FIRST `searchNext`.** `op:'search'` now
+  baselines every candidate at seed time, so `compare:'inc'/'dec'/'changed'/
+  'unchanged'` no longer silently return 0 candidates on the first narrow
+  (the footgun a real session burned rounds on and a skill had to document —
+  the "do one eq round first" workaround is obsolete).
+- **Representation-aware search** — `memory({op:'search', as:'bcd'|'digits'})`
+  for the stored≠displayed cases: `'bcd'` matches packed-BCD values (2 decimal
+  digits/byte, region endianness — classic NES scores); `'digits'` matches one
+  byte per ON-SCREEN digit at ANY constant tile base (HUD digit/tile-index
+  buffers; the base is auto-detected per candidate and reported; single-digit
+  seeds only accept base 0/0x30 to avoid matching everything). `searchNext`
+  narrows in the seed's representation automatically, including numeric
+  `inc`/`dec` on decoded values. Works on all platforms/regions (endianness
+  per region, big-endian m68k included).
+- **search/searchNext response notes fixed** — they recommended the dead
+  `searchValue` name and a `writeMemory({bytes})` form that op:'write'
+  REJECTS; now they name the live ops with a `hex` payload, mention the
+  scene-changed-mid-step empty-round trap, and point input-driven values at
+  `diffRuns`. Same stale-name fix in two `watch` tool notes.
+- `test/search-representations.test.js` covers all of it.
+
+
+### Added — banked-cart parity across ALL platforms (per-bank references + rebuild glue)
+The 0.27.0 feedback round fixed per-bank reference scanning and one-call banked
+rebuild glue for NES only. Every other banked-cart platform now gets the same
+treatment:
+- **`disasm({target:'references'})` scans EVERY bank on every banked format** —
+  SNES multi-bank LoROM (was: only the first 32KB bank), GB/GBC MBC and SMS/GG
+  Sega-mapper and MSX megaROM (was: only the first 32KB), Atari 2600 F8/F6/F4
+  (was: only the boot bank), Atari 7800 (was: only the top 16KB — flat carts now
+  scan the WHOLE image, SuperGame carts per-bank), and >32KB HuCards (was: a
+  wrapped, garbage start address). Non-NES refs carry a `romBank` tag (NES keeps
+  `prgBank`). Very large carts scan the first 64 banks and SAY SO in `notes`.
+- **`disasm({target:'project'})` splits every banked format per-bank** so
+  instructions never straddle a bank edge: Sega-mapper SMS/GG (16KB banks),
+  MSX megaROMs (16KB banks + the "AB" header as its own data region), banked
+  2600 (4KB banks), 7800 SuperGame (16KB banks + the .a78 header split out),
+  >32KB HuCards (8KB pages + optional copier header split out).
+- **Atari 7800 SuperGame and PC Engine HuCards (flat AND banked) get one-call
+  byte-identical `build()` rebuilds** — their asm toolchain is cc65/ca65, the
+  same match that made NES one-call. NES-style glue: HEADER segment carrying
+  the original header bytes, per-bank segment wrappers, generated multi-bank
+  `.cfg` via `linkerConfigPath`. **PCE was previously the one honestly-LOSSY
+  case** (planRegions trimmed real $FF padding and didn't strip copier
+  headers) — both fixed, `verifiable:true` now.
+- **SMS/GG, MSX, and 2600 banked carts get per-bank native rebuild recipes**
+  (their `build()` is SDCC/DASM — can't consume the disasm syntax): per-bank
+  wrappers + cfg blobs (2600), bank-by-bank `as`/`objcopy`/`dd`/`cat` recipes
+  in `BUILD.md` (SMS/GG/MSX), all byte-exact.
+- Proven by `test/banked-parity.test.js`: synthetic banked carts on 7 platforms;
+  byte-identical one-call rebuilds verified end-to-end for 7800 SuperGame,
+  banked PCE, and flat-PCE-with-real-padding.
+
+
+### Fixed — scaffold overhaul from real RetroDECK/Bazzite playtesting (all 14 platforms)
+A full human playtest of every genre scaffold on real hardware surfaced clusters
+of repeated logic errors. The big ones:
+- **SMS/GG: every `build({output:'project'})` ROM black-screened** — the project
+  recipe skipped the dir's `*_crt0.s` believing `buildForPlatform` auto-injects
+  the bundled crt0 (it doesn't; only the rom/run handlers do), so SDCC's stock
+  z80 crt0 linked instead and `main()` never ran. Also: the bundled crt0's reset
+  block was 9 bytes (overflowed into the `.org 0x0008` RST slot, corrupting
+  `jp gsinit`), `_CODE` linked at `$0000` ON TOP of the vector table, and `.gg`
+  ROMs got an SMS region nibble (`$4C`) that flips Genesis-Plus-GX into SMS-compat
+  mode. Project builds now route/fall back to the bundled crt0, `_CODE` sits at
+  `$0100`, GG ROMs get region `$7C`, ROMs pad to 32KB before the TMR SEGA header,
+  and a regression test pins the boot byte + header. The SMS scaffold now ships
+  `sms_crt0.s` like GG/MSX.
+- **"All enemies spawn on the left"** (18 shmup/racing templates): spawn X/lane
+  came from `spawn_timer`, which the caller resets to 0 immediately before
+  `spawn()` — a constant. Each template now has a Galois-LFSR `rand8()`.
+- **Puzzle genre**: the gbc template is now the polished falling-jewel reference
+  game (4-direction matches, gravity + cascade chains, magic piece, SFX + music,
+  collect/flush vblank rendering, dataLoc `$C200` via the gb/gbc project recipe);
+  the DMG gb template is rebuilt around the same core; and the
+  mark/clear/gravity/cascade core is ported to all 10 other platforms (PCE: H+V
+  in its 8KB boot bank). Replaces a horizontal-only scan that missed vertical/
+  diagonal matches, half-cleared 4+ runs, and never dropped survivors.
+- **Atari 2600**: SWCHA ASL carry-chains clobbered A between shifts (pressing
+  RIGHT also "pressed" LEFT — the stuck-to-the-left-edge bug) in three templates;
+  the platformer's terminal-velocity clamp caught POSITIVE velocities (unsigned
+  CMP), killing every jump within one frame; sports' paddle axis was inverted vs
+  the kernel's Y convention and RESBL was never strobed (the ball NEVER moved
+  horizontally — per-frame div-15 + HMBL positioning added); racing re-randomizes
+  both lanes on crash; shmup aliens reaching the cannon reset the wave.
+- **Atari 7800**: the SWCHA joystick bit defines were exactly REVERSED on every
+  template (up/down steered left/right; sports' left/right moved the paddle
+  vertically). Plus speed tuning (platformer movement + jump, puzzle fall rate,
+  sports serve).
+- **Platformers**: GBA fell through every platform (the `blocked_below` gate
+  only matched a 1px window at 20px/frame fall speeds); SNES platforms are now
+  visibly drawn on the scrolled text layer (were invisible collision rects);
+  Lynx landing uses a crossing test (exact-equality check tunnelled); C64
+  `render_view` rewritten ~20x faster (a per-CELL platform scan + 16-bit modulo
+  cost ~2s per 8px scroll step at 1MHz — froze the game and ate jump presses);
+  NES player is red (was sky-blue on sky-blue) and moves 2px/frame; GB/GBC jump
+  height tamed.
+- **GBA sports "never starts"**: `tte_printf` (broken in this libtonc — the
+  documented GBA-1 issue) ran every frame and crashed with an undefined-
+  instruction exception on iteration 1. Replaced with the `tte_write` digit path
+  the other templates already use.
+- **SNES**: each genre now gets a distinct backdrop tint (every scaffold shipped
+  the same blue checkered wallpaper).
+- **Sound everywhere**: every scaffold now has a continuous background-music
+  loop plus audible SFX, verified per platform by recording + RMS analysis.
+  Genesis/Lynx tick a melody inside `sfx_update()` (no template wiring; Lynx
+  voices 64→100), NES adds a triangle-channel melody to `nes_runtime`, PCE a
+  ch5 melody with corrected volume (the 5-bit field is ~-1.5dB/step from 31 —
+  the old 13 was -27dB, near-silence; the shmup SFX are maxed), and the SMS/GG
+  3-voice tracker that already shipped is now actually STARTED by all 11
+  templates. **MSX root cause**: `msx_crt0.s` had the same `_INITIALIZER`-in-RAM
+  bug fixed for SMS/GG (every `static x = N` booted 0) plus a BIOS-KEYINT
+  PSGADDR-latch race (PSG writes now DI/EI-guarded) — both fixed; this likely
+  also explains the reported MSX sprite flakiness.
+- **GB/GBC sports scanline tear**: the OAM DMA now fires at the vblank leading
+  edge (45 staged `oam_set` calls used to push it a third of the frame into
+  active display — the "horizontal line a 3rd of the way down" glitch).
+- Misc per-genre polish: PCE gameplay speeds, C64 racing clears the BASIC
+  startup text, C64 sports court widened to the 9-bit sprite range, MSX/Lynx
+  sports contrast, GBA puzzle well border.
+- **Verification**: all 69 existing platform×genre scaffolds were swept —
+  scaffold → project build → boot → render-health green, all 14 platforms
+  respond to input, and each platform's audio was captured and RMS-checked.
+  (Atari 2600 has no puzzle genre by design.)
+
+### Fixed/Added — the 0.27.0 NES RE feedback round (banked-NES rebuilds, A/B diff, token cuts)
+- **Banked NES `disasm({target:'project'})` now emits COMPLETE, working rebuild
+  glue** (the headline ask): a `HEADER` segment with the original 16 iNES bytes,
+  a per-bank `PRGn` segment wrapper for every bank, a multi-bank `nes_rebuild.cfg`
+  (switchable banks at `$8000`, fixed top bank at `$C000`, CHR wired when
+  present), and a `rebuild.json` `build()` call referencing all of it. Proven
+  byte-identical on a synthetic 4-bank mapper-2 ROM fed straight back to
+  `build()` — what previously took an hour of hand-written segments + cfg is
+  now zero glue. (NROM keeps the existing proven `inesHeader` one-call path.)
+- **`build({linkerConfigPath})`** reads the `.cfg` from disk so a large
+  multi-bank config never streams through context (and `rebuild.json` uses it).
+- **`disasm({target:'references'})` scans every PRG bank on banked NES** —
+  the old flat-blob-at-`$8000` disassembly returned `refsFound:0` on >32KB
+  ROMs. Refs now carry a `prgBank` tag, and `#$nn` immediates no longer count
+  as references (they're values, not addresses).
+- **`memory({op:'diffRuns'})`** — the A/B input-diff primitive: runs the same
+  start state twice under two different held inputs (savestate restore in
+  between) and returns only the divergent bytes, with run-A/run-B values for
+  small clusters. Replaces the save/run/dump/restore/run/dump/python-diff loop
+  (~6 calls + a 4KB context hit) with one call; live-verified isolating an NES
+  player-X byte.
+- **`memory({op:'read'/'readCart', outputPath, echo:false})`** returns just
+  `{path, bytes}` — no more ~4KB hex echo on a 2KB dump that was explicitly
+  routed to disk.
+- **`memory({op:'diff'})`**: summary clusters ≤8 bytes now include
+  `before`/`after` hex (no more falling back to `view:'raw'` for the values),
+  and `minDelta` filters RNG/counter wiggle.
+- **`input({op:'press'})` guarantees a released→pressed edge** (one released
+  frame first), so edge-triggered handlers (START pause) can't miss the press
+  when the button was already held.
+- **`breakpoint({on:'pc'})` misses now diagnose**: report `pcNow`, stop
+  suggesting `pressDuring` when input WAS supplied (wrong-address is then the
+  likely story), and point at `watch({on:'pc'})` coverage tracing.
+
+### Added — human co-drive detection: agents now KNOW when a human is playing in the playtest window
+The long-standing confusion ("they get confused when I try to play while they're
+coding") had a real mechanism: the playtest window shares the session's ONE
+emulator host with the agent, and its 60fps tick wrote the human's pad state —
+including all-zeros when nobody was pressing — over the agent's `input({op:'set'})`
+every frame. The agent had no signal a human was co-driving and no warning that
+its input was being clobbered. Now:
+- **The window only writes input while the human is actually pressing** (pad,
+  keyboard, or rewind-scrub), plus one release write after they let go. An idle
+  window no longer silently clobbers the agent's held input. The human still wins
+  the instant they press.
+- **The window tracks human activity** ("pressed within the last ~2 s" ≈ 120
+  ticks) and exposes it: `catalog({op:'status'})` reports `playtestWindowOpen` +
+  `humanInputActive` (+ `framesSinceHumanInput`), and `playtest({op:'status'})`
+  reports the same.
+- **`frame({op:'step'/'stepAndShot'})` and `input(set/press/sequence/navigate)`
+  responses carry a `humanCoDriveWarning`** while the human is actively playing,
+  telling the agent the conflict is happening NOW and pointing at the escape
+  hatches: `host({op:'pause'})` to inspect frozen, or a second session
+  (different `x-romdev-session` = fully isolated emulator) for deterministic work.
+- The playtest tool's FOOTGUN doc now describes the real contract (real-time
+  stepping always races; input only clobbered while the human presses).
+
+### Changed — `screenshot` scale docs: native is the accurate default, upscale adds no detail
+The `scale` param's docs oversold integer UPscaling as making tiny handheld shots
+"legible." That was misleading: nearest-neighbor upscale just duplicates pixels —
+it adds **no information** the native frame doesn't already have, costs more image
+tokens, and since VLM vision encoders resize every input to their own fixed
+resolution it may not change what the model sees (and can slightly degrade it via a
+bicubic downscale of stretched pixels). Reworded the param + tool description to
+lead with **native (`scale:1`, the default) = perfect pixels = the accurate
+representation**, keep the genuinely-useful DOWNscale (`<1`, fewer tokens for
+"did it change?" checks), and frame upscale honestly as a last resort for clients
+that can't zoom a small image. (No behavior change — `scale` was already opt-in and
+defaulted to native; this is the docs telling the truth about it.)
+(Committed during the 0.27.0 cycle but AFTER 0.27.0 published — ships in 0.28.0.)
+
+## 0.27.0
+
+### Added — `breakpoint(on:'pc', captureMemory:[…])` reads named RAM at the hit
+Completes item 2 of the NES Rygar report. 0.26.0 shipped `registersAtHit` (the
+break-instant register file) but not the memory half. Now `breakpoint(on:'pc')`
+takes `captureMemory:[{region,offset,length,label}]` and returns those reads inline
+as `capturedMemory`, so register + RAM inspection at a PC collapses into ONE call —
+no follow-up `cpu`/`memory` round trips. `registersAtHit` is the true break instant
+(core snapshot); `capturedMemory` reflects the routine's RAM side effects for the
+hit frame (stable + what RE needs), documented as such.
+
+## 0.26.0
+
+### Fixed — NES `breakpoint(on:'pc')` now returns reliable break-instant registers
+An agent RE'ing NES Rygar found that after a `pc` breakpoint hit, a follow-up
+`cpu({op:'read'})` returned the **idle-loop PC**, not the breakpoint instruction —
+the documented "break, then read the live register file" workflow gave end-of-frame
+state. Root cause: fceumm drains the cycle budget on hit but `retro_run` still
+finishes the frame, so the live X6502 registers are clobbered before the host reads
+them (the schema's "CPU is FROZEN at this instruction" was wrong for NES).
+- **fceumm core rebuild** (romdev-core-fceumm 0.8.0): the PC-break handler now
+  SNAPSHOTS A/X/Y/P/S at the hit instant, exposed via `romdev_pcbreak_get`.
+- **`breakpoint(on:'pc')` returns `registersAtHit`** — the reliable break-instant
+  register file. The schema + hit note now steer to it and explicitly warn that a
+  live `cpu({op:'read'})` after a hit is end-of-frame state on fceumm. (The
+  `captureMemory` companion that reads named RAM inline at the hit landed in 0.27.0.)
+- **NES `cpu({op:'read'})` core-internal fields relabeled** (item 3): `DB`,
+  `IRQlow`, `tcount`, `count` are fceumm internals (data-bus latch / IRQ bitmask /
+  cycle counters), not 6502 registers — moved out of `registers` into a labeled
+  `coreInternal` object so they're not misread as CPU state.
+
+### Added — `/livestream` shows the SYSTEM (platform) on every tool call + frame
+A human watching `/livestream` on a multi-agent server saw the session id + tool
+name, but not WHICH console each call/frame belonged to. Every observer event now
+carries `platform` (the session host's loaded system — nes, genesis, …), surfaced
+as a badge on the log row and the frame card. Wired on BOTH transports (the MCP
+observer middleware and the REST tool registry), resolved AFTER the handler runs so
+a `loadMedia` / `build({output:'run'})` that sets the platform mid-call labels its
+own frame correctly. Null until a ROM is loaded.
+
+## 0.25.0
+
+### Added — C64 input scripting + verification (RE startup-flow telemetry)
+Follow-up to the 0.24.0 C64 keyboard work: an agent RE'ing C64 Uridium could now
+press keys, but couldn't (a) script a keyboard+joystick startup TIMELINE in one
+call, or (b) tell whether a non-responsive key reached VICE at all. Both added — no
+core rebuild (the `c64_cia1_regs` region + key matrix already existed):
+- **`recordSession` `inputScript[].keys`** — hold C64 keyboard keys from a frame
+  until the next entry, interleaved with joystick `ports`, in one deterministic
+  timeline (e.g. `{atFrame:0,keys:['f1']},{atFrame:30,ports:[{b:true}]},
+  {atFrame:60,keys:['run/stop']},{atFrame:90,keys:[]}`). `ports` is now optional
+  (a step may set just keys). Unknown keys are **rejected with a clear error**, not
+  silently ignored.
+- **`input({op:'pressKey', verify:true})`** — also samples CIA1 **`$DC00`/`$DC01`**
+  (the keyboard/joystick scan ports the KERNAL reads) **before / during (key held)
+  / after**, plus matrix coords + active joyport. Lets you distinguish "my key
+  never reached VICE" (`before==during`) from "VICE saw it but the game ignored it"
+  (they differ, no reaction) when a C64 game doesn't respond.
+
+### Changed — `scaffold` no longer echoes the vendored toolchain manifest
+`scaffold({op:'project'|'game'})` used to return a flat `files[]` of EVERY written
+file — including the toolchain copies (35 of 44 entries on NES, **173 of 264 on
+GBA**, ~270 on SGDK Genesis) that an agent never touches. Across a matrix run (one
+game × every genre × every platform) that was ~100 KB of pure vendored-path lists
+in context with zero decision value. Now the response is a compact receipt:
+- `files` — only the project-**OWNED** files you edit (main source, runtime, crt0,
+  cfg, README).
+- `fileCount` (total written) + `vendorFileCount` (the summarized vendored copies,
+  on disk if you ever need them).
+- `verbose:true` restores the full flat list as `allFiles`.
+
+"Owned" is classified by what a file **is**, not just a `vendor/` prefix — so it
+correctly excludes the SDK header trees the GBA (libtonc `include/`+`sysinclude/`)
+and Genesis (SGDK `include/`) toolchains drop OUTSIDE `vendor/`, plus prebuilt
+`crt*.o` / `*.a` / `*.lib`. (The initial fix used a `vendor/`-prefix denylist and
+missed exactly those two SDK platforms — caught + fixed via a 0.24.0 matrix-run
+report. GBA dropped 173→9 owned, Genesis 82→13.) Mirrors the `inline`/`outputPath`
+choose-your-payload pattern the snippets op already had.
+
+### Changed — scaffold README + `nextStep` lead with `build({output:'project'})`
+The generated project README and the scaffold's `nextStep` now lead with the
+one-call **`build({output:'project', platform, path, outputPath})`** form (infers
+toolchain/crt0/linker from the directory — no `sourcesPaths`/`includePaths`/
+`linkerConfig` to hand-specify), and demote the verbose `output:'run'` + manifest
+form to a collapsed "compiling edited loose source" alternative. The project-dir
+build was already the easier path; now it's the one a fresh agent copies first.
+
+### Fixed — SMS shmup + Atari 7800 sports scaffolds rendered with wrong colors
+Both built and booted but looked broken (a 0.24.0 matrix report flagged them):
+- **SMS shmup** rendered the starfield as blue/**GREEN** striped bands. The BG
+  palette had colour 1 = `0x08`, which in SMS 2-2-2 BGR is green (G bits), not the
+  "deep space blue" the comment claimed. Fixed to a pure-blue depth gradient
+  (`0x10/0x20/0x30`) — the bands now read as space, dominant colour went green
+  `#00aa00` → blue `#0000ad`.
+- **Atari 7800 sports** rendered a near-black playfield that looked dead. Two MARIA
+  colour-byte bugs: the court walls used `0x48` (hue 4 = RED → **pink**, not the
+  intended blue) and the court floor was `0x00` (black, indistinguishable from a
+  blank screen). Fixed to blue walls (`0x8A`, hue 8) + a dark-green court floor
+  (`0xB4`) — now reads as an actual court (dominant black → green `#008221`).
+
+Both verified by screenshot + `frame({op:'verify'})`. (These were colour-value
+bugs in the scaffold templates, not the render pipeline.)
+
+### Removed — `catalog({op:'whatsNew'})` + the old→new tool rename table
+`whatsNew` returned a 125-entry map of pre-1.0 renamed tool names (plus, until now,
+~1.4k tokens of inlined CHANGELOG prose) so an agent resuming an old handoff could
+re-map a tool that had moved. The pre-1.0 consolidation is long settled — the old
+names are git history, and no running agent carries them — so maintaining a
+forever-growing rename record (and risking it landing in context) wasn't worth it.
+Dropped the op, the `tool-manifest.js` map, and its tests. An agent that hits an
+unknown tool name now just reads the current surface (`catalog({op:'categories'})`
+or the tool list); full release notes remain in CHANGELOG.md for humans.
+
 ## 0.24.0
 
 ### Added — C64 keyboard + joyport input (VICE core patch)

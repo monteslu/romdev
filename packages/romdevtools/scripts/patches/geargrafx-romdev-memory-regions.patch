@@ -1,8 +1,8 @@
 diff --git a/platforms/libretro/libretro.cpp b/platforms/libretro/libretro.cpp
-index 131c841..88467be 100644
+index 131c841..e5aa85e 100644
 --- a/platforms/libretro/libretro.cpp
 +++ b/platforms/libretro/libretro.cpp
-@@ -447,6 +447,359 @@ bool retro_unserialize(const void *data, size_t size)
+@@ -447,6 +447,438 @@ bool retro_unserialize(const void *data, size_t size)
      return core->LoadState(reinterpret_cast<const u8*>(data), size);
  }
  
@@ -128,6 +128,89 @@ index 131c841..88467be 100644
 +    romdev_pc_wd_limit = limit;
 +    romdev_pc_wd_count = 0;
 +    romdev_pc_watchdog = 0;
++}
++
++/* romdev at-hit register snapshot. The capture sites live in the CPU/memory
++ * inlines (huc6280_inline.h / memory_inline.h); the storage + the value-based
++ * setter live HERE so the inlines only need extern decls. out[0]=kind (0=none
++ * 1=pc-break/step 2=watchdog 3=write-watch 4=read-watch), out[1]=count(19),
++ * out[2..20]=regs in the romdev regId order ([0]=A [1]=X [2]=Y [3]=P [4]=S
++ * [16]=PC-of-executing-instruction [18]=S). `clear` resets the kind. */
++unsigned int romdev_snap_regs[19];
++int          romdev_snap_kind = 0;
++unsigned int romdev_huc_instr_pc = 0xFFFFFFFF;
++
++/* romdev interrupt block (pure-call primitive — gates HandleIRQ in
++ * huc6280_inline.h). */
++int romdev_irq_block = 0;
++void romdev_irqblock_set(int on)
++{
++    romdev_irq_block = on ? 1 : 0;
++}
++
++/* romdev VRAM-port copy trace (hook in huc6270_inline.h's ProcessVramWrite —
++ * the CPU's VWR data-port path). vaddr is the HuC6270 VRAM WORD address.
++ * set(lo,hi,enabled) arms + clears; get drains [vaddr,pc,val] triples,
++ * out2 = [totalSeen, stored]. */
++#define ROMDEV_VW_CAP 1024
++unsigned int romdev_vw_lo      = 0;
++unsigned int romdev_vw_hi      = 0;
++int          romdev_vw_enabled = 0;
++static unsigned int  romdev_vw_addrs[ROMDEV_VW_CAP];
++static unsigned int  romdev_vw_pcs  [ROMDEV_VW_CAP];
++static unsigned char romdev_vw_vals [ROMDEV_VW_CAP];
++static unsigned int  romdev_vw_count  = 0;
++static unsigned int  romdev_vw_stored = 0;
++void romdev_vw_log(unsigned int vaddr, unsigned int pc, unsigned char val)
++{
++    romdev_vw_count++;
++    if (romdev_vw_stored < ROMDEV_VW_CAP) {
++        romdev_vw_addrs[romdev_vw_stored] = vaddr;
++        romdev_vw_pcs  [romdev_vw_stored] = pc;
++        romdev_vw_vals [romdev_vw_stored] = val;
++        romdev_vw_stored++;
++    }
++}
++void romdev_vramwatch_set(unsigned int lo, unsigned int hi, int enabled)
++{
++    romdev_vw_lo = lo; romdev_vw_hi = hi;
++    romdev_vw_enabled = enabled ? 1 : 0;
++    romdev_vw_count = 0; romdev_vw_stored = 0;
++}
++unsigned int romdev_vramwatch_get(unsigned int *out, unsigned int max, unsigned int *out2)
++{
++    unsigned int i, n = romdev_vw_stored;
++    if (out2) { out2[0] = romdev_vw_count; out2[1] = romdev_vw_stored; }
++    if (!out) return 0;
++    if (n > max) n = max;
++    for (i = 0; i < n; i++) {
++        out[i*3 + 0] = romdev_vw_addrs[i];
++        out[i*3 + 1] = romdev_vw_pcs[i];
++        out[i*3 + 2] = romdev_vw_vals[i];
++    }
++    return n;
++}
++void romdev_huc_snap_vals(unsigned int a, unsigned int x, unsigned int y, unsigned int p, unsigned int s, int kind)
++{
++    int i;
++    for (i = 0; i < 19; i++) romdev_snap_regs[i] = 0;
++    romdev_snap_regs[0]  = a;
++    romdev_snap_regs[1]  = x;
++    romdev_snap_regs[2]  = y;
++    romdev_snap_regs[3]  = p;
++    romdev_snap_regs[4]  = s;
++    romdev_snap_regs[16] = romdev_huc_instr_pc;
++    romdev_snap_regs[18] = s;
++    romdev_snap_kind = kind;
++}
++void romdev_regsnap_get(unsigned int *out, int clear)
++{
++    int i;
++    if (!out) return;
++    out[0] = (unsigned int)romdev_snap_kind;
++    out[1] = 19;
++    for (i = 0; i < 19; i++) out[2 + i] = romdev_snap_regs[i];
++    if (clear) romdev_snap_kind = 0;
 +}
 +
 +/* ---- romdev RE primitives round 2 (HuC6280 = 65C02 superset) -----------
@@ -358,7 +441,7 @@ index 131c841..88467be 100644
  void *retro_get_memory_data(unsigned id)
  {
      switch (id)
-@@ -457,6 +810,18 @@ void *retro_get_memory_data(unsigned id)
+@@ -457,6 +889,18 @@ void *retro_get_memory_data(unsigned id)
              return core->GetMemory()->GetWorkingRAM();
          case RETRO_MEMORY_VIDEO_RAM:
              return (u8*)core->GetHuC6270_1()->GetVRAM();
@@ -377,7 +460,7 @@ index 131c841..88467be 100644
      }
  
      return NULL;
-@@ -472,6 +837,18 @@ size_t retro_get_memory_size(unsigned id)
+@@ -472,6 +916,18 @@ size_t retro_get_memory_size(unsigned id)
              return core->GetMemory()->GetWorkingRAMSize();
          case RETRO_MEMORY_VIDEO_RAM:
              return HUC6270_VRAM_SIZE * 2;
@@ -435,11 +518,46 @@ index 3caa541..11767c8 100644
          }
          while (!stop);
  
+diff --git a/src/huc6270_inline.h b/src/huc6270_inline.h
+index 018fd86..0fd8df9 100644
+--- a/src/huc6270_inline.h
++++ b/src/huc6270_inline.h
+@@ -26,6 +26,14 @@
+ #include "huc6280.h"
+ #include "trace_logger.h"
+ 
++/* romdev VRAM-port copy trace (state + exports in the libretro glue). */
++extern "C" {
++extern unsigned int romdev_vw_lo, romdev_vw_hi;
++extern int          romdev_vw_enabled;
++extern void         romdev_vw_log(unsigned int vaddr, unsigned int pc, unsigned char val);
++extern unsigned int romdev_huc_instr_pc;
++}
++
+ INLINE u16 HuC6270::Clock()
+ {
+     if (m_sat_transfer_pending > 0)
+@@ -225,6 +233,15 @@ INLINE void HuC6270::ProcessVramWrite()
+             m_register[HUC6270_REG_MAWR],
+             false);
+         m_vram[m_register[HUC6270_REG_MAWR] & 0x7FFF] = m_register[HUC6270_REG_VWR];
++        {
++            /* romdev VRAM-port copy trace — log {vram word addr, executing
++             * instruction PC, low byte} when the write lands in the watched
++             * window. State + exports in the libretro glue; extern "C" decls
++             * at the top of this header. */
++            unsigned int romdev_vaddr = m_register[HUC6270_REG_MAWR] & 0x7FFF;
++            if (romdev_vw_enabled && romdev_vaddr >= romdev_vw_lo && romdev_vaddr <= romdev_vw_hi)
++                romdev_vw_log(romdev_vaddr, romdev_huc_instr_pc, (unsigned char)(m_register[HUC6270_REG_VWR] & 0xFF));
++        }
+     }
+ 
+     m_register[HUC6270_REG_MAWR] += k_huc6270_read_write_increment[(m_register[HUC6270_REG_CR] >> 11) & 0x03];
 diff --git a/src/huc6280_inline.h b/src/huc6280_inline.h
-index c2e449d..f9c70fd 100644
+index c2e449d..1e0cf7e 100644
 --- a/src/huc6280_inline.h
 +++ b/src/huc6280_inline.h
-@@ -28,8 +28,97 @@
+@@ -28,8 +28,137 @@
  #include "memory.h"
  #include "trace_logger.h"
  
@@ -475,10 +593,51 @@ index c2e449d..f9c70fd 100644
 +extern int           romdev_cov_enabled;
 +extern unsigned int  romdev_cov_lo, romdev_cov_hi;
 +extern void          romdev_cov_log(unsigned int pc);
++/* romdev at-hit register snapshot (defined in the libretro glue). Layout = the
++ * romdev_getreg regId order: [0]=A [1]=X [2]=Y [3]=P [4]=S [16]=PC of the
++ * EXECUTING instruction's first byte [18]=S. kind: 1=pc-break/step,
++ * 2=watchdog, 3=write-watch, 4=read-watch. romdev_huc_instr_pc is latched at
++ * dispatch in RunInstruction — m_PC advances past operands mid-instruction. */
++extern unsigned int  romdev_snap_regs[19];
++extern int           romdev_snap_kind;
++extern unsigned int  romdev_huc_instr_pc;
++/* romdev INTERRUPT BLOCK — the pure-call primitive: while set, IRQ dispatch
++ * is suppressed (pending bits stay pending), so a callSubroutine-driven
++ * routine cannot be hijacked by the game's VDC/timer handlers. */
++extern int           romdev_irq_block;
 +}
++
++#define ROMDEV_HUC_SNAP(kind_) do { \
++    int snap_i_; \
++    for (snap_i_ = 0; snap_i_ < 19; snap_i_++) romdev_snap_regs[snap_i_] = 0; \
++    romdev_snap_regs[0]  = (unsigned int)m_A.GetValue(); \
++    romdev_snap_regs[1]  = (unsigned int)m_X.GetValue(); \
++    romdev_snap_regs[2]  = (unsigned int)m_Y.GetValue(); \
++    romdev_snap_regs[3]  = (unsigned int)m_P.GetValue(); \
++    romdev_snap_regs[4]  = (unsigned int)m_S.GetValue(); \
++    romdev_snap_regs[16] = romdev_huc_instr_pc; \
++    romdev_snap_regs[18] = (unsigned int)m_S.GetValue(); \
++    romdev_snap_kind = (kind_); \
++  } while (0)
 +
  INLINE u32 HuC6280::RunInstruction(bool* instruction_completed)
  {
++    /* romdev: once a breakpoint/watchdog hit has frozen this CPU, KEEP it
++     * frozen — the frame loop re-enters RunInstruction, which would resume
++     * execution and drift the registers away from the hit. (The frame loop
++     * drains on romdev_pc_hit, so returning 0 is the handled freeze path.) */
++    if (romdev_pc_hit)
++    {
++        if (IsValidPointer(instruction_completed))
++            *instruction_completed = true;
++        return 0;
++    }
++
++    /* romdev: m_PC right now is the first byte of the instruction about to be
++     * dispatched — latch it for the mid-instruction hooks (Memory::Read/Write
++     * watchpoints see an operand-advanced PC). */
++    romdev_huc_instr_pc = (unsigned int)m_PC.GetValue();
++
 +    /* romdev PC coverage log (discovery): record each DISTINCT in-window PC about
 +     * to execute. Checked BEFORE the opcode fetch, so m_PC is the address of the
 +     * instruction about to run. Cheap when disabled (one int test). */
@@ -499,6 +658,7 @@ index c2e449d..f9c70fd 100644
 +        if (++romdev_pc_wd_count >= romdev_pc_wd_limit)
 +        {
 +            romdev_pc_last_pc = m_PC.GetValue();   /* leave PC frozen exactly here */
++            ROMDEV_HUC_SNAP(2);   /* freeze the register file AT the stop */
 +            romdev_pc_hit = 1;
 +            romdev_pc_watchdog = 1;
 +            if (IsValidPointer(instruction_completed))
@@ -522,6 +682,7 @@ index c2e449d..f9c70fd 100644
 +                         && (unsigned int)m_PC.GetValue() == romdev_pc_addr))
 +        {
 +            romdev_pc_last_pc = m_PC.GetValue();   /* leave PC frozen exactly here */
++            ROMDEV_HUC_SNAP(1);   /* freeze the register file AT the hit */
 +            romdev_pc_hit = 1;
 +            romdev_pc_hits++;
 +            romdev_pc_step = 0;                    /* one-shot */
@@ -534,6 +695,15 @@ index c2e449d..f9c70fd 100644
  #if !defined(GG_DISABLE_DISASSEMBLER)
      m_memory_breakpoint_hit = false;
      m_cpu_breakpoint_hit = false;
+@@ -72,7 +201,7 @@ INLINE u32 HuC6280::RunInstruction(bool* instruction_completed)
+     }
+ #endif
+ 
+-    if((m_irq_pending || IS_SET_BIT(m_interrupt_request_register, 2)) && (m_transfer_state == 0))
++    if((m_irq_pending || IS_SET_BIT(m_interrupt_request_register, 2)) && (m_transfer_state == 0) && !romdev_irq_block)
+         HandleIRQ();
+ 
+     DisassembleNextOPCode();
 diff --git a/src/memory.h b/src/memory.h
 index d10af22..2a089c8 100644
 --- a/src/memory.h
@@ -547,10 +717,10 @@ index d10af22..2a089c8 100644
      bool TryPeek(u16 address, u8 bank, u8* value);
      void Write(u16 address, u8 value, bool block_transfer = false);
 diff --git a/src/memory_inline.h b/src/memory_inline.h
-index 62659bf..002e2fe 100644
+index 62659bf..e6cf3b2 100644
 --- a/src/memory_inline.h
 +++ b/src/memory_inline.h
-@@ -33,7 +33,49 @@
+@@ -33,7 +33,55 @@
  #include "sf2_mapper.h"
  #include "arcade_card_mapper.h"
  
@@ -579,19 +749,25 @@ index 62659bf..002e2fe 100644
 +extern unsigned int  romdev_wp_last_pc;
 +extern unsigned char romdev_wp_last_val;
 +extern unsigned int  romdev_wp_hits;
++/* at-hit register snapshot — defined in libretro.cpp; PC reported is the
++ * EXECUTING instruction's first byte (latched at dispatch in RunInstruction). */
++extern unsigned int  romdev_huc_instr_pc;
++extern void          romdev_huc_snap_vals(unsigned int a, unsigned int x, unsigned int y, unsigned int p, unsigned int s, int kind);
 +}
 +
  INLINE u8 Memory::Read(u16 address, bool block_transfer)
 +{
 +    u8 romdev_rd_value = ReadInternal(address, block_transfer);
 +    if (romdev_rd_enabled && (unsigned int)address == romdev_rd_addr) {
-+        romdev_rd_last_pc = m_huc6280->GetState()->PC->GetValue();
++        HuC6280::HuC6280_State* romdev_st = m_huc6280->GetState();
++        romdev_rd_last_pc = romdev_huc_instr_pc;
 +        romdev_rd_last_val = romdev_rd_value;
 +        romdev_rd_hits++;
++        romdev_huc_snap_vals(romdev_st->A->GetValue(), romdev_st->X->GetValue(), romdev_st->Y->GetValue(), romdev_st->P->GetValue(), romdev_st->S->GetValue(), 4);
 +    }
 +    if (romdev_range_enabled && (romdev_range_mode & 1)
 +        && (unsigned int)address >= romdev_range_lo && (unsigned int)address <= romdev_range_hi) {
-+        romdev_range_log(m_huc6280->GetState()->PC->GetValue(), (unsigned int)address, romdev_rd_value);
++        romdev_range_log(romdev_huc_instr_pc, (unsigned int)address, romdev_rd_value);
 +    }
 +    return romdev_rd_value;
 +}
@@ -600,7 +776,7 @@ index 62659bf..002e2fe 100644
  {
  #if defined(GG_TESTING)
      return m_test_memory[address];
-@@ -207,6 +249,20 @@ INLINE void Memory::Write(u16 address, u8 value, bool block_transfer)
+@@ -207,6 +255,22 @@ INLINE void Memory::Write(u16 address, u8 value, bool block_transfer)
      return;
  #endif
  
@@ -609,13 +785,15 @@ index 62659bf..002e2fe 100644
 +     * findWriter are supported on PCE (round 1 only had a read watch). */
 +    if (romdev_range_enabled && (romdev_range_mode & 2)
 +        && (unsigned int)address >= romdev_range_lo && (unsigned int)address <= romdev_range_hi) {
-+        romdev_range_log(m_huc6280->GetState()->PC->GetValue(), (unsigned int)address, value);
++        romdev_range_log(romdev_huc_instr_pc, (unsigned int)address, value);
 +    }
 +    /* romdev WRITE watchpoint (findWriter) — single watched address. */
 +    if (romdev_wp_enabled && (unsigned int)address == romdev_wp_addr) {
-+        romdev_wp_last_pc  = m_huc6280->GetState()->PC->GetValue();
++        HuC6280::HuC6280_State* romdev_st = m_huc6280->GetState();
++        romdev_wp_last_pc  = romdev_huc_instr_pc;
 +        romdev_wp_last_val = value;
 +        romdev_wp_hits++;
++        romdev_huc_snap_vals(romdev_st->A->GetValue(), romdev_st->X->GetValue(), romdev_st->Y->GetValue(), romdev_st->P->GetValue(), romdev_st->S->GetValue(), 3);
 +    }
 +
      GG_CHECK_MEMORY_BREAKPOINT(m_huc6280, HuC6280::HuC6280_BREAKPOINT_TYPE_CPU_ADDRESS, address, false);

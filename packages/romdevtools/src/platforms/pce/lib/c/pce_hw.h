@@ -103,7 +103,18 @@ void disp_enable(void);   /* VDC R5: BG + SPR + VBlank IRQ on at once           
 void vblank_irq_enable(void); /* just the VBlank IRQ bit (waitvsync needs it)        */
 void load_tiles(u16 vram, const u16 *src, u16 n);  /* alias of vram_write (tiles) */
 void set_sprite(u8 slot, u16 x, u16 y, u16 pattern, u8 palette); /* fill shadow SATB */
+void set_sprite_ex(u8 slot, u16 x, u16 y, u16 pattern, u8 palette, u16 attr_ex);
 void satb_dma(void);                            /* DMA shadow SATB -> VDC (R19)    */
+
+/* attr_ex bits for set_sprite_ex() — the HuC6270 large-sprite size + flip
+ * bits in SATB word3. A 32-wide sprite needs a 2-aligned pattern code, 32x32
+ * needs 4-aligned, 32x64 needs 8-aligned; the data is consecutive 16x16 cells
+ * (left-to-right, then down). See the set_sprite_ex() comment in pce_video.c. */
+#define SPR_CGX_32  0x0100  /* width 32px  (two cells side by side)        */
+#define SPR_CGY_32  0x1000  /* height 32px (two cell rows)                 */
+#define SPR_CGY_64  0x3000  /* height 64px (four cell rows)                */
+#define SPR_XFLIP   0x0800  /* mirror horizontally                          */
+#define SPR_YFLIP   0x8000  /* mirror vertically                            */
 
 /* The shadow SATB lives in VRAM at this word address; satb_dma() points the VDC
  * SATB-DMA source (R19) here. Pattern base for tiles is your choice; sprites
@@ -126,6 +137,7 @@ u8   pce_joy_read(void);   /* read pad 1 -> clean bitmask (PCE_JOY_* below)  */
 
 /* ---- sound helpers (pce_sound.c) ----------------------------------------- */
 void psg_tone(u8 chan, u16 freq, u8 vol); /* play a wavetable tone (vol 0..31) */
-void psg_off(u8 chan);                    /* silence + disable a channel        */
+void psg_off(u8 chan);
+void psg_music_tick(void);    /* call once per frame (scaffolds do) */                    /* silence + disable a channel        */
 
 #endif /* PCE_HW_H */

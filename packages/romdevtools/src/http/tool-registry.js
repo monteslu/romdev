@@ -17,7 +17,8 @@
 import { z } from "zod";
 import { registerTools } from "../mcp/tools/index.js";
 import { withClearToolErrors } from "../mcp/util.js";
-import { observer, summarizeForLog, extractImages } from "../observer/bus.js";
+import { observer, summarizeForLog, extractImages, pushObserverFrame } from "../observer/bus.js";
+import { getHostOrNull } from "../mcp/state.js";
 
 /**
  * Build a tool registry for a given session key. Each entry's handler closes
@@ -94,11 +95,17 @@ export async function runTool(tool, args, sessionKey) {
   // /livestream view updates for HTTP/skill tool calls too (the MCP path wraps
   // server.tool with installObserverMiddleware; the HTTP path runs handlers
   // directly, so we emit here — the single HTTP execution chokepoint).
+  // Which console this session's host currently has loaded — shown on every
+  // livestream event so a human watching a multi-agent server sees the SYSTEM
+  // (nes, genesis, …) alongside the tool, not just the session id. Best-effort.
+  let platform = null;
+  try { platform = getHostOrNull(sessionKey)?.status?.platform ?? null; } catch { /* none yet */ }
   const emit = (extra) => {
     try {
       observer.push({
         type: "call",
         sessionKey: sessionKey ?? "http",
+        platform,
         ts: startedAt,
         tool: tool.name,
         args: summarizeForLog(a),
@@ -122,6 +129,10 @@ export async function runTool(tool, args, sessionKey) {
   }
   try {
     const r = await tool.handler(a, {});
+    // Re-resolve the platform AFTER the handler: a call like loadMedia /
+    // build({output:'run'}) sets it during the call, so the post-call value
+    // correctly labels this call's event + frame (the pre-call value was null).
+    try { platform = getHostOrNull(sessionKey)?.status?.platform ?? platform; } catch { /* keep */ }
     // Unwrap the MCP content envelope to plain JSON for HTTP clients.
     if (r && r.isError) {
       const text = r.content?.[0]?.text ?? "tool error";
@@ -140,17 +151,21 @@ export async function runTool(tool, args, sessionKey) {
     // Strip both from the caller-visible result before it's serialized.
     let sidebandImages = [];
     let frameProvider = null;
+    let frameCaption = null;
     if (r && typeof r === "object") {
       if (Array.isArray(r._observerImages)) { sidebandImages = r._observerImages; delete r._observerImages; }
       if (typeof r._observerFrameProvider === "function") { frameProvider = r._observerFrameProvider; delete r._observerFrameProvider; }
+      if (typeof r._observerFrameCaption === "string") { frameCaption = r._observerFrameCaption; delete r._observerFrameCaption; }
     }
     if (frameProvider) {
-      setImmediate(() => {
-        try {
-          const img = frameProvider();
-          if (img) observer.push({ type: "call_frame", sessionKey: sessionKey ?? "http", ts: startedAt, tool: tool.name, images: [img] });
-        } catch { /* livestream is best-effort; never affects the caller */ }
-      });
+      // Throttled to one per 2s per (session, tool), trailing-edge — same
+      // policy as the MCP path (bus.js pushObserverFrame). Platform is
+      // re-resolved at emit time (loadMedia sets it DURING the call).
+      pushObserverFrame({
+        sessionKey, tool: tool.name, ts: startedAt, platform,
+        resolvePlatform: () => { try { return getHostOrNull(sessionKey)?.status?.platform ?? platform; } catch { return platform; } },
+        ...(frameCaption ? { caption: frameCaption } : {}),
+      }, frameProvider);
     }
     const inlineImages = extractImages(r);
     const images = inlineImages.length > 0 ? inlineImages : sidebandImages;

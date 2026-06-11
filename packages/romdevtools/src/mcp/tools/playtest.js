@@ -102,6 +102,48 @@ export function isPlaytestRunning(sessionKey) {
   return reconcileSession(sessionKey);
 }
 
+/**
+ * Human co-drive snapshot for one session: is a playtest window open, and has
+ * the HUMAN pressed anything (pad / keyboard / rewind-scrub) within the last
+ * ~2 s? Drives catalog({op:'status'}) and the co-drive warning attached to
+ * frame/input responses. Cheap, never throws; with no window everything is
+ * inactive. Frames are window ticks ≈ frames at 60fps real time.
+ * @param {string} sessionKey
+ * @returns {{windowOpen: boolean, humanInputActive: boolean, framesSinceHumanInput: number | null}}
+ */
+export function getPlaytestHumanStatus(sessionKey) {
+  if (!reconcileSession(sessionKey)) {
+    return { windowOpen: false, humanInputActive: false, framesSinceHumanInput: null };
+  }
+  const s = sessions.get(sessionKey);
+  return {
+    windowOpen: true,
+    humanInputActive: typeof s.humanInputActive === "function" ? !!s.humanInputActive() : false,
+    framesSinceHumanInput: typeof s.framesSinceHumanInput === "function" ? s.framesSinceHumanInput() : null,
+  };
+}
+
+/**
+ * The warning attached to frame({op:'step'/'stepAndShot'}) and input(set/press/
+ * sequence/navigate) responses while a human is co-driving this session's
+ * playtest window. null when there's no window or the human hasn't pressed
+ * recently — so the field only appears when there's a REAL conflict.
+ * @param {string} sessionKey
+ * @returns {string | null}
+ */
+export function humanCoDriveWarning(sessionKey) {
+  const st = getPlaytestHumanStatus(sessionKey);
+  if (!st.windowOpen || !st.humanInputActive) return null;
+  const ago = st.framesSinceHumanInput != null ? `~${st.framesSinceHumanInput} frames ago` : "moments ago";
+  return (
+    `A playtest window is open and the HUMAN last pressed buttons ${ago} — you are co-driving the same ` +
+    "emulator. While they press, the window's input overwrites yours each tick (the human wins), and its " +
+    "real-time 60fps loop races your frame-stepping (non-deterministic results). Either host({op:'pause'}) " +
+    "while you inspect (the window keeps rendering, frozen), do deterministic work in a SECOND session " +
+    "(a different x-romdev-session header = a fully isolated emulator), or wait for the human to stop."
+  );
+}
+
 export function registerPlaytestTools(server, z, sessionKey) {
   // op:'open' — open (or reuse) the SDL window for this session.
   async function ptOpen({ scale = 3, title, aspect = "tv" }) {
@@ -283,8 +325,14 @@ export function registerPlaytestTools(server, z, sessionKey) {
       // REPLACED by resetHost() on every runSource/loadMedia. Same object →
       // screenshot() and the window agree. Different object → they've diverged.
       const matches = !!windowHost && activeHost === windowHost;
+      const human = getPlaytestHumanStatus(sessionKey);
       return jsonContent({
         running: true,
+        // Is the human ACTIVELY playing right now (pressed within ~2 s)? While
+        // true, your input/setInput is overwritten each tick and real-time
+        // stepping races yours — pause, or use a second session.
+        humanInputActive: human.humanInputActive,
+        ...(human.framesSinceHumanInput != null ? { framesSinceHumanInput: human.framesSinceHumanInput } : {}),
         // What the HUMAN is looking at (the window's own host):
         windowMediaPath: windowHost?.status?.mediaPath ?? null,
         windowFrameCount: windowHost?.status?.frameCount ?? session.frameCount,
@@ -354,10 +402,14 @@ export function registerPlaytestTools(server, z, sessionKey) {
     "eyes (boots, renders, the feature is visible) — a window on a black screen/crash just wastes their attention. " +
     "BEST FOR diagnosing a USER-REPORTED bug: hand them the window, let them drive to the exact moment, then " +
     "inspect the SAME live host in real time (memory/watch/sprites/state). Every other tool keeps working against " +
-    "that live host while the window is open. FOOTGUN — the window's loop owns input AND stepping: each tick it " +
-    "rebuilds controller state from the human's gamepad+keyboard, calls setInput, then steps a frame, so your " +
-    "input({op:'set'}) is OVERWRITTEN on the next tick (the human wins). To inspect a moving state freeze it first: " +
-    "host({op:'pause'}) → read → host({op:'resume'}). Requires @kmamal/sdl. `scale`/`title`/`aspect` shape the window.\n" +
+    "that live host while the window is open. FOOTGUN — the window's loop steps the core in REAL TIME, and while " +
+    "the human is pressing (pad/keyboard) it writes their input each tick, overwriting yours — the human wins. " +
+    "(When the human is idle the window leaves your input({op:'set'}) alone, but its 60fps stepping still races " +
+    "your frame({op:'step'}).) You'll KNOW: frame/input responses carry `humanCoDriveWarning` while the human " +
+    "pressed within ~2s, and catalog({op:'status'})/playtest({op:'status'}) expose `humanInputActive`. To inspect " +
+    "a moving state freeze it first: host({op:'pause'}) → read → host({op:'resume'}); for deterministic stepping " +
+    "while the human plays, use a SECOND session (different x-romdev-session = fully isolated emulator). " +
+    "Requires @kmamal/sdl. `scale`/`title`/`aspect` shape the window.\n" +
     "• op:'stop' — close THIS session's window (the host stays loaded; other agents' windows unaffected).\n" +
     "• op:'status' — is a window open, what ROM/frame it shows, and `activeHostMatchesWindow` (false = a build/" +
     "loadMedia swapped the active host, so frame({op:'screenshot'}) no longer shows what the human sees — use op:'framebuffer').\n" +

@@ -160,6 +160,45 @@ Three layers:
 PVSnesLib's API is the path of least resistance. Roll your own SPC
 driver only when you really need the control.
 
+## "Music never starts (sfx works, sfx_init returned 0)"
+
+A command sent to the bundled snes_sfx driver IMMEDIATELY after
+`sfx_init()` returns can be silently swallowed. `sfx_init` returns the
+instant the SPC echoes the jump command, but the driver then spends
+~50 DSP port writes initialising before it seeds its command
+edge-detector from $2140. A `sfx_music_play()` issued inside that
+window becomes the SEED — no edge, no dispatch, music never starts.
+
+Symptoms via the debug tools: `getAudioState({chip:'dsp'})` shows
+voice 1 with pitch 0 / env 0; ARAM $00 (prev_cmd) already equals your
+command byte while ARAM $01 (music_on) is 0.
+
+Fix: put one `WaitForVBlank()` between `sfx_init()` and the first
+`sfx_play`/`sfx_music_play` — a frame is thousands of SPC cycles, the
+driver is guaranteed to be in its command loop. The racing example does
+exactly this (see its `sfx_init` call site).
+
+## "My HDMA table stops landing / OAM gets corrupted" (HDMA channel fights the OAM DMA)
+
+A DMA channel cannot serve general-purpose DMA and HDMA in the same
+frame — and PVSnesLib's runtime OWNS two channels for GP-DMA:
+
+- **channel 0** — `dmaCopyVram` and friends (console text upload,
+  `oamInitGfxSet`, `consoleVblank`)
+- **channel 7** — the VBlank ISR's OAM upload (vblank.asm rewrites
+  $4370-$4375 EVERY NMI)
+
+Park an HDMA effect on channel 7 and it works for exactly zero frames:
+each NMI silently rewrites the channel's DMAP/BBAD/A1T with OAM-DMA
+parameters, so your per-scanline writes stop landing — and worse, the
+HDMA unit then feeds your table bytes into $2104 (OAM data). The
+failure is maddeningly partial: channels 1-6 keep working, so a
+multi-channel effect (e.g. a Mode 7 split) comes up ALMOST right with
+one register mysteriously stuck at a stale value.
+
+Fix: keep HDMA on channels 1-6. The Mode 7 racing example uses 2-6 and
+documents the assignment at its `road_hdma_on()`.
+
 ## "consoleDrawText output is corrupt / shifted"
 
 `consoleInitText(palnum, palsize, tilfont, palfont)` configures the
@@ -220,7 +259,7 @@ synthesizes a fallback `issues[]` entry with a hint. The idioms to avoid:
   crossed a bank boundary and the layout is wrong. Native interrupt vectors live
   at `$FFE4-$FFEE`, emulation vectors at `$FFF4-$FFFF` — keep your header/vector
   block where the layout expects it. Use
-  `scaffold({op:'snippets', platform:"snes", mode:"get", name:"lorom_header.asm"})`
+  `examples({op:'snippets', platform:"snes", mode:"get", snippetName:"lorom_header.asm"})`
   for the canonical layout (and `lorom_multibank.asm` for multi-bank).
 
 (This is the asar/asm path. The default PVSnesLib **C** path goes through

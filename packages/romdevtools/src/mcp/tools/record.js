@@ -34,7 +34,7 @@ export function registerRecordTools(server, z, sessionKey) {
   server.tool(
     "recordSession",
     "Run the loaded ROM for N frames, sampling screenshots and/or memory every sampleEvery frames. Returns a timeline the agent can analyze. Inputs are either held for the whole session (holdInputs) or scripted as {atFrame, ports} entries each held until the next (inputScript). " +
-    "Screenshots (includeScreenshots, default true): pass outputDir to write frame-<n>.png per sample (timeline gets screenshotPath), OR inline:true to embed screenshotBase64 per entry — one is required. Set includeScreenshots:false for memory-only runs. " +
+    "Screenshots (includeScreenshots, default true): every sampled frame ALWAYS streams to the human's /livestream (over REST or MCP, no flag needed). For the AGENT's response: pass outputDir to also write frame-<n>.png per sample (timeline gets screenshotPath), or inline:true to embed screenshotBase64 per entry (opt-in — NOT default, so image bytes don't flood your context). With neither, frames still go to /livestream and the response stays compact (just the timeline). Set includeScreenshots:false to skip capture entirely (memory-only runs). " +
     "Memory (memorySamples): accepts the full readMemory region set incl. hardware registers (nes_apu_regs, etc.); hex appears per-sample in the timeline. For dense sampling (sampleEvery:1 over a long loop, e.g. APU regs across a music loop) add memoryOutputPath to stream rows to NDJSON on disk and keep the hex OUT of context — the response returns a compact summary {path, rows, regions, valueRanges} instead.",
     {
       frames: z.number().int().min(1).max(36000).default(300).describe("Total frames to run."),
@@ -44,11 +44,12 @@ export function registerRecordTools(server, z, sessionKey) {
         .array(
           z.object({
             atFrame: z.number().int().min(0),
-            ports: z.array(inputShape).max(2),
+            ports: z.array(inputShape).max(2).optional(),
+            keys: z.array(z.string()).optional().describe("C64-ONLY: C64 keyboard keys held from this frame until the next entry (f1/f3/f5/f7, return, space, run/stop, a-z, 0-9, …). [] releases all held keys. Unknown keys are rejected with a clear error. Lets you script a keyboard+joystick startup timeline (e.g. {atFrame:0,keys:['f1']},{atFrame:30,ports:[{b:true}]},{atFrame:90,keys:['run/stop']}) in one call."),
           }),
         )
         .optional()
-        .describe("Per-frame input changes. Each entry sets the input at `atFrame` and holds it until the next entry."),
+        .describe("Per-frame input changes. Each entry sets the input at `atFrame` (joystick `ports` and/or C64 `keys`) and holds it until the next entry. Either field is optional — a step may set just keys, just ports, or both."),
       memorySamples: z
         .array(
           z.object({
@@ -61,18 +62,22 @@ export function registerRecordTools(server, z, sessionKey) {
         .optional()
         .describe("Memory regions to sample at each capture point. Accepts the full readMemory region set (incl. nes_apu_regs and other hardware registers). Tip: sampleEvery:1 + memoryOutputPath gives a per-frame telemetry stream (e.g. APU registers over a music loop) without flooding context with hex."),
       includeScreenshots: z.boolean().default(true).describe("If false, skip PNG capture (just memory samples)."),
-      outputDir: z.string().optional().describe("Directory to write per-sample PNGs (frame-<n>.png). Required when includeScreenshots is true unless inline:true."),
-      inline: z.boolean().default(false).describe("If true, embed screenshotBase64 in each timeline entry instead of writing PNGs to disk. Default false — then outputDir is required when includeScreenshots is true."),
+      outputDir: z.string().optional().describe("OPTIONAL. If set, also write per-sample PNGs (frame-<n>.png) to this dir; the timeline gets each one's `screenshotPath`. Captured frames stream to /livestream regardless; outputDir just additionally persists them to disk for the agent."),
+      inline: z.boolean().default(false).describe("OPT-IN base64. If true, embed screenshotBase64 in each timeline entry. Default false — frames go to /livestream + (if outputDir) disk, but image BYTES are NOT put in your response context unless you ask. Only set this if you genuinely need the base64 inline."),
       memoryOutputPath: z.string().optional().describe("If set, write per-sample memory to this path as newline-delimited JSON (one row per sample) and OMIT the bulky per-sample `memory` from the timeline — returns a compact summary {path, rows, regions, valueRanges} instead. Use for dense sampling (sampleEvery:1 over a long loop) so ~200KB of hex never enters context."),
     },
-    safeTool(async ({ frames, sampleEvery, holdInputs, inputScript, memorySamples, includeScreenshots, outputDir, inline, memoryOutputPath }) => {
+    safeTool(async ({ frames, sampleEvery, holdInputs, inputScript, memorySamples, includeScreenshots = true, outputDir, inline = false, memoryOutputPath }) => {
       const host = getHost(sessionKey);
-      if (includeScreenshots && !inline && !outputDir) {
-        throw new Error("recordSession: includeScreenshots is true — pass outputDir (writes frame-<n>.png per sample, returns screenshotPath) or inline:true (embeds screenshotBase64 in each entry). Or set includeScreenshots:false for memory-only sampling.");
-      }
-      if (includeScreenshots && !inline && outputDir) {
+      // No outputDir/inline requirement anymore: captured frames ALWAYS stream to
+      // the human's /livestream (observer sideband). outputDir additionally writes
+      // PNGs to disk; inline additionally embeds base64 in the RESPONSE (opt-in, so
+      // we never flood agent context by default). Bare call = frames go to the
+      // human, nothing bulky comes back to the agent.
+      if (includeScreenshots && outputDir) {
         await mkdir(outputDir, { recursive: true });
       }
+      // Frames pushed to the /livestream observer this run (every captured sample).
+      const observerFrames = [];
       // Sort input script by frame.
       const script = (inputScript ?? []).slice().sort((a, b) => a.atFrame - b.atFrame);
       let scriptIdx = 0;
@@ -99,7 +104,12 @@ export function registerRecordTools(server, z, sessionKey) {
       while (elapsed < frames) {
         // Apply any scripted inputs whose atFrame ≤ current frame.
         while (scriptIdx < script.length && script[scriptIdx].atFrame <= elapsed) {
-          host.setInput({ ports: script[scriptIdx].ports });
+          const entry = script[scriptIdx];
+          if (entry.ports) host.setInput({ ports: entry.ports });
+          // C64 keyboard keys held from this entry until the next. Pass [] to
+          // release all. Only valid on a C64/VICE host (setC64HeldKeys throws
+          // otherwise — surfaced as a clear error, not a silent no-op).
+          if (entry.keys !== undefined) host.setC64HeldKeys(entry.keys);
           scriptIdx++;
         }
         const batch = Math.min(sampleEvery, frames - elapsed);
@@ -114,12 +124,21 @@ export function registerRecordTools(server, z, sessionKey) {
           try {
             const shot = host.screenshot();
             sample.framebuffer = { width: shot.width, height: shot.height };
-            if (inline) {
-              sample.screenshotBase64 = shot.pngBase64;
-            } else {
+            // ALWAYS push the frame to the human's /livestream (observer sideband),
+            // independent of how the AGENT wants it returned and independent of the
+            // transport (REST or MCP — both consume _observerImages). The human
+            // watching does not depend on the agent passing inline/outputDir.
+            observerFrames.push({ kind: "image", mimeType: "image/png", base64: shot.pngBase64 });
+            // The agent's RESPONSE: a path if outputDir was given, else nothing.
+            // Base64 goes into the response ONLY when explicitly inline:true — we do
+            // NOT dump image bytes into context by default.
+            if (outputDir) {
               const framePath = path.join(outputDir, `frame-${sample.frame}.png`);
               await writeFile(framePath, Buffer.from(shot.pngBase64, "base64"));
               sample.screenshotPath = framePath;
+            }
+            if (inline) {
+              sample.screenshotBase64 = shot.pngBase64;
             }
           } catch (e) {
             sample.screenshotError = String(e?.message ?? e);
@@ -150,10 +169,19 @@ export function registerRecordTools(server, z, sessionKey) {
         timeline.push(sample);
       }
 
+      // Attach the captured frames as a /livestream observer sideband (top-level
+      // sibling of `content`, NOT inside the JSON text — same pattern as frame.js,
+      // so the observer middleware forwards them and they never bloat the response
+      // text). The wrapper (MCP + REST both) strips _observerImages before reply.
+      const withObserver = (result) => {
+        if (observerFrames.length) Object.assign(result, { _observerImages: observerFrames });
+        return result;
+      };
+
       if (streamMemory) {
         await mkdir(path.dirname(memoryOutputPath), { recursive: true });
         await writeFile(memoryOutputPath, memRows.map((r) => JSON.stringify(r)).join("\n") + "\n");
-        return jsonContent({
+        return withObserver(jsonContent({
           framesRun: elapsed,
           samples: timeline.length,
           // Timeline retains screenshot paths + framebuffer dims but NOT the
@@ -167,14 +195,14 @@ export function registerRecordTools(server, z, sessionKey) {
             valueRanges,
             note: "Per-sample memory written to disk (one JSON object per row: {frame, elapsed, <label>:hex,...}). valueRanges shows each label's first-byte min/max so you can tell at a glance which watched bytes actually changed.",
           },
-        });
+        }));
       }
 
-      return jsonContent({
+      return withObserver(jsonContent({
         framesRun: elapsed,
         samples: timeline.length,
         timeline,
-      });
+      }));
     }),
   );
 }

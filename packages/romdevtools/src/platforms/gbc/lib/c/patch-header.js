@@ -7,10 +7,13 @@
 //
 // WHY: most libretro GB cores (gambatte) refuse to load a ROM whose
 // Nintendo logo at $0104-$0133 doesn't match the canonical bytes or
-// whose header checksum at $014D doesn't validate. RGBDS's `rgbfix`
-// does this in the asm-build path; for SDCC-built C ROMs (which our
-// pipeline does NOT auto-patch — every byte that compiles is yours),
-// this script does the same job.
+// whose header checksum at $014D doesn't validate.
+//
+// NOTE: romdev's own build pipeline DOES auto-patch the header now (it
+// runs a bundled rgbfix after every gb/gbc link — see the
+// "rgbfix (auto header fix)" line in build logs), so you only need this
+// script when rebuilding the project OUTSIDE romdev with stock SDCC and
+// no RGBDS installed. It's what keeps the forked project self-contained.
 //
 // The bundled gb_crt0.s reserves $0100-$014F for the header window,
 // so the bytes patched in here land on actual cartridge-header
@@ -148,7 +151,17 @@ if (isCli) {
   const rom = new Uint8Array(readFileSync(inPath));
   // Auto-detect CGB based on file extension.
   const cgb = /\.gbc$/i.test(inPath) || /\.gbc$/i.test(outPath);
-  patchGbHeader(rom, { cgb });
+  // Battery-cart passthrough: the bundled gb_crt0.s emits the cart-type and
+  // RAM-size bytes EXPLICITLY ($0147=$03 MBC1+RAM+BATTERY, $0149=$02 8KB) so
+  // battery hi-score saves work. Preserve a known battery-MBC declaration
+  // instead of stomping it back to ROM-only; unknown/garbage bytes (a crt0
+  // that left the header window as a .ds gap) still get the safe defaults.
+  const BATTERY_TYPES = new Set([0x03, 0x06, 0x0F, 0x10, 0x13, 0x1B, 0x1E]);
+  const declType = rom.length > 0x149 ? rom[0x147] : 0x00;
+  const declRam = rom.length > 0x149 ? rom[0x149] : 0x00;
+  const cartType = BATTERY_TYPES.has(declType) ? declType : 0x00;
+  const ramSize = cartType !== 0x00 && declRam >= 0x01 && declRam <= 0x05 ? declRam : 0x00;
+  patchGbHeader(rom, { cgb, cartType, ramSize });
   writeFileSync(outPath, rom);
-  console.log(`patched ${inPath}${outPath !== inPath ? ` → ${outPath}` : ""} (${rom.length} bytes${cgb ? ", CGB" : ""})`);
+  console.log(`patched ${inPath}${outPath !== inPath ? ` → ${outPath}` : ""} (${rom.length} bytes${cgb ? ", CGB" : ""}${cartType ? `, cart $${cartType.toString(16)}+RAM` : ""})`);
 }

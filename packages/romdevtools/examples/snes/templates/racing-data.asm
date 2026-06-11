@@ -1,5 +1,229 @@
-; ── racing-data.asm — font + player car + enemy car tiles ─────────
+; ── racing-data.asm — EMBER CIRCUIT's assembly half ──────────────────────────
+;
+; What lives here (and why it can't live in racing.c):
+;   1. The Mode 7 HDMA tables, in a RAMSECTION pinned to WRAM BANK $7E.
+;      tcc-65816 puts C globals in bank $7F — but an HDMA channel's A1Bx bank
+;      byte + the table address must be known exactly, so the tables live here
+;      where WE pick the bank. racing.c reaches them as plain externs.
+;   2. m7_build — the per-frame matrix-table builder. 168 multiplies per frame
+;      is far beyond tcc-compiled C (software 16-bit mul ≈ 200+ cycles); this
+;      uses the S-CPU's 8x8 hardware multiplier ($4202/$4203 → $4216, 8-cycle
+;      latency) and finishes in ~30% of a frame.
+;   3. sram_read16/sram_write16 — battery SRAM accessors. SRAM sits at
+;      $70:0000 (declared in hdr.asm — see racing-hdr.asm), reachable only
+;      with long (24-bit) addressing, which tcc C pointers don't emit.
+;   4. Font + car sprite tiles (rodata).
+;
+; Section names must stay unique vs snes_sfx_data.asm (also linked in).
+
 .include "hdr.asm"
+
+; ── HARDWARE IDIOM (load-bearing — reshape gameplay around this; see TROUBLESHOOTING) ──
+; The double-buffered HDMA tables. HDMA reads these DURING active display —
+; rewriting the table the beam is walking shears the ground mid-frame. So:
+; two copies of each; racing.c builds into the back buffer while HDMA walks
+; the front, and flips by rewriting A1Tx during vblank.
+;
+; Table grammar (walked by hardware, one entry header per batch of lines):
+;   [count 1-127][data]  = write data once, hold it for <count> lines
+;   [count|$80] [data...] = REPEAT: fresh data EVERY line for count&$7F lines
+;   [0]                  = end of table (last value persists to frame bottom)
+; We use plain 2-line hold entries (84 entries x 2 lines = 168 road lines):
+; half the multiplies of per-line repeat mode, visually identical.
+;
+; AB/CD layout (matrix channels, transfer mode 3 → $211B,$211B,$211C,$211C):
+;   [0]    = 56            hold the identity matrix through the mode-1 HUD strip
+;   [1-4]  = A=$0100, B=0  (identity — these lines are text, matrix unused)
+;   [5..]  = 84 x { count=2, Alo, Ahi, Blo, Bhi }   ← m7_build rewrites data
+;   [425]  = 0             terminator
+; m7_cdN MUST sit exactly 426 bytes after m7_abN: m7_build stores the CD
+; (M7C/M7D) halves through the same index register at offset +426/+428.
+;
+; VOFS layout (mode 2 → $210E,$210E): [56][0,0] then 84 x {2, lo, hi}, [0].
+; The VOFS value steps -2 per entry = -1 per scanline (see racing.c for the
+; camera math that makes that constant slope correct at every zoom).
+.RAMSECTION "mode7_tables" BANK $7E SLOT 2
+m7_ab0       dsb 426     ; matrix A/B table, buffer 0
+m7_cd0       dsb 426     ; matrix C/D table, buffer 0 (= m7_ab0 + 426, load-bearing)
+m7_ab1       dsb 426     ; buffer 1
+m7_cd1       dsb 426
+m7_vo0       dsb 256     ; M7VOFS table, buffer 0
+m7_vo1       dsb 256
+lam8_tab     dsb 84      ; per-band zoom λ>>3 (max 184, fits the 8x8 multiplier)
+hdma_mode_tab dsb 8      ; BGMODE split table (static after boot)
+hdma_hofs_tab dsb 8      ; M7HOFS table (racing.c patches bytes [4],[5] in vblank)
+m7_cos       dsb 1       ; inputs to m7_build, written by racing.c each frame:
+m7_sin       dsb 1       ;   heading cos/sin, signed, 64 = 1.0
+m7_dst       dsb 2       ;   back-buffer AB table, address of first entry
+m7_vdst      dsb 2       ;   back-buffer VOFS table, address of first entry
+m7_vstart    dsb 2       ;   VOFS value for the first road line
+m7_cabs      dsb 1       ; m7_build scratch: |cos|, |sin|, sign flags, products
+m7_sabs      dsb 1
+m7_cneg      dsb 2
+m7_sneg      dsb 2
+m7_pc        dsb 2
+m7_ps        dsb 2
+telem        dsb 16      ; headless-test telemetry block (see racing.c)
+.ENDS
+
+.SECTION ".racing_asm" SUPERFREE
+
+; ── HARDWARE IDIOM (load-bearing — reshape gameplay around this; see TROUBLESHOOTING) ──
+; void m7_build(void) — rebuild the BACK buffer's 84 matrix entries + VOFS
+; column from m7_cos/m7_sin/m7_dst/m7_vdst/m7_vstart (racing.c sets all five
+; first). Per entry: two hardware multiplies
+;     value = (λ>>3) x |trig|  →  $4216, then >>3 → 8.8 fixed point
+; λ is 8.8 zoom (so λ>>3 is 5.3, ≤184); trig is 64=1.0 (1.6); the product is
+; 6.9, and >>3 lands it in the 8.8 the M7x registers expect. Quantizing λ to
+; 8 bits costs ≤3% scale error on the nearest rows — invisible, and it turns
+; a 16x16 software multiply into one 8-cycle hardware one.
+; Matrix written per band:  A = λcosθ   B = -λsinθ   C = λsinθ   D = λcosθ
+; (the standard 2D rotation, scaled per scanline-band — that's all Mode 7 is).
+m7_build:
+    php
+    phb
+    sep #$20
+    lda #$7E
+    pha
+    plb                     ; DBR = $7E → every .w absolute below hits WRAM
+
+    ; split cos/sin into |value| + 16-bit negate flag
+    stz.w m7_cneg
+    stz.w m7_cneg + 1
+    stz.w m7_sneg
+    stz.w m7_sneg + 1
+    lda.w m7_cos
+    bpl @cpos
+    eor #$FF
+    inc a
+    inc.w m7_cneg
+@cpos:
+    sta.w m7_cabs
+    lda.w m7_sin
+    bpl @spos
+    eor #$FF
+    inc a
+    inc.w m7_sneg
+@spos:
+    sta.w m7_sabs
+
+    rep #$30
+    ldx.w m7_dst            ; X → first AB entry's count byte
+    ldy.w #0                ; Y = entry index 0..83 (also indexes lam8_tab)
+@entry:
+    ; Pc = (lam8[y] * |cos|) >> 3, negated if cos was negative
+    sep #$20
+    lda.w lam8_tab,y
+    sta.l $004202           ; multiplicand
+    lda.w m7_cabs
+    sta.l $004203           ; multiplier — starts the 8-cycle multiply
+    rep #$20
+    nop                     ; rep(3) + nop+nop(4) + lda.l setup ≥ the 8-cycle
+    nop                     ; result latency — NEVER read $4216 sooner
+    lda.l $004216
+    lsr a
+    lsr a
+    lsr a
+    sta.w m7_pc
+    lda.w m7_cneg
+    beq @pcok
+    lda.w #0
+    sec
+    sbc.w m7_pc
+    sta.w m7_pc
+@pcok:
+    ; Ps = (lam8[y] * |sin|) >> 3, negated if sin was negative
+    sep #$20
+    lda.w lam8_tab,y
+    sta.l $004202
+    lda.w m7_sabs
+    sta.l $004203
+    rep #$20
+    nop
+    nop
+    lda.l $004216
+    lsr a
+    lsr a
+    lsr a
+    sta.w m7_ps
+    lda.w m7_sneg
+    beq @psok
+    lda.w #0
+    sec
+    sbc.w m7_ps
+    sta.w m7_ps
+@psok:
+    ; store the band's matrix: AB entry data at 1,x — CD twin at +426
+    lda.w m7_pc
+    sta.w $0001,x           ; M7A = λcosθ
+    sta.w $01AD,x           ; M7D = λcosθ      ($1AD = 429 = 426 + 3)
+    lda.w m7_ps
+    sta.w $01AB,x           ; M7C = λsinθ      ($1AB = 427 = 426 + 1)
+    lda.w #0
+    sec
+    sbc.w m7_ps
+    sta.w $0003,x           ; M7B = -λsinθ
+    txa
+    clc
+    adc.w #5                ; next entry (count byte + 4 data bytes)
+    tax
+    iny
+    cpy.w #84
+    bne @entry
+
+    ; VOFS column: linear ramp, -2 per 2-line band (-1 per scanline)
+    ldx.w m7_vdst
+    lda.w m7_vstart
+    ldy.w #84
+@vrow:
+    sta.w $0001,x
+    dec a
+    dec a
+    inx
+    inx
+    inx
+    dey
+    bne @vrow
+
+    plb
+    plp
+    rtl
+
+; ── HARDWARE IDIOM (load-bearing) — battery SRAM accessors ──────────────────
+; SRAM is mapped at $70:0000 (LoROM, SRAMSIZE $01 in racing-hdr.asm = 2 KB).
+; Long addressing only — there is no SRAM mirror in the program banks, which
+; is why these are asm and not C. tcc calling convention: u16 arg at 5,s
+; (after the 4-byte rtl frame), second arg at 7,s; u16 return in tcc__r0.
+
+; u16 sram_read16(u16 offset)
+sram_read16:
+    php
+    rep #$30
+    lda 5,s            ; offset
+    tax
+    sep #$20
+    lda.l $700000,x
+    sta.w tcc__r0
+    lda.l $700001,x
+    sta.w tcc__r0 + 1
+    plp
+    rtl
+
+; void sram_write16(u16 offset, u16 value)
+sram_write16:
+    php
+    rep #$30
+    lda 5,s            ; offset
+    tax
+    lda 7,s            ; value
+    sep #$20
+    sta.l $700000,x    ; low byte
+    xba
+    sta.l $700001,x    ; high byte
+    plp
+    rtl
+
+.ENDS
 
 .section ".rodata1" superfree
 
@@ -307,47 +531,181 @@ palfont:
 .db $00, $00, $00, $00, $00, $00, $00, $00
 .db $00, $00
 
-tilsprite:
-; Tile 0 — player car (colour 1)
-.db $3C, $00, $7E, $00, $42, $00, $7E, $00
-.db $7E, $00, $42, $00, $7E, $00, $66, $00
-.db $00, $00, $00, $00, $00, $00, $00, $00
-.db $00, $00, $00, $00, $00, $00, $00, $00
-; Tile 1 — enemy car (colour 2)
-.db $00, $3C, $00, $7E, $00, $42, $00, $7E
-.db $00, $7E, $00, $42, $00, $7E, $00, $66
-.db $00, $00, $00, $00, $00, $00, $00, $00
-.db $00, $00, $00, $00, $00, $00, $00, $00
-
 palsprite:
 .db $00, $00       ; 0 transparent
-.db $FF, $7F       ; 1 white (player)
-.db $00, $7C       ; 2 red (enemy)
+.db $FF, $7F       ; 1 white (cockpit stripe)
+.db $1F, $00       ; 2 red (body)
+.db $10, $00       ; 3 dark red (shading)
+.db $C6, $18       ; 4 dark grey (tires)
+.db $CE, $39       ; 5 grey
 .db $00, $00, $00, $00, $00, $00, $00, $00
 .db $00, $00, $00, $00, $00, $00, $00, $00
-.db $00, $00, $00, $00, $00, $00, $00, $00
-.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00
 
-; ── Background wallpaper (one 8x8 4bpp tile, 4 solid colour quadrants) ──
-; Tiled across BG1 it paints the whole screen in four muted colours so the
-; playfield never reads as a flat/blank backdrop. Quadrant->colour: TL=1,
-; TR=2, BL=3, BR=4. 4bpp plane order: bytes 0-15 = rows 0-7 plane0/plane1
-; pairs, bytes 16-31 = rows 0-7 plane2/plane3 pairs.
-tilbg:
-.db $F0, $0F, $F0, $0F, $F0, $0F, $F0, $0F   ; rows 0-3: p0=left  p1=right
-.db $F0, $F0, $F0, $F0, $F0, $F0, $F0, $F0   ; rows 4-7: p0+p1 = left
-.db $00, $00, $00, $00, $00, $00, $00, $00   ; rows 0-3: p2/p3 = 0
-.db $0F, $00, $0F, $00, $0F, $00, $0F, $00   ; rows 4-7: p2 = right
-
-palbg:
-; 16-colour BG palette; only 1-4 used (the four wallpaper quadrant tones).
-.db $00, $00          ; 0 unused (BG fully opaque)
-.db $C4, $30          ; 1 dark blue
-.db $42, $29          ; 2 dark teal
-.db $88, $30          ; 3 dark purple
-.db $C6, $24          ; 4 dark slate
+tilsprite:
+; The car, 16x16, as OBJ-page tiles. SNES large (16x16) sprites fetch tiles
+; n, n+1, n+16, n+17 from a 16-tile-wide page — so the four quadrants sit at
+; page positions 0, 1, 16, 17 with blank tiles padding the rest of each row.
+; 4bpp: per tile 32 bytes = rows 0-7 plane0/plane1 pairs, then plane2/plane3.
+; tile 0 - car top-left
+.db $00, $03, $00, $07, $03, $04, $03, $04
+.db $00, $0F, $01, $0F, $03, $1F, $03, $1F
+.db $00, $00, $00, $00, $00, $00, $C0, $00
+.db $C0, $00, $F0, $00, $20, $00, $00, $00
+; tile 1 - car top-right
+.db $00, $C0, $00, $E0, $00, $E0, $00, $E0
+.db $00, $F0, $80, $F0, $C0, $F8, $C0, $F8
+.db $00, $00, $00, $00, $00, $00, $03, $00
+.db $03, $00, $0F, $00, $00, $00, $00, $00
+; tile 2 - blank
 .db $00, $00, $00, $00, $00, $00, $00, $00
 .db $00, $00, $00, $00, $00, $00, $00, $00
-.db $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 3 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 4 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 5 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 6 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 7 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 8 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 9 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 10 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 11 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 12 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 13 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 14 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 15 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 16 - car bottom-left
+.db $01, $1F, $01, $0F, $01, $0F, $01, $1F
+.db $00, $0F, $03, $1F, $07, $0F, $07, $07
+.db $00, $00, $00, $00, $C0, $00, $C0, $00
+.db $F0, $00, $20, $00, $00, $00, $00, $00
+; tile 17 - car bottom-right
+.db $80, $F8, $80, $F0, $80, $F0, $80, $F8
+.db $00, $F0, $C0, $F8, $E0, $F0, $E0, $E0
+.db $00, $00, $00, $00, $03, $00, $03, $00
+.db $0F, $00, $00, $00, $00, $00, $00, $00
+; tile 18 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 19 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 20 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 21 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 22 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 23 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 24 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 25 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 26 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 27 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 28 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 29 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 30 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 31 - blank
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
 
 .ends

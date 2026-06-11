@@ -266,7 +266,7 @@ export function installToolchainCore({ id }) {
 }
 
 export function registerToolchainTools(server, z, sessionKey) {
-  async function buildSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, crt0, crt0Path, codeLoc, dataLoc, options, linkerConfig, inesHeader, outputPath, inline = false, includeSymbols = false, lint = "advisory", runtime, maxmod, rebuildSdk }) {
+  async function buildSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, crt0, crt0Path, codeLoc, dataLoc, options, linkerConfig, linkerConfigPath, inesHeader, outputPath, inline = false, includeSymbols = false, lint = "advisory", runtime, maxmod, rebuildSdk }) {
       // Reject conflicting inline vs path args — fail loud, not silent.
       if (source != null && sourcePath != null) {
         throw new Error("build({output:'rom'}): pass either `source` OR `sourcePath`, not both.");
@@ -280,6 +280,12 @@ export function registerToolchainTools(server, z, sessionKey) {
       // crt0Path → crt0 source.
       if (crt0Path) {
         crt0 = await readFile(crt0Path, "utf-8");
+      }
+      // linkerConfigPath: read the .cfg from disk so a large multi-bank
+      // config (e.g. a disasm'd mapper-2 rebuild) isn't re-streamed through
+      // context on every build (0.27.0 feedback #2).
+      if (linkerConfigPath && linkerConfig == null) {
+        linkerConfig = await readFile(linkerConfigPath, "utf-8");
       }
       // Auto-inject the bundled crt0 for SMS/GG when caller didn't pass
       // one. Stock SDCC crt0 doesn't boot these targets; without this,
@@ -464,7 +470,7 @@ export function registerToolchainTools(server, z, sessionKey) {
       return jsonContent(payload);
   }
 
-  async function runSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, runtime, maxmod, rebuildSdk, crt0, crt0Path, codeLoc, dataLoc, linkerConfig, inesHeader, path: projPath, frames = 60, holdInputs, screenshotPath, projectName }) {
+  async function runSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, runtime, maxmod, rebuildSdk, crt0, crt0Path, codeLoc, dataLoc, linkerConfig, linkerConfigPath, inesHeader, path: projPath, frames = 60, holdInputs, screenshotPath, projectName }) {
       const { buildForPlatform } = await import("../../toolchains/index.js");
       const resolved = resolveCore(platform);
       if (!resolved) throw new Error(`no core available for platform '${platform}'`);
@@ -480,6 +486,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         binaryIncludes = { ...(binaryIncludes ?? {}), ...r.binaryIncludes };
         if (r.crt0 != null) crt0 = r.crt0;
         if (r.codeLoc != null) codeLoc = r.codeLoc;
+        if (r.dataLoc != null && dataLoc == null) dataLoc = r.dataLoc;
         if (r.linkerConfig != null && linkerConfig == null) linkerConfig = r.linkerConfig;
         if (r.runtime != null && runtime == null) runtime = r.runtime;
         if (r.maxmod != null && maxmod == null) maxmod = r.maxmod;
@@ -509,6 +516,9 @@ export function registerToolchainTools(server, z, sessionKey) {
       }
       if (crt0Path) {
         crt0 = await readFile(crt0Path, "utf-8");
+      }
+      if (linkerConfigPath && linkerConfig == null) {
+        linkerConfig = await readFile(linkerConfigPath, "utf-8");
       }
       // Auto-inject bundled crt0 for SMS/GG when caller didn't pass one
       // (stock SDCC crt0 doesn't boot these targets — see buildSource).
@@ -693,7 +703,7 @@ export function registerToolchainTools(server, z, sessionKey) {
     "• output:'rom' (default) — assemble or compile `source` (single) / `sources` ({name:contents}) / `sourcePath` / `sourcesPaths`. Returns the ROM (path by default; `inline:true` for binaryBase64) + build log. **`binaryIncludes`/`binaryIncludePaths` (base64/path CHR-ROM, music blobs for `.incbin`) — WITHOUT them no game with external assets builds.** `includes`/`includePaths` for `.include`d text. `linkerConfig` (cc65; NES preset 'chr-ram-runtime' RECOMMENDED). `crt0`/`crt0Path`/`codeLoc`/`dataLoc` (SDCC). `runtime`/`maxmod`/`rebuildSdk` (GBA/Genesis SDK). **`lint:'strict'` fails the build (stage:'lint', no binary) if the pre-flight SDCC crash-pattern scan flags anything (e.g. the uint8 loop-bound trap); 'advisory' (default) just lists hits in issues[].** **`includeSymbols:true` returns the .map text inline on a PLAIN rom build — distinct from output:'romWithDebug' which writes .dbg/.map FILES.** Language is inferred from extension/content — usually OMIT `language`.\n" +
     "• output:'romWithDebug' — like 'rom' but also emits linker debug info for the `symbols` tool: cc65 → `.dbg`, SDCC → sdld `.map`, Genesis m68k → GNU ld map (find where a RAM var landed). DEFAULT writes ROM + debug file + log to disk (`outputPath` required unless `inline:true`). **`resolveSymbols:['grid','score']` folds those names' addresses ({resolvedSymbols:{grid:{address,hex,region?,ramOffset?}}}) straight into the result — the cheap way to a WRAM variable's address without loading the whole map (or round-tripping it through `symbols`).**\n" +
     "• output:'run' — BUILD + LOAD + RUN + SCREENSHOT in one round trip — the fastest iteration loop. Same build args; runs `frames` frames and returns the screenshot INLINE. `holdInputs` holds controller state; `screenshotPath` writes the PNG to disk instead; `projectName` titles the playtest window.\n" +
-    "• output:'project' — build a project DIRECTORY (`path`) without re-passing the file manifest each call. Entry point is `main.c` (C/SGDK Genesis, GBA, cc65/SDCC C) OR `main.s`/`main.asm` (asm). Every `.c`/`.s`/`.asm` in the dir is a translation unit (linked together), every `.h`/`.inc` an include, and `.bin/.chr/.pcm/.brr/.vgm/...` become binaryIncludes (for `.incbin`). Iterate an on-disk project by re-calling with just `{path, platform}`. **This is the no-boilerplate path for a scaffold({op:'project'}) dir: the per-platform recipe auto-supplies the crt0 + load address — GB/GBC default `gb_crt0.s` + `codeLoc:0x150` (don't hand-pass them!), MSX routes `msx_crt0.s` + `codeLoc:0x4010`, SMS/GG auto-inject their bundled crt0, NES applies the chr-ram-runtime preset. PREFER this over re-passing `crt0Path`/`codeLoc` to output:'rom' for a scaffolded project.**",
+    "• output:'project' — build a project DIRECTORY (`path`) without re-passing the file manifest each call. Entry point is `main.c` (C/SGDK Genesis, GBA, cc65/SDCC C) OR `main.s`/`main.asm` (asm). Every `.c`/`.s`/`.asm` in the dir is a translation unit (linked together), every `.h`/`.inc` an include, and `.bin/.chr/.pcm/.brr/.vgm/...` become binaryIncludes (for `.incbin`). Iterate an on-disk project by re-calling with just `{path, platform}`. **This is the no-boilerplate path for an examples({op:'fork'}) dir: the per-platform recipe auto-supplies the crt0 + load address — GB/GBC default `gb_crt0.s` + `codeLoc:0x150` (don't hand-pass them!), MSX routes `msx_crt0.s` + `codeLoc:0x4010`, SMS/GG auto-inject their bundled crt0, NES applies the chr-ram-runtime preset. PREFER this over re-passing `crt0Path`/`codeLoc` to output:'rom' for a forked project.**",
     {
       output: z.enum(["rom", "romWithDebug", "run", "project"])
         .describe("rom=produce a ROM (default); romWithDebug=ROM + .dbg/.map debug files; run=build+load+run+screenshot; project=build a project directory."),
@@ -714,6 +724,7 @@ export function registerToolchainTools(server, z, sessionKey) {
       dataLoc: z.coerce.number().int().optional().describe("SDCC — _DATA (WRAM) load address (default $C000 on Z80). NOT read by output:'romWithDebug'."),
       options: z.array(z.string()).optional().describe("output:'rom' — extra toolchain CLI options."),
       linkerConfig: z.string().optional().describe("ld65 linker config (cc65). NES presets: 'chr-ram-runtime' (RECOMMENDED for homebrew C — full crt0 + iNES header + NMI w/ OAM DMA + `_shadow_oam` at $0200), 'chr-ram' (bare nmi:rti stub), 'chr-rom' (cc65-C with FIXED CHR-ROM art — segment split + CHARS segment; supply CHR via binaryIncludePaths into a CHARS source + the header via `inesHeader`). Or full .cfg contents. Preset NAMES only resolve on output:'rom'/'run'; output:'romWithDebug' takes raw .cfg contents only. **For rebuilding a commercial NROM game from its disassembly, prefer `inesHeader` over a raw .cfg.**"),
+      linkerConfigPath: z.string().optional().describe("Path-based `linkerConfig`: absolute path to a .cfg file on disk (the server reads it — the cfg never enters your context; e.g. the multi-bank cfg a banked-NES disasm project ships). Ignored when `linkerConfig` is passed inline."),
       inesHeader: z.object({
         prgBanks: z.coerce.number().int().min(1).max(255).describe("16KB PRG-ROM banks (1 = NROM-128, 2 = NROM-256)."),
         chrBanks: z.coerce.number().int().min(0).max(255).optional().describe("8KB CHR-ROM banks (0 = CHR-RAM, no CHARS segment). Default 0."),
@@ -785,8 +796,8 @@ export function registerToolchainTools(server, z, sessionKey) {
  */
 export function projectBuildRecipe(platform, names) {
   const has = (n) => names.includes(n);
-  /** @type {{crt0File:string|null, codeLoc:number|undefined, linkerConfig:string|undefined, runtime:string|undefined, maxmod:boolean|undefined, skip:Set<string>, includeAsC:Set<string>}} */
-  const r = { crt0File: null, codeLoc: undefined, linkerConfig: undefined, runtime: undefined, maxmod: undefined, skip: new Set(), includeAsC: new Set() };
+  /** @type {{crt0File:string|null, codeLoc:number|undefined, dataLoc:number|undefined, linkerConfig:string|undefined, runtime:string|undefined, maxmod:boolean|undefined, skip:Set<string>, includeAsC:Set<string>}} */
+  const r = { crt0File: null, codeLoc: undefined, dataLoc: undefined, linkerConfig: undefined, runtime: undefined, maxmod: undefined, skip: new Set(), includeAsC: new Set() };
 
   // Reference/upstream sources ship for grepping, not compiling (e.g. GB
   // music_demo's hUGEDriver.upstream.asm — the .c port is what builds). Skip
@@ -796,7 +807,11 @@ export function projectBuildRecipe(platform, names) {
   if (platform === "gb" || platform === "gbc") {
     // GB/GBC ship gb_crt0.s — it MUST go via crt0+codeLoc:0x150, never as a
     // source (SDCC emits its own gsinit → "Multiple definition of gsinit").
-    if (has("gb_crt0.s")) { r.crt0File = "gb_crt0.s"; r.codeLoc = 0x150; }
+    // dataLoc 0xC200: statics start ABOVE shadow_oam ($C100-$C19F, fixed by
+    // the runtime). The sdld default of $C000 let any project with >256 bytes
+    // of statics silently overlap the OAM shadow — oam_clear() then zeroed
+    // game state (grid/RNG seed). 512 bytes of 8KB WRAM is cheap insurance.
+    if (has("gb_crt0.s")) { r.crt0File = "gb_crt0.s"; r.codeLoc = 0x150; r.dataLoc = 0xC200; }
   } else if (platform === "nes") {
     // A SCAFFOLDED NES project ships nes_runtime.c + a crt0 + a .cfg and needs
     // the chr-ram-runtime preset (it defines the OAM/CHARS segments + a NMI with
@@ -823,10 +838,29 @@ export function projectBuildRecipe(platform, names) {
     // commercial ROMs boot in the same host; only our scaffolds failed). Routing
     // msx_crt0.s through crt0 makes ITS header + init the cartridge entry.
     if (has("msx_crt0.s")) { r.crt0File = "msx_crt0.s"; r.codeLoc = 0x4010; }
+  } else if (platform === "pce") {
+    // PCE example projects (they ship pce_hw.h) build on the 'rom32k' preset:
+    // a 32KB HuCard with bank 0 (STARTUP/VECTORS) FIRST in the file at $E000
+    // and banks 1-3 (CODE/RODATA) at $8000-$DFFF, where cc65's pce crt0 TAMs
+    // them before main(). cc65's stock pce.cfg is an 8KB boot bank — too small
+    // for a complete example game — and its documented 32K variant places the
+    // vectors in the LAST file bank, which a HuCard never maps at reset
+    // (verified black screen on geargrafx). An 8KB-sized program still links
+    // and boots identically under this preset, so it's safe for every
+    // pce_hw.h-style project. Bare hand-rolled dirs are left alone.
+    if (has("pce_hw.h")) r.linkerConfig = "rom32k";
   } else if (platform === "sms" || platform === "gg") {
-    // SMS/GG auto-inject their bundled crt0 inside buildForPlatform — so the
-    // scaffold's own *_crt0.s would be a DUPLICATE. Skip it.
-    for (const n of names) if (/_crt0\.s$/i.test(n)) r.skip.add(n);
+    // SMS/GG: route the project's *_crt0.s through the crt0 channel (like
+    // GB/MSX), NOT as a plain source TU. The OLD recipe skipped it on the
+    // belief that "buildForPlatform auto-injects the bundled crt0" — IT DOES
+    // NOT (only the output:'rom'/'run' MCP handlers auto-inject). So every
+    // output:'project' SMS/GG build linked SDCC's STOCK z80 crt0, whose boot
+    // is `ld a,#2 / rst $08 / halt` — main() never ran and every scaffold
+    // booted to a BLACK SCREEN (the RetroDECK "all broken" report; our
+    // output:'run' verifications were false-green via the other path).
+    // readProjectDir falls back to the bundled crt0 when the dir has none.
+    const crt0Name = names.find((n) => /_crt0\.s$/i.test(n));
+    if (crt0Name) r.crt0File = crt0Name;
   } else if (platform === "genesis" || platform === "megadrive" || platform === "md") {
     // SGDK supplies sega startup + rom header. The scaffold dir may contain
     // generated intermediates (sega.s, sega.preprocessed.s, rom_header.*, and an
@@ -919,6 +953,15 @@ export async function readProjectDir(projPath, platform) {
     }
   }
 
+  // SMS/GG with no crt0 file in the dir → fall back to the bundled crt0,
+  // exactly like the output:'rom'/'run' handlers do. Without this the link
+  // silently uses SDCC's stock z80 crt0, which never calls main() (black
+  // screen at boot). The SMS scaffold historically shipped without a crt0
+  // file, so this fallback is load-bearing for existing project dirs.
+  if (crt0 == null && (platform === "sms" || platform === "gg")) {
+    crt0 = await resolveAutoCrt0(platform);
+  }
+
   // GBA runtime refinement: libgba if the entry includes <gba.h>, else the
   // libtonc default the recipe set.
   let runtime = recipe.runtime;
@@ -926,11 +969,11 @@ export async function readProjectDir(projPath, platform) {
     runtime = "libgba";
   }
 
-  return { sources, includes, binaryIncludes, crt0, codeLoc: recipe.codeLoc, linkerConfig: recipe.linkerConfig, runtime, maxmod: recipe.maxmod };
+  return { sources, includes, binaryIncludes, crt0, codeLoc: recipe.codeLoc, dataLoc: recipe.dataLoc, linkerConfig: recipe.linkerConfig, runtime, maxmod: recipe.maxmod };
 }
 
 export async function buildProjectCore({ path: projPath, platform, outputPath }) {
-  const { sources, includes, binaryIncludes, crt0, codeLoc, linkerConfig, runtime, maxmod } = await readProjectDir(projPath, platform);
+  const { sources, includes, binaryIncludes, crt0, codeLoc, dataLoc, linkerConfig, runtime, maxmod } = await readProjectDir(projPath, platform);
 
   // Linker preset: the recipe names it (e.g. NES 'chr-ram-runtime', which ships
   // the OAM/CHARS segments + its own crt0). resolveLinkerConfig also returns any
@@ -968,6 +1011,7 @@ export async function buildProjectCore({ path: projPath, platform, outputPath })
     linkerConfig: resolvedLinkerConfig,
     crt0: crt0Rel,
     codeLoc,
+    dataLoc,
   });
   if (outputPath && result.binary) {
     await mkdir(path.dirname(outputPath), { recursive: true });

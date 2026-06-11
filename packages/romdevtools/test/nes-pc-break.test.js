@@ -67,12 +67,40 @@ test("NES PC breakpoint + read watch + single-step (fceumm 6502)", { timeout: 18
   assert.equal(bp.hit, true, "runUntilPC did not hit: " + JSON.stringify(bp));
   assert.equal(bp.pcRaw, writerPC, "frozen PC != requested PC");
 
-  // 3) getCPUState reads the live 6502 registers at the frozen instruction.
+  // 2b) registersAtHit — the register file SNAPSHOT taken at the break instant.
+  // fceumm drains the cycle budget on hit but retro_run still finishes the frame,
+  // so a follow-up cpu({op:'read'}) returns end-of-frame regs, NOT the break
+  // instant. The snapshot is the reliable break-instant register file — this is
+  // the fix for the "break → read registers" RE workflow on NES.
+  assert.ok(bp.registersAtHit, "breakpoint hit returned no registersAtHit snapshot (fceumm reg-snapshot patch missing?): " + JSON.stringify(bp));
+  for (const r of ["A", "X", "Y", "P", "S"]) {
+    assert.ok(Number.isInteger(bp.registersAtHit[r]) && bp.registersAtHit[r] >= 0 && bp.registersAtHit[r] <= 255,
+      `registersAtHit.${r} out of range: ${bp.registersAtHit[r]}`);
+  }
+
+  // 2c) captureMemory — read named RAM AT the hit, inline, in the SAME call as
+  // the register snapshot (collapses break→cpu→memory into one call). $10 is the
+  // counter this ROM writes, so it must come back.
+  const bp2 = toJSON(await client.callTool({
+    name: "breakpoint", arguments: { on: "pc", address: writerPC, maxFrames: 300,
+      captureMemory: [{ region: "system_ram", offset: 0x10, length: 1, label: "counter" }] },
+  }));
+  assert.equal(bp2.hit, true, "2nd runUntilPC did not hit");
+  assert.ok(bp2.registersAtHit, "2nd hit missing registersAtHit");
+  assert.ok(bp2.capturedMemory && bp2.capturedMemory.counter, "captureMemory not returned inline: " + JSON.stringify(bp2));
+  assert.match(bp2.capturedMemory.counter.hex, /^[0-9a-f]{2}$/, "captured $10 byte not a hex byte: " + JSON.stringify(bp2.capturedMemory));
+
+  // 3) the LIVE register file (a follow-up cpu read) is end-of-frame state on
+  // fceumm — it is NOT expected to match registersAtHit. We just confirm cpu read
+  // still works and that the internal fields are now under coreInternal, not regs.
   const regs = toJSON(await client.callTool({
     name: "cpu", arguments: { op: "read",  platform: "nes" },
   }));
   assert.ok((regs.pc ?? regs.PC ?? regs.registers?.PC) !== undefined,
     "getCPUState returned no PC: " + JSON.stringify(regs).slice(0, 160));
+  // item 3: fceumm-internal fields are labeled, not mixed into 6502 `registers`.
+  assert.equal(regs.registers.DB, undefined, "DB should be under coreInternal, not registers");
+  assert.ok(regs.coreInternal && regs.coreInternal.DB !== undefined, "coreInternal.DB missing");
 
   // 4) stepInstruction must ADVANCE the PC (not re-stop on the same instruction).
   const stepRes = toJSON(await client.callTool({ name: "frame", arguments: { op: "stepInstruction" } }));

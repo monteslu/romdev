@@ -37,7 +37,7 @@ const CC65_TARGET = {
 const LANGUAGE_TOOLCHAIN = {
   atari2600: {
     asm:    { toolchain: "dasm",         available: true },
-    basic:  { toolchain: "batariBasic",  available: false, note: "BASIC for 2600 via batariBasic — not bundled. bB's transpiler is written in Perl, which we don't ship as WASM. A port to C or JS would be a multi-day project. For now, write 2600 games in 6507 asm via dasm — the bundled scaffolds (default, paddle, single_screen) show the canonical race-the-beam pattern, and an LLM agent writes 2600 asm fluently." },
+    basic:  { toolchain: "batariBasic",  available: false, note: "BASIC for 2600 via batariBasic — not bundled. bB's transpiler is written in Perl, which we don't ship as WASM. A port to C or JS would be a multi-day project. For now, write 2600 games in 6507 asm via dasm — the bundled example games (default, paddle, single_screen) show the canonical race-the-beam pattern, and an LLM agent writes 2600 asm fluently." },
   },
   nes: {
     asm: { toolchain: "cc65",  available: true },
@@ -65,11 +65,11 @@ const LANGUAGE_TOOLCHAIN = {
   },
   snes: {
     asm: { toolchain: "asar",       available: true },
-    c:   { toolchain: "tcc816+wladx", available: true, note: "C for SNES via tcc-65816 + wla-65816 + wlalink. The PVSnesLib runtime IS bundled (built from source) and auto-linked — #include <snes.h> gives you consoleDrawText, setMode, oamSet, WaitForVBlank, etc. out of the box. `createGame`/`createProject` scaffold a complete PVSnesLib C project. Pass options.pvsneslib:false for the bare-main minimum-viable path." },
+    c:   { toolchain: "tcc816+wladx", available: true, note: "C for SNES via tcc-65816 + wla-65816 + wlalink. The PVSnesLib runtime IS bundled (built from source) and auto-linked — #include <snes.h> gives you consoleDrawText, setMode, oamSet, WaitForVBlank, etc. out of the box. `examples({op:'fork'})` gives you a complete working PVSnesLib C project. Pass options.pvsneslib:false for the bare-main minimum-viable path." },
   },
   genesis: {
     asm: { toolchain: "vasm68k",      available: true },
-    c:   { toolchain: "m68k-elf-gcc", available: true, note: "C for Genesis via gcc 14.2.0 + binutils + newlib, all compiled to WASM. The SGDK runtime IS bundled (built from source) and auto-linked — sprite engine, VDP, controller, PSG/Z80 sound, resource helpers all work; #include <genesis.h>. `createGame`/`createProject` scaffold a complete SGDK C project (the recommended path). Pass options.sgdk:false for the bare-gcc minimum-viable path." },
+    c:   { toolchain: "m68k-elf-gcc", available: true, note: "C for Genesis via gcc 14.2.0 + binutils + newlib, all compiled to WASM. The SGDK runtime IS bundled (built from source) and auto-linked — sprite engine, VDP, controller, PSG/Z80 sound, resource helpers all work; #include <genesis.h>. `examples({op:'fork'})` gives you a complete working SGDK C project (the recommended path). Pass options.sgdk:false for the bare-gcc minimum-viable path." },
   },
   gba: {
     c: { toolchain: "arm-none-eabi-gcc", available: true, note: "C for GBA via gcc 14.2.0 + binutils + newlib + libtonc 1.4.5 (default) OR libgba 0.5.4 (opt-in via runtime:\"libgba\"), all compiled to WASM (R24 + R28). #include <tonc.h> + tte_write/tte_printf works out of the box — that's the canonical Tonc-tutorial API every published GBA C resource uses. Caveat: tte_iohook (libtonc) and console.c (libgba) — the libsysbase-backed iprintf bridges — are NOT bundled. Use tte_printf directly, which is what the Tonc tutorial actually does." },
@@ -91,7 +91,7 @@ const LANGUAGE_TOOLCHAIN = {
  * Default language per platform. The choice reflects what's fastest /
  * smallest / best-matched to LLM fluency. Every platform that has a bundled
  * C compiler + runtime defaults to C — that's the canonical, productive path
- * and what `createGame`/`createProject` scaffold (cc65 for NES/C64/Atari7800/
+ * and what `examples({op:'fork'})` projects use (cc65 for NES/C64/Atari7800/
  * Lynx, SDCC for GB/GBC/SMS/GG, gcc+SGDK for Genesis, tcc+PVSnesLib for SNES,
  * gcc+libtonc for GBA). Platforms whose only bundled toolchain is an assembler
  * default to asm (Atari 2600 → dasm; SNES/Genesis keep an asm option too, but
@@ -727,16 +727,25 @@ export async function buildForPlatform(args) {
     // the cartridge header + reset vectors which the custom crt0 provides.
     // MSX: _CODE goes at $4010 — a cartridge maps at $4000-$BFFF and the first
     // 16 bytes are the ROM header ("AB" + INIT vector) the crt0 emits.
-    const codeLoc = args.codeLoc ?? (args.platform === "msx" ? MSX_CODE_LOC : 0x0000);
+    // SMS/GG: _CODE goes at $0100 — $0000-$00FF belongs to the crt0's ABS
+    // _HEADER area (reset + RST/IRQ/NMI vectors + _boot). The old default of
+    // $0000 linked _CODE ON TOP of the vector table: makebin emitted gsinit
+    // at $0000 and the di/im 1/SP-init/ISR vectors were GONE — it booted in a
+    // BIOS-less emulator by accident (gsinit happened to sit at the reset
+    // vector) but had no working IRQ/NMI/pause handling and was one EI away
+    // from jumping into garbage on real hardware.
+    const codeLoc = args.codeLoc ?? (
+      args.platform === "msx" ? MSX_CODE_LOC
+      : (args.platform === "sms" || args.platform === "gg") ? 0x0100
+      : 0x0000);
     const romSize = SDCC_ROM_SIZE[args.platform] ?? 32 * 1024;
 
     // crt0 + headers + sources come straight from the caller. The build
     // pipeline does NOT auto-inject platform runtimes, custom crt0s,
     // or post-link header patches. Every byte that compiles is visible
-    // to the caller's repo. Use `createProject({platform, template})`
-    // to scaffold a self-contained project with the runtime files
-    // copied in, or call `getStarterSnippet` / `getAllStarterSnippets`
-    // to fetch individual pieces.
+    // to the caller's repo. Use `examples({op:'fork'})` to get a
+    // self-contained project with the runtime files copied in, or
+    // `examples({op:'snippets'/'copySnippets'})` to fetch individual pieces.
     const crt0 = args.crt0;
 
     // Pre-flight lint: scan the C sources for known SDCC C89 violations
@@ -777,10 +786,27 @@ export async function buildForPlatform(args) {
       // and RAM-size ($0149) bytes — without -m/-r, -v leaves them at the
       // linker's garbage pad (e.g. type $3C), and emulators/hardware reject
       // an unknown MBC type with "retro_load_game failed". -m 0x00 = ROM ONLY
-      // (no mapper), -r 0x00 = no cart RAM — correct for these 32KB scaffolds.
+      // (no mapper), -r 0x00 = no cart RAM — correct for plain 32KB builds.
+      //
+      // Battery-cart passthrough (0.29.0 examples): a crt0 may DECLARE the
+      // cart in the header window (the GB equivalent of the NES crt0's iNES
+      // BATTERY bit — see the gbc lib gb_crt0.s, which emits $0147=$03 /
+      // $0149=$02 for MBC1+RAM+BATTERY so hi-scores persist in SAVE_RAM).
+      // If the linked image carries a KNOWN battery-MBC type byte with a
+      // sane RAM size, pass those through to rgbfix instead of stomping
+      // them to ROM-only; anything unrecognized (linker pad garbage) still
+      // falls back to the safe ROM-only default, so crt0s that don't
+      // declare a cart behave exactly as before.
+      const BATTERY_CART_TYPES = new Set([0x03, 0x06, 0x0F, 0x10, 0x13, 0x1B, 0x1E]); // MBC1/2/3/5 +BATTERY variants
+      const declType = binary.length > 0x149 ? binary[0x147] : 0x00;
+      const declRam = binary.length > 0x149 ? binary[0x149] : 0x00;
+      const cartByte = BATTERY_CART_TYPES.has(declType) ? declType : 0x00;
+      const ramByte = cartByte !== 0x00 && declRam >= 0x01 && declRam <= 0x05 ? declRam : 0x00;
+      const mArg = "0x" + cartByte.toString(16).padStart(2, "0").toUpperCase();
+      const rArg = "0x" + ramByte.toString(16).padStart(2, "0").toUpperCase();
       const fixOpts = args.platform === "gbc"
-        ? ["-v", "-p", "0xFF", "-C", "-m", "0x00", "-r", "0x00"]
-        : ["-v", "-p", "0xFF", "-m", "0x00", "-r", "0x00"];
+        ? ["-v", "-p", "0xFF", "-C", "-m", mArg, "-r", rArg]
+        : ["-v", "-p", "0xFF", "-m", mArg, "-r", rArg];
       const fix = await runRgbfix({ rom: binary, options: fixOpts });
       if (fix.exitCode === 0 && fix.binary) {
         binary = fix.binary;
@@ -809,32 +835,51 @@ export async function buildForPlatform(args) {
     // rejected it. Checksum = sum of bytes $0000..$7FEF (everything before
     // the header), stored little-endian. GG BIOS doesn't check, but writing
     // it is harmless. Only touches ROMs that actually have the header.
-    if (binary && r.exitCode === 0 && (args.platform === "sms" || args.platform === "gg") && binary.length >= 0x8000) {
+    if (binary && r.exitCode === 0 && (args.platform === "sms" || args.platform === "gg")) {
+      // Pad to a full 32KB bank FIRST. sdld emits up to the highest used
+      // address, so a small program can come out under $8000 — which (a)
+      // skipped this whole header block before (the header guard required
+      // 32KB) and (b) odd-size ROMs misbehave on real mappers/flashcarts.
+      if (binary.length < 0x8000) {
+        const padded = new Uint8Array(0x8000);
+        padded.set(binary);
+        binary = padded;
+      }
       const hdr = 0x7FF0;
       const hasHeader = String.fromCharCode(...binary.slice(hdr, hdr + 8)) === "TMR SEGA";
+      // Region nibble is PLATFORM-SPECIFIC and load-bearing: 4 = SMS export,
+      // 7 = GG international. A .gg ROM stamped with an SMS region (3/4) makes
+      // Genesis Plus GX (RetroArch/RetroDECK's SMS+GG core) boot it in "GG
+      // running SMS software" COMPATIBILITY mode — wrong video mode + wrong
+      // CRAM format for a native-GG program → black/garbled screen on the
+      // user's device while our BIOS-less host looked fine. Size nibble $C =
+      // 32KB checksum range ($0000-$7FEF).
+      const regionSize = args.platform === "gg" ? 0x7C : 0x4C;
       if (!hasHeader) {
         // No header emitted by the crt0 → write a complete TMR SEGA header
         // into the last 16 bytes of bank 0 ($7FF0-$7FFF). Without this the
         // export (US/EU) SMS BIOS shows "SOFTWARE ERROR" and refuses to run.
         // $7FF0-$7FF7 "TMR SEGA"; $7FF8-$7FF9 reserved ($00); $7FFA-$7FFB
         // checksum (filled below); $7FFC-$7FFE product code/version (zeros
-        // ok for homebrew); $7FFF region+size = $4C (region 4 = export,
-        // size $C = 32KB, the checksum range that covers $0000-$7FEF).
+        // ok for homebrew); $7FFF region+size (see regionSize above).
         const TMR = [0x54,0x4D,0x52,0x20,0x53,0x45,0x47,0x41]; // "TMR SEGA"
         for (let i = 0; i < 8; i++) binary[hdr + i] = TMR[i];
         binary[hdr + 8] = 0x00; binary[hdr + 9] = 0x00;   // reserved
         binary[hdr + 12] = 0x00; binary[hdr + 13] = 0x00; // product code lo
         binary[hdr + 14] = 0x00;                          // product/version
-        binary[hdr + 15] = 0x4C;                          // region 4 (export) + size $C (32KB)
       }
+      // Always stamp the platform-correct region/size — a crt0-provided header
+      // with an SMS region on a .gg build has the same compat-mode problem.
+      binary[hdr + 15] = regionSize;
       // Checksum = sum of bytes $0000..$7FEF (everything before the header),
-      // stored little-endian at $7FFA. Region/size $4C declares the 32KB
-      // range, so the BIOS checksums $0000-$7FEF.
+      // stored little-endian at $7FFA. Size nibble $C declares the 32KB
+      // range, so the BIOS checksums $0000-$7FEF. (The GG BIOS doesn't
+      // checksum, but writing it is harmless and correct.)
       let sum = 0;
       for (let i = 0; i < 0x7FF0; i++) sum = (sum + binary[i]) & 0xFFFF;
       binary[0x7FFA] = sum & 0xFF;
       binary[0x7FFB] = (sum >> 8) & 0xFF;
-      r.log += `\n--- SMS header ${hasHeader ? "checksum fixed" : "written + checksummed"} ($7FFA=${sum.toString(16).toUpperCase().padStart(4,"0")}, region/size=$4C) ---`;
+      r.log += `\n--- ${args.platform.toUpperCase()} header ${hasHeader ? "checksum fixed" : "written + checksummed"} ($7FFA=${sum.toString(16).toUpperCase().padStart(4,"0")}, region/size=$${regionSize.toString(16).toUpperCase()}) ---`;
     }
     // MSX: the binary built with codeLoc=$4010 is a $4000-based page image.
     // SDCC/sdldz80 emit an ihx that, converted to bin, starts at the lowest

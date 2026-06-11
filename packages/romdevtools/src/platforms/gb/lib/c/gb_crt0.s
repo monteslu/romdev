@@ -86,11 +86,35 @@
         nop
         jp      init
 
-;; ─── Header bytes at $0104-$014F — host pipeline fills these ──────
+;; ─── Header bytes at $0104-$014F — host pipeline fills most of these ─
+;; The logo / title / checksums are patched post-link (rgbfix in the
+;; build pipeline, or patch-header.js when rebuilding outside romdev).
+;; The CART TYPE and RAM SIZE bytes are DECLARED HERE as real bytes so
+;; the build's header fixup can read and preserve them:
+;;
+;;   $0147 = $03  MBC1 + RAM + BATTERY
+;;   $0149 = $02  8 KB external cart RAM at $A000-$BFFF
+;;
+;; This is what makes battery saves (persistent hi-scores) work: the
+;; emulator sizes its SAVE_RAM from these two bytes. The RAM is gated —
+;; games must write $0A to $0000-$1FFF before touching $A000 and write
+;; $00 after (see the SRAM idiom in the shmup example). Games that never
+;; touch $A000 are completely unaffected by the mapper declaration: a
+;; 32 KB image fits in MBC1 banks 0-1 exactly as it does in a ROM-only
+;; cart, and the MBC registers only react to ROM-area WRITES (which
+;; normal code never performs).
+;;
+;; If you rebuild OUTSIDE romdev, keep these bytes: rgbfix flags are
+;; `-m 0x03 -r 0x02` (patch-header.js defaults to ROM-only — pass
+;; cartType/ramSize through patchGbHeader() if you script it).
         .area _HEADERe (ABS)
         .org    0x0104
-        ;; 76 bytes total: Nintendo logo (48) + title (16) + flags+checksums (12)
-        .ds     0x4C
+        .ds     0x43            ; $0104-$0146 logo/title/CGB flag/licensee/SGB (patched in)
+        .org    0x0147
+        .db     0x03            ; $0147 cart type: MBC1+RAM+BATTERY (see above)
+        .db     0x00            ; $0148 ROM size (rgbfix -p recomputes)
+        .db     0x02            ; $0149 RAM size: 8 KB
+        .ds     0x06            ; $014A-$014F dest/licensee/version/checksums (patched in)
 
 ;; ─── init: real boot code, lives in _CODE starting at $0150 ────────
         .area   _CODE

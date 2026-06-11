@@ -93,3 +93,47 @@ test("controller buttons map to C64 keys via setInput (Batocera/RetroDeck model)
   assert.equal(calls.length, 0, "joystick up+Fire presses no C64 key");
   assert.notEqual(host.state.inputPorts[0][0], 0, "joystick reaches the joypad mask");
 });
+
+test("pressC64KeyVerify samples CIA1 $DC00/$DC01 before/during/after", { skip: !have, timeout: 60000 }, async () => {
+  const host = await boot();
+  const v = host.pressC64KeyVerify("space", 8);
+  assert.deepEqual([v.row, v.col], [7, 4], "space matrix");
+  assert.equal(v.autoReleased, true);
+  assert.ok(v.cia1 && v.cia1.before && v.cia1.during && v.cia1.after, "all three CIA snapshots present");
+  // CIA1 regs are 2 bytes [DC00, DC01]; values are real reads (0..255).
+  for (const phase of ["before", "during", "after"]) {
+    const s = v.cia1[phase];
+    assert.ok(Number.isInteger(s.DC00) && s.DC00 >= 0 && s.DC00 <= 255, `${phase} DC00 in range`);
+    assert.ok(Number.isInteger(s.DC01) && s.DC01 >= 0 && s.DC01 <= 255, `${phase} DC01 in range`);
+  }
+});
+
+test("setC64HeldKeys presses/releases matrix lines by diff (recordSession scripting)", { skip: !have, timeout: 60000 }, async () => {
+  const host = await boot();
+  const calls = [];
+  const orig = host.mod._romdev_key_matrix.bind(host.mod);
+  host.mod._romdev_key_matrix = (r, c, p) => { calls.push([r, c, p]); return orig(r, c, p); };
+
+  // hold f1 (0,4) + space (7,4)
+  let res = host.setC64HeldKeys(["f1", "space"]);
+  assert.deepEqual(res.held.sort(), ["f1", "space"]);
+  assert.ok(calls.some((x) => x[0] === 0 && x[1] === 4 && x[2] === 1), "f1 pressed");
+  assert.ok(calls.some((x) => x[0] === 7 && x[1] === 4 && x[2] === 1), "space pressed");
+
+  // change to just run/stop (7,7): releases f1+space, presses run/stop
+  calls.length = 0;
+  res = host.setC64HeldKeys(["run/stop"]);
+  assert.deepEqual(res.held, ["run/stop"]);
+  assert.ok(calls.some((x) => x[0] === 0 && x[1] === 4 && x[2] === 0), "f1 released");
+  assert.ok(calls.some((x) => x[0] === 7 && x[1] === 4 && x[2] === 0), "space released");
+  assert.ok(calls.some((x) => x[0] === 7 && x[1] === 7 && x[2] === 1), "run/stop pressed");
+
+  // [] releases everything
+  calls.length = 0;
+  res = host.setC64HeldKeys([]);
+  assert.deepEqual(res.held, []);
+  assert.ok(calls.some((x) => x[0] === 7 && x[1] === 7 && x[2] === 0), "run/stop released");
+
+  // unknown key is rejected with a clear error (not silent no-op)
+  assert.throws(() => host.setC64HeldKeys(["nope"]), /unknown C64 key 'nope'/);
+});

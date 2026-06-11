@@ -36,7 +36,7 @@ installs the master handler + `irq_add(II_VBLANK, NULL)` registers a
 no-op for vblank (just so the IRQ fires + the BIOS counter increments).
 With libgba, `irqInit()` does both steps.
 
-Every bundled R28 scaffold (`tonc_hello`, `tonc_hello_sprite`, `shmup`,
+Every bundled R28 example (`tonc_hello`, `tonc_hello_sprite`, `shmup`,
 `platformer`, `puzzle`, `sports`, `racing`) sets this up — copy the
 pattern.
 
@@ -132,10 +132,10 @@ install promise but everything else still works.
 A deferred enhancement is to port libsysbase into our build so
 iprintf "just works."
 
-## Adding sound to a scaffold
+## Adding sound to your game
 
 Both runtimes bundle `gba_sfx.h` + `gba_sfx.c` next to your `main.c`
-(courtesy of `scaffold({op:'project'})`). The shape:
+(courtesy of `examples({op:'fork'})`). The shape:
 
 ```c
 #include "gba_sfx.h"

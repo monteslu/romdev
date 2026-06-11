@@ -222,6 +222,11 @@ video are fully readable, so you assert live state instead of guessing:
   cpu:'spc700'})` for the sound CPU.
 - **Audio:** the S-DSP is fully decodable — full per-voice state plus the
   master mixer (see "Debugging sound" above for `audioDebug`).
+- **`disasm({target:'references'})`** scans EVERY 32 KB LoROM bank (refs
+  tagged `romBank`) — a hit in bank 12 of a 1 MB cart shows up, not just
+  bank 0. `disasm({target:'project'})` likewise splits per-bank with a
+  native ca65/ld65 rebuild recipe (build() is asar, which can't consume
+  the disasm's ca65 output).
 - **Memory regions:** `memory({op:'read'})` exposes OAM, CGRAM, ARAM (SPC700
   audio RAM), and **FillRAM**. Note the FillRAM quirk: snes9x mirrors the
   PPU registers $2100-$213F (OBSEL/BGMODE/TM/TS/color-math, etc.) into
@@ -248,7 +253,7 @@ PVSnesLib's `hdr.asm` fills these in.
 
 ## Where the SDK lives (and how to read it)
 
-`scaffold({op:'project', platform:"snes"})` ships the FULL PVSnesLib source +
+`examples({op:'fork'})` (any SNES example) ships the FULL PVSnesLib source +
 header tree into the new project at `vendor/pvsneslib/`. So when
 your code does `#include <snes.h>`, those headers come from
 `vendor/pvsneslib/include/`:
@@ -291,7 +296,7 @@ Loadable via snes9x (`loadMedia`).
 
 ## Horizontal scrolling (for side-scrollers)
 
-The `platformer` scaffold is single-screen. SNES scrolling is the easiest of
+The `platformer` example is single-screen. SNES scrolling is the easiest of
 the tile platforms because each BG layer has its own hardware scroll register
 and parallax is nearly free.
 

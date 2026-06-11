@@ -96,7 +96,7 @@ void main(void) {
 `tgi_updatedisplay()` is the frame heartbeat — it ping-pongs the
 double-buffered display and waits for vblank.
 
-## Drawing many rectangles in one frame (game scaffold pattern)
+## Drawing many rectangles in one frame (example-game pattern)
 
 The minimal example above draws "one rect per frame." For an actual
 game with HUD + background + sprites you'll do many tgi_bar / tgi_setcolor

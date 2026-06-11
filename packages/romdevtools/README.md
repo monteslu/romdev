@@ -12,7 +12,7 @@ That's it — one command starts the local romdev **tool server** (no global ins
 - **Agent Skill** — `GET /skills/romdev/SKILL.md` (the [Agent Skills](https://agentskills.io) standard; save it to your skills dir as `skills/romdev/SKILL.md`; ~100 tokens until invoked).
 - **MCP** — it's also a [Model Context Protocol](https://modelcontextprotocol.io/) server at `/mcp` for clients that want it.
 
-This package contains all the JavaScript — the tool surface, the WASM emulator host, the per-platform scaffolds, runtime/library source, and debug helpers — but **no emulator or compiler WASM itself.** Those ship in the `romdev-*` binary packages it depends on, loaded on demand the first time you build or run a given platform.
+This package contains all the JavaScript — the tool surface, the WASM emulator host, the per-platform example games, runtime/library source, and debug helpers — but **no emulator or compiler WASM itself.** Those ship in the `romdev-*` binary packages it depends on, loaded on demand the first time you build or run a given platform.
 
 > For the full project — what romdev is, the supported-platform matrix, how the pieces fit together, and how to develop on it — see the [repository README](https://github.com/monteslu/romdev#readme).
 
@@ -21,8 +21,8 @@ This package contains all the JavaScript — the tool surface, the WASM emulator
 - **`bin`**
   - `romdevtools` → the tool server (`src/mcp/server.js`). Serves the HTTP tool routes, `/documentation`, `/skills/romdev/SKILL.md`, and an MCP endpoint on `http://127.0.0.1:7331` by default (`PORT` / `HOST` to override). `romdev-mcp` is kept as an alias of the same command.
   - `romdevtools-cli` → a smoke/utility CLI, incl. `romdevtools-cli play <rom>` (SDL window, hot-plug controllers).
-- **`src/`** — the server, MCP tools, WASM host, core/toolchain resolvers, per-platform memory interpretation, and bundled library/runtime source (cc65 libs, PVSnesLib, SGDK, libtonc/libgba, hUGEDriver, …) that scaffolded projects link against.
-- **`examples/`** — per-platform starter projects and genre scaffolds.
+- **`src/`** — the server, MCP tools, WASM host, core/toolchain resolvers, per-platform memory interpretation, and bundled library/runtime source (cc65 libs, PVSnesLib, SGDK, libtonc/libgba, hUGEDriver, …) that forked projects link against.
+- **`examples/`** — per-platform example games (complete, working, forkable) and minimal references.
 
 ## Dependencies
 
@@ -45,7 +45,7 @@ claude mcp add --transport http romdev http://127.0.0.1:7331/mcp
 
 It's a standard **streamable-HTTP** MCP server at `http://127.0.0.1:7331/mcp`. For opencode, Codex CLI, and other clients, see **[Connect](https://github.com/monteslu/romdev#connect)** in the repository README. An optional human observer (live tool-call view) is at `/livestream`.
 
-Agents: the server delivers [`AGENTS.md`](./AGENTS.md) as connection-time instructions — the workflow guide for the full tool surface. Or just connect your agent and call `catalog({op:'categories'})` to explore the tools live (and `catalog({op:'whatsNew'})` for the recent CHANGELOG + a rename table if you're resuming work against an older version).
+Agents: the server delivers [`AGENTS.md`](./AGENTS.md) as connection-time instructions — the workflow guide for the full tool surface. Or just connect your agent and call `catalog({op:'categories'})` to explore the tools live, and `catalog({op:'status'})` for the running version + session snapshot.
 
 ## Prefer not to use MCP? Use HTTP or a Skill
 

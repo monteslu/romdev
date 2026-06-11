@@ -105,6 +105,7 @@ test("R23e SMS sports + racing templates build via buildForPlatform", { timeout:
     "joypad_read.c":  await readSource("src/platforms/sms/lib/c/joypad_read.c"),
     "sprite_table.c": await readSource("src/platforms/sms/lib/c/sprite_table.c"),
     "sms_sfx.c":      await readSource("src/platforms/sms/lib/c/sms_sfx.c"),
+    "sms_music.c":    await readSource("src/platforms/sms/lib/c/sms_music.c"),
   };
   const hw    = await readSource("src/platforms/sms/lib/c/sms_hw.h");
   const sfxH  = await readSource("src/platforms/sms/lib/c/sms_sfx.h");
@@ -114,7 +115,7 @@ test("R23e SMS sports + racing templates build via buildForPlatform", { timeout:
       platform: "sms",
       language: "c",
       sources: { "main.c": main, ...runtimes },
-      includes: { "sms_hw.h": hw, "sms_sfx.h": sfxH },
+      includes: { "sms_hw.h": hw, "sms_sfx.h": sfxH, "sms_music.h": await readSource("src/platforms/sms/lib/c/sms_music.h") },
     });
     assert.equal(r.ok, true, `sms/${t} build failed at ${r.stage}: ${(r.log || "").slice(-300)}`);
     assert.ok(r.binary.length >= 16384, `sms/${t}: ROM too small`);
@@ -161,22 +162,23 @@ test("R23e createGame supports sports + racing on EVERY tier-1 platform", { time
   }
 });
 
-test("R23e createGame rejects a genre on a platform that genuinely doesn't have it", { timeout: 10000 }, async () => {
+test("R23e createGame rejects an unknown template with a clear error", { timeout: 10000 }, async () => {
   const { createProjectImpl } = await import("../src/mcp/tools/project.js");
   const { mkdtemp } = await import("node:fs/promises");
   const { tmpdir } = await import("node:os");
   const projPath = await mkdtemp(join(tmpdir(), "r23-bad-"));
-  // Atari 2600 now ships shmup/platformer/sports/racing, but NOT puzzle — the
-  // TIA has no tilemap to draw a match-3 grid. puzzle is the one canonical
-  // genre it genuinely lacks, so it's the honest "unknown template" sentinel.
+  // The 14×5 grid is complete (2026-06-11): every platform now ships all five
+  // canonical genres, including atari2600/puzzle (TILE TWINS, a memory match-
+  // pairs game). So there's no longer a canonical genre any platform LACKS —
+  // the rejection path is exercised with a genuinely unknown template name.
   await assert.rejects(
     () => createProjectImpl({
       platform: "atari2600",
       name: "x",
       path: projPath,
-      template: "puzzle",
+      template: "fighting",
       overwrite: true,
     }),
-    /Unknown template 'puzzle'/,
+    /Unknown template 'fighting'/,
   );
 });

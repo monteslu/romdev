@@ -12,13 +12,13 @@ romdev ships a **hardware helper library** (`src/platforms/pce/lib/c/`:
 `psg_tone()` instead of poking VDC/VCE registers by hand. cc65 has **no** sprite
 library, so this lib is how you get pixels on screen.
 
-The fastest way to a working game: **`scaffold({op:'game', platform: "pce", genre:
-"shmup"})`** — or any of `platformer` / `puzzle` / `sports` / `racing`, the full
-genre set. For a smaller starting point use **`scaffold({op:'project', platform:
-"pce", template: "sprite_move"})`** (also `music_sfx`, `catch_game`). Either drops
+The fastest way to a working game: **fork the example game whose core loop is
+nearest yours — `examples({op:'fork', example:"pce/shmup", name, path})`** — or any
+of `platformer` / `puzzle` / `sports` / `racing`, the full genre set. For a smaller
+starting point fork `pce/sprite_move` (also `music_sfx`, `catch_game`). Either drops
 a complete, *building* project — a verified playable example + the helper lib +
 docs. Read the example's `main.c`, then change it. The examples live in
-`examples/pce/`. The genre scaffolds fill the BAT (32×32 virtual screen); the
+`examples/pce/`. The genre examples fill the BAT (32×32 virtual screen); the
 `platformer` smooth-scrolls the background via the VDC BXR (R7) register.
 **Gotcha:** `#include <stdint.h>` for int8/16/32_t — `pce.h` only typedefs u8/u16.
 
@@ -101,3 +101,12 @@ screen. Keep at least one (2+ byte) global. See TROUBLESHOOTING.md.
   + LFO.
 - `memory({op:'read'})` regions: `pce_vdc_vram`, `pce_vdc_satb`, `pce_vdc_regs`,
   `pce_vce_palette`, `pce_cpu_regs`, `pce_psg_regs`.
+- `disasm({target:'rom'|'references'|'project'})` — da65's native `huc6280`
+  CPU mode. HuCards >32 KB are handled per 8 KB page (page 0 at `$E000`,
+  where MPR7 maps it at reset — the vectors live there; pages 1+ at `$8000`,
+  an assumed window since the game's MPR writes decide at runtime).
+  `references` tags refs with `romBank`; `disasm({target:'project'})` emits
+  per-page regions + segment wrappers + a generated `.cfg`, and — because the
+  PCE asm toolchain IS cc65/ca65 — a **one-call byte-identical `build()`
+  rebuild** via `rebuild.json` (flat and banked; a 512-byte copier header is
+  split out and re-emitted as a HEADER segment).

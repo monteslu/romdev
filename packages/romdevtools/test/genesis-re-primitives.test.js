@@ -117,9 +117,10 @@ test("Genesis RE primitives: callSubroutine + watchRange + logPCRange + watchDma
   assert.equal(cs.returned, true, "callSubroutine did not return: " + JSON.stringify(cs));
   assert.notEqual(cs.watchdog, true, "normal routine should NOT trip the watchdog: " + JSON.stringify(cs));
   const dstAfter = toJSON(await client.callTool({ name: "memory", arguments: { op: "read", region: "system_ram", offset: dstOff, length: 8 } }));
-  // gpgx work-RAM is host-LE word-byte-swapped, so CAFE BABE 1122 3344 reads as
-  // fecabeba22114433. Assert the swapped form (proves the copy ran correctly).
-  assert.equal(dstAfter.hex.toLowerCase(), "fecabeba22114433", "callSubroutine copy wrong: " + dstAfter.hex);
+  // system_ram is normalized to CPU byte order now (the host un-swaps gpgx's
+  // host-LE word storage), so the copy reads back EXACTLY as the 68k wrote it.
+  // (The old expectation here was the swapped form — the bug baked into a test.)
+  assert.equal(dstAfter.hex.toLowerCase(), "cafebabe11223344", "callSubroutine copy wrong: " + dstAfter.hex);
 
   // ── the WATCHDOG: an infinite-loop routine must NOT hang — it returns
   //    { returned:false, watchdog:true, finalPC } with the spin address. This is

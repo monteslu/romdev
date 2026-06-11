@@ -2,6 +2,7 @@ import path from "node:path";
 import { readFile } from "node:fs/promises";
 import { getHost } from "../state.js";
 import { jsonContent, safeTool } from "../util.js";
+import { attachObserverFrame } from "./watch-memory.js";
 import { lookupCheats, searchCheatGames } from "../../cheats/lookup.js";
 import { encodeForDevice, nativeDevicesFor, decodeCode } from "../../cheats/gamegenie.js";
 
@@ -334,7 +335,7 @@ export function registerCheatTools(server, z, sessionKey) {
       switch (args.op) {
         case "lookup": return jsonContent(await cheatsLookupCore(args));
         case "search": return jsonContent(await cheatsSearchCore(args));
-        case "apply":  return jsonContent(await cheatsApplyCore(args, sessionKey));
+        case "apply":  return attachObserverFrame(jsonContent(await cheatsApplyCore(args, sessionKey)), getHost(sessionKey), "cheat applied");
         case "clear":  return jsonContent(await cheatsClearCore(args, sessionKey));
         case "make":   return jsonContent(await cheatsMakeCore(args));
         default: throw new Error(`cheats: unknown op '${args.op}'`);

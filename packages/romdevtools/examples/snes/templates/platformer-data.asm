@@ -1,5 +1,60 @@
-; ── platformer-data.asm — one sprite (player) + font stubs ─────────
+; ── platformer-data.asm — CRAG CAPER's assembly half ─────────────────────────
+;
+; What lives here (and why it can't live in platformer.c):
+;   1. The telem block, in a RAMSECTION pinned to WRAM BANK $7E. tcc-65816
+;      puts C globals in bank $7F at addresses the linker picks; a headless
+;      test harness wants a block it can FIND by scanning, at an address WE
+;      control. platformer.c reaches it as a plain extern.
+;   2. sram_read16/sram_write16 — battery SRAM accessors. SRAM sits at
+;      $70:0000 (declared in hdr.asm — see platformer-hdr.asm), reachable
+;      only with long (24-bit) addressing, which tcc C pointers don't emit.
+;   3. Font + sprite tiles + level BG tiles (rodata).
+;
+; Section names must stay unique vs snes_sfx_data.asm (also linked in).
+
 .include "hdr.asm"
+
+.RAMSECTION "platformer_wram" BANK $7E SLOT 2
+telem        dsb 24      ; headless-test telemetry block (see platformer.c)
+.ENDS
+
+.SECTION ".platformer_asm" SUPERFREE
+
+; ── HARDWARE IDIOM (load-bearing) — battery SRAM accessors ──────────────────
+; SRAM is mapped at $70:0000 (LoROM, SRAMSIZE $01 in platformer-hdr.asm =
+; 2 KB). Long addressing only — there is no SRAM mirror in the program banks,
+; which is why these are asm and not C. tcc calling convention: u16 arg at
+; 5,s (after the 4-byte rtl frame), second arg at 7,s; u16 return in tcc__r0.
+
+; u16 sram_read16(u16 offset)
+sram_read16:
+    php
+    rep #$30
+    lda 5,s            ; offset
+    tax
+    sep #$20
+    lda.l $700000,x
+    sta.w tcc__r0
+    lda.l $700001,x
+    sta.w tcc__r0 + 1
+    plp
+    rtl
+
+; void sram_write16(u16 offset, u16 value)
+sram_write16:
+    php
+    rep #$30
+    lda 5,s            ; offset
+    tax
+    lda 7,s            ; value
+    sep #$20
+    sta.l $700000,x    ; low byte
+    xba
+    sta.l $700001,x    ; high byte
+    plp
+    rtl
+
+.ENDS
 
 .section ".rodata1" superfree
 
@@ -308,40 +363,84 @@ palfont:
 .db $00, $00
 
 tilsprite:
-; Tile 0 — player (filled diamond, colour 1)
-.db $18, $00, $3C, $00, $7E, $00, $FF, $00
-.db $FF, $00, $7E, $00, $3C, $00, $18, $00
+; OBJ tiles, 8x8 4bpp (32 bytes each: rows 0-7 plane0/plane1 byte pairs,
+; then rows 0-7 plane2/plane3 pairs). Pixel colour = the 4 plane bits, and
+; the colour indexes palsprite below — so plane choice IS colour choice:
+;   player body  = plane0 only        → colour 1 (red)
+;   player eyes  = plane0+plane1      → colour 3 (white)
+;   coin disc    = plane2 only        → colour 4 (gold)
+;   coin ring    = plane0+plane2      → colour 5 (dark gold)
+;   spike        = plane1+plane2      → colour 6 (danger red)
+; tile 0 — player, idle (round body + legs, two eyes)
+.db $3C, $00, $7E, $24, $FF, $24, $FF, $00
+.db $FF, $00, $7E, $00, $66, $00, $66, $00
 .db $00, $00, $00, $00, $00, $00, $00, $00
 .db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 1 — player, jumping (arms up)
+.db $18, $00, $7E, $24, $FF, $24, $FF, $00
+.db $E7, $00, $C3, $00, $81, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 2 — coin (gold disc, embossed ring)
+.db $00, $00, $3C, $00, $66, $00, $5A, $00
+.db $5A, $00, $66, $00, $3C, $00, $00, $00
+.db $3C, $00, $7E, $00, $FF, $00, $FF, $00
+.db $FF, $00, $FF, $00, $7E, $00, $3C, $00
+; tile 3 — ground spike
+.db $00, $00, $00, $18, $00, $18, $00, $3C
+.db $00, $3C, $00, $7E, $00, $7E, $00, $FF
+.db $00, $00, $18, $00, $18, $00, $3C, $00
+.db $3C, $00, $7E, $00, $7E, $00, $FF, $00
 
 palsprite:
-.db $00, $00          ; 0 transparent
-.db $00, $7C          ; 1 red
-.db $00, $00, $00, $00, $00, $00, $00, $00
-.db $00, $00, $00, $00, $00, $00, $00, $00
+; OBJ palette block 0 (CGRAM 128-143), BGR555 little-endian.
+.db $00, $00       ; 0 transparent
+.db $1F, $00       ; 1 red (player body)
+.db $10, $00       ; 2 dark red (unused, free)
+.db $FF, $7F       ; 3 white (player eyes)
+.db $3F, $13       ; 4 gold (coin disc)
+.db $3C, $0A       ; 5 dark gold (coin ring)
+.db $DE, $18       ; 6 danger red (spike)
+.db $00, $00       ; 7 unused
 .db $00, $00, $00, $00, $00, $00, $00, $00
 .db $00, $00, $00, $00, $00, $00, $00, $00
 
-; ── Background wallpaper (one 8x8 4bpp tile, 4 solid colour quadrants) ──
-; Tiled across BG1 it paints the whole screen in four muted colours so the
-; playfield never reads as a flat/blank backdrop. Quadrant->colour: TL=1,
-; TR=2, BL=3, BR=4. 4bpp plane order: bytes 0-15 = rows 0-7 plane0/plane1
-; pairs, bytes 16-31 = rows 0-7 plane2/plane3 pairs.
+; ── Level BG tiles (8x8 4bpp, same plane layout as the sprites above).
+; Colour 0 is TRANSPARENT — the backdrop (CGRAM colour 0 = sky blue) shows
+; through, which is also why the dirt speckle holes read as sky-blue grit.
 tilbg:
-.db $F0, $0F, $F0, $0F, $F0, $0F, $F0, $0F   ; rows 0-3: p0=left  p1=right
-.db $F0, $F0, $F0, $F0, $F0, $F0, $F0, $F0   ; rows 4-7: p0+p1 = left
-.db $00, $00, $00, $00, $00, $00, $00, $00   ; rows 0-3: p2/p3 = 0
-.db $0F, $00, $0F, $00, $0F, $00, $0F, $00   ; rows 4-7: p2 = right
+; tile 0 — blank (all transparent = pure sky)
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 1 — puffy cloud (colour 1 = white, shared with the text ink)
+.db $00, $00, $18, $00, $3C, $00, $7E, $00
+.db $7E, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 2 — dirt fill (colour 2 brown, speckled with transparent holes)
+.db $00, $FF, $00, $FF, $00, $EF, $00, $FF
+.db $00, $FF, $00, $FE, $00, $FF, $00, $FF
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 3 — grass top (2 rows colour 3 green over colour 2 dirt) — used for
+; both the ground surface and the floating one-way platforms
+.db $FF, $FF, $FF, $FF, $00, $FF, $00, $FF
+.db $00, $FF, $00, $FF, $00, $FF, $00, $FF
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
 
 palbg:
-; 16-colour BG palette; only 1-4 used (the four wallpaper quadrant tones).
-.db $00, $00          ; 0 unused (BG fully opaque)
-.db $C4, $30          ; 1 dark blue
-.db $42, $29          ; 2 dark teal
-.db $88, $30          ; 3 dark purple
-.db $C6, $24          ; 4 dark slate
+; BG palette block 0 (CGRAM 0-15), BGR555 little-endian. Loaded AFTER the
+; console font palette and deliberately a SUPERSET of it: colour 1 stays
+; white so the HUD/title text keeps its ink, colour 0 is the backdrop sky.
+.db $4B, $72       ; 0 sky blue (the backdrop colour — colour 0 IS the sky)
+.db $FF, $7F       ; 1 white (text ink + clouds)
+.db $2E, $11       ; 2 dirt brown
+.db $86, $1A       ; 3 grass green
 .db $00, $00, $00, $00, $00, $00, $00, $00
 .db $00, $00, $00, $00, $00, $00, $00, $00
-.db $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
 
 .ends
