@@ -595,7 +595,9 @@ export class LibretroHost {
     // is the CPU ROM base (un-banked or banked-from-0), default note applies.
 
     const bytes = headerSkipped ? raw.subarray(headerSkipped) : raw;
-    return { bytes, base, headerSkipped, mapped, platform, note };
+    // `raw` is the FULL on-disk image incl. any header — needed by the banked
+    // CPU-address mapping (mapNesAddress expects the iNES header present).
+    return { bytes, raw, base, headerSkipped, mapped, platform, note };
   }
 
   /**
