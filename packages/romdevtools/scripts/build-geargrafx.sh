@@ -33,7 +33,7 @@ if [ -n "${PATCH_REL:-}" ] && [ -f "$PATCH_FILE" ]; then
   # re-apply always works.
   git checkout -- platforms/libretro/libretro.cpp \
     src/memory.h src/memory_inline.h src/huc6280_inline.h \
-    src/geargrafx_core_inline.h 2>/dev/null || true
+    src/geargrafx_core_inline.h src/huc6270_inline.h 2>/dev/null || true
   if git apply --recount --check "$PATCH_FILE" 2>/dev/null; then
     git apply --recount "$PATCH_FILE"; echo "Applied $PATCH_FILE"
   elif grep -rq "romdev_pcbreak_set" platforms/libretro/ 2>/dev/null; then
@@ -59,7 +59,7 @@ mv "$CORE_LIB" "${CORE_LIB%.bc}.a"; CORE_LIB="${CORE_LIB%.bc}.a"
 BP_EXPORTS=""
 # cwd here is $LIBRETRO (platforms/libretro); libretro.cpp holds the exports.
 grep -rq "romdev_pcbreak_get" . 2>/dev/null && \
-  BP_EXPORTS='"_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_watchdog_set",'
+  BP_EXPORTS='"_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_watchdog_set","_romdev_regsnap_get","_romdev_irqblock_set","_romdev_vramwatch_set","_romdev_vramwatch_get",'
 # RE primitives round 2 (register read/write + range-watch + PC-coverage) — added
 # by the same patch as the pcbreak hook, gated on the round-2 sentinel export.
 grep -rq "romdev_cov_get" . 2>/dev/null && \

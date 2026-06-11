@@ -323,6 +323,43 @@ export function letterbox(winW, winH, targetAspect) {
   };
 }
 
+// How recently (in window ticks ≈ frames at 60fps real time) the human must
+// have pressed something for the session to count as "human input active".
+// 120 ticks ≈ 2 s — long enough to span the natural gaps WITHIN active play
+// (between taps), short enough that an agent isn't warned off long after the
+// human set the pad down.
+export const HUMAN_INPUT_ACTIVE_FRAMES = 120;
+
+/**
+ * Any button held in a built input-port object? The C64 virtual keys
+ * (c64_f1 …) count too — any truthy value is a press.
+ * @param {Record<string, boolean>} port
+ */
+export function anyButtonHeld(port) {
+  for (const k in port) if (port[k]) return true;
+  return false;
+}
+
+/**
+ * Pure "when did the human last actually press something" tracker behind the
+ * co-drive detection. The tick loop calls note() every unpaused frame; the
+ * session handle (and through it catalog/frame/input warnings) asks active()/
+ * framesSince(). Pure + exported so the activity contract is unit-testable
+ * without an SDL window.
+ * @param {number} [activeWindow] ticks within which a press counts as active
+ */
+export function createHumanInputTracker(activeWindow = HUMAN_INPUT_ACTIVE_FRAMES) {
+  let lastTick = null;
+  return {
+    /** @param {boolean} pressing @param {number} tick */
+    note(pressing, tick) { if (pressing) lastTick = tick; },
+    /** @param {number} tick @returns {number | null} null = never pressed */
+    framesSince(tick) { return lastTick == null ? null : Math.max(0, tick - lastTick); },
+    /** @param {number} tick */
+    active(tick) { return lastTick != null && tick - lastTick <= activeWindow; },
+  };
+}
+
 function tvAspectFor(platform, displayAspect) {
   switch (platform) {
     case "nes":
@@ -505,6 +542,15 @@ export async function playtest(args) {
   let closeResolver = null;
   const closedPromise = new Promise((r) => { closeResolver = r; });
 
+  // Human co-drive detection. tickCount advances every tick (even paused /
+  // mid-rebuild) so "frames since the human pressed" tracks wall time at
+  // ~60fps. humanInputDirty = the host's input state currently holds buttons
+  // WE wrote for the human — it buys exactly one release write after they let
+  // go, after which an idle window leaves the agent's setInput alone.
+  let tickCount = 0;
+  const humanInput = createHumanInputTracker();
+  let humanInputDirty = false;
+
   // Track pixel-size from resize events instead of polling window.width every
   // tick — that's the retroemu pattern. window.pixelWidth/height is the real
   // backing-store size (which is what dstRect cares about); on HiDPI it
@@ -581,6 +627,7 @@ export async function playtest(args) {
 
   function tick() {
     if (!running || window.destroyed) { stop(); return; }
+    tickCount++;
     // Resolve the session's CURRENT host this frame. A `runSource`/`loadMedia`
     // rebuild swapped it; we follow it so the window shows the latest build.
     // If there's transiently no host or no media loaded (mid-swap), skip this
@@ -601,8 +648,9 @@ export async function playtest(args) {
     const paused = !!h.status.paused || !!h._renderTickSuspended;
     // Read controller state for each slot independently. Slot 0 = port 0
     // (player 1), slot 1 = port 1 (player 2). Each slot's input is built
-    // into its own port object; the agent's setInput is overwritten each
-    // tick (matching prior behavior). Select+Start on any controller quits.
+    // into its own port object. The agent's setInput is only overwritten
+    // while the human is ACTUALLY pressing (see the write below) — an idle
+    // window leaves it alone. Select+Start on any controller quits.
     let quit = false;
     const isC64 = h.status?.platform === "c64";
     function readControllerInto(port, inst) {
@@ -667,7 +715,12 @@ export async function playtest(args) {
           if (heldKeys.has(keyName)) port0[vbtn] = true;
         }
       }
+      // Did the human actually press anything this tick (pad or keyboard,
+      // either port)? Rewind-scrubbing counts as activity too — the human is
+      // actively manipulating emulator state even though R maps to no button.
+      const humanPressing = anyButtonHeld(port0) || anyButtonHeld(port1);
       const isRewinding = heldKeys.has("r") && rewindBuffer.length > 0;
+      humanInput.note(humanPressing || isRewinding, tickCount);
       if (isRewinding) {
         // Restore the previous snapshot and run one frame to produce its visual.
         const snap = rewindBuffer.pop();
@@ -687,7 +740,16 @@ export async function playtest(args) {
             if (rewindBuffer.length > MAX_REWIND_FRAMES) rewindBuffer.shift();
           } catch {}
         }
-        h.setInput({ ports: [port0, port1] });
+        // Write input ONLY while the human is actually pressing, plus ONE
+        // release write after they let go (humanInputDirty). The old behavior
+        // wrote all-zeros EVERY tick, which silently clobbered the agent's
+        // input({op:'set'}) even when nobody was touching the pad. An idle
+        // window now leaves the host's input state alone; the human still
+        // wins the instant they press.
+        if (humanPressing || humanInputDirty) {
+          h.setInput({ ports: [port0, port1] });
+          humanInputDirty = humanPressing;
+        }
         let stepped = 0;
         try {
           stepped = h.stepFrames(1);
@@ -817,6 +879,14 @@ export async function playtest(args) {
     // hot-plug), so a caller can decide whether to surface the keyboard help.
     // 0 → the user has no pad and is on the keyboard fallback.
     get controllerCount() { return controllers.filter(Boolean).length; },
+    // Human co-drive detection: has the human pressed anything (pad, keyboard,
+    // or rewind-scrub) within the last ~2 s of window ticks? Drives the
+    // catalog({op:'status'}) flags and the frame/input co-drive warnings so an
+    // agent KNOWS when a human is driving the same emulator.
+    humanInputActive() { return humanInput.active(tickCount); },
+    // Ticks (≈ frames at 60fps real time) since the last human press; null if
+    // the human hasn't touched anything since the window opened.
+    framesSinceHumanInput() { return humanInput.framesSince(tickCount); },
     // The emulator host the window is CURRENTLY rendering. The window follows
     // the session's live host (a `runSource`/`loadMedia` rebuild updates it in
     // place), so this is whatever the human is looking at right now. Exposed so

@@ -284,7 +284,14 @@ export function registerTileInspectTools(server, z, sessionKey) {
           if (r.pngBase64) {
             return { content: [imageContent(r.pngBase64), textContent(JSON.stringify({ ...r, pngBase64: undefined }))] };
           }
-          return jsonContent(r);
+          // Lift the livestream sideband OUT of the core's plain result before
+          // it's serialized — it must ride on the MCP result object, never in
+          // the agent-visible JSON text.
+          const sideband = r._observerImages;
+          delete r._observerImages;
+          const out = jsonContent(r);
+          if (sideband) out._observerImages = sideband;
+          return out;
         }
         default: throw new Error(`tiles: unknown op '${args.op}'`);
       }

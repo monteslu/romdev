@@ -1,8 +1,8 @@
 # GB / GBC C runtime + headers
 
 These are the source files that back the GB/GBC C templates. They're
-**not** auto-injected at build time — `scaffold({op:'project', platform:"gb"|"gbc",
-template:"..."})` copies them into your project directory so the
+**not** auto-injected at build time — `examples({op:'fork', example:"gb/<name>" or
+"gbc/<name>", name, path})` copies them into your project directory so the
 project is self-describing. Build calls then point at your project's
 copy of these files via `sourcesPaths` / `includePaths` / `crt0Path`.
 
@@ -32,7 +32,7 @@ didn't produce, or to override a field:
   Fixes up / overrides the header of an existing ROM on disk (title, cart
   type, ROM/RAM size, CGB flag, etc.).
 - `node patch-header.js out.gb` — standalone Node script, copied into
-  every GB project by `scaffold({op:'project'})`. Same logic, no MCP needed.
+  every GB project by `examples({op:'fork'})`. Same logic, no MCP needed.
 - `rgbfix -v -p 0 out.gb` — what the build pipeline runs under the hood;
   RGBDS asm projects can invoke it directly.
 
@@ -46,17 +46,16 @@ didn't produce, or to override a field:
   hardware, OAM DMA timing, joypad layout. Read this before your first
   GB/GBC project.
 
-## Project templates
+## Forking an example
 
-Bootstrap a working game-loop skeleton with `scaffold({op:'project'})`:
+Bootstrap a working game-loop skeleton by forking an example with `examples({op:'fork'})`:
 
 ```js
-scaffold({
-  op:       'project',
-  platform: "gbc",
-  template: "tile_engine",   // or "hello_sprite", or "default"
-  name:     "mygame",
-  path:     "/abs/path",
+examples({
+  op:      'fork',
+  example: "gbc/tile_engine",   // or "gbc/hello_sprite", or "gbc/default"
+  name:    "mygame",
+  path:    "/abs/path",
 })
 ```
 

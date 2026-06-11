@@ -10,6 +10,7 @@
 
 import { getHost } from "../state.js";
 import { jsonContent, safeTool } from "../util.js";
+import { attachObserverFrame } from "./watch-memory.js";
 
 export function registerRunUntilTools(server, z, sessionKey) {
   const memoryCondition = z.object({
@@ -75,11 +76,12 @@ export function registerRunUntilTools(server, z, sessionKey) {
         }
       }
 
-      return jsonContent({
+      // Livestream: the frame where the condition was met (or where we gave up).
+      return attachObserverFrame(jsonContent({
         conditionMet: met,
         framesStepped,
         finalValue,
-      });
+      }), host, met ? "runUntil: condition met" : "runUntil: gave up");
     }),
   );
 }

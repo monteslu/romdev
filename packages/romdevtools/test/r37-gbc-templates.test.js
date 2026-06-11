@@ -26,6 +26,7 @@ test("R37 GBC tier-1: every GBC scaffold compiles + writes BG palette via BCPS",
   const runtimeC = await readSrc("src/platforms/gbc/lib/c/gb_runtime.c");
   const runtimeH = await readSrc("src/platforms/gbc/lib/c/gb_runtime.h");
   const hwH      = await readSrc("src/platforms/gbc/lib/c/gb_hardware.h");
+  const fontH    = await readSrc("src/platforms/gbc/lib/c/font.h");  /* puzzle's HUD glyphs */
   for (const t of GBC_TEMPLATES) {
     const main = await readSrc(`examples/gbc/templates/${t}.c`);
     // Every gbc genre scaffold must visibly use BCPS/BCPD — that's
@@ -35,9 +36,12 @@ test("R37 GBC tier-1: every GBC scaffold compiles + writes BG palette via BCPS",
       platform: "gbc",
       language: "c",
       sources: { "main.c": main, "gb_runtime.c": runtimeC },
-      includes: { "gb_runtime.h": runtimeH, "gb_hardware.h": hwH },
+      includes: { "gb_runtime.h": runtimeH, "gb_hardware.h": hwH, "font.h": fontH },
       crt0,
       codeLoc: 0x150,
+      /* statics above shadow_oam ($C100) — the project recipe default;
+       * the puzzle's grid/shadow arrays overlap it at the sdld $C000 default */
+      dataLoc: 0xC200,
     });
     assert.equal(r.ok, true, `gbc/${t} build failed at ${r.stage}: ${(r.log || "").slice(-300)}`);
     assert.ok(r.binary.length >= 16384, `gbc/${t}: ROM too small`);

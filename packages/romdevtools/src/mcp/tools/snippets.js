@@ -97,11 +97,11 @@ export function registerSnippetTools(_server, _z) {
       platform, languages, snippets: filtered,
       note: filtered.length === 0
         ? `No snippets matched for '${platform}'${language ? ` (language=${language})` : ""}.`
-        : `Fetch one with starterSnippets({ platform, mode:'get', name${language ? ", language" : ""} }), or all with mode:'getAll'.`,
+        : `Fetch one with examples({ op:'snippets', platform, mode:'get', snippetName${language ? ", language" : ""} }), or all with mode:'getAll'.`,
     });
   }
   async function snippetsGet(platform, name, language) {
-    if (!name) throw new Error("starterSnippets mode:'get' requires `name`.");
+    if (!name) throw new Error("examples({op:'snippets'}) mode:'get' requires `snippetName`.");
     if (name.includes("..") || (name.includes("/") && !/^[a-z]+\/[\w.-]+$/i.test(name))) {
       throw new Error("snippet name must not contain '..' or arbitrary path separators");
     }
@@ -124,7 +124,7 @@ export function registerSnippetTools(_server, _z) {
       return textContent(`No snippets available for '${platform}'${language ? ` (language=${language})` : ""}.`);
     }
     if (!inline && !outputPath) {
-      throw new Error("starterSnippets mode:'getAll': pass outputPath (write the joined snippets to disk, returns {path}) or inline:true (return `combined` in the response). Or use copyStarterSnippets to write each snippet as its own file.");
+      throw new Error("examples({op:'snippets'}) mode:'getAll': pass outputPath (write the joined snippets to disk, returns {path}) or inline:true (return `combined` in the response). Or use examples({op:'copySnippets'}) to write each snippet as its own file.");
     }
     const parts = [];
     for (const s of filtered) {
@@ -161,7 +161,7 @@ export function registerSnippetTools(_server, _z) {
       if (filtered.length === 0) {
         const langPart = language ? ` (language=${language})` : "";
         const includePart = include ? ` (include=${JSON.stringify(include)})` : "";
-        throw new Error(`copyStarterSnippets: no snippets matched for platform '${platform}'${langPart}${includePart}.`);
+        throw new Error(`examples({op:'copySnippets'}): no snippets matched for platform '${platform}'${langPart}${includePart}.`);
       }
       await mkdir(destinationDir, { recursive: true });
       const written = [];
@@ -201,9 +201,9 @@ export function registerSnippetTools(_server, _z) {
   };
 }
 
-// starterSnippets/copyStarterSnippets folded into the `scaffold` tool. The cores
+// starterSnippets/copyStarterSnippets folded into the `examples` tool. The cores
 // are assigned inside registerSnippetTools (they close over the local helpers);
-// scaffold imports these and calls them. registerSnippetTools registers NO tools
+// examples imports these and calls them. registerSnippetTools registers NO tools
 // now — it just wires the cores.
 export let starterSnippetsCore = async () => { throw new Error("snippet cores not initialized — registerSnippetTools must run first"); };
 export let copyStarterSnippetsCore = async () => { throw new Error("snippet cores not initialized — registerSnippetTools must run first"); };

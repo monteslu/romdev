@@ -31,6 +31,18 @@ the same wall.
    cast through `volatile uint8_t *`. See `lib/c/SDCC_GOTCHAS.md`
    § "Writes to VRAM".
 
+3b. **OAM DMA goes FIRST after `wait_vblank()` — before any staging work.**
+   The vblank window is ~10 scanlines (~1140 cycles) and SDCC call overhead
+   is brutal: even a few dozen `oam_set()` CALLS before the flush push the
+   DMA out of vblank into active display, where it tears the sprites on one
+   FIXED scanline every frame (the "horizontal line a third of the way down"
+   glitch). The robust frame shape is: stage OAM/BG writes into RAM any time
+   during the frame, then `wait_vblank(); oam_dma_flush();` as the very first
+   thing, then a small bounded batch of BG map writes. One frame of sprite
+   latency is imperceptible. Also: statics belong at `dataLoc 0xC200` or
+   above (the project recipe sets this) so they can't collide with
+   `shadow_oam` at $C100.
+
 4. **OAM DMA must run from HRAM.** During the ~160 µs OAM DMA window
    the CPU can ONLY fetch from HRAM ($FF80-$FFFE). The bundled
    `oam_dma_copy()` installs a 9-byte stub at $FF80 and CALLs it; the
@@ -102,7 +114,7 @@ The CGB boot ROM checks header byte **`$0143`**:
 - `$80` → CGB-enhanced mode (color works, DMG-compat fallback)
 - `$C0` → CGB-only mode (refuses to boot on a DMG)
 
-**Every bundled GBC scaffold is built with `$0143 = $80`** — `build({output:'rom'})`
+**Every bundled GBC example game is built with `$0143 = $80`** — `build({output:'rom'})`
 / `build({output:'run'})` set this automatically at build time when `platform:"gbc"`,
 so a freshly built `.gbc` boots in color with no extra step. (Build it as
 `platform:"gb"` instead and the flag stays `$00` → DMG green-shade mode,
@@ -185,12 +197,12 @@ inversion: `{a}`→A, `{b}`→B, `{start}`/`{select}`, plus the d-pad (spatial
 east→A, west→B). So `input({op:'set', a: true})` presses GBC A as expected — unlike
 the genesis_plus_gx platforms (Genesis/SMS/GG), there's no surprise here.
 
-## Scaffolds
+## Example games
 
-All GB scaffolds (`shmup`, `platformer`, `puzzle`, `sports`, `racing`,
+All GB example games (`shmup`, `platformer`, `puzzle`, `sports`, `racing`,
 `hello_sprite`, `tile_engine`) compile identically as GBC ROMs — the
 bundled GB runtime is already CGB-aware (writes OCPD/OCPS for color).
-The genre scaffolds inherit from GB via `TEMPLATES.gbc = TEMPLATES.gb`;
+The genre examples inherit from GB via `TEMPLATES.gbc = TEMPLATES.gb`;
 the only differences at build time are:
 
 - ROM extension: `.gbc` (vs `.gb`)

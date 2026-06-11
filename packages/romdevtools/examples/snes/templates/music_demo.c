@@ -78,6 +78,13 @@ int main(void) {
      * screen is on you get a black/forced-blank screen forever. */
     sfx_init();
 
+    /* One frame between init and the FIRST command: sfx_init returns the
+     * instant the SPC echoes the jump command, but the driver then spends
+     * ~50 port writes initialising the DSP BEFORE it seeds its command
+     * edge-detector from $2140. A command sent inside that window gets
+     * swallowed by the seed — the music silently never starts. */
+    WaitForVBlank();
+
     /* Auto-start music. */
     sfx_music_play();
     music_running = 1;

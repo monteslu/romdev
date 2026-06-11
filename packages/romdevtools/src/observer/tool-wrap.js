@@ -5,9 +5,18 @@
 //
 // Idempotent per server instance — installs once, repeats are no-ops.
 
-import { observer, extractImages, summarizeForLog } from "./bus.js";
+import { observer, extractImages, summarizeForLog, pushObserverFrame } from "./bus.js";
+import { getHostOrNull } from "../mcp/state.js";
 
 const INSTALLED = Symbol.for("romdev.observer-installed");
+
+// The platform/system the session's host currently has loaded (nes, genesis, …),
+// or null if no ROM is loaded yet. Surfaced on every livestream event so a human
+// watching a multi-agent server sees WHICH console each tool call / frame belongs
+// to, not just the session id + tool name. Best-effort: never throws.
+function sessionPlatform(sessionKey) {
+  try { return getHostOrNull(sessionKey)?.status?.platform ?? null; } catch { return null; }
+}
 
 /**
  * Install tool-call instrumentation on an MCP server.
@@ -42,12 +51,15 @@ export function installObserverMiddleware(server, sessionKey) {
       // log isn't dominated by base64 / huge source strings, but keep
       // top-level property names intact.
       const argsSummary = summarizeForLog(args);
+      const platform = sessionPlatform(sessionKey); // which console this call drives
       let event;
       let frameProvider = null; // deferred framebuffer thunk (encoded async below)
+      let frameCaption = null;  // optional human label for the call_frame event
       if (thrown) {
         event = {
           type: "call",
           sessionKey,
+          platform,
           ts: startedAt,
           tool: name,
           args: argsSummary,
@@ -87,12 +99,17 @@ export function installObserverMiddleware(server, sessionKey) {
           frameProvider = result._observerFrameProvider;
           delete result._observerFrameProvider;
         }
+        if (result && typeof result === "object" && typeof result._observerFrameCaption === "string") {
+          frameCaption = result._observerFrameCaption;
+          delete result._observerFrameCaption;
+        }
         const inlineImages = extractImages(result);
         const images = inlineImages.length > 0 ? inlineImages : sidebandImages;
         const resultSummary = summarizeForLog(result);
         event = {
           type: "call",
           sessionKey,
+          platform,
           ts: startedAt,
           tool: name,
           args: argsSummary,
@@ -109,20 +126,18 @@ export function installObserverMiddleware(server, sessionKey) {
       // tool response on observer delivery.
       try { observer.push(event); } catch { /* never let observer kill the tool */ }
 
-      // Deferred frame: encode + push the PNG AFTER the agent's response goes
-      // out, so the (expensive) rasterize never delays the tool. setImmediate
-      // yields the response first; a separate `call_frame` event carries the
-      // image for the human's livestream. Best-effort — never throws into the
-      // tool path. (Only breakpoint/watch tools set a provider.)
+      // Deferred frame: encoded + pushed AFTER the agent's response goes out,
+      // throttled to one per 2s PER (session, tool) with a trailing-edge
+      // emit (bus.js pushObserverFrame) — frame-step loops can't flood the
+      // stream, distinct tools never throttle each other, and the last frame
+      // of a burst always lands. Best-effort — never throws into the tool
+      // path.
       if (frameProvider) {
-        setImmediate(() => {
-          try {
-            const img = frameProvider();
-            if (img) {
-              observer.push({ type: "call_frame", sessionKey, ts: startedAt, tool: name, images: [img] });
-            }
-          } catch { /* livestream is best-effort; never affects the agent */ }
-        });
+        pushObserverFrame({
+          sessionKey, tool: name, ts: startedAt, platform,
+          resolvePlatform: () => sessionPlatform(sessionKey),
+          ...(frameCaption ? { caption: frameCaption } : {}),
+        }, frameProvider);
       }
 
       if (thrown) throw thrown;

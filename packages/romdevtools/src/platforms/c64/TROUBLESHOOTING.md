@@ -83,6 +83,19 @@ KERNAL last selected. Result: ghost input.
 
 **Use port 2 (CIA1_PRA) by default.** All bundled C64 templates do.
 
+## "Player 2 input does nothing"
+
+Both C64 control ports ARE live over MCP, so 2P works — the mapping is just
+non-obvious: **host port 0 → control port 2 ($DC00) = player 1**, **host port 1
+→ control port 1 ($DC01) = player 2** (the universal "port 0 = P1" convention).
+So a 2P game reads P1 from $DC00 and P2 from $DC01, and you drive them with two
+port entries: `input({op:'set', ports:[{up:true},{down:true}]})` moves P1 up,
+P2 down. If P2 seems dead, check you passed a SECOND `ports` entry (not just
+port 0) and that the game actually entered 2P mode (its title pick, e.g. "PORT 1
+FIRE = 2P"). The host enables the VICE userport-adapter mapping + swaps the two
+RetroPad ports under the hood so this convention holds — you don't configure
+anything.
+
 ## "Audio is silent / SID doesn't play"
 
 Three things to check:

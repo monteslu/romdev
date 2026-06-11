@@ -43,6 +43,12 @@ const PLATFORM_CORE_OPTIONS = {
   // `… - C-BIOS` machine tree ships in romdev-core-bluemsx/bios and is mirrored
   // into the wasm FS as the system dir (see loadMedia + resolveSystemDir).
   msx: { bluemsx_msxtype: "MSX2+ - C-BIOS" },
+  // geargrafx ships with the TurboTap disabled, which makes port-1 input
+  // unreachable in-game (every pad scan slot mirrors pad 0). Enabling it
+  // costs nothing for 1P games (slot 0 still reads pad 0) and routes the
+  // host's port-1 input to pad slot 2 — PCE 2P works (probed 2026-06-10
+  // during the ZENITH BARRAGE gold round).
+  pce: { geargrafx_turbotap: "Enabled" },
   // VICE mounts a .d64/.tap/.crt but, with autostart off, just sits at the BASIC
   // `READY.` prompt — the agent would see a blue boot screen, not the game. Force
   // autostart so a disk/tape image runs the first program automatically (same as
@@ -57,6 +63,19 @@ const PLATFORM_CORE_OPTIONS = {
     // files back into the .d64 (VICE updates the in-FS image in place). Without
     // this a game's SAVE silently fails / errors — defeating disk-save support.
     vice_floppy_write_protection: "disabled",
+    // TWO live C64 control ports so 2P games see player 2. The VICE core drives
+    // ONE control port per RetroPad by default (every retro port → cur_port);
+    // the per-port split only happens with the userport adapter, where the
+    // mapper does vice_port = cur_port + retro_port. With joyport=1 + a userport
+    // adapter that gives retro0→control-port-1, retro1→control-port-2 — BOTH
+    // standard ports live. Our games read P1 on control port 2 ($DC00) and P2
+    // on port 1 ($DC01); the host swaps the two retro ports below
+    // (portInputToMask C64 path) so host port 0 = P1 (control port 2) and host
+    // port 1 = P2 (control port 1), matching the universal "port 0 = player 1"
+    // convention. Verified: drives both paddles independently in 2P, 1P-vs-CPU
+    // still reachable. (Both options ship in the wasm — no core rebuild.)
+    vice_joyport: "1",
+    vice_userport_joytype: "HIT",
   },
 };
 
@@ -415,6 +434,9 @@ export class LibretroHost {
 
     // Configure controller port 0 as joypad (some cores default to NONE).
     mod._retro_set_controller_port_device(0, RETRO_DEVICE_JOYPAD);
+    // Port 1 too — needed for 2P. The C64/VICE 2P path (two live control ports)
+    // only reads RetroPad port 1 when it's registered as a joypad device.
+    mod._retro_set_controller_port_device(1, RETRO_DEVICE_JOYPAD);
 
     // ---- Settle the framebuffer to the ROM's chosen geometry ----
     //
@@ -623,7 +645,14 @@ export class LibretroHost {
       this._applyC64ButtonKeys(input.ports[0] || {});
     }
     for (let port = 0; port < this.state.inputPorts.length; port++) {
-      const portInput = this._c64StripKeyButtons(input.ports[port], platform);
+      // C64 2P port swap: with joyport=1 + userport the VICE mapper binds
+      // RetroPad 0 → C64 control port 1 and RetroPad 1 → control port 2. But
+      // our games read player 1 on control port 2 ($DC00) and player 2 on
+      // control port 1 ($DC01). So feed host port 0's input to RetroPad slot 1
+      // (→ control port 2 = P1) and host port 1's to slot 0 (→ port 1 = P2),
+      // restoring the universal "host port 0 = player 1" convention.
+      const srcPort = platform === "c64" ? (port ^ 1) : port;
+      const portInput = this._c64StripKeyButtons(input.ports[srcPort], platform);
       this.state.inputPorts[port][0] = portInputToMask(portInput, platform);
     }
   }
@@ -776,6 +805,18 @@ export class LibretroHost {
     return mod._retro_get_memory_size(id) || 0;
   }
 
+  /** gpgx stores 68k work RAM as 16-bit words in host-LE order — the CPU's
+   *  byte at $FF0000+A physically lives at work_ram[A^1] (core/macros.h
+   *  READ_BYTE/WRITE_BYTE on little-endian builds). Normalize the system_ram
+   *  region to CPU byte order here so offset X IS the byte the 68k sees at
+   *  $FF0000+X — otherwise every byte-granular tool (search, diff, write,
+   *  classify) is off-by-XOR-1 vs disassembly addresses and cheat-DB maps
+   *  (self-consistent within raw-only loops, which is why it hid; poisonous
+   *  the moment an address crosses to/from the CPU view). */
+  _byteSwapRegion(region) {
+    return region === "system_ram" && this.status.platform === "genesis";
+  }
+
   readMemory(region, offset, length) {
     const mod = this._needMod();
     const id = MemoryRegionToRetro[region];
@@ -785,6 +826,12 @@ export class LibretroHost {
     if (!ptr || !size) throw new Error(this._emptyRegionError(region));
     if (offset < 0 || offset + length > size) {
       throw new RangeError(`read out of bounds: offset=${offset} len=${length} size=${size}`);
+    }
+    if (this._byteSwapRegion(region)) {
+      const heap = mod.HEAPU8;
+      const out = new Uint8Array(length);
+      for (let i = 0; i < length; i++) out[i] = heap[ptr + ((offset + i) ^ 1)];
+      return out;
     }
     return new Uint8Array(mod.HEAPU8.buffer, ptr + offset, length).slice();
   }
@@ -803,6 +850,11 @@ export class LibretroHost {
     if (!ptr || !size) throw new Error(this._emptyRegionError(region));
     if (offset < 0 || offset + bytes.length > size) {
       throw new RangeError(`write out of bounds: offset=${offset} len=${bytes.length} size=${size}`);
+    }
+    if (this._byteSwapRegion(region)) {
+      const heap = mod.HEAPU8;
+      for (let i = 0; i < bytes.length; i++) heap[ptr + ((offset + i) ^ 1)] = bytes[i];
+      return;
     }
     mod.HEAPU8.set(bytes, ptr + offset);
   }
@@ -929,6 +981,86 @@ export class LibretroHost {
   }
 
   /**
+   * Press a C64 key like pressC64Key, but sample the machine-visible input
+   * state (CIA1 $DC00/$DC01 — the keyboard/joystick scan ports) BEFORE,
+   * DURING (key held), and AFTER (released). Lets an RE agent tell apart
+   * "my key never reached VICE" from "VICE saw it but the game didn't scan
+   * it this frame". No core change — reads the already-exposed c64_cia1_regs
+   * region ($DC00..$DC0F).
+   * @param {string} key
+   * @param {number} frames  frames to hold (sampled at the midpoint)
+   * @returns {object} matrix coords + held flag + per-phase CIA snapshots
+   */
+  pressC64KeyVerify(key, frames = 4) {
+    const mod = this._needMod();
+    if (typeof mod._romdev_key_matrix !== "function") {
+      throw new Error("this core build does not expose C64 keyboard input (C64/VICE only).");
+    }
+    const pos = C64_KEY_MATRIX[String(key).toLowerCase()];
+    if (!pos) {
+      throw new Error(`unknown C64 key '${key}'. Known: ${Object.keys(C64_KEY_MATRIX).join(", ")}.`);
+    }
+    const [row, col] = pos;
+    const held = Math.max(1, frames | 0);
+    // $DC00 = CIA1 PRA (port A — joystick 2 + keyboard col select),
+    // $DC01 = CIA1 PRB (port B — joystick 1 + keyboard row read).
+    const cia = () => {
+      try {
+        const r = this.readMemory("c64_cia1_regs", 0, 2);
+        return { DC00: r[0], DC01: r[1] };
+      } catch { return null; }
+    };
+    const before = cia();
+    mod._romdev_key_matrix(row, col, 1);          // press
+    this.stepFrames(Math.ceil(held / 2));
+    const during = cia();                          // key still held
+    this.stepFrames(Math.max(1, held - Math.ceil(held / 2)));
+    mod._romdev_key_matrix(row, col, 0);          // release
+    this.stepFrames(1);
+    const after = cia();
+    return {
+      key: String(key).toLowerCase(),
+      row, col,
+      frames: held,
+      joyport: this.getC64JoyPort?.() ?? null,
+      autoReleased: true,
+      cia1: { before, during, after },
+      note: "CIA1 $DC00 (port A) / $DC01 (port B) are the keyboard/joystick scan ports the KERNAL reads. `during` is sampled with the key held; if before==during the key never moved the matrix line (didn't reach VICE); if they differ but the game didn't react, it scanned a different key/port or that screen ignores it.",
+    };
+  }
+
+  /**
+   * Set the SET of C64 keyboard keys held down (for scripted timelines like
+   * recordSession). Diffs against the currently-held set: presses newly-added
+   * keys' matrix lines, releases removed ones. Pass [] to release all. Does NOT
+   * step frames — the caller's loop owns stepping. Unknown keys throw.
+   * @param {string[]} keys
+   * @returns {{held: string[], matrix: Array<[number,number]>}}
+   */
+  setC64HeldKeys(keys) {
+    const mod = this._needMod();
+    if (typeof mod._romdev_key_matrix !== "function") {
+      throw new Error("this core build does not expose C64 keyboard input (C64/VICE only).");
+    }
+    const want = new Set((keys ?? []).map((k) => String(k).toLowerCase()));
+    for (const k of want) {
+      if (!C64_KEY_MATRIX[k]) {
+        throw new Error(`unknown C64 key '${k}'. Known: ${Object.keys(C64_KEY_MATRIX).join(", ")}.`);
+      }
+    }
+    const have = this._c64HeldKeys ?? (this._c64HeldKeys = new Set());
+    // release keys no longer wanted
+    for (const k of have) {
+      if (!want.has(k)) { const [r, c] = C64_KEY_MATRIX[k]; mod._romdev_key_matrix(r, c, 0); have.delete(k); }
+    }
+    // press newly-added keys
+    for (const k of want) {
+      if (!have.has(k)) { const [r, c] = C64_KEY_MATRIX[k]; mod._romdev_key_matrix(r, c, 1); have.add(k); }
+    }
+    return { held: [...have], matrix: [...have].map((k) => C64_KEY_MATRIX[k]) };
+  }
+
+  /**
    * Feed a PETSCII string into the C64 kernal keyboard buffer (for typing
    * LOAD/RUN/filenames). `\r` (or `\n`) becomes RETURN. Non-blocking — the
    * kernal drains it as the screen editor runs, so step frames after.
@@ -992,7 +1124,36 @@ export class LibretroHost {
       this.reset();
       return false;
     }
+    // Battery semantics: SAVE_RAM survives a power-cycle on a battery cart.
+    // Carry it across the reload (the reload itself zeroes it).
+    let sram = null;
+    try {
+      const size = this.regionSize("save_ram");
+      if (size > 0) sram = Uint8Array.from(this.readMemory("save_ram", 0, size));
+    } catch { /* no save_ram region on this core/cart — nothing to carry */ }
     await this.loadMedia(this._loadArgs);
+    if (sram && sram.some((b) => b !== 0)) {
+      // Restore like a frontend restores the .srm: bytes in place BEFORE the
+      // game's boot code reads them. Some cores size SAVE_RAM lazily (gpgx
+      // scans for the last non-empty byte → size 0 on a fresh boot), so fall
+      // back to the raw region pointer when the sized path refuses.
+      let restored = false;
+      try {
+        if (this.regionSize("save_ram") >= sram.length) {
+          this.writeMemory("save_ram", 0, sram);
+          restored = true;
+        }
+      } catch { /* sized path unavailable */ }
+      if (!restored) {
+        try {
+          const ptr = this.mod._retro_get_memory_data(0); // RETRO_MEMORY_SAVE_RAM
+          if (ptr) { this.mod.HEAPU8.set(sram, ptr); restored = true; }
+        } catch { /* no save buffer on this core/cart */ }
+      }
+      // loadMedia's settle frames may already have run the game's
+      // hi-score load against empty SRAM — soft-reset so boot re-reads.
+      if (restored) { try { this.reset(); } catch { /* keep the loaded state */ } }
+    }
     return true;
   }
 
@@ -1104,11 +1265,14 @@ export class LibretroHost {
   }
 
   // ── PC breakpoint + read watchpoint + single-step (core-side, exact) ────────
-  // Symmetric to the write watchpoint. The PC breakpoint freezes the CPU at the
-  // target instruction mid-frame (the core's execute loop bails on hit); the
-  // read watchpoint records the PC that READ an address. Both require a core
-  // patched with the romdev_pcbreak_*/romdev_readwatch_* exports (Genesis today;
-  // other cores as they're patched). Capability is feature-detected per core.
+  // Symmetric to the write watchpoint. On PC hit the core's execute loop drains
+  // the cycle budget and bails, but retro_run still finishes the frame — so the
+  // LIVE register file is end-of-frame state by the time the host reads it. Cores
+  // that snapshot the registers AT the hit (NES/fceumm: getPCBreak().registersAtHit)
+  // give the reliable break-instant regs; others expose only lastPC + the RAM side
+  // effects. The read watchpoint records the PC that READ an address. All require a
+  // core patched with the romdev_pcbreak_*/romdev_readwatch_* exports. Capability
+  // (and reg-snapshot availability) is feature-detected per core.
 
   /** True when this core build exposes the PC breakpoint + single-step. */
   pcBreakSupported() {
@@ -1139,13 +1303,22 @@ export class LibretroHost {
     if (typeof mod._romdev_pcbreak_get !== "function") {
       throw new Error("this core build does not expose the PC breakpoint.");
     }
-    const ptr = mod._malloc(24); // up to 6 × uint32 (older cores write 5)
+    const ptr = mod._malloc(44); // up to 11 × uint32 (newer fceumm writes 11: +A/X/Y/P/S snapshot)
     try {
-      // Pre-seed slot 5 (watchdog) so a 5-element older core leaves it 0.
-      new Uint32Array(mod.HEAPU8.buffer, ptr, 6).fill(0);
+      // Pre-seed all 11 slots. The reg-snapshot slots (6-10) default to
+      // 0xFFFFFFFF = "no snapshot" so a core that only writes 6 (Genesis et al.)
+      // leaves them as "unavailable" rather than 0 (a valid register value).
+      const seed = new Uint32Array(mod.HEAPU8.buffer, ptr, 11);
+      seed.fill(0); seed[6] = seed[7] = seed[8] = seed[9] = seed[10] = 0xFFFFFFFF;
       mod._romdev_pcbreak_get(ptr, clearHit ? 1 : 0);
-      const u = new Uint32Array(mod.HEAPU8.buffer, ptr, 6);
+      const u = new Uint32Array(mod.HEAPU8.buffer, ptr, 11);
       const lastPC = u[3];
+      // Register snapshot at the hit instant (fceumm). 0xFFFFFFFF = not captured
+      // (older core, or no hit yet). When present, these are the RELIABLE
+      // break-instant regs — the live X6502 regs are clobbered by end-of-frame.
+      const snap = (u[6] === 0xFFFFFFFF && u[7] === 0xFFFFFFFF)
+        ? null
+        : { A: u[6] & 0xFF, X: u[7] & 0xFF, Y: u[8] & 0xFF, P: u[9] & 0xFF, S: u[10] & 0xFF };
       return {
         enabled: !!u[0],
         address: u[1],
@@ -1153,6 +1326,7 @@ export class LibretroHost {
         lastPC: lastPC === 0xFFFFFFFF ? null : lastPC,
         hits: u[4],
         watchdog: !!u[5], // the run was force-stopped by the instruction watchdog
+        registersAtHit: snap,
       };
     } finally {
       mod._free(ptr);
@@ -1168,6 +1342,161 @@ export class LibretroHost {
   }
   watchdogSupported() {
     return !!(this.mod && typeof this.mod._romdev_watchdog_set === "function");
+  }
+
+  /** True when this core build exposes the at-hit register snapshot (gpgx). */
+  regSnapSupported() {
+    return !!(this.mod && typeof this.mod._romdev_regsnap_get === "function");
+  }
+
+  /**
+   * Read the at-hit register snapshot: the FULL register file frozen by the
+   * core hook at the instant a pc-break / watchdog / write-watch / read-watch
+   * fired. The live register file keeps running after a hit (per-scanline CPU
+   * scheduling / next-frame re-entry), so post-hit register reads drift —
+   * this snapshot is the truth. Shipped by ALL patched cores (all 14
+   * platforms). Returns { kind, named } or null when no hit has been
+   * snapshotted (or the core build predates the export). kind:
+   * 1=pc-break/step, 2=watchdog, 3=write-watch, 4=read-watch. `named` keys
+   * follow each CPU's own register file; `pc` is always the EXECUTING
+   * instruction (ARM: its pipeline PC, the same convention breakpoint
+   * addresses use). Pass clear to reset the kind.
+   */
+  getRegSnapshot(clear = false) {
+    const mod = this.mod;
+    if (!mod || typeof mod._romdev_regsnap_get !== "function") return null;
+    const ptr = mod._malloc(21 * 4);
+    try {
+      mod._romdev_regsnap_get(ptr, clear ? 1 : 0);
+      const u = new Uint32Array(mod.HEAPU8.buffer, ptr, 21);
+      const kind = u[0];
+      if (!kind) return null;
+      const r = Array.from(u.subarray(2, 2 + Math.min(u[1] >>> 0, 19)));
+      const platform = this.status.platform;
+      const h2 = (v) => "$" + (v & 0xFF).toString(16).toUpperCase();
+      const h4 = (v) => "$" + (v & 0xFFFF).toString(16).toUpperCase();
+      const hx = (v) => "$" + (v >>> 0).toString(16).toUpperCase();
+      let named;
+      if (platform === "genesis") {
+        // m68k regId order: D0-7, A0-7, PC(instr start), SR, SP.
+        named = {};
+        for (let i = 0; i < 8; i++) named["d" + i] = hx(r[i]);
+        for (let i = 0; i < 8; i++) named["a" + i] = hx(r[8 + i]);
+        named.pc = hx(r[16]);
+        named.sr = h4(r[17]);
+        named.sp = hx(r[18]);
+      } else if (platform === "gba") {
+        // ARM regId order: r0-r15 raw, CPSR at 16, instr pipeline PC at 17, SP at 18.
+        named = {};
+        for (let i = 0; i < 16; i++) named["r" + i] = hx(r[i]);
+        named.cpsr = hx(r[16]);
+        named.pc = hx(r[17]);   // EXECUTING instruction's pipeline PC (pc-break convention)
+        named.sp = hx(r[18]);
+      } else if (platform === "snes") {
+        // 65816 regId order: A, X, Y, P, S, DB, D, …, PBPC(instr start).
+        named = {
+          a: h4(r[0]), x: h4(r[1]), y: h4(r[2]), p: h4(r[3]), s: h4(r[4]),
+          db: h2(r[5]), d: h4(r[6]), pc: hx(r[16]),
+        };
+      } else if (platform === "gb" || platform === "gbc") {
+        named = {
+          a: h2(r[0]), f: h2(r[1]), b: h2(r[2]), c: h2(r[3]),
+          d: h2(r[4]), e: h2(r[5]), h: h2(r[6]), l: h2(r[7]),
+          pc: h4(r[16]), sp: h4(r[18]),
+        };
+      } else if (platform === "sms" || platform === "gg" || platform === "msx") {
+        named = {
+          a: h2(r[0]), f: h2(r[1]), b: h2(r[2]), c: h2(r[3]),
+          d: h2(r[4]), e: h2(r[5]), h: h2(r[6]), l: h2(r[7]),
+          ix: h4(r[8]), iy: h4(r[9]), pc: h4(r[16]), sp: h4(r[18]),
+        };
+      } else {
+        // 6502 family (nes, atari2600, atari7800, c64, lynx, pce/huc6280):
+        // regId order A, X, Y, P, S, …, PC(instr start).
+        named = {
+          a: h2(r[0]), x: h2(r[1]), y: h2(r[2]), p: h2(r[3]), s: h2(r[4]),
+          pc: h4(r[16]),
+        };
+      }
+      return { kind, named };
+    } finally {
+      mod._free(ptr);
+    }
+  }
+
+  /** True when this core build exposes the pure-CPU run (gpgx). */
+  runPureSupported() {
+    return !!(this.mod && typeof this.mod._romdev_run_pure === "function");
+  }
+
+  /** True when this core build exposes the interrupt block (the pure-call
+   *  primitive on cores without a separable CPU loop). */
+  irqBlockSupported() {
+    return !!(this.mod && typeof this.mod._romdev_irqblock_set === "function");
+  }
+
+  /** Suppress (or restore) interrupt DELIVERY to the active CPU. While
+   *  blocked, pending IRQ/NMI lines stay pending and no game handler can run
+   *  — the mechanism behind pure calls on cores whose CPU/video loops are
+   *  interleaved (everything except gpgx, which steps the CPU alone). */
+  setIrqBlock(on) {
+    const mod = this._needMod();
+    if (typeof mod._romdev_irqblock_set !== "function") {
+      throw new Error("this core build does not expose the interrupt block (rebuild with romdev_irqblock_set).");
+    }
+    mod._romdev_irqblock_set(on ? 1 : 0);
+  }
+
+  /** True when a pure call is possible on this platform by ANY mechanism:
+   *  a separable CPU run (gpgx), an interrupt block, or hardware with no
+   *  interrupts at all (the 2600's 6507 has no IRQ/NMI lines wired — every
+   *  call is inherently pure). */
+  pureCallSupported() {
+    return this.runPureSupported() || this.irqBlockSupported() || this.status.platform === "atari2600";
+  }
+
+  /** True when this core build exposes the VRAM-port copy trace (port-based
+   *  video memory: NES/SNES/PCE/MSX/SMS/GG/Genesis). Direct-mapped platforms
+   *  answer the same question through watchRange on the CPU-visible VRAM. */
+  vramWatchSupported() {
+    const mod = this.mod;
+    return !!(mod && typeof mod._romdev_vramwatch_set === "function" && typeof mod._romdev_vramwatch_get === "function");
+  }
+
+  /**
+   * Run `frames` frames logging every data-port write landing in the VRAM
+   * address window [lo,hi] — {vramAddr, pc, value} per event, pc being the
+   * EXECUTING instruction (during DMA on SNES, the instruction that triggered
+   * it). The "where does this graphic come from?" primitive for port-based
+   * video memory. Returns { events, total, stored, truncated }.
+   */
+  watchVram(lo, hi, frames, perFrame) {
+    const mod = this._needMod();
+    this._needMedia();
+    if (!this.vramWatchSupported()) throw new Error("VRAM copy trace not supported by this core.");
+    mod._romdev_vramwatch_set(lo >>> 0, hi >>> 0, 1);
+    try {
+      this._runFramesExclusive(perFrame ?? (() => false), frames);
+    } finally {
+      // drained below; disarm after
+    }
+    const CAP = 1024;
+    const outPtr = mod._malloc(CAP * 3 * 4);
+    const out2Ptr = mod._malloc(8);
+    try {
+      const n = mod._romdev_vramwatch_get(outPtr, CAP, out2Ptr);
+      const u = new Uint32Array(mod.HEAPU8.buffer, outPtr, n * 3);
+      const u2 = new Uint32Array(mod.HEAPU8.buffer, out2Ptr, 2);
+      const events = [];
+      for (let i = 0; i < n; i++) {
+        events.push({ vramAddr: u[i * 3], pc: u[i * 3 + 1], value: u[i * 3 + 2] & 0xFF });
+      }
+      return { events, total: u2[0], stored: u2[1], truncated: u2[0] > u2[1] };
+    } finally {
+      mod._free(outPtr);
+      mod._free(out2Ptr);
+      mod._romdev_vramwatch_set(0, 0, 0);
+    }
   }
 
   /** Arm/disarm the read watchpoint on a CPU address. */
@@ -1395,6 +1724,13 @@ export class LibretroHost {
     const {
       pc, regs = {}, spReg = prof.spReg, pcReg = prof.pcReg, sentinelPC = prof.defaultSentinel,
       sentinelBytes = prof.retBytes, maxFrames = 600, sandbox = true, capture,
+      // pure: step ONLY the active CPU (no frame machinery — VDP lines, co-CPU,
+      // interrupt raising). Without it, each "frame" of the call runs the
+      // game's OWN per-frame logic concurrently (VBlank handlers via RAM
+      // vectors etc.), which can stomp the buffer the driven routine is
+      // writing — a real session diffed a CORRECT codec reimplementation
+      // against that poisoned output for hours. gpgx (Genesis/SMS/GG) only.
+      pure = false,
       // presetMemory: [{addr, bytes}] CPU-space writes applied before the call
       // (codecs that read a global from RAM — a dest stride, a mode flag, etc).
       presetMemory = [],
@@ -1430,6 +1766,7 @@ export class LibretroHost {
 
     const snapshot = sandbox ? this.serializeState() : null;
     let captured, returned = false, framesRun = 0, watchdogTripped = false, stoppedAtPC = false;
+    let pureMode = null;
     try {
       // Apply pre-call memory writes (CPU-space).
       for (const m of presetMemory) {
@@ -1482,19 +1819,67 @@ export class LibretroHost {
       const target = (stopAtPC !== undefined ? stopAtPC : sentinelPC) >>> 0;
       this.setPCBreak(target, true, false);
       let finalState = null;
+      let irqBlocked = false;
       try {
-        framesRun = this._runFramesExclusive(() => {
-          const st = this.getPCBreak(false);
-          if (st.hit) {
-            finalState = st;
-            if (st.watchdog) watchdogTripped = true;
-            else if (stopAtPC !== undefined) stoppedAtPC = true;
-            else returned = true;
-            return true;
+        if (pure && this.runPureSupported()) {
+          // STRONGEST pure mode (gpgx): step ONLY the CPU — no frame machinery
+          // at all. Mask m68k interrupts so a PENDING VINT raised before the
+          // call can't redirect entry (no NEW interrupts are raised — the
+          // system loop never runs). The sandbox restore (or the game's own
+          // RTE discipline) makes the IPL change invisible afterward.
+          pureMode = "cpu-only";
+          if (this.status.platform === "genesis") {
+            this.setReg(17, (this.getReg(17) | 0x0700) & 0xFFFF);
           }
-          return false;
-        }, maxFrames);
+          // Drive the CPU in cycle chunks, checking the sentinel/watchdog
+          // between chunks. The watchdog bounds total instructions; the chunk
+          // cap is only a backstop against a watchdog-less older core.
+          const CHUNK_CYCLES = 1_000_000;
+          const maxChunks = 512;
+          for (let i = 0; i < maxChunks; i++) {
+            this.mod._romdev_run_pure(CHUNK_CYCLES);
+            const st = this.getPCBreak(false);
+            if (st.hit) {
+              finalState = st;
+              if (st.watchdog) watchdogTripped = true;
+              else if (stopAtPC !== undefined) stoppedAtPC = true;
+              else returned = true;
+              break;
+            }
+          }
+        } else {
+          if (pure) {
+            // INTERRUPT-BLOCKED pure mode (every other core): the frame
+            // machinery still runs (video/timers advance — harmless, they
+            // don't write game RAM), but interrupt DELIVERY is suppressed, so
+            // no game handler can execute. The only running game code is the
+            // routine we called — the same guarantee that matters for the
+            // output buffer. The 2600's 6507 has no interrupt lines at all,
+            // so every call there is pure by hardware.
+            if (this.irqBlockSupported()) {
+              this.setIrqBlock(true);
+              irqBlocked = true;
+              pureMode = "irq-blocked";
+            } else if (this.status.platform === "atari2600") {
+              pureMode = "no-interrupts";
+            } else {
+              throw new Error("cpu({op:'call', pure:true}) not supported by this core build (needs the romdev_irqblock_set export — update the core package).");
+            }
+          }
+          framesRun = this._runFramesExclusive(() => {
+            const st = this.getPCBreak(false);
+            if (st.hit) {
+              finalState = st;
+              if (st.watchdog) watchdogTripped = true;
+              else if (stopAtPC !== undefined) stoppedAtPC = true;
+              else returned = true;
+              return true;
+            }
+            return false;
+          }, maxFrames);
+        }
       } finally {
+        if (irqBlocked) { try { this.setIrqBlock(false); } catch { /* core gone */ } }
         this.setPCBreak(0, false, false);
         this.setWatchdog(0);
         if (!finalState) finalState = this.getPCBreak(true); else this.getPCBreak(true);
@@ -1514,6 +1899,7 @@ export class LibretroHost {
     const fin = this._lastCallResult || {};
     return {
       returned, framesRun,
+      ...(pure ? { pure: true, pureMode } : {}),
       ...(watchdogTripped ? { watchdog: true, reason: "watchdog: hit the instruction budget (likely a runaway loop — wrong A0/regs, a needed preset, or legitimately huge; raise maxInstructions or check the entry setup)" } : {}),
       ...(stoppedAtPC ? { stoppedAtPC: "$" + (stopAtPC >>> 0).toString(16).toUpperCase() } : {}),
       ...(fin.finalPC != null ? { finalPC: "$" + fin.finalPC.toString(16).toUpperCase(), finalPCRaw: fin.finalPC } : {}),

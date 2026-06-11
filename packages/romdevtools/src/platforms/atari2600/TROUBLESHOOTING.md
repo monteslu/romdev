@@ -159,3 +159,43 @@ snippet for one approach.
 ## "First build is slow but later ones are fast"
 
 Expected. dasm cold-load is ~500ms. Steady-state builds < 100ms.
+
+
+## Pressing RIGHT also "presses" LEFT (or the player can't move at all)
+
+The classic `LDA SWCHA / ASL / BCS … / ASL / BCS …` carry-chain only works if
+NOTHING between the shifts touches A. The moment a branch body does
+`LDA P_X` (a bounds check, a compare), the next `ASL` shifts your *position*
+instead of SWCHA — and since positions are < $80, carry comes back clear and
+the "other direction" fires too. Net effect: moves cancel, the sprite sticks
+to one edge. **Re-load SWCHA and AND a single bit per direction instead:**
+
+```asm
+  LDA SWCHA
+  AND #$80        ; bit7 = P0 Right (active LOW: 0 = pressed)
+  BNE .noRight
+  ...move right (clobber A freely)...
+.noRight:
+  LDA SWCHA
+  AND #$40        ; bit6 = P0 Left
+  BNE .noLeft
+  ...
+```
+
+## Jump plays its sound but the player never leaves the ground
+
+Signed-velocity clamps must check the SIGN first. An unsigned
+`CMP #$F8 / BCS keep` "terminal velocity" clamp also catches every POSITIVE
+(rising) velocity — +6 is less than $F8 unsigned — so the jump impulse is
+instantly slammed to falling and the whole arc resolves inside one frame
+(SFX plays, screen blips, no visible jump). Clamp only while falling:
+
+```asm
+  LDA P_VY
+  BPL .vyok       ; rising → terminal clamp doesn't apply
+  CMP #$F8
+  BCS .vyok       ; -8..-1 → fine
+  LDA #$F8        ; clamp to -8
+  STA P_VY
+.vyok:
+```

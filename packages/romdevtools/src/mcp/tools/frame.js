@@ -8,6 +8,7 @@ import { imageContent, jsonContent, safeTool } from "../util.js";
 import { decodeOAM, decodePpuRegs, ppuRegsPopulated } from "../../platforms/snes/ppu.js";
 import { stepInstructionCore, attachObserverFrame } from "./watch-memory.js";
 import { getRenderingContextCore } from "./rendering-context.js";
+import { humanCoDriveWarning } from "./playtest.js";
 
 // Normalize each platform's render-context into a CONSERVATIVE renderEnabled
 // (true | false | null). null = "can't tell from the registers" — verify never
@@ -244,11 +245,17 @@ export function registerFrameTools(server, z, sessionKey) {
   async function doStep({ frames }) {
       const host = getHost(sessionKey);
       const n = host.stepFrames(frames);
-      return jsonContent({
+      // Surface a co-drive conflict the moment the agent steps: a human
+      // actively playing in the playtest window means this step raced their
+      // real-time loop. Field only appears when the conflict is real.
+      const coDrive = humanCoDriveWarning(sessionKey);
+      // Livestream: the post-step frame (throttled to 1/2s per tool by the bus).
+      return attachObserverFrame(jsonContent({
         framesRun: n,
         frameCount: host.status.frameCount,
         framebuffer: { width: host.status.fbWidth, height: host.status.fbHeight },
-      });
+        ...(coDrive ? { humanCoDriveWarning: coDrive } : {}),
+      }), host, `step ×${n}`);
   }
 
   // Contract: an image goes to disk (path) OR comes back inline (inline:true).
@@ -371,16 +378,17 @@ export function registerFrameTools(server, z, sessionKey) {
       const host = getHost(sessionKey);
       host.stepFrames(frames);
       const shot = host.screenshot();
+      const coDrive = humanCoDriveWarning(sessionKey);
       if (!inline) {
         await writeFile(outPath, Buffer.from(shot.pngBase64, "base64"));
-        const json = jsonContent({ path: outPath, frameCount: host.status.frameCount, width: shot.width, height: shot.height });
+        const json = jsonContent({ path: outPath, frameCount: host.status.frameCount, width: shot.width, height: shot.height, ...(coDrive ? { humanCoDriveWarning: coDrive } : {}) });
         json._observerImages = [{ kind: "image", mimeType: "image/png", base64: shot.pngBase64 }];
         return json;
       }
       return {
         content: [
           imageContent(shot.pngBase64),
-          { type: "text", text: `stepped ${frames} → frame ${host.status.frameCount} (${shot.width}x${shot.height})` },
+          { type: "text", text: `stepped ${frames} → frame ${host.status.frameCount} (${shot.width}x${shot.height})${coDrive ? `\nWARNING: ${coDrive}` : ""}` },
         ],
       };
   }
@@ -393,7 +401,7 @@ export function registerFrameTools(server, z, sessionKey) {
     "level with 7200; prefer ONE big call.\n" +
     "'screenshot': capture the latest frame. `format:'png'` (default, exact colors) or `'ascii'` (lossy chafa text " +
     "render for agents that can't view images). `overlayBoxes` (png) draws a box per visible sprite (SNES+NES only); " +
-    "`scale` (png) resamples nearest-neighbor BOTH ways: 0<scale<1 DOWNscales (~75% fewer image tokens at 0.5), integer scale≥2 UPscales so tiny handheld targets read inline (e.g. scale:4 → GB 160x144 becomes 640x576); ascii cols/rows/symbols/colors knobs in the param hints. " +
+"`scale` (png) resamples nearest-neighbor: 0<scale<1 DOWNscales (~75% fewer image tokens at 0.5 — the useful direction, for cheap 'did it change?' checks). integer scale≥2 UPscales (pixel-duplication, e.g. scale:4 → GB 160x144 → 640x576) — but this adds NO detail (it's the same pixels enlarged) and costs MORE image tokens; the native frame already has every pixel. Prefer scale:1 (default, native). Only upscale if YOUR client renders tiny images too small to be useful AND can't zoom — and know that VLM encoders resize to a fixed resolution anyway, so it may not change what the model sees (and can slightly degrade it). ascii cols/rows/symbols/colors knobs in the param hints. " +
     "**CHEAP VERIFY: for a binary pass/fail check (theme changed? sprite present? HUD ticked?) prefer scale:0.5 or " +
     "format:'ascii' — BETTER, read the byte directly: symbols({op:'resolve', name}) → memory({op:'read'}) is a 1-byte " +
     "assertion that costs zero image tokens.**\n" +
@@ -417,7 +425,7 @@ export function registerFrameTools(server, z, sessionKey) {
       path: z.string().optional().describe("op=screenshot/stepAndShot: absolute path to write to (required unless inline:true)."),
       inline: z.boolean().default(false).describe("op=screenshot/stepAndShot: return the image in the response instead of writing to disk."),
       overlayBoxes: z.boolean().default(false).describe("op=screenshot png: draw a colored bounding box per visible sprite (SNES+NES only)."),
-      scale: z.number().gt(0).max(16).refine((s) => s <= 1 || Number.isInteger(s), { message: "scale must be 0<scale≤1 (downscale) or an integer ≥2 (upscale)" }).optional().describe("op=screenshot png: nearest-neighbor resample factor. 0<scale<1 DOWNscales (0.5 ≈ 75% fewer image tokens for cheap 'did it change?' checks); scale≥2 (integer) UPscales (nearest-neighbor — keeps pixel-art crisp) so tiny handheld targets are legible inline, e.g. scale:4 makes a GB 160x144 shot 640x576. scale=1/unset = native resolution."),
+      scale: z.number().gt(0).max(16).refine((s) => s <= 1 || Number.isInteger(s), { message: "scale must be 0<scale≤1 (downscale) or an integer ≥2 (upscale)" }).optional().describe("op=screenshot png: nearest-neighbor resample factor. DEFAULT (unset/1) = NATIVE resolution — perfect pixels, the accurate representation; use this. 0<scale<1 DOWNscales (0.5 ≈ 75% fewer image tokens — useful for cheap 'did it change?' checks). integer scale≥2 UPscales by pixel-duplication (e.g. scale:4 → GB 160x144 → 640x576): it adds NO information (same pixels enlarged), costs MORE image tokens, and since VLM encoders resize to their own fixed resolution it may not change what the model sees and can slightly degrade it. Only for clients that render tiny images too small to use and can't zoom."),
       cols: z.number().int().min(4).max(640).optional().describe("op=screenshot ascii: terminal columns (default fb_width/16)."),
       rows: z.number().int().min(4).max(480).optional().describe("op=screenshot ascii: terminal rows (default fb_height/16)."),
       symbols: z.enum(["ascii", "halfblock", "block", "quad", "sextant"]).default("ascii").describe("op=screenshot ascii: chafa symbol set."),

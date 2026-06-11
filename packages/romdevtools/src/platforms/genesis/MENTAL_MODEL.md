@@ -50,9 +50,13 @@ memory({op:'read', region:'system_ram', offset: sym.ramOffset, length:2})
 - **`static` file-local globals resolve too** (SGDK emits per-symbol sections).
   A non-`static` global that's never *read* can be optimised away at -O2 — mark
   game-state vars you inspect `volatile` (you want that anyway).
-- **Genesis WRAM is host-LE word-byte-swapped** in gpgx, so a 16-bit value reads
-  with its two bytes swapped at the offset (0x1234 → bytes `34 12`). Read the
-  word and account for it, or read single bytes.
+- **WRAM (`system_ram`) is normalized to CPU byte order** — offset X is the
+  byte the 68k sees at $FF0000+X, words read big-endian as expected, and
+  offsets line up with disassembly addresses and cheat-DB maps. (gpgx stores
+  work RAM host-LE word-swapped internally; the host un-swaps it. Before
+  0.28.0 the raw swapped layout leaked through — value-search/diff loops were
+  self-consistent, but any offset cross-referenced against a `move.b $FFxxxx`
+  in a disassembly was off-by-XOR-1.)
 - **PC → which function?** `symbols({op:'addr', pc, symbolsText: b.mapText})` maps
   a live `cpu({op:'read'}).pc` to the enclosing C function.
 
@@ -174,7 +178,7 @@ software mistake, not a hardware limit:
 > burst or a per-frame DMA), you overrun vblank, drop frames, and the
 > scroll judders. **Paint the planes ONCE at setup; the loop only nudges
 > scroll registers and re-stages sprites.** Use the
-> `template:"two_plane_parallax"` scaffold as the known-good shape.
+> `two_plane_parallax` example as the known-good shape.
 
 ### Hardware scroll, the whole loop
 
@@ -237,7 +241,7 @@ if (newTileCol != lastTileCol) {
 ```
 
 That's ~28 tile writes per 8 px of travel, not a 1792-cell plane redraw.
-The `template:"platformer"` scaffold scrolls within one plane (no
+The `platformer` example scrolls within one plane (no
 streaming); add the column-stream above to go wider. (Real Sonic also
 splits the screen with H-blank raster effects for independent strips —
 that's an IRQ/raster topic, see the `asm` template.)
@@ -427,10 +431,40 @@ Video is deeply readable; the FM audio chip is only partially exposed:
   `getPsgState` decodes the SN76489 (3 tone + 1 noise channels).
 - **Memory regions:** `memory({op:'read'})` exposes CRAM, VSRAM, VDP_REGS,
   Z80_RAM (the sound CPU's RAM), M68K work RAM, YM2612, PSG, and VRAM.
-  Remember the gpgx byte-swap quirk: VRAM and WRAM read host-LE
+  Remember the gpgx byte-swap quirk for VRAM: it reads host-LE
   word-byte-swapped (a 16-bit value's two bytes are swapped at the offset)
-  — account for it or read single bytes (see "Reading your C globals
-  headlessly").
+  — use tiles({op:'pixels'}) to decode in render order. M68K work RAM
+  (`system_ram`) is NOT affected: it's normalized to CPU byte order (see
+  "Reading your C globals headlessly").
+
+## Break-instant truth: registersAtHit + pure calls (0.28.0)
+
+gpgx schedules its CPUs per scanline, so a `breakpoint` hit mid-frame used to
+leave the LIVE register file hundreds of instructions past the hit by the time
+you could read it — chasing pointer registers read that way burned a real
+session for ~2h. Fixed two ways:
+
+- **`registersAtHit`** — `breakpoint({on:'pc'|'write'|'read'})` hits now carry
+  the FULL register file (d0-d7/a0-a7/pc/sr/sp) frozen by the core at the hit
+  instant. Use it, never a follow-up `cpu({op:'read'})`. The reported `pc` for
+  write/read hits is the EXECUTING instruction's first byte (pre-0.28.0 it was
+  the post-prefetch PC — one instruction late). On a pc-break the 68k also
+  stays FROZEN for the rest of the frame, so even live reads agree.
+- **`cpu({op:'call', pure:true})`** — steps ONLY the 68k: no VDP lines, no
+  Z80, no interrupts raised. Without it, a driven routine that spans frames
+  runs the game's own VBlank logic concurrently — which can stomp the output
+  buffer you're capturing (a real session diffed a CORRECT codec
+  reimplementation against that poisoned "ground truth" for hours). Prefer
+  `pure:true` for every decompressor/codec call; non-pure results carry a ⚠
+  caveat when frame logic ran. (SMS/GG get the same via the shared core; the
+  OTHER platforms get the same guarantee via interrupt blocking —
+  `pureMode:'irq-blocked'` — so the technique transfers everywhere.)
+- **`watch({on:'copy'})`** — the CPU-port complement of `watch({on:'dma'})`:
+  logs every data-port write landing in a VRAM window with the executing
+  instruction's PC. Use `dma` when the upload is DMA'd (most Genesis
+  graphics), `copy` when the game pokes the data port directly (the
+  "video_ram writes don't reach the renderer" class of confusion — `copy`
+  shows you who's writing and where).
 
 ## ROM layout
 
@@ -447,7 +481,7 @@ build pipeline computes the checksum on link.
 
 ## Where the SDK lives (and how to read it)
 
-`scaffold({op:'project', platform:"genesis"})` ships the full SGDK include
+`examples({op:'fork'})` (any Genesis example) ships the full SGDK include
 tree into the new project at `vendor/sgdk/`. So when your code does
 `#include <genesis.h>`, those headers come from
 `vendor/sgdk/include/`:

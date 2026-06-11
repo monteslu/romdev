@@ -76,10 +76,10 @@
 #
 
 diff --git a/src/arm/arm.c b/src/arm/arm.c
-index 0b92d7f..faf9a74 100644
+index 0b92d7f..3664f6d 100644
 --- a/src/arm/arm.c
 +++ b/src/arm/arm.c
-@@ -9,6 +9,203 @@
+@@ -9,6 +9,232 @@
  #include <mgba/internal/arm/isa-inlines.h>
  #include <mgba/internal/arm/isa-thumb.h>
  
@@ -149,6 +149,32 @@ index 0b92d7f..faf9a74 100644
 + * after the hit. */
 +static void romdev_end_frame(struct ARMCore* cpu) {
 +	cpu->cycles += ROMDEV_FRAME_CYCLES;
++}
++
++/* romdev at-hit REGISTER SNAPSHOT (ARM7TDMI). The live register file keeps
++ * moving after a hit (the next frame resumes the CPU), so the hooks freeze a
++ * copy at the hit instant. Layout = the romdev ARM regId order: [0..15] =
++ * r0..r15 raw (15 = the pipeline fetch PC), [16] = CPSR, plus two extras:
++ * [17] = the EXECUTING instruction's pipeline PC (gprs[PC]+width at dispatch —
++ * the SAME convention romdev_pc_addr uses, so it cross-references directly),
++ * [18] = r13/SP (uniform SP slot across cores). kind: 1=pc-break/step,
++ * 2=watchdog, 3=write-watch, 4=read-watch. */
++/* Memory-watch arming state (defined in gba/memory.c) — gates the fast-path
++ * bypass below so the instr-pc latch is live whenever a watch is armed. */
++extern int romdev_wp_enabled;
++extern int romdev_rd_enabled;
++extern int romdev_range_enabled;
++
++unsigned int romdev_snap_regs[19];
++int          romdev_snap_kind = 0;
++unsigned int romdev_arm_instr_pc = 0xFFFFFFFF;
++void romdev_arm_snap(struct ARMCore* cpu, int kind) {
++	int i;
++	for (i = 0; i < 16; i++) romdev_snap_regs[i] = (unsigned int) cpu->gprs[i];
++	romdev_snap_regs[16] = (unsigned int) cpu->cpsr.packed;
++	romdev_snap_regs[17] = romdev_arm_instr_pc;
++	romdev_snap_regs[18] = (unsigned int) cpu->gprs[13];
++	romdev_snap_kind = kind;
 +}
 +
 +/* Returns nonzero if a breakpoint/single-step fired for the instruction about
@@ -227,6 +253,9 @@ index 0b92d7f..faf9a74 100644
 +/* Coverage hook for the run loops: if armed and the about-to-execute PC is in
 + * [lo,hi], log it. Cheap when disabled (one int test). */
 +static inline void romdev_cov_check(unsigned int pcRaw) {
++	/* Latch the executing instruction's pipeline PC for the mid-instruction
++	 * hooks (write/read watchpoints) — called at every dispatch. */
++	romdev_arm_instr_pc = pcRaw;
 +	if (romdev_cov_enabled && pcRaw >= romdev_cov_lo && pcRaw <= romdev_cov_hi) {
 +		romdev_cov_log(pcRaw);
 +	}
@@ -283,7 +312,25 @@ index 0b92d7f..faf9a74 100644
  void ARMSetPrivilegeMode(struct ARMCore* cpu, enum PrivilegeMode mode) {
  	if (mode == cpu->privilegeMode) {
  		// Not switching modes after all
-@@ -230,6 +427,33 @@ void ARMRun(struct ARMCore* cpu) {
+@@ -121,8 +347,16 @@ void ARMReset(struct ARMCore* cpu) {
+ 	cpu->irqh.reset(cpu);
+ }
+ 
++/* romdev INTERRUPT BLOCK — the pure-call primitive. While set, IRQ delivery
++ * to the ARM is suppressed (IF/IE flags stay pending), so a routine driven by
++ * callSubroutine cannot be hijacked by the game's own VBlank handlers — the
++ * frame logic that stomps output buffers. Video/timers keep running; only the
++ * CPU's IRQ ENTRY is gated. (SWI is NOT gated: a driven routine may
++ * legitimately call BIOS functions.) */
++int romdev_irq_block = 0;
++
+ void ARMRaiseIRQ(struct ARMCore* cpu) {
+-	if (cpu->cpsr.i) {
++	if (cpu->cpsr.i || romdev_irq_block) {
+ 		return;
+ 	}
+ 	union PSR cpsr = cpu->cpsr;
+@@ -230,6 +464,35 @@ void ARMRun(struct ARMCore* cpu) {
  	while (cpu->cycles >= cpu->nextEvent) {
  		cpu->irqh.processEvents(cpu);
  	}
@@ -300,6 +347,7 @@ index 0b92d7f..faf9a74 100644
 +	if (romdev_pc_wd_limit && !romdev_pc_hit) {
 +		unsigned int width = (cpu->executionMode == MODE_THUMB) ? WORD_SIZE_THUMB : WORD_SIZE_ARM;
 +		if (romdev_watchdog_check(cpu->gprs[ARM_PC] + width)) {
++			romdev_arm_snap(cpu, 2);   /* freeze the register file AT the stop */
 +			romdev_end_frame(cpu);
 +			return;
 +		}
@@ -307,6 +355,7 @@ index 0b92d7f..faf9a74 100644
 +	if ((romdev_pc_enabled || romdev_pc_step) && !romdev_pc_hit) {
 +		unsigned int width = (cpu->executionMode == MODE_THUMB) ? WORD_SIZE_THUMB : WORD_SIZE_ARM;
 +		if (romdev_pcbreak_check(cpu->gprs[ARM_PC] + width)) {
++			romdev_arm_snap(cpu, 1);   /* freeze the register file AT the hit */
 +			romdev_end_frame(cpu);
 +			return;
 +		}
@@ -317,16 +366,28 @@ index 0b92d7f..faf9a74 100644
  	if (cpu->executionMode == MODE_THUMB) {
  		ThumbStep(cpu);
  	} else {
-@@ -241,12 +465,75 @@ void ARMRun(struct ARMCore* cpu) {
+@@ -241,12 +504,91 @@ void ARMRun(struct ARMCore* cpu) {
  }
  
  void ARMRunLoop(struct ARMCore* cpu) {
++	/* romdev: once a breakpoint/watchdog hit has frozen this CPU, KEEP it
++	 * frozen — re-entry would resume execution and drift the register file
++	 * away from the hit. The host clears the hit to resume. */
++	if (romdev_pc_hit) {
++		romdev_end_frame(cpu);
++		return;
++	}
++
 +	/* romdev breakpoint/coverage/watchdog fast-path bypass: when nothing is armed
-+	 * (no PC breakpoint, no single-step, no coverage log, no watchdog), run the
-+	 * stock tight loops untouched (zero overhead on the hot path). Coverage AND the
-+	 * watchdog gate the fast path too so their per-instruction hooks below actually
-+	 * run when armed. */
-+	if (!romdev_pc_enabled && !romdev_pc_step && !romdev_pc_hit && !romdev_cov_enabled && !romdev_pc_wd_limit) {
++	 * (no PC breakpoint, no single-step, no coverage log, no watchdog, no
++	 * write/read/range watch), run the stock tight loops untouched (zero
++	 * overhead on the hot path). The memory watches gate the fast path too
++	 * because their hooks report romdev_arm_instr_pc — the executing
++	 * instruction's pipeline PC, latched per-dispatch in the HOOKED loop below
++	 * (the fast loop doesn't latch, so a watch armed during the fast path
++	 * would report a stale PC and a stale register snapshot). */
++	if (!romdev_pc_enabled && !romdev_pc_step && !romdev_pc_hit && !romdev_cov_enabled && !romdev_pc_wd_limit
++	    && !romdev_wp_enabled && !romdev_rd_enabled && !romdev_range_enabled) {
 +		if (cpu->executionMode == MODE_THUMB) {
 +			while (cpu->cycles < cpu->nextEvent) {
 +				ThumbStep(cpu);
@@ -368,10 +429,12 @@ index 0b92d7f..faf9a74 100644
 +			/* romdev WATCHDOG: FIRST, before the pc-break, so a runaway can't outrun
 +			 * it. Same frame-end as the pc-break (no processEvents → no PC rewrite). */
 +			if (romdev_watchdog_check(cpu->gprs[ARM_PC] + WORD_SIZE_THUMB)) {
++				romdev_arm_snap(cpu, 2);
 +				romdev_end_frame(cpu);
 +				return;
 +			}
 +			if (romdev_pcbreak_check(cpu->gprs[ARM_PC] + WORD_SIZE_THUMB)) {
++				romdev_arm_snap(cpu, 1);
 +				romdev_end_frame(cpu);
 +				return;
 +			}
@@ -383,10 +446,12 @@ index 0b92d7f..faf9a74 100644
 +			/* romdev WATCHDOG: FIRST, before the pc-break, so a runaway can't outrun
 +			 * it. Same frame-end as the pc-break (no processEvents → no PC rewrite). */
 +			if (romdev_watchdog_check(cpu->gprs[ARM_PC] + WORD_SIZE_ARM)) {
++				romdev_arm_snap(cpu, 2);
 +				romdev_end_frame(cpu);
 +				return;
 +			}
 +			if (romdev_pcbreak_check(cpu->gprs[ARM_PC] + WORD_SIZE_ARM)) {
++				romdev_arm_snap(cpu, 1);
 +				romdev_end_frame(cpu);
 +				return;
 +			}
@@ -394,10 +459,10 @@ index 0b92d7f..faf9a74 100644
  		}
  	}
 diff --git a/src/gba/memory.c b/src/gba/memory.c
-index 27e289c..15f3b3c 100644
+index 27e289c..c40b99f 100644
 --- a/src/gba/memory.c
 +++ b/src/gba/memory.c
-@@ -18,6 +18,85 @@
+@@ -18,6 +18,92 @@
  #include <mgba-util/memory.h>
  #include <mgba-util/vfs.h>
  
@@ -413,9 +478,15 @@ index 27e289c..15f3b3c 100644
 +unsigned int  romdev_wp_last_pc  = 0xFFFFFFFF;
 +unsigned char romdev_wp_last_val = 0;
 +unsigned int  romdev_wp_hits     = 0;
++/* The hooks report the EXECUTING instruction's pipeline PC
++ * (romdev_arm_instr_pc, latched at dispatch in arm.c — same convention as the
++ * pc-break address) and freeze a full register snapshot at the hit. */
++extern unsigned int romdev_arm_instr_pc;
++extern void romdev_arm_snap(struct ARMCore* cpu, int kind);
 +#define ROMDEV_WP_GBA(cpu, addr, val) do { \
 +		if (romdev_wp_enabled && (unsigned int)(addr) == romdev_wp_addr) { \
-+			romdev_wp_last_pc = (cpu)->gprs[ARM_PC]; romdev_wp_last_val = (unsigned char)(val); romdev_wp_hits++; \
++			romdev_wp_last_pc = romdev_arm_instr_pc; romdev_wp_last_val = (unsigned char)(val); romdev_wp_hits++; \
++			romdev_arm_snap((cpu), 3); \
 +		} \
 +	} while (0)
 +
@@ -432,7 +503,8 @@ index 27e289c..15f3b3c 100644
 +unsigned int  romdev_rd_hits     = 0;
 +#define ROMDEV_RD_GBA(cpu, addr, val, cc) do { \
 +		if (romdev_rd_enabled && (cc) && (unsigned int)(addr) == romdev_rd_addr) { \
-+			romdev_rd_last_pc = (cpu)->gprs[ARM_PC]; romdev_rd_last_val = (unsigned char)(val); romdev_rd_hits++; \
++			romdev_rd_last_pc = romdev_arm_instr_pc; romdev_rd_last_val = (unsigned char)(val); romdev_rd_hits++; \
++			romdev_arm_snap((cpu), 4); \
 +		} \
 +	} while (0)
 +
@@ -483,7 +555,7 @@ index 27e289c..15f3b3c 100644
  #define IDLE_LOOP_THRESHOLD 10000
  
  mLOG_DEFINE_CATEGORY(GBA_MEM, "GBA Memory", "gba.memory");
-@@ -526,6 +605,8 @@ uint32_t GBALoad32(struct ARMCore* cpu, uint32_t address, int* cycleCounter) {
+@@ -526,6 +612,8 @@ uint32_t GBALoad32(struct ARMCore* cpu, uint32_t address, int* cycleCounter) {
  		break;
  	}
  
@@ -492,7 +564,7 @@ index 27e289c..15f3b3c 100644
  	if (cycleCounter) {
  		wait += 2;
  		if (address < GBA_BASE_ROM0) {
-@@ -641,6 +722,8 @@ uint32_t GBALoad16(struct ARMCore* cpu, uint32_t address, int* cycleCounter) {
+@@ -641,6 +729,8 @@ uint32_t GBALoad16(struct ARMCore* cpu, uint32_t address, int* cycleCounter) {
  		break;
  	}
  
@@ -501,7 +573,7 @@ index 27e289c..15f3b3c 100644
  	if (cycleCounter) {
  		wait += 2;
  		if (address < GBA_BASE_ROM0) {
-@@ -752,6 +835,8 @@ uint32_t GBALoad8(struct ARMCore* cpu, uint32_t address, int* cycleCounter) {
+@@ -752,6 +842,8 @@ uint32_t GBALoad8(struct ARMCore* cpu, uint32_t address, int* cycleCounter) {
  		break;
  	}
  
@@ -510,7 +582,7 @@ index 27e289c..15f3b3c 100644
  	if (cycleCounter) {
  		wait += 2;
  		if (address < GBA_BASE_ROM0) {
-@@ -830,6 +915,8 @@ uint32_t GBALoad8(struct ARMCore* cpu, uint32_t address, int* cycleCounter) {
+@@ -830,6 +922,8 @@ uint32_t GBALoad8(struct ARMCore* cpu, uint32_t address, int* cycleCounter) {
  
  void GBAStore32(struct ARMCore* cpu, uint32_t address, int32_t value, int* cycleCounter) {
  	struct GBA* gba = (struct GBA*) cpu->master;
@@ -519,7 +591,7 @@ index 27e289c..15f3b3c 100644
  	struct GBAMemory* memory = &gba->memory;
  	int wait = 0;
  	int32_t oldValue;
-@@ -882,6 +969,8 @@ void GBAStore32(struct ARMCore* cpu, uint32_t address, int32_t value, int* cycle
+@@ -882,6 +976,8 @@ void GBAStore32(struct ARMCore* cpu, uint32_t address, int32_t value, int* cycle
  
  void GBAStore16(struct ARMCore* cpu, uint32_t address, int16_t value, int* cycleCounter) {
  	struct GBA* gba = (struct GBA*) cpu->master;
@@ -528,7 +600,7 @@ index 27e289c..15f3b3c 100644
  	struct GBAMemory* memory = &gba->memory;
  	int wait = 0;
  	int16_t oldValue;
-@@ -1027,6 +1116,8 @@ void GBAStore16(struct ARMCore* cpu, uint32_t address, int16_t value, int* cycle
+@@ -1027,6 +1123,8 @@ void GBAStore16(struct ARMCore* cpu, uint32_t address, int16_t value, int* cycle
  
  void GBAStore8(struct ARMCore* cpu, uint32_t address, int8_t value, int* cycleCounter) {
  	struct GBA* gba = (struct GBA*) cpu->master;
@@ -538,10 +610,10 @@ index 27e289c..15f3b3c 100644
  	int wait = 0;
  	uint16_t oldValue;
 diff --git a/src/platform/libretro/libretro.c b/src/platform/libretro/libretro.c
-index 4b05a42..7c0acf8 100644
+index 4b05a42..0c1d828 100644
 --- a/src/platform/libretro/libretro.c
 +++ b/src/platform/libretro/libretro.c
-@@ -2269,6 +2269,222 @@ unsigned retro_get_region(void) {
+@@ -2269,6 +2269,246 @@ unsigned retro_get_region(void) {
  	return RETRO_REGION_NTSC; // TODO: This isn't strictly true
  }
  
@@ -651,6 +723,30 @@ index 4b05a42..7c0acf8 100644
 +	romdev_pc_wd_limit = limit;
 +	romdev_pc_wd_count = 0;
 +	romdev_pc_watchdog = 0;
++}
++
++/* romdev at-hit register snapshot (defined in arm.c; captured by the CPU hooks
++ * at the instant a pc-break / watchdog / write-watch / read-watch fires — the
++ * live register file keeps moving afterward). out[0]=kind (0=none
++ * 1=pc-break/step 2=watchdog 3=write-watch 4=read-watch), out[1]=count(19),
++ * out[2..20]=regs in the romdev ARM regId order ([0..15]=r0..r15, [16]=CPSR,
++ * [17]=pipeline PC of the executing instruction, [18]=r13/SP). `clear` resets
++ * the kind. */
++/* romdev interrupt block (pure-call primitive — gates ARMRaiseIRQ in arm.c). */
++extern int romdev_irq_block;
++void romdev_irqblock_set(int on) {
++	romdev_irq_block = on ? 1 : 0;
++}
++
++extern unsigned int romdev_snap_regs[19];
++extern int          romdev_snap_kind;
++void romdev_regsnap_get(unsigned int *out, int clear) {
++	int i;
++	if (!out) return;
++	out[0] = (unsigned int) romdev_snap_kind;
++	out[1] = 19;
++	for (i = 0; i < 19; i++) out[2 + i] = romdev_snap_regs[i];
++	if (clear) romdev_snap_kind = 0;
 +}
 +
 +/* romdev register read/write (GBA ARM7) — the inverse of getCPUState, used by the
@@ -764,7 +860,7 @@ index 4b05a42..7c0acf8 100644
  void retro_set_controller_port_device(unsigned port, unsigned device) {
  	UNUSED(port);
  	UNUSED(device);
-@@ -2327,6 +2543,20 @@ void* retro_get_memory_data(unsigned id) {
+@@ -2327,6 +2567,20 @@ void* retro_get_memory_data(unsigned id) {
  			break;
  		}
  		break;
@@ -785,7 +881,7 @@ index 4b05a42..7c0acf8 100644
  	default:
  		break;
  	}
-@@ -2373,6 +2603,16 @@ size_t retro_get_memory_size(unsigned id) {
+@@ -2373,6 +2627,16 @@ size_t retro_get_memory_size(unsigned id) {
  		return GB_SIZE_WORKING_RAM;
  	case RETRO_MEMORY_VIDEO_RAM:
  		return GBA_SIZE_VRAM;

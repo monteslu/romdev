@@ -115,9 +115,16 @@ which is what the KERNAL's IRQ uses to update key state every
 
 **Joystick.** One fire button. Press it with `input({op:'set', b: true})` (or
 spatial `south`) — both clear `$DC00` bit 4 (verified live). `a` is a **no-op**
-(no second button). Drive fire with `b`/`south` + the d-pad. The joystick reads
-**port 2** by default; switch with `input({op:'joyport', joyport:1})` /
-`input({op:'joyport'})` to read it.
+(no second button). Drive fire with `b`/`south` + the d-pad.
+
+**Two players.** BOTH C64 control ports are live at once, so 2P games just work:
+**host port 0 = player 1** (control port 2, `$DC00`) and **host port 1 = player
+2** (control port 1, `$DC01`) — the universal "port 0 = P1" convention. Pass two
+port entries: `input({op:'set', ports:[{up:true}, {down:true}]})` moves P1 up and
+P2 down independently. (Under the hood the host enables the VICE userport-adapter
+mapping so both ports route, and swaps them so P1 lands on control port 2 where
+the games read it.) The legacy `input({op:'joyport', joyport:1|2})` still selects
+which single port a ONE-stick setup drives, but you rarely need it now.
 
 **Keyboard (the C64-specific part — many games NEED it).** Unlike consoles, most
 C64 games (and cracktros) gate gameplay behind a KEYBOARD setup screen — **F1**
@@ -133,6 +140,26 @@ key:
 
 A typical C64 RE startup: load → step to the title → `pressKey f1` (1 player) →
 `set {b:true}` (fire to start) → step → you're in gameplay → `state({op:'save'})`.
+
+**Script the whole startup in one call.** `recordSession`'s `inputScript` takes
+C64 `keys` alongside joystick `ports` — held from each entry until the next — so a
+key+joystick startup is one deterministic timeline instead of many calls:
+```js
+recordSession({ frames:600, sampleEvery:60, outputDir:'…', inputScript:[
+  { atFrame:0,  keys:['f1'] },        // 1 player
+  { atFrame:30, ports:[{ b:true }] }, // fire (port 2)
+  { atFrame:90, keys:['run/stop'] },  // start
+  { atFrame:120, keys:[] } ] })       // release
+```
+A step may set just `keys`, just `ports`, or both; `keys:[]` releases all. An
+unknown key is rejected with a clear error (not a silent no-op).
+
+**When a key seems ignored, probe it.** `input({op:'pressKey', key:'run/stop',
+verify:true})` returns the matrix coords, active joyport, and a CIA1 snapshot
+(`$DC00`/`$DC01`) **before / during (held) / after**. `before==during` ⇒ the key
+never moved the matrix line (didn't reach VICE); they differ but the game didn't
+react ⇒ it scanned a different key/port, or that screen (crack/doc/trainer)
+ignores it. This is how you tell a romdev problem from a game-flow problem.
 
 **Controller-alone (playtest):** a human in `playtest` needs no keyboard — the
 pad's spare buttons map to the C64 keys (X=Space, L2=Run/Stop, R2=Return,
@@ -291,7 +318,7 @@ loads games, wrap the `.prg` into a `.d64`: `cart({op:'packDisk', prgPath})`
 
 ## Horizontal scrolling (for side-scrollers)
 
-The `platformer` scaffold is single-screen. C64 scrolling is the fiddliest of
+The `platformer` example is single-screen. C64 scrolling is the fiddliest of
 the platforms because the VIC-II only does a 0-7 px *fine* scroll in hardware;
 moving further is a software char-cell shift.
 

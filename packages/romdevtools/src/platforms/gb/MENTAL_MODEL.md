@@ -68,7 +68,10 @@ returns nothing.
 `disasm({target:'project'})` route through the native binutils z80 `objdump` in
 its `gbz80` machine (WASM, `-m gbz80`) — full CB-prefix coverage plus the
 SM83-specific opcodes (`ld (hl+),a`, `ldh`, `reti`, `ld hl,sp+e8`). One z80-elf
-binutils serves both plain Z80 (SMS/GG/MSX) and the GB CPU.
+binutils serves both plain Z80 (SMS/GG/MSX) and the GB CPU. MBC-banked carts
+(>32 KB) are scanned per 16 KB bank by `references` (bank 0 @ `$0000`, banks
+1+ @ their `$4000` window; refs tagged `romBank`) and split per-bank by
+`disasm({target:'project'})`.
 
 ## Five silent-failure footguns to know before you start (R26 + R27)
 
@@ -102,6 +105,18 @@ check these first. All five have shipped fixes in the bundled runtime
    side effects. Use `memcpy_vram(dst, src, n)` from `gb_runtime.h`
    (volatile-safe by construction) or cast through `volatile uint8_t *`.
    See `gb_runtime/lib/c/SDCC_GOTCHAS.md` § "Writes to VRAM" for detail.
+
+3b. **OAM DMA goes FIRST after `wait_vblank()` — before any staging work.**
+   The vblank window is ~10 scanlines (~1140 cycles) and SDCC call overhead
+   is brutal: even a few dozen `oam_set()` CALLS before the flush push the
+   DMA out of vblank into active display, where it tears the sprites on one
+   FIXED scanline every frame (the "horizontal line a third of the way down"
+   glitch). The robust frame shape is: stage OAM/BG writes into RAM any time
+   during the frame, then `wait_vblank(); oam_dma_flush();` as the very first
+   thing, then a small bounded batch of BG map writes. One frame of sprite
+   latency is imperceptible. Also: statics belong at `dataLoc 0xC200` or
+   above (the project recipe sets this) so they can't collide with
+   `shadow_oam` at $C100.
 
 4. **OAM DMA must run from HRAM.** During the ~160 µs OAM DMA window
    the CPU can ONLY fetch from HRAM ($FF80-$FFFE). The bundled
@@ -265,9 +280,9 @@ names also resolve (east→A, west→B). So `input({op:'set', a: true})` presses
 expected — unlike the genesis_plus_gx platforms (Genesis/SMS/GG), there's no
 surprise here. (Same for **GBC** — it shares the gambatte core.)
 
-## What `scaffold({op:'project'})` copies into your project
+## What `examples({op:'fork'})` copies into your project
 
-`scaffold({op:'project', platform:"gb"|"gbc", template:...})` writes these files
+`examples({op:'fork', example:"gb/..."|"gbc/...", name, path})` writes these files
 into your project directory. **They're yours** — every byte that compiles
 is in the repo. Edit, fork, replace; nothing is auto-injected at build time.
 
@@ -325,7 +340,7 @@ Most game patterns DON'T need any of this. Try the C path first.
 
 ## Horizontal scrolling (for side-scrollers)
 
-The `platformer` scaffold is single-screen. To make it a side-scroller:
+The `platformer` example is single-screen. To make it a side-scroller:
 
 - **Hardware scroll:** write `SCX` (`$FF43`) each frame = camera X mod 256.
   The BG is a 32×32 tile map (256×256 px) that wraps, so `SCX` alone scrolls

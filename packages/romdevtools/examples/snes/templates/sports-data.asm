@@ -1,6 +1,52 @@
-; ── sports-data.asm — font + paddle/ball sprite data for sports.c ────
-; One sprite tile: a solid 8×8 white block reused for paddles + ball.
+; ── sports-data.asm — NET SURGE's assembly half ──────────────────────────────
+;
+; What lives here (and why it can't live in sports.c):
+;   1. sram_read16/sram_write16 — battery SRAM accessors. SRAM sits at
+;      $70:0000 (declared in hdr.asm — see sports-hdr.asm), reachable only
+;      with long (24-bit) addressing, which tcc C pointers don't emit.
+;   2. Font + sprite + wallpaper tiles (rodata). One sprite tile: a solid
+;      8×8 white block reused for paddles + ball.
+;
+; Section names must stay unique vs snes_sfx_data.asm (also linked in).
 .include "hdr.asm"
+
+.SECTION ".sports_asm" SUPERFREE
+
+; ── HARDWARE IDIOM (load-bearing) — battery SRAM accessors ──────────────────
+; SRAM is mapped at $70:0000 (LoROM, SRAMSIZE $01 in sports-hdr.asm = 2 KB).
+; Long addressing only — there is no SRAM mirror in the program banks, which
+; is why these are asm and not C. tcc calling convention: u16 arg at 5,s
+; (after the 4-byte rtl frame), second arg at 7,s; u16 return in tcc__r0.
+
+; u16 sram_read16(u16 offset)
+sram_read16:
+    php
+    rep #$30
+    lda 5,s            ; offset
+    tax
+    sep #$20
+    lda.l $700000,x
+    sta.w tcc__r0
+    lda.l $700001,x
+    sta.w tcc__r0 + 1
+    plp
+    rtl
+
+; void sram_write16(u16 offset, u16 value)
+sram_write16:
+    php
+    rep #$30
+    lda 5,s            ; offset
+    tax
+    lda 7,s            ; value
+    sep #$20
+    sta.l $700000,x    ; low byte
+    xba
+    sta.l $700001,x    ; high byte
+    plp
+    rtl
+
+.ENDS
 
 .section ".rodata1" superfree
 

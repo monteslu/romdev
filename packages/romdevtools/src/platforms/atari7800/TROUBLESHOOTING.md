@@ -56,14 +56,14 @@ you have to:
 2. Place the sprite's DL entry into the zone covering its Y range.
 3. Per-frame, move the entry's bytes from old-zone DL → new-zone DL.
 
-Our scaffolds use a single-zone DLL for simplicity. Vertical
+Our example games use a single-zone DLL for simplicity. Vertical
 movement is faked by stamping the sprite at different row offsets
 within the canvas data — only works if the canvas is tall enough.
 
 ## "Memory overflow during link (RAM1 by N bytes)"
 
 The 7800 has **4 KB of RAM**. The `default.c` and `hello_sprite.c`
-scaffolds use very little; the `shmup.c` puzzle (and the older
+example games use very little; the `shmup.c` puzzle (and the older
 canvas-buffer approach) easily blow past it.
 
 Symptoms:
@@ -77,7 +77,7 @@ Fixes:
 - Use ROM constants (`const uint8_t` at file scope) instead of
   RAM globals.
 - Replace canvas-buffer rendering with per-object DLs (see
-  `shmup.c` scaffold for the canonical pattern).
+  `shmup.c` example for the canonical pattern).
 - Avoid per-frame `memset(canvas, 0, ...)` — instead, only stamp
   changed cells.
 
@@ -126,7 +126,7 @@ DL during active rendering; safe modification windows:
 Build a "next-frame" DL during the game-state update phase and
 swap pointers (DPPL/DPPH) at vblank — double-buffered.
 
-Our scaffolds rebuild the DL during vblank, which works for small
+Our example games rebuild the DL during vblank, which works for small
 DLs (< ~100 bytes). Large DLs that take ~1 ms to rebuild may
 exceed vblank time and start corrupting the active frame.
 
@@ -197,5 +197,5 @@ Fix options (in order of how much they shrink BSS):
   if you only need one sprite at a time — see `default.c` and
   `hello_sprite.c`. No per-scanline pool needed.
 
-The bundled scaffolds size their pools to fit; if you scale up
+The bundled example games size their pools to fit; if you scale up
 (more objects, taller play area), watch the build log.

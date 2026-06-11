@@ -58,3 +58,12 @@ you likely hit a BRK or an unhandled IRQ — check that you didn't enable a VDC 
 `clrscr()` must run before `cputs()` (it inits the font + VDC). Also confirm
 `.bss` is non-empty (see the first entry) — a broken crt0 means conio's font
 upload never happened.
+
+
+## PSG tone plays but is nearly inaudible
+
+The 5-bit channel volume (`PSG_CHAN_CTRL` low bits, 0-31) is roughly an
+ATTENUATOR: each step below 31 costs ~1.5 dB. A "middle" value like 13 is
+about -27 dB — effectively silence on real hardware and most cores. Use
+**29-31 for SFX/music** and treat anything under ~20 as a deliberate whisper.
+(The bundled `psg_tone` example helper and the music ticker default loud.)

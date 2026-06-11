@@ -166,6 +166,102 @@ at $0150. If you see code in that window, either:
   works; don't override it for GB/GBC unless you know what you're
   doing.
 
+## "BG map updates randomly don't stick" / a tile updates one frame late forever
+
+The core (like real hardware mid-frame) DROPS writes to VRAM ($8000-$9FFF)
+that land outside vblank while the LCD is on — silently. A game loop that
+pokes the BG map "whenever the state changes" will have SOME of those pokes
+land mid-frame and vanish: stale cells, a piece that visually lags the
+logical grid, glitches that move around as code timing shifts.
+
+The robust pattern (used by the bundled puzzle example games):
+
+1. **COLLECT** — during the frame, don't touch VRAM. Append (addr, tile)
+   pairs to a small RAM queue whenever game state changes a cell.
+2. **FLUSH** — immediately after `wait_vblank()` (right after the OAM DMA),
+   drain the queue with pure writes. No scanning, no logic — vblank is only
+   ~1140 cycles, so the flush must be writes only and bounded.
+3. **Scrub** — repaint one or two rows per frame round-robin as insurance,
+   so any cell that ever got dropped self-heals within a second.
+
+If you must write outside that structure, turn the LCD off first (only
+acceptable during init/load screens — mid-game it flashes white).
+
+## "BG map updates randomly don't stick" / a tile updates one frame late forever
+
+The core (like real hardware mid-frame) DROPS writes to VRAM ($8000-$9FFF)
+that land outside vblank while the LCD is on — silently. A game loop that
+pokes the BG map "whenever the state changes" will have SOME of those pokes
+land mid-frame and vanish: stale cells, a piece that visually lags the
+logical grid, glitches that move around as code timing shifts.
+
+The robust pattern (used by the bundled puzzle example games):
+
+1. **COLLECT** — during the frame, don't touch VRAM. Append (addr, tile)
+   pairs to a small RAM queue whenever game state changes a cell.
+2. **FLUSH** — immediately after `wait_vblank()` (right after the OAM DMA),
+   drain the queue with pure writes. No scanning, no logic — vblank is only
+   ~1140 cycles, so the flush must be writes only and bounded.
+3. **Scrub** — repaint one or two rows per frame round-robin as insurance,
+   so any cell that ever got dropped self-heals within a second.
+
+If you must write outside that structure, turn the LCD off first (only
+acceptable during init/load screens — mid-game it flashes white).
+
+## "My HUD scrolls with the background" / "the window ate the bottom of my screen"
+
+The window layer (WX/WY + LCDC bit 5) is the GB's fixed-HUD mechanism: it has
+no scroll registers, always draws its own map from (0,0) pinned to the screen,
+on top of the BG. Three rules, all demonstrated in the shmup example
+(`examples/gb/templates/shmup.c`, "HARDWARE IDIOM: window-layer HUD"):
+
+- **WX is screen X plus 7.** `WX=7` is the left edge. WX 0-6 produces real
+  DMG pixel-pipeline glitches; WX ≥ 167 pushes the window off-screen.
+- **The window has no height register.** From the first line it covers (WY)
+  it owns EVERY line to the bottom of the frame, full width from WX. That's
+  why GB HUDs live at the BOTTOM of the screen (`WY = 128` → lines 128-143 =
+  HUD, lines 0-127 = scrolling playfield). A top HUD needs a mid-frame
+  STAT/LYC interrupt to turn LCDC bit 5 back off — a different, fragile
+  idiom; don't fall into it by accident by setting WY=0.
+- **Sprites are NOT clipped by the window** — they draw on top of it. Despawn
+  (or Y-clamp) everything before the HUD line, or your enemies fly across
+  the score bar.
+
+Use a separate map for the window (LCDC bit 6 → $9C00) so it doesn't fight
+the BG's $9800 map.
+
+## "Hi-score doesn't persist" / save_ram is empty or all $FF
+
+Battery saves need BOTH halves:
+
+1. **The header must declare a battery cart.** The bundled `gb_crt0.s` emits
+   `$0147 = $03` (MBC1+RAM+BATTERY) and `$0149 = $02` (8 KB) as real bytes,
+   and the build's post-link header fix passes them through. The emulator
+   sizes its SAVE_RAM region from those two bytes — type $00 (ROM-only)
+   means no save_ram region at all, and writes to $A000 go nowhere.
+2. **Cart RAM is gated.** It boots DISABLED; writes are silently discarded
+   until you write `$0A` to $0000-$1FFF (any address there — it's a mapper
+   register, not memory). Write `$00` to the same range after saving
+   (battery hygiene: an enabled RAM bank can corrupt at power-off on real
+   hardware).
+
+Working pattern with magic + checksum (a fresh cart is $FF garbage — never
+trust raw bytes): shmup example, "HARDWARE IDIOM: battery SRAM". Verify
+headlessly: play to a score, force game over, `memory({op:'read',
+region:"save_ram"})` shows the record, and the hi-score still shows on the
+title after a hard reset (power cycle).
+
+## "Boot takes seconds" / a screen repaint visibly stalls the game
+
+The sm83 has no divide instruction. SDCC's software `%` / `/` costs ~700
+cycles per call — one `(r*7+c*5) % 11` in a 32×32 map fill is 2048 calls
+≈ 1.5 MILLION cycles ≈ a 1.5-second frozen boot (measured, not theoretical;
+the shmup example shipped exactly that for an hour). In any per-cell or
+per-frame loop, replace modulo patterns with running counters +
+subtract-on-overflow (see `paint_starfield` in the shmup example) and
+decimal score display with power-of-ten subtraction (`u16_to_tiles` there).
+A single `%` per event — e.g. per enemy spawn — is fine.
+
 ## Debug recipes
 
 A few high-leverage tools you might not know exist:
@@ -205,14 +301,13 @@ Boot order that always works for GBC:
    }
 ```
 
-Cribbed from `examples/gbc/templates/tile_engine.c` — start a fresh
-game from that template with:
+Cribbed from `examples/gbc/templates/tile_engine.c` — fork that
+example into a fresh game with:
 
 ```js
-scaffold({
-  op: 'project',
-  platform: "gbc",
-  template: "tile_engine",
+examples({
+  op: 'fork',
+  example: "gbc/tile_engine",
   name: "mygame",
   path: "/abs/path/to/dir",
 });

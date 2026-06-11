@@ -59,15 +59,34 @@ thousands of bytes and you'll drown).
    on-screen value. `region` defaults to `system_ram`.
 2. Change the value in-game (take damage, score a point), then
    `memory({op:'searchNext', compare:'eq', value})` — or `compare:'gt'|'lt'|'changed'|'unchanged'|
-   'inc'|'dec'` when you don't know the new value. Repeat until a handful remain.
+   'inc'|'dec'` when you don't know the new value. The relative compares work as the
+   FIRST narrow too (baselines are recorded at seed). Repeat until a handful remain.
 3. Confirm: `memory({op:'write'})` the candidate and watch the screen react.
 
 This is the Cheat-Engine/RetroArch loop. It is THE bread-and-butter primitive.
 
+**Stored ≠ displayed.** When a correct-looking seed returns 0, the byte usually isn't the
+raw number: seed `as:'bcd'` for packed-BCD scores (2 decimal digits per byte — very common
+on NES), or `as:'digits'` for one byte per ON-SCREEN digit at any constant tile base (HUD
+tile-index buffers; the matched base is reported per candidate, and `searchNext` keeps
+comparing in the same representation). For displayed−1 lives or ÷10 scores, just seed the
+transformed number. If an INPUT drives the value (position, velocity, charge), skip the
+loop entirely: `memory({op:'diffRuns', portsA:[{right:true}]})` isolates it in one call.
+
 `memory({op:'snapshot'})` + `memory({op:'diff'})` is for "which bytes did THIS one event touch?",
 not for value hunting. `memory({op:'diff'})` defaults to a **clustered summary** (ranges +
 stride) so it won't flood you — a reported stride (e.g. "islands at 0x80") is
-usually a struct/entity array, each island one record.
+usually a struct/entity array, each island one record. Small clusters (≤8 bytes) carry
+`before`/`after` hex inline, and `minDelta:N` drops |after−before| < N so RNG/counter
+wiggle disappears from the report.
+
+**"Which byte does this INPUT drive?" → `memory({op:'diffRuns'})`** — runs the same start
+state twice (savestate restore in between) under two different held inputs (`portsA` vs
+`portsB`, default released) for `frames` each, and returns only the bytes that DIVERGE
+between the runs, with run-A/run-B values on small clusters. One call replaces the whole
+save → hold → step → dump → restore → hold-other → dump → diff loop; the frame counter and
+all input-independent churn cancel out automatically. (The emulator is left at the end of
+run B.)
 
 ---
 
@@ -140,7 +159,12 @@ the copy reads from, then `breakpoint({on:'write'})` on THAT.
 **Precision — exact vs sampled.** The default `breakpoint({on:'write'})` is a core-level write
 watchpoint: it returns the EXACT writing instruction's PC, captured inside the CPU write
 path — correct even for NMI/IRQ-driven writes (the common case where a frame-sampled PC
-is just the idle loop). On a banked mapper it reports the `bank` (NES/GB/SMS-GG) so you
+is just the idle loop). On ALL 14 platforms, every hit (write/read/pc) also carries
+**`registersAtHit`** — the full register file frozen AT the hit instant — and the CPU
+stays FROZEN until the hit is cleared. Use registersAtHit instead of a follow-up
+`cpu({op:'read'})`: pre-0.28.0 the live registers kept running after a hit (on gpgx they
+drifted hundreds of instructions — address registers read that way were someone else's
+values). On a banked mapper it reports the `bank` (NES/GB/SMS-GG) so you
 can pass `{startAddress, bank}` to `disasm({target:'rom'})`. The lighter
 `breakpoint({on:'write', precision:'sampled'})` (a.k.a. `watch({on:'mem'})`) steps until the byte changes
 and returns a frame-boundary PC — a lead, not a guarantee under interrupts; use it for the
@@ -196,6 +220,16 @@ pushes a sentinel return, and runs until it returns. Most of these formats have 
 "stored/uncompressed" escape opcode, so once you can SEE the decompressed output
 you can usually craft a replacement by hand. (sandbox:false leaves the dest buffer
 live for `memory({op:'read'})`; sandbox:true restores the game untouched.)
+
+**Pass `pure:true` — on every platform.** A non-pure call that spans frames runs the
+game's OWN frame logic concurrently (VBlank handlers via RAM vectors, music
+drivers) — which can overwrite the dest buffer mid-call and hand you poisoned
+"ground truth" (a real session spent hours diffing a CORRECT reimplementation
+against it). With `pure:true` the game's handlers CANNOT run: Genesis/SMS/GG step
+only the CPU (`pureMode:'cpu-only'`); everywhere else interrupt DELIVERY is
+suppressed for the duration (`'irq-blocked'` — pending lines stay pending, video
+advances harmlessly); the 2600 has no interrupts (`'no-interrupts'`). Non-pure
+results carry a ⚠ caveat whenever frame logic ran.
 
 ## 5e. Re-inject an edited asset — the round-trip (don't reimplement the compressor)
 
@@ -315,9 +349,14 @@ Once you know WHAT to change, the write loop is a handful of calls — no custom
   confirm a patch landed where you meant.
 - **`disasm({target:'references', path, platform, address})`** — find every instruction that
   references a target address, classified `call/jump/branch/read/write/use/ref` (walks the
-  vector table too). The fast "who touches this?" for a STATIC image. Limitation: direct
-  addressing only — indirect/computed jumps aren't detected (use the runtime `watch`/
-  `breakpoint` tools in §5/§5d for those).
+  vector table too). The fast "who touches this?" for a STATIC image. EVERY banked format
+  is scanned PER BANK — NES mappers (refs carry `prgBank`), and SNES multi-bank LoROM,
+  GB/GBC MBC, SMS/GG Sega-mapper, MSX megaROM, Atari 2600 F8/F6/F4, Atari 7800 SuperGame,
+  and >32KB HuCards (refs carry `romBank`) — so a hit in bank 12 of a 128KB cart shows up,
+  not just the first bank. Zero-page direct + indexed operands match, and `#$nn` immediates
+  are excluded (values, not addresses). Limitation: direct addressing only —
+  indirect/computed jumps aren't detected (use the runtime `watch`/`breakpoint` tools in
+  §5/§5d for those).
 - **`cart({op:'extract', path, outputDir})`** — split a ROM into standard parts (NES header/
   prg/chr; SNES copier_header+rom+internal header; Genesis vectors/header/body; GB boot/
   header/body) + a `manifest.json` (mapper, mirroring…). **`cart({op:'wrap'})`** is the inverse:
@@ -330,8 +369,9 @@ watch the screen react — cheaper than shipping a wrong ROM patch.
 
 For a STRUCTURAL hack (new logic, not a byte poke), turn the whole ROM into a
 re-buildable project in one call: `disasm({target:'project', path, outputDir})`. It splits
-the ROM into regions (per-16KB bank for banked NES, per-32KB for SNES LoROM, slot0+slotX
-for GB, one flat region for SMS/Genesis/C64/Atari), disassembles each through the CPU's
+the ROM into regions (per-bank on EVERY banked format: 16KB banks for NES/GB/SMS-GG/MSX/
+7800-SuperGame, 32KB for SNES LoROM, 4KB for banked 2600, 8KB pages for >32KB HuCards;
+one flat region for Genesis/C64/Lynx/GBA and small carts), disassembles each through the CPU's
 native objdump, then **reassembles + verifies byte-exact** against the original; any line
 that won't reproduce faithfully heals to a `.byte`/`db` of its real bytes, so the emitted
 `.asm` ALWAYS rebuilds (`roundTrip.allByteExact`). `readablePercent` per region tells you
@@ -343,22 +383,27 @@ rebuild exists — a `rebuild.json` of the precise `build({...})` args. So the l
 
 **Two rebuild tiers** (the disasm emits each CPU's native-reassembler syntax — ca65 for
 6502/65816, GNU `as` for m68k/arm/z80/gbz80 — which only some `build()` toolchains consume):
-- **One-call `build()` rebuild, byte-identical** — **NES, C64, Atari 7800, Lynx**. Feed
-  `rebuild.json` straight to `build`. (Lynx: `build()` yields the headerless image; prepend
-  the shipped `lnx_header.bin` for the full `.lnx`.)
+- **One-call `build()` rebuild, byte-identical** — **NES (NROM *and* banked mappers), C64,
+  Atari 7800 (flat *and* SuperGame banked), Lynx, PC Engine (flat *and* banked HuCards)**.
+  Feed `rebuild.json` straight to `build`. Banked projects ship a HEADER segment with the
+  original header bytes (16 iNES / 128 .a78 / 512 copier), per-bank segment wrappers, and a
+  generated multi-bank `.cfg` referenced via `linkerConfigPath` (so the cfg never streams
+  through context). (Lynx: `build()` yields the headerless image; prepend the shipped
+  `lnx_header.bin` for the full `.lnx`.)
 - **Native-recipe rebuild (`buildCall:null`), byte-identical, steps in `BUILD.md`** — **SMS,
   GG, MSX, GB, GBC, Genesis, GBA, Atari 2600**. Their `build()` toolchains (SDCC/RGBDS/asar/
   dasm/vasm) can't reassemble ca65/GNU-as syntax, so `BUILD.md` gives the proven native
-  `as`/`ld`/`objcopy` chain.
-- **PC Engine** is the one not-yet-byte-exact case (the region trims real padding / doesn't
-  strip a copier header) — `BUILD.md` flags it.
+  `as`/`ld`/`objcopy` chain — per-bank on banked carts (Sega-mapper SMS/GG, MSX megaROMs,
+  banked 2600 get per-bank wrappers + cfg blobs and a bank-by-bank recipe).
 
 **Rebuilding a commercial NES (NROM CHR-ROM) game — `build({inesHeader})`:** the most common
 NES RE rebuild. `build({output:'rom', platform:'nes', inesHeader:{prgBanks, chrBanks, mapper,
 mirroring}, sourcesPaths:{…the PRG…}, binaryIncludePaths:{"chr.bin":…}})` auto-emits the
 16-byte iNES header + CHARS-segment wiring + flat NROM `.cfg` — no hand-derived header bytes.
-`disasm({target:'project'})` puts exactly this call in `rebuild.json`. (For homebrew C that
-ships fixed tile art, `linkerConfig:"chr-rom"` is the segment-split equivalent.)
+`disasm({target:'project'})` puts exactly this call in `rebuild.json` for NROM; banked
+mappers get the per-bank segment + multi-bank `.cfg` form instead (see the one-call tier
+above). (For homebrew C that ships fixed tile art, `linkerConfig:"chr-rom"` is the
+segment-split equivalent.)
 
 **Readability caveats** (the bytes are ALWAYS correct; only instruction-vs-`.byte` coverage
 varies): SNES and large Genesis ROMs come back byte-exact but DATA-ONLY (flat whole-ROM
@@ -398,6 +443,7 @@ For sprite/tile edits (not text), don't hand-roll the tile-format math:
 |---|---|
 | Find a value's address | `memory({op:'search'})` → `memory({op:'searchNext'})` (NOT full-RAM diff) |
 | Which bytes did one event touch | `memory({op:'snapshot'})` → `memory({op:'diff'})` (summary) |
+| Which byte does an INPUT drive | `memory({op:'diffRuns', portsA, portsB?})` (A/B divergence, one call) |
 | Is on-screen text a string or a bitmap | `text({op:'learn'})` (reports pre-rendered graphic) |
 | Is a "table" really ASCII/code | `memory({op:'classify'})` |
 | Confirm a patch is in the running ROM | `memory({op:'readCart'})` |
@@ -406,7 +452,8 @@ For sprite/tile edits (not text), don't hand-roll the tile-format math:
 | Which instruction READ a byte | `breakpoint({on:'read', address})` (read-side `breakpoint({on:'write'})`) |
 | Single-step the CPU | `frame({op:'stepInstruction'})` (+ `cpu({op:'read'})` to watch regs) |
 | Set a CPU register | `cpu({op:'setReg', regId, value})` |
-| Decompress a compressed asset | `cpu({op:'decompress'})` / `cpu({op:'call'})` (run the ROM's own codec) |
+| Decompress a compressed asset | `cpu({op:'decompress'})` / `cpu({op:'call', pure:true})` (run the ROM's own codec, interference-free) |
+| Where does this on-screen graphic come from | `watch({on:'copy', start, end})` (all 14 — writer PC per VRAM write; Genesis DMA also via `watch({on:'dma'})`) |
 | Re-inject edited bytes the game accepts | `romPatch({op:'makeStored'})` (verbatim-expand block) → `romPatch({op:'findFree'})` → `romPatch({op:'relocate'})` |
 | Find the pointer that loads an asset | `romPatch({op:'findPointer', romOffset})` |
 | FIND the unknown routine touching X | `watch({on:'range', start,end})` (all hits) / `watch({on:'pc'})` (coverage) |

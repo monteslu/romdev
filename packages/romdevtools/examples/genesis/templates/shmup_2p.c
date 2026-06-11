@@ -91,11 +91,23 @@ static void fire(Obj* ship, Obj* pool) {
     }
 }
 
+/* Galois LFSR (taps $B8), period 255 -- real per-spawn randomness.
+ * The old code derived the spawn column from spawn_timer, but the caller
+ * resets spawn_timer just before calling here, so it was CONSTANT and
+ * every enemy spawned in the same left column/lane. */
+static u8 rng_state = 0xA5;
+static u8 rand8(void) {
+  u8 lsb = (u8)(rng_state & 1);
+  rng_state >>= 1;
+  if (lsb) rng_state ^= 0xB8;
+  return rng_state;
+}
+
 static void spawn_enemy(void) {
     u16 i;
     for (i = 0; i < MAX_ENEMIES; i++) {
         if (!enemies[i].alive) {
-            enemies[i].x = ((spawn_timer * 37) & 0xFF) % (320 - 16) + 8;
+            enemies[i].x = (s16)((((u16)rand8()) * (320 - 16)) >> 8) + 8;
             enemies[i].y = -8;
             enemies[i].alive = TRUE;
             return;

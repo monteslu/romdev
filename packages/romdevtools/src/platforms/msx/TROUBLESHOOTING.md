@@ -66,3 +66,24 @@ fixed hardware colors — you choose indices, not RGB.
 The build worker pool can transiently fail. Re-run the build. If it fails
 consistently, read the `log` — SDCC's C89 parser errors are terse; common causes
 are `//` comments, mid-block declarations, or file-scope inline asm (see above).
+
+
+## PSG writes get eaten — sound code "runs" but the chip stays silent
+
+The BIOS KEYINT interrupt fires every frame and reads PSG register 14 (the
+joystick row) — and it CLOBBERS the PSGADDR latch. If an interrupt lands
+between your `PSGADDR = n` and the matching `PSGWRITE`, your byte goes into
+R14 instead of the register you selected. Symptom: the mixer looks right but
+periods/volumes stay 0 — total silence even though your code clearly ran.
+
+**Rule: wrap every PSGADDR/PSGWRITE sequence in `__asm__("di")` /
+`__asm__("ei")`.** The bundled `msx_psg_tone`/`msx_psg_off` (and the music
+ticker) already do this; copy the pattern for any direct PSG access you write.
+
+## A `static x = 5;` boots as 0 (historical — fixed in the bundled crt0)
+
+The old `msx_crt0.s` placed the SDCC `_INITIALIZER` area in RAM, so the boot
+copy duplicated uninitialised RAM onto itself: every value-initialised static
+read 0 and BSS was never zeroed. The bundled crt0 has been fixed (ROM-placed
+`_INITIALIZER` + a BSS-zero loop). If a project forked before 2026-06-09
+shows ghost zeros, refresh its `msx_crt0.s` from a freshly forked example.

@@ -12,13 +12,13 @@ romdev ships a **hardware helper library** (`src/platforms/msx/lib/c/`:
 `msx_psg_tone()` in plain C. It uses DIRECT Z80 I/O ports (the reliable path —
 NOT fragile inline-asm BIOS wrappers).
 
-The fastest way to a working game: **`scaffold({op:'game', platform: "msx", genre:
-"shmup"})`** — or any of `platformer` / `puzzle` / `sports` / `racing`, the full
-genre set. For a smaller starting point use **`scaffold({op:'project', platform:
-"msx", template: "sprite_move"})`** (also `music_sfx`, `catch_game`). Either drops
+The fastest way to a working game: **fork the example game whose core loop is
+nearest yours — `examples({op:'fork', example:"msx/shmup", name, path})`** — or any
+of `platformer` / `puzzle` / `sports` / `racing`, the full genre set. For a smaller
+starting point fork `msx/sprite_move` (also `music_sfx`, `catch_game`). Either drops
 a complete, *building* project — a verified playable example + the helper lib +
 the cart crt0 + docs. Read the example's `main.c`, then change it. Examples live in
-`examples/msx/`. The `platformer` scaffold column-streams the SCREEN 2 name table
+`examples/msx/`. The `platformer` example column-streams the SCREEN 2 name table
 for a tile-by-tile side-scroll. **Gotcha:** read joystick **port 1**
 (`msx_read_joystick(1)`) — port 0 is the keyboard, which an emulator's gamepad
 doesn't drive.
@@ -117,6 +117,12 @@ exactly this.
   generator + the envelope (period + shape bits).
 - `memory({op:'read'})` regions: `msx_vram`, `msx_vdp_regs`, `msx_vdp_status`,
   `msx_palette`, `msx_cpu_regs`, `msx_psg_regs`, plus `system_ram` (work RAM).
+- `disasm({target:'rom'|'references'|'project'})` — native binutils z80
+  `objdump`. MegaROMs (>32 KB) are handled per 16 KB bank: `references` scans
+  bank 0 at `$4000` (after the "AB" header) and banks 1+ at `$8000` (an
+  assumed ASCII16-style window), refs tagged `romBank`;
+  `disasm({target:'project'})` splits the header into its own data region and
+  emits a bank-by-bank native rebuild recipe in `BUILD.md`.
 
 ## MCP debug & inspection tooling
 

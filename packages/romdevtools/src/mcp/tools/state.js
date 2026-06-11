@@ -1,6 +1,7 @@
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import path from "node:path";
 import { getHost } from "../state.js";
+import { attachObserverFrame } from "./watch-memory.js";
 import { jsonContent, safeTool } from "../util.js";
 
 // Resolve a state-file `path`. An ABSOLUTE path is used as-is. A RELATIVE path
@@ -342,7 +343,7 @@ export function registerStateTools(server, z, sessionKey) {
     safeTool(async (args) => {
       switch (args.op) {
         case "save":   return jsonContent(await saveStateCore(args, sessionKey));
-        case "load":   return jsonContent(await loadStateCore(args, sessionKey));
+        case "load":   return attachObserverFrame(jsonContent(await loadStateCore(args, sessionKey)), getHost(sessionKey), `state load ${args.name ?? args.path ?? ""}`.trim());
         case "list":   return jsonContent(listStatesCore(args, sessionKey));
         case "export": {
           if (!args.fromSlot) throw new Error("state({op:'export'}): `fromSlot` is required.");

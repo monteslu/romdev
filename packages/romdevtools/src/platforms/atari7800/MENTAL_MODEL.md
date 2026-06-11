@@ -58,7 +58,7 @@ and DLL; you do NOT poke pixels into a framebuffer.**
   and (worse) burns enough cycles that the CPU stops getting time.
 - **Y position = which zone the object lives in.** Each zone covers
   N scanlines. To move an object up/down, you move it between
-  zones. (Or — in our scaffolds — you stamp the same sprite at
+  zones. (Or — in our example games — you stamp the same sprite at
   different row offsets within ONE zone's data block, which fakes
   Y movement.)
 - **Each DL header can pick a palette per object** (one of 8
@@ -136,7 +136,7 @@ The "loop continues" mask is `0x5F` (bits 0-4 + bit 6). Bit 5
 (indirect flag) and bit 7 (write-mode) do NOT keep the loop going
 by themselves.
 
-### 5-byte extended form (the bundled scaffolds use this)
+### 5-byte extended form (the bundled example games use this)
 
 ```
 +0  pixel-data LOW byte
@@ -195,7 +195,7 @@ scanlines for the ENTIRE display area (243 scanlines on NTSC,
 including 10 lines of top overscan before the visible area).
 
 If your DLL is shorter than 243 entries, MARIA reads past the end
-into random memory and renders garbage zones. The bundled scaffold
+into random memory and renders garbage zones. The bundled example
 allocates 243 entries × 3 bytes = 729 bytes (fits easily in 4 KB
 internal RAM) and points every zone with no objects at a shared
 `dl_empty[2] = {0, 0}` terminator.
@@ -213,11 +213,11 @@ for an 8-row sprite) unless you pack many sprites per page.
 **Easy work-around:** make every zone 1 scanline tall (offset=0)
 and use one DL entry per sprite ROW. Then `offset` is always 0, the
 address quirk goes away, and you can store sprite rows back-to-back.
-The bundled scaffold uses this pattern.
+The bundled example uses this pattern.
 
 The cost is more DLL entries (one per scanline), but at 3 bytes each
 across 243 lines = 729 bytes total — trivial RAM cost. Worth it for
-the simpler mental model on a starter scaffold.
+the simpler mental model on a starter example.
 
 ## Colour bytes (Atari NTSC palette)
 
@@ -237,10 +237,23 @@ read:
 
 ```c
 uint8_t pad = ~SWCHA;
-if (pad & JOY_UP)    /* P1 up */
-if (pad & JOY_DOWN)  /* P1 down */
-if (pad & JOY_LEFT)  /* P1 left */
 if (pad & JOY_RIGHT) /* P1 right */
+if (pad & JOY_LEFT)  /* P1 left */
+if (pad & JOY_DOWN)  /* P1 down */
+if (pad & JOY_UP)    /* P1 up */
+```
+
+**The bit order is the #1 7800 input footgun.** From bit 7 down the P1 nibble
+is **Right ($80), Left ($40), Down ($20), Up ($10)** — same as the 2600. Defining
+`JOY_UP 0x80 … JOY_RIGHT 0x10` (the "reads naturally" order) is exactly
+REVERSED, and the symptom is bizarre enough to misdiagnose: up/down steer
+left/right and vice versa. Always:
+
+```c
+#define JOY_RIGHT 0x80
+#define JOY_LEFT  0x40
+#define JOY_DOWN  0x20
+#define JOY_UP    0x10
 ```
 
 Fire button on `INPT4` at `$0C`, also active low.
@@ -343,9 +356,17 @@ What you can read:
   P / SP / PC) read from prosystem's `sally` globals.
 - **`background({view:'renderState'})`** — the MARIA CTRL bits, DPP,
   CHARBASE, and the current `dlistPtr`.
-- **`disasm({target:'rom'})`** and **`disasm({target:'references'})`** —
-  both default to the top 16 KB (`$C000-$FFFF`), where the reset vector
-  lands.
+- **`disasm({target:'rom'})`** — defaults to the top 16 KB
+  (`$C000-$FFFF`), where the reset vector lands.
+- **`disasm({target:'references'})`** — scans the WHOLE cart: flat carts
+  (≤48 KB) in one pass at their top-of-space org, SuperGame banked carts
+  (>48 KB) per 16 KB bank (last bank fixed at `$C000`, others at `$8000`),
+  refs tagged `romBank`. A 128-byte `.a78` header is stripped automatically.
+- **`disasm({target:'project'})`** — flat carts rebuild with one flat cc65
+  build; SuperGame carts get per-bank regions + NES-style glue (HEADER
+  segment with the original 128 header bytes, `BANKn` wrappers, multi-bank
+  `.cfg` via `linkerConfigPath`) — a one-call byte-identical
+  `build()` rebuild either way.
 
 Memory regions for **`memory({op:'read'})`**:
 

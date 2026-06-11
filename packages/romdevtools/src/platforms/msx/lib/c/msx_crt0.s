@@ -27,6 +27,8 @@
         .globl  _main
         .globl  l__INITIALIZER
         .globl  s__INITIALIZER
+        .globl  s__DATA
+        .globl  l__DATA
         .globl  s__INITIALIZED
 
 ;; ─── Cartridge ROM header at $4000 ────────────────────────────────
@@ -44,7 +46,15 @@
 ;; ─── crt0 body ────────────────────────────────────────────────────
 ;; Standard SDCC area order so the linker fills _GSINIT with the global
 ;; initializer fragments sdcc emits, then _GSFINAL.
+        ;; AREA ORDERING IS LOAD-BEARING (same bug class fixed in the SMS/GG
+        ;; crt0s 2026-06-08): `_INITIALIZER` (the ROM image of every value-
+        ;; initialised static) MUST be declared in the ROM group — otherwise
+        ;; sdld places it in RAM after `_INITIALIZED` and the init copy below
+        ;; copies uninitialised RAM onto itself, so every `static x = N;`
+        ;; boots as 0. On MSX that silenced ALL scaffold audio (the PSG
+        ;; music/sfx state booted zeroed) among other ghosts.
         .area   _HOME
+        .area   _INITIALIZER
         .area   _CODE
         .area   _GSINIT
         .area   _GSFINAL
@@ -59,6 +69,23 @@
 
 ;; INIT entry — the BIOS CALLs here with interrupts on and a valid stack.
 init:
+        ;; ── Zero the BSS segment (`_DATA`) ── every uninitialised static
+        ;; must read back 0 at boot (power-on RAM is garbage).
+        ld      bc, #l__DATA
+        ld      a, b
+        or      a, c
+        jr      Z, bss_done
+        ld      hl, #s__DATA
+        ld      (hl), #0x00
+        ld      d, h
+        ld      e, l
+        inc     de
+        dec     bc
+        ld      a, b
+        or      a, c
+        jr      Z, bss_done
+        ldir
+bss_done:
         ;; Copy initialized-data image from ROM to RAM (SDCC global inits).
         ld      bc, #l__INITIALIZER
         ld      a, b

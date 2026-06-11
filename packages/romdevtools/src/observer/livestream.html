@@ -148,6 +148,7 @@
     font-size: 11px; color: #888;
   }
   .log-row .ts { color: #666; }
+  .log-row .plat { color: #0d1117; background: #80cbc4; font-weight: 600; border-radius: 3px; padding: 0 5px; text-transform: uppercase; font-size: 10px; letter-spacing: .3px; }
   .log-row .tool { color: #ffeb3b; font-weight: 600; }
   .log-row .dur { color: #999; margin-left: auto; }
   .log-row .summary {
@@ -304,7 +305,8 @@
           // One latest image per "tool" (kind = tool name); ev.tool
           // identifies which inspect call produced it.
           s.latestByKind[ev.tool] = { ts: ev.ts, base64: img.base64,
-                                      mimeType: img.mimeType, tool: ev.tool };
+                                      mimeType: img.mimeType, tool: ev.tool, platform: ev.platform ?? null,
+                                      caption: ev.caption ?? null };
         }
       }
       // screenshotAscii pushes both the PNG (above) AND the raw ANSI
@@ -414,7 +416,9 @@
       const card = document.createElement("div");
       card.className = "image-card";
       const dt = new Date(img.ts).toLocaleTimeString();
-      card.innerHTML = `<div class="meta"><span>${img.tool}</span><span>${dt}</span></div>`;
+      const platBadge = img.platform ? `<span class="plat">${escapeHtml(img.platform)}</span> ` : "";
+      const label = img.caption ? `${img.tool} — ${img.caption}` : img.tool;
+      card.innerHTML = `<div class="meta"><span>${platBadge}${escapeHtml(label)}</span><span>${dt}</span></div>`;
       const el = document.createElement("img");
       el.src = `data:${img.mimeType};base64,${img.base64}`;
       el.alt = img.tool;
@@ -563,6 +567,7 @@
     const head = document.createElement("div");
     head.className = "head";
     head.innerHTML = `<span class="ts">${dt}</span>`
+      + (ev.platform ? `<span class="plat">${escapeHtml(ev.platform)}</span>` : "")
       + `<span class="tool">${escapeHtml(ev.tool)}</span>`
       + `<span class="dur">${ev.durationMs}ms</span>`;
     row.appendChild(head);

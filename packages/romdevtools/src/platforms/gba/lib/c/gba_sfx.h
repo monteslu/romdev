@@ -42,6 +42,16 @@ void sfx_tone(u8 channel, u16 freq_period, u8 length_frames);
  *   length_frames: 1..63 (same scaling as sfx_tone). */
 void sfx_noise(u8 length_frames);
 
+/* ── background music ────────────────────────────────────────────────
+ * A 16-step square-wave melody loop on channel 2 (so keep one-shot SFX
+ * on channel 1 + noise on 4 and nothing fights for the channel).
+ * Call sfx_music_tick() once per frame from your main loop — it steps
+ * the melody. ON by default after sfx_init(); sfx_music(0) silences it.
+ * "No sound" feedback in playtests is nearly always a missing per-frame
+ * tick, not broken registers. */
+void sfx_music(u8 on);
+void sfx_music_tick(void);
+
 /* Power down the APU. */
 void sfx_off(void);
 

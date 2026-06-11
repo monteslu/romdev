@@ -20,10 +20,10 @@ index 7e5c43b..4530bc7 100644
  
  private:
 diff --git a/libgambatte/libretro/libretro.cpp b/libgambatte/libretro/libretro.cpp
-index 15b042c..eba6af7 100644
+index 15b042c..4e49b22 100644
 --- a/libgambatte/libretro/libretro.cpp
 +++ b/libgambatte/libretro/libretro.cpp
-@@ -2874,6 +2874,208 @@ void retro_unload_game()
+@@ -2874,6 +2874,232 @@ void retro_unload_game()
  
  unsigned retro_get_region() { return RETRO_REGION_NTSC; }
  
@@ -31,6 +31,30 @@ index 15b042c..eba6af7 100644
 + * PC for a watched CPU address (the sm83 `pc` is live in the WRITE macros in
 + * cpu.cpp). State lives in cpu.cpp; exported here for the host. */
 +extern "C" {
++/* romdev at-hit register snapshot (defined in cpu.cpp; captured at the instant
++ * a pc-break / watchdog / write-watch / read-watch fires — the live registers
++ * keep moving afterward). out[0]=kind (0=none 1=pc-break/step 2=watchdog
++ * 3=write-watch 4=read-watch), out[1]=count(19), out[2..20]=regs in the
++ * romdev regId order ([0]=A [1]=F [2]=B [3]=C [4]=D [5]=E [6]=H [7]=L
++ * [16]=PC-of-executing-instruction [18]=SP). `clear` resets the kind. */
++/* romdev interrupt block (pure-call primitive — gates IRQ service in
++ * gambatte-memory.cpp's event loop). */
++int romdev_irq_block = 0;
++void romdev_irqblock_set(int on) {
++   romdev_irq_block = on ? 1 : 0;
++}
++
++extern unsigned       romdev_snap_regs[19];
++extern int            romdev_snap_kind;
++void romdev_regsnap_get(unsigned *out, int clear) {
++   int i;
++   if (!out) return;
++   out[0] = (unsigned)romdev_snap_kind;
++   out[1] = 19;
++   for (i = 0; i < 19; i++) out[2 + i] = romdev_snap_regs[i];
++   if (clear) romdev_snap_kind = 0;
++}
++
 +extern unsigned long  romdev_wp_addr;
 +extern int            romdev_wp_enabled;
 +extern unsigned long  romdev_wp_last_pc;
@@ -232,7 +256,7 @@ index 15b042c..eba6af7 100644
  void *retro_get_memory_data(unsigned id)
  {
     if (rom_loaded) switch (id)
-@@ -2883,11 +3085,20 @@ void *retro_get_memory_data(unsigned id)
+@@ -2883,11 +3109,20 @@ void *retro_get_memory_data(unsigned id)
        case RETRO_MEMORY_RTC:
           return gb.rtcdata_ptr();
        case RETRO_MEMORY_SYSTEM_RAM:
@@ -255,7 +279,7 @@ index 15b042c..eba6af7 100644
     }
  
     return 0;
-@@ -2902,14 +3113,21 @@ size_t retro_get_memory_size(unsigned id)
+@@ -2902,14 +3137,21 @@ size_t retro_get_memory_size(unsigned id)
        case RETRO_MEMORY_RTC:
           return gb.rtcdata_size();
        case RETRO_MEMORY_SYSTEM_RAM:
@@ -280,10 +304,10 @@ index 15b042c..eba6af7 100644
  
     return 0;
 diff --git a/libgambatte/src/cpu.cpp b/libgambatte/src/cpu.cpp
-index 0fb6199..f32ede2 100644
+index 0fb6199..b490f0a 100644
 --- a/libgambatte/src/cpu.cpp
 +++ b/libgambatte/src/cpu.cpp
-@@ -20,6 +20,104 @@
+@@ -20,6 +20,113 @@
  #include "gambatte-memory.h"
  #include "savestate.h"
  
@@ -296,6 +320,15 @@ index 0fb6199..f32ede2 100644
 +unsigned long romdev_wp_addr     = 0;
 +int           romdev_wp_enabled  = 0;
 +unsigned long romdev_wp_last_pc  = 0xFFFFFFFF;
++/* romdev at-hit REGISTER SNAPSHOT (sm83). The CPU state lives in LOCALS inside
++ * CPU::process and the host can only read the members after writeback — by
++ * which time more frames may have run. Snapshot at the hit instant instead.
++ * Layout = the romdev_getReg regId order: [0]=A [1]=F [2]=B [3]=C [4]=D [5]=E
++ * [6]=H [7]=L [16]=PC of the EXECUTING instruction's first byte [18]=SP.
++ * kind: 1=pc-break/step, 2=watchdog, 3=write-watch, 4=read-watch. */
++unsigned      romdev_snap_regs[19];
++int           romdev_snap_kind = 0;
++unsigned      romdev_gb_instr_pc = 0xFFFFFFFF;
 +unsigned char romdev_wp_last_val = 0;
 +unsigned long romdev_wp_hits     = 0;
 +unsigned long romdev_wp_last_rom_off = 0xFFFFFFFF; /* ROM offset of the writing PC (active bank) */
@@ -388,7 +421,7 @@ index 0fb6199..f32ede2 100644
  namespace gambatte {
  
  CPU::CPU()
-@@ -130,6 +228,57 @@ void CPU::loadState(SaveState const &state) {
+@@ -130,6 +237,57 @@ void CPU::loadState(SaveState const &state) {
  	skip_ = state.cpu.skip;
  }
  
@@ -446,17 +479,35 @@ index 0fb6199..f32ede2 100644
  // The main reasons for the use of macros is to more conveniently be able to tweak
  // which variables are local and which are not, combined with the fact that at the
  // time they were written GCC had a tendency to not be able to keep hot variables
-@@ -139,12 +288,35 @@ void CPU::loadState(SaveState const &state) {
+@@ -139,12 +297,54 @@ void CPU::loadState(SaveState const &state) {
  #define de() ( d << 8 | e )
  #define hl() ( h << 8 | l )
  
 -#define READ(dest, addr) do { (dest) = mem_.read(addr, cycleCounter); cycleCounter += 4; } while (0)
++/* Capture the at-hit register snapshot from CPU::process's LOCALS (a/b/c/…/sp
++ * are locals there; this macro only expands in that scope). PC reported is the
++ * EXECUTING instruction's first byte (romdev_gb_instr_pc, latched at dispatch),
++ * not the operand-advanced live pc. */
++#define ROMDEV_GB_SNAP(kind_) do { \
++		int snap_i_; \
++		for (snap_i_ = 0; snap_i_ < 19; snap_i_++) romdev_snap_regs[snap_i_] = 0; \
++		romdev_snap_regs[0]  = a; \
++		romdev_snap_regs[1]  = toF(hf2, cf, zf) & 0xFF; \
++		romdev_snap_regs[2]  = b;  romdev_snap_regs[3] = c; \
++		romdev_snap_regs[4]  = d;  romdev_snap_regs[5] = e; \
++		romdev_snap_regs[6]  = h;  romdev_snap_regs[7] = l; \
++		romdev_snap_regs[16] = romdev_gb_instr_pc; \
++		romdev_snap_regs[18] = sp; \
++		romdev_snap_kind = (kind_); \
++	} while (0)
++
 +/* romdev READ watchpoint check — runs AFTER the data read so it captures the
 + * value actually returned. Mirror of ROMDEV_WP_CHECK; hooked into the data-read
 + * macros below. PC_READ (instruction/operand fetch) is deliberately NOT hooked. */
 +#define ROMDEV_RD_CHECK(a, d) do { \
 +		if (romdev_rd_enabled && (unsigned long)(a) == romdev_rd_addr) { \
-+			romdev_rd_last_pc = pc; romdev_rd_last_val = (unsigned char)(d); romdev_rd_hits++; \
++			romdev_rd_last_pc = romdev_gb_instr_pc; romdev_rd_last_val = (unsigned char)(d); romdev_rd_hits++; \
++			ROMDEV_GB_SNAP(4); \
 +		} \
 +	} while (0)
 +/* romdev RE round 2 — RANGE watch hook. `w` is 1 for a write, 0 for a read;
@@ -465,20 +516,22 @@ index 0fb6199..f32ede2 100644
 +#define ROMDEV_RANGE_CHECK(a, d, w) do { \
 +		if (romdev_range_enabled && (romdev_range_mode & ((w) ? 2 : 1)) \
 +		    && (unsigned int)(a) >= romdev_range_lo && (unsigned int)(a) <= romdev_range_hi) { \
-+			romdev_range_log(pc, (unsigned int)(a), (unsigned char)(d)); \
++			romdev_range_log(romdev_gb_instr_pc, (unsigned int)(a), (unsigned char)(d)); \
 +		} \
 +	} while (0)
 +#define READ(dest, addr) do { (dest) = mem_.read(addr, cycleCounter); ROMDEV_RD_CHECK((addr), (dest)); ROMDEV_RANGE_CHECK((addr), (dest), 0); cycleCounter += 4; } while (0)
  #define PC_READ(dest) do { (dest) = mem_.read(pc, cycleCounter); pc = (pc + 1) & 0xFFFF; cycleCounter += 4; } while (0)
 -#define FF_READ(dest, addr) do { (dest) = mem_.ff_read(addr, cycleCounter); cycleCounter += 4; } while (0)
-+#define FF_READ(dest, addr) do { (dest) = mem_.ff_read(addr, cycleCounter); ROMDEV_RD_CHECK(0xFF00 | ((addr) & 0xFF), (dest)); ROMDEV_RANGE_CHECK(0xFF00 | ((addr) & 0xFF), (dest), 0); cycleCounter += 4; } while (0)
- 
+-
 -#define WRITE(addr, data) do { mem_.write(addr, data, cycleCounter); cycleCounter += 4; } while (0)
 -#define FF_WRITE(addr, data) do { mem_.ff_write(addr, data, cycleCounter); cycleCounter += 4; } while (0)
++#define FF_READ(dest, addr) do { (dest) = mem_.ff_read(addr, cycleCounter); ROMDEV_RD_CHECK(0xFF00 | ((addr) & 0xFF), (dest)); ROMDEV_RANGE_CHECK(0xFF00 | ((addr) & 0xFF), (dest), 0); cycleCounter += 4; } while (0)
++
 +#define ROMDEV_WP_CHECK(a, d) do { \
 +		if (romdev_wp_enabled && (unsigned long)(a) == romdev_wp_addr) { \
-+			romdev_wp_last_pc = pc; romdev_wp_last_val = (unsigned char)(d); romdev_wp_hits++; \
-+			romdev_wp_last_rom_off = mem_.romdev_romOffset(pc); \
++			romdev_wp_last_pc = romdev_gb_instr_pc; romdev_wp_last_val = (unsigned char)(d); romdev_wp_hits++; \
++			romdev_wp_last_rom_off = mem_.romdev_romOffset(romdev_gb_instr_pc); \
++			ROMDEV_GB_SNAP(3); \
 +		} \
 +	} while (0)
 +#define WRITE(addr, data) do { ROMDEV_WP_CHECK((addr), (data)); ROMDEV_RANGE_CHECK((addr), (data), 1); mem_.write(addr, data, cycleCounter); cycleCounter += 4; } while (0)
@@ -486,7 +539,27 @@ index 0fb6199..f32ede2 100644
  
  #define PC_MOD(data) do { pc = data; cycleCounter += 4; } while (0)
  
-@@ -515,6 +687,77 @@ void CPU::process(unsigned long const cycles) {
+@@ -499,6 +699,19 @@ void CPU::process(unsigned long const cycles) {
+ 	mem_.setEndtime(cycleCounter_, cycles);
+ 	mem_.updateInput();
+ 
++	/* romdev: once a breakpoint/watchdog hit has frozen this CPU, KEEP it
++	 * frozen — the libretro glue re-enters process() until the frame ends,
++	 * which would resume execution and drift the registers away from the hit.
++	 * The host clears the hit (pcbreak_get clearHit / pcbreak_set) to resume. */
++	/* CONSUME the requested cycle budget (advance the clock without executing)
++	 * so runFor still reports progress — an instant return makes the glue's
++	 * sample loop spin forever (the same hang the fire path's comment warns
++	 * about). */
++	if (romdev_pc_hit) {
++		cycleCounter_ += cycles;
++		return;
++	}
++
+ 	unsigned char a = a_;
+ 	unsigned long cycleCounter = cycleCounter_;
+ 
+@@ -515,6 +728,84 @@ void CPU::process(unsigned long const cycles) {
  				cycleCounter += cycles + (-cycles & 3);
  			}
  		} else while (cycleCounter < mem_.nextEventTime()) {
@@ -497,9 +570,15 @@ index 0fb6199..f32ede2 100644
 +			 * instruction; freeze + drain the cycle budget exactly like the pc-break
 +			 * (so the libretro frame loop completes this frame instead of re-calling
 +			 * runFor forever). The instruction is NOT executed. */
++			/* romdev: pc right now is the first byte of the instruction about to
++			 * be dispatched — latch it for the mid-instruction hooks (the WRITE/
++			 * READ watchpoints see an operand-advanced pc). */
++			romdev_gb_instr_pc = pc;
++
 +			if (romdev_pc_wd_limit && !romdev_pc_hit) {
 +				if (++romdev_pc_wd_count >= romdev_pc_wd_limit) {
 +					romdev_pc_last_pc = pc;
++					ROMDEV_GB_SNAP(2);
 +					romdev_pc_hit = 1;
 +					romdev_pc_watchdog = 1;
 +					pc_ = pc;
@@ -540,6 +619,7 @@ index 0fb6199..f32ede2 100644
 +				if (stepFire || ((romdev_pc_enabled && !romdev_pc_step)
 +				                 && (unsigned int)pc == romdev_pc_addr)) {
 +					romdev_pc_last_pc = pc;
++					ROMDEV_GB_SNAP(1);
 +					romdev_pc_hit = 1;
 +					romdev_pc_hits++;
 +					romdev_pc_step = 0;   /* one-shot */
@@ -623,6 +703,35 @@ index 76c29de..7b52f43 100644
  #endif
  
  	void setVideoBuffer(video_pixel_t *videoBuf, std::ptrdiff_t pitch) {
+diff --git a/libgambatte/src/gambatte-memory.cpp b/libgambatte/src/gambatte-memory.cpp
+index c8790fc..5028a98 100644
+--- a/libgambatte/src/gambatte-memory.cpp
++++ b/libgambatte/src/gambatte-memory.cpp
+@@ -24,6 +24,8 @@
+ #include "bootloader.h"
+ #include <cstring>
+ 
++extern "C" int romdev_irq_block;
++
+ namespace gambatte {
+ 
+ Memory::Memory(Interrupter const &interrupter) :
+@@ -358,7 +360,14 @@ unsigned long Memory::event(unsigned long cc) {
+ 			intreq_.setEventTime<intevent_unhalt>(disabled_time);
+ 		}
+ 
+-		if (ime()) {
++		/* romdev INTERRUPT BLOCK — the pure-call primitive. While set, IRQ
++		 * SERVICE is suppressed (pending flags stay pending in IF), so a
++		 * routine driven by callSubroutine cannot be hijacked by the game's
++		 * own VBlank/timer handlers — the frame logic that stomps output
++		 * buffers. Video/timers keep running; only the dispatch is gated.
++		 * (Declared extern "C" at file scope above — block-scope linkage
++		 * specs are illegal and namespace scope would mangle.) */
++		if (ime() && !romdev_irq_block) {
+ 			unsigned const pendingIrqs = intreq_.pendingIrqs();
+ 			unsigned const n = pendingIrqs & -pendingIrqs;
+ 			unsigned address;
 diff --git a/libgambatte/src/gambatte-memory.h b/libgambatte/src/gambatte-memory.h
 index d82ca85..19b71d7 100644
 --- a/libgambatte/src/gambatte-memory.h

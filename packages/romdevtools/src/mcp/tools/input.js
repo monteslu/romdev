@@ -1,6 +1,17 @@
 import { getHost } from "../state.js";
 import { jsonContent, safeTool } from "../util.js";
 import { getInputLayoutCore } from "./input-layout.js";
+import { humanCoDriveWarning } from "./playtest.js";
+import { attachObserverFrame } from "./watch-memory.js";
+
+// Spreadable co-drive conflict marker for every input-driving op: while a
+// human is actively playing in this session's playtest window, their input
+// overwrites the agent's each tick — so the agent must be TOLD its press/set
+// may not take. Empty (no field) when there's no conflict.
+function coDriveFields(sessionKey) {
+  const warning = humanCoDriveWarning(sessionKey);
+  return warning ? { humanCoDriveWarning: warning } : {};
+}
 
 // Resolve a platform-native button alias to the libretro button the host
 // understands. Genesis pads have A/B/C (+ X/Y/Z on 6-button) which libretro
@@ -103,6 +114,7 @@ function inputSetCore({ ports }, sessionKey) {
         ...(ignoredButtons.length
           ? { ignoredButtons, ignoredNote: `Ignored ${ignoredButtons.length} unknown button name(s) — not pressed. Valid: ${[...KNOWN_BUTTONS].join(", ")}.` }
           : {}),
+        ...coDriveFields(sessionKey),
       };
 }
 
@@ -110,6 +122,13 @@ function inputSetCore({ ports }, sessionKey) {
 function inputPressCore({ button, frames = 2, port: p = 0 }, sessionKey) {
       const host = getHost(sessionKey);
       const resolved = resolveButtonAlias(button, host.status.platform);
+      // GUARANTEE a released->pressed EDGE. If the button is already held
+      // (a prior input({op:'set'}) or an overlapping schedule), the game's
+      // newpress detector never fires and the press silently does nothing —
+      // the "one-shot press didn't pause the game" report (0.27.0 #7).
+      // One released frame first makes the edge unconditional.
+      host.setInput({ ports: [{}, {}] });
+      host.stepFrames(1);
       const pressed = { ports: [{}, {}] };
       pressed.ports[p][resolved] = true;
       host.setInput(pressed);
@@ -121,8 +140,10 @@ function inputPressCore({ button, frames = 2, port: p = 0 }, sessionKey) {
         ...(resolved !== button ? { resolvedTo: resolved } : {}),
         frames,
         releaseFrames: 1,
-        framesStepped: frames + 1,
+        preReleaseFrames: 1,
+        framesStepped: frames + 2,
         frameCount: host.status.frameCount,
+        ...coDriveFields(sessionKey),
       };
 }
 
@@ -135,7 +156,7 @@ function inputSequenceCore({ steps }, sessionKey) {
         host.stepFrames(step.frames);
         total += step.frames;
       }
-      return { stepsRun: steps.length, framesRun: total, frameCount: host.status.frameCount };
+      return { stepsRun: steps.length, framesRun: total, frameCount: host.status.frameCount, ...coDriveFields(sessionKey) };
 }
 
 /** op:'navigate' — drive menus by advancing on SCREEN CHANGE; reports consumed per step. */
@@ -178,6 +199,7 @@ function inputNavigateCore({ steps }, sessionKey) {
         framesRun: totalFrames,
         frameCount: host.status.frameCount,
         ...(dropped ? { droppedPresses: dropped, note: `${dropped} step(s) had consumed:false — the screen never changed after the press (wrong screen / press dropped / game polls input on a specific frame). Re-run those steps, increase holdFrames, or reach the screen via state save/load.` } : {}),
+        ...coDriveFields(sessionKey),
       };
 }
 
@@ -199,7 +221,9 @@ export function registerInputTools(server, z, sessionKey) {
     "The held state is honored by frame({op:'step'}) AND by watch/breakpoint runs that have NO `pressDuring` " +
     "schedule (they inherit it). If a watch/breakpoint IS given `pressDuring`, that schedule OWNS the pad for " +
     "the run and this set state is ignored — so drive a watched window with `pressDuring`, not a prior `set`.\n" +
-    "'press': press one named `button` for `frames` then release (port 0 default).\n" +
+    "'press': press one named `button` for `frames` then release (port 0 default). Runs ONE released frame " +
+    "first so edge-triggered handlers (START pause, menu confirm) always see a fresh newpress even if the " +
+    "button was already held by a prior set.\n" +
     "'sequence': scripted frame-by-frame `steps:[{input:{ports}, frames}]` for replays/tests.\n" +
     "'navigate': walk a menu by advancing on SCREEN CHANGE — `steps:[{button, holdFrames?, maxWaitFrames?, " +
     "settleFrames?}]`; reports `consumed` per step (false = the screen never reacted: wrong screen / press dropped / " +
@@ -228,26 +252,27 @@ export function registerInputTools(server, z, sessionKey) {
       key: z.string().optional().describe("op=pressKey (C64): key name — f1/f3/f5/f7, return, space, run/stop, a-z, 0-9, ctrl, cbm, home, down, right, lshift, rshift."),
       text: z.string().optional().describe("op=typeText (C64): string fed into the keyboard buffer; \\r / \\n become RETURN. e.g. 'LOAD\"*\",8,1\\rRUN\\r'."),
       joyport: z.number().int().min(1).max(2).optional().describe("op=joyport (C64): set the active joystick port (1 or 2). Omit to just GET the current port. Default is 2 (most C64 games)."),
+      verify: z.boolean().default(false).describe("op=pressKey (C64): also sample CIA1 $DC00/$DC01 (the keyboard/joystick scan ports the KERNAL reads) BEFORE / DURING (key held) / AFTER, plus matrix coords + active joyport. Use to tell apart 'my key never reached VICE' (before==during) from 'VICE saw it but the game ignored it' (they differ but no reaction) when a C64 game doesn't respond to a key."),
     },
     safeTool(async (args) => {
       switch (args.op) {
         case "set": {
           if (!args.ports) throw new Error("input({op:'set'}): `ports` is required.");
-          return jsonContent(inputSetCore(args, sessionKey));
+          return attachObserverFrame(jsonContent(inputSetCore(args, sessionKey)), getHost(sessionKey), "input set");
         }
         case "press": {
           if (!args.button) throw new Error("input({op:'press'}): `button` is required.");
-          return jsonContent(inputPressCore(args, sessionKey));
+          return attachObserverFrame(jsonContent(inputPressCore(args, sessionKey)), getHost(sessionKey), `press ${args.button}`);
         }
         case "sequence": {
           if (!args.steps) throw new Error("input({op:'sequence'}): `steps` is required.");
-          return jsonContent(inputSequenceCore(args, sessionKey));
+          return attachObserverFrame(jsonContent(inputSequenceCore(args, sessionKey)), getHost(sessionKey), "input sequence");
         }
         case "navigate": {
           if (!args.steps) throw new Error("input({op:'navigate'}): `steps` is required.");
           // Fill per-step defaults the old navigate schema provided.
           const steps = args.steps.map((s) => ({ holdFrames: 2, maxWaitFrames: 120, settleFrames: 2, ...s }));
-          return jsonContent(inputNavigateCore({ steps }, sessionKey));
+          return attachObserverFrame(jsonContent(inputNavigateCore({ steps }, sessionKey)), getHost(sessionKey), "navigate");
         }
         case "layout": {
           if (!args.platform) throw new Error("input({op:'layout'}): `platform` is required.");
@@ -256,6 +281,10 @@ export function registerInputTools(server, z, sessionKey) {
         case "pressKey": {
           if (!args.key) throw new Error("input({op:'pressKey'}): `key` is required (C64 keyboard key, e.g. 'f1', 'return', 'run/stop').");
           const host = getHost(sessionKey);
+          if (args.verify) {
+            const v = host.pressC64KeyVerify(args.key, args.frames ?? 4);
+            return jsonContent({ pressedKey: v.key, matrix: [v.row, v.col], frames: v.frames, joyport: v.joyport, autoReleased: v.autoReleased, cia1: v.cia1, frameCount: host.status.frameCount, note: v.note });
+          }
           const r = host.pressC64Key(args.key, args.frames ?? 4);
           return jsonContent({ pressedKey: r.key, matrix: [r.row, r.col], frames: r.frames, frameCount: host.status.frameCount });
         }
