@@ -51,6 +51,16 @@
 #include "c64_sfx.h"
 #include <stdint.h>
 
+/* cc65 KERNAL disk-I/O prototypes. We DON'T #include <cbm.h> — it drags in
+ * <c64.h>, whose VIC/SID/JOY macros collide with this project's
+ * c64_registers.h (cc65 errors "macro redefinition is not identical"). These
+ * four are the stable cc65 ABI; declaring them directly avoids the clash. */
+unsigned char __fastcall__ cbm_open(unsigned char lfn, unsigned char device,
+                                    unsigned char sec_addr, const char *name);
+void __fastcall__ cbm_close(unsigned char lfn);
+int __fastcall__ cbm_read(unsigned char lfn, void *buffer, unsigned int size);
+int __fastcall__ cbm_write(unsigned char lfn, const void *buffer, unsigned int size);
+
 /* The title screen renders this — examples({op:'fork'}) stamps your game's
  * name here automatically. Keep it ≤16 chars of A-Z 0-9 space dash. */
 #define GAME_TITLE "MAGMA MATCH"
@@ -222,18 +232,44 @@ static uint8_t read_stick_port1(void) {     /* player 2 */
 #define JOY_RIGHT 0x08
 #define JOY_FIRE  0x10
 
-/* ── HARDWARE IDIOM (load-bearing) — hi-score persistence seam ──────────────
- * HONEST NO-OPS, deliberately. The current VICE core build exposes no
- * SAVE_RAM region and no 1541 disk write-back, so NOTHING a .prg writes can
- * survive a power cycle yet (a planned core round adds the save path; see
- * the C64 MENTAL_MODEL "Disk images" section for where it will land).
- * These two functions are the STABLE SEAM: the game already calls them in
- * the right places — load at boot, save on a new record. When the core
- * round ships, implement them (d64 file write or cartridge RAM) WITHOUT
- * touching any caller. Until then the hi-score lives for the session only,
- * and this comment is the honest reason why. */
-static uint16_t hiscore_load(void) { return 0; }
-static void hiscore_save(uint16_t v) { (void)v; }
+/* ── HARDWARE IDIOM (load-bearing) — hi-score persistence: DISK SAVE ─────────
+ * The C64 has no battery SRAM — the honest save medium is the FLOPPY. A game
+ * persists by writing a file to drive 8; VICE commits it into the live 1541
+ * disk image (true-drive GCR write-back), so a save survives a power cycle
+ * exactly as it did on real hardware. (To capture it headlessly the host does
+ * state({op:'exportDisk', path}); re-loading that .d64 restores the save.)
+ *
+ * REQUIRES THE GAME RUN FROM A DISK: build/package it as a .d64 and load THAT
+ * (loadMedia autostarts it). A bare .prg injected straight into RAM has no
+ * mounted disk to save to, so the save is a silent no-op — still honest (the
+ * value just stays in-session), it simply has nowhere to persist.
+ *
+ * We keep a 2-byte record in a SEQ file "HI" on drive 8. These are the STABLE
+ * SEAM: the game calls hiscore_load at boot and hiscore_save on a new record;
+ * reshape the record format freely, just keep the two function signatures. */
+#define SAVE_NAME  "@0:HI,S,W"   /* @ = replace-if-exists; S=SEQ, W=write     */
+#define LOAD_NAME  "0:HI,S,R"
+
+static uint16_t hiscore_load(void) {
+    uint16_t v = 0;
+    uint8_t  buf[2];
+    if (cbm_open(2, 8, 2, LOAD_NAME) == 0) {
+        if (cbm_read(2, buf, 2) == 2) v = (uint16_t)buf[0] | ((uint16_t)buf[1] << 8);
+        cbm_close(2);
+    }
+    return v;   /* 0 if the file isn't there yet (first ever boot) */
+}
+
+static void hiscore_save(uint16_t v) {
+    uint8_t buf[2];
+    buf[0] = (uint8_t)(v & 0xFF);
+    buf[1] = (uint8_t)(v >> 8);
+    if (cbm_open(2, 8, 2, SAVE_NAME) == 0) {
+        cbm_write(2, buf, 2);
+        cbm_close(2);
+    }
+    /* No disk mounted (ran as a bare .prg) -> cbm_open fails -> silent no-op. */
+}
 
 /* ── GAME LOGIC (clay) — SID music: 2 voices + THE filter sweep ─────────────
  * Voice 0 = melody (pulse), voice 1 = bass (sawtooth THROUGH THE FILTER),
