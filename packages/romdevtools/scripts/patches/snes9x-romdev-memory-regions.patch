@@ -192,6 +192,9 @@ index ec55ea9..b1a93e4 100644
 +extern int           romdev_wp_enabled;
 +extern unsigned int  romdev_wp_last_pc;
 +extern unsigned char romdev_wp_last_val;
++extern unsigned char romdev_wp_last_old;
++extern int           romdev_wp_cond;
++extern unsigned char romdev_wp_cond_val;
 +extern unsigned int  romdev_wp_hits;
 +extern unsigned int  romdev_rd_addr;
 +extern int           romdev_rd_enabled;
@@ -217,10 +220,23 @@ index ec55ea9..b1a93e4 100644
 + * full register snapshot at the hit (the live file keeps moving afterward). */
 +extern "C" unsigned int romdev_snes_instr_pc;
 +extern "C" void romdev_snes_snap (int kind);
++/* value-condition (0.30.0): 1=increase 2=decrease 3=equals; skip non-qualifying
++ * (restoring/churn) writes so the reported PC is the MEANINGFUL write. */
++static inline int romdev_wp_cond_ok(unsigned char oldv, unsigned char v) {
++	switch (romdev_wp_cond) {
++		case 1:  return v > oldv;
++		case 2:  return v < oldv;
++		case 3:  return v == romdev_wp_cond_val;
++		default: return 1;
++	}
++}
 +#define ROMDEV_WP_SNES(addr, val) do { \
 +		if (romdev_wp_enabled && romdev_wp_canon(addr) == romdev_wp_canon(romdev_wp_addr)) { \
-+			romdev_wp_last_pc = romdev_snes_instr_pc; romdev_wp_last_val = (unsigned char)(val); romdev_wp_hits++; \
-+			romdev_snes_snap(3); \
++			unsigned char romdev_oldv = romdev_wp_cond ? S9xGetByte(addr) : 0; \
++			if (romdev_wp_cond_ok(romdev_oldv, (unsigned char)(val))) { \
++				romdev_wp_last_pc = romdev_snes_instr_pc; romdev_wp_last_val = (unsigned char)(val); romdev_wp_last_old = romdev_oldv; romdev_wp_hits++; \
++				romdev_snes_snap(3); \
++			} \
 +		} \
 +	} while (0)
 +#define ROMDEV_RD_SNES(addr, val) do { \
@@ -333,6 +349,9 @@ index d381c61..3ce0602 100644
 +int           romdev_wp_enabled  = 0;
 +unsigned int  romdev_wp_last_pc  = 0xFFFFFFFF;
 +unsigned char romdev_wp_last_val = 0;
++unsigned char romdev_wp_last_old = 0;
++int           romdev_wp_cond     = 0;
++unsigned char romdev_wp_cond_val = 0;
 +unsigned int  romdev_wp_hits     = 0;
 +
 +void romdev_watchpoint_set(unsigned int addr, int enabled) {
@@ -340,16 +359,32 @@ index d381c61..3ce0602 100644
 +   romdev_wp_enabled = enabled ? 1 : 0;
 +   romdev_wp_last_pc = 0xFFFFFFFF;
 +   romdev_wp_last_val = 0;
++   romdev_wp_last_old = 0;
++   romdev_wp_cond = 0;
++   romdev_wp_cond_val = 0;
 +   romdev_wp_hits = 0;
 +}
 +
-+void romdev_watchpoint_get(unsigned int *out5, int clearHits) {
-+   if (!out5) return;
-+   out5[0] = (unsigned int)romdev_wp_enabled;
-+   out5[1] = romdev_wp_addr;
-+   out5[2] = romdev_wp_last_pc;
-+   out5[3] = (unsigned int)romdev_wp_last_val;
-+   out5[4] = romdev_wp_hits;
++void romdev_watchpoint_set_cond(unsigned int addr, int enabled, int cond, int val) {
++   romdev_wp_addr = addr;
++   romdev_wp_enabled = enabled ? 1 : 0;
++   romdev_wp_last_pc = 0xFFFFFFFF;
++   romdev_wp_last_val = 0;
++   romdev_wp_last_old = 0;
++   romdev_wp_cond = cond;
++   romdev_wp_cond_val = (unsigned char)val;
++   romdev_wp_hits = 0;
++}
++
++void romdev_watchpoint_get(unsigned int *out, int clearHits) {
++   if (!out) return;
++   out[0] = (unsigned int)romdev_wp_enabled;
++   out[1] = romdev_wp_addr;
++   out[2] = romdev_wp_last_pc;
++   out[3] = (unsigned int)romdev_wp_last_val;
++   out[4] = romdev_wp_hits;
++   /* out[5] = prgOffset (SNES: none — host pre-seeds 0xFFFFFFFF) */
++   out[6] = (romdev_wp_hits ? (unsigned int)romdev_wp_last_old : 0xFFFFFFFFu);
 +   if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; }
 +}
 +
