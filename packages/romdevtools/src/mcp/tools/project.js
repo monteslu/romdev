@@ -1473,7 +1473,17 @@ TEMPLATES.gba = {
     runtimeDirs: GBA_LIBTONC_RUNTIME_DIRS,
     lang: GBA_TONC_LANG,
     ext: ".gba",
-    describe: "Match-3 falling-block scaffold (Tonc). 6x12 grid drawn as BG tiles, 1x3 active piece with LEFT/RIGHT shift, A rotate, DOWN soft-drop, START hard-drop. Horizontal triples clear + score.",
+    describe: "FACET FALL — complete GBA falling-jewel match-3: press-start title, 1P marathon (handheld — link-cable 2P not emulatable single-instance), falling-trio with 4-direction clears, cascade chains, levels that speed the fall, vivid faceted jewels (15-bit palette, one shape remapped to 3 colour slices), DMA/PSG music + SFX, persistent cartridge-SRAM hi-score ('SRAM_V' marker, byte-wide bus, magic+checksum, verified across power cycles). Teaches the BG0-tilemap well + the no-vblank-queue-famine repaint contrast vs the NES.",
+    players: "1 (handheld — link-cable 2P not emulatable single-instance)",
+    sram: "cartridge SRAM hi-score at 0x0E000000 ('SRAM_V' marker, byte-wide bus, magic+checksum; survives power cycles)",
+    mechanics: ["falling-trio control", "match-3 in 4 directions", "cascade chains with multipliers", "levels that speed the fall", "battery hi-score"],
+    techniques: [
+      "BG0 tilemap board (faceted jewels via 15-bit palette slices)",
+      "full-tilemap repaint (no vblank queue needed — GBA bandwidth)",
+      "cartridge SRAM hi-score (SRAM_V marker + byte-wide bus)",
+      "libtonc key_hit/key_held edge input",
+      "headless decode from VRAM/OAM/save_ram (GBA C globals not host-readable)",
+    ],
   },
   sports: {
     main: "templates/sports.c",
