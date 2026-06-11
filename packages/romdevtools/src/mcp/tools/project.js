@@ -1903,15 +1903,14 @@ TEMPLATES.atari2600 = {
     ext: ".a26",
     describe: "Gallery-shooter (Space-Invaders-shaped) done with the RIGHT TIA objects, not playfield 'barcode' bars: P0 = double-width cannon, P1 + NUSIZ1=%011 = a row of THREE hardware-replicated invaders (one GRP1 write draws all three), M0 = the player shot. Aliens march left/right and drop a step at the edges; fire with the joystick button. The honest 2600-idiomatic way to do this genre — extend by reusing P1 lower for shields or adding M1 as an alien bomb. Verified: marches + renders cannon/aliens/shot.",
   },
-  // ── Genre scaffolds ───────────────────────────────────────────────
-  // The 2600 maps cleanly onto only SOME of the five canonical genres.
+  // ── Genre games (all five, complete to the contract) ───────────────
   // shmup + sports are the console's native idioms (Space Invaders /
   // Pong); racing (top-down) and platformer (single-screen) are honest,
-  // period-correct fits. puzzle (match-3) is deliberately ABSENT — see
-  // the note after this block: a 6x12 multi-colour grid is not
-  // renderable on a tilemap-less, one-COLUPF-per-line, 2-player TIA, so
-  // shipping a "puzzle" key would mean shipping something that isn't a
-  // recognizable match-3. Genre id == template key (createGame maps 1:1).
+  // period-correct fits. puzzle is a MEMORY MATCH-PAIRS game (TILE TWINS),
+  // NOT match-3: a 6x12 multi-colour falling-block grid is not renderable
+  // on a tilemap-less, one-COLUPF-per-line TIA — but a static, turn-based
+  // match-pairs board drawn as full-width COLUPF bands IS a clean fit and
+  // is a real puzzle. Genre id == template key (fork maps 1:1).
   shmup: {
     main: "templates/shmup.asm",
     runtime: [],
@@ -1970,7 +1969,36 @@ TEMPLATES.atari2600 = {
     runtime: [],
     lang: "6507 assembly (dasm)",
     ext: ".a26",
-    describe: "PLATFORMER — SINGLE-SCREEN (Pitfall! / Montezuma / Kangaroo idiom). The 2600 has NO hardware scroll, no tilemap, 128 B RAM — a smooth side-scroller is not the honest fit (real games flip whole screens). This ships the genre CORE: fixed-point gravity + a jump arc (FIRE button), and land-on-top collision tested in CODE (not TIA collision, since you must know WHICH surface to stand on) against a 4-entry platform table drawn as horizontal playfield bars (the only TIA object wide enough to be a platform). Joystick walks L/R. Extend with ladders (UP/DOWN over a ladder x-span), an enemy on P1, a thrown rock on M0, or Pitfall-style screen-flipping at the edges. NOT a scroller — single screen by design.",
+    describe: "PERCH PATROL — complete Atari 2600 single-screen platformer (Pitfall! / Montezuma / Kangaroo idiom) to the full contract: a drawn PERCH/PATROL title banner (asymmetric playfield, not text mode), title/play/game-over state machine, P0 hero with fixed-point gravity + a jump arc (FIRE), land-on-ledge collision tested in CODE against a per-row playfield LEVEL table (the same table the kernel draws, so picture and physics never disagree), a bouncing coin (BL) to grab and a patrolling spike (M0) to dodge via TIA hardware-collision, score + in-session hi-score on the title (honest no-battery), TIA SFX + a title jingle + game-over tune, RIOT-timer pacing, SBC-#15 RESP/HMOVE positioning. The 2600 has NO hardware scroll/tilemap — the honest platformer is a FIXED screen (real games flip whole screens), so this one is too.",
+    players: "1 (honest — single-screen kernel budget; an enemy/second hero is left as a fork)",
+    sram: "none — no persistent storage on real 2600 hardware; hi-score is in-session only",
+    mechanics: ["gravity + jump arc", "land-on-ledge collision in CODE (PF LEVEL table)", "coin pickup (BL) + spike dodge (M0) via TIA collision", "score + session hi-score", "title/play/game-over state machine"],
+    techniques: [
+      "per-row playfield LEVEL table as the level (code + picture share it)",
+      "reflect-mode symmetric arena (author the left half only)",
+      "drawn asymmetric-playfield title banner (no text mode)",
+      "SBC-#15 RESP/HMOVE fine positioning + SWCHA re-read discipline",
+      "RIOT-timer frame pacing",
+      "score-mode dual-color HUD + multi-voice TIA music/SFX",
+    ],
+  },
+  puzzle: {
+    main: "templates/puzzle.asm",
+    runtime: [],
+    lang: "6507 assembly (dasm)",
+    ext: ".a26",
+    describe: "TILE TWINS — complete Atari 2600 memory match-pairs puzzle to the full contract: a drawn TILE/TWINS title banner (asymmetric playfield), title/play/game-over state machine, an 8-tile board (4 pairs) drawn as a vertical stack of full-width playfield BANDS (one COLUPF per band = per-tile color, the honest way to show distinct values on a tilemap-less TIA), a joystick UP/DOWN cursor with a bright separator-bar highlight, FIRE to flip a tile, match-clears with a chime + mismatch flip-back after a pause, a move counter + session best (fewest flips), TIA SFX + a title jingle + win tune, RIOT-timer pacing. A REAL puzzle (deliberate, turn-based, memory-driven) — not a reflex game — and a clean 2600 fit since a static turn-based board needs no per-frame motion. The board is a Fisher-Yates LFSR shuffle, fair every game.",
+    players: "1 (turn-based memory puzzle; alternating-2P fewest-flips is left as a fork)",
+    sram: "none — no persistent storage on real 2600 hardware; best is in-session only",
+    mechanics: ["8-tile / 4-pair memory board", "cursor move + flip", "match-clear + mismatch flip-back", "Fisher-Yates board shuffle", "move counter + session best", "title/play/win state machine"],
+    techniques: [
+      "playfield BANDS as tiles (per-band COLUPF = per-tile color)",
+      "separator-bar cursor highlight (lit gap line on the selected band)",
+      "8-bit LFSR + Fisher-Yates shuffle",
+      "drawn asymmetric-playfield title banner (no text mode)",
+      "SWCHA active-low direction edge-detect (Up=bit4 Down=bit5)",
+      "score-mode dual-color HUD + multi-voice TIA music/SFX",
+    ],
   },
 };
 
