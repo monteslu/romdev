@@ -21,27 +21,14 @@ import { registerTools } from "../src/mcp/tools/index.js";
 // Kept here as the EXPECTED contract — if a platform gains/loses genre
 // templates, update this table intentionally (it's the spec).
 const CANONICAL_GENRES = ["shmup", "platformer", "puzzle", "sports", "racing"];
-// Per-platform expected genres. All canonical-genre platforms ship the full 5
-// EXCEPT atari2600 — the TIA has no tilemap/framebuffer, so a match-3 "puzzle"
-// grid can't be rendered; it ships the 4 action genres only. Every supported
-// platform now ships at least one genre, so there is no fully genre-less
-// platform anymore (the old NON_GENRE_PLATFORMS holdout is gone).
-const EXPECTED_GENRES = {
-  nes: CANONICAL_GENRES,
-  gb: CANONICAL_GENRES,
-  gbc: CANONICAL_GENRES,
-  snes: CANONICAL_GENRES,
-  genesis: CANONICAL_GENRES,
-  sms: CANONICAL_GENRES,
-  gg: CANONICAL_GENRES,
-  c64: CANONICAL_GENRES,
-  gba: CANONICAL_GENRES,
-  lynx: CANONICAL_GENRES,
-  atari7800: CANONICAL_GENRES,
-  pce: CANONICAL_GENRES,
-  msx: CANONICAL_GENRES,
-  atari2600: ["shmup", "platformer", "sports", "racing"], // no puzzle (TIA)
-};
+// Per-platform expected genres. As of 2026-06-11 EVERY platform ships the full
+// 5 — the 14×5 grid is complete. The 2600 was the last holdout (the TIA has no
+// tilemap, so it ships a MEMORY MATCH-PAIRS puzzle, TILE TWINS, drawn with
+// full-width COLUPF bands — a real puzzle, not a colored match-3 grid).
+const EXPECTED_GENRES = Object.fromEntries(
+  ["nes","gb","gbc","snes","genesis","sms","gg","c64","gba","lynx","atari7800","pce","msx","atari2600"]
+    .map((p) => [p, CANONICAL_GENRES]),
+);
 const EXPECTED_PLATFORMS = Object.keys(EXPECTED_GENRES);
 
 async function startClient() {
@@ -81,26 +68,27 @@ test("R61 createGame: every genre-capable platform scaffolds its genres", { time
   }
 });
 
-test("R61 createGame: a genre a platform lacks is rejected with that platform's available genres", async () => {
-  // Every supported platform now ships at least one genre, so there is no
-  // longer a fully genre-less platform to reject wholesale. atari2600 is the
-  // one platform that lacks a SPECIFIC canonical genre (puzzle — no TIA
-  // tilemap), so it's the honest sentinel for the per-genre rejection path.
-  const client = await startClient();
-  const res = await client.callTool({
-    name: "examples",
-    arguments: { op: "fork", platform: "atari2600", template: "puzzle", name: "demo", path: os.tmpdir() },
-  });
-  assert.equal(res.isError, true, "atari2600/puzzle: expected an error");
-  const msg = res.content[0].text;
-  assert.match(msg, /no example 'atari2600\/puzzle'/);
-  // The error lists what atari2600 DOES have — derived from TEMPLATES, so this
-  // proves the available-genre list isn't a stale parallel table.
-  for (const g of ["shmup", "platformer", "sports", "racing"]) {
-    assert.match(msg, new RegExp(`\\b${g}\\b`), `atari2600 error should offer ${g}`);
+test("R61 createGame: the grid is complete — atari2600/puzzle (TILE TWINS) now forks", async () => {
+  // Historically the 2600 lacked a puzzle game (no TIA tilemap → no match-3),
+  // and this slot was the sentinel for the per-genre REJECTION path. As of
+  // 2026-06-11 the 2600 puzzle ships as TILE TWINS (a memory match-pairs game —
+  // a real puzzle that fits the TIA: full-width COLUPF bands, not a colored
+  // grid), completing the 14×5 grid. So this is now a POSITIVE test: the
+  // previously-missing cell forks successfully. (The per-genre/unknown-genre
+  // rejection path is covered by the unknown-genre test below.)
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "r61-a26puzzle-"));
+  try {
+    const client = await startClient();
+    const res = await client.callTool({
+      name: "examples",
+      arguments: { op: "fork", platform: "atari2600", template: "puzzle", name: "demo", path: tmp, overwrite: true },
+    });
+    assert.ok(!res.isError, `atari2600/puzzle should fork now: ${res.content?.[0]?.text}`);
+    const onDisk = readdirSync(tmp);
+    assert.ok(onDisk.some((f) => /^main\.(c|asm|s)$/.test(f)), "atari2600/puzzle: forked a main source");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
   }
-  // ...and must NOT advertise the one genre it can't render.
-  assert.doesNotMatch(msg, /\bpuzzle\b(?!')/, "atari2600 must not list puzzle as available");
 });
 
 test("R61 createGame: unknown genre rejected with the platform's available genres", async () => {
