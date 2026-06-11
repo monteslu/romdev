@@ -1135,7 +1135,16 @@ TEMPLATES.genesis = {
     runtimeDirs: SGDK_RUNTIME_DIRS,
     lang: SGDK_LANG,
     ext: ".bin",
-    describe: "Match-3 falling-block puzzle genre scaffold. 6×12 grid, 1×3 active piece (3 colours), rotate via A, soft-drop on DOWN, hard-drop on START, 3+-in-a-row clears in all 4 directions with gravity + cascade chains. xorshift RNG so cell colours actually vary.",
+    describe: "SHARD SIEGE — falling-trio match-3 to the full contract: 1P marathon with levels and cascade chains; 2P simultaneous split-board versus where chains send garbage rows (both wells update every frame — the Genesis has the VDP bandwidth, taught against the NES's 16-entry vblank budget). Whole-well repaints go as ONE DMA-queued rect. Battery-SRAM hi-score under a WINDOW-plane HUD, PSG music + SFX.",
+    players: "1-2 (2P = simultaneous versus, split boards with garbage attacks)",
+    sram: "header-declared cartridge SRAM at $200000 odd bytes (hi-score magic+checksum), verified across hardReset",
+    mechanics: ["falling-trio control", "match-3 in 4 directions", "cascade chains with multipliers", "garbage attack rows", "levels", "split-board versus"],
+    techniques: [
+      "whole-well repaint as one DMA-queued tilemap rect",
+      "window-plane fixed HUD (layout-change row clear)",
+      "cartridge SRAM via the $A130F1 mapper gate",
+      "PSG music + SFX",
+    ],
   },
   sports: {
     main: "templates/sports.c",
