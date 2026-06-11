@@ -898,12 +898,22 @@ TEMPLATES.snes = {
     main: "templates/platformer.c",
     extraSources: [
       { src: "templates/platformer-data.asm", dst: "data.asm" },
+      { src: "templates/platformer-hdr.asm", dst: "hdr.asm" },  /* battery-SRAM cart header */
     ],
     runtime: SNES_SFX_RUNTIME,
     runtimeDirs: SNES_PVSNESLIB_VENDOR_DIRS,
     lang: "C (tcc-65816 + PVSnesLib)",
     ext: ".sfc",
-    describe: "SIDE-SCROLLING platformer for SNES (PVSnesLib). Subpixel gravity + jump + land-on-top collision across a 512-px world. A camera follows the player; the BG scrolls in hardware via bgSetScroll(0, camX, 0) and the player sprite draws in screen space (worldX - camX), held screen-centered while the world moves under it. Jump SFX via the bundled SPC700 driver. NOTE: uses the PVSnesLib console (text) BG, so platforms are collision-only and the scroll shows as the on-BG text sliding — for visible tiled platform art across a wide world, build a tileset with gfx2snes + bgInitTileSet on a 64-wide map and stream tilemap columns into VRAM during vblank. See the SNES MENTAL_MODEL.md 'Horizontal scrolling'. BUILD: needs language:'c', snes_sfx_data.asm in sources, apu_blob.bin as a binary include, and snes_sfx.c/.h in includePaths (all scaffolded by createGame).",
+    describe: "CRAG CAPER — side-scrolling platformer to the full contract: subpixel gravity/jump physics, one-way platforms, pits + spikes, coins + distance scoring, alternating 2P turns (P2 on controller 2, per-player score and lives, GO-banner handoffs), battery-SRAM hi-score at $70:0000 (bundled hdr.asm, survives power cycles), SPC music + SFX, two-layer split (fixed HUD text layer over the scrolling level — no raster tricks needed on SNES, taught vs the NES sprite-0 idiom).",
+    players: "1-2 (alternating turns; P2 on controller 2)",
+    sram: "battery SRAM at $70:0000 (CARTRIDGETYPE $02 via bundled hdr.asm; magic+checksum), verified across hardReset",
+    mechanics: ["gravity-jump physics (sub-pixel)", "one-way platform collision", "one-way camera + world scroll", "pits + spike hazards", "coins + distance scoring", "alternating 2P turns"],
+    techniques: [
+      "two-layer split (fixed HUD BG over scrolling level)",
+      "battery SRAM at $70:0000 (long-addressed asm helpers)",
+      "SPC700 init-race avoidance",
+      "telemetry block for headless verification",
+    ],
   },
   puzzle: {
     main: "templates/puzzle.c",
