@@ -1588,7 +1588,17 @@ TEMPLATES.lynx = {
   racing: {
     main: "templates/racing.c", runtime: LYNX_RUNTIME, runtimeDirs: LYNX_VENDOR_DIRS,
     lang: LYNX_LANG, ext: ".lnx",
-    describe: "3-lane top-down racer. MIKEY lane-switch beep + crash noise.",
+    describe: "DEPTH DODGE — complete Lynx top-down vertical road racer fit to 160x102: title shell with an approaching-car attract, 1P endless run with LEFT/RIGHT lane steering + UP/DOWN speed control (1-5), 3 lives, best-distance record, MIKEY 4-voice music + SFX. The Lynx signature Suzy HARDWARE sprite scaling is the CORE mechanic — obstacle cars enter tiny at the horizon and SWELL toward you as they approach (HSIZE/VSIZE recomputed per frame from screen-Y, the hitbox tracking the live hardware scale), an OutRun-ish pseudo-3D depth built from honest sprite scaling, NOT Mode-7. Result screen pops the glyph to ~2.0x then eases back. The road has no hardware tilemap/scroll: the full-redraw loop repaints it each frame and the lane-dash phase animation IS the scroll. Honest 1P (ComLynx needs a second physical Lynx); honest no-save (handy exposes no SAVE_RAM — probed; cart EEPROM is the real path).",
+    players: "1 (handheld — ComLynx multiplayer needs a second physical Lynx)",
+    sram: "none — probe: regionSize(save_ram)=0, retro_get_memory(SAVE_RAM)=NULL; in-session best distance; cart EEPROM named in-file as the real path",
+    mechanics: ["3-lane top-down racing", "lane steering + speed control (1-5)", "depth-scaled approaching obstacles (hitbox = hardware sprite size)", "distance scoring", "3 crashes end the run", "in-session best-distance record", "attract-mode demo"],
+    techniques: [
+      "Suzy hardware sprite scaling for pseudo-3D depth (SCB HSIZE/VSIZE 8.8, per-frame rescale from screen-Y)",
+      "raw SCB authoring (literal 4bpp data, penpal recolour) via tgi_ioctl(0)",
+      "phase-animated road scroll (no hardware tilemap/scroll — redraw + dash phase per frame)",
+      "canonical TGI full-redraw loop (tgi_busy wait -> draw -> updatedisplay)",
+      "vblank-deferred MIKEY voice writes",
+    ],
   },
 };
 
