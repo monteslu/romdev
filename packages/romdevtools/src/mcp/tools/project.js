@@ -445,7 +445,21 @@ const TEMPLATES = {
           "TurboTap 2P via joy_read(JOY_2)",
         ],
       },
-      racing: mk("racing", "Top-down lane racer for PC Engine. Player car at the bottom, obstacle cars spawn from the top and slide down, LEFT/RIGHT switches lanes, speed grows with score, crash freeze + auto-reset. Scrolling road BG."),
+      racing: {
+        ...mk("racing", "PINION PURSUIT — complete PC Engine top-down road racer: title/1P-race/2P-simultaneous-split-lane-versus shell, hardware BG Y-scroll road via the VDC BYR register with per-row scenery streaming (no NES 240-wrap / SMS 224-wrap — the VDC masks BYR to the 256px BAT in hardware), 1P speed control + best-distance to BRAM (bank $F7 TAM thunks + $1807 write-unlock, survives power cycles), 2-channel PSG music + SFX. Real 2P simultaneous versus: P2 on the TurboTap (host-enabled port 1, verified). HONEST CAVEAT: no hardware window/raster split in the minimal lib, so the HUD is a SPRITE HUD (screen-space digits) and the title/result screens use a static road backdrop — only the play state scrolls."),
+        players: "1-2 (1P endless race, or 2P simultaneous split-lane versus; P2 via TurboTap port 1, host-enabled — verified port-1 reaches P2)",
+        sram: "BRAM bank $F7 via the save_ram region (2KB) — checksummed best-distance record, verified across hardReset",
+        mechanics: ["lane steering", "speed control (1P)", "traffic pool + AABB", "crash/lives", "best-distance scoring", "2P split-lane versus", "BRAM-persistent best distance"],
+        techniques: [
+          "hardware BG Y-scroll (VDC BYR) + per-row streaming",
+          "sprite HUD digits (screen-space over a scrolling road)",
+          "shadow SATB + R19 vblank DMA",
+          "TAM bank-mapping thunks from C",
+          "BRAM $1807 write-unlock",
+          "PSG divider-table 2-channel music",
+          "TurboTap 2P via joy_read(JOY_2)",
+        ],
+      },
     };
   })(),
 
