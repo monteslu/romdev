@@ -1575,7 +1575,17 @@ TEMPLATES.gba = {
     runtimeDirs: GBA_LIBTONC_RUNTIME_DIRS,
     lang: GBA_TONC_LANG,
     ext: ".gba",
-    describe: "Top-down 3-lane racer scaffold (Tonc). Player car bottom, obstacles spawn from top + slide down, L/R switches lanes, AABB crash detection, 60-frame freeze + reset. Score is frames-since-crash.",
+    describe: "VERGE PILOT — complete GBA top-down road racer: press-start title, 1P endless race (handheld — link-cable 2P not emulatable single-instance, stated honestly in-file), lane steering + A/B throttle, traffic dodging with crash/lives, vivid 15-bit colour, DMA/PSG music + SFX, persistent best distance in cartridge SRAM ('SRAM_V' marker, byte-wide bus, magic+checksum, verified across power cycles). The GBA signature is an AFFINE BG2 ROAD (Mode 1, the console's Mode-7 trick) that recedes/scrolls, scales with speed, and banks as you steer — the 8.8 matrix taught register-by-register (a single-matrix showcase; a full per-scanline perspective floor is noted as the heavier next step).",
+    players: "1 (handheld — link-cable 2P not emulatable single-instance)",
+    sram: "cartridge SRAM best distance at 0x0E000000 ('SRAM_V' marker, byte-wide bus, magic+checksum; survives power cycles)",
+    mechanics: ["lane steering", "A/B throttle", "traffic dodging", "crash + lives", "best-distance persistence"],
+    techniques: [
+      "affine BG2 road (Mode 1, 8.8 matrix: recede + scale-with-speed + bank)",
+      "cartridge SRAM best-distance (SRAM_V marker + byte-wide bus)",
+      "OBJ car steering across lanes",
+      "DMA/PSG music + SFX",
+      "headless decode from OAM/VRAM/save_ram (GBA C globals not host-readable)",
+    ],
   },
   // Opt-in libgba path for users who prefer the devkitPro SDK or are
   // porting an existing libgba codebase.
