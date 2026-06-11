@@ -612,7 +612,7 @@ TEMPLATES.gbc = {
     main: "templates/puzzle.c",
     runtime: GBC_RUNTIME,
     lang: GBC_LANG, ext: ".gbc",
-    describe: "CHROMA WELL — falling-jewel matcher (the polished reference puzzle), to the full contract: 8x15 well, 6 jewel colors as 6 REAL CGB palettes (BCPS/BCPD + the VRAM bank-1 attribute map — true per-tile color, not colorized mono), 4-direction matches with gravity cascades + chain scoring, magic jewel every 18th piece, window-layer HUD strip, persistent battery hi-score (MBC1+RAM+BATTERY SRAM, magic+checksum, verified across power cycles), title/play/game-over shell, ch1 music + ch2 SFX. The locked well paints via the COLLECT/FLUSH vblank queue (writes outside vblank silently drop — never bypass it). Statics need dataLoc 0xC200 (the project recipe sets it).",
+    describe: "CHROMA WELL — falling-jewel matcher, to the full contract: 8x15 well, 6 jewel colors as 6 REAL CGB palettes (BCPS/BCPD + the VRAM bank-1 attribute map — true per-tile color, not colorized mono), 4-direction matches with gravity cascades + chain scoring, magic jewel every 18th piece, window-layer HUD strip, persistent battery hi-score (MBC1+RAM+BATTERY SRAM, magic+checksum, verified across power cycles), title/play/game-over shell, ch1 music + ch2 SFX. The locked well paints via the COLLECT/FLUSH vblank queue (writes outside vblank silently drop — never bypass it). Statics need dataLoc 0xC200 (the project recipe sets it).",
     players: "1 (handheld — link-cable 2P not emulatable single-instance)",
     sram: "MBC1+RAM+BATTERY, 8KB at $A000 ($0A-gated), verified across hardReset",
     mechanics: ["grid logic", "falling-piece matching", "gravity + cascade chains", "scoring/levels", "battery hi-score", "title/play/game-over state machine"],
@@ -1804,7 +1804,7 @@ TEMPLATES.gba = {
     runtimeDirs: GBA_LIBTONC_RUNTIME_DIRS,
     lang: GBA_TONC_LANG,
     ext: ".gba",
-    describe: "VERGE PILOT — complete GBA top-down road racer: press-start title, 1P endless race (handheld — link-cable 2P not emulatable single-instance, stated honestly in-file), lane steering + A/B throttle, traffic dodging with crash/lives, vivid 15-bit colour, DMA/PSG music + SFX, persistent best distance in cartridge SRAM ('SRAM_V' marker, byte-wide bus, magic+checksum, verified across power cycles). The GBA signature is an AFFINE BG2 ROAD (Mode 1, the console's Mode-7 trick) that recedes/scrolls, scales with speed, and banks as you steer — the 8.8 matrix taught register-by-register (a single-matrix showcase; a full per-scanline perspective floor is noted as the heavier next step).",
+    describe: "VERGE PILOT — complete GBA top-down road racer: press-start title, 1P endless race (handheld — link-cable 2P not emulatable single-instance, stated honestly in-file), lane steering + A/B throttle, traffic dodging with crash/lives, vivid 15-bit colour, DMA/PSG music + SFX, persistent best distance in cartridge SRAM ('SRAM_V' marker, byte-wide bus, magic+checksum, verified across power cycles). The GBA signature is an AFFINE BG2 ROAD (Mode 1, the console's Mode-7 trick) that recedes/scrolls, scales with speed, and banks as you steer — the 8.8 matrix taught register-by-register (a single-matrix demo; a full per-scanline perspective floor is noted as the heavier next step).",
     players: "1 (handheld — link-cable 2P not emulatable single-instance)",
     sram: "cartridge SRAM best distance at 0x0E000000 ('SRAM_V' marker, byte-wide bus, magic+checksum; survives power cycles)",
     mechanics: ["lane steering", "A/B throttle", "traffic dodging", "crash + lives", "best-distance persistence"],
@@ -1916,7 +1916,7 @@ TEMPLATES.atari2600 = {
     runtime: [],
     lang: "6507 assembly (dasm)",
     ext: ".a26",
-    describe: "FLAK FRENZY — complete Atari 2600 gallery shooter (the 2600's flagship genre) to the full contract: a drawn FLAK/FRENZY title banner (asymmetric playfield, not text mode), title/play/game-over state machine, P0 ship + P1 with NUSIZ replication for a 2x3 invader formation (one GRP1 write draws the whole replicated row) + M0 shot, TIA hardware-collision hit detection, score + in-session hi-score on the title (honest no-battery), TIA SFX + a title jingle + game-over tune on separate voices, RIOT-timer frame pacing, the SBC-#15 RESP/HMOVE positioning idiom, SWCHA per-check re-read discipline. 1P by design — a gallery-shooter kernel already spends its scanline budget on the ship + replicated formation + shot (2P alternating turns left as a cheap fork).",
+    describe: "FLAK FRENZY — Atari 2600 gallery shooter (a genre the TIA suits) to the full contract: a drawn FLAK/FRENZY title banner (asymmetric playfield, not text mode), title/play/game-over state machine, P0 ship + P1 with NUSIZ replication for a 2x3 invader formation (one GRP1 write draws the whole replicated row) + M0 shot, TIA hardware-collision hit detection, score + in-session hi-score on the title (honest no-battery), TIA SFX + a title jingle + game-over tune on separate voices, RIOT-timer frame pacing, the SBC-#15 RESP/HMOVE positioning idiom, SWCHA per-check re-read discipline. 1P by design — a gallery-shooter kernel already spends its scanline budget on the ship + replicated formation + shot (2P alternating turns left as a cheap fork).",
     players: "1 (honest — gallery-shooter kernel budget; 2P alternating turns left as a fork)",
     sram: "none — no persistent storage on real 2600 hardware; hi-score is in-session only",
     mechanics: ["player ship + shot", "NUSIZ-replicated invader formation", "TIA hardware-collision hit detection", "formation march + score", "session hi-score", "title/play/game-over state machine"],
@@ -2567,7 +2567,9 @@ Compiles **C89**, not C99/C11. Stick to:
     "```js\nbuild({\n  output: \"project\",\n  platform: \"" + platform + "\",\n  path: \"" + projPath + "\",\n  outputPath: \"" + name + romExt + "\",\n})\n```";
   const readme = `# ${title ?? name}
 
-**A complete, working ${platform} game** (${lang}) — forked from the romdev \`${platform}/${template ?? "default"}\` example. It builds, runs, and renders RIGHT NOW, before you change a line.
+**A working ${platform} starting point** (${lang}) — forked from the romdev \`${platform}/${template ?? "default"}\` example. It builds, runs, and renders RIGHT NOW, before you change a line.
+
+This is SCAFFOLDING, not a finished game. The gameplay is deliberately thin — treat it as placeholder and make it yours. Its value is that the hard part is already done and working: the ${platform} boot sequence, hardware init, and APIs are wired up correctly, so you evolve a running ROM instead of getting a long chain of fragile setup right from a blank file.
 
 ${tmpl?.describe ? tmpl.describe + "\n\n" : ""}## How to make it yours
 
@@ -2823,10 +2825,13 @@ function extractMarkedBlocks(text) {
 export function registerProjectTools(server, z) {
   server.tool(
     "examples",
-    "The example-game library — complete, working, teaching-grade games per platform, and the ONLY way to start a " +
-    "new project: **never start from a blank file — fork the nearest example and modify it into your game, even a " +
-    "very different game.** (Retro bring-up is a long chain of fragile hardware init with zero partial credit; a " +
-    "working game is a regression oracle — change 2 things while 13 keep working.) `op`: 'list' | 'fork' | 'show' | " +
+    "The example-game library — one buildable, rendering starting point per platform×genre, and the ONLY way to start " +
+    "a new project: **never start from a blank file — fork the nearest example and modify it into your game, even a " +
+    "very different game.** These are SCAFFOLDING, not showcases: the gameplay is intentionally thin (treat it as " +
+    "placeholder and reshape it) — their value is that they already carry the platform's boot sequence, APIs, and " +
+    "syntax wired up and WORKING, so you change 2 things while 13 keep working instead of getting 15 right from " +
+    "nothing. (Retro bring-up is a long chain of fragile hardware init with zero partial credit; a working game is a " +
+    "regression oracle.) `op`: 'list' | 'fork' | 'show' | " +
     "'snippets' | 'copySnippets'.\n" +
     "'list': the mechanics map — every example with its kind (game vs minimal reference), mechanics inventory, " +
     "hardware techniques demonstrated (with file+marker anchors for op:'show'), players, SRAM. Use it to pick the " +
