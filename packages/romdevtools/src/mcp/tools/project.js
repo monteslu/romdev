@@ -1161,7 +1161,17 @@ TEMPLATES.genesis = {
     runtimeDirs: SGDK_RUNTIME_DIRS,
     lang: SGDK_LANG,
     ext: ".bin",
-    describe: "Endless top-down 3-lane racer. LEFT/RIGHT switches lanes, obstacles slide down at increasing speed as score climbs. Game-over on collision with 60-frame freeze then auto-reset.",
+    describe: "MIRAGE MILE — complete top-down road racer: VSCROLL road plane (hardware scroll — contrast with the NES 240-wrap taught in-file), a LIVE per-scanline HSCROLL_LINE heat-haze band (the only live line-scroll demo in the example set), WINDOW HUD, 1P speed control with best-distance battery SRAM (survives power cycles), 2P simultaneous split-lane versus on controller 2, PSG music + SFX.",
+    players: "1-2 (2P = simultaneous versus, split lanes)",
+    sram: "header-declared cartridge SRAM at $200000 odd bytes (best distance, magic+checksum), verified across hardReset",
+    mechanics: ["lane steering", "speed control (1P)", "traffic dodging", "crash lives", "distance scoring", "split-lane versus"],
+    techniques: [
+      "vertical plane scroll (hardware VSCROLL)",
+      "per-scanline HSCROLL_LINE heat-haze band (live line scroll)",
+      "window-plane fixed HUD",
+      "cartridge SRAM via the $A130F1 mapper gate",
+      "PSG music + SFX",
+    ],
   },
   shmup_2p: {
     main: "templates/shmup_2p.c",
