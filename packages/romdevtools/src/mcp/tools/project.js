@@ -286,7 +286,17 @@ const TEMPLATES = {
       ],
       lang: "C (SDCC sm83)",
       ext: ".gb",
-      describe: "Match-3 falling-block puzzle scaffold for GB. 6×12 grid rendered via BG tilemap, 1×3 active piece (3 colours via 3 BG tile shapes), rotate via A, hard-drop on START, 3+-in-a-row clears in all 4 directions (H/V/diagonals) with gravity + cascade chains.",
+      describe: "SHALE WELL — falling-stone match-3 to the full contract (the monochrome DMG take on a jewel matcher): an 8x15 well, five stone KINDS told apart by 2bpp TILE SHAPE through one DMG BGP palette (stripe/checker/ring/brick/diamond — the honest DMG answer to the GBC's six colors), move/cycle/soft-drop/hard-drop, 3+ clears in all 4 directions, gravity cascades chain for bonus, magic stone every 18th piece, levels speed up. 1P marathon (link-cable 2P unemulatable single-instance — honest in-file). Locked well rides the vblank COLLECT/FLUSH queue with an idle scrub; window-layer HUD; battery hi-score (MBC1+RAM+BATTERY, verified across power cycles); APU melody + SFX. Board arrays pinned via __at($C200) so it builds with the default recipe.",
+      players: "1 (handheld — link-cable 2P not emulatable single-instance)",
+      sram: "MBC1+RAM+BATTERY, 8KB at $A000 ($0A-gated, magic+checksum), verified across hardReset",
+      mechanics: ["falling-trio control", "match-3 in 4 directions", "gravity + cascade chains", "magic-stone target clear", "levels", "battery hi-score"],
+      techniques: [
+        "DMG tile-shape stone kinds (one BGP palette, no CGB regs)",
+        "vblank COLLECT/FLUSH queue + idle scrub",
+        "window-layer HUD",
+        "__at() WRAM pinning past the shadow-OAM page (default-recipe build)",
+        "battery SRAM save ($0A enable dance)",
+      ],
     },
     sports: {
       main: "templates/sports.c",
