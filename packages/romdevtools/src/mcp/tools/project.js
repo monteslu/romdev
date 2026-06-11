@@ -877,12 +877,22 @@ TEMPLATES.snes = {
     main: "templates/shmup.c",
     extraSources: [
       { src: "templates/shmup-data.asm", dst: "data.asm" },
+      { src: "templates/shmup-hdr.asm", dst: "hdr.asm" },  /* battery-SRAM cart header */
     ],
     runtime: SNES_SFX_RUNTIME,
     runtimeDirs: SNES_PVSNESLIB_VENDOR_DIRS,
     lang: "C (tcc-65816 + PVSnesLib)",
     ext: ".sfc",
-    describe: "Vertical-shmup scaffold for SNES. Player ship + 6 bullets + 6 enemies, wave spawner, AABB collisions, score. SFX (pew on fire, boom on hit) via the bundled SPC700 driver + sample bank.",
+    describe: "SOLAR BULWARK — complete SNES vertical shooter: title shell with 1P/2P co-op select, 2P SIMULTANEOUS co-op (P2 on controller 2, port-isolated), bullet/enemy pools, wave spawner, battery-SRAM hi-score at $70:0000 (bundled hdr.asm), SPC music + SFX with the init-race idiom, Mode 1 scrolling starfield.",
+    players: "1-2 (simultaneous co-op; P2 on controller 2)",
+    sram: "battery SRAM at $70:0000 (CARTRIDGETYPE $02 via bundled hdr.asm; magic+checksum), verified across hardReset",
+    mechanics: ["projectile pools", "wave spawner", "AABB collision", "2P simultaneous co-op", "battery hi-score", "title/play/game-over state machine"],
+    techniques: [
+      "battery SRAM at $70:0000 (long-addressed asm helpers)",
+      "SPC700 init-race avoidance",
+      "Mode 1 BG scroll + BG text HUD",
+      "oamSet/oamUpdate sprite pooling",
+    ],
   },
   platformer: {
     main: "templates/platformer.c",

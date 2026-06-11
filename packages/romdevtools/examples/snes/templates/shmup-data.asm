@@ -1,26 +1,64 @@
-; ── shmup-data.asm — font + 3-sprite blob for shmup.c ─────────────
+; ── shmup-data.asm — SOLAR BULWARK's assembly half ───────────────────────────
+;
+; What lives here (and why it can't live in shmup.c):
+;   1. sram_read16/sram_write16 — battery SRAM accessors. SRAM sits at
+;      $70:0000 (declared in hdr.asm — see shmup-hdr.asm), reachable only
+;      with long (24-bit) addressing, which tcc C pointers don't emit.
+;   2. Font + sprite tiles + starfield tiles (rodata).
 ;
 ; tilsprite contains three 8×8 4bpp tiles back-to-back:
-;   tile 0 (offset 0)  — ship  (palette colour 1, mid-blue)
+;   tile 0 (offset 0)  — ship   (palette colour 1; P2 reuses the SAME tile
+;                                through OBJ palette 1 — see shmup.c)
 ;   tile 1 (offset 32) — bullet (palette colour 2, yellow)
-;   tile 2 (offset 64) — enemy (palette colour 3, red)
+;   tile 2 (offset 64) — enemy  (palette colour 3)
 ;
-; Each 8×8 4bpp tile = 32 bytes (4 bitplanes × 8 rows × 1 byte).
-; SNES interleaves planes 0+1 first (16 bytes), then 2+3 (16 bytes).
+; Each 8×8 4bpp tile = 32 bytes: 8 rows of plane0/plane1 byte pairs, then
+; 8 rows of plane2/plane3 pairs. Colour index bits: p0=1, p1=2, p2=4, p3=8.
+;
+; Section names must stay unique vs snes_sfx_data.asm (also linked in).
 
 .include "hdr.asm"
 
+.SECTION ".shmup_asm" SUPERFREE
+
+; ── HARDWARE IDIOM (load-bearing) — battery SRAM accessors ──────────────────
+; SRAM is mapped at $70:0000 (LoROM, SRAMSIZE $01 in shmup-hdr.asm = 2 KB).
+; Long addressing only — there is no SRAM mirror in the program banks, which
+; is why these are asm and not C. tcc calling convention: u16 arg at 5,s
+; (after the 4-byte rtl frame), second arg at 7,s; u16 return in tcc__r0.
+
+; u16 sram_read16(u16 offset)
+sram_read16:
+    php
+    rep #$30
+    lda 5,s            ; offset
+    tax
+    sep #$20
+    lda.l $700000,x
+    sta.w tcc__r0
+    lda.l $700001,x
+    sta.w tcc__r0 + 1
+    plp
+    rtl
+
+; void sram_write16(u16 offset, u16 value)
+sram_write16:
+    php
+    rep #$30
+    lda 5,s            ; offset
+    tax
+    lda 7,s            ; value
+    sep #$20
+    sta.l $700000,x    ; low byte
+    xba
+    sta.l $700001,x    ; high byte
+    plp
+    rtl
+
+.ENDS
+
 .section ".rodata1" superfree
 
-; ⚠ KNOWN ISSUE (text-BG HUD): this is a STUB font. consoleInitText DMAs
-; 3072 bytes from here into VRAM; with only a stub, it reads past into
-; adjacent data → a garbage font → the text BG shows a junk checkerboard
-; AND the HUD text is unreadable. The real fix is to ship PVSnesLib's
-; open-source bitmap font: convert pvsneslibfont.png with gfx2snes and
-; `.incbin "pvsneslibfont.pic"` / `.pal` here (see the official PVSnesLib
-; hello_world example). Tracked as R7(c) follow-up. The GAME itself
-; (sprites, motion, input, collision, sound) renders + plays correctly;
-; only the on-BG HUD text is affected.
 tilfont:
 ; 8x8 4bpp console font, 96 glyphs (ASCII 0x20-0x7F). consoleInitText
 ; DMAs exactly 3072 bytes (96 tiles x 32 bytes, 4bpp) from here into
@@ -351,26 +389,46 @@ palsprite:
 .db $00, $00, $00, $00, $00, $00, $00, $00
 .db $00, $00, $00, $00, $00, $00, $00, $00
 
-; ── Background wallpaper (one 8×8 4bpp tile, 4 solid colour quadrants) ──
-; Tiled across BG1 it paints the whole screen in four muted colours so the
-; playfield never reads as a flat/blank backdrop. Quadrant→colour: TL=1,
-; TR=2, BL=3, BR=4. 4bpp plane order: bytes 0-15 = rows 0-7 plane0/plane1
-; pairs, bytes 16-31 = rows 0-7 plane2/plane3 pairs.
+; ── Starfield tiles (four 8×8 4bpp tiles) ───────────────────────────────────
+; shmup.c checkers tiles 0/1 across BG1 (two near-black space tones — no
+; single colour ever dominates the frame, which keeps render-health checks
+; honest) and scatters tiles 2/3 (stars) with its LFSR. The whole field then
+; scrolls in hardware (BG1VOFS) while the BG0 text HUD stays put.
+; 4bpp plane order: bytes 0-15 = rows 0-7 plane0/plane1 pairs, bytes 16-31 =
+; rows 0-7 plane2/plane3 pairs. Colour bits: p0=1, p1=2, p2=4, p3=8.
 tilbg:
-.db $F0, $0F, $F0, $0F, $F0, $0F, $F0, $0F   ; rows 0-3: p0=left  p1=right
-.db $F0, $F0, $F0, $F0, $F0, $F0, $F0, $F0   ; rows 4-7: p0+p1 = left
-.db $00, $00, $00, $00, $00, $00, $00, $00   ; rows 0-3: p2/p3 = 0
-.db $0F, $00, $0F, $00, $0F, $00, $0F, $00   ; rows 4-7: p2 = right
+; tile 0 — space tone A (solid colour 1, one dim speckle = colour 3)
+.db $FF, $00, $FF, $00, $FF, $00, $FF, $00   ; rows 0-3: p0 set = colour 1
+.db $FF, $00, $FF, $08, $FF, $00, $FF, $00   ; row 5: p1 bit → colour 3 dot
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 1 — space tone B (solid colour 2, one dim speckle = colour 3)
+.db $00, $FF, $00, $FF, $10, $FF, $00, $FF   ; row 2: p0 bit → colour 3 dot
+.db $00, $FF, $00, $FF, $00, $FF, $00, $FF
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $00, $00, $00, $00, $00, $00, $00, $00
+; tile 2 — bright star on tone A (cross of colour 5 = p0+p2, white)
+.db $FF, $00, $FF, $00, $FF, $00, $FF, $00
+.db $FF, $00, $FF, $00, $FF, $00, $FF, $00
+.db $00, $00, $00, $00, $10, $00, $38, $00   ; rows 2-4: p2 star cross
+.db $10, $00, $00, $00, $00, $00, $00, $00
+; tile 3 — gold star on tone B (cross of colour 6 = p1+p2, pale gold)
+.db $00, $FF, $00, $FF, $00, $FF, $00, $FF
+.db $00, $FF, $00, $FF, $00, $FF, $00, $FF
+.db $00, $00, $00, $00, $00, $00, $00, $00
+.db $08, $00, $1C, $00, $08, $00, $00, $00   ; rows 4-6: p2 star cross
 
 palbg:
-; 16-colour BG palette; only 1-4 used (the four wallpaper quadrant tones).
+; 16-colour BG palette (BGR555); 1-2 = space tones, 3 = speckle, 5-6 = stars.
 .db $00, $00          ; 0 unused (BG fully opaque)
-.db $C4, $30          ; 1 dark blue
-.db $42, $29          ; 2 dark teal
-.db $88, $30          ; 3 dark purple
-.db $C6, $24          ; 4 dark slate
+.db $62, $24          ; 1 space tone A (deep blue)
+.db $45, $20          ; 2 space tone B (deep indigo)
+.db $6A, $41          ; 3 dim speckle (grey-blue)
+.db $00, $00          ; 4 unused
+.db $FF, $7F          ; 5 bright star (white)
+.db $9E, $43          ; 6 gold star (pale gold)
 .db $00, $00, $00, $00, $00, $00, $00, $00
 .db $00, $00, $00, $00, $00, $00, $00, $00
-.db $00, $00, $00, $00, $00, $00
+.db $00, $00
 
 .ends
