@@ -1073,7 +1073,17 @@ TEMPLATES.c64 = {
   sports: {
     main: "templates/sports.c", runtime: C64_RUNTIME, runtimeDirs: C64_VENDOR_DIRS,
     lang: C64_LANG, ext: ".prg",
-    describe: "Pong with 3 hardware sprites. Joystick port 2 = P1; AI on the right paddle. SID paddle-hit + wall-bounce + score sfx.",
+    describe: "DELTA DUEL — complete C64 head-to-head court sports (Pong lineage): title shell with 1P-vs-beatable-CPU / 2P-SIMULTANEOUS-versus select (P1 control port 2, P2 control port 1), first-to-5 match flow into a result screen, beatable chase-AI CPU, a +/-1 PRNG deflection spin so idle 1P rallies provably END, in-session best 1P-vs-CPU win-streak record behind the gated persistence seam (no SAVE_RAM yet — honest no-op), 2-voice SID music with the filter sweep + SFX, raster-IRQ split fixed HUD. Paddles + ball are VIC-II HARDWARE SPRITES (9th-X-bit staging for the right paddle past X=255); the court is static screen-RAM chars painted once per match (no per-frame repaint).",
+    players: "1-2 (2P = simultaneous versus; P1 control port 2, P2 control port 1)",
+    sram: "none yet — VICE core has no SAVE_RAM/1541 write-back; hiscore_load/save are honest no-op seams; best win-streak is in-session",
+    mechanics: ["1P vs beatable chase-AI CPU", "2P simultaneous versus", "first-to-5 match flow + result screen", "PRNG deflection spin (rallies END)", "longest-win-streak record", "title/play/result state machine"],
+    techniques: [
+      "VIC-II hardware sprites (paddles + ball) with 9th-X-bit batch staging ($D010)",
+      "raster-IRQ split fixed HUD over a static court",
+      "dual joystick-port reads with keyboard-conflict idiom ($DC00/$DC01)",
+      "SID filter sweep (11-bit cutoff LFO; shared volume/mode register)",
+      "static char court (no per-frame repaint; dodges the full-repaint freeze)",
+    ],
   },
   racing: {
     main: "templates/racing.c", runtime: C64_RUNTIME, runtimeDirs: C64_VENDOR_DIRS,
