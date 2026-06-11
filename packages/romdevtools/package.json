@@ -61,7 +61,7 @@
     "romdev-famitone": "0.1.0",
     "romdev-maxmod": "0.1.0",
     "romdev-platform-atari2600": "0.7.0",
-    "romdev-platform-gba": "0.7.0",
+    "romdev-platform-gba": "0.8.0",
     "romdev-platform-snes": "0.8.0",
     "romdev-toolchain-cc65": "0.1.1",
     "romdev-toolchain-m68k-gcc": "0.2.0",
