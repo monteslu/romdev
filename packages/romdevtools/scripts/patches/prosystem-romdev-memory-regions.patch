@@ -1,11 +1,237 @@
 diff --git a/core/Memory.c b/core/Memory.c
-index cb12bd3..9f074c8 100644
+index cb12bd3..93e7f50 100644
 --- a/core/Memory.c
 +++ b/core/Memory.c
-@@ -30,6 +30,88 @@
- #include "Cartridge.h"
- #include "Tia.h"
- #include "Riot.h"
+@@ -1,197 +1,312 @@
+-/* ----------------------------------------------------------------------------
+- *   ___  ___  ___  ___       ___  ____  ___  _  _
+- *  /__/ /__/ /  / /__  /__/ /__    /   /_   / |/ /
+- * /    / \  /__/ ___/ ___/ ___/   /   /__  /    /  emulator
+- *
+- * ----------------------------------------------------------------------------
+- * Copyright 2005 Greg Stanton
+- * 
+- * This program is free software; you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation; either version 2 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program; if not, write to the Free Software
+- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+- * ----------------------------------------------------------------------------
+- * Memory.c
+- * ----------------------------------------------------------------------------
+- */
+-#include <stdlib.h>
+-#include "Memory.h"
+-#include "Equates.h"
+-#include "Bios.h"
+-#include "Cartridge.h"
+-#include "Tia.h"
+-#include "Riot.h"
+-
+-uint8_t memory_ram[MEMORY_SIZE] = {0};
+-uint8_t memory_rom[MEMORY_SIZE] = {0};
+-uint8_t memory_souper_ram[MEMORY_SOUPER_EXRAM_SIZE] = {0};
+-
+-void memory_Reset(void)
+-{
+-   uint32_t index;
+-   for(index = 0; index < MEMORY_SIZE; index++)
+-   {
+-      memory_ram[index] = 0;
+-      memory_rom[index] = 1;
+-   }
+-   for(index = 0; index < 16384; index++)
+-      memory_rom[index] = 0;
+-}
+-
+-uint16_t memory_souper_GetRamAddress(uint16_t address)
+-{
+-  uint8_t page = (address - 0x4000) >> 12;
+-  if((cartridge_souper_mode & CARTRIDGE_SOUPER_MODE_EXS) != 0)
+-  {
+-    if(address >= 0x6000 && address < 0x7000)
+-      page = cartridge_souper_ram_page_bank[0];
+-    else if(address >= 0x7000 && address < 0x8000)
+-      page = cartridge_souper_ram_page_bank[1];
+-  }
+-  return (address & 0x0fff) | ((uint16_t)page << 12);
+-}
+-
+-uint8_t memory_Read(uint16_t address)
+-{
+-   switch ( address )
+-   {
+-      case INTIM:
+-      case INTIM | 0x2:
+-         memory_ram[INTFLG] &= 0x7f;
+-         return memory_ram[INTIM];
+-      case INTFLG:
+-      case INTFLG | 0x2:
+-         memory_ram[INTFLG] &= 0x7f;
+-         return memory_ram[INTFLG];
+-      default:
+-         if(cartridge_type == CARTRIDGE_TYPE_SOUPER && address >= 0x4000 && address < 0x8000)
+-            return memory_souper_ram[memory_souper_GetRamAddress(address)];
+-         break;
+-   }
+-
+-   return memory_ram[address];
+-}
+-
+-void memory_Write(uint16_t address, uint8_t data)
+-{
+-   if(!memory_rom[address])
+-   {
+-      switch(address)
+-      {
+-         case WSYNC:
+-            if(!(cartridge_flags & 128))
+-               memory_ram[WSYNC] = true;
+-            break;
+-         case INPTCTRL:
+-            if(data == 22 && cartridge_IsLoaded()) 
+-               cartridge_Store(); 
+-            else if(data == 2 && bios_enabled)
+-               bios_Store();
+-            break;
+-         case INPT0:
+-         case INPT1:
+-         case INPT2:
+-         case INPT3:
+-         case INPT4:
+-         case INPT5:
+-            break;
+-         case AUDC0:
+-            tia_SetRegister(AUDC0, data);
+-            break;
+-         case AUDC1:
+-            tia_SetRegister(AUDC1, data);
+-            break;
+-         case AUDF0:
+-            tia_SetRegister(AUDF0, data);
+-            break;
+-         case AUDF1:
+-            tia_SetRegister(AUDF1, data);
+-            break;
+-         case AUDV0:
+-            tia_SetRegister(AUDV0, data);
+-            break;
+-         case AUDV1:
+-            tia_SetRegister(AUDV1, data);
+-            break;
+-         case SWCHA:	/*gdement:  Writing here actually writes to DRA inside the RIOT chip.
+-                       This value only indirectly affects output of SWCHA.  Ditto for SWCHB.*/
+-            riot_SetDRA(data);
+-            break;
+-         case SWCHB:
+-            riot_SetDRB(data);
+-            break;
+-         case TIM1T:
+-         case TIM1T | 0x8:
+-            riot_SetTimer(TIM1T, data);
+-            break;
+-         case TIM8T:
+-         case TIM8T | 0x8:
+-            riot_SetTimer(TIM8T, data);
+-            break;
+-         case TIM64T:
+-         case TIM64T | 0x8:
+-            riot_SetTimer(TIM64T, data);
+-            break;
+-         case T1024T:
+-         case T1024T | 0x8:
+-            riot_SetTimer(T1024T, data);
+-            break;
+-         default:
+-            if(cartridge_type == CARTRIDGE_TYPE_SOUPER && address >= 0x4000 && address < 0x8000)
+-            {
+-               memory_souper_ram[memory_souper_GetRamAddress(address)] = data;
+-               break;
+-            }
+-            memory_ram[address] = data;
+-            if(address >= 8256 && address <= 8447)
+-               memory_ram[address - 8192] = data;
+-            else if(address >= 8512 && address <= 8702)
+-               memory_ram[address - 8192] = data;
+-            else if(address >= 64 && address <= 255)
+-               memory_ram[address + 8192] = data;
+-            else if(address >= 320 && address <= 511)
+-               memory_ram[address + 8192] = data;
+-            break;
+-            /*TODO: gdement:  test here for debug port.  Don't put it in the switch because that will change behavior.*/
+-      }
+-   }
+-   else
+-      cartridge_Write(address, data);
+-}
+-
+-void memory_WriteROM(uint16_t address, uint16_t size, const uint8_t* data)
+-{
+-   uint32_t index;
+-
+-   if((address + size) <= MEMORY_SIZE && data != NULL)
+-   {
+-      for(index = 0; index < size; index++)
+-      {
+-         memory_ram[address + index] = data[index];
+-         memory_rom[address + index] = 1;
+-      }
+-   }
+-}
+-
+-void memory_ClearROM(uint16_t address, uint16_t size)
+-{
+-   uint32_t index;
+-
+-   if((address + size) <= MEMORY_SIZE)
+-   {
+-      for(index = 0; index < size; index++)
+-      {
+-         memory_ram[address + index] = 0;
+-         memory_rom[address + index] = 0;
+-      }
+-   }
+-}
++/* ----------------------------------------------------------------------------
++ *   ___  ___  ___  ___       ___  ____  ___  _  _
++ *  /__/ /__/ /  / /__  /__/ /__    /   /_   / |/ /
++ * /    / \  /__/ ___/ ___/ ___/   /   /__  /    /  emulator
++ *
++ * ----------------------------------------------------------------------------
++ * Copyright 2005 Greg Stanton
++ * 
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
++ * ----------------------------------------------------------------------------
++ * Memory.c
++ * ----------------------------------------------------------------------------
++ */
++#include <stdlib.h>
++#include "Memory.h"
++#include "Equates.h"
++#include "Bios.h"
++#include "Cartridge.h"
++#include "Tia.h"
++#include "Riot.h"
 +#include "Sally.h"   /* for sally_pc (the 6502 PC) — romdev watchpoint */
 +
 +/* romdev instruction-level write watchpoint state (hook in memory_Write). */
@@ -16,7 +242,18 @@ index cb12bd3..9f074c8 100644
 +extern unsigned int romdev_sally_instr_pc;
 +extern void         romdev_sally_snap(int kind);
 +unsigned char romdev_wp_last_val = 0;
++unsigned char romdev_wp_last_old = 0;
++int           romdev_wp_cond     = 0;
++unsigned char romdev_wp_cond_val = 0;
 +unsigned int  romdev_wp_hits     = 0;
++static int romdev_wp_cond_ok(unsigned char oldv, unsigned char v) {
++   switch (romdev_wp_cond) {
++      case 1:  return v > oldv;
++      case 2:  return v < oldv;
++      case 3:  return v == romdev_wp_cond_val;
++      default: return 1;
++   }
++}
 +
 +/* romdev instruction-level READ watchpoint state (mirror of the write watch;
 + * hook at the tail of memory_Read). Records the 6502 PC (sally_pc.w) of the
@@ -88,39 +325,60 @@ index cb12bd3..9f074c8 100644
 +      romdev_range_log(sally_pc.w, (unsigned int)(a), (unsigned char)(v)); \
 +   } \
 +} while (0)
- 
- uint8_t memory_ram[MEMORY_SIZE] = {0};
- uint8_t memory_rom[MEMORY_SIZE] = {0};
-@@ -62,27 +144,46 @@ uint16_t memory_souper_GetRamAddress(uint16_t address)
- 
- uint8_t memory_Read(uint16_t address)
- {
++
++uint8_t memory_ram[MEMORY_SIZE] = {0};
++uint8_t memory_rom[MEMORY_SIZE] = {0};
++uint8_t memory_souper_ram[MEMORY_SOUPER_EXRAM_SIZE] = {0};
++
++void memory_Reset(void)
++{
++   uint32_t index;
++   for(index = 0; index < MEMORY_SIZE; index++)
++   {
++      memory_ram[index] = 0;
++      memory_rom[index] = 1;
++   }
++   for(index = 0; index < 16384; index++)
++      memory_rom[index] = 0;
++}
++
++uint16_t memory_souper_GetRamAddress(uint16_t address)
++{
++  uint8_t page = (address - 0x4000) >> 12;
++  if((cartridge_souper_mode & CARTRIDGE_SOUPER_MODE_EXS) != 0)
++  {
++    if(address >= 0x6000 && address < 0x7000)
++      page = cartridge_souper_ram_page_bank[0];
++    else if(address >= 0x7000 && address < 0x8000)
++      page = cartridge_souper_ram_page_bank[1];
++  }
++  return (address & 0x0fff) | ((uint16_t)page << 12);
++}
++
++uint8_t memory_Read(uint16_t address)
++{
 +   uint8_t romdev_rd_value;
-    switch ( address )
-    {
-       case INTIM:
-       case INTIM | 0x2:
-          memory_ram[INTFLG] &= 0x7f;
--         return memory_ram[INTIM];
++   switch ( address )
++   {
++      case INTIM:
++      case INTIM | 0x2:
++         memory_ram[INTFLG] &= 0x7f;
 +         romdev_rd_value = memory_ram[INTIM];
 +         goto romdev_rd_done;
-       case INTFLG:
-       case INTFLG | 0x2:
-          memory_ram[INTFLG] &= 0x7f;
--         return memory_ram[INTFLG];
++      case INTFLG:
++      case INTFLG | 0x2:
++         memory_ram[INTFLG] &= 0x7f;
 +         romdev_rd_value = memory_ram[INTFLG];
 +         goto romdev_rd_done;
-       default:
-          if(cartridge_type == CARTRIDGE_TYPE_SOUPER && address >= 0x4000 && address < 0x8000)
--            return memory_souper_ram[memory_souper_GetRamAddress(address)];
++      default:
++         if(cartridge_type == CARTRIDGE_TYPE_SOUPER && address >= 0x4000 && address < 0x8000)
 +         {
 +            romdev_rd_value = memory_souper_ram[memory_souper_GetRamAddress(address)];
 +            goto romdev_rd_done;
 +         }
-          break;
-    }
- 
--   return memory_ram[address];
++         break;
++   }
++
 +   romdev_rd_value = memory_ram[address];
 +
 +romdev_rd_done:
@@ -130,18 +388,130 @@ index cb12bd3..9f074c8 100644
 +   }
 +   ROMDEV_RANGE_6502(address, romdev_rd_value, 0);
 +   return romdev_rd_value;
- }
- 
- void memory_Write(uint16_t address, uint8_t data)
- {
++}
++
++void memory_Write(uint16_t address, uint8_t data)
++{
 +   if (romdev_wp_enabled && (unsigned int)address == romdev_wp_addr) {
-+      romdev_wp_last_pc = romdev_sally_instr_pc; romdev_wp_last_val = data; romdev_wp_hits++;
-+      romdev_sally_snap(3);
++      unsigned char romdev_oldv = romdev_wp_cond ? memory_ram[address] : 0;
++      if (romdev_wp_cond_ok(romdev_oldv, data)) {
++         romdev_wp_last_pc = romdev_sally_instr_pc; romdev_wp_last_val = data; romdev_wp_last_old = romdev_oldv; romdev_wp_hits++;
++         romdev_sally_snap(3);
++      }
 +   }
 +   ROMDEV_RANGE_6502(address, data, 1);
-    if(!memory_rom[address])
-    {
-       switch(address)
++   if(!memory_rom[address])
++   {
++      switch(address)
++      {
++         case WSYNC:
++            if(!(cartridge_flags & 128))
++               memory_ram[WSYNC] = true;
++            break;
++         case INPTCTRL:
++            if(data == 22 && cartridge_IsLoaded()) 
++               cartridge_Store(); 
++            else if(data == 2 && bios_enabled)
++               bios_Store();
++            break;
++         case INPT0:
++         case INPT1:
++         case INPT2:
++         case INPT3:
++         case INPT4:
++         case INPT5:
++            break;
++         case AUDC0:
++            tia_SetRegister(AUDC0, data);
++            break;
++         case AUDC1:
++            tia_SetRegister(AUDC1, data);
++            break;
++         case AUDF0:
++            tia_SetRegister(AUDF0, data);
++            break;
++         case AUDF1:
++            tia_SetRegister(AUDF1, data);
++            break;
++         case AUDV0:
++            tia_SetRegister(AUDV0, data);
++            break;
++         case AUDV1:
++            tia_SetRegister(AUDV1, data);
++            break;
++         case SWCHA:	/*gdement:  Writing here actually writes to DRA inside the RIOT chip.
++                       This value only indirectly affects output of SWCHA.  Ditto for SWCHB.*/
++            riot_SetDRA(data);
++            break;
++         case SWCHB:
++            riot_SetDRB(data);
++            break;
++         case TIM1T:
++         case TIM1T | 0x8:
++            riot_SetTimer(TIM1T, data);
++            break;
++         case TIM8T:
++         case TIM8T | 0x8:
++            riot_SetTimer(TIM8T, data);
++            break;
++         case TIM64T:
++         case TIM64T | 0x8:
++            riot_SetTimer(TIM64T, data);
++            break;
++         case T1024T:
++         case T1024T | 0x8:
++            riot_SetTimer(T1024T, data);
++            break;
++         default:
++            if(cartridge_type == CARTRIDGE_TYPE_SOUPER && address >= 0x4000 && address < 0x8000)
++            {
++               memory_souper_ram[memory_souper_GetRamAddress(address)] = data;
++               break;
++            }
++            memory_ram[address] = data;
++            if(address >= 8256 && address <= 8447)
++               memory_ram[address - 8192] = data;
++            else if(address >= 8512 && address <= 8702)
++               memory_ram[address - 8192] = data;
++            else if(address >= 64 && address <= 255)
++               memory_ram[address + 8192] = data;
++            else if(address >= 320 && address <= 511)
++               memory_ram[address + 8192] = data;
++            break;
++            /*TODO: gdement:  test here for debug port.  Don't put it in the switch because that will change behavior.*/
++      }
++   }
++   else
++      cartridge_Write(address, data);
++}
++
++void memory_WriteROM(uint16_t address, uint16_t size, const uint8_t* data)
++{
++   uint32_t index;
++
++   if((address + size) <= MEMORY_SIZE && data != NULL)
++   {
++      for(index = 0; index < size; index++)
++      {
++         memory_ram[address + index] = data[index];
++         memory_rom[address + index] = 1;
++      }
++   }
++}
++
++void memory_ClearROM(uint16_t address, uint16_t size)
++{
++   uint32_t index;
++
++   if((address + size) <= MEMORY_SIZE)
++   {
++      for(index = 0; index < size; index++)
++      {
++         memory_ram[address + index] = 0;
++         memory_rom[address + index] = 0;
++      }
++   }
++}
 diff --git a/core/ProSystem.c b/core/ProSystem.c
 index 753035e..e43551e 100644
 --- a/core/ProSystem.c
@@ -358,7 +728,7 @@ index dede0ca..cc8fe6d 100644
        sally_Push(sally_pc.b.h);
        sally_Push(sally_pc.b.l);
 diff --git a/core/libretro.c b/core/libretro.c
-index 3e4dbdb..cdd30dd 100644
+index 3e4dbdb..50e8208 100644
 --- a/core/libretro.c
 +++ b/core/libretro.c
 @@ -28,6 +28,7 @@
@@ -369,7 +739,7 @@ index 3e4dbdb..cdd30dd 100644
  
  #ifdef _3DS
  extern void* linearMemAlign(size_t size, size_t alignment);
-@@ -614,15 +615,259 @@ unsigned retro_get_region(void)
+@@ -614,15 +615,279 @@ unsigned retro_get_region(void)
      return cartridge_region == REGION_NTSC ? RETRO_REGION_NTSC : RETRO_REGION_PAL;
  }
  
@@ -379,6 +749,9 @@ index 3e4dbdb..cdd30dd 100644
 +extern int           romdev_wp_enabled;
 +extern unsigned int  romdev_wp_last_pc;
 +extern unsigned char romdev_wp_last_val;
++extern unsigned char romdev_wp_last_old;
++extern int           romdev_wp_cond;
++extern unsigned char romdev_wp_cond_val;
 +extern unsigned int  romdev_wp_hits;
 +
 +void romdev_watchpoint_set(unsigned int addr, int enabled)
@@ -387,6 +760,21 @@ index 3e4dbdb..cdd30dd 100644
 +    romdev_wp_enabled = enabled ? 1 : 0;
 +    romdev_wp_last_pc = 0xFFFFFFFF;
 +    romdev_wp_last_val = 0;
++    romdev_wp_last_old = 0;
++    romdev_wp_cond = 0;
++    romdev_wp_cond_val = 0;
++    romdev_wp_hits = 0;
++}
++
++void romdev_watchpoint_set_cond(unsigned int addr, int enabled, int cond, int val)
++{
++    romdev_wp_addr = addr;
++    romdev_wp_enabled = enabled ? 1 : 0;
++    romdev_wp_last_pc = 0xFFFFFFFF;
++    romdev_wp_last_val = 0;
++    romdev_wp_last_old = 0;
++    romdev_wp_cond = cond;
++    romdev_wp_cond_val = (unsigned char)val;
 +    romdev_wp_hits = 0;
 +}
 +
@@ -398,6 +786,8 @@ index 3e4dbdb..cdd30dd 100644
 +    out5[2] = romdev_wp_last_pc;
 +    out5[3] = (unsigned int)romdev_wp_last_val;
 +    out5[4] = romdev_wp_hits;
++    out5[5] = 0xFFFFFFFF;
++    out5[6] = (romdev_wp_hits ? (unsigned int)romdev_wp_last_old : 0xFFFFFFFFu);
 +    if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; }
 +}
 +
@@ -629,7 +1019,7 @@ index 3e4dbdb..cdd30dd 100644
      return NULL;
  }
  
-@@ -630,6 +875,8 @@ size_t retro_get_memory_size(unsigned id)
+@@ -630,6 +895,8 @@ size_t retro_get_memory_size(unsigned id)
  {
      if ( id == RETRO_MEMORY_SYSTEM_RAM )
          return MEMORY_SIZE;
