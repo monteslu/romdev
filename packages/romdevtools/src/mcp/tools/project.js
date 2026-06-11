@@ -447,7 +447,18 @@ TEMPLATES.gbc = {
   platformer: {
     main: "templates/platformer.c", runtime: GBC_RUNTIME,
     lang: GBC_LANG, ext: ".gbc",
-    describe: "SIDE-SCROLLING platformer for GBC. Full CGB color palette (BG + sprite via BCPS/OCPS) over the GB side-scroller core: subpixel gravity + jump + land-on-top collision against platforms across a 256-px world (the wrapping BG map). The camera follows the player and scrolls the BG via SCX; the player sprite draws in screen space. A=jump, d-pad=move. One BG map wide (no streaming) — for a wider world, stream a new BG-map column on each 8px camera step (window for a fixed HUD). See the GBC MENTAL_MODEL.md 'Horizontal scrolling'. Extend with enemies, goals, pickups.",
+    describe: "SPECTRA BOUND — Game Boy Color side-scrolling platformer to the full contract: the GB runner core (Q4.4 sub-pixel gravity/jump, one-way platforms, lethal pits, drifting spikes, coins + distance scoring, one-way scroll-wall camera, seamlessly looping SCX 256-px column-map level, window-layer fixed HUD, divide-free math) with the GBC SIGNATURE on top — TRUE per-tile color: sky/grass/dirt/platform/HUD are 5 real CGB palettes (BCPS/BCPD) assigned per BG cell through the VRAM bank-1 attribute map, plus colorful player/coin/spike OBJ palettes (OCPS) — not colorized mono. Press-start title, persistent battery hi-score (MBC1+RAM+BATTERY SRAM, magic+checksum, verified across power cycles), GB APU music + SFX. KEY GOTCHA: HUD/text commits write bank-0 tiles only and stage text out of the vblank slice — per-cell VBK toggles or in-vblank char_tile overrun mode 3 and drop writes. Statics need dataLoc 0xC200. 1P by design (link-cable 2P not emulatable single-instance).",
+    players: "1 (handheld — link-cable 2P not emulatable single-instance)",
+    sram: "MBC1+RAM+BATTERY, 8KB at $A000 ($0A-gated, magic+checksum), verified across hardReset",
+    mechanics: ["gravity + Q4.4 jump physics", "one-way platforms (6-px landing window)", "pits + spikes + coins", "distance + coin scoring", "one-way scroll-wall camera", "lives + respawn breather", "battery-persistent hi-score"],
+    techniques: [
+      "CGB palette RAM (BCPS/BCPD + OCPS/OCPD, mode-3 write constraint)",
+      "VRAM bank-1 attribute map (VBK per-tile palettes)",
+      "window-layer HUD",
+      "SCX seamless looping scroll (uint8 wrap)",
+      "two-phase vblank commit (bank-0-only HUD + pre-staged text)",
+      "battery SRAM save ($0A enable dance)",
+    ],
   },
   puzzle: {
     main: "templates/puzzle.c",
