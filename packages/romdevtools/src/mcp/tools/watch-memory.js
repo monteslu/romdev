@@ -139,6 +139,19 @@ export function makePressDriver(host, presses) {
 // never disagree again.
 const MEMORY_REGIONS = /** @type {[string, ...string[]]} */ (Object.keys(MemoryRegionToRetro));
 
+// A region param that does NOT inline the full ~62-value enum into the JSON
+// schema. The enum array is ~214 tokens PER param site; inlining it on every
+// secondary region sub-param across this file was the dominant tool-schema
+// bloat (0.28.0 feedback #5). Used on SECONDARY/sub params; the PRIMARY region
+// inputs keep z.enum so the full list stays discoverable where the region IS
+// the choice. A plain string — validated at RUNTIME by the handler (the
+// host.readMemory / MemoryRegionToRetro lookup throws on an unknown region with
+// a clear message), so dropping the schema enum here costs no safety.
+// NOTE: `z` is passed into registerWatchMemoryTools (not a module import), so
+// this factory takes `z` and is invoked once inside the register fn.
+const makeRegionStr = (z) => (desc) =>
+  z.string().describe(desc + " (validated at runtime against the canonical region set).");
+
 // Abort-guard for input-driven watchpoint runs: sample caller-named bytes each
 // frame; the FIRST one to change stops the run with {label,addr,before,after}.
 // Lets a derailed driven scenario (player died, scene flipped) return immediately
@@ -266,6 +279,7 @@ function downsample(arr, n) {
 }
 
 export function registerWatchMemoryTools(server, z, sessionKey) {
+  const regionStr = makeRegionStr(z);
   const rangeShape = z.object({
     region: z.enum(MEMORY_REGIONS),
     offset: z.number().int().min(0),
@@ -830,7 +844,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       precision: z.enum(["exact", "sampled"]).default("exact")
         .describe("on:'write' ONLY. exact=core watchpoint, the real writing instruction PC even under interrupts (uses `address`). sampled=cheap frame-boundary PC (uses region/offset/length) — NOT the writer under IRQ. Ignored for on:read/pc (always exact)."),
       address: z.number().int().min(0).optional().describe("on:'write' exact / on:'read' / on:'pc' — CPU address to break on (write target, read target, or instruction boundary). Required for those."),
-      region: z.enum(MEMORY_REGIONS).optional().describe("on:'write' precision:'sampled' — region whose byte to watch for change."),
+      region: regionStr("on:'write' precision:'sampled' — region whose byte to watch for change.").optional(),
       offset: z.number().int().min(0).optional().describe("on:'write' precision:'sampled' — offset within the region."),
       length: z.number().int().min(1).max(4096).default(1).describe("on:'write' precision:'sampled' — bytes to watch from offset."),
       maxFrames: z.number().int().min(1).max(1_000_000).default(600).describe("Max frames to run while waiting for the condition."),
@@ -841,12 +855,12 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         holdFrames: z.number().int().min(1).default(2),
       })).optional().describe("Schedule input while waiting (drive the game to the state that triggers the condition). If OMITTED, this run inherits whatever input({op:'set'}) last held — same as frame({op:'step'}). If GIVEN, the schedule OWNS the pad for the whole run (a prior input({op:'set'}) is ignored); use it to drive the watched window itself. Entries with OVERLAPPING windows on the same port are OR'd into a chord (e.g. b+right held while a fires mid-window), not overwritten."),
       abortIf: z.array(z.object({
-        region: z.enum(MEMORY_REGIONS).optional().describe("memory region (default system_ram)"),
+        region: regionStr("memory region (default system_ram)").optional(),
         offset: z.number().int().min(0).describe("byte offset within the region"),
         label: z.string().optional().describe("human name for this guard byte"),
       })).optional().describe("on:'write' exact — ABORT GUARD for a pressDuring run: caller-named 'is this scenario still valid?' bytes (e.g. the area/scene id, the player object-active flag). If ANY changes mid-run the watchpoint stops IMMEDIATELY and returns {aborted:true, abortedBy, before, after} — so a driven scenario that derailed (player died → title screen) doesn't burn all maxFrames and return a meaningless found:false. Each is sampled once per frame (cheap)."),
       captureMemory: z.array(z.object({
-        region: z.enum(MEMORY_REGIONS).describe("memory region to read"),
+        region: regionStr("memory region to read"),
         offset: z.number().int().min(0).describe("byte offset within the region"),
         length: z.number().int().min(1).max(256).default(1).describe("bytes to read"),
         label: z.string().optional().describe("human name for this read (else 'region+offset')"),
