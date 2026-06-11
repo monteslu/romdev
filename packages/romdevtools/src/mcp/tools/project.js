@@ -452,6 +452,7 @@ const GBC_RUNTIME = [
   { src: "lib/c/gb_runtime.c",  dst: "gb_runtime.c" },
   { src: "lib/c/gb_crt0.s",     dst: "gb_crt0.s" },
   { src: "lib/c/patch-header.js", dst: "patch-header.js" },
+  { src: "lib/c/font.h", dst: "font.h" },  /* digits+A-Z 2bpp glyphs; every gbc example #includes it */
 ];
 const GBC_LANG = "C (SDCC sm83, GBC color)";
 TEMPLATES.gbc = {
@@ -503,10 +504,7 @@ TEMPLATES.gbc = {
   },
   puzzle: {
     main: "templates/puzzle.c",
-    runtime: [
-      ...GBC_RUNTIME,
-      { src: "lib/c/font.h", dst: "font.h" },  /* digits+A-Z 2bpp glyphs for the HUD */
-    ],
+    runtime: GBC_RUNTIME,
     lang: GBC_LANG, ext: ".gbc",
     describe: "CHROMA WELL — falling-jewel matcher (the polished reference puzzle), to the full contract: 8x15 well, 6 jewel colors as 6 REAL CGB palettes (BCPS/BCPD + the VRAM bank-1 attribute map — true per-tile color, not colorized mono), 4-direction matches with gravity cascades + chain scoring, magic jewel every 18th piece, window-layer HUD strip, persistent battery hi-score (MBC1+RAM+BATTERY SRAM, magic+checksum, verified across power cycles), title/play/game-over shell, ch1 music + ch2 SFX. The locked well paints via the COLLECT/FLUSH vblank queue (writes outside vblank silently drop — never bypass it). Statics need dataLoc 0xC200 (the project recipe sets it).",
     players: "1 (handheld — link-cable 2P not emulatable single-instance)",
@@ -529,7 +527,18 @@ TEMPLATES.gbc = {
   racing: {
     main: "templates/racing.c", runtime: GBC_RUNTIME,
     lang: GBC_LANG, ext: ".gbc",
-    describe: "3-lane racer for GBC. Asphalt BG palette + colored player/enemy cars + lane-switch + crash sfx.",
+    describe: "TWILIGHT LANE — Game Boy Color top-down road racer to the full contract: press-start title (honest no-2P), the road scrolls via SCY into a 256-px map (seamless uint8 wrap — contrast vs NES 240 / SMS 224 garbage-row / Genesis hardware-masked plane), four lanes, A/UP accelerate + B/DOWN brake (speed 1-4), LEFT/RIGHT lane tilt, 6-slot traffic pool, crash + 3 lives with invuln blink, window-layer HUD, best distance to battery SRAM (verified across power cycles). The GBC SIGNATURE: 5 real CGB BG palettes (violet dusk asphalt / evening grass / pine trees / cyan-glow dividers / HUD) assigned per cell via the bank-1 attribute map, plus cyan-car / red-traffic OBJ palettes (OCPS) — not colorized mono. GB APU music + SFX, two-phase vblank commit, dataLoc 0xC200.",
+    players: "1 (handheld — link-cable 2P not emulatable single-instance)",
+    sram: "MBC1+RAM+BATTERY, 8KB at $A000 ($0A-gated, best-distance magic+checksum), verified across hardReset",
+    mechanics: ["lane steering", "speed control 1-4", "best-distance persistence", "traffic pool + AABB crashes", "crash lives + invuln blink"],
+    techniques: [
+      "CGB per-tile color road (5 palettes via bank-1 attribute map)",
+      "OBJ palettes (OCPS) for car + traffic",
+      "SCY vertical road scroll (256-px seamless uint8 wrap)",
+      "window-layer fixed HUD",
+      "two-phase vblank commit (bank-0-only HUD + streamed roadside restamp)",
+      "battery SRAM best-distance ($0A enable dance)",
+    ],
   },
   /* R45 — same hUGEDriver music_demo as GB, with BCPS/BCPD palette
    * writes so it boots in CGB mode (gambatte flips on .gbc + $0143=$80).
