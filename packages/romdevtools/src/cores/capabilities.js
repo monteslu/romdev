@@ -1,0 +1,218 @@
+// capabilities.js — the platform CAPABILITY CONTRACT.
+//
+// One declarative entry per platform stating, in machine-readable form, what
+// romdev's platform-sensitive tools can do on it. This is the SOURCE OF TRUTH
+// the BUILDING.md `deep`/`shallow` legend used to encode as prose — now data,
+// enforced by test/capability-conformance.test.js (declared MUST exactly match
+// actual tool behavior; mismatch fails CI).
+//
+// Why it exists: the 14 tier-1 platforms are near-uniform, but the next-gen tier
+// (N64/PS1/Dreamcast/PSP/DS) breaks that — 3D rendering, MIPS/SH-4 CPUs, GPU-FBO
+// screenshots, ops that are meaningless on a polygon renderer. A declared
+// contract + a uniform "unsupported" signal lets agents discover what a system
+// can do BEFORE calling, and keeps the matrix honest as platforms diverge.
+//
+// Fields (keep MINIMAL — only what the contract / discovery / conformance use):
+//   cpuFamily       primary CPU family (forward-looking; "6502","z80","sm83",
+//                   "m68k","arm","65816","huc6280" today; "mips","sh4" later)
+//   renderingKind   "tile" | "framebuffer" | "3d" | "none" — how the screen is
+//                   produced. The current 14 are all "tile". Drives whether
+//                   tile/nametable inspection ops even make sense.
+//   introspection   "deep" | "shallow" — the BUILDING.md legend, as data.
+//   ops.*           boolean per platform-sensitive op (see OP_KEYS below).
+//   decompileQuality "excellent"|"good"|"medium"|"rough" (from the RE engine).
+//   cpus            { main, secondary[] } — what getCPUState({op:'read'}) decodes.
+//   audioChips      chip ids audioDebug({op:'inspect'}) decodes ([] = no chip).
+//   memoryRegions   exact region ids memory({op}) accepts beyond the generic set.
+
+/** The platform-sensitive op keys the contract tracks. Universal tools (build's
+ * file plumbing, encodeAudio, catalog, files, ...) are NOT here — they don't
+ * vary by platform. */
+export const OP_KEYS = /** @type {const} */ ([
+  "build",              // buildSource for this platform
+  "run",                // loadMedia + a real core
+  "screenshot",         // frame({op:'screenshot'})
+  "inspectSprites",     // sprites({op:'inspect'})
+  "inspectPalette",     // palette({source:'live'})
+  "inspectBackground",  // background({view:'renderState'/'map'})
+  "renderingContext",   // background({view:'renderState'}) decode
+  "cpuState",           // cpu({op:'read'}) main CPU
+  "audioDebug",         // audioDebug({op:'inspect'})
+  "cart",               // cart({op:'extract'/'wrap'})
+  "disasm",             // disasm({target:'rom'/'project'/'references'})
+  "decompile",          // disasm({target:'decompile'}) — RE engine, all 14
+]);
+
+// Generic regions every running core exposes (libretro RETRO_MEMORY_*).
+const GENERIC_REGIONS = ["system_ram", "save_ram", "video_ram", "rtc"];
+
+/** @typedef {{ cpuFamily:string, renderingKind:"tile"|"framebuffer"|"3d"|"none",
+ *   introspection:"deep"|"shallow", ops:Record<string,boolean>,
+ *   decompileQuality:string, cpus:{main:string, secondary:string[]},
+ *   audioChips:string[], memoryRegions:string[] }} Capability */
+
+const tileDeep = ({ ops: opsOverride = {}, ...rest } = {}) => ({
+  renderingKind: "tile", introspection: "deep",
+  ...rest,
+  ops: {
+    build: true, run: true, screenshot: true,
+    inspectSprites: true, inspectPalette: true, inspectBackground: true,
+    renderingContext: true, cpuState: true, audioDebug: true,
+    cart: true, disasm: true, decompile: true,
+    ...opsOverride,
+  },
+});
+
+/** @type {Record<string, Capability>} */
+export const CAPABILITIES = {
+  nes: {
+    cpuFamily: "6502", decompileQuality: "rough",
+    cpus: { main: "6502", secondary: [] },
+    audioChips: ["nes"],
+    memoryRegions: [...GENERIC_REGIONS, "nes_nametables", "nes_palette", "nes_oam",
+      "nes_chr", "nes_apu_regs", "nes_cpu_regs", "nes_ppu_regs"],
+    ...tileDeep(),
+  },
+  snes: {
+    cpuFamily: "65816", decompileQuality: "medium",
+    cpus: { main: "65816", secondary: ["spc700"] },
+    audioChips: ["dsp"],
+    memoryRegions: [...GENERIC_REGIONS, "snes_oam", "snes_cgram", "snes_aram", "snes_fillram"],
+    ...tileDeep(),
+  },
+  genesis: {
+    cpuFamily: "m68k", decompileQuality: "excellent",
+    cpus: { main: "m68k", secondary: [] }, // z80 not yet decoded
+    audioChips: ["ym2612", "psg"],
+    memoryRegions: [...GENERIC_REGIONS, "genesis_cram", "genesis_vsram", "genesis_vdp_regs",
+      "genesis_z80_ram", "genesis_m68k", "genesis_ym2612", "genesis_psg"],
+    ...tileDeep(),
+  },
+  sms: {
+    cpuFamily: "z80", decompileQuality: "good",
+    cpus: { main: "z80", secondary: [] },
+    audioChips: ["psg"],
+    memoryRegions: [...GENERIC_REGIONS, "sms_vram", "sms_cram", "sms_vdp_regs", "sms_z80_regs"],
+    ...tileDeep(),
+  },
+  gg: {
+    cpuFamily: "z80", decompileQuality: "good",
+    cpus: { main: "z80", secondary: [] },
+    audioChips: ["psg"],
+    memoryRegions: [...GENERIC_REGIONS, "gg_vram", "gg_cram"],
+    ...tileDeep(),
+  },
+  gb: {
+    cpuFamily: "sm83", decompileQuality: "good",
+    cpus: { main: "sm83", secondary: [] },
+    audioChips: ["gb"],
+    memoryRegions: [...GENERIC_REGIONS, "gb_vram", "gb_oam", "gb_io", "gb_hram",
+      "gb_bgpdata", "gb_objpdata", "gb_cpu_regs"],
+    ...tileDeep(),
+  },
+  gbc: {
+    cpuFamily: "sm83", decompileQuality: "good",
+    cpus: { main: "sm83", secondary: [] },
+    audioChips: ["gb"],
+    memoryRegions: [...GENERIC_REGIONS, "gb_vram", "gb_oam", "gb_io", "gb_hram",
+      "gb_bgpdata", "gb_objpdata", "gb_cpu_regs"],
+    ...tileDeep(),
+  },
+  gba: {
+    cpuFamily: "arm", decompileQuality: "excellent",
+    cpus: { main: "arm", secondary: [] },
+    audioChips: ["gba"],
+    memoryRegions: [...GENERIC_REGIONS, "gba_cpu_regs", "gba_io_regs", "gba_palette", "gba_oam"],
+    // GBA: the patched mgba regions give MORE than BUILDING.md's old "shallow"
+    // prose implied — inspectSprites/Palette + renderingContext + cpuState +
+    // audioDebug are all wired (per the tool Supported lists). cart extract/wrap
+    // and inspectBackgroundMap are NOT.
+    renderingKind: "tile", introspection: "shallow",
+    ops: {
+      build: true, run: true, screenshot: true,
+      inspectSprites: true, inspectPalette: true, inspectBackground: false,
+      renderingContext: true, cpuState: true, audioDebug: true,
+      cart: false, disasm: true, decompile: true,
+    },
+  },
+  atari2600: {
+    cpuFamily: "6502", decompileQuality: "rough",
+    cpus: { main: "6502", secondary: [] },
+    audioChips: [], // TIA tone, no dedicated sound chip audioDebug decodes
+    memoryRegions: [...GENERIC_REGIONS, "a26_tia_regs", "a26_cpu_regs"],
+    ...tileDeep({ ops: { audioDebug: false, inspectSprites: true, inspectBackground: false } }),
+  },
+  atari7800: {
+    cpuFamily: "6502", decompileQuality: "rough",
+    cpus: { main: "6502", secondary: [] },
+    audioChips: [], // TIA; no audioDebug decode
+    memoryRegions: [...GENERIC_REGIONS, "a78_cpu_regs"],
+    ...tileDeep({ ops: { audioDebug: false, inspectBackground: false } }),
+  },
+  c64: {
+    cpuFamily: "6502", decompileQuality: "rough",
+    cpus: { main: "6502", secondary: [] },
+    audioChips: ["sid"],
+    memoryRegions: [...GENERIC_REGIONS, "c64_color_ram", "c64_vic_regs", "c64_sid_regs",
+      "c64_cia1_regs", "c64_cia2_regs", "c64_cpu_regs"],
+    // C64 has no inspectBackgroundMap branch (character-mode screen is read via
+    // raw VIC regions, not a snapshotter).
+    ...tileDeep({ ops: { inspectBackground: false } }),
+  },
+  lynx: {
+    cpuFamily: "65c02", decompileQuality: "rough",
+    cpus: { main: "65c02", secondary: [] },
+    audioChips: ["mikey"],
+    memoryRegions: [...GENERIC_REGIONS, "lynx_cpu_regs", "lynx_hw_regs"],
+    // Lynx: sprites return the SCB list head (no fixed OAM) — counts as wired.
+    // shallow per BUILDING.md (generic introspection + sfx/music templates).
+    renderingKind: "tile", introspection: "shallow",
+    ops: {
+      build: true, run: true, screenshot: true,
+      inspectSprites: true, inspectPalette: true, inspectBackground: false,
+      renderingContext: true, cpuState: true, audioDebug: true,
+      cart: false, disasm: true, decompile: true,
+    },
+  },
+  pce: {
+    cpuFamily: "huc6280", decompileQuality: "medium",
+    cpus: { main: "", secondary: [] }, // getCPUState main NOT wired for pce
+    audioChips: ["pce"],
+    memoryRegions: [...GENERIC_REGIONS, "pce_vdc_vram", "pce_vdc_satb", "pce_vdc_regs",
+      "pce_vce_palette", "pce_cpu_regs", "pce_psg_regs"],
+    renderingKind: "tile", introspection: "deep",
+    ops: {
+      build: true, run: true, screenshot: true,
+      inspectSprites: true, inspectPalette: true, inspectBackground: false,
+      renderingContext: true, cpuState: false, audioDebug: true,
+      cart: false, disasm: true, decompile: true,
+    },
+  },
+  msx: {
+    cpuFamily: "z80", decompileQuality: "good",
+    cpus: { main: "", secondary: [] }, // getCPUState main NOT wired for msx
+    audioChips: ["ay8910"],
+    memoryRegions: [...GENERIC_REGIONS, "msx_vram", "msx_vdp_regs", "msx_vdp_status",
+      "msx_palette", "msx_cpu_regs", "msx_psg_regs"],
+    renderingKind: "tile", introspection: "deep",
+    ops: {
+      build: true, run: true, screenshot: true,
+      inspectSprites: true, inspectPalette: true, inspectBackground: false,
+      renderingContext: true, cpuState: false, audioDebug: true,
+      cart: false, disasm: true, decompile: true,
+    },
+  },
+};
+
+/** All platform ids in the contract. */
+export const CONTRACT_PLATFORMS = Object.keys(CAPABILITIES);
+
+/** Does `platform` support `op`? Unknown platform/op → false. */
+export function supports(platform, op) {
+  return Boolean(CAPABILITIES[platform]?.ops?.[op]);
+}
+
+/** The full capability entry for a platform (or null). */
+export function capabilitiesFor(platform) {
+  return CAPABILITIES[platform] ?? null;
+}

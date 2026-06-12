@@ -62,10 +62,47 @@ export function imageContent(pngBase64) {
 
 /** Wrap an Error as a tool error result. */
 export function errorContent(err) {
+  // UnsupportedError carries the structured capability-contract fields so an
+  // agent can branch on `unsupported: true` instead of string-matching the
+  // message. We surface BOTH a clean sentence and the structured fields.
+  if (err && err.name === "UnsupportedError") {
+    const text = err.message + (err.alternative ? ` (try: ${err.alternative})` : "");
+    return {
+      isError: true,
+      unsupported: true,
+      platform: err.platform,
+      op: err.op,
+      reason: err.reason ?? null,
+      alternative: err.alternative ?? null,
+      content: [{ type: "text", text }],
+    };
+  }
   return {
     isError: true,
     content: [{ type: "text", text: String(err?.message ?? err) }],
   };
+}
+
+/**
+ * The single, uniform "this platform doesn't support this op" signal. Throws a
+ * typed UnsupportedError that safeTool → errorContent formats consistently
+ * (and that programmatic callers / the conformance test can catch + inspect).
+ * Replaces the ad-hoc "not supported"/"not yet wired" throws.
+ *
+ * @param {string} platform
+ * @param {string} op        a capability op key (see cores/capabilities.js OP_KEYS)
+ * @param {{reason?:string, alternative?:string}} [opts]
+ * @returns {never}
+ */
+export function unsupported(platform, op, { reason, alternative } = {}) {
+  const base = `'${op}' is not supported on platform '${platform}'`;
+  const err = new Error(reason ? `${base}: ${reason}` : base + ".");
+  err.name = "UnsupportedError";
+  err.platform = platform;
+  err.op = op;
+  err.reason = reason ?? null;
+  err.alternative = alternative ?? null;
+  throw err;
 }
 
 /**

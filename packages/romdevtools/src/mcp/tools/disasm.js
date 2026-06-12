@@ -1167,14 +1167,21 @@ export function registerDisasmTools(server, z) {
     "refs carry `prgBank` (NES) / `romBank` (everything else). LIMITATION: direct addressing only " +
     "(indirect/computed jumps are missed).\n" +
     "── RE ENGINE (Rizin + Ghidra, all 14 platforms) ──\n" +
-    "'functions' = Rizin auto-detected function list {address,size,nbbs,cc,callers,callees}; the structural map of " +
-    "an unknown ROM. 'cfg' = basic-block control-flow graph of the function at `address` (nodes + typed edges: " +
+    "'functions' = Rizin auto-detected function list {address,size,nbbs,cc,callers,callees,looksLikeData}; the " +
+    "structural map of an unknown ROM. Sorted REAL CODE FIRST (by nbbs/cc) — don't rank by `size`, which is a lie " +
+    "(rizin folds data tables into giant pseudo-functions). `looksLikeData:true` (and the top-level `dataCount`) flags " +
+    "those data-folds so you don't waste a decompile on a graphics blob. " +
+    "'cfg' = basic-block control-flow graph of the function at `address` (nodes + typed edges: " +
     "jump/branch_true/branch_false). 'xrefs' = every cross-reference TO `address`, following Rizin's analysis graph " +
     "(DEEPER than 'references', which is a flat da65 operand scan — prefer 'xrefs' once you've run a function pass, " +
     "'references' for a quick header-less operand sweep). Typical RE loop: 'functions' to carve → 'cfg'/'xrefs' to " +
     "trace → then the live tools (memory search, write-breakpoints, watch copy) to LABEL what you carved.\n" +
     "'decompile' = Ghidra C-like PSEUDOCODE for the function at `address`, with the decompiler's own WARNINGs and a " +
-    "`qualityNote`. ALTITUDE RULE: decompile is for UNDERSTANDING (and as a port spec when retargeting to a bigger " +
+    "`qualityNote`. Hardware-register MMIO is NAMED in the output (e.g. `PPUMASK = 0x1e;` not `*0x2001 = 0x1e;`) " +
+    "with a `/* hw registers: … */` legend at the top listing each substitution — on platforms with a register map " +
+    "(NES/SNES/Genesis/GB/GBC/SMS/GG/2600/7800/C64). On the 6502 family (NES/2600/7800/C64/Lynx/PCE) a 6502-fold pass also " +
+    "cleans the SLEIGH clutter: width types become C99 stdint (uint1→uint8_t, uint2→uint16_t), redundant nested width " +
+    "casts collapse, and zero-page byte refs are named zp_XX — a `/* 6502 fold: … */` legend notes what was applied. ALTITUDE RULE: decompile is for UNDERSTANDING (and as a port spec when retargeting to a bigger " +
     "machine) — it is NOT the same-platform edit path. To CHANGE a ROM and rebuild it, use target:'project' " +
     "(byte-exact rebuildable asm); read the pseudocode as documentation alongside it. Per-CPU quality (calibrate, " +
     "don't treat low quality as a bug): ARM/GBA + M68K/Genesis = excellent (mostly-C games, real stack frames); " +
@@ -1183,7 +1190,7 @@ export function registerDisasmTools(server, z) {
     "LLM folds it. `address` for all four comes from target:'functions' (a CPU/virtual address; the file-offset " +
     "mapping is handled for you).",
     {
-      target: z.enum(["bytes", "rom", "project", "references", "cfg", "xrefs", "functions", "decompile"]).describe("bytes = raw chunk; rom = mapper-aware ROM; project = full rebuildable disasm; references = flat da65 operand-refs to an address; functions/cfg/xrefs = Rizin RE engine (function list / control-flow graph / deep graph xrefs); decompile = Ghidra C pseudocode. See the tool description for the RE loop + the decompile altitude rule + per-CPU quality (all 14 platforms)."),
+      target: z.enum(["bytes", "rom", "project", "references", "cfg", "xrefs", "functions", "decompile", "resolveJumptable"]).describe("bytes = raw chunk; rom = mapper-aware ROM; project = full rebuildable disasm; references = flat da65 operand-refs to an address; functions/cfg/xrefs = Rizin RE engine (function list / control-flow graph / deep graph xrefs); decompile = Ghidra C pseudocode; resolveJumptable = recover a computed-jump dispatcher's targets (LIVE — redirects to breakpoint({on:'jumptable'}), which runs the emulator and records the real switch arms a static decompiler can't follow). See the tool description for the RE loop + the decompile altitude rule + per-CPU quality (all 14 platforms)."),
       // shared
       path: z.string().optional().describe("target=bytes: raw binary path. target=rom/project/references: ROM file path."),
       base64: z.string().optional().describe("target=bytes: base64 of the bytes (OR `path`)."),
@@ -1227,6 +1234,18 @@ export function registerDisasmTools(server, z) {
         case "xrefs":      return jsonContent(await analyzeXrefs(requireRomPath(args), args.address, args.platform));
         case "functions":  return jsonContent(await analyzeFunctions(requireRomPath(args), args.platform));
         case "decompile":  return jsonContent(await analyzeDecompile(requireRomPath(args), args.address, args.platform));
+        case "resolveJumptable":
+          // A4: jumptable recovery is fundamentally a LIVE operation (it needs a
+          // running emulator to observe the computed targets) — disasm is static
+          // ROM analysis with no session. Redirect to the live op rather than
+          // silently doing nothing.
+          return jsonContent({
+            live: true,
+            redirect: "breakpoint({on:'jumptable'})",
+            address: args.address != null ? "$" + (args.address >>> 0).toString(16).toUpperCase() : null,
+            note: "Computed-jumptable recovery is LIVE, not static: it breaks at the dispatcher in a RUNNING emulator, single-steps through the indirect JMP (table,X)/RTS-trick, and records the targets it actually lands on. Load the ROM (playtest/loadMedia), drive it to the state that runs the dispatcher, then call breakpoint({on:'jumptable', address" +
+              (args.address != null ? `: ${args.address}` : "") + "}). That returns the distinct computed targets; decompile({address: target}) each to read the switch arms. No static-only tool can do this — it needs the live emulator.",
+          });
         default: throw new Error(`disasm: unknown target '${args.target}'`);
       }
     }),

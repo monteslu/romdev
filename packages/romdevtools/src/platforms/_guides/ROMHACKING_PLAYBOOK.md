@@ -334,14 +334,27 @@ what touches an address). The **Rizin/Ghidra analysis engine** carves the progra
   scan misses. Use it to answer "what calls this routine / reads this table?"
 - **`disasm({target:'decompile', path, address})`** — Ghidra **C-like pseudocode**
   for a function. Read it to UNDERSTAND a routine fast; it is NOT the edit path
-  (use `target:'project'`, §7b, to change and rebuild). Quality tracks the CPU —
-  see the `qualityNote` it returns: excellent on ARM (GBA) / 68000 (Genesis),
-  good on SM83 (GB) / Z80 (SMS/GG/MSX), medium on 65816 (SNES) / HuC6280 (PCE),
-  rough on the 6502 family (carry-flag idioms and 16-bit-math-on-8-bit decompile
-  to noise — read the disassembly there, or let an LLM fold the pseudocode).
+  (use `target:'project'`, §7b, to change and rebuild). Hardware-register MMIO is
+  NAMED (`PPUMASK` not `*0x2001`) and on the 6502 family SLEIGH clutter is folded
+  to readable C99 (`uint8_t`, `zp_FD`) — see the `/* hw registers: … */` /
+  `/* 6502 fold: … */` legends. Quality tracks the CPU — see the `qualityNote` it
+  returns: excellent on ARM (GBA) / 68000 (Genesis), good on SM83 (GB) / Z80
+  (SMS/GG/MSX), medium on 65816 (SNES) / HuC6280 (PCE), rough on the 6502 family
+  (carry-flag idioms and 16-bit-math-on-8-bit decompile to noise — read the
+  disassembly there, or let an LLM fold the residual pseudocode).
+- **`breakpoint({on:'jumptable', address})`** — when a routine decompiles to
+  `(*_IRQ)()` + "Could not recover jumptable" (the computed-jump dispatchers —
+  state machines, script/battle VMs — that static analysis structurally can't
+  follow), RESOLVE it live: this breaks at the dispatcher in the running emulator,
+  single-steps through the indirect `JMP (table,X)` / RTS-trick, and returns the
+  COMPUTED targets it actually lands on. Drive more game states (`pressDuring` /
+  `fromState`) to surface rarer arms. `disasm({target:'resolveJumptable'})` is the
+  static-side alias. No static-only tool can do this — it's romdev's live-emulator
+  edge.
 
 **The loop:** `symbols({op:'analyze'})` or `disasm({target:'functions'})` to carve →
-`disasm({target:'cfg'/'xrefs'/'decompile'})` to understand a candidate → then the
+`disasm({target:'cfg'/'xrefs'/'decompile'})` to understand a candidate (→
+`breakpoint({on:'jumptable'})` when it dispatches through a computed jump) → then the
 dynamic tools (memory search, `breakpoint({on:'write'})`, `watch`) to CONFIRM and
 label which carved function owns the value you care about. Static narrows the
 search space; dynamic proves it.
@@ -422,8 +435,9 @@ Once you know WHAT to change, the write loop is a handful of calls — no custom
   and >32KB HuCards (refs carry `romBank`) — so a hit in bank 12 of a 128KB cart shows up,
   not just the first bank. Zero-page direct + indexed operands match, and `#$nn` immediates
   are excluded (values, not addresses). Limitation: direct addressing only —
-  indirect/computed jumps aren't detected (use the runtime `watch`/`breakpoint` tools in
-  §5/§5d for those).
+  indirect/computed jumps aren't detected statically; resolve those LIVE with
+  `breakpoint({on:'jumptable', address})` (runs the emulator to record the computed
+  targets), or the other runtime `watch`/`breakpoint` tools in §5/§5d.
 - **`cart({op:'extract', path, outputDir})`** — split a ROM into standard parts (NES header/
   prg/chr; SNES copier_header+rom+internal header; Genesis vectors/header/body; GB boot/
   header/body) + a `manifest.json` (mapper, mirroring…). **`cart({op:'wrap'})`** is the inverse:
@@ -528,6 +542,7 @@ For sprite/tile edits (not text), don't hand-roll the tile-format math:
 | Re-inject edited bytes the game accepts | `romPatch({op:'makeStored'})` (verbatim-expand block) → `romPatch({op:'findFree'})` → `romPatch({op:'relocate'})` |
 | Find the pointer that loads an asset | `romPatch({op:'findPointer', romOffset})` |
 | FIND the unknown routine touching X | `watch({on:'range', start,end})` (all hits) / `watch({on:'pc'})` (coverage) |
+| Resolve a computed-jump dispatcher (decompiles to `(*_IRQ)()`) | `breakpoint({on:'jumptable', address})` (live — records the real switch arms) |
 | Which DMA wrote a VRAM tile + its source (Genesis) | `watch({on:'dma', precision:'exact', vramDest})` |
 | Where did a VRAM graphic come from (Genesis) | `watch({on:'dma', precision:'sampled'})` (ROM offset of the DMA source) |
 | Drive a menu fast | `input({op:'navigate'})` (advances on screen change) |

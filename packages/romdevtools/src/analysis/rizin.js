@@ -77,7 +77,7 @@ export const RIZIN_ARCH = {
  * @returns {Promise<{exitCode:number, output:string, log:string, crash?:object}>}
  */
 export async function runRizin(opts) {
-  const { romPath, romBytes, commands, arch, bits, baddr, writeable } = opts;
+  const { romPath, romBytes, commands, arch, bits, baddr, writeable, timeoutMs } = opts;
   if (!commands) throw new Error("runRizin: commands required");
   const bytes = romBytes ?? new Uint8Array(await readFile(romPath));
 
@@ -102,6 +102,11 @@ export async function runRizin(opts) {
   const res = await runIsolated({
     gluePath: rizinGluePath(),
     argv,
+    // A5: per-call timeout so a hung analysis (whole-ROM `aaa` on a multi-MB ROM)
+    // can't wedge the shared worker pool — on timeout the worker is killed +
+    // recycled and this call returns a clean { timedOut, log } result. Default
+    // 60s; callers can override (a scoped `af @ addr` pass is near-instant).
+    timeoutMs: timeoutMs ?? 60000,
     inputFiles: [{
       vfsPath: "/work/rom.bin",
       encoding: "base64",
@@ -109,6 +114,13 @@ export async function runRizin(opts) {
     }],
     outputFiles: [{ vfsPath: OUT, encoding: "utf8" }],
   });
+  // Surface a timeout as a thrown error so JSON callers get a clear signal
+  // (runRizinJson already wraps crashes; this makes the timeout explicit).
+  if (res.timedOut) {
+    const e = new Error(res.log?.trim() || "rizin analysis timed out");
+    /** @type {any} */ (e).timedOut = true;
+    throw e;
+  }
   return { ...res, output: res.outputs?.[OUT] ?? "" };
 }
 
