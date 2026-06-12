@@ -4,6 +4,25 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.40.1 — 2026-06-11
+
+### Fixed — Genesis `disasm({target:'decompile'})` was shifted +0x200
+
+A Genesis decompile at a caller-supplied address silently returned the function
+0x200 bytes too low (the wrong one, or an empty `{ return; }` / `halt_baddata()`),
+with no warning. `cfg` / `xrefs` / `functions` on the same address were correct —
+only `decompile` was off.
+
+Root cause: Rizin's Mega Drive loader splits a flat `.bin` into vtable / header /
+text segments and reports a non-zero address delta (`0x200`) on the code segment;
+the decompiler's address mapping honored that delta, but the raw image handed to
+Ghidra loads flat at offset 0, so the two disagreed by exactly 0x200. Fix: flat-
+cartridge platforms (Genesis, SMS, Game Gear, MSX, Game Boy / GBC) now force
+file-offset == CPU-address and ignore Rizin's segment delta. The 6502-family
+platforms were unaffected (they use a separate base-address path). Regression
+test added. (No change to the `romdev-analysis` / `romdev-analysis-decompiler`
+packages — the fix is entirely in the address-mapping JS.)
+
 ## 0.40.0 — 2026-06-11
 
 ### Reverse-engineering analysis engine — control-flow graphs, deep xrefs, function detection, and a decompiler
