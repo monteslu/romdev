@@ -4,6 +4,45 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.30.0 — 2026-06-11
+
+### RE-tooling round — the Cheat-Engine "locate a value + find its writer" workflow
+From a NES reverse-engineering feedback batch. Six additions to the
+memory/breakpoint primitives:
+- **`memory({op:'searchUnknown'})`** — the unknown-initial-value hunt: seed the
+  WHOLE region with no value, then narrow across in-game events with
+  `searchNext({compare:'dec'|'inc'|'unchanged'|'changed'|'gt'|'lt'})`. Finds the
+  lives/timer/ammo address you can't see on the HUD (`op:'search'` needs a value;
+  this doesn't).
+- **`memory({op:'diff'})` predicate filters** — `changeDir:'dec'|'inc'`,
+  `deltaEq:N` (signed exact delta, e.g. −1 = "lost a life"), `beforeMin/Max` +
+  `afterMin/Max` (value-range gates). A 500-byte death-window diff returns the
+  ~3 rows you want in one call.
+- **`memory({op:'diff'})` honors `outputPath` + `echo:false`** (was a bug — diff
+  ignored `outputPath`; a big diff now routes to your path, not a harness path).
+- **`memory({op:'readCart', cpuAddress, bank})`** — read cart ROM by a BANKED CPU
+  address (NES/SNES), the inverse of the breakpoint result's bank/prgOffset; no
+  more hand-computed `cpuAddr−0x8000+bank*0x4000`.
+- **`breakpoint({on:'write', condition})`** — stop on the MEANINGFUL write, not
+  restoring churn: `condition:'increase'|'decrease'` (the stored byte actually
+  moved that way) or `'equals'` + `conditionValue` (became N, e.g. a $00→$01
+  re-arm). Reports `oldValueByte`→`valueByte`. Live on **all 14 platforms** (11
+  emulator cores rebuilt to capture the pre-write byte). Also clarified in the
+  tool note that `on:'write'` runs to end-of-frame and reports the LAST matching
+  write (`hits` = count).
+- **Tool-schema slim** — dropped the inlined ~62-value region enum from 3
+  secondary watch/breakpoint sub-params (validated at runtime instead),
+  trimming the deferred-load schema cost.
+
+### Core rebuilds
+11 emulator cores rebuilt for the value-conditioned write breakpoint (bump +
+republish each): fceumm, snes9x, genesis-plus-gx, gambatte, mgba, handy,
+geargrafx, prosystem, stella2014, bluemsx, vice. **Build fix (latent, was on
+main):** the bluemsx region patch carried a duplicate Makefile CFLAGS hunk
+identical to the build patch's; since `git apply` is atomic, that made the whole
+region patch silently fail to apply — the watchpoint/region exposure was being
+dropped from the build. Removed the duplicate hunk.
+
 ## 0.29.0 — 2026-06-11
 
 ### Examples — the complete-game library, finished & made honest
