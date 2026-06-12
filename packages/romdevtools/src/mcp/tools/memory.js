@@ -736,7 +736,7 @@ function searchSessions(key) { let m = _searchSessions.get(key); if (!m) { m = n
 /** @type {Map<string, Map<string, {offset:number, bytes:Uint8Array}>>} */
 const _memSnaps = new Map();
 function memSnapshots(key) { let m = _memSnaps.get(key); if (!m) { m = new Map(); _memSnaps.set(key, m); } return m; }
-const snapKey = (region, name) => region + " " + name;
+const snapKey = (region, name) => region + "" + name;
 
 /** Bytes from `offset` to the end of the region — for a whole-region snapshot
  *  when no explicit length is given. Uses the core-reported region size. */
