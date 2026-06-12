@@ -57,7 +57,7 @@
     "romdev-core-gpgx": "0.12.0",
     "romdev-core-handy": "0.7.0",
     "romdev-core-prosystem": "0.8.0",
-    "romdev-core-vice": "0.8.0",
+    "romdev-core-vice": "0.9.0",
     "romdev-famitone": "0.1.0",
     "romdev-maxmod": "0.1.0",
     "romdev-platform-atari2600": "0.8.0",
