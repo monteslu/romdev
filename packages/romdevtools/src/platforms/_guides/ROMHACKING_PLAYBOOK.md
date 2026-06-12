@@ -18,6 +18,10 @@ read that platform's `platform({op:'doc', platform, name:'mental_model'})`.
    loose name (fuzzy) before assuming it's absent. Cheats are a STARTING point,
    not the whole job — combine with disassembly below.
 3. `symbols({op:'map', platform})` / the platform MENTAL_MODEL for the layout.
+4. `symbols({op:'analyze', romPath})` — for an unknown ROM with no cheats and no
+   debug file, this carves the structure (functions + strings + entrypoints) in
+   one call. The static map you hang everything else onto (see §5f for the full
+   Rizin/Ghidra analysis loop — cfg, xrefs, decompile).
 
 The cheat DB is bundled (`romdev_game_codes`). Do **not** scan the user's disk for
 `.cht` files — if it's not in the bundled DB, treat it as absent and RE it.
@@ -110,7 +114,7 @@ The #1 trap: visible names/labels are often **pre-rendered tile GRAPHICS**, not
 font-rendered from an ASCII string. Patching the ASCII string then does nothing.
 
 1. `text({op:'learn'})` on the on-screen text — it infers the game's char→tile-ID map
-   (games use their own encoding: Excitebike A=$0A, Mario ASCII-offset, FF sparse). Two
+   (games use their own encoding: e.g. one NES racer maps A=$0A, another uses an ASCII offset, a third a sparse table). Two
    modes: ROM mode `knownStrings:[{text, offset}]` when you found the bytes; **LIVE mode
    `fromScreen:[{text, row, col}]`** reads the tile IDs straight off the live BG map at a
    tile position (`background({view:'map'})` shows where the text sits) — this breaks the
@@ -310,6 +314,40 @@ Breakpoints are great once you KNOW the address. To FIND it:
 
 ---
 
+## 5f. Carve the program STRUCTURE before you label it — the RE engine (all 14)
+
+The watch/breakpoint tools above find routines *dynamically* (run the game, see
+what touches an address). The **Rizin/Ghidra analysis engine** carves the program
+*statically* — the map you label the dynamic findings onto. All 14 platforms.
+
+- **`symbols({op:'analyze', romPath})`** — one call, the whole shape: auto-detected
+  functions + strings + entrypoints. Start here on an unknown ROM.
+- **`disasm({target:'functions', path})`** — the function list with sizes,
+  basic-block counts, and caller/callee counts. The most-called functions are
+  usually the engine primitives (read-joypad, draw-tile, RNG).
+- **`disasm({target:'cfg', path, address})`** — the basic-block control-flow graph
+  of one function (nodes + typed branch edges). "Is this a loop? where does it
+  bail?" without reading the whole disassembly.
+- **`disasm({target:'xrefs', path, address})`** — every cross-reference TO an
+  address, following the analysis graph. DEEPER than `target:'references'` (a flat
+  operand scan): once a function pass has run, `xrefs` resolves calls the flat
+  scan misses. Use it to answer "what calls this routine / reads this table?"
+- **`disasm({target:'decompile', path, address})`** — Ghidra **C-like pseudocode**
+  for a function. Read it to UNDERSTAND a routine fast; it is NOT the edit path
+  (use `target:'project'`, §7b, to change and rebuild). Quality tracks the CPU —
+  see the `qualityNote` it returns: excellent on ARM (GBA) / 68000 (Genesis),
+  good on SM83 (GB) / Z80 (SMS/GG/MSX), medium on 65816 (SNES) / HuC6280 (PCE),
+  rough on the 6502 family (carry-flag idioms and 16-bit-math-on-8-bit decompile
+  to noise — read the disassembly there, or let an LLM fold the pseudocode).
+
+**The loop:** `symbols({op:'analyze'})` or `disasm({target:'functions'})` to carve →
+`disasm({target:'cfg'/'xrefs'/'decompile'})` to understand a candidate → then the
+dynamic tools (memory search, `breakpoint({on:'write'})`, `watch`) to CONFIRM and
+label which carved function owns the value you care about. Static narrows the
+search space; dynamic proves it.
+
+---
+
 ## 6. Driving menus (the real wall-clock sink)
 
 Use `input({op:'navigate', steps:[{button, maxWaitFrames}]})` — it advances on **screen
@@ -397,7 +435,11 @@ watch the screen react — cheaper than shipping a wrong ROM patch.
 ## 7b. Whole-ROM rebuildable disassembly — `disasm({target:'project'})`
 
 For a STRUCTURAL hack (new logic, not a byte poke), turn the whole ROM into a
-re-buildable project in one call: `disasm({target:'project', path, outputDir})`. It splits
+re-buildable project in one call: `disasm({target:'project', path, outputDir})`.
+(To UNDERSTAND a routine before you edit it, read its `disasm({target:'decompile'})`
+pseudocode or `disasm({target:'cfg'})` graph first — §5f. `project` is the *edit*
+path; decompile is the *understanding* path. They pair: read the C, edit the asm.)
+It splits
 the ROM into regions (per-bank on EVERY banked format: 16KB banks for NES/GB/SMS-GG/MSX/
 7800-SuperGame, 32KB for SNES LoROM, 4KB for banked 2600, 8KB pages for >32KB HuCards;
 one flat region for Genesis/C64/Lynx/GBA and small carts), disassembles each through the CPU's
@@ -496,7 +538,10 @@ For sprite/tile edits (not text), don't hand-roll the tile-format math:
 | Find / encode a font-rendered string | `text({op:'find'})` → `text({op:'encode'})` |
 | Assemble asm → raw patch bytes | `assembleSnippet({cpu, origin, code})` |
 | Mapper-aware diff of two ROMs | `romPatch({op:'diff'})` (CPU addrs, CHR `tile:N`) |
-| Who references this address (static) | `disasm({target:'references'})` (direct modes only) |
+| Who references this address (static) | `disasm({target:'references'})` (flat scan) / `disasm({target:'xrefs'})` (deeper, graph-following) |
+| Map an unknown ROM's structure | `symbols({op:'analyze'})` / `disasm({target:'functions'})` (functions + strings + entrypoints) |
+| Graph one function's control flow | `disasm({target:'cfg', address})` (basic blocks + branch edges) |
+| Read a routine as C pseudocode | `disasm({target:'decompile', address})` (Ghidra; all 14, quality per CPU) |
 | Split / rebuild a ROM into parts | `cart({op:'extract'})` / `cart({op:'wrap'})` |
 | Swap a sprite/tile (PNG round-trip) | `tiles({op:'png'})` → edit → `romPatch({op:'spliceCHR'})` |
 | Lift art from another game's ROM | `importArt({from:'rom'})` |

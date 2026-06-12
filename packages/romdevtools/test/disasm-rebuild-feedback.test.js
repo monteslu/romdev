@@ -1,4 +1,4 @@
-// Tests for the disassembler fixes from the NES Rygar disassemble→rebuild
+// Tests for the disassembler fixes from an NES action-game disassemble→rebuild
 // feedback: vector-label dedup, .org for round-trip, error-to-response, the
 // NES bank param, and the disassembleProject round-trip verification.
 
@@ -43,7 +43,7 @@ function makeBankedNes(prgBanks16k, mapper) {
     for (let i = 0; i < 16384; i++) prg[b * 16384 + i] = 0xEA; // NOP
   }
   // Vector table in the LAST bank (maps to $FFFA-$FFFF). Point NMI and IRQ both
-  // at $C0F6 (the Rygar case) and reset at $C000.
+  // at $C0F6 (the observed case) and reset at $C000.
   const vbase = prg.length - 6;
   const put16 = (off, val) => { prg[off] = val & 0xFF; prg[off + 1] = (val >> 8) & 0xFF; };
   put16(vbase + 0, 0xC0F6); // NMI
@@ -156,7 +156,7 @@ test("disassembleProject: byte-exact across GB and C64", async () => {
   const h = handlers();
   const cases = [
     { plat: "gb", rom: "asteroids_gb_mcp/asteroids_gb.gb" },
-    { plat: "c64", rom: "rom-games/c64/tetris/tetris.prg" },
+    { plat: "c64", rom: "rom-games/c64/puzzle/puzzle.prg" },
   ];
   for (const c of cases) {
     const romPath = path.join(os.homedir(), "code/cliemu", c.rom);

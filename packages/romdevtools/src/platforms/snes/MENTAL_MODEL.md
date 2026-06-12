@@ -47,13 +47,13 @@ The SNES has 8 BG modes selected via PPU register $2105 (BGMODE):
 
 ```
 0  4 BGs × 4 colors      — text-mode look
-1  3 BGs (16+16+4 col)   — default for most games (Super Mario World)
-2  2 BGs × 16 col + tilemap offset-per-tile (Yoshi's Island)
-3  1 BG × 256 col + 1 BG × 16 col (Donkey Kong Country)
+1  3 BGs (16+16+4 col)   — default for most games (typical 2D platformer)
+2  2 BGs × 16 col + tilemap offset-per-tile (a pre-rendered-sprite platformer)
+3  1 BG × 256 col + 1 BG × 16 col (pre-rendered-sprite platformer)
 4  1 BG × 256 col + 1 BG × 4 col with offset-per-tile
 5  2 BGs hi-res (512 px wide, half-height)
 6  hi-res mosaic
-7  1 BG with affine transform (Mario Kart, F-Zero)
+7  1 BG with affine transform (mode-7 racers)
 ```
 
 PVSnesLib's default is `BG_MODE1` (`setMode(BG_MODE1, 0)`) — three
@@ -313,3 +313,9 @@ and parallax is nearly free.
   scanlines.
 
 Track `camX` in pixels; actor screen-X = `worldX - camX`.
+
+## Reverse-engineering & decompilation
+
+The Rizin/Ghidra analysis engine works here like everywhere: `disasm({target:'functions'})` to carve the program, `disasm({target:'cfg'|'xrefs'})` to trace it, `symbols({op:'analyze'})` for a one-shot structural map.
+
+**Decompiler quality on 65816: MEDIUM.** The M/X register-width flags make instruction meaning context-dependent, but the Ghidra 65816 SLEIGH tracks them, so pseudocode is usable. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. See the cross-platform ROM-hacking playbook §5f for the full loop.

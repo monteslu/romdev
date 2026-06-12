@@ -1,4 +1,4 @@
-// gpgx core upgrades from the NBA-Jam-both-consoles feedback round (LIVE core):
+// gpgx core upgrades from a both-consoles sports-title feedback round (LIVE core):
 //   #1 registersAtHit on Genesis — the register file is FROZEN at the hit
 //      instant for pc-breaks AND write-watchpoints (pre-fix, gpgx's per-line
 //      scheduler kept running the 68k after a hit, so post-frame register

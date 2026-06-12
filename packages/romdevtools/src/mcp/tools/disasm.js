@@ -6,6 +6,13 @@ import { jsonContent, safeTool, writeOutput } from "../util.js";
 import { parseSymbols, buildSymbolMap } from "../../toolchains/common/symbols.js";
 import { registersForPlatform } from "../../platforms/common/registers.js";
 import { findReferencesCore } from "./find-references.js";
+import { analyzeCfg, analyzeXrefs, analyzeFunctions, analyzeDecompile } from "../../analysis/analyze.js";
+
+/** cfg/xrefs/functions all operate on a ROM file. Reuse the `path` arg. */
+function requireRomPath(args) {
+  if (!args.path) throw new Error(`disasm target='${args.target}' requires \`path\` (the ROM file).`);
+  return args.path;
+}
 
 // ── Per-platform CPU-address → file-offset mappers ────────────────
 // Each returns { bytes, fileOffset, cpu, notes } given the full ROM
@@ -839,7 +846,7 @@ async function disassembleRomCore(args) {
         }
       }
       // Dedup vector labels by ADDRESS. Two interrupt vectors legitimately
-      // sharing one target is valid 6502 (Rygar points NMI and IRQ both at
+      // sharing one target is valid 6502 (e.g. one NES cart points NMI and IRQ both at
       // $C0F6) — but da65's LABELDEF and every dasm injector reject two labels
       // at the same address ("Label for address $XXXX already defined"). Keep
       // the first name (vector iteration order is reset/nmi/irq) and record the
@@ -1158,9 +1165,25 @@ export function registerDisasmTools(server, z) {
     "'references' = scan a ROM's code for operands matching a CPU `address` and classify each (call/jump/branch/" +
     "read/write); also walks the vector table. Banked carts are scanned PER BANK (all of the formats above) — " +
     "refs carry `prgBank` (NES) / `romBank` (everything else). LIMITATION: direct addressing only " +
-    "(indirect/computed jumps are missed).",
+    "(indirect/computed jumps are missed).\n" +
+    "── RE ENGINE (Rizin + Ghidra, all 14 platforms) ──\n" +
+    "'functions' = Rizin auto-detected function list {address,size,nbbs,cc,callers,callees}; the structural map of " +
+    "an unknown ROM. 'cfg' = basic-block control-flow graph of the function at `address` (nodes + typed edges: " +
+    "jump/branch_true/branch_false). 'xrefs' = every cross-reference TO `address`, following Rizin's analysis graph " +
+    "(DEEPER than 'references', which is a flat da65 operand scan — prefer 'xrefs' once you've run a function pass, " +
+    "'references' for a quick header-less operand sweep). Typical RE loop: 'functions' to carve → 'cfg'/'xrefs' to " +
+    "trace → then the live tools (memory search, write-breakpoints, watch copy) to LABEL what you carved.\n" +
+    "'decompile' = Ghidra C-like PSEUDOCODE for the function at `address`, with the decompiler's own WARNINGs and a " +
+    "`qualityNote`. ALTITUDE RULE: decompile is for UNDERSTANDING (and as a port spec when retargeting to a bigger " +
+    "machine) — it is NOT the same-platform edit path. To CHANGE a ROM and rebuild it, use target:'project' " +
+    "(byte-exact rebuildable asm); read the pseudocode as documentation alongside it. Per-CPU quality (calibrate, " +
+    "don't treat low quality as a bug): ARM/GBA + M68K/Genesis = excellent (mostly-C games, real stack frames); " +
+    "SM83/GB + Z80/SMS/GG/MSX = good; 65816/SNES + HuC6280/PCE = medium; 6502 family (NES/2600/7800/C64/Lynx) = " +
+    "rough — carry-flag idioms and 16-bit math on an 8-bit CPU decompile to noise that only reads cleanly once an " +
+    "LLM folds it. `address` for all four comes from target:'functions' (a CPU/virtual address; the file-offset " +
+    "mapping is handled for you).",
     {
-      target: z.enum(["bytes", "rom", "project", "references"]).describe("bytes = raw chunk; rom = mapper-aware ROM; project = full rebuildable disasm; references = find refs to an address."),
+      target: z.enum(["bytes", "rom", "project", "references", "cfg", "xrefs", "functions", "decompile"]).describe("bytes = raw chunk; rom = mapper-aware ROM; project = full rebuildable disasm; references = flat da65 operand-refs to an address; functions/cfg/xrefs = Rizin RE engine (function list / control-flow graph / deep graph xrefs); decompile = Ghidra C pseudocode. See the tool description for the RE loop + the decompile altitude rule + per-CPU quality (all 14 platforms)."),
       // shared
       path: z.string().optional().describe("target=bytes: raw binary path. target=rom/project/references: ROM file path."),
       base64: z.string().optional().describe("target=bytes: base64 of the bytes (OR `path`)."),
@@ -1190,8 +1213,8 @@ export function registerDisasmTools(server, z) {
       annotateFileOffsets: z.boolean().default(true).describe("target=rom: append `; @0xNNNN` file offset to every line (for romPatch)."),
       // project
       outputDir: z.string().optional().describe("target=project: directory to write the project into (one .asm per region)."),
-      // references
-      address: z.number().int().min(0).max(0xFFFFFF).optional().describe("target=references: CPU address to find references TO."),
+      // references / cfg / xrefs
+      address: z.number().int().min(0).max(0xFFFFFFFF).optional().describe("target=references: CPU address to find references TO. target=cfg: address inside the function to graph. target=xrefs: address to find cross-references TO. target=decompile: address of the function to decompile (use an address from target='functions')."),
       maxRefsReturned: z.number().int().min(1).max(2048).default(256).describe("target=references: cap the references returned."),
     },
     safeTool(async (args) => {
@@ -1200,6 +1223,10 @@ export function registerDisasmTools(server, z) {
         case "rom":        return await disassembleRomCore(args);
         case "project":    return await disassembleProjectCore(args);
         case "references": return jsonContent(await findReferencesCore(args));
+        case "cfg":        return jsonContent(await analyzeCfg(requireRomPath(args), args.address, args.platform));
+        case "xrefs":      return jsonContent(await analyzeXrefs(requireRomPath(args), args.address, args.platform));
+        case "functions":  return jsonContent(await analyzeFunctions(requireRomPath(args), args.platform));
+        case "decompile":  return jsonContent(await analyzeDecompile(requireRomPath(args), args.address, args.platform));
         default: throw new Error(`disasm: unknown target '${args.target}'`);
       }
     }),

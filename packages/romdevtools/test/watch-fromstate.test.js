@@ -4,7 +4,7 @@
 // the both-given guard. Driven through the registered MCP tool via an in-process
 // server so the closure (wRange/maybeRestoreState) is exercised as shipped.
 
-import { test } from "node:test";
+import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -13,10 +13,10 @@ import path from "node:path";
 import { resolveCore } from "../src/cores/registry.js";
 import { resetHost, clearHost } from "../src/mcp/state.js";
 import { prgToD64 } from "../src/platforms/c64/d64.js";
-import { C64_HOMEBREW_PRG } from "./rom-fixtures.js";
+import { buildExampleRom } from "./build-fixture-rom.js";
 
-const PRG = C64_HOMEBREW_PRG;
-const have = !!PRG;
+let PRG;
+before(async () => { PRG = await buildExampleRom("c64"); });
 
 // Build a tiny in-process MCP-ish server that just records registered tools, so
 // we can call the real `watch` handler (incl. fromState) without HTTP.
@@ -32,7 +32,7 @@ async function makeWatchHandler(key) {
 
 const parse = (r) => JSON.parse(r.content[0].text);
 
-test("watch fromState: in-memory slot restore reruns the trace from that moment", { skip: !have, timeout: 120000 }, async () => {
+test("watch fromState: in-memory slot restore reruns the trace from that moment", { timeout: 120000 }, async () => {
   const key = "watch-fromstate-slot";
   try {
     const core = resolveCore("c64");
@@ -64,7 +64,7 @@ test("watch fromState: in-memory slot restore reruns the trace from that moment"
   }
 });
 
-test("watch fromState: determinism — same state slot gives the same distinctPCs", { skip: !have, timeout: 120000 }, async () => {
+test("watch fromState: determinism — same state slot gives the same distinctPCs", { timeout: 120000 }, async () => {
   const key = "watch-fromstate-det";
   try {
     const core = resolveCore("c64");
@@ -84,7 +84,7 @@ test("watch fromState: determinism — same state slot gives the same distinctPC
   }
 });
 
-test("watch fromStatePath: restore from a savestate FILE", { skip: !have, timeout: 120000 }, async () => {
+test("watch fromStatePath: restore from a savestate FILE", { timeout: 120000 }, async () => {
   const key = "watch-fromstate-file";
   const dir = await mkdtemp(path.join(tmpdir(), "wfs-"));
   try {
@@ -108,7 +108,7 @@ test("watch fromStatePath: restore from a savestate FILE", { skip: !have, timeou
   }
 });
 
-test("watch fromState + fromStatePath together is rejected", { skip: !have, timeout: 120000 }, async () => {
+test("watch fromState + fromStatePath together is rejected", { timeout: 120000 }, async () => {
   const key = "watch-fromstate-both";
   try {
     const core = resolveCore("c64");

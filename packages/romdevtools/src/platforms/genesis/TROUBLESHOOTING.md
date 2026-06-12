@@ -260,5 +260,5 @@ Diagnose it without guessing (no core rebuild):
 
 For a world WIDER than one 512-px plane, don't make the plane bigger and
 don't redraw it — stream ONE offscreen column per 8-px camera step
-(circular-buffer the 64-cell plane). See MENTAL_MODEL.md "How Sonic-style
-large maps REALLY work".
+(circular-buffer the 64-cell plane). See MENTAL_MODEL.md "How large scrolling
+maps REALLY work".

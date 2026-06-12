@@ -12,7 +12,7 @@ import { decodeCode, encodeForDevice, nativeDevicesFor } from "../src/cheats/gam
 // ── 1. NES banked cpuAddress ────────────────────────────────────────────────
 
 test("nesFileOffsetToCpu: banked ROM byte maps to the in-bank CPU addr, not a +$8000 overflow", () => {
-  // Rygar: mapper 2, 8 × 16KB PRG = 128KB. The feedback's byte: prg offset
+  // An NES action game: mapper 2, 8 × 16KB PRG = 128KB. The feedback's byte: prg offset
   // 0xDE03 (raw .nes offset 0xDE13) → bank 3, CPU $9E03. The OLD code gave
   // $15E03 (0xDE03 + 0x8000) — a non-address > $FFFF.
   const prgSize = 8 * 16384;

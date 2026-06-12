@@ -109,6 +109,11 @@ async function runJob(job) {
       return buf[idx++];
     };
   }
+  // Optional environment variables for the WASM (e.g. SLEIGHHOME for the Ghidra
+  // decompiler). Seed Module.ENV in preRun, before libc reads getenv().
+  if (job.env && typeof job.env === "object") {
+    moduleArgs.preRun = [(m) => { Object.assign((m.ENV || (m.ENV = {})), job.env); }];
+  }
 
   const mod = await factory(moduleArgs);
 

@@ -1,12 +1,20 @@
 # romdev
 
-The entry point for **romdev** — vibe-code real retro games. Lets a coding agent build, run, and inspect actual homebrew ROMs (NES, SNES, Game Boy, Genesis, Atari, C64, GBA, and more) with one command.
+The entry point for **romdev** — vibe-code real retro games. Build, run, inspect, and reverse-engineer actual homebrew ROMs (NES, SNES, Game Boy, Genesis, Atari, C64, GBA, and more) with one command — drive it yourself or let a coding assistant do it.
 
 ```bash
 npx romdevtools
 ```
 
-That's it — one command starts the local romdev **tool server** (no global install, no host compiler/emulator). Point any coding agent at it three ways:
+**What you get:**
+
+- **Build** — bundled per-platform toolchains (cc65, SDCC, RGBDS, asar, vasm, SGDK, PVSnesLib, libtonc, …) as WASM. Write source, compile, get a real ROM.
+- **Run + see + drive** — load the ROM into an emulated console (libretro cores as WASM), step frames, screenshot, script controller input.
+- **Inspect + romhack** — read CPU/video/save RAM, watch memory, write-breakpoints, the Cheat-Engine value-search loop, a bundled cheat database, mapper-aware disassembly, and a byte-exact rebuildable-project disassembler.
+- **Reverse-engineering analysis engine (all 14 platforms)** — control-flow graphs, deep cross-references, auto-detected functions, a one-shot structural map, and a Ghidra **decompiler** (C-like pseudocode): `disasm({target:'cfg'|'xrefs'|'functions'|'decompile'})` and `symbols({op:'analyze'})`. Understand *how* a routine works before you touch it — no $3,000 IDA license, no install.
+- **Convert assets** — PNG → platform tiles/tilemaps, quantize-to-palette, audio importers (BRR for SNES, XGM2 PCM for Genesis).
+
+Point any coding agent at it three ways:
 
 - **Plain HTTP** — `POST http://127.0.0.1:7331/tool/{name}`; browse/try every tool at `/documentation`.
 - **Agent Skill** — `GET /skills/romdev/SKILL.md` (the [Agent Skills](https://agentskills.io) standard; save it to your skills dir as `skills/romdev/SKILL.md`; ~100 tokens until invoked).
@@ -31,6 +39,7 @@ This package contains all the JavaScript — the tool surface, the WASM emulator
 - Cores: `romdev-core-{fceumm,gambatte,gpgx,vice,handy,prosystem,geargrafx,bluemsx}`
 - Platforms: `romdev-platform-{snes,gba,atari2600}`
 - Toolchains: `romdev-toolchain-{cc65,sdcc,m68k-gcc,vasm,rgbds}`
+- Analysis: `romdev-analysis` (Rizin → WASM: control-flow graphs, cross-references, function detection) and `romdev-analysis-decompiler` (Ghidra's C++ decompiler → WASM + SLEIGH processor specs for all 14 CPUs). Power `disasm({target:'cfg'|'xrefs'|'functions'|'decompile'})` and `symbols({op:'analyze'})`. Lazy-loaded on first use.
 - Data: `romdev_game_codes` — the bundled game-code / cheat database (a free labeled RAM/code map for thousands of known ROMs), split out so it can grow independently. Lazy-loaded one platform at a time.
 
 `@kmamal/sdl` is used only by `playtest()` / `romdevtools-cli play` (the live window). It ships its native binary via its own install script, which npm skips when romdev is a transitive dep (e.g. under `npx`) — so romdev's `postinstall` fetches it, and `playtest()` also self-heals at runtime if the binary is still missing (downloading the prebuilt before the first window open). Either way, if the binary can't be fetched (offline/locked-down network), the headless server is unaffected — only the live window degrades, and the error tells you the one command to fix it.

@@ -1,6 +1,6 @@
 // traceVramSource (Genesis) — "which ROM offset did this VRAM graphic come from?"
 //
-// The trap it kills: NBA Jam-style player names are pre-rendered tile bitmaps
+// The trap it kills: some sports games' player names are pre-rendered tile bitmaps
 // DMA'd into VRAM from ROM, not font-rendered from a string. You can SEE the
 // name but patching the ASCII string does nothing — the source is the bitmap in
 // ROM. Genesis makes this traceable: a memory→VRAM DMA leaves its SOURCE address

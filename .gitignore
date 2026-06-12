@@ -37,6 +37,15 @@ packages/*/wasm/
 # a stray build run re-emits wasm there and would leak into romdev's tarball):
 packages/romdev/src/cores/wasm/
 packages/romdev/src/toolchains/*/wasm/
+# The analysis engine staging dirs (rizin.wasm ~30MB, decompiler+SLEIGH ~14MB —
+# too big for git history; the shipped copies live in packages/romdev-analysis*/
+# matched above. These staging copies are dev fallbacks only).
+packages/romdevtools/src/analysis/wasm/
+packages/romdevtools/src/analysis/decompiler/
+# Compiled SLEIGH tables (.sla) are build OUTPUT like the wasm — they ship via
+# npm pack from the package's sleigh/ dir but are too big for git history. The
+# small .ldefs/.pspec/.cspec text specs alongside them DO stay tracked.
+packages/romdev-analysis-decompiler/sleigh/*.sla
 
 # Local scratch / build-prototyping workspace — throwaway build round-trip
 # tests, disasm→rebuild proofs, etc. Never committed, never shipped.

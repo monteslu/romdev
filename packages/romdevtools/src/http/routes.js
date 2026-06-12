@@ -189,7 +189,7 @@ export function buildOpenApi(registry, version) {
         parameters: [{
           name: SESSION_HEADER, in: "header", required: true,
           schema: { type: "string" },
-          description: "REQUIRED. Per-agent session id — pick one stable, UNIQUE, task-DESCRIPTIVE string (e.g. 'nes-platformer-build', 'zelda-romhack-text') and send it on EVERY call. It's the per-session emulator key (load→step→read state lives under it) AND the label shown in the /livestream observer, so a descriptive id tells a watching human which task each call belongs to. Several agents share one server safely by each using a different id. Missing → 401.",
+          description: "REQUIRED. Per-agent session id — pick one stable, UNIQUE, task-DESCRIPTIVE string (e.g. 'nes-platformer-build', 'rpg-romhack-text') and send it on EVERY call. It's the per-session emulator key (load→step→read state lives under it) AND the label shown in the /livestream observer, so a descriptive id tells a watching human which task each call belongs to. Several agents share one server safely by each using a different id. Missing → 401.",
         }],
       },
     };

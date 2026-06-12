@@ -4,9 +4,10 @@
 // transport pair, and drives the full agent workflow:
 //   listPlatforms → loadMedia → stepAndScreenshot → readMemory → saveState → loadState
 //
-// Verifies the wired tool surface against the real fceumm core + nestest.nes.
+// Verifies the wired tool surface against the real fceumm core + a ROM we build
+// from our own NES example (so the suite needs no external ROM on disk).
 
-import { test } from "node:test";
+import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import os from "node:os";
@@ -19,13 +20,16 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
 
 import { registerTools } from "../src/mcp/tools/index.js";
+import { buildExampleRom } from "./build-fixture-rom.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const ROM_PATH = path.join(__dirname, "roms", "nestest.nes");
-// nestest.nes is fetched on demand by scripts/fetch-test-roms.sh — skip ROM
-// tests gracefully when it's not present (e.g. fresh clones without the fetch).
-const HAS_NESTEST = existsSync(ROM_PATH);
+
+// Build a real, bootable NES ROM from our own example source. These tests just
+// need *a* valid NES ROM (load/step/screenshot/memory/savestate) — building it
+// ourselves means they always run and reference no external ROM on disk.
+let ROM_PATH;
+before(async () => { ROM_PATH = await buildExampleRom("nes"); });
 
 async function startServerAndClient() {
   const server = new McpServer(
@@ -68,7 +72,7 @@ test("MCP: listPlatforms returns NES and other v1 platforms", async () => {
   assert.equal(nes.coreAvailable, true);
 });
 
-test("MCP: load NES rom, step frames, screenshot returns valid PNG", { skip: !HAS_NESTEST && "nestest.nes not present — run scripts/fetch-test-roms.sh" }, async () => {
+test("MCP: load NES rom, step frames, screenshot returns valid PNG", async () => {
   const { client } = await startServerAndClient();
 
   // loadMedia
@@ -99,7 +103,7 @@ test("MCP: load NES rom, step frames, screenshot returns valid PNG", { skip: !HA
   assert.equal(png[3], 0x47);
 });
 
-test("MCP: save state, step further, load state restores frame count", { skip: !HAS_NESTEST && "nestest.nes not present" }, async () => {
+test("MCP: save state, step further, load state restores frame count", async () => {
   const { client } = await startServerAndClient();
   await client.callTool({
     name: "loadMedia",
@@ -143,7 +147,7 @@ test("MCP: save state, step further, load state restores frame count", { skip: !
   assert.equal(afterNoRender, 131, "render:false did not advance the frame counter");
 });
 
-test("MCP: loadState clears active cheats (documented contract)", { skip: !HAS_NESTEST && "nestest.nes not present" }, async () => {
+test("MCP: loadState clears active cheats (documented contract)", async () => {
   const { client } = await startServerAndClient();
   await client.callTool({ name: "loadMedia", arguments: { platform: "nes", path: ROM_PATH } });
   await client.callTool({ name: "frame", arguments: { op: "step",  frames: 30 } });
@@ -157,7 +161,7 @@ test("MCP: loadState clears active cheats (documented contract)", { skip: !HAS_N
   assert.deepEqual(re.active.map((c) => c.index), [0], "no stale cheat survived the restore");
 });
 
-test("MCP: exportState copies a slot to disk without touching the live host", { skip: !HAS_NESTEST && "nestest.nes not present" }, async () => {
+test("MCP: exportState copies a slot to disk without touching the live host", async () => {
   const { client } = await startServerAndClient();
   await client.callTool({ name: "loadMedia", arguments: { platform: "nes", path: ROM_PATH } });
   await client.callTool({ name: "frame", arguments: { op: "step",  frames: 30 } });
@@ -174,7 +178,7 @@ test("MCP: exportState copies a slot to disk without touching the live host", { 
   rmSync(out, { force: true });
 });
 
-test("MCP: readMemory returns 16 bytes from NES system RAM", { skip: !HAS_NESTEST && "nestest.nes not present" }, async () => {
+test("MCP: readMemory returns 16 bytes from NES system RAM", async () => {
   const { client } = await startServerAndClient();
   await client.callTool({
     name: "loadMedia",
@@ -192,7 +196,7 @@ test("MCP: readMemory returns 16 bytes from NES system RAM", { skip: !HAS_NESTES
   assert.equal(data.hex.length, 32);
 });
 
-test("MCP: findWriter captures the instruction-level write PC (watchpoint)", { skip: !HAS_NESTEST && "nestest.nes not present" }, async () => {
+test("MCP: findWriter captures the instruction-level write PC (watchpoint)", async () => {
   const { client } = await startServerAndClient();
   await client.callTool({ name: "loadMedia", arguments: { platform: "nes", path: ROM_PATH } });
   await client.callTool({ name: "frame", arguments: { op: "step",  frames: 60 } });
@@ -214,7 +218,7 @@ test("MCP: findWriter captures the instruction-level write PC (watchpoint)", { s
   assert.ok(typeof w.pcRaw === "number" && w.pcRaw !== 0xFFFFFFFF, "pcRaw is a concrete PC, not the sentinel");
 });
 
-test("MCP: pressButton on NES does not throw", { skip: !HAS_NESTEST && "nestest.nes not present" }, async () => {
+test("MCP: pressButton on NES does not throw", async () => {
   const { client } = await startServerAndClient();
   await client.callTool({
     name: "loadMedia",

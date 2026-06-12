@@ -1027,7 +1027,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     "hours diffing a CORRECT codec against that poisoned output. Prefer pure for every decompressor/codec call.\n" +
     "• op:'decompress' — convenience wrapper over op:'call' for the common decompressor shape: call `entryPC` with " +
     "A0=`sourceAddress` (and optionally A1=`destAddress`), run until it returns, then read `destAddress`. For the " +
-    "NBA-Jam-style 'name + portrait are LZ-compressed' wall: point it at the game's own decompressor.",
+    "the 'pre-rendered name + portrait are LZ-compressed' wall: point it at the game's own decompressor.",
     {
       op: z.enum(["read", "setReg", "call", "decompress"])
         .describe("read=CPU registers/flags; setReg=write one register; call=drive a subroutine until it returns; decompress=call shortcut (A0=source, A1=dest)."),

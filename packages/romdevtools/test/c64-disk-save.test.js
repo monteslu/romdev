@@ -4,15 +4,15 @@
 // mounted 1541 disk image; this is the C64 analogue of SRAM exportSram/importSram
 // (the C64 save medium is a floppy, not battery RAM). Requires the patched core.
 
-import { test } from "node:test";
+import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { resolveCore } from "../src/cores/registry.js";
 import { LibretroHost } from "../src/host/LibretroHost.js";
 import { prgToD64, readDirectory, extractFile } from "../src/platforms/c64/d64.js";
-import { C64_HOMEBREW_PRG } from "./rom-fixtures.js";
+import { buildExampleRom } from "./build-fixture-rom.js";
 
-const PRG = C64_HOMEBREW_PRG;
-const have = !!PRG;
+let PRG;
+before(async () => { PRG = await buildExampleRom("c64"); });
 
 async function bootDisk() {
   const { readFileSync } = await import("node:fs");
@@ -25,12 +25,12 @@ async function bootDisk() {
   return host;
 }
 
-test("core exposes the disk read/write exports", { skip: !have, timeout: 60000 }, async () => {
+test("core exposes the disk read/write exports", { timeout: 60000 }, async () => {
   const host = await bootDisk();
   assert.equal(host.diskImageSupported(), true, "patched VICE core should expose disk export/import");
 });
 
-test("exportDiskImage reads the live .d64 (174848 bytes, GAME present)", { skip: !have, timeout: 60000 }, async () => {
+test("exportDiskImage reads the live .d64 (174848 bytes, GAME present)", { timeout: 60000 }, async () => {
   const host = await bootDisk();
   const d64 = host.exportDiskImage(8);
   assert.equal(d64.length, 174848);
@@ -38,7 +38,7 @@ test("exportDiskImage reads the live .d64 (174848 bytes, GAME present)", { skip:
   assert.ok(dir.find((e) => e.name === "GAME"), "the packed program should be on the disk");
 });
 
-test("putDiskFile injects a PRG file that exportDiskImage reads back", { skip: !have, timeout: 60000 }, async () => {
+test("putDiskFile injects a PRG file that exportDiskImage reads back", { timeout: 60000 }, async () => {
   const host = await bootDisk();
   // a save file: 2-byte load address ($C000) + body
   const body = "DISK-SAVE-ROUNDTRIP";
@@ -54,7 +54,7 @@ test("putDiskFile injects a PRG file that exportDiskImage reads back", { skip: !
   assert.equal(Buffer.from(back.subarray(2)).toString("latin1"), body, "save body round-trips byte-exact");
 });
 
-test("importDiskImage swaps the whole disk", { skip: !have, timeout: 60000 }, async () => {
+test("importDiskImage swaps the whole disk", { timeout: 60000 }, async () => {
   const { readFileSync } = await import("node:fs");
   const host = await bootDisk();
   const prg = new Uint8Array(readFileSync(PRG));

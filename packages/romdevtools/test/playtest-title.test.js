@@ -18,7 +18,7 @@ test("projectName-derived virtualName becomes the title", () => {
 });
 
 test("a real ROM file path titles by basename", () => {
-  assert.equal(deriveTitle(h("/home/u/games/Zelda.sfc", "snes")), "Zelda (snes)");
+  assert.equal(deriveTitle(h("/home/u/games/Questling.sfc", "snes")), "Questling (snes)");
 });
 
 test("no media and no platform → generic label", () => {

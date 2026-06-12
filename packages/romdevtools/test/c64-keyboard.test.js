@@ -4,17 +4,17 @@
 // (F1 = 1 player, RUN/STOP, RETURN at setup screens) before joystick gameplay —
 // joystick alone can't pass them. Requires the patched core + a test PRG.
 
-import { test } from "node:test";
+import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import { resolveCore } from "../src/cores/registry.js";
 import { LibretroHost } from "../src/host/LibretroHost.js";
 import { prgToD64 } from "../src/platforms/c64/d64.js";
-import { C64_HOMEBREW_PRG } from "./rom-fixtures.js";
+import { buildExampleRom } from "./build-fixture-rom.js";
 
-const PRG = C64_HOMEBREW_PRG;
-const have = !!PRG;
+let PRG;
+before(async () => { PRG = await buildExampleRom("c64"); });
 
 async function boot() {
   const prg = new Uint8Array(readFileSync(PRG));
@@ -26,22 +26,27 @@ async function boot() {
   return host;
 }
 
-test("core exposes the C64 keyboard/joyport exports", { skip: !have, timeout: 60000 }, async () => {
+test("core exposes the C64 keyboard/joyport exports", { timeout: 60000 }, async () => {
   const host = await boot();
   assert.equal(host.keyboardSupported(), true, "patched VICE core should expose romdev_key_matrix");
 });
 
-test("joyport defaults to 2 (most C64 games) and is settable", { skip: !have, timeout: 60000 }, async () => {
+test("joyport reports the live control port and is settable", { timeout: 60000 }, async () => {
   const host = await boot();
-  assert.equal(host.getC64JoyPort(), 2, "default C64 joystick port is 2");
+  // The host boots VICE with vice_joyport=1 + the userport adapter so BOTH C64
+  // control ports are live for 2P (see LibretroHost defaultCoreOptions). The
+  // exact reported default tracks that config; what we assert here is that the
+  // get/set round-trips and the value guard holds.
   assert.equal(host.setC64JoyPort(1), 1);
   assert.equal(host.getC64JoyPort(), 1, "port switched to 1");
-  host.setC64JoyPort(2);
-  assert.equal(host.getC64JoyPort(), 2, "port switched back to 2");
+  assert.equal(host.setC64JoyPort(2), 2);
+  assert.equal(host.getC64JoyPort(), 2, "port switched to 2");
+  host.setC64JoyPort(1);
+  assert.equal(host.getC64JoyPort(), 1, "port switched back to 1");
   assert.throws(() => host.setC64JoyPort(3), /must be 1 or 2/);
 });
 
-test("typeText reaches the C64 kernal keyboard buffer (NDX + $0277)", { skip: !have, timeout: 60000 }, async () => {
+test("typeText reaches the C64 kernal keyboard buffer (NDX + $0277)", { timeout: 60000 }, async () => {
   const host = await boot();
   // Feed two chars; the kernal keyboard buffer is at $0277.. with the count in
   // $00C6 (NDX). Reading them proves the keystrokes reached the emulated machine.
@@ -57,7 +62,7 @@ test("typeText reaches the C64 kernal keyboard buffer (NDX + $0277)", { skip: !h
   assert.equal(buf[1], 0x42, "buffer[1] = 'B' (PETSCII $42)");
 });
 
-test("pressC64Key resolves the matrix position + auto-releases", { skip: !have, timeout: 60000 }, async () => {
+test("pressC64Key resolves the matrix position + auto-releases", { timeout: 60000 }, async () => {
   const host = await boot();
   const r = host.pressC64Key("f1", 4);
   assert.deepEqual([r.row, r.col], [0, 4], "F1 is matrix (0,4)");
@@ -65,7 +70,7 @@ test("pressC64Key resolves the matrix position + auto-releases", { skip: !have, 
   assert.throws(() => host.pressC64Key("nope"), /unknown C64 key/);
 });
 
-test("controller buttons map to C64 keys via setInput (Batocera/RetroDeck model)", { skip: !have, timeout: 60000 }, async () => {
+test("controller buttons map to C64 keys via setInput (Batocera/RetroDeck model)", { timeout: 60000 }, async () => {
   const host = await boot();
   // Instrument the matrix call so we can see press/release without depending on
   // a kernal var an autostarted game might clobber.
@@ -91,10 +96,14 @@ test("controller buttons map to C64 keys via setInput (Batocera/RetroDeck model)
   calls.length = 0;
   host.setInput({ ports: [{ up: true, b: true }, {}] });
   assert.equal(calls.length, 0, "joystick up+Fire presses no C64 key");
-  assert.notEqual(host.state.inputPorts[0][0], 0, "joystick reaches the joypad mask");
+  // The C64 2P fix swaps the two RetroPad slots (port ^ 1) so host port 0 →
+  // control port 2 = P1. So the up+Fire mask lands in inputPorts[1], not [0];
+  // assert the joystick reaches *a* joypad mask, wherever the swap put it.
+  const masks = host.state.inputPorts.map((p) => p[0]);
+  assert.ok(masks.some((m) => m !== 0), "joystick reaches the joypad mask");
 });
 
-test("pressC64KeyVerify samples CIA1 $DC00/$DC01 before/during/after", { skip: !have, timeout: 60000 }, async () => {
+test("pressC64KeyVerify samples CIA1 $DC00/$DC01 before/during/after", { timeout: 60000 }, async () => {
   const host = await boot();
   const v = host.pressC64KeyVerify("space", 8);
   assert.deepEqual([v.row, v.col], [7, 4], "space matrix");
@@ -108,7 +117,7 @@ test("pressC64KeyVerify samples CIA1 $DC00/$DC01 before/during/after", { skip: !
   }
 });
 
-test("setC64HeldKeys presses/releases matrix lines by diff (recordSession scripting)", { skip: !have, timeout: 60000 }, async () => {
+test("setC64HeldKeys presses/releases matrix lines by diff (recordSession scripting)", { timeout: 60000 }, async () => {
   const host = await boot();
   const calls = [];
   const orig = host.mod._romdev_key_matrix.bind(host.mod);

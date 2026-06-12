@@ -12,7 +12,7 @@ import { resolveStatePath } from "../src/mcp/tools/state.js";
 const hostWithRom = (mediaPath) => ({ status: { mediaPath } });
 
 test("relative path resolves against the loaded ROM's directory", () => {
-  const host = hostWithRom("/home/me/games/rygar.nes");
+  const host = hostWithRom("/home/me/games/action.nes");
   assert.equal(
     resolveStatePath("states/start.state", host),
     path.resolve("/home/me/games", "states/start.state"),
@@ -20,7 +20,7 @@ test("relative path resolves against the loaded ROM's directory", () => {
 });
 
 test("absolute path is used as-is (ROM dir irrelevant)", () => {
-  const host = hostWithRom("/home/me/games/rygar.nes");
+  const host = hostWithRom("/home/me/games/action.nes");
   assert.equal(resolveStatePath("/tmp/x.state", host), "/tmp/x.state");
 });
 

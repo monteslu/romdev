@@ -222,3 +222,9 @@ on CGB, its BG attribute byte in VRAM bank 1) each time the camera crosses an
 8-px boundary. Use the Window (LCDC bit 5) for a fixed HUD. CGB adds nothing
 that changes the scroll mechanism — just remember the per-tile attribute in
 bank 1 when you stream columns. See the GB MENTAL_MODEL for the full pattern.
+
+## Reverse-engineering & decompilation
+
+The Rizin/Ghidra analysis engine works here like everywhere: `disasm({target:'functions'})` to carve the program, `disasm({target:'cfg'|'xrefs'})` to trace it, `symbols({op:'analyze'})` for a one-shot structural map.
+
+**Decompiler quality on SM83: GOOD.** A dedicated SLEIGH plugin gives clean block-level pseudocode. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. See the cross-platform ROM-hacking playbook §5f for the full loop.

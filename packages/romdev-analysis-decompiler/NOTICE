@@ -1,0 +1,48 @@
+romdev-analysis-decompiler
+==========================
+
+This package bundles the Ghidra decompiler (compiled to WebAssembly) plus
+SLEIGH processor specifications for 14 retro CPUs. It redistributes built
+artifacts (.wasm and compiled .sla processor tables) only; the source for each
+is fetched on demand at the pinned commit recorded in romdev's
+scripts/versions.json and is never vendored into this repository.
+
+Components and attribution
+--------------------------
+
+1. Ghidra decompiler (C++) and the stock SLEIGH specs for
+   6502, 65C02, Z80, ARM (v4t), and 68000.
+   Copyright The Ghidra Project / National Security Agency.
+   Licensed under the Apache License, Version 2.0.
+   https://github.com/NationalSecurityAgency/ghidra
+   Compiled here via rz-ghidra (https://github.com/rizinorg/rz-ghidra,
+   LGPL-3.0) — only Ghidra's decompiler C++ and the SLEIGH compiler are used;
+   no rz-ghidra plugin code is linked into the shipped decompiler binary.
+
+2. SM83 (Game Boy / Game Boy Color) SLEIGH spec — "GhidraBoy".
+   Copyright Joonas Javanainen (Gekkio).
+   Licensed under the Apache License, Version 2.0.
+   https://github.com/Gekkio/GhidraBoy
+
+3. 65816 (Super Nintendo) SLEIGH spec — from "ghidra-snes".
+   Copyright Arnaud 'red' Rouyer (joshleaves); 65816 language derived from
+   the ghidra-65816 project.
+   Licensed under the MIT License.
+   https://github.com/joshleaves/ghidra-snes
+
+4. HuC6280 (PC Engine / TurboGrafx-16) SLEIGH spec — from "Ghidra_HuC6280".
+   Copyright Jozsef Tikviczki (TiCoKH), with cleanup by qufb.
+   This spec is a DERIVATIVE WORK of Ghidra's own Apache-2.0 6502 SLEIGH
+   specification: its git history shows it was developed inside Ghidra's
+   Ghidra/Processors/6502/ directory and later moved to a HuC6280/ directory
+   (PR #1, "Remove 6502 dependencies"); its header and register layout match
+   Ghidra's 6502.slaspec near-verbatim. The upstream repository did not include
+   an explicit LICENSE file, but the Apache-2.0 license of the Ghidra base it
+   derives from flows down to the derivative work and is not revocable by a
+   downstream author. It is therefore redistributed here under the
+   Apache License, Version 2.0, with attribution to the Ghidra Project / NSA,
+   to Jozsef Tikviczki (TiCoKH), and to qufb.
+   https://github.com/TiCoKH/Ghidra_HuC6280
+
+A copy of the Apache License, Version 2.0, ships as the `LICENSE` file in this
+package, and is also available at http://www.apache.org/licenses/LICENSE-2.0

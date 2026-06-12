@@ -334,3 +334,9 @@ moving further is a software char-cell shift.
 
 Track `camX` in pixels: `fine = camX & 7` → `$D016`; `coarseCol = camX >> 3`
 indexes your world map for which columns are on screen.
+
+## Reverse-engineering & decompilation
+
+The Rizin/Ghidra analysis engine works here like everywhere: `disasm({target:'functions'})` to carve the program, `disasm({target:'cfg'|'xrefs'})` to trace it, `symbols({op:'analyze'})` for a one-shot structural map.
+
+**Decompiler quality on 6502: ROUGH.** Carry-flag idioms and 16-bit math on an 8-bit CPU decompile to noise that only reads cleanly once an LLM folds it — on this CPU the disassembly is often more honest than the pseudocode. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. See the cross-platform ROM-hacking playbook §5f for the full loop.

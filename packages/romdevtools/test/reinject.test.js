@@ -162,7 +162,7 @@ test("findPointerTo + relocateBlock plant/find/repoint a 32-bit pointer (Genesis
   assert.ok(fp2.hits.some((h) => h.atOffsetDec === 0x100), "repointed pointer not found");
 });
 
-// ── shadow suppression + widths filter (v0.6.0 NBA-Jam nit #1) ──────────────
+// ── shadow suppression + widths filter (v0.6.0 sports-title feedback nit #1) ──────────────
 // Genesis emits a 32-bit BE form AND a 24-bit BE form. A 32-bit hit at N has the
 // same low-3-bytes as a 24-bit hit at N+1 (the tail), which doubled the agent's
 // hit list. Default suppresses that shadow; suppressShadows:false / widths control it.

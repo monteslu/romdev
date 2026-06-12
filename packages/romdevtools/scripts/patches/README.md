@@ -63,6 +63,26 @@ of each file). Summary:
 
 ---
 
+## Family 3 — rizin emscripten patches (2 patches, analysis engine)
+
+Make Rizin v0.8.2 build single-threaded for wasm32-emscripten (Node target).
+Recipe derived from the rzwasi project (https://github.com/IndAlok/rzwasi,
+LGPL-3.0) and re-cut as committed diffs against our pinned commit. Applied by
+`build-rizin.sh`.
+
+| Patch | Why | What breaks without it |
+|---|---|---|
+| `rizin-romdev-emscripten.patch` | (1) thread.h/thread*.c: pthread API replaced with single-thread stubs (`rz_emscripten_thread_stubs.h`) — emscripten pthreads need SharedArrayBuffer wasm we don't want for a one-shot CLI tool; (2) cons.c: route `__cons_write_ll` through `Module.print` so output capture works under MODULARIZE; (3) sys.c: no `execinfo.h`/backtrace under emscripten; (4) io_shm.c: no SysV shm; (5) rz_heap_jemalloc.h: skip jemalloc internals; (6) meson.build: emscripten has no librt/ptrace. | Build fails at thread.c (`#error Threading library only supported for pthread and w32`), then at execinfo.h, shm.h; output is invisible to the JS host. |
+| `rizin-libzip-emscripten.patch` | libzip meson **subproject** (fetched at configure time, so this can't live in the rizin patch): stub `zip_secure_random` with `srand/rand` (no `/dev/urandom` guarantee), drop macOS `sys/attr.h`/clonefile path, fix `ftello` redefinition, map `*_s` bounded-string calls to plain libc. Applied after `meson subprojects download` with sentinel `romdev emscripten compat`. | libzip compile errors abort the whole rizin build (zip support is linked into rz_io). |
+
+Known runtime wart (documented in `build-rizin.sh`): plugin-LISTING commands
+(`La`, `e asm.arch=??`) trap with "null function or function signature
+mismatch" — a fn-pointer cast UB that native builds tolerate. Nothing on the
+analysis path (`aaa`, `aflj`, `axtj`, `agf json`, `pdj`) hits it. If a future
+rizin bump fixes the cast, retest and delete this note.
+
+---
+
 ## Rules for this directory
 
 - A patch with no entry in this README is a bug — add the justification or

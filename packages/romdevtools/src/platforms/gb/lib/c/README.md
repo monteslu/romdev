@@ -65,7 +65,7 @@ Templates ship in `examples/{gb,gbc}/templates/`:
 |---|---|
 | `default` | Minimal palette-cycle hello-world. Use when you're not sure what to build yet. |
 | `hello_sprite` | LCD init + 16-byte tile upload + 4-color OBJ palette + sprite slot 0 + d-pad movement. ~80 lines, tested end-to-end. |
-| `tile_engine` | 20×18 BG map render from a `room[]` array + collision + multi-room transitions via doors. ~200 lines. Covers the Adventure / Zelda-1 / Sokoban shape. |
+| `tile_engine` | 20×18 BG map render from a `room[]` array + collision + multi-room transitions via doors. ~200 lines. Covers the top-down dungeon-crawler / room-puzzle shape. |
 
 ## SDCC 4.4.0 quirks
 

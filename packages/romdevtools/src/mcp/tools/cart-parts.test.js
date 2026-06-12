@@ -5,22 +5,25 @@
 // invariants at the math layer (fast, no WASM), so regressions surface
 // early in CI.
 
-import { test } from "node:test";
+import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import os from "node:os";
-import { readFile, writeFile, mkdtemp, access } from "node:fs/promises";
+import { readFile, writeFile, mkdtemp } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import { extractCartCore, wrapRomFromPartsCore } from "./cart-parts.js";
 import { diffRomsCore } from "./diff-roms.js";
 import { buildForPlatform } from "../../toolchains/index.js";
+import { buildExampleRom } from "../../../test/build-fixture-rom.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-// Test fixture: Excitebike — a known-good NROM-128 cart. Lives outside
-// the repo (rom-games sibling); skip rather than fail when absent.
-const EXCITEBIKE = path.join(__dirname, "../../../../rom-games/nes/bike/excitebike.nes");
+// A known-good NROM-128 cart: we build one from our own NES example (which
+// compiles to an NROM cart), so the round-trip test runs unconditionally and
+// needs no external ROM on disk.
+let SAMPLE_NROM;
+before(async () => { SAMPLE_NROM = await buildExampleRom("nes"); });
 
 // ─── Size / origin math (fast, no WASM) ─────────────────────────────
 
@@ -88,20 +91,9 @@ test("wrapRomFromParts[nes] unsupported prgBanks throws structured error", async
 
 // ─── Round-trip (extractCart → wrapRomFromParts → buildSource → diff) ──
 
-async function fixtureAvailable(p) {
-  try { await access(p); return true; } catch { return false; }
-}
-
-test("round-trip: NROM-128 (Excitebike) rebuilds byte-identical", async () => {
-  if (!(await fixtureAvailable(EXCITEBIKE))) {
-    // The fixture lives in the rom-games sibling repo; tolerate its absence
-    // so CI on a fresh checkout doesn't fail this test. The test only
-    // contributes value when the fixture is present.
-    console.log("# skip: Excitebike fixture not present at " + EXCITEBIKE);
-    return;
-  }
+test("round-trip: NROM-128 cart rebuilds byte-identical", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "rom-rt-"));
-  const ext = await extractCartCore({ path: EXCITEBIKE, outputDir: dir });
+  const ext = await extractCartCore({ path: SAMPLE_NROM, outputDir: dir });
   assert.equal(ext.manifest.platform, "nes");
   assert.equal(ext.manifest.format, "iNES");
 
@@ -116,6 +108,7 @@ test("round-trip: NROM-128 (Excitebike) rebuilds byte-identical", async () => {
     mirror: ext.manifest.mirror,
     prgBanks: ext.manifest.prgBanks,
     chrBanks: ext.manifest.chrBanks,
+    hasBattery: ext.manifest.hasBattery,
   });
 
   const build = await buildForPlatform({
@@ -129,7 +122,7 @@ test("round-trip: NROM-128 (Excitebike) rebuilds byte-identical", async () => {
   const builtPath = path.join(dir, "built.nes");
   await writeFile(builtPath, build.binary);
 
-  const diff = await diffRomsCore({ platform: "nes", aPath: EXCITEBIKE, bPath: builtPath });
+  const diff = await diffRomsCore({ platform: "nes", aPath: SAMPLE_NROM, bPath: builtPath });
   assert.equal(diff.sizeDelta, 0, `size mismatch (${diff.a.size} vs ${diff.b.size})`);
   assert.equal(diff.totalBytesDifferent, 0,
     `round-trip diverged:\n${JSON.stringify(diff.changes.slice(0, 5), null, 2)}`);

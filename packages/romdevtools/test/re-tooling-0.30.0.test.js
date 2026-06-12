@@ -1,4 +1,4 @@
-// 0.30.0 RE-tooling round (from v0.28.0 NES reverse-engineering feedback):
+// 0.30.0 RE-tooling round (from a v0.28.0 NES reverse-engineering feedback round):
 //   #1  op:'searchUnknown' — Cheat-Engine unknown-initial-value hunt: seed the
 //       WHOLE region, narrow by dec/inc/changed across events (find the
 //       lives/timer address you can't see).

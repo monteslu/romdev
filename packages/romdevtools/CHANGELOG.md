@@ -4,10 +4,67 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.40.0 — 2026-06-11
+
+### Reverse-engineering analysis engine — control-flow graphs, deep xrefs, function detection, and a decompiler
+
+A full open-source RE analysis layer, covering **all 14 platforms** with zero
+proprietary dependencies. Two new binary packages carry the WebAssembly; the
+main package gains four `disasm` targets and one `symbols` op that drive them.
+
+- **`disasm({target:'functions'})`** — auto-detected function list
+  (`{address, size, nbbs, cc, callers, callees}`): the structural map of an
+  unknown ROM, the carve step before you label anything live.
+- **`disasm({target:'cfg', address})`** — basic-block control-flow graph of the
+  function at `address` (nodes + typed edges: jump / branch_true / branch_false).
+- **`disasm({target:'xrefs', address})`** — every cross-reference TO `address`,
+  following the analysis graph. Deeper than the flat `target:'references'` da65
+  operand scan — prefer `xrefs` once a function pass has run, `references` for a
+  quick header-less sweep.
+- **`disasm({target:'decompile', address})`** — Ghidra C-like **pseudocode** for
+  the function at `address`, with the decompiler's own warnings and a per-CPU
+  `qualityNote`. Altitude rule: decompile is for UNDERSTANDING (and as a port
+  spec when retargeting to a bigger machine) — `target:'project'` stays the
+  byte-exact rebuildable edit path. Quality is excellent on ARM (GBA) and M68K
+  (Genesis), good on SM83 (GB/GBC) and Z80 (SMS/GG/MSX), medium on 65816 (SNES)
+  and HuC6280 (PC Engine), and rough on the 6502 family (an architecture limit —
+  every tool is rough on 6502).
+- **`symbols({op:'analyze'})`** — one-shot structural map of a ROM
+  (auto-detected functions + strings + entrypoints), no `.dbg`/`.map` needed.
+
+Built from pinned upstreams, fetch-on-demand, never vendored — only the compiled
+artifacts ship (see `scripts/build-rizin.sh`, `scripts/build-decompiler.sh`,
+`scripts/versions.json`):
+- **`romdev-analysis`** — Rizin compiled to WASM (the CFG / xrefs / functions
+  engine). LGPL-3.0.
+- **`romdev-analysis-decompiler`** — Ghidra's C++ decompiler compiled to WASM
+  (no JVM, no rizin) plus SLEIGH processor tables for all 14 CPUs. Apache-2.0,
+  with full per-component attribution in the package NOTICE (Ghidra/NSA, and the
+  community SM83 / 65816 / HuC6280 SLEIGH specs).
+
+### Documentation: no commercial game titles in shipped source
+
+Swept every shipped tool description, doc, README, mental-model guide, and the
+ROM-hacking playbook for commercial game/franchise names and replaced them with
+generic platform + hardware + mechanic descriptions ("a banked NES racer", "a
+top-down dungeon-crawler shape"). Console and chip names are unchanged — they're
+not anyone's IP. The bundled cheat database (third-party crowd-sourced data) is
+unaffected.
+
+### Tests build their own ROMs (no external fixtures)
+
+Tests that needed a real ROM now build one from our **own example sources** at
+runtime instead of depending on a ROM file on disk — so the whole suite runs
+with no external/commercial ROM anywhere. Every previously-skipped fixture-gated
+test now runs: **918 tests, 918 pass, 0 fail, 0 skipped**. (This also surfaced a
+latent fidelity bug the silent skips had hidden: `wrapRomFromParts` dropped the
+iNES battery-SRAM flag on round-trip — now preserved via a new `hasBattery`
+field, and exposed on the `wrapRomFromParts` tool.)
+
 ## 0.30.0 — 2026-06-11
 
 ### RE-tooling round — the Cheat-Engine "locate a value + find its writer" workflow
-From a NES reverse-engineering feedback batch. Six additions to the
+From an NES reverse-engineering feedback batch. Six additions to the
 memory/breakpoint primitives:
 - **`memory({op:'searchUnknown'})`** — the unknown-initial-value hunt: seed the
   WHOLE region with no value, then narrow across in-game events with
@@ -164,7 +221,7 @@ three guarantees now hold across the whole platform matrix:
 - `test/regsnap-all-cores.test.js`: live single-step snapshot + freeze proof
   on 10 platforms (plus the existing gpgx suite for Genesis/SMS/GG).
 
-### Fixed/Added — gpgx core round (the NBA-Jam-both-consoles feedback): break-instant truth on Genesis/SMS/GG
+### Fixed/Added — gpgx core round (a both-consoles sports-title feedback): break-instant truth on Genesis/SMS/GG
 The first core rebuild in this release (gpgx only; pins unchanged, patch extended).
 - **`registersAtHit` on Genesis/SMS/GG** — `breakpoint({on:'pc'|'write'|'read'})`
   hits now carry the FULL register file (m68k d0-d7/a0-a7/pc/sr/sp; z80
@@ -407,7 +464,7 @@ defaulted to native; this is the docs telling the truth about it.)
 ## 0.27.0
 
 ### Added — `breakpoint(on:'pc', captureMemory:[…])` reads named RAM at the hit
-Completes item 2 of the NES Rygar report. 0.26.0 shipped `registersAtHit` (the
+Completes item 2 of an NES action-game RE report. 0.26.0 shipped `registersAtHit` (the
 break-instant register file) but not the memory half. Now `breakpoint(on:'pc')`
 takes `captureMemory:[{region,offset,length,label}]` and returns those reads inline
 as `capturedMemory`, so register + RAM inspection at a PC collapses into ONE call —
@@ -418,7 +475,7 @@ hit frame (stable + what RE needs), documented as such.
 ## 0.26.0
 
 ### Fixed — NES `breakpoint(on:'pc')` now returns reliable break-instant registers
-An agent RE'ing NES Rygar found that after a `pc` breakpoint hit, a follow-up
+An agent RE'ing an NES action game found that after a `pc` breakpoint hit, a follow-up
 `cpu({op:'read'})` returned the **idle-loop PC**, not the breakpoint instruction —
 the documented "break, then read the live register file" workflow gave end-of-frame
 state. Root cause: fceumm drains the cycle budget on hit but `retro_run` still
@@ -447,7 +504,7 @@ own frame correctly. Null until a ROM is loaded.
 ## 0.25.0
 
 ### Added — C64 input scripting + verification (RE startup-flow telemetry)
-Follow-up to the 0.24.0 C64 keyboard work: an agent RE'ing C64 Uridium could now
+Follow-up to the 0.24.0 C64 keyboard work: an agent RE'ing a C64 shoot-'em-up could now
 press keys, but couldn't (a) script a keyboard+joystick startup TIMELINE in one
 call, or (b) tell whether a non-responsive key reached VICE at all. Both added — no
 core rebuild (the `c64_cia1_regs` region + key matrix already existed):
@@ -520,7 +577,7 @@ or the tool list); full release notes remain in CHANGELOG.md for humans.
 ## 0.24.0
 
 ### Added — C64 keyboard + joyport input (VICE core patch)
-An agent RE'ing C64 Uridium could reach the intro via joystick but couldn't ENTER
+An agent RE'ing a C64 shoot-'em-up could reach the intro via joystick but couldn't ENTER
 gameplay — the game needs **F1** (1 player) + fire on **port 2**, and romdev's
 input was joypad-mask-only. Many C64 games gate gameplay behind KEYBOARD setup
 screens that joystick can't reach. The VICE core now exports
@@ -602,7 +659,7 @@ training agents to ignore lint. Now: provably-VRAM dest → warning, plain RAM a
   repeated starfield + player sprite, hardware scroll only, zero loop-time tilemap
   writes. Builds clean, renders, scrolls (verified).
 - Genesis MENTAL_MODEL/TROUBLESHOOTING: "do NOT rewrite tilemaps in the frame
-  loop", logical-vs-hardware plane size, the correct parallax loop, Sonic-style
+  loop", logical-vs-hardware plane size, the correct parallax loop, large-scroller-style
   column streaming, and a "why does movement feel choppy?" recipe.
 
 ### Changed — discoverability (the recurring root cause)
@@ -1020,7 +1077,7 @@ savestate) is now fully supported, with NO new top-level tool:
 - **Honest "no save":** empty `save_ram` now says *why* — "this cart has no battery
   save" / "Atari 2600/7800 & Lynx never had cartridge saves" / "C64 has no battery SRAM (disk/.prg)" — instead of a generic "core didn't expose it." (Confirmed via research +
   core source: no core patches were needed; earlier "broken" readings were
-  password-game test carts like Metroid, which correctly have no battery.)
+  password-based NES carts, which correctly have no battery.)
 
 ### Fixed / Added — v0.15.0 session feedback
 - **`state` file `path` resolution.** A RELATIVE `path` (save/load/export) used to
@@ -1232,7 +1289,7 @@ discoverable rename table).
   searches only the widest form. The suppression matches on offset-overlap AND
   pointer-value (so two coincidentally co-located but distinct pointers are never
   falsely merged). The other 12 platforms emit a single width, so this is a
-  verified no-op there. (NBA-Jam-TE agent nit: 20 hits → the 10 distinct
+  verified no-op there. (sports-title agent nit: 20 hits → the 10 distinct
   relocation handles, no hand-dedupe.)
 - **`cpu({op:'call'})` watchdog now trips on a wrong-entry free-run, not just a
   tight loop — on EVERY CPU.** Two cross-system gaps fixed:
@@ -1249,7 +1306,7 @@ discoverable rename table).
     just `m68k_run`** — so it actually fires on **SMS/GG** (where the Z80 is the
     active CPU). Before, `callSubroutine` armed a watchdog that could never trip
     on SMS/GG (the counter only incremented on the m68k), so a Z80 free-run fell
-    to `maxFrames`. Requires the rebuilt `romdev-core-gpgx` WASM. (NBA-Jam-TE
+    to `maxFrames`. Requires the rebuilt `romdev-core-gpgx` WASM. (sports-title
     agent nit, generalized to all 14 platforms.)
 
 ## 0.10.0
@@ -1327,7 +1384,7 @@ Requires the bumped core packages.
 
 ## 0.7.0
 
-Reverse-engineering follow-ups from the NBA Jam (Genesis) agent's decompress
+Reverse-engineering follow-ups from a Genesis sports-title agent's decompress
 feedback. Genesis reference for the hang-fix (the watchdog is a core hook — it
 fans out to every core in 0.8.0); the JS-layer fixes (watchDma, previewTileArt)
 are all-platform.
@@ -1566,7 +1623,7 @@ sprite-inspection bug fix.
 ## 0.3.0
 
 The reverse-engineering / romhacking release — a full RE toolkit driven by a real
-NBA Jam Tournament Edition (Genesis) session, plus PC Engine + MSX cheat coverage
+a Genesis sports-title session, plus PC Engine + MSX cheat coverage
 and a cleaner package split.
 
 ### Added — RE / romhacking toolkit

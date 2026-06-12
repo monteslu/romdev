@@ -1,0 +1,37 @@
+{
+  "name": "romdev-analysis-decompiler",
+  "version": "0.1.0",
+  "description": "Ghidra C++ decompiler (pseudocode) for romdev, compiled to WASM, with SLEIGH specs for all 14 retro CPUs.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./wasm/*": "./wasm/*",
+    "./sleigh/*": "./sleigh/*"
+  },
+  "files": [
+    "index.js",
+    "wasm",
+    "sleigh",
+    "NOTICE",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monteslu/romdev.git",
+    "directory": "packages/romdev-analysis-decompiler"
+  },
+  "homepage": "https://github.com/monteslu/romdev#readme",
+  "bugs": {
+    "url": "https://github.com/monteslu/romdev/issues"
+  },
+  "author": "Luis Montes",
+  "scripts": {
+    "prepublishOnly": "node ../../scripts/verify-wasm.mjs"
+  }
+}

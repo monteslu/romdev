@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<processor_spec>
+  <programcounter register="PC"/>
+  
+  <volatile outputop="write" inputop="read">
+    <range space="RAM" first="0x0000" last="0x03ff"/>         <!-- VDC -->
+    <range space="RAM" first="0x0400" last="0x07ff"/>         <!-- VCE -->
+    <range space="RAM" first="0x0800" last="0x0bff"/>         <!-- PSG -->
+    <range space="RAM" first="0x0C00" last="0x0fff"/>         <!-- Timer I/O -->
+    <range space="RAM" first="0x1000" last="0x13ff"/>         <!-- Pad I/O -->
+    <range space="RAM" first="0x1400" last="0x17ff"/>         <!-- IRQ I/O -->
+    <range space="RAM" first="0x1800" last="0x19ff"/>         <!-- CD-ROM I/O -->
+  </volatile>
+  
+  <default_symbols>
+    <symbol name="VDC_ST0" address="0x0000"/>
+    <symbol name="VDC_ST1" address="0x0002"/>
+    <symbol name="VDC_ST2" address="0x0003"/>
+    <symbol name="VCE_Control" address="0x0400"/>
+    <symbol name="VCE_CTAddrL" address="0x0402"/>
+    <symbol name="VCE_CTAddrM" address="0x0403"/>
+    <symbol name="VCE_CTDataL" address="0x0404"/>
+    <symbol name="VCE_CTDataM" address="0x0405"/>
+    <symbol name="PSG_CHSel" address="0x0800"/>
+    <symbol name="PSG_AmpLev" address="0x0801"/>
+    <symbol name="PSG_FreqL" address="0x0802"/>
+    <symbol name="PSG_FreqH" address="0x0803"/>
+    <symbol name="PSG_CHOnW" address="0x0804"/>
+    <symbol name="PSG_LRVol" address="0x0805"/>
+    <symbol name="PSG_WData" address="0x0806"/>
+    <symbol name="PSG_NEnable" address="0x0807"/>
+    <symbol name="PSG_LFOFreq" address="0x0808"/>
+    <symbol name="PSG_LFOCtr" address="0x0809"/>
+    <symbol name="TMR_Reset" address="0x0C00"/>
+    <symbol name="TMR_Control" address="0x0C01"/>
+    <symbol name="PAD_IO" address="0x1000"/>
+    <symbol name="IRQ_Disable" address="0x1402"/>
+    <symbol name="IRQ_Request" address="0x1403"/>
+    <!--Only when CD System present-->
+    <symbol name="CDC_Status" address="0x1800"/>
+    <symbol name="CDC_CmdStatData" address="0x1801"/>
+    <symbol name="ADPCM_CDControl" address="0x1802"/>
+    <symbol name="BRAMLck" address="0x1803"/>
+    <symbol name="CDReset" address="0x1804"/>
+    <symbol name="ConvPCM" address="0x1805"/>
+    <symbol name="PCMData" address="0x1806"/>
+    <symbol name="BRAMUnlck" address="0x1807"/>
+    <symbol name="ADPCM_LSB" address="0x1808"/>
+    <symbol name="ADPCM_MSB" address="0x1809"/>
+    <symbol name="ADPCM_RAMData" address="0x180A"/>
+    <symbol name="ADPCM_DMAControl" address="0x180B"/>
+    <symbol name="ADPCM_Status" address="0x180C"/>
+    <symbol name="ADPCM_AdrCntr" address="0x180D"/>
+    <symbol name="ADPCM_PlyRate" address="0x180E"/>
+    <symbol name="ADPCM_FadeTmr" address="0x180F"/>
+    <symbol name="CD_BOOT" address="0xE000"/>
+    <symbol name="CD_RESET" address="0xE003"/>
+    <symbol name="CD_BASE" address="0xE006"/>
+    <symbol name="CD_READ" address="0xE009"/>
+    <symbol name="CD_SEEK" address="0xE00C"/>
+    <symbol name="CD_EXEC" address="0xE00F"/>
+    <symbol name="CD_PLAY" address="0xE012"/>
+    <symbol name="CD_SEARCH" address="0xE015"/>
+    <symbol name="CD_PAUSE" address="0xE018"/>
+    <symbol name="CD_STAT" address="0xE01B"/>
+    <symbol name="CD_SUBQ" address="0xE01E"/>
+    <symbol name="CD_DINFO" address="0xE021"/>
+    <symbol name="CD_CONTNTS" address="0xE024"/>
+    <symbol name="CD_SUBRD" address="0xE027"/>
+    <symbol name="CD_PCMRD" address="0xE02A"/>
+    <symbol name="CD_FADE" address="0xE02D"/>
+    <symbol name="AD_RESET" address="0xE030"/>
+    <symbol name="AD_TRANS" address="0xE033"/>
+    <symbol name="AD_READ" address="0xE036"/>
+    <symbol name="AD_WRITE" address="0xE039"/>
+    <symbol name="AD_PLAY" address="0xE03C"/>
+    <symbol name="AD_CPLAY" address="0xE03F"/>
+    <symbol name="AD_STOP" address="0xE042"/>
+    <symbol name="AD_STAT" address="0xE045"/>
+    <symbol name="BM_FORMAT" address="0xE048"/>
+    <symbol name="BM_FREE" address="0xE04B"/>
+    <symbol name="BM_READ" address="0xE04E"/>
+    <symbol name="BM_WRITE" address="0xE051"/>
+    <symbol name="BM_DELETE" address="0xE054"/>
+    <symbol name="BM_FILES" address="0xE057"/>
+    <symbol name="EX_GETVER" address="0xE05A"/>
+    <symbol name="EX_SETVEC" address="0xE05D"/>
+    <symbol name="EX_GETFNT" address="0xE060"/>
+    <symbol name="EX_JOYSNS" address="0xE063"/>
+    <symbol name="EX_JOYREP" address="0xE066"/>
+    <symbol name="EX_SCRSIZ" address="0xE069"/>
+    <symbol name="EX_DOTMOD" address="0xE06C"/>
+    <symbol name="EX_SCRMOD" address="0xE06F"/>
+    <symbol name="EX_IMODE" address="0xE072"/>
+    <symbol name="EX_VMODE" address="0xE075"/>
+    <symbol name="EX_HMODE" address="0xE078"/>
+    <symbol name="EX_VSYNC" address="0xE07B"/>
+    <symbol name="EX_RCRON" address="0xE07E"/>
+    <symbol name="EX_RCROFF" address="0xE081"/>
+    <symbol name="EX_IRQON" address="0xE084"/>
+    <symbol name="EX_IRQOFF" address="0xE087"/>
+    <symbol name="EX_BGON" address="0xE08A"/>
+    <symbol name="EX_BGOFF" address="0xE08D"/>
+    <symbol name="EX_SPRON" address="0xE090"/>
+    <symbol name="EX_SPROFF" address="0xE093"/>
+    <symbol name="EX_DSPON" address="0xE096"/>
+    <symbol name="EX_DSPOFF" address="0xE099"/>
+    <symbol name="EX_DMAMOD" address="0xE09C"/>
+    <symbol name="EX_SPRDMA" address="0xE09F"/>
+    <symbol name="EX_SATCLR" address="0xE0A2"/>
+    <symbol name="EX_SPRPUT" address="0xE0A5"/>
+    <symbol name="EX_SETRCR" address="0xE0A8"/>
+    <symbol name="EX_SETRED" address="0xE0AB"/>
+    <symbol name="EX_SETWRT" address="0xE0AE"/>
+    <symbol name="EX_SETDMA" address="0xE0B1"/>
+    <symbol name="EX_BINBCD" address="0xE0B4"/>
+    <symbol name="EX_BCDBIN" address="0xE0B7"/>
+    <symbol name="EX_RND" address="0xE0BA"/>
+    <symbol name="MA_MUL8U" address="0xE0BD"/>
+    <symbol name="MA_MUL8S" address="0xE0C0"/>
+    <symbol name="MA_MUL16U" address="0xE0C3"/>
+    <symbol name="MA_DIV16U" address="0xE0C6"/>
+    <symbol name="MA_DIV16S" address="0xE0C9"/>
+    <symbol name="MA_SQRT" address="0xE0CC"/>
+    <symbol name="MA_SIN" address="0xE0CF"/>
+    <symbol name="MA_COS" address="0xE0D2"/>
+    <symbol name="MA_ATNI" address="0xE0D5"/>
+    <symbol name="PSG_BIOS" address="0xE0D8"/>
+    <symbol name="GRP_BIOS" address="0xE0DB"/>
+    <symbol name="EX_MEMOPEN" address="0xE0DE"/>
+    <symbol name="PSG_FUNC" address="0xE0E1"/>
+    <symbol name="EX_COLORCMD" address="0xE0E4"/>
+    <symbol name="EX_FUNC1" address="0xE0E7"/>
+    <symbol name="EX_FUNC2" address="0xE0EA"/>
+    <symbol name="MA_MUL16S" address="0xE0ED"/>
+    <symbol name="MA_CBASIS" address="0xE0F0"/>
+    <!--Only when CD System present end-->
+    <symbol name="IRQ2" address="0xFFF6" entry="true" type="code_ptr"/>
+    <symbol name="IRQ1" address="0xFFF8" entry="true" type="code_ptr"/>
+    <symbol name="TIMER" address="0xFFFA" entry="true" type="code_ptr"/>
+    <symbol name="NMI" address="0xFFFC" entry="true" type="code_ptr"/>
+    <symbol name="RESET" address="0xFFFE" entry="true" type="code_ptr"/>
+  </default_symbols>
+  
+  <default_memory_blocks>
+    <memory_block name="ZP_RAM" start_address="0x2000" length="0x0100" initialized="false"/>
+    <memory_block name="STACK" start_address="0x2100" length="0x0100" initialized="false"/>
+  </default_memory_blocks>
+</processor_spec>
