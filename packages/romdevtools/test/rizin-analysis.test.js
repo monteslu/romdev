@@ -80,6 +80,34 @@ test("Ghidra decompiler: NES function → C pseudocode", async () => {
   assert.ok(typeof dec.qualityNote === "string", "carries a per-platform quality note");
 }, { timeout: 120000 });
 
+test("RE engine: flat-map platforms force file-offset == CPU-address (the +0x200 Genesis decompile-shift bug)", async () => {
+  // Regression for the 0.40.0 bug: Rizin's Mega Drive loader splits a flat .bin
+  // into vtable/header/text segments and reports delta=0x200 on the code
+  // segment, so vaMapping returned paddr = vaddr-0x200 and the decompiler
+  // returned the WRONG function. Genesis carts map 1:1 (file offset == CPU
+  // address) — the fix forces identity for flat-map platforms.
+  const { vaMapping, FLAT_CPU_MAP } = await import("../src/analysis/analyze.js");
+
+  // Flat-cartridge platforms must map file offset == CPU address (delta 0),
+  // EVEN THOUGH Rizin's opinionated loaders may report a non-zero segment
+  // delta. The Mega Drive loader splits a flat .bin into vtable/header/text and
+  // reports delta=0x200 on the code segment; the bug was that vaMapping
+  // honored that delta, so a code vaddr resolved to vaddr-0x200 (the WRONG
+  // function). The fix forces identity for these platforms.
+  assert.ok(FLAT_CPU_MAP.has("genesis"), "genesis must be a flat-CPU-map platform");
+  const bytes = new Uint8Array(16);
+  for (const p of ["genesis", "sms", "gg", "msx", "gb", "gbc"]) {
+    const arch = p === "genesis" ? "m68k" : p === "msx" || p === "sms" || p === "gg" ? "z80" : "gb";
+    const { paddr, vbase } = await vaMapping(bytes, arch, undefined, 0x2a75d2, p);
+    assert.equal(paddr, 0x2a75d2, `${p}: flat map must keep paddr == vaddr (no Rizin delta shift)`);
+    assert.equal(vbase, 0, `${p}: flat map base must be 0`);
+  }
+
+  // And a non-flat platform (NES, banked, goes through forcedBase/Rizin map)
+  // must NOT be forced — its mapping path stays active.
+  assert.ok(!FLAT_CPU_MAP.has("nes"), "nes is not a flat-map platform (uses the Rizin/forcedBase path)");
+}, { timeout: 60000 });
+
 test("Ghidra decompiler: SLEIGH language id for every platform", async () => {
   const { SLEIGH_LANGID } = await import("../src/analysis/decompile.js");
   const all = ["nes", "snes", "genesis", "sms", "gg", "gb", "gbc", "gba",

@@ -178,7 +178,20 @@ export async function analyzeStructure(romPath, platformOverride) {
  * entry carries {from (vaddr base), delta (vaddr-paddr), to}. Returns
  * { paddr, vbase } where paddr = vaddr-delta is the raw-file offset and vbase
  * (= delta) is the address byte 0 of the file maps to on the CPU bus. */
-async function vaMapping(romBytes, arch, bits, vaddr) {
+/** Platforms whose cartridge maps 1:1 to the CPU bus (file offset == CPU
+ * address, base 0). For these we DISTRUST Rizin's IO-map delta: some of Rizin's
+ * loaders (notably the Mega Drive loader) split the image into vtable/header/
+ * text SEGMENTS and report a non-zero delta on the code segment (e.g. 0x200 for
+ * Genesis), but the raw file we hand the decompiler loads flat at VMA 0 — so the
+ * vaddr IS the file offset and any delta is a lie for our purposes. Forcing
+ * identity here fixes the "+0x200 shifted decompile" bug (a code vaddr would
+ * otherwise resolve to vaddr-0x200, the WRONG function). */
+export const FLAT_CPU_MAP = new Set(["genesis", "sms", "gg", "msx", "gb", "gbc"]);
+
+export async function vaMapping(romBytes, arch, bits, vaddr, platform) {
+  // Flat-cartridge platforms: file offset == CPU address. Ignore Rizin's
+  // segment deltas entirely.
+  if (FLAT_CPU_MAP.has(platform)) return { paddr: vaddr, vbase: 0 };
   let maps;
   try {
     maps = await runRizinJson({ romBytes, arch, bits, commands: "omlj" });
@@ -208,7 +221,7 @@ export async function analyzeDecompile(romPath, address, platformOverride) {
   // decompiler's job via SLEIGH) — its flat image bases at 0 either way.
   const arch = RIZIN_ARCH[platform] ?? "6502";
   const bits = { arm: 32, m68k: 32, snes: 16 }[arch];
-  const { paddr, vbase } = await vaMapping(romBytes, arch, bits, address);
+  const { paddr, vbase } = await vaMapping(romBytes, arch, bits, address, platform);
   if (paddr < 0 || paddr >= romBytes.length) {
     throw new Error(
       `decompile: address ${hx(address)} maps to file offset ${paddr}, outside the ` +
