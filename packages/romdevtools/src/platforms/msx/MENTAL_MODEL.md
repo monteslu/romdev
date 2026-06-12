@@ -150,3 +150,9 @@ the emulator core** to expose the extra register/VRAM regions, then wiring a
 decoder. To add deep introspection to ColecoVision (or any thin platform),
 follow the existing core-patch pattern used for snes9x / gpgx / fceumm / vice
 under **`scripts/patches/`**.
+
+## Reverse-engineering & decompilation
+
+The Rizin/Ghidra analysis engine works here like everywhere: `disasm({target:'functions'})` to carve the program, `disasm({target:'cfg'|'xrefs'})` to trace it, `symbols({op:'analyze'})` for a one-shot structural map.
+
+**Decompiler quality on Z80: GOOD.** Register-rich hand asm decompiles cleanly at the block level. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. See the cross-platform ROM-hacking playbook §5f for the full loop.

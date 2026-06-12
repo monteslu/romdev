@@ -110,3 +110,9 @@ screen. Keep at least one (2+ byte) global. See TROUBLESHOOTING.md.
   PCE asm toolchain IS cc65/ca65 — a **one-call byte-identical `build()`
   rebuild** via `rebuild.json` (flat and banked; a 512-byte copier header is
   split out and re-emitted as a HEADER segment).
+
+## Reverse-engineering & decompilation
+
+The Rizin/Ghidra analysis engine works here like everywhere: `disasm({target:'functions'})` to carve the program, `disasm({target:'cfg'|'xrefs'})` to trace it, `symbols({op:'analyze'})` for a one-shot structural map.
+
+**Decompiler quality on HuC6280: MEDIUM.** The Ghidra HuC6280 SLEIGH covers all custom opcodes + MPR banking; pseudocode is usable. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. See the cross-platform ROM-hacking playbook §5f for the full loop.

@@ -1,0 +1,377 @@
+diff --git a/librz/cons/cons.c b/librz/cons/cons.c
+index 72a9d7c..1406365 100644
+--- a/librz/cons/cons.c
++++ b/librz/cons/cons.c
+@@ -148,6 +148,19 @@ static void __break_signal(int sig) {
+ }
+ 
+ static inline void __cons_write_ll(const char *buf, int len) {
++#ifdef __EMSCRIPTEN__
++	/* Honor rizin's own file-descriptor redirection (`cmd > file` sets
++	 * I.fdout to the file's fd). Only divert to stdout when fdout is the
++	 * console (1 or unset). write(1,...) under emscripten is line-buffered,
++	 * so partial flushes at the 64KB cons boundary don't inject a stray
++	 * newline mid-token — which a per-chunk Module.print would. */
++	if (I.fdout > 1) {
++		rz_xwrite(I.fdout, buf, len);
++	} else {
++		rz_xwrite(1, buf, len);
++	}
++	return;
++#endif
+ #if __WINDOWS__
+ 	if (I.vtmode != RZ_VIRT_TERM_MODE_DISABLE) {
+ 		rz_xwrite(I.fdout, buf, len);
+diff --git a/librz/include/rz_emscripten_thread_stubs.h b/librz/include/rz_emscripten_thread_stubs.h
+new file mode 100644
+index 0000000..a2c70a4
+--- /dev/null
++++ b/librz/include/rz_emscripten_thread_stubs.h
+@@ -0,0 +1,33 @@
++/**
++ * @file rz_emscripten_thread_stubs.h
++ * @brief Type stubs for single-threaded WASM builds
++ */
++
++#ifndef RZ_EMSCRIPTEN_THREAD_STUBS_H
++#define RZ_EMSCRIPTEN_THREAD_STUBS_H
++
++#ifdef __EMSCRIPTEN__
++
++#include <stdbool.h>
++
++typedef int RZ_TH_TID;
++typedef int RZ_TH_LOCK_T;
++typedef int RZ_TH_COND_T;
++typedef int RZ_TH_SEM_T;
++typedef void* RZ_TH_RET_T;
++#define RZ_TH_LOCAL
++
++typedef void *(*RzThreadFunction)(void *user);
++
++struct rz_th_t {
++	RZ_TH_TID tid;
++	RzThreadFunction function;
++	void *user;
++	void *retv;
++	bool breaked;
++	bool terminated;
++};
++
++#endif
++
++#endif
+diff --git a/librz/include/rz_heap_jemalloc.h b/librz/include/rz_heap_jemalloc.h
+index 5ab89b5..11a54a8 100644
+--- a/librz/include/rz_heap_jemalloc.h
++++ b/librz/include/rz_heap_jemalloc.h
+@@ -1,7 +1,9 @@
+ #ifndef RZ_HEAP_JEMALLOC_H
+ #define RZ_HEAP_JEMALLOC_H
+ 
++#ifndef __EMSCRIPTEN__
+ #include <rz_jemalloc/internal/jemalloc_internal.h>
++#endif
+ 
+ #define INC_HEAP32 1
+ #include "rz_heap_jemalloc.h"
+diff --git a/librz/io/p/io_shm.c b/librz/io/p/io_shm.c
+index 43f5068..6081884 100644
+--- a/librz/io/p/io_shm.c
++++ b/librz/io/p/io_shm.c
+@@ -7,7 +7,7 @@
+ 
+ #include "rz_io_plugins.h"
+ 
+-#if HAVE_HEADER_LINUX_ASHMEM_H || HAVE_HEADER_SYS_SHM_H || __WINDOWS__
++#if !defined(__EMSCRIPTEN__) && HAVE_HEADER_LINUX_ASHMEM_H || HAVE_HEADER_SYS_SHM_H || __WINDOWS__
+ #if HAVE_HEADER_LINUX_ASHMEM_H
+ #include <linux/ashmem.h>
+ #endif
+diff --git a/librz/util/sys.c b/librz/util/sys.c
+index 4522a13..8f06388 100644
+--- a/librz/util/sys.c
++++ b/librz/util/sys.c
+@@ -1,3 +1,6 @@
++#ifdef __EMSCRIPTEN__
++#include <emscripten.h>
++#endif
+ // SPDX-FileCopyrightText: 2009-2020 pancake <pancake@nopcode.org>
+ // SPDX-License-Identifier: LGPL-3.0-only
+ 
+@@ -49,16 +52,20 @@ static char **env = NULL;
+ #include <sys/sysctl.h>
+ #endif /* defined(__FreeBSD__) || defined(__DragonFly__) */
+ 
+-#if HAVE_BACKTRACE
++#if HAVE_BACKTRACE && !defined(__EMSCRIPTEN__)
++#ifndef __EMSCRIPTEN__
+ #include <execinfo.h>
++#endif
+ #endif /* HAVE_BACKTRACE */
+ 
+ #if __APPLE__
+ #include <errno.h>
+ 
+ #if HAVE_ENVIRON
++#ifndef __EMSCRIPTEN__
+ #include <execinfo.h>
+ #endif
++#endif
+ 
+ // iOS don't have this we can't hardcode
+ // #include <crt_externs.h>
+@@ -330,7 +337,7 @@ RZ_API char *rz_sys_cmd_strf(const char *fmt, ...) {
+  * \brief Print the backtrace at the point this function is called from.
+  */
+ RZ_API void rz_sys_backtrace(void) {
+-#if HAVE_BACKTRACE
++#if HAVE_BACKTRACE && !defined(__EMSCRIPTEN__)
+ 	void *array[10];
+ 	size_t size = backtrace(array, 10);
+ 	eprintf("Backtrace %zd stack frames.\n", size);
+@@ -528,7 +535,7 @@ RZ_API int rz_sys_crash_handler(const char *cmd) {
+ 	if (!checkcmd(cmd)) {
+ 		return false;
+ 	}
+-#if HAVE_BACKTRACE
++#if HAVE_BACKTRACE && !defined(__EMSCRIPTEN__)
+ 	void *array[1];
+ 	/* call this outside of the signal handler to init it safely */
+ 	backtrace(array, 1);
+diff --git a/librz/util/thread.c b/librz/util/thread.c
+index 7cc16be..9cee91e 100644
+--- a/librz/util/thread.c
++++ b/librz/util/thread.c
+@@ -27,6 +27,8 @@ RZ_IPI RZ_TH_TID rz_th_self(void) {
+ 	return pthread_self();
+ #elif __WINDOWS__
+ 	return GetCurrentThread();
++#elif defined(__EMSCRIPTEN__)
++	return (RZ_TH_TID)0;
+ #else
+ #pragma message("Not implemented on this platform")
+ 	return (RZ_TH_TID)-1;
+@@ -215,6 +217,10 @@ RZ_API RZ_OWN RzThread *rz_th_new(RZ_NONNULL RzThreadFunction function, RZ_NULLA
+ 	if ((th->tid = CreateThread(NULL, 0, thread_main_function, th, 0, 0))) {
+ 		return th;
+ 	}
++#elif defined(__EMSCRIPTEN__)
++	/* Emscripten: Defer execution to rz_th_wait (single-threaded mode) */
++	th->terminated = false;
++	return th;
+ #endif
+ 	RZ_LOG_ERROR("thread: Failed to start the RzThread\n");
+ 	free(th);
+@@ -235,6 +241,13 @@ RZ_API bool rz_th_wait(RZ_NONNULL RzThread *th) {
+ 	return pthread_join(th->tid, &thret) == 0;
+ #elif __WINDOWS__
+ 	return WaitForSingleObject(th->tid, INFINITE) == 0; // WAIT_OBJECT_0
++#elif defined(__EMSCRIPTEN__)
++	/* Emscripten: Execute callback now (deferred from rz_th_new) */
++	if (!th->terminated) {
++		th->retv = th->function(th->user);
++		th->terminated = true;
++	}
++	return true;
+ #endif
+ }
+ 
+diff --git a/librz/util/thread.h b/librz/util/thread.h
+index 4a49f6a..d5fa22e 100644
+--- a/librz/util/thread.h
++++ b/librz/util/thread.h
+@@ -46,8 +46,12 @@
+ #define RZ_TH_SEM_T  sem_t *
+ #define RZ_TH_RET_T  void *
+ #else
++#ifdef __EMSCRIPTEN__
++#include <rz_emscripten_thread_stubs.h>
++#else
+ #error Threading library only supported for pthread and w32
+ #endif
++#endif
+ 
+ #if __APPLE__
+ // Here to avoid polluting mach types macro redefinitions...
+@@ -81,12 +85,14 @@ struct rz_th_cond_t {
+ 	RZ_TH_COND_T cond;
+ };
+ 
++#ifndef __EMSCRIPTEN__
+ struct rz_th_t {
+ 	RZ_TH_TID tid; ///< Thread identifier.
+ 	RzThreadFunction function; ///< User defined thread function.
+ 	void *user; ///< User defined thread data to pass (can be NULL).
+ 	void *retv; ///< Thread return value.
+ };
++#endif
+ 
+ RZ_IPI RZ_TH_TID rz_th_self(void);
+ 
+diff --git a/librz/util/thread_cond.c b/librz/util/thread_cond.c
+index 673ee94..a121f4e 100644
+--- a/librz/util/thread_cond.c
++++ b/librz/util/thread_cond.c
+@@ -22,6 +22,8 @@ RZ_API RZ_OWN RzThreadCond *rz_th_cond_new(void) {
+ 	}
+ #elif __WINDOWS__
+ 	InitializeConditionVariable(&cond->cond);
++#elif defined(__EMSCRIPTEN__)
++	/* Single-threaded: no condition var init needed */
+ #endif
+ 	return cond;
+ }
+@@ -37,6 +39,8 @@ RZ_API void rz_th_cond_signal(RZ_NONNULL RzThreadCond *cond) {
+ 	pthread_cond_signal(&cond->cond);
+ #elif __WINDOWS__
+ 	WakeConditionVariable(&cond->cond);
++#elif defined(__EMSCRIPTEN__)
++	/* Single-threaded: no-op */
+ #endif
+ }
+ 
+@@ -51,6 +55,8 @@ RZ_API void rz_th_cond_signal_all(RZ_NONNULL RzThreadCond *cond) {
+ 	pthread_cond_broadcast(&cond->cond);
+ #elif __WINDOWS__
+ 	WakeAllConditionVariable(&cond->cond);
++#elif defined(__EMSCRIPTEN__)
++	/* Single-threaded: no-op */
+ #endif
+ }
+ 
+@@ -66,6 +72,8 @@ RZ_API void rz_th_cond_wait(RZ_NONNULL RzThreadCond *cond, RZ_NONNULL RzThreadLo
+ 	pthread_cond_wait(&cond->cond, &lock->lock);
+ #elif __WINDOWS__
+ 	SleepConditionVariableCS(&cond->cond, &lock->lock, INFINITE);
++#elif defined(__EMSCRIPTEN__)
++	/* Single-threaded: no-op */
+ #endif
+ }
+ 
+@@ -80,6 +88,8 @@ RZ_API void rz_th_cond_free(RZ_NULLABLE RzThreadCond *cond) {
+ 	}
+ #if HAVE_PTHREAD
+ 	pthread_cond_destroy(&cond->cond);
++#elif defined(__EMSCRIPTEN__)
++	/* Single-threaded: no-op */
+ #endif
+ 	free(cond);
+ }
+diff --git a/librz/util/thread_lock.c b/librz/util/thread_lock.c
+index cb436cc..8a1de28 100644
+--- a/librz/util/thread_lock.c
++++ b/librz/util/thread_lock.c
+@@ -48,6 +48,8 @@ RZ_API void rz_th_lock_enter(RZ_NONNULL RzThreadLock *thl) {
+ 	pthread_mutex_lock(&thl->lock);
+ #elif __WINDOWS__
+ 	EnterCriticalSection(&thl->lock);
++#elif defined(__EMSCRIPTEN__)
++	/* Single-threaded: no-op */
+ #endif
+ }
+ 
+@@ -64,6 +66,8 @@ RZ_API bool rz_th_lock_tryenter(RZ_NONNULL RzThreadLock *thl) {
+ 	return !pthread_mutex_trylock(&thl->lock);
+ #elif __WINDOWS__
+ 	return TryEnterCriticalSection(&thl->lock);
++#elif defined(__EMSCRIPTEN__)
++	return true; /* Single-threaded: always succeed */
+ #endif
+ }
+ 
+@@ -78,6 +82,8 @@ RZ_API void rz_th_lock_leave(RZ_NONNULL RzThreadLock *thl) {
+ 	pthread_mutex_unlock(&thl->lock);
+ #elif __WINDOWS__
+ 	LeaveCriticalSection(&thl->lock);
++#elif defined(__EMSCRIPTEN__)
++	/* Single-threaded: no-op */
+ #endif
+ }
+ 
+@@ -94,6 +100,8 @@ RZ_API void rz_th_lock_free(RZ_NULLABLE RzThreadLock *thl) {
+ 	pthread_mutex_destroy(&thl->lock);
+ #elif __WINDOWS__
+ 	DeleteCriticalSection(&thl->lock);
++#elif defined(__EMSCRIPTEN__)
++	/* Single-threaded: no-op */
+ #endif
+ 	free(thl);
+ }
+diff --git a/librz/util/thread_pool.c b/librz/util/thread_pool.c
+index 5a894bc..a70a4ce 100644
+--- a/librz/util/thread_pool.c
++++ b/librz/util/thread_pool.c
+@@ -21,7 +21,10 @@ struct rz_th_pool_t {
+  * \return     The number of available physical cores (always >= 1)
+  */
+ RZ_API RzThreadNCores rz_th_physical_core_number() {
+-#ifdef __WINDOWS__
++#if defined(__EMSCRIPTEN__)
++	/* Emscripten: single-threaded, always return 1 */
++	return 1;
++#elif defined(__WINDOWS__)
+ 	SYSTEM_INFO sysinfo;
+ 	GetSystemInfo(&sysinfo);
+ 	return (RzThreadNCores)sysinfo.dwNumberOfProcessors;
+diff --git a/librz/util/thread_sem.c b/librz/util/thread_sem.c
+index 6b45798..bbdb291 100644
+--- a/librz/util/thread_sem.c
++++ b/librz/util/thread_sem.c
+@@ -62,6 +62,8 @@ RZ_API RZ_OWN RzThreadSemaphore *rz_th_sem_new(unsigned int initial) {
+ 		free(sem);
+ 		return NULL;
+ 	}
++#elif defined(__EMSCRIPTEN__)
++	/* Single-threaded: no semaphore init needed */
+ #endif
+ 	return sem;
+ }
+@@ -86,6 +88,8 @@ RZ_API void rz_th_sem_free(RZ_NULLABLE RzThreadSemaphore *sem) {
+ 	}
+ #elif __WINDOWS__
+ 	CloseHandle(sem->sem);
++#elif defined(__EMSCRIPTEN__)
++	/* Single-threaded: no-op */
+ #endif
+ 	free(sem);
+ }
+@@ -101,6 +105,8 @@ RZ_API void rz_th_sem_post(RZ_NONNULL RzThreadSemaphore *sem) {
+ 	sem_post(sem->sem);
+ #elif __WINDOWS__
+ 	ReleaseSemaphore(sem->sem, 1, NULL);
++#elif defined(__EMSCRIPTEN__)
++	/* Single-threaded: no-op */
+ #endif
+ }
+ 
+@@ -116,5 +122,7 @@ RZ_API void rz_th_sem_wait(RZ_NONNULL RzThreadSemaphore *sem) {
+ 		;
+ #elif __WINDOWS__
+ 	WaitForSingleObject(sem->sem, INFINITE);
++#elif defined(__EMSCRIPTEN__)
++	/* Single-threaded: no-op */
+ #endif
+ }
+diff --git a/meson.build b/meson.build
+index 05e9f81..0d2f349 100644
+--- a/meson.build
++++ b/meson.build
+@@ -326,7 +326,7 @@ rizin_grammar_c_dep = rizin_grammar_c_proj.get_variable('rizin_grammar_c_dep')
+ # override done in rizin-grammar-c subproject
+ 
+ has_debugger = get_option('debugger')
+-have_ptrace = not ['windows', 'cygwin', 'sunos', 'haiku'].contains(host_machine.system())
++have_ptrace = not ['windows', 'cygwin', 'sunos', 'haiku', 'emscripten'].contains(host_machine.system())
+ use_ptrace_wrap = ['linux'].contains(host_machine.system())
+ 
+ have_ptrace = have_ptrace and has_debugger
+@@ -370,7 +370,7 @@ foreach it : ccs
+   if not it_cc.has_function('clock_gettime', prefix: '#include <time.h>') and it_cc.has_header_symbol('features.h', '__GLIBC__')
+     it_lrt = it_cc.find_library('rt', required: true, static: is_static_build)
+   endif
+-  have_lrt = not ['windows', 'darwin', 'openbsd', 'android', 'haiku'].contains(it_machine.system())
++  have_lrt = not ['windows', 'darwin', 'openbsd', 'android', 'haiku', 'emscripten'].contains(it_machine.system())
+   if have_lrt and not it_lrt.found()
+     it_lrt = it_cc.find_library('rt', required: true, static: is_static_build)
+   endif

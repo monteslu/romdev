@@ -1,6 +1,6 @@
 /* ── tile_engine.c — NES starter with a tile map + multiple rooms ──
  *
- * Single-screen-per-room layout (Adventure / Zelda-1 / Sokoban shape).
+ * Single-screen-per-room layout (top-down dungeon-crawler / room-puzzle shape).
  *   - 32×30 BG nametable rendered from a `room[]` array
  *   - Walk a sprite around with the d-pad
  *   - Crossing the screen edge transitions to the next room

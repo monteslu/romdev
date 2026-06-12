@@ -4,21 +4,30 @@
 // Cores already expose RETRO_MEMORY_SAVE_RAM (verified by source) — these tests
 // cover the JS fold + the honest "no battery save" path.
 
-import { test } from "node:test";
+import { test, before } from "node:test";
 import assert from "node:assert/strict";
-import { readFile, rm } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { resolveCore } from "../src/cores/registry.js";
 import { LibretroHost } from "../src/host/LibretroHost.js";
 import { identifyFile } from "../src/rom-id/identifier.js";
-import { NES_BATTERY_ROM, A7800_HOMEBREW } from "./rom-fixtures.js";
+import { buildExampleRom } from "./build-fixture-rom.js";
 
-// Optional external ROM with a battery (real NES RPG). See test/rom-fixtures.js.
-const DW = NES_BATTERY_ROM;
+// A battery-SRAM NES cart built from our OWN example: the example already sets
+// the iNES battery bit (flags6 bit 1), so the core exposes a real 8KB SAVE_RAM
+// region. No external/commercial ROM needed — these run unconditionally.
+let DW;
+before(async () => {
+  const base = await readFile(await buildExampleRom("nes"));
+  const rom = Buffer.from(base);
+  rom[6] |= 0x02; // ensure the battery bit is set
+  DW = path.join(tmpdir(), `sram-battery-${process.pid}.nes`);
+  await writeFile(DW, rom);
+});
 
-test("cart identify reports saveRam.hasBattery + bytes (NES battery cart)", { skip: !DW }, async () => {
+test("cart identify reports saveRam.hasBattery + bytes (battery NES cart)", async () => {
   const id = await identifyFile(DW);
   assert.ok(id.saveRam, "no saveRam field");
   assert.equal(id.saveRam.hasBattery, true);
@@ -26,7 +35,7 @@ test("cart identify reports saveRam.hasBattery + bytes (NES battery cart)", { sk
 });
 
 test("identify: a non-battery NES (password) cart reports saveRam.hasBattery=false", async () => {
-  // synthetic iNES header: flags6 with the battery bit CLEAR (like Metroid)
+  // synthetic iNES header: flags6 with the battery bit CLEAR (a non-battery cart)
   const b = Buffer.alloc(16 + 16384 + 8192);
   b[0]=0x4e;b[1]=0x45;b[2]=0x53;b[3]=0x1a;b[4]=1;b[5]=1;b[6]=0x10; // mapper1, no battery
   const { identifyBytes } = await import("../src/rom-id/identifier.js");
@@ -36,7 +45,7 @@ test("identify: a non-battery NES (password) cart reports saveRam.hasBattery=fal
   assert.equal(id.saveRam.bytes, 0);
 });
 
-test("SAVE_RAM live read/write + exportSram→importSram round-trip (NES battery)", { timeout: 120000, skip: !DW }, async () => {
+test("SAVE_RAM live read/write + exportSram→importSram round-trip (NES battery)", { timeout: 120000 }, async () => {
   const core = resolveCore("nes");
   const host = new LibretroHost();
   await host.loadCore(core.jsPath, core.wasmPath);
@@ -44,7 +53,7 @@ test("SAVE_RAM live read/write + exportSram→importSram round-trip (NES battery
   for (let i = 0; i < 60; i++) host.stepFrames(1);
 
   const size = host.regionSize("save_ram");
-  assert.equal(size, 8192, "DW SAVE_RAM should be 8192");
+  assert.equal(size, 8192, "battery cart SAVE_RAM should be 8192");
 
   // live write/read
   const before = host.readMemory("save_ram", 0, 1)[0];
@@ -67,8 +76,7 @@ test("SAVE_RAM live read/write + exportSram→importSram round-trip (NES battery
 });
 
 test("empty save_ram gives an HONEST message on a no-battery system (atari7800)", { timeout: 60000 }, async () => {
-  const a78 = A7800_HOMEBREW;
-  if (!a78) return;
+  const a78 = await buildExampleRom("atari7800");
   const core = resolveCore("atari7800");
   const host = new LibretroHost();
   await host.loadCore(core.jsPath, core.wasmPath);

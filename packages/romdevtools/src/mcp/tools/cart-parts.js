@@ -407,10 +407,12 @@ export async function extractCartCore({ path: romPath, platform, outputDir, inli
  *   mirror   — "horizontal" | "vertical" | "four-screen" (default horizontal)
  *   prgBanks — count of 16KB banks (default infer from prgPath size)
  *   chrBanks — count of 8KB banks (default infer; 0 for CHR-RAM)
+ *   hasBattery — battery-backed SRAM (iNES flags6 bit 1); preserved on round-trip
  */
-function wrapNes({ prgPath, chrPath, mapper, mirror, prgBanks, chrBanks }) {
+function wrapNes({ prgPath, chrPath, mapper, mirror, prgBanks, chrBanks, hasBattery }) {
   const m = mapper ?? 0;
   const mirrorFlag = mirror === "vertical" ? 1 : mirror === "four-screen" ? 8 : 0;
+  const batteryFlag = hasBattery ? 0x02 : 0;
   const prg = prgPath;
   const chr = chrPath ?? null;
 
@@ -445,7 +447,7 @@ function wrapNes({ prgPath, chrPath, mapper, mirror, prgBanks, chrBanks }) {
   .byte $4E, $45, $53, $1A     ; "NES\\x1a"
   .byte $${banks.toString(16).toUpperCase().padStart(2, "0")}    ; PRG-ROM banks (16KB each)
   .byte $${chrBanksNum.toString(16).toUpperCase().padStart(2, "0")}    ; CHR-ROM banks (8KB each; 0 = CHR-RAM)
-  .byte ${hex2((m << 4 | mirrorFlag) & 0xFF)}    ; mapper-lo + mirroring
+  .byte ${hex2((m << 4 | mirrorFlag | batteryFlag) & 0xFF)}    ; mapper-lo + mirroring + battery
   .byte ${hex2(m & 0xF0)}    ; mapper-hi + NES 2.0 flags
   .byte $00, $00, $00, $00, $00, $00, $00, $00
 
@@ -682,6 +684,7 @@ export function registerCartPartsTools(server, z) {
       mirror: z.enum(["horizontal", "vertical", "four-screen"]).optional().describe("op=wrap NES: nametable mirroring."),
       prgBanks: z.number().int().min(1).max(255).optional().describe("op=wrap NES: PRG bank count (16KB each); only 1 (NROM-128) or 2 (NROM-256) supported, default 1."),
       chrBanks: z.number().int().min(0).max(255).optional().describe("op=wrap NES: CHR bank count (8KB each); 0 = CHR-RAM."),
+      hasBattery: z.boolean().optional().describe("op=wrap NES: set the iNES battery-backed-SRAM flag (flags6 bit 1). Pass the value from extractCart's manifest.hasBattery for a byte-exact round-trip."),
       // wrap — SNES
       romPath: z.string().optional().describe("op=wrap SNES/SMS/GG/Atari 2600/Atari 7800/C64: whole-ROM body for a one-shot incbin (skips the per-part paths)."),
       copierHeaderPath: z.string().optional().describe("op=wrap SNES: path to a 512B copier header to prepend."),

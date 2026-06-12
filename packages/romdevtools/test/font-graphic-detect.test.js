@@ -1,4 +1,4 @@
-// learnFontMap pre-rendered-graphic detection (the NBA Jam name-bitmap trap).
+// learnFontMap pre-rendered-graphic detection (the pre-rendered-name-bitmap trap).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { detectPreRenderedGraphic } from "../src/mcp/tools/font-map.js";

@@ -1,6 +1,6 @@
 /* ── two_plane_parallax.c — Genesis SGDK two-plane parallax scaffold ──
  *
- * The "Uridium / Sonic-feel" starting point: a side-scrolling world that
+ * A smooth-scrolling side-scroller starting point: a side-scrolling world that
  * moves SMOOTHLY because the frame loop does HARDWARE SCROLL ONLY. There
  * are ZERO tilemap writes inside the loop — the two planes are painted
  * ONCE at setup, and every frame we just nudge two scroll registers and
@@ -30,11 +30,11 @@
  * plane — you don't get an independent per-plane size. See the Genesis
  * MENTAL_MODEL.md "Scrolling, parallax & the feel trap".
  *
- * To go WIDER than 512 px (a true Sonic-size level) you keep this exact
+ * To go WIDER than 512 px (a large multi-screen level) you keep this exact
  * loop and add ONE thing: stream the single offscreen column that's about
  * to scroll into view each time the camera crosses an 8-px tile boundary
  * (a circular buffer in the 64-cell plane) — NOT a whole-plane redraw.
- * See MENTAL_MODEL.md "How Sonic-style large maps really work".
+ * See MENTAL_MODEL.md "How large scrolling maps REALLY work".
  */
 
 #include <genesis.h>
@@ -94,7 +94,7 @@ int main(bool hard) {
     (void)hard;
 
     /* Palettes (BGR, 3 bits/chan). PAL0 = sprite, PAL1 = planes. */
-    PAL_setColor(0 +  5, 0x008E);  /* player orange (Uridium-ish) */
+    PAL_setColor(0 +  5, 0x008E);  /* player orange */
     PAL_setColor(16 + 1, 0x0A86);  /* ground top   (light)  */
     PAL_setColor(16 + 2, 0x0530);  /* ground body  (dark)   */
     PAL_setColor(16 + 3, 0x0CCC);  /* block edge   (white)  */

@@ -10,6 +10,7 @@
 import { writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { jsonContent, safeTool, writeOutput } from "../util.js";
+import { analyzeStructure } from "../../analysis/analyze.js";
 import { addressToSymbolCore } from "./address-to-symbol.js";
 
 // Tail length kept inline when a big log is written to a sibling file.
@@ -459,7 +460,7 @@ function registerSymbolsTool(server, z) {
     "Auto-detects GNU ld (Genesis/m68k + GBA/ARM), sdld (`XXXX  _name`, GB/GBC/SMS/GG/MSX), and ld65 VICE " +
     "(`al XXXX .name`, cc65/dasm).",
     {
-      op: z.enum(["resolve", "lookup", "map", "list", "addr"]).describe("resolve name→addr; lookup addr→sym; map = layout by region; list all; addr = PC→nearest symbol."),
+      op: z.enum(["resolve", "lookup", "map", "list", "addr", "analyze"]).describe("resolve name→addr; lookup addr→sym; map = layout by region; list all; addr = PC→nearest symbol; analyze = Rizin structural map of a ROM (no .dbg/.map needed — auto-detected functions + strings + entrypoints)."),
       dbg: z.string().optional().describe("op=resolve/lookup/list/map: cc65 .dbg text from build({output:'romWithDebug'}) (NES/C64/Atari7800/Lynx/PCE). Pass this OR `map`/`dbgPath`/`mapPath`."),
       map: z.string().optional().describe("op=resolve/lookup/list/map: .map text (build's `mapText`/`symbols`) — auto-detects sdld (GB/GBC/SMS/GG/MSX) vs GNU ld (Genesis/m68k). Pass this OR `dbg`/`dbgPath`/`mapPath`."),
       dbgPath: z.string().optional().describe("op=resolve/lookup/list/map: ABSOLUTE path to a cc65 .dbg on disk (the `dbgPath` build({output:'romWithDebug'}) returned). Server reads it — the map never enters your context. Inline `dbg` wins if both passed."),
@@ -472,11 +473,16 @@ function registerSymbolsTool(server, z) {
       pc: z.number().int().min(0).max(0xFFFFFF).optional().describe("op=addr: CPU address to look up (e.g. 0x01A7)."),
       symbolsText: z.string().optional().describe("op=addr: inline .map/.sym text (build's `symbols`). Takes precedence over symbolsPath."),
       symbolsPath: z.string().optional().describe("op=addr: path to a .map/.sym file (used only if symbolsText absent)."),
+      // analyze
+      romPath: z.string().optional().describe("op=analyze: ABSOLUTE path to the ROM file to structurally map via Rizin."),
     },
     safeTool(async (args) => {
-      // dbgPath/mapPath → read the .dbg/.map TEXT off disk so resolve/lookup/map/
-      // list work without the agent ever loading the map into context. (addr has
-      // its own symbolsPath handling.)
+      // op=analyze and op=addr don't take a .dbg/.map source. Everything else
+      // resolves dbgPath/mapPath → text off disk so the map never enters context.
+      if (args.op === "analyze") {
+        if (!args.romPath) throw new Error("symbols op='analyze' requires `romPath` (the ROM file).");
+        return jsonContent(await analyzeStructure(args.romPath, args.platform));
+      }
       const a = args.op === "addr" ? args : { ...args, ...(await loadDebugSource(args)) };
       switch (a.op) {
         case "resolve": return jsonContent(await resolveSymbolCore(a));

@@ -10,7 +10,7 @@ That's the whole setup. Everything — emulators, assemblers, C compilers, start
 
 ## Features
 
-A coding agent connects over [MCP](https://modelcontextprotocol.io/) and gets a tool surface for the full homebrew loop:
+You (or your coding assistant, over [MCP](https://modelcontextprotocol.io/) / plain HTTP) get a tool surface for the full homebrew loop:
 
 - **Building** — bundled per-platform toolchains (cc65, SDCC, RGBDS, asar, vasm, SGDK, PVSnesLib, libtonc, …) compiled to WebAssembly. The agent writes source, compiles it, and gets a real ROM.
 - **Asset conversion** — turn external art and audio into native data without leaving the server: PNG → platform tiles/tilemaps (`convertImageToTiles`, `imageToTilemap` — row-major or hardware sprite order), PNG quantize-to-palette, sprite-sheet/Aseprite/GIF loaders, and audio importers (`pcmToBrr` for SNES, `wavToXgm2Pcm` for Genesis XGM2 PCM). Path-in, native-data-out.
@@ -19,6 +19,7 @@ A coding agent connects over [MCP](https://modelcontextprotocol.io/) and gets a 
 - **Driving** — emit controller input, run input scripts, replay sequences.
 - **Inspecting** — read CPU/video/save RAM, watch memory, disassemble, inspect sprites/palettes/tilemaps, read CPU + sound-chip state.
 - **Reverse-engineering & romhacking** — a full RE toolkit for modifying existing games: iterative value search (`memory({op:'search'})` → `memory({op:'searchNext'})`, the Cheat-Engine loop), `memory({op:'classify'})` (is this "table" really ASCII?), `breakpoint({on:'write'})` (the exact instruction that wrote a byte), `memory({op:'readCart'})` (confirm a patch is live in the running image), `input({op:'navigate'})` (drive menus by screen-change), `watch({on:'dma'})` (Genesis: which ROM offset a graphic was DMA'd from), a bundled cheat database as a free labeled RAM map, and a cross-platform [ROM-hacking playbook](packages/romdevtools/src/platforms/_guides/ROMHACKING_PLAYBOOK.md) (`platform({op:'doc', platform:'romhacking', name:'playbook'})`).
+- **Structural analysis & decompilation** — an open-source RE engine (Rizin + Ghidra, compiled to WebAssembly) covering **all 14 platforms**: `disasm({target:'functions'})` (auto-detected function list), `disasm({target:'cfg'})` (control-flow graph), `disasm({target:'xrefs'})` (deep cross-references following the analysis graph), `symbols({op:'analyze'})` (one-shot structural map), and `disasm({target:'decompile'})` (Ghidra C-like pseudocode — quality excellent on GBA/Genesis, good on Game Boy/Z80, rough on the 6502 family). Understand *how* a routine works before you touch it; no $3,000 IDA license, no install.
 - **Saving/restoring** — named save states for try-this-then-undo workflows.
 
 The deliverable is **the ROM**, not the tool: a standard, hardware-valid `.nes`/`.gba`/`.md`/… that runs anywhere ROMs run. The bundled WASM cores are the *dev instrument* (build → observe → iterate), not the distribution runtime.
@@ -31,9 +32,11 @@ your agent <--MCP--> romdev server <-> WASM libretro core <-> your game
 
 ## Who is it for?
 
-- **Coding agents.** The primary user — every capability is an MCP tool.
-- **Non-developers making a game with an AI's help.** Run `npx romdevtools`, point your agent at it, describe the game you want.
-- **Homebrew developers** who want a tighter loop than reload-the-emulator-by-hand. The same MCP tools drive great from a TUI, Inspector, or script.
+- **Homebrew developers** who want a tighter loop than reload-the-emulator-by-hand — build, run, inspect, and patch real ROMs from one tool surface, drive it from your editor's AI, a TUI, the Inspector, or your own scripts.
+- **Anyone making a retro game with an AI's help**, no prior homebrew experience needed. Run `npx romdevtools`, point your coding assistant at it, and describe the game you want.
+- **Reverse-engineers and romhackers** — disassembly, control-flow graphs, a decompiler, live memory search, and write-breakpoints across all 14 systems, no $3,000 IDA license.
+
+Every capability is exposed as a tool, so a coding agent can drive the whole loop end-to-end — but the tools are just as usable by hand. The agent is the interface, not a requirement.
 
 ## Supported systems — pick your platform
 
@@ -57,6 +60,8 @@ Fourteen consoles/computers, oldest → newest. They vary enormously in how hard
 | **Game Boy Advance** | 2001 | C (libtonc / libgba) | 🟡 Medium | — | 32-bit ARM, comfortable C with the well-documented Tonc library — but a big machine (IRQ/DMA/video modes = lots of surface to learn). |
 
 **Difficulty legend:** 🟢 Easy · 🟡 Medium · 🟠 Hard · 🔴 Hardest. **Build** ratings come from an agent that actually shipped games across the lineup; **Hack** ratings are for text/data edits (a `—` means no romhack data yet — it's CPU-and-game-dependent, and any game using custom compression jumps to Hard regardless of system).
+
+The **RE analysis engine** (control-flow graphs, cross-references, function detection, and a Ghidra decompiler) works on **all 14 systems** regardless of the Hack rating above — the rating reflects how hard the *data* is to edit, not whether the *code* can be analyzed. Decompiler readability tracks the CPU: excellent on the 32-bit ARM (GBA) and 68000 (Genesis), down to rough on the 8-bit 6502 family.
 
 > **These ratings reflect difficulty *with romdev's current tooling* — not an abstract take on the hardware.** The biggest predictor of how hard a platform feels here isn't its raw hardware but the quality of its scaffolds, snippets, and SDK integration. Good tooling moves a platform a whole tier: the Atari 2600 is the hardest hardware on the list, yet a thick, hardware-verified snippet shelf made it *hard-but-shippable*; the same agent that found NES "hard" shipped on the C-and-SDK platforms in a single pass. **These numbers drift toward easier over time** as scaffolds, footgun fixes, and richer runtimes land. Treat the column as "expect roughly this much friction today," not "this system is permanently this hard."
 

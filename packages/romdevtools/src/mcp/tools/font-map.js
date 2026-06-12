@@ -1,7 +1,7 @@
 // learnFontMap / encodeTextForRom / findEncodedText — text-hack workflow.
 //
-// Every retro game maps characters to tile-IDs differently (Excitebike:
-// A=$0A, B=$0B, ..., Z=$23; Mario: ASCII offset; FF: sparse table). The
+// Every retro game maps characters to tile-IDs differently (one NES racer:
+// A=$0A, B=$0B, ..., Z=$23; another game: ASCII offset; a third: sparse table). The
 // agent currently reverse-engineers this by hand each session. These
 // three tools automate it:
 //
@@ -186,7 +186,7 @@ async function makeTilemapReader(host, platform, which) {
  * Decide whether a run of (char, tileId) reads from a live tilemap is FONT TEXT
  * (a reusable character→tile map) or a PRE-RENDERED GRAPHIC (a name/logo drawn as
  * a bitmap, where each cell is a unique tile). The trap a long RE session hit:
- * NBA Jam's player names are bitmaps, so patching the ASCII string did nothing.
+ * Some games' player names are bitmaps, so patching the ASCII string does nothing.
  * Signals a graphic when: (1) a repeated character used a DIFFERENT tile each
  * time (a real font reuses one tile per letter) — the direct proof; OR (2) every
  * tile is unique AND the ids form a near-contiguous run (tiles X,X+1,X+2,… = one

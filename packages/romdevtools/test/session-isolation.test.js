@@ -9,10 +9,9 @@
 // the sessionKey-threading actually flows through registerTools → category
 // register fns → handler closures.
 
-import { test } from "node:test";
+import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
-import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -22,11 +21,15 @@ import { z } from "zod";
 
 import { registerTools } from "../src/mcp/tools/index.js";
 import { _liveHostCount } from "../src/mcp/state.js";
+import { buildExampleRom } from "./build-fixture-rom.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const ROM_PATH = path.join(__dirname, "roms", "nestest.nes");
-const HAS_NESTEST = existsSync(ROM_PATH);
+
+// Build a real, bootable NES ROM from our own example source so this test runs
+// unconditionally and references no external ROM on disk.
+let ROM_PATH;
+before(async () => { ROM_PATH = await buildExampleRom("nes"); });
 
 async function startSession() {
   const server = new McpServer(
@@ -42,7 +45,7 @@ async function startSession() {
   return client;
 }
 
-test("two MCP sessions own independent hosts; loadMedia in one is invisible to the other", { skip: !HAS_NESTEST }, async () => {
+test("two MCP sessions own independent hosts; loadMedia in one is invisible to the other", async () => {
   const before = _liveHostCount();
   const a = await startSession();
   const b = await startSession();

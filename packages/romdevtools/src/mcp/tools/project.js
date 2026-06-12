@@ -1464,7 +1464,7 @@ TEMPLATES.genesis = {
     runtimeDirs: SGDK_RUNTIME_DIRS,
     lang: SGDK_LANG,
     ext: ".bin",
-    describe: "Two-plane parallax SCROLLING scaffold — the smooth-feel starting point for a Uridium/Sonic-style side-scroller. Plane A = a painted foreground world (ground + platform blocks), Plane B = a repeated starfield, one player sprite. The frame loop does HARDWARE SCROLL ONLY (two VDP_setHorizontalScroll writes + one VDP_updateSprites) — ZERO tilemap writes per frame, which is what keeps movement smooth (rewriting a plane each frame is the #1 'choppy horizontal movement' bug). Plane B scrolls at 1/4 speed for depth. Exposes volatile g_player_x / g_cam_x so you can motion-trace it headlessly (symbols->memory->recordSession). Extend by streaming one offscreen column per 8-px camera step for worlds wider than 512 px — see Genesis MENTAL_MODEL.md 'Scrolling, parallax & the feel trap'.",
+    describe: "Two-plane parallax SCROLLING scaffold — the smooth-feel starting point for a parallax side-scroller. Plane A = a painted foreground world (ground + platform blocks), Plane B = a repeated starfield, one player sprite. The frame loop does HARDWARE SCROLL ONLY (two VDP_setHorizontalScroll writes + one VDP_updateSprites) — ZERO tilemap writes per frame, which is what keeps movement smooth (rewriting a plane each frame is the #1 'choppy horizontal movement' bug). Plane B scrolls at 1/4 speed for depth. Exposes volatile g_player_x / g_cam_x so you can motion-trace it headlessly (symbols->memory->recordSession). Extend by streaming one offscreen column per 8-px camera step for worlds wider than 512 px — see Genesis MENTAL_MODEL.md 'Scrolling, parallax & the feel trap'.",
   },
   puzzle: {
     main: "templates/puzzle.c",

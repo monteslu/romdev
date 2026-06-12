@@ -1,4 +1,4 @@
-// Fixes from the 0.27.0 Zanac (NES mapper-2) feedback round:
+// Fixes from the 0.27.0 NES (mapper-2) feedback round:
 //   #1 disasm({target:'project'}) banked-NES rebuild glue is now COMPLETE +
 //      one-call (header segment, per-bank PRGn wrappers, multi-bank .cfg,
 //      rebuild.json wired to all of it via linkerConfigPath) — byte-exact.
@@ -97,7 +97,7 @@ test("banked NES: references scan every bank (zero-page direct + indexed) and sk
     await writeFile(romPath, makeBankedNes());
     const disasm = toolHandler(registerDisasmTools, "disasm");
 
-    // $F5 is touched by `rol $F5` in EVERY bank — the exact shape the Zanac
+    // $F5 is touched by `rol $F5` in EVERY bank — the exact shape the NES
     // session reported as refsFound:0.
     const r = parse(await disasm({ target: "references", path: romPath, address: 0xF5, maxRefsReturned: 64 }));
     assert.ok(r.refsFound >= 4, `expected refs in all 4 banks, got ${r.refsFound}`);

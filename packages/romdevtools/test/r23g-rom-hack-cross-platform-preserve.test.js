@@ -23,25 +23,29 @@
 // rom-hack, but NES → SNES is the interesting one because both
 // platforms have indexed-color tile formats.
 
-import { test } from "node:test";
+import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import os from "node:os";
-import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
   cropSpriteSheetImpl,
   crossPlatformSpriteImportImpl,
 } from "../src/mcp/tools/sprite-pipeline.js";
+import { buildExampleRom } from "./build-fixture-rom.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const NESTEST = path.resolve(__dirname, "roms", "nestest.nes");
-const HAS_NESTEST = existsSync(NESTEST);
+
+// Build a real, bootable NES ROM from our own example source so these tests run
+// unconditionally and reference no external ROM on disk.
+let NESTEST;
+before(async () => { NESTEST = await buildExampleRom("nes"); });
 
 test("R23g rom-hack NES → SNES: composite output matches extract+crop pipeline exactly",
-  { skip: !HAS_NESTEST, timeout: 60000 },
+  { timeout: 60000 },
   async () => {
     // Reproduce the user-offered case: NES 4-color tiles → SNES target.
     // Under rom-hack the auto-quantize step is skipped, so the composite
@@ -108,7 +112,7 @@ test("R23g rom-hack NES → SNES: composite output matches extract+crop pipeline
 );
 
 test("R23g rom-hack reports source palette unchanged (no emulator read)",
-  { skip: !HAS_NESTEST, timeout: 30000 },
+  { timeout: 30000 },
   async () => {
     // Sanity check that R23f's palette-resolution chain doesn't
     // accidentally read the live emulator palette under rom-hack even
@@ -135,7 +139,7 @@ test("R23g rom-hack reports source palette unchanged (no emulator read)",
 );
 
 test("R23g rom-hack output palette is monochrome ramp (NES default render)",
-  { skip: !HAS_NESTEST, timeout: 30000 },
+  { timeout: 30000 },
   async () => {
     // The standalone extractSpriteSheet under rom-hack uses the default
     // grayscale ramp. The composite should match — every output palette

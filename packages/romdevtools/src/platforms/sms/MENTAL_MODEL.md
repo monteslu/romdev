@@ -340,3 +340,9 @@ The `platformer` example is single-screen. To make it a side-scroller:
 
 Track `camX` in pixels; actor screen-X = `worldX - camX`. (Game Gear is the
 same VDP — only the visible window differs.)
+
+## Reverse-engineering & decompilation
+
+The Rizin/Ghidra analysis engine works here like everywhere: `disasm({target:'functions'})` to carve the program, `disasm({target:'cfg'|'xrefs'})` to trace it, `symbols({op:'analyze'})` for a one-shot structural map.
+
+**Decompiler quality on Z80: GOOD.** Register-rich hand asm decompiles cleanly at the block level. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. See the cross-platform ROM-hacking playbook §5f for the full loop.

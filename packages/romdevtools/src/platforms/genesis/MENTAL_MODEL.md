@@ -219,7 +219,7 @@ size and treat your logical world coords separately.
 | 32×64              | 256×512  | vertical scroller                    |
 | 64×64              | 512×512  | uses the most VRAM for name tables   |
 
-### How Sonic-style large maps REALLY work (wider than one plane)
+### How large scrolling maps REALLY work (wider than one plane)
 
 You do NOT make the plane "as wide as the level," and you do NOT redraw
 the plane. The 64-cell hardware plane is a **circular buffer**: as the
@@ -242,7 +242,7 @@ if (newTileCol != lastTileCol) {
 
 That's ~28 tile writes per 8 px of travel, not a 1792-cell plane redraw.
 The `platformer` example scrolls within one plane (no
-streaming); add the column-stream above to go wider. (Real Sonic also
+streaming); add the column-stream above to go wider. (Real large-scroller engines also
 splits the screen with H-blank raster effects for independent strips —
 that's an IRQ/raster topic, see the `asm` template.)
 
@@ -518,3 +518,9 @@ When you call `build({output:'rom'})`:
    image from the ELF → `.bin` Genesis ROM.
 
 Loadable via genesis_plus_gx (`loadMedia`).
+
+## Reverse-engineering & decompilation
+
+The Rizin/Ghidra analysis engine works here like everywhere: `disasm({target:'functions'})` to carve the program, `disasm({target:'cfg'|'xrefs'})` to trace it, `symbols({op:'analyze'})` for a one-shot structural map.
+
+**Decompiler quality on 68000: EXCELLENT.** An orthogonal ISA with real stack frames decompiles close to readable C — lean on it. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. See the cross-platform ROM-hacking playbook §5f for the full loop.

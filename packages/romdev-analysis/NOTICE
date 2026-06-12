@@ -1,0 +1,22 @@
+romdev-analysis
+===============
+
+This package bundles the Rizin reverse-engineering framework, compiled to
+WebAssembly, to power romdev's control-flow-graph / cross-reference / function-
+detection analysis (`disasm({target:'cfg'|'xrefs'|'functions'})` and
+`symbols({op:'analyze'})`). It redistributes a built artifact (`wasm/rizin.wasm`)
+only; the source is fetched on demand at the pinned commit recorded in romdev's
+`scripts/versions.json` and is never vendored into this repository.
+
+Component and license
+---------------------
+
+- **Rizin** (https://github.com/rizinorg/rizin) — the analysis engine compiled
+  into `wasm/rizin.wasm`. Licensed under the **GNU Lesser General Public License,
+  version 3 (LGPL-3.0)**. The full license text ships as `LICENSE` (LGPL-3.0)
+  and `LICENSE.GPL-3.0` (the GPL-3.0 it incorporates by reference).
+
+- The thin JavaScript loader in this package (`index.js`) is romdev's own code,
+  MIT-licensed (see the repository root LICENSE).
+
+Build recipe: romdev's `scripts/build-rizin.sh` + `scripts/patches/rizin-*.patch`.

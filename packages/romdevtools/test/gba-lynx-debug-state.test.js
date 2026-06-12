@@ -5,9 +5,8 @@
 // (the per-decoder unit tests live in gba-gb-apu-decode / c64-sid-gba-video /
 // lynx-mikey-decode). Regression guard for "core forgot to export the region".
 
-import { test } from "node:test";
+import { test, before } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -15,7 +14,7 @@ import { resolveCore } from "../src/cores/registry.js";
 import { LibretroHost } from "../src/host/LibretroHost.js";
 import { getCPUState } from "../src/host/cpu-state.js";
 import { buildGbaC } from "../src/toolchains/gba-c/gba-c.js";
-import { LYNX_HOMEBREW } from "./rom-fixtures.js";
+import { buildExampleRom } from "./build-fixture-rom.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -74,15 +73,12 @@ int main(void) {
   assert.equal(decodeGbaSprites(oam, {}).sprites.length, 128);
 });
 
-// Lynx test boots the prebuilt sample .lnx if present (no Lynx source toolchain
-// in-tree to build one on the fly). Skips cleanly if neither core nor ROM exist.
-const LYNX_ROM_CANDIDATES = [
-  LYNX_HOMEBREW,
-  path.join(__dirname, "roms", "test.lnx"),
-].filter(Boolean);
-const lynxRom = LYNX_ROM_CANDIDATES.find(existsSync);
+// Lynx test boots a .lnx we build from our own example (cc65 targets Lynx), so
+// it runs unconditionally and needs no external ROM on disk.
+let lynxRom;
+before(async () => { lynxRom = await buildExampleRom("lynx"); });
 
-test("Lynx: patched handy exposes cpu/hw regions + getCPUState decodes 65C02", { timeout: 60000, skip: lynxRom ? false : "no Lynx test ROM present" }, async () => {
+test("Lynx: patched handy exposes cpu/hw regions + getCPUState decodes 65C02", { timeout: 60000 }, async () => {
   const core = resolveCore("lynx");
   assert.ok(core, "resolveCore('lynx') returned null — handy wasm missing?");
 

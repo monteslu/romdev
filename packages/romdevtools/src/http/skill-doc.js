@@ -19,6 +19,7 @@ import { toolJsonSchema } from "./tool-registry.js";
 export const mcpPreamble = [
   "romdev: homebrew retro game development + reverse-engineering for coding agents.",
   "All ~32 tools register at session init — call any by name directly, no loading step. Each is a domain VERB with an operation axis: memory({op}), build({output}), breakpoint({on}), cpu({op}), sprites({op}), tiles({op}), disasm({target}), romPatch({op}), …",
+  "RE engine (all 14 platforms): disasm({target:'functions'}) auto-detects functions, disasm({target:'cfg'}) graphs control flow, disasm({target:'xrefs'}) finds cross-references, disasm({target:'decompile'}) emits Ghidra C pseudocode, symbols({op:'analyze'}) maps a ROM's structure in one call.",
   "catalog({op:'categories'}) maps the tools by purpose (a guide, not a gate); catalog({op:'status'}) is a session re-orient.",
 ].join("\n");
 
@@ -27,6 +28,7 @@ export const mcpPreamble = [
  */
 export const skillPreamble = [
   "romdev gives you homebrew retro game development + reverse-engineering for ~14 platforms (NES, SNES, Game Boy, Genesis, GBA, Atari, C64, and more) — build, run, screenshot, inspect, patch, disassemble, convert assets, drive emulators.",
+  "It also ships a full RE analysis engine (Rizin + Ghidra, all 14 platforms): control-flow graphs, cross-references, auto-detected functions, a one-shot structural map, and a C-pseudocode decompiler — `disasm({target:'cfg'|'xrefs'|'functions'|'decompile'})` and `symbols({op:'analyze'})`.",
   "",
   "## Prerequisite: romdev runs LOCALLY (same machine as you)",
   "romdev bundles every compiler + emulator as WASM and runs them in-process — that engine lives in the romdev SERVER, started once with `npx romdevtools` (listens on http://localhost:7331; no other install, no host gcc/emulator needed). If a call gets connection-refused, it isn't running — start it.",
@@ -39,7 +41,7 @@ export const skillPreamble = [
   "  • GET  /openapi.json — the full machine-readable API; GET /documentation — a browsable console.",
   "",
   "## Sessions — IMPORTANT for stateful work (load → step → read)",
-  "**Pick ONE session id for yourself and send it as the `x-romdev-session` header on EVERY call.** Make it UNIQUE and DESCRIPTIVE of what you're doing — e.g. `nes-platformer-build`, `zelda-romhack-text`, `gba-sprite-debug` (a slug, optionally with a short random suffix to stay unique). A human may be watching the live observer at /livestream, where your session id is the label for all your activity — a descriptive id tells them at a glance which agent/task each call belongs to; a bare uuid or `default` is opaque. The emulator/host is per-session: the ROM you `loadMedia` lives in YOUR session, and the next `frame`/`memory`/`cpu` call only sees it if it carries the SAME id. Do NOT send a new id each call — that's a fresh empty session every time (your loaded ROM vanishes; \"No ROM loaded\"). Several agents can share one server safely: each just sends a DIFFERENT id, so nobody clobbers another's ROM (another reason to make yours distinctive). The header is REQUIRED on every `/tool/{name}` call — omit it and you get a **401** (the server will NOT silently run you in a throwaway session). Pure file tools (romPatch/cart/encodeAudio) still need the header; just reuse your one id everywhere.",
+  "**Pick ONE session id for yourself and send it as the `x-romdev-session` header on EVERY call.** Make it UNIQUE and DESCRIPTIVE of what you're doing — e.g. `nes-platformer-build`, `rpg-romhack-text`, `gba-sprite-debug` (a slug, optionally with a short random suffix to stay unique). A human may be watching the live observer at /livestream, where your session id is the label for all your activity — a descriptive id tells them at a glance which agent/task each call belongs to; a bare uuid or `default` is opaque. The emulator/host is per-session: the ROM you `loadMedia` lives in YOUR session, and the next `frame`/`memory`/`cpu` call only sees it if it carries the SAME id. Do NOT send a new id each call — that's a fresh empty session every time (your loaded ROM vanishes; \"No ROM loaded\"). Several agents can share one server safely: each just sends a DIFFERENT id, so nobody clobbers another's ROM (another reason to make yours distinctive). The header is REQUIRED on every `/tool/{name}` call — omit it and you get a **401** (the server will NOT silently run you in a throwaway session). Pure file tools (romPatch/cart/encodeAudio) still need the header; just reuse your one id everywhere.",
   "",
   "Each tool is a domain VERB keyed by an operation axis — e.g. POST /tool/memory {\"op\":\"read\",…},",
   "POST /tool/build {\"output\":\"rom\",…}, POST /tool/romPatch {\"op\":\"findPointer\",…}. The full per-tool",

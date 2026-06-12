@@ -359,3 +359,9 @@ The `platformer` example is single-screen. To make it a side-scroller:
 Pattern: keep a `world_map[col][row]` array, a `camX` in pixels, convert
 actor world-X → screen-X as `worldX - camX`, and only ever touch the one
 column entering the screen per 8-px step.
+
+## Reverse-engineering & decompilation
+
+The Rizin/Ghidra analysis engine works here like everywhere: `disasm({target:'functions'})` to carve the program, `disasm({target:'cfg'|'xrefs'})` to trace it, `symbols({op:'analyze'})` for a one-shot structural map.
+
+**Decompiler quality on SM83: GOOD.** A dedicated SLEIGH plugin gives clean block-level pseudocode. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. See the cross-platform ROM-hacking playbook §5f for the full loop.

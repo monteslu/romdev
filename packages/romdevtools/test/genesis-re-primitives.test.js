@@ -136,7 +136,7 @@ test("Genesis RE primitives: callSubroutine + watchRange + logPCRange + watchDma
   assert.ok(wd.finalPC, "watchdog must report finalPC (where it's stuck): " + JSON.stringify(wd));
   assert.ok(wd.finalRegs, "watchdog must report finalRegs: " + JSON.stringify(wd));
 
-  // ── REGRESSION (v0.6.0 NBA-Jam nit #2): the DEFAULT watchdog budget must trip
+  // ── REGRESSION (v0.6.0 sports-title feedback nit #2): the DEFAULT watchdog budget must trip
   //    on a non-returning routine BEFORE maxFrames is exhausted. The old default
   //    (maxFrames*500k) was always larger than maxFrames-worth of real m68k
   //    execution, so a wrong-entry free-run silently hit maxFrames with

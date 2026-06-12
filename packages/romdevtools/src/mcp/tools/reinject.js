@@ -390,7 +390,7 @@ const PLATFORM_REGISTRY = {
   msx:       { forms: msxPointerForms,       verdict: "literal-escape", formats: ["raw", "konami-rle"],
                note: "RAW when uncompressed; Konami/other RLE has a literal-run token, so a literal-escape stored block is producible." },
   genesis:   { forms: genesisPointerForms, verdict: "literal-escape", formats: ["raw", "kosinski-literal"],
-               note: "Pointers are 32-bit BE = ROM offset (1:1 at $000000). Kosinski has an all-literal path (experimental terminator — self-verify). Nemesis is Huffman — NO stored escape; custom LZ (e.g. NBA Jam) — confirm the literal-run shape per game." },
+               note: "Pointers are 32-bit BE = ROM offset (1:1 at $000000). Kosinski has an all-literal path (experimental terminator — self-verify). Nemesis is Huffman — NO stored escape; custom LZ (e.g. some Genesis sports titles) — confirm the literal-run shape per game." },
   snes:      { forms: snesPointerForms, verdict: "literal-escape", formats: ["raw", "lz2-direct"],
                note: "Pointers 16-bit (bank-implied) or 24-bit long LE; needs LoROM/HiROM (auto-detected). LC_LZ2 has a clean direct-copy (000) literal command + 0xFF end — common but per-game; confirm the codec." },
   gba:       { forms: gbaPointerForms, verdict: "literal-escape", formats: ["raw", "lz77-literal"],

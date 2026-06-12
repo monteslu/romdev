@@ -55,7 +55,7 @@ mixing ARM + Thumb in the same binary. libgba is built Thumb-interwork.
 ```
 240×160 pixels visible, 6 BG modes (0-5)
 
-Mode 0: 4 tile BGs, scrolling. The classic 2D Mario-style mode.
+Mode 0: 4 tile BGs, scrolling. The classic 2D platformer mode.
 Mode 1: 2 tile BGs + 1 affine BG (rotation/scale).
 Mode 2: 2 affine BGs only. Mode 7-style perspective.
 Mode 3: 240×160 BGR555 framebuffer at $06000000. 16-bit per pixel.
@@ -268,3 +268,9 @@ entering view into the map's screen-blocks as the camera advances. A fixed HUD
 goes on its own BG layer left unscrolled (or via an HBlank IRQ that resets the
 offset for the HUD scanlines). Track camX in pixels; actor screen-X = worldX -
 camX.
+
+## Reverse-engineering & decompilation
+
+The Rizin/Ghidra analysis engine works here like everywhere: `disasm({target:'functions'})` to carve the program, `disasm({target:'cfg'|'xrefs'})` to trace it, `symbols({op:'analyze'})` for a one-shot structural map.
+
+**Decompiler quality on ARM7TDMI: EXCELLENT.** Most GBA code was compiled C, so the decompiler often recovers something close to the original source — lean on it. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. See the cross-platform ROM-hacking playbook §5f for the full loop.

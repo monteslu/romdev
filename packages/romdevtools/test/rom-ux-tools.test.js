@@ -1,4 +1,4 @@
-// ROM-hacking UX tools from the NBA Jam feedback: readCartRom (confirm the
+// ROM-hacking UX tools from a Genesis sports-title feedback round: readCartRom (confirm the
 // running image), navigate (advance on screen-change), framebufferHash.
 // Exercised on a LIVE host so the host plumbing is covered, not just shapes.
 

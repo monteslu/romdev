@@ -1,20 +1,23 @@
 // sprite-pipeline.test.js — R15 cross-game sprite-lift primitives.
 
-import { test } from "node:test";
+import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PNG } from "pngjs";
 
-import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { cropSpriteSheetImpl, quantizePngForPlatformImpl } from "./sprite-pipeline.js";
+import { buildExampleRom } from "../../../test/build-fixture-rom.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const NESTEST = path.resolve(__dirname, "..", "..", "..", "test", "roms", "nestest.nes");
-const HAS_NESTEST = existsSync(NESTEST);
+
+// Build a real NES ROM (with CHR tiles) from our own example so the sprite-lift
+// test runs unconditionally and needs no external ROM on disk.
+let NESTEST;
+before(async () => { NESTEST = await buildExampleRom("nes"); });
 
 // Make a small synthetic tile-grid PNG: 4 tile columns × 2 tile rows of
 // 8×8 cells, each cell solid-colored from a fixed palette so we can
@@ -138,7 +141,7 @@ test("quantizePngForPlatform(gbc, mode:luminance): sorts palette by luma so idx 
   }
 });
 
-test("crossPlatformSpriteImport: end-to-end NES → GBC lift", { skip: !HAS_NESTEST }, async () => {
+test("crossPlatformSpriteImport: end-to-end NES → GBC lift", { timeout: 120000 }, async () => {
   const { crossPlatformSpriteImportImpl } = await import("./sprite-pipeline.js");
   const dir = mkdtempSync(path.join(tmpdir(), "xport-"));
   try {

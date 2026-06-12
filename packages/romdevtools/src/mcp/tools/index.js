@@ -116,8 +116,8 @@ const CATEGORIES = [
   },
   {
     name: "debug",
-    description: "Cross-platform debugging primitives: inspectSprites, inspectPalette, getCPUState (main/spc700/z80), getAudioState (dsp/psg/ym2612), disassemble, symbol lookup.",
-    useWhen: ["sprites rendering wrong", "audio silent or distorted", "CPU stuck in unknown state", "need to read what existing ROM bytes do"],
+    description: "Cross-platform debugging + reverse-engineering: inspectSprites, inspectPalette, getCPUState (main/spc700/z80), getAudioState (dsp/psg/ym2612), and the disasm/RE engine — disassemble (raw/ROM/rebuildable-project), plus the Rizin/Ghidra ops disasm({target:'cfg'|'xrefs'|'functions'|'decompile'}) (control-flow graphs, deep xrefs, auto-detected functions, and C pseudocode — all 14 platforms) and symbols({op:'analyze'}) (one-shot structural map).",
+    useWhen: ["sprites rendering wrong", "audio silent or distorted", "CPU stuck in unknown state", "need to read what existing ROM bytes do", "reverse-engineering an unknown ROM — carve its functions/structure before labeling them live", "want C-like pseudocode to understand a routine"],
     register: (s, z, k) => {
       registerPlatformSpecificTools(s, z, k); // inspectSprites/Palette, getCPUState, getDspState, ...
       registerSymbolTools(s, z, k);            // buildSourceWithDebug, resolveSymbol, lookupAddress, ...

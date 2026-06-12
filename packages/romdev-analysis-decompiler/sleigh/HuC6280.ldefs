@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<language_definitions>
+  
+  <language processor="HuC6280"
+            endian="little"
+            size="16"
+            variant="default"
+            version="1.0"
+            slafile="HuC6280.sla"
+            processorspec="HuC6280.pspec"
+            manualindexfile="../manuals/HuC6280.idx"
+            id="HuC6280:LE:16:default">
+    <description>HuC6280 CMOS 8-bit Microprocessor</description>
+    <compiler name="default" spec="HuC6280.cspec" id="default"/>
+  </language>
+  
+</language_definitions>

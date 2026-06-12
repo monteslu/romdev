@@ -11,16 +11,16 @@
 // reads the live palette via decodeLivePalette and passes it into
 // renderTilesGrid for the internal extract.
 //
-// This test exercises the bug's exact repro: load nestest, step past
-// boot, call crossPlatformSpriteImport, assert the response surfaces
+// This test exercises the bug's exact repro: load a built example ROM, step
+// past boot, call crossPlatformSpriteImport, assert the response surfaces
 // `sourcePaletteSource: "emulator (subpalette N)"` AND the resulting
 // PNG isn't the pure grayscale fallback.
 
-import { test } from "node:test";
+import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import os from "node:os";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -29,11 +29,15 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
 
 import { registerTools } from "../src/mcp/tools/index.js";
+import { buildExampleRom } from "./build-fixture-rom.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const ROM_PATH = path.join(__dirname, "roms", "nestest.nes");
-const HAS_NESTEST = existsSync(ROM_PATH);
+
+// Build a real, bootable NES ROM from our own example source so these tests run
+// unconditionally and reference no external ROM on disk.
+let ROM_PATH;
+before(async () => { ROM_PATH = await buildExampleRom("nes"); });
 
 async function startSession() {
   const server = new McpServer(
@@ -52,20 +56,19 @@ function parseToolJson(res) {
 }
 
 test("R23f crossPlatformSpriteImport propagates live source palette under intent:homebrew",
-  { skip: !HAS_NESTEST, timeout: 60000 },
+  { timeout: 60000 },
   async () => {
     const client = await startSession();
     const dir = mkdtempSync(path.join(os.tmpdir(), "r23f-"));
     try {
-      // Load nestest into the host.
+      // Load the example NES build into the host.
       const loadResult = await client.callTool({
         name: "loadMedia",
         arguments: { platform: "nes", path: ROM_PATH },
       });
       assert.equal(loadResult.isError, undefined, "loadMedia failed: " + JSON.stringify(loadResult));
 
-      // Step the emulator past boot so the palette is populated by the
-      // game (nestest writes its palette early during init).
+      // Step past boot so the game writes its palette during init.
       await client.callTool({ name: "frame", arguments: { op: "step",  frames: 300 } });
 
       // Now run the composite under intent:"homebrew" with no explicit
@@ -83,7 +86,7 @@ test("R23f crossPlatformSpriteImport propagates live source palette under intent
           platform: "gbc",
           outputPng: outPng,
           intent: "homebrew",
-          paletteIndex: 0,  // BG palette 0 — nestest writes a non-grayscale palette here
+          paletteIndex: 1,  // BG palette 1 — the example writes a non-grayscale (blue) palette here
         },
       });
       assert.equal(res.isError, undefined, "composite tool errored: " + JSON.stringify(res));
@@ -122,7 +125,7 @@ test("R23f crossPlatformSpriteImport propagates live source palette under intent
 );
 
 test("R23f crossPlatformSpriteImport intent:rom-hack still uses grayscale (no regression)",
-  { skip: !HAS_NESTEST, timeout: 60000 },
+  { timeout: 60000 },
   async () => {
     // rom-hack default is colorMode:"none" → no emulator palette read →
     // sourcePaletteSource stays "default (grayscale)". This protects the
@@ -162,7 +165,7 @@ test("R23f crossPlatformSpriteImport intent:rom-hack still uses grayscale (no re
 );
 
 test("R23f crossPlatformSpriteImport with explicit paletteFromEmulator:true requires loaded ROM",
-  { skip: !HAS_NESTEST, timeout: 30000 },
+  { timeout: 30000 },
   async () => {
     // Explicit opt-in without a loaded ROM should error, not silently
     // fall back. Mirrors extractSpriteSheet's same behavior.

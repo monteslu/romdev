@@ -35,7 +35,7 @@ pad1_released     equ WRAM_BASE + $0006   ; 2 bytes
 game_state        equ WRAM_BASE + $0010   ; 1 byte: 0=title, 1=play, 2=gameover
 state_timer       equ WRAM_BASE + $0012   ; 2 bytes: frames in current state
 
-; Player / score (Tetris-shaped example).
+; Player / score (falling-block puzzle example).
 score             equ WRAM_BASE + $0020   ; 4 bytes (BCD or binary)
 lines_cleared     equ WRAM_BASE + $0024   ; 2 bytes
 level             equ WRAM_BASE + $0026   ; 1 byte
