@@ -793,6 +793,138 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       }), host);
   }
 
+  // A4: Computed-jumptable recovery via the LIVE emulator. Static analysis follows
+  // direct addressing only, so a `JMP (table,X)` / RTS-trick dispatcher collapses
+  // to "Could not recover jumptable" — and those dispatchers (game-state machines,
+  // script/event VMs, battle engines) are the routines you most want to read. We
+  // resolve them dynamically: break at the dispatcher, single-step THROUGH the
+  // indirect transfer, and record the PC it actually lands on. Run across many
+  // frames/inputs to accumulate the distinct target set — the real switch arms.
+  //
+  // No standalone tool (IDA/Ghidra/Binary Ninja) can do this: they have no live
+  // emulator to observe the computed target. The observed set can be fed back as
+  // analysis hints (Rizin ahi/aho) so `decompile`/`cfg` recover the switch.
+  async function bpResolveJumptable({ address, maxFrames = 1200, maxTargets = 64, stepLimit = 48, jumpThreshold = 5, pressDuring, fromState, fromStatePath }) {
+      const host = getHost(sessionKey);
+      if (!host.pcBreakSupported || !host.pcBreakSupported()) {
+        return jsonContent({
+          ok: false, notSupported: true, address: "$" + address.toString(16).toUpperCase(),
+          note: "This core build has no PC breakpoint / single-step (shipped on all 14 platforms as of 0.5.0 — update the core package if you see this).",
+        });
+      }
+      const restored = await maybeRestoreState(host, fromState, fromStatePath);
+      const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
+      const pressDriver = makePressDriver(host, presses);
+
+      // We separate COMPUTED targets from FIXED trampolines by what VARIES. As we
+      // single-step out of the dispatcher, normal flow is sequential (next PC =
+      // prev + 1..4 on a 6502, wider on ARM); a computed JMP (table,X) / RTS-trick
+      // makes the PC LEAP (delta > jumpThreshold or backward). But a real dispatch
+      // path contains FIXED leaps too — cc65 lowers an indirect call to
+      // JSR<callax>; JMP(ptr), so the trampoline addresses leap identically on
+      // every hit. The handler ARM is the leap destination that DIFFERS hit-to-
+      // hit. So: per hit, collect the set of leap destinations; across all hits,
+      // a destination seen on EVERY hit is a fixed trampoline (drop it), and one
+      // seen on only SOME hits is a real computed arm (keep it). leapSeen counts
+      // how many hits each destination appeared in; perHitLeaps holds the firstFrame
+      // + a sample fromPC for the keepers.
+      const leapSeen = new Map();   // destPC -> hitCount
+      const leapMeta = new Map();   // destPC -> { firstFrame, fromPC }
+      let dispatcherHits = 0, framesRun = 0;
+
+      try {
+        for (let i = 0; i < maxFrames && leapMeta.size < maxTargets * 4; i++) {
+          pressDriver.applyForFrame(i);
+          host.setPCBreak(address, true, false);
+          host.stepFrames(1);
+          framesRun++;
+          let st = host.getPCBreak(false);
+          if (!st.hit) { host.setPCBreak(0, false, false); continue; }
+
+          const fromPC = st.lastPC ?? address;
+          host.getPCBreak(true); // clear the hit so the next arm is clean
+          // Walk forward; collect the destination of EVERY control-flow leap in
+          // this hit (deduped within the hit), plus the PC it leapt FROM.
+          const seenThisHit = new Set();
+          let prev = fromPC, prevLeapFrom = fromPC;
+          for (let s = 0; s < stepLimit; s++) {
+            const step = host.stepInstruction(); // { pc } AFTER one instr
+            const pc = step.pc;
+            if (pc == null) break;
+            const delta = pc - prev;
+            if (delta < 0 || delta > jumpThreshold) {
+              if (!seenThisHit.has(pc)) {
+                seenThisHit.add(pc);
+                if (!leapMeta.has(pc)) leapMeta.set(pc, { firstFrame: framesRun, fromPC: prevLeapFrom });
+              }
+              prevLeapFrom = prev;
+            }
+            prev = pc;
+          }
+          for (const pc of seenThisHit) leapSeen.set(pc, (leapSeen.get(pc) ?? 0) + 1);
+          dispatcherHits++;
+        }
+      } finally {
+        pressDriver.finish();
+        host.setPCBreak(0, false, false); // disarm
+        if (host.getRegSnapshot) host.getRegSnapshot(true); // consume any stale snapshot
+      }
+
+      const hx = (v) => "$" + (v >>> 0).toString(16).toUpperCase();
+      // Classify each leap destination. A COMPUTED arm VARIES across hits — it was
+      // reached on some hits but not all (leapSeen < dispatcherHits). A FIXED
+      // trampoline (cc65 callax, the post-handler return path) leaps identically
+      // EVERY hit (leapSeen == dispatcherHits). Keep the variers as targets.
+      const allLeaps = [...leapMeta.entries()].map(([pc, m]) => ({
+        pc, hits: leapSeen.get(pc) ?? 0, firstFrame: m.firstFrame, fromPC: m.fromPC,
+      }));
+      let arms = allLeaps.filter((l) => l.hits < dispatcherHits);
+      // Fallback: if NOTHING varied (the dispatcher only ever took one path under
+      // this input — a single observed arm), report the non-trampoline leaps as
+      // candidate targets rather than nothing. With only one hit, everything has
+      // hits==1==dispatcherHits, so report all leaps as candidates.
+      let singleArm = false;
+      if (!arms.length && allLeaps.length) { arms = allLeaps; singleArm = true; }
+
+      const sorted = arms
+        .slice(0, maxTargets)
+        .map((l) => ({ target: hx(l.pc), targetRaw: l.pc, hits: l.hits, firstFrame: l.firstFrame, fromPC: hx(l.fromPC) }))
+        .sort((a, b) => b.hits - a.hits || a.targetRaw - b.targetRaw);
+
+      if (!sorted.length) {
+        const drove = presses.length > 0;
+        return attachObserverFrame(jsonContent({
+          ok: true, resolved: false,
+          address: hx(address), framesRun, dispatcherHits,
+          ...(restored ? { restoredFrom: restored } : {}),
+          ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
+          note: dispatcherHits === 0
+            ? (drove
+              ? "The dispatcher at this address never executed within maxFrames EVEN WITH the scheduled input — likely the WRONG address (a different routine dispatches), or not an instruction boundary. Confirm with breakpoint({on:'pc'}) that the PC reaches it at all."
+              : "The dispatcher never executed — drive the game to the state that runs it (pressDuring / fromState), or increase maxFrames. Confirm reachability with breakpoint({on:'pc'}).")
+            : "The dispatcher executed but no control-flow LEAP was observed in the next " + stepLimit + " instructions — so this address isn't (or isn't reaching) a computed jump. Confirm it's the indirect-jump instruction, or raise stepLimit if the dispatch does heavy setup first.",
+        }), host);
+      }
+
+      return attachObserverFrame(jsonContent({
+        ok: true, resolved: true,
+        address: hx(address),
+        targets: sorted,
+        distinctTargets: sorted.length,
+        dispatcherHits, framesRun,
+        ...(singleArm ? { singleArmObserved: true } : {}),
+        ...(arms.length > maxTargets ? { truncated: true, truncatedAt: maxTargets } : {}),
+        ...(restored ? { restoredFrom: restored } : {}),
+        ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
+        note: (singleArm
+            ? "Only ONE dispatch path ran under this input, so targets are the candidate leap destinations (couldn't separate the computed arm from fixed trampolines without a second arm to compare). Drive MORE game states (pressDuring / fromState) so the dispatcher takes different arms — then the varying one is isolated as the real target. "
+            : "targets are the COMPUTED jump destinations that VARIED across dispatches — the real switch arms a static decompiler can't see (fixed trampolines were filtered out). ") +
+          "Each is a routine the dispatcher branches to; decompile({address: target}) / disasm({target:'rom', startAddress: target}) to read them. " +
+          "hits = how many dispatches took that arm under this input; drive more states to surface rarer arms. " +
+          "This is the live-emulator advantage: no static-only tool can recover these.",
+      }), host);
+  }
+
   async function bpRunUntilRead({ address, maxFrames = 600, pressDuring }) {
       const host = getHost(sessionKey);
       if (!host.readWatchSupported || !host.readWatchSupported()) {
@@ -862,11 +994,12 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     "use it, NOT a follow-up cpu({op:'read'}). On some cores (notably NES/fceumm) the core drains the cycle budget on hit but the frame still finishes, " +
     "so a live cpu read afterward returns END-OF-FRAME registers, not the break instant. `registersAtHit` sidesteps that. The break PC is reported as `pc`/`pcRaw`; " +
     "the RAM side effects are also reliable via memory({op:'read'}). frame({op:'stepInstruction'}) to single-step from the break. (on:'read'/'write' finish the frame.)\n" +
+    "• on:'jumptable' — **RESOLVE a computed-jump dispatcher the static decompiler can't follow.** Game-state machines, script/event VMs, and battle engines dispatch through `JMP (table,X)` / RTS-trick tables; `decompile`/`cfg` collapse them to `(*_IRQ)()` + 'Could not recover jumptable'. Break at the dispatcher `address`, single-step THROUGH the indirect transfer, and record the PC it lands on — repeated across frames/inputs to accumulate the DISTINCT target set (the real switch arms), ranked by hit count. Drive more game states (pressDuring / fromState) to surface rarer arms. Returns `{targets:[{target,hits,fromPC}], distinctTargets}`. **No static-only tool (IDA/Ghidra/Binary Ninja) can do this — it needs a live emulator in the loop, which is romdev's edge.** Feed the targets to decompile({address:target}) to read each arm.\n" +
     "All supported on every CPU core. **Every hit carries `registersAtHit` — the FULL register file frozen by the core AT the hit instant, on ALL 14 platforms and all three `on` kinds.** Use it instead of a follow-up cpu({op:'read'}): the live registers keep moving after a hit (per-scanline CPU scheduling / frame completion), so a post-hit read drifts — chasing pointer registers read that way burned a real session for hours. The hit `pc` is the EXECUTING instruction's first byte (mid-instruction hooks no longer report the operand-advanced PC). Out-of-date core packages return notSupported.\n" +
     "MENU-SCREEN INPUT TRICK: if a pressDuring schedule never registers (some menu screens poll input in a way scheduled taps miss), HOLD the button instead: input({op:'set', buttons:{...}}) BEFORE this call and OMIT pressDuring — the run inherits the held state, the menu sees the edge, and the breakpoint catches the event.",
     {
-      on: z.enum(["write", "read", "pc"])
-        .describe("write=break on a write to address (precision:exact=true writer PC / sampled=frame PC, a lie under IRQ); read=break on a read (exact PC, who consumes it); pc=break when PC reaches address — the hit returns `registersAtHit` (the break-instant register file, all 14 platforms) + the break PC; use registersAtHit, not a follow-up cpu read (end-of-frame state)."),
+      on: z.enum(["write", "read", "pc", "jumptable"])
+        .describe("write=break on a write to address (precision:exact=true writer PC / sampled=frame PC, a lie under IRQ); read=break on a read (exact PC, who consumes it); pc=break when PC reaches address — the hit returns `registersAtHit` (the break-instant register file, all 14 platforms) + the break PC; jumptable=RESOLVE a computed-jump dispatcher (JMP (tbl,X) / RTS-trick) by breaking at `address`, single-stepping THROUGH the indirect transfer, and recording every COMPUTED target PC live across frames/inputs — the switch arms a static decompiler reports as 'Could not recover jumptable'. (use registersAtHit, not a follow-up cpu read.)"),
       precision: z.enum(["exact", "sampled"]).default("exact")
         .describe("on:'write' ONLY. exact=core watchpoint, the real writing instruction PC even under interrupts (uses `address`). sampled=cheap frame-boundary PC (uses region/offset/length) — NOT the writer under IRQ. Ignored for on:read/pc (always exact)."),
       address: z.number().int().min(0).optional().describe("on:'write' exact / on:'read' / on:'pc' — CPU address to break on (write target, read target, or instruction boundary). Required for those."),
@@ -893,6 +1026,11 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         length: z.number().int().min(1).max(256).default(1).describe("bytes to read"),
         label: z.string().optional().describe("human name for this read (else 'region+offset')"),
       })).optional().describe("on:'pc' — read these memory regions AT the hit and return them inline as `capturedMemory` (collapses break→read-RAM into ONE call, the token win). Pair with `registersAtHit` to get the routine's register + RAM state in a single round trip (e.g. capture the ZP pointer bytes a decoder just wrote). NOTE: registersAtHit is the true break instant (core snapshot); these RAM reads are taken after the hit frame finishes, so on run-to-frame-end cores (fceumm) they're the routine's RAM side effects for that frame — stable + reliable, which is exactly what RE needs."),
+      maxTargets: z.number().int().min(1).max(1024).default(64).describe("on:'jumptable' — stop once this many DISTINCT computed targets have been observed (the run also ends at maxFrames). Sets `truncated:true` if reached."),
+      stepLimit: z.number().int().min(1).max(256).default(48).describe("on:'jumptable' — instructions to single-step after each dispatcher hit while collecting control-flow leaps. Must be deep enough to REACH the handler: a compiler-lowered indirect call (cc65 JSR<callax>; JMP(ptr)) runs the table load + trampoline + the indirect jump before the handler is entered — ~30 instructions here, so the default is 48. Too low and you only capture the fixed trampolines (the real arms never appear); raise it if a dispatch does heavy setup before the indirect jump."),
+      jumpThreshold: z.number().int().min(1).max(64).default(5).describe("on:'jumptable' — a single-step whose PC delta exceeds this many bytes (or goes backward) counts as a control-flow LEAP (a taken jump/branch/call), vs sequential instruction flow. 5 suits 6502/Z80/SM83 (max ~3-byte instructions); raise for wider ISAs (ARM/m68k) so multi-byte sequential instructions aren't misread as leaps."),
+      fromState: z.number().int().min(0).optional().describe("on:'jumptable'/'pc' (via the trace path) — restore this in-memory savestate SLOT before running, so the dispatcher is resolved from a known, repeatable moment (e.g. inside the battle/menu the dispatcher drives). Mutually exclusive with fromStatePath."),
+      fromStatePath: z.string().optional().describe("on:'jumptable' — restore this savestate FILE before running (the disk equivalent of fromState). Mutually exclusive with fromState."),
     },
     safeTool(async (args) => {
       switch (args.on) {
@@ -911,6 +1049,10 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         case "pc": {
           if (args.address == null) throw new Error("breakpoint({on:'pc'}): `address` is required.");
           return await bpRunUntilPC(args);
+        }
+        case "jumptable": {
+          if (args.address == null) throw new Error("breakpoint({on:'jumptable'}): `address` is required (the computed-jump dispatcher).");
+          return await bpResolveJumptable(args);
         }
         default: throw new Error(`breakpoint: unknown on '${args.on}'`);
       }

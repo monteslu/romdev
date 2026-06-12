@@ -57,6 +57,7 @@ function spawnWorker() {
     pendingResolve: null,
     pendingReject: null,
     pendingJobId: null,
+    timedOut: false,  // set true when we kill it for exceeding a job timeout
   };
 
   w.child.on("message", (msg) => {
@@ -108,10 +109,13 @@ function spawnWorker() {
       w.pendingResolve = null;
       w.pendingReject = null;
       const err = new Error(
-        `worker ${w.id} exited unexpectedly (code=${code} signal=${signal}) ` +
-        `while running job ${w.pendingJobId}`
+        w.timedOut
+          ? `worker ${w.id} killed after job ${w.pendingJobId} exceeded its timeout`
+          : `worker ${w.id} exited unexpectedly (code=${code} signal=${signal}) ` +
+            `while running job ${w.pendingJobId}`
       );
       /** @type {any} */(err).crash = { exitCode: code, signal: signal ?? null };
+      /** @type {any} */(err).timedOut = !!w.timedOut;
       w.pendingJobId = null;
       reject(err);
     }
@@ -184,12 +188,31 @@ export async function runInWorker(job) {
   const w = await acquire();
   const id = nextJobId++;
   return new Promise((resolve, reject) => {
+    let done = false;
+    let timer = null;
+    const finish = () => {
+      if (timer) { clearTimeout(timer); timer = null; }
+    };
     const settle = (result, err) => {
+      if (done) return;
+      done = true;
+      finish();
       if (err) reject(err); else resolve(result);
     };
     w.pendingResolve = (result) => settle(result);
     w.pendingReject = (err) => {
-      if (err && err.crash) {
+      if (err && err.crash && /** @type {any} */ (err).timedOut) {
+        // A timeout we triggered — report it cleanly, not as a generic crash.
+        settle({
+          exitCode: -1,
+          log: `[timeout] analysis exceeded ${job.timeoutMs}ms and was killed; the WASM worker was ` +
+            `recycled (pool not wedged). For a multi-MB ROM use a scoped pass (analyze one function/bank, ` +
+            `not whole-ROM 'aaa').\n`,
+          outputs: {},
+          timedOut: true,
+          crash: err.crash,
+        });
+      } else if (err && err.crash) {
         // Convert crash to a normal result so callers don't have to catch.
         settle({
           exitCode: err.crash.exitCode ?? -1,
@@ -202,6 +225,21 @@ export async function runInWorker(job) {
       }
     };
     w.pendingJobId = id;
+
+    // Per-call timeout (A5 reliability): a hung WASM analysis (whole-ROM `aaa` on
+    // a multi-MB ROM) never exits the worker, so without this the pending job
+    // wedges the slot forever. On timeout we KILL the worker — the exit handler
+    // (which sees `w.timedOut`) rejects this job with a clear timeout result and
+    // respawns a fresh worker, so the pool keeps its capacity.
+    if (job.timeoutMs && job.timeoutMs > 0) {
+      timer = setTimeout(() => {
+        if (done) return;
+        w.timedOut = true;
+        try { w.child.kill("SIGKILL"); } catch { /* already gone */ }
+      }, job.timeoutMs);
+      if (typeof timer.unref === "function") timer.unref();
+    }
+
     w.child.send({ type: "run", id, job });
   });
 }

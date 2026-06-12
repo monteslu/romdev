@@ -62,6 +62,16 @@ test("Rizin: NES ROM → functions / CFG / xrefs / structure", async () => {
   const s = await analyzeStructure(rom, "nes");
   assert.equal(s.functionCount, fns.count, "structure functionCount matches");
   assert.ok(s.entrypoints.length >= 1, "at least one entrypoint");
+
+  // A3: every function carries a looksLikeData flag; dataCount is reported; and
+  // the list is sorted real-code-first (no data-fold ahead of a control-flow fn).
+  assert.equal(typeof fns.dataCount, "number", "functions reports dataCount");
+  for (const f of fns.functions) assert.equal(typeof f.looksLikeData, "boolean");
+  const firstData = fns.functions.findIndex((f) => f.looksLikeData);
+  const lastReal = fns.functions.map((f) => f.looksLikeData).lastIndexOf(false);
+  if (firstData !== -1 && lastReal !== -1) {
+    assert.ok(firstData > lastReal, "all looksLikeData entries sort AFTER real code");
+  }
 }, { timeout: 120000 });
 
 test("Ghidra decompiler: NES function → C pseudocode", async () => {

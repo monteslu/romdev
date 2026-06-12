@@ -4,6 +4,80 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.41.0 — 2026-06-12
+
+### RE engine round — bank-aware decompile, live jumptable recovery, readable 6502 output
+
+A correctness + readability pass across the whole reverse-engineering engine,
+plus the differentiator no static tool has: **resolving computed jumps with the
+live emulator.** All 14 platforms; no `romdev-analysis*` package changes (the
+work is in the address-mapping JS, the decompile post-passes, and the live-debug
+tools).
+
+#### New — `breakpoint({on:'jumptable', address})`: live computed-jumptable recovery
+
+Static analysis follows direct addressing only, so a game's *hottest* routines —
+state machines, script / event VMs, battle engines that dispatch through
+`JMP (table,X)` or an RTS-trick — decompile to `(*_IRQ)()` + "Could not recover
+jumptable." romdev has a **live emulator**, so it resolves them dynamically: break
+at the dispatcher, single-step through the indirect transfer, and record the PC
+it actually lands on — accumulated across frames/inputs. Fixed trampolines (the
+compiler's pointer-call shim, return paths) are filtered out by what *doesn't*
+vary; the destinations that vary hit-to-hit are the real switch arms, ranked by
+hit count. Drive more game states (`pressDuring` / `fromState`) to surface rarer
+arms. **No standalone tool (IDA / Ghidra / Binary Ninja) can do this** — it needs
+an emulator in the loop. `disasm({target:'resolveJumptable', address})` is the
+static-side alias that redirects to it.
+
+#### New — `disasm({target:'decompile'})` reads cleaner
+
+- **Hardware registers are named.** MMIO refs Ghidra emits as raw addresses
+  (`*0x2001`, `uRAM400e`) become the register name (`PPUMASK`, `NOISE_LO`), with a
+  `/* hw registers: … */` legend — on the 9 platforms with a register map
+  (NES/SNES/Genesis/GB/GBC/SMS/GG/2600/7800/C64).
+- **6502 SLEIGH clutter folds to readable C** (NES/2600/7800/C64/Lynx/PCE). Width
+  types become C99 stdint (`uint1`→`uint8_t`, `uint2`→`uint16_t`), redundant
+  nested casts collapse (`(uint16_t)(uint8_t)x`→`(uint8_t)x`), and zero-page byte
+  refs are named (`cRAM00fd`→`zp_FD`), with a `/* 6502 fold: … */` legend. A real
+  banked NES function went from `*(xunknown1 *)(uint2)(uint1)(param_2 - 0xb)` to
+  `*(uint8_t *)(zp_FE - 0xb)` — same semantics, far more readable. (The
+  carry-flag-16-bit / BCD reconstruction is left to an LLM reading the output;
+  rewriting it textually would risk changing semantics.)
+
+#### Improved — bank-aware decompile + honest function ranking
+
+- **Banked NES `decompile` resolves the bank.** Rizin reports flat-PRG VAs, so a
+  flat decode was bank-blind (cross-bank `JSR`/`JMP` landed on the wrong bank).
+  `decompile` now lays a real 32 KB CPU window (selected bank @ `$8000` + fixed
+  top bank @ `$C000`) so in-bank *and* fixed-bank calls resolve; NROM falls
+  through to the flat path. On a real banked game this moved a top-12 function
+  list from ~1 readable / 11 garbage to ~10 readable / 2.
+- **`disasm({target:'functions'})` is ranked real-code-first** with a
+  `looksLikeData` flag (+ `dataCount`), so giant single-block data folds stop
+  crowding out the actual control-flow routines you want.
+
+#### Fixed / hardened
+
+- **SMD-interleaved Genesis dumps auto-deinterleave.** A `.bin` in the SMD copier
+  format (size = N·16 KB + 512, `0xAA 0xBB` magic) read flat decodes to pure
+  "bad instruction" garbage; analysis now detects + reverses the interleave and
+  warns, so a flat disasm isn't silently wrong.
+- **C64 `.prg` load-address header is stripped** before analysis (the 2-byte load
+  address was being analyzed as code), with the base applied so addresses line up.
+- **Worker-pool timeout + recycle.** A whole-ROM `aaa` on a multi-MB ROM that
+  never returns no longer wedges the shared WASM analysis pool — the call times
+  out, the worker is killed + respawned, and a clean `{ timedOut }` result comes
+  back (with a "use a scoped pass" hint) instead of every later `disasm` hanging
+  until a manual server restart.
+
+#### New op discovery
+
+- **`platform({op:'capabilities', platform?})`** — the per-platform op-support
+  matrix (CPU family, rendering kind, which introspection/debug ops each core
+  actually wires), so an agent can check support before calling instead of
+  catching a failure. Unsupported ops now throw a typed, structured error
+  (`{ unsupported, platform, op, reason, alternative }`) rather than a bare string.
+
 ## 0.40.2 — 2026-06-11
 
 ### Fixed — SNES `disasm({target:'decompile'})` treated the address as a raw file offset

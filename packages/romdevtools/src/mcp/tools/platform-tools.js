@@ -6,7 +6,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { PNG } from "pngjs";
 import { getHost } from "../state.js";
-import { imageContent, jsonContent } from "../util.js";
+import { imageContent, jsonContent, unsupported } from "../util.js";
 
 // Consolidation: several handlers in this big shared file are extracted as
 // *Core functions that the consolidated domain tools (palette/tiles/background/
@@ -338,7 +338,10 @@ export function registerPlatformTools(server, z, sessionKey) {
         }, png);
       }
 
-      throw new Error(`inspectPalette not yet wired for platform '${p}'. Supported: nes, snes, genesis, sms, gg, gb, gbc, atari2600, atari7800, c64, gba, lynx, pce, msx.`);
+      unsupported(p, "inspectPalette", {
+        reason: "no palette decoder for this platform",
+        alternative: "platform({op:'capabilities'}) to see what's wired",
+      });
   };
 
   // getCPUState → cpu({op:'read'}) (router in watch-memory.js). Live-binding core.
@@ -347,7 +350,10 @@ export function registerPlatformTools(server, z, sessionKey) {
       const p = resolvePlatform(host, platform);
       const state = getCPUState(host, p, cpu);
       if (!state) {
-        throw new Error(`getCPUState: no decoder for platform '${p}' cpu '${cpu}'. Main CPU is wired for nes, snes, genesis, sms, gg, gb, gbc, atari2600, atari7800, c64, lynx, gba. Secondary CPUs: snes 'spc700' (genesis 'z80' not yet decoded).`);
+        unsupported(p, "cpuState", {
+          reason: `no ${cpu === "main" ? "main" : `'${cpu}'`}-CPU decoder for this platform`,
+          alternative: "platform({op:'capabilities'}) shows each platform's decoded CPUs (main + secondary); memory({op:'read'}) the raw CPU-register region otherwise",
+        });
       }
       return jsonContent({ platform: p, cpu, ...state });
   };
@@ -694,7 +700,10 @@ export function registerPlatformTools(server, z, sessionKey) {
         });
       }
 
-      throw new Error(`inspectSprites not yet wired for platform '${p}'. Supported: nes, snes, genesis, sms, gg, gb, gbc, atari2600, atari7800, c64, gba, pce, msx. (Lynx returns the SCB list head — it has no fixed OAM.)`);
+      unsupported(p, "inspectSprites", {
+        reason: "no sprite decoder for this platform",
+        alternative: "memory({op:'read'}) the raw OAM/sprite-attribute region, or platform({op:'capabilities'}) to see what's wired",
+      });
   };
 
   // inspectBackgroundMap lives in the `background` tool (rendering-context.js)
@@ -803,7 +812,10 @@ export function registerPlatformTools(server, z, sessionKey) {
         });
         return emitImage(r.png, `SNES BG map composite (${r.width}×${r.height}, ${r.mapWidth}×${r.mapHeight} tiles, ${r.bpp}bpp, tilemap@0x${tilemapBaseByte.toString(16)}, tiles@0x${tileBaseByte.toString(16)}). ${r.note}`);
       }
-      throw new Error(`inspectBackgroundMap not yet implemented for platform '${p}'`);
+      unsupported(p, "inspectBackground", {
+        reason: "no background-map snapshotter for this platform",
+        alternative: "background({view:'renderState'}) for the register-level context, or memory({op:'read'}) the raw VRAM/nametable region",
+      });
   };
 
   // convertImageToTiles → encodeArt({stage:'tiles'}) (router in sprite-pipeline.js).

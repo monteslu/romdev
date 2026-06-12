@@ -2,6 +2,7 @@ import { CORES, listAvailableCores, resolveCore } from "../../cores/registry.js"
 import { TOOLCHAINS } from "../../toolchains/registry.js";
 import { getLanguageOptions } from "../../toolchains/index.js";
 import { jsonContent, safeTool } from "../util.js";
+import { CAPABILITIES, CONTRACT_PLATFORMS, capabilitiesFor } from "../../cores/capabilities.js";
 import { listToolchainsCore, installToolchainCore } from "./toolchain.js";
 import { listPlatformDocsCore, getPlatformDocCore } from "./platform-docs.js";
 
@@ -99,11 +100,17 @@ export function resolvePlatformCore({ platform }) {
 export function registerPlatformTools(server, z) {
   server.tool(
     "platform",
-    "Platform/toolchain/docs discovery — what romdev can run and how. `op`: 'list' | 'resolve' | 'toolchains' | " +
-    "'docs' | 'doc'.\n" +
+    "Platform/toolchain/docs discovery — what romdev can run and how. `op`: 'list' | 'capabilities' | 'resolve' | " +
+    "'toolchains' | 'docs' | 'doc'.\n" +
     "'list': every platform with its emulator core, toolchain(s), available languages (+ documented default), and " +
     "platform-specific quirks. Call this FIRST to discover what's possible + check a non-default language is " +
     "available before asking build for it.\n" +
+    "'capabilities': the CAPABILITY CONTRACT — which platform-sensitive ops a platform supports (inspectSprites/" +
+    "Palette/Background, cpuState, audioDebug, renderingContext, cart, disasm, decompile), plus its cpuFamily, " +
+    "renderingKind (tile/framebuffer/3d), introspection depth, CPUs, audio chips, and memory regions. Pass `platform` " +
+    "for one, omit it for the whole matrix. Check this BEFORE calling a platform-sensitive tool to avoid an " +
+    "'unsupported' error — every tool that can't do an op on a platform returns {unsupported:true, platform, op, " +
+    "reason, alternative}.\n" +
     "'resolve': resolved core paths for a platform (debugging aid).\n" +
     "'toolchains': the bundled homebrew toolchains (all Tier-1 = bundled WASM, no install). Pass `id` to confirm a " +
     "specific toolchain's install status (a no-op in v1 — everything's bundled).\n" +
@@ -111,7 +118,7 @@ export function registerPlatformTools(server, z) {
     "troubleshooting / upstream_sources; `platform:'romhacking'` + `name:'playbook'` for the RE decision tree). " +
     "Read MENTAL_MODEL before writing code, and the romhacking playbook before a hack.",
     {
-      op: z.enum(["list", "resolve", "toolchains", "docs", "doc"]).describe("list=platforms; resolve=core paths; toolchains; docs=a platform's doc names; doc=read one doc."),
+      op: z.enum(["list", "capabilities", "resolve", "toolchains", "docs", "doc"]).describe("list=platforms; capabilities=per-platform op support matrix; resolve=core paths; toolchains; docs=a platform's doc names; doc=read one doc."),
       platform: z.string().optional().describe("op=resolve/docs/doc: platform id (e.g. nes, gb, genesis; 'romhacking' for the RE playbook)."),
       id: z.string().optional().describe("op=toolchains: a specific toolchain's install status (e.g. 'cc65')."),
       name: z.string().optional().describe("op=doc: which doc — mental_model | troubleshooting | upstream_sources | playbook."),
@@ -119,6 +126,14 @@ export function registerPlatformTools(server, z) {
     safeTool(async (args) => {
       switch (args.op) {
         case "list":    return jsonContent(listPlatformsCore());
+        case "capabilities": {
+          if (args.platform) {
+            const cap = capabilitiesFor(args.platform);
+            if (!cap) throw new Error(`platform({op:'capabilities'}): unknown platform '${args.platform}'. Known: ${CONTRACT_PLATFORMS.join(", ")}.`);
+            return jsonContent({ platform: args.platform, ...cap });
+          }
+          return jsonContent({ platforms: CONTRACT_PLATFORMS, capabilities: CAPABILITIES });
+        }
         case "resolve": {
           if (!args.platform) throw new Error("platform({op:'resolve'}): `platform` is required.");
           return jsonContent(resolvePlatformCore(args));
