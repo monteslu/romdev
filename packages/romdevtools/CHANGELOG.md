@@ -4,6 +4,29 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.40.2 — 2026-06-11
+
+### Fixed — SNES `disasm({target:'decompile'})` treated the address as a raw file offset
+
+On SNES, `decompile` decompiled the function at raw FILE offset `address`, but
+`functions` / `cfg` / `xrefs` all report LoROM/HiROM **CPU** addresses — so the
+documented "decompile an address from `functions`" loop silently returned the
+wrong function (e.g. asking for the entry at CPU `$00:8000` decompiled file
+`0x8000` = CPU `$01:8000`, the wrong bank).
+
+Fix: SNES now lays the cart out by **24-bit CPU address** — each ROM chunk is
+placed at its CPU bank (LoROM `$bank:8000`, HiROM `$C0+bank`), with the
+`$80-$FF` FastROM (and HiROM `$40-$7F`) mirrors filled in — then decompiles at
+the CPU address directly. This fixes both the function lookup AND in-bank /
+`jsl` operand resolution (a flat-at-0 image would mis-label every cross-bank
+call). The CPU-addressed image is ~16MB sparse (zero-filled between banks); a
+real 4MB cart decompiles in ~1.2s. (No change to the `romdev-analysis*`
+packages — the fix is in the address-mapping JS.)
+
+Note: 65816 decompiler output is medium quality (variable register width, BCD/
+decimal-flag expansion, direct-page guards) — for SNES, lean on `cfg` / `xrefs`
++ targeted `decompile` of leaf routines over big dispatchers.
+
 ## 0.40.1 — 2026-06-11
 
 ### Fixed — Genesis `disasm({target:'decompile'})` was shifted +0x200

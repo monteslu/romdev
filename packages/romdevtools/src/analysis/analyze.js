@@ -204,6 +204,69 @@ export async function vaMapping(romBytes, arch, bits, vaddr, platform) {
   return { paddr: vaddr, vbase: 0 };
 }
 
+/** Build a CPU-ADDRESSED sparse image of a SNES cart for the decompiler.
+ *
+ * SNES is banked: the langid is `65816:LE:24:snes` (24-bit space). If we hand
+ * the decompiler the flat file, a LoROM function at CPU $00:8000 lives at file
+ * 0, but its in-bank `jsr $80xx` operands resolve to file 0x80xx — bank-1 code,
+ * a plausible-but-WRONG body. So we lay each ROM chunk at its CPU address
+ * (sparse, zero-filled between), making BOTH the function address and every
+ * in-bank/JSL operand resolve. ~2x ROM size; fine at SNES cart sizes.
+ *
+ * Mirrors the detection/fold in disasm.js's mapSnesAddress (kept local to avoid
+ * a circular import: disasm.js imports analyze.js).
+ *
+ * The image is laid out BY CPU address, so the decompiler offset for a CPU
+ * address is the address itself (24-bit). @returns {{ image: Uint8Array, isLo:boolean }}
+ */
+export function buildSnesCpuImage(romBytes, mapperHint) {
+  const copierOff = (romBytes.length % 0x8000 === 0x200) ? 0x200 : 0;
+  let isLo;
+  if (mapperHint === "lorom") isLo = true;
+  else if (mapperHint === "hirom") isLo = false;
+  else {
+    const loByte = romBytes[copierOff + 0x7FC0 + 0x15];
+    const hiByte = romBytes[copierOff + 0xFFC0 + 0x15];
+    const detLo = loByte === 0x20 || loByte === 0x30 || loByte === 0x32;
+    const detHi = hiByte === 0x21 || hiByte === 0x31;
+    isLo = detHi && !detLo ? false : true; // default LoROM when ambiguous
+  }
+  const body = romBytes.subarray(copierOff);
+
+  if (isLo) {
+    // LoROM: 32KB file chunk N maps to CPU bank N, $8000-$FFFF. Banks $80-$FF
+    // MIRROR $00-$7F (the FastROM image), and code commonly runs there (a JML to
+    // $F9xxxx is bank 0x79's ROM via the $80+ mirror). So we lay the full 16MB
+    // 24-bit space and mirror each chunk into BOTH its $00-$7F home and its
+    // $80-$FF twin — otherwise a reference into the high half "can't load N
+    // bytes" and the decompiler bails.
+    const fileBanks = Math.ceil(body.length / 0x8000); // ROM chunks (≤128)
+    const image = new Uint8Array(0x1000000); // full 16MB CPU space
+    for (let b = 0; b < fileBanks; b++) {
+      const src = body.subarray(b * 0x8000, (b + 1) * 0x8000);
+      const lo = (b & 0x7F);          // home bank $00-$7F
+      image.set(src, lo * 0x10000 + 0x8000);          // $lo:8000
+      image.set(src, (lo | 0x80) * 0x10000 + 0x8000); // $(lo|80):8000 mirror
+    }
+    return { image, isLo: true };
+  }
+  // HiROM: file 64KB chunk N is CPU bank $C0+N ($0000-$FFFF, the primary image),
+  // mirrored to bank $40+N. The upper half of each chunk also appears at
+  // $00-$3F:$8000-$FFFF and $80-$BF:$8000-$FFFF. Lay the full 16MB space and
+  // mirror so any of those references resolve.
+  const fileBanks = Math.ceil(body.length / 0x10000); // 64KB chunks
+  const image = new Uint8Array(0x1000000);
+  for (let b = 0; b < fileBanks; b++) {
+    const src = body.subarray(b * 0x10000, (b + 1) * 0x10000);
+    image.set(src, (0xC0 + b) * 0x10000);             // $C0+b: full bank (primary)
+    image.set(src, (0x40 + b) * 0x10000);             // $40+b: mirror
+    const upper = src.subarray(0x8000);               // $8000-$FFFF half
+    image.set(upper, b * 0x10000 + 0x8000);           // $00+b:8000 mirror
+    image.set(upper, (0x80 + b) * 0x10000 + 0x8000);  // $80+b:8000 mirror
+  }
+  return { image, isLo: false };
+}
+
 /**
  * Decompile the function containing `address` to C pseudocode (Ghidra).
  * @returns {{platform, langid, address, code, warnings, qualityNote}}
@@ -214,6 +277,30 @@ export async function analyzeDecompile(romPath, address, platformOverride) {
   if (!platform) throw new Error(`analyze decompile: unknown platform for '${path.basename(romPath)}'`);
   if (!SLEIGH_LANGID[platform]) throw new Error(`analyze decompile: unsupported platform '${platform}'`);
   const romBytes = new Uint8Array(await readFile(romPath));
+
+  // SNES: banked 24-bit space. `address` is a LoROM/HiROM CPU address (what
+  // target='functions'/'cfg' report). Lay the cart out by CPU address so BOTH
+  // the function address AND its in-bank/JSL operands resolve, then decompile at
+  // the CPU address directly. (Flat-at-0 would decompile file[address] — the
+  // wrong bank — and mis-label every operand.)
+  if (platform === "snes") {
+    const { image } = buildSnesCpuImage(romBytes);
+    // The image is laid out by CPU address, so the file offset IS the address.
+    const imgOff = address >>> 0;
+    if (imgOff < 0 || imgOff >= image.length) {
+      throw new Error(
+        `decompile: SNES address ${hx(address)} is outside the ${image.length}-byte CPU image ` +
+        `(is it a valid LoROM/HiROM code address?).`
+      );
+    }
+    const rs = await decompileFunction({ platform, romBytes: image, fileOffset: imgOff });
+    return {
+      platform, langid: rs.langid,
+      address, addressHex: hx(address),
+      code: rs.code, warnings: rs.warnings,
+      qualityNote: "medium (65816 variable register width)",
+    };
+  }
 
   // Use rizin's loader mapping to turn the VA (what the user sees from
   // target='functions') into the file offset the raw decompiler image needs.

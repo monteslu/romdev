@@ -108,6 +108,41 @@ test("RE engine: flat-map platforms force file-offset == CPU-address (the +0x200
   assert.ok(!FLAT_CPU_MAP.has("nes"), "nes is not a flat-map platform (uses the Rizin/forcedBase path)");
 }, { timeout: 60000 });
 
+test("RE engine: SNES decompile lays the cart out by CPU address (LoROM/HiROM)", async () => {
+  // Regression for the 0.40.1→0.40.2 bug: SNES decompile treated the LoROM CPU
+  // address as a raw FILE offset, so `decompile address:0x8000` returned the
+  // function at file 0x8000 (CPU $01:8000) — the WRONG one. Fix: lay the image
+  // out by 24-bit CPU address so both the function address AND in-bank/JSL
+  // operands resolve. This unit-tests the layout directly (deterministic, no
+  // toolchain): distinct marker bytes per file-bank must land at their CPU
+  // addresses in the image.
+  const { buildSnesCpuImage } = await import("../src/analysis/analyze.js");
+
+  // 2 file banks (64KB LoROM): bank 0 filled with 0xA0, bank 1 with 0xB1.
+  const rom = new Uint8Array(0x10000);
+  rom.fill(0xa0, 0x0000, 0x8000); // file chunk 0 → CPU $00:8000-$FFFF
+  rom.fill(0xb1, 0x8000, 0x10000); // file chunk 1 → CPU $01:8000-$FFFF
+  const { image, isLo } = buildSnesCpuImage(rom, "lorom");
+  assert.equal(isLo, true);
+  assert.equal(image.length, 0x1000000, "LoROM image covers the full 16MB CPU space");
+  // CPU $00:8000 holds file-chunk-0 (0xA0), NOT file 0x8000's 0xB1.
+  assert.equal(image[0x008000], 0xa0, "CPU $00:8000 must be file chunk 0, not file offset 0x8000");
+  // CPU $01:8000 holds file-chunk-1 (0xB1).
+  assert.equal(image[0x018000], 0xb1, "CPU $01:8000 must be file chunk 1");
+  // The $80-$FF FastROM mirror: CPU $80:8000 mirrors $00:8000.
+  assert.equal(image[0x808000], 0xa0, "CPU $80:8000 mirrors $00:8000 (FastROM)");
+  // Between-bank RAM/IO window ($00:0000-$7FFF) stays zero-filled.
+  assert.equal(image[0x000000], 0x00, "LoROM $00:0000 (RAM/IO window) is zero-fill, not ROM");
+
+  // HiROM: file chunk 0 → CPU bank $C0 (full 64KB).
+  const hrom = new Uint8Array(0x10000);
+  hrom.fill(0xc7);
+  const hi = buildSnesCpuImage(hrom, "hirom");
+  assert.equal(hi.isLo, false);
+  assert.equal(hi.image[0xc00000], 0xc7, "HiROM file chunk 0 maps to CPU bank $C0");
+  assert.equal(hi.image[0x400000], 0xc7, "HiROM bank $40 mirrors $C0");
+}, { timeout: 30000 });
+
 test("Ghidra decompiler: SLEIGH language id for every platform", async () => {
   const { SLEIGH_LANGID } = await import("../src/analysis/decompile.js");
   const all = ["nes", "snes", "genesis", "sms", "gg", "gb", "gbc", "gba",
