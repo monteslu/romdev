@@ -30,9 +30,15 @@ memory/breakpoint primitives:
   emulator cores rebuilt to capture the pre-write byte). Also clarified in the
   tool note that `on:'write'` runs to end-of-frame and reports the LAST matching
   write (`hits` = count).
-- **Tool-schema slim** — dropped the inlined ~62-value region enum from 3
-  secondary watch/breakpoint sub-params (validated at runtime instead),
-  trimming the deferred-load schema cost.
+- **Tool-schema slim** — dropped the inlined ~62-value region enum from every
+  SECONDARY region sub-param (`watch` per-range `ranges[].region`, `recordSession`
+  `memorySamples[].region`, and both `runUntil` memory conditions); they're now
+  runtime-validated strings, trimming the deferred-load schema cost the feedback
+  flagged. The ONE primary discoverable enum (`watch` on:'mem' single-range
+  `region`, where the region IS the choice) is intentionally kept. **Bonus fix:**
+  the `runUntil` region was a STALE hardcoded 8-value list that silently
+  schema-rejected valid non-NES regions (`genesis_cram`, `c64_color_ram`,
+  `nes_apu_regs`, …) the handler actually supports — now accepted.
 
 ### Core rebuilds
 11 emulator cores rebuilt for the value-conditioned write breakpoint (bump +
