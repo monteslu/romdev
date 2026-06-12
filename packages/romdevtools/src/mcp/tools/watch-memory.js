@@ -139,6 +139,19 @@ export function makePressDriver(host, presses) {
 // never disagree again.
 const MEMORY_REGIONS = /** @type {[string, ...string[]]} */ (Object.keys(MemoryRegionToRetro));
 
+// A region param that does NOT inline the full ~62-value enum into the JSON
+// schema. The enum array is ~214 tokens PER param site; inlining it on every
+// secondary region sub-param across this file was the dominant tool-schema
+// bloat (0.28.0 feedback #5). Used on SECONDARY/sub params; the PRIMARY region
+// inputs keep z.enum so the full list stays discoverable where the region IS
+// the choice. A plain string — validated at RUNTIME by the handler (the
+// host.readMemory / MemoryRegionToRetro lookup throws on an unknown region with
+// a clear message), so dropping the schema enum here costs no safety.
+// NOTE: `z` is passed into registerWatchMemoryTools (not a module import), so
+// this factory takes `z` and is invoked once inside the register fn.
+const makeRegionStr = (z) => (desc) =>
+  z.string().describe(desc + " (validated at runtime against the canonical region set).");
+
 // Abort-guard for input-driven watchpoint runs: sample caller-named bytes each
 // frame; the FIRST one to change stops the run with {label,addr,before,after}.
 // Lets a derailed driven scenario (player died, scene flipped) return immediately
@@ -266,6 +279,7 @@ function downsample(arr, n) {
 }
 
 export function registerWatchMemoryTools(server, z, sessionKey) {
+  const regionStr = makeRegionStr(z);
   const rangeShape = z.object({
     region: z.enum(MEMORY_REGIONS),
     offset: z.number().int().min(0),
@@ -510,7 +524,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
 
   // breakpoint({on:write|read|pc}) STOP-on-first. on:write precision:exact=bpFindWriter
   // (core watchpoint, true PC under IRQ), precision:sampled=bpRunUntilWrite (frame PC).
-  async function bpFindWriter({ address, maxFrames = 600, pressDuring, abortIf }) {
+  async function bpFindWriter({ address, maxFrames = 600, pressDuring, abortIf, condition, conditionValue }) {
       const host = getHost(sessionKey);
       if (!host.watchpointSupported || !host.watchpointSupported()) {
         return jsonContent({
@@ -519,7 +533,18 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
             "Use watchMemory/runUntilWrite here — their pc is frame-sampled, so cross-check the value trace.",
         });
       }
-      host.setWatchpoint(address, true);
+      if (condition === "equals" && conditionValue == null) {
+        throw new Error("breakpoint({on:'write', condition:'equals'}): `conditionValue` (the byte to stop on) is required.");
+      }
+      // Pass the condition to the core's watchpoint so its hook only COUNTS +
+      // records writes that satisfy it (qualifying writes), ignoring restoring/
+      // churn writes — and so the reported PC is a meaningful write, not just the
+      // last write of the frame. Core support is feature-detected; if the loaded
+      // core build predates condition support, we fall back to a host-side
+      // 'equals' filter on the reported value (inc/dec need the core's old byte).
+      const wantCond = condition != null;
+      const coreCond = host.setWatchpoint(address, true, wantCond ? { condition, value: conditionValue } : undefined);
+      const coreHandledCond = wantCond && coreCond && coreCond.conditionApplied === true;
       const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
       const pressDriver = makePressDriver(host, presses);
       // Abort-guard: sample caller-named "still valid?" bytes each frame; if any
@@ -533,7 +558,17 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         pressDriver.applyForFrame(i);
         host.stepFrames(1);
         const w = host.getWatchpoint();
-        if (w.hits > 0) { result = { ...w, framesStepped: i + 1 }; break; }
+        if (w.hits > 0) {
+          // Host-side fallback for condition:'equals' on a core that didn't
+          // apply the condition itself: only accept when the reported (last)
+          // written value equals the target; otherwise keep waiting. (inc/dec
+          // can't be faked host-side — they need the core's pre-write byte, so
+          // we only reach here for them when the core DID handle the condition.)
+          if (wantCond && !coreHandledCond && condition === "equals" && (w.lastValue & 0xFF) !== (conditionValue & 0xFF)) {
+            continue;
+          }
+          result = { ...w, framesStepped: i + 1 }; break;
+        }
         const ab = guard.check();
         if (ab) { aborted = { ...ab, framesStepped: i + 1 }; break; }
       }
@@ -584,12 +619,17 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         // address — a word/long store shows only its byte here, not the operand
         // (a real session read 0x00 as "the move.l wrote zero").
         valueByte: "0x" + result.lastValue.toString(16).toUpperCase().padStart(2, "0"),
+        ...(result.lastOldValue != null ? { oldValueByte: "0x" + (result.lastOldValue & 0xFF).toString(16).toUpperCase().padStart(2, "0") } : {}),
+        ...(condition ? { condition, ...(coreHandledCond ? {} : { conditionAppliedBy: "host" }) } : {}),
         hits: result.hits,
         framesStepped: result.framesStepped,
         ...(wpRegs ? { registersAtHit: wpRegs } : {}),
         ...(bankInfo ? bankInfo : {}),
         ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
         note: "pc is the EXACT writing instruction (captured in the CPU write path), not a frame sample. " +
+          (condition
+            ? `condition:'${condition}' filtered to the MEANINGFUL write — pc/valueByte/hits reflect only qualifying writes${result.lastOldValue != null ? ` (oldValueByte→valueByte = ${"0x" + (result.lastOldValue & 0xFF).toString(16)}→${"0x" + result.lastValue.toString(16)})` : ""}. `
+            : "Without a `condition`, on:'write' runs to END OF FRAME and reports the LAST matching write of the frame (NOT the first) — `hits` is the count of all matching writes that frame. If a restoring/churn write hides the change you want, pass condition:'increase'|'decrease'|'equals'. ") +
           "valueByte is the single byte written to the watched address (a 16/32-bit store shows only its byte here). " +
           "hits counts watched-byte writes during the hit frame — the same instruction looping twice in one frame is hits:2, one event. " +
           (wpRegs ? "registersAtHit is the register file frozen AT the write (the live regs drift for the rest of the frame — don't cpu({op:'read'}) instead). " : "") +
@@ -830,9 +870,11 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       precision: z.enum(["exact", "sampled"]).default("exact")
         .describe("on:'write' ONLY. exact=core watchpoint, the real writing instruction PC even under interrupts (uses `address`). sampled=cheap frame-boundary PC (uses region/offset/length) — NOT the writer under IRQ. Ignored for on:read/pc (always exact)."),
       address: z.number().int().min(0).optional().describe("on:'write' exact / on:'read' / on:'pc' — CPU address to break on (write target, read target, or instruction boundary). Required for those."),
-      region: z.enum(MEMORY_REGIONS).optional().describe("on:'write' precision:'sampled' — region whose byte to watch for change."),
+      region: regionStr("on:'write' precision:'sampled' — region whose byte to watch for change.").optional(),
       offset: z.number().int().min(0).optional().describe("on:'write' precision:'sampled' — offset within the region."),
       length: z.number().int().min(1).max(4096).default(1).describe("on:'write' precision:'sampled' — bytes to watch from offset."),
+      condition: z.enum(["increase", "decrease", "equals"]).optional().describe("on:'write' precision:'exact' ONLY — stop only on the MEANINGFUL write, ignoring restoring/churn writes. 'decrease'/'increase' = the stored byte actually went down/up (e.g. a real lives−1, not a per-frame pointer-arithmetic restore); 'equals' = the byte became `value` (e.g. $00→$01 respawn re-arm). Without it, on:'write' reports the LAST matching write of the frame, which may be the churn, not the change you want."),
+      conditionValue: z.number().int().min(0).max(255).optional().describe("on:'write' condition:'equals' — the byte value to stop on (the NEW value written)."),
       maxFrames: z.number().int().min(1).max(1_000_000).default(600).describe("Max frames to run while waiting for the condition."),
       pressDuring: z.array(z.object({
         frame: z.number().int().min(0),
@@ -841,12 +883,12 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         holdFrames: z.number().int().min(1).default(2),
       })).optional().describe("Schedule input while waiting (drive the game to the state that triggers the condition). If OMITTED, this run inherits whatever input({op:'set'}) last held — same as frame({op:'step'}). If GIVEN, the schedule OWNS the pad for the whole run (a prior input({op:'set'}) is ignored); use it to drive the watched window itself. Entries with OVERLAPPING windows on the same port are OR'd into a chord (e.g. b+right held while a fires mid-window), not overwritten."),
       abortIf: z.array(z.object({
-        region: z.enum(MEMORY_REGIONS).optional().describe("memory region (default system_ram)"),
+        region: regionStr("memory region (default system_ram)").optional(),
         offset: z.number().int().min(0).describe("byte offset within the region"),
         label: z.string().optional().describe("human name for this guard byte"),
       })).optional().describe("on:'write' exact — ABORT GUARD for a pressDuring run: caller-named 'is this scenario still valid?' bytes (e.g. the area/scene id, the player object-active flag). If ANY changes mid-run the watchpoint stops IMMEDIATELY and returns {aborted:true, abortedBy, before, after} — so a driven scenario that derailed (player died → title screen) doesn't burn all maxFrames and return a meaningless found:false. Each is sampled once per frame (cheap)."),
       captureMemory: z.array(z.object({
-        region: z.enum(MEMORY_REGIONS).describe("memory region to read"),
+        region: regionStr("memory region to read"),
         offset: z.number().int().min(0).describe("byte offset within the region"),
         length: z.number().int().min(1).max(256).default(1).describe("bytes to read"),
         label: z.string().optional().describe("human name for this read (else 'region+offset')"),

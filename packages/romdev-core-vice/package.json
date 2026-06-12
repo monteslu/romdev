@@ -1,6 +1,6 @@
 {
   "name": "romdev-core-vice",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "VICE x64 libretro core (Commodore 64) for romdev, bundled as WASM.",
   "type": "module",
   "main": "index.js",

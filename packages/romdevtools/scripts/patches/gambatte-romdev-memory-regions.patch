@@ -59,6 +59,9 @@ index 15b042c..4e49b22 100644
 +extern int            romdev_wp_enabled;
 +extern unsigned long  romdev_wp_last_pc;
 +extern unsigned char  romdev_wp_last_val;
++extern unsigned char  romdev_wp_last_old;
++extern int            romdev_wp_cond;
++extern unsigned char  romdev_wp_cond_val;
 +extern unsigned long  romdev_wp_hits;
 +extern unsigned long  romdev_wp_last_rom_off;
 +
@@ -67,6 +70,20 @@ index 15b042c..4e49b22 100644
 +   romdev_wp_enabled = enabled ? 1 : 0;
 +   romdev_wp_last_pc = 0xFFFFFFFF;
 +   romdev_wp_last_val = 0;
++   romdev_wp_last_old = 0;
++   romdev_wp_cond = 0;
++   romdev_wp_cond_val = 0;
++   romdev_wp_hits = 0;
++}
++
++void romdev_watchpoint_set_cond(unsigned addr, int enabled, int cond, int val) {
++   romdev_wp_addr = addr;
++   romdev_wp_enabled = enabled ? 1 : 0;
++   romdev_wp_last_pc = 0xFFFFFFFF;
++   romdev_wp_last_val = 0;
++   romdev_wp_last_old = 0;
++   romdev_wp_cond = cond;
++   romdev_wp_cond_val = (unsigned char)val;
 +   romdev_wp_hits = 0;
 +}
 +
@@ -78,6 +95,7 @@ index 15b042c..4e49b22 100644
 +   out6[3] = (unsigned)romdev_wp_last_val;
 +   out6[4] = (unsigned)romdev_wp_hits;
 +   out6[5] = (unsigned)romdev_wp_last_rom_off; /* ROM offset (active bank) or 0xFFFFFFFF */
++   out6[6] = (romdev_wp_hits ? (unsigned)romdev_wp_last_old : 0xFFFFFFFFu);
 +   if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; romdev_wp_last_rom_off = 0xFFFFFFFF; }
 +}
 +}
@@ -330,8 +348,20 @@ index 0fb6199..b490f0a 100644
 +int           romdev_snap_kind = 0;
 +unsigned      romdev_gb_instr_pc = 0xFFFFFFFF;
 +unsigned char romdev_wp_last_val = 0;
++unsigned char romdev_wp_last_old = 0;
++int           romdev_wp_cond     = 0;
++unsigned char romdev_wp_cond_val = 0;
 +unsigned long romdev_wp_hits     = 0;
 +unsigned long romdev_wp_last_rom_off = 0xFFFFFFFF; /* ROM offset of the writing PC (active bank) */
++/* value-condition (0.30.0): 1=increase 2=decrease 3=equals; skip churn writes. */
++int romdev_wp_cond_ok(unsigned char oldv, unsigned char v) {
++   switch (romdev_wp_cond) {
++      case 1:  return v > oldv;
++      case 2:  return v < oldv;
++      case 3:  return v == romdev_wp_cond_val;
++      default: return 1;
++   }
++}
 +
 +/* romdev instruction-level READ watchpoint (mirror of the write watch above;
 + * hooked into the READ/FF_READ data-read macros, NOT PC_READ — instruction and
@@ -529,9 +559,12 @@ index 0fb6199..b490f0a 100644
 +
 +#define ROMDEV_WP_CHECK(a, d) do { \
 +		if (romdev_wp_enabled && (unsigned long)(a) == romdev_wp_addr) { \
-+			romdev_wp_last_pc = romdev_gb_instr_pc; romdev_wp_last_val = (unsigned char)(d); romdev_wp_hits++; \
-+			romdev_wp_last_rom_off = mem_.romdev_romOffset(romdev_gb_instr_pc); \
-+			ROMDEV_GB_SNAP(3); \
++			unsigned char romdev_oldv = romdev_wp_cond ? (unsigned char)mem_.read((a), cycleCounter) : 0; \
++			if (romdev_wp_cond_ok(romdev_oldv, (unsigned char)(d))) { \
++				romdev_wp_last_pc = romdev_gb_instr_pc; romdev_wp_last_val = (unsigned char)(d); romdev_wp_last_old = romdev_oldv; romdev_wp_hits++; \
++				romdev_wp_last_rom_off = mem_.romdev_romOffset(romdev_gb_instr_pc); \
++				ROMDEV_GB_SNAP(3); \
++			} \
 +		} \
 +	} while (0)
 +#define WRITE(addr, data) do { ROMDEV_WP_CHECK((addr), (data)); ROMDEV_RANGE_CHECK((addr), (data), 1); mem_.write(addr, data, cycleCounter); cycleCounter += 4; } while (0)

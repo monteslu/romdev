@@ -477,7 +477,19 @@ index 27e289c..c40b99f 100644
 +int           romdev_wp_enabled  = 0;
 +unsigned int  romdev_wp_last_pc  = 0xFFFFFFFF;
 +unsigned char romdev_wp_last_val = 0;
++unsigned char romdev_wp_last_old = 0;
++int           romdev_wp_cond     = 0;
++unsigned char romdev_wp_cond_val = 0;
 +unsigned int  romdev_wp_hits     = 0;
++/* value-condition (0.30.0): 1=increase 2=decrease 3=equals; skip churn writes. */
++static int romdev_wp_cond_ok(unsigned char oldv, unsigned char v) {
++	switch (romdev_wp_cond) {
++		case 1:  return v > oldv;
++		case 2:  return v < oldv;
++		case 3:  return v == romdev_wp_cond_val;
++		default: return 1;
++	}
++}
 +/* The hooks report the EXECUTING instruction's pipeline PC
 + * (romdev_arm_instr_pc, latched at dispatch in arm.c — same convention as the
 + * pc-break address) and freeze a full register snapshot at the hit. */
@@ -485,8 +497,12 @@ index 27e289c..c40b99f 100644
 +extern void romdev_arm_snap(struct ARMCore* cpu, int kind);
 +#define ROMDEV_WP_GBA(cpu, addr, val) do { \
 +		if (romdev_wp_enabled && (unsigned int)(addr) == romdev_wp_addr) { \
-+			romdev_wp_last_pc = romdev_arm_instr_pc; romdev_wp_last_val = (unsigned char)(val); romdev_wp_hits++; \
-+			romdev_arm_snap((cpu), 3); \
++			unsigned char romdev_oldv = 0; \
++			if (romdev_wp_cond) { int romdev_ws_ = 0; romdev_oldv = (unsigned char)(cpu)->memory.load8((cpu), (addr), &romdev_ws_); } \
++			if (romdev_wp_cond_ok(romdev_oldv, (unsigned char)(val))) { \
++				romdev_wp_last_pc = romdev_arm_instr_pc; romdev_wp_last_val = (unsigned char)(val); romdev_wp_last_old = romdev_oldv; romdev_wp_hits++; \
++				romdev_arm_snap((cpu), 3); \
++			} \
 +		} \
 +	} while (0)
 +
@@ -623,6 +639,9 @@ index 4b05a42..0c1d828 100644
 +extern int           romdev_wp_enabled;
 +extern unsigned int  romdev_wp_last_pc;
 +extern unsigned char romdev_wp_last_val;
++extern unsigned char romdev_wp_last_old;
++extern int           romdev_wp_cond;
++extern unsigned char romdev_wp_cond_val;
 +extern unsigned int  romdev_wp_hits;
 +
 +void romdev_watchpoint_set(unsigned int addr, int enabled) {
@@ -630,6 +649,20 @@ index 4b05a42..0c1d828 100644
 +	romdev_wp_enabled = enabled ? 1 : 0;
 +	romdev_wp_last_pc = 0xFFFFFFFF;
 +	romdev_wp_last_val = 0;
++	romdev_wp_last_old = 0;
++	romdev_wp_cond = 0;
++	romdev_wp_cond_val = 0;
++	romdev_wp_hits = 0;
++}
++
++void romdev_watchpoint_set_cond(unsigned int addr, int enabled, int cond, int val) {
++	romdev_wp_addr = addr;
++	romdev_wp_enabled = enabled ? 1 : 0;
++	romdev_wp_last_pc = 0xFFFFFFFF;
++	romdev_wp_last_val = 0;
++	romdev_wp_last_old = 0;
++	romdev_wp_cond = cond;
++	romdev_wp_cond_val = (unsigned char)val;
 +	romdev_wp_hits = 0;
 +}
 +
@@ -641,6 +674,7 @@ index 4b05a42..0c1d828 100644
 +	out6[3] = (unsigned int) romdev_wp_last_val;
 +	out6[4] = romdev_wp_hits;
 +	out6[5] = 0xFFFFFFFF; /* GBA is a flat 32-bit address space — no ROM bank */
++	out6[6] = (romdev_wp_hits ? (unsigned int)romdev_wp_last_old : 0xFFFFFFFFu);
 +	if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; }
 +}
 +
