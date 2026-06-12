@@ -13,9 +13,15 @@ import { jsonContent, safeTool } from "../util.js";
 import { attachObserverFrame } from "./watch-memory.js";
 
 export function registerRunUntilTools(server, z, sessionKey) {
+  // Condition `region` is a runtime-validated string, not a schema enum. It was
+  // an inlined 8-value list — which both bloated the schema AND silently rejected
+  // valid non-NES regions (genesis_*, c64_*, *_apu_regs) that host.readMemory
+  // accepts. The readMemory(region,…) call in the handler validates and throws a
+  // clear message on an unknown region (full canonical set, same as `memory`).
+  const regionStr = z.string().describe("memory region (full readMemory set, e.g. system_ram, nes_oam, genesis_vram, c64_color_ram; validated at runtime)");
   const memoryCondition = z.object({
     type: z.literal("memory"),
-    region: z.enum(["system_ram", "save_ram", "video_ram", "rtc", "nes_nametables", "nes_palette", "nes_oam", "nes_chr"]),
+    region: regionStr,
     offset: z.number().int().min(0),
     equals: z.number().int().min(0).max(255).optional(),
     notEquals: z.number().int().min(0).max(255).optional(),
@@ -24,7 +30,7 @@ export function registerRunUntilTools(server, z, sessionKey) {
 
   const memoryChangedCondition = z.object({
     type: z.literal("memoryChanged"),
-    region: z.enum(["system_ram", "save_ram", "video_ram", "rtc", "nes_nametables", "nes_palette", "nes_oam", "nes_chr"]),
+    region: regionStr,
     offset: z.number().int().min(0),
     length: z.number().int().min(1).max(8192).default(1),
   }).describe("Stop when memory[region][offset..offset+length] changes from its initial value.");

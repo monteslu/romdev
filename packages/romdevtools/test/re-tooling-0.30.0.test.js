@@ -162,3 +162,41 @@ test("#2a op:'readCart' maps a banked CPU address to PRG bytes (NES)", async () 
   assert.equal(r.hex, "aabbccdd", "cpuAddress $C000 reads the fixed top bank");
   assert.equal(r.fileOffset, "0x4010");
 });
+
+// #5 schema slim — the inlined ~62-value region enum was dropped from the
+// secondary region sub-params (validated at runtime instead). On runUntil the
+// old enum was also a STALE 8-value list that wrongly schema-rejected valid
+// non-NES regions. Prove the region sub-params now accept the full canonical
+// set, and that the ONE primary discoverable enum (watch on:'mem' region) is
+// intentionally kept.
+function captureSchema(registerFn, toolName) {
+  const schemas = {};
+  registerFn({ tool: (n, _d, s) => { schemas[n] = s; } }, z, "schema-probe");
+  return schemas[toolName];
+}
+
+test("#5 runUntil region accepts non-NES regions (old 8-value enum is gone, runtime-validated)", async () => {
+  const { registerRunUntilTools } = await import("../src/mcp/tools/run-until.js");
+  const schema = captureSchema(registerRunUntilTools, "runUntil");
+  const obj = z.object(schema);
+  // genesis_cram / c64_color_ram / nes_apu_regs were NOT in the old hardcoded
+  // 8-value enum → would have thrown at the schema even though readMemory accepts them.
+  for (const region of ["genesis_cram", "c64_color_ram", "nes_apu_regs", "system_ram"]) {
+    assert.doesNotThrow(
+      () => obj.parse({ condition: { type: "memory", region, offset: 0, equals: 1 } }),
+      `runUntil should accept region ${region}`,
+    );
+  }
+});
+
+test("#5 watch on:'mem' single-range region KEEPS the discoverable enum (primary choice)", async () => {
+  const schema = captureSchema(registerWatchMemoryTools, "watch");
+  const obj = z.object(schema);
+  // The primary on:'mem' region is still an enum: a garbage region is rejected
+  // AT THE SCHEMA (so the canonical list stays discoverable where region IS the choice).
+  assert.throws(
+    () => obj.parse({ on: "mem", region: "not_a_real_region", offset: 0 }),
+    "primary on:'mem' region stays an enum and rejects unknown values at the schema",
+  );
+  assert.doesNotThrow(() => obj.parse({ on: "mem", region: "genesis_cram", offset: 0 }));
+});

@@ -12,13 +12,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getHost } from "../state.js";
 import { jsonContent, safeTool } from "../util.js";
-import { MemoryRegionToRetro } from "../../host/types.js";
 
-// Single source of truth for memorySamples regions — the same canonical set
-// readMemory accepts. Previously hardcoded to 8 NES regions, so Genesis and
-// hardware-register regions (nes_apu_regs, etc.) couldn't be batch-sampled.
-const SAMPLE_REGIONS = /** @type {[string, ...string[]]} */ (Object.keys(MemoryRegionToRetro));
-
+// memorySamples regions accept the same canonical set readMemory accepts (incl.
+// hardware-register regions like nes_apu_regs). The region is a runtime-validated
+// string rather than an inlined ~62-value schema enum — the per-sample
+// host.readMemory(region,…) lookup throws on an unknown region with a clear
+// message, so the schema enum was pure deferred-load weight (0.28.0 feedback #5).
 export function registerRecordTools(server, z, sessionKey) {
   const inputShape = z.object({
     up: z.boolean().optional(), down: z.boolean().optional(),
@@ -54,7 +53,7 @@ export function registerRecordTools(server, z, sessionKey) {
         .array(
           z.object({
             label: z.string(),
-            region: z.enum(SAMPLE_REGIONS),
+            region: z.string().describe("memory region (full readMemory set incl. hardware registers; validated at runtime)"),
             offset: z.number().int().min(0),
             length: z.number().int().min(1).max(256),
           }),

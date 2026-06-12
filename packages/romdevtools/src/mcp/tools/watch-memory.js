@@ -281,7 +281,7 @@ function downsample(arr, n) {
 export function registerWatchMemoryTools(server, z, sessionKey) {
   const regionStr = makeRegionStr(z);
   const rangeShape = z.object({
-    region: z.enum(MEMORY_REGIONS),
+    region: regionStr("memory region for THIS range (same canonical set `memory` uses)"),
     offset: z.number().int().min(0),
     length: z.number().int().min(1).max(4096).default(1),
     label: z.string().optional().describe("Name echoed on every event from this range — tells disjoint ranges apart in one stream."),
