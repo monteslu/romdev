@@ -1,68 +1,3 @@
-# romdev memory-region exposure for the blueMSX (MSX / MSX2) libretro core.
-#
-# blueMSX keeps its V9938 VDP state in a file-static `struct VDP` (singleton
-# `theVdp` in VDP.c) with no public accessors, so this patch adds five tiny
-# getters in VDP.c (+ decls in VDP.h) returning live pointers into theVdp, then
-# wires region cases in libretro.c. The Z80/R800 CPU is reachable from libretro.c
-# via the already-present `extern BoardInfo boardInfo` / `(R800*)boardInfo.cpuRef`
-# (the core uses that exact cast elsewhere); its active register bank `regs` is
-# snapshotted into a flat little-endian buffer.
-#
-# Region IDs (romdev 0x1C0 block, must match src/host/types.js):
-#   MSX_VRAM       0x1C0   UInt8[VRAM_SIZE=192KB]  V9938 VRAM (size reported = live vramSize)
-#   MSX_VDP_REGS   0x1C1   UInt8[64]               VDP register file
-#   MSX_VDP_STATUS 0x1C2   UInt8[16]               VDP status registers
-#   MSX_PALETTE    0x1C3   UInt16[16]   = 32 B     paletteReg (9-bit GRB)
-#   MSX_CPU_REGS   0x1C4   snapshot                AF/BC/DE/HL/IX/IY/PC/SP + I/R/iff/im/halt
-#   MSX_PSG_REGS   0x1C5   UInt8[16]               AY-3-8910 register file (via a singleton
-#                                                  captured in ay8910Create + a getter in AY8910.c)
-#
-# Execution breakpoints (runUntilPC / runUntilRead / stepInstruction):
-#   Adds Z80/R800 hooks in Src/Z80/R800.c — a PC-break/single-step check at the
-#   top of the r800Execute / r800ExecuteUntil run loops (PC compared BEFORE the
-#   next opcode fetch; on hit it freezes the CPU at that PC and sets
-#   r800->terminate so the active run loop returns and retro_run completes the
-#   frame), plus READ and WRITE watchpoint hooks in readMem/writeMem (data path,
-#   not opcode fetch). libretro.c exports the romdev_pcbreak_*/romdev_readwatch_*/
-#   romdev_watchpoint_* setters+getters (same [out5]/[out6] layout as the gpgx
-#   m68k template). romdev_pc_step is a per-instruction countdown the host arms to
-#   2 so single-step ADVANCES the PC.
-#
-# Instruction WATCHDOG (callSubroutine can't hang anymore):
-#   A standalone-driven routine (e.g. a decompressor fed a wrong arg) can loop
-#   FOREVER inside one r800Execute / retro_run frame, so the host's per-FRAME cap
-#   never runs and the whole WASM hangs. ROMDEV_WATCHDOG_CHECK (in Src/Z80/R800.c,
-#   FIRST in BOTH run loops, before the PC-break check) counts dispatched
-#   instructions and force-stops at romdev_pc_wd_limit — sets romdev_pc_hit +
-#   romdev_pc_watchdog and ends the frame the SAME way the PC-break does
-#   (terminate=1; break). libretro.c exports romdev_watchdog_set(limit) (the host
-#   arms it before callSubroutine; 0 = off) and pcbreak_get now reports the
-#   watchdog-tripped flag in out6[5]. Build script adds _romdev_watchdog_set to
-#   EXPORTED_FUNCTIONS via WD_EXPORTS.
-#
-# RE primitives round 2 (register read/write + range-watch + PC-coverage):
-#   Adds the cross-core RE round-2 exports to the Z80/R800 path. romdev_setreg/
-#   romdev_getreg map the STABLE Z80 reg-id convention (0=A 1=F 2=B 3=C 4=D 5=E
-#   6=H 7=L 8=IX 9=IY 16=PC 18=SP) onto the R800 active register bank
-#   (cpu->regs, via boardInfo.cpuRef) — drives callSubroutine/setRegister.
-#   romdev_range_set/get logs EVERY {pc,addr,value} touching [lo,hi] (readMem/
-#   writeMem data hooks, mode 1=read 2=write 3=both) for watchRange; romdev_cov_
-#   set/get records DISTINCT in-window PCs (a coverage check at the top of the
-#   r800Execute/r800ExecuteUntil loops, beside the PC-break check) for logPCRange.
-#   State lives in Src/Z80/R800.c; the six exports in libretro.c. Build script
-#   adds them to EXPORTED_FUNCTIONS via RE2_EXPORTS.
-#
-diff --git a/Makefile.libretro b/Makefile.libretro
-index 6f412c7..5d65891 100644
---- a/Makefile.libretro
-+++ b/Makefile.libretro
-@@ -1,5 +1,5 @@
- TARGET_NAME := bluemsx
--CFLAGS := -std=gnu89
-+CFLAGS := -std=gnu89 -fno-common -Wno-error -Wno-incompatible-function-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration
- CXXFLAGS := -std=gnu++98
- GIT_VERSION := " $(shell git rev-parse --short HEAD || echo unknown)"
- ifneq ($(GIT_VERSION)," unknown")
 diff --git a/Src/SoundChips/AY8910.c b/Src/SoundChips/AY8910.c
 index 3e74ec9..b564d1d 100644
 --- a/Src/SoundChips/AY8910.c
@@ -179,10 +114,10 @@ index cc6cbf5..8c1bab2 100644
  extern void RefreshScreen(int);
  
 diff --git a/Src/Z80/R800.c b/Src/Z80/R800.c
-index e3dd190..bf55bc8 100644
+index e3dd190..a7c1024 100644
 --- a/Src/Z80/R800.c
 +++ b/Src/Z80/R800.c
-@@ -42,6 +42,185 @@ static UInt8  ZSPXYTable[256];
+@@ -42,6 +42,196 @@ static UInt8  ZSPXYTable[256];
  static UInt8  ZSPHTable[256];
  static UInt16 DAATable[0x800];
  
@@ -259,7 +194,18 @@ index e3dd190..bf55bc8 100644
 +    romdev_snap_kind = kind;
 +}
 +unsigned char romdev_wp_last_val = 0;
++unsigned char romdev_wp_last_old = 0;
++int           romdev_wp_cond     = 0;
++unsigned char romdev_wp_cond_val = 0;
 +unsigned int  romdev_wp_hits     = 0;
++int romdev_wp_cond_ok(unsigned char oldv, unsigned char v) {
++    switch (romdev_wp_cond) {
++        case 1:  return v > oldv;
++        case 2:  return v < oldv;
++        case 3:  return v == romdev_wp_cond_val;
++        default: return 1;
++    }
++}
 +
 +/* ---- romdev RE primitives round 2 (Z80 / R800) ---------------------- */
 +/* RANGE watch (discovery): log EVERY {pc,addr,value} that reads or writes an
@@ -368,7 +314,7 @@ index e3dd190..bf55bc8 100644
  
  static void cb(R800* r800);
  static void dd(R800* r800);
-@@ -179,9 +358,26 @@ static void writePort(R800* r800, UInt16 port, UInt8 value) {
+@@ -179,9 +369,26 @@ static void writePort(R800* r800, UInt16 port, UInt8 value) {
  }
  
  static UInt8 readMem(R800* r800, UInt16 address) {
@@ -396,17 +342,21 @@ index e3dd190..bf55bc8 100644
  }
  
  static UInt8 readOpcode(R800* r800, UInt16 address) {
-@@ -196,6 +392,20 @@ static UInt8 readOpcode(R800* r800, UInt16 address) {
+@@ -196,6 +403,24 @@ static UInt8 readOpcode(R800* r800, UInt16 address) {
  static void writeMem(R800* r800, UInt16 address, UInt8 value) {
      delayMem(r800);
      r800->cachePage = 0xffff;
 +    /* romdev WRITE watchpoint (findWriter): records the live Z80 PC of the
 +     * instruction writing a watched address. */
 +    if (romdev_wp_enabled && (unsigned int)address == romdev_wp_addr) {
-+        romdev_wp_last_pc = romdev_z80_instr_pc;
-+        romdev_wp_last_val = value;
-+        romdev_wp_hits++;
-+        romdev_z80_snap(r800, 3);
++        unsigned char romdev_oldv = romdev_wp_cond ? r800->readMemory(r800->ref, address) : 0;
++        if (romdev_wp_cond_ok(romdev_oldv, value)) {
++            romdev_wp_last_pc = romdev_z80_instr_pc;
++            romdev_wp_last_val = value;
++            romdev_wp_last_old = romdev_oldv;
++            romdev_wp_hits++;
++            romdev_z80_snap(r800, 3);
++        }
 +    }
 +    /* romdev RANGE watch: log every in-[lo,hi] data write {pc,addr,val}. */
 +    if (romdev_range_enabled && (romdev_range_mode & 2)
@@ -417,7 +367,7 @@ index e3dd190..bf55bc8 100644
      r800->writeMemory(r800->ref, address, value);
  
  #ifdef ENABLE_WATCHPOINTS
-@@ -6036,6 +6246,14 @@ SystemTime r800GetTimeTrace(R800* r800, int offset) {
+@@ -6036,6 +6261,14 @@ SystemTime r800GetTimeTrace(R800* r800, int offset) {
  
  void r800Execute(R800* r800) {
      static SystemTime lastRefreshTime = 0;
@@ -432,7 +382,7 @@ index e3dd190..bf55bc8 100644
      while (!r800->terminate) {
          UInt16 address;
          int iff1 = 0;
-@@ -6076,6 +6294,14 @@ void r800Execute(R800* r800) {
+@@ -6076,6 +6309,14 @@ void r800Execute(R800* r800) {
          }
  #endif
  
@@ -447,7 +397,7 @@ index e3dd190..bf55bc8 100644
          executeInstruction(r800, readOpcode(r800, r800->regs.PC.W++));
  
          if (r800->regs.halt)
-@@ -6086,7 +6312,7 @@ void r800Execute(R800* r800) {
+@@ -6086,7 +6327,7 @@ void r800Execute(R800* r800) {
  			continue;
  		}
  
@@ -456,7 +406,7 @@ index e3dd190..bf55bc8 100644
  			continue;
          }
  
-@@ -6144,6 +6370,13 @@ void r800Execute(R800* r800) {
+@@ -6144,6 +6385,13 @@ void r800Execute(R800* r800) {
  void r800ExecuteUntil(R800* r800, UInt32 endTime) {
      static SystemTime lastRefreshTime = 0;
  
@@ -470,7 +420,7 @@ index e3dd190..bf55bc8 100644
      while ((Int32)(endTime - r800->systemTime) > 0) {
          UInt16 address;
          int iff1 = 0;
-@@ -6169,14 +6402,22 @@ void r800ExecuteUntil(R800* r800, UInt32 endTime) {
+@@ -6169,14 +6417,22 @@ void r800ExecuteUntil(R800* r800, UInt32 endTime) {
          }
  #endif
  
@@ -495,7 +445,7 @@ index e3dd190..bf55bc8 100644
              continue;
          }
  
-@@ -6264,7 +6505,7 @@ void r800ExecuteInstruction(R800* r800) {
+@@ -6264,7 +6520,7 @@ void r800ExecuteInstruction(R800* r800) {
          r800->regs.iff1 >>= iff1;
      }
  
@@ -505,10 +455,10 @@ index e3dd190..bf55bc8 100644
      }
  
 diff --git a/libretro.c b/libretro.c
-index f583a99..b39403a 100644
+index f583a99..db42e7c 100644
 --- a/libretro.c
 +++ b/libretro.c
-@@ -1838,16 +1838,369 @@ unsigned retro_get_region(void)
+@@ -1838,16 +1838,388 @@ unsigned retro_get_region(void)
           return RETRO_REGION_NTSC;
     }
  }
@@ -585,6 +535,9 @@ index f583a99..b39403a 100644
 +extern int           romdev_wp_enabled;
 +extern unsigned int  romdev_wp_last_pc;
 +extern unsigned char romdev_wp_last_val;
++extern unsigned char romdev_wp_last_old;
++extern int           romdev_wp_cond;
++extern unsigned char romdev_wp_cond_val;
 +extern unsigned int  romdev_wp_hits;
 +
 +/* PC BREAKPOINT. `step` arms a one-instruction single-step (ignores addr). */
@@ -722,6 +675,21 @@ index f583a99..b39403a 100644
 +   romdev_wp_enabled = enabled ? 1 : 0;
 +   romdev_wp_last_pc = 0xFFFFFFFF;
 +   romdev_wp_last_val = 0;
++   romdev_wp_last_old = 0;
++   romdev_wp_cond = 0;
++   romdev_wp_cond_val = 0;
++   romdev_wp_hits = 0;
++}
++
++void romdev_watchpoint_set_cond(unsigned int addr, int enabled, int cond, int val)
++{
++   romdev_wp_addr = addr;
++   romdev_wp_enabled = enabled ? 1 : 0;
++   romdev_wp_last_pc = 0xFFFFFFFF;
++   romdev_wp_last_val = 0;
++   romdev_wp_last_old = 0;
++   romdev_wp_cond = cond;
++   romdev_wp_cond_val = (unsigned char)val;
 +   romdev_wp_hits = 0;
 +}
 +
@@ -737,6 +705,7 @@ index f583a99..b39403a 100644
 +   out6[3] = (unsigned int)romdev_wp_last_val;
 +   out6[4] = romdev_wp_hits;
 +   out6[5] = 0xFFFFFFFF;
++   out6[6] = (romdev_wp_hits ? (unsigned int)romdev_wp_last_old : 0xFFFFFFFFu);
 +   if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; }
 +}
 +

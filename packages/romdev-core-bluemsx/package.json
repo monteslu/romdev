@@ -1,6 +1,6 @@
 {
   "name": "romdev-core-bluemsx",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "blueMSX libretro core (MSX / MSX2) for romdev, bundled as WASM. Ships C-BIOS (open-source MSX BIOS) so no proprietary ROM is required.",
   "type": "module",
   "main": "index.js",
