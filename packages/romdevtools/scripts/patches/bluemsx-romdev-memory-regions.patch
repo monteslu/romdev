@@ -259,19 +259,7 @@ index e3dd190..bf55bc8 100644
 +    romdev_snap_kind = kind;
 +}
 +unsigned char romdev_wp_last_val = 0;
-+unsigned char romdev_wp_last_old = 0;
-+int           romdev_wp_cond     = 0;
-+unsigned char romdev_wp_cond_val = 0;
 +unsigned int  romdev_wp_hits     = 0;
-+/* value-condition (0.30.0): 1=increase 2=decrease 3=equals; skip churn writes. */
-+int romdev_wp_cond_ok(unsigned char oldv, unsigned char v) {
-+    switch (romdev_wp_cond) {
-+        case 1:  return v > oldv;
-+        case 2:  return v < oldv;
-+        case 3:  return v == romdev_wp_cond_val;
-+        default: return 1;
-+    }
-+}
 +
 +/* ---- romdev RE primitives round 2 (Z80 / R800) ---------------------- */
 +/* RANGE watch (discovery): log EVERY {pc,addr,value} that reads or writes an
@@ -415,14 +403,10 @@ index e3dd190..bf55bc8 100644
 +    /* romdev WRITE watchpoint (findWriter): records the live Z80 PC of the
 +     * instruction writing a watched address. */
 +    if (romdev_wp_enabled && (unsigned int)address == romdev_wp_addr) {
-+        unsigned char romdev_oldv = romdev_wp_cond ? r800->readMemory(r800->ref, address) : 0;
-+        if (romdev_wp_cond_ok(romdev_oldv, value)) {
-+            romdev_wp_last_pc = romdev_z80_instr_pc;
-+            romdev_wp_last_val = value;
-+            romdev_wp_last_old = romdev_oldv;
-+            romdev_wp_hits++;
-+            romdev_z80_snap(r800, 3);
-+        }
++        romdev_wp_last_pc = romdev_z80_instr_pc;
++        romdev_wp_last_val = value;
++        romdev_wp_hits++;
++        romdev_z80_snap(r800, 3);
 +    }
 +    /* romdev RANGE watch: log every in-[lo,hi] data write {pc,addr,val}. */
 +    if (romdev_range_enabled && (romdev_range_mode & 2)
@@ -732,30 +716,12 @@ index f583a99..b39403a 100644
 +}
 +
 +/* WRITE watchpoint (findWriter). */
-+extern unsigned char romdev_wp_last_old;
-+extern int           romdev_wp_cond;
-+extern unsigned char romdev_wp_cond_val;
 +void romdev_watchpoint_set(unsigned int addr, int enabled)
 +{
 +   romdev_wp_addr = addr;
 +   romdev_wp_enabled = enabled ? 1 : 0;
 +   romdev_wp_last_pc = 0xFFFFFFFF;
 +   romdev_wp_last_val = 0;
-+   romdev_wp_last_old = 0;
-+   romdev_wp_cond = 0;
-+   romdev_wp_cond_val = 0;
-+   romdev_wp_hits = 0;
-+}
-+
-+void romdev_watchpoint_set_cond(unsigned int addr, int enabled, int cond, int val)
-+{
-+   romdev_wp_addr = addr;
-+   romdev_wp_enabled = enabled ? 1 : 0;
-+   romdev_wp_last_pc = 0xFFFFFFFF;
-+   romdev_wp_last_val = 0;
-+   romdev_wp_last_old = 0;
-+   romdev_wp_cond = cond;
-+   romdev_wp_cond_val = (unsigned char)val;
 +   romdev_wp_hits = 0;
 +}
 +
@@ -771,7 +737,6 @@ index f583a99..b39403a 100644
 +   out6[3] = (unsigned int)romdev_wp_last_val;
 +   out6[4] = romdev_wp_hits;
 +   out6[5] = 0xFFFFFFFF;
-+   out6[6] = (romdev_wp_hits ? (unsigned int)romdev_wp_last_old : 0xFFFFFFFFu);
 +   if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; }
 +}
 +

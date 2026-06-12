@@ -63,7 +63,7 @@ OBJS=$(find . -name "*.o" | tr '\n' ' ')
 [ -z "$OBJS" ] && { echo "FATAL: blueMSX build produced no objects." >&2; exit 1; }
 
 WP_EXPORTS=""
-grep -rq "romdev_watchpoint_get" libretro.c Src/ 2>/dev/null && WP_EXPORTS='"_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get",'
+grep -rq "romdev_watchpoint_get" libretro.c Src/ 2>/dev/null && WP_EXPORTS='"_romdev_watchpoint_set","_romdev_watchpoint_get",'
 # PC breakpoint + read watchpoint (Z80 execute/read hooks in Src/Z80/R800.c,
 # exports in libretro.c) — drive runUntilPC / runUntilRead / stepInstruction.
 BP_EXPORTS=""
