@@ -65,6 +65,14 @@ thousands of bytes and you'll drown).
 
 This is the Cheat-Engine/RetroArch loop. It is THE bread-and-butter primitive.
 
+**Don't know the value? (lives/timer/ammo not on the HUD)** Use the
+unknown-initial-value hunt: `memory({op:'searchUnknown', region, size})` seeds
+the WHOLE region with no value, then narrow across events with
+`searchNext({compare:'dec'|'inc'|'unchanged'|'changed'|'gt'|'lt'})` — e.g.
+`searchUnknown` → lose a life → `searchNext({compare:'dec'})` → repeat until 1–2
+remain. `op:'search'` needs a value; `op:'searchUnknown'` is for when you can't
+see the number.
+
 **Stored ≠ displayed.** When a correct-looking seed returns 0, the byte usually isn't the
 raw number: seed `as:'bcd'` for packed-BCD scores (2 decimal digits per byte — very common
 on NES), or `as:'digits'` for one byte per ON-SCREEN digit at any constant tile base (HUD
@@ -78,7 +86,13 @@ not for value hunting. `memory({op:'diff'})` defaults to a **clustered summary**
 stride) so it won't flood you — a reported stride (e.g. "islands at 0x80") is
 usually a struct/entity array, each island one record. Small clusters (≤8 bytes) carry
 `before`/`after` hex inline, and `minDelta:N` drops |after−before| < N so RNG/counter
-wiggle disappears from the report.
+wiggle disappears from the report. For the locate-value-via-diff case, predicate
+filters cut a 500-byte death-window diff to the ~3 rows you want in one call:
+`changeDir:'dec'|'inc'` (direction), `deltaEq:N` (signed exact delta — `deltaEq:-1`
+= "lost one life"), and `beforeMin/Max` + `afterMin/Max` (value-range gates, e.g.
+`beforeMax:9` = a small counter, not a coordinate). `outputPath` writes the full
+diff JSON to your path regardless of size (`echo:false` returns just the
+counts+path so a big diff never streams through context).
 
 **"Which byte does this INPUT drive?" → `memory({op:'diffRuns'})`** — runs the same start
 state twice (savestate restore in between) under two different held inputs (`portsA` vs
@@ -136,8 +150,11 @@ a string — find a terminator / font map before treating the bytes as values.
 platforms (Genesis/Mega Drive, GB/GBC, SMS/GG, PCE, Lynx) the **file offset IS
 the CPU ROM address** — `memory({op:'readCart', offset:0x21FF00})` answers "does the
 running ROM have my bytes at 0x21FF00?" in one call. (NES/SNES: bytes are
-correct but mapper-banked — `mapped:true` in the response; map a CPU PC→offset
-via `breakpoint({on:'write'})`'s prgOffset/bank.)
+correct but mapper-banked — `mapped:true` in the response.) For a BANKED CPU
+address, read it directly: `memory({op:'readCart', cpuAddress:0x8654, bank:6})`
+maps the bank→PRG offset for you (NES/SNES) — the inverse of the breakpoint
+result's bank/prgOffset, so you stop hand-computing `cpuAddr−0x8000+bank*0x4000`.
+A NES `$C000+` address resolves to the fixed top bank automatically.
 
 When a write "doesn't show up", check the ROM here before assuming the patch
 failed — it's usually live and the bug is elsewhere (wrong source, see §2/§5).
@@ -169,6 +186,18 @@ can pass `{startAddress, bank}` to `disasm({target:'rom'})`. The lighter
 `breakpoint({on:'write', precision:'sampled'})` (a.k.a. `watch({on:'mem'})`) steps until the byte changes
 and returns a frame-boundary PC — a lead, not a guarantee under interrupts; use it for the
 value timeline or when you just want the change history, and cross-check the value trace.
+
+**Stop on the MEANINGFUL write, not the churn.** `breakpoint({on:'write'})` runs
+to END OF FRAME and reports the LAST matching write that frame (with `hits` =
+the count of all matching writes) — so a frequent **restoring** write (a pointer-
+arithmetic `inc`/`dec` that touches the byte every frame, a re-arm) can mask the
+write you actually want. Filter to the real change with `condition` (all 14
+platforms): `condition:'decrease'` / `'increase'` stop only when the stored byte
+actually went down/up (a real lives−1, not a restore), and `condition:'equals',
+conditionValue:N` stops on the byte becoming N (e.g. a $00→$01 respawn re-arm).
+The hit then reports `oldValueByte`→`valueByte` so you see the exact transition.
+This is the difference between pinning a genuine decrement instantly and chasing
+net-zero restoring churn.
 
 ---
 
