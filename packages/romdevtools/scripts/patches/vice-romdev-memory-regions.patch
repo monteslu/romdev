@@ -1,5 +1,5 @@
 diff --git a/libretro/libretro-core.c b/libretro/libretro-core.c
-index 82bd2fb..31c57a0 100644
+index 82bd2fb..97979d4 100644
 --- a/libretro/libretro-core.c
 +++ b/libretro/libretro-core.c
 @@ -19,6 +19,8 @@
@@ -11,7 +11,7 @@ index 82bd2fb..31c57a0 100644
  #include "vdrive-internal.h"
  #include "charset.h"
  #include "attach.h"
-@@ -8639,6 +8641,357 @@ unsigned retro_get_region(void)
+@@ -8639,6 +8641,377 @@ unsigned retro_get_region(void)
     }
  }
  
@@ -22,6 +22,9 @@ index 82bd2fb..31c57a0 100644
 +extern int           romdev_wp_enabled;
 +extern unsigned int  romdev_wp_last_pc;
 +extern unsigned char romdev_wp_last_val;
++extern unsigned char romdev_wp_last_old;
++extern int           romdev_wp_cond;
++extern unsigned char romdev_wp_cond_val;
 +extern unsigned int  romdev_wp_hits;
 +
 +void romdev_watchpoint_set(unsigned int addr, int enabled)
@@ -30,6 +33,21 @@ index 82bd2fb..31c57a0 100644
 +   romdev_wp_enabled = enabled ? 1 : 0;
 +   romdev_wp_last_pc = 0xFFFFFFFF;
 +   romdev_wp_last_val = 0;
++   romdev_wp_last_old = 0;
++   romdev_wp_cond = 0;
++   romdev_wp_cond_val = 0;
++   romdev_wp_hits = 0;
++}
++
++void romdev_watchpoint_set_cond(unsigned int addr, int enabled, int cond, int val)
++{
++   romdev_wp_addr = addr;
++   romdev_wp_enabled = enabled ? 1 : 0;
++   romdev_wp_last_pc = 0xFFFFFFFF;
++   romdev_wp_last_val = 0;
++   romdev_wp_last_old = 0;
++   romdev_wp_cond = cond;
++   romdev_wp_cond_val = (unsigned char)val;
 +   romdev_wp_hits = 0;
 +}
 +
@@ -41,6 +59,8 @@ index 82bd2fb..31c57a0 100644
 +   out5[2] = romdev_wp_last_pc;
 +   out5[3] = (unsigned int)romdev_wp_last_val;
 +   out5[4] = romdev_wp_hits;
++   out5[5] = 0xFFFFFFFF;
++   out5[6] = (romdev_wp_hits ? (unsigned int)romdev_wp_last_old : 0xFFFFFFFFu);
 +   if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; }
 +}
 +
@@ -369,7 +389,7 @@ index 82bd2fb..31c57a0 100644
  bool retro_load_game_special(unsigned type, const struct retro_game_info *info, size_t num)
  {
     (void)type;
-@@ -8668,6 +9021,54 @@ static void dc_sync_index(void)
+@@ -8668,6 +9041,54 @@ static void dc_sync_index(void)
     }
  }
  
@@ -424,7 +444,7 @@ index 82bd2fb..31c57a0 100644
  /* CPU traps ensure we are never saving snapshots or loading them in the middle of a cpu instruction.
     Without this, savestate corruption occurs.
  */
-@@ -8810,17 +9211,105 @@ bool retro_unserialize(const void *data_, size_t size)
+@@ -8810,17 +9231,105 @@ bool retro_unserialize(const void *data_, size_t size)
     return false;
  }
  
@@ -639,10 +659,10 @@ index a109492..e34811c 100644
           * "jammed" - however, our code may rely on FETCH_OPCODE being called
           * here, so we can not simply skip it. What we do instead is remembering
 diff --git a/vice/src/maincpu.c b/vice/src/maincpu.c
-index 14cf0b1..95b0929 100644
+index 14cf0b1..29503d5 100644
 --- a/vice/src/maincpu.c
 +++ b/vice/src/maincpu.c
-@@ -58,6 +58,98 @@
+@@ -58,6 +58,109 @@
  #define EXIT_FAILURE 1
  #endif
  
@@ -653,7 +673,18 @@ index 14cf0b1..95b0929 100644
 +int           romdev_wp_enabled  = 0;
 +unsigned int  romdev_wp_last_pc  = 0xFFFFFFFF;
 +unsigned char romdev_wp_last_val = 0;
++unsigned char romdev_wp_last_old = 0;
++int           romdev_wp_cond     = 0;
++unsigned char romdev_wp_cond_val = 0;
 +unsigned int  romdev_wp_hits     = 0;
++int romdev_wp_cond_ok(unsigned char oldv, unsigned char v) {
++    switch (romdev_wp_cond) {
++        case 1:  return v > oldv;
++        case 2:  return v < oldv;
++        case 3:  return v == romdev_wp_cond_val;
++        default: return 1;
++    }
++}
 +
 +/* romdev instruction-level READ watchpoint (6510) — mirror of the write watch.
 + * The LOAD macro below records reg_pc + the value when a watched address is
@@ -741,15 +772,18 @@ index 14cf0b1..95b0929 100644
  log_t maincpu_log = LOG_DEFAULT;
  
  /* MACHINE_STUFF should define/undef
-@@ -143,12 +235,38 @@ log_t maincpu_log = LOG_DEFAULT;
+@@ -143,12 +246,41 @@ log_t maincpu_log = LOG_DEFAULT;
  
  #ifndef STORE
  #define STORE(addr, value) \
 -    (*_mem_write_tab_ptr[(addr) >> 8])((uint16_t)(addr), (uint8_t)(value))
 +    do { \
 +        if (romdev_wp_enabled && (unsigned int)(uint16_t)(addr) == romdev_wp_addr) { \
-+            romdev_wp_last_pc = romdev_6510_instr_pc; romdev_wp_last_val = (unsigned char)(value); romdev_wp_hits++; \
-+            romdev_6510_snap(3); \
++            unsigned char romdev_oldv = romdev_wp_cond ? (*_mem_read_tab_ptr[((uint16_t)(addr)) >> 8])((uint16_t)(addr)) : 0; \
++            if (romdev_wp_cond_ok(romdev_oldv, (unsigned char)(value))) { \
++                romdev_wp_last_pc = romdev_6510_instr_pc; romdev_wp_last_val = (unsigned char)(value); romdev_wp_last_old = romdev_oldv; romdev_wp_hits++; \
++                romdev_6510_snap(3); \
++            } \
 +        } \
 +        if (romdev_range_enabled && (romdev_range_mode & 2) \
 +            && (unsigned int)(uint16_t)(addr) >= romdev_range_lo \
@@ -782,7 +816,7 @@ index 14cf0b1..95b0929 100644
  #endif
  
  #ifndef STORE_ZERO
-@@ -292,6 +410,41 @@ mos6510dtv_regs_t maincpu_regs;
+@@ -292,6 +424,41 @@ mos6510dtv_regs_t maincpu_regs;
  mos6510_regs_t maincpu_regs;
  #endif
  
@@ -824,7 +858,7 @@ index 14cf0b1..95b0929 100644
  static int maincpu_jammed = 0;
  
  /* ------------------------------------------------------------------------- */
-@@ -530,9 +683,16 @@ void maincpu_mainloop(void)
+@@ -530,9 +697,16 @@ void maincpu_mainloop(void)
  #ifndef C64DTV
      /* Notice that using a struct for these would make it a lot slower (at
         least, on gcc 2.7.2.x).  */
@@ -844,7 +878,7 @@ index 14cf0b1..95b0929 100644
  #else
      static int reg_a_read_idx = 0;
      static int reg_a_write_idx = 0;
-@@ -565,8 +725,6 @@ void maincpu_mainloop(void)
+@@ -565,8 +739,6 @@ void maincpu_mainloop(void)
      } while (0);
  #define reg_y_read dtv_registers[reg_y_idx]
  #endif
@@ -853,7 +887,7 @@ index 14cf0b1..95b0929 100644
      static uint8_t flag_n = 0;
      static uint8_t flag_z = 0;
  #ifndef NEED_REG_PC
-@@ -639,7 +797,13 @@ if (!retro_mainloop)
+@@ -639,7 +811,13 @@ if (!retro_mainloop)
  
  #define GLOBAL_REGS maincpu_regs
  
@@ -867,7 +901,7 @@ index 14cf0b1..95b0929 100644
  
          maincpu_int_status->num_dma_per_opcode = 0;
  
-@@ -769,7 +933,13 @@ void maincpu_mainloop(void)
+@@ -769,7 +947,13 @@ void maincpu_mainloop(void)
  
  #define GLOBAL_REGS maincpu_regs
  

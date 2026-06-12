@@ -3,6 +3,7 @@ import { MemoryRegionToRetro } from "../../host/types.js";
 import { jsonContent, safeTool, textContent, writeOutput } from "../util.js";
 import { classifyBytes } from "./classify-region.js";
 import { clusterChanges } from "./diff-cluster.js";
+import { mapNesAddress, mapSnesAddress } from "./disasm.js";
 
 // Small reads stay inline (hex) for ergonomics; large reads must go to disk
 // (raw bytes) unless inline:true. The common case — peeking a few bytes of
@@ -193,9 +194,41 @@ async function memWrite(sessionKey, { region, offset = 0, hex, base64, data, byt
       return textContent(`wrote ${buf.length} bytes to ${region}+${offset}`);
 }
 
-async function memReadCart(sessionKey, { offset = 0, length = 16, outputPath, inline, echo }) {
+async function memReadCart(sessionKey, { offset = 0, length = 16, cpuAddress, bank, mapper, outputPath, inline, echo }) {
       const host = getHost(sessionKey);
       const rom = host.getCartRom();
+
+      // Banked CPU-address read (0.28.0 feedback #2a): map {cpuAddress, bank?} →
+      // PRG bytes, the inverse of the breakpoint result's bank/prgOffset. Saves
+      // the caller the hand-computed `cpuAddr - 0x8000 + bank*0x4000` arithmetic
+      // that bit them twice. NES + SNES today (reuses the disasm mappers).
+      if (cpuAddress != null) {
+        let m;
+        if (rom.platform === "nes") {
+          m = mapNesAddress(rom.raw, cpuAddress >>> 0, length, bank);
+        } else if (rom.platform === "snes") {
+          m = mapSnesAddress(rom.raw, cpuAddress >>> 0, length, mapper);
+        } else {
+          throw new Error(`memory({op:'readCart', cpuAddress}): banked CPU-address mapping is NES/SNES only (got '${rom.platform}'). Use a flat 'offset' for this platform.`);
+        }
+        const hex = Array.from(m.bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+        const meta = {
+          platform: rom.platform,
+          cpuAddress: "0x" + (cpuAddress >>> 0).toString(16).toUpperCase(),
+          ...(bank != null ? { bank } : {}),
+          fileOffset: "0x" + m.fileOffset.toString(16).toUpperCase(),
+          prgOffset: "0x" + (m.fileOffset - (m.prgFileStart ?? 0)).toString(16).toUpperCase(),
+          length: m.bytes.length,
+          note: m.note,
+        };
+        if (outputPath) {
+          const { path, bytes: written } = writeOutput(Uint8Array.from(m.bytes), { outputPath, what: "readCartRom" });
+          if (echo === false) return jsonContent({ ...meta, path, bytes: written });
+          return jsonContent({ ...meta, path, bytes: written, hex });
+        }
+        return jsonContent({ ...meta, hex });
+      }
+
       if (offset >= rom.bytes.length) {
         throw new Error(`readCartRom: offset ${offset} is past the end of the ${rom.platform} ROM (size ${rom.bytes.length}, header skipped ${rom.headerSkipped}).`);
       }
@@ -293,23 +326,38 @@ async function memDiffRuns(sessionKey, { region, frames = 60, portsA, portsB, of
       });
 }
 
-async function memDiff(sessionKey, { region, name = "default", view = "summary", maxChanges = 4096, maxClusters = 64, gap = 4, minDelta }) {
+async function memDiff(sessionKey, { region, name = "default", view = "summary", maxChanges = 4096, maxClusters = 64, gap = 4, minDelta, changeDir, beforeMin, beforeMax, afterMin, afterMax, deltaEq, outputPath, echo = true }) {
       const host = getHost(sessionKey);
       const snap = memSnapshots(sessionKey).get(snapKey(region, name));
       if (!snap) throw new Error(`memory({op:'diff'}): no snapshot named '${name}' for region '${region}'. Call memory({op:'snapshot', region, name}) first.`);
       const now = host.readMemory(region, snap.offset, snap.bytes.length);
 
-      // Collect changed offsets once. minDelta filters OUT small wiggles
-      // (|after - before| < minDelta) so "find the position byte amid OAM/RNG
-      // churn" is one cheap call instead of a raw dump + client-side filtering
-      // (0.27.0 feedback #5).
+      // Collect changed offsets once, applying server-side predicate filters so
+      // the lives/score/ammo hunt is ONE call instead of dumping the whole diff
+      // and filtering client-side (0.28.0 feedback #3). All filters AND together:
+      //   minDelta   — |after-before| >= minDelta (drop small wiggles; 0.27.0 #5)
+      //   changeDir  — 'dec' (after<before) | 'inc' (after>before)
+      //   deltaEq    — after-before === deltaEq EXACTLY (signed; e.g. -1 for "lost one life")
+      //   beforeMin/Max, afterMin/Max — value-range gates on the old/new byte
+      // Example: a 537-byte death diff → the ~3 "decreased by exactly 1 from a
+      // small value" rows with {changeDir:'dec', beforeMax:9, deltaEq:-1}.
       const changedOffsets = [];
       for (let i = 0; i < snap.bytes.length; i++) {
-        if (snap.bytes[i] === now[i]) continue;
-        if (minDelta != null && Math.abs(now[i] - snap.bytes[i]) < minDelta) continue;
+        const b = snap.bytes[i], a = now[i];
+        if (b === a) continue;
+        if (minDelta != null && Math.abs(a - b) < minDelta) continue;
+        if (changeDir === "dec" && !(a < b)) continue;
+        if (changeDir === "inc" && !(a > b)) continue;
+        if (deltaEq != null && (a - b) !== deltaEq) continue;
+        if (beforeMin != null && b < beforeMin) continue;
+        if (beforeMax != null && b > beforeMax) continue;
+        if (afterMin != null && a < afterMin) continue;
+        if (afterMax != null && a > afterMax) continue;
         changedOffsets.push(i);
       }
       const changedCount = changedOffsets.length;
+      const filtered = (changeDir != null || deltaEq != null || beforeMin != null ||
+        beforeMax != null || afterMin != null || afterMax != null);
 
       if (view === "raw") {
         const changes = changedOffsets.slice(0, maxChanges).map((i) => ({
@@ -318,11 +366,13 @@ async function memDiff(sessionKey, { region, name = "default", view = "summary",
           before: snap.bytes[i].toString(16).padStart(2, "0"),
           after: now[i].toString(16).padStart(2, "0"),
         }));
-        return jsonContent({
+        const result = {
           region, name, view, baseOffset: snap.offset, length: snap.bytes.length,
-          changedCount, changes,
-          ...(changedCount > changes.length ? { truncated: true, note: `${changedCount} bytes changed; showing first ${changes.length} (raise maxChanges).` } : {}),
-        });
+          ...(filtered ? { filterMatches: changedCount } : { changedCount }),
+          changes,
+          ...(changedCount > changes.length ? { truncated: true, note: `${changedCount} ${filtered ? "matching " : ""}bytes changed; showing first ${changes.length} (raise maxChanges).` } : {}),
+        };
+        return diffOut(result, { outputPath, echo, region, heavyKey: "changes", count: changedCount });
       }
 
       // SUMMARY: cluster adjacent changes (within `gap`) into ranges + stride.
@@ -353,18 +403,33 @@ async function memDiff(sessionKey, { region, name = "default", view = "summary",
         }
         return entry;
       });
-      return jsonContent({
+      const result = {
         region, name, view, baseOffset: snap.offset, length: snap.bytes.length,
-        changedCount, clusterCount: clusters.length,
+        ...(filtered ? { filterMatches: changedCount } : { changedCount }), clusterCount: clusters.length,
         clusters: out,
         ...(stride !== null ? { stride: "0x" + stride.toString(16), strideHint: strideNote } : {}),
         ...(clusters.length > out.length ? { truncated: true } : {}),
         note: changedCount === 0
-          ? "Nothing changed."
-          : `${changedCount} bytes changed in ${clusters.length} cluster(s). ` +
+          ? (filtered ? "No changed byte matched the filters (try loosening changeDir/deltaEq/before*/after*)." : "Nothing changed.")
+          : `${changedCount} ${filtered ? "matching " : ""}bytes changed in ${clusters.length} cluster(s). ` +
             (stride !== null ? strideNote + " " : "") +
-            "Use view:'raw' for exact before/after bytes (or narrow with a tighter event window). For 'find the address of value X' use memory({op:'search'}), not diff.",
-      });
+            "Use view:'raw' for exact before/after bytes (or narrow with a tighter event window / the changeDir/deltaEq/before*/after* filters). For 'find the address of value X' use memory({op:'search'}), not diff.",
+      };
+      return diffOut(result, { outputPath, echo, region, heavyKey: "clusters", count: changedCount });
+}
+
+// Honor outputPath/echo for diff results, mirroring memRead (0.28.0 feedback
+// #2): write the FULL JSON to outputPath regardless of size; with echo:false
+// return only the slim envelope (counts + path), dropping the heavy array so a
+// large diff never streams through context.
+function diffOut(result, { outputPath, echo, region, heavyKey, count }) {
+  if (!outputPath) return jsonContent(result);
+  const { path, bytes } = writeOutput(JSON.stringify(result, null, 2), { outputPath, what: `diff(${region})` });
+  if (echo === false) {
+    const { [heavyKey]: _omit, ...slim } = result;
+    return jsonContent({ ...slim, path, bytes, echo: false, note: `Full diff written to ${path} (${count} changes); '${heavyKey}' omitted (echo:false).` });
+  }
+  return jsonContent({ ...result, path, bytes });
 }
 
 // diffState lives in the `state` tool (state({op:'diff'})).
@@ -471,6 +536,37 @@ async function memSearch(sessionKey, { value, size = 1, as = "raw", region = "sy
       });
 }
 
+// op:'searchUnknown' — the Cheat-Engine UNKNOWN-INITIAL-VALUE hunt: seed the
+// candidate set to the WHOLE region (every size-aligned offset, baselined to
+// its current value), with NO value filter. Then narrow across in-game events
+// with searchNext compare:'dec'/'inc'/'unchanged'/'changed'/'gt'/'lt'. This is
+// the canonical "find the lives/score/timer address you can't see" loop, which
+// op:'search' (requires a value) can't do. (0.28.0 feedback #1.)
+async function memSearchUnknown(sessionKey, { size = 1, as = "raw", region = "system_ram", name = "default", maxCandidates = 64 }) {
+      const host = getHost(sessionKey);
+      if (as === "digits") throw new Error("memory({op:'searchUnknown'}): as:'digits' needs a value; use as:'raw' or 'bcd' for an unknown-value hunt.");
+      const info = REGION_INFO[region] ?? {};
+      const little = (info.endianness ?? genericEndianness(host.status.platform)) !== "big";
+      const buf = host.readMemory(region, 0, regionLength(host, region, 0));
+      const s = { region, size, little, as, digitLen: 0 };
+      // Seed EVERY size-aligned offset; baseline each to its current decoded
+      // value so the first searchNext relative compare works immediately.
+      const candidates = [];
+      const prevMap = new Map();
+      for (let i = 0; i + size <= buf.length; i += size) {
+        const cur = decodeAt(buf, i, s);
+        if (cur === null) continue;
+        candidates.push(i);
+        prevMap.set(i, cur);
+      }
+      searchSessions(sessionKey).set(name, { ...s, addrs: Uint32Array.from(candidates), prev: prevMap, kMap: null });
+      return jsonContent({
+        searchId: name, region, size, as, mode: "unknown",
+        count: candidates.length,
+        note: `Seeded ${candidates.length} candidates (the whole region, no value filter). Now cause the value to change in-game, then narrow with memory({op:'searchNext', name:'${name}', compare:'dec'|'inc'|'unchanged'|'changed'|'gt'|'lt'}) — e.g. 'dec' after losing a life, 'unchanged' across a frame where it shouldn't move. Repeat until 1-2 remain, then confirm with op:'write'.`,
+      });
+}
+
 async function memSearchNext(sessionKey, { compare, value, name = "default", maxCandidates = 64 }) {
       const host = getHost(sessionKey);
       const s = searchSessions(sessionKey).get(name);
@@ -542,13 +638,17 @@ export function registerMemoryTools(server, z, sessionKey) {
     "• op:'diff' — compare a region against a snapshot baseline → the CHANGED bytes. DEFAULT `view:'summary'` is a CLUSTERED summary (+ stride detection — '4 islands at stride 0x80' = a struct array) so a churny gameplay diff doesn't flood context; `view:'raw'` = the per-byte before/after list.\n" +
     "• op:'classify' — heuristically classify the bytes at an offset BEFORE you trust a 'found table'. **Kills the classic trap: a run that 'matches' your stats is often ASCII TEXT (bytes 82/79/68 = 'ROD' from a taunt string) or code.** Returns looksLike/printableRatio/entropy/asciiPreview/confidence.\n" +
     "• op:'search' — seed the iterative RAM value search (Cheat Engine / RetroArch style): all addresses currently holding `value` (`size` 1/2/4 bytes, region's endianness). The primitive for 'the screen shows X, find its RAM address' — better than snapshot+diff for this. STORED ≠ DISPLAYED is common — `as:'bcd'` (packed BCD scores) and `as:'digits'` (one byte per on-screen digit at ANY constant tile base, auto-detected per candidate) search those representations directly; for displayed−1 lives or ÷10 scores just seed the transformed number.\n" +
+    "• op:'searchUnknown' — the UNKNOWN-INITIAL-VALUE hunt (Cheat Engine's 'Unknown initial value'): seed the WHOLE region as candidates with NO value, then narrow across in-game events with op:'searchNext' compare 'dec'/'inc'/'unchanged'/'changed'/'gt'/'lt'. THE way to find a value you can't see (lives/timer/ammo not on the HUD): searchUnknown → lose a life → searchNext compare:'dec' → repeat. Use this when you don't know the number; use op:'search' when you do.\n" +
     "• op:'searchNext' — narrow the active candidate list against CURRENT memory. `compare`: 'eq'/'gt'/'lt' (need `value`), 'changed'/'unchanged'/'inc'/'dec' (vs the previous read — usable as the FIRST narrow too; baselines are recorded at seed). Comparisons happen in the seed's `as` representation. Repeat until 1-2 remain, then confirm with op:'write'. (For values an INPUT drives — position, velocity — op:'diffRuns' is usually one call instead of a narrowing loop.)",
     {
-      op: z.enum(["read", "write", "readCart", "snapshot", "diff", "diffRuns", "classify", "search", "searchNext"])
-        .describe("read=bytes→hex; write=hex/base64→region; readCart=loaded cart ROM image; snapshot=capture a baseline; diff=changed bytes vs a baseline; diffRuns=run the SAME start state twice under two different held inputs and return only the DIVERGENT bytes (THE input→RAM mapping primitive — replaces save/run/dump/restore/run/dump/python-diff); classify=what kind of data is here; search=seed a value search; searchNext=narrow it."),
+      op: z.enum(["read", "write", "readCart", "snapshot", "diff", "diffRuns", "classify", "search", "searchUnknown", "searchNext"])
+        .describe("read=bytes→hex; write=hex/base64→region; readCart=loaded cart ROM image; snapshot=capture a baseline; diff=changed bytes vs a baseline; diffRuns=run the SAME start state twice under two different held inputs and return only the DIVERGENT bytes (THE input→RAM mapping primitive — replaces save/run/dump/restore/run/dump/python-diff); classify=what kind of data is here; search=seed a value search (you know the number); searchUnknown=seed the whole region (you DON'T know the number); searchNext=narrow either."),
       region: z.enum(REGIONS).optional().describe("Memory region. Required for read/write/snapshot/diff; defaults to system_ram for classify/search. (readCart targets the cart ROM image, not a region.)"),
       offset: z.number().int().min(0).default(0).describe("Byte offset within the region (read/write/snapshot/classify) or the cart ROM image (readCart)."),
       length: z.number().int().min(1).max(1 << 20).optional().describe("Bytes to read (max 1MB). op:read default 1; op:readCart default 16; op:snapshot default = whole region from offset; op:classify default 256."),
+      cpuAddress: z.number().int().min(0).optional().describe("op:readCart (NES/SNES) — read by a BANKED CPU ADDRESS instead of a flat offset (the inverse of the breakpoint result's bank/prgOffset). e.g. read a jump table at $8654 in bank 6: {op:'readCart', cpuAddress:0x8654, bank:6}. A $C000+ NES address resolves to the fixed top bank. Saves the cpuAddr-0x8000+bank*0x4000 hand-arithmetic."),
+      bank: z.number().int().min(0).optional().describe("op:readCart with cpuAddress — which 16KB PRG bank is mapped into the switchable $8000-$BFFF window (NES). Ignored for $C000+ (fixed top bank) and for non-banked ROMs."),
+      mapper: z.enum(["lorom", "hirom"]).optional().describe("op:readCart with cpuAddress (SNES) — force LoROM/HiROM mapping if auto-detect is wrong."),
       offsets: offsetsShape.optional().describe("op:read BATCH — a list of addresses (each read `length` bytes, default 1) or {offset,length} objects → reads:[{offset,length,hex}]. Takes precedence over offset/length."),
       // write
       hex: z.string().optional().describe("op:write — hex string, e.g. 'deadbeef' (even length)."),
@@ -563,6 +663,12 @@ export function registerMemoryTools(server, z, sessionKey) {
       maxClusters: z.number().int().min(1).max(4096).default(64).describe("op:diff summary view — cap the cluster list (clusterCount is the true total)."),
       gap: z.number().int().min(1).max(256).default(4).describe("op:diff summary view — merge changed bytes within this many bytes into one cluster (default 4)."),
       minDelta: z.number().int().min(1).max(255).optional().describe("op:diff — ignore changes where |after-before| < minDelta (filters RNG/counter wiggle so a position byte that moved by the entity's speed stands out)."),
+      changeDir: z.enum(["inc", "dec"]).optional().describe("op:diff — keep only bytes that went UP ('inc', after>before) or DOWN ('dec', after<before). The lives/score/ammo hunt: a death window's 'dec' bytes are the candidates."),
+      deltaEq: z.number().int().min(-255).max(255).optional().describe("op:diff — keep only bytes whose signed change (after-before) is EXACTLY this. e.g. deltaEq:-1 = 'decreased by one' (lost a life); deltaEq:10 = '+10 score tick'."),
+      beforeMin: z.number().int().min(0).max(255).optional().describe("op:diff — keep only bytes whose BEFORE value was >= this."),
+      beforeMax: z.number().int().min(0).max(255).optional().describe("op:diff — keep only bytes whose BEFORE value was <= this (e.g. beforeMax:9 = a small counter like lives, not a coordinate)."),
+      afterMin: z.number().int().min(0).max(255).optional().describe("op:diff — keep only bytes whose AFTER value was >= this."),
+      afterMax: z.number().int().min(0).max(255).optional().describe("op:diff — keep only bytes whose AFTER value was <= this."),
       frames: z.number().int().min(1).max(100000).default(60).describe("op:diffRuns — frames to run EACH scenario from the same start state."),
       portsA: z.array(z.record(z.string(), z.boolean())).max(2).optional().describe("op:diffRuns — held input for run A (e.g. [{right:true}]). Default released."),
       portsB: z.array(z.record(z.string(), z.boolean())).max(2).optional().describe("op:diffRuns — held input for run B. Default released — A-vs-idle is the classic 'which byte does this input drive?' probe."),
@@ -573,9 +679,9 @@ export function registerMemoryTools(server, z, sessionKey) {
       compare: z.enum(["eq", "changed", "unchanged", "inc", "dec", "gt", "lt"]).optional().describe("op:searchNext — eq=now equals `value`; changed/unchanged vs the last read; inc/dec=went up/down. All of these work as the FIRST narrow too (baselines are recorded at seed). gt/lt=now >/< `value`."),
       maxCandidates: z.number().int().min(1).max(8192).default(64).describe("op:search/searchNext — cap the candidates RETURNED (the full list is kept server-side; `count` is the true total)."),
       // shared output
-      outputPath: z.string().optional().describe(`op:read/readCart — write RAW bytes here. Required for reads >${INLINE_HEX_LIMIT}B unless inline. Small reads honor it too (writes file AND returns hex), so 'dump to disk then diff two files' works at any size. (Ignored with offsets.)`),
+      outputPath: z.string().optional().describe(`op:read/readCart — write RAW bytes here. Required for reads >${INLINE_HEX_LIMIT}B unless inline. Small reads honor it too (writes file AND returns hex), so 'dump to disk then diff two files' works at any size. (Ignored with offsets.) op:diff — write the FULL diff JSON here regardless of size (so a big diff routes to YOUR path, not a harness path).`),
       inline: z.boolean().default(false).describe(`op:read/readCart — for reads >${INLINE_HEX_LIMIT}B, return the hex in the response instead of writing to disk.`),
-      echo: z.boolean().default(true).describe("op:read/readCart with outputPath — false = return only {path, bytes} with NO inline hex (keeps a 2-4KB dump out of context; the raw bytes are in the file)."),
+      echo: z.boolean().default(true).describe("op:read/readCart with outputPath — false = return only {path, bytes} with NO inline hex (keeps a 2-4KB dump out of context; the raw bytes are in the file). op:diff with outputPath — false = return only the slim envelope (counts + path), omitting the changes/clusters array."),
     },
     safeTool(async (args) => {
       switch (args.op) {
@@ -599,9 +705,10 @@ export function registerMemoryTools(server, z, sessionKey) {
         }
         case "classify":   return await memClassify(sessionKey, args);
         case "search": {
-          if (args.value == null) throw new Error("memory({op:'search'}): `value` is required.");
+          if (args.value == null) throw new Error("memory({op:'search'}): `value` is required (use op:'searchUnknown' for an unknown-value hunt).");
           return await memSearch(sessionKey, args);
         }
+        case "searchUnknown": return await memSearchUnknown(sessionKey, args);
         case "searchNext": {
           if (!args.compare) throw new Error("memory({op:'searchNext'}): `compare` is required.");
           return await memSearchNext(sessionKey, args);
