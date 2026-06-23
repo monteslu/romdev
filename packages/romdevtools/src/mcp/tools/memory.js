@@ -542,7 +542,7 @@ async function memSearch(sessionKey, { value, size = 1, as = "raw", region = "sy
 // with searchNext compare:'dec'/'inc'/'unchanged'/'changed'/'gt'/'lt'. This is
 // the canonical "find the lives/score/timer address you can't see" loop, which
 // op:'search' (requires a value) can't do. (0.28.0 feedback #1.)
-async function memSearchUnknown(sessionKey, { size = 1, as = "raw", region = "system_ram", name = "default", maxCandidates = 64 }) {
+async function memSearchUnknown(sessionKey, { size = 1, as = "raw", region = "system_ram", name = "default", maxCandidates: _maxCandidates = 64 }) {
       const host = getHost(sessionKey);
       if (as === "digits") throw new Error("memory({op:'searchUnknown'}): as:'digits' needs a value; use as:'raw' or 'bcd' for an unknown-value hunt.");
       const info = REGION_INFO[region] ?? {};

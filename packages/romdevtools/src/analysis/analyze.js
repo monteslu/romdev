@@ -12,7 +12,7 @@
 // resolved by the existing disasm mappers — analysis here is whole-file.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { runRizin, runRizinJson, RIZIN_ARCH } from "./rizin.js";
+import { runRizinJson, RIZIN_ARCH } from "./rizin.js";
 import { decompileFunction, SLEIGH_LANGID } from "./decompile.js";
 import { registersForPlatform } from "../platforms/common/registers.js";
 

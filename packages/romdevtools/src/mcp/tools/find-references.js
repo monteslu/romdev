@@ -213,7 +213,7 @@ function nesVectorRefs(data, targetAddr) {
   return refs;
 }
 
-export async function findReferencesCore({ path, platform, address, mapper, maxRefsReturned = 256 }) {
+export async function findReferencesCore({ path, platform, address, mapper: _mapper, maxRefsReturned = 256 }) {
   const data = new Uint8Array(await readFile(path));
   const resolved = platform ?? (
     /\.nes$/i.test(path) ? "nes" :
