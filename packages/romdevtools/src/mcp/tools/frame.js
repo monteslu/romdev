@@ -486,6 +486,82 @@ export function registerFrameTools(server, z, sessionKey) {
     };
   }
 
+  // op:'compareRam' — the RAM-diff oracle. The STATE-level sibling of
+  // sideBySide: instead of comparing pixels, compare the work-RAM of slot A
+  // (the original) and slot B (the port) at the same game-moment. This is how a
+  // logic port is proven correct INDEPENDENT of graphics — if the two machines'
+  // RAM matches, the game logic is running identically even when one renders
+  // blank (no PPU shim yet).
+  //
+  // Designed for a "smart-enough, not frontier" agent: it does the byte-compare
+  // MECHANICALLY and returns a DIGESTED verdict — a match %, the diverging
+  // address RANGES (run-length-encoded, not raw bytes), and plain-language
+  // guidance — so the agent gets "addresses $0300-$0312 differ, likely your
+  // sprite table" instead of two 2KB hex blobs to eyeball.
+  function compareRam({ region = "system_ram", frames, maxRanges = 24 }) {
+    const hostA = getHost(sessionKey);
+    const hostB = getHostB(sessionKey);
+    if (frames && frames > 0) { hostA.stepFrames(frames); hostB.stepFrames(frames); }
+
+    const sizeA = hostA.regionSize ? hostA.regionSize(region) : 0;
+    const sizeB = hostB.regionSize ? hostB.regionSize(region) : 0;
+    if (!sizeA || !sizeB) {
+      throw new Error(`frame({op:'compareRam'}): region '${region}' not available on ${!sizeA ? "slot A (" + hostA.status.platform + ")" : "slot B (" + hostB.status.platform + ")"}. Both hosts must expose it; 'system_ram' is the portable default.`);
+    }
+    const len = Math.min(sizeA, sizeB);
+    const a = hostA.readMemory(region, 0, len);
+    const b = hostB.readMemory(region, 0, len);
+
+    // Run-length-encode the diverging spans so the agent sees regions, not bytes.
+    const ranges = [];
+    let diffBytes = 0;
+    let runStart = -1;
+    for (let i = 0; i < len; i++) {
+      const differ = a[i] !== b[i];
+      if (differ) {
+        diffBytes++;
+        if (runStart < 0) runStart = i;
+      } else if (runStart >= 0) {
+        ranges.push({ start: runStart, end: i - 1, length: i - runStart });
+        runStart = -1;
+      }
+    }
+    if (runStart >= 0) ranges.push({ start: runStart, end: len - 1, length: len - runStart });
+
+    const matchPct = len ? Math.round(((len - diffBytes) / len) * 1000) / 10 : 100;
+    // Keep the biggest diverging spans (most informative), cap the list.
+    const sorted = [...ranges].sort((x, y) => y.length - x.length);
+    const shown = sorted.slice(0, maxRanges).map((r) => ({
+      range: `$${r.start.toString(16).toUpperCase().padStart(4, "0")}-$${r.end.toString(16).toUpperCase().padStart(4, "0")}`,
+      bytes: r.length,
+      // a tiny sample so the agent can sanity-check WITHOUT a separate read
+      a: Buffer.from(a.subarray(r.start, Math.min(r.start + 4, r.end + 1))).toString("hex"),
+      b: Buffer.from(b.subarray(r.start, Math.min(r.start + 4, r.end + 1))).toString("hex"),
+    }));
+
+    const verdict =
+      diffBytes === 0
+        ? "IDENTICAL — slot A and slot B work-RAM match byte-for-byte. The port's logic is running exactly like the original at this moment."
+        : matchPct >= 95
+          ? `CLOSE (${matchPct}% match) — logic is largely tracking; ${ranges.length} diverging span(s). Inspect the ranges below (often graphics/timing scratch that doesn't affect logic). Read a range with memory({op:'read', region, offset}) on each slot to dig in.`
+          : `DIVERGED (${matchPct}% match) — the port's logic is NOT tracking the original. Step both from a known-identical point (state restore), then compareRam after a few frames to find WHERE they split. The first diverging span is usually the root cause.`;
+
+    return jsonContent({
+      op: "compareRam",
+      region,
+      a: { platform: hostA.status.platform, frame: hostA.status.frameCount, bytes: sizeA },
+      b: { platform: hostB.status.platform, frame: hostB.status.frameCount, bytes: sizeB },
+      comparedBytes: len,
+      matchPct,
+      identical: diffBytes === 0,
+      divergingBytes: diffBytes,
+      divergingSpans: ranges.length,
+      ranges: shown,
+      ...(ranges.length > shown.length ? { rangesOmitted: ranges.length - shown.length } : {}),
+      note: verdict,
+    });
+  }
+
   async function doStepAndShot({ frames, path: outPath, inline }) {
       requireImageTarget(outPath, inline, "frame({op:'stepAndShot'})");
       const host = getHost(sessionKey);
@@ -508,7 +584,7 @@ export function registerFrameTools(server, z, sessionKey) {
 
   server.tool(
     "frame",
-    "Advance the emulator and capture frames. `op`: 'step' | 'screenshot' | 'stepAndShot' | 'sideBySide' | 'stepInstruction' | 'verify'.\n" +
+    "Advance the emulator and capture frames. `op`: 'step' | 'screenshot' | 'stepAndShot' | 'sideBySide' | 'compareRam' | 'stepInstruction' | 'verify'.\n" +
     "'step': advance N `frames` as fast as possible — NO pacing/audio/vsync. Cores run at WASM speed, so frames:3600 " +
     "(1 min of game time) finishes in ~5-30ms, cheaper than a screenshot. Don't be timid — skip a title with 300, a " +
     "level with 7200; prefer ONE big call.\n" +
@@ -526,6 +602,12 @@ export function registerFrameTools(server, z, sessionKey) {
     "comparable size. Returns per-pane {platform, frame, distinctColors, dominantColor, dominantPct} so a no-vision " +
     "agent still gets a structured 'are both alive / how different' signal. Requires a ROM in slot B (loadMedia({slot:'b'})). " +
     "Same image contract as screenshot (path or inline:true).\n" +
+    "'compareRam': the RAM-diff ORACLE — the STATE-level sibling of sideBySide. Compares the work-RAM (`region`, default " +
+    "'system_ram') of slot A vs slot B at the same game-moment to prove a logic PORT is correct INDEPENDENT of graphics " +
+    "(matching RAM = identical logic even when the port renders blank). Returns a DIGESTED verdict: matchPct, " +
+    "identical, and the diverging address RANGES run-length-encoded with a 4-byte sample of each side (NOT raw byte " +
+    "dumps) so even a small model gets '$0300-$0312 differ' not two hex blobs. Workflow: state-restore both to an " +
+    "identical point, step both N frames, compareRam — the FIRST diverging span is usually the bug. Requires slot B.\n" +
     "'stepInstruction': execute exactly ONE CPU instruction and stop (finer than 'step'); freezes the CPU one " +
     "instruction later and returns { pc }. Pair with cpu({op:'read'}) to watch registers change while tracing a routine.\n" +
     "'verify': one-call 'is the game actually rendering / alive?' health check WITHOUT vision — for the spiral where an " +
@@ -539,8 +621,10 @@ export function registerFrameTools(server, z, sessionKey) {
     "IMAGE CONTRACT (screenshot/stepAndShot): the image goes to `path` (default, returns {path}) OR inline:true — " +
     "you MUST pass one. Keeps PNGs out of context unless asked.",
     {
-      op: z.enum(["step", "screenshot", "stepAndShot", "sideBySide", "stepInstruction", "verify"]).describe("step frames; capture a screenshot; step+capture in one call; capture both hosts side-by-side (A|B); single-step one CPU instruction; or verify the game is actually rendering/alive (no vision needed)."),
-      frames: z.number().int().min(1).max(1_000_000).default(1).describe("op=step/stepAndShot/sideBySide: frames to advance (1-1,000,000). For sideBySide, BOTH hosts step the same amount. 36000 (10 min) usually completes in <1s — don't be conservative."),
+      op: z.enum(["step", "screenshot", "stepAndShot", "sideBySide", "compareRam", "stepInstruction", "verify"]).describe("step frames; capture a screenshot; step+capture in one call; capture both hosts side-by-side (A|B); compareRam = diff slot-A vs slot-B work-RAM (the logic-port oracle); single-step one CPU instruction; or verify the game is actually rendering/alive (no vision needed)."),
+      frames: z.number().int().min(1).max(1_000_000).default(1).describe("op=step/stepAndShot/sideBySide/compareRam: frames to advance (1-1,000,000). For sideBySide/compareRam, BOTH hosts step the same amount. 36000 (10 min) usually completes in <1s — don't be conservative."),
+      region: z.string().optional().describe("op=compareRam: memory region to diff across the two slots (default 'system_ram', the portable work-RAM). Both hosts must expose it."),
+      maxRanges: z.number().int().min(1).max(256).default(24).describe("op=compareRam: cap on the diverging address ranges returned (largest first)."),
       format: z.enum(["png", "ascii"]).default("png").describe("op=screenshot: 'png' (default, real image) or 'ascii' (lossy text render)."),
       path: z.string().optional().describe("op=screenshot/stepAndShot: absolute path to write to (required unless inline:true)."),
       inline: z.boolean().default(false).describe("op=screenshot/stepAndShot: return the image in the response instead of writing to disk."),
@@ -557,6 +641,7 @@ export function registerFrameTools(server, z, sessionKey) {
         case "screenshot":      return doScreenshot(args);
         case "stepAndShot":     return doStepAndShot(args);
         case "sideBySide":      return await doSideBySide(args);
+        case "compareRam":      return compareRam(args);
         case "stepInstruction": return await stepInstructionCore(sessionKey);
         case "verify":          return await doVerify(args);
         default: throw new Error(`frame: unknown op '${args.op}'`);
