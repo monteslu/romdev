@@ -1167,18 +1167,41 @@ async function recompileCore(args) {
   }
   const romPath = requireRomPath(args);
   const rom = new Uint8Array(await readFile(romPath));
-  // iNES: 16-byte header, then PRG. v1 handles NROM (16KB or 32KB PRG).
+  // iNES validation: "NES\x1a" magic, then a 16-byte header, then PRG. v1 handles
+  // NROM (mapper 0, 16KB or 32KB PRG). Give size vs mapper their OWN errors so the
+  // message is never misleading (a 24KB mapper-0 ROM isn't a "mapped cart").
+  const hasInes = rom.length >= 16 && rom[0] === 0x4e && rom[1] === 0x45 && rom[2] === 0x53 && rom[3] === 0x1a;
+  if (!hasInes) {
+    throw new Error("disasm({target:'recompile'}): not an iNES file (missing 'NES\\x1a' magic). Phase 1 takes a raw .nes ROM.");
+  }
+  const mapper = (rom[6] >> 4) | (rom[7] & 0xf0);
+  if (mapper !== 0) {
+    throw new Error(`disasm({target:'recompile'}): mapper ${mapper} is not supported in phase 1 — only NROM (mapper 0). Bank-switched carts need the per-bank recompile path (not yet built).`);
+  }
   const prgSize = rom.length - 16;
   if (prgSize !== 0x4000 && prgSize !== 0x8000) {
-    throw new Error(`disasm({target:'recompile'}): expected NROM PRG (16KB or 32KB); got ${prgSize} bytes. Mapped carts aren't supported in phase 1.`);
+    throw new Error(`disasm({target:'recompile'}): expected an NROM PRG of 16KB or 32KB; got ${prgSize} bytes. Phase 1 handles only those two sizes.`);
   }
   const prg = rom.subarray(16, 16 + prgSize);
-  const startAddress = prgSize === 0x4000 ? 0xC000 : 0x8000; // 16KB mirrors high
+  const prgBase = prgSize === 0x4000 ? 0xC000 : 0x8000; // 16KB mirrors into $C000
+
+  // Disassemble from the REAL reset vector, not blindly from the PRG base. The
+  // reset routine lives wherever $FFFC/$FFFD point — often deep in PRG, with data
+  // or padding ($00 = brk) at the base. Starting at the base translated that
+  // padding as 6 garbage `brk`s; starting at the reset vector yields the actual
+  // boot routine (robotfindskitten: 6-instr-garbage → 70-instr clean, 0 residue).
+  const resetVec = prg[prg.length - 4] | (prg[prg.length - 3] << 8);
+  const resetOff = resetVec - prgBase;
+  if (resetOff < 0 || resetOff >= prg.length) {
+    throw new Error(`disasm({target:'recompile'}): reset vector $${resetVec.toString(16)} is outside the PRG window ($${prgBase.toString(16)}-$FFFF). Corrupt ROM or unexpected layout.`);
+  }
+  // Slice the PRG at the reset vector so da65 starts decoding real code there.
+  const codeBytes = prg.subarray(resetOff);
   const { runDa65 } = await import("../../toolchains/cc65/da65.js");
-  const da = await runDa65({ bytes: prg, cpu: "6502", startAddress, options: ["--comments", "4"] });
+  const da = await runDa65({ bytes: codeBytes, cpu: "6502", startAddress: resetVec, options: ["--comments", "4"] });
   const da65Full = da.asm ?? "";
-  // Slice the first routine (the reset path) — a flat full-PRG disasm renders
-  // data tables after it as bogus code. Phase 1 = the boot routine.
+  // Slice the first routine (the reset path) — a flat disasm renders data tables
+  // after it as bogus code. Phase 1 = the boot routine.
   const da65Asm = sliceFirstRoutine(da65Full);
 
   // Optional NES-PPU-on-SNES shim: boot the original ROM, read its PPU state,
@@ -1228,6 +1251,7 @@ async function recompileCore(args) {
   return jsonContent({
     ok: true,
     source: "nes", target: "snes",
+    resetVector: "$" + resetVec.toString(16).toUpperCase().padStart(4, "0"),
     entry,
     instrCount, seamCount,
     stubbedCallees: stubbed,

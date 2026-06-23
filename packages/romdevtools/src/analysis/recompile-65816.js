@@ -347,9 +347,13 @@ export function sliceFirstRoutine(da65Asm) {
  *             entry: string, instrCount: number, seamCount: number, stubbed: string[] }}
  */
 export function recompileNesToSnes(da65Asm, opts = {}) {
-  const { body, equs, residue, instrCount, seamCount } = translateBody(da65Asm);
+  const { body, equs, residue, instrCount, seamCount, entry: bodyEntry } = translateBody(da65Asm);
   const fullBody = (equs.length ? equs.join("\n") + "\n" : "") + body;
-  const entry = opts.entry || entryLabel(fullBody) || "RECOMPILE_ENTRY";
+  // entry: caller override > the first-instruction label translateBody fixed >
+  // first label in the body (legacy fallback) > a synthetic name. bodyEntry is
+  // the correct one — it anchors the reset vector to the routine's OPENING
+  // instruction, not a later branch target.
+  const entry = opts.entry || bodyEntry || entryLabel(fullBody) || "RECOMPILE_ENTRY";
   const stubUndefined = opts.stubUndefined !== false;
   const stubbed = stubUndefined ? findUndefinedLabels(fullBody, equs) : [];
   const withStubs = fullBody + (stubbed.length ? "\n" + emitStubs(stubbed) : "");
@@ -373,6 +377,14 @@ export function translateBody(da65Asm) {
   const residue = [];
   let instrCount = 0;
   let seamCount = 0;
+  // The reset vector must target the FIRST translated instruction. da65 only
+  // labels branch targets, so a fall-through entry (the common case — a reset
+  // routine that opens `sei / cld / ...`) is UNLABELED. Guarantee a label on the
+  // first instruction: use its own label if it has one, else inject a synthetic
+  // RECOMPILE_ENTRY. Without this, entryLabel() picked the first *labeled* line
+  // (a later branch target) and the reset skipped the routine's opening setup.
+  let entry = null;
+  const ENTRY_LABEL = "RECOMPILE_ENTRY";
 
   for (const raw of lines) {
     const p = parseDa65Line(raw);
@@ -399,10 +411,25 @@ export function translateBody(da65Asm) {
         const r = translateInstr(p);
         if (r.ok) {
           instrCount++;
+          if (entry == null) {
+            // First real instruction → fix the entry label.
+            if (p.label) {
+              entry = p.label;
+            } else {
+              entry = ENTRY_LABEL;
+              bodyLines.push(`${ENTRY_LABEL}:`);
+            }
+          }
           if (r.out.some((l) => l.includes("NES_PPU_") || l.includes("seam:"))) seamCount++;
           bodyLines.push(...r.out);
         } else {
           residue.push({ reason: r.reason, line: r.line.trim() });
+          // Even a refused first instruction must anchor the entry, so the reset
+          // vector lands at the top of the routine rather than a later label.
+          if (entry == null) {
+            entry = p.label || ENTRY_LABEL;
+            if (!p.label) bodyLines.push(`${ENTRY_LABEL}:`);
+          }
           // Emit a visible marker so the asm still shows where logic was dropped.
           if (p.label) bodyLines.push(`${p.label}:`);
           bodyLines.push(`        ; UNTRANSLATED: ${p.raw.trim()}  (${r.reason})`);
@@ -413,7 +440,7 @@ export function translateBody(da65Asm) {
         break;
     }
   }
-  return { body: bodyLines.join("\n"), equs, residue, instrCount, seamCount };
+  return { body: bodyLines.join("\n"), equs, residue, instrCount, seamCount, entry };
 }
 
 /**

@@ -124,6 +124,31 @@ test("translateBody collects equs, residue, and instruction/seam counts", () => 
   // body keeps the labels so branches resolve
   assert.match(r.body, /^reset:/m);
   assert.match(r.body, /^L8016:/m);
+  // entry is the first instruction's own label
+  assert.equal(r.entry, "reset", "entry anchors to the first instruction's label");
+});
+
+test("translateBody anchors entry to the FIRST instruction even when unlabeled", () => {
+  // da65 only labels branch targets, so a fall-through reset entry (sei/cld/...)
+  // is UNLABELED while a later branch target (L8107) IS labeled. The entry must
+  // be the routine's OPENING instruction, not the first label — else the reset
+  // skips the routine's setup. translateBody injects RECOMPILE_ENTRY for this.
+  const da65 = [
+    '        .setcpu "6502"',
+    "        sei",            // first instruction — UNLABELED
+    "        cld",
+    "        lda     #$00",
+    "        sta     $2000",  // seam
+    "L8107:  bit     $2002",  // a LATER label (would be the wrong entry)
+    "        bpl     L8107",
+    "        jmp     L8107",
+  ].join("\n");
+  const r = translateBody(da65);
+  assert.equal(r.entry, "RECOMPILE_ENTRY", "synthetic entry injected for the unlabeled opener");
+  // The injected label sits immediately before the first instruction (sei).
+  assert.match(r.body, /^RECOMPILE_ENTRY:\n\s+sei/m, "entry label precedes the opening sei, not the L8107 branch target");
+  // And it must come BEFORE the L8107 label in the body.
+  assert.ok(r.body.indexOf("RECOMPILE_ENTRY:") < r.body.indexOf("L8107:"), "entry precedes the later branch target");
 });
 
 test("findUndefinedLabels + emitStubs isolate a single-function slice", () => {
