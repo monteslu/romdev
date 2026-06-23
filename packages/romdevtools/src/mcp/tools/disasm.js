@@ -7,6 +7,7 @@ import { parseSymbols, buildSymbolMap } from "../../toolchains/common/symbols.js
 import { registersForPlatform } from "../../platforms/common/registers.js";
 import { findReferencesCore } from "./find-references.js";
 import { analyzeCfg, analyzeXrefs, analyzeFunctions, analyzeDecompile } from "../../analysis/analyze.js";
+import { recompileNesToSnes, sliceFirstRoutine } from "../../analysis/recompile-65816.js";
 
 /** cfg/xrefs/functions all operate on a ROM file. Reuse the `path` arg. */
 function requireRomPath(args) {
@@ -1144,6 +1145,73 @@ function renderBuildMd({ platform, romPath, regions, blobs, build, verifiable, n
   return lines.join("\n") + "\n";
 }
 
+/**
+ * target:'recompile' — NES (6502) → SNES (65816) static recompile (emit backend
+ * phase 1). Reads the NES ROM's PRG, disassembles the reset routine with da65,
+ * translates it to asar-ready 65816 (the 6502 logic runs in EMULATION mode), and
+ * returns the main.asm + seam include + a residue report. Optionally writes the
+ * sources to `outputDir`. Build the result with build({platform:'snes'}) and
+ * verify it with frame({op:'sideBySide'}) against the original.
+ *
+ * v1 scope: NROM, documented 6502, the reset/boot routine. The PPU/APU seam is
+ * stubbed (no real NES-PPU-on-SNES runtime yet) so the port boots + runs the
+ * logic but renders blank — the runtime shim is a separate task.
+ */
+async function recompileCore(args) {
+  const { platform, targetPlatform } = args;
+  if (platform && platform !== "nes") {
+    throw new Error(`disasm({target:'recompile'}): only NES source is supported in phase 1 (got '${platform}').`);
+  }
+  if (targetPlatform && targetPlatform !== "snes") {
+    throw new Error(`disasm({target:'recompile'}): only SNES target is supported in phase 1 (got '${targetPlatform}').`);
+  }
+  const romPath = requireRomPath(args);
+  const rom = new Uint8Array(await readFile(romPath));
+  // iNES: 16-byte header, then PRG. v1 handles NROM (16KB or 32KB PRG).
+  const prgSize = rom.length - 16;
+  if (prgSize !== 0x4000 && prgSize !== 0x8000) {
+    throw new Error(`disasm({target:'recompile'}): expected NROM PRG (16KB or 32KB); got ${prgSize} bytes. Mapped carts aren't supported in phase 1.`);
+  }
+  const prg = rom.subarray(16, 16 + prgSize);
+  const startAddress = prgSize === 0x4000 ? 0xC000 : 0x8000; // 16KB mirrors high
+  const { runDa65 } = await import("../../toolchains/cc65/da65.js");
+  const da = await runDa65({ bytes: prg, cpu: "6502", startAddress, options: ["--comments", "4"] });
+  const da65Full = da.asm ?? "";
+  // Slice the first routine (the reset path) — a flat full-PRG disasm renders
+  // data tables after it as bogus code. Phase 1 = the boot routine.
+  const da65Asm = sliceFirstRoutine(da65Full);
+  const { mainAsm, seamAsm, residue, entry, instrCount, seamCount, stubbed } = recompileNesToSnes(da65Asm);
+
+  let written = null;
+  if (args.outputDir) {
+    await mkdir(args.outputDir, { recursive: true });
+    const mainPath = nodePath.join(args.outputDir, "main.asm");
+    const seamPath = nodePath.join(args.outputDir, "nes_seam.asm");
+    await writeFile(mainPath, mainAsm);
+    await writeFile(seamPath, seamAsm);
+    written = { mainAsm: mainPath, seamAsm: seamPath };
+  }
+
+  return jsonContent({
+    ok: true,
+    source: "nes", target: "snes",
+    entry,
+    instrCount, seamCount,
+    stubbedCallees: stubbed,
+    residue,
+    note:
+      `Recompiled the NES reset routine to 65816 (asar). ${instrCount} instrs, ${seamCount} PPU/APU seam calls, ` +
+      `${stubbed.length} callee(s) stubbed (phase-1 isolation), ${residue.length} residue line(s). ` +
+      "The 6502 logic runs in 65816 EMULATION mode; the hardware seam is STUBBED (writes→rts, $2002 read→$80 so " +
+      "boot wait-loops exit) — so the port boots and runs the logic but renders blank until a NES-PPU-on-SNES " +
+      "runtime fills the seam (separate task). " +
+      (written
+        ? `Wrote ${written.mainAsm} + ${written.seamAsm}. Build: build({platform:'snes', source: main.asm, ...}); then loadMedia + frame({op:'sideBySide'}) vs the NES original.`
+        : "Pass outputDir to write main.asm + nes_seam.asm to disk for build({platform:'snes'})."),
+    ...(written ? { written } : { mainAsm, seamAsm }),
+  });
+}
+
 export function registerDisasmTools(server, z) {
   server.tool(
     "disasm",
@@ -1190,7 +1258,7 @@ export function registerDisasmTools(server, z) {
     "LLM folds it. `address` for all four comes from target:'functions' (a CPU/virtual address; the file-offset " +
     "mapping is handled for you).",
     {
-      target: z.enum(["bytes", "rom", "project", "references", "cfg", "xrefs", "functions", "decompile", "resolveJumptable"]).describe("bytes = raw chunk; rom = mapper-aware ROM; project = full rebuildable disasm; references = flat da65 operand-refs to an address; functions/cfg/xrefs = Rizin RE engine (function list / control-flow graph / deep graph xrefs); decompile = Ghidra C pseudocode; resolveJumptable = recover a computed-jump dispatcher's targets (LIVE — redirects to breakpoint({on:'jumptable'}), which runs the emulator and records the real switch arms a static decompiler can't follow). See the tool description for the RE loop + the decompile altitude rule + per-CPU quality (all 14 platforms)."),
+      target: z.enum(["bytes", "rom", "project", "references", "cfg", "xrefs", "functions", "decompile", "resolveJumptable", "recompile"]).describe("bytes = raw chunk; rom = mapper-aware ROM; project = full rebuildable disasm; references = flat da65 operand-refs to an address; functions/cfg/xrefs = Rizin RE engine (function list / control-flow graph / deep graph xrefs); decompile = Ghidra C pseudocode; resolveJumptable = recover a computed-jump dispatcher's targets (LIVE — redirects to breakpoint({on:'jumptable'}), which runs the emulator and records the real switch arms a static decompiler can't follow); recompile = EMIT backend — statically recompile a NES ROM's reset routine to SNES 65816 asar source that builds + boots (phase 1: NROM, 6502→65816 emulation mode, PPU/APU seam STUBBED). See the tool description for the RE loop + the decompile altitude rule + per-CPU quality (all 14 platforms)."),
       // shared
       path: z.string().optional().describe("target=bytes: raw binary path. target=rom/project/references: ROM file path."),
       base64: z.string().optional().describe("target=bytes: base64 of the bytes (OR `path`)."),
@@ -1219,7 +1287,8 @@ export function registerDisasmTools(server, z) {
       annotateRegisters: z.boolean().default(true).describe("target=rom: append `; PPUMASK` etc. to operands hitting a known hardware register."),
       annotateFileOffsets: z.boolean().default(true).describe("target=rom: append `; @0xNNNN` file offset to every line (for romPatch)."),
       // project
-      outputDir: z.string().optional().describe("target=project: directory to write the project into (one .asm per region)."),
+      outputDir: z.string().optional().describe("target=project: directory to write the project into (one .asm per region). target=recompile: directory to write main.asm + nes_seam.asm for build({platform:'snes'})."),
+      targetPlatform: z.string().optional().describe("target=recompile: the platform to emit (phase 1: only 'snes'). The source platform is `platform` (phase 1: only 'nes')."),
       // references / cfg / xrefs
       address: z.number().int().min(0).max(0xFFFFFFFF).optional().describe("target=references: CPU address to find references TO. target=cfg: address inside the function to graph. target=xrefs: address to find cross-references TO. target=decompile: address of the function to decompile (use an address from target='functions')."),
       maxRefsReturned: z.number().int().min(1).max(2048).default(256).describe("target=references: cap the references returned."),
@@ -1234,6 +1303,7 @@ export function registerDisasmTools(server, z) {
         case "xrefs":      return jsonContent(await analyzeXrefs(requireRomPath(args), args.address, args.platform));
         case "functions":  return jsonContent(await analyzeFunctions(requireRomPath(args), args.platform));
         case "decompile":  return jsonContent(await analyzeDecompile(requireRomPath(args), args.address, args.platform));
+        case "recompile":  return await recompileCore(args);
         case "resolveJumptable":
           // A4: jumptable recovery is fundamentally a LIVE operation (it needs a
           // running emulator to observe the computed targets) — disasm is static
