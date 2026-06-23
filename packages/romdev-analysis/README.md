@@ -23,3 +23,5 @@ the build recipe is `scripts/build-rizin.sh` + `scripts/patches/rizin-*.patch`.
 SM83 (`gb` plugin — Game Boy / GBC), ARM (GBA), M68K (Genesis), 65816 (`snes`
 plugin), SPC700. HuC6280 (PC Engine) analysis arrives with the rz-ghidra
 decompiler package (SLEIGH spec).
+
+**Built by:** `romdevtools/scripts/build-rizin.sh` + patch(es) `rizin-romdev-emscripten.patch`, `rizin-libzip-emscripten.patch`. See `scripts/BUILD_MAP.md` in the romdev repo for the full recipe→package map.

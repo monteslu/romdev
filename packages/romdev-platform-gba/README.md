@@ -18,3 +18,5 @@ This package redistributes the upstream binary built to WebAssembly; the source
 is fetched from a pinned upstream commit at build time (see the romdev repo's
 `scripts/versions.json` and `BUILDING.md`). See the romdev repo `NOTICE` for the
 full third-party inventory.
+
+**Built by:** `romdevtools/scripts/build-mgba.sh + build-arm-wasm-tools.sh` + patch(es) `mgba-romdev-watchpoint.patch`. See `scripts/BUILD_MAP.md` in the romdev repo for the full recipe→package map.
