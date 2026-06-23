@@ -195,7 +195,7 @@ export function translateInstr(p) {
  * register low byte is passed in X so one seam routine handles the whole file.
  * @returns {string[]}
  */
-function emitSeamAccess(mnem, operand, reg, rawForComment) {
+function emitSeamAccess(mnem, operand, reg, _rawForComment) {
   const regName = NES_REGISTERS[reg] || `REG_${reg.toString(16)}`;
   const lowByte = `#$${(reg & 0xff).toString(16).padStart(2, "0")}`;
   const lines = [`        ; seam: ${mnem} ${operand} (${regName})`];
@@ -250,8 +250,13 @@ export function emitSeam() {
  * @param {string} a.body         translated 65816 body (the functions)
  * @param {string} a.resetLabel   label the reset vector points at
  * @param {string} [a.nmiLabel]   label for the NMI vector (defaults to a stub)
+ * @param {boolean} [a.withShim]  include + call the NES-PPU-on-SNES shim
+ *   (nes_ppu_shim.asm). When true, the init preamble calls NES_SHIM_PRESENT
+ *   (in native mode, before dropping to emulation) so the static boot picture
+ *   the original ROM produced is drawn — turning the blank port into a real
+ *   rendered screen.
  */
-export function emitMainAsm({ body, resetLabel, nmiLabel }) {
+export function emitMainAsm({ body, resetLabel, nmiLabel, withShim }) {
   const nmi = nmiLabel || "NMI_STUB";
   return [
     "; NES→SNES recompiled image (romdev emit backend, phase 1).",
@@ -267,6 +272,9 @@ export function emitMainAsm({ body, resetLabel, nmiLabel }) {
     "        ldx     #$1FFF",
     "        txs             ; SNES stack",
     "        sep #$30        ; back to 8-bit",
+    ...(withShim
+      ? ["        jsr     NES_SHIM_PRESENT   ; draw the converted NES boot picture (native mode)"]
+      : []),
     "        sec",
     "        xce             ; → EMULATION mode: now the 6502 logic runs as-is",
     `        jmp     ${resetLabel}`,
@@ -276,6 +284,7 @@ export function emitMainAsm({ body, resetLabel, nmiLabel }) {
     "",
     nmiLabel ? "" : "NMI_STUB:\n        rti\n",
     "incsrc \"nes_seam.asm\"",
+    ...(withShim ? ["incsrc \"nes_ppu_shim.asm\""] : []),
     "",
     "; ── interrupt vectors (native + emulation) ───────────────────────────",
     "org $00FFEA",
@@ -332,6 +341,8 @@ export function sliceFirstRoutine(da65Asm) {
  * @param {boolean} [opts.stubUndefined=true]  stub callees not defined in the
  *   slice (needed when recompiling a single function in isolation; set false
  *   once the whole reachable graph is translated)
+ * @param {boolean} [opts.withShim=false]  emit a call to + incsrc of the
+ *   NES-PPU-on-SNES shim (the caller supplies nes_ppu_shim.asm separately)
  * @returns {{ mainAsm: string, seamAsm: string, residue: Array<{reason,line}>,
  *             entry: string, instrCount: number, seamCount: number, stubbed: string[] }}
  */
@@ -342,7 +353,7 @@ export function recompileNesToSnes(da65Asm, opts = {}) {
   const stubUndefined = opts.stubUndefined !== false;
   const stubbed = stubUndefined ? findUndefinedLabels(fullBody, equs) : [];
   const withStubs = fullBody + (stubbed.length ? "\n" + emitStubs(stubbed) : "");
-  const mainAsm = emitMainAsm({ body: withStubs, resetLabel: entry });
+  const mainAsm = emitMainAsm({ body: withStubs, resetLabel: entry, withShim: !!opts.withShim });
   const seamAsm = emitSeam();
   return { mainAsm, seamAsm, residue, entry, instrCount, seamCount, stubbed };
 }
