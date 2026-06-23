@@ -635,6 +635,66 @@ export function registerFrameTools(server, z, sessionKey) {
     });
   }
 
+  // op:'compareRender' — the PRESENTATION oracle. The graphics-side sibling of
+  // compareRam: instead of bytes, compare the decoded RENDERING STATE of slot A
+  // (original) vs slot B (port) — "BG enabled? which tilemap/palette? sprites
+  // on? forced blank?" This is what an agent building/tuning the graphics shim
+  // needs: it says exactly WHAT the port's presentation is missing vs. the
+  // original, in plain terms, without the agent decoding registers by hand.
+  //
+  // Works cross-platform: each side is decoded by its own platform's
+  // rendering-context decoder (NES PPU, SNES PPU, Genesis VDP, ...), then the
+  // human-readable `summary` lines are diffed. Same-platform ports get a literal
+  // line diff; cross-platform ports get both summaries side by side (the agent
+  // maps concepts, since e.g. "BG1 tile base" has no NES equivalent).
+  async function compareRender({ frames }) {
+    const hostA = getHost(sessionKey);
+    const hostB = getHostB(sessionKey);
+    if (frames && frames > 0) { hostA.stepFrames(frames); hostB.stepFrames(frames); }
+    const platA = hostA.status.platform;
+    const platB = hostB.status.platform;
+    let ctxA, ctxB;
+    try { ctxA = await getRenderingContextCore({ platform: platA, area: "all", host: hostA }); }
+    catch (e) { ctxA = { platform: platA, summary: [`(render-context decode unavailable: ${e.message})`] }; }
+    try { ctxB = await getRenderingContextCore({ platform: platB, area: "all", host: hostB }); }
+    catch (e) { ctxB = { platform: platB, summary: [`(render-context decode unavailable: ${e.message})`] }; }
+
+    const sumA = Array.isArray(ctxA.summary) ? ctxA.summary : [];
+    const sumB = Array.isArray(ctxB.summary) ? ctxB.summary : [];
+    const samePlatform = platA === platB;
+
+    let lineDiff = null;
+    if (samePlatform) {
+      // Literal line diff: what the original shows that the port doesn't (and vice versa).
+      const setB = new Set(sumB);
+      const setA = new Set(sumA);
+      lineDiff = {
+        onlyInOriginal: sumA.filter((l) => !setB.has(l)),
+        onlyInPort: sumB.filter((l) => !setA.has(l)),
+        matching: sumA.filter((l) => setB.has(l)).length,
+      };
+    }
+
+    // Per-slot render-enable verdict (reuse the same logic verify uses).
+    const flagsA = pickRenderFlags(ctxA);
+    const flagsB = pickRenderFlags(ctxB);
+
+    const note = samePlatform
+      ? (lineDiff.onlyInOriginal.length === 0 && lineDiff.onlyInPort.length === 0
+          ? "Rendering state MATCHES — same platform, identical decoded render context. The port's presentation tracks the original."
+          : `Rendering differs: ${lineDiff.onlyInOriginal.length} aspect(s) the ORIGINAL has that the port lacks (see onlyInOriginal — that's your shim's TODO list), ${lineDiff.onlyInPort.length} the port has extra. Fix the port until onlyInOriginal is empty.`)
+      : `Cross-platform port (${platA}→${platB}): the two render models differ by hardware, so compare the summaries conceptually. originalRenderEnabled=${flagsA.renderEnabled}, portRenderEnabled=${flagsB.renderEnabled}. If the original renders and the port is forced-blank/disabled, the graphics shim hasn't enabled output yet — that's step one.`;
+
+    return jsonContent({
+      op: "compareRender",
+      a: { platform: platA, renderEnabled: flagsA.renderEnabled, summary: sumA },
+      b: { platform: platB, renderEnabled: flagsB.renderEnabled, summary: sumB },
+      samePlatform,
+      ...(lineDiff ? { diff: lineDiff } : {}),
+      note,
+    });
+  }
+
   async function doStepAndShot({ frames, path: outPath, inline }) {
       requireImageTarget(outPath, inline, "frame({op:'stepAndShot'})");
       const host = getHost(sessionKey);
@@ -657,7 +717,7 @@ export function registerFrameTools(server, z, sessionKey) {
 
   server.tool(
     "frame",
-    "Advance the emulator and capture frames. `op`: 'step' | 'screenshot' | 'stepAndShot' | 'sideBySide' | 'compareRam' | 'findDiverge' | 'stepInstruction' | 'verify'.\n" +
+    "Advance the emulator and capture frames. `op`: 'step' | 'screenshot' | 'stepAndShot' | 'sideBySide' | 'compareRam' | 'findDiverge' | 'compareRender' | 'stepInstruction' | 'verify'.\n" +
     "'step': advance N `frames` as fast as possible — NO pacing/audio/vsync. Cores run at WASM speed, so frames:3600 " +
     "(1 min of game time) finishes in ~5-30ms, cheaper than a screenshot. Don't be timid — skip a title with 300, a " +
     "level with 7200; prefer ONE big call.\n" +
@@ -686,6 +746,11 @@ export function registerFrameTools(server, z, sessionKey) {
     "byte address at which the work-RAM splits ({atFrame, address, a, b}). Non-destructive: both hosts are RESTORED to " +
     "their pre-search state. Run it from a known-identical point (state-restore both first) so 'first split' is meaningful. " +
     "The agent then disasms the code that writes that address on both sides. Requires slot B.\n" +
+    "'compareRender': the PRESENTATION oracle — compare the decoded RENDERING STATE of slot A vs slot B (BG/sprites " +
+    "enabled? which tilemap/palette? forced blank?) instead of bytes. This is what an agent building/tuning the graphics " +
+    "shim needs: it says in plain terms WHAT the port's presentation is missing vs. the original. Same-platform ports get " +
+    "a line diff (onlyInOriginal = your shim's TODO); cross-platform ports get both summaries + each side's renderEnabled " +
+    "verdict. Requires slot B.\n" +
     "'stepInstruction': execute exactly ONE CPU instruction and stop (finer than 'step'); freezes the CPU one " +
     "instruction later and returns { pc }. Pair with cpu({op:'read'}) to watch registers change while tracing a routine.\n" +
     "'verify': one-call 'is the game actually rendering / alive?' health check WITHOUT vision — for the spiral where an " +
@@ -699,8 +764,8 @@ export function registerFrameTools(server, z, sessionKey) {
     "IMAGE CONTRACT (screenshot/stepAndShot): the image goes to `path` (default, returns {path}) OR inline:true — " +
     "you MUST pass one. Keeps PNGs out of context unless asked.",
     {
-      op: z.enum(["step", "screenshot", "stepAndShot", "sideBySide", "compareRam", "findDiverge", "stepInstruction", "verify"]).describe("step frames; capture a screenshot; step+capture in one call; capture both hosts side-by-side (A|B); compareRam = diff slot-A vs slot-B work-RAM (the logic-port oracle); findDiverge = find the first frame+byte where the two slots split (root-cause finder); single-step one CPU instruction; or verify the game is actually rendering/alive (no vision needed)."),
-      frames: z.number().int().min(1).max(1_000_000).default(1).describe("op=step/stepAndShot/sideBySide/compareRam: frames to advance (1-1,000,000). For sideBySide/compareRam, BOTH hosts step the same amount. 36000 (10 min) usually completes in <1s — don't be conservative."),
+      op: z.enum(["step", "screenshot", "stepAndShot", "sideBySide", "compareRam", "findDiverge", "compareRender", "stepInstruction", "verify"]).describe("step frames; capture a screenshot; step+capture in one call; capture both hosts side-by-side (A|B); compareRam = diff slot-A vs slot-B work-RAM (the logic-port oracle); findDiverge = find the first frame+byte where the two slots split (root-cause finder); compareRender = diff the decoded rendering state of the two slots (the presentation oracle); single-step one CPU instruction; or verify the game is actually rendering/alive (no vision needed)."),
+      frames: z.number().int().min(1).max(1_000_000).default(1).describe("op=step/stepAndShot/sideBySide/compareRam/compareRender: frames to advance (1-1,000,000). For the slot-A/B compare ops, BOTH hosts step the same amount. 36000 (10 min) usually completes in <1s — don't be conservative."),
       region: z.string().optional().describe("op=compareRam/findDiverge: memory region to diff across the two slots (default 'system_ram', the portable work-RAM). Both hosts must expose it."),
       maxRanges: z.number().int().min(1).max(256).default(24).describe("op=compareRam: cap on the diverging address ranges returned (largest first)."),
       maxFrames: z.number().int().min(1).max(100000).default(600).describe("op=findDiverge: max frames to step in lockstep looking for the first divergence (default 600 = ~10s)."),
@@ -722,6 +787,7 @@ export function registerFrameTools(server, z, sessionKey) {
         case "sideBySide":      return await doSideBySide(args);
         case "compareRam":      return compareRam(args);
         case "findDiverge":     return findDiverge(args);
+        case "compareRender":   return await compareRender(args);
         case "stepInstruction": return await stepInstructionCore(sessionKey);
         case "verify":          return await doVerify(args);
         default: throw new Error(`frame: unknown op '${args.op}'`);

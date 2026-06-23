@@ -507,8 +507,10 @@ async function gbContext(host, area, platform) {
   };
 }
 
-export async function getRenderingContextCore({ platform, area = "all", sessionKey }) {
-  const host = getHost(sessionKey);
+export async function getRenderingContextCore({ platform, area = "all", sessionKey, host: explicitHost }) {
+  // `host` lets a caller (e.g. frame compareRender) decode a SPECIFIC host —
+  // the slot-B comparison host — instead of the session's slot-A default.
+  const host = explicitHost ?? getHost(sessionKey);
   const p = platform ?? host.getStatus().platform;
   switch (p) {
     case "nes": return nesContext(host, area);
