@@ -256,10 +256,12 @@ export function emitSeam() {
  *   the original ROM produced is drawn — turning the blank port into a real
  *   rendered screen.
  */
-export function emitMainAsm({ body, resetLabel, nmiLabel, withShim }) {
-  const nmi = nmiLabel || "NMI_STUB";
+export function emitMainAsm({ body, resetLabel, nmiLabel, withShim, withRuntime, nmiBody }) {
+  // Native NMI vector: with the phase-2 runtime it points at NES_RT_NMI (which
+  // flushes sprites then calls the game's NMI); otherwise the legacy stub/label.
+  const nmiVector = withRuntime ? "NES_RT_NMI" : (nmiLabel || "NMI_STUB");
   return [
-    "; NES→SNES recompiled image (romdev emit backend, phase 1).",
+    `; NES→SNES recompiled image (romdev emit backend, ${withRuntime ? "phase 2: live runtime" : "phase 1"}).`,
     "; The 6502 game logic runs in 65816 EMULATION mode (E=1) unmodified.",
     "lorom",
     "",
@@ -275,24 +277,44 @@ export function emitMainAsm({ body, resetLabel, nmiLabel, withShim }) {
     ...(withShim
       ? ["        jsr     NES_SHIM_PRESENT   ; draw the converted NES boot picture (native mode)"]
       : []),
+    ...(withRuntime
+      ? ["        jsr     NES_RT_INIT        ; enable vblank NMI + sprite setup (native mode)"]
+      : []),
     "        sec",
     "        xce             ; → EMULATION mode: now the 6502 logic runs as-is",
     `        jmp     ${resetLabel}`,
     "",
     "; ── recompiled 6502 logic (emulation mode) ───────────────────────────",
     body,
+    ...(withRuntime && nmiBody
+      ? ["", "; ── recompiled NES NMI handler (called from NES_RT_NMI each vblank) ──", nmiBody]
+      : []),
     "",
-    nmiLabel ? "" : "NMI_STUB:\n        rti\n",
-    "incsrc \"nes_seam.asm\"",
+    // The emulation-mode IRQ/BRK still needs a target; keep a bare stub unless the
+    // caller provided a real NMI label for the legacy (non-runtime) path.
+    (withRuntime || nmiLabel) ? "" : "NMI_STUB:\n        rti\n",
+    ...(withRuntime || !nmiLabel ? ["IRQ_STUB:\n        rti\n"] : []),
+    // The seam (NES_PPU_WRITE/READ/...) lives in nes_seam.asm for the phase-1
+    // path; the phase-2 runtime DEFINES its own seam, so include only one.
+    // ORDER MATTERS: the runtime is CODE (no org of its own) so it must come
+    // BEFORE the shim — the shim ends with `org $028000` + 8KB of data, and any
+    // code after that would flow into bank $02 (wrong bank for the NMI vector +
+    // for `lda.l ...,x` tables). Seam/runtime first (bank $00), shim data last.
+    ...(withRuntime ? ["incsrc \"nes_ppu_runtime.asm\""] : ["incsrc \"nes_seam.asm\""]),
     ...(withShim ? ["incsrc \"nes_ppu_shim.asm\""] : []),
     "",
     "; ── interrupt vectors (native + emulation) ───────────────────────────",
+    "; The recompiled game runs in EMULATION mode, so its NMI vectors through the",
+    "; EMULATION vector ($FFFA) — NOT the native one ($FFEA). Point BOTH at the",
+    "; runtime NMI so it fires regardless of mode.",
     "org $00FFEA",
-    `        dw      ${nmi}          ; native NMI`,
+    `        dw      ${nmiVector}          ; native NMI`,
+    "org $00FFFA",
+    `        dw      ${nmiVector}          ; emulation NMI (the game's actual vblank)`,
     "org $00FFFC",
     "        dw      RESET_ENTRY     ; emulation RESET",
     "org $00FFFE",
-    "        dw      NMI_STUB        ; emulation IRQ/BRK",
+    "        dw      IRQ_STUB        ; emulation IRQ/BRK",
     "",
   ].join("\n");
 }
@@ -343,23 +365,83 @@ export function sliceFirstRoutine(da65Asm) {
  *   once the whole reachable graph is translated)
  * @param {boolean} [opts.withShim=false]  emit a call to + incsrc of the
  *   NES-PPU-on-SNES shim (the caller supplies nes_ppu_shim.asm separately)
+ * @param {boolean} [opts.withRuntime=false]  phase 2: wire the per-frame runtime
+ *   (the caller supplies nes_ppu_runtime.asm + sets the NMI vector). Requires
+ *   nmiDa65Asm to give the runtime a game NMI handler to call.
+ * @param {string} [opts.nmiDa65Asm]  da65 listing of the NES NMI handler (sliced
+ *   from the $FFFA vector). Translated as a second body the runtime NMI calls.
  * @returns {{ mainAsm: string, seamAsm: string, residue: Array<{reason,line}>,
- *             entry: string, instrCount: number, seamCount: number, stubbed: string[] }}
+ *             entry: string, nmiEntry: string|null, instrCount: number,
+ *             seamCount: number, stubbed: string[] }}
  */
 export function recompileNesToSnes(da65Asm, opts = {}) {
   const { body, equs, residue, instrCount, seamCount, entry: bodyEntry } = translateBody(da65Asm);
-  const fullBody = (equs.length ? equs.join("\n") + "\n" : "") + body;
+
+  // Optionally translate the NES NMI handler as a second body (phase-2 runtime).
+  let nmiBody = null;
+  let nmiEntry = null;
+  let nmiEqus = [];
+  let nmiResidue = [];
+  let nmiInstr = 0;
+  let nmiSeam = 0;
+  if (opts.withRuntime && opts.nmiDa65Asm) {
+    const t = translateBody(opts.nmiDa65Asm);
+    nmiBody = t.body;
+    nmiEntry = t.entry;
+    nmiEqus = t.equs;
+    nmiResidue = t.residue;
+    nmiInstr = t.instrCount;
+    nmiSeam = t.seamCount;
+    // The two bodies may both define an entry named RECOMPILE_ENTRY (the synthetic
+    // fall-through label). Rename the NMI's so they don't collide in one image.
+    if (nmiEntry === "RECOMPILE_ENTRY") {
+      nmiBody = nmiBody.replace(/\bRECOMPILE_ENTRY\b/g, "RECOMPILE_NMI_ENTRY");
+      nmiEntry = "RECOMPILE_NMI_ENTRY";
+    }
+  }
+
+  // Equs (zero-page/external address aliases like `L001E = $001E`) are shared
+  // between the two bodies — emit the UNION once, de-duplicated, in the reset
+  // body's prefix; the NMI body carries none (a duplicate `=` is an asar error).
+  const seenEqu = new Set();
+  const allEqus = [...equs, ...nmiEqus].filter((e) => {
+    const name = e.split(/\s*=/)[0].trim();
+    if (seenEqu.has(name)) return false;
+    seenEqu.add(name);
+    return true;
+  });
+  const fullBody = (allEqus.length ? allEqus.join("\n") + "\n" : "") + body;
+  const fullNmiBody = nmiBody; // equs already hoisted above
   // entry: caller override > the first-instruction label translateBody fixed >
   // first label in the body (legacy fallback) > a synthetic name. bodyEntry is
   // the correct one — it anchors the reset vector to the routine's OPENING
   // instruction, not a later branch target.
   const entry = opts.entry || bodyEntry || entryLabel(fullBody) || "RECOMPILE_ENTRY";
+
+  // Stub callees undefined across BOTH bodies (so a routine the reset calls that
+  // happens to be defined inside the NMI body — or vice versa — is not stubbed).
   const stubUndefined = opts.stubUndefined !== false;
-  const stubbed = stubUndefined ? findUndefinedLabels(fullBody, equs) : [];
-  const withStubs = fullBody + (stubbed.length ? "\n" + emitStubs(stubbed) : "");
-  const mainAsm = emitMainAsm({ body: withStubs, resetLabel: entry, withShim: !!opts.withShim });
+  const combined = fullBody + (fullNmiBody ? "\n" + fullNmiBody : "");
+  const stubbed = stubUndefined ? findUndefinedLabels(combined, allEqus) : [];
+  const stubsAsm = stubbed.length ? "\n" + emitStubs(stubbed) : "";
+  const withStubs = fullBody + stubsAsm;
+
+  const mainAsm = emitMainAsm({
+    body: withStubs,
+    resetLabel: entry,
+    withShim: !!opts.withShim,
+    withRuntime: !!opts.withRuntime,
+    nmiBody: fullNmiBody,
+  });
   const seamAsm = emitSeam();
-  return { mainAsm, seamAsm, residue, entry, instrCount, seamCount, stubbed };
+  return {
+    mainAsm, seamAsm,
+    residue: [...residue, ...nmiResidue],
+    entry, nmiEntry,
+    instrCount: instrCount + nmiInstr,
+    seamCount: seamCount + nmiSeam,
+    stubbed,
+  };
 }
 
 /**
