@@ -1,12 +1,18 @@
 # Build scripts
 
+> **Which recipe builds which package?** See [`BUILD_MAP.md`](./BUILD_MAP.md) —
+> the recipe ↔ binary-package map (e.g. `build-fceumm.sh` + its patch →
+> `romdev-core-fceumm`). The reverse pointer is in each satellite package's
+> README ("Built by:").
+>
 > **Adding a new platform?** Read [`../BUILDING.md`](../BUILDING.md) first.
 > It's the single source of truth for the platform × core × patch × region-ID
 > matrix + the "how to add a platform without breaking the others" recipe.
 > Per-script details live here; the cross-cutting plan lives there.
 
-These rebuild every bundled WASM artifact in `src/cores/wasm/` and
-`src/toolchains/*/wasm/` from upstream source.
+These rebuild every bundled WASM artifact from upstream source, staging into
+`src/cores/wasm/` and `src/toolchains/*/wasm/` (gitignored dev-staging dirs) and
+copying into the shipping binary package's `wasm/` (see `BUILD_MAP.md`).
 
 You only need to run them if you're:
 
@@ -14,8 +20,9 @@ You only need to run them if you're:
 - Verifying reproducibility.
 - Adding a new platform.
 
-End users of romdev do not run these — the prebuilt `.wasm` files ship
-in the npm package directly.
+End users of romdev do not run these — the prebuilt `.wasm` files ship in the
+per-platform binary packages (`romdev-core-*` / `romdev-platform-*` /
+`romdev-analysis*`), pulled in as dependencies.
 
 ## Prerequisites
 

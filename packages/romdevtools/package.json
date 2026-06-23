@@ -80,6 +80,8 @@
   "files": [
     "src",
     "!src/**/*.test.js",
+    "!src/cores/wasm/**",
+    "!src/toolchains/*/wasm/**",
     "examples",
     "AGENTS.md",
     "README.md",

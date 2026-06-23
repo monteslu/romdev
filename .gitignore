@@ -33,10 +33,14 @@ CLAUDE.md
 # Built WASM + emscripten glue — NOT committed (build output; see header).
 # The binary packages' wasm/ dirs (the real, shipped wasm):
 packages/*/wasm/
-# The legacy src/.../wasm/ output dirs in the main package (must stay empty —
-# a stray build run re-emits wasm there and would leak into romdev's tarball):
-packages/romdev/src/cores/wasm/
-packages/romdev/src/toolchains/*/wasm/
+# The src/.../wasm/ build-STAGING dirs in the main package (must stay empty in
+# git — a build run re-emits wasm there and would leak into romdevtools' npm
+# tarball; the real shipped cores live in packages/romdev-core-*/wasm/, matched
+# above). NB: these were renamed packages/romdev/ -> packages/romdevtools/ and
+# the ignore paths were stale, which is how 14MB of duplicate cores got
+# committed under src/cores/wasm/ — fixed here.
+packages/romdevtools/src/cores/wasm/
+packages/romdevtools/src/toolchains/*/wasm/
 # The analysis engine staging dirs (rizin.wasm ~30MB, decompiler+SLEIGH ~14MB —
 # too big for git history; the shipped copies live in packages/romdev-analysis*/
 # matched above. These staging copies are dev fallbacks only).

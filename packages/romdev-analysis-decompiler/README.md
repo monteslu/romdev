@@ -31,3 +31,5 @@ romdev's `scripts/versions.json` and is never vendored here. Full per-component
 attribution — including the Ghidra/NSA base (Apache-2.0), GhidraBoy (Apache-2.0),
 ghidra-snes (MIT), and the HuC6280 spec (Apache-2.0 by derivation) — is in the
 [NOTICE](./NOTICE) file.
+
+**Built by:** `romdevtools/scripts/build-decompiler.sh` (no patch — built clean). See `scripts/BUILD_MAP.md` in the romdev repo for the full recipe→package map.
