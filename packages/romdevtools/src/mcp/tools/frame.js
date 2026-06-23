@@ -562,6 +562,79 @@ export function registerFrameTools(server, z, sessionKey) {
     });
   }
 
+  // op:'findDiverge' — the ROOT-CAUSE finder. compareRam tells you slot A and
+  // slot B differ; this tells you EXACTLY WHEN and WHERE they first split. It
+  // snapshots both hosts, steps them in lockstep, and reports the first frame at
+  // which the work-RAM diverges + the first diverging byte address. A
+  // smart-enough agent shouldn't binary-search frames by hand — the tool does
+  // the search and hands back "frame 47, $0312 (A=05 B=07): that's where your
+  // port's logic split from the original."
+  //
+  // Both hosts' MACHINE STATE (RAM/CPU/PPU) is restored to the pre-search point
+  // afterward via unserializeState, so the agent keeps working from where it was.
+  // (The frameCount COUNTER keeps climbing — a known core behavior of
+  // unserializeState — but the actual emulated state is rewound.)
+  function findDiverge({ region = "system_ram", maxFrames = 600 }) {
+    const hostA = getHost(sessionKey);
+    const hostB = getHostB(sessionKey);
+    const sizeA = hostA.regionSize ? hostA.regionSize(region) : 0;
+    const sizeB = hostB.regionSize ? hostB.regionSize(region) : 0;
+    if (!sizeA || !sizeB) {
+      throw new Error(`frame({op:'findDiverge'}): region '${region}' not available on ${!sizeA ? "slot A (" + hostA.status.platform + ")" : "slot B (" + hostB.status.platform + ")"}. Both hosts must expose it; 'system_ram' is the portable default.`);
+    }
+    const len = Math.min(sizeA, sizeB);
+    // Save both so the search is non-destructive.
+    const saveA = hostA.serializeState();
+    const saveB = hostB.serializeState();
+    const startFrameA = hostA.status.frameCount;
+
+    const firstDiff = () => {
+      const a = hostA.readMemory(region, 0, len);
+      const b = hostB.readMemory(region, 0, len);
+      for (let i = 0; i < len; i++) if (a[i] !== b[i]) return { offset: i, a: a[i], b: b[i] };
+      return null;
+    };
+
+    let result;
+    // If they already differ at frame 0, that IS the divergence point.
+    let cur = firstDiff();
+    if (cur) {
+      result = { diverged: true, atFrame: 0, framesStepped: 0, offset: cur.offset, a: cur.a, b: cur.b };
+    } else {
+      // Step in lockstep, one frame at a time, until the first split or maxFrames.
+      let stepped = 0;
+      let found = null;
+      for (let f = 1; f <= maxFrames; f++) {
+        hostA.stepFrames(1);
+        hostB.stepFrames(1);
+        stepped = f;
+        cur = firstDiff();
+        if (cur) { found = { atFrame: f, offset: cur.offset, a: cur.a, b: cur.b }; break; }
+      }
+      result = found
+        ? { diverged: true, atFrame: found.atFrame, framesStepped: stepped, offset: found.offset, a: found.a, b: found.b }
+        : { diverged: false, framesStepped: stepped };
+    }
+
+    // Restore both hosts to where they were before the search.
+    try { hostA.unserializeState(saveA); } catch { /* best-effort */ }
+    try { hostB.unserializeState(saveB); } catch { /* best-effort */ }
+
+    const addrHex = result.offset != null ? "$" + result.offset.toString(16).toUpperCase().padStart(4, "0") : null;
+    return jsonContent({
+      op: "findDiverge",
+      region,
+      a: { platform: hostA.status.platform },
+      b: { platform: hostB.status.platform },
+      searchStartedAtFrame: startFrameA,
+      ...result,
+      ...(addrHex ? { address: addrHex } : {}),
+      note: result.diverged
+        ? `First divergence at frame ${result.atFrame} (relative to search start), address ${addrHex}: slot A = $${result.a.toString(16).padStart(2, "0")}, slot B = $${result.b.toString(16).padStart(2, "0")}. This is where the port's logic first split from the original — decompile/disasm around the code that writes ${addrHex} on BOTH sides to find why. Both hosts' machine state (RAM/CPU/PPU) restored to the pre-search point.`
+        : `No divergence in ${result.framesStepped} frames — the port's logic tracks the original across this window. Step further or raise maxFrames if you expect a later split. Both hosts' machine state restored to the pre-search point.`,
+    });
+  }
+
   async function doStepAndShot({ frames, path: outPath, inline }) {
       requireImageTarget(outPath, inline, "frame({op:'stepAndShot'})");
       const host = getHost(sessionKey);
@@ -584,7 +657,7 @@ export function registerFrameTools(server, z, sessionKey) {
 
   server.tool(
     "frame",
-    "Advance the emulator and capture frames. `op`: 'step' | 'screenshot' | 'stepAndShot' | 'sideBySide' | 'compareRam' | 'stepInstruction' | 'verify'.\n" +
+    "Advance the emulator and capture frames. `op`: 'step' | 'screenshot' | 'stepAndShot' | 'sideBySide' | 'compareRam' | 'findDiverge' | 'stepInstruction' | 'verify'.\n" +
     "'step': advance N `frames` as fast as possible — NO pacing/audio/vsync. Cores run at WASM speed, so frames:3600 " +
     "(1 min of game time) finishes in ~5-30ms, cheaper than a screenshot. Don't be timid — skip a title with 300, a " +
     "level with 7200; prefer ONE big call.\n" +
@@ -608,6 +681,11 @@ export function registerFrameTools(server, z, sessionKey) {
     "identical, and the diverging address RANGES run-length-encoded with a 4-byte sample of each side (NOT raw byte " +
     "dumps) so even a small model gets '$0300-$0312 differ' not two hex blobs. Workflow: state-restore both to an " +
     "identical point, step both N frames, compareRam — the FIRST diverging span is usually the bug. Requires slot B.\n" +
+    "'findDiverge': the ROOT-CAUSE finder built ON compareRam — where compareRam says THAT they differ, this says exactly " +
+    "WHEN and WHERE. Snapshots both slots, steps them in lockstep up to `maxFrames`, and reports the first frame + first " +
+    "byte address at which the work-RAM splits ({atFrame, address, a, b}). Non-destructive: both hosts are RESTORED to " +
+    "their pre-search state. Run it from a known-identical point (state-restore both first) so 'first split' is meaningful. " +
+    "The agent then disasms the code that writes that address on both sides. Requires slot B.\n" +
     "'stepInstruction': execute exactly ONE CPU instruction and stop (finer than 'step'); freezes the CPU one " +
     "instruction later and returns { pc }. Pair with cpu({op:'read'}) to watch registers change while tracing a routine.\n" +
     "'verify': one-call 'is the game actually rendering / alive?' health check WITHOUT vision — for the spiral where an " +
@@ -621,10 +699,11 @@ export function registerFrameTools(server, z, sessionKey) {
     "IMAGE CONTRACT (screenshot/stepAndShot): the image goes to `path` (default, returns {path}) OR inline:true — " +
     "you MUST pass one. Keeps PNGs out of context unless asked.",
     {
-      op: z.enum(["step", "screenshot", "stepAndShot", "sideBySide", "compareRam", "stepInstruction", "verify"]).describe("step frames; capture a screenshot; step+capture in one call; capture both hosts side-by-side (A|B); compareRam = diff slot-A vs slot-B work-RAM (the logic-port oracle); single-step one CPU instruction; or verify the game is actually rendering/alive (no vision needed)."),
+      op: z.enum(["step", "screenshot", "stepAndShot", "sideBySide", "compareRam", "findDiverge", "stepInstruction", "verify"]).describe("step frames; capture a screenshot; step+capture in one call; capture both hosts side-by-side (A|B); compareRam = diff slot-A vs slot-B work-RAM (the logic-port oracle); findDiverge = find the first frame+byte where the two slots split (root-cause finder); single-step one CPU instruction; or verify the game is actually rendering/alive (no vision needed)."),
       frames: z.number().int().min(1).max(1_000_000).default(1).describe("op=step/stepAndShot/sideBySide/compareRam: frames to advance (1-1,000,000). For sideBySide/compareRam, BOTH hosts step the same amount. 36000 (10 min) usually completes in <1s — don't be conservative."),
-      region: z.string().optional().describe("op=compareRam: memory region to diff across the two slots (default 'system_ram', the portable work-RAM). Both hosts must expose it."),
+      region: z.string().optional().describe("op=compareRam/findDiverge: memory region to diff across the two slots (default 'system_ram', the portable work-RAM). Both hosts must expose it."),
       maxRanges: z.number().int().min(1).max(256).default(24).describe("op=compareRam: cap on the diverging address ranges returned (largest first)."),
+      maxFrames: z.number().int().min(1).max(100000).default(600).describe("op=findDiverge: max frames to step in lockstep looking for the first divergence (default 600 = ~10s)."),
       format: z.enum(["png", "ascii"]).default("png").describe("op=screenshot: 'png' (default, real image) or 'ascii' (lossy text render)."),
       path: z.string().optional().describe("op=screenshot/stepAndShot: absolute path to write to (required unless inline:true)."),
       inline: z.boolean().default(false).describe("op=screenshot/stepAndShot: return the image in the response instead of writing to disk."),
@@ -642,6 +721,7 @@ export function registerFrameTools(server, z, sessionKey) {
         case "stepAndShot":     return doStepAndShot(args);
         case "sideBySide":      return await doSideBySide(args);
         case "compareRam":      return compareRam(args);
+        case "findDiverge":     return findDiverge(args);
         case "stepInstruction": return await stepInstructionCore(sessionKey);
         case "verify":          return await doVerify(args);
         default: throw new Error(`frame: unknown op '${args.op}'`);
