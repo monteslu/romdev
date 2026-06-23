@@ -498,21 +498,20 @@ export function registerFrameTools(server, z, sessionKey) {
   // address RANGES (run-length-encoded, not raw bytes), and plain-language
   // guidance — so the agent gets "addresses $0300-$0312 differ, likely your
   // sprite table" instead of two 2KB hex blobs to eyeball.
-  function compareRam({ region = "system_ram", frames, maxRanges = 24 }) {
+  // Core RAM comparison between the two slots for one region. Returns the raw
+  // numbers + RLE ranges; the op wrappers add verdict text. Shared by
+  // compareRam and portStatus. Throws if either slot lacks the region.
+  function computeRamMatch(region) {
     const hostA = getHost(sessionKey);
     const hostB = getHostB(sessionKey);
-    if (frames && frames > 0) { hostA.stepFrames(frames); hostB.stepFrames(frames); }
-
     const sizeA = hostA.regionSize ? hostA.regionSize(region) : 0;
     const sizeB = hostB.regionSize ? hostB.regionSize(region) : 0;
     if (!sizeA || !sizeB) {
-      throw new Error(`frame({op:'compareRam'}): region '${region}' not available on ${!sizeA ? "slot A (" + hostA.status.platform + ")" : "slot B (" + hostB.status.platform + ")"}. Both hosts must expose it; 'system_ram' is the portable default.`);
+      throw new Error(`region '${region}' not available on ${!sizeA ? "slot A (" + hostA.status.platform + ")" : "slot B (" + hostB.status.platform + ")"}. Both hosts must expose it; 'system_ram' is the portable default.`);
     }
     const len = Math.min(sizeA, sizeB);
     const a = hostA.readMemory(region, 0, len);
     const b = hostB.readMemory(region, 0, len);
-
-    // Run-length-encode the diverging spans so the agent sees regions, not bytes.
     const ranges = [];
     let diffBytes = 0;
     let runStart = -1;
@@ -527,8 +526,19 @@ export function registerFrameTools(server, z, sessionKey) {
       }
     }
     if (runStart >= 0) ranges.push({ start: runStart, end: len - 1, length: len - runStart });
-
     const matchPct = len ? Math.round(((len - diffBytes) / len) * 1000) / 10 : 100;
+    return { sizeA, sizeB, len, a, b, ranges, diffBytes, matchPct };
+  }
+
+  function compareRam({ region = "system_ram", frames, maxRanges = 24 }) {
+    const hostA = getHost(sessionKey);
+    const hostB = getHostB(sessionKey);
+    if (frames && frames > 0) { hostA.stepFrames(frames); hostB.stepFrames(frames); }
+
+    let m;
+    try { m = computeRamMatch(region); }
+    catch (e) { throw new Error(`frame({op:'compareRam'}): ${e.message}`); }
+    const { sizeA, sizeB, len, a, b, ranges, diffBytes, matchPct } = m;
     // Keep the biggest diverging spans (most informative), cap the list.
     const sorted = [...ranges].sort((x, y) => y.length - x.length);
     const shown = sorted.slice(0, maxRanges).map((r) => ({
@@ -695,6 +705,75 @@ export function registerFrameTools(server, z, sessionKey) {
     });
   }
 
+  // op:'portStatus' — the CAPSTONE. One call that runs all the compare signals
+  // (logic via RAM, presentation via render state, pixels via the content scan)
+  // and returns a SINGLE digested "state of your port" verdict with the next
+  // concrete action. For a smart-enough agent this collapses "which of the 4
+  // oracles do I run, in what order, and how do I read them together?" into one
+  // answer: "logic matches 100%, but the port renders blank → build the graphics
+  // shim; start by enabling display output."
+  async function portStatus({ frames, region = "system_ram" }) {
+    const hostA = getHost(sessionKey);
+    const hostB = getHostB(sessionKey);
+    if (frames && frames > 0) { hostA.stepFrames(frames); hostB.stepFrames(frames); }
+
+    // 1. Logic (RAM) — only meaningful for a SAME-platform port (cross-platform
+    //    RAM layouts differ, so a byte diff there isn't a logic verdict).
+    const samePlatform = hostA.status.platform === hostB.status.platform;
+    let logic = null;
+    if (samePlatform) {
+      try {
+        const m = computeRamMatch(region);
+        logic = { region, matchPct: m.matchPct, identical: m.diffBytes === 0, divergingBytes: m.diffBytes, divergingSpans: m.ranges.length };
+      } catch (e) { logic = { error: e.message }; }
+    }
+
+    // 2. Presentation (render state) — per-side render-enable.
+    let renderA, renderB;
+    try { renderA = pickRenderFlags(await getRenderingContextCore({ platform: hostA.status.platform, area: "all", host: hostA })); }
+    catch { renderA = { renderEnabled: null }; }
+    try { renderB = pickRenderFlags(await getRenderingContextCore({ platform: hostB.status.platform, area: "all", host: hostB })); }
+    catch { renderB = { renderEnabled: null }; }
+
+    // 3. Pixels — is each side drawing more than a flat color?
+    const pxA = pixelSummary(...rgbaTriple(hostA));
+    const pxB = pixelSummary(...rgbaTriple(hostB));
+    const aliveA = pxA.distinctColors > 2 && pxA.dominantPct < 99;
+    const aliveB = pxB.distinctColors > 2 && pxB.dominantPct < 99;
+
+    // Fuse into a single next-action verdict.
+    let verdict, nextAction;
+    if (samePlatform && logic && logic.identical) {
+      if (aliveB) { verdict = "PORT LOOKS COMPLETE"; nextAction = "Logic matches byte-for-byte AND the port renders. Spot-check with frame({op:'sideBySide'}) and move on."; }
+      else { verdict = "LOGIC DONE, PRESENTATION MISSING"; nextAction = "RAM matches the original exactly — the game logic is correct. The port renders blank: build/finish the graphics shim. Start with frame({op:'compareRender'}) to see what the original enables that the port doesn't."; }
+    } else if (samePlatform && logic && !logic.error) {
+      verdict = `LOGIC DIVERGED (${logic.matchPct}% RAM match)`;
+      nextAction = "The port's logic is NOT tracking the original. Run frame({op:'findDiverge'}) from a known-identical point to get the first frame+address where they split, then breakpoint({on:'write', address}) on each slot to compare the code.";
+    } else {
+      // cross-platform — RAM diff isn't a logic verdict; lean on render + pixels.
+      verdict = "CROSS-PLATFORM PORT";
+      nextAction = aliveB
+        ? "Both sides render — compare visually with frame({op:'sideBySide'}) and the decoded state with frame({op:'compareRender'}). RAM can't be byte-compared across different hardware."
+        : "The port renders blank while the original draws. The graphics shim hasn't enabled output — frame({op:'compareRender'}) shows what to turn on. Verify logic another way (the recompiled CPU should be running even when blank).";
+    }
+
+    return jsonContent({
+      op: "portStatus",
+      a: { platform: hostA.status.platform, frame: hostA.status.frameCount, renderEnabled: renderA.renderEnabled, pixelsAlive: aliveA },
+      b: { platform: hostB.status.platform, frame: hostB.status.frameCount, renderEnabled: renderB.renderEnabled, pixelsAlive: aliveB },
+      samePlatform,
+      ...(logic ? { logic } : {}),
+      verdict,
+      nextAction,
+    });
+  }
+
+  // Small helper: framebuffer RGBA as the (w,h,rgba) triple pixelSummary wants.
+  function rgbaTriple(host) {
+    const s = host.screenshotRgba();
+    return [s.width, s.height, s.rgba];
+  }
+
   async function doStepAndShot({ frames, path: outPath, inline }) {
       requireImageTarget(outPath, inline, "frame({op:'stepAndShot'})");
       const host = getHost(sessionKey);
@@ -717,7 +796,7 @@ export function registerFrameTools(server, z, sessionKey) {
 
   server.tool(
     "frame",
-    "Advance the emulator and capture frames. `op`: 'step' | 'screenshot' | 'stepAndShot' | 'sideBySide' | 'compareRam' | 'findDiverge' | 'compareRender' | 'stepInstruction' | 'verify'.\n" +
+    "Advance the emulator and capture frames. `op`: 'step' | 'screenshot' | 'stepAndShot' | 'sideBySide' | 'compareRam' | 'findDiverge' | 'compareRender' | 'portStatus' | 'stepInstruction' | 'verify'.\n" +
     "'step': advance N `frames` as fast as possible — NO pacing/audio/vsync. Cores run at WASM speed, so frames:3600 " +
     "(1 min of game time) finishes in ~5-30ms, cheaper than a screenshot. Don't be timid — skip a title with 300, a " +
     "level with 7200; prefer ONE big call.\n" +
@@ -751,6 +830,10 @@ export function registerFrameTools(server, z, sessionKey) {
     "shim needs: it says in plain terms WHAT the port's presentation is missing vs. the original. Same-platform ports get " +
     "a line diff (onlyInOriginal = your shim's TODO); cross-platform ports get both summaries + each side's renderEnabled " +
     "verdict. Requires slot B.\n" +
+    "'portStatus': the CAPSTONE — ONE call that fuses logic (RAM), presentation (render state), and pixels into a single " +
+    "'state of your port' verdict + the next concrete action (e.g. 'LOGIC DONE, PRESENTATION MISSING → build the graphics " +
+    "shim, start with compareRender'). Use this FIRST when working a port to know what to do next; drill in with the " +
+    "specific compare ops. Requires slot B.\n" +
     "'stepInstruction': execute exactly ONE CPU instruction and stop (finer than 'step'); freezes the CPU one " +
     "instruction later and returns { pc }. Pair with cpu({op:'read'}) to watch registers change while tracing a routine.\n" +
     "'verify': one-call 'is the game actually rendering / alive?' health check WITHOUT vision — for the spiral where an " +
@@ -764,9 +847,9 @@ export function registerFrameTools(server, z, sessionKey) {
     "IMAGE CONTRACT (screenshot/stepAndShot): the image goes to `path` (default, returns {path}) OR inline:true — " +
     "you MUST pass one. Keeps PNGs out of context unless asked.",
     {
-      op: z.enum(["step", "screenshot", "stepAndShot", "sideBySide", "compareRam", "findDiverge", "compareRender", "stepInstruction", "verify"]).describe("step frames; capture a screenshot; step+capture in one call; capture both hosts side-by-side (A|B); compareRam = diff slot-A vs slot-B work-RAM (the logic-port oracle); findDiverge = find the first frame+byte where the two slots split (root-cause finder); compareRender = diff the decoded rendering state of the two slots (the presentation oracle); single-step one CPU instruction; or verify the game is actually rendering/alive (no vision needed)."),
+      op: z.enum(["step", "screenshot", "stepAndShot", "sideBySide", "compareRam", "findDiverge", "compareRender", "portStatus", "stepInstruction", "verify"]).describe("step frames; capture a screenshot; step+capture in one call; capture both hosts side-by-side (A|B); compareRam = diff slot-A vs slot-B work-RAM (the logic-port oracle); findDiverge = find the first frame+byte where the two slots split (root-cause finder); compareRender = diff the decoded rendering state of the two slots (the presentation oracle); portStatus = ONE fused 'state of your port' verdict + next action (the capstone); single-step one CPU instruction; or verify the game is actually rendering/alive (no vision needed)."),
       frames: z.number().int().min(1).max(1_000_000).default(1).describe("op=step/stepAndShot/sideBySide/compareRam/compareRender: frames to advance (1-1,000,000). For the slot-A/B compare ops, BOTH hosts step the same amount. 36000 (10 min) usually completes in <1s — don't be conservative."),
-      region: z.string().optional().describe("op=compareRam/findDiverge: memory region to diff across the two slots (default 'system_ram', the portable work-RAM). Both hosts must expose it."),
+      region: z.string().optional().describe("op=compareRam/findDiverge/portStatus: memory region to diff across the two slots (default 'system_ram', the portable work-RAM). Both hosts must expose it."),
       maxRanges: z.number().int().min(1).max(256).default(24).describe("op=compareRam: cap on the diverging address ranges returned (largest first)."),
       maxFrames: z.number().int().min(1).max(100000).default(600).describe("op=findDiverge: max frames to step in lockstep looking for the first divergence (default 600 = ~10s)."),
       format: z.enum(["png", "ascii"]).default("png").describe("op=screenshot: 'png' (default, real image) or 'ascii' (lossy text render)."),
@@ -788,6 +871,7 @@ export function registerFrameTools(server, z, sessionKey) {
         case "compareRam":      return compareRam(args);
         case "findDiverge":     return findDiverge(args);
         case "compareRender":   return await compareRender(args);
+        case "portStatus":      return await portStatus(args);
         case "stepInstruction": return await stepInstructionCore(sessionKey);
         case "verify":          return await doVerify(args);
         default: throw new Error(`frame: unknown op '${args.op}'`);
