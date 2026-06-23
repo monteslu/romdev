@@ -2698,7 +2698,7 @@ ${buildBlock}
   };
 }
 
-async function createGameCore({ platform, genre, name, path: projPath, title, overwrite, verbose = false }) {
+async function _createGameCore({ platform, genre, name, path: projPath, title, overwrite, verbose = false }) {
       // The five canonical genres. A genre is available on a platform iff
       // TEMPLATES[platform] has a matching template entry — we DERIVE
       // availability from TEMPLATES rather than maintain a parallel table,
