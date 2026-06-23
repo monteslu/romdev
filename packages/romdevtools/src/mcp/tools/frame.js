@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { PNG } from "pngjs";
 import { resamplePng } from "../../host/framebuffer.js";
-import { getHost } from "../state.js";
+import { getHost, getHostB } from "../state.js";
 import { imageContent, jsonContent, safeTool } from "../util.js";
 import { decodeOAM, decodePpuRegs, ppuRegsPopulated } from "../../platforms/snes/ppu.js";
 import { stepInstructionCore, attachObserverFrame } from "./watch-memory.js";
@@ -241,6 +241,79 @@ function hsvToRgb(h, s, v) {
   return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
 }
 
+/**
+ * Lightweight pixel summary of an RGBA framebuffer — the same dominant-color /
+ * distinct-color scan computeVerify uses, factored out so sideBySide can report
+ * a per-pane "is this side alive / how different is it" signal without the full
+ * render-context decode. No host needed; pure pixels. Exported for tests.
+ */
+export function pixelSummary(width, height, rgba) {
+  const counts = new Map();
+  const total = width * height;
+  for (let i = 0; i + 3 < rgba.length; i += 4) {
+    const key = (rgba[i] << 16) | (rgba[i + 1] << 8) | rgba[i + 2];
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  let topColor = 0, topCount = 0;
+  for (const [c, n] of counts) if (n > topCount) { topCount = n; topColor = c; }
+  const dominantFraction = total ? topCount / total : 1;
+  return {
+    width, height,
+    distinctColors: counts.size,
+    dominantColor: "#" + topColor.toString(16).padStart(6, "0"),
+    dominantPct: Math.round(dominantFraction * 1000) / 10,
+  };
+}
+
+/**
+ * Composite two framebuffers into one PNG, A on the left and B on the right,
+ * separated by a vertical divider. Panes are integer-upscaled to a shared
+ * height (the taller of the two) so a small handheld next to a console reads at
+ * a comparable size; the upscale is nearest-neighbor to keep pixels crisp. The
+ * background fills any letterbox gaps. Returns the encoded PNG buffer.
+ *
+ * @param {{width:number,height:number,rgba:Uint8Array|Buffer}} a left pane
+ * @param {{width:number,height:number,rgba:Uint8Array|Buffer}} b right pane
+ * @param {number} gap divider width in px
+ * Exported for tests.
+ */
+export function compositeSideBySide(a, b, gap = 4) {
+  // Integer scale each pane up toward the common (max) height. Integer-only so
+  // pixel art stays sharp; a pane that doesn't divide evenly is centered.
+  const targetH = Math.max(a.height, b.height);
+  const scaleFor = (h) => Math.max(1, Math.floor(targetH / h));
+  const aScale = scaleFor(a.height);
+  const bScale = scaleFor(b.height);
+  const aW = a.width * aScale, aH = a.height * aScale;
+  const bW = b.width * bScale, bH = b.height * bScale;
+  const outH = Math.max(aH, bH);
+  const outW = aW + gap + bW;
+  const out = new PNG({ width: outW, height: outH });
+  // Backdrop: a neutral dark gray so a black game frame is still distinguishable
+  // from the canvas, and the divider reads.
+  for (let i = 0; i < out.data.length; i += 4) {
+    out.data[i] = 0x20; out.data[i + 1] = 0x20; out.data[i + 2] = 0x20; out.data[i + 3] = 0xFF;
+  }
+  const blit = (pane, scale, dstX, dstW, dstH) => {
+    const offY = Math.floor((outH - dstH) / 2); // vertically center a shorter pane
+    for (let y = 0; y < dstH; y++) {
+      const srcY = Math.floor(y / scale);
+      for (let x = 0; x < dstW; x++) {
+        const srcX = Math.floor(x / scale);
+        const s = (srcY * pane.width + srcX) * 4;
+        const d = ((offY + y) * outW + (dstX + x)) * 4;
+        out.data[d] = pane.rgba[s];
+        out.data[d + 1] = pane.rgba[s + 1];
+        out.data[d + 2] = pane.rgba[s + 2];
+        out.data[d + 3] = 0xFF;
+      }
+    }
+  };
+  blit(a, aScale, 0, aW, aH);
+  blit(b, bScale, aW + gap, bW, bH);
+  return { buffer: PNG.sync.write(out), outW, outH, aScale, bScale };
+}
+
 export function registerFrameTools(server, z, sessionKey) {
   async function doStep({ frames }) {
       const host = getHost(sessionKey);
@@ -373,6 +446,46 @@ export function registerFrameTools(server, z, sessionKey) {
     return json;
   }
 
+  // op:'sideBySide' — capture BOTH hosts (slot A + slot B) into one composited
+  // PNG, A left, B right. The two-cores-in-one-call capture for the port-compare
+  // loop: load the original in slot A, the port in slot B, step both the same N
+  // frames, and look at them together. Also returns a per-pane pixel summary so
+  // a no-vision agent gets a structured "both alive? how different?" signal.
+  async function doSideBySide({ frames, path: outPath, inline }) {
+    requireImageTarget(outPath, inline, "frame({op:'sideBySide'})");
+    const hostA = getHost(sessionKey);   // throws with slot-A recovery guidance
+    const hostB = getHostB(sessionKey);  // throws with "load slot B" guidance
+    if (frames && frames > 0) {
+      // Step both the same amount so the comparison is at the same game time.
+      hostA.stepFrames(frames);
+      hostB.stepFrames(frames);
+    }
+    const a = hostA.screenshotRgba();
+    const b = hostB.screenshotRgba();
+    const { buffer, outW, outH, aScale, bScale } = compositeSideBySide(a, b);
+    const pngBase64 = buffer.toString("base64");
+    const panes = {
+      a: { platform: hostA.status.platform, frame: hostA.status.frameCount, scale: aScale, ...pixelSummary(a.width, a.height, a.rgba) },
+      b: { platform: hostB.status.platform, frame: hostB.status.frameCount, scale: bScale, ...pixelSummary(b.width, b.height, b.rgba) },
+    };
+    if (!inline) {
+      await writeFile(outPath, buffer);
+      const json = jsonContent({ path: outPath, width: outW, height: outH, layout: "A|B", panes });
+      // Show the human the composite (not either raw pane) on the livestream.
+      json._observerImages = [{ kind: "image", mimeType: "image/png", base64: pngBase64 }];
+      return json;
+    }
+    const tempPath = path.join(tmpdir(), `romdev-sidebyside-${hostA.status.platform ?? "a"}-vs-${hostB.status.platform ?? "b"}.png`);
+    try { await writeFile(tempPath, buffer); } catch { /* best-effort */ }
+    return {
+      content: [
+        imageContent(pngBase64),
+        { type: "text", text: `side-by-side ${outW}x${outH} — left: ${panes.a.platform} @frame ${panes.a.frame} (${panes.a.distinctColors} colors), right: ${panes.b.platform} @frame ${panes.b.frame} (${panes.b.distinctColors} colors). Also written to ${tempPath}.` },
+      ],
+      _observerImages: [{ kind: "image", mimeType: "image/png", base64: pngBase64 }],
+    };
+  }
+
   async function doStepAndShot({ frames, path: outPath, inline }) {
       requireImageTarget(outPath, inline, "frame({op:'stepAndShot'})");
       const host = getHost(sessionKey);
@@ -395,7 +508,7 @@ export function registerFrameTools(server, z, sessionKey) {
 
   server.tool(
     "frame",
-    "Advance the emulator and capture frames. `op`: 'step' | 'screenshot' | 'stepAndShot' | 'stepInstruction' | 'verify'.\n" +
+    "Advance the emulator and capture frames. `op`: 'step' | 'screenshot' | 'stepAndShot' | 'sideBySide' | 'stepInstruction' | 'verify'.\n" +
     "'step': advance N `frames` as fast as possible — NO pacing/audio/vsync. Cores run at WASM speed, so frames:3600 " +
     "(1 min of game time) finishes in ~5-30ms, cheaper than a screenshot. Don't be timid — skip a title with 300, a " +
     "level with 7200; prefer ONE big call.\n" +
@@ -406,6 +519,13 @@ export function registerFrameTools(server, z, sessionKey) {
     "format:'ascii' — BETTER, read the byte directly: symbols({op:'resolve', name}) → memory({op:'read'}) is a 1-byte " +
     "assertion that costs zero image tokens.**\n" +
     "'stepAndShot': step + screenshot in ONE round-trip — the drive-then-look loop. (No overlayBoxes/scale here — png only.)\n" +
+    "'sideBySide': capture BOTH hosts (slot A + the slot-B comparison host) into ONE composited PNG — A left, B right, " +
+    "divider between. The two-cores-in-one-call capture for the original-vs-port compare loop: loadMedia the original " +
+    "in slot A, loadMedia({slot:'b'}) the port, then frame({op:'sideBySide', frames}) steps BOTH the same N frames and " +
+    "shows them together. Panes are integer-upscaled to a shared height so a handheld next to a console reads at a " +
+    "comparable size. Returns per-pane {platform, frame, distinctColors, dominantColor, dominantPct} so a no-vision " +
+    "agent still gets a structured 'are both alive / how different' signal. Requires a ROM in slot B (loadMedia({slot:'b'})). " +
+    "Same image contract as screenshot (path or inline:true).\n" +
     "'stepInstruction': execute exactly ONE CPU instruction and stop (finer than 'step'); freezes the CPU one " +
     "instruction later and returns { pc }. Pair with cpu({op:'read'}) to watch registers change while tracing a routine.\n" +
     "'verify': one-call 'is the game actually rendering / alive?' health check WITHOUT vision — for the spiral where an " +
@@ -419,8 +539,8 @@ export function registerFrameTools(server, z, sessionKey) {
     "IMAGE CONTRACT (screenshot/stepAndShot): the image goes to `path` (default, returns {path}) OR inline:true — " +
     "you MUST pass one. Keeps PNGs out of context unless asked.",
     {
-      op: z.enum(["step", "screenshot", "stepAndShot", "stepInstruction", "verify"]).describe("step frames; capture a screenshot; step+capture in one call; single-step one CPU instruction; or verify the game is actually rendering/alive (no vision needed)."),
-      frames: z.number().int().min(1).max(1_000_000).default(1).describe("op=step/stepAndShot: frames to advance (1-1,000,000). 36000 (10 min) usually completes in <1s — don't be conservative."),
+      op: z.enum(["step", "screenshot", "stepAndShot", "sideBySide", "stepInstruction", "verify"]).describe("step frames; capture a screenshot; step+capture in one call; capture both hosts side-by-side (A|B); single-step one CPU instruction; or verify the game is actually rendering/alive (no vision needed)."),
+      frames: z.number().int().min(1).max(1_000_000).default(1).describe("op=step/stepAndShot/sideBySide: frames to advance (1-1,000,000). For sideBySide, BOTH hosts step the same amount. 36000 (10 min) usually completes in <1s — don't be conservative."),
       format: z.enum(["png", "ascii"]).default("png").describe("op=screenshot: 'png' (default, real image) or 'ascii' (lossy text render)."),
       path: z.string().optional().describe("op=screenshot/stepAndShot: absolute path to write to (required unless inline:true)."),
       inline: z.boolean().default(false).describe("op=screenshot/stepAndShot: return the image in the response instead of writing to disk."),
@@ -436,6 +556,7 @@ export function registerFrameTools(server, z, sessionKey) {
         case "step":            return doStep(args);
         case "screenshot":      return doScreenshot(args);
         case "stepAndShot":     return doStepAndShot(args);
+        case "sideBySide":      return await doSideBySide(args);
         case "stepInstruction": return await stepInstructionCore(sessionKey);
         case "verify":          return await doVerify(args);
         default: throw new Error(`frame: unknown op '${args.op}'`);

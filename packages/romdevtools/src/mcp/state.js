@@ -14,6 +14,15 @@ import { LibretroHost } from "../host/index.js";
 /** @type {Map<string, LibretroHost>} */
 const hosts = new Map();
 
+// Secondary host slot ("B") per session. The primary slot above is what every
+// tool uses by default; slot B exists for the ONE workflow that needs two cores
+// live at once: side-by-side comparison (e.g. an original ROM vs. its port).
+// loadMedia({slot:'b'}) loads here; frame({op:'sideBySide'}) captures both. It
+// is entirely opt-in — a session that never loads slot B pays nothing, and the
+// per-session teardown below clears both slots together.
+/** @type {Map<string, LibretroHost>} */
+const hostsB = new Map();
+
 // What this session last loaded, kept OUTSIDE the host map so it SURVIVES a
 // host eviction (server restart / session reconnect / unload). The host itself
 // is gone in those cases, so the "No ROM loaded" error has nothing to read —
@@ -100,16 +109,67 @@ export function clearHost(sessionKey) {
     try { existing.unloadMedia(); } catch {}
   }
   hosts.delete(sessionKey);
+  // A session shutdown tears down BOTH slots — slot B is part of the same
+  // session's footprint and must not outlive it.
+  clearHostB(sessionKey);
 }
 
-/** Test-only: number of live hosts. */
+// --- Secondary host slot ("B") ----------------------------------------------
+// Same lifecycle helpers as the primary, scoped to the hostsB map. getHostB
+// throws a slot-specific error (no recovery breadcrumb — slot B is transient
+// scratch for a comparison, not the session's main ROM).
+
+/** @param {string} sessionKey @returns {LibretroHost} */
+export function getHostB(sessionKey) {
+  const host = hostsB.get(sessionKey);
+  if (!host) {
+    throw new Error(
+      "No ROM loaded in comparison slot B for this session — load one with " +
+      "loadMedia({ slot: 'b', platform, path }). Slot B is the second core used " +
+      "by frame({op:'sideBySide'}); it is not the session's primary ROM.",
+    );
+  }
+  return host;
+}
+
+/** @param {string} sessionKey */
+export function getHostBOrNull(sessionKey) {
+  return hostsB.get(sessionKey) ?? null;
+}
+
+/** @param {string} sessionKey @returns {LibretroHost} */
+export function resetHostB(sessionKey) {
+  const existing = hostsB.get(sessionKey);
+  if (existing && existing.status.loaded) {
+    try { existing.unloadMedia(); } catch {}
+  }
+  const fresh = new LibretroHost();
+  hostsB.set(sessionKey, fresh);
+  return fresh;
+}
+
+/** @param {string} sessionKey */
+export function clearHostB(sessionKey) {
+  const existing = hostsB.get(sessionKey);
+  if (existing && existing.status.loaded) {
+    try { existing.unloadMedia(); } catch {}
+  }
+  hostsB.delete(sessionKey);
+}
+
+/** Test-only: number of live hosts (both slots). */
 export function _liveHostCount() {
-  return hosts.size;
+  return hosts.size + hostsB.size;
 }
 
 /** Test-only: inject a (possibly fake) host for a session key. */
 export function _setHostForTest(sessionKey, host) {
   hosts.set(sessionKey, host);
+}
+
+/** Test-only: inject a (possibly fake) host into comparison slot B. */
+export function _setHostBForTest(sessionKey, host) {
+  hostsB.set(sessionKey, host);
 }
 
 // Shared reference to the per-session disclosure manager, so tool
