@@ -1180,7 +1180,34 @@ async function recompileCore(args) {
   // Slice the first routine (the reset path) — a flat full-PRG disasm renders
   // data tables after it as bogus code. Phase 1 = the boot routine.
   const da65Asm = sliceFirstRoutine(da65Full);
-  const { mainAsm, seamAsm, residue, entry, instrCount, seamCount, stubbed } = recompileNesToSnes(da65Asm);
+
+  // Optional NES-PPU-on-SNES shim: boot the original ROM, read its PPU state,
+  // convert tiles/nametable/palette to SNES formats, and emit a shim that draws
+  // that static boot picture.
+  //
+  // STATUS (WORKING, default OFF): the JS-side conversion (NES 2bpp→SNES 4bpp
+  // tiles, NES palette→BGR555 CGRAM, nametable→tilemap) is correct and
+  // unit-tested, and the emitted 65816 UPLOAD routine now DMAs all three to SNES
+  // VRAM/CGRAM and turns the screen on — verified end-to-end on snes9x
+  // (test/recompile-shim-render.test.js). It is still OFF by default because
+  // phase 1 only draws the STATIC first screen: after the shim, the recompiled
+  // NES logic runs against a STUBBED PPU seam, so animation/scroll/sprites are
+  // not maintained (the next layer). Opt in with withShim:true for the static
+  // boot picture. (frame compareRender/findDiverge are the oracles to debug it.)
+  const wantShim = args.withShim === true;
+  let shimAsm = null;
+  let shimInfo = null;
+  if (wantShim) {
+    try {
+      shimInfo = await buildNesPpuShim(rom);
+      shimAsm = shimInfo.asm;
+    } catch (e) {
+      shimInfo = { error: e.message };
+    }
+  }
+
+  const { mainAsm, seamAsm, residue, entry, instrCount, seamCount, stubbed } =
+    recompileNesToSnes(da65Asm, { withShim: !!shimAsm });
 
   let written = null;
   if (args.outputDir) {
@@ -1190,8 +1217,14 @@ async function recompileCore(args) {
     await writeFile(mainPath, mainAsm);
     await writeFile(seamPath, seamAsm);
     written = { mainAsm: mainPath, seamAsm: seamPath };
+    if (shimAsm) {
+      const shimPath = nodePath.join(args.outputDir, "nes_ppu_shim.asm");
+      await writeFile(shimPath, shimAsm);
+      written.shimAsm = shimPath;
+    }
   }
 
+  const shimDrawn = !!shimAsm;
   return jsonContent({
     ok: true,
     source: "nes", target: "snes",
@@ -1199,17 +1232,49 @@ async function recompileCore(args) {
     instrCount, seamCount,
     stubbedCallees: stubbed,
     residue,
+    shim: shimDrawn
+      ? { applied: true, phase: "static-boot-picture", tiles: shimInfo.tileCount, note: "Emitted the NES-PPU-on-SNES shim (converted tiles/nametable/palette + a 65816 upload routine) and the recompiled image draws the original ROM's STATIC boot screen on SNES (tiles+tilemap+palette → VRAM/CGRAM, BG1 on). Phase 1 = the first screen only: after the shim, the recompiled NES logic runs against a STUBBED PPU seam, so animation/scroll/sprites are not maintained yet. Use frame({op:'sideBySide'}) vs the NES original to compare." }
+      : { applied: false, reason: shimInfo?.error || "withShim not set (default off)", note: "No PPU shim — the port runs the logic but renders blank. Pass withShim:true to draw the original ROM's static boot picture on SNES; the recompiled LOGIC is the deliverable either way." },
     note:
       `Recompiled the NES reset routine to 65816 (asar). ${instrCount} instrs, ${seamCount} PPU/APU seam calls, ` +
       `${stubbed.length} callee(s) stubbed (phase-1 isolation), ${residue.length} residue line(s). ` +
-      "The 6502 logic runs in 65816 EMULATION mode; the hardware seam is STUBBED (writes→rts, $2002 read→$80 so " +
-      "boot wait-loops exit) — so the port boots and runs the logic but renders blank until a NES-PPU-on-SNES " +
-      "runtime fills the seam (separate task). " +
+      (shimDrawn
+        ? `The 6502 logic runs in 65816 EMULATION mode; the NES-PPU-on-SNES shim draws the converted static boot picture (${shimInfo.tileCount} tiles). `
+        : "The 6502 logic runs in 65816 EMULATION mode; the hardware seam is STUBBED so the port renders blank. ") +
       (written
-        ? `Wrote ${written.mainAsm} + ${written.seamAsm}. Build: build({platform:'snes', source: main.asm, ...}); then loadMedia + frame({op:'sideBySide'}) vs the NES original.`
-        : "Pass outputDir to write main.asm + nes_seam.asm to disk for build({platform:'snes'})."),
-    ...(written ? { written } : { mainAsm, seamAsm }),
+        ? `Wrote ${Object.values(written).join(" + ")}. Build all of them together with build({platform:'snes'}); then loadMedia + frame({op:'sideBySide'}) vs the NES original.`
+        : "Pass outputDir to write main.asm + nes_seam.asm" + (shimDrawn ? " + nes_ppu_shim.asm" : "") + " to disk for build({platform:'snes'})."),
+    ...(written ? { written } : { mainAsm, seamAsm, ...(shimAsm ? { shimAsm } : {}) }),
   });
+}
+
+/**
+ * Boot a NES ROM in a throwaway host, read its PPU state after boot, and build
+ * the NES-PPU-on-SNES shim (converted tiles/nametable/palette + the DMA
+ * routine). Returns { asm, tileCount }. Throws if the core/regions are
+ * unavailable.
+ * @param {Uint8Array} romBytes  full iNES file
+ */
+async function buildNesPpuShim(romBytes) {
+  const { resolveCore } = await import("../../cores/registry.js");
+  const { LibretroHost } = await import("../../host/index.js");
+  const { buildSnesAssets, emitPpuShim } = await import("../../analysis/nes-ppu-shim.js");
+  const core = resolveCore("nes");
+  if (!core) throw new Error("NES core unavailable for shim boot");
+  const host = new LibretroHost();
+  try {
+    await host.loadCore(core.jsPath, core.wasmPath);
+    await host.loadMedia({ platform: "nes", bytes: romBytes, virtualName: "/rom.nes" });
+    // Boot long enough for the game to finish its initial PPU upload.
+    host.stepFrames(120);
+    const chr = host.readMemory("nes_chr", 0, Math.min(0x2000, host.regionSize("nes_chr") || 0x2000));
+    const nt = host.readMemory("nes_nametables", 0, 0x400); // first nametable: 960 tiles + 64 attr
+    const pal = host.readMemory("nes_palette", 0, 32);
+    const assets = buildSnesAssets({ chr, nametable: nt, palette: pal });
+    return { asm: emitPpuShim(assets), tileCount: assets.tileCount };
+  } finally {
+    try { host.unloadMedia(); } catch { /* best-effort */ }
+  }
 }
 
 export function registerDisasmTools(server, z) {
@@ -1289,6 +1354,7 @@ export function registerDisasmTools(server, z) {
       // project
       outputDir: z.string().optional().describe("target=project: directory to write the project into (one .asm per region). target=recompile: directory to write main.asm + nes_seam.asm for build({platform:'snes'})."),
       targetPlatform: z.string().optional().describe("target=recompile: the platform to emit (phase 1: only 'snes'). The source platform is `platform` (phase 1: only 'nes')."),
+      withShim: z.boolean().default(false).describe("target=recompile: phase-1 static render (default off). Emit the NES-PPU-on-SNES shim — boots the original ROM, converts its tiles/nametable/palette to SNES VRAM/CGRAM data + a 65816 upload routine that draws the original's STATIC boot screen on SNES (verified on snes9x). Default off because phase 1 only draws the first screen: after the shim the recompiled NES logic runs against a STUBBED PPU seam, so animation/scroll/sprites are not maintained yet. The recompiled logic (with or without the shim) is the deliverable."),
       // references / cfg / xrefs
       address: z.number().int().min(0).max(0xFFFFFFFF).optional().describe("target=references: CPU address to find references TO. target=cfg: address inside the function to graph. target=xrefs: address to find cross-references TO. target=decompile: address of the function to decompile (use an address from target='functions')."),
       maxRefsReturned: z.number().int().min(1).max(2048).default(256).describe("target=references: cap the references returned."),
