@@ -212,15 +212,60 @@ export function withClearToolErrors(server, z) {
   return server;
 }
 
+// ── Hex-string coercion on address-like params ─────────────────────
+// JSON forbids `0x…` number literals, so an agent that pastes an address as hex
+// (`{address: 0xC06C}`) gets a HARD parse error, and even valid JSON can't carry
+// hex. We accept the STRING forms `"0x…"`, `"$…"`, and decimal strings on
+// address-like params and coerce them to a number BEFORE validation, so the
+// natural thing an agent reaches for just works. (Reported repeatedly in v0.41.0
+// feedback as the #1 first-try-fail.)
+//
+// Matched by KEY NAME (not schema introspection — robust across zod versions).
+// DELIBERATELY NARROW: only names that are unambiguously a numeric address/offset
+// across the toolset. Names like `start`/`end`/`from`/`to`/`target`/`compare` are
+// EXCLUDED because they're also booleans (the START button) or enums (`compare:'eq'`,
+// `from:'aseprite'`); the coercer passes non-hex strings through, but not wrapping
+// them at all keeps those schemas pristine. Address-suffixed forms (`startAddress`,
+// `endAddress`) DO match and cover the range-bound case.
+const ADDR_KEY_RE = /^(address|cpuAddress|addr|offset|pc|compare|startAddress|endAddress|baseAddress|targetAddress|fromAddress|toAddress|romOffset|prgOffset|vramAddr)$/i;
+
+/** Coerce `"0x1A"` / `"$1A"` / `"26"` → number; pass through numbers/undefined/
+ *  non-hex strings unchanged (so a non-numeric value still hits the real schema
+ *  error). Exported for unit tests. */
+export function coerceHexNumber(v) {
+  if (typeof v !== "string") return v;
+  const s = v.trim();
+  if (/^[$]([0-9a-fA-F]+)$/.test(s)) return parseInt(s.slice(1), 16);
+  if (/^0x[0-9a-fA-F]+$/i.test(s)) return parseInt(s, 16);
+  if (/^-?\d+$/.test(s)) return parseInt(s, 10);
+  return v; // leave anything else for the inner schema to reject
+}
+
 /**
  * Build a `.strict()` z.object from a tool's shape whose validation issues each
  * render as a clear sentence (unknown-key "did you mean", enum options, missing
  * required, wrong type). Used by withClearToolErrors to replace the stored schema.
+ * Also wraps address-like params with hex-string coercion (see coerceHexNumber).
  * @param {any} z
  * @param {Record<string, any>} shape
  * @param {string} toolName
  */
 function strictFriendlyObject(z, shape, toolName) {
+  // Wrap address-like fields with a hex-string→number preprocessor. z.preprocess
+  // runs the coercion first, then the field's own schema (number().int()…)
+  // validates the result — so descriptions, optionality, and ranges are preserved.
+  const coercedShape = {};
+  for (const [key, schema] of Object.entries(shape)) {
+    if (ADDR_KEY_RE.test(key)) {
+      // z.preprocess drops the wrapper's .description (which tools/list needs),
+      // so re-attach the field's own description to the wrapped schema.
+      const wrapped = z.preprocess(coerceHexNumber, schema);
+      coercedShape[key] = schema.description ? wrapped.describe(schema.description) : wrapped;
+    } else {
+      coercedShape[key] = schema;
+    }
+  }
+  shape = coercedShape;
   const validKeys = Object.keys(shape);
   const errorMap = (issue) => {
     switch (issue.code) {
