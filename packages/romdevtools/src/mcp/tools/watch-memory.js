@@ -22,6 +22,50 @@ import { resolveButtonAlias } from "./input.js";
 import { getCPUStateCore } from "./platform-tools.js";
 import { traceVramSourceCore } from "./trace-vram-source.js";
 import { resolveStatePath } from "./state.js";
+import { buildBacktrace } from "../../analysis/backtrace.js";
+import { mapNesAddress } from "./disasm.js";
+
+/**
+ * Build the decoded call stack for a breakpoint hit: who called the routine the
+ * PC is in. Uses the captured register snapshot's stack pointer + the stack RAM.
+ * Returns null when unavailable (unsupported ISA / no regs) — never throws.
+ * @param {import("../../host/index.js").LibretroHost} host
+ * @param {Object|null} regs   the `named` register snapshot (has the stack ptr)
+ */
+function backtraceForHit(host, regs) {
+  if (!regs) return null;
+  const platform = host.status?.platform;
+  // Validate the $20 (JSR) opcode at each candidate caller PC when we can map the
+  // CPU address to a ROM byte. NES: use the cart image + the mapper.
+  let readByteAt = null;
+  if (platform === "nes") {
+    try {
+      const cart = host.getCartRom();
+      readByteAt = (cpuAddr) => {
+        try {
+          const { bytes } = mapNesAddress(cart.raw, cpuAddr, 1);
+          return bytes && bytes.length ? bytes[0] : null;
+        } catch { return null; }
+      };
+    } catch { /* no cart / mapping — frames stay best-effort */ }
+  }
+  const bt = buildBacktrace({
+    platform,
+    regs,
+    readMemory: (region, off, len) => host.readMemory(region, off, len),
+    readByteAt,
+  });
+  if (!bt || !bt.frames.length) return null;
+  return {
+    isa: bt.isa,
+    frames: bt.frames.map((f) => ({
+      callerPc: "$" + f.callerPc.toString(16).toUpperCase().padStart(4, "0"),
+      returnAddr: "$" + f.returnAddr.toString(16).toUpperCase().padStart(4, "0"),
+      confident: f.confident,
+    })),
+    note: "callStack[0] is the immediate caller (the JSR that reached this routine), decoded from the stack at the break instant. confident=true means the byte before the return target is a JSR ($20). Generated server-side — no hand stack-walking.",
+  };
+}
 
 // Restore a savestate (in-memory slot `fromState` OR disk file `fromStatePath`)
 // before a trace, so on:'range'/'pc' run from a known moment. Returns a small
@@ -624,6 +668,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         hits: result.hits,
         framesStepped: result.framesStepped,
         ...(wpRegs ? { registersAtHit: wpRegs } : {}),
+        ...((() => { const bt = backtraceForHit(host, wpRegs); return bt ? { callStack: bt } : {}; })()),
         ...(bankInfo ? bankInfo : {}),
         ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
         note: "pc is the EXACT writing instruction (captured in the CPU write path), not a frame sample. " +
@@ -782,6 +827,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         pc: last.lastPC != null ? "$" + last.lastPC.toString(16).toUpperCase() : null,
         pcRaw: last.lastPC,
         ...(atHit ? { registersAtHit: atHit } : {}),
+        ...((() => { const bt = backtraceForHit(host, atHit); return bt ? { callStack: bt } : {}; })()),
         ...(capturedMemory ? { capturedMemory } : {}),
         frame: host.status.frameCount,
         framesRun,
