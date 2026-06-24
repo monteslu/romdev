@@ -4,6 +4,71 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.42.0 — 2026-06-24
+
+### v0.41.0 feedback batch + the NES→SNES port engine
+
+A round driven by RE-session feedback (cheats, ergonomics, the human-playtest
+eviction case) plus the flagship port-engine work.
+
+#### Fixed — `cheats` raw RAM codes were inert
+
+`cheats({op:'make'})` for a sub-`$0100` RAM address emitted the short `32:09`
+form, which libretro cores PARSE but never bind — and `apply` then falsely
+reported `applied:true`. `encodeRaw` now pads the address to a binding width
+(`0032:09`); `apply` re-encodes a hand-typed short code too. Verified on fceumm.
+
+#### New — hex-string forms on address params
+
+A hex literal in a JSON arg (`address: 0xC06C`) was a hard parse error. All
+address-like params (`address`/`offset`/`pc`/`compare`/…) now accept the STRING
+forms `"0xC06C"` / `"$C06C"` / decimal strings, coerced before validation —
+centralized so every tool gets it.
+
+#### New — `catalog({op:'status'}).capabilities`
+
+A map of which debug ops the loaded core/toolchain implement (pcBreakpoint,
+watchpointExact, rangeWatch, cheats, da65Toolchain, …) so an agent picks a
+working trace strategy up front instead of probing by failure.
+
+#### New — `callStack` on breakpoint hits
+
+`breakpoint({on:'pc'|'write'})` hits carry a decoded call stack (6502 family):
+the server walks the stack from the captured S register and returns each caller
+PC (validated against the `$20` JSR opcode), replacing hand stack-walking.
+
+#### New — `references` finds inline jump-table / trampoline call sites
+
+When no `jsr/jmp/branch` names a CODE address (it's reached via a computed jump),
+`references` now scans the raw ROM for the address as a 16-bit pointer (LE/BE, +
+the 6502 RTS-trick `addr-1`) and reports `tableHits`.
+
+#### New — `disasm({target:'pointerTable'})`
+
+Static index→handler decode of a jump/pointer table: contiguous `dw`, SPLIT
+lo/hi arrays at two bases, the RTS-trick (`+1`), and a REVERSE lookup (handler →
+dispatch index). The static complement to the live `breakpoint({on:'jumptable'})`.
+
+#### New — playtest eviction survivability
+
+While a playtest window is open, romdev rolls a `.state` to disk every ~15s (and
+on F2), so a session eviction can't lose a human's manual progress — the recovery
+hint points at `state({op:'load', path})`. Surfaced in `playtest({op:'status'})`.
+
+#### Leaner schemas
+
+The last inline 62-value region enum in the watch/breakpoint tool schemas is now
+a runtime-validated string — the full enum lives once on `memory`'s `region`.
+
+#### Port engine — NES→SNES static recompile renders + plays
+
+`disasm({target:'recompile'})` now draws the original ROM's screen on SNES
+(`withShim`, phase-1 static — fixed the `cpx.w` upload bug) and animates sprites
++ runs the game's NMI each vblank (`withRuntime`, phase-2 live). The recompiler
+follows the real reset vector and anchors the entry to the routine's first
+instruction. (Plus the `frame` port-compare oracles: compareRam/compareRender/
+findDiverge/portStatus + side-by-side two-core capture.)
+
 ## 0.41.0 — 2026-06-12
 
 ### RE engine round — bank-aware decompile, live jumptable recovery, readable 6502 output
