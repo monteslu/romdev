@@ -31,23 +31,28 @@ A map of which debug ops the loaded core/toolchain implement (pcBreakpoint,
 watchpointExact, rangeWatch, cheats, da65Toolchain, …) so an agent picks a
 working trace strategy up front instead of probing by failure.
 
-#### New — `callStack` on breakpoint hits
+#### New — `callStack` on breakpoint hits (13 of 14 platforms)
 
-`breakpoint({on:'pc'|'write'})` hits carry a decoded call stack (6502 family):
-the server walks the stack from the captured S register and returns each caller
-PC (validated against the `$20` JSR opcode), replacing hand stack-walking.
+`breakpoint({on:'pc'|'write'})` hits carry a decoded call stack: the server walks
+the stack from the captured stack pointer and returns each caller PC. Covers the
+6502 family (JSR-opcode validated), m68k (Genesis — 4-byte BE return), and Z80/
+SM83 (SMS/GG/MSX/GB/GBC — 2-byte LE return). GBA (ARM) is the lone exclusion: its
+calls return through the link register, not the stack.
 
 #### New — `references` finds inline jump-table / trampoline call sites
 
 When no `jsr/jmp/branch` names a CODE address (it's reached via a computed jump),
-`references` now scans the raw ROM for the address as a 16-bit pointer (LE/BE, +
-the 6502 RTS-trick `addr-1`) and reports `tableHits`.
+`references` now scans the raw ROM for the address as a 16-bit pointer (LE/BE) and
+reports `tableHits`. Per-platform header skip (NES/SNES/7800/Lynx); the 6502
+RTS-trick `addr-1` form is scanned only on the 6502 family.
 
-#### New — `disasm({target:'pointerTable'})`
+#### New — `disasm({target:'pointerTable'})` (all mapped platforms)
 
 Static index→handler decode of a jump/pointer table: contiguous `dw`, SPLIT
 lo/hi arrays at two bases, the RTS-trick (`+1`), and a REVERSE lookup (handler →
 dispatch index). The static complement to the live `breakpoint({on:'jumptable'})`.
+Works on every platform with an address mapper (nes/snes/sms/gg/gb/gbc/2600/7800/
+c64/genesis); the endian default follows the CPU (Genesis/m68k → BE).
 
 #### New — playtest eviction survivability
 
