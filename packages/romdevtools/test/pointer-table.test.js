@@ -87,3 +87,52 @@ test("disasm({target:'pointerTable'}) decodes a split RTS-trick table on a NES R
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("pointerTable works on a NON-NES platform: GB LE table", async () => {
+  // GB cpu addr == file offset for $0000-$7FFF. LE word table at $1000.
+  const gb = new Uint8Array(0x8000);
+  gb.set([0x34, 0x42, 0xbc, 0x5a], 0x1000); // $4234, $5ABC (LE)
+  const dir = await mkdtemp(path.join(os.tmpdir(), "pt-gb-"));
+  try {
+    const p = path.join(dir, "t.gb");
+    await writeFile(p, gb);
+    const r = parse(await toolHandler()({ target: "pointerTable", platform: "gb", path: p, loBase: 0x1000, count: 2 }));
+    assert.equal(r.platform, "gb");
+    assert.match(r.form, /contiguous LE/);
+    assert.equal(r.entries[0].handler, "$4234");
+    assert.equal(r.entries[1].handler, "$5ABC");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("pointerTable defaults to BIG-endian on Genesis (m68k word order)", async () => {
+  const gen = new Uint8Array(0x40000);
+  gen.set([0x12, 0x34, 0x56, 0x78], 0x2000); // BE words $1234, $5678
+  const dir = await mkdtemp(path.join(os.tmpdir(), "pt-gen-"));
+  try {
+    const p = path.join(dir, "t.bin");
+    await writeFile(p, gen);
+    const r = parse(await toolHandler()({ target: "pointerTable", platform: "genesis", path: p, loBase: 0x2000, count: 2 }));
+    assert.match(r.form, /contiguous BE/, "Genesis tables default to big-endian");
+    assert.equal(r.entries[0].handler, "$1234");
+    assert.equal(r.entries[1].handler, "$5678");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("pointerTable rejects a platform with no static mapper, listing the supported set", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "pt-pce-"));
+  try {
+    const p = path.join(dir, "t.pce");
+    await writeFile(p, new Uint8Array(0x2000));
+    const res = await toolHandler()({ target: "pointerTable", platform: "pce", path: p, loBase: 0x1000, count: 1 });
+    assert.equal(res.isError, true);
+    const msg = res.content.find((c) => c.type === "text").text;
+    assert.match(msg, /no static address mapper/);
+    assert.match(msg, /breakpoint\(\{on:'jumptable'\}\)/, "steers to the live resolver");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

@@ -16,6 +16,42 @@ function requireRomPath(args) {
   return args.path;
 }
 
+/**
+ * CPU address → file offset for a platform's ROM image, dispatching to the
+ * per-platform mapper. Returns the offset or null (out of range / unmapped /
+ * unsupported platform). The single home for "where in the file is CPU address
+ * X" — used by file-offset annotation AND target=pointerTable.
+ * @param {string} platform
+ * @param {Uint8Array} data   full ROM image
+ * @param {number} cpuAddr
+ * @param {{bank?:number, snesMapper?:number}} [opts]
+ */
+function cpuAddrToFileOffset(platform, data, cpuAddr, opts = {}) {
+  try {
+    switch (platform) {
+      case "snes": return mapSnesAddress(data, cpuAddr, 1, opts.snesMapper).fileOffset;
+      case "sms": case "gg": return mapSmsAddress(data, cpuAddr, 1).fileOffset;
+      case "gb": case "gbc": return mapGbAddress(data, cpuAddr, 1, opts.bank).fileOffset;
+      case "atari2600": return mapAtari2600Address(data, cpuAddr, 1, opts.bank ?? 0).fileOffset;
+      case "atari7800": return mapAtari7800Address(data, cpuAddr, 1, opts.bank ?? 0).fileOffset;
+      case "c64": return mapC64Address(data, cpuAddr, 1, opts.bank ?? 0).fileOffset;
+      case "genesis": case "megadrive": case "md": return mapGenesisAddress(data, cpuAddr, 1).fileOffset;
+      case "nes": return mapNesAddress(data, cpuAddr, 1, opts.bank).fileOffset;
+      default: return null; // msx/pce/lynx/gba: no static address mapper here
+    }
+  } catch {
+    return null;
+  }
+}
+
+/** Platforms target=pointerTable can map a CPU address for (has a mapper above).
+ *  Their default jump-table word order: 6502/Z80/65816 are little-endian; the
+ *  m68k (Genesis) stores words BIG-endian, so a Genesis `dc.w` table is BE. */
+const POINTER_TABLE_PLATFORMS = new Set([
+  "nes", "snes", "sms", "gg", "gb", "gbc", "atari2600", "atari7800", "c64", "genesis", "megadrive", "md",
+]);
+const BIG_ENDIAN_TABLE_PLATFORMS = new Set(["genesis", "megadrive", "md"]);
+
 // ── Per-platform CPU-address → file-offset mappers ────────────────
 // Each returns { bytes, fileOffset, cpu, notes } given the full ROM
 // bytes and a desired CPU address. Throws with a clear message if the
@@ -907,25 +943,12 @@ async function disassembleRomCore(args) {
         exitCode = r.exitCode;
       }
 
-      // File-offset annotation: per-line cpu→file translator.
+      // File-offset annotation: per-line cpu→file translator (shared mapper).
+      // `args.bank` maps $8000-$BFFF to the chosen switchable bank; mapNesAddress
+      // ignores it for $C000+ (fixed top bank), so each line points at the right
+      // PRG offset.
       if (annotateFileOffsetsFlag) {
-        const cpuToFile = (cpuAddr) => {
-          try {
-            if (resolved === "snes") return mapSnesAddress(data, cpuAddr, 1, mapper).fileOffset;
-            if (resolved === "sms" || resolved === "gg") return mapSmsAddress(data, cpuAddr, 1).fileOffset;
-            if (resolved === "gb" || resolved === "gbc") return mapGbAddress(data, cpuAddr, 1, args.bank).fileOffset;
-            if (resolved === "atari2600") return mapAtari2600Address(data, cpuAddr, 1, args.bank ?? 0).fileOffset;
-            if (resolved === "atari7800") return mapAtari7800Address(data, cpuAddr, 1, args.bank ?? 0).fileOffset;
-            if (resolved === "c64") return mapC64Address(data, cpuAddr, 1, args.bank ?? 0).fileOffset;
-            if (resolved === "genesis") return mapGenesisAddress(data, cpuAddr, 1).fileOffset;
-            // `args.bank` maps $8000-$BFFF to the chosen switchable bank;
-            // mapNesAddress ignores it for $C000+ (fixed top bank), so each
-            // annotated line points at the correct PRG offset.
-            return mapNesAddress(data, cpuAddr, 1, args.bank).fileOffset;
-          } catch {
-            return null;
-          }
-        };
+        const cpuToFile = (cpuAddr) => cpuAddrToFileOffset(resolved, data, cpuAddr, { bank: args.bank, snesMapper: mapper });
         // Secondary translator for NES — also report the header-stripped
         // PRG offset, since patchFile against `prg.bin` (from extractCart)
         // needs the header-less frame.
@@ -1161,24 +1184,26 @@ function renderBuildMd({ platform, romPath, regions, blobs, build, verifiable, n
 /**
  * target=pointerTable — STATIC decode of a jump/pointer table into an
  * index→handler map (+ optional reverse lookup). The static complement to the
- * LIVE resolveJumptable. Handles contiguous LE/BE `dw` tables, SPLIT lo/hi arrays
- * at two bases, and the 6502 RTS-trick (+1). NES banked addresses honor `bank`.
+ * LIVE resolveJumptable. Handles contiguous LE/BE tables, SPLIT lo/hi arrays at
+ * two bases, and the 6502 RTS-trick (+1). Works on every platform with an address
+ * mapper (nes/snes/sms/gg/gb/gbc/2600/7800/c64/genesis); banked carts honor `bank`.
+ * The default endian follows the CPU (Genesis/m68k → BE; everything else → LE),
+ * overridable via `endian`.
  */
 async function pointerTableCore(args) {
-  const { platform, loBase, hiBase, count, convention = "direct", endian = "LE", reverseHandler, bank } = args;
+  const { platform, loBase, hiBase, count, convention = "direct", reverseHandler, bank } = args;
   if (loBase == null) throw new Error("disasm({target:'pointerTable'}): loBase (the table / low-byte base) is required.");
   if (count == null) throw new Error("disasm({target:'pointerTable'}): count (number of entries) is required.");
   const romPath = requireRomPath(args);
   const data = new Uint8Array(await readFile(romPath));
-  const resolved = platform ?? (/\.nes$/i.test(romPath) ? "nes" : null);
-  if (resolved !== "nes") {
-    throw new Error(`disasm({target:'pointerTable'}): only NES is wired today (got '${resolved ?? "unknown"}'). Pass platform:'nes' on a .nes ROM.`);
+  const resolved = platform ?? (/\.nes$/i.test(romPath) ? "nes" : /\.(sfc|smc)$/i.test(romPath) ? "snes" : /\.gb$/i.test(romPath) ? "gb" : /\.sms$/i.test(romPath) ? "sms" : /\.(gen|md|bin)$/i.test(romPath) ? "genesis" : null);
+  if (!resolved || !POINTER_TABLE_PLATFORMS.has(resolved)) {
+    throw new Error(`disasm({target:'pointerTable'}): platform '${resolved ?? "unknown"}' has no static address mapper. Supported: ${[...POINTER_TABLE_PLATFORMS].join(", ")}. (msx/pce/lynx/gba: locate the table live with breakpoint({on:'jumptable'}).)`);
   }
-  // CPU address → file offset via the NES mapper (banked-cart aware).
-  const toOffset = (cpuAddr) => {
-    const { fileOffset } = mapNesAddress(data, cpuAddr, 1, bank);
-    return fileOffset;
-  };
+  // CPU address → file offset via the platform mapper (banked-cart aware).
+  const toOffset = (cpuAddr) => cpuAddrToFileOffset(resolved, data, cpuAddr, { bank });
+  // Default endian follows the CPU's word order unless the caller overrides it.
+  const endian = args.endian ?? (BIG_ENDIAN_TABLE_PLATFORMS.has(resolved) ? "BE" : "LE");
   const { entries, form } = decodePointerTable({ data, toOffset, count, loBase, hiBase, convention, endian });
   const fmt = (n) => "$" + (n & 0xffff).toString(16).toUpperCase().padStart(4, "0");
   const out = {
@@ -1482,7 +1507,7 @@ export function registerDisasmTools(server, z) {
       hiBase: z.number().int().min(0).max(0xFFFFFF).optional().describe("target=pointerTable: CPU address of the HIGH-byte array (SPLIT lo/hi form). Omit for a contiguous `dw` table (hi byte follows each lo byte)."),
       count: z.number().int().min(1).max(4096).optional().describe("target=pointerTable: number of entries to decode."),
       convention: z.enum(["direct", "rts+1"]).default("direct").describe("target=pointerTable: 'direct' = the stored word IS the handler; 'rts+1' = the 6502 RTS-trick (table holds handler-1; +1 is applied)."),
-      endian: z.enum(["LE", "BE"]).default("LE").describe("target=pointerTable: byte order of the CONTIGUOUS form (split lo/hi ignores this)."),
+      endian: z.enum(["LE", "BE"]).optional().describe("target=pointerTable: byte order of the CONTIGUOUS form (split lo/hi ignores this). Default follows the CPU — Genesis/m68k is BE, everything else LE; override only if a table is stored against type."),
       reverseHandler: z.number().int().min(0).max(0xFFFF).optional().describe("target=pointerTable: also report which dispatch INDEX/indices land on this handler address (reverse lookup — 'what state triggers this routine?')."),
     },
     safeTool(async (args) => {
