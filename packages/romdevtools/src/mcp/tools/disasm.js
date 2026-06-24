@@ -1432,6 +1432,7 @@ export function registerDisasmTools(server, z) {
       // references / cfg / xrefs
       address: z.number().int().min(0).max(0xFFFFFFFF).optional().describe("target=references: CPU address to find references TO. target=cfg: address inside the function to graph. target=xrefs: address to find cross-references TO. target=decompile: address of the function to decompile (use an address from target='functions')."),
       maxRefsReturned: z.number().int().min(1).max(2048).default(256).describe("target=references: cap the references returned."),
+      includeTableHits: z.boolean().default(false).describe("target=references: also scan the raw ROM for the address as a 16-bit POINTER (LE/BE, + the 6502 RTS-trick addr-1) — finds inline jump-table / trampoline call sites that no jsr/jmp/branch names. Auto-on when no direct refs are found; set true to get tableHits alongside direct refs too."),
     },
     safeTool(async (args) => {
       switch (args.target) {
