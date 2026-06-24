@@ -213,7 +213,42 @@ function nesVectorRefs(data, targetAddr) {
   return refs;
 }
 
-export async function findReferencesCore({ path, platform, address, mapper: _mapper, maxRefsReturned = 256 }) {
+/**
+ * Scan the raw ROM bytes for the target address encoded as a 16-bit POINTER —
+ * the inline-jump-table / trampoline case that a control-flow operand scan can't
+ * see. A dispatcher reads a word table and jumps to (or rts-tricks into) the
+ * entry, so the handler is reached with NO jsr/jmp/branch ever naming it; da65
+ * also mis-decodes the table bytes as instructions, hiding them from `references`.
+ * We surface every byte position whose LE or BE 16-bit word equals the target —
+ * and ALSO target-1, the 6502 "RTS trick" (push addr-1, rts → jumps to addr).
+ *
+ * @param {Uint8Array} data       full ROM image (incl. any header)
+ * @param {number} targetAddr     CPU address of the handler
+ * @param {number} headerSkip     bytes of file header before the code image
+ * @returns {Array<{fileOffset:string, word:string, endian:"LE"|"BE", convention:"direct"|"rts+1"}>}
+ */
+function scanPointerTableHits(data, targetAddr, headerSkip = 0) {
+  const hits = [];
+  const t16 = targetAddr & 0xffff;
+  const want = [
+    { value: t16, convention: "direct" },
+    { value: (t16 - 1) & 0xffff, convention: "rts+1" }, // 6502 RTS-trick: table holds addr-1
+  ];
+  for (let i = headerSkip; i + 1 < data.length; i++) {
+    const le = data[i] | (data[i + 1] << 8);
+    const be = (data[i] << 8) | data[i + 1];
+    for (const w of want) {
+      if (le === w.value) {
+        hits.push({ fileOffset: "0x" + i.toString(16).toUpperCase(), word: "$" + w.value.toString(16).toUpperCase().padStart(4, "0"), endian: "LE", convention: w.convention });
+      } else if (be === w.value) {
+        hits.push({ fileOffset: "0x" + i.toString(16).toUpperCase(), word: "$" + w.value.toString(16).toUpperCase().padStart(4, "0"), endian: "BE", convention: w.convention });
+      }
+    }
+  }
+  return hits;
+}
+
+export async function findReferencesCore({ path, platform, address, mapper: _mapper, includeTableHits = false, maxRefsReturned = 256 }) {
   const data = new Uint8Array(await readFile(path));
   const resolved = platform ?? (
     /\.nes$/i.test(path) ? "nes" :
@@ -514,6 +549,17 @@ export async function findReferencesCore({ path, platform, address, mapper: _map
     refs.push(...atariVectorRefs(data, address));
   }
 
+  // Pointer-table / trampoline scan. The operand scan above only finds DIRECT
+  // control-flow (jsr/jmp/branch naming the address). When a handler is reached
+  // ONLY through an inline word table (computed jump / RTS-trick dispatcher), no
+  // instruction names it — so when the direct scan comes up empty (or the caller
+  // asks), scan the raw bytes for the address as a 16-bit pointer (LE/BE, direct
+  // and the RTS-trick addr-1 form). This is the case the v0.41.0 feedback hit
+  // where the only "ref" was an inline `B5 8E` table entry da65 mis-decoded.
+  const headerSkip = resolved === "nes" ? 16 : ((resolved === "snes" && (data.length % 1024) === 512) ? 512 : 0);
+  const wantTableHits = includeTableHits || refs.length === 0;
+  const tableHits = wantTableHits ? scanPointerTableHits(data, address, headerSkip) : null;
+
   return {
     path,
     platform: resolved,
@@ -523,9 +569,21 @@ export async function findReferencesCore({ path, platform, address, mapper: _map
     truncated: refs.length > maxRefsReturned
       ? `${refs.length - maxRefsReturned} additional references not returned (raise maxRefsReturned).`
       : undefined,
+    ...(tableHits && tableHits.length
+      ? {
+          tableHits: tableHits.slice(0, maxRefsReturned),
+          tableHitsFound: tableHits.length,
+        }
+      : {}),
     notes: [
       refs.length === 0
-        ? `No references found. Address $${address.toString(16).toUpperCase()} may be unreached, or an indirect/computed jump target.`
+        ? `No DIRECT control-flow references (jsr/jmp/branch naming $${address.toString(16).toUpperCase()}).` +
+          (tableHits && tableHits.length
+            ? ` BUT ${tableHits.length} pointer-table hit(s) — the address appears as a 16-bit word in the ROM (an inline jump-table / trampoline reaches it via a computed jump). See tableHits: fileOffset is where the pointer sits; convention 'rts+1' is the 6502 RTS-trick (table holds addr-1).`
+            : ` No pointer-table hits either — likely unreached, or a register/computed target this scan can't resolve.`)
+        : null,
+      refs.length > 0 && tableHits && tableHits.length
+        ? `Also ${tableHits.length} pointer-table hit(s) (the address also appears as a raw 16-bit pointer — see tableHits).`
         : null,
       segmentsCapped > 0
         ? `Scan covered the first ${SEGMENT_CAP} banks only — ${segmentsCapped} additional bank(s) were NOT scanned (very large cart).`
