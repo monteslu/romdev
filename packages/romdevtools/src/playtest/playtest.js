@@ -272,7 +272,7 @@ export const KEYBOARD_BINDINGS_HELP = `Keyboard:
 Emulator hotkeys (RetroArch defaults):
   P / Space            Pause / unpause emulation
   K                    Frame advance (step one frame while paused)
-  R (hold)             Rewind (up to 10 seconds)
+  R                    Rewind one frame (while paused)
   F2                   Save state (to slot)
   F4                   Load state (from slot)
 
@@ -599,6 +599,28 @@ export async function playtest(args) {
       }
       return;
     }
+    if (key === "r") {
+      // The ring buffer's top snapshot is the state *before* the currently
+      // displayed frame; discard it, then restore the one before that and
+      // re-run a frame to render it. (stepFrames is a no-op while paused, so
+      // we resume/step/pause exactly like frame advance.)
+      const h = getLiveHost();
+      if (h && h.status?.loaded && h.status.paused && rewindBuffer.length > 1) {
+        rewindBuffer.pop();
+        const snap = rewindBuffer[rewindBuffer.length - 1];
+        try {
+          h.unserializeState(snap);
+          h.resume();
+          h.stepFrames(1);
+          h.pause();
+          frameCount++;
+          humanInput.note(true, tickCount);
+        } catch (e) {
+          log.error("[playtest] rewind error:", e.message);
+        }
+      }
+      return;
+    }
     if (key) heldKeys.add(key);
   });
   window.on("keyUp", (e) => {
@@ -716,52 +738,38 @@ export async function playtest(args) {
         }
       }
       // Did the human actually press anything this tick (pad or keyboard,
-      // either port)? Rewind-scrubbing counts as activity too — the human is
-      // actively manipulating emulator state even though R maps to no button.
+      // either port)?
       const humanPressing = anyButtonHeld(port0) || anyButtonHeld(port1);
-      const isRewinding = heldKeys.has("r") && rewindBuffer.length > 0;
-      humanInput.note(humanPressing || isRewinding, tickCount);
-      if (isRewinding) {
-        // Restore the previous snapshot and run one frame to produce its visual.
-        const snap = rewindBuffer.pop();
+      humanInput.note(humanPressing, tickCount);
+      // Capture snapshot before stepping so R can rewind to it later.
+      if (h.status?.loaded) {
         try {
-          h.unserializeState(snap);
-          h.stepFrames(1);
-          frameCount++;
-        } catch (e) {
-          log.error("[playtest] rewind error:", e.message);
-        }
-      } else {
-        // Capture snapshot before stepping so it can be rewound to later.
-        if (h.status?.loaded) {
-          try {
-            const snap = h.serializeState();
-            rewindBuffer.push(snap);
-            if (rewindBuffer.length > MAX_REWIND_FRAMES) rewindBuffer.shift();
-          } catch {}
-        }
-        // Write input ONLY while the human is actually pressing, plus ONE
-        // release write after they let go (humanInputDirty). The old behavior
-        // wrote all-zeros EVERY tick, which silently clobbered the agent's
-        // input({op:'set'}) even when nobody was touching the pad. An idle
-        // window now leaves the host's input state alone; the human still
-        // wins the instant they press.
-        if (humanPressing || humanInputDirty) {
-          h.setInput({ ports: [port0, port1] });
-          humanInputDirty = humanPressing;
-        }
-        let stepped = 0;
-        try {
-          stepped = h.stepFrames(1);
-        } catch (e) {
-          // A step error mid-swap (host being torn down/rebuilt) is transient —
-          // skip this frame and let the next tick pick up the new host. Don't kill
-          // the window. (A window-level failure is handled by the destroyed checks.)
-          log.error("[playtest] step error (skipping frame):", e.message);
-          return;
-        }
-        if (stepped > 0) frameCount++;
+          const snap = h.serializeState();
+          rewindBuffer.push(snap);
+          if (rewindBuffer.length > MAX_REWIND_FRAMES) rewindBuffer.shift();
+        } catch {}
       }
+      // Write input ONLY while the human is actually pressing, plus ONE
+      // release write after they let go (humanInputDirty). The old behavior
+      // wrote all-zeros EVERY tick, which silently clobbered the agent's
+      // input({op:'set'}) even when nobody was touching the pad. An idle
+      // window now leaves the host's input state alone; the human still
+      // wins the instant they press.
+      if (humanPressing || humanInputDirty) {
+        h.setInput({ ports: [port0, port1] });
+        humanInputDirty = humanPressing;
+      }
+      let stepped = 0;
+      try {
+        stepped = h.stepFrames(1);
+      } catch (e) {
+        // A step error mid-swap (host being torn down/rebuilt) is transient —
+        // skip this frame and let the next tick pick up the new host. Don't kill
+        // the window. (A window-level failure is handled by the destroyed checks.)
+        log.error("[playtest] step error (skipping frame):", e.message);
+        return;
+      }
+      if (stepped > 0) frameCount++;
     }
 
     if (!window.destroyed) {
