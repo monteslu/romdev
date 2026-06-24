@@ -28,6 +28,13 @@ function resolveDa65Glue() {
 let _glue;
 const glue = () => (_glue ??= resolveDa65Glue());
 
+/** True if the da65 WASM (romdev-toolchain-cc65) is installed/resolvable, without
+ *  throwing — for capability probes (catalog status) that must not crash when the
+ *  toolchain is absent. */
+export function da65Available() {
+  try { return !!resolveDa65Glue(); } catch { return false; }
+}
+
 /**
  * Disassemble a chunk of bytes.
  *

@@ -58,9 +58,38 @@ import { registerCheatTools } from "./cheats.js";
 import { createDisclosure } from "../disclosure.js";
 import { jsonContent, safeTool, withClearToolErrors } from "../util.js";
 import { getHostOrNull, setDisclosure } from "../state.js";
+import { da65Available } from "../../toolchains/cc65/da65.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+
+/**
+ * The debug capabilities the LOADED core (and the installed toolchain) actually
+ * implement — so an agent picks a working trace strategy UP FRONT instead of
+ * discovering the gaps through a string of `notSupported` returns (each a wasted
+ * round trip). Capability varies by platform/core build and by whether the
+ * cc65/da65 toolchain is installed, so it can't be assumed. Surfaced in
+ * catalog({op:'status'}). Names are agent-facing (what you'd reach for), mapped
+ * to the host's existing *Supported() probes.
+ * @param {import("../../host/index.js").LibretroHost|null} host
+ */
+function hostCapabilities(host) {
+  const da65 = da65Available();
+  if (!host) return { da65Toolchain: da65 };
+  const has = (m) => { try { return !!host[m]?.(); } catch { return false; } };
+  return {
+    pcBreakpoint: has("pcBreakSupported"),       // breakpoint({on:'pc'})
+    watchpointExact: has("watchpointSupported"), // breakpoint({on:'write', precision:'exact'}) + condition filter
+    readWatch: has("readWatchSupported"),        // breakpoint({on:'read'})
+    rangeWatch: has("vramWatchSupported"),       // watch({on:'range'}) (VRAM-port trace)
+    registerWrite: has("setRegSupported"),       // register write + callSubroutine
+    registerSnapshot: has("regSnapSupported"),   // registersAtHit on a break
+    cheats: has("cheatsSupported"),              // cheats({op:'apply'}) via retro_cheat_set
+    diskImage: has("diskImageSupported"),        // C64 .d64 loadMedia
+    keyboard: has("keyboardSupported"),          // keyboard input (C64/MSX)
+    da65Toolchain: da65,                         // disasm({target:'rom'/'references'/...})
+  };
+}
 
 // Package version — surfaced by catalog({op:'status'}) so an agent can
 // check the running romdev version with a plain TOOL CALL (works over MCP AND the
@@ -190,7 +219,7 @@ export function registerTools(server, z, sessionKey) {
     "• op:'status' — a snapshot of the current session: which platform's core/ROM is in the running host (if any), current frame count, last-loaded media, loaded categories. Call this when you've lost context across many tool calls and want to re-ground.",
     {
       op: z.enum(["categories", "status"]).default("categories")
-        .describe("categories=tool-category catalog; status=live session snapshot (romdevVersion + host/platform/frameCount/media — call this to check the running version, e.g. is a saved skill stale)."),
+        .describe("categories=tool-category catalog; status=live session snapshot (romdevVersion + host/platform/frameCount/media + a `capabilities` map of which debug ops the loaded core/toolchain implement — call this to check the running version or pick a working trace strategy before probing by failure)."),
     },
     safeTool(async ({ op = "categories" }) => {
       if (op === "status") {
@@ -206,6 +235,10 @@ export function registerTools(server, z, sessionKey) {
         return jsonContent({
           romdevVersion: PKG_VERSION,
           ...base,
+          // Which debug ops the loaded core + installed toolchain implement, so
+          // an agent picks a working trace strategy up front instead of probing
+          // by failure (~4 dead calls/session). v0.41.0 feedback #2 (002129).
+          capabilities: hostCapabilities(host),
           playtestWindowOpen: human.windowOpen,
           ...(human.windowOpen
             ? {
