@@ -119,8 +119,20 @@ test("MCP: save state, step further, load state restores frame count", async () 
 
   await client.callTool({ name: "frame", arguments: { op: "step",  frames: 100 } });
   const statusAfter = await client.callTool({ name: "catalog", arguments: { op: "status" } });
-  const afterFrames = JSON.parse(statusAfter.content[0].text).frameCount;
+  const statusObj = JSON.parse(statusAfter.content[0].text);
+  const afterFrames = statusObj.frameCount;
   assert.equal(afterFrames, 130);
+
+  // status carries a capabilities map of which debug ops the loaded core/toolchain
+  // implement, so an agent picks a working trace strategy without probing by failure.
+  assert.ok(statusObj.capabilities && typeof statusObj.capabilities === "object", "status has a capabilities map");
+  const caps = statusObj.capabilities;
+  for (const k of ["pcBreakpoint", "watchpointExact", "cheats", "da65Toolchain"]) {
+    assert.equal(typeof caps[k], "boolean", `capabilities.${k} is a boolean`);
+  }
+  // fceumm (the NES core loaded above) implements PC breakpoints + cheats.
+  assert.equal(caps.pcBreakpoint, true, "fceumm exposes PC breakpoints");
+  assert.equal(caps.cheats, true, "fceumm exposes the cheat interface");
 
   const restore = await client.callTool({
     name: "state",
