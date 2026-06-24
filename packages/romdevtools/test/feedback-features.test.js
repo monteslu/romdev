@@ -23,6 +23,17 @@ test("resolveCheatCodeForApply: raw RAM address stays a RAM poke", () => {
   assert.equal(r.reencodedFrom, null);
 });
 
+test("resolveCheatCodeForApply: a SHORT RAM code is normalized to the binding width", () => {
+  // A 2-hex-digit RAM address ("32:09") is INERT on libretro cores (parses but
+  // never pokes) — apply used to pass it through verbatim and falsely report
+  // success. Now it's re-padded to "0032:09" (the form that actually binds) and
+  // reencodedFrom records the original. (Verified live on fceumm.)
+  const r = resolveCheatCodeForApply("32:09", "nes");
+  assert.equal(r.appliedAs, "ram");
+  assert.equal(r.code, "0032:09", "short RAM address padded to the binding width");
+  assert.equal(r.reencodedFrom, "32:09");
+});
+
 test("resolveCheatCodeForApply: a native device code (no colon) passes through", () => {
   const r = resolveCheatCodeForApply("GATKGATX", "nes");
   assert.equal(r.code, "GATKGATX");

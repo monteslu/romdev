@@ -444,9 +444,21 @@ export function decodeWithDevice(code, platform) {
   return { ...decoded, device };
 }
 
-/** Format a raw ADDR:VAL[:COMPARE] code from decoded parts (hex, no 0x). */
+/** Format a raw ADDR:VAL[:COMPARE] code from decoded parts (hex, no 0x).
+ *  The ADDRESS is padded to a minimum of 4 hex digits. This is NOT cosmetic:
+ *  libretro cheat parsers (verified on fceumm) treat a short `AA:VV` RAM code as
+ *  inert — it parses but never binds (`apply` then falsely reports success). A
+ *  zero-page address like $32 must be emitted as `0032:09` to actually poke; the
+ *  2-digit `32:09` is silently dropped. ROM addresses ($8000+) are already 4+
+ *  digits, so padding only fixes the low-RAM case and never changes a working
+ *  code. The VALUE stays 2 digits (`0009` 4-digit values also break the parser).
+ *  Addresses wider than 16 bits (e.g. Genesis $FFxxxx work RAM) keep their full
+ *  width, rounded up to an even number of digits. */
 export function encodeRaw({ address, value, compare }) {
-  const addrHex = (address >>> 0).toString(16).toUpperCase();
+  const rawHex = (address >>> 0).toString(16).toUpperCase();
+  // pad to >=4 digits, and to an even digit count so it's a whole number of bytes
+  const width = Math.max(4, rawHex.length + (rawHex.length & 1));
+  const addrHex = rawHex.padStart(width, "0");
   const valHex = (value & 0xFF).toString(16).toUpperCase().padStart(2, "0");
   return compare != null
     ? `${addrHex}:${valHex}:${(compare & 0xFF).toString(16).toUpperCase().padStart(2, "0")}`

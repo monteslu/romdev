@@ -94,17 +94,25 @@ test("encodeGbGameGenie round-trips (6- and 9-digit)", () => {
   }
 });
 
-test("encodeRaw formats ADDR:VAL[:COMPARE]", () => {
-  assert.equal(encodeRaw({ address: 0x00c7, value: 0xff }), "C7:FF");
+test("encodeRaw formats ADDR:VAL[:COMPARE], padding the address to a binding width", () => {
+  // The address is padded to >=4 hex digits: a short `AA:VV` RAM code is INERT on
+  // libretro cores (parses but never pokes), so a zero-page address MUST be 4
+  // digits to actually bind. See encodeRaw's doc.
+  assert.equal(encodeRaw({ address: 0x00c7, value: 0xff }), "00C7:FF");
+  assert.equal(encodeRaw({ address: 0x32, value: 0x09 }), "0032:09");
   assert.equal(encodeRaw({ address: 0x1234, value: 0x0a, compare: 0x5c }), "1234:0A:5C");
+  // ROM/16-bit addresses are already 4 digits → unchanged; wide addresses keep
+  // their width (rounded to an even digit count).
+  assert.equal(encodeRaw({ address: 0x8000, value: 0x09 }), "8000:09");
+  assert.equal(encodeRaw({ address: 0xff1234, value: 0x09 }), "FF1234:09");
 });
 
 test("encodeCode style + platform dispatch, always round-trips", () => {
   // gamegenie style on NES → letter code that decodes back.
   const gg = encodeCode({ address: 0x91d9, value: 0xad }, "nes", "gamegenie");
   assert.ok(eq(decodeCode(gg, "nes"), { address: 0x91d9, value: 0xad }));
-  // raw style → ADDR:VAL on any platform.
-  assert.equal(encodeCode({ address: 0x00c7, value: 0xff }, "snes", "raw"), "C7:FF");
+  // raw style → ADDR:VAL on any platform (address padded to a binding width).
+  assert.equal(encodeCode({ address: 0x00c7, value: 0xff }, "snes", "raw"), "00C7:FF");
   // platform with no GG scheme falls back to raw.
   assert.ok(encodeCode({ address: 0x10, value: 1 }, "sms").includes(":"));
 });
