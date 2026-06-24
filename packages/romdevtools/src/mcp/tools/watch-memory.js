@@ -17,13 +17,13 @@ import path from "node:path";
 import { getHost } from "../state.js";
 import { jsonContent, safeTool } from "../util.js";
 import { getCPUState } from "../../host/cpu-state.js";
-import { MemoryRegionToRetro } from "../../host/types.js";
 import { resolveButtonAlias } from "./input.js";
 import { getCPUStateCore } from "./platform-tools.js";
 import { traceVramSourceCore } from "./trace-vram-source.js";
 import { resolveStatePath } from "./state.js";
 import { buildBacktrace } from "../../analysis/backtrace.js";
 import { mapNesAddress } from "./disasm.js";
+import { MemoryRegionToRetro } from "../../host/types.js";
 
 /**
  * Build the decoded call stack for a breakpoint hit: who called the routine the
@@ -174,13 +174,11 @@ export function makePressDriver(host, presses) {
   };
 }
 
-// Single source of truth: the same canonical region vocabulary readMemory
-// uses (host/types.js). Previously this was a hand-maintained list that had
-// drifted — it carried DEAD Genesis `md_*` names (which throw on read) and
-// was MISSING nes_apu_regs / genesis_* / c64_*, so you couldn't watch the
-// hardware-register regions readMemory could already read. Deriving from the
-// host map means new regions flow through automatically and the two tools can
-// never disagree again.
+// Single source of truth: the same canonical region vocabulary readMemory uses
+// (host/types.js). Derived from the host map so new regions flow through
+// automatically and the two tools never disagree. Used by the ONE primary
+// `on:'mem'` region enum (kept discoverable on purpose); every SECONDARY region
+// sub-param uses the lean regionStr string instead (0.28.0/0.30.0 feedback #5).
 const MEMORY_REGIONS = /** @type {[string, ...string[]]} */ (Object.keys(MemoryRegionToRetro));
 
 // A region param that does NOT inline the full ~62-value enum into the JSON
@@ -1338,7 +1336,9 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     {
       on: z.enum(["mem", "range", "pc", "dma", "copy"])
         .describe("mem=watch a RAM byte/ranges for value changes over frames (the power tool); range=log every read/write PC in [start,end]; pc=coverage trace of distinct PCs executed in [start,end]; dma=Genesis-only mem→VDP DMA source/dest trace; copy=log every write landing in a VRAM address window with the EXECUTING instruction's PC (all 14 platforms — the generic 'where does this graphic come from?')."),
-      // on:'mem'
+      // on:'mem' — the ONE primary region enum kept on purpose (0.30.0 design):
+      // where region IS the choice, the discoverable canonical list stays in the
+      // schema. The secondary region sub-params use the lean regionStr instead.
       region: z.enum(MEMORY_REGIONS).optional().describe("on:'mem' single-range — the region to watch (same canonical set memory uses, incl. nes_apu_regs, genesis_ym2612, c64_sid_regs). Omit when using `ranges`."),
       offset: z.number().int().min(0).default(0).describe("on:'mem' single-range — first byte of the watched range."),
       length: z.number().int().min(1).max(4096).default(1).describe("on:'mem' single-range — bytes to watch (default 1)."),
