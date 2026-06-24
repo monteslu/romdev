@@ -225,15 +225,15 @@ function nesVectorRefs(data, targetAddr) {
  * @param {Uint8Array} data       full ROM image (incl. any header)
  * @param {number} targetAddr     CPU address of the handler
  * @param {number} headerSkip     bytes of file header before the code image
+ * @param {boolean} [rtsTrick=true]  also look for target-1 (the 6502 RTS trick).
+ *   Only meaningful on 6502-family ROMs; off elsewhere to avoid spurious hits.
  * @returns {Array<{fileOffset:string, word:string, endian:"LE"|"BE", convention:"direct"|"rts+1"}>}
  */
-function scanPointerTableHits(data, targetAddr, headerSkip = 0) {
+function scanPointerTableHits(data, targetAddr, headerSkip = 0, rtsTrick = true) {
   const hits = [];
   const t16 = targetAddr & 0xffff;
-  const want = [
-    { value: t16, convention: "direct" },
-    { value: (t16 - 1) & 0xffff, convention: "rts+1" }, // 6502 RTS-trick: table holds addr-1
-  ];
+  const want = [{ value: t16, convention: "direct" }];
+  if (rtsTrick) want.push({ value: (t16 - 1) & 0xffff, convention: "rts+1" }); // 6502 RTS-trick: table holds addr-1
   for (let i = headerSkip; i + 1 < data.length; i++) {
     const le = data[i] | (data[i + 1] << 8);
     const be = (data[i] << 8) | data[i + 1];
@@ -246,6 +246,35 @@ function scanPointerTableHits(data, targetAddr, headerSkip = 0) {
     }
   }
   return hits;
+}
+
+/**
+ * Bytes of file header before the code image, per platform — so the pointer-table
+ * scan reports a fileOffset into the actual code, and (more importantly) doesn't
+ * skip real data. Most platforms are headerless; the exceptions: NES (16-byte
+ * iNES), SNES (512-byte copier header iff size%1024==512), Atari 7800 (.a78 has a
+ * 128-byte header when the "ATARI7800" magic is present), Lynx (64-byte "LYNX").
+ * @param {string} platform
+ * @param {Uint8Array} data
+ */
+function romHeaderSkip(platform, data) {
+  switch (platform) {
+    case "nes":
+      return (data.length >= 4 && data[0] === 0x4e && data[1] === 0x45 && data[2] === 0x53 && data[3] === 0x1a) ? 16 : 0;
+    case "snes":
+      return (data.length % 1024) === 512 ? 512 : 0;
+    case "atari7800": {
+      // .a78 v2/v3 header is 128 bytes, magic "ATARI7800" at offset 1.
+      const magic = "ATARI7800";
+      let ok = data.length > 128;
+      for (let i = 0; ok && i < magic.length; i++) if (data[1 + i] !== magic.charCodeAt(i)) ok = false;
+      return ok ? 128 : 0;
+    }
+    case "lynx":
+      return (data.length >= 4 && data[0] === 0x4c && data[1] === 0x59 && data[2] === 0x4e && data[3] === 0x58) ? 64 : 0; // "LYNX"
+    default:
+      return 0; // gb/gbc/sms/gg/genesis/c64/2600/pce/msx: headerless code image
+  }
 }
 
 export async function findReferencesCore({ path, platform, address, mapper: _mapper, includeTableHits = false, maxRefsReturned = 256 }) {
@@ -556,9 +585,13 @@ export async function findReferencesCore({ path, platform, address, mapper: _map
   // asks), scan the raw bytes for the address as a 16-bit pointer (LE/BE, direct
   // and the RTS-trick addr-1 form). This is the case the v0.41.0 feedback hit
   // where the only "ref" was an inline `B5 8E` table entry da65 mis-decoded.
-  const headerSkip = resolved === "nes" ? 16 : ((resolved === "snes" && (data.length % 1024) === 512) ? 512 : 0);
+  const headerSkip = romHeaderSkip(resolved, data);
+  // The RTS-trick (table holds addr-1) is a 6502 idiom; only scan for it on the
+  // 6502 family so we don't surface spurious addr-1 matches on Z80/m68k/etc.
+  const SIXTYFIVE_OH_TWO = new Set(["nes", "atari2600", "atari7800", "c64", "lynx", "pce"]);
+  const rtsTrick = SIXTYFIVE_OH_TWO.has(resolved);
   const wantTableHits = includeTableHits || refs.length === 0;
-  const tableHits = wantTableHits ? scanPointerTableHits(data, address, headerSkip) : null;
+  const tableHits = wantTableHits ? scanPointerTableHits(data, address, headerSkip, rtsTrick) : null;
 
   return {
     path,

@@ -79,3 +79,32 @@ test("a truly unreached address reports neither refs nor table hits, clearly", a
   assert.ok(!r.tableHitsFound);
   assert.match(r.notes, /No pointer-table hits either/i);
 });
+
+test("NES header is skipped: the table-hit fileOffset is past the 16-byte iNES header", async () => {
+  // word $8534-1 = $8533 (rts+1) at PRG offset 0x100 → file offset 0x110.
+  const rom = nrom([{ off: 0x100, bytes: [0x33, 0x85] }]);
+  const r = await refs(rom, 0x8534);
+  assert.equal(r.tableHitsFound, 1);
+  assert.equal(r.tableHits[0].fileOffset, "0x110", "iNES header (16) + PRG 0x100");
+  assert.equal(r.tableHits[0].convention, "rts+1");
+});
+
+test("RTS-trick (addr-1) is scanned ONLY on the 6502 family, not on GB/Z80/m68k", async () => {
+  // GB headerless. Put $4234 (direct) AND $4233 (= addr-1) in a word table.
+  const gb = new Uint8Array(0x8000);
+  gb.set([0x34, 0x42], 0x1000); // $4234 direct
+  gb.set([0x33, 0x42], 0x1002); // $4233 — would be rts+1 of $4234 on a 6502
+  const dir = await mkdtemp(path.join(os.tmpdir(), "reftbl-gb-"));
+  try {
+    const p = path.join(dir, "t.gb");
+    await writeFile(p, gb);
+    const r = await findReferencesCore({ path: p, platform: "gb", address: 0x4234 });
+    const convs = (r.tableHits || []).map((h) => h.convention);
+    assert.ok(convs.includes("direct"), "the direct pointer is found");
+    assert.ok(!convs.includes("rts+1"), "the addr-1 RTS trick is NOT scanned on GB (not 6502)");
+    // GB is headerless → the direct hit's offset is the raw file offset.
+    assert.equal(r.tableHits.find((h) => h.convention === "direct").fileOffset, "0x1000");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
