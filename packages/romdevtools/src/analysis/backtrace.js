@@ -68,30 +68,111 @@ export function decode6502Backtrace(sp, stackPage, readByteAt, maxDepth = 8) {
   return anyConfident ? frames.filter((f) => f.confident) : frames;
 }
 
+/** Parse a hex register value that may carry a "$"/"0x" prefix → number, or NaN. */
+function regNum(v) {
+  return parseInt(String(v ?? "").replace(/^\$|^0x/i, ""), 16);
+}
+
+/**
+ * Decode a stack of 16-bit LE return addresses (Z80 `call` / SM83 `call`): the
+ * stack grows DOWN and SP points at the low byte of the topmost return address;
+ * each `call` pushed a 2-byte LE return = the address of the instruction AFTER
+ * the call. We can't cheaply recover the call instruction's own length (Z80 call
+ * is 3 bytes, but a computed jump-in differs), so callerPc IS the return address
+ * and we mark it `confident` when it lands in a plausible code range. SP-relative,
+ * so the caller supplies a word reader (handles the platform's RAM mapping).
+ *
+ * @param {number} sp
+ * @param {(cpuAddr:number)=>(number|null)} readWordLE  read a 16-bit LE word
+ * @param {number} [maxDepth=8]
+ * @param {number} [codeMin=0x0000]  return addresses below this are treated as data
+ */
+function decode16BitStack(sp, readWordLE, maxDepth = 8, codeMin = 0x0150) {
+  const frames = [];
+  let addr = sp & 0xffff;
+  for (let i = 0; i < maxDepth; i++) {
+    const ret = readWordLE(addr);
+    if (ret == null) break;
+    const confident = ret >= codeMin && ret <= 0xffff;
+    if (confident) {
+      frames.push({ returnAddr: ret, callerPc: ret, confident: true });
+    } else if (frames.every((f) => !f.confident)) {
+      frames.push({ returnAddr: ret, callerPc: ret, confident: false });
+    } else {
+      break; // had a confident chain, hit a non-code word → off the frames
+    }
+    addr = (addr + 2) & 0xffff;
+  }
+  const anyConfident = frames.some((f) => f.confident);
+  return anyConfident ? frames.filter((f) => f.confident) : frames;
+}
+
+/**
+ * Decode an m68k call stack. `jsr`/`bsr` push a 4-byte (longword) return address;
+ * the stack grows down and A7 (SP) points at the topmost return longword (stored
+ * big-endian). The return address is the instruction AFTER the jsr/bsr; we report
+ * it as callerPc (recovering the call's own length needs a disasm pass). Genesis
+ * RAM is $FF0000-$FFFFFF (mirrored), so SP is a 24-bit bus address.
+ *
+ * @param {number} sp
+ * @param {(cpuAddr:number)=>(number|null)} readLongBE  read a 32-bit BE longword
+ * @param {number} [maxDepth=8]
+ */
+function decodeM68kStack(sp, readLongBE, maxDepth = 8) {
+  const frames = [];
+  let addr = sp >>> 0;
+  for (let i = 0; i < maxDepth; i++) {
+    const ret = readLongBE(addr);
+    if (ret == null) break;
+    // Plausible m68k code address: even, inside the 24-bit address space, and not
+    // obviously garbage ($00000000 / $FFFFFFFF). ROM is $000000+; RAM is $FF0000+.
+    const a = ret & 0xffffff;
+    const confident = (a & 1) === 0 && a !== 0 && a !== 0xffffff && a < 0x1000000;
+    if (confident) {
+      frames.push({ returnAddr: a, callerPc: a, confident: true });
+    } else if (frames.every((f) => !f.confident)) {
+      frames.push({ returnAddr: a, callerPc: a, confident: false });
+    } else {
+      break;
+    }
+    addr = (addr + 4) >>> 0;
+  }
+  const anyConfident = frames.some((f) => f.confident);
+  return anyConfident ? frames.filter((f) => f.confident) : frames;
+}
+
 /**
  * Build a backtrace from a register snapshot + a stack reader, dispatching on CPU
  * family. Returns null if the platform isn't supported or the snapshot lacks a
- * stack pointer — callers should treat null as "no backtrace available", not an
- * error.
+ * stack pointer — callers treat null as "no backtrace available", not an error.
+ *
+ * Coverage: 6502 family (nes/2600/7800/c64/lynx/pce), m68k (genesis), Z80
+ * (sms/gg/msx), SM83 (gb/gbc) — 13 of 14. GBA (ARM) is intentionally excluded:
+ * ARM's BL leaves the return address in the LINK REGISTER, not on the stack, so a
+ * stack walk doesn't recover the call chain without frame-pointer/unwind analysis.
  *
  * @param {Object} opts
  * @param {string} opts.platform
  * @param {Object} opts.regs           the `named` register map (hex strings)
  * @param {(region:string, offset:number, length:number)=>Uint8Array} opts.readMemory
- * @param {(cpuAddr:number)=>(number|null)} [opts.readByteAt]  validate opcodes
+ * @param {(cpuAddr:number)=>(number|null)} [opts.readByteAt]  validate the 6502 JSR opcode
+ * @param {(cpuAddr:number, bytes:number)=>(number|null)} [opts.readCpuWord]  read
+ *   a little-endian word at a CPU address (Z80/SM83 stacks live in work RAM at the
+ *   SP, not a fixed page) — required for z80/sm83.
+ * @param {(cpuAddr:number)=>(number|null)} [opts.readCpuLongBE]  read a 32-bit
+ *   big-endian longword at a 68K bus address — required for genesis.
  * @param {number} [opts.maxDepth=8]
  * @returns {{ frames: Array, isa: string } | null}
  */
-export function buildBacktrace({ platform, regs, readMemory, readByteAt, maxDepth = 8 }) {
+export function buildBacktrace({ platform, regs, readMemory, readByteAt, readCpuWord, readCpuLongBE, maxDepth = 8 }) {
   if (!regs) return null;
   const SIXTYFIVE_OH_TWO = new Set(["nes", "atari2600", "atari7800", "c64", "lynx", "pce"]);
+  const Z80_FAMILY = new Set(["sms", "gg", "msx", "gb", "gbc"]); // z80 + sm83: same 2-byte LE call frame
   if (SIXTYFIVE_OH_TWO.has(platform)) {
-    // Register snapshots format values as "$EF" / "0xEF"; strip the prefix.
-    const sp = parseInt(String(regs.s ?? "").replace(/^\$|^0x/i, ""), 16);
+    const sp = regNum(regs.s);
     if (Number.isNaN(sp)) return null;
     let stackPage;
     try { stackPage = readMemory("system_ram", 0x0100, 0x100); } catch { return null; }
-    // NES/2600 RAM is mirrored/short; if the read is shorter than a page, pad.
     if (stackPage.length < 0x100) {
       const full = new Uint8Array(0x100);
       full.set(stackPage.subarray(0, 0x100));
@@ -100,5 +181,18 @@ export function buildBacktrace({ platform, regs, readMemory, readByteAt, maxDept
     const frames = decode6502Backtrace(sp, stackPage, readByteAt, maxDepth);
     return { isa: "6502", frames };
   }
-  return null; // other ISAs: not yet decoded (phase 1 = 6502 family)
+  if (Z80_FAMILY.has(platform)) {
+    const sp = regNum(regs.sp);
+    if (Number.isNaN(sp) || !readCpuWord) return null;
+    const readWordLE = (a) => readCpuWord(a, 2);
+    const frames = decode16BitStack(sp, readWordLE, maxDepth);
+    return { isa: platform === "gb" || platform === "gbc" ? "sm83" : "z80", frames };
+  }
+  if (platform === "genesis") {
+    const sp = regNum(regs.sp);
+    if (Number.isNaN(sp) || !readCpuLongBE) return null;
+    const frames = decodeM68kStack(sp, readCpuLongBE, maxDepth);
+    return { isa: "m68k", frames };
+  }
+  return null; // gba (ARM, link-register calls) — not a stack walk
 }

@@ -35,8 +35,9 @@ import { MemoryRegionToRetro } from "../../host/types.js";
 function backtraceForHit(host, regs) {
   if (!regs) return null;
   const platform = host.status?.platform;
-  // Validate the $20 (JSR) opcode at each candidate caller PC when we can map the
-  // CPU address to a ROM byte. NES: use the cart image + the mapper.
+
+  // 6502: validate the $20 (JSR) opcode at each candidate caller PC by mapping the
+  // CPU address to a ROM byte. NES uses the cart image + the mapper.
   let readByteAt = null;
   if (platform === "nes") {
     try {
@@ -49,21 +50,52 @@ function backtraceForHit(host, regs) {
       };
     } catch { /* no cart / mapping — frames stay best-effort */ }
   }
+
+  // Z80/SM83 + m68k stacks live in WORK RAM at the SP (not a fixed page). Read the
+  // stack via system_ram using the platform's CPU-addr→RAM mask (the same mapping
+  // the callSubroutine watchdog uses). Best-effort: return null on any read miss.
+  const ramMask = platform === "genesis" ? 0xffff
+    : (platform === "gb" || platform === "gbc" || platform === "sms" || platform === "gg" || platform === "msx") ? 0x1fff
+      : 0xffff;
+  const readRamByte = (cpuAddr) => {
+    try {
+      const b = host.readMemory("system_ram", cpuAddr & ramMask, 1);
+      return b && b.length ? b[0] : null;
+    } catch { return null; }
+  };
+  const readCpuWord = (cpuAddr) => {
+    const lo = readRamByte(cpuAddr); const hi = readRamByte(cpuAddr + 1);
+    return (lo == null || hi == null) ? null : (lo | (hi << 8));
+  };
+  const readCpuLongBE = (cpuAddr) => {
+    const b0 = readRamByte(cpuAddr), b1 = readRamByte(cpuAddr + 1), b2 = readRamByte(cpuAddr + 2), b3 = readRamByte(cpuAddr + 3);
+    return (b0 == null || b1 == null || b2 == null || b3 == null) ? null : ((b0 << 24) | (b1 << 16) | (b2 << 8) | b3) >>> 0;
+  };
+
   const bt = buildBacktrace({
     platform,
     regs,
     readMemory: (region, off, len) => host.readMemory(region, off, len),
     readByteAt,
+    readCpuWord,
+    readCpuLongBE,
   });
   if (!bt || !bt.frames.length) return null;
+  const pad = bt.isa === "m68k" ? 6 : 4; // 24-bit m68k addresses print wider
+  const isaNote = {
+    "6502": "confident=true means the byte before the return target is a JSR ($20).",
+    sm83: "confident=true means the return address lands in a plausible code range (SM83 call frames are 2-byte LE; the call's own length isn't recovered, so callerPc IS the return address).",
+    z80: "confident=true means the return address lands in a plausible code range (Z80 call frames are 2-byte LE; callerPc IS the return address).",
+    m68k: "confident=true means the return longword is even + in-range (m68k jsr/bsr push a 4-byte BE return; callerPc IS the return address).",
+  }[bt.isa] || "";
   return {
     isa: bt.isa,
     frames: bt.frames.map((f) => ({
-      callerPc: "$" + f.callerPc.toString(16).toUpperCase().padStart(4, "0"),
-      returnAddr: "$" + f.returnAddr.toString(16).toUpperCase().padStart(4, "0"),
+      callerPc: "$" + f.callerPc.toString(16).toUpperCase().padStart(pad, "0"),
+      returnAddr: "$" + f.returnAddr.toString(16).toUpperCase().padStart(pad, "0"),
       confident: f.confident,
     })),
-    note: "callStack[0] is the immediate caller (the JSR that reached this routine), decoded from the stack at the break instant. confident=true means the byte before the return target is a JSR ($20). Generated server-side — no hand stack-walking.",
+    note: `callStack[0] is the immediate caller (the call that reached this routine), decoded from the stack at the break instant. ${isaNote} Generated server-side — no hand stack-walking.`,
   };
 }
 
