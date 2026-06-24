@@ -66,3 +66,43 @@ test("valid call still succeeds (no false positives)", async () => {
   const m = await callErr(c, { op: "read", region: "system_ram", offset: 0, length: 16 });
   assert.equal(m, null, "valid call should not error: " + m);
 });
+
+// ── hex-string coercion on address-like params ──
+// The test tool echoes its args, so we can read back the coerced number.
+async function callOk(c, args) {
+  const r = await c.callTool({ name: "memory", arguments: args });
+  assert.ok(!r.isError, "expected success, got: " + (r.content?.[0]?.text || ""));
+  return JSON.parse(r.content[0].text.replace(/^ok /, ""));
+}
+
+test("address-like param accepts a '0x..' hex string and coerces to a number", async () => {
+  const c = await client();
+  const out = await callOk(c, { op: "read", offset: "0xC06C" });
+  assert.equal(out.offset, 0xc06c, "0xC06C → 49260");
+  assert.equal(typeof out.offset, "number");
+});
+
+test("address-like param accepts a '$..' hex string", async () => {
+  const c = await client();
+  const out = await callOk(c, { op: "read", offset: "$26" });
+  assert.equal(out.offset, 0x26, "$26 → 38");
+});
+
+test("address-like param still accepts a plain number unchanged", async () => {
+  const c = await client();
+  const out = await callOk(c, { op: "read", offset: 50 });
+  assert.equal(out.offset, 50);
+});
+
+test("a non-hex garbage string on an address param still errors clearly", async () => {
+  const c = await client();
+  // coerceHexNumber leaves "nope" alone → the inner number schema rejects it.
+  const m = await callErr(c, { op: "read", offset: "nope" });
+  assert.match(m, /'offset' must be a number/);
+});
+
+test("a decimal string coerces too (JSON-safe numeric strings)", async () => {
+  const c = await client();
+  const out = await callOk(c, { op: "read", offset: "256" });
+  assert.equal(out.offset, 256);
+});
