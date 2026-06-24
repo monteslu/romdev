@@ -8,6 +8,7 @@ import { registersForPlatform } from "../../platforms/common/registers.js";
 import { findReferencesCore } from "./find-references.js";
 import { analyzeCfg, analyzeXrefs, analyzeFunctions, analyzeDecompile } from "../../analysis/analyze.js";
 import { recompileNesToSnes, sliceFirstRoutine } from "../../analysis/recompile-65816.js";
+import { decodePointerTable, reverseLookup } from "../../analysis/pointer-table.js";
 
 /** cfg/xrefs/functions all operate on a ROM file. Reuse the `path` arg. */
 function requireRomPath(args) {
@@ -1157,6 +1158,49 @@ function renderBuildMd({ platform, romPath, regions, blobs, build, verifiable, n
  * stubbed (no real NES-PPU-on-SNES runtime yet) so the port boots + runs the
  * logic but renders blank — the runtime shim is a separate task.
  */
+/**
+ * target=pointerTable — STATIC decode of a jump/pointer table into an
+ * index→handler map (+ optional reverse lookup). The static complement to the
+ * LIVE resolveJumptable. Handles contiguous LE/BE `dw` tables, SPLIT lo/hi arrays
+ * at two bases, and the 6502 RTS-trick (+1). NES banked addresses honor `bank`.
+ */
+async function pointerTableCore(args) {
+  const { platform, loBase, hiBase, count, convention = "direct", endian = "LE", reverseHandler, bank } = args;
+  if (loBase == null) throw new Error("disasm({target:'pointerTable'}): loBase (the table / low-byte base) is required.");
+  if (count == null) throw new Error("disasm({target:'pointerTable'}): count (number of entries) is required.");
+  const romPath = requireRomPath(args);
+  const data = new Uint8Array(await readFile(romPath));
+  const resolved = platform ?? (/\.nes$/i.test(romPath) ? "nes" : null);
+  if (resolved !== "nes") {
+    throw new Error(`disasm({target:'pointerTable'}): only NES is wired today (got '${resolved ?? "unknown"}'). Pass platform:'nes' on a .nes ROM.`);
+  }
+  // CPU address → file offset via the NES mapper (banked-cart aware).
+  const toOffset = (cpuAddr) => {
+    const { fileOffset } = mapNesAddress(data, cpuAddr, 1, bank);
+    return fileOffset;
+  };
+  const { entries, form } = decodePointerTable({ data, toOffset, count, loBase, hiBase, convention, endian });
+  const fmt = (n) => "$" + (n & 0xffff).toString(16).toUpperCase().padStart(4, "0");
+  const out = {
+    platform: resolved,
+    form,
+    count,
+    entries: entries.map((e) => ({ index: e.index, handler: fmt(e.handler), storedWord: fmt(e.storedWord) })),
+  };
+  if (reverseHandler != null) {
+    const indices = reverseLookup(entries, reverseHandler);
+    out.reverse = {
+      handler: fmt(reverseHandler),
+      indices,
+      note: indices.length
+        ? `dispatch index/indices ${indices.join(", ")} land on ${fmt(reverseHandler)}.`
+        : `no table index reaches ${fmt(reverseHandler)} (check loBase/hiBase/count/convention, or it's reached another way).`,
+    };
+  }
+  out.note = "index→handler decoded statically. For a SPLIT table pass loBase (low array) + hiBase (high array); for a contiguous `dw` table pass only loBase. convention:'rts+1' adds 1 (6502 RTS trick). reverseHandler answers 'which state triggers this routine?'. (For a COMPUTED dispatcher whose table you can't locate statically, use the live breakpoint({on:'jumptable'}).)";
+  return out;
+}
+
 async function recompileCore(args) {
   const { platform, targetPlatform } = args;
   if (platform && platform !== "nes") {
@@ -1396,7 +1440,7 @@ export function registerDisasmTools(server, z) {
     "LLM folds it. `address` for all four comes from target:'functions' (a CPU/virtual address; the file-offset " +
     "mapping is handled for you).",
     {
-      target: z.enum(["bytes", "rom", "project", "references", "cfg", "xrefs", "functions", "decompile", "resolveJumptable", "recompile"]).describe("bytes = raw chunk; rom = mapper-aware ROM; project = full rebuildable disasm; references = flat da65 operand-refs to an address; functions/cfg/xrefs = Rizin RE engine (function list / control-flow graph / deep graph xrefs); decompile = Ghidra C pseudocode; resolveJumptable = recover a computed-jump dispatcher's targets (LIVE — redirects to breakpoint({on:'jumptable'}), which runs the emulator and records the real switch arms a static decompiler can't follow); recompile = EMIT backend — statically recompile a NES ROM's reset routine to SNES 65816 asar source that builds + boots (phase 1: NROM, 6502→65816 emulation mode, PPU/APU seam STUBBED). See the tool description for the RE loop + the decompile altitude rule + per-CPU quality (all 14 platforms)."),
+      target: z.enum(["bytes", "rom", "project", "references", "cfg", "xrefs", "functions", "decompile", "resolveJumptable", "pointerTable", "recompile"]).describe("bytes = raw chunk; rom = mapper-aware ROM; project = full rebuildable disasm; references = flat da65 operand-refs to an address; functions/cfg/xrefs = Rizin RE engine (function list / control-flow graph / deep graph xrefs); decompile = Ghidra C pseudocode; resolveJumptable = recover a computed-jump dispatcher's targets (LIVE — redirects to breakpoint({on:'jumptable'}), which runs the emulator and records the real switch arms a static decompiler can't follow); recompile = EMIT backend — statically recompile a NES ROM's reset routine to SNES 65816 asar source that builds + boots (phase 1: NROM, 6502→65816 emulation mode, PPU/APU seam STUBBED). See the tool description for the RE loop + the decompile altitude rule + per-CPU quality (all 14 platforms)."),
       // shared
       path: z.string().optional().describe("target=bytes: raw binary path. target=rom/project/references: ROM file path."),
       base64: z.string().optional().describe("target=bytes: base64 of the bytes (OR `path`)."),
@@ -1412,7 +1456,7 @@ export function registerDisasmTools(server, z) {
       symbolsText: z.string().optional().describe("target=bytes: inline symbol-file text."),
       symbolsFormat: z.enum(["wla", "cc65-lbl"]).optional().describe("target=bytes: explicit symbol-file format override."),
       // rom
-      bank: z.number().int().min(0).max(255).optional().describe("target=rom: switchable ROM bank to map into the windowed slot (NES mapper>0 $8000 / GB $4000; also 2600/7800/c64)."),
+      bank: z.number().int().min(0).max(255).optional().describe("target=rom / pointerTable: switchable ROM bank to map into the windowed slot (NES mapper>0 $8000 / GB $4000; also 2600/7800/c64)."),
       thumb: z.boolean().default(false).describe("target=rom: GBA — disassemble as THUMB (16-bit) instead of ARM."),
       endAddress: z.number().int().min(0).max(0xffffff).optional().describe("target=rom: CPU end address (inclusive); alternative to length."),
       untilReturn: z.boolean().default(false).describe("target=rom: stop at the first return/unconditional-jump (rts/rti/rtl/jmp, or ret/reti/jp per CPU) — grab one routine."),
@@ -1433,6 +1477,13 @@ export function registerDisasmTools(server, z) {
       address: z.number().int().min(0).max(0xFFFFFFFF).optional().describe("target=references: CPU address to find references TO. target=cfg: address inside the function to graph. target=xrefs: address to find cross-references TO. target=decompile: address of the function to decompile (use an address from target='functions')."),
       maxRefsReturned: z.number().int().min(1).max(2048).default(256).describe("target=references: cap the references returned."),
       includeTableHits: z.boolean().default(false).describe("target=references: also scan the raw ROM for the address as a 16-bit POINTER (LE/BE, + the 6502 RTS-trick addr-1) — finds inline jump-table / trampoline call sites that no jsr/jmp/branch names. Auto-on when no direct refs are found; set true to get tableHits alongside direct refs too."),
+      // target=pointerTable
+      loBase: z.number().int().min(0).max(0xFFFFFF).optional().describe("target=pointerTable: CPU address of the table (contiguous form) OR the LOW-byte array (split form). Required."),
+      hiBase: z.number().int().min(0).max(0xFFFFFF).optional().describe("target=pointerTable: CPU address of the HIGH-byte array (SPLIT lo/hi form). Omit for a contiguous `dw` table (hi byte follows each lo byte)."),
+      count: z.number().int().min(1).max(4096).optional().describe("target=pointerTable: number of entries to decode."),
+      convention: z.enum(["direct", "rts+1"]).default("direct").describe("target=pointerTable: 'direct' = the stored word IS the handler; 'rts+1' = the 6502 RTS-trick (table holds handler-1; +1 is applied)."),
+      endian: z.enum(["LE", "BE"]).default("LE").describe("target=pointerTable: byte order of the CONTIGUOUS form (split lo/hi ignores this)."),
+      reverseHandler: z.number().int().min(0).max(0xFFFF).optional().describe("target=pointerTable: also report which dispatch INDEX/indices land on this handler address (reverse lookup — 'what state triggers this routine?')."),
     },
     safeTool(async (args) => {
       switch (args.target) {
@@ -1445,6 +1496,7 @@ export function registerDisasmTools(server, z) {
         case "functions":  return jsonContent(await analyzeFunctions(requireRomPath(args), args.platform));
         case "decompile":  return jsonContent(await analyzeDecompile(requireRomPath(args), args.address, args.platform));
         case "recompile":  return await recompileCore(args);
+        case "pointerTable": return jsonContent(await pointerTableCore(args));
         case "resolveJumptable":
           // A4: jumptable recovery is fundamentally a LIVE operation (it needs a
           // running emulator to observe the computed targets) — disasm is static
