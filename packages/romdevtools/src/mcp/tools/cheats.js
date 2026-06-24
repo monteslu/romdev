@@ -4,7 +4,7 @@ import { getHost } from "../state.js";
 import { jsonContent, safeTool } from "../util.js";
 import { attachObserverFrame } from "./watch-memory.js";
 import { lookupCheats, searchCheatGames } from "../../cheats/lookup.js";
-import { encodeForDevice, nativeDevicesFor, decodeCode } from "../../cheats/gamegenie.js";
+import { encodeForDevice, nativeDevicesFor, decodeCode, encodeRaw } from "../../cheats/gamegenie.js";
 
 // Per-platform cheat address space (for makeCheat validation). A Game Genie
 // letter code can only address these ranges; out-of-range → raw ADDR:VAL only.
@@ -57,6 +57,15 @@ export function resolveCheatCodeForApply(rawCode, platform) {
       else appliedAs = "rom-unencodable";
     } else if (decoded) {
       appliedAs = "ram";
+      // Normalize the raw RAM code so a short hand-typed `AA:VV` (e.g. "32:09")
+      // is re-emitted in the binding width ("0032:09"). The libretro parser
+      // (verified on fceumm) silently DROPS an under-padded RAM address — it
+      // parses but never pokes — so passing the user's short string through
+      // verbatim is the inert-cheat footgun. encodeRaw pads the address to the
+      // width the core honors. (No-op for already-padded codes.)
+      const norm = encodeRaw(decoded);
+      if (norm !== rawCode) reencodedFrom = rawCode;
+      code = norm;
     }
   }
   return { code, appliedAs, reencodedFrom };
