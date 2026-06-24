@@ -9,7 +9,7 @@ import {
 } from "../host/retroConstants.js";
 import { log } from "../mcp/log.js";
 import path from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createRequire } from "node:module";
@@ -407,6 +407,40 @@ export async function playtest(args) {
   // rebuild. Falls back to the open-time host if the accessor is absent.
   const getLiveHost = typeof args.getLiveHost === "function" ? args.getLiveHost : () => openHost;
   const scale = args.scale ?? 3;
+
+  // ── Eviction survivability: a rolling auto-checkpoint to DISK while the window
+  // is open. Emulator state lives in server memory only, so a session eviction
+  // (restart / reconnect / unload) while a HUMAN is mid-playthrough loses their
+  // manual progress — the recovery hint can only restore a fresh boot. Writing a
+  // rolling .state to disk every N seconds means their progress is never more than
+  // N seconds from recoverable (state({op:'load', path})). F2 also writes here on
+  // demand (so "I saved it" produces a real, reportable file). (v0.41.0 feedback
+  // note 125904 #2/#3.)
+  const checkpointPath = args.autoCheckpointPath ?? null;
+  const checkpointEverySec = args.checkpointIntervalSec ?? 15;
+  let lastCheckpointTick = 0;
+  let lastCheckpointError = null;
+  /** Serialize the live host and write it to the checkpoint path atomically
+   *  (temp + rename). Synchronous + best-effort: never throws into the tick. */
+  function writeCheckpoint(h, reason) {
+    if (!checkpointPath || !h || !h.status?.loaded) return false;
+    try {
+      const blob = h.serializeState();
+      if (!blob || !blob.length) return false;
+      const dir = path.dirname(checkpointPath);
+      if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true });
+      const tmp = checkpointPath + ".tmp";
+      writeFileSync(tmp, Buffer.from(blob));
+      renameSync(tmp, checkpointPath);
+      lastCheckpointError = null;
+      log.debug(`[playtest] checkpoint (${reason}) → ${checkpointPath} (${blob.length} B)`);
+      return true;
+    } catch (e) {
+      lastCheckpointError = e.message;
+      log.debug(`[playtest] checkpoint failed: ${e.message}`);
+      return false;
+    }
+  }
   // Default the window title to the loaded ROM/project name so the human can
   // tell which game they're looking at (instead of a generic "romdev
   // playtest"). buildProject loads with a virtualName of the project dir, and
@@ -580,7 +614,16 @@ export async function playtest(args) {
     }
     if (key === "f2") {
       const h = getLiveHost();
-      if (h && h.status?.loaded) { try { h.saveState("hotkey"); } catch {} }
+      if (h && h.status?.loaded) {
+        try { h.saveState("hotkey"); } catch { /* in-memory slot best-effort */ }
+        // ALSO persist to disk so the save survives host death and the human gets
+        // a real file (the in-memory 'hotkey' slot dies with an evicted host).
+        if (checkpointPath && writeCheckpoint(h, "F2")) {
+          log.info(`[playtest] F2 → saved to ${checkpointPath} (survives a session eviction; state({op:'load', path}) to restore).`);
+        } else {
+          log.info("[playtest] F2 → in-memory 'hotkey' slot saved (state({op:'export', fromSlot:'hotkey', path}) to persist it; it does NOT survive a host eviction).");
+        }
+      }
       return;
     }
     if (key === "f4") {
@@ -657,6 +700,14 @@ export async function playtest(args) {
     // media unloaded and stepFrames threw).
     const h = getLiveHost();
     if (!h || !h.status?.loaded) return;
+    // Rolling auto-checkpoint to disk (eviction survivability). Cheap relative to
+    // the N-second cadence; serialize off the live host so it captures the human's
+    // exact progress. Skipped while paused (nothing changed) and on the very first
+    // ticks (let the core settle).
+    if (checkpointPath && tickCount - lastCheckpointTick >= checkpointEverySec * 60 && !h.status.paused) {
+      lastCheckpointTick = tickCount;
+      writeCheckpoint(h, "auto");
+    }
     // While paused the window keeps RENDERING the frozen frame (so the human
     // still sees it), but must NOT touch input or step the core: otherwise the
     // per-tick setInput would clobber any input the AGENT set for an
@@ -895,6 +946,16 @@ export async function playtest(args) {
     // Ticks (≈ frames at 60fps real time) since the last human press; null if
     // the human hasn't touched anything since the window opened.
     framesSinceHumanInput() { return humanInput.framesSince(tickCount); },
+    // Eviction-survivability state: where the rolling auto-checkpoint is written
+    // and whether the last write succeeded. Surfaced in playtest({op:'status'})
+    // so an agent can see the human's progress is being saved (and warn if not).
+    lastCheckpoint() {
+      return {
+        path: checkpointPath,
+        lastWrittenTick: lastCheckpointTick || null,
+        lastError: lastCheckpointError,
+      };
+    },
     // The emulator host the window is CURRENTLY rendering. The window follows
     // the session's live host (a `runSource`/`loadMedia` rebuild updates it in
     // place), so this is whatever the human is looking at right now. Exposed so

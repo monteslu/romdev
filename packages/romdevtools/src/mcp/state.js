@@ -10,9 +10,31 @@
 // layer is responsible for calling clearHost(key) on session close.
 
 import { LibretroHost } from "../host/index.js";
+import path from "node:path";
+import os from "node:os";
+import { existsSync } from "node:fs";
 
 /** @type {Map<string, LibretroHost>} */
 const hosts = new Map();
+
+/**
+ * Disk path for a playtest session's rolling auto-checkpoint (eviction
+ * survivability). Deterministic per (session, rom) so the eviction-recovery hint
+ * can name it WITHOUT any bookkeeping. Next to the ROM when it's a real on-disk
+ * file; else a stable per-session file under the OS temp dir. (v0.41.0 feedback
+ * note 125904.) Shared by the playtest tool (writer) and getHost (recovery hint).
+ * @param {string} sessionKey
+ * @param {string|null} mediaPath
+ */
+export function playtestCheckpointPath(sessionKey, mediaPath) {
+  const safeSession = String(sessionKey).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 40);
+  if (mediaPath && !mediaPath.startsWith("<") && path.isAbsolute(mediaPath)) {
+    const dir = path.dirname(mediaPath);
+    const base = path.basename(mediaPath, path.extname(mediaPath));
+    return path.join(dir, `${base}.playtest-autosave.state`);
+  }
+  return path.join(os.tmpdir(), `romdev-playtest-${safeSession}.autosave.state`);
+}
 
 // Secondary host slot ("B") per session. The primary slot above is what every
 // tool uses by default; slot B exists for the ONE workflow that needs two cores
@@ -56,11 +78,18 @@ export function getHost(sessionKey) {
       const recall = prev.path
         ? `loadMedia({ platform: "${prev.platform}", path: "${prev.path}" })`
         : `loadMedia({ platform: "${prev.platform}", base64: ... })  (your ROM came from base64 — re-supply the bytes)`;
+      // If a playtest window was open, a rolling auto-checkpoint may be on disk —
+      // restoring it recovers the human's MANUAL progress, not just a fresh boot.
+      const ckpt = playtestCheckpointPath(sessionKey, prev.path ?? null);
+      const ckptHint = existsSync(ckpt)
+        ? `\nA playtest auto-checkpoint is on disk (your last ~15s of play): after the load above, run\n  state({ op: "load", path: "${ckpt}" })\nto restore the human's progress instead of replaying from boot.`
+        : "";
       throw new Error(
         "No ROM loaded in this session — the host was evicted (the server restarted, " +
         "your session reconnected, or the media was unloaded). Emulator state lives in " +
         "server memory only, so it did not survive. RECOVER by re-running your last load:\n  " +
         recall +
+        ckptHint +
         "\nThen replay any boot/navigate steps to get back to where you were. " +
         "(If instead you expected a DIFFERENT session, you may be sending an inconsistent " +
         "`x-romdev-session` header — reuse one stable id on every call.)",

@@ -5,7 +5,7 @@
 
 import { writeFile } from "node:fs/promises";
 
-import { getHost, getHostOrNull } from "../state.js";
+import { getHost, getHostOrNull, playtestCheckpointPath } from "../state.js";
 import { imageContent, jsonContent, safeTool, textContent } from "../util.js";
 import { log } from "../log.js";
 
@@ -169,6 +169,10 @@ export function registerPlaytestTools(server, z, sessionKey) {
       }
 
       const { playtest, KEYBOARD_BINDINGS_HELP, C64_BINDINGS_HELP } = await import("../../playtest/playtest.js");
+      // Where the rolling auto-checkpoint (eviction survivability) is written.
+      // Next to the ROM when it's a real file (so it's obvious + co-located); for
+      // base64/in-memory loads, a stable per-session file under the OS temp dir.
+      const autoCheckpointPath = playtestCheckpointPath(sessionKey, loadedMediaPath);
       let session;
       try {
         // Pass a live-host accessor so the window FOLLOWS rebuilds: runSource/
@@ -181,7 +185,9 @@ export function registerPlaytestTools(server, z, sessionKey) {
           scale,
           title,
           aspect,
+          autoCheckpointPath,
         });
+        session.autoCheckpointPath = autoCheckpointPath;
         sessions.set(sessionKey, session);
       } catch (e) {
         // Branch on WHY it failed — the cause is either the @kmamal/sdl native
@@ -265,6 +271,10 @@ export function registerPlaytestTools(server, z, sessionKey) {
         scale,
         aspect,
         controllerCount: session.controllerCount,
+        // Eviction survivability: while this window is open we roll a .state to
+        // disk so the human's manual progress survives a session eviction.
+        autoCheckpointPath,
+        autoCheckpointNote: `Progress auto-saves to ${autoCheckpointPath} every ~15s while the window is open (and on F2). If the session is evicted, state({op:'load', path}) it to restore the human's playthrough instead of replaying from boot.`,
         // C64 input is non-obvious (games need keyboard keys to START), so ALWAYS
         // relay the controls — a controller alone IS enough (spare buttons/stick
         // map to F1/Run-Stop/Space/Return), and the keyboard fallback covers the
@@ -345,6 +355,19 @@ export function registerPlaytestTools(server, z, sessionKey) {
             "loadMedia swapped it). frame({op:'screenshot'}) now shows the active host, NOT " +
             "what the human sees. Call playtest({op:'framebuffer'}) to capture the human's window.",
         }),
+        // Eviction survivability: where the human's progress auto-saves, and
+        // whether the last write failed (so an agent can warn + suggest a manual
+        // state({op:'save', path}) if the rolling checkpoint isn't landing).
+        ...((() => {
+          const ck = session.lastCheckpoint?.();
+          if (!ck || !ck.path) return {};
+          return {
+            autoCheckpointPath: ck.path,
+            ...(ck.lastError
+              ? { autoCheckpointError: ck.lastError, autoCheckpointHint: "The rolling auto-checkpoint is FAILING — the human's progress is NOT being saved. Have them pick a writable spot: state({op:'save', path}) manually." }
+              : { autoCheckpointNote: "The human's progress auto-saves here every ~15s (and on F2); survives a session eviction via state({op:'load', path})." }),
+          };
+        })()),
       });
   }
 
