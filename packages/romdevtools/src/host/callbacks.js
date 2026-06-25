@@ -164,6 +164,13 @@ export function registerCallbacks(args) {
   mod._retro_set_environment(envCb);
 
   const videoCb = mod.addFunction((dataPtr, w, h, pitch) => {
+    // HW-render path: dataPtr === RETRO_HW_FRAME_BUFFER_VALID means "the frame is
+    // in the GL framebuffer." DON'T read back here — GL state is only stable AFTER
+    // _retro_run returns. Flag it; stepFrames does the glReadPixels post-run.
+    if (dataPtr === RETRO_HW_FRAME_BUFFER_VALID && state.hwRender?.active) {
+      state.hwFramePending = true;
+      return;
+    }
     if (dataPtr === 0 || dataPtr === RETRO_HW_FRAME_BUFFER_VALID) return;
     const bytes = h * pitch;
     const view = mod.HEAPU8.subarray(dataPtr, dataPtr + bytes);
@@ -429,8 +436,14 @@ function handleEnv(mod, state, rawCmd, dataPtr, log) {
     case E.SET_PROC_ADDRESS_CALLBACK:
       return true;
 
+    // HW render (n64/ps1): if the host set up a GL handler (state.hwRender), let it
+    // claim the SET_HW_RENDER request + install its callbacks. Without it (the 14
+    // software cores, or no GL stack), reject so the core falls back to software.
+    case E.SET_HW_RENDER:
+      if (state.hwRender) return state.hwRender.setup(mod, dataPtr);
+      return false;
+
     // Things we can't or don't want to support — reject so core falls back.
-    case E.SET_HW_RENDER: // no GL in headless mode
     case E.GET_RUMBLE_INTERFACE:
     case E.GET_SENSOR_INTERFACE:
     case E.GET_CAMERA_INTERFACE:

@@ -53,6 +53,12 @@ export const CORES = {
   c64: { platform: "c64", coreName: "vice_x64", pkg: "romdev-core-vice", displayName: "Commodore 64 (VICE x64)" },
   pce: { platform: "pce", coreName: "geargrafx", pkg: "romdev-core-geargrafx", displayName: "PC Engine / TurboGrafx-16 (Geargrafx)", aka: "turbografx,tg16,pcengine" },
   msx: { platform: "msx", coreName: "bluemsx", pkg: "romdev-core-bluemsx", displayName: "MSX / MSX2 (blueMSX)", aka: "msx2" },
+  // 32-bit MIPS tier. These cores HW-render (GL): the host lazy-loads the OPTIONAL
+  // webgl-node bridge only when one of these boots (hwRender:true). The other 14 are
+  // software-rendered and never touch GL, so a headless user without the GPU module
+  // is unaffected.
+  n64: { platform: "n64", coreName: "parallel_n64", pkg: "romdev-core-parallel-n64", displayName: "Nintendo 64 (ParaLLEl N64)", hwRender: true },
+  ps1: { platform: "ps1", coreName: "beetle_psx_hw", pkg: "romdev-core-beetle-psx", displayName: "Sony PlayStation (Beetle PSX HW)", hwRender: true, aka: "psx,playstation" },
 };
 
 /** Try to get {jsPath,wasmPath} for a core from its binary package. */

@@ -603,7 +603,7 @@ export function registerToolchainTools(server, z, sessionKey) {
       }
 
       const host = resetHost(sessionKey);
-      await host.loadCore(resolved.jsPath, resolved.wasmPath);
+      await host.loadCore(resolved.jsPath, resolved.wasmPath, { hwRender: resolved.hwRender });
       // Pass projectName as a virtualName so the playtest window titles itself
       // with the game name (the SDL window reads host.status.mediaPath). Keep
       // a platform-correct extension so shared cores still resolve the system.

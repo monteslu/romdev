@@ -21,7 +21,7 @@ export function registerLifecycleTools(server, z, sessionKey) {
     if (path && base64) throw new Error("loadMedia: provide `path` OR `base64`, not both.");
     const slotB = slot === "b";
     const host = slotB ? resetHostB(sessionKey) : resetHost(sessionKey);
-    await host.loadCore(resolved.jsPath, resolved.wasmPath);
+    await host.loadCore(resolved.jsPath, resolved.wasmPath, { hwRender: resolved.hwRender });
     const bytes = base64 ? new Uint8Array(Buffer.from(base64, "base64")) : undefined;
     await host.loadMedia({
       platform,
