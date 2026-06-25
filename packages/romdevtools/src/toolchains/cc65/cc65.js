@@ -38,6 +38,17 @@ function resolveCc65BaseDir() {
 // the base dir once; derive the wasm + share dirs from it on demand.
 let _cc65Base;
 const cc65Base = () => (_cc65Base ??= resolveCc65BaseDir());
+
+/** True if the cc65 build toolchain WASM (cc65 + ld65, in romdev-toolchain-cc65)
+ *  is installed/resolvable, without throwing — for the catalog(status) capability
+ *  probe. cc65, ca65, ld65, and da65 all ship in the SAME package, so this also
+ *  reflects ld65 (the linker) availability. */
+export function cc65Available() {
+  try {
+    const dir = resolveCc65BaseDir();
+    return existsSync(path.join(dir, "wasm", "cc65.js")) && existsSync(path.join(dir, "wasm", "ld65.js"));
+  } catch { return false; }
+}
 const wasmDir  = () => path.join(cc65Base(), "wasm");
 const shareDir = () => path.join(cc65Base(), "share", "cc65");
 

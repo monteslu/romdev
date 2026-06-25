@@ -206,6 +206,26 @@ export function makePressDriver(host, presses) {
   };
 }
 
+/**
+ * Flush any held-input shadow before a driven run. Back-to-back `pressDuring`
+ * runs on the SAME live host can leak the PRIOR run's held button into the next
+ * run's frame 0 — the game latches the pad into its own RAM each frame, and the
+ * new run's frame-0 logic reads that stale chord before the new input propagates.
+ * That makes a negative control (hold A to prove A does NOT reach a B-only branch)
+ * FALSE-POSITIVE on frame 1. (v0.41.0 feedback 213831 #1.) Calling this first sets
+ * the pad neutral and steps `n` frames so the game's input shadow settles to
+ * neutral; then the schedule drives a clean run. Only steps when a press schedule
+ * is actually given (no-op otherwise, so it never disturbs an inherited pad).
+ * @param {import("../../host/index.js").LibretroHost} host
+ * @param {number} n   neutral frames to settle (0 = skip)
+ * @param {boolean} driven  whether this run has a pressDuring schedule
+ */
+function settleHeldInput(host, n, driven) {
+  if (!driven || !n || n <= 0) return;
+  host.setInput({ ports: [{}, {}] });
+  host.stepFrames(n | 0);
+}
+
 // Single source of truth: the same canonical region vocabulary readMemory uses
 // (host/types.js). Derived from the host map so new regions flow through
 // automatically and the two tools never disagree. Used by the ONE primary
@@ -598,7 +618,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
 
   // breakpoint({on:write|read|pc}) STOP-on-first. on:write precision:exact=bpFindWriter
   // (core watchpoint, true PC under IRQ), precision:sampled=bpRunUntilWrite (frame PC).
-  async function bpFindWriter({ address, maxFrames = 600, pressDuring, abortIf, condition, conditionValue }) {
+  async function bpFindWriter({ address, maxFrames = 600, pressDuring, settleFrames = 0, abortIf, condition, conditionValue }) {
       const host = getHost(sessionKey);
       if (!host.watchpointSupported || !host.watchpointSupported()) {
         return jsonContent({
@@ -616,10 +636,14 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       // last write of the frame. Core support is feature-detected; if the loaded
       // core build predates condition support, we fall back to a host-side
       // 'equals' filter on the reported value (inc/dec need the core's old byte).
+      const presses0 = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
+      // Flush a prior run's held input BEFORE arming, so a back-to-back driven run
+      // starts from a neutral pad (see settleHeldInput / 213831 #1).
+      settleHeldInput(host, settleFrames, presses0.length > 0);
       const wantCond = condition != null;
       const coreCond = host.setWatchpoint(address, true, wantCond ? { condition, value: conditionValue } : undefined);
       const coreHandledCond = wantCond && coreCond && coreCond.conditionApplied === true;
-      const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
+      const presses = presses0;
       const pressDriver = makePressDriver(host, presses);
       // Abort-guard: sample caller-named "still valid?" bytes each frame; if any
       // changes, a driven run that DERAILED (player died → title screen, scene
@@ -761,7 +785,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       });
   }
 
-  async function bpRunUntilPC({ address, maxFrames = 600, pressDuring, captureMemory }) {
+  async function bpRunUntilPC({ address, maxFrames = 600, pressDuring, settleFrames = 0, captureMemory }) {
       const host = getHost(sessionKey);
       if (!host.pcBreakSupported || !host.pcBreakSupported()) {
         return jsonContent({
@@ -771,6 +795,10 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         });
       }
       const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
+      // Flush a prior run's held-button shadow BEFORE arming (so the settle frames
+      // don't trip the breakpoint) — prevents a back-to-back negative control from
+      // false-positiving on frame 0. See settleHeldInput.
+      settleHeldInput(host, settleFrames, presses.length > 0);
       const pressDriver = makePressDriver(host, presses);
       host.setPCBreak(address, true, false);
       let hit = false, framesRun = 0, last = null;
@@ -797,9 +825,13 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
           ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
           ...(pcNow != null ? { pcNow: "$" + pcNow.toString(16).toUpperCase() } : {}),
           note: (drove
-            ? "PC never reached that address within maxFrames EVEN WITH the scheduled input — so this is " +
-              "likely the WRONG ADDRESS for the path that actually ran (a different routine handles it), " +
-              "or the address isn't an instruction boundary (mid-instruction never matches REG_PC). "
+            ? "PC never reached that address within maxFrames EVEN WITH the scheduled input. Either (a) this is " +
+              "the WRONG ADDRESS for the path that actually ran (a different routine handles it), (b) the address " +
+              "isn't an instruction boundary (mid-instruction never matches REG_PC), OR (c) the condition " +
+              "LEGITIMATELY did not occur — i.e. this hit:false is the DESIRED result of a negative control " +
+              "(you're proving input X does NOT reach this branch; e.g. an A-vs-B discriminator where only the " +
+              "other button should hit). If you confirmed the address is reachable on the positive run, (c) is " +
+              "the expected outcome, not a failure. "
             : "PC never reached that address within maxFrames. Either the code path didn't execute (drive " +
               "it with pressDuring to reach the right game state), or the address isn't an instruction " +
               "boundary (mid-instruction never matches REG_PC). ") +
@@ -1091,6 +1123,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         port: z.number().int().min(0).max(3).default(0),
         holdFrames: z.number().int().min(1).default(2),
       })).optional().describe("Schedule input while waiting (drive the game to the state that triggers the condition). If OMITTED, this run inherits whatever input({op:'set'}) last held — same as frame({op:'step'}). If GIVEN, the schedule OWNS the pad for the whole run (a prior input({op:'set'}) is ignored); use it to drive the watched window itself. Entries with OVERLAPPING windows on the same port are OR'd into a chord (e.g. b+right held while a fires mid-window), not overwritten."),
+      settleFrames: z.number().int().min(0).max(120).default(0).describe("on:'pc'/'write' with pressDuring — release the pad to NEUTRAL and step this many frames BEFORE the run, so the PRIOR run's held-button shadow (the game latches the pad into its own RAM each frame) doesn't bleed into this run's frame 0. Set ~10-30 for back-to-back A/B-discriminator / negative-control runs on the same live host (hold A to prove A does NOT reach a B-only branch) — without it the stale chord can false-positive on frame 1. No-op without pressDuring."),
       abortIf: z.array(z.object({
         region: regionStr("memory region (default system_ram)").optional(),
         offset: z.number().int().min(0).describe("byte offset within the region"),
@@ -1295,7 +1328,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
 
   // ── Range watch + coverage trace (item 2, discovery) ────────────────────────
 
-  async function wRange({ start, end, kind = "both", frames = 120, pressDuring, limit = 200, fromState, fromStatePath }) {
+  async function wRange({ start, end, kind = "both", frames = 120, pressDuring, limit = 200, dedupe = false, distinctPCsOnly = false, fromState, fromStatePath }) {
       const host = getHost(sessionKey);
       if (!host.rangeWatchSupported || !host.rangeWatchSupported()) {
         return jsonContent({ notSupported: true, events: [],
@@ -1313,20 +1346,59 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       if (presses.length) pressDriver.applyForFrame(0);
       const r = host.watchRange(start, end, kind, frames);
       pressDriver.finish();
-      const events = r.events.slice(0, limit).map((e) => ({
-        pc: "$" + e.pc.toString(16).toUpperCase(),
-        address: "$" + e.address.toString(16).toUpperCase(),
-        value: "0x" + e.value.toString(16).toUpperCase().padStart(2, "0"),
-      }));
-      // distinct PCs are the actionable summary
-      const distinctPCs = [...new Set(r.events.map((e) => e.pc))].slice(0, 64)
-        .map((p) => "$" + p.toString(16).toUpperCase());
+      const hx = (n, w = 0) => "$" + n.toString(16).toUpperCase().padStart(w, "0");
+      const hxv = (n) => "0x" + n.toString(16).toUpperCase().padStart(2, "0");
+
+      // Per-PC digest — the actionable "which routines touch this range" answer.
+      // Each writer's hit count + a sample address/value, sorted by frequency. This
+      // is what a "who writes here?" query actually needs; the per-event flood (a
+      // per-frame counter inc'd at one PC → hundreds of near-identical rows) is
+      // ~95% wasted tokens for that question. (v0.41.0 feedback 133737 N1.)
+      const byPC = new Map();
+      for (const e of r.events) {
+        let g = byPC.get(e.pc);
+        if (!g) { g = { pc: e.pc, count: 0, sampleAddress: e.address, sampleValue: e.value }; byPC.set(e.pc, g); }
+        g.count++;
+      }
+      const byPCList = [...byPC.values()].sort((a, b) => b.count - a.count).slice(0, 64)
+        .map((g) => ({ pc: hx(g.pc), count: g.count, sampleAddress: hx(g.sampleAddress), sampleValue: hxv(g.sampleValue) }));
+      const distinctPCs = byPCList.map((g) => g.pc);
+
+      // distinctPCsOnly → return JUST the digest, suppress the raw event list (the
+      // common "discover the writers" use; no per-event tokens spent).
+      if (distinctPCsOnly) {
+        return attachObserverFrame(jsonContent({
+          range: hx(start) + ".." + hx(end), kind, total: r.total, truncated: r.truncated,
+          ...(stateInfo ? { restoredFrom: stateInfo } : {}),
+          distinctPCs, byPC: byPCList,
+          note: "distinctPCsOnly: per-PC digest only (raw events suppressed). Each PC is a routine that touches the range; `count` is how often it fired, `sampleAddress`/`sampleValue` a representative hit. disasm({target:'rom'}) a PC to identify it. Drop distinctPCsOnly (or set dedupe:true) for the events." +
+            (r.truncated ? " TRUNCATED: more events than the buffer held — narrow start..end/frames." : ""),
+        }), host);
+      }
+
+      // dedupe → collapse identical (pc,address,value) rows to one with an
+      // `occurrences` count, so a byte written the same way every frame is 1 row
+      // not hundreds (parity with on:'dma's dedupe).
+      let events;
+      if (dedupe) {
+        const seen = new Map();
+        for (const e of r.events) {
+          const k = `${e.pc}|${e.address}|${e.value}`;
+          const g = seen.get(k);
+          if (g) g.occurrences++;
+          else seen.set(k, { pc: hx(e.pc), address: hx(e.address), value: hxv(e.value), occurrences: 1 });
+        }
+        events = [...seen.values()].sort((a, b) => b.occurrences - a.occurrences).slice(0, limit);
+      } else {
+        events = r.events.slice(0, limit).map((e) => ({ pc: hx(e.pc), address: hx(e.address), value: hxv(e.value) }));
+      }
       return attachObserverFrame(jsonContent({
-        range: "$" + start.toString(16).toUpperCase() + "..$" + end.toString(16).toUpperCase(),
+        range: hx(start) + ".." + hx(end),
         kind, total: r.total, returned: events.length, truncated: r.truncated,
+        ...(dedupe ? { deduped: true, uniqueEvents: events.length } : {}),
         ...(stateInfo ? { restoredFrom: stateInfo } : {}),
-        distinctPCs, events,
-        note: "distinctPCs is the actionable summary — each is a routine that touches this range; disasm({target:'rom'}) one to identify the renderer/reader. " +
+        distinctPCs, byPC: byPCList, events,
+        note: "distinctPCs/byPC is the actionable summary — each PC is a routine that touches this range; disasm({target:'rom'}) one to identify the renderer/reader. For a 'who writes here?' query, distinctPCsOnly:true returns JUST the digest (no per-event flood); dedupe:true collapses per-frame churn to unique (pc,address,value) rows with `occurrences`. " +
           (r.truncated ? "TRUNCATED: more events than the buffer held — narrow `start..end` or `frames` for the full set." : ""),
       }), host);
   }
@@ -1361,7 +1433,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     "• on:'mem' — the power tool: answer 'what code is touching this RAM byte?' OR extract a frame-accurate event timeline (music-driver note onsets, physics arcs). Reports every frame that changed a watched byte as {frame,offset,before,after,pc}. " +
     "Extras: `ranges:[{region,offset,length,label}]` watches MANY disjoint regions in ONE pass (identical frames); `onChange:'reset'|'increase'|'decrease'|'any'` edge filter (reset = counter-reload = the note-onset signal); `valueFilter:{min,max}`; `format:'series'` = compact columnar value-vs-frame curve (~10× smaller for a ramp); `sampleEvery`; `groupByPC` (collapse by sampled PC); `cheatLabels` (auto-name addresses from the cheat DB); `outputPath` streams all events as NDJSON; `stopOnFirst` exits on the first match. " +
     "**CAVEAT: frame-level, not instruction-level (last value per frame); the sampled `pc` is a frame-boundary sample — for ISR-driven writes use breakpoint({on:'write', precision:'exact'}) for the real writer.**\n" +
-    "• on:'range' — DISCOVERY: log EVERY instruction that reads or writes ANYWHERE in [start,end]. The fix for 'I don't know which PC touches this'. Returns {pc,address,value}[] + the actionable distinctPCs. (Ring-buffered: `truncated:true` if it overflows.) `fromState`/`fromStatePath` restores a savestate FIRST so the trace runs from a known moment (jump to the boss, then see what writes HP) — deterministic + repeatable.\n" +
+    "• on:'range' — DISCOVERY: log EVERY instruction that reads or writes ANYWHERE in [start,end]. The fix for 'I don't know which PC touches this'. Returns {pc,address,value}[] + the actionable distinctPCs + a per-PC digest (byPC). For a pure 'who writes here?' query, `distinctPCsOnly:true` returns JUST the digest (no per-event flood — a per-frame counter inc'd at one PC otherwise floods hundreds of near-identical rows); `dedupe:true` collapses identical (pc,address,value) events to one row with `occurrences`. (Ring-buffered: `truncated:true` if it overflows.) `fromState`/`fromStatePath` restores a savestate FIRST so the trace runs from a known moment (jump to the boss, then see what writes HP) — deterministic + repeatable.\n" +
     "• on:'pc' — DISCOVERY (coverage trace): record every DISTINCT PC executed within [start,end] — 'what code runs here?'. Log execution in the bank where you suspect the renderer lives during the moment it draws, then disassemble the PCs. Also takes `fromState`/`fromStatePath` to trace from a restored moment.\n" +
     "• on:'dma' — GENESIS ONLY: trace mem→VDP DMAs (the answer to 'this name/portrait/logo is a pre-rendered bitmap DMA'd into VRAM — WHERE in ROM?', which on:'write' can't catch). `precision:'exact'` (default) logs every mem→VDP DMA with its VRAM DESTINATION + ROM SOURCE + length (filter by `vramDest`±`destWindow`; `dedupe` collapses the per-frame refresh; `sourceFilter:'rom-only'` drops RAM→VRAM noise; catches a same-frame second DMA). `precision:'sampled'` is the cheap frame-sampled source-register read (may miss two DMAs in one frame, dest-agnostic). `perFrame:true` switches to FEEL/PERF MODE: a per-frame timeline of VDP-DMA WORK ({frame,dmas,bytes,romBytes,ramBytes} + peakFrame + `spikes`) — the cheap 'why does horizontal movement feel choppy?' diagnostic (a per-frame byte spike = too much VDP work in the loop, e.g. a tilemap rewrite). On non-Genesis cores returns `notSupported`.\n" +
     "• on:'copy' — ALL 14 PLATFORMS: log every write landing in a VRAM/dest address window [start,end] with the EXECUTING instruction's PC — the generic answer to 'this tile/nametable/portrait on screen: which routine uploads it?'. Port-based video memory (NES $2007, SNES $2118/19 — incl. the DMA path, PCE VWR, MSX/SMS/GG VDP data port, Genesis data port) is hooked INSIDE the core, so `start`/`end` are VRAM addresses (NES PPU $0000-$3FFF; SNES VRAM byte addr; PCE VRAM word addr; MSX/SMS/GG VRAM addr). Direct-mapped platforms (GB/GBC $8000-$9FFF, GBA 0x06000000+, C64/Lynx/7800 RAM framebuffers) route through the CPU-address range log automatically — pass CPU addresses there. Follow up with breakpoint({on:'pc', address: pc}) to get registersAtHit at the uploader.",
@@ -1385,6 +1457,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       stopOnFirst: z.boolean().default(false).describe("on:'mem' — stop on the first filter-passing change instead of running the full duration. (For a true stop-on-first breakpoint, prefer the `breakpoint` tool.)"),
       // on:'range'
       kind: z.enum(["read", "write", "both"]).default("both").describe("on:'range' — watch reads, writes, or both."),
+      distinctPCsOnly: z.boolean().default(false).describe("on:'range' — return JUST the per-PC digest (distinctPCs + byPC[{pc,count,sampleAddress,sampleValue}]) and SUPPRESS the raw event list. The token-cheap form of the common 'which routines touch this range?' query — a per-frame counter inc'd at one PC floods hundreds of near-identical events otherwise."),
       // on:'range' / on:'pc' window
       start: z.number().int().min(0).optional().describe("on:'range'/'pc' — low CPU address of the window."),
       end: z.number().int().min(0).optional().describe("on:'range'/'pc' — high CPU address (inclusive)."),
@@ -1397,7 +1470,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       precision: z.enum(["exact", "sampled"]).default("exact").describe("on:'dma' — exact=per-DMA core log with VRAM dest + ROM source (catches same-frame DMAs); sampled=frame-sampled source-register read (cheaper, may miss two DMAs in one frame, dest-agnostic). Ignored when perFrame:true."),
       vramDest: z.number().int().min(0).optional().describe("on:'dma' precision:'exact' — keep only DMAs whose VRAM destination is within ±`destWindow` of this address."),
       destWindow: z.number().int().min(0).default(0x40).describe("on:'dma' precision:'exact' — match window around vramDest (default 64 bytes ≈ 1 tile)."),
-      dedupe: z.boolean().default(true).describe("on:'dma' precision:'exact' — collapse identical DMAs (same dest+source+length+code) to one entry with an `occurrences` count (default on)."),
+      dedupe: z.boolean().optional().describe("Collapse identical events to one entry with an `occurrences` count. on:'dma' precision:'exact' — identical DMAs (same dest+source+length+code), DEFAULT ON. on:'range' — identical (pc,address,value) writes, DEFAULT OFF (turns per-frame churn from hundreds of rows into a few)."),
       sourceFilter: z.enum(["all", "rom-only", "ram-only"]).default("all").describe("on:'dma' precision:'exact' — 'rom-only' drops the RAM→VRAM per-frame refresh noise; 'ram-only' keeps only it."),
       romPreviewBytes: z.number().int().min(0).max(64).default(0).describe("on:'dma' — bytes of the ROM source to preview per DMA (exact default 0; sampled default 16)."),
       minLengthBytes: z.number().int().min(0).max(65536).default(0).describe("on:'dma' precision:'sampled' — ignore DMAs shorter than this many bytes (filters tiny scroll/sprite updates so graphic uploads stand out)."),

@@ -4,6 +4,35 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.44.0 — 2026-06-25
+
+### v0.41.0 feedback (part 2) — RE-session ergonomics
+
+- **`watch({on:'range'})` dedupe + digest.** A range watch over a churny window
+  flooded with per-frame writes (a counter inc'd at one PC → hundreds of
+  near-identical rows). New `dedupe:true` collapses identical `(pc,address,value)`
+  events to one row with an `occurrences` count (parity with `on:'dma'`), and
+  `distinctPCsOnly:true` returns JUST the per-PC digest (`byPC[{pc,count,
+  sampleAddress,sampleValue}]`) and suppresses the raw event list — the
+  token-cheap "which routines touch this range?" answer. (133737 N1)
+- **`catalog({op:'status'}).capabilities` build-toolchain flags.** Added
+  `cc65Build`, `ld65Link`, `da65Disasm` so an agent knows before calling
+  `build`/`disasm` whether the toolchain is present (the analysis subtargets
+  cfg/xrefs/functions/decompile are all da65-backed). (184553 #1, 190223 #1)
+- **`cheats` slot lifecycle.** `apply` now REPLACES an active freeze on the same
+  address instead of stacking a second one that fights for the byte
+  (`replacedSameAddress`), and new `op:'remove'` drops ONE cheat by slot/code
+  without `clear`'s nuke-all. (213831 #3)
+- **`breakpoint` `settleFrames`.** Back-to-back driven runs on the same live host
+  could inherit the prior run's held-button shadow on frame 0 (false-positiving a
+  negative control). `settleFrames:N` releases the pad to neutral and steps N
+  frames before the run so it starts clean. (213831 #1)
+- **`breakpoint({on:'pc'})` miss-note** now names the negative-control case: a
+  `hit:false` may be the DESIRED result (proving input X does NOT reach a branch),
+  not a wrong-address failure. (213831 #2)
+- Confirmed already shipped (0.42.0): hex-string `address`/`offset` params, the
+  base capabilities map. (133737 N2, 002129 #2)
+
 ## 0.43.0 — 2026-06-25
 
 ### Port engine is now GENERIC (any source → any target), not NES→SNES-only

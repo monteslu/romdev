@@ -59,6 +59,7 @@ import { createDisclosure } from "../disclosure.js";
 import { jsonContent, safeTool, withClearToolErrors } from "../util.js";
 import { getHostOrNull, setDisclosure } from "../state.js";
 import { da65Available } from "../../toolchains/cc65/da65.js";
+import { cc65Available } from "../../toolchains/cc65/cc65.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -75,7 +76,16 @@ import { dirname, join } from "node:path";
  */
 function hostCapabilities(host) {
   const da65 = da65Available();
-  if (!host) return { da65Toolchain: da65 };
+  const cc65 = cc65Available();
+  // Toolchain caps don't need a loaded host — report them either way so an agent
+  // can check build/disasm availability before loading a ROM.
+  const toolchains = {
+    da65Disasm: da65,    // disasm({target:'rom'/'references'/'cfg'/'xrefs'/'functions'/'decompile'}) — all da65-backed
+    cc65Build: cc65,     // build({platform:'nes'/'c64'/'atari7800'/'lynx'}) — cc65/ca65
+    ld65Link: cc65,      // the ld65 linker (ships with cc65 in the same package)
+    da65Toolchain: da65, // legacy alias for da65Disasm (kept for back-compat)
+  };
+  if (!host) return toolchains;
   const has = (m) => { try { return !!host[m]?.(); } catch { return false; } };
   return {
     pcBreakpoint: has("pcBreakSupported"),       // breakpoint({on:'pc'})
@@ -87,7 +97,7 @@ function hostCapabilities(host) {
     cheats: has("cheatsSupported"),              // cheats({op:'apply'}) via retro_cheat_set
     diskImage: has("diskImageSupported"),        // C64 .d64 loadMedia
     keyboard: has("keyboardSupported"),          // keyboard input (C64/MSX)
-    da65Toolchain: da65,                         // disasm({target:'rom'/'references'/...})
+    ...toolchains,
   };
 }
 

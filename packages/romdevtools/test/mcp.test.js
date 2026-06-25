@@ -127,12 +127,14 @@ test("MCP: save state, step further, load state restores frame count", async () 
   // implement, so an agent picks a working trace strategy without probing by failure.
   assert.ok(statusObj.capabilities && typeof statusObj.capabilities === "object", "status has a capabilities map");
   const caps = statusObj.capabilities;
-  for (const k of ["pcBreakpoint", "watchpointExact", "cheats", "da65Toolchain"]) {
+  for (const k of ["pcBreakpoint", "watchpointExact", "cheats", "da65Disasm", "cc65Build", "ld65Link", "da65Toolchain"]) {
     assert.equal(typeof caps[k], "boolean", `capabilities.${k} is a boolean`);
   }
   // fceumm (the NES core loaded above) implements PC breakpoints + cheats.
   assert.equal(caps.pcBreakpoint, true, "fceumm exposes PC breakpoints");
   assert.equal(caps.cheats, true, "fceumm exposes the cheat interface");
+  // da65Toolchain stays a back-compat alias for da65Disasm.
+  assert.equal(caps.da65Toolchain, caps.da65Disasm, "da65Toolchain aliases da65Disasm");
 
   const restore = await client.callTool({
     name: "state",
