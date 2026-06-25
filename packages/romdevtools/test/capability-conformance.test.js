@@ -15,7 +15,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { CAPABILITIES, OP_KEYS, CONTRACT_PLATFORMS, supports } from "../src/cores/capabilities.js";
+import { CAPABILITIES, OP_KEYS, CONTRACT_PLATFORMS, ANALYSIS_ONLY_PLATFORMS, supports } from "../src/cores/capabilities.js";
 import { CORES } from "../src/cores/registry.js";
 import { MemoryRegionToRetro } from "../src/host/types.js";
 import { unsupported, errorContent } from "../src/mcp/util.js";
@@ -29,6 +29,26 @@ test("contract: every tier-1 platform in CORES has a capability entry", () => {
   // ...and vice-versa: no manifest entry without a real core.
   for (const p of CONTRACT_PLATFORMS) {
     assert.ok(CORES[p], `manifest platform '${p}' has no core in the registry`);
+  }
+});
+
+test("contract: analysis-only tier (ps1/n64) is well-formed but run-side-off", () => {
+  // The MIPS analysis-first tier: in the manifest for the capability signal, but
+  // NOT full tier-1 — no core, no run-side ops, exempt from the universal checks.
+  for (const p of ANALYSIS_ONLY_PLATFORMS) {
+    const c = CAPABILITIES[p];
+    assert.equal(c.introspection, "none", `${p} is analysis-only (introspection:'none')`);
+    assert.equal(c.ops.disasm, true, `${p} disasm works (the whole point of this tier)`);
+    // every run-side / build op is OFF (no core yet).
+    for (const op of ["build", "run", "screenshot", "cpuState", "audioDebug",
+      "inspectSprites", "inspectPalette", "inspectBackground", "renderingContext"]) {
+      assert.equal(c.ops[op], false, `${p}.${op} must be false (no core in this tier)`);
+    }
+    for (const op of OP_KEYS) assert.equal(typeof c.ops[op], "boolean", `${p}.ops.${op} is a boolean`);
+  }
+  // ps1/n64 are NOT in the full-tier contract set.
+  for (const p of ANALYSIS_ONLY_PLATFORMS) {
+    assert.ok(!CONTRACT_PLATFORMS.includes(p), `${p} is excluded from the full tier-1 contract`);
   }
 });
 

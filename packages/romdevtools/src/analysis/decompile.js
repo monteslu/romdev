@@ -47,6 +47,10 @@ export const SLEIGH_LANGID = {
   genesis: "68000:BE:32:default",
   snes: "65816:LE:24:snes",
   pce: "HuC6280:LE:16:default",
+  // 32-bit MIPS tier. PS1 R3000 = little-endian; N64 R4300 = big-endian (games run
+  // 32-bit MIPS III code). Ghidra ships both MIPS variants in its stock SLEIGH.
+  ps1: "MIPS:LE:32:default",
+  n64: "MIPS:BE:32:default",
 };
 
 /**
