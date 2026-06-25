@@ -1609,6 +1609,8 @@ function sniffPlatformFromPath(p) {
   if (/\.prg$/i.test(p)) return "c64";
   if (/\.(lnx|lyx)$/i.test(p)) return "lynx";
   if (/\.gba$/i.test(p)) return "gba";
+  if (/\.(z64|n64|v64)$/i.test(p)) return "n64";
+  if (/\.(psexe|psx)$/i.test(p)) return "ps1"; // .exe/.bin are ambiguous — pass platform explicitly
   if (/\.(gen|md|bin)$/i.test(p)) return "genesis";
   return null;
 }

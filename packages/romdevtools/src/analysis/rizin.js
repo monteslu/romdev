@@ -54,6 +54,19 @@ export const RIZIN_ARCH = {
   // DECOMPILER uses the proper HuC6280 SLEIGH spec — so CFG/xrefs/functions are
   // approximate on PCE while decompile is accurate.
   pce: "6502",
+  // 32-bit MIPS tier (analysis-first; the MIPS plugin ships in rizin.wasm). PS1 =
+  // R3000 little-endian; N64 = R4300 big-endian. Endianness comes from RIZIN_ENDIAN
+  // below — same arch, different byte order.
+  ps1: "mips",
+  n64: "mips",
+};
+
+/** Byte order per platform, for shared-arch families that ship both (MIPS). Only
+ *  platforms NOT matching their arch default need an entry; absent → use the
+ *  loader/arch default. PS1 is little, N64 is big. */
+export const RIZIN_ENDIAN = {
+  ps1: "little",
+  n64: "big",
 };
 
 /**
@@ -77,13 +90,21 @@ export const RIZIN_ARCH = {
  * @returns {Promise<{exitCode:number, output:string, log:string, crash?:object}>}
  */
 export async function runRizin(opts) {
-  const { romPath, romBytes, commands, arch, bits, baddr, writeable, timeoutMs } = opts;
+  const { romPath, romBytes, commands, arch, bits, baddr, writeable, timeoutMs, endian } = opts;
   if (!commands) throw new Error("runRizin: commands required");
   const bytes = romBytes ?? new Uint8Array(await readFile(romPath));
 
   const pre = ["e scr.color=0", "e scr.interactive=false", "e scr.prompt=false"];
   if (arch) pre.push(`e asm.arch=${arch}`);
   if (bits) pre.push(`e asm.bits=${bits}`);
+  // Endianness matters for shared-arch families that ship both byte orders — most
+  // pressingly MIPS: PS1 (R3000) is little-endian, N64 (R4300) is big-endian, same
+  // `mips` plugin. Set both asm + cfg so the disasm AND the analysis loader agree.
+  if (endian === "big" || endian === "little") {
+    // `cfg.bigendian` is the rizin config var (there is NO `asm.bigendian` —
+    // setting it errors). cfg.bigendian drives BOTH the disasm and the analysis.
+    pre.push(`e cfg.bigendian=${endian === "big" ? "true" : "false"}`);
+  }
 
   // Split trailing command off so its output (only) goes to the file. Earlier
   // commands (aaa, config) print nothing we need. Rizin's `cmd > file` writes

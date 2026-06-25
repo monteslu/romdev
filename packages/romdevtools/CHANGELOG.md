@@ -4,6 +4,31 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.45.0 — 2026-06-25
+
+### PS1 + N64 analysis-first (the 32-bit MIPS tier)
+
+The first step past the GBA-era line: static RE for PlayStation (R3000) and
+Nintendo 64 (R4300), via the MIPS plugin already in the shipped `rizin.wasm` — no
+new core, no toolchain, no GPU bridge in this slice.
+
+- **`disasm({platform:'ps1'|'n64', target:'functions'|'cfg'|'xrefs'|'rom'})`** —
+  works on real ROMs. Verified: a libdragon N64 homebrew (`FlappyBird.z64`)
+  recovers 251 functions with control-flow graphs and cross-references. The raw
+  N64 ROM has no entry `aaa` recognizes, so MIPS analysis is seeded at the
+  post-IPL3 code start (`af` + `aac`) — `aaa` finds 0, the seed finds the tree.
+- **Endianness is wired right:** PS1 is little-endian, N64 is big-endian (same
+  `mips` arch). N64 `.v64`/`.n64` dumps are auto-normalized to `.z64` byte order;
+  PS1 PS-EXE headers are stripped to the load address.
+- **Capability manifest:** `ps1` (framebuffer) / `n64` (3d) are an analysis-only
+  tier — `disasm` true; run-side ops (build/run/screenshot/the tile/sprite
+  inspectors) and `decompile` false. The tile/nametable inspectors are meaningless
+  on a framebuffer/3D renderer, so an agent gets the clean `unsupported()` signal.
+- **`decompile` (C pseudocode) is NOT available yet** for MIPS — the rz-ghidra
+  decompiler ships no MIPS SLEIGH spec (adding `MIPS.sla` is a later
+  `romdev-analysis-decompiler` rebuild). It returns a clear steer to the working
+  disasm targets, not a cryptic failure.
+
 ## 0.44.0 — 2026-06-25
 
 ### v0.41.0 feedback (part 2) — RE-session ergonomics

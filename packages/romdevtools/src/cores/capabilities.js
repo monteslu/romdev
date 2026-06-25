@@ -202,10 +202,60 @@ export const CAPABILITIES = {
       cart: false, disasm: true, decompile: true,
     },
   },
+
+  // ── 32-bit MIPS tier — ANALYSIS-FIRST (no run-side core yet) ──────────────
+  // disasm/decompile are wired through the shipped rizin.wasm MIPS plugin (PS1 =
+  // R3000 LE, N64 = R4300 BE). Everything run-side (build/run/screenshot/the
+  // tile/sprite inspectors) is FALSE: there is no emulator core in this slice, and
+  // the tile/nametable/OAM inspectors are MEANINGLESS on a framebuffer (PS1) / 3D
+  // (N64) renderer anyway — so an agent gets the uniform unsupported() signal
+  // instead of blindly calling inspectBackground on a polygon machine.
+  // disasm/cfg/xrefs/functions WORK (rizin's Capstone MIPS plugin). decompile is
+  // FALSE: the rz-ghidra decompiler ships only the 8 SLEIGH specs for the current
+  // tier (no MIPS.sla) — adding it is a romdev-analysis-decompiler rebuild, a later
+  // step. decompileQuality records the EXPECTED quality once that spec ships.
+  ps1: {
+    cpuFamily: "mips", decompileQuality: "good",
+    cpus: { main: "r3000", secondary: ["gte"] },
+    audioChips: ["spu"],
+    memoryRegions: [...GENERIC_REGIONS],
+    renderingKind: "framebuffer", introspection: "none",
+    ops: {
+      build: false, run: false, screenshot: false,
+      inspectSprites: false, inspectPalette: false, inspectBackground: false,
+      renderingContext: false, cpuState: false, audioDebug: false,
+      cart: false, disasm: true, decompile: false,
+    },
+  },
+  n64: {
+    cpuFamily: "mips", decompileQuality: "good",
+    cpus: { main: "r4300", secondary: ["rsp"] },
+    audioChips: [],
+    memoryRegions: [...GENERIC_REGIONS],
+    renderingKind: "3d", introspection: "none",
+    ops: {
+      build: false, run: false, screenshot: false,
+      inspectSprites: false, inspectPalette: false, inspectBackground: false,
+      renderingContext: false, cpuState: false, audioDebug: false,
+      cart: false, disasm: true, decompile: false,
+    },
+  },
 };
 
-/** All platform ids in the contract. */
-export const CONTRACT_PLATFORMS = Object.keys(CAPABILITIES);
+/** ANALYSIS-ONLY platforms: a static-RE-only tier (disasm/cfg/xrefs work; no
+ *  emulator core, no run-side ops). They live in the manifest so an agent gets the
+ *  capability signal, but they're NOT full tier-1 platforms — the run-side/build/
+ *  decompile conformance checks don't apply, and they have no core in the registry.
+ *  The MIPS tier (PS1/N64) lands here first (analysis-first); they graduate to
+ *  CONTRACT_PLATFORMS when a core + the run-side ops are wired. */
+export const ANALYSIS_ONLY_PLATFORMS = Object.entries(CAPABILITIES)
+  .filter(([, c]) => c.introspection === "none")
+  .map(([p]) => p);
+
+/** The full tier-1 platforms (have a core + the universal build/run/screenshot
+ *  ops). Excludes the analysis-only tier above. */
+export const CONTRACT_PLATFORMS = Object.keys(CAPABILITIES)
+  .filter((p) => !ANALYSIS_ONLY_PLATFORMS.includes(p));
 
 /** Does `platform` support `op`? Unknown platform/op → false. */
 export function supports(platform, op) {

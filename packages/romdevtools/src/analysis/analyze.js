@@ -12,7 +12,7 @@
 // resolved by the existing disasm mappers — analysis here is whole-file.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { runRizinJson, RIZIN_ARCH } from "./rizin.js";
+import { runRizinJson, RIZIN_ARCH, RIZIN_ENDIAN } from "./rizin.js";
 import { decompileFunction, SLEIGH_LANGID } from "./decompile.js";
 import { registersForPlatform } from "../platforms/common/registers.js";
 
@@ -133,13 +133,61 @@ export function sniffPlatform(p) {
   if (/\.(lnx|lyx)$/i.test(p)) return "lynx";
   if (/\.gba$/i.test(p)) return "gba";
   if (/\.pce$/i.test(p)) return "pce";
+  if (/\.(z64|n64|v64)$/i.test(p)) return "n64";
+  if (/\.(psexe|psx)$/i.test(p)) return "ps1"; // .exe/.bin ambiguous — pass platform explicitly
   if (/\.(gen|md|bin)$/i.test(p)) return "genesis";
   return null;
 }
 
 /** rizin asm.bits per arch (analysis defaults; rizin's loader usually sets
  * these for recognized formats, but raw blobs need a hint). */
-const BITS = { arm: 32, m68k: 32, snes: 16 };
+const BITS = { arm: 32, m68k: 32, snes: 16, mips: 32 };
+
+/**
+ * The rizin analysis-SEED command for a context. For the 8/16-bit platforms
+ * rizin's `aaa` recognizes the bin format / vectors and seeds itself. For a RAW
+ * MIPS image (N64/PS1) there's no recognized entry, so `aaa` finds nothing —
+ * instead define a function at the code start and recursively analyze its call
+ * graph (`af` + `aac`), which surfaces the real function tree (verified: 251
+ * functions on a real libdragon N64 ROM where `aaa` found 0).
+ * @param {{arch:string, codeStart:number}} ctx
+ * @returns {string} the seed command (no trailing semicolon)
+ */
+function analysisSeed({ arch, codeStart }) {
+  if (arch === "mips") {
+    const at = "0x" + (codeStart || 0).toString(16);
+    return `af @ ${at}; aac @ ${at}`;
+  }
+  return "aaa";
+}
+
+/**
+ * Normalize an N64 ROM to BIG-ENDIAN (.z64) byte order. Dumps come in three
+ * orders, distinguished by the first 4 bytes of the header:
+ *   .z64 (big)    80 37 12 40   — native; no change
+ *   .v64 (byteswap)37 80 40 12  — swap every 2 bytes
+ *   .n64 (little) 40 12 37 80   — swap every 4 bytes
+ * MIPS analysis wants the big-endian image so addresses + instruction words line up.
+ * @param {Uint8Array} bytes
+ * @returns {{ bytes: Uint8Array, reordered: string|null }}
+ */
+function normalizeN64ByteOrder(bytes) {
+  if (bytes.length < 4) return { bytes, reordered: null };
+  const b = bytes;
+  const is = (a, c, d, e) => b[0] === a && b[1] === c && b[2] === d && b[3] === e;
+  if (is(0x80, 0x37, 0x12, 0x40)) return { bytes, reordered: null }; // .z64 big — native
+  if (is(0x37, 0x80, 0x40, 0x12)) { // .v64 byteswapped — swap pairs
+    const out = new Uint8Array(b.length & ~1);
+    for (let i = 0; i + 1 < b.length; i += 2) { out[i] = b[i + 1]; out[i + 1] = b[i]; }
+    return { bytes: out, reordered: "v64 (byteswapped) → z64" };
+  }
+  if (is(0x40, 0x12, 0x37, 0x80)) { // .n64 little — swap dwords
+    const out = new Uint8Array(b.length & ~3);
+    for (let i = 0; i + 3 < b.length; i += 4) { out[i] = b[i + 3]; out[i + 1] = b[i + 2]; out[i + 2] = b[i + 1]; out[i + 3] = b[i]; }
+    return { bytes: out, reordered: "n64 (little-endian dwords) → z64" };
+  }
+  return { bytes, reordered: null }; // unknown header — leave as-is
+}
 
 /** Build the common rizin invocation context for a ROM + platform. Returns
  * { romBytes, arch, bits, note } — arch null means let rizin sniff. */
@@ -175,11 +223,38 @@ async function loadContext(romPath, platformOverride) {
     loadBase = romBytes[0] | (romBytes[1] << 8);
     romBytes = romBytes.subarray(2);
   }
+  const warningsEarly = [];
+  // N64: normalize to big-endian (.z64) byte order, then the ROM header's entry
+  // point (big-endian word at 0x08) is the CPU load base. The 0x1000-byte header
+  // (IPL3 bootcode) precedes the game; rizin analyzes the whole image but the
+  // entry tells functions where code starts.
+  let codeStart = 0; // file offset where executable code begins (post-header)
+  if (platform === "n64") {
+    const norm = normalizeN64ByteOrder(romBytes);
+    romBytes = norm.bytes;
+    if (norm.reordered) warningsEarly.push(`N64 ROM was ${norm.reordered} byte order — normalized to z64 (big-endian) for analysis.`);
+    if (romBytes.length >= 0x0c) {
+      // entry point: big-endian 32-bit at offset 0x08.
+      loadBase = (romBytes[0x08] << 24) | (romBytes[0x09] << 16) | (romBytes[0x0a] << 8) | romBytes[0x0b];
+    }
+    // The IPL3 bootcode occupies the first 0x1000 bytes; game code starts after it.
+    // rizin's `aaa` doesn't recognize a raw N64 ROM's entry, so analysis is seeded
+    // here (see ANALYSIS_SEED).
+    codeStart = 0x1000;
+  }
+  // PS1 PS-EXE: a 2048-byte header; the load (t_addr) is a little-endian word at
+  // 0x18, and the code follows the header. Strip the header so rizin sees code at
+  // the load address. A raw .bin (no PS-EXE magic) is left flat.
+  if (platform === "ps1" && romBytes.length >= 0x800 &&
+      romBytes[0] === 0x50 && romBytes[1] === 0x53 && romBytes[2] === 0x2d && romBytes[3] === 0x58) { // "PS-X"
+    loadBase = (romBytes[0x18] | (romBytes[0x19] << 8) | (romBytes[0x1a] << 16) | (romBytes[0x1b] << 24)) >>> 0;
+    romBytes = romBytes.subarray(0x800);
+  }
 
   // A6: container/format sniff. Some dumps are interleaved/headered such that a
   // FLAT read scrambles every byte → fake "bad instruction" noise everywhere.
   // Detect + auto-correct, and warn so a flat disasm isn't silently wrong.
-  const warnings = [];
+  const warnings = [...warningsEarly];
   if (platform === "genesis") {
     const smd = deinterleaveSmd(romBytes);
     if (smd) {
@@ -188,7 +263,7 @@ async function loadContext(romPath, platformOverride) {
         "auto-deinterleaved before analysis. A flat read of the original would scramble every instruction.");
     }
   }
-  return { platform, romBytes, arch, bits: BITS[arch], approx, loadBase, warnings };
+  return { platform, romBytes, arch, bits: BITS[arch], endian: RIZIN_ENDIAN[platform], approx, loadBase, codeStart, warnings };
 }
 
 /** Detect + reverse Sega Mega Drive SMD interleaving. An .smd dump is a 512-byte
@@ -227,8 +302,12 @@ function hx(n) { return "0x" + (n >>> 0).toString(16); }
  * @returns {{platform, count, functions: Array<{address, name, size, nbbs, cc, callers, callees}>}}
  */
 export async function analyzeFunctions(romPath, platformOverride) {
-  const { platform, romBytes, arch, bits, loadBase, warnings } = await loadContext(romPath, platformOverride);
-  const fns = await runRizinJson({ romBytes, arch, bits, baddr: loadBase || undefined, commands: "aaa; aflj" });
+  const { platform, romBytes, arch, bits, endian, loadBase, codeStart, warnings } = await loadContext(romPath, platformOverride);
+  // MIPS seeds analysis at the code-start file offset (aaa finds nothing on a raw
+  // N64/PS1 image), so it must run FLAT (no baddr rebase) for those offsets to line
+  // up; the 8/16-bit `aaa` path keeps its bin-loader base.
+  const baddr = arch === "mips" ? undefined : (loadBase || undefined);
+  const fns = await runRizinJson({ romBytes, arch, bits, endian, baddr, commands: `${analysisSeed({ arch, codeStart })}; aflj` });
   const functions = fns.map((f) => ({
     address: f.offset,
     addressHex: hx(f.offset),
@@ -269,14 +348,17 @@ export async function analyzeFunctions(romPath, platformOverride) {
  */
 export async function analyzeCfg(romPath, address, platformOverride) {
   if (address == null) throw new Error("analyze cfg: address required");
-  const { platform, romBytes, arch, bits, loadBase } = await loadContext(romPath, platformOverride);
+  const { platform, romBytes, arch, bits, endian, loadBase, codeStart } = await loadContext(romPath, platformOverride);
   // afbj = basic blocks of the function as JSON: each block has addr/size/jump/
   // fail/ninstr. `jump` is the taken edge; `fail` (present only on conditional
   // blocks) is the fall-through. This is the structured CFG source — `agf json`
   // only gives a text body blob with untyped out_nodes.
+  // MIPS: seed the call graph first (the address is a vaddr from `functions`,
+  // which rizin recovers during `aac`), and run flat.
+  const baddr = arch === "mips" ? undefined : (loadBase || undefined);
   const blocks = await runRizinJson({
-    romBytes, arch, bits, baddr: loadBase || undefined,
-    commands: `aaa; af @ ${hx(address)}; afbj @ ${hx(address)}`,
+    romBytes, arch, bits, endian, baddr,
+    commands: `${analysisSeed({ arch, codeStart })}; af @ ${hx(address)}; afbj @ ${hx(address)}`,
   });
   if (!Array.isArray(blocks) || blocks.length === 0) {
     return { platform, arch, address, addressHex: hx(address), nodes: [], edges: [], note: "no function/blocks at address" };
@@ -308,10 +390,11 @@ export async function analyzeCfg(romPath, address, platformOverride) {
  */
 export async function analyzeXrefs(romPath, address, platformOverride) {
   if (address == null) throw new Error("analyze xrefs: address required");
-  const { platform, romBytes, arch, bits, loadBase } = await loadContext(romPath, platformOverride);
+  const { platform, romBytes, arch, bits, endian, loadBase, codeStart } = await loadContext(romPath, platformOverride);
+  const baddr = arch === "mips" ? undefined : (loadBase || undefined);
   let refs;
   try {
-    refs = await runRizinJson({ romBytes, arch, bits, baddr: loadBase || undefined, commands: `aaa; axtj @ ${hx(address)}` });
+    refs = await runRizinJson({ romBytes, arch, bits, endian, baddr, commands: `${analysisSeed({ arch, codeStart })}; axtj @ ${hx(address)}` });
   } catch (e) {
     // axtj prints nothing (not even `[]`) when there are zero refs → our JSON
     // guard throws. Treat "no JSON" as "no refs".
@@ -333,12 +416,13 @@ export async function analyzeXrefs(romPath, address, platformOverride) {
  * analysis pass. The "give me the shape of this ROM" call.
  */
 export async function analyzeStructure(romPath, platformOverride) {
-  const { platform, romBytes, arch, bits, loadBase } = await loadContext(romPath, platformOverride);
-  const baddr = loadBase || undefined;
+  const { platform, romBytes, arch, bits, endian, loadBase, codeStart } = await loadContext(romPath, platformOverride);
+  const baddr = arch === "mips" ? undefined : (loadBase || undefined);
+  const seed = analysisSeed({ arch, codeStart });
   const [fns, strings, entries] = await Promise.all([
-    runRizinJson({ romBytes, arch, bits, baddr, commands: "aaa; aflj" }).catch(() => []),
-    runRizinJson({ romBytes, arch, bits, baddr, commands: "aaa; izj" }).catch(() => []),
-    runRizinJson({ romBytes, arch, bits, baddr, commands: "aaa; iej" }).catch(() => []),
+    runRizinJson({ romBytes, arch, bits, endian, baddr, commands: `${seed}; aflj` }).catch(() => []),
+    runRizinJson({ romBytes, arch, bits, endian, baddr, commands: `${seed}; izj` }).catch(() => []),
+    runRizinJson({ romBytes, arch, bits, baddr, commands: `${seed}; iej` }).catch(() => []),
   ]);
   return {
     platform, arch,
@@ -506,6 +590,16 @@ export async function analyzeDecompile(romPath, address, platformOverride) {
   // directly, not via loadContext) — a flat read of an interleaved ROM decodes
   // to pure garbage.
   if (platform === "genesis") romBytes = deinterleaveSmd(romBytes) ?? romBytes;
+
+  // MIPS (N64/PS1): the rz-ghidra decompiler doesn't ship a MIPS SLEIGH spec yet
+  // (only the 8 specs for the current tier). disasm/cfg/xrefs/functions DO work —
+  // steer the agent there instead of failing cryptically with "No function selected".
+  if (platform === "n64" || platform === "ps1") {
+    throw new Error(
+      `decompile: ${platform} (MIPS) C-pseudocode is NOT available yet — the rz-ghidra decompiler doesn't bundle a MIPS SLEIGH spec (adding MIPS.sla is a romdev-analysis-decompiler rebuild). ` +
+      `The MIPS DISASSEMBLY engine works today: disasm({target:'functions'}) lists functions, target:'cfg' is the control-flow graph, target:'xrefs' is the callers, target:'rom' is the linear disasm.`,
+    );
+  }
 
   // SNES: banked 24-bit space. `address` is a LoROM/HiROM CPU address (what
   // target='functions'/'cfg' report). Lay the cart out by CPU address so BOTH
