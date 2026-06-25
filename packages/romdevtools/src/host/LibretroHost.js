@@ -49,6 +49,12 @@ const PLATFORM_CORE_OPTIONS = {
   // host's port-1 input to pad slot 2 — PCE 2P works (probed 2026-06-10
   // during the ZENITH BARRAGE gold round).
   pce: { geargrafx_turbotap: "Enabled" },
+  // parallel_n64 defaults to a software gfx plugin that never presents to our GL
+  // FBO. Force glide64 (the GL renderer) so HW render actually produces frames.
+  n64: { "parallel-n64-gfxplugin": "glide64" },
+  // beetle_psx_hw defaults to the software renderer; force hardware_gl so it
+  // renders through the GL context the host set up (otherwise no FBO frames).
+  ps1: { beetle_psx_hw_renderer: "hardware_gl" },
   // VICE mounts a .d64/.tap/.crt but, with autostart off, just sits at the BASIC
   // `READY.` prompt — the agent would see a blue boot screen, not the game. Force
   // autostart so a disk/tape image runs the first program automatically (same as
