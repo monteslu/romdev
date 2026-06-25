@@ -70,3 +70,12 @@ export const RETRO_LOG_ERROR = 3;
 // Sentinels
 /** Video refresh data pointer meaning "GL framebuffer is valid". */
 export const RETRO_HW_FRAME_BUFFER_VALID = -1 >>> 0; // unsigned -1
+
+// HW render context types (retro_hw_context_type) — the GL flavors the
+// HW-render cores (n64/ps1) request via RETRO_ENVIRONMENT_SET_HW_RENDER.
+export const RETRO_HW_CONTEXT_NONE = 0;
+export const RETRO_HW_CONTEXT_OPENGL = 1;        // OpenGL 2.x (compat)
+export const RETRO_HW_CONTEXT_OPENGLES2 = 2;     // GLES 2.0
+export const RETRO_HW_CONTEXT_OPENGL_CORE = 3;   // OpenGL 3+ core
+export const RETRO_HW_CONTEXT_OPENGLES3 = 4;     // GLES 3.0
+export const RETRO_HW_CONTEXT_OPENGLES_VERSION = 5; // GLES with explicit version

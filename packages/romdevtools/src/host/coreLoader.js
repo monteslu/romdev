@@ -14,6 +14,10 @@ import { RETRO_API_VERSION } from "./retroConstants.js";
  * @typedef {Object} LoadCoreArgs
  * @property {string} jsPath absolute path to the `_libretro.js` glue
  * @property {string} [wasmPath] absolute path to the `.wasm`; if omitted, Emscripten resolves next to the .js
+ * @property {object} [glCanvas] HW-render cores (n64/ps1): a webgl-node mock canvas the
+ *   minified Emscripten glue drives via `GLctx = canvas.getContext('webgl2')`.
+ * @property {object} [glBridge] HW-render cores with UNMINIFIED imports: a map of GL
+ *   function name → native-gles impl, patched directly into the WASM env imports.
  */
 
 /**
@@ -22,7 +26,7 @@ import { RETRO_API_VERSION } from "./retroConstants.js";
  * @param {LoadCoreArgs} args
  */
 export async function loadLibretroCore(args) {
-  const { jsPath, wasmPath } = args;
+  const { jsPath, wasmPath, glCanvas, glBridge } = args;
 
   const url = pathToFileURL(jsPath).href + "?t=" + Date.now();
   const ns = await import(url);
@@ -37,7 +41,43 @@ export async function loadLibretroCore(args) {
     print: () => {},
     printErr: () => {},
   };
-  if (wasmPath) {
+
+  // HW-render cores: minified glue uses GLctx = canvas.getContext('webgl2'), so we
+  // hand it a webgl-node mock canvas + install the WebGL2 globals Emscripten probes.
+  if (glCanvas) {
+    opts.canvas = glCanvas;
+    if (typeof globalThis.WebGLRenderingContext === "undefined") {
+      const { WebGL2RenderingContext } = await import("webgl-node");
+      globalThis.WebGLRenderingContext = WebGL2RenderingContext;
+      globalThis.WebGL2RenderingContext = WebGL2RenderingContext;
+    }
+  }
+
+  if (wasmPath && glBridge) {
+    // Unminified GL cores: patch GL function imports + no-op EGL (we own EGL via
+    // native-gles), and capture the instance memory for the bridge's marshaling.
+    const wasmBinary = await readFile(wasmPath);
+    opts.instantiateWasm = (info, receiveInstance) => {
+      for (const nsObj of Object.values(info)) {
+        if (typeof nsObj !== "object" || nsObj === null) continue;
+        for (const [name, fn] of Object.entries(glBridge)) {
+          if (name in nsObj) nsObj[name] = fn;
+        }
+        if ("eglGetDisplay" in nsObj) {
+          nsObj.eglGetDisplay = () => 62000;
+          nsObj.eglInitialize = () => 1;
+          nsObj.eglQueryString = () => 0;
+        }
+      }
+      WebAssembly.instantiate(wasmBinary, info).then((result) => {
+        if (glBridge._setMemory && result.instance.exports.memory) {
+          glBridge._setMemory(result.instance.exports.memory);
+        }
+        receiveInstance(result.instance, result.module);
+      });
+      return {};
+    };
+  } else if (wasmPath) {
     opts.wasmBinary = await readFile(wasmPath);
   }
 

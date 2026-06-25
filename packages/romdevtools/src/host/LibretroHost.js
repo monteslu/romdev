@@ -155,7 +155,7 @@ export const PLATFORM_VIRTUAL_EXT = {
   pce:        ".pce",
   msx:        ".rom",
 };
-import { RETRO_DEVICE_JOYPAD } from "./retroConstants.js";
+import { RETRO_DEVICE_JOYPAD, RETRO_PIXEL_FORMAT_XRGB8888 } from "./retroConstants.js";
 
 // C64 controller→keyboard map (the Batocera/RetroDeck model: a CONTROLLER alone
 // plays C64 — no physical keyboard needed — by mapping spare buttons/stick to
@@ -241,11 +241,45 @@ export class LibretroHost {
    * Load a libretro core module. Registers callbacks then runs retro_init.
    * @param {string} jsPath
    * @param {string} [wasmPath]
+   * @param {Object} [opts]
+   * @param {boolean} [opts.hwRender] this core HW-renders (GL) — n64/ps1. Loads the
+   *   optional native GL stack and creates a headless context BEFORE the core boots
+   *   (GL calls happen during init/load). The 14 software cores omit this.
    */
-  async loadCore(jsPath, wasmPath) {
+  async loadCore(jsPath, wasmPath, opts = {}) {
     if (this.mod) throw new Error("core already loaded; create a new host");
-    const mod = await loadLibretroCore({ jsPath, wasmPath });
+
+    let glCanvas = null;
+    if (opts.hwRender) {
+      // Set up the HW-render path: LibretroGL owns the FBO/readback; a webgl-node
+      // mock canvas backs the minified core's GLctx. Both pull the OPTIONAL native
+      // GL deps lazily (clear install hint if absent).
+      const { LibretroGL } = await import("./LibretroGL.js");
+      const { loadWebGl2Context } = await import("./glOptionalDep.js");
+      this.hwRender = new LibretroGL();
+      await this.hwRender.ensureGl();
+      const createWebGL2Context = await loadWebGl2Context();
+      const { canvas } = createWebGL2Context(640, 480);
+      // Skip Emscripten's Safari WebGL2 workaround (breaks instanceof) by
+      // pre-setting the flag it checks.
+      canvas.getContextSafariWebGL2Fixed = canvas.getContext;
+      glCanvas = canvas;
+      this._glContextCreated = true;
+      // The env callback routes SET_HW_RENDER to this handler.
+      this.state.hwRender = this.hwRender;
+    }
+
+    const mod = await loadLibretroCore({ jsPath, wasmPath, glCanvas });
     this.mod = mod;
+
+    // Canvas HW-render cores: initialize the Emscripten GL context so `GLctx` is
+    // set BEFORE any GL call (the core's context_reset / first getParameter). Must
+    // run before _retro_init.
+    if (glCanvas && mod.GL) {
+      const handle = mod.GL.createContext(glCanvas, { majorVersion: 2 });
+      if (handle > 0) mod.GL.makeContextCurrent(handle);
+    }
+
     registerCallbacks({ mod, state: this.state, log: this.log });
     mod._retro_init();
     this.status.corePath = jsPath;
@@ -430,7 +464,18 @@ export class LibretroHost {
       : this.status.fbWidth / this.status.fbHeight;
     // timing.sample_rate is at offset +32 (double).
     this.status.audioSampleRate = mod.getValue(avInfoPtr + 32, "double");
+    // max_width/max_height (+8/+12) bound the FBO for HW-render cores (the core may
+    // render larger than base, e.g. N64 hi-res or PS1 internal upscale).
+    const maxW = mod.getValue(avInfoPtr + 8, "i32") || this.status.fbWidth;
+    const maxH = mod.getValue(avInfoPtr + 12, "i32") || this.status.fbHeight;
     mod._free(avInfoPtr);
+
+    // HW render: now that AV info is known, create the FBO the core renders into.
+    // createContext() also fires the core's context_reset (via dynCall) so it
+    // (re)builds its GL resources. The EGL context was already created in loadCore.
+    if (this.hwRender?.active) {
+      this.hwRender.createContext(maxW, maxH, this._glContextCreated);
+    }
 
     // Configure controller port 0 as joypad (some cores default to NONE).
     mod._retro_set_controller_port_device(0, RETRO_DEVICE_JOYPAD);
@@ -480,6 +525,7 @@ export class LibretroHost {
       let firstRefreshAt = -1;
       while (stepped < MAX_SETTLE) {
         mod._retro_run();
+        this._afterRun();
         stepped++;
         if (firstRefreshAt < 0 && this.state.lastFrame && this.state.lastFrame !== beforeRefreshSnapshot) {
           firstRefreshAt = stepped;
@@ -520,6 +566,7 @@ export class LibretroHost {
     if (this.status.paused) return 0;
     for (let i = 0; i < n; i++) {
       mod._retro_run();
+      this._afterRun();
       this.status.frameCount++;
     }
     if (this.state.lastFrame) {
@@ -527,6 +574,23 @@ export class LibretroHost {
       this.status.fbHeight = this.state.lastFrame.height;
     }
     return n;
+  }
+
+  /** Post-_retro_run hook: HW-render readback. The video callback set
+   *  state.hwFramePending during run; now (GL state stable) read back the FBO into
+   *  state.lastFrame as an RGBA frame. No-op for the 14 software cores. */
+  _afterRun() {
+    if (this.state.hwFramePending && this.hwRender?.active) {
+      this.state.hwFramePending = false;
+      const frame = this.hwRender.readbackFrame();
+      if (frame) {
+        this.state.lastFrame = {
+          width: frame.width, height: frame.height,
+          pitch: frame.width * 4, format: RETRO_PIXEL_FORMAT_XRGB8888,
+          pixels: frame.pixels, rgba: true,
+        };
+      }
+    }
   }
 
   /** Run exactly ONE frame to refresh the framebuffer, even while paused — for a
@@ -537,6 +601,7 @@ export class LibretroHost {
     const mod = this._needMod();
     this._needMedia();
     mod._retro_run();
+    this._afterRun();
     this.status.frameCount++;
     if (this.state.lastFrame) {
       this.status.fbWidth = this.state.lastFrame.width;
