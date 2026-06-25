@@ -22,6 +22,7 @@
 // Plain JS ESM + JSDoc. See internal-romdev/PORTING_MENTAL_MODELS.md Part 4.
 
 import { NES_REGISTERS } from "../platforms/common/registers.js";
+import { recompile } from "./recompile/index.js";
 
 /**
  * The 151 documented 6502 mnemonics. Anything da65 emits outside this set — or
@@ -375,73 +376,21 @@ export function sliceFirstRoutine(da65Asm) {
  *             seamCount: number, stubbed: string[] }}
  */
 export function recompileNesToSnes(da65Asm, opts = {}) {
-  const { body, equs, residue, instrCount, seamCount, entry: bodyEntry } = translateBody(da65Asm);
-
-  // Optionally translate the NES NMI handler as a second body (phase-2 runtime).
-  let nmiBody = null;
-  let nmiEntry = null;
-  let nmiEqus = [];
-  let nmiResidue = [];
-  let nmiInstr = 0;
-  let nmiSeam = 0;
-  if (opts.withRuntime && opts.nmiDa65Asm) {
-    const t = translateBody(opts.nmiDa65Asm);
-    nmiBody = t.body;
-    nmiEntry = t.entry;
-    nmiEqus = t.equs;
-    nmiResidue = t.residue;
-    nmiInstr = t.instrCount;
-    nmiSeam = t.seamCount;
-    // The two bodies may both define an entry named RECOMPILE_ENTRY (the synthetic
-    // fall-through label). Rename the NMI's so they don't collide in one image.
-    if (nmiEntry === "RECOMPILE_ENTRY") {
-      nmiBody = nmiBody.replace(/\bRECOMPILE_ENTRY\b/g, "RECOMPILE_NMI_ENTRY");
-      nmiEntry = "RECOMPILE_NMI_ENTRY";
-    }
-  }
-
-  // Equs (zero-page/external address aliases like `L001E = $001E`) are shared
-  // between the two bodies — emit the UNION once, de-duplicated, in the reset
-  // body's prefix; the NMI body carries none (a duplicate `=` is an asar error).
-  const seenEqu = new Set();
-  const allEqus = [...equs, ...nmiEqus].filter((e) => {
-    const name = e.split(/\s*=/)[0].trim();
-    if (seenEqu.has(name)) return false;
-    seenEqu.add(name);
-    return true;
+  // Delegate to the GENERIC engine (lift 6502 → IR → emit 65816). This is now a
+  // thin source/target-pinned wrapper kept for back-compat with the disasm tool +
+  // existing tests; the actual translation lives in analysis/recompile/. The
+  // generic path produces the same image (the 65816 emitter reproduces this
+  // module's emitMainAsm/emitSeam output) — see analysis/recompile/index.js.
+  // `nmiDa65Asm` is the old arg name; the generic engine calls it `nmiSourceAsm`.
+  return recompile(da65Asm, {
+    source: "nes",
+    target: "snes",
+    entry: opts.entry,
+    stubUndefined: opts.stubUndefined,
+    withShim: opts.withShim,
+    withRuntime: opts.withRuntime,
+    nmiSourceAsm: opts.nmiDa65Asm,
   });
-  const fullBody = (allEqus.length ? allEqus.join("\n") + "\n" : "") + body;
-  const fullNmiBody = nmiBody; // equs already hoisted above
-  // entry: caller override > the first-instruction label translateBody fixed >
-  // first label in the body (legacy fallback) > a synthetic name. bodyEntry is
-  // the correct one — it anchors the reset vector to the routine's OPENING
-  // instruction, not a later branch target.
-  const entry = opts.entry || bodyEntry || entryLabel(fullBody) || "RECOMPILE_ENTRY";
-
-  // Stub callees undefined across BOTH bodies (so a routine the reset calls that
-  // happens to be defined inside the NMI body — or vice versa — is not stubbed).
-  const stubUndefined = opts.stubUndefined !== false;
-  const combined = fullBody + (fullNmiBody ? "\n" + fullNmiBody : "");
-  const stubbed = stubUndefined ? findUndefinedLabels(combined, allEqus) : [];
-  const stubsAsm = stubbed.length ? "\n" + emitStubs(stubbed) : "";
-  const withStubs = fullBody + stubsAsm;
-
-  const mainAsm = emitMainAsm({
-    body: withStubs,
-    resetLabel: entry,
-    withShim: !!opts.withShim,
-    withRuntime: !!opts.withRuntime,
-    nmiBody: fullNmiBody,
-  });
-  const seamAsm = emitSeam();
-  return {
-    mainAsm, seamAsm,
-    residue: [...residue, ...nmiResidue],
-    entry, nmiEntry,
-    instrCount: instrCount + nmiInstr,
-    seamCount: seamCount + nmiSeam,
-    stubbed,
-  };
 }
 
 /**

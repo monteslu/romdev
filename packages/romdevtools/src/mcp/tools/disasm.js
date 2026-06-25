@@ -1227,12 +1227,19 @@ async function pointerTableCore(args) {
 }
 
 async function recompileCore(args) {
-  const { platform, targetPlatform } = args;
+  const { platform } = args;
+  const targetPlatform = args.targetPlatform || "snes";
   if (platform && platform !== "nes") {
-    throw new Error(`disasm({target:'recompile'}): only NES source is supported in phase 1 (got '${platform}').`);
+    throw new Error(`disasm({target:'recompile'}): only NES source is supported today (got '${platform}'). The engine is generic (lift→IR→emit); other source lifters land as they're built.`);
   }
-  if (targetPlatform && targetPlatform !== "snes") {
-    throw new Error(`disasm({target:'recompile'}): only SNES target is supported in phase 1 (got '${targetPlatform}').`);
+  // The generic engine targets any platform with a registered emitter. SNES is the
+  // 1:1 emulation-mode path (with the PPU shim/runtime render layers); Genesis is a
+  // real 6502→68000 LOGIC translation (presentation seam stubbed — verify with the
+  // RAM-diff oracle, frame({op:'compareRam'})).
+  const { supportedPairs } = await import("../../analysis/recompile/index.js");
+  const validTargets = new Set(supportedPairs().filter((p) => p.startsWith("nes→")).map((p) => p.split("→")[1]));
+  if (!validTargets.has(targetPlatform)) {
+    throw new Error(`disasm({target:'recompile'}): no emitter for target '${targetPlatform}'. Supported NES→ targets: ${[...validTargets].join(", ")}.`);
   }
   const romPath = requireRomPath(args);
   const rom = new Uint8Array(await readFile(romPath));
@@ -1289,8 +1296,12 @@ async function recompileCore(args) {
   // The phase-2 runtime (withRuntime) implies the shim (it needs the BG + tiles
   // the shim uploads); enabling it turns the static port into a LIVE one (sprites
   // animate each vblank, the game's NMI runs). withShim alone is the static path.
-  const wantRuntime = args.withRuntime === true;
-  const wantShim = args.withShim === true || wantRuntime;
+  // The PPU shim/runtime are NES-PPU-on-SNES render layers — SNES target only. A
+  // Genesis (or other) target is a LOGIC port (presentation seam stubbed); verify
+  // it with the RAM-diff oracle, not a rendered screen.
+  const snesTarget = targetPlatform === "snes";
+  const wantRuntime = snesTarget && args.withRuntime === true;
+  const wantShim = snesTarget && (args.withShim === true || wantRuntime);
   let shimAsm = null;
   let shimInfo = null;
   if (wantShim) {
@@ -1328,11 +1339,14 @@ async function recompileCore(args) {
     }
   }
 
-  const { mainAsm, seamAsm, residue, entry, nmiEntry, instrCount, seamCount, stubbed } =
-    recompileNesToSnes(da65Asm, {
+  const { recompile } = await import("../../analysis/recompile/index.js");
+  const { mainAsm, seamAsm, seamFile, residue, entry, nmiEntry, instrCount, seamCount, stubbed, targetIsa } =
+    recompile(da65Asm, {
+      source: "nes",
+      target: targetPlatform,
       withShim: !!shimAsm,
       withRuntime: !!runtimeAsm,
-      nmiDa65Asm,
+      nmiSourceAsm: nmiDa65Asm,
     });
 
   const runtimeOn = !!runtimeAsm;
@@ -1348,7 +1362,7 @@ async function recompileCore(args) {
       await writeFile(rtPath, runtimeAsm);
       written.runtimeAsm = rtPath;
     } else {
-      const seamPath = nodePath.join(args.outputDir, "nes_seam.asm");
+      const seamPath = nodePath.join(args.outputDir, seamFile);
       await writeFile(seamPath, seamAsm);
       written.seamAsm = seamPath;
     }
@@ -1362,30 +1376,36 @@ async function recompileCore(args) {
   const shimDrawn = !!shimAsm;
   return jsonContent({
     ok: true,
-    source: "nes", target: "snes",
+    source: "nes", target: targetPlatform, targetIsa,
     resetVector: "$" + resetVec.toString(16).toUpperCase().padStart(4, "0"),
     entry,
     ...(runtimeOn ? { nmiEntry, nmi: nmiInfo } : {}),
     instrCount, seamCount,
     stubbedCallees: stubbed,
     residue,
-    shim: shimDrawn
-      ? { applied: true, phase: runtimeOn ? "live-background" : "static-boot-picture", tiles: shimInfo.tileCount, note: "Emitted the NES-PPU-on-SNES shim (converted tiles/nametable/palette → VRAM/CGRAM, BG1 on). It draws the original ROM's boot screen background." }
-      : { applied: false, reason: shimInfo?.error || "withShim not set (default off)", note: "No PPU shim — the port runs the logic but renders blank. Pass withShim:true (static) or withRuntime:true (live) to draw the original ROM's picture on SNES." },
-    runtime: runtimeOn
-      ? { applied: true, phase: "live-sprites", gameNmi: nmiInfo?.gameNmi || null, note: "PHASE 2: the per-frame runtime is wired — each vblank it flushes the game's shadow OAM to SNES sprites and runs the game's NMI handler, so sprites ANIMATE (not a static screenshot). Background is from the shim; live nametable streaming is phase 3. Build all emitted files together with build({platform:'snes'})." }
-      : { applied: false, note: "Static port (no per-frame runtime). Pass withRuntime:true to animate sprites + run the game's NMI each vblank." },
+    ...(snesTarget ? {
+      shim: shimDrawn
+        ? { applied: true, phase: runtimeOn ? "live-background" : "static-boot-picture", tiles: shimInfo.tileCount, note: "Emitted the NES-PPU-on-SNES shim (converted tiles/nametable/palette → VRAM/CGRAM, BG1 on). It draws the original ROM's boot screen background." }
+        : { applied: false, reason: shimInfo?.error || "withShim not set (default off)", note: "No PPU shim — the port runs the logic but renders blank. Pass withShim:true (static) or withRuntime:true (live) to draw the original ROM's picture on SNES." },
+      runtime: runtimeOn
+        ? { applied: true, phase: "live-sprites", gameNmi: nmiInfo?.gameNmi || null, note: "PHASE 2: the per-frame runtime is wired — each vblank it flushes the game's shadow OAM to SNES sprites and runs the game's NMI handler, so sprites ANIMATE (not a static screenshot). Background is from the shim; live nametable streaming is phase 3. Build all emitted files together with build({platform:'snes'})." }
+        : { applied: false, note: "Static port (no per-frame runtime). Pass withRuntime:true to animate sprites + run the game's NMI each vblank." },
+    } : {
+      port: { kind: "logic-recompile", targetIsa, note: `LOGIC port: the NES 6502 was TRANSLATED to ${targetIsa} (not emulated) — game logic runs, the PPU/APU presentation seam is STUBBED. Build with the platform's toolchain, then VERIFY with the RAM-diff oracle: load the original NES ROM and this port side by side and frame({op:'compareRam'}) the work-RAM mirror. Presentation (a ${targetPlatform} render runtime) is a separate layer.` },
+    }),
     note:
-      `Recompiled the NES reset${runtimeOn ? " + NMI" : ""} routine(s) to 65816 (asar). ${instrCount} instrs, ${seamCount} PPU/APU seam calls, ` +
+      `Recompiled the NES reset${runtimeOn ? " + NMI" : ""} routine(s) to ${targetIsa}. ${instrCount} instrs, ${seamCount} PPU/APU seam calls, ` +
       `${stubbed.length} callee(s) stubbed (isolation), ${residue.length} residue line(s). ` +
-      (runtimeOn
-        ? "PHASE 2: the 6502 logic runs in emulation mode; the runtime flushes sprites + runs the game NMI every vblank, and the shim draws the BG — so the port is LIVE (sprites move). "
-        : shimDrawn
-          ? `The 6502 logic runs in 65816 EMULATION mode; the shim draws the converted static boot picture (${shimInfo.tileCount} tiles). `
-          : "The 6502 logic runs in 65816 EMULATION mode; the hardware seam is STUBBED so the port renders blank. ") +
+      (snesTarget
+        ? (runtimeOn
+          ? "PHASE 2: the 6502 logic runs in emulation mode; the runtime flushes sprites + runs the game NMI every vblank, and the shim draws the BG — so the port is LIVE (sprites move). "
+          : shimDrawn
+            ? `The 6502 logic runs in 65816 EMULATION mode; the shim draws the converted static boot picture (${shimInfo.tileCount} tiles). `
+            : "The 6502 logic runs in 65816 EMULATION mode; the hardware seam is STUBBED so the port renders blank. ")
+        : `The 6502 logic is TRANSLATED to ${targetIsa} (real ISA translation, not emulation); the PPU/APU seam is STUBBED so it's a LOGIC port — verify with frame({op:'compareRam'}) vs the NES original. `) +
       (written
-        ? `Wrote ${Object.values(written).join(" + ")}. Build all of them together with build({platform:'snes'}); then loadMedia + frame({op:'sideBySide'}) vs the NES original.`
-        : `Pass outputDir to write the .asm files to disk for build({platform:'snes'}).`),
+        ? `Wrote ${Object.values(written).join(" + ")}. Build with the ${targetPlatform} toolchain; then loadMedia + frame({op:'compareRam'}) vs the NES original.`
+        : `Pass outputDir to write the .asm files to disk for build({platform:'${targetPlatform}'}).`),
     ...(written ? { written } : { mainAsm, ...(runtimeOn ? { runtimeAsm } : { seamAsm }), ...(shimAsm ? { shimAsm } : {}) }),
   });
 }
@@ -1495,7 +1515,7 @@ export function registerDisasmTools(server, z) {
       annotateFileOffsets: z.boolean().default(true).describe("target=rom: append `; @0xNNNN` file offset to every line (for romPatch)."),
       // project
       outputDir: z.string().optional().describe("target=project: directory to write the project into (one .asm per region). target=recompile: directory to write main.asm + nes_seam.asm for build({platform:'snes'})."),
-      targetPlatform: z.string().optional().describe("target=recompile: the platform to emit (phase 1: only 'snes'). The source platform is `platform` (phase 1: only 'nes')."),
+      targetPlatform: z.string().optional().describe("target=recompile: the platform to EMIT (default 'snes'). The engine is generic (lift source→IR→emit target): 'snes' = 1:1 emulation-mode port with the PPU render layers (withShim/withRuntime); 'genesis' = real 6502→68000 LOGIC translation (presentation stubbed, verify with frame({op:'compareRam'})). Source `platform` is 'nes' today; more source lifters land as built."),
       withShim: z.boolean().default(false).describe("target=recompile: phase-1 STATIC render (default off). Emit the NES-PPU-on-SNES shim — boots the original ROM, converts its tiles/nametable/palette to SNES VRAM/CGRAM data + a 65816 upload routine that draws the original's STATIC boot screen on SNES (verified on snes9x). Draws the first screen only; sprites don't animate. For a LIVE port use withRuntime instead."),
       withRuntime: z.boolean().default(false).describe("target=recompile: phase-2 LIVE render (default off). Implies withShim (BG) and adds the per-frame runtime: each vblank it flushes the game's shadow OAM to SNES sprites and runs the game's own NMI handler, so SPRITES ANIMATE and the game's per-frame logic runs — the port plays, not just boots to a screenshot. Background is static from the shim; live nametable/scroll streaming is phase 3. Verified on snes9x."),
       // references / cfg / xrefs
