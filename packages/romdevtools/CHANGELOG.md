@@ -4,6 +4,30 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.43.0 — 2026-06-25
+
+### Port engine is now GENERIC (any source → any target), not NES→SNES-only
+
+The recompiler was rebuilt around a small intermediate representation (IR): a
+LIFTER turns a source-CPU disassembly into IR; an EMITTER turns IR into target-CPU
+assembly. Adding a platform PAIR is now one lifter + one emitter, not a bespoke
+recompiler. NES→SNES and the new NES→Genesis run through the *same* pipeline.
+
+- **`disasm({target:'recompile', targetPlatform})`** — `'snes'` is the 1:1
+  emulation-mode port (with the PPU shim/runtime render layers); **`'genesis'` is a
+  real 6502→68000 LOGIC translation** — `lda #$42`→`move.b #$42,d0`,
+  `sta $0010`→`move.b d0,($FF0010).l`, branches/jsr/jmp mapped, the NES address
+  space mapped into Genesis work RAM at `$FF0000` (which IS the Tier-1 RAM-diff
+  oracle's mirror). Verified end-to-end: a real NES homebrew's reset routine
+  translates to m68k (0 residue), builds with vasm68k, and BOOTS in gpgx with the
+  translated logic executing (RAM writes land).
+- The presentation seam (PPU/APU) is stubbed for non-SNES targets — it's a LOGIC
+  port; verify with `frame({op:'compareRam'})` vs the NES original. A render
+  runtime per target is a later layer (NES-PPU-on-SNES is the template).
+- Unsupported targets fail with the supported set. `recompileNesToSnes` now
+  delegates to the generic engine (same image; existing SNES tests unchanged).
+- New: `src/analysis/recompile/` (ir, lift-6502, emit-65816, emit-m68k, index).
+
 ## 0.42.0 — 2026-06-24
 
 ### v0.41.0 feedback batch + the NES→SNES port engine
