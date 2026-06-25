@@ -204,18 +204,38 @@ export async function cheatsApplyCore({ code, desc, path: romPath, index, enable
       const { code: codeToApply, appliedAs, reencodedFrom } = resolveCheatCodeForApply(rawCode, plat);
 
       const unencodable = appliedAs === "rom-unencodable";
-      const slot = index != null ? index : host.listActiveCheats().length;
+      // Slot selection: an explicit `index` wins. Otherwise, if an active cheat
+      // already targets the SAME address, REUSE its slot — applying `005C:03` over
+      // an active `005C:02` should REPLACE the freeze, not stack a second one that
+      // fights for the same byte (v0.41.0 feedback 213831 #3). Only append a new
+      // slot when nothing targets this address yet.
+      const newAddr = cheatAddress(codeToApply);
+      let replacedSlot = null;
+      let slot;
+      if (index != null) {
+        slot = index;
+      } else if (newAddr != null) {
+        const existing = host.listActiveCheats().find((c) => cheatAddress(c.code) === newAddr);
+        if (existing) { slot = existing.index; replacedSlot = existing.index; }
+        else slot = host.listActiveCheats().length;
+      } else {
+        slot = host.listActiveCheats().length;
+      }
       // Still install it (the raw poke may be what the user wants), but warn.
       host.setCheat(slot, codeToApply, enabled);
       return {
         applied: enabled,
         slot,
+        ...(replacedSlot != null ? { replacedSameAddress: true } : {}),
         code: codeToApply,
         appliedAs,
         ...(reencodedFrom ? { reencodedFrom } : {}),
         ...(resolvedDesc ? { desc: resolvedDesc } : {}),
         active: host.listActiveCheats(),
-        note: (reencodedFrom
+        note: (replacedSlot != null
+          ? `REPLACED the active cheat on the same address (slot ${replacedSlot}) — applying a new freeze on an address that already had one swaps it rather than stacking two that fight over the byte. To remove a single freeze without clearing the rest, use cheats({op:'remove', code|slot}). `
+          : "") +
+          (reencodedFrom
           ? `Raw code ${reencodedFrom} names a ROM address — re-encoded to the native ROM-patch device (${codeToApply}) so the core installs a read-intercept (a raw ADDR:VAL on a ROM address is treated as a RAM poke and would silently no-op). `
           : unencodable
           ? `WARNING: this raw code names a ROM address but couldn't be re-encoded to a ROM-patch code (a ROM patch needs a COMPARE byte — pass ADDR:VAL:COMPARE). As applied it's a RAM poke and will likely NO-OP on this read-only ROM address. Read the current byte and supply it as the compare, or use makeCheat. `
@@ -223,6 +243,53 @@ export async function cheatsApplyCore({ code, desc, path: romPath, index, enable
           "Applied in volatile core state — the ROM file is untouched; reset / loadState / clearCheats removes it. " +
           "Screenshot to see the effect (and to verify the cheat's address label is correct). " +
           "`appliedAs` tells you how it went in: 'ram' poke, 'rom' read-intercept, 'raw' core-decoded code, or 'rom-unencodable' (a ROM address that couldn't be made into a working ROM patch).",
+      };
+}
+
+/** The CPU/RAM address a cheat code targets, or null if undecodable. Used to
+ *  detect same-address freezes (replace, not stack) + for op:'remove' by code. */
+function cheatAddress(code) {
+  if (typeof code !== "string") return null;
+  // raw ADDR:VAL[:COMPARE] — the address is the first field.
+  if (code.includes(":")) {
+    const a = parseInt(code.split(":")[0], 16);
+    return Number.isNaN(a) ? null : (a & 0xffff);
+  }
+  // a device code (Game Genie / PAR / GameShark) — decode it platform-agnostically.
+  try {
+    const d = decodeCode(code, null);
+    return d && d.address != null ? (d.address & 0xffff) : null;
+  } catch { return null; }
+}
+
+/** op:'remove' — disable ONE active cheat (by slot index or by code/address),
+ *  leaving the rest in place. The single-slot complement to op:'clear' (nuke-all).
+ *  v0.41.0 feedback 213831 #3. */
+export async function cheatsRemoveCore({ slot, code }, sessionKey) {
+      const host = getHost(sessionKey);
+      if (!host.listActiveCheats) return { removed: false, reason: "no cheat interface on this core", active: [] };
+      const active = host.listActiveCheats();
+      let target = null;
+      if (slot != null) {
+        target = active.find((c) => c.index === slot);
+      } else if (code != null) {
+        // match by exact code OR by the address the code targets (so a user can
+        // remove '005C:02' by passing '005C:03', '$5C', or the device code).
+        const addr = cheatAddress(code);
+        target = active.find((c) => c.code === code) || (addr != null ? active.find((c) => cheatAddress(c.code) === addr) : null);
+      } else {
+        throw new Error("cheats({op:'remove'}): provide `slot` (index) or `code` (the cheat to remove).");
+      }
+      if (!target) {
+        return { removed: false, reason: `no active cheat matching ${slot != null ? `slot ${slot}` : `code '${code}'`}`, active };
+      }
+      host.setCheat(target.index, target.code, false); // disable that slot only
+      return {
+        removed: true,
+        slot: target.index,
+        code: target.code,
+        active: host.listActiveCheats(),
+        note: "Disabled that one cheat (volatile); the rest stay active. Use op:'clear' to remove ALL, op:'apply' to add/swap.",
       };
 }
 
@@ -319,7 +386,7 @@ export function registerCheatTools(server, z, sessionKey) {
     "round-trip `verified`. RAM cheat = address+value; ROM/code cheat = also `compare` (the byte currently there — " +
     "read it first).",
     {
-      op: z.enum(["lookup", "search", "apply", "clear", "make"]).describe("lookup THIS game's DB cheats; search the DB by game name; apply a cheat live; clear all cheats; make a new code."),
+      op: z.enum(["lookup", "search", "apply", "remove", "clear", "make"]).describe("lookup THIS game's DB cheats; search the DB by game name; apply a cheat live (replaces an active cheat on the SAME address); remove ONE active cheat (by slot/code); clear ALL cheats; make a new code."),
       // lookup
       path: z.string().optional().describe("op=lookup/apply(+desc): absolute ROM path. lookup sniffs platform+name from it."),
       filter: z.string().optional().describe("op=lookup: case-insensitive substring filter on cheat descriptions."),
@@ -330,8 +397,9 @@ export function registerCheatTools(server, z, sessionKey) {
       // apply
       code: z.string().optional().describe("op=apply: raw cheat code (ADDR:VAL or a Game Genie code). Provide code OR desc."),
       desc: z.string().optional().describe("op=apply: description of a matched cheat (requires `path`). First substring match is applied."),
-      index: z.number().int().min(0).optional().describe("op=apply: cheat slot (default: next free slot). Reuse a slot to replace it."),
+      index: z.number().int().min(0).optional().describe("op=apply: cheat slot (default: reuse the slot of an active cheat on the same address, else next free). Reuse a slot to replace it."),
       enabled: z.boolean().default(true).describe("op=apply: false disables the slot instead of enabling."),
+      slot: z.number().int().min(0).optional().describe("op=remove: the active-cheat slot to disable (from apply's `slot` / active[].index). Provide slot OR code."),
       // make / search / lookup share `platform`
       platform: z.enum([...MAKE_CHEAT_PLATFORMS]).optional().describe("op=lookup: override platform detection. op=search: OPTIONAL — omit to search ALL platforms (each match returns its own `platform`); pass one only to scope the search. op=make: REQUIRED — the target platform (all 14 tier-1)."),
       address: z.number().int().min(0).optional().describe("op=make: address to cheat (RAM addr, or the ROM addr to patch)."),
@@ -345,6 +413,7 @@ export function registerCheatTools(server, z, sessionKey) {
         case "lookup": return jsonContent(await cheatsLookupCore(args));
         case "search": return jsonContent(await cheatsSearchCore(args));
         case "apply":  return attachObserverFrame(jsonContent(await cheatsApplyCore(args, sessionKey)), getHost(sessionKey), "cheat applied");
+        case "remove": return jsonContent(await cheatsRemoveCore(args, sessionKey));
         case "clear":  return jsonContent(await cheatsClearCore(args, sessionKey));
         case "make":   return jsonContent(await cheatsMakeCore(args));
         default: throw new Error(`cheats: unknown op '${args.op}'`);
