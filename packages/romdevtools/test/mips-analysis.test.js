@@ -122,3 +122,32 @@ test("PS1 PS-EXE header is stripped + analyzed little-endian", { timeout: 60000 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("PS1 RE round-trips: functions are real VAs + CFG/decompile work at them", { timeout: 120000 }, async () => {
+  // build a multi-function PS1 program with the bundled lib so there are real calls
+  const { buildForPlatform } = await import("../src/toolchains/index.js");
+  const libDir = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "src", "platforms", "ps1", "lib", "c");
+  let libc, libh;
+  try { libc = await readFile(path.join(libDir, "psx.c"), "utf8"); libh = await readFile(path.join(libDir, "psx.h"), "utf8"); }
+  catch { console.log("no ps1 lib; skipping"); return; }
+  const src = `#include "psx.h"\nint main(){ psx_init(); psx_srand(1); Vec3 v={FIX(1),FIX(1),FIX(1)}; for(;;){ psx_clear(RGB(1,2,3)); psx_camera(0,0,FIX(-5),0,0); psx_tri3d(v,v,v,RGB(9,9,9)); psx_number(8,8,psx_rand(),RGB(5,5,5)); psx_vsync(); } }`;
+  const b = await buildForPlatform({ platform: "ps1", language: "c", sources: { "main.c": src, "psx.c": libc }, includes: { "psx.h": libh } });
+  if (!b.ok) { console.log("ps1 build failed (toolchain not built?); skipping"); return; }
+  const dir = await mkdtemp(path.join(tmpdir(), "ps1re-"));
+  try {
+    const p = path.join(dir, "g.exe");
+    await writeFile(p, b.binary);
+    const fns = (await analyzeFunctions(p, "ps1")).functions;
+    // multiple functions discovered (jal-following works), all at real PS1 VAs (0x80...)
+    assert.ok(fns.length >= 3, `discovered multiple functions (jal-following works): ${fns.length}`);
+    assert.ok(fns.every((f) => (f.address >>> 0) >= 0x80010000), "every function address is a real PS1 VA (0x80010000+), not a file offset");
+    const fn = fns.find((f) => !f.looksLikeData && f.size > 20) || fns[0];
+    const cfg = await analyzeCfg(p, fn.address, "ps1");
+    assert.ok(cfg.blockCount >= 1, "CFG resolves at the VA");
+    assert.ok((cfg.nodes[0].address >>> 0) >= 0x80010000, "CFG node addresses are VAs");
+    const dc = await analyzeDecompile(p, fn.address, "ps1");
+    assert.ok(dc.code && dc.code.length > 50, "decompile produces C at the VA (round-trips VA→fileOffset)");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

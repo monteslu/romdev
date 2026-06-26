@@ -161,6 +161,17 @@ function analysisSeed({ arch, codeStart }) {
   return "aaa";
 }
 
+/** MIPS analysis runs FLAT (rizin ignores -B on a raw malloc:// buffer), so rizin
+ *  reports FILE-OFFSET addresses. For PS1 loadContext left-pads the .text so flat
+ *  offset == the VA's low 20 bits (see there); we add the VA's HIGH bits back as
+ *  `rebase` so callers get real VAs that round-trip through the decompile
+ *  VA→fileOffset math. N64 (.z64) keeps its absolute VAs baked into the code and is
+ *  analyzed flat from codeStart, so no rebase. */
+function mipsAnalysisBase({ arch, platform, loadBase, codeStart }) {
+  const rebase = (arch === "mips" && platform === "ps1" && loadBase) ? (loadBase & 0xfff00000) >>> 0 : 0;
+  return { baddr: undefined, seedAt: codeStart, rebase };
+}
+
 /**
  * Normalize an N64 ROM to BIG-ENDIAN (.z64) byte order. Dumps come in three
  * orders, distinguished by the first 4 bytes of the header:
@@ -248,7 +259,22 @@ async function loadContext(romPath, platformOverride) {
   if (platform === "ps1" && romBytes.length >= 0x800 &&
       romBytes[0] === 0x50 && romBytes[1] === 0x53 && romBytes[2] === 0x2d && romBytes[3] === 0x58) { // "PS-X"
     loadBase = (romBytes[0x18] | (romBytes[0x19] << 8) | (romBytes[0x1a] << 16) | (romBytes[0x1b] << 24)) >>> 0;
-    romBytes = romBytes.subarray(0x800);
+    const text = romBytes.subarray(0x800);
+    // rizin ignores -B on a raw malloc:// buffer, so it addresses flat from 0. PS1
+    // jal targets are ABSOLUTE VAs (e.g. jal 0x80010518) — to let rizin follow them,
+    // left-pad the .text by the load address's low 20 bits so flat offset N == the
+    // VA's low bits (jal masks to a 28-bit region). The high bits (0x80000000) are
+    // added back as `rebase`. Without this, every cross-function call dangles and
+    // only the entry blob is discovered. (Cap the pad so a weird t_addr can't OOM.)
+    const lowPad = loadBase & 0x000fffff;
+    if (lowPad > 0 && lowPad <= 0x200000) {
+      const padded = new Uint8Array(lowPad + text.length);
+      padded.set(text, lowPad);
+      romBytes = padded;
+      codeStart = lowPad;
+    } else {
+      romBytes = text;
+    }
   }
 
   // A6: container/format sniff. Some dumps are interleaved/headered such that a
@@ -303,14 +329,11 @@ function hx(n) { return "0x" + (n >>> 0).toString(16); }
  */
 export async function analyzeFunctions(romPath, platformOverride) {
   const { platform, romBytes, arch, bits, endian, loadBase, codeStart, warnings } = await loadContext(romPath, platformOverride);
-  // MIPS seeds analysis at the code-start file offset (aaa finds nothing on a raw
-  // N64/PS1 image), so it must run FLAT (no baddr rebase) for those offsets to line
-  // up; the 8/16-bit `aaa` path keeps its bin-loader base.
-  const baddr = arch === "mips" ? undefined : (loadBase || undefined);
-  const fns = await runRizinJson({ romBytes, arch, bits, endian, baddr, commands: `${analysisSeed({ arch, codeStart })}; aflj` });
+  const { baddr, seedAt, rebase } = mipsAnalysisBase({ arch, platform, loadBase, codeStart });
+  const fns = await runRizinJson({ romBytes, arch, bits, endian, baddr, commands: `${analysisSeed({ arch, codeStart: seedAt })}; aflj` });
   const functions = fns.map((f) => ({
-    address: f.offset,
-    addressHex: hx(f.offset),
+    address: (f.offset + rebase) >>> 0,
+    addressHex: hx((f.offset + rebase) >>> 0),
     name: f.name,
     size: f.size,
     nbbs: f.nbbs,           // basic-block count
@@ -354,27 +377,29 @@ export async function analyzeCfg(romPath, address, platformOverride) {
   // blocks) is the fall-through. This is the structured CFG source — `agf json`
   // only gives a text body blob with untyped out_nodes.
   // MIPS: seed the call graph first (the address is a vaddr from `functions`,
-  // which rizin recovers during `aac`), and run flat.
-  const baddr = arch === "mips" ? undefined : (loadBase || undefined);
+  // which rizin recovers during `aac`). PS1 rebases to loadBase so the vaddr lines up.
+  const { baddr, seedAt, rebase } = mipsAnalysisBase({ arch, platform, loadBase, codeStart });
+  const flat = ((address >>> 0) - rebase) >>> 0; // VA → flat offset rizin uses
+  const rb = (a) => (a == null ? a : (a + rebase) >>> 0);
   const blocks = await runRizinJson({
     romBytes, arch, bits, endian, baddr,
-    commands: `${analysisSeed({ arch, codeStart })}; af @ ${hx(address)}; afbj @ ${hx(address)}`,
+    commands: `${analysisSeed({ arch, codeStart: seedAt })}; af @ ${hx(flat)}; afbj @ ${hx(flat)}`,
   });
   if (!Array.isArray(blocks) || blocks.length === 0) {
     return { platform, arch, address, addressHex: hx(address), nodes: [], edges: [], note: "no function/blocks at address" };
   }
   const nodes = blocks.map((b) => ({
-    id: b.addr,
-    address: b.addr,
-    addressHex: hx(b.addr),
+    id: rb(b.addr),
+    address: rb(b.addr),
+    addressHex: hx(rb(b.addr)),
     size: b.size,
     ninstr: b.ninstr,
   }));
   const edges = [];
   for (const b of blocks) {
     const conditional = b.fail != null;
-    if (b.jump != null) edges.push({ from: b.addr, to: b.jump, type: conditional ? "branch_true" : "jump_or_fall" });
-    if (b.fail != null) edges.push({ from: b.addr, to: b.fail, type: "branch_false" });
+    if (b.jump != null) edges.push({ from: rb(b.addr), to: rb(b.jump), type: conditional ? "branch_true" : "jump_or_fall" });
+    if (b.fail != null) edges.push({ from: rb(b.addr), to: rb(b.fail), type: "branch_false" });
   }
   return {
     platform, arch,
@@ -391,10 +416,12 @@ export async function analyzeCfg(romPath, address, platformOverride) {
 export async function analyzeXrefs(romPath, address, platformOverride) {
   if (address == null) throw new Error("analyze xrefs: address required");
   const { platform, romBytes, arch, bits, endian, loadBase, codeStart } = await loadContext(romPath, platformOverride);
-  const baddr = arch === "mips" ? undefined : (loadBase || undefined);
+  const { baddr, seedAt, rebase } = mipsAnalysisBase({ arch, platform, loadBase, codeStart });
+  const flat = ((address >>> 0) - rebase) >>> 0;
+  const rb = (a) => (a == null ? a : (a + rebase) >>> 0);
   let refs;
   try {
-    refs = await runRizinJson({ romBytes, arch, bits, endian, baddr, commands: `${analysisSeed({ arch, codeStart })}; axtj @ ${hx(address)}` });
+    refs = await runRizinJson({ romBytes, arch, bits, endian, baddr, commands: `${analysisSeed({ arch, codeStart: seedAt })}; axtj @ ${hx(flat)}` });
   } catch (e) {
     // axtj prints nothing (not even `[]`) when there are zero refs → our JSON
     // guard throws. Treat "no JSON" as "no refs".
@@ -402,9 +429,9 @@ export async function analyzeXrefs(romPath, address, platformOverride) {
     else throw e;
   }
   const out = (refs ?? []).map((r) => ({
-    from: r.from,
-    fromHex: hx(r.from),
-    to: r.to,
+    from: rb(r.from),
+    fromHex: hx(rb(r.from)),
+    to: rb(r.to),
     type: (r.type || "").toLowerCase(), // CALL / CODE / DATA / STRING
     opcode: r.opcode,
   }));
@@ -417,23 +444,24 @@ export async function analyzeXrefs(romPath, address, platformOverride) {
  */
 export async function analyzeStructure(romPath, platformOverride) {
   const { platform, romBytes, arch, bits, endian, loadBase, codeStart } = await loadContext(romPath, platformOverride);
-  const baddr = arch === "mips" ? undefined : (loadBase || undefined);
-  const seed = analysisSeed({ arch, codeStart });
+  const { baddr, seedAt, rebase } = mipsAnalysisBase({ arch, platform, loadBase, codeStart });
+  const seed = analysisSeed({ arch, codeStart: seedAt });
   const [fns, strings, entries] = await Promise.all([
     runRizinJson({ romBytes, arch, bits, endian, baddr, commands: `${seed}; aflj` }).catch(() => []),
     runRizinJson({ romBytes, arch, bits, endian, baddr, commands: `${seed}; izj` }).catch(() => []),
     runRizinJson({ romBytes, arch, bits, baddr, commands: `${seed}; iej` }).catch(() => []),
   ]);
+  const rb = (a) => (a == null ? a : (a + rebase) >>> 0);
   return {
     platform, arch,
     functionCount: Array.isArray(fns) ? fns.length : 0,
     stringCount: Array.isArray(strings) ? strings.length : 0,
-    entrypoints: (Array.isArray(entries) ? entries : []).map((e) => ({ address: e.vaddr, addressHex: hx(e.vaddr) })),
+    entrypoints: (Array.isArray(entries) ? entries : []).map((e) => ({ address: rb(e.vaddr), addressHex: hx(rb(e.vaddr)) })),
     functions: (Array.isArray(fns) ? fns : []).slice(0, 512).map((f) => ({
-      address: f.offset, addressHex: hx(f.offset), name: f.name, size: f.size, callers: f.indegree ?? 0,
+      address: rb(f.offset), addressHex: hx(rb(f.offset)), name: f.name, size: f.size, callers: f.indegree ?? 0,
     })),
     strings: (Array.isArray(strings) ? strings : []).slice(0, 256).map((s) => ({
-      address: s.vaddr, addressHex: hx(s.vaddr), value: s.string,
+      address: rb(s.vaddr), addressHex: hx(rb(s.vaddr)), value: s.string,
     })),
   };
 }

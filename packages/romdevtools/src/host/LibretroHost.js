@@ -892,6 +892,19 @@ export class LibretroHost {
 
   readMemory(region, offset, length) {
     const mod = this._needMod();
+    // PS1 GPU VRAM (1024×512×16bpp = 1MB) isn't on the RETRO_MEMORY interface; the
+    // rebuilt pcsx core exposes it via romdev_vram_get. Serve video_ram from there.
+    if (region === "video_ram" && typeof mod._romdev_vram_get === "function") {
+      const SIZE = 1024 * 512 * 2;
+      if (offset < 0 || offset + length > SIZE) {
+        throw new RangeError(`read out of bounds: offset=${offset} len=${length} size=${SIZE}`);
+      }
+      const p = mod._malloc(SIZE);
+      try {
+        mod._romdev_vram_get(p, SIZE / 2);
+        return new Uint8Array(mod.HEAPU8.buffer, p + offset, length).slice();
+      } finally { mod._free(p); }
+    }
     const id = MemoryRegionToRetro[region];
     if (id === undefined) throw new Error(this._unknownRegionError(region));
     const ptr = mod._retro_get_memory_data(id);
