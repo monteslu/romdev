@@ -1451,6 +1451,26 @@ export class LibretroHost {
    * instruction (ARM: its pipeline PC, the same convention breakpoint
    * addresses use). Pass clear to reset the kind.
    */
+  /** True when the loaded MIPS core (n64/ps1) exposes the live R3000/R4300 register
+   *  snapshot (the cheat+regsnap-enabled romdev build). */
+  mipsRegsSupported() {
+    return !!(this.mod && typeof this.mod._romdev_mips_regs_get === "function");
+  }
+
+  /** Read the live MIPS register file: 32 GPRs + LO + HI + PC, as a Uint32Array(35).
+   *  null if the core doesn't expose it (older build). */
+  getMipsRegs() {
+    const mod = this.mod;
+    if (!mod || typeof mod._romdev_mips_regs_get !== "function") return null;
+    const ptr = mod._malloc(35 * 4);
+    try {
+      mod._romdev_mips_regs_get(ptr);
+      return new Uint32Array(mod.HEAPU8.buffer, ptr, 35).slice();
+    } finally {
+      mod._free(ptr);
+    }
+  }
+
   getRegSnapshot(clear = false) {
     const mod = this.mod;
     if (!mod || typeof mod._romdev_regsnap_get !== "function") return null;

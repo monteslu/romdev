@@ -144,6 +144,28 @@
       "platforms": [
         "msx"
       ]
+    },
+    "parallel_n64": {
+      "kind": "git",
+      "url": "https://github.com/libretro/parallel-n64.git",
+      "ref": "master",
+      "commit": "1da824e13e725a7144f3245324f43d59623974f8",
+      "license": "GPL-2.0",
+      "patch": "scripts/patches/romdev-snippets/n64-regsnap.c (appended by build-parallel-n64.sh)",
+      "platforms": [
+        "n64"
+      ]
+    },
+    "pcsx_rearmed": {
+      "kind": "git",
+      "url": "https://github.com/libretro/pcsx_rearmed.git",
+      "ref": "master",
+      "commit": "94a7ee303c7852799caceb5af93cfd4f75c442e0",
+      "license": "GPL-2.0",
+      "patch": "scripts/patches/romdev-snippets/ps1-regsnap.c (appended by build-pcsx-rearmed.sh)",
+      "platforms": [
+        "ps1"
+      ]
     }
   },
   "toolchains": {

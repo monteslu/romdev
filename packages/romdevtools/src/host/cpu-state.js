@@ -139,6 +139,30 @@ function decodeSnes9xSPC(state) {
  * @param {Uint8Array} bytes 28-byte snapshot
  * @returns {ReturnType<typeof formatCpuState> | null}
  */
+/** MIPS R3000 (PS1) / R4300 (N64) register names, $0..$31. */
+const MIPS_GPR_NAMES = [
+  "zero", "at", "v0", "v1", "a0", "a1", "a2", "a3",
+  "t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7",
+  "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7",
+  "t8", "t9", "k0", "k1", "gp", "sp", "fp", "ra",
+];
+
+/** Decode the romdev MIPS regsnap (Uint32Array(35): 32 GPRs + LO + HI + PC) into a
+ *  CPUState. Names follow the MIPS o32 ABI convention. */
+function decodeMips(regs) {
+  if (!regs || regs.length < 35) return null;
+  const hx = (v) => "$" + (v >>> 0).toString(16).toUpperCase().padStart(8, "0");
+  const named = {};
+  for (let i = 0; i < 32; i++) named[MIPS_GPR_NAMES[i]] = hx(regs[i]);
+  named.lo = hx(regs[32]);
+  named.hi = hx(regs[33]);
+  return {
+    pc: regs[34] >>> 0,
+    pcHex: hx(regs[34]),
+    registers: named,
+  };
+}
+
 function decode6502(bytes) {
   if (!bytes || bytes.length < 25) return null;
   const u16le = (o) => bytes[o] | (bytes[o + 1] << 8);
@@ -300,6 +324,9 @@ function decodeZ80(bytes) {
  * @returns {CPUState | null}
  */
 export function getCPUState(host, platform, cpu = "main") {
+  if (platform === "n64" || platform === "ps1") {
+    return decodeMips(host.getMipsRegs?.());
+  }
   if (platform === "nes") {
     const bytes = host.readMemory("nes_cpu_regs", 0, 28);
     return decode6502(bytes);
