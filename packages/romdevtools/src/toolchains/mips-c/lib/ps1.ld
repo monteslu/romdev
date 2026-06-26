@@ -4,10 +4,10 @@ ENTRY(_start)
 MEMORY { ram (rwx) : ORIGIN = 0x80010000, LENGTH = 0x1F0000 }
 SECTIONS {
   .text : { *(.text.start) *(.text*) *(.rodata*) } > ram
-  .data : { *(.data*) *(.sdata*) } > ram
+  .data : { *(.data*) *(.sdata*) *(.lit8) *(.lit4) *(.scommon) } > ram
   . = ALIGN(4);
   __bss_start = .;
-  .bss : { *(.bss*) *(.sbss*) *(COMMON) } > ram
+  .bss : { *(.bss*) *(.sbss*) *(.scommon) *(COMMON) } > ram
   . = ALIGN(4);
   __bss_end = .;
   __sp_top = 0x801FFFF0;

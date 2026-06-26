@@ -75,17 +75,36 @@ export async function buildMipsC(args) {
   log += `--- as (${crt0Name}) ---\n${crt0As.log || "(ok)"}\n`;
   if (crt0As.exitCode !== 0 || !crt0As.object) return { ok: false, binary: null, log, exitCode: crt0As.exitCode || 1, stage: "as (crt0)", ...(crt0As.crash ? { crash: crt0As.crash } : {}) };
 
+  // softint.c — the few libgcc helpers (64-bit divide/mod) in plain C, so the
+  // link doesn't need an endian-specific libgcc.a (the EL libgcc isn't bundled).
+  const softSrc = await readFile(path.join(LIB, "softint.c"), "utf-8");
+  const softCc = await runCc1mips({ source: softSrc, options: cc1Options, endian });
+  const softAs = softCc.asmSource ? await runMipsAs({ source: softCc.asmSource, endian }) : { exitCode: 1 };
+  if (softCc.exitCode !== 0 || softAs.exitCode !== 0 || !softAs.object) {
+    return { ok: false, binary: null, log: log + (softCc.log || "") + (softAs.log || ""), exitCode: 1, stage: "softint" };
+  }
+
   // link
   const ldName = platform === "ps1" ? "ps1.ld" : "n64.ld";
   const linkScript = await readFile(path.join(LIB, ldName), "utf-8");
-  const [libgcc, libc, libm] = await Promise.all([
-    readFile(path.join(LIB, "libgcc.a")), readFile(path.join(LIB, "libc.a")), readFile(path.join(LIB, "libm.a")),
+  // newlib + libgcc are endian-specific: el/ (PS1 little) vs be/ (N64 big). libgcc
+  // is only bundled for be/ — softint.c covers the EL case, so libgcc is optional.
+  const libDir = path.join(LIB, endian === "little" ? "el" : "be");
+  const [libc, libm] = await Promise.all([
+    readFile(path.join(libDir, "libc.a")), readFile(path.join(libDir, "libm.a")),
   ]);
+  const archives = { "libc.a": new Uint8Array(libc), "libm.a": new Uint8Array(libm) };
+  const libraries = ["c", "m"];
+  try {
+    const libgcc = await readFile(path.join(libDir, "libgcc.a"));
+    archives["libgcc.a"] = new Uint8Array(libgcc);
+    libraries.unshift("gcc");
+  } catch { /* no endian libgcc — softint.c provides the needed helpers */ }
   const ld = await runMipsLd({
-    objects: { "crt0.o": crt0As.object, ...userObjs },
+    objects: { "crt0.o": crt0As.object, "softint.o": softAs.object, ...userObjs },
     linkScript, endian,
-    archives: { "libgcc.a": new Uint8Array(libgcc), "libc.a": new Uint8Array(libc), "libm.a": new Uint8Array(libm) },
-    libraries: ["c", "gcc", "m"],
+    archives,
+    libraries,
     libraryPaths: ["/work"],
     options: ["--no-warn-rwx-segments"],
   });
