@@ -15,6 +15,14 @@ import { resolveCore } from "../src/cores/registry.js";
 import { framebufferToRgba } from "../src/host/framebuffer.js";
 import { glStackAvailable } from "../src/host/glOptionalDep.js";
 import { getCPUState } from "../src/host/cpu-state.js";
+import { buildForPlatform } from "../src/toolchains/index.js";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+const HAS_MIPS_GCC = (() => {
+  const p = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src", "toolchains", "mips-elf-gcc", "wasm", "cc1.mjs");
+  return existsSync(p);
+})();
 
 function countNonBlack(rgba) {
   let nz = 0;
@@ -117,4 +125,46 @@ test("PS1: pcsx_rearmed (HLE, no BIOS) boots + presents a frame", { timeout: 120
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("build: C → PS1 PS-EXE compiles AND runs on the core", { timeout: 180000 }, async () => {
+  if (!HAS_MIPS_GCC) { console.log("mips-elf-gcc WASM not built; skipping build test"); return; }
+  const r = await buildForPlatform({
+    platform: "ps1", language: "c",
+    source: `
+      #define GP0 (*(volatile unsigned int*)0x1F801810)
+      #define GP1 (*(volatile unsigned int*)0x1F801814)
+      int main(){
+        GP1=0; GP1=0x03000000;
+        GP0=0x02FF8040; GP0=0; GP0=0x01000140;
+        for(;;){}
+      }`,
+  });
+  assert.equal(r.ok, true, `PS1 build ok (stage=${r.stage}): ${(r.log || "").slice(-200)}`);
+  assert.ok(r.binary && r.binary.length > 2048, "produced a PS-EXE (header + code)");
+  assert.equal(String.fromCharCode(...r.binary.slice(0, 8)), "PS-X EXE", "PS-EXE magic");
+
+  // boot the built PS-EXE on the real core
+  const core = resolveCore("ps1");
+  if (!core) return;
+  const host = new LibretroHost();
+  try {
+    await host.loadCore(core.jsPath, core.wasmPath, { hwRender: core.hwRender });
+    await host.loadMedia({ platform: "ps1", bytes: r.binary, virtualName: "/built.exe" });
+    for (let i = 0; i < 120; i++) host.stepFrames(1);
+    const lf = host.state.lastFrame;
+    assert.ok(lf && lf.width > 0, "the freshly-built PS-EXE booted + presented a frame");
+  } finally {
+    host.dispose?.();
+  }
+});
+
+test("build: C → N64 compiles (big-endian mips)", { timeout: 120000 }, async () => {
+  if (!HAS_MIPS_GCC) { console.log("mips-elf-gcc WASM not built; skipping"); return; }
+  const r = await buildForPlatform({
+    platform: "n64", language: "c",
+    source: "int sq(int n){ return n*n; } int main(){ return sq(7); }",
+  });
+  assert.equal(r.ok, true, `N64 build ok: ${(r.log || "").slice(-200)}`);
+  assert.ok(r.binary && r.binary.length > 0, "produced a binary");
 });

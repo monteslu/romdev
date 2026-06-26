@@ -24,7 +24,7 @@ test("MIPS arch + endian + SLEIGH langid are wired for ps1 and n64", () => {
   assert.equal(SLEIGH_LANGID.n64, "MIPS:BE:32:default");
 });
 
-test("capability manifest: ps1/n64 are the MIPS tier (disasm+run yes, build/decompile no)", () => {
+test("capability manifest: ps1/n64 have FULL parity (run+screenshot+disasm+decompile+build)", () => {
   for (const p of ["ps1", "n64"]) {
     const c = CAPABILITIES[p];
     assert.equal(c.cpuFamily, "mips");
@@ -32,7 +32,7 @@ test("capability manifest: ps1/n64 are the MIPS tier (disasm+run yes, build/deco
     assert.equal(c.ops.run, true, `${p} run (real core wired)`);
     assert.equal(c.ops.screenshot, true, `${p} screenshot`);
     assert.equal(c.ops.decompile, true, `${p} decompile (MIPS SLEIGH shipped)`);
-    assert.equal(c.ops.build, false, `${p} build (no MIPS toolchain yet)`);
+    assert.equal(c.ops.build, true, `${p} build (mips-elf-gcc WASM toolchain)`);
     assert.equal(c.ops.inspectBackground, false, "tile inspector meaningless on framebuffer/3d");
   }
   assert.equal(CAPABILITIES.ps1.renderingKind, "framebuffer");

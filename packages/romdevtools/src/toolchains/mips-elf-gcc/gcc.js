@@ -33,10 +33,13 @@ function resolveMipsGlue(file) {
 const _glue = {};
 const mipsGlue = (file) => (_glue[file] ??= resolveMipsGlue(file));
 
-/** ABI/arch flags shared by cc1 + as. N64 = mips III (R4300, 64-bit-capable but
- *  32-bit code), PS1 = mips I (R3000). We default to a conservative mips1/-mabi=32
- *  that both accept; the SDK layer can override via `options`. */
-function archFlags(endian) {
+/** Endian flags differ by TOOL: cc1 (the C frontend) wants `-mel`/`-meb`; the
+ *  assembler + linker want `-EL`/`-EB`. `-mabi=32` (cc1) covers both R3000 (PS1)
+ *  and R4300 (N64) 32-bit code. */
+function cc1ArchFlags(endian) {
+  return [endian === "little" ? "-mel" : "-meb", "-mabi=32"];
+}
+function asArchFlags(endian) {
   return [endian === "little" ? "-EL" : "-EB", "-mabi=32"];
 }
 
@@ -47,7 +50,7 @@ export async function runCc1mips(args) {
   const inputFiles = [textFile("/work/main.c", source)];
   for (const [name, content] of Object.entries(headers)) inputFiles.push(textFile("/work/" + name, content));
   const argv = [
-    ...archFlags(endian),
+    ...cc1ArchFlags(endian),
     "-iquote", "/work", "-I", "/work",
     ...options,
     "/work/main.c", "-o", "/work/main.s",
@@ -69,7 +72,7 @@ export async function runMipsAs(args) {
   const inputFiles = [textFile("/work/main.s", source)];
   for (const [name, content] of Object.entries(includes)) inputFiles.push(textFile("/work/" + name, content));
   for (const [name, bytes] of Object.entries(binaryIncludes)) inputFiles.push(binaryFile("/work/" + name, bytes));
-  const argv = [...archFlags(endian), "-I", "/work", ...options, "/work/main.s", "-o", "/work/main.o"];
+  const argv = [...asArchFlags(endian), "-I", "/work", ...options, "/work/main.s", "-o", "/work/main.o"];
   const r = await runIsolated({
     gluePath: mipsGlue("mips-elf-as.mjs"),
     argv, inputFiles,
