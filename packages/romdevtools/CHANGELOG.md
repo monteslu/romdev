@@ -4,6 +4,30 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.57.0 — 2026-06-26
+
+### Dreamcast (SH-4) analysis slice — disasm + decompile
+
+First slice of Dreamcast support: the SH-4 (SuperH) reverse-engineering path, on the
+same pattern as the PS1/N64 analysis slice.
+
+- rizin's `sh` plugin (already in rizin.wasm) wired for disasm/cfg/xrefs/functions
+  (arch=sh, little-endian).
+- Ghidra's **SuperH4** SLEIGH spec compiled (`SuperH4_le.sla`) + shipped in
+  romdev-analysis-decompiler → `decompile` produces real C (langid
+  `SuperH4:LE:32:default`). Verified: SH-4 bytes → disasm + decompiled C.
+- analyze.js handles DC binaries: strips an ELF to its first PT_LOAD segment (vaddr =
+  loadBase 0x8c010000) or treats a raw image as flat; left-pads so flat offset ==
+  the VA's low bits + rebases the high bits (same trick PS1 needed for absolute-
+  addressed calls — SH-4's PC-relative + absolute addressing needs it too).
+- `dreamcast` added to the capability manifest as the new `sh` tier (analysis-first;
+  run/build/etc. land in later phases). The 3D (PowerVR2) renderer's tile/sprite
+  inspectors are N/A by hardware with a stated reason. Excluded from the all-14
+  contract via the generalized NEXTGEN_TIER (mips + sh).
+
+Suite 1059/1059. Run-side (Flycast WASM), build (sh-elf-gcc), the helper lib, and the
+5 example games are the next phases.
+
 ## 0.56.1 — 2026-06-26
 
 ### ascii screenshot: legible default grid + lighter default color (0.44.0 feedback #1)

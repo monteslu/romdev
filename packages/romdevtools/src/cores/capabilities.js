@@ -248,6 +248,23 @@ export const CAPABILITIES = {
       cart: false, disasm: true, decompile: true,
     },
   },
+
+  dreamcast: {
+    cpuFamily: "sh", decompileQuality: "good", tier: "sh",
+    cpus: { main: "sh4", secondary: ["arm7"] }, // SH-4 main + ARM7 AICA sound CPU
+    audioChips: ["aica"],
+    memoryRegions: [...GENERIC_REGIONS],
+    renderingKind: "3d", introspection: "shallow",
+    ops: {
+      // SH-4 analysis slice: disasm + decompile via rizin's `sh` plugin + Ghidra's
+      // SuperH4 SLEIGH. Run-side (Flycast WASM) + build (sh-elf-gcc) land in later
+      // phases. The PowerVR2 3D renderer has no tile/sprite inspectors (N/A by hw).
+      build: false, run: false, screenshot: false,
+      inspectSprites: false, inspectPalette: false, inspectBackground: false,
+      renderingContext: false, cpuState: false, audioDebug: false,
+      cart: false, disasm: true, decompile: true,
+    },
+  },
 };
 
 /** The 32-bit MIPS tier (PS1/N64) — marked `tier:"mips"`. A PARTIAL tier: they
@@ -259,14 +276,22 @@ export const MIPS_TIER_PLATFORMS = Object.entries(CAPABILITIES)
   .filter(([, c]) => c.tier === "mips")
   .map(([p]) => p);
 
+/** The next-gen tiers (32-bit CPU families added after the canonical 14): MIPS
+ *  (PS1/N64) + SH (Dreamcast) + future. Any platform carrying a CPU-family `tier`
+ *  is held to its OWN conformance, not the "all 14" cross-checks; a new platform
+ *  starts here (analysis-first) and graduates as run/build/etc. land. */
+export const NEXTGEN_TIER_PLATFORMS = Object.entries(CAPABILITIES)
+  .filter(([, c]) => c.tier === "mips" || c.tier === "sh")
+  .map(([p]) => p);
+
 /** Back-compat: the analysis-only set is now empty (PS1/N64 gained run/screenshot
  *  in the run-side wiring). Kept so the name still resolves for older imports. */
 export const ANALYSIS_ONLY_PLATFORMS = [];
 
 /** The canonical tier-1 platforms (the 14): full op surface, universal build/run/
- *  screenshot. Excludes the partial MIPS tier above. */
+ *  screenshot. Excludes the partial next-gen tiers above. */
 export const CONTRACT_PLATFORMS = Object.keys(CAPABILITIES)
-  .filter((p) => !MIPS_TIER_PLATFORMS.includes(p));
+  .filter((p) => !NEXTGEN_TIER_PLATFORMS.includes(p));
 
 /** Does `platform` support `op`? Unknown platform/op → false. */
 export function supports(platform, op) {

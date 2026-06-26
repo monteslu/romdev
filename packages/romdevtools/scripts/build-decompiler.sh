@@ -71,6 +71,8 @@ compile_sla "$PROC/68000/data/languages/68040.slaspec" 68040
 # MIPS — both endians (N64 R4300 = big, PS1 R3000 = little), 32-bit code variant.
 compile_sla "$PROC/MIPS/data/languages/mips32be.slaspec" mips32be
 compile_sla "$PROC/MIPS/data/languages/mips32le.slaspec" mips32le
+# SuperH SH-4 (Dreamcast) — little-endian 32-bit.
+compile_sla "$PROC/SuperH4/data/languages/SuperH4_le.slaspec" SuperH4_le
 # external (community specs)
 compile_sla "$GHIDRABOY/data/languages/sm83.slaspec"   sm83
 compile_sla "$SNES/data/languages/65816.slaspec"       65816
@@ -111,6 +113,20 @@ cat > "$SLEIGH_HOME/mips.ldefs" <<'MIPS_LDEFS'
   </language>
 </language_definitions>
 MIPS_LDEFS
+
+# SuperH4 metadata: stock SuperH4.ldefs declares BE + windows variants we don't ship,
+# so emit a MINIMAL ldefs with only the LE:32:default langid (Dreamcast SH-4).
+cp "$PROC/SuperH4/data/languages/"SuperH4.pspec "$PROC/SuperH4/data/languages/"SuperH4_le.cspec "$SLEIGH_HOME/"
+cat > "$SLEIGH_HOME/SuperH4.ldefs" <<'SH_LDEFS'
+<?xml version="1.0" encoding="UTF-8"?>
+<language_definitions>
+  <language processor="SuperH4" endian="little" size="32" variant="default" version="1.01"
+            slafile="SuperH4_le.sla" processorspec="SuperH4.pspec" id="SuperH4:LE:32:default">
+    <description>SuperH SH-4 little endian (Sega Dreamcast)</description>
+    <compiler name="default" spec="SuperH4_le.cspec" id="default"/>
+  </language>
+</language_definitions>
+SH_LDEFS
 
 # ── 4. WASM decompiler ──────────────────────────────────────────────────────
 echo "==> building WASM decompiler"

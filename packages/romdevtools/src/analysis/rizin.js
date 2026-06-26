@@ -59,14 +59,16 @@ export const RIZIN_ARCH = {
   // below — same arch, different byte order.
   ps1: "mips",
   n64: "mips",
+  dreamcast: "sh", // SH-4 (SuperH) — rizin's `sh` plugin covers it
 };
 
 /** Byte order per platform, for shared-arch families that ship both (MIPS). Only
  *  platforms NOT matching their arch default need an entry; absent → use the
- *  loader/arch default. PS1 is little, N64 is big. */
+ *  loader/arch default. PS1 is little, N64 is big. Dreamcast SH-4 is little. */
 export const RIZIN_ENDIAN = {
   ps1: "little",
   n64: "big",
+  dreamcast: "little",
 };
 
 /**
