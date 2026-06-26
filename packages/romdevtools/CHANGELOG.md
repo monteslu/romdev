@@ -4,6 +4,29 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.55.0 — 2026-06-26
+
+### System manifests now call out the features a platform CAN'T have (and why)
+
+A bare `inspectSprites: false` in the capability manifest is ambiguous — an agent
+can't tell "N/A by hardware, permanent" from "a decoder we haven't built." For the
+14 tile-based systems this never bit (they support those ops); for the framebuffer
+(PS1) / 3D (N64) systems, FOUR ops are false with no stated reason.
+
+- New `naReason(platform, op)` in the capability manifest returns a HARDWARE-grounded
+  explanation, keyed on `renderingKind`: a framebuffer/3D renderer has no tile/
+  sprite-attribute/nametable/palette tables for the tile-era inspectors to read —
+  those ops are *meaningless on the hardware*, not merely absent. (PS1 `cart` →
+  "disc-based, no cartridge ROM".)
+- `platform({op:'capabilities', platform})` now includes a `naReasons` map alongside
+  `ops`, so the manifest itself states what each platform can't do + why.
+- The `unsupported()` signal from inspectSprites/inspectPalette/inspectBackground/
+  renderingContext now carries that hardware reason instead of a generic "no decoder
+  for this platform" — an agent gets "this is a 3D renderer, there are no sprite
+  tables" and won't retry or request a decoder that can't exist.
+- Conformance test pins it: every false introspection op on ps1/n64 must carry a
+  hardware-grounded N/A reason. Suite 1054/1054.
+
 ## 0.54.0 — 2026-06-26
 
 ### Audit: two real N64/PS1 parity gaps found + fixed

@@ -277,3 +277,30 @@ export function supports(platform, op) {
 export function capabilitiesFor(platform) {
   return CAPABILITIES[platform] ?? null;
 }
+
+// Why an op is unsupported, grounded in the HARDWARE — so `unsupported()`'s reason
+// distinguishes "N/A by hardware, permanent" from "a decoder we haven't wired."
+// Keyed on renderingKind: a framebuffer (PS1) / 3D (N64) renderer has no tile,
+// sprite-attribute, nametable, or palette tables for the tile-era inspectors to
+// read — those ops are MEANINGLESS on the hardware, not merely absent.
+const RENDERING_NA = {
+  framebuffer: "this platform renders to a flat framebuffer — there are no tile/sprite-attribute/nametable/palette tables to inspect (the GPU draws pixels/polys directly). Read the raw framebuffer via memory({region:'video_ram'}).",
+  "3d": "this platform is a 3D (polygon) renderer — there are no tile/sprite-attribute/nametable/palette tables to inspect (geometry is transformed + rasterized, not composed from tile maps). Inspect the scene via memory({region:'system_ram'}) / cpu state.",
+};
+const NA_OPS = new Set(["inspectSprites", "inspectPalette", "inspectBackground", "renderingContext"]);
+
+/** A hardware-grounded reason an op is unsupported on a platform, or null if the
+ *  op isn't one of the hardware-N/A introspection ops. Drives unsupported().reason
+ *  so agents see "N/A by hardware" (don't retry / don't request a decoder) rather
+ *  than a generic "no decoder for this platform". */
+export function naReason(platform, op) {
+  const cap = CAPABILITIES[platform];
+  if (!cap || cap.ops?.[op]) return null;            // supported → no N/A reason
+  if (op === "cart") {
+    return cap.renderingKind === "framebuffer"
+      ? "this platform is disc-based (no cartridge ROM to inspect/patch as a cart)."
+      : null;
+  }
+  if (NA_OPS.has(op)) return RENDERING_NA[cap.renderingKind] ?? null;
+  return null;
+}

@@ -10,6 +10,7 @@
 import { readFileSync } from "node:fs";
 import { getHost } from "../state.js";
 import { jsonContent, safeTool, unsupported } from "../util.js";
+import { naReason } from "../../cores/capabilities.js";
 import { inspectBackgroundMapCore } from "./platform-tools.js";
 import { whichTilesAreRenderedCore } from "./which-tiles.js";
 
@@ -533,7 +534,7 @@ export async function getRenderingContextCore({ platform, area = "all", sessionK
     case "msx":   return msxContext(host, area);
     default:
       unsupported(p, "renderingContext", {
-        reason: "no rendering-context decoder for this platform",
+        reason: naReason(p, "renderingContext") ?? "no rendering-context decoder for this platform",
         alternative: "platform({op:'capabilities'}) to see what's wired",
       });
   }

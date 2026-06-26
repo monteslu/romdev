@@ -15,7 +15,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { CAPABILITIES, OP_KEYS, CONTRACT_PLATFORMS, MIPS_TIER_PLATFORMS, supports } from "../src/cores/capabilities.js";
+import { CAPABILITIES, OP_KEYS, CONTRACT_PLATFORMS, MIPS_TIER_PLATFORMS, supports, naReason } from "../src/cores/capabilities.js";
 import { CORES } from "../src/cores/registry.js";
 import { MemoryRegionToRetro } from "../src/host/types.js";
 import { unsupported, errorContent } from "../src/mcp/util.js";
@@ -47,9 +47,15 @@ test("contract: MIPS tier (ps1/n64) has full op parity (build+run+disasm+decompi
     assert.equal(c.ops.decompile, true, `${p} decompile (MIPS SLEIGH shipped)`);
     // build now works (mips-elf-gcc WASM toolchain):
     assert.equal(c.ops.build, true, `${p} build (mips-elf-gcc WASM toolchain)`);
-    // framebuffer/3D renderers have no tile/sprite inspectors:
-    for (const op of ["inspectSprites", "inspectPalette", "inspectBackground"]) {
+    // framebuffer/3D renderers have no tile/sprite inspectors — AND the manifest
+    // must explain WHY (hardware-grounded reason), not just report false. This is
+    // the "call out the features they can't have" contract: an agent gets "N/A by
+    // hardware" (a framebuffer/3D renderer has no tile tables), not "no decoder".
+    for (const op of ["inspectSprites", "inspectPalette", "inspectBackground", "renderingContext"]) {
       assert.equal(c.ops[op], false, `${p}.${op} meaningless on framebuffer/3D`);
+      const reason = naReason(p, op);
+      assert.ok(reason && /framebuffer|3D|polygon|no tile|no .*table/i.test(reason),
+        `${p}.${op} must carry a hardware-grounded N/A reason, got: ${reason}`);
     }
     for (const op of OP_KEYS) assert.equal(typeof c.ops[op], "boolean", `${p}.ops.${op} is a boolean`);
   }
