@@ -1476,6 +1476,24 @@ export class LibretroHost {
     return !!(this.mod && typeof this.mod._romdev_spu_get === "function");
   }
 
+  /** True when the N64 core exposes the AI registers (getAudioState chip:'ai'). */
+  aiRegsSupported() {
+    return !!(this.mod && typeof this.mod._romdev_ai_get === "function");
+  }
+
+  /** Read the N64 AI registers + VI clock as a Uint32Array(7). null if absent. */
+  getAiRegs() {
+    const mod = this.mod;
+    if (!mod || typeof mod._romdev_ai_get !== "function") return null;
+    const ptr = mod._malloc(7 * 4);
+    try {
+      mod._romdev_ai_get(ptr);
+      return new Uint32Array(mod.HEAPU8.buffer, ptr, 7).slice();
+    } finally {
+      mod._free(ptr);
+    }
+  }
+
   /** Read the PS1 SPU's 0x400-word register block as a Uint16Array(1024). null if
    *  the core doesn't expose it. */
   getSpuRegs() {

@@ -221,3 +221,29 @@ test("audioDebug: PS1 SPU register decode (chip:'spu')", { timeout: 180000 }, as
     host.dispose?.();
   }
 });
+
+test("audioDebug: N64 AI output state (chip:'ai')", { timeout: 180000 }, async () => {
+  const core = resolveCore("n64");
+  if (!core) return;
+  if (!(await glStackAvailable())) { console.log("no GL stack; skipping"); return; }
+  let rom = null;
+  for (const f of ["paniclab.n64", "megatextures-1.0.z64"]) {
+    const p = path.join(process.env.HOME, "code/cliemu/homebrew_collection/n64", f);
+    try { rom = new Uint8Array(await readFile(p)); break; } catch { /* next */ }
+  }
+  if (!rom) { console.log("no N64 fixture; skipping"); return; }
+  const { decodeN64Ai } = await import("../src/host/n64-ai-state.js");
+  const host = new LibretroHost();
+  try {
+    await host.loadCore(core.jsPath, core.wasmPath, { hwRender: core.hwRender });
+    if (!host.aiRegsSupported()) { console.log("core has no AI export; skipping"); return; }
+    await host.loadMedia({ platform: "n64", bytes: rom, virtualName: "/g.n64" });
+    for (let i = 0; i < 180; i++) host.stepFrames(1);
+    const ai = decodeN64Ai(host.getAiRegs());
+    assert.equal(ai.chip, "ai");
+    assert.ok(typeof ai.playing === "boolean", "decodes the playing flag");
+    assert.ok(ai.sampleRate >= 0, "decodes a sample rate");
+  } finally {
+    host.dispose?.();
+  }
+});
