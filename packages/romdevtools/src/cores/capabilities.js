@@ -227,7 +227,7 @@ export const CAPABILITIES = {
       // (PSn00bSDK, not yet). The framebuffer renderer has no tile/sprite inspectors.
       build: true, run: true, screenshot: true,
       inspectSprites: false, inspectPalette: false, inspectBackground: false,
-      renderingContext: false, cpuState: true, audioDebug: false,
+      renderingContext: false, cpuState: true, audioDebug: true,
       cart: false, disasm: true, decompile: true,
     },
   },

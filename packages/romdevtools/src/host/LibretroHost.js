@@ -1471,6 +1471,25 @@ export class LibretroHost {
     }
   }
 
+  /** True when the PS1 core exposes the SPU register block (getAudioState chip:'spu'). */
+  spuRegsSupported() {
+    return !!(this.mod && typeof this.mod._romdev_spu_get === "function");
+  }
+
+  /** Read the PS1 SPU's 0x400-word register block as a Uint16Array(1024). null if
+   *  the core doesn't expose it. */
+  getSpuRegs() {
+    const mod = this.mod;
+    if (!mod || typeof mod._romdev_spu_get !== "function") return null;
+    const ptr = mod._malloc(0x400 * 2);
+    try {
+      mod._romdev_spu_get(ptr, 0x400);
+      return new Uint16Array(mod.HEAPU8.buffer, ptr, 0x400).slice();
+    } finally {
+      mod._free(ptr);
+    }
+  }
+
   getRegSnapshot(clear = false) {
     const mod = this.mod;
     if (!mod || typeof mod._romdev_regsnap_get !== "function") return null;

@@ -39,6 +39,7 @@ import { decodeGbApu, decodeGbaApu } from "../../host/gb-apu-state.js";
 import { decodeC64Sid } from "../../host/c64-sid-state.js";
 import { decodeLynxMikey, decodeLynxPalette } from "../../host/lynx-mikey-state.js";
 import { getPcePsgState } from "../../host/pce-psg-state.js";
+import { decodePs1Spu } from "../../host/ps1-spu-state.js";
 import { getMsxAyState } from "../../host/msx-ay-state.js";
 import { decodeGbaSprites, decodeGbaPalette } from "../../host/gba-video-state.js";
 
@@ -424,7 +425,13 @@ export function registerPlatformTools(server, z, sessionKey) {
       if (!ay) throw new Error("getAudioState chip:'ay8910' — no PSG region (load an MSX ROM into the patched blueMSX core).");
       return { platform: "msx", ...ay };
     }
-    throw new Error(`getAudioState: unknown chip '${chip}'. Use 'nes' (NES 2A03), 'gb' (Game Boy/GBC), 'gba' (GBA), 'dsp' (SNES), 'psg' (Genesis/SMS/GG SN76489), 'ym2612' (Genesis FM), 'sid' (C64), or 'mikey' (Lynx).`);
+    if (chip === "spu") {
+      // PS1 SPU — 24 ADPCM voices (volume/pitch/ADSR + key-on/off).
+      const regs = host.getSpuRegs?.();
+      if (!regs) throw new Error("getAudioState chip:'spu' — no SPU region (load a PS1 program into the rebuilt pcsx_rearmed core).");
+      return { platform: "ps1", ...decodePs1Spu(regs) };
+    }
+    throw new Error(`getAudioState: unknown chip '${chip}'. Use 'nes' (NES 2A03), 'gb' (Game Boy/GBC), 'gba' (GBA), 'dsp' (SNES), 'psg' (Genesis/SMS/GG SN76489), 'ym2612' (Genesis FM), 'sid' (C64), 'mikey' (Lynx), 'pce', 'ay8910' (MSX), or 'spu' (PS1).`);
   }
 
   getAudioStateCore = async ({ chip }, callerSessionKey) => jsonContent(readAudioChip(chip, callerSessionKey));
