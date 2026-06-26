@@ -111,9 +111,11 @@ if [ ! -f "$ROOT/build-wasm-gcc/gcc/cc1.wasm" ]; then
   # and fail (they must RUN natively during the build to GENERATE cc1's sources). Force
   # the build-tool compiler back to the native host gcc/g++ so the gen tools are native
   # while cc1 itself still cross-compiles to WASM via $(CC)=emcc for non-build objects.
+  # Only override the build-tool COMPILER (CC/CXX_FOR_BUILD); do NOT clear BUILD_*FLAGS —
+  # the gen tools need the version -D defines (BASEVER/DEVPHASE/DATESTAMP) the Makefile
+  # injects via BUILD_CPPFLAGS, and clearing them breaks genversion/genchecksum.
   ( cd gcc && emmake make -j"$NCPU" cc1 \
-      CC_FOR_BUILD=gcc CXX_FOR_BUILD=g++ \
-      BUILD_CFLAGS= BUILD_CXXFLAGS= BUILD_LDFLAGS= )
+      CC_FOR_BUILD=gcc CXX_FOR_BUILD=g++ )
 fi
 
 # ── 3. binutils as WASM ─────────────────────────────────────────────
