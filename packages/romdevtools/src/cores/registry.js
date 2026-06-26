@@ -58,7 +58,10 @@ export const CORES = {
   // software-rendered and never touch GL, so a headless user without the GPU module
   // is unaffected.
   n64: { platform: "n64", coreName: "parallel_n64", pkg: "romdev-core-parallel-n64", displayName: "Nintendo 64 (ParaLLEl N64)", hwRender: true },
-  ps1: { platform: "ps1", coreName: "beetle_psx_hw", pkg: "romdev-core-beetle-psx", displayName: "Sony PlayStation (Beetle PSX HW)", hwRender: true, aka: "psx,playstation" },
+  // pcsx_rearmed = SOFTWARE renderer + built-in HLE BIOS (no firmware to ship, no
+  // GL dependency) — the clean no-dependency PS1 path, like the other 14. The GL
+  // beetle_psx_hw (+ real BIOS) stays available as a higher-fidelity alternative.
+  ps1: { platform: "ps1", coreName: "pcsx_rearmed", pkg: "romdev-core-pcsx-rearmed", displayName: "Sony PlayStation (PCSX-ReARMed, HLE)", aka: "psx,playstation" },
 };
 
 /** Try to get {jsPath,wasmPath} for a core from its binary package. */

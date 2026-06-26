@@ -12,6 +12,7 @@ import {
   RETRO_PIXEL_FORMAT_0RGB1555,
   RETRO_PIXEL_FORMAT_RGB565,
   RETRO_PIXEL_FORMAT_XRGB8888,
+  ROMDEV_PIXEL_FORMAT_RGBA8888,
 } from "./retroConstants.js";
 
 /**
@@ -35,7 +36,19 @@ export function framebufferToRgba(width, height, src, pitch, format) {
 }
 
 function decodePixelsInto(dst, width, height, src, pitch, format) {
-  if (format === RETRO_PIXEL_FORMAT_XRGB8888) {
+  if (format === ROMDEV_PIXEL_FORMAT_RGBA8888) {
+    // HW-render readback: already RGBA. Copy RGB row-by-row but FORCE alpha=255 —
+    // the N64/PS1 GL framebuffer leaves alpha at 0 (it's the render target's unused
+    // channel), which would make every pixel transparent → composites to white.
+    for (let y = 0; y < height; y++) {
+      const sRow = y * pitch, dRow = y * width * 4;
+      for (let x = 0; x < width; x++) {
+        const s = sRow + x * 4, d = dRow + x * 4;
+        dst[d] = src[s]; dst[d + 1] = src[s + 1]; dst[d + 2] = src[s + 2];
+        dst[d + 3] = 0xff;
+      }
+    }
+  } else if (format === RETRO_PIXEL_FORMAT_XRGB8888) {
     for (let y = 0; y < height; y++) {
       const srcRow = y * pitch;
       const dstRow = y * width * 4;

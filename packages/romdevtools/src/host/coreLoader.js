@@ -46,10 +46,17 @@ export async function loadLibretroCore(args) {
   // hand it a webgl-node mock canvas + install the WebGL2 globals Emscripten probes.
   if (glCanvas) {
     opts.canvas = glCanvas;
-    if (typeof globalThis.WebGLRenderingContext === "undefined") {
+    if (typeof globalThis.WebGL2RenderingContext === "undefined") {
       const { WebGL2RenderingContext } = await import("webgl-node");
-      globalThis.WebGLRenderingContext = WebGL2RenderingContext;
       globalThis.WebGL2RenderingContext = WebGL2RenderingContext;
+      // CRITICAL: WebGLRenderingContext (WebGL1) must be a DISTINCT class from
+      // WebGL2RenderingContext. Emscripten's getContext shim does
+      //   return (ver=="webgl") == (gl instanceof WebGLRenderingContext) ? gl : null
+      // For ver="webgl2" that needs `gl instanceof WebGLRenderingContext` to be
+      // FALSE. If we aliased WebGLRenderingContext to the WebGL2 class, a webgl2
+      // context IS instanceof it → the shim returns null → GLctx never set → the
+      // core renders nothing. So WebGL1 gets its own empty marker class.
+      globalThis.WebGLRenderingContext = class WebGLRenderingContext {};
     }
   }
 

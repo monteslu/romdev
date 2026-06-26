@@ -161,7 +161,7 @@ export const PLATFORM_VIRTUAL_EXT = {
   pce:        ".pce",
   msx:        ".rom",
 };
-import { RETRO_DEVICE_JOYPAD, RETRO_PIXEL_FORMAT_XRGB8888 } from "./retroConstants.js";
+import { RETRO_DEVICE_JOYPAD, ROMDEV_PIXEL_FORMAT_RGBA8888 } from "./retroConstants.js";
 
 // C64 controller→keyboard map (the Batocera/RetroDeck model: a CONTROLLER alone
 // plays C64 — no physical keyboard needed — by mapping spare buttons/stick to
@@ -592,7 +592,7 @@ export class LibretroHost {
       if (frame) {
         this.state.lastFrame = {
           width: frame.width, height: frame.height,
-          pitch: frame.width * 4, format: RETRO_PIXEL_FORMAT_XRGB8888,
+          pitch: frame.width * 4, format: ROMDEV_PIXEL_FORMAT_RGBA8888,
           pixels: frame.pixels, rgba: true,
         };
       }

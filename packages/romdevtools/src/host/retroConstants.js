@@ -79,3 +79,8 @@ export const RETRO_HW_CONTEXT_OPENGLES2 = 2;     // GLES 2.0
 export const RETRO_HW_CONTEXT_OPENGL_CORE = 3;   // OpenGL 3+ core
 export const RETRO_HW_CONTEXT_OPENGLES3 = 4;     // GLES 3.0
 export const RETRO_HW_CONTEXT_OPENGLES_VERSION = 5; // GLES with explicit version
+
+// romdev-internal sentinel: a HW-render readback frame is already RGBA8888 (from
+// glReadPixels GL_RGBA), NOT the BGRA byte order libretro's XRGB8888 uses. The
+// framebuffer decoder special-cases this so R/B aren't swapped.
+export const ROMDEV_PIXEL_FORMAT_RGBA8888 = 0x52474241; // 'RGBA'
