@@ -596,6 +596,56 @@ const TEMPLATES = {
       },
     };
   })(),
+
+  // ── Nintendo 64 (mips-elf-gcc R4300) — software 3D engine helper lib + examples ──
+  // The N64 was a 3D-first machine, so ALL 5 examples are 3D (even the puzzle —
+  // rendered as a 3D well of cubes). Same software-3D lib as PS1 (n64.{h,c}), a
+  // framebuffer backend the headless-angrylion core scans out.
+  n64: (() => {
+    const N64_RUNTIME = [
+      { src: "lib/c/n64.h", dst: "n64.h" },
+      { src: "lib/c/n64.c", dst: "n64.c" },
+    ];
+    const mk = (name, describe) => ({ main: `${name}/main.c`, runtime: N64_RUNTIME, lang: "C (mips-elf-gcc)", ext: ".z64", describe });
+    return {
+      default: mk("shmup", "STARFALL 64 — the canonical N64 3D starter: a vertical shooter where enemies fly in from depth and scale up under perspective. Exercises the whole software-3D lib (camera, transform, culled cubes) + SI/PIF pad + HUD, presented through angrylion's VI scanout. Same as 'shmup'."),
+      shmup: {
+        ...mk("shmup", "STARFALL 64 — a 3D Nintendo 64 vertical shooter (the N64 twin of the PS1 STARFALL). Enemy cubes fly in from the far distance and grow under perspective; stream bullets into Z, AABB collision, xorshift wave spawner, starfield, title/play/game-over with score + lives. Software 3D pipeline (n64_camera/n64_model/n64_quad3d) rendered to an RDRAM framebuffer the headless-angrylion core scans out."),
+        players: "1 (N64 has 4 controller ports; 2-4P can hook the other ports later)",
+        sram: "none in this starter — N64 saves go to Controller Pak / EEPROM / SRAM via the PI; the lib keeps hi-score in-session (stated in-file).",
+        mechanics: ["3D perspective playfield", "depth-scaled enemies", "projectile pools", "wave spawner", "AABB collision", "lives + score", "title/play/game-over state machine"],
+        techniques: ["software 3D: fixed-point camera + model transform", "perspective projection + back-face cull", "software triangle rasterizer → RDRAM framebuffer", "VI scanout (correct VI register setup)", "SI/PIF controller poll"],
+      },
+      racing: {
+        ...mk("racing", "POLE BENDER 64 — a 3D Nintendo 64 racer. A perspective road ribbon recedes to the horizon and bends with a sine curve; steer between the verges as the world scrolls toward you, rival cubes growing as you close. Distance score, collision spin-out, title/race/results. The N64's 3D heritage on display."),
+        players: "1",
+        sram: "none (in-session best; Controller Pak/EEPROM is the real-hardware save).",
+        mechanics: ["3D curved road (perspective quads)", "throttle/brake/steer", "rival traffic + collision", "distance scoring", "title/race/results"],
+        techniques: ["receding road segments with depth-driven curve", "no-cull ground-plane quads", "chase camera", "16.16 fixed-point world scroll"],
+      },
+      platformer: {
+        ...mk("platformer", "BLOCK HOP 64 — a 3D Nintendo 64 platformer. A cube hero runs and jumps across floating platforms in perspective; gravity + jump physics (16.16 fixed point), AABB landing on platform tops, coins, a lethal pit, a follow camera. Title/play/game-over, score + lives."),
+        players: "1",
+        sram: "none (in-session hi-score).",
+        mechanics: ["gravity + jump physics", "platform-top AABB landing", "coin pickups", "lethal pit + lives", "follow camera", "title/play/game-over"],
+        techniques: ["3D platforms as flat-topped boxes", "culled hero/coin cubes", "smooth-follow camera", "fixed-point physics"],
+      },
+      sports: {
+        ...mk("sports", "SLAM COURT 64 — a 3D Nintendo 64 sports game (air-hockey / pong). A perspective court down its length; you control the near paddle, the CPU the far, the ball bounces in 3D (X across, Z into the screen) and scales with depth. First to 7. Title/match/game-over."),
+        players: "1 (vs CPU; the N64's extra ports can host 2-4P later)",
+        sram: "none (match score is in-session).",
+        mechanics: ["3D ball physics (X/Z)", "player + CPU paddles", "wall bounces + scoring", "tracking CPU AI", "first-to-7", "title/match/game-over"],
+        techniques: ["perspective court floor (no-cull quad)", "depth-scaled ball", "paddle/ball cubes", "capped CPU tracking"],
+      },
+      puzzle: {
+        ...mk("puzzle", "DROP GRID 64 — a 3D Nintendo 64 falling-block puzzle. Unlike the flat-2D PS1 puzzle, this is rendered in 3D (the N64 was a 3D-first machine): the well is a perspective box of cube walls and the blocks are shaded cubes you watch fall in depth. Move/drop, full-row clear + scoring, ramping speed, stack-out = game over. Title/play/game-over."),
+        players: "1",
+        sram: "none (in-session hi-score).",
+        mechanics: ["integer grid model", "falling block move/drop", "full-row clear + scoring", "ramping fall speed", "stack-out game over", "title/play/game-over"],
+        techniques: ["3D-rendered well (cube walls + floor)", "blocks as shaded 3D cubes", "tilted camera into the well", "integer board logic", "SI/PIF pad edge detection"],
+      },
+    };
+  })(),
 };
 // R37: GBC has its own scaffold tree at examples/gbc/templates/ +
 // src/platforms/gbc/lib/c/. Same runtime files as GB (the APU + Z80 +

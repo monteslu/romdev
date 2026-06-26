@@ -4,6 +4,31 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.53.0 — 2026-06-26
+
+### N64 + PS1 reach EXAMPLE parity: 5 full genre games each
+
+Both new platforms now ship the same caliber of bundled, playable examples as the
+other 14 (parity = "5 decent full games"), registered in project.js and forkable +
+buildable through the normal createProject/build tool flow.
+
+**PS1** (4 × 3D + 1 × 2D, on a software 3D engine + the GPU): shmup STARFALL,
+racing POLE BENDER (a real receding 3D road), platformer BLOCK HOP, sports
+SLAM COURT (3D pong/air-hockey), puzzle DROP GRID (2D — the right idiom for a grid).
+
+**N64** (all 5 × 3D — the N64 was a 3D-first machine, so even the puzzle is a 3D
+well of cubes): STARFALL 64 / POLE BENDER 64 / BLOCK HOP 64 / SLAM COURT 64 /
+DROP GRID 64, on the same software-3D lib with a framebuffer backend the
+headless-angrylion core scans out.
+
+Every example builds + boots + renders, verified on the actual cores (frames
+inspected). The N64 path required the three earlier breakthroughs (self-booting
+.z64 via a clean IPL3, a headless-angrylion GL-free core, and the VI-scanout
+software rasterizer). Suite 1052/1052.
+
+**This completes N64 + PS1 parity** — every tool the other 14 have works, and both
+ship 5 full idiomatic examples.
+
 ## 0.51.0 — 2026-06-26
 
 ### N64 audioDebug — FULL parity (zero functional gaps)
