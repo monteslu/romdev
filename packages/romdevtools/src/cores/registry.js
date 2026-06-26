@@ -65,6 +65,10 @@ export const CORES = {
   // GL dependency) — the clean no-dependency PS1 path, like the other 14. The GL
   // beetle_psx_hw (+ real BIOS) stays available as a higher-fidelity alternative.
   ps1: { platform: "ps1", coreName: "pcsx_rearmed", pkg: "romdev-core-pcsx-rearmed", displayName: "Sony PlayStation (PCSX-ReARMed, HLE)", aka: "psx,playstation" },
+  // Flycast = full Dreamcast emulator, GLES3/WebGL2 HW-render (PowerVR2 is GPU-first,
+  // no software framebuffer path) → driven through the native-gles/webgl-node bridge
+  // like the GL N64 build. HLE BIOS (reios) on by default — no firmware to ship.
+  dreamcast: { platform: "dreamcast", coreName: "flycast", pkg: "romdev-core-flycast", displayName: "Sega Dreamcast (Flycast)", aka: "dc", hwRender: true },
 };
 
 /** Try to get {jsPath,wasmPath} for a core from its binary package. */
