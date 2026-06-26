@@ -257,12 +257,12 @@ export const CAPABILITIES = {
     renderingKind: "3d", introspection: "shallow",
     ops: {
       // Flycast WASM boots + RUNS homebrew .elf (reios HLE): the SH-4 executes guest
-      // code, so `run` + memory introspection work. `screenshot` stays off until the
-      // PowerVR2 present-path is verified end-to-end (needs a TA-driving program — the
-      // KOS helper lib). `build` lands with the sh-elf-gcc WASM toolchain. The 3D
-      // renderer has no tile/sprite inspectors (N/A by hw). disasm/decompile = SH-4
-      // analysis slice (rizin `sh` + Ghidra SuperH4 SLEIGH).
-      build: false, run: true, screenshot: false,
+      // code (run + memory introspection), and the PowerVR2 present-path works — flycast
+      // renders to the GL FBO and the host reads it back (verified: a framebuffer-writing
+      // program shows ~727k captured pixels). `build` lands with the sh-elf-gcc WASM
+      // toolchain. The 3D renderer has no tile/sprite inspectors (N/A by hw).
+      // disasm/decompile = SH-4 analysis slice (rizin `sh` + Ghidra SuperH4 SLEIGH).
+      build: false, run: true, screenshot: true,
       inspectSprites: false, inspectPalette: false, inspectBackground: false,
       renderingContext: false, cpuState: false, audioDebug: false,
       cart: false, disasm: true, decompile: true,

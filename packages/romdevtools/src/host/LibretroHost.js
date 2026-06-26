@@ -64,7 +64,15 @@ const PLATFORM_CORE_OPTIONS = {
   // path loads a raw homebrew .elf (reios_loadElf copies PT_LOAD segments to their
   // vaddr + jumps). With it off (the default), flycast wants a real dc_boot.bin we
   // don't ship → the .elf never loads (RAM stays empty, CPU never runs our code).
-  dreamcast: { flycast_threaded_rendering: "disabled", flycast_hle_bios: "enabled" },
+  // emulate_framebuffer scans out the DC framebuffer directly on every VBlank (the 2D
+  // path, no TA list) — so simple homebrew that writes RGB565 pixels to VRAM presents
+  // reliably without building a full PowerVR2 tile list. (Threaded rendering is also
+  // force-disabled in the core itself; the option here is belt-and-suspenders.)
+  dreamcast: {
+    flycast_threaded_rendering: "disabled",
+    flycast_hle_bios: "enabled",
+    flycast_emulate_framebuffer: "enabled",
+  },
   // VICE mounts a .d64/.tap/.crt but, with autostart off, just sits at the BASIC
   // `READY.` prompt — the agent would see a blue boot screen, not the game. Force
   // autostart so a disk/tape image runs the first program automatically (same as
