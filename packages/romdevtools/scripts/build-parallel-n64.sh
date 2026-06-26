@@ -31,6 +31,20 @@ if ! grep -q "romdev_mips_regs_get" libretro/libretro.c; then
   rm -f libretro/libretro.o
 fi
 
+# romdev live-debug instrumentation (breakpoint/watch): romdev_debug.c into the
+# r4300 dir + hook write_rdram_dram (write watch) + the pure_interp step (pc-break
+# + coverage).
+if [ ! -f mupen64plus-core/src/r4300/romdev_debug.c ]; then
+  cp "$SCRIPT_DIR/patches/romdev-snippets/n64-debug.c" mupen64plus-core/src/r4300/romdev_debug.c
+  sed -i 's|\$(CORE_DIR)/src/r4300/r4300.c \\|$(CORE_DIR)/src/r4300/r4300.c \\\n\t$(CORE_DIR)/src/r4300/romdev_debug.c \\|' Makefile.common
+  sed -i 's|int write_rdram_dram(void\* opaque, uint32_t address, uint32_t value, uint32_t mask)\n{|extern void romdev_on_write(unsigned int,unsigned int,unsigned int);\nint write_rdram_dram(void* opaque, uint32_t address, uint32_t value, uint32_t mask)\n{\n    romdev_on_write(address, value, 0);|' mupen64plus-core/src/ri/rdram.c
+  # (the rdram sed spans lines; use perl for the multiline match)
+  perl -0pi -e 's/int write_rdram_dram\(void\* opaque, uint32_t address, uint32_t value, uint32_t mask\)\n\{/extern void romdev_on_write(unsigned int,unsigned int,unsigned int);\nint write_rdram_dram(void* opaque, uint32_t address, uint32_t value, uint32_t mask)\n{\n    romdev_on_write(address, value, 0);/ unless /romdev_on_write/' mupen64plus-core/src/ri/rdram.c
+  perl -0pi -e 's/void pure_interpreter\(void\)\n\{/extern int romdev_on_step(unsigned int);\nextern int stop;\nvoid pure_interpreter(void)\n{/ unless /romdev_on_step/' mupen64plus-core/src/r4300/pure_interp.c
+  perl -0pi -e 's/     InterpretOpcode\(\);\n   \}/     if (romdev_on_step(PC->addr)) { stop = 1; break; }\n     InterpretOpcode();\n   }/ unless /romdev_on_step\(PC/' mupen64plus-core/src/r4300/pure_interp.c
+  rm -f mupen64plus-core/src/ri/rdram.o mupen64plus-core/src/r4300/pure_interp.o
+fi
+
 emmake make -f Makefile platform=emscripten HAVE_THR_AL=1 clean >/dev/null 2>&1 || true
 emmake make -f Makefile platform=emscripten HAVE_THR_AL=1 -j"$(nproc)"
 
@@ -66,7 +80,7 @@ for src in $EXTRAS; do
     && emar rcs "$CORE_A" "${src%.c}.o" 2>/dev/null
 done
 
-EXPORTED='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_mips_regs_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
+EXPORTED='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_mips_regs_get","_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get","_romdev_regsnap_get","_romdev_watchdog_set","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
 EXPORTED_RT='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS","dynCall"]'
 
 emcc "$CORE_A" -O3 -flto -s WASM=1 -s MODULARIZE=1 -s EXPORT_ES6=1 \

@@ -72,7 +72,7 @@ const PLATFORM_QUIRKS = {
     headerLocation: "PS-EXE: 'PS-X EXE' magic at 0, entry (pc0) at +0x10, load addr (t_addr) at +0x18; 2048-byte header then code",
     notes: [
       "32-bit MIPS R3000 (little-endian), framebuffer GPU. Runs via PCSX-ReARMed with its BUILT-IN HLE BIOS — no firmware file needed, software-rendered. Load a .exe (PS-EXE), or a disc image if you have one.",
-      "WORKS NOW: build (buildSource language:'c' → mips-elf-gcc → a PS-EXE the HLE BIOS runs; write GPU/SPU registers directly, no SDK yet), run, frame({op:'screenshot'}), cpu({op:'read'}) (live R3000 registers), cheats, readMemory/writeMemory (system_ram = 2MB main RAM), disasm + decompile (Ghidra MIPS C). MIPS is little-endian here.",
+      "WORKS NOW: build (buildSource language:'c' → mips-elf-gcc → a PS-EXE the HLE BIOS runs; write GPU/SPU registers directly, no SDK yet), run, frame({op:'screenshot'}), cpu({op:'read'}) (live R3000 registers), cheats, readMemory/writeMemory (system_ram = 2MB main RAM), disasm + decompile (Ghidra MIPS C), AND the live-debug tools breakpoint({on:'pc'/'write'/'read'}) + watch({on:'range'}) (the cores carry romdev's CPU instrumentation). MIPS is little-endian here.",
       "The bare build path: a minimal crt0 sets the stack + clears .bss + calls main(); code loads at 0x80010000. No PSn00bSDK runtime yet — drive the GPU at ports 0x1F801810/0x1F801814. The framebuffer renderer has no tile/sprite inspectors — use screenshot + memory.",
       "For higher fidelity (GL hardware renderer) a real PS1 BIOS + the beetle_psx_hw core is the alternative, but the HLE pcsx_rearmed path ships clean with zero firmware.",
     ],
@@ -84,7 +84,7 @@ const PLATFORM_QUIRKS = {
     headerLocation: ".z64 (big-endian) magic 80 37 12 40 at 0; entry point (big-endian word) at +0x08; 0x1000-byte IPL3 bootcode then game code. .v64/.n64 byte orders are auto-normalized.",
     notes: [
       "32-bit MIPS R4300 (big-endian), 3D RDP/RSP. Runs via ParaLLEl-N64 with the glide64 GL renderer — HW-rendered through the OPTIONAL native GL stack (native-gles + webgl-node). Those are optionalDependencies: install them for N64; the other platforms don't need them.",
-      "WORKS NOW: build (buildSource language:'c' → mips-elf-gcc → a big-endian MIPS image; bare crt0, no libdragon yet so it's logic-only for now), run, frame({op:'screenshot'}) (real 3D frames, headless via FBO readback), cpu({op:'read'}) (live R4300 registers), cheats, readMemory/writeMemory (system_ram = 8MB RDRAM, 0x80xxxxxx maps to offset 0), disasm + decompile (Ghidra MIPS C). MIPS is big-endian here.",
+      "WORKS NOW: build (buildSource language:'c' → mips-elf-gcc → a big-endian MIPS image; bare crt0, no libdragon yet so it's logic-only for now), run, frame({op:'screenshot'}) (real 3D frames, headless via FBO readback), cpu({op:'read'}) (live R4300 registers), cheats, readMemory/writeMemory (system_ram = 8MB RDRAM, 0x80xxxxxx maps to offset 0), disasm + decompile (Ghidra MIPS C), AND breakpoint + watch (live-debug instrumentation in the core). MIPS is big-endian here.",
       "build caveat: a fully BOOTABLE N64 ROM needs the IPL3 bootcode + a libdragon-style header (libdragon SDK forthcoming). The bare build compiles+links your C to a flat image — great for logic/RE, not yet a self-booting cart. 3D renderer has no tile/sprite inspectors — use screenshot + memory.",
       "If frame() errors with an install hint, the optional GL module isn't installed: `npm install native-gles webgl-node`.",
     ],
