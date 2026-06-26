@@ -14,6 +14,7 @@ import { LibretroHost } from "../src/host/LibretroHost.js";
 import { resolveCore } from "../src/cores/registry.js";
 import { framebufferToRgba } from "../src/host/framebuffer.js";
 import { glStackAvailable } from "../src/host/glOptionalDep.js";
+import { getCPUState } from "../src/host/cpu-state.js";
 
 function countNonBlack(rgba) {
   let nz = 0;
@@ -50,6 +51,18 @@ test("N64: parallel_n64 HW-renders a real frame through the GL bridge", { timeou
     assert.ok(nz > lf.width * lf.height * 0.1, `frame has real content (not black): ${nz} non-black px`);
     // alpha forced opaque (the FBO leaves alpha=0)
     assert.equal(rgba[3], 0xff, "alpha forced opaque in the decode");
+
+    // cpuState — the R4300 register file (cheat+regsnap-enabled core build).
+    if (host.mipsRegsSupported()) {
+      const cpu = getCPUState(host, "n64");
+      assert.ok(cpu && typeof cpu.pc === "number", "N64 cpuState decodes");
+      assert.ok((cpu.registers.sp || "").startsWith("$80") || cpu.pc !== 0, "registers look like real RDRAM state");
+      assert.equal(Object.keys(cpu.registers).length, 34, "32 GPRs + lo + hi");
+    }
+    // cheats — retro_cheat_set exported.
+    if (host.cheatsSupported()) {
+      host.setCheat(0, "80100000 0042", true); // GameShark-style; should not throw
+    }
   } finally {
     host.dispose?.();
   }
@@ -88,6 +101,16 @@ test("PS1: pcsx_rearmed (HLE, no BIOS) boots + presents a frame", { timeout: 120
       const lf = host.state.lastFrame;
       assert.ok(lf, "PS1 presented a frame");
       assert.ok(lf.width > 0 && lf.height > 0, `real framebuffer: ${lf.width}x${lf.height}`);
+
+      // cpuState — the R3000 register file.
+      if (host.mipsRegsSupported()) {
+        const cpu = getCPUState(host, "ps1");
+        assert.ok(cpu && typeof cpu.pc === "number", "PS1 cpuState decodes");
+        assert.equal(Object.keys(cpu.registers).length, 34, "32 GPRs + lo + hi");
+        // our test PS-EXE sets sp = 0x801FFFF0; the running PC should be in its code.
+        assert.match(cpu.registers.sp, /^\$80/, "sp is in PS1 main RAM");
+      }
+      if (host.cheatsSupported()) host.setCheat(0, "80100000 0042", true);
     } finally {
       host.dispose?.();
     }

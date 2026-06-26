@@ -4,6 +4,33 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.47.0 — 2026-06-25
+
+### N64 + PS1 reach feature parity (cheats + cpuState + decompile)
+
+The MIPS tier now matches the 14 on everything except `build`:
+
+- **MIPS decompile** — `disasm({platform:'n64'|'ps1', target:'decompile'})` produces
+  real Ghidra C pseudocode. **No Python**: the stock Ghidra MIPS SLEIGH spec is
+  compiled to `.sla` (MIPS:BE:32 for N64, MIPS:LE:32 for PS1) by the same
+  `sleigh_opt` that builds the other 8 CPU tables. (m2c/Pyodide was rejected — it
+  would drag a CPython runtime into the tool.)
+- **cpuState** — `cpu({op:'read'})` decodes the live R4300 (N64) / R3000 (PS1)
+  register file: 32 GPRs by o32 ABI name + lo/hi + PC. Backed by a tiny
+  `romdev_mips_regs_get` appended to each core's `libretro.c` (the new
+  `build-parallel-n64.sh` / `build-pcsx-rearmed.sh` recipes).
+- **cheats** — `_retro_cheat_set`/`_retro_cheat_reset` are now exported from the
+  rebuilt cores (they were in the upstream C, just unexported).
+- The cores are reproducible: pinned in `versions.json`, built by the new recipes
+  (clone → append the regsnap → emcc with the cheat+regsnap exports; the regsnap is
+  `EMSCRIPTEN_KEEPALIVE` so LTO doesn't strip it).
+
+**Parity scorecard** — N64 & PS1 now have: run, screenshot, memory r/w, disasm
+(cfg/xrefs/functions), decompile, cheats, cpuState. The one remaining op is
+**build** (a MIPS GCC→WASM toolchain — PSn00bSDK/libdragon — the largest separate
+piece). The framebuffer/3D renderers have no tile/sprite/nametable inspectors by
+nature.
+
 ## 0.46.0 — 2026-06-25
 
 ### N64 + PS1 run-side: boot, run, render (the MIPS tier goes live)
