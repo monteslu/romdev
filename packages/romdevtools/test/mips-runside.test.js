@@ -24,6 +24,9 @@ const HAS_MIPS_GCC = (() => {
   return existsSync(p);
 })();
 
+// the bundled N64 software-3D helper lib (n64.h / n64.c).
+const LIB_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src", "platforms", "n64", "lib", "c");
+
 function countNonBlack(rgba) {
   let nz = 0;
   for (let i = 0; i < rgba.length; i += 4) {
@@ -32,33 +35,37 @@ function countNonBlack(rgba) {
   return nz;
 }
 
-test("N64: parallel_n64 HW-renders a real frame through the GL bridge", { timeout: 180000 }, async () => {
+test("N64: a toolchain-built homebrew boots + renders through the software core", { timeout: 180000 }, async () => {
+  if (!HAS_MIPS_GCC) { console.log("mips-elf-gcc not built; skipping"); return; }
   const core = resolveCore("n64");
   if (!core) { console.log("no n64 core staged; skipping"); return; }
-  if (!(await glStackAvailable())) { console.log("native GL stack not installed; skipping N64 run-side"); return; }
 
-  // megatextures is a known-good libdragon 3D demo; fall back to others.
-  let rom = null;
-  for (const f of ["megatextures-1.0.z64", "paniclab.n64"]) {
-    const p = path.join(process.env.HOME, "code/cliemu/homebrew_collection/n64", f);
-    try { rom = new Uint8Array(await readFile(p)); break; } catch { /* next */ }
-  }
-  if (!rom) { console.log("no N64 fixture; skipping"); return; }
+  // Build a homebrew with the bundled software-3D lib (a spinning cube) and prove it
+  // self-boots (clean IPL3) + renders to the framebuffer that angrylion scans out.
+  const n64c = await readFile(path.join(LIB_DIR, "n64.c"), "utf8");
+  const n64h = await readFile(path.join(LIB_DIR, "n64.h"), "utf8");
+  const src = `#include "n64.h"
+    int main(){ Vec3 v[8]={{FIX(-1),FIX(-1),FIX(-1)},{FIX(1),FIX(-1),FIX(-1)},{FIX(1),FIX(1),FIX(-1)},{FIX(-1),FIX(1),FIX(-1)},
+      {FIX(-1),FIX(-1),FIX(1)},{FIX(1),FIX(-1),FIX(1)},{FIX(1),FIX(1),FIX(1)},{FIX(-1),FIX(1),FIX(1)}}; fix a=0;
+      n64_init(); n64_camera(0,0,FIX(-5),0,0);
+      for(;;){ a+=FIX(2); n64_model(0,0,0,a); n64_clear(RGB(10,10,40));
+        n64_quad3d(v[0],v[1],v[2],v[3],RGB(220,40,40)); n64_quad3d(v[1],v[5],v[6],v[2],RGB(40,220,40));
+        n64_quad3d(v[4],v[5],v[1],v[0],RGB(40,40,220)); n64_flip(); } }`;
+  const built = await buildForPlatform({ platform: "n64", language: "c",
+    sources: { "main.c": src, "n64.c": n64c }, includes: { "n64.h": n64h } });
+  assert.ok(built.ok, "homebrew builds");
+  assert.equal(built.binary[0], 0x80, "valid .z64 header magic (0x80371240)");
 
   const host = new LibretroHost();
   try {
     await host.loadCore(core.jsPath, core.wasmPath, { hwRender: core.hwRender });
-    await host.loadMedia({ platform: "n64", bytes: rom, virtualName: "/game.z64" });
-    assert.ok(host.hwRender?.active, "HW render is active for n64");
-    for (let i = 0; i < 240; i++) host.stepFrames(1);
+    await host.loadMedia({ platform: "n64", bytes: built.binary, virtualName: "/game.z64" });
+    for (let i = 0; i < 120; i++) host.stepFrames(1);
     const lf = host.state.lastFrame;
-    assert.ok(lf && lf.rgba, "got a HW-render RGBA frame");
-    assert.ok(lf.width >= 256 && lf.height >= 224, `real framebuffer size: ${lf.width}x${lf.height}`);
+    assert.ok(lf, "got a software-rendered frame");
     const rgba = framebufferToRgba(lf.width, lf.height, lf.pixels, lf.pitch, lf.format);
     const nz = countNonBlack(rgba);
-    assert.ok(nz > lf.width * lf.height * 0.1, `frame has real content (not black): ${nz} non-black px`);
-    // alpha forced opaque (the FBO leaves alpha=0)
-    assert.equal(rgba[3], 0xff, "alpha forced opaque in the decode");
+    assert.ok(nz > lf.width * lf.height * 0.1, `the cube rendered (not black): ${nz} non-black px`);
 
     // cpuState — the R4300 register file (cheat+regsnap-enabled core build).
     if (host.mipsRegsSupported()) {
