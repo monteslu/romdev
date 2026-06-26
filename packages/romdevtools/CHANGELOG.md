@@ -4,6 +4,32 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.62.0 — 2026-06-26
+
+### Dreamcast run-side BREAKTHROUGH: Flycast boots + runs DC ELFs
+
+The threading wall is solved. Flycast (the full DC emulator) now **boots a homebrew
+.elf via reios HLE and runs frames** through the romdev host — `retro_init` /
+`retro_load_game` / `retro_run` all succeed, av_info reports 640×480, and video_refresh
+fires every frame. No abort, no `unwind`.
+
+The fix (after trying PROXY_TO_PTHREAD + ASYNCIFY, which deadlocks in Node on the
+GL↔proxy-thread dependency): build single-threaded and **`--wrap` pthread_create to a
+no-op** (`scripts/patches/romdev-snippets/flycast-pthread-noop.c`). pthread_create
+returns success but spawns nothing; join/detach are no-ops. So flycast's worker threads
+(achievements/http/network/audio-async) never run, `std::thread`'s ctor doesn't abort
+(no "thread constructor failed"), and — crucially — the main thread never blocks on a
+worker, so there's no emscripten `unwind`. Emulation runs synchronously on retro_run
+(ThreadedRendering defaulted false). This is far cleaner than stubbing thread sites
+one-by-one (there were 4+ wrapper classes plus raw std::thread/std::async).
+
+Also: the GL `get_proc_address` bridge fix (0.59.0) is what got context_reset past the
+signature mismatch; the 512MB-mmap fallback (posix_vmem) got init past the trap.
+
+NEXT: a DC program that actually renders via PowerVR2 (the KOS helper lib) to verify the
+present path end-to-end, then flip run/screenshot true. Captured in build-flycast.sh.
+Suite green.
+
 ## 0.60.0 — 2026-06-26
 
 ### Dreamcast: SuperH4 SLEIGH metadata shipped + Flycast threading progress
