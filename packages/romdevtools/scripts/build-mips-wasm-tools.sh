@@ -69,10 +69,15 @@ if [ ! -f "$WASM_PREFIX/lib/libisl.a" ]; then
   emmake make -j"$NCPU"; emmake make install
 fi
 
+# emscripten's libc DECLARES psignal/sigsetmask/etc., so gcc's libiberty must NOT
+# emit its own (conflicting) definitions. Pre-seed the autoconf cache so configure
+# believes these exist → libiberty's #ifndef HAVE_* guards skip them.
+PSIGNAL_CACHE="ac_cv_func_psignal=yes ac_cv_func_sigsetmask=yes"
+
 # ── 2. cc1 as WASM ──────────────────────────────────────────────────
 if [ ! -f "$ROOT/build-wasm-gcc/gcc/cc1.wasm" ]; then
   cd "$ROOT"; mkdir -p build-wasm-gcc; cd build-wasm-gcc
-  [ -f Makefile ] || emconfigure "$SRC_DIR/gcc-$GCC_VER/configure" \
+  [ -f Makefile ] || env $PSIGNAL_CACHE emconfigure "$SRC_DIR/gcc-$GCC_VER/configure" \
     --target=$TARGET --prefix="$WASM_PREFIX/gcc-wasm" \
     --host=wasm32-unknown-emscripten --build="$(gcc -dumpmachine)" \
     --enable-languages=c --disable-nls --disable-multilib \
@@ -86,7 +91,7 @@ fi
 # ── 3. binutils as WASM ─────────────────────────────────────────────
 if [ ! -f "$ROOT/build-wasm-binutils/gas/as-new.wasm" ]; then
   cd "$ROOT"; mkdir -p build-wasm-binutils; cd build-wasm-binutils
-  [ -f Makefile ] || emconfigure "$SRC_DIR/binutils-$BINUTILS_VER/configure" \
+  [ -f Makefile ] || env $PSIGNAL_CACHE emconfigure "$SRC_DIR/binutils-$BINUTILS_VER/configure" \
     --target=$TARGET --prefix="$WASM_PREFIX/binutils-wasm" \
     --host=wasm32-unknown-emscripten --build="$(gcc -dumpmachine)" \
     --disable-nls --disable-werror --disable-multilib
