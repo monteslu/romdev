@@ -225,7 +225,7 @@ export const CAPABILITIES = {
       // + cpuState (R3000 regsnap) + cheats live; disasm + decompile work (MIPS
       // Capstone + the MIPS:LE:32 SLEIGH spec). build needs a PS1 toolchain
       // (PSn00bSDK, not yet). The framebuffer renderer has no tile/sprite inspectors.
-      build: false, run: true, screenshot: true,
+      build: true, run: true, screenshot: true,
       inspectSprites: false, inspectPalette: false, inspectBackground: false,
       renderingContext: false, cpuState: true, audioDebug: false,
       cart: false, disasm: true, decompile: true,
@@ -242,7 +242,7 @@ export const CAPABILITIES = {
       // run/screenshot + cpuState (R4300 regsnap) + cheats live; disasm + decompile
       // work (MIPS Capstone + MIPS:BE:32 SLEIGH). build needs an N64 toolchain
       // (libdragon, not yet); the 3D renderer has no tile/sprite inspectors.
-      build: false, run: true, screenshot: true,
+      build: true, run: true, screenshot: true,
       inspectSprites: false, inspectPalette: false, inspectBackground: false,
       renderingContext: false, cpuState: true, audioDebug: false,
       cart: false, disasm: true, decompile: true,

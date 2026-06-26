@@ -4,6 +4,37 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.48.0 — 2026-06-25
+
+### N64 + PS1 `build` op — full feature parity
+
+The last missing op. N64 and PS1 now **build** C from source, completing parity
+with the 14 (every op: build, run, screenshot, memory, disasm, decompile, cheats,
+cpuState).
+
+- **A from-scratch `mips-elf` GCC toolchain compiled to WASM** — binutils 2.42 +
+  gcc 14.2.0 + newlib 4.4.0, the same two-stage pipeline as the Genesis m68k
+  toolchain. STAGE 1 builds it natively; STAGE 2 re-compiles cc1/as/ld/objcopy/
+  objdump to WASM. One toolchain serves both endiannesses (cc1 `-mel`/`-meb`,
+  as/ld `-EL`/`-EB`).
+- **`buildSource({platform:'ps1'|'n64', language:'c'})`** — cc1 → as → ld → objcopy,
+  links a minimal crt0 + libc/libm/libgcc. PS1 wraps the image in a PS-EXE the HLE
+  BIOS loads; N64 emits a big-endian flat image. **Verified end-to-end:** a C program
+  compiled by the toolchain boots and renders on the PS1 core (GPU fill executed).
+- Four GCC-15/emscripten build incompatibilities fixed along the way (all in the
+  build scripts): binutils `static_assert`-as-identifier (`-std=gnu11`), newlib
+  libgloss pre-C23 idioms (permissive target CFLAGS), libiberty `psignal` conflict
+  (source patch, both gcc + binutils copies), and the `all-gcc`/`all` aux-tool
+  targets pulling in ftw/gprofng (build the specific `cc1`/`as`/`ld` targets).
+- New `romdev-toolchain-mips-gcc` package (the WASM tools); pinned + reproducible
+  via `build-mips-toolchain.sh` + `build-mips-wasm-tools.sh`.
+
+**Caveats:** the bare build path has no SDK yet — PS1 is "drive the GPU/SPU
+registers yourself" (PSn00bSDK forthcoming); N64 compiles+links but a self-booting
+cart needs IPL3 + a libdragon header (libdragon forthcoming). Both are logic/RE-
+complete and the foundation for the SDKs. The framebuffer/3D renderers have no
+tile/sprite inspectors by nature.
+
 ## 0.47.0 — 2026-06-25
 
 ### N64 + PS1 reach feature parity (cheats + cpuState + decompile)

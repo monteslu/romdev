@@ -90,36 +90,51 @@ if [ ! -f "$ROOT/build-wasm-gcc/gcc/cc1.wasm" ]; then
     --disable-bootstrap --without-headers --with-newlib \
     --with-gmp="$WASM_PREFIX" --with-mpfr="$WASM_PREFIX" \
     --with-mpc="$WASM_PREFIX" --with-isl="$WASM_PREFIX" --with-system-zlib
-  emmake make -j"$NCPU" all-gcc
+  # Build JUST cc1 (the C frontend we need), NOT all-gcc — the aux tools
+  # (gcov-tool, lto-plugin) reference ftw/liblto_plugin.so that emscripten lacks
+  # and abort the whole all-gcc target. cc1 is self-contained.
+  ( cd gcc && emmake make -j"$NCPU" cc1 )
 fi
 
 # ── 3. binutils as WASM ─────────────────────────────────────────────
+# binutils has its OWN libiberty/strsignal.c — patch it too (same psignal fix).
+if ! grep -q "romdev: emscripten libc provides psignal" "$SRC_DIR/binutils-$BINUTILS_VER/libiberty/strsignal.c"; then
+  sed -i 's/#ifndef HAVE_PSIGNAL/#if 0 \/* romdev: emscripten libc provides psignal *\//' \
+    "$SRC_DIR/binutils-$BINUTILS_VER/libiberty/strsignal.c"
+fi
 if [ ! -f "$ROOT/build-wasm-binutils/gas/as-new.wasm" ]; then
   cd "$ROOT"; mkdir -p build-wasm-binutils; cd build-wasm-binutils
-  [ -f Makefile ] || env $PSIGNAL_CACHE emconfigure "$SRC_DIR/binutils-$BINUTILS_VER/configure" \
+  [ -f Makefile ] || emconfigure "$SRC_DIR/binutils-$BINUTILS_VER/configure" \
     --target=$TARGET --prefix="$WASM_PREFIX/binutils-wasm" \
     --host=wasm32-unknown-emscripten --build="$(gcc -dumpmachine)" \
     --disable-nls --disable-werror --disable-multilib
-  emmake make -j"$NCPU"
+  # Build the support libs then the tool subdirs via the TOP makefile (all-gas /
+  # all-ld / all-binutils configure + build their subdirs; a bare `all` would also
+  # pull in gprofng/aux tools that reference ftw etc. and abort).
+  emmake make -j"$NCPU" all-libiberty all-bfd all-opcodes all-libsframe all-libctf
+  emmake make -j"$NCPU" all-gas all-ld all-binutils
 fi
 
 # ── 4. Wrap + stage ─────────────────────────────────────────────────
-BINUTILS_WASM="$ROOT/build-wasm-binutils/binutils"
-GAS_WASM="$ROOT/build-wasm-binutils/gas"
-LD_WASM="$ROOT/build-wasm-binutils/ld"
-GCC_WASM="$ROOT/build-wasm-gcc/gcc"
-EMCC_KNOBS='-O2 -g0 -s MODULARIZE=1 -s EXPORT_ES6=1 -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=268435456 -s EXIT_RUNTIME=1 -s INVOKE_RUN=0 -s ENVIRONMENT=node -s EXPORTED_RUNTIME_METHODS=["callMain","FS"]'
+# Each tool is RE-LINKED through its own Makefile with the MODULARIZE/EXPORT_ES6
+# knobs injected via LDFLAGS — NOT `emcc <built>` directly, because the tool's
+# object list (libbackend.a + the per-language objects for cc1, etc.) is known
+# only to the Makefile. Output goes straight to the staging dir.
+KNOBS_BASE="-O2 -g0 -s MODULARIZE=1 -s EXPORT_ES6=1 -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=268435456 -s EXIT_RUNTIME=1 -s INVOKE_RUN=0 -s ENVIRONMENT=node -s EXPORTED_RUNTIME_METHODS=callMain,FS"
 
-stage() { # <built-wasm> <out-name> <export-name>
-  local built="$1" out="$2" exp="$3"
-  echo "  staging $out"
-  emcc "$built" $EMCC_KNOBS -s EXPORT_NAME="$exp" -o "$OUT/$out.mjs"
+relink() { # <build-subdir> <make-target> <out-name> <export-name>
+  local sub="$1" tgt="$2" out="$3" exp="$4"
+  echo "  re-linking + staging $out"
+  ( cd "$sub" && rm -f "$tgt" "$tgt.wasm" && \
+    emmake make "$tgt" LDFLAGS="$KNOBS_BASE -s EXPORT_NAME=$exp" )
+  cp "$sub/$tgt"      "$OUT/$out.mjs"
+  cp "$sub/$tgt.wasm" "$OUT/$out.wasm"
   cp "$OUT/$out.mjs" "$OUT/$out.wasm" "$PKG_OUT/" 2>/dev/null || true
 }
-stage "$GCC_WASM/cc1"        cc1            createMipsCc1
-stage "$GAS_WASM/as-new"     mips-elf-as    createMipsAs
-stage "$LD_WASM/ld-new"      mips-elf-ld    createMipsLd
-stage "$BINUTILS_WASM/objcopy" mips-elf-objcopy createMipsObjcopy
-stage "$BINUTILS_WASM/objdump" mips-elf-objdump createMipsObjdump
+relink "$ROOT/build-wasm-gcc/gcc"        cc1     cc1              createMipsCc1
+relink "$ROOT/build-wasm-binutils/gas"   as-new  mips-elf-as      createMipsAs
+relink "$ROOT/build-wasm-binutils/ld"    ld-new  mips-elf-ld      createMipsLd
+relink "$ROOT/build-wasm-binutils/binutils" objcopy mips-elf-objcopy createMipsObjcopy
+relink "$ROOT/build-wasm-binutils/binutils" objdump mips-elf-objdump createMipsObjdump
 
 echo "STAGE 2 complete. mips-elf tools staged → $OUT/"
