@@ -4,6 +4,39 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.46.0 — 2026-06-25
+
+### N64 + PS1 run-side: boot, run, render (the MIPS tier goes live)
+
+Past analysis-only — N64 and PS1 now **boot, run, and present real frames** through
+the host. The 32-bit MIPS tier is a new partial tier (`tier:"mips"`), distinct from
+the canonical 14.
+
+- **N64** (ParaLLEl-N64, HW 3D render) — `run` + `frame({op:'screenshot'})` produce
+  real 3D frames headlessly via a GL framebuffer readback. Rendering goes through a
+  ported GL bridge (`LibretroGL`/`LibretroGLBridge`) backed by `native-gles` +
+  `webgl-node`, which are **optionalDependencies**: lazy-loaded only when an N64/PS1
+  core boots, so the 14 software platforms and headless installs without the GPU
+  module are completely unaffected (clear install hint if absent).
+- **PS1** (PCSX-ReARMed, software + **built-in HLE BIOS**) — `run` + screenshot with
+  zero firmware to ship, no GL dependency. Loads PS-EXE (and disc images).
+- **Memory** works for both: `readMemory`/`writeMemory` on `system_ram` (N64 = 8MB
+  RDRAM, PS1 = 2MB main RAM) — poke values directly.
+- **Static RE** (from 0.45.0) still works: `disasm({platform:'n64'|'ps1',
+  target:'rom'|'functions'|'cfg'|'xrefs'})`.
+- N64 `.v64`/`.n64` byte orders auto-normalize to `.z64`; PS-EXE headers are stripped.
+
+Three GL-binding bugs fixed to get frames on screen: the Emscripten `getContext`
+shim's `instanceof WebGLRenderingContext` check (needs WebGL1 to be a distinct
+class), the signed-vs-unsigned `RETRO_HW_FRAME_BUFFER_VALID` compare, and the
+all-transparent FBO alpha (forced opaque in a new RGBA decode path).
+
+**Still pending** for full parity (honestly off in the manifest): `build` (needs a
+MIPS toolchain — PSn00bSDK/libdragon), `decompile` (needs a MIPS SLEIGH spec in the
+decompiler — slaspec sources exist, a decompiler-package rebuild), `getCPUState` +
+`cheats` (need a core rebuild exposing those exports). The framebuffer/3D renderers
+have no tile/sprite/nametable inspectors by nature.
+
 ## 0.45.0 — 2026-06-25
 
 ### PS1 + N64 analysis-first (the 32-bit MIPS tier)
