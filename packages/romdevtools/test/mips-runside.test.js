@@ -195,3 +195,29 @@ test("live-debug: watchpoint + range-watch fire on PS1 (instrumented core)", { t
     host.dispose?.();
   }
 });
+
+test("audioDebug: PS1 SPU register decode (chip:'spu')", { timeout: 180000 }, async () => {
+  if (!HAS_MIPS_GCC) { console.log("mips-elf-gcc not built; skipping"); return; }
+  const core = resolveCore("ps1");
+  if (!core) return;
+  const { decodePs1Spu } = await import("../src/host/ps1-spu-state.js");
+  // a PS1 program that writes the SPU main volume + a voice volume/pitch.
+  const r = await buildForPlatform({ platform: "ps1", language: "c", source: `
+    #define SPU(o) (*(volatile unsigned short*)(0x1F801C00+(o)))
+    int main(){ SPU(0x180)=0x3FFF; SPU(0x182)=0x3FFF; SPU(0)=0x2000; SPU(2)=0x1000; for(;;){} }` });
+  assert.ok(r.ok, "build ok");
+  const host = new LibretroHost();
+  try {
+    await host.loadCore(core.jsPath, core.wasmPath, { hwRender: core.hwRender });
+    if (!host.spuRegsSupported()) { console.log("core has no SPU export; skipping"); return; }
+    await host.loadMedia({ platform: "ps1", bytes: r.binary, virtualName: "/spu.exe" });
+    host.stepFrames(60);
+    const st = decodePs1Spu(host.getSpuRegs());
+    assert.equal(st.chip, "spu");
+    assert.equal(st.voices.length, 24, "24 SPU voices");
+    assert.equal(st.mainVolumeLeft, 0x3fff, "main volume L read back");
+    assert.equal(st.voices[0].volumeLeft, 0x2000, "voice0 volume read back");
+  } finally {
+    host.dispose?.();
+  }
+});

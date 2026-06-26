@@ -4,6 +4,22 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.50.0 — 2026-06-26
+
+### PS1 SPU audioDebug
+
+- **`getAudioState({chip:'spu'})`** decodes the PS1 SPU's 24 ADPCM voices (per-voice
+  volume L/R, pitch→Hz, ADSR, key-on/off + main volume + control), from a
+  `romdev_spu_get` export added to pcsx_rearmed (copies the SPU regArea). Verified:
+  a toolchain-built program's SPU register writes read back correctly.
+- ps1 `audioDebug:true` in the manifest.
+
+**Parity status (N64/PS1 vs the canonical 14):** at parity on build, run, screenshot,
+memory, cpuState, disasm, decompile, cheats, breakpoint, watch (+ PS1 audioDebug).
+Genuinely N/A by hardware: the tile/sprite/nametable/palette inspectors (framebuffer/3D
+renderers have no such tables) and `cart` (disc-based). **Remaining real TODO:** N64
+audioDebug (the RSP/AI audio path — a deeper decode than the PS1 SPU register block).
+
 ## 0.49.0 — 2026-06-26
 
 ### N64 + PS1 live-debug — breakpoint + watch now work
