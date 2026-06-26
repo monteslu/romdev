@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<language_definitions>
+  <language processor="SuperH4" endian="little" size="32" variant="default" version="1.01"
+            slafile="SuperH4_le.sla" processorspec="SuperH4.pspec" id="SuperH4:LE:32:default">
+    <description>SuperH SH-4 little endian (Sega Dreamcast)</description>
+    <compiler name="default" spec="SuperH4_le.cspec" id="default"/>
+  </language>
+</language_definitions>

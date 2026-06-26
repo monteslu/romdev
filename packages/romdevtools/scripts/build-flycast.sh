@@ -49,6 +49,16 @@ fi
 grep -q "__EMSCRIPTEN__" core/linux/posix_vmem.cpp || \
   perl -0pi -e "s/(bool init\(void \*\*vmem_base_addr, void \*\*sh4rcb_addr, size_t ramSize\)\n\{)/\$1\n#if defined(__EMSCRIPTEN__)\n\t(void)vmem_base_addr; (void)sh4rcb_addr; (void)ramSize; return false;\n#endif/" core/linux/posix_vmem.cpp
 
+# 6. single-threaded WASM: stub worker-thread creation (emscripten can't spawn them
+#    without -pthread, and with -pthread the main thread can't block → unwind). The
+#    emulation runs synchronously on retro_run (ThreadedRendering defaulted false).
+grep -q "romdev/WASM (single-threaded" core/stdclass.cpp || \
+  perl -0pi -e 's/(void cThread::Start\(\)\n\{)/$1\n#if defined(__EMSCRIPTEN__)\n\treturn; \/* romdev\/WASM: no worker threads *\/\n#endif/' core/stdclass.cpp
+grep -q "romdev/WASM (single-threaded" core/util/periodic_thread.h || \
+  perl -0pi -e 's/(\tvoid start\(\)\n\t\{)/$1\n#if defined(__EMSCRIPTEN__)\n\t\treturn; \/* romdev\/WASM: no worker threads *\/\n#endif/' core/util/periodic_thread.h
+grep -q "romdev/WASM: single-threaded build" shell/libretro/option.cpp || \
+  sed -i 's/Option<bool> ThreadedRendering(CORE_OPTION_NAME "_threaded_rendering", true);/#if defined(__EMSCRIPTEN__) \/* romdev\/WASM: single-threaded build *\/\nOption<bool> ThreadedRendering(CORE_OPTION_NAME "_threaded_rendering", false);\n#else\nOption<bool> ThreadedRendering(CORE_OPTION_NAME "_threaded_rendering", true);\n#endif/' shell/libretro/option.cpp
+
 # ── configure + build ───────────────────────────────────────────────────────
 rm -rf build-em && mkdir build-em && cd build-em
 emcmake cmake .. -DLIBRETRO=ON -DUSE_VULKAN=OFF -DUSE_GLES2=OFF -DCMAKE_BUILD_TYPE=Release \

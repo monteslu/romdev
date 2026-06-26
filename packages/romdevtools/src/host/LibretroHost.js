@@ -55,6 +55,12 @@ const PLATFORM_CORE_OPTIONS = {
   // beetle_psx_hw defaults to the software renderer; force hardware_gl so it
   // renders through the GL context the host set up (otherwise no FBO frames).
   ps1: { beetle_psx_hw_renderer: "hardware_gl" },
+  // Flycast defaults to THREADED rendering — the render thread + the main thread's
+  // wait on it makes retro_run unwind under emscripten pthreads (yields to the event
+  // loop, incompatible with our synchronous frame-step). Disable it so render() runs
+  // synchronously on the calling thread (Emulator::render → run(), no cross-thread
+  // wait). Also keep per-frame sync (no auto frame-skip) so one retro_run = one frame.
+  dreamcast: { flycast_threaded_rendering: "disabled" },
   // VICE mounts a .d64/.tap/.crt but, with autostart off, just sits at the BASIC
   // `READY.` prompt — the agent would see a blue boot screen, not the game. Force
   // autostart so a disk/tape image runs the first program automatically (same as

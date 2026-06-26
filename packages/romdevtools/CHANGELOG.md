@@ -4,6 +4,25 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.60.0 — 2026-06-26
+
+### Dreamcast: SuperH4 SLEIGH metadata shipped + Flycast threading progress
+
+- **SuperH4 SLEIGH metadata committed** (`.ldefs`/`.pspec`/`.cspec`) — these ship
+  alongside the gitignored `.sla` (like every other CPU); without them the decompiler
+  couldn't load the SuperH4 spec at runtime. (0.57.0 shipped the wiring but missed the
+  metadata files. Now complete.)
+- Flycast run-side threading: the single-threaded WASM build needs worker-thread
+  creation stubbed (emscripten can't spawn them without -pthread; with -pthread the
+  main thread can't block → unwind). Captured the patches in `build-flycast.sh`
+  (`cThread::Start` / `VPeriodicThread::start` no-op, `ThreadedRendering` defaults
+  false on emscripten) + the `flycast_threaded_rendering: disabled` host option.
+
+KNOWN-OPEN: Flycast's load still aborts on a not-yet-located worker thread (no-pthread)
+or unwinds (pthread). The thread/main-loop model integration is the remaining run-side
+fight — see N64_PS1_LESSONS_FOR_DREAMCAST.md. DC analysis (disasm+decompile) is fully
+shipped + tested. Suite 1059/1059.
+
 ## 0.59.0 — 2026-06-26
 
 ### Dreamcast run-side: Flycast loads ELFs + GL bridge fix (general)
