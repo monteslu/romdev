@@ -222,13 +222,13 @@ export const CAPABILITIES = {
     renderingKind: "framebuffer", introspection: "shallow",
     ops: {
       // pcsx_rearmed: software render + HLE BIOS (no firmware, no GL). run/screenshot
-      // live. build needs a PS1 toolchain (PSn00bSDK, not yet). The framebuffer
-      // renderer has no tile/sprite/nametable inspectors. decompile needs a MIPS
-      // SLEIGH spec (not yet); disasm works (MIPS Capstone).
+      // live; disasm + decompile work (MIPS Capstone + the MIPS:LE:32 SLEIGH spec).
+      // build needs a PS1 toolchain (PSn00bSDK, not yet). The framebuffer renderer
+      // has no tile/sprite/nametable inspectors.
       build: false, run: true, screenshot: true,
       inspectSprites: false, inspectPalette: false, inspectBackground: false,
       renderingContext: false, cpuState: false, audioDebug: false,
-      cart: false, disasm: true, decompile: false,
+      cart: false, disasm: true, decompile: true,
     },
   },
   n64: {
@@ -239,12 +239,13 @@ export const CAPABILITIES = {
     renderingKind: "3d", introspection: "shallow",
     ops: {
       // parallel_n64: HW (GL) render via the optional native-gles bridge.
-      // run/screenshot live. build needs an N64 toolchain (libdragon, not yet); the
-      // 3D renderer has no tile/sprite inspectors. decompile pending; disasm works.
+      // run/screenshot live; disasm + decompile work (MIPS Capstone + MIPS:BE:32
+      // SLEIGH). build needs an N64 toolchain (libdragon, not yet); the 3D renderer
+      // has no tile/sprite inspectors.
       build: false, run: true, screenshot: true,
       inspectSprites: false, inspectPalette: false, inspectBackground: false,
       renderingContext: false, cpuState: false, audioDebug: false,
-      cart: false, disasm: true, decompile: false,
+      cart: false, disasm: true, decompile: true,
     },
   },
 };

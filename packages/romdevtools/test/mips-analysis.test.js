@@ -31,7 +31,7 @@ test("capability manifest: ps1/n64 are the MIPS tier (disasm+run yes, build/deco
     assert.equal(c.ops.disasm, true, `${p} disasm`);
     assert.equal(c.ops.run, true, `${p} run (real core wired)`);
     assert.equal(c.ops.screenshot, true, `${p} screenshot`);
-    assert.equal(c.ops.decompile, false, `${p} decompile (no MIPS SLEIGH yet)`);
+    assert.equal(c.ops.decompile, true, `${p} decompile (MIPS SLEIGH shipped)`);
     assert.equal(c.ops.build, false, `${p} build (no MIPS toolchain yet)`);
     assert.equal(c.ops.inspectBackground, false, "tile inspector meaningless on framebuffer/3d");
   }
@@ -82,18 +82,23 @@ test("live: N64 homebrew → functions, cfg, xrefs (rizin MIPS engine)", { timeo
   assert.ok(Array.isArray(xr.refs), "xrefs returns a (possibly empty) ref array");
 });
 
-test("decompile on a MIPS platform steers to the disasm path, not a cryptic failure", { timeout: 120000 }, async () => {
+test("decompile on a MIPS platform produces real C (MIPS SLEIGH)", { timeout: 120000 }, async () => {
   let rom = null;
-  for (const f of ["FlappyBird.z64", "sblobber64.z64"]) {
+  for (const f of ["FlappyBird.z64", "sblobber64.z64", "paniclab.n64"]) {
     const p = path.join(N64_DIR, f);
     try { await readFile(p); rom = p; break; } catch { /* next */ }
   }
   if (!rom) { console.log("no N64 fixture; skipping"); return; }
-  await assert.rejects(
-    () => analyzeDecompile(rom, 0x80000840, "n64"),
-    /MIPS.*not available yet|no MIPS SLEIGH|use disasm/i,
-    "decompile names the missing MIPS SLEIGH + points at the working disasm targets",
-  );
+  // decompile the most complex recovered function.
+  const fns = await analyzeFunctions(rom, "n64");
+  const top = fns.functions[0];
+  const d = await analyzeDecompile(rom, top.address, "n64");
+  assert.equal(d.langid, "MIPS:BE:32:default", "N64 uses the big-endian MIPS SLEIGH");
+  assert.ok(typeof d.code === "string" && d.code.length > 20, "got C output");
+  assert.doesNotMatch(d.code, /No sleigh specification|No function selected|Could not create architecture/,
+    "real decompiler output, not an error string");
+  // a decompiled function body has a signature + braces.
+  assert.match(d.code, /\b(void|int|uint|undefined)\w*\s+\w+\s*\(/, "looks like a C function signature");
 });
 
 test("PS1 PS-EXE header is stripped + analyzed little-endian", { timeout: 60000 }, async () => {

@@ -68,6 +68,9 @@ compile_sla "$PROC/6502/data/languages/65c02.slaspec"  65c02
 compile_sla "$PROC/Z80/data/languages/z80.slaspec"     z80
 compile_sla "$PROC/ARM/data/languages/ARM4t_le.slaspec" ARM4t_le
 compile_sla "$PROC/68000/data/languages/68040.slaspec" 68040
+# MIPS — both endians (N64 R4300 = big, PS1 R3000 = little), 32-bit code variant.
+compile_sla "$PROC/MIPS/data/languages/mips32be.slaspec" mips32be
+compile_sla "$PROC/MIPS/data/languages/mips32le.slaspec" mips32le
 # external (community specs)
 compile_sla "$GHIDRABOY/data/languages/sm83.slaspec"   sm83
 compile_sla "$SNES/data/languages/65816.slaspec"       65816
@@ -88,6 +91,26 @@ cp "$PROC/68000/data/languages/"68000.{ldefs,pspec,cspec} "$PROC/68000/data/lang
 cp "$GHIDRABOY/data/languages/"sm83.{ldefs,pspec,cspec} "$SLEIGH_HOME/"
 cp "$SNES/data/languages/"65816.{ldefs,cspec} "$SNES/data/languages/"65816-snes.pspec "$SLEIGH_HOME/"
 cp "$HUC/Ghidra/Processors/HuC6280/data/languages/"HuC6280.{ldefs,pspec,cspec} "$SLEIGH_HOME/"
+# MIPS metadata: the stock mips.ldefs declares 65 langids referencing R6/64 .sla we
+# don't build, which makes the whole ldefs fail to load. Emit a MINIMAL ldefs with
+# only the two 32-bit-default langids we ship. (pspec/cspec copied straight.)
+cp "$PROC/MIPS/data/languages/"mips32.pspec "$SLEIGH_HOME/"
+cp "$PROC/MIPS/data/languages/"mips32be.cspec "$PROC/MIPS/data/languages/"mips32le.cspec "$SLEIGH_HOME/"
+cat > "$SLEIGH_HOME/mips.ldefs" <<'MIPS_LDEFS'
+<?xml version="1.0" encoding="UTF-8"?>
+<language_definitions>
+  <language processor="MIPS" endian="big" size="32" variant="default" version="1.7"
+            slafile="mips32be.sla" processorspec="mips32.pspec" id="MIPS:BE:32:default">
+    <description>MIPS32 big endian (N64 R4300, 32-bit code)</description>
+    <compiler name="default" spec="mips32be.cspec" id="default"/>
+  </language>
+  <language processor="MIPS" endian="little" size="32" variant="default" version="1.7"
+            slafile="mips32le.sla" processorspec="mips32.pspec" id="MIPS:LE:32:default">
+    <description>MIPS32 little endian (PS1 R3000)</description>
+    <compiler name="default" spec="mips32le.cspec" id="default"/>
+  </language>
+</language_definitions>
+MIPS_LDEFS
 
 # ── 4. WASM decompiler ──────────────────────────────────────────────────────
 echo "==> building WASM decompiler"
