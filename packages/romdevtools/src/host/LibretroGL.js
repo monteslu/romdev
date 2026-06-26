@@ -174,13 +174,20 @@ export class LibretroGL {
 
   /**
    * Read back the rendered frame as RGBA pixels.
+   * @param {number} [cropW] active width the core reported (e.g. DC 640); when smaller
+   *   than the FBO, read back only that bottom-left region instead of the whole viewport
+   *   (the GL bottom-left origin puts the active framebuffer in the lower-left corner).
+   * @param {number} [cropH] active height the core reported (e.g. DC 480).
    * Returns { pixels, width, height } or null if not active.
    */
-  readbackFrame() {
+  readbackFrame(cropW, cropH) {
     if (!this.active) return null;
 
     gl.glFinish();
-    const w = this.fboW, h = this.fboH;
+    // Crop to the core's active resolution when it's a sub-region of the FBO; this
+    // strips the dead border a fixed-size GL FBO leaves around a smaller native frame.
+    const w = (cropW > 0 && cropW <= this.fboW) ? cropW : this.fboW;
+    const h = (cropH > 0 && cropH <= this.fboH) ? cropH : this.fboH;
     const GL_RGBA = 0x1908, GL_UNSIGNED_BYTE = 0x1401;
 
     if (!this._glPixels || this._glPixels.length !== w * h * 4) {
@@ -188,6 +195,7 @@ export class LibretroGL {
     }
 
     gl.glBindFramebuffer(0x8D40, 0); // GL_FRAMEBUFFER — read from default FBO
+    // x=0,y=0 is the bottom-left of the FBO, which is where the native frame is drawn.
     gl.glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, this._glPixels);
 
 
