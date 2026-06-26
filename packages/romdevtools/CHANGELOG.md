@@ -4,6 +4,36 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.58.0 — 2026-06-26
+
+### Dreamcast run-side: Flycast WASM core builds + inits; sh-elf toolchain built
+
+The two heaviest Dreamcast pieces, both landed (build infrastructure; host present-path
+integration is the next step):
+
+- **sh-elf-gcc toolchain** (SH-4): binutils 2.42 + gcc 14.2.0 + newlib 4.4.0, built
+  for `sh-elf` (m4-single-only, little-endian — the DC ABI). Compiles SH-4 C end to
+  end. `scripts/build-sh-toolchain.sh` (adapted from the mips one; SH-4 is single-
+  endian so no be/el split).
+- **Flycast → WASM**: the full Dreamcast emulator (785 C++ files, GLES3/WebGL2)
+  compiled to a 5.9MB WASM module that instantiates with all libretro entry points
+  and `retro_init` succeeds. Flycast has no upstream emscripten build, so
+  `scripts/build-flycast.sh` applies the romdev WASM patches discovered here:
+  - a `CPU_GENERIC` host (no JIT) → the SH-4/ARM/DSP interpreters (`TARGET_NO_REC`);
+    CMake `DetectArchitecture` + `build.h` + the FPU-control / JIT-segfault-recovery
+    arch branches all get a generic no-op path.
+  - asio single-threaded (`ASIO_DISABLE_THREADS`) so it doesn't need POSIX
+    signal_blocker/tss_ptr (emscripten without -pthread isn't detected as POSIX).
+  - Vulkan OFF (WASM uses WebGL); networking/UPnP stubbed.
+  - **the key boot fix:** emscripten can't `mmap` a 512MB contiguous reservation (it
+    traps), so `posix_vmem::init` declines fast-vmem on emscripten → Flycast's
+    malloc-based memory fallback engages and `retro_init` succeeds.
+- `dreamcast` registry entry (Flycast, hwRender — PowerVR2 is GPU-first, no software
+  framebuffer; HLE reios BIOS, no firmware to ship).
+
+Suite 1059/1059. Next: the GL present-path (load_game + run + frame through the host's
+WebGL2 bridge), then the helper lib + 5 example games + packaging.
+
 ## 0.57.0 — 2026-06-26
 
 ### Dreamcast (SH-4) analysis slice — disasm + decompile
