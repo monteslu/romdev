@@ -40,7 +40,10 @@ function cc1ArchFlags(endian) {
   return [endian === "little" ? "-mel" : "-meb", "-mabi=32"];
 }
 function asArchFlags(endian) {
-  return [endian === "little" ? "-EL" : "-EB", "-mabi=32"];
+  // -G0: never use GP-relative (small-data) addressing. Without it, statics land in
+  // .sdata/.sbss and the 16-bit GPREL offsets overflow ("relocation truncated") on
+  // anything but a tiny program. -G0 forces normal .data/.bss addressing.
+  return [endian === "little" ? "-EL" : "-EB", "-mabi=32", "-G0"];
 }
 
 // ── cc1 — MIPS gcc C frontend, source → assembly ─────────────────────
