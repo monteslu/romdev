@@ -4,6 +4,36 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.56.0 — 2026-06-26
+
+### N64 + PS1 are now SHIPPABLE: core packages + toolchain wired for publish
+
+The functionality was done, but the artifacts weren't distributable — the cores lived
+only in the gitignored dev-staging dir, with no npm package to publish. Fixed:
+
+- **New `romdev-core-pcsx-rearmed`** (PS1) and **`romdev-core-parallel-n64`** (N64,
+  headless-angrylion software) packages, mirroring the 14's structure (package.json
+  + index.js + README + gitignored `wasm/` shipped via the `files` allowlist +
+  verify-wasm prepublish guard). These are CUSTOM romdev builds (the romdev debug
+  exports + IPL3) — documented in each README + built by scripts/build-*.sh.
+- **`romdev-toolchain-mips-gcc`** moved to required `dependencies` (build needs it);
+  the two cores added to `dependencies` (always installed, like the 14). lockfile
+  regenerated — `npm ci` passes.
+- publish-all.mjs now discovers all 3 (26 packages total).
+
+### A real shipping bug the npm-pack smoke test caught
+
+The cores' Emscripten glue had a DEV SCRATCH wasm name baked in (`pcsx_vram.wasm`,
+`pn64_sw.wasm` from `-o $SCRATCH/...`) instead of the published `*_libretro.wasm`.
+The host always passes `wasmBinary` so it worked in dev — but any consumer loading
+the factory directly got ENOENT. Re-linked both glues with the correct `-o` name (the
+build scripts already used it; only my hand-links were wrong). A clean-install smoke
+test (npm pack → install into a bare dir → resolve + instantiate + check exports) +
+a packaging contract test now pin this so it can't silently regress.
+
+Verified: clean-install smoke test passes, full build→load-from-package→run→render
+pipeline works for both, npm ci + lint + 1054/1054 tests green. Ready for `npm publish`.
+
 ## 0.55.0 — 2026-06-26
 
 ### System manifests now call out the features a platform CAN'T have (and why)
