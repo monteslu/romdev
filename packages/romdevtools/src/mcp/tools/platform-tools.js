@@ -6,6 +6,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { PNG } from "pngjs";
 import { getHost } from "../state.js";
+import { naReason } from "../../cores/capabilities.js";
 import { imageContent, jsonContent, unsupported } from "../util.js";
 
 // Consolidation: several handlers in this big shared file are extracted as
@@ -341,7 +342,7 @@ export function registerPlatformTools(server, z, sessionKey) {
       }
 
       unsupported(p, "inspectPalette", {
-        reason: "no palette decoder for this platform",
+        reason: naReason(p, "inspectPalette") ?? "no palette decoder for this platform",
         alternative: "platform({op:'capabilities'}) to see what's wired",
       });
   };
@@ -716,7 +717,7 @@ export function registerPlatformTools(server, z, sessionKey) {
       }
 
       unsupported(p, "inspectSprites", {
-        reason: "no sprite decoder for this platform",
+        reason: naReason(p, "inspectSprites") ?? "no sprite decoder for this platform",
         alternative: "memory({op:'read'}) the raw OAM/sprite-attribute region, or platform({op:'capabilities'}) to see what's wired",
       });
   };
@@ -828,7 +829,7 @@ export function registerPlatformTools(server, z, sessionKey) {
         return emitImage(r.png, `SNES BG map composite (${r.width}×${r.height}, ${r.mapWidth}×${r.mapHeight} tiles, ${r.bpp}bpp, tilemap@0x${tilemapBaseByte.toString(16)}, tiles@0x${tileBaseByte.toString(16)}). ${r.note}`);
       }
       unsupported(p, "inspectBackground", {
-        reason: "no background-map snapshotter for this platform",
+        reason: naReason(p, "inspectBackground") ?? "no background-map snapshotter for this platform",
         alternative: "background({view:'renderState'}) for the register-level context, or memory({op:'read'}) the raw VRAM/nametable region",
       });
   };

@@ -2,7 +2,7 @@ import { CORES, listAvailableCores, resolveCore } from "../../cores/registry.js"
 import { TOOLCHAINS } from "../../toolchains/registry.js";
 import { getLanguageOptions } from "../../toolchains/index.js";
 import { jsonContent, safeTool } from "../util.js";
-import { CAPABILITIES, capabilitiesFor } from "../../cores/capabilities.js";
+import { CAPABILITIES, capabilitiesFor, OP_KEYS, naReason } from "../../cores/capabilities.js";
 import { listToolchainsCore, installToolchainCore } from "./toolchain.js";
 import { listPlatformDocsCore, getPlatformDocCore } from "./platform-docs.js";
 
@@ -154,7 +154,15 @@ export function registerPlatformTools(server, z) {
           if (args.platform) {
             const cap = capabilitiesFor(args.platform);
             if (!cap) throw new Error(`platform({op:'capabilities'}): unknown platform '${args.platform}'. Known: ${Object.keys(CAPABILITIES).join(", ")}.`);
-            return jsonContent({ platform: args.platform, ...cap });
+            // Call out WHY each unsupported op is N/A by hardware (a framebuffer/3D
+            // renderer has no tile/sprite tables; a disc system has no cart) so an
+            // agent reading the manifest sees "can't, because hardware" — not a
+            // bare `false` it might mistake for "not built yet".
+            const naReasons = {};
+            for (const op of OP_KEYS) {
+              if (!cap.ops[op]) { const r = naReason(args.platform, op); if (r) naReasons[op] = r; }
+            }
+            return jsonContent({ platform: args.platform, ...cap, ...(Object.keys(naReasons).length ? { naReasons } : {}) });
           }
           // All platforms incl. the partial MIPS tier (ps1/n64) — so an agent can
           // discover their capability map and see which ops are live vs not-yet.
