@@ -389,10 +389,14 @@ export function registerFrameTools(server, z, sessionKey) {
   async function shootAscii({ cols, rows, symbols, colors, path: outPath, inline }) {
     const host = getHost(sessionKey);
     const { width, height, rgba } = host.screenshotRgba();
-    // Default each cell to "2 game tiles" (8×8 platforms) so the grid maps
-    // to tile coords: cell (c,r) covers tiles (c*2..c*2+1, r*2..r*2+1).
-    if (cols == null) cols = Math.max(4, Math.floor(width / 16));
-    if (rows == null) rows = Math.max(4, Math.floor(height / 16));
+    // Default to ONE cell per 8×8 tile (so a 256×224 NES frame → 32×28, legible
+    // game state). The old /16 default (16×14 for NES) was too coarse to read
+    // anything — feedback 0.44.0 #1. The terminal symbol's own subcell shape adds
+    // detail back, so this stays cheap.
+    if (cols == null) cols = Math.max(8, Math.floor(width / 8));
+    if (rows == null) rows = Math.max(8, Math.floor(height / 8));
+    // Warn when the caller forced a grid so coarse it can't show game state.
+    const tooCoarse = cols < Math.floor(width / 8) / 2 || rows < Math.floor(height / 8) / 2;
     const { renderRgbaToAnsi } = await import("../../host/chafa-render.js");
     const ansi = await renderRgbaToAnsi(rgba, width, height, { cols, rows, symbols, colors });
     // Livestream sidebands: the human sees BOTH the real PNG and the ANSI.
@@ -401,15 +405,20 @@ export function registerFrameTools(server, z, sessionKey) {
       _observerImages: [{ kind: "image", mimeType: "image/png", base64: shot.pngBase64 }],
       _observerAnsi: ansi,
     };
+    const coarseNote = tooCoarse
+      ? `NOTE: ${cols}x${rows} is too coarse to read game state from this ${width}x${height} frame. `
+        + `For a pass/fail check ("are we in gameplay?"), a memory({op:'read'}) byte assertion is cheaper and exact — `
+        + `ascii is for a rough visual, not state.`
+      : null;
     let result;
     if (!inline) {
       await writeFile(outPath, ansi, "utf-8");
-      result = jsonContent({ path: outPath, framebuffer: { width, height }, terminal: { cols, rows, symbols, colors }, ansiBytes: Buffer.byteLength(ansi, "utf-8") });
+      result = jsonContent({ path: outPath, framebuffer: { width, height }, terminal: { cols, rows, symbols, colors }, ansiBytes: Buffer.byteLength(ansi, "utf-8"), ...(coarseNote ? { note: coarseNote } : {}) });
     } else {
       result = {
         content: [
           { type: "text", text: ansi },
-          { type: "text", text: `framebuffer ${width}x${height} → terminal ${cols}x${rows} (${symbols}/${colors}, ${Buffer.byteLength(ansi, "utf-8")}B)` },
+          { type: "text", text: `framebuffer ${width}x${height} → terminal ${cols}x${rows} (${symbols}/${colors}, ${Buffer.byteLength(ansi, "utf-8")}B)` + (coarseNote ? `\n${coarseNote}` : "") },
         ],
       };
     }
@@ -857,10 +866,10 @@ export function registerFrameTools(server, z, sessionKey) {
       inline: z.boolean().default(false).describe("op=screenshot/stepAndShot: return the image in the response instead of writing to disk."),
       overlayBoxes: z.boolean().default(false).describe("op=screenshot png: draw a colored bounding box per visible sprite (SNES+NES only)."),
       scale: z.number().gt(0).max(16).refine((s) => s <= 1 || Number.isInteger(s), { message: "scale must be 0<scale≤1 (downscale) or an integer ≥2 (upscale)" }).optional().describe("op=screenshot png: nearest-neighbor resample factor. DEFAULT (unset/1) = NATIVE resolution — perfect pixels, the accurate representation; use this. 0<scale<1 DOWNscales (0.5 ≈ 75% fewer image tokens — useful for cheap 'did it change?' checks). integer scale≥2 UPscales by pixel-duplication (e.g. scale:4 → GB 160x144 → 640x576): it adds NO information (same pixels enlarged), costs MORE image tokens, and since VLM encoders resize to their own fixed resolution it may not change what the model sees and can slightly degrade it. Only for clients that render tiny images too small to use and can't zoom."),
-      cols: z.number().int().min(4).max(640).optional().describe("op=screenshot ascii: terminal columns (default fb_width/16)."),
-      rows: z.number().int().min(4).max(480).optional().describe("op=screenshot ascii: terminal rows (default fb_height/16)."),
+      cols: z.number().int().min(4).max(640).optional().describe("op=screenshot ascii: terminal columns (default fb_width/8 — one cell per 8×8 tile, legible game state)."),
+      rows: z.number().int().min(4).max(480).optional().describe("op=screenshot ascii: terminal rows (default fb_height/8)."),
       symbols: z.enum(["ascii", "halfblock", "block", "quad", "sextant"]).default("ascii").describe("op=screenshot ascii: chafa symbol set."),
-      colors: z.enum(["true", "256", "16", "fgbg"]).default("true").describe("op=screenshot ascii: color depth."),
+      colors: z.enum(["true", "256", "16", "fgbg"]).default("256").describe("op=screenshot ascii: color depth. Default '256' (indexed) — far fewer ANSI escape bytes than 'true' (truecolor per cell) for a near-identical read. Use 'true' only when exact color matters."),
     },
     safeTool(async (args) => {
       switch (args.op) {

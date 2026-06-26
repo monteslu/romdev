@@ -1,6 +1,6 @@
 {
   "name": "romdevtools",
-  "version": "0.56.0",
+  "version": "0.56.1",
   "description": "Tool server giving coding agents full control of homebrew ROM development AND reverse-engineering/romhacking across 16 retro platforms (NES, SNES, GB, Genesis, Atari, C64, PC Engine, MSX, PlayStation, N64, ...) via WASM toolchains + emulator cores. Use over plain HTTP, as an Agent Skill, or as an MCP server.",
   "type": "module",
   "main": "src/mcp/server.js",
