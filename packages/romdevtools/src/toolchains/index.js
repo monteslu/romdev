@@ -85,6 +85,12 @@ const LANGUAGE_TOOLCHAIN = {
     c:   { toolchain: "sdcc", available: true, note: "C for MSX via SDCC's z80 port. Cartridge ROM with the 'AB' header + INIT pointer at $4000; boots on C-BIOS (open MSX BIOS). MSX2 by default (runs MSX1 carts too)." },
     asm: { toolchain: "sdcc", available: true },
   },
+  ps1: {
+    c: { toolchain: "mips-elf-gcc", available: true, note: "C for PS1 via gcc 14.2.0 + binutils + newlib (mips-elf, little-endian R3000), compiled to WASM. The bare path: a minimal crt0 sets the stack + clears .bss + calls main(); the output is a PS-EXE the HLE BIOS loads (load at 0x80010000). No SDK (PSn00bSDK) yet — bring your own GPU/SPU register writes, or use this for logic. write to GPU ports 0x1F801810/0x1F801814." },
+  },
+  n64: {
+    c: { toolchain: "mips-elf-gcc", available: true, note: "C for N64 via gcc 14.2.0 + binutils + newlib (mips-elf, big-endian R4300), compiled to WASM. Bare path: minimal crt0 (stack + .bss + main()) → flat code image at 0x80000400. NOTE: a fully bootable N64 ROM needs the IPL3 bootcode + a libdragon-style header (libdragon SDK forthcoming) — this path exercises the toolchain + is the basis for the SDK." },
+  },
 };
 
 /**
@@ -115,6 +121,8 @@ const PLATFORM_DEFAULT_LANGUAGE = {
   spc700:     "asm",
   pce:        "c",
   msx:        "c",
+  ps1:        "c",
+  n64:        "c",
 };
 
 /**
@@ -465,6 +473,33 @@ export async function buildForPlatform(args) {
     }
     // language === "c" or undefined → fall through to the sdcc dispatch
     // below (SDCC_PORTS["gb"] = sm83 port).
+  }
+
+  if (args.platform === "ps1" || args.platform === "n64") {
+    // MIPS C: the bare gcc+newlib+libgcc path (no SDK yet). cc1→as→ld→objcopy
+    // through the mips-elf-gcc WASM toolchain; PS1 (R3000, little-endian) wraps the
+    // image in a PS-EXE the HLE BIOS loads; N64 (R4300, big-endian) emits a flat
+    // .bin (real N64 boot needs libdragon — forthcoming). language defaults to "c".
+    const { buildMipsC } = await import("./mips-c/mips-c.js");
+    const r = await buildMipsC({
+      source: args.source,
+      sources: args.sources,
+      headers: args.includes,
+      platform: args.platform,
+      cc1Options: args.options,
+    });
+    return {
+      ok: r.ok,
+      binary: r.binary,
+      listing: "",
+      symbols: r.symbols ?? "",
+      log: r.log,
+      issues: parseBuildLog(r.log),
+      exitCode: r.exitCode,
+      toolchain: "mips-elf-gcc",
+      stage: r.stage,
+      ...(r.crash ? { crash: r.crash } : {}),
+    };
   }
 
   if (args.platform === "gba") {
