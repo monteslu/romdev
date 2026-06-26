@@ -106,7 +106,14 @@ if [ ! -f "$ROOT/build-wasm-gcc/gcc/cc1.wasm" ]; then
   emmake make -j"$NCPU" all-build
   emmake make -j"$NCPU" all-libcpp all-libiberty all-libdecnumber all-libbacktrace
   emmake make -j"$NCPU" configure-gcc
-  ( cd gcc && emmake make -j"$NCPU" cc1 )
+  # cc1: gcc/Makefile sets CC_FOR_BUILD=$(CC) — and emconfigure made $(CC)=emcc, so the
+  # BUILD-side gen tools (genchecksum/genhooks/genmodes/…) would be built+linked as WASM
+  # and fail (they must RUN natively during the build to GENERATE cc1's sources). Force
+  # the build-tool compiler back to the native host gcc/g++ so the gen tools are native
+  # while cc1 itself still cross-compiles to WASM via $(CC)=emcc for non-build objects.
+  ( cd gcc && emmake make -j"$NCPU" cc1 \
+      CC_FOR_BUILD=gcc CXX_FOR_BUILD=g++ \
+      BUILD_CFLAGS= BUILD_CXXFLAGS= BUILD_LDFLAGS= )
 fi
 
 # ── 3. binutils as WASM ─────────────────────────────────────────────
