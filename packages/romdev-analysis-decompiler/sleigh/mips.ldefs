@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<language_definitions>
+  <language processor="MIPS"
+            endian="big"
+            size="32"
+            variant="default"
+            version="1.7"
+            slafile="mips32be.sla"
+            processorspec="mips32.pspec"
+            id="MIPS:BE:32:default">
+    <description>MIPS32 big endian (N64 R4300, 32-bit code)</description>
+    <compiler name="default" spec="mips32be.cspec" id="default"/>
+  </language>
+  <language processor="MIPS"
+            endian="little"
+            size="32"
+            variant="default"
+            version="1.7"
+            slafile="mips32le.sla"
+            processorspec="mips32.pspec"
+            id="MIPS:LE:32:default">
+    <description>MIPS32 little endian (PS1 R3000)</description>
+    <compiler name="default" spec="mips32le.cspec" id="default"/>
+  </language>
+</language_definitions>

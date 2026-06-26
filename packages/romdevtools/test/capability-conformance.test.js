@@ -44,9 +44,9 @@ test("contract: MIPS tier (ps1/n64) is a well-formed PARTIAL tier (run+disasm, g
     assert.equal(c.ops.run, true, `${p} runs (real core)`);
     assert.equal(c.ops.screenshot, true, `${p} screenshots`);
     assert.equal(c.ops.disasm, true, `${p} disasm (MIPS Capstone)`);
+    assert.equal(c.ops.decompile, true, `${p} decompile (MIPS SLEIGH shipped)`);
     // Known gaps (OFF until closed):
     assert.equal(c.ops.build, false, `${p} build (no MIPS toolchain yet)`);
-    assert.equal(c.ops.decompile, false, `${p} decompile (no MIPS SLEIGH yet)`);
     // framebuffer/3D renderers have no tile/sprite inspectors:
     for (const op of ["inspectSprites", "inspectPalette", "inspectBackground"]) {
       assert.equal(c.ops[op], false, `${p}.${op} meaningless on framebuffer/3D`);

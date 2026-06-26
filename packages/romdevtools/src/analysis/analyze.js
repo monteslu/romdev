@@ -591,14 +591,32 @@ export async function analyzeDecompile(romPath, address, platformOverride) {
   // to pure garbage.
   if (platform === "genesis") romBytes = deinterleaveSmd(romBytes) ?? romBytes;
 
-  // MIPS (N64/PS1): the rz-ghidra decompiler doesn't ship a MIPS SLEIGH spec yet
-  // (only the 8 specs for the current tier). disasm/cfg/xrefs/functions DO work —
-  // steer the agent there instead of failing cryptically with "No function selected".
+  // MIPS (N64/PS1): `address` is a vaddr from target='functions'. Map it to a file
+  // offset and decompile via the MIPS SLEIGH spec (MIPS:BE:32 for N64, MIPS:LE:32
+  // for PS1). N64: normalize byte order, fileOff = vaddr - entryVaddr + 0x1000 (post
+  // IPL3). PS1: strip PS-EXE, fileOff = vaddr - loadAddr.
   if (platform === "n64" || platform === "ps1") {
-    throw new Error(
-      `decompile: ${platform} (MIPS) C-pseudocode is NOT available yet — the rz-ghidra decompiler doesn't bundle a MIPS SLEIGH spec (adding MIPS.sla is a romdev-analysis-decompiler rebuild). ` +
-      `The MIPS DISASSEMBLY engine works today: disasm({target:'functions'}) lists functions, target:'cfg' is the control-flow graph, target:'xrefs' is the callers, target:'rom' is the linear disasm.`,
-    );
+    let fileOff;
+    if (platform === "n64") {
+      romBytes = normalizeN64ByteOrder(romBytes).bytes;
+      const entry = ((romBytes[0x08] << 24) | (romBytes[0x09] << 16) | (romBytes[0x0a] << 8) | romBytes[0x0b]) >>> 0;
+      fileOff = ((address >>> 0) - entry + 0x1000) >>> 0;
+    } else {
+      let loadAddr = 0;
+      if (romBytes.length >= 0x800 && romBytes[0] === 0x50 && romBytes[1] === 0x53 && romBytes[2] === 0x2d && romBytes[3] === 0x58) {
+        loadAddr = (romBytes[0x18] | (romBytes[0x19] << 8) | (romBytes[0x1a] << 16) | (romBytes[0x1b] << 24)) >>> 0;
+        romBytes = romBytes.subarray(0x800);
+      }
+      fileOff = ((address >>> 0) - loadAddr) >>> 0;
+    }
+    if (fileOff >= romBytes.length) {
+      throw new Error(`decompile: ${platform} address ${hx(address)} maps to file offset ${hx(fileOff)}, outside the ${romBytes.length}-byte image. Use an address from target='functions'.`);
+    }
+    const rm = await decompileFunction({ platform, romBytes, fileOffset: fileOff });
+    return {
+      platform, langid: rm.langid, address, addressHex: hx(address),
+      code: prettyDecompile(rm.code, platform), warnings: rm.warnings,
+    };
   }
 
   // SNES: banked 24-bit space. `address` is a LoROM/HiROM CPU address (what
