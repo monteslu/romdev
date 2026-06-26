@@ -65,6 +65,9 @@ void psx_model(fix tx, fix ty, fix tz, fix yaw);
    culled. Z-buffered by draw order (call back-to-front, or use psx_sort). */
 void psx_tri3d(Vec3 a, Vec3 b, Vec3 c, unsigned int bgr);
 void psx_quad3d(Vec3 a, Vec3 b, Vec3 c, Vec3 d, unsigned int bgr);
+/* no-back-face-cull variants — for ground planes / floors (ambiguous winding). */
+void psx_tri3d_nc(Vec3 a, Vec3 b, Vec3 c, unsigned int bgr);
+void psx_quad3d_nc(Vec3 a, Vec3 b, Vec3 c, Vec3 d, unsigned int bgr);
 /* returns the average camera-space Z of 3/4 model verts (for manual sorting). */
 fix psx_depth3(Vec3 a, Vec3 b, Vec3 c);
 fix psx_depth4(Vec3 a, Vec3 b, Vec3 c, Vec3 d);

@@ -24,11 +24,10 @@ void psx_clear(unsigned int bgr) {
 
 void psx_rect(int x, int y, int w, int h, unsigned int bgr)
 {
+    /* GP0 0x60 = monochrome variable-size RECTANGLE: color, (y,x) corner, (h,w) size. */
     GP0 = 0x60000000u | (bgr & 0x00FFFFFFu);
-    GP0 = ((unsigned)(y) << 16) | ((unsigned)(x) & 0xFFFF);
-    GP0 = ((unsigned)(y) << 16) | ((unsigned)(x + w) & 0xFFFF);
-    GP0 = ((unsigned)(y + h) << 16) | ((unsigned)(x) & 0xFFFF);
-    GP0 = ((unsigned)(y + h) << 16) | ((unsigned)(x + w) & 0xFFFF);
+    GP0 = (((unsigned)y & 0xFFFF) << 16) | ((unsigned)x & 0xFFFF);
+    GP0 = (((unsigned)h & 0xFFFF) << 16) | ((unsigned)w & 0xFFFF);
 }
 
 void psx_tri2d(int x0,int y0,int x1,int y1,int x2,int y2,unsigned int bgr)
@@ -155,6 +154,16 @@ void psx_tri3d(Vec3 a, Vec3 b, Vec3 c, unsigned int bgr)
     if (cross <= 0) return;
     psx_tri2d(x0,y0,x1,y1,x2,y2,bgr);
 }
+
+void psx_tri3d_nc(Vec3 a, Vec3 b, Vec3 c, unsigned int bgr)
+{
+    Vec3 ca=to_cam(a), cb=to_cam(b), cc=to_cam(c);
+    int x0,y0,x1,y1,x2,y2;
+    if (!project(ca,&x0,&y0) || !project(cb,&x1,&y1) || !project(cc,&x2,&y2)) return;
+    psx_tri2d(x0,y0,x1,y1,x2,y2,bgr); /* no back-face cull */
+}
+void psx_quad3d_nc(Vec3 a, Vec3 b, Vec3 c, Vec3 d, unsigned int bgr)
+{ psx_tri3d_nc(a,b,c,bgr); psx_tri3d_nc(a,c,d,bgr); }
 
 void psx_quad3d(Vec3 a, Vec3 b, Vec3 c, Vec3 d, unsigned int bgr)
 {
