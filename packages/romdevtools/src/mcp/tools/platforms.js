@@ -2,7 +2,7 @@ import { CORES, listAvailableCores, resolveCore } from "../../cores/registry.js"
 import { TOOLCHAINS } from "../../toolchains/registry.js";
 import { getLanguageOptions } from "../../toolchains/index.js";
 import { jsonContent, safeTool } from "../util.js";
-import { CAPABILITIES, CONTRACT_PLATFORMS, capabilitiesFor } from "../../cores/capabilities.js";
+import { CAPABILITIES, capabilitiesFor } from "../../cores/capabilities.js";
 import { listToolchainsCore, installToolchainCore } from "./toolchain.js";
 import { listPlatformDocsCore, getPlatformDocCore } from "./platform-docs.js";
 
@@ -65,6 +65,30 @@ const PLATFORM_QUIRKS = {
       "Debugging: getCPUState (z80), inspectPalette, inspectSprites (VRAM sprite-attr table), getRenderingContext (VDP R1 screen-enable + mode + VRAM table bases), getAudioState({chip:'ay8910'}) (3 square + noise + envelope), getMemoryMap (pass the sdld .map), readMemory regions msx_vram/msx_vdp_regs/msx_vdp_status/msx_palette/msx_cpu_regs/msx_psg_regs.",
     ],
     starterSnippets: ["hello_msx.c", "msx_crt0.s"],
+  },
+  ps1: {
+    multiBank: false,
+    maxRomBytesPerBank: 0, // disc/EXE based, not a fixed cart
+    headerLocation: "PS-EXE: 'PS-X EXE' magic at 0, entry (pc0) at +0x10, load addr (t_addr) at +0x18; 2048-byte header then code",
+    notes: [
+      "32-bit MIPS R3000 (little-endian), framebuffer GPU. Runs via PCSX-ReARMed with its BUILT-IN HLE BIOS — no firmware file needed, software-rendered. Load a .exe (PS-EXE), or a disc image if you have one.",
+      "WORKS NOW: run, frame({op:'screenshot'}), readMemory/writeMemory (system_ram = 2MB main RAM) — write RAM directly to poke values — and the static RE engine — disasm({platform:'ps1', target:'rom'|'functions'|'cfg'|'xrefs'}). MIPS is little-endian here.",
+      "NOT YET: build (needs a PS1 toolchain like PSn00bSDK), decompile (needs a MIPS SLEIGH spec), getCPUState + cheats (need a core rebuild exposing those exports). The framebuffer renderer has no tile/sprite/nametable inspectors — use the screenshot + memory.",
+      "For higher fidelity (GL hardware renderer) a real PS1 BIOS + the beetle_psx_hw core is the alternative, but the HLE pcsx_rearmed path ships clean with zero firmware.",
+    ],
+    starterSnippets: [],
+  },
+  n64: {
+    multiBank: false,
+    maxRomBytesPerBank: 0,
+    headerLocation: ".z64 (big-endian) magic 80 37 12 40 at 0; entry point (big-endian word) at +0x08; 0x1000-byte IPL3 bootcode then game code. .v64/.n64 byte orders are auto-normalized.",
+    notes: [
+      "32-bit MIPS R4300 (big-endian), 3D RDP/RSP. Runs via ParaLLEl-N64 with the glide64 GL renderer — HW-rendered through the OPTIONAL native GL stack (native-gles + webgl-node). Those are optionalDependencies: install them for N64; the other platforms don't need them.",
+      "WORKS NOW: run, frame({op:'screenshot'}) (real 3D frames, headless via FBO readback), readMemory/writeMemory (system_ram = 8MB RDRAM, RDRAM addresses like 0x80xxxxxx map to offset 0) — write RAM directly to poke values — and the static RE engine — disasm({platform:'n64', target:'rom'|'functions'|'cfg'|'xrefs'}). MIPS is big-endian here.",
+      "NOT YET: build (needs libdragon as a WASM toolchain), decompile (needs a MIPS SLEIGH spec), getCPUState + cheats (need a core rebuild exposing those exports). 3D renderer has no tile/sprite inspectors — use screenshot + memory.",
+      "If frame() errors with an install hint, the optional GL module isn't installed: `npm install native-gles webgl-node`.",
+    ],
+    starterSnippets: [],
   },
 };
 
@@ -129,10 +153,12 @@ export function registerPlatformTools(server, z) {
         case "capabilities": {
           if (args.platform) {
             const cap = capabilitiesFor(args.platform);
-            if (!cap) throw new Error(`platform({op:'capabilities'}): unknown platform '${args.platform}'. Known: ${CONTRACT_PLATFORMS.join(", ")}.`);
+            if (!cap) throw new Error(`platform({op:'capabilities'}): unknown platform '${args.platform}'. Known: ${Object.keys(CAPABILITIES).join(", ")}.`);
             return jsonContent({ platform: args.platform, ...cap });
           }
-          return jsonContent({ platforms: CONTRACT_PLATFORMS, capabilities: CAPABILITIES });
+          // All platforms incl. the partial MIPS tier (ps1/n64) — so an agent can
+          // discover their capability map and see which ops are live vs not-yet.
+          return jsonContent({ platforms: Object.keys(CAPABILITIES), capabilities: CAPABILITIES });
         }
         case "resolve": {
           if (!args.platform) throw new Error("platform({op:'resolve'}): `platform` is required.");
