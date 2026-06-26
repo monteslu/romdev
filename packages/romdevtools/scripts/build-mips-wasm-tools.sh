@@ -69,10 +69,15 @@ if [ ! -f "$WASM_PREFIX/lib/libisl.a" ]; then
   emmake make -j"$NCPU"; emmake make install
 fi
 
-# emscripten's libc DECLARES psignal/sigsetmask/etc., so gcc's libiberty must NOT
-# emit its own (conflicting) definitions. Pre-seed the autoconf cache so configure
-# believes these exist → libiberty's #ifndef HAVE_* guards skip them.
-PSIGNAL_CACHE="ac_cv_func_psignal=yes ac_cv_func_sigsetmask=yes"
+# emscripten's libc DECLARES psignal (const char*), but gcc's libiberty defines it
+# (char*) under #ifndef HAVE_PSIGNAL → "conflicting types" building strsignal.o.
+# The autoconf-cache route didn't stick (libiberty re-probes), so patch the source:
+# disable libiberty's psignal outright (emscripten provides it). Idempotent.
+if ! grep -q "romdev: emscripten libc provides psignal" "$SRC_DIR/gcc-$GCC_VER/libiberty/strsignal.c"; then
+  sed -i 's/#ifndef HAVE_PSIGNAL/#if 0 \/* romdev: emscripten libc provides psignal *\//' \
+    "$SRC_DIR/gcc-$GCC_VER/libiberty/strsignal.c"
+fi
+PSIGNAL_CACHE=""
 
 # ── 2. cc1 as WASM ──────────────────────────────────────────────────
 if [ ! -f "$ROOT/build-wasm-gcc/gcc/cc1.wasm" ]; then
