@@ -19,6 +19,26 @@ mkdir -p "$BUILD_DIR" "$OUT"
 [ -d "$SRC" ] || git clone --depth 1 "$REPO" "$SRC"
 cd "$SRC"
 
+# ── romdev: build a HEADLESS-ANGRYLION core (software RDP + VI scanout, no GL) so
+# raw CPU-rendered homebrew framebuffers display (glide64/GL only presents RDP
+# display-lists). Force GL off + stub the inactive plugin tables + force angrylion. ──
+# 1) hard-force HAVE_OPENGL=0 for emscripten right before Makefile.common (which keys
+#    the video plugins off HAVE_OPENGL).
+if ! grep -q "romdev: hard-force GL off for emscripten" Makefile; then
+  perl -0pi -e 's/include Makefile.common/# romdev: hard-force GL off for emscripten\nifeq (\$(platform), emscripten)\n  HAVE_OPENGL := 0\n  GLES := 0\nendif\n\ninclude Makefile.common/' Makefile
+fi
+# 2) no-op stubs for the inactive video-plugin entry points (glide64/gln64/rice) that
+#    plugins.c's static tables still reference.
+if [ ! -f mupen64plus-core/src/romdev_glide_stubs.c ]; then
+  cp "$SCRIPT_DIR/patches/romdev-snippets/n64-glide-stubs.c" mupen64plus-core/src/romdev_glide_stubs.c
+  sed -i 's|\$(CORE_DIR)/src/r4300/r4300.c \\|$(CORE_DIR)/src/r4300/r4300.c \\\n\t$(CORE_DIR)/src/romdev_glide_stubs.c \\|' Makefile.common
+fi
+# 3) force angrylion in autoselect (the headless build has no other renderer).
+if ! grep -q "romdev: headless software build" libretro/libretro.c; then
+  perl -0pi -e 's/static void core_settings_autoselect_gfx_plugin\(void\)\n\{\n   struct retro_variable gfx_var = \{ "parallel-n64-gfxplugin", 0 \};/static void core_settings_autoselect_gfx_plugin(void)\n{\n#ifndef HAVE_OPENGL\n   \/* romdev: headless software build — angrylion is the only renderer. *\/\n   gfx_plugin = GFX_ANGRYLION;\n   return;\n#endif\n   struct retro_variable gfx_var = { "parallel-n64-gfxplugin", 0 };/' libretro/libretro.c
+  rm -f libretro/libretro.o
+fi
+
 # Emscripten Makefile compatibility (upstream visibility flags + GLSM signature).
 grep -q "fno-common" Makefile 2>/dev/null || { sed -i 's/-fvisibility=hidden//g; s/-fvisibility-inlines-hidden//g' Makefile; }
 if grep -q "rglBlendFuncSeparate(GLenum sfactor, GLenum dfactor)" libretro-common/glsm/glsm.c 2>/dev/null; then
@@ -98,16 +118,13 @@ done
 EXPORTED='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_mips_regs_get","_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get","_romdev_regsnap_get","_romdev_watchdog_set","_romdev_ai_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
 EXPORTED_RT='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS","dynCall"]'
 
+# Headless software link (no GL/WebGL flags — angrylion presents via video_cb).
 emcc "$CORE_A" -O3 -flto -s WASM=1 -s MODULARIZE=1 -s EXPORT_ES6=1 \
   -s "EXPORT_NAME=create_parallel_n64" -s "ENVIRONMENT=node,web" -s ALLOW_MEMORY_GROWTH=1 \
-  -s INITIAL_MEMORY=167772160 -s MAXIMUM_MEMORY=536870912 -s STACK_SIZE=1048576 -s ALLOW_TABLE_GROWTH=1 \
+  -s INITIAL_MEMORY=201326592 -s MAXIMUM_MEMORY=536870912 -s STACK_SIZE=2097152 -s ALLOW_TABLE_GROWTH=1 \
   -s EXPORTED_FUNCTIONS="$EXPORTED" -s EXPORTED_RUNTIME_METHODS="$EXPORTED_RT" \
-  -s FILESYSTEM=1 -s INVOKE_RUN=0 -s USE_ZLIB=1 -s MIN_WEBGL_VERSION=2 -s FULL_ES3=1 \
+  -s FILESYSTEM=1 -s INVOKE_RUN=0 -s USE_ZLIB=1 \
   -s ERROR_ON_UNDEFINED_SYMBOLS=0 \
   -o "$OUT/parallel_n64_libretro.js"
 
-# Expose Emscripten's internal GL object on Module so the host can call
-# GL.createContext()/makeContextCurrent() from outside the closure.
-sed -i 's/var GL={/var GL=Module.GL={/' "$OUT/parallel_n64_libretro.js"
-
-echo "Built: $OUT/parallel_n64_libretro.{js,wasm}"
+echo "Built: $OUT/parallel_n64_libretro.{js,wasm} (headless software / angrylion)"
