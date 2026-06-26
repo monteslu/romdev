@@ -32,7 +32,11 @@ const LIB = path.join(__dirname, "lib");
 export async function buildShC(args) {
   const headers = args.headers ?? {};
   // -m4-single-only is passed by the cc1 wrapper; here the language/codegen knobs.
-  const cc1Options = [...(args.cc1Options ?? []), "-O2", "-ffreestanding", "-fno-builtin", "-Wall"];
+  // Default to -O2, but let a user-supplied -O<level> win (gcc honors the LAST -O, so a
+  // default appended AFTER the user's would clobber it — only add -O2 if absent).
+  const userOpts = args.cc1Options ?? [];
+  const hasOpt = userOpts.some((o) => /^-O/.test(o));
+  const cc1Options = [...(hasOpt ? [] : ["-O2"]), ...userOpts, "-ffreestanding", "-fno-builtin", "-Wall"];
   const sources = args.sources ?? (args.source != null ? { "main.c": args.source } : {});
   let log = "";
 

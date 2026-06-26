@@ -4,6 +4,21 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.67.0 — 2026-06-26
+
+### Dreamcast examples + sh-c -O level fix
+
+Four DC example programs (rom-games/dreamcast/): dchello (test card), bounce (animation),
+starfield (shmup background), grid (puzzle/board) — all build via the WASM toolchain and
+render distinct content through Flycast, exercising the dc.h helper (no-KOS PowerVR2
+framebuffer + 2D primitives).
+
+sh-c driver: a user-supplied `-O<level>` now wins over the default `-O2` (gcc honors the
+LAST -O, so a default appended after the user's would clobber it — only add -O2 if absent).
+This matters because the WASM cc1 hangs at -O2 on some sources (the interprocedural-
+optimization phase; native sh-elf-gcc compiles them in <1s), and -O1 is the workaround.
+Suite 1059/1059.
+
 ## 0.66.0 — 2026-06-26
 
 ### Dreamcast: build() works — full WASM toolchain + packaging
