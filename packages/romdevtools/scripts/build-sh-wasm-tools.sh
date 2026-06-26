@@ -92,14 +92,20 @@ if [ ! -f "$ROOT/build-wasm-gcc/gcc/cc1.wasm" ]; then
     --with-mpc="$WASM_PREFIX" --with-isl="$WASM_PREFIX" --with-system-zlib
   # Build JUST cc1 (the C frontend we need), NOT all-gcc — the aux tools
   # (gcov-tool, lto-plugin) reference ftw/liblto_plugin.so that emscripten lacks
-  # and abort the whole all-gcc target. cc1 is self-contained. configure-gcc
-  # creates the gcc/ subdir + Makefile first (lazy with --host=wasm32). gcc's cc1
-  # needs the BUILD-side (native) genmodes/gen* tools, which need the build-side
-  # libiberty — build that first, then configure-gcc, then cc1.
+  # and abort the whole all-gcc target. cc1 is self-contained.
+  #
+  # cc1 has two classes of prerequisite:
+  #   - BUILD-side (native gcc) gen* tools → need the build-side support libs.
+  #     `all-build` builds those (build-x86_64-linux-gnu/{libiberty,libcpp}).
+  #   - HOST-side (WASM) support libs cc1 links against: ../libcpp/libcpp.a,
+  #     ../libiberty/libiberty.a, ../libdecnumber, ../libbacktrace. The gcc top
+  #     makefile configures these HOST dirs lazily — `make cc1` from gcc/ does NOT
+  #     trigger their *configure*, so we must configure+build them explicitly via
+  #     the top-level all-<dir> targets FIRST (configure-<dir> alone is a no-op stub;
+  #     all-<dir> depends on configure-<dir> and actually runs it).
   emmake make -j"$NCPU" all-build
+  emmake make -j"$NCPU" all-libcpp all-libiberty all-libdecnumber all-libbacktrace
   emmake make -j"$NCPU" configure-gcc
-  # cc1 also needs the WASM-side support libs (libcpp/libiberty/libbacktrace/...).
-  emmake make -j"$NCPU" all-libiberty all-libcpp all-libcody all-libdecnumber all-libbacktrace
   ( cd gcc && emmake make -j"$NCPU" cc1 )
 fi
 

@@ -4,6 +4,21 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.64.0 — 2026-06-26
+
+### Dreamcast: present-path verified — screenshot works
+
+Flycast renders to the GL FBO and the host reads it back: a framebuffer-writing homebrew
+program shows ~727k captured pixels through the host's normal frame path (hwFramePending →
+readbackFrame). Manifest `dreamcast.screenshot` is now true. With the CPU executing
+(0.63.0), the direct-framebuffer present path lights up.
+
+Added `flycast_emulate_framebuffer: enabled` to the host's DC options — it scans the DC
+framebuffer out on every VBlank (the 2D path, no PowerVR2 tile list), so simple homebrew
+that writes RGB565 to VRAM presents reliably without authoring a full TA list. (Full
+TA/3D fidelity + correct framebuffer addressing come with the KOS helper lib; the pipeline
+itself — boot → run → render → host capture — is proven end-to-end.) Suite 1059/1059.
+
 ## 0.63.0 — 2026-06-26
 
 ### Dreamcast: HOMEBREW EXECUTES — run + memory introspection live
