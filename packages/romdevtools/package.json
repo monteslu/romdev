@@ -79,8 +79,6 @@
   },
   "optionalDependencies": {
     "native-gles": "^0.5.0",
-    "romdev-core-beetle-psx": "0.1.0",
-    "romdev-core-parallel-n64": "0.1.0",
     "romdev-toolchain-mips-gcc": "0.1.0",
     "webgl-node": "^1.2.0"
   },
