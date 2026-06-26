@@ -91,6 +91,9 @@ const LANGUAGE_TOOLCHAIN = {
   n64: {
     c: { toolchain: "mips-elf-gcc", available: true, note: "C for N64 via gcc 14.2.0 + binutils + newlib (mips-elf, big-endian R4300), compiled to WASM. Bare path: minimal crt0 (stack + .bss + main()) → flat code image at 0x80000400. NOTE: a fully bootable N64 ROM needs the IPL3 bootcode + a libdragon-style header (libdragon SDK forthcoming) — this path exercises the toolchain + is the basis for the SDK." },
   },
+  dreamcast: {
+    c: { toolchain: "sh-elf-gcc", available: true, note: "C for Dreamcast via gcc 14.2.0 + binutils + newlib (sh-elf, little-endian SH-4, m4-single-only FP), compiled to WASM. Bare path: a minimal crt0 sets the stack + clears .bss + calls main(); the output is an ELF that Flycast's reios HLE BIOS boots DIRECTLY (no GD-ROM/CDI image, no firmware). No KallistiOS yet — bring up the PowerVR2 framebuffer yourself: program FB_R_CTRL/FB_R_SIZE/FB_R_SOF1 + SPG for 640x480 RGB565 at VRAM 0xA5000000, then write pixels (see the dc.h helper). With flycast_emulate_framebuffer on, a plain pixel-writing program presents — no TA list needed." },
+  },
 };
 
 /**
@@ -123,6 +126,7 @@ const PLATFORM_DEFAULT_LANGUAGE = {
   msx:        "c",
   ps1:        "c",
   n64:        "c",
+  dreamcast:  "c",
 };
 
 /**
@@ -497,6 +501,32 @@ export async function buildForPlatform(args) {
       issues: parseBuildLog(r.log),
       exitCode: r.exitCode,
       toolchain: "mips-elf-gcc",
+      stage: r.stage,
+      ...(r.crash ? { crash: r.crash } : {}),
+    };
+  }
+
+  if (args.platform === "dreamcast") {
+    // Dreamcast SH-4 C: the bare gcc+newlib+libgcc path through the sh-elf-gcc WASM
+    // toolchain (cc1→as→ld). The output is an ELF that Flycast's reios HLE BIOS boots
+    // directly (no GD-ROM/CDI image). Bring up the PowerVR2 framebuffer yourself (see
+    // the dc.h helper); language defaults to "c".
+    const { buildShC } = await import("./sh-c/sh-c.js");
+    const r = await buildShC({
+      source: args.source,
+      sources: args.sources,
+      headers: args.includes,
+      cc1Options: args.options,
+    });
+    return {
+      ok: r.ok,
+      binary: r.binary,
+      listing: "",
+      symbols: r.symbols ?? "",
+      log: r.log,
+      issues: parseBuildLog(r.log),
+      exitCode: r.exitCode,
+      toolchain: "sh-elf-gcc",
       stage: r.stage,
       ...(r.crash ? { crash: r.crash } : {}),
     };

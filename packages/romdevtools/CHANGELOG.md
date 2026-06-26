@@ -4,6 +4,27 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.66.0 — 2026-06-26
+
+### Dreamcast: build() works — full WASM toolchain + packaging
+
+`build({platform:"dreamcast"})` now compiles SH-4 C to a bootable ELF entirely in WASM,
+and the result boots + renders through Flycast — the complete zero-install pipeline
+(build → run → screenshot), verified end-to-end via the public `buildForPlatform`.
+
+- **sh-elf-gcc WASM toolchain** (cc1 + as + ld + objcopy + objdump): gcc 14.2.0 +
+  binutils 2.42 + newlib 4.4.0 for sh-elf (little-endian SH-4, m4-single-only). The cc1
+  build needed CC_FOR_BUILD forced native (emconfigure makes $(CC)=emcc, which would
+  build the gen tools as WASM) + the host-side libcpp/libiberty configured first.
+- **sh-c build driver** + lib (dc-crt0.s zeroes .bss + calls main; dc.ld links at
+  0x8c010000; newlib libc/libm/libgcc). The ELF IS the deliverable — reios boots it.
+- **Packages:** romdev-core-flycast (the DC core) + romdev-toolchain-sh-gcc (the WASM
+  compiler), both added as romdevtools deps; the registry resolves the DC core from the
+  package. Manifest `dreamcast.build` is now true.
+
+Dreamcast core parity reached: disasm + decompile + build + run + screenshot. Suite
+1059/1059.
+
 ## 0.65.0 — 2026-06-26
 
 ### Dreamcast: homebrew renders correct graphics + HW-frame crop-to-native

@@ -262,7 +262,7 @@ export const CAPABILITIES = {
       // program shows ~727k captured pixels). `build` lands with the sh-elf-gcc WASM
       // toolchain. The 3D renderer has no tile/sprite inspectors (N/A by hw).
       // disasm/decompile = SH-4 analysis slice (rizin `sh` + Ghidra SuperH4 SLEIGH).
-      build: false, run: true, screenshot: true,
+      build: true, run: true, screenshot: true,
       inspectSprites: false, inspectPalette: false, inspectBackground: false,
       renderingContext: false, cpuState: false, audioDebug: false,
       cart: false, disasm: true, decompile: true,
