@@ -45,6 +45,21 @@ if [ ! -f mupen64plus-core/src/r4300/romdev_debug.c ]; then
   rm -f mupen64plus-core/src/ri/rdram.o mupen64plus-core/src/r4300/pure_interp.o
 fi
 
+# romdev N64 AI register reader (getAudioState chip:'ai').
+if ! grep -q "romdev_ai_get" mupen64plus-core/src/plugin/audio_libretro/audio_backend_libretro.c; then
+  cat >> mupen64plus-core/src/plugin/audio_libretro/audio_backend_libretro.c <<'AIEOF'
+
+/* romdev: copy the N64 AI registers + VI clock for getAudioState chip:'ai'. */
+#include <emscripten.h>
+extern struct device g_dev;
+EMSCRIPTEN_KEEPALIVE void romdev_ai_get(unsigned int *out) {
+   int i; for (i = 0; i < AI_REGS_COUNT; i++) out[i] = g_dev.ai.regs[i];
+   out[AI_REGS_COUNT] = g_dev.ai.vi ? g_dev.ai.vi->clock : 0;
+}
+AIEOF
+  rm -f mupen64plus-core/src/plugin/audio_libretro/audio_backend_libretro.o
+fi
+
 emmake make -f Makefile platform=emscripten HAVE_THR_AL=1 clean >/dev/null 2>&1 || true
 emmake make -f Makefile platform=emscripten HAVE_THR_AL=1 -j"$(nproc)"
 
@@ -80,7 +95,7 @@ for src in $EXTRAS; do
     && emar rcs "$CORE_A" "${src%.c}.o" 2>/dev/null
 done
 
-EXPORTED='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_mips_regs_get","_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get","_romdev_regsnap_get","_romdev_watchdog_set","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
+EXPORTED='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_mips_regs_get","_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get","_romdev_regsnap_get","_romdev_watchdog_set","_romdev_ai_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
 EXPORTED_RT='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS","dynCall"]'
 
 emcc "$CORE_A" -O3 -flto -s WASM=1 -s MODULARIZE=1 -s EXPORT_ES6=1 \

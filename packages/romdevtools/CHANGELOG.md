@@ -4,6 +4,23 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.51.0 — 2026-06-26
+
+### N64 audioDebug — FULL parity (zero functional gaps)
+
+- **`getAudioState({chip:'ai'})`** decodes the N64 Audio Interface: sample rate
+  (from DACRATE + the VI clock), whether audio is playing (a buffer is DMA-queued),
+  the DMA source address. (N64 audio is RSP-mixed, so the AI is the OUTPUT state, not
+  per-voice — that lives in game-specific RSP audio lists in RDRAM.) Verified: a real
+  ROM reports `playing:true, sampleRate:32006`. From a `romdev_ai_get` export added
+  to parallel_n64. n64 `audioChips:['ai']`, `audioDebug:true`.
+
+**This closes the last functional gap.** A programmatic audit confirms N64/PS1 now
+match the canonical 14 on every applicable op — build, run, screenshot, memory,
+cpuState, audioDebug, disasm, decompile, cheats, breakpoint, watch. The only manifest
+differences are N/A BY HARDWARE: the tile/sprite/nametable/palette inspectors
+(framebuffer/3D renderers have no such tables) and `cart` (disc-based). Suite 1052/1052.
+
 ## 0.50.0 — 2026-06-26
 
 ### PS1 SPU audioDebug

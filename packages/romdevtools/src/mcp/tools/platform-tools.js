@@ -40,6 +40,7 @@ import { decodeC64Sid } from "../../host/c64-sid-state.js";
 import { decodeLynxMikey, decodeLynxPalette } from "../../host/lynx-mikey-state.js";
 import { getPcePsgState } from "../../host/pce-psg-state.js";
 import { decodePs1Spu } from "../../host/ps1-spu-state.js";
+import { decodeN64Ai } from "../../host/n64-ai-state.js";
 import { getMsxAyState } from "../../host/msx-ay-state.js";
 import { decodeGbaSprites, decodeGbaPalette } from "../../host/gba-video-state.js";
 
@@ -430,6 +431,13 @@ export function registerPlatformTools(server, z, sessionKey) {
       const regs = host.getSpuRegs?.();
       if (!regs) throw new Error("getAudioState chip:'spu' — no SPU region (load a PS1 program into the rebuilt pcsx_rearmed core).");
       return { platform: "ps1", ...decodePs1Spu(regs) };
+    }
+    if (chip === "ai") {
+      // N64 AI — the audio OUTPUT state (sample rate + playing + DMA source). N64
+      // audio is RSP-mixed, so there are no per-voice registers to decode.
+      const regs = host.getAiRegs?.();
+      if (!regs) throw new Error("getAudioState chip:'ai' — no AI region (load an N64 ROM into the rebuilt parallel_n64 core).");
+      return { platform: "n64", ...decodeN64Ai(regs) };
     }
     throw new Error(`getAudioState: unknown chip '${chip}'. Use 'nes' (NES 2A03), 'gb' (Game Boy/GBC), 'gba' (GBA), 'dsp' (SNES), 'psg' (Genesis/SMS/GG SN76489), 'ym2612' (Genesis FM), 'sid' (C64), 'mikey' (Lynx), 'pce', 'ay8910' (MSX), or 'spu' (PS1).`);
   }

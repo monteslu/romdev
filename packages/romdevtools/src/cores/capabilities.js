@@ -234,17 +234,17 @@ export const CAPABILITIES = {
   n64: {
     cpuFamily: "mips", decompileQuality: "good", tier: "mips",
     cpus: { main: "r4300", secondary: ["rsp"] },
-    audioChips: [],
+    audioChips: ["ai"], // AI = the audio OUTPUT interface (RSP-mixed; no per-voice chip)
     memoryRegions: [...GENERIC_REGIONS],
     renderingKind: "3d", introspection: "shallow",
     ops: {
       // parallel_n64: HW (GL) render via the optional native-gles bridge.
-      // run/screenshot + cpuState (R4300 regsnap) + cheats live; disasm + decompile
-      // work (MIPS Capstone + MIPS:BE:32 SLEIGH). build needs an N64 toolchain
-      // (libdragon, not yet); the 3D renderer has no tile/sprite inspectors.
+      // run/screenshot + cpuState (R4300 regsnap) + cheats + breakpoint/watch +
+      // audioDebug(AI) live; disasm + decompile work; build via mips-elf-gcc.
+      // The 3D renderer has no tile/sprite inspectors (N/A by hardware).
       build: true, run: true, screenshot: true,
       inspectSprites: false, inspectPalette: false, inspectBackground: false,
-      renderingContext: false, cpuState: true, audioDebug: false,
+      renderingContext: false, cpuState: true, audioDebug: true,
       cart: false, disasm: true, decompile: true,
     },
   },
