@@ -51,6 +51,9 @@ export const SLEIGH_LANGID = {
   // 32-bit MIPS III code). Ghidra ships both MIPS variants in its stock SLEIGH.
   ps1: "MIPS:LE:32:default",
   n64: "MIPS:BE:32:default",
+  // Dreamcast = SH-4 (SuperH), little-endian. Ghidra ships SuperH4 in its stock
+  // SLEIGH; we compile SuperH4_le.sla (see scripts/build-decompiler.sh).
+  dreamcast: "SuperH4:LE:32:default",
 };
 
 /**

@@ -135,13 +135,14 @@ export function sniffPlatform(p) {
   if (/\.pce$/i.test(p)) return "pce";
   if (/\.(z64|n64|v64)$/i.test(p)) return "n64";
   if (/\.(psexe|psx)$/i.test(p)) return "ps1"; // .exe/.bin ambiguous — pass platform explicitly
+  if (/\.(cdi|gdi)$/i.test(p)) return "dreamcast"; // DC disc images; .elf is cross-platform — pass platform explicitly
   if (/\.(gen|md|bin)$/i.test(p)) return "genesis";
   return null;
 }
 
 /** rizin asm.bits per arch (analysis defaults; rizin's loader usually sets
  * these for recognized formats, but raw blobs need a hint). */
-const BITS = { arm: 32, m68k: 32, snes: 16, mips: 32 };
+const BITS = { arm: 32, m68k: 32, snes: 16, mips: 32, sh: 32 };
 
 /**
  * The rizin analysis-SEED command for a context. For the 8/16-bit platforms
@@ -154,7 +155,10 @@ const BITS = { arm: 32, m68k: 32, snes: 16, mips: 32 };
  * @returns {string} the seed command (no trailing semicolon)
  */
 function analysisSeed({ arch, codeStart }) {
-  if (arch === "mips") {
+  // MIPS (N64/PS1) and SH-4 (Dreamcast) are raw code images with no rizin-recognized
+  // entry, so `aaa` finds nothing — seed a function at the code start + recursively
+  // analyze its call graph (`af` + `aac`). The 8/16-bit bin formats self-seed via aaa.
+  if (arch === "mips" || arch === "sh") {
     const at = "0x" + (codeStart || 0).toString(16);
     return `af @ ${at}; aac @ ${at}`;
   }
@@ -167,8 +171,12 @@ function analysisSeed({ arch, codeStart }) {
  *  `rebase` so callers get real VAs that round-trip through the decompile
  *  VA→fileOffset math. N64 (.z64) keeps its absolute VAs baked into the code and is
  *  analyzed flat from codeStart, so no rebase. */
-function mipsAnalysisBase({ arch, platform, loadBase, codeStart }) {
-  const rebase = (arch === "mips" && platform === "ps1" && loadBase) ? (loadBase & 0xfff00000) >>> 0 : 0;
+function mipsAnalysisBase({ platform, loadBase, codeStart }) {
+  // PS1 (left-padded to the VA's low 20 bits) and Dreamcast (same, loadBase
+  // 0x8c010000) need the VA's HIGH bits added back so addresses round-trip. N64 runs
+  // flat with VAs already baked in (no rebase).
+  const padded = (platform === "ps1" || platform === "dreamcast") && loadBase;
+  const rebase = padded ? (loadBase & 0xfff00000) >>> 0 : 0;
   return { baddr: undefined, seedAt: codeStart, rebase };
 }
 
@@ -266,6 +274,39 @@ async function loadContext(romPath, platformOverride) {
     // VA's low bits (jal masks to a 28-bit region). The high bits (0x80000000) are
     // added back as `rebase`. Without this, every cross-function call dangles and
     // only the entry blob is discovered. (Cap the pad so a weird t_addr can't OOM.)
+    const lowPad = loadBase & 0x000fffff;
+    if (lowPad > 0 && lowPad <= 0x200000) {
+      const padded = new Uint8Array(lowPad + text.length);
+      padded.set(text, lowPad);
+      romBytes = padded;
+      codeStart = lowPad;
+    } else {
+      romBytes = text;
+    }
+  }
+  // Dreamcast SH-4: KOS produces an ELF (load base 0x8c010000) or a stripped flat
+  // binary. For an ELF, strip to the first PT_LOAD segment's bytes + take its vaddr
+  // as loadBase. Like PS1, SH-4 uses PC-relative + absolute addressing, so left-pad
+  // so flat offset == the VA's low bits and add the high bits back as rebase.
+  if (platform === "dreamcast") {
+    let text = romBytes, loadVa = 0x8c010000;
+    if (romBytes.length >= 0x34 && romBytes[0] === 0x7f && romBytes[1] === 0x45 &&
+        romBytes[2] === 0x4c && romBytes[3] === 0x46) { // "\x7fELF"
+      // ELF32 LE: e_phoff @0x1c, e_phentsize @0x2a, e_phnum @0x2c. Find first PT_LOAD.
+      const u32 = (o) => (romBytes[o] | (romBytes[o + 1] << 8) | (romBytes[o + 2] << 16) | (romBytes[o + 3] << 24)) >>> 0;
+      const u16 = (o) => romBytes[o] | (romBytes[o + 1] << 8);
+      const phoff = u32(0x1c), phentsize = u16(0x2a), phnum = u16(0x2c);
+      for (let i = 0; i < phnum; i++) {
+        const ph = phoff + i * phentsize;
+        if (u32(ph) === 1) { // PT_LOAD
+          const p_offset = u32(ph + 4), p_vaddr = u32(ph + 8), p_filesz = u32(ph + 16);
+          loadVa = p_vaddr >>> 0;
+          text = romBytes.subarray(p_offset, p_offset + p_filesz);
+          break;
+        }
+      }
+    }
+    loadBase = loadVa >>> 0;
     const lowPad = loadBase & 0x000fffff;
     if (lowPad > 0 && lowPad <= 0x200000) {
       const padded = new Uint8Array(lowPad + text.length);
@@ -623,12 +664,26 @@ export async function analyzeDecompile(romPath, address, platformOverride) {
   // offset and decompile via the MIPS SLEIGH spec (MIPS:BE:32 for N64, MIPS:LE:32
   // for PS1). N64: normalize byte order, fileOff = vaddr - entryVaddr + 0x1000 (post
   // IPL3). PS1: strip PS-EXE, fileOff = vaddr - loadAddr.
-  if (platform === "n64" || platform === "ps1") {
+  if (platform === "n64" || platform === "ps1" || platform === "dreamcast") {
     let fileOff;
     if (platform === "n64") {
       romBytes = normalizeN64ByteOrder(romBytes).bytes;
       const entry = ((romBytes[0x08] << 24) | (romBytes[0x09] << 16) | (romBytes[0x0a] << 8) | romBytes[0x0b]) >>> 0;
       fileOff = ((address >>> 0) - entry + 0x1000) >>> 0;
+    } else if (platform === "dreamcast") {
+      // SH-4: strip the ELF to its first PT_LOAD segment (vaddr = loadBase), or treat
+      // a raw image as flat at 0x8c010000. fileOff = address - segment vaddr.
+      let loadVa = 0x8c010000;
+      if (romBytes.length >= 0x34 && romBytes[0] === 0x7f && romBytes[1] === 0x45 && romBytes[2] === 0x4c && romBytes[3] === 0x46) {
+        const u32 = (o) => (romBytes[o] | (romBytes[o + 1] << 8) | (romBytes[o + 2] << 16) | (romBytes[o + 3] << 24)) >>> 0;
+        const u16 = (o) => romBytes[o] | (romBytes[o + 1] << 8);
+        const phoff = u32(0x1c), phentsize = u16(0x2a), phnum = u16(0x2c);
+        for (let i = 0; i < phnum; i++) {
+          const ph = phoff + i * phentsize;
+          if (u32(ph) === 1) { loadVa = u32(ph + 8) >>> 0; romBytes = romBytes.subarray(u32(ph + 4), u32(ph + 4) + u32(ph + 16)); break; }
+        }
+      }
+      fileOff = ((address >>> 0) - loadVa) >>> 0;
     } else {
       let loadAddr = 0;
       if (romBytes.length >= 0x800 && romBytes[0] === 0x50 && romBytes[1] === 0x53 && romBytes[2] === 0x2d && romBytes[3] === 0x58) {
