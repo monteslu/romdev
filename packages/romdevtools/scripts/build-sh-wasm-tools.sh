@@ -98,6 +98,8 @@ if [ ! -f "$ROOT/build-wasm-gcc/gcc/cc1.wasm" ]; then
   # libiberty — build that first, then configure-gcc, then cc1.
   emmake make -j"$NCPU" all-build
   emmake make -j"$NCPU" configure-gcc
+  # cc1 also needs the WASM-side support libs (libcpp/libiberty/libbacktrace/...).
+  emmake make -j"$NCPU" all-libiberty all-libcpp all-libcody all-libdecnumber all-libbacktrace
   ( cd gcc && emmake make -j"$NCPU" cc1 )
 fi
 
