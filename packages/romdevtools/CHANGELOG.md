@@ -4,6 +4,28 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.59.0 — 2026-06-26
+
+### Dreamcast run-side: Flycast loads ELFs + GL bridge fix (general)
+
+Flycast WASM now boots a homebrew `.elf` (reios HLE — no BIOS/disc) and requests GL:
+- threads: `-pthread -sPTHREAD_POOL_SIZE=8` (Flycast spawns std::threads; without
+  pthreads the ctor aborts). The pthread build bakes the module filename into the
+  worker bootstrap, so it MUST link with the final `flycast_libretro.js` name.
+- **GL proc-address (general bridge fix in LibretroGL.js):** emscripten-WebGL cores
+  (Flycast) resolve GL via libretro `get_proc_address`. The bridge previously returned
+  a no-op 0-arg stub → the core called multi-arg GL fns through it → "null function or
+  function signature mismatch" in context_reset. Now the bridge returns the real
+  `emscripten_GetProcAddress` table pointer (built with `-sGL_ENABLE_GET_PROC_ADDRESS=1
+  -lGL`); the native-gles stub path stays as the glide64-N64 fallback. This fix helps
+  ANY future emscripten-WebGL core.
+- `ROMDEV_CORE_LOG=1` env gates core stdout/stderr (was always suppressed) — found the
+  thread + mmap aborts with it.
+
+KNOWN-OPEN: `retro_run` throws emscripten's `unwind` (Flycast yields via
+emscripten_set_main_loop / Asyncify, incompatible with the host's synchronous
+frame-step). That main-loop integration is the next run-side step. Suite 1059/1059.
+
 ## 0.58.0 — 2026-06-26
 
 ### Dreamcast run-side: Flycast WASM core builds + inits; sh-elf toolchain built

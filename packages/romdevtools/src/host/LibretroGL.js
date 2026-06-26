@@ -225,32 +225,27 @@ export class LibretroGL {
       return this._procAddressCache.get(name);
     }
 
-    // Look up the function on native-gles
+    // PREFERRED: cores built with emscripten's own WebGL layer (GL_ENABLE_GET_PROC_
+    // ADDRESS=1, e.g. Flycast) resolve GL through emscripten_GetProcAddress, which
+    // returns a REAL function-table pointer into the WebGL JS implementation —
+    // correct signature, no stub. Use it when the core exports it. (The old
+    // native-gles `gl[name]` + addFunction(...,'i') stub path traps the moment the
+    // core calls a multi-arg GL fn through a 0-arg pointer — that's the
+    // context_reset "null function or function signature mismatch".)
+    if (typeof mod._emscripten_GetProcAddress === "function") {
+      const ptr = mod._emscripten_GetProcAddress(symPtr) >>> 0;
+      this._procAddressCache.set(name, ptr);
+      return ptr;
+    }
+
+    // Fallback (native-gles bridge cores, e.g. the glide64 N64 build): the GL fns
+    // are linked directly into the core, so a non-zero "available" marker suffices —
+    // the core calls its own linked function, not this pointer.
     const fn = gl[name];
     if (!fn) {
-      // Not found — some cores probe for extension functions
       this._procAddressCache.set(name, 0);
       return 0;
     }
-
-    // We need to create an Emscripten addFunction wrapper that bridges
-    // the WASM call to the native GL call. The challenge is that each
-    // GL function has a different signature.
-    //
-    // For libretro cores compiled with Emscripten, they typically call
-    // GL functions directly (linked at compile time) rather than through
-    // get_proc_address. get_proc_address is mainly used for extension
-    // functions. We return 0 for now if they're probing — the core's
-    // Emscripten build should have the GL functions linked directly.
-    //
-    // If a core truly needs runtime-resolved GL, we'd need a signature
-    // table mapping GL function names to their parameter types.
-
-    // For common GL functions, return a stub that indicates "available"
-    // The actual calls go through the Emscripten-linked GL functions.
-    // Returning non-zero tells the core the function exists.
-    // We create a minimal no-op wrapper since the core will call the
-    // directly-linked version, not this pointer.
     const stub = mod.addFunction(() => { return 0; }, 'i');
     this._procAddressCache.set(name, stub);
     return stub;
