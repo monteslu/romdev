@@ -38,8 +38,8 @@ export async function loadLibretroCore(args) {
   /** @type {Record<string, unknown>} */
   const opts = {
     noInitialRun: true,
-    print: () => {},
-    printErr: () => {},
+    print: process.env.ROMDEV_CORE_LOG ? (s) => console.error("[core]", s) : () => {},
+    printErr: process.env.ROMDEV_CORE_LOG ? (s) => console.error("[core:err]", s) : () => {},
   };
 
   // HW-render cores: minified glue uses GLctx = canvas.getContext('webgl2'), so we
