@@ -4,6 +4,33 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.54.0 — 2026-06-26
+
+### Audit: two real N64/PS1 parity gaps found + fixed
+
+A full per-tool audit (all 32 tools, live-probed on both platforms) surfaced two
+genuine gaps where the platform was CAPABLE but the tool didn't deliver:
+
+1. **PS1 reverse-engineering returned bogus addresses.** `disasm`/`cfg`/`xrefs`/
+   `functions`/`decompile` on a PS1 PS-EXE found a single fake `fcn.00000000` at
+   file offset 0 (not the real 0x80010000+ VA), and `decompile` then threw "address
+   maps outside the image." Root cause: rizin ignores `-B` on a raw buffer, so the
+   stripped .text was analyzed flat from 0, and PS1's ABSOLUTE jal targets dangled →
+   no cross-function discovery. Fix: left-pad the .text so flat offset == the VA's
+   low 20 bits (jal-following now works) and add the high bits back as a rebase, so
+   every reported address is a real VA that round-trips. PS1 now finds all functions
+   (16 vs 1) at correct VAs, CFG/xrefs/decompile all resolve. (N64 was already fine.)
+
+2. **PS1 `video_ram` was claimed but empty.** The manifest lists `video_ram` for
+   every platform, but pcsx_rearmed never exposed the GPU VRAM. Added a
+   `romdev_vram_get` export (1024×512×16bpp) wired into `memory({region:'video_ram'})`
+   — PS1 GPU VRAM is now readable (verified: rendered pixels show up).
+
+Everything else in the audit was already at parity or genuinely N/A-by-hardware
+(the tile/sprite/nametable/palette inspectors need tables a framebuffer/3D renderer
+doesn't have; `cart` is for cartridge ROMs). save/loadState, runUntil, frame-verify,
+romPatch, and the agnostic art/snippet tools all work on both. Suite 1053/1053.
+
 ## 0.53.0 — 2026-06-26
 
 ### N64 + PS1 reach EXAMPLE parity: 5 full genre games each

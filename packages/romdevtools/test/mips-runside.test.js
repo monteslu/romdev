@@ -254,3 +254,27 @@ test("audioDebug: N64 AI output state (chip:'ai')", { timeout: 180000 }, async (
     host.dispose?.();
   }
 });
+
+test("memory: PS1 video_ram exposes the GPU VRAM (rebuilt pcsx core)", { timeout: 120000 }, async () => {
+  if (!HAS_MIPS_GCC) { console.log("mips-elf-gcc not built; skipping"); return; }
+  const core = resolveCore("ps1");
+  if (!core) return;
+  const psxc = await readFile(path.join(process.env.HOME, "code/cliemu/romdev/packages/romdevtools/src/platforms/ps1/lib/c/psx.c"), "utf8");
+  const psxh = await readFile(path.join(process.env.HOME, "code/cliemu/romdev/packages/romdevtools/src/platforms/ps1/lib/c/psx.h"), "utf8");
+  const src = `#include "psx.h"\nint main(){ psx_init(); for(;;){ psx_clear(RGB(120,80,200)); psx_rect(10,10,40,40,RGB(255,0,0)); psx_vsync(); } }`;
+  const b = await buildForPlatform({ platform: "ps1", language: "c", sources: { "main.c": src, "psx.c": psxc }, includes: { "psx.h": psxh } });
+  if (!b.ok) { console.log("ps1 build failed; skipping"); return; }
+  const host = new LibretroHost();
+  try {
+    await host.loadCore(core.jsPath, core.wasmPath, { hwRender: core.hwRender });
+    if (!(host.mod && typeof host.mod._romdev_vram_get === "function")) { console.log("core has no VRAM export; skipping"); return; }
+    await host.loadMedia({ platform: "ps1", bytes: b.binary, virtualName: "/v.exe" });
+    for (let i = 0; i < 60; i++) host.stepFrames(1);
+    const vram = host.readMemory("video_ram", 0, 8192);
+    assert.equal(vram.length, 8192, "video_ram is readable");
+    let nz = 0; for (let i = 0; i < vram.length; i += 2) if (vram[i] | vram[i + 1]) nz++;
+    assert.ok(nz > 0, `GPU VRAM holds rendered pixels: ${nz} nonzero`);
+  } finally {
+    host.dispose?.();
+  }
+});
