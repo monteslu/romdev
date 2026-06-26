@@ -4,6 +4,22 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.56.1 — 2026-06-26
+
+### ascii screenshot: legible default grid + lighter default color (0.44.0 feedback #1)
+
+`frame({op:'screenshot', format:'ascii'})` defaulted to a `fb/16` grid (16×14 for a
+256×224 NES frame — too coarse to read any game state) AND truecolor (`38;2;r;g;b`
+per cell, ~7.9KB of escapes). So the "cheap text screenshot" was both expensive and
+useless for an "are we in gameplay?" check.
+
+- default grid is now `fb/8` (one cell per 8×8 tile → 32×28 for NES, legible).
+- default `colors` is now `'256'` (indexed) instead of `'true'` — near-identical read,
+  far fewer escape bytes. Net for the NES case: 4× more cells AND ~55% smaller
+  (7876B → 3551B).
+- when a caller forces a grid too coarse to show state, the result carries a `note`
+  pointing at `memory({op:'read'})` as the cheaper exact path for a pass/fail check.
+
 ## 0.56.0 — 2026-06-26
 
 ### N64 + PS1 are now SHIPPABLE: core packages + toolchain wired for publish
