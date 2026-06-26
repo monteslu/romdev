@@ -606,7 +606,9 @@ export class LibretroHost {
   _afterRun() {
     if (this.state.hwFramePending && this.hwRender?.active) {
       this.state.hwFramePending = false;
-      const frame = this.hwRender.readbackFrame();
+      // Crop the GL FBO to the core's reported active resolution (e.g. DC 640x480 in an
+      // 853x853 FBO) so screenshots don't carry the dead viewport border.
+      const frame = this.hwRender.readbackFrame(this.state.hwFrameW, this.state.hwFrameH);
       if (frame) {
         this.state.lastFrame = {
           width: frame.width, height: frame.height,

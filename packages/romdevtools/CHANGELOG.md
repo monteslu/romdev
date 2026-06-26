@@ -4,6 +4,21 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.65.0 — 2026-06-26
+
+### Dreamcast: homebrew renders correct graphics + HW-frame crop-to-native
+
+A minimal DC homebrew (no KallistiOS — a dependency-free `dc.h` helper that programs the
+PowerVR2 FB_R_CTRL/FB_R_SIZE/FB_R_SOF1 + SPG for a 640x480 RGB565 framebuffer) builds with
+the native sh-elf toolchain, boots via reios HLE, runs, and renders a test pattern that the
+host captures **pixel-exact** (verified: dark-blue background + equal red/green/blue bars +
+white frame, the program's exact colors). This closes the DC render-fidelity loop.
+
+Host change (helps any HW-render core): the video_refresh callback now records the core's
+reported active resolution, and the GL readback crops the FBO to it — so a 640x480 DC frame
+no longer comes back as the full 853x853 GL viewport with a dead border. `readbackFrame`
+takes optional (cropW, cropH); `_afterRun` passes the core's w/h. Suite 1059/1059.
+
 ## 0.64.0 — 2026-06-26
 
 ### Dreamcast: present-path verified — screenshot works

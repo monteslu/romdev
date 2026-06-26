@@ -172,6 +172,10 @@ export function registerCallbacks(args) {
     const uPtr = dataPtr >>> 0;
     if (uPtr === RETRO_HW_FRAME_BUFFER_VALID && state.hwRender?.active) {
       state.hwFramePending = true;
+      // Remember the core's reported active resolution (e.g. DC 640x480) so the
+      // readback can crop the (often larger, e.g. 853x853) GL FBO to just the
+      // rendered region instead of returning the whole viewport with dead borders.
+      if (w > 0 && h > 0) { state.hwFrameW = w; state.hwFrameH = h; }
       return;
     }
     if (dataPtr === 0 || uPtr === RETRO_HW_FRAME_BUFFER_VALID) return;
