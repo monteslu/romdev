@@ -4,6 +4,29 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.49.0 — 2026-06-26
+
+### N64 + PS1 live-debug — breakpoint + watch now work
+
+The remaining big parity gap: the live-debugging RE tools. parallel_n64 (R4300) and
+pcsx_rearmed (R3000) are rebuilt with romdev's CPU instrumentation, so:
+
+- **`breakpoint({on:'pc'|'write'|'read'})`** + **`watch({on:'range'|'mem'})`** work on
+  both MIPS platforms — verified live: a C program (built by the romdev toolchain)
+  writing to a known address is caught by a write watchpoint with the writing PC, and
+  a range watch captures the write stream during emulation.
+- A `romdev_debug.c` instrumentation unit (per core) hooks the memory write/read paths
+  (write/read watch + range watch + coverage) and the interpreter step (PC break +
+  single-step). Exports the full `romdev_watchpoint`/`readwatch`/`pcbreak`/`range`/`cov`/
+  `regsnap`/`watchdog` set the host already expects — so the host needed ZERO changes
+  (its debug methods were already generic).
+- Reproducible via the updated build-pcsx-rearmed.sh / build-parallel-n64.sh
+  (patch the source + hooks + exports).
+
+**Remaining honest gap:** `audioDebug` (PS1 SPU / N64 audio chip decoders) is still
+TODO. The tile/sprite/nametable inspectors stay N/A by hardware (framebuffer/3D
+renderers have no such tables). Everything else is at parity. Suite 1050/1050.
+
 ## 0.48.0 — 2026-06-25
 
 ### N64 + PS1 `build` op — full feature parity

@@ -168,3 +168,30 @@ test("build: C → N64 compiles (big-endian mips)", { timeout: 120000 }, async (
   assert.equal(r.ok, true, `N64 build ok: ${(r.log || "").slice(-200)}`);
   assert.ok(r.binary && r.binary.length > 0, "produced a binary");
 });
+
+test("live-debug: watchpoint + range-watch fire on PS1 (instrumented core)", { timeout: 180000 }, async () => {
+  if (!HAS_MIPS_GCC) { console.log("mips-elf-gcc not built; skipping"); return; }
+  const core = resolveCore("ps1");
+  if (!core) return;
+  const r = await buildForPlatform({ platform: "ps1", language: "c",
+    source: "int main(){ volatile unsigned char *t=(volatile unsigned char*)0x80001000; for(;;){ *t=0x42; *t=0x43; } }" });
+  assert.ok(r.ok, "build ok");
+  const host = new LibretroHost();
+  try {
+    await host.loadCore(core.jsPath, core.wasmPath, { hwRender: core.hwRender });
+    if (!host.watchpointSupported()) { console.log("core has no watchpoint export; skipping"); return; }
+    await host.loadMedia({ platform: "ps1", bytes: r.binary, virtualName: "/wp.exe" });
+    host.stepFrames(10);
+    // write watchpoint on the target address must catch the writing PC
+    host.setWatchpoint(0x80001000, true);
+    host.stepFrames(5);
+    const wp = host.getWatchpoint(true);
+    assert.ok(wp.hits > 0, `write watchpoint fired: ${wp.hits} hits`);
+    assert.ok((wp.lastPC >>> 0) > 0x80000000, `captured the writing PC: ${(wp.lastPC >>> 0).toString(16)}`);
+    // range watch must capture write events too
+    const ev = host.watchRange(0x80001000, 0x80001010, "write", 5);
+    assert.ok(ev.total > 0, `range watch captured writes: ${ev.total}`);
+  } finally {
+    host.dispose?.();
+  }
+});

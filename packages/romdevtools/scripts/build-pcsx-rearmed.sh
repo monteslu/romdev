@@ -28,6 +28,23 @@ if ! grep -q "romdev_mips_regs_get" frontend/libretro.c; then
   rm -f frontend/libretro.o
 fi
 
+# romdev live-debug instrumentation: drop romdev_debug.c into libpcsxcore + hook
+# the memory write/read paths + the interpreter step, so breakpoint/watch work.
+if [ ! -f libpcsxcore/romdev_debug.c ]; then
+  cp "$SCRIPT_DIR/patches/romdev-snippets/ps1-debug.c" libpcsxcore/romdev_debug.c
+  # add to OBJS
+  sed -i 's|libpcsxcore/gte.o libpcsxcore/gte_nf.o libpcsxcore/gte_divider.o|libpcsxcore/gte.o libpcsxcore/gte_nf.o libpcsxcore/gte_divider.o libpcsxcore/romdev_debug.o|' Makefile
+  # write hooks in psxmem.c (capture old byte, call romdev_on_write before each store)
+  sed -i 's|#include "psxmem.h"|#include "psxmem.h"\nextern void romdev_on_write(unsigned int,unsigned int,unsigned int);\nextern void romdev_on_read(unsigned int);|' libpcsxcore/psxmem.c
+  sed -i 's|\t\t\t\*(u8 \*)p = value;|\t\t\tromdev_on_write(mem, value, *(u8*)p);\n\t\t\t*(u8 *)p = value;|' libpcsxcore/psxmem.c
+  sed -i 's|\t\t\t\*(u16 \*)p = SWAPu16(value);|\t\t\tromdev_on_write(mem, value, *(u16*)p);\n\t\t\t*(u16 *)p = SWAPu16(value);|' libpcsxcore/psxmem.c
+  sed -i 's|\t\t\t\*(u32 \*)p = SWAPu32(value);|\t\t\tromdev_on_write(mem, value, *(u32*)p);\n\t\t\t*(u32 *)p = SWAPu32(value);|' libpcsxcore/psxmem.c
+  sed -i 's|\t\t\t\tDebugCheckBP((mem \& 0xffffff) | 0x80000000, R4);\n\t\t\treturn SWAPu32|\t\t\t\tDebugCheckBP((mem \& 0xffffff) | 0x80000000, R4);\n\t\t\tromdev_on_read(mem);\n\t\t\treturn SWAPu32|' libpcsxcore/psxmem.c
+  # pc-break + coverage hooks in the interpreter step (set regs->stop on a hit)
+  sed -i 's|static inline void execI_(u8 \*\*memRLUT, psxRegisters \*regs) {|extern int romdev_on_step(unsigned int);\nextern void romdev_cov_mark(unsigned int);\nstatic inline void execI_(u8 **memRLUT, psxRegisters *regs) {\n\tromdev_cov_mark(regs->pc);\n\tif (romdev_on_step(regs->pc)) { regs->stop = 1; return; }|' libpcsxcore/psxinterpreter.c
+  rm -f libpcsxcore/psxmem.o libpcsxcore/psxinterpreter.o
+fi
+
 emmake make -f Makefile.libretro platform=emscripten clean >/dev/null 2>&1 || true
 emmake make -f Makefile.libretro platform=emscripten -j"$(nproc)"
 
@@ -35,7 +52,7 @@ CORE_LIB=$(find . -maxdepth 2 \( -name "*_libretro_emscripten.bc" -o -name "*.a"
 cp "$CORE_LIB" "${CORE_LIB%.bc}.a" 2>/dev/null || true
 CORE_A="${CORE_LIB%.bc}.a"; [ -f "$CORE_A" ] || CORE_A="$CORE_LIB"
 
-EXPORTED='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_mips_regs_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
+EXPORTED='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_mips_regs_get","_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get","_romdev_regsnap_get","_romdev_watchdog_set","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
 EXPORTED_RT='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS","dynCall"]'
 
 emcc "$CORE_A" -O3 -s WASM=1 -s MODULARIZE=1 -s EXPORT_ES6=1 \
