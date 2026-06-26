@@ -32,6 +32,39 @@ function wrapPsExe(text, loadAddr = 0x80010000, spBase = 0x801ffff0) {
   return out;
 }
 
+// Minimal clean-room N64 IPL3 (assembled from lib/n64-ipl3.s): runs in SP DMEM at
+// 0xA4000040 after the (HLE or real) PIF boot copies ROM[0x40..0xFFF] there. It
+// PI-DMAs 1 MB from cart 0xB0001000 → RDRAM 0x80000400 and jumps to the game entry.
+const N64_IPL3 = [
+  0x3c08a460, 0x24090400, 0xad090000, 0x3c091000, 0x35291000, 0xad090004,
+  0x3c09000f, 0x3529ffff, 0xad09000c, 0x8d0a0010, 0x314a0003, 0x1540fffd,
+  0x00000000, 0x3c0b8000, 0x356b0400, 0x01600008, 0x00000000,
+];
+
+/** Wrap a raw .text image (linked at 0x80000400) in a bootable big-endian .z64:
+ *  64-byte header (0x80371240 magic + entry) + IPL3 at 0x40 + game at 0x1000. The
+ *  parallel_n64 HLE boot runs the IPL3, which copies the game to RDRAM and jumps. */
+function wrapN64Rom(text, entry = 0x80000400) {
+  const GAME_OFF = 0x1000;
+  const size = GAME_OFF + ((text.length + 3) & ~3);
+  const rom = new Uint8Array(size < 0x101000 ? 0x101000 : size); // ≥1MB (IPL3 copies 1MB)
+  const be32 = (o, v) => { rom[o] = (v >>> 24) & 0xff; rom[o + 1] = (v >> 16) & 0xff; rom[o + 2] = (v >> 8) & 0xff; rom[o + 3] = v & 0xff; };
+  // header: PI BSD config / magic, clock, entry, release
+  be32(0x00, 0x80371240);          // magic (Z64, native big-endian)
+  be32(0x04, 0x0000000f);          // clock rate
+  be32(0x08, entry);               // boot entry (informational; IPL3 jumps explicitly)
+  be32(0x0c, 0x00001444);          // release
+  // name (0x20..0x33)
+  const name = "ROMDEV HOMEBREW     ";
+  for (let i = 0; i < 20; i++) rom[0x20 + i] = name.charCodeAt(i);
+  be32(0x3c, 0x0000004e); // cartridge id "NE" placeholder + region
+  // IPL3 at 0x40
+  for (let i = 0; i < N64_IPL3.length; i++) be32(0x40 + i * 4, N64_IPL3[i]);
+  // game at 0x1000
+  rom.set(text, GAME_OFF);
+  return rom;
+}
+
 /**
  * Build a minimal C program to a runnable PS1/N64 image.
  * @param {Object} args
@@ -115,6 +148,8 @@ export async function buildMipsC(args) {
   log += `--- objcopy ---\n${oc.log || "(ok)"}\n`;
   if (oc.exitCode !== 0 || !oc.binary) return { ok: false, binary: null, log, exitCode: oc.exitCode || 1, stage: "objcopy", ...(oc.crash ? { crash: oc.crash } : {}) };
 
-  const binary = platform === "ps1" ? wrapPsExe(oc.binary) : oc.binary;
+  const binary = platform === "ps1" ? wrapPsExe(oc.binary)
+    : platform === "n64" ? wrapN64Rom(oc.binary)
+    : oc.binary;
   return { ok: true, binary, log, exitCode: 0, stage: "done", ...(ld.map ? { symbols: ld.map } : {}) };
 }
