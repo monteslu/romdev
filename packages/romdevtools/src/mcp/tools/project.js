@@ -546,6 +546,56 @@ const TEMPLATES = {
       },
     };
   })(),
+
+  // ── PlayStation (mips-elf-gcc R3000) — software 3D engine helper lib + examples ──
+  // The PS1 is a 3D machine: the helper lib (psx.{h,c}) is a real software 3D
+  // pipeline (fixed-point transform + perspective + cull). 4 examples are 3D; the
+  // puzzle is 2D (a flat grid is the right idiom even on 3D hardware).
+  ps1: (() => {
+    const PS1_RUNTIME = [
+      { src: "lib/c/psx.h", dst: "psx.h" },
+      { src: "lib/c/psx.c", dst: "psx.c" },
+    ];
+    const mk = (name, describe) => ({ main: `${name}/main.c`, runtime: PS1_RUNTIME, lang: "C (mips-elf-gcc)", ext: ".exe", describe });
+    return {
+      default: mk("shmup", "STARFALL — the canonical PS1 3D starter: a vertical shooter where enemies fly in from depth and grow under perspective projection. Exercises the whole 3D helper lib (camera, model transform, culled cubes) + SIO pad + HUD. Same as 'shmup'."),
+      shmup: {
+        ...mk("shmup", "STARFALL — a 3D PlayStation vertical shooter. The playfield recedes into the screen; enemy cubes fly in from the far distance and scale up under perspective as they approach. Stream bullets into Z, AABB collision, xorshift wave spawner, parallax starfield, title/play/game-over with score + lives. Built on the software 3D pipeline (psx_camera/psx_model/psx_quad3d, 16.16 fixed point)."),
+        players: "1 (PS1 has two pad ports; a 2P round can hook port 2 later)",
+        sram: "none in this starter — PS1 saves go to a Memory Card via the BIOS; the helper lib keeps hi-score in-session (stated in-file).",
+        mechanics: ["3D perspective playfield", "depth-scaled enemies", "projectile pools", "wave spawner", "AABB collision", "lives + score", "title/play/game-over state machine"],
+        techniques: ["software 3D: fixed-point camera + model transform", "perspective projection + back-face cull", "GPU flat-shaded quads (GP0 0x20/0x60)", "SIO controller polling", "blocky HUD number font"],
+      },
+      racing: {
+        ...mk("racing", "POLE BENDER — a 3D PlayStation racer. The road is a ribbon of perspective quads receding to the horizon and bending with a sine curve; you steer a car between the verges as the world scrolls toward you, rival cubes growing as you close on them. The PS1 signature: a real 3D track, not pseudo-3D scaling. Distance score, collision spin-out, title/race/results."),
+        players: "1",
+        sram: "none (in-session best time/score; Memory Card path is the real-hardware save).",
+        mechanics: ["3D curved road (perspective quads)", "throttle/brake/steer physics", "rival traffic + collision", "distance scoring", "title/race/results state machine"],
+        techniques: ["receding road segments with depth-driven centerline curve", "no-cull ground-plane quads (psx_quad3d_nc)", "chase camera with downward tilt", "16.16 fixed-point world scroll"],
+      },
+      platformer: {
+        ...mk("platformer", "BLOCK HOP — a 3D PlayStation platformer. A cube hero runs and jumps across floating platforms drawn in perspective; gravity + jump physics in 16.16 fixed point, AABB landing on platform tops, coins to collect, a lethal pit, a chase camera that follows the hero. Title/play/game-over, score + lives."),
+        players: "1",
+        sram: "none (in-session hi-score; Memory Card is the real save path).",
+        mechanics: ["gravity + jump physics", "platform-top AABB landing", "coin pickups", "lethal pit + lives", "follow camera", "title/play/game-over"],
+        techniques: ["3D platforms as no-cull flat-topped boxes", "culled hero/coin cubes", "smooth-follow camera (psx_camera per frame)", "fixed-point physics"],
+      },
+      sports: {
+        ...mk("sports", "SLAM COURT — a 3D PlayStation sports game (air-hockey / pong). A perspective court seen down its length; you control the near paddle, the CPU the far one, and the ball bounces in 3D (X across, Z into the screen), its size changing with depth. First to 7. Title/match/game-over."),
+        players: "1 (vs CPU; a 2P split-paddle round can hook port 2 later)",
+        sram: "none (match score is in-session).",
+        mechanics: ["3D ball physics (X/Z)", "player + CPU paddles", "wall bounces + scoring", "tracking CPU AI", "first-to-7 match", "title/match/game-over"],
+        techniques: ["perspective court floor (no-cull quad)", "depth-scaled ball", "paddle/ball cubes at world positions", "capped CPU tracking"],
+      },
+      puzzle: {
+        ...mk("puzzle", "DROP GRID — the one 2D game in the PS1 set (a flat grid is the right idiom even on 3D hardware). A falling-block puzzle: colored blocks drop down a well, full rows clear and score, speed ramps up, stack the top = game over. Drawn with the GPU's 2D rectangle primitive. Title/play/game-over."),
+        players: "1",
+        sram: "none (in-session hi-score).",
+        mechanics: ["integer grid model", "falling block move/drop", "full-row clear + scoring", "ramping fall speed", "stack-out game over", "title/play/game-over"],
+        techniques: ["2D GPU rectangles (GP0 0x60 variable-size rect)", "integer board logic (no 3D needed)", "SIO pad edge detection", "row-shift clear"],
+      },
+    };
+  })(),
 };
 // R37: GBC has its own scaffold tree at examples/gbc/templates/ +
 // src/platforms/gbc/lib/c/. Same runtime files as GB (the APU + Z80 +

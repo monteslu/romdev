@@ -59,6 +59,12 @@ SPUEOF
   rm -f plugins/dfsound/spu.o
 fi
 
+# romdev pad reader (homebrew can also read SIO directly; this export aids debugging).
+if ! grep -q "romdev_pad_get" frontend/libretro.c; then
+  printf '\n#include <emscripten.h>\nextern unsigned short in_keystate[];\nEMSCRIPTEN_KEEPALIVE unsigned int romdev_pad_get(void){ return in_keystate[0]; }\n' >> frontend/libretro.c
+  rm -f frontend/libretro.o
+fi
+
 emmake make -f Makefile.libretro platform=emscripten clean >/dev/null 2>&1 || true
 emmake make -f Makefile.libretro platform=emscripten -j"$(nproc)"
 
@@ -66,7 +72,7 @@ CORE_LIB=$(find . -maxdepth 2 \( -name "*_libretro_emscripten.bc" -o -name "*.a"
 cp "$CORE_LIB" "${CORE_LIB%.bc}.a" 2>/dev/null || true
 CORE_A="${CORE_LIB%.bc}.a"; [ -f "$CORE_A" ] || CORE_A="$CORE_LIB"
 
-EXPORTED='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_mips_regs_get","_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get","_romdev_regsnap_get","_romdev_watchdog_set","_romdev_spu_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
+EXPORTED='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_mips_regs_get","_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get","_romdev_regsnap_get","_romdev_watchdog_set","_romdev_spu_get","_romdev_pad_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
 EXPORTED_RT='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS","dynCall"]'
 
 emcc "$CORE_A" -O3 -s WASM=1 -s MODULARIZE=1 -s EXPORT_ES6=1 \
