@@ -61,6 +61,18 @@ grep -q "romdev/WASM (single-threaded" core/util/periodic_thread.h || \
 grep -q "romdev/WASM: single-threaded build" shell/libretro/option.cpp || \
   sed -i 's/Option<bool> ThreadedRendering(CORE_OPTION_NAME "_threaded_rendering", true);/#if defined(__EMSCRIPTEN__) \/* romdev\/WASM: single-threaded build *\/\nOption<bool> ThreadedRendering(CORE_OPTION_NAME "_threaded_rendering", false);\n#else\nOption<bool> ThreadedRendering(CORE_OPTION_NAME "_threaded_rendering", true);\n#endif/' shell/libretro/option.cpp
 
+# CPU runs on the worker thread when ThreadedRendering is on — but our pthread no-op
+# means that worker never runs (CPU never steps). Force it OFF at runtime (the option
+# default isn't enough; the host's option value may not reach update_variables in time).
+grep -q "romdev force single-thread" shell/libretro/libretro.cpp || \
+  perl -0pi -e 's/(\tif \(first_startup\)\n\t\{\n\t\tif \(config::ThreadedRendering\))/#if defined(__EMSCRIPTEN__)\n\tconfig::ThreadedRendering.override(false); \/\/ romdev force single-thread (no workers in WASM)\n#endif\n$1/' shell/libretro/libretro.cpp
+
+# HLE BIOS (reios) must be ON: only the reios path loads a raw homebrew .elf. We never
+# ship a real dc_boot.bin, and the "(Restart Required)" option is latched at retro_init
+# before the host can set it — so default it true in the source.
+grep -q "romdev/WASM: we never ship" shell/libretro/option.cpp || \
+  perl -0pi -e 's/Option<bool> UseReios\(CORE_OPTION_NAME "_hle_bios"\);/#if defined(__EMSCRIPTEN__) \/* romdev\/WASM: we never ship a real dc_boot.bin *\/\nOption<bool> UseReios(CORE_OPTION_NAME "_hle_bios", true);\n#else\nOption<bool> UseReios(CORE_OPTION_NAME "_hle_bios");\n#endif/' shell/libretro/option.cpp
+
 # ── configure + build ───────────────────────────────────────────────────────
 rm -rf build-em && mkdir build-em && cd build-em
 emcmake cmake .. -DLIBRETRO=ON -DUSE_VULKAN=OFF -DUSE_GLES2=OFF -DCMAKE_BUILD_TYPE=Release \

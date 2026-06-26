@@ -4,6 +4,27 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.63.0 — 2026-06-26
+
+### Dreamcast: HOMEBREW EXECUTES — run + memory introspection live
+
+Custom Flycast core patches make the SH-4 actually execute guest code. A homebrew .elf
+boots via reios HLE, the SH-4 runs it, and the guest's RAM writes are visible through the
+host (verified: a 0xDC0DC0DC marker the test program writes appears in DC RAM). Manifest
+`dreamcast.run` is now true.
+
+Root cause (3 stacked bugs): (1) worker-thread aborts — fixed by single-thread +
+`--wrap pthread_create` no-op (0.62.0); (2) HLE BIOS off — only the reios path loads a raw
+.elf, and the option is latched at retro_init, so default `UseReios=true` in source for
+emscripten; (3) THE BIG ONE — `ThreadedRendering` defaulted ON, which runs the CPU on a
+`std::async` worker that our pthread no-op kills → the SH-4 never steps (PC stuck at the
+reset vector, reios_boot never fires, RAM stays zero). Fixed by unconditionally
+`config::ThreadedRendering.override(false)` for emscripten in update_variables.
+
+`screenshot` stays false until the PowerVR2 present-path is verified with a TA-driving
+program (the KOS helper lib — next phase). All patches reproducible in build-flycast.sh.
+Suite 1059/1059.
+
 ## 0.62.0 — 2026-06-26
 
 ### Dreamcast run-side BREAKTHROUGH: Flycast boots + runs DC ELFs
