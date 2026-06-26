@@ -164,14 +164,17 @@ export function registerCallbacks(args) {
   mod._retro_set_environment(envCb);
 
   const videoCb = mod.addFunction((dataPtr, w, h, pitch) => {
-    // HW-render path: dataPtr === RETRO_HW_FRAME_BUFFER_VALID means "the frame is
-    // in the GL framebuffer." DON'T read back here — GL state is only stable AFTER
-    // _retro_run returns. Flag it; stepFrames does the glReadPixels post-run.
-    if (dataPtr === RETRO_HW_FRAME_BUFFER_VALID && state.hwRender?.active) {
+    // HW-render path: dataPtr == RETRO_HW_FRAME_BUFFER_VALID means "the frame is in
+    // the GL framebuffer." The WASM passes the i32 as SIGNED -1; the constant is the
+    // UNSIGNED 0xFFFFFFFF — coerce with >>>0 so both match. DON'T read back here —
+    // GL state is only stable AFTER _retro_run returns. Flag it; stepFrames does the
+    // glReadPixels post-run.
+    const uPtr = dataPtr >>> 0;
+    if (uPtr === RETRO_HW_FRAME_BUFFER_VALID && state.hwRender?.active) {
       state.hwFramePending = true;
       return;
     }
-    if (dataPtr === 0 || dataPtr === RETRO_HW_FRAME_BUFFER_VALID) return;
+    if (dataPtr === 0 || uPtr === RETRO_HW_FRAME_BUFFER_VALID) return;
     const bytes = h * pitch;
     const view = mod.HEAPU8.subarray(dataPtr, dataPtr + bytes);
     state.lastFrame = {

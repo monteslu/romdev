@@ -215,26 +215,33 @@ export const CAPABILITIES = {
   // tier (no MIPS.sla) — adding it is a romdev-analysis-decompiler rebuild, a later
   // step. decompileQuality records the EXPECTED quality once that spec ships.
   ps1: {
-    cpuFamily: "mips", decompileQuality: "good",
+    cpuFamily: "mips", decompileQuality: "good", tier: "mips",
     cpus: { main: "r3000", secondary: ["gte"] },
     audioChips: ["spu"],
     memoryRegions: [...GENERIC_REGIONS],
-    renderingKind: "framebuffer", introspection: "none",
+    renderingKind: "framebuffer", introspection: "shallow",
     ops: {
-      build: false, run: false, screenshot: false,
+      // pcsx_rearmed: software render + HLE BIOS (no firmware, no GL). run/screenshot
+      // live. build needs a PS1 toolchain (PSn00bSDK, not yet). The framebuffer
+      // renderer has no tile/sprite/nametable inspectors. decompile needs a MIPS
+      // SLEIGH spec (not yet); disasm works (MIPS Capstone).
+      build: false, run: true, screenshot: true,
       inspectSprites: false, inspectPalette: false, inspectBackground: false,
       renderingContext: false, cpuState: false, audioDebug: false,
       cart: false, disasm: true, decompile: false,
     },
   },
   n64: {
-    cpuFamily: "mips", decompileQuality: "good",
+    cpuFamily: "mips", decompileQuality: "good", tier: "mips",
     cpus: { main: "r4300", secondary: ["rsp"] },
     audioChips: [],
     memoryRegions: [...GENERIC_REGIONS],
-    renderingKind: "3d", introspection: "none",
+    renderingKind: "3d", introspection: "shallow",
     ops: {
-      build: false, run: false, screenshot: false,
+      // parallel_n64: HW (GL) render via the optional native-gles bridge.
+      // run/screenshot live. build needs an N64 toolchain (libdragon, not yet); the
+      // 3D renderer has no tile/sprite inspectors. decompile pending; disasm works.
+      build: false, run: true, screenshot: true,
       inspectSprites: false, inspectPalette: false, inspectBackground: false,
       renderingContext: false, cpuState: false, audioDebug: false,
       cart: false, disasm: true, decompile: false,
@@ -242,20 +249,23 @@ export const CAPABILITIES = {
   },
 };
 
-/** ANALYSIS-ONLY platforms: a static-RE-only tier (disasm/cfg/xrefs work; no
- *  emulator core, no run-side ops). They live in the manifest so an agent gets the
- *  capability signal, but they're NOT full tier-1 platforms — the run-side/build/
- *  decompile conformance checks don't apply, and they have no core in the registry.
- *  The MIPS tier (PS1/N64) lands here first (analysis-first); they graduate to
- *  CONTRACT_PLATFORMS when a core + the run-side ops are wired. */
-export const ANALYSIS_ONLY_PLATFORMS = Object.entries(CAPABILITIES)
-  .filter(([, c]) => c.introspection === "none")
+/** The 32-bit MIPS tier (PS1/N64) — marked `tier:"mips"`. A PARTIAL tier: they
+ *  run + screenshot + disasm, but don't yet have the full op surface of the canonical
+ *  14 (no build toolchain, no MIPS decompile/cpuState, framebuffer/3D renderers have
+ *  no tile/sprite inspectors). They're held to their OWN conformance, not the
+ *  "all 14" cross-checks. They graduate to CONTRACT_PLATFORMS as the gaps close. */
+export const MIPS_TIER_PLATFORMS = Object.entries(CAPABILITIES)
+  .filter(([, c]) => c.tier === "mips")
   .map(([p]) => p);
 
-/** The full tier-1 platforms (have a core + the universal build/run/screenshot
- *  ops). Excludes the analysis-only tier above. */
+/** Back-compat: the analysis-only set is now empty (PS1/N64 gained run/screenshot
+ *  in the run-side wiring). Kept so the name still resolves for older imports. */
+export const ANALYSIS_ONLY_PLATFORMS = [];
+
+/** The canonical tier-1 platforms (the 14): full op surface, universal build/run/
+ *  screenshot. Excludes the partial MIPS tier above. */
 export const CONTRACT_PLATFORMS = Object.keys(CAPABILITIES)
-  .filter((p) => !ANALYSIS_ONLY_PLATFORMS.includes(p));
+  .filter((p) => !MIPS_TIER_PLATFORMS.includes(p));
 
 /** Does `platform` support `op`? Unknown platform/op → false. */
 export function supports(platform, op) {
