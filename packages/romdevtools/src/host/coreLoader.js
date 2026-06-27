@@ -37,10 +37,15 @@ export async function loadLibretroCore(args) {
 
   /** @type {Record<string, unknown>} */
   const opts = {
-    noInitialRun: true,
     print: process.env.ROMDEV_CORE_LOG ? (s) => console.error("[core]", s) : () => {},
     printErr: process.env.ROMDEV_CORE_LOG ? (s) => console.error("[core:err]", s) : () => {},
   };
+  // The cores are linked with INVOKE_RUN=0, so main() never auto-runs regardless.
+  // Do NOT set noInitialRun on GL (canvas) cores: it suppresses the Emscripten GL
+  // runtime init, so `Module.GL` (and thus the WebGL2/native-gles context the core's
+  // SET_HW_RENDER path needs) is never created. For non-GL cores it's harmless either
+  // way; we set it only there to keep their startup identical to before.
+  if (!glCanvas) opts.noInitialRun = true;
 
   // HW-render cores: minified glue uses GLctx = canvas.getContext('webgl2'), so we
   // hand it a webgl-node mock canvas + install the WebGL2 globals Emscripten probes.
@@ -84,8 +89,16 @@ export async function loadLibretroCore(args) {
       });
       return {};
     };
-  } else if (wasmPath) {
+  } else if (wasmPath && !glCanvas) {
     opts.wasmBinary = await readFile(wasmPath);
+  } else if (wasmPath && glCanvas) {
+    // GL (canvas) cores: do NOT hand Emscripten a pre-read wasmBinary. Passing it
+    // routes instantiation through a path that skips the GL runtime init, so
+    // `Module.GL` (the WebGL2/native-gles context the SET_HW_RENDER path needs) is
+    // never created. Let Emscripten locate `<name>.wasm` next to the `.js` itself
+    // (via locateFile) — the same way retroemu loads parallel_n64/flycast.
+    const wasmDir = wasmPath.slice(0, wasmPath.lastIndexOf("/") + 1);
+    opts.locateFile = (file) => wasmDir + file;
   }
 
   const mod = await factory(opts);

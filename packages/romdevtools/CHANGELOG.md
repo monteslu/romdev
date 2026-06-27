@@ -4,6 +4,31 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.68.0 — 2026-06-26
+
+### N64 renders on the REAL GPU via native-gles (glide64), not software
+
+parallel_n64 now renders the RDP through **glide64 → GLES2/WebGL2 → native-gles** (the
+real GPU, headless EGL pbuffer), replacing the angrylion software-RDP build. SET_HW_RENDER
+fires, the host's LibretroGL drives native-gles, and frames read back via glReadPixels —
+the same GPU path as Flycast/Dreamcast. (Verified: hwActive=true, the GL context engages
+from boot.)
+
+The build + host fixes that made it work (every one was a real wall):
+- **Link all .o directly**, not via a .bc/.a archive — the archive route drops the
+  GLSM/context_reset/glide64 objects (no externally-referenced symbol), so the core never
+  calls SET_HW_RENDER. (build-parallel-n64.sh)
+- **`-lGL` + `GL_ENABLE_GET_PROC_ADDRESS=1` + `"GL"` in EXPORTED_RUNTIME_METHODS** — these
+  make Emscripten emit `Module["GL"]=GL`, so the returned module actually exposes the GL
+  context object the host needs. Without them, `mod.GL` is undefined and HW render never
+  initializes.
+- **coreLoader: don't set `noInitialRun`/`wasmBinary` for GL (canvas) cores** — both
+  suppress the Emscripten GL runtime init; use `locateFile` so the .wasm loads the normal way.
+- **Pre-seed PLATFORM_CORE_OPTIONS before `_retro_init`** (loadCore now infers the platform
+  from the core filename): the core picks its renderer (glide64 vs angrylion) from
+  `parallel-n64-gfxplugin` during retro_init, so the override must be set before then.
+- Registry: n64 is now `hwRender:true` (glide64 GL).
+
 ## 0.67.0 — 2026-06-26
 
 ### Dreamcast examples + sh-c -O level fix
