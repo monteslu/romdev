@@ -219,15 +219,19 @@ export const CAPABILITIES = {
     cpus: { main: "r3000", secondary: ["gte"] },
     audioChips: ["spu"],
     memoryRegions: [...GENERIC_REGIONS],
-    renderingKind: "framebuffer", introspection: "shallow",
+    renderingKind: "3d", introspection: "shallow",
     ops: {
-      // pcsx_rearmed: software render + HLE BIOS (no firmware, no GL). run/screenshot
-      // + cpuState (R3000 regsnap) + cheats live; disasm + decompile work (MIPS
-      // Capstone + the MIPS:LE:32 SLEIGH spec). build needs a PS1 toolchain
-      // (PSn00bSDK, not yet). The framebuffer renderer has no tile/sprite inspectors.
+      // beetle_psx_hw: the GPU renders on the REAL GPU via the GLES3/WebGL2 hardware
+      // renderer through native-gles (like glide64-N64 + Flycast-DC), with OpenBIOS
+      // EMBEDDED (PCSX-Redux, MIT, region-free) — no Sony firmware to ship, no BIOS file.
+      // run/screenshot + cheats live; disasm + decompile work (MIPS Capstone + the
+      // MIPS:LE:32 SLEIGH spec). cpuState/audioDebug are OFF: those need beetle-side
+      // romdev_mips_regs_get/romdev_spu_get exports (a future core patch — the old
+      // pcsx_rearmed-software build had them, but it has no WebGL2 GPU path). build needs
+      // a PS1 toolchain (PSn00bSDK, not yet).
       build: true, run: true, screenshot: true,
       inspectSprites: false, inspectPalette: false, inspectBackground: false,
-      renderingContext: false, cpuState: true, audioDebug: true,
+      renderingContext: false, cpuState: false, audioDebug: false,
       cart: false, disasm: true, decompile: true,
     },
   },

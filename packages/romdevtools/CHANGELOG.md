@@ -4,6 +4,30 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.69.0 — 2026-06-26
+
+### PS1 renders on the REAL GPU via native-gles (Beetle PSX HW + OpenBIOS)
+
+The PS1 core is now **Beetle PSX HW** (mednafen) with its GLES3/WebGL2 hardware renderer,
+rendering the PS1 GPU on the real GPU through native-gles — the same path as glide64-N64
+and Flycast-DC. It ships with **OpenBIOS embedded** (PCSX-Redux, MIT-licensed, region-free),
+so there's NO copyrighted Sony firmware to ship and no BIOS file to supply. (Verified:
+mod.GL exposed, SET_HW_RENDER fires, hwActive=true, the OpenBIOS 3D-cube boot animation
+renders in shaded perspective through native-gles.)
+
+- New package romdev-core-beetle-psx-hw (replaces romdev-core-pcsx-rearmed as the PS1
+  core); build-beetle-psx-hw.sh reuses the N64 GL recipe (all-.o link, -lGL +
+  GL_ENABLE_GET_PROC_ADDRESS + GL in EXPORTED_RUNTIME_METHODS, the libretro-common EXTRAS).
+- Registry: ps1 → beetle_psx_hw, hwRender:true. Manifest: renderingKind 3d, run+screenshot
+  +disasm+decompile+build true; cpuState/audioDebug now false (beetle lacks the romdev
+  MIPS/SPU debug exports the old pcsx_rearmed-software build had — a future core patch;
+  pcsx had no WebGL2 GPU path).
+
+NOTE (both MIPS platforms): the GL cores render RDP/GPU display lists, NOT raw CPU-written
+framebuffers — so the romdev software-3D example libs (which rasterize into a framebuffer)
+render black on them; REAL games with GPU geometry render correctly. SDK-based examples
+(libdragon rdpq / PSn00bSDK GTE) are the renderable path. Suite 1059/1059.
+
 ## 0.68.0 — 2026-06-26
 
 ### N64 renders on the REAL GPU via native-gles (glide64), not software

@@ -61,10 +61,11 @@ export const CORES = {
   // (the host's WebGL2 bridge), same path as Flycast. The host forces the glide64 plugin
   // via a core option. NOT software RDP (angrylion) — that was the old headless build.
   n64: { platform: "n64", coreName: "parallel_n64", pkg: "romdev-core-parallel-n64", displayName: "Nintendo 64 (ParaLLEl N64, glide64 GL)", hwRender: true },
-  // pcsx_rearmed = SOFTWARE renderer + built-in HLE BIOS (no firmware to ship, no
-  // GL dependency) — the clean no-dependency PS1 path, like the other 14. The GL
-  // beetle_psx_hw (+ real BIOS) stays available as a higher-fidelity alternative.
-  ps1: { platform: "ps1", coreName: "pcsx_rearmed", pkg: "romdev-core-pcsx-rearmed", displayName: "Sony PlayStation (PCSX-ReARMed, HLE)", aka: "psx,playstation" },
+  // beetle_psx_hw = mednafen PSX with the GLES3/WebGL2 HARDWARE renderer → rendered on
+  // the real GPU through native-gles (like glide64-N64 + Flycast-DC). Ships with OpenBIOS
+  // EMBEDDED (PCSX-Redux, MIT-licensed, region-free) so there's no copyrighted Sony
+  // firmware to ship and no BIOS file to supply — the GPU PS1 path with an open BIOS.
+  ps1: { platform: "ps1", coreName: "beetle_psx_hw", pkg: "romdev-core-beetle-psx-hw", displayName: "Sony PlayStation (Beetle PSX HW, OpenBIOS)", aka: "psx,playstation", hwRender: true },
   // Flycast = full Dreamcast emulator, GLES3/WebGL2 HW-render (PowerVR2 is GPU-first,
   // no software framebuffer path) → driven through the native-gles/webgl-node bridge
   // like the GL N64 build. HLE BIOS (reios) on by default — no firmware to ship.
