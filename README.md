@@ -108,8 +108,6 @@ The three 3D consoles (N64 / PlayStation / Dreamcast) render on the **real GPU**
 
 `romdevtools` resolves each core/compiler from its package lazily — a toolchain's WASM is only loaded into memory the first time you build for that platform, so booting the server is fast and a session only pays for the platforms it actually uses. WASM is a **build output**: it ships via the npm packages, not committed to this git repo (which holds the source, recipes, and version pins). See [packages/romdevtools/BUILDING.md](./packages/romdevtools/BUILDING.md) for the platform × core × toolchain matrix and how the wasm is built (a pinned Emscripten container).
 
-> The binary packages now total **~330 MB of WASM** (the MIPS and SH GCC toolchains alone are the bulk), and PSP (ppsspp) + Nintendo DS cores are next. Today they all *install* together (hard deps) even though only the WASM you touch loads into *memory*. Making the **install** itself on-demand — fetch a platform's package the first time it's used, like Node-RED installs node sets — is the next packaging step (see the [lazy-load plan](https://github.com/monteslu/romdev)); the JS-on-V8 cores (`wasmcart-libretro`, `jsgame-libretro`) will plug into the same on-demand model.
-
 ## Connect
 
 Boot the server (it stays in the foreground — `Ctrl-C` to stop):
