@@ -35,7 +35,7 @@ test("capability manifest: ps1/n64 have FULL parity (run+screenshot+disasm+decom
     assert.equal(c.ops.build, true, `${p} build (mips-elf-gcc WASM toolchain)`);
     assert.equal(c.ops.inspectBackground, false, "tile inspector meaningless on framebuffer/3d");
   }
-  assert.equal(CAPABILITIES.ps1.renderingKind, "framebuffer");
+  assert.equal(CAPABILITIES.ps1.renderingKind, "3d"); // beetle_psx_hw GPU renderer
   assert.equal(CAPABILITIES.n64.renderingKind, "3d");
 });
 
