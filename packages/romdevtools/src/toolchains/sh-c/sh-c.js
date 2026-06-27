@@ -30,7 +30,11 @@ const LIB = path.join(__dirname, "lib");
  * @param {string[]} [args.cc1Options] extra cc1 flags
  */
 export async function buildShC(args) {
-  const headers = args.headers ?? {};
+  // The bundled DC helper (dc.h) is auto-available so `#include "dc.h"` just works —
+  // it brings up the PowerVR2 framebuffer (FB_R_CTRL/SIZE/SOF1 + SPG for 640x480 RGB565)
+  // that Flycast presents. A caller-supplied "dc.h" wins (override the bundled one).
+  const bundledDcH = await readFile(path.join(LIB, "dc.h"), "utf-8").catch(() => null);
+  const headers = { ...(bundledDcH != null ? { "dc.h": bundledDcH } : {}), ...(args.headers ?? {}) };
   // -m4-single-only is passed by the cc1 wrapper; here the language/codegen knobs.
   // Default to -O2, but let a user-supplied -O<level> win (gcc honors the LAST -O, so a
   // default appended AFTER the user's would clobber it — only add -O2 if absent).
