@@ -36,6 +36,17 @@ import {
  * to function headlessly (no menu = no user pick). Empty today — all
  * shipped cores load with their defaults.
  */
+// Core filename stem → platform, for the cores whose renderer (or other boot-time
+// behavior) is chosen from an option at retro_init. loadCore uses this to pre-seed
+// PLATFORM_CORE_OPTIONS before the core registers its variables, so the override
+// wins over the core's default (e.g. glide64-GL over angrylion-software for N64).
+const CORE_STEM_TO_PLATFORM = {
+  parallel_n64: "n64",
+  pcsx_rearmed: "ps1",
+  flycast: "dreamcast",
+  beetle_psx_hw: "ps1",
+};
+
 const PLATFORM_CORE_OPTIONS = {
   // blueMSX defaults its machine to "SEGA - SC-3000" (an SG-1000 clone, wrong for
   // MSX carts). Force the open MSX2+ C-BIOS machine — a superset that also runs
@@ -270,6 +281,16 @@ export class LibretroHost {
    *   optional native GL stack and creates a headless context BEFORE the core boots
    *   (GL calls happen during init/load). The 14 software cores omit this.
    */
+  /** Infer the platform from a core's js filename stem (e.g.
+   *  ".../parallel_n64_libretro.js" → "n64"), so loadCore can pre-seed that
+   *  platform's option overrides without the caller threading the platform
+   *  through. Covers the cores whose boot-time renderer choice depends on an
+   *  option; returns null otherwise (the overrides are then a no-op anyway). */
+  _platformForCore(jsPath) {
+    const stem = (jsPath.split("/").pop() || "").replace(/_libretro\.js$/, "");
+    return CORE_STEM_TO_PLATFORM[stem] ?? null;
+  }
+
   async loadCore(jsPath, wasmPath, opts = {}) {
     if (this.mod) throw new Error("core already loaded; create a new host");
 
@@ -305,6 +326,24 @@ export class LibretroHost {
     }
 
     registerCallbacks({ mod, state: this.state, log: this.log });
+
+    // Pre-seed per-platform core-option overrides BEFORE _retro_init. The core
+    // registers its variables (SET_VARIABLES) during retro_init and decides its
+    // renderer THEN — e.g. parallel_n64 reads `parallel-n64-gfxplugin` to pick
+    // glide64 (GL/HW-render) vs angrylion (software). Seeding the override here
+    // (not in loadMedia, which is too late) makes the SET_VARIABLES handler keep
+    // our value instead of the core's default, so HW render engages from boot.
+    const platform = opts.platform ?? this._platformForCore(jsPath);
+    if (platform) {
+      const overrides = PLATFORM_CORE_OPTIONS[platform];
+      if (overrides) {
+        for (const [key, value] of Object.entries(overrides)) {
+          this.state.coreVariables.set(key, { value });
+        }
+        this.state.variablesUpdated = true;
+      }
+    }
+
     mod._retro_init();
     this.status.corePath = jsPath;
   }

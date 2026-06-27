@@ -57,10 +57,10 @@ export const CORES = {
   // webgl-node bridge only when one of these boots (hwRender:true). The other 14 are
   // software-rendered and never touch GL, so a headless user without the GPU module
   // is unaffected.
-  // parallel_n64 built headless-angrylion (software RDP + VI scanout, no GL) so raw
-  // CPU-rendered homebrew framebuffers display — the clean no-GL-dependency N64 path,
-  // like pcsx_rearmed for PS1. (The GL/glide64 build only presents RDP display-lists.)
-  n64: { platform: "n64", coreName: "parallel_n64", pkg: "romdev-core-parallel-n64", displayName: "Nintendo 64 (ParaLLEl N64, software)", hwRender: false },
+  // parallel_n64 renders the RDP on the REAL GPU through glide64 (GL HLE) → native-gles
+  // (the host's WebGL2 bridge), same path as Flycast. The host forces the glide64 plugin
+  // via a core option. NOT software RDP (angrylion) — that was the old headless build.
+  n64: { platform: "n64", coreName: "parallel_n64", pkg: "romdev-core-parallel-n64", displayName: "Nintendo 64 (ParaLLEl N64, glide64 GL)", hwRender: true },
   // pcsx_rearmed = SOFTWARE renderer + built-in HLE BIOS (no firmware to ship, no
   // GL dependency) — the clean no-dependency PS1 path, like the other 14. The GL
   // beetle_psx_hw (+ real BIOS) stays available as a higher-fidelity alternative.
