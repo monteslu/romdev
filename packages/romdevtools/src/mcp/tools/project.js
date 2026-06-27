@@ -646,6 +646,22 @@ const TEMPLATES = {
       },
     };
   })(),
+
+  // ── Sega Dreamcast (sh-elf-gcc SH-4) — bare PowerVR2 framebuffer via the bundled
+  // dc.h helper; the output ELF boots DIRECTLY on Flycast's reios HLE BIOS (no GD-ROM
+  // image, no firmware) and renders on the real GPU through native-gles. dc.h is
+  // auto-bundled by the toolchain, so the example is a single main.c. No KallistiOS
+  // and no genre scaffolds yet — `hello` is the verified renderable starting point. ──
+  dreamcast: {
+    default: { main: "hello/main.c", runtime: [], lang: "C (sh-elf-gcc)", ext: ".elf",
+      describe: "DCHELLO — the canonical Dreamcast starter: bring up the PowerVR2 640x480 RGB565 framebuffer (via the auto-bundled dc.h: FB_R_CTRL/SIZE/SOF1 + SPG) and paint a test pattern (dark-blue field, red/green/blue bars, white frame). Proves the SH-4 build → Flycast reios HLE boot → native-gles GPU render pipeline end-to-end. The base to grow your own DC graphics from. Same as 'hello'." },
+    hello: { main: "hello/main.c", runtime: [], lang: "C (sh-elf-gcc)", ext: ".elf",
+      describe: "DCHELLO — a minimal Dreamcast homebrew. dc_video_init() programs the PowerVR2 framebuffer registers for 640x480 RGB565 at VRAM 0xA5000000; then dc_clear/dc_rect paint a recognizable pattern. Boots directly on Flycast's reios HLE BIOS (no firmware) and presents through native-gles with flycast_emulate_framebuffer — no TA display list needed.",
+      players: "1 (Dreamcast has 4 controller ports; the bare path doesn't wire the Maple bus yet)",
+      sram: "none in this starter — DC saves go to the VMU via the Maple bus; not wired in the bare path.",
+      mechanics: ["direct framebuffer paint (clear + solid rects)", "recognizable test pattern"],
+      techniques: ["PowerVR2 framebuffer bring-up (FB_R_CTRL/FB_R_SIZE/FB_R_SOF1 + SPG)", "640x480 RGB565 at VRAM 0xA5000000", "SH-4 bare crt0 (stack + .bss + main)", "boots on Flycast reios HLE — no firmware"] },
+  },
 };
 // R37: GBC has its own scaffold tree at examples/gbc/templates/ +
 // src/platforms/gbc/lib/c/. Same runtime files as GB (the APU + Z80 +

@@ -12,7 +12,6 @@ import path from "node:path";
 
 import { LibretroHost } from "../src/host/LibretroHost.js";
 import { resolveCore } from "../src/cores/registry.js";
-import { framebufferToRgba } from "../src/host/framebuffer.js";
 import { glStackAvailable } from "../src/host/glOptionalDep.js";
 import { getCPUState } from "../src/host/cpu-state.js";
 import { buildForPlatform } from "../src/toolchains/index.js";
@@ -26,14 +25,6 @@ const HAS_MIPS_GCC = (() => {
 
 // the bundled N64 software-3D helper lib (n64.h / n64.c).
 const LIB_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src", "platforms", "n64", "lib", "c");
-
-function countNonBlack(rgba) {
-  let nz = 0;
-  for (let i = 0; i < rgba.length; i += 4) {
-    if (rgba[i] || rgba[i + 1] || rgba[i + 2]) nz++;
-  }
-  return nz;
-}
 
 test("N64: a toolchain-built homebrew boots + renders through the software core", { timeout: 180000 }, async () => {
   if (!HAS_MIPS_GCC) { console.log("mips-elf-gcc not built; skipping"); return; }

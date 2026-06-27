@@ -4,6 +4,28 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.70.0 — 2026-06-26
+
+### Dreamcast is ship-ready: verified build → run → screenshot, with a renderable example
+
+The Dreamcast platform is now verified end-to-end and release-ready:
+
+- **build → run → screenshot proven + regression-tested.** A C homebrew compiles via
+  sh-elf-gcc, boots DIRECTLY on Flycast's reios HLE BIOS (no GD-ROM image, no firmware),
+  and renders on the real GPU through native-gles at 640×480 — confirmed by the new
+  `test/dreamcast-runside.test.js`.
+- **dc.h is now auto-bundled.** The PowerVR2 framebuffer helper (640×480 RGB565 bring-up:
+  FB_R_CTRL/SIZE/SOF1 + SPG) ships in the sh-c toolchain lib and is injected automatically,
+  so `#include "dc.h"` just works — a DC program is a single `main.c` with no glue. A
+  caller-supplied `dc.h` still overrides the bundled one.
+- **A renderable example** — `examples/dreamcast/hello` (DCHELLO): the canonical starter
+  that paints a test pattern through the GPU pipeline. Registered with createProject /
+  scaffold like the other platforms.
+
+(The 640×480 screenshot path was already correct — the GL FBO is sized to Flycast's
+upscale bound and the host crops the readback to the core's reported geometry; a raw
+readback without crop args was the only thing that looked oversized.)
+
 ## 0.69.0 — 2026-06-26
 
 ### PS1 renders on the REAL GPU via native-gles (Beetle PSX HW + OpenBIOS)
