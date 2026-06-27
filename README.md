@@ -87,20 +87,28 @@ Every platform has a working core, ready-made starter projects, and **5 genre sc
 | Atari 7800 | prosystem | cc65 | `sfx_*` TIA | 2-voice TIA tracker |
 | PC Engine | geargrafx | cc65 | `psg_tone` (HuC6280 PSG, 6 ch) | hand-authored PSG |
 | MSX / MSX2 | blueMSX | SDCC (z80) | `msx_psg_tone` (AY-3-8910) | hand-authored PSG |
+| Nintendo 64 | parallel_n64 (glide64, **GPU**) | mips-gcc (C) | AI / RSP | — |
+| PlayStation | beetle_psx_hw (**GPU**) | mips-gcc (C; PSn00bSDK) | SPU | — |
+| Dreamcast | flycast (**GPU**) | sh-gcc (C) | AICA | — |
 
 The `platformer` scaffold side-scrolls (hardware camera + per-platform column streaming) on every platform except NES and the Atari 2600 — both single-screen, since neither has hardware background scroll.
+
+The three 3D consoles (N64 / PlayStation / Dreamcast) render on the **real GPU** through [`native-gles`](https://github.com/monteslu/native-gles) — headless OpenGL/EGL, no browser, no software rasterizer — one engine across all three. PlayStation embeds [OpenBIOS](https://github.com/grumpycoders/pcsx-redux) (MIT, region-free), so no proprietary firmware ships. These don't ship genre scaffolds yet; their renderable starting points come from the open GPU SDKs — [libdragon](https://github.com/DragonMinded/libdragon) (Unlicense) for N64, [PSn00bSDK](https://github.com/Lameguy64/PSn00bSDK) (MPL) for PlayStation — which emit the real GPU geometry the GL cores render. (The 2D consoles' software libs render to a CPU framebuffer the GL cores don't scan out.)
 
 ## How it's packaged
 
 `romdev` is a small **monorepo** of npm packages. The thing you install is `romdevtools`; it hard-depends on a set of `romdev-*` binary packages that carry the WebAssembly:
 
 - **[`romdevtools`](./packages/romdevtools)** — the tool server (HTTP routes + Agent Skill + MCP), all generic tools, scaffolds, runtime/library source, debug helpers, and the `romdevtools` / `romdev-mcp` (alias) / `romdevtools-cli` binaries. The fast-churning layer; ships **zero wasm**.
-- **`romdev-core-*`** (8) — shared emulator cores: `fceumm`, `gambatte`, `gpgx`, `vice`, `handy`, `prosystem`, `geargrafx` (PC Engine), `bluemsx` (MSX).
+- **`romdev-core-*`** (11) — shared emulator cores: `fceumm`, `gambatte`, `gpgx`, `vice`, `handy`, `prosystem`, `geargrafx` (PC Engine), `bluemsx` (MSX), and the GPU cores `parallel-n64` (N64), `beetle-psx-hw` (PlayStation), `flycast` (Dreamcast).
 - **`romdev-platform-*`** (3) — self-contained platform bundles where the core + compiler are used by no one else: `snes`, `gba`, `atari2600`.
-- **`romdev-toolchain-*`** (5) — shared compilers: `cc65`, `sdcc`, `m68k-gcc`, `vasm`, `rgbds`.
+- **`romdev-toolchain-*`** (7) — shared compilers: `cc65`, `sdcc`, `m68k-gcc`, `vasm`, `rgbds`, `mips-gcc` (N64/PS1 C), `sh-gcc` (Dreamcast C).
+- **`romdev-analysis*`** (2) — the RE engine: `romdev-analysis` (Rizin → WASM) + `romdev-analysis-decompiler` (Ghidra decompiler + SLEIGH specs → WASM).
 - **`romdev_game_codes`** (1) — the bundled game-code / cheat database (~30 MB of pre-parsed cheats for thousands of known ROMs across 13 platforms). Split out so the main package stays small and the DB grows on its own cadence; lazy-loaded one platform at a time.
 
 `romdevtools` resolves each core/compiler from its package lazily — a toolchain's WASM is only loaded into memory the first time you build for that platform, so booting the server is fast and a session only pays for the platforms it actually uses. WASM is a **build output**: it ships via the npm packages, not committed to this git repo (which holds the source, recipes, and version pins). See [packages/romdevtools/BUILDING.md](./packages/romdevtools/BUILDING.md) for the platform × core × toolchain matrix and how the wasm is built (a pinned Emscripten container).
+
+> The binary packages now total **~330 MB of WASM** (the MIPS and SH GCC toolchains alone are the bulk), and PSP (ppsspp) + Nintendo DS cores are next. Today they all *install* together (hard deps) even though only the WASM you touch loads into *memory*. Making the **install** itself on-demand — fetch a platform's package the first time it's used, like Node-RED installs node sets — is the next packaging step (see the [lazy-load plan](https://github.com/monteslu/romdev)); the JS-on-V8 cores (`wasmcart-libretro`, `jsgame-libretro`) will plug into the same on-demand model.
 
 ## Connect
 
