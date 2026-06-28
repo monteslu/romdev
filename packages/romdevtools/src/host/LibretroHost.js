@@ -492,6 +492,14 @@ export class LibretroHost {
     const pathPtr = mod._malloc(pathBytes.length);
     mod.HEAPU8.set(pathBytes, pathPtr);
 
+    // Proxied cores run on the app thread, whose MEMFS is a SEPARATE (per-thread) JS heap — the
+    // main-thread FS.writeFile above is invisible there. PPSSPP fopen's the path on the app
+    // thread, so write the ROM into the app thread's MEMFS too (the bytes are already in shared
+    // WASM memory at dataPtr).
+    if (this._proxied) {
+      mod._romdev_app_fs_write(pathPtr, dataPtr, data.length);
+    }
+
     // retro_game_info struct (16 bytes on wasm32).
     const infoPtr = mod._malloc(16);
     mod.setValue(infoPtr + 0, pathPtr, "i32");

@@ -123,22 +123,42 @@ EMSCRIPTEN_KEEPALIVE void romdev_register_callbacks(void) {
   retro_set_input_state((void *)tramp_input_state);
 }
 
-// PROXY_TO_PTHREAD: emscripten runs main() on a dedicated pthread (the "app thread") and turns
-// the JS thread into a pure event-loop pump that services ALL proxy channels (em_proxy queue,
-// syscall mailbox, FS, stdio) automatically. main() records itself as the app thread and parks
-// with a live runtime; the JS thread drives the core by proxying retro_* onto it.
-int main(int argc, char **argv) {
-  (void)argc; (void)argv;
-  g_q = emscripten_proxy_get_system_queue();
-  g_app_thread = pthread_self();         // main() runs on the app thread under PROXY_TO_PTHREAD
-  g_main_thread = emscripten_main_runtime_thread_id();  // the JS pump thread (callbacks proxy here)
+// The app thread: park forever executing proxied work (live runtime keeps it + the runtime alive).
+static void *app_thread_main(void *arg) {
+  (void)arg;
   g_app_ready = 1;
   emscripten_exit_with_live_runtime();
-  return 0;
+  return nullptr;
+}
+EMSCRIPTEN_KEEPALIVE void romdev_proxy_init(void) {
+  if (g_q) return;
+  g_q = emscripten_proxy_get_system_queue();
+  g_main_thread = pthread_self();
+  pthread_create(&g_app_thread, nullptr, app_thread_main, nullptr);
+  while (!g_app_ready) { emscripten_thread_sleep(1); }
 }
 
-// No-op now (main() does the init). Kept for the host's call sequence.
-EMSCRIPTEN_KEEPALIVE void romdev_proxy_init(void) {}
+// Write a file into the APP THREAD's MEMFS (its JS heap), so PPSSPP's fopen on the app thread
+// finds it. MEMFS is per-thread, so a main-thread FS.writeFile is invisible to the app thread.
+// The host stages the bytes in WASM memory (shared) + the path; this copies them on the app thread.
+struct FsWriteArgs { const char *path; const unsigned char *data; int len; };
+static void fs_write_on_app(void *p) {
+  auto *a = (FsWriteArgs *)p;
+  EM_ASM({
+    var path = UTF8ToString($0);
+    var bytes = HEAPU8.subarray($1, $1 + $2);
+    try {
+      // mkdir -p the parent dirs
+      var parts = path.split('/'); var cur = '';
+      for (var i = 1; i < parts.length - 1; i++) { cur += '/' + parts[i]; try { FS.mkdir(cur); } catch(e) {} }
+      FS.writeFile(path, bytes);
+    } catch (e) { console.error('[romdev fs_write]', path, e); }
+  }, a->path, a->data, a->len);
+}
+EMSCRIPTEN_KEEPALIVE void romdev_app_fs_write(const char *path, const unsigned char *data, int len) {
+  FsWriteArgs a{path, data, len};
+  emscripten_proxy_sync(g_q, g_app_thread, fs_write_on_app, &a);
+}
 
 // Proxied retro_init — runs the core's init on the app thread (after callbacks are registered).
 void retro_init(void);
