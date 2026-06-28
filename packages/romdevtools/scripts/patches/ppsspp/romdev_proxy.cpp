@@ -212,8 +212,15 @@ EMSCRIPTEN_KEEPALIVE int romdev_proxied_run_state(void) { return g_run_state; }
 // the app thread proxied back to main. With async load/run, main isn't blocked in proxy_sync (so
 // it doesn't auto-pump), so we pump explicitly — while still yielding to the JS event loop
 // between pumps (so emscripten can service the app thread's pooled-Worker grabs / postMessage).
+// Drain the main thread's proxy queue. Guard against re-entry: a proxied task can itself end up
+// here (emscripten may pump while a task runs), and nesting emscripten_proxy_execute_queue blows
+// the JS stack. The flag makes a nested call a no-op — the outer drain finishes the work.
+static volatile int g_pumping = 0;
 EMSCRIPTEN_KEEPALIVE void romdev_pump_main_queue(void) {
+  if (g_pumping) return;
+  g_pumping = 1;
   emscripten_proxy_execute_queue(g_q);
+  g_pumping = 0;
 }
 
 struct LoadArgs { const void *info; bool result; };
