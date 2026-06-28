@@ -582,9 +582,9 @@ export class LibretroHost {
       // ContextReset (creates GPU/DrawContext) survives intermittently after the webgl-node
       // MAX_UNIFORM_BLOCK_SIZE fix but still hits a non-deterministic native-heap corruption in
       // PPSSPP's GL init — disabled until that's pinned (ASAN). Core loads + runs without it.
-      // if (ok && this.state.proxiedContextResetPtr) {
-      //   mod._romdev_proxied_fire_context_reset(this.state.proxiedContextResetPtr);
-      // }
+      if (ok && this.state.proxiedContextResetPtr) {
+        mod._romdev_proxied_fire_context_reset(this.state.proxiedContextResetPtr);
+      }
     } else {
       ok = mod._retro_load_game(infoPtr);
     }
