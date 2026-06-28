@@ -343,6 +343,19 @@ function handleEnv(mod, state, rawCmd, dataPtr, log) {
       // already a useful diagnostic — most cores pass a fully-formed message
       // (no varargs substitution needed) or a message + N args we can't decode.
       // Read the fmt as-is so log output is actually readable.
+      // Proxied cores call the log callback from the app thread, so it must be a C function
+      // pointer (a main-thread addFunction is a bad table index there). The shim's romdev_log_cb
+      // routes to Module.romdev_logCb (installed below).
+      if (state.proxied) {
+        mod.romdev_logCb = (level, fmtPtr) => {
+          if (!log) return;
+          let msg = "<unreadable>";
+          try { msg = mod.UTF8ToString(fmtPtr); } catch { /* */ }
+          log(level, msg);
+        };
+        mod.setValue(dataPtr, mod._romdev_log_cb_ptr(), "i32");
+        return true;
+      }
       if (!state._logCbPtr) {
         state._logCbPtr = mod.addFunction((level, fmtPtr, _vaPtr) => {
           if (!log) return;
