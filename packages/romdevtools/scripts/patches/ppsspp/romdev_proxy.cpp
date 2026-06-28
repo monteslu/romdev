@@ -28,10 +28,75 @@ bool retro_load_game(const void *info);
 void retro_run(void);
 void retro_reset(void);
 void retro_unload_game(void);
+void retro_set_environment(void *cb);
+void retro_set_video_refresh(void *cb);
+void retro_set_audio_sample(void *cb);
+void retro_set_audio_sample_batch(void *cb);
+void retro_set_input_poll(void *cb);
+void retro_set_input_state(void *cb);
 
 static em_proxying_queue *g_q = nullptr;
 static pthread_t g_app_thread;
+static pthread_t g_main_thread;
 static volatile int g_app_ready = 0;
+
+// ── libretro callback trampolines ──
+// The core (running on the app thread) invokes these. They proxy to the MAIN thread to run the
+// real JS callback (which touches host JS state). The main thread is blocked in
+// emscripten_proxy_sync(load_game/run) but pumps its own queue while waiting — validated — so
+// the round-trip completes without deadlock. The host installs the JS impls as Module fns.
+struct EnvArgs { unsigned cmd; void *data; int ret; };
+static void env_on_main(void *p) {
+  auto *a = (EnvArgs *)p;
+  a->ret = EM_ASM_INT({ return Module['romdev_envCb']($0, $1); }, a->cmd, a->data);
+}
+static bool tramp_env(unsigned cmd, void *data) {
+  EnvArgs a{cmd, data, 0};
+  emscripten_proxy_sync(g_q, g_main_thread, env_on_main, &a);
+  return a.ret != 0;
+}
+struct VideoArgs { const void *data; unsigned w, h, pitch; };
+static void video_on_main(void *p) {
+  auto *a = (VideoArgs *)p;
+  EM_ASM({ Module['romdev_videoCb']($0, $1, $2, $3); }, a->data, a->w, a->h, a->pitch);
+}
+static void tramp_video(const void *data, unsigned w, unsigned h, unsigned pitch) {
+  VideoArgs a{data, w, h, pitch};
+  emscripten_proxy_sync(g_q, g_main_thread, video_on_main, &a);
+}
+struct AudioBatchArgs { const void *data; unsigned frames; unsigned ret; };
+static void audio_batch_on_main(void *p) {
+  auto *a = (AudioBatchArgs *)p;
+  a->ret = EM_ASM_INT({ return Module['romdev_audioBatchCb']($0, $1); }, a->data, a->frames);
+}
+static unsigned tramp_audio_batch(const void *data, unsigned frames) {
+  AudioBatchArgs a{data, frames, frames};
+  emscripten_proxy_sync(g_q, g_main_thread, audio_batch_on_main, &a);
+  return a.ret;
+}
+static void tramp_audio_one(short l, short r) { (void)l; (void)r; }  // batch path is used
+static void tramp_input_poll(void) { }
+struct InputArgs { unsigned port, device, idx, id; int ret; };
+static void input_on_main(void *p) {
+  auto *a = (InputArgs *)p;
+  a->ret = EM_ASM_INT({ return Module['romdev_inputCb']($0, $1, $2, $3); }, a->port, a->device, a->idx, a->id);
+}
+static short tramp_input_state(unsigned port, unsigned device, unsigned idx, unsigned id) {
+  InputArgs a{port, device, idx, id, 0};
+  emscripten_proxy_sync(g_q, g_main_thread, input_on_main, &a);
+  return (short)a.ret;
+}
+
+// Register the trampolines with the core. Runs ON THE APP THREAD (proxied), so the function
+// pointers are valid there (where the core invokes them). Called once before retro_init.
+EMSCRIPTEN_KEEPALIVE void romdev_register_callbacks(void) {
+  retro_set_environment((void *)tramp_env);
+  retro_set_video_refresh((void *)tramp_video);
+  retro_set_audio_sample((void *)tramp_audio_one);
+  retro_set_audio_sample_batch((void *)tramp_audio_batch);
+  retro_set_input_poll((void *)tramp_input_poll);
+  retro_set_input_state((void *)tramp_input_state);
+}
 
 // The app thread: park forever executing proxied work. emscripten_exit_with_live_runtime keeps
 // this pthread + the runtime alive; the proxying queue is pumped by the runtime.
@@ -46,12 +111,49 @@ static void *app_thread_main(void *arg) {
 EMSCRIPTEN_KEEPALIVE void romdev_proxy_init(void) {
   if (g_q) return;
   g_q = emscripten_proxy_get_system_queue();
+  g_main_thread = pthread_self();  // the JS main thread (callbacks proxy back here)
   pthread_create(&g_app_thread, nullptr, app_thread_main, nullptr);
   // spin until the app thread has recorded itself (cheap; happens immediately)
   while (!g_app_ready) { emscripten_thread_sleep(1); }
 }
 
+// Proxied retro_init — runs the core's init on the app thread (after callbacks are registered).
+void retro_init(void);
+static void run_init(void *p) { (void)p; retro_init(); }
+EMSCRIPTEN_KEEPALIVE void romdev_proxied_init(void) {
+  emscripten_proxy_sync(g_q, g_app_thread, run_init, nullptr);
+}
+
+// Register the callback trampolines on the app thread (so the function pointers belong there).
+static void do_register_cbs(void *p) { (void)p; romdev_register_callbacks(); }
+EMSCRIPTEN_KEEPALIVE void romdev_proxied_register_callbacks(void) {
+  emscripten_proxy_sync(g_q, g_app_thread, do_register_cbs, nullptr);
+}
+
 EMSCRIPTEN_KEEPALIVE int romdev_app_ready(void) { return g_app_ready; }
+
+// ── ASYNC load_game + run ──
+// Critical: emscripten_proxy_ASYNC (not sync) so the JS MAIN thread is NOT blocked — its event
+// loop keeps turning, which is what services PPSSPP's worker-thread operations (pooled-Worker
+// grabs, postMessage wakeups, futex). A blocking proxy_sync freezes main's event loop → the
+// core's threads can't be scheduled → deadlock. The host kicks the async op then polls the done
+// flag from JS, yielding to the event loop between polls. load: 0=running,1=ok,2=fail. run:1=busy.
+static volatile int g_load_state = 0;
+static const void *g_load_info = nullptr;
+static void run_load_async(void *p) { (void)p; g_load_state = retro_load_game(g_load_info) ? 1 : 2; }
+EMSCRIPTEN_KEEPALIVE void romdev_proxied_load_game_start(const void *info) {
+  g_load_state = 0; g_load_info = info;
+  emscripten_proxy_async(g_q, g_app_thread, run_load_async, nullptr);
+}
+EMSCRIPTEN_KEEPALIVE int romdev_proxied_load_state(void) { return g_load_state; }
+
+static volatile int g_run_state = 0;
+static void run_run_async(void *p) { (void)p; retro_run(); g_run_state = 0; }
+EMSCRIPTEN_KEEPALIVE void romdev_proxied_run_start(void) {
+  g_run_state = 1;
+  emscripten_proxy_async(g_q, g_app_thread, run_run_async, nullptr);
+}
+EMSCRIPTEN_KEEPALIVE int romdev_proxied_run_state(void) { return g_run_state; }
 
 struct LoadArgs { const void *info; bool result; };
 static void run_load(void *p) { auto *a = (LoadArgs *)p; a->result = retro_load_game(a->info); }

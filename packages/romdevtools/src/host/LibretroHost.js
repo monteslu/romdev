@@ -348,7 +348,18 @@ export class LibretroHost {
       }
     }
 
-    registerCallbacks({ mod, state: this.state, log: this.log });
+    if (this._proxied) {
+      // Proxied cores: install the JS callback impls on Module (the C trampolines proxy each
+      // callback from the app thread back to main to run these). Register the trampolines on
+      // MAIN — they're plain C function pointers the app thread can call, and retro_init/
+      // pthread_create must run on main (Worker allocation proxies to main; it'd deadlock if
+      // main were blocked proxying init to the app thread). Only load_game/run proxy to app.
+      const { registerProxiedCallbacks } = await import("./callbacks.js");
+      registerProxiedCallbacks({ mod, state: this.state, log: this.log });
+      mod._romdev_register_callbacks();
+    } else {
+      registerCallbacks({ mod, state: this.state, log: this.log });
+    }
 
     // Pre-seed per-platform core-option overrides BEFORE _retro_init. The core
     // registers its variables (SET_VARIABLES) during retro_init and decides its
@@ -367,6 +378,8 @@ export class LibretroHost {
       }
     }
 
+    // retro_init runs on MAIN even for proxied cores (it spawns the threadManager workers via
+    // pthread_create, which needs the main thread free — not blocked proxying init to app).
     mod._retro_init();
     this.status.corePath = jsPath;
   }
@@ -478,11 +491,21 @@ export class LibretroHost {
     mod.setValue(infoPtr + 8, data.length, "i32");
     mod.setValue(infoPtr + 12, 0, "i32"); // meta = null
 
-    // Proxied cores: run retro_load_game on the app thread (it creates the GL context +
-    // starts the core's threads there). Direct call for single-threaded cores.
-    const ok = this._proxied
-      ? mod._romdev_proxied_load_game(infoPtr)
-      : mod._retro_load_game(infoPtr);
+    // Proxied cores: run retro_load_game on the app thread ASYNCHRONOUSLY (it creates the GL
+    // context + spawns the core's worker threads there). We kick it async then poll the done
+    // flag while YIELDING to the JS event loop — the event loop must keep turning so emscripten
+    // can service the app-thread's pooled-Worker grabs / postMessage wakeups. A blocking call
+    // would freeze the event loop → the core's threads can't be scheduled → deadlock.
+    let ok;
+    if (this._proxied) {
+      mod._romdev_proxied_load_game_start(infoPtr);
+      while (mod._romdev_proxied_load_state() === 0) {
+        await new Promise((r) => setImmediate(r));
+      }
+      ok = mod._romdev_proxied_load_state() === 1;
+    } else {
+      ok = mod._retro_load_game(infoPtr);
+    }
 
     // Free the struct itself. Don't free pathPtr or dataPtr — the core may
     // retain pointers into them for the life of the loaded game.

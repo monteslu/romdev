@@ -228,6 +228,49 @@ export function registerCallbacks(args) {
   mod._retro_set_input_state(inputStateCb);
 }
 
+/**
+ * Proxied (app-thread) cores: the C shim registers C trampolines with the core that proxy each
+ * callback back to the MAIN thread to run these JS impls. So instead of addFunction (which binds
+ * a closure to the calling thread and can't be invoked from the app thread), we install the JS
+ * impls as Module fns the trampolines call via EM_ASM. Same bodies as registerCallbacks, minus
+ * the addFunction/retro_set_* (the shim does those on the app thread).
+ */
+export function registerProxiedCallbacks(args) {
+  const { mod, state, log } = args;
+
+  mod.romdev_envCb = (cmd, dataPtr) => (handleEnv(mod, state, cmd, dataPtr, log) ? 1 : 0);
+
+  mod.romdev_videoCb = (dataPtr, w, h, pitch) => {
+    const uPtr = dataPtr >>> 0;
+    if (uPtr === RETRO_HW_FRAME_BUFFER_VALID && (state.hwRender?.active || state.proxied)) {
+      state.hwFramePending = true;
+      if (w > 0 && h > 0) { state.hwFrameW = w; state.hwFrameH = h; }
+      return;
+    }
+    if (dataPtr === 0 || uPtr === RETRO_HW_FRAME_BUFFER_VALID) return;
+    const bytes = h * pitch;
+    const view = mod.HEAPU8.subarray(dataPtr, dataPtr + bytes);
+    state.lastFrame = { width: w, height: h, pitch, format: state.pixelFormat, pixels: new Uint8Array(view) };
+  };
+
+  mod.romdev_audioBatchCb = (dataPtr, frames) => {
+    if (dataPtr === 0 || frames === 0) return frames;
+    const byteLen = frames * 2 * 2;
+    const samples = new Int16Array(mod.HEAPU8.buffer, dataPtr, byteLen / 2).slice();
+    state.audioRing.push(samples);
+    return frames;
+  };
+
+  mod.romdev_inputCb = (port, device, _idx, id) => {
+    if (device === 3) return state.keysDown.has(id) ? 1 : 0;
+    const portBits = state.inputPorts[port];
+    if (!portBits) return 0;
+    const bits = portBits[0];
+    if (id === 256) return bits;
+    return bits & (1 << id) ? 1 : 0;
+  };
+}
+
 function allocString(mod, state, str) {
   const bytes = Buffer.from(str + "\0", "utf-8");
   const ptr = mod._malloc(bytes.length);
