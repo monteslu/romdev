@@ -294,8 +294,16 @@ export class LibretroHost {
   async loadCore(jsPath, wasmPath, opts = {}) {
     if (this.mod) throw new Error("core already loaded; create a new host");
 
+    // Proxied (multi-threaded) cores — e.g. PPSSPP/PSP — run on a dedicated "app thread" so the
+    // JS main thread never blocks while the core's worker threads proxy back to it (which would
+    // deadlock the synchronous frame-stepping). They own the ENTIRE GL stack on the app thread
+    // (native-gles + webgl-node loaded + context created + readback all there). The registry
+    // marks them; the single-threaded GL cores keep the main-thread GL path below.
+    this._proxied = !!opts.proxied;
+    this.state.proxied = this._proxied;
+
     let glCanvas = null;
-    if (opts.hwRender) {
+    if (opts.hwRender && !this._proxied) {
       // Set up the HW-render path: LibretroGL owns the FBO/readback; a webgl-node
       // mock canvas backs the minified core's GLctx. Both pull the OPTIONAL native
       // GL deps lazily (clear install hint if absent).
@@ -317,12 +325,27 @@ export class LibretroHost {
     const mod = await loadLibretroCore({ jsPath, wasmPath, glCanvas });
     this.mod = mod;
 
-    // Canvas HW-render cores: initialize the Emscripten GL context so `GLctx` is
+    if (this._proxied) {
+      // Spawn the app thread, then build the whole GL stack on it (native-gles + webgl-node +
+      // the Emscripten GL context). 480x272 is PSP native; the readback crops per-frame.
+      if (typeof mod._romdev_proxy_init !== "function") {
+        throw new Error("core marked proxied but missing _romdev_proxy_init export");
+      }
+      mod._romdev_proxy_init();
+      if (opts.hwRender) {
+        const ok = mod._romdev_proxied_gl_setup(480, 272);
+        if (ok !== 1) throw new Error("proxied GL setup failed on the app thread");
+      }
+    }
+
+    // Canvas HW-render cores (non-proxied): initialize the Emscripten GL context so `GLctx` is
     // set BEFORE any GL call (the core's context_reset / first getParameter). Must
     // run before _retro_init.
     if (glCanvas && mod.GL) {
-      const handle = mod.GL.createContext(glCanvas, { majorVersion: 2 });
-      if (handle > 0) mod.GL.makeContextCurrent(handle);
+      {
+        const handle = mod.GL.createContext(glCanvas, { majorVersion: 2 });
+        if (handle > 0) mod.GL.makeContextCurrent(handle);
+      }
     }
 
     registerCallbacks({ mod, state: this.state, log: this.log });
@@ -455,7 +478,11 @@ export class LibretroHost {
     mod.setValue(infoPtr + 8, data.length, "i32");
     mod.setValue(infoPtr + 12, 0, "i32"); // meta = null
 
-    const ok = mod._retro_load_game(infoPtr);
+    // Proxied cores: run retro_load_game on the app thread (it creates the GL context +
+    // starts the core's threads there). Direct call for single-threaded cores.
+    const ok = this._proxied
+      ? mod._romdev_proxied_load_game(infoPtr)
+      : mod._retro_load_game(infoPtr);
 
     // Free the struct itself. Don't free pathPtr or dataPtr — the core may
     // retain pointers into them for the life of the loaded game.
@@ -587,7 +614,7 @@ export class LibretroHost {
       let stepped = 0;
       let firstRefreshAt = -1;
       while (stepped < MAX_SETTLE) {
-        mod._retro_run();
+        this._runCore();
         this._afterRun();
         stepped++;
         if (firstRefreshAt < 0 && this.state.lastFrame && this.state.lastFrame !== beforeRefreshSnapshot) {
@@ -624,11 +651,11 @@ export class LibretroHost {
    * @returns {number} frames actually run
    */
   stepFrames(n) {
-    const mod = this._needMod();
+    this._needMod();
     this._needMedia();
     if (this.status.paused) return 0;
     for (let i = 0; i < n; i++) {
-      mod._retro_run();
+      this._runCore();
       this._afterRun();
       this.status.frameCount++;
     }
@@ -639,10 +666,44 @@ export class LibretroHost {
     return n;
   }
 
+  /** Run one frame. Proxied cores route retro_run onto the app thread (so the JS main thread
+   *  stays free to service the core's worker-thread proxy calls); others call directly. */
+  _runCore() {
+    if (this._proxied) this.mod._romdev_proxied_run();
+    else this.mod._retro_run();
+  }
+
   /** Post-_retro_run hook: HW-render readback. The video callback set
    *  state.hwFramePending during run; now (GL state stable) read back the FBO into
    *  state.lastFrame as an RGBA frame. No-op for the 14 software cores. */
   _afterRun() {
+    if (this._proxied) {
+      // Proxied cores own GL on the app thread; read the frame back THERE into a WASM buffer,
+      // then copy it out here. The core reports its size via video_refresh (hwFrameW/H).
+      if (this.state.hwFramePending) {
+        this.state.hwFramePending = false;
+        const w = this.state.hwFrameW || 480, h = this.state.hwFrameH || 272;
+        const mod = this.mod;
+        const n = w * h * 4;
+        if (!this._pxBuf || this._pxBufN !== n) {
+          if (this._pxBuf) mod._free(this._pxBuf);
+          this._pxBuf = mod._malloc(n); this._pxBufN = n;
+        }
+        mod._romdev_proxied_readback(w, h, this._pxBuf);
+        // native-gles is bottom-left origin → flip vertically into lastFrame.
+        const src = mod.HEAPU8.subarray(this._pxBuf, this._pxBuf + n);
+        const pixels = new Uint8Array(n);
+        const rowBytes = w * 4;
+        for (let y = 0; y < h; y++) {
+          pixels.set(src.subarray((h - 1 - y) * rowBytes, (h - y) * rowBytes), y * rowBytes);
+        }
+        this.state.lastFrame = {
+          width: w, height: h, pitch: rowBytes,
+          format: ROMDEV_PIXEL_FORMAT_RGBA8888, pixels, rgba: true,
+        };
+      }
+      return;
+    }
     if (this.state.hwFramePending && this.hwRender?.active) {
       this.state.hwFramePending = false;
       // Crop the GL FBO to the core's reported active resolution (e.g. DC 640x480 in an
@@ -663,9 +724,9 @@ export class LibretroHost {
    *  playtest loop can't race). Advances the (monotonic) frame counter by 1.
    *  Returns the frame count after. */
   renderOneFrame() {
-    const mod = this._needMod();
+    this._needMod();
     this._needMedia();
-    mod._retro_run();
+    this._runCore();
     this._afterRun();
     this.status.frameCount++;
     if (this.state.lastFrame) {
@@ -1770,7 +1831,7 @@ export class LibretroHost {
    * @returns {number} frames actually run
    */
   _runFramesExclusive(body, maxFrames) {
-    const mod = this._needMod();
+    this._needMod();
     // Suspend ONLY the playtest window's render-tick stepping for the duration —
     // not `status.paused` (the agent's pause is a separate concept, and the core
     // run must be identical whether or not the user paused). The playtest tick
@@ -1781,7 +1842,7 @@ export class LibretroHost {
     let framesRun = 0;
     try {
       for (let i = 0; i < maxFrames; i++) {
-        mod._retro_run();
+        this._runCore();
         this.status.frameCount++;
         framesRun++;
         if (body(i)) break;

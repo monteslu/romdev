@@ -170,7 +170,7 @@ export function registerCallbacks(args) {
     // GL state is only stable AFTER _retro_run returns. Flag it; stepFrames does the
     // glReadPixels post-run.
     const uPtr = dataPtr >>> 0;
-    if (uPtr === RETRO_HW_FRAME_BUFFER_VALID && state.hwRender?.active) {
+    if (uPtr === RETRO_HW_FRAME_BUFFER_VALID && (state.hwRender?.active || state.proxied)) {
       state.hwFramePending = true;
       // Remember the core's reported active resolution (e.g. DC 640x480) so the
       // readback can crop the (often larger, e.g. 853x853) GL FBO to just the
@@ -448,6 +448,9 @@ function handleEnv(mod, state, rawCmd, dataPtr, log) {
     // software cores, or no GL stack), reject so the core falls back to software.
     case E.SET_HW_RENDER:
       if (state.hwRender) return state.hwRender.setup(mod, dataPtr);
+      // Proxied cores own GL on the app thread (set up before retro_load_game); accept so the
+      // core uses its GL path. context_reset runs on the app thread during the proxied load.
+      if (state.proxied) return true;
       return false;
 
     // Things we can't or don't want to support — reject so core falls back.
