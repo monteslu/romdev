@@ -117,7 +117,17 @@ EMSCRIPTEN_KEEPALIVE void *romdev_log_cb_ptr(void) { return (void *)romdev_log_c
 // The host passes the pointer (it read it during SET_HW_RENDER on the main side).
 typedef void (*ctx_reset_fn)(void);
 static ctx_reset_fn g_ctx_reset = nullptr;
-static void run_ctx_reset(void *p) { (void)p; if (g_ctx_reset) g_ctx_reset(); }
+static void run_ctx_reset(void *p) {
+  (void)p;
+  // Make the EMSCRIPTEN GL context (Module.GL → GLctx, which PPSSPP's GL calls go through) current
+  // before context_reset — it creates the DrawContext + GL render manager via GLctx. native-gles
+  // makeCurrent alone isn't enough (PPSSPP renders through GLctx, not the raw binding).
+  EM_ASM({
+    if (Module['romdev_nativeGles']) Module['romdev_nativeGles'].makeCurrent();
+    if (Module['GL'] && Module['romdev_glHandle'] != null) Module['GL'].makeContextCurrent(Module['romdev_glHandle']);
+  });
+  if (g_ctx_reset) g_ctx_reset();
+}
 EMSCRIPTEN_KEEPALIVE void romdev_proxied_fire_context_reset(void *fn) {
   g_ctx_reset = (ctx_reset_fn)fn;
   if (g_ctx_reset) emscripten_proxy_sync(g_q, g_app_thread, run_ctx_reset, nullptr);
@@ -359,6 +369,7 @@ static void gl_setup_async(void *p) {
         Module['romdev_appCanvas'] = canvas;
         var hnd = Module['GL'].createContext(canvas, { majorVersion: 2 });
         if (hnd > 0) Module['GL'].makeContextCurrent(hnd);
+        Module['romdev_glHandle'] = hnd;
         Module['_romdev_gl_setup_set_phase'](1, 2);
       } catch (e) { console.error('[romdev gl_setup]', e); Module['_romdev_gl_setup_set_phase'](-1, 2); }
     })();

@@ -575,6 +575,13 @@ export class LibretroHost {
         await new Promise((r) => setTimeout(r, 0)); // yield → emscripten services worker ops
       }
       ok = mod._romdev_proxied_load_state() === 1;
+      // NOTE: PPSSPP's ContextReset (creates DrawContext + GPU) must run for rendering — without it
+      // gpu/draw are null and EmuFrame renders nothing (the blank-frame root cause). Firing it here
+      // currently heap-corrupts inside the GL render-manager construction (under investigation), so
+      // it's disabled for now; the core loads + runs stably without it (CPU/audio work, no video).
+      // if (ok && this.state.proxiedContextResetPtr) {
+      //   mod._romdev_proxied_fire_context_reset(this.state.proxiedContextResetPtr);
+      // }
     } else {
       ok = mod._retro_load_game(infoPtr);
     }
