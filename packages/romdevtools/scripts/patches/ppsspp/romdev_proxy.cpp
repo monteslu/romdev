@@ -112,6 +112,17 @@ static void romdev_log_cb(int level, const char *fmt, ...) {
 }
 EMSCRIPTEN_KEEPALIVE void *romdev_log_cb_ptr(void) { return (void *)romdev_log_cb; }
 
+// Fire the core's context_reset (read from the hw_render struct at SET_HW_RENDER) ON THE APP
+// THREAD, where the GL context lives — so PPSSPP (re)builds its GL resources against our surface.
+// The host passes the pointer (it read it during SET_HW_RENDER on the main side).
+typedef void (*ctx_reset_fn)(void);
+static ctx_reset_fn g_ctx_reset = nullptr;
+static void run_ctx_reset(void *p) { (void)p; if (g_ctx_reset) g_ctx_reset(); }
+EMSCRIPTEN_KEEPALIVE void romdev_proxied_fire_context_reset(void *fn) {
+  g_ctx_reset = (ctx_reset_fn)fn;
+  if (g_ctx_reset) emscripten_proxy_sync(g_q, g_app_thread, run_ctx_reset, nullptr);
+}
+
 // Register the trampolines with the core. Runs ON THE APP THREAD (proxied), so the function
 // pointers are valid there (where the core invokes them). Called once before retro_init.
 EMSCRIPTEN_KEEPALIVE void romdev_register_callbacks(void) {
@@ -335,6 +346,9 @@ static void gl_setup_async(void *p) {
       try {
         var nativeGles = (await import("native-gles")).default;
         var webglNode = await import("webgl-node");
+        // webgl-node.createWebGL2Context creates the shared EGL surface (native-gles + webgl-node
+        // render into the same surface the readback reads). Don't also call
+        // nativeGles.createContext — that makes a SECOND context and segfaults.
         var ctxPair = webglNode.createWebGL2Context(w, h);
         var canvas = ctxPair.canvas;
         canvas.getContextSafariWebGL2Fixed = canvas.getContext;
