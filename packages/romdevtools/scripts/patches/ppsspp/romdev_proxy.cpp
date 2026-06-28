@@ -47,15 +47,13 @@ static volatile int g_app_ready = 0;
 // the round-trip completes without deadlock. The host installs the JS impls as Module fns.
 struct EnvArgs { unsigned cmd; void *data; int ret; };
 static void env_on_main(void *p) {
-  EM_ASM({console.error('[romdev] env_on_main running cmd='+$0);}, ((EnvArgs*)p)->cmd);
   auto *a = (EnvArgs *)p;
   a->ret = EM_ASM_INT({ return Module['romdev_envCb']($0, $1); }, a->cmd, a->data);
 }
 static bool tramp_env(unsigned cmd, void *data) {
-  EM_ASM({console.error('[romdev] tramp_env cmd='+$0+' (app thread, proxying)');}, cmd);
   EnvArgs a{cmd, data, 0};
-  emscripten_proxy_sync(g_q, g_main_thread, env_on_main, &a);
-  EM_ASM({console.error('[romdev] tramp_env RESUMED cmd='+$0+' ret='+$1);}, cmd, a.ret);
+  if (pthread_self() == g_main_thread) env_on_main(&a);  // already on main → run directly
+  else emscripten_proxy_sync(g_q, g_main_thread, env_on_main, &a);
   return a.ret != 0;
 }
 struct VideoArgs { const void *data; unsigned w, h, pitch; };
@@ -65,7 +63,8 @@ static void video_on_main(void *p) {
 }
 static void tramp_video(const void *data, unsigned w, unsigned h, unsigned pitch) {
   VideoArgs a{data, w, h, pitch};
-  emscripten_proxy_sync(g_q, g_main_thread, video_on_main, &a);
+  if (pthread_self() == g_main_thread) video_on_main(&a);
+  else emscripten_proxy_sync(g_q, g_main_thread, video_on_main, &a);
 }
 struct AudioBatchArgs { const void *data; unsigned frames; unsigned ret; };
 static void audio_batch_on_main(void *p) {
@@ -74,7 +73,8 @@ static void audio_batch_on_main(void *p) {
 }
 static unsigned tramp_audio_batch(const void *data, unsigned frames) {
   AudioBatchArgs a{data, frames, frames};
-  emscripten_proxy_sync(g_q, g_main_thread, audio_batch_on_main, &a);
+  if (pthread_self() == g_main_thread) audio_batch_on_main(&a);
+  else emscripten_proxy_sync(g_q, g_main_thread, audio_batch_on_main, &a);
   return a.ret;
 }
 static void tramp_audio_one(short l, short r) { (void)l; (void)r; }  // batch path is used
@@ -86,7 +86,8 @@ static void input_on_main(void *p) {
 }
 static short tramp_input_state(unsigned port, unsigned device, unsigned idx, unsigned id) {
   InputArgs a{port, device, idx, id, 0};
-  emscripten_proxy_sync(g_q, g_main_thread, input_on_main, &a);
+  if (pthread_self() == g_main_thread) input_on_main(&a);
+  else emscripten_proxy_sync(g_q, g_main_thread, input_on_main, &a);
   return (short)a.ret;
 }
 
@@ -100,6 +101,16 @@ static unsigned romdev_hw_get_fb(void) { return 0; }
 static unsigned romdev_hw_get_proc(const char *sym) { return emscripten_GetProcAddress(sym); }
 EMSCRIPTEN_KEEPALIVE void *romdev_hw_get_fb_ptr(void) { return (void *)romdev_hw_get_fb; }
 EMSCRIPTEN_KEEPALIVE void *romdev_hw_get_proc_ptr(void) { return (void *)romdev_hw_get_proc; }
+
+// The libretro log callback (retro_log_printf_t). The core calls this from the app thread during
+// load/run, so it must be a C function pointer (a main-thread addFunction would be a bad table
+// index here). Route to console; varargs ignored (PPSSPP pre-formats most messages).
+#include <cstdarg>
+static void romdev_log_cb(int level, const char *fmt, ...) {
+  (void)level;
+  EM_ASM({ if (Module['romdev_logCb']) Module['romdev_logCb']($0, $1); }, level, fmt);
+}
+EMSCRIPTEN_KEEPALIVE void *romdev_log_cb_ptr(void) { return (void *)romdev_log_cb; }
 
 // Register the trampolines with the core. Runs ON THE APP THREAD (proxied), so the function
 // pointers are valid there (where the core invokes them). Called once before retro_init.
