@@ -579,6 +579,9 @@ export class LibretroHost {
       // gpu/draw are null and EmuFrame renders nothing (the blank-frame root cause). Firing it here
       // currently heap-corrupts inside the GL render-manager construction (under investigation), so
       // it's disabled for now; the core loads + runs stably without it (CPU/audio work, no video).
+      // ContextReset (creates GPU/DrawContext) survives intermittently after the webgl-node
+      // MAX_UNIFORM_BLOCK_SIZE fix but still hits a non-deterministic native-heap corruption in
+      // PPSSPP's GL init — disabled until that's pinned (ASAN). Core loads + runs without it.
       // if (ok && this.state.proxiedContextResetPtr) {
       //   mod._romdev_proxied_fire_context_reset(this.state.proxiedContextResetPtr);
       // }

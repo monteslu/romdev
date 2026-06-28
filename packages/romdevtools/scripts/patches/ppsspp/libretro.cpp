@@ -1512,6 +1512,11 @@ bool retro_load_game(const struct retro_game_info *game)
    // the same emuhack → infinite recursion → JS "Maximum call stack size exceeded". With
    // replacements off, the interpreter runs the original MIPS code directly.
    g_Config.bFuncReplacements = false;
+   // Pin a sane 1x internal resolution + force GL backend. If iInternalResolution is left 0/garbage
+   // (we don't always feed the option), pixelWidth/renderWidth = res*480 becomes 0 or huge, and the
+   // GOT_BACKBUFFER FBO / render-target allocation in ContextReset sizes a buffer from it → OOB.
+   g_Config.iInternalResolution = 1;
+   g_Config.iGPUBackend = (int)GPUBackend::OPENGL;
 #endif
 
    CoreParameter coreParam   = {};
