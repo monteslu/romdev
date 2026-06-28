@@ -123,24 +123,22 @@ EMSCRIPTEN_KEEPALIVE void romdev_register_callbacks(void) {
   retro_set_input_state((void *)tramp_input_state);
 }
 
-// The app thread: park forever executing proxied work. emscripten_exit_with_live_runtime keeps
-// this pthread + the runtime alive; the proxying queue is pumped by the runtime.
-static void *app_thread_main(void *arg) {
-  (void)arg;
+// PROXY_TO_PTHREAD: emscripten runs main() on a dedicated pthread (the "app thread") and turns
+// the JS thread into a pure event-loop pump that services ALL proxy channels (em_proxy queue,
+// syscall mailbox, FS, stdio) automatically. main() records itself as the app thread and parks
+// with a live runtime; the JS thread drives the core by proxying retro_* onto it.
+int main(int argc, char **argv) {
+  (void)argc; (void)argv;
+  g_q = emscripten_proxy_get_system_queue();
+  g_app_thread = pthread_self();         // main() runs on the app thread under PROXY_TO_PTHREAD
+  g_main_thread = emscripten_main_runtime_thread_id();  // the JS pump thread (callbacks proxy here)
   g_app_ready = 1;
   emscripten_exit_with_live_runtime();
-  return nullptr;
+  return 0;
 }
 
-// Called once from JS (the main thread) right after the module loads. Spawns the app thread.
-EMSCRIPTEN_KEEPALIVE void romdev_proxy_init(void) {
-  if (g_q) return;
-  g_q = emscripten_proxy_get_system_queue();
-  g_main_thread = pthread_self();  // the JS main thread (callbacks proxy back here)
-  pthread_create(&g_app_thread, nullptr, app_thread_main, nullptr);
-  // spin until the app thread has recorded itself (cheap; happens immediately)
-  while (!g_app_ready) { emscripten_thread_sleep(1); }
-}
+// No-op now (main() does the init). Kept for the host's call sequence.
+EMSCRIPTEN_KEEPALIVE void romdev_proxy_init(void) {}
 
 // Proxied retro_init — runs the core's init on the app thread (after callbacks are registered).
 void retro_init(void);
