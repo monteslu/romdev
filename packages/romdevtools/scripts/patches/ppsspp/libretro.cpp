@@ -1332,8 +1332,12 @@ namespace Libretro
    std::atomic<EmuThreadState> emuThreadState(EmuThreadState::DISABLED);
 
    static std::thread emuThread;
+extern "C" int romdev_get_core_state_impl() { return (int)coreState; }
    static void EmuFrame()
    {
+#ifdef __EMSCRIPTEN__
+      { static int n=0; n++; EM_ASM({ globalThis.__ef=$0; }, n); }
+#endif
       ctx->SetRenderTarget();
       Draw::DrawContext *draw = ctx->GetDrawContext();
       if (draw) {
@@ -1352,6 +1356,14 @@ namespace Libretro
          // Reached the end of the frame while running at full blast, all good. Set back to running for the next frame
          coreState = CORE_RUNNING_CPU;
          break;
+#ifdef __EMSCRIPTEN__
+      case CORE_STEPPING_CPU:
+         // Headless: there is no debugger to resume us, so a recoverable break (bad mem access,
+         // BREAK instruction, etc.) would otherwise wedge here forever and hang retro_run. Force
+         // back to running so the frame loop keeps advancing (matches "ignore bad mem access").
+         coreState = CORE_RUNNING_CPU;
+         break;
+#endif
       default:
          // We're not handling the various states used for debugging in the libretro port.
          break;
@@ -1517,6 +1529,10 @@ bool retro_load_game(const struct retro_game_info *game)
    // GOT_BACKBUFFER FBO / render-target allocation in ContextReset sizes a buffer from it → OOB.
    g_Config.iInternalResolution = 1;
    g_Config.iGPUBackend = (int)GPUBackend::OPENGL;
+   // Ignore bad memory accesses instead of dropping into CORE_STEPPING_CPU (a debugger-pause state
+   // that never resumes headless → retro_run hangs the frame). The interpreter then continues past
+   // a recoverable bad access, matching how the standalone runs without a debugger attached.
+   g_Config.bIgnoreBadMemAccess = true;
 #endif
 
    CoreParameter coreParam   = {};
