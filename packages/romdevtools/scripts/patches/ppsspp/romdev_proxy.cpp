@@ -133,6 +133,7 @@ EMSCRIPTEN_KEEPALIVE void romdev_proxied_fire_context_reset(void *fn) {
   if (g_ctx_reset) emscripten_proxy_sync(g_q, g_app_thread, run_ctx_reset, nullptr);
 }
 
+
 // Register the trampolines with the core. Runs ON THE APP THREAD (proxied), so the function
 // pointers are valid there (where the core invokes them). Called once before retro_init.
 EMSCRIPTEN_KEEPALIVE void romdev_register_callbacks(void) {
