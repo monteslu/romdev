@@ -333,8 +333,16 @@ export class LibretroHost {
       }
       mod._romdev_proxy_init();
       if (opts.hwRender) {
-        const ok = mod._romdev_proxied_gl_setup(480, 272);
-        if (ok !== 1) throw new Error("proxied GL setup failed on the app thread");
+        // Async GL setup: the app thread imports native-gles/webgl-node + creates the context,
+        // which needs the main JS event loop. So kick it async + poll while yielding (a blocking
+        // proxy_sync would freeze the event loop the import() depends on → deadlock).
+        mod._romdev_proxied_gl_setup_start(480, 272);
+        while (mod._romdev_gl_setup_phase() !== 2) {
+          await new Promise((r) => setImmediate(r));
+        }
+        if (mod._romdev_gl_setup_result() !== 1) {
+          throw new Error("proxied GL setup failed on the app thread");
+        }
       }
     }
 

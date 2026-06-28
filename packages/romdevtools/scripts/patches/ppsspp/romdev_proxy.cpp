@@ -269,6 +269,45 @@ EMSCRIPTEN_KEEPALIVE int romdev_proxied_gl_setup(int w, int h) {
   return g_gl_setup_result;
 }
 
+// Async GL setup: kick it on the app thread, then the host polls romdev_gl_setup_state while
+// pumping the main queue + yielding (so the app thread's import() can use the main event loop).
+// proxy_async doesn't carry an em_proxying_ctx, so the JS finish writes g_gl_setup_result and
+// also flips g_gl_setup_started→2 done. 0=idle,1=running,2=done(result in g_gl_setup_result).
+static volatile int g_gl_setup_phase = 0;
+static void gl_setup_async(void *p) {
+  (void)p;
+  int w = g_gl_w, h = g_gl_h;
+  EM_ASM({
+    var w = $0; var h = $1;
+    (async () => {
+      try {
+        var nativeGles = (await import("native-gles")).default;
+        var webglNode = await import("webgl-node");
+        var ctxPair = webglNode.createWebGL2Context(w, h);
+        var canvas = ctxPair.canvas;
+        canvas.getContextSafariWebGL2Fixed = canvas.getContext;
+        globalThis.WebGL2RenderingContext = webglNode.WebGL2RenderingContext;
+        if (typeof globalThis.WebGLRenderingContext === 'undefined')
+          globalThis.WebGLRenderingContext = class WebGLRenderingContext {};
+        Module['romdev_nativeGles'] = nativeGles;
+        Module['romdev_appCanvas'] = canvas;
+        var hnd = Module['GL'].createContext(canvas, { majorVersion: 2 });
+        if (hnd > 0) Module['GL'].makeContextCurrent(hnd);
+        Module['_romdev_gl_setup_set_phase'](1, 2);
+      } catch (e) { console.error('[romdev gl_setup]', e); Module['_romdev_gl_setup_set_phase'](-1, 2); }
+    })();
+  }, w, h);
+}
+EMSCRIPTEN_KEEPALIVE void romdev_gl_setup_set_phase(int result, int phase) {
+  g_gl_setup_result = result; g_gl_setup_phase = phase;
+}
+EMSCRIPTEN_KEEPALIVE void romdev_proxied_gl_setup_start(int w, int h) {
+  g_gl_w = w; g_gl_h = h; g_gl_setup_result = 0; g_gl_setup_phase = 1;
+  emscripten_proxy_async(g_q, g_app_thread, gl_setup_async, nullptr);
+}
+EMSCRIPTEN_KEEPALIVE int romdev_gl_setup_phase(void) { return g_gl_setup_phase; }
+EMSCRIPTEN_KEEPALIVE int romdev_gl_setup_result(void) { return g_gl_setup_result; }
+
 // Read back the rendered frame ON THE APP THREAD into a WASM buffer the host then copies out.
 // (glReadPixels must run on the GL-owning thread.) Returns via the shared buffer pointer.
 struct ReadbackArgs { int w; int h; unsigned char *out; };
