@@ -491,9 +491,17 @@ function handleEnv(mod, state, rawCmd, dataPtr, log) {
     // software cores, or no GL stack), reject so the core falls back to software.
     case E.SET_HW_RENDER:
       if (state.hwRender) return state.hwRender.setup(mod, dataPtr);
-      // Proxied cores own GL on the app thread (set up before retro_load_game); accept so the
-      // core uses its GL path. context_reset runs on the app thread during the proxied load.
-      if (state.proxied) return true;
+      // Proxied cores own GL on the app thread. Fill the retro_hw_render_callback struct with
+      // C function pointers (valid on the app thread, unlike main-thread addFunction): the core
+      // reads context_reset (+4) itself; we write get_current_framebuffer (+8) + get_proc_address
+      // (+12) from the shim. bottom_left_origin (+18) is true for GL.
+      if (state.proxied) {
+        state.proxiedContextResetPtr = mod.getValue(dataPtr + 4, "i32");
+        mod.setValue(dataPtr + 8, mod._romdev_hw_get_fb_ptr(), "i32");
+        mod.setValue(dataPtr + 12, mod._romdev_hw_get_proc_ptr(), "i32");
+        state.proxiedBottomLeft = !!mod.HEAPU8[dataPtr + 18];
+        return true;
+      }
       return false;
 
     // Things we can't or don't want to support — reject so core falls back.

@@ -47,12 +47,15 @@ static volatile int g_app_ready = 0;
 // the round-trip completes without deadlock. The host installs the JS impls as Module fns.
 struct EnvArgs { unsigned cmd; void *data; int ret; };
 static void env_on_main(void *p) {
+  EM_ASM({console.error('[romdev] env_on_main running cmd='+$0);}, ((EnvArgs*)p)->cmd);
   auto *a = (EnvArgs *)p;
   a->ret = EM_ASM_INT({ return Module['romdev_envCb']($0, $1); }, a->cmd, a->data);
 }
 static bool tramp_env(unsigned cmd, void *data) {
+  EM_ASM({console.error('[romdev] tramp_env cmd='+$0+' (app thread, proxying)');}, cmd);
   EnvArgs a{cmd, data, 0};
   emscripten_proxy_sync(g_q, g_main_thread, env_on_main, &a);
+  EM_ASM({console.error('[romdev] tramp_env RESUMED cmd='+$0+' ret='+$1);}, cmd, a.ret);
   return a.ret != 0;
 }
 struct VideoArgs { const void *data; unsigned w, h, pitch; };
@@ -86,6 +89,17 @@ static short tramp_input_state(unsigned port, unsigned device, unsigned idx, uns
   emscripten_proxy_sync(g_q, g_main_thread, input_on_main, &a);
   return (short)a.ret;
 }
+
+// ── HW-render struct callbacks (get_current_framebuffer + get_proc_address) ──
+// SET_HW_RENDER hands the core a retro_hw_render_callback struct; the host fills in
+// get_current_framebuffer (+8) and get_proc_address (+12). These must be C function pointers
+// (valid on the app thread where the core calls them), NOT main-thread addFunction trampolines
+// (table-index-out-of-bounds on the app thread). The host writes these via the *_ptr() getters.
+unsigned emscripten_GetProcAddress(const char *name);
+static unsigned romdev_hw_get_fb(void) { return 0; }
+static unsigned romdev_hw_get_proc(const char *sym) { return emscripten_GetProcAddress(sym); }
+EMSCRIPTEN_KEEPALIVE void *romdev_hw_get_fb_ptr(void) { return (void *)romdev_hw_get_fb; }
+EMSCRIPTEN_KEEPALIVE void *romdev_hw_get_proc_ptr(void) { return (void *)romdev_hw_get_proc; }
 
 // Register the trampolines with the core. Runs ON THE APP THREAD (proxied), so the function
 // pointers are valid there (where the core invokes them). Called once before retro_init.
@@ -154,6 +168,14 @@ EMSCRIPTEN_KEEPALIVE void romdev_proxied_run_start(void) {
   emscripten_proxy_async(g_q, g_app_thread, run_run_async, nullptr);
 }
 EMSCRIPTEN_KEEPALIVE int romdev_proxied_run_state(void) { return g_run_state; }
+
+// The host's async poll loop calls this each tick (on the MAIN thread) to execute any callbacks
+// the app thread proxied back to main. With async load/run, main isn't blocked in proxy_sync (so
+// it doesn't auto-pump), so we pump explicitly — while still yielding to the JS event loop
+// between pumps (so emscripten can service the app thread's pooled-Worker grabs / postMessage).
+EMSCRIPTEN_KEEPALIVE void romdev_pump_main_queue(void) {
+  emscripten_proxy_execute_queue(g_q);
+}
 
 struct LoadArgs { const void *info; bool result; };
 static void run_load(void *p) { auto *a = (LoadArgs *)p; a->result = retro_load_game(a->info); }

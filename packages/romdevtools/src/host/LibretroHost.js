@@ -500,7 +500,8 @@ export class LibretroHost {
     if (this._proxied) {
       mod._romdev_proxied_load_game_start(infoPtr);
       while (mod._romdev_proxied_load_state() === 0) {
-        await new Promise((r) => setImmediate(r));
+        mod._romdev_pump_main_queue();         // run callbacks the app thread proxied to main
+        await new Promise((r) => setImmediate(r)); // yield → emscripten services worker ops
       }
       ok = mod._romdev_proxied_load_state() === 1;
     } else {
