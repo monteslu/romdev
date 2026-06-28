@@ -1333,6 +1333,7 @@ namespace Libretro
 
    static std::thread emuThread;
 extern "C" int romdev_get_core_state_impl() { return (int)coreState; }
+
    static void EmuFrame()
    {
 #ifdef __EMSCRIPTEN__

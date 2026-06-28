@@ -1080,8 +1080,7 @@ namespace MIPSInt
 				orig = Memory::Read_Instruction(PC, false);  // raw word, no replacement resolution
 			}
 			if (orig.encoding == op.encoding || MIPS_IS_EMUHACK(orig.encoding)) {
-				// Truly unresolvable — skip to avoid a hang (rare; better than an infinite loop).
-				PC += 4;
+				PC += 4;  // truly unresolvable — skip (rare; better than an infinite loop)
 			} else {
 				MIPSInterpret(orig);
 			}
