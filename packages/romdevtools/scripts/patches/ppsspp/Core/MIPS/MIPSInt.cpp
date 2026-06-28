@@ -1,4 +1,7 @@
 // Copyright (c) 2012- PPSSPP Project.
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -1063,13 +1066,22 @@ namespace MIPSInt
 			if (!entry || !entry->replaceFunc) {
 				ERROR_LOG(Log::CPU, "Bad replacement function index %i", index);
 			}
-			// Interpret the original instruction under it. Read_Instruction(PC, true) resolves the
-			// replacement back to the saved original — but if GetReplacedOpAt fails it returns this
-			// SAME emuhack, so re-interpreting it recurses forever (JS "Maximum call stack size").
-			// Guard: if resolution didn't change the opcode, skip past it instead of recursing.
-			MIPSOpcode orig = Memory::Read_Instruction(PC, true);
+			// Restore + interpret the REAL original instruction this emuhack replaced. The saved
+			// original lives in the replacement system (GetReplacedOpAt); Read_Instruction(PC,true)
+			// returns it, but if that lookup fails it returns the SAME emuhack (infinite recursion).
+			// So fetch the original explicitly: prefer GetReplacedOpAt; if it's missing or still an
+			// emuhack, fall back to the raw memory word (resolveReplacements=false). Interpreting the
+			// real opcode (instead of skipping PC) keeps the game's control flow intact.
+			u32 origWord = 0;
+			MIPSOpcode orig;
+			if (GetReplacedOpAt(PC, &origWord) && !MIPS_IS_EMUHACK(origWord)) {
+				orig = MIPSOpcode(origWord);
+			} else {
+				orig = Memory::Read_Instruction(PC, false);  // raw word, no replacement resolution
+			}
 			if (orig.encoding == op.encoding || MIPS_IS_EMUHACK(orig.encoding)) {
-				PC += 4;  // unresolvable emuhack — advance to avoid infinite recursion
+				// Truly unresolvable — skip to avoid a hang (rare; better than an infinite loop).
+				PC += 4;
 			} else {
 				MIPSInterpret(orig);
 			}
