@@ -381,10 +381,22 @@ static void gl_readback(void *p) {
   auto *a = (ReadbackArgs *)p;
   EM_ASM({
     var w = $0; var h = $1; var outPtr = $2;
+    var px = new Uint8Array(w * h * 4);
+    // PPSSPP renders through GLctx (the webgl-node WebGL2 context Module.GL is bound to). Read from
+    // THAT context so we read exactly the surface PPSSPP drew to (the separate native-gles handle
+    // may be a different EGL context). Fall back to native-gles if GLctx is unavailable.
+    try {
+      if (typeof GLctx !== 'undefined' && GLctx && GLctx.readPixels) {
+        GLctx.bindFramebuffer(GLctx.FRAMEBUFFER, null);
+        GLctx.finish();
+        GLctx.readPixels(0, 0, w, h, GLctx.RGBA, GLctx.UNSIGNED_BYTE, px);
+        HEAPU8.set(px, outPtr);
+        return;
+      }
+    } catch (e) { /* fall through to native-gles */ }
     var gl = Module['romdev_nativeGles'];
     gl.makeCurrent();
     gl.glFinish();
-    var px = new Uint8Array(w * h * 4);
     gl.glBindFramebuffer(0x8D40, 0);
     gl.glReadPixels(0, 0, w, h, 0x1908, 0x1401, px);
     HEAPU8.set(px, outPtr);
