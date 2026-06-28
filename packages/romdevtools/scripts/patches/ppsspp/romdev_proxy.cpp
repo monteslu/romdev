@@ -126,16 +126,26 @@ EMSCRIPTEN_KEEPALIVE void romdev_register_callbacks(void) {
 // The app thread: park forever executing proxied work (live runtime keeps it + the runtime alive).
 static void *app_thread_main(void *arg) {
   (void)arg;
-  g_app_ready = 1;
+  // Do NOT set g_app_ready here — it would be true before the runtime's event loop (below) is
+  // actually pumping the proxy queue, so a proxied call from main would sit unprocessed and a
+  // proxy_sync would hang main forever. Instead the host pings via romdev_app_ping (proxied), and
+  // ping_on_app sets g_app_ready — which only runs once the queue is being serviced.
   emscripten_exit_with_live_runtime();
   return nullptr;
+}
+// Runs ON the app thread (proxied) once its queue is live → proves the channel works.
+static void ping_on_app(void *p) { (void)p; g_app_ready = 1; }
+EMSCRIPTEN_KEEPALIVE void romdev_app_ping(void) {
+  // proxy_async: returns immediately; the host then polls romdev_app_ready() while pumping +
+  // yielding, so the app thread's event loop spins up and runs ping_on_app.
+  emscripten_proxy_async(g_q, g_app_thread, ping_on_app, nullptr);
 }
 EMSCRIPTEN_KEEPALIVE void romdev_proxy_init(void) {
   if (g_q) return;
   g_q = emscripten_proxy_get_system_queue();
   g_main_thread = pthread_self();
   pthread_create(&g_app_thread, nullptr, app_thread_main, nullptr);
-  while (!g_app_ready) { emscripten_thread_sleep(1); }
+  // The host calls romdev_app_ping() then waits for romdev_app_ready() in JS (yielding + pumping).
 }
 
 // Write a file into the APP THREAD's MEMFS (its JS heap), so PPSSPP's fopen on the app thread
@@ -217,6 +227,23 @@ EMSCRIPTEN_KEEPALIVE int romdev_proxied_load_game(const void *info) {
 static void run_run(void *p) { (void)p; retro_run(); }
 EMSCRIPTEN_KEEPALIVE void romdev_proxied_run(void) {
   emscripten_proxy_sync(g_q, g_app_thread, run_run, nullptr);
+}
+
+// retro_get_system_av_info + retro_set_controller_port_device read/touch core state that lives on
+// the app thread — proxy them there (a direct main-thread call wedges).
+void retro_get_system_av_info(void *info);
+struct AvArgs { void *info; };
+static void run_av_info(void *p) { retro_get_system_av_info(((AvArgs *)p)->info); }
+EMSCRIPTEN_KEEPALIVE void romdev_proxied_av_info(void *info) {
+  AvArgs a{info};
+  emscripten_proxy_sync(g_q, g_app_thread, run_av_info, &a);
+}
+void retro_set_controller_port_device(unsigned port, unsigned device);
+struct CtrlArgs { unsigned port, device; };
+static void run_ctrl(void *p) { auto *a = (CtrlArgs *)p; retro_set_controller_port_device(a->port, a->device); }
+EMSCRIPTEN_KEEPALIVE void romdev_proxied_set_controller(unsigned port, unsigned device) {
+  CtrlArgs a{port, device};
+  emscripten_proxy_sync(g_q, g_app_thread, run_ctrl, &a);
 }
 
 static void run_reset(void *p) { (void)p; retro_reset(); }

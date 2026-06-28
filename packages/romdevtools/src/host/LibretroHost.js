@@ -164,6 +164,29 @@ function mirrorDirToFS(FS, hostDir, fsDir) {
   }
 }
 
+/** Mirror a host dir into a PROXIED core's APP-THREAD MEMFS (a per-thread JS heap, invisible to
+ *  the main-thread FS). Each file's bytes go through shared WASM memory; romdev_app_fs_write does
+ *  the FS.writeFile on the app thread, where the core's fopen runs. */
+function mirrorDirToAppFS(mod, hostDir, fsDir) {
+  for (const name of readdirSync(hostDir)) {
+    const hostPath = path.join(hostDir, name);
+    const fsPath = fsDir + "/" + name;
+    const st = statSync(hostPath);
+    if (st.isDirectory()) {
+      mirrorDirToAppFS(mod, hostPath, fsPath);
+    } else if (st.isFile()) {
+      const bytes = readFileSync(hostPath);
+      const dataPtr = mod._malloc(bytes.length || 1);
+      mod.HEAPU8.set(bytes, dataPtr);
+      const pb = Buffer.from(fsPath + "\0", "utf-8");
+      const pathPtr = mod._malloc(pb.length);
+      mod.HEAPU8.set(pb, pathPtr);
+      try { mod._romdev_app_fs_write(pathPtr, dataPtr, bytes.length); } catch { /* skip */ }
+      mod._free(dataPtr); mod._free(pathPtr);
+    }
+  }
+}
+
 /**
  * When loadMedia is called with `bytes:` and no `virtualName`, this is
  * the extension we tack onto "/rom" so the core knows which platform
@@ -332,13 +355,22 @@ export class LibretroHost {
         throw new Error("core marked proxied but missing _romdev_proxy_init export");
       }
       mod._romdev_proxy_init();
+      // Confirm the app thread's event loop is actually SERVICING its proxy queue before driving
+      // it — app_ready is set by a proxied ping (ping_on_app), which only runs once the queue is
+      // live. Setting it eagerly would race: a proxied call issued before the loop pumps would sit
+      // unprocessed and a proxy_sync would hang main. Pump + yield so the async ping is delivered.
+      mod._romdev_app_ping();
+      while (mod._romdev_app_ready() !== 1) {
+        mod._romdev_pump_main_queue();
+        await new Promise((r) => setTimeout(r, 0));
+      }
       if (opts.hwRender) {
         // Async GL setup: the app thread imports native-gles/webgl-node + creates the context,
         // which needs the main JS event loop. So kick it async + poll while yielding (a blocking
         // proxy_sync would freeze the event loop the import() depends on → deadlock).
         mod._romdev_proxied_gl_setup_start(480, 272);
         while (mod._romdev_gl_setup_phase() !== 2) {
-          await new Promise((r) => setImmediate(r));
+          await new Promise((r) => setTimeout(r, 0));
         }
         if (mod._romdev_gl_setup_result() !== 1) {
           throw new Error("proxied GL setup failed on the app thread");
@@ -388,7 +420,11 @@ export class LibretroHost {
 
     // retro_init runs on MAIN even for proxied cores (it spawns the threadManager workers via
     // pthread_create, which needs the main thread free — not blocked proxying init to app).
-    mod._retro_init();
+    // EXCEPT proxied cores defer it to loadMedia: PPSSPP's retro_init touches the system dir
+    // (fonts/flash0), which for proxied cores is only mirrored into the app-thread FS during
+    // loadMedia — calling retro_init before the mount makes the loader hang on missing assets.
+    if (!this._proxied) mod._retro_init();
+    else this._retroInitPending = true;
     this.status.corePath = jsPath;
   }
 
@@ -408,6 +444,10 @@ export class LibretroHost {
   async loadMedia(args) {
     const mod = this._needMod();
     const { platform } = args;
+    // Allow the systemDir to be supplied per-load (not just via the constructor) — proxied cores
+    // (PSP) need it to mirror BIOS/font assets into the app-thread FS, and callers commonly pass
+    // it to loadMedia rather than at construction.
+    if (args.systemDir && !this.systemDir) this.systemDir = args.systemDir;
     // Derive the kind from the file/virtual extension when the caller didn't say
     // — so a C64 .d64 reports mediaKind:"disk" (writable save target) vs a .prg
     // "program". For an in-memory load, the virtualName carries the ext.
@@ -441,7 +481,13 @@ export class LibretroHost {
     if (this.systemDir && !this._systemDirMounted && mod.FS) {
       try {
         const FS_SYS = "/system";
-        mirrorDirToFS(mod.FS, this.systemDir, FS_SYS);
+        // Proxied cores read the system dir on the app thread (separate per-thread MEMFS); mirror
+        // ONLY there. Non-proxied cores read main's FS. (Mirroring to both is wasted work.)
+        if (this._proxied) {
+          mirrorDirToAppFS(mod, this.systemDir, FS_SYS);
+        } else {
+          mirrorDirToFS(mod.FS, this.systemDir, FS_SYS);
+        }
         // Redirect the core's reported system dir to the in-FS copy.
         if (this.state) this.state.systemDir = FS_SYS;
         this._systemDirMounted = true;
@@ -474,7 +520,10 @@ export class LibretroHost {
       throw new Error("loadMedia requires either `path` or `bytes`");
     }
     const vfsPath = "/rom" + ext;
-    if (mod.FS) {
+    // For proxied cores the core fopen's on the app thread, so the ROM goes to the app-thread
+    // MEMFS below (romdev_app_fs_write) — writing it to the main-thread FS too is wasted work
+    // (and for a 60MB ISO, a needless copy). Non-proxied cores read main's FS directly.
+    if (mod.FS && !this._proxied) {
       try {
         mod.FS.writeFile(vfsPath, data);
       } catch (e) {
@@ -514,10 +563,16 @@ export class LibretroHost {
     // would freeze the event loop → the core's threads can't be scheduled → deadlock.
     let ok;
     if (this._proxied) {
+      // Deferred retro_init (see loadCore): now that the system dir is mirrored into the app-thread
+      // FS, the core can init (fonts/flash0 present) without hanging.
+      if (this._retroInitPending) {
+        mod._retro_init();
+        this._retroInitPending = false;
+      }
       mod._romdev_proxied_load_game_start(infoPtr);
       while (mod._romdev_proxied_load_state() === 0) {
         mod._romdev_pump_main_queue();         // run callbacks the app thread proxied to main
-        await new Promise((r) => setImmediate(r)); // yield → emscripten services worker ops
+        await new Promise((r) => setTimeout(r, 0)); // yield → emscripten services worker ops
       }
       ok = mod._romdev_proxied_load_state() === 1;
     } else {
@@ -579,7 +634,10 @@ export class LibretroHost {
     //   };
     // };
     const avInfoPtr = mod._malloc(64);
-    mod._retro_get_system_av_info(avInfoPtr);
+    // Proxied cores keep core state on the app thread; retro_get_system_av_info reads it, so it
+    // must run there (a direct main-thread call reads garbage / can wedge). Proxy it.
+    if (this._proxied) mod._romdev_proxied_av_info(avInfoPtr);
+    else mod._retro_get_system_av_info(avInfoPtr);
     this.status.fbWidth = mod.getValue(avInfoPtr + 0, "i32");
     this.status.fbHeight = mod.getValue(avInfoPtr + 4, "i32");
     // aspect_ratio (+16) is the intended DISPLAY aspect (what a CRT would
@@ -607,11 +665,17 @@ export class LibretroHost {
       this.hwRender.createContext(maxW, maxH, this._glContextCreated);
     }
 
-    // Configure controller port 0 as joypad (some cores default to NONE).
-    mod._retro_set_controller_port_device(0, RETRO_DEVICE_JOYPAD);
-    // Port 1 too — needed for 2P. The C64/VICE 2P path (two live control ports)
-    // only reads RetroPad port 1 when it's registered as a joypad device.
-    mod._retro_set_controller_port_device(1, RETRO_DEVICE_JOYPAD);
+    // Configure controller port 0 as joypad (some cores default to NONE). Proxied cores touch
+    // core state on the app thread, so proxy it there.
+    if (this._proxied) {
+      mod._romdev_proxied_set_controller(0, RETRO_DEVICE_JOYPAD);
+      mod._romdev_proxied_set_controller(1, RETRO_DEVICE_JOYPAD);
+    } else {
+      mod._retro_set_controller_port_device(0, RETRO_DEVICE_JOYPAD);
+      // Port 1 too — needed for 2P. The C64/VICE 2P path (two live control ports)
+      // only reads RetroPad port 1 when it's registered as a joypad device.
+      mod._retro_set_controller_port_device(1, RETRO_DEVICE_JOYPAD);
+    }
 
     // ---- Settle the framebuffer to the ROM's chosen geometry ----
     //
@@ -634,7 +698,10 @@ export class LibretroHost {
     // VDP in 1-3 frames; SNES in 1; NES in 1-2. The cost is ~5-30 ms
     // on loadMedia, paid once. Skip when loaded paused (caller is
     // already in control).
-    if (!this.status.paused) {
+    // Proxied cores (PSP) drive frames through the async run path (run_start + poll); the
+    // synchronous settle loop below uses the blocking sync run, so skip it. PSP geometry is the
+    // fixed 480×272 av_info already read, so there's no pre-init default to settle past.
+    if (!this.status.paused && !this._proxied) {
       // Settle frames are core warm-up, not agent-visible gameplay
       // frames — don't increment frameCount. From the agent's POV the
       // first stepFrames(N) should advance the count by exactly N.
