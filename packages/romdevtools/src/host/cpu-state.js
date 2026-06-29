@@ -163,6 +163,35 @@ function decodeMips(regs) {
   };
 }
 
+/** Decode the SH-4 register block (Dreamcast) from getSh4Regs():
+ *  [0..15]=r0..r15, 16=pc, 17=pr, 18=gbr, 19=vbr, 20=sr, 21=mac.l, 22=mac.h, 23=fpul. */
+function decodeSh4(regs) {
+  if (!regs || regs.length < 24) return null;
+  const hx = (v) => "$" + (v >>> 0).toString(16).toUpperCase().padStart(8, "0");
+  const named = {};
+  for (let i = 0; i < 16; i++) named["r" + i] = hx(regs[i]);
+  named.pr = hx(regs[17]);
+  named.gbr = hx(regs[18]);
+  named.vbr = hx(regs[19]);
+  named.sr = hx(regs[20]);
+  named.macl = hx(regs[21]);
+  named.mach = hx(regs[22]);
+  named.fpul = hx(regs[23]);
+  // SR flags: T(0) S(1) Q(8) M(9) BL(28) RB(29) MD(30)
+  const sr = regs[20] >>> 0;
+  return {
+    pc: regs[16] >>> 0,
+    pcHex: hx(regs[16]),
+    registers: named,
+    flags: {
+      T: !!(sr & 0x1), S: !!(sr & 0x2),
+      Q: !!(sr & 0x100), M: !!(sr & 0x200),
+      BL: !!(sr & 0x10000000), RB: !!(sr & 0x20000000), MD: !!(sr & 0x40000000),
+      raw: hx(sr),
+    },
+  };
+}
+
 function decode6502(bytes) {
   if (!bytes || bytes.length < 25) return null;
   const u16le = (o) => bytes[o] | (bytes[o + 1] << 8);
@@ -326,6 +355,9 @@ function decodeZ80(bytes) {
 export function getCPUState(host, platform, cpu = "main") {
   if (platform === "n64" || platform === "ps1") {
     return decodeMips(host.getMipsRegs?.());
+  }
+  if (platform === "dreamcast") {
+    return decodeSh4(host.getSh4Regs?.());
   }
   if (platform === "nes") {
     const bytes = host.readMemory("nes_cpu_regs", 0, 28);

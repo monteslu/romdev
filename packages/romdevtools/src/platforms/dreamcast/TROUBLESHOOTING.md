@@ -42,12 +42,13 @@ constant/address resolution breaks. Build a **multi-function** test program to v
 `functions` returns real VAs that round-trip — a single-instruction smoke test hides
 base-address misalignment. (Same class of trap as the PS1 rebase issue.)
 
-## "cpu({op:'read'}) / breakpoint / watch / audioDebug return N/A"
+## "breakpoint / watch return N/A"
 
-Not wired on DC yet — Flycast doesn't export the SH-4 register-struct / memory-path /
-AICA readers romdev's generic host probes for. The capability map reports them **N/A**
-(honest), not broken. Use `memory({op:'read', region:'system_ram'})` +
-`disasm`/`decompile` meanwhile. (A core rebuild to add them is tracked.)
+`cpu({op:'read'})` and `audioDebug({op:'inspect', chip:'aica'})` ARE wired on DC (the
+flycast core exports `romdev_sh4_regs_get` + `romdev_aica_get`). `breakpoint`/`watch`
+are not yet — those need interpreter-step + memory-path hooks in flycast (cpuState/
+audioDebug are plain register reads). Use `cpu`/`audioDebug` + `memory` +
+`disasm`/`decompile` meanwhile.
 
 ## "renderingContext returns N/A"
 

@@ -1721,6 +1721,47 @@ export class LibretroHost {
     }
   }
 
+  /** True when the Dreamcast core (flycast) exposes the live SH-4 register block. */
+  sh4RegsSupported() {
+    return !!(this.mod && typeof this.mod._romdev_sh4_regs_get === "function");
+  }
+
+  /** Read the live SH-4 register block as a Uint32Array(24):
+   *  [0..15]=r0..r15, 16=pc, 17=pr, 18=gbr, 19=vbr, 20=sr, 21=mac.l, 22=mac.h, 23=fpul.
+   *  null if the core doesn't expose it. */
+  getSh4Regs() {
+    const mod = this.mod;
+    if (!mod || typeof mod._romdev_sh4_regs_get !== "function") return null;
+    const ptr = mod._malloc(24 * 4);
+    try {
+      mod._romdev_sh4_regs_get(ptr);
+      return new Uint32Array(mod.HEAPU8.buffer, ptr, 24).slice();
+    } finally {
+      mod._free(ptr);
+    }
+  }
+
+  /** True when the Dreamcast core exposes the AICA register file
+   *  (getAudioState chip:'aica'). */
+  aicaRegsSupported() {
+    return !!(this.mod && typeof this.mod._romdev_aica_get === "function");
+  }
+
+  /** Read the AICA register window (channels + CommonData) as a Uint8Array.
+   *  Default 0x3000 bytes (64 SGC channel blocks @ 0x80 each + CommonData @ 0x2800).
+   *  null if the core doesn't expose it. */
+  getAicaRegs(bytes = 0x3000) {
+    const mod = this.mod;
+    if (!mod || typeof mod._romdev_aica_get !== "function") return null;
+    const ptr = mod._malloc(bytes);
+    try {
+      mod._romdev_aica_get(ptr, bytes);
+      return new Uint8Array(mod.HEAPU8.buffer, ptr, bytes).slice();
+    } finally {
+      mod._free(ptr);
+    }
+  }
+
   /** True when the PS1 core exposes the SPU register block (getAudioState chip:'spu'). */
   spuRegsSupported() {
     return !!(this.mod && typeof this.mod._romdev_spu_get === "function");
