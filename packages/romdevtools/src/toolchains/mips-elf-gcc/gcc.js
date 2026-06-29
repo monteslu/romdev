@@ -1,130 +1,67 @@
 // mips-elf-gcc — WASM toolchain wrappers for N64 / PS1 C builds.
 //
-// Pipeline (mirrors m68k-elf-gcc/gcc.js — gcc-the-driver can't fork/exec under
-// emscripten, so we orchestrate cc1 → as → ld → objcopy through callMain):
-//   runCc1mips({source, headers, options, endian}) → MIPS assembly (.s)
-//   runMipsAs({source, includes, endian})          → .o ELF object
-//   runMipsLd({objects, linkScript, ...})          → linked .elf (+ map)
-//   runMipsObjcopy({elf})                          → raw .bin
+// The full pipeline:
+//   runCc1mips({source, headers, options, endian}) → MIPS assembly text (.s)
+//   runMipsAs({source, includes, endian})           → .o ELF object
+//   runMipsLd({objects, linkScript, endian})         → linked .elf (+ map)
+//   runMipsObjcopy({elf})                            → raw .bin
 //
-// Endianness: N64 (R4300) is big-endian (default), PS1 (R3000) is little-endian
-// (-EL). The same WASM toolchain emits both — pass endian:'little' for PS1.
-
+// 0.81.0: the 4 stages come from the shared makeGccToolchain() factory
+// (common/gcc-toolchain.js); this file is just the MIPS config + thin re-exports.
+// Unlike the other arches, MIPS is bi-endian (N64 big, PS1 little) — its cc1 and
+// as/ld want DIFFERENT endian flag spellings (cc1: -mel/-meb; as/ld: -EL/-EB), so
+// the flags are functions of `endian` (default "big" for N64). MIPS32, ABI o32, -G0.
+//
+// WASM glue ships in romdev-toolchain-mips-gcc; resolution is lazy + memoized.
 import { fileURLToPath } from "node:url";
-import { existsSync } from "node:fs";
 import path from "node:path";
 
-import { runIsolated, textFile, binaryFile, getOutputBytes, getOutputText } from "../_worker/run.js";
+import { makeGccToolchain } from "../common/gcc-toolchain.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// The WASM ships in romdev-toolchain-mips-gcc; fall back to the in-tree dev copy.
-function resolveMipsGlue(file) {
-  try {
-    const u = import.meta.resolve("romdev-toolchain-mips-gcc");
-    const p = path.join(path.dirname(fileURLToPath(u)), "wasm", file);
-    if (existsSync(p)) return p;
-  } catch { /* not resolvable — fall through */ }
-  const local = path.join(__dirname, "wasm", file);
-  if (existsSync(local)) return local;
-  throw new Error(`mips-elf-gcc WASM (${file}) not found — build it with scripts/build-mips-wasm-tools.sh`);
-}
-const _glue = {};
-const mipsGlue = (file) => (_glue[file] ??= resolveMipsGlue(file));
+const { runCc1, runAs, runLd, runObjcopy } = makeGccToolchain({
+  pkg: "romdev-toolchain-mips-gcc",
+  localDir: __dirname,
+  label: "mips-elf-gcc",
+  glue: {
+    cc1: "cc1.mjs",
+    as: "mips-elf-as.mjs",
+    ld: "mips-elf-ld.mjs",
+    objcopy: "mips-elf-objcopy.mjs",
+  },
+  defaultEndian: "big",
+  cc1Flags: (endian) => [endian === "little" ? "-mel" : "-meb", "-mabi=32"],
+  asFlags: (endian) => [endian === "little" ? "-EL" : "-EB", "-mabi=32", "-G0"],
+  ldFlags: (endian) => [endian === "little" ? "-EL" : "-EB"],
+  ldScriptName: "link.ld",
+  outputName: "main.bin",
+});
 
-/** Endian flags differ by TOOL: cc1 (the C frontend) wants `-mel`/`-meb`; the
- *  assembler + linker want `-EL`/`-EB`. `-mabi=32` (cc1) covers both R3000 (PS1)
- *  and R4300 (N64) 32-bit code. */
-function cc1ArchFlags(endian) {
-  return [endian === "little" ? "-mel" : "-meb", "-mabi=32"];
-}
-function asArchFlags(endian) {
-  // -G0: never use GP-relative (small-data) addressing. Without it, statics land in
-  // .sdata/.sbss and the 16-bit GPREL offsets overflow ("relocation truncated") on
-  // anything but a tiny program. -G0 forces normal .data/.bss addressing.
-  return [endian === "little" ? "-EL" : "-EB", "-mabi=32", "-G0"];
-}
+/**
+ * Compile a C source to MIPS assembly via cc1.
+ * @param {{source:string, headers?:Record<string,string>, options?:string[], endian?:"big"|"little"}} args
+ * @returns {Promise<{log:string, exitCode:number, asmSource:string|null, crash?:any}>}
+ */
+export const runCc1mips = runCc1;
 
-// ── cc1 — MIPS gcc C frontend, source → assembly ─────────────────────
-export async function runCc1mips(args) {
-  const { source, options = [], endian = "big" } = args;
-  const headers = args.headers ?? {};
-  const inputFiles = [textFile("/work/main.c", source)];
-  for (const [name, content] of Object.entries(headers)) inputFiles.push(textFile("/work/" + name, content));
-  const argv = [
-    ...cc1ArchFlags(endian),
-    "-iquote", "/work", "-I", "/work",
-    ...options,
-    "/work/main.c", "-o", "/work/main.s",
-  ];
-  const r = await runIsolated({
-    gluePath: mipsGlue("cc1.mjs"),
-    argv, inputFiles,
-    outputFiles: [{ vfsPath: "/work/main.s", encoding: "utf8" }],
-  });
-  return { log: r.log, exitCode: r.exitCode, asmSource: getOutputText(r, "/work/main.s") || null,
-    ...(r.crash ? { crash: r.crash, stage: "crash" } : {}) };
-}
+/**
+ * Assemble MIPS assembly with mips-elf-as.
+ * @param {{source:string, includes?:Record<string,string>, binaryIncludes?:Record<string,Uint8Array>, options?:string[], endian?:"big"|"little"}} args
+ * @returns {Promise<{log:string, exitCode:number, object:Uint8Array|null, crash?:any}>}
+ */
+export const runMipsAs = runAs;
 
-// ── mips-elf-as — GNU assembler, .s → .o ─────────────────────────────
-export async function runMipsAs(args) {
-  const { source, options = [], endian = "big" } = args;
-  const includes = args.includes ?? {};
-  const binaryIncludes = args.binaryIncludes ?? {};
-  const inputFiles = [textFile("/work/main.s", source)];
-  for (const [name, content] of Object.entries(includes)) inputFiles.push(textFile("/work/" + name, content));
-  for (const [name, bytes] of Object.entries(binaryIncludes)) inputFiles.push(binaryFile("/work/" + name, bytes));
-  const argv = [...asArchFlags(endian), "-I", "/work", ...options, "/work/main.s", "-o", "/work/main.o"];
-  const r = await runIsolated({
-    gluePath: mipsGlue("mips-elf-as.mjs"),
-    argv, inputFiles,
-    outputFiles: [{ vfsPath: "/work/main.o", encoding: "base64" }],
-  });
-  return { log: r.log, exitCode: r.exitCode, object: getOutputBytes(r, "/work/main.o"),
-    ...(r.crash ? { crash: r.crash, stage: "crash" } : {}) };
-}
+/**
+ * Link MIPS object files into an ELF executable (+ linker map).
+ * @param {{objects:Record<string,Uint8Array>, linkScript:string, libraries?:string[], libraryPaths?:string[], archives?:Record<string,Uint8Array>, options?:string[], endian?:"big"|"little"}} args
+ * @returns {Promise<{log:string, exitCode:number, elf:Uint8Array|null, map:string|null, crash?:any}>}
+ */
+export const runMipsLd = runLd;
 
-// ── mips-elf-ld — GNU linker, .o + linker script → .elf ──────────────
-export async function runMipsLd(args) {
-  const { objects, linkScript, libraries = [], libraryPaths = [], options = [], endian = "big" } = args;
-  const archives = args.archives ?? {};
-  const inputFiles = [textFile("/work/link.ld", linkScript)];
-  for (const [name, bytes] of Object.entries(objects)) inputFiles.push(binaryFile("/work/" + name, bytes));
-  for (const [name, bytes] of Object.entries(archives)) inputFiles.push(binaryFile("/work/" + name, bytes));
-  const argv = [
-    endian === "little" ? "-EL" : "-EB",
-    "-T", "/work/link.ld",
-    "-o", "/work/main.elf",
-    "-Map=/work/main.map",
-    ...libraryPaths.flatMap((p) => ["-L", p]),
-    ...Object.keys(objects).map((n) => "/work/" + n),
-    ...libraries.map((l) => `-l${l}`),
-    ...options,
-  ];
-  const r = await runIsolated({
-    gluePath: mipsGlue("mips-elf-ld.mjs"),
-    argv, inputFiles,
-    outputFiles: [
-      { vfsPath: "/work/main.elf", encoding: "base64" },
-      { vfsPath: "/work/main.map", encoding: "utf8" },
-    ],
-  });
-  return { log: r.log, exitCode: r.exitCode, elf: getOutputBytes(r, "/work/main.elf"),
-    map: getOutputText(r, "/work/main.map") || null,
-    ...(r.crash ? { crash: r.crash, stage: "crash" } : {}) };
-}
-
-// ── mips-elf-objcopy — ELF → raw .bin ────────────────────────────────
-export async function runMipsObjcopy(args) {
-  const { elf, options = [] } = args;
-  const inputFiles = [binaryFile("/work/main.elf", elf)];
-  const argv = ["-O", "binary", ...options, "/work/main.elf", "/work/main.bin"];
-  const r = await runIsolated({
-    gluePath: mipsGlue("mips-elf-objcopy.mjs"),
-    argv, inputFiles,
-    outputFiles: [{ vfsPath: "/work/main.bin", encoding: "base64" }],
-  });
-  return { log: r.log, exitCode: r.exitCode, binary: getOutputBytes(r, "/work/main.bin"),
-    ...(r.crash ? { crash: r.crash, stage: "crash" } : {}) };
-}
+/**
+ * Strip an ELF down to a raw .bin.
+ * @param {{elf:Uint8Array, options?:string[]}} args
+ * @returns {Promise<{log:string, exitCode:number, binary:Uint8Array|null, crash?:any}>}
+ */
+export const runMipsObjcopy = runObjcopy;

@@ -5,25 +5,21 @@
 // #include that generated .h. Built by scripts/build-sjasm.sh.
 
 import { fileURLToPath } from "node:url";
-import { existsSync } from "node:fs";
 import path from "node:path";
+
+import { makeGlueResolver } from "../common/wasm-tool.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-function resolveGlue(name) {
-  // sjasm + bintos ship in romdev-toolchain-m68k-gcc (the Genesis toolchain
-  // package — same place as the m68k compiler they pair with). Resolve from
-  // there; fall back to a local copy under src/ for dev.
-  try {
-    const u = import.meta.resolve("romdev-toolchain-m68k-gcc");
-    const p = path.join(path.dirname(fileURLToPath(u)), "wasm", name);
-    if (existsSync(p)) return p;
-  } catch { /* package not resolvable — fall through to local */ }
-  const local = path.join(__dirname, "wasm", name);
-  if (existsSync(local)) return local;
-  throw new Error(`sjasm WASM not found: ${name} — install romdev-toolchain-m68k-gcc (or run scripts/build-sjasm.sh)`);
-}
+// sjasm + bintos ship in romdev-toolchain-m68k-gcc (the Genesis toolchain
+// package — same place as the m68k compiler they pair with); a local src/ copy
+// is the dev fallback. Lazy + memoized: resolve only on first use.
+const resolveGlue = makeGlueResolver({
+  pkg: "romdev-toolchain-m68k-gcc",
+  localDir: __dirname,
+  label: "sjasm",
+});
 
 let _sjasmFactory, _bintosFactory;
 async function loadSjasm() {
