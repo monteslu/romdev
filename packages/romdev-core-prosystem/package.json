@@ -1,6 +1,6 @@
 {
   "name": "romdev-core-prosystem",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "ProSystem libretro core (Atari 7800) for romdev, bundled as WASM.",
   "type": "module",
   "main": "index.js",
