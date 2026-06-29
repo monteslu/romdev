@@ -4,6 +4,27 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.71.1 — 2026-06-29
+
+Feedback from the first run against the `pret/pokeruby` GBA decompilation.
+
+- **Project-mode `entry` now resolves a NESTED path** (e.g. `entry:'src/main.c'`). The
+  recursive asset staging already walked subdirs, but entry resolution stayed top-level
+  only — so any decomp/SDK-layout project whose entry isn't at the repo root failed with
+  "entry not found." Now it resolves against the recursive file set, reads the nested file
+  as the entry **source**, accepts a bare filename when it uniquely matches one nested
+  file, and errors with a "did you mean `src/…`?" hint.
+- **`platform({op:'list'})` honors the `platform` filter** — returns just that one
+  platform's row instead of the whole 17-platform matrix (the biggest token sink reported:
+  ~17 KB → ~0.8 KB for one platform). New **`slim:true`** drops the verbose per-language
+  `note` + `quirks` prose (~60× smaller); detail stays behind `op:'doc'`/`op:'capabilities'`.
+- **`platform({op:'resolve'})` surfaces the toolchain(s)** + a note that the build
+  toolchain is WASM/harness-only (was core-paths-only, forcing `node_modules` spelunking).
+- **GBA `mental_model` "What's NOT bundled"** now calls out **agbcc's absence** (the real
+  blocker for byte-exact Gen-III decomps like pokeruby/pokeemerald) and adds a "romdev's
+  build model" section: `build` is single-shot compile→ROM, the toolchain can't back an
+  external Makefile, with the confirmed host agbcc recipe for matching builds.
+
 ## 0.71.0 — 2026-06-28
 
 ### N64 / PS1 / Dreamcast reach full parity: cpuState + audioDebug + GPU-rendering helper libs + 5 examples each
