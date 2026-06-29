@@ -367,7 +367,7 @@ export function registerAudioTools(server, z, sessionKey) {
     "sampled SFX fire' on Genesis is still record-and-FFT.",
     {
       op: z.enum(["inspect", "record"]).describe("inspect a sound chip's live state (single-frame, or a frames trace); or record audio to a WAV."),
-      chip: z.enum(["nes", "gb", "gba", "dsp", "psg", "ym2612", "sid", "mikey", "pce", "ay8910"]).optional().describe("op=inspect: which sound chip to decode (all 14 systems mapped)."),
+      chip: z.enum(["nes", "gb", "gba", "dsp", "psg", "ym2612", "sid", "mikey", "pce", "ay8910", "spu", "ai", "aica"]).optional().describe("op=inspect: which sound chip to decode. Tile systems: nes/gb/gba/dsp(SNES)/psg(SN76489)/ym2612(Genesis FM)/sid(C64)/mikey(Lynx)/pce/ay8910(MSX). 3D systems: spu (PS1, 24 ADPCM voices), ai (N64 AI output), aica (Dreamcast, 64 PCM/ADPCM channels)."),
       frames: z.number().int().min(1).max(60000).optional().describe("op=record: emulator frames to capture (default 180 = 3s NTSC). op=inspect: if set, TRACE the chip over N frames into a per-channel timeline; OMIT for a single-frame snapshot."),
       sampleEvery: z.number().int().min(1).default(1).describe("op=inspect trace: sample the chip only every Nth frame (thins a long trace; the last frame is always sampled). Changes on skipped frames surface at the next sampled frame, so >1 loses fine timing — keep at 1 to catch every transition."),
       path: z.string().optional().describe("op=record: absolute path to write the WAV (required for record)."),
