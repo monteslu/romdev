@@ -48,15 +48,20 @@ if ! grep -q "romdev_mips_regs_get" libretro/libretro.c; then
   rm -f libretro/libretro.o
 fi
 
-# romdev live-debug instrumentation (breakpoint/watch): romdev_debug.c into the
-# r4300 dir + hook write_rdram_dram (write watch) + the pure_interp step (pc-break
-# + coverage).
-if [ ! -f mupen64plus-core/src/r4300/romdev_debug.c ]; then
-  cp "$SCRIPT_DIR/patches/romdev-snippets/n64-debug.c" mupen64plus-core/src/r4300/romdev_debug.c
-  sed -i 's|\$(CORE_DIR)/src/r4300/r4300.c \\|$(CORE_DIR)/src/r4300/r4300.c \\\n\t$(CORE_DIR)/src/r4300/romdev_debug.c \\|' Makefile.common
-  perl -0pi -e 's/int write_rdram_dram\(void\* opaque, uint32_t address, uint32_t value, uint32_t mask\)\n\{/extern void romdev_on_write(unsigned int,unsigned int,unsigned int);\nint write_rdram_dram(void* opaque, uint32_t address, uint32_t value, uint32_t mask)\n{\n    romdev_on_write(address, value, 0);/ unless /romdev_on_write/' mupen64plus-core/src/ri/rdram.c
-  perl -0pi -e 's/void pure_interpreter\(void\)\n\{/extern int romdev_on_step(unsigned int);\nextern int stop;\nvoid pure_interpreter(void)\n{/ unless /romdev_on_step/' mupen64plus-core/src/r4300/pure_interp.c
-  perl -0pi -e 's/     InterpretOpcode\(\);\n   \}/     if (romdev_on_step(PC->addr)) { stop = 1; break; }\n     InterpretOpcode();\n   }/ unless /romdev_on_step\(PC/' mupen64plus-core/src/r4300/pure_interp.c
+# romdev live-debug instrumentation (0.80.0): the SHARED romdev_debug.{h,c} (the same
+# lib the classic cores link) + a thin N64 shim (n64-debug.c → romdev_n64_debug.c). The
+# shim adapts the core's call sites to the shared hooks. Stage both into the r4300 dir,
+# add them to Makefile.common, hook write_rdram_dram (write watch) + the pure_interp
+# step (pc-break + coverage + watchdog + single-step).
+if [ ! -f mupen64plus-core/src/r4300/romdev_n64_debug.c ]; then
+  RDBG_SRC="$SCRIPT_DIR/patches/romdev-snippets/../romdev-debug"
+  RDBG_SRC="$(cd "$SCRIPT_DIR/romdev-debug" && pwd)"
+  cp "$RDBG_SRC/romdev_debug.h" "$RDBG_SRC/romdev_debug.c" mupen64plus-core/src/r4300/
+  cp "$SCRIPT_DIR/patches/romdev-snippets/n64-debug.c" mupen64plus-core/src/r4300/romdev_n64_debug.c
+  sed -i 's|\$(CORE_DIR)/src/r4300/r4300.c \\|$(CORE_DIR)/src/r4300/r4300.c \\\n\t$(CORE_DIR)/src/r4300/romdev_debug.c \\\n\t$(CORE_DIR)/src/r4300/romdev_n64_debug.c \\|' Makefile.common
+  perl -0pi -e 's/int write_rdram_dram\(void\* opaque, uint32_t address, uint32_t value, uint32_t mask\)\n\{/extern void romdev_n64_write(unsigned int,unsigned int);\nint write_rdram_dram(void* opaque, uint32_t address, uint32_t value, uint32_t mask)\n{\n    romdev_n64_write(address, value);/ unless /romdev_n64_write/' mupen64plus-core/src/ri/rdram.c
+  perl -0pi -e 's/void pure_interpreter\(void\)\n\{/extern int romdev_n64_step(unsigned int);\nextern int stop;\nvoid pure_interpreter(void)\n{/ unless /romdev_n64_step/' mupen64plus-core/src/r4300/pure_interp.c
+  perl -0pi -e 's/     InterpretOpcode\(\);\n   \}/     if (romdev_n64_step(PC->addr)) { stop = 1; break; }\n     InterpretOpcode();\n   }/ unless /romdev_n64_step\(PC/' mupen64plus-core/src/r4300/pure_interp.c
   rm -f mupen64plus-core/src/ri/rdram.o mupen64plus-core/src/r4300/pure_interp.o
 fi
 
@@ -113,7 +118,7 @@ done
 # native-gles. Linking every object explicitly (like retroemu does) keeps the GL path.
 OBJ_FILES=$(find . -name "*.o" | tr '\n' ' ')
 
-EXPORTED='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_mips_regs_get","_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get","_romdev_regsnap_get","_romdev_watchdog_set","_romdev_ai_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free","_emscripten_GetProcAddress"]'
+EXPORTED='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_mips_regs_get","_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get","_romdev_regsnap_get","_romdev_watchdog_set","_romdev_irqblock_set","_romdev_ai_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free","_emscripten_GetProcAddress"]'
 EXPORTED_RT='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS","dynCall","GL"]'
 
 # GL link: glide64 renders the RDP through GLES2/WebGL2. native-gles owns the EGL
