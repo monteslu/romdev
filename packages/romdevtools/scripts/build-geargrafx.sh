@@ -45,28 +45,37 @@ else
   echo "No region patch yet — building stock geargrafx."
 fi
 
+# ── romdev shared debug lib (0.80.0) ─ stage romdev_debug.h into src/ (already on
+# the Makefile's -I$(SOURCE_DIR) path) so the inlines + libretro.cpp #include resolves.
+RDBG_SRC="$PROJECT_DIR/scripts/romdev-debug"
+cp "$RDBG_SRC/romdev_debug.h" "$RDBG_SRC/romdev_debug.c" "$DIR/src/"
+
 cd "$LIBRETRO"
 emmake make platform=emscripten clean >/dev/null 2>&1 || true
 find . -maxdepth 1 -name "*_libretro_emscripten.bc" -delete 2>/dev/null || true
 emmake make platform=emscripten -j"$(nproc)"
 
+# Compile the shared romdev_debug.c so its exports archive in below.
+emcc -c -O2 "$DIR/src/romdev_debug.c" -o "$DIR/src/romdev_debug.o"
+
 CORE_LIB=$(find . -maxdepth 1 -name "*_libretro_emscripten.bc" -print -quit)
 [ -z "$CORE_LIB" ] && { echo "FATAL: geargrafx build produced no .bc archive." >&2; exit 1; }
 mv "$CORE_LIB" "${CORE_LIB%.bc}.a"; CORE_LIB="${CORE_LIB%.bc}.a"
+# Add the shared romdev_debug.o so its exports link in.
+emar rcs "$CORE_LIB" "$DIR/src/romdev_debug.o"
 
 # Execution breakpoint + read watchpoint exports (this core has no WRITE watch).
 # Added when the patch's pcbreak hook is present in the built tree.
 BP_EXPORTS=""
-# cwd here is $LIBRETRO (platforms/libretro); libretro.cpp holds the exports.
-grep -rq "romdev_pcbreak_get" . 2>/dev/null && \
+# (0.80.0) the debug exports now live in the shared src/romdev_debug.c (staged above);
+# setReg/getReg + the VRAM watch stay in libretro.cpp. Gate on the staged lib + the
+# per-core sentinels so the export list still tracks what's actually built in.
+SENTINEL_DIRS=". $DIR/src/romdev_debug.c"
+grep -rq "romdev_pcbreak_get" $SENTINEL_DIRS 2>/dev/null && \
   BP_EXPORTS='"_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_watchdog_set","_romdev_regsnap_get","_romdev_irqblock_set","_romdev_vramwatch_set","_romdev_vramwatch_get",'
-# RE primitives round 2 (register read/write + range-watch + PC-coverage) — added
-# by the same patch as the pcbreak hook, gated on the round-2 sentinel export.
-grep -rq "romdev_cov_get" . 2>/dev/null && \
+grep -rq "romdev_cov_get" $SENTINEL_DIRS 2>/dev/null && \
   BP_EXPORTS="$BP_EXPORTS"'"_romdev_setreg","_romdev_getreg","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get",'
-# WRITE watchpoint (findWriter) — geargrafx gained a clean Write funnel, so this is
-# now supported on PCE too (gated on the watchpoint export sentinel).
-grep -rq "romdev_watchpoint_get" . 2>/dev/null && \
+grep -rq "romdev_watchpoint_get" $SENTINEL_DIRS 2>/dev/null && \
   BP_EXPORTS="$BP_EXPORTS"'"_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get",'
 EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set",'"$BP_EXPORTS"'"_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
 EXPORTED_RUNTIME='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS"]'
