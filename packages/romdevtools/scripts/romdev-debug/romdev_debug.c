@@ -62,6 +62,7 @@ static unsigned      pc_hits = 0;
 static unsigned      wd_limit = 0;         /* watchdog: max instrs (0=off) */
 static unsigned      wd_count = 0;
 static int           wd_tripped = 0;
+static int           pc_hit_kind = 0;      /* why the last dispatch froze: 1=pcbreak 2=watchdog */
 
 /* at-hit snapshots (filled by the core's shim; declared in the header) */
 unsigned romdev_snap_regs[ROMDEV_SNAP_REGS];
@@ -129,7 +130,7 @@ EMSCRIPTEN_KEEPALIVE
 void romdev_pcbreak_set(unsigned addr, int enabled, int step) {
     pc_addr = addr; pc_enabled = enabled ? 1 : 0;
     pc_step = step ? 2 : 0;                /* arm to 2 → one instr runs before stop */
-    pc_hit = 0; pc_last_pc = 0xFFFFFFFFu; pc_hits = 0;
+    pc_hit = 0; pc_last_pc = 0xFFFFFFFFu; pc_hits = 0; pc_hit_kind = 0;
     wd_tripped = 0; wd_count = 0;
     romdev_pcbrk_regs[0] = romdev_pcbrk_regs[1] = romdev_pcbrk_regs[2] =
         romdev_pcbrk_regs[3] = romdev_pcbrk_regs[4] = 0xFFFFFFFFu;
@@ -232,20 +233,24 @@ int romdev_on_dispatch(unsigned pc) {
     }
 cov_done:
     /* watchdog: force-stop a runaway after wd_limit instructions */
-    if (wd_limit) {
+    if (wd_limit && !pc_hit) {
         if (++wd_count >= wd_limit) {
-            wd_tripped = 1; pc_hit = 1; pc_last_pc = pc;
+            wd_tripped = 1; pc_hit = 1; pc_last_pc = pc; pc_hit_kind = 2;
             return 1;
         }
     }
     /* single-step: arm-to-2 countdown → one instruction runs, then freeze */
     if (pc_step > 0) {
-        if (--pc_step == 0) { pc_hit = 1; pc_last_pc = pc; pc_hits++; return 1; }
+        if (--pc_step == 0) { pc_hit = 1; pc_last_pc = pc; pc_hits++; pc_hit_kind = 1; return 1; }
     }
     /* PC breakpoint */
     if (pc_enabled && pc == pc_addr) {
-        pc_hit = 1; pc_last_pc = pc; pc_hits++;
+        pc_hit = 1; pc_last_pc = pc; pc_hits++; pc_hit_kind = 1;
         return 1;
     }
     return pc_hit; /* stay frozen until the host clears it (pcbreak_get/set) */
 }
+
+int romdev_pc_hit_kind(void) { return pc_hit_kind; }
+
+int romdev_is_frozen(void) { return pc_hit; }

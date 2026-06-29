@@ -111,8 +111,18 @@ int romdev_on_read(unsigned addr, unsigned char val, unsigned pc);
 /* Call once per instruction dispatch with the live PC. Drives coverage + the PC
  * breakpoint/watchdog. Returns 1 if the CPU should FREEZE (a pcbreak/watchdog hit
  * or single-step) — the core must then drain its cycle budget + return without
- * executing, and stay frozen until the host clears the hit. Returns 0 to run normally. */
+ * executing, and stay frozen until the host clears the hit. Returns 0 to run normally.
+ * When it returns 1, romdev_pc_hit_kind() says WHY (for the snapshot kind). */
 int romdev_on_dispatch(unsigned pc);
+
+/* After romdev_on_dispatch returns 1, the reason for the freeze (= the snapshot kind
+ * the core should take): 1 = pc-break/single-step, 2 = watchdog. 0 if no freeze. */
+int romdev_pc_hit_kind(void);
+
+/* True while the CPU is frozen on a pcbreak/watchdog hit (until the host clears it).
+ * A core checks this at the top of its run loop to STAY frozen — re-entering the loop
+ * would resume execution and drift the registers away from the hit instant. */
+int romdev_is_frozen(void);
 
 /* True when an armed write-watchpoint condition needs the pre-write value — lets a
  * core skip the (sometimes costly) old-value read on the hot path when no cond is set. */
