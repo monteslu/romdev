@@ -15,6 +15,8 @@ import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
+import { resolveToolBaseDir } from "../common/wasm-tool.js";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -23,21 +25,18 @@ const __dirname = path.dirname(__filename);
 // needs to link a target, so they must come from the same place as the WASM.
 // Resolve the package's base dir once; fall back to a local copy under src/
 // if present (transition / dev). The package is a hard dep of romdev.
-function resolveCc65BaseDir() {
-  try {
-    const u = import.meta.resolve("romdev-toolchain-cc65");
-    const dir = path.dirname(fileURLToPath(u));
-    if (existsSync(path.join(dir, "wasm", "cc65.js"))) return dir;
-  } catch { /* package not resolvable — fall through to local */ }
-  if (existsSync(path.join(__dirname, "wasm", "cc65.js"))) return __dirname;
-  throw new Error("cc65 WASM not found — install romdev-toolchain-cc65");
-}
 // Lazy + memoized: resolve (and possibly throw "not installed") only on the
 // first cc65 build (NES/C64/Atari7800/Lynx), not at module load — so booting
 // the server never touches this package unless cc65 is actually used. Resolve
 // the base dir once; derive the wasm + share dirs from it on demand.
 let _cc65Base;
-const cc65Base = () => (_cc65Base ??= resolveCc65BaseDir());
+const cc65Base = () =>
+  (_cc65Base ??= resolveToolBaseDir({
+    pkg: "romdev-toolchain-cc65",
+    sentinel: "wasm/cc65.js",
+    localDir: __dirname,
+    label: "cc65",
+  }));
 
 /** True if the cc65 build toolchain WASM (cc65 + ld65, in romdev-toolchain-cc65)
  *  is installed/resolvable, without throwing — for the catalog(status) capability
@@ -45,7 +44,7 @@ const cc65Base = () => (_cc65Base ??= resolveCc65BaseDir());
  *  reflects ld65 (the linker) availability. */
 export function cc65Available() {
   try {
-    const dir = resolveCc65BaseDir();
+    const dir = cc65Base();
     return existsSync(path.join(dir, "wasm", "cc65.js")) && existsSync(path.join(dir, "wasm", "ld65.js"));
   } catch { return false; }
 }

@@ -12,31 +12,19 @@
 // See `src/toolchains/index.js` SNES dispatch.
 
 import { fileURLToPath } from "node:url";
-import { existsSync } from "node:fs";
 import path from "node:path";
 
 import { runIsolated, textFile, binaryFile, getOutputBytes } from "../_worker/run.js";
+import { makeGlueResolver } from "../common/wasm-tool.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // wla-dx's WASM ships in romdev-platform-snes (the SNES platform is the only
-// consumer). Resolve from that package; fall back to a local copy under src/
-// if present (transition / dev). The package is a hard dep of romdev.
-function resolveWladxGlue(file) {
-  try {
-    const u = import.meta.resolve("romdev-platform-snes");
-    const p = path.join(path.dirname(fileURLToPath(u)), "wasm", file);
-    if (existsSync(p)) return p;
-  } catch { /* package not resolvable — fall through to local */ }
-  const local = path.join(__dirname, "wasm", file);
-  if (existsSync(local)) return local;
-  throw new Error(`wla-dx WASM (${file}) not found — install romdev-platform-snes`);
-}
-// Lazy + memoized per tool: resolve only on the first wla-dx (SNES asm) build
-// that uses each tool, not at module load.
-const _glue = {};
-const wladxGlue = (file) => (_glue[file] ??= resolveWladxGlue(file));
+// consumer); a local src/ copy is the dev fallback. Lazy + memoized per tool:
+// resolve only on the first wla-dx (SNES asm) build that uses each tool, not at
+// module load.
+const wladxGlue = makeGlueResolver({ pkg: "romdev-platform-snes", localDir: __dirname, label: "wla-dx" });
 
 /**
  * Assemble a single .asm source with wla-65816.
