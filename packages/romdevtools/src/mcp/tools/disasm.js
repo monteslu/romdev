@@ -1461,7 +1461,7 @@ export function registerDisasmTools(server, z) {
     "read/write); also walks the vector table. Banked carts are scanned PER BANK (all of the formats above) — " +
     "refs carry `prgBank` (NES) / `romBank` (everything else). LIMITATION: direct addressing only " +
     "(indirect/computed jumps are missed).\n" +
-    "── RE ENGINE (Rizin + Ghidra, all 14 platforms) ──\n" +
+    "── RE ENGINE (Rizin + Ghidra, all platforms incl. the 3D CPUs: MIPS R3000/R4300 + SH-4) ──\n" +
     "'functions' = Rizin auto-detected function list {address,size,nbbs,cc,callers,callees,looksLikeData}; the " +
     "structural map of an unknown ROM. Sorted REAL CODE FIRST (by nbbs/cc) — don't rank by `size`, which is a lie " +
     "(rizin folds data tables into giant pseudo-functions). `looksLikeData:true` (and the top-level `dataCount`) flags " +
