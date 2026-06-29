@@ -23,9 +23,6 @@ const HAS_MIPS_GCC = (() => {
   return existsSync(p);
 })();
 
-// the bundled N64 software-3D helper lib (n64.h / n64.c).
-const LIB_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src", "platforms", "n64", "lib", "c");
-
 test("N64: a toolchain-built homebrew boots + RENDERS on the GPU (glide64 GBI dlist)", { timeout: 180000 }, async () => {
   if (!HAS_MIPS_GCC) { console.log("mips-elf-gcc not built; skipping"); return; }
   const core = resolveCore("n64");
