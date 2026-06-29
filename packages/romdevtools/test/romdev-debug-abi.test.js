@@ -58,6 +58,11 @@ const MIGRATED_CORES = [
   { core: "geargrafx_libretro",       extra: ["_romdev_setreg", "_romdev_getreg", "_romdev_vramwatch_set", "_romdev_vramwatch_get"] },
   { core: "bluemsx_libretro",         extra: ["_romdev_setreg", "_romdev_getreg", "_romdev_vramwatch_set", "_romdev_vramwatch_get"] },
   { core: "mgba_libretro",            extra: ["_romdev_setreg", "_romdev_getreg"] },
+  // The newer cores migrated their divergent debug snippets onto the shared lib too.
+  // MIPS cores read CPU state via romdev_mips_regs_get (no setReg/getReg); they ship
+  // from their own binary packages (resolveWasm falls back to those).
+  { core: "parallel_n64_libretro",    extra: ["_romdev_mips_regs_get", "_romdev_ai_get"] },
+  { core: "pcsx_rearmed_libretro",    extra: ["_romdev_mips_regs_get", "_romdev_spu_get"] },
 ];
 
 for (const { core, extra } of MIGRATED_CORES) {

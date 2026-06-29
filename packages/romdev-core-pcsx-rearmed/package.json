@@ -1,6 +1,6 @@
 {
   "name": "romdev-core-pcsx-rearmed",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "PCSX-ReARMed libretro core (Sony PlayStation, HLE BIOS) for romdev, bundled as WASM with romdev's CPU + SPU + GPU-VRAM debug exports.",
   "type": "module",
   "main": "index.js",

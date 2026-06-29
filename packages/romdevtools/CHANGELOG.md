@@ -32,8 +32,18 @@ test makes any drift a hard failure.
   genesis 1249→738, mgba 934→437 lines). handy (65C02/Lynx) is the one remaining inline
   core (a migration attempt regressed CPU execution; reverted to its working baseline,
   deferred to a focused follow-up).
+- **The 3 newer cores too.** N64 (parallel-n64, MIPS R4300) and PS1 (pcsx-rearmed, MIPS
+  R3000) had their OWN *divergent* debug snippets (n64-debug.c / ps1-debug.c — a second
+  copy of the machinery with different var names + a 2-arg pcbreak_set that silently
+  dropped the host's step arg, so single-step was BROKEN). Both now use the shared lib via
+  a thin per-core shim (R4300/R3000 snapshot + RDRAM-mirror canon + call-site adapters) —
+  single-step fixed, watchdog real, coverage unified. Dreamcast (flycast, SH-4) and the PS1
+  HW alt (beetle-psx) have NO debug machinery — only read-only CPU/AICA/SPU state accessors
+  (irreducibly per-core), so nothing to migrate. **12 of 13 instrumented cores now share the
+  lib** (only Lynx remains inline). Also fixed 2 pre-existing PS1 build bugs a fresh clone
+  surfaced (a broken read-watch sed; a dangling `_romdev_vram_get` export defined nowhere).
 - **`test/romdev-debug-abi.test.js`**: loads each migrated core's wasm and asserts the
-  full shared ABI is exported — drift fails the suite (now guards all 10). 
+  full shared ABI is exported — drift fails the suite (now guards all 12, incl N64+PS1). 
   **`test/romdev-debug-lib.test.js`** compiles the lib natively and checks its logic.
 - Build wiring: each migrated `build-<core>.sh` stages + includes (`INCFLAGS_PLATFORM`)
   + compiles/archives `romdev_debug.c`. Author guide for the shim-only flow is in
