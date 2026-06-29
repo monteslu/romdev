@@ -35,9 +35,20 @@ else
   echo "Applied $PATCH_FILE"
 fi
 
+# ── romdev shared debug lib (0.80.0) ─ stage at the src root (on -I.) AND in
+# emucore/ so M6502.cxx's #include resolves; inject via INCFLAGS_PLATFORM too.
+RDBG_SRC="$PROJECT_DIR/scripts/romdev-debug"
+cp "$RDBG_SRC/romdev_debug.h" "$DIR/romdev_debug.h"
+cp "$RDBG_SRC/romdev_debug.h" "$DIR/stella/src/emucore/romdev_debug.h"
+cp "$RDBG_SRC/romdev_debug.c" "$DIR/romdev_debug.c"
+ROMDEV_INC="-I$DIR"
+
 emmake make platform=emscripten clean >/dev/null 2>&1 || true
 find . -maxdepth 2 -name "*_libretro_emscripten.a" -delete 2>/dev/null || true
-emmake make platform=emscripten -j"$(nproc)"
+emmake make platform=emscripten -j"$(nproc)" INCFLAGS_PLATFORM="$ROMDEV_INC"
+
+# Compile the shared romdev_debug.c so its exports archive in below.
+emcc -c -O2 "$DIR/romdev_debug.c" -o "$DIR/romdev_debug.o"
 
 CORE_LIB=$(find . -maxdepth 2 \( -name "*.a" -o -name "*_libretro_emscripten.bc" \) -print -quit)
 if [ -z "$CORE_LIB" ]; then
@@ -82,8 +93,10 @@ if [ -n "$LIBRETRO_COMMON" ]; then
   done
   [ -n "$COMMON_OBJS" ] && emar rcs "$CORE_LIB" $COMMON_OBJS
 fi
+# Add the shared romdev_debug.o so its exports link in.
+emar rcs "$CORE_LIB" "$DIR/romdev_debug.o"
 
-EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_watchdog_set","_romdev_regsnap_get","_romdev_setreg","_romdev_getreg","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
+EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_watchdog_set","_romdev_irqblock_set","_romdev_regsnap_get","_romdev_setreg","_romdev_getreg","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
 EXPORTED_RUNTIME='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS"]'
 
 mkdir -p "$OUT"

@@ -39,13 +39,23 @@ else
   echo "Applied $PATCH_FILE"
 fi
 
+# ── romdev shared debug lib (0.80.0) ────────────────────────────────────────
+# The watchpoint/readwatch/range/coverage/pcbreak/watchdog machinery + exports now
+# live in scripts/romdev-debug/romdev_debug.c (shared by all cores). Stage it at the
+# snes9x src root (already on the Makefile's -I$(CORE_DIR) path) so cpuexec.cpp/
+# getset.h/libretro.cpp's `#include "romdev_debug.h"` resolves; the per-core patch
+# keeps only the 65816 hooks + setReg/getReg + the VRAM-port watch + memory regions.
+RDBG_SRC="$PROJECT_DIR/scripts/romdev-debug"
+cp "$RDBG_SRC/romdev_debug.h" "$RDBG_SRC/romdev_debug.c" "$SNES9X_DIR/"
+ROMDEV_INC="-I$SNES9X_DIR"
+
 # Build the libretro static archive (.a) using snes9x's own emscripten
 # Makefile platform.
 cd "$SNES9X_DIR/libretro"
 emmake make platform=emscripten clean >/dev/null 2>&1 || true
 # Drop a stale renamed .a so find -quit can't pick it over the fresh build.
 find . -maxdepth 1 -name "*_libretro*.a" -delete 2>/dev/null || true
-emmake make platform=emscripten -j"$(nproc)"
+emmake make platform=emscripten -j"$(nproc)" INCFLAGS_PLATFORM="$ROMDEV_INC"
 
 # Locate the produced archive. snes9x may emit `.a` or `.bc` depending
 # on the upstream Makefile version; both are LLVM IR archives that emcc
@@ -59,6 +69,11 @@ if [[ "$CORE_LIB" == *.bc ]] && head -c 7 "$CORE_LIB" | grep -q '!<arch>'; then
   mv "$CORE_LIB" "${CORE_LIB%.bc}.a"
   CORE_LIB="${CORE_LIB%.bc}.a"
 fi
+
+# Compile the shared romdev_debug.c + add it to the archive so its exports link in.
+RDBG_OBJ="$SNES9X_DIR/romdev_debug.o"
+emcc -c -O2 "$SNES9X_DIR/romdev_debug.c" -o "$RDBG_OBJ"
+emar rcs "$CORE_LIB" "$RDBG_OBJ"
 
 # Final emcc link → WASM module. Flags mirror retroemu's snes9x.sh so the
 # core stays interchangeable with the rest of our bundled libretro cores.

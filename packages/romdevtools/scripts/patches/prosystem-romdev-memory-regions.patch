@@ -1,15 +1,83 @@
 diff --git a/core/Memory.c b/core/Memory.c
-index cb12bd3..93e7f50 100644
+index e3d9c40..a708e8c 100644
 --- a/core/Memory.c
 +++ b/core/Memory.c
-@@ -1,197 +1,312 @@
+@@ -30,6 +30,15 @@
+ #include "Cartridge.h"
+ #include "Tia.h"
+ #include "Riot.h"
++#include "Sally.h"   /* for sally_pc (the 6502 PC) — romdev watchpoint */
++
++/* romdev (0.80.0): the watch/range/coverage machinery + state live in the shared
++ * romdev_debug.c. Memory.c keeps only the 6502 memory_Read/Write hooks (which call
++ * romdev_on_read/on_write) + the Sally snapshot externs. */
++#include "romdev_debug.h"
++extern unsigned int romdev_sally_instr_pc;
++extern void         romdev_sally_snap(int kind);
++#define ROMDEV_RANGE_6502(a, v, iswr) do { (void)(a); (void)(v); (void)(iswr); } while (0)
+ 
+ uint8_t memory_ram[MEMORY_SIZE] = {0};
+ uint8_t memory_rom[MEMORY_SIZE] = {0};
+@@ -62,27 +71,43 @@ uint16_t memory_souper_GetRamAddress(uint16_t address)
+ 
+ uint8_t memory_Read(uint16_t address)
+ {
++   uint8_t romdev_rd_value;
+    switch ( address )
+    {
+       case INTIM:
+       case INTIM | 0x2:
+          memory_ram[INTFLG] &= 0x7f;
+-         return memory_ram[INTIM];
++         romdev_rd_value = memory_ram[INTIM];
++         goto romdev_rd_done;
+       case INTFLG:
+       case INTFLG | 0x2:
+          memory_ram[INTFLG] &= 0x7f;
+-         return memory_ram[INTFLG];
++         romdev_rd_value = memory_ram[INTFLG];
++         goto romdev_rd_done;
+       default:
+          if(cartridge_type == CARTRIDGE_TYPE_SOUPER && address >= 0x4000 && address < 0x8000)
+-            return memory_souper_ram[memory_souper_GetRamAddress(address)];
++         {
++            romdev_rd_value = memory_souper_ram[memory_souper_GetRamAddress(address)];
++            goto romdev_rd_done;
++         }
+          break;
+    }
+ 
+-   return memory_ram[address];
++   romdev_rd_value = memory_ram[address];
++
++romdev_rd_done:
++   if (romdev_on_read((unsigned int)address, romdev_rd_value, romdev_sally_instr_pc))
++      romdev_sally_snap(4);
++   return romdev_rd_value;
+ }
+ 
+ void memory_Write(uint16_t address, uint8_t data)
+ {
++   {
++      unsigned char romdev_oldv = romdev_wp_wants_old() ? memory_ram[address] : 0;
++      if (romdev_on_write((unsigned int)address, romdev_oldv, data, romdev_sally_instr_pc, 0xFFFFFFFFu))
++         romdev_sally_snap(3);
++   }
+    if(!memory_rom[address])
+    {
+       switch(address)
+diff --git a/core/ProSystem.c b/core/ProSystem.c
+index 40100a7..e0dc573 100644
+--- a/core/ProSystem.c
++++ b/core/ProSystem.c
+@@ -1,414 +1,425 @@
 -/* ----------------------------------------------------------------------------
 - *   ___  ___  ___  ___       ___  ____  ___  _  _
 - *  /__/ /__/ /  / /__  /__/ /__    /   /_   / |/ /
 - * /    / \  /__/ ___/ ___/ ___/   /   /__  /    /  emulator
 - *
 - * ----------------------------------------------------------------------------
-- * Copyright 2005 Greg Stanton
+- * Copyright 2003,2004 Greg Stanton
 - * 
 - * This program is free software; you can redistribute it and/or modify
 - * it under the terms of the GNU General Public License as published by
@@ -25,180 +93,397 @@ index cb12bd3..93e7f50 100644
 - * along with this program; if not, write to the Free Software
 - * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 - * ----------------------------------------------------------------------------
-- * Memory.c
+- * Palette.c
 - * ----------------------------------------------------------------------------
 - */
--#include <stdlib.h>
--#include "Memory.h"
+-#include "ProSystem.h"
+-#include <string.h>
 -#include "Equates.h"
 -#include "Bios.h"
 -#include "Cartridge.h"
--#include "Tia.h"
+-#include "Maria.h"
+-#include "Memory.h"
+-#include "Region.h"
 -#include "Riot.h"
+-#include "Sally.h"
+-#include "Tia.h"
+-#include "Pokey.h"
+-#include "BupChip.h"
+-#define PRO_SYSTEM_STATE_HEADER "PRO-SYSTEM STATE"
 -
--uint8_t memory_ram[MEMORY_SIZE] = {0};
--uint8_t memory_rom[MEMORY_SIZE] = {0};
--uint8_t memory_souper_ram[MEMORY_SOUPER_EXRAM_SIZE] = {0};
+-static uint32_t prosystem_cycles = 0;
+-uint16_t prosystem_frequency     = 60;
+-uint16_t prosystem_scanlines     = 262;
 -
--void memory_Reset(void)
+-void prosystem_Reset(void)
 -{
--   uint32_t index;
--   for(index = 0; index < MEMORY_SIZE; index++)
--   {
--      memory_ram[index] = 0;
--      memory_rom[index] = 1;
--   }
--   for(index = 0; index < 16384; index++)
--      memory_rom[index] = 0;
--}
+-   if(!cartridge_IsLoaded())
+-      return;
 -
--uint16_t memory_souper_GetRamAddress(uint16_t address)
--{
--  uint8_t page = (address - 0x4000) >> 12;
--  if((cartridge_souper_mode & CARTRIDGE_SOUPER_MODE_EXS) != 0)
--  {
--    if(address >= 0x6000 && address < 0x7000)
--      page = cartridge_souper_ram_page_bank[0];
--    else if(address >= 0x7000 && address < 0x8000)
--      page = cartridge_souper_ram_page_bank[1];
--  }
--  return (address & 0x0fff) | ((uint16_t)page << 12);
--}
+-   sally_Reset();
+-   region_Reset();
+-   tia_Clear();
+-   tia_Reset();
+-   pokey_Clear();
+-   pokey_Reset();
+-   memory_Reset();
+-   maria_Clear();
+-   maria_Reset();
+-   riot_Reset ();
 -
--uint8_t memory_Read(uint16_t address)
--{
--   switch ( address )
--   {
--      case INTIM:
--      case INTIM | 0x2:
--         memory_ram[INTFLG] &= 0x7f;
--         return memory_ram[INTIM];
--      case INTFLG:
--      case INTFLG | 0x2:
--         memory_ram[INTFLG] &= 0x7f;
--         return memory_ram[INTFLG];
--      default:
--         if(cartridge_type == CARTRIDGE_TYPE_SOUPER && address >= 0x4000 && address < 0x8000)
--            return memory_souper_ram[memory_souper_GetRamAddress(address)];
--         break;
--   }
--
--   return memory_ram[address];
--}
--
--void memory_Write(uint16_t address, uint8_t data)
--{
--   if(!memory_rom[address])
--   {
--      switch(address)
--      {
--         case WSYNC:
--            if(!(cartridge_flags & 128))
--               memory_ram[WSYNC] = true;
--            break;
--         case INPTCTRL:
--            if(data == 22 && cartridge_IsLoaded()) 
--               cartridge_Store(); 
--            else if(data == 2 && bios_enabled)
--               bios_Store();
--            break;
--         case INPT0:
--         case INPT1:
--         case INPT2:
--         case INPT3:
--         case INPT4:
--         case INPT5:
--            break;
--         case AUDC0:
--            tia_SetRegister(AUDC0, data);
--            break;
--         case AUDC1:
--            tia_SetRegister(AUDC1, data);
--            break;
--         case AUDF0:
--            tia_SetRegister(AUDF0, data);
--            break;
--         case AUDF1:
--            tia_SetRegister(AUDF1, data);
--            break;
--         case AUDV0:
--            tia_SetRegister(AUDV0, data);
--            break;
--         case AUDV1:
--            tia_SetRegister(AUDV1, data);
--            break;
--         case SWCHA:	/*gdement:  Writing here actually writes to DRA inside the RIOT chip.
--                       This value only indirectly affects output of SWCHA.  Ditto for SWCHB.*/
--            riot_SetDRA(data);
--            break;
--         case SWCHB:
--            riot_SetDRB(data);
--            break;
--         case TIM1T:
--         case TIM1T | 0x8:
--            riot_SetTimer(TIM1T, data);
--            break;
--         case TIM8T:
--         case TIM8T | 0x8:
--            riot_SetTimer(TIM8T, data);
--            break;
--         case TIM64T:
--         case TIM64T | 0x8:
--            riot_SetTimer(TIM64T, data);
--            break;
--         case T1024T:
--         case T1024T | 0x8:
--            riot_SetTimer(T1024T, data);
--            break;
--         default:
--            if(cartridge_type == CARTRIDGE_TYPE_SOUPER && address >= 0x4000 && address < 0x8000)
--            {
--               memory_souper_ram[memory_souper_GetRamAddress(address)] = data;
--               break;
--            }
--            memory_ram[address] = data;
--            if(address >= 8256 && address <= 8447)
--               memory_ram[address - 8192] = data;
--            else if(address >= 8512 && address <= 8702)
--               memory_ram[address - 8192] = data;
--            else if(address >= 64 && address <= 255)
--               memory_ram[address + 8192] = data;
--            else if(address >= 320 && address <= 511)
--               memory_ram[address + 8192] = data;
--            break;
--            /*TODO: gdement:  test here for debug port.  Don't put it in the switch because that will change behavior.*/
--      }
--   }
+-   if(bios_enabled)
+-      bios_Store();
 -   else
--      cartridge_Write(address, data);
+-      cartridge_Store();
+-
+-   prosystem_cycles = sally_ExecuteRES();
 -}
 -
--void memory_WriteROM(uint16_t address, uint16_t size, const uint8_t* data)
+-void prosystem_ExecuteFrame(const uint8_t* input)
 -{
--   uint32_t index;
+-   uint32_t scanlinesPerBupchipTick;
+-   uint32_t bupchipTickScanlines = 0;
+-   uint32_t currentBupchipTick   = 0;
 -
--   if((address + size) <= MEMORY_SIZE && data != NULL)
+-   riot_SetInput(input);
+-   scanlinesPerBupchipTick = (prosystem_scanlines - 1) / 4;
+-
+-   for(maria_scanline = 1; maria_scanline <= prosystem_scanlines; maria_scanline++)
 -   {
--      for(index = 0; index < size; index++)
+-      uint32_t cycles;
+-      if(maria_scanline == maria_displayArea.top)
+-         memory_ram[MSTAT] = 0;
+-      if(maria_scanline == maria_displayArea.bottom)
+-         memory_ram[MSTAT] = 128;
+-
+-      prosystem_cycles %= 456;
+-      while(prosystem_cycles < 28)
 -      {
--         memory_ram[address + index] = data[index];
--         memory_rom[address + index] = 1;
+-         cycles = sally_ExecuteInstruction();
+-         prosystem_cycles += (cycles << 2);
+-
+-         if(riot_timing)
+-            riot_UpdateTimer(cycles);
+-
+-         if(memory_ram[WSYNC] && !(cartridge_flags & CARTRIDGE_WSYNC_MASK))
+-         {
+-            prosystem_cycles  = 456;
+-            memory_ram[WSYNC] = false;
+-            break;
+-         }
+-      }
+-
+-      cycles = maria_RenderScanline();
+-      if(cartridge_flags & CARTRIDGE_CYCLE_STEALING_MASK)
+-         prosystem_cycles += cycles;
+-
+-      while(prosystem_cycles < 456)
+-      {
+-         cycles = sally_ExecuteInstruction();
+-         prosystem_cycles += (cycles << 2);
+-         if(riot_timing)
+-            riot_UpdateTimer(cycles);
+-
+-         if(memory_ram[WSYNC] && !(cartridge_flags & CARTRIDGE_WSYNC_MASK))
+-         {
+-            prosystem_cycles = 456;
+-            memory_ram[WSYNC] = false;
+-            break;
+-         }
+-      }
+-      tia_Process(2);
+-      if(cartridge_pokey)
+-         pokey_Process(2);
+-
+-      if(cartridge_bupchip)
+-      {
+-         bupchipTickScanlines++;
+-         if(bupchipTickScanlines == scanlinesPerBupchipTick)
+-         {
+-            bupchipTickScanlines = 0;
+-            bupchip_Process(currentBupchipTick);
+-            currentBupchipTick++;
+-         }
 -      }
 -   }
 -}
 -
--void memory_ClearROM(uint16_t address, uint16_t size)
+-bool prosystem_Save(char *buffer, bool fast_saves)
 -{
+-   uint32_t size = 0;
 -   uint32_t index;
 -
--   if((address + size) <= MEMORY_SIZE)
+-   for(index = 0; index < 16; index++)
+-      buffer[size + index] = PRO_SYSTEM_STATE_HEADER[index];
+-   size += 16;
+-
+-   buffer[size++] = 1;
+-   for(index = 0; index < 4; index++)
+-      buffer[size + index] = 0;
+-   size += 4;
+-
+-   for(index = 0; index < 32; index++)
+-      buffer[size + index] = cartridge_digest[index];
+-   size += 32;
+-
+-   buffer[size++] = sally_a;
+-   buffer[size++] = sally_x;
+-   buffer[size++] = sally_y;
+-   buffer[size++] = sally_p;
+-   buffer[size++] = sally_s;
+-   buffer[size++] = sally_pc.b.l;
+-   buffer[size++] = sally_pc.b.h;
+-   buffer[size++] = cartridge_bank;
+-
+-   for(index = 0; index < 16384; index++)
+-      buffer[size + index] = memory_ram[index];
+-   size += 16384;
+-
+-   if (fast_saves)
 -   {
--      for(index = 0; index < size; index++)
+-      if (bios_enabled)
 -      {
--         memory_ram[address + index] = 0;
--         memory_rom[address + index] = 0;
+-         save_uint32_to_buffer(buffer, &size, bios_size);
+-         for(index = MEMORY_SIZE - bios_size; index <= MEMORY_SIZE; index++)
+-            buffer[size + index] = memory_ram[index];
+-         size += bios_size;
 -      }
+- 
+-      for(index = 0; index < TIA_BUFFER_SIZE; index++)
+-         buffer[size + index] = tia_buffer[index];
+-      size += TIA_BUFFER_SIZE;
+-
+-      for(index = 0; index < 2; index++)
+-      {
+-         buffer[size++] = tia_volume[index];
+-         buffer[size++] = tia_counterMax[index];
+-         buffer[size++] = tia_counter[index];
+-         buffer[size++] = tia_audc[index];
+-         buffer[size++] = tia_audf[index];
+-         buffer[size++] = tia_audv[index];
+-
+-         save_uint32_to_buffer(buffer, &size, tia_poly4Cntr[index]);
+-         save_uint32_to_buffer(buffer, &size, tia_poly5Cntr[index]);
+-         save_uint32_to_buffer(buffer, &size, tia_poly9Cntr[index]);
+-      }
+-      buffer[size++] = tia_soundCntr;
+-
+-      save_uint32_to_buffer(buffer, &size, pokey_soundCntr);
+-
+-      for(index = 0; index < 4; index++)
+-      {
+-         buffer[size++] = pokey_audf[index];
+-         buffer[size++] = pokey_audc[index];
+-         buffer[size++] = pokey_output[index];
+-         buffer[size++] = pokey_outVol[index];
+-      }
+-      buffer[size++] = pokey_audctl;
+-
+-      save_uint32_to_buffer(buffer, &size, pokey_poly17Size);
+-      save_uint32_to_buffer(buffer, &size, pokey_polyAdjust);
+-      save_uint32_to_buffer(buffer, &size, pokey_poly04Cntr);
+-      save_uint32_to_buffer(buffer, &size, pokey_poly05Cntr);
+-      save_uint32_to_buffer(buffer, &size, pokey_poly17Cntr);
+-
+-      for(index = 0; index < 4; index++)
+-      {
+-         save_uint32_to_buffer(buffer, &size, pokey_divideMax[index]);
+-         save_uint32_to_buffer(buffer, &size, pokey_divideCount[index]);
+-      }
+-
+-      save_uint32_to_buffer(buffer, &size, pokey_sampleMax);
+-
+-      for(index = 0; index < 2; index++)
+-      {
+-         save_uint32_to_buffer(buffer, &size, pokey_sampleCount[index]);
+-      }
+-
+-      save_uint32_to_buffer(buffer, &size, pokey_baseMultiplier);
 -   }
+-
+-   if(cartridge_type == CARTRIDGE_TYPE_SUPERCART_RAM)
+-   {
+-      for(index = 0; index < 16384; index++)
+-         buffer[size + index] = memory_ram[16384 + index];
+-      size += 16384;
+-   }
+-   else if(cartridge_type == CARTRIDGE_TYPE_SOUPER)
+-   {
+-      buffer[size++] = cartridge_souper_chr_bank[0];
+-      buffer[size++] = cartridge_souper_chr_bank[1];
+-      buffer[size++] = cartridge_souper_mode;
+-      buffer[size++] = cartridge_souper_ram_page_bank[0];
+-      buffer[size++] = cartridge_souper_ram_page_bank[1];
+-      for(index = 0; index < sizeof(memory_souper_ram); index++)
+-         buffer[size + index] = memory_souper_ram[index];
+-      size += sizeof(memory_souper_ram);
+-      buffer[size++] = bupchip_flags;
+-      buffer[size++] = bupchip_volume;
+-      buffer[size++] = bupchip_current_song;
+-   }
+-
+-   return true;
+-}
+-
+-bool prosystem_Load(const char *buffer, bool fast_saves)
+-{
+-   uint32_t index;
+-   char digest[33] = {0};
+-   uint32_t offset = 0;
+-
+-   for(index = 0; index < 16; index++)
+-   {
+-      /* File is not a valid ProSystem save state. */
+-      if(buffer[offset + index] != PRO_SYSTEM_STATE_HEADER[index])
+-         return false;
+-   }
+-   offset += 16;
+-   buffer[offset++];
+-
+-   for(index = 0; index < 4; index++);
+-   offset += 4;
+-
+-   for(index = 0; index < 32; index++)
+-      digest[index] = buffer[offset + index];
+-
+-   offset += 32;
+-
+-   /* Does not match loaded cartridge digest? */
+-   if(strcmp(cartridge_digest, digest) != 0)
+-      return false;
+-
+-   sally_a      = buffer[offset++];
+-   sally_x      = buffer[offset++];
+-   sally_y      = buffer[offset++];
+-   sally_p      = buffer[offset++];
+-   sally_s      = buffer[offset++];
+-   sally_pc.b.l = buffer[offset++];
+-   sally_pc.b.h = buffer[offset++];
+-
+-   cartridge_StoreBank(buffer[offset++]);
+-
+-   for(index = 0; index < 16384; index++)
+-      memory_ram[index] = buffer[offset + index];
+-   offset += 16384;
+-
+-   if (fast_saves)
+-   {
+-      if (bios_enabled)
+-      {
+-         bios_size = read_uint32_from_buffer(buffer, &offset);
+-         for(index = MEMORY_SIZE - bios_size; index <= MEMORY_SIZE; index++)
+-            memory_ram[index] = buffer[offset + index];
+-         offset += bios_size;
+-      }
+-
+-      for(index = 0; index < TIA_BUFFER_SIZE; index++)
+-         tia_buffer[index] = buffer[offset + index];
+-      offset += TIA_BUFFER_SIZE;
+-
+-      for(index = 0; index < 2; index++)
+-      {
+-         tia_volume[index] = buffer[offset++];
+-         tia_counterMax[index] = buffer[offset++];
+-         tia_counter[index] = buffer[offset++];
+-         tia_audc[index] = buffer[offset++];
+-         tia_audf[index] = buffer[offset++];
+-         tia_audv[index] = buffer[offset++];
+-         tia_poly4Cntr[index] = read_uint32_from_buffer(buffer, &offset);
+-         tia_poly5Cntr[index] = read_uint32_from_buffer(buffer, &offset);
+-         tia_poly9Cntr[index] = read_uint32_from_buffer(buffer, &offset);
+-      }
+-      tia_soundCntr = buffer[offset++];
+-
+-      pokey_soundCntr = read_uint32_from_buffer(buffer, &offset);
+-
+-      for(index = 0; index < 4; index++)
+-      {
+-         pokey_audf[index] = buffer[offset++];
+-         pokey_audc[index] = buffer[offset++];
+-         pokey_output[index] = buffer[offset++];
+-         pokey_outVol[index] = buffer[offset++];
+-      }
+-      pokey_audctl = buffer[offset++];
+-
+-      pokey_poly17Size = read_uint32_from_buffer(buffer, &offset);
+-      pokey_polyAdjust = read_uint32_from_buffer(buffer, &offset);
+-      pokey_poly04Cntr = read_uint32_from_buffer(buffer, &offset);
+-      pokey_poly05Cntr = read_uint32_from_buffer(buffer, &offset);
+-      pokey_poly17Cntr = read_uint32_from_buffer(buffer, &offset);
+-
+-      for(index = 0; index < 4; index++)
+-      {
+-         pokey_divideMax[index] = read_uint32_from_buffer(buffer, &offset);
+-         pokey_divideCount[index] = read_uint32_from_buffer(buffer, &offset);
+-      }
+-
+-      pokey_sampleMax = read_uint32_from_buffer(buffer, &offset);
+-
+-      for(index = 0; index < 2; index++)
+-      {
+-         pokey_sampleCount[index] = read_uint32_from_buffer(buffer, &offset);
+-      }
+-
+-      pokey_baseMultiplier = read_uint32_from_buffer(buffer, &offset);
+-   }
+-
+-   if(cartridge_type == CARTRIDGE_TYPE_SUPERCART_RAM)
+-   {
+-      for(index = 0; index < 16384; index++)
+-         memory_ram[16384 + index] = buffer[offset + index];
+-      offset += 16384; 
+-   }
+-   else if(cartridge_type == CARTRIDGE_TYPE_SOUPER)
+-   {
+-      cartridge_souper_chr_bank[0] = buffer[offset++];
+-      cartridge_souper_chr_bank[1] = buffer[offset++];
+-      cartridge_souper_mode = buffer[offset++];
+-      cartridge_souper_ram_page_bank[0] = buffer[offset++];
+-      cartridge_souper_ram_page_bank[1] = buffer[offset++];
+-      for(index = 0; index < sizeof(memory_souper_ram); index++)
+-         memory_souper_ram[index] = buffer[offset++];
+-      bupchip_flags = buffer[offset++];
+-      bupchip_volume = buffer[offset++];
+-      bupchip_current_song = buffer[offset++];
+-      bupchip_StateLoaded();
+-   }
+-
+-   return true;
+-}
+-
+-void prosystem_Close(bool persistent_data)
+-{
+-   bupchip_Release();
+-   cartridge_Release(persistent_data);
+-   maria_Reset();
+-   maria_Clear();
+-   memory_Reset();
+-   tia_Reset();
+-   tia_Clear();
+-}
+-
+-uint32_t read_uint32_from_buffer(const char* buffer, uint32_t* offset)
+-{
+-    uint32_t index = *offset;
+-    *offset += 8;
+-    return (uint32_t)buffer[index]     << 28 |
+-           (uint32_t)buffer[index + 1] << 24 |
+-           (uint32_t)buffer[index + 2] << 20 |
+-           (uint32_t)buffer[index + 3] << 16 |
+-           (uint32_t)buffer[index + 4] << 12 |
+-           (uint32_t)buffer[index + 5] << 8  |
+-           (uint32_t)buffer[index + 6] << 4  |
+-           (uint32_t)buffer[index + 7];
+-}
+-
+-void save_uint32_to_buffer(char* buffer, uint32_t* size, uint32_t data)
+-{
+-   int i;
+-   uint8_t shiftby = 32;
+-   uint32_t index = *size;
+-   *size += 8;
+-   for (i = 0; i < 8; i++)
+-      buffer[index++] = (data >> (shiftby -= 4)) & 0xF;
 -}
 +/* ----------------------------------------------------------------------------
 + *   ___  ___  ___  ___       ___  ____  ___  _  _
@@ -206,7 +491,7 @@ index cb12bd3..93e7f50 100644
 + * /    / \  /__/ ___/ ___/ ___/   /   /__  /    /  emulator
 + *
 + * ----------------------------------------------------------------------------
-+ * Copyright 2005 Greg Stanton
++ * Copyright 2003,2004 Greg Stanton
 + * 
 + * This program is free software; you can redistribute it and/or modify
 + * it under the terms of the GNU General Public License as published by
@@ -222,405 +507,433 @@ index cb12bd3..93e7f50 100644
 + * along with this program; if not, write to the Free Software
 + * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 + * ----------------------------------------------------------------------------
-+ * Memory.c
++ * Palette.c
 + * ----------------------------------------------------------------------------
 + */
-+#include <stdlib.h>
-+#include "Memory.h"
++#include "ProSystem.h"
++#include <string.h>
 +#include "Equates.h"
 +#include "Bios.h"
 +#include "Cartridge.h"
-+#include "Tia.h"
++#include "Maria.h"
++#include "Memory.h"
++#include "Region.h"
 +#include "Riot.h"
-+#include "Sally.h"   /* for sally_pc (the 6502 PC) — romdev watchpoint */
++#include "Sally.h"
++#include "Tia.h"
++#include "Pokey.h"
++#include "BupChip.h"
++#define PRO_SYSTEM_STATE_HEADER "PRO-SYSTEM STATE"
 +
-+/* romdev instruction-level write watchpoint state (hook in memory_Write). */
-+unsigned int  romdev_wp_addr     = 0;
-+int           romdev_wp_enabled  = 0;
-+unsigned int  romdev_wp_last_pc  = 0xFFFFFFFF;
-+/* at-hit snapshot helpers — defined in Sally.c (see comment there) */
-+extern unsigned int romdev_sally_instr_pc;
-+extern void         romdev_sally_snap(int kind);
-+unsigned char romdev_wp_last_val = 0;
-+unsigned char romdev_wp_last_old = 0;
-+int           romdev_wp_cond     = 0;
-+unsigned char romdev_wp_cond_val = 0;
-+unsigned int  romdev_wp_hits     = 0;
-+static int romdev_wp_cond_ok(unsigned char oldv, unsigned char v) {
-+   switch (romdev_wp_cond) {
-+      case 1:  return v > oldv;
-+      case 2:  return v < oldv;
-+      case 3:  return v == romdev_wp_cond_val;
-+      default: return 1;
-+   }
-+}
++static uint32_t prosystem_cycles = 0;
++uint16_t prosystem_frequency     = 60;
++uint16_t prosystem_scanlines     = 262;
 +
-+/* romdev instruction-level READ watchpoint state (mirror of the write watch;
-+ * hook at the tail of memory_Read). Records the 6502 PC (sally_pc.w) of the
-+ * instruction that READ a watched address, the value read, and a hit count.
-+ * Exported via romdev_readwatch_* in libretro.c. */
-+unsigned int  romdev_rd_addr     = 0;
-+int           romdev_rd_enabled  = 0;
-+unsigned int  romdev_rd_last_pc  = 0xFFFFFFFF;
-+unsigned char romdev_rd_last_val = 0;
-+unsigned int  romdev_rd_hits     = 0;
-+
-+/* ─── romdev RE primitives round 2 (range-watch + PC-coverage) ─────────────
-+ * RANGE watch (discovery): log EVERY {pc,addr,value} that reads or writes an
-+ * address in [lo,hi] over a window — not stop-on-first. Hooked into the same
-+ * memory_Read / memory_Write paths as the single-address watch above. Ring
-+ * buffer; the host drains it via romdev_range_get (defined in libretro.c). The
-+ * pc recorded is sally_pc.w, the executing instruction. */
-+#define ROMDEV_RANGE_CAP 4096
-+unsigned int  romdev_range_lo      = 0;
-+unsigned int  romdev_range_hi      = 0;
-+int           romdev_range_enabled = 0;
-+int           romdev_range_mode    = 0;     /* 1=read, 2=write, 3=both */
-+unsigned int  romdev_range_pc  [ROMDEV_RANGE_CAP];
-+unsigned int  romdev_range_addr[ROMDEV_RANGE_CAP];
-+unsigned char romdev_range_val [ROMDEV_RANGE_CAP];
-+unsigned int  romdev_range_count   = 0;     /* total events seen (may exceed CAP) */
-+unsigned int  romdev_range_stored  = 0;     /* events actually stored (<= CAP) */
-+
-+/* PC COVERAGE log (discovery): record DISTINCT PCs executed within an address
-+ * window [lo,hi] over a run — "what code runs here?". Linear de-dup against the
-+ * stored set (cheap for the small windows this targets). The execute-loop hook
-+ * lives in core/Sally.c. */
-+#define ROMDEV_COV_CAP 8192
-+unsigned int  romdev_cov_lo      = 0;
-+unsigned int  romdev_cov_hi      = 0;
-+int           romdev_cov_enabled = 0;
-+unsigned int  romdev_cov_pcs[ROMDEV_COV_CAP];
-+unsigned int  romdev_cov_count   = 0;       /* distinct PCs stored (<= CAP) */
-+unsigned int  romdev_cov_total   = 0;       /* total in-range dispatches seen */
-+
-+/* Append one range-watch event (called from the read/write hooks below). */
-+void romdev_range_log(unsigned int pc, unsigned int addr, unsigned char val)
-+{
-+   romdev_range_count++;
-+   if (romdev_range_stored < ROMDEV_RANGE_CAP) {
-+      romdev_range_pc  [romdev_range_stored] = pc;
-+      romdev_range_addr[romdev_range_stored] = addr;
-+      romdev_range_val [romdev_range_stored] = val;
-+      romdev_range_stored++;
-+   }
-+}
-+
-+/* Record a distinct in-window PC for the coverage log. */
-+void romdev_cov_log(unsigned int pc)
-+{
-+   unsigned int i;
-+   romdev_cov_total++;
-+   for (i = 0; i < romdev_cov_count; i++) if (romdev_cov_pcs[i] == pc) return;
-+   if (romdev_cov_count < ROMDEV_COV_CAP) romdev_cov_pcs[romdev_cov_count++] = pc;
-+}
-+
-+/* romdev RANGE watch hook macro for the 6502 read/write paths. `iswr` is 1 for a
-+ * write, 0 for a read; romdev_range_mode 1=read 2=write 3=both. pc is sally_pc.w,
-+ * the executing instruction. (Param is named `iswr` not `w` so it doesn't collide
-+ * with the `.w` member of the sally_pc pair.) Cheap when disabled (one int test). */
-+#define ROMDEV_RANGE_6502(a, v, iswr) do { \
-+   if (romdev_range_enabled && (romdev_range_mode & ((iswr) ? 2 : 1)) \
-+       && (unsigned int)(a) >= romdev_range_lo && (unsigned int)(a) <= romdev_range_hi) { \
-+      romdev_range_log(sally_pc.w, (unsigned int)(a), (unsigned char)(v)); \
-+   } \
-+} while (0)
-+
-+uint8_t memory_ram[MEMORY_SIZE] = {0};
-+uint8_t memory_rom[MEMORY_SIZE] = {0};
-+uint8_t memory_souper_ram[MEMORY_SOUPER_EXRAM_SIZE] = {0};
-+
-+void memory_Reset(void)
-+{
-+   uint32_t index;
-+   for(index = 0; index < MEMORY_SIZE; index++)
-+   {
-+      memory_ram[index] = 0;
-+      memory_rom[index] = 1;
-+   }
-+   for(index = 0; index < 16384; index++)
-+      memory_rom[index] = 0;
-+}
-+
-+uint16_t memory_souper_GetRamAddress(uint16_t address)
-+{
-+  uint8_t page = (address - 0x4000) >> 12;
-+  if((cartridge_souper_mode & CARTRIDGE_SOUPER_MODE_EXS) != 0)
-+  {
-+    if(address >= 0x6000 && address < 0x7000)
-+      page = cartridge_souper_ram_page_bank[0];
-+    else if(address >= 0x7000 && address < 0x8000)
-+      page = cartridge_souper_ram_page_bank[1];
-+  }
-+  return (address & 0x0fff) | ((uint16_t)page << 12);
-+}
-+
-+uint8_t memory_Read(uint16_t address)
-+{
-+   uint8_t romdev_rd_value;
-+   switch ( address )
-+   {
-+      case INTIM:
-+      case INTIM | 0x2:
-+         memory_ram[INTFLG] &= 0x7f;
-+         romdev_rd_value = memory_ram[INTIM];
-+         goto romdev_rd_done;
-+      case INTFLG:
-+      case INTFLG | 0x2:
-+         memory_ram[INTFLG] &= 0x7f;
-+         romdev_rd_value = memory_ram[INTFLG];
-+         goto romdev_rd_done;
-+      default:
-+         if(cartridge_type == CARTRIDGE_TYPE_SOUPER && address >= 0x4000 && address < 0x8000)
-+         {
-+            romdev_rd_value = memory_souper_ram[memory_souper_GetRamAddress(address)];
-+            goto romdev_rd_done;
-+         }
-+         break;
-+   }
-+
-+   romdev_rd_value = memory_ram[address];
-+
-+romdev_rd_done:
-+   if (romdev_rd_enabled && (unsigned int)address == romdev_rd_addr) {
-+      romdev_rd_last_pc = romdev_sally_instr_pc; romdev_rd_last_val = romdev_rd_value; romdev_rd_hits++;
-+      romdev_sally_snap(4);
-+   }
-+   ROMDEV_RANGE_6502(address, romdev_rd_value, 0);
-+   return romdev_rd_value;
-+}
-+
-+void memory_Write(uint16_t address, uint8_t data)
-+{
-+   if (romdev_wp_enabled && (unsigned int)address == romdev_wp_addr) {
-+      unsigned char romdev_oldv = romdev_wp_cond ? memory_ram[address] : 0;
-+      if (romdev_wp_cond_ok(romdev_oldv, data)) {
-+         romdev_wp_last_pc = romdev_sally_instr_pc; romdev_wp_last_val = data; romdev_wp_last_old = romdev_oldv; romdev_wp_hits++;
-+         romdev_sally_snap(3);
-+      }
-+   }
-+   ROMDEV_RANGE_6502(address, data, 1);
-+   if(!memory_rom[address])
-+   {
-+      switch(address)
-+      {
-+         case WSYNC:
-+            if(!(cartridge_flags & 128))
-+               memory_ram[WSYNC] = true;
-+            break;
-+         case INPTCTRL:
-+            if(data == 22 && cartridge_IsLoaded()) 
-+               cartridge_Store(); 
-+            else if(data == 2 && bios_enabled)
-+               bios_Store();
-+            break;
-+         case INPT0:
-+         case INPT1:
-+         case INPT2:
-+         case INPT3:
-+         case INPT4:
-+         case INPT5:
-+            break;
-+         case AUDC0:
-+            tia_SetRegister(AUDC0, data);
-+            break;
-+         case AUDC1:
-+            tia_SetRegister(AUDC1, data);
-+            break;
-+         case AUDF0:
-+            tia_SetRegister(AUDF0, data);
-+            break;
-+         case AUDF1:
-+            tia_SetRegister(AUDF1, data);
-+            break;
-+         case AUDV0:
-+            tia_SetRegister(AUDV0, data);
-+            break;
-+         case AUDV1:
-+            tia_SetRegister(AUDV1, data);
-+            break;
-+         case SWCHA:	/*gdement:  Writing here actually writes to DRA inside the RIOT chip.
-+                       This value only indirectly affects output of SWCHA.  Ditto for SWCHB.*/
-+            riot_SetDRA(data);
-+            break;
-+         case SWCHB:
-+            riot_SetDRB(data);
-+            break;
-+         case TIM1T:
-+         case TIM1T | 0x8:
-+            riot_SetTimer(TIM1T, data);
-+            break;
-+         case TIM8T:
-+         case TIM8T | 0x8:
-+            riot_SetTimer(TIM8T, data);
-+            break;
-+         case TIM64T:
-+         case TIM64T | 0x8:
-+            riot_SetTimer(TIM64T, data);
-+            break;
-+         case T1024T:
-+         case T1024T | 0x8:
-+            riot_SetTimer(T1024T, data);
-+            break;
-+         default:
-+            if(cartridge_type == CARTRIDGE_TYPE_SOUPER && address >= 0x4000 && address < 0x8000)
-+            {
-+               memory_souper_ram[memory_souper_GetRamAddress(address)] = data;
-+               break;
-+            }
-+            memory_ram[address] = data;
-+            if(address >= 8256 && address <= 8447)
-+               memory_ram[address - 8192] = data;
-+            else if(address >= 8512 && address <= 8702)
-+               memory_ram[address - 8192] = data;
-+            else if(address >= 64 && address <= 255)
-+               memory_ram[address + 8192] = data;
-+            else if(address >= 320 && address <= 511)
-+               memory_ram[address + 8192] = data;
-+            break;
-+            /*TODO: gdement:  test here for debug port.  Don't put it in the switch because that will change behavior.*/
-+      }
-+   }
-+   else
-+      cartridge_Write(address, data);
-+}
-+
-+void memory_WriteROM(uint16_t address, uint16_t size, const uint8_t* data)
-+{
-+   uint32_t index;
-+
-+   if((address + size) <= MEMORY_SIZE && data != NULL)
-+   {
-+      for(index = 0; index < size; index++)
-+      {
-+         memory_ram[address + index] = data[index];
-+         memory_rom[address + index] = 1;
-+      }
-+   }
-+}
-+
-+void memory_ClearROM(uint16_t address, uint16_t size)
-+{
-+   uint32_t index;
-+
-+   if((address + size) <= MEMORY_SIZE)
-+   {
-+      for(index = 0; index < size; index++)
-+      {
-+         memory_ram[address + index] = 0;
-+         memory_rom[address + index] = 0;
-+      }
-+   }
-+}
-diff --git a/core/ProSystem.c b/core/ProSystem.c
-index 753035e..e43551e 100644
---- a/core/ProSystem.c
-+++ b/core/ProSystem.c
-@@ -42,6 +42,13 @@ static uint32_t prosystem_cycles = 0;
- uint16_t prosystem_frequency     = 60;
- uint16_t prosystem_scanlines     = 262;
- 
 +/* romdev PC breakpoint hit flag — set by the execute hook in core/Sally.c when
 + * the CPU reaches the breakpoint PC. On a hit sally_ExecuteInstruction returns
 + * WITHOUT advancing PC or consuming cycles, so the per-frame cycle loops below
 + * would spin forever; we must drain the budget and break out so retro_run still
 + * returns this frame (leaving it incomplete = infinite hang). */
-+extern volatile int romdev_pc_hit;
++#include "romdev_debug.h"   /* romdev (0.80.0): romdev_is_frozen() — the shared freeze flag */
 +
- void prosystem_Reset(void)
- {
-    if(!cartridge_IsLoaded())
-@@ -87,6 +94,7 @@ void prosystem_ExecuteFrame(const uint8_t* input)
-       while(prosystem_cycles < 28)
-       {
-          cycles = sally_ExecuteInstruction();
-+         if(romdev_pc_hit) { prosystem_cycles = 456; break; }
-          prosystem_cycles += (cycles << 2);
- 
-          if(riot_timing)
-@@ -99,6 +107,7 @@ void prosystem_ExecuteFrame(const uint8_t* input)
-             break;
-          }
-       }
-+      if(romdev_pc_hit) break;
- 
-       cycles = maria_RenderScanline();
-       if(cartridge_flags & CARTRIDGE_CYCLE_STEALING_MASK)
-@@ -107,6 +116,7 @@ void prosystem_ExecuteFrame(const uint8_t* input)
-       while(prosystem_cycles < 456)
-       {
-          cycles = sally_ExecuteInstruction();
-+         if(romdev_pc_hit) { prosystem_cycles = 456; break; }
-          prosystem_cycles += (cycles << 2);
-          if(riot_timing)
-             riot_UpdateTimer(cycles);
-@@ -118,6 +128,7 @@ void prosystem_ExecuteFrame(const uint8_t* input)
-             break;
-          }
-       }
-+      if(romdev_pc_hit) break;
-       tia_Process(2);
-       if(cartridge_pokey)
-          pokey_Process(2);
++void prosystem_Reset(void)
++{
++   if(!cartridge_IsLoaded())
++      return;
++
++   sally_Reset();
++   region_Reset();
++   tia_Clear();
++   tia_Reset();
++   pokey_Clear();
++   pokey_Reset();
++   memory_Reset();
++   maria_Clear();
++   maria_Reset();
++   riot_Reset ();
++
++   if(bios_enabled)
++      bios_Store();
++   else
++      cartridge_Store();
++
++   prosystem_cycles = sally_ExecuteRES();
++}
++
++void prosystem_ExecuteFrame(const uint8_t* input)
++{
++   uint32_t scanlinesPerBupchipTick;
++   uint32_t bupchipTickScanlines = 0;
++   uint32_t currentBupchipTick   = 0;
++
++   riot_SetInput(input);
++   scanlinesPerBupchipTick = (prosystem_scanlines - 1) / 4;
++
++   for(maria_scanline = 1; maria_scanline <= prosystem_scanlines; maria_scanline++)
++   {
++      uint32_t cycles;
++      if(maria_scanline == maria_displayArea.top)
++         memory_ram[MSTAT] = 0;
++      if(maria_scanline == maria_displayArea.bottom)
++         memory_ram[MSTAT] = 128;
++
++      prosystem_cycles %= 456;
++      while(prosystem_cycles < 28)
++      {
++         cycles = sally_ExecuteInstruction();
++         if(romdev_is_frozen()) { prosystem_cycles = 456; break; }
++         prosystem_cycles += (cycles << 2);
++
++         if(riot_timing)
++            riot_UpdateTimer(cycles);
++
++         if(memory_ram[WSYNC] && !(cartridge_flags & CARTRIDGE_WSYNC_MASK))
++         {
++            prosystem_cycles  = 456;
++            memory_ram[WSYNC] = false;
++            break;
++         }
++      }
++      if(romdev_is_frozen()) break;
++
++      cycles = maria_RenderScanline();
++      if(cartridge_flags & CARTRIDGE_CYCLE_STEALING_MASK)
++         prosystem_cycles += cycles;
++
++      while(prosystem_cycles < 456)
++      {
++         cycles = sally_ExecuteInstruction();
++         if(romdev_is_frozen()) { prosystem_cycles = 456; break; }
++         prosystem_cycles += (cycles << 2);
++         if(riot_timing)
++            riot_UpdateTimer(cycles);
++
++         if(memory_ram[WSYNC] && !(cartridge_flags & CARTRIDGE_WSYNC_MASK))
++         {
++            prosystem_cycles = 456;
++            memory_ram[WSYNC] = false;
++            break;
++         }
++      }
++      if(romdev_is_frozen()) break;
++      tia_Process(2);
++      if(cartridge_pokey)
++         pokey_Process(2);
++
++      if(cartridge_bupchip)
++      {
++         bupchipTickScanlines++;
++         if(bupchipTickScanlines == scanlinesPerBupchipTick)
++         {
++            bupchipTickScanlines = 0;
++            bupchip_Process(currentBupchipTick);
++            currentBupchipTick++;
++         }
++      }
++   }
++}
++
++bool prosystem_Save(char *buffer, bool fast_saves)
++{
++   uint32_t size = 0;
++   uint32_t index;
++
++   for(index = 0; index < 16; index++)
++      buffer[size + index] = PRO_SYSTEM_STATE_HEADER[index];
++   size += 16;
++
++   buffer[size++] = 1;
++   for(index = 0; index < 4; index++)
++      buffer[size + index] = 0;
++   size += 4;
++
++   for(index = 0; index < 32; index++)
++      buffer[size + index] = cartridge_digest[index];
++   size += 32;
++
++   buffer[size++] = sally_a;
++   buffer[size++] = sally_x;
++   buffer[size++] = sally_y;
++   buffer[size++] = sally_p;
++   buffer[size++] = sally_s;
++   buffer[size++] = sally_pc.b.l;
++   buffer[size++] = sally_pc.b.h;
++   buffer[size++] = cartridge_bank;
++
++   for(index = 0; index < 16384; index++)
++      buffer[size + index] = memory_ram[index];
++   size += 16384;
++
++   if (fast_saves)
++   {
++      if (bios_enabled)
++      {
++         save_uint32_to_buffer(buffer, &size, bios_size);
++         for(index = MEMORY_SIZE - bios_size; index <= MEMORY_SIZE; index++)
++            buffer[size + index] = memory_ram[index];
++         size += bios_size;
++      }
++ 
++      for(index = 0; index < TIA_BUFFER_SIZE; index++)
++         buffer[size + index] = tia_buffer[index];
++      size += TIA_BUFFER_SIZE;
++
++      for(index = 0; index < 2; index++)
++      {
++         buffer[size++] = tia_volume[index];
++         buffer[size++] = tia_counterMax[index];
++         buffer[size++] = tia_counter[index];
++         buffer[size++] = tia_audc[index];
++         buffer[size++] = tia_audf[index];
++         buffer[size++] = tia_audv[index];
++
++         save_uint32_to_buffer(buffer, &size, tia_poly4Cntr[index]);
++         save_uint32_to_buffer(buffer, &size, tia_poly5Cntr[index]);
++         save_uint32_to_buffer(buffer, &size, tia_poly9Cntr[index]);
++      }
++      buffer[size++] = tia_soundCntr;
++
++      save_uint32_to_buffer(buffer, &size, pokey_soundCntr);
++
++      for(index = 0; index < 4; index++)
++      {
++         buffer[size++] = pokey_audf[index];
++         buffer[size++] = pokey_audc[index];
++         buffer[size++] = pokey_output[index];
++         buffer[size++] = pokey_outVol[index];
++      }
++      buffer[size++] = pokey_audctl;
++
++      save_uint32_to_buffer(buffer, &size, pokey_poly17Size);
++      save_uint32_to_buffer(buffer, &size, pokey_polyAdjust);
++      save_uint32_to_buffer(buffer, &size, pokey_poly04Cntr);
++      save_uint32_to_buffer(buffer, &size, pokey_poly05Cntr);
++      save_uint32_to_buffer(buffer, &size, pokey_poly17Cntr);
++
++      for(index = 0; index < 4; index++)
++      {
++         save_uint32_to_buffer(buffer, &size, pokey_divideMax[index]);
++         save_uint32_to_buffer(buffer, &size, pokey_divideCount[index]);
++      }
++
++      save_uint32_to_buffer(buffer, &size, pokey_sampleMax);
++
++      for(index = 0; index < 2; index++)
++      {
++         save_uint32_to_buffer(buffer, &size, pokey_sampleCount[index]);
++      }
++
++      save_uint32_to_buffer(buffer, &size, pokey_baseMultiplier);
++   }
++
++   if(cartridge_type == CARTRIDGE_TYPE_SUPERCART_RAM)
++   {
++      for(index = 0; index < 16384; index++)
++         buffer[size + index] = memory_ram[16384 + index];
++      size += 16384;
++   }
++   else if(cartridge_type == CARTRIDGE_TYPE_SOUPER)
++   {
++      buffer[size++] = cartridge_souper_chr_bank[0];
++      buffer[size++] = cartridge_souper_chr_bank[1];
++      buffer[size++] = cartridge_souper_mode;
++      buffer[size++] = cartridge_souper_ram_page_bank[0];
++      buffer[size++] = cartridge_souper_ram_page_bank[1];
++      for(index = 0; index < sizeof(memory_souper_ram); index++)
++         buffer[size + index] = memory_souper_ram[index];
++      size += sizeof(memory_souper_ram);
++      buffer[size++] = bupchip_flags;
++      buffer[size++] = bupchip_volume;
++      buffer[size++] = bupchip_current_song;
++   }
++
++   return true;
++}
++
++bool prosystem_Load(const char *buffer, bool fast_saves)
++{
++   uint32_t index;
++   char digest[33] = {0};
++   uint32_t offset = 0;
++
++   for(index = 0; index < 16; index++)
++   {
++      /* File is not a valid ProSystem save state. */
++      if(buffer[offset + index] != PRO_SYSTEM_STATE_HEADER[index])
++         return false;
++   }
++   offset += 16;
++   buffer[offset++];
++
++   for(index = 0; index < 4; index++);
++   offset += 4;
++
++   for(index = 0; index < 32; index++)
++      digest[index] = buffer[offset + index];
++
++   offset += 32;
++
++   /* Does not match loaded cartridge digest? */
++   if(strcmp(cartridge_digest, digest) != 0)
++      return false;
++
++   sally_a      = buffer[offset++];
++   sally_x      = buffer[offset++];
++   sally_y      = buffer[offset++];
++   sally_p      = buffer[offset++];
++   sally_s      = buffer[offset++];
++   sally_pc.b.l = buffer[offset++];
++   sally_pc.b.h = buffer[offset++];
++
++   cartridge_StoreBank(buffer[offset++]);
++
++   for(index = 0; index < 16384; index++)
++      memory_ram[index] = buffer[offset + index];
++   offset += 16384;
++
++   if (fast_saves)
++   {
++      if (bios_enabled)
++      {
++         bios_size = read_uint32_from_buffer(buffer, &offset);
++         for(index = MEMORY_SIZE - bios_size; index <= MEMORY_SIZE; index++)
++            memory_ram[index] = buffer[offset + index];
++         offset += bios_size;
++      }
++
++      for(index = 0; index < TIA_BUFFER_SIZE; index++)
++         tia_buffer[index] = buffer[offset + index];
++      offset += TIA_BUFFER_SIZE;
++
++      for(index = 0; index < 2; index++)
++      {
++         tia_volume[index] = buffer[offset++];
++         tia_counterMax[index] = buffer[offset++];
++         tia_counter[index] = buffer[offset++];
++         tia_audc[index] = buffer[offset++];
++         tia_audf[index] = buffer[offset++];
++         tia_audv[index] = buffer[offset++];
++         tia_poly4Cntr[index] = read_uint32_from_buffer(buffer, &offset);
++         tia_poly5Cntr[index] = read_uint32_from_buffer(buffer, &offset);
++         tia_poly9Cntr[index] = read_uint32_from_buffer(buffer, &offset);
++      }
++      tia_soundCntr = buffer[offset++];
++
++      pokey_soundCntr = read_uint32_from_buffer(buffer, &offset);
++
++      for(index = 0; index < 4; index++)
++      {
++         pokey_audf[index] = buffer[offset++];
++         pokey_audc[index] = buffer[offset++];
++         pokey_output[index] = buffer[offset++];
++         pokey_outVol[index] = buffer[offset++];
++      }
++      pokey_audctl = buffer[offset++];
++
++      pokey_poly17Size = read_uint32_from_buffer(buffer, &offset);
++      pokey_polyAdjust = read_uint32_from_buffer(buffer, &offset);
++      pokey_poly04Cntr = read_uint32_from_buffer(buffer, &offset);
++      pokey_poly05Cntr = read_uint32_from_buffer(buffer, &offset);
++      pokey_poly17Cntr = read_uint32_from_buffer(buffer, &offset);
++
++      for(index = 0; index < 4; index++)
++      {
++         pokey_divideMax[index] = read_uint32_from_buffer(buffer, &offset);
++         pokey_divideCount[index] = read_uint32_from_buffer(buffer, &offset);
++      }
++
++      pokey_sampleMax = read_uint32_from_buffer(buffer, &offset);
++
++      for(index = 0; index < 2; index++)
++      {
++         pokey_sampleCount[index] = read_uint32_from_buffer(buffer, &offset);
++      }
++
++      pokey_baseMultiplier = read_uint32_from_buffer(buffer, &offset);
++   }
++
++   if(cartridge_type == CARTRIDGE_TYPE_SUPERCART_RAM)
++   {
++      for(index = 0; index < 16384; index++)
++         memory_ram[16384 + index] = buffer[offset + index];
++      offset += 16384; 
++   }
++   else if(cartridge_type == CARTRIDGE_TYPE_SOUPER)
++   {
++      cartridge_souper_chr_bank[0] = buffer[offset++];
++      cartridge_souper_chr_bank[1] = buffer[offset++];
++      cartridge_souper_mode = buffer[offset++];
++      cartridge_souper_ram_page_bank[0] = buffer[offset++];
++      cartridge_souper_ram_page_bank[1] = buffer[offset++];
++      for(index = 0; index < sizeof(memory_souper_ram); index++)
++         memory_souper_ram[index] = buffer[offset++];
++      bupchip_flags = buffer[offset++];
++      bupchip_volume = buffer[offset++];
++      bupchip_current_song = buffer[offset++];
++      bupchip_StateLoaded();
++   }
++
++   return true;
++}
++
++void prosystem_Close(bool persistent_data)
++{
++   bupchip_Release();
++   cartridge_Release(persistent_data);
++   maria_Reset();
++   maria_Clear();
++   memory_Reset();
++   tia_Reset();
++   tia_Clear();
++}
++
++uint32_t read_uint32_from_buffer(const char* buffer, uint32_t* offset)
++{
++    uint32_t index = *offset;
++    *offset += 8;
++    return (uint32_t)buffer[index]     << 28 |
++           (uint32_t)buffer[index + 1] << 24 |
++           (uint32_t)buffer[index + 2] << 20 |
++           (uint32_t)buffer[index + 3] << 16 |
++           (uint32_t)buffer[index + 4] << 12 |
++           (uint32_t)buffer[index + 5] << 8  |
++           (uint32_t)buffer[index + 6] << 4  |
++           (uint32_t)buffer[index + 7];
++}
++
++void save_uint32_to_buffer(char* buffer, uint32_t* size, uint32_t data)
++{
++   int i;
++   uint8_t shiftby = 32;
++   uint32_t index = *size;
++   *size += 8;
++   for (i = 0; i < 8; i++)
++      buffer[index++] = (data >> (shiftby -= 4)) & 0xF;
++}
 diff --git a/core/Sally.c b/core/Sally.c
-index dede0ca..cc8fe6d 100644
+index 398c38f..f7ac495 100644
 --- a/core/Sally.c
 +++ b/core/Sally.c
-@@ -34,6 +34,36 @@ uint8_t sally_p = 0;
+@@ -34,6 +34,11 @@ uint8_t sally_p = 0;
  uint8_t sally_s = 0;
  pair sally_pc = {0};
  
-+/* romdev PC BREAKPOINT / single-step (6502 execute hook in
-+ * sally_ExecuteInstruction below). When enabled and the 6502 PC about to
-+ * execute (sally_pc.w, BEFORE the opcode fetch) equals romdev_pc_addr, the hook
-+ * sets romdev_pc_hit and returns WITHOUT executing — the CPU is frozen exactly
-+ * at that PC. prosystem_ExecuteFrame (core/ProSystem.c) sees the hit flag after
-+ * each instruction and drains the remaining per-frame cycle budget so retro_run
-+ * finishes (leaving the frame incomplete = infinite hang). The host polls
-+ * romdev_pcbreak_get after each retro_run frame, stops stepping once hit is set,
-+ * then reads the register file via getCPUState. romdev_pc_step arms a
-+ * per-instruction countdown (host arms to 2 = "let ONE instruction execute,
-+ * then stop") so single-step ADVANCES the PC instead of re-stopping on the
-+ * current un-executed instruction. Exported via romdev_pcbreak_* in libretro.c. */
-+unsigned int  romdev_pc_addr    = 0;
-+int           romdev_pc_enabled = 0;
-+int           romdev_pc_step    = 0;
-+volatile int  romdev_pc_hit     = 0;
-+unsigned int  romdev_pc_last_pc = 0xFFFFFFFF;
-+unsigned int  romdev_pc_hits    = 0;
-+
-+/* romdev INSTRUCTION WATCHDOG — the fix for "callSubroutine hung". A standalone-
-+ * driven routine (e.g. a decompressor fed a slightly-wrong pointer) can loop
-+ * FOREVER inside a single prosystem_ExecuteFrame / retro_run frame, so the host's
-+ * per-FRAME maxFrames never gets a turn and the whole WASM hangs. This counts
-+ * dispatched instructions and force-stops (sets romdev_pc_hit + romdev_pc_watchdog)
-+ * when the budget is exceeded — so a runaway returns control with the final PC
-+ * intact instead of hanging. romdev_pc_wd_limit 0 = disabled. */
-+unsigned int  romdev_pc_wd_limit = 0;       /* max instructions before force-stop (0 = off) */
-+unsigned int  romdev_pc_wd_count = 0;       /* instructions executed since arm */
-+volatile int  romdev_pc_watchdog = 0;       /* set when the watchdog tripped */
++/* romdev (0.80.0): the pc-break/watchdog/coverage/watch machinery + state live in
++ * the shared romdev_debug.c. Sally.c keeps only the 6502 register snapshot + the
++ * dispatch hook (which calls romdev_on_dispatch). */
++#include "romdev_debug.h"
 +
  static uint8_t sally_opcode;
  static pair sally_address;
  static uint32_t sally_cycles;
-@@ -752,8 +782,97 @@ void sally_Reset(void)
+@@ -752,8 +757,45 @@ void sally_Reset(void)
     sally_pc.w = 0;
  }
  
-+/* romdev PC COVERAGE log (round 2): state lives in core/Memory.c; the execute
-+ * loop below records each DISTINCT in-window PC about to run. */
-+extern int          romdev_cov_enabled;
-+extern unsigned int romdev_cov_lo, romdev_cov_hi;
-+extern void         romdev_cov_log(unsigned int pc);
-+
-+/* romdev at-hit REGISTER SNAPSHOT (Sally 6502). The frame loop re-enters
-+ * sally_ExecuteInstruction after a hit (and the live sally_* globals keep
-+ * moving), so the hooks freeze a copy at the hit instant. Layout = the
-+ * romdev_getreg regId order: [0]=A [1]=X [2]=Y [3]=P [4]=S [16]=PC of the
-+ * EXECUTING instruction's first byte [18]=S. kind: 1=pc-break/step,
-+ * 2=watchdog, 3=write-watch, 4=read-watch. */
-+unsigned int romdev_snap_regs[19];
-+int          romdev_snap_kind = 0;
++/* romdev at-hit REGISTER SNAPSHOT (Sally 6502) — per-core. Fills the shared
++ * romdev_snap_regs[] in the romdev_getreg regId order: [0]=A [1]=X [2]=Y [3]=P
++ * [4]=S [16]=PC of the EXECUTING instruction [18]=S. The memory_Read/Write watch
++ * hooks (Memory.c) + the dispatch hook call this when the shared lib reports a hit. */
 +unsigned int romdev_sally_instr_pc = 0xFFFFFFFF;
 +void romdev_sally_snap(int kind)
 +{
@@ -638,78 +951,33 @@ index dede0ca..cc8fe6d 100644
 +
  uint32_t sally_ExecuteInstruction(void)
  {
-+   /* romdev: once a breakpoint/watchdog hit has frozen this CPU, KEEP it
-+    * frozen — the frame loop re-enters here, which would resume execution and
-+    * drift the registers away from the hit. (The per-frame loop drains its
-+    * budget on romdev_pc_hit, so returning 0 is the handled freeze path.) */
-+   if (romdev_pc_hit)
++   /* romdev (0.80.0): keep this CPU frozen across re-entry after a hit. */
++   if (romdev_is_frozen())
 +      return 0;
 +
-+   /* romdev: sally_pc.w right now is the first byte of the instruction about
-+    * to be dispatched — latch it for the mid-instruction hooks (memory_Read/
-+    * memory_Write watchpoints see an operand-advanced sally_pc). */
++   /* sally_pc.w is the first byte of the instruction about to dispatch — latch it
++    * for the Sally memory_Read/Write watch hooks, then ask the shared lib whether
++    * to FREEZE (coverage + watchdog + pc-break/single-step live in romdev_debug.c).
++    * On a freeze: snapshot (kind 2=watchdog else 1=pc-break/step) and return 0 cycles
++    * WITHOUT executing — PC left un-advanced; the per-frame loop drains its budget on
++    * the hit flag so retro_run still returns. */
 +   romdev_sally_instr_pc = (unsigned int)sally_pc.w;
 +
-+   /* romdev instruction WATCHDOG: force-stop a runaway (the callSubroutine hang).
-+    * Checked FIRST, BEFORE the opcode fetch, so sally_pc.w is the address of the
-+    * instruction about to execute. On overflow, fire the breakpoint with the
-+    * watchdog flag and return 0 cycles WITHOUT executing — the per-frame loop
-+    * drains its budget on romdev_pc_hit so retro_run returns instead of hanging. */
-+   if (romdev_pc_wd_limit && !romdev_pc_hit)
++   if (romdev_on_dispatch((unsigned int)sally_pc.w))
 +   {
-+      if (++romdev_pc_wd_count >= romdev_pc_wd_limit)
-+      {
-+         romdev_pc_last_pc = sally_pc.w;   /* leave PC frozen exactly here */
-+         romdev_sally_snap(2);   /* freeze the register file AT the stop */
-+         romdev_pc_hit = 1;
-+         romdev_pc_watchdog = 1;
-+         return 0;
-+      }
-+   }
-+
-+   /* romdev PC coverage log (discovery): record each DISTINCT in-window PC about
-+    * to execute. Checked here, BEFORE the opcode fetch, so sally_pc.w is the
-+    * address of the instruction about to run. Cheap when disabled (one int test). */
-+   if (romdev_cov_enabled
-+       && (unsigned int)sally_pc.w >= romdev_cov_lo
-+       && (unsigned int)sally_pc.w <= romdev_cov_hi)
-+      romdev_cov_log((unsigned int)sally_pc.w);
-+
-+   /* romdev PC breakpoint / single-step: checked here, BEFORE the opcode fetch,
-+    * so sally_pc.w is the address of the instruction about to execute. On a hit
-+    * (or single-step countdown reaching 0) freeze the CPU at this PC: record it,
-+    * set the hit flag, return WITHOUT executing or advancing PC, and report 0
-+    * cycles. The frame loop drains the remaining cycle budget on the hit flag so
-+    * retro_run still returns. Gated on !romdev_pc_hit so a held breakpoint
-+    * doesn't re-fire while the host reads state and disarms. */
-+   if ((romdev_pc_enabled || romdev_pc_step) && !romdev_pc_hit)
-+   {
-+      int stepFire = 0;
-+      if (romdev_pc_step) { if (--romdev_pc_step <= 0) stepFire = 1; }
-+      if (stepFire || ((romdev_pc_enabled && !romdev_pc_step)
-+                       && (unsigned int)sally_pc.w == romdev_pc_addr))
-+      {
-+         romdev_pc_last_pc = sally_pc.w;   /* leave PC frozen exactly here */
-+         romdev_sally_snap(1);   /* freeze the register file AT the hit */
-+         romdev_pc_hit = 1;
-+         romdev_pc_hits++;
-+         romdev_pc_step = 0;               /* one-shot */
-+         return 0;
-+      }
++      romdev_sally_snap(romdev_pc_hit_kind() == 2 ? 2 : 1);
++      return 0;
 +   }
 +
     sally_opcode = memory_Read(sally_pc.w++);
     sally_cycles = SALLY_CYCLES[sally_opcode];
  
-@@ -1523,8 +1642,16 @@ uint32_t sally_ExecuteRES(void)
+@@ -1523,8 +1565,13 @@ uint32_t sally_ExecuteRES(void)
     return 6;
  }
  
-+/* romdev INTERRUPT BLOCK — the pure-call primitive. While set, NMI/IRQ entry
-+ * is suppressed (MARIA's DLI line is simply not taken), so a routine driven
-+ * by callSubroutine cannot be hijacked by the game's display-list interrupt
-+ * handlers — the frame logic that stomps output buffers. */
-+int romdev_irq_block = 0;
++/* romdev_irq_block (the pure-call NMI/IRQ suppressor) now lives in the shared lib;
++ * sally_ExecuteNMI below reads it via the romdev_debug.h include. */
 +
  uint32_t sally_ExecuteNMI(void)
  {
@@ -718,7 +986,7 @@ index dede0ca..cc8fe6d 100644
     sally_Push(sally_pc.b.h);
     sally_Push(sally_pc.b.l);
     sally_p &= ~SALLY_FLAG.B;
-@@ -1537,7 +1664,7 @@ uint32_t sally_ExecuteNMI(void)
+@@ -1537,7 +1584,7 @@ uint32_t sally_ExecuteNMI(void)
  
  uint32_t sally_ExecuteIRQ(void)
  {
@@ -728,7 +996,7 @@ index dede0ca..cc8fe6d 100644
        sally_Push(sally_pc.b.h);
        sally_Push(sally_pc.b.l);
 diff --git a/core/libretro.c b/core/libretro.c
-index 3e4dbdb..50e8208 100644
+index 3e4dbdb..8e0683d 100644
 --- a/core/libretro.c
 +++ b/core/libretro.c
 @@ -28,6 +28,7 @@
@@ -739,170 +1007,15 @@ index 3e4dbdb..50e8208 100644
  
  #ifdef _3DS
  extern void* linearMemAlign(size_t size, size_t alignment);
-@@ -614,15 +615,279 @@ unsigned retro_get_region(void)
+@@ -614,15 +615,66 @@ unsigned retro_get_region(void)
      return cartridge_region == REGION_NTSC ? RETRO_REGION_NTSC : RETRO_REGION_PAL;
  }
  
-+/* romdev instruction-level write watchpoint (6502) — records sally_pc when a
-+ * watched address is written (hook in core/Memory.c). State defined there. */
-+extern unsigned int  romdev_wp_addr;
-+extern int           romdev_wp_enabled;
-+extern unsigned int  romdev_wp_last_pc;
-+extern unsigned char romdev_wp_last_val;
-+extern unsigned char romdev_wp_last_old;
-+extern int           romdev_wp_cond;
-+extern unsigned char romdev_wp_cond_val;
-+extern unsigned int  romdev_wp_hits;
++/* romdev (0.80.0): the watch/pcbreak/watchdog/regsnap/irqblock/range/coverage
++ * machinery + exports live in the shared romdev_debug.c. libretro.c keeps the
++ * 6502 setReg/getReg + the memory regions (below). */
++#include "romdev_debug.h"
 +
-+void romdev_watchpoint_set(unsigned int addr, int enabled)
-+{
-+    romdev_wp_addr = addr;
-+    romdev_wp_enabled = enabled ? 1 : 0;
-+    romdev_wp_last_pc = 0xFFFFFFFF;
-+    romdev_wp_last_val = 0;
-+    romdev_wp_last_old = 0;
-+    romdev_wp_cond = 0;
-+    romdev_wp_cond_val = 0;
-+    romdev_wp_hits = 0;
-+}
-+
-+void romdev_watchpoint_set_cond(unsigned int addr, int enabled, int cond, int val)
-+{
-+    romdev_wp_addr = addr;
-+    romdev_wp_enabled = enabled ? 1 : 0;
-+    romdev_wp_last_pc = 0xFFFFFFFF;
-+    romdev_wp_last_val = 0;
-+    romdev_wp_last_old = 0;
-+    romdev_wp_cond = cond;
-+    romdev_wp_cond_val = (unsigned char)val;
-+    romdev_wp_hits = 0;
-+}
-+
-+void romdev_watchpoint_get(unsigned int *out5, int clearHits)
-+{
-+    if (!out5) return;
-+    out5[0] = (unsigned int)romdev_wp_enabled;
-+    out5[1] = romdev_wp_addr;
-+    out5[2] = romdev_wp_last_pc;
-+    out5[3] = (unsigned int)romdev_wp_last_val;
-+    out5[4] = romdev_wp_hits;
-+    out5[5] = 0xFFFFFFFF;
-+    out5[6] = (romdev_wp_hits ? (unsigned int)romdev_wp_last_old : 0xFFFFFFFFu);
-+    if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; }
-+}
-+
-+/* romdev READ watchpoint (6502) — symmetric to the write watch above. Records
-+ * the 6502 PC of the instruction that READ a watched address (hooked in
-+ * core/Memory.c:memory_Read, the mirror of the write hook). State defined there. */
-+extern unsigned int  romdev_rd_addr;
-+extern int           romdev_rd_enabled;
-+extern unsigned int  romdev_rd_last_pc;
-+extern unsigned char romdev_rd_last_val;
-+extern unsigned int  romdev_rd_hits;
-+
-+void romdev_readwatch_set(unsigned int addr, int enabled)
-+{
-+    romdev_rd_addr = addr;
-+    romdev_rd_enabled = enabled ? 1 : 0;
-+    romdev_rd_last_pc = 0xFFFFFFFF;
-+    romdev_rd_last_val = 0;
-+    romdev_rd_hits = 0;
-+}
-+
-+/* Fills out5: [enabled, addr, lastPC, lastVal, hits]. */
-+void romdev_readwatch_get(unsigned int *out5, int clearHits)
-+{
-+    if (!out5) return;
-+    out5[0] = (unsigned int)romdev_rd_enabled;
-+    out5[1] = romdev_rd_addr;
-+    out5[2] = romdev_rd_last_pc;
-+    out5[3] = (unsigned int)romdev_rd_last_val;
-+    out5[4] = romdev_rd_hits;
-+    if (clearHits) { romdev_rd_hits = 0; romdev_rd_last_pc = 0xFFFFFFFF; }
-+}
-+
-+/* romdev PC BREAKPOINT (6502 execute hook in core/Sally.c:sally_ExecuteInstruction).
-+ * Freezes the CPU exactly at the breakpoint PC; the host polls romdev_pcbreak_get
-+ * after each retro_run frame, stops stepping once hit is set, then reads registers
-+ * via getCPUState. `step` arms a one-instruction single-step (ignores addr). */
-+extern unsigned int  romdev_pc_addr;
-+extern int           romdev_pc_enabled;
-+extern int           romdev_pc_step;
-+extern volatile int  romdev_pc_hit;
-+extern unsigned int  romdev_pc_last_pc;
-+extern unsigned int  romdev_pc_hits;
-+
-+extern unsigned int  romdev_pc_wd_limit;
-+extern unsigned int  romdev_pc_wd_count;
-+extern volatile int  romdev_pc_watchdog;
-+
-+void romdev_pcbreak_set(unsigned int addr, int enabled, int step)
-+{
-+    romdev_pc_addr = addr;
-+    romdev_pc_enabled = enabled ? 1 : 0;
-+    /* step is a per-instruction countdown; arm to 2 so ONE instruction executes
-+     * before the stop fires (true single-step that advances the PC). */
-+    romdev_pc_step = step ? 2 : 0;
-+    romdev_pc_hit = 0;
-+    romdev_pc_last_pc = 0xFFFFFFFF;
-+    romdev_pc_hits = 0;
-+    romdev_pc_watchdog = 0;
-+    romdev_pc_wd_count = 0;
-+}
-+
-+/* Fills out6: [enabled, addr, hit, lastPC, hits, watchdogTripped]. clearHit re-arms. */
-+void romdev_pcbreak_get(unsigned int *out6, int clearHit)
-+{
-+    if (!out6) return;
-+    out6[0] = (unsigned int)romdev_pc_enabled;
-+    out6[1] = romdev_pc_addr;
-+    out6[2] = (unsigned int)romdev_pc_hit;
-+    out6[3] = romdev_pc_last_pc;
-+    out6[4] = romdev_pc_hits;
-+    out6[5] = (unsigned int)romdev_pc_watchdog;
-+    if (clearHit) { romdev_pc_hit = 0; romdev_pc_watchdog = 0; romdev_pc_wd_count = 0; }
-+}
-+
-+/* Arm the instruction watchdog (force-stop a runaway after `limit` instructions;
-+ * 0 = disable). The host sets this before driving callSubroutine so a runaway
-+ * routine returns control instead of hanging the whole WASM. */
-+void romdev_watchdog_set(unsigned int limit)
-+{
-+    romdev_pc_wd_limit = limit;
-+    romdev_pc_wd_count = 0;
-+    romdev_pc_watchdog = 0;
-+}
-+
-+/* romdev at-hit register snapshot (defined in Sally.c; captured at the instant
-+ * a pc-break / watchdog / write-watch / read-watch fires). out[0]=kind (0=none
-+ * 1=pc-break/step 2=watchdog 3=write-watch 4=read-watch), out[1]=count(19),
-+ * out[2..20]=regs in the romdev regId order ([0]=A [1]=X [2]=Y [3]=P [4]=S
-+ * [16]=PC-of-executing-instruction [18]=S). `clear` resets the kind. */
-+extern int romdev_irq_block;
-+void romdev_irqblock_set(int on)
-+{
-+    romdev_irq_block = on ? 1 : 0;
-+}
-+
-+extern unsigned int romdev_snap_regs[19];
-+extern int          romdev_snap_kind;
-+void romdev_regsnap_get(unsigned int *out, int clear)
-+{
-+    int i;
-+    if (!out) return;
-+    out[0] = (unsigned int)romdev_snap_kind;
-+    out[1] = 19;
-+    for (i = 0; i < 19; i++) out[2 + i] = romdev_snap_regs[i];
-+    if (clear) romdev_snap_kind = 0;
-+}
-+
-+/* ─── romdev RE primitives round 2 ────────────────────────────────────────────
-+ * Register read/write (the inverse of getCPUState — used by the host's
-+ * setRegister / callSubroutine) plus the range-watch + PC-coverage discovery
-+ * logs. romdev 6502 reg-id convention (STABLE across all cores): 0=A, 1=X, 2=Y,
-+ * 3=P(status), 4=SP, 16=PC. Maps onto prosystem's Sally globals (sally_a/x/y/
-+ * p/s + the 16-bit sally_pc.w). setreg returns 0 ok / -1 unknown. The Sally
-+ * register globals are already declared in Sally.h (included above). */
 +int romdev_setreg(int regId, unsigned int value)
 +{
 +    switch (regId) {
@@ -927,64 +1040,6 @@ index 3e4dbdb..50e8208 100644
 +        case 16: return (unsigned int)sally_pc.w;
 +        default: return 0;
 +    }
-+}
-+
-+/* romdev RANGE watch (discovery) — log every read/write in [lo,hi]. mode: 1=read
-+ * 2=write 3=both. Arm clears the buffer. State + read/write hooks live in
-+ * core/Memory.c. */
-+extern unsigned int  romdev_range_lo, romdev_range_hi;
-+extern int           romdev_range_enabled, romdev_range_mode;
-+extern unsigned int  romdev_range_pc[], romdev_range_addr[];
-+extern unsigned char romdev_range_val[];
-+extern unsigned int  romdev_range_count, romdev_range_stored;
-+
-+void romdev_range_set(unsigned int lo, unsigned int hi, int mode, int enabled)
-+{
-+    romdev_range_lo = lo; romdev_range_hi = hi;
-+    romdev_range_mode = mode ? mode : 3;
-+    romdev_range_enabled = enabled ? 1 : 0;
-+    romdev_range_count = 0; romdev_range_stored = 0;
-+}
-+
-+/* Drain up to `max` events into out[] as packed triples [pc,addr,val,...]
-+ * (val in the low byte of its uint32 slot). Returns events written. out2 (size 2)
-+ * gets [totalSeen, stored] so the caller knows if the ring overflowed. */
-+unsigned int romdev_range_get(unsigned int *out, unsigned int max, unsigned int *out2)
-+{
-+    unsigned int i, n = romdev_range_stored;
-+    if (out2) { out2[0] = romdev_range_count; out2[1] = romdev_range_stored; }
-+    if (!out) return 0;
-+    if (n > max) n = max;
-+    for (i = 0; i < n; i++) {
-+        out[i*3 + 0] = romdev_range_pc[i];
-+        out[i*3 + 1] = romdev_range_addr[i];
-+        out[i*3 + 2] = (unsigned int)romdev_range_val[i];
-+    }
-+    return n;
-+}
-+
-+/* romdev PC COVERAGE log (discovery) — distinct in-window PCs over a run. State +
-+ * the execute-loop hook live in core/Memory.c + core/Sally.c. */
-+extern int           romdev_cov_enabled;
-+extern unsigned int  romdev_cov_lo, romdev_cov_hi;
-+extern unsigned int  romdev_cov_pcs[], romdev_cov_count, romdev_cov_total;
-+
-+void romdev_cov_set(unsigned int lo, unsigned int hi, int enabled)
-+{
-+    romdev_cov_lo = lo; romdev_cov_hi = hi;
-+    romdev_cov_enabled = enabled ? 1 : 0;
-+    romdev_cov_count = 0; romdev_cov_total = 0;
-+}
-+
-+/* Copy up to `max` distinct PCs into out[]. out2 (size 2) gets [distinct,total]. */
-+unsigned int romdev_cov_get(unsigned int *out, unsigned int max, unsigned int *out2)
-+{
-+    unsigned int i, n = romdev_cov_count;
-+    if (out2) { out2[0] = romdev_cov_count; out2[1] = romdev_cov_total; }
-+    if (!out) return 0;
-+    if (n > max) n = max;
-+    for (i = 0; i < n; i++) out[i] = romdev_cov_pcs[i];
-+    return n;
 +}
 +
  unsigned retro_api_version(void)
@@ -1019,7 +1074,7 @@ index 3e4dbdb..50e8208 100644
      return NULL;
  }
  
-@@ -630,6 +895,8 @@ size_t retro_get_memory_size(unsigned id)
+@@ -630,6 +682,8 @@ size_t retro_get_memory_size(unsigned id)
  {
      if ( id == RETRO_MEMORY_SYSTEM_RAM )
          return MEMORY_SIZE;
