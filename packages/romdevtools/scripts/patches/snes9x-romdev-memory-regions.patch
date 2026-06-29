@@ -1,40 +1,17 @@
 diff --git a/cpuexec.cpp b/cpuexec.cpp
-index aa43b2f..0d2bf81 100644
+index aa43b2f..3c69389 100644
 --- a/cpuexec.cpp
 +++ b/cpuexec.cpp
-@@ -19,8 +19,83 @@
+@@ -19,8 +19,49 @@
  
  static inline void S9xReschedule (void);
  
-+/* romdev PC breakpoint / single-step state. Defined with C linkage in
-+ * libretro.cpp; exported via romdev_pcbreak_set/get. The hook below compares the
-+ * 24-bit program-bank:PC at instruction dispatch and freezes S9xMainLoop AT the
-+ * breakpoint (PBPC left untouched on the un-executed instruction). */
++/* romdev (0.80.0): the watchpoint/readwatch/range/coverage/pcbreak/watchdog/
++ * irqblock machinery + state live in the shared romdev_debug.c. cpuexec.cpp keeps
++ * only the per-core 65816 register snapshot + the instruction-PC latch; the dispatch
++ * hook below calls the shared romdev_on_dispatch. */
 +extern "C" {
-+extern unsigned int  romdev_pc_addr;
-+extern int           romdev_pc_enabled;
-+extern int           romdev_pc_step;
-+extern volatile int  romdev_pc_hit;
-+extern unsigned int  romdev_pc_last_pc;
-+extern unsigned int  romdev_pc_hits;
-+
-+/* romdev INSTRUCTION WATCHDOG — the fix for "callSubroutine hung". A standalone-
-+ * driven routine (e.g. a decompressor fed a wrong pointer) can loop FOREVER
-+ * inside a single S9xMainLoop / retro_run frame, so the host's per-FRAME
-+ * maxFrames never gets a turn and the WASM hangs. The hook below counts
-+ * dispatched instructions and force-stops (sets romdev_pc_hit + the watchdog
-+ * flag) when the budget is exceeded. State defined in libretro.cpp. */
-+extern unsigned int  romdev_pc_wd_limit;
-+extern unsigned int  romdev_pc_wd_count;
-+extern volatile int  romdev_pc_watchdog;
-+
-+/* romdev PC COVERAGE log (discovery): record DISTINCT in-window PCs about to
-+ * execute. State + the de-dup helper live in libretro.cpp; the hook below sits
-+ * at the same dispatch point as the pc-break check (Registers.PBPC is the
-+ * instruction about to run). Cheap when disabled (one int test). */
-+extern int           romdev_cov_enabled;
-+extern unsigned int  romdev_cov_lo, romdev_cov_hi;
-+extern void          romdev_cov_log(unsigned int pc);
++#include "romdev_debug.h"
 +}
 +
 +/* romdev at-hit REGISTER SNAPSHOT (65816). The live register file keeps
@@ -45,8 +22,6 @@ index aa43b2f..0d2bf81 100644
 + * instruction's first byte [18]=S.W. kind: 1=pc-break/step, 2=watchdog,
 + * 3=write-watch, 4=read-watch. */
 +extern "C" {
-+unsigned int  romdev_snap_regs[19];
-+int           romdev_snap_kind = 0;
 +unsigned int  romdev_snes_instr_pc = 0xFFFFFFFF;
 +void romdev_snes_snap (int kind)
 +{
@@ -65,28 +40,19 @@ index aa43b2f..0d2bf81 100644
 +}
 +}
 +
-+/* romdev INTERRUPT BLOCK — the pure-call primitive. While set, NMI/IRQ
-+ * delivery is suppressed (pending flags stay pending), so a routine driven by
-+ * callSubroutine cannot be hijacked by the game's own NMI/VBlank handlers —
-+ * the frame logic that stomps output buffers. Events/PPU keep running; only
-+ * CPU interrupt DISPATCH is gated. The SPC700 is effectively frozen during a
-+ * pure call too: APU execution is event-driven from the frames the host is
-+ * NOT stepping. */
-+extern "C" int romdev_irq_block;
-+
  void S9xMainLoop (void)
  {
 +	/* romdev: once a breakpoint/watchdog hit has frozen this CPU, KEEP it
 +	 * frozen — the host re-enters S9xMainLoop on the next frame, which would
 +	 * resume execution and drift the register file away from the hit. The
 +	 * host clears the hit (pcbreak_get clearHit / pcbreak_set) to resume. */
-+	if (romdev_pc_hit)
++	if (romdev_is_frozen())
 +		return;
 +
  	#define CHECK_FOR_IRQ_CHANGE() \
  	if (Timings.IRQFlagChanging) \
  	{ \
-@@ -44,7 +119,7 @@ void S9xMainLoop (void)
+@@ -44,7 +85,7 @@ void S9xMainLoop (void)
  
  	for (;;)
  	{
@@ -95,7 +61,7 @@ index aa43b2f..0d2bf81 100644
  		{
  			#ifdef DEBUGGER
  			if (Settings.TraceHCEvent)
-@@ -78,7 +153,7 @@ void S9xMainLoop (void)
+@@ -78,7 +119,7 @@ void S9xMainLoop (void)
  			CPU.IRQLine = TRUE;
  		}
  
@@ -104,79 +70,32 @@ index aa43b2f..0d2bf81 100644
  		{
  			if (CPU.WaitingForInterrupt)
  			{
-@@ -135,6 +210,67 @@ void S9xMainLoop (void)
+@@ -135,6 +176,20 @@ void S9xMainLoop (void)
  			break;
  		}
  
-+		/* romdev instruction WATCHDOG: force-stop a runaway (the callSubroutine
-+		 * hang). Counts dispatched instructions; on overflow, fire the breakpoint
-+		 * with the watchdog flag so the host gets the final PC instead of hanging.
-+		 * Checked FIRST, at the same dispatch point as the pc-break — Registers.PBPC
-+		 * is the about-to-execute instruction; stop the same way the pc-break does
-+		 * (break out of S9xMainLoop, leaving PBPC frozen on the un-executed insn). */
-+		/* romdev: PBPC right now is the first byte of the instruction about to
-+		 * be dispatched — latch it so mid-instruction hooks (write/read
-+		 * watchpoints) report the EXECUTING instruction, not the drifted
-+		 * operand-fetch PC. */
++		/* romdev (0.80.0): PBPC is the first byte of the instruction about to dispatch
++		 * — latch it for the 65816 mid-instruction R/W hooks, then ask the shared lib
++		 * whether to FREEZE (coverage + watchdog + pc-break/single-step live in
++		 * romdev_debug.c). On a freeze, snapshot the 65816 registers (kind 2=watchdog
++		 * else 1=pc-break/step) and break out of S9xMainLoop leaving PBPC on the
++		 * un-executed instruction (the host polls pcbreak_get after retro_run). */
 +		romdev_snes_instr_pc = Registers.PBPC & 0xffffff;
 +
-+		if (romdev_pc_wd_limit && !romdev_pc_hit)
++		if (romdev_on_dispatch(Registers.PBPC & 0xffffff))
 +		{
-+			if (++romdev_pc_wd_count >= romdev_pc_wd_limit)
-+			{
-+				romdev_pc_last_pc = Registers.PBPC & 0xffffff;
-+				romdev_snes_snap(2);   /* freeze the register file AT the stop */
-+				romdev_pc_hit = 1;
-+				romdev_pc_watchdog = 1;
-+				break;
-+			}
-+		}
-+
-+		/* romdev PC coverage log (discovery): record each DISTINCT in-window PC
-+		 * about to execute. Registers.PBPC is the address of the next opcode.
-+		 * Cheap when disabled (one int test). */
-+		if (romdev_cov_enabled
-+		    && (Registers.PBPC & 0xffffff) >= romdev_cov_lo
-+		    && (Registers.PBPC & 0xffffff) <= romdev_cov_hi)
-+			romdev_cov_log(Registers.PBPC & 0xffffff);
-+
-+		/* romdev PC breakpoint / single-step. Checked HERE — after interrupt
-+		 * dispatch, immediately before the opcode is fetched — so Registers.PBPC
-+		 * is exactly the instruction about to execute. On a hit we set the hit
-+		 * flag and break out of S9xMainLoop, leaving PBPC untouched on the
-+		 * un-executed instruction: the CPU is frozen precisely at the
-+		 * breakpoint. The host polls romdev_pcbreak_get after retro_run, reads
-+		 * the registers via getCPUState, then disarms/re-arms before continuing.
-+		 * romdev_pc_step stops after exactly one instruction (one-shot). The
-+		 * compare masks to 24 bits (the high byte of PBPC is always 0). */
-+		if ((romdev_pc_enabled || romdev_pc_step) && !romdev_pc_hit)
-+		{
-+			/* Single-step (romdev_pc_step) is a per-instruction countdown the host
-+			 * arms to 2 = "let ONE instruction execute, then stop" — so the step
-+			 * ADVANCES the PC instead of re-stopping on the current (un-executed)
-+			 * instruction. A plain breakpoint (step==0) matches the bank+addr. */
-+			int stepFire = 0;
-+			if (romdev_pc_step) { if (--romdev_pc_step <= 0) stepFire = 1; }
-+			if (stepFire || ((romdev_pc_enabled && !romdev_pc_step)
-+			                 && (Registers.PBPC & 0xffffff) == (romdev_pc_addr & 0xffffff)))
-+			{
-+				romdev_pc_last_pc = Registers.PBPC & 0xffffff;
-+				romdev_snes_snap(1);  /* freeze the register file AT the hit */
-+				romdev_pc_hit = 1;
-+				romdev_pc_hits++;
-+				romdev_pc_step = 0;   /* one-shot */
-+				break;                /* leave the CPU frozen at this PC */
-+			}
++			romdev_snes_snap(romdev_pc_hit_kind() == 2 ? 2 : 1);
++			break;
 +		}
 +
  		uint8				Op;
  		struct	SOpcodes	*Opcodes;
  
 diff --git a/getset.h b/getset.h
-index ec55ea9..b1a93e4 100644
+index ec55ea9..a73af88 100644
 --- a/getset.h
 +++ b/getset.h
-@@ -54,7 +54,81 @@ static inline int32 memory_speed (uint32 address)
+@@ -54,7 +54,58 @@ static inline int32 memory_speed (uint32 address)
  	return (TWO_CYCLES);
  }
  
@@ -187,25 +106,17 @@ index ec55ea9..b1a93e4 100644
 + * READ watch mirrors it for reads (hook in the S9xGetByte wrapper + the
 + * S9xGetWord fast path). Declared here, ahead of every get/set, so all hooks
 + * (including the S9xGetWord READ_WORD fast path) can see the macros. */
++/* romdev (0.80.0): the watch machinery + state live in the shared romdev_debug.c.
++ * getset.h keeps only the 65816 hook macros + the WRAM-mirror address canon. */
 +extern "C" {
-+extern unsigned int  romdev_wp_addr;
-+extern int           romdev_wp_enabled;
-+extern unsigned int  romdev_wp_last_pc;
-+extern unsigned char romdev_wp_last_val;
-+extern unsigned char romdev_wp_last_old;
-+extern int           romdev_wp_cond;
-+extern unsigned char romdev_wp_cond_val;
-+extern unsigned int  romdev_wp_hits;
-+extern unsigned int  romdev_rd_addr;
-+extern int           romdev_rd_enabled;
-+extern unsigned int  romdev_rd_last_pc;
-+extern unsigned char romdev_rd_last_val;
-+extern unsigned int  romdev_rd_hits;
++#include "romdev_debug.h"
 +}
 +
 +/* Canonicalize a SNES bus address: the low 8 KB of WRAM is MIRRORED into banks
 + * $00-$3F and $80-$BF at $0000-$1FFF, so the CPU issues a stack/zero-page access
-+ * as e.g. $00:0039 while the "real" WRAM address is $7E0039 — match both. */
++ * as e.g. $00:0039 while the "real" WRAM address is $7E0039 — match both. The
++ * shared lib compares raw addresses, so we canonicalize BEFORE calling it (both
++ * the watched address (set by the host as $7Exxxx) and the live access). */
 +static inline unsigned int romdev_wp_canon(unsigned int a)
 +{
 +	a &= 0xffffff;
@@ -214,60 +125,29 @@ index ec55ea9..b1a93e4 100644
 +		return 0x7e0000u | off;
 +	return a;
 +}
-+/* The hooks record the EXECUTING instruction's first byte
-+ * (romdev_snes_instr_pc, latched at dispatch in S9xMainLoop) — NOT the live
-+ * PBPC, which has advanced past the operands by write time — and freeze a
-+ * full register snapshot at the hit (the live file keeps moving afterward). */
++/* The hooks record the EXECUTING instruction's first byte (romdev_snes_instr_pc,
++ * latched at dispatch in S9xMainLoop) — NOT the live PBPC, which has advanced past
++ * the operands by write time — and the shared lib reports a hit (return 1) so we
++ * freeze a full register snapshot (the live file keeps moving afterward).
++ * Call sites pass only pure expressions (Address, Byte, word>>8), so naming the
++ * macro args twice is safe (no double-eval side effects, unlike the gpgx z80). */
 +extern "C" unsigned int romdev_snes_instr_pc;
 +extern "C" void romdev_snes_snap (int kind);
-+/* value-condition (0.30.0): 1=increase 2=decrease 3=equals; skip non-qualifying
-+ * (restoring/churn) writes so the reported PC is the MEANINGFUL write. */
-+static inline int romdev_wp_cond_ok(unsigned char oldv, unsigned char v) {
-+	switch (romdev_wp_cond) {
-+		case 1:  return v > oldv;
-+		case 2:  return v < oldv;
-+		case 3:  return v == romdev_wp_cond_val;
-+		default: return 1;
-+	}
-+}
 +#define ROMDEV_WP_SNES(addr, val) do { \
-+		if (romdev_wp_enabled && romdev_wp_canon(addr) == romdev_wp_canon(romdev_wp_addr)) { \
-+			unsigned char romdev_oldv = romdev_wp_cond ? S9xGetByte(addr) : 0; \
-+			if (romdev_wp_cond_ok(romdev_oldv, (unsigned char)(val))) { \
-+				romdev_wp_last_pc = romdev_snes_instr_pc; romdev_wp_last_val = (unsigned char)(val); romdev_wp_last_old = romdev_oldv; romdev_wp_hits++; \
-+				romdev_snes_snap(3); \
-+			} \
-+		} \
++		unsigned int _ca = romdev_wp_canon(addr); \
++		unsigned char romdev_oldv = romdev_wp_wants_old() ? S9xGetByte(addr) : 0; \
++		if (romdev_on_write(_ca, romdev_oldv, (unsigned char)(val), romdev_snes_instr_pc, 0xFFFFFFFFu)) \
++			romdev_snes_snap(3); \
 +	} while (0)
 +#define ROMDEV_RD_SNES(addr, val) do { \
-+		if (romdev_rd_enabled && romdev_wp_canon(addr) == romdev_wp_canon(romdev_rd_addr)) { \
-+			romdev_rd_last_pc = romdev_snes_instr_pc; romdev_rd_last_val = (unsigned char)(val); romdev_rd_hits++; \
++		if (romdev_on_read(romdev_wp_canon(addr), (unsigned char)(val), romdev_snes_instr_pc)) \
 +			romdev_snes_snap(4); \
-+		} \
 +	} while (0)
 +
-+/* ---- romdev RANGE watch (discovery, 65816) ----------------------------------
-+ * Log EVERY {pc,addr,val} that reads or writes an address in [lo,hi] over a
-+ * window — not stop-on-first. Hooked into the same read/write paths as the
-+ * single-address watch above. `w` is 1 for a write, 0 for a read; the mode mask
-+ * (1=read 2=write 3=both) lives in libretro.cpp. Addresses are canonicalized
-+ * (WRAM mirror → $7Exxxx) so a window on $7E0000+ catches zero-page/stack
-+ * accesses too. PC = Registers.PBPC & 0xffffff. */
-+extern "C" {
-+extern unsigned int  romdev_range_lo, romdev_range_hi;
-+extern int           romdev_range_enabled, romdev_range_mode;
-+extern void          romdev_range_log(unsigned int pc, unsigned int addr, unsigned char val);
-+extern int           romdev_cov_enabled;
-+extern unsigned int  romdev_cov_lo, romdev_cov_hi;
-+extern void          romdev_cov_log(unsigned int pc);
-+}
-+#define ROMDEV_RANGE_SNES(addr, val, w) do { \
-+		if (romdev_range_enabled && (romdev_range_mode & ((w) ? 2 : 1))) { \
-+			unsigned int _ca = romdev_wp_canon(addr); \
-+			if (_ca >= romdev_range_lo && _ca <= romdev_range_hi) \
-+				romdev_range_log(Registers.PBPC & 0xffffff, _ca, (unsigned char)(val)); \
-+		} \
-+	} while (0)
++/* ---- romdev RANGE watch — folded into on_write/on_read now (no-op kept so the
++ * existing call sites need no edits). The shared lib's range logic runs inside
++ * romdev_on_write/on_read above; addresses arrive already WRAM-canonicalized. */
++#define ROMDEV_RANGE_SNES(addr, val, w) do { (void)(addr); (void)(val); (void)(w); } while (0)
 +
 +/* The original byte-read body, renamed. S9xGetByte (below) wraps it so the read
 + * watch observes the returned value on EVERY exit path; transparent to callers. */
@@ -275,7 +155,7 @@ index ec55ea9..b1a93e4 100644
  {
  	int		block = (Address & 0xffffff) >> MEMMAP_SHIFT;
  	uint8	*GetAddress = Memory.Map[block];
-@@ -157,6 +231,14 @@ inline uint8 S9xGetByte (uint32 Address)
+@@ -157,6 +208,14 @@ inline uint8 S9xGetByte (uint32 Address)
  	}
  }
  
@@ -290,7 +170,7 @@ index ec55ea9..b1a93e4 100644
  inline uint16 S9xGetWord (uint32 Address, enum s9xwrap_t w = WRAP_NONE)
  {
  	uint16	word;
-@@ -193,6 +275,12 @@ inline uint16 S9xGetWord (uint32 Address, enum s9xwrap_t w = WRAP_NONE)
+@@ -193,6 +252,12 @@ inline uint16 S9xGetWord (uint32 Address, enum s9xwrap_t w = WRAP_NONE)
  	if (GetAddress >= (uint8 *) CMemory::MAP_LAST)
  	{
  		word = READ_WORD(GetAddress + (Address & 0xffff));
@@ -303,7 +183,7 @@ index ec55ea9..b1a93e4 100644
  		addCyclesInMemoryAccess_x2;
  		return (word);
  	}
-@@ -319,6 +407,8 @@ inline uint16 S9xGetWord (uint32 Address, enum s9xwrap_t w = WRAP_NONE)
+@@ -319,6 +384,8 @@ inline uint16 S9xGetWord (uint32 Address, enum s9xwrap_t w = WRAP_NONE)
  
  inline void S9xSetByte (uint8 Byte, uint32 Address)
  {
@@ -312,7 +192,7 @@ index ec55ea9..b1a93e4 100644
  	int		block = (Address & 0xffffff) >> MEMMAP_SHIFT;
  	uint8	*SetAddress = Memory.WriteMap[block];
  	int32	speed = memory_speed(Address);
-@@ -425,6 +515,12 @@ inline void S9xSetByte (uint8 Byte, uint32 Address)
+@@ -425,6 +492,12 @@ inline void S9xSetByte (uint8 Byte, uint32 Address)
  
  inline void S9xSetWord (uint16 Word, uint32 Address, enum s9xwrap_t w = WRAP_NONE, enum s9xwriteorder_t o = WRITE_01)
  {
@@ -326,7 +206,7 @@ index ec55ea9..b1a93e4 100644
  	if ((Address & mask) == mask)
  	{
 diff --git a/libretro/libretro.cpp b/libretro/libretro.cpp
-index d381c61..3ce0602 100644
+index d381c61..f1165f4 100644
 --- a/libretro/libretro.cpp
 +++ b/libretro/libretro.cpp
 @@ -6,6 +6,7 @@
@@ -337,159 +217,16 @@ index d381c61..3ce0602 100644
  #include "gfx.h"
  #include "snapshot.h"
  #include "controls.h"
-@@ -2029,6 +2030,333 @@ unsigned retro_get_region()
+@@ -2029,6 +2030,107 @@ unsigned retro_get_region()
      return Settings.PAL ? RETRO_REGION_PAL : RETRO_REGION_NTSC;
  }
  
-+/* romdev instruction-level write watchpoint (65816). State defined here with C
-+ * linkage; the hook in getset.h's S9xSetByte stamps Registers.PBPC (the full
-+ * 24-bit program-bank:PC) when a watched address is written. Exported below. */
++/* romdev (0.80.0): the watchpoint/readwatch/range/coverage/pcbreak/watchdog/
++ * regsnap/irqblock machinery + state live in the shared romdev_debug.c. libretro.cpp
++ * keeps only the per-core SNES pieces: the VRAM-port copy trace, the 65816
++ * setReg/getReg, and the memory regions (below). */
 +extern "C" {
-+unsigned int  romdev_wp_addr     = 0;
-+int           romdev_wp_enabled  = 0;
-+unsigned int  romdev_wp_last_pc  = 0xFFFFFFFF;
-+unsigned char romdev_wp_last_val = 0;
-+unsigned char romdev_wp_last_old = 0;
-+int           romdev_wp_cond     = 0;
-+unsigned char romdev_wp_cond_val = 0;
-+unsigned int  romdev_wp_hits     = 0;
-+
-+void romdev_watchpoint_set(unsigned int addr, int enabled) {
-+   romdev_wp_addr = addr;
-+   romdev_wp_enabled = enabled ? 1 : 0;
-+   romdev_wp_last_pc = 0xFFFFFFFF;
-+   romdev_wp_last_val = 0;
-+   romdev_wp_last_old = 0;
-+   romdev_wp_cond = 0;
-+   romdev_wp_cond_val = 0;
-+   romdev_wp_hits = 0;
-+}
-+
-+void romdev_watchpoint_set_cond(unsigned int addr, int enabled, int cond, int val) {
-+   romdev_wp_addr = addr;
-+   romdev_wp_enabled = enabled ? 1 : 0;
-+   romdev_wp_last_pc = 0xFFFFFFFF;
-+   romdev_wp_last_val = 0;
-+   romdev_wp_last_old = 0;
-+   romdev_wp_cond = cond;
-+   romdev_wp_cond_val = (unsigned char)val;
-+   romdev_wp_hits = 0;
-+}
-+
-+void romdev_watchpoint_get(unsigned int *out, int clearHits) {
-+   if (!out) return;
-+   out[0] = (unsigned int)romdev_wp_enabled;
-+   out[1] = romdev_wp_addr;
-+   out[2] = romdev_wp_last_pc;
-+   out[3] = (unsigned int)romdev_wp_last_val;
-+   out[4] = romdev_wp_hits;
-+   /* out[5] = prgOffset (SNES: none — host pre-seeds 0xFFFFFFFF) */
-+   out[6] = (romdev_wp_hits ? (unsigned int)romdev_wp_last_old : 0xFFFFFFFFu);
-+   if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; }
-+}
-+
-+/* romdev instruction-level READ watchpoint (65816) — symmetric to the write
-+ * watch above. The hook in getset.h's S9xGetByte stamps Registers.PBPC (the
-+ * full 24-bit program-bank:PC) of the instruction that READ a watched address.
-+ * State defined here with C linkage; exported below. (The opcode-fetch path
-+ * uses CPU.PCBase[] directly and bypasses S9xGetByte, so instruction fetches do
-+ * not normally trip the read watch — only data reads do.) */
-+unsigned int  romdev_rd_addr     = 0;
-+int           romdev_rd_enabled  = 0;
-+unsigned int  romdev_rd_last_pc  = 0xFFFFFFFF;
-+unsigned char romdev_rd_last_val = 0;
-+unsigned int  romdev_rd_hits     = 0;
-+
-+void romdev_readwatch_set(unsigned int addr, int enabled) {
-+   romdev_rd_addr = addr;
-+   romdev_rd_enabled = enabled ? 1 : 0;
-+   romdev_rd_last_pc = 0xFFFFFFFF;
-+   romdev_rd_last_val = 0;
-+   romdev_rd_hits = 0;
-+}
-+
-+/* Fills out5: [enabled, addr, lastPC, lastVal, hits]. */
-+void romdev_readwatch_get(unsigned int *out5, int clearHits) {
-+   if (!out5) return;
-+   out5[0] = (unsigned int)romdev_rd_enabled;
-+   out5[1] = romdev_rd_addr;
-+   out5[2] = romdev_rd_last_pc;
-+   out5[3] = (unsigned int)romdev_rd_last_val;
-+   out5[4] = romdev_rd_hits;
-+   if (clearHits) { romdev_rd_hits = 0; romdev_rd_last_pc = 0xFFFFFFFF; }
-+}
-+
-+/* romdev PC BREAKPOINT (65816 execute hook in cpuexec.cpp:S9xMainLoop). When
-+ * enabled and the 24-bit program-bank:PC reaches romdev_pc_addr at instruction
-+ * dispatch — BEFORE the opcode is fetched/executed — the hook sets
-+ * romdev_pc_hit, records lastPC, and forces S9xMainLoop to exit this frame with
-+ * Registers.PBPC left exactly AT the un-executed instruction. The host polls
-+ * romdev_pcbreak_get after each retro_run and stops stepping once hit is set,
-+ * then reads the registers via getCPUState. `step` arms a one-instruction
-+ * single-step (stops regardless of address). */
-+unsigned int  romdev_pc_addr    = 0;
-+int           romdev_pc_enabled = 0;
-+int           romdev_pc_step    = 0;        /* 1 = stop after exactly one instruction */
-+volatile int  romdev_pc_hit     = 0;        /* set by the execute hook, cleared by the host */
-+unsigned int  romdev_pc_last_pc = 0xFFFFFFFF;
-+unsigned int  romdev_pc_hits    = 0;
-+
-+/* romdev INSTRUCTION WATCHDOG state (the callSubroutine-hang fix). The hook in
-+ * cpuexec.cpp:S9xMainLoop counts dispatched instructions and force-stops when the
-+ * budget is exceeded so a runaway returns control with the final PC instead of
-+ * hanging. romdev_pc_wd_limit 0 = disabled. */
-+unsigned int  romdev_pc_wd_limit = 0;       /* max instructions before force-stop (0 = off) */
-+unsigned int  romdev_pc_wd_count = 0;       /* instructions executed since arm */
-+volatile int  romdev_pc_watchdog = 0;       /* set when the watchdog tripped */
-+
-+void romdev_pcbreak_set(unsigned int addr, int enabled, int step) {
-+   romdev_pc_addr = addr;
-+   romdev_pc_enabled = enabled ? 1 : 0;
-+   /* step is a per-instruction countdown; arm to 2 so ONE instruction executes
-+    * before the stop fires (true single-step that advances the PC). */
-+   romdev_pc_step = step ? 2 : 0;
-+   romdev_pc_hit = 0;
-+   romdev_pc_last_pc = 0xFFFFFFFF;
-+   romdev_pc_hits = 0;
-+   romdev_pc_watchdog = 0;
-+   romdev_pc_wd_count = 0;
-+}
-+
-+/* Fills out6: [enabled, addr, hit, lastPC, hits, watchdogTripped]. clearHit re-arms. */
-+void romdev_pcbreak_get(unsigned int *out6, int clearHit) {
-+   if (!out6) return;
-+   out6[0] = (unsigned int)romdev_pc_enabled;
-+   out6[1] = romdev_pc_addr;
-+   out6[2] = (unsigned int)romdev_pc_hit;
-+   out6[3] = romdev_pc_last_pc;
-+   out6[4] = romdev_pc_hits;
-+   out6[5] = (unsigned int)romdev_pc_watchdog;
-+   if (clearHit) { romdev_pc_hit = 0; romdev_pc_watchdog = 0; romdev_pc_wd_count = 0; }
-+}
-+
-+/* Arm the instruction watchdog (force-stop a runaway after `limit` instructions;
-+ * 0 = disable). The host sets this before driving callSubroutine so a runaway
-+ * routine returns control instead of hanging. */
-+void romdev_watchdog_set(unsigned int limit) {
-+   romdev_pc_wd_limit = limit;
-+   romdev_pc_wd_count = 0;
-+   romdev_pc_watchdog = 0;
-+}
-+
-+/* romdev at-hit register snapshot (defined in cpuexec.cpp, captured by the CPU
-+ * hooks at the instant a pc-break / watchdog / write-watch / read-watch fires
-+ * — the live register file keeps moving afterward, so post-frame reads lie).
-+ * out[0] = kind (0=none 1=pc-break/step 2=watchdog 3=write-watch
-+ * 4=read-watch), out[1] = count (19), out[2..20] = registers in the
-+ * romdev_setreg/getreg regId order ([0]=A [1]=X [2]=Y [3]=P [4]=S [5]=DB
-+ * [6]=D [16]=PBPC-of-executing-instruction [18]=S). `clear` resets the kind. */
-+/* romdev interrupt block (pure-call primitive): while set, NMI/IRQ delivery
-+ * is suppressed in S9xMainLoop so a callSubroutine-driven routine cannot be
-+ * hijacked by the game's own handlers. */
-+int romdev_irq_block = 0;
-+void romdev_irqblock_set(int on) {
-+   romdev_irq_block = on ? 1 : 0;
-+}
++#include "romdev_debug.h"
 +
 +/* romdev VRAM-port copy trace (hooks in ppu.h's REGISTER_2118/2119 family —
 + * CPU port writes AND the DMA path both land there). set(lo,hi,enabled) arms
@@ -529,17 +266,6 @@ index d381c61..3ce0602 100644
 +      out[i*3 + 2] = romdev_vw_vals[i];
 +   }
 +   return n;
-+}
-+
-+extern unsigned int romdev_snap_regs[19];
-+extern int          romdev_snap_kind;
-+void romdev_regsnap_get(unsigned int *out, int clear) {
-+   int i;
-+   if (!out) return;
-+   out[0] = (unsigned int)romdev_snap_kind;
-+   out[1] = 19;
-+   for (i = 0; i < 19; i++) out[2 + i] = romdev_snap_regs[i];
-+   if (clear) romdev_snap_kind = 0;
 +}
 +
 +/* ── romdev register read/write (65816) ──────────────────────────────────────
@@ -586,97 +312,6 @@ index d381c61..3ce0602 100644
 +   }
 +}
 +
-+/* ── romdev RANGE watch (discovery) ──────────────────────────────────────────
-+ * Log every {pc,addr,val} touching [lo,hi] over a window — not stop-on-first.
-+ * The read/write hooks (getset.h) call romdev_range_log; here is the state, the
-+ * de-dup-free ring buffer, and the set/get exports. mode: 1=read 2=write 3=both.
-+ * Arm (romdev_range_set with enabled=1) clears the buffer. */
-+#define ROMDEV_RANGE_CAP 4096
-+unsigned int  romdev_range_lo      = 0;
-+unsigned int  romdev_range_hi      = 0;
-+int           romdev_range_enabled = 0;
-+int           romdev_range_mode    = 0;     /* 1=read, 2=write, 3=both */
-+unsigned int  romdev_range_pc  [ROMDEV_RANGE_CAP];
-+unsigned int  romdev_range_addr[ROMDEV_RANGE_CAP];
-+unsigned char romdev_range_val [ROMDEV_RANGE_CAP];
-+unsigned int  romdev_range_count   = 0;     /* total events seen (may exceed CAP) */
-+unsigned int  romdev_range_stored  = 0;     /* events actually stored (<= CAP) */
-+
-+/* Append one range-watch event (called from the getset.h read/write hooks). */
-+void romdev_range_log(unsigned int pc, unsigned int addr, unsigned char val)
-+{
-+   romdev_range_count++;
-+   if (romdev_range_stored < ROMDEV_RANGE_CAP) {
-+      romdev_range_pc  [romdev_range_stored] = pc;
-+      romdev_range_addr[romdev_range_stored] = addr;
-+      romdev_range_val [romdev_range_stored] = val;
-+      romdev_range_stored++;
-+   }
-+}
-+
-+void romdev_range_set(unsigned int lo, unsigned int hi, int mode, int enabled)
-+{
-+   romdev_range_lo = lo; romdev_range_hi = hi;
-+   romdev_range_mode = mode ? mode : 3;
-+   romdev_range_enabled = enabled ? 1 : 0;
-+   romdev_range_count = 0; romdev_range_stored = 0;
-+}
-+
-+/* Drain up to `max` events into out[] as packed triples [pc,addr,val,...]
-+ * (val in the low byte of its uint32 slot). Returns events written. out2 (size 2)
-+ * gets [totalSeen, stored] so the caller knows if the ring overflowed. */
-+unsigned int romdev_range_get(unsigned int *out, unsigned int max, unsigned int *out2)
-+{
-+   unsigned int i, n = romdev_range_stored;
-+   if (out2) { out2[0] = romdev_range_count; out2[1] = romdev_range_stored; }
-+   if (!out) return 0;
-+   if (n > max) n = max;
-+   for (i = 0; i < n; i++) {
-+      out[i*3 + 0] = romdev_range_pc[i];
-+      out[i*3 + 1] = romdev_range_addr[i];
-+      out[i*3 + 2] = (unsigned int)romdev_range_val[i];
-+   }
-+   return n;
-+}
-+
-+/* ── romdev PC COVERAGE log (discovery) ──────────────────────────────────────
-+ * Record DISTINCT PCs executed within [lo,hi] over a run — "what code runs
-+ * here?". The hook in cpuexec.cpp:S9xMainLoop calls romdev_cov_log at dispatch.
-+ * Linear de-dup against the stored set (cheap for the small windows this
-+ * targets). */
-+#define ROMDEV_COV_CAP 8192
-+unsigned int  romdev_cov_lo      = 0;
-+unsigned int  romdev_cov_hi      = 0;
-+int           romdev_cov_enabled = 0;
-+unsigned int  romdev_cov_pcs[ROMDEV_COV_CAP];
-+unsigned int  romdev_cov_count   = 0;       /* distinct PCs stored (<= CAP) */
-+unsigned int  romdev_cov_total   = 0;       /* total in-range dispatches seen */
-+
-+void romdev_cov_log(unsigned int pc)
-+{
-+   unsigned int i;
-+   romdev_cov_total++;
-+   for (i = 0; i < romdev_cov_count; i++) if (romdev_cov_pcs[i] == pc) return;
-+   if (romdev_cov_count < ROMDEV_COV_CAP) romdev_cov_pcs[romdev_cov_count++] = pc;
-+}
-+
-+void romdev_cov_set(unsigned int lo, unsigned int hi, int enabled)
-+{
-+   romdev_cov_lo = lo; romdev_cov_hi = hi;
-+   romdev_cov_enabled = enabled ? 1 : 0;
-+   romdev_cov_count = 0; romdev_cov_total = 0;
-+}
-+
-+/* Copy up to `max` distinct PCs into out[]. out2 (size 2) gets [distinct,total]. */
-+unsigned int romdev_cov_get(unsigned int *out, unsigned int max, unsigned int *out2)
-+{
-+   unsigned int i, n = romdev_cov_count;
-+   if (out2) { out2[0] = romdev_cov_count; out2[1] = romdev_cov_total; }
-+   if (!out) return 0;
-+   if (n > max) n = max;
-+   for (i = 0; i < n; i++) out[i] = romdev_cov_pcs[i];
-+   return n;
-+}
 +}
 +
 +/* rom-dev-mcp extension: custom memory region IDs above libretro standard.
@@ -690,7 +325,7 @@ index d381c61..3ce0602 100644
  void* retro_get_memory_data(unsigned type)
  {
      void* data;
-@@ -2051,6 +2379,18 @@ void* retro_get_memory_data(unsigned type)
+@@ -2051,6 +2153,18 @@ void* retro_get_memory_data(unsigned type)
          case RETRO_MEMORY_VIDEO_RAM:
          data = Memory.VRAM;
          break;
@@ -709,7 +344,7 @@ index d381c61..3ce0602 100644
          //case RETRO_MEMORY_ROM:
          //	data = Memory.ROM;
          //	break;
-@@ -2085,6 +2425,18 @@ size_t retro_get_memory_size(unsigned type)
+@@ -2085,6 +2199,18 @@ size_t retro_get_memory_size(unsigned type)
          case RETRO_MEMORY_VIDEO_RAM:
              size = 64 * 1024;
              break;
