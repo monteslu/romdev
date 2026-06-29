@@ -1,6 +1,6 @@
 {
   "name": "romdev-core-beetle-psx-hw",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Beetle PSX HW libretro core (Sony PlayStation, GLES3 hardware renderer + embedded OpenBIOS) for romdev, bundled as WASM.",
   "type": "module",
   "main": "index.js",
