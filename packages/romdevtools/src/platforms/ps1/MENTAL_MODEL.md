@@ -63,10 +63,12 @@ via the voice registers. The helper lib has a minimal tone path.
   TROUBLESHOOTING if a fixed-VA image misbehaves.)
 - **`frame({op:'verify'})` / screenshot** — render-health + capture. ✅
 - **`cart` extract/wrap** — PS-EXE. ✅
-- **`cpu({op:'read'})` / `breakpoint` / `watch` / `audioDebug`** — these read core
-  exports that beetle_psx doesn't yet carry (they need beetle-side R3000A regsnap +
-  SPU register reads patched in). Currently reported **N/A** in the capability map —
-  honest about what's not wired, not "broken." (Tracked for a core rebuild.)
+- **`cpu({op:'read'})`** — live R3000A register file (`romdev_mips_regs_get`: r0..r31,
+  LO, HI, PC). ✅
+- **`audioDebug({op:'inspect', chip:'spu'})`** — the SPU register block at `0x1F80_1C00`
+  (`romdev_spu_get`, the 1 KB window). ✅
+- **`breakpoint` / `watch`** — not yet (those need interpreter-step + memory-path hooks
+  patched into beetle; cpuState/audioDebug are plain reads and ARE wired).
 - **`renderingContext`** is **N/A** (false) — 3D GPU machine, no 2D tile VDP to decode.
 
 ## Build pipeline
@@ -79,5 +81,5 @@ the LE side), then `wrapPsExe` produces the bootable PS-EXE. `#include` the bund
 ## What's NOT bundled / hardware limits
 
 - No CD-ROM/XA/streaming or MDEC video.
-- `cpuState`/`audioDebug` not yet exported by the core (see above).
+- `breakpoint`/`watch` not yet (need interpreter-step hooks; cpuState/audioDebug ARE wired).
 - `renderingContext` is N/A (3D GPU, no tile VDP).

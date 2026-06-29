@@ -42,12 +42,13 @@ back — so reported addresses are real VAs. If you see a lone `fcn.00000000`, y
 a path that bypassed the rebase; build a **multi-function** program to exercise it (a
 single-instruction smoke test hides this).
 
-## "cpu({op:'read'}) / breakpoint / watch / audioDebug return N/A"
+## "breakpoint / watch return N/A"
 
-These aren't wired on PS1 yet — beetle_psx doesn't export the R3000A regsnap / SPU
-register readers romdev's generic host probes for. The capability map reports them
-**N/A** (honest), not broken. Use `memory({op:'read', region:'system_ram'})` +
-`disasm`/`decompile` for inspection meanwhile. (A core rebuild to add them is tracked.)
+`cpu({op:'read'})` and `audioDebug({op:'inspect', chip:'spu'})` ARE wired on PS1 (the
+core exports `romdev_mips_regs_get` + `romdev_spu_get`). `breakpoint`/`watch` are not
+yet — those need interpreter-step + memory-path hooks patched into beetle (cpuState/
+audioDebug are plain reads). Use `cpu`/`audioDebug` + `memory` + `disasm`/`decompile`
+meanwhile.
 
 ## "renderingContext returns N/A"
 

@@ -20,6 +20,24 @@ mkdir -p "$BUILD_DIR" "$OUT"
 [ -d "$SRC/.git" ] || git clone --depth 1 "$REPO" "$SRC"
 cd "$SRC"
 
+# ── romdev debug exports (cpuState + audioDebug) ──────────────────────────────
+# cpuState: R3000A register snapshot appended to cpu.c (GPR/BACKED_PC macros in scope).
+# audioDebug: SPU register block appended to spu.c (the static raw `regs` mirror in
+# scope — we read regs.Regs[] directly, NOT SPU_Read, since SPU_Read quantizes the
+# volume/sweep registers). Both idempotent. They light up cpu({op:'read'}) +
+# audioDebug({op:'inspect',chip:'spu'}) with zero host changes — the host's
+# *Supported() checks just probe for the exports.
+CPU_C="mednafen/psx/cpu.c"
+if ! grep -q "romdev_mips_regs_get" "$CPU_C"; then
+  cat "$SCRIPT_DIR/patches/romdev-snippets/beetle-psx-regsnap.c" >> "$CPU_C"
+  echo "romdev: appended beetle-psx-regsnap.c to $CPU_C"
+fi
+SPU_C="mednafen/psx/spu.c"
+if ! grep -q "romdev_spu_get" "$SPU_C"; then
+  cat "$SCRIPT_DIR/patches/romdev-snippets/beetle-psx-spu.c" >> "$SPU_C"
+  echo "romdev: appended beetle-psx-spu.c to $SPU_C"
+fi
+
 # The emscripten target already enables HAVE_OPENGL/GLES/GLES3 + libchdr (CHD discs).
 emmake make platform=emscripten clean >/dev/null 2>&1 || true
 emmake make platform=emscripten -j"$(nproc)"
@@ -56,7 +74,7 @@ done
 # (-lGL + GL_ENABLE_GET_PROC_ADDRESS + "GL" in EXPORTED_RUNTIME_METHODS) make Emscripten
 # emit Module["GL"]=GL so the returned module exposes the GL context the host drives.
 OBJ_FILES=$(find . -name "*.o" | tr '\n' ' ')
-EXPORTED='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free","_emscripten_GetProcAddress"]'
+EXPORTED='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_romdev_mips_regs_get","_romdev_spu_get","_malloc","_free","_emscripten_GetProcAddress"]'
 EXPORTED_RT='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS","dynCall","GL"]'
 
 emcc $OBJ_FILES -O3 -flto -s WASM=1 -s MODULARIZE=1 -s EXPORT_ES6=1 \
