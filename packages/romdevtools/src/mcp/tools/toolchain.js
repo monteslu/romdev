@@ -470,8 +470,16 @@ export function registerToolchainTools(server, z, sessionKey) {
       return jsonContent(payload);
   }
 
-  async function runSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, runtime, maxmod, rebuildSdk, crt0, crt0Path, codeLoc, dataLoc, linkerConfig, linkerConfigPath, inesHeader, path: projPath, frames = 60, holdInputs, screenshotPath, projectName }) {
+  async function runSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, runtime, maxmod, rebuildSdk, crt0, crt0Path, codeLoc, dataLoc, linkerConfig, linkerConfigPath, inesHeader, options, defines, entry, path: projPath, frames = 60, holdInputs, screenshotPath, projectName }) {
       const { buildForPlatform } = await import("../../toolchains/index.js");
+      // Merge `defines` ({_VER:1}) into `options` (--define) just like the project/rom paths,
+      // so a project-dir RUN honors them too.
+      const mergedOptions = [
+        ...(Array.isArray(options) ? options : []),
+        ...(defines && typeof defines === "object"
+          ? Object.entries(defines).flatMap(([k, v]) => ["--define", `${k}=${v}`])
+          : []),
+      ];
       const resolved = resolveCore(platform);
       if (!resolved) throw new Error(`no core available for platform '${platform}'`);
 
@@ -481,7 +489,7 @@ export function registerToolchainTools(server, z, sessionKey) {
       // happy path; without it, output:'run' + path errored ("requires source").
       const noExplicitSources = source == null && sourcePath == null && sources == null && sourcesPaths == null;
       if (projPath && noExplicitSources) {
-        const r = await readProjectDir(projPath, platform);
+        const r = await readProjectDir(projPath, platform, { entry });
         includes = { ...(includes ?? {}), ...r.includes };
         binaryIncludes = { ...(binaryIncludes ?? {}), ...r.binaryIncludes };
         if (r.crt0 != null) crt0 = r.crt0;
@@ -586,6 +594,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         crt0: crt0Rel2,
         codeLoc,
         dataLoc,
+        options: mergedOptions.length ? mergedOptions : undefined,
       });
       logBuildResult("build:run", platform, build);
       if (!build.ok || !build.binary) {
