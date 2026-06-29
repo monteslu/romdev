@@ -1,8 +1,8 @@
-// Packaging contract for the N64/PS1 cores + MIPS toolchain. These ship as separate
-// npm packages (romdev-core-pcsx-rearmed, romdev-core-parallel-n64,
-// romdev-toolchain-mips-gcc); this pins the shape a consumer relies on so a bad
-// build/pack can't silently ship (the "pcsx_vram.wasm" baked-name bug that the
-// npm-pack smoke test caught).
+// Packaging contract for the N64 core + MIPS toolchain. These ship as separate npm
+// packages (romdev-core-parallel-n64, romdev-toolchain-mips-gcc); this pins the shape a
+// consumer relies on so a bad build/pack can't silently ship (the "pcsx_vram.wasm"
+// baked-name bug that the npm-pack smoke test caught). (PS1 is beetle-psx-hw — the one
+// GPU+debug core — covered by the beetle packaging contract elsewhere.)
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -12,7 +12,6 @@ import { fileURLToPath } from "node:url";
 const PKGS = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 const CORE_PKGS = [
-  { dir: "romdev-core-pcsx-rearmed", platform: "ps1", coreName: "pcsx_rearmed" },
   { dir: "romdev-core-parallel-n64", platform: "n64", coreName: "parallel_n64" },
 ];
 
