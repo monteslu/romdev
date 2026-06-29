@@ -74,6 +74,17 @@ export async function runAsar(args) {
   });
   let { binary, log, exitCode } = first;
 
+  // asar exits a NORMAL error build via its C++ exception path (quit throws a
+  // numeric heap pointer, not a clean status), so the worker appends a generic
+  // `[worker] Abort in WASM: <ptr>` line even though asar DID write proper
+  // diagnostics (e.g. `…: error: (Elabel_not_found): …`). That line reads as a
+  // silent crash + the heap-pointer "<number>" looks like an OOM/trap — it cost
+  // real diagnosis time (v0.70.0 feedback #5). When the log already has a real
+  // asar diagnostic, this was an ordinary error exit: drop the misleading line.
+  if (exitCode !== 0 && /:\s*(error|warning)\s*:/i.test(log)) {
+    log = log.replace(/\n?\s*\[worker\] Abort in WASM:[^\n]*\n?/g, "\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
+  }
+
   // Silent-fail recovery. When asar throws a numeric value through Emscripten's
   // C++-exception path, that "number" is a heap pointer to the thrown object,
   // not an exit code — and we've lost the actual error message. Under
@@ -101,9 +112,19 @@ export async function runAsar(args) {
 
     const hex = "0x" + (exitCode >>> 0).toString(16).toUpperCase();
     const looksLikeHeapPointer = exitCode > 1024;
-    const hint = looksLikeHeapPointer
+    // Count DISTINCT files touched via the readfile/filesize/canreadfile API.
+    // asar-WASM has a known resource issue where reading enough distinct files
+    // that way (the canonical commercial-disassembly asset-conversion idiom, e.g.
+    // an incpal macro converting many .pal palettes) can abort with no diagnostic
+    // (v0.70.0 feedback #1). Surfacing the count turns a silent dead-end into a
+    // lead. (incbin of the same files does NOT trip it — only readfile1/filesize.)
+    const distinctReadfileFiles = countReadfileFiles(source);
+    const readfileHint = distinctReadfileFiles >= READFILE_DISTINCT_WARN
+      ? ` This source reads ${distinctReadfileFiles} DISTINCT files via readfile1/filesize/canreadfile — asar-WASM can abort with no diagnostic above a threshold of distinct files read that way (a known limitation). If you're converting assets at assemble time (e.g. .pal -> 15-bit), pre-convert them to .bin blobs offline and incbin those instead (incbin does NOT leak) — the output is byte-identical.`
+      : "";
+    const hint = (looksLikeHeapPointer
       ? "Exit code looks like a heap pointer, not a real exit code — likely a C++ exception that escaped without writing to stderr. Common causes: bank-border-crossed, section overlap, ROM size exceeded, or out-of-memory while assembling."
-      : "asar exited non-zero with no output.";
+      : "asar exited non-zero with no output.") + readfileHint;
 
     const layoutText = formatLayout(summarizeWrittenRegions(verboseBinary, baseRom, { flatBinary }));
 
@@ -153,6 +174,20 @@ export async function runAsar(args) {
   for (const [name, blob] of Object.entries(binaryIncludes)) {
     const size = blob instanceof Uint8Array ? blob.length : Buffer.from(blob, "base64").length;
     includesInfo[name] = { size };
+  }
+
+  // Proactive advisory: even when THIS build squeaked by, a source reading many
+  // distinct files via readfile1/filesize is at risk of the asar-WASM abort —
+  // surface it (non-fatal) so a growing disassembly doesn't dead-end later.
+  {
+    const distinct = countReadfileFiles(source);
+    if (distinct >= READFILE_DISTINCT_WARN && !/readfile.*distinct files/i.test(log)) {
+      log =
+        `[asar advisory] this source reads ${distinct} distinct files via readfile1/filesize — ` +
+        `asar-WASM can abort (no diagnostic) above a threshold of distinct files read that way. ` +
+        `If you're converting assets at assemble time, prefer pre-converting them to .bin and ` +
+        `'incbin' (byte-identical, no leak).\n` + log;
+    }
   }
 
   // Try to read the symbol file that asar emitted, if any.
@@ -346,20 +381,30 @@ function asarPreflight(source, { binaryIncludes = {}, includes = {} } = {}) {
   }
 
   // -----------------------------------------------------------------------
-  // Header-overlap detection: if an `incbin "foo.bin"` lands in a 32 KB
-  // bank window starting at $XX8000 and the file size would extend past
-  // $XXFFC0 (16 KB of usable area before the LoROM header), warn the user
-  // BEFORE asar happily clobbers the header during pass 2.
+  // Header-overlap detection: an `incbin "foo.bin"` whose span would reach
+  // $00FFC0 clobbers the LoROM header during pass 2. **The LoROM header lives
+  // ONLY in bank $00** ($00FFC0..$00FFFF) — for banks $01+, $XXFFC0 is ordinary
+  // ROM, and games (e.g. SMW's GFX banks 08-0B) legitimately fill across those
+  // boundaries under `check bankcross off`. So only flag BANK $00 (v0.70.0 #6:
+  // the old check false-positived on every bank as "$08FFC0 header"). Also honor
+  // `check bankcross off` (the user is explicitly opting into bank-crossing fills).
   //
-  // We only check incbin's pointing at files in binaryIncludes (where we
-  // know the size). We assume each incbin is preceded by an `org $XX8000`
-  // and that the file fits or doesn't from that base.
+  // We only check incbin's pointing at files in binaryIncludes (size known) and
+  // assume each is preceded by an `org $008000`. Note: this scans only the entry
+  // source — `incbin`s inside `incsrc`'d files aren't seen (so the check is a
+  // best-effort early warning, not full coverage).
   // -----------------------------------------------------------------------
   const incbinDirective = /^\s*incbin\s+"([^"]+)"/;
-  // Walk top-to-bottom, tracking the most recent org as the "cursor".
+  const bankcrossOffRe = /^\s*check\s+bankcross\s+off\b/i;
+  const bankcrossOnRe = /^\s*check\s+bankcross\s+(on|half)\b/i;
+  // Walk top-to-bottom, tracking the most recent org as the "cursor" and the
+  // current `check bankcross` state (off = the user opted into crossing fills).
   let cursor = null;
+  let bankcrossOff = false;
   for (let i = 0; i < lines.length; i++) {
     const line = stripComment(lines[i]);
+    if (bankcrossOffRe.test(line)) { bankcrossOff = true; continue; }
+    if (bankcrossOnRe.test(line)) { bankcrossOff = false; continue; }
     const orgMatch = line.match(orgDirective);
     if (orgMatch) {
       cursor = parseInt(orgMatch[1], 16);
@@ -373,15 +418,16 @@ function asarPreflight(source, { binaryIncludes = {}, includes = {} } = {}) {
     const size = blob instanceof Uint8Array ? blob.length : Buffer.from(blob, "base64").length;
     const bank = (cursor >>> 16) & 0xFF;
     const off = cursor & 0xFFFF;
-    const headerStart = 0xFFC0; // LoROM header lives at $XXFFC0..$XXFFFF
-    if (off >= 0x8000 && off + size > headerStart) {
+    const headerStart = 0xFFC0; // LoROM header lives at $00FFC0..$00FFFF (bank $00 ONLY)
+    if (!bankcrossOff && bank === 0x00 && off >= 0x8000 && off + size > headerStart) {
       const fmtAddr = (a) => "$" + a.toString(16).padStart(6, "0").toUpperCase();
       const endAddr = (bank << 16) | (off + size - 1);
       issues.push(
         `[asar preflight] line ${i + 1}: 'incbin "${name}"' (${size} bytes) starting at ` +
         `${fmtAddr(cursor)} would extend to ${fmtAddr(endAddr)}, overlapping the LoROM ` +
-        `header at $${bank.toString(16).padStart(2, "0").toUpperCase()}FFC0. Move this data ` +
-        `to a higher bank (e.g. 'org $018000') or shrink it below ${headerStart - off} bytes.`,
+        `header at $00FFC0. Move this data to a higher bank (e.g. 'org $018000') or ` +
+        `shrink it below ${headerStart - off} bytes. (Add 'check bankcross off' if this ` +
+        `crossing is intentional.)`,
       );
     }
     // Advance cursor so consecutive incbins in the same bank stack.
@@ -530,4 +576,28 @@ function asarPreflight(source, { binaryIncludes = {}, includes = {} } = {}) {
     return "error: asar preflight rejected source\n" + issues.join("\n");
   }
   return null;
+}
+
+// asar-WASM aborts (no diagnostic) once readfile1/filesize/canreadfile touch
+// enough DISTINCT files — the canonical commercial-disassembly asset-conversion
+// idiom (an incpal-style macro converting many .pal palettes at assemble time).
+// We can't always predict the exact ceiling, so warn above this many distinct
+// files so the build doesn't silently dead-end (v0.70.0 feedback #1).
+const READFILE_DISTINCT_WARN = 40;
+
+/**
+ * Count DISTINCT file names passed to the readfile / filesize / canreadfile
+ * functions. Only literal string filenames are counted (computed names can't be
+ * resolved statically). Used for the readfile-leak advisory.
+ * @param {string} source
+ * @returns {number}
+ */
+function countReadfileFiles(source) {
+  const names = new Set();
+  // readfile1("x",..) / readfile2(...) / readfile3 / readfile4 / filesize("x")
+  // / canreadfile("x",..) / canreadfile1..4 — first string arg is the filename.
+  const re = /\b(?:readfile[1-4]|canreadfile[1-4]?|filesize)\s*\(\s*"([^"]+)"/gi;
+  let m;
+  while ((m = re.exec(source)) !== null) names.add(m[1]);
+  return names.size;
 }

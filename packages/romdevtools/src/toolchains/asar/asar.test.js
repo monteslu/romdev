@@ -149,3 +149,37 @@ org $008000
   assert.match(r.log, /Asar 1\.\d+/);
   assert.match(r.log, /partial ROM layout/);
 });
+
+// ── v0.70.0 feedback fixes ────────────────────────────────────────────────
+
+test("v0.70.0 #5: a clean asar error exit is NOT mislabeled 'Abort in WASM'", async () => {
+  const r = await runAsar({ source: "lorom\norg $008000\n  jmp UndefinedLabelXYZ\norg $00FFFC\ndw $8000\n" });
+  assert.equal(r.exitCode, 1);
+  assert.ok(/Elabel_not_found|wasn't found/i.test(r.log), "should keep the real diagnostic");
+  assert.ok(!/Abort in WASM/.test(r.log), "should strip the misleading abort line on a clean error:\n" + r.log);
+});
+
+test("v0.70.0 #6: bankcross preflight only flags bank $00 + honors 'check bankcross off'", async () => {
+  const big = Buffer.alloc(0x8000).toString("base64"); // 32KB fills a whole bank window
+  // bank $08 crossing $08FFC0 is ordinary ROM — must NOT be rejected
+  const a = await runAsar({ source: "lorom\norg $088000\nincbin \"g.bin\"\n", binaryIncludes: { "g.bin": big } });
+  assert.ok(!/preflight/.test(a.log), "bank $08 cross should NOT be a preflight rejection:\n" + a.log);
+  // bank $00 crossing $00FFC0 SHOULD be flagged (real header overlap)
+  const b = await runAsar({ source: "lorom\norg $008000\nincbin \"g.bin\"\n", binaryIncludes: { "g.bin": big } });
+  assert.ok(/preflight.*\$00FFC0/.test(b.log), "bank $00 cross should be flagged:\n" + b.log);
+  // `check bankcross off` suppresses even bank $00
+  const c = await runAsar({ source: "lorom\ncheck bankcross off\norg $008000\nincbin \"g.bin\"\n", binaryIncludes: { "g.bin": big } });
+  assert.ok(!/preflight/.test(c.log), "'check bankcross off' should suppress:\n" + c.log);
+});
+
+test("v0.70.0 #1: a source reading many distinct files via readfile gets an advisory", async () => {
+  const bins = {};
+  let src = "lorom\norg $008000\n";
+  for (let i = 0; i < 82; i++) { bins[`f${i}.bin`] = Buffer.from([i & 0xff, 1, 2]).toString("base64"); src += `db readfile1("f${i}.bin",0)\n`; }
+  src += "org $00FFFC\ndw $8000\n";
+  const r = await runAsar({ source: src, binaryIncludes: bins });
+  assert.ok(/asar advisory.*82 distinct/.test(r.log), "should warn about 82 distinct readfile targets:\n" + r.log.slice(0, 400));
+  // a small build (1 file) must NOT carry the advisory
+  const r2 = await runAsar({ source: 'lorom\norg $008000\ndb readfile1("f0.bin",0)\norg $00FFFC\ndw $8000\n', binaryIncludes: { "f0.bin": "AAEC" } });
+  assert.ok(!/asar advisory/.test(r2.log), "small build should not warn");
+});

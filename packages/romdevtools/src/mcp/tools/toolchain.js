@@ -703,7 +703,7 @@ export function registerToolchainTools(server, z, sessionKey) {
     "• output:'rom' (default) — assemble or compile `source` (single) / `sources` ({name:contents}) / `sourcePath` / `sourcesPaths`. Returns the ROM (path by default; `inline:true` for binaryBase64) + build log. **`binaryIncludes`/`binaryIncludePaths` (base64/path CHR-ROM, music blobs for `.incbin`) — WITHOUT them no game with external assets builds.** `includes`/`includePaths` for `.include`d text. `linkerConfig` (cc65; NES preset 'chr-ram-runtime' RECOMMENDED). `crt0`/`crt0Path`/`codeLoc`/`dataLoc` (SDCC). `runtime`/`maxmod`/`rebuildSdk` (GBA/Genesis SDK). **`lint:'strict'` fails the build (stage:'lint', no binary) if the pre-flight SDCC crash-pattern scan flags anything (e.g. the uint8 loop-bound trap); 'advisory' (default) just lists hits in issues[].** **`includeSymbols:true` returns the .map text inline on a PLAIN rom build — distinct from output:'romWithDebug' which writes .dbg/.map FILES.** Language is inferred from extension/content — usually OMIT `language`.\n" +
     "• output:'romWithDebug' — like 'rom' but also emits linker debug info for the `symbols` tool: cc65 → `.dbg`, SDCC → sdld `.map`, Genesis m68k → GNU ld map (find where a RAM var landed). DEFAULT writes ROM + debug file + log to disk (`outputPath` required unless `inline:true`). **`resolveSymbols:['grid','score']` folds those names' addresses ({resolvedSymbols:{grid:{address,hex,region?,ramOffset?}}}) straight into the result — the cheap way to a WRAM variable's address without loading the whole map (or round-tripping it through `symbols`).**\n" +
     "• output:'run' — BUILD + LOAD + RUN + SCREENSHOT in one round trip — the fastest iteration loop. Same build args; runs `frames` frames and returns the screenshot INLINE. `holdInputs` holds controller state; `screenshotPath` writes the PNG to disk instead; `projectName` titles the playtest window.\n" +
-    "• output:'project' — build a project DIRECTORY (`path`) without re-passing the file manifest each call. Entry point is `main.c` (C/SGDK Genesis, GBA, cc65/SDCC C) OR `main.s`/`main.asm` (asm). Every `.c`/`.s`/`.asm` in the dir is a translation unit (linked together), every `.h`/`.inc` an include, and `.bin/.chr/.pcm/.brr/.vgm/...` become binaryIncludes (for `.incbin`). Iterate an on-disk project by re-calling with just `{path, platform}`. **This is the no-boilerplate path for an examples({op:'fork'}) dir: the per-platform recipe auto-supplies the crt0 + load address — GB/GBC default `gb_crt0.s` + `codeLoc:0x150` (don't hand-pass them!), MSX routes `msx_crt0.s` + `codeLoc:0x4010`, SMS/GG auto-inject their bundled crt0, NES applies the chr-ram-runtime preset. PREFER this over re-passing `crt0Path`/`codeLoc` to output:'rom' for a forked project.**",
+    "• output:'project' — build a project DIRECTORY (`path`) without re-passing the file manifest each call. Entry point auto-detects `main.c` (C/SGDK Genesis, GBA, cc65/SDCC C) OR `main.s`/`main.asm` (asm); pass `entry:'smw.asm'` to point at a differently-named top-level file (e.g. an existing disassembly). Every `.c`/`.s`/`.asm` in the dir is a translation unit (linked together), every `.h`/`.inc` an include, and `.bin/.chr/.pcm/.brr/.vgm/...` (recursively, including subdirectories) become binaryIncludes (for `.incbin`). `options` (e.g. asar `--define _VER=1`) and `defines` are honored here too. Iterate an on-disk project by re-calling with just `{path, platform}`. **This is the no-boilerplate path for an examples({op:'fork'}) dir: the per-platform recipe auto-supplies the crt0 + load address — GB/GBC default `gb_crt0.s` + `codeLoc:0x150` (don't hand-pass them!), MSX routes `msx_crt0.s` + `codeLoc:0x4010`, SMS/GG auto-inject their bundled crt0, NES applies the chr-ram-runtime preset. PREFER this over re-passing `crt0Path`/`codeLoc` to output:'rom' for a forked project.**",
     {
       output: z.enum(["rom", "romWithDebug", "run", "project"])
         .describe("rom=produce a ROM (default); romWithDebug=ROM + .dbg/.map debug files; run=build+load+run+screenshot; project=build a project directory."),
@@ -722,7 +722,8 @@ export function registerToolchainTools(server, z, sessionKey) {
       crt0Path: z.string().optional().describe("Path-based `crt0`. NOT read by output:'romWithDebug' — pass `crt0` there."),
       codeLoc: z.coerce.number().int().optional().describe("SDCC — _CODE load address (default $0000; GB/GBC bundled crt0 wants 0x150)."),
       dataLoc: z.coerce.number().int().optional().describe("SDCC — _DATA (WRAM) load address (default $C000 on Z80). NOT read by output:'romWithDebug'."),
-      options: z.array(z.string()).optional().describe("output:'rom' — extra toolchain CLI options."),
+      options: z.array(z.string()).optional().describe("Extra toolchain CLI options. Honored by output:'rom' AND output:'project' (e.g. asar `--define _VER=1`, `--fix-checksum=off`, `-wno…`)."),
+      defines: z.record(z.string(), z.union([z.string(), z.number()])).optional().describe("Assembler defines as a map ({_VER:1}) — convenience for asar's `--define NAME=VALUE`. Merged into `options` for output:'rom'/'project'. (Equivalent to passing `--define _VER=1` yourself.)"),
       linkerConfig: z.string().optional().describe("ld65 linker config (cc65). NES presets: 'chr-ram-runtime' (RECOMMENDED for homebrew C — full crt0 + iNES header + NMI w/ OAM DMA + `_shadow_oam` at $0200), 'chr-ram' (bare nmi:rti stub), 'chr-rom' (cc65-C with FIXED CHR-ROM art — segment split + CHARS segment; supply CHR via binaryIncludePaths into a CHARS source + the header via `inesHeader`). Or full .cfg contents. Preset NAMES only resolve on output:'rom'/'run'; output:'romWithDebug' takes raw .cfg contents only. **For rebuilding a commercial NROM game from its disassembly, prefer `inesHeader` over a raw .cfg.**"),
       linkerConfigPath: z.string().optional().describe("Path-based `linkerConfig`: absolute path to a .cfg file on disk (the server reads it — the cfg never enters your context; e.g. the multi-bank cfg a banked-NES disasm project ships). Ignored when `linkerConfig` is passed inline."),
       inesHeader: z.object({
@@ -746,6 +747,7 @@ export function registerToolchainTools(server, z, sessionKey) {
       projectName: z.string().optional().describe("output:'run' — playtest window title (no effect on the ROM)."),
       // project-only
       path: z.string().optional().describe("output:'project' — absolute path to the project directory."),
+      entry: z.string().optional().describe("output:'project' — name of the top-level source file when it isn't main.c/main.s/main.asm (e.g. 'smw.asm' for an existing disassembly). Project-relative or a bare filename. Default: auto-detect main.c / main.s / main.asm."),
       // shared output
       outputPath: z.string().optional().describe("output:'rom'/'romWithDebug'/'project' — absolute path to write the ROM (romWithDebug writes .dbg/.map/.log alongside; REQUIRED for romWithDebug unless inline:true). output:'rom' omitted → temp-file path returned (or inline:true for base64)."),
       inline: z.boolean().default(false).describe("output:'rom'/'romWithDebug' — return binaryBase64 (+ debug text for romWithDebug) in the response instead of writing to disk."),
@@ -906,6 +908,45 @@ export function projectBuildRecipe(platform, names) {
 }
 
 /**
+ * Recursively collect files in SUBDIRECTORIES of a project (top-level files are
+ * handled by the recipe). Returns {rel, abs} with `rel` POSIX-relative to root
+ * (e.g. "col/misc/x.pal"), so the asar/incbin mount resolves the same path the
+ * source references. Skips dot-dirs and common build/VCS dirs to avoid hauling
+ * in junk. Caps total files to keep a pathological tree from blowing up.
+ * @param {string} root
+ * @returns {Promise<Array<{rel:string, abs:string}>>}
+ */
+async function walkSubdirAssets(root) {
+  /** @type {Array<{rel:string, abs:string}>} */
+  const out = [];
+  const SKIP_DIR = new Set([".git", ".svn", "node_modules", "out", "build", "obj", ".vscode"]);
+  const MAX = 5000;
+  async function walk(dir, rel) {
+    let ents;
+    try { ents = await readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      if (out.length >= MAX) return;
+      const childRel = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        if (e.name.startsWith(".") || SKIP_DIR.has(e.name)) continue;
+        await walk(path.join(dir, e.name), childRel);
+      } else if (e.isFile()) {
+        out.push({ rel: childRel, abs: path.join(dir, e.name) });
+      }
+    }
+  }
+  // Only descend into subdirectories (top-level handled by the flat loop/recipe).
+  let top;
+  try { top = await readdir(root, { withFileTypes: true }); } catch { return out; }
+  for (const e of top) {
+    if (e.isDirectory() && !e.name.startsWith(".") && !SKIP_DIR.has(e.name)) {
+      await walk(path.join(root, e.name), e.name);
+    }
+  }
+  return out;
+}
+
+/**
  * Read a scaffolded project DIRECTORY into the build inputs, applying the
  * per-platform recipe (crt0 routing, linker preset, runtime, skip-list) and
  * the GBA runtime content-sniff. The SINGLE source of truth shared by
@@ -913,17 +954,40 @@ export function projectBuildRecipe(platform, names) {
  * can never drift. Returns crt0 as RAW source text (callers assemble it).
  * @param {string} projPath
  * @param {string} platform
+ * @param {{entry?: string}} [opts]  entry: name of the top-level source when it isn't main.*
  */
-export async function readProjectDir(projPath, platform) {
+export async function readProjectDir(projPath, platform, opts = {}) {
   const entries = await readdir(projPath, { withFileTypes: true });
   const files = entries.filter((e) => e.isFile());
 
+  // Subdirectory assets — a real disassembly keeps palettes/gfx in nested dirs
+  // (e.g. col/misc/back_area.pal) and `.incbin`s them by relative path. The old
+  // flat readdir never saw them → "file not found". Walk recursively and add any
+  // binary asset (regardless of extension/double-extension) keyed by its path
+  // RELATIVE to the project root, so the asar/incbin mount resolves it.
+  const subAssets = await walkSubdirAssets(projPath);
+
+  // Entry override: an existing project whose top file isn't main.* (e.g.
+  // smw.asm). Accept a project-relative or bare name; it becomes the single
+  // entry source. Without it, auto-detect main.c / main.s / main.asm.
+  const entryName = opts.entry ? path.normalize(opts.entry).replace(/^[./]+/, "") : null;
+  if (entryName) {
+    const exists = files.some((f) => f.name === entryName) ||
+      subAssets.some((a) => a.rel === entryName);
+    if (!exists) {
+      throw new Error(
+        `entry '${entryName}' not found in ${projPath}. Found top-level: ` +
+        `${files.map((f) => f.name).join(", ") || "(none)"}.`
+      );
+    }
+  }
+
   const hasC = files.some((f) => f.name === "main.c");
   const hasAsm = files.some((f) => f.name === "main.s" || f.name === "main.asm");
-  if (!hasC && !hasAsm) {
+  if (!entryName && !hasC && !hasAsm) {
     throw new Error(
-      `no entry point in ${projPath}: expected main.c (C/SGDK/GBA/cc65 project) or main.s / main.asm (asm project). ` +
-      `Found: ${files.map((f) => f.name).join(", ") || "(empty)"}.`
+      `no entry point in ${projPath}: expected main.c (C/SGDK/GBA/cc65 project) or main.s / main.asm (asm project), ` +
+      `or pass entry:'<top-file>'. Found: ${files.map((f) => f.name).join(", ") || "(empty)"}.`
     );
   }
 
@@ -932,6 +996,15 @@ export async function readProjectDir(projPath, platform) {
   // (sega.preprocessed.s). The recipe routes crt0 / preset / runtime / skips so
   // the dir build matches the hand-written build({output:'run'}) call.
   const recipe = projectBuildRecipe(platform, files.map((f) => f.name));
+
+  // With a custom entry, the entry is the ONE source; every OTHER top-level
+  // .asm/.s/.c routes as an include (asar/wla resolve `.include`/`#include`
+  // from the includes mount), matching the single-source asm model.
+  if (entryName && /\.(asm|s)$/i.test(entryName)) {
+    for (const f of files) {
+      if (/\.(c|s|asm)$/i.test(f.name) && f.name !== entryName) recipe.includeAsC.add(f.name);
+    }
+  }
 
   /** @type {Record<string,string>} */ const sources = {};
   /** @type {Record<string,string>} */ const includes = {};
@@ -950,6 +1023,19 @@ export async function readProjectDir(projPath, platform) {
       // Any binary asset an .incbin might reference. (.xgc = compiled XGM2 blob,
       // .vgz/.esf/etc = music driver inputs.) Missing one = "file not found: X".
       binaryIncludes[n] = (await readFile(path.join(projPath, n))).toString("base64");
+    }
+  }
+
+  // Stage subdirectory assets (any extension) keyed by their path relative to the
+  // project root, so `incbin "col/misc/X.pal"` / `.incbin "gfx/a.bin"` resolve in
+  // the mount. Text-ish includes (.asm/.s/.h/.inc) found in subdirs go to includes
+  // (so `incsrc "lib/foo.asm"` works); everything else is a binary asset.
+  for (const a of subAssets) {
+    if (recipe.skip.has(a.rel) || a.rel === entryName) continue;
+    if (/\.(h|inc|asm|s)$/i.test(a.rel)) {
+      includes[a.rel] = (await readFile(a.abs)).toString("utf-8");
+    } else {
+      binaryIncludes[a.rel] = (await readFile(a.abs)).toString("base64");
     }
   }
 
@@ -972,8 +1058,17 @@ export async function readProjectDir(projPath, platform) {
   return { sources, includes, binaryIncludes, crt0, codeLoc: recipe.codeLoc, dataLoc: recipe.dataLoc, linkerConfig: recipe.linkerConfig, runtime, maxmod: recipe.maxmod };
 }
 
-export async function buildProjectCore({ path: projPath, platform, outputPath }) {
-  const { sources, includes, binaryIncludes, crt0, codeLoc, dataLoc, linkerConfig, runtime, maxmod } = await readProjectDir(projPath, platform);
+export async function buildProjectCore({ path: projPath, platform, outputPath, options, defines, entry }) {
+  const { sources, includes, binaryIncludes, crt0, codeLoc, dataLoc, linkerConfig, runtime, maxmod } = await readProjectDir(projPath, platform, { entry });
+
+  // Thread `options` (e.g. asar `--define _VER=1`, `--fix-checksum=off`) + the `defines`
+  // convenience map through to the toolchain — project mode used to silently drop them.
+  const mergedOptions = [
+    ...(Array.isArray(options) ? options : []),
+    ...(defines && typeof defines === "object"
+      ? Object.entries(defines).flatMap(([k, v]) => ["--define", `${k}=${v}`])
+      : []),
+  ];
 
   // Linker preset: the recipe names it (e.g. NES 'chr-ram-runtime', which ships
   // the OAM/CHARS segments + its own crt0). resolveLinkerConfig also returns any
@@ -1012,6 +1107,7 @@ export async function buildProjectCore({ path: projPath, platform, outputPath })
     crt0: crt0Rel,
     codeLoc,
     dataLoc,
+    options: mergedOptions.length ? mergedOptions : undefined,
   });
   if (outputPath && result.binary) {
     await mkdir(path.dirname(outputPath), { recursive: true });
