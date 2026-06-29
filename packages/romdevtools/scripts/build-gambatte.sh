@@ -44,12 +44,25 @@ else
   echo "Applied $PATCH_FILE"
 fi
 
+# ── romdev shared debug lib (0.80.0) ────────────────────────────────────────
+# The watchpoint/readwatch/range/coverage/pcbreak/watchdog machinery + exports now
+# live in scripts/romdev-debug/romdev_debug.c (shared by all cores). Stage it into
+# the gambatte tree so cpu.cpp/libretro.cpp's `#include "romdev_debug.h"` resolves,
+# compile it, and add it to the link. The per-core patch only keeps the GB hooks.
+RDBG_SRC="$PROJECT_DIR/scripts/romdev-debug"
+cp "$RDBG_SRC/romdev_debug.h" "$RDBG_SRC/romdev_debug.c" "$GAMBATTE_DIR/libgambatte/src/"
+ROMDEV_INC="-I$GAMBATTE_DIR/libgambatte/src"
+
 emmake make -f Makefile.libretro platform=emscripten clean >/dev/null 2>&1 || true
 # `make clean` doesn't remove the .a we create by renaming the .bc, so a stale
 # archive from a prior build can survive and shadow the fresh one (find -quit
 # picks .a before .bc). Drop stale archives so only this build's output remains.
 find . -maxdepth 2 -name "*_libretro_emscripten.a" -delete 2>/dev/null || true
-emmake make -f Makefile.libretro platform=emscripten -j"$(nproc)"
+# Inject the romdev_debug.h include via INCFLAGS_PLATFORM — the Makefile's designated
+# extension point (it's `+=`'d into INCFLAGS, so it ADDS to the core's own -I dirs
+# instead of clobbering them like a bare CFLAGS= would).
+emmake make -f Makefile.libretro platform=emscripten -j"$(nproc)" \
+  INCFLAGS_PLATFORM="$ROMDEV_INC"
 
 CORE_LIB=$(find . -maxdepth 2 \( -name "*.a" -o -name "*_libretro_emscripten.bc" \) -print -quit)
 if [ -z "$CORE_LIB" ]; then
@@ -103,6 +116,11 @@ if [ -n "$LIBRETRO_COMMON" ]; then
     emar rcs "$CORE_LIB" $COMMON_OBJS
   fi
 fi
+
+# Compile the shared romdev_debug.c + add it to the archive so its exports link in.
+RDBG_OBJ="$GAMBATTE_DIR/libgambatte/src/romdev_debug.o"
+emcc -c -O2 "$GAMBATTE_DIR/libgambatte/src/romdev_debug.c" -o "$RDBG_OBJ"
+emar rcs "$CORE_LIB" "$RDBG_OBJ"
 
 EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_watchdog_set","_romdev_regsnap_get","_romdev_irqblock_set","_romdev_setreg","_romdev_getreg","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
 EXPORTED_RUNTIME='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS"]'

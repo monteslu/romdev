@@ -36,11 +36,23 @@ else
   echo "Applied $PATCH_FILE"
 fi
 
+# ── romdev shared debug lib (0.80.0) ────────────────────────────────────────
+# The watchpoint/readwatch/range/coverage/pcbreak/watchdog machinery + exports now
+# live in scripts/romdev-debug/romdev_debug.c (shared by all cores). gpgx is the
+# dual-CPU case: BOTH the m68k (m68kcpu.c/.h) and the z80 (z80.c) call the same
+# shared romdev_on_* hooks → one shared debug state, exactly as before. Stage the
+# lib at the gpgx src root so the #include resolves from every dir, inject the
+# include via INCFLAGS_PLATFORM, and compile+archive the .c.
+RDBG_SRC="$PROJECT_DIR/scripts/romdev-debug"
+cp "$RDBG_SRC/romdev_debug.h" "$RDBG_SRC/romdev_debug.c" "$GPGX_DIR/"
+ROMDEV_INC="-I$GPGX_DIR"
+
 emmake make -f Makefile.libretro platform=emscripten clean >/dev/null 2>&1 || true
 # Drop a stale .a (created by renaming the .bc; make clean doesn't remove it)
 # so find -quit can't pick it over this build's fresh output.
 find . -maxdepth 2 -name "*_libretro*.a" -delete 2>/dev/null || true
-emmake make -f Makefile.libretro platform=emscripten -j"$(nproc)"
+emmake make -f Makefile.libretro platform=emscripten -j"$(nproc)" \
+  INCFLAGS_PLATFORM="$ROMDEV_INC"
 
 CORE_LIB=$(find . -maxdepth 2 \( -name "*.a" -o -name "*_libretro*.bc" \) -print -quit)
 if [ -z "$CORE_LIB" ]; then
@@ -91,7 +103,12 @@ if [ -n "$LIBRETRO_COMMON" ]; then
   fi
 fi
 
-EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_watchdog_set","_romdev_setreg","_romdev_getreg","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get","_romdev_dmawatch_set","_romdev_dmawatch_get","_romdev_regsnap_get","_romdev_run_pure","_romdev_vramwatch_set","_romdev_vramwatch_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
+# Compile the shared romdev_debug.c + add it to the archive so its exports link in.
+RDBG_OBJ="$GPGX_DIR/romdev_debug.o"
+emcc -c -O2 "$GPGX_DIR/romdev_debug.c" -o "$RDBG_OBJ"
+emar rcs "$CORE_LIB" "$RDBG_OBJ"
+
+EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_watchdog_set","_romdev_irqblock_set","_romdev_setreg","_romdev_getreg","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get","_romdev_dmawatch_set","_romdev_dmawatch_get","_romdev_regsnap_get","_romdev_run_pure","_romdev_vramwatch_set","_romdev_vramwatch_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
 EXPORTED_RUNTIME='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS"]'
 
 mkdir -p "$OUT"
