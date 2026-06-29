@@ -36,11 +36,14 @@ export async function buildShC(args) {
   const bundledDcH = await readFile(path.join(LIB, "dc.h"), "utf-8").catch(() => null);
   const headers = { ...(bundledDcH != null ? { "dc.h": bundledDcH } : {}), ...(args.headers ?? {}) };
   // -m4-single-only is passed by the cc1 wrapper; here the language/codegen knobs.
-  // Default to -O2, but let a user-supplied -O<level> win (gcc honors the LAST -O, so a
-  // default appended AFTER the user's would clobber it — only add -O2 if absent).
+  // Default to -O1, NOT -O2: the sh-elf cc1.wasm build has an -O2-only pass that aborts
+  // ("memory access out of bounds" during "Assembling functions") on common control
+  // flow — e.g. an infinite loop that mutates locals through both `if`/`else` branches.
+  // -O1 dodges it entirely and is plenty for DC homebrew. A user-supplied -O<level>
+  // still wins (gcc honors the LAST -O, so only add a default when none is present).
   const userOpts = args.cc1Options ?? [];
   const hasOpt = userOpts.some((o) => /^-O/.test(o));
-  const cc1Options = [...(hasOpt ? [] : ["-O2"]), ...userOpts, "-ffreestanding", "-fno-builtin", "-Wall"];
+  const cc1Options = [...(hasOpt ? [] : ["-O1"]), ...userOpts, "-ffreestanding", "-fno-builtin", "-Wall"];
   const sources = args.sources ?? (args.source != null ? { "main.c": args.source } : {});
   let log = "";
 

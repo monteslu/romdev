@@ -99,3 +99,35 @@ test("dreamcast: cpuState (SH-4 regs) + audioDebug (AICA) read from the rebuilt 
       host.dispose?.();
     }
   });
+
+test("dreamcast: all 5 genre examples build + render on the GPU (full 480-line frame)", { timeout: 400000 }, async () => {
+  const { readFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const exDir = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "examples", "dreamcast");
+  const core = resolveCore("dreamcast");
+  const haveGl = await glStackAvailable();
+  for (const ex of ["shmup", "platformer", "puzzle", "racing", "sports"]) {
+    const src = await readFile(path.join(exDir, ex, "main.c"), "utf8");
+    const built = await buildForPlatform({ platform: "dreamcast", source: src });
+    assert.ok(built.ok, `${ex} builds: ${(built.log || "").slice(-160)}`);
+    if (!core || !haveGl) continue;
+    const host = new LibretroHost();
+    try {
+      await host.loadCore(core.jsPath, core.wasmPath, { hwRender: true, platform: "dreamcast" });
+      await host.loadMedia({ platform: "dreamcast", bytes: built.binary, virtualName: `/${ex}.elf` });
+      for (let i = 0; i < 150; i++) host.stepFrames(1);
+      const fb = host.hwRender.readbackFrame(host.state.hwFrameW, host.state.hwFrameH);
+      let nonBlack = 0, top = 0; const colors = new Set();
+      for (let y = 0; y < fb.height; y++) for (let x = 0; x < fb.width; x++) {
+        const o = (y * fb.width + x) * 4;
+        if (fb.pixels[o] | fb.pixels[o + 1] | fb.pixels[o + 2]) { nonBlack++; if (y < fb.height / 2) top++; }
+        colors.add((fb.pixels[o] << 16) | (fb.pixels[o + 1] << 8) | fb.pixels[o + 2]);
+      }
+      assert.ok(nonBlack > 50000, `${ex} renders on the GPU: ${nonBlack} px`);
+      assert.ok(top > 1000, `${ex} fills the TOP half too (interlace 480i, not 240p): top=${top}`);
+      assert.ok(colors.size >= 3, `${ex} multiple colors: ${colors.size}`);
+    } finally {
+      host.dispose?.();
+    }
+  }
+});
