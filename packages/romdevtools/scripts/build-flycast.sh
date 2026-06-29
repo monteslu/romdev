@@ -82,11 +82,19 @@ emmake make flycast_libretro -j"$(nproc)"
 # pthread no-op wrapper (single-threaded build): compile it + --wrap the pthread fns.
 emcc -O2 -c "$SCRIPT_DIR/patches/romdev-snippets/flycast-pthread-noop.c" -o /tmp/flycast-pthread-noop.o
 
+# romdev debug exports (cpuState SH-4 + audioDebug AICA). Compiled C++ against the
+# flycast core headers (Sh4cntx in sh4_if.h, aica_reg in aica_mem.h). em++ so the
+# extern "C" exports link cleanly into the module.
+em++ -O2 -c "$SCRIPT_DIR/patches/romdev-snippets/flycast-debug.c" -o /tmp/flycast-debug.o \
+  -I"$BUILD_DIR/core" -I"$BUILD_DIR/core/deps" -I"$BUILD_DIR/core/deps/nowide/include" \
+  -I"$BUILD_DIR/core/deps/glm" -I"$BUILD_DIR/core/deps/stb" -I"$BUILD_DIR/core/deps/xxHash" \
+  -std=c++17 -DTARGET_NO_OPENMP -DLIBRETRO -DTARGET_NO_THREADS
+
 # ── link all archives → one WASM module ─────────────────────────────────────
 LIBS="libflycast_libretro.a libflycast-resources.a core/deps/libelf/libelf.a core/deps/nowide/libnowide.a core/deps/miniupnpc/libminiupnpc.a core/deps/libchdr/libchdr-static.a core/deps/tinygettext/libtinygettext.a core/deps/libzip/lib/libzip.a core/deps/xxHash/cmake_unofficial/libxxhash.a core/deps/libchdr/deps/zlib-*/libz.a core/deps/libchdr/deps/lzma-*/liblzma.a core/deps/libchdr/deps/zstd-*/build/cmake/lib/libzstd.a"
-EXPORTED='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free","_emscripten_GetProcAddress"]'
+EXPORTED='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_romdev_sh4_regs_get","_romdev_aica_get","_malloc","_free","_emscripten_GetProcAddress"]'
 EXPORTED_RT='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS","dynCall","GL"]'
-emcc /tmp/flycast-pthread-noop.o $LIBS -O2 -Wl,--wrap=pthread_create -Wl,--wrap=pthread_join -Wl,--wrap=pthread_detach -s WASM=1 -s MODULARIZE=1 -s EXPORT_ES6=1 -s "EXPORT_NAME=create_flycast" \
+emcc /tmp/flycast-pthread-noop.o /tmp/flycast-debug.o $LIBS -O2 -Wl,--wrap=pthread_create -Wl,--wrap=pthread_join -Wl,--wrap=pthread_detach -s WASM=1 -s MODULARIZE=1 -s EXPORT_ES6=1 -s "EXPORT_NAME=create_flycast" \
   -s "ENVIRONMENT=node,web" -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=536870912 \
   -s MAXIMUM_MEMORY=1073741824 -s STACK_SIZE=4194304 -s ALLOW_TABLE_GROWTH=1 \
   -s EXPORTED_FUNCTIONS="$EXPORTED" -s EXPORTED_RUNTIME_METHODS="$EXPORTED_RT" \

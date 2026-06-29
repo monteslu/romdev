@@ -64,3 +64,38 @@ test("dreamcast: a C homebrew builds (sh-elf-gcc) + boots on Flycast reios + ren
       host.dispose?.();
     }
   });
+
+test("dreamcast: cpuState (SH-4 regs) + audioDebug (AICA) read from the rebuilt flycast core",
+  { timeout: 180000 }, async () => {
+    const built = await buildForPlatform({ platform: "dreamcast",
+      source: `#include "dc.h"\nvoid main(void){ dc_video_init(); dc_clear(dc_rgb(0,0,32)); for(;;){} }` });
+    assert.ok(built.ok, `homebrew builds: ${(built.log || "").slice(-200)}`);
+    if (!(await glStackAvailable())) { console.log("GL stack unavailable; skipping"); return; }
+    const core = resolveCore("dreamcast");
+    if (!core) return;
+    const { getCPUState } = await import("../src/host/cpu-state.js");
+    const { decodeAica } = await import("../src/host/dc-aica-state.js");
+    const host = new LibretroHost();
+    try {
+      await host.loadCore(core.jsPath, core.wasmPath, { hwRender: true, platform: "dreamcast" });
+      if (!host.sh4RegsSupported()) { console.log("core has no SH-4 export; skipping"); return; }
+      await host.loadMedia({ platform: "dreamcast", bytes: built.binary, virtualName: "/built.elf" });
+      for (let i = 0; i < 60; i++) host.stepFrames(1);
+
+      // cpuState — SH-4 PC + SP land in the KOS-linked RAM region (0x8C00_0000+).
+      const cs = getCPUState(host, "dreamcast");
+      assert.ok(cs, "getCPUState returned a state");
+      assert.equal(((cs.pc >>> 0) & 0xf0000000) >>> 0, 0x80000000, `PC in SH-4 space (got ${cs.pcHex})`);
+      assert.ok(cs.flags && "T" in cs.flags, "SR flags decoded");
+      assert.ok("r15" in cs.registers, "r15 present");
+
+      // audioDebug — the AICA decode gives 64 channels + a master volume.
+      assert.ok(host.aicaRegsSupported(), "AICA export present");
+      const aica = decodeAica(host.getAicaRegs());
+      assert.equal(aica.chip, "aica");
+      assert.equal(aica.voices.length, 64, "64 AICA channels");
+      assert.ok(typeof aica.masterVolume === "number", "master volume decoded");
+    } finally {
+      host.dispose?.();
+    }
+  });

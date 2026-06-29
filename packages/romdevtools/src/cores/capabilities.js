@@ -265,11 +265,14 @@ export const CAPABILITIES = {
       // code (run + memory introspection), and the PowerVR2 present-path works — flycast
       // renders to the GL FBO and the host reads it back (verified: a framebuffer-writing
       // program shows ~727k captured pixels). `build` lands with the sh-elf-gcc WASM
-      // toolchain. The 3D renderer has no tile/sprite inspectors (N/A by hw).
-      // disasm/decompile = SH-4 analysis slice (rizin `sh` + Ghidra SuperH4 SLEIGH).
+      // toolchain. cpuState (SH-4 Sh4cntx regs) + audioDebug (AICA 64-channel register
+      // window) come from romdev_sh4_regs_get/romdev_aica_get patched into the flycast
+      // libretro entry (see scripts/patches/romdev-snippets/flycast-debug.c). The 3D
+      // renderer has no tile/sprite inspectors (N/A by hw). disasm/decompile = SH-4
+      // analysis slice (rizin `sh` + Ghidra SuperH4 SLEIGH).
       build: true, run: true, screenshot: true,
       inspectSprites: false, inspectPalette: false, inspectBackground: false,
-      renderingContext: false, cpuState: false, audioDebug: false,
+      renderingContext: false, cpuState: true, audioDebug: true,
       cart: false, disasm: true, decompile: true,
     },
   },

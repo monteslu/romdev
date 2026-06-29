@@ -65,10 +65,12 @@ samples to AICA RAM and triggers channels. KOS ships an AICA sound driver
 - **`disasm` / `decompile`** — SH-4 via rizin (`sh`) + Ghidra (SuperH4 SLEIGH). ✅
   (Good decompile quality; SH-4 is a clean 32-bit RISC.)
 - **`build`** — sh-elf-gcc → WASM toolchain. ✅
-- **`cpu({op:'read'})` / `breakpoint` / `watch` / `audioDebug`** — these read core
-  exports Flycast doesn't yet carry (need SH-4 register-struct + memory-path + AICA
-  reads patched in). Currently **N/A** in the capability map — honest, not broken.
-  (Tracked for a core rebuild.)
+- **`cpu({op:'read'})`** — live SH-4 register file (`romdev_sh4_regs_get`: r0..r15, pc,
+  pr, gbr, vbr, sr, mac, fpul + decoded SR flags). ✅
+- **`audioDebug({op:'inspect', chip:'aica'})`** — the AICA's 64 PCM/ADPCM channels
+  (key-on / volume / pitch / loop / format) + master volume (`romdev_aica_get`). ✅
+- **`breakpoint` / `watch`** — not yet (need interpreter-step + memory-path hooks in
+  flycast; cpuState/audioDebug are plain reads and ARE wired).
 - **`renderingContext`** is **N/A** — 3D TA machine, no 2D tile VDP to decode.
 
 ## Build pipeline
@@ -81,5 +83,5 @@ against KallistiOS for libc + the TA/AICA/Maple drivers. `#include` the bundled
 ## What's NOT bundled / hardware limits
 
 - No GD-ROM/CDDA streaming or VMU save emulation in the dev loop.
-- `cpuState`/`audioDebug` not yet exported by the core (see above).
+- `breakpoint`/`watch` not yet (need interpreter-step hooks; cpuState/audioDebug ARE wired).
 - `renderingContext` is N/A (3D TA, no tile VDP).
