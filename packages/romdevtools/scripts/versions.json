@@ -155,17 +155,6 @@
       "platforms": [
         "n64"
       ]
-    },
-    "pcsx_rearmed": {
-      "kind": "git",
-      "url": "https://github.com/libretro/pcsx_rearmed.git",
-      "ref": "master",
-      "commit": "94a7ee303c7852799caceb5af93cfd4f75c442e0",
-      "license": "GPL-2.0",
-      "patch": "scripts/patches/romdev-snippets/ps1-regsnap.c (appended by build-pcsx-rearmed.sh)",
-      "platforms": [
-        "ps1"
-      ]
     }
   },
   "toolchains": {
