@@ -1,6 +1,6 @@
 {
   "name": "romdev-core-parallel-n64",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "ParaLLEl-N64 libretro core (Nintendo 64), HEADLESS-ANGRYLION software build for romdev (no GL — scans out raw RDRAM framebuffers), bundled as WASM with romdev's CPU + AI + live-debug exports.",
   "type": "module",
   "main": "index.js",
