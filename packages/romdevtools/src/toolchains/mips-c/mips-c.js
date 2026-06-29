@@ -77,9 +77,30 @@ function wrapN64Rom(text, entry = 0x80000400) {
 export async function buildMipsC(args) {
   const platform = args.platform;
   const endian = platform === "ps1" ? "little" : "big";
-  const headers = args.headers ?? {};
   const cc1Options = [...(args.cc1Options ?? []), "-O2", "-G0", "-ffreestanding", "-fno-builtin", "-Wall"];
   const sources = args.sources ?? (args.source != null ? { "main.c": args.source } : {});
+
+  // Auto-bundle the platform helper lib so `#include "n64.h"` / `#include "psx.h"`
+  // just works (parity with the Dreamcast sh-c path that auto-bundles dc.h). The
+  // header is added to the virtual headers; the matching .c is compiled + linked as
+  // an extra source — UNLESS the caller already provides their own (caller wins, and
+  // we skip auto-linking the .c if a same-named source is already present so there's
+  // no duplicate-symbol clash). The helper lives in platforms/<platform>/lib/c/.
+  const helperName = platform === "ps1" ? "psx" : platform === "n64" ? "n64" : null;
+  const headers = { ...(args.headers ?? {}) };
+  /** @type {Record<string,string>} */
+  let autoHelperSrc = null;
+  if (helperName) {
+    const helperDir = path.join(__dirname, "..", "..", "platforms", platform, "lib", "c");
+    const hPath = path.join(helperDir, `${helperName}.h`);
+    const cPath = path.join(helperDir, `${helperName}.c`);
+    if (headers[`${helperName}.h`] == null) {
+      const hSrc = await readFile(hPath, "utf-8").catch(() => null);
+      if (hSrc != null) headers[`${helperName}.h`] = hSrc;
+    }
+    const callerHasC = (args.sources && (args.sources[`${helperName}.c`] != null));
+    if (!callerHasC) autoHelperSrc = await readFile(cPath, "utf-8").catch(() => null);
+  }
   let log = "";
 
   /** @type {Record<string, Uint8Array>} */
@@ -93,6 +114,19 @@ export async function buildMipsC(args) {
     if (as.exitCode !== 0 || !as.object) return { ok: false, binary: null, log, exitCode: as.exitCode || 1, stage: `as (${cName})`, ...(as.crash ? { crash: as.crash } : {}) };
     userObjs[cName.replace(/\.c$/i, ".o")] = as.object;
   }
+  // Auto-bundled helper .c (n64.c / psx.c) — compiled with the SAME headers so it can
+  // see its own header, linked alongside the user objects. Skipped when the caller
+  // supplied their own helper .c (callerHasC) above.
+  if (autoHelperSrc != null) {
+    const cc = await runCc1mips({ source: autoHelperSrc, headers, options: cc1Options, endian });
+    log += `--- cc1 (${helperName}.c, bundled) ---\n${cc.log || "(ok)"}\n`;
+    if (cc.exitCode !== 0 || !cc.asmSource) return { ok: false, binary: null, log, exitCode: cc.exitCode || 1, stage: `cc1 (${helperName}.c bundled)`, ...(cc.crash ? { crash: cc.crash } : {}) };
+    const as = await runMipsAs({ source: cc.asmSource, endian });
+    log += `--- as (${helperName}.c, bundled) ---\n${as.log || "(ok)"}\n`;
+    if (as.exitCode !== 0 || !as.object) return { ok: false, binary: null, log, exitCode: as.exitCode || 1, stage: `as (${helperName}.c bundled)` };
+    userObjs[`${helperName}.o`] = as.object;
+  }
+
   // raw .s sources too
   for (const sName of Object.keys(sources).filter((n) => /\.(s|asm)$/i.test(n))) {
     const as = await runMipsAs({ source: sources[sName], endian });
