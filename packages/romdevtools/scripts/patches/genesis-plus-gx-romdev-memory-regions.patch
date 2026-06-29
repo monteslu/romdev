@@ -324,7 +324,7 @@ index bd454f6..146c282 100644
    {
      /* Z80 area */
 diff --git a/core/z80/z80.c b/core/z80/z80.c
-index 74d5053..b781a82 100644
+index 74d5053..e5e925d 100644
 --- a/core/z80/z80.c
 +++ b/core/z80/z80.c
 @@ -220,6 +220,16 @@ unsigned char (*z80_readmem)(unsigned int address);
@@ -344,7 +344,7 @@ index 74d5053..b781a82 100644
  static UINT32 EA;
  
  static UINT8 SZ[256];       /* zero and sign flags */
-@@ -627,12 +637,42 @@ INLINE void BURNODD(int cycles, int opcodes, int cyclesum)
+@@ -627,12 +637,49 @@ INLINE void BURNODD(int cycles, int opcodes, int cyclesum)
  /***************************************************************
   * Read a byte from given memory location
   ***************************************************************/
@@ -380,16 +380,23 @@ index 74d5053..b781a82 100644
   * Write a byte to given memory location
   ***************************************************************/
 -#define WM(addr,value) z80_writemem(addr,value)
-+#define WM(addr,value) do { \
-+    unsigned char romdev_oldv = romdev_wp_wants_old() ? romdev_z80_rm((unsigned int)(addr)) : 0; \
-+    if (romdev_on_write((unsigned int)(addr), romdev_oldv, (unsigned char)(value), romdev_z80_instr_pc, 0xFFFFFFFFu)) \
-+      romdev_z80_snap(3); \
-+    z80_writemem((addr),(value)); \
-+  } while (0)
++/* WM must be a FUNCTION, not a macro: many call sites pass side-effecting args
++ * (e.g. WM(HL, RLC(RM(HL))) — the value reads memory AND mutates the carry flag),
++ * so a macro that names `value` twice would double-evaluate them and corrupt the
++ * z80 (this exact bug stuck the SMS/GG crt0 gsinit loop). The romdev write hook
++ * lives inside so the addr/value are each evaluated exactly once at the call. */
++#define WM(addr,value) romdev_z80_wm((unsigned int)(addr), (unsigned char)(value))
++INLINE void romdev_z80_wm(unsigned int addr, unsigned char value)
++{
++  unsigned char romdev_oldv = romdev_wp_wants_old() ? romdev_z80_rm(addr) : 0;
++  if (romdev_on_write(addr, romdev_oldv, value, romdev_z80_instr_pc, 0xFFFFFFFFu))
++    romdev_z80_snap(3);
++  z80_writemem(addr, value);
++}
  
  /***************************************************************
   * Read a word from given memory location
-@@ -3417,10 +3457,46 @@ void z80_reset(void)
+@@ -3417,10 +3464,46 @@ void z80_reset(void)
  /****************************************************************************
   * Run until given cycle count 
   ****************************************************************************/
@@ -436,7 +443,7 @@ index 74d5053..b781a82 100644
      /* check for IRQs before each instruction */
      if (Z80.irq_state && IFF1 && !Z80.after_ei)
      {
-@@ -3432,7 +3508,7 @@ void z80_run(unsigned int cycles)
+@@ -3432,7 +3515,7 @@ void z80_run(unsigned int cycles)
      R++;
      EXEC_INLINE(op,ROP());
    }
