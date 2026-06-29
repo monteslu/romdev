@@ -13,6 +13,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import { runCc1mips, runMipsAs, runMipsLd, runMipsObjcopy } from "../mips-elf-gcc/gcc.js";
+import { CBuild, BuildError } from "../common/c-build.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LIB = path.join(__dirname, "lib");
@@ -101,89 +102,78 @@ export async function buildMipsC(args) {
     const callerHasC = (args.sources && (args.sources[`${helperName}.c`] != null));
     if (!callerHasC) autoHelperSrc = await readFile(cPath, "utf-8").catch(() => null);
   }
-  let log = "";
+  const cb = new CBuild();
+  // bound stage runners (endian + opts fixed) so the per-source loops stay terse
+  const cc1 = (source) => runCc1mips({ source, headers, options: cc1Options, endian });
+  const as = (source) => runMipsAs({ source, endian });
 
-  /** @type {Record<string, Uint8Array>} */
-  const userObjs = {};
-  for (const cName of Object.keys(sources).filter((n) => /\.c$/i.test(n))) {
-    const cc = await runCc1mips({ source: sources[cName], headers, options: cc1Options, endian });
-    log += `--- cc1 (${cName}) ---\n${cc.log || "(ok)"}\n`;
-    if (cc.exitCode !== 0 || !cc.asmSource) return { ok: false, binary: null, log, exitCode: cc.exitCode || 1, stage: `cc1 (${cName})`, ...(cc.crash ? { crash: cc.crash } : {}) };
-    const as = await runMipsAs({ source: cc.asmSource, endian });
-    log += `--- as (${cName}) ---\n${as.log || "(ok)"}\n`;
-    if (as.exitCode !== 0 || !as.object) return { ok: false, binary: null, log, exitCode: as.exitCode || 1, stage: `as (${cName})`, ...(as.crash ? { crash: as.crash } : {}) };
-    userObjs[cName.replace(/\.c$/i, ".o")] = as.object;
-  }
-  // Auto-bundled helper .c (n64.c / psx.c) — compiled with the SAME headers so it can
-  // see its own header, linked alongside the user objects. Skipped when the caller
-  // supplied their own helper .c (callerHasC) above.
-  if (autoHelperSrc != null) {
-    const cc = await runCc1mips({ source: autoHelperSrc, headers, options: cc1Options, endian });
-    log += `--- cc1 (${helperName}.c, bundled) ---\n${cc.log || "(ok)"}\n`;
-    if (cc.exitCode !== 0 || !cc.asmSource) return { ok: false, binary: null, log, exitCode: cc.exitCode || 1, stage: `cc1 (${helperName}.c bundled)`, ...(cc.crash ? { crash: cc.crash } : {}) };
-    const as = await runMipsAs({ source: cc.asmSource, endian });
-    log += `--- as (${helperName}.c, bundled) ---\n${as.log || "(ok)"}\n`;
-    if (as.exitCode !== 0 || !as.object) return { ok: false, binary: null, log, exitCode: as.exitCode || 1, stage: `as (${helperName}.c bundled)` };
-    userObjs[`${helperName}.o`] = as.object;
-  }
-
-  // raw .s sources too
-  for (const sName of Object.keys(sources).filter((n) => /\.(s|asm)$/i.test(n))) {
-    const as = await runMipsAs({ source: sources[sName], endian });
-    log += `--- as (${sName}) ---\n${as.log || "(ok)"}\n`;
-    if (as.exitCode !== 0 || !as.object) return { ok: false, binary: null, log, exitCode: as.exitCode || 1, stage: `as (${sName})`, ...(as.crash ? { crash: as.crash } : {}) };
-    userObjs[sName.replace(/\.(s|asm)$/i, ".o")] = as.object;
-  }
-
-  // crt0 (per platform)
-  const crt0Name = platform === "ps1" ? "ps1-crt0.s" : "n64-crt0.s";
-  const crt0Src = await readFile(path.join(LIB, crt0Name), "utf-8");
-  const crt0As = await runMipsAs({ source: crt0Src, endian });
-  log += `--- as (${crt0Name}) ---\n${crt0As.log || "(ok)"}\n`;
-  if (crt0As.exitCode !== 0 || !crt0As.object) return { ok: false, binary: null, log, exitCode: crt0As.exitCode || 1, stage: "as (crt0)", ...(crt0As.crash ? { crash: crt0As.crash } : {}) };
-
-  // softint.c — the few libgcc helpers (64-bit divide/mod) in plain C, so the
-  // link doesn't need an endian-specific libgcc.a (the EL libgcc isn't bundled).
-  const softSrc = await readFile(path.join(LIB, "softint.c"), "utf-8");
-  const softCc = await runCc1mips({ source: softSrc, options: cc1Options, endian });
-  const softAs = softCc.asmSource ? await runMipsAs({ source: softCc.asmSource, endian }) : { exitCode: 1 };
-  if (softCc.exitCode !== 0 || softAs.exitCode !== 0 || !softAs.object) {
-    return { ok: false, binary: null, log: log + (softCc.log || "") + (softAs.log || ""), exitCode: 1, stage: "softint" };
-  }
-
-  // link
-  const ldName = platform === "ps1" ? "ps1.ld" : "n64.ld";
-  const linkScript = await readFile(path.join(LIB, ldName), "utf-8");
-  // newlib + libgcc are endian-specific: el/ (PS1 little) vs be/ (N64 big). libgcc
-  // is only bundled for be/ — softint.c covers the EL case, so libgcc is optional.
-  const libDir = path.join(LIB, endian === "little" ? "el" : "be");
-  const [libc, libm] = await Promise.all([
-    readFile(path.join(libDir, "libc.a")), readFile(path.join(libDir, "libm.a")),
-  ]);
-  const archives = { "libc.a": new Uint8Array(libc), "libm.a": new Uint8Array(libm) };
-  const libraries = ["c", "m"];
   try {
-    const libgcc = await readFile(path.join(libDir, "libgcc.a"));
-    archives["libgcc.a"] = new Uint8Array(libgcc);
-    libraries.unshift("gcc");
-  } catch { /* no endian libgcc — softint.c provides the needed helpers */ }
-  const ld = await runMipsLd({
-    objects: { "crt0.o": crt0As.object, "softint.o": softAs.object, ...userObjs },
-    linkScript, endian,
-    archives,
-    libraries,
-    libraryPaths: ["/work"],
-    options: ["--no-warn-rwx-segments"],
-  });
-  log += `--- ld ---\n${ld.log || "(ok)"}\n`;
-  if (ld.exitCode !== 0 || !ld.elf) return { ok: false, binary: null, log, exitCode: ld.exitCode || 1, stage: "ld", ...(ld.crash ? { crash: ld.crash } : {}) };
+    /** @type {Record<string, Uint8Array>} */
+    const userObjs = {};
+    for (const cName of Object.keys(sources).filter((n) => /\.c$/i.test(n))) {
+      const cc = await cb.stage(`cc1 (${cName})`, () => cc1(sources[cName]), (r) => r.asmSource);
+      const ao = await cb.stage(`as (${cName})`, () => as(cc.asmSource), (r) => r.object);
+      userObjs[cName.replace(/\.c$/i, ".o")] = ao.object;
+    }
+    // Auto-bundled helper .c (n64.c / psx.c) — compiled with the SAME headers so it can
+    // see its own header, linked alongside the user objects. Skipped when the caller
+    // supplied their own helper .c (callerHasC) above.
+    if (autoHelperSrc != null) {
+      const cc = await cb.stage(`cc1 (${helperName}.c bundled)`, () => cc1(autoHelperSrc), (r) => r.asmSource);
+      const ao = await cb.stage(`as (${helperName}.c bundled)`, () => as(cc.asmSource), (r) => r.object);
+      userObjs[`${helperName}.o`] = ao.object;
+    }
 
-  const oc = await runMipsObjcopy({ elf: ld.elf });
-  log += `--- objcopy ---\n${oc.log || "(ok)"}\n`;
-  if (oc.exitCode !== 0 || !oc.binary) return { ok: false, binary: null, log, exitCode: oc.exitCode || 1, stage: "objcopy", ...(oc.crash ? { crash: oc.crash } : {}) };
+    // raw .s sources too
+    for (const sName of Object.keys(sources).filter((n) => /\.(s|asm)$/i.test(n))) {
+      const ao = await cb.stage(`as (${sName})`, () => as(sources[sName]), (r) => r.object);
+      userObjs[sName.replace(/\.(s|asm)$/i, ".o")] = ao.object;
+    }
 
-  const binary = platform === "ps1" ? wrapPsExe(oc.binary)
-    : platform === "n64" ? wrapN64Rom(oc.binary)
-    : oc.binary;
-  return { ok: true, binary, log, exitCode: 0, stage: "done", ...(ld.map ? { symbols: ld.map } : {}) };
+    // crt0 (per platform)
+    const crt0Name = platform === "ps1" ? "ps1-crt0.s" : "n64-crt0.s";
+    const crt0Src = await readFile(path.join(LIB, crt0Name), "utf-8");
+    const crt0As = await cb.stage(`as (${crt0Name})`, () => as(crt0Src), (r) => r.object);
+
+    // softint.c — the few libgcc helpers (64-bit divide/mod) in plain C, so the
+    // link doesn't need an endian-specific libgcc.a (the EL libgcc isn't bundled).
+    const softSrc = await readFile(path.join(LIB, "softint.c"), "utf-8");
+    const softCc = await cb.stage("cc1 (softint.c)", () => cc1(softSrc), (r) => r.asmSource);
+    const softAs = await cb.stage("as (softint.c)", () => as(softCc.asmSource), (r) => r.object);
+
+    // link
+    const ldName = platform === "ps1" ? "ps1.ld" : "n64.ld";
+    const linkScript = await readFile(path.join(LIB, ldName), "utf-8");
+    // newlib + libgcc are endian-specific: el/ (PS1 little) vs be/ (N64 big). libgcc
+    // is only bundled for be/ — softint.c covers the EL case, so libgcc is optional.
+    const libDir = path.join(LIB, endian === "little" ? "el" : "be");
+    const [libc, libm] = await Promise.all([
+      readFile(path.join(libDir, "libc.a")), readFile(path.join(libDir, "libm.a")),
+    ]);
+    const archives = { "libc.a": new Uint8Array(libc), "libm.a": new Uint8Array(libm) };
+    const libraries = ["c", "m"];
+    try {
+      const libgcc = await readFile(path.join(libDir, "libgcc.a"));
+      archives["libgcc.a"] = new Uint8Array(libgcc);
+      libraries.unshift("gcc");
+    } catch { /* no endian libgcc — softint.c provides the needed helpers */ }
+    const ld = await cb.stage("ld", () => runMipsLd({
+      objects: { "crt0.o": crt0As.object, "softint.o": softAs.object, ...userObjs },
+      linkScript, endian,
+      archives,
+      libraries,
+      libraryPaths: ["/work"],
+      options: ["--no-warn-rwx-segments"],
+    }), (r) => r.elf);
+
+    const oc = await cb.stage("objcopy", () => runMipsObjcopy({ elf: ld.elf }), (r) => r.binary);
+
+    const binary = platform === "ps1" ? wrapPsExe(oc.binary)
+      : platform === "n64" ? wrapN64Rom(oc.binary)
+      : oc.binary;
+    return { ok: true, binary, log: cb.log, exitCode: 0, stage: "done", ...(ld.map ? { symbols: ld.map } : {}) };
+  } catch (e) {
+    if (e instanceof BuildError) return e.toResult();
+    throw e;
+  }
 }

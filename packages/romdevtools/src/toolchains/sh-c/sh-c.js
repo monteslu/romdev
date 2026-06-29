@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import { runCc1sh, runShAs, runShLd } from "../sh-elf-gcc/gcc.js";
+import { CBuild, BuildError } from "../common/c-build.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -45,60 +46,51 @@ export async function buildShC(args) {
   const hasOpt = userOpts.some((o) => /^-O/.test(o));
   const cc1Options = [...(hasOpt ? [] : ["-O1"]), ...userOpts, "-ffreestanding", "-fno-builtin", "-Wall"];
   const sources = args.sources ?? (args.source != null ? { "main.c": args.source } : {});
-  let log = "";
+  const cb = new CBuild();
+  const as = (source) => runShAs({ source });
 
-  /** @type {Record<string, Uint8Array>} */
-  const userObjs = {};
-  for (const cName of Object.keys(sources).filter((n) => /\.c$/i.test(n))) {
-    const cc = await runCc1sh({ source: sources[cName], headers, options: cc1Options });
-    log += `--- cc1 (${cName}) ---\n${cc.log || "(ok)"}\n`;
-    if (cc.exitCode !== 0 || !cc.asmSource)
-      return { ok: false, binary: null, log, exitCode: cc.exitCode || 1, stage: `cc1 (${cName})`, ...(cc.crash ? { crash: cc.crash } : {}) };
-    const as = await runShAs({ source: cc.asmSource });
-    log += `--- as (${cName}) ---\n${as.log || "(ok)"}\n`;
-    if (as.exitCode !== 0 || !as.object)
-      return { ok: false, binary: null, log, exitCode: as.exitCode || 1, stage: `as (${cName})`, ...(as.crash ? { crash: as.crash } : {}) };
-    userObjs[cName.replace(/\.c$/i, ".o")] = as.object;
+  try {
+    /** @type {Record<string, Uint8Array>} */
+    const userObjs = {};
+    for (const cName of Object.keys(sources).filter((n) => /\.c$/i.test(n))) {
+      const cc = await cb.stage(`cc1 (${cName})`, () => runCc1sh({ source: sources[cName], headers, options: cc1Options }), (r) => r.asmSource);
+      const ao = await cb.stage(`as (${cName})`, () => as(cc.asmSource), (r) => r.object);
+      userObjs[cName.replace(/\.c$/i, ".o")] = ao.object;
+    }
+    // raw .s sources too
+    for (const sName of Object.keys(sources).filter((n) => /\.(s|asm)$/i.test(n))) {
+      const ao = await cb.stage(`as (${sName})`, () => as(sources[sName]), (r) => r.object);
+      userObjs[sName.replace(/\.(s|asm)$/i, ".o")] = ao.object;
+    }
+
+    // crt0 (stack + .bss clear + main()).
+    const crt0Src = await readFile(path.join(LIB, "dc-crt0.s"), "utf-8");
+    const crt0As = await cb.stage("as (dc-crt0.s)", () => as(crt0Src), (r) => r.object);
+
+    // link: crt0 + user objects + newlib (libc/libm) + libgcc.
+    const linkScript = await readFile(path.join(LIB, "dc.ld"), "utf-8");
+    const [libc, libm, libgcc] = await Promise.all([
+      readFile(path.join(LIB, "libc.a")),
+      readFile(path.join(LIB, "libm.a")),
+      readFile(path.join(LIB, "libgcc.a")),
+    ]);
+    const ld = await cb.stage("ld", () => runShLd({
+      objects: { "crt0.o": crt0As.object, ...userObjs },
+      linkScript,
+      archives: {
+        "libc.a": new Uint8Array(libc),
+        "libm.a": new Uint8Array(libm),
+        "libgcc.a": new Uint8Array(libgcc),
+      },
+      libraries: ["c", "m", "gcc"],
+      libraryPaths: ["/work"],
+      options: ["--no-warn-rwx-segments"],
+    }), (r) => r.elf);
+
+    // The ELF IS the deliverable — reios boots it directly.
+    return { ok: true, binary: ld.elf, log: cb.log, exitCode: 0, stage: "done", ...(ld.map ? { symbols: ld.map } : {}) };
+  } catch (e) {
+    if (e instanceof BuildError) return e.toResult();
+    throw e;
   }
-  // raw .s sources too
-  for (const sName of Object.keys(sources).filter((n) => /\.(s|asm)$/i.test(n))) {
-    const as = await runShAs({ source: sources[sName] });
-    log += `--- as (${sName}) ---\n${as.log || "(ok)"}\n`;
-    if (as.exitCode !== 0 || !as.object)
-      return { ok: false, binary: null, log, exitCode: as.exitCode || 1, stage: `as (${sName})`, ...(as.crash ? { crash: as.crash } : {}) };
-    userObjs[sName.replace(/\.(s|asm)$/i, ".o")] = as.object;
-  }
-
-  // crt0 (stack + .bss clear + main()).
-  const crt0Src = await readFile(path.join(LIB, "dc-crt0.s"), "utf-8");
-  const crt0As = await runShAs({ source: crt0Src });
-  log += `--- as (dc-crt0.s) ---\n${crt0As.log || "(ok)"}\n`;
-  if (crt0As.exitCode !== 0 || !crt0As.object)
-    return { ok: false, binary: null, log, exitCode: crt0As.exitCode || 1, stage: "as (crt0)", ...(crt0As.crash ? { crash: crt0As.crash } : {}) };
-
-  // link: crt0 + user objects + newlib (libc/libm) + libgcc.
-  const linkScript = await readFile(path.join(LIB, "dc.ld"), "utf-8");
-  const [libc, libm, libgcc] = await Promise.all([
-    readFile(path.join(LIB, "libc.a")),
-    readFile(path.join(LIB, "libm.a")),
-    readFile(path.join(LIB, "libgcc.a")),
-  ]);
-  const ld = await runShLd({
-    objects: { "crt0.o": crt0As.object, ...userObjs },
-    linkScript,
-    archives: {
-      "libc.a": new Uint8Array(libc),
-      "libm.a": new Uint8Array(libm),
-      "libgcc.a": new Uint8Array(libgcc),
-    },
-    libraries: ["c", "m", "gcc"],
-    libraryPaths: ["/work"],
-    options: ["--no-warn-rwx-segments"],
-  });
-  log += `--- ld ---\n${ld.log || "(ok)"}\n`;
-  if (ld.exitCode !== 0 || !ld.elf)
-    return { ok: false, binary: null, log, exitCode: ld.exitCode || 1, stage: "ld", ...(ld.crash ? { crash: ld.crash } : {}) };
-
-  // The ELF IS the deliverable — reios boots it directly.
-  return { ok: true, binary: ld.elf, log, exitCode: 0, stage: "done", ...(ld.map ? { symbols: ld.map } : {}) };
 }
