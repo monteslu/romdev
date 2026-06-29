@@ -35,10 +35,24 @@ if [ -f "$PATCH_FILE" ]; then
   fi
 fi
 
+# ── romdev shared debug lib (0.80.0) ────────────────────────────────────────
+# The watchpoint/readwatch/range/coverage/pcbreak/watchdog machinery + exports now
+# live in scripts/romdev-debug/romdev_debug.c (shared by all cores). vice's Makefile
+# has no append-safe include hook, so stage romdev_debug.h next to BOTH files that
+# #include it (maincpu.c in vice/src/, libretro-core.c in libretro/) — the quote-
+# include then resolves relative to each source. The per-core patch keeps the 6510
+# STORE/LOAD hooks + setReg/getReg + the C64 disk/keyboard/joyport + memory regions.
+RDBG_SRC="$PROJECT_DIR/scripts/romdev-debug"
+cp "$RDBG_SRC/romdev_debug.h" "$VICE_DIR/vice/src/romdev_debug.h"
+cp "$RDBG_SRC/romdev_debug.h" "$VICE_DIR/libretro/romdev_debug.h"
+
 echo "Building VICE x64 archive..."
 emmake make platform=emscripten EMUTYPE=x64 clean 2>/dev/null || true
 find . -maxdepth 3 -name "*_libretro*.a" -delete 2>/dev/null || true
 emmake make platform=emscripten EMUTYPE=x64 -j"$(nproc)"
+
+# Compile the shared romdev_debug.c + archive it so its exports link in.
+emcc -c -O2 "$RDBG_SRC/romdev_debug.c" -o "$VICE_DIR/romdev_debug.o"
 
 CORE_LIB=$(find . -maxdepth 2 \( -name "vice_x64*.a" -o -name "vice_x64*_libretro_emscripten.bc" \) | head -1)
 if [ -z "$CORE_LIB" ]; then
@@ -94,6 +108,9 @@ emar rcs "$CORE_LIB" \
   libretro-common/time/*.o \
   libretro-common/lists/*.o \
   deps/7zip/*.o
+
+# Add the shared romdev_debug.o so its exports link in.
+emar rcs "$CORE_LIB" "$VICE_DIR/romdev_debug.o"
 
 echo "Linking final VICE WASM module..."
 emcc "$CORE_LIB" \
