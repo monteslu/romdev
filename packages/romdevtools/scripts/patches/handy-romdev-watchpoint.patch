@@ -1,57 +1,21 @@
-# romdev patch for handy (Atari Lynx) libretro core — see README.md here.
-#
-# FOUR additions (all 65C02, flat 64KB space — PC is unambiguous, no banking):
-# 1) Instruction-level WRITE WATCHPOINT: the CPU_POKE macro in lynx/c65c02.h
-#    records mPC when a watched address is written; libretro.cpp exports
-#    romdev_watchpoint_set/get (findWriter).
-# 2) Instruction-level READ WATCHPOINT: the CPU_PEEK macro records mPC + the
-#    value when a watched address is read; libretro.cpp exports
-#    romdev_readwatch_set/get (runUntilRead). Mirror of the write watch.
-# 3) EXECUTION (PC) BREAKPOINT + SINGLE-STEP: C65C02::Update() compares mPC to
-#    the armed address just before the opcode fetch and, on a hit, freezes the
-#    CPU at that instruction (returns un-executed) so the host can read live
-#    regs; retro_run's frame loop then consumes the remaining cycle budget so
-#    the frame still completes (otherwise the loop spins forever). Single-step
-#    uses a per-instruction countdown so the PC actually advances. libretro.cpp
-#    exports romdev_pcbreak_set/get (runUntilPC / stepInstruction).
-# 4) DEBUG STATE REGIONS via retro_get_memory_data/_size custom IDs:
-#    - 0x190 lynx_cpu_regs: 8-byte 65C02 snapshot {PClo,PChi,A,X,Y,SP,P,flags}
-#      from the public CSystem::GetRegs(C6502_REGS&), for getCPUState.
-#    - 0x191 lynx_hw_regs: the $FC00-$FDFF hardware-register window (512 bytes)
-#      read through the public Peek_CPU memory path — Suzy sprite regs ($FCxx) +
-#      Mikey LCD control / audio ($FD20-$FD3F) / palette ($FDA0-$FDBF). Used by
-#      getAudioState (Mikey) and inspectPalette/getRenderingContext (Lynx).
-#    Both synthesized into static buffers per call (the chip fields are private;
-#    Peek/GetRegs are the sanctioned public reads, side-effect-free here).
-#    Lynx sprites are SCB linked lists (no fixed OAM) so there is no sprite
-#    region — inspectSprites walks SCBs over the exported SYSTEM_RAM instead.
-#
-# git apply ignores everything above the first 'diff --git' line.
-#
-#
-# RE primitives round 2: register read/write (romdev_setreg/getreg via the public
-# CSystem GetRegs/SetRegs round-trip; 65C02 reg-ids 0=A 1=X 2=Y 3=P(=PS) 4=SP
-# 16=PC), a RANGE WATCH logging every {pc,addr,value} in [lo,hi] (hooks in the
-# CPU_PEEK / CPU_POKE macros, c65c02.h; exports romdev_range_set/get), and a PC
-# COVERAGE log of distinct in-window PCs (hook in C65C02::Update before the
-# opcode fetch; exports romdev_cov_set/get). Ring-buffer state lives in libretro.cpp.
-#
 diff --git a/libretro/libretro.cpp b/libretro/libretro.cpp
-index ad4efd7..e886c00 100644
+index ad4efd7..dd3488f 100644
 --- a/libretro/libretro.cpp
 +++ b/libretro/libretro.cpp
-@@ -995,6 +995,10 @@ void retro_get_system_av_info(struct retro_system_av_info *info)
+@@ -995,6 +995,12 @@ void retro_get_system_av_info(struct retro_system_av_info *info)
     info->geometry.aspect_ratio = (float)lynx_width / (float)lynx_height;
  }
  
-+/* romdev PC breakpoint hit flag (defined with C linkage further below). Forward-
-+ * declared here so retro_run's frame loop can end the frame on a hit. */
-+extern "C" volatile int romdev_pc_hit;
++/* romdev (0.80.0): the PC-breakpoint/watchdog hit flag is now PRIVATE to the shared
++ * romdev_debug.c — read it via the romdev_is_frozen() accessor (declared in
++ * romdev_debug.h, included via c65c02.h) so retro_run's frame loop can end the frame
++ * on a hit. (The old raw `extern romdev_pc_hit` symbol no longer exists.) */
++extern "C" int romdev_is_frozen(void);
 +
  void retro_run(void)
  {
     unsigned i, res = 0;
-@@ -1083,6 +1087,17 @@ void retro_run(void)
+@@ -1083,6 +1089,17 @@ void retro_run(void)
     while (gSystemCycleCount - gLastRunCycleCount < retro_cycles_per_frame) {
        lynx->Update();
  
@@ -61,7 +25,7 @@ index ad4efd7..e886c00 100644
 +       * cycles). Consume the remaining frame-cycle budget and break so
 +       * retro_run returns; the host then polls romdev_pcbreak_get, disarms, and
 +       * reads the live registers. */
-+      if (romdev_pc_hit) {
++      if (romdev_is_frozen()) {
 +         gSystemCycleCount = gLastRunCycleCount + retro_cycles_per_frame;
 +         break;
 +      }
@@ -69,7 +33,7 @@ index ad4efd7..e886c00 100644
        for (int lcv = 1; lcv < retro_overclock; lcv++)
           lynx->Overclock();
     }
-@@ -1292,16 +1307,346 @@ unsigned retro_get_region(void)
+@@ -1292,16 +1309,127 @@ unsigned retro_get_region(void)
     return RETRO_REGION_NTSC;
  }
  
@@ -79,16 +43,16 @@ index ad4efd7..e886c00 100644
 +extern "C" {
 +/* romdev at-hit register snapshot — see c65c02.h for layout. The snap is a
 + * FUNCTION (not a macro) so the hooks can call it from expression contexts. */
-+unsigned int  romdev_snap_regs[19];
-+int           romdev_snap_kind = 0;
++/* romdev (0.80.0): the watch/pcbreak/watchdog/range/coverage/irqblock STATE + the
++ * romdev_*_set/get exports all live in the shared romdev_debug.c now. libretro.cpp keeps
++ * only the genuinely-per-core surface: the 65C02 value-based register snapshot (the
++ * dispatch + CPU_PEEK/POKE hooks in c65c02.h call it), the shared snap-buffer fill, and
++ * setReg/getReg (which go through the C65C02 register file, not the shared buffer). */
 +unsigned int  romdev_65c02_instr_pc = 0xFFFFFFFF;
-+/* romdev interrupt block (pure-call primitive — gates the IRQ dispatch in
-+ * lynx/c65c02.h's Update()). */
-+int           romdev_irq_block = 0;
-+void romdev_irqblock_set(int on)
-+{
-+   romdev_irq_block = on ? 1 : 0;
-+}
++/* romdev 65C02 register snapshot — fills the SHARED romdev_snap_regs[]/romdev_snap_kind
++ * (declared in romdev_debug.h) at a hit. Layout matches the host's getRegSnapshot:
++ * [0]=A [1]=X [2]=Y [3]=P [4]=SP [16]=PC. A FUNCTION (not a macro) so the c65c02.h hooks
++ * can call it from expression contexts. */
 +unsigned int  romdev_65c02_snap(unsigned int a, unsigned int x, unsigned int y, unsigned int ps, unsigned int sp, int kind)
 +{
 +   int i;
@@ -103,170 +67,6 @@ index ad4efd7..e886c00 100644
 +   romdev_snap_kind = kind;
 +   return 0;
 +}
-+void romdev_regsnap_get(unsigned int *out, int clear)
-+{
-+   int i;
-+   if (!out) return;
-+   out[0] = (unsigned int)romdev_snap_kind;
-+   out[1] = 19;
-+   for (i = 0; i < 19; i++) out[2 + i] = romdev_snap_regs[i];
-+   if (clear) romdev_snap_kind = 0;
-+}
-+
-+unsigned int  romdev_wp_addr     = 0;
-+int           romdev_wp_enabled  = 0;
-+unsigned int  romdev_wp_last_pc  = 0xFFFFFFFF;
-+unsigned char romdev_wp_last_val = 0;
-+unsigned char romdev_wp_last_old = 0;
-+int           romdev_wp_cond     = 0;
-+unsigned char romdev_wp_cond_val = 0;
-+unsigned int  romdev_wp_hits     = 0;
-+/* value-condition (0.30.0): 1=increase 2=decrease 3=equals; skip churn writes. */
-+int romdev_wp_cond_ok(unsigned char oldv, unsigned char v) {
-+   switch (romdev_wp_cond) {
-+      case 1:  return v > oldv;
-+      case 2:  return v < oldv;
-+      case 3:  return v == romdev_wp_cond_val;
-+      default: return 1;
-+   }
-+}
-+
-+void romdev_watchpoint_set(unsigned int addr, int enabled)
-+{
-+   romdev_wp_addr = addr;
-+   romdev_wp_enabled = enabled ? 1 : 0;
-+   romdev_wp_last_pc = 0xFFFFFFFF;
-+   romdev_wp_last_val = 0;
-+   romdev_wp_last_old = 0;
-+   romdev_wp_cond = 0;
-+   romdev_wp_cond_val = 0;
-+   romdev_wp_hits = 0;
-+}
-+
-+void romdev_watchpoint_set_cond(unsigned int addr, int enabled, int cond, int val)
-+{
-+   romdev_wp_addr = addr;
-+   romdev_wp_enabled = enabled ? 1 : 0;
-+   romdev_wp_last_pc = 0xFFFFFFFF;
-+   romdev_wp_last_val = 0;
-+   romdev_wp_last_old = 0;
-+   romdev_wp_cond = cond;
-+   romdev_wp_cond_val = (unsigned char)val;
-+   romdev_wp_hits = 0;
-+}
-+
-+void romdev_watchpoint_get(unsigned int *out6, int clearHits)
-+{
-+   if (!out6) return;
-+   out6[0] = (unsigned int)romdev_wp_enabled;
-+   out6[1] = romdev_wp_addr;
-+   out6[2] = romdev_wp_last_pc;
-+   out6[3] = (unsigned int)romdev_wp_last_val;
-+   out6[4] = romdev_wp_hits;
-+   out6[5] = 0xFFFFFFFF; /* Lynx 65C02 is flat 64KB — no ROM bank to report */
-+   out6[6] = (romdev_wp_hits ? (unsigned int)romdev_wp_last_old : 0xFFFFFFFFu);
-+   if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; }
-+}
-+
-+/* romdev instruction-level READ watchpoint (Lynx 65C02) — symmetric to the
-+ * write watch above. The CPU_PEEK hook in lynx/c65c02.h records mPC + the value
-+ * when a watched address is READ. Exported via romdev_readwatch_* for the host
-+ * runUntilRead tool. */
-+unsigned int  romdev_rd_addr     = 0;
-+int           romdev_rd_enabled  = 0;
-+unsigned int  romdev_rd_last_pc  = 0xFFFFFFFF;
-+unsigned char romdev_rd_last_val = 0;
-+unsigned int  romdev_rd_hits     = 0;
-+
-+void romdev_readwatch_set(unsigned int addr, int enabled)
-+{
-+   romdev_rd_addr = addr;
-+   romdev_rd_enabled = enabled ? 1 : 0;
-+   romdev_rd_last_pc = 0xFFFFFFFF;
-+   romdev_rd_last_val = 0;
-+   romdev_rd_hits = 0;
-+}
-+
-+/* Fills out5: [enabled, addr, lastPC, lastVal, hits]. */
-+void romdev_readwatch_get(unsigned int *out5, int clearHits)
-+{
-+   if (!out5) return;
-+   out5[0] = (unsigned int)romdev_rd_enabled;
-+   out5[1] = romdev_rd_addr;
-+   out5[2] = romdev_rd_last_pc;
-+   out5[3] = (unsigned int)romdev_rd_last_val;
-+   out5[4] = romdev_rd_hits;
-+   if (clearHits) { romdev_rd_hits = 0; romdev_rd_last_pc = 0xFFFFFFFF; }
-+}
-+
-+/* romdev PC BREAKPOINT (Lynx 65C02). The compare lives in C65C02::Update()
-+ * (lynx/c65c02.h) just before the opcode fetch, freezing mPC at the breakpoint.
-+ * The host polls romdev_pcbreak_get after each retro_run frame, stops stepping
-+ * once hit is set, then reads the registers via getCPUState. `step` arms a
-+ * one-instruction single-step (ignores addr). Flat 64KB — PC is unambiguous. */
-+unsigned int  romdev_pc_addr     = 0;
-+int           romdev_pc_enabled  = 0;
-+int           romdev_pc_step     = 0;        /* per-instruction countdown when single-stepping */
-+volatile int  romdev_pc_hit      = 0;        /* set by the execute hook, cleared by the host */
-+unsigned int  romdev_pc_last_pc  = 0xFFFFFFFF;
-+unsigned int  romdev_pc_hits     = 0;
-+
-+/* romdev INSTRUCTION WATCHDOG — the fix for "callSubroutine hung". A standalone-
-+ * driven routine (e.g. a decompressor fed a slightly-wrong A) can loop FOREVER
-+ * inside a single retro_run frame, so the host's per-FRAME cap never gets a turn
-+ * and the whole WASM hangs. This counts dispatched instructions and force-stops
-+ * (sets romdev_pc_hit + romdev_pc_watchdog) when the budget is exceeded — so a
-+ * runaway returns control with the final PC intact instead of hanging. The check
-+ * lives in C65C02::Update() at the SAME spot as the pc-break, placed FIRST.
-+ * romdev_pc_wd_limit 0 = disabled. */
-+unsigned int  romdev_pc_wd_limit = 0;        /* max instructions before force-stop (0 = off) */
-+unsigned int  romdev_pc_wd_count = 0;        /* instructions executed since arm */
-+volatile int  romdev_pc_watchdog = 0;        /* set when the watchdog tripped */
-+
-+void romdev_pcbreak_set(unsigned int addr, int enabled, int step)
-+{
-+   romdev_pc_addr = addr;
-+   romdev_pc_enabled = enabled ? 1 : 0;
-+   /* step is a per-instruction countdown; arm to 2 so ONE instruction executes
-+    * before the stop fires (true single-step that advances the PC). */
-+   romdev_pc_step = step ? 2 : 0;
-+   romdev_pc_hit = 0;
-+   romdev_pc_last_pc = 0xFFFFFFFF;
-+   romdev_pc_hits = 0;
-+   romdev_pc_watchdog = 0;
-+   romdev_pc_wd_count = 0;
-+}
-+
-+/* Fills out6: [enabled, addr, hit, lastPC, hits, watchdogTripped]. clearHit re-arms. */
-+void romdev_pcbreak_get(unsigned int *out6, int clearHit)
-+{
-+   if (!out6) return;
-+   out6[0] = (unsigned int)romdev_pc_enabled;
-+   out6[1] = romdev_pc_addr;
-+   out6[2] = (unsigned int)romdev_pc_hit;
-+   out6[3] = romdev_pc_last_pc;
-+   out6[4] = romdev_pc_hits;
-+   out6[5] = (unsigned int)romdev_pc_watchdog;
-+   if (clearHit) { romdev_pc_hit = 0; romdev_pc_watchdog = 0; romdev_pc_wd_count = 0; }
-+}
-+
-+/* Arm the instruction watchdog (force-stop a runaway after `limit` instructions;
-+ * 0 = disable). The host sets this before driving callSubroutine so a runaway
-+ * routine returns control instead of hanging the whole WASM. */
-+void romdev_watchdog_set(unsigned int limit)
-+{
-+   romdev_pc_wd_limit = limit;
-+   romdev_pc_wd_count = 0;
-+   romdev_pc_watchdog = 0;
-+}
-+
-+/* ─── romdev RE primitives round 2 (Lynx 65C02) ───────────────────────────────
-+ * Register read/write (inverse of getCPUState — powers setRegister /
-+ * callSubroutine) via the public CSystem GetRegs/SetRegs round-trip, a RANGE
-+ * WATCH logging every {pc,addr,value} touching [lo,hi] (hooks in the CPU_PEEK /
-+ * CPU_POKE macros, c65c02.h), and a PC COVERAGE log of distinct in-window PCs
-+ * (hook in C65C02::Update before the opcode fetch). 6502/65C02 reg-id convention
-+ * (STABLE): 0=A 1=X 2=Y 3=P(status=PS) 4=SP 16=PC. Flat 64KB — PC unambiguous. */
 +
 +int romdev_setreg(int regId, unsigned int value)
 +{
@@ -300,89 +100,6 @@ index ad4efd7..e886c00 100644
 +      case 16: return (unsigned int)(r.PC & 0xFFFF);
 +      default: return 0;
 +   }
-+}
-+
-+/* RANGE watch state + ring buffer (CAP 4096). mode 1=read 2=write 3=both. The
-+ * CPU_PEEK / CPU_POKE hooks (c65c02.h) call romdev_range_log; recorded pc is mPC
-+ * (the executing instruction). */
-+#define ROMDEV_RANGE_CAP 4096
-+unsigned int  romdev_range_lo      = 0;
-+unsigned int  romdev_range_hi      = 0;
-+int           romdev_range_enabled = 0;
-+int           romdev_range_mode    = 0;
-+unsigned int  romdev_range_pc  [ROMDEV_RANGE_CAP];
-+unsigned int  romdev_range_addr[ROMDEV_RANGE_CAP];
-+unsigned char romdev_range_val [ROMDEV_RANGE_CAP];
-+unsigned int  romdev_range_count   = 0;
-+unsigned int  romdev_range_stored  = 0;
-+
-+void romdev_range_log(unsigned int pc, unsigned int addr, unsigned char val)
-+{
-+   romdev_range_count++;
-+   if (romdev_range_stored < ROMDEV_RANGE_CAP) {
-+      romdev_range_pc  [romdev_range_stored] = pc;
-+      romdev_range_addr[romdev_range_stored] = addr;
-+      romdev_range_val [romdev_range_stored] = val;
-+      romdev_range_stored++;
-+   }
-+}
-+
-+void romdev_range_set(unsigned int lo, unsigned int hi, int mode, int enabled)
-+{
-+   romdev_range_lo = lo; romdev_range_hi = hi;
-+   romdev_range_mode = mode ? mode : 3;
-+   romdev_range_enabled = enabled ? 1 : 0;
-+   romdev_range_count = 0; romdev_range_stored = 0;
-+}
-+
-+/* Drain up to `max` events into out[] as packed triples [pc,addr,val,...].
-+ * out2 (size 2) gets [totalSeen, stored]. */
-+unsigned int romdev_range_get(unsigned int *out, unsigned int max, unsigned int *out2)
-+{
-+   unsigned int i, n = romdev_range_stored;
-+   if (out2) { out2[0] = romdev_range_count; out2[1] = romdev_range_stored; }
-+   if (!out) return 0;
-+   if (n > max) n = max;
-+   for (i = 0; i < n; i++) {
-+      out[i*3 + 0] = romdev_range_pc[i];
-+      out[i*3 + 1] = romdev_range_addr[i];
-+      out[i*3 + 2] = (unsigned int)romdev_range_val[i];
-+   }
-+   return n;
-+}
-+
-+/* PC COVERAGE state + linear-dedup buffer (CAP 8192). Hook in C65C02::Update. */
-+#define ROMDEV_COV_CAP 8192
-+unsigned int  romdev_cov_lo      = 0;
-+unsigned int  romdev_cov_hi      = 0;
-+int           romdev_cov_enabled = 0;
-+unsigned int  romdev_cov_pcs[ROMDEV_COV_CAP];
-+unsigned int  romdev_cov_count   = 0;
-+unsigned int  romdev_cov_total   = 0;
-+
-+void romdev_cov_log(unsigned int pc)
-+{
-+   unsigned int i;
-+   romdev_cov_total++;
-+   for (i = 0; i < romdev_cov_count; i++) if (romdev_cov_pcs[i] == pc) return;
-+   if (romdev_cov_count < ROMDEV_COV_CAP) romdev_cov_pcs[romdev_cov_count++] = pc;
-+}
-+
-+void romdev_cov_set(unsigned int lo, unsigned int hi, int enabled)
-+{
-+   romdev_cov_lo = lo; romdev_cov_hi = hi;
-+   romdev_cov_enabled = enabled ? 1 : 0;
-+   romdev_cov_count = 0; romdev_cov_total = 0;
-+}
-+
-+unsigned int romdev_cov_get(unsigned int *out, unsigned int max, unsigned int *out2)
-+{
-+   unsigned int i, n = romdev_cov_count;
-+   if (out2) { out2[0] = romdev_cov_count; out2[1] = romdev_cov_total; }
-+   if (!out) return 0;
-+   if (n > max) n = max;
-+   for (i = 0; i < n; i++) out[i] = romdev_cov_pcs[i];
-+   return n;
 +}
 +}
 +
@@ -449,10 +166,10 @@ index ad4efd7..e886c00 100644
     return 0;
  }
 diff --git a/lynx/c65c02.h b/lynx/c65c02.h
-index 0fdea74..2ee8bc3 100644
+index 0fdea74..116fc7a 100644
 --- a/lynx/c65c02.h
 +++ b/lynx/c65c02.h
-@@ -65,9 +65,100 @@
+@@ -65,9 +65,42 @@
  //#define CPU_PEEKW(m)			(mSystem.PeekW_CPU(m))
  //#define CPU_POKE(m1,m2)			(mSystem.Poke_CPU(m1,m2))
  
@@ -465,79 +182,13 @@ index 0fdea74..2ee8bc3 100644
 +#ifdef __cplusplus
 +extern "C" {
 +#endif
-+extern unsigned int  romdev_wp_addr;
-+extern int           romdev_wp_enabled;
-+extern unsigned int  romdev_wp_last_pc;
-+extern unsigned char romdev_wp_last_val;
-+extern unsigned char romdev_wp_last_old;
-+extern int           romdev_wp_cond;
-+extern unsigned char romdev_wp_cond_val;
-+extern int           romdev_wp_cond_ok(unsigned char oldv, unsigned char v);
-+extern unsigned int  romdev_wp_hits;
-+
-+/* romdev instruction-level READ watchpoint (Lynx 65C02) — mirror of the write
-+ * watch above. The CPU_PEEK macro is the central read path (used for both
-+ * operand/data reads and the opcode fetch). When enabled, any read of a watched
-+ * address records the reading PC (mPC), the value, and a hit count. State has C
-+ * linkage so libretro.cpp can extern + export it via romdev_readwatch_*. */
-+extern unsigned int  romdev_rd_addr;
-+extern int           romdev_rd_enabled;
-+extern unsigned int  romdev_rd_last_pc;
-+extern unsigned char romdev_rd_last_val;
-+extern unsigned int  romdev_rd_hits;
-+
-+/* romdev at-hit register snapshot (defined in libretro.cpp). Layout = the
-+ * romdev_getreg regId order: [0]=A [1]=X [2]=Y [3]=PS [4]=SP [16]=PC of the
-+ * EXECUTING instruction's first byte [18]=SP. kind: 1=pc-break/step,
-+ * 2=watchdog, 3=write-watch, 4=read-watch. romdev_65c02_instr_pc is latched at
-+ * dispatch in Update() — mPC advances past operands mid-instruction, so the
-+ * write/read hooks must report the latch, not the live mPC. */
-+extern unsigned int  romdev_snap_regs[19];
-+extern int           romdev_snap_kind;
++/* romdev (0.80.0): the watch/pcbreak/watchdog/range/coverage/irqblock machinery +
++ * state live in the shared romdev_debug.c. c65c02.h keeps the 65C02 value-based
++ * register snapshot (defined in libretro.cpp) + the CPU_PEEK/CPU_POKE hook macros
++ * (which call romdev_on_read/on_write) + the dispatch hook. */
++#include "romdev_debug.h"
 +extern unsigned int  romdev_65c02_instr_pc;
 +extern unsigned int  romdev_65c02_snap(unsigned int a, unsigned int x, unsigned int y, unsigned int ps, unsigned int sp, int kind);
-+/* romdev INTERRUPT BLOCK — the pure-call primitive: while set, IRQ delivery
-+ * is suppressed (Mikie keeps the line pending), so a callSubroutine-driven
-+ * routine cannot be hijacked by the game's timer/video handlers. */
-+extern int           romdev_irq_block;
-+
-+/* romdev PC BREAKPOINT (Lynx 65C02). Compared in C65C02::Update() just before
-+ * the opcode fetch, where mPC == the address of the instruction about to
-+ * execute. On a hit (or single-step countdown), romdev_pc_hit is set and mPC is
-+ * left un-incremented so the CPU is frozen exactly at the breakpoint; the
-+ * libretro frame loop sees the flag and consumes the rest of the frame budget
-+ * so retro_run still returns. romdev_pc_step is a per-instruction countdown the
-+ * host arms to 2 ("let ONE instruction execute, then stop") so single-step
-+ * actually advances the PC. Flat 64KB space — no banking, PC is unambiguous. */
-+extern unsigned int  romdev_pc_addr;
-+extern int           romdev_pc_enabled;
-+extern int           romdev_pc_step;
-+extern volatile int  romdev_pc_hit;
-+extern unsigned int  romdev_pc_last_pc;
-+extern unsigned int  romdev_pc_hits;
-+
-+/* romdev INSTRUCTION WATCHDOG (the callSubroutine-hang fix). Counted in
-+ * C65C02::Update() at the SAME spot as the pc-break, placed FIRST: when the
-+ * dispatched-instruction budget is exceeded it freezes mPC and sets
-+ * romdev_pc_hit + romdev_pc_watchdog so the frame loop ends instead of spinning
-+ * forever. State lives in libretro.cpp; 0 = disabled. */
-+extern unsigned int  romdev_pc_wd_limit;
-+extern unsigned int  romdev_pc_wd_count;
-+extern volatile int  romdev_pc_watchdog;
-+
-+/* romdev RE round 2: RANGE watch (read+write log over [lo,hi]) + PC COVERAGE.
-+ * State + the ring buffers live in libretro.cpp; the CPU_PEEK / CPU_POKE hooks
-+ * below and the Update() hook call these. mode 1=read 2=write 3=both; recorded
-+ * pc is mPC (the executing instruction). */
-+extern unsigned int  romdev_range_lo;
-+extern unsigned int  romdev_range_hi;
-+extern int           romdev_range_enabled;
-+extern int           romdev_range_mode;
-+extern void          romdev_range_log(unsigned int pc, unsigned int addr, unsigned char val);
-+extern int           romdev_cov_enabled;
-+extern unsigned int  romdev_cov_lo;
-+extern unsigned int  romdev_cov_hi;
-+extern void          romdev_cov_log(unsigned int pc);
 +#ifdef __cplusplus
 +}
 +#endif
@@ -546,20 +197,24 @@ index 0fdea74..2ee8bc3 100644
 + * Written as an expression (comma operator) because CPU_PEEK is used in
 + * expression context (e.g. mOperand=CPU_PEEK(...)). */
 +#define ROMDEV_65C02_SNAP(kind_) romdev_65c02_snap((unsigned int)(mA & 0xFF), (unsigned int)(mX & 0xFF), (unsigned int)(mY & 0xFF), (unsigned int)(PS() & 0xFF), (unsigned int)(mSP & 0xFF), (kind_))
-+#define ROMDEV_RD_HOOK(m,v)		((romdev_rd_enabled && (unsigned int)(m)==romdev_rd_addr) ? (romdev_rd_last_pc=romdev_65c02_instr_pc, romdev_rd_last_val=(unsigned char)(v), romdev_rd_hits++, ROMDEV_65C02_SNAP(4), (v)) : (v))
++/* romdev (0.80.0): the READ hook → shared on_read. CRITICAL — the underlying read
++ * (mSystem.Peek_CPU on a HARDWARE register at m>=0xfc00) can have SIDE EFFECTS (clears
++ * a status bit / advances a FIFO), so it MUST be evaluated EXACTLY ONCE. A GCC
++ * statement-expression reads it into a temp, passes that to on_read, and yields it —
++ * no double-read. (The first cut re-evaluated the read 2-3× via the comma-operator
++ * form, which silently corrupted I/O state and derailed the CPU — the Lynx never
++ * reached its main loop.) */
++#define ROMDEV_RD_HOOK(m,rd)	({ unsigned int romdev_m=(unsigned int)(m); unsigned char romdev_v=(unsigned char)(rd); if(romdev_on_read(romdev_m, romdev_v, romdev_65c02_instr_pc)) ROMDEV_65C02_SNAP(4); romdev_v; })
 +
-+/* romdev RANGE read-watch helper (expression form, like ROMDEV_RD_HOOK): log
-+ * every read in [lo,hi] when range mode includes reads, then yield v. */
-+#define ROMDEV_RANGE_RD_HOOK(m,v)	((romdev_range_enabled && (romdev_range_mode & 1) && (unsigned int)(m)>=romdev_range_lo && (unsigned int)(m)<=romdev_range_hi) ? (romdev_range_log(mPC,(unsigned int)(m),(unsigned char)(v)), (v)) : (v))
-+
-+#define CPU_PEEK(m)				ROMDEV_RANGE_RD_HOOK((m), ROMDEV_RD_HOOK((m), (((m<0xfc00)?mRamPointer[m]:mSystem.Peek_CPU(m)))))
++#define CPU_PEEK(m)				ROMDEV_RD_HOOK((m), (((m)<0xfc00)?mRamPointer[(m)]:mSystem.Peek_CPU((m))))
  #define CPU_PEEKW(m)			(((m<0xfc00)?(mRamPointer[m]+(mRamPointer[m+1]<<8)):mSystem.PeekW_CPU(m)))
 -#define CPU_POKE(m1,m2)			{if(m1<0xfc00) mRamPointer[m1]=m2; else mSystem.Poke_CPU(m1,m2);}
-+#define CPU_POKE(m1,m2)			{ if(romdev_wp_enabled && (unsigned int)(m1)==romdev_wp_addr){ unsigned char romdev_oldv = (romdev_wp_cond && (m1)<0xfc00) ? mRamPointer[m1] : 0; if(romdev_wp_cond_ok(romdev_oldv,(unsigned char)(m2))){ romdev_wp_last_pc=romdev_65c02_instr_pc; romdev_wp_last_val=(unsigned char)(m2); romdev_wp_last_old=romdev_oldv; romdev_wp_hits++; ROMDEV_65C02_SNAP(3); } } if(romdev_range_enabled && (romdev_range_mode & 2) && (unsigned int)(m1)>=romdev_range_lo && (unsigned int)(m1)<=romdev_range_hi){ romdev_range_log(romdev_65c02_instr_pc,(unsigned int)(m1),(unsigned char)(m2)); } if(m1<0xfc00) mRamPointer[m1]=m2; else mSystem.Poke_CPU(m1,m2);}
++/* romdev (0.80.0): the WRITE hook → shared on_write (watchpoint + range-write). */
++#define CPU_POKE(m1,m2)			{ unsigned char romdev_oldv = (romdev_wp_wants_old() && (m1)<0xfc00) ? mRamPointer[m1] : 0; if(romdev_on_write((unsigned int)(m1), romdev_oldv, (unsigned char)(m2), romdev_65c02_instr_pc, 0xFFFFFFFFu)){ ROMDEV_65C02_SNAP(3); } if(m1<0xfc00) mRamPointer[m1]=m2; else mSystem.Poke_CPU(m1,m2);}
  
  
  enum
-@@ -216,7 +307,7 @@ class C65C02
+@@ -216,7 +249,7 @@ class C65C02
  
           //    fprintf(stderr, "cpu update\n");
  
@@ -568,71 +223,27 @@ index 0fdea74..2ee8bc3 100644
           {
              // IRQ signal clearance is handled by CMikie::Update() as this
              // is the only source of interrupts
-@@ -248,6 +339,69 @@ class C65C02
+@@ -248,6 +281,25 @@ class C65C02
           //
           if(gSystemCPUSleep) return;
  
-+         /* romdev: once a breakpoint/watchdog hit has frozen this CPU, KEEP it
-+          * frozen — the system loop re-enters Update() until the frame ends,
-+          * which would resume execution and drift the registers away from the
-+          * hit. The host clears the hit to resume. */
-+         if(romdev_pc_hit) return;
++         /* romdev (0.80.0): keep this CPU frozen across re-entry after a hit (the
++          * system loop re-enters Update() until the frame ends; the host clears the
++          * hit to resume). */
++         if(romdev_is_frozen()) return;
 +
-+         /* romdev: mPC right now is the first byte of the instruction about to
-+          * be dispatched — latch it for the mid-instruction hooks (CPU_POKE /
-+          * ROMDEV_RD_HOOK see an operand-advanced mPC). */
++         /* mPC is the first byte of the instruction about to dispatch — latch it for
++          * the CPU_POKE / ROMDEV_RD_HOOK watch hooks, then ask the shared lib whether
++          * to FREEZE (coverage + watchdog + pc-break/single-step live in romdev_debug.c).
++          * On a freeze: snapshot (kind 2=watchdog else 1=pc-break/step) and RETURN
++          * WITHOUT executing — mPC left un-incremented; the libretro frame loop sees
++          * the hit flag and consumes the rest of the frame so retro_run returns. */
 +         romdev_65c02_instr_pc = (unsigned int)mPC;
 +
-+         /* romdev instruction WATCHDOG: force-stop a runaway (the callSubroutine
-+          * hang). Checked FIRST, HERE before the opcode fetch, so mPC is the
-+          * address of the instruction about to execute. On overflow we freeze the
-+          * CPU exactly here (mPC un-incremented), set romdev_pc_hit so the
-+          * libretro frame loop consumes the remaining frame budget and retro_run
-+          * returns instead of spinning forever, and flag romdev_pc_watchdog so the
-+          * host learns it tripped. Gated on !romdev_pc_hit so it doesn't re-fire
-+          * while the host reads state and disarms. Cheap when disabled. */
-+         if(romdev_pc_wd_limit && !romdev_pc_hit)
++         if(romdev_on_dispatch((unsigned int)mPC))
 +         {
-+            if(++romdev_pc_wd_count >= romdev_pc_wd_limit)
-+            {
-+               romdev_pc_last_pc = (unsigned int)mPC;  /* frozen here, un-executed */
-+               ROMDEV_65C02_SNAP(2);    /* freeze the register file AT the stop */
-+               romdev_pc_hit = 1;
-+               romdev_pc_watchdog = 1;
-+               return;                                 /* do NOT fetch/execute */
-+            }
-+         }
-+
-+         /* romdev PC coverage log (discovery): record each DISTINCT in-window PC
-+          * about to execute. Checked HERE, before the opcode fetch, so mPC is the
-+          * address of the instruction about to run. Cheap when disabled. */
-+         if(romdev_cov_enabled
-+            && (unsigned int)mPC >= romdev_cov_lo && (unsigned int)mPC <= romdev_cov_hi)
-+            romdev_cov_log((unsigned int)mPC);
-+
-+         /* romdev PC breakpoint / single-step: checked HERE, before the opcode
-+          * fetch, so mPC is the address of the instruction about to execute. On
-+          * a hit we set romdev_pc_hit and RETURN WITHOUT executing (mPC left
-+          * un-incremented) so the CPU is frozen exactly at the breakpoint. The
-+          * libretro frame loop checks romdev_pc_hit after lynx->Update() and
-+          * consumes the remaining frame-cycle budget so retro_run still returns
-+          * (otherwise the while loop would spin forever). romdev_pc_step is a
-+          * per-instruction countdown the host arms to 2: it lets ONE instruction
-+          * execute, then stops, so single-step ADVANCES the PC. */
-+         if((romdev_pc_enabled || romdev_pc_step) && !romdev_pc_hit)
-+         {
-+            int stepFire = 0;
-+            if(romdev_pc_step) { if(--romdev_pc_step <= 0) stepFire = 1; }
-+            if(stepFire || ((romdev_pc_enabled && !romdev_pc_step)
-+                            && (unsigned int)mPC == romdev_pc_addr))
-+            {
-+               romdev_pc_last_pc = (unsigned int)mPC;  /* frozen here, un-executed */
-+               ROMDEV_65C02_SNAP(1);    /* freeze the register file AT the hit */
-+               romdev_pc_hit = 1;
-+               romdev_pc_hits++;
-+               romdev_pc_step = 0;                     /* one-shot */
-+               return;                                 /* do NOT fetch/execute */
-+            }
++            ROMDEV_65C02_SNAP(romdev_pc_hit_kind() == 2 ? 2 : 1);
++            return;                                 /* do NOT fetch/execute */
 +         }
 +
           // Fetch opcode

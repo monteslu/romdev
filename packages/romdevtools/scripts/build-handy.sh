@@ -33,6 +33,17 @@ else
   echo "Applied $PATCH_FILE"
 fi
 
+# romdev (0.80.0): stage the SHARED debug lib next to its includers (c65c02.h +
+# libretro.cpp both quote-include "romdev_debug.h"; romdev_debug.c includes its own
+# header) so the Makefile-driven compile resolves it without touching the upstream
+# Makefile's include flags.
+RDBG_SRC="$PROJECT_DIR/scripts/romdev-debug"
+cp "$RDBG_SRC/romdev_debug.h" lynx/romdev_debug.h
+cp "$RDBG_SRC/romdev_debug.h" libretro/romdev_debug.h
+cp "$RDBG_SRC/romdev_debug.h" romdev_debug.h
+cp "$RDBG_SRC/romdev_debug.c" romdev_debug.c
+echo "romdev: staged shared romdev_debug.{h,c}"
+
 emmake make platform=emscripten clean >/dev/null 2>&1 || true
 find . -maxdepth 2 -name "*_libretro_emscripten.a" -delete 2>/dev/null || true
 emmake make platform=emscripten -j"$(nproc)"
@@ -46,6 +57,14 @@ if [[ "$CORE_LIB" == *.bc ]] && head -c 7 "$CORE_LIB" | grep -q '!<arch>'; then
   mv "$CORE_LIB" "${CORE_LIB%.bc}.a"
   CORE_LIB="${CORE_LIB%.bc}.a"
 fi
+
+# romdev (0.80.0): compile the shared debug lib + archive it into the core lib so the
+# migrated c65c02.h dispatch + CPU_PEEK/POKE hooks (romdev_on_dispatch/on_read/on_write)
+# and the libretro.cpp frame guard (romdev_is_frozen) resolve at link. -I. lets
+# romdev_debug.c find its own header.
+emcc -c -O3 -D__LIBRETRO__ -I. -o romdev_debug.o romdev_debug.c
+emar rcs "$CORE_LIB" romdev_debug.o
+echo "romdev: compiled + archived romdev_debug.o into $CORE_LIB"
 
 # libretro-common helpers (file streams, string utils) if the core needs them.
 LIBRETRO_COMMON=""

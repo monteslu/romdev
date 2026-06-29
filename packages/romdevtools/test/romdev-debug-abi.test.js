@@ -58,6 +58,9 @@ const MIGRATED_CORES = [
   { core: "geargrafx_libretro",       extra: ["_romdev_setreg", "_romdev_getreg", "_romdev_vramwatch_set", "_romdev_vramwatch_get"] },
   { core: "bluemsx_libretro",         extra: ["_romdev_setreg", "_romdev_getreg", "_romdev_vramwatch_set", "_romdev_vramwatch_get"] },
   { core: "mgba_libretro",            extra: ["_romdev_setreg", "_romdev_getreg"] },
+  // handy (Lynx 65C02) — the last inline holdout, now on the shared lib. The CPU_PEEK
+  // read hook MUST evaluate the (side-effecting) I/O read exactly once; see the patch.
+  { core: "handy_libretro",           extra: ["_romdev_setreg", "_romdev_getreg"] },
   // The newer cores migrated their divergent debug snippets onto the shared lib too.
   // MIPS cores read CPU state via romdev_mips_regs_get (no setReg/getReg); they ship
   // from their own binary packages (resolveWasm falls back to those).
