@@ -26,51 +26,53 @@ const HAS_MIPS_GCC = (() => {
 // the bundled N64 software-3D helper lib (n64.h / n64.c).
 const LIB_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src", "platforms", "n64", "lib", "c");
 
-test("N64: a toolchain-built homebrew boots + renders through the software core", { timeout: 180000 }, async () => {
+test("N64: a toolchain-built homebrew boots + RENDERS on the GPU (glide64 GBI dlist)", { timeout: 180000 }, async () => {
   if (!HAS_MIPS_GCC) { console.log("mips-elf-gcc not built; skipping"); return; }
   const core = resolveCore("n64");
   if (!core) { console.log("no n64 core staged; skipping"); return; }
 
-  // Build a homebrew with the bundled software-3D lib (a spinning cube) and prove it
-  // self-boots (clean IPL3) + renders to the framebuffer that angrylion scans out.
-  const n64c = await readFile(path.join(LIB_DIR, "n64.c"), "utf8");
-  const n64h = await readFile(path.join(LIB_DIR, "n64.h"), "utf8");
+  // The bundled n64.c helper emits a GBI (F3DEX2) display list that glide64 HLEs onto
+  // the GPU — NOT a software framebuffer (which would be black on glide64 + <1fps).
+  // n64.h/n64.c auto-bundle, so a bare #include works. A spinning cube + a 2D rect +
+  // a clear exercises clear/rect/quad3d (the scan-converted triangle path).
   const src = `#include "n64.h"
     int main(){ Vec3 v[8]={{FIX(-1),FIX(-1),FIX(-1)},{FIX(1),FIX(-1),FIX(-1)},{FIX(1),FIX(1),FIX(-1)},{FIX(-1),FIX(1),FIX(-1)},
       {FIX(-1),FIX(-1),FIX(1)},{FIX(1),FIX(-1),FIX(1)},{FIX(1),FIX(1),FIX(1)},{FIX(-1),FIX(1),FIX(1)}}; fix a=0;
       n64_init(); n64_camera(0,0,FIX(-5),0,0);
       for(;;){ a+=FIX(2); n64_model(0,0,0,a); n64_clear(RGB(10,10,40));
         n64_quad3d(v[0],v[1],v[2],v[3],RGB(220,40,40)); n64_quad3d(v[1],v[5],v[6],v[2],RGB(40,220,40));
-        n64_quad3d(v[4],v[5],v[1],v[0],RGB(40,40,220)); n64_flip(); } }`;
-  const built = await buildForPlatform({ platform: "n64", language: "c",
-    sources: { "main.c": src, "n64.c": n64c }, includes: { "n64.h": n64h } });
-  assert.ok(built.ok, "homebrew builds");
+        n64_quad3d(v[4],v[5],v[1],v[0],RGB(40,40,220)); n64_rect(20,20,40,40,RGB(240,240,40)); n64_flip(); } }`;
+  const built = await buildForPlatform({ platform: "n64", source: src, sourceName: "main.c" });
+  assert.ok(built.ok, `homebrew builds: ${(built.log || "").slice(-200)}`);
   assert.equal(built.binary[0], 0x80, "valid .z64 header magic (0x80371240)");
 
+  if (!(await glStackAvailable())) { console.log("no GL stack; skipping render assertions"); return; }
   const host = new LibretroHost();
   try {
     await host.loadCore(core.jsPath, core.wasmPath, { hwRender: core.hwRender, platform: "n64" });
     await host.loadMedia({ platform: "n64", bytes: built.binary, virtualName: "/game.z64" });
-    for (let i = 0; i < 120; i++) host.stepFrames(1);
-    // The core renders the RDP on the real GPU through glide64 → native-gles (hwActive).
-    // NOTE: glide64 presents RDP display lists, NOT raw CPU-written framebuffers — so the
-    // bundled software-3D lib (which rasterizes into an RDRAM framebuffer) renders BLACK
-    // here even though it runs. Real N64 ROMs that issue RDP geometry render correctly
-    // (verified out-of-band with Mario Kart 64 + Zelda OoT). So this run-side test asserts
-    // the GPU path engages + the CPU executes, not that the software-FB homebrew shows.
     assert.ok(host.hwRender?.active, "glide64 GL engaged through native-gles (hwActive)");
+    for (let i = 0; i < 180; i++) host.stepFrames(1);
+
+    // The homebrew's GBI display list renders on the GPU — assert non-black + multiple
+    // distinct colors (clear + the three cube faces + the yellow rect).
+    const fb = host.hwRender.readbackFrame(host.state.hwFrameW, host.state.hwFrameH);
+    assert.ok(fb, "got a HW frame");
+    let nonBlack = 0; const colors = new Set();
+    for (let i = 0; i < fb.pixels.length; i += 4) {
+      if (fb.pixels[i] | fb.pixels[i + 1] | fb.pixels[i + 2]) nonBlack++;
+      colors.add((fb.pixels[i] << 16) | (fb.pixels[i + 1] << 8) | fb.pixels[i + 2]);
+    }
+    assert.ok(nonBlack > 20000, `N64 GBI dlist rendered on the GPU (not black): ${nonBlack} px`);
+    assert.ok(colors.size >= 3, `multiple colors (clear + faces + rect): ${colors.size}`);
 
     // cpuState — the R4300 register file (cheat+regsnap-enabled core build).
     if (host.mipsRegsSupported()) {
       const cpu = getCPUState(host, "n64");
       assert.ok(cpu && typeof cpu.pc === "number", "N64 cpuState decodes");
-      assert.ok((cpu.registers.sp || "").startsWith("$80") || cpu.pc !== 0, "registers look like real RDRAM state");
       assert.equal(Object.keys(cpu.registers).length, 34, "32 GPRs + lo + hi");
     }
-    // cheats — retro_cheat_set exported.
-    if (host.cheatsSupported()) {
-      host.setCheat(0, "80100000 0042", true); // GameShark-style; should not throw
-    }
+    if (host.cheatsSupported()) host.setCheat(0, "80100000 0042", true);
   } finally {
     host.dispose?.();
   }

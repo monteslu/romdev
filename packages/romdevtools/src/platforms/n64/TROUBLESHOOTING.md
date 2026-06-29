@@ -1,39 +1,37 @@
 # Nintendo 64 — troubleshooting
 
 Read `platform({op:'doc', platform:'n64', name:'mental_model'})` first — the shipping
-N64 renders through the **glide64 GL HLE plugin** (it rasterizes RDP display lists on
+N64 renders through the **glide64 GL HLE plugin** (it rasterizes GBI display lists on
 the real GPU), not a software framebuffer.
 
 ## "ROM builds + boots but the screen is BLACK"
 
-The #1 N64 bug. Causes, in order of likelihood (glide64 GL path):
+The #1 N64 bug — almost always **software-framebuffer drawing instead of the GPU path**:
 
-1. **No valid RDP display list was submitted.** glide64 only draws what it sees in the
-   display list — if the game never builds + runs one (DPC start/end set, the list
-   ends with a pipeline-sync + full-sync), nothing reaches GL. Use the bundled `n64.c`
-   display-list helpers; confirm with `frame({op:'verify'})` (nearlyBlank).
-2. **The VI / video mode wasn't initialized.** Even with a display list, the VI needs
-   its control (bpp), h/v start, x/y scale and origin set so there's a scanout target.
-   The helper lib's `vi_init` does this.
-3. **A combine/texture/blend mode glide64 can't HLE.** Unusual RDP combiner setups can
-   render nothing under HLE. Stick to the common combine modes the helper lib uses.
-
-> If you're on a custom **angrylion software-RDP** build instead (`hwRender:false`), the
-> classic gotchas apply: write the framebuffer through the **uncached kseg1 alias**
-> (`0xA000_0000 | addr`) — cached kseg0 writes never reach RDRAM where the VI scans out
-> — and get the VI register indices exactly right (from the core's `vi_controller.h`).
+1. **You poked pixels into an RDRAM framebuffer yourself.** glide64 only presents GBI
+   **display lists** — it never scans out a CPU-written framebuffer. A software
+   rasterizer renders black here (and would be <1fps anyway). **Use the bundled `n64.c`
+   helper** (`n64_clear`/`n64_rect`/`n64_tri*`/`n64_quad3d` + `n64_flip`): it emits a
+   GBI display list glide64 HLEs onto the GPU. `#include "n64.h"` (auto-bundled).
+2. **You hand-built a display list with the wrong OSTask.** The RSP-HLE only routes a
+   task to glide64 when the OSTask `type` (DMEM 0xFC0) == 1, and glide64 only accepts
+   it if the task's ucode region CRC-matches a known ucode. The helper sets both (a
+   3072-byte blob summing to an F3DEX2 CRC); if you roll your own, match that.
+3. **You forgot `n64_flip()`** — the display list isn't submitted to the RSP until
+   flip kicks the task. Confirm with `frame({op:'verify'})` (nearlyBlank).
 
 ## "frame({op:'verify'}) says nearlyBlank"
 
-No geometry reached the GPU (cause 1-2) — it's a display-list / VI-init problem, not a
-toolchain problem. The build is fine; the render setup is the issue.
+No GBI list reached glide64 — it's a display-list / OSTask problem (causes 1-2), not a
+toolchain problem. The build is fine; the render path is the issue. The helper handles
+all of this — diff your code against it.
 
 ## "Geometry is wrong / triangles inside-out / nothing where expected"
 
-3D pipeline math (the helper lib transforms before building the display list). Check:
-16.16 fixed-point throughout, back-face winding matches your vertex order, perspective
-divide before the viewport map, and the vertices land in the on-screen range. Diff
-against the helper lib's draw order.
+3D pipeline math (the helper transforms + projects to screen space, then scan-converts
+triangles into GPU fill-rect spans). Check: 16.16 fixed-point throughout, back-face
+winding matches your vertex order, perspective divide before the viewport map, and the
+vertices land on-screen. Diff against the helper's draw order.
 
 ## "Build fails: 'relocation truncated to fit'"
 

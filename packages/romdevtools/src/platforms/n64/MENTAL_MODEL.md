@@ -9,21 +9,22 @@ native-gles / WebGL2 bridge (`hwRender: true`).
 ## The one thing to know about rendering
 
 The N64 core renders through **glide64** — a GL HLE plugin that interprets the game's
-**RDP display lists** and translates them to OpenGL on the real GPU. So romdev N64
-homebrew draws by building **RDP display lists** (the standard N64 path), the way a
-real game does; glide64 rasterizes them. (parallel_n64 *defaults* to a software gfx
-plugin that never presents to our GL surface — the host config forces `glide64` so
-frames reach the screen.) The bundled `n64.c` helper lib builds the display lists +
-VI setup; use it.
+**GBI display lists** and rasterizes them on the real GPU. So romdev N64 homebrew draws
+by building a **GBI (F3DEX2) display list** each frame and kicking the RSP, the way a
+real game does; glide64 HLEs it onto the GPU. A software framebuffer (poking pixels
+into RDRAM) shows **black** on glide64 and would be <1fps — so don't do that.
 
-If the screen is black, the usual cause is that **no valid RDP display list was
-submitted** (or the VI wasn't initialized) — see TROUBLESHOOTING. Confirm with
-`frame({op:'verify'})` (nearlyBlank).
+**Use the bundled `n64.c` helper** — it does the GPU path for you: `n64_clear`/`n64_rect`
+emit GPU **fill rectangles**, `n64_tri2d`/`n64_tri3d`/`n64_quad3d` scan-convert into
+GPU fill-rect spans (still GPU-rasterized, not CPU pixels), and `n64_flip` ships the
+display list as a GFX OSTask. `#include "n64.h"` and it just works (auto-bundled). How
+it gets glide64 to accept the list without shipping Nintendo microcode: the RSP-HLE
+treats an OSTask with `type==1` as graphics, and glide64 picks its command table by
+CRC-summing the task's "ucode" region — so the helper embeds a 3072-byte blob that
+*sums* to a real F3DEX2 CRC (the bytes are never executed under HLE).
 
-> Historical note: an earlier bring-up used the **angrylion software RDP** (`hwRender:
-> false`, software-rasterize into UNCACHED RDRAM + a hand-set VI scanout). The shipping
-> core is the glide64 GL path above; if you're on a custom angrylion build, the cached-
-> RDRAM / VI-register gotchas in TROUBLESHOOTING still apply.
+If the screen is black, the usual cause is software-framebuffer drawing instead of the
+helper's display-list path — see TROUBLESHOOTING. Confirm with `frame({op:'verify'})`.
 
 ## CPU / memory map (R4300i, MIPS III, 64-bit, big-endian)
 
