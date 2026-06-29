@@ -1,5 +1,5 @@
 diff --git a/src/drivers/libretro/libretro.c b/src/drivers/libretro/libretro.c
-index 96dece6..845c077 100644
+index 96dece6..bf2d32e 100644
 --- a/src/drivers/libretro/libretro.c
 +++ b/src/drivers/libretro/libretro.c
 @@ -262,6 +262,17 @@ static unsigned libretro_msg_interface_version = 0;
@@ -20,200 +20,15 @@ index 96dece6..845c077 100644
  
  /* overclock the console by adding dummy scanlines to PPU loop
   * disables DMC DMA and WaveHi filling for these dummies
-@@ -3946,6 +3957,338 @@ unsigned retro_get_region(void)
+@@ -3946,6 +3957,106 @@ unsigned retro_get_region(void)
     return FSettings.PAL ? RETRO_REGION_PAL : RETRO_REGION_NTSC;
  }
  
-+/* romdev instruction-level write watchpoint. Set an address to watch; the next
-+ * CPU write to it records the WRITING instruction's PC (not a frame-boundary
-+ * sample), the value, and a hit count. romdev_watchpoint_get fills a small
-+ * uint32 array [enabled, addr, lastPC, lastVal, hits]; pass clearHits!=0 to
-+ * reset the hit counter + lastPC after reading. Defined in x6502.c. */
-+extern uint32_t romdev_wp_addr;
-+extern int      romdev_wp_enabled;
-+extern uint32_t romdev_wp_last_pc;
-+extern uint8_t  romdev_wp_last_val;
-+extern uint32_t romdev_wp_hits;
-+extern uint8_t  romdev_wp_last_old; /* pre-write byte (for inc/dec conditions) */
-+extern int      romdev_wp_cond;     /* 0=none 1=increase 2=decrease 3=equals   */
-+extern uint8_t  romdev_wp_cond_val; /* target byte for 'equals'                */
-+
-+void romdev_watchpoint_set(uint32_t addr, int enabled)
-+{
-+   romdev_wp_addr = addr;
-+   romdev_wp_enabled = enabled ? 1 : 0;
-+   romdev_wp_last_pc = 0xFFFFFFFF;
-+   romdev_wp_last_val = 0;
-+   romdev_wp_last_old = 0;
-+   romdev_wp_cond = 0;
-+   romdev_wp_cond_val = 0;
-+   romdev_wp_hits = 0;
-+}
-+
-+/* Value-conditioned watchpoint (0.30.0): only count/record writes that move the
-+ * stored byte the chosen way — 1=increase (new>old), 2=decrease (new<old),
-+ * 3=equals (new==val). Skips restoring/churn writes so the reported PC is the
-+ * MEANINGFUL write, not the frame's last write. */
-+void romdev_watchpoint_set_cond(uint32_t addr, int enabled, int cond, int val)
-+{
-+   romdev_wp_addr = addr;
-+   romdev_wp_enabled = enabled ? 1 : 0;
-+   romdev_wp_last_pc = 0xFFFFFFFF;
-+   romdev_wp_last_val = 0;
-+   romdev_wp_last_old = 0;
-+   romdev_wp_cond = cond;
-+   romdev_wp_cond_val = (uint8_t)val;
-+   romdev_wp_hits = 0;
-+}
-+
-+extern uint8_t *romdev_wp_last_pc_ptr; /* host ptr of the writing PC (x6502.c) */
-+
-+/* Fills out6: [enabled, addr, lastPC, lastVal, hits, prgOffset]. prgOffset is the
-+ * ABSOLUTE PRG-ROM file offset of the writing instruction (0xFFFFFFFF if the PC
-+ * was in RAM or unmapped) — it disambiguates the BANK for a $8000-$BFFF PC on a
-+ * banked mapper. Derived from the page pointer captured live at the write. */
-+void romdev_watchpoint_get(uint32_t *out6, int clearHits)
-+{
-+   uint32_t prgOff = 0xFFFFFFFF;
-+   if (!out6) return;
-+   if (romdev_wp_last_pc_ptr) {
-+      int c;
-+      for (c = 0; c < 16; c++) {
-+         if (PRGptr[c] && PRGsize[c]) {
-+            ptrdiff_t d = romdev_wp_last_pc_ptr - PRGptr[c];
-+            if (d >= 0 && (uint32_t)d < PRGsize[c]) { prgOff = (uint32_t)d; break; }
-+         }
-+      }
-+   }
-+   out6[0] = (uint32_t)romdev_wp_enabled;
-+   out6[1] = romdev_wp_addr;
-+   out6[2] = romdev_wp_last_pc;
-+   out6[3] = (uint32_t)romdev_wp_last_val;
-+   out6[4] = romdev_wp_hits;
-+   out6[5] = prgOff;
-+   out6[6] = (romdev_wp_hits ? (uint32_t)romdev_wp_last_old : 0xFFFFFFFF); /* pre-write byte */
-+   if (clearHits) { romdev_wp_hits = 0; romdev_wp_last_pc = 0xFFFFFFFF; romdev_wp_last_pc_ptr = 0; }
-+}
-+
-+/* romdev READ watchpoint (6502) — symmetric to the write watch above. Records
-+ * the 6502 PC of the instruction that READ a watched address (hooked in
-+ * RdMemNorm / RdRAMFast in x6502.c, the mirror of the write hook). */
-+extern uint32_t romdev_rd_addr;
-+extern int      romdev_rd_enabled;
-+extern uint32_t romdev_rd_last_pc;
-+extern uint8_t  romdev_rd_last_val;
-+extern uint32_t romdev_rd_hits;
-+
-+void romdev_readwatch_set(unsigned int addr, int enabled)
-+{
-+   romdev_rd_addr = addr;
-+   romdev_rd_enabled = enabled ? 1 : 0;
-+   romdev_rd_last_pc = 0xFFFFFFFF;
-+   romdev_rd_last_val = 0;
-+   romdev_rd_hits = 0;
-+}
-+
-+/* Fills out5: [enabled, addr, lastPC, lastVal, hits]. */
-+void romdev_readwatch_get(unsigned int *out5, int clearHits)
-+{
-+   if (!out5) return;
-+   out5[0] = (unsigned int)romdev_rd_enabled;
-+   out5[1] = romdev_rd_addr;
-+   out5[2] = romdev_rd_last_pc;
-+   out5[3] = (unsigned int)romdev_rd_last_val;
-+   out5[4] = romdev_rd_hits;
-+   if (clearHits) { romdev_rd_hits = 0; romdev_rd_last_pc = 0xFFFFFFFF; }
-+}
-+
-+/* romdev PC BREAKPOINT (6502 execute hook in x6502.c:X6502_Run). The core
-+ * freezes the CPU exactly at the breakpoint PC (BEFORE that instruction
-+ * executes) by draining the cycle budget; the host polls romdev_pcbreak_get
-+ * after each retro_run frame, stops stepping once hit is set, then reads the
-+ * registers via getCPUState. `step` arms a one-instruction single-step (ignores
-+ * addr). NOTE: the 6502 PC is the raw 16-bit address — a $8000-$BFFF target is
-+ * BANK-AMBIGUOUS on banked mappers (the break fires whichever bank is paged in
-+ * with that PC). The host's 5-word out array has no prgOffset slot (that's the
-+ * core-agnostic contract); combine with the write-watchpoint prgOffset to
-+ * disambiguate the bank if needed. */
-+extern uint32_t romdev_pc_addr;
-+extern int      romdev_pc_enabled;
-+extern int      romdev_pc_step;
-+extern volatile int romdev_pc_hit;
-+extern uint32_t romdev_pc_last_pc;
-+extern uint32_t romdev_pc_hits;
-+extern uint32_t romdev_pc_snap_a, romdev_pc_snap_x, romdev_pc_snap_y, romdev_pc_snap_p, romdev_pc_snap_s;
-+
-+extern unsigned int  romdev_pc_wd_limit;
-+extern unsigned int  romdev_pc_wd_count;
-+extern int           romdev_pc_watchdog;
-+
-+void romdev_pcbreak_set(unsigned int addr, int enabled, int step)
-+{
-+   romdev_pc_addr = addr;
-+   romdev_pc_enabled = enabled ? 1 : 0;
-+   /* step is a per-instruction countdown; arm to 2 so ONE instruction executes
-+    * before the stop fires (true single-step that advances the PC). */
-+   romdev_pc_step = step ? 2 : 0;
-+   romdev_pc_hit = 0;
-+   romdev_pc_last_pc = 0xFFFFFFFF;
-+   romdev_pc_hits = 0;
-+   romdev_pc_watchdog = 0;
-+   romdev_pc_wd_count = 0;
-+   romdev_pc_snap_a = romdev_pc_snap_x = romdev_pc_snap_y =
-+      romdev_pc_snap_p = romdev_pc_snap_s = 0xFFFFFFFF;
-+}
-+
-+/* Fills out11: [enabled, addr, hit, lastPC, hits, watchdogTripped, A, X, Y, P, S].
-+ * Slots 6-10 are the register file SNAPSHOT taken at the hit instant (0xFFFFFFFF
-+ * until a hit) — the reliable break-instant regs, since the live X6502 regs are
-+ * clobbered by the rest of the frame. Older hosts that pass a 6-word array still
-+ * work (we only write what fits is the host's concern; we always write 11, so the
-+ * host must allocate 11). clearHit re-arms (also clears the snapshot). */
-+void romdev_pcbreak_get(unsigned int *out11, int clearHit)
-+{
-+   if (!out11) return;
-+   out11[0] = (unsigned int)romdev_pc_enabled;
-+   out11[1] = romdev_pc_addr;
-+   out11[2] = (unsigned int)romdev_pc_hit;
-+   out11[3] = romdev_pc_last_pc;
-+   out11[4] = romdev_pc_hits;
-+   out11[5] = (unsigned int)romdev_pc_watchdog;
-+   out11[6] = romdev_pc_snap_a;
-+   out11[7] = romdev_pc_snap_x;
-+   out11[8] = romdev_pc_snap_y;
-+   out11[9] = romdev_pc_snap_p;
-+   out11[10] = romdev_pc_snap_s;
-+   if (clearHit) {
-+      romdev_pc_hit = 0; romdev_pc_watchdog = 0; romdev_pc_wd_count = 0;
-+      romdev_pc_snap_a = romdev_pc_snap_x = romdev_pc_snap_y =
-+         romdev_pc_snap_p = romdev_pc_snap_s = 0xFFFFFFFF;
-+   }
-+}
-+
-+/* Arm the instruction watchdog (force-stop a runaway after `limit` instructions;
-+ * 0 = disable). The host sets this before driving callSubroutine so a runaway
-+ * routine returns control instead of hanging. */
-+void romdev_watchdog_set(unsigned int limit)
-+{
-+   romdev_pc_wd_limit = limit;
-+   romdev_pc_wd_count = 0;
-+   romdev_pc_watchdog = 0;
-+}
-+
-+/* romdev at-hit register snapshot (defined in x6502.c; captured by the CPU
-+ * hooks at the instant a pc-break / watchdog / write-watch / read-watch
-+ * fires). out[0]=kind (0=none 1=pc-break/step 2=watchdog 3=write-watch
-+ * 4=read-watch), out[1]=count(19), out[2..20]=regs in the romdev regId order
-+ * ([0]=A [1]=X [2]=Y [3]=P [4]=S [16]=PC-of-executing-instruction [18]=S).
-+ * `clear` resets the kind. */
-+/* romdev interrupt block (pure-call primitive — defined in x6502.c): while
-+ * set, NMI/IRQ delivery is suppressed so a callSubroutine-driven routine
-+ * cannot be hijacked by the game's own handlers. */
-+extern int romdev_irq_block;
-+void romdev_irqblock_set(int on)
-+{
-+   romdev_irq_block = on ? 1 : 0;
-+}
++/* romdev (0.80.0): the watchpoint/readwatch/range/coverage/pcbreak/watchdog/regsnap/
++ * irqblock exports now come from the shared romdev_debug.c (built into the core). Only
++ * the NES-specific VRAM-port watch + the 6502 romdev_setReg/getReg + the memory-region
++ * accessors stay here. The 6502 register SNAPSHOT (romdev_6502_snap) lives in x6502.c. */
++#include "romdev_debug.h"
 +
 +/* romdev VRAM-port copy trace (state in x6502.c, hook in ppu.c's $2007
 + * handler). set(lo,hi,enabled) arms a window of PPU addresses and clears the
@@ -242,18 +57,6 @@ index 96dece6..845c077 100644
 +      out[i*3 + 2] = romdev_vw_val[i];
 +   }
 +   return n;
-+}
-+
-+extern uint32_t romdev_snap_regs[19];
-+extern int      romdev_snap_kind;
-+void romdev_regsnap_get(unsigned int *out, int clear)
-+{
-+   int i;
-+   if (!out) return;
-+   out[0] = (unsigned int)romdev_snap_kind;
-+   out[1] = 19;
-+   for (i = 0; i < 19; i++) out[2 + i] = (unsigned int)romdev_snap_regs[i];
-+   if (clear) romdev_snap_kind = 0;
 +}
 +
 +/* romdev register read/write — the inverse of getCPUState, used by the host's
@@ -290,64 +93,6 @@ index 96dece6..845c077 100644
 +   }
 +}
 +
-+/* romdev RANGE watch (discovery) — log every read/write in [lo,hi]. mode: 1=read
-+ * 2=write 3=both. Arm clears the buffer. State + the read/write hooks live in
-+ * x6502.c (ROMDEV_RANGE_6502). */
-+extern unsigned int  romdev_range_lo, romdev_range_hi;
-+extern int           romdev_range_enabled, romdev_range_mode;
-+extern unsigned int  romdev_range_pc[], romdev_range_addr[];
-+extern unsigned char romdev_range_val[];
-+extern unsigned int  romdev_range_count, romdev_range_stored;
-+
-+void romdev_range_set(unsigned int lo, unsigned int hi, int mode, int enabled)
-+{
-+   romdev_range_lo = lo; romdev_range_hi = hi;
-+   romdev_range_mode = mode ? mode : 3;
-+   romdev_range_enabled = enabled ? 1 : 0;
-+   romdev_range_count = 0; romdev_range_stored = 0;
-+}
-+
-+/* Drain up to `max` events into out[] as packed triples [pc,addr,val,...]
-+ * (val in the low byte of its uint32 slot). Returns events written. out2 (size 2)
-+ * gets [totalSeen, stored] so the caller knows if the ring overflowed. */
-+unsigned int romdev_range_get(unsigned int *out, unsigned int max, unsigned int *out2)
-+{
-+   unsigned int i, n = romdev_range_stored;
-+   if (out2) { out2[0] = romdev_range_count; out2[1] = romdev_range_stored; }
-+   if (!out) return 0;
-+   if (n > max) n = max;
-+   for (i = 0; i < n; i++) {
-+      out[i*3 + 0] = romdev_range_pc[i];
-+      out[i*3 + 1] = romdev_range_addr[i];
-+      out[i*3 + 2] = (unsigned int)romdev_range_val[i];
-+   }
-+   return n;
-+}
-+
-+/* romdev PC COVERAGE log (discovery) — distinct in-window PCs over a run. State +
-+ * the execute-loop hook live in x6502.c. */
-+extern int           romdev_cov_enabled;
-+extern unsigned int  romdev_cov_lo, romdev_cov_hi;
-+extern unsigned int  romdev_cov_pcs[], romdev_cov_count, romdev_cov_total;
-+
-+void romdev_cov_set(unsigned int lo, unsigned int hi, int enabled)
-+{
-+   romdev_cov_lo = lo; romdev_cov_hi = hi;
-+   romdev_cov_enabled = enabled ? 1 : 0;
-+   romdev_cov_count = 0; romdev_cov_total = 0;
-+}
-+
-+/* Copy up to `max` distinct PCs into out[]. out2 (size 2) gets [distinct,total]. */
-+unsigned int romdev_cov_get(unsigned int *out, unsigned int max, unsigned int *out2)
-+{
-+   unsigned int i, n = romdev_cov_count;
-+   if (out2) { out2[0] = romdev_cov_count; out2[1] = romdev_cov_total; }
-+   if (!out) return 0;
-+   if (n > max) n = max;
-+   for (i = 0; i < n; i++) out[i] = romdev_cov_pcs[i];
-+   return n;
-+}
-+
 +/* rom-dev-mcp extension: custom memory region IDs above libretro standard.
 + * Lets the host inspect NES PPU + APU state for agent-driven dev workflows.
 + * IDs mirror those used by snes9x/gpgx patches (same project). */
@@ -382,7 +127,7 @@ index 96dece6..845c077 100644
  void *retro_get_memory_data(unsigned type)
  {
     uint8_t* data;
-@@ -3965,6 +4308,56 @@ void *retro_get_memory_data(unsigned type)
+@@ -3965,6 +4076,56 @@ void *retro_get_memory_data(unsigned type)
        case RETRO_MEMORY_SYSTEM_RAM:
           data = RAM;
           break;
@@ -439,7 +184,7 @@ index 96dece6..845c077 100644
        default:
           data = NULL;
           break;
-@@ -3992,6 +4385,13 @@ size_t retro_get_memory_size(unsigned type)
+@@ -3992,6 +4153,13 @@ size_t retro_get_memory_size(unsigned type)
        case RETRO_MEMORY_SYSTEM_RAM:
           size = 0x800;
           break;
@@ -504,99 +249,23 @@ index e1c6438..e925205 100644
  static uint32_t DMCAddress = 0;
  static int32_t DMCSize = 0;
 diff --git a/src/x6502.c b/src/x6502.c
-index 61b83e0..6413582 100644
+index 61b83e0..6fc0034 100644
 --- a/src/x6502.c
 +++ b/src/x6502.c
-@@ -29,6 +29,188 @@
+@@ -28,6 +28,74 @@
+ 
  X6502 X;
  uint8_t encryptOpcodes =0;
- 
-+/* romdev watchpoint: instruction-level write watch. When enabled, any CPU write
-+ * to romdev_wp_addr records the WRITING instruction's PC (X.PC is synced to the
-+ * current opcode before its memory writes execute), the value, and a hit count.
-+ * Exposed to the host via romdev_watchpoint_* in libretro.c. */
-+uint32_t romdev_wp_addr     = 0;
-+int      romdev_wp_enabled  = 0;
-+uint32_t romdev_wp_last_pc  = 0xFFFFFFFF;
-+uint8_t  romdev_wp_last_val = 0;
-+uint8_t  romdev_wp_last_old = 0;
-+int      romdev_wp_cond     = 0;
-+uint8_t  romdev_wp_cond_val = 0;
-+uint32_t romdev_wp_hits     = 0;
-+/* Does new value V (with old byte OLD) satisfy the active condition? cond 0 =
-+ * unconditional. Used by the write hooks to skip restoring/churn writes. */
-+static INLINE int romdev_wp_cond_ok(uint8_t oldv, uint8_t v) {
-+	switch (romdev_wp_cond) {
-+		case 1:  return v > oldv;             /* increase */
-+		case 2:  return v < oldv;             /* decrease */
-+		case 3:  return v == romdev_wp_cond_val; /* equals */
-+		default: return 1;                    /* none */
-+	}
-+}
-+/* The host pointer of the PC's 2KB page at write time. Page[A>>11] is
-+ * (host_ptr - A_base), so Page[PC>>11] + PC is the live host address of the
-+ * writing instruction — libretro.c converts it to an absolute PRG-ROM offset
-+ * (hence the active BANK) so a $8000-$BFFF PC isn't bank-ambiguous on a banked
-+ * mapper. Captured here because X.PC reflects the bank live at the write. */
-+extern uint8_t *Page[32];
-+uint8_t *romdev_wp_last_pc_ptr = 0;
++/* romdev (0.80.0): the watchpoint/readwatch/range/coverage/pcbreak/watchdog state +
++ * machinery now live in the shared romdev_debug.c. x6502.c keeps only the 6502-specific
++ * bits: the instruction-PC latch, the at-hit register snapshot (6502 layout), the NES
++ * VRAM-port copy trace, and the PRG-offset helper (romdev_6502_romoff, below). */
++#include "romdev_debug.h"
 +
-+/* romdev instruction-level READ watchpoint (mirror of the write watch above).
-+ * When enabled, any CPU data read of romdev_rd_addr records the READING
-+ * instruction's PC (X.PC, synced to the current opcode before its memory reads
-+ * execute), the value read, and a hit count. Hooked into the two data-read
-+ * paths (RdMemNorm / RdRAMFast) — the exact mirror of the write hook in
-+ * WrMemNorm / WrRAMFast. Exported via romdev_readwatch_* in libretro.c. */
-+uint32_t romdev_rd_addr     = 0;
-+int      romdev_rd_enabled  = 0;
-+uint32_t romdev_rd_last_pc  = 0xFFFFFFFF;
-+uint8_t  romdev_rd_last_val = 0;
-+uint32_t romdev_rd_hits     = 0;
-+
-+/* romdev PC BREAKPOINT (6502 execute hook in X6502_Run below). When enabled and
-+ * the 6502 PC about to execute equals romdev_pc_addr, romdev_pc_hit is set and
-+ * X6502_Run consumes the remaining cycle budget and breaks out of its loop so
-+ * the CPU freezes EXACTLY at that PC (X.PC is synced first). The host polls
-+ * romdev_pcbreak_get after each retro_run frame, stops stepping once hit is
-+ * set, then reads the full register file via getCPUState. romdev_pc_step forces
-+ * a one-instruction stop regardless of address (single-step). */
-+uint32_t      romdev_pc_addr    = 0;
-+int           romdev_pc_enabled = 0;
-+int           romdev_pc_step    = 0;        /* 1 = stop after exactly one instruction */
-+volatile int  romdev_pc_hit     = 0;        /* set by the execute hook, cleared by the host */
-+uint32_t      romdev_pc_last_pc = 0xFFFFFFFF;
-+uint32_t      romdev_pc_hits    = 0;
-+
-+/* Register-file SNAPSHOT taken AT the breakpoint hit (before the instruction at
-+ * the break PC executes, and before the rest of the frame — NMI etc. — clobbers
-+ * the live X6502 regs). fceumm drains the cycle budget on hit but retro_run still
-+ * finishes the frame, so reading X.A/X.PC AFTER retro_run returns end-of-frame
-+ * state, not the break-instant state. These frozen copies are the truth the host
-+ * surfaces; -1 (0xFFFFFFFF) until a hit. */
-+uint32_t      romdev_pc_snap_a  = 0xFFFFFFFF;
-+uint32_t      romdev_pc_snap_x  = 0xFFFFFFFF;
-+uint32_t      romdev_pc_snap_y  = 0xFFFFFFFF;
-+uint32_t      romdev_pc_snap_p  = 0xFFFFFFFF;
-+uint32_t      romdev_pc_snap_s  = 0xFFFFFFFF;
-+
-+/* Generic at-hit register snapshot (the cross-core romdev_regsnap_get shape) —
-+ * extends the pc-break-only snapshot above to write-watch and read-watch hits
-+ * too. Layout = the romdev_setreg/getreg regId order: [0]=A [1]=X [2]=Y [3]=P
-+ * [4]=S [16]=PC of the EXECUTING instruction's first byte [18]=S. kind:
-+ * 1=pc-break/step, 2=watchdog, 3=write-watch, 4=read-watch. */
-+uint32_t      romdev_snap_regs[19];
-+int           romdev_snap_kind = 0;
 +/* First-byte address of the instruction being executed, latched at dispatch in
 + * X6502_Run — X.PC is only synced at loop boundaries, so mid-instruction hooks
 + * must report THIS. */
 +uint32_t      romdev_6502_instr_pc = 0xFFFFFFFF;
-+/* romdev INTERRUPT BLOCK — the pure-call primitive. While set, NMI/IRQ/RESET
-+ * delivery is suppressed (the lines stay pending in _IRQlow), so a routine
-+ * driven by callSubroutine cannot be hijacked by the game's own NMI/IRQ
-+ * handlers (the frame logic that stomps output buffers). The PPU/APU keep
-+ * running — only CPU interrupt DISPATCH is gated, which is the one path that
-+ * runs game code other than the called routine. */
-+int           romdev_irq_block = 0;
 +
 +/* romdev VRAM-port COPY TRACE (the source-trace primitive for port-based
 + * video memory): log every CPU write that lands in a watched VRAM address
@@ -623,6 +292,11 @@ index 61b83e0..6413582 100644
 +		romdev_vw_stored++;
 +	}
 +}
++
++/* romdev at-hit register snapshot (6502 layout — per-core). Fills the shared
++ * romdev_snap_regs[] in the romdev_getReg regId order ([0]=A [1]=X [2]=Y [3]=P
++ * [4]=S [16]=PC-of-executing-instruction [18]=S) + the kind. The hooks call this
++ * when the shared lib reports a hit. */
 +static void romdev_6502_snap(int kind) {
 +	int i;
 +	for (i = 0; i < 19; i++) romdev_snap_regs[i] = 0;
@@ -636,131 +310,59 @@ index 61b83e0..6413582 100644
 +	romdev_snap_kind = kind;
 +}
 +
-+/* romdev INSTRUCTION WATCHDOG — the fix for "callSubroutine hung". A standalone-
-+ * driven routine (e.g. a decompressor fed a slightly-wrong pointer) can loop
-+ * FOREVER inside a single X6502_Run / retro_run frame, so the host's per-FRAME
-+ * maxFrames never gets a turn and the whole WASM hangs. This counts dispatched
-+ * instructions and force-stops (sets romdev_pc_hit + romdev_pc_watchdog) when the
-+ * budget is exceeded — so a runaway returns control with the final PC intact
-+ * instead of hanging. romdev_pc_wd_limit 0 = disabled. */
-+unsigned int  romdev_pc_wd_limit = 0;       /* max instructions before force-stop (0 = off) */
-+unsigned int  romdev_pc_wd_count = 0;       /* instructions executed since arm */
-+volatile int  romdev_pc_watchdog = 0;       /* set when the watchdog tripped */
-+
-+/* romdev RANGE watch (discovery): log EVERY {pc,addr,value} that reads or writes
-+ * an address in [lo,hi] over a window — not stop-on-first. Hooked into the same
-+ * read/write paths (RdMemNorm/RdRAMFast + WrMemNorm/WrRAMFast) as the single-
-+ * address watch above. Ring buffer; the host drains it via romdev_range_get. The
-+ * pc recorded is X.PC, the executing instruction. */
-+#define ROMDEV_RANGE_CAP 4096
-+unsigned int  romdev_range_lo      = 0;
-+unsigned int  romdev_range_hi      = 0;
-+int           romdev_range_enabled = 0;
-+int           romdev_range_mode    = 0;     /* 1=read, 2=write, 3=both */
-+unsigned int  romdev_range_pc  [ROMDEV_RANGE_CAP];
-+unsigned int  romdev_range_addr[ROMDEV_RANGE_CAP];
-+unsigned char romdev_range_val [ROMDEV_RANGE_CAP];
-+unsigned int  romdev_range_count   = 0;     /* total events seen (may exceed CAP) */
-+unsigned int  romdev_range_stored  = 0;     /* events actually stored (<= CAP) */
-+
-+/* romdev PC COVERAGE log (discovery): record DISTINCT PCs executed within an
-+ * address window [lo,hi] over a run — "what code runs here?". Linear de-dup
-+ * against the stored set (cheap for the small windows this targets). */
-+#define ROMDEV_COV_CAP 8192
-+unsigned int  romdev_cov_lo      = 0;
-+unsigned int  romdev_cov_hi      = 0;
-+int           romdev_cov_enabled = 0;
-+unsigned int  romdev_cov_pcs[ROMDEV_COV_CAP];
-+unsigned int  romdev_cov_count   = 0;       /* distinct PCs stored (<= CAP) */
-+unsigned int  romdev_cov_total   = 0;       /* total in-range dispatches seen */
-+
-+/* Append one range-watch event (called from the read/write hooks via the macro
-+ * ROMDEV_RANGE_6502 below). */
-+void romdev_range_log(unsigned int pc, unsigned int addr, unsigned char val)
-+{
-+	romdev_range_count++;
-+	if (romdev_range_stored < ROMDEV_RANGE_CAP) {
-+		romdev_range_pc  [romdev_range_stored] = pc;
-+		romdev_range_addr[romdev_range_stored] = addr;
-+		romdev_range_val [romdev_range_stored] = val;
-+		romdev_range_stored++;
++#include "cart.h"
++static unsigned romdev_6502_romoff(uint32_t pc) {
++	uint8_t *p;
++	int c;
++	if (pc < 0x8000) return 0xFFFFFFFFu;
++	p = Page[(pc >> 11) & 31] + pc;
++	for (c = 0; c < 32; c++) {
++		if (PRGptr[c] && PRGsize[c]) {
++			ptrdiff_t d = p - PRGptr[c];
++			if (d >= 0 && (uint32_t)d < PRGsize[c]) return (unsigned)d;
++		}
 +	}
++	return 0xFFFFFFFFu;
 +}
-+
-+/* Record a distinct in-window PC for the coverage log. */
-+void romdev_cov_log(unsigned int pc)
-+{
-+	unsigned int i;
-+	romdev_cov_total++;
-+	for (i = 0; i < romdev_cov_count; i++) if (romdev_cov_pcs[i] == pc) return;
-+	if (romdev_cov_count < ROMDEV_COV_CAP) romdev_cov_pcs[romdev_cov_count++] = pc;
-+}
-+
-+/* romdev RANGE watch hook macro for the 6502 read/write paths. `w` is 1 for a
-+ * write, 0 for a read; romdev_range_mode 1=read 2=write 3=both. pc is X.PC, the
-+ * executing instruction. Cheap when disabled (one int test). */
-+#define ROMDEV_RANGE_6502(a, v, w) do { \
-+	if (romdev_range_enabled && (romdev_range_mode & ((w) ? 2 : 1)) \
-+	    && (unsigned int)(a) >= romdev_range_lo && (unsigned int)(a) <= romdev_range_hi) { \
-+		romdev_range_log(X.PC, (unsigned int)(a), (unsigned char)(v)); \
-+	} \
-+} while (0)
-+
+ 
  uint32_t timestamp;
  uint32_t sound_timestamp;
- void FP_FASTAPASS(1) (*MapIRQHook)(int a);
-@@ -55,18 +237,41 @@ void FP_FASTAPASS(1) (*MapIRQHook)(int a);
+@@ -54,19 +122,33 @@ void FP_FASTAPASS(1) (*MapIRQHook)(int a);
+ 	if (!overclocked) sound_timestamp +=  __x; \
  }
  
++/* romdev (0.80.0): the wp/rd/range bookkeeping now lives in the shared romdev_debug.c.
++ * Each bus tap feeds it (addr, value, pc + the pre-write byte / PRG offset) and takes
++ * the 6502 register snapshot when the shared lib reports a hit. */
  static INLINE uint8_t RdMemNorm(uint32_t A) {
 -	return(_DB = ARead[A](A));
 +	uint8_t v = ARead[A](A);
-+	if (romdev_rd_enabled && A == romdev_rd_addr) {
-+		romdev_rd_last_pc = romdev_6502_instr_pc; romdev_rd_last_val = v; romdev_rd_hits++;
-+		romdev_6502_snap(4);
-+	}
-+	ROMDEV_RANGE_6502(A, v, 0);
++	if (romdev_on_read(A, v, romdev_6502_instr_pc)) romdev_6502_snap(4);
 +	return(_DB = v);
  }
  
  static INLINE void WrMemNorm(uint32_t A, uint8_t V) {
-+	if (romdev_wp_enabled && A == romdev_wp_addr) {
-+		/* old byte = current bus read (only when a condition needs it, to avoid
-+		 * a mapper read side effect on the common no-condition path). */
-+		uint8_t romdev_old = romdev_wp_cond ? ARead[A](A) : 0;
-+		if (romdev_wp_cond_ok(romdev_old, V)) {
-+			romdev_wp_last_pc = romdev_6502_instr_pc; romdev_wp_last_val = V; romdev_wp_last_old = romdev_old; romdev_wp_hits++;
-+			romdev_wp_last_pc_ptr = (romdev_6502_instr_pc >= 0x8000) ? Page[(romdev_6502_instr_pc >> 11) & 31] + romdev_6502_instr_pc : 0;
-+			romdev_6502_snap(3);
-+		}
-+	}
-+	ROMDEV_RANGE_6502(A, V, 1);
++	/* old byte = current bus read only when a condition needs it (avoid a mapper
++	 * read side effect on the common no-condition path). */
++	uint8_t romdev_old = romdev_wp_wants_old() ? ARead[A](A) : 0;
++	if (romdev_on_write(A, romdev_old, V, romdev_6502_instr_pc, romdev_6502_romoff(romdev_6502_instr_pc)))
++		romdev_6502_snap(3);
  	BWrite[A](A, V);
  }
  
  static INLINE uint8_t RdRAMFast(uint32_t A) {
-+	if (romdev_rd_enabled && A == romdev_rd_addr) {
-+		romdev_rd_last_pc = romdev_6502_instr_pc; romdev_rd_last_val = RAM[A]; romdev_rd_hits++;
-+		romdev_6502_snap(4);
-+	}
-+	ROMDEV_RANGE_6502(A, RAM[A], 0);
++	if (romdev_on_read(A, RAM[A], romdev_6502_instr_pc)) romdev_6502_snap(4);
  	return(_DB = RAM[A]);
  }
  
  static INLINE void WrRAMFast(uint32_t A, uint8_t V) {
-+	if (romdev_wp_enabled && A == romdev_wp_addr) {
-+		uint8_t romdev_old = RAM[A]; /* pre-write byte (RAM is side-effect free) */
-+		if (romdev_wp_cond_ok(romdev_old, V)) {
-+			romdev_wp_last_pc = romdev_6502_instr_pc; romdev_wp_last_val = V; romdev_wp_last_old = romdev_old; romdev_wp_hits++;
-+			romdev_wp_last_pc_ptr = (romdev_6502_instr_pc >= 0x8000) ? Page[(romdev_6502_instr_pc >> 11) & 31] + romdev_6502_instr_pc : 0;
-+			romdev_6502_snap(3);
-+		}
-+	}
-+	ROMDEV_RANGE_6502(A, V, 1);
++	uint8_t romdev_old = RAM[A]; /* pre-write byte (RAM is side-effect free) */
++	if (romdev_on_write(A, romdev_old, V, romdev_6502_instr_pc, romdev_6502_romoff(romdev_6502_instr_pc)))
++		romdev_6502_snap(3);
  	RAM[A] = V;
  }
  
-@@ -391,6 +596,17 @@ void X6502_Run(int32_t cycles)
+@@ -391,6 +473,17 @@ void X6502_Run(int32_t cycles)
  	#undef _PC
  	#define _PC pbackus
  
@@ -770,7 +372,7 @@ index 61b83e0..6413582 100644
 +	 * (the documented "live regs are end-of-frame state" problem; the snapshot
 +	 * sidestepped it, the freeze now removes it). The host clears the hit
 +	 * (pcbreak_get clearHit / pcbreak_set) to resume. */
-+	if (romdev_pc_hit) {
++	if (romdev_is_frozen()) {
 +		_count = 0;
 +		return;
 +	}
@@ -778,7 +380,7 @@ index 61b83e0..6413582 100644
  	if (PAL)
  		cycles *= 15;	/* 15*4=60 */
  	else
-@@ -402,7 +618,7 @@ void X6502_Run(int32_t cycles)
+@@ -402,7 +495,7 @@ void X6502_Run(int32_t cycles)
  		int32_t temp;
  		uint8_t b1;
  
@@ -787,82 +389,32 @@ index 61b83e0..6413582 100644
  			if (_IRQlow & FCEU_IQRESET) {
  				_PC = RdMem(0xFFFC);
  				_PC |= RdMem(0xFFFD) << 8;
-@@ -445,6 +661,79 @@ void X6502_Run(int32_t cycles)
+@@ -445,6 +538,29 @@ void X6502_Run(int32_t cycles)
  		}
  
  		_PI = _P;
 +
-+		/* romdev instruction WATCHDOG: force-stop a runaway (the callSubroutine
-+		 * hang). Counts dispatched instructions; on overflow, fire the breakpoint
-+		 * with the watchdog flag so the host gets the final PC instead of hanging.
-+		 * Checked FIRST, before the opcode fetch, so _PC is the about-to-execute
-+		 * instruction; stop the frame the same way the pc-break does (drain the
-+		 * cycle budget + break). */
-+		/* romdev: _PC right now is the first byte of the instruction about to be
-+		 * dispatched — latch it for the mid-instruction hooks (write/read
-+		 * watchpoints, range log). */
++		/* romdev (0.80.0): _PC right now is the first byte of the instruction about to
++		 * be dispatched — latch it for the mid-instruction R/W hooks, then ask the
++		 * shared lib whether this dispatch should FREEZE (coverage + watchdog +
++		 * pc-break/single-step all live in romdev_debug.c now). */
 +		romdev_6502_instr_pc = (uint32_t)_PC;
 +
-+		if (romdev_pc_wd_limit && !romdev_pc_hit) {
-+			if (++romdev_pc_wd_count >= romdev_pc_wd_limit) {
-+				X.PC = pbackus;        /* leave CPU frozen exactly at this PC */
-+				romdev_pc_last_pc = _PC;
-+				/* snapshot the register file AT the hit (regs are clobbered by the
-+				 * rest of the frame before the host can read them) */
-+				romdev_pc_snap_a = (uint32_t)X.A; romdev_pc_snap_x = (uint32_t)X.X;
-+				romdev_pc_snap_y = (uint32_t)X.Y; romdev_pc_snap_p = (uint32_t)X.P;
-+				romdev_pc_snap_s = (uint32_t)X.S;
-+				romdev_6502_snap(2);
-+				romdev_pc_hit = 1;
-+				romdev_pc_watchdog = 1;
-+				_count = 0;            /* drain the budget so the frame ends here */
-+				break;
-+			}
++		if (romdev_on_dispatch((uint32_t)_PC)) {
++			/* freeze the CPU EXACTLY at this PC (X.PC = pbackus, instruction NOT run),
++			 * take the 6502 register snapshot with the shared lib's reported kind
++			 * (2=watchdog else 1=pc-break/step) + fill the compact pcbreak_get reg slots
++			 * (A,X,Y,P,S — clobbered by the rest of the frame otherwise), and DRAIN the
++			 * cycle budget so this frame ends here instead of re-looping forever. */
++			X.PC = pbackus;
++			romdev_6502_snap(romdev_pc_hit_kind() == 2 ? 2 : 1);
++			romdev_pcbrk_regs[0] = (uint32_t)X.A; romdev_pcbrk_regs[1] = (uint32_t)X.X;
++			romdev_pcbrk_regs[2] = (uint32_t)X.Y; romdev_pcbrk_regs[3] = (uint32_t)X.P;
++			romdev_pcbrk_regs[4] = (uint32_t)X.S;
++			_count = 0;
++			break;
 +		}
 +
-+		/* romdev PC coverage log (discovery): record each DISTINCT in-window PC
-+		 * about to execute. Checked here, BEFORE the opcode fetch, so _PC is the
-+		 * address of the instruction about to run. Cheap when disabled (one int
-+		 * test). */
-+		if (romdev_cov_enabled
-+		    && (unsigned int)_PC >= romdev_cov_lo
-+		    && (unsigned int)_PC <= romdev_cov_hi)
-+			romdev_cov_log(_PC);
-+
-+		/* romdev PC breakpoint / single-step: checked here, BEFORE the opcode
-+		 * fetch, so _PC (== pbackus) is the address of the instruction about to
-+		 * execute (after any IRQ/NMI/RESET redirect above). On a hit, sync X.PC,
-+		 * mark the hit, CONSUME the remaining cycle budget (_count = 0) so this
-+		 * frame's CPU work ends, and break out — the CPU is now frozen exactly
-+		 * at the breakpoint PC. The host sees romdev_pc_hit after retro_run and
-+		 * stops stepping; getCPUState then reads the live register file.
-+		 * romdev_pc_step stops after exactly one instruction regardless of addr. */
-+		if ((romdev_pc_enabled || romdev_pc_step) && !romdev_pc_hit) {
-+			/* Single-step (romdev_pc_step) is a per-instruction countdown the host
-+			 * arms to 2 = "let ONE instruction execute, then stop" — so the step
-+			 * actually ADVANCES the PC instead of re-stopping on the current
-+			 * (un-executed) instruction. A plain breakpoint (step==0) matches addr. */
-+			int stepFire = 0;
-+			if (romdev_pc_step) { if (--romdev_pc_step <= 0) stepFire = 1; }
-+			if (stepFire || ((romdev_pc_enabled && !romdev_pc_step)
-+			                 && (uint32_t)_PC == romdev_pc_addr)) {
-+				X.PC = pbackus;        /* leave CPU frozen exactly at this PC */
-+				romdev_pc_last_pc = _PC;
-+				/* snapshot the register file AT the hit — the live X6502 regs are
-+				 * clobbered by the remainder of the frame (NMI/idle) before the host
-+				 * can read them, so a post-retro_run getCPUState lies. These frozen
-+				 * copies are what breakpoint() returns as registersAtHit. */
-+				romdev_pc_snap_a = (uint32_t)X.A; romdev_pc_snap_x = (uint32_t)X.X;
-+				romdev_pc_snap_y = (uint32_t)X.Y; romdev_pc_snap_p = (uint32_t)X.P;
-+				romdev_pc_snap_s = (uint32_t)X.S;
-+				romdev_6502_snap(1);
-+				romdev_pc_hit = 1;
-+				romdev_pc_hits++;
-+				romdev_pc_step = 0;    /* one-shot */
-+				_count = 0;            /* drain the budget so the frame ends here */
-+				break;
-+			}
-+		}
 +
  		b1 = RdMem(_PC);
  
