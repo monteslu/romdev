@@ -24,6 +24,7 @@ import { readFile } from "node:fs/promises";
 
 import { runTcc816 } from "../tcc816/tcc816.js";
 import { runWla65816, runWlalink } from "../wladx/wladx.js";
+import { CBuild, BuildError } from "../common/c-build.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -171,7 +172,7 @@ function normalizeSnesSources(args) {
  * substitution fires. (We do that in wla-65816.js unconditionally.)
  */
 async function buildWithPvSnesLib({ sources, headers, tccOptions, wlaOptions, binaryIncludes = {} }) {
-  let log = "";
+  const cb = new CBuild();
   const pvsnesHeaders = await loadPvSnesLibHeaders();
   const pvsnesHdr = await readFile(path.join(PVSNESLIB_DIR, "include", "hdr.asm"), "utf-8");
   // wla can `.include "<sibling>.asm"` from same dir, so all sources need
@@ -186,102 +187,91 @@ async function buildWithPvSnesLib({ sources, headers, tccOptions, wlaOptions, bi
   // map. tcc only looks in /work (we use `-I /work`) so a flat namespace works.
   const tccHeaders = { ...pvsnesHeaders, ...headers };
 
-  /** @type {Record<string, Uint8Array>} */
-  const userObjs = {};
-  // ── Stage 1: build each .c via tcc → .asm → .obj ────────────────
-  const cFiles = Object.keys(sources).filter((n) => /\.c$/i.test(n));
-  for (const cName of cFiles) {
-    const tcc = await runTcc816({
-      source: sources[cName],
-      headers: tccHeaders,
-      options: tccOptions,
-    });
-    log += `--- tcc-65816 (${cName}) ---\n` + (tcc.log || "(ok)") + "\n";
-    if (tcc.exitCode !== 0 || !tcc.asmSource) {
-      return { ok: false, binary: null, log, exitCode: tcc.exitCode || 1, stage: `tcc-65816 (${cName})`, ...(tcc.crash ? { crash: tcc.crash } : {}) };
+  try {
+    /** @type {Record<string, Uint8Array>} */
+    const userObjs = {};
+    // ── Stage 1: build each .c via tcc → .asm → .obj ────────────────
+    const cFiles = Object.keys(sources).filter((n) => /\.c$/i.test(n));
+    for (const cName of cFiles) {
+      const tcc = await cb.stage(`tcc-65816 (${cName})`, () => runTcc816({
+        source: sources[cName],
+        headers: tccHeaders,
+        options: tccOptions,
+      }), (r) => r.asmSource);
+      // KEEP tcc's `.include "hdr.asm"` — wla resolves it via the includes
+      // map below. (We strip it from library .obj builds where libc.asm
+      // already includes hdr.asm; user code includes hdr.asm directly.)
+      const wla = await cb.stage(`wla-65816 (${cName})`, () => runWla65816({
+        source: tcc.asmSource,
+        includes: { "hdr.asm": pvsnesHdr, ...asmSiblings },
+        options: wlaOptions,
+      }), (r) => r.object, { logName: `wla-65816 (${cName} → .obj)` });
+      const objName = cName.replace(/\.c$/i, ".obj");
+      userObjs[objName] = wla.object;
     }
-    // KEEP tcc's `.include "hdr.asm"` — wla resolves it via the includes
-    // map below. (We strip it from library .obj builds where libc.asm
-    // already includes hdr.asm; user code includes hdr.asm directly.)
-    const wla = await runWla65816({
-      source: tcc.asmSource,
-      includes: { "hdr.asm": pvsnesHdr, ...asmSiblings },
-      options: wlaOptions,
-    });
-    log += `--- wla-65816 (${cName} → .obj) ---\n` + (wla.log || "(ok)") + "\n";
-    if (wla.exitCode !== 0 || !wla.object) {
-      return { ok: false, binary: null, log, exitCode: wla.exitCode || 1, stage: `wla-65816 (${cName})`, ...(wla.crash ? { crash: wla.crash } : {}) };
+
+    // ── Stage 2: assemble each user .asm / .s sibling directly ──────
+    for (const asmName of Object.keys(asmSiblings)) {
+      const wla = await cb.stage(`wla-65816 (${asmName})`, () => runWla65816({
+        source: asmSiblings[asmName],
+        includes: { "hdr.asm": pvsnesHdr, ...asmSiblings },
+        binaryIncludes,
+        options: wlaOptions,
+      }), (r) => r.object, { logName: `wla-65816 (${asmName} → .obj)` });
+      const objName = asmName.replace(/\.(asm|s)$/i, ".obj");
+      userObjs[objName] = wla.object;
     }
-    const objName = cName.replace(/\.c$/i, ".obj");
-    userObjs[objName] = wla.object;
-  }
 
-  // ── Stage 2: assemble each user .asm / .s sibling directly ──────
-  for (const asmName of Object.keys(asmSiblings)) {
-    const wla = await runWla65816({
-      source: asmSiblings[asmName],
-      includes: { "hdr.asm": pvsnesHdr, ...asmSiblings },
-      binaryIncludes,
-      options: wlaOptions,
-    });
-    log += `--- wla-65816 (${asmName} → .obj) ---\n` + (wla.log || "(ok)") + "\n";
-    if (wla.exitCode !== 0 || !wla.object) {
-      return { ok: false, binary: null, log, exitCode: wla.exitCode || 1, stage: `wla-65816 (${asmName})`, ...(wla.crash ? { crash: wla.crash } : {}) };
+    // ── Stage 3: assemble PVSnesLib runtime FROM SOURCE, then link ──
+    const pvObjs = await assemblePvSnesLibObjs();
+    if (!pvObjs.ok) {
+      return { ok: false, binary: null, log: cb.log + (pvObjs.log || ""), exitCode: 1, stage: `pvsneslib runtime: ${pvObjs.stage}`, runtime: "pvsneslib" };
     }
-    const objName = asmName.replace(/\.(asm|s)$/i, ".obj");
-    userObjs[objName] = wla.object;
+    const crt0Obj = pvObjs.objs["crt0_snes.obj"];
+    const libmObj = pvObjs.objs["libm.obj"];
+    const libtccObj = pvObjs.objs["libtcc.obj"];
+    const libcObj = pvObjs.objs["libc.obj"];
+
+    // PVSnesLib's linkfile convention puts crt0 first (reset-vector tie-break),
+    // then libm/libtcc/libc, then user code. wlalink's order matters for which
+    // section "wins" when sections collide.
+    const userObjLines = Object.keys(userObjs).map((n) => `/work/${n}`).join("\n");
+    const linkfile =
+      "[objects]\n" +
+      "/work/crt0_snes.obj\n" +
+      "/work/libm.obj\n" +
+      "/work/libtcc.obj\n" +
+      "/work/libc.obj\n" +
+      userObjLines + "\n";
+
+    const link = await cb.stage("wlalink", () => runWlalink({
+      objects: {
+        "crt0_snes.obj": crt0Obj,
+        "libm.obj":      libmObj,
+        "libtcc.obj":    libtccObj,
+        "libc.obj":      libcObj,
+        ...userObjs,
+      },
+      linkfile,
+      // -d: disable label-arith opts (PVSnesLib's library .obj files were
+      //     built with -d so user link must match). -A: cart-size check.
+      // -c: allow duplicate labels (PVSnesLib's libc has known dupes between
+      //     consoles/input regs that they ship with -c). -b: program output.
+      options: ["-d", "-A", "-c", "-b"],
+    }), (r) => r.binary);
+
+    return {
+      ok: true,
+      binary: link.binary,
+      log: cb.log,
+      exitCode: 0,
+      stage: "done",
+      runtime: "pvsneslib",
+    };
+  } catch (e) {
+    if (e instanceof BuildError) return e.toResult();
+    throw e;
   }
-
-  // ── Stage 3: assemble PVSnesLib runtime FROM SOURCE, then link ──
-  const pvObjs = await assemblePvSnesLibObjs();
-  if (!pvObjs.ok) {
-    return { ok: false, binary: null, log: log + (pvObjs.log || ""), exitCode: 1, stage: `pvsneslib runtime: ${pvObjs.stage}`, runtime: "pvsneslib" };
-  }
-  const crt0Obj = pvObjs.objs["crt0_snes.obj"];
-  const libmObj = pvObjs.objs["libm.obj"];
-  const libtccObj = pvObjs.objs["libtcc.obj"];
-  const libcObj = pvObjs.objs["libc.obj"];
-
-  // PVSnesLib's linkfile convention puts crt0 first (reset-vector tie-break),
-  // then libm/libtcc/libc, then user code. wlalink's order matters for which
-  // section "wins" when sections collide.
-  const userObjLines = Object.keys(userObjs).map((n) => `/work/${n}`).join("\n");
-  const linkfile =
-    "[objects]\n" +
-    "/work/crt0_snes.obj\n" +
-    "/work/libm.obj\n" +
-    "/work/libtcc.obj\n" +
-    "/work/libc.obj\n" +
-    userObjLines + "\n";
-
-  const link = await runWlalink({
-    objects: {
-      "crt0_snes.obj": crt0Obj,
-      "libm.obj":      libmObj,
-      "libtcc.obj":    libtccObj,
-      "libc.obj":      libcObj,
-      ...userObjs,
-    },
-    linkfile,
-    // -d: disable label-arith opts (PVSnesLib's library .obj files were
-    //     built with -d so user link must match). -A: cart-size check.
-    // -c: allow duplicate labels (PVSnesLib's libc has known dupes between
-    //     consoles/input regs that they ship with -c). -b: program output.
-    options: ["-d", "-A", "-c", "-b"],
-  });
-  log += "--- wlalink ---\n" + (link.log || "(ok)") + "\n";
-  if (link.exitCode !== 0 || !link.binary) {
-    return { ok: false, binary: null, log, exitCode: link.exitCode || 1, stage: "wlalink", ...(link.crash ? { crash: link.crash } : {}) };
-  }
-
-  return {
-    ok: true,
-    binary: link.binary,
-    log,
-    exitCode: 0,
-    stage: "done",
-    runtime: "pvsneslib",
-  };
 }
 
 /**
@@ -289,7 +279,7 @@ async function buildWithPvSnesLib({ sources, headers, tccOptions, wlaOptions, bi
  * bundled original crt0.asm + hdr.asm support a bare `int main()`.
  */
 async function buildMinimal({ sources, headers, tccOptions, wlaOptions, _binaryIncludes = {} }) {
-  let log = "";
+  const cb = new CBuild();
   const hdrAsm  = await readFile(path.join(MINIMAL_LIB_DIR, "hdr.asm"),  "utf-8");
   const crt0Asm = await readFile(path.join(MINIMAL_LIB_DIR, "crt0.asm"), "utf-8");
 
@@ -300,73 +290,58 @@ async function buildMinimal({ sources, headers, tccOptions, wlaOptions, _binaryI
     if (/\.(asm|s)$/i.test(name)) asmSiblings[name] = contents;
   }
 
-  /** @type {Record<string, Uint8Array>} */
-  const userObjs = {};
-  const cFiles = Object.keys(sources).filter((n) => /\.c$/i.test(n));
-  for (const cName of cFiles) {
-    const tcc = await runTcc816({ source: sources[cName], headers, options: tccOptions });
-    log += `--- tcc-65816 (${cName}) ---\n` + (tcc.log || "(ok)") + "\n";
-    if (tcc.exitCode !== 0 || !tcc.asmSource) {
-      return { ok: false, binary: null, log, exitCode: tcc.exitCode || 1, stage: `tcc-65816 (${cName})`, ...(tcc.crash ? { crash: tcc.crash } : {}) };
+  try {
+    /** @type {Record<string, Uint8Array>} */
+    const userObjs = {};
+    const cFiles = Object.keys(sources).filter((n) => /\.c$/i.test(n));
+    for (const cName of cFiles) {
+      const tcc = await cb.stage(`tcc-65816 (${cName})`, () => runTcc816({ source: sources[cName], headers, options: tccOptions }), (r) => r.asmSource);
+      const wla = await cb.stage(`wla-65816 (${cName})`, () => runWla65816({
+        source: tcc.asmSource,
+        includes: { "hdr.asm": hdrAsm, ...asmSiblings },
+        options: wlaOptions,
+      }), (r) => r.object, { logName: `wla-65816 (${cName} → .obj)` });
+      const objName = cName.replace(/\.c$/i, ".o");
+      userObjs[objName] = wla.object;
     }
-    const wla = await runWla65816({
-      source: tcc.asmSource,
-      includes: { "hdr.asm": hdrAsm, ...asmSiblings },
+
+    for (const asmName of Object.keys(asmSiblings)) {
+      const wla = await cb.stage(`wla-65816 (${asmName})`, () => runWla65816({
+        source: asmSiblings[asmName],
+        includes: { "hdr.asm": hdrAsm, ...asmSiblings },
+        options: wlaOptions,
+      }), (r) => r.object, { logName: `wla-65816 (${asmName} → .obj)` });
+      const objName = asmName.replace(/\.(asm|s)$/i, ".o");
+      userObjs[objName] = wla.object;
+    }
+
+    // crt0 from our minimum-viable runtime.
+    const wlaCrt0 = await cb.stage("wla-65816 (crt0)", () => runWla65816({
+      source: crt0Asm,
+      includes: { "hdr.asm": hdrAsm },
       options: wlaOptions,
-    });
-    log += `--- wla-65816 (${cName} → .obj) ---\n` + (wla.log || "(ok)") + "\n";
-    if (wla.exitCode !== 0 || !wla.object) {
-      return { ok: false, binary: null, log, exitCode: wla.exitCode || 1, stage: `wla-65816 (${cName})`, ...(wla.crash ? { crash: wla.crash } : {}) };
-    }
-    const objName = cName.replace(/\.c$/i, ".o");
-    userObjs[objName] = wla.object;
-  }
+    }), (r) => r.object, { logName: "wla-65816 (crt0.asm)" });
 
-  for (const asmName of Object.keys(asmSiblings)) {
-    const wla = await runWla65816({
-      source: asmSiblings[asmName],
-      includes: { "hdr.asm": hdrAsm, ...asmSiblings },
-      options: wlaOptions,
-    });
-    log += `--- wla-65816 (${asmName} → .obj) ---\n` + (wla.log || "(ok)") + "\n";
-    if (wla.exitCode !== 0 || !wla.object) {
-      return { ok: false, binary: null, log, exitCode: wla.exitCode || 1, stage: `wla-65816 (${asmName})`, ...(wla.crash ? { crash: wla.crash } : {}) };
-    }
-    const objName = asmName.replace(/\.(asm|s)$/i, ".o");
-    userObjs[objName] = wla.object;
-  }
+    const userObjLines = Object.keys(userObjs).map((n) => `/work/${n}`).join("\n");
+    const linkfile = "[objects]\n/work/crt0.o\n" + userObjLines + "\n";
+    const link = await cb.stage("wlalink", () => runWlalink({
+      objects: { "crt0.o": wlaCrt0.object, ...userObjs },
+      linkfile,
+      options: ["-d", "-b"],
+    }), (r) => r.binary);
 
-  // crt0 from our minimum-viable runtime.
-  const wlaCrt0 = await runWla65816({
-    source: crt0Asm,
-    includes: { "hdr.asm": hdrAsm },
-    options: wlaOptions,
-  });
-  log += "--- wla-65816 (crt0.asm) ---\n" + (wlaCrt0.log || "(ok)") + "\n";
-  if (wlaCrt0.exitCode !== 0 || !wlaCrt0.object) {
-    return { ok: false, binary: null, log, exitCode: wlaCrt0.exitCode || 1, stage: "wla-65816 (crt0)", ...(wlaCrt0.crash ? { crash: wlaCrt0.crash } : {}) };
+    return {
+      ok: true,
+      binary: link.binary,
+      log: cb.log,
+      exitCode: 0,
+      stage: "done",
+      runtime: "minimal",
+    };
+  } catch (e) {
+    if (e instanceof BuildError) return e.toResult();
+    throw e;
   }
-
-  const userObjLines = Object.keys(userObjs).map((n) => `/work/${n}`).join("\n");
-  const linkfile = "[objects]\n/work/crt0.o\n" + userObjLines + "\n";
-  const link = await runWlalink({
-    objects: { "crt0.o": wlaCrt0.object, ...userObjs },
-    linkfile,
-    options: ["-d", "-b"],
-  });
-  log += "--- wlalink ---\n" + (link.log || "(ok)") + "\n";
-  if (link.exitCode !== 0 || !link.binary) {
-    return { ok: false, binary: null, log, exitCode: link.exitCode || 1, stage: "wlalink", ...(link.crash ? { crash: link.crash } : {}) };
-  }
-
-  return {
-    ok: true,
-    binary: link.binary,
-    log,
-    exitCode: 0,
-    stage: "done",
-    runtime: "minimal",
-  };
 }
 
 /**

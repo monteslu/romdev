@@ -35,6 +35,7 @@ import {
 import { runSjasm, runBintos } from "../sjasm/sjasm.js";
 import { packAr } from "../common/ar.js";
 import { resolveSdkArchive } from "../common/sdk-cache.js";
+import { CBuild, BuildError } from "../common/c-build.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -254,7 +255,7 @@ export async function buildGenesisC(args) {
  *   7. objcopy -O binary → final .bin
  */
 async function buildWithSgdk({ sources, headers, binaryIncludes, cc1Options, rebuildSdk = false, writeSeed = false }) {
-  let log = "";
+  const cb = new CBuild();
   // SGDK_GCC define + freestanding-style flags must be in cc1 invocations
   const sgdkCc1Options = [
     "-DSGDK_GCC",
@@ -280,154 +281,135 @@ async function buildWithSgdk({ sources, headers, binaryIncludes, cc1Options, reb
   const sgdkHeaders = await loadSgdkHeaders();
   const tccHeaders = { ...headers, ...sgdkHeaders };
 
-  // ── Stage B: compile + assemble each user .c source ──
-  /** @type {Record<string, Uint8Array>} */
-  const userObjs = {};
-  const cFiles = Object.keys(sources).filter((n) => /\.c$/i.test(n));
-  for (const cName of cFiles) {
-    const cc = await runCc1m68k({
-      source: sources[cName],
-      headers: tccHeaders,
-      options: userCc1Options,
+  try {
+    // ── Stage B: compile + assemble each user .c source ──
+    /** @type {Record<string, Uint8Array>} */
+    const userObjs = {};
+    const cFiles = Object.keys(sources).filter((n) => /\.c$/i.test(n));
+    for (const cName of cFiles) {
+      const cc = await cb.stage(`cc1 (${cName})`,
+        () => runCc1m68k({ source: sources[cName], headers: tccHeaders, options: userCc1Options }),
+        (r) => r.asmSource);
+      const as = await cb.stage(`as (${cName})`,
+        () => runM68kAs({ source: cc.asmSource }),
+        (r) => r.object, { logName: `as (${cName} → .o)` });
+      userObjs[cName.replace(/\.c$/i, ".o")] = as.object;
+    }
+
+    // ── Stage B': assemble user .s sibling files directly ──
+    // User .s files may .incbin sibling binary blobs (e.g. xgm2 music) — pass
+    // the same binaryIncludes map to each so the assembler can mount them.
+    const asmFiles = Object.keys(sources).filter((n) => /\.(s|asm)$/i.test(n));
+    for (const asmName of asmFiles) {
+      const as = await cb.stage(`as (${asmName})`,
+        () => runM68kAs({ source: sources[asmName], binaryIncludes }),
+        (r) => r.object);
+      userObjs[asmName.replace(/\.(s|asm)$/i, ".o")] = as.object;
+    }
+
+    // ── Stage C: build rom_header.bin from SGDK's rom_header.c ──
+    const romHeaderC = await readFile(path.join(SGDK_LIB_DIR, "rom_header.c"), "utf-8");
+    const rhCc = await cb.stage("cc1 (rom_header)",
+      () => runCc1m68k({ source: romHeaderC, headers: tccHeaders, options: sgdkCc1Options }),
+      (r) => r.asmSource, { logName: "cc1 (rom_header.c)" });
+    const rhAs = await cb.stage("as (rom_header)",
+      () => runM68kAs({ source: rhCc.asmSource }),
+      (r) => r.object, { logName: "as (rom_header.s)" });
+    // Objcopy → raw header bin (256 bytes)
+    const rhObjcopy = await cb.stage("objcopy (rom_header)",
+      () => runM68kObjcopy({ elf: rhAs.object }),
+      (r) => r.binary, { logName: "objcopy (rom_header.o → .bin)" });
+
+    // ── Stage D: assemble sega.s with the just-built rom_header.bin as a sibling ──
+    // sega.s `.incbin "out/rom_header.bin"` — we mount it at /work/out/rom_header.bin
+    // via the worker's binaryFile facility. runM68kAs's includes map only handles text,
+    // so we need to extend the as call to accept binary siblings.
+    //
+    // Note: we use `sega.preprocessed.s` (the cpp-expanded form). The raw sega.s
+    // uses `#include <task_cst.h>` + `#define`d constants, which SGDK normally
+    // expands via gcc's `-x assembler-with-cpp` driver mode. Our `runM68kAs`
+    // wrapper calls `as` directly without cpp, so we ship the preprocessed
+    // version as a build artifact (~7 KB) instead of running cpp at every build.
+    const segaSrc = await readFile(path.join(SGDK_LIB_DIR, "sega.preprocessed.s"), "utf-8");
+    const segaAs = await cb.stage("as (sega.s)",
+      () => runM68kAs({
+        source: segaSrc,
+        binaryIncludes: { "out/rom_header.bin": rhObjcopy.binary },
+        // SGDK assembles sega.s with the same -DSGDK_GCC etc. flags as C — pass them
+        // via -Wa,--register-prefix-optional,--bitwise-or implicitly via cc1's driver.
+        // Our as wrapper takes raw flags; the equivalent here is just --bitwise-or.
+        options: ["--register-prefix-optional", "--bitwise-or"],
+      }),
+      (r) => r.object);
+
+    // ── Stage D2: compile the SGDK runtime FROM SOURCE → libmd.a ──
+    // (Z80 drivers via sjasm+bintos, all SGDK .c via m68k-gcc, libres + .s
+    // assembled, packed into an archive. No prebuilt libmd.a black box.)
+    // Seed by default (compiling SGDK from source is ~18s); rebuildSdk:true
+    // recompiles; an edit to the vendored SGDK source without the flag is flagged.
+    const sdkWarnings = [];
+    const sgdkRes = await resolveSdkArchive({
+      name: "SGDK",
+      sources: await readSgdkSources(),
+      seedPath: path.join(SGDK_LIB_DIR, "libmd.seed.a"),
+      seedHashPath: path.join(SGDK_LIB_DIR, "libmd.seed.hash"),
+      rebuild: rebuildSdk, writeSeed,
+      compileFromSource: async () => {
+        const r = await compileSgdkRuntime({ ...tccHeaders }, sgdkCc1Options);
+        return r.ok ? { ok: true, archive: r.libmd } : r;
+      },
     });
-    log += `--- cc1 (${cName}) ---\n` + (cc.log || "(ok)") + "\n";
-    if (cc.exitCode !== 0 || !cc.asmSource) {
-      return { ok: false, binary: null, log, exitCode: cc.exitCode || 1, stage: `cc1 (${cName})`, runtime: "sgdk", ...(cc.crash ? { crash: cc.crash } : {}) };
+    if (!sgdkRes.ok) {
+      // Original appended sgdkRes.log raw (no newline normalization) to the log.
+      cb.log += (sgdkRes.log || "");
+      throw new BuildError({ stage: `sgdk runtime: ${sgdkRes.stage}`, exitCode: 1, log: cb.log });
     }
-    const as = await runM68kAs({ source: cc.asmSource });
-    log += `--- as (${cName} → .o) ---\n` + (as.log || "(ok)") + "\n";
-    if (as.exitCode !== 0 || !as.object) {
-      return { ok: false, binary: null, log, exitCode: as.exitCode || 1, stage: `as (${cName})`, runtime: "sgdk", ...(as.crash ? { crash: as.crash } : {}) };
-    }
-    userObjs[cName.replace(/\.c$/i, ".o")] = as.object;
-  }
+    if (sgdkRes.sdkEditIgnored) sdkWarnings.push(sgdkRes.sdkEditIgnored);
+    cb.log += `--- SGDK runtime ${sgdkRes.fromSource ? "compiled from source" : "from prebuilt seed"} ---\n`;
 
-  // ── Stage B': assemble user .s sibling files directly ──
-  // User .s files may .incbin sibling binary blobs (e.g. xgm2 music) — pass
-  // the same binaryIncludes map to each so the assembler can mount them.
-  const asmFiles = Object.keys(sources).filter((n) => /\.(s|asm)$/i.test(n));
-  for (const asmName of asmFiles) {
-    const as = await runM68kAs({ source: sources[asmName], binaryIncludes });
-    log += `--- as (${asmName}) ---\n` + (as.log || "(ok)") + "\n";
-    if (as.exitCode !== 0 || !as.object) {
-      return { ok: false, binary: null, log, exitCode: as.exitCode || 1, stage: `as (${asmName})`, runtime: "sgdk", ...(as.crash ? { crash: as.crash } : {}) };
-    }
-    userObjs[asmName.replace(/\.(s|asm)$/i, ".o")] = as.object;
-  }
+    // ── Stage E: link everything ──
+    const mdLd = await readFile(path.join(SGDK_LIB_DIR, "md.ld"), "utf-8");
+    const [libgcc, libc, libm] = await Promise.all([
+      readFile(path.join(MINIMAL_LIB_DIR, "libgcc.a")),
+      readFile(path.join(MINIMAL_LIB_DIR, "libc.a")),
+      readFile(path.join(MINIMAL_LIB_DIR, "libm.a")),
+    ]);
 
-  // ── Stage C: build rom_header.bin from SGDK's rom_header.c ──
-  const romHeaderC = await readFile(path.join(SGDK_LIB_DIR, "rom_header.c"), "utf-8");
-  const rhCc = await runCc1m68k({
-    source: romHeaderC,
-    headers: tccHeaders,
-    options: sgdkCc1Options,
-  });
-  log += "--- cc1 (rom_header.c) ---\n" + (rhCc.log || "(ok)") + "\n";
-  if (rhCc.exitCode !== 0 || !rhCc.asmSource) {
-    return { ok: false, binary: null, log, exitCode: rhCc.exitCode || 1, stage: "cc1 (rom_header)", runtime: "sgdk", ...(rhCc.crash ? { crash: rhCc.crash } : {}) };
-  }
-  const rhAs = await runM68kAs({ source: rhCc.asmSource });
-  log += "--- as (rom_header.s) ---\n" + (rhAs.log || "(ok)") + "\n";
-  if (rhAs.exitCode !== 0 || !rhAs.object) {
-    return { ok: false, binary: null, log, exitCode: rhAs.exitCode || 1, stage: "as (rom_header)", runtime: "sgdk", ...(rhAs.crash ? { crash: rhAs.crash } : {}) };
-  }
-  // Objcopy → raw header bin (256 bytes)
-  const rhObjcopy = await runM68kObjcopy({ elf: rhAs.object });
-  log += "--- objcopy (rom_header.o → .bin) ---\n" + (rhObjcopy.log || "(ok)") + "\n";
-  if (rhObjcopy.exitCode !== 0 || !rhObjcopy.binary) {
-    return { ok: false, binary: null, log, exitCode: rhObjcopy.exitCode || 1, stage: "objcopy (rom_header)", runtime: "sgdk", ...(rhObjcopy.crash ? { crash: rhObjcopy.crash } : {}) };
-  }
+    const ld = await cb.stage("ld",
+      () => runM68kLd({
+        objects: { "sega.o": segaAs.object, ...userObjs },
+        linkScript: mdLd,
+        archives: {
+          "libmd.a":  sgdkRes.archive,
+          "libgcc.a": new Uint8Array(libgcc),
+          "libc.a":   new Uint8Array(libc),
+          "libm.a":   new Uint8Array(libm),
+        },
+        libraries: ["md", "gcc", "c"],
+        libraryPaths: ["/work"],
+        options: ["--no-warn-rwx-segments"],
+      }),
+      (r) => r.elf);
 
-  // ── Stage D: assemble sega.s with the just-built rom_header.bin as a sibling ──
-  // sega.s `.incbin "out/rom_header.bin"` — we mount it at /work/out/rom_header.bin
-  // via the worker's binaryFile facility. runM68kAs's includes map only handles text,
-  // so we need to extend the as call to accept binary siblings.
-  //
-  // Note: we use `sega.preprocessed.s` (the cpp-expanded form). The raw sega.s
-  // uses `#include <task_cst.h>` + `#define`d constants, which SGDK normally
-  // expands via gcc's `-x assembler-with-cpp` driver mode. Our `runM68kAs`
-  // wrapper calls `as` directly without cpp, so we ship the preprocessed
-  // version as a build artifact (~7 KB) instead of running cpp at every build.
-  const segaSrc = await readFile(path.join(SGDK_LIB_DIR, "sega.preprocessed.s"), "utf-8");
-  const segaAs = await runM68kAs({
-    source: segaSrc,
-    binaryIncludes: { "out/rom_header.bin": rhObjcopy.binary },
-    // SGDK assembles sega.s with the same -DSGDK_GCC etc. flags as C — pass them
-    // via -Wa,--register-prefix-optional,--bitwise-or implicitly via cc1's driver.
-    // Our as wrapper takes raw flags; the equivalent here is just --bitwise-or.
-    options: ["--register-prefix-optional", "--bitwise-or"],
-  });
-  log += "--- as (sega.s) ---\n" + (segaAs.log || "(ok)") + "\n";
-  if (segaAs.exitCode !== 0 || !segaAs.object) {
-    return { ok: false, binary: null, log, exitCode: segaAs.exitCode || 1, stage: "as (sega.s)", runtime: "sgdk", ...(segaAs.crash ? { crash: segaAs.crash } : {}) };
+    // ── Stage F: extract raw ROM ──
+    const objcopy = await cb.stage("objcopy",
+      () => runM68kObjcopy({ elf: ld.elf }),
+      (r) => r.binary);
+
+    return {
+      ok: true,
+      binary: objcopy.binary,
+      log: cb.log,
+      exitCode: 0,
+      stage: "done",
+      runtime: "sgdk",
+      ...(ld.map ? { symbols: ld.map } : {}),
+      ...(sdkWarnings.length ? { sdkEditIgnored: sdkWarnings } : {}),
+    };
+  } catch (e) {
+    if (e instanceof BuildError) return e.toResult({ runtime: "sgdk" });
+    throw e;
   }
-
-  // ── Stage D2: compile the SGDK runtime FROM SOURCE → libmd.a ──
-  // (Z80 drivers via sjasm+bintos, all SGDK .c via m68k-gcc, libres + .s
-  // assembled, packed into an archive. No prebuilt libmd.a black box.)
-  // Seed by default (compiling SGDK from source is ~18s); rebuildSdk:true
-  // recompiles; an edit to the vendored SGDK source without the flag is flagged.
-  const sdkWarnings = [];
-  const sgdkRes = await resolveSdkArchive({
-    name: "SGDK",
-    sources: await readSgdkSources(),
-    seedPath: path.join(SGDK_LIB_DIR, "libmd.seed.a"),
-    seedHashPath: path.join(SGDK_LIB_DIR, "libmd.seed.hash"),
-    rebuild: rebuildSdk, writeSeed,
-    compileFromSource: async () => {
-      const r = await compileSgdkRuntime({ ...tccHeaders }, sgdkCc1Options);
-      return r.ok ? { ok: true, archive: r.libmd } : r;
-    },
-  });
-  if (!sgdkRes.ok) {
-    return { ok: false, binary: null, log: log + (sgdkRes.log || ""), exitCode: 1, stage: `sgdk runtime: ${sgdkRes.stage}`, runtime: "sgdk" };
-  }
-  if (sgdkRes.sdkEditIgnored) sdkWarnings.push(sgdkRes.sdkEditIgnored);
-  log += `--- SGDK runtime ${sgdkRes.fromSource ? "compiled from source" : "from prebuilt seed"} ---\n`;
-
-  // ── Stage E: link everything ──
-  const mdLd = await readFile(path.join(SGDK_LIB_DIR, "md.ld"), "utf-8");
-  const [libgcc, libc, libm] = await Promise.all([
-    readFile(path.join(MINIMAL_LIB_DIR, "libgcc.a")),
-    readFile(path.join(MINIMAL_LIB_DIR, "libc.a")),
-    readFile(path.join(MINIMAL_LIB_DIR, "libm.a")),
-  ]);
-
-  const ld = await runM68kLd({
-    objects: { "sega.o": segaAs.object, ...userObjs },
-    linkScript: mdLd,
-    archives: {
-      "libmd.a":  sgdkRes.archive,
-      "libgcc.a": new Uint8Array(libgcc),
-      "libc.a":   new Uint8Array(libc),
-      "libm.a":   new Uint8Array(libm),
-    },
-    libraries: ["md", "gcc", "c"],
-    libraryPaths: ["/work"],
-    options: ["--no-warn-rwx-segments"],
-  });
-  log += "--- ld ---\n" + (ld.log || "(ok)") + "\n";
-  if (ld.exitCode !== 0 || !ld.elf) {
-    return { ok: false, binary: null, log, exitCode: ld.exitCode || 1, stage: "ld", runtime: "sgdk", ...(ld.crash ? { crash: ld.crash } : {}) };
-  }
-
-  // ── Stage F: extract raw ROM ──
-  const objcopy = await runM68kObjcopy({ elf: ld.elf });
-  log += "--- objcopy ---\n" + (objcopy.log || "(ok)") + "\n";
-  if (objcopy.exitCode !== 0 || !objcopy.binary) {
-    return { ok: false, binary: null, log, exitCode: objcopy.exitCode || 1, stage: "objcopy", runtime: "sgdk", ...(objcopy.crash ? { crash: objcopy.crash } : {}) };
-  }
-
-  return {
-    ok: true,
-    binary: objcopy.binary,
-    log,
-    exitCode: 0,
-    stage: "done",
-    runtime: "sgdk",
-    ...(ld.map ? { symbols: ld.map } : {}),
-    ...(sdkWarnings.length ? { sdkEditIgnored: sdkWarnings } : {}),
-  };
 }
 
 /**
@@ -472,93 +454,82 @@ export function finalizeGenesisRom(bin) {
  */
 async function buildMinimal(args) {
   const { sources, headers, binaryIncludes, cc1Options } = args;
-  let log = "";
+  const cb = new CBuild();
 
-  // ── Stage 1: compile each .c file via cc1 → .s ─────────────────
-  /** @type {Record<string, Uint8Array>} */
-  const userObjs = {};
-  // User .c gets warnings on (minimal path has no SDK to flood). See buildWithSgdk.
-  const userCc1Options = [...cc1Options, "-Wall", "-Wextra", "-Wno-unused-parameter"];
-  const cFiles = Object.keys(sources).filter((n) => /\.c$/i.test(n));
-  for (const cName of cFiles) {
-    const cc = await runCc1m68k({
-      source: sources[cName],
-      headers,
-      options: userCc1Options,
-    });
-    log += `--- cc1 (${cName}) ---\n` + (cc.log || "(ok)") + "\n";
-    if (cc.exitCode !== 0 || !cc.asmSource) {
-      return { ok: false, binary: null, log, exitCode: cc.exitCode || 1, stage: `cc1 (${cName})`, runtime: "minimal", ...(cc.crash ? { crash: cc.crash } : {}) };
+  try {
+    // ── Stage 1: compile each .c file via cc1 → .s ─────────────────
+    /** @type {Record<string, Uint8Array>} */
+    const userObjs = {};
+    // User .c gets warnings on (minimal path has no SDK to flood). See buildWithSgdk.
+    const userCc1Options = [...cc1Options, "-Wall", "-Wextra", "-Wno-unused-parameter"];
+    const cFiles = Object.keys(sources).filter((n) => /\.c$/i.test(n));
+    for (const cName of cFiles) {
+      const cc = await cb.stage(`cc1 (${cName})`,
+        () => runCc1m68k({ source: sources[cName], headers, options: userCc1Options }),
+        (r) => r.asmSource);
+      // ── Stage 2: assemble that .s with m68k-elf-as ────────────────
+      const as = await cb.stage(`as (${cName})`,
+        () => runM68kAs({ source: cc.asmSource }),
+        (r) => r.object, { logName: `as (${cName} → .o)` });
+      userObjs[cName.replace(/\.c$/i, ".o")] = as.object;
     }
-    // ── Stage 2: assemble that .s with m68k-elf-as ────────────────
-    const as = await runM68kAs({ source: cc.asmSource });
-    log += `--- as (${cName} → .o) ---\n` + (as.log || "(ok)") + "\n";
-    if (as.exitCode !== 0 || !as.object) {
-      return { ok: false, binary: null, log, exitCode: as.exitCode || 1, stage: `as (${cName})`, runtime: "minimal", ...(as.crash ? { crash: as.crash } : {}) };
+
+    // ── Stage 2b: assemble each .s file directly ───────────────────
+    const asmFiles = Object.keys(sources).filter((n) => /\.(s|asm)$/i.test(n));
+    for (const asmName of asmFiles) {
+      const as = await cb.stage(`as (${asmName})`,
+        () => runM68kAs({ source: sources[asmName], binaryIncludes }),
+        (r) => r.object);
+      userObjs[asmName.replace(/\.(s|asm)$/i, ".o")] = as.object;
     }
-    userObjs[cName.replace(/\.c$/i, ".o")] = as.object;
+
+    // ── Stage 3: assemble the bundled sega.s crt0 ───────────────────
+    const sega = await readFile(path.join(MINIMAL_LIB_DIR, "sega.s"), "utf-8");
+    const segaAs = await cb.stage("as (sega.s)",
+      () => runM68kAs({ source: sega }),
+      (r) => r.object, { logName: "as (sega.s crt0)" });
+
+    // ── Stage 4: link everything ────────────────────────────────────
+    const linkScript = await readFile(path.join(MINIMAL_LIB_DIR, "genesis.ld"), "utf-8");
+    const [libgcc, libc, libm] = await Promise.all([
+      readFile(path.join(MINIMAL_LIB_DIR, "libgcc.a")),
+      readFile(path.join(MINIMAL_LIB_DIR, "libc.a")),
+      readFile(path.join(MINIMAL_LIB_DIR, "libm.a")),
+    ]);
+
+    const ld = await cb.stage("ld",
+      () => runM68kLd({
+        objects: { "sega.o": segaAs.object, ...userObjs },
+        linkScript,
+        archives: {
+          "libgcc.a": new Uint8Array(libgcc),
+          "libc.a":   new Uint8Array(libc),
+          "libm.a":   new Uint8Array(libm),
+        },
+        libraries: ["c", "gcc", "m"],
+        libraryPaths: ["/work"],
+        options: ["--no-warn-rwx-segments"],
+      }),
+      (r) => r.elf);
+
+    // ── Stage 5: extract raw binary ─────────────────────────────────
+    const objcopy = await cb.stage("objcopy",
+      () => runM68kObjcopy({ elf: ld.elf }),
+      (r) => r.binary);
+
+    return {
+      ok: true,
+      binary: objcopy.binary,
+      log: cb.log,
+      exitCode: 0,
+      stage: "done",
+      runtime: "minimal",
+      ...(ld.map ? { symbols: ld.map } : {}),
+    };
+  } catch (e) {
+    if (e instanceof BuildError) return e.toResult({ runtime: "minimal" });
+    throw e;
   }
-
-  // ── Stage 2b: assemble each .s file directly ───────────────────
-  const asmFiles = Object.keys(sources).filter((n) => /\.(s|asm)$/i.test(n));
-  for (const asmName of asmFiles) {
-    const as = await runM68kAs({ source: sources[asmName], binaryIncludes });
-    log += `--- as (${asmName}) ---\n` + (as.log || "(ok)") + "\n";
-    if (as.exitCode !== 0 || !as.object) {
-      return { ok: false, binary: null, log, exitCode: as.exitCode || 1, stage: `as (${asmName})`, runtime: "minimal", ...(as.crash ? { crash: as.crash } : {}) };
-    }
-    userObjs[asmName.replace(/\.(s|asm)$/i, ".o")] = as.object;
-  }
-
-  // ── Stage 3: assemble the bundled sega.s crt0 ───────────────────
-  const sega = await readFile(path.join(MINIMAL_LIB_DIR, "sega.s"), "utf-8");
-  const segaAs = await runM68kAs({ source: sega });
-  log += "--- as (sega.s crt0) ---\n" + (segaAs.log || "(ok)") + "\n";
-  if (segaAs.exitCode !== 0 || !segaAs.object) {
-    return { ok: false, binary: null, log, exitCode: segaAs.exitCode || 1, stage: "as (sega.s)", runtime: "minimal", ...(segaAs.crash ? { crash: segaAs.crash } : {}) };
-  }
-
-  // ── Stage 4: link everything ────────────────────────────────────
-  const linkScript = await readFile(path.join(MINIMAL_LIB_DIR, "genesis.ld"), "utf-8");
-  const [libgcc, libc, libm] = await Promise.all([
-    readFile(path.join(MINIMAL_LIB_DIR, "libgcc.a")),
-    readFile(path.join(MINIMAL_LIB_DIR, "libc.a")),
-    readFile(path.join(MINIMAL_LIB_DIR, "libm.a")),
-  ]);
-
-  const ld = await runM68kLd({
-    objects: { "sega.o": segaAs.object, ...userObjs },
-    linkScript,
-    archives: {
-      "libgcc.a": new Uint8Array(libgcc),
-      "libc.a":   new Uint8Array(libc),
-      "libm.a":   new Uint8Array(libm),
-    },
-    libraries: ["c", "gcc", "m"],
-    libraryPaths: ["/work"],
-    options: ["--no-warn-rwx-segments"],
-  });
-  log += "--- ld ---\n" + (ld.log || "(ok)") + "\n";
-  if (ld.exitCode !== 0 || !ld.elf) {
-    return { ok: false, binary: null, log, exitCode: ld.exitCode || 1, stage: "ld", runtime: "minimal", ...(ld.crash ? { crash: ld.crash } : {}) };
-  }
-
-  // ── Stage 5: extract raw binary ─────────────────────────────────
-  const objcopy = await runM68kObjcopy({ elf: ld.elf });
-  log += "--- objcopy ---\n" + (objcopy.log || "(ok)") + "\n";
-  if (objcopy.exitCode !== 0 || !objcopy.binary) {
-    return { ok: false, binary: null, log, exitCode: objcopy.exitCode || 1, stage: "objcopy", runtime: "minimal", ...(objcopy.crash ? { crash: objcopy.crash } : {}) };
-  }
-
-  return {
-    ok: true,
-    binary: objcopy.binary,
-    log,
-    exitCode: 0,
-    stage: "done",
-    runtime: "minimal",
-    ...(ld.map ? { symbols: ld.map } : {}),
-  };
 }
 
 /** @param {{source?:string, sources?:Record<string,string>}} args */

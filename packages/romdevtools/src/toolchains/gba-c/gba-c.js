@@ -37,6 +37,7 @@ import {
 } from "../arm-none-eabi-gcc/gcc.js";
 import { packAr } from "../common/ar.js";
 import { resolveSdkArchive } from "../common/sdk-cache.js";
+import { CBuild, BuildError } from "../common/c-build.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -139,7 +140,7 @@ function normalizeGbaSources(args) {
  *   6. objcopy -O binary → final .gba ROM
  */
 async function buildWithLibtonc({ sources, headers, cc1Options, binaryIncludes = {}, maxmod = false, rebuildSdk = false, writeSeed = false }) {
-  let log = "";
+  const cb = new CBuild();
 
   const crt0Src    = await readFile(path.join(LIBTONC_DIR, "gba_crt0.s"), "utf-8");
   const linkScript = await readFile(path.join(LIBTONC_DIR, "gba_cart.ld"), "utf-8");
@@ -152,7 +153,7 @@ async function buildWithLibtonc({ sources, headers, cc1Options, binaryIncludes =
   // ourselves so users don't need to author it by hand.
   const hasSoundbank = maxmod && Object.prototype.hasOwnProperty.call(binaryIncludes, "soundbank.bin");
   if (hasSoundbank) {
-    log += `--- soundbank stub auto-emitted (.incbin "soundbank.bin") ---\n`;
+    cb.note(`--- soundbank stub auto-emitted (.incbin "soundbank.bin") ---`);
   }
 
   const libtoncHeaders = await loadLibtoncHeaders();
@@ -166,45 +167,34 @@ async function buildWithLibtonc({ sources, headers, cc1Options, binaryIncludes =
     "-mthumb-interwork",
   ];
 
-  // ── Stage A: compile each user .c → .s ─────────────────────────
-  const objects = {};
-  for (const [name, src] of Object.entries(sources)) {
-    if (!name.endsWith(".c")) continue;
-    const cc1 = await runCc1arm({
-      source: src,
-      headers: { ...sysHeaders, ...libtoncHeaders, ...maxmodHeaders, ...headers },
-      options: libtoncCc1Options,
-    });
-    log += `--- cc1 (${name}) ---\n${cc1.log || "(ok)"}\n`;
-    if (cc1.exitCode !== 0 || !cc1.asmSource) {
-      return { ok: false, binary: null, log, exitCode: cc1.exitCode || 1, stage: `cc1 (${name})`, runtime: "libtonc", ...(cc1.crash ? { crash: cc1.crash } : {}) };
+  try {
+    // ── Stage A: compile each user .c → .s ─────────────────────────
+    const objects = {};
+    for (const [name, src] of Object.entries(sources)) {
+      if (!name.endsWith(".c")) continue;
+      const cc1 = await cb.stage(`cc1 (${name})`, () => runCc1arm({
+        source: src,
+        headers: { ...sysHeaders, ...libtoncHeaders, ...maxmodHeaders, ...headers },
+        options: libtoncCc1Options,
+      }), (r) => r.asmSource);
+      const asm = await cb.stage(`as (${name})`, () => runArmAs({ source: cc1.asmSource }), (r) => r.object);
+      objects[name.replace(/\.c$/, ".o")] = asm.object;
     }
-    const asm = await runArmAs({ source: cc1.asmSource });
-    log += `--- as (${name}) ---\n${asm.log || "(ok)"}\n`;
-    if (asm.exitCode !== 0 || !asm.object) {
-      return { ok: false, binary: null, log, exitCode: asm.exitCode || 1, stage: `as (${name})`, runtime: "libtonc", ...(asm.crash ? { crash: asm.crash } : {}) };
-    }
-    objects[name.replace(/\.c$/, ".o")] = asm.object;
-  }
 
-  // ── Stage B: assemble gba_crt0.s ─────────────────────────────────
-  const crt0As = await runArmAs({ source: crt0Src });
-  log += `--- as (gba_crt0.s) ---\n${crt0As.log || "(ok)"}\n`;
-  if (crt0As.exitCode !== 0 || !crt0As.object) {
-    return { ok: false, binary: null, log, exitCode: crt0As.exitCode || 1, stage: "as (gba_crt0.s)", runtime: "libtonc", ...(crt0As.crash ? { crash: crt0As.crash } : {}) };
-  }
-  objects["gba_crt0.o"] = crt0As.object;
+    // ── Stage B: assemble gba_crt0.s ─────────────────────────────────
+    const crt0As = await cb.stage("as (gba_crt0.s)", () => runArmAs({ source: crt0Src }), (r) => r.object);
+    objects["gba_crt0.o"] = crt0As.object;
 
-  // fake_heap_end + `end` stubs. The gba_cart.ld linker script
-  // defines `__end__` (top of bss) but not the bare `end` symbol that
-  // newlib's sbrk() references. We provide both `fake_heap_end` AND
-  // `end` here as tiny data-section labels. Points at end of EWRAM.
-  //
-  // For real games you'd want sbrk to start the heap at __end__ and
-  // track it dynamically — this stub gives a fixed bound which is
-  // fine for the small allocations newlib does internally.
-  const fakeHeapEndStub = await runArmAs({
-    source: `
+    // fake_heap_end + `end` stubs. The gba_cart.ld linker script
+    // defines `__end__` (top of bss) but not the bare `end` symbol that
+    // newlib's sbrk() references. We provide both `fake_heap_end` AND
+    // `end` here as tiny data-section labels. Points at end of EWRAM.
+    //
+    // For real games you'd want sbrk to start the heap at __end__ and
+    // track it dynamically — this stub gives a fixed bound which is
+    // fine for the small allocations newlib does internally.
+    const fakeHeapEndStub = await cb.stage("as (fake_heap_end stub)", () => runArmAs({
+      source: `
       .section .data
       .global fake_heap_end
       .global end
@@ -214,17 +204,13 @@ async function buildWithLibtonc({ sources, headers, cc1Options, binaryIncludes =
       end:
         .word 0x02000000   /* start of EWRAM — sbrk grows from here */
     `,
-  });
-  log += `--- as (fake_heap_end stub) ---\n${fakeHeapEndStub.log || "(ok)"}\n`;
-  if (fakeHeapEndStub.exitCode !== 0 || !fakeHeapEndStub.object) {
-    return { ok: false, binary: null, log, exitCode: fakeHeapEndStub.exitCode || 1, stage: "as (fake_heap_end stub)", runtime: "libtonc", ...(fakeHeapEndStub.crash ? { crash: fakeHeapEndStub.crash } : {}) };
-  }
-  objects["fake_heap_end.o"] = fakeHeapEndStub.object;
+    }), (r) => r.object);
+    objects["fake_heap_end.o"] = fakeHeapEndStub.object;
 
-  // ── Stage B3: maxmod soundbank embedding stub ───────────────────
-  if (hasSoundbank) {
-    const soundbankStub = await runArmAs({
-      source: `
+    // ── Stage B3: maxmod soundbank embedding stub ───────────────────
+    if (hasSoundbank) {
+      const soundbankStub = await cb.stage("as (soundbank.s)", () => runArmAs({
+        source: `
         .section .rodata
         .align 2
         .global soundbank_bin
@@ -236,117 +222,109 @@ async function buildWithLibtonc({ sources, headers, cc1Options, binaryIncludes =
         soundbank_bin_size:
           .word soundbank_bin_end - soundbank_bin
       `,
-      binaryIncludes: { "soundbank.bin": binaryIncludes["soundbank.bin"] },
-    });
-    log += `--- as (soundbank.s) ---\n${soundbankStub.log || "(ok)"}\n`;
-    if (soundbankStub.exitCode !== 0 || !soundbankStub.object) {
-      return { ok: false, binary: null, log, exitCode: soundbankStub.exitCode || 1, stage: "as (soundbank.s)", runtime: "libtonc", ...(soundbankStub.crash ? { crash: soundbankStub.crash } : {}) };
+        binaryIncludes: { "soundbank.bin": binaryIncludes["soundbank.bin"] },
+      }), (r) => r.object);
+      objects["soundbank.o"] = soundbankStub.object;
     }
-    objects["soundbank.o"] = soundbankStub.object;
-  }
 
-  // ── Stage B4: resolve libtonc (and maxmod) — seed by default, or compile
-  // from source when rebuildSdk is set. Edits to the vendored SDK source take
-  // effect with rebuildSdk:true; without it, the fast prebuilt seed is used and
-  // an edit is flagged (sdkEditIgnored), never silently dropped.
-  const sdkWarnings = [];
-  const toncRes = await sdkArchive({
-    name: "libtonc",
-    srcDirs: [path.join(LIBTONC_DIR, "src"), SYSBASE_DIR],
-    seedBase: path.join(LIBTONC_DIR, "libtonc"),
-    rebuild: rebuildSdk, writeSeed,
-    compile: async () => {
-      const r = await compileSdkObjects({
-        key: "libtonc",
-        srcDirs: [path.join(LIBTONC_DIR, "src"), SYSBASE_DIR],
-        headers: { ...sysHeaders, ...libtoncHeaders, ...maxmodHeaders, ...headers },
-      });
-      return r.ok ? { ok: true, archive: packAr(r.objects) } : r;
-    },
-  });
-  if (!toncRes.ok) {
-    return { ok: false, binary: null, log: log + (toncRes.log || ""), exitCode: 1, stage: toncRes.stage, runtime: "libtonc" };
-  }
-  if (toncRes.sdkEditIgnored) sdkWarnings.push(toncRes.sdkEditIgnored);
-  log += `--- libtonc ${toncRes.fromSource ? "compiled from source" : "from prebuilt seed"} ---\n`;
-
-  let maxmodAr = null;
-  if (maxmod) {
-    const mmHeaders = await loadMaxmodAsmHeaders();
-    const mmRes = await sdkArchive({
-      name: "maxmod",
-      srcDirs: [path.join(MAXMOD_DIR, "source"), path.join(MAXMOD_DIR, "source_gba")],
-      seedBase: path.join(MAXMOD_DIR, "maxmod"),
+    // ── Stage B4: resolve libtonc (and maxmod) — seed by default, or compile
+    // from source when rebuildSdk is set. Edits to the vendored SDK source take
+    // effect with rebuildSdk:true; without it, the fast prebuilt seed is used and
+    // an edit is flagged (sdkEditIgnored), never silently dropped.
+    const sdkWarnings = [];
+    const toncRes = await sdkArchive({
+      name: "libtonc",
+      srcDirs: [path.join(LIBTONC_DIR, "src"), SYSBASE_DIR],
+      seedBase: path.join(LIBTONC_DIR, "libtonc"),
       rebuild: rebuildSdk, writeSeed,
       compile: async () => {
         const r = await compileSdkObjects({
-          key: "maxmod",
-          srcDirs: [path.join(MAXMOD_DIR, "source"), path.join(MAXMOD_DIR, "source_gba")],
-          headers: { ...sysHeaders, ...maxmodHeaders, ...mmHeaders },
-          cppDefines: ["SYS_GBA=1"],
+          key: "libtonc",
+          srcDirs: [path.join(LIBTONC_DIR, "src"), SYSBASE_DIR],
+          headers: { ...sysHeaders, ...libtoncHeaders, ...maxmodHeaders, ...headers },
         });
         return r.ok ? { ok: true, archive: packAr(r.objects) } : r;
       },
     });
-    if (!mmRes.ok) {
-      return { ok: false, binary: null, log: log + (mmRes.log || ""), exitCode: 1, stage: mmRes.stage, runtime: "libtonc" };
+    if (!toncRes.ok) {
+      return { ok: false, binary: null, log: cb.log + (toncRes.log || ""), exitCode: 1, stage: toncRes.stage, runtime: "libtonc" };
     }
-    if (mmRes.sdkEditIgnored) sdkWarnings.push(mmRes.sdkEditIgnored);
-    maxmodAr = mmRes.archive;
-    log += `--- maxmod ${mmRes.fromSource ? "compiled from source" : "from prebuilt seed"} ---\n`;
+    if (toncRes.sdkEditIgnored) sdkWarnings.push(toncRes.sdkEditIgnored);
+    cb.note(`--- libtonc ${toncRes.fromSource ? "compiled from source" : "from prebuilt seed"} ---`);
+
+    let maxmodAr = null;
+    if (maxmod) {
+      const mmHeaders = await loadMaxmodAsmHeaders();
+      const mmRes = await sdkArchive({
+        name: "maxmod",
+        srcDirs: [path.join(MAXMOD_DIR, "source"), path.join(MAXMOD_DIR, "source_gba")],
+        seedBase: path.join(MAXMOD_DIR, "maxmod"),
+        rebuild: rebuildSdk, writeSeed,
+        compile: async () => {
+          const r = await compileSdkObjects({
+            key: "maxmod",
+            srcDirs: [path.join(MAXMOD_DIR, "source"), path.join(MAXMOD_DIR, "source_gba")],
+            headers: { ...sysHeaders, ...maxmodHeaders, ...mmHeaders },
+            cppDefines: ["SYS_GBA=1"],
+          });
+          return r.ok ? { ok: true, archive: packAr(r.objects) } : r;
+        },
+      });
+      if (!mmRes.ok) {
+        return { ok: false, binary: null, log: cb.log + (mmRes.log || ""), exitCode: 1, stage: mmRes.stage, runtime: "libtonc" };
+      }
+      if (mmRes.sdkEditIgnored) sdkWarnings.push(mmRes.sdkEditIgnored);
+      maxmodAr = mmRes.archive;
+      cb.note(`--- maxmod ${mmRes.fromSource ? "compiled from source" : "from prebuilt seed"} ---`);
+    }
+
+    // ── Stage C: link ───────────────────────────────────────────────
+    // crt*.o + libgcc/libc/libnosys are gcc/newlib toolchain runtime.
+    const archives = {
+      "libtonc.a":  toncRes.archive,
+      "crti.o":     new Uint8Array(await readFile(path.join(LIBTONC_DIR, "crti.o"))),
+      "crtn.o":     new Uint8Array(await readFile(path.join(LIBTONC_DIR, "crtn.o"))),
+      "crtbegin.o": new Uint8Array(await readFile(path.join(LIBTONC_DIR, "crtbegin.o"))),
+      "crtend.o":   new Uint8Array(await readFile(path.join(LIBTONC_DIR, "crtend.o"))),
+    };
+    if (maxmodAr) archives["libmm.a"] = maxmodAr;
+    const targetLibs = await readTargetArchives();
+    Object.assign(archives, targetLibs);
+
+    // Wrap the libs in --start-group / --end-group so the linker
+    // re-scans them for cross-references between libc → libgcc → libc
+    // (libc/strtol uses __aeabi_uidiv from libgcc; libgcc may call back
+    // into libc helpers). Without re-scan we get undefined references.
+    const ld = await cb.stage("ld", () => runArmLd({
+      objects,
+      linkScript,
+      archives,
+      libraryPaths: ["/work"],
+      libraries: [],   // explicit -l flags moved into options for ordering control
+      options: [
+        "/work/crti.o",
+        "/work/crtbegin.o",
+        // libtonc/maxmod archives are packed from compiled-from-source objects.
+        "--start-group",
+        "-ltonc",
+        ...(maxmod ? ["-lmm"] : []),
+        "-lc",
+        "-lgcc",
+        "-lnosys",
+        "--end-group",
+        "/work/crtend.o",
+        "/work/crtn.o",
+      ],
+    }), (r) => r.elf);
+
+    // ── Stage D: objcopy ────────────────────────────────────────────
+    const objcopy = await cb.stage("objcopy", () => runArmObjcopy({ elf: ld.elf }), (r) => r.binary);
+
+    return { ok: true, binary: objcopy.binary, log: cb.log, exitCode: 0, stage: "done", runtime: "libtonc", ...(ld.map ? { symbols: ld.map } : {}), ...(sdkWarnings.length ? { sdkEditIgnored: sdkWarnings } : {}) };
+  } catch (e) {
+    if (e instanceof BuildError) return e.toResult({ runtime: "libtonc" });
+    throw e;
   }
-
-  // ── Stage C: link ───────────────────────────────────────────────
-  // crt*.o + libgcc/libc/libnosys are gcc/newlib toolchain runtime.
-  const archives = {
-    "libtonc.a":  toncRes.archive,
-    "crti.o":     new Uint8Array(await readFile(path.join(LIBTONC_DIR, "crti.o"))),
-    "crtn.o":     new Uint8Array(await readFile(path.join(LIBTONC_DIR, "crtn.o"))),
-    "crtbegin.o": new Uint8Array(await readFile(path.join(LIBTONC_DIR, "crtbegin.o"))),
-    "crtend.o":   new Uint8Array(await readFile(path.join(LIBTONC_DIR, "crtend.o"))),
-  };
-  if (maxmodAr) archives["libmm.a"] = maxmodAr;
-  const targetLibs = await readTargetArchives();
-  Object.assign(archives, targetLibs);
-
-  // Wrap the libs in --start-group / --end-group so the linker
-  // re-scans them for cross-references between libc → libgcc → libc
-  // (libc/strtol uses __aeabi_uidiv from libgcc; libgcc may call back
-  // into libc helpers). Without re-scan we get undefined references.
-  const ld = await runArmLd({
-    objects,
-    linkScript,
-    archives,
-    libraryPaths: ["/work"],
-    libraries: [],   // explicit -l flags moved into options for ordering control
-    options: [
-      "/work/crti.o",
-      "/work/crtbegin.o",
-      // libtonc/maxmod archives are packed from compiled-from-source objects.
-      "--start-group",
-      "-ltonc",
-      ...(maxmod ? ["-lmm"] : []),
-      "-lc",
-      "-lgcc",
-      "-lnosys",
-      "--end-group",
-      "/work/crtend.o",
-      "/work/crtn.o",
-    ],
-  });
-  log += `--- ld ---\n${ld.log || "(ok)"}\n`;
-  if (ld.exitCode !== 0 || !ld.elf) {
-    return { ok: false, binary: null, log, exitCode: ld.exitCode || 1, stage: "ld", runtime: "libtonc", ...(ld.crash ? { crash: ld.crash } : {}) };
-  }
-
-  // ── Stage D: objcopy ────────────────────────────────────────────
-  const objcopy = await runArmObjcopy({ elf: ld.elf });
-  log += `--- objcopy ---\n${objcopy.log || "(ok)"}\n`;
-  if (objcopy.exitCode !== 0 || !objcopy.binary) {
-    return { ok: false, binary: null, log, exitCode: objcopy.exitCode || 1, stage: "objcopy", runtime: "libtonc", ...(objcopy.crash ? { crash: objcopy.crash } : {}) };
-  }
-
-  return { ok: true, binary: objcopy.binary, log, exitCode: 0, stage: "done", runtime: "libtonc", ...(ld.map ? { symbols: ld.map } : {}), ...(sdkWarnings.length ? { sdkEditIgnored: sdkWarnings } : {}) };
 }
 
 /**
@@ -360,7 +338,7 @@ async function buildWithLibtonc({ sources, headers, cc1Options, binaryIncludes =
  *   5. objcopy -O binary → final .gba ROM
  */
 async function buildWithLibgba({ sources, headers, cc1Options, rebuildSdk = false, writeSeed = false }) {
-  let log = "";
+  const cb = new CBuild();
 
   // Read the libgba bundle once (crt0 + linker script; the SDK itself is
   // compiled from source below, not linked from libgba.a).
@@ -381,43 +359,32 @@ async function buildWithLibgba({ sources, headers, cc1Options, rebuildSdk = fals
     "-mthumb-interwork",
   ];
 
-  // ── Stage A: compile each user .c → .s ─────────────────────────
-  const objects = {};
-  for (const [name, src] of Object.entries(sources)) {
-    if (!name.endsWith(".c")) continue;
-    const cc1 = await runCc1arm({
-      source: src,
-      headers: { ...sysHeaders, ...libgbaHeaders, ...headers },
-      options: libgbaCc1Options,
-    });
-    log += `--- cc1 (${name}) ---\n${cc1.log || "(ok)"}\n`;
-    if (cc1.exitCode !== 0 || !cc1.asmSource) {
-      return { ok: false, binary: null, log, exitCode: cc1.exitCode || 1, stage: `cc1 (${name})`, runtime: "libgba", ...(cc1.crash ? { crash: cc1.crash } : {}) };
+  try {
+    // ── Stage A: compile each user .c → .s ─────────────────────────
+    const objects = {};
+    for (const [name, src] of Object.entries(sources)) {
+      if (!name.endsWith(".c")) continue;
+      const cc1 = await cb.stage(`cc1 (${name})`, () => runCc1arm({
+        source: src,
+        headers: { ...sysHeaders, ...libgbaHeaders, ...headers },
+        options: libgbaCc1Options,
+      }), (r) => r.asmSource);
+      const asm = await cb.stage(`as (${name})`, () => runArmAs({ source: cc1.asmSource }), (r) => r.object);
+      objects[name.replace(/\.c$/, ".o")] = asm.object;
     }
-    const asm = await runArmAs({ source: cc1.asmSource });
-    log += `--- as (${name}) ---\n${asm.log || "(ok)"}\n`;
-    if (asm.exitCode !== 0 || !asm.object) {
-      return { ok: false, binary: null, log, exitCode: asm.exitCode || 1, stage: `as (${name})`, runtime: "libgba", ...(asm.crash ? { crash: asm.crash } : {}) };
-    }
-    objects[name.replace(/\.c$/, ".o")] = asm.object;
-  }
 
-  // ── Stage B: assemble gba_crt0.s ─────────────────────────────────
-  const crt0As = await runArmAs({ source: crt0Src });
-  log += `--- as (gba_crt0.s) ---\n${crt0As.log || "(ok)"}\n`;
-  if (crt0As.exitCode !== 0 || !crt0As.object) {
-    return { ok: false, binary: null, log, exitCode: crt0As.exitCode || 1, stage: "as (gba_crt0.s)", runtime: "libgba", ...(crt0As.crash ? { crash: crt0As.crash } : {}) };
-  }
-  objects["gba_crt0.o"] = crt0As.object;
+    // ── Stage B: assemble gba_crt0.s ─────────────────────────────────
+    const crt0As = await cb.stage("as (gba_crt0.s)", () => runArmAs({ source: crt0Src }), (r) => r.object);
+    objects["gba_crt0.o"] = crt0As.object;
 
-  // ── Stage B2: assemble fake_heap_end + `end` stubs ──────────────
-  // devkitARM's libsysbase normally provides both `fake_heap_end`
-  // (used by sbrk's heap tracking) and the linker script defines
-  // `end` (start of heap). We excluded libsysbase so we provide
-  // both as tiny data labels — gba_cart.ld defines `__end__` but not
-  // bare `end` which newlib sbrk needs.
-  const fakeHeapEndStub = await runArmAs({
-    source: `
+    // ── Stage B2: assemble fake_heap_end + `end` stubs ──────────────
+    // devkitARM's libsysbase normally provides both `fake_heap_end`
+    // (used by sbrk's heap tracking) and the linker script defines
+    // `end` (start of heap). We excluded libsysbase so we provide
+    // both as tiny data labels — gba_cart.ld defines `__end__` but not
+    // bare `end` which newlib sbrk needs.
+    const fakeHeapEndStub = await cb.stage("as (fake_heap_end stub)", () => runArmAs({
+      source: `
       .section .data
       .global fake_heap_end
       .global end
@@ -427,98 +394,90 @@ async function buildWithLibgba({ sources, headers, cc1Options, rebuildSdk = fals
       end:
         .word 0x02000000   /* start of EWRAM — sbrk grows from here */
     `,
-  });
-  log += `--- as (fake_heap_end stub) ---\n${fakeHeapEndStub.log || "(ok)"}\n`;
-  if (fakeHeapEndStub.exitCode !== 0 || !fakeHeapEndStub.object) {
-    return { ok: false, binary: null, log, exitCode: fakeHeapEndStub.exitCode || 1, stage: "as (fake_heap_end stub)", runtime: "libgba", ...(fakeHeapEndStub.crash ? { crash: fakeHeapEndStub.crash } : {}) };
+    }), (r) => r.object);
+    objects["fake_heap_end.o"] = fakeHeapEndStub.object;
+
+    // ── Stage B3: compile libgba (+ libsysbase) FROM SOURCE ─────────
+    // Link libgba's own compiled objects, NOT a prebuilt libgba.a. Edit any
+    // libgba source and it takes effect. libsysbase (gba_iosupport.c) gives the
+    // devoptab routing so libgba's consoleInit() + iprintf work.
+    const sdkWarnings = [];
+    const gbaRes = await sdkArchive({
+      name: "libgba",
+      srcDirs: [path.join(LIBGBA_DIR, "src"), SYSBASE_DIR],
+      seedBase: path.join(LIBGBA_DIR, "libgba"),
+      rebuild: rebuildSdk, writeSeed,
+      compile: async () => {
+        const r = await compileSdkObjects({
+          key: "libgba",
+          srcDirs: [path.join(LIBGBA_DIR, "src"), SYSBASE_DIR],
+          headers: { ...sysHeaders, ...libgbaHeaders, ...headers },
+        });
+        return r.ok ? { ok: true, archive: packAr(r.objects) } : r;
+      },
+    });
+    if (!gbaRes.ok) {
+      return { ok: false, binary: null, log: cb.log + (gbaRes.log || ""), exitCode: 1, stage: gbaRes.stage, runtime: "libgba" };
+    }
+    if (gbaRes.sdkEditIgnored) sdkWarnings.push(gbaRes.sdkEditIgnored);
+    cb.note(`--- libgba ${gbaRes.fromSource ? "compiled from source" : "from prebuilt seed"} ---`);
+
+    // ── Stage C: link ───────────────────────────────────────────────
+    // libgba archive from seed/source; crt*.o + libgcc/libc/libnosys are toolchain.
+    const archives = {
+      "libgba.a":   gbaRes.archive,
+      "crti.o":     new Uint8Array(await readFile(path.join(LIBGBA_DIR, "crti.o"))),
+      "crtn.o":     new Uint8Array(await readFile(path.join(LIBGBA_DIR, "crtn.o"))),
+      "crtbegin.o": new Uint8Array(await readFile(path.join(LIBGBA_DIR, "crtbegin.o"))),
+      "crtend.o":   new Uint8Array(await readFile(path.join(LIBGBA_DIR, "crtend.o"))),
+    };
+    const targetLibs = await readTargetArchives();
+    Object.assign(archives, targetLibs);
+
+    // Link order matters for `-l` archives and crt*.o files. Standard
+    // gcc-driver order: crti.o + crtbegin.o → user objects → libgba →
+    // libc + libgcc + libnosys → crtend.o + crtn.o.
+    // --start-group / --end-group forces ld to re-scan the libs so
+    // libc → libgcc → libc cross-refs resolve (libc/strtol calls
+    // __aeabi_uidiv in libgcc; libgcc may call back into libc).
+    const ld = await cb.stage("ld", () => runArmLd({
+      objects,
+      linkScript,
+      archives,
+      libraryPaths: ["/work"],
+      libraries: [],
+      options: [
+        "/work/crti.o",
+        "/work/crtbegin.o",
+        // libgba archive packed from compiled-from-source objects.
+        "--start-group",
+        "-lgba",
+        "-lc",
+        "-lgcc",
+        "-lnosys",
+        "--end-group",
+        "/work/crtend.o",
+        "/work/crtn.o",
+      ],
+    }), (r) => r.elf);
+
+    // ── Stage D: objcopy ELF → raw .gba ─────────────────────────────
+    const objcopy = await cb.stage("objcopy", () => runArmObjcopy({ elf: ld.elf }), (r) => r.binary);
+
+    return {
+      ok: true,
+      binary: objcopy.binary,
+      log: cb.log,
+      exitCode: 0,
+      stage: "done",
+      runtime: "libgba",
+      ...(ld.map ? { symbols: ld.map } : {}),
+      ...(sdkWarnings.length ? { sdkEditIgnored: sdkWarnings } : {}),
+    };
+  } catch (e) {
+    if (e instanceof BuildError) return e.toResult({ runtime: "libgba" });
+    throw e;
   }
-  objects["fake_heap_end.o"] = fakeHeapEndStub.object;
-
-  // ── Stage B3: compile libgba (+ libsysbase) FROM SOURCE ─────────
-  // Link libgba's own compiled objects, NOT a prebuilt libgba.a. Edit any
-  // libgba source and it takes effect. libsysbase (gba_iosupport.c) gives the
-  // devoptab routing so libgba's consoleInit() + iprintf work.
-  const sdkWarnings = [];
-  const gbaRes = await sdkArchive({
-    name: "libgba",
-    srcDirs: [path.join(LIBGBA_DIR, "src"), SYSBASE_DIR],
-    seedBase: path.join(LIBGBA_DIR, "libgba"),
-    rebuild: rebuildSdk, writeSeed,
-    compile: async () => {
-      const r = await compileSdkObjects({
-        key: "libgba",
-        srcDirs: [path.join(LIBGBA_DIR, "src"), SYSBASE_DIR],
-        headers: { ...sysHeaders, ...libgbaHeaders, ...headers },
-      });
-      return r.ok ? { ok: true, archive: packAr(r.objects) } : r;
-    },
-  });
-  if (!gbaRes.ok) {
-    return { ok: false, binary: null, log: log + (gbaRes.log || ""), exitCode: 1, stage: gbaRes.stage, runtime: "libgba" };
-  }
-  if (gbaRes.sdkEditIgnored) sdkWarnings.push(gbaRes.sdkEditIgnored);
-  log += `--- libgba ${gbaRes.fromSource ? "compiled from source" : "from prebuilt seed"} ---\n`;
-
-  // ── Stage C: link ───────────────────────────────────────────────
-  // libgba archive from seed/source; crt*.o + libgcc/libc/libnosys are toolchain.
-  const archives = {
-    "libgba.a":   gbaRes.archive,
-    "crti.o":     new Uint8Array(await readFile(path.join(LIBGBA_DIR, "crti.o"))),
-    "crtn.o":     new Uint8Array(await readFile(path.join(LIBGBA_DIR, "crtn.o"))),
-    "crtbegin.o": new Uint8Array(await readFile(path.join(LIBGBA_DIR, "crtbegin.o"))),
-    "crtend.o":   new Uint8Array(await readFile(path.join(LIBGBA_DIR, "crtend.o"))),
-  };
-  const targetLibs = await readTargetArchives();
-  Object.assign(archives, targetLibs);
-
-  // Link order matters for `-l` archives and crt*.o files. Standard
-  // gcc-driver order: crti.o + crtbegin.o → user objects → libgba →
-  // libc + libgcc + libnosys → crtend.o + crtn.o.
-  // --start-group / --end-group forces ld to re-scan the libs so
-  // libc → libgcc → libc cross-refs resolve (libc/strtol calls
-  // __aeabi_uidiv in libgcc; libgcc may call back into libc).
-  const ld = await runArmLd({
-    objects,
-    linkScript,
-    archives,
-    libraryPaths: ["/work"],
-    libraries: [],
-    options: [
-      "/work/crti.o",
-      "/work/crtbegin.o",
-      // libgba archive packed from compiled-from-source objects.
-      "--start-group",
-      "-lgba",
-      "-lc",
-      "-lgcc",
-      "-lnosys",
-      "--end-group",
-      "/work/crtend.o",
-      "/work/crtn.o",
-    ],
-  });
-  log += `--- ld ---\n${ld.log || "(ok)"}\n`;
-  if (ld.exitCode !== 0 || !ld.elf) {
-    return { ok: false, binary: null, log, exitCode: ld.exitCode || 1, stage: "ld", runtime: "libgba", ...(ld.crash ? { crash: ld.crash } : {}) };
-  }
-
-  // ── Stage D: objcopy ELF → raw .gba ─────────────────────────────
-  const objcopy = await runArmObjcopy({ elf: ld.elf });
-  log += `--- objcopy ---\n${objcopy.log || "(ok)"}\n`;
-  if (objcopy.exitCode !== 0 || !objcopy.binary) {
-    return { ok: false, binary: null, log, exitCode: objcopy.exitCode || 1, stage: "objcopy", runtime: "libgba", ...(objcopy.crash ? { crash: objcopy.crash } : {}) };
-  }
-
-  return {
-    ok: true,
-    binary: objcopy.binary,
-    log,
-    exitCode: 0,
-    stage: "done",
-    runtime: "libgba",
-    ...(ld.map ? { symbols: ld.map } : {}),
-    ...(sdkWarnings.length ? { sdkEditIgnored: sdkWarnings } : {}),
-  };
 }
 
 /**
@@ -530,44 +489,33 @@ async function buildWithLibgba({ sources, headers, cc1Options, rebuildSdk = fals
  * must provide their own _start / main entry point.
  */
 async function buildMinimal({ sources, headers, cc1Options }) {
-  let log = "";
-  const objects = {};
-  for (const [name, src] of Object.entries(sources)) {
-    if (!name.endsWith(".c")) continue;
-    const cc1 = await runCc1arm({ source: src, headers, options: cc1Options });
-    log += `--- cc1 (${name}) ---\n${cc1.log || "(ok)"}\n`;
-    if (cc1.exitCode !== 0 || !cc1.asmSource) {
-      return { ok: false, binary: null, log, exitCode: cc1.exitCode || 1, stage: `cc1 (${name})`, runtime: "minimal", ...(cc1.crash ? { crash: cc1.crash } : {}) };
+  const cb = new CBuild();
+  try {
+    const objects = {};
+    for (const [name, src] of Object.entries(sources)) {
+      if (!name.endsWith(".c")) continue;
+      const cc1 = await cb.stage(`cc1 (${name})`, () => runCc1arm({ source: src, headers, options: cc1Options }), (r) => r.asmSource);
+      const asm = await cb.stage(`as (${name})`, () => runArmAs({ source: cc1.asmSource }), (r) => r.object);
+      objects[name.replace(/\.c$/, ".o")] = asm.object;
     }
-    const asm = await runArmAs({ source: cc1.asmSource });
-    log += `--- as (${name}) ---\n${asm.log || "(ok)"}\n`;
-    if (asm.exitCode !== 0 || !asm.object) {
-      return { ok: false, binary: null, log, exitCode: asm.exitCode || 1, stage: `as (${name})`, runtime: "minimal", ...(asm.crash ? { crash: asm.crash } : {}) };
-    }
-    objects[name.replace(/\.c$/, ".o")] = asm.object;
-  }
 
-  // Minimum-viable linker script — single .text region at GBA cart base.
-  const ld = await runArmLd({
-    objects,
-    linkScript: `OUTPUT_FORMAT("elf32-littlearm")
+    // Minimum-viable linker script — single .text region at GBA cart base.
+    const ld = await cb.stage("ld", () => runArmLd({
+      objects,
+      linkScript: `OUTPUT_FORMAT("elf32-littlearm")
 ENTRY(main)
 MEMORY { ROM (rx) : ORIGIN = 0x08000000, LENGTH = 32M }
 SECTIONS { .text : { *(.text*) *(.rodata*) } > ROM }
 `,
-  });
-  log += `--- ld ---\n${ld.log || "(ok)"}\n`;
-  if (ld.exitCode !== 0 || !ld.elf) {
-    return { ok: false, binary: null, log, exitCode: ld.exitCode || 1, stage: "ld", runtime: "minimal", ...(ld.crash ? { crash: ld.crash } : {}) };
-  }
+    }), (r) => r.elf);
 
-  const objcopy = await runArmObjcopy({ elf: ld.elf });
-  log += `--- objcopy ---\n${objcopy.log || "(ok)"}\n`;
-  if (objcopy.exitCode !== 0 || !objcopy.binary) {
-    return { ok: false, binary: null, log, exitCode: objcopy.exitCode || 1, stage: "objcopy", runtime: "minimal", ...(objcopy.crash ? { crash: objcopy.crash } : {}) };
-  }
+    const objcopy = await cb.stage("objcopy", () => runArmObjcopy({ elf: ld.elf }), (r) => r.binary);
 
-  return { ok: true, binary: objcopy.binary, log, exitCode: 0, stage: "done", runtime: "minimal", ...(ld.map ? { symbols: ld.map } : {}) };
+    return { ok: true, binary: objcopy.binary, log: cb.log, exitCode: 0, stage: "done", runtime: "minimal", ...(ld.map ? { symbols: ld.map } : {}) };
+  } catch (e) {
+    if (e instanceof BuildError) return e.toResult({ runtime: "minimal" });
+    throw e;
+  }
 }
 
 /**
