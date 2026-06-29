@@ -40,6 +40,8 @@ int romdev_get_core_state_impl();
 EMSCRIPTEN_KEEPALIVE int romdev_core_state(void) { return romdev_get_core_state_impl(); }
 unsigned romdev_get_pc_impl();
 EMSCRIPTEN_KEEPALIVE unsigned romdev_get_pc(void) { return romdev_get_pc_impl(); }
+double romdev_get_ticks_impl();
+EMSCRIPTEN_KEEPALIVE double romdev_get_ticks(void) { return romdev_get_ticks_impl(); }
 static pthread_t g_app_thread;
 static pthread_t g_main_thread;
 static volatile int g_app_ready = 0;

@@ -647,3 +647,6 @@ const MIPSExceptionInfo &Core_GetExceptionInfo() {
 }
 
 extern "C" unsigned romdev_get_pc_impl() { return currentMIPS ? currentMIPS->pc : 0; }
+
+#include "Core/CoreTiming.h"
+extern "C" double romdev_get_ticks_impl() { return (double)CoreTiming::GetTicks(); }
