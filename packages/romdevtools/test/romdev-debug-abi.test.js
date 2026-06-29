@@ -11,12 +11,28 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadLibretroCore } from "../src/host/coreLoader.js";
 
-const WASM_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src", "cores", "wasm");
+const PKG_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+const WASM_DIR = path.join(PKG_ROOT, "src", "cores", "wasm");
+// Some cores ship only from their carved-out binary package (the registry resolves
+// those first); look there too so the ABI check isn't silently skipped.
+function resolveWasm(core) {
+  const dev = path.join(WASM_DIR, `${core}.js`);
+  if (existsSync(dev)) return { jsPath: dev, wasmPath: path.join(WASM_DIR, `${core}.wasm`) };
+  // fall back to a sibling binary package's wasm/ dir (romdev-core-* / romdev-platform-*)
+  const pkgsDir = path.join(PKG_ROOT, "..");
+  if (existsSync(pkgsDir)) {
+    for (const entry of readdirSync(pkgsDir)) {
+      const cand = path.join(pkgsDir, entry, "wasm", `${core}.js`);
+      if (existsSync(cand)) return { jsPath: cand, wasmPath: path.join(pkgsDir, entry, "wasm", `${core}.wasm`) };
+    }
+  }
+  return null;
+}
 
 // The shared-lib exports EVERY migrated core must carry (Part 1 of romdev_debug.h).
 const SHARED_ABI = [
@@ -40,17 +56,17 @@ const MIGRATED_CORES = [
   { core: "prosystem_libretro",       extra: ["_romdev_setreg", "_romdev_getreg"] },
   { core: "stella2014_libretro",      extra: ["_romdev_setreg", "_romdev_getreg"] },
   { core: "geargrafx_libretro",       extra: ["_romdev_setreg", "_romdev_getreg", "_romdev_vramwatch_set", "_romdev_vramwatch_get"] },
+  { core: "bluemsx_libretro",         extra: ["_romdev_setreg", "_romdev_getreg", "_romdev_vramwatch_set", "_romdev_vramwatch_get"] },
 ];
 
 for (const { core, extra } of MIGRATED_CORES) {
   test(`ABI: ${core} exports the full shared romdev_debug surface`, { timeout: 60000 }, async () => {
-    const jsPath = path.join(WASM_DIR, `${core}.js`);
-    const wasmPath = path.join(WASM_DIR, `${core}.wasm`);
-    if (!existsSync(jsPath) || !existsSync(wasmPath)) {
+    const resolved = resolveWasm(core);
+    if (!resolved || !existsSync(resolved.wasmPath)) {
       console.log(`${core} wasm not staged locally; skipping (build it to run this)`);
       return;
     }
-    const mod = await loadLibretroCore({ jsPath, wasmPath });
+    const mod = await loadLibretroCore(resolved);
     const missing = [...SHARED_ABI, ...extra].filter((s) => typeof mod[s] !== "function");
     assert.deepEqual(missing, [], `${core} is missing romdev_* exports: ${missing.join(", ")}`);
   });

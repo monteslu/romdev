@@ -53,9 +53,20 @@ else
   echo "No region patch yet — building stock blueMSX (+ build fix)."
 fi
 
+# ── romdev shared debug lib (0.80.0) ─ stage romdev_debug.h at the root (on the
+# Makefile's -I$(CORE_DIR) path) AND in Src/Z80/ (R800.c includes it); inject via
+# INCFLAGS_PLATFORM too. The per-core patch keeps the MSX VRAM watch + setReg/getReg.
+RDBG_SRC="$PROJECT_DIR/scripts/romdev-debug"
+cp "$RDBG_SRC/romdev_debug.h" "$DIR/romdev_debug.h"
+cp "$RDBG_SRC/romdev_debug.h" "$DIR/Src/Z80/romdev_debug.h"
+cp "$RDBG_SRC/romdev_debug.c" "$DIR/romdev_debug.c"
+
 emmake make -f Makefile.libretro platform=emscripten clean >/dev/null 2>&1 || true
 find . -name "*.o" -delete 2>/dev/null || true
-emmake make -f Makefile.libretro platform=emscripten -j"$(nproc)"
+emmake make -f Makefile.libretro platform=emscripten -j"$(nproc)" INCFLAGS_PLATFORM="-I$DIR"
+
+# Compile the shared romdev_debug.c so it links with the rest of the objects.
+emcc -c -O2 "$DIR/romdev_debug.c" -o "$DIR/romdev_debug.o"
 
 # blueMSX must be linked from the .o files directly (an emar archive drops the
 # tentative/common symbols even with -fno-common). Collect every object.
@@ -63,15 +74,15 @@ OBJS=$(find . -name "*.o" | tr '\n' ' ')
 [ -z "$OBJS" ] && { echo "FATAL: blueMSX build produced no objects." >&2; exit 1; }
 
 WP_EXPORTS=""
-grep -rq "romdev_watchpoint_get" libretro.c Src/ 2>/dev/null && WP_EXPORTS='"_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get",'
+grep -rq "romdev_watchpoint_get" libretro.c Src/ "$DIR/romdev_debug.c" 2>/dev/null && WP_EXPORTS='"_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get",'
 # PC breakpoint + read watchpoint (Z80 execute/read hooks in Src/Z80/R800.c,
 # exports in libretro.c) — drive runUntilPC / runUntilRead / stepInstruction.
 BP_EXPORTS=""
-grep -rq "romdev_pcbreak_get" libretro.c Src/ 2>/dev/null && BP_EXPORTS='"_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_readwatch_set","_romdev_readwatch_get",'
+grep -rq "romdev_pcbreak_get" libretro.c Src/ "$DIR/romdev_debug.c" 2>/dev/null && BP_EXPORTS='"_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_readwatch_set","_romdev_readwatch_get",'
 # Instruction WATCHDOG (force-stop a runaway callSubroutine so it can't hang the
 # WASM). State + run-loop hook in Src/Z80/R800.c; romdev_watchdog_set in libretro.c.
 WD_EXPORTS=""
-grep -rq "romdev_watchdog_set" libretro.c Src/ 2>/dev/null && WD_EXPORTS='"_romdev_watchdog_set","_romdev_regsnap_get","_romdev_irqblock_set","_romdev_vramwatch_set","_romdev_vramwatch_get",'
+grep -rq "romdev_watchdog_set" libretro.c Src/ "$DIR/romdev_debug.c" 2>/dev/null && WD_EXPORTS='"_romdev_watchdog_set","_romdev_regsnap_get","_romdev_irqblock_set","_romdev_vramwatch_set","_romdev_vramwatch_get",'
 # RE primitives round 2: register read/write (callSubroutine/setRegister) +
 # range-watch (watchRange) + PC-coverage (logPCRange). Z80/R800 hooks in
 # Src/Z80/R800.c, exports in libretro.c. Same reg-id convention as the other Z80
