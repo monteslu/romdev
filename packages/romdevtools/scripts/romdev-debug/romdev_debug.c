@@ -180,6 +180,11 @@ void romdev_irqblock_set(int on) { romdev_irq_block = on ? 1 : 0; }
 
 int romdev_wp_wants_old(void) { return wp_enabled && wp_cond; }
 
+int romdev_any_armed(void) {
+    return wp_enabled || rd_enabled || range_enabled || cov_enabled
+        || pc_enabled || pc_step || wd_limit || pc_hit;
+}
+
 static int wp_cond_ok(unsigned char oldv, unsigned char v) {
     switch (wp_cond) {
         case 1:  return v > oldv;                /* increase */

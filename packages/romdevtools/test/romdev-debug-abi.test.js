@@ -57,6 +57,7 @@ const MIGRATED_CORES = [
   { core: "stella2014_libretro",      extra: ["_romdev_setreg", "_romdev_getreg"] },
   { core: "geargrafx_libretro",       extra: ["_romdev_setreg", "_romdev_getreg", "_romdev_vramwatch_set", "_romdev_vramwatch_get"] },
   { core: "bluemsx_libretro",         extra: ["_romdev_setreg", "_romdev_getreg", "_romdev_vramwatch_set", "_romdev_vramwatch_get"] },
+  { core: "mgba_libretro",            extra: ["_romdev_setreg", "_romdev_getreg"] },
 ];
 
 for (const { core, extra } of MIGRATED_CORES) {

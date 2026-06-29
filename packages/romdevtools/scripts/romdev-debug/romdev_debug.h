@@ -128,6 +128,12 @@ int romdev_is_frozen(void);
  * core skip the (sometimes costly) old-value read on the hot path when no cond is set. */
 int romdev_wp_wants_old(void);
 
+/* True when ANY debug feature is armed (watchpoint / read-watch / range / coverage /
+ * pc-break / single-step / watchdog / freeze). A core with a stock tight run loop uses
+ * this to bypass all the per-instruction hooks when nothing is armed — zero overhead on
+ * the hot path. Equivalent to OR-ing every enabled flag. */
+int romdev_any_armed(void);
+
 /* ═══════════════════════════════════════════════════════════════════════════
  * PART 3 — the snapshot buffer the core's per-CPU snapshot shim fills on a hit.
  *   On a watchpoint/pcbreak hit the core calls its own romdev_<cpu>_snap(kind)
