@@ -3,36 +3,31 @@
 // Run with --cpu 6502 (default). For SNES/65816 use --cpu 65816.
 
 import { fileURLToPath } from "node:url";
-import { existsSync } from "node:fs";
 import path from "node:path";
 
 import { runIsolated, textFile, binaryFile } from "../_worker/run.js";
+import { resolveGlueFile } from "../common/wasm-tool.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// da65's WASM ships in romdev-toolchain-cc65 (alongside cc65 / ca65 / ld65).
-// Resolve from that package; fall back to a local copy under src/ if present
-// (transition / dev). The package is a hard dep of romdev.
-function resolveDa65Glue() {
-  try {
-    const u = import.meta.resolve("romdev-toolchain-cc65");
-    const p = path.join(path.dirname(fileURLToPath(u)), "wasm", "da65.js");
-    if (existsSync(p)) return p;
-  } catch { /* package not resolvable — fall through to local */ }
-  const local = path.join(__dirname, "wasm", "da65.js");
-  if (existsSync(local)) return local;
-  throw new Error("da65 WASM not found — install romdev-toolchain-cc65");
-}
-// Lazy + memoized: resolve only on the first da65 disassembly, not at boot.
+// da65's WASM ships in romdev-toolchain-cc65 (alongside cc65 / ca65 / ld65); a
+// local src/ copy is the dev fallback. Lazy + memoized: resolve only on the
+// first da65 disassembly, not at boot.
 let _glue;
-const glue = () => (_glue ??= resolveDa65Glue());
+const glue = () =>
+  (_glue ??= resolveGlueFile({
+    pkg: "romdev-toolchain-cc65",
+    file: "da65.js",
+    localDir: __dirname,
+    label: "da65",
+  }));
 
 /** True if the da65 WASM (romdev-toolchain-cc65) is installed/resolvable, without
  *  throwing — for capability probes (catalog status) that must not crash when the
  *  toolchain is absent. */
 export function da65Available() {
-  try { return !!resolveDa65Glue(); } catch { return false; }
+  try { return !!glue(); } catch { return false; }
 }
 
 /**

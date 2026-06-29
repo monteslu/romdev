@@ -13,9 +13,10 @@
 // share/sdcc/{include,lib/<port>} is mounted at /share/sdcc/ at call time.
 
 import { fileURLToPath } from "node:url";
-import { existsSync } from "node:fs";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
+
+import { resolveToolBaseDir } from "../common/wasm-tool.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -25,21 +26,19 @@ const __dirname = path.dirname(__filename);
 // back to a local copy under src/ if present (transition / dev). The package
 // is a hard dep of romdev. The share/ files are mounted into MEMFS at call
 // time. (Mirrors the cc65 resolver.)
-function resolveSdccBaseDir() {
-  try {
-    const u = import.meta.resolve("romdev-toolchain-sdcc");
-    const dir = path.dirname(fileURLToPath(u));
-    if (existsSync(path.join(dir, "wasm", "sdcc.js"))) return dir;
-  } catch { /* package not resolvable — fall through to local */ }
-  if (existsSync(path.join(__dirname, "wasm", "sdcc.js"))) return __dirname;
-  throw new Error("SDCC WASM not found — install romdev-toolchain-sdcc");
-}
+//
 // Lazy + memoized: resolve (and possibly throw "not installed") only on the
 // first SDCC build (GB/GBC/SMS/GG C), not at module load — so booting the
 // server never touches this package unless SDCC is actually used. Resolve the
 // base dir once; derive each tool glue + the share dir from it on demand.
 let _sdccBase;
-const sdccBase  = () => (_sdccBase ??= resolveSdccBaseDir());
+const sdccBase  = () =>
+  (_sdccBase ??= resolveToolBaseDir({
+    pkg: "romdev-toolchain-sdcc",
+    sentinel: "wasm/sdcc.js",
+    localDir: __dirname,
+    label: "SDCC",
+  }));
 const sdccGlue  = (file) => path.join(sdccBase(), "wasm", file);
 const shareDir  = () => path.join(sdccBase(), "share", "sdcc");
 

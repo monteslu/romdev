@@ -5,22 +5,16 @@
 // romdev-toolchain-sdcc alongside sdas/sdcc.
 
 import { fileURLToPath } from "node:url";
-import { existsSync } from "node:fs";
 import path from "node:path";
 import { runIsolated, textFile, binaryFile, getOutputBytes } from "../_worker/run.js";
+import { makeGlueResolver } from "../common/wasm-tool.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-function z80Glue(file) {
-  try {
-    const u = import.meta.resolve("romdev-toolchain-sdcc");
-    const p = path.join(path.dirname(fileURLToPath(u)), "wasm", file);
-    if (existsSync(p)) return p;
-  } catch { /* fall through to local */ }
-  const local = path.join(__dirname, "wasm", file);
-  if (existsSync(local)) return local;
-  throw new Error(`z80 binutils WASM (${file}) not found — install romdev-toolchain-sdcc`);
-}
+// z80-elf binutils ship in romdev-toolchain-sdcc (alongside sdas/sdcc); a local
+// src/ copy is the dev fallback. Lazy + memoized: resolve each glue only on its
+// first use, not at boot.
+const z80Glue = makeGlueResolver({ pkg: "romdev-toolchain-sdcc", localDir: __dirname, label: "sdas" });
 
 /** True if the z80 GNU assembler chain is available. */
 export function z80GnuAvailable() {
