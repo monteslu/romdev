@@ -548,6 +548,9 @@ static void check_variables(CoreParameter &coreParam)
        g_Config.iCpuCore = (int)CPUCore::IR_INTERPRETER;
    }
 #else
+   // romdev: PLAIN interpreter only — IR_INTERPRETER needs the IR-JIT backend (generates native
+   // code), which WASM can't do (→ "null function or function signature mismatch"). The plain
+   // interpreter is correct but ~1/465th real-time; the no-JIT speed ceiling is the PSP-in-WASM wall.
    g_Config.iCpuCore = (int)CPUCore::INTERPRETER;
 #endif
 
