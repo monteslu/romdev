@@ -32,18 +32,23 @@ test makes any drift a hard failure.
   genesis 1249→738, mgba 934→437 lines). handy (65C02/Lynx) is the one remaining inline
   core (a migration attempt regressed CPU execution; reverted to its working baseline,
   deferred to a focused follow-up).
-- **The 3 newer cores too.** N64 (parallel-n64, MIPS R4300) and PS1 (pcsx-rearmed, MIPS
-  R3000) had their OWN *divergent* debug snippets (n64-debug.c / ps1-debug.c — a second
-  copy of the machinery with different var names + a 2-arg pcbreak_set that silently
-  dropped the host's step arg, so single-step was BROKEN). Both now use the shared lib via
-  a thin per-core shim (R4300/R3000 snapshot + RDRAM-mirror canon + call-site adapters) —
-  single-step fixed, watchdog real, coverage unified. Dreamcast (flycast, SH-4) and the PS1
-  HW alt (beetle-psx) have NO debug machinery — only read-only CPU/AICA/SPU state accessors
-  (irreducibly per-core), so nothing to migrate. **12 of 13 instrumented cores now share the
-  lib** (only Lynx remains inline). Also fixed 2 pre-existing PS1 build bugs a fresh clone
-  surfaced (a broken read-watch sed; a dangling `_romdev_vram_get` export defined nowhere).
+- **The newer cores too — and ONE PS1 core now.** N64 (parallel-n64, MIPS R4300) had its
+  own divergent debug snippet (a second copy of the machinery with a 2-arg pcbreak_set that
+  silently dropped the host's step arg → single-step was BROKEN); it now uses the shared lib
+  via a thin shim (R4300 snapshot + RDRAM canon + call-site adapters), single-step fixed.
+  **PS1 was split across TWO cores** — beetle-psx-hw (the GPU/GL renderer, but read-only
+  state) and pcsx-rearmed (full debug, but software-render + not even wired into the
+  registry). That split was useless — you couldn't get GPU *and* debugging in one core. So
+  the full debug surface (watchpoints, pc-break, single-step, range, coverage) was added
+  DIRECTLY to **beetle-psx-hw** (shared lib + a shim hooking mednafen's WriteMemory/
+  ReadMemory + the CPU_RunReal interpreter loop), and **pcsx-rearmed was deleted entirely**
+  (package, build script, snippets, version pin). PS1 is now ONE core that GPU-renders AND
+  fully debugs. Dreamcast (flycast, SH-4) has no debug machinery — only read-only SH-4/AICA
+  state accessors (irreducibly per-core), nothing to migrate. **12 of 13 instrumented cores
+  share the lib** (only Lynx remains inline). Also fixed a missing package-stage step in the
+  beetle build (rebuilds appeared to "do nothing" since the registry loads the package copy).
 - **`test/romdev-debug-abi.test.js`**: loads each migrated core's wasm and asserts the
-  full shared ABI is exported — drift fails the suite (now guards all 12, incl N64+PS1). 
+  full shared ABI is exported — drift fails the suite (now guards all 12, incl N64+beetle PS1). 
   **`test/romdev-debug-lib.test.js`** compiles the lib natively and checks its logic.
 - Build wiring: each migrated `build-<core>.sh` stages + includes (`INCFLAGS_PLATFORM`)
   + compiles/archives `romdev_debug.c`. Author guide for the shim-only flow is in

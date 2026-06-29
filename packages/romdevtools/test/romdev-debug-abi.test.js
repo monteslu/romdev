@@ -62,7 +62,9 @@ const MIGRATED_CORES = [
   // MIPS cores read CPU state via romdev_mips_regs_get (no setReg/getReg); they ship
   // from their own binary packages (resolveWasm falls back to those).
   { core: "parallel_n64_libretro",    extra: ["_romdev_mips_regs_get", "_romdev_ai_get"] },
-  { core: "pcsx_rearmed_libretro",    extra: ["_romdev_mips_regs_get", "_romdev_spu_get"] },
+  // PS1: beetle_psx_hw is the ONE PS1 core — GPU (GL) + the full debug surface, after
+  // the pcsx_rearmed split was collapsed. (mips_regs_get/spu_get are the R3000/SPU readers.)
+  { core: "beetle_psx_hw_libretro",   extra: ["_romdev_mips_regs_get", "_romdev_spu_get"] },
 ];
 
 for (const { core, extra } of MIGRATED_CORES) {

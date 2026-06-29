@@ -1,4 +1,4 @@
-// MIPS run-side (N64 HW-render via the GL bridge, PS1 software via pcsx_rearmed
+// MIPS run-side (N64 HW-render via the GL bridge, PS1 HW-render via beetle_psx_hw
 // HLE). Proves the cores boot, run, and present a real framebuffer through romdev's
 // host — the run/screenshot parity. These need the optional native GL stack
 // (native-gles/webgl-node) for N64 + a core in the dev-staging dir; they skip
@@ -75,7 +75,7 @@ test("N64: a toolchain-built homebrew boots + RENDERS on the GPU (glide64 GBI dl
   }
 });
 
-test("PS1: pcsx_rearmed (HLE, no BIOS) boots + presents a frame", { timeout: 120000 }, async () => {
+test("PS1: beetle_psx_hw (OpenBIOS) boots + presents a frame", { timeout: 120000 }, async () => {
   const core = resolveCore("ps1");
   if (!core) { console.log("no ps1 core staged; skipping"); return; }
 
@@ -172,24 +172,34 @@ test("live-debug: watchpoint + range-watch fire on PS1 (instrumented core)", { t
   if (!HAS_MIPS_GCC) { console.log("mips-elf-gcc not built; skipping"); return; }
   const core = resolveCore("ps1");
   if (!core) return;
+  // A program that drives the GPU (so we know main runs) AND scribbles a global array
+  // in user RAM. Under beetle's real OpenBIOS, low kernel/vector space (e.g. 0x80001000)
+  // is protected — so we discover what the program ACTUALLY writes via findWriter on the
+  // running code, then confirm the watchpoint + range-watch fire on the GL core. This
+  // exercises the full shared-lib debug surface end-to-end (the machinery is core-agnostic;
+  // the host arms the raw virtual address, which the beetle hook reports unmasked).
   const r = await buildForPlatform({ platform: "ps1", language: "c",
-    source: "int main(){ volatile unsigned char *t=(volatile unsigned char*)0x80001000; for(;;){ *t=0x42; *t=0x43; } }" });
+    source: "volatile unsigned int g; int main(){ volatile unsigned int *G1=(volatile unsigned int*)0x1f801814; *G1=0x03000000; for(;;){ g++; } }" });
   assert.ok(r.ok, "build ok");
   const host = new LibretroHost();
   try {
     await host.loadCore(core.jsPath, core.wasmPath, { hwRender: core.hwRender });
     if (!host.watchpointSupported()) { console.log("core has no watchpoint export; skipping"); return; }
     await host.loadMedia({ platform: "ps1", bytes: r.binary, virtualName: "/wp.exe" });
+    host.stepFrames(30);
+    // Discover an address the RUNNING program writes (the global `g` + stack churn) via a
+    // wide range-watch — this proves the write-watch path fires on the active GL core.
+    const wide = host.watchRange(0x80000000, 0x801fffff, "write", 64);
+    assert.ok(wide.total > 0, `range-watch captured writes on the GL PS1 core: ${wide.total}`);
+    assert.ok(wide.events?.length > 0 && (wide.events[0].pc >>> 0) > 0x80000000,
+      `captured a real writing PC: ${(wide.events?.[0]?.pc >>> 0).toString(16)}`);
+    // Now arm a single-address watchpoint on one of those exact addresses and confirm it fires.
+    const TGT = (wide.events[0].address >>> 0);
+    host.setWatchpoint(TGT, true);
     host.stepFrames(10);
-    // write watchpoint on the target address must catch the writing PC
-    host.setWatchpoint(0x80001000, true);
-    host.stepFrames(5);
     const wp = host.getWatchpoint(true);
-    assert.ok(wp.hits > 0, `write watchpoint fired: ${wp.hits} hits`);
+    assert.ok(wp.hits > 0, `write watchpoint @0x${TGT.toString(16)} fired: ${wp.hits} hits`);
     assert.ok((wp.lastPC >>> 0) > 0x80000000, `captured the writing PC: ${(wp.lastPC >>> 0).toString(16)}`);
-    // range watch must capture write events too
-    const ev = host.watchRange(0x80001000, 0x80001010, "write", 5);
-    assert.ok(ev.total > 0, `range watch captured writes: ${ev.total}`);
   } finally {
     host.dispose?.();
   }
@@ -207,7 +217,7 @@ test("audioDebug: PS1 SPU register decode (chip:'spu')", { timeout: 180000 }, as
   // (0x3FFF) reads back as the converged live volume (≈0x3800), NOT the literal.
   // That live value is the correct thing audioDebug reports (it's what drives the
   // mixer). So we assert the SHAPE + that the volumes are populated in the right
-  // range, not the exact literal (an artifact of the old raw-store pcsx core).
+  // range, not the exact literal (an artifact of the prior raw-store debug core, since removed).
   const r = await buildForPlatform({ platform: "ps1", language: "c", source: `
     #define SPU(o) (*(volatile unsigned short*)(0x1F801C00+(o)))
     int main(){ SPU(0x180)=0x3FFF; SPU(0x182)=0x3FFF; SPU(0)=0x2000; SPU(2)=0x1000; for(;;){} }` });
@@ -255,7 +265,7 @@ test("audioDebug: N64 AI output state (chip:'ai')", { timeout: 180000 }, async (
   }
 });
 
-test("memory: PS1 video_ram exposes the GPU VRAM (rebuilt pcsx core)", { timeout: 120000 }, async () => {
+test("memory: PS1 video_ram exposes the GPU VRAM (beetle, if romdev_vram_get present)", { timeout: 120000 }, async () => {
   if (!HAS_MIPS_GCC) { console.log("mips-elf-gcc not built; skipping"); return; }
   const core = resolveCore("ps1");
   if (!core) return;
