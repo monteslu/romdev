@@ -21,18 +21,24 @@ test makes any drift a hard failure.
 
 - **Shared lib + ABI contract** (`romdev_debug.h`): the ~16 host-probed exports +
   the core-hook interface (`romdev_on_write/on_read/on_dispatch` returning hit/freeze
-  signals; `romdev_is_frozen`/`romdev_pc_hit_kind`/`romdev_wp_wants_old` accessors).
-- **3 pilot cores migrated**, spanning three CPU families and the dual-CPU case:
-  gambatte (sm83), fceumm (6502), and genesis-plus-gx (m68k **and** z80 — both CPUs
-  now feed the SAME shared debug state, replacing the old "m68kcpu.c defines, z80.c
-  externs" split). The other 14 cores still inline their machinery and are unchanged;
-  they migrate in later releases.
+  signals; `romdev_is_frozen`/`romdev_pc_hit_kind`/`romdev_wp_wants_old`/`romdev_any_armed`
+  accessors).
+- **10 cores migrated**, spanning every CPU family in the project: gambatte (sm83),
+  fceumm (6502), genesis-plus-gx (m68k **and** z80 — both CPUs now feed the SAME shared
+  debug state, replacing the old "m68kcpu.c defines, z80.c externs" split), snes9x
+  (65816), vice (6510/C64), prosystem (6502/7800), stella2014 (6507/2600), geargrafx
+  (HuC6280/PCE), bluemsx (z80/MSX), and mgba (ARM7TDMI/GBA — the lone 32-bit RISC core).
+  Each per-core patch shrank substantially (e.g. fceumm 869→421, snes9x 814→449,
+  genesis 1249→738, mgba 934→437 lines). handy (65C02/Lynx) is the one remaining inline
+  core (a migration attempt regressed CPU execution; reverted to its working baseline,
+  deferred to a focused follow-up).
 - **`test/romdev-debug-abi.test.js`**: loads each migrated core's wasm and asserts the
-  full shared ABI is exported — drift fails the suite. **`test/romdev-debug-lib.test.js`**
-  compiles the lib natively and checks its logic directly.
+  full shared ABI is exported — drift fails the suite (now guards all 10). 
+  **`test/romdev-debug-lib.test.js`** compiles the lib natively and checks its logic.
 - Build wiring: each migrated `build-<core>.sh` stages + includes (`INCFLAGS_PLATFORM`)
   + compiles/archives `romdev_debug.c`. Author guide for the shim-only flow is in
-  `BUILDING.md`.
+  `BUILDING.md`. (CRLF cores — gpgx z80, vice, prosystem — generate the patch against an
+  LF-normalized baseline so `git diff` doesn't explode.)
 
 ## 0.71.1 — 2026-06-29
 
