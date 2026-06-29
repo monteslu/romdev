@@ -93,9 +93,17 @@ const PLATFORM_QUIRKS = {
 };
 
 /** op:'list' — every platform with core/toolchains/languages/quirks. */
-export function listPlatformsCore() {
+export function listPlatformsCore({ platform, slim } = {}) {
       const available = new Set(listAvailableCores());
-      const platforms = Object.entries(CORES).map(([id, info]) => {
+      let ids = Object.keys(CORES);
+      if (platform) {
+        if (!CORES[platform]) {
+          throw new Error(`platform({op:'list'}): unknown platform '${platform}'. Known: ${ids.join(", ")}.`);
+        }
+        ids = [platform]; // per-platform filter — the big token-sink fix (v0.71.0 fb)
+      }
+      const platforms = ids.map((id) => {
+        const info = CORES[id];
         const toolchains = Object.values(TOOLCHAINS)
           .filter((t) => t.platforms.includes(id))
           .map((t) => ({ id: t.id, displayName: t.displayName, tier: t.tier }));
@@ -107,18 +115,45 @@ export function listPlatformsCore() {
           toolchains,
         };
         const langs = getLanguageOptions(id);
-        if (langs) entry.languages = langs;
-        if (PLATFORM_QUIRKS[id]) entry.quirks = PLATFORM_QUIRKS[id];
+        if (langs) {
+          // `slim` drops the heavy per-language `note` + `quirks` prose (the big
+          // token sink when you only need "which platforms/toolchains/languages
+          // exist"). Detail stays behind platform({op:'doc'}) + op:'capabilities'.
+          entry.languages = slim
+            ? { defaultLanguage: langs.defaultLanguage,
+                languages: (langs.languages || []).map((l) => ({ language: l.language, toolchain: l.toolchain, available: l.available })) }
+            : langs;
+        }
+        if (!slim && PLATFORM_QUIRKS[id]) entry.quirks = PLATFORM_QUIRKS[id];
         return entry;
       });
-      return { platforms };
+      // A single-platform query returns just that row (not wrapped in `platforms[]`).
+      return platform ? platforms[0] : { platforms };
 }
 
-/** op:'resolve' — resolved core paths for a platform (debugging aid). */
+/** op:'resolve' — resolved core paths + the toolchain summary for a platform. */
 export function resolvePlatformCore({ platform }) {
       const r = resolveCore(platform);
       if (!r) throw new Error(`no core available for platform '${platform}'`);
-      return r;
+      // Also surface the toolchain(s) — resolve used to report only the emulator
+      // core, so agents had to spelunk node_modules to learn the build path (v0.71.0
+      // fb #3). We do NOT hand out the WASM/.mjs artifact paths: those tools run ONLY
+      // inside romdev's `build` worker harness (virtual FS), so a node_modules path
+      // invites the wrong mental model (shimming them into an external Makefile —
+      // which does NOT work). The `note` states that plainly (fb #4/#5).
+      const toolchains = Object.values(TOOLCHAINS)
+        .filter((t) => t.platforms.includes(platform))
+        .map((t) => ({ id: t.id, displayName: t.displayName, tier: t.tier }));
+      return {
+        ...r,
+        toolchains,
+        toolchainNote:
+          "Build via the `build` tool (it compiles a source set into one ROM). The toolchain " +
+          "binaries are WASM, run ONLY inside romdev's build worker (virtual FS) — they are NOT " +
+          "host-callable and CANNOT back an external project's Makefile. For an existing decomp/" +
+          "romhack that needs its own legacy compiler (e.g. agbcc) + Makefile, build it on the host " +
+          "and use romdev to run/inspect/debug the resulting ROM.",
+      };
 }
 
 export function registerPlatformTools(server, z) {
@@ -142,14 +177,15 @@ export function registerPlatformTools(server, z) {
     "troubleshooting / upstream_sources; `platform:'romhacking'` + `name:'playbook'` for the RE decision tree). " +
     "Read MENTAL_MODEL before writing code, and the romhacking playbook before a hack.",
     {
-      op: z.enum(["list", "capabilities", "resolve", "toolchains", "docs", "doc"]).describe("list=platforms; capabilities=per-platform op support matrix; resolve=core paths; toolchains; docs=a platform's doc names; doc=read one doc."),
-      platform: z.string().optional().describe("op=resolve/docs/doc: platform id (e.g. nes, gb, genesis; 'romhacking' for the RE playbook)."),
+      op: z.enum(["list", "capabilities", "resolve", "toolchains", "docs", "doc"]).describe("list=platforms (pass `platform` to get just ONE, `slim:true` to drop the verbose notes); capabilities=per-platform op support matrix; resolve=core + toolchain artifact paths; toolchains; docs=a platform's doc names; doc=read one doc."),
+      platform: z.string().optional().describe("op=list/resolve/docs/doc/capabilities: platform id (e.g. nes, gb, genesis; 'romhacking' for the RE playbook). On op=list it filters to that ONE platform's row instead of the whole matrix (big token saver)."),
+      slim: z.boolean().optional().describe("op=list: drop the heavy per-language `note` + `quirks` prose; return just {platform, toolchains[], languages{defaultLanguage,…}}. Detail stays behind op:'doc' / op:'capabilities'."),
       id: z.string().optional().describe("op=toolchains: a specific toolchain's install status (e.g. 'cc65')."),
       name: z.string().optional().describe("op=doc: which doc — mental_model | troubleshooting | upstream_sources | playbook."),
     },
     safeTool(async (args) => {
       switch (args.op) {
-        case "list":    return jsonContent(listPlatformsCore());
+        case "list":    return jsonContent(listPlatformsCore({ platform: args.platform, slim: args.slim }));
         case "capabilities": {
           if (args.platform) {
             const cap = capabilitiesFor(args.platform);
