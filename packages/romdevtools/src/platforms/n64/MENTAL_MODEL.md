@@ -3,27 +3,27 @@
 The N64 is a **3D machine**: a 93.75 MHz MIPS R4300i CPU + the RCP (Reality
 Co-Processor = RSP vector unit + RDP rasterizer) drawing into RDRAM, scanned out
 by the VI (Video Interface). romdev runs it on **parallel_n64** (libretro) built to
-WASM, and homebrew renders with a bundled **software-3D engine** (not the RDP) —
-see "Rendering" for why.
+WASM, rendering through the **glide64 GL HLE plugin** on the real GPU via romdev's
+native-gles / WebGL2 bridge (`hwRender: true`).
 
 ## The one thing to know about rendering
 
-The N64 core runs the **angrylion software RDP** with GL compiled OUT, loaded
-`hwRender: false`. angrylion does a faithful **VI scanout** — it presents whatever
-the CPU wrote into the RDRAM framebuffer. So rombdev N64 homebrew **software-
-rasterizes** triangles straight into an RDRAM framebuffer; it does NOT issue RDP
-display lists. (The HLE GL renderers — glide64/gln64/rice — only translate a game's
-RDP display lists to OpenGL; they show a BLACK screen for raw-framebuffer homebrew,
-which is why we don't use them.) The bundled `n64.c` helper lib is the software
-engine; use it.
+The N64 core renders through **glide64** — a GL HLE plugin that interprets the game's
+**RDP display lists** and translates them to OpenGL on the real GPU. So romdev N64
+homebrew draws by building **RDP display lists** (the standard N64 path), the way a
+real game does; glide64 rasterizes them. (parallel_n64 *defaults* to a software gfx
+plugin that never presents to our GL surface — the host config forces `glide64` so
+frames reach the screen.) The bundled `n64.c` helper lib builds the display lists +
+VI setup; use it.
 
-Two render gotchas that cause a black screen:
-- **The framebuffer must be UNCACHED.** Write pixels via the kseg1 alias
-  (`0xA0000000 | addr`), not cached kseg0 — cached writes sit in the CPU cache and
-  never reach RDRAM where the VI reads them.
-- **The VI registers must be EXACTLY right** (control = 16bpp, h/v start, x/y scale,
-  origin). One wrong register index blanks the screen. The helper lib sets them; if
-  you set them by hand, get the map from the core's `vi_controller.h`.
+If the screen is black, the usual cause is that **no valid RDP display list was
+submitted** (or the VI wasn't initialized) — see TROUBLESHOOTING. Confirm with
+`frame({op:'verify'})` (nearlyBlank).
+
+> Historical note: an earlier bring-up used the **angrylion software RDP** (`hwRender:
+> false`, software-rasterize into UNCACHED RDRAM + a hand-set VI scanout). The shipping
+> core is the glide64 GL path above; if you're on a custom angrylion build, the cached-
+> RDRAM / VI-register gotchas in TROUBLESHOOTING still apply.
 
 ## CPU / memory map (R4300i, MIPS III, 64-bit, big-endian)
 
@@ -74,10 +74,10 @@ N64 is at **full parity** with the tile systems wherever the hardware allows:
 `build({platform:'n64'})` cross-compiles with a from-scratch **mips-elf-gcc → WASM**
 toolchain (cc1 → as → ld → objcopy orchestrated from JS, like the m68k path), big-
 endian libs, then `wrapN64Rom` produces the bootable image. `#include` the bundled
-`n64.h` for the software-3D engine + framebuffer/VI/pad/audio helpers.
+`n64.h` for the 3D helpers (display-list build + VI setup + pad/audio).
 
 ## What's NOT bundled / hardware limits
 
-- No RDP/RSP microcode display-list path (we software-render — see top).
+- No custom RSP microcode path (glide64 HLEs the standard F3DEX-style display lists).
 - No real-hardware Expansion Pak detection beyond the standard 4/8 MB split.
-- `renderingContext` is N/A (3D framebuffer, no tile VDP).
+- `renderingContext` is N/A (3D, no tile VDP).

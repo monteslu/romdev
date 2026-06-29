@@ -1,37 +1,39 @@
 # Nintendo 64 — troubleshooting
 
-Read `platform({op:'doc', platform:'n64', name:'mental_model'})` first — most N64
-black-screen bugs are the rendering model (software RDP into UNCACHED RDRAM).
+Read `platform({op:'doc', platform:'n64', name:'mental_model'})` first — the shipping
+N64 renders through the **glide64 GL HLE plugin** (it rasterizes RDP display lists on
+the real GPU), not a software framebuffer.
 
 ## "ROM builds + boots but the screen is BLACK"
 
-The #1 N64 bug. Three causes, in order of likelihood:
+The #1 N64 bug. Causes, in order of likelihood (glide64 GL path):
 
-1. **You wrote pixels to CACHED RDRAM.** The angrylion VI scanout reads RDRAM; cached
-   (kseg0, `0x8000_0000`) writes sit in the CPU cache and never land. Write the
-   framebuffer through the **uncached kseg1 alias** (`0xA000_0000 | addr`). The
-   bundled `n64.c` framebuffer pointer is already uncached — use it, don't roll your
-   own cached pointer.
-2. **The VI registers are wrong.** angrylion blanks unless VI control (16bpp),
-   h_start/v_start, x_scale/y_scale and origin are exactly right. Use the helper lib's
-   `vi_init`; if hand-setting, copy the indices from the core's `vi_controller.h` (a
-   wrong index — e.g. using the v_sync slot for what's actually LEAP — blanks it).
-3. **You expected the HLE GL renderer to draw your framebuffer.** It won't — glide64/
-   gln64/rice only translate RDP **display lists**. romdev's core is the software-RDP
-   build (`hwRender:false`) precisely so raw framebuffers display. Confirm with
-   `frame({op:'verify'})` (nearlyBlank) + check RDRAM has nonzero pixels via
-   `memory({op:'read', region:'system_ram'})`.
+1. **No valid RDP display list was submitted.** glide64 only draws what it sees in the
+   display list — if the game never builds + runs one (DPC start/end set, the list
+   ends with a pipeline-sync + full-sync), nothing reaches GL. Use the bundled `n64.c`
+   display-list helpers; confirm with `frame({op:'verify'})` (nearlyBlank).
+2. **The VI / video mode wasn't initialized.** Even with a display list, the VI needs
+   its control (bpp), h/v start, x/y scale and origin set so there's a scanout target.
+   The helper lib's `vi_init` does this.
+3. **A combine/texture/blend mode glide64 can't HLE.** Unusual RDP combiner setups can
+   render nothing under HLE. Stick to the common combine modes the helper lib uses.
 
-## "frame({op:'verify'}) says nearlyBlank but RDRAM has pixels"
+> If you're on a custom **angrylion software-RDP** build instead (`hwRender:false`), the
+> classic gotchas apply: write the framebuffer through the **uncached kseg1 alias**
+> (`0xA000_0000 | addr`) — cached kseg0 writes never reach RDRAM where the VI scans out
+> — and get the VI register indices exactly right (from the core's `vi_controller.h`).
 
-Pixels are in RAM but not scanned out → it's a VI/uncached issue (causes 1-2 above),
-not a draw issue. The renderer is fine; the scanout config or cache is the problem.
+## "frame({op:'verify'}) says nearlyBlank"
+
+No geometry reached the GPU (cause 1-2) — it's a display-list / VI-init problem, not a
+toolchain problem. The build is fine; the render setup is the issue.
 
 ## "Geometry is wrong / triangles inside-out / nothing where expected"
 
-Software-3D pipeline math. Check: the framebuffer is 16.16 fixed-point throughout;
-back-face culling winding order matches your vertex order; perspective divide before
-viewport map. The helper lib's pipeline is correct — diff against its draw call order.
+3D pipeline math (the helper lib transforms before building the display list). Check:
+16.16 fixed-point throughout, back-face winding matches your vertex order, perspective
+divide before the viewport map, and the vertices land in the on-screen range. Diff
+against the helper lib's draw order.
 
 ## "Build fails: 'relocation truncated to fit'"
 
