@@ -38,6 +38,7 @@ const MIGRATED_CORES = [
   { core: "snes9x_libretro",          extra: ["_romdev_setreg", "_romdev_getreg", "_romdev_vramwatch_set", "_romdev_vramwatch_get"] },
   { core: "vice_x64_libretro",        extra: ["_romdev_setreg", "_romdev_getreg", "_romdev_disk_export", "_romdev_key_matrix", "_romdev_joyport_get"] },
   { core: "prosystem_libretro",       extra: ["_romdev_setreg", "_romdev_getreg"] },
+  { core: "stella2014_libretro",      extra: ["_romdev_setreg", "_romdev_getreg"] },
 ];
 
 for (const { core, extra } of MIGRATED_CORES) {
