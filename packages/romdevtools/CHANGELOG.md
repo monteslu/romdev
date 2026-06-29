@@ -4,6 +4,65 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.71.0 — 2026-06-28
+
+### N64 / PS1 / Dreamcast reach full parity: cpuState + audioDebug + GPU-rendering helper libs + 5 examples each
+
+The three next-gen 3D platforms are now first-class alongside the original 14.
+
+**Live debugging (cpuState + audioDebug).** PS1 (beetle_psx_hw) and Dreamcast (flycast)
+gained the romdev debug-reader exports, so `cpu({op:'read'})` and
+`audioDebug({op:'inspect'})` light up (N64 already had them):
+- **PS1** — `cpu({op:'read'})` returns the live R3000A register file; `audioDebug({chip:'spu'})`
+  decodes the SPU's 24 voices + main volume (read from the raw register mirror, not the
+  sweep-quantized `SPU_Read`).
+- **Dreamcast** — `cpu({op:'read'})` returns the SH-4 registers (r0–r15, pc, pr, gbr, vbr,
+  sr + decoded flags, mac, fpul); `audioDebug({chip:'aica'})` decodes the AICA's 64
+  PCM/ADPCM channels + master volume. Full host plumbing + decoders added.
+- The capability manifest now reports cpuState/audioDebug `true` for all three (verified by
+  probing real core exports; `breakpoint`/`watch` remain pending on PS1/DC).
+
+**GPU-rendering helper libs (no software framebuffers).** Every 3D platform's helper now
+draws through the GPU — a software rasterizer would be black on the GL cores and <1fps:
+- **N64** — the `n64.h` helper was rewritten to emit a **GBI (F3DEX2) display list** that
+  glide64 HLEs onto the GPU (clear/rect as fill-rectangles, triangles scan-converted into
+  GPU fill-rect spans), instead of poking pixels into RDRAM (which rendered black on
+  glide64). No Nintendo microcode shipped — the OSTask CRC-bait trick selects F3DEX2.
+- **PS1** — already correct (GP0 GPU primitives on beetle_psx_hw).
+- **Dreamcast** — `dc.h` now sets **480i interlace** in `dc_video_init` (240p only showed
+  the top 240 of 480 lines), and added a Maple-DMA `dc_pad()` / `dc_pressed()`.
+- `#include "n64.h"` / `#include "psx.h"` now auto-bundle (parity with `dc.h`).
+
+**5 genre examples per platform.** N64, PS1, and Dreamcast each ship
+shmup / platformer / puzzle / racing / sports examples — all verified building + rendering
+on the GPU.
+
+**Docs.** MENTAL_MODEL + TROUBLESHOOTING for N64, PS1, and Dreamcast (the render model,
+boot story, debug surface, and what's N/A and why).
+
+### asar (SNES) build-tool fixes
+
+From real commercial-disassembly feedback:
+- **`build({output:'project'|'run'})` honors `options` + a new `defines` map** (e.g. asar
+  `--define`) — they were silently dropped.
+- **New `entry` param** so a project whose top file isn't `main.*` (e.g. an existing
+  `smw.asm` disassembly) builds without injecting glue.
+- **Subdirectory assets are staged recursively** (a flat `readdir` missed nested
+  `incbin`/`incsrc` targets).
+- **A clean asar error is no longer mislabeled** `[worker] Abort in WASM` (it exits errors
+  via a C++-exception path; the misleading heap-pointer line is stripped when real
+  diagnostics are present).
+- **The LoROM-header bankcross preflight no longer false-positives** on banks $01+ (the
+  header is only in bank $00) and honors `check bankcross off`.
+- **A readfile/filesize advisory** warns when a source reads many distinct files that way
+  (the asar-WASM resource limit), pointing at the pre-convert-to-`.bin` + `incbin`
+  workaround.
+
+### Toolchain
+
+- **sh-c (Dreamcast) defaults to `-O1`** — the sh-elf `cc1.wasm` has an `-O2`-only pass
+  that aborts on common control flow; `-O1` dodges it. A user-supplied `-O<level>` wins.
+
 ## 0.70.0 — 2026-06-26
 
 ### Dreamcast is ship-ready: verified build → run → screenshot, with a renderable example
