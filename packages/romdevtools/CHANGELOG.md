@@ -29,9 +29,19 @@ test makes any drift a hard failure.
   (65816), vice (6510/C64), prosystem (6502/7800), stella2014 (6507/2600), geargrafx
   (HuC6280/PCE), bluemsx (z80/MSX), and mgba (ARM7TDMI/GBA — the lone 32-bit RISC core).
   Each per-core patch shrank substantially (e.g. fceumm 869→421, snes9x 814→449,
-  genesis 1249→738, mgba 934→437 lines). handy (65C02/Lynx) is the one remaining inline
-  core (a migration attempt regressed CPU execution; reverted to its working baseline,
-  deferred to a focused follow-up).
+  genesis 1249→738, mgba 934→437 lines).
+- **handy (Lynx 65C02) migrated too — the last inline holdout.** A first attempt regressed
+  CPU execution; the root cause turned out to be the read hook. The Lynx's `CPU_PEEK`
+  reads memory OR a hardware I/O register (`mSystem.Peek_CPU` at $FC00+), and reading an
+  I/O register has SIDE EFFECTS (clears a status bit / advances a FIFO). The first migrated
+  read macro was an expression (comma-operator) form that re-evaluated the underlying read
+  2-3× → the I/O register got read multiple times per access → corrupted hardware state →
+  the CPU never reached its main loop (looked like a "freeze"). Fixed by reading the source
+  EXACTLY ONCE into a temp via a GCC statement-expression before calling `romdev_on_read`.
+  Patch shrank 640→251 lines. With this, **all 13 instrumented cores share the lib** — no
+  inline holdouts remain. (Also fixed the libretro.cpp frame-loop guard, which referenced
+  the now-private `romdev_pc_hit` symbol directly → switched to the `romdev_is_frozen()`
+  accessor like every other migrated core.)
 - **The newer cores too — and ONE PS1 core now.** N64 (parallel-n64, MIPS R4300) had its
   own divergent debug snippet (a second copy of the machinery with a 2-arg pcbreak_set that
   silently dropped the host's step arg → single-step was BROKEN); it now uses the shared lib
@@ -44,11 +54,10 @@ test makes any drift a hard failure.
   ReadMemory + the CPU_RunReal interpreter loop), and **pcsx-rearmed was deleted entirely**
   (package, build script, snippets, version pin). PS1 is now ONE core that GPU-renders AND
   fully debugs. Dreamcast (flycast, SH-4) has no debug machinery — only read-only SH-4/AICA
-  state accessors (irreducibly per-core), nothing to migrate. **12 of 13 instrumented cores
-  share the lib** (only Lynx remains inline). Also fixed a missing package-stage step in the
+  state accessors (irreducibly per-core), nothing to migrate. **all 13 instrumented cores share the lib** (Lynx included — see below). Also fixed a missing package-stage step in the
   beetle build (rebuilds appeared to "do nothing" since the registry loads the package copy).
 - **`test/romdev-debug-abi.test.js`**: loads each migrated core's wasm and asserts the
-  full shared ABI is exported — drift fails the suite (now guards all 12, incl N64+beetle PS1). 
+  full shared ABI is exported — drift fails the suite (now guards all 13, incl N64 + beetle PS1 + Lynx). 
   **`test/romdev-debug-lib.test.js`** compiles the lib natively and checks its logic.
 - Build wiring: each migrated `build-<core>.sh` stages + includes (`INCFLAGS_PLATFORM`)
   + compiles/archives `romdev_debug.c`. Author guide for the shim-only flow is in
