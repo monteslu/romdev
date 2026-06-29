@@ -261,6 +261,16 @@ synthesizes a fallback `issues[]` entry with a hint. The idioms to avoid:
   block where the layout expects it. Use
   `examples({op:'snippets', platform:"snes", mode:"get", snippetName:"lorom_header.asm"})`
   for the canonical layout (and `lorom_multibank.asm` for multi-bank).
+- **`readfile1`/`filesize`/`canreadfile` across MANY distinct files.** Converting
+  assets at assemble time (the commercial-disassembly idiom — e.g. an `incpal`
+  macro reading every `.pal` palette to emit 15-bit color) reads many *distinct*
+  files via the readfile API. asar-WASM can **abort with no diagnostic** above a
+  threshold of distinct files read that way (one file read 200× is fine — it's
+  the *count of distinct files*). `incbin` does NOT have this problem. The build
+  log carries an `[asar advisory]`/abort-hint when it sees a source over the
+  threshold. **Fix: pre-convert the assets to `.bin` blobs offline and `incbin`
+  them** — the output is byte-identical. (Put the converted blobs in a subdir;
+  `output:'project'` stages subdirectory assets recursively.)
 
 (This is the asar/asm path. The default PVSnesLib **C** path goes through
 tcc-65816 + wla-65816 and has its own C89 trap, above.)
