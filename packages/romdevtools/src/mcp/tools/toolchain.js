@@ -977,16 +977,33 @@ export async function readProjectDir(projPath, platform, opts = {}) {
   const subAssets = await walkSubdirAssets(projPath);
 
   // Entry override: an existing project whose top file isn't main.* (e.g.
-  // smw.asm). Accept a project-relative or bare name; it becomes the single
-  // entry source. Without it, auto-detect main.c / main.s / main.asm.
-  const entryName = opts.entry ? path.normalize(opts.entry).replace(/^[./]+/, "") : null;
+  // smw.asm) OR is nested (e.g. src/main.c — common for decomps/SDK projects).
+  // Accept a project-relative path or a bare name; it becomes the single entry
+  // source. Resolve against BOTH the top-level files AND the recursively staged
+  // subdir set, with POSIX slashes (`path.normalize` may emit `\` on Windows).
+  const entryName = opts.entry
+    ? path.normalize(opts.entry).replace(/\\/g, "/").replace(/^[./]+/, "")
+    : null;
+  // The resolved {rel, abs} for the entry when it's nested in a subdirectory.
+  let entrySubAsset = null;
   if (entryName) {
-    const exists = files.some((f) => f.name === entryName) ||
-      subAssets.some((a) => a.rel === entryName);
-    if (!exists) {
+    const topMatch = files.some((f) => f.name === entryName);
+    entrySubAsset = subAssets.find((a) => a.rel === entryName) || null;
+    // Bare-filename fallback: `entry:'main.c'` matches `src/main.c` if unique.
+    if (!topMatch && !entrySubAsset && !entryName.includes("/")) {
+      const byBase = subAssets.filter((a) => a.rel.split("/").pop() === entryName);
+      if (byBase.length === 1) entrySubAsset = byBase[0];
+    }
+    if (!topMatch && !entrySubAsset) {
+      const nearby = subAssets
+        .filter((a) => a.rel.split("/").pop() === entryName.split("/").pop())
+        .map((a) => a.rel).slice(0, 8);
       throw new Error(
-        `entry '${entryName}' not found in ${projPath}. Found top-level: ` +
-        `${files.map((f) => f.name).join(", ") || "(none)"}.`
+        `entry '${entryName}' not found in ${projPath}. ` +
+        (nearby.length
+          ? `Did you mean: ${nearby.join(", ")}? (entry is project-relative — e.g. 'src/main.c'.)`
+          : `Top-level: ${files.map((f) => f.name).join(", ") || "(none)"}. ` +
+            `entry is project-relative — pass the path under the repo root (e.g. 'src/main.c').`)
       );
     }
   }
@@ -1006,7 +1023,7 @@ export async function readProjectDir(projPath, platform, opts = {}) {
   // the dir build matches the hand-written build({output:'run'}) call.
   const recipe = projectBuildRecipe(platform, files.map((f) => f.name));
 
-  // With a custom entry, the entry is the ONE source; every OTHER top-level
+  // With a custom ASM entry, the entry is the ONE source; every OTHER top-level
   // .asm/.s/.c routes as an include (asar/wla resolve `.include`/`#include`
   // from the includes mount), matching the single-source asm model.
   if (entryName && /\.(asm|s)$/i.test(entryName)) {
@@ -1040,12 +1057,20 @@ export async function readProjectDir(projPath, platform, opts = {}) {
   // the mount. Text-ish includes (.asm/.s/.h/.inc) found in subdirs go to includes
   // (so `incsrc "lib/foo.asm"` works); everything else is a binary asset.
   for (const a of subAssets) {
-    if (recipe.skip.has(a.rel) || a.rel === entryName) continue;
+    if (recipe.skip.has(a.rel) || a.rel === entrySubAsset?.rel) continue;
     if (/\.(h|inc|asm|s)$/i.test(a.rel)) {
       includes[a.rel] = (await readFile(a.abs)).toString("utf-8");
     } else {
       binaryIncludes[a.rel] = (await readFile(a.abs)).toString("base64");
     }
+  }
+
+  // A NESTED entry (e.g. src/main.c) is read here as the entry SOURCE — the
+  // top-level loop above only sees root files, so a subdir entry would otherwise
+  // never compile. Keyed by its relative path so #include/.include resolution
+  // from the same subdir works.
+  if (entrySubAsset) {
+    sources[entrySubAsset.rel] = (await readFile(entrySubAsset.abs)).toString("utf-8");
   }
 
   // SMS/GG with no crt0 file in the dir → fall back to the bundled crt0,

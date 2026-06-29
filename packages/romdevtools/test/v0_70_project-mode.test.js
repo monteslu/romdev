@@ -63,3 +63,28 @@ test("project mode: a bad entry name is rejected with a clear error", { timeout:
   );
   await rm(dir, { recursive: true, force: true });
 });
+
+// v0.71.0 feedback #1: project-mode `entry` must resolve a NESTED path (src/main.c),
+// not just top-level files — common for decomps / SDK-layout projects.
+test("project mode: entry resolves a nested path (src/main.c) + bare-name fallback", { timeout: 120000 }, async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "romdev-v71-"));
+  await mkdir(path.join(dir, "src"), { recursive: true });
+  await writeFile(path.join(dir, "src", "game.s"),
+    "lorom\norg $008000\nStart:\n  sei\n.loop:\n  jmp .loop\norg $00FFFC\ndw Start\n");
+  try {
+    // explicit nested path
+    const a = parse(await buildProjectCore({ path: dir, platform: "snes", entry: "src/game.s" }));
+    assert.equal(a.ok, true, `nested entry builds: ${(a.log || "").slice(-160)}`);
+    assert.ok(a.sourcesBuilt.includes("src/game.s"), `nested entry is the source: ${JSON.stringify(a.sourcesBuilt)}`);
+    // bare filename → unique nested match
+    const b = parse(await buildProjectCore({ path: dir, platform: "snes", entry: "game.s" }));
+    assert.equal(b.ok, true, "bare-name entry resolves to the unique nested file");
+    // a bad entry errors with a project-relative hint
+    await assert.rejects(
+      () => buildProjectCore({ path: dir, platform: "snes", entry: "src/missing.s" }),
+      /entry 'src\/missing\.s' not found/,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

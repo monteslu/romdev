@@ -248,6 +248,11 @@ Loadable via mGBA (`loadMedia`).
 
 ## What's NOT bundled
 
+- **`agbcc` (the legacy GBA compiler).** romdev's GBA C path is **modern
+  `arm-none-eabi-gcc` 14.2.0** only. The byte-exact decompilations + romhacks
+  (pokeruby / pokeemerald / pokefirered, etc.) build with agbcc + a custom
+  `ld_script.txt`, so romdev **cannot reproduce a matching retail ROM** for those.
+  That's a hard limit, not a missing feature — see "romdev's build model" below.
 - **libgba's `console.c`** (iprintf-style stdio output). Pulls in
   devkitPro's libsysbase header chain — not yet ported. See
   TROUBLESHOOTING.md for the trade-off rationale and workarounds.
@@ -256,7 +261,23 @@ Loadable via mGBA (`loadMedia`).
 - **devkitARM's `bin2s`** (binary → assembly converter for asset
   pipelines). Not bundled; ship binary assets as C arrays for now.
 
-Everything else from a stock devkitARM install works.
+Everything else from a stock devkitARM install (homebrew-style) works.
+
+## romdev's build model (read this before driving an existing project)
+
+`build` is a **single-shot "compile these sources → one ROM" tool**, NOT an arbitrary
+build-system backend. The toolchain binaries are **WASM, run only inside romdev's build
+worker (virtual FS)** — they are **not host-callable** and **cannot back an external
+project's `Makefile`** as `$(TOOLCHAIN)/bin`. (The `.mjs` wrappers under `node_modules`
+export a worker factory, not a CLI `main` — invoking one directly exits 0 and writes
+nothing.)
+
+So for an **existing decomp/romhack** (agbcc-era or any project with its own Makefile):
+build it **on the host** with its own toolchain, then point romdev at the resulting
+`.gba` for the run / inspect / debug / decompile loop. Confirmed host recipe for the
+Pokémon Gen-III decomps: `brew install arm-none-eabi-gcc arm-none-eabi-binutils`, clone
+`pret/agbcc` → `./build.sh` → `./install.sh <repo>`, then `make <target>` (yields a
+byte-matching ROM). romdev's value here is everything AFTER the build, not the build.
 
 ## Horizontal scrolling (for side-scrollers)
 
