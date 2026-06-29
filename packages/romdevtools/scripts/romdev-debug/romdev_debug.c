@@ -64,7 +64,7 @@ static unsigned      wd_count = 0;
 static int           wd_tripped = 0;
 
 /* at-hit snapshots (filled by the core's shim; declared in the header) */
-unsigned romdev_snap_regs[ROMDEV_SNAP_WORDS];
+unsigned romdev_snap_regs[ROMDEV_SNAP_REGS];
 int      romdev_snap_kind = 0;
 unsigned romdev_pcbrk_regs[ROMDEV_PCBRK_REGS] =
     { 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu };
@@ -166,8 +166,9 @@ EMSCRIPTEN_KEEPALIVE
 void romdev_regsnap_get(unsigned *out, int clear) {
     int i;
     if (!out) return;
-    out[0] = (unsigned)romdev_snap_kind;
-    for (i = 1; i < ROMDEV_SNAP_WORDS; i++) out[i] = romdev_snap_regs[i];
+    out[0] = (unsigned)romdev_snap_kind;   /* 0=none 1=pc-break 2=watchdog 3=write 4=read */
+    out[1] = ROMDEV_SNAP_REGS;             /* count word the host reads (u[1]) */
+    for (i = 0; i < ROMDEV_SNAP_REGS; i++) out[2 + i] = romdev_snap_regs[i];
     if (clear) romdev_snap_kind = 0;
 }
 
@@ -187,13 +188,13 @@ static int wp_cond_ok(unsigned char oldv, unsigned char v) {
     }
 }
 
-void romdev_on_write(unsigned addr, unsigned char oldv, unsigned char newv,
-                     unsigned pc, unsigned rom_off) {
+int romdev_on_write(unsigned addr, unsigned char oldv, unsigned char newv,
+                    unsigned pc, unsigned rom_off) {
+    int hit = 0;
     if (wp_enabled && addr == wp_addr && wp_cond_ok(oldv, newv)) {
         wp_last_pc = pc; wp_last_val = newv; wp_last_old = oldv;
         wp_last_rom_off = rom_off; wp_hits++;
-        /* the core's shim takes a register snapshot (kind 3 = write-watch) right
-         * before/after calling this, into romdev_snap_regs[]. */
+        hit = 1; /* caller takes a kind-3 register snapshot */
     }
     if (range_enabled && (range_mode & 2) && addr >= range_lo && addr <= range_hi) {
         range_count++;
@@ -202,11 +203,14 @@ void romdev_on_write(unsigned addr, unsigned char oldv, unsigned char newv,
             range_val[range_stored] = newv; range_stored++;
         }
     }
+    return hit;
 }
 
-void romdev_on_read(unsigned addr, unsigned char val, unsigned pc) {
+int romdev_on_read(unsigned addr, unsigned char val, unsigned pc) {
+    int hit = 0;
     if (rd_enabled && addr == rd_addr) {
         rd_last_pc = pc; rd_last_val = val; rd_hits++;
+        hit = 1; /* caller takes a kind-4 register snapshot */
     }
     if (range_enabled && (range_mode & 1) && addr >= range_lo && addr <= range_hi) {
         range_count++;
@@ -215,6 +219,7 @@ void romdev_on_read(unsigned addr, unsigned char val, unsigned pc) {
             range_val[range_stored] = val; range_stored++;
         }
     }
+    return hit;
 }
 
 int romdev_on_dispatch(unsigned pc) {

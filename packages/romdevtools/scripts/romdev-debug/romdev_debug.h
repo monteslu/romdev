@@ -33,7 +33,8 @@ extern "C" {
 /* ── capacities (must match what the host's get-functions read out) ── */
 #define ROMDEV_COV_CAP    8192   /* distinct PCs the coverage ring holds */
 #define ROMDEV_RANGE_CAP  4096   /* range-watch event ring */
-#define ROMDEV_SNAP_WORDS 19     /* romdev_snap_regs[] word count (out: kind + 18) */
+#define ROMDEV_SNAP_REGS  19     /* registers in a snapshot (romdev_snap_regs[]) */
+#define ROMDEV_SNAP_WORDS 21     /* regsnap_get out: [kind, count(19), regs0..18] */
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * PART 1 — exports the HOST calls (the ABI). Implemented in romdev_debug.c.
@@ -72,9 +73,10 @@ void romdev_watchdog_set(unsigned limit);
 void romdev_cov_set(unsigned lo, unsigned hi, int enabled);
 unsigned romdev_cov_get(unsigned *out, unsigned max, unsigned *out2);
 
-/* At-hit CPU register snapshot. The core fills romdev_snap_regs[] on a hit (via its
- * snapshot shim); the host reads it here. out: ROMDEV_SNAP_WORDS words; word0=kind
- * (0 = no snapshot), then the per-CPU register layout. */
+/* At-hit CPU register snapshot. The core fills romdev_snap_regs[] (ROMDEV_SNAP_REGS
+ * registers) on a hit via its snapshot shim; the host reads it here. out is
+ * ROMDEV_SNAP_WORDS (21) words: [0]=kind (0 = no snapshot), [1]=count (=19),
+ * [2..20]=the per-CPU register layout. */
 void romdev_regsnap_get(unsigned *out, int clear);
 
 /* IRQ block: when set, the core's interrupt dispatch is gated off (deterministic
@@ -95,12 +97,16 @@ void romdev_irqblock_set(int on);
  *   newv   — the value being written
  *   pc     — the live PC of the executing instruction
  *   rom_off— active-bank ROM offset for `pc`, or 0xFFFFFFFF if N/A
- * Drives the write-watchpoint + the range-watch (write side). */
-void romdev_on_write(unsigned addr, unsigned char oldv, unsigned char newv,
-                     unsigned pc, unsigned rom_off);
+ * Drives the write-watchpoint + the range-watch (write side).
+ * RETURNS 1 if a write-watchpoint just HIT — the core should then take its register
+ * snapshot (fill romdev_snap_regs[] from its live CPU state + set romdev_snap_kind=3),
+ * since only the core knows its register layout. Returns 0 otherwise. */
+int romdev_on_write(unsigned addr, unsigned char oldv, unsigned char newv,
+                    unsigned pc, unsigned rom_off);
 
-/* Call on every memory READ. Drives the read-watchpoint + range-watch (read side). */
-void romdev_on_read(unsigned addr, unsigned char val, unsigned pc);
+/* Call on every memory READ. Drives the read-watchpoint + range-watch (read side).
+ * RETURNS 1 if a read-watchpoint just HIT — core takes its snapshot (kind=4). */
+int romdev_on_read(unsigned addr, unsigned char val, unsigned pc);
 
 /* Call once per instruction dispatch with the live PC. Drives coverage + the PC
  * breakpoint/watchdog. Returns 1 if the CPU should FREEZE (a pcbreak/watchdog hit
@@ -118,7 +124,7 @@ int romdev_wp_wants_old(void);
  *   which writes romdev_snap_regs[0]=kind and [1..] = its registers, then the host
  *   reads them via romdev_regsnap_get. Declared here so both sides agree on layout.
  * ═════════════════════════════════════════════════════════════════════════ */
-extern unsigned romdev_snap_regs[ROMDEV_SNAP_WORDS];
+extern unsigned romdev_snap_regs[ROMDEV_SNAP_REGS];
 extern int      romdev_snap_kind;
 
 /* Compact at-PC-break register snapshot, surfaced inline in pcbreak_get slots 6-10.
