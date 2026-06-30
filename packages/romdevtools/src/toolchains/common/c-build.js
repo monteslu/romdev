@@ -31,13 +31,24 @@ export class BuildError extends Error {
     if (info.crash) this.crash = info.crash;
   }
   /**
-   * The canonical failure result every builder returns. Pass extra fields (e.g.
-   * `{ binary: null }` or a platform-specific `{ runtime }`) to merge in.
+   * The canonical failure result the GCC/tcc C-SDK builders return (includes
+   * `ok: false`). Pass extra fields (e.g. a platform-specific `{ runtime }`) to merge.
    * @param {Record<string, any>} [extra]
    */
   toResult(extra = {}) {
+    return { ok: false, ...this.fields(extra) };
+  }
+
+  /**
+   * The failure fields WITHOUT a forced `ok` — for builders (cc65/sdcc) whose
+   * lower layer returns `{ binary, log, exitCode, stage }` and lets the caller
+   * (index.js) add `ok`. Same { binary:null, log, exitCode, stage, crash? } core
+   * + any `extra` (e.g. sdcc's `failedTU` / `compiledOK`). Note: crash is only
+   * spread when present (cc65/sdcc historically never carried it — pass nothing).
+   * @param {Record<string, any>} [extra]
+   */
+  fields(extra = {}) {
     return {
-      ok: false,
       binary: null,
       log: this.log,
       exitCode: this.exitCode,
