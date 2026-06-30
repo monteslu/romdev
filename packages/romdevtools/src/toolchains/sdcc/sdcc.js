@@ -17,6 +17,12 @@ import path from "node:path";
 import { readFile } from "node:fs/promises";
 
 import { resolveToolBaseDir } from "../common/wasm-tool.js";
+// sdcc uses CBuild ONLY as the log accumulator (cb.log) — every one of its stages
+// has custom failure handling (the `[buildZ80C] FAILED on TU` context line +
+// failedTU/compiledOK fields, and sdld's raw-exitCode return) that doesn't fit the
+// generic cb.stage(throw-on-fail) shape, so they stay inline. Same partial-fit call
+// the snes-c migration made for its SDK-runtime sites.
+import { CBuild } from "../common/c-build.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -362,7 +368,7 @@ export function ihxToBin(ihx, size, fill = 0xFF) {
  */
 export async function buildZ80C(args) {
   const sources = args.sources ?? { "main.c": args.source };
-  let log = "";
+  const cb = new CBuild();
   /** @type {Record<string, string>} */
   const objects = {};
   // SM83 (Game Boy) uses sdasgb instead of sdasz80 — different instruction set.
@@ -378,10 +384,10 @@ export async function buildZ80C(args) {
       const asmRun = isSm83 ? runSdasgb : runSdasz80;
       const asmLabel = isSm83 ? "sdasgb" : "sdasz80";
       const r = await asmRun({ source: src });
-      log += `--- ${asmLabel} (${name}) ---\n` + r.log + "\n";
+      cb.log += `--- ${asmLabel} (${name}) ---\n` + r.log + "\n";
       if (r.exitCode !== 0 || !r.rel) {
-        log += `\n[buildZ80C] FAILED on TU '${name}' (${asmLabel}). Successfully compiled before this: ${compiledOK.length === 0 ? "(none)" : compiledOK.join(", ")}\n`;
-        return { binary: null, log, exitCode: r.exitCode || 1, stage: asmLabel, failedTU: name, compiledOK: [...compiledOK] };
+        cb.log += `\n[buildZ80C] FAILED on TU '${name}' (${asmLabel}). Successfully compiled before this: ${compiledOK.length === 0 ? "(none)" : compiledOK.join(", ")}\n`;
+        return { binary: null, log: cb.log, exitCode: r.exitCode || 1, stage: asmLabel, failedTU: name, compiledOK: [...compiledOK] };
       }
       compiledOK.push(name);
       objects[name.replace(/\.(s|asm)$/i, ".rel")] = r.rel;
@@ -392,10 +398,10 @@ export async function buildZ80C(args) {
         port: args.port,
         headers: args.headers,
       });
-      log += `--- sdcc (${name}) ---\n` + r.log + "\n";
+      cb.log += `--- sdcc (${name}) ---\n` + r.log + "\n";
       if (r.exitCode !== 0 || !r.rel) {
-        log += `\n[buildZ80C] FAILED on TU '${name}' (sdcc). Successfully compiled before this: ${compiledOK.length === 0 ? "(none)" : compiledOK.join(", ")}\n`;
-        return { binary: null, log, exitCode: r.exitCode || 1, stage: "sdcc", failedTU: name, compiledOK: [...compiledOK] };
+        cb.log += `\n[buildZ80C] FAILED on TU '${name}' (sdcc). Successfully compiled before this: ${compiledOK.length === 0 ? "(none)" : compiledOK.join(", ")}\n`;
+        return { binary: null, log: cb.log, exitCode: r.exitCode || 1, stage: "sdcc", failedTU: name, compiledOK: [...compiledOK] };
       }
       compiledOK.push(name);
       objects[name.replace(/\.(c|h)$/i, ".rel")] = r.rel;
@@ -421,16 +427,20 @@ export async function buildZ80C(args) {
   let crt0Rel = args.crt0;
   if (crt0Rel && !/^XL[2-4]\b/.test(crt0Rel.trim())) {
     // Looks like .s source — assemble it via the same path we use for
-    // user .s sources.
+    // user .s sources. (Keeps its custom FAILED-context line, so inline.)
     const crt0Asm = await (isSm83 ? runSdasgb : runSdasz80)({ source: crt0Rel });
-    log += `--- ${isSm83 ? "sdasgb" : "sdasz80"} (crt0) ---\n` + crt0Asm.log + "\n";
+    cb.log += `--- ${isSm83 ? "sdasgb" : "sdasz80"} (crt0) ---\n` + crt0Asm.log + "\n";
     if (crt0Asm.exitCode !== 0 || !crt0Asm.rel) {
-      log += `\n[buildZ80C] FAILED to assemble crt0 source. Successfully compiled before this: ${compiledOK.length === 0 ? "(none)" : compiledOK.join(", ")}\n`;
-      return { binary: null, log, exitCode: crt0Asm.exitCode || 1, stage: "sdasgb-crt0" };
+      cb.log += `\n[buildZ80C] FAILED to assemble crt0 source. Successfully compiled before this: ${compiledOK.length === 0 ? "(none)" : compiledOK.join(", ")}\n`;
+      return { binary: null, log: cb.log, exitCode: crt0Asm.exitCode || 1, stage: "sdasgb-crt0" };
     }
     crt0Rel = crt0Asm.rel;
   }
 
+  // sdld is a clean stage (no per-TU context) → cb.stage. NOTE: the failure
+  // shape here had NO `exitCode || 1` fallback (raw link.exitCode); CBuild uses
+  // `exitCode || 1`. link.exitCode is non-zero on a real link failure, so this
+  // is equivalent in practice — but to stay byte-identical, handle it inline.
   const link = await runSdld({
     objects,
     port: args.port,
@@ -439,9 +449,9 @@ export async function buildZ80C(args) {
     dataLoc: args.dataLoc,
     crt0: crt0Rel,
   });
-  log += "--- sdld ---\n" + link.log;
+  cb.log += "--- sdld ---\n" + link.log;
   if (link.exitCode !== 0 || !link.ihx) {
-    return { binary: null, log, exitCode: link.exitCode, stage: "sdld" };
+    return { binary: null, log: cb.log, exitCode: link.exitCode, stage: "sdld" };
   }
   // `romBase` (e.g. MSX $4000) means the cartridge maps at that address: the
   // ihx writes records at absolute $4000+, so size the buffer to cover them,
@@ -452,7 +462,7 @@ export async function buildZ80C(args) {
     const span = args.romBase + (args.romSize || 0);
     const full = ihxToBin(link.ihx, span);
     const end = args.romSize ? args.romBase + args.romSize : full.length;
-    return { binary: full.slice(args.romBase, end), log, exitCode: 0, stage: "done", map: link.map ?? null };
+    return { binary: full.slice(args.romBase, end), log: cb.log, exitCode: 0, stage: "done", map: link.map ?? null };
   }
   // If romSize is null/0, size the buffer to the highest address the ihx
   // actually wrote (no padding to a ROM size). Used for tape targets like
@@ -465,7 +475,7 @@ export async function buildZ80C(args) {
   if (!args.romSize && args.codeLoc) {
     trimmed = binary.slice(args.codeLoc);
   }
-  return { binary: trimmed, log, exitCode: 0, stage: "done", map: link.map ?? null };
+  return { binary: trimmed, log: cb.log, exitCode: 0, stage: "done", map: link.map ?? null };
 }
 
 /**
