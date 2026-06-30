@@ -19,7 +19,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { mkdtempSync, readdirSync, statSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readdirSync, statSync, readFileSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { loadLibretroCore } from "./coreLoader.js";
 import { newCallbackState, registerCallbacks } from "./callbacks.js";
@@ -324,6 +324,10 @@ export class LibretroHost {
     // marks them; the single-threaded GL cores keep the main-thread GL path below.
     this._proxied = !!opts.proxied;
     this.state.proxied = this._proxied;
+    // NODERAWFS cores (flycast): the WASM FS is Node's real fs, so the core fopens the
+    // disc image straight off disk — loadMedia must pass the REAL path and NOT slurp
+    // the (up to ~1GB) file into the WASM heap. See loadMedia.
+    this._noderawfs = !!opts.noderawfs;
 
     let glCanvas = null;
     if (opts.hwRender && !this._proxied) {
@@ -347,6 +351,20 @@ export class LibretroHost {
 
     const mod = await loadLibretroCore({ jsPath, wasmPath, glCanvas });
     this.mod = mod;
+
+    // AUTO-DETECT NODERAWFS regardless of the caller's opt. A NODERAWFS build replaces
+    // the in-RAM MEMFS with Node's real fs, so `FS.writeFile("/rom.elf", …)` would target
+    // the REAL root path (EACCES → WASM abort). loadMedia must know this even when a
+    // caller (a test, runSource) didn't pass the flag — and the build STILL registers
+    // FS.filesystems, so that's not a tell. The reliable probe: write to a real temp path
+    // via FS and check whether it actually lands on the host disk.
+    if (!this._noderawfs && mod.FS) {
+      try {
+        const probe = path.join(os.tmpdir(), `.romdev-noderawfs-probe-${process.pid}`);
+        mod.FS.writeFile(probe, "");
+        if (existsSync(probe)) { this._noderawfs = true; try { unlinkSync(probe); } catch {} }
+      } catch { /* MEMFS: the temp path isn't real → not NODERAWFS, leave as-is */ }
+    }
 
     if (this._proxied) {
       // Spawn the app thread, then build the whole GL stack on it (native-gles + webgl-node +
@@ -514,16 +532,35 @@ export class LibretroHost {
       if (!args.virtualName) mediaPath = "<memory" + defaultExt + ">";
     } else if (args.path) {
       mediaPath = args.path;
-      data = await readFile(mediaPath);
       ext = path.extname(mediaPath);
+      // NODERAWFS cores (flycast) fopen the disc straight off Node's real fs — DON'T
+      // read the (up-to-~1GB) image into a JS buffer; libchdr seeks the sectors it
+      // needs on demand. `data` stays null; the real path is passed below. This ONLY
+      // applies to a real disk PATH — an in-memory `bytes` load (a freshly-built ELF in
+      // the tests/runSource) has no file to fopen, so it still mirrors into the FS below.
+      if (!this._noderawfs) data = await readFile(mediaPath);
     } else {
       throw new Error("loadMedia requires either `path` or `bytes`");
     }
+    // NODERAWFS: the WASM FS IS Node's real fs, so a `mod.FS.writeFile("/rom.elf", …)`
+    // would try to write the REAL root path `/rom.elf` (EACCES → WASM abort). For an
+    // in-memory `bytes` load on a NODERAWFS core (a freshly-built ELF in the tests /
+    // runSource), spill the bytes to a REAL temp file and load THAT path — the core
+    // fopens it off disk like any other media.
+    if (this._noderawfs && data != null) {
+      const tmpFile = path.join(mkdtempSync(path.join(os.tmpdir(), "romdev-dc-")), "rom" + (ext || ".bin"));
+      writeFileSync(tmpFile, data);
+      this._noderawfsTmp = tmpFile; // remembered so unloadMedia can clean it up
+      mediaPath = tmpFile;
+      data = null; // now streamed from the temp path, not the heap
+    }
+    // Stream-from-disk is valid for a NODERAWFS core once data is null (a real path OR
+    // the temp file we just wrote). A non-NODERAWFS core always mirrors into the FS.
+    const streamFromDisk = this._noderawfs && data == null;
     const vfsPath = "/rom" + ext;
-    // For proxied cores the core fopen's on the app thread, so the ROM goes to the app-thread
-    // MEMFS below (romdev_app_fs_write) — writing it to the main-thread FS too is wasted work
-    // (and for a 60MB ISO, a needless copy). Non-proxied cores read main's FS directly.
-    if (mod.FS && !this._proxied) {
+    // Mirror the bytes into the (in-RAM) MEMFS for normal cores. NODERAWFS skips this —
+    // it streams from the real path (mediaPath) instead.
+    if (mod.FS && !this._proxied && !streamFromDisk) {
       try {
         mod.FS.writeFile(vfsPath, data);
       } catch (e) {
@@ -531,12 +568,18 @@ export class LibretroHost {
       }
     }
 
-    // Allocate ROM data into the WASM heap (the core may keep this pointer).
-    const dataPtr = mod._malloc(data.length);
-    mod.HEAPU8.set(data, dataPtr);
+    // ROM data → WASM heap (the core may keep this pointer). When streaming off disk
+    // there's no buffer — dataPtr stays 0 and dataLen 0; the core reads from the path.
+    let dataPtr = 0;
+    const dataLen = streamFromDisk ? 0 : data.length;
+    if (!streamFromDisk) {
+      dataPtr = mod._malloc(data.length);
+      mod.HEAPU8.set(data, dataPtr);
+    }
 
-    // Allocate path string.
-    const pathStr = mod.FS ? vfsPath : mediaPath;
+    // Path string. Streaming → the REAL host path (the core fopens it). Otherwise the
+    // in-FS vfs path (or the real path if the core has no FS).
+    const pathStr = streamFromDisk ? mediaPath : (mod.FS ? vfsPath : mediaPath);
     const pathBytes = Buffer.from(pathStr + "\0", "utf-8");
     const pathPtr = mod._malloc(pathBytes.length);
     mod.HEAPU8.set(pathBytes, pathPtr);
@@ -546,14 +589,14 @@ export class LibretroHost {
     // thread, so write the ROM into the app thread's MEMFS too (the bytes are already in shared
     // WASM memory at dataPtr).
     if (this._proxied) {
-      mod._romdev_app_fs_write(pathPtr, dataPtr, data.length);
+      mod._romdev_app_fs_write(pathPtr, dataPtr, dataLen);
     }
 
     // retro_game_info struct (16 bytes on wasm32).
     const infoPtr = mod._malloc(16);
     mod.setValue(infoPtr + 0, pathPtr, "i32");
-    mod.setValue(infoPtr + 4, dataPtr, "i32");
-    mod.setValue(infoPtr + 8, data.length, "i32");
+    mod.setValue(infoPtr + 4, dataPtr, "i32");      // 0 for NODERAWFS (core reads the path)
+    mod.setValue(infoPtr + 8, dataLen, "i32");      // 0 for NODERAWFS
     mod.setValue(infoPtr + 12, 0, "i32"); // meta = null
 
     // Proxied cores: run retro_load_game on the app thread ASYNCHRONOUSLY (it creates the GL
@@ -600,7 +643,7 @@ export class LibretroHost {
       // rather than leaving the agent with "failed".
       throw new Error(
         `The '${platform}' core REFUSED this ${mediaKind || "media"} ` +
-        `(${data.length} bytes${ext ? `, ${ext}` : ""}, path ${mediaPath}). ` +
+        `(${data ? data.length + " bytes" : "streamed from disk"}${ext ? `, ${ext}` : ""}, path ${mediaPath}). ` +
         `retro_load_game returned false — the bytes reached the core but it would not accept them. ` +
         `Common causes: (1) wrong platform for this file (a GB ROM loaded as 'nes', etc.) — ` +
         `confirm the platform matches the file; (2) a corrupt or TRUNCATED image — re-check the byte length; ` +
@@ -621,8 +664,10 @@ export class LibretroHost {
     // it does NOT clear work RAM on most cores, so boot-seeded state persists.
     // Stash the raw bytes (a copy, so a later free of the caller's buffer can't
     // corrupt it) + the load descriptor; hardReset() replays loadMedia with it.
+    // NODERAWFS streamed from disk — there's no buffer to stash; replay from the path.
     this._loadArgs = {
-      bytes: data instanceof Uint8Array ? data.slice() : new Uint8Array(data),
+      ...(data ? { bytes: data instanceof Uint8Array ? data.slice() : new Uint8Array(data) }
+               : { path: mediaPath }),
       platform,
       mediaKind,
       virtualName: args.virtualName,
@@ -660,6 +705,13 @@ export class LibretroHost {
     this.status.displayAspect = reportedAspect > 0
       ? reportedAspect
       : this.status.fbWidth / this.status.fbHeight;
+    // timing.fps is at offset +24 (double) — the core's NATIVE refresh rate. Most
+    // are ~60, but some games/cores run 50 (PAL) or ~30 (e.g. Sonic Adventure on
+    // flycast). The playtest window paces its tick to THIS, not a hardcoded 60, so a
+    // 30fps title isn't double-ticked (which wasted half the budget + glitched on the
+    // heavy interpreter-only DC core). 0/garbage → fall back to 60.
+    const reportedFps = mod.getValue(avInfoPtr + 24, "double");
+    this.status.coreFps = (reportedFps >= 1 && reportedFps <= 120) ? reportedFps : 60;
     // timing.sample_rate is at offset +32 (double).
     this.status.audioSampleRate = mod.getValue(avInfoPtr + 32, "double");
     // max_width/max_height (+8/+12) bound the FBO for HW-render cores (the core may
@@ -1785,6 +1837,27 @@ export class LibretroHost {
     }
   }
 
+  /** True when the GameTank core exposes the ACP audio-coprocessor state
+   *  (getAudioState chip:'acp'). */
+  acpStateSupported() {
+    return !!(this.mod && typeof this.mod._romdev_acp_get === "function");
+  }
+
+  /** Read the GameTank ACP state as a Uint32Array(10): [0]dacReg [1]irqRate
+   *  [2]irqCounter [3]running [4]resetting [5]muted [6]volume [7]audioPC
+   *  [8]samplesPerFrame [9]clkMult. null if the core doesn't expose it. */
+  getAcpState() {
+    const mod = this.mod;
+    if (!mod || typeof mod._romdev_acp_get !== "function") return null;
+    const ptr = mod._malloc(10 * 4);
+    try {
+      mod._romdev_acp_get(ptr);
+      return new Uint32Array(mod.HEAPU8.buffer, ptr, 10).slice();
+    } finally {
+      mod._free(ptr);
+    }
+  }
+
   /** Read the PS1 SPU's 0x400-word register block as a Uint16Array(1024). null if
    *  the core doesn't expose it. */
   getSpuRegs() {
@@ -2381,7 +2454,7 @@ export class LibretroHost {
         // $FF0000-$FFFFFF → system_ram (& 0xFFFF). Sentinel 0 (vector area).
         // 7.67MHz / ~10 cyc/instr / 60 ≈ 12.8k; use 50k (tight loops are denser).
         return { spReg: 18, pcReg: 16, retBytes: 4, retBigEndian: true, defaultSentinel: 0, ramMask: 0xFFFF, instrPerFrame: 50000 };
-      case "nes": case "atari2600": case "atari7800": case "lynx": case "c64": case "pce":
+      case "nes": case "atari2600": case "atari7800": case "lynx": case "c64": case "pce": case "gametank":
         // 6502/65C02/HuC6280/6510: A=0,X=1,Y=2,P=3,SP=4,PC=16. RTS pops 2 bytes
         // (PCL,PCH) from the $0100 page. system_ram is the low RAM; the stack page
         // $0100-$01FF maps to system_ram offset 0x100-0x1FF on most of these.

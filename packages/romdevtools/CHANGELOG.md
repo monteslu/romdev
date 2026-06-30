@@ -4,6 +4,96 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.84.0 — 2026-06-30
+
+**The 3D GL cores are now PLAYABLE in the SDL playtest window — N64 + PS1 at full speed.**
+Until now the hardware-rendered cores (n64/ps1/dreamcast, all `hwRender:true`) rendered
+headlessly but couldn't be driven interactively. Verified end-to-end: **Mario Kart 64
+(N64)** and **Crash Bandicoot (PS1)** play in the window at full speed with sound and a
+standard controller. Five fixes, all in `src/playtest/playtest.js` + `src/host/`:
+- **Software-blit window for hwRender cores.** An `accelerated:true` SDL window makes a GLX
+  context that collides with native-gles's EGL context → `X_GLXMakeCurrent BadAccess` server
+  crash. hwRender cores now open `accelerated:false` (they only present CPU readback pixels).
+- **RGBA8888 in the window's pixel converter** — the hwRender readback format was unhandled →
+  black window. Added (with the alpha=255 force the GL FBO needs).
+- **Audio-paced stepping, wall-clock budgeted.** Step extra frames per tick to keep SDL's
+  buffer full, but cap the burst by WALL-CLOCK (≤1.5 ticks), not a frame count. A frame-count
+  cap froze the event loop on slow cores (8 frames × 60ms = 480ms) → stutter death-spiral;
+  the time budget keeps the window responsive and the audio steady. (Fixes the N64 choppy
+  audio too — parallel-n64 emits ~91 frames of audio per real second, not 60.)
+- **N64 analog stick + full pad map.** `inputStateCb` handles `RETRO_DEVICE_ANALOG` (synthesize
+  ±32767 from the d-pad); N64-specific pad map (Z = a free face button, C-buttons = right
+  stick — the analog triggers idle half-pressed and aren't used by N64).
+- **No per-frame serialize on hwRender.** The rewind buffer AND the auto-checkpoint both call
+  `serializeState()` — fine for 8/16-bit (KB) but brutal on a 16MB N64/DC state (~18ms/call).
+  Skipped entirely when `host.hwRender`.
+
+**Dreamcast: boots commercial GD-ROM games, but EXPERIMENTAL / not yet playable.** flycast now
+loads + renders real discs (Sonic Adventure, Crazy Taxi) — a first — via two fixes: the
+**GLES (WebGL2) renderer** (`-DUSE_GLES=ON`; the desktop-GL path called `glClearDepth` which
+WebGL lacks → a frame-58 crash), and **NODERAWFS disc streaming** (`-s NODERAWFS=1` + a host
+`noderawfs` path) so libchdr seeks the disc off Node's real fs instead of loading the whole
+CHD into the WASM heap (an 872MB Sonic CHD OOM'd a 1GB heap). BUT on the interpreter core DC
+runs at ~5 fps — **unplayable.** It ships on the correct interpreter; the WASM SH-4 JIT (78fps,
+integrated behind `ROMDEV_FLYCAST_JIT=1`) has native-emit bugs that hang Sonic's boot and is a
+documented next step (internal). DC is labeled experimental, not a playable platform.
+
+## 0.83.0 — 2026-06-30
+
+**GameTank examples: 5 genre games reworked into shippable, hardware-tested shape.**
+The GameTank example set (`examples/gametank/templates/`) went from thin scaffolds
+to five complete, play-tested games (verified on real RetroDeck hardware): `shmup`,
+`platformer`, `puzzle`, `sports`, `racing`. Along the way several real GameTank
+blitter/SDK footguns were isolated and are now documented in the shared headers so
+future games dodge them:
+- **A box of width OR height exactly 128 is silently DROPPED** by the blitter (a
+  full-screen-dimension fill never draws). Clamp to 127. (Hit as a "vanishing
+  ground" / "no road" bug.) Documented in `gt_draw.h`.
+- **Box top-edge scanlines flicker between the two double-buffer pages** — only the
+  border-clear path paints the screen's edge rows cleanly. Frames that draw near the
+  top finish with `queue_clear_border(topColor)` (drawn LAST; HUD text that must sit
+  in rows 0-6 goes AFTER it). Documented in `gt_draw.h`.
+- **The SDK `rnd()` corrupts game state on the single-bank build** — use the inline
+  `rnd8()` xorshift in `gt_draw.h` instead. (Broke enemy spawning until found.)
+- **GRAM sprite blits are the per-frame cost** — too many overrun the vblank window
+  and the draw queue drops rects (platforms flicker/vanish). Keep sprites few (the
+  platformer blits only the hero; coins are cheap rects).
+- New shared helpers: `gt_hud.h` gained a 3×5 A–Z text font (`hud_text`); `gt_draw.h`
+  exposes `rnd8()`. `gt_sound.h` SFX wired into sports (wall/paddle/score) and racing
+  (crash). `puzzle` is now a faithful Columns-style 3-jewel matcher (CHROMA WELL):
+  3-tile falling column, A/B color-cycle, horizontal/vertical/diagonal matching with
+  gravity chains. Platformer gained a 3-frame walk cycle, signed/clamped jump physics
+  (no more unsigned-wrap fall-death), swept platform-landing (no tunneling), and a
+  coin pickup chime. `examples/README.md` gained the GameTank row.
+
+## 0.82.0 — 2026-06-29
+
+**New platform: GameTank — the 18th system, a full Tier-1.** Clyde Shaffer's
+open-hardware [GameTank](https://gametank.zone/) (a W65C02S console: 128×128
+hardware-blitter framebuffer + a second 65C02 audio coprocessor) is now a
+first-class romdev platform, held to the SAME Tier-1 contract as the 14 classic
+2D systems — not the partial 3D-console tier.
+- **Build** via cc65 (`--cpu 65c02`, `-t none`) + a bundled single-bank 32 KB
+  preset (linker cfg + crt0 + vectors + `gametank.h`). Output is a flat `.gtr`
+  (EEPROM32K, size-keyed mapper). The cc65 dispatch gained a per-platform CPU
+  override (the `-t none` path needs an explicit `--cpu`) + preset-bundled
+  headers; both reusable by future cc65 platforms.
+- **Run + render** through `monteslu/gametank-libretro` (built to WASM).
+- **Full debug surface** — the core is patched with the shared romdev_debug
+  hooks: `cpuState` (live 65C02 regs), write/read **watchpoints**, **pc-break**,
+  **watchdog**, **coverage**, `setReg`/`getReg`. Same machinery every other
+  instrumented core links.
+- **audioDebug** (`chip:'acp'`) — the ACP audio coprocessor's state (DAC output,
+  IRQ/sample rate, run/mute, the audio-CPU PC).
+- **cart** extract/wrap — split a `.gtr` into body + the `$FFFA` vector table
+  (size-keyed mapper detect), and re-wrap for the extract→patch→rebuild cycle.
+- **disasm/decompile** — the existing 6502 Rizin/Ghidra path covers it.
+- N/A by hardware (like Dreamcast): `inspectSprites` (blitter, no OAM),
+  `inspectBackground` (framebuffer, no tilemap). No genre scaffolds yet.
+
+New packages: `romdev-core-gametank`. The capability conformance test holds
+GameTank to the full Tier-1 contract (13/13).
+
 ## 0.81.0 — 2026-06-29
 
 **Shared toolchain layers.** The same de-duplication pass the debug ABI got, applied

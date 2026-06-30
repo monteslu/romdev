@@ -40,12 +40,23 @@ export async function resolveLinkerConfig(platform, arg) {
     );
   }
   const supportSources = {};
+  // Bundled headers a preset makes available to the C compile (e.g. GameTank's
+  // `gametank.h` register defs) — keyed by their REAL name so `#include "gametank.h"`
+  // resolves, NOT renamed like the `.s` support sources. A bundled header is named
+  // `<name>.h` (no `<preset>.` prefix needed); the `.s`/`.asm` files follow the
+  // support-source convention.
+  /** @type {Record<string,string>} */
+  const headers = {};
   try {
     const entries = await readdir(presetDir);
     const prefix = `${preset}.`;
     for (const f of entries) {
-      if (!f.startsWith(prefix) || f === `${preset}.cfg`) continue;
       const ext = path.extname(f).toLowerCase();
+      if (ext === ".h") {
+        headers[f] = await readFile(path.join(presetDir, f), "utf-8");
+        continue;
+      }
+      if (!f.startsWith(prefix) || f === `${preset}.cfg`) continue;
       if (ext === ".s" || ext === ".asm") {
         const contents = await readFile(path.join(presetDir, f), "utf-8");
         const suffix = f.slice(prefix.length);
@@ -55,5 +66,5 @@ export async function resolveLinkerConfig(platform, arg) {
   } catch {
     // No support files.
   }
-  return { cfg, supportSources };
+  return { cfg, supportSources, headers };
 }

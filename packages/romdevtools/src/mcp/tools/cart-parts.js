@@ -296,6 +296,44 @@ function extractAtari7800(data) {
   };
 }
 
+// GameTank .gtr — a flat, headerless cart whose mapper is keyed by SIZE
+// (8 KB EEPROM8K / 32 KB EEPROM32K / 2 MB FLASH2M). For the single-bank 32 KB
+// format the 6502 vector table (NMI/RESET/IRQ) is the last 6 bytes ($FFFA), like
+// the 7800. Split into body + vectors (32 KB) or just rom.bin (other sizes), and
+// decode the vectors. No header to strip.
+function extractGameTank(data) {
+  const n = data.length;
+  const mapper = n === 0x2000 ? "EEPROM8K"
+    : n === 0x8000 ? "EEPROM32K"
+    : n === 0x200000 ? "FLASH2M"
+    : "UNKNOWN";
+  const parts = {};
+  let vectors = null;
+  // The 32 KB single-bank format maps at $8000-$FFFF, so the CPU vector table is
+  // the last 6 bytes. (FLASH2M banks the cart — the live vectors are in bank $FF,
+  // also the last 6 bytes of the 2 MB image; EEPROM8K mirrors up into $FFFA too.)
+  if (n >= 6) {
+    parts["body.bin"] = data.slice(0, n - 6);
+    parts["vectors.bin"] = data.slice(n - 6);
+    const off = n - 6;
+    const w = (lo) => "$" + (((data[off + lo + 1] << 8) | data[off + lo]) & 0xFFFF)
+      .toString(16).toUpperCase().padStart(4, "0");
+    vectors = { nmi: w(0), reset: w(2), irq: w(4) };
+  } else {
+    parts["rom.bin"] = data.slice(0);
+  }
+  return {
+    parts,
+    manifest: {
+      platform: "gametank",
+      bytes: n,
+      mapper,                          // SIZE is the mapper — keep the byte count exact on re-wrap
+      bodyBytes: n >= 6 ? n - 6 : n,
+      vectors,
+    },
+  };
+}
+
 function extractGb(data, platform) {
   return {
     parts: {
@@ -348,6 +386,8 @@ export async function extractCartCore({ path: romPath, platform, outputDir, inli
     case "atari7800":
     case "a7800": result = extractAtari7800(data); break;
     case "c64":   result = extractC64(data); break;
+    case "gametank":
+    case "gtr":   result = extractGameTank(data); break;
     default:
       throw new Error(`extractCart: platform '${resolved}' not supported`);
   }
@@ -619,6 +659,8 @@ export async function wrapRomFromPartsCore(args) {
     case "atari7800":
     case "a7800": return wrapAtari7800(args);
     case "c64":   return wrapC64(args);
+    case "gametank":
+    case "gtr":   return wrapGameTank(args);
     default:
       throw new Error(`wrapRomFromParts: platform '${platform}' not supported`);
   }
@@ -644,6 +686,40 @@ function wrapC64({ loadAddress, bodyPath, romPath }) {
         .incbin "${bodyPath ?? "body.bin"}"
 `;
   return { wrapperSource, linkerConfig: null };
+}
+
+/**
+ * Wrap GameTank parts back into a flat .gtr. body.bin + vectors.bin (6 bytes at
+ * the end) → a size-keyed image (default 32 KB EEPROM32K). The mapper IS the
+ * size, so the wrapper PADS to exactly romSize (default $8000) with the vectors
+ * forced to the last 6 bytes. Emits a ca65 source that .incbin's the body, pads,
+ * then .incbin's the vectors at $FFFA — assemble+link with the gametank preset,
+ * or just `cat body.bin <pad> vectors.bin` to the exact size.
+ */
+function wrapGameTank({ bodyPath, vectorsPath, romPath, romSize }) {
+  if (romPath) {
+    // already-flat image — just (re)assert the size by including it verbatim.
+    const wrapperSource =
+`; GameTank .gtr wrapper — a prebuilt flat image (size = mapper).
+        .incbin "${romPath}"
+`;
+    return { wrapperSource, linkerConfig: null };
+  }
+  const size = romSize ?? 0x8000;          // default EEPROM32K
+  const body = bodyPath ?? "body.bin";
+  const vecs = vectorsPath ?? "vectors.bin";
+  // ca65: body at the start of the ROM segment, the 6-byte vector table pinned to
+  // $FFFA. The gametank single-bank linker cfg (or a flat cat) places these so the
+  // final image is exactly `size` bytes with the vectors last.
+  const wrapperSource =
+`; GameTank .gtr wrapper (size-keyed mapper; default EEPROM32K = $${size.toString(16).toUpperCase()} bytes).
+; body.bin = code/data ($8000..), vectors.bin = the 6-byte NMI/RESET/IRQ table at $FFFA.
+.segment "STARTUP"
+        .incbin "${body}"
+.segment "VECTORS"
+        .incbin "${vecs}"
+`;
+  return { wrapperSource, linkerConfig: "single-bank", romSize: size };
 }
 
 // ─── MCP registration ─────────────────────────────────────────────

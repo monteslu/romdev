@@ -17,6 +17,23 @@ const CC65_TARGET = {
   atari7800: "atari7800",
   lynx: "lynx",
   pce: "pce",
+  // GameTank has no built-in cc65 target — it links bare via `-t none` + the
+  // bundled single-bank preset cfg/crt0/vectors (presets/gametank/).
+  gametank: "none",
+};
+
+/** cc65 platforms whose CPU is NOT implied by a built-in target. The built-in
+ *  targets (lynx/pce/…) set the CPU themselves; `-t none` defaults to plain 6502,
+ *  so GameTank (a real W65C02S) MUST be told `--cpu 65c02` for cc65 codegen +
+ *  `--cpu W65C02` for ca65, or it silently emits 6502 code on a 65C02. */
+const CC65_CPU = {
+  gametank: { cc: "65c02", ca: "W65C02" },
+};
+
+/** Exact ROM sizes for cc65 platforms whose mapper is size-keyed (no header).
+ *  GameTank detects EEPROM32K by a flat 32 KB image — pad to exactly 32768. */
+const CC65_ROM_SIZE = {
+  gametank: 32768,
 };
 
 /**
@@ -81,6 +98,10 @@ const LANGUAGE_TOOLCHAIN = {
     c:   { toolchain: "cc65", available: true, note: "C for PC Engine via cc65's huc6280 target — crt0 + pce.lib (VDC/VCE/PSG/joypad helpers) auto-linked. #include <pce.h>." },
     asm: { toolchain: "cc65", available: true },
   },
+  gametank: {
+    c:   { toolchain: "cc65", available: true, note: "C for GameTank (Clyde Shaffer's open W65C02S console) via cc65 `--cpu 65c02` + a bundled single-bank 32KB preset (crt0 + linker cfg + vectors), pass linkerConfig:'single-bank'. #include \"gametank.h\" for the blitter/DMA/banking/gamepad registers ($4000-$4007 blitter, $2007 dma_flags, $2005 bank_reg, $2008/9 gamepads). Bare path — color-fill the 128x128 framebuffer via the blitter; the full SDK gfx/audio/text runtime + 2MB multi-bank flash pipeline is not bundled (Tier B, deferred). Output is a flat 32KB .gtr (EEPROM32K, size-keyed mapper)." },
+    asm: { toolchain: "cc65", available: true },
+  },
   msx: {
     c:   { toolchain: "sdcc", available: true, note: "C for MSX via SDCC's z80 port. Cartridge ROM with the 'AB' header + INIT pointer at $4000; boots on C-BIOS (open MSX BIOS). MSX2 by default (runs MSX1 carts too)." },
     asm: { toolchain: "sdcc", available: true },
@@ -114,6 +135,7 @@ const PLATFORM_DEFAULT_LANGUAGE = {
   c64:        "c",
   atari7800:  "c",
   lynx:       "c",
+  gametank:   "c",
   gb:         "c",
   gbc:        "c",
   snes:       "c",
@@ -425,24 +447,56 @@ export async function buildForPlatform(args) {
     // the build pipeline does NOT auto-select presets based on source
     // contents — every byte that compiles must be visible to the caller.
     const { resolveLinkerConfig } = await import("./cc65/preset-resolver.js");
-    const { cfg, supportSources } = await resolveLinkerConfig(args.platform, args.linkerConfig);
+    const { cfg, supportSources, headers: presetHeaders } = await resolveLinkerConfig(args.platform, args.linkerConfig);
 
     // Splice in any preset support sources (crt0, etc.). User sources win
     // if there's a name collision, but the preset uses `_preset_*` so it
     // wouldn't normally collide.
     sources = { ...supportSources, ...sources };
 
+    // A preset can bundle headers (e.g. GameTank's gametank.h) so `#include
+    // "gametank.h"` just works; caller-supplied headers win on collision.
+    const mergedHeaders = { ...(presetHeaders ?? {}), ...(args.includes ?? {}) };
+
+    // CPU override for `-t none` platforms whose CPU isn't implied by the target
+    // (GameTank → cc65 `--cpu 65c02`, ca65 `--cpu W65C02`).
+    const cpu = CC65_CPU[args.platform];
+    const ccCpuOpts = cpu ? ["--cpu", cpu.cc] : [];
+    const caCpuOpts = cpu ? ["--cpu", cpu.ca] : [];
+
     const builder = anyC ? buildC : buildAsm;
     const r = await builder({
       sources,
       target: cc65Target,
-      [anyC ? "headers" : "includes"]: args.includes,
+      [anyC ? "headers" : "includes"]: anyC ? mergedHeaders : args.includes,
+      // ca65 .include files (e.g. an SDK's modules_enabled.inc) — distinct from C
+      // headers; the C path's per-TU ca65 pass needs them, and they weren't being
+      // forwarded. A platform with a multi-file asm-backed SDK (GameTank) needs this.
+      ...(args.asmIncludes ? { asmIncludes: args.asmIncludes } : {}),
       binaryIncludes: args.binaryIncludes,
       linkerConfig: cfg,
+      ccOptions: ccCpuOpts,
+      caOptions: caCpuOpts,
     });
+
+    // Size-keyed mappers (GameTank EEPROM32K): pad the flat image to the exact
+    // ROM size the core size-detects. Under-size or a few bytes over would fall
+    // into the UNKNOWN mapper path.
+    let binary = r.binary;
+    const romSize = CC65_ROM_SIZE[args.platform];
+    if (binary && r.exitCode === 0 && romSize && binary.length !== romSize) {
+      if (binary.length < romSize) {
+        const padded = new Uint8Array(romSize);
+        padded.set(binary);
+        binary = padded;
+      } else {
+        binary = binary.slice(0, romSize);
+      }
+    }
+
     return {
-      ok: r.exitCode === 0 && r.binary !== null,
-      binary: r.binary,
+      ok: r.exitCode === 0 && binary !== null,
+      binary,
       listing: "",
       symbols: "",
       log: r.log,

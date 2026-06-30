@@ -114,9 +114,10 @@ test("contract: renderingContext manifest matches the wired set (all 14)", () =>
 });
 
 test("contract: cpuState manifest matches the main-CPU wired set", () => {
-  // getCPUState main decoders: all except pce + msx.
+  // getCPUState main decoders: all except pce + msx. (gametank: 6502 regsnap via
+  // the romdev_* core patch.)
   const wired = new Set(["nes", "snes", "genesis", "sms", "gg", "gb", "gbc",
-    "atari2600", "atari7800", "c64", "lynx", "gba"]);
+    "atari2600", "atari7800", "c64", "lynx", "gba", "gametank"]);
   for (const p of CONTRACT_PLATFORMS) {
     assert.equal(supports(p, "cpuState"), wired.has(p),
       `cpuState: manifest=${supports(p, "cpuState")} wired=${wired.has(p)} for ${p}`);
@@ -148,7 +149,8 @@ test("contract: audioDebug manifest matches the per-chip wiring", async () => {
   // audioDebug decodes per-chip; a platform supports it iff it has ≥1 audioChip.
   // The wired set (from the chip→platform branches): everything except the
   // Ataris (TIA tone, no decoded chip).
-  const wired = new Set(["snes", "genesis", "sms", "gg", "nes", "gb", "gbc", "gba", "c64", "lynx", "pce", "msx"]);
+  // gametank: the ACP audio coprocessor (chip:'acp') via romdev_acp_get.
+  const wired = new Set(["snes", "genesis", "sms", "gg", "nes", "gb", "gbc", "gba", "c64", "lynx", "pce", "msx", "gametank"]);
   for (const p of CONTRACT_PLATFORMS) {
     assert.equal(supports(p, "audioDebug"), wired.has(p),
       `audioDebug: manifest=${supports(p, "audioDebug")} wired=${wired.has(p)} for ${p}`);
@@ -158,7 +160,7 @@ test("contract: audioDebug manifest matches the per-chip wiring", async () => {
 test("contract: cart manifest matches the extract/wrap case list", async () => {
   // cart extract+wrap is a switch in cart-parts.js. Wired: the 10 cartridge
   // formats with an extract<X>/wrap<X> pair.
-  const wired = new Set(["nes", "snes", "genesis", "gb", "gbc", "sms", "gg", "atari2600", "atari7800", "c64"]);
+  const wired = new Set(["nes", "snes", "genesis", "gb", "gbc", "sms", "gg", "atari2600", "atari7800", "c64", "gametank"]);
   for (const p of CONTRACT_PLATFORMS) {
     assert.equal(supports(p, "cart"), wired.has(p),
       `cart: manifest=${supports(p, "cart")} wired=${wired.has(p)} for ${p}`);

@@ -6,8 +6,10 @@ import {
   RETRO_PIXEL_FORMAT_0RGB1555,
   RETRO_PIXEL_FORMAT_RGB565,
   RETRO_PIXEL_FORMAT_XRGB8888,
+  ROMDEV_PIXEL_FORMAT_RGBA8888,
 } from "../host/retroConstants.js";
 import { log } from "../mcp/log.js";
+import { initResampler, resampleS16Stereo } from "./resampler/index.mjs";
 import path from "node:path";
 import { existsSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
 import { execFile } from "node:child_process";
@@ -203,10 +205,39 @@ const SDL_BUTTON_TO_LIBRETRO_BIT = {
   back: 2,      // SELECT
   guide: 2,
   start: 3,
-  leftShoulder: 10,
-  rightShoulder: 11,
-  leftStick: 14,
-  rightStick: 15,
+  leftShoulder: 10,   // RETRO L
+  rightShoulder: 11,  // RETRO R
+  leftStick: 14,      // RETRO L3
+  rightStick: 15,     // RETRO R3
+  // NOTE: L2/R2 (bits 12/13) are ANALOG triggers in libretro — node-sdl exposes
+  // them as axes (leftTrigger/rightTrigger), not buttons, so they're read from
+  // inst.axes below, not here.
+};
+
+// N64-specific pad map. parallel_n64's RetroPad layout (its digital_cbuttons_map)
+// is NOT the generic NES/SNES one — RETRO B="N64 A", RETRO Y="N64 B", RETRO X/A/L/R
+// are the four C-buttons, RETRO Select="N64 L", RETRO R2="N64 R", RETRO L2="N64 Z".
+// The N64's Z/L/R are DIGITAL buttons (its analog triggers don't exist), so on a
+// modern pad they go on the SHOULDER buttons, NOT the analog triggers (which idle
+// half-pressed and would stick). Layout for a standard X360-style pad:
+//   Xbox A (bottom) = N64 A   (accelerate)
+//   Xbox B (right)  = N64 B   (brake)
+//   Xbox X (left)   = N64 Z   (FIRE ITEM)  ← a free face button, easy to reach
+//   Xbox Y (top)    = N64 B   (alias, so either right/top brakes)
+//   L shoulder      = N64 L
+//   R shoulder      = N64 R   (hop / drift)
+//   right stick     = the four C-buttons (in readControllerInto)
+//   left stick/dpad = N64 analog stick (via the dpad→ANALOG synth in callbacks.js)
+const SDL_BUTTON_TO_LIBRETRO_BIT_N64 = {
+  dpadUp: 4, dpadDown: 5, dpadLeft: 6, dpadRight: 7,  // N64 d-pad (literal)
+  a: 0,               // Xbox A (bottom) → RETRO B  = N64 A   (accelerate)
+  b: 1,               // Xbox B (right)  → RETRO Y  = N64 B   (brake)
+  y: 1,               // Xbox Y (top)    → RETRO Y  = N64 B   (alias)
+  x: 12,              // Xbox X (left)   → RETRO L2 = N64 Z   (FIRE ITEM)
+  start: 3,           // Start
+  leftShoulder: 2,    // L shoulder → RETRO Select = N64 L
+  rightShoulder: 13,  // R shoulder → RETRO R2     = N64 R   (hop/drift)
+  // C-buttons (RETRO X/A/L/R) come from the RIGHT STICK in readControllerInto.
 };
 
 // Analog stick → dpad direction (for games that only read dpad)
@@ -479,12 +510,22 @@ export async function playtest(args) {
   }
 
   // Open the window.
+  //
+  // HW-render cores (n64/ps1/dreamcast) already own a GL context via native-gles
+  // (the EGL pbuffer the core renders its RDP/GPU into; we glReadPixels it to CPU
+  // pixels). If the SDL window ALSO requests an accelerated (GL) renderer, node-sdl
+  // calls glXMakeCurrent on the same X display and the two GL contexts collide →
+  // `X Error BadAccess (GLX X_GLXMakeCurrent)`, crashing the process. The window only
+  // ever presents CPU pixels (window.render(..., "rgba32", rgba)), so it does NOT need
+  // its own GL context — open a SOFTWARE-blit window for HW-render cores to avoid the
+  // context fight. Software cores keep the accelerated path (faster upscale blit).
+  const hwRenderCore = !!host.hwRender;
   const window = sdl.video.createWindow({
     title,
     width: winInitW,
     height: winInitH,
     resizable: true,
-    accelerated: true,
+    accelerated: hwRenderCore ? false : true,
     vsync: false,
   });
   log.debug(`[playtest] window opened: ${winInitW}x${winInitH}, fb=${fbWidth}x${fbHeight}, aspect=${aspectMode}`);
@@ -494,16 +535,38 @@ export async function playtest(args) {
   // Mismatched rates produce choppy/sped-up/cracking playback because the
   // SDL device consumes samples at the wrong rate, alternately starving
   // (clicks) and overflowing.
+  //
+  // EXCEPTION — very-low-rate cores (the GameTank ACP emits ~13983 Hz, 3x lower
+  // than anything else): SDL's device buffer granularity (thousands of samples)
+  // dwarfs a 60 fps core's ~233-sample-per-frame chunks at that rate, so the
+  // device starves between ticks = clicks and pops. (RetroArch avoids this with
+  // a sinc resampler + dynamic rate control to the device rate.) So for low
+  // rates we open the device at 48 kHz and LINEAR-RESAMPLE each chunk up to it,
+  // which makes the per-frame chunks big enough for clean playback.
   let audio = null;
   const coreSampleRate = Math.round(host.status.audioSampleRate ?? 48000);
+  const AUDIO_RESAMPLE_TO = 48000;
+  let needsResample = coreSampleRate > 0 && coreSampleRate < 24000;
+  // Load the WASM+SIMD resampler if this core needs upsampling. If it fails to
+  // load, fall back to opening the device at the native rate (better than no
+  // audio) — needsResample is forced off so we never call a missing resampler.
+  if (needsResample) {
+    const ready = await initResampler();
+    if (!ready) {
+      log.error("[playtest] resampler WASM failed to load — using native rate (audio may click)");
+      needsResample = false;
+    }
+  }
+  const deviceSampleRate = needsResample ? AUDIO_RESAMPLE_TO : coreSampleRate;
   try {
     audio = sdl.audio.openDevice({ type: "playback" }, {
       channels: 2,
-      frequency: coreSampleRate,
+      frequency: deviceSampleRate,
       format: "s16",
     });
     audio.play();
-    log.debug(`[playtest] audio: ${coreSampleRate} Hz, stereo, s16`);
+    log.debug(`[playtest] audio: ${deviceSampleRate} Hz, stereo, s16` +
+      (needsResample ? ` (resampled from core ${coreSampleRate} Hz)` : ""));
   } catch (e) {
     log.error("[playtest] audio init failed (continuing silent):", e.message);
   }
@@ -688,7 +751,15 @@ export async function playtest(args) {
 
   // Tick = one emulated frame + render + audio drain. Driven by setInterval
   // so the Node event loop stays free for MCP requests on the same host.
-  const frameMs = 1000 / 60;
+  // Pace to the CORE's native refresh rate (status.coreFps), not a hardcoded 60: a
+  // 30fps title (Sonic Adventure on flycast) at a 60Hz tick gets double-ticked —
+  // wasting half the budget and, on the heavy interpreter-only DC core (23ms/frame,
+  // no JIT), falling behind every tick → the black-flash/glitch. At its real 30fps
+  // each frame gets a full 33ms tick, which the core can actually hit. Clamped so a
+  // bogus report can't run the window absurdly fast or slow.
+  const coreFps = openHost?.status?.coreFps;
+  const fps = (coreFps >= 20 && coreFps <= 120) ? coreFps : 60;
+  const frameMs = 1000 / fps;
 
   function tick() {
     if (!running || window.destroyed) { stop(); return; }
@@ -704,7 +775,12 @@ export async function playtest(args) {
     // the N-second cadence; serialize off the live host so it captures the human's
     // exact progress. Skipped while paused (nothing changed) and on the very first
     // ticks (let the core settle).
-    if (checkpointPath && tickCount - lastCheckpointTick >= checkpointEverySec * 60 && !h.status.paused) {
+    // Auto-checkpoint serializes the WHOLE machine state — cheap for 8/16-bit (KB,
+    // instant) but BRUTAL for the hwRender 3D cores (DC/N64 savestate ≈16MB, ~18ms
+    // to serialize), which would freeze the window for ~18ms every cadence on an
+    // already-slow core. Skip it entirely for hwRender — same call as the rewind
+    // buffer skip. (Eviction recovery matters less than a playable window here.)
+    if (!h.hwRender && checkpointPath && tickCount - lastCheckpointTick >= checkpointEverySec * 60 && !h.status.paused) {
       lastCheckpointTick = tickCount;
       writeCheckpoint(h, "auto");
     }
@@ -726,6 +802,7 @@ export async function playtest(args) {
     // window leaves it alone. Select+Start on any controller quits.
     let quit = false;
     const isC64 = h.status?.platform === "c64";
+    const isN64 = h.status?.platform === "n64";
     function readControllerInto(port, inst) {
       if (!inst) return;
       const btn = inst.buttons || {};
@@ -733,7 +810,8 @@ export async function playtest(args) {
         quit = true;
         return;
       }
-      for (const [sdlName, bit] of Object.entries(SDL_BUTTON_TO_LIBRETRO_BIT)) {
+      const buttonMap = isN64 ? SDL_BUTTON_TO_LIBRETRO_BIT_N64 : SDL_BUTTON_TO_LIBRETRO_BIT;
+      for (const [sdlName, bit] of Object.entries(buttonMap)) {
         if (btn[sdlName]) port[bitToName(bit)] = true;
       }
       const axes = inst.axes || {};
@@ -743,6 +821,9 @@ export async function playtest(args) {
       else if (lx < -STICK_DEADZONE) port.left = true;
       if (ly > STICK_DEADZONE) port.down = true;
       else if (ly < -STICK_DEADZONE) port.up = true;
+      // NOTE: the analog triggers are NOT used for N64 — its Z/L/R are digital and
+      // map to the SHOULDER buttons (see SDL_BUTTON_TO_LIBRETRO_BIT_N64). (node-sdl's
+      // X360 trigger axes also idle at ~0.5, so reading them as buttons would stick.)
       // C64: the RIGHT stick selects the function keys (F1/F3/F5/F7) — the
       // Batocera/RetroDeck convention so a controller alone reaches the keyboard
       // keys C64 setup screens need. Emitted as virtual buttons the host's C64
@@ -754,6 +835,19 @@ export async function playtest(args) {
         else if (ry > STICK_DEADZONE) port.c64_f7 = true;    // down  → F7
         if (rx < -STICK_DEADZONE) port.c64_f3 = true;        // left  → F3
         else if (rx > STICK_DEADZONE) port.c64_f5 = true;    // right → F5
+      }
+      // N64: the RIGHT stick drives the four C-buttons — the standard emulation
+      // convention so a modern dual-stick pad plays N64 naturally (left stick =
+      // analog stick via the d-pad synthesis in callbacks.js; right stick = C). The
+      // C-buttons land on libretro bits A/X/L/R, which parallel_n64 reads as
+      // C-Down/C-Up/C-Left/C-Right. Z is the left trigger (mapped above).
+      if (isN64) {
+        const rx = axes.rightStickX ?? 0;
+        const ry = axes.rightStickY ?? 0;
+        if (ry < -STICK_DEADZONE) port.x = true;        // up    → C-Up    (RETRO X)
+        else if (ry > STICK_DEADZONE) port.a = true;    // down  → C-Down  (RETRO A)
+        if (rx < -STICK_DEADZONE) port.l = true;        // left  → C-Left  (RETRO L)
+        else if (rx > STICK_DEADZONE) port.r = true;    // right → C-Right (RETRO R)
       }
     }
 
@@ -792,8 +886,14 @@ export async function playtest(args) {
       // either port)?
       const humanPressing = anyButtonHeld(port0) || anyButtonHeld(port1);
       humanInput.note(humanPressing, tickCount);
-      // Capture snapshot before stepping so R can rewind to it later.
-      if (h.status?.loaded) {
+      // Capture snapshot before stepping so R can rewind to it later. SKIP for
+      // hwRender cores (n64/ps1/dreamcast): their savestates are HUGE (N64 ≈16MB
+      // each — 600 frames would be ~9GB of RAM) and serializeState costs ~8ms/frame
+      // there, eating half the 16.6ms budget and starving the audio feed (the choppy
+      // playback). The R-key rewind is a nicety, not worth that on the 3D engines —
+      // pause + savestate still work for those. (Rewind buffer is playtest-only; it's
+      // NOT part of the debug ABI, so dropping it on these cores changes nothing else.)
+      if (h.status?.loaded && !h.hwRender) {
         try {
           const snap = h.serializeState();
           rewindBuffer.push(snap);
@@ -810,9 +910,39 @@ export async function playtest(args) {
         h.setInput({ ports: [port0, port1] });
         humanInputDirty = humanPressing;
       }
+      // AUDIO-PACED stepping, BUDGETED BY WALL-CLOCK. We catch the buffer up by
+      // stepping extra frames per tick to keep SDL's queue topped — but a fast core
+      // (n64 2.4ms/frame) and a SUB-REALTIME core (flycast DC ~60ms/frame) need very
+      // different burst sizes. A fixed MAX_STEPS frame-count cap is the trap: 8 frames
+      // is 19ms on n64 (fine) but 480ms on DC — which BLOCKS the Node event loop for
+      // half a second per tick, so the window can't repaint and audio drains dry →
+      // "breaks down, super choppy" death spiral that never recovers. The fix is to
+      // cap by TIME: keep stepping only while we're under a wall-clock budget (~1.5
+      // ticks). A sub-realtime core then runs steady-slow (audio underruns gracefully,
+      // a constant low pitch) instead of stuttering — and the loop ALWAYS yields the
+      // event loop promptly so the window stays responsive.
       let stepped = 0;
       try {
-        stepped = h.stepFrames(1);
+        if (audio && deviceSampleRate > 0) {
+          const bps = deviceSampleRate * 4; // stereo s16
+          const TARGET_MS = 60;             // keep ~60ms queued — drain sets the speed
+          const BUDGET_MS = frameMs * 1.5;  // wall-clock ceiling for the whole burst
+          const burstStart = performance.now();
+          do {
+            stepped += h.stepFrames(1);
+            // Stop the instant we've spent our wall-clock budget — this is what keeps
+            // a slow core from freezing the loop. A single frame already over budget
+            // still steps once (progress), then we yield.
+            if (performance.now() - burstStart >= BUDGET_MS) break;
+            const qMs = ((audio.queued ?? 0) / bps) * 1000;
+            let ringMs = 0;
+            for (const b of h.state.audioRing) ringMs += (b.length / 2);
+            ringMs = (ringMs / deviceSampleRate) * 1000;
+            if (qMs + ringMs >= TARGET_MS) break;
+          } while (true);
+        } else {
+          stepped = h.stepFrames(1); // no audio device → plain 1 frame/tick
+        }
       } catch (e) {
         // A step error mid-swap (host being torn down/rebuilt) is transient —
         // skip this frame and let the next tick pick up the new host. Don't kill
@@ -879,17 +1009,16 @@ export async function playtest(args) {
     }
 
     if (running && audio && h.state.audioRing.length > 0) {
-      // SDL device tells us how many bytes are still queued (not yet played).
-      // If we get >200ms ahead, the player got a stutter and is now
-      // building latency — drop new samples until the queue drains back
-      // to ~50ms. This keeps audio synced to wall clock without underruns.
-      // Wrap the whole block in try/catch — stop() may have closed the
-      // audio device between the running check and the access below.
+      // Enqueue the real audio the core produced this tick. The AUDIO-PACED stepping
+      // above already steps however many frames are needed to keep ~60ms queued, so
+      // the buffer stays full from REAL samples — no silence padding, no rate-deficit
+      // starvation. SDL's steady drain at the device rate is what sets emulation speed.
+      // We only stop enqueuing if latency runs away (>250ms) — a safety valve, not
+      // the normal path.
       try {
-        const bytesPerSecond = coreSampleRate * 2 /* ch */ * 2 /* s16 */;
-        const queuedBytes = audio.queued ?? 0;
-        const queuedMs = (queuedBytes / bytesPerSecond) * 1000;
-        if (queuedMs < 200) {
+        const bytesPerSecond = deviceSampleRate * 2 /* ch */ * 2 /* s16 */;
+        const queuedMs = ((audio.queued ?? 0) / bytesPerSecond) * 1000;
+        if (queuedMs < 250) {
           let total = 0;
           for (const buf of h.state.audioRing) total += buf.byteLength;
           const merged = Buffer.alloc(total);
@@ -898,14 +1027,15 @@ export async function playtest(args) {
             merged.set(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength), off);
             off += buf.byteLength;
           }
-          audio.enqueue(merged);
+          audio.enqueue(needsResample
+            ? resampleS16Stereo(merged, coreSampleRate, deviceSampleRate)
+            : merged);
         }
       } catch (e) {
         if (!e.message?.includes("closed")) {
           log.error("[playtest] audio enqueue error:", e.message);
         }
       }
-      // Always clear the ring — if we skipped enqueue we drop those samples.
       h.state.audioRing.length = 0;
     }
   }
@@ -992,7 +1122,25 @@ function bitToName(bit) {
 /** Convert libretro framebuffer (any pixel format) to RGBA32. */
 function framebufferToRgba(f) {
   const out = Buffer.alloc(f.width * f.height * 4);
-  if (f.format === RETRO_PIXEL_FORMAT_XRGB8888) {
+  if (f.format === ROMDEV_PIXEL_FORMAT_RGBA8888) {
+    // HW-render readback (n64/ps1/dreamcast via native-gles): pixels are ALREADY
+    // RGBA in row order. Copy straight through but FORCE alpha=255 — the GL render
+    // target leaves alpha=0 (unused channel), which SDL would composite as fully
+    // transparent → a black window. This is the on-screen analogue of the same
+    // alpha fix framebufferToRgba() in framebuffer.js does for screenshots.
+    for (let y = 0; y < f.height; y++) {
+      const src = y * f.pitch;
+      const dst = y * f.width * 4;
+      for (let x = 0; x < f.width; x++) {
+        const s = src + x * 4;
+        const d = dst + x * 4;
+        out[d + 0] = f.pixels[s + 0];
+        out[d + 1] = f.pixels[s + 1];
+        out[d + 2] = f.pixels[s + 2];
+        out[d + 3] = 0xff;
+      }
+    }
+  } else if (f.format === RETRO_PIXEL_FORMAT_XRGB8888) {
     for (let y = 0; y < f.height; y++) {
       const src = y * f.pitch;
       const dst = y * f.width * 4;

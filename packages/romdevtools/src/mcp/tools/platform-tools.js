@@ -42,6 +42,7 @@ import { decodeLynxMikey, decodeLynxPalette } from "../../host/lynx-mikey-state.
 import { getPcePsgState } from "../../host/pce-psg-state.js";
 import { decodePs1Spu } from "../../host/ps1-spu-state.js";
 import { decodeN64Ai } from "../../host/n64-ai-state.js";
+import { decodeGameTankAcp } from "../../host/gametank-acp-state.js";
 import { decodeAica } from "../../host/dc-aica-state.js";
 import { getMsxAyState } from "../../host/msx-ay-state.js";
 import { decodeGbaSprites, decodeGbaPalette } from "../../host/gba-video-state.js";
@@ -448,7 +449,14 @@ export function registerPlatformTools(server, z, sessionKey) {
       if (!regs) throw new Error("getAudioState chip:'aica' — no AICA region (load a Dreamcast program into the rebuilt flycast core).");
       return { platform: "dreamcast", ...decodeAica(regs) };
     }
-    throw new Error(`getAudioState: unknown chip '${chip}'. Use 'nes' (NES 2A03), 'gb' (Game Boy/GBC), 'gba' (GBA), 'dsp' (SNES), 'psg' (Genesis/SMS/GG SN76489), 'ym2612' (Genesis FM), 'sid' (C64), 'mikey' (Lynx), 'pce', 'ay8910' (MSX), 'spu' (PS1), or 'aica' (Dreamcast).`);
+    if (chip === "acp") {
+      // GameTank ACP — a second 65C02 driving a DAC from 4 KB audio RAM (no fixed
+      // synth registers), from the patched core's romdev_acp_get state block.
+      const regs = host.getAcpState?.();
+      if (!regs) throw new Error("getAudioState chip:'acp' — no ACP state (load a GameTank ROM into the patched gametank core).");
+      return { platform: "gametank", ...decodeGameTankAcp(regs) };
+    }
+    throw new Error(`getAudioState: unknown chip '${chip}'. Use 'nes' (NES 2A03), 'gb' (Game Boy/GBC), 'gba' (GBA), 'dsp' (SNES), 'psg' (Genesis/SMS/GG SN76489), 'ym2612' (Genesis FM), 'sid' (C64), 'mikey' (Lynx), 'pce', 'ay8910' (MSX), 'spu' (PS1), 'aica' (Dreamcast), or 'acp' (GameTank).`);
   }
 
   getAudioStateCore = async ({ chip }, callerSessionKey) => jsonContent(readAudioChip(chip, callerSessionKey));

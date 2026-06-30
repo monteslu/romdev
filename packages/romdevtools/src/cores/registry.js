@@ -53,6 +53,7 @@ export const CORES = {
   c64: { platform: "c64", coreName: "vice_x64", pkg: "romdev-core-vice", displayName: "Commodore 64 (VICE x64)" },
   pce: { platform: "pce", coreName: "geargrafx", pkg: "romdev-core-geargrafx", displayName: "PC Engine / TurboGrafx-16 (Geargrafx)", aka: "turbografx,tg16,pcengine" },
   msx: { platform: "msx", coreName: "bluemsx", pkg: "romdev-core-bluemsx", displayName: "MSX / MSX2 (blueMSX)", aka: "msx2" },
+  gametank: { platform: "gametank", coreName: "gametank", pkg: "romdev-core-gametank", displayName: "GameTank (Clyde Shaffer)", aka: "gtr" },
   // 32-bit MIPS tier. These cores HW-render (GL): the host lazy-loads the OPTIONAL
   // webgl-node bridge only when one of these boots (hwRender:true). The other 14 are
   // software-rendered and never touch GL, so a headless user without the GPU module
@@ -69,7 +70,12 @@ export const CORES = {
   // Flycast = full Dreamcast emulator, GLES3/WebGL2 HW-render (PowerVR2 is GPU-first,
   // no software framebuffer path) → driven through the native-gles/webgl-node bridge
   // like the GL N64 build. HLE BIOS (reios) on by default — no firmware to ship.
-  dreamcast: { platform: "dreamcast", coreName: "flycast", pkg: "romdev-core-flycast", displayName: "Sega Dreamcast (Flycast)", aka: "dc", hwRender: true },
+  // noderawfs: the flycast WASM is built with -s NODERAWFS=1, so its filesystem IS
+  // Node's real fs — libchdr fopens/seeks the disc image off DISK on demand instead
+  // of the host loading the whole (up to ~1GB) CHD into the WASM heap (which OOM'd a
+  // 1GB max-heap on big discs like Sonic Adventure). The host passes the REAL path
+  // and skips the malloc+FS.writeFile for these cores. See LibretroHost.loadMedia.
+  dreamcast: { platform: "dreamcast", coreName: "flycast", pkg: "romdev-core-flycast", displayName: "Sega Dreamcast (Flycast)", aka: "dc", hwRender: true, noderawfs: true },
 };
 
 /** Try to get {jsPath,wasmPath} for a core from its binary package. */

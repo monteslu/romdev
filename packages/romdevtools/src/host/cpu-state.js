@@ -533,6 +533,23 @@ export function getCPUState(host, platform, cpu = "main") {
         "(PC-8 in ARM, PC-4 in THUMB). Registers are decimal; cpsr/spsr/execPc are hex.",
     };
   }
+  if (platform === "gametank") {
+    // The patched GameTank core exposes the LIVE W65C02S register file via
+    // romdev_getreg (regId: 0=A 1=X 2=Y 3=P 4=SP 16=PC) — no synthesized region
+    // needed, read it directly. (At a watch/break HIT the frozen snapshot also
+    // comes through romdev_regsnap_get like every other core.)
+    const A = host.getReg(0), X = host.getReg(1), Y = host.getReg(2);
+    const P = host.getReg(3), SP = host.getReg(4), pc = host.getReg(16);
+    return {
+      pc, sp: 0x100 | (SP & 0xFF),
+      registers: { A, X, Y, P, SP },
+      cpu: "65c02",
+      flags: {
+        N: !!(P & 0x80), V: !!(P & 0x40), B: !!(P & 0x10), D: !!(P & 0x08),
+        I: !!(P & 0x04), Z: !!(P & 0x02), C: !!(P & 0x01),
+      },
+    };
+  }
   if (platform === "lynx") {
     // Patched handy exposes a 16-byte 65C02 snapshot via lynx_cpu_regs (see
     // the handy memory-regions patch). Layout: [0] PC lo, [1] PC hi, [2] A,

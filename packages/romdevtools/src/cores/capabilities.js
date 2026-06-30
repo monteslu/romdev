@@ -174,6 +174,30 @@ export const CAPABILITIES = {
       cart: false, disasm: true, decompile: true,
     },
   },
+  gametank: {
+    // Clyde Shaffer's open W65C02S console: a 128x128 framebuffer drawn by a
+    // hardware blitter (no tilemap / no fixed OAM), + a second 65C02 audio
+    // coprocessor. Closest cousin is the Lynx (also 65C02 + blitter). The core
+    // is patched with the romdev_* debug hooks (6502 regsnap + MemoryWrite/Read
+    // watchpoints + the mos6502 dispatch freeze) — so cpuState + write/read
+    // watchpoints + pc-break + watchdog + coverage are LIVE, alongside build/run/
+    // screenshot/disasm/decompile. inspectSprites is N/A (the blitter has no OAM,
+    // like Dreamcast); inspectBackground N/A (framebuffer, not a tilemap).
+    cpuFamily: "6502", decompileQuality: "rough",
+    cpus: { main: "6502", secondary: ["acp-65c02"] }, // ACP = the audio coprocessor (2nd 65C02)
+    // audioDebug(chip:'acp') reports the ACP's STATE (DAC output, IRQ/sample rate,
+    // run/mute, audio-CPU PC) via the core's romdev_acp_get export — it's a second
+    // 65C02 driving a DAC, not a fixed-register synth.
+    audioChips: ["acp"],
+    memoryRegions: [...GENERIC_REGIONS],
+    renderingKind: "framebuffer", introspection: "shallow",
+    ops: {
+      build: true, run: true, screenshot: true,
+      inspectSprites: false, inspectPalette: true, inspectBackground: false,
+      renderingContext: true, cpuState: true, audioDebug: true,
+      cart: true, disasm: true, decompile: true,
+    },
+  },
   pce: {
     cpuFamily: "huc6280", decompileQuality: "medium",
     cpus: { main: "", secondary: [] }, // getCPUState main NOT wired for pce
