@@ -4,6 +4,31 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.81.0 — 2026-06-29
+
+**Shared toolchain layers.** The same de-duplication pass the debug ABI got, applied
+to `src/toolchains/` — three small shared modules under `common/` collapse what every
+wrapper and C-SDK builder re-implemented. Pure de-duplication: every argv, `/work`
+path, output encoding, log header, stage name, and return shape is byte-for-byte
+unchanged — no behavior change.
+- **`common/wasm-tool.js`** — the glue-resolution dance (`import.meta.resolve(pkg)` →
+  local `src/` fallback → throw install hint) that ~15 wrappers each duplicated, plus
+  the `runIsolated` input-file marshalling. `makeGlueResolver` / `resolveGlueFile`
+  (file-glue: asar, wladx, rgbds, dasm, vasm68k, sjasm, tcc816, z80/sdas, da65) +
+  `resolveToolBaseDir` (base-dir: cc65, sdcc).
+- **`common/gcc-toolchain.js`** — `makeGccToolchain(config)`. The arm/m68k/mips/sh GCC
+  wrappers were ~73% identical (cc1→as→ld→objcopy); each is now a ~67-line config object
+  + thin named re-exports (callers keep `runM68kAs` etc). MIPS endian (N64 big / PS1
+  little) handled via per-stage flag functions. ~210 → 67 lines each.
+- **`common/c-build.js`** — `CBuild` stage-runner + `BuildError`. The 5 GCC/tcc C-SDK
+  builders (gba/genesis/mips/sh/snes-c) plus cc65 repeated the
+  `run → log += → if (fail) return {ok:false,…,stage,…crash}` dance ~73×; it's now
+  `cb.stage(name, run, pick)` (throws `BuildError`) + a single try/catch that maps back
+  to the exact result via `e.toResult(extra)`. `BuildError.fields()` serves the cc65
+  shape (no `ok` field — index.js adds it). All 17 systems' C compilers now run through
+  the shared layers; sdcc is a documented partial fit (shares the log accumulator, keeps
+  its bespoke per-TU failure context). Full suite 1084/1084.
+
 ## 0.80.0 — 2026-06-29
 
 **Shared debug ABI library.** The per-core debug instrumentation (watchpoints,
