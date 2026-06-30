@@ -16,6 +16,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 
 import { resolveToolBaseDir } from "../common/wasm-tool.js";
+import { CBuild, BuildError } from "../common/c-build.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -278,59 +279,51 @@ export async function buildC(args) {
   const caOpts = args.debug ? ["-g"] : [];
   const sources = normalizeSources(args, "main.c");
 
-  let log = "";
-  /** @type {Record<string, Uint8Array>} */
-  const objects = {};
-  for (const [name, src] of Object.entries(sources)) {
-    const ext = path.extname(name).toLowerCase();
-    let asmSource;
-    let asmName;
-    if (ext === ".s" || ext === ".asm") {
-      asmSource = src;
-      asmName = name;
-    } else {
-      const cc = await runCc65({
-        source: src,
-        headers: args.headers,
-        target: args.target,
-        options: ccOpts,
-      });
-      log += `--- cc65 (${name}) ---\n` + cc.log + "\n";
-      if (cc.exitCode !== 0 || !cc.asmSource) {
-        return { binary: null, log, exitCode: cc.exitCode || 1, stage: "cc65" };
+  const cb = new CBuild();
+  try {
+    /** @type {Record<string, Uint8Array>} */
+    const objects = {};
+    for (const [name, src] of Object.entries(sources)) {
+      const ext = path.extname(name).toLowerCase();
+      let asmSource;
+      let asmName;
+      if (ext === ".s" || ext === ".asm") {
+        asmSource = src;
+        asmName = name;
+      } else {
+        // failure stage is bare "cc65" (no name) but the log header carries the name.
+        const cc = await cb.stage("cc65",
+          () => runCc65({ source: src, headers: args.headers, target: args.target, options: ccOpts }),
+          (r) => r.asmSource, { logName: `cc65 (${name})` });
+        asmSource = cc.asmSource;
+        asmName = name.replace(/\.(c|h)$/i, ".s");
       }
-      asmSource = cc.asmSource;
-      asmName = name.replace(/\.(c|h)$/i, ".s");
+      const ca = await cb.stage("ca65",
+        () => runCa65({ source: asmSource, includes: args.asmIncludes, binaryIncludes: args.binaryIncludes, target: args.target, options: caOpts }),
+        (r) => r.object, { logName: `ca65 (${asmName})` });
+      objects[asmName.replace(/\.s$/, ".o")] = ca.object;
     }
-    const ca = await runCa65({
-      source: asmSource,
-      includes: args.asmIncludes,
-      binaryIncludes: args.binaryIncludes,
+    // ld65 is NOT throw-on-fail here: it returns its own success/failure inline with
+    // dbg + ramUsage, so keep it as a plain call (the cc65 contract has no `ok` field).
+    const ld = await runLd65({
+      objects,
       target: args.target,
-      options: caOpts,
+      debug: args.debug,
+      linkerConfig: args.linkerConfig,
     });
-    log += `--- ca65 (${asmName}) ---\n` + ca.log + "\n";
-    if (ca.exitCode !== 0 || !ca.object) {
-      return { binary: null, log, exitCode: ca.exitCode || 1, stage: "ca65" };
-    }
-    const objName = asmName.replace(/\.s$/, ".o");
-    objects[objName] = ca.object;
+    cb.log += "--- ld65 ---\n" + ld.log;   // exact: no trailing newline (matches pre-refactor)
+    return {
+      binary: ld.binary,
+      dbg: ld.dbg,
+      log: cb.log,
+      exitCode: ld.exitCode,
+      ramUsage: parseRamUsage(ld.map),
+      stage: ld.exitCode === 0 ? "done" : "ld65",
+    };
+  } catch (e) {
+    if (e instanceof BuildError) return e.fields();   // cc65 shape: no `ok` field
+    throw e;
   }
-  const ld = await runLd65({
-    objects,
-    target: args.target,
-    debug: args.debug,
-    linkerConfig: args.linkerConfig,
-  });
-  log += "--- ld65 ---\n" + ld.log;
-  return {
-    binary: ld.binary,
-    dbg: ld.dbg,
-    log,
-    exitCode: ld.exitCode,
-    ramUsage: parseRamUsage(ld.map),
-    stage: ld.exitCode === 0 ? "done" : "ld65",
-  };
 }
 
 /**
@@ -353,39 +346,35 @@ export async function buildAsm(args) {
   const caOpts = args.debug ? ["-g"] : [];
   const sources = normalizeSources(args, "main.s");
 
-  let log = "";
-  /** @type {Record<string, Uint8Array>} */
-  const objects = {};
-  for (const [name, src] of Object.entries(sources)) {
-    const ca = await runCa65({
-      source: src,
-      includes: args.includes,
-      binaryIncludes: args.binaryIncludes,
-      target: args.target,
-      options: caOpts,
-    });
-    log += `--- ca65 (${name}) ---\n` + ca.log + "\n";
-    if (ca.exitCode !== 0 || !ca.object) {
-      return { binary: null, log, exitCode: ca.exitCode || 1, stage: "ca65" };
+  const cb = new CBuild();
+  try {
+    /** @type {Record<string, Uint8Array>} */
+    const objects = {};
+    for (const [name, src] of Object.entries(sources)) {
+      const ca = await cb.stage("ca65",
+        () => runCa65({ source: src, includes: args.includes, binaryIncludes: args.binaryIncludes, target: args.target, options: caOpts }),
+        (r) => r.object, { logName: `ca65 (${name})` });
+      objects[name.replace(/\.(s|asm)$/i, ".o")] = ca.object;
     }
-    const objName = name.replace(/\.(s|asm)$/i, ".o");
-    objects[objName] = ca.object;
+    const ld = await runLd65({
+      objects,
+      target: args.target,
+      debug: args.debug,
+      linkerConfig: args.linkerConfig,
+    });
+    cb.log += "--- ld65 ---\n" + ld.log;
+    return {
+      binary: ld.binary,
+      dbg: ld.dbg,
+      log: cb.log,
+      exitCode: ld.exitCode,
+      ramUsage: parseRamUsage(ld.map),
+      stage: ld.exitCode === 0 ? "done" : "ld65",
+    };
+  } catch (e) {
+    if (e instanceof BuildError) return e.fields();   // cc65 shape: no `ok` field
+    throw e;
   }
-  const ld = await runLd65({
-    objects,
-    target: args.target,
-    debug: args.debug,
-    linkerConfig: args.linkerConfig,
-  });
-  log += "--- ld65 ---\n" + ld.log;
-  return {
-    binary: ld.binary,
-    dbg: ld.dbg,
-    log,
-    exitCode: ld.exitCode,
-    ramUsage: parseRamUsage(ld.map),
-    stage: ld.exitCode === 0 ? "done" : "ld65",
-  };
 }
 
 /**
