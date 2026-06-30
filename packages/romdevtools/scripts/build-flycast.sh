@@ -30,10 +30,21 @@ git submodule update --init --recursive --depth 1
 if ! grep -q "romdev: emscripten" shell/cmake/DetectArchitecture.cmake; then
   perl -0pi -e 's/(if \(CMAKE_OSX_ARCHITECTURES\)\n    set\(ARCHITECTURE "\$\{CMAKE_OSX_ARCHITECTURES\}"\)\n    return\(\)\nendif\(\))/$1\n\n# romdev: emscripten\/WASM has no JIT.\nif (EMSCRIPTEN)\n    set(ARCHITECTURE "wasm")\n    return()\nendif()/' shell/cmake/DetectArchitecture.cmake
 fi
-# 2. build.h: CPU_GENERIC + TARGET_NO_REC for emscripten.
+# 2. build.h: CPU_GENERIC for emscripten. DEFAULT = the SH-4/ARM/DSP INTERPRETERS
+#    (TARGET_NO_REC) — the SHIPPABLE config: correct on all games, ~16fps on heavy DC
+#    scenes (3 interpreted CPUs). Set ROMDEV_FLYCAST_JIT=1 to build the experimental
+#    WASM SH-4 JIT instead (core/rec-wasm/rec_wasm.cpp; fast ~78fps but has native-emit
+#    correctness bugs that hang Sonic's boot — see N64_PS1_LESSONS_FOR_DREAMCAST.md
+#    "DREAMCAST PERF" + "FLYCAST WASM JIT — RESUME HERE"). The JIT integration is fully
+#    wired and one env-flag away; it just isn't correct yet.
+FLYCAST_REC_DEFINES='\t#ifndef TARGET_NO_REC\n\t#define TARGET_NO_REC\n\t#endif'
+if [ "${ROMDEV_FLYCAST_JIT:-0}" = "1" ]; then
+  FLYCAST_REC_DEFINES='\t#define FEAT_SHREC DYNAREC_JIT\n\t#define FEAT_AREC DYNAREC_NONE\n\t#define FEAT_DSPREC DYNAREC_NONE'
+  echo "romdev: building flycast with the EXPERIMENTAL WASM SH-4 JIT (ROMDEV_FLYCAST_JIT=1)"
+fi
 if ! grep -q "CPU_GENERIC" core/build.h; then
   sed -i 's/#define CPU_X64      0x20000004/#define CPU_X64      0x20000004\n#define CPU_GENERIC  0x20000005/' core/build.h
-  perl -0pi -e 's/(#if defined\(__x86_64__\) \|\| defined\(_M_X64\))/#if defined(__EMSCRIPTEN__)\n\t#define HOST_CPU CPU_GENERIC\n\t#ifndef TARGET_NO_REC\n\t#define TARGET_NO_REC\n\t#endif\n#elif defined(__x86_64__) || defined(_M_X64)/' core/build.h
+  perl -0pi -e "s/(#if defined\\(__x86_64__\\) \\|\\| defined\\(_M_X64\\))/#if defined(__EMSCRIPTEN__)\\n\\t#define HOST_CPU CPU_GENERIC\\n${FLYCAST_REC_DEFINES}\\n#elif defined(__x86_64__) || defined(_M_X64)/" core/build.h
 fi
 # 3. sh4_core_regs.cpp + context.cpp: CPU_GENERIC no-op.
 grep -q "HOST_CPU == CPU_GENERIC" core/hw/sh4/sh4_core_regs.cpp || \
@@ -43,6 +54,12 @@ grep -q "HOST_CPU == CPU_GENERIC" core/linux/context.cpp || \
 # 4. CMakeLists: emscripten asio single-threaded.
 if ! grep -q "romdev: emscripten/WASM libretro build" CMakeLists.txt; then
   perl -0pi -e 's/(\ttarget_compile_definitions\(\$\{PROJECT_NAME\} PRIVATE LIBRETRO\)\n)/$1\tif(EMSCRIPTEN)\n\t\ttarget_compile_definitions(\${PROJECT_NAME} PRIVATE ASIO_STANDALONE ASIO_DISABLE_THREADS ASIO_DISABLE_LOCAL_SOCKETS ASIO_DISABLE_SERIAL_PORT ESHUTDOWN=110 SA_RESTART=0 SA_NOCLDWAIT=0 IMGUI_DISABLE_DEFAULT_SHELL_FUNCTIONS)\n\tendif()\n/' CMakeLists.txt
+fi
+
+# 4b. CMakeLists: compile the WASM SH-4 JIT backend for the emscripten target. Added
+#     right after the rec-x64 sources block (which ends with the matching `endif()`).
+if ! grep -q "core/rec-wasm/rec_wasm.cpp" CMakeLists.txt; then
+  perl -0pi -e 's/(\t\t\tcore\/rec-x64\/x64_regalloc\.h\)\n\tendif\(\)\nendif\(\))/$1\n\nif(EMSCRIPTEN)\n\ttarget_sources(\${PROJECT_NAME} PRIVATE core\/rec-wasm\/rec_wasm.cpp)\nendif()/' CMakeLists.txt
 fi
 
 # 5. posix_vmem.cpp: decline fast-vmem on emscripten (no 512MB mmap) → malloc fallback.
@@ -73,9 +90,30 @@ grep -q "romdev force single-thread" shell/libretro/libretro.cpp || \
 grep -q "romdev/WASM: we never ship" shell/libretro/option.cpp || \
   perl -0pi -e 's/Option<bool> UseReios\(CORE_OPTION_NAME "_hle_bios"\);/#if defined(__EMSCRIPTEN__) \/* romdev\/WASM: we never ship a real dc_boot.bin *\/\nOption<bool> UseReios(CORE_OPTION_NAME "_hle_bios", true);\n#else\nOption<bool> UseReios(CORE_OPTION_NAME "_hle_bios");\n#endif/' shell/libretro/option.cpp
 
+# ── stage the WASM SH-4 JIT backend into the tree ───────────────────────────
+# rec_wasm.cpp emits wasm bytecode at runtime (WebAssembly.compile + table.grow +
+# call_indirect). CMakeLists compiles it for EMSCRIPTEN (target_sources added above).
+mkdir -p core/rec-wasm
+cp "$SCRIPT_DIR/patches/flycast-wasm-jit/rec_wasm.cpp"          core/rec-wasm/
+cp "$SCRIPT_DIR/patches/flycast-wasm-jit/wasm_module_builder.h" core/rec-wasm/
+cp "$SCRIPT_DIR/patches/flycast-wasm-jit/wasm_emit.h"           core/rec-wasm/
+cp "$SCRIPT_DIR/patches/flycast-wasm-jit/fly_instrument.h"      core/rec-wasm/
+cp "$SCRIPT_DIR/patches/flycast-wasm-jit/wasm_test_shil_ops.h"  core/rec-wasm/
+echo "romdev: staged WASM SH-4 JIT backend into core/rec-wasm/"
+
 # ── configure + build ───────────────────────────────────────────────────────
+# JIT-only extra defines: JIT_PROD_BUILD (drop the dev EM_ASM logging + the
+#   wasm_test_shil_ops self-test) + -fexceptions (the JIT block-exit/MMU-fault path
+#   uses C++ exceptions). The interpreter build needs neither.
+JIT_CXX_FLAGS=""
+JIT_C_FLAGS=""
+if [ "${ROMDEV_FLYCAST_JIT:-0}" = "1" ]; then
+  JIT_CXX_FLAGS="-DJIT_PROD_BUILD -fexceptions"
+  JIT_C_FLAGS="-DJIT_PROD_BUILD"
+fi
 rm -rf build-em && mkdir build-em && cd build-em
-emcmake cmake .. -DLIBRETRO=ON -DUSE_VULKAN=OFF -DUSE_GLES2=OFF -DCMAKE_BUILD_TYPE=Release \
+emcmake cmake .. -DLIBRETRO=ON -DUSE_VULKAN=OFF -DUSE_GLES=ON -DUSE_GLES2=OFF -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CXX_FLAGS="$JIT_CXX_FLAGS" -DCMAKE_C_FLAGS="$JIT_C_FLAGS"
 
 emmake make flycast_libretro -j"$(nproc)"
 
@@ -92,13 +130,25 @@ em++ -O2 -c "$SCRIPT_DIR/patches/romdev-snippets/flycast-debug.c" -o /tmp/flycas
 
 # ── link all archives → one WASM module ─────────────────────────────────────
 LIBS="libflycast_libretro.a libflycast-resources.a core/deps/libelf/libelf.a core/deps/nowide/libnowide.a core/deps/miniupnpc/libminiupnpc.a core/deps/libchdr/libchdr-static.a core/deps/tinygettext/libtinygettext.a core/deps/libzip/lib/libzip.a core/deps/xxHash/cmake_unofficial/libxxhash.a core/deps/libchdr/deps/zlib-*/libz.a core/deps/libchdr/deps/lzma-*/liblzma.a core/deps/libchdr/deps/zstd-*/build/cmake/lib/libzstd.a"
-EXPORTED='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_romdev_sh4_regs_get","_romdev_aica_get","_malloc","_free","_emscripten_GetProcAddress"]'
-EXPORTED_RT='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS","dynCall","GL"]'
-emcc /tmp/flycast-pthread-noop.o /tmp/flycast-debug.o $LIBS -O2 -Wl,--wrap=pthread_create -Wl,--wrap=pthread_join -Wl,--wrap=pthread_detach -s WASM=1 -s MODULARIZE=1 -s EXPORT_ES6=1 -s "EXPORT_NAME=create_flycast" \
+# Base exports (interpreter). The JIT build ADDS the _wasm_* memory-access + fallback
+# imports the EM_JS glue in rec_wasm.cpp binds into each runtime-compiled block module
+# (export them explicitly so DCE can't drop them), + wasmExports/wasmTable/wasmMemory
+# runtime methods + -fexceptions. The interpreter needs none of these.
+BASE_EXPORTS='"_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_romdev_sh4_regs_get","_romdev_aica_get","_malloc","_free","_emscripten_GetProcAddress"'
+BASE_RT='"ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS","dynCall","GL"'
+JIT_LINK_FLAGS=""
+if [ "${ROMDEV_FLYCAST_JIT:-0}" = "1" ]; then
+  BASE_EXPORTS="$BASE_EXPORTS,\"_wasm_mem_read8\",\"_wasm_mem_read16\",\"_wasm_mem_read32\",\"_wasm_mem_write8\",\"_wasm_mem_write16\",\"_wasm_mem_write32\",\"_wasm_exec_ifb\",\"_wasm_exec_shil_fb\""
+  BASE_RT="$BASE_RT,\"wasmExports\",\"wasmTable\",\"wasmMemory\""
+  JIT_LINK_FLAGS="-fexceptions -s DISABLE_EXCEPTION_CATCHING=0"
+fi
+EXPORTED="[$BASE_EXPORTS]"
+EXPORTED_RT="[$BASE_RT]"
+emcc /tmp/flycast-pthread-noop.o /tmp/flycast-debug.o $LIBS -O3 $JIT_LINK_FLAGS -Wl,--wrap=pthread_create -Wl,--wrap=pthread_join -Wl,--wrap=pthread_detach -s WASM=1 -s MODULARIZE=1 -s EXPORT_ES6=1 -s "EXPORT_NAME=create_flycast" \
   -s "ENVIRONMENT=node,web" -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=536870912 \
   -s MAXIMUM_MEMORY=1073741824 -s STACK_SIZE=4194304 -s ALLOW_TABLE_GROWTH=1 \
   -s EXPORTED_FUNCTIONS="$EXPORTED" -s EXPORTED_RUNTIME_METHODS="$EXPORTED_RT" \
-  -s FILESYSTEM=1 -s INVOKE_RUN=0 -s USE_ZLIB=1 -s MIN_WEBGL_VERSION=2 -s MAX_WEBGL_VERSION=2 \
+  -s FILESYSTEM=1 -s NODERAWFS=1 -s INVOKE_RUN=0 -s USE_ZLIB=1 -s MIN_WEBGL_VERSION=2 -s MAX_WEBGL_VERSION=2 \
   -s FULL_ES3=1 -s GL_ENABLE_GET_PROC_ADDRESS=1 -lGL -s ERROR_ON_UNDEFINED_SYMBOLS=0 -o "$OUT/flycast_libretro.js"
 sed -i 's/var GL={/var GL=Module.GL={/' "$OUT/flycast_libretro.js" 2>/dev/null || true
 echo "Built: $OUT/flycast_libretro.{js,wasm}"

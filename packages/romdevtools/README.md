@@ -1,6 +1,6 @@
 # romdev
 
-The entry point for **romdev** — vibe-code real retro games. Build, run, inspect, and reverse-engineer actual homebrew ROMs (NES, SNES, Game Boy, Genesis, Atari, C64, GBA, PC Engine, MSX — and the 3D consoles N64, PlayStation, and Dreamcast) with one command — drive it yourself or let a coding assistant do it.
+The entry point for **romdev** — vibe-code real retro games. Build, run, inspect, and reverse-engineer actual homebrew ROMs (NES, SNES, Game Boy, Genesis, Atari, C64, GBA, PC Engine, MSX, GameTank — and the 3D consoles N64, PlayStation, and Dreamcast) with one command — drive it yourself or let a coding assistant do it.
 
 ```bash
 npx romdevtools
@@ -9,9 +9,9 @@ npx romdevtools
 **What you get:**
 
 - **Build** — bundled per-platform toolchains (cc65, SDCC, RGBDS, asar, vasm, SGDK, PVSnesLib, libtonc, …) as WASM. Write source, compile, get a real ROM.
-- **Run + see + drive** — load the ROM into an emulated console (libretro cores as WASM), step frames, screenshot, script controller input. The 2D consoles render in software; the 3D consoles (N64 via glide64, PlayStation via Beetle PSX HW, Dreamcast via Flycast) render on the **real GPU** through [`native-gles`](https://github.com/monteslu/native-gles) — headless OpenGL/EGL, no browser. PlayStation ships [OpenBIOS](https://github.com/grumpycoders/pcsx-redux) (MIT) embedded, so there's no proprietary firmware to supply.
+- **Run + see + drive** — load the ROM into an emulated console (libretro cores as WASM), step frames, screenshot, script controller input. The 2D consoles render in software; the 3D consoles (N64 via glide64, PlayStation via Beetle PSX HW, Dreamcast via Flycast) render on the **real GPU** through [`native-gles`](https://github.com/monteslu/native-gles) — headless OpenGL/EGL, no browser. PlayStation ships [OpenBIOS](https://github.com/grumpycoders/pcsx-redux) (MIT) embedded, so there's no proprietary firmware to supply. **Dreamcast is EXPERIMENTAL** — it boots and renders, but the WASM build runs the SH-4 (+ AICA) as interpreters, so it's currently too slow to be playable; treat it as analysis/RE-only for now.
 - **Inspect + romhack** — read CPU/video/save RAM, watch memory, write-breakpoints, the Cheat-Engine value-search loop, a bundled cheat database, mapper-aware disassembly, and a byte-exact rebuildable-project disassembler.
-- **Reverse-engineering analysis engine (all 17 platforms — incl. the 3D consoles' MIPS R3000/R4300 + SH-4)** — control-flow graphs, deep cross-references, auto-detected functions (ranked real-code-first), a one-shot structural map, and a Ghidra **decompiler** (C-like pseudocode, with hardware registers named and 6502 SLEIGH clutter folded to readable C): `disasm({target:'cfg'|'xrefs'|'functions'|'decompile'})` and `symbols({op:'analyze'})`. And the piece no static tool has: **live computed-jumptable recovery** — `breakpoint({on:'jumptable'})` runs the emulator to resolve the `JMP (table,X)` / RTS-trick dispatchers (state machines, script/battle VMs) that static analysis collapses to "could not recover." Understand *how* a routine works before you touch it — no $3,000 IDA license, no install.
+- **Reverse-engineering analysis engine (all 18 platforms — incl. the 3D consoles' MIPS R3000/R4300 + SH-4)** — control-flow graphs, deep cross-references, auto-detected functions (ranked real-code-first), a one-shot structural map, and a Ghidra **decompiler** (C-like pseudocode, with hardware registers named and 6502 SLEIGH clutter folded to readable C): `disasm({target:'cfg'|'xrefs'|'functions'|'decompile'})` and `symbols({op:'analyze'})`. And the piece no static tool has: **live computed-jumptable recovery** — `breakpoint({on:'jumptable'})` runs the emulator to resolve the `JMP (table,X)` / RTS-trick dispatchers (state machines, script/battle VMs) that static analysis collapses to "could not recover." Understand *how* a routine works before you touch it — no $3,000 IDA license, no install.
 - **Convert assets** — PNG → platform tiles/tilemaps, quantize-to-palette, audio importers (BRR for SNES, XGM2 PCM for Genesis).
 
 Point any coding agent at it three ways:
@@ -36,12 +36,12 @@ This package contains all the JavaScript — the tool surface, the WASM emulator
 
 `romdevtools` depends on the binary/data packages it needs (exact-pinned), so a single install gets a matched, tested set:
 
-- 2D cores: `romdev-core-{fceumm,gambatte,gpgx,vice,handy,prosystem,geargrafx,bluemsx}`
+- 2D cores: `romdev-core-{fceumm,gambatte,gpgx,vice,handy,prosystem,geargrafx,bluemsx,gametank}`
 - 3D / GPU cores (rendered through `native-gles`): `romdev-core-{parallel-n64,beetle-psx-hw,flycast}`
 - Platforms (core + dedicated toolchain bundled): `romdev-platform-{snes,gba,atari2600}`
 - Toolchains: `romdev-toolchain-{cc65,sdcc,m68k-gcc,vasm,rgbds,mips-gcc,sh-gcc}` (mips-gcc = N64/PS1 C; sh-gcc = Dreamcast C)
 - GPU deps (OPTIONAL — only the 3D cores need them; the 2D cores never touch GL): `native-gles` + `webgl-node`. A headless user without a GPU stack can still run all the 2D platforms.
-- Analysis: `romdev-analysis` (Rizin → WASM: control-flow graphs, cross-references, function detection) and `romdev-analysis-decompiler` (Ghidra's C++ decompiler → WASM + SLEIGH processor specs for all 17 CPUs, incl. MIPS R3000/R4300 + SH-4). Power `disasm({target:'cfg'|'xrefs'|'functions'|'decompile'})` and `symbols({op:'analyze'})`. Lazy-loaded on first use.
+- Analysis: `romdev-analysis` (Rizin → WASM: control-flow graphs, cross-references, function detection) and `romdev-analysis-decompiler` (Ghidra's C++ decompiler → WASM + SLEIGH processor specs for all 18 CPUs, incl. MIPS R3000/R4300 + SH-4). Power `disasm({target:'cfg'|'xrefs'|'functions'|'decompile'})` and `symbols({op:'analyze'})`. Lazy-loaded on first use.
 - Data: `romdev_game_codes` — the bundled game-code / cheat database (a free labeled RAM/code map for thousands of known ROMs), split out so it can grow independently. Lazy-loaded one platform at a time.
 
 `@kmamal/sdl` is used only by `playtest()` / `romdevtools-cli play` (the live window). It ships its native binary via its own install script, which npm skips when romdev is a transitive dep (e.g. under `npx`) — so romdev's `postinstall` fetches it, and `playtest()` also self-heals at runtime if the binary is still missing (downloading the prebuilt before the first window open). Either way, if the binary can't be fetched (offline/locked-down network), the headless server is unaffected — only the live window degrades, and the error tells you the one command to fix it.

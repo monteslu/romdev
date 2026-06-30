@@ -17,9 +17,10 @@ import { toolJsonSchema } from "./tool-registry.js";
  * hands instructions to an MCP client. Talks ONLY about MCP tool-calling.
  */
 export const mcpPreamble = [
-  "romdev: homebrew retro game development + reverse-engineering for coding agents.",
+  "romdev: homebrew retro game development + reverse-engineering for coding agents — 18 platforms (NES through GBA, C64, GameTank, + the 3D consoles N64/PlayStation/Dreamcast).",
+  "HARD RULE: NEVER install a host compiler or emulator (no clang/gcc/Xcode/devkitPro/brew/apt, no downloaded emulator). romdev BUNDLES every compiler (cc65, sdcc, gcc, arm/m68k/mips/sh-gcc, tcc, wla, rgbds, vasm, asar, dasm) + every emulator core as WASM and runs them through these tools — build({output:'rom'|'run'}) compiles, loadMedia+frame runs. If you're about to install or call a host toolchain, STOP and use the romdev build tool instead; an install kicking off is a DEFECT to report.",
   "All ~32 tools register at session init — call any by name directly, no loading step. Each is a domain VERB with an operation axis: memory({op}), build({output}), breakpoint({on}), cpu({op}), sprites({op}), tiles({op}), disasm({target}), romPatch({op}), …",
-  "RE engine (all 14 platforms): disasm({target:'functions'}) auto-detects functions, disasm({target:'cfg'}) graphs control flow, disasm({target:'xrefs'}) finds cross-references, disasm({target:'decompile'}) emits Ghidra C pseudocode, symbols({op:'analyze'}) maps a ROM's structure in one call.",
+  "RE engine (all 18 platforms): disasm({target:'functions'}) auto-detects functions, disasm({target:'cfg'}) graphs control flow, disasm({target:'xrefs'}) finds cross-references, disasm({target:'decompile'}) emits Ghidra C pseudocode, symbols({op:'analyze'}) maps a ROM's structure in one call.",
   "catalog({op:'categories'}) maps the tools by purpose (a guide, not a gate); catalog({op:'status'}) is a session re-orient.",
 ].join("\n");
 
@@ -27,11 +28,14 @@ export const mcpPreamble = [
  * Skill-channel preamble — talks ONLY about the HTTP routes. No MCP.
  */
 export const skillPreamble = [
-  "romdev gives you homebrew retro game development + reverse-engineering for ~14 platforms (NES, SNES, Game Boy, Genesis, GBA, Atari, C64, and more) — build, run, screenshot, inspect, patch, disassemble, convert assets, drive emulators.",
-  "It also ships a full RE analysis engine (Rizin + Ghidra, all 14 platforms): control-flow graphs, cross-references, auto-detected functions, a one-shot structural map, and a C-pseudocode decompiler — `disasm({target:'cfg'|'xrefs'|'functions'|'decompile'})` and `symbols({op:'analyze'})`.",
+  "romdev gives you homebrew retro game development + reverse-engineering for 18 platforms (NES, SNES, Game Boy, Genesis, GBA, Atari, C64, GameTank, the 3D consoles N64/PlayStation/Dreamcast, and more) — build, run, screenshot, inspect, patch, disassemble, convert assets, drive emulators.",
+  "It also ships a full RE analysis engine (Rizin + Ghidra, all 18 platforms): control-flow graphs, cross-references, auto-detected functions, a one-shot structural map, and a C-pseudocode decompiler — `disasm({target:'cfg'|'xrefs'|'functions'|'decompile'})` and `symbols({op:'analyze'})`.",
+  "",
+  "## HARD RULE: never install a compiler or emulator — romdev already bundles every one",
+  "Every compiler/assembler/linker (cc65, sdcc, gcc, arm/m68k/mips/sh-gcc, tcc, wla, rgbds, vasm, asar, dasm) and every emulator core ships as WASM INSIDE romdev and runs in-process through these tools — `build({output:'rom'|'run'})` compiles, `loadMedia`+`frame` runs. You do NOT need, and must NOT install, a host `clang`/`gcc`/Xcode/Command-Line-Tools/devkitPro/`brew`/`apt` compiler or any emulator to build or run a ROM here. If you catch yourself about to install or invoke a host compiler/emulator — STOP. That's never the move: use the romdev `build` tool. (`platform({op:'toolchains'})` lists what's bundled for each platform.) A compiler/emulator install kicking off while using romdev is a DEFECT to report, not a step to take.",
   "",
   "## Prerequisite: romdev runs LOCALLY (same machine as you)",
-  "romdev bundles every compiler + emulator as WASM and runs them in-process — that engine lives in the romdev SERVER, started once with `npx romdevtools` (listens on http://localhost:7331; no other install, no host gcc/emulator needed). If a call gets connection-refused, it isn't running — start it.",
+  "The romdev SERVER hosts all that bundled WASM in-process; start it once with `npx romdevtools` (listens on http://localhost:7331 — that single `npx` is the ONLY install, and it pulls the toolchains/cores as bundled WASM, never a host compiler). If a call gets connection-refused, the server isn't running — start it.",
   "**romdev runs on the SAME machine as you, and tools take FILESYSTEM PATHS** (`path`, `outputPath`, `modulePath`, `vgmPath`, …) — those are paths on the local disk romdev shares with you, NOT uploads. Pass an absolute local path; romdev reads/writes it directly. (This is also why it's localhost-only and needs no auth.) Likewise output paths land on the local disk where you can read them back.",
   "",
   "## How to call romdev",
@@ -58,7 +62,7 @@ export function buildSkillDoc({ registry, agentsBody, version }) {
   const frontmatter = [
     "---",
     "name: romdev",
-    "description: Homebrew retro game development and ROM reverse-engineering for ~14 platforms (NES, SNES, Game Boy/Color, Genesis, GBA, Atari 2600/7800, Lynx, C64, SMS, Game Gear, PC Engine, MSX). Use when building, running, debugging, disassembling, asset-converting, or romhacking a retro game — drives bundled emulators and toolchains over HTTP.",
+    "description: Homebrew retro game development and ROM reverse-engineering for 18 platforms (NES, SNES, Game Boy/Color, Genesis, GBA, Atari 2600/7800, Lynx, C64, SMS, Game Gear, PC Engine, MSX, GameTank, N64, PlayStation, Dreamcast). Use when building, running, debugging, disassembling, asset-converting, or romhacking a retro game — drives bundled emulators and toolchains over HTTP. NEVER install a host compiler/emulator; romdev bundles all of them as WASM (use the build tool).",
     `metadata:`,
     `  version: "${version ?? "0.0.0"}"`,
     "---",

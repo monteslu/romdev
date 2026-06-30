@@ -1,0 +1,4 @@
+; romdev single-bank GameTank modules
+ENABLE_MODULE_DRAWQUEUE:
+ENABLE_MODULE_TEXT:
+ENABLE_MODULE_RANDOM:

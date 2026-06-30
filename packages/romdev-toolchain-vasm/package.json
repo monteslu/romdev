@@ -1,6 +1,6 @@
 {
   "name": "romdev-toolchain-vasm",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "vasm m68k (Motorola syntax) assembler for romdev Genesis dev, bundled as WASM.",
   "type": "module",
   "main": "index.js",

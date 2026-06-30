@@ -275,8 +275,10 @@ export async function buildC(args) {
   // and these are pure upside. (NOTE: cc65 errors on an unknown -W name, so this
   // list is verified valid against the bundled cc65.)
   const ccWarn = ["-W", "unused-var,unused-func,unused-label,const-comparison,struct-param,pointer-sign"];
-  const ccOpts = args.debug ? ["-g", ...ccWarn] : [...ccWarn];
-  const caOpts = args.debug ? ["-g"] : [];
+  // ccOptions/caOptions = caller-supplied extra flags (e.g. GameTank's `--cpu 65c02`
+  // for the `-t none` path where the CPU isn't implied by a built-in cc65 target).
+  const ccOpts = [...(args.debug ? ["-g"] : []), ...ccWarn, ...(args.ccOptions ?? [])];
+  const caOpts = [...(args.debug ? ["-g"] : []), ...(args.caOptions ?? [])];
   const sources = normalizeSources(args, "main.c");
 
   const cb = new CBuild();
@@ -343,7 +345,7 @@ export async function buildC(args) {
  * @param {string} [args.linkerConfig] custom ld65 .cfg
  */
 export async function buildAsm(args) {
-  const caOpts = args.debug ? ["-g"] : [];
+  const caOpts = [...(args.debug ? ["-g"] : []), ...(args.caOptions ?? [])];
   const sources = normalizeSources(args, "main.s");
 
   const cb = new CBuild();

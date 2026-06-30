@@ -1,6 +1,6 @@
 {
   "name": "romdev-toolchain-m68k-gcc",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "m68k-elf-gcc toolchain (cc1 / as / ld / objcopy / objdump) for romdev Genesis C builds + disassembly, bundled as WASM.",
   "type": "module",
   "main": "index.js",

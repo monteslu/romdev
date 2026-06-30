@@ -213,15 +213,33 @@ export function registerCallbacks(args) {
   }, "v");
   mod._retro_set_input_poll(inputPollCb);
 
-  const inputStateCb = mod.addFunction((port, device, _idx, id) => {
+  const inputStateCb = mod.addFunction((port, device, idx, id) => {
     // device 3 = RETRO_DEVICE_KEYBOARD — id is the libretro keycode
     if (device === 3) {
       return state.keysDown.has(id) ? 1 : 0;
     }
-    // Default: JOYPAD (device 1) and unknown devices fall through to bitfield.
     const portBits = state.inputPorts[port];
     if (!portBits) return 0;
     const bits = portBits[0];
+    // device 5 = RETRO_DEVICE_ANALOG. Games with an analog stick (N64, and the
+    // dual-stick consoles) read this INSTEAD of the d-pad for movement — MK64
+    // steers entirely off the stick, so a d-pad-only mask leaves the kart dead.
+    // We have no real axis source (setInput is digital), so SYNTHESIZE a full-
+    // deflection stick from the d-pad bits: left/right → X = -/+32767, up/down →
+    // Y = -/+32767. idx 0 = left stick, id 0 = X, id 1 = Y (libretro convention).
+    if (device === 5) {
+      if (idx === 0) {
+        if (id === 0) { // X axis
+          if (bits & (1 << 6)) return -32767; // JOYPAD_LEFT
+          if (bits & (1 << 7)) return 32767;  // JOYPAD_RIGHT
+        } else if (id === 1) { // Y axis (up = negative)
+          if (bits & (1 << 4)) return -32767; // JOYPAD_UP
+          if (bits & (1 << 5)) return 32767;  // JOYPAD_DOWN
+        }
+      }
+      return 0;
+    }
+    // Default: JOYPAD (device 1) and unknown devices fall through to bitfield.
     if (id === 256) return bits; // RETRO_DEVICE_ID_JOYPAD_MASK
     return bits & (1 << id) ? 1 : 0;
   }, "iiiii");
