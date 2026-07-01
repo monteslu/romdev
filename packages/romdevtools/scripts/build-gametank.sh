@@ -39,8 +39,11 @@ fi
 # ── inject hook calls ──
 # write-watch + range-write: at the top of MemoryWrite(address, value).
 perl -0pi -e 's/(void MemoryWrite\(uint16_t address, uint8_t value\) \{)/extern "C" void romdev_gametank_write(unsigned int,unsigned int);\n$1\n    romdev_gametank_write(address, value);/ unless /romdev_gametank_write\(address, value\);/' src/libretro.cpp
-# read-watch: replace MemoryRead's one-line body so it reads the value, hooks, returns it.
-perl -0pi -e 's/uint8_t MemoryRead\(uint16_t address\) \{\n    return MemoryReadResolve\(address, true\);\n\}/extern "C" void romdev_gametank_read(unsigned int,unsigned int);\nuint8_t MemoryRead(uint16_t address) {\n    uint8_t romdev_v = MemoryReadResolve(address, true);\n    romdev_gametank_read(address, romdev_v);\n    return romdev_v;\n}/ unless /romdev_gametank_read\(address/' src/libretro.cpp
+# read-watch + Game Genie: replace MemoryRead's one-line body so it reads the real byte,
+# runs the observe hook (read-watch), then applies the cheat SUBSTITUTION (romdev_cheat_read
+# from the shared lib — hardware-faithful: address match → return the substitute byte, with
+# optional compare-against-original) and returns whatever it gives back.
+perl -0pi -e 's/uint8_t MemoryRead\(uint16_t address\) \{\n    return MemoryReadResolve\(address, true\);\n\}/extern "C" void romdev_gametank_read(unsigned int,unsigned int);\nextern "C" unsigned char romdev_cheat_read(unsigned int,unsigned char);\nuint8_t MemoryRead(uint16_t address) {\n    uint8_t romdev_v = MemoryReadResolve(address, true);\n    romdev_gametank_read(address, romdev_v);\n    return romdev_cheat_read(address & 0xFFFF, romdev_v);\n}/ unless /romdev_gametank_read\(address/' src/libretro.cpp
 
 # pc-break + coverage + watchdog: in the mos6502 Run() loop, right before the
 # opcode fetch (pc is the instruction about to execute). On a hit, set freeze —
@@ -69,7 +72,7 @@ echo "romdev: instrumented MemoryWrite / MemoryRead / mos6502 dispatch + per-fra
 source "$HOME/code/mine/emsdk/emsdk_env.sh" >/dev/null 2>&1 || true
 
 # the romdev_* exports the host feature-detects (shared lib surface + per-core snap/setreg)
-ROMDEV_EXPORTS='"_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_watchdog_set","_romdev_regsnap_get","_romdev_irqblock_set","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get","_romdev_setreg","_romdev_getreg","_romdev_acp_get"'
+ROMDEV_EXPORTS='"_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_watchdog_set","_romdev_regsnap_get","_romdev_irqblock_set","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get","_romdev_setreg","_romdev_getreg","_romdev_acp_get","_romdev_cheat_set","_romdev_cheat_get","_romdev_cheat_read"'
 
 # Step 1: compile the core objects via the Makefile's retroemu target (with
 # romdev_debug.c added to SOURCES). The Makefile's EM_EXPORTS only lists the

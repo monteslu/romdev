@@ -18,6 +18,9 @@ const GG_ADDR_RANGE = {
   snes: [0x008000, 0xFFFFFF], // mapped ROM ($xx:8000-$xx:FFFF); the Game Genie
                               // ROM device patches here. (Pro Action Replay is
                               // a RAM poke — for a ROM patch we pick GG below.)
+  gametank: [0x0000, 0xFFFF], // flat 16-bit CPU space. GameTank's Game Genie is a
+                              // READ substitution on the bus, so any read address is
+                              // valid (RAM or cart ROM). A NEW format — see gamegenie.js.
 };
 
 // The native ROM-PATCH device per platform (installs a read-intercept), as
@@ -94,6 +97,7 @@ const SUPPORTED = new Set([
 const MAKE_CHEAT_PLATFORMS = [
   "nes", "gb", "gbc", "snes", "genesis", "sms", "gg",
   "atari2600", "atari7800", "lynx", "gba", "c64", "pce", "msx",
+  "gametank", // NEW: GameTank Game Genie (read-substitution device) — see gamegenie.js
 ];
 
 // gameCheats indexes whose codes are predominantly ENCRYPTED at the source

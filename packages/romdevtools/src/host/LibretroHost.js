@@ -214,6 +214,11 @@ export const PLATFORM_VIRTUAL_EXT = {
   msx:        ".rom",
 };
 import { RETRO_DEVICE_JOYPAD, ROMDEV_PIXEL_FORMAT_RGBA8888 } from "./retroConstants.js";
+import { decodeCode as decodeCheatCode } from "../cheats/gamegenie.js";
+
+// Platforms whose core stubs retro_cheat_set but ships romdev's value-override cheat
+// device (romdev_cheat_set) — cheats route through that read-substitution instead.
+const CHEAT_PREFER_ROMDEV_DEVICE = new Set(["gametank"]);
 
 // C64 controller→keyboard map (the Batocera/RetroDeck model: a CONTROLLER alone
 // plays C64 — no physical keyboard needed — by mapping spare buttons/stick to
@@ -1536,7 +1541,18 @@ export class LibretroHost {
    *  (Older bundled cores predate the cheat-export build flag.) */
   cheatsSupported() {
     const mod = this.mod;
-    return !!(mod && typeof mod._retro_cheat_set === "function");
+    // Real cheat support = EITHER the core's retro_cheat_set actually applies codes,
+    // OR romdev's value-override cheat device (romdev_cheat_set) is present. Some cores
+    // (GameTank) stub retro_cheat_set but ship the romdev_cheat_* read-substitution
+    // device — that's the working path for them.
+    return !!(mod && (typeof mod._romdev_cheat_set === "function" || typeof mod._retro_cheat_set === "function"));
+  }
+
+  /** True if this core applies cheats via romdev's value-override device (romdev_cheat_set)
+   *  rather than the libretro retro_cheat_set (which is a stub on some cores). */
+  _usesRomdevCheatDevice() {
+    return !!(this.mod && typeof this.mod._romdev_cheat_set === "function" &&
+      CHEAT_PREFER_ROMDEV_DEVICE.has(this.status.platform));
   }
 
   /**
@@ -1553,6 +1569,32 @@ export class LibretroHost {
    */
   setCheat(index, code, enabled = true) {
     const mod = this._needMod();
+
+    // romdev value-override device (GameTank etc.): the core's retro_cheat_set is a
+    // stub, but romdev_cheat_set installs a hardware-faithful read substitution. Decode
+    // the code to {address,value,compare} and hand it to the device.
+    if (this._usesRomdevCheatDevice()) {
+      const decoded = decodeCheatCode(String(code), this.status.platform);
+      if (!decoded || decoded.address == null || decoded.value == null) {
+        throw new Error(
+          `setCheat: could not decode '${code}' for ${this.status.platform}. ` +
+          `Provide a GameTank Game Genie code or a raw ADDR:VAL[:COMPARE].`,
+        );
+      }
+      mod._romdev_cheat_set(
+        index >>> 0,
+        decoded.address & 0xFFFF,
+        decoded.value & 0xFF,
+        (decoded.compare ?? 0) & 0xFF,
+        decoded.compare != null ? 1 : 0,
+        enabled ? 1 : 0,
+      );
+      if (!this._activeCheats) this._activeCheats = new Map();
+      if (enabled) this._activeCheats.set(index, code);
+      else this._activeCheats.delete(index);
+      return;
+    }
+
     if (typeof mod._retro_cheat_set !== "function") {
       throw new Error(
         "this core build does not expose the cheat interface (retro_cheat_set). " +
