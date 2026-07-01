@@ -76,7 +76,7 @@ const NEARLY_BLANK_DOMINANT = 0.92;
  */
 export async function computeVerify(host, frames, sessionKey) {
   const platform = host.status.platform;
-  if (frames && frames > 0) host.stepFrames(frames);
+  if (frames && frames > 0) await host.stepFrames(frames);
   const frameCount = host.status.frameCount;
 
   // --- pixel content check (platform-agnostic) ---
@@ -317,7 +317,9 @@ export function compositeSideBySide(a, b, gap = 4) {
 export function registerFrameTools(server, z, sessionKey) {
   async function doStep({ frames }) {
       const host = getHost(sessionKey);
-      const n = host.stepFrames(frames);
+      // await: native-runtime hosts (jsgame) have an async stepFrames that yields for
+      // the game's async work; awaiting a sync LibretroHost return is a harmless no-op.
+      const n = await host.stepFrames(frames);
       // Surface a co-drive conflict the moment the agent steps: a human
       // actively playing in the playtest window means this step raced their
       // real-time loop. Field only appears when the conflict is real.
@@ -786,7 +788,7 @@ export function registerFrameTools(server, z, sessionKey) {
   async function doStepAndShot({ frames, path: outPath, inline }) {
       requireImageTarget(outPath, inline, "frame({op:'stepAndShot'})");
       const host = getHost(sessionKey);
-      host.stepFrames(frames);
+      await host.stepFrames(frames);
       const shot = host.screenshot();
       const coDrive = humanCoDriveWarning(sessionKey);
       if (!inline) {
