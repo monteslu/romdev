@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Build the WASM+SIMD audio resampler for the playtest sink.
-# Mirrors simdpipe's emcc style (-O3 -msimd128, MODULARIZE ES6). Single-thread,
-# small heap (audio chunks are a few KB). Output: resampler.mjs + resampler.wasm.
+# Build the WASM+SIMD audio resampler.
+# -O3 -msimd128, MODULARIZE ES6. Single-thread, small heap (audio chunks are a few
+# KB). Output: resampler.mjs + resampler.wasm. Needs an activated Emscripten SDK on
+# PATH (source your emsdk_env.sh first, or set EMSDK).
 set -euo pipefail
 cd "$(dirname "$0")"
 
-source "$HOME/code/mine/emsdk/emsdk_env.sh" >/dev/null 2>&1 || true
+[ -n "${EMSDK:-}" ] && [ -f "$EMSDK/emsdk_env.sh" ] && source "$EMSDK/emsdk_env.sh" >/dev/null 2>&1 || true
 
 emcc resampler.c \
   -O3 -msimd128 -ffast-math \

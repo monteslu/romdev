@@ -4,6 +4,15 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.84.1 — 2026-06-30
+
+- **New package `romdev-audio-resampler`** — the WASM+SIMD linear audio resampler (interleaved
+  S16LE stereo, any src→dst rate) is carved out of `src/playtest/resampler/` into its own
+  standalone, zero-dep npm package so other projects can consume it (retroemu's terminal audio
+  path needs it to resample fractional-rate cores like the GameTank ACP's ~13983 Hz up to a
+  fixed device rate — the way a libretro frontend does). romdevtools now depends on it; the
+  playtest audio sink imports it instead of the in-tree copy. No behavior change here.
+
 ## 0.84.0 — 2026-06-30
 
 **The 3D GL cores are now PLAYABLE in the SDL playtest window — N64 + PS1 at full speed.**

@@ -9,7 +9,7 @@ import {
   ROMDEV_PIXEL_FORMAT_RGBA8888,
 } from "../host/retroConstants.js";
 import { log } from "../mcp/log.js";
-import { initResampler, resampleS16Stereo } from "./resampler/index.mjs";
+import { initResampler, resampleS16Stereo } from "romdev-audio-resampler";
 import path from "node:path";
 import { existsSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
 import { execFile } from "node:child_process";
