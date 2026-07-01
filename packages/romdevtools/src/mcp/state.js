@@ -122,13 +122,37 @@ export function getHostOrNull(sessionKey) {
  * @returns {LibretroHost}
  */
 export function resetHost(sessionKey) {
-  const existing = hosts.get(sessionKey);
-  if (existing && existing.status.loaded) {
-    try { existing.unloadMedia(); } catch {}
-  }
+  teardownHost(hosts.get(sessionKey));
   const fresh = new LibretroHost();
   hosts.set(sessionKey, fresh);
   return fresh;
+}
+
+/** Tear down whatever host kind is present (LibretroHost.unloadMedia or a native
+ *  host's destroy) — WasmcartHost/JsGameHost don't have unloadMedia. */
+function teardownHost(existing) {
+  if (!existing) return;
+  try {
+    if (typeof existing.unloadMedia === "function" && existing.status?.loaded) {
+      existing.unloadMedia();
+    } else if (typeof existing.destroy === "function") {
+      existing.destroy();
+    }
+  } catch { /* ignore teardown errors */ }
+}
+
+/**
+ * Install an already-constructed host (a native-runtime kind: WasmcartHost /
+ * JsGameHost) as this session's active host, tearing down any previous one.
+ * Emulator platforms use resetHost + loadCore; native runtimes build their own
+ * host and hand it here.
+ * @param {string} sessionKey
+ * @param {object} hostInstance
+ */
+export function installHost(sessionKey, hostInstance) {
+  teardownHost(hosts.get(sessionKey));
+  hosts.set(sessionKey, hostInstance);
+  return hostInstance;
 }
 
 /** @param {string} sessionKey */

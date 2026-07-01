@@ -1,8 +1,17 @@
 import { resolveCore } from "../../cores/registry.js";
 import {
   clearHost, clearHostB, getHost, getHostB, getHostBOrNull, getHostOrNull,
-  rememberLastMedia, resetHost, resetHostB,
+  installHost, rememberLastMedia, resetHost, resetHostB,
 } from "../state.js";
+import { WasmcartHost } from "../../host/WasmcartHost.js";
+import { JsGameHost } from "../../host/JsGameHost.js";
+
+// Native-runtime platforms don't use a libretro core — they run a native WASM/JS
+// game module in-process. loadMedia builds the matching host and installs it.
+const NATIVE_RUNTIME_HOSTS = {
+  wasmcart: () => new WasmcartHost(),
+  jsgame: () => new JsGameHost(),
+};
 import { jsonContent, safeTool, textContent } from "../util.js";
 import { resolveCheatCodeForApply } from "./cheats.js";
 import { attachObserverFrame } from "./watch-memory.js";
@@ -15,10 +24,34 @@ export function registerLifecycleTools(server, z, sessionKey) {
   // it gets its own fresh host and does NOT overwrite slot A's recovery
   // breadcrumb, since B is transient scratch, not the session's main ROM.
   async function doLoadMedia({ platform, path, base64, mediaKind, virtualName, cheats, slot }) {
-    const resolved = resolveCore(platform);
-    if (!resolved) throw new Error(`no core available for platform '${platform}'`);
     if (!path && !base64) throw new Error("loadMedia: provide either `path` (file on disk) or `base64` (ROM bytes).");
     if (path && base64) throw new Error("loadMedia: provide `path` OR `base64`, not both.");
+
+    // Native-runtime kinds (wasmcart, jsgame) bypass the libretro core path: build
+    // their own host, load the game module, install it as the session host. They
+    // share the frame/input/screenshot surface but not loadCore/cheats/regions.
+    if (NATIVE_RUNTIME_HOSTS[platform]) {
+      if (slot === "b") throw new Error(`slot 'b' (side-by-side) is not supported for '${platform}'`);
+      const host = NATIVE_RUNTIME_HOSTS[platform]();
+      const bytes = base64 ? new Uint8Array(Buffer.from(base64, "base64")) : undefined;
+      await host.loadMedia({ platform, ...(bytes ? { bytes } : { path }) });
+      installHost(sessionKey, host);
+      if (path || bytes) rememberLastMedia(sessionKey, { platform, path, fromBase64: !!bytes });
+      const caps = host.getCapabilities();
+      const result = {
+        loaded: true, platform, kind: caps.kind,
+        mediaKind: host.status.mediaKind,
+        ...(bytes ? { bytes: bytes.length } : { path: host.status.mediaPath }),
+        fbWidth: host.status.fbWidth, fbHeight: host.status.fbHeight,
+        capabilities: caps,
+      };
+      // Push the first frame to the /livestream observer, same as an emulator load.
+      attachObserverFrame(result, host, `${platform} loaded`);
+      return result;
+    }
+
+    const resolved = resolveCore(platform);
+    if (!resolved) throw new Error(`no core available for platform '${platform}'`);
     const slotB = slot === "b";
     const host = slotB ? resetHostB(sessionKey) : resetHost(sessionKey);
     await host.loadCore(resolved.jsPath, resolved.wasmPath, { hwRender: resolved.hwRender, noderawfs: resolved.noderawfs });

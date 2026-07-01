@@ -4,6 +4,27 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.85.0 — 2026-07-01
+
+- **Native-runtime game kinds — wasmcart + jsgame are now first-class hosts.** romdev is a
+  uniform harness for runnable game artifacts; libretro emulator cores were one kind, and now
+  wasmcart carts (`.wasc`) and jsgame web games (`.jsgame`) are two more. They run native
+  WASM/JS in-process (not emulation) but share the same run/see/drive surface:
+  `loadMedia({platform:'wasmcart'|'jsgame'}) → frame(step/screenshot/verify) → input`, driven
+  through the existing tools. A capability descriptor per host keeps emulator-only tools
+  (memory regions, cpuState, disasm, cheats) absent for these kinds.
+  - `WasmcartHost` wraps wasmcart's `CartHost.runFrame`; framebuffer is XRGB8888 (decoded as-is).
+    **WASM introspection** (the V8-runtime bonus): read/write the real cart heap, enumerate the
+    module's exports, read the WCInfo. Needs `wasmcart@^0.3.0` (its new `setFixedStep`).
+  - `JsGameHost` wraps jsgamelauncher's new headless `createHostSession` (`rungame@^0.13.0`):
+    host-stepped rAF + offscreen-canvas readback, synthetic gamepad input, **JS introspection**
+    (`globalThis._jsg`). Requires the server to run with `--experimental-vm-modules` — the server
+    now SELF-RE-EXECS with that flag if missing (harmless for everything else).
+- **`pack` tool — the "build" (zip) step for native kinds.** `pack({target:'wasc'|'jsgame',
+  source, outputPath})` assembles a source directory into its distributable `.wasc`/`.jsgame`
+  archive (a zip; NOT a compiler — wasmcart is any-language→WASM, jsgame is plain JS). Rounds
+  out the build→run→see loop for these kinds. Zero new deps (fflate).
+
 ## 0.84.1 — 2026-06-30
 
 - **New package `romdev-audio-resampler`** — the WASM+SIMD linear audio resampler (interleaved

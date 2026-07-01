@@ -1,4 +1,21 @@
 #!/usr/bin/env node
+// Self-re-exec with --experimental-vm-modules if it's missing. The jsgame host kind
+// (rungame) sandboxes games in a vm.SourceTextModule realm, which requires that flag.
+// It's harmless for everything else, so we enable it once up front rather than making
+// users remember it. Guard against a re-exec loop via a sentinel env var.
+if (
+  !process.execArgv.some((a) => a.includes("experimental-vm-modules")) &&
+  !process.env.ROMDEV_REEXEChild
+) {
+  const { spawnSync } = await import("node:child_process");
+  const r = spawnSync(
+    process.execPath,
+    ["--experimental-vm-modules", ...process.execArgv, process.argv[1], ...process.argv.slice(2)],
+    { stdio: "inherit", env: { ...process.env, ROMDEV_REEXEChild: "1" } },
+  );
+  process.exit(r.status ?? 0);
+}
+
 // romdev — MCP server (Streamable HTTP).
 //
 // Exposes the libretro harness, save state, memory inspection, screenshot,
