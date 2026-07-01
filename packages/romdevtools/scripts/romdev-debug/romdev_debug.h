@@ -52,6 +52,27 @@ void romdev_watchpoint_get(unsigned *out, int clearHits);
 void romdev_readwatch_set(unsigned addr, int enabled);
 void romdev_readwatch_get(unsigned *out, int clearHits);
 
+/* ── Game Genie / cheat value-override ──────────────────────────────────────────
+ * A memory-read substitution device, exactly like a hardware Game Genie: when the CPU
+ * reads `addr`, the substitute `value` is returned instead of the real byte — optionally
+ * only when the real byte equals `compare` (the "compare" codes that survive bank
+ * switching). Up to ROMDEV_CHEAT_SLOTS active codes. The core's MemoryRead calls
+ * romdev_cheat_read(addr, realByte) and returns whatever it gives back.
+ *   slot      0..ROMDEV_CHEAT_SLOTS-1
+ *   addr      the (masked) read address to intercept
+ *   value     the byte to substitute
+ *   compare   the expected original byte (only used if hasCompare)
+ *   hasCompare 0 = always substitute; 1 = only when realByte == compare
+ *   enabled   1 = active, 0 = clear this slot */
+#define ROMDEV_CHEAT_SLOTS 24
+void romdev_cheat_set(int slot, unsigned addr, unsigned char value,
+                      unsigned char compare, int hasCompare, int enabled);
+/* out fills [enabled, addr, value, compare, hasCompare] for `slot`. */
+void romdev_cheat_get(int slot, unsigned *out);
+/* The read-substitution the core's bus read calls. Returns the byte to actually use
+ * (the substitute if a matching cheat is active, else `realByte`). Cheap when idle. */
+unsigned char romdev_cheat_read(unsigned addr, unsigned char realByte);
+
 /* Range watch: log {pc,addr,val} for every R/W in [lo,hi] (mode 1=read 2=write 3=both).
  * get fills `out` with INTERLEAVED triples [pc0,addr0,val0, pc1,addr1,val1, …] up to
  * `max` events (returns the count); out2 (if non-null) gets [total, stored]. */

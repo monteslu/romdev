@@ -277,6 +277,98 @@ export function decodeSnesGameGenie(code) {
   return { address, value };
 }
 
+// ── GameTank Game Genie ─────────────────────────────────────────────────
+// A NEW format for Clyde Shaffer's open GameTank console — no prior art exists
+// (nobody has made GameTank cheat codes before). The GameTank CPU (W65C02S) sees a
+// flat 16-bit address space, so a code encodes a 16-bit READ address + an 8-bit
+// substitute value, plus an optional 8-bit compare byte (the compare form survives
+// the cart's flash bank switching, exactly like NES/GB compare codes). The device
+// intercepts the CPU's bus read and substitutes the value — identical behaviour to
+// a hardware Game Genie you could build for the console's open cart bus.
+//
+// Encoding: a distinct 16-letter wheel (so codes read as GameTank, not NES). The
+// payload nibbles are laid out and lightly scrambled so a small address change moves
+// several letters (the GG "feel"), then a 1-nibble checksum guards typos.
+//   plain:   6 payload nibbles (addr16 + val8) + 1 checksum = 7 letters, shown "XXX-XXXX"
+//   compare: 8 payload nibbles (addr16 + val8 + cmp8) + 1 checksum = 9 letters, "XXXX-XXXXX"
+const GT_GG_LETTERS = "KLMNPQRSTVWXYZ23"; // 16 distinct glyphs, no vowels/0-1-O-I ambiguity
+
+function gtNibblesToLetters(nibs) {
+  return nibs.map((x) => GT_GG_LETTERS[x & 0xF]).join("");
+}
+function gtLettersToNibbles(code) {
+  const clean = code.replace(/-/g, "").toUpperCase();
+  const n = [];
+  for (const ch of clean) {
+    const v = GT_GG_LETTERS.indexOf(ch);
+    if (v < 0) return null;
+    n.push(v);
+  }
+  return n;
+}
+// Simple nibble checksum: XOR of all payload nibbles, folded to 4 bits.
+function gtChecksum(payloadNibs) {
+  let c = 0;
+  for (const x of payloadNibs) c ^= x & 0xF;
+  return c & 0xF;
+}
+// Scramble/unscramble the payload-nibble ORDER (a fixed permutation) so a code
+// doesn't read as plain hex. Self-inverse pairs keep decode trivial.
+const GT_PERM6 = [3, 0, 5, 1, 4, 2];      // plain: 6 nibbles
+const GT_PERM8 = [5, 2, 7, 0, 4, 1, 6, 3]; // compare: 8 nibbles
+function applyPerm(arr, perm) { return perm.map((i) => arr[i]); }
+function invertPerm(perm) {
+  const inv = new Array(perm.length);
+  perm.forEach((p, i) => { inv[p] = i; });
+  return inv;
+}
+
+/** ENCODE → GameTank Game Genie. `address` 0..0xFFFF, `value` 0..0xFF, optional
+ *  `compare` 0..0xFF. Returns the dashed letter code, or null if out of range. */
+export function encodeGameTankGameGenie({ address, value, compare }) {
+  if (address == null || value == null) return null;
+  const a = address & 0xFFFF, v = value & 0xFF;
+  if (address < 0 || address > 0xFFFF || value < 0 || value > 0xFF) return null;
+
+  // payload nibbles, MSB-first: addr[15:12],addr[11:8],addr[7:4],addr[3:0],val[7:4],val[3:0]
+  let payload = [(a >> 12) & 0xF, (a >> 8) & 0xF, (a >> 4) & 0xF, a & 0xF, (v >> 4) & 0xF, v & 0xF];
+  let perm = GT_PERM6;
+  if (compare != null) {
+    if (compare < 0 || compare > 0xFF) return null;
+    const c = compare & 0xFF;
+    payload = payload.concat([(c >> 4) & 0xF, c & 0xF]);
+    perm = GT_PERM8;
+  }
+  const scrambled = applyPerm(payload, perm);
+  const sum = gtChecksum(payload);
+  const nibs = scrambled.concat([sum]);
+  const letters = gtNibblesToLetters(nibs);
+  // dash after the first 3 (plain) / 4 (compare) letters for readability
+  const cut = compare != null ? 4 : 3;
+  return letters.slice(0, cut) + "-" + letters.slice(cut);
+}
+
+/** Decode a GameTank Game Genie code → { address, value, compare? } or null. */
+export function decodeGameTankGameGenie(code) {
+  const n = gtLettersToNibbles(code);
+  if (!n) return null;
+  let perm, payloadLen;
+  if (n.length === 7) { perm = GT_PERM6; payloadLen = 6; }
+  else if (n.length === 9) { perm = GT_PERM8; payloadLen = 8; }
+  else return null;
+
+  const scrambled = n.slice(0, payloadLen);
+  const sum = n[payloadLen];
+  const payload = applyPerm(scrambled, invertPerm(perm));
+  if (gtChecksum(payload) !== sum) return null; // typo / not a valid GameTank code
+
+  const address = ((payload[0] << 12) | (payload[1] << 8) | (payload[2] << 4) | payload[3]) & 0xFFFF;
+  const value = ((payload[4] << 4) | payload[5]) & 0xFF;
+  if (payloadLen === 6) return { address, value };
+  const compare = ((payload[6] << 4) | payload[7]) & 0xFF;
+  return { address, value, compare };
+}
+
 // ── Game Boy GameShark ──────────────────────────────────────────────────
 // 8 hex digits "TTVVAAAA": TT = type/RAM-bank byte, VV = replacement value,
 // AAAA = the RAM address in LITTLE-ENDIAN order. (Distinct from GB Game Genie,
@@ -340,6 +432,11 @@ export function detectDevice(code, platform) {
       if (hex8 || hyphenHex) return "action-replay"; // SMS/GG Action Replay
       if (/^[0-9A-F]{3}-[0-9A-F]{3}/i.test(c)) return "game-genie";
       return "unknown";
+    case "gametank":
+      // 7-letter (XXX-XXXX) or 9-letter (XXXX-XXXXX) GameTank wheel code.
+      if (/^[KLMNPQRSTVWXYZ23]{3}-[KLMNPQRSTVWXYZ23]{4}$/i.test(c) ||
+          /^[KLMNPQRSTVWXYZ23]{4}-[KLMNPQRSTVWXYZ23]{5}$/i.test(c)) return "game-genie";
+      return "unknown";
     default:
       return "unknown";
   }
@@ -370,6 +467,8 @@ export function decodeCode(code, platform) {
     case "gg":
       // SMS/GG Action Replay raw-hex (addr/val, no scramble).
       return decodeProActionReplay(c, platform);
+    case "gametank":
+      return decodeGameTankGameGenie(c);
     default:
       return null;
   }
@@ -476,6 +575,7 @@ export function nativeDevicesFor(platform) {
     case "snes": return ["pro-action-replay", "game-genie"];
     case "gb": case "gbc": return ["game-genie", "gameshark"];
     case "sms": case "gg": return ["action-replay"];
+    case "gametank": return ["game-genie"];
     default: return ["raw"];
   }
 }
@@ -494,6 +594,7 @@ export function encodeForDevice({ address, value, compare }, platform, device) {
       else if (["genesis", "megadrive", "md"].includes(platform)) code = encodeGenesisGameGenie({ address, value });
       else if (["gb", "gbc"].includes(platform)) code = encodeGbGameGenie({ address, value, compare });
       else if (platform === "snes") code = encodeSnesGameGenie({ address, value });
+      else if (platform === "gametank") code = encodeGameTankGameGenie({ address, value, compare });
       return code ? { code, device: "game-genie" } : null;
     }
     case "pro-action-replay": {

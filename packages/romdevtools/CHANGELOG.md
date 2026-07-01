@@ -4,6 +4,28 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.86.0 — 2026-07-01
+
+- **GameTank Game Genie — a brand-new cheat-code format.** Nobody had made GameTank cheat codes
+  before; this adds a Game-Genie-style read-substitution device to the emulated GameTank core plus
+  a code format that is HARDWARE-COMPATIBLE (the same codes would work on a physical Game Genie
+  built for the console's open cart bus).
+  - Core (`romdev-core-gametank@0.2.0`): a value-override cheat device in the shared debug lib
+    (`romdev_cheat_set`/`romdev_cheat_read`/`romdev_cheat_get`, 24 slots). `MemoryRead` returns the
+    substitute byte on an address match, with optional compare-against-original (survives bank
+    switching) — exactly what a hardware Game Genie does. Any core that adds the one-line
+    `romdev_cheat_read` call to its bus read gets this for free.
+  - Format: `encodeGameTankGameGenie`/`decodeGameTankGameGenie` — a distinct 16-letter wheel
+    (`KLMNPQRSTVWXYZ23`), 16-bit address + 8-bit value (+ optional compare), scrambled with a
+    checksum. Plain codes are `XXX-XXXX`, compare codes `XXXX-XXXXX` (e.g. `$8100→0x42` = KTM-LPK3).
+    Wired into every device dispatcher; `cheats({op:'make', platform:'gametank', …})` generates
+    codes and `cheats({op:'apply'})` applies them live. GameTank's `retro_cheat_set` is a stub, so
+    `LibretroHost.setCheat` routes GameTank cheats through the romdev value-override device.
+- **jsgame test no longer skips.** It ran only under `--experimental-vm-modules`, so the default
+  suite skipped it. It now runs in an isolated forked child process (SDL is main-thread-only;
+  rungame leaks handles) driven over rawr JSON-RPC — the child carries the flag and is killed when
+  the RPC resolves, so the main suite stays clean. Suite: 1099 tests, 1099 pass, 0 skipped.
+
 ## 0.85.0 — 2026-07-01
 
 - **Native-runtime game kinds — wasmcart + jsgame are now first-class hosts.** romdev is a

@@ -107,6 +107,58 @@ void romdev_readwatch_get(unsigned *out, int clearHits) {
     if (clearHits) { rd_hits = 0; rd_last_pc = 0xFFFFFFFFu; }
 }
 
+/* ── Game Genie / cheat value-override (hardware-faithful read substitution) ─────── */
+static struct {
+    unsigned      addr;
+    unsigned char value;
+    unsigned char compare;
+    int           hasCompare;
+    int           enabled;
+} cheat_slots[ROMDEV_CHEAT_SLOTS];
+static int cheat_any = 0; /* fast idle-skip: true if any slot enabled */
+
+static void cheat_recompute_any(void) {
+    int i;
+    cheat_any = 0;
+    for (i = 0; i < ROMDEV_CHEAT_SLOTS; i++)
+        if (cheat_slots[i].enabled) { cheat_any = 1; break; }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void romdev_cheat_set(int slot, unsigned addr, unsigned char value,
+                      unsigned char compare, int hasCompare, int enabled) {
+    if (slot < 0 || slot >= ROMDEV_CHEAT_SLOTS) return;
+    cheat_slots[slot].addr = addr;
+    cheat_slots[slot].value = value;
+    cheat_slots[slot].compare = compare;
+    cheat_slots[slot].hasCompare = hasCompare ? 1 : 0;
+    cheat_slots[slot].enabled = enabled ? 1 : 0;
+    cheat_recompute_any();
+}
+EMSCRIPTEN_KEEPALIVE
+void romdev_cheat_get(int slot, unsigned *out) {
+    if (!out || slot < 0 || slot >= ROMDEV_CHEAT_SLOTS) return;
+    out[0] = (unsigned)cheat_slots[slot].enabled;
+    out[1] = cheat_slots[slot].addr;
+    out[2] = cheat_slots[slot].value;
+    out[3] = cheat_slots[slot].compare;
+    out[4] = (unsigned)cheat_slots[slot].hasCompare;
+}
+/* The substitution the core's bus read calls. One predicted-not-taken branch when no
+ * codes are active (cheat_any == 0), so it's free on the hot path when idle. */
+EMSCRIPTEN_KEEPALIVE
+unsigned char romdev_cheat_read(unsigned addr, unsigned char realByte) {
+    int i;
+    if (!cheat_any) return realByte;
+    for (i = 0; i < ROMDEV_CHEAT_SLOTS; i++) {
+        if (cheat_slots[i].enabled && cheat_slots[i].addr == addr) {
+            if (!cheat_slots[i].hasCompare || cheat_slots[i].compare == realByte)
+                return cheat_slots[i].value;
+        }
+    }
+    return realByte;
+}
+
 EMSCRIPTEN_KEEPALIVE
 void romdev_range_set(unsigned lo, unsigned hi, int mode, int enabled) {
     range_lo = lo; range_hi = hi; range_mode = mode;
