@@ -162,7 +162,10 @@
       "ref": "master",
       "commit": "814991a2571ad3970e386cef48f3b148aa1c27b9",
       "license": "MIT",
-      "patch": "scripts/patches/fake08-romdev-memory-regions.patch",
+      "patches": [
+        "scripts/patches/fake08-romdev-memory-regions.patch",
+        "scripts/patches/fake08-romdev-input-resume-fix.patch"
+      ],
       "submodules": {
         "libs/z8lua": "e6928578d46b61fd5ea30cfcf547e855a30a0553"
       },

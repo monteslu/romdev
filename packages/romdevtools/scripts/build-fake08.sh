@@ -60,6 +60,21 @@ else
   exit 1
 fi
 
+# ── apply romdev's input-resume fix (the first button press after a cart load was
+# eaten by the _clearInputOnResume guard, so btnp never fired → games never left
+# their title screen). See scripts/patches/fake08-romdev-input-resume-fix.patch. ──
+INPUT_PATCH="$PROJECT_DIR/scripts/patches/fake08-romdev-input-resume-fix.patch"
+git checkout -- source/vm.cpp 2>/dev/null || true
+if git apply --check "$INPUT_PATCH" 2>/dev/null; then
+  git apply "$INPUT_PATCH"
+  echo "romdev: applied $INPUT_PATCH"
+elif grep -q "fall through — deliver real input this frame" source/vm.cpp; then
+  echo "romdev: input-resume fix already present; skipping."
+else
+  echo "FATAL: fake08 input-resume patch failed to apply and sentinel not present." >&2
+  exit 1
+fi
+
 cd "$FAKE08_DIR/platform/libretro"
 
 # ── build the objects with longjmp + exceptions support (the gotcha) ──
