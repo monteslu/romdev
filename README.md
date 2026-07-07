@@ -41,7 +41,7 @@ Every capability is exposed as a tool, so a coding agent can drive the whole loo
 
 ## Supported systems — pick your platform
 
-Eighteen consoles/computers, oldest → newest — fifteen 2D systems (including the open-hardware GameTank) plus three 3D consoles (N64, PlayStation, Dreamcast). They vary enormously in how hard a game is to make and how hard an existing game is to hack. **Build** = write code → compile → run. **Hack** = modify an existing commercial ROM (find data → patch → reinsert). A system can be easy on one and hard on the other. (Difficulty is rated *as it feels through romdev today* — see the note under the table; it gets easier as the tooling improves.)
+Eighteen consoles/computers, oldest → newest — fifteen 2D systems (including the open-hardware GameTank) plus three 3D consoles (N64, PlayStation, Dreamcast) — plus the **PICO-8** fantasy console (its own tier, listed after the 3D consoles). They vary enormously in how hard a game is to make and how hard an existing game is to hack. **Build** = write code → compile → run. **Hack** = modify an existing commercial ROM (find data → patch → reinsert). A system can be easy on one and hard on the other. (Difficulty is rated *as it feels through romdev today* — see the note under the table; it gets easier as the tooling improves.)
 
 | System | Year | Languages (toolkit) | Build a game | Romhack a game | Best for |
 |---|---|---|---|---|---|
@@ -68,6 +68,12 @@ The three **3D consoles** are a newer, distinct tier — they compile + boot + r
 | **Nintendo 64** | 1996 | C (mips-elf-gcc) | 🟠 Hard | — | MIPS R4300 + the RDP/RSP. Renders on glide64 through the GPU; bare C drives a GBI display list (or use libdragon). The 3D end of the pool. |
 | **Sony PlayStation** | 1994 | C (mips-elf-gcc) | 🟠 Hard | — | MIPS R3000. Renders on Beetle PSX HW through the GPU; OpenBIOS embedded (no Sony firmware). Bare C writes the GP0/GP1 ports, or link PSn00bSDK. |
 | **Sega Dreamcast** | 1998 | C (sh-elf-gcc) | 🟠 Hard | — | SH-4 + PowerVR2. Boots an ELF on Flycast's reios HLE; the bundled `dc.h` brings up a 640×480 framebuffer. No KallistiOS yet (bare-metal C). |
+
+The **PICO-8** fantasy console is its own tier again — not a hardware machine but a Lua VM ([FAKE-08](https://github.com/jtothebell/fake-08), MIT, no BIOS). It runs `.p8` (Lua source) and `.p8.png` (cart-in-a-PNG) carts at 128×128 with sound, and it's the **friendliest build target on the whole list**: the "code" is plain Lua, so `build({platform:'pico8', source: lua})` just packages a runnable `.p8` (no compiler, no linker, no crt0). Because it's a VM, there's no machine code to disassemble — `disasm({target:'source'})` hands back the cart's Lua directly, and `memory({region:'system_ram'})` reads its 64 KB address space. Thousands of freely-shareable community carts run as-is.
+
+| System | Year | Language (toolkit) | Build a game | "Hack" a cart | Best for |
+|---|---|---|---|---|---|
+| **PICO-8** | 2015 | Lua (FAKE-08) | 🟢 Easiest | 🟢 Easy | The gentlest on-ramp: Lua carts are plain text, so "build" is packaging and "hack" is editing source. Huge community library. |
 
 **Difficulty legend:** 🟢 Easy · 🟡 Medium · 🟠 Hard · 🔴 Hardest. **Build** ratings come from an agent that actually shipped games across the lineup; **Hack** ratings are for text/data edits (a `—` means no romhack data yet — it's CPU-and-game-dependent, and any game using custom compression jumps to Hard regardless of system).
 
