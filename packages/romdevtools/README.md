@@ -1,6 +1,6 @@
 # romdev
 
-The entry point for **romdev** — vibe-code real retro games. Build, run, inspect, and reverse-engineer actual homebrew ROMs (NES, SNES, Game Boy, Genesis, Atari, C64, GBA, PC Engine, MSX, GameTank — and the 3D consoles N64, PlayStation, and Dreamcast) with one command — drive it yourself or let a coding assistant do it.
+The entry point for **romdev** — vibe-code real retro games. Build, run, inspect, and reverse-engineer actual homebrew ROMs (NES, SNES, Game Boy, Genesis, Atari, C64, GBA, PC Engine, MSX, GameTank — and the 3D consoles N64, PlayStation, and Dreamcast), plus the **PICO-8** fantasy console (via FAKE-08), with one command — drive it yourself or let a coding assistant do it.
 
 ```bash
 npx romdevtools
@@ -14,6 +14,7 @@ npx romdevtools
 - **Reverse-engineering analysis engine (all 18 platforms — incl. the 3D consoles' MIPS R3000/R4300 + SH-4)** — control-flow graphs, deep cross-references, auto-detected functions (ranked real-code-first), a one-shot structural map, and a Ghidra **decompiler** (C-like pseudocode, with hardware registers named and 6502 SLEIGH clutter folded to readable C): `disasm({target:'cfg'|'xrefs'|'functions'|'decompile'})` and `symbols({op:'analyze'})`. And the piece no static tool has: **live computed-jumptable recovery** — `breakpoint({on:'jumptable'})` runs the emulator to resolve the `JMP (table,X)` / RTS-trick dispatchers (state machines, script/battle VMs) that static analysis collapses to "could not recover." Understand *how* a routine works before you touch it — no $3,000 IDA license, no install.
 - **Convert assets** — PNG → platform tiles/tilemaps, quantize-to-palette, audio importers (BRR for SNES, XGM2 PCM for Genesis).
 - **Native game runtimes (beyond emulation)** — the same run/see/drive loop also hosts two *native* game formats: **wasmcart** (`.wasc` — WASM games from any language; 2026) and **jsgame** (`.jsgame` — JavaScript canvas/WebGL games; 2024). `loadMedia({platform:'wasmcart'|'jsgame'})` → `frame({op:'step'|'screenshot'})` → `input`, over the same tools — plus V8/WASM introspection (the cart's live WASM heap + exports; the JS game's globals) an emulator can't offer, and `pack({target:'wasc'|'jsgame'})` to zip a source dir into the distributable archive (the "build" step; romdev doesn't compile the WASM — bring your own). A capability descriptor marks the emulator-only tools (memory regions / cpuState / disasm) *not-applicable* for these kinds. Depends on the [`wasmcart`](https://www.npmjs.com/package/wasmcart) + [`rungame`](https://www.npmjs.com/package/rungame) packages (jsgame runs in a `vm` realm — the server self-re-execs with `--experimental-vm-modules`).
+- **PICO-8 (fantasy console)** — the [FAKE-08](https://github.com/jtothebell/fake-08) player (MIT, no BIOS) runs PICO-8 `.p8` (Lua source) and `.p8.png` (cart-in-a-label-PNG) carts at 128×128 with sound. `loadMedia({platform:'pico8'})` → `frame`/`input` work like any core; `build({platform:'pico8', source: lua})` PACKAGES a runnable `.p8` from Lua (+ optional gfx/sfx/map sections) — it's a cart assembler, not a CPU compiler (the Lua IS the code). PICO-8 is a Lua VM, so instead of machine-code disasm/decompile you read the cart's Lua directly with `disasm({target:'source'})`; `memory({region:'system_ram'})` exposes the full 64KB PICO-8 address space (sprite sheet, map, sfx, general RAM, screen buffer). Its capability descriptor is a `fantasy` tier — cpuState/decompile/tile-inspectors report *not-applicable* (there's no CPU or tile hardware to inspect). Ships the [`romdev-core-fake08`](https://www.npmjs.com/package/romdev-core-fake08) core package.
 
 Point any coding agent at it three ways:
 
@@ -37,7 +38,7 @@ This package contains all the JavaScript — the tool surface, the WASM emulator
 
 `romdevtools` depends on the binary/data packages it needs (exact-pinned), so a single install gets a matched, tested set:
 
-- 2D cores: `romdev-core-{fceumm,gambatte,gpgx,vice,handy,prosystem,geargrafx,bluemsx,gametank}`
+- 2D cores: `romdev-core-{fceumm,gambatte,gpgx,vice,handy,prosystem,geargrafx,bluemsx,gametank,fake08}`
 - 3D / GPU cores (rendered through `native-gles`): `romdev-core-{parallel-n64,beetle-psx-hw,flycast}`
 - Platforms (core + dedicated toolchain bundled): `romdev-platform-{snes,gba,atari2600}`
 - Toolchains: `romdev-toolchain-{cc65,sdcc,m68k-gcc,vasm,rgbds,mips-gcc,sh-gcc}` (mips-gcc = N64/PS1 C; sh-gcc = Dreamcast C)
