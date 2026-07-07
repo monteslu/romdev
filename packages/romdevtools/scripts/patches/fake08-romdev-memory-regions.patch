@@ -1,0 +1,29 @@
+diff --git a/platform/libretro/libretro.cpp b/platform/libretro/libretro.cpp
+index 589d4f2..0c1f2b8 100644
+--- a/platform/libretro/libretro.cpp
++++ b/platform/libretro/libretro.cpp
+@@ -785,13 +785,23 @@ EXPORT unsigned retro_get_region()
+     return 0;
+ }
+ 
++// romdev: expose PICO-8's 64KB address space as SYSTEM_RAM so romdev's memory /
++// watch-memory / cheat tools can read it. PicoRam is a union whose flat `data[0x10000]`
++// view IS the full PICO-8 memory map (sprite sheet, map, flags, music, sfx, general-use
++// RAM at 0x4300-0x5dff, persistent cart data, screen buffer, user data). _memory is the
++// live global built in retro_init, so this stays valid across frames.
+ EXPORT void *retro_get_memory_data(unsigned id)
+ {
+-    //move cart data saving to here?
++    if (id == RETRO_MEMORY_SYSTEM_RAM && _memory != nullptr) {
++        return _memory->data;
++    }
+     return nullptr;
+ }
+ 
+ EXPORT size_t retro_get_memory_size(unsigned id)
+ {
++    if (id == RETRO_MEMORY_SYSTEM_RAM && _memory != nullptr) {
++        return 0x10000; // 64KB — the full PICO-8 address space
++    }
+     return 0;
+ }
