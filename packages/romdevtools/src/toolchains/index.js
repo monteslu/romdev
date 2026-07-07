@@ -1042,8 +1042,46 @@ export async function buildForPlatform(args) {
     };
   }
 
+  if (args.platform === "pico8") {
+    // PICO-8 "build" = PACKAGE a .p8 cart (plain-text sections), NOT compile to machine
+    // code — the Lua is source. Accept bare Lua (`source`/`lua`) wrapped into a valid .p8,
+    // or a complete .p8 passed through. Optional data sections (gfx/map/sfx/music) via
+    // `sections`. The "binary" IS the .p8 text bytes, which FAKE-08 loads + runs directly.
+    const { packP8 } = await import("./pico8/pack.js");
+    try {
+      const lua = args.lua ?? args.source ?? args.code;
+      const { text, bytes, warnings } = packP8({
+        lua,
+        p8: args.p8,
+        version: args.p8Version,
+        sections: args.sections ?? {},
+      });
+      return {
+        ok: true,
+        binary: bytes,
+        listing: text,      // the readable .p8 IS the listing
+        symbols: "",
+        log: warnings.length ? warnings.map((w) => `[pico8] ${w}`).join("\n") : "[pico8] packaged .p8 cart",
+        issues: [],
+        exitCode: 0,
+        toolchain: "pico8-pack",
+      };
+    } catch (e) {
+      return {
+        ok: false,
+        binary: null,
+        listing: "",
+        symbols: "",
+        log: String(e.message ?? e),
+        issues: [],
+        exitCode: 1,
+        toolchain: "pico8-pack",
+      };
+    }
+  }
+
   throw new Error(
-    `no bundled toolchain for platform '${args.platform}'. Supported: atari2600 (dasm), nes/c64/atari7800/lynx (cc65), snes (C via tcc-65816+wla+PVSnesLib, or asm via asar), genesis (C via m68k-gcc+SGDK, or asm via vasm68k), gba (C via arm-gcc+libtonc/libgba), gb/gbc (sdcc sm83 / rgbds), sms/gg (sdcc). Call listPlatforms for the live matrix.`,
+    `no bundled toolchain for platform '${args.platform}'. Supported: atari2600 (dasm), nes/c64/atari7800/lynx (cc65), snes (C via tcc-65816+wla+PVSnesLib, or asm via asar), genesis (C via m68k-gcc+SGDK, or asm via vasm68k), gba (C via arm-gcc+libtonc/libgba), gb/gbc (sdcc sm83 / rgbds), sms/gg (sdcc), pico8 (.p8 cart packager). Call listPlatforms for the live matrix.`,
   );
 }
 

@@ -54,6 +54,11 @@ export const CORES = {
   pce: { platform: "pce", coreName: "geargrafx", pkg: "romdev-core-geargrafx", displayName: "PC Engine / TurboGrafx-16 (Geargrafx)", aka: "turbografx,tg16,pcengine" },
   msx: { platform: "msx", coreName: "bluemsx", pkg: "romdev-core-bluemsx", displayName: "MSX / MSX2 (blueMSX)", aka: "msx2" },
   gametank: { platform: "gametank", coreName: "gametank", pkg: "romdev-core-gametank", displayName: "GameTank (Clyde Shaffer)", aka: "gtr" },
+  // FAKE-08 = open-source (MIT) PICO-8 player, NOT Lexaloffle's PICO-8, no BIOS. Runs
+  // .p8 (Lua source) + .p8.png carts at 128×128. It's a Lua VM, not a real CPU — the
+  // capability descriptor marks cpuState/disasm/memory-region tools not-applicable; the
+  // .p8 Lua source IS the readable "disassembly".
+  pico8: { platform: "pico8", coreName: "fake08", pkg: "romdev-core-fake08", displayName: "PICO-8 (FAKE-08)", aka: "p8,fake08" },
   // 32-bit MIPS tier. These cores HW-render (GL): the host lazy-loads the OPTIONAL
   // webgl-node bridge only when one of these boots (hwRender:true). The other 14 are
   // software-rendered and never touch GL, so a headless user without the GPU module

@@ -212,6 +212,7 @@ export const PLATFORM_VIRTUAL_EXT = {
   atari7800:  ".a78",
   pce:        ".pce",
   msx:        ".rom",
+  pico8:      ".p8",
 };
 import { RETRO_DEVICE_JOYPAD, ROMDEV_PIXEL_FORMAT_RGBA8888 } from "./retroConstants.js";
 import { decodeCode as decodeCheatCode } from "../cheats/gamegenie.js";

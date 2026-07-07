@@ -198,6 +198,33 @@ export const CAPABILITIES = {
       cart: true, disasm: true, decompile: true,
     },
   },
+  pico8: {
+    // FAKE-08 (MIT) runs PICO-8 carts. PICO-8 is a Lua VM, not a real CPU — so there's
+    // no machine code to disassemble/decompile and no CPU register file (cpuState N/A).
+    // But: build=PACKAGE a .p8 cart (Lua + gfx/sfx/map sections); run/screenshot work;
+    // memory works — the romdev patch exposes the full 64KB PICO-8 address space as
+    // system_ram (sprite sheet, map, flags, music, sfx, general RAM, screen buffer).
+    // disasm here is target:'source' — the cart IS Lua source, so we return the Lua
+    // itself (the honest "understand this cart" path), not a machine-code listing.
+    // It renders to a 128×128 framebuffer (poke to screen memory), so the inspect-*
+    // tile/sprite-table tools are N/A like gametank/the disc platforms.
+    // tier:"fantasy" — a fantasy console (Lua VM), not a CPU emulator. Held to its OWN
+    // conformance, NOT the canonical-14 cross-checks (which assume CPU disasm/decompile/
+    // cpuState/tile inspectors every real console has). Excluded from CONTRACT_PLATFORMS
+    // via NEXTGEN_TIER_PLATFORMS.
+    tier: "fantasy",
+    cpuFamily: "lua", decompileQuality: "n/a",
+    cpus: { main: "", secondary: [] }, // Lua VM — no CPU register file
+    audioChips: [], // audioDebug not wired (PICO-8's synth isn't a fixed-register chip we decode)
+    memoryRegions: [...GENERIC_REGIONS],
+    renderingKind: "framebuffer", introspection: "shallow",
+    ops: {
+      build: true, run: true, screenshot: true,
+      inspectSprites: false, inspectPalette: false, inspectBackground: false,
+      renderingContext: false, cpuState: false, audioDebug: false,
+      cart: false, disasm: true, decompile: false,
+    },
+  },
   pce: {
     cpuFamily: "huc6280", decompileQuality: "medium",
     cpus: { main: "", secondary: [] }, // getCPUState main NOT wired for pce
@@ -316,7 +343,7 @@ export const MIPS_TIER_PLATFORMS = Object.entries(CAPABILITIES)
  *  is held to its OWN conformance, not the "all 14" cross-checks; a new platform
  *  starts here (analysis-first) and graduates as run/build/etc. land. */
 export const NEXTGEN_TIER_PLATFORMS = Object.entries(CAPABILITIES)
-  .filter(([, c]) => c.tier === "mips" || c.tier === "sh")
+  .filter(([, c]) => c.tier === "mips" || c.tier === "sh" || c.tier === "fantasy")
   .map(([p]) => p);
 
 /** Back-compat: the analysis-only set is now empty (PS1/N64 gained run/screenshot

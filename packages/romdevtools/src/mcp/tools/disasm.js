@@ -1190,6 +1190,59 @@ function renderBuildMd({ platform, romPath, regions, blobs, build, verifiable, n
  * The default endian follows the CPU (Genesis/m68k → BE; everything else → LE),
  * overridable via `endian`.
  */
+/**
+ * target='source' — return a cart's high-level SOURCE instead of a disassembly, for
+ * platforms where the "cart" IS source (not machine code). Today: PICO-8 (.p8 = Lua +
+ * data sections; .p8.png = the same cart embedded in a label PNG). This is the honest
+ * "understand this cart" path for a Lua VM — there's no machine code to disassemble, so
+ * we hand back the actual Lua the game runs, plus a map of the other sections.
+ */
+async function readCartSourceCore(args) {
+  const romPath = requireRomPath(args);
+  const fs = await import("node:fs/promises");
+  const lower = romPath.toLowerCase();
+  const isPng = lower.endsWith(".p8.png");
+  const isP8 = lower.endsWith(".p8");
+  if (!isP8 && !isPng && args.platform !== "pico8") {
+    throw new Error(
+      `disasm({target:'source'}) is for source-form carts (PICO-8 .p8/.p8.png). '${romPath}' isn't one. ` +
+      `For machine-code ROMs use target:'rom'/'project'/'decompile'.`,
+    );
+  }
+  if (isPng) {
+    // A .p8.png embeds the cart in the PNG's low bits — decoding needs the FAKE-08 core.
+    throw new Error(
+      "disasm({target:'source'}): .p8.png carts store the source steganographically in the PNG — " +
+      "load it (loadMedia({platform:'pico8'})) to run it; export the .p8 text form to read the Lua. " +
+      "Pass a plain-text .p8 here to read its source directly.",
+    );
+  }
+  const text = await fs.readFile(romPath, "utf8");
+  // Split on __section__ markers, preserving order.
+  const parts = text.split(/(^__[a-z]+__$)/m);
+  const sections = {};
+  let current = "(header)";
+  let buf = [];
+  const flush = () => { if (buf.length) sections[current] = buf.join("\n").replace(/^\n+|\n+$/g, ""); buf = []; };
+  for (const chunk of parts) {
+    const m = chunk.match(/^__([a-z]+)__$/);
+    if (m) { flush(); current = m[1]; } else { buf.push(chunk); }
+  }
+  flush();
+  return {
+    platform: "pico8",
+    kind: "source",
+    format: ".p8",
+    note: "PICO-8 carts are SOURCE, not machine code — this is the Lua the game runs (+ its data sections). There is no disassembly to do.",
+    lua: sections.lua ?? "",
+    sections: Object.keys(sections),
+    // Include non-lua data sections so callers can see the full cart shape (gfx/map/sfx/music/gff/label).
+    dataSections: Object.fromEntries(
+      Object.entries(sections).filter(([k]) => k !== "lua" && k !== "(header)"),
+    ),
+  };
+}
+
 async function pointerTableCore(args) {
   const { platform, loBase, hiBase, count, convention = "direct", reverseHandler, bank } = args;
   if (loBase == null) throw new Error("disasm({target:'pointerTable'}): loBase (the table / low-byte base) is required.");
@@ -1485,11 +1538,11 @@ export function registerDisasmTools(server, z) {
     "LLM folds it. `address` for all four comes from target:'functions' (a CPU/virtual address; the file-offset " +
     "mapping is handled for you).",
     {
-      target: z.enum(["bytes", "rom", "project", "references", "cfg", "xrefs", "functions", "decompile", "resolveJumptable", "pointerTable", "recompile"]).describe("bytes = raw chunk; rom = mapper-aware ROM; project = full rebuildable disasm; references = flat da65 operand-refs to an address; functions/cfg/xrefs = Rizin RE engine (function list / control-flow graph / deep graph xrefs); decompile = Ghidra C pseudocode; resolveJumptable = recover a computed-jump dispatcher's targets (LIVE — redirects to breakpoint({on:'jumptable'}), which runs the emulator and records the real switch arms a static decompiler can't follow); recompile = EMIT backend — statically recompile a NES ROM's reset routine to SNES 65816 asar source that builds + boots (phase 1: NROM, 6502→65816 emulation mode, PPU/APU seam STUBBED). See the tool description for the RE loop + the decompile altitude rule + per-CPU quality (all 14 platforms)."),
+      target: z.enum(["bytes", "rom", "project", "references", "cfg", "xrefs", "functions", "decompile", "source", "resolveJumptable", "pointerTable", "recompile"]).describe("bytes = raw chunk; rom = mapper-aware ROM; project = full rebuildable disasm; references = flat da65 operand-refs to an address; functions/cfg/xrefs = Rizin RE engine (function list / control-flow graph / deep graph xrefs); decompile = Ghidra C pseudocode; resolveJumptable = recover a computed-jump dispatcher's targets (LIVE — redirects to breakpoint({on:'jumptable'}), which runs the emulator and records the real switch arms a static decompiler can't follow); recompile = EMIT backend — statically recompile a NES ROM's reset routine to SNES 65816 asar source that builds + boots (phase 1: NROM, 6502→65816 emulation mode, PPU/APU seam STUBBED). See the tool description for the RE loop + the decompile altitude rule + per-CPU quality (all 14 platforms)."),
       // shared
       path: z.string().optional().describe("target=bytes: raw binary path. target=rom/project/references: ROM file path."),
       base64: z.string().optional().describe("target=bytes: base64 of the bytes (OR `path`)."),
-      platform: z.enum(["nes", "snes", "sms", "gg", "gb", "gbc", "atari2600", "atari7800", "c64", "genesis", "gba", "pce", "msx", "lynx"]).optional().describe("target=rom/project/references: override platform (else sniffed from extension)."),
+      platform: z.enum(["nes", "snes", "sms", "gg", "gb", "gbc", "atari2600", "atari7800", "c64", "genesis", "gba", "pce", "msx", "lynx", "pico8"]).optional().describe("target=rom/project/references: override platform (else sniffed from extension). target=source: pico8 (.p8 carts are Lua source)."),
       startAddress: z.number().int().min(0).max(0xffffffff).default(0x8000).describe("target=bytes/rom: address of the first byte (GBA auto-bumped to 0x08000000)."),
       length: z.number().int().min(1).max(65536).optional().describe("target=rom: bytes to disassemble (default 256; mutually exclusive with endAddress)."),
       addOrigin: z.boolean().default(true).describe("target=bytes/rom: prepend `.org` so the asm re-assembles through ca65."),
@@ -1540,6 +1593,7 @@ export function registerDisasmTools(server, z) {
         case "xrefs":      return jsonContent(await analyzeXrefs(requireRomPath(args), args.address, args.platform));
         case "functions":  return jsonContent(await analyzeFunctions(requireRomPath(args), args.platform));
         case "decompile":  return jsonContent(await analyzeDecompile(requireRomPath(args), args.address, args.platform));
+        case "source":     return jsonContent(await readCartSourceCore(args));
         case "recompile":  return await recompileCore(args);
         case "pointerTable": return jsonContent(await pointerTableCore(args));
         case "resolveJumptable":
