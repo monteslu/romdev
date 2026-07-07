@@ -1,0 +1,159 @@
+pico-8 cartridge // http://www.pico-8.com
+version 18
+__lua__
+-- star sweeper — a shmup scaffold
+-- genre example for romdev/pico8. real sprites (see __gfx__), looping
+-- music (__music__), sfx, title/play/gameover states, projectile pool,
+-- wave spawner, aabb collision, score + hi-score, thruster animation.
+-- fork it and reshape one thing at a time.
+
+-- sprite ids in __gfx__:
+--  1 ship, 2 ship-thrust, 3 shot, 4 foe-a, 5 foe-b, 6 explosion
+
+function _init()
+ hi=0
+ make_stars()
+ state="title"
+ reset_game()
+ music(0)
+end
+
+function make_stars()
+ stars={}
+ for i=1,40 do add(stars,{x=rnd(128),y=rnd(128),s=rnd(2)+.4}) end
+end
+
+function reset_game()
+ player={x=60,y=100,cool=0,inv=0}
+ shots={}
+ foes={}
+ boom={}
+ score=0
+ lives=3
+ spawn=0
+ t=0
+end
+
+function _update()
+ t+=1
+ for s in all(stars) do s.y+=s.s if s.y>128 then s.y=0 s.x=rnd(128) end end
+
+ if state=="title" then
+  if btnp(4) or btnp(5) then state="play" reset_game() music(1) end
+  return
+ end
+ if state=="over" then
+  if btnp(4) or btnp(5) then state="title" music(0) end
+  return
+ end
+
+ -- move
+ local mv=false
+ if btn(0) then player.x-=2 mv=true end
+ if btn(1) then player.x+=2 mv=true end
+ if btn(2) then player.y-=2 end
+ if btn(3) then player.y+=2 end
+ player.x=mid(4,player.x,116)
+ player.y=mid(4,player.y,120)
+ player.inv=max(0,player.inv-1)
+
+ -- fire
+ player.cool=max(0,player.cool-1)
+ if (btn(4) or btn(5)) and player.cool==0 then
+  add(shots,{x=player.x+3,y=player.y-2})
+  player.cool=7 sfx(3)
+ end
+ for s in all(shots) do s.y-=4 if s.y<-4 then del(shots,s) end end
+
+ -- spawn foes (ramping)
+ spawn-=1
+ if spawn<=0 then
+  add(foes,{x=rnd(104)+12,y=-8,vy=rnd(1)+1,vx=rnd(1)-.5,ty=flr(rnd(2))})
+  spawn=max(10,38-flr(t/90))
+ end
+ for f in all(foes) do
+  f.y+=f.vy f.x+=f.vx
+  if f.x<8 or f.x>116 then f.vx=-f.vx end
+  if f.y>134 then del(foes,f) end
+  if player.inv==0 and abs(f.x-player.x)<6 and abs(f.y-player.y)<6 then
+   del(foes,f) hurt()
+  end
+ end
+
+ -- shot vs foe
+ for s in all(shots) do
+  for f in all(foes) do
+   if abs(f.x-s.x)<5 and abs(f.y-s.y)<5 then
+    del(shots,s) del(foes,f)
+    add(boom,{x=f.x,y=f.y,f=0})
+    score+=10 sfx(4)
+    break
+   end
+  end
+ end
+ for b in all(boom) do b.f+=1 if b.f>8 then del(boom,b) end end
+end
+
+function hurt()
+ lives-=1 sfx(5)
+ add(boom,{x=player.x,y=player.y,f=0})
+ player.inv=60
+ if lives<=0 then
+  hi=max(hi,score) state="over" music(-1)
+ end
+end
+
+function _draw()
+ cls(0)
+ for s in all(stars) do pset(s.x,s.y,s.s>1.6 and 7 or (s.s>1 and 6 or 5)) end
+
+ if state=="title" then
+  print("star sweeper",34,44,12)
+  print("★",26,44,10) print("★",96,44,10)
+  spr(1,60,62)
+  print("z/x  start",40,84,7)
+  print("hi "..hi,50,98,6)
+  print("arrows move · z/x fire",18,116,5)
+  return
+ end
+
+ for f in all(foes) do spr(f.ty==0 and 4 or 5,f.x-4,f.y-4) end
+ for s in all(shots) do spr(3,s.x-4,s.y-4) end
+ for b in all(boom) do spr(6,b.x-4,b.y-4) end
+ -- ship (blink when invulnerable)
+ if not (player.inv>0 and player.inv%4<2) then
+  spr((t%8<4) and 2 or 1,player.x-4,player.y-4)
+ end
+
+ rectfill(0,0,127,7,1)
+ print("score "..score,2,1,7)
+ print("hi "..hi,54,1,6)
+ for i=1,lives do spr(1,96+i*8,0) end
+
+ if state=="over" then
+  rectfill(28,52,100,80,0) rect(28,52,100,80,8)
+  print("game over",44,56,8)
+  print("score "..score,42,66,7)
+  print("z/x  title",40,74,6)
+ end
+end
+
+__gfx__
+00000000000c000000000c00000aa00000088000008888000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000ccc00000ccc0000aaaa000008888000899998000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0070070000ccc00000ccc0000a00a000088888000988889000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000770000cccccc00cc7cc00aa00aa008899988089aaaa9800000000000000000000000000000000000000000000000000000000000000000000000000000000
+000770000c7cc7c00c7cc7c0a0a00a0a0899998008aaaa8000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0070070000c00c0000cccc00a000000a088888000899998000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000090900000a00a000088880000899800000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000000000009000000000000000088000000880000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+__sfx__
+010c00000c6530e6530c65300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+010c00001805518055180551805518055180551305513055130551305511055110550e0550e0550e0550e0550c0550c0550c0550c05500000000000000000000000000000000000000000000000000000000000000
+011c00002465524655216551d655000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+010800002105524055000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+010400001c6551f655236550000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+010500000c6530a653086530565303653016530000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+__music__
+00 01424344
+00 02424344

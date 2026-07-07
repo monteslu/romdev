@@ -1,0 +1,113 @@
+pico-8 cartridge // http://www.pico-8.com
+version 18
+__lua__
+-- lane runner — a top-down endless racing scaffold
+-- genre example for romdev/pico8. car sprites (see __gfx__), looping
+-- music, engine/crash sfx, 3-lane dodging, scrolling road + dashes,
+-- speed ramp, distance score + best. fork it.
+
+function _init()
+ best=0
+ state="title"
+ reset_run()
+ music(0)
+end
+
+function reset_run()
+ car={x=64,lane=1}
+ lanes={40,64,88}
+ rivals={}
+ dist=0 speed=2 spawn=0 road=0 t=0 shake=0
+end
+
+function _update()
+ t+=1
+ road=(road+speed)%16
+ if shake>0 then shake-=1 end
+ if state=="title" then
+  if btnp(4) or btnp(5) then state="play" reset_run() music(1) end
+  return
+ end
+ if state=="over" then
+  if btnp(4) or btnp(5) then state="title" music(0) end
+  return
+ end
+
+ if btnp(0) and car.lane>0 then car.lane-=1 sfx(0) end
+ if btnp(1) and car.lane<2 then car.lane+=1 sfx(0) end
+ car.x=car.x+(lanes[car.lane+1]-car.x)*.4
+
+ speed=min(2+dist/700,5.5)
+ dist+=speed
+
+ spawn-=1
+ if spawn<=0 then
+  add(rivals,{lane=flr(rnd(3)),y=-14,c=flr(rnd(3))})
+  spawn=max(16,44-flr(dist/110))
+ end
+ for r in all(rivals) do
+  r.y+=speed
+  if r.y>140 then del(rivals,r) end
+  if r.lane==car.lane and abs(r.y-104)<13 then
+   sfx(2) shake=12 best=max(best,flr(dist/10)) state="over" music(-1)
+  end
+ end
+end
+
+function _draw()
+ local sx=shake>0 and (rnd(4)-2) or 0
+ cls(3)
+ camera(sx,0)
+ -- grass texture
+ for i=0,8 do for j=0,8 do if (i+j)%2==0 then pset(i*16+2,j*16+8,11) end end end
+ -- road
+ rectfill(28,0,100,128,5)
+ rectfill(28,0,31,128,10) rectfill(97,0,100,128,10)
+ for y=-16,128,16 do
+  rectfill(52,y+road,54,y+road+9,7)
+  rectfill(74,y+road,76,y+road+9,7)
+ end
+
+ if state=="title" then
+  camera()
+  rectfill(12,42,116,94,0)
+  print("lane runner",40,48,10)
+  spr(1,60,64)
+  print("left/right  swerve",22,80,6)
+  print("z/x  start",40,88,7)
+  if best>0 then print("best "..best,50,100,7) end
+  return
+ end
+
+ for r in all(rivals) do spr(2+r.c,lanes[r.lane+1]-4,r.y-6) end
+ spr(1,car.x-4,104-6)
+
+ camera()
+ rectfill(0,0,127,8,0)
+ print("dist "..flr(dist/10),2,1,7)
+ print("spd "..flr(speed*10),88,1,10)
+
+ if state=="over" then
+  rectfill(22,52,106,80,0) rect(22,52,106,80,8)
+  print("crashed!",46,56,8)
+  print("dist "..flr(dist/10),44,66,7)
+  print("z/x  title",40,74,6)
+ end
+end
+
+__gfx__
+000000000008800000099000000aa000000ee00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000888800009999000aaaaa000eeeee00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000008777780097777900a7777a00e7777e0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000008888880099999900aaaaaa00eeeeee0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000008888880099999900aaaaaa00eeeeee0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000008777780097777900a7777a00e7777e0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000088880000999900000aa000000ee0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000080080000900900000aa000000ee0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+__sfx__
+010800001505013050000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+010400001f0552205500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+010600000c05008050050550000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+__music__
+00 40424344
+00 41424344

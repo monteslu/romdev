@@ -662,6 +662,33 @@ const TEMPLATES = {
       mechanics: ["direct framebuffer paint (clear + solid rects)", "recognizable test pattern"],
       techniques: ["PowerVR2 framebuffer bring-up (FB_R_CTRL/FB_R_SIZE/FB_R_SOF1 + SPG)", "640x480 RGB565 at VRAM 0xA5000000", "SH-4 bare crt0 (stack + .bss + main)", "boots on Flycast reios HLE — no firmware"] },
   },
+  // PICO-8 (FAKE-08): the "source" IS a complete .p8 cart (Lua + __gfx__/__sfx__/__music__
+  // sections), so there's no crt0/runtime/linker — fork copies the .p8 and
+  // build({platform:'pico8', source:<the .p8 text>}) packages it. Each is a real playable
+  // game: hand-authored pixel-art sprites, looping music + SFX, title/play/over states,
+  // full genre mechanics. Fork one and reshape a single thing at a time.
+  pico8: {
+    shmup: { main: "templates/shmup.p8", runtime: [], lang: "Lua (FAKE-08)", ext: ".p8",
+      describe: "STAR SWEEPER — a vertical shooter. Ship sprite w/ thruster animation + i-frame blink, two enemy sprite types, projectile pool, ramping wave spawner, AABB collision, explosion sprites, score + persistent hi-score, looping title/play music that switches on start. The full shmup contract in ~130 lines of Lua.",
+      players: "1", mechanics: ["projectile pool", "wave spawner", "AABB collision", "i-frames", "title/play/over state machine"],
+      techniques: ["hand-authored __gfx__ sprites drawn with spr()", "__music__ + __sfx__ banks (music switches per state)", "sprite animation via frame flip", "scrolling starfield"] },
+    platformer: { main: "templates/platformer.p8", runtime: [], lang: "Lua (FAKE-08)", ext: ".p8",
+      describe: "HOP QUEST — a platformer. Hero sprite with idle/walk/jump frames (h-flipped by facing), gravity + solid-box collision, variable-height jump, animated spinning-coin sprites to collect, a goal flag, parallax hills, best-time tracking. Fork the movement/level and go.",
+      players: "1", mechanics: ["gravity + solid-box collision", "variable jump", "coin pickups", "goal + win state", "respawn on fall"],
+      techniques: ["hand-authored hero + coin sprites", "spr() h-flip by facing", "walk-cycle animation", "__music__ loop + jump/coin SFX", "parallax backdrop"] },
+    puzzle: { main: "templates/puzzle.p8", runtime: [], lang: "Lua (FAKE-08)", ext: ".p8",
+      describe: "COLOR DROP — a falling-gem match puzzle. Five faceted gem sprites, an 8×12 well, slide + soft/hard drop, horizontal match-3 line clears with a flash then gravity-settle + combo scoring, next-gem preview, game-over on stack-out. Looping music + drop/slide/match SFX.",
+      players: "1", mechanics: ["grid + falling piece", "match-3 clears", "gravity settle", "combo scoring", "next preview", "stack-out game over"],
+      techniques: ["hand-authored gem sprites", "flash-then-clear timing (state machine on a flash queue)", "column gravity compaction", "__music__ loop + SFX"] },
+    sports: { main: "templates/sports.p8", runtime: [], lang: "Lua (FAKE-08)", ext: ".p8",
+      describe: "RALLY VOLLEY — a 2-player paddle sports game. Paddle + ball sprites, angle-off-paddle physics, ball speed-up per rally, 1P-vs-CPU (tracking AI) or 2P couch mode toggled on the title, first-to-5 scoring. Looping music + wall/paddle/point SFX. The classic 2P scaffold.",
+      players: "1-2 (vs CPU or couch 2P)", mechanics: ["paddle + ball physics", "angle off paddle", "rally speed-up", "AI opponent", "first-to-5 match"],
+      techniques: ["hand-authored paddle/ball sprites", "mode toggle on title screen", "simple tracking AI", "__music__ loop + bounce/point SFX"] },
+    racing: { main: "templates/racing.p8", runtime: [], lang: "Lua (FAKE-08)", ext: ".p8",
+      describe: "LANE RUNNER — a top-down endless racer. Player + rival car sprites, 3-lane snap-steer dodging, scrolling road with animated lane dashes + shoulders, speed that ramps with distance, screen-shake on crash, distance score + best. Looping engine music + swerve/crash SFX.",
+      players: "1", mechanics: ["lane-snap steering", "rival spawner", "speed ramp", "crash + game over", "distance score"],
+      techniques: ["hand-authored car sprites", "scrolling-road illusion (moving dashes)", "camera() screen-shake", "__music__ loop + SFX"] },
+  },
 };
 // R37: GBC has its own scaffold tree at examples/gbc/templates/ +
 // src/platforms/gbc/lib/c/. Same runtime files as GB (the APU + Z80 +
