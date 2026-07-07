@@ -1,0 +1,31 @@
+diff --git a/source/vm.cpp b/source/vm.cpp
+index 63a6a63..c2eaac7 100644
+--- a/source/vm.cpp
++++ b/source/vm.cpp
+@@ -1198,14 +1198,19 @@ void Vm::update_buttons() {
+     // that closed the menu doesn't get passed to the cart.
+     // Keep clearing until the user releases all buttons.
+     if (_clearInputOnResume) {
+-        // Check if action buttons (4=O, 5=X) are still held
+-        if ((inputState.KHeld & 0x30) == 0) {
+-            _clearInputOnResume = false;
++        // Only KEEP swallowing while the action buttons that launched us (4=O, 5=X)
++        // are still physically held. The frame they're released, clear the flag AND
++        // fall through to deliver this frame's real input — otherwise the first genuine
++        // press after a cart load is silently eaten (btnp never fires until the player
++        // taps twice). Original code returned unconditionally, wiping that first frame.
++        if ((inputState.KHeld & 0x30) != 0) {
++            _input->SetState(0, 0);
++            _input->SetMouse(0, 0, 0);
++            _input->SetKeyboard(false, "");
++            return;
+         }
+-        _input->SetState(0, 0);
+-        _input->SetMouse(0, 0, 0);
+-        _input->SetKeyboard(false, "");
+-        return;
++        _clearInputOnResume = false;
++        // fall through — deliver real input this frame
+     }
+     
+     _input->SetState(inputState.KDown, inputState.KHeld);

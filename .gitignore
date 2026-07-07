@@ -66,3 +66,4 @@ publish-all.mjs
 .z80build/
 .z80build3/
 a.out
+*.playtest-autosave.state
