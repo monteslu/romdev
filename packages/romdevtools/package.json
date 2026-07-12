@@ -71,7 +71,7 @@
     "romdev-platform-atari2600": "0.9.0",
     "romdev-platform-gba": "0.9.0",
     "romdev-platform-snes": "0.9.0",
-    "romdev-toolchain-cc65": "0.1.2",
+    "romdev-toolchain-cc65": "0.1.3",
     "romdev-toolchain-m68k-gcc": "0.2.1",
     "romdev-toolchain-mips-gcc": "0.1.1",
     "romdev-toolchain-rgbds": "0.1.1",

@@ -1,0 +1,318 @@
+cc65 reproducible debug info — deterministic, location/time-independent objects.
+
+WHY: With -g, cc65/ca65 bake three environment-dependent values into every
+object file's debug info: (1) an OPT_DATETIME wall-clock timestamp stamped by
+ca65 at assembly time, (2) each source file's modification time, and (3) each
+source file's full path. None affect generated code — a debugger uses them only
+to locate a source and check whether it changed — but they make the object
+depend on WHEN and WHERE it was built. That breaks byte-for-byte reproducibility.
+
+It bites us concretely: romdev ships cc65 both as a native binary and as a WASM
+build. The WASM build stages inputs into a virtual filesystem under "/work/...",
+each written with a single mtime, so assembling the very same source through the
+WASM ca65 produces a different .o than the native ca65 — different debug paths,
+different mtimes, different OPT_DATETIME. Downstream, the GameTank SDK's
+FLASH2M bank-placement measures object/segment sizes, so this cosmetic delta
+perturbs code layout and can flip a tight build between fitting and overflowing.
+
+FIX (all in the debug-info emission paths; generated code is untouched):
+  - ca65 OPT_DATETIME: use SOURCE_DATE_EPOCH if set, else 0 (not wall clock).
+  - ca65 FILE table: intern the basename (not the full path) and pin the mtime
+    to SOURCE_DATE_EPOCH-or-0. GetFileIndex basenames to match, so .dbg line
+    references still resolve. --create-dep is unaffected in practice (romdev
+    never uses it) but note it now emits basenames.
+  - cc65 ".dbg file"/".dbg line": emit the basename and a pinned mtime so the
+    generated assembly itself is path/time independent (this is what makes the
+    .s byte-identical, which in turn makes ca65's embedded .s size match).
+  - A shared common/filetime.c:GetSourceDateEpoch() honors SOURCE_DATE_EPOCH
+    (the cross-toolchain reproducible-build convention).
+
+SENTINEL for idempotent re-apply: GetSourceDateEpoch in src/common/filetime.c.
+
+diff --git a/src/ca65/filetab.c b/src/ca65/filetab.c
+index ce4b15c03..05b45521a 100644
+--- a/src/ca65/filetab.c
++++ b/src/ca65/filetab.c
+@@ -34,13 +34,16 @@
+ 
+ 
+ #include <stdio.h>
++#include <stdlib.h>
+ #include <string.h>
+ #include <errno.h>
+ 
+ /* common */
+ #include "check.h"
+ #include "coll.h"
++#include "filetime.h"
+ #include "hashtab.h"
++#include "strbuf.h"
+ #include "xmalloc.h"
+ 
+ /* ca65 */
+@@ -147,6 +150,42 @@ static int HT_Compare (const void* Key1, const void* Key2)
+ 
+ 
+ 
++static unsigned NormalizedNameId (const StrBuf* Name)
++/* Intern a file name into the string pool, stripped down to its basename, and
++** return its id. The file names stored in the object file's FILE table (and
++** referenced by debug line info) are only used by a debugger to identify a
++** source and never affect generated code, but the leading directory path makes
++** the object depend on WHERE the source was assembled from. That breaks
++** byte-for-byte reproducibility, most visibly between a native build (real host
++** paths) and the WASM build of ca65 (whose virtual FS stages inputs under
++** "/work/..."). Stripping to the basename - which is what a debugger matches on
++** anyway - removes that dependency. Both AddFile and GetFileIndex funnel
++** through here so the FILE table and the .dbg line references stay consistent.
++*/
++{
++    const char* Buf = SB_GetConstBuf (Name);
++    unsigned    Len = SB_GetLen (Name);
++    StrBuf      Base = STATIC_STRBUF_INITIALIZER;
++    unsigned    Id;
++    unsigned    Start = Len;
++
++    /* Find the start of the basename: the char after the last path separator,
++    ** scanning only within the known length (the StrBuf need not be NUL
++    ** terminated).
++    */
++    while (Start > 0 && Buf[Start-1] != '/' && Buf[Start-1] != '\\') {
++        --Start;
++    }
++
++    /* Intern the basename slice */
++    SB_AppendBuf (&Base, Buf + Start, Len - Start);
++    Id = GetStrBufId (&Base);
++    SB_Done (&Base);
++    return Id;
++}
++
++
++
+ static FileEntry* NewFileEntry (unsigned Name, FileType Type,
+                                 unsigned long Size, unsigned long MTime)
+ /* Create a new FileEntry, insert it into the tables and return it */
+@@ -203,8 +242,10 @@ const StrBuf* GetFileName (unsigned Name)
+ unsigned GetFileIndex (const StrBuf* Name)
+ /* Return the file index for the given file name. */
+ {
+-    /* Get the string pool index from the name */
+-    unsigned NameIdx = GetStrBufId (Name);
++    /* Get the string pool index from the name (basename-normalized, matching
++    ** how AddFile interned it).
++    */
++    unsigned NameIdx = NormalizedNameId (Name);
+ 
+     /* Search in the hash table for the name */
+     const FileEntry* F = HT_Find (&HashTab, &NameIdx);
+@@ -226,8 +267,24 @@ unsigned AddFile (const StrBuf* Name, FileType Type,
+ ** the table.
+ */
+ {
+-    /* Create a new file entry and insert it into the tables */
+-    FileEntry* F = NewFileEntry (GetStrBufId (Name), Type, Size, MTime);
++    /* Pin the modification time for reproducible objects: SOURCE_DATE_EPOCH if
++    ** set, otherwise 0. Like the file name, the mtime here is only used by a
++    ** debugger to decide whether a source changed since assembly - it never
++    ** affects generated code - so a fixed value keeps the object identical
++    ** regardless of when/where the input files were written (the WASM build
++    ** stamps every staged input with a single virtual-FS write time).
++    */
++    int SdePresent = 0;
++    unsigned long NormMTime = (unsigned long) GetSourceDateEpoch (&SdePresent);
++    if (!SdePresent) {
++        NormMTime = 0;
++    }
++    (void) MTime;
++
++    /* Create a new file entry and insert it into the tables, keyed on the
++    ** basename-normalized name so the object is path independent.
++    */
++    FileEntry* F = NewFileEntry (NormalizedNameId (Name), Type, Size, NormMTime);
+ 
+     /* Return the index */
+     return F->Index;
+diff --git a/src/ca65/main.c b/src/ca65/main.c
+index 3e751109e..2c7997721 100644
+--- a/src/ca65/main.c
++++ b/src/ca65/main.c
+@@ -44,6 +44,7 @@
+ #include "cmdline.h"
+ #include "consprop.h"
+ #include "debugflag.h"
++#include "filetime.h"
+ #include "mmodel.h"
+ #include "print.h"
+ #include "scopedefs.h"
+@@ -154,8 +155,20 @@ static void SetOptions (void)
+     SB_Printf (&Buf, "ca65 V%s", GetVersionAsString ());
+     OptTranslator (&Buf);
+ 
+-    /* Set date and time */
+-    OptDateTime ((unsigned long) time (0));
++    /* Set date and time. The OPT_DATETIME stamp is informational only (it never
++    ** affects generated code), but a wall-clock value makes every object unique,
++    ** so two builds of the same input never match byte-for-byte. Pin it: use
++    ** SOURCE_DATE_EPOCH when set, otherwise 0. This makes objects reproducible by
++    ** default while still letting a build stamp a real date via the environment.
++    */
++    {
++        int SdePresent = 0;
++        unsigned long DateTime = (unsigned long) GetSourceDateEpoch (&SdePresent);
++        if (!SdePresent) {
++            DateTime = 0;
++        }
++        OptDateTime (DateTime);
++    }
+ 
+     /* Release memory for the string */
+     SB_Done (&Buf);
+diff --git a/src/cc65/input.c b/src/cc65/input.c
+index 4faf2aa87..68b086502 100644
+--- a/src/cc65/input.c
++++ b/src/cc65/input.c
+@@ -42,6 +42,7 @@
+ #include "coll.h"
+ #include "debugflag.h"
+ #include "filestat.h"
++#include "filetime.h"
+ #include "fname.h"
+ #include "print.h"
+ #include "strbuf.h"
+@@ -179,6 +180,8 @@ static AFile* NewAFile (IFile* IF, FILE* F)
+         ** if a file has changed in the debugger, we will ignore this problem
+         ** here.
+         */
++        int SdePresent = 0;
++        unsigned long DbgMTime;
+         struct stat Buf;
+         if (FileStat (IF->Name, &Buf) != 0) {
+             /* Error */
+@@ -187,8 +190,21 @@ static AFile* NewAFile (IFile* IF, FILE* F)
+         IF->Size  = (unsigned long) Buf.st_size;
+         IF->MTime = (unsigned long) Buf.st_mtime;
+ 
+-        /* Set the debug data */
+-        g_fileinfo (IF->Name, IF->Size, IF->MTime);
++        /* Emit reproducible debug file info: the leading directory path and the
++        ** modification time both make the generated assembly (and thus the
++        ** object assembled from it) depend on where and when the source was
++        ** compiled. The WASM build of cc65 in particular sees inputs staged into
++        ** a virtual FS ("/work/..."), so an otherwise identical compile diverges
++        ** from a native build purely in these fields. Emit the basename only and
++        ** a pinned mtime (SOURCE_DATE_EPOCH if set, otherwise 0). These fields
++        ** are used only by a debugger to identify/change-check a source and
++        ** never affect generated code.
++        */
++        DbgMTime = (unsigned long) GetSourceDateEpoch (&SdePresent);
++        if (!SdePresent) {
++            DbgMTime = 0;
++        }
++        g_fileinfo (FindName (IF->Name), IF->Size, DbgMTime);
+     }
+ 
+     /* Insert the new structure into the AFile collection */
+diff --git a/src/cc65/lineinfo.c b/src/cc65/lineinfo.c
+index 8639d27e9..179a824a9 100644
+--- a/src/cc65/lineinfo.c
++++ b/src/cc65/lineinfo.c
+@@ -38,6 +38,7 @@
+ /* common */
+ #include "chartype.h"
+ #include "check.h"
++#include "fname.h"
+ #include "xmalloc.h"
+ 
+ /* cc65 */
+@@ -222,9 +223,17 @@ unsigned GetPresumedLineNum (const LineInfo* LI)
+ 
+ 
+ const char* GetActualFileName (const struct LineInfo* LI)
+-/* Return the actual name of the source file from a line info struct */
++/* Return the actual name of the source file from a line info struct.
++** Only the basename is returned: this name is emitted into ".dbg line"
++** directives in the generated assembly, and keeping the leading directory path
++** would make the assembly (and the object assembled from it) depend on where
++** the source was compiled - breaking byte-for-byte reproducibility between a
++** native build (real host paths) and the WASM build (whose virtual FS stages
++** inputs under "/work/..."). The basename is what a debugger matches on anyway.
++*/
+ {
+-    return LI->File != 0 ? GetInputFileName (LI->File->InputFile) : "<out of filescope>";
++    return LI->File != 0 ? FindName (GetInputFileName (LI->File->InputFile))
++                         : "<out of filescope>";
+ }
+ 
+ 
+diff --git a/src/common/filetime.c b/src/common/filetime.c
+index 8bdf44f3f..0646c5a7e 100644
+--- a/src/common/filetime.c
++++ b/src/common/filetime.c
+@@ -42,8 +42,11 @@
+ 
+ 
+ 
++#include <stdlib.h>
++#include <limits.h>
++#include <errno.h>
++
+ #if defined(_WIN32)
+-#  include <errno.h>
+ #  include <windows.h>
+ #else
+ #  include <sys/types.h>                          /* FreeBSD needs this */
+@@ -56,6 +59,31 @@
+ 
+ 
+ 
++time_t GetSourceDateEpoch (int* Present)
++/* Return the reproducible-build time stamp. See filetime.h for details. */
++{
++    const char* Env = getenv ("SOURCE_DATE_EPOCH");
++    if (Env != 0 && Env[0] != '\0') {
++        char* End;
++        unsigned long V;
++        errno = 0;
++        V = strtoul (Env, &End, 10);
++        /* Accept only a clean, fully-consumed, non-overflowing value */
++        if (End != Env && *End == '\0' && !(V == ULONG_MAX && errno == ERANGE)) {
++            if (Present != 0) {
++                *Present = 1;
++            }
++            return (time_t) V;
++        }
++    }
++    if (Present != 0) {
++        *Present = 0;
++    }
++    return time (0);
++}
++
++
++
+ /*****************************************************************************/
+ /*                                   Code                                    */
+ /*****************************************************************************/
+diff --git a/src/common/filetime.h b/src/common/filetime.h
+index f5f00cdc9..d1c944aec 100644
+--- a/src/common/filetime.h
++++ b/src/common/filetime.h
+@@ -63,6 +63,17 @@ int SetFileTimes (const char* Path, time_t T);
+ ** workarounds for all others (which in fact means "WINDOWS").
+ */
+ 
++time_t GetSourceDateEpoch (int* Present);
++/* Return the reproducible-build time stamp. If the SOURCE_DATE_EPOCH
++** environment variable is set to a valid non-negative integer, that value is
++** returned and, if Present is non-NULL, *Present is set to 1. Otherwise the
++** current wall-clock time (time(0)) is returned and *Present is set to 0.
++** This lets timestamps that get baked into object files (the ca65 OPT_DATETIME
++** stamp, source-file modification times in debug info) be pinned to a fixed
++** value so builds are byte-for-byte reproducible regardless of when or where
++** they run. See https://reproducible-builds.org/docs/source-date-epoch/ .
++*/
++
+ 
+ 
+ /* End of filestat.h */

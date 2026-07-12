@@ -178,15 +178,17 @@
     "cc65": {
       "kind": "git",
       "url": "https://github.com/cc65/cc65.git",
-      "ref": "V2.19",
-      "commit": "555282497c3ecf8b313d87d5973093af19c35bd5",
+      "ref": "master",
+      "commit": "cc3c40c54e51b2d9a22b63c85c418a2b11763377",
       "license": "zlib",
+      "patch": "scripts/patches/cc65-reproducible-debug-info.patch",
       "platforms": [
         "nes",
         "atari2600",
         "atari7800",
         "c64",
-        "lynx"
+        "lynx",
+        "gametank"
       ]
     },
     "sdcc": {
