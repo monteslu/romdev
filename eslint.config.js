@@ -17,6 +17,8 @@ export default [
     ignores: [
       "**/node_modules/**",
       "**/wasm/**",
+      // Generated Emscripten module glue that doesn't live under a wasm/ dir.
+      "packages/romdev-audio-resampler/resampler.mjs",
       "**/build/**",
       "**/.romdev-build/**",
       "**/.claude/**",     // workflow scripts — top-level return, not project ESM
