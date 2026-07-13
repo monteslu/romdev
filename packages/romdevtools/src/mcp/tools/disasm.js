@@ -1548,9 +1548,13 @@ export function registerDisasmTools(server, z) {
     "regions (PER-BANK on every banked format: NES mappers, SNES LoROM, GB MBC, Sega-mapper SMS/GG, MSX megaROM, " +
     "2600 F8/F6/F4, 7800 SuperGame, >32KB HuCards), REASSEMBLES each and verifies BYTE-EXACT (`roundTripOk`); " +
     "non-faithful lines fall back to `.byte` so it ALWAYS rebuilds; `readablePercent` reports instruction-vs-data. " +
-    "NES/C64/7800/Lynx/PCE ship a one-call `build()` rebuild in rebuild.json (flat AND banked); the rest ship a " +
-    "proven native recipe in BUILD.md. (SNES 65816 usually lands at the byte-exact " +
-    "data-only floor — its `.a8/.i8` width state desyncs when instructions and pinned `.byte` mix.)\n" +
+    "REBUILD (one call, ALL 15 classic platforms): `build({output:'reassemble', platform, path})` turns the project " +
+    "dir back into a BYTE-IDENTICAL ROM — it assembles each region + splices them into the kept `original.rom` " +
+    "(header/gaps/pad verbatim). Edit a region `.asm` first for a change: a same-length edit rebuilds a modified " +
+    "ROM (`byteExact:false`), a length-changing edit is refused. NES/C64/7800/Lynx/PCE ALSO ship a cc65-native " +
+    "one-call `build({output:'rom'})` recipe in rebuild.json (flat AND banked). (SNES 65816 usually lands at the " +
+    "byte-exact data-only floor — its `.a8/.i8` width state desyncs when instructions and pinned `.byte` mix; the " +
+    "reassemble rebuild is byte-identical regardless of readability.)\n" +
     "'references' = scan a ROM's code for operands matching a CPU `address` and classify each (call/jump/branch/" +
     "read/write); also walks the vector table. Banked carts are scanned PER BANK (all of the formats above) — " +
     "refs carry `prgBank` (NES) / `romBank` (everything else). LIMITATION: direct addressing only " +
@@ -1704,6 +1708,7 @@ function sniffPlatformFromPath(p) {
   if (/\.prg$/i.test(p)) return "c64";
   if (/\.(lnx|lyx)$/i.test(p)) return "lynx";
   if (/\.gba$/i.test(p)) return "gba";
+  if (/\.gtr$/i.test(p)) return "gametank";
   if (/\.(z64|n64|v64)$/i.test(p)) return "n64";
   if (/\.(psexe|psx)$/i.test(p)) return "ps1"; // .exe/.bin are ambiguous — pass platform explicitly
   if (/\.(gen|md|bin)$/i.test(p)) return "genesis";
@@ -1922,6 +1927,21 @@ function planRegions(platform, data) {
         label: `HuCard 8KB page ${b}${b === 0 ? " (reset MPR7 → $E000, vectors)" : " ($8000 ASSUMED — MPRs map pages at runtime)"}`,
       });
     }
+    return regions;
+  }
+  if (platform === "gametank") {
+    // GameTank (Clyde Shaffer's open W65C02S console): a flat, size-keyed EEPROM
+    // cart (default 32KB = EEPROM32K) mapped so the image ends at $FFFF — a 32KB
+    // ROM spans $8000-$FFFF, with the 6-byte NMI/RESET/IRQ vector table at $FFFA.
+    // One flat region at the top of the address space; the 65C02 rides the same
+    // da65/ca65 6502-family path (--cpu 65c02). No trailing-pad trim: the cart is
+    // exactly `size` bytes and the vectors + any pad are REAL bytes.
+    const org = (0x10000 - data.length) & 0xffff;
+    regions.push({
+      name: "rom", file: "rom.asm", bytes: data.slice(0),
+      startAddress: org, fileOffset: 0,
+      label: `flat cart @ $${org.toString(16).toUpperCase()} (W65C02, vectors at $FFFA)`,
+    });
     return regions;
   }
   if (platform === "msx") {

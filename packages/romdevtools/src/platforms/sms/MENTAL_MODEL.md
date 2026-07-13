@@ -321,7 +321,9 @@ disassemblers.
 Sega-mapper banked carts (>48 KB) are handled per-bank: `references` scans
 every 16 KB bank (bank 0 @ `$0000`, bank 1 @ `$4000`, banks 2+ @ their slot-2
 window `$8000`), refs tagged `romBank`; `disasm({target:'project'})` emits one
-region per bank with a bank-by-bank native rebuild recipe in `BUILD.md`.
+region per bank, and **`build({output:'reassemble', platform:'sms', path})`
+rebuilds the whole cart into a byte-identical ROM in one call** (it assembles each
+bank and splices them back — no bank-by-bank native recipe to run by hand).
 
 ## Horizontal scrolling (for side-scrollers)
 
