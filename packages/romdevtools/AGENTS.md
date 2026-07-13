@@ -105,7 +105,9 @@ questions, and running both early is normal.** A good default:
    you may have just skipped a long memory hunt. If it returns nothing useful (no
    match, or no cheat for *your* target), that's fine — move on, no time lost.
 3. **Disassemble / trace** whenever the hack is about CODE or about data the
-   cheats don't cover: `disasm({target:'project'})` for a rebuildable project,
+   cheats don't cover: `disasm({target:'project'})` for a rebuildable project
+   (then edit a region `.asm` and `build({output:'reassemble', platform, path})` to
+   rebuild a byte-identical ROM in one call — the "cmp before commit" gate),
    `disasm({target:'references'})` for "what touches this address", `breakpoint({on:'write'})` for the exact
    instruction that wrote a byte, `watch({on:'mem'})`/`breakpoint({on:'write',precision:'sampled'})` to find an address
    empirically. For STRUCTURE — "what are the functions, how do they call each
@@ -347,10 +349,13 @@ Different platforms have different levels of MCP-exposed debugging — different
 > (VDP DMA) — elsewhere use `breakpoint({on:'write'})`/`watch({on:'range'})`. All other RE tools above
 > work on every platform that has the register-write/watch core hooks (the 15 classic platforms).
 > `disasm({target:'rom'})` + `disasm({target:'references'})` cover **all 18** (incl. the 3D consoles' MIPS/SH-4), and `disasm({target:'project'})` byte-exact reassembly the **15 classic platforms** (incl. GameTank) — every
-> CPU family disassembles through a native binutils `objdump` (WASM), and
-> `disasm({target:'project'})` reassembles byte-exact through the matching native
-> `as`/`ld`/`objcopy`. The per-platform notes below cover the platform-SPECIFIC
-> inspectors + chips (PC Engine + MSX: generic shapes only so far).
+> CPU family disassembles through a native binutils `objdump` (WASM). To REBUILD,
+> **`build({output:'reassemble', platform, path})` turns a `disasm({target:'project'})`
+> dir back into a byte-identical ROM in ONE call on all 15** — it assembles each
+> region `.asm` with the native assembler and splices the results into the original's
+> header/gaps/pad. (Edit a region first for an intentional change; a same-length edit
+> rebuilds a modified ROM, a length-changing edit is refused.) The per-platform notes
+> below cover the platform-SPECIFIC inspectors + chips (PC Engine + MSX: generic shapes only so far).
 
 The deep per-platform inspectors + the exact memory-region names, core quirks, and any platform-specific traps live in **each platform's `MENTAL_MODEL.md`** (read via `platform({op:'doc', platform, name:'mental_model'})`) — read it for the system you're on. Symptom → doc:
 - **NES** — blank/black screen, wrong sprites/colors, or need live PPU regs / CIRAM-attribute / MMC1-banked CHR state.
@@ -365,7 +370,7 @@ The deep per-platform inspectors + the exact memory-region names, core quirks, a
 - **Atari Lynx** — `sprites({op:'inspect'})` returns an SCB list head (no fixed OAM), or you need the Mikey palette/audio, 65C02 regs, or the `lynx_hw_regs` $FC00-$FDFF window.
 - **MSX** — VDP/PSG inspection or AY8910 `audioDebug`. (ColecoVision is bring-up-only: standard `system_ram`/`save_ram`/`video_ram`, no custom inspectors — extend by patching its core per the snes9x/gpgx pattern.)
 - **PC Engine** — generic shapes + the core's native regions only so far (no custom-inspector treatment yet).
-- **GameTank** — Clyde Shaffer's open-hardware W65C02S console (cc65 toolchain, ext `.gtr`). Full classic-style Tier-1: `cpu({op:'read'})` (65c02 regsnap), `audioDebug({op:'inspect', chip:'acp'})` (the ACP audio coprocessor), `breakpoint({on:'write'|'read'|'pc'})` + watchdog + coverage, `disasm` (`bytes`/`rom`/`references` + the 6502 Rizin/Ghidra cfg/xrefs/functions/decompile path), `cart({op:'extract'|'wrap'})`, and the 6502 re-inject path (`romPatch`) same as NES/C64/Lynx. **No `sprites({op:'inspect'})`/`background`** — it's a blitter framebuffer with no sprite OAM / no tilemap (like the Dreamcast). No genre example games yet (brand-new platform).
+- **GameTank** — Clyde Shaffer's open-hardware W65C02S console (cc65 toolchain, ext `.gtr`). Full classic-style Tier-1: `cpu({op:'read'})` (65c02 regsnap), `audioDebug({op:'inspect', chip:'acp'})` (the ACP audio coprocessor), `breakpoint({on:'write'|'read'|'pc'})` + watchdog + coverage, `disasm` (`bytes`/`rom`/`references`/`project` + the 6502 Rizin/Ghidra cfg/xrefs/functions/decompile path — a 32KB flat cart @ `$8000`, one region, rebuilt byte-identical via `build({output:'reassemble', platform:'gametank', path})`), `cart({op:'extract'|'wrap'})`, and the 6502 re-inject path (`romPatch`) same as NES/C64/Lynx. **No `sprites({op:'inspect'})`/`background`** — it's a blitter framebuffer with no sprite OAM / no tilemap (like the Dreamcast). No genre example games yet (brand-new platform).
 
 Starter snippets per platform live under `src/platforms/<platform>/lib/`. Discover via `examples({op:'snippets', platform})` (default `mode:'list'`), fetch one via `examples({op:'snippets', platform, mode:'get', snippetName})`. SNES + NES + Genesis + SMS + Game Boy + Atari 2600 + Atari 7800 have substantial snippet libraries; others are minimal.
 

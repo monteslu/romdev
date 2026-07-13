@@ -76,6 +76,9 @@ export const CPU_FAMILY = {
   // PC Engine's HuC6280 is a 65C02 superset — the 6502-family da65/ca65 path
   // reassembles it (da65 also has an explicit --cpu huc6280 mode for decode).
   pce: "6502",
+  // GameTank's W65C02S is a 65C02 superset — same 6502-family da65/ca65 path.
+  // 65C02-only opcodes da65 doesn't decode floor to `.byte` (still byte-exact).
+  gametank: "6502",
 };
 
 /**

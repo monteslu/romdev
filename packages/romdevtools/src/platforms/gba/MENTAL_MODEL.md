@@ -182,8 +182,10 @@ Pair `sprites` / `palette` / `background` / `cpu` with
 `disasm({target:'rom'})`, `disasm({target:'references'})`, and
 `disasm({target:'project'})` run the native binutils
 **`arm-none-eabi-objdump`** (WASM) — **ARM mode by default**, pass
-`thumb:true` for Thumb code. The byte-exact project reassembles through
-`arm-none-eabi-as` / `ld` / `objcopy`.
+`thumb:true` for Thumb code. To rebuild, **`build({output:'reassemble',
+platform:'gba', path})` turns the project dir back into a byte-identical ROM in
+one call** — it assembles each region through `arm-none-eabi-as`/`ld`/`objcopy` and
+splices the results into the original's header/pad (you don't run them yourself).
 
 **Gotcha (until ARM/Thumb mode-tracking lands):** GBA C compiles mostly to
 **Thumb** reached via an **ARM crt0 stub**, so an ARM-mode disasm of a full

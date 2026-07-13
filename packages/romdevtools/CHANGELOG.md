@@ -28,6 +28,12 @@ the `romdev-mcp` bin is kept as an alias.)
     disassemble/heal). It also fixes a latent silent-truncation bug: a length-growing edit on the GNU
     paths was truncated back to the region size by the objcopy slice; it now reports `producedLength`
     so the caller catches it.
+- **GameTank joins the rebuildable-project platforms (14 → 15 classic).** `disasm({target:'project'})`
+  now handles GameTank's flat W65C02S EEPROM cart (32KB mapped at `$8000`, vectors at `$FFFA`; rides the
+  6502-family da65/ca65 path), so `build({output:'reassemble', platform:'gametank'})` rebuilds it
+  byte-identical like every other classic system. `.gtr` now sniffs to `gametank` (no explicit platform
+  needed) and has a `PLATFORM_VIRTUAL_EXT` entry. (The docs already claimed GameTank was covered — this
+  makes it true.)
 
 ## 0.87.2 — 2026-07-12
 

@@ -124,6 +124,19 @@ test("SMS (z80/GNU-as): reassemble is byte-identical", { timeout: 120000 }, asyn
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+test("GameTank (W65C02/ca65): reassemble is byte-identical", { timeout: 120000 }, async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "romdev-reasm-gt-"));
+  try {
+    // 32KB flat EEPROM32K cart mapped at $8000; reset vector ($FFFC) → $8000.
+    const orig = bank(0x8000, [0xA5, 0x02, 0x85, 0x02, 0x4C, 0x00, 0x80], 0xEA);
+    orig[0x7FFC] = 0x00; orig[0x7FFD] = 0x80;
+    const { re, proj } = await roundtrip(dir, "game.gtr", orig, "gametank");
+    assert.equal(proj.regions[0].startAddress, "$8000", "32KB cart maps at $8000");
+    assert.equal(re.ok, true, "reassemble failed: " + JSON.stringify(re.regions));
+    assert.equal(re.byteExact, true, "GameTank rebuild must be byte-identical");
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test("NES (6502/ca65): reassemble a real ROM (nestest.nes) is byte-identical", { timeout: 120000 }, async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "romdev-reasm-nes-"));
   try {

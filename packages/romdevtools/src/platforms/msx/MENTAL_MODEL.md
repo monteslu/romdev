@@ -121,8 +121,10 @@ exactly this.
   `objdump`. MegaROMs (>32 KB) are handled per 16 KB bank: `references` scans
   bank 0 at `$4000` (after the "AB" header) and banks 1+ at `$8000` (an
   assumed ASCII16-style window), refs tagged `romBank`;
-  `disasm({target:'project'})` splits the header into its own data region and
-  emits a bank-by-bank native rebuild recipe in `BUILD.md`.
+  `disasm({target:'project'})` splits the header into its own data region, and
+  **`build({output:'reassemble', platform:'msx', path})` rebuilds the whole ROM
+  byte-identical in one call** (each bank assembled + spliced back — no
+  bank-by-bank native recipe to run by hand).
 
 ## MCP debug & inspection tooling
 

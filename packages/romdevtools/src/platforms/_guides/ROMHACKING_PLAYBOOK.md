@@ -462,24 +462,31 @@ that won't reproduce faithfully heals to a `.byte`/`db` of its real bytes, so th
 `.asm` ALWAYS rebuilds (`roundTrip.allByteExact`). `readablePercent` per region tells you
 how much came back as real instructions vs. data. Alongside the `.asm` it writes the
 turnkey **rebuild glue**: data blobs (NES CHR-ROM → `chr.bin`; stripped Genesis/GBA/Lynx/MSX
-cartridge header → `*.bin`), a `BUILD.md` with the exact steps, and — where a one-call
-rebuild exists — a `rebuild.json` of the precise `build({...})` args. So the loop is
-`disasm({target:'project'})` → edit a `.asm` → rebuild → `romPatch({op:'diff'})` to confirm.
+cartridge header → `*.bin`), a verbatim `original.rom` template, a `reassemble.json` manifest,
+a `BUILD.md` with the exact steps, and — where a cc65-native one-call rebuild also exists — a
+`rebuild.json` of the precise `build({...})` args. So the loop is
+`disasm({target:'project'})` → edit a `.asm` → `build({output:'reassemble'})` → `romPatch({op:'diff'})` to confirm.
 
-**Two rebuild tiers** (the disasm emits each CPU's native-reassembler syntax — ca65 for
-6502/65816, GNU `as` for m68k/arm/z80/gbz80 — which only some `build()` toolchains consume):
-- **One-call `build()` rebuild, byte-identical** — **NES (NROM *and* banked mappers), C64,
-  Atari 7800 (flat *and* SuperGame banked), Lynx, PC Engine (flat *and* banked HuCards)**.
-  Feed `rebuild.json` straight to `build`. Banked projects ship a HEADER segment with the
-  original header bytes (16 iNES / 128 .a78 / 512 copier), per-bank segment wrappers, and a
-  generated multi-bank `.cfg` referenced via `linkerConfigPath` (so the cfg never streams
-  through context). (Lynx: `build()` yields the headerless image; prepend the shipped
-  `lnx_header.bin` for the full `.lnx`.)
-- **Native-recipe rebuild (`buildCall:null`), byte-identical, steps in `BUILD.md`** — **SMS,
-  GG, MSX, GB, GBC, Genesis, GBA, Atari 2600**. Their `build()` toolchains (SDCC/RGBDS/asar/
-  dasm/vasm) can't reassemble ca65/GNU-as syntax, so `BUILD.md` gives the proven native
-  `as`/`ld`/`objcopy` chain — per-bank on banked carts (Sega-mapper SMS/GG, MSX megaROMs,
-  banked 2600 get per-bank wrappers + cfg blobs and a bank-by-bank recipe).
+**The rebuild — one call, every platform.** `build({output:'reassemble', platform, path})` turns
+the project dir back into a **byte-identical ROM in ONE call on all 15 classic platforms** — no
+per-CPU recipe to run by hand. It assembles each region `.asm` with the CPU's native assembler
+(ca65 for 6502/65816, GNU `as`/`ld`/`objcopy` for m68k/arm/z80/gbz80) and splices the results into
+a copy of `original.rom`, so the cartridge header, inter-region gaps, and trailing pad come back
+verbatim. `byteExact:true` = the rebuild equals the original exactly. **Edit a region `.asm` first
+for an intentional change:** a same-length edit rebuilds a modified-but-valid ROM
+(`byteExact:false`, only the changed bytes differ); a length-changing edit is REFUSED with a
+per-region error (splicing can't shift every later byte — keep the byte count, or drop to a full
+`build({output:'rom'})` linker recipe). This is the "cmp before commit" gate for any structural hack.
+
+**Alternate cc65-native `build()` rebuild (`rebuild.json`)** — for **NES (NROM *and* banked
+mappers), C64, Atari 7800 (flat *and* SuperGame banked), Lynx, PC Engine (flat *and* banked
+HuCards)** the project also ships a `rebuild.json` you can feed straight to `build({output:'rom'})`
+(these platforms' `build()` toolchain IS cc65/ca65). Banked projects ship a HEADER segment with
+the original header bytes (16 iNES / 128 .a78 / 512 copier), per-bank segment wrappers, and a
+generated multi-bank `.cfg` via `linkerConfigPath`. (Lynx: it yields the headerless image; prepend
+the shipped `lnx_header.bin` for the full `.lnx`.) The other platforms (SMS/GG/MSX/GB/GBC/Genesis/
+GBA/Atari 2600) have no `rebuild.json` — but `build({output:'reassemble'})` above rebuilds them all
+the same one-call way, so you never need the native `as`/`ld`/`objcopy` chain yourself.
 
 **Rebuilding a commercial NES (NROM CHR-ROM) game — `build({inesHeader})`:** the most common
 NES RE rebuild. `build({output:'rom', platform:'nes', inesHeader:{prgBanks, chrBanks, mapper,

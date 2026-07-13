@@ -219,7 +219,8 @@ What you can read:
   F6 = 16 KB, F4 = 32 KB) `references` scans EVERY 4 KB bank at `$F000`,
   refs tagged `romBank`; `disasm({target:'project'})` likewise emits one
   region per bank plus per-bank `BANKn` wrappers and a multi-area `.cfg`
-  blob for the native ca65/ld65 rebuild.
+  blob, and **`build({output:'reassemble', platform:'atari2600', path})`
+  rebuilds the whole cart byte-identical in one call** (no ca65/ld65 by hand).
 
 Memory regions for **`memory({op:'read'})`**:
 
