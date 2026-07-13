@@ -25,7 +25,7 @@ const WASMCART_FB_FORMAT = RETRO_PIXEL_FORMAT_XRGB8888;
 // setInput speaks the libretro button vocabulary (b,y,select,start,up,down,left,
 // right,a,x,l,r,…); wasmcart pads carry the same conceptual buttons. We translate
 // the input bitmask/object into the pad object shape CartHost._writePads expects.
-const JOYPAD = {
+const _JOYPAD = {
   b: 0, y: 1, select: 2, start: 3, up: 4, down: 5, left: 6, right: 7,
   a: 8, x: 9, l: 10, r: 11, l2: 12, r2: 13, l3: 14, r3: 15,
 };
