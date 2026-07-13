@@ -363,3 +363,116 @@ async function reassembleCc65Native(disasm, startAddress, original, family) {
       note: ok ? "incremental heal did not converge; emitted byte-exact data-only (low readability)" : "could not reach byte-exact even as data" };
   }
 }
+
+// ── ASSEMBLE-ONLY path (the byte-exact ROUND-TRIP rebuild) ───────────────────
+//
+// reassembleForPlatform above DISASSEMBLES bytes and heals them back. But
+// build({output:'reassemble'}) rebuilds from region .asm files that
+// disasm({target:'project'}) already emitted (and that an agent may have
+// EDITED). Those files are the platform's native dialect already — ca65 for
+// 6502/65816, GNU-as for m68k/arm/z80/sm83 — so we just ASSEMBLE them; no
+// disassemble, no heal loop. `assembleRegionText` is that half: source text +
+// its origin/length → the produced bytes (or null + log on error). It reuses
+// the SAME per-family as/ld/objcopy/ca65/ld65 calls the heal path uses, so a
+// region that round-trips in disasm reassembles identically here.
+
+/**
+ * Assemble one region's .asm source (possibly hand-edited) back to raw bytes,
+ * using the platform's native assembler chain. No disassembly, no heal loop —
+ * the source is already the right dialect.
+ * @param {Object} a
+ * @param {string} a.platform
+ * @param {string} a.asmText     the region .asm contents (comments ok; leading `; ...` header ignored by the assembler)
+ * @param {number} a.startAddress CPU/origin address of the first byte
+ * @param {number} a.byteLength   expected produced length (the region's original size)
+ * @returns {Promise<{ ok:boolean, bytes:Uint8Array|null, family:string, log?:string }>}
+ */
+export async function assembleRegionText(a) {
+  const { platform, asmText, startAddress, byteLength } = a;
+  const family = CPU_FAMILY[platform];
+  if (!family) throw new Error(`assembleRegionText: no reassembly path for platform '${platform}'`);
+
+  if (family === "6502" || family === "65816") {
+    const { runCa65, runLd65 } = await import("../cc65/cc65.js");
+    const cpuTag = family === "65816" ? "65816" : "6502";
+    const cfg = `MEMORY{M:start $${startAddress.toString(16)},size $${byteLength.toString(16)},type ro,file %O,fill yes,fillval $FF;}\nSEGMENTS{CODE:load M,type ro;}\n`;
+    // The emitted .asm carries `.setcpu`/`.org` from the heal path; if a hand-
+    // edited file dropped them, ca65 still needs the CPU + origin, so ensure both.
+    let src = asmText;
+    if (!/^\s*\.setcpu\b/m.test(src)) src = `\t.setcpu "${cpuTag}"\n` + src;
+    if (!/^\s*\.org\b/m.test(src)) src = src.replace(/(\.setcpu\s+"[^"]+")/, `$1\n\t.org $${startAddress.toString(16).toUpperCase()}`);
+    const ca = await runCa65({ source: src, target: "none" }).catch((e) => ({ object: null, log: String(e) }));
+    if (!ca || !ca.object) return { ok: false, bytes: null, family, log: ca?.log || "ca65 failed" };
+    const ld = await runLd65({ objects: { "o.o": ca.object }, target: "none", linkerConfig: cfg }).catch((e) => ({ binary: null, log: String(e) }));
+    if (!ld || !ld.binary) return { ok: false, bytes: null, family, log: ld?.log || "ld65 failed" };
+    return { ok: true, bytes: new Uint8Array(ld.binary), family };
+  }
+
+  // GNU families (m68k/arm/z80/sm83): as → (ld) → objcopy. Mirror the toolset
+  // selection + the SUBALIGN(1)/`.org`/no-link rules from reassembleGnuNative.
+  let tools;
+  if (family === "m68k") {
+    const m = await import("../m68k-elf-gcc/gcc.js");
+    tools = { runAs: m.runM68kAs, runLd: m.runM68kLd, runObjcopy: m.runM68kObjcopy, fmtLines: `OUTPUT_FORMAT("elf32-m68k")\nOUTPUT_ARCH(m68k)\n` };
+  } else if (family === "arm") {
+    const m = await import("../arm-none-eabi-gcc/gcc.js");
+    tools = { runAs: m.runArmAs, runLd: m.runArmLd, runObjcopy: m.runArmObjcopy, fmtLines: "" };
+  } else if (family === "z80" || family === "sm83") {
+    const z = await import("../z80/binutils.js");
+    tools = { runAs: z.runZ80As, runObjcopy: z.runZ80Objcopy, march: family === "sm83" ? "gbz80" : "z80", noLink: true };
+  } else {
+    throw new Error(`assembleRegionText: no reassembly path for family '${family}'`);
+  }
+
+  const { runAs, runLd, runObjcopy, fmtLines = "", noLink, march } = tools;
+  const ld = `${fmtLines}ENTRY(_start)\nSECTIONS {\n  .text 0x${startAddress.toString(16)} : SUBALIGN(1) {\n    *(.text*) *(.rodata*) *(.data*)\n  }\n  /DISCARD/ : { *(.ARM.attributes) *(.comment) *(.note*) }\n}\n`;
+
+  // GNU `as` for these CPUs does NOT treat `;` as a comment — `;` is a statement
+  // separator. The emitted .asm uses `;` two ways: a LEADING `; …` metadata header
+  // block, and a TRAILING `; ADDR` address comment on each `.byte`/instruction
+  // line (from dataRegionSource + normalizeObjdump). Strip BOTH: drop the leading
+  // comment-only lines, then cut any trailing `; …` off every remaining line.
+  let gnuSrc;
+  {
+    const lines = asmText.split(/\r?\n/);
+    let i = 0;
+    while (i < lines.length && (lines[i].trim() === "" || lines[i].trimStart().startsWith(";"))) i++;
+    gnuSrc = lines.slice(i).map((ln) => {
+      const c = ln.indexOf(";");
+      return (c >= 0 ? ln.slice(0, c) : ln).replace(/\s+$/, "");
+    }).join("\n");
+  }
+  // A DATA region (dataRegionSource) is just `.org` + `.byte` rows with no
+  // `.section .text`/`_start:` scaffolding the link script needs. Wrap it so the
+  // linked (m68k/arm) path finds `_start` at the origin; the code path already
+  // carries its own scaffolding (skip if present). The no-link (z80/gbz80) path
+  // keeps its `.org` and never needs `_start`.
+  if (!noLink && !/^\s*\.section\s+\.text/m.test(gnuSrc)) {
+    gnuSrc = `.section .text\n.global _start\n_start:\n` + gnuSrc.replace(/^\s*\.org\s+\S+\s*$/m, "");
+  }
+  gnuSrc = gnuSrc + "\n";
+  const a2 = await runAs({ source: gnuSrc, march }).catch((e) => ({ object: null, log: String(e) }));
+  if (!a2 || !a2.object) return { ok: false, bytes: null, family, log: a2?.log || "as failed" };
+  let elf;
+  if (noLink) {
+    elf = a2.object;
+  } else {
+    const l = await runLd({ objects: { "main.o": a2.object }, linkScript: ld }).catch((e) => ({ elf: null, log: String(e) }));
+    if (!l || !l.elf) return { ok: false, bytes: null, family, log: l?.log || "ld failed" };
+    elf = l.elf;
+  }
+  const o = await runObjcopy({ elf }).catch((e) => ({ binary: null, log: String(e) }));
+  if (!o || !o.binary) return { ok: false, bytes: null, family, log: o?.log || "objcopy failed" };
+  let bin = new Uint8Array(o.binary);
+  // producedLength = how many REAL bytes the region assembled to (for the no-link
+  // path, minus the `.org` leading-zero pad). The caller checks this against the
+  // region's expected byteLength so a length-changing edit is REFUSED, not
+  // silently truncated by the slice below.
+  const produced = noLink ? Math.max(0, bin.length - startAddress) : bin.length;
+  if (noLink) {
+    bin = bin.slice(startAddress, startAddress + byteLength);
+  } else if (bin.length > byteLength) {
+    bin = bin.slice(0, byteLength);
+  }
+  return { ok: true, bytes: bin, family, producedLength: produced };
+}

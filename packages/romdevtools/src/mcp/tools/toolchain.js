@@ -712,10 +712,11 @@ export function registerToolchainTools(server, z, sessionKey) {
     "• output:'rom' (default) — assemble or compile `source` (single) / `sources` ({name:contents}) / `sourcePath` / `sourcesPaths`. Returns the ROM (path by default; `inline:true` for binaryBase64) + build log. **`binaryIncludes`/`binaryIncludePaths` (base64/path CHR-ROM, music blobs for `.incbin`) — WITHOUT them no game with external assets builds.** `includes`/`includePaths` for `.include`d text. `linkerConfig` (cc65; NES preset 'chr-ram-runtime' RECOMMENDED). `crt0`/`crt0Path`/`codeLoc`/`dataLoc` (SDCC). `runtime`/`maxmod`/`rebuildSdk` (GBA/Genesis SDK). **`lint:'strict'` fails the build (stage:'lint', no binary) if the pre-flight SDCC crash-pattern scan flags anything (e.g. the uint8 loop-bound trap); 'advisory' (default) just lists hits in issues[].** **`includeSymbols:true` returns the .map text inline on a PLAIN rom build — distinct from output:'romWithDebug' which writes .dbg/.map FILES.** Language is inferred from extension/content — usually OMIT `language`.\n" +
     "• output:'romWithDebug' — like 'rom' but also emits linker debug info for the `symbols` tool: cc65 → `.dbg`, SDCC → sdld `.map`, Genesis m68k → GNU ld map (find where a RAM var landed). DEFAULT writes ROM + debug file + log to disk (`outputPath` required unless `inline:true`). **`resolveSymbols:['grid','score']` folds those names' addresses ({resolvedSymbols:{grid:{address,hex,region?,ramOffset?}}}) straight into the result — the cheap way to a WRAM variable's address without loading the whole map (or round-tripping it through `symbols`).**\n" +
     "• output:'run' — BUILD + LOAD + RUN + SCREENSHOT in one round trip — the fastest iteration loop. Same build args; runs `frames` frames and returns the screenshot INLINE. `holdInputs` holds controller state; `screenshotPath` writes the PNG to disk instead; `projectName` titles the playtest window.\n" +
-    "• output:'project' — build a project DIRECTORY (`path`) without re-passing the file manifest each call. Entry point auto-detects `main.c` (C/SGDK Genesis, GBA, cc65/SDCC C) OR `main.s`/`main.asm` (asm); pass `entry:'smw.asm'` to point at a differently-named top-level file (e.g. an existing disassembly). Every `.c`/`.s`/`.asm` in the dir is a translation unit (linked together), every `.h`/`.inc` an include, and `.bin/.chr/.pcm/.brr/.vgm/...` (recursively, including subdirectories) become binaryIncludes (for `.incbin`). `options` (e.g. asar `--define _VER=1`) and `defines` are honored here too. Iterate an on-disk project by re-calling with just `{path, platform}`. **This is the no-boilerplate path for an examples({op:'fork'}) dir: the per-platform recipe auto-supplies the crt0 + load address — GB/GBC default `gb_crt0.s` + `codeLoc:0x150` (don't hand-pass them!), MSX routes `msx_crt0.s` + `codeLoc:0x4010`, SMS/GG auto-inject their bundled crt0, NES applies the chr-ram-runtime preset. PREFER this over re-passing `crt0Path`/`codeLoc` to output:'rom' for a forked project.**",
+    "• output:'project' — build a project DIRECTORY (`path`) without re-passing the file manifest each call. Entry point auto-detects `main.c` (C/SGDK Genesis, GBA, cc65/SDCC C) OR `main.s`/`main.asm` (asm); pass `entry:'smw.asm'` to point at a differently-named top-level file (e.g. an existing disassembly). Every `.c`/`.s`/`.asm` in the dir is a translation unit (linked together), every `.h`/`.inc` an include, and `.bin/.chr/.pcm/.brr/.vgm/...` (recursively, including subdirectories) become binaryIncludes (for `.incbin`). `options` (e.g. asar `--define _VER=1`) and `defines` are honored here too. Iterate an on-disk project by re-calling with just `{path, platform}`. **This is the no-boilerplate path for an examples({op:'fork'}) dir: the per-platform recipe auto-supplies the crt0 + load address — GB/GBC default `gb_crt0.s` + `codeLoc:0x150` (don't hand-pass them!), MSX routes `msx_crt0.s` + `codeLoc:0x4010`, SMS/GG auto-inject their bundled crt0, NES applies the chr-ram-runtime preset. PREFER this over re-passing `crt0Path`/`codeLoc` to output:'rom' for a forked project.**\n" +
+    "• output:'reassemble' — **the UNIFORM byte-exact ROUND-TRIP**: rebuild a `disasm({target:'project'})` output dir (`path`) into a byte-identical ROM in ONE call, on EVERY classic platform (NES/SNES/Genesis/GB/GBC/SMS/GG/MSX/GBA/C64/Atari/PCE/Lynx) — not just the cc65-native subset that `rebuild.json` covers. It reads the `reassemble.json` manifest disasm wrote, ASSEMBLES each region `.asm` with the platform's native assembler (ca65 for 6502/65816, GNU-as for m68k/arm/z80/sm83), and SPLICES each result into a copy of the original ROM (`original.rom`, kept in the dir) at its file offset — so the cartridge header, inter-region gaps, and trailing pad return verbatim. Returns `{ok, byteExact, outputPath, regions:[{file,byteExact,...}]}`; writes the ROM to `outputPath` (or `<dir>/rebuilt.<ext>` by default). **This is the 'cmp before commit' gate for a ROM-hacking / annotation workflow: edit a region `.asm`, call this, get a byte-identical ROM back (or a precise per-region mismatch if your edit changed a region's length).** `byteExact:true` = the rebuild equals `original.rom` exactly.",
     {
-      output: z.enum(["rom", "romWithDebug", "run", "project"])
-        .describe("rom=produce a ROM (default); romWithDebug=ROM + .dbg/.map debug files; run=build+load+run+screenshot; project=build a project directory."),
+      output: z.enum(["rom", "romWithDebug", "run", "project", "reassemble"])
+        .describe("rom=produce a ROM (default); romWithDebug=ROM + .dbg/.map debug files; run=build+load+run+screenshot; project=build a project directory; reassemble=rebuild a disasm({target:'project'}) dir into a byte-identical ROM (uniform across ALL platforms)."),
       platform: z.string().describe("Target platform id (e.g. 'nes', 'genesis')."),
       language: z.string().optional().describe("Language override ('c'/'asm'/'basic'). USUALLY OMIT — inferred from source extension/content; only the ambiguous case falls to the platform default. Ignored by output:'romWithDebug' (C only)."),
       // source inputs (rom/romWithDebug/run)
@@ -779,6 +780,10 @@ export function registerToolchainTools(server, z, sessionKey) {
         case "project": {
           if (!args.path) throw new Error("build({output:'project'}): `path` (the project directory) is required.");
           return await buildProjectImpl(args);
+        }
+        case "reassemble": {
+          if (!args.path) throw new Error("build({output:'reassemble'}): `path` (the disasm project directory) is required.");
+          return await reassembleProjectCore(args);
         }
         case "romWithDebug": return await buildSourceWithDebugCore(args);
         default: throw new Error(`build: unknown output '${args.output}'`);
@@ -1160,5 +1165,135 @@ export async function buildProjectCore({ path: projPath, platform, outputPath, o
     ...(result.stage ? { stage: result.stage } : {}),
     ...(await logField(result.log, false, logSibling, result.ok)),
     issues: rankIssues(result.issues ?? []),
+  });
+}
+
+/**
+ * build({output:'reassemble'}) — the UNIFORM byte-exact round-trip.
+ *
+ * Rebuild a `disasm({target:'project'})` output dir into a byte-identical ROM,
+ * on EVERY platform. Reads the `reassemble.json` manifest disasm wrote, then for
+ * each region assembles its (possibly hand-edited) `.asm` with the platform's
+ * native assembler and SPLICES the result into a copy of the original ROM
+ * (`original.rom`, kept in the dir) at the region's file offset — so the header,
+ * inter-region gaps, and trailing pad come back verbatim. The result equals the
+ * original exactly when no region was edited; an edit that keeps a region's
+ * length rebuilds a modified-but-valid ROM; an edit that CHANGES a region's
+ * length is reported as a per-region mismatch (splicing would corrupt offsets).
+ *
+ * This is the "cmp before commit" gate a ROM-hacking / annotation workflow needs,
+ * and unlike rebuild.json it exists for ALL classic platforms, not just the
+ * cc65-native subset.
+ */
+export async function reassembleProjectCore({ path: projPath, platform, outputPath }) {
+  const { assembleRegionText } = await import("../../toolchains/common/reassemble.js");
+  const manifestPath = path.join(projPath, "reassemble.json");
+  let manifest;
+  try {
+    manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  } catch {
+    throw new Error(
+      `build({output:'reassemble'}): no reassemble.json in '${projPath}'. This op rebuilds a ` +
+      `disasm({target:'project'}) directory — run that first (it writes reassemble.json + original.rom).`,
+    );
+  }
+  const plat = platform ?? manifest.platform;
+  if (platform && manifest.platform && platform !== manifest.platform) {
+    throw new Error(`build({output:'reassemble'}): platform '${platform}' ≠ manifest platform '${manifest.platform}'.`);
+  }
+
+  // The gap template: a copy of the original ROM. Reassembled regions overwrite
+  // their ranges; everything else (header, vectors, inter-region gaps, pad) is
+  // preserved byte-for-byte from here.
+  const templatePath = path.isAbsolute(manifest.romTemplate)
+    ? manifest.romTemplate
+    : path.join(projPath, manifest.romTemplate);
+  let template;
+  try {
+    template = new Uint8Array(await readFile(templatePath));
+  } catch {
+    throw new Error(`build({output:'reassemble'}): missing ROM template '${templatePath}' (the original.rom disasm kept). Re-run disasm({target:'project'}).`);
+  }
+  if (manifest.romLength != null && template.length !== manifest.romLength) {
+    throw new Error(`build({output:'reassemble'}): original.rom is ${template.length} bytes but manifest says ${manifest.romLength} — stale project.`);
+  }
+
+  const rom = template.slice(); // mutable copy — splice regions into it
+  const regionResults = [];
+  let anyEditKeptExact = false;
+
+  for (const reg of manifest.regions) {
+    const asmText = await readFile(path.join(projPath, reg.file), "utf8");
+    const r = await assembleRegionText({
+      platform: plat,
+      asmText,
+      startAddress: reg.startAddress,
+      byteLength: reg.byteLength,
+    });
+    if (!r.ok || !r.bytes) {
+      regionResults.push({ file: reg.file, ok: false, byteExact: false, error: (r.log || "assemble failed").split("\n").slice(-3).join(" | ").slice(0, 400) });
+      continue;
+    }
+    // A length-changing edit can't be spliced without shifting every later byte —
+    // refuse rather than silently corrupt the ROM. `producedLength` (GNU path) is
+    // the true assembled size BEFORE the byteLength slice; without it fall back to
+    // the sliced length (the cc65 path errors at ld65 on overflow, so it's safe).
+    const producedLen = r.producedLength ?? r.bytes.length;
+    if (producedLen !== reg.byteLength) {
+      regionResults.push({
+        file: reg.file, ok: false, byteExact: false,
+        error: `region reassembled to ${producedLen} bytes but must be ${reg.byteLength} (a length-changing edit can't be spliced back — keep the region's byte count, or use build({output:'rom'}) with a full linker recipe).`,
+      });
+      continue;
+    }
+    // Compare against the original bytes at this offset to report whether THIS
+    // region matches the source ROM (edited-but-valid regions differ, that's ok).
+    const orig = template.slice(reg.fileOffset, reg.fileOffset + reg.byteLength);
+    let regionExact = true;
+    for (let i = 0; i < reg.byteLength; i++) {
+      rom[reg.fileOffset + i] = r.bytes[i];
+      if (r.bytes[i] !== orig[i]) regionExact = false;
+    }
+    if (!regionExact) anyEditKeptExact = true;
+    regionResults.push({
+      file: reg.file, ok: true, byteExact: regionExact,
+      startAddress: "$" + reg.startAddress.toString(16).toUpperCase(),
+      fileOffset: "0x" + reg.fileOffset.toString(16).toUpperCase(),
+      bytes: reg.byteLength,
+    });
+  }
+
+  // Whole-ROM byte-exact vs the original template.
+  let romExact = rom.length === template.length;
+  if (romExact) for (let i = 0; i < rom.length; i++) if (rom[i] !== template[i]) { romExact = false; break; }
+
+  const anyRegionFailed = regionResults.some((r) => !r.ok);
+  const ext = PLATFORM_VIRTUAL_EXT[plat] ?? ".bin";
+  const outPath = outputPath ?? path.join(projPath, "rebuilt" + ext);
+  // Only write when every region assembled (a failed region means the ROM is
+  // incomplete/garbage — don't hand back a broken image).
+  let wrote = null;
+  if (!anyRegionFailed) {
+    await writeFile(outPath, rom);
+    wrote = outPath;
+  }
+
+  const note = anyRegionFailed
+    ? `Reassembly INCOMPLETE — ${regionResults.filter((r) => !r.ok).length} region(s) failed (see regions[].error). No ROM written.`
+    : romExact
+      ? `Byte-IDENTICAL to the original ROM (${rom.length} bytes). Round-trip verified — safe to commit.`
+      : anyEditKeptExact
+        ? `Rebuilt ${rom.length} bytes with edited region(s) (regions[].byteExact=false = your changes). Not identical to the original — that's expected for an intentional edit.`
+        : `Rebuilt ${rom.length} bytes but NOT byte-identical to the original despite no reported region edits — investigate regions[] before trusting this.`;
+
+  return jsonContent({
+    ok: !anyRegionFailed,
+    output: "reassemble",
+    platform: plat,
+    byteExact: !anyRegionFailed && romExact,
+    outputPath: wrote,
+    romLength: rom.length,
+    regions: regionResults,
+    note,
   });
 }
