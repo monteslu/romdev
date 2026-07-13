@@ -149,7 +149,12 @@ async function reassembleGnuNative(disasm, startAddress, original, tools, family
   // binutils chain for this CPU. asArgs (e.g. for z80's -march=gbz80) ride
   // through to the assembler call (the z80 wrapper bakes march in itself).
   const { runAs, runLd, runObjcopy, fmtLines = "" } = tools;
-  const ld = `${fmtLines}ENTRY(_start)\nSECTIONS {\n  .text 0x${startAddress.toString(16)} : {\n    *(.text*) *(.rodata*) *(.data*)\n  }\n  /DISCARD/ : { *(.ARM.attributes) *(.comment) *(.note*) }\n}\n`;
+  // SUBALIGN(1) is load-bearing: without it, the m68k ELF aligns .text to a 2-byte
+  // (word) boundary, so `objcopy -O binary` emits 2 leading pad bytes and the whole
+  // region shifts by 2 → byte-exact FAILS even for a pure `.byte` floor. Forcing
+  // sub-alignment to 1 places the section exactly at its origin with no leading pad.
+  // (ARM shares this linked path; harmless there where alignment already matches.)
+  const ld = `${fmtLines}ENTRY(_start)\nSECTIONS {\n  .text 0x${startAddress.toString(16)} : SUBALIGN(1) {\n    *(.text*) *(.rodata*) *(.data*)\n  }\n  /DISCARD/ : { *(.ARM.attributes) *(.comment) *(.note*) }\n}\n`;
 
   // Parse objdump's normalized lines into {label?, code?, addr, bytes}.
   const lines = disasm.split(/\r?\n/).map(parseLine);
