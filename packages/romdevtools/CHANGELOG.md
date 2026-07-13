@@ -4,6 +4,54 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.88.0 — 2026-07-12
+
+- **`build({output:'reassemble'})` — the UNIFORM byte-exact ROUND-TRIP.** `disasm({target:'project'})`
+  splits a ROM into byte-exact region `.asm` files, but a one-call rebuild only existed for the
+  cc65-native subset (NES/C64/Atari7800/Lynx/PCE via `rebuild.json`). Every other platform documented
+  a "run these native tools yourself" recipe — so an agent (or one of Jay's disassemble/annotate
+  skills) following the "rebuild byte-identical + `cmp` before every commit" gate would stall on
+  SNES/Genesis/GB/etc. This adds a single rebuild call that works on **every** classic platform.
+  - `disasm({target:'project'})` now also writes `reassemble.json` (a `{platform, romTemplate,
+    romLength, regions:[{file, startAddress, fileOffset, byteLength}]}` manifest) + a verbatim
+    `original.rom` copy, for all platforms. `BUILD.md` leads with the one-call path.
+  - `build({output:'reassemble', platform, path})` reads the manifest, ASSEMBLES each (possibly
+    hand-edited) region `.asm` with the platform's native assembler — ca65 for 6502/65816, GNU-as for
+    m68k/arm/z80/sm83 — and SPLICES each result into a copy of `original.rom` at its file offset, so
+    the cartridge header, inter-region gaps, and trailing pad return byte-for-byte. Returns
+    `{ok, byteExact, outputPath, regions:[{file, byteExact, …}]}`.
+  - **The annotation gate is now real on every platform:** a same-length region edit rebuilds a
+    modified-but-valid ROM (`byteExact:false`, exactly the changed bytes differ); a length-changing
+    edit is REFUSED with a precise per-region error (splicing can't shift every later byte). Verified
+    byte-identical end-to-end on all six CPU families (6502, 65816, sm83, z80, m68k, arm).
+  - New `assembleRegionText()` in `toolchains/common/reassemble.js` (the assemble-only half — no
+    disassemble/heal). It also fixes a latent silent-truncation bug: a length-growing edit on the GNU
+    paths was truncated back to the region size by the objcopy slice; it now reports `producedLength`
+    so the caller catches it.
+
+## 0.87.2 — 2026-07-12
+
+- Pin the reproducible `cc65` toolchain (`romdev-toolchain-cc65@0.1.3`) so cc65 builds are
+  deterministic across environments.
+- Fix the m68k (Genesis) byte-exact reassembly: the ELF `.text` word-aligned, so `objcopy -O binary`
+  emitted 2 leading pad bytes and the region shifted by 2. `SUBALIGN(1)` on the link script pins the
+  section at its origin.
+
+## 0.87.1 — 2026-07-08
+
+- **PICO-8: input fix + 5 finished genre example games.** The `_clearInputOnResume` patch delivers
+  the first button press after a cart load (without it no cart leaves its title screen). Ships five
+  complete example carts (shmup/platformer/puzzle/sports/racing) with original art + looping
+  public-domain music.
+
+## 0.87.0 — 2026-07-08
+
+- **PICO-8 platform via FAKE-08.** The MIT-licensed FAKE-08 player compiled to a WASM libretro core
+  (`romdev-core-fake08`, no BIOS). Full tool surface: `build({platform:'pico8'})` packages a `.p8`,
+  `disasm({target:'source'})` returns the cart's Lua, `memory({region:'system_ram'})` reads the flat
+  64KB PICO-8 map, and load/run/see/drive work. Capability tier `fantasy` (excluded from the
+  CPU-emulator RE contracts — it's a Lua VM, not machine code).
+
 ## 0.86.0 — 2026-07-01
 
 - **GameTank Game Genie — a brand-new cheat-code format.** Nobody had made GameTank cheat codes

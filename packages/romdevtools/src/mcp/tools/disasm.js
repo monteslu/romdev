@@ -1043,7 +1043,7 @@ async function disassembleRomCore(args) {
       return jsonContent({ ...baseResult, ok: true, asm });
 }
 
-async function disassembleProjectCore({ path: romPath, outputDir, platform }) {
+export async function disassembleProjectCore({ path: romPath, outputDir, platform }) {
       const { reassembleForPlatform, CPU_FAMILY } = await import("../../toolchains/common/reassemble.js");
       const data = new Uint8Array(await readFile(romPath));
       const resolved = platform ?? sniffPlatformFromPath(romPath);
@@ -1098,10 +1098,34 @@ async function disassembleProjectCore({ path: romPath, outputDir, platform }) {
         );
       }
       const buildMd = renderBuildMd({
-        platform: resolved, romPath, regions: out, blobs: writtenBlobs,
+        platform: resolved, romPath, outputDir, regions: out, blobs: writtenBlobs,
         build: absBuild, verifiable: plan.verifiable, notes: plan.notes, allOk,
       });
       await writeFile(nodePath.join(outputDir, "BUILD.md"), buildMd);
+
+      // reassemble.json — the UNIFORM byte-exact rebuild manifest, written for
+      // EVERY platform (unlike rebuild.json's one-call subset). It lets
+      // build({output:'reassemble', path}) rebuild the ROM in one call on any
+      // platform: assemble each region .asm and splice it into a copy of the
+      // ORIGINAL rom (kept as original.rom) at its file offset, so the header,
+      // inter-region gaps, and trailing pad come back verbatim. See toolchain.js.
+      await writeFile(nodePath.join(outputDir, "original.rom"), data);
+      const reassembleManifest = {
+        platform: resolved,
+        romTemplate: "original.rom",  // relative to the project dir
+        romLength: data.length,
+        regions: regions.map((reg) => ({
+          file: reg.file,
+          startAddress: reg.startAddress,
+          fileOffset: reg.fileOffset,
+          byteLength: reg.bytes.length,
+          ...(reg.kind === "data" ? { kind: "data" } : {}),
+        })),
+      };
+      await writeFile(
+        nodePath.join(outputDir, "reassemble.json"),
+        JSON.stringify(reassembleManifest, null, 2) + "\n"
+      );
 
       return jsonContent({
         ok: allOk,
@@ -1116,14 +1140,17 @@ async function disassembleProjectCore({ path: romPath, outputDir, platform }) {
           verifiable: plan.verifiable, // true = expected byte-identical via that call
           buildDoc: "BUILD.md",
           notes: plan.notes,
+          // The UNIFORM one-call rebuild, available on EVERY platform (splices
+          // the reassembled regions into a copy of the original for the gaps).
+          reassemble: { output: "reassemble", platform: resolved, path: outputDir },
         },
         note: allOk
           ? `All ${out.length} region(s) round-trip BYTE-EXACT (avg ${avgReadable}% disassembled as instructions, the rest as .byte data). ` +
+            `Rebuild byte-identical in ONE call: build({output:'reassemble', platform:'${resolved}', path:'${outputDir}'}).` +
             (absBuild
-              ? `Rebuild it with the build() call in rebuild.json / BUILD.md` +
-                (plan.verifiable ? " — expected byte-identical." : " (see notes — may need linker tweaks).")
-              : `See BUILD.md for how to rebuild.`)
-          : `Some regions did NOT round-trip byte-exact — see regions[].note.`,
+              ? ` (build() one-call rebuild also available via rebuild.json.)`
+              : ``)
+          : `Some regions did NOT round-trip byte-exact — see regions[].note. build({output:'reassemble', platform:'${resolved}', path:'${outputDir}'}) still rebuilds the original bytes (edited regions must reassemble to their length).`,
       });
 }
 
@@ -1142,7 +1169,7 @@ function absolutizeBuild(build, outputDir) {
 }
 
 /** Human + agent readable rebuild instructions for a disassembled project. */
-function renderBuildMd({ platform, romPath, regions, blobs, build, verifiable, notes, allOk }) {
+function renderBuildMd({ platform, romPath, outputDir, regions, blobs, build, verifiable, notes, allOk }) {
   const lines = [];
   lines.push(`# Rebuilding this ${platform} project`, "");
   lines.push(`Disassembled from \`${nodePath.basename(romPath)}\` by \`disasm({target:'project'})\`.`, "");
@@ -1151,21 +1178,35 @@ function renderBuildMd({ platform, romPath, regions, blobs, build, verifiable, n
     lines.push(`- \`${r.file}\` — ${r.region}${r.kind === "data" ? " (data)" : ""}, byte-exact${r.roundTripOk === false ? " ⚠ round-trip FAILED" : ""}.`);
   }
   for (const b of blobs) lines.push(`- \`${b.file}\` — ${b.bytes} bytes of binary data (extracted from the ROM; do not hand-edit).`);
-  lines.push("- `rebuild.json` — the exact `build()` args below, with absolute paths.", "");
+  lines.push("- `original.rom` — a verbatim copy of the source ROM (the rebuild template; do not edit).");
+  lines.push("- `reassemble.json` — the region→offset manifest the one-call rebuild reads.");
+  if (build) lines.push("- `rebuild.json` — the alternate cc65-native `build()` args below.");
+  lines.push("");
+
+  // The UNIFORM one-call rebuild — available on EVERY platform.
+  lines.push("## Rebuild (recommended — one call, all platforms)", "");
+  lines.push("Rebuild this project into a **byte-identical** ROM in one call:", "");
+  lines.push("```json", JSON.stringify({ output: "reassemble", platform, path: outputDir }, null, 2), "```", "");
+  lines.push(
+    "Pass these as the arguments to the `build` tool. It assembles each region `.asm` " +
+    "and splices the result into a copy of `original.rom`, so the header, gaps, and pad " +
+    "return verbatim. `byteExact:true` = the rebuild equals the original exactly. Edit a " +
+    "region `.asm` first to make a change — a same-length edit rebuilds a modified ROM; a " +
+    "length-changing edit is reported (splicing would shift every later byte).", "",
+  );
+
   if (build) {
-    lines.push("## Rebuild", "");
+    lines.push("## Rebuild (alternate — cc65-native `build()`)", "");
     if (verifiable) {
-      lines.push("This rebuilds **byte-identical** to the source ROM. Call:", "");
+      lines.push("This platform also has a native `build()` recipe that rebuilds byte-identical:", "");
     } else {
-      lines.push("Rebuild call (see Notes — may need linker adjustments for an exact match):", "");
+      lines.push("Alternate native `build()` recipe (see Notes — may need linker adjustments):", "");
     }
     lines.push("```json", JSON.stringify(build, null, 2), "```", "");
-    lines.push("Pass these as the arguments to the `build` tool. The same JSON is in `rebuild.json`.", "");
-  } else {
-    lines.push("## Rebuild", "", "No automatic rebuild recipe for this platform yet. " + notes, "");
+    lines.push("The same JSON is in `rebuild.json`.", "");
   }
   if (notes) lines.push("## Notes", "", notes, "");
-  if (!allOk) lines.push("> ⚠ Some regions did not round-trip byte-exact — edit those `.asm` files before rebuilding.", "");
+  if (!allOk) lines.push("> ⚠ Some regions did not round-trip byte-exact as INSTRUCTIONS (they floored to `.byte` data, which is still byte-exact). The one-call rebuild above is unaffected.", "");
   return lines.join("\n") + "\n";
 }
 
