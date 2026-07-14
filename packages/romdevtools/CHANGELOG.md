@@ -4,6 +4,25 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.89.0 — 2026-07-14
+
+Large-ROM `disasm({target:'project'})` no longer times out the tool call — the last of the
+findings from the 1 MB ActRaiser run. A multi-MB cart (32-bank SNES/Genesis) can take minutes to
+reassemble; that used to time the MCP call out mid-run even though the server finished writing every
+bank.
+
+- **Parallelized the per-bank reassembly.** The region loop was strictly sequential (one bank at a
+  time, one WASM worker). It now fires all regions concurrently and the worker pool caps real
+  parallelism at `ROM_DEV_WASM_POOL_SIZE` (default 2) — so a 32-bank cart runs pool-many banks at
+  once instead of serializing 32 heal loops. Order + byte-exactness preserved.
+- **`disasm({target:'project', background:true})` — the timeout-proof path.** For a large ROM, start
+  the disassembly in the background and get a `{jobId}` back IMMEDIATELY; the server keeps working
+  even if the call's client times out. Poll with `disasm({target:'project', job, outputDir})` — it
+  reports `regionsDone/regionsTotal` while running, then returns the exact same completion payload a
+  synchronous call would, once `status:'done'` (or the reason on `'error'`). Job state lives in a
+  `.romdev-job.json` in the output dir (stateless across calls; git-ignored). The sync path is
+  unchanged and remains the default for normal-size ROMs.
+
 ## 0.88.2 — 2026-07-13
 
 Two fixes from a real-world `disasm({target:'project'})` + `build({output:'reassemble'})` run — a
