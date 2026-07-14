@@ -1043,20 +1043,106 @@ async function disassembleRomCore(args) {
       return jsonContent({ ...baseResult, ok: true, asm });
 }
 
-export async function disassembleProjectCore({ path: romPath, outputDir, platform }) {
+// The job-status file dropped in the output dir so a background disassembly's
+// progress survives across MCP calls (no in-memory registry — poll reads the
+// file). Presence + `status` is the source of truth.
+const JOB_FILE = ".romdev-job.json";
+
+/**
+ * disasm({target:'project'}) orchestrator. Three modes:
+ *   - default (sync): run to completion, return the full payload.
+ *   - background:true → START the work detached, return {jobId} immediately (for
+ *     multi-MB ROMs whose reassemble would time out the tool call).
+ *   - job:'<id>' → POLL: read the status file; return progress, or the final
+ *     payload once done, or the error if it failed.
+ */
+export async function disassembleProjectCore(args) {
+  const { path: romPath, outputDir, platform, background, job } = args;
+
+  // ── POLL an existing background job ────────────────────────────────────────
+  if (job) {
+    if (!outputDir) throw new Error("disasm({target:'project', job}): outputDir is required to locate the job status file.");
+    let st;
+    try { st = JSON.parse(await readFile(nodePath.join(outputDir, JOB_FILE), "utf8")); }
+    catch { throw new Error(`disasm({target:'project', job:'${job}'}): no job found in '${outputDir}' (missing ${JOB_FILE}). Start one with background:true first.`); }
+    if (st.jobId !== job) throw new Error(`disasm({target:'project'}): job '${job}' doesn't match the job in '${outputDir}' ('${st.jobId}'). Poll the outputDir you started.`);
+    if (st.status === "running") {
+      return jsonContent({
+        ok: null, status: "running", jobId: job, platform: st.platform, outputDir,
+        regionsDone: st.regionsDone ?? 0, regionsTotal: st.regionsTotal ?? null,
+        note: `Still disassembling — ${st.regionsDone ?? 0}/${st.regionsTotal ?? "?"} regions done. Poll again: disasm({target:'project', job:'${job}', outputDir:'${outputDir}'}).`,
+      });
+    }
+    if (st.status === "error") {
+      return jsonContent({ ok: false, status: "error", jobId: job, platform: st.platform, outputDir, error: st.error, note: `Background disassembly FAILED: ${st.error}` });
+    }
+    // done → hand back the stored final payload verbatim.
+    return jsonContent(st.result);
+  }
+
+  // ── START a background job ─────────────────────────────────────────────────
+  if (background) {
+    if (!outputDir) throw new Error("disasm({target:'project', background:true}): outputDir is required (the job writes its status + output there).");
+    const resolved = platform ?? sniffPlatformFromPath(romPath);
+    if (!resolved) throw new Error(`disassembleProject: could not detect platform from '${romPath}'. Pass platform explicitly.`);
+    await mkdir(outputDir, { recursive: true });
+    // A deterministic-but-unique id (no Date.now/random in scripts; here we're in
+    // the server, so a monotonic counter + the dir is fine and readable).
+    const jobId = `job-${resolved}-${(bgJobCounter++).toString(36)}`;
+    const statusPath = nodePath.join(outputDir, JOB_FILE);
+    await writeFile(statusPath, JSON.stringify({ jobId, status: "running", platform: resolved, regionsDone: 0, regionsTotal: null }, null, 2));
+    // Fire-and-forget: run the work, updating the status file as it goes. Errors
+    // are caught and recorded in the status file (the poll surfaces them) — an
+    // unhandled rejection here must never crash the server.
+    runProjectDisassembly(args, resolved, { statusPath, jobId }).then(
+      async (payload) => { await writeFile(statusPath, JSON.stringify({ jobId, status: "done", platform: resolved, result: payload }, null, 2)); },
+      async (err) => { await writeFile(statusPath, JSON.stringify({ jobId, status: "error", platform: resolved, error: String(err?.message ?? err) }, null, 2)).catch(() => {}); },
+    );
+    return jsonContent({
+      ok: null, status: "running", jobId, platform: resolved, outputDir,
+      note: `Disassembly started in the BACKGROUND (large ROM). Poll for completion: disasm({target:'project', job:'${jobId}', outputDir:'${outputDir}'}). ` +
+        `The server keeps working even if this call's client times out; the poll returns the full result when done.`,
+    });
+  }
+
+  // ── SYNC (default) ─────────────────────────────────────────────────────────
+  const resolved = platform ?? sniffPlatformFromPath(romPath);
+  if (!resolved) throw new Error(`disassembleProject: could not detect platform from '${romPath}'. Pass platform explicitly.`);
+  await mkdir(outputDir, { recursive: true });
+  return jsonContent(await runProjectDisassembly(args, resolved, null));
+}
+
+let bgJobCounter = 1;
+
+/**
+ * The actual disassemble-project work. Returns the payload OBJECT (not wrapped in
+ * jsonContent — the caller wraps, so the same object can also be stored in the job
+ * status file). `progress` (or null) receives {statusPath, jobId} to checkpoint
+ * per-region completion for the poll surface.
+ */
+async function runProjectDisassembly({ path: romPath, outputDir }, resolved, progress) {
       const { reassembleForPlatform, CPU_FAMILY } = await import("../../toolchains/common/reassemble.js");
       const data = new Uint8Array(await readFile(romPath));
-      const resolved = platform ?? sniffPlatformFromPath(romPath);
-      if (!resolved) throw new Error(`disassembleProject: could not detect platform from '${romPath}'. Pass platform explicitly.`);
       await mkdir(outputDir, { recursive: true });
 
       // Plan the regions to disassemble for this platform (per-bank for banked
       // ROMs; one region for flat ROMs). Each region → its own byte-exact .asm.
       const regions = planRegions(resolved, data);
       if (!regions.length) throw new Error(`disassembleProject: no regions planned for '${resolved}' (unsupported or empty ROM).`);
+      if (progress) {
+        await writeFile(nodePath.join(outputDir, JOB_FILE),
+          JSON.stringify({ jobId: progress.jobId, status: "running", platform: resolved, regionsDone: 0, regionsTotal: regions.length }, null, 2)).catch(() => {});
+      }
 
-      const out = [];
-      for (const reg of regions) {
+      // Reassemble every region CONCURRENTLY. Each region is independent (its own
+      // WASM worker job + its own file write), and the worker pool caps real
+      // parallelism at ROM_DEV_WASM_POOL_SIZE — so firing all banks at once runs
+      // pool-many at a time and cuts wall-time by that factor on multi-bank ROMs
+      // (a 32-bank SNES cart no longer serializes 32 heal loops). Order is
+      // preserved by mapping over indices. (For very large ROMs the async-job
+      // path below still applies so the client never times out mid-run.)
+      let regionsDone = 0;
+      const out = await Promise.all(regions.map(async (reg) => {
         // Known-data regions (e.g. the GBA cartridge header) are emitted as a
         // clean `.byte` dump — byte-exact by construction, NOT a failed disasm.
         const r = reg.kind === "data"
@@ -1076,14 +1162,20 @@ export async function disassembleProjectCore({ path: romPath, outputDir, platfor
                   : `readable ${r.readablePercent}%`) +
           (r.note ? ` · ${r.note}` : "") + "\n\n";
         await writeFile(nodePath.join(outputDir, reg.file), header + r.source);
-        out.push({
+        // Checkpoint progress for the poll surface (background jobs only).
+        regionsDone++;
+        if (progress) {
+          await writeFile(nodePath.join(outputDir, JOB_FILE),
+            JSON.stringify({ jobId: progress.jobId, status: "running", platform: resolved, regionsDone, regionsTotal: regions.length }, null, 2)).catch(() => {});
+        }
+        return {
           region: reg.name, file: reg.file, startAddress: "$" + reg.startAddress.toString(16).toUpperCase(),
           bytes: reg.bytes.length, roundTripOk: r.ok, readablePercent,
           ...(reg.kind === "data" ? { kind: "data" } : {}),
           ...(isFill ? { fill: true, fillByte: "$" + fillByte.toString(16).toUpperCase().padStart(2, "0") } : {}),
           ...(r.note ? { note: r.note } : {}),
-        });
-      }
+        };
+      }));
 
       const allOk = out.every((r) => r.roundTripOk);
       // Average readability over CODE regions only — fill regions have no
@@ -1139,6 +1231,7 @@ export async function disassembleProjectCore({ path: romPath, outputDir, platfor
         "original.rom",
         "*.rom", "*.nes", "*.sfc", "*.smc", "*.gb", "*.gbc", "*.gba",
         "*.gen", "*.sms", "*.gg", "*.a26", "*.a78", "*.lnx", "*.pce", "*.gtr",
+        ".romdev-job.json",
       ]);
       const reassembleManifest = {
         platform: resolved,
@@ -1157,7 +1250,9 @@ export async function disassembleProjectCore({ path: romPath, outputDir, platfor
         JSON.stringify(reassembleManifest, null, 2) + "\n"
       );
 
-      return jsonContent({
+      // Return the raw payload OBJECT (the orchestrator wraps it in jsonContent
+      // for the sync path, or stores it in the job status file for background).
+      return {
         ok: allOk,
         path: romPath,
         platform: resolved,
@@ -1183,7 +1278,7 @@ export async function disassembleProjectCore({ path: romPath, outputDir, platfor
               ? ` (build() one-call rebuild also available via rebuild.json.)`
               : ``)
           : `Some regions did NOT round-trip byte-exact — see regions[].note. build({output:'reassemble', platform:'${resolved}', path:'${outputDir}'}) still rebuilds the original bytes (edited regions must reassemble to their length).`,
-      });
+      };
 }
 
 /**
@@ -1618,7 +1713,11 @@ export function registerDisasmTools(server, z) {
     "'project' = turn a ROM into a complete re-buildable disassembly in one call across all systems; splits into " +
     "regions (PER-BANK on every banked format: NES mappers, SNES LoROM, GB MBC, Sega-mapper SMS/GG, MSX megaROM, " +
     "2600 F8/F6/F4, 7800 SuperGame, >32KB HuCards), REASSEMBLES each and verifies BYTE-EXACT (`roundTripOk`); " +
-    "non-faithful lines fall back to `.byte` so it ALWAYS rebuilds; `readablePercent` reports instruction-vs-data. " +
+    "non-faithful lines fall back to `.byte` so it ALWAYS rebuilds; `readablePercent` reports instruction-vs-data (a uniform-FILL " +
+    "bank — all $FF/$00 padding — reports `readablePercent:null` + `fill:true`, NOT a bogus 100%). Also writes a `.gitignore` " +
+    "so the kept `original.rom` (copyrighted ROM data) can't be committed. **LARGE ROM (≥512KB, e.g. a 1MB SNES cart)? Pass " +
+    "`background:true`** — the reassemble can take minutes and would time out the call; you get a `{jobId}` immediately, then poll " +
+    "`disasm({target:'project', job, outputDir})` (reports `regionsDone/regionsTotal`, then the full result when `status:'done'`). " +
     "REBUILD (one call, ALL 15 classic platforms): `build({output:'reassemble', platform, path})` turns the project " +
     "dir back into a BYTE-IDENTICAL ROM — it assembles each region + splices them into the kept `original.rom` " +
     "(header/gaps/pad verbatim). Edit a region `.asm` first for a change: a same-length edit rebuilds a modified " +
@@ -1684,6 +1783,8 @@ export function registerDisasmTools(server, z) {
       annotateFileOffsets: z.boolean().default(true).describe("target=rom: append `; @0xNNNN` file offset to every line (for romPatch)."),
       // project
       outputDir: z.string().optional().describe("target=project: directory to write the project into (one .asm per region). target=recompile: directory to write main.asm + nes_seam.asm for build({platform:'snes'})."),
+      background: z.boolean().default(false).describe("target=project: run the disassembly in the BACKGROUND and return IMMEDIATELY with a {jobId} instead of blocking. Use this for LARGE ROMs (≥512KB — a multi-bank SNES/Genesis cart) where the full reassemble can take minutes and would otherwise time out the tool call. Poll with disasm({target:'project', job:'<jobId>', outputDir}) until status is 'done' (or 'error'); the final poll returns the same payload the synchronous call would have. Small ROMs don't need this — they finish well within the call."),
+      job: z.string().optional().describe("target=project: poll a background job started with background:true. Pass the jobId you got back (and the same outputDir). Returns {status:'running', regionsDone, regionsTotal} while working, or the full completion payload once status is 'done'. On 'error' the failure reason is included."),
       targetPlatform: z.string().optional().describe("target=recompile: the platform to EMIT (default 'snes'). The engine is generic (lift source→IR→emit target): 'snes' = 1:1 emulation-mode port with the PPU render layers (withShim/withRuntime); 'genesis' = real 6502→68000 LOGIC translation (presentation stubbed, verify with frame({op:'compareRam'})). Source `platform` is 'nes' today; more source lifters land as built."),
       withShim: z.boolean().default(false).describe("target=recompile: phase-1 STATIC render (default off). Emit the NES-PPU-on-SNES shim — boots the original ROM, converts its tiles/nametable/palette to SNES VRAM/CGRAM data + a 65816 upload routine that draws the original's STATIC boot screen on SNES (verified on snes9x). Draws the first screen only; sprites don't animate. For a LIVE port use withRuntime instead."),
       withRuntime: z.boolean().default(false).describe("target=recompile: phase-2 LIVE render (default off). Implies withShim (BG) and adds the per-frame runtime: each vblank it flushes the game's shadow OAM to SNES sprites and runs the game's own NMI handler, so SPRITES ANIMATE and the game's per-frame logic runs — the port plays, not just boots to a screenshot. Background is static from the shim; live nametable/scroll streaming is phase 3. Verified on snes9x."),

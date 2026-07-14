@@ -270,3 +270,54 @@ test("padding is honest: an all-$FF fill bank is flagged, not reported ~100% rea
     assert.ok(code0.readablePercent != null, "the code bank keeps a real readablePercent");
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+// ── large-ROM timeout fix: background job (Jay's 1MB ROM timed out mid-run) ───
+
+test("background job: start returns immediately, poll returns the full result when done", { timeout: 180000 }, async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "romdev-reasm-bg-"));
+  try {
+    // 4-bank SNES ROM — enough to exercise the start/poll/done lifecycle.
+    const b = () => bank(0x8000, [0xAD, 0x05, 0x02, 0x8D, 0x05, 0x02, 0x4C, 0x00, 0x80], 0xEA);
+    const orig = concat(b(), b(), b(), b());
+    const romPath = path.join(dir, "game.sfc");
+    await writeFile(romPath, orig);
+    const projDir = path.join(dir, "proj");
+    const disasm = toolHandler(registerDisasmTools, "disasm");
+
+    // START — must return immediately with a running job, NOT the full payload.
+    const start = parse(await disasm({ target: "project", path: romPath, outputDir: projDir, platform: "snes", background: true }));
+    assert.equal(start.status, "running", "background start must report status:'running'");
+    assert.ok(start.jobId, "must return a jobId to poll");
+    assert.equal(start.ok, null, "an in-flight job is neither ok:true nor false");
+    assert.ok(start.regions === undefined, "the START call must NOT contain the finished result");
+
+    // POLL until done (or a generous cap).
+    let final = null;
+    for (let i = 0; i < 300; i++) {
+      await new Promise((r) => setTimeout(r, 300));
+      const p = parse(await disasm({ target: "project", outputDir: projDir, job: start.jobId }));
+      if (p.status === "running") { assert.ok(p.regionsTotal >= 1, "running poll reports region totals"); continue; }
+      if (p.status === "error") { assert.fail("background job errored: " + p.error); }
+      final = p; break;
+    }
+    assert.ok(final, "job must finish within the poll window");
+    assert.equal(final.ok, true, "the completed job's payload is the same as a sync run");
+    assert.equal(final.regions.length, 4, "all 4 banks present in the final payload");
+    assert.equal(final.roundTrip.allByteExact, true, "background result is byte-exact");
+    // The status file must be git-ignored so it isn't committed.
+    const gi = await readFile(path.join(projDir, ".gitignore"), "utf8");
+    assert.ok(gi.includes(".romdev-job.json"), "the job status file must be git-ignored");
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("background poll errors clearly: unknown job / missing dir", { timeout: 30000 }, async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "romdev-reasm-bgerr-"));
+  try {
+    const disasm = toolHandler(registerDisasmTools, "disasm");
+    // Poll a dir that never had a job → clear error, not a crash.
+    const res = await disasm({ target: "project", outputDir: dir, job: "job-nope-1" });
+    assert.equal(res.isError, true, "polling a nonexistent job must be an error result");
+    const text = res.content.find((c) => c.type === "text").text;
+    assert.ok(/no job found|\.romdev-job\.json/.test(text), "error must explain there's no job: " + text);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
