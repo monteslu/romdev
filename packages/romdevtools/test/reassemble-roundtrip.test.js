@@ -220,3 +220,53 @@ test("missing manifest: a clear error, not a crash", { timeout: 30000 }, async (
     assert.ok(/reassemble\.json/.test(text), "must point at the missing reassemble.json: " + text);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+// ── field-feedback fixes (Jay's 1MB ActRaiser run, 0.88.x) ───────────────────
+
+test("ROM data can't be committed: disasm writes a .gitignore for original.rom", { timeout: 120000 }, async () => {
+  const { mkdir } = await import("node:fs/promises");
+  const dir = await mkdtemp(path.join(os.tmpdir(), "romdev-reasm-gitignore-"));
+  try {
+    const projDir = path.join(dir, "proj");
+    // Pre-existing .gitignore (Jay's case: repo already had `*.sfc`) — must be
+    // preserved + appended-to, not clobbered or duplicated.
+    await mkdir(projDir, { recursive: true });
+    await writeFile(path.join(projDir, ".gitignore"), "*.sfc\n");
+    const orig = bank(0x8000, [0xAD, 0x05, 0x02, 0x8D, 0x05, 0x02, 0x4C, 0x00, 0x80], 0xEA);
+    const romPath = path.join(dir, "game.sfc");
+    await writeFile(romPath, orig);
+    const disasm = toolHandler(registerDisasmTools, "disasm");
+    const proj = parse(await disasm({ target: "project", path: romPath, outputDir: projDir, platform: "snes" }));
+    assert.equal(proj.romProtected, ".gitignore", "payload must advertise the .gitignore protection");
+    const gi = await readFile(path.join(projDir, ".gitignore"), "utf8");
+    const lines = gi.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    assert.ok(lines.includes("original.rom"), "original.rom must be ignored: " + gi);
+    assert.ok(lines.includes("*.sfc"), "pre-existing rule must be preserved");
+    assert.equal(lines.filter((l) => l === "*.sfc").length, 1, "no duplicate of the existing rule");
+    assert.ok(!lines.includes("*.md"), "must NOT ignore *.md (collides with Markdown / BUILD.md)");
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("padding is honest: an all-$FF fill bank is flagged, not reported ~100% readable", { timeout: 120000 }, async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "romdev-reasm-fill-"));
+  try {
+    // Two SNES banks: bank0 = real code, bank1 = 32KB of $FF padding (the trap
+    // that used to disassemble into junk `sbc $FFFFFF,x` and report ~100%).
+    const code = bank(0x8000, [0xAD, 0x05, 0x02, 0x8D, 0x05, 0x02, 0x4C, 0x00, 0x80], 0xEA);
+    const pad = new Uint8Array(0x8000).fill(0xFF);
+    const orig = concat(code, pad);
+    const romPath = path.join(dir, "game.sfc");
+    await writeFile(romPath, orig);
+    const disasm = toolHandler(registerDisasmTools, "disasm");
+    const proj = parse(await disasm({ target: "project", path: romPath, outputDir: path.join(dir, "proj"), platform: "snes" }));
+
+    assert.equal(proj.fillRegions, 1, "exactly the one padding bank must be flagged as fill");
+    const fill = proj.regions.find((r) => r.fill);
+    assert.ok(fill, "a fill region must be present");
+    assert.equal(fill.readablePercent, null, "a fill region's readablePercent must be null, never a bogus %");
+    assert.equal(fill.fillByte, "$FF", "the fill byte must be reported");
+    // The avg must reflect CODE only — not skewed by the padding bank.
+    const code0 = proj.regions.find((r) => !r.fill);
+    assert.ok(code0.readablePercent != null, "the code bank keeps a real readablePercent");
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});

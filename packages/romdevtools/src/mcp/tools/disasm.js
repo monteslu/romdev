@@ -1062,21 +1062,36 @@ export async function disassembleProjectCore({ path: romPath, outputDir, platfor
         const r = reg.kind === "data"
           ? { ok: true, readablePercent: 0, source: dataRegionSource(reg.bytes, reg.startAddress, CPU_FAMILY[resolved]), note: "data region (not code)" }
           : await reassembleForPlatform({ platform: resolved, bytes: reg.bytes, startAddress: reg.startAddress });
+        // A uniform-FILL region ($FF/$00 padding) disassembles into junk that
+        // reports a high readablePercent — a trap (the emptiest bank looks the
+        // "most readable"). Detect it and report readability HONESTLY as null +
+        // a `fill` flag, so `readablePercent` never lies about padding.
+        const fillByte = uniformFillByte(reg.bytes);
+        const isFill = fillByte != null && reg.kind !== "data";
+        const readablePercent = isFill ? null : r.readablePercent;
         const header = `; ${reg.label} — ${reg.bytes.length} bytes @ $${reg.startAddress.toString(16).toUpperCase()} ` +
           `(file 0x${reg.fileOffset.toString(16).toUpperCase()}), ${resolved}\n` +
-          `; round-trip: ${r.ok ? "BYTE-EXACT" : "FAILED"} · readable ${r.readablePercent}%` +
+          `; round-trip: ${r.ok ? "BYTE-EXACT" : "FAILED"} · ` +
+          (isFill ? `FILL region (all $${fillByte.toString(16).toUpperCase().padStart(2, "0")}) — readability N/A`
+                  : `readable ${r.readablePercent}%`) +
           (r.note ? ` · ${r.note}` : "") + "\n\n";
         await writeFile(nodePath.join(outputDir, reg.file), header + r.source);
         out.push({
           region: reg.name, file: reg.file, startAddress: "$" + reg.startAddress.toString(16).toUpperCase(),
-          bytes: reg.bytes.length, roundTripOk: r.ok, readablePercent: r.readablePercent,
+          bytes: reg.bytes.length, roundTripOk: r.ok, readablePercent,
           ...(reg.kind === "data" ? { kind: "data" } : {}),
+          ...(isFill ? { fill: true, fillByte: "$" + fillByte.toString(16).toUpperCase().padStart(2, "0") } : {}),
           ...(r.note ? { note: r.note } : {}),
         });
       }
 
       const allOk = out.every((r) => r.roundTripOk);
-      const avgReadable = Math.round(out.reduce((s, r) => s + r.readablePercent, 0) / out.length);
+      // Average readability over CODE regions only — fill regions have no
+      // meaningful percent (readablePercent:null) and would skew the average.
+      const codeRegions = out.filter((r) => r.readablePercent != null);
+      const avgReadable = codeRegions.length
+        ? Math.round(codeRegions.reduce((s, r) => s + r.readablePercent, 0) / codeRegions.length)
+        : 0;
 
       // Make the project TURNKEY: write the rebuild glue (data blobs, the exact
       // build() call, and human-readable instructions) so it rebuilds without
@@ -1110,6 +1125,21 @@ export async function disassembleProjectCore({ path: romPath, outputDir, platfor
       // ORIGINAL rom (kept as original.rom) at its file offset, so the header,
       // inter-region gaps, and trailing pad come back verbatim. See toolchain.js.
       await writeFile(nodePath.join(outputDir, "original.rom"), data);
+      // original.rom is a verbatim copy of the source ROM (the reassemble splice
+      // template) — copyrighted cartridge data that must NEVER be committed. Emit
+      // a .gitignore that excludes it plus common ROM extensions so a scaffolded
+      // project can't accidentally check the ROM into git. Append (deduped) if a
+      // .gitignore already exists so we don't clobber the user's rules.
+      // NOTE: no `*.md` — Genesis ROMs share that extension with Markdown, and
+      // ignoring it would exclude BUILD.md. `original.rom` covers the template on
+      // every platform regardless; the extension list is a belt-and-suspenders
+      // for any raw ROM a user drops in the dir.
+      await ensureGitignore(outputDir, [
+        "# romdev: never commit ROM data (original.rom is the reassemble template)",
+        "original.rom",
+        "*.rom", "*.nes", "*.sfc", "*.smc", "*.gb", "*.gbc", "*.gba",
+        "*.gen", "*.sms", "*.gg", "*.a26", "*.a78", "*.lnx", "*.pce", "*.gtr",
+      ]);
       const reassembleManifest = {
         platform: resolved,
         romTemplate: "original.rom",  // relative to the project dir
@@ -1133,7 +1163,9 @@ export async function disassembleProjectCore({ path: romPath, outputDir, platfor
         platform: resolved,
         regions: out,
         roundTrip: { regions: out.length, allByteExact: allOk, failed: out.filter((r) => !r.roundTripOk).map((r) => r.region) },
-        readablePercentAvg: avgReadable,
+        readablePercentAvg: avgReadable,   // over CODE regions only; fill/padding excluded
+        fillRegions: out.filter((r) => r.fill).length,  // padding banks flagged (readablePercent:null), NOT counted as readable
+        romProtected: ".gitignore",        // original.rom + ROM extensions git-ignored so the ROM can't be committed
         rebuild: {
           blobs: writtenBlobs,
           buildCall: absBuild,        // the exact build({...}) args to reproduce the ROM
@@ -1152,6 +1184,44 @@ export async function disassembleProjectCore({ path: romPath, outputDir, platfor
               : ``)
           : `Some regions did NOT round-trip byte-exact — see regions[].note. build({output:'reassemble', platform:'${resolved}', path:'${outputDir}'}) still rebuilds the original bytes (edited regions must reassemble to their length).`,
       });
+}
+
+/**
+ * If a region is (near-)uniform fill — one byte value repeated — return that
+ * byte; else null. Padding banks ($FF/$00) disassemble into junk that reports a
+ * bogus-high readablePercent, so we flag them and exclude them from readability.
+ * Threshold: ≥99.5% one value AND ≥256 bytes (small regions aren't "padding"),
+ * so a real code bank with incidental repeats is never misflagged.
+ */
+function uniformFillByte(bytes) {
+  if (!bytes || bytes.length < 256) return null;
+  const first = bytes[0];
+  let same = 0;
+  for (let i = 0; i < bytes.length; i++) if (bytes[i] === first) same++;
+  return same / bytes.length >= 0.995 ? first : null;
+}
+
+/**
+ * Ensure a project dir's .gitignore contains each of `entries`, without
+ * clobbering an existing one. Creates the file if absent; otherwise appends only
+ * the lines not already present (whitespace-trimmed match), preserving the user's
+ * existing rules and order. Blank/comment lines are appended verbatim only if the
+ * whole block is new (we don't dedupe comments against existing text).
+ */
+async function ensureGitignore(outputDir, entries) {
+  const gi = nodePath.join(outputDir, ".gitignore");
+  let existing = "";
+  try { existing = await readFile(gi, "utf8"); } catch { /* no .gitignore yet */ }
+  const have = new Set(existing.split(/\r?\n/).map((l) => l.trim()).filter(Boolean));
+  const toAdd = entries.filter((e) => {
+    const t = e.trim();
+    if (!t) return false;
+    if (t.startsWith("#")) return existing === "" || !existing.includes(t); // keep the header once
+    return !have.has(t);
+  });
+  if (!toAdd.length) return;
+  const prefix = existing === "" ? "" : (existing.endsWith("\n") ? "" : "\n");
+  await writeFile(gi, existing + prefix + toAdd.join("\n") + "\n");
 }
 
 /** Rewrite a planRebuild build()'s bare *Paths filenames to absolute paths. */
@@ -1178,8 +1248,9 @@ function renderBuildMd({ platform, romPath, outputDir, regions, blobs, build, ve
     lines.push(`- \`${r.file}\` — ${r.region}${r.kind === "data" ? " (data)" : ""}, byte-exact${r.roundTripOk === false ? " ⚠ round-trip FAILED" : ""}.`);
   }
   for (const b of blobs) lines.push(`- \`${b.file}\` — ${b.bytes} bytes of binary data (extracted from the ROM; do not hand-edit).`);
-  lines.push("- `original.rom` — a verbatim copy of the source ROM (the rebuild template; do not edit).");
+  lines.push("- `original.rom` — a verbatim copy of the source ROM (the rebuild template; do not edit). **Copyrighted ROM data — never commit it. A `.gitignore` excluding it (and ROM extensions) is written for you.**");
   lines.push("- `reassemble.json` — the region→offset manifest the one-call rebuild reads.");
+  lines.push("- `.gitignore` — keeps `original.rom` + raw ROM files out of git (appended if you already had one).");
   if (build) lines.push("- `rebuild.json` — the alternate cc65-native `build()` args below.");
   lines.push("");
 
