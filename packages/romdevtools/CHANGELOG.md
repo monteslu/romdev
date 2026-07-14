@@ -4,6 +4,25 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.88.2 — 2026-07-13
+
+Two fixes from a real-world `disasm({target:'project'})` + `build({output:'reassemble'})` run — a
+1 MB commercial SNES ROM (which rebuilt **byte-identical**, validating 0.88.0 on real hardware data).
+
+- **ROM data can't be committed by accident.** `disasm({target:'project'})` keeps a verbatim
+  `original.rom` (the reassemble splice template) in the project dir — copyrighted cartridge bytes.
+  It now also writes a `.gitignore` that excludes `original.rom` plus common ROM extensions, so a
+  scaffolded project can't check the ROM into git. If a `.gitignore` already exists, the rules are
+  appended (deduped), never clobbered. (No `*.md` in the list — it collides with Markdown / BUILD.md;
+  `original.rom` covers the template on every platform regardless.) The payload advertises
+  `romProtected: ".gitignore"`.
+- **`readablePercent` no longer lies about padding.** A uniform-fill bank (all `$FF` or `$00`)
+  disassembles into junk instructions (`sbc $FFFFFF,x` …) and used to report a bogus ~100% readable —
+  so the *emptiest* bank looked the "most readable," inverting the "low % = data bank" heuristic. Fill
+  regions are now detected (≥99.5% one byte, ≥256 bytes) and reported honestly: `readablePercent: null`
+  + `fill: true` + `fillByte`, excluded from the code-only `readablePercentAvg`, and labeled in the
+  region `.asm` header. The payload reports `fillRegions` count.
+
 ## 0.88.0 — 2026-07-12
 
 - **`build({output:'reassemble'})` — the UNIFORM byte-exact ROUND-TRIP.** `disasm({target:'project'})`
