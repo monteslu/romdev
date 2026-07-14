@@ -107,7 +107,13 @@ questions, and running both early is normal.** A good default:
 3. **Disassemble / trace** whenever the hack is about CODE or about data the
    cheats don't cover: `disasm({target:'project'})` for a rebuildable project
    (then edit a region `.asm` and `build({output:'reassemble', platform, path})` to
-   rebuild a byte-identical ROM in one call — the "cmp before commit" gate),
+   rebuild a byte-identical ROM in one call — the "cmp before commit" gate; a
+   `.gitignore` is written so the kept `original.rom` can't be committed. **Large
+   ROM (≥512KB, e.g. a 1MB SNES/Genesis cart)? Pass `background:true`** and poll
+   `disasm({target:'project', job, outputDir})` — the reassemble can take minutes
+   and would otherwise time the call out. A uniform-fill/padding bank reports
+   `fill:true` + `readablePercent:null`, so "low % = data bank" isn't fooled by a
+   $FF pad tail),
    `disasm({target:'references'})` for "what touches this address", `breakpoint({on:'write'})` for the exact
    instruction that wrote a byte, `watch({on:'mem'})`/`breakpoint({on:'write',precision:'sampled'})` to find an address
    empirically. For STRUCTURE — "what are the functions, how do they call each
