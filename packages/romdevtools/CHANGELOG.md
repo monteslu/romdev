@@ -4,6 +4,24 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.90.0 — 2026-07-15
+
+Two fixes from the ActRaiser *annotation* session (carving a routine out of the SNES `.byte`
+floor by live single-stepping).
+
+- **`disasm({target:'rom'})` accepts a banked SNES address ≥ 0x10000.** Passing a natural LoROM CPU
+  address (e.g. `$02AF86`, bank 2) aborted with da65's `StartAddr < 0x10000` precondition — the wrong
+  half of a multi-bank cart's address space. It now disassembles with the bank-local 16-bit address
+  (the correct in-bank CPU address) and folds the bank base back into the file-offset annotation, so
+  the full 24-bit address maps to the right ROM offset. `memory({op:'readCart'})` already accepted the
+  full address; the two tools now agree.
+- **`frame({op:'stepInstructions', count})` — bulk single-step.** Tracing a routine to confirm its
+  boundaries + 65816 immediate widths cost ~one round trip per instruction (a 2-byte `lda #imm8` vs a
+  3-byte `ldx #imm16` shows up only as the PC delta). This returns an ordered `trace:[{pc, width}]` in
+  ONE call — `width` = PC[k+1]-PC[k] (a missing width = a branch/jump moved the PC) — with the
+  boilerplate note emitted once, not per entry. `withRegisters:true` adds the register file at each
+  step. Collapses a ~26-call trace into 1.
+
 ## 0.89.0 — 2026-07-14
 
 Large-ROM `disasm({target:'project'})` no longer times out the tool call — the last of the

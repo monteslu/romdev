@@ -511,7 +511,7 @@ playbook):
   read-side mirror. `found:false` ⇒ the region is bulk-copied/DMA'd from a SOURCE struct.
 - **Read a register AT an instruction** — `breakpoint({on:'pc', address})` freezes the CPU →
   `cpu({op:'read'})` for the live register file (e.g. a decoder's source pointer);
-  `frame({op:'stepInstruction'})` single-steps. The "infer for hours → read it in 3 calls" move.
+  `frame({op:'stepInstruction'})` single-steps (or **`frame({op:'stepInstructions', count})`** to bulk-step N into ONE ordered `trace:[{pc, width}]` — `width`=PC-delta shows 65816 immediate sizes, the way to carve a routine out of the SNES `.byte` floor without a round trip per instruction). The "infer for hours → read it in 3 calls" move.
 - **Discover the unknown routine** — `watch({on:'range'|'pc'})` logs every PC touching a
   region; `watch({on:'dma'})` (Genesis) traces a graphic back to its ROM source offset.
 - **Confirm bytes / classify** — `memory({op:'readCart'})` reads the running program image

@@ -6,7 +6,7 @@ import { resamplePng } from "../../host/framebuffer.js";
 import { getHost, getHostB } from "../state.js";
 import { imageContent, jsonContent, safeTool } from "../util.js";
 import { decodeOAM, decodePpuRegs, ppuRegsPopulated } from "../../platforms/snes/ppu.js";
-import { stepInstructionCore, attachObserverFrame } from "./watch-memory.js";
+import { stepInstructionCore, stepInstructionsCore, attachObserverFrame } from "./watch-memory.js";
 import { getRenderingContextCore } from "./rendering-context.js";
 import { humanCoDriveWarning } from "./playtest.js";
 
@@ -847,6 +847,11 @@ export function registerFrameTools(server, z, sessionKey) {
     "specific compare ops. Requires slot B.\n" +
     "'stepInstruction': execute exactly ONE CPU instruction and stop (finer than 'step'); freezes the CPU one " +
     "instruction later and returns { pc }. Pair with cpu({op:'read'}) to watch registers change while tracing a routine.\n" +
+    "'stepInstructions': BULK single-step — execute `count` instructions and return an ORDERED `trace:[{pc, width, bytes}]` " +
+    "in ONE call (the `note` boilerplate emitted once, not per entry). `width` = PC[k+1]-PC[k], so immediate widths are " +
+    "visible directly — the 65816 `.a8` vs `.i16` case (a 2-byte lda #imm8 vs a 3-byte ldx #imm16 shows up only as the PC " +
+    "delta), which is what confirms a routine's boundaries when static da65 floored the bank to `.byte`. `withRegisters:true` " +
+    "adds the register file at each step. This collapses the ~1-round-trip-per-instruction cost of tracing a routine.\n" +
     "'verify': one-call 'is the game actually rendering / alive?' health check WITHOUT vision — for the spiral where an " +
     "agent can't see the screen and doesn't know if a black frame means broken. Pass `frames` to boot-then-check in one " +
     "call. Fuses (1) a pixel-content scan of the live framebuffer (distinctColors, dominant-color %) and (2) the " +
@@ -858,7 +863,9 @@ export function registerFrameTools(server, z, sessionKey) {
     "IMAGE CONTRACT (screenshot/stepAndShot): the image goes to `path` (default, returns {path}) OR inline:true — " +
     "you MUST pass one. Keeps PNGs out of context unless asked.",
     {
-      op: z.enum(["step", "screenshot", "stepAndShot", "sideBySide", "compareRam", "findDiverge", "compareRender", "portStatus", "stepInstruction", "verify"]).describe("step frames; capture a screenshot; step+capture in one call; capture both hosts side-by-side (A|B); compareRam = diff slot-A vs slot-B work-RAM (the logic-port oracle); findDiverge = find the first frame+byte where the two slots split (root-cause finder); compareRender = diff the decoded rendering state of the two slots (the presentation oracle); portStatus = ONE fused 'state of your port' verdict + next action (the capstone); single-step one CPU instruction; or verify the game is actually rendering/alive (no vision needed)."),
+      op: z.enum(["step", "screenshot", "stepAndShot", "sideBySide", "compareRam", "findDiverge", "compareRender", "portStatus", "stepInstruction", "stepInstructions", "verify"]).describe("step frames; capture a screenshot; step+capture in one call; capture both hosts side-by-side (A|B); compareRam = diff slot-A vs slot-B work-RAM (the logic-port oracle); findDiverge = find the first frame+byte where the two slots split (root-cause finder); compareRender = diff the decoded rendering state of the two slots (the presentation oracle); portStatus = ONE fused 'state of your port' verdict + next action (the capstone); single-step one CPU instruction; stepInstructions = bulk single-step N instructions into one ordered trace; or verify the game is actually rendering/alive (no vision needed)."),
+      count: z.number().int().min(1).max(4096).default(16).describe("op=stepInstructions: how many CPU instructions to single-step into the trace (default 16, max 4096)."),
+      withRegisters: z.boolean().default(false).describe("op=stepInstructions: include the CPU register file at each step (heavier payload; omit if you only need pc/width/bytes for boundary+immediate-width analysis)."),
       frames: z.number().int().min(1).max(1_000_000).default(1).describe("op=step/stepAndShot/sideBySide/compareRam/compareRender: frames to advance (1-1,000,000). For the slot-A/B compare ops, BOTH hosts step the same amount. 36000 (10 min) usually completes in <1s — don't be conservative."),
       region: z.string().optional().describe("op=compareRam/findDiverge/portStatus: memory region to diff across the two slots (default 'system_ram', the portable work-RAM). Both hosts must expose it."),
       maxRanges: z.number().int().min(1).max(256).default(24).describe("op=compareRam: cap on the diverging address ranges returned (largest first)."),
@@ -884,6 +891,7 @@ export function registerFrameTools(server, z, sessionKey) {
         case "compareRender":   return await compareRender(args);
         case "portStatus":      return await portStatus(args);
         case "stepInstruction": return await stepInstructionCore(sessionKey);
+        case "stepInstructions": return await stepInstructionsCore(sessionKey, { count: args.count, withRegisters: args.withRegisters });
         case "verify":          return await doVerify(args);
         default: throw new Error(`frame: unknown op '${args.op}'`);
       }

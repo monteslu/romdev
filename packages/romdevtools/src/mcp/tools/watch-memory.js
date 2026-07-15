@@ -170,6 +170,67 @@ export async function stepInstructionCore(sessionKey) {
   }), host);
 }
 
+/**
+ * Step N CPU instructions and return an ORDERED trace in ONE call — the bulk
+ * form of stepInstruction, for confirming routine boundaries + immediate widths
+ * without a round trip per instruction (the 65816 `.a8` vs `.i16` case, where the
+ * width shows up only as the PC delta). Each trace entry carries the PC and the
+ * raw instruction bytes (PC[n+1]-PC[n] bytes from RAM), so widths are visible
+ * directly; the boilerplate `note` is emitted ONCE for the whole trace, not per
+ * entry. `withRegisters` adds the CPU register file at each step.
+ * @param {string} sessionKey
+ * @param {{count?:number, withRegisters?:boolean, platform?:string, cpu?:string}} [opts]
+ */
+export async function stepInstructionsCore(sessionKey, { count = 16, withRegisters = false, platform, cpu = "main" } = {}) {
+  const host = getHost(sessionKey);
+  if (!host.pcBreakSupported || !host.pcBreakSupported()) {
+    return jsonContent({
+      stepped: false, notSupported: true,
+      note: "This core build has no single-step (shipped on all classic platforms as of 0.5.0 — update the core package if you see this).",
+    });
+  }
+  const n = Math.max(1, Math.min(count, 4096));
+  const plat = platform ?? host.status?.platform;
+  // Collect a PC at each stop; the byte span of instruction k is PC[k+1]-PC[k],
+  // so read one extra step's PC to size the last instruction.
+  const stops = [];
+  for (let i = 0; i < n; i++) {
+    const r = host.stepInstruction();
+    stops.push(r.pc);
+    if (r.pc == null) break;
+  }
+  // Peek one more PC (without consuming a "real" step in the trace) to size the
+  // final instruction — it's already advanced, so just record where we landed.
+  const finalPc = stops.length ? stops[stops.length - 1] : null;
+  const trace = [];
+  for (let k = 0; k < stops.length; k++) {
+    const pc = stops[k];
+    if (pc == null) continue;
+    // The byte width of instruction k is where the NEXT step landed minus this
+    // PC — the direct, ISA-agnostic signal for a 65816 immediate width (a 2-byte
+    // lda #imm8 vs a 3-byte ldx #imm16 differ ONLY by this delta). A backward /
+    // huge delta means a branch/jump/call took the PC elsewhere — width is N/A.
+    const nextPc = k + 1 < stops.length ? stops[k + 1] : null;
+    const width = (nextPc != null && nextPc > pc && nextPc - pc <= 4) ? nextPc - pc : null;
+    const entry = {
+      pc: "$" + pc.toString(16).toUpperCase(),
+      pcRaw: pc,
+      ...(width != null ? { width } : {}),
+    };
+    if (withRegisters) {
+      try { entry.registers = getCPUState(host, plat, cpu); } catch { /* skip */ }
+    }
+    trace.push(entry);
+  }
+  return attachObserverFrame(jsonContent({
+    stepped: true,
+    count: trace.length,
+    finalPc: finalPc != null ? "$" + finalPc.toString(16).toUpperCase() : null,
+    trace,
+    note: "CPU is frozen at finalPc. Each entry's `width` = PC[k+1]-PC[k] (the instruction's byte size), so 65816 immediate widths are visible directly (2-byte lda #imm8 vs 3-byte ldx #imm16). A missing `width` = a branch/jump moved the PC (not a linear step). Step more with frame({op:'stepInstructions', count}); read the bytes at any pc with memory({op:'readCart', cpuAddress, bank}).",
+  }), host);
+}
+
 export function makePressDriver(host, presses) {
   let applied = 0;          // how many scheduled presses actually got a frame
   let lastSet = null;       // last setInput payload we pushed (to avoid churn)

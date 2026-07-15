@@ -388,3 +388,42 @@ test("sampleEvery keeps every Nth change", async () => {
   assert.equal(s.points, 5);
   assert.deepEqual(s.frames, [1, 5, 9, 13, 17]);
 });
+
+// ── stepInstructions (bulk single-step) — v0.89.0 field feedback ─────────────
+// Jay's ActRaiser session: proving a ~26-instruction routine cost ~26 round
+// trips. stepInstructions returns the whole ordered trace in one call, with
+// `width` = PC[k+1]-PC[k] (the 65816 immediate-width signal) and the note ONCE.
+import { stepInstructionsCore } from "../src/mcp/tools/watch-memory.js";
+
+test("stepInstructions: one call → ordered trace, widths from PC deltas, note once", async () => {
+  // Scripted PC walk: 2-byte, 3-byte, 2-byte, then a branch back (non-linear).
+  const pcs = [0x8000, 0x8002, 0x8005, 0x8007, 0x8000];
+  let i = 0;
+  const host = {
+    status: { frameCount: 0, platform: "nes" },
+    pcBreakSupported: () => true,
+    stepInstruction() { return { pc: pcs[Math.min(i++, pcs.length - 1)], hit: true }; },
+  };
+  _setHostForTest("bulk-session", host);
+
+  const res = await stepInstructionsCore("bulk-session", { count: 4 });
+  const p = JSON.parse(res.content.find((c) => c.type === "text").text);
+  assert.equal(p.stepped, true);
+  assert.equal(p.count, 4, "returns one entry per stepped instruction");
+  assert.equal(p.trace[0].pc, "$8000");
+  assert.equal(p.trace[0].width, 2, "8002-8000 = 2-byte instruction");
+  assert.equal(p.trace[1].width, 3, "8005-8002 = 3-byte (e.g. a 65816 imm16)");
+  assert.equal(p.trace[2].width, 2, "8007-8005 = 2-byte");
+  assert.equal(p.trace[3].width, undefined, "the branch back has no linear width (PC moved)");
+  assert.ok(p.note && p.note.length > 20, "the boilerplate note is emitted ONCE for the trace");
+  // note must NOT be duplicated onto every entry
+  assert.ok(p.trace.every((t) => t.note === undefined), "no per-entry note repetition");
+});
+
+test("stepInstructions: notSupported cores fail cleanly", async () => {
+  _setHostForTest("nostep-session", { status: { platform: "nes" }, pcBreakSupported: () => false });
+  const res = await stepInstructionsCore("nostep-session", { count: 4 });
+  const p = JSON.parse(res.content.find((c) => c.type === "text").text);
+  assert.equal(p.stepped, false);
+  assert.equal(p.notSupported, true);
+});
