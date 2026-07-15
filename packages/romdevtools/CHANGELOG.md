@@ -25,6 +25,14 @@ the gba_lua_sdk maxmod debugging session; `romdev-platform-gba@0.10.0`).
   `$03xxxxxx` → `gba_iwram`.
 - Regression test: live tonc ROM, asserts EWRAM reads past the old bogus 32 KB limit and that
   IWRAM reads live stack/`.bss` bytes (all-zeros = the defect is back).
+- **Audited all 15 classic platforms for the same defect class — GBA was the only instance.**
+  Live audit of `system_ram` size vs hardware truth on every core: gpgx (the other multi-system
+  core, serving Genesis/SMS/GG) switches sizes per system correctly (64 KB / 8 KB / 8 KB); the two
+  flagged outliers are correct by design and verified live-data-not-zeros (Atari 7800's 64 KB is
+  the intended whole-bus view — offset == CPU address, documented; MSX's 512 KB is real mapper RAM
+  on the emulated machine). The "important RAM unexposed" pattern (the IWRAM analog) was also
+  checked: GB HRAM (`gb_hram`) and Genesis Z80 sound RAM (`genesis_z80_ram`) already have
+  dedicated regions — GBA IWRAM was the one gap.
 
 ## 0.90.0 — 2026-07-15
 
