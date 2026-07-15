@@ -73,6 +73,17 @@ export function textFile(vfsPath, content) {
 
 /** Convert binary (Uint8Array / Buffer) → InputFile spec. */
 export function binaryFile(vfsPath, bytes) {
-  const buf = bytes instanceof Buffer ? bytes : Buffer.from(bytes);
+  // Accept EITHER raw bytes OR a base64 STRING — the same either/or contract the
+  // toolchain wrappers honor individually (asar/cc65/vasm68k/wladx all guard with
+  // `x instanceof Uint8Array ? x : Buffer.from(x, "base64")`). The MCP
+  // `binaryIncludes` schema delivers base64 STRINGS; the old `Buffer.from(string)`
+  // here decoded them as UTF-8, so the base64 TEXT itself became the file bytes —
+  // .incbin then embedded base64 text into the ROM. That corrupted every
+  // user-supplied binary include on the paths that mount via binaryFile (GBA's
+  // maxmod soundbank stub + the generic gcc runner used by Genesis/MIPS/SH):
+  // the GBA maxmod "silent without print()" hunt traced back to exactly this.
+  const buf = Buffer.isBuffer(bytes) ? bytes
+    : bytes instanceof Uint8Array ? Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+    : Buffer.from(bytes, "base64");
   return { vfsPath, encoding: "base64", data: buf.toString("base64") };
 }

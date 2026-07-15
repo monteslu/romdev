@@ -4,6 +4,25 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.91.1 — 2026-07-15
+
+**`binaryIncludes` base64 strings were embedded as TEXT on the GBA/gcc-runner paths — the real
+cause of the maxmod "silent without `print()`" saga.**
+
+- The MCP/HTTP contract delivers `binaryIncludes` as base64 STRINGS (inline AND `binaryIncludePaths`
+  both arrive base64). `binaryFile()` in the worker layer did `Buffer.from(bytes)` — decoding a
+  string as UTF-8 — so the base64 *text itself* became the mounted file's contents and `.incbin`
+  embedded ~4/3-inflated garbage into the ROM. asar/cc65/vasm68k/wladx each carried their own
+  either/or guard (why NES CHR etc. always worked); the GBA soundbank stub and the generic gcc
+  runner (Genesis/MIPS/SH `.incbin`) did not. Direct in-process `Uint8Array` callers were unaffected
+  — hence "same source, different ROM, opposite audio" between an agent session (server, base64)
+  and a local harness (bytes). Diagnosed by finding the soundbank's base64 text inside the silent
+  ROM; a corrupt bank makes maxmod's `mmReadPattern` misread (the phantom-channel tell) and every
+  build silent regardless of what else runs.
+- Fix: `binaryFile()` now honors the same either-bytes-or-base64 contract as the per-toolchain
+  guards. Regression test builds the same ROM both ways and asserts byte-identity + that the bank's
+  base64 text never appears in a ROM.
+
 ## 0.91.0 — 2026-07-15
 
 **GBA `system_ram` was silently wrong — fixed, + a new `gba_iwram` region** (defect report from
