@@ -18,7 +18,7 @@
  *   | "a78_cpu_regs"
  *   | "c64_color_ram" | "c64_vic_regs" | "c64_sid_regs"
  *   | "c64_cia1_regs" | "c64_cia2_regs" | "c64_cpu_regs"
- *   | "gba_cpu_regs" | "gba_io_regs" | "gba_palette" | "gba_oam"
+ *   | "gba_cpu_regs" | "gba_io_regs" | "gba_palette" | "gba_oam" | "gba_iwram"
  *   | "lynx_cpu_regs" | "lynx_hw_regs"
  *   | "pce_vdc_vram" | "pce_vdc_satb" | "pce_vdc_regs"
  *   | "pce_vce_palette" | "pce_cpu_regs" | "pce_psg_regs"
@@ -75,11 +75,14 @@ export const RetroMemory = {
   C64_CIA1_REGS:      0x173,
   C64_CIA2_REGS:      0x174,
   C64_CPU_REGS:       0x175,
-  // GBA (mgba): CPU snapshot + the IO page (video AND audio regs) + palette + OAM.
+  // GBA (mgba): CPU snapshot + the IO page (video AND audio regs) + palette + OAM
+  // + IWRAM. On GBA, `system_ram` is EWRAM (256KB @ 0x02000000); `gba_iwram` is
+  // the 32KB @ 0x03000000 where the C stack + libtonc/maxmod .bss live.
   GBA_CPU_REGS:       0x180,
   GBA_IO_REGS:        0x181,
   GBA_PALETTE:        0x182,
   GBA_OAM:            0x183,
+  GBA_IWRAM:          0x184,
   // Lynx (handy): CPU snapshot + the $FC00-$FDFF Suzy/Mikey HW register window
   // (sprite regs, LCD control, audio $FD20-$FD3F, palette $FDA0-$FDBF).
   LYNX_CPU_REGS:      0x190,
@@ -153,6 +156,7 @@ export const MemoryRegionToRetro = {
   gba_io_regs:   RetroMemory.GBA_IO_REGS,
   gba_palette:   RetroMemory.GBA_PALETTE,
   gba_oam:       RetroMemory.GBA_OAM,
+  gba_iwram:     RetroMemory.GBA_IWRAM,
   lynx_cpu_regs: RetroMemory.LYNX_CPU_REGS,
   lynx_hw_regs:  RetroMemory.LYNX_HW_REGS,
   pce_vdc_vram:    RetroMemory.PCE_VDC_VRAM,

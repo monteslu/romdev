@@ -328,10 +328,10 @@ index 27e289c..0bb04a7 100644
  	int wait = 0;
  	uint16_t oldValue;
 diff --git a/src/platform/libretro/libretro.c b/src/platform/libretro/libretro.c
-index 4b05a42..30fd8f3 100644
+index 4b05a42..57918d0 100644
 --- a/src/platform/libretro/libretro.c
 +++ b/src/platform/libretro/libretro.c
-@@ -2269,6 +2269,65 @@ unsigned retro_get_region(void) {
+@@ -2269,6 +2269,66 @@ unsigned retro_get_region(void) {
  	return RETRO_REGION_NTSC; // TODO: This isn't strictly true
  }
  
@@ -375,6 +375,7 @@ index 4b05a42..30fd8f3 100644
 +#define ROMDEV_REGION_GBA_IO_REGS  0x181u /* 0x400 bytes: io[512] — video + audio regs */
 +#define ROMDEV_REGION_GBA_PALETTE  0x182u /* 0x400 bytes: palette[512] 15-bit BGR (256 BG + 256 OBJ) */
 +#define ROMDEV_REGION_GBA_OAM      0x183u /* 0x400 bytes: oam.raw[512] — 128 sprites x 8 bytes */
++#define ROMDEV_REGION_GBA_IWRAM    0x184u /* 0x8000 bytes: IWRAM @ 0x03000000 — the C stack + libtonc/maxmod .bss live here */
 +
 +#ifdef M_CORE_GBA
 +/* Assemble the ARM7 register snapshot. Layout (all little-endian u32):
@@ -397,7 +398,7 @@ index 4b05a42..30fd8f3 100644
  void retro_set_controller_port_device(unsigned port, unsigned device) {
  	UNUSED(port);
  	UNUSED(device);
-@@ -2327,6 +2386,20 @@ void* retro_get_memory_data(unsigned id) {
+@@ -2327,6 +2387,23 @@ void* retro_get_memory_data(unsigned id) {
  			break;
  		}
  		break;
@@ -414,11 +415,35 @@ index 4b05a42..30fd8f3 100644
 +	case ROMDEV_REGION_GBA_OAM:
 +		if (core->platform(core) == mPLATFORM_GBA) return ((struct GBA*)core->board)->video.oam.raw;
 +		break;
++	case ROMDEV_REGION_GBA_IWRAM:
++		if (core->platform(core) == mPLATFORM_GBA) return ((struct GBA*)core->board)->memory.iwram;
++		break;
 +#endif
  	default:
  		break;
  	}
-@@ -2373,6 +2446,16 @@ size_t retro_get_memory_size(unsigned id) {
+@@ -2370,9 +2447,39 @@ size_t retro_get_memory_size(unsigned id) {
+ 		}
+ 		break;
+ 	case RETRO_MEMORY_SYSTEM_RAM:
++		/* romdev fix (upstream bug): this returned GB_SIZE_WORKING_RAM (0x8000)
++		 * UNCONDITIONALLY — the Game Boy constant — while retro_get_memory_data
++		 * returns the GBA's 256KB EWRAM. So on GBA the region reported IWRAM's
++		 * size (32KB, a coincidence) over EWRAM's bytes: reads past 32KB were
++		 * refused and the size misled callers into thinking this WAS IWRAM.
++		 * Return the real size of what the data pointer exposes per platform. */
++		switch (core->platform(core)) {
++#ifdef M_CORE_GB
++		case mPLATFORM_GB:
++			return GB_SIZE_WORKING_RAM;
++#endif
++#ifdef M_CORE_GBA
++		case mPLATFORM_GBA:
++			return GBA_SIZE_EWRAM; /* 0x40000 — matches memory.wram above */
++#endif
++		default:
++			break;
++		}
  		return GB_SIZE_WORKING_RAM;
  	case RETRO_MEMORY_VIDEO_RAM:
  		return GBA_SIZE_VRAM;
@@ -431,6 +456,8 @@ index 4b05a42..30fd8f3 100644
 +		return GBA_SIZE_PALETTE_RAM; /* 0x400 */
 +	case ROMDEV_REGION_GBA_OAM:
 +		return GBA_SIZE_OAM;       /* 0x400 */
++	case ROMDEV_REGION_GBA_IWRAM:
++		return GBA_SIZE_IWRAM;     /* 0x8000 — IWRAM @ 0x03000000 */
 +#endif
  	default:
  		break;
