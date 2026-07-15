@@ -926,21 +926,30 @@ async function disassembleRomCore(args) {
         asm = r.asm; exitCode = r.exitCode;
         if (labels.length > 0 && cpuFamily !== "arm") asm = injectVectorLabels(asm, labels);
       } else {
+        // da65's --start-addr is a 16-bit address (it aborts on >= 0x10000). For a
+        // banked SNES/PCE/… address (e.g. LoROM $02AF86, bank 2), the in-bank CPU
+        // address IS the low 16 bits ($AF86) — so disassemble with the bank-local
+        // start and remember the bank base to fold back into the file-offset
+        // annotation, which needs the FULL cpu address to map to a ROM offset.
+        const bankBase = startAddress & ~0xFFFF;      // 0 for a $0000-$FFFF address
+        const da65Start = startAddress & 0xFFFF;      // legal 16-bit --start-addr
         if (labels.length > 0 || dataRangesInWindow.length > 0 || mapped.cpu !== "6502") {
           info = buildInfoFile({
-            startAddress, length,
+            startAddress: da65Start, length,
             cpu: mapped.cpu,
-            labels,
-            dataRanges: dataRangesInWindow,
+            labels: labels.map((l) => ({ ...l, addr: l.addr & 0xFFFF })),
+            dataRanges: dataRangesInWindow.map((d) => ({ ...d, start: d.start & 0xFFFF, end: d.end & 0xFFFF })),
           });
         }
         const needAddressColumn = annotateRegistersFlag || annotateFileOffsetsFlag;
         const r = await runDa65({
-          bytes: mapped.bytes, startAddress, cpu: mapped.cpu, info,
+          bytes: mapped.bytes, startAddress: da65Start, cpu: mapped.cpu, info,
           options: needAddressColumn ? ["--comments", "4"] : [],
         });
         asm = r.asm;
         exitCode = r.exitCode;
+        // Stash so the annotators below reconstruct the full 24-bit cpu address.
+        args = { ...args, _bankBase: bankBase };
       }
 
       // File-offset annotation: per-line cpu→file translator (shared mapper).
@@ -948,7 +957,10 @@ async function disassembleRomCore(args) {
       // ignores it for $C000+ (fixed top bank), so each line points at the right
       // PRG offset.
       if (annotateFileOffsetsFlag) {
-        const cpuToFile = (cpuAddr) => cpuAddrToFileOffset(resolved, data, cpuAddr, { bank: args.bank, snesMapper: mapper });
+        // da65 emitted bank-local 16-bit addresses; add the bank base back so the
+        // file mapper resolves to the right ROM offset for a banked SNES address.
+        const bankBase = args._bankBase ?? 0;
+        const cpuToFile = (cpuAddr) => cpuAddrToFileOffset(resolved, data, (cpuAddr & 0xFFFF) + bankBase, { bank: args.bank, snesMapper: mapper });
         // Secondary translator for NES — also report the header-stripped
         // PRG offset, since patchFile against `prg.bin` (from extractCart)
         // needs the header-less frame.

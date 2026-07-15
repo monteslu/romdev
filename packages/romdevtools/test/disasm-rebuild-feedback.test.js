@@ -171,3 +171,33 @@ test("disassembleProject: byte-exact across GB and C64", async () => {
     }
   }
 }, { timeout: 120000 });
+
+// ── v0.89.0 field feedback (Jay's ActRaiser annotation session) ──────────────
+
+// disasm({target:'rom'}) must accept a SNES CPU address ≥ 0x10000 (a banked
+// LoROM address like $02AF86). Before the fix, da65's --start-addr aborted with
+// "StartAddr < 0x10000" — the wrong half of a multi-bank cart's address space.
+test("disasm({target:'rom'}) accepts a banked SNES address ≥ 0x10000 (no da65 abort)", async () => {
+  const h = handlers();
+  const dir = await mkdtemp(path.join(os.tmpdir(), "snes-highaddr-"));
+  try {
+    // 256KB LoROM. bank 2 = file 0x10000..0x17FFF; $02AF86 → file 0x12F86.
+    const rom = new Uint8Array(0x40000).fill(0xEA);
+    rom.set([0xA9, 0x05, 0x8D, 0x00, 0x21, 0x6B], 0x12F86); // lda #$05 / sta $2100 / rtl
+    const romPath = path.join(dir, "game.sfc");
+    await writeFile(romPath, rom);
+
+    const res = await h.disassembleRom({ platform: "snes", path: romPath, startAddress: 0x02AF86, length: 96, inline: true });
+    assert.equal(res.isError, undefined, "must not error: " + (res.isError ? res.content[0].text : ""));
+    const p = parse(res);
+    assert.equal(p.exitCode, 0, "da65 must not abort on the ≥0x10000 address");
+    const asm = p.asm || "";
+    assert.match(asm, /lda\s+#\$05/i, "decoded the real code, not a StartAddr abort");
+    assert.match(asm, /sta\s+\$2100/i, "second instruction decoded");
+    // The bank-local addr ($AF86) is what da65 sees; the file annotation resolves
+    // the FULL cpu address to the right ROM offset (0x12F86).
+    assert.match(asm, /12F86/i, "file-offset annotation maps the full 24-bit address");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
