@@ -420,6 +420,23 @@ test("stepInstructions: one call → ordered trace, widths from PC deltas, note 
   assert.ok(p.trace.every((t) => t.note === undefined), "no per-entry note repetition");
 });
 
+test("stepInstructions: wide (m68k-style) instruction widths are not clamped to 4", async () => {
+  // Genesis m68k reaches 10-byte instructions; a 6502-sized cap would drop them.
+  const pcs = [0x200, 0x206, 0x210, 0x212]; // widths 6, 10, 2 (need 4 stops → count 4)
+  let i = 0;
+  const host = {
+    status: { frameCount: 0, platform: "genesis" },
+    pcBreakSupported: () => true,
+    stepInstruction() { return { pc: pcs[Math.min(i++, pcs.length - 1)], hit: true }; },
+  };
+  _setHostForTest("bulk-m68k", host);
+  const res = await stepInstructionsCore("bulk-m68k", { count: 4 });
+  const p = JSON.parse(res.content.find((c) => c.type === "text").text);
+  assert.equal(p.trace[0].width, 6, "6-byte width kept (not dropped by a 4-byte cap)");
+  assert.equal(p.trace[1].width, 10, "10-byte m68k width kept");
+  assert.equal(p.trace[2].width, 2, "2-byte width kept");
+});
+
 test("stepInstructions: notSupported cores fail cleanly", async () => {
   _setHostForTest("nostep-session", { status: { platform: "nes" }, pcBreakSupported: () => false });
   const res = await stepInstructionsCore("nostep-session", { count: 4 });
