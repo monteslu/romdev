@@ -209,9 +209,13 @@ export async function stepInstructionsCore(sessionKey, { count = 16, withRegiste
     // The byte width of instruction k is where the NEXT step landed minus this
     // PC — the direct, ISA-agnostic signal for a 65816 immediate width (a 2-byte
     // lda #imm8 vs a 3-byte ldx #imm16 differ ONLY by this delta). A backward /
-    // huge delta means a branch/jump/call took the PC elsewhere — width is N/A.
+    // large delta means a branch/jump/call took the PC elsewhere — width is N/A.
+    // The cap is the longest single instruction across every supported ISA (m68k
+    // reaches 10 bytes; 6502/z80 ≤4, ARM 4, Thumb 2) with headroom — NOT a
+    // 6502-sized 4, which would wrongly drop valid Genesis widths of 6/8/10.
+    const MAX_INSTR_BYTES = 16;
     const nextPc = k + 1 < stops.length ? stops[k + 1] : null;
-    const width = (nextPc != null && nextPc > pc && nextPc - pc <= 4) ? nextPc - pc : null;
+    const width = (nextPc != null && nextPc > pc && nextPc - pc <= MAX_INSTR_BYTES) ? nextPc - pc : null;
     const entry = {
       pc: "$" + pc.toString(16).toUpperCase(),
       pcRaw: pc,
