@@ -1,0 +1,17 @@
+# Build ARTIFACTS that must never ship — the `files:["examples"]` glob pulls the
+# whole examples tree, so a stray build({output:'run'}) / playtest output written
+# into an example dir would otherwise get published. Ignore compiled ROM binaries
+# and build logs. (NOT .p8 — those are PICO-8 source-form example carts; NOT .md —
+# collides with Markdown; NOT .bin/.chr/.png — legitimate example input assets.)
+**/*.build.log
+examples/**/*.gba
+examples/**/*.nes
+examples/**/*.sfc
+examples/**/*.smc
+examples/**/*.gb
+examples/**/*.gbc
+examples/**/*.gtr
+examples/**/*.a26
+examples/**/*.a78
+examples/**/*.lnx
+examples/**/*.pce
