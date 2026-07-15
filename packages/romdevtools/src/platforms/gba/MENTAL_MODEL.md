@@ -170,9 +170,16 @@ alone doesn't explain it. (The audio inspector is also summarized under
 | `gba_io_regs`   | $04000000-$040003FE (1 KB)         | the I/O page — **video AND audio** MMIO    |
 | `gba_palette`   | $05000000-$050003FF (1 KB)         | 256 BG + 256 OBJ BGR555 entries            |
 | `gba_oam`       | $07000000-$070003FF (1 KB)         | 128 sprite attribute entries (8 B each)    |
-| `system_ram`    | $02000000 EWRAM / $03000000 IWRAM  | main + on-chip work RAM                    |
+| `system_ram`    | $02000000-$0203FFFF (256 KB)       | **EWRAM only** — the big/slow work RAM     |
+| `gba_iwram`     | $03000000-$03007FFF (32 KB)        | **IWRAM** — the C stack + libtonc/maxmod `.bss` live HERE, not in EWRAM |
 | `video_ram`     | $06000000-$06017FFF (96 KB)        | BG + sprite tile data + framebuffer        |
 | `save_ram`      | $0E000000-$0E00FFFF (64 KB)        | battery-backed SRAM                        |
+
+**IWRAM vs EWRAM — the debugging footgun:** a `$0300xxxx` address (SP, maxmod's
+`mmLayerMain`, most C globals on this toolchain) lives in `gba_iwram`, NOT
+`system_ram`. Reading `system_ram` at that low 16-bit offset returns EWRAM bytes —
+real memory, wrong RAM — which "confirms" false hypotheses. Map the address by its
+prefix first: `$02xxxxxx` → `system_ram`, `$03xxxxxx` → `gba_iwram`.
 
 Pair `sprites` / `palette` / `background` / `cpu` with
 `breakpoint({on:'write'})` for the full live-debug loop.

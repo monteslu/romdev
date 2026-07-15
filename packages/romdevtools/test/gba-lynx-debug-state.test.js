@@ -73,6 +73,55 @@ int main(void) {
   assert.equal(decodeGbaSprites(oam, {}).sprites.length, 128);
 });
 
+// The gba_lua_sdk defect report (internal-gbalua/ROMDEV_MEMORY_REGION_DEFECT.md):
+// upstream mgba-libretro returned GB_SIZE_WORKING_RAM (32768) for SYSTEM_RAM
+// UNCONDITIONALLY while the data pointer was GBA EWRAM — so `system_ram` on GBA
+// was the first 32KB of EWRAM wearing IWRAM's size, and IWRAM (the C stack +
+// libtonc/maxmod .bss, everything at $0300xxxx) was unreadable. Reads returned
+// real-but-wrong bytes (silent zeros), sending the agent down false trails.
+test("GBA: system_ram is full EWRAM (256KB) and gba_iwram reads the LIVE stack/.bss", { timeout: 180000 }, async () => {
+  const core = resolveCore("gba");
+  assert.ok(core, "resolveCore('gba') returned null — mgba wasm missing?");
+  const main = `
+#include <tonc.h>
+int counter = 1;           /* .data — in IWRAM on this toolchain */
+int main(void) {
+    irq_init(NULL);
+    irq_add(II_VBLANK, NULL);
+    REG_DISPCNT = DCNT_MODE0 | DCNT_BG0;
+    while (1) { counter++; VBlankIntrWait(); }
+}
+`;
+  const r = await buildGbaC({ sources: { "main.c": main } });
+  assert.equal(r.ok, true, `build failed: ${(r.log || "").slice(-300)}`);
+  const host = new LibretroHost();
+  await host.loadCore(core.jsPath, core.wasmPath);
+  await host.loadMedia({ platform: "gba", bytes: r.binary, virtualName: "iwram.gba" });
+  for (let i = 0; i < 120; i++) host.stepFrames(1);
+
+  // system_ram must be EWRAM's REAL size (the upstream size bug returned 32768)…
+  const sysRam = host.readMemory("system_ram", 0, 16);
+  assert.equal(sysRam.length, 16);
+  // …and readable PAST the old bogus 32KB limit.
+  assert.doesNotThrow(() => host.readMemory("system_ram", 0x20000, 16),
+    "EWRAM read at offset 0x20000 must not RangeError (size was wrongly 32768)");
+
+  // gba_iwram exists, is 32KB, and holds LIVE data: the stack near the top and
+  // the toolchain's .data/.bss below. All-zeros = the defect regressed.
+  const top = host.readMemory("gba_iwram", 0x7E00, 0x200);   // stack region
+  const low = host.readMemory("gba_iwram", 0x0000, 0x1000);  // .data/.bss
+  const topNonzero = top.some((b) => b !== 0);
+  const lowNonzero = low.some((b) => b !== 0);
+  assert.ok(topNonzero || lowNonzero, "IWRAM reads all zeros — the silent-zeros defect is back");
+  // SP (from the CPU snapshot) points into IWRAM — the exact repro from the report.
+  const cpu = getCPUState(host, "gba");
+  if (cpu.registers.SP >= 0x03000000 && cpu.registers.SP < 0x03008000) {
+    const spOff = cpu.registers.SP - 0x03000000;
+    const nearSp = host.readMemory("gba_iwram", Math.max(0, spOff - 64), 64);
+    assert.ok(nearSp.some((b) => b !== 0), "bytes near the live SP must not be all zeros");
+  }
+});
+
 // Lynx test boots a .lnx we build from our own example (cc65 targets Lynx), so
 // it runs unconditionally and needs no external ROM on disk.
 let lynxRom;

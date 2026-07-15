@@ -4,6 +4,28 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.91.0 — 2026-07-15
+
+**GBA `system_ram` was silently wrong — fixed, + a new `gba_iwram` region** (defect report from
+the gba_lua_sdk maxmod debugging session; `romdev-platform-gba@0.10.0`).
+
+- Root cause was an **upstream mgba-libretro bug**: `retro_get_memory_size(SYSTEM_RAM)` returned
+  `GB_SIZE_WORKING_RAM` (32768 — the Game Boy constant) unconditionally, while
+  `retro_get_memory_data` returned the GBA's 256 KB **EWRAM**. So `system_ram` on GBA was the first
+  32 KB of EWRAM wearing IWRAM's size: reads at `$0300xxxx`-style offsets returned real-but-wrong
+  bytes (silent zeros where libtonc puts nothing), IWRAM was unreachable entirely, and the
+  misleading 32768 size "confirmed" false hypotheses for hours. Same wrongness flowed through
+  `breakpoint({captureMemory})`.
+- Fixed in the mgba patch: `system_ram` now reports EWRAM's real size (**262144**) and reads the
+  full 256 KB; new **`gba_iwram`** region (32 KB @ `$03000000`) exposes the RAM where the C stack
+  and libtonc/maxmod `.bss` actually live. Region enums are single-source, so `gba_iwram` appears
+  in every memory tool automatically.
+- GBA MENTAL_MODEL corrected (it wrongly claimed `system_ram` covered both RAMs) + a new
+  "IWRAM vs EWRAM debugging footgun" note: map the address by prefix — `$02xxxxxx` → `system_ram`,
+  `$03xxxxxx` → `gba_iwram`.
+- Regression test: live tonc ROM, asserts EWRAM reads past the old bogus 32 KB limit and that
+  IWRAM reads live stack/`.bss` bytes (all-zeros = the defect is back).
+
 ## 0.90.0 — 2026-07-15
 
 Two fixes from the ActRaiser *annotation* session (carving a routine out of the SNES `.byte`
