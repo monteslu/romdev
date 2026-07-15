@@ -20,7 +20,12 @@ floor by live single-stepping).
   3-byte `ldx #imm16` shows up only as the PC delta). This returns an ordered `trace:[{pc, width}]` in
   ONE call — `width` = PC[k+1]-PC[k] (a missing width = a branch/jump moved the PC) — with the
   boilerplate note emitted once, not per entry. `withRegisters:true` adds the register file at each
-  step. Collapses a ~26-call trace into 1.
+  step. Collapses a ~26-call trace into 1. Works on all 18 platforms (it wraps `stepInstruction`); the
+  `width` cap is the longest instruction across every ISA (16), so m68k's up-to-10-byte instructions
+  aren't clamped like a 6502-sized cap would.
+- Stray build artifacts (a compiled `.gba`/`.build.log` a playtest wrote into `examples/`) no longer
+  ship in the npm package — an `.npmignore` excludes ROM binaries + build logs from the `examples`
+  glob (source-form `.p8` example carts + `.png`/`.chr`/`.bin` input assets still ship).
 
 ## 0.89.0 — 2026-07-14
 
