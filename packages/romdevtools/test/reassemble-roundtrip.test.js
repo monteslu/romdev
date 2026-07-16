@@ -321,3 +321,33 @@ test("background poll errors clearly: unknown job / missing dir", { timeout: 300
     assert.ok(/no job found|\.romdev-job\.json/.test(text), "error must explain there's no job: " + text);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+// Large flat Genesis region is CHUNKED so it doesn't monopolize a worker for
+// minutes (field report: a ~500KB Genesis disasm "locked up the whole MCP
+// server" — one flat region + a superlinear heal loop = ~5 min sync). Chunks
+// parallelize and each heal loop stays bounded; the rebuild is still byte-exact.
+test("Genesis: a large flat ROM splits into chunk regions and round-trips byte-exact", { timeout: 240000 }, async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "romdev-reasm-genchunk-"));
+  try {
+    // 96KB of code past the reset PC → must exceed one 32KB chunk (≥3 regions).
+    // A repeating m68k pattern (move #imm,d0 / nop) keeps it real-ish + fast.
+    const rom = new Uint8Array(0x20000);
+    rom[4] = 0x00; rom[5] = 0x00; rom[6] = 0x02; rom[7] = 0x00; // reset PC = $0200
+    const pat = [0x30, 0x3C, 0x12, 0x34, 0x4E, 0x71]; // move.w #$1234,d0 ; nop
+    for (let o = 0x200; o < 0x200 + 0x18000; o += pat.length) rom.set(pat, o);
+    const romPath = path.join(dir, "big.md");
+    await writeFile(romPath, rom);
+
+    const disasm = toolHandler(registerDisasmTools, "disasm");
+    const build = toolHandler(registerToolchainTools, "build", "genchunk");
+    const projDir = path.join(dir, "proj");
+    const proj = parse(await disasm({ target: "project", path: romPath, outputDir: projDir, platform: "genesis" }));
+
+    assert.ok(proj.regions.length >= 3, `a 96KB flat region must chunk (got ${proj.regions.length} region(s))`);
+    assert.ok(proj.regions.every((r) => /chunk\d+\.asm/.test(r.file)), "chunks are named chunkN.asm");
+    assert.equal(proj.roundTrip.allByteExact, true, "every chunk round-trips byte-exact");
+
+    const re = parse(await build({ output: "reassemble", platform: "genesis", path: projDir }));
+    assert.equal(re.byteExact, true, "the chunked project rebuilds byte-identical");
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});

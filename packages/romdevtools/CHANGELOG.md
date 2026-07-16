@@ -4,6 +4,25 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.91.3 — 2026-07-16
+
+**A large flat-region disassembly no longer locks up the server** (field report: a ~500 KB Genesis
+`disasm({target:'project'})` "locked up the whole MCP server").
+
+- Genesis is one flat 68k region, so it disassembled the entire ROM as a SINGLE unit — and the
+  reassembler's heal loop is **superlinear** in region size (it re-assembles the whole growing
+  region each pass: 32 KB ≈ 2 s but 64 KB ≈ 8 s). A ~471 KB cart took **~5 minutes**, monopolizing
+  one WASM worker the whole time — indistinguishable from a lockup, and past any client timeout. The
+  0.89.0 per-region parallelism didn't help because there was only ONE region.
+- Fix: `planRegions` now **chunks a large flat region** (Genesis; ≤32 KB per `chunkN.asm`). Each
+  chunk's heal loop stays fast, and the existing per-region loop runs them across the worker pool in
+  parallel. A boundary that splits an instruction just floors those bytes to `.byte` — still
+  byte-exact, since the reassemble rebuild splices each chunk into `original.rom` by offset. Measured
+  on a real 512 KB cart: **~5 min → ~33 s**, and the one-call `build({output:'reassemble'})` rebuild
+  is **byte-identical** (verified). `planRebuild`'s Genesis header/pad math spans all chunks.
+- For the fully-robust path on any multi-MB ROM, `background:true` + poll (0.89.0) now genuinely
+  helps here — 15 chunks parallelize where one region couldn't.
+
 ## 0.91.2 — 2026-07-15
 
 **Packaging: build artifacts really can't ship now.** The 0.90.0 `.npmignore` meant to keep stray

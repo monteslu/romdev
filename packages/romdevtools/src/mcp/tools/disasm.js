@@ -1905,6 +1905,41 @@ function trimTrailingPad(bytes) {
   return end < bytes.length ? bytes.slice(0, end) : bytes;
 }
 
+// Max bytes per disasm/reassemble region. The reassembler's heal loop is
+// SUPERLINEAR in region size (it re-assembles the whole growing region every
+// pass), so a single large flat region (e.g. a ~500KB Genesis ROM) can take
+// minutes and monopolize the WASM worker — the MCP server appears locked up.
+// Bounding each region keeps every heal loop fast AND lets planRegions' consumers
+// run them across the worker pool in parallel. 32KB matched the sweet spot in
+// timing (32KB ≈ 2s vs 64KB ≈ 8s — the superlinearity is steep).
+const FLAT_REGION_CHUNK = 0x8000;
+
+/**
+ * Split a flat code `body` (already pad-trimmed) starting at CPU/file `start`
+ * into ≤FLAT_REGION_CHUNK-byte regions. One region if it fits; else chunkN.asm
+ * pieces at consecutive offsets. A chunk boundary that splits an instruction
+ * just floors those bytes to `.byte` in each piece — still byte-exact, since the
+ * reassemble rebuild splices each region into the original by fileOffset.
+ * @returns {Array<{name,file,bytes,startAddress,fileOffset,label}>}
+ */
+function chunkFlatRegion(body, start, platform) {
+  if (body.length <= FLAT_REGION_CHUNK) {
+    return [{ name: "rom", file: "rom.asm", bytes: body, startAddress: start, fileOffset: start, label: `code from $${start.toString(16)}` }];
+  }
+  const out = [];
+  const n = Math.ceil(body.length / FLAT_REGION_CHUNK);
+  for (let i = 0; i < n; i++) {
+    const off = i * FLAT_REGION_CHUNK;
+    const slice = body.slice(off, Math.min(body.length, off + FLAT_REGION_CHUNK));
+    out.push({
+      name: `chunk${i}`, file: `chunk${i}.asm`,
+      bytes: slice, startAddress: start + off, fileOffset: start + off,
+      label: `${platform} code chunk ${i}/${n} @ $${(start + off).toString(16)} (flat region split for parallel reassembly)`,
+    });
+  }
+  return out;
+}
+
 /** Emit a known-data region as a clean, byte-exact `.byte` dump (GAS/cc65 both
  *  accept `.byte` with `.org`). 16 bytes per line, with the address in a comment. */
 // Emit a byte-exact `.byte` dump for a known-DATA region (e.g. a cartridge
@@ -2038,8 +2073,16 @@ function planRegions(platform, data) {
     // trimming the trailing $00/$FF padding that fills a sized cart.
     const resetPc = (data[4] << 24 | data[5] << 16 | data[6] << 8 | data[7]) >>> 0;
     const start = (resetPc < data.length && resetPc >= 0x200) ? resetPc : 0x200;
-    regions.push({ name: "rom", file: "rom.asm", bytes: trimTrailingPad(data.slice(start)), startAddress: start, fileOffset: start, label: `code from reset PC $${start.toString(16)}` });
-    return regions;
+    const body = trimTrailingPad(data.slice(start));
+    // CHUNK the flat region. The m68k heal loop is superlinear in region size
+    // (it re-assembles the whole growing region each pass), so one ~500KB flat
+    // region took ~5 MINUTES — the MCP server appeared LOCKED UP. Splitting into
+    // bounded chunks makes each heal loop fast AND lets the per-region loop run
+    // them across the worker pool in parallel (a 512KB cart: ~5min → ~15s). A
+    // chunk boundary that splits an instruction just floors those bytes to
+    // `.byte` (still byte-exact; the reassemble rebuild concatenates chunks
+    // verbatim by fileOffset). Small ROMs stay a single region.
+    return chunkFlatRegion(body, start, "genesis");
   }
   if (platform === "c64") {
     const loadAddr = data[0] | (data[1] << 8);
