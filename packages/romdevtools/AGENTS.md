@@ -606,7 +606,7 @@ You have two modes. Pick per task:
 
 **Text mode** — `tiles({op:'pixels'})`, `tiles({op:'ascii'})`, `tiles({op:'fingerprints'})`, `memory({op:'read'})`. Returns structured data or ASCII art. Best for precise comparison ("is this tile blank?", "did $00F4 change between frame 60 and 90?", "find all tiles whose hash matches X").
 
-Both work fine. Image mode is more flexible but burns more tokens per call. Use text mode for scans and diffs, image mode for "does this look like Mario?" questions.
+Both work fine. Image mode is more flexible but burns more tokens per call. Use text mode for scans and diffs, image mode for "does this look like the hero sprite?" questions.
 
 ## NES-specific (most common platform)
 
