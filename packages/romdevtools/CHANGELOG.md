@@ -4,6 +4,59 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.95.0 — 2026-07-16
+
+The GBA + Genesis build pipelines are now standalone: their SDK library trees
+AND build drivers live in the binary packages, with stable public entries, and
+the whole pipeline runs in a non-node host (browser Web Worker) through an
+injected environment. An SDK built on either target deps ONE package and zero
+romdevtools.
+
+**Share trees moved into the binary packages**
+- `src/platforms/gba/lib/` → `romdev-platform-gba/share/gba/lib/` (libtonc,
+  libgba, maxmod, sysbase, crt0s, ld scripts, arm target archives).
+- `src/platforms/genesis/lib/` → `romdev-toolchain-m68k-gcc/share/genesis/lib/`
+  (full SGDK tree + the minimal `c/` runtime).
+- Both packages export `shareDir`. Templates' `lib/...` references unchanged
+  (the inner layout is preserved). Build scripts/docs/tests repointed.
+
+**Stable public build entries (drivers moved INTO the packages)**
+- `import { buildGbaC, parseBuildLog } from "romdev-platform-gba"`.
+- `import { buildGenesisC, finalizeGenesisRom, runSjasm, runBintos,
+  parseBuildLog } from "romdev-toolchain-m68k-gcc"`.
+- romdevtools itself now builds GBA/Genesis through these entries — one
+  pipeline, no fork. The shared tool-running kit is vendored byte-identical in
+  each package's `build/` (romdevtools' `src/toolchains` is canonical; a
+  parity test fails the suite on drift, `scripts/sync-build-kit.sh` re-syncs).
+- The old deep-import paths (`src/toolchains/gba-c/`, `genesis-c/`, `sjasm/`)
+  no longer exist.
+
+**Env-injectable tool running (the browser-IDE seam)**
+- `buildGbaC({..., env})` / `buildGenesisC({..., env})`: `env.runTool` carries
+  a logical ToolJob (`{tool, glueFile, pkg, argv, inputFiles, outputFiles}`)
+  and the host owns WASM instantiation + MEMFS; `env.share` supplies the
+  share tree as a `{relPath: bytes|text}` manifest (stage with
+  `buildShareManifest` — key order matters: it feeds compile order → ar
+  member order → ROM bytes); `env.hash` + `env.sdkCache` cover the SDK seed
+  check + rebuild cache; `env.loadGlue` covers sjasm/bintos on Genesis.
+- No node builtin in the pipeline's static import closure (test-enforced);
+  node defaults load lazily. An injected-env build is sha256-identical to the
+  node path (test-enforced). Browsers need only a Buffer shim (ar packer).
+- Pure marshalling moved to `common/io.js`; `common/share-fs.js` is the new
+  share seam; `makeGccToolchain(config, env)` + `makeArmGccTools(env)` /
+  `makeM68kGccTools(env)` / `makeZ80Tools(env)` factories.
+
+**Fixes**
+- SDK seed hashes were keyed on ABSOLUTE source paths, so any tree move (or
+  another machine) made every GBA/Genesis build report a false
+  `sdkEditIgnored`. Hash keys are share-relative now; seeds regenerated.
+- The staged gametank core wasm had been overwritten by a build without the
+  romdev debug instrumentation (Game Genie/cheat exports missing). Rebuilt
+  with `scripts/build-gametank.sh`; `romdev-core-gametank` 0.4.0, repinned.
+
+**Packages:** romdevtools 0.95.0, romdev-platform-gba 0.11.0,
+romdev-toolchain-m68k-gcc 0.3.0, romdev-core-gametank 0.4.0.
+
 ## 0.94.0 — 2026-07-16
 
 Follow-up to the 0.93.0 SNES readability fix, from a fresh annotation session.
