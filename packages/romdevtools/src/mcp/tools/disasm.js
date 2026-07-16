@@ -1204,13 +1204,30 @@ async function runProjectDisassembly({ path: romPath, outputDir }, resolved, pro
       // (a 32-bank SNES cart no longer serializes 32 heal loops). Order is
       // preserved by mapping over indices. (For very large ROMs the async-job
       // path below still applies so the client never times out mid-run.)
+      // CODE/DATA MAP — the fix for the readability floor. da65/objdump decode a
+      // whole region as if it were all code; when they hit a DATA byte mid-region
+      // it mis-decodes, desyncs the byte stream (and, on 65816, the .a8/.i8 width
+      // state), and the heal loop can't reconverge → the whole region floors to
+      // `.byte`, 0% readable. Instead: run the analysis engine (rizin) ONCE to get
+      // the real function byte-spans, and disassemble ONLY those — data between
+      // functions is emitted as clean `.byte` up front, so nothing desyncs and the
+      // real code stays readable. Best-effort: if analysis is unavailable the
+      // per-region reassembler falls back to its old whole-region heal.
+      let codeSpans = null;
+      try {
+        codeSpans = await extractCodeSpans(romPath, resolved);
+      } catch { codeSpans = null; }
+
       let regionsDone = 0;
       const out = await Promise.all(regions.map(async (reg) => {
         // Known-data regions (e.g. the GBA cartridge header) are emitted as a
         // clean `.byte` dump — byte-exact by construction, NOT a failed disasm.
+        // Per-region code spans (file-offset ranges) → relative to this region's
+        // bytes, so the reassembler disassembles code + `.byte`s the gaps.
+        const regionSpans = codeSpans ? spansForRegion(codeSpans, reg.fileOffset, reg.bytes.length) : null;
         const r = reg.kind === "data"
           ? { ok: true, readablePercent: 0, source: dataRegionSource(reg.bytes, reg.startAddress, CPU_FAMILY[resolved]), note: "data region (not code)" }
-          : await reassembleForPlatform({ platform: resolved, bytes: reg.bytes, startAddress: reg.startAddress });
+          : await reassembleForPlatform({ platform: resolved, bytes: reg.bytes, startAddress: reg.startAddress, codeSpans: regionSpans });
         // A uniform-FILL region ($FF/$00 padding) disassembles into junk that
         // reports a high readablePercent — a trap (the emptiest bank looks the
         // "most readable"). Detect it and report readability HONESTLY as null +
@@ -1903,6 +1920,66 @@ function trimTrailingPad(bytes) {
   // keep a tiny tail so a final real instruction isn't clipped; align to 16.
   end = Math.min(bytes.length, (end + 16) & ~0xF);
   return end < bytes.length ? bytes.slice(0, end) : bytes;
+}
+
+/**
+ * Run the analysis engine (rizin) once on the ROM and return the real CODE
+ * byte-spans as {start, end} FILE offsets (merged, sorted). Data-flagged
+ * pseudo-functions (graphics/tables mis-detected as code) are excluded. This is
+ * the code/data map that lets reassembly disassemble only real code and `.byte`
+ * the rest — the fix for the whole-region-floors-to-.byte readability problem.
+ * 6502/65816 only for now (the platforms whose da65 path desyncs on data); other
+ * families fall through to null and keep the whole-region heal.
+ * @returns {Promise<Array<{start:number,end:number}>|null>}
+ */
+async function extractCodeSpans(romPath, platform) {
+  const fam = (await import("../../toolchains/common/reassemble.js")).CPU_FAMILY[platform];
+  if (fam !== "6502" && fam !== "65816") return null; // only the da65-desync families
+  const { analyzeFunctions } = await import("../../analysis/analyze.js");
+  const res = await analyzeFunctions(romPath, platform);
+  if (!res || !res.functions?.length) return null;
+  // Real code only — exclude the data-fold pseudo-functions. `address` is a CPU
+  // address (rizin baddr = the CPU load base, e.g. $8000 on SNES LoROM — NOT a
+  // file offset), `size` the byte length. spansForRegion compares against da65's
+  // CPU addresses, so keep these in CPU space.
+  // rizin analyzes the ROM as one flat image at baddr. address = baddr + FILE
+  // offset, so file offset = address - baddr. Recover baddr from the minimum
+  // function address rounded down to the load base (SNES LoROM = $8000). We turn
+  // every span into a FILE-offset span so it maps unambiguously onto any bank
+  // (all LoROM banks share the $8000 CPU window, but their FILE offsets differ).
+  const minAddr = Math.min(...res.functions.filter((f) => f.address != null).map((f) => f.address >>> 0));
+  const baddr = minAddr & ~0xFFFF | (minAddr & 0x8000 ? 0x8000 : 0); // $8000-aligned load base
+  const raw = res.functions
+    .filter((f) => !f.looksLikeData && (f.size ?? 0) > 0 && f.address != null)
+    .map((f) => ({ start: (f.address - baddr) >>> 0, end: (f.address - baddr + f.size) >>> 0 }))
+    .sort((a, b) => a.start - b.start);
+  if (!raw.length) return null;
+  // Merge overlapping/adjacent spans.
+  const merged = [raw[0]];
+  for (let i = 1; i < raw.length; i++) {
+    const last = merged[merged.length - 1];
+    if (raw[i].start <= last.end) last.end = Math.max(last.end, raw[i].end);
+    else merged.push({ ...raw[i] });
+  }
+  return merged; // FILE-offset spans
+}
+
+/**
+ * Translate whole-ROM code spans (file offsets) into spans RELATIVE to a region's
+ * bytes (0..regionLen), clipped to the region. Returns null when the whole region
+ * is code (no gaps → let the normal path run) or when there's no code at all.
+ * @returns {Array<{start:number,end:number}>|null}
+ */
+function spansForRegion(codeSpans, fileOffset, regionLen) {
+  const rel = [];
+  for (const s of codeSpans) {
+    const start = Math.max(0, s.start - fileOffset);
+    const end = Math.min(regionLen, s.end - fileOffset);
+    if (end > start) rel.push({ start, end });
+  }
+  if (!rel.length) return [];                         // region is all data → all .byte
+  if (rel.length === 1 && rel[0].start === 0 && rel[0].end === regionLen) return null; // all code → normal path
+  return rel;
 }
 
 // Max bytes per disasm/reassemble region. The reassembler's heal loop is

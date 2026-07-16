@@ -12,6 +12,7 @@
 // the server" property requested in Round 11 feedback.
 
 import { fork } from "node:child_process";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -19,7 +20,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const WORKER_PATH = path.join(__dirname, "wasm-worker.js");
 
-const POOL_SIZE = Number(process.env.ROM_DEV_WASM_POOL_SIZE ?? 2);
+// Default the WASM worker pool to (cores − 2), capped at 12. The reassembler's
+// per-span/per-region heal fans out MANY small independent ca65/ld65 jobs
+// (a 65816 project disasm = every function of every bank), so a pool of 2 left
+// 22 cores idle and serialized a multi-minute grind. `ROM_DEV_WASM_POOL_SIZE`
+// still overrides for constrained hosts (or to force determinism in tests).
+const POOL_SIZE = Number(
+  process.env.ROM_DEV_WASM_POOL_SIZE ?? Math.max(2, Math.min(12, (os.cpus()?.length || 4) - 2)),
+);
 
 /**
  * @typedef {Object} Worker

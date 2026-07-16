@@ -90,7 +90,7 @@ export const CPU_FAMILY = {
  *   total:number, dcLines:number, readablePercent:number, note?:string }>}
  */
 export async function reassembleForPlatform(a) {
-  const { platform, bytes, startAddress } = a;
+  const { platform, bytes, startAddress, codeSpans } = a;
   const family = CPU_FAMILY[platform];
   if (!family) throw new Error(`reassembleForPlatform: no reassembly path for platform '${platform}'`);
 
@@ -101,10 +101,24 @@ export async function reassembleForPlatform(a) {
   let disasm;
   if (family === "6502" || family === "65816") {
     const { runDa65 } = await import("../cc65/da65.js");
-    const r = await runDa65({ bytes, startAddress, cpu: family === "65816" ? "65816" : "6502", options: ["--comments", "4"] });
+    // THE readability-floor fix (65816): when we have a code map, disassemble
+    // each code span INDEPENDENTLY and dump the gaps as `.byte`. Two reasons a
+    // single whole-region da65 pass floors to 0%:
+    //   1. da65's `--comments 4` ASCII gutter broke the byte-capture regex → 0
+    //      code lines recognized → everything floored. (regex fixed below.)
+    //   2. On 65816, `.a8/.i8` width state set by a `rep/sep` inside one span
+    //      leaks across the `.byte` gap into the next span, whose real entry
+    //      width differs → operand widths wrong → byte counts wrong → cascade →
+    //      the heal loop can't reconverge → floor.
+    // Per-span disassembly cures (2): each span re-seeds width at its own entry
+    // and can't desync the next. It's also FAST — each span is small, so its
+    // heal loop is cheap, versus one superlinear 32KB heal (that measured 300s
+    // for 21%). See reassemble65816Spans.
+    if (family === "65816" && Array.isArray(codeSpans) && codeSpans.length) {
+      return reassemble65816Spans(bytes, startAddress, codeSpans);
+    }
+    const r = await runDa65({ bytes, startAddress, cpu: family === "65816" ? "65816" : "6502", options: ["--comments", "4"], codeSpans });
     disasm = r.asm;
-    // da65 output is already valid cc65 — heal it in place (cc65 reassembles its
-    // own syntax natively).
     return reassembleCc65Native(disasm, startAddress, bytes, family);
   }
   // ALL non-6502 CPUs: disassemble with native objdump, reassemble with the
@@ -277,6 +291,217 @@ async function reassembleGnuNative(disasm, startAddress, original, tools, family
     readablePercent: 0, note: ok ? "byte-exact (data-only floor — some instructions didn't round-trip)" : "could not reach byte-exact" };
 }
 
+// Recognize a da65 `--comments 4` code line and pull {addr, bytes} out of its
+// `; ADDR BB BB ..` comment. The byte group is single-space-separated hex pairs
+// followed by an ASCII gutter (2+ spaces then the rendering) or EOL — so we stop
+// at a double-space, NOT at `$` (anchoring to `$` matches nothing → the 0%
+// readability floor bug). Labels/comments/directives are not code.
+const DA65_CODE_RE = /^\s*\S.*?\s*;\s*([0-9A-Fa-f]{4,8})\s+((?:[0-9A-Fa-f]{2}(?: [0-9A-Fa-f]{2})*))(?:\s{2,}|\s*$)/;
+function parseDa65Code(line) {
+  if (/^\s*(?:L[0-9A-Fa-f]+:|;|\.)/.test(line)) return null;
+  const m = line.match(DA65_CODE_RE);
+  if (!m) return null;
+  return { addr: parseInt(m[1], 16), bytes: m[2].trim().split(/\s+/).map((h) => parseInt(h, 16)) };
+}
+
+/**
+ * 65816 readability path: disassemble each code span INDEPENDENTLY (so a span's
+ * `.a8/.i8` width state can't leak across a data gap into the next span and
+ * desync it), heal each span's da65 output line-by-line to byte-exact, and
+ * stitch the healed code spans + `.byte` gaps into one `.org`-anchored source.
+ * Every span is small → its heal loop is cheap → the whole region is fast AND as
+ * readable as the real code allows (versus one 32KB heal that floored to 21% in
+ * 300s).
+ *
+ * @param {Uint8Array} original  full region bytes
+ * @param {number} startAddress  CPU address of region byte 0
+ * @param {{start:number,end:number}[]} spans region-relative code byte offsets
+ *   (sorted, merged, non-overlapping)
+ * @returns same shape as reassembleForPlatform
+ */
+async function reassemble65816Spans(original, startAddress, spans) {
+  const { runDa65 } = await import("../cc65/da65.js");
+  const { runCa65, runLd65 } = await import("../cc65/cc65.js");
+
+  // Heal one contiguous CODE span to byte-exact ca65 source. da65 decodes it as
+  // code (its own info Code RANGE); any line ca65 rejects (bare wdm/cop/brk, a
+  // data mis-decode inside the span) is pinned to `.byte`. Small spans → few
+  // passes. Returns { asm, readable, total } — asm has NO `.setcpu`/`.org`
+  // (the stitcher supplies those once for the whole region).
+  const healSpan = async (spanBytes, spanAddr) => {
+    const r = await runDa65({ bytes: spanBytes, startAddress: spanAddr, cpu: "65816",
+      options: ["--comments", "4"], codeSpans: [{ start: 0, end: spanBytes.length }] });
+    // Keep only the body lines (drop da65's banner comments + equates block —
+    // the stitcher emits shared equates isn't needed; ca65 tolerates the raw
+    // `Lxxxx := $..` lines, so keep those, drop only the leading `;` banner and
+    // the `.setcpu`). We strip `.setcpu`; equates/labels/width dirs stay.
+    const lines = r.asm.split(/\r?\n/).filter((l) => !/^\s*\.setcpu\b/.test(l));
+    const meta = lines.map(parseDa65Code);
+    const forced = new Set();
+    const total = meta.filter(Boolean).length;
+    const cfg = `MEMORY{M:start $${spanAddr.toString(16)},size $${spanBytes.length.toString(16)},type ro,file %O,fill yes,fillval $FF;}\nSEGMENTS{CODE:load M,type ro;}\n`;
+    const codeByText = new Map();
+    lines.forEach((line, i) => { if (meta[i]) { const t = line.trim(); if (!codeByText.has(t)) codeByText.set(t, i); } });
+    const build = () => {
+      const rows = [`\t.setcpu "65816"`, `\t.org $${spanAddr.toString(16).toUpperCase()}`];
+      lines.forEach((line, i) => rows.push(forced.has(i) ? "\t.byte " + meta[i].bytes.map(hex2).join(",") : line));
+      return rows.join("\n") + "\n";
+    };
+    const assemble = async (src) => {
+      const ca = await runCa65({ source: src, target: "none" }).catch(() => null);
+      if (!ca || !ca.object) return { bytes: null, log: ca?.log || "" };
+      const ld = await runLd65({ objects: { "o.o": ca.object }, target: "none", linkerConfig: cfg }).catch(() => null);
+      return { bytes: ld && ld.binary ? new Uint8Array(ld.binary) : null, log: "" };
+    };
+    // Bound heal effort. A span that needs MANY pins is really mis-classified
+    // data (rizin over-claimed a data blob as a function); grinding it one pin
+    // per re-assembly is the slow path (a 500-line junk span = 500 assemblies).
+    // So bail to a clean `.byte` dump once too many lines are pinned — cheaper
+    // AND more honest (a 40%-pinned "function" isn't readable code anyway). The
+    // pass cap is a hard ceiling; the pin-ratio bail is the usual early exit.
+    const cap = Math.min(total + 8, 60);
+    const bailPins = Math.max(12, Math.ceil(total * 0.35));
+    for (let pass = 0; pass < cap; pass++) {
+      if (forced.size >= bailPins) break; // too much data mis-decoded → floor span
+      const src = build();
+      const srcLines = src.split("\n");
+      const { bytes: out, log } = await assemble(src);
+      if (out && out.length === spanBytes.length && firstDiff(spanBytes, out) < 0) {
+        // Split the emitted lines into equates (`Lxxxx := $..`) and body. The
+        // stitcher dedups equates region-wide (each span re-declares the same
+        // targets → collisions if emitted per-span).
+        const equates = [], body = [];
+        lines.forEach((line, i) => {
+          if (forced.has(i)) { body.push("\t.byte " + meta[i].bytes.map(hex2).join(",")); return; }
+          if (/^\s*L[0-9A-Fa-f]+\s*:=/.test(line)) equates.push(line.trim());
+          else if (!/^\s*;/.test(line) && line.trim() !== "") body.push(line);
+        });
+        return { equates, body, readable: total - forced.size, total };
+      }
+      if (!out) {
+        let pinned = false;
+        for (const m of log.matchAll(/^[^\n]*?:(\d+):\s*(?:\x1b\[[0-9;]*m)*\s*Error/gm)) {
+          const sl = (srcLines[parseInt(m[1], 10) - 1] || "").trim();
+          const idx = codeByText.get(sl);
+          if (idx != null && !forced.has(idx)) { forced.add(idx); pinned = true; }
+        }
+        if (pinned) continue;
+        const next = meta.findIndex((mm, i) => mm && !forced.has(i));
+        if (next < 0) break;
+        forced.add(next);
+        continue;
+      }
+      // byte mismatch: pin the line owning the first diff.
+      const d = firstDiff(spanBytes, out);
+      const off = (d < 0 ? Math.min(out.length, spanBytes.length) : d) + spanAddr;
+      let owner = -1;
+      for (let i = 0; i < meta.length; i++) {
+        if (!meta[i]) continue;
+        if (meta[i].addr <= off && off < meta[i].addr + meta[i].bytes.length) { owner = i; break; }
+        if (meta[i].addr <= off) owner = i;
+      }
+      if (owner < 0 || forced.has(owner)) {
+        const next = meta.findIndex((mm, i) => mm && !forced.has(i));
+        if (next < 0) break;
+        forced.add(next);
+      } else forced.add(owner);
+    }
+    // Span didn't converge as code → emit it as `.byte` (still byte-exact when
+    // stitched). Readable 0 for this span.
+    const body = [];
+    for (let i = 0; i < spanBytes.length; i += 16) body.push("\t.byte " + Array.from(spanBytes.slice(i, i + 16)).map(hex2).join(","));
+    return { equates: [], body, readable: 0, total };
+  };
+
+  // Walk the region: alternating gaps (`.byte`) and healed code spans. Spans are
+  // region-relative, sorted, non-overlapping.
+  const dataRows = (rel, len) => {
+    const rows = [];
+    for (let i = rel; i < rel + len; i += 16) rows.push("\t.byte " + Array.from(original.slice(i, Math.min(rel + len, i + 16))).map(hex2).join(","));
+    return rows;
+  };
+  let cursor = 0, readable = 0, total = 0;
+  const healed = await Promise.all(spans.map((s) => healSpan(original.slice(s.start, s.end), startAddress + s.start)));
+  // Dedup equates region-wide. da65 equates a target label to a FIXED address
+  // (`L2992D := $2992D`), so identical names always carry the same value — a
+  // plain by-name dedup is safe. But a name that is ALSO defined as an in-body
+  // `Lxxxx:` label (da65 labels a target that lands at the start of a decoded
+  // line) would double-define → emit the equate ONLY for names never defined by
+  // a label. This keeps cross-span references (`jsr LFF0D` where $FF0D is in
+  // another span but not at a line start there → no label → must be equated)
+  // resolvable, which dropping all in-region equates broke.
+  const labelDefs = new Set(); // names defined as `Lxxxx:` in some span body
+  for (const h of healed) {
+    for (const line of h.body) {
+      const lm = line.match(/^\s*(L[0-9A-Fa-f]+):/);
+      if (lm) labelDefs.add(lm[1]);
+    }
+  }
+  const equateSet = new Map(); // name → line
+  for (const h of healed) {
+    for (const e of h.equates) {
+      const m = e.match(/^(L[0-9A-Fa-f]+)\s*:=\s*\$[0-9A-Fa-f]+/);
+      if (!m) continue;
+      if (labelDefs.has(m[1])) continue;    // defined by a real label → skip equate
+      if (!equateSet.has(m[1])) equateSet.set(m[1], e);
+    }
+  }
+  const out = [`\t.setcpu "65816"`, ...[...equateSet.values()], `\t.org $${startAddress.toString(16).toUpperCase()}`];
+  for (let i = 0; i < spans.length; i++) {
+    const s = spans[i];
+    if (s.start > cursor) out.push(...dataRows(cursor, s.start - cursor)); // data gap before span
+    out.push(...healed[i].body);
+    readable += healed[i].readable; total += healed[i].total;
+    cursor = s.end;
+  }
+  if (cursor < original.length) out.push(...dataRows(cursor, original.length - cursor)); // trailing data
+
+  const cfg = `MEMORY{M:start $${startAddress.toString(16)},size $${original.length.toString(16)},type ro,file %O,fill yes,fillval $FF;}\nSEGMENTS{CODE:load M,type ro;}\n`;
+  // Assemble; any `Lxxxx` da65 referenced but that no surviving label defines
+  // (target mid-instruction, or in a floored span) comes back "undefined". Every
+  // such name IS an address literal (`L940F` = $940F) — synthesize the equate
+  // and retry. A couple of repair rounds resolves the whole dangling set.
+  let src = out.join("\n") + "\n";
+  const definedNames = new Set([...equateSet.keys(), ...labelDefs]);
+  const extraEquates = [];
+  let ca = null, bytes = null;
+  for (let repair = 0; repair < 6; repair++) {
+    ca = await runCa65({ source: src, target: "none" }).catch(() => null);
+    if (ca && ca.object) {
+      const ld = await runLd65({ objects: { "o.o": ca.object }, target: "none", linkerConfig: cfg }).catch(() => null);
+      bytes = ld && ld.binary ? new Uint8Array(ld.binary) : null;
+      break;
+    }
+    // Collect undefined `Lxxxx` symbols from the ca65 log and equate them.
+    // Strip ANSI colour codes first — ca65 wraps the symbol name in them
+    // (`Symbol ‘\x1b[92mL940F\x1b[97m’ is undefined`), which would otherwise
+    // split the quote from the name and defeat the match.
+    const plainLog = (ca?.log || "").replace(/\x1b\[[0-9;]*m/g, "");
+    let added = false;
+    for (const m of plainLog.matchAll(/Symbol\s+['‘’]?(L([0-9A-Fa-f]+))['‘’]?\s+is undefined/g)) {
+      const name = m[1];
+      if (definedNames.has(name)) continue;
+      definedNames.add(name);
+      extraEquates.push(`${name} := $${parseInt(m[2], 16).toString(16).toUpperCase()}`);
+      added = true;
+    }
+    if (!added) break;
+    // Re-emit with the repair equates prepended (after .setcpu).
+    const lines2 = out.slice();
+    lines2.splice(1, 0, ...extraEquates);
+    src = lines2.join("\n") + "\n";
+  }
+  const ok = !!bytes && bytes.length === original.length && firstDiff(original, bytes) < 0;
+  if (ok) {
+    return { family: "65816", source: src, bytes, ok: true, total, dcLines: total - readable,
+      readablePercent: total ? Math.round(100 * readable / total) : 100 };
+  }
+  // Stitched whole-region assembly failed (a cross-span label/width edge) — fall
+  // back to the proven whole-region native heal so we still ship byte-exact.
+  const r = await runDa65({ bytes: original, startAddress, cpu: "65816", options: ["--comments", "4"], codeSpans: spans });
+  return reassembleCc65Native(r.asm, startAddress, original, "65816");
+}
+
 /**
  * Reassemble cc65 (6502/65816) families by using da65's output AS-IS — it's
  * already valid cc65 with its own equate/label structure. We inject `.org`
@@ -292,12 +517,17 @@ async function reassembleCc65Native(disasm, startAddress, original, family) {
   const cfg = `MEMORY{M:start $${startAddress.toString(16)},size $${original.length.toString(16)},type ro,file %O,fill yes,fillval $FF;}\nSEGMENTS{CODE:load M,type ro;}\n`;
 
   // Split da65 output into lines, tagging code lines with their {addr,bytes}.
+  // da65's `--comments 4` line shape is:
+  //   `  <insn>   ; <ADDR> <BB BB ..>   <ascii-gutter>`
+  // i.e. the raw bytes are followed by a right-aligned ASCII rendering of those
+  // bytes (`x`, `.`, `B.`). The byte group is therefore NOT at end-of-line — it's
+  // followed by padding + the gutter. Anchoring the byte capture to `$` (as an
+  // earlier version did) matches ZERO code lines, so every instruction reads as
+  // non-code → codeLineCount 0 → the heal loop can't tell code from data and the
+  // whole region floors to `.byte` at 0% readable. THIS is the readability-floor
+  // bug. Capture `; ADDR BB BB ...` and stop at 2+ spaces (the gutter gap) or EOL.
   const lines = disasm.split(/\r?\n/);
-  const meta = lines.map((line) => {
-    const m = line.match(/^\s*(?!L[0-9A-Fa-f]+:|;|\.)(\S.*?)\s*;\s*([0-9A-Fa-f]{4,8})\s+((?:[0-9A-Fa-f]{2}\s*)+)\s*$/);
-    if (m) return { code: true, addr: parseInt(m[2], 16), bytes: m[3].trim().split(/\s+/).map((h) => parseInt(h, 16)) };
-    return { code: false };
-  });
+  const meta = lines.map((line) => { const p = parseDa65Code(line); return p ? { code: true, ...p } : { code: false }; });
   const forced = new Set(); // line indices replaced with .byte
 
   const build = () => {
@@ -311,22 +541,43 @@ async function reassembleCc65Native(disasm, startAddress, original, family) {
   };
   const assemble = async (src) => {
     const ca = await runCa65({ source: src, target: "none" }).catch(() => null);
-    if (!ca || !ca.object) return null;
+    if (!ca || !ca.object) return { bytes: null, log: ca?.log || "" };
     const ld = await runLd65({ objects: { "o.o": ca.object }, target: "none", linkerConfig: cfg }).catch(() => null);
-    return ld && ld.binary ? new Uint8Array(ld.binary) : null;
+    return { bytes: ld && ld.binary ? new Uint8Array(ld.binary) : null, log: "" };
   };
+
+  // build() injects one `.org` line after `.setcpu`, so a ca65 error at source
+  // line N maps to disasm line N-1 IF it's past the injection, else N. We map by
+  // matching the reported line's text back to a meta code line instead — robust
+  // to any line-shifting. Pre-index code lines by their trimmed da65 text.
+  const codeByText = new Map();
+  lines.forEach((line, i) => { if (meta[i].code) { const t = line.trim(); if (!codeByText.has(t)) codeByText.set(t, i); } });
 
   let source = build();
   const codeLineCount = meta.filter((m) => m.code).length;
   for (let pass = 0; pass < 80; pass++) {
     source = build();
-    const out = await assemble(source);
+    const srcLines = source.split("\n");
+    const { bytes: out, log } = await assemble(source);
     if (out && out.length === original.length && firstDiff(original, out) < 0) {
       return { family, source, bytes: out, ok: true, total: codeLineCount, dcLines: forced.size,
         readablePercent: codeLineCount ? Math.round(100 * (1 - forced.size / codeLineCount)) : 100 };
     }
     if (!out) {
-      // ca65/ld failed — pin the first not-yet-pinned code line and retry.
+      // ca65/ld failed. Pin EVERY code line ca65 flagged this pass (da65 emits a
+      // handful of instructions ca65 won't re-accept — bare `wdm`, some implied/
+      // stack forms — and data mis-decoded inside a rizin span). Pinning one at a
+      // time would blow the 80-pass budget and floor a mostly-good region; pin
+      // them all at once so the loop converges in a few passes.
+      let pinnedAny = false;
+      for (const m of log.matchAll(/^[^\n]*?:(\d+):\s*(?:\x1b\[[0-9;]*m)*\s*Error/gm)) {
+        const srcLine = (srcLines[parseInt(m[1], 10) - 1] || "").trim();
+        const idx = codeByText.get(srcLine);
+        if (idx != null && !forced.has(idx)) { forced.add(idx); pinnedAny = true; }
+      }
+      if (pinnedAny) continue;
+      // Couldn't map any error line to a code line — fall back to pinning the
+      // first not-yet-pinned code line so the loop still makes progress.
       const next = meta.findIndex((m, i) => m.code && !forced.has(i));
       if (next < 0) break;
       forced.add(next);
@@ -359,7 +610,7 @@ async function reassembleCc65Native(disasm, startAddress, original, family) {
       rows.push("\t.byte " + Array.from(original.slice(i, i + 16)).map(hex2).join(","));
     }
     const flat = rows.join("\n") + "\n";
-    const out = await assemble(flat);
+    const { bytes: out } = await assemble(flat);
     const ok = !!out && out.length === original.length && firstDiff(original, out) < 0;
     return { family, source: flat, bytes: out ?? null, ok, total: codeLineCount, dcLines: codeLineCount,
       readablePercent: 0,
