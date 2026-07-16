@@ -6,6 +6,12 @@ the `romdev-mcp` bin is kept as an alias.)
 
 ## 0.91.2 — 2026-07-15
 
+**Packaging: build artifacts really can't ship now.** The 0.90.0 `.npmignore` meant to keep stray
+`examples/**/*.gba`/`.build.log` out of the tarball was inert — npm uses the `files` array as the
+allowlist and bypasses `.npmignore` for included dirs. The exclusions moved into `files` itself
+(`!examples/**/*.gba` …), where npm honors them; verified a stray `.gba` + build log no longer pack
+(source-form `.p8` carts + input assets still ship).
+
 **`disasm({target:'rom', bank:N})` no longer silently reads the wrong bank** (field report from a
 SNES annotation session — the dangerous twin of the 0.90.0 SNES-address fix).
 
