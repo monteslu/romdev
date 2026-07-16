@@ -1286,6 +1286,17 @@ export async function reassembleProjectCore({ path: projPath, platform, outputPa
         ? `Rebuilt ${rom.length} bytes with edited region(s) (regions[].byteExact=false = your changes). Not identical to the original — that's expected for an intentional edit.`
         : `Rebuilt ${rom.length} bytes but NOT byte-identical to the original despite no reported region edits — investigate regions[] before trusting this.`;
 
+  // Region output: when the whole ROM is byte-identical, the per-region array is
+  // pure boilerplate (the top-level byteExact + note carry the signal), and on a
+  // 32-bank cart that's ~2.5KB of repeated tokens per rebuild. Collapse to a
+  // count summary on full success; list the ACTIONABLE rows (failed or edited/
+  // mismatched) otherwise — which is exactly when the detail matters. (Field
+  // report: reassemble echoed all 32 regions on every success.)
+  const allClean = !anyRegionFailed && regionResults.every((r) => r.byteExact !== false);
+  const regionsOut = allClean
+    ? { count: regionResults.length, allByteExact: true }
+    : regionResults.filter((r) => !r.ok || r.byteExact === false);
+
   return jsonContent({
     ok: !anyRegionFailed,
     output: "reassemble",
@@ -1293,7 +1304,7 @@ export async function reassembleProjectCore({ path: projPath, platform, outputPa
     byteExact: !anyRegionFailed && romExact,
     outputPath: wrote,
     romLength: rom.length,
-    regions: regionResults,
+    regions: regionsOut,
     note,
   });
 }

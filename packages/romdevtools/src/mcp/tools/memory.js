@@ -140,7 +140,10 @@ async function memRead(sessionKey, { region, offset = 0, length, offsets, output
         length: bytes.length,
         endianness,
         wordSize: info.wordSize ?? 1,
-        note,
+        // Only emit `note` when there's actually one — a region with no note
+        // (system_ram, most work-RAM) used to return `note: null` every read
+        // (field report: pure noise on a batch RE loop).
+        ...(note ? { note } : {}),
       };
       // Large reads: path-or-inline. Write the RAW bytes to disk (not hex) so
       // the artifact is directly usable; inline returns the hex string.
@@ -207,7 +210,13 @@ async function memReadCart(sessionKey, { offset = 0, length = 16, cpuAddress, ba
         if (rom.platform === "nes") {
           m = mapNesAddress(rom.raw, cpuAddress >>> 0, length, bank);
         } else if (rom.platform === "snes") {
-          m = mapSnesAddress(rom.raw, cpuAddress >>> 0, length, mapper);
+          // SNES: the bank IS the address's high byte. `mapSnesAddress` ignores a
+          // separate `bank` param — field report: a bank-local addr + bank:2 read
+          // BANK 0 silently. Compose it into the 24-bit address, same fix as
+          // disasm({target:'rom', bank}).
+          let addr = cpuAddress >>> 0;
+          if (bank != null && addr < 0x10000) addr = ((bank & 0xFF) << 16) | addr;
+          m = mapSnesAddress(rom.raw, addr, length, mapper);
         } else {
           throw new Error(`memory({op:'readCart', cpuAddress}): banked CPU-address mapping is NES/SNES only (got '${rom.platform}'). Use a flat 'offset' for this platform.`);
         }

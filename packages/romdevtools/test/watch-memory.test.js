@@ -444,3 +444,40 @@ test("stepInstructions: notSupported cores fail cleanly", async () => {
   assert.equal(p.stepped, false);
   assert.equal(p.notSupported, true);
 });
+
+// ── stepInstructions flow classification (v0.91.1 field report) ──────────────
+// `width` was the raw PC delta, so a TAKEN forward branch (2-byte beq to +3)
+// looked exactly like a 3-byte instruction. Now `flow` classifies from the
+// opcode and `width` is present only on flow:'seq' steps.
+test("stepInstructions: flow classification omits width on control transfers", async () => {
+  // Scripted PCs + a getCartRom whose bytes at each PC give a known opcode.
+  // Two seq (lda #imm 2B, nop 1B) then a taken branch (beq) then its target.
+  const pcs = [0x8000, 0x8002, 0x8003, 0x8010];
+  const opcodes = { 0x8000: 0xA9 /*lda#*/, 0x8002: 0xEA /*nop*/, 0x8003: 0xF0 /*beq*/, 0x8010: 0xA9 };
+  let i = 0;
+  const host = {
+    status: { frameCount: 0, platform: "nes" },
+    pcBreakSupported: () => true,
+    stepInstruction() { return { pc: pcs[Math.min(i++, pcs.length - 1)], hit: true }; },
+    getCartRom() {
+      // a fake ROM where readMemory-by-cpu-addr returns the scripted opcode.
+      // mapNesAddress on a flat 32KB NROM: cpuAddr $8000 -> file 0x10 (after
+      // header). Build a 32KB PRG with the opcodes at their mapped offsets.
+      const raw = new Uint8Array(16 + 0x8000);
+      raw.set([0x4e, 0x45, 0x53, 0x1a, 1, 0]); // iNES header, 1 PRG bank
+      for (const [pc, op] of Object.entries(opcodes)) raw[16 + (Number(pc) - 0x8000)] = op;
+      return { raw, platform: "nes" };
+    },
+  };
+  _setHostForTest("flow-session", host);
+  const res = await stepInstructionsCore("flow-session", { count: 4 });
+  const p = JSON.parse(res.content.find((c) => c.type === "text").text);
+  const [s0, s1, s2] = p.trace;
+  assert.equal(s0.flow, "seq", "lda # is sequential");
+  assert.equal(s0.width, 2, "lda # is 2 bytes (delta = size on seq)");
+  assert.equal(s1.flow, "seq", "nop is sequential");
+  assert.equal(s1.width, 1, "nop is 1 byte");
+  assert.equal(s2.flow, "branch", "beq is a branch");
+  assert.equal(s2.width, undefined, "a TAKEN branch must NOT report a width (the bug)");
+  assert.ok(s2.nextPc, "the branch carries nextPc instead of width");
+});

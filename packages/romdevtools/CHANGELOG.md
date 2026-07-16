@@ -4,6 +4,36 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.92.0 — 2026-07-16
+
+A batch of RE-workflow fixes from two SNES annotation sessions (carving routines out of the 65816
+`.byte` floor with the live debugger).
+
+**Correctness**
+- **`memory({op:'readCart', cpuAddress, bank})` honored the SNES bank** — a bank-local 16-bit
+  address + `bank:2` read BANK 0's bytes silently (the third of the "silently the wrong bank" family;
+  the disasm twin was 0.91.2). It now composes `bank<<16 | cpuAddress` under LoROM/HiROM mapping.
+- **`frame({op:'stepInstructions'})` `width` no longer lies on taken branches.** `width` was the raw
+  PC delta, so a taken forward branch (a 2-byte `beq` to +3) looked exactly like a 3-byte instruction —
+  silently mis-validating a 65816 immediate-width decode. Each step is now classified from its opcode
+  into **`flow: 'seq'|'branch'|'call'|'jump'|'ret'`** (a small fixed 6502/65816 transfer set), and
+  `width` is emitted **only on `flow:'seq'`** steps (where the delta really is the instruction size); a
+  control transfer carries `flow` + `nextPc` instead.
+- **`cpu({op:'call'})` speaks the loaded core's registers.** `finalRegs` used hardcoded m68k names
+  ({D0,A0,…}) on every core, so on a 65816 core the values came back under wrong labels — now decoded
+  per-CPU (A/X/Y/P/DB/D/S/PC on SNES). `regs` accepts register **names** (`{a:0x0350}`) via a
+  per-platform map (unknown name → clear error), not just raw ids. New **`callMode:'jsr'|'jsl'`** sizes
+  the 65816 return/sentinel correctly (a plain `jsr`/`rts` helper pushes 2 bytes, not the 3-byte
+  `jsl`/`rtl` default — otherwise it "returned" one byte off into vector-stub land).
+
+**Token cost**
+- `build({output:'reassemble'})` collapses the per-region array to `{count, allByteExact:true}` on full
+  success (was ~2.5 KB of identical rows on a 32-bank cart every rebuild); it lists only the failed/edited
+  regions — which is when the detail is actionable.
+- `breakpoint({on:'pc'})` hits no longer re-emit the ~600-char `registersAtHit` note every time (the full
+  explanation is in the tool description, loaded once) — a terse pointer instead. `memory({op:'read'})`
+  stops emitting a `note: null` field for regions that have no note.
+
 ## 0.91.3 — 2026-07-16
 
 **A large flat-region disassembly no longer locks up the server** (field report: a ~500 KB Genesis

@@ -18,6 +18,7 @@
 
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { getCPUState } from "./cpu-state.js";
 import os from "node:os";
 import { mkdtempSync, readdirSync, statSync, readFileSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -2275,9 +2276,14 @@ export class LibretroHost {
       throw new Error("cpu({op:'call'}) needs the PC breakpoint (romdev_pcbreak) too.");
     }
     const prof = this._cpuCallProfile();
+    // callMode selects the return size for CPUs with both a short + long call
+    // (65816 jsr/rts=2 vs jsl/rtl=3). Default keeps the profile's retBytes.
+    const callMode = a.callMode;
+    const modeRetBytes = callMode === "jsr" ? prof.jsrRetBytes
+      : callMode === "jsl" ? prof.jslRetBytes : undefined;
     const {
       pc, regs = {}, spReg = prof.spReg, pcReg = prof.pcReg, sentinelPC = prof.defaultSentinel,
-      sentinelBytes = prof.retBytes, maxFrames = 600, sandbox = true, capture,
+      sentinelBytes = (modeRetBytes ?? prof.retBytes), maxFrames = 600, sandbox = true, capture,
       // pure: step ONLY the active CPU (no frame machinery — VDP lines, co-CPU,
       // interrupt raising). Without it, each "frame" of the call runs the
       // game's OWN per-frame logic concurrently (VBlank handlers via RAM
@@ -2329,7 +2335,22 @@ export class LibretroHost {
         if (bytes.length) this.writeMemoryCpuAddr(m.addr >>> 0, bytes);
       }
       // Set caller-supplied registers.
-      for (const [id, val] of Object.entries(regs)) this.setReg(Number(id), val);
+      // regs accepts NAMES ('a','x','y','p','sp',…, per the platform's regNames
+      // map) OR raw numeric ids — field report: no 65816 reg-id table meant a
+      // caller couldn't preset A without guessing. A name with no mapping, or a
+      // non-numeric key on a platform without regNames, throws clearly.
+      for (const [key, val] of Object.entries(regs)) {
+        let id = Number(key);
+        if (Number.isNaN(id)) {
+          const mapped = prof.regNames?.[String(key).toLowerCase()];
+          if (mapped == null) {
+            const known = prof.regNames ? Object.keys(prof.regNames).join(", ") : "(numeric ids only on this platform)";
+            throw new Error(`cpu({op:'call'}): unknown register '${key}'. Use a numeric reg-id or one of: ${known}.`);
+          }
+          id = mapped;
+        }
+        this.setReg(id, val);
+      }
       // Push the sentinel return address per the CPU's stack discipline, then set
       // SP + PC. The return address width + push direction + byte order all come
       // from the per-CPU profile (m68k pushes 4 BE bytes, predecrement; the 6502
@@ -2445,7 +2466,16 @@ export class LibretroHost {
       // the breakpoint fired before-dispatch, which is the m68k default).
       let finalPC = finalState && finalState.lastPC != null ? finalState.lastPC : null;
       let finalRegs = null;
-      try { finalRegs = this._readCallRegs(); } catch { /* best effort */ }
+      // Use the platform's REAL register file (getCPUState decodes per-core: A/X/Y/
+      // P/DB/DP on 65816, D0-D7/A0-A7 on m68k, …). The old _readCallRegs hardcoded
+      // m68k names {D0,D1,A0,A1,PC,SP}, so on a 65816 core the values came back
+      // under WRONG labels — a caller couldn't read A/X/Y/P (field report). Fall
+      // back to the raw m68k-id read only if the per-core decode is unavailable.
+      try {
+        const st = getCPUState(this, this._loadArgs?.platform);
+        if (st && st.registers) finalRegs = st.registers;
+      } catch { /* fall through */ }
+      if (!finalRegs) { try { finalRegs = this._readCallRegs(); } catch { /* best effort */ } }
       this._lastCallResult = { finalPC, finalRegs };
     } finally {
       if (snapshot) this.unserializeState(snapshot);
@@ -2505,7 +2535,8 @@ export class LibretroHost {
         // The slowest cores live here (atari2600 6507 ~1.19MHz, c64 6510 ~1MHz):
         // ~5-6k instr/frame → 600 frames ≈ 3-3.8M, BELOW a flat 4M. 6k keeps the
         // per-CPU budget under the frame cap so the watchdog actually trips.
-        return { spReg: 4, pcReg: 16, retBytes: 2, retBigEndian: true, defaultSentinel: 0, stackPage: 0x100, ramMask: 0xFFFF, retAdjust: -1, instrPerFrame: 6000 };
+        return { spReg: 4, pcReg: 16, retBytes: 2, retBigEndian: true, defaultSentinel: 0, stackPage: 0x100, ramMask: 0xFFFF, retAdjust: -1, instrPerFrame: 6000,
+          regNames: { a: 0, x: 1, y: 2, p: 3, sp: 4, s: 4, pc: 16 } };
       case "gb": case "gbc":
         // SM83: PC=16, SP=18. CALL/RET push 2 little-endian bytes, predecrement
         // SP. Stack lives in WRAM ($C000-$DFFF, also high RAM); SP & 0x1FFF →
@@ -2513,11 +2544,14 @@ export class LibretroHost {
         // 4.19MHz / ~10 cyc / 60 ≈ 7k.
         return { spReg: 18, pcReg: 16, retBytes: 2, retBigEndian: false, defaultSentinel: 0, ramMask: 0x1FFF, instrPerFrame: 8000 };
       case "snes":
-        // 65816: SP=4, PC=16. A long subroutine (JSL/RTL) pushes a 3-byte return
-        // (the 65816 stack is in bank 0, page-relative is the 8-bit/16-bit S). We
-        // push 3 bytes at the 16-bit S in bank 0 (predecrement); WRAM low mirror.
-        // ~3.58MHz / ~6 cyc / 60 ≈ 10k.
-        return { spReg: 4, pcReg: 16, retBytes: 3, retBigEndian: false, defaultSentinel: 0, ramMask: 0x1FFF, retAdjust: -1, instrPerFrame: 12000 };
+        // 65816: A=0,X=1,Y=2,P=3,S=4,DB=5,D=6,PC=16. retBytes DEFAULTS to 3 for a
+        // JSL/RTL callee; a JSR/RTS callee pushes only 2 (PCL,PCH) — pass
+        // callMode:'jsr' to size the sentinel/return-pop to 2 (field report: a
+        // plain jsr helper "returned" 1 byte off into vector-stub land). The
+        // 65816 stack is in bank 0; WRAM low mirror.  ~3.58MHz / ~6 cyc / 60 ≈ 10k.
+        return { spReg: 4, pcReg: 16, retBytes: 3, retBigEndian: false, defaultSentinel: 0, ramMask: 0x1FFF, retAdjust: -1, instrPerFrame: 12000,
+          regNames: { a: 0, x: 1, y: 2, p: 3, s: 4, sp: 4, db: 5, d: 6, dp: 6, pc: 16 },
+          jsrRetBytes: 2, jslRetBytes: 3 };
       case "sms": case "gg": case "msx":
         // Z80: PC=16, SP=18. CALL/RET push 2 LE bytes predecrement. Work RAM
         // window varies (SMS $C000-$DFFF → sms low RAM); SP & 0x1FFF.
