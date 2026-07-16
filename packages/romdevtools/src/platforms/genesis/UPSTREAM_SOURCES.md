@@ -3,11 +3,11 @@
 Trust hierarchy:
 
 1. **Bundled examples** (`examples/genesis/templates/*.c`).
-2. **Bundled runtime source** — `src/platforms/genesis/lib/c/
+2. **Bundled runtime source** — `(shipped in romdev-toolchain-m68k-gcc) share/genesis/c/
    genesis_sfx.c` (PSG wrapper); `lib/sgdk/sega.s` (boot crt0);
    `lib/sgdk/rom_header.c` (cart header builder).
 3. **Bundled library source** (R58) — full SGDK source tree at
-   `src/platforms/genesis/lib/sgdk/src/`. Every SGDK API (VDP_*,
+   `(shipped in romdev-toolchain-m68k-gcc) share/genesis/sgdk/src/`. Every SGDK API (VDP_*,
    SPR_*, JOY_*, XGM2_*, BMP_*, etc.) has readable C here.
 4. **Upstream GitHub** (NOT bundled):
 

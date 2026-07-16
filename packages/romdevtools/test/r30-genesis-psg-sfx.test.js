@@ -13,7 +13,7 @@ import path from "node:path";
 import { buildGenesisC } from "../src/toolchains/genesis-c/genesis-c.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const LIB_DIR = path.join(__dirname, "..", "src", "platforms", "genesis", "lib", "c");
+const LIB_DIR = path.join(__dirname, "..", "..", "romdev-toolchain-m68k-gcc", "share", "genesis", "lib", "c");
 const SFX_H = readFileSync(path.join(LIB_DIR, "genesis_sfx.h"), "utf-8");
 const SFX_C = readFileSync(path.join(LIB_DIR, "genesis_sfx.c"), "utf-8");
 

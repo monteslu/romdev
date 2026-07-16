@@ -20,8 +20,8 @@ test("R26 Genesis shmup_2p builds via buildGenesisC", { timeout: 180000 }, async
   const { buildGenesisC } = await import("../src/toolchains/genesis-c/genesis-c.js");
   const src = await readSource("examples/genesis/templates/shmup_2p.c");
   // R30: scaffold uses genesis_sfx — provide it.
-  const sfxH = await readSource("src/platforms/genesis/lib/c/genesis_sfx.h");
-  const sfxC = await readSource("src/platforms/genesis/lib/c/genesis_sfx.c");
+  const sfxH = await readSource("../romdev-toolchain-m68k-gcc/share/genesis/lib/c/genesis_sfx.h");
+  const sfxC = await readSource("../romdev-toolchain-m68k-gcc/share/genesis/lib/c/genesis_sfx.c");
   const r = await buildGenesisC({
     sources: { "main.c": src, "genesis_sfx.c": sfxC },
     headers: { "genesis_sfx.h": sfxH },

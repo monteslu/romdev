@@ -9,6 +9,17 @@ import path from "node:path";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WASM = path.join(__dirname, "wasm");
 
+// share/genesis/lib/{sgdk,c,*.s} — the Genesis C library tree: the full SGDK
+// tree (include headers, sources + prebuilt seeds for libmd, sega crt0, md.ld,
+// rom_header, Z80 driver sources/blobs, res) + the minimal-runtime `c/` tree +
+// the standalone crt0/vector/util .s files. The Genesis build driver + the
+// createGame scaffolder read these at compile time; they ship WITH this
+// toolchain package because it's the only consumer (same shape as
+// romdev-toolchain-cc65's share/). The inner `lib/` mirrors the original
+// src/platforms/genesis/lib/ layout. A future m68k platform (Neo Geo, Amiga,
+// X68000) would add its SDK alongside under share/.
+export const shareDir = path.join(__dirname, "share", "genesis");
+
 // Compiler backend / assembler / linker / objcopy — m68k-elf gcc family.
 // Plus SGDK's Z80 toolchain (sjasm + bintos): the Genesis sound drivers are
 // Z80 assembly assembled by sjasm and embedded into the m68k ROM by bintos, so

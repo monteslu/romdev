@@ -13,7 +13,7 @@ import path from "node:path";
 import { buildGbaC } from "../src/toolchains/gba-c/gba-c.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const LIB_DIR = path.join(__dirname, "..", "src", "platforms", "gba", "lib", "c");
+const LIB_DIR = path.join(__dirname, "..", "..", "romdev-platform-gba", "share", "gba", "lib", "c");
 const SFX_H = readFileSync(path.join(LIB_DIR, "gba_sfx.h"), "utf-8");
 const SFX_C = readFileSync(path.join(LIB_DIR, "gba_sfx.c"), "utf-8");
 

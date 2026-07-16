@@ -3,7 +3,7 @@
 # devkitPro GBA SDK runtime) against our stage-1 native
 # arm-none-eabi cross-toolchain, then ship the resulting libgba.a
 # + headers + crt0 + linker script as TARGET BINARY ARTIFACTS
-# under src/platforms/gba/lib/libgba/.
+# under packages/romdev-platform-gba/share/gba/lib/libgba/.
 #
 # Pattern matches R20 stage 3 (SGDK on Genesis):
 #   - libgba.a is m68k-elf-equivalent ARM target object code; the
@@ -15,11 +15,11 @@
 #     project tree per the self-containment policy.
 #
 # Output:
-#   src/platforms/gba/lib/libgba/libgba.a       (~200 KB target archive)
-#   src/platforms/gba/lib/libgba/include/...    (headers — gba.h, etc.)
-#   src/platforms/gba/lib/libgba/crt0.s         (cart startup code)
-#   src/platforms/gba/lib/libgba/lnkscript      (linker script)
-#   src/platforms/gba/lib/libgba/LICENSE        (zlib license)
+#   packages/romdev-platform-gba/share/gba/lib/libgba/libgba.a       (~200 KB target archive)
+#   packages/romdev-platform-gba/share/gba/lib/libgba/include/...    (headers — gba.h, etc.)
+#   packages/romdev-platform-gba/share/gba/lib/libgba/crt0.s         (cart startup code)
+#   packages/romdev-platform-gba/share/gba/lib/libgba/lnkscript      (linker script)
+#   packages/romdev-platform-gba/share/gba/lib/libgba/LICENSE        (zlib license)
 #
 # Prereq: stage 1 (build-arm-toolchain.sh) must have completed —
 # we use that as the cross-toolchain for libgba's native target build.
@@ -29,7 +29,7 @@ set -euo pipefail
 NATIVE_PREFIX="$BUILD_DIR/arm-toolchain/install"
 TARGET=arm-none-eabi
 SRC_DIR="$BUILD_DIR/arm-toolchain/src"
-OUT="$PROJECT_DIR/src/platforms/gba/lib/libgba"
+OUT="$PROJECT_DIR/../romdev-platform-gba/share/gba/lib/libgba"
 NCPU="$(nproc)"
 
 if [ ! -x "$NATIVE_PREFIX/bin/$TARGET-gcc" ]; then
@@ -175,7 +175,7 @@ cp -r include/* "$OUT/include/"
 # packages. For our purposes a minimal crt0 we write ourselves is
 # the right scope.
 # TODO: ship a hand-written gba_crt0.s + lnkscript in this script
-# or in src/platforms/gba/lib/libgba/ that matches libgba's
+# or in packages/romdev-platform-gba/share/gba/lib/libgba/ that matches libgba's
 # expectations (calls __libc_init_array etc.).
 
 # License

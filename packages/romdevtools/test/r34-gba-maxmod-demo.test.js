@@ -20,8 +20,8 @@ import { buildGbaC } from "../src/toolchains/gba-c/gba-c.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "..");
 
-const XM_PATH         = join(REPO_ROOT, "src/platforms/gba/lib/maxmod/music/chiptune.xm");
-const SOUNDBANK_PATH  = join(REPO_ROOT, "src/platforms/gba/lib/maxmod/music/chiptune_soundbank.bin");
+const XM_PATH         = join(REPO_ROOT, "../romdev-platform-gba/share/gba/lib/maxmod/music/chiptune.xm");
+const SOUNDBANK_PATH  = join(REPO_ROOT, "../romdev-platform-gba/share/gba/lib/maxmod/music/chiptune_soundbank.bin");
 const TEMPLATE_PATH   = join(REPO_ROOT, "examples/gba/templates/maxmod_demo.c");
 
 test("R34 chiptune.xm + pre-built soundbank.bin both ship", () => {

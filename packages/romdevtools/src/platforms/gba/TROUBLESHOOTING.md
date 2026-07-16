@@ -201,7 +201,7 @@ script. Restart the MCP server.
 The GBA C build mounts newlib + libgcc headers into `/work/` for the
 cc1 invocation. If you see this, your build is somehow missing the
 sysinclude/ tree. Verify
-`src/platforms/gba/lib/libgba/sysinclude/stdint.h` exists; if not,
+`(shipped in romdev-platform-gba) share/gba/libgba/sysinclude/stdint.h` exists; if not,
 re-run `scripts/build-libgba.sh` which fetches devkitPro's
 iosupport.h + ships the toolchain's newlib headers.
 

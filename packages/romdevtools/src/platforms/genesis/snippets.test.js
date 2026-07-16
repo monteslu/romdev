@@ -17,7 +17,9 @@ import { buildForPlatform } from "../../toolchains/index.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const LIB_DIR = path.join(__dirname, "lib");
+// The Genesis lib tree moved to romdev-toolchain-m68k-gcc/share/genesis/lib/
+// (a sibling package). __dirname is src/platforms/genesis/ inside romdevtools.
+const LIB_DIR = path.resolve(__dirname, "..", "..", "..", "..", "romdev-toolchain-m68k-gcc", "share", "genesis", "lib");
 
 // Each snippet is included as a TEXT include via `incsrc` from a minimal
 // driver program. This validates syntax without forcing layout — vasm

@@ -40,8 +40,8 @@ test("R23 NES sports + racing templates build via buildForPlatform", { timeout: 
 test("R23 Genesis sports + racing templates build via buildGenesisC", { timeout: 180000 }, async () => {
   const { buildGenesisC } = await import("../src/toolchains/genesis-c/genesis-c.js");
   // R30: scaffolds now include genesis_sfx — provide it.
-  const sfxH = await readSource("src/platforms/genesis/lib/c/genesis_sfx.h");
-  const sfxC = await readSource("src/platforms/genesis/lib/c/genesis_sfx.c");
+  const sfxH = await readSource("../romdev-toolchain-m68k-gcc/share/genesis/lib/c/genesis_sfx.h");
+  const sfxC = await readSource("../romdev-toolchain-m68k-gcc/share/genesis/lib/c/genesis_sfx.c");
   for (const t of ["sports", "racing"]) {
     const src = await readSource(`examples/genesis/templates/${t}.c`);
     const r = await buildGenesisC({

@@ -26,7 +26,7 @@ const REPO_ROOT = resolve(__dirname, "..");
 test("R42 Genesis XGM2 music: xgm2_demo template builds with .xgc incbin'd into ROM", { timeout: 240000 }, async () => {
   const mainC   = await readFile(join(REPO_ROOT, "examples/genesis/templates/xgm2_demo.c"),       "utf-8");
   const dataS   = await readFile(join(REPO_ROOT, "examples/genesis/templates/xgm2_demo_data.s"),  "utf-8");
-  const xgcBlob = await readFile(join(REPO_ROOT, "src/platforms/genesis/lib/sgdk/music/demo.xgc"));
+  const xgcBlob = await readFile(join(REPO_ROOT, "../romdev-toolchain-m68k-gcc/share/genesis/lib/sgdk/music/demo.xgc"));
 
   const r = await buildGenesisC({
     sources: {
@@ -67,8 +67,8 @@ test("R42 Genesis XGM2 music: xgm2_demo template builds with .xgc incbin'd into 
 });
 
 test("R42 demo.vgm + demo.xgc are byte-stable (regen via scripts/build-genesis-demo-vgm.js + xgm2tool)", { timeout: 180000 }, async () => {
-  const vgm = await readFile(join(REPO_ROOT, "src/platforms/genesis/lib/sgdk/music/demo.vgm"));
-  const xgc = await readFile(join(REPO_ROOT, "src/platforms/genesis/lib/sgdk/music/demo.xgc"));
+  const vgm = await readFile(join(REPO_ROOT, "../romdev-toolchain-m68k-gcc/share/genesis/lib/sgdk/music/demo.vgm"));
+  const xgc = await readFile(join(REPO_ROOT, "../romdev-toolchain-m68k-gcc/share/genesis/lib/sgdk/music/demo.xgc"));
   // Sizes pinned so any silent regeneration-drift is caught.
   assert.equal(vgm.length, 691, "demo.vgm size changed — re-run scripts/build-genesis-demo-vgm.js");
   assert.ok(xgc.length > 100 && xgc.length < 4096, `demo.xgc unexpected size: ${xgc.length}`);

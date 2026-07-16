@@ -1,16 +1,18 @@
 {
   "name": "romdev-platform-gba",
-  "version": "0.10.0",
-  "description": "Game Boy Advance binaries for romdev: mGBA emulator core + arm-none-eabi-gcc toolchain (cc1 / as / ld / objcopy) (WASM). These ship together because nothing else uses them + ARM/Thumb disassembly (objdump).",
+  "version": "0.11.0",
+  "description": "Game Boy Advance binaries + C library tree for romdev: mGBA emulator core + arm-none-eabi-gcc toolchain (cc1 / as / ld / objcopy / objdump) + the GBA C library share/ tree (libtonc, libgba, maxmod, sysbase, crt0, ldscripts). WASM. Single-consumer: the GBA platform.",
   "type": "module",
   "main": "index.js",
   "exports": {
     ".": "./index.js",
-    "./wasm/*": "./wasm/*"
+    "./wasm/*": "./wasm/*",
+    "./share/*": "./share/*"
   },
   "files": [
     "index.js",
     "wasm",
+    "share",
     "README.md"
   ],
   "engines": {

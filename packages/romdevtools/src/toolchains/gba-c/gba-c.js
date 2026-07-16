@@ -38,16 +38,31 @@ import {
 import { packAr } from "../common/ar.js";
 import { resolveSdkArchive } from "../common/sdk-cache.js";
 import { CBuild, BuildError } from "../common/c-build.js";
+import { resolveToolBaseDir } from "../common/wasm-tool.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const LIBGBA_DIR  = path.resolve(__dirname, "..", "..", "platforms", "gba", "lib", "libgba");
-const LIBTONC_DIR = path.resolve(__dirname, "..", "..", "platforms", "gba", "lib", "libtonc");
-const MAXMOD_DIR  = path.resolve(__dirname, "..", "..", "platforms", "gba", "lib", "maxmod");
+// The GBA C library tree ships in romdev-platform-gba's share/ (moved out of
+// romdevtools' src so a standalone consumer of this driver — e.g. the gba-lua
+// SDK — doesn't drag the whole romdev install). Resolve the package's share/gba
+// base; the dev fallback is the package inside this monorepo (a sibling of
+// romdevtools under packages/). `sentinel` proves we found the right dir.
+const GBA_SHARE = path.join(
+  resolveToolBaseDir({
+    pkg: "romdev-platform-gba",
+    sentinel: path.join("share", "gba", "lib", "libtonc", "gba_crt0.s"),
+    localDir: path.resolve(__dirname, "..", "..", "..", "..", "romdev-platform-gba"),
+    label: "GBA C library tree (romdev-platform-gba/share)",
+  }),
+  "share", "gba", "lib",
+);
+const LIBGBA_DIR  = path.join(GBA_SHARE, "libgba");
+const LIBTONC_DIR = path.join(GBA_SHARE, "libtonc");
+const MAXMOD_DIR  = path.join(GBA_SHARE, "maxmod");
 // Minimal libsysbase (devoptab_list[] + reentrant write/read routing) so
 // newlib stdio (iprintf/printf) reaches a console device. Compiled from source
 // and linked with both libtonc (tte_init_con) and libgba (consoleInit).
-const SYSBASE_DIR = path.resolve(__dirname, "..", "..", "platforms", "gba", "lib", "sysbase");
+const SYSBASE_DIR = path.join(GBA_SHARE, "sysbase");
 
 /**
  * Compile + assemble + link a C source to a GBA ROM (.gba).
@@ -648,7 +663,7 @@ async function readTargetArchives() {
   // these were read from the 14 GB build/arm-toolchain/install tree; that
   // coupled the package to the build workspace. Copied into src so the GBA
   // package ships them itself — ~15 MB, the real GBA payload beyond wasm.)
-  const archDir = path.resolve(__dirname, "..", "..", "platforms", "gba", "lib", "arm-archives");
+  const archDir = path.join(GBA_SHARE, "arm-archives");
   const out = {};
   for (const name of ["libc.a", "libnosys.a", "libgcc.a"]) {
     try {

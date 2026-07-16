@@ -6,7 +6,7 @@
 # devkitPro-specific dependencies. We use the same native arm-none-eabi
 # toolchain that built libtonc + libgba.
 #
-# Output goes to src/platforms/gba/lib/maxmod/:
+# Output goes to packages/romdev-platform-gba/share/gba/lib/maxmod/:
 #   libmm.a              the static library
 #   include/maxmod.h     public C-callable API
 #   include/mm_types.h   data types
@@ -21,7 +21,7 @@ require_cmd gcc
 require_cmd git
 
 MAXMOD_BUILD="$BUILD_DIR/maxmod"
-DEST_DIR="$PROJECT_DIR/src/platforms/gba/lib/maxmod"
+DEST_DIR="$PROJECT_DIR/../romdev-platform-gba/share/gba/lib/maxmod"
 ARM_TOOLCHAIN="$BUILD_DIR/arm-toolchain/install"
 
 mkdir -p "$MAXMOD_BUILD" "$DEST_DIR"

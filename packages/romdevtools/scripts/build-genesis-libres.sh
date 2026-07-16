@@ -19,7 +19,7 @@
 set -euo pipefail
 
 RESCOMP_JAR="${1:?usage: build-genesis-libres.sh <path-to-rescomp.jar>}"
-RES_DIR="$(cd "$(dirname "$0")/.." && pwd)/src/platforms/genesis/lib/sgdk/res"
+RES_DIR="$(cd "$(dirname "$0")/.." && pwd)/../romdev-toolchain-m68k-gcc/share/genesis/lib/sgdk/res"
 
 cd "$RES_DIR"
 java -jar "$RESCOMP_JAR" libres.res libres.s

@@ -10,7 +10,7 @@
  *     XGM2_play(music_xgm) — the driver expects the compiled XGC2 blob.
  *
  * The companion .xgc file is produced by SGDK's xgm2tool from a source
- * .vgm (also shipped under src/platforms/genesis/lib/sgdk/music/). To
+ * .vgm (also shipped under romdev-toolchain-m68k-gcc/share/genesis/lib/sgdk/music/). To
  * rebuild from the source .vgm:
  *
  *   java -jar xgm2tool.jar demo.vgm demo.xgc -s -n

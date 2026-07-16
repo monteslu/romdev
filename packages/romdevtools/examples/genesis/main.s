@@ -22,7 +22,7 @@
 ;
 ; See getStarterSnippet({platform:"genesis", name:"..."}) for richer
 ; building blocks (vdp_init, vblank_wait, pad_read, sprite_table, etc.)
-; and src/platforms/genesis/lib/README.md for the full quickstart.
+; and romdev-toolchain-m68k-gcc/share/genesis/lib/README.md for the full quickstart.
 
 ; -----------------------------------------------------------------------
 ; Memory map — VDP ports.

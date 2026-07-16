@@ -4,7 +4,7 @@
 // Emits a short looping PSG arpeggio (no copyrighted material — just three
 // SN76489 tones running over a fixed pattern). The resulting .vgm is fed to
 // SGDK's xgm2tool to produce the .xgm asset shipped under
-// src/platforms/genesis/lib/sgdk/music/demo.xgm.
+// packages/romdev-toolchain-m68k-gcc/share/genesis/lib/sgdk/music/demo.xgm.
 //
 // VGM 1.50 spec reference: https://vgmrips.net/wiki/VGM_Specification
 // (We use only PSG writes — opcode 0x50 + 1 byte — and frame waits 0x62 NTSC).

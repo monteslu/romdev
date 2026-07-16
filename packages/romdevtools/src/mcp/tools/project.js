@@ -2359,7 +2359,30 @@ export async function createProjectImpl({ platform, name, path: projPath, title,
   // gbc/lib/c/. Same Z80 + APU + most VRAM layout as GB, but BCPS/BCPD
   // palette setup and visibly colorful tile art make the difference.
   const EXAMPLES_DIR = path.join(REPO_ROOT, "examples", platform);
-  const PLATFORM_LIB_DIR = path.join(REPO_ROOT, "src", "platforms", platform);
+  // Most platforms keep their C-runtime lib tree under src/platforms/<p>/lib/,
+  // so PLATFORM_LIB_DIR is that platform dir and templates reference `lib/...`.
+  // GBA and Genesis moved their lib trees OUT to their binary packages' share/
+  // (so a standalone SDK consumer doesn't drag the whole romdev install). The
+  // inner `lib/` is preserved (share/<pkgdir>/lib/...), so pointing
+  // PLATFORM_LIB_DIR at `share/<pkgdir>` keeps every template's `lib/...` src
+  // valid with NO template changes. Resolve via the package (or dev-tree
+  // fallback) so it works installed or in the monorepo.
+  let PLATFORM_LIB_DIR = path.join(REPO_ROOT, "src", "platforms", platform);
+  const SHARE_PLATFORMS = {
+    gba:     { pkg: "romdev-platform-gba",        dir: "gba" },
+    genesis: { pkg: "romdev-toolchain-m68k-gcc",  dir: "genesis" },
+  };
+  if (SHARE_PLATFORMS[platform]) {
+    const { pkg, dir } = SHARE_PLATFORMS[platform];
+    const { resolveToolBaseDir } = await import("../../toolchains/common/wasm-tool.js");
+    const base = resolveToolBaseDir({
+      pkg,
+      sentinel: path.join("share", dir, "lib"),
+      localDir: path.resolve(REPO_ROOT, "..", pkg),
+      label: `${platform} lib tree (${pkg}/share)`,
+    });
+    PLATFORM_LIB_DIR = path.join(base, "share", dir);
+  }
   const CC65_PRESETS_DIR = path.join(REPO_ROOT, "src", "toolchains", "cc65");
 
   const hasTemplates = !!TEMPLATES[platform];
