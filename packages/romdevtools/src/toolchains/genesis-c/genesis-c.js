@@ -36,11 +36,26 @@ import { runSjasm, runBintos } from "../sjasm/sjasm.js";
 import { packAr } from "../common/ar.js";
 import { resolveSdkArchive } from "../common/sdk-cache.js";
 import { CBuild, BuildError } from "../common/c-build.js";
+import { resolveToolBaseDir } from "../common/wasm-tool.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const MINIMAL_LIB_DIR = path.resolve(__dirname, "..", "..", "platforms", "genesis", "lib", "c");
-const SGDK_LIB_DIR    = path.resolve(__dirname, "..", "..", "platforms", "genesis", "lib", "sgdk");
+// The Genesis C library tree (SGDK + minimal runtime) ships in
+// romdev-toolchain-m68k-gcc's share/ (moved out of romdevtools' src so a
+// standalone consumer of this driver — e.g. the mdlua SDK — doesn't drag the
+// whole romdev install). Resolve the package's share/genesis base; the dev
+// fallback is the package inside this monorepo (a sibling of romdevtools).
+const GENESIS_SHARE = path.join(
+  resolveToolBaseDir({
+    pkg: "romdev-toolchain-m68k-gcc",
+    sentinel: path.join("share", "genesis", "lib", "sgdk", "md.ld"),
+    localDir: path.resolve(__dirname, "..", "..", "..", "..", "romdev-toolchain-m68k-gcc"),
+    label: "Genesis C library tree (romdev-toolchain-m68k-gcc/share)",
+  }),
+  "share", "genesis", "lib",
+);
+const MINIMAL_LIB_DIR = path.join(GENESIS_SHARE, "c");
+const SGDK_LIB_DIR    = path.join(GENESIS_SHARE, "sgdk");
 const SGDK_SRC_DIR    = path.join(SGDK_LIB_DIR, "src");
 const SGDK_INC_DIR    = path.join(SGDK_LIB_DIR, "include");
 const SGDK_RES_DIR    = path.join(SGDK_LIB_DIR, "res");

@@ -17,7 +17,7 @@ import { LibretroHost } from "../src/host/index.js";
 import { registerAudioTools } from "../src/mcp/tools/audio.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DEMO_VGM = join(__dirname, "..", "src", "platforms", "genesis", "lib", "sgdk", "music", "demo.vgm");
+const DEMO_VGM = join(__dirname, "..", "..", "romdev-toolchain-m68k-gcc", "share", "genesis", "lib", "sgdk", "music", "demo.vgm");
 
 function audioHandler(sessionKey) {
   let handler;

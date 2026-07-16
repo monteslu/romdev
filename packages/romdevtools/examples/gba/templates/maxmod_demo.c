@@ -24,7 +24,7 @@
  *   build/maxmod/host/mmutil chiptune.xm -osoundbank.bin -hsoundbank.h
  *
  * (Source .xm tracker module + Node-based regenerator both live under
- *  src/platforms/gba/lib/maxmod/music/ — see make_chiptune_xm.js. The
+ *  romdev-platform-gba/share/gba/lib/maxmod/music/ — see make_chiptune_xm.js. The
  *  buildGbaC layer auto-emits a `.incbin "soundbank.bin"` asm stub
  *  exposing the soundbank under the global symbol `soundbank_bin`.)
  *

@@ -1,6 +1,6 @@
 {
   "name": "romdev-core-gametank",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "GameTank libretro core (Clyde Shaffer's open W65C02S console) for romdev, bundled as WASM.",
   "type": "module",
   "main": "index.js",

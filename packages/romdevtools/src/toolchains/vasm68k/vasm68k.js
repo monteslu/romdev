@@ -52,7 +52,7 @@ function vasm68kPreflight(source) {
       "[vasm68k preflight] source does not appear to declare a 68K reset vector. " +
       "The 68K reads SSP from $00000000 and reset PC from $00000004 on power-on. " +
       "Without a vector table, the cart will jump to garbage. " +
-      "See src/platforms/genesis/lib/header.s for the canonical vector table layout."
+      "See romdev-toolchain-m68k-gcc/share/genesis/lib/header.s for the canonical vector table layout."
     );
   }
 
@@ -64,7 +64,7 @@ function vasm68kPreflight(source) {
       "[vasm68k preflight] no 'SEGA' magic string found in source. " +
       "Genesis ROM header at $100 must include 'SEGA MEGA DRIVE' or similar " +
       "for real hardware to boot. genesis_plus_gx tolerates its absence; " +
-      "real cartridges do not. See src/platforms/genesis/lib/header.s."
+      "real cartridges do not. See romdev-toolchain-m68k-gcc/share/genesis/lib/header.s."
     );
   }
 

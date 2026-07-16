@@ -19,18 +19,18 @@ const REPO_ROOT = resolve(__dirname, "..");
 
 test("R33 maxmod SOURCE is bundled (built from source, not a prebuilt libmm.a)", () => {
   // maxmod now compiles from its own .s source in-build — no opaque libmm.a.
-  const srcDir = join(REPO_ROOT, "src/platforms/gba/lib/maxmod/source");
-  const gbaDir = join(REPO_ROOT, "src/platforms/gba/lib/maxmod/source_gba");
+  const srcDir = join(REPO_ROOT, "../romdev-platform-gba/share/gba/lib/maxmod/source");
+  const gbaDir = join(REPO_ROOT, "../romdev-platform-gba/share/gba/lib/maxmod/source_gba");
   assert.ok(existsSync(join(srcDir, "mm_main.s")), "maxmod source/mm_main.s missing");
   assert.ok(existsSync(join(srcDir, "mm_mas.s")), "maxmod source/mm_mas.s missing");
   assert.ok(existsSync(join(gbaDir, "mm_mixer_gba.s")), "maxmod source_gba/mm_mixer_gba.s missing");
-  assert.ok(existsSync(join(REPO_ROOT, "src/platforms/gba/lib/maxmod/asm_include/mp_macros.inc")),
+  assert.ok(existsSync(join(REPO_ROOT, "../romdev-platform-gba/share/gba/lib/maxmod/asm_include/mp_macros.inc")),
     "maxmod asm_include/mp_macros.inc missing");
 });
 
 test("R33 maxmod headers (maxmod.h + mm_types.h) are bundled", () => {
-  assert.ok(existsSync(join(REPO_ROOT, "src/platforms/gba/lib/maxmod/include/maxmod.h")));
-  assert.ok(existsSync(join(REPO_ROOT, "src/platforms/gba/lib/maxmod/include/mm_types.h")));
+  assert.ok(existsSync(join(REPO_ROOT, "../romdev-platform-gba/share/gba/lib/maxmod/include/maxmod.h")));
+  assert.ok(existsSync(join(REPO_ROOT, "../romdev-platform-gba/share/gba/lib/maxmod/include/mm_types.h")));
 });
 
 test("R33 GBA libtonc + maxmod: minimal ROM links cleanly", { timeout: 180000 }, async () => {

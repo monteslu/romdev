@@ -2,7 +2,7 @@
 # R28 STAGE 3-bis of the GBA C tier-1 pipeline: build libtonc against
 # our stage-1 native arm-none-eabi toolchain, then ship the resulting
 # libtonc.a + headers as TARGET BINARY ARTIFACTS under
-# src/platforms/gba/lib/libtonc/.
+# packages/romdev-platform-gba/share/gba/lib/libtonc/.
 #
 # libtonc is the de-facto GBA C library aligned with the Tonc tutorial
 # (https://gbadev.net/tonc/), which is THE GBA C corpus the LLM has
@@ -31,7 +31,7 @@ set -euo pipefail
 NATIVE_PREFIX="$BUILD_DIR/arm-toolchain/install"
 TARGET=arm-none-eabi
 SRC_DIR="$BUILD_DIR/arm-toolchain/src"
-OUT="$PROJECT_DIR/src/platforms/gba/lib/libtonc"
+OUT="$PROJECT_DIR/../romdev-platform-gba/share/gba/lib/libtonc"
 NCPU="$(nproc)"
 
 if [ ! -x "$NATIVE_PREFIX/bin/$TARGET-gcc" ]; then
@@ -150,7 +150,7 @@ fi
 # libtonc plug into the same startup. If libgba isn't built yet,
 # symlink would break; we duplicate-copy from libgba/'s already-staged
 # files when present.
-LIBGBA_DIR="$PROJECT_DIR/src/platforms/gba/lib/libgba"
+LIBGBA_DIR="$PROJECT_DIR/../romdev-platform-gba/share/gba/lib/libgba"
 for f in gba_crt0.s gba_cart.ld crti.o crtn.o crtbegin.o crtend.o; do
   if [ -f "$LIBGBA_DIR/$f" ]; then
     cp "$LIBGBA_DIR/$f" "$OUT/$f"

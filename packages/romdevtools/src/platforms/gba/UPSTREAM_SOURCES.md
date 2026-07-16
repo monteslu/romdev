@@ -4,15 +4,15 @@ Trust hierarchy (try in order before filing a feedback round):
 
 1. **Bundled examples** (`examples/gba/templates/*.c`) — verified
    compile + run. Start here.
-2. **Bundled runtime source** (`src/platforms/gba/lib/c/gba_sfx.c`) —
+2. **Bundled runtime source** (`(shipped in romdev-platform-gba) share/gba/c/gba_sfx.c`) —
    our APU wrapper. Read when sfx isn't doing what you expect.
 3. **Bundled library source** — libtonc + libgba + maxmod (R58):
 
    | Library | Local source | Read this when |
    |---|---|---|
-   | libtonc | `src/platforms/gba/lib/libtonc/src/` | `tte_init_X` / `oam_copy` / TTE behavior |
-   | libgba | `src/platforms/gba/lib/libgba/src/` | `irqInit`/`irqEnable`/`VBlankIntrWait` |
-   | maxmod | `src/platforms/gba/lib/maxmod/` (.s files already there) | `mmFrame`/`mmStart` audio timing |
+   | libtonc | `(shipped in romdev-platform-gba) share/gba/libtonc/src/` | `tte_init_X` / `oam_copy` / TTE behavior |
+   | libgba | `(shipped in romdev-platform-gba) share/gba/libgba/src/` | `irqInit`/`irqEnable`/`VBlankIntrWait` |
+   | maxmod | `(shipped in romdev-platform-gba) share/gba/maxmod/` (.s files already there) | `mmFrame`/`mmStart` audio timing |
 
 4. **Upstream GitHub** (NOT bundled — fetch on demand):
 

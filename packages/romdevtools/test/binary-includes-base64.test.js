@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { buildGbaC } from "../src/toolchains/gba-c/gba-c.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const BANK = path.join(__dirname, "..", "src", "platforms", "gba", "lib", "maxmod", "music", "chiptune_soundbank.bin");
+const BANK = path.join(__dirname, "..", "..", "romdev-platform-gba", "share", "gba", "lib", "maxmod", "music", "chiptune_soundbank.bin");
 
 const SRC = `
 #include <tonc.h>

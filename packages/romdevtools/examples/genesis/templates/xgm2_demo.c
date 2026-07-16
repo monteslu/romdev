@@ -14,7 +14,7 @@
  * so no manual update calls are needed from the 68000 side.
  *
  * The music asset is a tiny CC0 PSG arpeggio shipped at
- * src/platforms/genesis/lib/sgdk/music/demo.vgm — re-buildable via
+ * romdev-toolchain-m68k-gcc/share/genesis/lib/sgdk/music/demo.vgm — re-buildable via
  * `node scripts/build-genesis-demo-vgm.js` + xgm2tool.
  */
 
