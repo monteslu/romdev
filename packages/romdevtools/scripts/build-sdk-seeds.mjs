@@ -18,9 +18,9 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { buildGbaC } from "../src/toolchains/gba-c/gba-c.js";
+import { buildGbaC } from "romdev-platform-gba";
 import { buildSnesC } from "../src/toolchains/snes-c/snes-c.js";
-import { buildGenesisC } from "../src/toolchains/genesis-c/genesis-c.js";
+import { buildGenesisC } from "romdev-toolchain-m68k-gcc";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");

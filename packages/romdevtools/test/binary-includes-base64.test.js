@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildGbaC } from "../src/toolchains/gba-c/gba-c.js";
+import { buildGbaC } from "romdev-platform-gba";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BANK = path.join(__dirname, "..", "..", "romdev-platform-gba", "share", "gba", "lib", "maxmod", "music", "chiptune_soundbank.bin");

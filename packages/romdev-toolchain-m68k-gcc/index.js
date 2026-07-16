@@ -33,3 +33,15 @@ export const toolchain = {
   "sjasm": { gluePath: path.join(WASM, "sjasm.js") },
   "bintos": { gluePath: path.join(WASM, "bintos.js") },
 };
+
+// ── The Genesis C build pipeline (build/) ──────────────────────────────────
+// The full driver lives in this package so ONE dep compiles everything for
+// the target: `import { buildGenesisC } from "romdev-toolchain-m68k-gcc"`.
+// The import chain is inert at load (the worker pool forks only when a tool
+// actually runs; WASM glue resolves lazily), so static re-exports cost only
+// a few ms of JS parse. The vendored build/common + build/_worker kit is
+// byte-identical to romdevtools' canonical copy (enforced by romdevtools'
+// build-kit parity test; re-sync with romdevtools scripts/sync-build-kit.sh).
+export { buildGenesisC, finalizeGenesisRom } from "./build/genesis-c/genesis-c.js";
+export { runSjasm, runBintos } from "./build/sjasm/sjasm.js";
+export { parseBuildLog } from "./build/parse-errors.js";

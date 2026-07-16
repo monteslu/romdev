@@ -5,7 +5,7 @@ import { runDasm } from "./dasm/dasm.js";
 import { buildC, buildAsm } from "./cc65/cc65.js";
 import { runAsar } from "./asar/asar.js";
 import { runVasm68k } from "./vasm68k/vasm68k.js";
-import { finalizeGenesisRom } from "./genesis-c/genesis-c.js";
+import { finalizeGenesisRom } from "romdev-toolchain-m68k-gcc";
 import { buildGB, runRgbfix } from "./rgbds/rgbds.js";
 import { buildZ80C, SDCC_PORTS } from "./sdcc/sdcc.js";
 import { parseBuildLog } from "./parse-errors.js";
@@ -598,7 +598,7 @@ export async function buildForPlatform(args) {
     // language defaults to "c" since no asm path is wired yet — saves
     // every caller from having to spell it out.
     if (args.language === "c" || args.language == null) {
-      const { buildGbaC } = await import("./gba-c/gba-c.js");
+      const { buildGbaC } = await import("romdev-platform-gba");
       const r = await buildGbaC({
         source: args.source,
         sources: args.sources,
@@ -635,7 +635,7 @@ export async function buildForPlatform(args) {
     // runnable Genesis ROM. SGDK runtime helpers (sprite engine, VDP,
     // sound) follow in stage 3 of R20.
     if (args.language === "c") {
-      const { buildGenesisC } = await import("./genesis-c/genesis-c.js");
+      const { buildGenesisC } = await import("romdev-toolchain-m68k-gcc");
       const r = await buildGenesisC({
         source: args.source,
         sources: args.sources,

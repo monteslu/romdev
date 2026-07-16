@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildGenesisC } from "./genesis-c.js";
+import { buildGenesisC } from "romdev-toolchain-m68k-gcc";
 
 test("buildGenesisC sgdk:false: bare main() compiles via minimum-viable path", async () => {
   const r = await buildGenesisC({

@@ -7,12 +7,14 @@
   "exports": {
     ".": "./index.js",
     "./wasm/*": "./wasm/*",
-    "./share/*": "./share/*"
+    "./share/*": "./share/*",
+    "./build/*": "./build/*"
   },
   "files": [
     "index.js",
     "wasm",
     "share",
+    "build",
     "README.md"
   ],
   "engines": {

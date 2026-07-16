@@ -25,7 +25,7 @@ async function readSource(rel) {
 }
 
 test("R21 Genesis SGDK templates: all compile to valid ROMs", { timeout: 180000 }, async () => {
-  const { buildGenesisC } = await import("../src/toolchains/genesis-c/genesis-c.js");
+  const { buildGenesisC } = await import("romdev-toolchain-m68k-gcc");
   // R30: genre scaffolds now use genesis_sfx — provide it alongside main.c.
   const sfxH = await readSource("../romdev-toolchain-m68k-gcc/share/genesis/lib/c/genesis_sfx.h");
   const sfxC = await readSource("../romdev-toolchain-m68k-gcc/share/genesis/lib/c/genesis_sfx.c");

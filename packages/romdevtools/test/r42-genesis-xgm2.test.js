@@ -18,7 +18,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve, join } from "node:path";
 
-import { buildGenesisC } from "../src/toolchains/genesis-c/genesis-c.js";
+import { buildGenesisC } from "romdev-toolchain-m68k-gcc";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "..");

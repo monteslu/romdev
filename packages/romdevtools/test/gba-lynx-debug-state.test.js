@@ -13,7 +13,7 @@ import path from "node:path";
 import { resolveCore } from "../src/cores/registry.js";
 import { LibretroHost } from "../src/host/LibretroHost.js";
 import { getCPUState } from "../src/host/cpu-state.js";
-import { buildGbaC } from "../src/toolchains/gba-c/gba-c.js";
+import { buildGbaC } from "romdev-platform-gba";
 import { buildExampleRom } from "./build-fixture-rom.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

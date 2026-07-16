@@ -21,7 +21,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { buildGbaC } from "../src/toolchains/gba-c/gba-c.js";
+import { buildGbaC } from "romdev-platform-gba";
 import { resolveCore } from "../src/cores/registry.js";
 
 // A tiny Tonc ROM. main() seeds the runtime, then enters an INFINITE loop that

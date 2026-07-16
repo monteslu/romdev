@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-import { buildGenesisC } from "../src/toolchains/genesis-c/genesis-c.js";
+import { buildGenesisC } from "romdev-toolchain-m68k-gcc";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LIB_DIR = path.join(__dirname, "..", "..", "romdev-toolchain-m68k-gcc", "share", "genesis", "lib", "c");
