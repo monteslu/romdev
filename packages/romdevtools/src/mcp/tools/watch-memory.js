@@ -181,7 +181,7 @@ export async function stepInstructionCore(sessionKey) {
  * @param {string} sessionKey
  * @param {{count?:number, withRegisters?:boolean, platform?:string, cpu?:string}} [opts]
  */
-export async function stepInstructionsCore(sessionKey, { count = 16, withRegisters = false, platform, cpu = "main" } = {}) {
+export async function stepInstructionsCore(sessionKey, { count = 16, withRegisters = false, platform, cpu = "main", format = "full" } = {}) {
   const host = getHost(sessionKey);
   if (!host.pcBreakSupported || !host.pcBreakSupported()) {
     return jsonContent({
@@ -257,15 +257,44 @@ export async function stepInstructionsCore(sessionKey, { count = 16, withRegiste
     }
     trace.push(entry);
   }
+  const finalPcHex = finalPc != null ? "$" + finalPc.toString(16).toUpperCase() : null;
+
+  // format:'compact' — one string per step instead of a per-step object. A
+  // triage trace's signal is "which loop is the CPU in", and 48 steps of JSON
+  // objects (~250 lines) is ~90% padding for that. Each string is
+  // `"$PC seq"` / `"$PC branch->$TGT"` — same info, a fraction of the tokens.
+  if (format === "compact") {
+    const steps = trace.map((e) => {
+      const f = e.flow || (e.width != null ? "seq" : "?");
+      return e.nextPc ? `${e.pc} ${f}->${e.nextPc}` : `${e.pc} ${f}`;
+    });
+    // Also fold the visited PCs into ranges with visit counts — the loop map.
+    const counts = new Map();
+    for (const e of trace) counts.set(e.pcRaw, (counts.get(e.pcRaw) || 0) + 1);
+    const visited = [...counts.keys()].sort((a, b) => a - b);
+    const ranges = [];
+    for (const pc of visited) {
+      const last = ranges[ranges.length - 1];
+      if (last && pc <= last._end + 4) { last._end = pc; last.hits += counts.get(pc); }
+      else ranges.push({ from: "$" + pc.toString(16).toUpperCase(), _start: pc, _end: pc, hits: counts.get(pc) });
+    }
+    const pcRanges = ranges.map((r) => ({ from: r.from, to: "$" + r._end.toString(16).toUpperCase(), hits: r.hits }));
+    return attachObserverFrame(jsonContent({
+      stepped: true, count: trace.length, finalPc: finalPcHex,
+      steps, pcRanges,
+      note: "compact: `steps` = one string per step (`$PC flow` / `$PC flow->$target`); `pcRanges` = the distinct PC spans visited with hit counts (the loop map). Full per-step objects: pass format:'full'.",
+    }), host);
+  }
+
   return attachObserverFrame(jsonContent({
     stepped: true,
     count: trace.length,
-    finalPc: finalPc != null ? "$" + finalPc.toString(16).toUpperCase() : null,
+    finalPc: finalPcHex,
     trace,
     note: (opAt
       ? "CPU is frozen at finalPc. `flow` classifies each step from its opcode (seq/branch/call/jump/ret); `width` = the instruction's true byte size and is present ONLY on `flow:'seq'` steps, so a 65816 immediate width (2-byte lda #imm8 vs 3-byte ldx #imm16) is trustworthy — a taken forward branch no longer masquerades as a width (it carries `flow` + `nextPc` instead). "
       : "CPU is frozen at finalPc. `width` = PC[k+1]-PC[k]; on this core no opcode classifier ran, so `flow:'seq'` means the step was linear (delta = size) and a branch omits `width`. ") +
-      "Step more with frame({op:'stepInstructions', count}).",
+      "Step more with frame({op:'stepInstructions', count}). For a compact loop-map trace pass format:'compact'.",
   }), host);
 }
 
@@ -437,6 +466,66 @@ function tryGetPC(host) {
     const cpu = getCPUState(host, platform);
     if (cpu && typeof cpu.pc === "number") return cpu.pc;
     return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Where is the MAIN THREAD, not the frame-boundary snapshot? A single
+ * `tryGetPC` after `stepFrames` lands on whatever ran last at the boundary —
+ * almost always the NMI/idle handler (`$8520` etc.), which is useless for "where
+ * was the code I'm hunting." Instead single-step across ~a frame and histogram
+ * the PCs: the main loop dominates the sample count while the interrupt handler
+ * is a brief once-per-frame blip. Report the modal PC (the busiest instruction)
+ * plus a couple of runners-up as `pcHistogram`. Best-effort — null if the core
+ * has no single-step, so callers keep the frame-boundary `pcNow` as a fallback.
+ *
+ * @param {*} host
+ * @param {number} [samples] instructions to single-step (default ~one frame)
+ * @returns {{modalPc:number, hits:number, total:number, top:Array<{pc:number,hits:number}>}|null}
+ */
+function sampleMainThreadPc(host, samples = 400) {
+  try {
+    if (!host.pcBreakSupported || !host.pcBreakSupported()) return null;
+    if (typeof host.stepInstruction !== "function") return null;
+    // Snapshot the FULL emulator state so the sampling has ZERO side effects —
+    // single-stepping ~a frame advances the CPU and the frame counter, which
+    // would otherwise surprise a caller who wants to retry the miss with
+    // different input. Restore it after. (serializeState is cross-platform; if
+    // the core lacks it we bail rather than mutate state unrestorably.)
+    let snapshot = null;
+    try { snapshot = typeof host.serializeState === "function" ? host.serializeState() : null; }
+    catch { snapshot = null; }
+    if (!snapshot) return null; // no restore path → don't perturb state for a diagnostic
+    // `frameCount` is a JS-side counter, NOT part of the core's serialized blob,
+    // so unserializeState won't roll it back — save/restore it explicitly.
+    const prevFrameCount = host.status?.frameCount;
+    try {
+      const counts = new Map();
+      let total = 0;
+      for (let i = 0; i < samples; i++) {
+        const r = host.stepInstruction();
+        // stepInstruction returns the post-step PC on most cores; fall back to a
+        // direct read if not.
+        const pc = (r && typeof r.pc === "number") ? r.pc : tryGetPC(host);
+        if (pc == null) break;
+        counts.set(pc, (counts.get(pc) || 0) + 1);
+        total++;
+      }
+      if (!total) return null;
+      const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+      return {
+        modalPc: sorted[0][0],
+        hits: sorted[0][1],
+        total,
+        top: sorted.slice(0, 4).map(([pc, hits]) => ({ pc, hits })),
+      };
+    } finally {
+      // Restore the pre-sample state no matter what.
+      try { host.unserializeState(snapshot); } catch { /* best-effort */ }
+      if (prevFrameCount != null && host.status) host.status.frameCount = prevFrameCount;
+    }
   } catch {
     return null;
   }
@@ -949,10 +1038,20 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         // where the CPU actually is, and tailor the advice.
         const pcNow = tryGetPC(host);
         const drove = presses.length > 0;
+        // The frame-boundary pcNow almost always lands on the NMI/idle handler,
+        // which says nothing about where the main thread was. Single-step across
+        // ~a frame and report the modal (busiest) PC as mainThreadPc — the main
+        // loop dominates the histogram while the interrupt handler is a blip.
+        // Save-state-wrapped, so it has ZERO side effects (state is restored).
+        const mt = sampleMainThreadPc(host);
         return attachObserverFrame(jsonContent({
           hit: false, address: "$" + address.toString(16).toUpperCase(), framesRun,
           ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
           ...(pcNow != null ? { pcNow: "$" + pcNow.toString(16).toUpperCase() } : {}),
+          ...(mt ? {
+            mainThreadPc: "$" + mt.modalPc.toString(16).toUpperCase(),
+            pcHistogram: mt.top.map((e) => ({ pc: "$" + e.pc.toString(16).toUpperCase(), hits: e.hits })),
+          } : {}),
           note: (drove
             ? "PC never reached that address within maxFrames EVEN WITH the scheduled input. Either (a) this is " +
               "the WRONG ADDRESS for the path that actually ran (a different routine handles it), (b) the address " +
@@ -964,7 +1063,10 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
             : "PC never reached that address within maxFrames. Either the code path didn't execute (drive " +
               "it with pressDuring to reach the right game state), or the address isn't an instruction " +
               "boundary (mid-instruction never matches REG_PC). ") +
-            (pcNow != null ? "pcNow is the frame-boundary PC (usually the idle loop). " : "") +
+            (mt ? "mainThreadPc is the BUSIEST PC over ~a frame of single-stepping (the main loop), not the " +
+                  "frame-boundary idle/NMI snapshot in pcNow; pcHistogram shows the top PCs by hit count. " +
+                  "(Sampling is save-state-wrapped — no side effects; the emulator is back where it was.) "
+                : (pcNow != null ? "pcNow is the frame-boundary PC (usually the idle loop). " : "")) +
             "To find which code DID run, coverage-trace the suspect range: watch({on:'pc', start, end, frames}) " +
             "returns every distinct PC executed there; or anchor on a RAM effect with breakpoint({on:'write'}).",
         }), host);

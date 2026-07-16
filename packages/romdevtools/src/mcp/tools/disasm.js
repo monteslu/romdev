@@ -1934,24 +1934,31 @@ function trimTrailingPad(bytes) {
  */
 async function extractCodeSpans(romPath, platform) {
   const fam = (await import("../../toolchains/common/reassemble.js")).CPU_FAMILY[platform];
-  if (fam !== "6502" && fam !== "65816") return null; // only the da65-desync families
+  // Code-span-based disasm + speculative gap recovery applies to the cc65 (da65)
+  // families ONLY: 6502 (nes/c64/atari/pce/lynx/gametank) + 65816 (snes). da65
+  // decodes only what its info-file marks as Code, so a gap needs a span map and
+  // speculative recovery. The GNU families (m68k/z80/sm83/arm) use objdump, which
+  // does a full LINEAR sweep — it already decodes every byte as an instruction
+  // (reachable-code-missed can't happen there), so a span map would only DEGRADE
+  // them by forcing correctly-decoded gaps to `.byte`. They intentionally get no
+  // spans (verified: whole-region objdump decodes a rizin-missed routine fine).
+  if (fam !== "6502" && fam !== "65816") return null;
   const { analyzeFunctions } = await import("../../analysis/analyze.js");
   const res = await analyzeFunctions(romPath, platform);
   if (!res || !res.functions?.length) return null;
-  // Real code only — exclude the data-fold pseudo-functions. `address` is a CPU
-  // address (rizin baddr = the CPU load base, e.g. $8000 on SNES LoROM — NOT a
-  // file offset), `size` the byte length. spansForRegion compares against da65's
-  // CPU addresses, so keep these in CPU space.
-  // rizin analyzes the ROM as one flat image at baddr. address = baddr + FILE
-  // offset, so file offset = address - baddr. Recover baddr from the minimum
-  // function address rounded down to the load base (SNES LoROM = $8000). We turn
-  // every span into a FILE-offset span so it maps unambiguously onto any bank
-  // (all LoROM banks share the $8000 CPU window, but their FILE offsets differ).
+  // rizin analyzes the ROM as one flat image at a load base. A function's FILE
+  // offset = its address − baddr. For SNES LoROM every bank shares the $8000 CPU
+  // window, so we round the min address down to the $8000-aligned base; for the
+  // flat 6502 carts the base is `loadBase` (0 / the header base for a 1:1 cart).
+  // We emit FILE-offset spans so they map unambiguously onto any region.
   const minAddr = Math.min(...res.functions.filter((f) => f.address != null).map((f) => f.address >>> 0));
-  const baddr = minAddr & ~0xFFFF | (minAddr & 0x8000 ? 0x8000 : 0); // $8000-aligned load base
+  const baddr = fam === "65816"
+    ? (minAddr & ~0xFFFF | (minAddr & 0x8000 ? 0x8000 : 0)) // SNES LoROM $8000 window
+    : (res.loadBase ?? 0) >>> 0;                            // flat/1:1 6502 carts
   const raw = res.functions
     .filter((f) => !f.looksLikeData && (f.size ?? 0) > 0 && f.address != null)
     .map((f) => ({ start: (f.address - baddr) >>> 0, end: (f.address - baddr + f.size) >>> 0 }))
+    .filter((s) => s.end > s.start && s.start < 0x8000000) // guard against a bogus rebase
     .sort((a, b) => a.start - b.start);
   if (!raw.length) return null;
   // Merge overlapping/adjacent spans.

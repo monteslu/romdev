@@ -402,7 +402,12 @@ export async function analyzeFunctions(romPath, platformOverride) {
     (a.size ?? 0) - (b.size ?? 0)
   );
   const dataCount = functions.filter((f) => f.looksLikeData).length;
-  return { platform, arch, count: functions.length, dataCount, functions,
+  // `loadBase` is the CPU address that file offset 0 maps to (0 for flat carts
+  // that map 1:1, the header-declared base for ROMs that don't). A function's
+  // FILE offset = its (rebased) address − loadBase — exposed so callers
+  // (extractCodeSpans) can turn addresses into file offsets on ANY platform,
+  // not just SNES LoROM.
+  return { platform, arch, count: functions.length, dataCount, functions, loadBase: loadBase >>> 0,
     ...(warnings?.length ? { warnings } : {}) };
 }
 
@@ -483,7 +488,20 @@ export async function analyzeXrefs(romPath, address, platformOverride) {
  * One-shot structural map: functions + strings + entrypoints from a full
  * analysis pass. The "give me the shape of this ROM" call.
  */
-export async function analyzeStructure(romPath, platformOverride) {
+/**
+ * Structural map of a ROM (functions + strings + entrypoints) via Rizin.
+ *
+ * On a 1MB+ ROM the full function+string list is ~70K chars — it overflows the
+ * MCP tool-result limit and spills to a file. `opts.summary` returns just the
+ * counts + entrypoints + the top-N functions (by size, then callers) + a few
+ * sample strings — the slice the disassemble-rom workflow actually extracts.
+ * `opts.topN` bounds the function list without the other summary trimming.
+ *
+ * @param {string} romPath
+ * @param {string} [platformOverride]
+ * @param {{summary?:boolean, topN?:number}} [opts]
+ */
+export async function analyzeStructure(romPath, platformOverride, opts = {}) {
   const { platform, romBytes, arch, bits, endian, loadBase, codeStart } = await loadContext(romPath, platformOverride);
   const { baddr, seedAt, rebase } = mipsAnalysisBase({ arch, platform, loadBase, codeStart });
   const seed = analysisSeed({ arch, codeStart: seedAt });
@@ -493,17 +511,40 @@ export async function analyzeStructure(romPath, platformOverride) {
     runRizinJson({ romBytes, arch, bits, baddr, commands: `${seed}; iej` }).catch(() => []),
   ]);
   const rb = (a) => (a == null ? a : (a + rebase) >>> 0);
+  const fnList = Array.isArray(fns) ? fns : [];
+  const strList = Array.isArray(strings) ? strings : [];
+  const entrypoints = (Array.isArray(entries) ? entries : []).map((e) => ({ address: rb(e.vaddr), addressHex: hx(rb(e.vaddr)) }));
+  const mapFn = (f) => ({ address: rb(f.offset), addressHex: hx(rb(f.offset)), name: f.name, size: f.size, callers: f.indegree ?? 0 });
+  const mapStr = (s) => ({ address: rb(s.vaddr), addressHex: hx(rb(s.vaddr)), value: s.string });
+
+  if (opts.summary) {
+    // Top functions by size, then by caller count — the ones worth disassembling
+    // first. A handful of strings as a content sniff, not the whole table.
+    const n = opts.topN ?? 25;
+    const topFunctions = [...fnList]
+      .sort((a, b) => (b.size ?? 0) - (a.size ?? 0) || (b.indegree ?? 0) - (a.indegree ?? 0))
+      .slice(0, n).map(mapFn);
+    return {
+      platform, arch,
+      functionCount: fnList.length,
+      stringCount: strList.length,
+      entrypoints,
+      topFunctions,
+      sampleStrings: strList.slice(0, 12).map(mapStr),
+      note: `summary: top ${topFunctions.length} of ${fnList.length} functions by size. ` +
+        `Call again with summary:false (or a higher topN) for the full list, or symbols({op:'analyze', romPath, topN:N}).`,
+    };
+  }
+
+  const fnCap = opts.topN ?? 512;
   return {
     platform, arch,
-    functionCount: Array.isArray(fns) ? fns.length : 0,
-    stringCount: Array.isArray(strings) ? strings.length : 0,
-    entrypoints: (Array.isArray(entries) ? entries : []).map((e) => ({ address: rb(e.vaddr), addressHex: hx(rb(e.vaddr)) })),
-    functions: (Array.isArray(fns) ? fns : []).slice(0, 512).map((f) => ({
-      address: rb(f.offset), addressHex: hx(rb(f.offset)), name: f.name, size: f.size, callers: f.indegree ?? 0,
-    })),
-    strings: (Array.isArray(strings) ? strings : []).slice(0, 256).map((s) => ({
-      address: rb(s.vaddr), addressHex: hx(rb(s.vaddr)), value: s.string,
-    })),
+    functionCount: fnList.length,
+    stringCount: strList.length,
+    entrypoints,
+    functions: fnList.slice(0, fnCap).map(mapFn),
+    strings: strList.slice(0, 256).map(mapStr),
+    ...(fnList.length > fnCap ? { note: `functions truncated to ${fnCap} of ${fnList.length} — pass a higher topN or summary:true.` } : {}),
   };
 }
 

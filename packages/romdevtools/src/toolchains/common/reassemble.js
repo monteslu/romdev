@@ -101,21 +101,19 @@ export async function reassembleForPlatform(a) {
   let disasm;
   if (family === "6502" || family === "65816") {
     const { runDa65 } = await import("../cc65/da65.js");
-    // THE readability-floor fix (65816): when we have a code map, disassemble
-    // each code span INDEPENDENTLY and dump the gaps as `.byte`. Two reasons a
-    // single whole-region da65 pass floors to 0%:
+    // Span-based readability path (BOTH 6502 and 65816): when we have a code map,
+    // disassemble each code span INDEPENDENTLY, dump the gaps as `.byte`, and
+    // speculatively recover reachable code the analysis engine missed (a routine
+    // entered only via a branch). Two things a single whole-region da65 pass got
+    // wrong that this cures:
     //   1. da65's `--comments 4` ASCII gutter broke the byte-capture regex → 0
-    //      code lines recognized → everything floored. (regex fixed below.)
-    //   2. On 65816, `.a8/.i8` width state set by a `rep/sep` inside one span
-    //      leaks across the `.byte` gap into the next span, whose real entry
-    //      width differs → operand widths wrong → byte counts wrong → cascade →
-    //      the heal loop can't reconverge → floor.
-    // Per-span disassembly cures (2): each span re-seeds width at its own entry
-    // and can't desync the next. It's also FAST — each span is small, so its
-    // heal loop is cheap, versus one superlinear 32KB heal (that measured 300s
-    // for 21%). See reassemble65816Spans.
-    if (family === "65816" && Array.isArray(codeSpans) && codeSpans.length) {
-      return reassemble65816Spans(bytes, startAddress, codeSpans);
+    //      code lines recognized → everything floored. (regex fixed in parseDa65Code.)
+    //   2. On 65816, `.a8/.i8` width state set by a `rep/sep` desynced the whole
+    //      region (M/X). reassembleCc65Spans tracks width per instruction.
+    // FAST too — each span is small, so its heal loop is cheap, versus one
+    // superlinear 32KB heal (that measured 300s for 21%). See reassembleCc65Spans.
+    if (Array.isArray(codeSpans) && codeSpans.length) {
+      return reassembleCc65Spans(bytes, startAddress, codeSpans, family);
     }
     const r = await runDa65({ bytes, startAddress, cpu: family === "65816" ? "65816" : "6502", options: ["--comments", "4"], codeSpans });
     disasm = r.asm;
@@ -127,28 +125,34 @@ export async function reassembleForPlatform(a) {
   // instructions `as` rejects (absolute branch/PC-relative forms) to `.byte`.
   // NO hand-rolled decoders anywhere.
   const { runObjdump } = await import("../objdump.js");
+  // Resolve the objdump arch + the matching binutils tools for this GNU family.
+  let objArch, tools;
   if (family === "m68k") {
-    disasm = (await runObjdump({ bytes, arch: "m68k", startAddress })).asm;
+    objArch = "m68k";
     const m = await import("../m68k-elf-gcc/gcc.js");
-    return reassembleGnuNative(disasm, startAddress, bytes,
-      { runAs: m.runM68kAs, runLd: m.runM68kLd, runObjcopy: m.runM68kObjcopy, fmtLines: `OUTPUT_FORMAT("elf32-m68k")\nOUTPUT_ARCH(m68k)\n` }, family);
-  }
-  if (family === "arm") {
-    disasm = (await runObjdump({ bytes, arch: "arm", startAddress })).asm;
+    tools = { runAs: m.runM68kAs, runLd: m.runM68kLd, runObjcopy: m.runM68kObjcopy, fmtLines: `OUTPUT_FORMAT("elf32-m68k")\nOUTPUT_ARCH(m68k)\n` };
+  } else if (family === "arm") {
+    objArch = "arm";
     const m = await import("../arm-none-eabi-gcc/gcc.js");
-    return reassembleGnuNative(disasm, startAddress, bytes,
-      { runAs: m.runArmAs, runLd: m.runArmLd, runObjcopy: m.runArmObjcopy }, family);
-  }
-  if (family === "z80" || family === "sm83") {
-    // z80 binutils `as` handles BOTH the Z80 (-march=z80) and the Game Boy CPU
-    // (-march=gbz80) — the same objdump that disassembled them.
-    const arch = family === "sm83" ? "gbz80" : "z80";
-    disasm = (await runObjdump({ bytes, arch, startAddress })).asm;
+    tools = { runAs: m.runArmAs, runLd: m.runArmLd, runObjcopy: m.runArmObjcopy };
+  } else if (family === "z80" || family === "sm83") {
+    // z80 binutils `as` handles BOTH Z80 (-march=z80) and Game Boy (-march=gbz80).
+    objArch = family === "sm83" ? "gbz80" : "z80";
     const z = await import("../z80/binutils.js");
-    return reassembleGnuNative(disasm, startAddress, bytes,
-      { runAs: z.runZ80As, runObjcopy: z.runZ80Objcopy, march: arch, noLink: true }, family);
+    tools = { runAs: z.runZ80As, runObjcopy: z.runZ80Objcopy, march: objArch, noLink: true };
+  } else {
+    throw new Error(`reassembleForPlatform: no reassembly path for family '${family}'`);
   }
-  throw new Error(`reassembleForPlatform: no reassembly path for family '${family}'`);
+  // NOTE: the GNU families do NOT use a code-span map. objdump does a full LINEAR
+  // sweep — it already decodes EVERY byte as an instruction, including code the
+  // analysis engine's function detection would miss (verified: a routine not in
+  // any rizin function still decodes). So there's no `.byte` blob hiding real
+  // code here, and the speculative gap recovery that the cc65/da65 path needs
+  // (da65 only decodes what its info-file marks Code) would only DEGRADE this by
+  // forcing correctly-decoded gaps to `.byte`. `codeSpans` is intentionally
+  // ignored on the GNU path.
+  disasm = (await runObjdump({ bytes, arch: objArch, startAddress })).asm;
+  return reassembleGnuNative(disasm, startAddress, bytes, tools, family);
 }
 
 /**
@@ -304,24 +308,135 @@ function parseDa65Code(line) {
   return { addr: parseInt(m[1], 16), bytes: m[2].trim().split(/\s+/).map((h) => parseInt(h, 16)) };
 }
 
+// da65 ADDRMODE string from an {m,x} width pair (true = 8-bit). da65 grammar:
+// char 0 = A width (uppercase M = 8-bit, lowercase m = 16-bit), char 1 = X/Y
+// width (uppercase X = 8-bit, lowercase x = 16-bit). Post-reset = "MX".
+const addrmode = (m, x) => (m ? "M" : "m") + (x ? "X" : "x");
+
+// 65816 instruction base length (bytes) per opcode, measured at 8-bit M/X —
+// derived authoritatively from da65 (decode `op 00 00 00 00…` and read the byte
+// count). The width-dependent opcodes below get +1 when their operand width is
+// 16-bit. Everything else is fixed-length, so this table + the width set is a
+// complete linear length decoder.
+const OP_LEN_8 = [1,2,2,2,2,2,2,2,1,2,1,1,3,3,3,4,2,2,2,2,2,2,2,2,1,3,1,1,3,3,3,4,3,2,4,2,2,2,2,2,1,2,1,1,3,3,3,4,2,2,2,2,2,2,2,2,1,3,1,1,3,3,3,4,1,2,2,2,3,2,2,2,1,2,1,1,3,3,3,4,2,2,2,2,3,2,2,2,1,3,1,1,4,3,3,4,1,2,3,2,2,2,2,2,1,2,1,1,3,3,3,4,2,2,2,2,2,2,2,2,1,3,1,1,3,3,3,4,2,2,3,2,2,2,2,2,1,2,1,1,3,3,3,4,2,2,2,2,2,2,2,2,1,3,1,1,3,3,3,4,2,2,2,2,2,2,2,2,1,2,1,1,3,3,3,4,2,2,2,2,2,2,2,2,1,3,1,1,3,3,3,4,2,2,2,2,2,2,2,2,1,2,1,1,3,3,3,4,2,2,2,2,2,2,2,2,1,3,1,1,3,3,3,4,2,2,2,2,2,2,2,2,1,2,1,1,3,3,3,4,2,2,2,2,3,2,2,2,1,3,1,1,3,3,3,4];
+// Opcodes whose immediate is A-width (M): ORA AND EOR ADC BIT LDA CMP SBC #imm.
+const M_IMM = new Set([0x09, 0x29, 0x49, 0x69, 0x89, 0xA9, 0xC9, 0xE9]);
+// Opcodes whose immediate is X/Y-width (X): LDY LDX CPY CPX #imm.
+const X_IMM = new Set([0xA0, 0xA2, 0xC0, 0xE0]);
+
 /**
- * 65816 readability path: disassemble each code span INDEPENDENTLY (so a span's
- * `.a8/.i8` width state can't leak across a data gap into the next span and
- * desync it), heal each span's da65 output line-by-line to byte-exact, and
- * stitch the healed code spans + `.byte` gaps into one `.org`-anchored source.
+ * Linear 65816 width walk: track M/X per instruction across the span (following
+ * rep/sep) and split it into MAXIMAL width-homogeneous ranges. Each range's
+ * ADDRMODE is exact, so da65 decodes every immediate at its true width in ONE
+ * pass — the residual `and #$00FF`-read-as-`and #$FF`+`brk` desyncs the earlier
+ * rep/sep-only segmenter missed (a 16-bit width set several instructions back)
+ * are gone. `.byte`/data inside a rizin span will mis-walk, but that floors to
+ * byte-exact `.byte` in the heal loop anyway.
+ *
+ * @param {Uint8Array} bytes span bytes
+ * @param {boolean} m8 entry A-width (true = 8-bit)
+ * @param {boolean} x8 entry X/Y-width
+ * @returns {Array<{start:number,end:number,m8:boolean,x8:boolean}>} width ranges (relative offsets)
+ */
+function widthRanges(bytes, m8, x8) {
+  const ranges = [];
+  let rangeStart = 0, curM = m8, curX = x8, off = 0;
+  const push = (end) => { if (end > rangeStart) ranges.push({ start: rangeStart, end, m8: curM, x8: curX }); };
+  while (off < bytes.length) {
+    const op = bytes[off];
+    let len = OP_LEN_8[op];
+    if (M_IMM.has(op) && !curM) len++;   // 16-bit A immediate → +1
+    if (X_IMM.has(op) && !curX) len++;   // 16-bit X/Y immediate → +1
+    if (off + len > bytes.length) { off = bytes.length; break; } // truncated tail → stop; heal floors it
+    // rep (C2) clears P bits → widen; sep (E2) sets → narrow. Applies AFTER this
+    // instruction, so it opens a NEW range at the next offset.
+    if ((op === 0xC2 || op === 0xE2) && len >= 2) {
+      const mask = bytes[off + 1], to8 = op === 0xE2;
+      const nextM = (mask & 0x20) ? to8 : curM;
+      const nextX = (mask & 0x10) ? to8 : curX;
+      if (nextM !== curM || nextX !== curX) {
+        push(off + len);
+        rangeStart = off + len; curM = nextM; curX = nextX;
+      }
+    }
+    off += len;
+  }
+  push(bytes.length);
+  return ranges;
+}
+
+/**
+ * Disassemble a 65816 span with M/X WIDTH TRACKING through literal `rep`/`sep`.
+ *
+ * da65's info-file ADDRMODE is a fixed ENTRY seed — it does NOT follow an
+ * in-stream `rep #$30` / `sep #$20`, so every sized immediate after a width
+ * change mis-decodes (a `lda #$0000` reads as `lda #$00` + a spurious op) and
+ * desyncs the rest of the span. Fix: walk the span in width-HOMOGENEOUS
+ * segments. `rep`/`sep #imm` are 2-byte, width-INDEPENDENT opcodes (`C2`/`E2`),
+ * so we can always decode correctly up to and including the next one at the
+ * current width, read the immediate to flip M (bit $20) / X (bit $10), and
+ * continue the remainder at the new width. One da65 call per segment; the
+ * results are concatenated into a single da65-shaped listing.
+ *
+ * Entry width defaults to 8-bit A / 8-bit X,Y (post-reset) — correct for a boot
+ * routine and a safe default elsewhere (a mid-function span whose real entry is
+ * 16-bit will re-sync at its first rep/sep; any residual mis-decode still floors
+ * to byte-exact `.byte` in the heal loop).
+ *
+ * @param {Uint8Array} spanBytes
+ * @param {number} spanAddr CPU address of spanBytes[0]
+ * @param {(a:any)=>Promise<{asm:string}>} runDa65
+ * @param {{m8?:boolean, x8?:boolean}} [entry] ENTRY width (true = 8-bit). Defaults
+ *   to post-reset 8-bit/8-bit. A function entered in 16-bit mode from its caller
+ *   needs the real entry width or its leading immediates mis-size until the first
+ *   rep/sep re-syncs — healSpan infers this by trying all four and scoring.
+ * @returns {Promise<string>} da65 `--comments 4` listing for the whole span
+ */
+async function da65SpanWidthTracked(spanBytes, spanAddr, runDa65, entry = {}) {
+  const m8 = entry.m8 ?? true, x8 = entry.x8 ?? true;
+  // Full linear width walk → maximal width-homogeneous ranges (a real per-
+  // instruction M/X dataflow, not just rep/sep segmentation). One da65 call with
+  // every range seeded to its exact ADDRMODE, so every immediate decodes at its
+  // true width — including one whose width was set by a rep several instructions
+  // and branches back.
+  const ranges = widthRanges(spanBytes, m8, x8);
+  const info = ranges.map((r) => {
+    const s = (spanAddr + r.start) & 0xFFFF, e = (spanAddr + r.end - 1) & 0xFFFF;
+    return `RANGE {\n  START $${s.toString(16).toUpperCase()};\n  END $${e.toString(16).toUpperCase()};\n  TYPE Code;\n  ADDRMODE "${addrmode(r.m8, r.x8)}";\n};\n`;
+  }).join("");
+  const r = await runDa65({ bytes: spanBytes, startAddress: spanAddr, cpu: "65816",
+    options: ["--comments", "4"], info });
+  // Strip da65's banner + `.setcpu`; keep width directives, labels, equates.
+  const isBanner = (l) => /^\s*;\s*(da65 |Created:|Input file:|Page:|-{5,})/.test(l);
+  return r.asm.split(/\r?\n/).filter((l) => !isBanner(l) && !/^\s*\.setcpu\b/.test(l)).join("\n");
+}
+
+/**
+ * cc65-family (6502 / 65816) span-based readability path: disassemble each code
+ * span INDEPENDENTLY and dump the gaps as `.byte`, heal each span line-by-line to
+ * byte-exact, and stitch the healed spans + gaps into one `.org`-anchored source.
  * Every span is small → its heal loop is cheap → the whole region is fast AND as
- * readable as the real code allows (versus one 32KB heal that floored to 21% in
- * 300s).
+ * readable as the real code allows. Two family-specific behaviors in `healSpan`:
+ *   - 65816: M/X width is tracked per instruction (da65SpanWidthTracked) + entry
+ *     width is inferred; the whole reason this path exists (the readability floor
+ *     was an M/X desync). 6502 has no width state, so it skips both.
+ * Cross-family (both 6502 and 65816): SPECULATIVE GAP RECOVERY — a small gap
+ * sandwiched between two code spans is very likely a routine the analysis engine
+ * missed (entered only via a branch, never a `jsr`/`jsl`), so it's decoded and
+ * kept when it round-trips byte-exact. That's platform-independent and now
+ * benefits every cc65-family platform (nes/c64/atari/pce/lynx/gametank + snes).
  *
  * @param {Uint8Array} original  full region bytes
  * @param {number} startAddress  CPU address of region byte 0
  * @param {{start:number,end:number}[]} spans region-relative code byte offsets
  *   (sorted, merged, non-overlapping)
+ * @param {"6502"|"65816"} family
  * @returns same shape as reassembleForPlatform
  */
-async function reassemble65816Spans(original, startAddress, spans) {
+async function reassembleCc65Spans(original, startAddress, spans, family) {
   const { runDa65 } = await import("../cc65/da65.js");
   const { runCa65, runLd65 } = await import("../cc65/cc65.js");
+  const cpuTag = family === "65816" ? "65816" : "6502";
 
   // Heal one contiguous CODE span to byte-exact ca65 source. da65 decodes it as
   // code (its own info Code RANGE); any line ca65 rejects (bare wdm/cop/brk, a
@@ -329,13 +444,46 @@ async function reassemble65816Spans(original, startAddress, spans) {
   // passes. Returns { asm, readable, total } — asm has NO `.setcpu`/`.org`
   // (the stitcher supplies those once for the whole region).
   const healSpan = async (spanBytes, spanAddr) => {
-    const r = await runDa65({ bytes: spanBytes, startAddress: spanAddr, cpu: "65816",
-      options: ["--comments", "4"], codeSpans: [{ start: 0, end: spanBytes.length }] });
-    // Keep only the body lines (drop da65's banner comments + equates block —
-    // the stitcher emits shared equates isn't needed; ca65 tolerates the raw
-    // `Lxxxx := $..` lines, so keep those, drop only the leading `;` banner and
-    // the `.setcpu`). We strip `.setcpu`; equates/labels/width dirs stay.
-    const lines = r.asm.split(/\r?\n/).filter((l) => !/^\s*\.setcpu\b/.test(l));
+    // ENTRY-WIDTH INFERENCE (65816 only — 6502 has no M/X state). For 6502, one
+    // plain per-span da65 call (its info file marks the whole span TYPE Code).
+    if (family !== "65816") {
+      const r = await runDa65({ bytes: spanBytes, startAddress: spanAddr, cpu: "6502",
+        options: ["--comments", "4"], codeSpans: [{ start: 0, end: spanBytes.length }] });
+      const asm6502 = r.asm.split(/\r?\n/)
+        .filter((l) => !/^\s*;\s*(da65 |Created:|Input file:|Page:|-{5,})/.test(l) && !/^\s*\.setcpu\b/.test(l))
+        .join("\n");
+      return finishSpan(asm6502, spanBytes, spanAddr);
+    }
+    // da65SpanWidthTracked follows rep/sep WITHIN the span,
+    // but the ENTRY width is a guess — a function entered in 16-bit mode from its
+    // caller (no leading rep/sep to re-sync) mis-sizes its opening immediates: a
+    // `ldx #$0000` (A2 00 00) at 8-bit entry decodes as `ldx #$00` + `brk` + a
+    // shifted stream. Try candidate entry widths and pick the one with the FEWEST
+    // misdecode symptoms (stray `brk`/`cop`/`wdm`/`stp` — vanishingly rare in real
+    // code, so they're the desync fingerprint). Post-reset 8/8 first (correct for
+    // the common case + boot); only probe wider entries if 8/8 looks desynced, to
+    // keep the fast path fast.
+    const symptomCount = (asm) => (asm.match(/\b(brk|cop|wdm|stp)\b/gi) || []).length;
+    let asm = await da65SpanWidthTracked(spanBytes, spanAddr, runDa65, { m8: true, x8: true });
+    let best = symptomCount(asm);
+    if (best > 0) {
+      // Symptoms present → the entry width may be wrong. Try the other three.
+      for (const e of [{ m8: false, x8: false }, { m8: true, x8: false }, { m8: false, x8: true }]) {
+        const alt = await da65SpanWidthTracked(spanBytes, spanAddr, runDa65, e);
+        const s = symptomCount(alt);
+        if (s < best) { asm = alt; best = s; if (s === 0) break; }
+      }
+    }
+    return finishSpan(asm, spanBytes, spanAddr);
+  };
+
+  // Shared heal: pin any da65 CODE line ca65 rejects (or that mis-round-trips) to
+  // `.byte`, up to a pin-ratio bail; on success split into equates + body. Used by
+  // BOTH the 6502 and 65816 span paths (only the disassembly step differs above).
+  const finishSpan = async (asm, spanBytes, spanAddr) => {
+    // Keep only the body lines (drop da65's `.setcpu`; equates/labels/width dirs
+    // stay — the stitcher dedups equates region-wide).
+    const lines = asm.split(/\r?\n/).filter((l) => !/^\s*\.setcpu\b/.test(l));
     const meta = lines.map(parseDa65Code);
     const forced = new Set();
     const total = meta.filter(Boolean).length;
@@ -343,7 +491,7 @@ async function reassemble65816Spans(original, startAddress, spans) {
     const codeByText = new Map();
     lines.forEach((line, i) => { if (meta[i]) { const t = line.trim(); if (!codeByText.has(t)) codeByText.set(t, i); } });
     const build = () => {
-      const rows = [`\t.setcpu "65816"`, `\t.org $${spanAddr.toString(16).toUpperCase()}`];
+      const rows = [`\t.setcpu "${cpuTag}"`, `\t.org $${spanAddr.toString(16).toUpperCase()}`];
       lines.forEach((line, i) => rows.push(forced.has(i) ? "\t.byte " + meta[i].bytes.map(hex2).join(",") : line));
       return rows.join("\n") + "\n";
     };
@@ -413,15 +561,43 @@ async function reassemble65816Spans(original, startAddress, spans) {
     return { equates: [], body, readable: 0, total };
   };
 
-  // Walk the region: alternating gaps (`.byte`) and healed code spans. Spans are
-  // region-relative, sorted, non-overlapping.
-  const dataRows = (rel, len) => {
+  // Build the full segment list: the rizin code spans PLUS the gaps between them.
+  // A SMALL gap sandwiched BETWEEN two code spans is very likely reachable code
+  // rizin's function detection missed (e.g. a main dispatch loop entered only via
+  // `brl`, never `call`ed). Decode those speculatively — healSpan keeps the
+  // instruction decode if it round-trips byte-exact, else the pin-ratio bail
+  // floors it to `.byte` fast (Jay's "decode speculatively, keep when it
+  // round-trips"). A LARGE gap, or a leading/trailing gap, is almost always bulk
+  // data (graphics/tables) — decoding it is slow and pointless, so emit it as
+  // raw `.byte` directly. Byte-exactness holds either way.
+  const SPEC_GAP_MAX = 0x400; // 1KB — big enough for a missed routine, small enough to stay fast
+  const dataRows = (relStart, relEnd) => {
     const rows = [];
-    for (let i = rel; i < rel + len; i += 16) rows.push("\t.byte " + Array.from(original.slice(i, Math.min(rel + len, i + 16))).map(hex2).join(","));
+    for (let i = relStart; i < relEnd; i += 16) rows.push("\t.byte " + Array.from(original.slice(i, Math.min(relEnd, i + 16))).map(hex2).join(","));
     return rows;
   };
-  let cursor = 0, readable = 0, total = 0;
-  const healed = await Promise.all(spans.map((s) => healSpan(original.slice(s.start, s.end), startAddress + s.start)));
+  const segments = [];
+  {
+    let c = 0;
+    for (const s of spans) {
+      if (s.start > c) {
+        // A gap is "sandwiched" if it has a code span on BOTH sides (c>0 here
+        // means a prior span ended at c; this span starts at s.start).
+        const sandwiched = c > 0;
+        segments.push({ start: c, end: s.start, gap: true, speculate: sandwiched && (s.start - c) <= SPEC_GAP_MAX });
+      }
+      segments.push({ start: s.start, end: s.end, gap: false, speculate: true });
+      c = s.end;
+    }
+    if (c < original.length) segments.push({ start: c, end: original.length, gap: true, speculate: false });
+  }
+  let readable = 0, total = 0;
+  // Speculated segments (code spans + small sandwiched gaps) go through healSpan;
+  // non-speculated gaps (bulk data) become raw `.byte` without a decode attempt.
+  const healed = await Promise.all(segments.map((s) =>
+    s.speculate
+      ? healSpan(original.slice(s.start, s.end), startAddress + s.start)
+      : Promise.resolve({ equates: [], body: dataRows(s.start, s.end), readable: 0, total: 0, isData: true })));
   // Dedup equates region-wide. da65 equates a target label to a FIXED address
   // (`L2992D := $2992D`), so identical names always carry the same value — a
   // plain by-name dedup is safe. But a name that is ALSO defined as an in-body
@@ -447,14 +623,17 @@ async function reassemble65816Spans(original, startAddress, spans) {
     }
   }
   const out = [`\t.setcpu "65816"`, ...[...equateSet.values()], `\t.org $${startAddress.toString(16).toUpperCase()}`];
-  for (let i = 0; i < spans.length; i++) {
-    const s = spans[i];
-    if (s.start > cursor) out.push(...dataRows(cursor, s.start - cursor)); // data gap before span
+  for (let i = 0; i < segments.length; i++) {
     out.push(...healed[i].body);
-    readable += healed[i].readable; total += healed[i].total;
-    cursor = s.end;
+    // Readability is measured over the rizin CODE spans only (the code we set out
+    // to disassemble). A speculatively-decoded gap that recovered real code adds
+    // to `readable` as a bonus; a gap that floored to `.byte` does NOT inflate
+    // `total` (it was never claimed as code) — so the percentage stays honest:
+    // it reflects how much identified code is readable, not diluted by data
+    // gaps we optimistically probed.
+    if (!segments[i].gap) { readable += healed[i].readable; total += healed[i].total; }
+    else if (healed[i].readable > 0) readable += healed[i].readable, total += healed[i].readable; // recovered gap code: pure bonus, counts as 100% of itself
   }
-  if (cursor < original.length) out.push(...dataRows(cursor, original.length - cursor)); // trailing data
 
   const cfg = `MEMORY{M:start $${startAddress.toString(16)},size $${original.length.toString(16)},type ro,file %O,fill yes,fillval $FF;}\nSEGMENTS{CODE:load M,type ro;}\n`;
   // Assemble; any `Lxxxx` da65 referenced but that no surviving label defines

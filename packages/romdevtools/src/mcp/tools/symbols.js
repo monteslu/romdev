@@ -475,13 +475,15 @@ function registerSymbolsTool(server, z) {
       symbolsPath: z.string().optional().describe("op=addr: path to a .map/.sym file (used only if symbolsText absent)."),
       // analyze
       romPath: z.string().optional().describe("op=analyze: ABSOLUTE path to the ROM file to structurally map via Rizin."),
+      summary: z.boolean().optional().describe("op=analyze: return counts + entrypoints + TOP functions (by size, then callers) + a few sample strings, instead of the full ~70K-char table. Use this first on a large ROM."),
+      topN: z.number().int().min(1).max(1000).optional().describe("op=analyze: cap the function list to the N largest (default 512 full / 25 with summary)."),
     },
     safeTool(async (args) => {
       // op=analyze and op=addr don't take a .dbg/.map source. Everything else
       // resolves dbgPath/mapPath → text off disk so the map never enters context.
       if (args.op === "analyze") {
         if (!args.romPath) throw new Error("symbols op='analyze' requires `romPath` (the ROM file).");
-        return jsonContent(await analyzeStructure(args.romPath, args.platform));
+        return jsonContent(await analyzeStructure(args.romPath, args.platform, { summary: args.summary, topN: args.topN }));
       }
       const a = args.op === "addr" ? args : { ...args, ...(await loadDebugSource(args)) };
       switch (a.op) {
