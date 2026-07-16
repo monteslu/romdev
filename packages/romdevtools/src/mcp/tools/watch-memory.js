@@ -199,27 +199,58 @@ export async function stepInstructionsCore(sessionKey, { count = 16, withRegiste
     stops.push(r.pc);
     if (r.pc == null) break;
   }
-  // Peek one more PC (without consuming a "real" step in the trace) to size the
-  // final instruction — it's already advanced, so just record where we landed.
   const finalPc = stops.length ? stops[stops.length - 1] : null;
+
+  // Classify each step's control FLOW from its opcode. This is the fix for the
+  // width paper cut (field report): `width` was reported as the raw PC delta, so
+  // a TAKEN forward branch (2-byte `beq` to +3) looked exactly like a 3-byte
+  // instruction — silently mis-validating a decode. The delta is the true
+  // instruction size ONLY on a sequential step; on any branch/jsr/jmp it's the
+  // jump distance. We read the opcode byte at each PC (6502/65816 have a small,
+  // fixed control-transfer opcode set) and emit `flow` always + `width` ONLY for
+  // truly sequential steps. Other CPUs (no classifier yet) keep the delta-`width`
+  // fallback but carry `flow:'seq'|'nonseq'` so a delta is never mistaken for a
+  // width across a branch.
+  let rom = null, opAt = null;
+  try {
+    rom = host.getCartRom?.();
+  } catch { rom = null; }
+  const family = CPU_FAMILY_FOR[plat];
+  if (rom && (family === "6502" || family === "65816")) {
+    const { mapSnesAddress, mapNesAddress } = await import("./disasm.js");
+    opAt = (pc) => {
+      try {
+        const m = plat === "snes" ? mapSnesAddress(rom.raw ?? rom, pc >>> 0, 1)
+          : plat === "nes" ? mapNesAddress(rom.raw ?? rom, pc >>> 0, 1)
+          : null;
+        return m ? m.bytes[0] : null;
+      } catch { return null; }
+    };
+  }
+
   const trace = [];
   for (let k = 0; k < stops.length; k++) {
     const pc = stops[k];
     if (pc == null) continue;
-    // The byte width of instruction k is where the NEXT step landed minus this
-    // PC — the direct, ISA-agnostic signal for a 65816 immediate width (a 2-byte
-    // lda #imm8 vs a 3-byte ldx #imm16 differ ONLY by this delta). A backward /
-    // large delta means a branch/jump/call took the PC elsewhere — width is N/A.
-    // The cap is the longest single instruction across every supported ISA (m68k
-    // reaches 10 bytes; 6502/z80 ≤4, ARM 4, Thumb 2) with headroom — NOT a
-    // 6502-sized 4, which would wrongly drop valid Genesis widths of 6/8/10.
-    const MAX_INSTR_BYTES = 16;
     const nextPc = k + 1 < stops.length ? stops[k + 1] : null;
-    const width = (nextPc != null && nextPc > pc && nextPc - pc <= MAX_INSTR_BYTES) ? nextPc - pc : null;
+    const op = opAt ? opAt(pc) : null;
+    const flow = op != null ? classify6502Flow(op) : null; // 'branch'|'call'|'jump'|'ret'|'seq'
+    const delta = (nextPc != null && nextPc > pc && nextPc - pc <= 16) ? nextPc - pc : null;
+    // `width` = true instruction size. Trustworthy ONLY when the step was
+    // sequential: we know that either because the opcode says non-control-flow
+    // ('seq'), or (no classifier) we fall back to the delta but flag it.
+    let width = null;
+    if (flow === "seq") width = delta;                 // classified sequential → delta IS the size
+    else if (flow == null) width = delta;              // no classifier (other CPU) → delta, flagged nonseq-unknown
+    // control-transfer ('branch'/'call'/'jump'/'ret') → width omitted (delta is a jump distance)
     const entry = {
       pc: "$" + pc.toString(16).toUpperCase(),
       pcRaw: pc,
+      ...(flow ? { flow } : {}),
       ...(width != null ? { width } : {}),
+      // On a control transfer, expose the raw delta separately so it's never
+      // confused with a width but the target is still visible.
+      ...(flow && flow !== "seq" && nextPc != null ? { nextPc: "$" + nextPc.toString(16).toUpperCase() } : {}),
     };
     if (withRegisters) {
       try { entry.registers = getCPUState(host, plat, cpu); } catch { /* skip */ }
@@ -231,8 +262,41 @@ export async function stepInstructionsCore(sessionKey, { count = 16, withRegiste
     count: trace.length,
     finalPc: finalPc != null ? "$" + finalPc.toString(16).toUpperCase() : null,
     trace,
-    note: "CPU is frozen at finalPc. Each entry's `width` = PC[k+1]-PC[k] (the instruction's byte size), so 65816 immediate widths are visible directly (2-byte lda #imm8 vs 3-byte ldx #imm16). A missing `width` = a branch/jump moved the PC (not a linear step). Step more with frame({op:'stepInstructions', count}); read the bytes at any pc with memory({op:'readCart', cpuAddress, bank}).",
+    note: (opAt
+      ? "CPU is frozen at finalPc. `flow` classifies each step from its opcode (seq/branch/call/jump/ret); `width` = the instruction's true byte size and is present ONLY on `flow:'seq'` steps, so a 65816 immediate width (2-byte lda #imm8 vs 3-byte ldx #imm16) is trustworthy — a taken forward branch no longer masquerades as a width (it carries `flow` + `nextPc` instead). "
+      : "CPU is frozen at finalPc. `width` = PC[k+1]-PC[k]; on this core no opcode classifier ran, so `flow:'seq'` means the step was linear (delta = size) and a branch omits `width`. ") +
+      "Step more with frame({op:'stepInstructions', count}).",
   }), host);
+}
+
+// CPU family for the opcode-flow classifier (subset — only where classify runs).
+const CPU_FAMILY_FOR = { nes: "6502", c64: "6502", atari2600: "6502", atari7800: "6502", lynx: "6502", pce: "6502", gametank: "6502", snes: "65816" };
+
+/**
+ * Classify a 6502/65816 opcode as a control transfer for the step trace.
+ * Returns 'branch' | 'call' | 'jump' | 'ret' | 'seq'. Covers the full 65816
+ * transfer set (a superset of 6502): conditional branches (bcc/bcs/beq/bne/bmi/
+ * bpl/bvc/bvs + bra/brl), jsr/jsl (call), jmp variants/rti/brk-vector (jump),
+ * rts/rtl/rti (ret). Everything else is sequential.
+ */
+function classify6502Flow(op) {
+  switch (op) {
+    // conditional branches (rel8) + BRA/BRL
+    case 0x10: case 0x30: case 0x50: case 0x70:
+    case 0x90: case 0xB0: case 0xD0: case 0xF0:
+    case 0x80: case 0x82:
+      return "branch";
+    case 0x20: case 0x22: case 0xFC: // jsr abs / jsl long / jsr (abs,x)
+      return "call";
+    case 0x4C: case 0x5C: case 0x6C: case 0x7C: case 0xDC: // jmp abs/long/(ind)/(abs,x)/[long]
+    case 0x00: // brk (vectors away)
+    case 0x02: // cop (vectors away)
+      return "jump";
+    case 0x40: case 0x60: case 0x6B: // rti / rts / rtl
+      return "ret";
+    default:
+      return "seq";
+  }
 }
 
 export function makePressDriver(host, presses) {
@@ -944,9 +1008,12 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       // budget on hit but retro_run still finishes the frame, so the live regs are
       // end-of-frame state. Prefer registersAtHit; only fall back to a live read on
       // cores that don't snapshot.
+      // Terse per-hit note — the full explanation lives in the breakpoint tool
+      // description (loaded once), so a hit doesn't re-charge ~600 chars of
+      // boilerplate every time (field report: this repeated on all 3 pc-breaks).
       const frozenNote = atHit
-        ? "registersAtHit holds the register file CAPTURED AT the break instant — use THESE, not a follow-up cpu({op:'read'}), which returns end-of-frame state (the CPU/frame machinery keeps running after the hit). For RAM at the hit, pass captureMemory:[{region,offset,length}] to get it inline (capturedMemory) in THIS call instead of a follow-up read. frame({op:'stepInstruction'}) to single-step from here."
-        : "This core does not snapshot registers at the hit. cpu({op:'read'}) reflects the CPU state now; on cores that run-to-frame-end (fceumm) that is NOT the break instant — prefer the RAM side effects (memory({op:'read'})) over the live register file.";
+        ? "Use registersAtHit (not a follow-up cpu read — that's end-of-frame). captureMemory:[…] reads RAM at the hit inline."
+        : "No hit-snapshot on this core: prefer memory({op:'read'}) side effects; a live cpu read is end-of-frame on run-to-end cores (fceumm).";
       if (host.getRegSnapshot) host.getRegSnapshot(true); // consume the snapshot so a later bp can't read a stale one
       return attachObserverFrame(jsonContent({
         hit: true,
@@ -1243,8 +1310,10 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
   // (platform-tools.js). The other 3 are closure impls below (they need the
   // per-session host). regSchema is shared by the call op.
   const regSchema = z.record(z.string(), z.number().int()).optional().describe(
-    "op:call — registers to set before the call, keyed by romdev reg-id (m68k: 0-7=D0-D7, 8-15=A0-A7, 16=PC, 17=SR, 18=SP). " +
-    "e.g. {\"8\":2863118} sets A0. PC is set from the `pc` arg, not here.");
+    "op:call — registers to set before the call, keyed by register NAME (preferred) or raw reg-id. " +
+    "Names are per-CPU: 6502/65C02 = a,x,y,p,sp; 65816 (SNES) = a,x,y,p,s,db,d(=dp); m68k (Genesis) = raw ids. " +
+    "e.g. {\"a\":848} presets the 65816 accumulator. Raw ids still work (m68k: 0-7=D0-D7, 8-15=A0-A7, 16=PC, 17=SR, 18=SP). " +
+    "An unknown name errors with the valid list. PC is set from the `pc` arg, not here.");
 
   async function cpuSetReg({ regId, value }) {
       const host = getHost(sessionKey);
@@ -1256,18 +1325,22 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       return jsonContent({ regId, value: "0x" + (now >>> 0).toString(16).toUpperCase(), valueRaw: now });
   }
 
-  async function cpuCall({ pc, regs, sentinelPC = 0, stopAtPC, presetMemory, maxFrames = 600, maxInstructions, sandbox = false, pure = false }) {
+  async function cpuCall({ pc, regs, sentinelPC = 0, stopAtPC, presetMemory, maxFrames = 600, maxInstructions, sandbox = false, pure = false, callMode }) {
       const host = getHost(sessionKey);
       if (!host.setRegSupported || !host.setRegSupported()) {
         return jsonContent({ returned: false, notSupported: true,
           note: "This core build has no register-write (shipped on all 14 platforms as of 0.6.0 — update the core package). cpu({op:'call'}) needs it." });
       }
-      const numRegs = {};
-      for (const [k, v] of Object.entries(regs ?? {})) numRegs[Number(k)] = v >>> 0;
+      // Pass regs THROUGH (names or numeric ids) — the host resolves names via the
+      // platform's regNames map. (Was pre-numified here, which silently dropped
+      // names; a 65816 caller couldn't preset A without a reg-id table.)
+      const passRegs = {};
+      for (const [k, v] of Object.entries(regs ?? {})) passRegs[k] = v >>> 0;
       const r = host.callSubroutine({
-        pc, regs: numRegs, sentinelPC, stopAtPC,
+        pc, regs: passRegs, sentinelPC, stopAtPC,
         presetMemory: (presetMemory ?? []).map((m) => ({ addr: m.addr, hex: m.hex })),
         maxFrames, ...(maxInstructions ? { maxInstructions } : {}), sandbox, pure,
+        ...(callMode ? { callMode } : {}),
       });
       // The poisoned-call caveat (a real session lost hours to this): when the
       // call spanned FRAMES of emulation, the game's own per-frame logic (VBlank
@@ -1366,6 +1439,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       maxInstructions: z.number().int().min(1000).optional().describe("op:call — instruction watchdog budget (the REAL cap; default ~maxFrames*500k). Raise for a huge decompress; lower to fail fast while probing the right A0."),
       sandbox: z.boolean().default(false).describe("op:call — snapshot+restore core state around the call (default FALSE — you want the dst buffer left live to read). True leaves the live game untouched."),
       pure: z.boolean().default(false).describe("op:call — guarantee the game's own frame logic CANNOT run during the call and stomp the routine's output (ALL 14 platforms; `pureMode` in the result says how: 'cpu-only' on Genesis/SMS/GG, 'irq-blocked' elsewhere, 'no-interrupts' on 2600). Prefer this for any decompressor/codec call."),
+      callMode: z.enum(["jsr", "jsl"]).optional().describe("op:call (65816/SNES) — the callee's return type: 'jsr' = a near routine ending in RTS (2-byte return), 'jsl' = a long routine ending in RTL (3-byte return, the default). Set 'jsr' when driving a plain jsr-called helper — otherwise the sentinel is sized for a 3-byte return and the routine 'returns' one byte off into vector-stub land."),
       // decompress
       entryPC: z.number().int().min(0).optional().describe("op:decompress — decompressor entry PC."),
       sourceAddress: z.number().int().min(0).optional().describe("op:decompress — compressed-source address → A0 (reg-id 8 on m68k)."),
