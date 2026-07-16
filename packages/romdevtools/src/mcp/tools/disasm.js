@@ -422,12 +422,24 @@ function findFirstReturnLine(asm, cpuFamily = "6502") {
  * page-mapped via the sega mapper, but for v1 we treat the 16 KB at
  * $8000-$BFFF as "bank 0" by default.
  */
-export function mapSmsAddress(data, cpuAddr, length) {
+export function mapSmsAddress(data, cpuAddr, length, bank) {
   // Slot 0: $0000-$3FFF maps to file 0..$3FFF (bank 0, fixed).
   // Slot 1: $4000-$7FFF maps to file $4000..$7FFF (bank 1, fixed by default).
   // Slot 2: $8000-$BFFF maps to file $8000..$BFFF (banked — default = bank 2).
+  //   Pass `bank` to page a different 16KB bank into slot 2 on a Sega-mapper
+  //   cart (bank ignored for the fixed slots 0/1 — those windows have only one
+  //   possible mapping, so there's nothing to get wrong).
   if (cpuAddr < 0xC000) {
-    const fileOffset = cpuAddr;
+    let fileOffset = cpuAddr;
+    let note = `SMS/GG sega mapper, slot ${cpuAddr < 0x4000 ? 0 : cpuAddr < 0x8000 ? 1 : 2} (default bank)`;
+    if (bank != null && cpuAddr >= 0x8000) {
+      const numBanks = Math.ceil(data.length / 0x4000);
+      if (bank < 0 || bank >= numBanks) {
+        throw new Error(`SMS bank ${bank} out of range (ROM has ${numBanks} × 16KB banks, 0-${numBanks - 1})`);
+      }
+      fileOffset = bank * 0x4000 + (cpuAddr - 0x8000);
+      note = `SMS/GG sega mapper, bank ${bank} paged into slot 2 ($8000)`;
+    }
     if (fileOffset >= data.length) {
       throw new Error(`CPU address $${cpuAddr.toString(16)} past end of SMS ROM (${data.length} bytes)`);
     }
@@ -435,7 +447,7 @@ export function mapSmsAddress(data, cpuAddr, length) {
       bytes: data.slice(fileOffset, fileOffset + length),
       fileOffset,
       cpu: "z80",
-      note: `SMS/GG sega mapper, slot ${cpuAddr < 0x4000 ? 0 : cpuAddr < 0x8000 ? 1 : 2} (default bank)`,
+      note,
     };
   }
   throw new Error(
@@ -557,7 +569,7 @@ export function mapGenesisAddress(data, cpuAddr, length) {
  *   48 KB: $4000-$FFFF (rare)
  *   144 KB SuperGame: bank-switched at $8000-$BFFF + fixed at $C000
  */
-export function mapAtari7800Address(data, cpuAddr, length, _bank = 0) {
+export function mapAtari7800Address(data, cpuAddr, length, bank = null) {
   // Detect header. "ATARI7800" magic at offset 1.
   const hasHeader =
     data.length > 128 &&
@@ -565,6 +577,23 @@ export function mapAtari7800Address(data, cpuAddr, length, _bank = 0) {
       === "ATARI7800";
   const headerSize = hasHeader ? 128 : 0;
   const romSize = data.length - headerSize;
+  // SuperGame banking: 16KB banks page into $8000-$BFFF; the LAST bank is fixed
+  // at $C000-$FFFF. Pass `bank` to select the paged bank for a $8000-window
+  // address (a $C000+ address always resolves to the fixed top bank, NES-style —
+  // `bank` is ignored there, never silently misapplied).
+  if (bank != null && bank !== 0 && cpuAddr >= 0x8000 && cpuAddr < 0xC000) {
+    const numBanks = Math.floor(romSize / 0x4000);
+    if (bank < 0 || bank >= numBanks) {
+      throw new Error(`7800 bank ${bank} out of range (ROM has ${numBanks} × 16KB banks, 0-${numBanks - 1})`);
+    }
+    const fileOffset = headerSize + bank * 0x4000 + (cpuAddr - 0x8000);
+    return {
+      bytes: data.slice(fileOffset, fileOffset + length),
+      fileOffset,
+      cpu: "6502",
+      note: `7800 SuperGame bank ${bank} paged into $8000-$BFFF`,
+    };
+  }
   // Default behavior: figure out which file-offset corresponds to cpuAddr.
   // For "fixed" carts (no banking), CPU $C000 maps to romStart + (romSize - 16KB)
   // etc. The simplest, most-correct model: assume cart fills high address
@@ -758,6 +787,28 @@ async function disassembleRomCore(args) {
         startAddress = 0x0200;
       }
 
+      // `bank` handling — NEVER silently ignore it (field report: SNES LoROM
+      // `{startAddress:$83CD, bank:2}` used to read BANK 0's bytes and return a
+      // plausible disassembly under the caller's bank-2 label — silently the
+      // wrong 32KB, worse than an error).
+      //  - SNES: the bank IS the address's high byte. Compose the full 24-bit
+      //    address (same mapping readCart honors); the da65 bank-local masking
+      //    + file-offset annotation (0.90.0) handle everything downstream.
+      //  - sms/gg + atari7800: honored in their mappers (slot-2 / SuperGame
+      //    windows) — see mapSmsAddress/mapAtari7800Address.
+      //  - flat platforms (genesis/gba/lynx/c64 .prg): a meaningful bank is a
+      //    caller error — REJECT it rather than return flat bytes under a
+      //    banked label.
+      if (resolved === "snes" && args.bank != null && startAddress < 0x10000) {
+        startAddress = ((args.bank & 0xFF) << 16) | startAddress;
+      }
+      if (args.bank != null && args.bank !== 0 && (resolved === "genesis" || resolved === "gba" || resolved === "lynx" || resolved === "c64")) {
+        throw new Error(
+          `disasm({target:'rom'}): \`bank\` is not applicable on ${resolved} (flat address space — no cart banking). ` +
+          `Pass the address directly.`,
+        );
+      }
+
       const mapped = resolved === "lynx"
         ? (() => {
             const hasHdr = data.length >= 64 && data[0] === 0x4c && data[1] === 0x59 && data[2] === 0x4e && data[3] === 0x58; // "LYNX"
@@ -776,7 +827,7 @@ async function disassembleRomCore(args) {
         : resolved === "snes"
         ? mapSnesAddress(data, startAddress, length, mapper)
         : resolved === "sms" || resolved === "gg"
-          ? mapSmsAddress(data, startAddress, length)
+          ? mapSmsAddress(data, startAddress, length, args.bank)
           : resolved === "gb" || resolved === "gbc"
             ? mapGbAddress(data, startAddress, length, args.bank)
             : resolved === "atari2600"
@@ -1781,7 +1832,7 @@ export function registerDisasmTools(server, z) {
       symbolsText: z.string().optional().describe("target=bytes: inline symbol-file text."),
       symbolsFormat: z.enum(["wla", "cc65-lbl"]).optional().describe("target=bytes: explicit symbol-file format override."),
       // rom
-      bank: z.number().int().min(0).max(255).optional().describe("target=rom / pointerTable: switchable ROM bank to map into the windowed slot (NES mapper>0 $8000 / GB $4000; also 2600/7800/c64)."),
+      bank: z.number().int().min(0).max(255).optional().describe("target=rom / pointerTable: switchable ROM bank to map into the windowed slot. NES (mapper>0, $8000), GB/GBC ($4000), SMS/GG (Sega-mapper slot 2, $8000), Atari 2600/7800 (SuperGame $8000). SNES: the bank IS the address high byte — pass either a full 24-bit startAddress ($02AF86) OR a bank-local address + bank:2 (composed to $02AF86 internally); both map correctly. Flat platforms (Genesis/GBA/Lynx/C64) have no cart banking — a non-zero `bank` is REJECTED, never silently applied to bank 0."),
       thumb: z.boolean().default(false).describe("target=rom: GBA — disassemble as THUMB (16-bit) instead of ARM."),
       endAddress: z.number().int().min(0).max(0xffffff).optional().describe("target=rom: CPU end address (inclusive); alternative to length."),
       untilReturn: z.boolean().default(false).describe("target=rom: stop at the first return/unconditional-jump (rts/rti/rtl/jmp, or ret/reti/jp per CPU) — grab one routine."),

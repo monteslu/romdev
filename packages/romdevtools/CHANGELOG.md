@@ -4,6 +4,25 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.91.2 — 2026-07-15
+
+**`disasm({target:'rom', bank:N})` no longer silently reads the wrong bank** (field report from
+the ActRaiser annotation session — the dangerous twin of the 0.90.0 SNES-address fix).
+
+- On SNES LoROM, `{startAddress:$83CD, bank:2}` used to SUCCEED but read **bank 0's** bytes and
+  return a plausible-looking disassembly under the caller's bank-2 label — silently the wrong 32 KB
+  (worse than an error; an agent would annotate bank 0 under a bank-2 name). The `bank` param was
+  simply dropped for SNES.
+- Fixed + verified on the real ActRaiser ROM: `disasm({startAddress:0x83CD, bank:2})` now composes
+  the full 24-bit address ($0283CD) and decodes bank 2's actual `RotMatrix_Build` (`sep #$10 /
+  ldx $0314 / …`), with the file offset resolving to 0x103CD — matching the report's exact wanted
+  result. A full 24-bit `startAddress` works identically.
+- Also honored `bank` for **SMS/GG** (page a 16 KB bank into the Sega-mapper slot-2 $8000 window).
+- **Flat platforms (Genesis/GBA/Lynx/C64) now REJECT a non-zero `bank`** instead of silently
+  applying it to a flat read — no cart banking there, so a bank is a caller error, surfaced loudly.
+- Regression tests: bank-N reads the right 32 KB (not bank 0), full-address parity, and the
+  flat-platform rejection.
+
 ## 0.91.1 — 2026-07-15
 
 **`binaryIncludes` base64 strings were embedded as TEXT on the GBA/gcc-runner paths — the real
