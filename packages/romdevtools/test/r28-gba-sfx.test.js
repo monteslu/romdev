@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-import { buildGbaC } from "../src/toolchains/gba-c/gba-c.js";
+import { buildGbaC } from "romdev-platform-gba";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LIB_DIR = path.join(__dirname, "..", "..", "romdev-platform-gba", "share", "gba", "lib", "c");

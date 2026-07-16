@@ -12,7 +12,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { buildGbaC } from "../src/toolchains/gba-c/gba-c.js";
+import { buildGbaC } from "romdev-platform-gba";
 
 test("R28 GBA libtonc (default): #include <tonc.h> compiles + links", { timeout: 180000 }, async () => {
   // Default runtime is libtonc — no `runtime` arg needed.

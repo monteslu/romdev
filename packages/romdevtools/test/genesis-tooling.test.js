@@ -8,7 +8,7 @@ import { z } from "zod";
 import { registerTileInspectTools } from "../src/mcp/tools/tile-inspect.js";
 import { _setHostForTest } from "../src/mcp/state.js";
 import { buildForPlatform } from "../src/toolchains/index.js";
-import { finalizeGenesisRom } from "../src/toolchains/genesis-c/genesis-c.js";
+import { finalizeGenesisRom } from "romdev-toolchain-m68k-gcc";
 import { resolveCore } from "../src/cores/registry.js";
 import { LibretroHost } from "../src/host/index.js";
 import { writeFile, mkdtemp, rm } from "node:fs/promises";

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { finalizeGenesisRom } from "./genesis-c.js";
+import { finalizeGenesisRom } from "romdev-toolchain-m68k-gcc";
 
 // finalizeGenesisRom mirrors SGDK's post-link step: pad to a 128KB
 // boundary (min 512KB) and write the $18E checksum (sum of BE words

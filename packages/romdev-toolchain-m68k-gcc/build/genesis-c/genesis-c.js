@@ -40,16 +40,16 @@ import { resolveToolBaseDir } from "../common/wasm-tool.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-// The Genesis C library tree (SGDK + minimal runtime) ships in
-// romdev-toolchain-m68k-gcc's share/ (moved out of romdevtools' src so a
-// standalone consumer of this driver — e.g. the mdlua SDK — doesn't drag the
-// whole romdev install). Resolve the package's share/genesis base; the dev
-// fallback is the package inside this monorepo (a sibling of romdevtools).
+// The Genesis C library tree (SGDK + minimal runtime) ships in THIS package's
+// share/ (the driver moved in with the tree so a standalone consumer — e.g.
+// the mdlua SDK — imports buildGenesisC from "romdev-toolchain-m68k-gcc" and
+// drags in nothing else). Primary resolution is package self-reference; the
+// fallback is this file's own package root (build/genesis-c/ → two up).
 const GENESIS_SHARE = path.join(
   resolveToolBaseDir({
     pkg: "romdev-toolchain-m68k-gcc",
     sentinel: path.join("share", "genesis", "lib", "sgdk", "md.ld"),
-    localDir: path.resolve(__dirname, "..", "..", "..", "..", "romdev-toolchain-m68k-gcc"),
+    localDir: path.resolve(__dirname, "..", ".."),
     label: "Genesis C library tree (romdev-toolchain-m68k-gcc/share)",
   }),
   "share", "genesis", "lib",

@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildGenesisC } from "./genesis-c.js";
+import { buildGenesisC } from "romdev-toolchain-m68k-gcc";
 
 test("buildGenesisC sgdk:true: #include <genesis.h> + VDP_drawText links to a valid SGDK ROM", async () => {
   const r = await buildGenesisC({

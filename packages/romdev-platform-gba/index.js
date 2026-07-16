@@ -35,3 +35,14 @@ export const toolchain = {
   "arm-none-eabi-ld": { gluePath: path.join(WASM, "arm-none-eabi-ld.mjs") },
   "arm-none-eabi-objcopy": { gluePath: path.join(WASM, "arm-none-eabi-objcopy.mjs") },
 };
+
+// ── The GBA C build pipeline (build/) ──────────────────────────────────────
+// The full driver lives in this package so ONE dep compiles everything for
+// the target: `import { buildGbaC } from "romdev-platform-gba"`. The import
+// chain is inert at load (the worker pool forks only when a tool actually
+// runs; WASM glue resolves lazily), so static re-exports cost only a few ms
+// of JS parse. The vendored build/common + build/_worker kit is
+// byte-identical to romdevtools' canonical copy (enforced by romdevtools'
+// build-kit parity test; re-sync with romdevtools scripts/sync-build-kit.sh).
+export { buildGbaC } from "./build/gba-c/gba-c.js";
+export { parseBuildLog } from "./build/parse-errors.js";

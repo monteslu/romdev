@@ -11,7 +11,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { buildGbaC } from "../src/toolchains/gba-c/gba-c.js";
+import { buildGbaC } from "romdev-platform-gba";
 
 test("R24 GBA minimum-viable: bare main() compiles + links", { timeout: 120000 }, async () => {
   const r = await buildGbaC({

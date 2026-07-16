@@ -42,16 +42,16 @@ import { resolveToolBaseDir } from "../common/wasm-tool.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-// The GBA C library tree ships in romdev-platform-gba's share/ (moved out of
-// romdevtools' src so a standalone consumer of this driver — e.g. the gba-lua
-// SDK — doesn't drag the whole romdev install). Resolve the package's share/gba
-// base; the dev fallback is the package inside this monorepo (a sibling of
-// romdevtools under packages/). `sentinel` proves we found the right dir.
+// The GBA C library tree ships in THIS package's share/ (the driver moved in
+// with the tree so a standalone consumer — e.g. the gba-lua SDK — imports
+// buildGbaC from "romdev-platform-gba" and drags in nothing else). Primary
+// resolution is package self-reference; the fallback is this file's own
+// package root (build/gba-c/ → two up). `sentinel` proves the dir is right.
 const GBA_SHARE = path.join(
   resolveToolBaseDir({
     pkg: "romdev-platform-gba",
     sentinel: path.join("share", "gba", "lib", "libtonc", "gba_crt0.s"),
-    localDir: path.resolve(__dirname, "..", "..", "..", "..", "romdev-platform-gba"),
+    localDir: path.resolve(__dirname, "..", ".."),
     label: "GBA C library tree (romdev-platform-gba/share)",
   }),
   "share", "gba", "lib",
