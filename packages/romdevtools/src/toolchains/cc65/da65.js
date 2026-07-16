@@ -147,14 +147,17 @@ function defaultCodeInfo(startAddress, length, cpu) {
  *
  * @param {number} startAddress CPU address of region byte 0
  * @param {{start:number,end:number}[]} spans region-relative code byte offsets
- * @param {string} cpu (only 65816 reaches here)
+ * @param {string} _cpu (only 65816 reaches here — kept for call-site symmetry)
  */
-function codeMapInfo(startAddress, spans, cpu) {
+function codeMapInfo(startAddress, spans, _cpu) {
   const lo16 = (n) => "$" + ((startAddress + n) & 0xFFFF).toString(16).toUpperCase();
-  // ADDRMODE "MX" = post-reset 8-bit A / 8-bit X,Y. da65 tracks rep/sep #$xx
-  // within a Code range and flips width itself, so the seed only sets the entry
-  // state; declaring each function's entry as post-reset is correct for a boot
-  // ROM and harmless elsewhere (the first rep/sep re-syncs it).
+  // ADDRMODE "MX" = post-reset 8-bit A / 8-bit X,Y — the entry width for each
+  // span. NOTE: da65 does NOT auto-widen on a mid-span `rep #$30`, so a 16-bit
+  // immediate after a rep can render one byte short + a spurious following op.
+  // That's still BYTE-EXACT (the reassemble heal pins any line whose bytes don't
+  // round-trip), just imperfect readability inside 16-bit routines. Threading
+  // the real M/X state (from a break-instant P, or a rep/sep scan) into the seed
+  // is the future quality win; the entry seed is correct for boot/8-bit code.
   return spans
     .map((s) => `RANGE {\n  START ${lo16(s.start)};\n  END ${lo16(s.end - 1)};\n  TYPE Code;\n  ADDRMODE "MX";\n};\n`)
     .join("");
