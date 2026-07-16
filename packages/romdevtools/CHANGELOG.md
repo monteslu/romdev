@@ -6,17 +6,17 @@ the `romdev-mcp` bin is kept as an alias.)
 
 ## 0.91.2 — 2026-07-15
 
-**`disasm({target:'rom', bank:N})` no longer silently reads the wrong bank** (field report from
-the ActRaiser annotation session — the dangerous twin of the 0.90.0 SNES-address fix).
+**`disasm({target:'rom', bank:N})` no longer silently reads the wrong bank** (field report from a
+SNES annotation session — the dangerous twin of the 0.90.0 SNES-address fix).
 
 - On SNES LoROM, `{startAddress:$83CD, bank:2}` used to SUCCEED but read **bank 0's** bytes and
   return a plausible-looking disassembly under the caller's bank-2 label — silently the wrong 32 KB
   (worse than an error; an agent would annotate bank 0 under a bank-2 name). The `bank` param was
   simply dropped for SNES.
-- Fixed + verified on the real ActRaiser ROM: `disasm({startAddress:0x83CD, bank:2})` now composes
-  the full 24-bit address ($0283CD) and decodes bank 2's actual `RotMatrix_Build` (`sep #$10 /
-  ldx $0314 / …`), with the file offset resolving to 0x103CD — matching the report's exact wanted
-  result. A full 24-bit `startAddress` works identically.
+- Fixed + verified on a real 1 MB commercial LoROM cart: `disasm({startAddress:0x83CD, bank:2})` now
+  composes the full 24-bit address ($0283CD), decodes bank 2's actual routine (`sep #$10 /
+  ldx $0314 / …`), and resolves the file offset to 0x103CD — the report's exact wanted result. A
+  full 24-bit `startAddress` works identically.
 - Also honored `bank` for **SMS/GG** (page a 16 KB bank into the Sega-mapper slot-2 $8000 window).
 - **Flat platforms (Genesis/GBA/Lynx/C64) now REJECT a non-zero `bank`** instead of silently
   applying it to a flat read — no cart banking there, so a bank is a caller error, surfaced loudly.
@@ -74,7 +74,7 @@ the gba_lua_sdk maxmod debugging session; `romdev-platform-gba@0.10.0`).
 
 ## 0.90.0 — 2026-07-15
 
-Two fixes from the ActRaiser *annotation* session (carving a routine out of the SNES `.byte`
+Two fixes from a SNES *annotation* session (carving a routine out of the SNES `.byte`
 floor by live single-stepping).
 
 - **`disasm({target:'rom'})` accepts a banked SNES address ≥ 0x10000.** Passing a natural LoROM CPU
@@ -98,7 +98,7 @@ floor by live single-stepping).
 ## 0.89.0 — 2026-07-14
 
 Large-ROM `disasm({target:'project'})` no longer times out the tool call — the last of the
-findings from the 1 MB ActRaiser run. A multi-MB cart (32-bank SNES/Genesis) can take minutes to
+findings from a 1 MB commercial SNES run. A multi-MB cart (32-bank SNES/Genesis) can take minutes to
 reassemble; that used to time the MCP call out mid-run even though the server finished writing every
 bank.
 
@@ -243,8 +243,8 @@ Two fixes from a real-world `disasm({target:'project'})` + `build({output:'reass
 
 **The 3D GL cores are now PLAYABLE in the SDL playtest window — N64 + PS1 at full speed.**
 Until now the hardware-rendered cores (n64/ps1/dreamcast, all `hwRender:true`) rendered
-headlessly but couldn't be driven interactively. Verified end-to-end: **Mario Kart 64
-(N64)** and **Crash Bandicoot (PS1)** play in the window at full speed with sound and a
+headlessly but couldn't be driven interactively. Verified end-to-end: commercial 3D titles on
+**N64** and **PS1** play in the window at full speed with sound and a
 standard controller. Five fixes, all in `src/playtest/playtest.js` + `src/host/`:
 - **Software-blit window for hwRender cores.** An `accelerated:true` SDL window makes a GLX
   context that collides with native-gles's EGL context → `X_GLXMakeCurrent BadAccess` server
@@ -264,14 +264,14 @@ standard controller. Five fixes, all in `src/playtest/playtest.js` + `src/host/`
   Skipped entirely when `host.hwRender`.
 
 **Dreamcast: boots commercial GD-ROM games, but EXPERIMENTAL / not yet playable.** flycast now
-loads + renders real discs (a Dreamcast disc, a Dreamcast disc) — a first — via two fixes: the
+loads + renders real discs — a first — via two fixes: the
 **GLES (WebGL2) renderer** (`-DUSE_GLES=ON`; the desktop-GL path called `glClearDepth` which
 WebGL lacks → a frame-58 crash), and **NODERAWFS disc streaming** (`-s NODERAWFS=1` + a host
 `noderawfs` path) so libchdr seeks the disc off Node's real fs instead of loading the whole
-CHD into the WASM heap (an 872MB Sonic CHD OOM'd a 1GB heap). BUT on the interpreter core DC
+CHD into the WASM heap (an 872MB CHD OOM'd a 1GB heap). BUT on the interpreter core DC
 runs at ~5 fps — **unplayable.** It ships on the correct interpreter; the WASM SH-4 JIT (78fps,
-integrated behind `ROMDEV_FLYCAST_JIT=1`) has native-emit bugs that hang Sonic's boot and is a
-documented next step (internal). DC is labeled experimental, not a playable platform.
+integrated behind `ROMDEV_FLYCAST_JIT=1`) has native-emit bugs that hang a commercial disc's boot
+and is a documented next step (internal). DC is labeled experimental, not a playable platform.
 
 ## 0.83.0 — 2026-06-30
 
