@@ -4,6 +4,32 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.93.0 — 2026-07-16
+
+**The 65816 (SNES) data-only readability floor is fixed.** `disasm({target:'project'})` on a SNES
+cart used to produce byte-exact but **0%-readable** output — every instruction floored to `.byte`, so
+the whole workflow was carving routines out of a data wall by hand. It now disassembles the real code
+as instructions: a full 1MB LoROM cart round-trips **byte-identical** at **~68% average
+instructions** (100% on pure-code banks; data banks correctly stay `.byte`) in **~30s**.
+
+Three compounding root causes, all fixed:
+- **The byte-capture regex matched zero code lines.** da65's `--comments 4` appends a right-aligned
+  ASCII gutter after the byte hex (`sei ; 8000 78    x`); the heal loop's regex anchored the byte
+  group to end-of-line, so it recognized **no** code → couldn't tell code from data → floored the
+  region. The regex now stops at the gutter gap. (This alone was the whole 0% floor.)
+- **Cross-span width desync.** A single whole-region da65 pass let one function's `.a8/.i8` width
+  state leak across a data gap into the next function, mis-sizing its operands and cascading. The
+  65816 path now disassembles each code span **independently** (re-seeding width per span) and dumps
+  the gaps as `.byte`, so nothing desyncs.
+- **Unbounded heal on mis-classified data.** A data blob the analysis engine over-claimed as a
+  function used to grind one `.byte` pin per re-assembly. Each span now bails to a clean `.byte` dump
+  once too many lines pin (it isn't readable code anyway) — turning a multi-minute grind into seconds.
+
+Supporting changes: da65 gained a per-span code-map info file (`TYPE Code` RANGEs from the analysis
+engine); undefined cross-span label references are auto-equated to their literal addresses at stitch
+time; and the WASM worker pool now defaults to `(cores − 2)` capped at 12 (was 2), so the many small
+per-function reassembly jobs actually use the machine. `ROM_DEV_WASM_POOL_SIZE` still overrides.
+
 ## 0.92.0 — 2026-07-16
 
 A batch of RE-workflow fixes from two SNES annotation sessions (carving routines out of the 65816
