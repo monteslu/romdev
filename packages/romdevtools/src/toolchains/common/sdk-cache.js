@@ -16,39 +16,80 @@
 //
 // This module is platform-agnostic: each toolchain passes in how to hash its
 // source, where its seed lives, and how to compile from source.
+//
+// ENV INJECTION (0.95.0, browser IDEs): NO top-level node imports. The node
+// bits (fs seed reads, the os.tmpdir() disk cache, node:crypto hashing) load
+// lazily; a caller may inject `io` — { readSeed, readSeedHash, cacheGet,
+// cachePut, hash } — and the node defaults are skipped entirely. A browser
+// host supplies seed/hash bytes from its fetched share manifest and an
+// IndexedDB (or no-op) cache.
 
-import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { createHash } from "node:crypto";
-import path from "node:path";
-import os from "node:os";
+/** Stable hash of a {name: text|bytes} source map (order-independent).
+ *  Node-only convenience (uses node:crypto synchronously via the lazy import
+ *  in resolveSdkArchive's default io); kept for existing callers/scripts. */
+export async function hashSources(srcMap) {
+  const { createHash } = await import("node:crypto");
+  return hashWith((data) => {
+    const h = createHash("sha256");
+    for (const chunk of data) h.update(chunk);
+    return h.digest("hex");
+  }, srcMap);
+}
 
-/** Stable hash of a {name: text|bytes} source map (order-independent). */
-export function hashSources(srcMap) {
-  const h = createHash("sha256");
+/** Feed the canonical (sorted, NUL-delimited) source-map byte stream to a
+ *  caller-supplied digest fn. Shared by the node and injected hash paths so
+ *  both produce identical keys for identical sources. */
+function hashWith(digest, srcMap) {
+  const enc = typeof TextEncoder !== "undefined" ? new TextEncoder() : null;
+  const toBytes = (v) =>
+    typeof v === "string"
+      ? (enc ? enc.encode(v) : Buffer.from(v))
+      : v instanceof Uint8Array ? v : new Uint8Array(v);
+  const chunks = [];
+  const NUL = new Uint8Array([0]);
   for (const name of Object.keys(srcMap).sort()) {
-    const v = srcMap[name];
-    h.update(name);
-    h.update("\0");
-    h.update(typeof v === "string" ? v : Buffer.from(v));
-    h.update("\0");
+    chunks.push(toBytes(name), NUL, toBytes(srcMap[name]), NUL);
   }
-  return h.digest("hex");
+  return digest(chunks);
 }
 
-// On-disk cache for rebuilt-from-source archives, so a `rebuildSdk` result is
-// reused across processes/sessions (not just within one). Keyed by source hash.
-function cacheDir() {
-  return path.join(os.tmpdir(), "romdev-sdk-cache");
-}
-async function readDiskCache(key) {
-  try { return new Uint8Array(await readFile(path.join(cacheDir(), key + ".a"))); }
-  catch { return null; }
-}
-async function writeDiskCache(key, bytes) {
-  try {
-    await mkdir(cacheDir(), { recursive: true });
-    await writeFile(path.join(cacheDir(), key + ".a"), bytes);
-  } catch { /* cache is best-effort */ }
+/** Default node io: fs seed reads + os.tmpdir() disk cache + node:crypto
+ *  hashing. All imports lazy so a browser bundle that injects io never
+ *  touches a node builtin through this module. Exported so the drivers can
+ *  compose a share-addressed io from these pieces (cacheGet/cachePut/hash). */
+export async function nodeSdkIo() {
+  const { readFile, writeFile, mkdir } = await import("node:fs/promises");
+  const { createHash } = await import("node:crypto");
+  const path = (await import("node:path")).default;
+  const os = (await import("node:os")).default;
+  const cacheDir = () => path.join(os.tmpdir(), "romdev-sdk-cache");
+  return {
+    readSeed: async (seedPath) => {
+      try { return new Uint8Array(await readFile(seedPath)); } catch { return null; }
+    },
+    readSeedHash: async (seedHashPath) => {
+      try { return (await readFile(seedHashPath, "utf-8")).trim(); } catch { return null; }
+    },
+    writeSeed: async (seedPath, bytes, seedHashPath, hash) => {
+      await writeFile(seedPath, bytes);
+      await writeFile(seedHashPath, hash + "\n");
+    },
+    cacheGet: async (key) => {
+      try { return new Uint8Array(await readFile(path.join(cacheDir(), key + ".a"))); }
+      catch { return null; }
+    },
+    cachePut: async (key, bytes) => {
+      try {
+        await mkdir(cacheDir(), { recursive: true });
+        await writeFile(path.join(cacheDir(), key + ".a"), bytes);
+      } catch { /* cache is best-effort */ }
+    },
+    hash: async (srcMap) => hashWith((data) => {
+      const h = createHash("sha256");
+      for (const chunk of data) h.update(chunk);
+      return h.digest("hex");
+    }, srcMap),
+  };
 }
 
 /**
@@ -57,41 +98,45 @@ async function writeDiskCache(key, bytes) {
  * @param {Object} a
  * @param {string} a.name          SDK name (for messages), e.g. "libtonc"
  * @param {Record<string,string>} a.sources  the vendored SDK source map (for hashing)
- * @param {string} a.seedPath       absolute path to the prebuilt seed .a
- * @param {string} a.seedHashPath   absolute path to the seed's source-hash file
+ * @param {string} a.seedPath       seed .a location (absolute path, or a share-relative
+ *                                  key when an injected io resolves it)
+ * @param {string} a.seedHashPath   the seed's source-hash file (same addressing)
  * @param {boolean} a.rebuild       caller asked to compile from source
  * @param {() => Promise<{ok:boolean, archive?:Uint8Array, stage?:string, log?:string}>} a.compileFromSource
+ * @param {{readSeed?:Function, readSeedHash?:Function, writeSeed?:Function,
+ *          cacheGet?:Function, cachePut?:Function, hash:Function}} [a.io]
+ *   injected environment (browser hosts). When io is given the node defaults
+ *   are NOT loaded at all — `hash` is required, everything else optional
+ *   (a missing cacheGet/cachePut just means no cross-process cache)
  * @returns {Promise<{ok:boolean, archive?:Uint8Array, fromSource:boolean,
  *   sdkEditIgnored?:{sdk:string, message:string}, stage?:string, log?:string}>}
  */
 export async function resolveSdkArchive(a) {
-  const srcHash = hashSources(a.sources);
+  const io = { ...(a.io ? {} : await nodeSdkIo()), ...(a.io ?? {}) };
+  const srcHash = await io.hash(a.sources);
 
   // Explicit rebuild → compile from source (disk-cached by hash).
   if (a.rebuild) {
     // When writeSeed is set (the seed generator), always recompile + persist
     // the seed; don't short-circuit on the disk cache.
     if (!a.writeSeed) {
-      const cached = await readDiskCache(srcHash);
+      const cached = io.cacheGet ? await io.cacheGet(srcHash) : null;
       if (cached) return { ok: true, archive: cached, fromSource: true };
     }
     const r = await a.compileFromSource();
     if (!r.ok) return { ok: false, fromSource: true, stage: r.stage, log: r.log };
-    await writeDiskCache(srcHash, r.archive);
-    if (a.writeSeed && a.seedPath) {
-      await writeFile(a.seedPath, r.archive);
-      await writeFile(a.seedHashPath, srcHash + "\n");
+    if (io.cachePut) await io.cachePut(srcHash, r.archive);
+    if (a.writeSeed && a.seedPath && io.writeSeed) {
+      await io.writeSeed(a.seedPath, r.archive, a.seedHashPath, srcHash);
     }
     return { ok: true, archive: r.archive, fromSource: true };
   }
 
   // Default → use the prebuilt seed.
-  let seed = null;
-  try { seed = new Uint8Array(await readFile(a.seedPath)); } catch { /* no seed */ }
+  const seed = io.readSeed ? await io.readSeed(a.seedPath) : null;
 
   // Compare the seed's source-hash to the current vendored source.
-  let seedHash = null;
-  try { seedHash = (await readFile(a.seedHashPath, "utf-8")).trim(); } catch { /* no hash */ }
+  const seedHash = io.readSeedHash ? await io.readSeedHash(a.seedHashPath) : null;
 
   if (seed) {
     const edited = seedHash && seedHash !== srcHash;
@@ -111,6 +156,6 @@ export async function resolveSdkArchive(a) {
   // No seed shipped (dev / first build before seeding) → compile from source.
   const r = await a.compileFromSource();
   if (!r.ok) return { ok: false, fromSource: true, stage: r.stage, log: r.log };
-  await writeDiskCache(srcHash, r.archive);
+  if (io.cachePut) await io.cachePut(srcHash, r.archive);
   return { ok: true, archive: r.archive, fromSource: true };
 }

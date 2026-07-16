@@ -4,15 +4,43 @@
 //   - the npm package the glue ships in + the glue filenames
 //   - the per-stage arch flags (cc1 / as / ld), which for MIPS depend on endian
 //   - the linker-script filename + the objcopy output filename
-// makeGccToolchain(config) returns the 4 run functions, so each arch shrinks to a
-// small config object. Glue resolution is lazy+memoized (booting never loads a
+// makeGccToolchain(config, env?) returns the 4 run functions, so each arch shrinks to
+// a small config object. Glue resolution is lazy+memoized (booting never loads a
 // toolchain package until something is actually built with it).
 //
+// ENV INJECTION (0.95.0, for the browser IDEs): every stage runs through ONE
+// seam — `runTool(job)` — and the caller may supply it via `env.runTool`. The
+// job carries the logical tool identity ({ tool, glueFile, pkg }) plus the
+// fully-marshalled { argv, inputFiles, outputFiles }; the host owns WASM
+// instantiation and MEMFS mounting and returns { exitCode, log, outputs }.
+// A browser Web Worker supplies its own runTool over the same glue files
+// (fetched as static assets); node callers omit env and get the default
+// child-process pool. The default is a LAZY dynamic import so a browser
+// bundle that always injects runTool never loads node:child_process.
+//
 // All four stages keep the exact pre-refactor argv, /work paths, output encodings,
-// and return shapes (including `...(r.crash ? { crash, stage:"crash" } : {})`), so
-// this is a pure de-duplication — no behavior change.
-import { runIsolated, getOutputBytes, getOutputText } from "../_worker/run.js";
-import { makeGlueResolver, marshalInputs } from "./wasm-tool.js";
+// and return shapes (including `...(r.crash ? { crash, stage:"crash" } : {})`).
+// ONLY the pure io helpers are imported statically — glue resolution
+// (./wasm-tool.js: node fs/url) and the worker pool (../_worker/run.js:
+// node child_process) load lazily inside the default runner, so a browser
+// bundle that injects env.runTool never touches a node builtin through here.
+import { marshalInputs, getOutputBytes, getOutputText } from "./io.js";
+
+/**
+ * @typedef {Object} ToolJob
+ * @property {"cc1"|"as"|"ld"|"objcopy"} tool  logical stage
+ * @property {string}   glueFile   glue filename inside the package's wasm/ (e.g. "cc1-arm.mjs")
+ * @property {string}   pkg        npm package the glue ships in
+ * @property {string}   [gluePath] absolute glue path (set by the default node runner only)
+ * @property {string[]} argv
+ * @property {Array<{vfsPath:string, encoding:"utf8"|"base64", data:string}>} inputFiles
+ * @property {Array<{vfsPath:string, encoding:"utf8"|"base64"}>} outputFiles
+ */
+
+/**
+ * @typedef {Object} GccToolchainEnv
+ * @property {(job: ToolJob) => Promise<{exitCode:number, log:string, outputs:Record<string,string>, crash?:any}>} [runTool]
+ */
 
 /**
  * @typedef {Object} GccArchConfig
@@ -37,14 +65,37 @@ function flags(entry, endian) {
   return typeof entry === "function" ? entry(endian) : (entry ?? []);
 }
 
+/** The default node runner: resolve the glue from the npm package, run in the
+ *  isolated child-process pool. Loaded lazily so injecting env.runTool means
+ *  the pool (node:child_process) is never imported. */
+function makeDefaultRunTool(config) {
+  let glue = null;
+  let runIsolated = null;
+  return async (job) => {
+    if (!runIsolated) ({ runIsolated } = await import("../_worker/run.js"));
+    if (!glue) {
+      const { makeGlueResolver } = await import("./wasm-tool.js");
+      glue = makeGlueResolver({ pkg: config.pkg, localDir: config.localDir, label: config.label });
+    }
+    return runIsolated({
+      gluePath: glue(job.glueFile),
+      argv: job.argv,
+      inputFiles: job.inputFiles,
+      outputFiles: job.outputFiles,
+    });
+  };
+}
+
 /**
  * Build the 4 GCC-stage run functions for one architecture.
  * @param {GccArchConfig} config
+ * @param {GccToolchainEnv} [env]  optional injected environment (browser hosts)
  * @returns {{ runCc1:Function, runAs:Function, runLd:Function, runObjcopy:Function }}
  */
-export function makeGccToolchain(config) {
-  const glue = makeGlueResolver({ pkg: config.pkg, localDir: config.localDir, label: config.label });
+export function makeGccToolchain(config, env) {
+  const runTool = env?.runTool ?? makeDefaultRunTool(config);
   const endianOf = (args) => args.endian ?? config.defaultEndian ?? "big";
+  const job = (tool, glueFile, rest) => ({ tool, glueFile, pkg: config.pkg, ...rest });
 
   /** cc1: C source → assembly (.s). */
   async function runCc1(args) {
@@ -58,12 +109,11 @@ export function makeGccToolchain(config) {
       "/work/main.c",
       "-o", "/work/main.s",
     ];
-    const r = await runIsolated({
-      gluePath: glue(config.glue.cc1),
+    const r = await runTool(job("cc1", config.glue.cc1, {
       argv,
       inputFiles,
       outputFiles: [{ vfsPath: "/work/main.s", encoding: "utf8" }],
-    });
+    }));
     return {
       log: r.log,
       exitCode: r.exitCode,
@@ -87,12 +137,11 @@ export function makeGccToolchain(config) {
       "/work/main.s",
       "-o", "/work/main.o",
     ];
-    const r = await runIsolated({
-      gluePath: glue(config.glue.as),
+    const r = await runTool(job("as", config.glue.as, {
       argv,
       inputFiles,
       outputFiles: [{ vfsPath: "/work/main.o", encoding: "base64" }],
-    });
+    }));
     return {
       log: r.log,
       exitCode: r.exitCode,
@@ -118,15 +167,14 @@ export function makeGccToolchain(config) {
       ...libraries.map((l) => `-l${l}`),
       ...options,
     ];
-    const r = await runIsolated({
-      gluePath: glue(config.glue.ld),
+    const r = await runTool(job("ld", config.glue.ld, {
       argv,
       inputFiles,
       outputFiles: [
         { vfsPath: "/work/main.elf", encoding: "base64" },
         { vfsPath: "/work/main.map", encoding: "utf8" },
       ],
-    });
+    }));
     return {
       log: r.log,
       exitCode: r.exitCode,
@@ -146,12 +194,11 @@ export function makeGccToolchain(config) {
       "/work/main.elf",
       "/work/" + config.outputName,
     ];
-    const r = await runIsolated({
-      gluePath: glue(config.glue.objcopy),
+    const r = await runTool(job("objcopy", config.glue.objcopy, {
       argv,
       inputFiles,
       outputFiles: [{ vfsPath: "/work/" + config.outputName, encoding: "base64" }],
-    });
+    }));
     return {
       log: r.log,
       exitCode: r.exitCode,

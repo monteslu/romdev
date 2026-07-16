@@ -25,6 +25,8 @@ const KIT = [
   "common/sdk-cache.js",
   "common/wasm-tool.js",
   "common/gcc-toolchain.js",
+  "common/io.js",
+  "common/share-fs.js",
   "_worker/pool.js",
   "_worker/run.js",
   "_worker/wasm-worker.js",

@@ -9,6 +9,21 @@
 // Each WASM tool runs in a fresh worker (R12 subprocess isolation), so
 // a crash in one stage doesn't take out the server.
 //
+// ENV INJECTION (0.95.0, browser IDEs): pass `env` to run the identical
+// pipeline in a non-node host (a Web Worker). All seams optional; omitting
+// `env` gives the node behavior (worker pool + fs share reads):
+//   env.runTool  — the 4 tool runs (see common/gcc-toolchain.js ToolJob);
+//                  the host owns WASM instantiation + MEMFS mounting.
+//   env.share    — the share/gba/lib tree as a {relPath: string|Uint8Array}
+//                  manifest (stage it with common/share-fs.js
+//                  buildShareManifest so key ORDER matches node — order
+//                  feeds compile order → ar member order → ROM bytes).
+//   env.hash     — async {name:text}→hex digest for the SDK seed check
+//                  (browser: crypto.subtle; required when env is given).
+//   env.sdkCache — optional {get(key), put(key,bytes)} rebuild cache.
+// NO top-level node imports here — node bits load lazily on the default
+// paths only, so a browser bundle can load this module untouched.
+//
 // Two runtime modes:
 //
 //   libgba: true (default) — idiomatic GBA homebrew. Links against the
@@ -17,52 +32,76 @@
 //     agents get the canonical devkitARM API — BG / sprite / DMA /
 //     interrupts / sound / input / BIOS calls. ONE caveat:
 //     iprintf-style stdio output (libgba's console.c) is NOT included —
-//     see src/platforms/gba/TROUBLESHOOTING.md and the long comment
-//     block in scripts/build-libgba.sh for the trade-off rationale and
+//     see the GBA TROUBLESHOOTING doc and the long comment block in
+//     scripts/build-libgba.sh for the trade-off rationale and
 //     three workaround paths.
 //
 //   libgba: false (minimum-viable) — bare gcc + newlib only. User writes
 //     against the raw GBA hardware registers (0x04000000-0x04000208).
 //     Useful for educational builds or when you want zero SDK overhead.
 
-import { fileURLToPath } from "node:url";
-import path from "node:path";
-import { readFile, readdir } from "node:fs/promises";
-
-import {
-  runCc1arm,
-  runArmAs,
-  runArmLd,
-  runArmObjcopy,
-} from "../arm-none-eabi-gcc/gcc.js";
+import { makeArmGccTools } from "../arm-none-eabi-gcc/gcc.js";
 import { packAr } from "../common/ar.js";
-import { resolveSdkArchive } from "../common/sdk-cache.js";
+import { resolveSdkArchive, hashSources, nodeSdkIo } from "../common/sdk-cache.js";
 import { CBuild, BuildError } from "../common/c-build.js";
-import { resolveToolBaseDir } from "../common/wasm-tool.js";
+import { mapShare, dirShare } from "../common/share-fs.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-// The GBA C library tree ships in THIS package's share/ (the driver moved in
-// with the tree so a standalone consumer — e.g. the gba-lua SDK — imports
-// buildGbaC from "romdev-platform-gba" and drags in nothing else). Primary
-// resolution is package self-reference; the fallback is this file's own
-// package root (build/gba-c/ → two up). `sentinel` proves the dir is right.
-const GBA_SHARE = path.join(
-  resolveToolBaseDir({
+// ── environment resolution ──────────────────────────────────────────────────
+
+/** Node default: resolve THIS package's share/gba/lib and wrap it. The GBA C
+ *  library tree ships in this package's share/ so a standalone consumer —
+ *  e.g. the gba-lua SDK — imports buildGbaC from "romdev-platform-gba" and
+ *  drags in nothing else. Primary resolution is package self-reference; the
+ *  fallback is this file's own package root (build/gba-c/ → two up). */
+let _nodeShare = null;
+let _nodeShareRoot = null;
+async function defaultShare() {
+  if (_nodeShare) return _nodeShare;
+  const { resolveToolBaseDir } = await import("../common/wasm-tool.js");
+  const path = (await import("node:path")).default;
+  const base = resolveToolBaseDir({
     pkg: "romdev-platform-gba",
     sentinel: path.join("share", "gba", "lib", "libtonc", "gba_crt0.s"),
-    localDir: path.resolve(__dirname, "..", ".."),
+    localDir: new URL("../..", import.meta.url).href,
     label: "GBA C library tree (romdev-platform-gba/share)",
-  }),
-  "share", "gba", "lib",
-);
-const LIBGBA_DIR  = path.join(GBA_SHARE, "libgba");
-const LIBTONC_DIR = path.join(GBA_SHARE, "libtonc");
-const MAXMOD_DIR  = path.join(GBA_SHARE, "maxmod");
-// Minimal libsysbase (devoptab_list[] + reentrant write/read routing) so
-// newlib stdio (iprintf/printf) reaches a console device. Compiled from source
-// and linked with both libtonc (tte_init_con) and libgba (consoleInit).
-const SYSBASE_DIR = path.join(GBA_SHARE, "sysbase");
+  });
+  _nodeShareRoot = path.join(base, "share", "gba", "lib");
+  _nodeShare = dirShare(_nodeShareRoot);
+  return _nodeShare;
+}
+
+/** Resolve the build context (tools + share + sdk io) from an optional env. */
+let _defaultTools = null;
+async function buildCtx(env) {
+  const tools = env?.runTool
+    ? makeArmGccTools({ runTool: env.runTool })
+    : (_defaultTools ??= makeArmGccTools());
+  const share = env?.share
+    ? (typeof env.share.text === "function" ? env.share : mapShare(env.share))
+    : await defaultShare();
+  // Seed + rebuild-cache io, addressed by share-RELATIVE paths (so the seed
+  // hash is machine-independent — hashing absolute paths broke the seed check
+  // every time the tree moved). writeSeed (the seed generator) is node-only.
+  const io = {
+    readSeed: async (rel) => { try { return await share.bytes(rel); } catch { return null; } },
+    readSeedHash: async (rel) => { try { return (await share.text(rel)).trim(); } catch { return null; } },
+    ...(env ? {} : {
+      writeSeed: async (rel, bytes, hashRel, hash) => {
+        const { writeFile } = await import("node:fs/promises");
+        await writeFile(_nodeShareRoot + "/" + rel, bytes);
+        await writeFile(_nodeShareRoot + "/" + hashRel, hash + "\n");
+      },
+    }),
+    hash: env?.hash ?? hashSources,
+    ...(env?.sdkCache
+      ? { cacheGet: (k) => env.sdkCache.get(k), cachePut: (k, b) => env.sdkCache.put(k, b) }
+      : env ? {} : {
+        cacheGet: async (k) => (await nodeSdkIo()).cacheGet(k),
+        cachePut: async (k, b) => (await nodeSdkIo()).cachePut(k, b),
+      }),
+  };
+  return { tools, share, io };
+}
 
 /**
  * Compile + assemble + link a C source to a GBA ROM (.gba).
@@ -99,6 +138,7 @@ const SYSBASE_DIR = path.join(GBA_SHARE, "sysbase");
  * @param {string[]} [args.cc1Options]
  * @param {"libtonc"|"libgba"|"none"} [args.runtime="libtonc"]
  * @param {boolean} [args.libgba] legacy flag — true = libgba, false = none
+ * @param {Object} [args.env] injected environment (browser hosts) — see header
  * @returns {Promise<{ok:boolean, binary:Uint8Array|null, log:string, exitCode:number, stage:string, runtime:string}>}
  */
 export async function buildGbaC(args) {
@@ -126,7 +166,8 @@ export async function buildGbaC(args) {
     else runtime = "libtonc";
   }
 
-  const opts = { sources, headers, cc1Options, binaryIncludes, maxmod: !!args.maxmod, rebuildSdk: !!args.rebuildSdk, writeSeed: !!args.seedWrite };
+  const ctx = await buildCtx(args.env);
+  const opts = { ...ctx, sources, headers, cc1Options, binaryIncludes, maxmod: !!args.maxmod, rebuildSdk: !!args.rebuildSdk, writeSeed: !!args.seedWrite };
   if (runtime === "libtonc") return buildWithLibtonc(opts);
   if (runtime === "libgba")  return buildWithLibgba(opts);
   if (runtime === "none")    return buildMinimal(opts);
@@ -154,11 +195,12 @@ function normalizeGbaSources(args) {
  *   5. ld user objects + gba_crt0.o + libtonc.a + libgcc.a + libc.a + libnosys.a → ELF
  *   6. objcopy -O binary → final .gba ROM
  */
-async function buildWithLibtonc({ sources, headers, cc1Options, binaryIncludes = {}, maxmod = false, rebuildSdk = false, writeSeed = false }) {
+async function buildWithLibtonc({ tools, share, io, sources, headers, cc1Options, binaryIncludes = {}, maxmod = false, rebuildSdk = false, writeSeed = false }) {
+  const { runCc1arm, runArmAs, runArmLd, runArmObjcopy } = tools;
   const cb = new CBuild();
 
-  const crt0Src    = await readFile(path.join(LIBTONC_DIR, "gba_crt0.s"), "utf-8");
-  const linkScript = await readFile(path.join(LIBTONC_DIR, "gba_cart.ld"), "utf-8");
+  const crt0Src    = await share.text("libtonc/gba_crt0.s");
+  const linkScript = await share.text("libtonc/gba_cart.ld");
 
   // Auto-emit a soundbank-embedding stub when the caller passes a
   // `soundbank.bin` binary include AND opts into maxmod. The stub
@@ -171,11 +213,11 @@ async function buildWithLibtonc({ sources, headers, cc1Options, binaryIncludes =
     cb.note(`--- soundbank stub auto-emitted (.incbin "soundbank.bin") ---`);
   }
 
-  const libtoncHeaders = await loadLibtoncHeaders();
-  const sysHeaders     = await loadSysIncludeHeaders();
+  const libtoncHeaders = await loadHeaderTree(share, "libtonc/include");
+  const sysHeaders     = await loadHeaderTree(share, "libgba/sysinclude");
   // Maxmod headers (maxmod.h + mm_types.h) — only loaded when the
   // user opts into music with `maxmod: true`.
-  const maxmodHeaders  = maxmod ? await loadMaxmodHeaders() : {};
+  const maxmodHeaders  = maxmod ? await loadFlatHeaders(share, "maxmod/include", /\.h$/i) : {};
 
   const libtoncCc1Options = [
     ...cc1Options,
@@ -248,14 +290,16 @@ async function buildWithLibtonc({ sources, headers, cc1Options, binaryIncludes =
     // an edit is flagged (sdkEditIgnored), never silently dropped.
     const sdkWarnings = [];
     const toncRes = await sdkArchive({
+      share, io,
       name: "libtonc",
-      srcDirs: [path.join(LIBTONC_DIR, "src"), SYSBASE_DIR],
-      seedBase: path.join(LIBTONC_DIR, "libtonc"),
+      srcDirs: ["libtonc/src", "sysbase"],
+      seedBase: "libtonc/libtonc",
       rebuild: rebuildSdk, writeSeed,
       compile: async () => {
         const r = await compileSdkObjects({
+          share, tools,
           key: "libtonc",
-          srcDirs: [path.join(LIBTONC_DIR, "src"), SYSBASE_DIR],
+          srcDirs: ["libtonc/src", "sysbase"],
           headers: { ...sysHeaders, ...libtoncHeaders, ...maxmodHeaders, ...headers },
         });
         return r.ok ? { ok: true, archive: packAr(r.objects) } : r;
@@ -269,16 +313,18 @@ async function buildWithLibtonc({ sources, headers, cc1Options, binaryIncludes =
 
     let maxmodAr = null;
     if (maxmod) {
-      const mmHeaders = await loadMaxmodAsmHeaders();
+      const mmHeaders = await loadFlatHeaders(share, "maxmod/asm_include", /\.(inc|h)$/i);
       const mmRes = await sdkArchive({
+        share, io,
         name: "maxmod",
-        srcDirs: [path.join(MAXMOD_DIR, "source"), path.join(MAXMOD_DIR, "source_gba")],
-        seedBase: path.join(MAXMOD_DIR, "maxmod"),
+        srcDirs: ["maxmod/source", "maxmod/source_gba"],
+        seedBase: "maxmod/maxmod",
         rebuild: rebuildSdk, writeSeed,
         compile: async () => {
           const r = await compileSdkObjects({
+            share, tools,
             key: "maxmod",
-            srcDirs: [path.join(MAXMOD_DIR, "source"), path.join(MAXMOD_DIR, "source_gba")],
+            srcDirs: ["maxmod/source", "maxmod/source_gba"],
             headers: { ...sysHeaders, ...maxmodHeaders, ...mmHeaders },
             cppDefines: ["SYS_GBA=1"],
           });
@@ -297,13 +343,13 @@ async function buildWithLibtonc({ sources, headers, cc1Options, binaryIncludes =
     // crt*.o + libgcc/libc/libnosys are gcc/newlib toolchain runtime.
     const archives = {
       "libtonc.a":  toncRes.archive,
-      "crti.o":     new Uint8Array(await readFile(path.join(LIBTONC_DIR, "crti.o"))),
-      "crtn.o":     new Uint8Array(await readFile(path.join(LIBTONC_DIR, "crtn.o"))),
-      "crtbegin.o": new Uint8Array(await readFile(path.join(LIBTONC_DIR, "crtbegin.o"))),
-      "crtend.o":   new Uint8Array(await readFile(path.join(LIBTONC_DIR, "crtend.o"))),
+      "crti.o":     await share.bytes("libtonc/crti.o"),
+      "crtn.o":     await share.bytes("libtonc/crtn.o"),
+      "crtbegin.o": await share.bytes("libtonc/crtbegin.o"),
+      "crtend.o":   await share.bytes("libtonc/crtend.o"),
     };
     if (maxmodAr) archives["libmm.a"] = maxmodAr;
-    const targetLibs = await readTargetArchives();
+    const targetLibs = await readTargetArchives(share);
     Object.assign(archives, targetLibs);
 
     // Wrap the libs in --start-group / --end-group so the linker
@@ -352,20 +398,21 @@ async function buildWithLibtonc({ sources, headers, cc1Options, binaryIncludes =
  *   4. ld user objects + gba_crt0.o + libgba.a + libgcc.a + libc.a → ELF
  *   5. objcopy -O binary → final .gba ROM
  */
-async function buildWithLibgba({ sources, headers, cc1Options, rebuildSdk = false, writeSeed = false }) {
+async function buildWithLibgba({ tools, share, io, sources, headers, cc1Options, rebuildSdk = false, writeSeed = false }) {
+  const { runCc1arm, runArmAs, runArmLd, runArmObjcopy } = tools;
   const cb = new CBuild();
 
   // Read the libgba bundle once (crt0 + linker script; the SDK itself is
   // compiled from source below, not linked from libgba.a).
-  const crt0Src   = await readFile(path.join(LIBGBA_DIR, "gba_crt0.s"), "utf-8");
-  const linkScript = await readFile(path.join(LIBGBA_DIR, "gba_cart.ld"), "utf-8");
+  const crt0Src   = await share.text("libgba/gba_crt0.s");
+  const linkScript = await share.text("libgba/gba_cart.ld");
 
   // Discover libgba's headers + the newlib + gcc system headers
   // (stdint.h, stddef.h, etc. that libgba's gba_types.h depends on).
   // Both get mounted at /work/... so cc1's `-iquote /work -I /work`
   // (from runCc1arm) picks them up via #include "..." AND <...>.
-  const libgbaHeaders = await loadLibgbaHeaders();
-  const sysHeaders = await loadSysIncludeHeaders();
+  const libgbaHeaders = await loadHeaderTree(share, "libgba/include");
+  const sysHeaders = await loadHeaderTree(share, "libgba/sysinclude");
 
   // libgba uses Thumb mode + interwork. -ffreestanding so cc1 doesn't
   // emit references to host-only stubs that newlib might not provide.
@@ -418,14 +465,16 @@ async function buildWithLibgba({ sources, headers, cc1Options, rebuildSdk = fals
     // devoptab routing so libgba's consoleInit() + iprintf work.
     const sdkWarnings = [];
     const gbaRes = await sdkArchive({
+      share, io,
       name: "libgba",
-      srcDirs: [path.join(LIBGBA_DIR, "src"), SYSBASE_DIR],
-      seedBase: path.join(LIBGBA_DIR, "libgba"),
+      srcDirs: ["libgba/src", "sysbase"],
+      seedBase: "libgba/libgba",
       rebuild: rebuildSdk, writeSeed,
       compile: async () => {
         const r = await compileSdkObjects({
+          share, tools,
           key: "libgba",
-          srcDirs: [path.join(LIBGBA_DIR, "src"), SYSBASE_DIR],
+          srcDirs: ["libgba/src", "sysbase"],
           headers: { ...sysHeaders, ...libgbaHeaders, ...headers },
         });
         return r.ok ? { ok: true, archive: packAr(r.objects) } : r;
@@ -441,12 +490,12 @@ async function buildWithLibgba({ sources, headers, cc1Options, rebuildSdk = fals
     // libgba archive from seed/source; crt*.o + libgcc/libc/libnosys are toolchain.
     const archives = {
       "libgba.a":   gbaRes.archive,
-      "crti.o":     new Uint8Array(await readFile(path.join(LIBGBA_DIR, "crti.o"))),
-      "crtn.o":     new Uint8Array(await readFile(path.join(LIBGBA_DIR, "crtn.o"))),
-      "crtbegin.o": new Uint8Array(await readFile(path.join(LIBGBA_DIR, "crtbegin.o"))),
-      "crtend.o":   new Uint8Array(await readFile(path.join(LIBGBA_DIR, "crtend.o"))),
+      "crti.o":     await share.bytes("libgba/crti.o"),
+      "crtn.o":     await share.bytes("libgba/crtn.o"),
+      "crtbegin.o": await share.bytes("libgba/crtbegin.o"),
+      "crtend.o":   await share.bytes("libgba/crtend.o"),
     };
-    const targetLibs = await readTargetArchives();
+    const targetLibs = await readTargetArchives(share);
     Object.assign(archives, targetLibs);
 
     // Link order matters for `-l` archives and crt*.o files. Standard
@@ -503,7 +552,8 @@ async function buildWithLibgba({ sources, headers, cc1Options, rebuildSdk = fals
  * Same shape as buildWithLibgba but skips crt0 + libgba.a. The user
  * must provide their own _start / main entry point.
  */
-async function buildMinimal({ sources, headers, cc1Options }) {
+async function buildMinimal({ tools, sources, headers, cc1Options }) {
+  const { runCc1arm, runArmAs, runArmLd, runArmObjcopy } = tools;
   const cb = new CBuild();
   try {
     const objects = {};
@@ -533,148 +583,69 @@ SECTIONS { .text : { *(.text*) *(.rodata*) } > ROM }
   }
 }
 
-/**
- * Load every libtonc header file under include/ into a {name: contents}
- * map suitable for passing as `headers` to cc1. Cached per-process.
- */
-let _libtoncHeadersCache = null;
-async function loadLibtoncHeaders() {
-  if (_libtoncHeadersCache) return _libtoncHeadersCache;
-  const incDir = path.join(LIBTONC_DIR, "include");
-  const out = {};
-  async function walk(dir, rel = "") {
-    const entries = await readdir(dir, { withFileTypes: true });
-    for (const ent of entries) {
-      const full = path.join(dir, ent.name);
-      const subRel = rel ? `${rel}/${ent.name}` : ent.name;
-      if (ent.isDirectory()) {
-        await walk(full, subRel);
-      } else if (ent.isFile() && /\.(h|inc)$/i.test(ent.name)) {
-        out[subRel] = await readFile(full, "utf-8");
-      }
-    }
-  }
-  await walk(incDir);
-  _libtoncHeadersCache = out;
-  return out;
-}
+// ── share-tree readers (cached per share instance) ──────────────────────────
 
-let _maxmodHeadersCache = null;
-async function loadMaxmodHeaders() {
-  if (_maxmodHeadersCache) return _maxmodHeadersCache;
-  const incDir = path.join(MAXMOD_DIR, "include");
-  const out = {};
-  const entries = await readdir(incDir);
-  for (const name of entries) {
-    if (/\.h$/i.test(name)) {
-      out[name] = await readFile(path.join(incDir, name), "utf-8");
-    }
-  }
-  _maxmodHeadersCache = out;
-  return out;
+const _shareCaches = new WeakMap();
+function shareCache(share) {
+  let c = _shareCaches.get(share);
+  if (!c) { c = new Map(); _shareCaches.set(share, c); }
+  return c;
 }
 
 /**
- * Maxmod's assembly include files (asm_include/*.inc) — the macro/struct/def
- * includes its .s sources pull in via #include. Needed to compile maxmod from
- * source. Keyed by bare name (how the .s files reference them). Cached.
+ * Load every header (.h/.inc) under a share subtree into a {relName: contents}
+ * map suitable for passing as `headers` to cc1 — keys relative to the subtree
+ * root (e.g. "tonc.h", "sys/types.h"). Cached per share instance.
  */
-let _maxmodAsmHeadersCache = null;
-async function loadMaxmodAsmHeaders() {
-  if (_maxmodAsmHeadersCache) return _maxmodAsmHeadersCache;
+async function loadHeaderTree(share, prefix) {
+  const cache = shareCache(share);
+  const key = "tree:" + prefix;
+  if (cache.has(key)) return cache.get(key);
   const out = {};
-  const dir = path.join(MAXMOD_DIR, "asm_include");
-  let entries;
-  try { entries = await readdir(dir); } catch { entries = []; }
-  for (const name of entries) {
-    if (/\.(inc|h)$/i.test(name)) out[name] = await readFile(path.join(dir, name), "utf-8");
+  for (const rel of await share.list(prefix)) {
+    if (!/\.(h|inc)$/i.test(rel)) continue;
+    out[rel.slice(prefix.length + 1)] = await share.text(rel);
   }
-  _maxmodAsmHeadersCache = out;
+  cache.set(key, out);
+  return out;
+}
+
+/** Load headers from ONE directory level (no recursion into subdirs), keyed by
+ *  bare filename — the maxmod include/asm_include shape. Cached. */
+async function loadFlatHeaders(share, prefix, pattern) {
+  const cache = shareCache(share);
+  const key = "flat:" + prefix + ":" + pattern;
+  if (cache.has(key)) return cache.get(key);
+  const out = {};
+  for (const rel of await share.list(prefix)) {
+    const name = rel.slice(prefix.length + 1);
+    if (name.includes("/") || !pattern.test(name)) continue;
+    out[name] = await share.text(rel);
+  }
+  cache.set(key, out);
   return out;
 }
 
 /**
- * Load every libgba header file under include/ into a {name: contents}
- * map suitable for passing as `headers` to cc1. Cached per-process.
+ * Read libgcc.a + libc.a + libnosys.a — the 3 ARM target archives bundled in
+ * the share tree (self-contained, like Genesis-C does it; previously read from
+ * the 14 GB build/arm-toolchain/install tree, which coupled the package to the
+ * build workspace). Cached per share instance.
  */
-let _libgbaHeadersCache = null;
-async function loadLibgbaHeaders() {
-  if (_libgbaHeadersCache) return _libgbaHeadersCache;
-  const incDir = path.join(LIBGBA_DIR, "include");
-  const out = {};
-  async function walk(dir, rel = "") {
-    const entries = await readdir(dir, { withFileTypes: true });
-    for (const ent of entries) {
-      const full = path.join(dir, ent.name);
-      const subRel = rel ? `${rel}/${ent.name}` : ent.name;
-      if (ent.isDirectory()) {
-        await walk(full, subRel);
-      } else if (ent.isFile() && /\.(h|inc)$/i.test(ent.name)) {
-        out[subRel] = await readFile(full, "utf-8");
-      }
-    }
-  }
-  await walk(incDir);
-  _libgbaHeadersCache = out;
-  return out;
-}
-
-/**
- * Load every newlib + gcc system header from the bundled sysinclude/
- * tree. cc1 doesn't search a default system path under our worker
- * setup, so we mount the headers into /work/ via the `headers` arg.
- *
- * About 159 files / 2.4 MB at the moment. Cached per-process.
- */
-let _sysHeadersCache = null;
-async function loadSysIncludeHeaders() {
-  if (_sysHeadersCache) return _sysHeadersCache;
-  const sysDir = path.join(LIBGBA_DIR, "sysinclude");
-  const out = {};
-  async function walk(dir, rel = "") {
-    let entries;
-    try { entries = await readdir(dir, { withFileTypes: true }); }
-    catch { return; }
-    for (const ent of entries) {
-      const full = path.join(dir, ent.name);
-      const subRel = rel ? `${rel}/${ent.name}` : ent.name;
-      if (ent.isDirectory()) {
-        await walk(full, subRel);
-      } else if (ent.isFile() && /\.(h|inc)$/i.test(ent.name)) {
-        out[subRel] = await readFile(full, "utf-8");
-      }
-    }
-  }
-  await walk(sysDir);
-  _sysHeadersCache = out;
-  return out;
-}
-
-/**
- * Read libgcc.a + libc.a + libnosys.a from the native arm-none-eabi
- * install. These are ARM target archives so they don't care that they
- * were built natively. Cached per-process.
- */
-let _targetArchivesCache = null;
-async function readTargetArchives() {
-  if (_targetArchivesCache) return _targetArchivesCache;
-  // The 3 ARM target archives (libc/libnosys/libgcc) are bundled in the
-  // platform lib dir — self-contained, like Genesis-C does it. (Previously
-  // these were read from the 14 GB build/arm-toolchain/install tree; that
-  // coupled the package to the build workspace. Copied into src so the GBA
-  // package ships them itself — ~15 MB, the real GBA payload beyond wasm.)
-  const archDir = path.join(GBA_SHARE, "arm-archives");
+async function readTargetArchives(share) {
+  const cache = shareCache(share);
+  if (cache.has("target-archives")) return cache.get("target-archives");
   const out = {};
   for (const name of ["libc.a", "libnosys.a", "libgcc.a"]) {
     try {
-      out[name] = new Uint8Array(await readFile(path.join(archDir, name)));
+      out[name] = await share.bytes("arm-archives/" + name);
     } catch (e) {
       // libnosys may not be present on every toolchain; skip if missing.
       if (name === "libnosys.a") continue;
       throw e;
     }
   }
-  _targetArchivesCache = out;
+  cache.set("target-archives", out);
   return out;
 }
 
@@ -690,42 +661,39 @@ async function readTargetArchives() {
  *   - .s  → cc1 -E (cpp: #include/#define) → as     (maxmod's GAS+cpp asm)
  *
  * @param {Object} a
+ * @param {Object} a.share share accessor
+ * @param {Object} a.tools the 4 ARM tool runners
  * @param {string} a.key cache key (sdk name + variant)
- * @param {string[]} a.srcDirs absolute dirs to scan for .c/.s
+ * @param {string[]} a.srcDirs share-relative dirs to scan for .c/.s
  * @param {Record<string,string>} a.headers headers map for cc1 (sys + sdk + src-local)
  * @param {string[]} [a.cppDefines] e.g. ["SYS_GBA=1"] applied to .s preprocessing
  * @param {string[]} [a.cc1Options]
  * @returns {Promise<{ok:boolean, objects?:Record<string,Uint8Array>, stage?:string, log?:string}>}
  */
 const _sdkObjCache = new Map();
-async function compileSdkObjects({ key, srcDirs, headers, cppDefines = [], cc1Options = [] }) {
+async function compileSdkObjects({ share, tools, key, srcDirs, headers, cppDefines = [], cc1Options = [] }) {
+  const { runCc1arm, runArmAs } = tools;
   // Gather source files (preserve sub-path in the object name to avoid clashes).
   // Also collect .s/.inc files as AVAILABLE INCLUDES — GAS asm often #includes
   // sibling .s "type" files (e.g. libtonc's tte_types.s) and .inc macro files.
   const files = [];
   const localIncludes = {};
   for (const dir of srcDirs) {
-    async function walk(d, rel = "") {
-      let ents;
-      try { ents = await readdir(d, { withFileTypes: true }); } catch { return; }
-      for (const e of ents) {
-        const full = path.join(d, e.name);
-        const sub = rel ? `${rel}/${e.name}` : e.name;
-        if (e.isDirectory()) await walk(full, sub);
-        else if (/\.(c|s)$/i.test(e.name)) {
-          files.push({ full, sub });
-          if (/\.s$/i.test(e.name)) localIncludes[e.name] = await readFile(full, "utf-8");
-        } else if (/\.(inc|h)$/i.test(e.name)) {
-          localIncludes[e.name] = await readFile(full, "utf-8");
-        }
+    for (const rel of await share.list(dir)) {
+      const sub = rel.slice(dir.length + 1);
+      const base = sub.split("/").pop();
+      if (/\.(c|s)$/i.test(base)) {
+        files.push({ rel, sub });
+        if (/\.s$/i.test(base)) localIncludes[base] = await share.text(rel);
+      } else if (/\.(inc|h)$/i.test(base)) {
+        localIncludes[base] = await share.text(rel);
       }
     }
-    await walk(dir);
   }
   headers = { ...headers, ...localIncludes };
   // Cache key folds in every source file's bytes so an edit busts the cache.
   const srcTexts = {};
-  for (const f of files) srcTexts[f.sub] = await readFile(f.full, "utf-8");
+  for (const f of files) srcTexts[f.sub] = await share.text(f.rel);
   const cacheKey = key + "\0" + Object.entries(srcTexts).map(([k, v]) => k + ":" + v.length).join("|");
   if (_sdkObjCache.has(cacheKey)) return _sdkObjCache.get(cacheKey);
 
@@ -767,21 +735,15 @@ async function compileSdkObjects({ key, srcDirs, headers, cppDefines = [], cc1Op
   return result;
 }
 
-/** Read every .c/.s source under the given dirs into a {relpath: text} map (for hashing). */
-async function readSdkSources(srcDirs) {
+/** Read every .c/.s/.h/.inc source under the given share dirs into a
+ *  {relpath: text} map (for hashing). Keys are share-RELATIVE (stable across
+ *  machines and tree moves — hashing absolute paths broke the seed check). */
+async function readSdkSources(share, srcDirs) {
   const out = {};
   for (const dir of srcDirs) {
-    async function walk(d, rel = "") {
-      let ents;
-      try { ents = await readdir(d, { withFileTypes: true }); } catch { return; }
-      for (const e of ents) {
-        const full = path.join(d, e.name);
-        const sub = rel ? `${rel}/${e.name}` : e.name;
-        if (e.isDirectory()) await walk(full, sub);
-        else if (/\.(c|s|h|inc)$/i.test(e.name)) out[dir + "/" + sub] = await readFile(full, "utf-8");
-      }
+    for (const rel of await share.list(dir)) {
+      if (/\.(c|s|h|inc)$/i.test(rel)) out[rel] = await share.text(rel);
     }
-    await walk(dir);
   }
   return out;
 }
@@ -792,8 +754,8 @@ async function readSdkSources(srcDirs) {
  * vendored source was edited but not rebuilt. `compile` produces the archive
  * from source (compileSdkObjects + packAr).
  */
-async function sdkArchive({ name, srcDirs, seedBase, rebuild, writeSeed, compile }) {
-  const sources = await readSdkSources(srcDirs);
+async function sdkArchive({ share, io, name, srcDirs, seedBase, rebuild, writeSeed, compile }) {
+  const sources = await readSdkSources(share, srcDirs);
   return resolveSdkArchive({
     name,
     sources,
@@ -802,5 +764,6 @@ async function sdkArchive({ name, srcDirs, seedBase, rebuild, writeSeed, compile
     rebuild,
     writeSeed,
     compileFromSource: compile,
+    io,
   });
 }

@@ -20,7 +20,7 @@ M68K="$PKGS/romdev-toolchain-m68k-gcc/build"
 
 for dest in "$GBA" "$M68K"; do
   mkdir -p "$dest/common" "$dest/_worker"
-  for f in ar.js c-build.js sdk-cache.js wasm-tool.js gcc-toolchain.js; do
+  for f in ar.js c-build.js sdk-cache.js wasm-tool.js gcc-toolchain.js io.js share-fs.js; do
     cp "$SRC/common/$f" "$dest/common/$f"
   done
   for f in pool.js run.js wasm-worker.js; do
