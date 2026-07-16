@@ -201,3 +201,51 @@ test("disasm({target:'rom'}) accepts a banked SNES address ≥ 0x10000 (no da65 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// The dangerous twin (second field report): dodging the abort by passing a
+// bank-LOCAL window address + bank:N used to SUCCEED but read bank 0's bytes and
+// return a plausible disasm under the caller's bank-N label — silently the wrong
+// 32KB. disasm({bank:N}) must now honor the LoROM bank like readCart does.
+test("disasm({target:'rom', bank:N}) reads bank N on SNES LoROM, not bank 0", async () => {
+  const h = handlers();
+  const dir = await mkdtemp(path.join(os.tmpdir(), "snes-bank-"));
+  try {
+    // 256KB LoROM. Distinct code in bank 0 (file 0x3CD) vs bank 2 (file 0x103CD).
+    const rom = new Uint8Array(0x40000).fill(0xEA);
+    rom.set([0xA9, 0x00, 0x8D, 0x00, 0x21], 0x3CD);    // bank0: lda #$00 / sta $2100
+    rom.set([0xA9, 0x42, 0x8D, 0x0C, 0x42], 0x103CD);  // bank2: lda #$42 / sta $420C
+    const romPath = path.join(dir, "game.sfc");
+    await writeFile(romPath, rom);
+
+    // The report's exact call shape: bank-local $83CD + bank:2 → wants $0283CD.
+    const res = await h.disassembleRom({ platform: "snes", path: romPath, startAddress: 0x83CD, bank: 2, length: 32, inline: true });
+    const p = parse(res);
+    const asm = p.asm || "";
+    assert.match(asm, /lda\s+#\$42/i, "must read BANK 2's bytes (lda #$42)");
+    assert.doesNotMatch(asm, /lda\s+#\$00/i, "must NOT read bank 0's bytes (the silent-wrong-bank bug)");
+    assert.match(asm, /103CD/i, "file offset resolves to bank 2 (0x103CD), not bank 0 (0x3CD)");
+
+    // Passing the full 24-bit address gives the identical result.
+    const res2 = await h.disassembleRom({ platform: "snes", path: romPath, startAddress: 0x0283CD, length: 32, inline: true });
+    assert.match(parse(res2).asm || "", /lda\s+#\$42/i, "full 24-bit address reads bank 2 too");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// Flat platforms have no cart banking — a non-zero `bank` must be REJECTED, not
+// silently applied to a flat read under a banked label.
+test("disasm({target:'rom', bank:N}) is rejected on flat platforms (genesis)", async () => {
+  const h = handlers();
+  const dir = await mkdtemp(path.join(os.tmpdir(), "gen-bank-"));
+  try {
+    const rom = new Uint8Array(0x400); rom.set([0x60, 0xFE], 0x200); // bra .
+    const romPath = path.join(dir, "game.md");
+    await writeFile(romPath, rom);
+    const res = await h.disassembleRom({ platform: "genesis", path: romPath, startAddress: 0x200, bank: 2, length: 8 });
+    assert.equal(res.isError, true, "a bank on a flat platform must error, not silently read flat");
+    assert.match(res.content.find((c) => c.type === "text").text, /not applicable|flat/i);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
