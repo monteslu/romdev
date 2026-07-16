@@ -4,6 +4,70 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.94.0 — 2026-07-16
+
+Follow-up to the 0.93.0 SNES readability fix, from a fresh annotation session.
+0.93.0 stopped the `.byte` floor but left two quality gaps; both are fixed, plus
+two token-efficiency wins.
+
+**65816 readability — full M/X dataflow + coverage pass**
+- **Per-instruction M/X width tracking (full dataflow).** da65's info-file
+  `ADDRMODE` is a fixed ENTRY seed — it doesn't follow an in-stream `rep #$30` /
+  `sep #$20`, so a 16-bit immediate after a width change decoded one byte short
+  (`lda #$0000` read as `lda #$00` + a spurious `brk`) and desynced the routine.
+  Each span is now LINEAR-WALKED with a real 65816 length decoder (base-length
+  table derived from da65 + the exact width-dependent immediate set) that tracks
+  M/X per instruction and splits the span into maximal width-homogeneous ranges;
+  a single da65 call seeds every range to its true `ADDRMODE`. So `and #$00FF`,
+  `ldx #$0000`, `lda #$1234` etc. decode at full width even when the `rep` that
+  set it was several instructions back — with correct `.a8/.a16/.i8/.i16`.
+- **Entry-width inference.** A function entered in 16-bit mode from its caller
+  (no leading `rep`/`sep` to re-sync) had the wrong opening width. Each span now
+  tries the candidate entry widths and keeps the one with the fewest misdecode
+  symptoms (stray `brk`/`cop`/`wdm` — the desync fingerprint). Bank0's `brk`
+  misdecodes dropped ~3× on the reference cart.
+- **Reachable code the analysis engine missed is now recovered — across the
+  whole cc65 family (not just SNES).** A small gap sandwiched between two code
+  spans is very likely a routine entered only via a branch (a dispatch loop
+  branched into, never `call`ed) — the analysis engine's function detection skips
+  it, so it used to fall out as a `.byte` blob. Such gaps (≤1KB, code on both
+  sides) are decoded speculatively and KEPT when they round-trip byte-exact; a
+  data gap floors back to `.byte`. This now runs for **every cc65-family platform**
+  — 6502 (nes/c64/atari/pce/lynx/gametank) as well as 65816 (snes). Bulk/leading/
+  trailing data is left as `.byte` un-probed (fast). Byte-exactness holds
+  throughout. (The M/X width machinery above is 65816-only — the 6502 cores have
+  no width state. The GNU-toolchain families — m68k/z80/sm83/arm — deliberately
+  do NOT use a code-span map: objdump does a full linear sweep and already
+  decodes every byte, so a span map would only degrade them by `.byte`-ing
+  correctly-decoded gaps.)
+- **`readablePercent` is honest.** Measured over the identified code spans only;
+  a speculatively-probed gap that floored to `.byte` no longer inflates the
+  denominator, and the width fixes remove the "high % but misleading stream"
+  case. A 100% bank is now trustworthy.
+
+Net on the reference 1MB LoROM cart: byte-identical end-to-end, ~75% average
+disassembled as instructions (100% on code banks), ~43s.
+
+**`breakpoint({on:'pc'})` miss now reports the main thread**
+- On a miss, the frame-boundary `pcNow` almost always lands on the NMI/idle
+  handler — useless for "where was the code I'm hunting." The response now also
+  carries **`mainThreadPc`** (the busiest PC over ~a frame of single-stepping —
+  the main loop) plus a `pcHistogram` of the top PCs by hit count. The sampling
+  is save-state-wrapped, so it has **zero side effects** (the emulator is
+  restored, frame counter included).
+
+**Token efficiency**
+- **`symbols({op:'analyze'})` gained `summary:true` and `topN`.** The full
+  function+string table is ~44K chars on a 1MB ROM (it overflowed the tool-result
+  limit and spilled to a file). `summary:true` returns counts + entrypoints + the
+  top functions (by size, then callers) + a few sample strings (~2.5K chars) —
+  the slice the disassemble workflow actually extracts. `topN` bounds the full
+  list.
+- **`frame({op:'stepInstructions', stepFormat:'compact'})`.** A triage trace's
+  signal is "which loop is the CPU in"; the default per-step objects are ~90%
+  padding for that. `compact` returns one string per step (`$PC flow->$target`)
+  plus a `pcRanges` loop-map with hit counts.
+
 ## 0.93.0 — 2026-07-16
 
 **The 65816 (SNES) data-only readability floor is fixed.** `disasm({target:'project'})` on a SNES

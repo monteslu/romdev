@@ -91,4 +91,20 @@ test("SNES PC breakpoint + read watch + single-step (snes9x 65816)", { timeout: 
   }));
   assert.equal(rd.notSupported, undefined, "runUntilRead notSupported — read-watch patch missing?");
   assert.ok(typeof rd.hit === "boolean", "runUntilRead returned no hit field: " + JSON.stringify(rd));
+
+  // 6) On a MISS, breakpoint({on:'pc'}) reports mainThreadPc — the busiest PC over
+  // ~a frame of single-stepping (the main loop), not the frame-boundary idle/NMI
+  // snapshot. Arm on an address the CPU never reaches (a data byte, not an
+  // instruction boundary) so it misses, then assert the diagnostic.
+  const miss = toJSON(await client.callTool({
+    name: "breakpoint", arguments: { on: "pc",  address: 0x00FFEE, maxFrames: 30 },
+  }));
+  assert.equal(miss.hit, false, "expected a miss on the unreachable address: " + JSON.stringify(miss));
+  assert.ok(miss.mainThreadPc, "miss did not report mainThreadPc: " + JSON.stringify(miss).slice(0, 260));
+  assert.ok(Array.isArray(miss.pcHistogram) && miss.pcHistogram.length > 0,
+    "miss did not report a pcHistogram: " + JSON.stringify(miss).slice(0, 260));
+  // mainThreadPc must be a real code address in the LoROM code window ($8000+),
+  // not $0 / an interrupt vector. The main loop lives in bank 0 code.
+  const mtPc = parseInt(miss.mainThreadPc.replace("$", ""), 16);
+  assert.ok(mtPc >= 0x8000, "mainThreadPc is not in the code window: " + miss.mainThreadPc);
 });
