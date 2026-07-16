@@ -625,23 +625,29 @@ const PLANNERS = {
   // ($000000..resetPC) are not in any region → shipped as header.bin + prepended;
   // trailing pad re-added. Native recipe byte-identical proven.
   genesis(data, regions) {
-    const reg = regions.find((r) => r.file === "rom.asm") || regions[0];
-    const start = reg.startAddress;
-    const regionLen = reg.bytes.length;
+    // The code region may be a single `rom.asm` OR several `chunkN.asm` pieces
+    // (planRegions chunks a large flat region for parallel reassembly). Treat the
+    // code span as [first region's start .. last region's end]; the header is the
+    // bytes before it, the pad the bytes after.
+    const code = regions.filter((r) => r.kind !== "data").sort((a, b) => a.fileOffset - b.fileOffset);
+    const first = code[0] || regions[0];
+    const last = code[code.length - 1] || regions[0];
+    const start = first.startAddress;
+    const codeEnd = last.fileOffset + last.bytes.length;
     const header = data.slice(0, start);
-    const pad = trailingPad(data, start + regionLen);
+    const pad = trailingPad(data, codeEnd);
+    const nChunks = code.length;
+    const fileList = nChunks > 1 ? `${nChunks} chunkN.asm pieces (concatenated in offset order)` : `rom.asm region`;
     return {
       blobs: { "header.bin": header },
       build: null,
       verifiable: pad.uniform,
       notes:
         `Genesis rebuild = header.bin (${header.length} B: 68k vectors + Sega header, up to the reset ` +
-        `PC $${start.toString(16)}) + rom.asm region + ${pad.count} byte(s) of 0x${pad.byte.toString(16).padStart(2, "0")} trailing pad, ` +
-        `concatenated in file order. build({platform:'genesis'}) is vasm68k/SGDK and rewrites the ` +
-        `$18E checksum — no build() route. Rebuild natively: reassembleForPlatform({platform:'genesis', ` +
-        `bytes:<rom.asm region bytes>, startAddress:0x${start.toString(16)}}) (or m68k-elf-as → ld → ` +
-        `objcopy; the LINKED objcopy output starts at offset 0 — take bin.slice(0, ${regionLen})), then ` +
-        `header.bin ++ region ++ pad. The $18E checksum is inside header.bin (re-added verbatim). ` +
+        `PC $${start.toString(16)}) + ${fileList} + ${pad.count} byte(s) of 0x${pad.byte.toString(16).padStart(2, "0")} trailing pad, ` +
+        `concatenated in file order. PREFER the one-call build({output:'reassemble', platform:'genesis', path}) ` +
+        `(splices every chunk into original.rom by offset — byte-identical, handles the split automatically). ` +
+        `build({platform:'genesis'}) is vasm68k/SGDK and rewrites the $18E checksum — no direct build() route. ` +
         (pad.uniform ? `Byte-identical proven.` : `WARNING: trailing pad is non-uniform — capture the tail separately.`),
     };
   },
