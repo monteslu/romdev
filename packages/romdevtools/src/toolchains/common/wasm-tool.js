@@ -13,7 +13,8 @@
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { textFile, binaryFile } from "../_worker/run.js";
+// (textFile/binaryFile live in the pure ./io.js — no worker import here, so
+// importing this module never pulls the child-process pool.)
 
 /**
  * Resolve a single tool glue FILE from its package, falling back to a local
@@ -33,6 +34,9 @@ export function resolveGlueFile({ pkg, file, localDir, label }) {
     const p = path.join(path.dirname(fileURLToPath(u)), "wasm", file);
     if (existsSync(p)) return p;
   } catch { /* package not resolvable — fall through to local */ }
+  // localDir may be a file: URL (wrappers that must stay free of top-level
+  // node imports pass `new URL(".", import.meta.url).href`) — convert here.
+  if (localDir?.startsWith("file:")) localDir = fileURLToPath(localDir);
   const local = path.join(localDir, "wasm", file);
   if (existsSync(local)) return local;
   throw new Error(`${label ?? file} WASM not found — install ${pkg}`);
@@ -56,6 +60,7 @@ export function resolveToolBaseDir({ pkg, sentinel, localDir, label }) {
     const dir = path.dirname(fileURLToPath(u));
     if (existsSync(path.join(dir, sentinel))) return dir;
   } catch { /* package not resolvable — fall through to local */ }
+  if (localDir?.startsWith("file:")) localDir = fileURLToPath(localDir);
   if (existsSync(path.join(localDir, sentinel))) return localDir;
   throw new Error(`${label ?? pkg} WASM not found — install ${pkg}`);
 }
@@ -78,24 +83,7 @@ export function makeGlueResolver({ pkg, localDir, label }) {
     (cache[file] ??= resolveGlueFile({ pkg, file, localDir, label }));
 }
 
-/**
- * Marshal text + binary virtual-file maps into the runIsolated() inputFiles[]
- * array, all rooted at /work. Order: the primary source first (if given), then
- * text entries, then binary entries — matching what the wrappers built by hand.
- *
- * @param {Object} a
- * @param {{name: string, text: string}} [a.primary]   the main source (e.g. main.c → /work/main.c)
- * @param {Record<string,string>} [a.text]             virtual text files (headers, includes, link scripts)
- * @param {Record<string,Uint8Array>} [a.binary]       virtual binary files (objects, archives, binary includes)
- * @returns {import("../_worker/run.js").InputFile[]}
- */
-export function marshalInputs({ primary, text = {}, binary = {} } = {}) {
-  /** @type {import("../_worker/run.js").InputFile[]} */
-  const files = [];
-  if (primary) files.push(textFile("/work/" + primary.name, primary.text));
-  for (const [name, content] of Object.entries(text))
-    files.push(textFile("/work/" + name, content));
-  for (const [name, bytes] of Object.entries(binary))
-    files.push(binaryFile("/work/" + name, bytes));
-  return files;
-}
+// marshalInputs (and textFile/binaryFile) are pure and live in ./io.js so the
+// browser-loadable pipeline can import them without touching node. Re-exported
+// for the existing wrappers that import them from here.
+export { marshalInputs, textFile, binaryFile } from "./io.js";

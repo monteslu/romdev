@@ -9,6 +9,22 @@
 // Each WASM tool runs in a fresh worker (R12 subprocess isolation), so
 // a crash in one stage doesn't take out the server.
 //
+// ENV INJECTION (0.95.0, browser IDEs): pass `env` to run the identical
+// pipeline in a non-node host (a Web Worker). All seams optional; omitting
+// `env` gives the node behavior (worker pool + fs share reads):
+//   env.runTool  — the 4 gcc tool runs (see common/gcc-toolchain.js ToolJob);
+//                  the host owns WASM instantiation + MEMFS mounting.
+//   env.loadGlue — sjasm/bintos module factories (see sjasm/sjasm.js).
+//   env.share    — the share/genesis/lib tree as a {relPath: string|Uint8Array}
+//                  manifest (stage it with common/share-fs.js
+//                  buildShareManifest so key ORDER matches node — order
+//                  feeds compile order → ar member order → ROM bytes).
+//   env.hash     — async {name:text}→hex digest for the SDK seed check
+//                  (browser: crypto.subtle; required when env is given).
+//   env.sdkCache — optional {get(key), put(key,bytes)} rebuild cache.
+// NO top-level node imports here — node bits load lazily on the default
+// paths only, so a browser bundle can load this module untouched.
+//
 // Two runtime modes:
 //
 //   sgdk: true  (default)  — idiomatic Genesis homebrew. Links against
@@ -22,43 +38,96 @@
 //     Useful for educational / minimal builds. Bundles original-code
 //     sega.s + genesis.ld instead of SGDK's.
 
-import { fileURLToPath } from "node:url";
-import path from "node:path";
-import { readFile } from "node:fs/promises";
-
-import {
-  runCc1m68k,
-  runM68kAs,
-  runM68kLd,
-  runM68kObjcopy,
-} from "../m68k-elf-gcc/gcc.js";
-import { runSjasm, runBintos } from "../sjasm/sjasm.js";
+import { makeM68kGccTools } from "../m68k-elf-gcc/gcc.js";
+import { makeZ80Tools } from "../sjasm/sjasm.js";
 import { packAr } from "../common/ar.js";
-import { resolveSdkArchive } from "../common/sdk-cache.js";
+import { resolveSdkArchive, hashSources, nodeSdkIo } from "../common/sdk-cache.js";
 import { CBuild, BuildError } from "../common/c-build.js";
-import { resolveToolBaseDir } from "../common/wasm-tool.js";
+import { mapShare, dirShare } from "../common/share-fs.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-// The Genesis C library tree (SGDK + minimal runtime) ships in THIS package's
-// share/ (the driver moved in with the tree so a standalone consumer — e.g.
-// the mdlua SDK — imports buildGenesisC from "romdev-toolchain-m68k-gcc" and
-// drags in nothing else). Primary resolution is package self-reference; the
-// fallback is this file's own package root (build/genesis-c/ → two up).
-const GENESIS_SHARE = path.join(
-  resolveToolBaseDir({
+// ── environment resolution ──────────────────────────────────────────────────
+
+/** Node default: resolve THIS package's share/genesis/lib and wrap it. The
+ *  Genesis C library tree (SGDK + minimal runtime) ships in this package's
+ *  share/ so a standalone consumer — e.g. the mdlua SDK — imports
+ *  buildGenesisC from "romdev-toolchain-m68k-gcc" and drags in nothing else.
+ *  Primary resolution is package self-reference; the fallback is this file's
+ *  own package root (build/genesis-c/ → two up). */
+let _nodeShare = null;
+let _nodeShareRoot = null;
+async function defaultShare() {
+  if (_nodeShare) return _nodeShare;
+  const { resolveToolBaseDir } = await import("../common/wasm-tool.js");
+  const path = (await import("node:path")).default;
+  const base = resolveToolBaseDir({
     pkg: "romdev-toolchain-m68k-gcc",
     sentinel: path.join("share", "genesis", "lib", "sgdk", "md.ld"),
-    localDir: path.resolve(__dirname, "..", ".."),
+    localDir: new URL("../..", import.meta.url).href,
     label: "Genesis C library tree (romdev-toolchain-m68k-gcc/share)",
-  }),
-  "share", "genesis", "lib",
-);
-const MINIMAL_LIB_DIR = path.join(GENESIS_SHARE, "c");
-const SGDK_LIB_DIR    = path.join(GENESIS_SHARE, "sgdk");
-const SGDK_SRC_DIR    = path.join(SGDK_LIB_DIR, "src");
-const SGDK_INC_DIR    = path.join(SGDK_LIB_DIR, "include");
-const SGDK_RES_DIR    = path.join(SGDK_LIB_DIR, "res");
+  });
+  _nodeShareRoot = path.join(base, "share", "genesis", "lib");
+  _nodeShare = dirShare(_nodeShareRoot);
+  return _nodeShare;
+}
+
+/** Resolve the build context (tools + z80 tools + share + sdk io). */
+let _defaultTools = null;
+let _defaultZ80 = null;
+async function buildCtx(env) {
+  const tools = env?.runTool
+    ? makeM68kGccTools({ runTool: env.runTool })
+    : (_defaultTools ??= makeM68kGccTools());
+  const z80 = env?.loadGlue
+    ? makeZ80Tools({ loadGlue: env.loadGlue })
+    : (_defaultZ80 ??= makeZ80Tools());
+  const share = env?.share
+    ? (typeof env.share.text === "function" ? env.share : mapShare(env.share))
+    : await defaultShare();
+  // Seed + rebuild-cache io, addressed by share-RELATIVE paths (so the seed
+  // hash is machine-independent — hashing absolute paths broke the seed check
+  // every time the tree moved). writeSeed (the seed generator) is node-only.
+  const io = {
+    readSeed: async (rel) => { try { return await share.bytes(rel); } catch { return null; } },
+    readSeedHash: async (rel) => { try { return (await share.text(rel)).trim(); } catch { return null; } },
+    ...(env ? {} : {
+      writeSeed: async (rel, bytes, hashRel, hash) => {
+        const { writeFile } = await import("node:fs/promises");
+        await writeFile(_nodeShareRoot + "/" + rel, bytes);
+        await writeFile(_nodeShareRoot + "/" + hashRel, hash + "\n");
+      },
+    }),
+    hash: env?.hash ?? hashSources,
+    ...(env?.sdkCache
+      ? { cacheGet: (k) => env.sdkCache.get(k), cachePut: (k, b) => env.sdkCache.put(k, b) }
+      : env ? {} : {
+        cacheGet: async (k) => (await nodeSdkIo()).cacheGet(k),
+        cachePut: async (k, b) => (await nodeSdkIo()).cachePut(k, b),
+      }),
+  };
+  return { tools, z80, share, io };
+}
+
+// ── share-tree readers (cached per share instance) ──────────────────────────
+
+const _shareCaches = new WeakMap();
+function shareCache(share) {
+  let c = _shareCaches.get(share);
+  if (!c) { c = new Map(); _shareCaches.set(share, c); }
+  return c;
+}
+
+/** Read every SGDK source file (src/ + res/) into a {relpath: text} map for
+ *  hashing the seed. Keys are share-RELATIVE (stable across machines and tree
+ *  moves — hashing absolute paths broke the seed check on every move). */
+async function readSgdkSources(share) {
+  const out = {};
+  for (const prefix of ["sgdk/src", "sgdk/res"]) {
+    for (const rel of await share.list(prefix)) {
+      if (/\.(c|s|s80|h|inc|i80|res)$/i.test(rel)) out[rel] = await share.text(rel);
+    }
+  }
+  return out;
+}
 
 /**
  * Build the WHOLE SGDK runtime from its own source into a libmd.a, so Genesis
@@ -71,62 +140,40 @@ const SGDK_RES_DIR    = path.join(SGDK_LIB_DIR, "res");
  * Cached per-process (keyed on source bytes so an edit to vendored SGDK
  * source rebuilds).
  *
+ * @param {{share:Object, tools:Object, z80:Object}} ctx
  * @param {Record<string,string>} baseHeaders SGDK headers + sys headers
  * @param {string[]} cc1Options
  * @returns {Promise<{ok:boolean, libmd?:Uint8Array, stage?:string, log?:string}>}
  */
-/** Read every SGDK source file (src/ + res/) into a {path:text} map for hashing the seed. */
-async function readSgdkSources() {
-  const { readdir } = await import("node:fs/promises");
-  const out = {};
-  async function walk(dir, rel = "") {
-    let ents;
-    try { ents = await readdir(dir, { withFileTypes: true }); } catch { return; }
-    for (const e of ents) {
-      const full = path.join(dir, e.name);
-      const sub = rel ? `${rel}/${e.name}` : e.name;
-      if (e.isDirectory()) await walk(full, sub);
-      else if (/\.(c|s|s80|h|inc|i80|res)$/i.test(e.name)) out[dir + "/" + sub] = await readFile(full, "utf-8");
-    }
-  }
-  await walk(SGDK_SRC_DIR);
-  await walk(SGDK_RES_DIR);
-  return out;
-}
-
 let _sgdkRuntimeCache = null;
-async function compileSgdkRuntime(baseHeaders, cc1Options) {
-  const { readdir } = await import("node:fs/promises");
+async function compileSgdkRuntime({ share, tools, z80 }, baseHeaders, cc1Options) {
+  const { runCc1m68k, runM68kAs } = tools;
+  const { runSjasm, runBintos } = z80;
+  const SRC = "sgdk/src";
   // Collect source files.
   const cFiles = [], sFiles = [], s80Files = [];
   const localHeaders = {};
-  async function walk(dir, rel = "") {
-    let ents;
-    try { ents = await readdir(dir, { withFileTypes: true }); } catch { return; }
-    for (const e of ents) {
-      const full = path.join(dir, e.name);
-      const sub = rel ? `${rel}/${e.name}` : e.name;
-      if (e.isDirectory()) { await walk(full, sub); continue; }
-      // Skip optional extensions (ext/) — they pull in deps we don't vendor and
-      // aren't part of the core libmd that genesis.h exposes.
-      const norm = sub.replace(/\\/g, "/");
-      const isExt = norm.startsWith("ext/") || norm.includes("/ext/");
-      if (/\.(h|inc|i80)$/i.test(e.name)) { localHeaders[sub] = await readFile(full, "utf-8"); continue; }
-      if (isExt) continue;
-      // boot/sega.s is the crt0/header glue — the main build assembles it
-      // separately (Stage D) with the generated rom_header.bin sibling, so it's
-      // NOT part of the runtime archive. Skip both sega.s and rom_header.c here.
-      if (/(^|\/)sega\.s$/i.test(norm) || /(^|\/)rom_header\.c$/i.test(norm)) continue;
-      if (/\.c$/i.test(e.name)) cFiles.push({ full, sub });
-      else if (/\.s$/i.test(e.name)) sFiles.push({ full, sub });
-      else if (/\.s80$/i.test(e.name)) s80Files.push({ full, sub });
-    }
+  for (const rel of await share.list(SRC)) {
+    const sub = rel.slice(SRC.length + 1);
+    const base = sub.split("/").pop();
+    const norm = sub.replace(/\\/g, "/");
+    // Skip optional extensions (ext/) — they pull in deps we don't vendor and
+    // aren't part of the core libmd that genesis.h exposes.
+    const isExt = norm.startsWith("ext/") || norm.includes("/ext/");
+    if (/\.(h|inc|i80)$/i.test(base)) { localHeaders[sub] = await share.text(rel); continue; }
+    if (isExt) continue;
+    // boot/sega.s is the crt0/header glue — the main build assembles it
+    // separately (Stage D) with the generated rom_header.bin sibling, so it's
+    // NOT part of the runtime archive. Skip both sega.s and rom_header.c here.
+    if (/(^|\/)sega\.s$/i.test(norm) || /(^|\/)rom_header\.c$/i.test(norm)) continue;
+    if (/\.c$/i.test(base)) cFiles.push({ rel, sub });
+    else if (/\.s$/i.test(base)) sFiles.push({ rel, sub });
+    else if (/\.s80$/i.test(base)) s80Files.push({ rel, sub });
   }
-  await walk(SGDK_SRC_DIR);
 
   // Cache key from all source bytes.
   const allSrc = {};
-  for (const f of [...cFiles, ...sFiles, ...s80Files]) allSrc[f.sub] = await readFile(f.full, "utf-8");
+  for (const f of [...cFiles, ...sFiles, ...s80Files]) allSrc[f.sub] = await share.text(f.rel);
   const cacheKey = Object.entries(allSrc).map(([k, v]) => k + ":" + v.length).join("|");
   if (_sgdkRuntimeCache && _sgdkRuntimeCache.key === cacheKey) return _sgdkRuntimeCache.val;
 
@@ -141,25 +188,18 @@ async function compileSgdkRuntime(baseHeaders, cc1Options) {
   // them: INCLUDE "z80_def.i80").
   const z80Includes = {};
   for (const [k, v] of Object.entries(localHeaders)) {
-    if (/\.i80$/i.test(k)) z80Includes[path.basename(k)] = v;
+    if (/\.i80$/i.test(k)) z80Includes[k.split("/").pop()] = v;
   }
-  async function loadI80From(dir, _rel = "") {
-    let ents;
-    try { ents = await readdir(dir, { withFileTypes: true }); } catch { return; }
-    for (const e of ents) {
-      const full = path.join(dir, e.name);
-      if (e.isDirectory()) await loadI80From(full);
-      else if (/\.i80$/i.test(e.name)) z80Includes[e.name] = await readFile(full, "utf-8");
-    }
+  for (const rel of await share.list("sgdk/include")) {
+    if (/\.i80$/i.test(rel)) z80Includes[rel.split("/").pop()] = await share.text(rel);
   }
-  await loadI80From(SGDK_INC_DIR);
   const driverAsm = {}; // generated bintos .s, keyed by basename
   for (const d of s80Files) {
     // Only the core sound drivers under snd/ are part of libmd. Optional
     // extensions (e.g. ext/minimusic) ship .z80 deps we don't vendor and
     // aren't #included by any SGDK .c — skip them.
     if (!d.sub.replace(/\\/g, "/").startsWith("snd/")) continue;
-    const name = path.basename(d.sub).replace(/\.s80$/i, "");
+    const name = d.sub.split("/").pop().replace(/\.s80$/i, "");
     const sj = await runSjasm({ source: allSrc[d.sub], includes: z80Includes });
     if (!sj.ok) return { ok: false, stage: `sjasm(${d.sub})`, log: log + sj.log };
     const bt = await runBintos({ binary: sj.binary, name });
@@ -175,7 +215,7 @@ async function compileSgdkRuntime(baseHeaders, cc1Options) {
 
   // libres.h is a generated artifact (vendored); make it includable as res/libres.h.
   try {
-    const libresH = await readFile(path.join(SGDK_RES_DIR, "libres.h"), "utf-8");
+    const libresH = await share.text("sgdk/res/libres.h");
     baseHeaders["res/libres.h"] = libresH;
     baseHeaders["libres.h"] = libresH;
   } catch { /* no libres — degraded */ }
@@ -218,7 +258,7 @@ async function compileSgdkRuntime(baseHeaders, cc1Options) {
     addObj(r.obj);
   }
   try {
-    const libresS = await readFile(path.join(SGDK_RES_DIR, "libres.s"), "utf-8");
+    const libresS = await share.text("sgdk/res/libres.s");
     const r = await plainAs(libresS, "libres.s");
     if (r.err) return { ok: false, stage: r.err, log: log + (r.log || "") };
     addObj(r.obj);
@@ -243,6 +283,7 @@ async function compileSgdkRuntime(baseHeaders, cc1Options) {
  * @param {string[]} [args.cc1Options]
  * @param {boolean} [args.sgdk=true] link against bundled SGDK runtime
  *   (default). Pass false for the minimum-viable bare-main path.
+ * @param {Object} [args.env] injected environment (browser hosts) — see header
  * @returns {Promise<{ok:boolean, binary:Uint8Array|null, log:string, exitCode:number, stage:string, runtime:string}>}
  */
 export async function buildGenesisC(args) {
@@ -251,10 +292,11 @@ export async function buildGenesisC(args) {
   const cc1Options = args.cc1Options ?? ["-O2"];
   const sources = normalizeGenesisSources(args);
   const useSgdk = args.sgdk !== false;
+  const ctx = await buildCtx(args.env);
   if (useSgdk) {
-    return buildWithSgdk({ sources, headers, binaryIncludes, cc1Options, rebuildSdk: !!args.rebuildSdk, writeSeed: !!args.seedWrite });
+    return buildWithSgdk({ ...ctx, sources, headers, binaryIncludes, cc1Options, rebuildSdk: !!args.rebuildSdk, writeSeed: !!args.seedWrite });
   }
-  return buildMinimal({ sources, headers, binaryIncludes, cc1Options });
+  return buildMinimal({ ...ctx, sources, headers, binaryIncludes, cc1Options });
 }
 
 /**
@@ -269,7 +311,8 @@ export async function buildGenesisC(args) {
  *   6. ld user.o + sega.o + libmd.a + libgcc.a + libc.a → ELF
  *   7. objcopy -O binary → final .bin
  */
-async function buildWithSgdk({ sources, headers, binaryIncludes, cc1Options, rebuildSdk = false, writeSeed = false }) {
+async function buildWithSgdk({ tools, z80, share, io, sources, headers, binaryIncludes, cc1Options, rebuildSdk = false, writeSeed = false }) {
+  const { runCc1m68k, runM68kAs, runM68kLd, runM68kObjcopy } = tools;
   const cb = new CBuild();
   // SGDK_GCC define + freestanding-style flags must be in cc1 invocations
   const sgdkCc1Options = [
@@ -293,7 +336,7 @@ async function buildWithSgdk({ sources, headers, binaryIncludes, cc1Options, reb
   // cc1's -iquote /work picks up sibling files mounted alongside main.c.
   // SGDK includes are placed under /work/sgdk-inc/ in MEMFS; user `#include <genesis.h>`
   // resolves via -I /work/sgdk-inc.
-  const sgdkHeaders = await loadSgdkHeaders();
+  const sgdkHeaders = await loadSgdkHeaders(share);
   const tccHeaders = { ...headers, ...sgdkHeaders };
 
   try {
@@ -323,7 +366,7 @@ async function buildWithSgdk({ sources, headers, binaryIncludes, cc1Options, reb
     }
 
     // ── Stage C: build rom_header.bin from SGDK's rom_header.c ──
-    const romHeaderC = await readFile(path.join(SGDK_LIB_DIR, "rom_header.c"), "utf-8");
+    const romHeaderC = await share.text("sgdk/rom_header.c");
     const rhCc = await cb.stage("cc1 (rom_header)",
       () => runCc1m68k({ source: romHeaderC, headers: tccHeaders, options: sgdkCc1Options }),
       (r) => r.asmSource, { logName: "cc1 (rom_header.c)" });
@@ -345,7 +388,7 @@ async function buildWithSgdk({ sources, headers, binaryIncludes, cc1Options, reb
     // expands via gcc's `-x assembler-with-cpp` driver mode. Our `runM68kAs`
     // wrapper calls `as` directly without cpp, so we ship the preprocessed
     // version as a build artifact (~7 KB) instead of running cpp at every build.
-    const segaSrc = await readFile(path.join(SGDK_LIB_DIR, "sega.preprocessed.s"), "utf-8");
+    const segaSrc = await share.text("sgdk/sega.preprocessed.s");
     const segaAs = await cb.stage("as (sega.s)",
       () => runM68kAs({
         source: segaSrc,
@@ -365,14 +408,15 @@ async function buildWithSgdk({ sources, headers, binaryIncludes, cc1Options, reb
     const sdkWarnings = [];
     const sgdkRes = await resolveSdkArchive({
       name: "SGDK",
-      sources: await readSgdkSources(),
-      seedPath: path.join(SGDK_LIB_DIR, "libmd.seed.a"),
-      seedHashPath: path.join(SGDK_LIB_DIR, "libmd.seed.hash"),
+      sources: await readSgdkSources(share),
+      seedPath: "sgdk/libmd.seed.a",
+      seedHashPath: "sgdk/libmd.seed.hash",
       rebuild: rebuildSdk, writeSeed,
       compileFromSource: async () => {
-        const r = await compileSgdkRuntime({ ...tccHeaders }, sgdkCc1Options);
+        const r = await compileSgdkRuntime({ share, tools, z80 }, { ...tccHeaders }, sgdkCc1Options);
         return r.ok ? { ok: true, archive: r.libmd } : r;
       },
+      io,
     });
     if (!sgdkRes.ok) {
       // Original appended sgdkRes.log raw (no newline normalization) to the log.
@@ -383,11 +427,11 @@ async function buildWithSgdk({ sources, headers, binaryIncludes, cc1Options, reb
     cb.log += `--- SGDK runtime ${sgdkRes.fromSource ? "compiled from source" : "from prebuilt seed"} ---\n`;
 
     // ── Stage E: link everything ──
-    const mdLd = await readFile(path.join(SGDK_LIB_DIR, "md.ld"), "utf-8");
+    const mdLd = await share.text("sgdk/md.ld");
     const [libgcc, libc, libm] = await Promise.all([
-      readFile(path.join(MINIMAL_LIB_DIR, "libgcc.a")),
-      readFile(path.join(MINIMAL_LIB_DIR, "libc.a")),
-      readFile(path.join(MINIMAL_LIB_DIR, "libm.a")),
+      share.bytes("c/libgcc.a"),
+      share.bytes("c/libc.a"),
+      share.bytes("c/libm.a"),
     ]);
 
     const ld = await cb.stage("ld",
@@ -396,9 +440,9 @@ async function buildWithSgdk({ sources, headers, binaryIncludes, cc1Options, reb
         linkScript: mdLd,
         archives: {
           "libmd.a":  sgdkRes.archive,
-          "libgcc.a": new Uint8Array(libgcc),
-          "libc.a":   new Uint8Array(libc),
-          "libm.a":   new Uint8Array(libm),
+          "libgcc.a": libgcc,
+          "libc.a":   libc,
+          "libm.a":   libm,
         },
         libraries: ["md", "gcc", "c"],
         libraryPaths: ["/work"],
@@ -468,7 +512,8 @@ export function finalizeGenesisRom(bin) {
  * minimal sega.s / genesis.ld bundled under lib/c/.
  */
 async function buildMinimal(args) {
-  const { sources, headers, binaryIncludes, cc1Options } = args;
+  const { tools, share, sources, headers, binaryIncludes, cc1Options } = args;
+  const { runCc1m68k, runM68kAs, runM68kLd, runM68kObjcopy } = tools;
   const cb = new CBuild();
 
   try {
@@ -499,17 +544,17 @@ async function buildMinimal(args) {
     }
 
     // ── Stage 3: assemble the bundled sega.s crt0 ───────────────────
-    const sega = await readFile(path.join(MINIMAL_LIB_DIR, "sega.s"), "utf-8");
+    const sega = await share.text("c/sega.s");
     const segaAs = await cb.stage("as (sega.s)",
       () => runM68kAs({ source: sega }),
       (r) => r.object, { logName: "as (sega.s crt0)" });
 
     // ── Stage 4: link everything ────────────────────────────────────
-    const linkScript = await readFile(path.join(MINIMAL_LIB_DIR, "genesis.ld"), "utf-8");
+    const linkScript = await share.text("c/genesis.ld");
     const [libgcc, libc, libm] = await Promise.all([
-      readFile(path.join(MINIMAL_LIB_DIR, "libgcc.a")),
-      readFile(path.join(MINIMAL_LIB_DIR, "libc.a")),
-      readFile(path.join(MINIMAL_LIB_DIR, "libm.a")),
+      share.bytes("c/libgcc.a"),
+      share.bytes("c/libc.a"),
+      share.bytes("c/libm.a"),
     ]);
 
     const ld = await cb.stage("ld",
@@ -517,9 +562,9 @@ async function buildMinimal(args) {
         objects: { "sega.o": segaAs.object, ...userObjs },
         linkScript,
         archives: {
-          "libgcc.a": new Uint8Array(libgcc),
-          "libc.a":   new Uint8Array(libc),
-          "libm.a":   new Uint8Array(libm),
+          "libgcc.a": libgcc,
+          "libc.a":   libc,
+          "libm.a":   libm,
         },
         libraries: ["c", "gcc", "m"],
         libraryPaths: ["/work"],
@@ -570,27 +615,17 @@ function normalizeGenesisSources(args) {
  * `.h`/`.inc`/`.i` header. cc1 sees them via the worker pool's input-files
  * mount — same as the headers map the user provides.
  *
- * Cached at module level — SGDK headers don't change at runtime.
+ * Cached per share instance — SGDK headers don't change at runtime.
  */
-let _sgdkHeaderCache = null;
-async function loadSgdkHeaders() {
-  if (_sgdkHeaderCache) return _sgdkHeaderCache;
-  const { readdir } = await import("node:fs/promises");
+async function loadSgdkHeaders(share) {
+  const cache = shareCache(share);
+  if (cache.has("sgdk-headers")) return cache.get("sgdk-headers");
+  const PREFIX = "sgdk/include";
   const out = {};
-  /** @param {string} dir @param {string} prefix */
-  async function walk(dir, prefix) {
-    const entries = await readdir(dir, { withFileTypes: true });
-    for (const e of entries) {
-      const fullPath = path.join(dir, e.name);
-      const relPath = prefix ? `${prefix}/${e.name}` : e.name;
-      if (e.isDirectory()) {
-        await walk(fullPath, relPath);
-      } else if (e.isFile() && /\.(h|hpp|inc|i)$/i.test(e.name)) {
-        out[relPath] = await readFile(fullPath, "utf-8");
-      }
-    }
+  for (const rel of await share.list(PREFIX)) {
+    const name = rel.slice(PREFIX.length + 1);
+    if (/\.(h|hpp|inc|i)$/i.test(name)) out[name] = await share.text(rel);
   }
-  await walk(path.join(SGDK_LIB_DIR, "include"), "");
-  _sgdkHeaderCache = out;
+  cache.set("sgdk-headers", out);
   return out;
 }

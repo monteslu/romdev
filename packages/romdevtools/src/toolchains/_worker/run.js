@@ -54,36 +54,7 @@ export async function runIsolated(job) {
   return await runInWorker(job);
 }
 
-/** Convenience: get bytes (Uint8Array) for an output file from the result. */
-export function getOutputBytes(result, vfsPath) {
-  const data = result.outputs?.[vfsPath];
-  if (!data) return null;
-  return new Uint8Array(Buffer.from(data, "base64"));
-}
-
-/** Convenience: get text for an output file from the result. */
-export function getOutputText(result, vfsPath) {
-  return result.outputs?.[vfsPath] ?? "";
-}
-
-/** Convert text → InputFile spec. */
-export function textFile(vfsPath, content) {
-  return { vfsPath, encoding: "utf8", data: content };
-}
-
-/** Convert binary (Uint8Array / Buffer) → InputFile spec. */
-export function binaryFile(vfsPath, bytes) {
-  // Accept EITHER raw bytes OR a base64 STRING — the same either/or contract the
-  // toolchain wrappers honor individually (asar/cc65/vasm68k/wladx all guard with
-  // `x instanceof Uint8Array ? x : Buffer.from(x, "base64")`). The MCP
-  // `binaryIncludes` schema delivers base64 STRINGS; the old `Buffer.from(string)`
-  // here decoded them as UTF-8, so the base64 TEXT itself became the file bytes —
-  // .incbin then embedded base64 text into the ROM. That corrupted every
-  // user-supplied binary include on the paths that mount via binaryFile (GBA's
-  // maxmod soundbank stub + the generic gcc runner used by Genesis/MIPS/SH):
-  // the GBA maxmod "silent without print()" hunt traced back to exactly this.
-  const buf = Buffer.isBuffer(bytes) ? bytes
-    : bytes instanceof Uint8Array ? Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-    : Buffer.from(bytes, "base64");
-  return { vfsPath, encoding: "base64", data: buf.toString("base64") };
-}
+// The pure marshalling + output helpers moved to ../common/io.js (so the
+// browser-loadable pipeline never imports this node-only module). Re-exported
+// here so every existing `from "../_worker/run.js"` import keeps working.
+export { textFile, binaryFile, getOutputBytes, getOutputText } from "../common/io.js";
