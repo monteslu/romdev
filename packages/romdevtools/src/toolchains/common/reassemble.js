@@ -832,10 +832,16 @@ export async function assembleRegionText(a) {
     // The emitted .asm carries `.setcpu`/`.org` from the heal path; if a hand-
     // edited file dropped them, ca65 still needs the CPU + origin, so ensure both.
     let src = asmText;
-    if (!/^\s*\.setcpu\b/m.test(src)) src = `\t.setcpu "${cpuTag}"\n` + src;
-    if (!/^\s*\.org\b/m.test(src)) src = src.replace(/(\.setcpu\s+"[^"]+")/, `$1\n\t.org $${startAddress.toString(16).toUpperCase()}`);
+    let prependedLines = 0; // lines we add ahead of the user's file — callers
+                            // subtract this so reported line numbers match THEIR file
+    if (!/^\s*\.setcpu\b/m.test(src)) { src = `\t.setcpu "${cpuTag}"\n` + src; prependedLines++; }
+    if (!/^\s*\.org\b/m.test(src)) {
+      const before = src;
+      src = src.replace(/(\.setcpu\s+"[^"]+")/, `$1\n\t.org $${startAddress.toString(16).toUpperCase()}`);
+      if (src !== before) prependedLines++;
+    }
     const ca = await runCa65({ source: src, target: "none" }).catch((e) => ({ object: null, log: String(e) }));
-    if (!ca || !ca.object) return { ok: false, bytes: null, family, log: ca?.log || "ca65 failed" };
+    if (!ca || !ca.object) return { ok: false, bytes: null, family, log: ca?.log || "ca65 failed", prependedLines };
     const ld = await runLd65({ objects: { "o.o": ca.object }, target: "none", linkerConfig: cfg }).catch((e) => ({ binary: null, log: String(e) }));
     if (!ld || !ld.binary) return { ok: false, bytes: null, family, log: ld?.log || "ld65 failed" };
     return { ok: true, bytes: new Uint8Array(ld.binary), family };

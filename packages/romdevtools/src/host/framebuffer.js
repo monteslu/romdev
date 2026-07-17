@@ -144,6 +144,31 @@ export function framebufferToScreenshot(width, height, src, pitch, format) {
  * @param {number} scale resample factor (>0)
  * @returns {{ base64: string, width: number, height: number }}
  */
+/**
+ * Crop a base64 PNG to {x,y,w,h} (framebuffer pixel coords, clamped to the
+ * image). The HUD-verification workflow (poke a value, read the counter/bar)
+ * wants a small native-res strip: far fewer image tokens than the full frame
+ * AND legible, unlike a downscale. Compose with resamplePng (crop first, then
+ * scale) for an enlarged detail view.
+ *
+ * @param {string} pngBase64 source PNG, base64-encoded
+ * @param {{x?:number, y?:number, w?:number, h?:number}} crop
+ * @returns {{ base64: string, width: number, height: number }}
+ */
+export function cropPng(pngBase64, crop) {
+  const src = PNG.sync.read(Buffer.from(pngBase64, "base64"));
+  const x = Math.max(0, Math.min(src.width - 1, Math.floor(crop.x ?? 0)));
+  const y = Math.max(0, Math.min(src.height - 1, Math.floor(crop.y ?? 0)));
+  const w = Math.max(1, Math.min(src.width - x, Math.floor(crop.w ?? (src.width - x))));
+  const h = Math.max(1, Math.min(src.height - y, Math.floor(crop.h ?? (src.height - y))));
+  const dst = new PNG({ width: w, height: h });
+  for (let row = 0; row < h; row++) {
+    const si = ((y + row) * src.width + x) * 4;
+    src.data.copy(dst.data, row * w * 4, si, si + w * 4);
+  }
+  return { base64: PNG.sync.write(dst).toString("base64"), width: w, height: h };
+}
+
 export function resamplePng(pngBase64, scale) {
   const src = PNG.sync.read(Buffer.from(pngBase64, "base64"));
   const dw = Math.max(1, Math.round(src.width * scale));

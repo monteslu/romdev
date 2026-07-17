@@ -2,7 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PNG } from "pngjs";
-import { resamplePng } from "../../host/framebuffer.js";
+import { cropPng, resamplePng } from "../../host/framebuffer.js";
 import { getHost, getHostB } from "../state.js";
 import { imageContent, jsonContent, safeTool } from "../util.js";
 import { decodeOAM, decodePpuRegs, ppuRegsPopulated } from "../../platforms/snes/ppu.js";
@@ -342,7 +342,7 @@ export function registerFrameTools(server, z, sessionKey) {
   }
 
   // PNG capture. Writes to outPath, or returns inline when `inline`.
-  async function shootPng({ path: outPath, inline, overlayBoxes, scale }) {
+  async function shootPng({ path: outPath, inline, overlayBoxes, scale, crop }) {
     const host = getHost(sessionKey);
     const shot = host.screenshot();
     let pngBase64 = shot.pngBase64;
@@ -363,6 +363,14 @@ export function registerFrameTools(server, z, sessionKey) {
     // unset) is the native-resolution default; scale<1 is a downscaled shot
     // (~75% fewer image tokens for routine "did it change?" sanity checks),
     // scale>=2 is an integer up-scale so tiny handheld targets read legibly.
+    // Crop FIRST (native-res strip — the HUD-verification token-saver: a
+    // 1-pixel-tick bar or an 8px counter stays legible, unlike a downscale),
+    // then scale — so crop+integer-scale gives an enlarged detail view.
+    const cropped = !!crop;
+    if (cropped) {
+      const c = cropPng(pngBase64, crop);
+      pngBase64 = c.base64; width = c.width; height = c.height;
+    }
     const scaled = scale && scale !== 1;
     if (scaled) {
       const r = resamplePng(pngBase64, scale);
@@ -370,7 +378,7 @@ export function registerFrameTools(server, z, sessionKey) {
     }
     if (!inline) {
       await writeFile(outPath, Buffer.from(pngBase64, "base64"));
-      const json = jsonContent({ path: outPath, width, height, ...(scaled ? { scale, fullWidth: shot.width, fullHeight: shot.height } : {}), overlay: overlayInfo });
+      const json = jsonContent({ path: outPath, width, height, ...(cropped ? { crop } : {}), ...(scaled || cropped ? { ...(scaled ? { scale } : {}), fullWidth: shot.width, fullHeight: shot.height } : {}), overlay: overlayInfo });
       json._observerImages = [{ kind: "image", mimeType: "image/png", base64: pngBase64 }];
       return json;
     }
@@ -382,7 +390,7 @@ export function registerFrameTools(server, z, sessionKey) {
     return {
       content: [
         imageContent(pngBase64),
-        { type: "text", text: `framebuffer ${shot.width}x${shot.height}${scaled ? ` (scaled ${scale}x to ${width}x${height})` : ""}${overlayInfo ? ` (overlay: ${overlayInfo.spritesDrawn} sprites)` : ""} — also written to ${tempPath} (use this path for ImageMagick/crops; pass outputPath for a permanent location).` },
+        { type: "text", text: `framebuffer ${shot.width}x${shot.height}${cropped ? ` (cropped to ${width}x${height} at ${crop.x ?? 0},${crop.y ?? 0})` : ""}${scaled ? ` (scaled ${scale}x${cropped ? "" : ` to ${width}x${height}`})` : ""}${overlayInfo ? ` (overlay: ${overlayInfo.spritesDrawn} sprites)` : ""} — also written to ${tempPath} (use this path for ImageMagick/crops; pass outputPath for a permanent location).` },
       ],
     };
   }
@@ -428,10 +436,10 @@ export function registerFrameTools(server, z, sessionKey) {
     return result;
   }
 
-  async function doScreenshot({ format, path: outPath, inline, overlayBoxes, scale, cols, rows, symbols, colors }) {
+  async function doScreenshot({ format, path: outPath, inline, overlayBoxes, scale, crop, cols, rows, symbols, colors }) {
       requireImageTarget(outPath, inline, "frame({op:'screenshot'})");
       if (format === "ascii") return shootAscii({ cols, rows, symbols, colors, path: outPath, inline });
-      return shootPng({ path: outPath, inline, overlayBoxes, scale });
+      return shootPng({ path: outPath, inline, overlayBoxes, scale, crop });
   }
 
   // op:'verify' — one-call "did the game actually render / is it alive?" health
@@ -814,7 +822,7 @@ export function registerFrameTools(server, z, sessionKey) {
     "'screenshot': capture the latest frame. `format:'png'` (default, exact colors) or `'ascii'` (lossy chafa text " +
     "render for agents that can't view images). `overlayBoxes` (png) draws a box per visible sprite (SNES+NES only); " +
 "`scale` (png) resamples nearest-neighbor: 0<scale<1 DOWNscales (~75% fewer image tokens at 0.5 — the useful direction, for cheap 'did it change?' checks). integer scale≥2 UPscales (pixel-duplication, e.g. scale:4 → GB 160x144 → 640x576) — but this adds NO detail (it's the same pixels enlarged) and costs MORE image tokens; the native frame already has every pixel. Prefer scale:1 (default, native). Only upscale if YOUR client renders tiny images too small to be useful AND can't zoom — and know that VLM encoders resize to a fixed resolution anyway, so it may not change what the model sees (and can slightly degrade it). ascii cols/rows/symbols/colors knobs in the param hints. " +
-    "**CHEAP VERIFY: for a binary pass/fail check (theme changed? sprite present? HUD ticked?) prefer scale:0.5 or " +
+    "**READING a HUD counter/bar? crop:{x,y,w,h} at native res — legible AND a fraction of the tokens (no external image tools).** **CHEAP VERIFY: for a binary pass/fail check (theme changed? sprite present? HUD ticked?) prefer scale:0.5 or " +
     "format:'ascii' — BETTER, read the byte directly: symbols({op:'resolve', name}) → memory({op:'read'}) is a 1-byte " +
     "assertion that costs zero image tokens.**\n" +
     "'stepAndShot': step + screenshot in ONE round-trip — the drive-then-look loop. (No overlayBoxes/scale here — png only.)\n" +
@@ -875,7 +883,8 @@ export function registerFrameTools(server, z, sessionKey) {
       path: z.string().optional().describe("op=screenshot/stepAndShot: absolute path to write to (required unless inline:true)."),
       inline: z.boolean().default(false).describe("op=screenshot/stepAndShot: return the image in the response instead of writing to disk."),
       overlayBoxes: z.boolean().default(false).describe("op=screenshot png: draw a colored bounding box per visible sprite (SNES+NES only)."),
-      scale: z.number().gt(0).max(16).refine((s) => s <= 1 || Number.isInteger(s), { message: "scale must be 0<scale≤1 (downscale) or an integer ≥2 (upscale)" }).optional().describe("op=screenshot png: nearest-neighbor resample factor. DEFAULT (unset/1) = NATIVE resolution — perfect pixels, the accurate representation; use this. 0<scale<1 DOWNscales (0.5 ≈ 75% fewer image tokens — useful for cheap 'did it change?' checks). integer scale≥2 UPscales by pixel-duplication (e.g. scale:4 → GB 160x144 → 640x576): it adds NO information (same pixels enlarged), costs MORE image tokens, and since VLM encoders resize to their own fixed resolution it may not change what the model sees and can slightly degrade it. Only for clients that render tiny images too small to use and can't zoom."),
+      crop: z.object({ x: z.number().int().min(0).optional(), y: z.number().int().min(0).optional(), w: z.number().int().min(1).optional(), h: z.number().int().min(1).optional() }).optional().describe("op=screenshot png: crop to a framebuffer-pixel rect BEFORE any scale (clamped to the frame). THE HUD-verification token-saver: a native-res strip of the counter/bar is legible AND a fraction of the image tokens of the full frame (poke a value → crop-read the HUD in one call, no external image tools). Compose with integer scale for an enlarged detail view."),
+      scale: z.number().gt(0).max(16).refine((s) => s <= 1 || Number.isInteger(s), { message: "scale must be 0<scale≤1 (downscale) or an integer ≥2 (upscale)" }).optional().describe("op=screenshot png: nearest-neighbor resample factor. DEFAULT (unset/1) = NATIVE resolution — perfect pixels, the accurate representation; use this. 0<scale<1 DOWNscales (0.5 ≈ 75% fewer image tokens — useful for cheap 'did it change?' checks; NOT for READING text/counters — an 8px HUD font is illegible below native; use native res, ideally with `crop`). integer scale≥2 UPscales by pixel-duplication (e.g. scale:4 → GB 160x144 → 640x576): it adds NO information (same pixels enlarged), costs MORE image tokens, and since VLM encoders resize to their own fixed resolution it may not change what the model sees and can slightly degrade it. Only for clients that render tiny images too small to use and can't zoom."),
       cols: z.number().int().min(4).max(640).optional().describe("op=screenshot ascii: terminal columns (default fb_width/8 — one cell per 8×8 tile, legible game state)."),
       rows: z.number().int().min(4).max(480).optional().describe("op=screenshot ascii: terminal rows (default fb_height/8)."),
       symbols: z.enum(["ascii", "halfblock", "block", "quad", "sextant"]).default("ascii").describe("op=screenshot ascii: chafa symbol set."),

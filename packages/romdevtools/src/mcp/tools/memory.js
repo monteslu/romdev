@@ -205,9 +205,66 @@ async function memWrite(sessionKey, { region, offset = 0, hex, base64, data, byt
       return textContent(`wrote ${buf.length} bytes to ${region}+${offset}`);
 }
 
-async function memReadCart(sessionKey, { offset = 0, length = 16, cpuAddress, bank, mapper, outputPath, inline, echo }) {
+async function memReadCart(sessionKey, { offset = 0, length = 16, cpuAddress, bank, mapper, outputPath, inline, echo, findHex, maxMatches = 100 }) {
       const host = getHost(sessionKey);
       const rom = host.getCartRom();
+
+      // findHex (v0.94.0 round 2): byte-pattern scan over the LOADED cart image —
+      // the call-site hunt ("who jsr's $873C?" = scan for `20 3C 87`) that agents
+      // otherwise script in Python over the ROM file. Each match returns the file
+      // offset AND the mapped CPU address (the offset→bank:addr arithmetic is
+      // exactly the part hand-conversion gets wrong). Same hex-string contract as
+      // state({op:'dump', findHex}).
+      if (findHex != null) {
+        const cleaned = String(findHex).replace(/[\s_$]/g, "");
+        if (!/^[0-9a-fA-F]+$/.test(cleaned) || cleaned.length % 2 !== 0) {
+          throw new Error(`memory({op:'readCart', findHex}): must be an even-length hex string, got '${findHex}'`);
+        }
+        const needle = Buffer.from(cleaned, "hex");
+        const hay = Buffer.from(rom.bytes.buffer, rom.bytes.byteOffset, rom.bytes.byteLength);
+        // Per-platform inverse map: file offset (header-stripped image) → CPU address.
+        let toCpu = null;
+        if (rom.platform === "nes") {
+          const prgSize = hay.length; // rom.bytes IS the PRG image for NES
+          const lastBank = Math.floor((prgSize - 1) / 0x4000);
+          toCpu = (o) => {
+            const b = Math.floor(o / 0x4000);
+            const addr = (b === lastBank ? 0xC000 : 0x8000) + (o & 0x3FFF);
+            return { cpuAddress: "$" + addr.toString(16).toUpperCase(), bank: b };
+          };
+        } else if (rom.platform === "snes") {
+          // Self-consistent lo/hi detection: ask the forward mapper where
+          // $00:8000 (LoROM probe) lands. LoROM → file 0.
+          let isLo = true;
+          try { isLo = mapSnesAddress(rom.raw, 0x008000, 1, mapper).fileOffset - (rom.raw.length - hay.length) === 0; }
+          catch { /* default lorom */ }
+          toCpu = (o) => isLo
+            ? { cpuAddress: "$" + (o >> 15).toString(16).toUpperCase().padStart(2, "0") + ":" + (0x8000 | (o & 0x7FFF)).toString(16).toUpperCase().padStart(4, "0") }
+            : { cpuAddress: "$" + (0xC0 + (o >> 16)).toString(16).toUpperCase().padStart(2, "0") + ":" + (o & 0xFFFF).toString(16).toUpperCase().padStart(4, "0") };
+        } else if (rom.base) {
+          toCpu = (o) => ({ cpuAddress: "0x" + (rom.base + o).toString(16).toUpperCase() });
+        }
+        const matches = [];
+        let from = 0;
+        while (matches.length < maxMatches) {
+          const i = hay.indexOf(needle, from);
+          if (i < 0) break;
+          matches.push({ fileOffset: "0x" + i.toString(16).toUpperCase(), ...(toCpu ? toCpu(i) : {}) });
+          from = i + 1;
+        }
+        return jsonContent({
+          platform: rom.platform,
+          findHex: cleaned,
+          count: matches.length,
+          truncated: matches.length === maxMatches,
+          matches,
+          note: (rom.platform === "nes"
+            ? "cpuAddress assumes the standard $8000-window convention (last PRG bank fixed at $C000); on an exotic mapper trust bank+the $3FFF offset over the literal address. "
+            : rom.platform === "snes" ? "cpuAddress is bank:addr in the cart's detected mapping (LoROM/HiROM from the header). "
+            : "") +
+            "Scan is over the header-stripped cart image (fileOffset is image-relative" + ((rom.raw?.length ?? 0) > (rom.bytes?.length ?? 0) ? `; add ${(rom.raw.length - rom.bytes.length)} for the raw file` : "") + ").",
+        });
+      }
 
       // Banked CPU-address read (0.28.0 feedback #2a): map {cpuAddress, bank?} →
       // PRG bytes, the inverse of the breakpoint result's bank/prgOffset. Saves
@@ -620,7 +677,7 @@ async function memSearchNext(sessionKey, { compare, value, name = "default", max
         searchId: name, compare, count: kept.length,
         candidates: kept.slice(0, maxCandidates).map((a) => "0x" + a.toString(16) + "=" + read(a)),
         note: kept.length === 0
-          ? "0 left — narrowed too far (wrong op, or the value moved between reads — e.g. the scene changed/player died mid-step; screenshot before blaming the compare). Re-seed with memory({op:'search'})."
+          ? "0 left — narrowed too far (wrong op, or the value moved between reads — e.g. the scene changed/player died mid-step; screenshot before blaming the compare). Re-seed with memory({op:'search'}). If the on-screen number narrows to 0 on a correct op, it may be stored as BCD/digits, not binary — re-seed with as:'bcd' (a SNES timer hunt went 22 raw candidates → 1 in one 'dec' pass that way)."
           : kept.length <= 2
           ? "Down to 1-2 — confirm: memory({op:'write', region, offset, hex:'..'}) and watch the screen change."
           : "Still multiple — change the value again and memory({op:'searchNext'}) to keep narrowing.",
@@ -650,7 +707,7 @@ export function registerMemoryTools(server, z, sessionKey) {
     "searchNext → {compare, value?}.\n" +
     `• op:'read' — bytes as a \`hex\` string. ≤${INLINE_HEX_LIMIT}B come back inline; >${INLINE_HEX_LIMIT}B need \`outputPath\` (RAW bytes written → {path,bytes}) or \`inline:true\`. BATCH: \`offsets\` (addresses or {offset,length}) reads many non-contiguous spots in ONE call → reads:[{offset,length,hex}]. (Genesis video_ram is raw host-LE word-swapped — not a direct tile map; use tiles({op:'pixels'}).)\n` +
     "• op:'write' — pass payload as `hex` (e.g. 'deadbeef') OR `base64` — **NOT `data`, `bytes`, or an array (those are REJECTED with guidance).** hex for byte patterns, base64 for binary blobs.\n" +
-    "• op:'readCart' — read the LOADED CARTRIDGE ROM image ('is the emulator running my patched bytes?'). For un-banked platforms (Genesis/GB/SMS/Lynx/PCE) the file `offset` IS the CPU ROM address; **NES/SNES skip the header and reach bytes through a mapper, so `mapped:true`+note say the offset is not a flat CPU address.**\n" +
+    "• op:'readCart' — read the LOADED CARTRIDGE ROM image ('is the emulator running my patched bytes?'). With `findHex` it SCANS the whole image for a byte pattern and maps every hit to a CPU address (call-site hunts: '20 3C 87' finds every jsr $873C). For un-banked platforms (Genesis/GB/SMS/Lynx/PCE) the file `offset` IS the CPU ROM address; **NES/SNES skip the header and reach bytes through a mapper, so `mapped:true`+note say the offset is not a flat CPU address.**\n" +
     "• op:'snapshot' — capture a baseline of `region` (server RAM, keyed by `name`) to later diff. The 'which bytes did THIS event touch?' workflow: snapshot → trigger event → op:'diff'.\n" +
     "• op:'diff' — compare a region against a snapshot baseline → the CHANGED bytes. DEFAULT `view:'summary'` is a CLUSTERED summary (+ stride detection — '4 islands at stride 0x80' = a struct array) so a churny gameplay diff doesn't flood context; `view:'raw'` = the per-byte before/after list.\n" +
     "• op:'classify' — heuristically classify the bytes at an offset BEFORE you trust a 'found table'. **Kills the classic trap: a run that 'matches' your stats is often ASCII TEXT (bytes 82/79/68 = 'ROD' from a taunt string) or code.** Returns looksLike/printableRatio/entropy/asciiPreview/confidence.\n" +
@@ -668,6 +725,8 @@ export function registerMemoryTools(server, z, sessionKey) {
       mapper: z.enum(["lorom", "hirom"]).optional().describe("op:readCart with cpuAddress (SNES) — force LoROM/HiROM mapping if auto-detect is wrong."),
       offsets: offsetsShape.optional().describe("op:read BATCH — a list of addresses (each read `length` bytes, default 1) or {offset,length} objects → reads:[{offset,length,hex}]. Takes precedence over offset/length."),
       compact: z.boolean().optional().describe("op:read with `offsets` — return reads as ONE {\"0xOFF\": \"hex\"} map instead of an object per read (~4x fewer tokens for the sample-N-flags pattern)."),
+      findHex: z.string().optional().describe("op:'readCart' — byte-pattern SCAN over the loaded cart image (even-length hex, spaces/$ ok — e.g. '20 3C 87' = jsr $873C). Returns matches as {fileOffset, cpuAddress[, bank]} — the offset→bank:addr mapping done for you. THE call-site hunt for annotation work; replaces scripting over the ROM file."),
+      maxMatches: z.number().int().min(1).max(1000).optional().describe("op:'readCart' findHex — cap on returned matches (default 100; truncated:true when hit)."),
       // write
       hex: z.string().optional().describe("op:write — hex string, e.g. 'deadbeef' (even length)."),
       base64: z.string().optional().describe("op:write — base64 bytes (binary blobs)."),

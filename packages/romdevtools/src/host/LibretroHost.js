@@ -1645,7 +1645,25 @@ export class LibretroHost {
    * @param {number} address CPU address to watch
    * @param {boolean} [enabled=true]
    */
+  /** Canonicalize a watch address for the loaded platform. SNES: the low 8 KB
+   *  of WRAM mirrors into banks $00-$3F/$80-$BF at $0000-$1FFF; the snes9x
+   *  romdev hooks canonicalize every LIVE access to the $7E form before
+   *  comparing, so the ARMED address must be in $7E form too — arming a raw
+   *  $0218 could never match a `sta f:$7E0218` (or vice versa: arming
+   *  $7E0218 matches `sta $0218` fine, because the live access canonicalizes).
+   *  Applied to write watch, read watch, and range watch alike. */
+  _canonWatchAddress(address) {
+    if (this.status?.platform === "snes") {
+      const a = address & 0xFFFFFF, bank = a >> 16, off = a & 0xFFFF;
+      if (off < 0x2000 && (bank <= 0x3F || (bank >= 0x80 && bank <= 0xBF))) {
+        return 0x7E0000 | off;
+      }
+    }
+    return address;
+  }
+
   setWatchpoint(address, enabled = true, opts) {
+    address = this._canonWatchAddress(address);
     const mod = this._needMod();
     if (typeof mod._romdev_watchpoint_set !== "function") {
       throw new Error("this core build does not expose the write watchpoint (rebuild with romdev_watchpoint_* exports).");
@@ -2056,6 +2074,7 @@ export class LibretroHost {
 
   /** Arm/disarm the read watchpoint on a CPU address. */
   setReadWatch(address, enabled = true) {
+    address = this._canonWatchAddress(address);
     const mod = this._needMod();
     if (typeof mod._romdev_readwatch_set !== "function") {
       throw new Error("this core build does not expose the read watchpoint (rebuild with romdev_readwatch_* exports).");
@@ -2596,6 +2615,12 @@ export class LibretroHost {
     const mod = this._needMod();
     this._needMedia();
     if (!this.rangeWatchSupported()) throw new Error("range watch not supported by this core.");
+    // SNES WRAM low-mirror canonicalization (see _canonWatchAddress): live
+    // accesses arrive at the hook in $7E form, so a raw $0200-$0220 range
+    // would never match. Only shift the range when BOTH ends canonicalize
+    // (a range straddling the mirror boundary stays literal).
+    const cl = this._canonWatchAddress(lo), ch = this._canonWatchAddress(hi);
+    if (cl !== lo && ch !== hi) { lo = cl; hi = ch; }
     const m = mode === "read" ? 1 : mode === "write" ? 2 : 3;
     mod._romdev_range_set(lo >>> 0, hi >>> 0, m, 1);
     try {

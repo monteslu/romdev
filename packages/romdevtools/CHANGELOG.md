@@ -4,6 +4,52 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.97.0 — 2026-07-17
+
+v0.94.0 feedback round 2 (the SNES annotation agent's 20:51 + 00:40 notes).
+
+**Bug fix — SNES WRAM mirror aliasing in exact watchpoints.** Watching
+`$0218` silently missed a `sta f:$7E0218` writer (and vice-versa forms): the
+snes9x hook canonicalizes every LIVE access to the $7E form, so the host now
+canonicalizes the ARMED address too — write watch, read watch, AND the range
+watch (whose [lo,hi] had the same hole). Any addressing form of a low-WRAM
+byte (`sta $18` DP, `sta $0218` absolute in banks $00-$3F/$80-$BF,
+`sta f:$7E0218` long) is caught from any armed form. Results echo
+`armedAddress` when canonicalization applied. Verified against the real core
+(the previously-missing raw form now reports the exact writer PC). No core
+rebuild — host-side fix.
+
+**Minor fix — `disasm({target:'rom'})` outputPath** creates its parent
+directory instead of raw ENOENT.
+
+**Reassemble failures are structured now** (the hottest annotation call):
+`regions[].issues[]` per the standard {file,line,message} contract, ANSI
+color codes stripped, and the internal `main.s` remapped to the region's
+REAL source file with line numbers shifted past any auto-prepended
+`.setcpu`/`.org` — so the error points at the file you actually edit.
+
+**`disasm({target:'rom'}) widths:{a,i}`** — explicit 65816 entry-width
+override (8|16 each). For a blob with no in-window caller the agent often
+KNOWS the width (live P capture, surrounding code); the override skips
+inference and decodes at the stated entry (in-window rep/sep still
+followed). The forced-width decode replaces hand-decoding from byte columns.
+
+**`memory({op:'readCart', findHex})`** — byte-pattern scan over the loaded
+cart image ('20 3C 87' finds every `jsr $873C`), each match mapped to a CPU
+address server-side (NES bank + $8000/$C000 window; SNES LoROM/HiROM
+bank:addr). The call-site hunt without a Python side-script.
+
+**`frame({op:'screenshot', crop:{x,y,w,h}})`** — native-res crop before any
+scale (composable with integer scale for a detail view). The HUD-
+verification token-saver: poke a value → crop-read the counter in one call.
+
+**Doc/hint nudges:** the memory-search "0 left" note suggests re-seeding
+`as:'bcd'` (BCD-stored counters); the screenshot `scale` docs warn that
+sub-native scales are illegible for text (use native + crop); the per-byte
+read-watch miss note points table-consumer hunts at
+`watch({on:'range', kind:'read'})`, which already answers "who reads any
+byte of this struct?" in one call.
+
 ## 0.96.0 — 2026-07-16
 
 v0.94.0 feedback round (the SNES annotation agent's two notes files — no bugs
