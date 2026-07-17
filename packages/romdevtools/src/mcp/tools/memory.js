@@ -82,7 +82,7 @@ function genericEndianness(platform) {
 // Each function is the body of one former narrow tool, verbatim. The `memory`
 // router dispatches on `op`. They share the module-scope helpers below.
 
-async function memRead(sessionKey, { region, offset = 0, length, offsets, outputPath, inline, echo }) {
+async function memRead(sessionKey, { region, offset = 0, length, offsets, outputPath, inline, echo, compact }) {
       const host = getHost(sessionKey);
       const info0 = REGION_INFO[region] ?? {};
       const endianness0 = info0.endianness ?? genericEndianness(host.status.platform);
@@ -100,6 +100,14 @@ async function memRead(sessionKey, { region, offset = 0, length, offsets, output
             hex: Array.from(b, (x) => x.toString(16).padStart(2, "0")).join(""),
           };
         });
+        // compact:true — the "sample N flags" shape: one {"0xOFF":"hex"} map
+        // instead of an object per read (~4x fewer tokens on a dozen 1-2 byte
+        // probes; v0.94.0 feedback). Region/endianness still echoed once.
+        if (compact) {
+          const map = {};
+          for (const r of reads) map["0x" + r.offset.toString(16)] = r.hex;
+          return jsonContent({ region, endianness: endianness0, reads: map });
+        }
         return jsonContent({
           region,
           endianness: endianness0,
@@ -659,6 +667,7 @@ export function registerMemoryTools(server, z, sessionKey) {
       bank: z.number().int().min(0).optional().describe("op:readCart with cpuAddress — which 16KB PRG bank is mapped into the switchable $8000-$BFFF window (NES). Ignored for $C000+ (fixed top bank) and for non-banked ROMs."),
       mapper: z.enum(["lorom", "hirom"]).optional().describe("op:readCart with cpuAddress (SNES) — force LoROM/HiROM mapping if auto-detect is wrong."),
       offsets: offsetsShape.optional().describe("op:read BATCH — a list of addresses (each read `length` bytes, default 1) or {offset,length} objects → reads:[{offset,length,hex}]. Takes precedence over offset/length."),
+      compact: z.boolean().optional().describe("op:read with `offsets` — return reads as ONE {\"0xOFF\": \"hex\"} map instead of an object per read (~4x fewer tokens for the sample-N-flags pattern)."),
       // write
       hex: z.string().optional().describe("op:write — hex string, e.g. 'deadbeef' (even length)."),
       base64: z.string().optional().describe("op:write — base64 bytes (binary blobs)."),

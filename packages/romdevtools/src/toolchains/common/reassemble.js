@@ -311,7 +311,7 @@ function parseDa65Code(line) {
 // da65 ADDRMODE string from an {m,x} width pair (true = 8-bit). da65 grammar:
 // char 0 = A width (uppercase M = 8-bit, lowercase m = 16-bit), char 1 = X/Y
 // width (uppercase X = 8-bit, lowercase x = 16-bit). Post-reset = "MX".
-const addrmode = (m, x) => (m ? "M" : "m") + (x ? "X" : "x");
+export const addrmode = (m, x) => (m ? "M" : "m") + (x ? "X" : "x");
 
 // 65816 instruction base length (bytes) per opcode, measured at 8-bit M/X —
 // derived authoritatively from da65 (decode `op 00 00 00 00…` and read the byte
@@ -338,7 +338,7 @@ const X_IMM = new Set([0xA0, 0xA2, 0xC0, 0xE0]);
  * @param {boolean} x8 entry X/Y-width
  * @returns {Array<{start:number,end:number,m8:boolean,x8:boolean}>} width ranges (relative offsets)
  */
-function widthRanges(bytes, m8, x8) {
+export function widthRanges(bytes, m8, x8) {
   const ranges = [];
   let rangeStart = 0, curM = m8, curX = x8, off = 0;
   const push = (end) => { if (end > rangeStart) ranges.push({ start: rangeStart, end, m8: curM, x8: curX }); };

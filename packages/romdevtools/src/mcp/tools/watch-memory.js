@@ -836,7 +836,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
 
   // breakpoint({on:write|read|pc}) STOP-on-first. on:write precision:exact=bpFindWriter
   // (core watchpoint, true PC under IRQ), precision:sampled=bpRunUntilWrite (frame PC).
-  async function bpFindWriter({ address, maxFrames = 600, pressDuring, settleFrames = 0, abortIf, condition, conditionValue }) {
+  async function bpFindWriter({ address, maxFrames = 600, pressDuring, settleFrames = 0, abortIf, condition, conditionValue, conditionWidth }) {
       const host = getHost(sessionKey);
       if (!host.watchpointSupported || !host.watchpointSupported()) {
         return jsonContent({
@@ -846,8 +846,43 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         });
       }
       if (condition === "equals" && conditionValue == null) {
-        throw new Error("breakpoint({on:'write', condition:'equals'}): `conditionValue` (the byte to stop on) is required.");
+        throw new Error("breakpoint({on:'write', condition:'equals'}): `conditionValue` (the value to stop on) is required.");
       }
+      // 16-BIT condition (v0.94.0 feedback): on 65816/68k the interesting state
+      // is often a word written by one store. Explicit conditionWidth:16, or
+      // inferred when conditionValue > 255 (a byte condition can't mean that).
+      let width = conditionWidth ?? ((condition === "equals" && conditionValue != null && conditionValue > 0xFF) ? 16 : 8);
+      if (width === 16 && condition == null) {
+        throw new Error("breakpoint({on:'write', conditionWidth:16}): a 16-bit width needs a `condition` ('equals'|'increase'|'decrease').");
+      }
+      if (condition === "equals" && conditionValue != null && conditionValue > (width === 16 ? 0xFFFF : 0xFF)) {
+        throw new Error(`breakpoint({on:'write', condition:'equals'}): conditionValue 0x${conditionValue.toString(16)} exceeds the ${width}-bit range.`);
+      }
+      // Best-effort CPU-address → work-RAM byte read for the host-side word
+      // checks (same platform mapping backtraceForHit uses; SNES adds the
+      // bank-$7E direct window). Returns null when unmappable — the 16-bit
+      // paths then degrade gracefully (documented in the result note).
+      const platform0 = host.status?.platform;
+      const readRamByteAt = (cpuAddr) => {
+        try {
+          let off;
+          if (platform0 === "snes") {
+            if (cpuAddr >= 0x7E0000 && cpuAddr <= 0x7FFFFF) off = cpuAddr - 0x7E0000;
+            else if ((cpuAddr & 0xFFFF) < 0x2000) off = cpuAddr & 0x1FFF;
+            else return null;
+          } else if (platform0 === "gb" || platform0 === "gbc" || platform0 === "sms" || platform0 === "gg" || platform0 === "msx") {
+            off = cpuAddr & 0x1FFF;
+          } else {
+            off = cpuAddr & 0xFFFF;
+          }
+          const b = host.readMemory("system_ram", off, 1);
+          return b && b.length ? b[0] : null;
+        } catch { return null; }
+      };
+      const readRamWordLE = (cpuAddr) => {
+        const lo = readRamByteAt(cpuAddr), hi = readRamByteAt(cpuAddr + 1);
+        return (lo == null || hi == null) ? null : (lo | (hi << 8));
+      };
       // Pass the condition to the core's watchpoint so its hook only COUNTS +
       // records writes that satisfy it (qualifying writes), ignoring restoring/
       // churn writes — and so the reported PC is a meaningful write, not just the
@@ -859,8 +894,24 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       // starts from a neutral pad (see settleHeldInput / 213831 #1).
       settleHeldInput(host, settleFrames, presses0.length > 0);
       const wantCond = condition != null;
-      const coreCond = host.setWatchpoint(address, true, wantCond ? { condition, value: conditionValue } : undefined);
-      const coreHandledCond = wantCond && coreCond && coreCond.conditionApplied === true;
+      // width 16, equals: the core hook compares ONE byte, so arm it on the HIGH
+      // byte (address+1) with the value's high byte — a 16-bit store writes low
+      // then high, and watching the LOW byte of a constant like $2000 is useless
+      // ($00 matches everything). The low byte is then verified host-side.
+      // width 16, increase/decrease: a byte-level delta lies about a word counter
+      // (the carry), so arm an UNCONDITIONED watch for the writer PC and do the
+      // word compare host-side each frame.
+      const wide = width === 16;
+      const wideEquals = wide && condition === "equals";
+      const wideDelta = wide && (condition === "increase" || condition === "decrease");
+      const watchAddr = wideEquals ? address + 1 : address;
+      const coreCondSpec = wideEquals ? { condition: "equals", value: (conditionValue >> 8) & 0xFF }
+        : wideDelta ? undefined
+        : (wantCond ? { condition, value: conditionValue } : undefined);
+      const coreCond = host.setWatchpoint(watchAddr, true, coreCondSpec);
+      const coreHandledCond = !!coreCondSpec && coreCond && coreCond.conditionApplied === true;
+      let prevWord = wideDelta ? readRamWordLE(address) : null;
+      let wordAtHit = null, wordBeforeHit = null, lowByteVerified = null;
       const presses = presses0;
       const pressDriver = makePressDriver(host, presses);
       // Abort-guard: sample caller-named "still valid?" bytes each frame; if any
@@ -873,15 +924,45 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       for (let i = 0; i < maxFrames; i++) {
         pressDriver.applyForFrame(i);
         host.stepFrames(1);
-        const w = host.getWatchpoint();
+        const w = host.getWatchpoint(wideDelta); // wideDelta: clear per frame (plain watch counts churn)
         if (w.hits > 0) {
+          if (wideDelta) {
+            // 16-bit increase/decrease: word compare host-side. The core watch
+            // (low byte, unconditioned) only tells us SOMETHING wrote the counter
+            // this frame + the writer PC; the word delta decides if it counts.
+            const word = readRamWordLE(address);
+            if (word == null) {
+              // Unmappable address → cannot do the word compare; fail loudly
+              // rather than silently reporting byte-delta lies.
+              host.setWatchpoint(watchAddr, false);
+              pressDriver.finish();
+              return jsonContent({
+                found: false, address: "$" + address.toString(16).toUpperCase(),
+                note: "conditionWidth:16 with 'increase'/'decrease' needs a host-readable work-RAM address for the word compare, and this address didn't map to system_ram on this platform. Use the 8-bit condition on the byte that actually changes, or watch with condition:'equals' width 16.",
+              });
+            }
+            const moved = prevWord != null && (condition === "increase" ? word > prevWord : word < prevWord);
+            if (!moved) { prevWord = word; continue; }
+            wordBeforeHit = prevWord; wordAtHit = word;
+            result = { ...w, framesStepped: i + 1 }; break;
+          }
           // Host-side fallback for condition:'equals' on a core that didn't
           // apply the condition itself: only accept when the reported (last)
           // written value equals the target; otherwise keep waiting. (inc/dec
           // can't be faked host-side — they need the core's pre-write byte, so
           // we only reach here for them when the core DID handle the condition.)
-          if (wantCond && !coreHandledCond && condition === "equals" && (w.lastValue & 0xFF) !== (conditionValue & 0xFF)) {
+          const eqTarget = wideEquals ? (conditionValue >> 8) & 0xFF : (conditionValue ?? 0) & 0xFF;
+          if (wantCond && !coreHandledCond && condition === "equals" && (w.lastValue & 0xFF) !== eqTarget) {
             continue;
+          }
+          if (wideEquals) {
+            // High byte matched in the core — verify the LOW byte host-side so
+            // the WORD really equals the target (a $20xx write with the wrong
+            // low byte keeps waiting). Unmappable low byte → accept + flag.
+            const lo = readRamByteAt(address);
+            if (lo != null && lo !== (conditionValue & 0xFF)) continue;
+            lowByteVerified = lo != null;
+            wordAtHit = lo != null ? ((w.lastValue & 0xFF) << 8) | lo : null;
           }
           result = { ...w, framesStepped: i + 1 }; break;
         }
@@ -889,7 +970,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         if (ab) { aborted = { ...ab, framesStepped: i + 1 }; break; }
       }
       pressDriver.finish();
-      host.setWatchpoint(address, false); // disarm
+      host.setWatchpoint(watchAddr, false); // disarm
       if (aborted) {
         return jsonContent({
           found: false, aborted: true, abortedBy: aborted.label,
@@ -937,6 +1018,11 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         valueByte: "0x" + result.lastValue.toString(16).toUpperCase().padStart(2, "0"),
         ...(result.lastOldValue != null ? { oldValueByte: "0x" + (result.lastOldValue & 0xFF).toString(16).toUpperCase().padStart(2, "0") } : {}),
         ...(condition ? { condition, ...(coreHandledCond ? {} : { conditionAppliedBy: "host" }) } : {}),
+        ...(wide ? { conditionWidth: 16 } : {}),
+        ...(wide && watchAddr !== address ? { watchedByte: "$" + watchAddr.toString(16).toUpperCase() + " (high byte)" } : {}),
+        ...(wordAtHit != null ? { valueWord: "0x" + wordAtHit.toString(16).toUpperCase().padStart(4, "0") } : {}),
+        ...(wordBeforeHit != null ? { oldValueWord: "0x" + wordBeforeHit.toString(16).toUpperCase().padStart(4, "0") } : {}),
+        ...(wideEquals && lowByteVerified === false ? { lowByteVerified: false } : {}),
         hits: result.hits,
         framesStepped: result.framesStepped,
         ...(wpRegs ? { registersAtHit: wpRegs } : {}),
@@ -944,6 +1030,8 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         ...(bankInfo ? bankInfo : {}),
         ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
         note: "pc is the EXACT writing instruction (captured in the CPU write path), not a frame sample. " +
+          (wideEquals ? `conditionWidth:16 — the core watch sat on the HIGH byte ($${watchAddr.toString(16).toUpperCase()}) for 0x${((conditionValue >> 8) & 0xFF).toString(16).padStart(2, "0")}, and the low byte was ${lowByteVerified === false ? "NOT host-verifiable at this address (accepted on the high byte alone)" : "verified host-side"} — so the hit means the WORD became 0x${conditionValue.toString(16).toUpperCase().padStart(4, "0")}. ` : "") +
+          (wideDelta ? `conditionWidth:16 — the word at $${address.toString(16).toUpperCase()}/+1 ${condition}d ${wordBeforeHit != null ? "0x" + wordBeforeHit.toString(16).toUpperCase().padStart(4, "0") + "→0x" + wordAtHit.toString(16).toUpperCase().padStart(4, "0") : ""} (host-side word compare; the pc is the frame's low-byte writer). A write that only touches the HIGH byte won't trip the watch — rare for real 16-bit stores, which write both. ` : "") +
           (condition
             ? `condition:'${condition}' filtered to the MEANINGFUL write — pc/valueByte/hits reflect only qualifying writes${result.lastOldValue != null ? ` (oldValueByte→valueByte = ${"0x" + (result.lastOldValue & 0xFF).toString(16)}→${"0x" + result.lastValue.toString(16)})` : ""}. `
             : "Without a `condition`, on:'write' runs to END OF FRAME and reports the LAST matching write of the frame (NOT the first) — `hits` is the count of all matching writes that frame. If a restoring/churn write hides the change you want, pass condition:'increase'|'decrease'|'equals'. ") +
@@ -1349,7 +1437,8 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       offset: z.number().int().min(0).optional().describe("on:'write' precision:'sampled' — offset within the region."),
       length: z.number().int().min(1).max(4096).default(1).describe("on:'write' precision:'sampled' — bytes to watch from offset."),
       condition: z.enum(["increase", "decrease", "equals"]).optional().describe("on:'write' precision:'exact' ONLY — stop only on the MEANINGFUL write, ignoring restoring/churn writes. 'decrease'/'increase' = the stored byte actually went down/up (e.g. a real lives−1, not a per-frame pointer-arithmetic restore); 'equals' = the byte became `value` (e.g. $00→$01 respawn re-arm). Without it, on:'write' reports the LAST matching write of the frame, which may be the churn, not the change you want."),
-      conditionValue: z.number().int().min(0).max(255).optional().describe("on:'write' condition:'equals' — the byte value to stop on (the NEW value written)."),
+      conditionValue: z.number().int().min(0).max(65535).optional().describe("on:'write' condition:'equals' — the value to stop on (the NEW value written). > 255 implies conditionWidth:16."),
+      conditionWidth: z.union([z.literal(8), z.literal(16)]).optional().describe("on:'write' precision:'exact' — condition width, default 8. 16 treats address/address+1 as one little-endian WORD: 'equals' arms the core watch on the HIGH byte (no useless $00-low-byte matches) + verifies the low byte host-side; 'increase'/'decrease' compare the word host-side so a 16-bit counter's carry can't lie. Inferred automatically when conditionValue > 255."),
       maxFrames: z.number().int().min(1).max(1_000_000).default(600).describe("Max frames to run while waiting for the condition."),
       pressDuring: z.array(z.object({
         frame: z.number().int().min(0),
