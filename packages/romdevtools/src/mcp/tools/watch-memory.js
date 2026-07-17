@@ -908,6 +908,10 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       const coreCondSpec = wideEquals ? { condition: "equals", value: (conditionValue >> 8) & 0xFF }
         : wideDelta ? undefined
         : (wantCond ? { condition, value: conditionValue } : undefined);
+      // SNES WRAM low-mirror transparency: the host canonicalizes the armed
+      // address ($0218 → $7E0218) so any addressing form the writer uses is
+      // caught; echo it so the agent sees which byte is really armed.
+      const canonAddr = host._canonWatchAddress ? host._canonWatchAddress(watchAddr) : watchAddr;
       const coreCond = host.setWatchpoint(watchAddr, true, coreCondSpec);
       const coreHandledCond = !!coreCondSpec && coreCond && coreCond.conditionApplied === true;
       let prevWord = wideDelta ? readRamWordLE(address) : null;
@@ -985,7 +989,9 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       }
       if (!result) {
         return jsonContent({
-          found: false, address: "$" + address.toString(16).toUpperCase(), framesStepped: maxFrames,
+          found: false, address: "$" + address.toString(16).toUpperCase(),
+          ...(canonAddr !== watchAddr ? { armedAddress: "$" + canonAddr.toString(16).toUpperCase() + " (WRAM low mirror canonicalized — a $7Exxxx-form writer would have been caught too)" } : {}),
+          framesStepped: maxFrames,
           ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
           ...(abortIf && abortIf.length ? { abortIfArmed: guard.count } : {}),
           // One-line hint by default; the full "two reasons" explainer is verbose
@@ -1010,6 +1016,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       return attachObserverFrame(jsonContent({
         found: true,
         address: "$" + address.toString(16).toUpperCase(),
+        ...(canonAddr !== watchAddr ? { armedAddress: "$" + canonAddr.toString(16).toUpperCase() + " (WRAM low mirror canonicalized — all addressing forms of this byte are caught)" } : {}),
         pc: result.lastPC != null ? "$" + result.lastPC.toString(16).toUpperCase() : null,
         pcRaw: result.lastPC,
         // valueByte, not value: this is the ONE BYTE that landed on the watched
@@ -1383,7 +1390,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         return jsonContent({
           hit: false, address: "$" + address.toString(16).toUpperCase(), framesRun,
           ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
-          note: "Address was not read within maxFrames. Drive the game to the state that reads it (pressDuring), or increase maxFrames.",
+          note: "Address was not read within maxFrames. Drive the game to the state that reads it (pressDuring), or increase maxFrames. If you're hunting the CONSUMER of a table/struct (any field of any record might be the one that's read), don't guess per-byte — watch({on:'range', kind:'read', start, end}) logs EVERY reading PC over the whole range in one call (distinctPCsOnly:true for just the digest).",
         });
       }
       const fin = host.getReadWatch(true);

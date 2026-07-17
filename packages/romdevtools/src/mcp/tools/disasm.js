@@ -998,7 +998,18 @@ async function disassembleRomCore(args) {
           ...(mapped.cpu === "65816" ? { bytes: mapped.bytes, entry } : {}),
         });
         let r;
-        if (mapped.cpu === "65816") {
+        if (mapped.cpu === "65816" && args.widths) {
+          // EXPLICIT entry-width override (v0.94.0 round 2): the agent often
+          // KNOWS the width (live P capture, surrounding code) when a blob has
+          // no in-window caller — inference can only guess there. Forced entry
+          // width, single da65 call, no symptom scoring; in-window rep/sep are
+          // still followed by the dataflow.
+          const entry = { m8: args.widths.a !== 16, x8: args.widths.i !== 16 };
+          r = await runDa65({
+            bytes: mapped.bytes, startAddress: da65Start, cpu: mapped.cpu,
+            info: mkInfo(entry), options: da65Options,
+          });
+        } else if (mapped.cpu === "65816") {
           // ENTRY-WIDTH INFERENCE (same heuristic as target:'project'): decode
           // at post-reset 8/8 first; if the listing shows desync symptoms
           // (stray brk/cop/wdm/stp — vanishingly rare in real code), retry the
@@ -1123,6 +1134,9 @@ async function disassembleRomCore(args) {
       }
 
       if (outputPath) {
+        // Create the parent dir like every other file-writing tool does — a raw
+        // ENOENT for a missing directory cost an agent a retry (v0.94.0 round 2).
+        await mkdir(nodePath.dirname(outputPath), { recursive: true });
         await writeFile(outputPath, asm);
         return jsonContent({
           ...baseResult,
@@ -1882,6 +1896,7 @@ export function registerDisasmTools(server, z) {
       // rom
       bank: z.number().int().min(0).max(255).optional().describe("target=rom / pointerTable: switchable ROM bank to map into the windowed slot. NES (mapper>0, $8000), GB/GBC ($4000), SMS/GG (Sega-mapper slot 2, $8000), Atari 2600/7800 (SuperGame $8000). SNES: the bank IS the address high byte — pass either a full 24-bit startAddress ($02AF86) OR a bank-local address + bank:2 (composed to $02AF86 internally); both map correctly. Flat platforms (Genesis/GBA/Lynx/C64) have no cart banking — a non-zero `bank` is REJECTED, never silently applied to bank 0."),
       thumb: z.boolean().default(false).describe("target=rom: GBA — disassemble as THUMB (16-bit) instead of ARM."),
+      widths: z.object({ a: z.union([z.literal(8), z.literal(16)]).optional(), i: z.union([z.literal(8), z.literal(16)]).optional() }).optional().describe("target=rom, SNES/65816 — FORCE the ENTRY width (a = accumulator/M, i = index/X, default 8) instead of inferring it. Use when YOU know the width (live P capture, surrounding code) for a window with no in-window caller — e.g. widths:{a:16,i:16} to decode a blob entered in 16-bit mode. In-window rep/sep are still followed."),
       endAddress: z.number().int().min(0).max(0xffffff).optional().describe("target=rom: CPU end address (inclusive); alternative to length."),
       untilReturn: z.boolean().default(false).describe("target=rom: stop at the first return/unconditional-jump (rts/rti/rtl/jmp, or ret/reti/jp per CPU) — grab one routine."),
       mapper: z.enum(["lorom", "hirom"]).optional().describe("target=rom/references: SNES mapper override (header-less homebrew defaults lorom)."),

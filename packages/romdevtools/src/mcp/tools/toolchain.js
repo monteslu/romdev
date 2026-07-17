@@ -1231,7 +1231,25 @@ export async function reassembleProjectCore({ path: projPath, platform, outputPa
       byteLength: reg.byteLength,
     });
     if (!r.ok || !r.bytes) {
-      regionResults.push({ file: reg.file, ok: false, byteExact: false, error: (r.log || "assemble failed").split("\n").slice(-3).join(" | ").slice(0, 400) });
+      // Structured failure (v0.94.0 round 2): strip the assembler's ANSI color
+      // codes, parse the log into the standard issues[] contract, and remap the
+      // internal concatenation name (main.s) + line numbers to the REGION'S
+      // real source file — reassemble is the hottest call in an annotation
+      // project, so its errors must point at the file the agent actually edits.
+      const cleanLog = (r.log || "assemble failed").replace(/\x1b\[[0-9;]*m/g, "");
+      const lineShift = r.prependedLines ?? 0;
+      const issues = parseBuildLog(cleanLog).map((iss) => ({
+        ...iss,
+        ...(iss.file === "main.s" || iss.file == null ? { file: reg.file } : {}),
+        ...(iss.line != null && lineShift ? { line: iss.line - lineShift } : {}),
+      }));
+      regionResults.push({
+        file: reg.file, ok: false, byteExact: false,
+        ...(issues.length ? { issues } : {}),
+        error: cleanLog.split("\n").filter((l) => l.trim()).slice(-3).join(" | ")
+          .replace(/main\.s:(\d+)/g, (_, n) => `${reg.file}:${Number(n) - lineShift}`)
+          .slice(0, 400),
+      });
       continue;
     }
     // A length-changing edit can't be spliced without shifting every later byte —
