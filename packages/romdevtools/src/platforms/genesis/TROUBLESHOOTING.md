@@ -144,6 +144,20 @@ Three layered things to check:
 3. **PSG (SN76489) writes go to $C00011 *byte-wise*.** A `move.w` to
    $C00011 silently writes only the low byte; use `move.b`.
 
+## "Watching a 16-bit counter with breakpoint({on:'write'}) behaves oddly"
+
+68000 words are BIG-endian: the HIGH byte of a word at `$FF0218` lives AT
+`$FF0218` (not +1). Pass `conditionWidth:16` and the tool handles the layout
+— `'equals'` arms the high byte at `address`, `'increase'`/`'decrease'`
+compare the full word host-side (so $00FF→$0100 reads as the increase it is,
+not a low-byte decrease). A plain byte-watch on the LOW byte of a word
+constant matches far too much.
+
+Work-RAM mirrors: $FF0000-$FFFFFF also appears across $E00000-$FEFFFF; a
+watch armed on a mirror form is canonicalized to the $FF form at arm time
+(the result echoes `armedAddress`). Cart ROM addresses ($000000-$3FFFFF)
+are never touched — read-watches on ROM tables stay literal.
+
 ## "Save states don't restore Z80 state"
 
 The libretro core needs to capture the Z80 RAM ($A00000-$A0FFFF) +

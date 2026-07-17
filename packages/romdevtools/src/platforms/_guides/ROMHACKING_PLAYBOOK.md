@@ -160,6 +160,11 @@ maps the bank→PRG offset for you (NES/SNES) — the inverse of the breakpoint
 result's bank/prgOffset, so you stop hand-computing `cpuAddr−0x8000+bank*0x4000`.
 A NES `$C000+` address resolves to the fixed top bank automatically.
 
+**Byte-pattern hunts** (call sites, embedded pointers): `memory({op:'readCart',
+findHex:'20 3C 87'})` scans the whole loaded cart for the pattern and maps every
+hit to a CPU address server-side (`$00:8837`-style on SNES; bank + window on
+NES/GB/SMS) — every `jsr $873C` in one call, no scripting over the ROM file.
+
 When a write "doesn't show up", check the ROM here before assuming the patch
 failed — it's usually live and the bug is elsewhere (wrong source, see §2/§5).
 
@@ -202,6 +207,26 @@ conditionValue:N` stops on the byte becoming N (e.g. a $00→$01 respawn re-arm)
 The hit then reports `oldValueByte`→`valueByte` so you see the exact transition.
 This is the difference between pinning a genuine decrement instantly and chasing
 net-zero restoring churn.
+
+**16-bit values: pass `conditionWidth:16`** (auto-inferred when
+`conditionValue > 255`). It treats address/address+1 as one WORD in the
+platform CPU's byte order (little-endian everywhere except the big-endian
+Genesis 68k): `'equals'` arms the word's HIGH byte — a byte-watch on the low
+byte of a constant like `$2000` matches everything — and `'increase'`/
+`'decrease'` compare the word so a counter's carry ($00FF→$0100) can't read
+as a byte-level decrease. The hit reports `valueWord`/`oldValueWord`.
+
+**Mirrors are handled at arm time.** RAM aliases (SNES banks $00-$3F low 8KB
+↔ $7E, NES $0800-$1FFF, GB echo $E000-$FDFF, SMS/GG $E000-$FFFB, Genesis
+$E00000-$FEFFFF) are canonicalized when the watch is armed, and the result
+echoes `armedAddress` when that happened — so watching `$0218` on SNES
+catches a `sta f:$7E0218` writer. You don't need to guess which form the
+game uses.
+
+**Hunting a table's CONSUMER, not one byte?** Don't per-byte read-watch a
+guess — `watch({on:'range', kind:'read', start, end})` logs EVERY reading PC
+over the whole struct in one call (`distinctPCsOnly:true` for just the
+digest).
 
 ---
 

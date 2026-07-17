@@ -219,6 +219,32 @@ consoleSetTextOffset(0x0100);    /* first text tile in tilemap */
 consoleInitText(0, 16 * 2, &tilfont, &palfont);
 ```
 
+## "breakpoint({on:'write'}) finds nothing, but the byte is demonstrably rewritten"
+
+Historical trap, FIXED in 0.97.0: the low 8 KB of WRAM is mirrored into banks
+$00-$3F/$80-$BF, and the watch used to arm the literal address while the core
+compared the canonical $7E form — watching `$0218` silently missed a
+`sta f:$7E0218`. Watches (write/read/range) now canonicalize at arm time and
+the result echoes `armedAddress` when that happened, so any addressing form of
+a low-WRAM byte is caught from any armed form. If you still get `found:false`,
+the byte is likely rebuilt as a BLOCK (copied/DMA'd from a source struct) —
+find the source with `memory({op:'search'})` and watch THAT.
+
+For 16-bit flags/counters, pass `conditionWidth:16` — `'equals'` arms the
+word's high byte (a low-byte watch on `$2000` matches everything) and
+`'increase'`/`'decrease'` compare the word so the carry can't lie.
+
+## "disasm shows `lda #$00` + `brk` garbage — M/X width desync"
+
+A 16-bit immediate decoded at 8-bit width desyncs the stream. Three tools, in
+order: (1) `disasm({target:'rom'})` runs a per-instruction M/X width dataflow
+— in-window `rep`/`sep` are followed and the ENTRY width is inferred — so a
+plain re-decode of the range usually just works now; (2) when the window has
+no self-evident entry and YOU know the width (live P capture, surrounding
+code), force it: `widths:{a:16,i:16}`; (3) `target:'project'` runs the same
+dataflow with heal-to-byte-exact for whole-ROM work. Hand-decoding from the
+byte columns should never be necessary.
+
 ## "Save states don't include the SPC700 state"
 
 snes9x snapshot includes APU state by default, so this should work

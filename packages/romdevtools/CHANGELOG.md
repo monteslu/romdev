@@ -4,6 +4,39 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.98.0 — 2026-07-17
+
+Cross-platform generalization of the 0.96.0/0.97.0 feedback fixes ("fixes
+that go across systems get done for all systems"):
+
+- **Mirror canonicalization for EVERY mirror platform**, not just SNES:
+  arming a watch (write/read/range) on an alias form now canonicalizes on
+  NES ($0800-$1FFF → $0000-$07FF), GB/GBC (echo $E000-$FDFF → $C000-$DDFF),
+  SMS/GG ($E000-$FFFB → $C000-$DFFB; mapper regs untouched), and Genesis
+  ($E00000-$FEFFFF → $FF0000|offset). Only unambiguous mirror windows are
+  touched — nothing that could alias ROM/regs (a Genesis read-watch on a
+  cart table at $000218 stays literal). Verified live on gpgx: arming the
+  $E2-mirror form catches the canonical $FF-form writer.
+  ⚠ Residual, stated honestly: snes9x is the only core whose hooks
+  canonicalize LIVE accesses, so on the other platforms a WRITER that itself
+  uses a mirror form still evades the watch. Fixing that direction needs
+  per-core hook patches + core rebuilds — deferred until it bites someone.
+- **`conditionWidth:16` is endianness-aware.** Genesis 68k words are
+  BIG-endian, so 'equals' now arms the word's high byte AT `address` there
+  (not address+1, which is the LOW byte on 68k and was wrong in 0.96.0) and
+  the host-side word compare composes big-endian. Verified live on gpgx
+  (a `move.w #$2000` write caught with exact PC). GBA gained proper
+  EWRAM/IWRAM mapping for the host-side reads too.
+- **`readCart` `findHex` maps GB/GBC (MBC $4000 window) and SMS/GG
+  (Sega-mapper slot 2)** hits to bank + CPU address, alongside the existing
+  NES/SNES/flat mappings.
+
+Not applicable elsewhere, for the record: the 65816 M/X width dataflow and
+`widths:{a,i}` override are width-state concepts only 65816 has (GBA's
+analog — ARM/Thumb mode mixing — already has the per-window `thumb` flag;
+full mode-tracking disasm remains the known deferred item), and the
+reassemble `issues[]` fix was already platform-generic.
+
 ## 0.97.0 — 2026-07-17
 
 v0.94.0 feedback round 2 (the SNES annotation agent's 20:51 + 00:40 notes).
