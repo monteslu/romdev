@@ -8,6 +8,7 @@ import { registersForPlatform } from "../../platforms/common/registers.js";
 import { findReferencesCore } from "./find-references.js";
 import { analyzeCfg, analyzeXrefs, analyzeFunctions, analyzeDecompile } from "../../analysis/analyze.js";
 import { recompileNesToSnes, sliceFirstRoutine } from "../../analysis/recompile-65816.js";
+import { widthRanges, addrmode } from "../../toolchains/common/reassemble.js";
 import { decodePointerTable, reverseLookup } from "../../analysis/pointer-table.js";
 
 /** cfg/xrefs/functions all operate on a ROM file. Reuse the `path` arg. */
@@ -984,19 +985,49 @@ async function disassembleRomCore(args) {
         // annotation, which needs the FULL cpu address to map to a ROM offset.
         const bankBase = startAddress & ~0xFFFF;      // 0 for a $0000-$FFFF address
         const da65Start = startAddress & 0xFFFF;      // legal 16-bit --start-addr
-        if (labels.length > 0 || dataRangesInWindow.length > 0 || mapped.cpu !== "6502") {
-          info = buildInfoFile({
-            startAddress: da65Start, length,
-            cpu: mapped.cpu,
-            labels: labels.map((l) => ({ ...l, addr: l.addr & 0xFFFF })),
-            dataRanges: dataRangesInWindow.map((d) => ({ ...d, start: d.start & 0xFFFF, end: d.end & 0xFFFF })),
+        const needAddressColumn = annotateRegistersFlag || annotateFileOffsetsFlag;
+        const da65Options = needAddressColumn ? ["--comments", "4"] : [];
+        const mkInfo = (entry) => buildInfoFile({
+          startAddress: da65Start, length,
+          cpu: mapped.cpu,
+          labels: labels.map((l) => ({ ...l, addr: l.addr & 0xFFFF })),
+          dataRanges: dataRangesInWindow.map((d) => ({ ...d, start: d.start & 0xFFFF, end: d.end & 0xFFFF })),
+          // 65816: feed the window bytes so buildInfoFile runs the 0.94.0
+          // per-instruction M/X width dataflow (width-homogeneous ADDRMODE
+          // ranges) instead of one fixed entry seed.
+          ...(mapped.cpu === "65816" ? { bytes: mapped.bytes, entry } : {}),
+        });
+        let r;
+        if (mapped.cpu === "65816") {
+          // ENTRY-WIDTH INFERENCE (same heuristic as target:'project'): decode
+          // at post-reset 8/8 first; if the listing shows desync symptoms
+          // (stray brk/cop/wdm/stp — vanishingly rare in real code), retry the
+          // other three entry widths and keep the cleanest. A mid-function
+          // window entered in 16-bit mode from its caller needs this — there's
+          // no leading rep/sep to re-sync from.
+          const symptomCount = (asmText) => (asmText.match(/\b(brk|cop|wdm|stp)\b/gi) || []).length;
+          const runWith = (entry) => runDa65({
+            bytes: mapped.bytes, startAddress: da65Start, cpu: mapped.cpu,
+            info: mkInfo(entry), options: da65Options,
+          });
+          r = await runWith({ m8: true, x8: true });
+          let best = symptomCount(r.asm);
+          if (best > 0) {
+            for (const e of [{ m8: false, x8: false }, { m8: true, x8: false }, { m8: false, x8: true }]) {
+              const alt = await runWith(e);
+              const sc = symptomCount(alt.asm);
+              if (sc < best) { r = alt; best = sc; if (sc === 0) break; }
+            }
+          }
+        } else {
+          if (labels.length > 0 || dataRangesInWindow.length > 0 || mapped.cpu !== "6502") {
+            info = mkInfo(undefined);
+          }
+          r = await runDa65({
+            bytes: mapped.bytes, startAddress: da65Start, cpu: mapped.cpu, info,
+            options: da65Options,
           });
         }
-        const needAddressColumn = annotateRegistersFlag || annotateFileOffsetsFlag;
-        const r = await runDa65({
-          bytes: mapped.bytes, startAddress: da65Start, cpu: mapped.cpu, info,
-          options: needAddressColumn ? ["--comments", "4"] : [],
-        });
         asm = r.asm;
         exitCode = r.exitCode;
         // Stash so the annotators below reconstruct the full 24-bit cpu address.
@@ -1833,7 +1864,7 @@ export function registerDisasmTools(server, z) {
     "LLM folds it. `address` for all four comes from target:'functions' (a CPU/virtual address; the file-offset " +
     "mapping is handled for you).",
     {
-      target: z.enum(["bytes", "rom", "project", "references", "cfg", "xrefs", "functions", "decompile", "source", "resolveJumptable", "pointerTable", "recompile"]).describe("bytes = raw chunk; rom = mapper-aware ROM; project = full rebuildable disasm; references = flat da65 operand-refs to an address; functions/cfg/xrefs = Rizin RE engine (function list / control-flow graph / deep graph xrefs); decompile = Ghidra C pseudocode; resolveJumptable = recover a computed-jump dispatcher's targets (LIVE — redirects to breakpoint({on:'jumptable'}), which runs the emulator and records the real switch arms a static decompiler can't follow); recompile = EMIT backend — statically recompile a NES ROM's reset routine to SNES 65816 asar source that builds + boots (phase 1: NROM, 6502→65816 emulation mode, PPU/APU seam STUBBED). See the tool description for the RE loop + the decompile altitude rule + per-CPU quality (all 14 platforms)."),
+      target: z.enum(["bytes", "rom", "project", "references", "cfg", "xrefs", "functions", "decompile", "source", "resolveJumptable", "pointerTable", "recompile"]).describe("bytes = raw chunk; rom = mapper-aware ROM (on SNES/65816 it runs the SAME per-instruction M/X width dataflow as target:'project' — in-window rep/sep are followed, entry width is inferred — so a re-decode of one range under corrected widths is one call, no project regen); project = full rebuildable disasm; references = flat da65 operand-refs to an address; functions/cfg/xrefs = Rizin RE engine (function list / control-flow graph / deep graph xrefs); decompile = Ghidra C pseudocode; resolveJumptable = recover a computed-jump dispatcher's targets (LIVE — redirects to breakpoint({on:'jumptable'}), which runs the emulator and records the real switch arms a static decompiler can't follow); recompile = EMIT backend — statically recompile a NES ROM's reset routine to SNES 65816 asar source that builds + boots (phase 1: NROM, 6502→65816 emulation mode, PPU/APU seam STUBBED). See the tool description for the RE loop + the decompile altitude rule + per-CPU quality (all 14 platforms)."),
       // shared
       path: z.string().optional().describe("target=bytes: raw binary path. target=rom/project/references: ROM file path."),
       base64: z.string().optional().describe("target=bytes: base64 of the bytes (OR `path`)."),
@@ -2417,7 +2448,7 @@ function firstErrorLine(text) {
  * gaps around the data ranges, rather than declaring one big Code RANGE
  * with data RANGEs on top.
  */
-function buildInfoFile({ startAddress, length, cpu, labels, dataRanges }) {
+function buildInfoFile({ startAddress, length, cpu, labels, dataRanges, bytes, entry }) {
   const lo = (n) => "$" + (n & 0xFFFF).toString(16).toUpperCase();
   const endAddress = startAddress + length - 1;
   const lines = [];
@@ -2429,20 +2460,36 @@ function buildInfoFile({ startAddress, length, cpu, labels, dataRanges }) {
     .sort((a, b) => a.start - b.start);
 
   // Emit alternating Code / ByteTable ranges.
+  //
+  // 65816 + window bytes available: run the 0.94.0 per-instruction M/X width
+  // dataflow (the same widthRanges walk target:'project' uses) over each code
+  // segment, carrying the width state ACROSS data ranges (data doesn't touch
+  // P). Every code range is seeded to its exact ADDRMODE, so a 16-bit
+  // immediate decodes at full width even when the rep that set it was several
+  // instructions back. Without bytes (or on 6502) this falls back to the
+  // fixed entry seed, exactly as before.
   const isHighCpu = cpu === "65816";
-  const codeRange = (s, e) => isHighCpu
-    ? `RANGE { START ${lo(s)}; END ${lo(e)}; TYPE Code; ADDRMODE "MX"; };`
-    : `RANGE { START ${lo(s)}; END ${lo(e)}; TYPE Code; };`;
+  let curM = entry?.m8 ?? true, curX = entry?.x8 ?? true; // post-reset 8/8 default
+  const codeRange = (s, e) => {
+    if (!isHighCpu) return [`RANGE { START ${lo(s)}; END ${lo(e)}; TYPE Code; };`];
+    if (!bytes) return [`RANGE { START ${lo(s)}; END ${lo(e)}; TYPE Code; ADDRMODE "${addrmode(curM, curX)}"; };`];
+    const seg = bytes.subarray(s - startAddress, e - startAddress + 1);
+    const ranges = widthRanges(seg, curM, curX);
+    const last = ranges[ranges.length - 1];
+    if (last) { curM = last.m8; curX = last.x8; }
+    return ranges.map((r) =>
+      `RANGE { START ${lo(s + r.start)}; END ${lo(s + r.end - 1)}; TYPE Code; ADDRMODE "${addrmode(r.m8, r.x8)}"; };`);
+  };
   const dataRange = (s, e) =>
     `RANGE { START ${lo(s)}; END ${lo(e)}; TYPE ByteTable; };`;
 
   let cursor = startAddress;
   for (const dr of drs) {
-    if (cursor < dr.start) lines.push(codeRange(cursor, dr.start - 1));
+    if (cursor < dr.start) lines.push(...codeRange(cursor, dr.start - 1));
     lines.push(dataRange(dr.start, dr.end));
     cursor = dr.end + 1;
   }
-  if (cursor <= endAddress) lines.push(codeRange(cursor, endAddress));
+  if (cursor <= endAddress) lines.push(...codeRange(cursor, endAddress));
 
   for (const lab of labels) {
     if (lab.addr > 0xFFFF) continue;

@@ -4,6 +4,31 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.96.0 — 2026-07-16
+
+v0.94.0 feedback round (the SNES annotation agent's two notes files — no bugs
+reported, three asks):
+
+- **`disasm({target:'rom'})` now runs the 0.94.0 per-instruction M/X width
+  dataflow on 65816** — the same widthRanges walk as `target:'project'`:
+  in-window `rep`/`sep` are followed (width-homogeneous ADDRMODE ranges, so a
+  16-bit immediate decodes full-width even when the `rep` that set it is
+  several instructions back) and the ENTRY width is inferred (8/8 first, then
+  the other three scored by desync symptoms). The tool description says so.
+  This makes "re-decode one range under corrected widths" a single call — no
+  project regeneration that would discard hand-maintained annotations.
+- **`breakpoint({on:'write'})` gains `conditionWidth: 16`** (auto-inferred
+  when `conditionValue > 255`): `condition:'equals'` arms the core watch on
+  the HIGH byte (address+1) with the value's high byte — no more useless
+  $00-low-byte matches on constants like $2000 — and verifies the low byte
+  host-side so the hit means the WORD equals the target. `'increase'`/
+  `'decrease'` compare the word host-side each frame (an unconditioned core
+  watch supplies the writer PC), so a 16-bit counter's carry can't lie the
+  way a byte-level delta does. Results carry `valueWord`/`oldValueWord`/
+  `watchedByte`; `conditionValue`'s schema now allows 0-65535.
+- **`memory({op:'read', offsets, compact:true})`** returns the batch as ONE
+  `{"0xOFF": "hex"}` map (~4x fewer tokens for the sample-N-flags pattern).
+
 ## 0.95.0 — 2026-07-16
 
 The GBA + Genesis build pipelines are now standalone: their SDK library trees
