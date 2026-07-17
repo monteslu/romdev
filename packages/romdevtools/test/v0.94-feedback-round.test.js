@@ -125,7 +125,7 @@ test("#2 conditionWidth:16 equals — arms the HIGH byte, verifies the low byte 
   assert.equal(r.found, true);
   assert.equal(r.conditionWidth, 16);
   assert.equal(host._armed?.addr ?? null, null, "disarmed after the run");
-  assert.equal(r.watchedByte, "$6A1 (high byte)", "the core watch sat on address+1");
+  assert.equal(r.watchedByte, "$6A1 (word's high byte, little-endian)", "the core watch sat on address+1");
   assert.equal(r.valueWord, "0x2000", "the WORD is reported, not just the byte");
   assert.match(r.note, /HIGH byte/, "note explains the high-byte arming");
 });

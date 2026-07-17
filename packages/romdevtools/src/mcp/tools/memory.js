@@ -241,6 +241,22 @@ async function memReadCart(sessionKey, { offset = 0, length = 16, cpuAddress, ba
           toCpu = (o) => isLo
             ? { cpuAddress: "$" + (o >> 15).toString(16).toUpperCase().padStart(2, "0") + ":" + (0x8000 | (o & 0x7FFF)).toString(16).toUpperCase().padStart(4, "0") }
             : { cpuAddress: "$" + (0xC0 + (o >> 16)).toString(16).toUpperCase().padStart(2, "0") + ":" + (o & 0xFFFF).toString(16).toUpperCase().padStart(4, "0") };
+        } else if (rom.platform === "gb" || rom.platform === "gbc") {
+          // MBC convention: bank 0 fixed at $0000-$3FFF; every other bank
+          // through the $4000-$7FFF window.
+          toCpu = (o) => {
+            const b = Math.floor(o / 0x4000);
+            const addr = b === 0 ? o : 0x4000 + (o & 0x3FFF);
+            return { cpuAddress: "$" + addr.toString(16).toUpperCase(), bank: b };
+          };
+        } else if (rom.platform === "sms" || rom.platform === "gg") {
+          // Sega mapper convention: slot0 $0000/slot1 $4000 fixed-ish, banks ≥2
+          // usually paged through slot 2 at $8000.
+          toCpu = (o) => {
+            const b = Math.floor(o / 0x4000);
+            const addr = (b <= 1 ? b * 0x4000 : 0x8000) + (o & 0x3FFF);
+            return { cpuAddress: "$" + addr.toString(16).toUpperCase(), bank: b };
+          };
         } else if (rom.base) {
           toCpu = (o) => ({ cpuAddress: "0x" + (rom.base + o).toString(16).toUpperCase() });
         }
@@ -261,6 +277,8 @@ async function memReadCart(sessionKey, { offset = 0, length = 16, cpuAddress, ba
           note: (rom.platform === "nes"
             ? "cpuAddress assumes the standard $8000-window convention (last PRG bank fixed at $C000); on an exotic mapper trust bank+the $3FFF offset over the literal address. "
             : rom.platform === "snes" ? "cpuAddress is bank:addr in the cart's detected mapping (LoROM/HiROM from the header). "
+            : rom.platform === "gb" || rom.platform === "gbc" ? "cpuAddress uses the MBC convention (bank 0 at $0000, banks ≥1 through the $4000 window) — trust bank+offset on an exotic mapper. "
+            : rom.platform === "sms" || rom.platform === "gg" ? "cpuAddress uses the Sega-mapper convention (banks ≥2 through slot 2 at $8000) — trust bank+offset if the game repages slots. "
             : "") +
             "Scan is over the header-stripped cart image (fileOffset is image-relative" + ((rom.raw?.length ?? 0) > (rom.bytes?.length ?? 0) ? `; add ${(rom.raw.length - rom.bytes.length)} for the raw file` : "") + ").",
         });

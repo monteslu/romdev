@@ -1645,19 +1645,46 @@ export class LibretroHost {
    * @param {number} address CPU address to watch
    * @param {boolean} [enabled=true]
    */
-  /** Canonicalize a watch address for the loaded platform. SNES: the low 8 KB
-   *  of WRAM mirrors into banks $00-$3F/$80-$BF at $0000-$1FFF; the snes9x
-   *  romdev hooks canonicalize every LIVE access to the $7E form before
-   *  comparing, so the ARMED address must be in $7E form too — arming a raw
-   *  $0218 could never match a `sta f:$7E0218` (or vice versa: arming
-   *  $7E0218 matches `sta $0218` fine, because the live access canonicalizes).
-   *  Applied to write watch, read watch, and range watch alike. */
+  /** Canonicalize a watch address for the loaded platform — RAM-mirror
+   *  aliasing otherwise makes exact watches silently miss (v0.94.0 round 2).
+   *  Applied to write watch, read watch, and range watch alike.
+   *
+   *  SNES: the low 8 KB of WRAM mirrors into banks $00-$3F/$80-$BF at
+   *  $0000-$1FFF; the snes9x romdev hooks canonicalize every LIVE access to
+   *  the $7E form before comparing, so the ARMED address must be in $7E form
+   *  too — arming a raw $0218 could never match a `sta f:$7E0218`.
+   *
+   *  The other mirror platforms (NES/GB/GBC/SMS/GG/Genesis) get the SAME
+   *  arm-side canonicalization so arming a mirror-form address matches the
+   *  canonical-form writer (the common agent mistake). ⚠ Their core hooks
+   *  compare RAW bus addresses (only snes9x canonicalizes live accesses), so
+   *  a WRITER that itself uses a mirror form still evades on those platforms
+   *  — fixing that direction needs per-core hook patches (deferred; noted in
+   *  the changelog). Only unambiguous mirror windows are canonicalized —
+   *  nothing that could alias ROM/regs. */
   _canonWatchAddress(address) {
-    if (this.status?.platform === "snes") {
+    const platform = this.status?.platform;
+    if (platform === "snes") {
       const a = address & 0xFFFFFF, bank = a >> 16, off = a & 0xFFFF;
       if (off < 0x2000 && (bank <= 0x3F || (bank >= 0x80 && bank <= 0xBF))) {
         return 0x7E0000 | off;
       }
+    } else if (platform === "nes") {
+      // $0800-$1FFF are pure mirrors of internal RAM $0000-$07FF.
+      const a = address & 0xFFFF;
+      if (a >= 0x0800 && a <= 0x1FFF) return a & 0x07FF;
+    } else if (platform === "gb" || platform === "gbc") {
+      // Echo RAM $E000-$FDFF mirrors WRAM $C000-$DDFF.
+      const a = address & 0xFFFF;
+      if (a >= 0xE000 && a <= 0xFDFF) return a - 0x2000;
+    } else if (platform === "sms" || platform === "gg") {
+      // $E000-$FFFB mirrors RAM $C000-$DFFB ($FFFC-$FFFF are mapper regs — untouched).
+      const a = address & 0xFFFF;
+      if (a >= 0xE000 && a <= 0xFFFB) return a - 0x2000;
+    } else if (platform === "genesis") {
+      // 68k work RAM at $FF0000-$FFFFFF is mirrored across $E00000-$FEFFFF.
+      const a = address & 0xFFFFFF;
+      if (a >= 0xE00000 && a <= 0xFEFFFF) return 0xFF0000 | (a & 0xFFFF);
     }
     return address;
   }
