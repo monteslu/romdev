@@ -20,6 +20,12 @@ node_modules/
 # per-package recipe lives in packages/*/build but its fetched/intermediate
 # artifacts are ignored — only the build SCRIPT + patches are committed.)
 build/
+# EXCEPT the vendored build-driver kits (source, parity-tested against the
+# romdevtools canonical copies — NOT build output). Without these negations a
+# clean checkout is missing the buildGbaC/buildGenesisC pipeline entirely
+# (the CI red streak from 0.95.0 to 0.100.0).
+!packages/romdev-platform-gba/build/
+!packages/romdev-toolchain-m68k-gcc/build/
 packages/*/build/_work/
 packages/*/build/upstream/
 
