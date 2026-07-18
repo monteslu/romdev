@@ -5,12 +5,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { PNG } from "pngjs";
-import { framebufferToPng, resamplePng } from "./framebuffer.js";
+import { framebufferToPng, resamplePng } from "romdev-core-host/framebuffer.js";
 import {
   RETRO_PIXEL_FORMAT_0RGB1555,
   RETRO_PIXEL_FORMAT_RGB565,
   RETRO_PIXEL_FORMAT_XRGB8888,
-} from "./retroConstants.js";
+} from "romdev-core-host/retroConstants.js";
 
 function decode(buf) {
   return PNG.sync.read(buf);

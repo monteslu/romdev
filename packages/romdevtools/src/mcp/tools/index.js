@@ -73,7 +73,7 @@ import { dirname, join } from "node:path";
  * cc65/da65 toolchain is installed, so it can't be assumed. Surfaced in
  * catalog({op:'status'}). Names are agent-facing (what you'd reach for), mapped
  * to the host's existing *Supported() probes.
- * @param {import("../../host/index.js").LibretroHost|null} host
+ * @param {import("romdev-core-host/index.js").LibretroHost|null} host
  */
 function hostCapabilities(host) {
   const da65 = da65Available();

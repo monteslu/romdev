@@ -44,7 +44,7 @@ int main(void) {
   assert.equal(r.ok, true, `gba build failed at ${r.stage}: ${(r.log || "").slice(-600)}`);
 
   // 2) Boot under mgba.
-  const { LibretroHost } = await import("../src/host/LibretroHost.js");
+  const { LibretroHost } = await import("romdev-core-host/LibretroHost.js");
   const core = resolveCore("gba");
   assert.ok(core, "resolveCore('gba') returned null — mgba_libretro.{js,wasm} missing?");
   const host = new LibretroHost();

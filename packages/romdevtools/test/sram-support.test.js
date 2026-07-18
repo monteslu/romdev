@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { resolveCore } from "../src/cores/registry.js";
-import { LibretroHost } from "../src/host/LibretroHost.js";
+import { LibretroHost } from "romdev-core-host/LibretroHost.js";
 import { identifyFile } from "../src/rom-id/identifier.js";
 import { buildExampleRom } from "./build-fixture-rom.js";
 

@@ -9,7 +9,7 @@ import { PNG } from "pngjs";
 
 import { decodeTile, renderPatternTablePng, decodeNametable } from "./ppu.js";
 import { resolveCore } from "../../cores/registry.js";
-import { LibretroHost } from "../../host/index.js";
+import { LibretroHost } from "romdev-core-host/index.js";
 import { buildC } from "../../toolchains/cc65/cc65.js";
 import { writeFile, mkdtemp } from "node:fs/promises";
 import os from "node:os";

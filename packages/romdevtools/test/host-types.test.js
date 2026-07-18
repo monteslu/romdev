@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { defaultMediaKind, portInputToMask } from "./types.js";
+import { defaultMediaKind, portInputToMask } from "romdev-core-host/types.js";
 
 test("defaultMediaKind: consoles return cartridge", () => {
   assert.equal(defaultMediaKind("nes"), "cartridge");

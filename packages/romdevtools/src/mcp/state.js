@@ -9,7 +9,7 @@
 // minted once per McpServer instance in registerTools(); the transport
 // layer is responsible for calling clearHost(key) on session close.
 
-import { LibretroHost } from "../host/index.js";
+import { LibretroHost } from "romdev-core-host/index.js";
 import path from "node:path";
 import os from "node:os";
 import { existsSync } from "node:fs";

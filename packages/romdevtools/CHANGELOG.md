@@ -4,6 +4,44 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.99.0 — 2026-07-18
+
+**The host + runner extraction** (internal-romdev/ROMDEV_CORE_RUNNER_PLAN.md
+Phase 1; MODULARITY.md item 4's trigger fired — six SDK run bridges + the web
+IDEs are the consumers):
+
+- **New package `romdev-core-host`** — the libretro host runtime
+  (`LibretroHost`, coreLoader, callbacks, framebuffer codecs, retro
+  constants, every per-chip audio/CPU-state decoder, the GL bridge, and the
+  Game Genie decoder) published standalone. This is the SAME host the MCP
+  server runs — romdevtools now consumes it as a dependency, so there is
+  exactly ONE host implementation. Bundles no cores. The two non-libretro
+  host variants (JsGameHost/WasmcartHost) stay in romdevtools so the SDK
+  dep tree doesn't drag rungame/wasmcart.
+- **New package `romdev-core-runner`** — the human "fire it up" tier:
+  `runRom(rom, {core, buttonMap, keyMap, scale, title, aspect})` opens an
+  SDL window over romdev-core-host with keyboard + hot-plug gamepad input,
+  audio at the core's native rate, and aspect-correct pixel-perfect
+  scaling. Carries the playtest window's SDL hardening VERBATIM (`initSdl`:
+  missing-native-binary self-repair, the failed-import-cache workaround,
+  offscreen-driver detection) and throws a structured
+  `{code:"SDL_UNAVAILABLE", sdlKind, fixCmd}` — never a module-load crash;
+  `@kmamal/sdl` is an optionalDependency declared ONCE here. Deliberately
+  NO agent surface (checkpoints/rewind/live-host-follow stay in playtest).
+- **playtest.js folded onto the runner's shared pieces**: initSdl (with the
+  romdev-specific no-display guidance preserved verbatim at the tool
+  surface), the SDL-button/keyboard → RetroPad maps, letterbox, tvAspectFor,
+  bitToName, and the framebuffer→RGBA blit now come from romdev-core-runner
+  — the duplicated copies are deleted. playtest keeps the agent tier:
+  live-host follow, auto-checkpoints, rewind, human co-drive detection,
+  audio-paced stepping, the C64/N64 layouts.
+- Tests: SDL-absent contract (structured failure with SDL missing, mocked;
+  offscreen-driver detection) + the moved host unit tests.
+
+The SDK folds (gtlua/mdlua/neslua/c64lua/gbalua → ~15-line `runRom` shims)
+are the SDK repos' follow-up; this release is the romdev-side extraction
+they consume.
+
 ## 0.98.0 — 2026-07-17
 
 Cross-platform generalization of the 0.96.0/0.97.0 feedback fixes ("fixes

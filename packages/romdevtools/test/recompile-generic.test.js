@@ -13,7 +13,7 @@ import { IR } from "../src/analysis/recompile/ir.js";
 import { runAsar } from "../src/toolchains/asar/asar.js";
 import { runVasm68k } from "../src/toolchains/vasm68k/vasm68k.js";
 import { resolveCore } from "../src/cores/registry.js";
-import { LibretroHost } from "../src/host/index.js";
+import { LibretroHost } from "romdev-core-host/index.js";
 
 const SAMPLE = [
   "        .setcpu \"6502\"",

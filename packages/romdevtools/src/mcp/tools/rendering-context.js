@@ -541,7 +541,7 @@ export async function getRenderingContextCore({ platform, area = "all", sessionK
 }
 
 async function gbaContext(host, area) {
-  const { decodeGbaRenderingContext } = await import("../../host/gba-video-state.js");
+  const { decodeGbaRenderingContext } = await import("romdev-core-host/gba-video-state.js");
   const io = host.readMemory("gba_io_regs", 0, 0x400);
   const ctx = decodeGbaRenderingContext(io);
   const summary = [];
@@ -554,7 +554,7 @@ async function gbaContext(host, area) {
 }
 
 async function lynxContext(host, area) {
-  const { decodeLynxRenderingContext } = await import("../../host/lynx-mikey-state.js");
+  const { decodeLynxRenderingContext } = await import("romdev-core-host/lynx-mikey-state.js");
   const hw = host.readMemory("lynx_hw_regs", 0, 0x200);
   const ctx = decodeLynxRenderingContext(hw);
   const summary = [];

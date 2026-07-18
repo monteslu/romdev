@@ -12,7 +12,7 @@ import { readFile } from "node:fs/promises";
 
 import { decode6502Backtrace, buildBacktrace } from "../src/analysis/backtrace.js";
 import { resolveCore } from "../src/cores/registry.js";
-import { LibretroHost } from "../src/host/index.js";
+import { LibretroHost } from "romdev-core-host/index.js";
 import { mapNesAddress } from "../src/mcp/tools/disasm.js";
 
 test("decode6502Backtrace recovers caller PCs (return = JSR+2; JSR at return-2)", () => {

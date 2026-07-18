@@ -10,7 +10,7 @@ import { _setHostForTest } from "../src/mcp/state.js";
 import { buildForPlatform } from "../src/toolchains/index.js";
 import { finalizeGenesisRom } from "romdev-toolchain-m68k-gcc";
 import { resolveCore } from "../src/cores/registry.js";
-import { LibretroHost } from "../src/host/index.js";
+import { LibretroHost } from "romdev-core-host/index.js";
 import { writeFile, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

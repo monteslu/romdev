@@ -20,8 +20,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import yauzl from "yauzl";
-import { LibretroHost } from "../host/index.js";
-import { framebufferToPng } from "../host/framebuffer.js";
+import { LibretroHost } from "romdev-core-host/index.js";
+import { framebufferToPng } from "romdev-core-host/framebuffer.js";
 import { resolveCore } from "../cores/registry.js";
 
 // Extension → platform mapping. Drives auto-detection when --platform isn't

@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { resolveCore } from "../src/cores/registry.js";
-import { LibretroHost } from "../src/host/index.js";
+import { LibretroHost } from "romdev-core-host/index.js";
 import { buildC } from "../src/toolchains/cc65/cc65.js";
 
 async function bootNes() {

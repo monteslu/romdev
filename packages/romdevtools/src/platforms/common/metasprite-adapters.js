@@ -76,7 +76,7 @@ function encode4bppSnes(grids) { // planar-pairs: bytes 0-15 planes0&1, 16-31 pl
 // =====================================================================
 export async function genesisAdapter(host) {
   const { decode4bppTile, decodeGenesisSubpalette } = await import("../genesis/vdp.js");
-  const { decodeGenesisSprites } = await import("../../host/gpgx-state.js");
+  const { decodeGenesisSprites } = await import("romdev-core-host/gpgx-state.js");
   const vram = host.readMemory("video_ram", 0, 0x10000);
   const cram = host.readMemory("genesis_cram", 0, 128);
   const regs = host.readMemory("genesis_vdp_regs", 0, 32);

@@ -19,8 +19,8 @@ import os from "node:os";
 import path from "node:path";
 import { PNG } from "pngjs";
 
-import { LibretroHost } from "../src/host/LibretroHost.js";
-import { cropPng } from "../src/host/framebuffer.js";
+import { LibretroHost } from "romdev-core-host/LibretroHost.js";
+import { cropPng } from "romdev-core-host/framebuffer.js";
 import { registerDisasmTools } from "../src/mcp/tools/disasm.js";
 import { registerMemoryTools } from "../src/mcp/tools/memory.js";
 import { reassembleProjectCore } from "../src/mcp/tools/toolchain.js";

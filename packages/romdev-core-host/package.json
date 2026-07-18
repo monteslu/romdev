@@ -1,0 +1,33 @@
+{
+  "name": "romdev-core-host",
+  "version": "0.1.0",
+  "description": "The romdev libretro host runtime: load a bundled romdev-core-* emulator core, run frames, read the framebuffer/audio/memory regions, drive input, save/load state. The same hardened host the romdev MCP server uses, consumable standalone (SDK run bridges, tooling) without the server.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./*": "./*"
+  },
+  "files": [
+    "*.js",
+    "!*.test.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "license": "MIT",
+  "author": "Luis Montes",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monteslu/romdev.git"
+  },
+  "dependencies": {
+    "@monteslu/chafa-wasm": "^0.4.0",
+    "pngjs": "^7.0.0"
+  },
+  "optionalDependencies": {
+    "native-gles": "^0.5.0",
+    "webgl-node": "^1.2.0"
+  }
+}

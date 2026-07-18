@@ -7,8 +7,8 @@ import assert from "node:assert/strict";
 
 import { buildForPlatform } from "../src/toolchains/index.js";
 import { resolveCore } from "../src/cores/registry.js";
-import { LibretroHost } from "../src/host/LibretroHost.js";
-import { glStackAvailable } from "../src/host/glOptionalDep.js";
+import { LibretroHost } from "romdev-core-host/LibretroHost.js";
+import { glStackAvailable } from "romdev-core-host/glOptionalDep.js";
 
 // A minimal pixel-writing program: bring up the PowerVR2 framebuffer via the bundled
 // dc.h helper and paint three solid bars + a white frame on a dark-blue field. No TA
@@ -73,8 +73,8 @@ test("dreamcast: cpuState (SH-4 regs) + audioDebug (AICA) read from the rebuilt 
     if (!(await glStackAvailable())) { console.log("GL stack unavailable; skipping"); return; }
     const core = resolveCore("dreamcast");
     if (!core) return;
-    const { getCPUState } = await import("../src/host/cpu-state.js");
-    const { decodeAica } = await import("../src/host/dc-aica-state.js");
+    const { getCPUState } = await import("romdev-core-host/cpu-state.js");
+    const { decodeAica } = await import("romdev-core-host/dc-aica-state.js");
     const host = new LibretroHost();
     try {
       await host.loadCore(core.jsPath, core.wasmPath, { hwRender: true, platform: "dreamcast" });

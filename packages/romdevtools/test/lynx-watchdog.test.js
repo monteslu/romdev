@@ -55,7 +55,7 @@ test("Lynx watchdog force-stops an infinite loop (handy 65C02)", { timeout: 1800
   }, undefined, { timeout: 180000 }));
   assert.equal(build.ok, true, "lynx build failed:\n" + (build.log || JSON.stringify(build)).slice(-600));
 
-  const { LibretroHost } = await import("../src/host/LibretroHost.js");
+  const { LibretroHost } = await import("romdev-core-host/LibretroHost.js");
   const core = resolveCore("lynx");
   assert.ok(core, "resolveCore('lynx') returned null — handy_libretro.{js,wasm} missing?");
   const host = new LibretroHost();

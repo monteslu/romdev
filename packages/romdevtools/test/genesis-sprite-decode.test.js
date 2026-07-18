@@ -9,8 +9,8 @@ import assert from "node:assert/strict";
 
 import { buildForPlatform } from "../src/toolchains/index.js";
 import { resolveCore } from "../src/cores/registry.js";
-import { LibretroHost } from "../src/host/index.js";
-import { decodeGenesisSprites } from "../src/host/gpgx-state.js";
+import { LibretroHost } from "romdev-core-host/index.js";
+import { decodeGenesisSprites } from "romdev-core-host/gpgx-state.js";
 
 const SRC = `
 #include <genesis.h>

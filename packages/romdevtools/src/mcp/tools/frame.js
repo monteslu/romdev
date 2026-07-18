@@ -2,7 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PNG } from "pngjs";
-import { cropPng, resamplePng } from "../../host/framebuffer.js";
+import { cropPng, resamplePng } from "romdev-core-host/framebuffer.js";
 import { getHost, getHostB } from "../state.js";
 import { imageContent, jsonContent, safeTool } from "../util.js";
 import { decodeOAM, decodePpuRegs, ppuRegsPopulated } from "../../platforms/snes/ppu.js";
@@ -407,7 +407,7 @@ export function registerFrameTools(server, z, sessionKey) {
     if (rows == null) rows = Math.max(8, Math.floor(height / 8));
     // Warn when the caller forced a grid so coarse it can't show game state.
     const tooCoarse = cols < Math.floor(width / 8) / 2 || rows < Math.floor(height / 8) / 2;
-    const { renderRgbaToAnsi } = await import("../../host/chafa-render.js");
+    const { renderRgbaToAnsi } = await import("romdev-core-host/chafa-render.js");
     const ansi = await renderRgbaToAnsi(rgba, width, height, { cols, rows, symbols, colors });
     // Livestream sidebands: the human sees BOTH the real PNG and the ANSI.
     const shot = host.screenshot();

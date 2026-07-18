@@ -217,7 +217,7 @@ export const PLATFORM_VIRTUAL_EXT = {
   pico8:      ".p8",
 };
 import { RETRO_DEVICE_JOYPAD, ROMDEV_PIXEL_FORMAT_RGBA8888 } from "./retroConstants.js";
-import { decodeCode as decodeCheatCode } from "../cheats/gamegenie.js";
+import { decodeCode as decodeCheatCode } from "./gamegenie.js";
 
 // Platforms whose core stubs retro_cheat_set but ships romdev's value-override cheat
 // device (romdev_cheat_set) — cheats route through that read-substitution instead.
