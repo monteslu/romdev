@@ -22,7 +22,8 @@ import { getCPUStateCore } from "./platform-tools.js";
 import { traceVramSourceCore } from "./trace-vram-source.js";
 import { resolveStatePath } from "./state.js";
 import { buildBacktrace } from "../../analysis/backtrace.js";
-import { mapNesAddress } from "./disasm.js";
+import { mapNesAddress, mapC64Address, mapAtari2600Address, mapAtari7800Address } from "./disasm.js";
+import { loadSymbolList, loadDebugSource } from "./symbols.js";
 import { MemoryRegionToRetro } from "romdev-core-host/types.js";
 
 /**
@@ -588,6 +589,111 @@ function downsample(arr, n) {
   const step = (len - 1) / (n - 1);
   for (let i = 0; i < n; i++) out.push(arr[Math.round(i * step)]);
   return out;
+}
+
+// ── census enrichment (0.101.0): phantom-read flagging + routine grouping ──
+//
+// Phantom reads: on the 6502 family, `sta abs,X` / `sta abs,Y` (and the
+// abs,X RMWs) always perform a DUMMY READ at the un-carried address
+// `(base & $FF00) | ((base_lo + X) & $FF)` before the real access. On a
+// cycle-accurate core those bus reads land in a READ census and look exactly
+// like consumers of the watched range. The static tell: the instruction at
+// the reporting PC is a WRITE-class indexed op whose operand base is OUTSIDE
+// the range. That is decidable from the cart bytes alone — so decide it here
+// and flag the row instead of letting it be written up as a consumer.
+const PHANTOM_DUMMY_READ_OPCODES = new Set([
+  0x9D, 0x99,                         // sta abs,X / sta abs,Y
+  0xDE, 0xFE, 0x1E, 0x5E, 0x3E, 0x7E, // dec/inc/asl/lsr/rol/ror abs,X
+]);
+const PHANTOM_PLATFORMS = new Set(["nes", "c64", "atari2600", "atari7800"]);
+
+/** Best-effort cart-byte reader at a CPU address (fixed-bank mapping). */
+function makeRomByteReader(host, platform) {
+  if (!PHANTOM_PLATFORMS.has(platform)) return null;
+  let raw;
+  try { raw = host.getCartRom()?.raw; } catch { return null; }
+  if (!raw) return null;
+  return (cpuAddr) => {
+    try {
+      switch (platform) {
+        case "nes": return mapNesAddress(raw, cpuAddr, 1).bytes[0];
+        case "c64": return mapC64Address(raw, cpuAddr, 1, 0).bytes[0];
+        case "atari2600": return mapAtari2600Address(raw, cpuAddr, 1, 0).bytes[0];
+        case "atari7800": return mapAtari7800Address(raw, cpuAddr, 1, 0).bytes[0];
+        default: return null;
+      }
+    } catch { return null; }
+  };
+}
+
+/**
+ * Mutates byPCList rows in place; returns extra result fields + note lines.
+ * - phantomRead/storeBase per row (read censuses, 6502 family)
+ * - routine per row + a byRoutine rollup (when a dbg/map symbol file is given)
+ */
+async function enrichCensus(byPCList, { host, kind, start, end, dbg, map }) {
+  const extra = {};
+  const noteLines = [];
+  const platform = host.status?.platform ?? null;
+
+  if (kind === "read" && platform && PHANTOM_PLATFORMS.has(platform)) {
+    const readB = makeRomByteReader(host, platform);
+    if (readB) {
+      let flagged = 0;
+      for (const row of byPCList) {
+        const pc = parseInt(row.pc.slice(1), 16);
+        const op = readB(pc);
+        if (op == null || !PHANTOM_DUMMY_READ_OPCODES.has(op)) continue;
+        const lo = readB(pc + 1), hi = readB(pc + 2);
+        if (lo == null || hi == null) continue;
+        const base = lo | (hi << 8);
+        if (base < start || base > end) {
+          row.phantomRead = true;
+          row.storeBase = "$" + base.toString(16).toUpperCase();
+          flagged++;
+        }
+      }
+      if (flagged) {
+        noteLines.push(
+          `${flagged} PC(s) flagged phantomRead: the instruction there is an indexed WRITE/RMW whose operand base ` +
+          "(storeBase) is outside this range — its 6502 dummy-read cycle landed in the range, but the PROGRAM never " +
+          "reads these bytes there. Don't write them up as consumers. (Fixed-bank decode; a PC in a switched bank may " +
+          "escape the check — the write-census diff still catches it.)");
+      }
+    }
+  }
+
+  if (dbg || map) {
+    try {
+      const { symbols } = await loadSymbolList({ dbg, map });
+      const sorted = symbols.filter((sym) => Number.isFinite(sym.addr)).sort((a, b) => a.addr - b.addr);
+      const nameFor = (addr) => {
+        let best = null;
+        for (const sym of sorted) { if (sym.addr <= addr) best = sym; else break; }
+        return best ? { name: best.name, offset: addr - best.addr } : null;
+      };
+      const roll = new Map();
+      for (const row of byPCList) {
+        const pc = parseInt(row.pc.slice(1), 16);
+        const sym = nameFor(pc);
+        if (!sym) continue;
+        row.routine = sym.offset ? `${sym.name}+${sym.offset}` : sym.name;
+        let g = roll.get(sym.name);
+        if (!g) { g = { routine: sym.name, pcs: 0, count: 0 }; roll.set(sym.name, g); }
+        g.pcs++; g.count += row.count;
+      }
+      if (roll.size) {
+        extra.byRoutine = [...roll.values()].sort((a, b) => b.count - a.count);
+        noteLines.push(
+          "byRoutine groups the PCs by containing symbol — compare censuses in ROUTINE units, not PC units " +
+          "(a read-modify-write logs two PCs in one routine; PC counts look like disagreements across runs when they aren't).");
+      }
+    } catch (e) {
+      noteLines.push(`routine grouping skipped: ${e.message}`);
+    }
+  }
+
+  return { extra, noteLines };
 }
 
 export function registerWatchMemoryTools(server, z, sessionKey) {
@@ -1680,7 +1786,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
 
   // ── Range watch + coverage trace (item 2, discovery) ────────────────────────
 
-  async function wRange({ start, end, kind = "both", frames = 120, pressDuring, limit = 200, dedupe = false, distinctPCsOnly = false, fromState, fromStatePath }) {
+  async function wRange({ start, end, kind = "both", frames = 120, pressDuring, limit = 200, dedupe = false, distinctPCsOnly = false, fromState, fromStatePath, dbg, map, dbgPath, mapPath }) {
       const host = getHost(sessionKey);
       if (!host.rangeWatchSupported || !host.rangeWatchSupported()) {
         return jsonContent({ notSupported: true, events: [],
@@ -1715,6 +1821,9 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       const byPCList = [...byPC.values()].sort((a, b) => b.count - a.count).slice(0, 64)
         .map((g) => ({ pc: hx(g.pc), count: g.count, sampleAddress: hx(g.sampleAddress), sampleValue: hxv(g.sampleValue) }));
       const distinctPCs = byPCList.map((g) => g.pc);
+      const dbgSrc = (dbg || map || dbgPath || mapPath) ? await loadDebugSource({ dbg, map, dbgPath, mapPath }) : {};
+      const { extra: censusExtra, noteLines: censusNotes } = await enrichCensus(byPCList, { host, kind, start, end, dbg: dbgSrc.dbg, map: dbgSrc.map });
+      const censusNoteSuffix = censusNotes.length ? " " + censusNotes.join(" ") : "";
 
       // distinctPCsOnly → return JUST the digest, suppress the raw event list (the
       // common "discover the writers" use; no per-event tokens spent).
@@ -1722,9 +1831,9 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         return attachObserverFrame(jsonContent({
           range: hx(start) + ".." + hx(end), kind, total: r.total, truncated: r.truncated,
           ...(stateInfo ? { restoredFrom: stateInfo } : {}),
-          distinctPCs, byPC: byPCList,
+          distinctPCs, byPC: byPCList, ...censusExtra,
           note: "distinctPCsOnly: per-PC digest only (raw events suppressed). Each PC is a routine that touches the range; `count` is how often it fired, `sampleAddress`/`sampleValue` a representative hit. disasm({target:'rom'}) a PC to identify it. Drop distinctPCsOnly (or set dedupe:true) for the events." +
-            (r.truncated ? " TRUNCATED: more events than the buffer held — narrow start..end/frames." : ""),
+            (r.truncated ? " TRUNCATED: more events than the buffer held — narrow start..end/frames." : "") + censusNoteSuffix,
         }), host);
       }
 
@@ -1749,9 +1858,9 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         kind, total: r.total, returned: events.length, truncated: r.truncated,
         ...(dedupe ? { deduped: true, uniqueEvents: events.length } : {}),
         ...(stateInfo ? { restoredFrom: stateInfo } : {}),
-        distinctPCs, byPC: byPCList, events,
+        distinctPCs, byPC: byPCList, ...censusExtra, events,
         note: "distinctPCs/byPC is the actionable summary — each PC is a routine that touches this range; disasm({target:'rom'}) one to identify the renderer/reader. For a 'who writes here?' query, distinctPCsOnly:true returns JUST the digest (no per-event flood); dedupe:true collapses per-frame churn to unique (pc,address,value) rows with `occurrences`. " +
-          (r.truncated ? "TRUNCATED: more events than the buffer held — narrow `start..end` or `frames` for the full set." : ""),
+          (r.truncated ? "TRUNCATED: more events than the buffer held — narrow `start..end` or `frames` for the full set." : "") + censusNoteSuffix,
       }), host);
   }
 
@@ -1810,6 +1919,10 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       // on:'range'
       kind: z.enum(["read", "write", "both"]).default("both").describe("on:'range' — watch reads, writes, or both."),
       distinctPCsOnly: z.boolean().default(false).describe("on:'range' — return JUST the per-PC digest (distinctPCs + byPC[{pc,count,sampleAddress,sampleValue}]) and SUPPRESS the raw event list. The token-cheap form of the common 'which routines touch this range?' query — a per-frame counter inc'd at one PC floods hundreds of near-identical events otherwise."),
+      dbg: z.string().optional().describe("on:'range' — cc65 .dbg TEXT: adds `routine` (nearest preceding symbol) to each byPC row + a byRoutine rollup, so censuses compare in ROUTINE units across sessions (an RMW logs 2 PCs in one routine; raw PC counts look like disagreements when they aren't). Prefer dbgPath — the map never enters your context."),
+      map: z.string().optional().describe("on:'range' — sdld/GNU-ld .map TEXT: same routine grouping for Z80/SM83/Genesis symbol maps. Prefer mapPath."),
+      dbgPath: z.string().optional().describe("on:'range' — path to the .dbg on disk (build({output:'romWithDebug'}) wrote it); read server-side."),
+      mapPath: z.string().optional().describe("on:'range' — path to the .map on disk; read server-side."),
       // on:'range' / on:'pc' window
       start: z.number().int().min(0).optional().describe("on:'range'/'pc' — low CPU address of the window."),
       end: z.number().int().min(0).optional().describe("on:'range'/'pc' — high CPU address (inclusive)."),

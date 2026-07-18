@@ -102,6 +102,146 @@ function scanAsmForReferences(asm, targetAddr, sourceLabels) {
   return refs;
 }
 
+// ── accessScan: address-aware reader/writer scan ──────────────────────────
+//
+// findReferences answers "which instructions NAME this exact address"; the
+// accessScan answers the harder RE question "which instructions can REACH this
+// byte" — including indexed forms whose operand BASE is below the target
+// (`sta $0181,y` reaching $0182; `lda $0100,y` reaching anywhere in page 1)
+// and, on Z80/m68k where memory access goes through register bases, the
+// pointer LOADS that take the address (`ld hl,$C123` / `lea $FF8000,a0`).
+// Each site is classified read / write / rmw / pointerLoad, with the index
+// offset needed to reach the target, so "who can write this byte" comes back
+// as a bounded, digested list instead of a hand-built hex-pattern hunt.
+
+const ACCESS_FAM_6502 = new Set(["nes", "atari2600", "atari7800", "c64", "lynx", "pce", "gametank"]);
+export function accessFamilyFor(platform) {
+  if (ACCESS_FAM_6502.has(platform)) return "6502";
+  if (platform === "snes") return "65816";
+  if (platform === "gb" || platform === "gbc") return "sm83";
+  if (platform === "sms" || platform === "gg" || platform === "msx") return "z80";
+  if (platform === "genesis" || platform === "megadrive" || platform === "md") return "m68k";
+  return null;
+}
+
+const RMW_6502 = new Set(["inc", "dec", "asl", "lsr", "rol", "ror", "trb", "tsb"]);
+const WRITE_6502 = new Set(["sta", "stx", "sty", "stz"]);
+const READ_6502 = new Set(["lda", "ldx", "ldy", "bit", "cmp", "cpx", "cpy", "adc", "sbc", "and", "ora", "eor"]);
+
+/** Classify how `mnemonic` uses a memory operand, per CPU family. */
+function accessKind(mnemonic, family, operand, litStart) {
+  const m = mnemonic.toLowerCase();
+  if (family === "6502" || family === "65816") {
+    if (WRITE_6502.has(m)) return "write";
+    if (RMW_6502.has(m)) return "rmw";
+    if (READ_6502.has(m)) return "read";
+    if (m === "jsr" || m === "jsl") return "call";
+    if (m === "jmp" || m === "jml") return "jump";
+    if (/^b[a-z]{2}$/.test(m) && m !== "bit") return "branch";
+    return "use";
+  }
+  if (family === "sm83" || family === "z80") {
+    const inParens = isInsideParens(operand, litStart);
+    if (!inParens) return "pointerLoad";           // ld hl,$C123 — address taken
+    const comma = operand.indexOf(",");
+    if (m.startsWith("ld")) {
+      if (comma < 0) return "use";
+      return litStart < comma ? "write" : "read";   // ld ($NN),a vs ld a,($NN)
+    }
+    if (m === "call" || m === "rst") return "call";
+    if (m === "jp" || m === "jr") return "jump";
+    return "use";
+  }
+  if (family === "m68k") {
+    if (m === "lea" || m === "pea" || m.startsWith("movea")) return "pointerLoad";
+    const comma = operand.lastIndexOf(",");
+    if (m.startsWith("move") || m.startsWith("clr") || m.startsWith("add") ||
+        m.startsWith("sub") || m.startsWith("and") || m.startsWith("or") ||
+        m.startsWith("eor") || m.startsWith("bset") || m.startsWith("bclr") || m.startsWith("bchg")) {
+      if (comma < 0) return m.startsWith("clr") ? "write" : "use";
+      return litStart > comma ? "write" : "read";   // dest is LAST on m68k
+    }
+    if (m.startsWith("jsr") || m.startsWith("bsr")) return "call";
+    if (m.startsWith("jmp") || m.startsWith("bra")) return "jump";
+    return "use";
+  }
+  return "use";
+}
+
+function isInsideParens(operand, idx) {
+  let depth = 0;
+  for (let i = 0; i < idx; i++) {
+    if (operand[i] === "(") depth++;
+    else if (operand[i] === ")") depth--;
+  }
+  return depth > 0;
+}
+
+/** Is the 6502-family literal at litEnd followed by an ,x / ,y index suffix? */
+function indexSuffix(operand, litEnd) {
+  const rest = operand.slice(litEnd);
+  const m = rest.match(/^\s*,\s*([xXyY])\b/);
+  return m ? m[1].toLowerCase() : null;
+}
+
+/**
+ * Scan disasm text for every instruction that can REACH targetAddr.
+ * @param {string} asm
+ * @param {number} targetAddr
+ * @param {{family: string, window: number}} opts
+ */
+export function scanAsmForAccess(asm, targetAddr, { family, window = 2 }) {
+  const sites = [];
+  const pageBase = targetAddr & 0xFF00;
+  for (const line of asm.split(/\r?\n/)) {
+    if (line.startsWith(";")) continue;
+    const addrM = line.match(/;\s+([0-9A-Fa-f]{4,6})\s+/);
+    if (!addrM) continue;
+    const refAddr = parseInt(addrM[1], 16);
+    const trimmed = line.replace(/^[\s\t]+/, "").replace(/^L[0-9A-Fa-f]{4,6}:\s*/, "");
+    const sepIdx = trimmed.indexOf(";");
+    const src = sepIdx >= 0 ? trimmed.slice(0, sepIdx).trim() : trimmed.trim();
+    const mnemonicM = src.match(/^([a-zA-Z][a-zA-Z0-9.]*)\s+(.*)$/);
+    if (!mnemonicM) continue;
+    const mnemonic = mnemonicM[1];
+    const operand = mnemonicM[2];
+    for (const m of operand.matchAll(/(#?)\$([0-9A-Fa-f]+)\b/g)) {
+      if (m[1] === "#") continue;                    // immediate = a value, not an address
+      const base = parseInt(m[2], 16);
+      const litStart = m.index + m[1].length;
+      const litEnd = m.index + m[0].length;
+      const is6502ish = family === "6502" || family === "65816";
+      const idx = is6502ish ? indexSuffix(operand, litEnd) : null;
+      let hit = null;
+      if (base === targetAddr) {
+        hit = { how: "direct" };
+      } else if (base < targetAddr) {
+        const kindProbe = accessKind(mnemonic, family, operand, litStart);
+        const reachable =
+          (is6502ish && idx != null) ||               // abs,x / abs,y / zp,x base
+          (!is6502ish && kindProbe === "pointerLoad"); // z80/m68k address-taken base
+        if (reachable && targetAddr - base <= window) {
+          hit = { how: "indexedBase", indexOffset: targetAddr - base };
+        } else if (reachable && base === pageBase && base !== targetAddr) {
+          hit = { how: "pageBase", indexOffset: targetAddr - base };
+        }
+      }
+      if (!hit) continue;
+      const kind = accessKind(mnemonic, family, operand, litStart);
+      sites.push({
+        atAddress: "$" + refAddr.toString(16).toUpperCase(),
+        atAddressDec: refAddr,
+        instruction: `${mnemonic} ${operand}`,
+        kind,
+        base: "$" + base.toString(16).toUpperCase(),
+        ...(hit.how !== "direct" ? { via: hit.how, indexOffset: hit.indexOffset } : {}),
+      });
+      break; // one hit per line is enough
+    }
+  }
+  return sites;
+}
+
 /**
  * Vector-table references for SMS / Game Gear. The Z80 has fixed
  * "vectors" — actually rst handler entry points — at $0000, $0008,
@@ -277,7 +417,7 @@ function romHeaderSkip(platform, data) {
   }
 }
 
-export async function findReferencesCore({ path, platform, address, mapper: _mapper, includeTableHits = false, maxRefsReturned = 256 }) {
+export async function findReferencesCore({ path, platform, address, mapper: _mapper, includeTableHits = false, maxRefsReturned = 256, accessScan = null }) {
   const data = new Uint8Array(await readFile(path));
   const resolved = platform ?? (
     /\.nes$/i.test(path) ? "nes" :
@@ -294,6 +434,16 @@ export async function findReferencesCore({ path, platform, address, mapper: _map
   );
   if (!resolved) {
     throw new Error(`findReferences: could not detect platform for '${path}'. Pass platform explicitly.`);
+  }
+  if (accessScan) {
+    const family = accessFamilyFor(resolved);
+    if (!family) {
+      throw new Error(
+        `disasm({target:'accessScan'}): '${resolved}' is a literal-pool ISA (addresses are built in registers, ` +
+        "not encoded in instruction operands), so a static operand scan is structurally blind there. " +
+        "Use the LIVE tools instead: watch({on:'range', kind:'write'}) for writers, breakpoint({on:'write'/'read'}) for a single byte.",
+      );
+    }
   }
 
   // Disassemble the whole code area. Flat platforms produce one asm blob;
@@ -548,6 +698,53 @@ export async function findReferencesCore({ path, platform, address, mapper: _map
     asm = r.asm;
   } else {
     throw new Error(`findReferences: platform '${resolved}' not supported yet.`);
+  }
+
+  if (accessScan) {
+    const family = accessFamilyFor(resolved);
+    const window = accessScan.window ?? 2;
+    let sites = [];
+    if (segments) {
+      const bankKey = resolved === "nes" ? "prgBank" : "romBank";
+      for (const seg of segments) {
+        for (const site of scanAsmForAccess(seg.asm, address, { family, window })) {
+          sites.push({ ...site, [bankKey]: seg.bank });
+        }
+      }
+    } else {
+      sites = scanAsmForAccess(asm, address, { family, window });
+    }
+    const summary = { direct: 0, indexedBase: 0, pageBase: 0, writers: 0, readers: 0, rmw: 0, pointerLoads: 0 };
+    for (const site of sites) {
+      summary[site.via ?? "direct"]++;
+      if (site.kind === "write") summary.writers++;
+      else if (site.kind === "read") summary.readers++;
+      else if (site.kind === "rmw") summary.rmw++;
+      else if (site.kind === "pointerLoad") summary.pointerLoads++;
+    }
+    const famNote =
+      family === "6502" || family === "65816"
+        ? "Indexed bases (abs,X / abs,Y) within `window` below the target are matched, plus the page base ($xx00,idx) for the target's page. Indirect forms (($nn),y) match only exactly — their base is a pointer LOCATION, not the array base; find the pointer's writers instead."
+        : family === "sm83" || family === "z80"
+          ? "Memory access on this CPU flows through register pairs, so besides direct ($nnnn) operands the scan reports pointerLoad sites (ld rr,$nnnn) whose base is within `window` of the target — the load that TAKES the address is the lead. hl-relative stores themselves are statically invisible: confirm with watch({on:'range'})."
+          : "m68k: direct absolute operands + pointerLoad (lea/pea/movea) bases within `window`. d16(An)/(An)+ accesses are register-relative and statically invisible: confirm with watch({on:'range'}).";
+    return {
+      path,
+      platform: resolved,
+      address: "$" + address.toString(16).toUpperCase(),
+      window,
+      sitesFound: sites.length,
+      sites: sites.slice(0, maxRefsReturned),
+      truncated: sites.length > maxRefsReturned
+        ? `${sites.length - maxRefsReturned} additional sites not returned (raise maxRefsReturned).`
+        : undefined,
+      summary,
+      notes: [
+        famNote,
+        "This bounds DIRECT + near-base indexed access only — table-driven writes (lda tbl,y / sta base,x with a far base) and fully indirect access need the live census: watch({on:'range', kind:'write'}).",
+        segmentsCapped > 0 ? `Scan covered the first ${SEGMENT_CAP} banks only — ${segmentsCapped} additional bank(s) were NOT scanned.` : null,
+      ].filter(Boolean).join(" "),
+    };
   }
 
   let refs;

@@ -239,7 +239,7 @@ export async function resolveSymbolsBatchCore({ dbg, map, names, platform }) {
  * the map flavor. Returns `{ name, addr, kind, ramOffset? }[]`. This is what
  * gave Genesis/m68k C globals a name→address path (was cc65-only before).
  */
-async function loadSymbolList({ dbg, map }) {
+export async function loadSymbolList({ dbg, map }) {
   if (dbg) {
     const { parseDbg, DbgIndex } = await import("../../toolchains/cc65/dbgparse.js");
     const idx = new DbgIndex(parseDbg(dbg));
