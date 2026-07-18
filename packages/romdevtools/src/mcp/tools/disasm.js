@@ -10,6 +10,7 @@ import { analyzeCfg, analyzeXrefs, analyzeFunctions, analyzeDecompile } from "..
 import { recompileNesToSnes, sliceFirstRoutine } from "../../analysis/recompile-65816.js";
 import { widthRanges, addrmode } from "../../toolchains/common/reassemble.js";
 import { decodePointerTable, reverseLookup } from "../../analysis/pointer-table.js";
+import { decodeScript } from "../../analysis/script-grammar.js";
 
 /** cfg/xrefs/functions all operate on a ROM file. Reuse the `path` arg. */
 function requireRomPath(args) {
@@ -1824,6 +1825,45 @@ async function buildNesPpuShim(romBytes) {
   }
 }
 
+export async function scriptCore(args) {
+  const { grammar, address, fileOffset, maxRecords, platform, bank } = args;
+  if (!grammar) {
+    throw new Error("disasm({target:'script'}): `grammar` is required — the declarative opcode table (see the tool description). Decode the interpreter first (that's where the grammar comes from), then this target decodes any amount of script data mechanically.");
+  }
+  const romPath = requireRomPath(args);
+  const data = new Uint8Array(await readFile(romPath));
+  let startOffset = fileOffset;
+  let baseAddress;
+  if (startOffset == null) {
+    if (address == null) {
+      throw new Error("disasm({target:'script'}): pass `address` (CPU address of the script start; mapped through the platform's banking) or `fileOffset` (raw file offset).");
+    }
+    const resolved = args.platform ?? (/\.nes$/i.test(romPath) ? "nes" : /\.(sfc|smc)$/i.test(romPath) ? "snes" : /\.gb$/i.test(romPath) ? "gb" : /\.gbc$/i.test(romPath) ? "gbc" : /\.(sms)$/i.test(romPath) ? "sms" : /\.gg$/i.test(romPath) ? "gg" : /\.(gen|md|bin)$/i.test(romPath) ? "genesis" : /\.a26$/i.test(romPath) ? "atari2600" : /\.a78$/i.test(romPath) ? "atari7800" : /\.prg$/i.test(romPath) ? "c64" : null);
+    const off = resolved ? cpuAddrToFileOffset(resolved, data, address, { bank }) : null;
+    if (off == null) {
+      throw new Error(`disasm({target:'script'}): couldn't map CPU address $${Number(address).toString(16).toUpperCase()} to a file offset for platform '${resolved ?? platform ?? "unknown"}'. Pass \`fileOffset\` directly (plus the script's CPU address as \`address\` for labeling).`);
+    }
+    startOffset = off;
+    baseAddress = address - off; // linear within the mapped bank
+  } else {
+    baseAddress = (address != null ? address - startOffset : 0);
+  }
+  const result = decodeScript(data, grammar, {
+    startOffset,
+    baseAddress,
+    ...(maxRecords != null ? { maxRecords } : {}),
+  });
+  return {
+    path: romPath,
+    fileOffset: startOffset,
+    ...(address != null ? { address: "$" + Number(address).toString(16).toUpperCase() } : {}),
+    ...result,
+    note: result.stopped.reason === "unknown-opcode"
+      ? "Unknown opcode: either the grammar is missing a command (read the interpreter's dispatch for that value and add it) or the stream ended before this point (a stop/chain command you haven't modeled)."
+      : "Grammar-decoded records. Addresses assume the script is linear within its bank; chain targets in another bank need a fresh call with that bank's address.",
+  };
+}
+
 export function registerDisasmTools(server, z) {
   server.tool(
     "disasm",
@@ -1861,6 +1901,8 @@ export function registerDisasmTools(server, z) {
     "those data-folds so you don't waste a decompile on a graphics blob. " +
     "'cfg' = basic-block control-flow graph of the function at `address` (nodes + typed edges: " +
     "jump/branch_true/branch_false). 'xrefs' = every cross-reference TO `address`, following Rizin's analysis graph " +
+    "'script' = decode a DATA region as custom bytecode from a declarative `grammar` (level/map scripts, spawn lists, cutscene command streams, music macros — any in-game interpreter whose opcode shapes you've verified against its dispatch routine). The grammar lives in the CALL, so the decode is reproducible by any future session instead of living in a side script: per-opcode field lists with flag-conditional presence + implied defaults, counted and terminator-ended lists, stop/chain commands. Returns structured records + a machine-readable stop reason; bounds-checked, never crashes on data. Works on every platform (pure byte decoding; `address` maps through banking on the mapped platforms, `fileOffset` works everywhere).\n" +
+    "'accessScan' = bound every instruction that can REACH a RAM `address` — the 'who can write this byte' scan. Direct operands PLUS indexed forms whose base sits within `window` below the target or at its page base (sta $0181,y reaching $0182; lda $0100,y reaching page-1 bytes), classified read/write/rmw/pointerLoad with the index offset needed. On Z80/SM83/m68k, where access flows through register bases, it reports the pointer LOADS that take the address (ld hl,$nnnn / lea). Bounds DIRECT access exhaustively; table-driven + fully indirect access still needs watch({on:'range'}) — the result says so. Literal-pool ISAs (GBA) are refused with the live-tool pointer.\n" +
     "(DEEPER than 'references', which is a flat da65 operand scan — prefer 'xrefs' once you've run a function pass, " +
     "'references' for a quick header-less operand sweep). Typical RE loop: 'functions' to carve → 'cfg'/'xrefs' to " +
     "trace → then the live tools (memory search, write-breakpoints, watch copy) to LABEL what you carved.\n" +
@@ -1878,7 +1920,7 @@ export function registerDisasmTools(server, z) {
     "LLM folds it. `address` for all four comes from target:'functions' (a CPU/virtual address; the file-offset " +
     "mapping is handled for you).",
     {
-      target: z.enum(["bytes", "rom", "project", "references", "cfg", "xrefs", "functions", "decompile", "source", "resolveJumptable", "pointerTable", "recompile"]).describe("bytes = raw chunk; rom = mapper-aware ROM (on SNES/65816 it runs the SAME per-instruction M/X width dataflow as target:'project' — in-window rep/sep are followed, entry width is inferred — so a re-decode of one range under corrected widths is one call, no project regen); project = full rebuildable disasm; references = flat da65 operand-refs to an address; functions/cfg/xrefs = Rizin RE engine (function list / control-flow graph / deep graph xrefs); decompile = Ghidra C pseudocode; resolveJumptable = recover a computed-jump dispatcher's targets (LIVE — redirects to breakpoint({on:'jumptable'}), which runs the emulator and records the real switch arms a static decompiler can't follow); recompile = EMIT backend — statically recompile a NES ROM's reset routine to SNES 65816 asar source that builds + boots (phase 1: NROM, 6502→65816 emulation mode, PPU/APU seam STUBBED). See the tool description for the RE loop + the decompile altitude rule + per-CPU quality (all 14 platforms)."),
+      target: z.enum(["bytes", "rom", "project", "references", "cfg", "xrefs", "functions", "decompile", "source", "resolveJumptable", "pointerTable", "recompile", "script", "accessScan"]).describe("bytes = raw chunk; rom = mapper-aware ROM (on SNES/65816 it runs the SAME per-instruction M/X width dataflow as target:'project' — in-window rep/sep are followed, entry width is inferred — so a re-decode of one range under corrected widths is one call, no project regen); project = full rebuildable disasm; references = flat da65 operand-refs to an address; functions/cfg/xrefs = Rizin RE engine (function list / control-flow graph / deep graph xrefs); decompile = Ghidra C pseudocode; resolveJumptable = recover a computed-jump dispatcher's targets (LIVE — redirects to breakpoint({on:'jumptable'}), which runs the emulator and records the real switch arms a static decompiler can't follow); recompile = EMIT backend — statically recompile a NES ROM's reset routine to SNES 65816 asar source that builds + boots (phase 1: NROM, 6502→65816 emulation mode, PPU/APU seam STUBBED). See the tool description for the RE loop + the decompile altitude rule + per-CPU quality (all 14 platforms)."),
       // shared
       path: z.string().optional().describe("target=bytes: raw binary path. target=rom/project/references: ROM file path."),
       base64: z.string().optional().describe("target=bytes: base64 of the bytes (OR `path`)."),
@@ -1923,6 +1965,10 @@ export function registerDisasmTools(server, z) {
       hiBase: z.number().int().min(0).max(0xFFFFFF).optional().describe("target=pointerTable: CPU address of the HIGH-byte array (SPLIT lo/hi form). Omit for a contiguous `dw` table (hi byte follows each lo byte)."),
       count: z.number().int().min(1).max(4096).optional().describe("target=pointerTable: number of entries to decode."),
       convention: z.enum(["direct", "rts+1"]).default("direct").describe("target=pointerTable: 'direct' = the stored word IS the handler; 'rts+1' = the 6502 RTS-trick (table holds handler-1; +1 is applied)."),
+      grammar: z.record(z.string(), z.any()).optional().describe("target=script: the declarative bytecode grammar. {endian?, recordPrefix?: [field...], opcode?: {type}, commands: {'<opcode>': {name, fields?: [field...], stop?, chain?: '<fieldName>'}}, unknownOpcode?: 'stop'|'error'}. field = {name, type: u8|i8|u16|i16|u24|u32, if?: {field, mask?, eq|ne}, default?, pointer?, repeat?: {count: '<field>'|N} | {until: {name, type, gte|eq}}, fields?: [...]}. `if` reads already-decoded fields ((value & mask) vs eq/ne) so flag-gated layouts ('bit 7 set = delay omitted') are one line; `default` records the implied value when the condition fails. repeat.until reads the leading field each iteration and ends the list (terminator consumed) when it trips."),
+      fileOffset: z.number().int().optional().describe("target=script: raw file offset of the script start (alternative to `address`, which maps through the platform's banking)."),
+      maxRecords: z.number().int().optional().describe("target=script: decode cap (default 256)."),
+      window: z.number().int().min(0).max(64).optional().describe("target=accessScan: how far below the target an indexed/pointer BASE may sit and still count as reaching it (default 2 — catches base-1/base-2 index-from-1 loops; the target's page base $xx00 is always checked too)."),
       endian: z.enum(["LE", "BE"]).optional().describe("target=pointerTable: byte order of the CONTIGUOUS form (split lo/hi ignores this). Default follows the CPU — Genesis/m68k is BE, everything else LE; override only if a table is stored against type."),
       reverseHandler: z.number().int().min(0).max(0xFFFF).optional().describe("target=pointerTable: also report which dispatch INDEX/indices land on this handler address (reverse lookup — 'what state triggers this routine?')."),
     },
@@ -1932,6 +1978,10 @@ export function registerDisasmTools(server, z) {
         case "rom":        return await disassembleRomCore(args);
         case "project":    return await disassembleProjectCore(args);
         case "references": return jsonContent(await findReferencesCore(args));
+        case "accessScan": {
+          if (args.address == null) throw new Error("disasm({target:'accessScan'}): `address` (the RAM/variable byte to bound access to) is required.");
+          return jsonContent(await findReferencesCore({ ...args, accessScan: { window: args.window ?? 2 } }));
+        }
         case "cfg":        return jsonContent(await analyzeCfg(requireRomPath(args), args.address, args.platform));
         case "xrefs":      return jsonContent(await analyzeXrefs(requireRomPath(args), args.address, args.platform));
         case "functions":  return jsonContent(await analyzeFunctions(requireRomPath(args), args.platform));
@@ -1939,6 +1989,7 @@ export function registerDisasmTools(server, z) {
         case "source":     return jsonContent(await readCartSourceCore(args));
         case "recompile":  return await recompileCore(args);
         case "pointerTable": return jsonContent(await pointerTableCore(args));
+        case "script":     return jsonContent(await scriptCore(args));
         case "resolveJumptable":
           // A4: jumptable recovery is fundamentally a LIVE operation (it needs a
           // running emulator to observe the computed targets) — disasm is static

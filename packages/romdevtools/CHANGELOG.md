@@ -4,6 +4,41 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.101.0 — 2026-07-18
+
+**The RE round: four capabilities distilled from a field agent's annotation
+workflow** (each one replaces a recipe that had to be executed by hand, and
+documented in prose, every time):
+
+- **`disasm({target:'accessScan', address})`** — bound every instruction that
+  can REACH a RAM byte. Direct operands PLUS indexed forms whose base sits
+  within `window` below the target or at its page base (the store scan's
+  structural blind spot: an `sta base,y` never names `base+k`), classified
+  read/write/rmw/pointerLoad with the index offset needed. Z80/SM83/m68k
+  report the pointer LOADS that take the address (register-based access is
+  statically invisible; the result says so). 13 platforms; literal-pool ISAs
+  (GBA) refuse with the live-tool pointer. Instruction-boundary verification
+  is inherited from the per-bank disassembly, not byte-pattern matching.
+- **`disasm({target:'script', grammar})`** — decode a data region as custom
+  bytecode from a declarative grammar (level/map scripts, spawn lists,
+  cutscene streams, music macros). Per-opcode field lists with
+  flag-conditional presence + implied defaults, counted and terminator-ended
+  lists, stop/chain commands, record prefix fields. The grammar rides in the
+  call, so a verified script format is re-decodable by any future session
+  instead of living in a side decoder script. Platform-agnostic;
+  bounds-checked; machine-readable stop reasons.
+- **Phantom-read flagging** — a `watch({on:'range', kind:'read'})` census on
+  the 6502 family now decodes the instruction at each reporting PC from the
+  cart image: an indexed WRITE/RMW whose operand base is outside the range is
+  flagged `phantomRead` with its `storeBase` — the CPU's dummy-read cycle
+  landed in the range, but the program never reads those bytes there. Stops
+  bus artifacts being written up as consumers.
+- **Routine grouping** — pass `dbg`/`dbgPath` (cc65) or `map`/`mapPath`
+  (sdld/GNU ld) to `watch({on:'range'})` and every byPC row carries
+  `routine` (nearest preceding symbol) plus a `byRoutine` rollup, so
+  censuses compare across sessions in ROUTINE units (an RMW logs two PCs in
+  one routine; raw PC counts read as false disagreements).
+
 ## 0.100.0 — 2026-07-18
 
 **romdev-core-host goes ISOMORPHIC** (ROMDEV_CORE_RUNNER_PLAN Phase 2 / §6b,
