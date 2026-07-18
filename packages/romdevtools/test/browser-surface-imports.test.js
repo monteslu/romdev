@@ -50,3 +50,37 @@ for (const rel of BROWSER_SURFACE) {
     assert.deepEqual(offenders, [], `${rel} statically imports: ${offenders.join(", ")}`);
   });
 }
+
+// ─── romdev-core-host isomorphic core surface (ROMDEV_CORE_RUNNER_PLAN §6b) ──
+// The static import closure of `romdev-core-host` (index.js) must be
+// browser-bundleable: no top-level `node:` imports AND no pngjs (it drags
+// node:zlib). Node I/O lives in io-node.js and PNG in framebuffer-png.js,
+// both reached only via lazy `await import(...)` — the sanctioned pattern.
+// Deliberately NOT listed: io-node.js, framebuffer-png.js (the adapters),
+// chafa-render.js / LibretroGL*.js / glOptionalDep.js (desktop-only, loaded
+// lazily behind hwRender / terminal rendering).
+const CORE_HOST_SURFACE = [
+  "index.js",
+  "LibretroHost.js",
+  "coreLoader.js",
+  "callbacks.js",
+  "framebuffer.js",
+  "pure-util.js",
+  "types.js",
+  "retroConstants.js",
+  "gamegenie.js",
+  "cpu-state.js",
+];
+const CORE_HOST_BANNED = [/^node:/, /^pngjs$/, /_worker\//];
+
+for (const rel of CORE_HOST_SURFACE) {
+  test(`core-host isomorphic surface: ${rel} has no node/pngjs imports`, () => {
+    const src = readFileSync(path.join(PKGS, "romdev-core-host", rel), "utf-8");
+    const offenders = [];
+    for (const m of src.matchAll(STATIC_IMPORT)) {
+      const spec = m[1];
+      if (CORE_HOST_BANNED.some((re) => re.test(spec))) offenders.push(spec);
+    }
+    assert.deepEqual(offenders, [], `romdev-core-host/${rel} statically imports: ${offenders.join(", ")}`);
+  });
+}

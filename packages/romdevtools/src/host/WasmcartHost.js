@@ -14,7 +14,8 @@
 // clock so frame N is reproducible (setFixedStep), matching how romdev steps a core.
 
 import { CartHost } from "wasmcart";
-import { framebufferToScreenshot, framebufferToRgba } from "romdev-core-host/framebuffer.js";
+import { framebufferToRgba } from "romdev-core-host/framebuffer.js";
+import { framebufferToScreenshot } from "romdev-core-host/framebuffer-png.js";
 import { RETRO_PIXEL_FORMAT_XRGB8888 } from "romdev-core-host/retroConstants.js";
 
 // wasmcart framebuffer is uint32 XRGB8888 (0x00RRGGBB) → bytes [B,G,R,X] in LE
