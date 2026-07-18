@@ -1,13 +1,13 @@
-// Framebuffer utilities. XRGB8888 / RGB565 / 0RGB1555 → PNG (base64).
+// Framebuffer utilities: XRGB8888 / RGB565 / 0RGB1555 → RGBA typed arrays.
 //
 // libretro pixel layouts (little-endian, byte order on a little-endian host):
 //   XRGB8888 → [B, G, R, X] per pixel, 4 bytes
 //   RGB565   → low byte then high byte; bits {15..11=R, 10..5=G, 4..0=B}
 //   0RGB1555 → low byte then high byte; bits {14..10=R, 9..5=G, 4..0=B}
 //
-// pngjs expects [R, G, B, A] per pixel.
+// This module is part of the isomorphic core surface: pure typed-array math,
+// no pngjs. PNG encode/crop/resample live in framebuffer-png.js.
 
-import { PNG } from "pngjs";
 import {
   RETRO_PIXEL_FORMAT_0RGB1555,
   RETRO_PIXEL_FORMAT_RGB565,
@@ -20,7 +20,7 @@ import {
  * row at a time, no padding). Same pixel-format decode as
  * framebufferToPng but skips the PNG encode step — useful when the
  * caller wants raw pixels (e.g. piping into chafa-wasm for ASCII
- * rendering).
+ * rendering, or blitting to a browser canvas).
  *
  * @param {number} width
  * @param {number} height
@@ -35,7 +35,9 @@ export function framebufferToRgba(width, height, src, pitch, format) {
   return dst;
 }
 
-function decodePixelsInto(dst, width, height, src, pitch, format) {
+/** Decode into a caller-provided RGBA destination (pngjs data or a canvas
+ *  ImageData buffer). Exported for framebuffer-png.js and direct blitters. */
+export function decodePixelsInto(dst, width, height, src, pitch, format) {
   if (format === ROMDEV_PIXEL_FORMAT_RGBA8888) {
     // HW-render readback: already RGBA. Copy RGB row-by-row but FORCE alpha=255 —
     // the N64/PS1 GL framebuffer leaves alpha at 0 (it's the render target's unused
@@ -98,93 +100,4 @@ function decodePixelsInto(dst, width, height, src, pitch, format) {
   } else {
     throw new Error(`Unsupported pixel format ${format}`);
   }
-}
-
-/**
- * @param {number} width
- * @param {number} height
- * @param {Uint8Array} src raw framebuffer bytes
- * @param {number} pitch bytes per row
- * @param {number} format one of RETRO_PIXEL_FORMAT_*
- * @returns {Buffer} PNG bytes
- */
-export function framebufferToPng(width, height, src, pitch, format) {
-  const png = new PNG({ width, height });
-  decodePixelsInto(png.data, width, height, src, pitch, format);
-  return PNG.sync.write(png);
-}
-
-/**
- * @param {number} width
- * @param {number} height
- * @param {Uint8Array} src
- * @param {number} pitch
- * @param {number} format
- * @returns {import("./types.js").ScreenshotResult}
- */
-export function framebufferToScreenshot(width, height, src, pitch, format) {
-  const buf = framebufferToPng(width, height, src, pitch, format);
-  return { width, height, pngBase64: buf.toString("base64") };
-}
-
-/**
- * Nearest-neighbor resample of a base64 PNG by `scale`. Works BOTH directions:
- *   scale<1  → downscale (e.g. 0.5 = half size; ~75% fewer image tokens for a
- *              routine "did it change?" sanity check).
- *   scale>=2 → integer up-scale (e.g. 4 = 4x size) so tiny handheld targets
- *              (GB/GG 160x144, etc.) are legible inline without ImageMagick.
- *
- * Nearest-neighbor (not averaging/smoothing) is deliberate in both directions:
- * it keeps pixel-art edges crisp and palette colors exact, so a scaled shot
- * still reads accurately. The PNG is fully decoded already (it's a tiny
- * framebuffer), so this is cheap. Platform-agnostic — same pixel scaling for
- * every core.
- *
- * @param {string} pngBase64 source PNG, base64-encoded
- * @param {number} scale resample factor (>0)
- * @returns {{ base64: string, width: number, height: number }}
- */
-/**
- * Crop a base64 PNG to {x,y,w,h} (framebuffer pixel coords, clamped to the
- * image). The HUD-verification workflow (poke a value, read the counter/bar)
- * wants a small native-res strip: far fewer image tokens than the full frame
- * AND legible, unlike a downscale. Compose with resamplePng (crop first, then
- * scale) for an enlarged detail view.
- *
- * @param {string} pngBase64 source PNG, base64-encoded
- * @param {{x?:number, y?:number, w?:number, h?:number}} crop
- * @returns {{ base64: string, width: number, height: number }}
- */
-export function cropPng(pngBase64, crop) {
-  const src = PNG.sync.read(Buffer.from(pngBase64, "base64"));
-  const x = Math.max(0, Math.min(src.width - 1, Math.floor(crop.x ?? 0)));
-  const y = Math.max(0, Math.min(src.height - 1, Math.floor(crop.y ?? 0)));
-  const w = Math.max(1, Math.min(src.width - x, Math.floor(crop.w ?? (src.width - x))));
-  const h = Math.max(1, Math.min(src.height - y, Math.floor(crop.h ?? (src.height - y))));
-  const dst = new PNG({ width: w, height: h });
-  for (let row = 0; row < h; row++) {
-    const si = ((y + row) * src.width + x) * 4;
-    src.data.copy(dst.data, row * w * 4, si, si + w * 4);
-  }
-  return { base64: PNG.sync.write(dst).toString("base64"), width: w, height: h };
-}
-
-export function resamplePng(pngBase64, scale) {
-  const src = PNG.sync.read(Buffer.from(pngBase64, "base64"));
-  const dw = Math.max(1, Math.round(src.width * scale));
-  const dh = Math.max(1, Math.round(src.height * scale));
-  const dst = new PNG({ width: dw, height: dh });
-  for (let y = 0; y < dh; y++) {
-    const sy = Math.min(src.height - 1, Math.floor(y / scale));
-    for (let x = 0; x < dw; x++) {
-      const sx = Math.min(src.width - 1, Math.floor(x / scale));
-      const si = (sy * src.width + sx) * 4;
-      const di = (y * dw + x) * 4;
-      dst.data[di] = src.data[si];
-      dst.data[di + 1] = src.data[si + 1];
-      dst.data[di + 2] = src.data[si + 2];
-      dst.data[di + 3] = src.data[si + 3];
-    }
-  }
-  return { base64: PNG.sync.write(dst).toString("base64"), width: dw, height: dh };
 }

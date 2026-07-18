@@ -2,7 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PNG } from "pngjs";
-import { cropPng, resamplePng } from "romdev-core-host/framebuffer.js";
+import { cropPng, resamplePng } from "romdev-core-host/framebuffer-png.js";
 import { getHost, getHostB } from "../state.js";
 import { imageContent, jsonContent, safeTool } from "../util.js";
 import { decodeOAM, decodePpuRegs, ppuRegsPopulated } from "../../platforms/snes/ppu.js";

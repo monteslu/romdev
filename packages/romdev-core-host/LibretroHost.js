@@ -1,10 +1,10 @@
-// LibretroHost — Node-side host for a single Emscripten libretro core.
+// LibretroHost — the host for a single Emscripten libretro core.
 //
 // One instance = one platform's core loaded + (optionally) one ROM. The host
 // exposes a small public API the MCP layer wraps:
 //
-//   loadCore(jsPath, wasmPath?)
-//   loadMedia({ platform, path, mediaKind? })
+//   loadCore(jsPath, wasmPath?)  or  loadCore({ factory, wasmBinary })
+//   loadMedia({ platform, path | bytes, mediaKind? })
 //   unloadMedia()
 //   stepFrames(n)
 //   getFramebuffer() / screenshot()
@@ -13,18 +13,20 @@
 //   readMemory(region, offset, length) / writeMemory(region, offset, bytes)
 //   reset() / pause() / resume() / getStatus()
 //
+// ISOMORPHIC (ROMDEV_CORE_RUNNER_PLAN §6b): this module has NO top-level
+// `node:` imports — enforced by romdevtools/test/browser-surface-imports.
+// The path-based code paths lazy-import the Node adapter (io-node.js); a
+// bytes-based session ({factory, wasmBinary} + loadMedia({bytes})) never
+// touches it, so the same host runs in a browser/worker bundle.
+//
 // Patterns drawn from retroemu/LibretroHost.js + wasmcart-libretro/libretro.c.
 // See memory `libretro-wasm-patterns`.
 
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { getCPUState } from "./cpu-state.js";
-import os from "node:os";
-import { mkdtempSync, readdirSync, statSync, readFileSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { loadLibretroCore } from "./coreLoader.js";
 import { newCallbackState, registerCallbacks } from "./callbacks.js";
-import { framebufferToRgba, framebufferToScreenshot } from "./framebuffer.js";
+import { framebufferToRgba } from "./framebuffer.js";
+import { extnameOf, isNodeEnv, encodeCString, writeFsTree } from "./pure-util.js";
 import {
   MemoryRegionToRetro,
   defaultMediaKind,
@@ -125,68 +127,8 @@ const PLATFORM_SYSTEM_DIR = {
   msx: { pkg: "romdev-core-bluemsx", export: "biosDir" },
 };
 
-/**
- * Resolve the absolute path of a platform's bundled system/BIOS dir, or null if
- * the platform needs none / the package isn't resolvable. Best-effort: any
- * failure falls back to null (the core then boots with whatever default it has).
- * @param {string} platform
- * @returns {string | null}
- */
-function resolvePlatformSystemDir(platform) {
-  const entry = PLATFORM_SYSTEM_DIR[platform];
-  if (!entry) return null;
-  try {
-    const dir = path.dirname(fileURLToPath(import.meta.resolve(entry.pkg)));
-    const biosDir = path.join(dir, "bios");
-    if (existsSync(biosDir)) return biosDir;
-  } catch { /* package not resolvable */ }
-  return null;
-}
-
-/**
- * Recursively copy a host directory into the emscripten virtual FS so a core's
- * fopen() can read it (BIOS / machine-config trees). emscripten FILESYSTEM=1
- * MEMFS is enough — no NODEFS rebuild needed.
- * @param {any} FS the core module's FS
- * @param {string} hostDir absolute host path
- * @param {string} fsDir destination path inside the wasm FS (e.g. "/system")
- */
-function mirrorDirToFS(FS, hostDir, fsDir) {
-  try { FS.mkdir(fsDir); } catch { /* exists */ }
-  for (const name of readdirSync(hostDir)) {
-    const hostPath = path.join(hostDir, name);
-    const fsPath = fsDir + "/" + name;
-    const st = statSync(hostPath);
-    if (st.isDirectory()) {
-      mirrorDirToFS(FS, hostPath, fsPath);
-    } else if (st.isFile()) {
-      try { FS.writeFile(fsPath, readFileSync(hostPath)); } catch { /* skip */ }
-    }
-  }
-}
-
-/** Mirror a host dir into a PROXIED core's APP-THREAD MEMFS (a per-thread JS heap, invisible to
- *  the main-thread FS). Each file's bytes go through shared WASM memory; romdev_app_fs_write does
- *  the FS.writeFile on the app thread, where the core's fopen runs. */
-function mirrorDirToAppFS(mod, hostDir, fsDir) {
-  for (const name of readdirSync(hostDir)) {
-    const hostPath = path.join(hostDir, name);
-    const fsPath = fsDir + "/" + name;
-    const st = statSync(hostPath);
-    if (st.isDirectory()) {
-      mirrorDirToAppFS(mod, hostPath, fsPath);
-    } else if (st.isFile()) {
-      const bytes = readFileSync(hostPath);
-      const dataPtr = mod._malloc(bytes.length || 1);
-      mod.HEAPU8.set(bytes, dataPtr);
-      const pb = Buffer.from(fsPath + "\0", "utf-8");
-      const pathPtr = mod._malloc(pb.length);
-      mod.HEAPU8.set(pb, pathPtr);
-      try { mod._romdev_app_fs_write(pathPtr, dataPtr, bytes.length); } catch { /* skip */ }
-      mod._free(dataPtr); mod._free(pathPtr);
-    }
-  }
-}
+// resolvePlatformSystemDir / mirrorDirToFS / mirrorDirToAppFS moved to
+// io-node.js (they read the host disk); the call sites go through this._io.
 
 /**
  * When loadMedia is called with `bytes:` and no `virtualName`, this is
@@ -276,16 +218,21 @@ export class LibretroHost {
    * @param {(level: number, msg: string) => void} [opts.log]
    */
   constructor(opts = {}) {
-    const tmp = mkdtempSync(path.join(os.tmpdir(), "romdev-"));
     /** @type {any | null} */
     this.mod = null;
     // The host-disk system dir (BIOS / machine configs). Mirrored into the wasm
     // FS on first loadMedia for cores that fopen() from it (blueMSX C-BIOS).
     this.systemDir = opts.systemDir ?? null;
     this._systemDirMounted = false;
+    // Default system/save dirs start as VIRTUAL placeholders. MEMFS cores only
+    // ever see these strings inside the wasm FS, so any string works; only
+    // NODERAWFS cores dereference them on the real disk. loadCore upgrades the
+    // placeholders to a real temp dir when the Node adapter is available —
+    // lazily, because a browser has no tmpdir (and never runs NODERAWFS cores).
+    this._defaultDirs = !opts.systemDir || !opts.saveDir;
     this.state = newCallbackState({
-      systemDir: opts.systemDir ?? tmp,
-      saveDir: opts.saveDir ?? tmp,
+      systemDir: opts.systemDir ?? "/romdev-system",
+      saveDir: opts.saveDir ?? "/romdev-save",
     });
     this.log = opts.log;
     this.status = {
@@ -322,8 +269,50 @@ export class LibretroHost {
     return CORE_STEM_TO_PLATFORM[stem] ?? null;
   }
 
+  /**
+   * Load a libretro core module. Registers callbacks then runs retro_init.
+   * Two call shapes:
+   *   loadCore(jsPath, wasmPath?, opts?)          — Node: glue + wasm off disk
+   *   loadCore({ factory, wasmBinary, ...opts })  — isomorphic: the caller
+   *     supplies the glue's default export + wasm bytes; no disk touched.
+   * opts.io: false disables the Node adapter even under Node (forces the
+   * pure bytes-only contract — what a browser bundle gets).
+   */
   async loadCore(jsPath, wasmPath, opts = {}) {
     if (this.mod) throw new Error("core already loaded; create a new host");
+    let factory = null, wasmBinary = null;
+    if (jsPath && typeof jsPath === "object") {
+      const a = jsPath;
+      factory = a.factory ?? null;
+      wasmBinary = a.wasmBinary ?? null;
+      wasmPath = a.wasmPath;
+      opts = a;
+      jsPath = a.jsPath;
+    }
+
+    // The Node I/O adapter, loaded lazily and exactly once. Absent (browser
+    // bundle, or opts.io === false), every path-based branch below refuses
+    // with a pointer to its bytes-based equivalent instead of crashing.
+    if (this._io === undefined) {
+      this._io = (opts.io !== false && opts.io !== null && isNodeEnv())
+        ? await import("./io-node.js")
+        : null;
+    }
+    // screenshot() is sync, so the PNG encoder must be preloaded. Best-effort:
+    // where framebuffer-png can't load (a browser bundle without a pngjs
+    // shim), screenshot() explains itself and the typed-array surface
+    // (getFramebuffer / screenshotRgba) still works.
+    if (this._png === undefined) {
+      this._png = await import("./framebuffer-png.js").then((m) => m, () => null);
+    }
+    // Upgrade the constructor's virtual dir placeholders to a real temp dir
+    // under Node (NODERAWFS cores hand these strings to the real fs).
+    if (this._defaultDirs && this._io) {
+      const tmp = this._io.makeTmpDir();
+      if (this.state.systemDir === "/romdev-system") this.state.systemDir = tmp;
+      if (this.state.saveDir === "/romdev-save") this.state.saveDir = tmp;
+      this._defaultDirs = false;
+    }
 
     // Proxied (multi-threaded) cores — e.g. PPSSPP/PSP — run on a dedicated "app thread" so the
     // JS main thread never blocks while the core's worker threads proxy back to it (which would
@@ -357,7 +346,7 @@ export class LibretroHost {
       this.state.hwRender = this.hwRender;
     }
 
-    const mod = await loadLibretroCore({ jsPath, wasmPath, glCanvas });
+    const mod = await loadLibretroCore({ jsPath, wasmPath, factory, wasmBinary, glCanvas });
     this.mod = mod;
 
     // AUTO-DETECT NODERAWFS regardless of the caller's opt. A NODERAWFS build replaces
@@ -365,13 +354,10 @@ export class LibretroHost {
     // the REAL root path (EACCES → WASM abort). loadMedia must know this even when a
     // caller (a test, runSource) didn't pass the flag — and the build STILL registers
     // FS.filesystems, so that's not a tell. The reliable probe: write to a real temp path
-    // via FS and check whether it actually lands on the host disk.
-    if (!this._noderawfs && mod.FS) {
-      try {
-        const probe = path.join(os.tmpdir(), `.romdev-noderawfs-probe-${process.pid}`);
-        mod.FS.writeFile(probe, "");
-        if (existsSync(probe)) { this._noderawfs = true; try { unlinkSync(probe); } catch {} }
-      } catch { /* MEMFS: the temp path isn't real → not NODERAWFS, leave as-is */ }
+    // via FS and check whether it actually lands on the host disk. (NODERAWFS builds
+    // only exist under Node — without the adapter the probe is definitionally false.)
+    if (!this._noderawfs && mod.FS && this._io) {
+      this._noderawfs = this._io.probeNoderawfs(mod.FS);
     }
 
     if (this._proxied) {
@@ -433,7 +419,7 @@ export class LibretroHost {
     // glide64 (GL/HW-render) vs angrylion (software). Seeding the override here
     // (not in loadMedia, which is too late) makes the SET_VARIABLES handler keep
     // our value instead of the core's default, so HW render engages from boot.
-    const platform = opts.platform ?? this._platformForCore(jsPath);
+    const platform = opts.platform ?? this._platformForCore(jsPath ?? "");
     if (platform) {
       const overrides = PLATFORM_CORE_OPTIONS[platform];
       if (overrides) {
@@ -451,7 +437,7 @@ export class LibretroHost {
     // loadMedia — calling retro_init before the mount makes the loader hang on missing assets.
     if (!this._proxied) mod._retro_init();
     else this._retroInitPending = true;
-    this.status.corePath = jsPath;
+    this.status.corePath = jsPath ?? "<factory>";
   }
 
   /**
@@ -477,7 +463,7 @@ export class LibretroHost {
     // Derive the kind from the file/virtual extension when the caller didn't say
     // — so a C64 .d64 reports mediaKind:"disk" (writable save target) vs a .prg
     // "program". For an in-memory load, the virtualName carries the ext.
-    const kindExt = path.extname(args.path || args.virtualName || "");
+    const kindExt = extnameOf(args.path || args.virtualName || "");
     const mediaKind = args.mediaKind ?? defaultMediaKind(platform, kindExt);
 
     // Apply per-platform core option defaults BEFORE retro_load_game.
@@ -496,9 +482,20 @@ export class LibretroHost {
     // (e.g. blueMSX reads `<systemDir>/Machines/<name>/cbios_*.rom`). When the
     // caller didn't pass a systemDir, resolve the platform's bundled BIOS tree
     // (romdev-core-bluemsx ships the open C-BIOS machines) so MSX "just works".
-    if (!this.systemDir) {
-      const bundled = resolvePlatformSystemDir(platform);
+    if (!this.systemDir && this._io) {
+      const entry = PLATFORM_SYSTEM_DIR[platform];
+      const bundled = entry ? this._io.resolveBundledDir(entry.pkg, "bios") : null;
       if (bundled) this.systemDir = bundled;
+    }
+
+    // In-memory system tree — the isomorphic alternative to a host-disk
+    // systemDir: { "Machines/x/y.rom": bytes } written into the wasm FS at
+    // /system. A browser consumer fetches its BIOS tree and passes it here.
+    if (args.systemFiles && !this._systemDirMounted && mod.FS && !this._proxied) {
+      const FS_SYS = "/system";
+      writeFsTree(mod.FS, FS_SYS, args.systemFiles);
+      if (this.state) this.state.systemDir = FS_SYS;
+      this._systemDirMounted = true;
     }
 
     // The emscripten FS is virtual, so the host-disk systemDir isn't visible to
@@ -509,10 +506,13 @@ export class LibretroHost {
         const FS_SYS = "/system";
         // Proxied cores read the system dir on the app thread (separate per-thread MEMFS); mirror
         // ONLY there. Non-proxied cores read main's FS. (Mirroring to both is wasted work.)
+        if (!this._io) {
+          throw new Error("systemDir is a host-disk path but this host has no Node I/O — pass systemFiles ({relPath: bytes}) instead");
+        }
         if (this._proxied) {
-          mirrorDirToAppFS(mod, this.systemDir, FS_SYS);
+          this._io.mirrorDirToAppFS(mod, this.systemDir, FS_SYS);
         } else {
-          mirrorDirToFS(mod.FS, this.systemDir, FS_SYS);
+          this._io.mirrorDirToFS(mod.FS, this.systemDir, FS_SYS);
         }
         // Redirect the core's reported system dir to the in-FS copy.
         if (this.state) this.state.systemDir = FS_SYS;
@@ -534,19 +534,24 @@ export class LibretroHost {
       // shape for any shared-core platform.
       const defaultExt = PLATFORM_VIRTUAL_EXT[platform] ?? "";
       mediaPath = args.virtualName ?? ("/rom" + defaultExt);
-      ext = path.extname(mediaPath);
+      ext = extnameOf(mediaPath);
       // Synthesize a stable status path that still encodes the platform
       // when the user didn't supply a name (helpful in logs).
       if (!args.virtualName) mediaPath = "<memory" + defaultExt + ">";
     } else if (args.path) {
       mediaPath = args.path;
-      ext = path.extname(mediaPath);
+      ext = extnameOf(mediaPath);
       // NODERAWFS cores (flycast) fopen the disc straight off Node's real fs — DON'T
       // read the (up-to-~1GB) image into a JS buffer; libchdr seeks the sectors it
       // needs on demand. `data` stays null; the real path is passed below. This ONLY
       // applies to a real disk PATH — an in-memory `bytes` load (a freshly-built ELF in
       // the tests/runSource) has no file to fopen, so it still mirrors into the FS below.
-      if (!this._noderawfs) data = await readFile(mediaPath);
+      if (!this._noderawfs) {
+        if (!this._io) {
+          throw new Error("loadMedia({path}) needs the Node I/O adapter — in a browser, read the file yourself and pass loadMedia({bytes})");
+        }
+        data = await this._io.readFileBytes(mediaPath);
+      }
     } else {
       throw new Error("loadMedia requires either `path` or `bytes`");
     }
@@ -556,8 +561,8 @@ export class LibretroHost {
     // runSource), spill the bytes to a REAL temp file and load THAT path — the core
     // fopens it off disk like any other media.
     if (this._noderawfs && data != null) {
-      const tmpFile = path.join(mkdtempSync(path.join(os.tmpdir(), "romdev-dc-")), "rom" + (ext || ".bin"));
-      writeFileSync(tmpFile, data);
+      // NODERAWFS implies Node (the probe requires this._io), so the adapter is here.
+      const tmpFile = this._io.writeNoderawfsTmp(data, ext);
       this._noderawfsTmp = tmpFile; // remembered so unloadMedia can clean it up
       mediaPath = tmpFile;
       data = null; // now streamed from the temp path, not the heap
@@ -588,7 +593,7 @@ export class LibretroHost {
     // Path string. Streaming → the REAL host path (the core fopens it). Otherwise the
     // in-FS vfs path (or the real path if the core has no FS).
     const pathStr = streamFromDisk ? mediaPath : (mod.FS ? vfsPath : mediaPath);
-    const pathBytes = Buffer.from(pathStr + "\0", "utf-8");
+    const pathBytes = encodeCString(pathStr);
     const pathPtr = mod._malloc(pathBytes.length);
     mod.HEAPU8.set(pathBytes, pathPtr);
 
@@ -987,10 +992,18 @@ export class LibretroHost {
     return h >>> 0;
   }
 
-  /** Returns the latest frame as a base64 PNG. */
+  /** Returns the latest frame as a base64 PNG. Needs the PNG encoder
+   *  (framebuffer-png.js, preloaded at loadCore) — where a browser bundle
+   *  omits it, use getFramebuffer()/screenshotRgba() typed arrays instead. */
   screenshot() {
+    if (!this._png) {
+      throw new Error(
+        "screenshot(): PNG encoder unavailable in this bundle (framebuffer-png.js / pngjs did not load) — " +
+        "use getFramebuffer() or screenshotRgba() for raw typed-array pixels, or ship romdev-core-host/framebuffer-png.js with a pngjs shim.",
+      );
+    }
     const f = this.getFramebuffer();
-    return framebufferToScreenshot(f.width, f.height, f.pixels, f.pitch, f.format);
+    return this._png.framebufferToScreenshot(f.width, f.height, f.pixels, f.pitch, f.format);
   }
 
   /** Returns the latest frame as flat RGBA8888 bytes — for piping into
@@ -1311,7 +1324,7 @@ export class LibretroHost {
       throw new Error("this core build does not expose disk putfile (C64/VICE only).");
     }
     const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-    const nameBytes = Buffer.from(String(name) + "\0", "latin1");
+    const nameBytes = encodeCString(String(name), "latin1");
     const namePtr = mod._malloc(nameBytes.length);
     const dataPtr = mod._malloc(data.length || 1);
     try {
@@ -1456,7 +1469,7 @@ export class LibretroHost {
       throw new Error("this core build does not expose C64 text input (C64/VICE only).");
     }
     const s = String(text).replace(/\n/g, "\r");
-    const bytes = Buffer.from(s + "\0", "latin1");
+    const bytes = encodeCString(s, "latin1");
     const ptr = mod._malloc(bytes.length);
     try {
       mod.HEAPU8.set(bytes, ptr);
@@ -1604,7 +1617,7 @@ export class LibretroHost {
         "Rebuild the core with the cheat exports, or apply RAM cheats via writeMemory.",
       );
     }
-    const bytes = Buffer.from(String(code) + "\0", "utf-8");
+    const bytes = encodeCString(String(code));
     const ptr = mod._malloc(bytes.length);
     try {
       mod.HEAPU8.set(bytes, ptr);

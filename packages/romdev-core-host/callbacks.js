@@ -12,6 +12,7 @@
 // See memory `libretro-wasm-patterns` for rationale.
 
 import { RETRO_HW_FRAME_BUFFER_VALID } from "./retroConstants.js";
+import { encodeCString } from "./pure-util.js";
 
 /**
  * @typedef {Object} Frame
@@ -290,7 +291,7 @@ export function registerProxiedCallbacks(args) {
 }
 
 function allocString(mod, state, str) {
-  const bytes = Buffer.from(str + "\0", "utf-8");
+  const bytes = encodeCString(str);
   const ptr = mod._malloc(bytes.length);
   mod.HEAPU8.set(bytes, ptr);
   state._allocatedPtrs.push(ptr);

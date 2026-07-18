@@ -12,7 +12,8 @@
 // vm.SourceTextModule). loadMedia throws a clear message if it's missing.
 
 import { createHostSession } from "rungame";
-import { framebufferToScreenshot, framebufferToRgba } from "romdev-core-host/framebuffer.js";
+import { framebufferToRgba } from "romdev-core-host/framebuffer.js";
+import { framebufferToScreenshot } from "romdev-core-host/framebuffer-png.js";
 import { ROMDEV_PIXEL_FORMAT_RGBA8888 } from "romdev-core-host/retroConstants.js";
 
 // canvas.data() is RGBA already — reuse romdev's RGBA framebuffer format (no decode).

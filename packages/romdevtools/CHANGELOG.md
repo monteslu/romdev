@@ -4,6 +4,37 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.100.0 — 2026-07-18
+
+**romdev-core-host goes ISOMORPHIC** (ROMDEV_CORE_RUNNER_PLAN Phase 2 / §6b,
+repinned here as `romdev-core-host@0.2.0` + `romdev-core-runner@0.1.1`):
+
+- The core's static import closure (LibretroHost, coreLoader, callbacks,
+  framebuffer, types, constants, gamegenie, cpu-state) now has ZERO top-level
+  `node:` imports and no pngjs, enforced by an extension of the
+  browser-surface-imports gate. Node I/O moved to a lazy adapter
+  (`romdev-core-host/io-node.js`) loaded only on path-based code paths.
+- New isomorphic entry points: `loadCore({ factory, wasmBinary })` runs a
+  core from the glue's default export + wasm bytes (no disk);
+  `loadMedia({ bytes })` was already byte-capable; new
+  `loadMedia({ systemFiles })` mounts an in-memory BIOS tree (the browser
+  alternative to a host-disk systemDir). `loadCore({ io: false })` forces
+  the pure contract even under Node.
+- PNG encode/crop/resample split to `romdev-core-host/framebuffer-png.js`
+  (pngjs drags node:zlib); `framebuffer.js` keeps the pure typed-array
+  converters and newly exports `decodePixelsInto` for direct canvas blits.
+  `screenshot()` preloads the encoder at loadCore and degrades to a
+  descriptive error pointing at `screenshotRgba()` where it can't load.
+  BREAKING (pre-1.0): `framebufferToPng` / `framebufferToScreenshot` are no
+  longer re-exported from the core-host index; import the subpath.
+- Buffer usage in the core surface replaced with TextEncoder-based
+  `encodeCString` (pure-util.js, also exported).
+- Node behavior is byte-identical: the new `core-host-pure-e2e` gate runs
+  the same ROM through the path-based host and a `{ io: false }` bytes-only
+  host and asserts identical framebuffer hash, RAM, and frame count.
+- Zero romdevtools tool-surface changes; importers repointed to the new
+  subpaths only.
+
 ## 0.99.0 — 2026-07-18
 
 **The host + runner extraction** (internal-romdev/ROMDEV_CORE_RUNNER_PLAN.md

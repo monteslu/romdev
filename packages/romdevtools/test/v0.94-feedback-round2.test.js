@@ -20,7 +20,7 @@ import path from "node:path";
 import { PNG } from "pngjs";
 
 import { LibretroHost } from "romdev-core-host/LibretroHost.js";
-import { cropPng } from "romdev-core-host/framebuffer.js";
+import { cropPng } from "romdev-core-host/framebuffer-png.js";
 import { registerDisasmTools } from "../src/mcp/tools/disasm.js";
 import { registerMemoryTools } from "../src/mcp/tools/memory.js";
 import { reassembleProjectCore } from "../src/mcp/tools/toolchain.js";

@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { PNG } from "pngjs";
-import { framebufferToPng, resamplePng } from "romdev-core-host/framebuffer.js";
+import { framebufferToPng, resamplePng } from "romdev-core-host/framebuffer-png.js";
 import {
   RETRO_PIXEL_FORMAT_0RGB1555,
   RETRO_PIXEL_FORMAT_RGB565,

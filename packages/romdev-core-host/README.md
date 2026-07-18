@@ -7,6 +7,11 @@ state. This is the SAME host the romdev MCP server runs (the server consumes
 this package too), so there is exactly one host implementation in the
 ecosystem. Bundles NO cores; pass any `romdev-core-*` package.
 
+**Isomorphic**: the core surface has no top-level `node:` imports and no
+pngjs. Under Node you load cores and ROMs by path; in a browser or worker
+bundle you pass the Emscripten factory + wasm bytes and ROM bytes, and the
+same host runs unchanged (see "Browser / bytes-only use" below).
+
 ```js
 import { LibretroHost } from "romdev-core-host";
 import * as core from "romdev-core-fceumm"; // any romdev-core-* package
@@ -81,21 +86,56 @@ Dreamcast) hardware-render through a headless GL context: pass
 `{ hwRender: true }` to `loadCore` and install the optional `native-gles`
 dependency; the software-rendered cores need neither.
 
+## Browser / bytes-only use
+
+Everything the index exports is browser-bundleable (enforced by a gate
+test: no top-level `node:` imports, no pngjs in the static closure). The
+browser contract is "the caller does the I/O":
+
+```js
+import { LibretroHost } from "romdev-core-host";
+import factory from "romdev-core-fceumm/wasm/fceumm_libretro.js"; // your bundle
+const wasmBinary = new Uint8Array(await (await fetch(wasmUrl)).arrayBuffer());
+const romBytes   = new Uint8Array(await (await fetch(romUrl)).arrayBuffer());
+
+const host = new LibretroHost();
+await host.loadCore({ factory, wasmBinary });
+await host.loadMedia({ platform: "nes", bytes: romBytes });
+host.stepFrames(1);
+const { rgba, width, height } = host.screenshotRgba(); // blit to a canvas
+```
+
+- `loadCore({ factory, wasmBinary })` takes the glue's default export + wasm
+  bytes; `loadCore(jsPath, wasmPath)` stays the Node path form. Passing
+  `io: false` in the options forces the pure contract even under Node (the
+  path-based branches then refuse with a pointer to their bytes equivalent).
+- `loadMedia({ systemFiles: { "Machines/x/y.rom": bytes } })` mounts an
+  in-memory BIOS tree, the browser alternative to a host-disk `systemDir`.
+- `screenshot()` (base64 PNG) needs the lazily-preloaded PNG tier; where a
+  bundle omits pngjs it throws a descriptive error and the typed-array
+  surface (`getFramebuffer()` / `screenshotRgba()`) is the path.
+- Node-only by nature: NODERAWFS cores (Dreamcast disc streaming), the 3D
+  cores' native GL stack, and terminal (chafa) rendering.
+
 ## Subpath exports
 
-The index exports `LibretroHost`, the framebuffer codecs
-(`framebufferToPng` / `framebufferToRgba` / `framebufferToScreenshot`),
-every retro constant, and the shared type helpers. Everything else is
-addressable directly, e.g.:
+The index exports `LibretroHost`, the pure framebuffer codecs
+(`framebufferToRgba` / `decodePixelsInto`), the pure utilities
+(`encodeCString`, `writeFsTree`, `extnameOf`, `isNodeEnv`), every retro
+constant, and the shared type helpers. Everything else is addressable
+directly, e.g.:
 
 ```js
 import { decodeCode } from "romdev-core-host/gamegenie.js";
-import { framebufferToPng } from "romdev-core-host/framebuffer.js";
+// PNG encode/crop/resample (pngjs-backed, Node or shimmed bundles):
+import { framebufferToPng, resamplePng } from "romdev-core-host/framebuffer-png.js";
 ```
 
 Per-chip audio/state decoders (`nes-apu-state.js`, `gb-apu-state.js`,
 `dsp-state.js`, `gpgx-state.js`, `snes9x-state.js`, `c64-sid-state.js`,
-`gba-video-state.js`, and friends) follow the same pattern.
+`gba-video-state.js`, and friends) follow the same pattern. The Node I/O
+adapter (`io-node.js`) is internal: the host lazy-loads it on path-based
+calls; browser bundles never reach it.
 
 ## Requirements
 
