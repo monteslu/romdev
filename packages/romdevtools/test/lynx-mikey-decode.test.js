@@ -9,7 +9,7 @@ import {
   decodeLynxMikey,
   decodeLynxPalette,
   decodeLynxRenderingContext,
-} from "../src/host/lynx-mikey-state.js";
+} from "romdev-core-host/lynx-mikey-state.js";
 
 /** Build a 512-byte lynx_hw_regs window from a sparse {offset:value} map. */
 function hwRegs(map) {

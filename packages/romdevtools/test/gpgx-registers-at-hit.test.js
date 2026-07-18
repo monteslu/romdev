@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 
 import { buildForPlatform } from "../src/toolchains/index.js";
 import { resolveCore } from "../src/cores/registry.js";
-import { LibretroHost } from "../src/host/index.js";
+import { LibretroHost } from "romdev-core-host/index.js";
 
 // A self-contained Genesis program with KNOWN addresses:
 //   Start ($200): set up registers with sentinel values, then loop:

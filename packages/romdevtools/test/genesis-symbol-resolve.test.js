@@ -16,7 +16,7 @@ import { resolveSymbolCore, getMemoryMapCore, listSymbolsCore } from "../src/mcp
 import { addressToSymbolCore } from "../src/mcp/tools/address-to-symbol.js";
 import { buildForPlatform } from "../src/toolchains/index.js";
 import { resolveCore } from "../src/cores/registry.js";
-import { LibretroHost } from "../src/host/index.js";
+import { LibretroHost } from "romdev-core-host/index.js";
 
 // A Genesis C program with a NON-static and a STATIC global, both in work RAM.
 const SRC = `#include <genesis.h>

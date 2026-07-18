@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadLibretroCore } from "../src/host/coreLoader.js";
+import { loadLibretroCore } from "romdev-core-host/coreLoader.js";
 
 const PKG_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const WASM_DIR = path.join(PKG_ROOT, "src", "cores", "wasm");

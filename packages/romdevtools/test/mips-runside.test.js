@@ -10,10 +10,10 @@ import { readFile, writeFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { LibretroHost } from "../src/host/LibretroHost.js";
+import { LibretroHost } from "romdev-core-host/LibretroHost.js";
 import { resolveCore } from "../src/cores/registry.js";
-import { glStackAvailable } from "../src/host/glOptionalDep.js";
-import { getCPUState } from "../src/host/cpu-state.js";
+import { glStackAvailable } from "romdev-core-host/glOptionalDep.js";
+import { getCPUState } from "romdev-core-host/cpu-state.js";
 import { buildForPlatform } from "../src/toolchains/index.js";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -209,7 +209,7 @@ test("audioDebug: PS1 SPU register decode (chip:'spu')", { timeout: 180000 }, as
   if (!HAS_MIPS_GCC) { console.log("mips-elf-gcc not built; skipping"); return; }
   const core = resolveCore("ps1");
   if (!core) return;
-  const { decodePs1Spu } = await import("../src/host/ps1-spu-state.js");
+  const { decodePs1Spu } = await import("romdev-core-host/ps1-spu-state.js");
   // A PS1 program that writes the SPU main volume + a voice volume/pitch.
   // NOTE on what reads back: in beetle (Mednafen) SPU, the main/voice VOLUME
   // registers are sweep-CONTROL writes — the running volume sweep converges to a
@@ -249,7 +249,7 @@ test("audioDebug: N64 AI output state (chip:'ai')", { timeout: 180000 }, async (
     try { rom = new Uint8Array(await readFile(p)); break; } catch { /* next */ }
   }
   if (!rom) { console.log("no N64 fixture; skipping"); return; }
-  const { decodeN64Ai } = await import("../src/host/n64-ai-state.js");
+  const { decodeN64Ai } = await import("romdev-core-host/n64-ai-state.js");
   const host = new LibretroHost();
   try {
     await host.loadCore(core.jsPath, core.wasmPath, { hwRender: core.hwRender });

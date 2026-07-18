@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decodeNesApu, hzToMidi } from "../src/host/nes-apu-state.js";
+import { decodeNesApu, hzToMidi } from "romdev-core-host/nes-apu-state.js";
 
 /** Build a 24-byte APU snapshot from a sparse {offset:value} map. */
 function apuRegs(map) {

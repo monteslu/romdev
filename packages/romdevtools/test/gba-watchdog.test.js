@@ -54,7 +54,7 @@ test("GBA watchdog: infinite-loop routine returns {watchdog:true} (mgba ARM7TDMI
   assert.ok(r.binary && r.binary.length > 256, `binary too small: ${r.binary?.length}`);
 
   // 2) Boot it under mgba via the host (mirrors what runSource does internally).
-  const { LibretroHost } = await import("../src/host/LibretroHost.js");
+  const { LibretroHost } = await import("romdev-core-host/LibretroHost.js");
   const core = resolveCore("gba");
   assert.ok(core, "resolveCore('gba') returned null — mgba_libretro.{js,wasm} missing?");
   const host = new LibretroHost();

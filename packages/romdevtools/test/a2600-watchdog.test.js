@@ -97,7 +97,7 @@ test("Atari 2600 watchdog force-stops an infinite loop (stella2014 6507)", { tim
   const spinPC = parseInt(m[2], 16) >>> 0;
   assert.ok(spinPC >= 0xF000, "SPIN looks wrong: $" + spinPC.toString(16));
 
-  const { LibretroHost } = await import("../src/host/LibretroHost.js");
+  const { LibretroHost } = await import("romdev-core-host/LibretroHost.js");
   const core = resolveCore("atari2600");
   assert.ok(core, "resolveCore('atari2600') returned null — stella2014_libretro.{js,wasm} missing?");
   const host = new LibretroHost();

@@ -20,8 +20,8 @@ import { fileURLToPath } from "node:url";
 
 import { buildForPlatform } from "../src/toolchains/index.js";
 import { resolveCore } from "../src/cores/registry.js";
-import { LibretroHost } from "../src/host/index.js";
-import { framebufferToPng } from "../src/host/framebuffer.js";
+import { LibretroHost } from "romdev-core-host/index.js";
+import { framebufferToPng } from "romdev-core-host/framebuffer.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

@@ -11,8 +11,8 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import { resolveCore } from "../src/cores/registry.js";
-import { LibretroHost } from "../src/host/LibretroHost.js";
-import { getCPUState } from "../src/host/cpu-state.js";
+import { LibretroHost } from "romdev-core-host/LibretroHost.js";
+import { getCPUState } from "romdev-core-host/cpu-state.js";
 import { buildGbaC } from "romdev-platform-gba";
 import { buildExampleRom } from "./build-fixture-rom.js";
 
@@ -60,7 +60,7 @@ int main(void) {
   assert.ok(cpu.registers.SP > 0x2000000, `SP looks wrong: 0x${cpu.registers.SP.toString(16)}`);
 
   // DISPCNT we set: BG mode 0, BG0 + OBJ enabled.
-  const { decodeGbaRenderingContext } = await import("../src/host/gba-video-state.js");
+  const { decodeGbaRenderingContext } = await import("romdev-core-host/gba-video-state.js");
   const io = host.readMemory("gba_io_regs", 0, 0x400);
   const ctx = decodeGbaRenderingContext(io);
   assert.equal(ctx.bgMode, 0, "expected BG mode 0");
@@ -68,7 +68,7 @@ int main(void) {
   assert.equal(ctx.displayObj, true, "expected OBJ enabled");
 
   // OAM decodes to 128 sprite slots.
-  const { decodeGbaSprites } = await import("../src/host/gba-video-state.js");
+  const { decodeGbaSprites } = await import("romdev-core-host/gba-video-state.js");
   const oam = host.readMemory("gba_oam", 0, 0x400);
   assert.equal(decodeGbaSprites(oam, {}).sprites.length, 128);
 });
@@ -150,7 +150,7 @@ test("Lynx: patched handy exposes cpu/hw regions + getCPUState decodes 65C02", {
   assert.ok(cpu.flags && cpu.flags.raw.startsWith("0x"));
 
   // Palette decodes to 16 entries; Mikey to 4 channels.
-  const { decodeLynxPalette, decodeLynxMikey } = await import("../src/host/lynx-mikey-state.js");
+  const { decodeLynxPalette, decodeLynxMikey } = await import("romdev-core-host/lynx-mikey-state.js");
   assert.equal(decodeLynxPalette(hw).entries.length, 16);
   assert.equal(decodeLynxMikey(hw).channels.length, 4);
 });

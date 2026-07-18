@@ -56,7 +56,7 @@ test("PCE watchdog force-stops an infinite loop (geargrafx HuC6280)", { timeout:
   }, undefined, { timeout: 180000 }));
   assert.equal(build.ok, true, "pce build failed:\n" + (build.log || JSON.stringify(build)).slice(-600));
 
-  const { LibretroHost } = await import("../src/host/LibretroHost.js");
+  const { LibretroHost } = await import("romdev-core-host/LibretroHost.js");
   const core = resolveCore("pce");
   assert.ok(core, "resolveCore('pce') returned null — geargrafx_libretro.{js,wasm} missing?");
   const host = new LibretroHost();

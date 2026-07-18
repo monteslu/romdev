@@ -55,7 +55,7 @@ test("C64 watchdog force-stops an infinite loop (vice 6510)", { timeout: 180000 
   }, undefined, { timeout: 180000 }));
   assert.equal(build.ok, true, "c64 build failed:\n" + (build.log || JSON.stringify(build)).slice(-600));
 
-  const { LibretroHost } = await import("../src/host/LibretroHost.js");
+  const { LibretroHost } = await import("romdev-core-host/LibretroHost.js");
   const core = resolveCore("c64");
   assert.ok(core, "resolveCore('c64') returned null — vice_x64_libretro.{js,wasm} missing?");
   const host = new LibretroHost();

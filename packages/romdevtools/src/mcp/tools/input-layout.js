@@ -2,7 +2,7 @@
 // the libretro→hardware id mapping. Lets agents writing asm input handlers
 // know exactly what each bit/id means.
 
-import { FACE_BUTTON_MAP } from "../../host/types.js";
+import { FACE_BUTTON_MAP } from "romdev-core-host/types.js";
 
 const HARDWARE_LAYOUTS = {
   nes: {

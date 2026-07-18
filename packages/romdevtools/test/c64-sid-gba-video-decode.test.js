@@ -4,12 +4,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decodeC64Sid, freqToNote } from "../src/host/c64-sid-state.js";
+import { decodeC64Sid, freqToNote } from "romdev-core-host/c64-sid-state.js";
 import {
   decodeGbaSprites,
   decodeGbaPalette,
   decodeGbaRenderingContext,
-} from "../src/host/gba-video-state.js";
+} from "romdev-core-host/gba-video-state.js";
 
 // ── helpers ────────────────────────────────────────────────────────────
 

@@ -95,7 +95,7 @@ function expectedRolls(n) {
 
 async function buildRun(platform, src) {
     const { buildForPlatform } = await import("../src/toolchains/index.js");
-    const { LibretroHost } = await import("../src/host/LibretroHost.js");
+    const { LibretroHost } = await import("romdev-core-host/LibretroHost.js");
     const { resolveCore } = await import("../src/cores/registry.js");
     // The live MCP path auto-injects the bundled crt0 for sms/gg; buildForPlatform
     // does not, so pass it explicitly (this is the crt0 under test).

@@ -9,9 +9,9 @@ import assert from "node:assert/strict";
 import {
   encodeGameTankGameGenie, decodeGameTankGameGenie,
   encodeForDevice, decodeCode, detectDevice, nativeDevicesFor,
-} from "../src/cheats/gamegenie.js";
+} from "romdev-core-host/gamegenie.js";
 import { resolveCore } from "../src/cores/registry.js";
-import { LibretroHost } from "../src/host/LibretroHost.js";
+import { LibretroHost } from "romdev-core-host/LibretroHost.js";
 
 test("gametank GG codec: encode/decode round-trips (plain + compare)", () => {
   let n = 0;

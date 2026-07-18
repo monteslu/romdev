@@ -53,7 +53,7 @@ int main(void) {
 
   // Boot the rom under mgba via the host. Mirrors what runSource does
   // internally but skips the MCP plumbing.
-  const { LibretroHost } = await import("../src/host/LibretroHost.js");
+  const { LibretroHost } = await import("romdev-core-host/LibretroHost.js");
   const core = resolveCore("gba");
   const host = new LibretroHost();
   await host.loadCore(core.jsPath, core.wasmPath);

@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 
 import { buildForPlatform } from "../src/toolchains/index.js";
 import { resolveCore } from "../src/cores/registry.js";
-import { LibretroHost } from "../src/host/index.js";
+import { LibretroHost } from "romdev-core-host/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const EXAMPLES = path.join(__dirname, "..", "examples");

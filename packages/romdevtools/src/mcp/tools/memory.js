@@ -1,5 +1,5 @@
 import { getHost } from "../state.js";
-import { MemoryRegionToRetro } from "../../host/types.js";
+import { MemoryRegionToRetro } from "romdev-core-host/types.js";
 import { jsonContent, safeTool, textContent, writeOutput } from "../util.js";
 import { classifyBytes } from "./classify-region.js";
 import { clusterChanges } from "./diff-cluster.js";

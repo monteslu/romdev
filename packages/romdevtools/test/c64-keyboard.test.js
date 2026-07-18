@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import { resolveCore } from "../src/cores/registry.js";
-import { LibretroHost } from "../src/host/LibretroHost.js";
+import { LibretroHost } from "romdev-core-host/LibretroHost.js";
 import { prgToD64 } from "../src/platforms/c64/d64.js";
 import { buildExampleRom } from "./build-fixture-rom.js";
 

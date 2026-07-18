@@ -17,7 +17,7 @@ import assert from "node:assert/strict";
 
 import { CAPABILITIES, OP_KEYS, CONTRACT_PLATFORMS, MIPS_TIER_PLATFORMS, supports, naReason } from "../src/cores/capabilities.js";
 import { CORES } from "../src/cores/registry.js";
-import { MemoryRegionToRetro } from "../src/host/types.js";
+import { MemoryRegionToRetro } from "romdev-core-host/types.js";
 import { unsupported, errorContent } from "../src/mcp/util.js";
 
 // ─── (A) Static manifest consistency ────────────────────────────────────────

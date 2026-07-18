@@ -19,8 +19,8 @@ import { fileURLToPath } from "node:url";
 
 import { buildForPlatform } from "../src/toolchains/index.js";
 import { resolveCore } from "../src/cores/registry.js";
-import { LibretroHost } from "../src/host/index.js";
-import { getCPUState } from "../src/host/cpu-state.js";
+import { LibretroHost } from "romdev-core-host/index.js";
+import { getCPUState } from "romdev-core-host/cpu-state.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PLAT = path.join(__dirname, "..", "src", "platforms");
@@ -150,7 +150,7 @@ test("PCE asset pipeline: tile codec round-trips and matches planar-pairs", asyn
 });
 
 test("PCE audio: getAudioState decodes the HuC6280 PSG (6 channels)", async () => {
-  const { getPcePsgState } = await import("../src/host/pce-psg-state.js");
+  const { getPcePsgState } = await import("romdev-core-host/pce-psg-state.js");
   const build = await buildForPlatform({ platform: "pce", source: "void main(void){for(;;);}", sourceName: "main.c" });
   const core = resolveCore("pce");
   const host = new LibretroHost();
@@ -166,7 +166,7 @@ test("PCE audio: getAudioState decodes the HuC6280 PSG (6 channels)", async () =
 }, { timeout: 60000 });
 
 test("MSX audio: getAudioState decodes the AY-3-8910 (3 channels + envelope)", async () => {
-  const { getMsxAyState } = await import("../src/host/msx-ay-state.js");
+  const { getMsxAyState } = await import("romdev-core-host/msx-ay-state.js");
   const build = await buildForPlatform({ platform: "msx", source: "void main(void){for(;;);}", sourceName: "main.c" });
   const core = resolveCore("msx");
   const host = new LibretroHost();

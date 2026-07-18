@@ -1804,7 +1804,7 @@ async function recompileCore(args) {
  */
 async function buildNesPpuShim(romBytes) {
   const { resolveCore } = await import("../../cores/registry.js");
-  const { LibretroHost } = await import("../../host/index.js");
+  const { LibretroHost } = await import("romdev-core-host/index.js");
   const { buildSnesAssets, emitPpuShim } = await import("../../analysis/nes-ppu-shim.js");
   const core = resolveCore("nes");
   if (!core) throw new Error("NES core unavailable for shim boot");

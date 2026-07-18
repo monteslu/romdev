@@ -130,7 +130,7 @@ test("R54 #2: end-to-end — GB build links shadow_oam at $C100", { timeout: 120
 // ─── #3 loadMedia virtual extension per platform ───────────────────
 
 test("R54 #3: PLATFORM_VIRTUAL_EXT is defined for the shared-core platforms", async () => {
-  const host = await readSrc("src/host/LibretroHost.js");
+  const host = await readSrc("../romdev-core-host/LibretroHost.js");
   // Spot-check that the table covers SMS vs GG (the actual bite from R26).
   assert.match(host, /PLATFORM_VIRTUAL_EXT\s*=\s*\{[\s\S]*?sms:\s*"\.sms"[\s\S]*?gg:\s*"\.gg"/,
     "PLATFORM_VIRTUAL_EXT must include sms + gg with their distinguishing extensions");
@@ -224,7 +224,7 @@ test("R54 #9: getRenderingContextCore accepts sessionKey as a parameter", async 
 // ─── #10 readMemory error messages with per-platform suggestions ───
 
 test("R54 #10: _emptyRegionError generates a helpful per-platform message", async () => {
-  const src = await readSrc("src/host/LibretroHost.js");
+  const src = await readSrc("../romdev-core-host/LibretroHost.js");
   assert.match(src, /_emptyRegionError\s*\(\s*region\s*\)/,
     "_emptyRegionError helper must exist");
   // Check the suggestion table covers GB (the round 26 case).
@@ -360,7 +360,7 @@ test("R54 #14: gb_crt0.s is actually assembled + linked (init symbol present in 
 test("R54 #14: GB sound_init + sound_play_tone actually writes NR50/NR51/NR52 + APU produces audio", { timeout: 120000 }, async () => {
   const { buildForPlatform } = await import("../src/toolchains/index.js");
   const { patchGbHeader } = await import("../src/platforms/gb/lib/c/patch-header.js");
-  const { LibretroHost } = await import("../src/host/LibretroHost.js");
+  const { LibretroHost } = await import("romdev-core-host/LibretroHost.js");
   const { resolveCore } = await import("../src/cores/registry.js");
 
   const rt_c = await readSrc("src/platforms/gb/lib/c/gb_runtime.c");
@@ -407,7 +407,7 @@ test("R54 #14: GB sound_init + sound_play_tone actually writes NR50/NR51/NR52 + 
 test("R54 #15: screenshot after fresh loadMedia returns a clean DMG framebuffer (not stale/pink)", { timeout: 120000 }, async () => {
   const { buildForPlatform } = await import("../src/toolchains/index.js");
   const { patchGbHeader } = await import("../src/platforms/gb/lib/c/patch-header.js");
-  const { LibretroHost } = await import("../src/host/LibretroHost.js");
+  const { LibretroHost } = await import("romdev-core-host/LibretroHost.js");
   const { resolveCore } = await import("../src/cores/registry.js");
   const { PNG } = await import("pngjs");
 

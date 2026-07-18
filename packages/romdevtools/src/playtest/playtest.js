@@ -2,22 +2,25 @@
 // drive it with whatever gamepad is plugged in. Uses the same SDL API
 // pattern as the working retroemu player.
 
+// The SDL loader hardening + the presentation/input primitives live in
+// romdev-core-runner now (the shared human-tier SDL host) — playtest is the
+// AGENT tier on top: live-host follow, checkpoints, rewind, co-drive
+// detection, audio-paced stepping, resampler. One SDL host in the ecosystem.
 import {
-  RETRO_PIXEL_FORMAT_0RGB1555,
-  RETRO_PIXEL_FORMAT_RGB565,
-  RETRO_PIXEL_FORMAT_XRGB8888,
-  ROMDEV_PIXEL_FORMAT_RGBA8888,
-} from "../host/retroConstants.js";
+  initSdl,
+  sdlPackageRoot as runnerSdlPackageRoot,
+  SDL_BUTTON_TO_LIBRETRO_BIT,
+  KEY_TO_LIBRETRO_BIT,
+  STICK_DEADZONE,
+  bitToName,
+  tvAspectFor,
+  letterbox as runnerLetterbox,
+  framebufferToRgba,
+} from "romdev-core-runner";
 import { log } from "../mcp/log.js";
 import { initResampler, resampleS16Stereo } from "romdev-audio-resampler";
 import path from "node:path";
 import { existsSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { createRequire } from "node:module";
-
-const execFileAsync = promisify(execFile);
-const require = createRequire(import.meta.url);
 
 
 /**
@@ -25,7 +28,7 @@ const require = createRequire(import.meta.url);
  * ROM/project basename (e.g. "asteroids.sfc" → "asteroids"); for in-memory
  * builds (runSource) the path is a synthetic "<memory.sfc>" with no project
  * name, so fall back to the platform, then the generic label.
- * @param {import("../host/index.js").LibretroHost} host
+ * @param {import("romdev-core-host/index.js").LibretroHost} host
  * @returns {string}
  */
 export function deriveTitle(host) {
@@ -41,26 +44,9 @@ export function deriveTitle(host) {
   return platform ? `romdev — ${platform}` : "romdev playtest";
 }
 
-/**
- * Find the on-disk root directory of the @kmamal/sdl package. Its `exports`
- * field doesn't expose `./package.json`, so we resolve the main entry and walk
- * up to the nearest directory containing a package.json. Exported for tests.
- * @returns {string | null}
- */
-export function sdlPackageRoot() {
-  let entry;
-  try {
-    entry = require.resolve("@kmamal/sdl");
-  } catch {
-    return null;
-  }
-  let dir = path.dirname(entry);
-  while (dir !== path.dirname(dir)) {
-    if (existsSync(path.join(dir, "package.json"))) return dir;
-    dir = path.dirname(dir);
-  }
-  return null;
-}
+// Re-exported from romdev-core-runner (single implementation); kept on this
+// module for the existing tests + any external import of the old name.
+export const sdlPackageRoot = runnerSdlPackageRoot;
 
 /**
  * @kmamal/sdl ships its native binary (`dist/sdl.node`) via an `install`
@@ -81,86 +67,18 @@ export function sdlPackageRoot() {
  * blamed the desktop session).
  * @returns {Promise<any>} the SDL module
  */
-let _sdlModule = null;
+/** Load @kmamal/sdl via romdev-core-runner's hardened initSdl() (self-repair
+ *  for the missing native binary, failed-import-cache workaround, offscreen-
+ *  driver detection). This wrapper only enriches the no-display message with
+ *  the romdev-specific guidance the playtest tool passes through verbatim. */
 async function getSdl() {
-  if (_sdlModule) return _sdlModule;
-
-  // Resolve the package root (works under npx, local install, or a monorepo
-  // symlink). Note: @kmamal/sdl's `exports` does NOT expose ./package.json, so
-  // resolve the main entry and walk up to the dir that contains package.json.
-  let sdlNode = null;
-  let installScript = null;
   try {
-    const pkgDir = sdlPackageRoot();
-    if (pkgDir) {
-      sdlNode = path.join(pkgDir, "dist", "sdl.node");
-      installScript = path.join(pkgDir, "scripts", "install.mjs");
-    }
-  } catch {
-    // @kmamal/sdl itself isn't installed at all — nothing we can repair.
-  }
-
-  const tag = (err, kind, fixCmd) => {
-    err.sdlKind = kind;
-    if (fixCmd) err.fixCmd = fixCmd;
-    return err;
-  };
-
-  // Self-heal: if the prebuilt binary is missing but the install script is
-  // present, run it (exactly what the skipped postinstall would have done).
-  // This MUST happen before the first import — Node's ESM loader caches a
-  // rejected dynamic import for the process lifetime, so a failed first import
-  // could never recover even after the binary lands on disk.
-  if (sdlNode && !existsSync(sdlNode) && installScript && existsSync(installScript)) {
-    log("playtest: @kmamal/sdl native binary missing — fetching prebuilt via its install script…");
-    try {
-      await execFileAsync(process.execPath, [installScript], {
-        timeout: 120000,
-        // Prebuilt-only — never fall through to a node-gyp/clang source build.
-        env: { ...process.env, npm_config_build_from_source: "false", npm_config_build_from_source_all: "false" },
-      });
-    } catch (e) {
-      throw tag(new Error(
-        `the @kmamal/sdl native binary isn't installed and the auto-install failed: ${e?.message ?? e}`,
-      ), "install-failed", `node "${installScript}"`);
-    }
-  }
-
-  // Still missing after the heal attempt → fail with the exact fix, BEFORE the
-  // import (so we never cache a rejection).
-  if (sdlNode && !existsSync(sdlNode)) {
-    throw tag(new Error(
-      `the @kmamal/sdl native binary isn't installed (expected at ${sdlNode})`,
-    ), "missing-binary", installScript ? `node "${installScript}"` : undefined);
-  }
-
-  // Force nearest-neighbor scaling globally. SDL2 reads this env var at init;
-  // we already pass scaling:"nearest" per render, but this is belt-and-
-  // suspenders so a pixel-art ROM is NEVER blurred by bilinear filtering on any
-  // path. 0 = nearest, 1 = linear, 2 = best. MUST be set before SDL inits, i.e.
-  // before the import below.
-  if (!process.env.SDL_RENDER_SCALE_QUALITY) {
-    process.env.SDL_RENDER_SCALE_QUALITY = "0";
-  }
-
-  // Binary present (or path unresolvable — let import surface the real error).
-  try {
-    const ns = await import("@kmamal/sdl");
-    _sdlModule = ns.default || ns;
-    // GROUND-TRUTH visibility check (cross-platform, NOT env-var guessing):
-    // SDL picks a video driver at init. With no presentable surface (no desktop
-    // session, no Xvfb, headless box) it falls back to "offscreen"/"dummy" —
-    // createWindow then SUCCEEDS and audio plays, but nothing appears on any
-    // physical screen. That's the silent "agent says the window's up, user sees
-    // nothing (but hears sound)" failure. We catch it HERE by asking SDL which
-    // driver it actually selected — works the same on Linux/macOS/Windows, and
-    // correctly ALLOWS a real offscreen X server (Xvfb reports "x11", not
-    // "offscreen"). Headless rendering (screenshot/runSource) never calls this,
-    // so offscreen stays perfectly fine for everything except opening a window
-    // for a human.
-    const driver = _sdlModule?.info?.drivers?.video?.current;
-    if (driver === "offscreen" || driver === "dummy") {
-      throw tag(new Error(
+    return await initSdl({ log: (m) => log(`playtest: ${m}`) });
+  } catch (e) {
+    if (e?.sdlKind === "no-display") {
+      const m = /"(offscreen|dummy)"/.exec(e.message ?? "");
+      const driver = m ? m[1] : "offscreen";
+      e.message =
         `SDL selected the "${driver}" video driver — there is no presentable display, ` +
         "so a playtest window would render but never appear on a physical screen " +
         "(you'd hear audio but see nothing). The server must run where it has a real " +
@@ -168,51 +86,14 @@ async function getSdl() {
         "(`npx romdevtools`), then point your agent at that server. (A server spawned " +
         "by your agent host, over plain SSH, or from a tty/headless box has no display. " +
         "A virtual display like Xvfb works too — it reports as the real driver, not " +
-        "\"offscreen\".)",
-      ), "no-display");
+        "\"offscreen\".)";
     }
-    return _sdlModule;
-  } catch (e) {
-    if (e?.sdlKind) throw e; // already-tagged (e.g. the offscreen check above)
-    const isModuleErr = e?.code === "ERR_MODULE_NOT_FOUND" ||
-      /sdl\.node|dist[\\/]/.test(e?.message || "");
-    throw tag(new Error(e?.message ?? String(e)),
-      isModuleErr ? "missing-binary" : "sdl-error",
-      isModuleErr && installScript ? `node "${installScript}"` : undefined);
+    throw e;
   }
 }
 
-// Map SDL standard-controller button name → libretro JOYPAD bit.
-// SDL names follow Xbox letter positions: A=bottom, B=right, X=left, Y=top.
-// libretro RETRO_DEVICE_ID_JOYPAD also names by letter: B=0 (bottom-physical
-// on a SNES/NES pad), A=8 (right), Y=1 (left), X=9 (top), SELECT=2, START=3,
-// L=10, R=11, L2=12, R2=13, L3=14, R3=15.
-//
-// Both schemes share the "letter = physical position" convention, but Xbox
-// swaps A/B vs SNES. We map by physical position so the bottom button is
-// always "main action" (NES A / SNES B) and the right is "secondary"
-// (NES B / SNES A) regardless of pad letters. That matches retroarch's
-// default user mapping for an Xbox controller on a NES/SNES core.
-const SDL_BUTTON_TO_LIBRETRO_BIT = {
-  dpadUp: 4,
-  dpadDown: 5,
-  dpadLeft: 6,
-  dpadRight: 7,
-  a: 0,         // SDL bottom (Xbox A) → libretro B (NES A / SNES B) = main action
-  b: 8,         // SDL right  (Xbox B) → libretro A (NES B / SNES A) = secondary
-  x: 1,         // SDL left   (Xbox X) → libretro Y (SNES Y / unused on NES)
-  y: 9,         // SDL top    (Xbox Y) → libretro X (SNES X / unused on NES)
-  back: 2,      // SELECT
-  guide: 2,
-  start: 3,
-  leftShoulder: 10,   // RETRO L
-  rightShoulder: 11,  // RETRO R
-  leftStick: 14,      // RETRO L3
-  rightStick: 15,     // RETRO R3
-  // NOTE: L2/R2 (bits 12/13) are ANALOG triggers in libretro — node-sdl exposes
-  // them as axes (leftTrigger/rightTrigger), not buttons, so they're read from
-  // inst.axes below, not here.
-};
+// (The generic SDL-button → RetroPad map + keyboard map + STICK_DEADZONE come
+// from romdev-core-runner — the single shared copy.)
 
 // N64-specific pad map. parallel_n64's RetroPad layout (its digital_cbuttons_map)
 // is NOT the generic NES/SNES one — RETRO B="N64 A", RETRO Y="N64 B", RETRO X/A/L/R
@@ -238,28 +119,6 @@ const SDL_BUTTON_TO_LIBRETRO_BIT_N64 = {
   leftShoulder: 2,    // L shoulder → RETRO Select = N64 L
   rightShoulder: 13,  // R shoulder → RETRO R2     = N64 R   (hop/drift)
   // C-buttons (RETRO X/A/L/R) come from the RIGHT STICK in readControllerInto.
-};
-
-// Analog stick → dpad direction (for games that only read dpad)
-const STICK_DEADZONE = 8000;
-
-// Keyboard fallback for users without a gamepad. Same physical-position
-// convention as the controller map: Z = bottom (NES A / SNES B), X = right
-// (NES B / SNES A), A = left (SNES Y), S = top (SNES X). Arrows for D-pad.
-// Enter = Start, RShift = Select, Q/W = L/R shoulders. ESC closes the window.
-//
-// Key strings come straight from node-sdl keyDown/keyUp events.
-const KEY_TO_LIBRETRO_BIT = {
-  up: 4, down: 5, left: 6, right: 7,
-  z: 0,                        // bottom face = B (NES A, SNES B) = main action
-  x: 8,                        // right face  = A (NES B, SNES A)
-  a: 1,                        // left  face  = Y (SNES)
-  s: 9,                        // top   face  = X (SNES)
-  return: 3,                   // Enter = START
-  rshift: 2,                   // RShift = SELECT
-  backspace: 2,                // also SELECT (laptop friendly)
-  q: 10,                       // L shoulder
-  w: 11,                       // R shoulder
 };
 
 // C64-only keyboard fallback: PC key → the virtual C64 button name the host's
@@ -324,35 +183,9 @@ the BOTTOM face button is always the main action, regardless of pad letter.
  * @param {string | null} platform
  * @param {number} displayAspect core-reported, used as fallback
  */
-/**
- * Largest rect of `targetAspect` that fits inside a winW×winH window, centered
- * (letterbox/pillarbox). Pure + exported so the aspect-on-resize behavior is
- * unit-testable without a display. The image is ALWAYS drawn at this rect, so
- * resizing the window never stretches it off-aspect — it just grows the bars.
- * @param {number} winW window backing-store width (px)
- * @param {number} winH window backing-store height (px)
- * @param {number} targetAspect desired width/height ratio
- * @returns {{dstX:number, dstY:number, dstW:number, dstH:number}}
- */
-export function letterbox(winW, winH, targetAspect) {
-  const winAspect = winW / winH;
-  let dstW, dstH;
-  if (winAspect > targetAspect) {
-    // Window wider than target → full height, pillarbox left/right.
-    dstH = winH;
-    dstW = Math.round(winH * targetAspect);
-  } else {
-    // Window taller than target → full width, letterbox top/bottom.
-    dstW = winW;
-    dstH = Math.round(winW / targetAspect);
-  }
-  return {
-    dstX: Math.round((winW - dstW) / 2),
-    dstY: Math.round((winH - dstH) / 2),
-    dstW,
-    dstH,
-  };
-}
+// letterbox lives in romdev-core-runner (single implementation); re-exported
+// for the existing tests + external importers of the old name.
+export const letterbox = runnerLetterbox;
 
 // How recently (in window ticks ≈ frames at 60fps real time) the human must
 // have pressed something for the session to count as "human input active".
@@ -391,28 +224,9 @@ export function createHumanInputTracker(activeWindow = HUMAN_INPUT_ACTIVE_FRAMES
   };
 }
 
-function tvAspectFor(platform, displayAspect) {
-  switch (platform) {
-    case "nes":
-    case "snes":
-    case "genesis":
-    case "atari2600":
-    case "atari7800":
-    case "c64":
-    case "sms":
-      return 4 / 3;
-    case "gg":          return 1.20;     // Game Gear LCD 160×144 → ~10:9 but stretched
-    case "gb":
-    case "gbc":         return 10 / 9;   // GB LCD 160×144 native
-    case "gba":         return 3 / 2;    // GBA LCD 240×160 native
-    case "lynx":        return 102 / 81; // Lynx LCD pixel aspect (4:3 displayed)
-    default:            return displayAspect;
-  }
-}
-
 /**
  * @param {Object} args
- * @param {import("../host/index.js").LibretroHost} args.host
+ * @param {import("romdev-core-host/index.js").LibretroHost} args.host
  * @param {number} [args.scale]
  * @param {string} [args.title]
  * @param {"fb" | "tv" | "core"} [args.aspect] "fb" (default) = raw
@@ -1108,87 +922,4 @@ export async function playtest(args) {
       };
     },
   };
-}
-
-function bitToName(bit) {
-  return ({
-    0: "b", 1: "y", 2: "select", 3: "start",
-    4: "up", 5: "down", 6: "left", 7: "right",
-    8: "a", 9: "x", 10: "l", 11: "r",
-    12: "l2", 13: "r2", 14: "l3", 15: "r3",
-  })[bit];
-}
-
-/** Convert libretro framebuffer (any pixel format) to RGBA32. */
-function framebufferToRgba(f) {
-  const out = Buffer.alloc(f.width * f.height * 4);
-  if (f.format === ROMDEV_PIXEL_FORMAT_RGBA8888) {
-    // HW-render readback (n64/ps1/dreamcast via native-gles): pixels are ALREADY
-    // RGBA in row order. Copy straight through but FORCE alpha=255 — the GL render
-    // target leaves alpha=0 (unused channel), which SDL would composite as fully
-    // transparent → a black window. This is the on-screen analogue of the same
-    // alpha fix framebufferToRgba() in framebuffer.js does for screenshots.
-    for (let y = 0; y < f.height; y++) {
-      const src = y * f.pitch;
-      const dst = y * f.width * 4;
-      for (let x = 0; x < f.width; x++) {
-        const s = src + x * 4;
-        const d = dst + x * 4;
-        out[d + 0] = f.pixels[s + 0];
-        out[d + 1] = f.pixels[s + 1];
-        out[d + 2] = f.pixels[s + 2];
-        out[d + 3] = 0xff;
-      }
-    }
-  } else if (f.format === RETRO_PIXEL_FORMAT_XRGB8888) {
-    for (let y = 0; y < f.height; y++) {
-      const src = y * f.pitch;
-      const dst = y * f.width * 4;
-      for (let x = 0; x < f.width; x++) {
-        const s = src + x * 4;
-        const d = dst + x * 4;
-        out[d + 0] = f.pixels[s + 2];
-        out[d + 1] = f.pixels[s + 1];
-        out[d + 2] = f.pixels[s + 0];
-        out[d + 3] = 0xff;
-      }
-    }
-  } else if (f.format === RETRO_PIXEL_FORMAT_RGB565) {
-    for (let y = 0; y < f.height; y++) {
-      const src = y * f.pitch;
-      const dst = y * f.width * 4;
-      for (let x = 0; x < f.width; x++) {
-        const s = src + x * 2;
-        const p = f.pixels[s] | (f.pixels[s + 1] << 8);
-        const r = (p >> 11) & 0x1f;
-        const g = (p >> 5) & 0x3f;
-        const b = p & 0x1f;
-        const d = dst + x * 4;
-        out[d + 0] = (r << 3) | (r >> 2);
-        out[d + 1] = (g << 2) | (g >> 4);
-        out[d + 2] = (b << 3) | (b >> 2);
-        out[d + 3] = 0xff;
-      }
-    }
-  } else if (f.format === RETRO_PIXEL_FORMAT_0RGB1555) {
-    for (let y = 0; y < f.height; y++) {
-      const src = y * f.pitch;
-      const dst = y * f.width * 4;
-      for (let x = 0; x < f.width; x++) {
-        const s = src + x * 2;
-        const p = f.pixels[s] | (f.pixels[s + 1] << 8);
-        const r = (p >> 10) & 0x1f;
-        const g = (p >> 5) & 0x1f;
-        const b = p & 0x1f;
-        const d = dst + x * 4;
-        out[d + 0] = (r << 3) | (r >> 2);
-        out[d + 1] = (g << 3) | (g >> 2);
-        out[d + 2] = (b << 3) | (b >> 2);
-        out[d + 3] = 0xff;
-      }
-    }
-  } else {
-    throw new Error(`Unsupported pixel format ${f.format}`);
-  }
-  return out;
 }

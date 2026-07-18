@@ -13,7 +13,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { z } from "zod";
 
-import { LibretroHost } from "../src/host/LibretroHost.js";
+import { LibretroHost } from "romdev-core-host/LibretroHost.js";
 import { registerMemoryTools } from "../src/mcp/tools/memory.js";
 import { registerWatchMemoryTools } from "../src/mcp/tools/watch-memory.js";
 import { _setHostForTest } from "../src/mcp/state.js";

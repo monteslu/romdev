@@ -16,20 +16,20 @@ import { mkdir, writeFile, readFile } from "node:fs/promises";
 import path from "node:path";
 import { getHost } from "../state.js";
 import { jsonContent, safeTool } from "../util.js";
-import { getCPUState } from "../../host/cpu-state.js";
+import { getCPUState } from "romdev-core-host/cpu-state.js";
 import { resolveButtonAlias } from "./input.js";
 import { getCPUStateCore } from "./platform-tools.js";
 import { traceVramSourceCore } from "./trace-vram-source.js";
 import { resolveStatePath } from "./state.js";
 import { buildBacktrace } from "../../analysis/backtrace.js";
 import { mapNesAddress } from "./disasm.js";
-import { MemoryRegionToRetro } from "../../host/types.js";
+import { MemoryRegionToRetro } from "romdev-core-host/types.js";
 
 /**
  * Build the decoded call stack for a breakpoint hit: who called the routine the
  * PC is in. Uses the captured register snapshot's stack pointer + the stack RAM.
  * Returns null when unavailable (unsupported ISA / no regs) — never throws.
- * @param {import("../../host/index.js").LibretroHost} host
+ * @param {import("romdev-core-host/index.js").LibretroHost} host
  * @param {Object|null} regs   the `named` register snapshot (has the stack ptr)
  */
 function backtraceForHit(host, regs) {
@@ -374,7 +374,7 @@ export function makePressDriver(host, presses) {
  * the pad neutral and steps `n` frames so the game's input shadow settles to
  * neutral; then the schedule drives a clean run. Only steps when a press schedule
  * is actually given (no-op otherwise, so it never disturbs an inherited pad).
- * @param {import("../../host/index.js").LibretroHost} host
+ * @param {import("romdev-core-host/index.js").LibretroHost} host
  * @param {number} n   neutral frames to settle (0 = skip)
  * @param {boolean} driven  whether this run has a pressDuring schedule
  */

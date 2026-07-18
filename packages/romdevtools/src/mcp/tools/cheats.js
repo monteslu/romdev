@@ -4,7 +4,7 @@ import { getHost } from "../state.js";
 import { jsonContent, safeTool } from "../util.js";
 import { attachObserverFrame } from "./watch-memory.js";
 import { lookupCheats, searchCheatGames } from "../../cheats/lookup.js";
-import { encodeForDevice, nativeDevicesFor, decodeCode, encodeRaw } from "../../cheats/gamegenie.js";
+import { encodeForDevice, nativeDevicesFor, decodeCode, encodeRaw } from "romdev-core-host/gamegenie.js";
 
 // Per-platform cheat address space (for makeCheat validation). A Game Genie
 // letter code can only address these ranges; out-of-range → raw ADDR:VAL only.

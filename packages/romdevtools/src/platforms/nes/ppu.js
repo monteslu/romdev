@@ -296,7 +296,7 @@ export function renderNametablePng(args) {
  * Reads nametable, palette, and CHR via the patched fceumm memory regions
  * and composites them into a single PNG.
  *
- * @param {import("../../host/index.js").LibretroHost} host
+ * @param {import("romdev-core-host/index.js").LibretroHost} host
  * @param {Object} [opts]
  * @param {0 | 1} [opts.which] which 1KB nametable (0 = $2000, 1 = $2400). Default 0.
  * @returns {Buffer}
@@ -351,7 +351,7 @@ export function renderPalettePng(palette32) {
  * games rewrite CHR-RAM mid-frame). Fallback path: parse the iNES file
  * on disk for carts where the memory region isn't available.
  *
- * @param {import("../../host/index.js").LibretroHost} host
+ * @param {import("romdev-core-host/index.js").LibretroHost} host
  * @returns {Promise<{ width: number, height: number, png: Buffer, source: "live"|"ines" }>}
  */
 export async function snapshotPatternTables(host) {

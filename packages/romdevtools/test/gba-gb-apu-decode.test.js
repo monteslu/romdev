@@ -5,7 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decodeGbApu, decodeGbaApu, freqToNote } from "../src/host/gb-apu-state.js";
+import { decodeGbApu, decodeGbaApu, freqToNote } from "romdev-core-host/gb-apu-state.js";
 
 /** Build a 128-byte gb_io page from a sparse {offset:value} map. */
 function gbIo(map) {

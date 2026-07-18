@@ -13,7 +13,7 @@ import { z } from "zod";
 
 import { buildForPlatform } from "../src/toolchains/index.js";
 import { resolveCore } from "../src/cores/registry.js";
-import { LibretroHost } from "../src/host/index.js";
+import { LibretroHost } from "romdev-core-host/index.js";
 import { registerAudioTools } from "../src/mcp/tools/audio.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

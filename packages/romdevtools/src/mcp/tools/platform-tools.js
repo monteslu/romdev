@@ -32,20 +32,20 @@ function requireImageTarget(outPath, inline, tool) {
     throw new Error(`${tool}: pass outputPath (write the image to disk, returns {imagePath}) or inline:true (return the image in the response).`);
   }
 }
-import { getCPUState } from "../../host/cpu-state.js";
-import { getDspState } from "../../host/dsp-state.js";
-import { getNesApuState } from "../../host/nes-apu-state.js";
-import { decodeGenesisPSG, decodeGenesisYM2612 } from "../../host/gpgx-state.js";
-import { decodeGbApu, decodeGbaApu } from "../../host/gb-apu-state.js";
-import { decodeC64Sid } from "../../host/c64-sid-state.js";
-import { decodeLynxMikey, decodeLynxPalette } from "../../host/lynx-mikey-state.js";
-import { getPcePsgState } from "../../host/pce-psg-state.js";
-import { decodePs1Spu } from "../../host/ps1-spu-state.js";
-import { decodeN64Ai } from "../../host/n64-ai-state.js";
-import { decodeGameTankAcp } from "../../host/gametank-acp-state.js";
-import { decodeAica } from "../../host/dc-aica-state.js";
-import { getMsxAyState } from "../../host/msx-ay-state.js";
-import { decodeGbaSprites, decodeGbaPalette } from "../../host/gba-video-state.js";
+import { getCPUState } from "romdev-core-host/cpu-state.js";
+import { getDspState } from "romdev-core-host/dsp-state.js";
+import { getNesApuState } from "romdev-core-host/nes-apu-state.js";
+import { decodeGenesisPSG, decodeGenesisYM2612 } from "romdev-core-host/gpgx-state.js";
+import { decodeGbApu, decodeGbaApu } from "romdev-core-host/gb-apu-state.js";
+import { decodeC64Sid } from "romdev-core-host/c64-sid-state.js";
+import { decodeLynxMikey, decodeLynxPalette } from "romdev-core-host/lynx-mikey-state.js";
+import { getPcePsgState } from "romdev-core-host/pce-psg-state.js";
+import { decodePs1Spu } from "romdev-core-host/ps1-spu-state.js";
+import { decodeN64Ai } from "romdev-core-host/n64-ai-state.js";
+import { decodeGameTankAcp } from "romdev-core-host/gametank-acp-state.js";
+import { decodeAica } from "romdev-core-host/dc-aica-state.js";
+import { getMsxAyState } from "romdev-core-host/msx-ay-state.js";
+import { decodeGbaSprites, decodeGbaPalette } from "romdev-core-host/gba-video-state.js";
 
 /** Resolve the platform to inspect: explicit arg → currently loaded host. */
 function resolvePlatform(host, requested) {
@@ -227,7 +227,7 @@ export function registerPlatformTools(server, z, sessionKey) {
 
       if (p === "genesis") {
         const cram = host.readMemory("genesis_cram", 0, 128);
-        const { decodeGenesisCRAM } = await import("../../host/gpgx-state.js");
+        const { decodeGenesisCRAM } = await import("romdev-core-host/gpgx-state.js");
         const colors = decodeGenesisCRAM(cram);
         // 4 palettes × 16 entries = 64 colors; render as 4 rows of 16.
         const png = renderColorsAsPng(colors, 16);
@@ -584,7 +584,7 @@ export function registerPlatformTools(server, z, sessionKey) {
       if (p === "genesis") {
         const vram = host.readMemory("video_ram", 0, 65536);
         const vdpRegs = host.readMemory("genesis_vdp_regs", 0, 32);
-        const { decodeGenesisSprites } = await import("../../host/gpgx-state.js");
+        const { decodeGenesisSprites } = await import("romdev-core-host/gpgx-state.js");
         const sprites = decodeGenesisSprites(vram, vdpRegs);
         return jsonContent({ platform: p, sprites });
       }

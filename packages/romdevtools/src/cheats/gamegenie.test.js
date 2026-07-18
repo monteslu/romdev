@@ -16,7 +16,7 @@ import {
   encodeGbGameGenie,
   encodeCode,
   encodeRaw,
-} from "./gamegenie.js";
+} from "romdev-core-host/gamegenie.js";
 
 test("decodeRaw parses ADDR:VAL and ADDR:VAL:COMPARE", () => {
   assert.deepEqual(decodeRaw("00C7:FF"), { address: 0x00c7, value: 0xff });
@@ -119,7 +119,7 @@ test("encodeCode style + platform dispatch, always round-trips", () => {
 
 // ── Device detection + the non-Game-Genie devices ────────────────────────
 test("decodeWithDevice labels the cheat device per platform", async () => {
-  const { decodeWithDevice } = await import("./gamegenie.js");
+  const { decodeWithDevice } = await import("romdev-core-host/gamegenie.js");
   assert.equal(decodeWithDevice("SXIOPO", "nes").device, "game-genie");
   assert.equal(decodeWithDevice("00C7:FF", "nes").device, "raw");
   assert.equal(decodeWithDevice("7E0DBF63", "snes").device, "pro-action-replay");
@@ -129,12 +129,12 @@ test("decodeWithDevice labels the cheat device per platform", async () => {
 });
 
 test("SNES Pro Action Replay decodes AAAAAAVV (no scramble)", async () => {
-  const { decodeProActionReplay } = await import("./gamegenie.js");
+  const { decodeProActionReplay } = await import("romdev-core-host/gamegenie.js");
   assert.deepEqual(decodeProActionReplay("7E0DBF63", "snes"), { address: 0x7e0dbf, value: 0x63 });
 });
 
 test("SNES Game Genie descrambles (snes9x alphabet), round-trips", async () => {
-  const { decodeSnesGameGenie, encodeSnesGameGenie } = await import("./gamegenie.js");
+  const { decodeSnesGameGenie, encodeSnesGameGenie } = await import("romdev-core-host/gamegenie.js");
   const d = decodeSnesGameGenie("D3E6-E4A4");
   assert.ok(d && d.address != null);
   // It's a SCRAMBLE, not raw hex — must not equal the naive hex slice.
@@ -145,7 +145,7 @@ test("SNES Game Genie descrambles (snes9x alphabet), round-trips", async () => {
 });
 
 test("GB GameShark decodes TTVVAAAA (LE address), round-trips", async () => {
-  const { decodeGbGameShark, encodeGbGameShark } = await import("./gamegenie.js");
+  const { decodeGbGameShark, encodeGbGameShark } = await import("romdev-core-host/gamegenie.js");
   const d = decodeGbGameShark("0102CBC0");
   assert.equal(d.value, 0x02);
   assert.equal(d.address, 0xc0cb); // little-endian
@@ -153,7 +153,7 @@ test("GB GameShark decodes TTVVAAAA (LE address), round-trips", async () => {
 });
 
 test("encodeForDevice labels what it produced + nativeDevicesFor", async () => {
-  const { encodeForDevice, nativeDevicesFor } = await import("./gamegenie.js");
+  const { encodeForDevice, nativeDevicesFor } = await import("romdev-core-host/gamegenie.js");
   assert.deepEqual(nativeDevicesFor("snes"), ["pro-action-replay", "game-genie"]);
   assert.deepEqual(nativeDevicesFor("gb"), ["game-genie", "gameshark"]);
   const par = encodeForDevice({ address: 0x7e0dbf, value: 0x63 }, "snes", "pro-action-replay");

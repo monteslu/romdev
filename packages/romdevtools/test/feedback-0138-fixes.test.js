@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { nesFileOffsetToCpu } from "../src/mcp/tools/font-map.js";
-import { decodeCode, encodeForDevice, nativeDevicesFor } from "../src/cheats/gamegenie.js";
+import { decodeCode, encodeForDevice, nativeDevicesFor } from "romdev-core-host/gamegenie.js";
 
 // ── 1. NES banked cpuAddress ────────────────────────────────────────────────
 
