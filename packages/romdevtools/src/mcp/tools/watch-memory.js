@@ -627,6 +627,31 @@ function makeRomByteReader(host, platform) {
 }
 
 /**
+ * v0.98.0 feedback #3: a watch armed while the CPU sits at an UN-CLEARED
+ * breakpoint hit silently misses everything that already executed inside the
+ * broken frame — and an empty result then reads as a clean negative, which is
+ * load-bearing evidence in RE work. Detectable at arm time; say so.
+ */
+function armedWhileHaltedInfo(host) {
+  try {
+    if (!host.pcBreakSupported || !host.pcBreakSupported()) return {};
+    const b = host.getPCBreak(false);
+    if (b && b.enabled && b.hit) {
+      return {
+        armedWhileHalted: true,
+        armedWhileHaltedNote:
+          "This watch was armed while the CPU was HALTED at an un-cleared breakpoint hit ($" +
+          b.address.toString(16).toUpperCase() +
+          "). Accesses that already executed earlier in the broken frame were NOT captured — an empty/quiet " +
+          "result here is NOT a clean negative. For a complete window, restore a savestate and arm the watch " +
+          "BEFORE driving to the moment (fromState/fromStatePath does both in one call).",
+      };
+    }
+  } catch { /* no pc-break surface on this core — nothing to flag */ }
+  return {};
+}
+
+/**
  * Mutates byPCList rows in place; returns extra result fields + note lines.
  * - phantomRead/storeBase per row (read censuses, 6502 family)
  * - routine per row + a byRoutine rollup (when a dbg/map symbol file is given)
@@ -1806,6 +1831,10 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       // anchors it (deterministic re-runs), halve the window until it fits and
       // report the frames actually used. Without fromState the game would drift
       // between attempts, so we refuse to pretend and leave truncated:true.
+      // ARM-time check, before any frames run. A fromState restore re-anchors
+      // execution, so the missed-partial-frame concern is void there (and the
+      // core's hit latch may survive a restore — it would false-positive).
+      const haltInfo = (fromState || fromStatePath) ? {} : armedWhileHaltedInfo(host);
       const canNarrow = autoNarrow && (fromState || fromStatePath);
       let framesUsed = frames;
       let narrowAttempts = 0;
@@ -1850,7 +1879,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       // common "discover the writers" use; no per-event tokens spent).
       if (distinctPCsOnly) {
         return attachObserverFrame(jsonContent({
-          range: hx(start) + ".." + hx(end), kind, frames: framesUsed, total: r.total, truncated: r.truncated, ...narrowInfo,
+          range: hx(start) + ".." + hx(end), kind, frames: framesUsed, total: r.total, truncated: r.truncated, ...narrowInfo, ...haltInfo,
           ...(stateInfo ? { restoredFrom: stateInfo } : {}),
           distinctPCs, byPC: byPCList, ...censusExtra,
           note: "distinctPCsOnly: per-PC digest only (raw events suppressed). Each PC is a routine that touches the range; `count` is how often it fired, `sampleAddress`/`sampleValue` a representative hit. disasm({target:'rom'}) a PC to identify it. Drop distinctPCsOnly (or set dedupe:true) for the events." +
@@ -1876,7 +1905,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       }
       return attachObserverFrame(jsonContent({
         range: hx(start) + ".." + hx(end),
-        kind, frames: framesUsed, total: r.total, returned: events.length, truncated: r.truncated, ...narrowInfo,
+        kind, frames: framesUsed, total: r.total, returned: events.length, truncated: r.truncated, ...narrowInfo, ...haltInfo,
         ...(dedupe ? { deduped: true, uniqueEvents: events.length } : {}),
         ...(stateInfo ? { restoredFrom: stateInfo } : {}),
         distinctPCs, byPC: byPCList, ...censusExtra, events,
@@ -1915,7 +1944,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     "• on:'mem' — the power tool: answer 'what code is touching this RAM byte?' OR extract a frame-accurate event timeline (music-driver note onsets, physics arcs). Reports every frame that changed a watched byte as {frame,offset,before,after,pc}. " +
     "Extras: `ranges:[{region,offset,length,label}]` watches MANY disjoint regions in ONE pass (identical frames); `onChange:'reset'|'increase'|'decrease'|'any'` edge filter (reset = counter-reload = the note-onset signal); `valueFilter:{min,max}`; `format:'series'` = compact columnar value-vs-frame curve (~10× smaller for a ramp); `sampleEvery`; `groupByPC` (collapse by sampled PC); `cheatLabels` (auto-name addresses from the cheat DB); `outputPath` streams all events as NDJSON; `stopOnFirst` exits on the first match. " +
     "**CAVEAT: frame-level, not instruction-level (last value per frame); the sampled `pc` is a frame-boundary sample — for ISR-driven writes use breakpoint({on:'write', precision:'exact'}) for the real writer.**\n" +
-    "• on:'range' — DISCOVERY: log EVERY instruction that reads or writes ANYWHERE in [start,end]. The fix for 'I don't know which PC touches this'. Returns {pc,address,value}[] + the actionable distinctPCs + a per-PC digest (byPC). For a pure 'who writes here?' query, `distinctPCsOnly:true` returns JUST the digest (no per-event flood — a per-frame counter inc'd at one PC otherwise floods hundreds of near-identical rows); `dedupe:true` collapses identical (pc,address,value) events to one row with `occurrences`. (Ring-buffered: `truncated:true` if it overflows — and a truncated run can support a positive but NEVER a negative claim; with a fromState anchor, `autoNarrow:true` halves `frames` deterministically until the log is complete and reports framesUsed.) `fromState`/`fromStatePath` restores a savestate FIRST so the trace runs from a known moment (jump to the boss, then see what writes HP) — deterministic + repeatable.\n" +
+    "• on:'range' — DISCOVERY: log EVERY instruction that reads or writes ANYWHERE in [start,end]. The fix for 'I don't know which PC touches this'. Returns {pc,address,value}[] + the actionable distinctPCs + a per-PC digest (byPC). For a pure 'who writes here?' query, `distinctPCsOnly:true` returns JUST the digest (no per-event flood — a per-frame counter inc'd at one PC otherwise floods hundreds of near-identical rows); `dedupe:true` collapses identical (pc,address,value) events to one row with `occurrences`. (Ring-buffered: `truncated:true` if it overflows — and a truncated run can support a positive but NEVER a negative claim; with a fromState anchor, `autoNarrow:true` halves `frames` deterministically until the log is complete and reports framesUsed.) `fromState`/`fromStatePath` restores a savestate FIRST so the trace runs from a known moment (jump to the boss, then see what writes HP) — deterministic + repeatable. ARMING WHILE HALTED at an un-cleared breakpoint hit misses everything already executed in the broken frame — the result then carries `armedWhileHalted:true` so an empty window isn't mistaken for a clean negative; clear the hit or arm from a savestate restore instead.\n" +
     "• on:'pc' — DISCOVERY (coverage trace): record every DISTINCT PC executed within [start,end] — 'what code runs here?'. Log execution in the bank where you suspect the renderer lives during the moment it draws, then disassemble the PCs. Also takes `fromState`/`fromStatePath` to trace from a restored moment.\n" +
     "• on:'dma' — GENESIS ONLY: trace mem→VDP DMAs (the answer to 'this name/portrait/logo is a pre-rendered bitmap DMA'd into VRAM — WHERE in ROM?', which on:'write' can't catch). `precision:'exact'` (default) logs every mem→VDP DMA with its VRAM DESTINATION + ROM SOURCE + length (filter by `vramDest`±`destWindow`; `dedupe` collapses the per-frame refresh; `sourceFilter:'rom-only'` drops RAM→VRAM noise; catches a same-frame second DMA). `precision:'sampled'` is the cheap frame-sampled source-register read (may miss two DMAs in one frame, dest-agnostic). `perFrame:true` switches to FEEL/PERF MODE: a per-frame timeline of VDP-DMA WORK ({frame,dmas,bytes,romBytes,ramBytes} + peakFrame + `spikes`) — the cheap 'why does horizontal movement feel choppy?' diagnostic (a per-frame byte spike = too much VDP work in the loop, e.g. a tilemap rewrite). On non-Genesis cores returns `notSupported`.\n" +
     "• on:'copy' — ALL 14 PLATFORMS: log every write landing in a VRAM/dest address window [start,end] with the EXECUTING instruction's PC — the generic answer to 'this tile/nametable/portrait on screen: which routine uploads it?'. Port-based video memory (NES $2007, SNES $2118/19 — incl. the DMA path, PCE VWR, MSX/SMS/GG VDP data port, Genesis data port) is hooked INSIDE the core, so `start`/`end` are VRAM addresses (NES PPU $0000-$3FFF; SNES VRAM byte addr; PCE VRAM word addr; MSX/SMS/GG VRAM addr). Direct-mapped platforms (GB/GBC $8000-$9FFF, GBA 0x06000000+, C64/Lynx/7800 RAM framebuffers) route through the CPU-address range log automatically — pass CPU addresses there. Follow up with breakpoint({on:'pc', address: pc}) to get registersAtHit at the uploader.",

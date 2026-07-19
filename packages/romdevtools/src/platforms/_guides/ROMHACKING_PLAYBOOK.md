@@ -491,6 +491,17 @@ Once you know WHAT to change, the write loop is a handful of calls — no custom
 Verify-before-patch: `memory({op:'write', region:'system_ram', offset, hex})` on the LIVE emulator and
 watch the screen react — cheaper than shipping a wrong ROM patch.
 
+**Reading your OWN annotated source back by address.** Once you've built a
+`disasm({target:'project'})` tree and started commenting it, "show me my source
+for `$E4DB`" is the most-repeated move in the session. Don't hand-grep the bank
+file (a nibble-class regex like `E4[A-C][0-9A-F] ` silently truncates on a
+missed class and drags in false hits from data-table comment bytes):
+`disasm({target:'sourceLookup', projectDir, startAddress, endAddress?})` reads
+your `.asm`/`.s` files and returns the lines whose trailing address comment
+(`; E4DB …`) falls in range, with context, annotations intact — one call
+instead of grep→sed→eyeball. (Contrast `target:'rom'`, which re-decodes fresh
+and loses every annotation.)
+
 ## 7b. Whole-ROM rebuildable disassembly — `disasm({target:'project'})`
 
 For a STRUCTURAL hack (new logic, not a byte poke), turn the whole ROM into a

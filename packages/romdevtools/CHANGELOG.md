@@ -4,6 +4,35 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.103.0 — 2026-07-19
+
+**v0.98.0 feedback batch** (from a NES annotation session, shared
+late — the increments predate 0.99.0 but the asks were still open):
+
+- **`disasm({target:'sourceLookup', projectDir, startAddress, endAddress?})`**
+  (headline) — show YOUR OWN annotated project source for a CPU address, the
+  most-repeated navigation op in an annotation session. Reads the project's
+  `.asm`/`.s` files and returns the lines whose trailing address comment
+  (`; E4DB 20 E4 D2`, what `disasm({target:'project'})` emits) falls in
+  range, with context, annotations intact. Replaces the hand-built
+  nibble-class grep over a 7000-line bank file (which silently truncates on
+  a missed nibble class and pulls in false hits from data tables). Merges
+  contiguous hits into blocks; explains an empty result (no address comments
+  vs. address-not-in-range).
+- **`memory({op:'write'})` hex cleaning** — spaces/underscores/`$` are now
+  stripped before validation (an embedded space no longer trips the
+  odd-length check), and the errors name the real cause: a bad character is
+  quoted, an odd count is reported "after stripping separators … a byte is
+  two hex chars" instead of a bare "even length" message that sent the
+  caller re-counting nibbles.
+- **`watch` armed-while-halted flag** — arming a range watch while the CPU
+  sits at an un-cleared breakpoint hit misses everything already executed in
+  the broken frame, and an empty result then reads as a clean negative
+  (load-bearing evidence in RE). The result now carries
+  `armedWhileHalted:true` + guidance when armed from that state; a
+  `fromState` restore re-anchors execution so it's correctly not flagged
+  there. Schema warning added.
+
 ## 0.102.0 — 2026-07-19
 
 **The RE round, part 2** — the two remaining mechanizable recipes from the
