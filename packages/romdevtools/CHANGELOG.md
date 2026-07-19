@@ -4,6 +4,33 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.102.0 — 2026-07-19
+
+**The RE round, part 2** — the two remaining mechanizable recipes from the
+same field workflow 0.101.0 distilled:
+
+- **Save-state liveness probe** — `state({op:'load'})` now verifies the
+  restored state is LIVE: step 4 frames, check the PC moves / framebuffer
+  changes, then RE-RESTORE the exact state (net-zero side effects). A state
+  captured mid-pause/transition has its dispatchers stopped, and everything
+  watched from it looks dead — the `liveness` field says so up front with
+  the re-save guidance, instead of costing a session the discovery.
+  `probeLiveness:false` skips it for frame-exact flows.
+- **`autoNarrow` on range censuses** — a truncated census can support a
+  positive but never a NEGATIVE claim (the dropped rows are exactly what
+  could overturn "nothing else touches this"). With `autoNarrow:true` and a
+  `fromState`/`fromStatePath` anchor, `watch({on:'range'})` halves `frames`
+  and re-runs deterministically until the log fits (max 5 halvings, floor
+  8), reporting `autoNarrowed:{attempts, framesRequested, framesUsed,
+  complete}` so the annotation can state the census was complete. Without
+  the anchor it refuses to pretend (re-runs would drift) and says why.
+
+Deliberately NOT added: routine attribution on single breakpoint hits (a
+hit is one PC you're about to disassemble anyway — the census rollup from
+0.101.0 is where routine units pay); producer enumeration for a VALUE
+(immediate scans structurally miss table-driven writers — that's dataflow,
+which is what the live census IS; the caveat stays in the docs).
+
 ## 0.101.0 — 2026-07-18
 
 **The RE round: four capabilities distilled from a field agent's annotation

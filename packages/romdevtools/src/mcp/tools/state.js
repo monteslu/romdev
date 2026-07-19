@@ -1,6 +1,7 @@
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import path from "node:path";
 import { getHost } from "../state.js";
+import { getCPUState } from "romdev-core-host/cpu-state.js";
 import { attachObserverFrame } from "./watch-memory.js";
 import { jsonContent, safeTool } from "../util.js";
 
@@ -70,7 +71,50 @@ async function exportStateCore({ fromSlot, path: outPath }, sessionKey) {
 }
 
 /** op:'load' — restore from an in-memory slot OR a disk blob. */
-async function loadStateCore({ name, path: inPath, render = true }, sessionKey) {
+/**
+ * Liveness probe (0.102.0): a state captured at a paused/transitional moment
+ * can have its dispatchers not running — everything watched from it looks
+ * dead. Probe by stepping a few frames and checking that the PC moves and the
+ * framebuffer changes, then RE-RESTORE the exact state so the probe is
+ * side-effect-free. Skippable with probeLiveness:false (frame-exact flows).
+ */
+function probeStateLiveness(host, reload) {
+  const frameCount0 = host.status.frameCount; // the monotonic power-on counter must not observe the probe
+  try {
+    const pcOf = () => {
+      try { return getCPUState(host)?.pc ?? null; } catch { return null; }
+    };
+    const pcs = new Set();
+    const p0 = pcOf(); if (p0 != null) pcs.add(p0);
+    const hash0 = host.framebufferHash();
+    const FRAMES = 4;
+    let framebufferChanged, pcVaried;
+    try {
+      for (let i = 0; i < FRAMES; i++) {
+        host.stepFrames(1);
+        const p = pcOf(); if (p != null) pcs.add(p);
+      }
+      framebufferChanged = host.framebufferHash() !== hash0;
+      pcVaried = pcs.size > 1;
+    } finally {
+      reload(); // net-zero: the caller gets the state exactly as loaded
+      host.status.frameCount = frameCount0;
+    }
+    const alive = pcVaried || framebufferChanged;
+    return {
+      alive, framesProbed: FRAMES, pcVaried, framebufferChanged,
+      ...(alive ? {} : {
+        note: "PROBE: the CPU PC never moved and the framebuffer never changed over " + FRAMES +
+          " frames — this state looks FROZEN (captured mid-pause/transition; dispatchers not running). " +
+          "Code you watch from here may never execute. Advance to a live moment and re-save, or " +
+          "confirm with a breakpoint on a routine you know runs constantly (NMI, main loop). " +
+          "(The probe re-restored the state; your session is at the exact loaded moment.)",
+      }),
+    };
+  } catch { return null; } // best-effort — never fail the load over the probe
+}
+
+async function loadStateCore({ name, path: inPath, render = true, probeLiveness = true }, sessionKey) {
       if (!name && !inPath) throw new Error("state({op:'load'}): provide `name` (in-memory slot) or `path` (disk).");
       if (name && inPath) throw new Error("state({op:'load'}): provide `name` OR `path`, not both.");
       const host = getHost(sessionKey);
@@ -82,10 +126,19 @@ async function loadStateCore({ name, path: inPath, render = true }, sessionKey) 
       } else {
         cheatsCleared = host.loadState(name) || 0;
       }
+      let liveness = null;
+      if (probeLiveness) {
+        const blobForReload = resolvedIn ? new Uint8Array(await readFile(resolvedIn)) : null;
+        liveness = probeStateLiveness(host, () => {
+          if (blobForReload) host.unserializeState(blobForReload);
+          else host.loadState(name);
+        });
+      }
       let rendered = false;
       if (render) { host.renderOneFrame(); rendered = true; }
       return {
         loaded: true,
+        ...(liveness ? { liveness } : {}),
         ...(resolvedIn ? { path: resolvedIn, ...(resolvedIn !== inPath ? { resolvedPath: resolvedIn } : {}) } : { name }),
         platform: host.status.platform,
         rendered,
@@ -332,6 +385,7 @@ export function registerStateTools(server, z, sessionKey) {
       path: z.string().optional().describe("op=save: also write the blob here (survives restarts). op=load: restore from this disk blob. op=export/dump: write the blob here (required). A RELATIVE path resolves against the loaded ROM's directory (NOT the server CWD); an absolute path is used as-is. The result echoes `resolvedPath` when they differ."),
       // load
       render: z.boolean().default(true).describe("op=load: step one frame after restoring so the framebuffer reflects it (fixes the stale-screenshot footgun). false = stay at the exact restored instant."),
+      probeLiveness: z.boolean().default(true).describe("op=load: probe that the restored state is LIVE (step 4 frames: does the PC move / framebuffer change?), then RE-RESTORE the exact state — net-zero side effects. A state captured mid-pause/transition has its dispatchers stopped and everything watched from it looks dead; the probe says so up front. false = skip (saves 4 emulated frames of work)."),
       // export
       fromSlot: z.string().min(1).optional().describe("op=export: in-memory slot to copy to disk (required)."),
       // dump

@@ -1786,7 +1786,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
 
   // ── Range watch + coverage trace (item 2, discovery) ────────────────────────
 
-  async function wRange({ start, end, kind = "both", frames = 120, pressDuring, limit = 200, dedupe = false, distinctPCsOnly = false, fromState, fromStatePath, dbg, map, dbgPath, mapPath }) {
+  async function wRange({ start, end, kind = "both", frames = 120, pressDuring, limit = 200, dedupe = false, distinctPCsOnly = false, fromState, fromStatePath, dbg, map, dbgPath, mapPath, autoNarrow = false }) {
       const host = getHost(sessionKey);
       if (!host.rangeWatchSupported || !host.rangeWatchSupported()) {
         return jsonContent({ notSupported: true, events: [],
@@ -1796,14 +1796,35 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       // Optionally restore a savestate FIRST, so the trace runs from a known
       // moment (the deterministic "jump to the boss fight, then see what writes
       // HP" loop) instead of from wherever the live session happens to be.
-      const stateInfo = await maybeRestoreState(host, fromState, fromStatePath);
+      let stateInfo = await maybeRestoreState(host, fromState, fromStatePath);
       // pressDuring is driven inside the frame loop; watchRange's host method owns
       // stepping, so for now apply presses up front if any (simple: hold for the run).
       const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
-      const pressDriver = makePressDriver(host, presses);
-      if (presses.length) pressDriver.applyForFrame(0);
-      const r = host.watchRange(start, end, kind, frames);
-      pressDriver.finish();
+      // autoNarrow (0.102.0): a truncated census can support a positive but never
+      // a NEGATIVE — the dropped rows are exactly what could overturn "no PC
+      // outside this cluster appeared". When the run overflows and a savestate
+      // anchors it (deterministic re-runs), halve the window until it fits and
+      // report the frames actually used. Without fromState the game would drift
+      // between attempts, so we refuse to pretend and leave truncated:true.
+      const canNarrow = autoNarrow && (fromState || fromStatePath);
+      let framesUsed = frames;
+      let narrowAttempts = 0;
+      let r;
+      for (;;) {
+        const pressDriver = makePressDriver(host, presses);
+        if (presses.length) pressDriver.applyForFrame(0);
+        r = host.watchRange(start, end, kind, framesUsed);
+        pressDriver.finish();
+        if (!r.truncated || !canNarrow || framesUsed <= 8 || narrowAttempts >= 5) break;
+        narrowAttempts++;
+        framesUsed = Math.max(8, Math.floor(framesUsed / 2));
+        stateInfo = await maybeRestoreState(host, fromState, fromStatePath);
+      }
+      const narrowInfo = narrowAttempts > 0
+        ? { autoNarrowed: { attempts: narrowAttempts, framesRequested: frames, framesUsed, complete: !r.truncated } }
+        : (autoNarrow && !canNarrow && r?.truncated
+          ? { autoNarrowNote: "autoNarrow needs fromState/fromStatePath (deterministic re-runs) — without an anchor the game drifts between attempts. Result left truncated." }
+          : {});
       const hx = (n, w = 0) => "$" + n.toString(16).toUpperCase().padStart(w, "0");
       const hxv = (n) => "0x" + n.toString(16).toUpperCase().padStart(2, "0");
 
@@ -1829,7 +1850,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       // common "discover the writers" use; no per-event tokens spent).
       if (distinctPCsOnly) {
         return attachObserverFrame(jsonContent({
-          range: hx(start) + ".." + hx(end), kind, total: r.total, truncated: r.truncated,
+          range: hx(start) + ".." + hx(end), kind, frames: framesUsed, total: r.total, truncated: r.truncated, ...narrowInfo,
           ...(stateInfo ? { restoredFrom: stateInfo } : {}),
           distinctPCs, byPC: byPCList, ...censusExtra,
           note: "distinctPCsOnly: per-PC digest only (raw events suppressed). Each PC is a routine that touches the range; `count` is how often it fired, `sampleAddress`/`sampleValue` a representative hit. disasm({target:'rom'}) a PC to identify it. Drop distinctPCsOnly (or set dedupe:true) for the events." +
@@ -1855,7 +1876,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       }
       return attachObserverFrame(jsonContent({
         range: hx(start) + ".." + hx(end),
-        kind, total: r.total, returned: events.length, truncated: r.truncated,
+        kind, frames: framesUsed, total: r.total, returned: events.length, truncated: r.truncated, ...narrowInfo,
         ...(dedupe ? { deduped: true, uniqueEvents: events.length } : {}),
         ...(stateInfo ? { restoredFrom: stateInfo } : {}),
         distinctPCs, byPC: byPCList, ...censusExtra, events,
@@ -1923,6 +1944,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       map: z.string().optional().describe("on:'range' — sdld/GNU-ld .map TEXT: same routine grouping for Z80/SM83/Genesis symbol maps. Prefer mapPath."),
       dbgPath: z.string().optional().describe("on:'range' — path to the .dbg on disk (build({output:'romWithDebug'}) wrote it); read server-side."),
       mapPath: z.string().optional().describe("on:'range' — path to the .map on disk; read server-side."),
+      autoNarrow: z.boolean().default(false).describe("on:'range' — when the event ring buffer overflows (truncated:true, which can support a positive but NEVER a negative claim), automatically halve `frames` and re-run from the fromState/fromStatePath anchor until the run fits (max 5 halvings, floor 8 frames). Requires the savestate anchor — deterministic re-runs; the result reports framesUsed + attempts so the annotation can say the census was complete."),
       // on:'range' / on:'pc' window
       start: z.number().int().min(0).optional().describe("on:'range'/'pc' — low CPU address of the window."),
       end: z.number().int().min(0).optional().describe("on:'range'/'pc' — high CPU address (inclusive)."),
