@@ -186,11 +186,21 @@ async function memWrite(sessionKey, { region, offset = 0, hex, base64, data, byt
       }
       let buf;
       if (hex) {
-        if (hex.length % 2 !== 0) throw new Error("writeMemory: hex string must have even length");
-        if (!/^[0-9a-fA-F]*$/.test(hex)) throw new Error("writeMemory: hex string contains non-hex characters");
-        buf = new Uint8Array(hex.length / 2);
+        // Strip whitespace/underscore/$ separators FIRST (v0.98.0 feedback #2:
+        // "AB CD" failed the odd-length check and the error blamed length, so
+        // the caller re-counted nibbles instead of spotting the space). Same
+        // cleaning findHex has always done.
+        const cleaned = String(hex).replace(/[\s_$]/g, "");
+        if (!/^[0-9a-fA-F]*$/.test(cleaned)) {
+          const bad = cleaned.match(/[^0-9a-fA-F]/);
+          throw new Error(`writeMemory: hex contains a non-hex character '${bad[0]}' — pass plain hex like "1A2B" (spaces/underscores/$ are fine and stripped).`);
+        }
+        if (cleaned.length % 2 !== 0) {
+          throw new Error(`writeMemory: odd hex length (${cleaned.length} nibbles after stripping separators) — a byte is two hex chars, so one nibble is missing or extra.`);
+        }
+        buf = new Uint8Array(cleaned.length / 2);
         for (let i = 0; i < buf.length; i++) {
-          buf[i] = parseInt(hex.substr(i * 2, 2), 16);
+          buf[i] = parseInt(cleaned.substr(i * 2, 2), 16);
         }
       } else if (base64) {
         buf = new Uint8Array(Buffer.from(base64, "base64"));
