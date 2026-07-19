@@ -437,7 +437,10 @@ state({op:'load', name:'ready'})            // 1 call instead of the whole boot
 ... drive + watch ...
 ```
 
-A save state captures applied cheats and the exact RAM/PPU state, so every run
+`state({op:'load'})` liveness-probes every restore (a state saved mid-pause or
+mid-transition has its dispatchers stopped — everything you watch from it looks
+dead; the `liveness` field says so up front, and the probe re-restores the
+exact state so it costs nothing). A save state captures applied cheats and the exact RAM/PPU state, so every run
 starts byte-identical — *more* repeatable than re-booting, not just cheaper. A
 named slot (`name`) lives in memory for the session; a `path` persists to disk
 across sessions. If a task says "restart before each run", a state reload
