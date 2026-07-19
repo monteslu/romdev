@@ -165,6 +165,23 @@ findHex:'20 3C 87'})` scans the whole loaded cart for the pattern and maps every
 hit to a CPU address server-side (`$00:8837`-style on SNES; bank + window on
 NES/GB/SMS) — every `jsr $873C` in one call, no scripting over the ROM file.
 
+**"Who can write/read this RAM byte?"** — don't hand-build store-opcode
+patterns: `disasm({target:'accessScan', address:0x0182})` bounds every
+instruction that can REACH the byte, including indexed forms whose base sits
+below it (`sta $0181,y` reaching `$0182`; `lda $0100,y` reaching any page-1
+byte — the exact class a raw `findHex` scan is structurally blind to), each
+classified read/write/rmw with the index offset needed. It rides the
+disassembly, so instruction-boundary false positives are already filtered.
+Table-driven and fully indirect writes still need the live census
+(`watch({on:'range', kind:'write'})`); the result says so.
+
+**Found an in-game script interpreter?** (level/map scripts, spawn lists,
+cutscene streams): once you've verified its opcode shapes against the
+dispatch routine, `disasm({target:'script', grammar:{...}})` decodes any
+amount of script data from the declarative grammar — flag-conditional
+fields, counted/terminated lists, stop/chain commands — so the format lives
+in a reproducible tool call instead of a throwaway decoder script.
+
 When a write "doesn't show up", check the ROM here before assuming the patch
 failed — it's usually live and the bug is elsewhere (wrong source, see §2/§5).
 
