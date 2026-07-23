@@ -35,9 +35,24 @@ already had reachable, and gives the agent EARS to go with its eyes:
 - Shared `parseHexBytes` factored out of memory.js so `memory({op:'write'})` and
   `wasm({op:'write'})` clean/validate hex identically.
 
-Not in this slice (planned, see the umbrella doc): the wasmcart debug ABI
-(`debug:true` manifest + `wc_debug_state()`) and the regression/replay harness —
-both need wasmcart-spec design, marked SPEC-DESIGN, not coded here.
+- **Named debug state (wasmcart debug ABI consumer).** WasmcartHost gains
+  feature-detected `readDebugState`/`readDebugValue`/`writeDebugValue`
+  passthroughs (like setFixedStep — present only when the wasmcart build has the
+  debug ABI). The `wasm` tool gains `op:'debugState'` (dump the cart's opt-in
+  named fields with values) and `read`/`write` by `name` (resolve a debug field
+  to offset+type, read/write DECODED — the source-level view vs. a raw offset).
+  `conformance` now checks debug-ABI consistency (FLAG_DEBUG set but no
+  wc_debug_state export = error; export without the flag = warn). Capability
+  `hasDebugState` added. The wasmcart SIDE (FLAG_DEBUG, wc_debug_state, the
+  WC_DEBUG_FIELDS SDK macro, default-off governing rule) is committed in the
+  wasmcart repo (part of ABI 3 — no version bump, pre-1.0/no external users);
+  romdev consumes it once that publishes + repins. Until then the named-debug
+  ops feature-detect and stay inert against the pinned wasmcart@0.3.0.
+
+Deferred (SPEC-DESIGN): the regression/replay harness — and per the scale
+analysis it stays deferred deliberately, because full replay isn't practical for
+multi-GB carts; named-state assertions at driven checkpoints (built on the debug
+ABI above) are the durable, size-independent path.
 
 ## 0.103.0 — 2026-07-19
 

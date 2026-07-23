@@ -76,6 +76,9 @@ export class WasmcartHost {
       // module's exported functions/globals. Different axis than emulator regions.
       hasMemoryRegions: false,
       hasWasmIntrospection: true,
+      // Named debug state (opt-in wasmcart debug ABI). True only when the cart
+      // opted in AND the wasmcart build exposes the reader — feature-detected.
+      hasDebugState: this.debugSupported(),
       hasCpuState: false,
       hasDisasm: false,
       hasCheats: false,
@@ -259,6 +262,40 @@ export class WasmcartHost {
     return bytes.length;
   }
 
+  // ── Debug ABI passthrough (opt-in named state) ───────────────────────────
+  // Feature-detected, like setFixedStep: the CartHost debug methods exist only
+  // in wasmcart with the debug ABI. Absent (older published wasmcart) → these
+  // report "unsupported" and the wasm tool says so, rather than crashing.
+
+  /** True when the loaded cart opts into the debug ABI AND this CartHost build
+   *  exposes the debug reader. */
+  debugSupported() {
+    return typeof this.cart?.readDebugState === "function"
+      && !!this.cart?.readDebugState?.();
+  }
+
+  /** The cart's named debug-state descriptor table, or null. */
+  readDebugState() {
+    if (typeof this.cart?.readDebugState !== "function") return null;
+    return this.cart.readDebugState();
+  }
+
+  /** Read a named debug value (decoded per its declared type). */
+  readDebugValue(name) {
+    if (typeof this.cart?.readDebugValue !== "function") {
+      throw new Error("this wasmcart build has no debug ABI (update the wasmcart package). Use wasm({op:'read', offset}) for a raw heap read.");
+    }
+    return this.cart.readDebugValue(name);
+  }
+
+  /** Write a named scalar debug value. */
+  writeDebugValue(name, value) {
+    if (typeof this.cart?.writeDebugValue !== "function") {
+      throw new Error("this wasmcart build has no debug ABI. Use wasm({op:'write', offset}) for a raw heap write.");
+    }
+    return this.cart.writeDebugValue(name, value);
+  }
+
   /** Enumerate the cart module's WASM exports (function/memory/global/table names + kinds). */
   wasmExports() {
     if (!this.cart?.instance) return [];
@@ -341,6 +378,21 @@ export class WasmcartHost {
     if (manifest.players != null && (!Number.isInteger(manifest.players) || manifest.players < 1 || manifest.players > 4)) {
       issues.push({ severity: "warn", code: "manifest-shape",
         message: `manifest players:${manifest.players} is out of range — wasmcart supports 1-4 players.` });
+    }
+
+    // 5. Debug ABI consistency (opt-in). FLAG_DEBUG (1<<5) set but no
+    //    wc_debug_state export = a broken debug cart; declaring debug scaffolding
+    //    without opting in via the flag is a self-policing warn.
+    const FLAG_DEBUG = 1 << 5;
+    const flagDebug = !!((info.flags ?? 0) & FLAG_DEBUG);
+    const hasDebugExport = exportNames.has("wc_debug_state");
+    if (flagDebug && !hasDebugExport) {
+      issues.push({ severity: "error", code: "debug-missing-export",
+        message: "WC_FLAG_DEBUG is set but the cart doesn't export wc_debug_state() — add the export (WC_DEBUG_FIELDS) or clear the flag." });
+    }
+    if (!flagDebug && hasDebugExport) {
+      issues.push({ severity: "warn", code: "debug-unflagged",
+        message: "cart exports wc_debug_state() but WC_FLAG_DEBUG isn't set — the host won't read it (default is no debugging). Set the flag or drop the export." });
     }
 
     return {
