@@ -37,6 +37,28 @@ export function writeOutput(data, { outputPath, inline = false, what = "output",
   return { path: outputPath, bytes: buf.length };
 }
 
+/**
+ * Parse a hex string to bytes, tolerating whitespace/underscore/$ separators
+ * and naming the real cause on failure (v0.98.0 feedback #2). Shared by
+ * memory({op:'write'}) and wasm({op:'write'}) so both behave identically.
+ * @param {string} hex
+ * @param {string} [label] tool name for the error message (default "hex")
+ * @returns {Uint8Array}
+ */
+export function parseHexBytes(hex, label = "hex") {
+  const cleaned = String(hex).replace(/[\s_$]/g, "");
+  if (!/^[0-9a-fA-F]*$/.test(cleaned)) {
+    const bad = cleaned.match(/[^0-9a-fA-F]/);
+    throw new Error(`${label}: contains a non-hex character '${bad[0]}' — pass plain hex like "1A2B" (spaces/underscores/$ are fine and stripped).`);
+  }
+  if (cleaned.length % 2 !== 0) {
+    throw new Error(`${label}: odd hex length (${cleaned.length} nibbles after stripping separators) — a byte is two hex chars, so one nibble is missing or extra.`);
+  }
+  const buf = new Uint8Array(cleaned.length / 2);
+  for (let i = 0; i < buf.length; i++) buf[i] = parseInt(cleaned.substr(i * 2, 2), 16);
+  return buf;
+}
+
 /** Wrap a JSON object as an MCP tool text-content result. */
 export function jsonContent(obj) {
   return {

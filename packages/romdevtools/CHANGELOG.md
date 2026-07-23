@@ -4,6 +4,41 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.104.0 — 2026-07-23
+
+**wasmcart harness, Slice 1 — the sense loop + conformance** (internal-romdev/
+WASMCART_UMBRELLA_PLAN.md WS1+WS2). romdev is the run/debug/validate harness
+for wasmcart carts, NOT an SDK — it starts at the `.wasc` the developer's own
+toolchain produced. This slice makes the WASM-runtime introspection WasmcartHost
+already had reachable, and gives the agent EARS to go with its eyes:
+
+- **Audio capture** — `audioDebug({op:'record'})` now works on a wasmcart
+  session. WasmcartHost accumulates each `CartHost.runFrame().audio` (Int16 or
+  Float32, normalized to Int16) into the `state.audioRing` the record op drains,
+  and sets `status.audioSampleRate` from the cart's WCInfo. The agent verifies
+  "did the jump sound play" headlessly, the same way it verifies the frame.
+- **New `wasm` tool** — introspection an emulator can't offer, gated on
+  `hasWasmIntrospection` and refusing symmetrically on a libretro host:
+  - `op:'conformance'` — the "won't load / loaded but wrong, WHY?" verdict:
+    required exports (wc_get_info/wc_init/wc_render) present? manifest abi vs the
+    running instance? declared resolution vs actual? manifest shape? →
+    `{conforms, issues[]}`, each issue naming the fix. The wasmcart analogue of
+    iNES-header validation; the one failure an agent can't diagnose from source.
+  - `op:'info'/'exports'` (+ `abiComplete`), `op:'read'/'write'` over the cart
+    heap (raw byte offset; shared hex cleaner), `op:'save'`.
+- **`catalog({op:'status'})`** surfaces the wasmcart facts (kind,
+  wasmIntrospection, wasmMemoryBytes, wasmExportCount, audioCapture) so an agent
+  picks the right tools without probing by failure.
+- **Fix**: WasmcartHost was missing `getStatus()`, which `catalog({op:'status'})`
+  calls host-kind-agnostically — status crashed on any wasmcart session (caught
+  by the new live smoke; regression-tested).
+- Shared `parseHexBytes` factored out of memory.js so `memory({op:'write'})` and
+  `wasm({op:'write'})` clean/validate hex identically.
+
+Not in this slice (planned, see the umbrella doc): the wasmcart debug ABI
+(`debug:true` manifest + `wc_debug_state()`) and the regression/replay harness —
+both need wasmcart-spec design, marked SPEC-DESIGN, not coded here.
+
 ## 0.103.0 — 2026-07-19
 
 **v0.98.0 feedback batch** (from a NES annotation session, shared
