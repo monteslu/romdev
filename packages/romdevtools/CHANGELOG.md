@@ -4,6 +4,59 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.105.0 — 2026-07-23
+
+**wasmcart harness, the rest of the plan — deterministic replay, debug events,
+positioning, and the dogfood proof** (WS3 Parts B+C, WS5, WS6 of
+internal-romdev/WASMCART_UMBRELLA_PLAN.md). Consumes wasmcart 0.5.0 (spec-side:
+`WC_FLAG_DETERMINISTIC` + `wc_set_seed` + `WC_DETERMINISTIC_RNG`;
+`wc_debug_mark` + captured `wc_log`; both opt-in, default structurally absent).
+Feature-detected — inert on wasmcart 0.4.0; repin to ^0.5.0 at release.
+
+- **Deterministic replay** — `loadMedia({deterministicSeed})` (wasmcart only;
+  refused with a pointer on emulator platforms, which are already deterministic
+  from power-on): fixed virtual clock + the u32 seed delivered to the cart's
+  `wc_set_seed` BEFORE `wc_init`. Same seed + same input script = an identical
+  frame sequence on carts that declare `WC_FLAG_DETERMINISTIC` (surfaced as
+  `capabilities.hasDeterministic`, `status.deterministicSeed`). Requesting it
+  on a pre-0.5.0 wasmcart install refuses loudly instead of handing back a
+  silently-unseeded run.
+- **Regression goldens are seed-aware** — `regression({op:'capture'})` stamps
+  the session's `deterministicSeed` into the golden; `op:'check'` under a
+  different seed fails FAST with the exact reload remedy instead of reporting
+  the mismatch as frame-hash noise. With a seed, frameHash checkpoints are
+  airtight (proven across fresh loads in tests and live).
+- **`wasm({op:'events'})`** — drain the frame-stamped debug event trace:
+  `wc_debug_mark(id)` annotations and captured `wc_log` lines, the navigable
+  timeline of a run. Pull-model, clears on read; says so plainly on a
+  pre-events wasmcart build.
+- **Conformance grows determinism checks** — `WC_FLAG_DETERMINISTIC` without
+  `wc_set_seed` is an error (declared but unseedable); the export without the
+  flag is a self-policing warn.
+- **FIX: 0 Hz WAV headers** — `audioDebug({op:'record'})` used `?? 48000` for
+  the fallback rate, which let a wasmcart cart's declared 0 ("host decides")
+  through as an unplayable 0 Hz WAV header. Now `|| 48000`. Caught by the
+  dogfood run below.
+- **Vendored `test/fixtures/detrng.wasc`** (+ source/rebuild recipe): RNG-noise
+  render + marks + debug fields. 7 new consumer tests (replay identity across
+  loads, seed divergence, caps/status surfacing, events drain, conformance,
+  airtight golden, seed-mismatch refusal, WAV rate) — skip-guarded so a clean
+  clone on wasmcart 0.4.0 stays green.
+- **WS6 dogfood shipped** — `rom-games/wasmcart/starfall/`: a real game
+  (deterministic spawns, named state, marks, audio, input) developed and
+  verified END-TO-END through the live MCP server: seeded load → conformance
+  → screenshot → input-driven `player_x` by name → non-silent audio record →
+  events timeline → regression capture/check bit-exact across fresh loads →
+  wrong-seed refusal. Its README documents the loop.
+- **WS5 positioning** — wasmcart repo gains `docs/positioning.md` (ship the
+  artifact you debugged; native backends optional with fidelity risk contained;
+  observability by construction); this README's wasmcart paragraph updated to
+  the full surface.
+
+Release note: bump the `wasmcart` dependency to ^0.5.0 (and refresh the
+lockfile) once wasmcart 0.5.0 is on npm — the pin stays ^0.4.0 in-tree so a
+clean clone installs today; every 0.5.0 consumer feature-detects.
+
 ## 0.104.0 — 2026-07-23
 
 **wasmcart harness, Slice 1 — the sense loop + conformance** (internal-romdev/

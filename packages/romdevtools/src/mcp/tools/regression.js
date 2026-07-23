@@ -151,6 +151,9 @@ export function registerRegressionTools(server, z, sessionKey) {
           goldenVersion: GOLDEN_VERSION,
           platform: host.status.platform,
           kind: host.getCapabilities?.().kind ?? "libretro",
+          // Seeded deterministic run (wasmcart): stamp the seed so a check
+          // knows what reproduces this golden. null = unseeded capture.
+          deterministicSeed: host.status.deterministicSeed ?? null,
           inputScript: inputScript ?? [],
           checkpoints,
           observations,
@@ -168,6 +171,18 @@ export function registerRegressionTools(server, z, sessionKey) {
       let golden;
       try { golden = JSON.parse(await readFile(goldenPath, "utf8")); }
       catch { throw new Error(`regression({op:'check'}): couldn't read golden at '${goldenPath}' — run op:'capture' first.`); }
+      // Fail FAST on a seed mismatch instead of reporting it as hash noise:
+      // a golden captured under seed S only reproduces under seed S.
+      const goldenSeed = golden.deterministicSeed ?? null;
+      const sessionSeed = host.status.deterministicSeed ?? null;
+      if (goldenSeed !== sessionSeed) {
+        throw new Error(
+          `regression({op:'check'}): golden was captured with deterministicSeed=${goldenSeed} but this session loaded with ${sessionSeed} — ` +
+          (goldenSeed === null
+            ? "reload WITHOUT deterministicSeed to match the golden."
+            : `reload with loadMedia({deterministicSeed: ${goldenSeed}}) so the replay is comparable.`)
+        );
+      }
       const script = inputScript ?? golden.inputScript;
       const cps = checkpoints ?? golden.checkpoints;
       const observations = await runCheckpoints(host, { script, checkpoints: cps });

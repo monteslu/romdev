@@ -82,6 +82,12 @@ export class WasmcartHost {
       // Named debug state (opt-in wasmcart debug ABI). True only when the cart
       // opted in AND the wasmcart build exposes the reader — feature-detected.
       hasDebugState: this.debugSupported(),
+      // Cart declares FLAG_DETERMINISTIC (honors seeded replay) AND the
+      // wasmcart build can deliver a seed — feature-detected like debug.
+      hasDeterministic: !!this.cart?.info?.hasDeterministic
+        && this.cart?.deterministicSeed !== undefined,
+      // Frame-stamped wc_log/wc_debug_mark capture (wasmcart 0.5.0+).
+      hasDebugEvents: typeof this.cart?.drainDebugEvents === "function",
       hasCpuState: false,
       hasDisasm: false,
       hasCheats: false,
@@ -94,19 +100,35 @@ export class WasmcartHost {
    * in-memory cart zip. Mirrors LibretroHost.loadMedia's post-conditions:
    * status.loaded + a first framebuffer so screenshot works immediately.
    */
-  async loadMedia({ platform, path: mediaPath, bytes, glBackend } = {}) {
+  async loadMedia({ platform, path: mediaPath, bytes, glBackend, deterministic } = {}) {
     const source = bytes ?? mediaPath;
     if (!source) throw new Error("WasmcartHost.loadMedia: provide `path` or `bytes`.");
 
     this.cart = new CartHost();
-    await this.cart.load(source, glBackend ? { glBackend } : {});
+    // Deterministic replay (wasmcart 0.5.0+): {seed, stepMs?}. Feature-detect
+    // via the constructor field — an older CartHost would silently ignore the
+    // option and hand back a non-deterministic run the caller believes is seeded.
+    if (deterministic && this.cart.deterministicSeed === undefined) {
+      throw new Error(
+        "deterministic replay needs wasmcart >= 0.5.0 (this install predates wc_set_seed) — reinstall/repin wasmcart."
+      );
+    }
+    await this.cart.load(source, {
+      ...(glBackend ? { glBackend } : {}),
+      ...(deterministic ? { deterministic } : {}),
+    });
     // Deterministic clock: romdev steps frames, so frame N should be reproducible.
     // Feature-detect — setFixedStep is a newer CartHost addition; older published
     // versions fall back to wall-clock (still works, just non-deterministic timing).
-    if (typeof this.cart.setFixedStep === "function") {
+    // A deterministic load already engaged its own step (possibly custom) — don't clobber it.
+    if (typeof this.cart.setFixedStep === "function" && !deterministic) {
       this.cart.setFixedStep(1000 / 60);
-      this._deterministicClock = true;
     }
+    this._deterministicClock = typeof this.cart.setFixedStep === "function";
+
+    // Full deterministic replay (seeded RNG, wasmcart 0.5.0+): surfaced in
+    // status so regression goldens can stamp + verify the seed they ran under.
+    this.status.deterministicSeed = deterministic ? this.cart.deterministicSeed : null;
 
     this.status.loaded = true;
     this.status.platform = platform || "wasmcart";
@@ -330,6 +352,15 @@ export class WasmcartHost {
     return this.cart.writeDebugValue(name, value);
   }
 
+  /** Drain the frame-stamped debug event trace (wc_log lines + wc_debug_mark
+   *  annotations). Pull-model; clears the rings. wasmcart 0.5.0+. */
+  drainDebugEvents() {
+    if (typeof this.cart?.drainDebugEvents !== "function") {
+      throw new Error("this wasmcart build has no debug event capture (needs wasmcart >= 0.5.0).");
+    }
+    return this.cart.drainDebugEvents();
+  }
+
   /** Enumerate the cart module's WASM exports (function/memory/global/table names + kinds). */
   wasmExports() {
     if (!this.cart?.instance) return [];
@@ -427,6 +458,21 @@ export class WasmcartHost {
     if (!flagDebug && hasDebugExport) {
       issues.push({ severity: "warn", code: "debug-unflagged",
         message: "cart exports wc_debug_state() but WC_FLAG_DEBUG isn't set — the host won't read it (default is no debugging). Set the flag or drop the export." });
+    }
+
+    // 6. Deterministic-replay consistency (opt-in). FLAG_DETERMINISTIC (1<<6)
+    //    declares the cart honors seeded replay — meaningless without the
+    //    wc_set_seed export the host delivers the seed through.
+    const FLAG_DETERMINISTIC = 1 << 6;
+    const flagDet = !!((info.flags ?? 0) & FLAG_DETERMINISTIC);
+    const hasSeedExport = exportNames.has("wc_set_seed");
+    if (flagDet && !hasSeedExport) {
+      issues.push({ severity: "error", code: "deterministic-missing-export",
+        message: "WC_FLAG_DETERMINISTIC is set but the cart doesn't export wc_set_seed() — the host can't seed it, so replay isn't reproducible. Add WC_DETERMINISTIC_RNG (or your own wc_set_seed) or clear the flag." });
+    }
+    if (!flagDet && hasSeedExport) {
+      issues.push({ severity: "warn", code: "deterministic-unflagged",
+        message: "cart exports wc_set_seed() but WC_FLAG_DETERMINISTIC isn't set — hosts won't seed it (default is a normal run). Set the flag if the cart truly honors seeded replay." });
     }
 
     return {

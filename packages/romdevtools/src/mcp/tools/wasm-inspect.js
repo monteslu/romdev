@@ -55,11 +55,14 @@ export function registerWasmInspectTools(server, z, sessionKey) {
     "field to its offset+type and reads/writes it DECODED (the preferred path when the cart exposes debug state). With " +
     "`offset`, peeks/pokes the RAW heap byte-wise (the fallback: raw offsets are opaque without the debug table, and " +
     "you own the source, so prefer `name`).\n" +
+    "• 'events' — DRAIN the frame-stamped debug event trace: wc_log lines ({frame, text}) and wc_debug_mark(id) " +
+    "annotations ({frame, id}) the cart emitted since the last drain. The navigable timeline of a run ('level " +
+    "loaded at frame 312') — pull-model, clears on read. wasmcart 0.5.0+.\n" +
     "• 'save' — the cart's declared save-data bytes (savePtr/saveSize), to assert a game persisted what it should.\n" +
     "REFUSES on an emulator host (use disasm/symbols/memory there).",
     {
-      op: z.enum(["conformance", "info", "exports", "debugState", "read", "write", "save"])
-        .describe("conformance = spec-validation verdict; info = running WCInfo; exports = module export list; debugState = the cart's opt-in named debug fields; read/write = a named debug field (`name`) OR the raw heap (`offset`); save = declared save-data bytes."),
+      op: z.enum(["conformance", "info", "exports", "debugState", "events", "read", "write", "save"])
+        .describe("conformance = spec-validation verdict; info = running WCInfo; exports = module export list; debugState = the cart's opt-in named debug fields; events = drain the frame-stamped wc_log/wc_debug_mark trace; read/write = a named debug field (`name`) OR the raw heap (`offset`); save = declared save-data bytes."),
       name: z.string().optional().describe("op=read/write: a debug field name from debugState (resolves to offset+type, reads/writes DECODED). Preferred over `offset` when the cart exposes debug state."),
       value: z.number().optional().describe("op=write: the value to write to the named scalar debug field (use with `name`)."),
       offset: z.number().int().min(0).optional().describe("op=read/write: RAW byte offset into the cart's WASM linear memory (fallback when there's no named field)."),
@@ -111,6 +114,20 @@ export function registerWasmInspectTools(server, z, sessionKey) {
         });
         return jsonContent({ hasDebugState: true, count: fields.length, fields: values,
           note: "the cart's opt-in named state. read/write a field by name: wasm({op:'read', name:'player_x'})." });
+      }
+
+      if (op === "events") {
+        if (typeof host.drainDebugEvents !== "function" || !host.getCapabilities().hasDebugEvents) {
+          return jsonContent({
+            hasDebugEvents: false,
+            note: "this wasmcart build has no debug event capture (needs wasmcart >= 0.5.0). wc_log still prints to the server console.",
+          });
+        }
+        const { log, marks } = host.drainDebugEvents();
+        return jsonContent({
+          hasDebugEvents: true, log, marks,
+          note: "drained (rings are now empty). marks are cart-authored wc_debug_mark(id) annotations; log is captured wc_log text. Both stamped with the frame they fired on.",
+        });
       }
 
       if (op === "read" && name != null) {

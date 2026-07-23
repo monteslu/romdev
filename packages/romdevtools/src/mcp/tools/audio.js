@@ -414,7 +414,9 @@ export function registerAudioTools(server, z, sessionKey) {
       }
       host.state.audioRing.length = 0;
 
-      const sampleRate = host.status.audioSampleRate ?? 48000;
+      // `||` not `??`: wasmcart carts may declare 0 = "host decides", and a
+      // 0 Hz WAV header is unplayable (caught by the starfall dogfood run).
+      const sampleRate = host.status.audioSampleRate || 48000;
       const wav = encodeWav(samples, sampleRate);
       await mkdir(path.dirname(outPath), { recursive: true });
       await writeFile(outPath, wav);
