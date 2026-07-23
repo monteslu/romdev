@@ -197,6 +197,29 @@ export class WasmcartHost {
     return { ...this.status };
   }
 
+  /** FNV-1a hash of the last framebuffer — a cheap "did the frame change"
+   *  fingerprint for the regression harness. Strided on large buffers (GL carts
+   *  can be 1080p+, ~8 MB) so a checkpoint hash stays fast; the stride is
+   *  deterministic so the same frame always hashes the same. Matches
+   *  LibretroHost.framebufferHash's contract (0 = no frame yet). */
+  framebufferHash() {
+    const f = this.state.lastFrame;
+    if (!f) return 0;
+    const px = f.pixels;
+    // Aim for ~64K sampled bytes: stride so a small frame hashes every byte and
+    // a big one is sampled. Deterministic (depends only on length), so a golden
+    // captured here re-hashes identically on replay.
+    const stride = Math.max(1, Math.floor(px.length / 65536));
+    let h = 0x811c9dc5;
+    for (let i = 0; i < px.length; i += stride) {
+      h ^= px[i];
+      h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+    }
+    // Fold in width/height so a resolution change never collides.
+    h = (h ^ (f.width * 73856093) ^ (f.height * 19349663)) >>> 0;
+    return h >>> 0;
+  }
+
   /** @returns {{width,height,pixels,pitch,format}} the last rendered frame. */
   getFramebuffer() {
     if (!this.state.lastFrame) throw new Error("no frame produced yet — step frames first");
