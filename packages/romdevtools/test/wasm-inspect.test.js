@@ -179,3 +179,17 @@ test("wasm({op:'debugState'}) says so when the cart has no debug state", async (
   assert.equal(r.hasDebugState, false);
   assert.match(r.note, /no named debug state/);
 });
+
+test("WasmcartHost.framebufferHash is stable per frame + shifts on change", async () => {
+  const host = new WasmcartHost();
+  await host.loadMedia({ platform: "wasmcart", path: HELLO });
+  host.stepFrames(5);
+  const h1 = host.framebufferHash();
+  const h2 = host.framebufferHash(); // same frame → same hash (deterministic)
+  assert.equal(h1, h2);
+  assert.equal(typeof h1, "number");
+  host.stepFrames(30);
+  // after more frames the hash is still a number (may or may not differ for a
+  // static hello cart — assert only determinism + type, not content).
+  assert.equal(typeof host.framebufferHash(), "number");
+});

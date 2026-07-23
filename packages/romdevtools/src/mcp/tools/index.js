@@ -36,6 +36,7 @@ import { registerSpliceChrTools } from "./splice-chr.js";
 import { registerCartPartsTools } from "./cart-parts.js";
 import { registerNativePackTools } from "./native-pack.js";
 import { registerWasmInspectTools } from "./wasm-inspect.js";
+import { registerRegressionTools } from "./regression.js";
 import { registerFontMapTools } from "./font-map.js";
 import { registerDisasmTools } from "./disasm.js";
 import { registerFindReferencesTools } from "./find-references.js";
@@ -211,7 +212,7 @@ const CATEGORIES = [
     name: "advanced",
     description: "Less common automation + MOTION/TELEMETRY tracing: runUntil (drive a ROM headlessly until a condition), watch({on:'mem', format:'series'}) (a compact value-vs-frame CURVE per byte — the primitive for velocity/scroll/sprite-position over time), runUntilWrite (step until target byte is written, return the PC), recordSession (hold/script input over N frames while sampling memory + screenshots into an analyzable timeline — use it to diagnose game-FEEL issues: choppy movement, scroll jumps, camera-vs-sprite desync, NOT just input macros).",
     useWhen: ["want to automate reaching a specific game state", "tracking down which code writes a specific RAM byte (gameplay variable hunting)", "diagnosing why movement/scrolling feels choppy or wrong — sample sprite X + scroll regs over frames with recordSession or watch series", "recording an input macro for regression testing"],
-    register: (s, z, k) => { registerRunUntilTools(s, z, k); registerWatchMemoryTools(s, z, k); registerRecordTools(s, z, k); },
+    register: (s, z, k) => { registerRunUntilTools(s, z, k); registerWatchMemoryTools(s, z, k); registerRecordTools(s, z, k); registerRegressionTools(s, z, k); },
   },
 ];
 

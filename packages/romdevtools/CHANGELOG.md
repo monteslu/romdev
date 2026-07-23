@@ -49,10 +49,23 @@ already had reachable, and gives the agent EARS to go with its eyes:
   romdev consumes it once that publishes + repins. Until then the named-debug
   ops feature-detect and stay inert against the pinned wasmcart@0.3.0.
 
-Deferred (SPEC-DESIGN): the regression/replay harness — and per the scale
-analysis it stays deferred deliberately, because full replay isn't practical for
-multi-GB carts; named-state assertions at driven checkpoints (built on the debug
-ABI above) are the durable, size-independent path.
+- **Checkpoint-based regression harness (`regression` tool).** Prove a change
+  didn't break a game: `op:'capture'` runs an input script and records
+  observations at checkpoint frames into a golden JSON; `op:'check'` re-runs and
+  diffs → {passed, diffs[]}. Host-kind-agnostic (emulators AND wasmcart).
+  REPLAYS FROM THE LOADED STATE (no per-frame savestate) so it scales to ANY
+  cart size — the scale-analysis answer to "full-frame replay is impractical for
+  multi-GB carts". Observations: 'frameHash' (framebuffer fingerprint;
+  reproducible only on a deterministic cart), 'debug' (wasmcart NAMED debug
+  state — the size-independent, deterministic path: 'at frame 600, hp==3' costs
+  the same at 128KB or 2GB), 'memory' (emulator regions). WasmcartHost gained a
+  strided `framebufferHash()` (fast on 1080p+ GL carts, deterministic). Verified
+  live through MCP: capture → reload → check passes on hello.wasc.
+
+The wasmcart named-debug ops (read/write by name) go fully live once the
+wasmcart debug ABI publishes + romdev repins; until then they feature-detect
+and the regression harness's 'debug' checkpoints require that build. 'frameHash'
+and 'memory' checkpoints work today on every host.
 
 ## 0.103.0 — 2026-07-19
 
