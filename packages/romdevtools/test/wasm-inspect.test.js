@@ -119,3 +119,63 @@ test("wasm tool REFUSES on a libretro (emulator) host", async () => {
   const res = await getWasmHandler("emu-test")({ op: "conformance" });
   assert.match(errText(res), /not a WASM-runtime cart|disasm\/symbols/);
 });
+
+// ── debug ABI ops (feature-detected; fake a debug-capable host/cart) ─────────
+
+function makeDebugCart(fields, mem) {
+  // mem: { name: {value, set(v)} } keyed by field name
+  return {
+    readDebugState: () => fields,
+    readDebugValue: (name) => {
+      const f = fields.find((x) => x.name === name);
+      if (!f) throw new Error(`debug field '${name}' not found`);
+      return { name, type: f.typeName, value: mem[name].value };
+    },
+    writeDebugValue: (name, v) => { mem[name].value = v; return fields.find((x) => x.name === name).valuePtr; },
+  };
+}
+
+function debugHost() {
+  const mem = { hp: { value: 42 }, player_x: { value: 100 } };
+  const fields = [
+    { name: "hp", type: 0, typeName: "u8", valuePtr: 0x200, len: 1 },
+    { name: "player_x", type: 3, typeName: "i16", valuePtr: 0x204, len: 1 },
+  ];
+  const cart = makeDebugCart(fields, mem);
+  return {
+    getCapabilities: () => ({ kind: "wasmcart", hasWasmIntrospection: true, hasDebugState: true }),
+    readDebugState: () => cart.readDebugState(),
+    readDebugValue: (n) => cart.readDebugValue(n),
+    writeDebugValue: (n, v) => cart.writeDebugValue(n, v),
+    _mem: mem,
+  };
+}
+
+test("wasm({op:'debugState'}) lists the cart's named fields with values", async () => {
+  _setHostForTest("dbg1", debugHost());
+  const r = parse(await getWasmHandler("dbg1")({ op: "debugState" }));
+  assert.equal(r.hasDebugState, true);
+  assert.equal(r.count, 2);
+  const hp = r.fields.find((f) => f.name === "hp");
+  assert.equal(hp.value, 42);
+});
+
+test("wasm({op:'read', name}) / {op:'write', name, value} on a named field", async () => {
+  const host = debugHost();
+  _setHostForTest("dbg2", host);
+  const h = getWasmHandler("dbg2");
+  assert.equal(parse(await h({ op: "read", name: "hp" })).value, 42);
+  await h({ op: "write", name: "hp", value: 7 });
+  assert.equal(parse(await h({ op: "read", name: "hp" })).value, 7);
+  assert.equal(host._mem.hp.value, 7);
+});
+
+test("wasm({op:'debugState'}) says so when the cart has no debug state", async () => {
+  _setHostForTest("dbg3", {
+    getCapabilities: () => ({ kind: "wasmcart", hasWasmIntrospection: true }),
+    readDebugState: () => null,
+  });
+  const r = parse(await getWasmHandler("dbg3")({ op: "debugState" }));
+  assert.equal(r.hasDebugState, false);
+  assert.match(r.note, /no named debug state/);
+});
