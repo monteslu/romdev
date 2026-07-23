@@ -35,6 +35,7 @@ import { registerReinjectTools } from "./reinject.js";
 import { registerSpliceChrTools } from "./splice-chr.js";
 import { registerCartPartsTools } from "./cart-parts.js";
 import { registerNativePackTools } from "./native-pack.js";
+import { registerWasmInspectTools } from "./wasm-inspect.js";
 import { registerFontMapTools } from "./font-map.js";
 import { registerDisasmTools } from "./disasm.js";
 import { registerFindReferencesTools } from "./find-references.js";
@@ -88,6 +89,22 @@ function hostCapabilities(host) {
   };
   if (!host) return toolchains;
   const has = (m) => { try { return !!host[m]?.(); } catch { return false; } };
+  // Native-runtime hosts (wasmcart/jsgame) expose a getCapabilities() descriptor
+  // instead of the per-supported() methods. When present, surface its facts so an
+  // agent picks the wasm/audio tools without probing by failure — the same reason
+  // the emulator caps below exist. Guarded so libretro hosts are untouched.
+  const nativeCaps = (() => {
+    try { return host.getCapabilities?.() ?? null; } catch { return null; }
+  })();
+  const wasm = nativeCaps?.hasWasmIntrospection
+    ? {
+        kind: nativeCaps.kind,                     // 'wasmcart'
+        wasmIntrospection: true,                   // wasm({op}) tool applies
+        wasmMemoryBytes: (() => { try { return host.wasmMemorySize(); } catch { return 0; } })(),
+        wasmExportCount: (() => { try { return host.wasmExports().length; } catch { return 0; } })(),
+        audioCapture: !!nativeCaps.hasAudio,       // audioDebug({op:'record'})
+      }
+    : {};
   return {
     pcBreakpoint: has("pcBreakSupported"),       // breakpoint({on:'pc'})
     watchpointExact: has("watchpointSupported"), // breakpoint({on:'write', precision:'exact'}) + condition filter
@@ -98,6 +115,7 @@ function hostCapabilities(host) {
     cheats: has("cheatsSupported"),              // cheats({op:'apply'}) via retro_cheat_set
     diskImage: has("diskImageSupported"),        // C64 .d64 loadMedia
     keyboard: has("keyboardSupported"),          // keyboard input (C64/MSX)
+    ...wasm,
     ...toolchains,
   };
 }
@@ -168,6 +186,7 @@ const CATEGORIES = [
       registerTileInspectTools(s, z, k);       // tiles{op} (png/pixels/fingerprints/ascii/preview)
       registerAddressToSymbolTools(s, z, k);   // addressToSymbol — PC → C function name
       registerCheatTools(s, z, k);             // gameCheats (labeled RAM/code map), applyCheat, clearCheats
+      registerWasmInspectTools(s, z, k);       // wasm{op} — WASM-runtime cart introspection (wasmcart)
     },
   },
   {

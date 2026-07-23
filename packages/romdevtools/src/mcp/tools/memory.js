@@ -1,6 +1,6 @@
 import { getHost } from "../state.js";
 import { MemoryRegionToRetro } from "romdev-core-host/types.js";
-import { jsonContent, safeTool, textContent, writeOutput } from "../util.js";
+import { jsonContent, safeTool, textContent, writeOutput, parseHexBytes } from "../util.js";
 import { classifyBytes } from "./classify-region.js";
 import { clusterChanges } from "./diff-cluster.js";
 import { mapNesAddress, mapSnesAddress } from "./disasm.js";
@@ -190,18 +190,7 @@ async function memWrite(sessionKey, { region, offset = 0, hex, base64, data, byt
         // "AB CD" failed the odd-length check and the error blamed length, so
         // the caller re-counted nibbles instead of spotting the space). Same
         // cleaning findHex has always done.
-        const cleaned = String(hex).replace(/[\s_$]/g, "");
-        if (!/^[0-9a-fA-F]*$/.test(cleaned)) {
-          const bad = cleaned.match(/[^0-9a-fA-F]/);
-          throw new Error(`writeMemory: hex contains a non-hex character '${bad[0]}' — pass plain hex like "1A2B" (spaces/underscores/$ are fine and stripped).`);
-        }
-        if (cleaned.length % 2 !== 0) {
-          throw new Error(`writeMemory: odd hex length (${cleaned.length} nibbles after stripping separators) — a byte is two hex chars, so one nibble is missing or extra.`);
-        }
-        buf = new Uint8Array(cleaned.length / 2);
-        for (let i = 0; i < buf.length; i++) {
-          buf[i] = parseInt(cleaned.substr(i * 2, 2), 16);
-        }
+        buf = parseHexBytes(hex, "writeMemory: hex");
       } else if (base64) {
         buf = new Uint8Array(Buffer.from(base64, "base64"));
       } else {

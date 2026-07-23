@@ -37,7 +37,12 @@ export class WasmcartHost {
     this.hwRender = null; // wasmcart GL carts render into their own FB; no libretro HW-render path
     this._log = log || (() => {});
     this.cart = null;
-    this.state = { lastFrame: null };
+    // state.audioRing mirrors LibretroHost's shape so the SHARED audioDebug
+    // ({op:'record'}) tool drains it host-kind-agnostically: an array of
+    // interleaved-stereo Int16Array chunks. CartHost.runFrame returns Int16 OR
+    // Float32 per frame; we convert Float32→Int16 so the WAV encoder (Int16)
+    // gets one shape regardless of what the cart emits.
+    this.state = { lastFrame: null, audioRing: [], lastAudio: null };
     this._inputPorts = [{}]; // per-port pad objects, applied each stepFrames
     this.status = {
       loaded: false,
@@ -103,6 +108,10 @@ export class WasmcartHost {
     this.status.mediaKind = "cart";
     this.status.frameCount = 0;
     this.status.coreFps = 60;
+    // Audio sample rate the cart declared (WCInfo.audioSampleRate) so the WAV
+    // record op tags the file correctly. 0 (no audio) falls back to 48000 in the tool.
+    try { this.status.audioSampleRate = this.cart.getInfo()?.audioSampleRate || 0; }
+    catch { this.status.audioSampleRate = 0; }
 
     // Settle a first frame so width/height and a framebuffer exist (carts often
     // finalize their resolution during the first render).
@@ -137,13 +146,30 @@ export class WasmcartHost {
     }
   }
 
-  /** Advance n frames, driving CartHost.runFrame with the current input. */
+  /** Advance n frames, driving CartHost.runFrame with the current input. Each
+   *  frame's audio is accumulated into state.audioRing (as Int16) so the shared
+   *  audioDebug({op:'record'}) tool can drain it exactly like a libretro core. */
   stepFrames(n) {
     if (!this.cart) throw new Error("no cart loaded — loadMedia first");
     let r = null;
     for (let i = 0; i < n; i++) {
       r = this.cart.runFrame(this._inputPorts);
       this.status.frameCount++;
+      if (r?.audio && r.audio.length) {
+        // Copy out (the buffer is a subarray into WASM memory that moves next
+        // frame) and normalize Float32 [-1,1] → Int16 so the ring is uniform.
+        const a = r.audio;
+        if (a instanceof Float32Array) {
+          const i16 = new Int16Array(a.length);
+          for (let k = 0; k < a.length; k++) {
+            const s = a[k] < -1 ? -1 : a[k] > 1 ? 1 : a[k];
+            i16[k] = s < 0 ? s * 0x8000 : s * 0x7fff;
+          }
+          this.state.audioRing.push(i16);
+        } else {
+          this.state.audioRing.push(new Int16Array(a)); // Int16 copy
+        }
+      }
     }
     if (r) {
       // Copy the framebuffer view out (CartHost returns a subarray into WASM memory,
@@ -160,6 +186,12 @@ export class WasmcartHost {
       this.status.fbHeight = r.height;
     }
     return n;
+  }
+
+  /** Snapshot of the host status (mirrors LibretroHost.getStatus — used by
+   *  catalog({op:'status'}), which is host-kind-agnostic). */
+  getStatus() {
+    return { ...this.status };
   }
 
   /** @returns {{width,height,pixels,pitch,format}} the last rendered frame. */
@@ -246,6 +278,80 @@ export class WasmcartHost {
   /** The cart's parsed WCInfo (fbPtr, savePtr/saveSize, width/height, abi). */
   getInfo() {
     return this.cart ? this.cart.getInfo() : null;
+  }
+
+  /** The cart's parsed manifest.json (name, abi, players, pointer, keyboard, net). */
+  getManifest() {
+    return this.cart ? this.cart.getManifest() : null;
+  }
+
+  /**
+   * ABI/manifest conformance check — the "won't load / loaded but wrong, why?"
+   * verdict an agent can't get from its own source. Format validation against
+   * the wasmcart spec, language-agnostic. Returns { conforms, issues[] }, each
+   * issue { severity:'error'|'warn', code, message } naming the fix.
+   *
+   * NOTE: the cart is already LOADED here (CartHost.load ran + validated the ABI
+   * version and the required exports enough to init), so this reports the
+   * matches/mismatches a *loaded* cart can still have — a manifest that lies
+   * about its resolution, a declared capability with no matching import, an ABI
+   * the host tolerated but the manifest misdeclares. A cart that fails to load
+   * at all surfaces its error through loadMedia; this is the next layer.
+   */
+  checkConformance() {
+    if (!this.cart) throw new Error("no cart loaded — loadMedia first");
+    const issues = [];
+    const info = this.cart.getInfo() || {};
+    const manifest = this.cart.getManifest() || {};
+    const exportNames = new Set(Object.keys(this.cart.instance?.exports || {}));
+
+    // 1. Required ABI exports (the top broken-cart cause). CartHost.load would
+    //    have thrown before here if wc_get_info were missing, but wc_init /
+    //    wc_render can be absent on a partially-built cart that still parsed.
+    for (const req of ["wc_get_info", "wc_init", "wc_render"]) {
+      if (!exportNames.has(req)) {
+        issues.push({ severity: "error", code: "missing-export",
+          message: `required export '${req}' is not present — the cart won't run. Export it from your entry translation unit (see include/wc_cart.h).` });
+      }
+    }
+
+    // 2. Manifest ABI vs the running instance's WCInfo version.
+    if (manifest.abi != null && info.version != null && manifest.abi !== info.version) {
+      issues.push({ severity: "error", code: "abi-mismatch",
+        message: `manifest declares abi:${manifest.abi} but wc_get_info reports version ${info.version} — align the manifest's abi with WC_ABI_VERSION the cart was built against.` });
+    }
+
+    // 3. Declared resolution vs. what the instance reports (a manifest that lies
+    //    about width/height mis-sizes the host's framebuffer expectations).
+    for (const [mk, ik] of [["width", "width"], ["height", "height"]]) {
+      if (manifest[mk] != null && info[ik] != null && manifest[mk] !== info[ik]) {
+        issues.push({ severity: "warn", code: "resolution-mismatch",
+          message: `manifest ${mk}:${manifest[mk]} differs from the running ${ik} ${info[ik]} — the instance's value wins; fix the manifest to match.` });
+      }
+    }
+
+    // 4. Manifest sanity — declared opt-in capabilities that are malformed.
+    //    (Import-vs-declaration cross-checking needs the WASM Module's import
+    //    list, which CartHost doesn't retain post-instantiation; deferred to a
+    //    WS3 debug-ABI increment rather than guessed here.)
+    if (manifest.net?.websocket != null && !Array.isArray(manifest.net.websocket)) {
+      issues.push({ severity: "error", code: "manifest-shape",
+        message: "manifest net.websocket must be an array of allowed domains (e.g. [\"api.example.com\"])." });
+    }
+    if (manifest.players != null && (!Number.isInteger(manifest.players) || manifest.players < 1 || manifest.players > 4)) {
+      issues.push({ severity: "warn", code: "manifest-shape",
+        message: `manifest players:${manifest.players} is out of range — wasmcart supports 1-4 players.` });
+    }
+
+    return {
+      conforms: issues.every((i) => i.severity !== "error"),
+      abi: info.version ?? null,
+      manifestAbi: manifest.abi ?? null,
+      width: info.width ?? null,
+      height: info.height ?? null,
+      requiredExportsPresent: ["wc_get_info", "wc_init", "wc_render"].every((e) => exportNames.has(e)),
+      issues,
+    };
   }
 
   cheatsSupported() { return false; }
