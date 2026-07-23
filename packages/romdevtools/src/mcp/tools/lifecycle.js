@@ -23,9 +23,12 @@ export function registerLifecycleTools(server, z, sessionKey) {
   // slot:'b' targets the secondary comparison host (for frame sideBySide);
   // it gets its own fresh host and does NOT overwrite slot A's recovery
   // breadcrumb, since B is transient scratch, not the session's main ROM.
-  async function doLoadMedia({ platform, path, base64, mediaKind, virtualName, cheats, slot }) {
+  async function doLoadMedia({ platform, path, base64, mediaKind, virtualName, cheats, slot, deterministicSeed }) {
     if (!path && !base64) throw new Error("loadMedia: provide either `path` (file on disk) or `base64` (ROM bytes).");
     if (path && base64) throw new Error("loadMedia: provide `path` OR `base64`, not both.");
+    if (deterministicSeed !== undefined && !NATIVE_RUNTIME_HOSTS[platform]) {
+      throw new Error("deterministicSeed is a wasmcart option (seeded replay via wc_set_seed). Emulator cores are already deterministic from power-on — just replay the same input script.");
+    }
 
     // Native-runtime kinds (wasmcart, jsgame) bypass the libretro core path: build
     // their own host, load the game module, install it as the session host. They
@@ -34,7 +37,11 @@ export function registerLifecycleTools(server, z, sessionKey) {
       if (slot === "b") throw new Error(`slot 'b' (side-by-side) is not supported for '${platform}'`);
       const host = NATIVE_RUNTIME_HOSTS[platform]();
       const bytes = base64 ? new Uint8Array(Buffer.from(base64, "base64")) : undefined;
-      await host.loadMedia({ platform, ...(bytes ? { bytes } : { path }) });
+      await host.loadMedia({
+        platform,
+        ...(bytes ? { bytes } : { path }),
+        ...(deterministicSeed !== undefined ? { deterministic: { seed: deterministicSeed } } : {}),
+      });
       installHost(sessionKey, host);
       if (path || bytes) rememberLastMedia(sessionKey, { platform, path, fromBase64: !!bytes });
       const caps = host.getCapabilities();
@@ -43,6 +50,7 @@ export function registerLifecycleTools(server, z, sessionKey) {
         mediaKind: host.status.mediaKind,
         ...(bytes ? { bytes: bytes.length } : { path: host.status.mediaPath }),
         fbWidth: host.status.fbWidth, fbHeight: host.status.fbHeight,
+        ...(deterministicSeed !== undefined ? { deterministicSeed: host.status.deterministicSeed } : {}),
         capabilities: caps,
       };
       // Push the first frame to the /livestream observer, same as an emulator load.
@@ -141,6 +149,7 @@ export function registerLifecycleTools(server, z, sessionKey) {
       virtualName: z.string().optional().describe("With `base64`: virtual filename shown to cores that fopen() the path (default '/rom')."),
       cheats: z.array(z.string()).max(64).optional().describe("Codes applied before the first frame (Game Genie / raw ADDR:VAL[:COMPARE] / native device codes). A raw ROM-address code is re-encoded to a read-intercept so it doesn't silently no-op. Returns a per-code `cheats:[{code, appliedAs, applied}]` report."),
       slot: z.enum(["a", "b"]).default("a").describe("'a' (default) = the session's primary host (what every other tool uses). 'b' = the secondary comparison host used by frame({op:'sideBySide'}); load the second ROM here. Slot B is independent scratch — it keeps no recovery breadcrumb and never drives the livestream."),
+      deterministicSeed: z.number().int().min(0).optional().describe("wasmcart only: load as a DETERMINISTIC REPLAY — fixed virtual clock + this u32 RNG seed delivered to the cart's wc_set_seed before init. Same seed + same input script = an identical frame sequence (airtight frameHash regression goldens). Only meaningful for carts that declare WC_FLAG_DETERMINISTIC (check capabilities.hasDeterministic after load); other carts get the fixed clock but keep their own entropy."),
     },
     safeTool(doLoadMedia),
   );
