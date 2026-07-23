@@ -67,6 +67,21 @@ wasmcart debug ABI publishes + romdev repins; until then they feature-detect
 and the regression harness's 'debug' checkpoints require that build. 'frameHash'
 and 'memory' checkpoints work today on every host.
 
+- **wasmcart repinned to ^0.4.0** — the debug ABI published, so the named-debug
+  ops and 'debug' regression checkpoints above are LIVE, not inert.
+
+- **FIX: input never reached wasmcart carts.** `WasmcartHost._padFromInput`
+  emitted named 0/1 button fields, but `CartHost._writePads` expects
+  `{connected, buttons: <BUTTON bitmask>, leftX..rightTrigger}` and ZEROES any
+  pad without `connected` — so every romdev `input`/`setInput` call read as a
+  disconnected pad. Pads now translate to the real shape (bitmask from
+  wasmcart's exported BUTTON map, analog + trigger passthrough) and pad 0 is
+  connected-idle from load, like a libretro port. Caught by the first REAL-cart
+  input test: the mock-host suite stayed green through the whole bug. New
+  `test/fixtures/dbghello.wasc` (hello + WC_DEBUG_FIELDS, source + rebuild
+  recipe alongside) now covers input, named debug state, and regression
+  capture/check against an actual compiled cart.
+
 ## 0.103.0 — 2026-07-19
 
 **v0.98.0 feedback batch** (from a NES annotation session, shared
