@@ -13,7 +13,7 @@
 // which maps cleanly onto stepFrames + state.lastFrame. We drive its fixed-step
 // clock so frame N is reproducible (setFixedStep), matching how romdev steps a core.
 
-import { CartHost } from "wasmcart";
+import { CartHost, BUTTON } from "wasmcart";
 import { framebufferToRgba } from "romdev-core-host/framebuffer.js";
 import { framebufferToScreenshot } from "romdev-core-host/framebuffer-png.js";
 import { RETRO_PIXEL_FORMAT_XRGB8888 } from "romdev-core-host/retroConstants.js";
@@ -43,7 +43,10 @@ export class WasmcartHost {
     // Float32 per frame; we convert Float32→Int16 so the WAV encoder (Int16)
     // gets one shape regardless of what the cart emits.
     this.state = { lastFrame: null, audioRing: [], lastAudio: null };
-    this._inputPorts = [{}]; // per-port pad objects, applied each stepFrames
+    // Per-port pad objects, applied each stepFrames. Pad 0 starts connected
+    // and idle so carts that check pad.connected see a controller before the
+    // first setInput — the same contract as a libretro port.
+    this._inputPorts = [this._padFromInput({})];
     this.status = {
       loaded: false,
       platform: null,
@@ -124,15 +127,23 @@ export class WasmcartHost {
     return this.status;
   }
 
-  /** Translate romdev's setInput vocabulary into a wasmcart pad object. */
+  /** Translate romdev's setInput vocabulary into the pad object
+   *  CartHost._writePads expects: {connected, buttons: <BUTTON bitmask>,
+   *  leftX..rightTrigger}. A pad without `connected` is ZEROED by CartHost,
+   *  so every translated pad is connected — like a libretro port. */
   _padFromInput(input) {
-    if (!input || typeof input !== "object") return {};
-    const pad = { up: 0, down: 0, left: 0, right: 0, a: 0, b: 0, x: 0, y: 0,
-                  l: 0, r: 0, start: 0, select: 0 };
-    for (const key of Object.keys(pad)) {
-      if (input[key]) pad[key] = 1;
+    const src = input && typeof input === "object" ? input : {};
+    let buttons = 0;
+    for (const [name, bit] of Object.entries(BUTTON)) {
+      if (src[name.toLowerCase()]) buttons |= bit;
     }
-    return pad;
+    return {
+      connected: true,
+      buttons,
+      leftX: src.leftX | 0, leftY: src.leftY | 0,
+      rightX: src.rightX | 0, rightY: src.rightY | 0,
+      leftTrigger: src.leftTrigger | 0, rightTrigger: src.rightTrigger | 0,
+    };
   }
 
   /**
