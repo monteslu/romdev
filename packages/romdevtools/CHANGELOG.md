@@ -21,6 +21,14 @@ romdev-core-runner → 0.2.2 (repinned; new `drawFpsOverlay` export).
   clamped 0..999). Keyboard help updated.
 - runRom also picked up the reused RGBA conversion buffer from 0.105.3
   (it was still allocating per tick).
+- **The agent can drive the counter too**: `playtest({op:'fps', show?})`
+  toggles/sets the on-screen counter (same state F3 flips — no separate
+  flags to fight over), `playtest({op:'open', fpsOverlay:true})` opens with
+  it visible, and op:'status' reports `fpsOverlay` alongside `perf`.
+- romdev-xgm2's own 5-test suite was ENOENT-broken since the
+  romdev→romdevtools rename (fixture reached into the dead packages/romdev/
+  tree; `npm test --workspaces` hid it behind the last workspace's summary).
+  Self-contained fixture now; the root `npm test` exit code is the gate.
 
 ## 0.105.3 — 2026-07-23
 

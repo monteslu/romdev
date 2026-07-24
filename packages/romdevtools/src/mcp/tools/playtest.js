@@ -146,7 +146,7 @@ export function humanCoDriveWarning(sessionKey) {
 
 export function registerPlaytestTools(server, z, sessionKey) {
   // op:'open' — open (or reuse) the SDL window for this session.
-  async function ptOpen({ scale = 3, title, aspect = "tv" }) {
+  async function ptOpen({ scale = 3, title, aspect = "tv", fpsOverlay = false }) {
       const host = getHost(sessionKey);
       const loadedMediaPath = host.status?.mediaPath ?? null;
       // No env-var preflight here — the GROUND-TRUTH "is there a real display?"
@@ -185,6 +185,7 @@ export function registerPlaytestTools(server, z, sessionKey) {
           scale,
           title,
           aspect,
+          fpsOverlay,
           autoCheckpointPath,
         });
         session.autoCheckpointPath = autoCheckpointPath;
@@ -366,6 +367,7 @@ export function registerPlaytestTools(server, z, sessionKey) {
         // presentMs SDL render, audioQueuedMs SDL queue depth). This is the
         // "is it actually slow, and WHERE" readout.
         ...(session.perf ? { perf: session.perf } : {}),
+        fpsOverlay: session.fpsOverlay ?? false,
         ...(matches ? {} : {
           hint: "The active host diverged from the playtest window (a build({output:'run'})/" +
             "loadMedia swapped it). frame({op:'screenshot'}) now shows the active host, NOT " +
@@ -433,6 +435,25 @@ export function registerPlaytestTools(server, z, sessionKey) {
       };
   }
 
+  // op:'fps' — agent-side control of the on-screen fps counter (same state F3 flips).
+  function ptFps({ show }) {
+      if (!reconcileSession(sessionKey)) {
+        return jsonContent({
+          fpsOverlay: null,
+          note: "No playtest window open for this session — playtest({op:'open'}) first (pass fpsOverlay:true to open with the counter on). The title bar always shows fps while a window is open.",
+        });
+      }
+      const session = sessions.get(sessionKey);
+      const value = session.setFpsOverlay(show ?? !session.fpsOverlay);
+      return jsonContent({
+        fpsOverlay: value,
+        perf: session.perf ?? null,
+        note: value
+          ? "On-screen fps counter is ON (top-left; the human can also toggle it with F3). Title bar shows fps regardless."
+          : "On-screen fps counter is OFF. Title bar still shows fps; playtest({op:'status'}).perf has the stage breakdown.",
+      });
+  }
+
   server.tool(
     "playtest",
     "Show the loaded ROM to a HUMAN in a native SDL window, one tool keyed by `op`. For your OWN build-iteration " +
@@ -453,15 +474,20 @@ export function registerPlaytestTools(server, z, sessionKey) {
     "• op:'status' — is a window open, what ROM/frame it shows, and `activeHostMatchesWindow` (false = a build/" +
     "loadMedia swapped the active host, so frame({op:'screenshot'}) no longer shows what the human sees — use op:'framebuffer').\n" +
     "• op:'framebuffer' — capture the EXACT framebuffer the human's window shows (the window's own host, not the " +
-    "active host frame({op:'screenshot'}) reads). `path` (default) or `inline:true`.",
+    "active host frame({op:'screenshot'}) reads). `path` (default) or `inline:true`.\n" +
+    "• op:'fps' — show/hide the on-screen fps counter in the human's window (`show:true|false`, omit to toggle; " +
+    "same state as the F3 hotkey). The title bar always shows live fps, and op:'status' returns `perf` " +
+    "(fps/tickHz + per-stage ms) for YOUR diagnosis — use op:'fps' when the HUMAN should see the number.",
     {
-      op: z.enum(["open", "stop", "status", "framebuffer"]).default("open")
-        .describe("open=show the ROM to a human (default); stop=close this session's window; status=is it open + does it match the active host; framebuffer=capture what the human sees."),
+      op: z.enum(["open", "stop", "status", "framebuffer", "fps"]).default("open")
+        .describe("open=show the ROM to a human (default); stop=close this session's window; status=is it open + does it match the active host; framebuffer=capture what the human sees; fps=show/hide the on-screen fps counter."),
       scale: z.number().int().min(1).max(8).default(3).describe("op:open — integer upscale factor for the window."),
       title: z.string().optional().describe("op:open — window title."),
       aspect: z.enum(["fb", "tv", "core"]).default("tv").describe("op:open — initial window shape. 'tv' (DEFAULT) = how a player saw the hardware (4:3 consoles; native LCD for handhelds — GB/GBC 10:9 not stretched, GG ~6:5, Lynx 4:3, GBA 3:2). 'fb' = raw framebuffer × scale (square pixels, dev geometry). 'core' honors the core's display_aspect_ratio. NOTE: 'tv' reads the platform from the running host, so pass the correct `platform` to loadMedia (gbc not gb for a CGB game) or it falls back to the fb aspect."),
       path: z.string().optional().describe("op:framebuffer — absolute path to write the PNG to. Required unless inline:true."),
       inline: z.boolean().default(false).describe("op:framebuffer — return the image in the response instead of writing to disk."),
+      fpsOverlay: z.boolean().default(false).describe("op:open — start with the on-screen fps counter visible (the title bar shows fps either way; F3 and op:'fps' toggle it later)."),
+      show: z.boolean().optional().describe("op:fps — true=show the counter, false=hide it; omit to toggle."),
     },
     safeTool(async (args) => {
       switch (args.op ?? "open") {
@@ -472,6 +498,7 @@ export function registerPlaytestTools(server, z, sessionKey) {
           if (!args.inline && !args.path) throw new Error("playtest({op:'framebuffer'}): pass `path` (where to write the PNG) or `inline:true`.");
           return await ptFramebuffer(args);
         }
+        case "fps":         return ptFps(args);
         default: throw new Error(`playtest: unknown op '${args.op}'`);
       }
     }),
