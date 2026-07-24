@@ -58,6 +58,17 @@ test("real cart: capabilities report hasDebugState=true", async () => {
   assert.equal(host.getCapabilities().hasDebugState, true);
 });
 
+test("real cart: status reports a real displayAspect after load (playtest window sizing)", async () => {
+  // Regression: WasmcartHost left displayAspect at its 0 init forever, and the
+  // playtest window computes width = round(height * aspect) — a 0 aspect opened
+  // a 0-width SDL window ("invalid width"), misreported as a display problem.
+  const host = await loadDbg();
+  const { fbWidth, fbHeight, displayAspect } = host.getStatus();
+  assert.ok(fbWidth > 0 && fbHeight > 0, "fb dims settled at load");
+  assert.ok(displayAspect > 0, "displayAspect is a real ratio, not the 0 init");
+  assert.equal(displayAspect, fbWidth / fbHeight, "cart pixels are square: aspect = fb ratio");
+});
+
 // ── the wasm tool over the real debug ABI ────────────────────────────────────
 
 test("real cart: wasm op:debugState lists the cart's fields with values", async () => {

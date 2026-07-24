@@ -10,6 +10,7 @@ export {
   STICK_DEADZONE,
   bitToName,
   tvAspectFor,
+  effectiveAspect,
   letterbox,
   framebufferToRgba,
 } from "./present.js";

@@ -19,6 +19,7 @@ import {
   STICK_DEADZONE,
   bitToName,
   tvAspectFor,
+  effectiveAspect,
   letterbox,
   framebufferToRgba,
 } from "./present.js";
@@ -89,8 +90,8 @@ export async function runRom(rom, opts = {}) {
   let winInitH = fbHeight * scale;
   if (aspectMode === "tv" || aspectMode === "core") {
     const aspect = aspectMode === "tv"
-      ? tvAspectFor(host.status.platform ?? platform, host.status.displayAspect ?? fbWidth / fbHeight)
-      : (host.status.displayAspect ?? fbWidth / fbHeight);
+      ? tvAspectFor(host.status.platform ?? platform, effectiveAspect(host.status.displayAspect, fbWidth, fbHeight))
+      : effectiveAspect(host.status.displayAspect, fbWidth, fbHeight);
     winInitH = fbHeight * scale;
     winInitW = Math.round(winInitH * aspect);
   }
@@ -223,9 +224,9 @@ export async function runRom(rom, opts = {}) {
       const rgba = framebufferToRgba(fb);
       let targetAspect;
       if (aspectMode === "tv") {
-        targetAspect = tvAspectFor(host.status.platform ?? platform, host.status.displayAspect ?? fb.width / fb.height);
+        targetAspect = tvAspectFor(host.status.platform ?? platform, effectiveAspect(host.status.displayAspect, fb.width, fb.height));
       } else if (aspectMode === "core") {
-        targetAspect = host.status.displayAspect ?? fb.width / fb.height;
+        targetAspect = effectiveAspect(host.status.displayAspect, fb.width, fb.height);
       } else {
         targetAspect = fb.width / fb.height;
       }
