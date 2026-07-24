@@ -4,6 +4,19 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.105.2 — 2026-07-23
+
+FIX (release mechanics of the 0.105.1 fix): 0.105.1 added the
+`effectiveAspect` export to romdev-core-runner's present.js WITHOUT bumping
+that package's version, and romdevtools pins the runner exactly. A fresh
+install therefore paired romdevtools 0.105.1 with the registry's
+romdev-core-runner 0.1.1 (which predates the export), and opening the
+playtest window failed with "romdev-core-runner does not provide an export
+named effectiveAspect". Monorepo/workspace checkouts never saw it (the
+workspace copy links in-tree). Now: **romdev-core-runner 0.2.0** published
+with the export, romdevtools repinned to it. No code changes beyond the
+version/pin; the 0.105.1 window fix itself was correct.
+
 ## 0.105.1 — 2026-07-23
 
 FIX: the playtest window zero-sized itself for wasmcart/jsgame carts: SDL
