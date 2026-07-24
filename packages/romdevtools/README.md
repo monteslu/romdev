@@ -30,7 +30,7 @@ This package contains all the JavaScript — the tool surface, the WASM emulator
 
 - **`bin`**
   - `romdevtools` → the tool server (`src/mcp/server.js`). Serves the HTTP tool routes, `/documentation`, `/skills/romdev/SKILL.md`, and an MCP endpoint on `http://127.0.0.1:7331` by default (`PORT` / `HOST` to override). `romdev-mcp` is kept as an alias of the same command.
-  - `romdevtools-cli` → a smoke/utility CLI, incl. `romdevtools-cli play <rom>` (SDL window, hot-plug controllers).
+  - `romdevtools-cli` → a smoke/utility CLI, incl. `romdevtools-cli play <rom>` (SDL window, hot-plug controllers, live fps in the title bar).
 - **`src/`** — the server, MCP tools, WASM host, core/toolchain resolvers, per-platform memory interpretation, and bundled library/runtime source (cc65 libs, PVSnesLib, SGDK, libtonc/libgba, hUGEDriver, …) that forked projects link against.
 - **`examples/`** — per-platform example games (complete, working, forkable) and minimal references.
 
