@@ -14,6 +14,7 @@ import {
   STICK_DEADZONE,
   bitToName,
   tvAspectFor,
+  effectiveAspect,
   letterbox as runnerLetterbox,
   framebufferToRgba,
 } from "romdev-core-runner";
@@ -317,8 +318,8 @@ export async function playtest(args) {
   let winInitH = fbHeight * scale;
   if (aspectMode === "tv" || aspectMode === "core") {
     const aspect = aspectMode === "tv"
-      ? tvAspectFor(host.status.platform, host.status.displayAspect ?? fbWidth / fbHeight)
-      : (host.status.displayAspect ?? fbWidth / fbHeight);
+      ? tvAspectFor(host.status.platform, effectiveAspect(host.status.displayAspect, fbWidth, fbHeight))
+      : effectiveAspect(host.status.displayAspect, fbWidth, fbHeight);
     winInitH = fbHeight * scale;
     winInitW = Math.round(winInitH * aspect);
   }
@@ -785,9 +786,9 @@ export async function playtest(args) {
         const fbH = fb.height;
         let targetAspect;
         if (aspectMode === "tv") {
-          targetAspect = tvAspectFor(h.status.platform, h.status.displayAspect ?? fbW / fbH);
+          targetAspect = tvAspectFor(h.status.platform, effectiveAspect(h.status.displayAspect, fbW, fbH));
         } else if (aspectMode === "core") {
-          targetAspect = h.status.displayAspect ?? fbW / fbH;
+          targetAspect = effectiveAspect(h.status.displayAspect, fbW, fbH);
         } else {
           targetAspect = fbW / fbH;
         }

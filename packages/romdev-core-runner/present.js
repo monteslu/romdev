@@ -97,8 +97,31 @@ export function tvAspectFor(platform, displayAspect) {
     case "gba":         return 3 / 2;    // GBA LCD 240×160 native
     case "lynx":        return 102 / 81; // Lynx LCD pixel aspect (4:3 displayed)
     case "gametank":    return 4 / 3;    // composite out to a 4:3 display
-    default:            return displayAspect;
+    // Unknown platform (wasmcart/jsgame/newer cores): trust the reported
+    // aspect only if it's a real ratio — hosts that don't know theirs report
+    // 0, and a 0 aspect sizes a 0-width window (SDL "invalid width").
+    default:            return Number.isFinite(displayAspect) && displayAspect > 0
+      ? displayAspect
+      : 4 / 3;
   }
+}
+
+/**
+ * A usable aspect ratio from host status. `status.displayAspect ?? fbW/fbH`
+ * is a trap: hosts that don't know their aspect report 0, and nullish
+ * coalescing keeps the 0 — which then sizes a zero-width window. Prefer the
+ * reported aspect only when it's a real positive ratio, else the
+ * framebuffer's own shape, else 4:3 as the last resort (fb dims can be 0
+ * before a cart settles its resolution).
+ * @param {number | null | undefined} statusAspect host.status.displayAspect
+ * @param {number} fbWidth
+ * @param {number} fbHeight
+ */
+export function effectiveAspect(statusAspect, fbWidth, fbHeight) {
+  if (Number.isFinite(statusAspect) && statusAspect > 0) return statusAspect;
+  const fbAspect = fbWidth / fbHeight;
+  if (Number.isFinite(fbAspect) && fbAspect > 0) return fbAspect;
+  return 4 / 3;
 }
 
 /**

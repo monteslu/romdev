@@ -4,6 +4,32 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.105.1 — 2026-07-23
+
+FIX: the playtest window zero-sized itself for wasmcart/jsgame carts: SDL
+threw "invalid width" and the tool misreported it as "SDL initialized but
+couldn't get a display". Root cause: `WasmcartHost`/`JsGameHost` left
+`status.displayAspect` at its 0 init forever, every window-sizing site used
+`displayAspect ?? fbW/fbH` (nullish coalescing keeps the 0), `tvAspectFor`'s
+unknown-platform default returned it verbatim, and the window opened at
+`width = round(height * 0) = 0`. Not OS-specific; it first tripped on macOS
+only because that is where a wasmcart cart first met the playtest window.
+
+- Both native hosts now report the real framebuffer ratio once dimensions
+  settle (cart pixels are square, so aspect = fbWidth/fbHeight), kept current
+  on resolution changes.
+- New `effectiveAspect(statusAspect, fbW, fbH)` guard in romdev-core-runner's
+  present.js, used at all six sizing/letterbox sites (playtest.js and
+  runRom.js); `tvAspectFor`'s default now refuses non-finite/non-positive
+  values instead of passing them through.
+- The playtest tool's catch-all SDL error no longer asserts a display/desktop
+  problem for arbitrary errors: the desktop-session advice appears only when
+  the SDL message actually names a display/driver failure, otherwise the
+  quoted SDL error itself is presented as the fault to report.
+- Tests: present-aspect-guard.test.js (tvAspectFor/effectiveAspect truth
+  table) plus a real-cart displayAspect regression in
+  wasmcart-real-cart.test.js.
+
 ## 0.105.0 — 2026-07-23
 
 **wasmcart harness, the rest of the plan — deterministic replay, debug events,

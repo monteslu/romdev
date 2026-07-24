@@ -146,6 +146,10 @@ export class WasmcartHost {
     this.stepFrames(1);
     this.status.fbWidth = this.state.lastFrame?.width || 0;
     this.status.fbHeight = this.state.lastFrame?.height || 0;
+    // A cart's display IS its framebuffer (square pixels, no CRT stretch) —
+    // report the real ratio; a 0 here zero-sizes the playtest window.
+    this.status.displayAspect = this.status.fbHeight > 0
+      ? this.status.fbWidth / this.status.fbHeight : 0;
     return this.status;
   }
 
@@ -228,6 +232,7 @@ export class WasmcartHost {
       this.state.lastAudio = r.audio || null;
       this.status.fbWidth = r.width;
       this.status.fbHeight = r.height;
+      this.status.displayAspect = r.height > 0 ? r.width / r.height : 0;
     }
     return n;
   }

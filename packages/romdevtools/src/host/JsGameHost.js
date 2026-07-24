@@ -141,6 +141,9 @@ export class JsGameHost {
     };
     this.status.fbWidth = f.width;
     this.status.fbHeight = f.height;
+    // The canvas IS the display (square pixels) — report the real ratio; a 0
+    // here zero-sizes the playtest window.
+    this.status.displayAspect = f.height > 0 ? f.width / f.height : 0;
     return n;
   }
 

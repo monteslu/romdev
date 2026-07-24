@@ -231,16 +231,26 @@ export function registerPlaytestTools(server, z, sessionKey) {
             fix + "This is a one-time native-addon fix, NOT a display/desktop " +
             "issue." + headlessNote;
         } else {
-          // A genuine SDL init / display failure (no video device / no desktop
-          // session). The desktop-session advice is the right call here.
+          // Anything else SDL threw. Do NOT overwrite the quoted error with a
+          // confident display/desktop diagnosis — "invalid width" (a romdev
+          // window-sizing bug) wore the "couldn't get a display" costume once
+          // and sent the human debugging the wrong layer. The quoted SDL
+          // message is the ground truth; desktop-session advice is offered as
+          // the usual cause only when the error actually smells like one.
           reason = "sdl-error";
+          const msg = e?.message ?? String(e);
+          const smellsLikeDisplay = /display|video|driver|screen|desktop|wayland|x11|xdg|connection/i.test(msg);
           message =
-            "Couldn't open the SDL playtest window: " + (e?.message ?? String(e)) +
-            ". SDL initialized but couldn't get a display. This usually means the " +
-            "server has no access to a logged-in desktop session — e.g. it was " +
-            "spawned as an MCP subprocess by your agent host, or runs over plain " +
-            "SSH/headless. The reliable fix: run the server yourself in a terminal " +
-            "inside your desktop session, then connect your agent to it." +
+            "Couldn't open the SDL playtest window: " + msg + "." +
+            (smellsLikeDisplay
+              ? " This usually means the server has no access to a logged-in " +
+                "desktop session — e.g. it was spawned as an MCP subprocess by " +
+                "your agent host, or runs over plain SSH/headless. The reliable " +
+                "fix: run the server yourself in a terminal inside your desktop " +
+                "session, then connect your agent to it."
+              : " That quoted SDL error is the actual fault (not a display/" +
+                "desktop-session problem) — report it as a romdev bug if it " +
+                "isn't obviously environmental.") +
             headlessNote + " You can also open the built ROM in any standalone emulator.";
         }
         // Server-console breadcrumb (stderr) so a human at the terminal sees the
