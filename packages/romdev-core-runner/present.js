@@ -182,6 +182,66 @@ export function letterbox(winW, winH, targetAspect) {
   };
 }
 
+// 3x5 bitmap digits for the on-window fps counter (row bit patterns, MSB = left).
+const FPS_DIGITS = [
+  [0b111, 0b101, 0b101, 0b101, 0b111], // 0
+  [0b010, 0b110, 0b010, 0b010, 0b111], // 1
+  [0b111, 0b001, 0b111, 0b100, 0b111], // 2
+  [0b111, 0b001, 0b111, 0b001, 0b111], // 3
+  [0b101, 0b101, 0b111, 0b001, 0b001], // 4
+  [0b111, 0b100, 0b111, 0b001, 0b111], // 5
+  [0b111, 0b100, 0b111, 0b101, 0b111], // 6
+  [0b111, 0b001, 0b010, 0b010, 0b010], // 7
+  [0b111, 0b101, 0b111, 0b101, 0b111], // 8
+  [0b111, 0b101, 0b111, 0b001, 0b111], // 9
+];
+
+/**
+ * Draw an fps counter into the top-left of an RGBA frame buffer (in place,
+ * after framebufferToRgba, before the window blit). Green digits on a black
+ * backing box, sized relative to the framebuffer so it reads the same on a
+ * 160x144 handheld and a 1280x720 wasmcart cart. Pure pixel writes — no
+ * fonts, no allocations.
+ * @param {Buffer|Uint8Array} rgba RGBA32 frame (width*height*4 bytes)
+ * @param {number} width frame width in pixels
+ * @param {number} height frame height in pixels
+ * @param {number} fps value to display (clamped to 0..999)
+ */
+export function drawFpsOverlay(rgba, width, height, fps) {
+  const s = Math.max(1, Math.round(height / 120)); // pixel scale
+  const text = String(Math.max(0, Math.min(999, Math.round(fps))));
+  const pad = s;
+  const boxW = pad * 2 + text.length * 4 * s - s; // digits are 3 wide + 1 gap
+  const boxH = pad * 2 + 5 * s;
+  const x0 = 2, y0 = 2;
+  for (let y = 0; y < boxH && y0 + y < height; y++) {
+    for (let x = 0; x < boxW && x0 + x < width; x++) {
+      const d = ((y0 + y) * width + (x0 + x)) * 4;
+      rgba[d] = 0; rgba[d + 1] = 0; rgba[d + 2] = 0; rgba[d + 3] = 0xff;
+    }
+  }
+  for (let i = 0; i < text.length; i++) {
+    const glyph = FPS_DIGITS[text.charCodeAt(i) - 48];
+    if (!glyph) continue;
+    const gx = x0 + pad + i * 4 * s;
+    const gy = y0 + pad;
+    for (let row = 0; row < 5; row++) {
+      for (let col = 0; col < 3; col++) {
+        if (!((glyph[row] >> (2 - col)) & 1)) continue;
+        for (let sy = 0; sy < s; sy++) {
+          for (let sx = 0; sx < s; sx++) {
+            const px = gx + col * s + sx;
+            const py = gy + row * s + sy;
+            if (px >= width || py >= height) continue;
+            const d = (py * width + px) * 4;
+            rgba[d] = 0x40; rgba[d + 1] = 0xff; rgba[d + 2] = 0x40; rgba[d + 3] = 0xff;
+          }
+        }
+      }
+    }
+  }
+}
+
 /** Convert a libretro framebuffer (any pixel format) to RGBA32 for the window
  *  blit. (The GL/HW-render RGBA path forces alpha=255 — the GL render target
  *  leaves alpha=0, which SDL would composite as a black window.)

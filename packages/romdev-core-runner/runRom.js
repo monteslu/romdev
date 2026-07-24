@@ -150,6 +150,10 @@ export async function runRom(rom, opts = {}) {
   const heldKeys = new Set();
   let running = true;
   let frameCount = 0;
+  // Title-bar fps window + reused RGBA conversion buffer (no per-tick alloc).
+  let fpsFrames = 0, fpsWinStart = 0;
+  /** @type {Buffer|null} */
+  let rgbaScratch = null;
   let closeResolver = null;
   const closedPromise = new Promise((r) => { closeResolver = r; });
 
@@ -196,6 +200,16 @@ export async function runRom(rom, opts = {}) {
 
   function tick() {
     if (!running || window.destroyed) { stop(); return; }
+    // Title-bar fps (1/s): what the machine actually achieves, not the target.
+    {
+      const now = performance.now();
+      if (!fpsWinStart) fpsWinStart = now;
+      else if (now - fpsWinStart >= 1000) {
+        const fps = Math.round((fpsFrames * 1000) / (now - fpsWinStart));
+        fpsFrames = 0; fpsWinStart = now;
+        try { window.setTitle(`${title} | ${fps} fps`); } catch { /* mid-teardown */ }
+      }
+    }
     const outQuit = { quit: false };
     const port0 = {};
     const port1 = {};
@@ -208,7 +222,9 @@ export async function runRom(rom, opts = {}) {
     host.setInput({ ports: [port0, port1] });
 
     try {
-      frameCount += host.stepFrames(1);
+      const n = host.stepFrames(1);
+      frameCount += n;
+      fpsFrames += n;
     } catch (e) {
       log(`step error: ${e.message}`);
       stop();
@@ -218,7 +234,8 @@ export async function runRom(rom, opts = {}) {
     // Blit, aspect-correct into the current window size.
     try {
       const fb = host.getFramebuffer();
-      const rgba = framebufferToRgba(fb);
+      rgbaScratch = framebufferToRgba(fb, rgbaScratch);
+      const rgba = rgbaScratch;
       let targetAspect;
       if (aspectMode === "tv") {
         targetAspect = tvAspectFor(host.status.platform ?? platform, effectiveAspect(host.status.displayAspect, fb.width, fb.height));
