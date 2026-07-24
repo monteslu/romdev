@@ -360,6 +360,12 @@ export function registerPlaytestTools(server, z, sessionKey) {
         activeMediaPath: activeHost?.status?.mediaPath ?? null,
         activeFrameCount: activeHost?.status?.frameCount ?? null,
         activeHostMatchesWindow: matches,
+        // Live window perf (rolling 1s): fps = emulated frames/sec (60 = full
+        // speed; lower = the machine can't keep up), tickHz = render passes/sec,
+        // and per-stage EMAs (stepMs emulation, convertMs framebuffer→RGBA,
+        // presentMs SDL render, audioQueuedMs SDL queue depth). This is the
+        // "is it actually slow, and WHERE" readout.
+        ...(session.perf ? { perf: session.perf } : {}),
         ...(matches ? {} : {
           hint: "The active host diverged from the playtest window (a build({output:'run'})/" +
             "loadMedia swapped it). frame({op:'screenshot'}) now shows the active host, NOT " +

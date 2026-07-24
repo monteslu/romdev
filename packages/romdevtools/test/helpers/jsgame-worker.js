@@ -36,6 +36,7 @@ async function runJsgame(gamePath) {
     platform: status.platform,
     fbWidth: status.fbWidth,
     fbHeight: status.fbHeight,
+    displayAspect: status.displayAspect,
     caps,
     stepped,
     frameCount: host.status.frameCount,

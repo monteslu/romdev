@@ -39,6 +39,10 @@ test("jsgame: load + capabilities + step + screenshot + input + JS introspection
   assert.equal(r.loaded, true);
   assert.equal(r.platform, "jsgame");
   assert.ok(r.fbWidth > 0 && r.fbHeight > 0, "reports a framebuffer size");
+  // Regression (0.105.1): displayAspect must be a real ratio once frames run —
+  // a 0 here zero-sized the playtest window ("invalid width").
+  assert.ok(r.displayAspect > 0, "reports a real displayAspect, not the 0 init");
+  assert.equal(r.displayAspect, r.fbWidth / r.fbHeight, "canvas pixels are square");
 
   // capabilities (native runtime: no emulator surface; JS introspection instead)
   assert.equal(r.caps.kind, "jsgame");

@@ -20,6 +20,7 @@ import {
   bitToName,
   tvAspectFor,
   effectiveAspect,
+  initialWindowSize,
   letterbox,
   framebufferToRgba,
 } from "./present.js";
@@ -86,15 +87,11 @@ export async function runRom(rom, opts = {}) {
   host.stepFrames(1);
   const first = host.getFramebuffer();
   const fbWidth = first.width, fbHeight = first.height;
-  let winInitW = fbWidth * scale;
-  let winInitH = fbHeight * scale;
-  if (aspectMode === "tv" || aspectMode === "core") {
-    const aspect = aspectMode === "tv"
-      ? tvAspectFor(host.status.platform ?? platform, effectiveAspect(host.status.displayAspect, fbWidth, fbHeight))
-      : effectiveAspect(host.status.displayAspect, fbWidth, fbHeight);
-    winInitH = fbHeight * scale;
-    winInitW = Math.round(winInitH * aspect);
-  }
+  const { width: winInitW, height: winInitH } = initialWindowSize({
+    fbWidth, fbHeight, scale, aspectMode,
+    platform: host.status.platform ?? platform,
+    displayAspect: host.status.displayAspect,
+  });
 
   // HW-render cores already own a GL context via native-gles; an accelerated
   // SDL window would open a second GL context on the same display and collide

@@ -15,6 +15,7 @@ import {
   bitToName,
   tvAspectFor,
   effectiveAspect,
+  initialWindowSize,
   letterbox as runnerLetterbox,
   framebufferToRgba,
 } from "romdev-core-runner";
@@ -269,7 +270,7 @@ export async function playtest(args) {
   /** Serialize the live host and write it to the checkpoint path atomically
    *  (temp + rename). Synchronous + best-effort: never throws into the tick. */
   function writeCheckpoint(h, reason) {
-    if (!checkpointPath || !h || !h.status?.loaded) return false;
+    if (!checkpointPath || !h || !h.status?.loaded || typeof h.serializeState !== "function") return false;
     try {
       const blob = h.serializeState();
       if (!blob || !blob.length) return false;
@@ -313,16 +314,12 @@ export async function playtest(args) {
   // Decide initial window size. In "tv" / "core" modes, scale by height
   // and let the chosen aspect dictate width — keeps vertical resolution
   // honest (you can still count scanlines) while applying horizontal
-  // stretch.
-  let winInitW = fbWidth * scale;
-  let winInitH = fbHeight * scale;
-  if (aspectMode === "tv" || aspectMode === "core") {
-    const aspect = aspectMode === "tv"
-      ? tvAspectFor(host.status.platform, effectiveAspect(host.status.displayAspect, fbWidth, fbHeight))
-      : effectiveAspect(host.status.displayAspect, fbWidth, fbHeight);
-    winInitH = fbHeight * scale;
-    winInitW = Math.round(winInitH * aspect);
-  }
+  // stretch. Shared + unit-tested in core-runner (the inline copy of this
+  // math is what opened a 0-width window when a host reported aspect 0).
+  const { width: winInitW, height: winInitH } = initialWindowSize({
+    fbWidth, fbHeight, scale, aspectMode,
+    platform: host.status.platform, displayAspect: host.status.displayAspect,
+  });
 
   // Open the window.
   //
@@ -480,6 +477,26 @@ export async function playtest(args) {
   /** @type {Uint8Array[]} */
   const rewindBuffer = [];
 
+  // Reused RGBA conversion buffer (a fresh 3.7MB Buffer.alloc per tick on a
+  // 1280x720 wasmcart cart is ~220MB/s of zeroing + GC churn — visible jank).
+  /** @type {Buffer|null} */
+  let rgbaScratch = null;
+
+  // Perf telemetry, surfaced via playtest({op:'status'}).perf so "the window
+  // feels slow" turns into numbers: emulated fps (frames stepped/sec, catch-up
+  // bursts included), render ticks/sec, and an EMA of what each tick stage
+  // costs. Cheap: two performance.now() reads per stage per tick.
+  const perf = {
+    fps: 0,             // emulated frames per wall second (60 = full speed)
+    tickHz: 0,          // render/present passes per wall second
+    stepMs: 0,          // EMA: emulation step burst per tick
+    convertMs: 0,       // EMA: framebuffer→RGBA conversion per tick
+    presentMs: 0,       // EMA: SDL render per tick
+    audioQueuedMs: null, // last SDL audio queue depth (null = no audio device)
+  };
+  let perfFrames = 0, perfTicks = 0, perfWinStart = 0;
+  const ema = (prev, v) => (prev === 0 ? v : prev + (v - prev) * 0.05);
+
   window.on("close", () => { stop(); });
   window.on("keyDown", (e) => {
     if (e.key === "escape") { stop(); return; }
@@ -579,6 +596,17 @@ export async function playtest(args) {
   function tick() {
     if (!running || window.destroyed) { stop(); return; }
     tickCount++;
+    // Roll the 1s perf window.
+    {
+      const now = performance.now();
+      if (!perfWinStart) perfWinStart = now;
+      else if (now - perfWinStart >= 1000) {
+        perf.fps = Math.round((perfFrames * 1000) / (now - perfWinStart));
+        perf.tickHz = Math.round((perfTicks * 1000) / (now - perfWinStart));
+        perfFrames = 0; perfTicks = 0; perfWinStart = now;
+      }
+      perfTicks++;
+    }
     // Resolve the session's CURRENT host this frame. A `runSource`/`loadMedia`
     // rebuild swapped it; we follow it so the window shows the latest build.
     // If there's transiently no host or no media loaded (mid-swap), skip this
@@ -708,7 +736,9 @@ export async function playtest(args) {
       // playback). The R-key rewind is a nicety, not worth that on the 3D engines —
       // pause + savestate still work for those. (Rewind buffer is playtest-only; it's
       // NOT part of the debug ABI, so dropping it on these cores changes nothing else.)
-      if (h.status?.loaded && !h.hwRender) {
+      // Hosts without savestates (wasmcart/jsgame) get no rewind buffer —
+      // checking the method beats throwing into an empty catch every tick.
+      if (h.status?.loaded && !h.hwRender && typeof h.serializeState === "function") {
         try {
           const snap = h.serializeState();
           rewindBuffer.push(snap);
@@ -737,6 +767,7 @@ export async function playtest(args) {
       // a constant low pitch) instead of stuttering — and the loop ALWAYS yields the
       // event loop promptly so the window stays responsive.
       let stepped = 0;
+      const tStep = performance.now();
       try {
         if (audio && deviceSampleRate > 0) {
           const bps = deviceSampleRate * 4; // stereo s16
@@ -765,13 +796,18 @@ export async function playtest(args) {
         log.error("[playtest] step error (skipping frame):", e.message);
         return;
       }
+      perf.stepMs = ema(perf.stepMs, performance.now() - tStep);
+      perfFrames += stepped;
       if (stepped > 0) frameCount++;
     }
 
     if (!window.destroyed) {
       try {
+        const tConvert = performance.now();
         const fb = h.getFramebuffer();
-        const rgba = framebufferToRgba(fb);
+        rgbaScratch = framebufferToRgba(fb, rgbaScratch);
+        const rgba = rgbaScratch;
+        perf.convertMs = ema(perf.convertMs, performance.now() - tConvert);
 
         // Letterbox: compute the largest rect with the *target* aspect
         // ratio that fits inside the (possibly-resized) window, centered.
@@ -804,10 +840,12 @@ export async function playtest(args) {
         const curH = window.pixelHeight || winPixelH;
         const { dstX, dstY, dstW, dstH } = letterbox(curW, curH, targetAspect);
 
+        const tPresent = performance.now();
         window.render(fbW, fbH, fbW * 4, "rgba32", rgba, {
           scaling: "nearest",
           dstRect: { x: dstX, y: dstY, width: dstW, height: dstH },
         });
+        perf.presentMs = ema(perf.presentMs, performance.now() - tPresent);
       } catch (e) {
         // A render throw usually means the window went away under us (the
         // SDL handle was freed without a 'close' event — compositor kill,
@@ -833,6 +871,7 @@ export async function playtest(args) {
       try {
         const bytesPerSecond = deviceSampleRate * 2 /* ch */ * 2 /* s16 */;
         const queuedMs = ((audio.queued ?? 0) / bytesPerSecond) * 1000;
+        perf.audioQueuedMs = Math.round(queuedMs);
         if (queuedMs < 250) {
           let total = 0;
           for (const buf of h.state.audioRing) total += buf.byteLength;
@@ -866,6 +905,9 @@ export async function playtest(args) {
     closed: closedPromise,
     get frameCount() { return frameCount; },
     get running() { return running; },
+    // Live perf readout (rolling 1s fps/tickHz + per-stage EMAs) — the answer
+    // to "the window feels slow, WHERE is the time going".
+    get perf() { return { ...perf }; },
     // Truth-probe for the underlying SDL window. `running` is our own flag
     // and can lag reality if the window dies without firing a 'close' event
     // (compositor kill, X/Wayland session loss, invalid handle). Callers

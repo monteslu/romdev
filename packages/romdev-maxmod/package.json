@@ -1,6 +1,6 @@
 {
   "name": "romdev-maxmod",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Pure-JS Maxmod soundbank compiler for GBA — a faithful port of devkitPro mmutil. Parses .xm/.mod/.it/.s3m and emits a Maxmod MAS soundbank (.bin + .h) you link into a GBA ROM and play with mmStart(). No native binary, no devkitPro.",
   "type": "module",
   "main": "src/index.js",
