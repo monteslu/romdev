@@ -4,6 +4,24 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.105.4 — 2026-07-23
+
+**fps ON the window, for the human** (0.105.3 gave the agent
+`playtest({op:'status'}).perf`; this puts it where the player is looking).
+romdev-core-runner → 0.2.2 (repinned; new `drawFpsOverlay` export).
+
+- **Title bar always shows live fps** — `"<game> | 60 fps"`, updated once a
+  second, in BOTH windows (romdev's playtest and core-runner's runRom, the
+  SDK/CLI tier). Zero render cost; it's the fps the machine actually
+  achieves, not the target.
+- **F3 toggles an on-screen counter** (playtest): green digits on a black
+  box, top-left, drawn into the frame right before the blit, sized relative
+  to the framebuffer. `drawFpsOverlay()` is pure pixel writes, unit-tested
+  (digits render, rest of the frame untouched, bounds-safe on tiny frames,
+  clamped 0..999). Keyboard help updated.
+- runRom also picked up the reused RGBA conversion buffer from 0.105.3
+  (it was still allocating per tick).
+
 ## 0.105.3 — 2026-07-23
 
 Tests for the 0.105.1 window fix at the level it actually broke, plus the

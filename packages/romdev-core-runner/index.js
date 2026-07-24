@@ -12,6 +12,7 @@ export {
   tvAspectFor,
   effectiveAspect,
   initialWindowSize,
+  drawFpsOverlay,
   letterbox,
   framebufferToRgba,
 } from "./present.js";

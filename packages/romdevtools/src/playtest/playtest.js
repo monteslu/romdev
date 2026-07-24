@@ -16,6 +16,7 @@ import {
   tvAspectFor,
   effectiveAspect,
   initialWindowSize,
+  drawFpsOverlay,
   letterbox as runnerLetterbox,
   framebufferToRgba,
 } from "romdev-core-runner";
@@ -166,6 +167,7 @@ Emulator hotkeys (RetroArch defaults):
   K                    Frame advance (step one frame while paused)
   R                    Rewind one frame (while paused)
   F2                   Save state (to slot)
+  F3                   Toggle on-screen fps counter (fps is always in the title bar)
   F4                   Load state (from slot)
 
 Gamepad: any SDL-recognized controller works. Physical-position mapping —
@@ -496,6 +498,9 @@ export async function playtest(args) {
   };
   let perfFrames = 0, perfTicks = 0, perfWinStart = 0;
   const ema = (prev, v) => (prev === 0 ? v : prev + (v - prev) * 0.05);
+  // On-window fps: always in the title bar (updated 1/s, zero render cost);
+  // F3 toggles a corner counter drawn into the frame for the human.
+  let fpsOverlay = false;
 
   window.on("close", () => { stop(); });
   window.on("keyDown", (e) => {
@@ -507,6 +512,7 @@ export async function playtest(args) {
       if (h) { h.status.paused ? h.resume() : h.pause(); }
       return;
     }
+    if (key === "f3") { fpsOverlay = !fpsOverlay; return; }
     if (key === "f2") {
       const h = getLiveHost();
       if (h && h.status?.loaded) {
@@ -604,6 +610,8 @@ export async function playtest(args) {
         perf.fps = Math.round((perfFrames * 1000) / (now - perfWinStart));
         perf.tickHz = Math.round((perfTicks * 1000) / (now - perfWinStart));
         perfFrames = 0; perfTicks = 0; perfWinStart = now;
+        // Title-bar readout — the human's always-on fps display.
+        try { window.setTitle(`${title} | ${perf.fps} fps`); } catch { /* window mid-teardown */ }
       }
       perfTicks++;
     }
@@ -808,6 +816,7 @@ export async function playtest(args) {
         rgbaScratch = framebufferToRgba(fb, rgbaScratch);
         const rgba = rgbaScratch;
         perf.convertMs = ema(perf.convertMs, performance.now() - tConvert);
+        if (fpsOverlay) drawFpsOverlay(rgba, fb.width, fb.height, perf.fps);
 
         // Letterbox: compute the largest rect with the *target* aspect
         // ratio that fits inside the (possibly-resized) window, centered.
