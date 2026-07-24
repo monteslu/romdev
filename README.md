@@ -41,7 +41,7 @@ Every capability is exposed as a tool, so a coding agent can drive the whole loo
 
 ## Supported systems — pick your platform
 
-Eighteen consoles/computers, oldest → newest — fifteen 2D systems (including the open-hardware GameTank) plus three 3D consoles (N64, PlayStation, Dreamcast) — plus the **PICO-8** fantasy console (its own tier, listed after the 3D consoles). They vary enormously in how hard a game is to make and how hard an existing game is to hack. **Build** = write code → compile → run. **Hack** = modify an existing commercial ROM (find data → patch → reinsert). A system can be easy on one and hard on the other. (Difficulty is rated *as it feels through romdev today* — see the note under the table; it gets easier as the tooling improves.)
+Eighteen consoles/computers, oldest → newest — fifteen 2D systems (including the open-hardware GameTank) plus three 3D consoles (N64, PlayStation, Dreamcast) — plus the **PICO-8** fantasy console and the two **native game runtimes** (wasmcart, jsgame), each its own tier after the 3D consoles. They vary enormously in how hard a game is to make and how hard an existing game is to hack. **Build** = write code → compile → run. **Hack** = modify an existing commercial ROM (find data → patch → reinsert). A system can be easy on one and hard on the other. (Difficulty is rated *as it feels through romdev today* — see the note under the table; it gets easier as the tooling improves.)
 
 | System | Year | Languages (toolkit) | Build a game | Romhack a game | Best for |
 |---|---|---|---|---|---|
@@ -75,6 +75,13 @@ The **PICO-8** fantasy console is its own tier again — not a hardware machine 
 |---|---|---|---|---|---|
 | **PICO-8** | 2015 | Lua (FAKE-08) | 🟢 Easiest | 🟢 Easy | The gentlest on-ramp: Lua carts are plain text, so "build" is packaging and "hack" is editing source. Huge community library. |
 
+The two **native game runtimes** are the newest tier — not emulated hardware but native game formats driven through the *same* run/see/drive/debug loop (`loadMedia` → `frame` → `input` → `playtest`). Here romdev is the **harness, not the compiler**: you bring your own toolchain, `pack({target:'wasc'|'jsgame'})` packages the distributable, and the deliverable is the exact artifact you debugged. Emulator-only tools (cpuState, disasm, memory regions) report *not-applicable* via a capability descriptor; in their place you get WASM/V8 introspection an emulator can't offer.
+
+| System | Year | Language (toolkit) | Build a game | "Hack" a cart | Best for |
+|---|---|---|---|---|---|
+| **wasmcart** | 2026 | any language that targets WASM — C, C++, Rust, Zig, mruby, … (`wc_cart.h` ABI) | 🟢 Easy | — | Ship the same `.wasc` you debugged. The harness adds deterministic replay (`loadMedia({deterministicSeed})`), a debug-event timeline (`wasm({op:'events'})`), named debug state, absolute pointer input for mouse-UI carts, conformance verdicts ("won't load, why"), and regression goldens. |
+| **jsgame** | 2024 | JavaScript (canvas / WebGL2) | 🟢 Easy | — | The web-game developer's on-ramp: run a JS canvas/WebGL game like a cart — screenshots, scripted input, deterministic frame-stepping — plus V8 introspection (read the game's live globals). |
+
 **Difficulty legend:** 🟢 Easy · 🟡 Medium · 🟠 Hard · 🔴 Hardest. **Build** ratings come from an agent that actually shipped games across the lineup; **Hack** ratings are for text/data edits (a `—` means no romhack data yet — it's CPU-and-game-dependent, and any game using custom compression jumps to Hard regardless of system).
 
 The **RE analysis engine** (control-flow graphs, cross-references, function detection, and a Ghidra decompiler) works on **all 18 systems** — including the 3D consoles' MIPS R3000/R4300 and SH-4 — regardless of the Hack rating above; the rating reflects how hard the *data* is to edit, not whether the *code* can be analyzed. Decompiler readability tracks the CPU: excellent on the 32-bit ARM (GBA) and 68000 (Genesis), good on the MIPS/SH-4 3D CPUs and Z80, down to rough on the 8-bit 6502 family. (The byte-exact *rebuildable-project* disassembler — `disasm({target:'project'})` — covers the 15 classic platforms, and **`build({output:'reassemble'})` rebuilds any of them into a byte-identical ROM in one call**; the 3D consoles get analysis/decompile, not full reassembly yet.)
@@ -106,6 +113,10 @@ Every platform has a working core, ready-made starter projects, and **5 genre sc
 | Nintendo 64 | parallel_n64 (glide64, **GPU**) | mips-gcc (C) | AI / RSP | — |
 | PlayStation | beetle_psx_hw (**GPU**) | mips-gcc (C; PSn00bSDK) | SPU | — |
 | Dreamcast | flycast (**GPU**) | sh-gcc (C) | AICA | — |
+| wasmcart | CartHost (native WASM host — no emulator) | bring-your-own WASM toolchain (`wc_cart.h`) | 48 kHz PCM ring (`wc_audio` / `wc_pcm_mixer`) | — |
+| jsgame | rungame (native V8 host — no emulator) | JavaScript (canvas / WebGL2) | game's own WebAudio graph (not captured in-harness yet) | — |
+
+(The two native-runtime rows are the harness tier: no scaffolds and no bundled compiler — `pack({target:'wasc'|'jsgame'})` packages a source dir you built with your own toolchain.)
 
 The `platformer` scaffold side-scrolls (hardware camera + per-platform column streaming) on every platform except NES and the Atari 2600 — both single-screen, since neither has hardware background scroll.
 
