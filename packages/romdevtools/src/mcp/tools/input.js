@@ -237,7 +237,12 @@ export function registerInputTools(server, z, sessionKey) {
     "when ITS code polls; re-apply immediately before the consuming stepFrames and verify via the held-buttons RAM " +
     "byte, not this echo.",
     {
-      op: z.enum(["set", "press", "sequence", "navigate", "layout", "pressKey", "typeText", "joyport"]).describe("set/hold buttons; press one button; run a sequence; navigate a menu; get the input layout. C64-ONLY: pressKey (press a C64 KEYBOARD key — F1/Return/Space/Run-Stop — many C64 games need these to start, joystick alone can't); typeText (feed a string into the C64 keyboard buffer — LOAD/RUN/filenames); joyport (get/set which C64 joystick port the pad drives, 1 or 2; default 2)."),
+      op: z.enum(["set", "press", "sequence", "navigate", "layout", "pressKey", "typeText", "joyport", "pointer"]).describe("set/hold buttons; press one button; run a sequence; navigate a menu; get the input layout. WASMCART: pointer (absolute mouse/touch — position the cursor at an exact {x,y} and click; for carts that declare FLAG_POINTER). C64-ONLY: pressKey/typeText/joyport."),
+      // pointer (wasmcart absolute cursor)
+      x: z.number().int().optional().describe("op=pointer: cursor X in cart pixels."),
+      y: z.number().int().optional().describe("op=pointer: cursor Y in cart pixels."),
+      left: z.boolean().optional().describe("op=pointer: hold the left/primary mouse button."),
+      right: z.boolean().optional().describe("op=pointer: hold the right/secondary mouse button."),
       // set
       ports: z.array(port).min(1).max(2).optional().describe("op=set: per-port input. [{a:true,right:true}] holds A+Right on port 0."),
       // press
@@ -259,6 +264,13 @@ export function registerInputTools(server, z, sessionKey) {
         case "set": {
           if (!args.ports) throw new Error("input({op:'set'}): `ports` is required.");
           return attachObserverFrame(jsonContent(inputSetCore(args, sessionKey)), getHost(sessionKey), "input set");
+        }
+        case "pointer": {
+          const host = getHost(sessionKey);
+          if (typeof host?.setInput !== "function") throw new Error("input({op:'pointer'}): no host loaded.");
+          if (args.x == null || args.y == null) throw new Error("input({op:'pointer'}): `x` and `y` are required.");
+          host.setInput({ pointer: { x: args.x, y: args.y, left: !!args.left, right: !!args.right, active: true } });
+          return attachObserverFrame(jsonContent({ pointer: { x: args.x, y: args.y, left: !!args.left, right: !!args.right } }), host, `pointer ${args.x},${args.y}`);
         }
         case "press": {
           if (!args.button) throw new Error("input({op:'press'}): `button` is required.");
