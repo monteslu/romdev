@@ -180,6 +180,14 @@ export class WasmcartHost {
     } else {
       this._inputPorts = [this._padFromInput(input)];
     }
+    // Absolute pointer (mouse/touch): {pointer:{x,y,left,right,active}}. Carts
+    // that declare FLAG_POINTER read this; harnesses can click at exact coords.
+    if (input && input.pointer && typeof this.cart?.setPointer === "function") {
+      const p = input.pointer;
+      const buttons = (p.left ? 1 : 0) | (p.right ? 2 : 0) | (p.middle ? 4 : 0);
+      const active = p.active === false ? false : true;
+      this.cart.setPointer(0, p.x | 0, p.y | 0, buttons, active);
+    }
   }
 
   /** Advance n frames, driving CartHost.runFrame with the current input. Each
