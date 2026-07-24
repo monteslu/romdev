@@ -11,7 +11,8 @@ positioning, and the dogfood proof** (WS3 Parts B+C, WS5, WS6 of
 internal-romdev/WASMCART_UMBRELLA_PLAN.md). Consumes wasmcart 0.5.0 (spec-side:
 `WC_FLAG_DETERMINISTIC` + `wc_set_seed` + `WC_DETERMINISTIC_RNG`;
 `wc_debug_mark` + captured `wc_log`; both opt-in, default structurally absent).
-Feature-detected — inert on wasmcart 0.4.0; repin to ^0.5.0 at release.
+Feature-detected — inert on wasmcart 0.4.0. **Depends on `wasmcart` ^0.5.0**
+(repinned at release; wasmcart 0.5.0 is live on npm).
 
 - **Deterministic replay** — `loadMedia({deterministicSeed})` (wasmcart only;
   refused with a pointer on emulator platforms, which are already deterministic
@@ -30,6 +31,12 @@ Feature-detected — inert on wasmcart 0.4.0; repin to ^0.5.0 at release.
   `wc_debug_mark(id)` annotations and captured `wc_log` lines, the navigable
   timeline of a run. Pull-model, clears on read; says so plainly on a
   pre-events wasmcart build.
+- **`input({op:'pointer'})`** — absolute pointer for wasmcart carts that declare
+  `WC_FLAG_POINTER`: position the cursor at an exact `{x, y}` (cart pixels) and
+  hold `left`/`right`. Drives mouse-UI carts a gamepad-button vocabulary can't
+  reach — `WasmcartHost.setInput({pointer})` → `CartHost.setPointer`. Refuses on
+  emulator platforms (no pointer surface). Exercised end-to-end driving the
+  Stratagus RTS cart's menus through the live MCP server.
 - **Conformance grows determinism checks** — `WC_FLAG_DETERMINISTIC` without
   `wc_set_seed` is an error (declared but unseedable); the export without the
   flag is a self-policing warn.
@@ -53,9 +60,9 @@ Feature-detected — inert on wasmcart 0.4.0; repin to ^0.5.0 at release.
   observability by construction); this README's wasmcart paragraph updated to
   the full surface.
 
-Release note: bump the `wasmcart` dependency to ^0.5.0 (and refresh the
-lockfile) once wasmcart 0.5.0 is on npm — the pin stays ^0.4.0 in-tree so a
-clean clone installs today; every 0.5.0 consumer feature-detects.
+Release note: the `wasmcart` dependency is now ^0.5.0 (lockfile refreshed) —
+wasmcart 0.5.0 is published, so every determinism/events/pointer feature is
+live for a fresh install rather than feature-detected-inert.
 
 ## 0.104.0 — 2026-07-23
 
