@@ -499,8 +499,9 @@ export async function playtest(args) {
   let perfFrames = 0, perfTicks = 0, perfWinStart = 0;
   const ema = (prev, v) => (prev === 0 ? v : prev + (v - prev) * 0.05);
   // On-window fps: always in the title bar (updated 1/s, zero render cost);
-  // F3 toggles a corner counter drawn into the frame for the human.
-  let fpsOverlay = false;
+  // a corner counter drawn into the frame is toggled by the human (F3) or
+  // the agent (playtest({op:'fps'}) → session.setFpsOverlay).
+  let fpsOverlay = !!args.fpsOverlay;
 
   window.on("close", () => { stop(); });
   window.on("keyDown", (e) => {
@@ -917,6 +918,10 @@ export async function playtest(args) {
     // Live perf readout (rolling 1s fps/tickHz + per-stage EMAs) — the answer
     // to "the window feels slow, WHERE is the time going".
     get perf() { return { ...perf }; },
+    // On-screen fps counter control — same state the F3 hotkey flips, so the
+    // agent and the human never fight over separate flags.
+    get fpsOverlay() { return fpsOverlay; },
+    setFpsOverlay(v) { fpsOverlay = !!v; return fpsOverlay; },
     // Truth-probe for the underlying SDL window. `running` is our own flag
     // and can lag reality if the window dies without firing a 'close' event
     // (compositor kill, X/Wayland session loss, invalid handle). Callers
