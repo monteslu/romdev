@@ -4,6 +4,48 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.105.3 — 2026-07-23
+
+Tests for the 0.105.1 window fix at the level it actually broke, plus the
+playtest perf readout ("the window feels slow" is now a number, not a vibe).
+romdev-core-runner → 0.2.1 (repinned; new exports).
+
+- **Window sizing extracted + tested.** The initial-size math lived
+  duplicated + inline in playtest.js and runRom.js, so nothing unit-tested it
+  and the aspect-0 bug hid there. Both now call core-runner's new
+  `initialWindowSize()`; playtest-window-sizing.test.js pins the exact wyvern
+  repro (1280x720 wasmcart, {scale:2, aspect:'tv'}, host reporting aspect 0 →
+  2560x1440, pre-fix 0x1440), a no-zero-window sweep across every
+  aspect-mode/platform/bogus-aspect combination, real-cart end-to-end sizing
+  from a loaded WasmcartHost, and a plain-language throw on an unsettled 0x0
+  framebuffer. jsgame's displayAspect regression rides the real-fixture
+  jsgame-host test.
+- **Playtest perf telemetry** — `playtest({op:'status'})` now returns `perf`:
+  rolling-1s `fps` (emulated frames/sec; 60 = full speed) and `tickHz`
+  (render passes/sec), plus per-stage EMAs `stepMs` / `convertMs` /
+  `presentMs` and `audioQueuedMs`. Answers "is it slow and WHERE" on a live
+  window without touching the machine.
+- **Window tick cost cuts** (measured on a 1280x720 wasmcart cart):
+  framebuffer→RGBA conversion gets a word-at-a-time swizzle for the two
+  32bpp formats and a reusable output buffer (1.83 → 0.69 ms/frame,
+  byte-identical, and no more ~220MB/s Buffer.alloc churn at 60fps — GC
+  pauses read as window jank); the rewind buffer and auto-checkpoint now
+  check the host HAS serializeState (wasmcart/jsgame don't) instead of
+  throwing into an empty catch every tick.
+- **Workspace contract tests** (test/workspace-contract.test.js): every named
+  import from a workspace romdev-* package must resolve against the package's
+  real export surface, and every workspace-sibling pin must match the in-tree
+  version. Plus a publish-all preflight that refuses to publish when a
+  package's content changed but its version already exists on the registry —
+  the 0.105.1→0.105.2 miss, now structurally blocked.
+- **Three pre-existing drifts the new preflight caught, fixed**:
+  romdev-analysis, romdev-analysis-decompiler, and romdev-famitone all
+  changed in-tree after their 0.1.0 publishes without a bump — fresh installs
+  were getting a decompiler with NO Dreamcast SH-4 SLEIGH, an analysis
+  package predating the core-wasm de-dup, and famitone without the lint-bug
+  fixes, while the monorepo tested the current code. All three → 0.2.0,
+  repinned.
+
 ## 0.105.2 — 2026-07-23
 
 FIX (release mechanics of the 0.105.1 fix): 0.105.1 added the

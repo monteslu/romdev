@@ -125,6 +125,35 @@ export function effectiveAspect(statusAspect, fbWidth, fbHeight) {
 }
 
 /**
+ * Initial window size, the way playtest and runRom open theirs: height =
+ * fbHeight * scale, width follows the chosen aspect mode. THE function that
+ * opened a 0-width window ("invalid width") when a host reported
+ * displayAspect 0 — it lived duplicated + inline in both windows, so nothing
+ * unit-tested it. Pure; throws a plain-language error instead of returning
+ * dimensions SDL would reject.
+ * @param {{fbWidth:number, fbHeight:number, scale:number,
+ *          aspectMode:"tv"|"core"|"fb", platform:string|null,
+ *          displayAspect:number|null|undefined}} p
+ * @returns {{width:number, height:number}}
+ */
+export function initialWindowSize({ fbWidth, fbHeight, scale, aspectMode, platform, displayAspect }) {
+  let width = fbWidth * scale;
+  let height = fbHeight * scale;
+  if (aspectMode === "tv" || aspectMode === "core") {
+    const aspect = aspectMode === "tv"
+      ? tvAspectFor(platform, effectiveAspect(displayAspect, fbWidth, fbHeight))
+      : effectiveAspect(displayAspect, fbWidth, fbHeight);
+    width = Math.round(height * aspect);
+  }
+  if (!(width > 0) || !(height > 0)) {
+    throw new Error(
+      `window sizing failed: framebuffer ${fbWidth}x${fbHeight}, scale ${scale}, ` +
+      `aspect mode ${aspectMode} → ${width}x${height} (the host hasn't produced a real frame yet?)`);
+  }
+  return { width, height };
+}
+
+/**
  * Largest rect of `targetAspect` that fits inside a winW×winH window, centered
  * (letterbox/pillarbox). Pure — the image is ALWAYS drawn at this rect, so
  * resizing the window never stretches it off-aspect, it just grows the bars.
@@ -155,9 +184,37 @@ export function letterbox(winW, winH, targetAspect) {
 
 /** Convert a libretro framebuffer (any pixel format) to RGBA32 for the window
  *  blit. (The GL/HW-render RGBA path forces alpha=255 — the GL render target
- *  leaves alpha=0, which SDL would composite as a black window.) */
-export function framebufferToRgba(f) {
-  const out = Buffer.alloc(f.width * f.height * 4);
+ *  leaves alpha=0, which SDL would composite as a black window.)
+ *
+ *  Runs once per window tick, so it matters at 60fps on big framebuffers
+ *  (wasmcart 1280x720 = 3.7MB): pass the previous return value as `out` to
+ *  reuse the buffer (a fresh Buffer.alloc per tick is ~220MB/s of zeroing +
+ *  GC churn), and the two 32-bit-per-pixel formats take a word-at-a-time
+ *  swizzle path instead of the per-byte loop.
+ *  @param {{width:number, height:number, pitch:number, format:number, pixels:Uint8Array}} f
+ *  @param {Buffer|null} [out] previous frame's buffer to reuse (size-checked)
+ */
+export function framebufferToRgba(f, out = null) {
+  const need = f.width * f.height * 4;
+  if (!out || out.length !== need) out = Buffer.alloc(need);
+  // Word-at-a-time path for the 4-byte-per-pixel formats when rows are dense
+  // and the source is 4-byte aligned (the normal case for both).
+  const dense = f.pitch === f.width * 4 && (f.pixels.byteOffset & 3) === 0;
+  if (f.format === ROMDEV_PIXEL_FORMAT_RGBA8888 && dense) {
+    const src32 = new Uint32Array(f.pixels.buffer, f.pixels.byteOffset, f.width * f.height);
+    const out32 = new Uint32Array(out.buffer, out.byteOffset, f.width * f.height);
+    for (let i = 0; i < src32.length; i++) out32[i] = src32[i] | 0xff000000; // force alpha (LE: A is the high byte)
+    return out;
+  }
+  if (f.format === RETRO_PIXEL_FORMAT_XRGB8888 && dense) {
+    const src32 = new Uint32Array(f.pixels.buffer, f.pixels.byteOffset, f.width * f.height);
+    const out32 = new Uint32Array(out.buffer, out.byteOffset, f.width * f.height);
+    for (let i = 0; i < src32.length; i++) {
+      const v = src32[i]; // LE bytes B,G,R,X → u32 0xXXRRGGBB
+      out32[i] = 0xff000000 | ((v & 0xff) << 16) | (v & 0xff00) | ((v >>> 16) & 0xff);
+    }
+    return out;
+  }
   if (f.format === ROMDEV_PIXEL_FORMAT_RGBA8888) {
     for (let y = 0; y < f.height; y++) {
       const src = y * f.pitch;

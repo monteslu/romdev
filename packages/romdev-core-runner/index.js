@@ -11,6 +11,7 @@ export {
   bitToName,
   tvAspectFor,
   effectiveAspect,
+  initialWindowSize,
   letterbox,
   framebufferToRgba,
 } from "./present.js";
