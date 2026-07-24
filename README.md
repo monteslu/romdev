@@ -187,7 +187,7 @@ Then just describe what you want:
 [agent sees the result, iterates]
 ```
 
-`romdev` also doubles as a plain emulator: `romdev-cli play game.gba` opens an SDL window with hot-plug controllers.
+`romdev` also doubles as a plain emulator: `romdev-cli play game.gba` opens an SDL window with hot-plug controllers and live fps in the title bar.
 
 ## Development
 

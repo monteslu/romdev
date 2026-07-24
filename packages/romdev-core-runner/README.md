@@ -64,6 +64,9 @@ Keyboard fallback: arrows = d-pad, `Z`/`X`/`A`/`S` = the same four face
 positions, Enter = Start, Right-Shift (or Backspace) = Select, `Q`/`W` =
 L/R shoulders. ESC closes the window.
 
+The title bar shows live fps (`<game> | 60 fps`, updated once a second) —
+the rate the machine actually achieves, not the target.
+
 ## SDL availability
 
 `@kmamal/sdl` is an **optionalDependency**, declared once here so consuming
@@ -87,8 +90,15 @@ and print its own "install SDL or use an external emulator" message.
 The presentation layer is exported for frontends that want the maps and
 math without the stock window: `SDL_BUTTON_TO_LIBRETRO_BIT`,
 `KEY_TO_LIBRETRO_BIT`, `STICK_DEADZONE`, `bitToName(bit)`,
-`tvAspectFor(platform, displayAspect)`, `letterbox(winW, winH, aspect)`,
-`framebufferToRgba(fb)`, plus `initSdl()` (the hardened loader) and
+`tvAspectFor(platform, displayAspect)`,
+`effectiveAspect(statusAspect, fbW, fbH)` (a usable ratio even when the
+host reports 0/NaN), `initialWindowSize({fbWidth, fbHeight, scale,
+aspectMode, platform, displayAspect})` (the tested open-size math — never
+produces a zero-size window), `letterbox(winW, winH, aspect)`,
+`framebufferToRgba(fb, out?)` (pass the previous return value as `out` to
+reuse the buffer across ticks — no per-frame allocation), and
+`drawFpsOverlay(rgba, width, height, fps)` (the corner fps counter, pure
+pixel writes), plus `initSdl()` (the hardened loader) and
 `sdlPackageRoot()`.
 
 ## Requirements
