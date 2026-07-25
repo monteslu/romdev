@@ -4,6 +4,39 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.106.0 — 2026-07-25
+
+**wasmcart GL carts render HEADLESS** — real GPU pixels in screenshots and
+frame hashes, no window, no display. Rides wasmcart 0.6.0's `glBackend`
+factory contract: WasmcartHost offers CartHost a lazy factory that CartHost
+invokes only when the cart's wasm actually imports from the `gl` module
+(the import section is the detection ground truth). The factory serves ONE
+process-lifetime offscreen webgl-node WebGL2 context (single native EGL
+context, no destroy API — reused across loads; GL state carries over, carts
+set their own). After each `stepFrames` call the GL context is read back
+(Y-flipped, alpha forced opaque — the hwRender lesson) into the host frame
+as RGBA8888, so `frame({op:'screenshot'})`, `frame({op:'verify'})`, and
+regression goldens all see the actual draws.
+
+- `status.gl`: `"rendered"` | `"stubbed"` for GL carts, `null` for 2D carts;
+  `getCapabilities().hasGlRendering` alongside.
+- Degrades honestly: wasmcart < 0.6.0 or missing webgl-node → the old
+  stubbed-GL behavior (2D framebuffer only), reported as `"stubbed"`, never
+  a load failure. Version-gated by reading wasmcart's package version (its
+  exports map hides package.json — resolved next to the entry).
+- 720p offscreen ceiling; readback clamps to the drawing buffer. Carts that
+  viewport at 0,0 (the norm) read back exactly.
+- Tests: wasmcart-gl.test.js (GL clear color read back byte-exact through
+  the full host path; 2D carts untouched; hash coverage) — skip-guarded on
+  clean clones where the pin is still ^0.5.0.
+
+Release note: bump the `wasmcart` dependency to ^0.6.0 (and refresh the
+lockfile) once wasmcart 0.6.0 is on npm — publish wasmcart FIRST. The pin
+stays ^0.5.0 in-tree so a clean clone installs today; the GL path
+feature-detects and stays inert on 0.5.0. ⚠ node_modules/wasmcart is
+currently a manual sync of 0.6.0 for live verification; any npm op reifies
+it back to the lock's 0.5.0 (the GL tests then skip — still green).
+
 ## 0.105.4 — 2026-07-23
 
 **fps ON the window, for the human** (0.105.3 gave the agent
