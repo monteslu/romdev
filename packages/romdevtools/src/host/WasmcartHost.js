@@ -16,7 +16,50 @@
 import { CartHost, BUTTON } from "wasmcart";
 import { framebufferToRgba } from "romdev-core-host/framebuffer.js";
 import { framebufferToScreenshot } from "romdev-core-host/framebuffer-png.js";
-import { RETRO_PIXEL_FORMAT_XRGB8888 } from "romdev-core-host/retroConstants.js";
+import { RETRO_PIXEL_FORMAT_XRGB8888, ROMDEV_PIXEL_FORMAT_RGBA8888 } from "romdev-core-host/retroConstants.js";
+import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
+// ── Headless GL for GL carts ─────────────────────────────────────────────────
+// wasmcart >= 0.6.0 accepts glBackend as a FACTORY invoked only when the
+// cart's wasm imports from the "gl" module. With an offscreen webgl-node
+// context, GL carts render REAL pixels headless (screenshots/frame hashes
+// work) instead of silently no-oping into stubs. Version-gated: a 0.5.x
+// CartHost would treat the function as a truthy context and break — on the
+// ^0.5.0 pin this whole path stays inert.
+const _require = createRequire(import.meta.url);
+let _wcGlFactoryOk = null;
+function wasmcartSupportsGlFactory() {
+  if (_wcGlFactoryOk !== null) return _wcGlFactoryOk;
+  try {
+    // package.json isn't in wasmcart's exports map — read it next to the entry.
+    const pkg = JSON.parse(readFileSync(
+      path.join(path.dirname(_require.resolve("wasmcart")), "package.json"), "utf8"));
+    const [maj, min] = String(pkg.version).split(".").map(Number);
+    _wcGlFactoryOk = maj > 0 || min >= 6;
+  } catch { _wcGlFactoryOk = false; }
+  return _wcGlFactoryOk;
+}
+
+// ONE offscreen WebGL2 context per process, reused across loads — webgl-node
+// binds a single native EGL context (no destroy API), so per-load creation
+// isn't safe. GL state carries across reloads; carts set their own state.
+// 720p ceiling: readback clamps to the drawing buffer.
+const OFFSCREEN_GL_W = 1280, OFFSCREEN_GL_H = 720;
+let _webglNodeMod; // undefined = untried, null = unavailable
+let _offscreenGl = null;
+async function _webglNode() {
+  if (_webglNodeMod !== undefined) return _webglNodeMod;
+  try { _webglNodeMod = await import("webgl-node"); } catch { _webglNodeMod = null; }
+  return _webglNodeMod;
+}
+async function _getOffscreenGl() {
+  const wn = await _webglNode();
+  if (!wn) return null;
+  if (!_offscreenGl) _offscreenGl = wn.createWebGL2Context(OFFSCREEN_GL_W, OFFSCREEN_GL_H).gl;
+  return _offscreenGl;
+}
 
 // wasmcart framebuffer is uint32 XRGB8888 (0x00RRGGBB) → bytes [B,G,R,X] in LE
 // memory, identical to libretro's XRGB8888, so romdev's decoder handles it as-is.
@@ -58,7 +101,9 @@ export class WasmcartHost {
       coreFps: 60,
       displayAspect: 0,
       audioSampleRate: 0,
+      gl: null, // "rendered" | "stubbed" for GL carts, null for 2D carts
     };
+    this._gl = null; // live GL context for readback (offscreen or caller-supplied)
   }
 
   /**
@@ -79,6 +124,10 @@ export class WasmcartHost {
       // module's exported functions/globals. Different axis than emulator regions.
       hasMemoryRegions: false,
       hasWasmIntrospection: true,
+      // GL carts render on a real (offscreen) WebGL2 context and screenshots
+      // show the actual draws — false means this GL cart is running stubbed
+      // (webgl-node unavailable or wasmcart < 0.6.0). 2D carts: false.
+      hasGlRendering: !!this._gl,
       // Named debug state (opt-in wasmcart debug ABI). True only when the cart
       // opted in AND the wasmcart build exposes the reader — feature-detected.
       hasDebugState: this.debugSupported(),
@@ -113,10 +162,27 @@ export class WasmcartHost {
         "deterministic replay needs wasmcart >= 0.5.0 (this install predates wc_set_seed) — reinstall/repin wasmcart."
       );
     }
+    // Headless GL: offer CartHost a lazy offscreen-context factory (it runs
+    // only if the cart's wasm imports GL). Availability is probed WITHOUT
+    // creating a context, so 2D-only sessions never pay for one, and a
+    // missing webgl-node degrades to the old stub behavior instead of
+    // failing the load. A caller-supplied glBackend always wins.
+    this._gl = null;
+    let glFactory = null;
+    if (!glBackend && wasmcartSupportsGlFactory() && await _webglNode()) {
+      glFactory = async () => {
+        const gl = await _getOffscreenGl();
+        if (gl) this._gl = gl;
+        return gl;
+      };
+    }
     await this.cart.load(source, {
-      ...(glBackend ? { glBackend } : {}),
+      ...(glBackend ? { glBackend } : glFactory ? { glBackend: glFactory } : {}),
       ...(deterministic ? { deterministic } : {}),
     });
+    if (glBackend && this.cart.usesGL) this._gl = glBackend;
+    // Surfaced in status: are this GL cart's draws real pixels or stubs?
+    this.status.gl = this.cart.usesGL ? (this._gl ? "rendered" : "stubbed") : null;
     // Deterministic clock: romdev steps frames, so frame N should be reproducible.
     // Feature-detect — setFixedStep is a newer CartHost addition; older published
     // versions fall back to wall-clock (still works, just non-deterministic timing).
@@ -234,7 +300,38 @@ export class WasmcartHost {
       this.status.fbHeight = r.height;
       this.status.displayAspect = r.height > 0 ? r.width / r.height : 0;
     }
+    // GL carts draw into the GL context, not the 2D framebuffer — read the
+    // real pixels back once per stepFrames call (not per frame).
+    if (this._gl && this.cart.usesGL) this._readbackGl();
     return n;
+  }
+
+  /** Replace state.lastFrame with the GL context's pixels. GL's origin is
+   *  bottom-left → rows are flipped; GL targets often leave alpha 0 → forced
+   *  opaque (alpha 0 composites to a black screenshot — the hwRender lesson).
+   *  Readback region = the cart's declared resolution clamped to the context
+   *  (viewport and readPixels share the bottom-left origin, so a cart that
+   *  viewports at 0,0 — the norm — is read exactly). */
+  _readbackGl() {
+    const gl = this._gl;
+    const w = Math.min(this.status.fbWidth || gl.drawingBufferWidth, gl.drawingBufferWidth);
+    const h = Math.min(this.status.fbHeight || gl.drawingBufferHeight, gl.drawingBufferHeight);
+    if (!(w > 0 && h > 0)) return;
+    const row = w * 4;
+    const raw = new Uint8Array(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, raw);
+    const flipped = new Uint8Array(w * h * 4);
+    for (let y = 0; y < h; y++) {
+      flipped.set(raw.subarray((h - 1 - y) * row, (h - y) * row), y * row);
+    }
+    for (let i = 3; i < flipped.length; i += 4) flipped[i] = 0xff;
+    this.state.lastFrame = {
+      width: w, height: h, pixels: flipped, pitch: row,
+      format: ROMDEV_PIXEL_FORMAT_RGBA8888,
+    };
+    this.status.fbWidth = w;
+    this.status.fbHeight = h;
+    this.status.displayAspect = h > 0 ? w / h : 0;
   }
 
   /** Snapshot of the host status (mirrors LibretroHost.getStatus — used by
@@ -511,5 +608,8 @@ export class WasmcartHost {
     this.cart = null;
     this.state.lastFrame = null;
     this.status.loaded = false;
+    // Drop the reference only — the offscreen context is a process-lifetime
+    // singleton (webgl-node has one native EGL context and no destroy API).
+    this._gl = null;
   }
 }
