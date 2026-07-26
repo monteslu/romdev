@@ -30,12 +30,10 @@ regression goldens all see the actual draws.
   the full host path; 2D carts untouched; hash coverage) — skip-guarded on
   clean clones where the pin is still ^0.5.0.
 
-Release note: bump the `wasmcart` dependency to ^0.6.0 (and refresh the
-lockfile) once wasmcart 0.6.0 is on npm — publish wasmcart FIRST. The pin
-stays ^0.5.0 in-tree so a clean clone installs today; the GL path
-feature-detects and stays inert on 0.5.0. ⚠ node_modules/wasmcart is
-currently a manual sync of 0.6.0 for live verification; any npm op reifies
-it back to the lock's 0.5.0 (the GL tests then skip — still green).
+Release note: the `wasmcart` dependency is ^0.6.0 (lockfile refreshed from
+the registry — no manual sync in play); wasmcart 0.6.0 is published, so the
+headless-GL path is live for a fresh install. The version gate + test
+skip-guards remain as belt-and-braces for downgraded environments.
 
 ## 0.105.4 — 2026-07-23
 
