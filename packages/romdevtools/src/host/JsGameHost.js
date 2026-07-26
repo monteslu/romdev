@@ -159,8 +159,10 @@ export class JsGameHost {
 
   screenshotRgba() {
     const f = this.getFramebuffer();
+    // Key is `rgba` — the LibretroHost contract (same fix as WasmcartHost:
+    // `pixels` made frame({op:'verify'}) throw on every jsgame session).
     return { width: f.width, height: f.height,
-             pixels: framebufferToRgba(f.width, f.height, f.pixels, f.pitch, f.format) };
+             rgba: framebufferToRgba(f.width, f.height, f.pixels, f.pitch, f.format) };
   }
 
   // ── JS introspection (the V8-runtime bonus) ──────────────────────────────────

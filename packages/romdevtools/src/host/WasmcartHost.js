@@ -378,8 +378,11 @@ export class WasmcartHost {
   /** Flat RGBA Uint8Array of the current frame (for the livestream/side-by-side). */
   screenshotRgba() {
     const f = this.getFramebuffer();
+    // Key is `rgba` — the LibretroHost contract. It was `pixels` until
+    // 0.106.0, which made frame({op:'verify'}) throw a raw TypeError on
+    // every wasmcart cart (first exercised by the openarena GL smoke).
     return { width: f.width, height: f.height,
-             pixels: framebufferToRgba(f.width, f.height, f.pixels, f.pitch, f.format) };
+             rgba: framebufferToRgba(f.width, f.height, f.pixels, f.pitch, f.format) };
   }
 
   /** Save data (SRAM equivalent) if the cart declares any. */
