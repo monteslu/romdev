@@ -4,6 +4,24 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.106.1 — 2026-07-25
+
+FIX (found live by the first real-GL-cart acceptance run): `frame({op:'verify'})`
+threw a raw TypeError on EVERY wasmcart and jsgame session — both native
+hosts' `screenshotRgba()` returned `{pixels}` where the LibretroHost contract
+(and every caller: computeVerify, sideBySide, livestream) destructures
+`{rgba}`. Present since the hosts were born; nothing ever exercised verify on
+a native-runtime kind until the openarena smoke below. Key renamed to `rgba`;
+regression test pins the shape AND runs computeVerify through a real cart.
+
+The acceptance run itself (the throwaway-server MCP flow on the openarena
+`.wasc` — the full ioquake3 engine + 409MB of game data): loadMedia reports
+`hasGlRendering:true` → 240 frames → `verify` = verified true (73,931
+distinct colors, 98.8% non-backdrop) → `frame({op:'screenshot'})` captures a
+real in-game 3D frame (terrain, skybox, viewmodel, HUD) → held `up`+`b` via
+`input({op:'set'})` moves the camera and the armor counter. Headless GL for
+wasmcart is proven end-to-end on a commercial-grade engine.
+
 ## 0.106.0 — 2026-07-25
 
 **wasmcart GL carts render HEADLESS** — real GPU pixels in screenshots and

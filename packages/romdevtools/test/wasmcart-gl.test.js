@@ -18,6 +18,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { WasmcartHost } from "../src/host/WasmcartHost.js";
+import { computeVerify } from "../src/mcp/tools/frame.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const GLCART = path.join(HERE, "fixtures", "glcart.wasc");
@@ -73,5 +74,20 @@ test("GL frame participates in framebufferHash (regression goldens see GL draws)
   host.stepFrames(2);
   const hash = host.framebufferHash();
   assert.ok(hash !== 0, "hash of the GL readback frame");
+  host.destroy();
+});
+
+test("screenshotRgba returns `rgba` (the LibretroHost contract) and frame verify runs", async () => {
+  // Regression (found by the openarena MCP smoke): both native hosts returned
+  // {pixels} where every LibretroHost caller — computeVerify, sideBySide, the
+  // livestream — destructures {rgba}, so frame({op:'verify'}) threw a raw
+  // TypeError on EVERY wasmcart/jsgame session since the hosts were born.
+  const host = new WasmcartHost();
+  await host.loadMedia({ platform: "wasmcart", path: DBG });
+  const s = host.screenshotRgba();
+  assert.ok(s.rgba && s.rgba.length === s.width * s.height * 4, "rgba key, full-frame length");
+  const v = await computeVerify(host, 2, "wasmcart-gl-test");
+  assert.ok(typeof v.verified === "boolean" || v.verified === null, "verify produced a verdict, not a throw");
+  assert.ok(v.pixels && v.pixels.width > 0, "pixel scan ran");
   host.destroy();
 });
