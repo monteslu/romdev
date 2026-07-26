@@ -862,8 +862,9 @@ export function registerFrameTools(server, z, sessionKey) {
     "adds the register file at each step. This collapses the ~1-round-trip-per-instruction cost of tracing a routine.\n" +
     "'verify': one-call 'is the game actually rendering / alive?' health check WITHOUT vision — for the spiral where an " +
     "agent can't see the screen and doesn't know if a black frame means broken. Pass `frames` to boot-then-check in one " +
-    "call. Fuses (1) a pixel-content scan of the live framebuffer (distinctColors, dominant-color %) and (2) the " +
-    "per-platform render-ENABLE/NMI decode (reused from the rendering-context decoder — works on all 14 platforms). " +
+    "call. Fuses (1) a pixel-content scan of the live framebuffer (distinctColors, dominant-color %) — works on EVERY " +
+    "kind, wasmcart/jsgame included (GL carts scan the offscreen-GL readback) — and (2) the per-platform " +
+    "render-ENABLE/NMI decode on the classic emulated platforms (native runtimes report render.renderEnabled:null). " +
     "Returns {verified:true|false|null, issues[], pixels, render}. verified:null + unsettled when no frame has been " +
     "stepped yet (it won't cry wolf on boot — step first). issues[] flags blankScreen/nearlyBlank/renderDisabled. " +
     "renderDisabled is only raised when the registers SAY so (never on an undecodable platform). Pass/fail with no " +
