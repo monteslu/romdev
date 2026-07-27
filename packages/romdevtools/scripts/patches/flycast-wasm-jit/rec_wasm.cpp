@@ -57,7 +57,9 @@
 //       block PC + SHIL op dump for the first 10 hits. This is the
 //       primary tool for finding native-emit bugs at the subsystem
 //       level — the actual methodology the project switched to.
+#ifndef FORCE_CPP_DISPATCH
 #define FORCE_CPP_DISPATCH 0
+#endif
 
 // Naomi serial EEPROM diagnostic counters (defined in naomi.cpp)
 extern u32 g_naomi_board_write_count;
@@ -113,10 +115,38 @@ struct ShilWriteEntry {
 	u32 size;
 	u32 val_lo;  // low 32 bits (or full value for size<=4)
 	u32 val_hi;  // high 32 bits for size==8
+	u32 old_lo;  // pre-write value (RAM only) - lets the mode-7 shadow ROLL BACK
+	u32 old_hi;  //   the observer run so both runs see pristine memory
+	bool rollbackable; // area-3 RAM write (side-effect-free to undo)
 };
 static std::vector<ShilWriteEntry> g_shil_writes;
 static bool g_shil_dry_run = false;
 static bool g_shil_log_writes = false;  // log writes to g_shil_writes AND apply them
+static bool g_shil_read_timer_taint = false; // set when a block reads P4 on-chip (live timer) space
+
+// Roll back captured writes in reverse order, restoring pre-write values.
+// RAM-only: MMIO writes are never rolled back (their side effects can't be
+// undone) - blocks touching MMIO are tagged in the mismatch log instead.
+static void shadowRollbackWrites(const std::vector<ShilWriteEntry>& ws) {
+	for (size_t i = ws.size(); i-- > 0; ) {
+		const ShilWriteEntry& e = ws[i];
+		if (!e.rollbackable) continue;
+		if (e.size == 8) {
+			WriteMem32(e.addr, e.old_lo);
+			WriteMem32(e.addr + 4, e.old_hi);
+		} else if (e.size == 1) {
+			WriteMem8(e.addr, (u8)e.old_lo);
+		} else if (e.size == 2) {
+			WriteMem16(e.addr, (u16)e.old_lo);
+		} else {
+			WriteMem32(e.addr, e.old_lo);
+		}
+	}
+}
+static bool shadowAllRollbackable(const std::vector<ShilWriteEntry>& ws) {
+	for (const auto& e : ws) if (!e.rollbackable) return false;
+	return true;
+}
 
 // Write/read counters for diagnostic modes
 static u32 g_shil_write_count = 0;
@@ -156,7 +186,25 @@ static int prof_report_frames = 0;         // mainloop calls since last report
 #define JIT_TABLE_MASK (JIT_TABLE_SIZE - 1)
 static u32 jit_dispatch_table[JIT_TABLE_SIZE];  // PC hash → table index (0 = miss)
 static u32 jit_dispatch_pc[JIT_TABLE_SIZE];    // PC hash → actual PC (collision guard)
-static u32 jit_dispatch_hash[JIT_TABLE_SIZE];  // PC hash → first opcode (SMC detection)
+static u32 jit_dispatch_hash[JIT_TABLE_SIZE];  // PC hash → FNV-1a of the block's guest CODE (SMC detection; 0 = ROM/no hash)
+static u32 jit_dispatch_size[JIT_TABLE_SIZE];  // PC hash → guest code size the hash covers
+
+// FNV-1a over a block's guest code bytes. RAM blocks only (area 3 + OC-RAM
+// don't apply here; code runs from area 3 or ROM; ROM is immutable → 0).
+// This replaces the old first-16-bit-word fingerprint, which missed the
+// in-place code replacement the Dreamcast boot loader performs (1ST_READ.BIN
+// lands over the loader with the same leading word at several PCs) - the
+// stale compiled blocks then push/branch per the OLD code: the real cause of
+// the commercial-boot hang the June notes pinned on shop_readm.
+static u32 blockCodeHash(u32 vaddr, u32 codeSize) {
+	u32 phys = vaddr & 0x1FFFFFFF;
+	if ((phys >> 26) != 3) return 0;           // ROM/BIOS: immutable
+	if (codeSize == 0 || codeSize > 4096) codeSize = 2;
+	const u8* p = &mem_b[phys & RAM_MASK];
+	u32 h = 0x811c9dc5u;
+	for (u32 i = 0; i < codeSize; i++) { h ^= p[i]; h *= 16777619u; }
+	return h ? h : 1;                          // 0 reserved for "no hash"
+}
 
 // Dispatch loop exit status
 static int g_dispatch_result = 0;    // 0=timeslice, 1=miss, 3=interrupt
@@ -569,6 +617,17 @@ void EMSCRIPTEN_KEEPALIVE wasm_exec_shil_fb(u32 block_vaddr, u32 op_index) {
 		if (!op.rs3.is_null()) addr += readI32(op.rs3);
 		addMemReadPenalty(addr, op.size);
 		g_shil_read_count++;
+		// Shadow taint: a read of P4 on-chip module space (0xE0/0xFF... =
+		// physical area 7, TMU/RTC/etc) samples LIVE hardware state (the
+		// SH-4 timer TMU_TCNT0 = 0xFFD8000C is the common one). The JIT
+		// observer run and the reference run read it at different scheduler
+		// moments, so the value legitimately differs (the exact-+1 "r[0]"
+		// divergence) - not a JIT bug, and unrollbackable (it's time, not
+		// memory). Tag the block so the mode-7 compare skips it.
+		{
+			u32 rphys = addr & 0x1FFFFFFF;
+			if ((rphys >> 26) == 7) g_shil_read_timer_taint = true;
+		}
 		if (op.size == 8) {
 			u32 doff = op.rd.reg_offset();
 			*(u32*)((u8*)&ctx + doff) = ReadMem32(addr);
@@ -645,6 +704,23 @@ void EMSCRIPTEN_KEEPALIVE wasm_exec_shil_fb(u32 block_vaddr, u32 op_index) {
 				} else {
 					e.val_lo = readI32(op.rs2);
 					e.val_hi = 0;
+				}
+				// Capture the pre-write value for RAM so the shadow can roll
+				// this write back. Rollbackable = side-effect-free storage:
+				//   - area 3 SDRAM (any mirror: physical >> 26 == 3)
+				//   - operand-cache-RAM, virtual 0x7C000000-0x7FFFFFFF (the
+				//     on-chip OC used as early-boot stack; plain storage).
+				// P4 control regs (0xE0/0xFF...) and store queues stay
+				// non-rollbackable: their writes have side effects.
+				u32 wphys = addr & 0x1FFFFFFF;
+				e.rollbackable = ((wphys >> 26) == 3) ||
+				                 (addr >= 0x7C000000 && addr <= 0x7FFFFFFF);
+				e.old_lo = 0; e.old_hi = 0;
+				if (e.rollbackable) {
+					if (op.size == 8) { e.old_lo = ReadMem32(addr); e.old_hi = ReadMem32(addr + 4); }
+					else if (op.size == 1) e.old_lo = ReadMem8(addr);
+					else if (op.size == 2) e.old_lo = ReadMem16(addr);
+					else e.old_lo = ReadMem32(addr);
 				}
 				g_shil_writes.push_back(e);
 			}
@@ -868,7 +944,9 @@ extern u32 g_wasm_block_count;
 //       [SHADOW-JIT] MISMATCH lines with exact divergence info.
 //
 // Modes 0-5 and 7 all require FORCE_CPP_DISPATCH=1.
+#ifndef EXECUTOR_MODE
 #define EXECUTOR_MODE 6
+#endif
 #define SHIL_START_BLOCK 24168000
 
 // Reference executor: per-instruction via OpPtr
@@ -1711,26 +1789,28 @@ static int c_dispatch_loop(u32 ctx_ptr, u32 ram_base) {
 			return blocks_run;
 		}
 
-		// SMC check: direct RAM read instead of IReadMem16 (avoids full
-		// memory map lookup on every dispatch). Only check RAM blocks
-		// (area 3: 0x0C/0x8C/0xAC). ROM/BIOS blocks skip the check.
+		// SMC check: FNV over the block's whole guest code (RAM blocks only;
+		// hash 0 = ROM/BIOS, immutable, skip). Direct mem_b reads - no
+		// memory-map lookup. Catches in-place code replacement the old
+		// first-word check missed (the commercial-boot stale-block hang).
 		{
-			u32 phys = pc & 0x1FFFFFFF;
-			if ((phys >> 26) == 3) {
-				u32 currentOp = *(u16*)(&mem_b[phys & RAM_MASK]);
-				if (currentOp != jit_dispatch_hash[key]) {
+			u32 want = jit_dispatch_hash[key];
+			if (want != 0) {
+				u32 got = blockCodeHash(pc, jit_dispatch_size[key]);
+				if (got != want) {
 #ifndef JIT_PROD_BUILD
 					static u32 smc_log_count = 0;
 					if (smc_log_count < 50) {
 						smc_log_count++;
 						EM_ASM({ console.log('[JIT-SMC] pc=0x' + ($0>>>0).toString(16) +
-							' old_op=0x' + $1.toString(16) + ' new_op=0x' + $2.toString(16)); },
-							pc, jit_dispatch_hash[key], currentOp);
+							' old_hash=0x' + ($1>>>0).toString(16) + ' new_hash=0x' + ($2>>>0).toString(16)); },
+							pc, want, got);
 					}
 #endif
 					jit_dispatch_table[key] = 0;
 					jit_dispatch_pc[key] = 0;
 					jit_dispatch_hash[key] = 0;
+					jit_dispatch_size[key] = 0;
 					auto blk_it = blockByVaddr.find(pc);
 					if (blk_it != blockByVaddr.end())
 						blockByVaddr.erase(blk_it);
@@ -2325,9 +2405,14 @@ public:
 
 		blockByVaddr[block->vaddr] = block;
 
-		// Store hash for SMC detection (first 2 bytes of block code)
-		// SMC fingerprint — stored in flat array alongside dispatch table
-		jit_dispatch_hash[(block->vaddr >> 1) & JIT_TABLE_MASK] = (u32)IReadMem16(block->vaddr);
+		// SMC fingerprint: FNV over the block's WHOLE guest code (the old
+		// 2-byte first-word fingerprint let in-place code replacement with a
+		// matching leading word run stale compiled blocks).
+		{
+			u32 hkey = (block->vaddr >> 1) & JIT_TABLE_MASK;
+			jit_dispatch_size[hkey] = block->sh4_code_size;
+			jit_dispatch_hash[hkey] = blockCodeHash(block->vaddr, block->sh4_code_size);
+		}
 
 #if EXECUTOR_MODE == 6 || EXECUTOR_MODE == 7
 		// Build WASM modules when using WASM execution or JIT-vs-ref shadow
@@ -2335,7 +2420,16 @@ public:
 
 		// Try multi-block: chain statically-connected blocks.
 		// Interior blocks have inline SMC guards (direct RAM read + compare).
+		// EXCEPT under the JIT-vs-ref shadow: multi-block runs the WHOLE chain
+		// in one native call while the ref side runs ONLY the entry block, so
+		// their exit PCs diverge by construction (the "diff=pc" false
+		// mismatch). Force single-block compilation for a fair per-block diff.
+		u32 chainLen = 1;
+#if EXECUTOR_MODE == 7
+		buildBlockModule(builder, block);
+#else
 		auto chain = discoverChain(block);
+		chainLen = (u32)chain.size();
 		if (chain.size() >= 2) {
 			buildMultiBlockModule(builder, chain);
 #ifndef JIT_PROD_BUILD
@@ -2345,6 +2439,7 @@ public:
 		} else {
 			buildBlockModule(builder, block);
 		}
+#endif
 
 		const auto& bytes = builder.getBytes();
 		double fly_compile_t0 = emscripten_get_now();
@@ -2354,7 +2449,7 @@ public:
 		        block->vaddr,
 		        (u32)bytes.size(),
 		        (u32)(fly_compile_ms * 1000.0),
-		        (u32)chain.size());
+		        chainLen);
 
 		if (table_idx > 0) {
 			// Store in dispatch table — (pc>>1)&MASK handles address aliasing
@@ -2464,19 +2559,63 @@ public:
 						} else {
 							RuntimeBlockInfo* block = it->second;
 #if EXECUTOR_MODE == 7
-							// JIT-vs-REF shadow comparison. Run each block
-							// through the native WASM JIT AND the reference
-							// interpreter, compare ctx, log divergences.
-							// Execution continues with ref's correct result.
+							// JIT-vs-REF shadow comparison, SIDE-EFFECT-CLEAN (v2).
+							// v1 ran the JIT first and then the reference on the
+							// JIT-mutated MEMORY: any block that read a value its
+							// own writes produced (pointer-in-RAM loops, the BSS
+							// clear at 0x8c0083d8) diverged BY CONSTRUCTION - the
+							// false "readm off-by-one" - and every side effect
+							// applied twice (the upstream authors' "non-determinism").
+							// v2: the JIT runs first as a pure OBSERVER - writem is
+							// forced through the captured shil fallback (shadow
+							// builds default FLY_FORCE_FALLBACK_MASK to 0x200), the
+							// capture records pre-write RAM values, and the whole
+							// run is ROLLED BACK before the reference executes on
+							// the same pristine state. Net effect of a shadow block
+							// = exactly ONE reference execution. Blocks whose
+							// writes touch MMIO can't be rolled back and are
+							// tagged tainted=1 in the mismatch log.
 							Sh4Context& ctx = *sh4ctx;
 							alignas(16) static u8 jit7_pre[sizeof(Sh4Context)];
 							memcpy(jit7_pre, &ctx, sizeof(Sh4Context));
 
-							// Run JIT normally (writem forced to shil_fb via
-							// FLY_FORCE_FALLBACK_MASK). Writes actually apply AND
-							// are logged for comparison via g_shil_log_writes.
+							// 0. Staleness guard: the JS block cache may hold a
+							// module compiled from an OLDER decode of this vaddr
+							// (in-place code replacement; the shadow path never
+							// ran the dispatch-loop SMC check at all). Verify the
+							// full code hash and rebuild from the CURRENT block
+							// if stale - otherwise the shadow compares the ref
+							// against a block that no longer exists.
+							{
+								u32 skey = (block->vaddr >> 1) & JIT_TABLE_MASK;
+								u32 want = blockCodeHash(block->vaddr, block->sh4_code_size);
+								if (jit_dispatch_pc[skey] != block->vaddr ||
+								    (want != 0 && jit_dispatch_hash[skey] != want)) {
+									static u32 shadow_stale_count = 0;
+									shadow_stale_count++;
+									if (shadow_stale_count <= 20) {
+										EM_ASM({ console.log('[SHADOW-STALE] rebuilt pc=0x' +
+											($0>>>0).toString(16) + ' (#' + $1 + ')'); },
+											block->vaddr, shadow_stale_count);
+									}
+									wasm_remove_block(block->vaddr);
+									WasmModuleBuilder sbuilder;
+									buildBlockModule(sbuilder, block);
+									const auto& sbytes = sbuilder.getBytes();
+									int stidx = wasm_compile_block(sbytes.data(), (u32)sbytes.size(), block->vaddr);
+									if (stidx > 0) {
+										jit_dispatch_table[skey] = (u32)stidx;
+										jit_dispatch_pc[skey] = block->vaddr;
+										jit_dispatch_hash[skey] = want;
+										jit_dispatch_size[skey] = block->sh4_code_size;
+									}
+								}
+							}
+
+							// 1. JIT observer run (writes captured with old values).
 							g_shil_writes.clear();
 							g_shil_log_writes = true;
+							g_shil_read_timer_taint = false;
 							u32 ctx_ptr = (u32)(uintptr_t)&ctx;
 							u32 ram_ptr = (u32)(uintptr_t)&mem_b[0];
 							ctx.cycle_counter -= block->guest_cycles;
@@ -2484,23 +2623,30 @@ public:
 							int trap = wasm_execute_block(block->vaddr, ctx_ptr, ram_ptr);
 							g_shil_log_writes = false;
 
-							// Save JIT's writes + register state
 							static std::vector<ShilWriteEntry> jit_writes;
 							jit_writes = g_shil_writes;
 							alignas(16) static u8 jit7_post[sizeof(Sh4Context)];
 							memcpy(jit7_post, &ctx, sizeof(Sh4Context));
+							bool jit_tainted = !shadowAllRollbackable(jit_writes);
 
-							// Restore pre-state for ref (registers). Memory
-							// has JIT's writes, which ref will overwrite.
+							// 2. Undo the observer run: RAM writes back, registers back.
+							shadowRollbackWrites(jit_writes);
 							memcpy(&ctx, jit7_pre, sizeof(Sh4Context));
+
+							// 3. Reference run (authoritative; its writes stay).
+							// This path runs the SHIL interpreter (wasm_exec_shil_fb),
+							// whose readm sets g_shil_read_timer_taint on a P4
+							// on-chip read - the signal we use to skip the compare.
 							g_shil_writes.clear();
 							g_shil_log_writes = true;
+							g_shil_read_timer_taint = false;
 							ctx.cycle_counter -= block->guest_cycles;
 							g_ifb_exception_pending = false;
 							for (u32 i = 0; i < block->oplist.size(); i++)
 								wasm_exec_shil_fb(block->vaddr, i);
 
 							g_shil_log_writes = false;
+							bool timer_tainted = g_shil_read_timer_taint;
 							// Save ref's writes
 							static std::vector<ShilWriteEntry> ref_writes;
 							ref_writes = g_shil_writes;
@@ -2559,6 +2705,7 @@ public:
 							static u32 jit7_match = 0;
 							static u32 jit7_mismatch = 0;
 							static u32 jit7_skip = 0;
+							static u32 jit7_timer_skip = 0;
 							if (trap) {
 								jit7_skip++;
 								if (jit7_skip <= 5 || (jit7_skip & 0x3FF) == 0) {
@@ -2566,6 +2713,13 @@ public:
 										' blk=' + $1 + ' pc=0x' + ($2>>>0).toString(16)); },
 										jit7_skip, g_wasm_block_count, block->vaddr);
 								}
+							} else if (timer_tainted) {
+								// Block read a live SH-4 on-chip timer (TMU/RTC): the two runs
+								// sample it at different scheduler moments, so a divergence is
+								// expected + real. Skip the compare - not a JIT bug.
+								jit7_timer_skip++;
+								if ((jit7_timer_skip & 0x3FFF) == 0)
+									EM_ASM({ console.log('[SHADOW-JIT-TIMER-SKIP] count=' + $0); }, jit7_timer_skip);
 							} else {
 								const Sh4Context& jit_ctx = *(const Sh4Context*)jit7_post;
 								const Sh4Context& ref_ctx = ctx;
@@ -2618,10 +2772,11 @@ public:
 											(($4 >= 0) ? ('[' + $4 + ']') : '') +
 											' jit=0x' + ($5>>>0).toString(16) +
 											' ref=0x' + ($6>>>0).toString(16) +
-											' nops=' + $7); },
+											' nops=' + $7 +
+											' tainted=' + $8); },
 											jit7_mismatch, g_wasm_block_count, block->vaddr,
 											diff_name, diff_idx, jit_v, ref_v,
-											(u32)block->oplist.size());
+											(u32)block->oplist.size(), jit_tainted ? 1 : 0);
 										if (jit7_mismatch <= 10) {
 											for (u32 i = 0; i < block->oplist.size() && i < 40; i++) {
 												auto& sop = block->oplist[i];
