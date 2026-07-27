@@ -46,6 +46,23 @@ if ! grep -q "CPU_GENERIC" core/build.h; then
   sed -i 's/#define CPU_X64      0x20000004/#define CPU_X64      0x20000004\n#define CPU_GENERIC  0x20000005/' core/build.h
   perl -0pi -e "s/(#if defined\\(__x86_64__\\) \\|\\| defined\\(_M_X64\\))/#if defined(__EMSCRIPTEN__)\\n\\t#define HOST_CPU CPU_GENERIC\\n${FLYCAST_REC_DEFINES}\\n#elif defined(__x86_64__) || defined(_M_X64)/" core/build.h
 fi
+# Re-assert the rec mode EVERY run — the block above is apply-once, so switching
+# interpreter <-> JIT on an existing tree would otherwise silently keep the stale
+# mode (a "JIT" build with TARGET_NO_REC compiles rec_wasm.cpp to a 333-byte
+# empty object and the link dies on the _wasm_* exports).
+if [ "${ROMDEV_FLYCAST_JIT:-0}" = "1" ]; then
+  REC_MODE_BLOCK=$'\t#define FEAT_SHREC DYNAREC_JIT\n\t#define FEAT_AREC DYNAREC_NONE\n\t#define FEAT_DSPREC DYNAREC_NONE'
+else
+  REC_MODE_BLOCK=$'\t#ifndef TARGET_NO_REC\n\t#define TARGET_NO_REC\n\t#endif'
+fi
+REC_MODE_BLOCK="$REC_MODE_BLOCK" perl -0pi -e 's/(#if defined\(__EMSCRIPTEN__\)\n\t#define HOST_CPU CPU_GENERIC\n).*?(\n#elif defined\(__x86_64__\) \|\| defined\(_M_X64\))/$1$ENV{REC_MODE_BLOCK}$2/s' core/build.h
+if [ "${ROMDEV_FLYCAST_JIT:-0}" = "1" ]; then
+  grep -q "FEAT_SHREC DYNAREC_JIT" core/build.h || { echo "FATAL: build.h rec-mode re-assert failed"; exit 1; }
+  echo "romdev: build.h rec mode = WASM SH-4 JIT"
+else
+  grep -q "TARGET_NO_REC" core/build.h || { echo "FATAL: build.h rec-mode re-assert failed"; exit 1; }
+  echo "romdev: build.h rec mode = interpreter"
+fi
 # 3. sh4_core_regs.cpp + context.cpp: CPU_GENERIC no-op.
 grep -q "HOST_CPU == CPU_GENERIC" core/hw/sh4/sh4_core_regs.cpp || \
   perl -0pi -e 's/(    #else\n\t#error "SetFloatStatusReg: Unsupported platform")/    #elif HOST_CPU == CPU_GENERIC\n\t(void)roundingMode; (void)denorm2zero;\n$1/' core/hw/sh4/sh4_core_regs.cpp
@@ -110,6 +127,27 @@ JIT_C_FLAGS=""
 if [ "${ROMDEV_FLYCAST_JIT:-0}" = "1" ]; then
   JIT_CXX_FLAGS="-DJIT_PROD_BUILD -fexceptions"
   JIT_C_FLAGS="-DJIT_PROD_BUILD"
+fi
+# ROMDEV_FLYCAST_SHADOW=1 → the JIT-vs-reference SHADOW diagnostic (implies JIT):
+#   EXECUTOR_MODE 7 (every block runs through BOTH the native JIT and the
+#   reference interpreter, Sh4Context compared byte-by-byte, [SHADOW-JIT]
+#   MISMATCH logged with exact block/op/register), FORCE_CPP_DISPATCH 1, and
+#   NO JIT_PROD_BUILD (the shadow machinery + logging are #ifndef-gated on it).
+#   Optional ROMDEV_FLYCAST_FALLBACK_MASK=0xNN forces op categories to the
+#   interpreter fallback (bit 6 = readm) for differential isolation.
+#   Run the result with ROMDEV_CORE_LOG=1 and grep for SHADOW-JIT.
+if [ "${ROMDEV_FLYCAST_SHADOW:-0}" = "1" ]; then
+  [ "${ROMDEV_FLYCAST_JIT:-0}" = "1" ] || { echo "ROMDEV_FLYCAST_SHADOW=1 requires ROMDEV_FLYCAST_JIT=1"; exit 1; }
+  JIT_CXX_FLAGS="-fexceptions -DEXECUTOR_MODE=7 -DFORCE_CPP_DISPATCH=1"
+  JIT_C_FLAGS=""
+  # Default mask 0x200 = writem via the captured shil fallback. The shadow's
+  # side-effect rollback NEEDS every write captured (native JIT stores are
+  # invisible to it); without this, read-modify-write-through-memory blocks
+  # produce guaranteed false mismatches. Override to test writem's native
+  # emit only AFTER everything else converges.
+  ROMDEV_FLYCAST_FALLBACK_MASK="${ROMDEV_FLYCAST_FALLBACK_MASK:-0x200}"
+  JIT_CXX_FLAGS="$JIT_CXX_FLAGS -DFLY_FORCE_FALLBACK_MASK=${ROMDEV_FLYCAST_FALLBACK_MASK}"
+  echo "romdev: SHADOW diagnostic build (EXECUTOR_MODE 7, no JIT_PROD_BUILD, mask=${ROMDEV_FLYCAST_FALLBACK_MASK})"
 fi
 rm -rf build-em && mkdir build-em && cd build-em
 emcmake cmake .. -DLIBRETRO=ON -DUSE_VULKAN=OFF -DUSE_GLES=ON -DUSE_GLES2=OFF -DCMAKE_BUILD_TYPE=Release \
