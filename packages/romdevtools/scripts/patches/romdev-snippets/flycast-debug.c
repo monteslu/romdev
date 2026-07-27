@@ -40,4 +40,14 @@ EMSCRIPTEN_KEEPALIVE void romdev_aica_get(unsigned char *out, int bytes)
    for (i = 0; i < bytes; i++) out[i] = aica::aica_reg[i];
 }
 
+/* Live Maple controller button mask per port (post-UpdateInputState). kcode is
+ * active-LOW (a pressed button is a 0 bit), so this reports what the game reads.
+ * Debug-only: lets romdev verify setInput actually reaches the DC input path. */
+extern unsigned int kcode[4];
+EMSCRIPTEN_KEEPALIVE unsigned int romdev_dc_kcode_get(int port)
+{
+   if (port < 0 || port > 3) return 0xFFFFFFFFu;
+   return kcode[port];
+}
+
 }
