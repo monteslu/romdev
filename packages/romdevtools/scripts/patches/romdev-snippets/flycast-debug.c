@@ -14,6 +14,12 @@
 #include "hw/sh4/sh4_if.h"
 #include "hw/aica/aica_mem.h"
 
+// C++-linkage externs (these globals are plain C++ symbols in rec_wasm.cpp /
+// libretro.cpp, so declare them OUTSIDE extern "C" or the names won't resolve).
+extern unsigned int kcode[4];
+extern unsigned int g_shil_fb_call_count;  // rec_wasm.cpp: per-op interpreter fallbacks
+extern unsigned int g_wasm_block_count;    // rec_wasm.cpp: total JIT blocks executed
+
 extern "C" {
 
 EMSCRIPTEN_KEEPALIVE void romdev_sh4_regs_get(unsigned int *out)
@@ -43,7 +49,11 @@ EMSCRIPTEN_KEEPALIVE void romdev_aica_get(unsigned char *out, int bytes)
 /* Live Maple controller button mask per port (post-UpdateInputState). kcode is
  * active-LOW (a pressed button is a 0 bit), so this reports what the game reads.
  * Debug-only: lets romdev verify setInput actually reaches the DC input path. */
-extern unsigned int kcode[4];
+EMSCRIPTEN_KEEPALIVE unsigned int romdev_jit_stats(int which){
+   if (which==0) return g_shil_fb_call_count;
+   if (which==1) return g_wasm_block_count;
+   return 0;
+}
 EMSCRIPTEN_KEEPALIVE unsigned int romdev_dc_kcode_get(int port)
 {
    if (port < 0 || port > 3) return 0xFFFFFFFFu;

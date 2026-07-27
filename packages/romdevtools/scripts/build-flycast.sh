@@ -33,10 +33,13 @@ fi
 # 2. build.h: CPU_GENERIC for emscripten. DEFAULT = the SH-4/ARM/DSP INTERPRETERS
 #    (TARGET_NO_REC) — the SHIPPABLE config: correct on all games, ~16fps on heavy DC
 #    scenes (3 interpreted CPUs). Set ROMDEV_FLYCAST_JIT=1 to build the experimental
-#    WASM SH-4 JIT instead (core/rec-wasm/rec_wasm.cpp; fast ~78fps but has native-emit
-#    correctness bugs that hang Sonic's boot — see N64_PS1_LESSONS_FOR_DREAMCAST.md
-#    "DREAMCAST PERF" + "FLYCAST WASM JIT — RESUME HERE"). The JIT integration is fully
-#    wired and one env-flag away; it just isn't correct yet.
+#    WASM SH-4 JIT instead (core/rec-wasm/rec_wasm.cpp; ~71-91fps on discs from your own library).
+#    The "native-emit bugs hang Sonic's boot" note here was WRONG: the hang was a
+#    stale-compiled-block SMC hole (fixed via full-block fingerprints), and the emit
+#    bugs it was blamed on were artifacts of a buggy shadow comparator. a Dreamcast disc,
+#    a Dreamcast disc, Rez and a Dreamcast disc all boot clean on the JIT. It stays opt-in only
+#    because it's young, not because it's known-broken — see
+#    internal-romdev/FLYCAST_WASM_JIT_RESUME.md for the full story + ship checklist.
 FLYCAST_REC_DEFINES='\t#ifndef TARGET_NO_REC\n\t#define TARGET_NO_REC\n\t#endif'
 if [ "${ROMDEV_FLYCAST_JIT:-0}" = "1" ]; then
   FLYCAST_REC_DEFINES='\t#define FEAT_SHREC DYNAREC_JIT\n\t#define FEAT_AREC DYNAREC_NONE\n\t#define FEAT_DSPREC DYNAREC_NONE'
@@ -107,6 +110,25 @@ grep -q "romdev force single-thread" shell/libretro/libretro.cpp || \
 grep -q "romdev/WASM: we never ship" shell/libretro/option.cpp || \
   perl -0pi -e 's/Option<bool> UseReios\(CORE_OPTION_NAME "_hle_bios"\);/#if defined(__EMSCRIPTEN__) \/* romdev\/WASM: we never ship a real dc_boot.bin *\/\nOption<bool> UseReios(CORE_OPTION_NAME "_hle_bios", true);\n#else\nOption<bool> UseReios(CORE_OPTION_NAME "_hle_bios");\n#endif/' shell/libretro/option.cpp
 
+# 7. perf profiling exports (romdev_aica_prof_ms / romdev_gpu_prof_ms). These answer
+#    "where is the frame time actually going" once the SH-4 JIT is on: the SH-4 stops
+#    being the bottleneck and the remaining cost is the interpreted AICA (ARM7) plus
+#    the TA-parse/GL-draw path. Both accumulate wall-ms and reset on read(1).
+#    ALWAYS applied (not JIT-gated) so an interpreter build can be measured against a
+#    JIT build with the same instrument; the cost is one emscripten_get_now() pair per
+#    AICA sample tick / per rendered frame. The matching _romdev_*_prof_ms entries are
+#    in BASE_EXPORTS below — if you drop these patches, drop those too, or the link
+#    silently omits them (ERROR_ON_UNDEFINED_SYMBOLS=0) and the host sees no export.
+grep -q "romdev_aica_prof_ms" core/hw/aica/aica.cpp || \
+  perl -0pi -e 's/(static int AicaUpdate\(int tag, int cycles, int jitter, void \*arg\)\n\{\n)(\targm::run\(1\);|\tarm::run\(1\);)/#include <emscripten.h>\ndouble g_aica_prof_ms = 0.0;\nextern "C" EMSCRIPTEN_KEEPALIVE double romdev_aica_prof_ms(int reset){ double v=g_aica_prof_ms; if(reset) g_aica_prof_ms=0.0; return v; }\n\n$1\tdouble _t0 = emscripten_get_now();\n$2\n\tg_aica_prof_ms += emscripten_get_now() - _t0;/' core/hw/aica/aica.cpp
+grep -q "romdev_aica_prof_ms" core/hw/aica/aica.cpp || { echo "FATAL: aica prof patch failed to apply"; exit 1; }
+grep -q "romdev_gpu_prof_ms" core/hw/pvr/Renderer_if.cpp || {
+  perl -0pi -e 's/(#include <mutex>\n)/$1#include <emscripten.h>\ndouble g_gpu_prof_ms = 0.0;\nextern "C" EMSCRIPTEN_KEEPALIVE double romdev_gpu_prof_ms(int reset){ double v=g_gpu_prof_ms; if(reset) g_gpu_prof_ms=0.0; return v; }\nstruct RomdevGpuTimer { double t0; RomdevGpuTimer(){ t0 = emscripten_get_now(); } ~RomdevGpuTimer(){ g_gpu_prof_ms += emscripten_get_now() - t0; } };\n/' core/hw/pvr/Renderer_if.cpp
+  perl -0pi -e 's/(\n\t\t\{\n\t\t\tFC_PROFILE_SCOPE_NAMED\("Renderer::Process"\);)/\n\t\tRomdevGpuTimer _rgt; \/\/ times TA-parse (Process) + GL draw (Render) + present$1/' core/hw/pvr/Renderer_if.cpp
+}
+grep -q "romdev_gpu_prof_ms" core/hw/pvr/Renderer_if.cpp || { echo "FATAL: gpu prof patch failed to apply"; exit 1; }
+grep -q "RomdevGpuTimer _rgt" core/hw/pvr/Renderer_if.cpp || { echo "FATAL: gpu prof timer scope failed to apply"; exit 1; }
+
 # ── stage the WASM SH-4 JIT backend into the tree ───────────────────────────
 # rec_wasm.cpp emits wasm bytecode at runtime (WebAssembly.compile + table.grow +
 # call_indirect). CMakeLists compiles it for EMSCRIPTEN (target_sources added above).
@@ -172,7 +194,7 @@ LIBS="libflycast_libretro.a libflycast-resources.a core/deps/libelf/libelf.a cor
 # imports the EM_JS glue in rec_wasm.cpp binds into each runtime-compiled block module
 # (export them explicitly so DCE can't drop them), + wasmExports/wasmTable/wasmMemory
 # runtime methods + -fexceptions. The interpreter needs none of these.
-BASE_EXPORTS='"_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_romdev_sh4_regs_get","_romdev_aica_get","_romdev_dc_kcode_get","_malloc","_free","_emscripten_GetProcAddress"'
+BASE_EXPORTS='"_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_romdev_sh4_regs_get","_romdev_aica_get","_romdev_dc_kcode_get","_romdev_aica_prof_ms","_romdev_jit_stats","_romdev_gpu_prof_ms","_malloc","_free","_emscripten_GetProcAddress"'
 BASE_RT='"ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS","dynCall","GL"'
 JIT_LINK_FLAGS=""
 if [ "${ROMDEV_FLYCAST_JIT:-0}" = "1" ]; then

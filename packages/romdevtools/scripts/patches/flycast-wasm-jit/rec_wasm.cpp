@@ -189,20 +189,38 @@ static u32 jit_dispatch_pc[JIT_TABLE_SIZE];    // PC hash → actual PC (collisi
 static u32 jit_dispatch_hash[JIT_TABLE_SIZE];  // PC hash → FNV-1a of the block's guest CODE (SMC detection; 0 = ROM/no hash)
 static u32 jit_dispatch_size[JIT_TABLE_SIZE];  // PC hash → guest code size the hash covers
 
-// FNV-1a over a block's guest code bytes. RAM blocks only (area 3 + OC-RAM
-// don't apply here; code runs from area 3 or ROM; ROM is immutable → 0).
-// This replaces the old first-16-bit-word fingerprint, which missed the
-// in-place code replacement the Dreamcast boot loader performs (1ST_READ.BIN
-// lands over the loader with the same leading word at several PCs) - the
-// stale compiled blocks then push/branch per the OLD code: the real cause of
-// the commercial-boot hang the June notes pinned on shop_readm.
+// SMC fingerprint of a block's guest code. RAM blocks only (area 3; ROM is
+// immutable → 0). Replaces the old first-16-bit-word fingerprint, which missed
+// the in-place code replacement the DC boot loader performs (1ST_READ.BIN lands
+// over the loader with the same leading word) - the stale compiled blocks then
+// ran the OLD code: the real commercial-boot hang (misattributed to shop_readm).
+//
+// PERF: this runs on EVERY dispatch of EVERY RAM block (~190K/frame), so it MUST
+// be O(1). A full FNV over the block bytes cost ~40% of frame time. Instead we
+// sample the FIRST word, the LAST word, and the MIDDLE word (+ size mixed in) -
+// 3 reads regardless of block length. Whole-routine replacement (the boot
+// loader's case) changes the last/middle word, so it's still caught; a
+// same-length patch that touches ONLY interior words between the samples could
+// theoretically slip, but the boot loader rewrites entire routines, not
+// surgical interior words. If a title ever needs byte-exact SMC, gate the full
+// FNV behind a per-page dirty flag rather than paying it every dispatch.
 static u32 blockCodeHash(u32 vaddr, u32 codeSize) {
 	u32 phys = vaddr & 0x1FFFFFFF;
 	if ((phys >> 26) != 3) return 0;           // ROM/BIOS: immutable
 	if (codeSize == 0 || codeSize > 4096) codeSize = 2;
 	const u8* p = &mem_b[phys & RAM_MASK];
+	auto rd16 = [&](u32 off) -> u32 {
+		if (off + 1 >= codeSize) off = (codeSize >= 2) ? codeSize - 2 : 0;
+		return (u32)p[off] | ((u32)p[off + 1] << 8);
+	};
+	u32 first  = rd16(0);
+	u32 mid    = rd16((codeSize / 2) & ~1u);
+	u32 last   = rd16(codeSize - 2);
 	u32 h = 0x811c9dc5u;
-	for (u32 i = 0; i < codeSize; i++) { h ^= p[i]; h *= 16777619u; }
+	h = (h ^ first)  * 16777619u;
+	h = (h ^ mid)    * 16777619u;
+	h = (h ^ last)   * 16777619u;
+	h = (h ^ codeSize) * 16777619u;
 	return h ? h : 1;                          // 0 reserved for "no hash"
 }
 
@@ -304,7 +322,7 @@ extern u32 g_wasm_block_count;
 // Runtime SHIL op interpreter — executes a single SHIL op by reading
 // register values from Sh4Context, performing the operation, and writing
 // results back. Used for ops that the WASM emitter doesn't handle natively.
-static u32 g_shil_fb_call_count = 0;
+__attribute__((used, retain, visibility("default"))) u32 g_shil_fb_call_count = 0; // externed by flycast-debug.c for perf profiling; retain so archive LTO cannot internalize it
 static u32 g_shil_fb_miss_count = 0;
 
 void EMSCRIPTEN_KEEPALIVE wasm_exec_shil_fb(u32 block_vaddr, u32 op_index) {
