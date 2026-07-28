@@ -28,9 +28,13 @@ import { resolveCore } from "../src/cores/registry.js";
 function fbSignature(host) {
   try {
     const fb = host.getFramebuffer();
-    const buf = fb?.data ?? fb?.pixels ?? fb;
-    if (!buf) return "nofb";
-    return crypto.createHash("md5").update(Buffer.from(buf.buffer ?? buf)).digest("hex").slice(0, 12);
+    const buf = fb?.pixels ?? fb?.data;
+    if (!ArrayBuffer.isView(buf)) return "nofb";
+    // Hash the VIEW, not buf.buffer — on hwRender cores the backing ArrayBuffer
+    // is a reused staging buffer, so hashing it can mask a real frame change.
+    return crypto.createHash("md5")
+      .update(Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength))
+      .digest("hex").slice(0, 12);
   } catch (e) {
     return `err:${String(e.message).slice(0, 20)}`;
   }
@@ -45,8 +49,9 @@ const FRAMES = Number(arg("--frames", 600));
 const WARMUP = Number(arg("--warmup", 180));
 
 const DC = process.env.ROMDEV_DC_DISCS;
+// A deliberately mixed set of containers (.gdi/.chd/.cue), supplied by env.
 const GAMES = [
-      ];
+          ];
 
 /**
  * Read the JIT/AICA/GPU profiling counters off the core Module.
