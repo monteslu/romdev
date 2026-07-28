@@ -2140,15 +2140,23 @@ static std::vector<RuntimeBlockInfo*> discoverChain(RuntimeBlockInfo* entry) {
 		if (bcls != BET_CLS_Static && bcls != BET_CLS_COND) continue;
 		if (current->BlockType == BET_StaticIntr) continue;
 
-		// Taken-target edge only. Following the COND fall-through edge as well
-		// was tried and REVERTED: it diverges from the reference on two of
-		// three discs (frame-hash mismatch within ~400 frames, SP/PC drifting
-		// wholesale), even with the routing fix below and even capped at a
-		// 2-block chain. The routing fix is necessary but not sufficient —
-		// something else about entering a block via its fall-through edge is
-		// unsound here. Not yet diagnosed; see the perf notes.
+		// Follow BOTH edges of a conditional — taken target AND fall-through.
+		// Taken-only left mean chain length at ~1.15-1.2, i.e. ~85% of modules
+		// were a single block, which is why per-dispatch overhead dominated.
+		//
+		// EXCEPT for a DELAYED conditional (bt.s/bf.s, has_jcond). Such a block
+		// stashes its condition in ctx.jdyn via shop_jcond before the delay
+		// slot runs, and its exit reads jdyn back. Every block in a chain
+		// shares ONE cached jdyn local, so chaining both edges of a delayed
+		// conditional lets a later block's jcond clobber an earlier one's
+		// pending condition — the earlier exit then branches on the wrong
+		// value. Caught as a single sr.T divergence in a 5-block chain by the
+		// chain-vs-reference differential; excluding has_jcond takes
+		// multi-block divergences to zero across three discs.
 		u32 targets[2] = { current->BranchBlock, 0xFFFFFFFF };
 		u32 ntargets = 1;
+		if (bcls == BET_CLS_COND && !current->has_jcond)
+			targets[ntargets++] = current->NextBlock;
 
 		for (u32 t = 0; t < ntargets && (int)chain.size() < MULTIBLOCK_MAX; t++) {
 			u32 target = targets[t];
