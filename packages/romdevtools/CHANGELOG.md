@@ -4,6 +4,22 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.107.4 — 2026-07-28
+
+Repin `wasmcart` ^0.9.1. No code change.
+
+0.9.0 made the Node `CartHost` supply its own GL context, matching what the
+browser host started doing in 0.8.0 — the same `load()` call had been
+succeeding in a browser and throwing under Node. 0.9.1 adds `getGlContext()`
+and fixes the CLI reading a private field that is only set when the host
+self-provisions, so a caller-supplied context silently disabled GL readback.
+
+romdev keeps supplying its own factory rather than relying on the new
+self-provisioning: it wants ONE 1280x720 context reused for the whole process,
+where wasmcart's own default is 640x480 created per load. Its `_gl` tracking
+already covers both the host-created and caller-supplied cases, so
+`getGlContext()` is not needed here.
+
 ## 0.107.3 — 2026-07-28
 
 Repin `wasmcart` ^0.8.0. No code change — romdev already supplies a GL context
