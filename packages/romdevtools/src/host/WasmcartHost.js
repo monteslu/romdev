@@ -17,30 +17,14 @@ import { CartHost, BUTTON } from "wasmcart";
 import { framebufferToRgba } from "romdev-core-host/framebuffer.js";
 import { framebufferToScreenshot } from "romdev-core-host/framebuffer-png.js";
 import { RETRO_PIXEL_FORMAT_XRGB8888, ROMDEV_PIXEL_FORMAT_RGBA8888 } from "romdev-core-host/retroConstants.js";
-import { createRequire } from "node:module";
-import { readFileSync } from "node:fs";
-import path from "node:path";
 
 // ── Headless GL for GL carts ─────────────────────────────────────────────────
-// wasmcart >= 0.6.0 accepts glBackend as a FACTORY invoked only when the
-// cart's wasm imports from the "gl" module. With an offscreen webgl-node
-// context, GL carts render REAL pixels headless (screenshots/frame hashes
-// work) instead of silently no-oping into stubs. Version-gated: a 0.5.x
-// CartHost would treat the function as a truthy context and break — on the
-// ^0.5.0 pin this whole path stays inert.
-const _require = createRequire(import.meta.url);
-let _wcGlFactoryOk = null;
-function wasmcartSupportsGlFactory() {
-  if (_wcGlFactoryOk !== null) return _wcGlFactoryOk;
-  try {
-    // package.json isn't in wasmcart's exports map — read it next to the entry.
-    const pkg = JSON.parse(readFileSync(
-      path.join(path.dirname(_require.resolve("wasmcart")), "package.json"), "utf8"));
-    const [maj, min] = String(pkg.version).split(".").map(Number);
-    _wcGlFactoryOk = maj > 0 || min >= 6;
-  } catch { _wcGlFactoryOk = false; }
-  return _wcGlFactoryOk;
-}
+// wasmcart takes glBackend as a FACTORY invoked only when the cart's wasm
+// imports from the "gl" module, so 2D-only sessions never create a context.
+// webgl-node + native-gles are REQUIRED dependencies (not optional): GL carts
+// must render REAL pixels headless so screenshots and frame hashes mean
+// something. wasmcart 0.7.0 makes "GL cart, no context" a load error, and
+// romdev satisfies that by always having a context rather than opting out.
 
 // ONE offscreen WebGL2 context per process, reused across loads — webgl-node
 // binds a single native EGL context (no destroy API), so per-load creation
@@ -101,7 +85,7 @@ export class WasmcartHost {
       coreFps: 60,
       displayAspect: 0,
       audioSampleRate: 0,
-      gl: null, // "rendered" | "stubbed" for GL carts, null for 2D carts
+      gl: null, // "rendered" for GL carts, null for 2D carts
     };
     this._gl = null; // live GL context for readback (offscreen or caller-supplied)
   }
@@ -125,8 +109,7 @@ export class WasmcartHost {
       hasMemoryRegions: false,
       hasWasmIntrospection: true,
       // GL carts render on a real (offscreen) WebGL2 context and screenshots
-      // show the actual draws — false means this GL cart is running stubbed
-      // (webgl-node unavailable or wasmcart < 0.6.0). 2D carts: false.
+      // show the actual draws. 2D carts: false (they never request a context).
       hasGlRendering: !!this._gl,
       // Named debug state (opt-in wasmcart debug ABI). True only when the cart
       // opted in AND the wasmcart build exposes the reader — feature-detected.
@@ -162,27 +145,40 @@ export class WasmcartHost {
         "deterministic replay needs wasmcart >= 0.5.0 (this install predates wc_set_seed) — reinstall/repin wasmcart."
       );
     }
-    // Headless GL: offer CartHost a lazy offscreen-context factory (it runs
-    // only if the cart's wasm imports GL). Availability is probed WITHOUT
-    // creating a context, so 2D-only sessions never pay for one, and a
-    // missing webgl-node degrades to the old stub behavior instead of
-    // failing the load. A caller-supplied glBackend always wins.
+    // Headless GL: hand CartHost a lazy offscreen-context factory. It runs
+    // ONLY if the cart's wasm imports GL, so 2D-only sessions never create a
+    // context. A caller-supplied glBackend always wins.
     this._gl = null;
     let glFactory = null;
-    if (!glBackend && wasmcartSupportsGlFactory() && await _webglNode()) {
+    if (!glBackend) {
       glFactory = async () => {
         const gl = await _getOffscreenGl();
-        if (gl) this._gl = gl;
+        if (!gl) {
+          // webgl-node/native-gles are REQUIRED dependencies, so reaching here
+          // means a broken install rather than an unsupported configuration.
+          // Say that plainly: wasmcart's own error ("no glBackend was provided")
+          // would point at the caller, which is not where the fault is.
+          throw new Error(
+            "romdev requires headless GL for wasmcart GL carts, but webgl-node/native-gles " +
+            "failed to load. Reinstall romdevtools (native-gles builds or downloads a native " +
+            "module at install time; check that step's output).");
+        }
+        this._gl = gl;
         return gl;
       };
     }
+    // No allowMissingGL: a GL cart with no context renders black with no error,
+    // which is the failure mode wasmcart 0.7.0 made fatal on purpose. romdev
+    // guarantees a context instead of opting out of the check.
     await this.cart.load(source, {
-      ...(glBackend ? { glBackend } : glFactory ? { glBackend: glFactory } : {}),
+      glBackend: glBackend ?? glFactory,
       ...(deterministic ? { deterministic } : {}),
     });
     if (glBackend && this.cart.usesGL) this._gl = glBackend;
     // Surfaced in status: are this GL cart's draws real pixels or stubs?
-    this.status.gl = this.cart.usesGL ? (this._gl ? "rendered" : "stubbed") : null;
+    // "stubbed" is no longer reachable: the factory either supplies a context
+    // or throws, so a loaded GL cart is always really rendering.
+    this.status.gl = this.cart.usesGL ? "rendered" : null;
     // Deterministic clock: romdev steps frames, so frame N should be reproducible.
     // Feature-detect — setFixedStep is a newer CartHost addition; older published
     // versions fall back to wall-clock (still works, just non-deterministic timing).
