@@ -1449,12 +1449,106 @@ static bool emitShilOp(WasmModuleBuilder& b, const shil_opcode& op,
 
 	// ---- Division ops (complex, kept as shil_fb fallback) ----
 	// div32u/div32s need 64-bit division with dual output
-	// div1 needs sr.Q/sr.M bit access, div32p2 has complex conditionals
-	// These are relatively rare compared to ALU/FPU/memory ops
-	case shop_div32u:
-	case shop_div32s:
-	case shop_div32p2:
+	// ---- SH-4 division, emitted natively (was a shil_fb import) ----
+	// WASM has i64 div/rem, so the 64/32 forms map almost 1:1 onto the
+	// canonical implementations in shil_canonical.h.
+	case shop_div32u: {
+		u32 t64 = cache.tmp64Local();
+		emitLoadParamCached(b, op.rs3, cache);
+		b.op_i64_extend_i32_u();
+		b.op_i64_const(32);
+		b.op_i64_shl();
+		emitLoadParamCached(b, op.rs1, cache);
+		b.op_i64_extend_i32_u();
+		b.op_i64_or();
+		b.op_local_set(t64);
+		emitLoadParamCached(b, op.rs2, cache);
+		b.op_local_tee(LOCAL_TMP3);
+		b.op_if_i32();
+		b.op_local_get(t64); b.op_local_get(LOCAL_TMP3);
+		b.op_i64_extend_i32_u(); b.op_i64_div_u(); b.op_i32_wrap_i64();
+		b.op_else(); b.op_i32_const(0); b.op_end();
+		b.op_local_set(LOCAL_TMP4);
+		b.op_local_get(LOCAL_TMP3);
+		b.op_if_i32();
+		b.op_local_get(t64); b.op_local_get(LOCAL_TMP3);
+		b.op_i64_extend_i32_u(); b.op_i64_rem_u(); b.op_i32_wrap_i64();
+		b.op_else(); b.op_local_get(t64); b.op_i32_wrap_i64(); b.op_end();
+		b.op_local_set(LOCAL_TMP5);
+		emitPreStore(b, op.rd, cache);  b.op_local_get(LOCAL_TMP4); emitPostStore(b, op.rd, cache);
+		emitPreStore(b, op.rd2, cache); b.op_local_get(LOCAL_TMP5); emitPostStore(b, op.rd2, cache);
+		return true;
+	}
+
+	case shop_div32s: {
+		u32 t64 = cache.tmp64Local();
+		emitLoadParamCached(b, op.rs3, cache);
+		b.op_i64_extend_i32_u(); b.op_i64_const(32); b.op_i64_shl();
+		emitLoadParamCached(b, op.rs1, cache);
+		b.op_i64_extend_i32_u(); b.op_i64_or();
+		b.op_local_tee(t64);
+		b.op_i64_const(0); b.op_i64_lt_s();
+		b.op_if_i64();
+		b.op_local_get(t64); b.op_i64_const(1); b.op_i64_add();
+		b.op_else(); b.op_local_get(t64); b.op_end();
+		b.op_local_set(t64);
+		emitLoadParamCached(b, op.rs2, cache);
+		b.op_local_set(LOCAL_TMP3);
+		b.op_local_get(LOCAL_TMP3);
+		b.op_if_i32();
+		b.op_local_get(t64); b.op_local_get(LOCAL_TMP3);
+		b.op_i64_extend_i32_s(); b.op_i64_div_s(); b.op_i32_wrap_i64();
+		b.op_else(); b.op_i32_const(0); b.op_end();
+		b.op_local_set(LOCAL_TMP4);
+		b.op_local_get(t64);
+		b.op_local_get(LOCAL_TMP4); b.op_i64_extend_i32_s();
+		b.op_local_get(LOCAL_TMP3); b.op_i64_extend_i32_s();
+		b.op_i64_mul(); b.op_i64_sub(); b.op_i32_wrap_i64();
+		b.op_local_set(LOCAL_TMP5);
+		emitLoadParamCached(b, op.rs3, cache);
+		b.op_local_tee(LOCAL_TMP);
+		b.op_local_get(LOCAL_TMP3); b.op_i32_xor();
+		b.op_i32_const((s32)0x80000000); b.op_i32_and();
+		b.op_if_void();
+		b.op_local_get(LOCAL_TMP4); b.op_i32_const(1); b.op_i32_sub(); b.op_local_set(LOCAL_TMP4);
+		b.op_else();
+		b.op_local_get(LOCAL_TMP); b.op_i32_const(0); b.op_i32_lt_s();
+		b.op_if_void();
+		b.op_local_get(LOCAL_TMP5); b.op_i32_const(1); b.op_i32_sub(); b.op_local_set(LOCAL_TMP5);
+		b.op_end();
+		b.op_end();
+		emitPreStore(b, op.rd, cache);  b.op_local_get(LOCAL_TMP4); emitPostStore(b, op.rd, cache);
+		emitPreStore(b, op.rd2, cache); b.op_local_get(LOCAL_TMP5); emitPostStore(b, op.rd2, cache);
+		return true;
+	}
+
+	case shop_div32p2: {
+		emitLoadParamCached(b, op.rs1, cache); b.op_local_set(LOCAL_TMP4);
+		emitLoadParamCached(b, op.rs2, cache); b.op_local_set(LOCAL_TMP3);
+		emitLoadParamCached(b, op.rs3, cache); b.op_local_tee(LOCAL_TMP5);
+		b.op_i32_const((s32)0x80000000); b.op_i32_and();
+		b.op_if_void();
+		b.op_local_get(LOCAL_TMP3); b.op_i32_const(0); b.op_i32_gt_s();
+		b.op_if_void();
+		b.op_local_get(LOCAL_TMP4); b.op_i32_const(1); b.op_i32_sub(); b.op_local_set(LOCAL_TMP4);
+		b.op_end();
+		b.op_local_get(LOCAL_TMP5); b.op_i32_const(1); b.op_i32_and();
+		b.op_if_void();
+		b.op_local_get(LOCAL_TMP4); b.op_local_get(LOCAL_TMP3); b.op_i32_add(); b.op_local_set(LOCAL_TMP4);
+		b.op_end();
+		b.op_else();
+		b.op_local_get(LOCAL_TMP5); b.op_i32_const(1); b.op_i32_and(); b.op_i32_eqz();
+		b.op_if_void();
+		b.op_local_get(LOCAL_TMP4); b.op_local_get(LOCAL_TMP3); b.op_i32_sub(); b.op_local_set(LOCAL_TMP4);
+		b.op_end();
+		b.op_end();
+		emitPreStore(b, op.rd, cache); b.op_local_get(LOCAL_TMP4); emitPostStore(b, op.rd, cache);
+		return true;
+	}
+
 	case shop_div1:
+		// Touches sr.Q/sr.M (bits 8/9 of sr.status) with a read-modify-write
+		// the register cache also mirrors — left on the fallback path.
 		return false;
 
 	// ---- System ops that need fallback (flush+reload around call) ----
