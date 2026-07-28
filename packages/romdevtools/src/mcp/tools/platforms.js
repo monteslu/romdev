@@ -83,10 +83,10 @@ const PLATFORM_QUIRKS = {
     maxRomBytesPerBank: 0,
     headerLocation: ".z64 (big-endian) magic 80 37 12 40 at 0; entry point (big-endian word) at +0x08; 0x1000-byte IPL3 bootcode then game code. .v64/.n64 byte orders are auto-normalized.",
     notes: [
-      "32-bit MIPS R4300 (big-endian), 3D RDP/RSP. Runs via ParaLLEl-N64 with the glide64 GL renderer — HW-rendered through the OPTIONAL native GL stack (native-gles + webgl-node). Those are optionalDependencies: install them for N64; the other platforms don't need them.",
+      "32-bit MIPS R4300 (big-endian), 3D RDP/RSP. Runs via ParaLLEl-N64 with the glide64 GL renderer — HW-rendered on a real GPU through the native GL stack (native-gles + webgl-node), which ships as a required dependency, so nothing extra to install.",
       "WORKS NOW: build (buildSource language:'c' → mips-elf-gcc → a big-endian MIPS image; bare crt0, no libdragon yet so it's logic-only for now), run, frame({op:'screenshot'}) (real 3D frames, headless via FBO readback), cpu({op:'read'}) (live R4300 registers), cheats, readMemory/writeMemory (system_ram = 8MB RDRAM, 0x80xxxxxx maps to offset 0), disasm + decompile (Ghidra MIPS C), breakpoint + watch (live-debug instrumentation), AND getAudioState({chip:'ai'}) (audio output: sample rate + playing). MIPS is big-endian here.",
       "build caveat: a fully BOOTABLE N64 ROM needs the IPL3 bootcode + a libdragon-style header (libdragon SDK forthcoming). The bare build compiles+links your C to a flat image — great for logic/RE, not yet a self-booting cart. 3D renderer has no tile/sprite inspectors — use screenshot + memory.",
-      "If frame() errors with an install hint, the optional GL module isn't installed: `npm install native-gles webgl-node`.",
+      "If frame() errors pointing at GL, the native GL module failed to build/download during install — reinstall romdevtools and check that step's output.",
     ],
     starterSnippets: [],
   },
