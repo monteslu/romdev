@@ -78,7 +78,7 @@ export const CORES = {
   // noderawfs: the flycast WASM is built with -s NODERAWFS=1, so its filesystem IS
   // Node's real fs — libchdr fopens/seeks the disc image off DISK on demand instead
   // of the host loading the whole (up to ~1GB) CHD into the WASM heap (which OOM'd a
-  // 1GB max-heap on big discs like Sonic Adventure). The host passes the REAL path
+  // 1GB max-heap on a full-size commercial disc). The host passes the REAL path
   // and skips the malloc+FS.writeFile for these cores. See LibretroHost.loadMedia.
   dreamcast: { platform: "dreamcast", coreName: "flycast", pkg: "romdev-core-flycast", displayName: "Sega Dreamcast (Flycast)", aka: "dc", hwRender: true, noderawfs: true },
 };
