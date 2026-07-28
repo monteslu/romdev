@@ -188,6 +188,12 @@ static u32 jit_dispatch_table[JIT_TABLE_SIZE];  // PC hash → table index (0 = 
 static u32 jit_dispatch_pc[JIT_TABLE_SIZE];    // PC hash → actual PC (collision guard)
 static u32 jit_dispatch_hash[JIT_TABLE_SIZE];  // PC hash → FNV-1a of the block's guest CODE (SMC detection; 0 = ROM/no hash)
 static u32 jit_dispatch_size[JIT_TABLE_SIZE];  // PC hash → guest code size the hash covers
+// PERF: the guest-RAM address of the block's code, resolved ONCE at compile
+// time. The dispatch loop used to recompute phys = vaddr & 0x1FFFFFFF, test the
+// area, and re-derive &mem_b[phys & RAM_MASK] on every single dispatch — all of
+// it invariant for a given block. nullptr = ROM/BIOS (immutable, skip the SMC
+// check entirely).
+static const u8* jit_dispatch_ptr[JIT_TABLE_SIZE];
 
 // SMC fingerprint of a block's guest code. RAM blocks only (area 3; ROM is
 // immutable → 0). Replaces the old first-16-bit-word fingerprint, which missed
@@ -1836,7 +1842,14 @@ static int c_dispatch_loop(u32 ctx_ptr, u32 ram_base) {
 		{
 			u32 want = jit_dispatch_hash[key];
 			if (want != 0) {
-				u32 got = blockCodeHash(pc, jit_dispatch_size[key]);
+				// Cached pointer + size; no per-dispatch address arithmetic.
+				const u8* cp = jit_dispatch_ptr[key];
+				u32 csz = jit_dispatch_size[key];
+				u32 a, z;
+				memcpy(&a, cp, 4);
+				memcpy(&z, cp + ((csz >= 8) ? (csz - 4) : 0), 4);
+				u32 got = (a * 2654435761u) ^ (z + csz * 2246822519u);
+				if (got == 0) got = 1;
 				if (got != want) {
 #ifndef JIT_PROD_BUILD
 					static u32 smc_log_count = 0;
@@ -2452,6 +2465,8 @@ public:
 			u32 hkey = (block->vaddr >> 1) & JIT_TABLE_MASK;
 			jit_dispatch_size[hkey] = block->sh4_code_size;
 			jit_dispatch_hash[hkey] = blockCodeHash(block->vaddr, block->sh4_code_size);
+			{	u32 ph = block->vaddr & 0x1FFFFFFF;
+				jit_dispatch_ptr[hkey] = ((ph >> 26) == 3) ? &mem_b[ph & RAM_MASK] : nullptr; }
 		}
 
 #if EXECUTOR_MODE == 6 || EXECUTOR_MODE == 7
@@ -2647,6 +2662,8 @@ public:
 										jit_dispatch_table[skey] = (u32)stidx;
 										jit_dispatch_pc[skey] = block->vaddr;
 										jit_dispatch_hash[skey] = want;
+										{	u32 ph2 = block->vaddr & 0x1FFFFFFF;
+											jit_dispatch_ptr[skey] = ((ph2 >> 26) == 3) ? &mem_b[ph2 & RAM_MASK] : nullptr; }
 										jit_dispatch_size[skey] = block->sh4_code_size;
 									}
 								}
