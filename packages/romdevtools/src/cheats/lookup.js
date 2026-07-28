@@ -106,8 +106,8 @@ function normalize(name) {
 
 // A "base name" with region/revision/dump tags stripped — for FUZZY matching
 // only. "(World)", "(USA, Europe)", "(Rev A)", "[!]", "(Action Replay)" etc. are
-// dropped and separators normalized, so "NBA Jam - Tournament Edition (World)",
-// "NBA Jam Tournament Edition", and "NBA Jam - Tournament Edition (USA) (Rev 1)"
+// dropped and separators normalized, so "Some Game - Special Edition (World)",
+// "Some Game Special Edition", and "Some Game - Special Edition (USA) (Rev 1)"
 // collapse to the same key. Used as a fallback when exact match fails.
 function baseName(name) {
   return name
@@ -220,7 +220,7 @@ export async function lookupCheats({ platform, romName, fileName, bytes }) {
 
   // 3. FUZZY fallback (Fuse over the tag-stripped baseName). Catches the common
   //    failure where identifyRom's name differs from the DB key by a region/
-  //    revision tag or punctuation ("NBA Jam - Tournament Edition (World)" vs a
+  //    revision tag or punctuation ("Some Game - Special Edition (World)" vs a
   //    (USA) dump or a missing hyphen), AND now typos — the entry IS in the DB,
   //    just under a sibling name. Stricter threshold than searchCheats: this
   //    auto-PICKS an entry, so require a strong (≤0.4 distance → ≥0.6 sim) match.

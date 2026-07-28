@@ -591,9 +591,9 @@ export async function playtest(args) {
   // Tick = one emulated frame + render + audio drain. Driven by setInterval
   // so the Node event loop stays free for MCP requests on the same host.
   // Pace to the CORE's native refresh rate (status.coreFps), not a hardcoded 60: a
-  // 30fps title on flycast at a 60Hz tick gets double-ticked —
-  // wasting half the budget and, on the heavy interpreter-only DC core (23ms/frame,
-  // no JIT), falling behind every tick → the black-flash/glitch. At its real 30fps
+  // 30fps title (some DC discs on flycast) at a 60Hz tick gets double-ticked —
+  // wasting half the budget and, on a heavy core with a big per-frame cost,
+  // falling behind every tick → the black-flash/glitch. At its real 30fps
   // each frame gets a full 33ms tick, which the core can actually hit. Clamped so a
   // bogus report can't run the window absurdly fast or slow.
   const coreFps = openHost?.status?.coreFps;

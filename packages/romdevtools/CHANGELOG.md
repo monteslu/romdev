@@ -22,7 +22,7 @@ because of them:
   Every other backend calls it BEFORE executing, which is why the assignment is
   correct there. For a block that is a function prologue, the frame got pushed
   twice and popped once: the function returned on a stack 20 bytes low, loaded a
-  local as PR, and jumped to garbage. That was the a disc boot hang.
+  local as PR, and jumped to garbage. That was the commercial-disc boot hang.
 - **Interrupts were deferred on `BET_*Intr` block exits.** Those blocks end on an
   SR write, which can unmask an already-pending interrupt; rec_x64 emits
   `GenCall(UpdateINTC)` and the interpreter does `if (UpdateSR()) UpdateINTC();`,
@@ -36,8 +36,8 @@ published core byte-for-byte (verified). `ROMDEV_FLYCAST_INTERP=1` builds the
 interpreter instead — the old `ROMDEV_FLYCAST_JIT=1` opt-in is gone, since the
 JIT is no longer opt-in. Also adds `test/dreamcast-jit-perf.js`, a perf harness
 whose liveness gate judges by the SH-4 block counter rather than the framebuffer
-(a static picture means "waiting on input", not "hung" — a Dreamcast disc parks on its
-VMU prompt with the CPU running fine).
+(a static picture means "waiting on input", not "hung" — several discs park on a
+save-file prompt with the CPU running fine).
 
 ## 0.106.1 — 2026-07-25
 

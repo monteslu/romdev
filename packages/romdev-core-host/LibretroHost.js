@@ -719,7 +719,7 @@ export class LibretroHost {
       ? reportedAspect
       : this.status.fbWidth / this.status.fbHeight;
     // timing.fps is at offset +24 (double) — the core's NATIVE refresh rate. Most
-    // are ~60, but some games/cores run 50 (PAL) or ~30 (e.g. some Dreamcast titles on
+    // are ~60, but some games/cores run 50 (PAL) or ~30 (e.g. some DC discs on
     // flycast). The playtest window paces its tick to THIS, not a hardcoded 60, so a
     // 30fps title isn't double-ticked (which wasted half the budget + glitched on the
     // heavy interpreter-only DC core). 0/garbage → fall back to 60.
