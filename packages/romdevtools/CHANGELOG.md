@@ -4,6 +4,22 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.107.5 — 2026-07-28
+
+Repin `romdev-core-host` 0.3.0 and `romdev-core-runner` 0.2.4.
+
+The publish preflight caught real drift: core-host 0.2.1 was already on the
+registry with `native-gles`/`webgl-node` as **optionalDependencies**, while
+in-tree they had been moved to `dependencies` — the GL-is-required change.
+That is an install-behaviour change on a published version, so it takes a
+minor bump rather than being force-published over.
+
+core-runner has no content change of its own (its shipped files are identical
+to the registry tarball; the in-tree diff is test files, which do not ship).
+It is bumped so it can repin core-host — otherwise npm nests the old
+core-host@0.2.1 underneath it and the optional/required distinction comes
+right back through the transitive path.
+
 ## 0.107.4 — 2026-07-28
 
 Repin `wasmcart` ^0.9.1. No code change.
