@@ -2587,10 +2587,25 @@ Compiles **C89**, not C99/C11. Stick to:
       "ROM. Use `romPatch({op:'gbHeader'})` only to fix up an existing/external " +
       "ROM on disk or to override header fields (title, cart type, ROM/RAM size).";
   } else if (isSdccZ80) {
-    const inc = runtimeHeaders.length > 0
-      ? `\n  includePaths: { ${runtimeHeaders.map((h) => `"${h.dst}": "${h.dst}"`).join(", ")} },`
-      : "";
-    buildBlock = "```js\nbuild({\n  output: \"run\",\n  platform: \"" + platform + "\",\n  sourcePath: \"" + mainFilename + "\"," + inc + "\n  frames: 240,\n})\n```";
+    // sourcePath compiles ONE translation unit. A template that ships runtime
+    // .c files (gg: vdp_init.c, load_palette.c, load_tiles.c) needs every one
+    // of them as a source or the link dies on unresolved symbols — so document
+    // the multi-file form whenever there are any.
+    const runtimeCs = (tmpl?.runtime ?? []).filter((r) => /\.c$/i.test(r.dst));
+    if (runtimeCs.length > 0 && /\.c$/i.test(mainFilename)) {
+      const srcLines = [`    "${mainFilename}": "${mainFilename}",`]
+        .concat(runtimeCs.map((r) => `    "${r.dst}": "${r.dst}",`))
+        .join("\n");
+      const incLine = runtimeHeaders.length > 0
+        ? `\n  includePaths: {\n${runtimeHeaders.map((h) => `    "${h.dst}": "${h.dst}",`).join("\n")}\n  },`
+        : "";
+      buildBlock = "```js\nbuild({\n  output: \"run\",\n  platform: \"" + platform + "\",\n  sourcesPaths: {\n" + srcLines + "\n  }," + incLine + "\n  frames: 240,\n})\n```";
+    } else {
+      const inc = runtimeHeaders.length > 0
+        ? `\n  includePaths: { ${runtimeHeaders.map((h) => `"${h.dst}": "${h.dst}"`).join(", ")} },`
+        : "";
+      buildBlock = "```js\nbuild({\n  output: \"run\",\n  platform: \"" + platform + "\",\n  sourcePath: \"" + mainFilename + "\"," + inc + "\n  frames: 240,\n})\n```";
+    }
   } else if (platform === "c64") {
     const inc = runtimeHeaders.length > 0
       ? `\n  includePaths: { ${runtimeHeaders.map((h) => `"${h.dst}": "${h.dst}"`).join(", ")} },`
@@ -2698,7 +2713,21 @@ Compiles **C89**, not C99/C11. Stick to:
       buildBlock = "```js\nbuild({ output: \"run\", platform: \"gba\", language: \"c\", sourcePath: \"" + mainFilename + "\", frames: 240 })\n```";
     }
   } else {
-    buildBlock = "```js\nbuild({ output: \"run\", platform: \"" + platform + "\", sourcePath: \"" + mainFilename + "\", frames: 240 })\n```";
+    // Catch-all (msx, ...). Same trap as above: msx ships msx_vdp.c as runtime,
+    // so a sourcePath snippet compiles main.c alone — msx_hw.h is not found and
+    // msx_vdp.c never links.
+    const runtimeCs = (tmpl?.runtime ?? []).filter((r) => /\.c$/i.test(r.dst));
+    if (runtimeCs.length > 0 && /\.c$/i.test(mainFilename)) {
+      const srcLines = [`    "${mainFilename}": "${mainFilename}",`]
+        .concat(runtimeCs.map((r) => `    "${r.dst}": "${r.dst}",`))
+        .join("\n");
+      const incLine = runtimeHeaders.length > 0
+        ? `\n  includePaths: {\n${runtimeHeaders.map((h) => `    "${h.dst}": "${h.dst}",`).join("\n")}\n  },`
+        : "";
+      buildBlock = "```js\nbuild({\n  output: \"run\",\n  platform: \"" + platform + "\",\n  sourcesPaths: {\n" + srcLines + "\n  }," + incLine + "\n  frames: 240,\n})\n```";
+    } else {
+      buildBlock = "```js\nbuild({ output: \"run\", platform: \"" + platform + "\", sourcePath: \"" + mainFilename + "\", frames: 240 })\n```";
+    }
   }
 
   let filesSection = `- \`${mainFilename}\` — the game. Title screen, game loop, all the GAME LOGIC clay.\n`;
