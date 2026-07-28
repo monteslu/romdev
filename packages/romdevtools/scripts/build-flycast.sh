@@ -3,8 +3,9 @@
 #
 # Flycast is a full DC emulator (785 C++ files, GLES3/WebGL2 renderer). It has no
 # upstream emscripten build, so this script applies the romdev WASM patches:
-#   - DetectArchitecture.cmake + core/build.h: a CPU_GENERIC host (no JIT) → the
-#     SH-4/ARM/DSP INTERPRETERS (TARGET_NO_REC). emscripten has no dynarec.
+#   - DetectArchitecture.cmake + core/build.h: a CPU_GENERIC host (upstream has no
+#     emscripten dynarec) + romdev's own WASM SH-4 recompiler in core/rec-wasm.
+#     DEFAULT is the recompiler; ROMDEV_FLYCAST_INTERP=1 builds the interpreter.
 #   - core/hw/sh4/sh4_core_regs.cpp + core/linux/context.cpp: CPU_GENERIC no-op
 #     branches (host-FPU control + JIT segfault recovery don't exist on WASM).
 #   - CMakeLists: emscripten libretro build runs asio single-threaded
@@ -30,20 +31,34 @@ git submodule update --init --recursive --depth 1
 if ! grep -q "romdev: emscripten" shell/cmake/DetectArchitecture.cmake; then
   perl -0pi -e 's/(if \(CMAKE_OSX_ARCHITECTURES\)\n    set\(ARCHITECTURE "\$\{CMAKE_OSX_ARCHITECTURES\}"\)\n    return\(\)\nendif\(\))/$1\n\n# romdev: emscripten\/WASM has no JIT.\nif (EMSCRIPTEN)\n    set(ARCHITECTURE "wasm")\n    return()\nendif()/' shell/cmake/DetectArchitecture.cmake
 fi
-# 2. build.h: CPU_GENERIC for emscripten. DEFAULT = the SH-4/ARM/DSP INTERPRETERS
-#    (TARGET_NO_REC) — the SHIPPABLE config: correct on all games, ~16fps on heavy DC
-#    scenes (3 interpreted CPUs). Set ROMDEV_FLYCAST_JIT=1 to build the experimental
-#    WASM SH-4 JIT instead (core/rec-wasm/rec_wasm.cpp; ~71-91fps on commercial discs).
-#    The "native-emit bugs hang Sonic's boot" note here was WRONG: the hang was a
-#    stale-compiled-block SMC hole (fixed via full-block fingerprints), and the emit
-#    bugs it was blamed on were artifacts of a buggy shadow comparator. Sonic Adventure,
-#    Crazy Taxi, Rez and Tony Hawk all boot clean on the JIT. It stays opt-in only
-#    because it's young, not because it's known-broken — see
-#    internal-romdev/FLYCAST_WASM_JIT_RESUME.md for the full story + ship checklist.
-FLYCAST_REC_DEFINES='\t#ifndef TARGET_NO_REC\n\t#define TARGET_NO_REC\n\t#endif'
-if [ "${ROMDEV_FLYCAST_JIT:-0}" = "1" ]; then
-  FLYCAST_REC_DEFINES='\t#define FEAT_SHREC DYNAREC_JIT\n\t#define FEAT_AREC DYNAREC_NONE\n\t#define FEAT_DSPREC DYNAREC_NONE'
-  echo "romdev: building flycast with the EXPERIMENTAL WASM SH-4 JIT (ROMDEV_FLYCAST_JIT=1)"
+# 2. build.h: CPU_GENERIC for emscripten. DEFAULT = the WASM SH-4 RECOMPILER
+#    (core/rec-wasm/rec_wasm.cpp) — this is what romdev-core-flycast 0.3.0+ ships,
+#    so a plain `bash build-flycast.sh` reproduces the PUBLISHED core. ~70-160fps on
+#    commercial discs vs ~16fps interpreted; AICA (ARM7+DSP) stays interpreted.
+#    Set ROMDEV_FLYCAST_INTERP=1 to build the SH-4 interpreter (TARGET_NO_REC)
+#    instead — slower but the simplest reference when bisecting a suspected JIT bug.
+#
+#    History: the "native-emit bugs hang Sonic's boot" claim that kept the JIT
+#    opt-in through 0.2.0 was WRONG on both counts. The boot hang was a
+#    stale-compiled-block SMC hole (fixed via block-code fingerprints), the "emit
+#    bugs" were artifacts of a buggy shadow comparator, and the last real hang
+#    (Soul Calibur) was a block being executed twice because the dispatch-miss
+#    handler called rdv_FailedToFindBlock() AFTER running the block, rewinding pc.
+#    See internal-romdev/FLYCAST_WASM_JIT_RESUME.md for the full story.
+#
+# Single source of truth for the rec mode — every check below reads FLYCAST_JIT.
+FLYCAST_JIT=1
+if [ "${ROMDEV_FLYCAST_INTERP:-0}" = "1" ]; then
+  FLYCAST_JIT=0
+fi
+# The shadow diagnostic implies the JIT (it compares JIT vs reference).
+if [ "${ROMDEV_FLYCAST_SHADOW:-0}" = "1" ]; then
+  [ "$FLYCAST_JIT" = "1" ] || { echo "ROMDEV_FLYCAST_SHADOW=1 conflicts with ROMDEV_FLYCAST_INTERP=1"; exit 1; }
+fi
+FLYCAST_REC_DEFINES='\t#define FEAT_SHREC DYNAREC_JIT\n\t#define FEAT_AREC DYNAREC_NONE\n\t#define FEAT_DSPREC DYNAREC_NONE'
+if [ "$FLYCAST_JIT" = "0" ]; then
+  FLYCAST_REC_DEFINES='\t#ifndef TARGET_NO_REC\n\t#define TARGET_NO_REC\n\t#endif'
+  echo "romdev: building flycast with the SH-4 INTERPRETER (ROMDEV_FLYCAST_INTERP=1)"
 fi
 if ! grep -q "CPU_GENERIC" core/build.h; then
   sed -i 's/#define CPU_X64      0x20000004/#define CPU_X64      0x20000004\n#define CPU_GENERIC  0x20000005/' core/build.h
@@ -53,13 +68,13 @@ fi
 # interpreter <-> JIT on an existing tree would otherwise silently keep the stale
 # mode (a "JIT" build with TARGET_NO_REC compiles rec_wasm.cpp to a 333-byte
 # empty object and the link dies on the _wasm_* exports).
-if [ "${ROMDEV_FLYCAST_JIT:-0}" = "1" ]; then
+if [ "$FLYCAST_JIT" = "1" ]; then
   REC_MODE_BLOCK=$'\t#define FEAT_SHREC DYNAREC_JIT\n\t#define FEAT_AREC DYNAREC_NONE\n\t#define FEAT_DSPREC DYNAREC_NONE'
 else
   REC_MODE_BLOCK=$'\t#ifndef TARGET_NO_REC\n\t#define TARGET_NO_REC\n\t#endif'
 fi
 REC_MODE_BLOCK="$REC_MODE_BLOCK" perl -0pi -e 's/(#if defined\(__EMSCRIPTEN__\)\n\t#define HOST_CPU CPU_GENERIC\n).*?(\n#elif defined\(__x86_64__\) \|\| defined\(_M_X64\))/$1$ENV{REC_MODE_BLOCK}$2/s' core/build.h
-if [ "${ROMDEV_FLYCAST_JIT:-0}" = "1" ]; then
+if [ "$FLYCAST_JIT" = "1" ]; then
   grep -q "FEAT_SHREC DYNAREC_JIT" core/build.h || { echo "FATAL: build.h rec-mode re-assert failed"; exit 1; }
   echo "romdev: build.h rec mode = WASM SH-4 JIT"
 else
@@ -146,7 +161,7 @@ echo "romdev: staged WASM SH-4 JIT backend into core/rec-wasm/"
 #   uses C++ exceptions). The interpreter build needs neither.
 JIT_CXX_FLAGS=""
 JIT_C_FLAGS=""
-if [ "${ROMDEV_FLYCAST_JIT:-0}" = "1" ]; then
+if [ "$FLYCAST_JIT" = "1" ]; then
   JIT_CXX_FLAGS="-DJIT_PROD_BUILD -fexceptions"
   JIT_C_FLAGS="-DJIT_PROD_BUILD"
 fi
@@ -159,7 +174,6 @@ fi
 #   interpreter fallback (bit 6 = readm) for differential isolation.
 #   Run the result with ROMDEV_CORE_LOG=1 and grep for SHADOW-JIT.
 if [ "${ROMDEV_FLYCAST_SHADOW:-0}" = "1" ]; then
-  [ "${ROMDEV_FLYCAST_JIT:-0}" = "1" ] || { echo "ROMDEV_FLYCAST_SHADOW=1 requires ROMDEV_FLYCAST_JIT=1"; exit 1; }
   JIT_CXX_FLAGS="-fexceptions -DEXECUTOR_MODE=7 -DFORCE_CPP_DISPATCH=1"
   JIT_C_FLAGS=""
   # Default mask 0x200 = writem via the captured shil fallback. The shadow's
@@ -197,7 +211,7 @@ LIBS="libflycast_libretro.a libflycast-resources.a core/deps/libelf/libelf.a cor
 BASE_EXPORTS='"_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_romdev_sh4_regs_get","_romdev_aica_get","_romdev_dc_kcode_get","_romdev_aica_prof_ms","_romdev_jit_stats","_romdev_gpu_prof_ms","_malloc","_free","_emscripten_GetProcAddress"'
 BASE_RT='"ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS","dynCall","GL"'
 JIT_LINK_FLAGS=""
-if [ "${ROMDEV_FLYCAST_JIT:-0}" = "1" ]; then
+if [ "$FLYCAST_JIT" = "1" ]; then
   BASE_EXPORTS="$BASE_EXPORTS,\"_wasm_mem_read8\",\"_wasm_mem_read16\",\"_wasm_mem_read32\",\"_wasm_mem_write8\",\"_wasm_mem_write16\",\"_wasm_mem_write32\",\"_wasm_exec_ifb\",\"_wasm_exec_shil_fb\""
   BASE_RT="$BASE_RT,\"wasmExports\",\"wasmTable\",\"wasmMemory\""
   JIT_LINK_FLAGS="-fexceptions -s DISABLE_EXCEPTION_CATCHING=0"
