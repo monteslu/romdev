@@ -4,6 +4,22 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.107.2 — 2026-07-27
+
+README only. The Dreamcast blurb still said sustained play "hasn't been
+characterised", written before the discs were actually driven with a
+controller. Testing since then got every disc past its boot/save prompt —
+all five take controller input and navigate their menus, and two reach live
+in-game scenes with 3D world rendering and a working HUD.
+
+The earlier stall was an input mistake on my side, not an emulator limit:
+these DC dialogs confirm on **B**, and only `a` had been tried. Nothing in
+the core changed.
+
+Still honestly scoped: *sustained* play (a full level, long-run stability,
+framerate in the heaviest scenes) remains uncharacterised, so the platform
+is still flagged EXPERIMENTAL.
+
 ## 0.107.1 — 2026-07-27
 
 Docs/comment fix, no behaviour change: removes commercial game titles from
