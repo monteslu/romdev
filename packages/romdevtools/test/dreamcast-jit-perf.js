@@ -28,9 +28,13 @@ import { resolveCore } from "../src/cores/registry.js";
 function fbSignature(host) {
   try {
     const fb = host.getFramebuffer();
-    const buf = fb?.data ?? fb?.pixels ?? fb;
-    if (!buf) return "nofb";
-    return crypto.createHash("md5").update(Buffer.from(buf.buffer ?? buf)).digest("hex").slice(0, 12);
+    const buf = fb?.pixels ?? fb?.data;
+    if (!ArrayBuffer.isView(buf)) return "nofb";
+    // Hash the VIEW, not buf.buffer — on hwRender cores the backing ArrayBuffer
+    // is a reused staging buffer, so hashing it can mask a real frame change.
+    return crypto.createHash("md5")
+      .update(Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength))
+      .digest("hex").slice(0, 12);
   } catch (e) {
     return `err:${String(e.message).slice(0, 20)}`;
   }
@@ -45,10 +49,14 @@ const FRAMES = Number(arg("--frames", 600));
 const WARMUP = Number(arg("--warmup", 180));
 
 const DC = "/home/monteslu/retrodeck/roms/dreamcast";
+// A deliberately mixed set: .gdi + .chd + .cue containers, and Rez is a music
+// game (worst case for the still-interpreted AICA).
 const GAMES = [
   ["Crazy Taxi", `${DC}/Crazy Taxi v1.004 (1999)(Sega)(US)[!][6S]/Crazy Taxi v1.004 (1999)(Sega)(US)[!][6S].gdi`],
   ["Sonic Adventure", `${DC}/Sonic Adventure v1.005 (1999)(Sega)(US)(M5)[!][26S].chd`],
   ["Soul Calibur", `${DC}/Soul Calibur v1.000 (1999)(Namco)(US)[!][4S].chd`],
+  ["Rez", `${DC}/Rez (Europe) (EnJaFrDeEsIt)/Rez (Europe) (En,Ja,Fr,De,Es,It).cue`],
+  ["Tony Hawk 2", `${DC}/Tony Hawk's Pro Skater 2 v1.001 (2000)(Activision)(US)[!]/Tony Hawk's Pro Skater 2 v1.001 (2000)(Activision)(US)[!].gdi`],
 ];
 
 /**
