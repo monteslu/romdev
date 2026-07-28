@@ -1040,6 +1040,29 @@ static void applyBlockExitCpp(RuntimeBlockInfo* block) {
 		break;
 	}
 	}
+
+	// BET_*Intr blocks end on an instruction that writes SR (ldc Rn,SR /
+	// ldc.l @Rn+,SR / rte), which can unmask an already-pending interrupt.
+	// Both other backends take it right here: rec_x64 emits GenCall(UpdateINTC)
+	// for BET_StaticIntr/BET_DynamicIntr (rec_x64.cpp), and the interpreter does
+	// `if (UpdateSR()) UpdateINTC();` (sh4_opcodes.cpp).
+	//
+	// The dispatch loop happens to reach the same state for NATIVE blocks — the
+	// sync_sr fallback calls UpdateSR() -> SRdecode() -> recalc_pending_itrs(),
+	// and the loop tests ctx.interrupt_pend after every block. But the C++/SHIL
+	// execution sites (the two dispatch-miss handlers) run a block and fall
+	// straight through with NO interrupt check, so an interrupt unmasked by such
+	// a block was deferred until some later dispatch-loop iteration noticed it.
+	// Deliver it here, where every C++ block exit passes.
+	//
+	// NOT under the EXECUTOR_MODE 7 shadow: that mode calls this helper on the
+	// reference side of a JIT-vs-ref comparison, and taking an interrupt there
+	// would rewrite pc/sr/spc mid-compare and manufacture false mismatches (the
+	// same class of self-inflicted bug as the four already fixed in the shadow).
+#if EXECUTOR_MODE != 7
+	if (block->BlockType == BET_StaticIntr || block->BlockType == BET_DynamicIntr)
+		UpdateINTC();
+#endif
 }
 
 // === MODE SWITCH (defined above ref_execute_block) ===
