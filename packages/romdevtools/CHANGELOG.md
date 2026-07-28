@@ -4,6 +4,25 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.107.1 — 2026-07-27
+
+Docs/comment fix, no behaviour change: removes commercial game titles from
+everything that ships to npm. The 0.107.0 CHANGELOG named two of them, and
+CHANGELOG.md is in the `files` allowlist, so they went out inside the tarball.
+Four older instances were caught in the same sweep — comments in
+`src/cores/registry.js`, `src/playtest/playtest.js`, `src/cheats/lookup.js`
+(which used a real title as its filename-normalization example) and
+`romdev-core-host`'s `LibretroHost.js`. The playtest comment also still called
+the Dreamcast core interpreter-only, which stopped being true in core 0.3.0.
+
+Verified by scanning the actual `npm pack --dry-run` file list rather than the
+working tree — a hand-written grep had already missed one of these.
+
+Repins `romdev-core-host` 0.2.1 and `romdev-core-runner` 0.2.3. core-runner
+carries no content change; it is bumped so it can repin core-host, otherwise
+npm would nest the old core-host@0.2.0 underneath it and the scrubbed comment
+would still ship.
+
 ## 0.107.0 — 2026-07-27
 
 Dreamcast gets the WASM SH-4 recompiler: repin `romdev-core-flycast` 0.3.0
