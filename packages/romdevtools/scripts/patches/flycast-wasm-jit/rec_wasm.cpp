@@ -2878,10 +2878,21 @@ public:
 								}
 								blockExecs++;
 								g_wasm_block_count++;
-								// Recompile to restore dispatch table entry
+								// Recompile to restore dispatch table entry.
+								// rdv_FailedToFindBlock() does `Sh4cntx.pc = pc` (driver.cpp) —
+								// every other backend calls it BEFORE running the block and then
+								// jumps to the code it returns. We call it AFTER having already
+								// executed the block via SHIL, so it REWINDS pc to the block we
+								// just finished and the dispatch loop runs that block a SECOND
+								// time. For a block whose prologue pushes a frame, the frame is
+								// pushed twice but popped once, so the function returns on a
+								// stack 20 bytes low, loads a local as PR and jumps to garbage.
+								// (Soul Calibur boot hang.) Preserve the post-execution pc.
 								if (compileTimeThisFrame < COMPILE_TIME_BUDGET_MS) {
 									double t0 = emscripten_get_now();
+									u32 pc_after_exec = sh4ctx->pc;
 									rdv_FailedToFindBlock(miss_pc);
+									sh4ctx->pc = pc_after_exec;
 									compilesThisFrame++;
 									compileTimeThisFrame += (emscripten_get_now() - t0);
 								}
