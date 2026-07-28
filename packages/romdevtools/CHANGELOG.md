@@ -4,6 +4,16 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.107.3 — 2026-07-28
+
+Repin `wasmcart` ^0.8.0. No code change — romdev already supplies a GL context
+unconditionally and never used the `allowMissingGL` opt-out that 0.8.0 removes.
+
+0.8.0 also closes a hole that did affect anyone embedding the browser host:
+`CartHostWeb` never got 0.7.0's "GL cart with no context is a load error"
+change and still silently stubbed, so the breaking change 0.7.0 announced did
+not reach browser consumers. It now supplies its own WebGL2 context.
+
 ## 0.107.2 — 2026-07-27
 
 README only. The Dreamcast blurb still said sustained play "hasn't been
