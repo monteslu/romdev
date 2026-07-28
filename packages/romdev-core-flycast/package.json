@@ -1,7 +1,7 @@
 {
   "name": "romdev-core-flycast",
-  "version": "0.2.0",
-  "description": "Flycast libretro core (Sega Dreamcast, reios HLE BIOS) for romdev, bundled as WASM — single-threaded SH-4 interpreter build that boots homebrew ELFs.",
+  "version": "0.3.0",
+  "description": "Flycast libretro core (Sega Dreamcast, reios HLE BIOS) for romdev, bundled as WASM — single-threaded build with the WASM SH-4 recompiler; boots homebrew ELFs and commercial GD-ROM images.",
   "type": "module",
   "main": "index.js",
   "exports": {

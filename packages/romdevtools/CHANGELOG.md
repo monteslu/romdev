@@ -4,6 +4,41 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.107.0 — 2026-07-27
+
+Dreamcast gets the WASM SH-4 recompiler: repin `romdev-core-flycast` 0.3.0
+(was 0.2.0, the SH-4 interpreter). Commercial GD-ROM titles go from ~16fps —
+unplayable — to 70-160fps headless, with AICA (ARM7+DSP) still interpreted at
+under ~12% of frame time.
+
+Two correctness fixes landed in the recompiler first; the repin is only safe
+because of them:
+
+- **A block could be executed twice.** The dispatch-miss handler for "block is
+  compiled but not in the dispatch table" (hash collision or eviction) ran the
+  block via the SHIL interpreter and THEN called `rdv_FailedToFindBlock()` to
+  restore the table entry — but that function does `Sh4cntx.pc = pc`, so it
+  rewound pc to the block just finished and the dispatch loop ran it again.
+  Every other backend calls it BEFORE executing, which is why the assignment is
+  correct there. For a block that is a function prologue, the frame got pushed
+  twice and popped once: the function returned on a stack 20 bytes low, loaded a
+  local as PR, and jumped to garbage. That was the a disc boot hang.
+- **Interrupts were deferred on `BET_*Intr` block exits.** Those blocks end on an
+  SR write, which can unmask an already-pending interrupt; rec_x64 emits
+  `GenCall(UpdateINTC)` and the interpreter does `if (UpdateSR()) UpdateINTC();`,
+  while the WASM backend did neither. Harmless for natively-dispatched blocks
+  (the sync_sr fallback recomputes `interrupt_pend` and the dispatch loop tests
+  it every block) but a real gap in the two miss handlers, which ran a block via
+  SHIL and fell through with no interrupt check at all.
+
+`build-flycast.sh` now DEFAULTS to the recompiler, so a plain run reproduces the
+published core byte-for-byte (verified). `ROMDEV_FLYCAST_INTERP=1` builds the
+interpreter instead — the old `ROMDEV_FLYCAST_JIT=1` opt-in is gone, since the
+JIT is no longer opt-in. Also adds `test/dreamcast-jit-perf.js`, a perf harness
+whose liveness gate judges by the SH-4 block counter rather than the framebuffer
+(a static picture means "waiting on input", not "hung" — a Dreamcast disc parks on its
+VMU prompt with the CPU running fine).
+
 ## 0.106.1 — 2026-07-25
 
 FIX (found live by the first real-GL-cart acceptance run): `frame({op:'verify'})`

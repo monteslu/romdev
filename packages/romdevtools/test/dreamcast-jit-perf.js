@@ -15,8 +15,9 @@
  *
  *   node test/dreamcast-jit-perf.js [--frames N] [game ...]
  *
- * The staged core must be a JIT build (ROMDEV_FLYCAST_JIT=1); against an
- * interpreter build the jit counters read 0 and it says so.
+ * The staged core must be a JIT build — that is build-flycast.sh's default, so a
+ * plain rebuild gives you one. Against an interpreter build
+ * (ROMDEV_FLYCAST_INTERP=1) the jit counters read 0 and it says so.
  */
 
 import crypto from "node:crypto";
