@@ -2130,27 +2130,42 @@ static std::vector<RuntimeBlockInfo*> discoverChain(RuntimeBlockInfo* entry) {
 	// of Shenmue blocks — the rest end in conditional branches, so chains
 	// never formed and every block ran as a standalone WebAssembly.Module.
 	// Allowing COND's taken path recovers the common hot loop pattern.
+	// Follow BOTH edges of a conditional now that buildMultiBlockModule checks
+	// each arm against ctx.pc explicitly. Taking only the taken-target edge
+	// left mean chain length at ~1.15-1.2 (i.e. ~85% of modules were a single
+	// block), which is the whole reason per-dispatch overhead dominated.
 	for (size_t i = 0; i < chain.size() && (int)chain.size() < MULTIBLOCK_MAX; i++) {
 		RuntimeBlockInfo* current = chain[i];
 		u32 bcls = BET_GET_CLS(current->BlockType);
 		if (bcls != BET_CLS_Static && bcls != BET_CLS_COND) continue;
 		if (current->BlockType == BET_StaticIntr) continue;
 
-		u32 target = current->BranchBlock;
-		if (target == 0xFFFFFFFF || target == 0) continue;
-		if (target == entry->vaddr) continue;  // self-loop — let outer dispatch handle it
+		// Taken-target edge only. Following the COND fall-through edge as well
+		// was tried and REVERTED: it diverges from the reference on two of
+		// three discs (frame-hash mismatch within ~400 frames, SP/PC drifting
+		// wholesale), even with the routing fix below and even capped at a
+		// 2-block chain. The routing fix is necessary but not sufficient —
+		// something else about entering a block via its fall-through edge is
+		// unsound here. Not yet diagnosed; see the perf notes.
+		u32 targets[2] = { current->BranchBlock, 0xFFFFFFFF };
+		u32 ntargets = 1;
 
-		// Skip if already in chain
-		bool dup = false;
-		for (auto* b : chain) {
-			if (b->vaddr == target) { dup = true; break; }
+		for (u32 t = 0; t < ntargets && (int)chain.size() < MULTIBLOCK_MAX; t++) {
+			u32 target = targets[t];
+			if (target == 0xFFFFFFFF || target == 0) continue;
+			if (target == entry->vaddr) continue;  // self-loop — outer dispatch handles it
+
+			bool dup = false;
+			for (auto* b : chain) {
+				if (b->vaddr == target) { dup = true; break; }
+			}
+			if (dup) continue;
+
+			auto it = blockByVaddr.find(target);
+			if (it == blockByVaddr.end()) continue;
+
+			chain.push_back(it->second);
 		}
-		if (dup) continue;
-
-		auto it = blockByVaddr.find(target);
-		if (it == blockByVaddr.end()) continue;
-
-		chain.push_back(it->second);
 	}
 	return chain;
 }
@@ -2349,19 +2364,37 @@ static bool buildMultiBlockModule(WasmModuleBuilder& b,
 			auto nextTarget = pcToIdx.find(blk->NextBlock);
 
 			if (branchTarget != pcToIdx.end() && nextTarget != pcToIdx.end()) {
-				// Both targets in chain
+				// Both targets in chain.
+				//
+				// Each arm is checked against ctx.pc EXPLICITLY. The previous
+				// version tested only BranchBlock and used a bare `else` for
+				// the fall-through — so if a SHIL fallback or an exception left
+				// ctx.pc at some third value, that else silently ran the
+				// fall-through block and poisoned SH-4 state. That hazard is
+				// why chaining refused to follow fall-through paths at all,
+				// which in turn kept mean chain length near 1. With both arms
+				// verified, an unexpected pc falls through to `br $exit` and
+				// the outer dispatch loop resolves it, exactly like the
+				// single-target variants below.
 				b.op_local_get(LOCAL_CTX);
 				b.op_i32_load(ctx_off::PC);
 				b.op_i32_const((s32)blk->BranchBlock);
 				b.op_i32_eq();
-				b.op_if();  // inner if: $exit=br(3), $dispatch=br(2), outer if=br(1)
+				b.op_if();  // inner if
 				b.op_i32_const((s32)branchTarget->second);
 				b.op_local_set(LOCAL_NEXT_IDX);
-				b.op_else();
+				b.op_br(2);  // br $dispatch
+				b.op_end();
+				b.op_local_get(LOCAL_CTX);
+				b.op_i32_load(ctx_off::PC);
+				b.op_i32_const((s32)blk->NextBlock);
+				b.op_i32_eq();
+				b.op_if();  // inner if
 				b.op_i32_const((s32)nextTarget->second);
 				b.op_local_set(LOCAL_NEXT_IDX);
+				b.op_br(2);  // br $dispatch
 				b.op_end();
-				b.op_br(1);  // br $dispatch (from outer if: depth 1)
+				b.op_br(2);  // br $exit — pc matched neither, let outer dispatch handle it
 			} else if (branchTarget != pcToIdx.end()) {
 				// Only branch target in chain
 				b.op_local_get(LOCAL_CTX);
