@@ -100,6 +100,11 @@ namespace wop {
 	constexpr u8 i64_add       = 0x7C;
 	constexpr u8 i64_sub       = 0x7D;
 	constexpr u8 i64_mul       = 0x7E;
+	constexpr u8 i64_div_s     = 0x7F;
+	constexpr u8 i64_div_u     = 0x80;
+	constexpr u8 i64_rem_s     = 0x81;
+	constexpr u8 i64_rem_u     = 0x82;
+	constexpr u8 i64_lt_s      = 0x53;
 	constexpr u8 i64_and       = 0x83;
 	constexpr u8 i64_or        = 0x84;
 	constexpr u8 i64_xor       = 0x85;
@@ -374,6 +379,11 @@ public:
 	void op_i64_add()   { emitByte(wop::i64_add); }
 	void op_i64_sub()   { emitByte(wop::i64_sub); }
 	void op_i64_mul()   { emitByte(wop::i64_mul); }
+	void op_i64_div_s() { emitByte(wop::i64_div_s); }
+	void op_i64_div_u() { emitByte(wop::i64_div_u); }
+	void op_i64_rem_s() { emitByte(wop::i64_rem_s); }
+	void op_i64_rem_u() { emitByte(wop::i64_rem_u); }
+	void op_i64_lt_s()  { emitByte(wop::i64_lt_s); }
 	void op_i64_and()   { emitByte(wop::i64_and); }
 	void op_i64_or()    { emitByte(wop::i64_or); }
 	void op_i64_xor()   { emitByte(wop::i64_xor); }
@@ -420,6 +430,10 @@ public:
 	void op_unreachable() { emitByte(wop::unreachable); }
 
 	void op_if(u8 blockType = 0x40) { emitByte(wop::if_); emitByte(blockType); }
+	// Typed if-blocks (WASM blocktype): 0x40 void, 0x7F i32, 0x7E i64.
+	void op_if_void() { op_if(0x40); }
+	void op_if_i32()  { op_if(0x7F); }
+	void op_if_i64()  { op_if(0x7E); }
 	void op_else()       { emitByte(wop::else_); }
 	void op_end()        { emitByte(wop::end); }
 	void op_block(u8 blockType = 0x40) { emitByte(wop::block); emitByte(blockType); }
