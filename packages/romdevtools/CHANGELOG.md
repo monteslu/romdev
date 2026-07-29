@@ -4,6 +4,45 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.108.0 — 2026-07-28
+
+Repin `romdev-core-flycast` 0.4.0 — a Dreamcast core with six SH-4
+recompiler changes, five of them correctness.
+
+The one that matters most: **a commercial disc that did not boot at all now
+runs.** The dispatch-miss path for "block is compiled but not in the dispatch
+table" ran the block via the SHIL interpreter and THEN called
+`rdv_FailedToFindBlock()`, which does `Sh4cntx.pc = pc` — rewinding pc to the
+block just finished so the dispatch loop ran it again. For a block that is a
+function prologue, the frame was pushed twice and popped once: the function
+returned on a stack 20 bytes low, loaded a local as the return address, and
+jumped to garbage.
+
+Also: interrupts unmasked by an SR write are now delivered on the C++/SHIL
+execution paths (rec_x64 and the interpreter always did this, the WASM
+backend did not); the SMC fingerprint dropped from three scattered byte-pair
+reads plus four FNV rounds to two aligned dword loads, on a path that runs on
+EVERY dispatch of EVERY RAM block; each block's guest-code pointer is resolved
+once at compile time instead of recomputed per dispatch; SH-4 division emits
+native WASM i64 div/rem instead of trampolining through an import; and a
+conditional whose targets are both in a chain now checks BOTH arms against
+ctx.pc rather than assuming the fall-through.
+
+Finally, chaining follows a conditional's fall-through edge, not just its
+taken target — mean chain length was ~1.15, i.e. most compiled modules were a
+single block. Delayed conditionals (bt.s/bf.s) are excluded: they stash their
+condition in ctx.jdyn, which every block in a chain shares through one cached
+local, so chaining both of their edges let a later block clobber an earlier
+one's pending condition.
+
+Perf is a deliberate trade, bisected commit-by-commit: the chaining change
+buys one heavy disc a stable +37% and costs two others ~3-5%. The other five
+changes are perf-neutral within measurement noise. Correctness was verified
+with a new chain-vs-reference differential (the existing EXECUTOR_MODE 7
+shadow forces single-block compilation and is blind to chaining): zero
+divergences across 235,753 multi-block comparisons on three discs, with the
+single-block control clean at 689,807 comparisons.
+
 ## 0.107.5 — 2026-07-28
 
 Repin `romdev-core-host` 0.3.0 and `romdev-core-runner` 0.2.4.
