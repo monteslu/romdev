@@ -4,6 +4,94 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.109.0 — 2026-07-30
+
+Acts on three rounds of field notes (v0.98.0, v0.103.0, v0.106.1). Every
+item was reproduced against the tree before being fixed; every new test was
+also run as a CONTROL against the unfixed code, to confirm it can actually
+fail.
+
+### cpu({op:'call'}) left the machine unresumable
+
+`callSubroutine`'s setup pushes a sentinel return address onto the GAME's
+stack, lowers SP by that width, and overwrites PC. When the callee reaches
+its return that unwinds; when the run is CUT SHORT (`stopAtPC`, or a
+watchdog stop mid-routine) none of it does — and with `sandbox:false` there
+was no restore at all. Reproduced on nestest/fceumm: S dropped `$FD` to
+`$0A` and stayed. A reported session saw `$F5` to `$F3` (two bytes of 6502
+sentinel), then crashed into RAM when the game's own `pla/pla/rts` popped
+garbage.
+
+`returned:false` is precisely the unsafe case. The CPU register file is now
+restored when a call doesn't return (`cpuContextRestored:true`), so the
+stack goes back while the RAM the routine wrote stays live — reading that is
+the whole point of `sandbox:false`.
+
+The repair covers all 15 platforms with a CPU-call profile, and is verified
+on all four CPU families that can build a ROM in-test: NES (6502 page
+stack), GB (SM83), SMS (Z80) and Genesis (m68k predecrement). The two stack
+disciplines leak in OPPOSITE directions, so testing one proves nothing about
+the other.
+
+### input({op:'set'}) silently pressed nothing on a wrong shape
+
+The unknown-key guard only fired on keys whose value was literally `true`,
+so `{port:0, buttons:['a','b']}` slipped past it AND the `requested` echo:
+accepted, nothing pressed. Malformed port objects are now rejected. A silent
+no-op here poisons NEGATIVE results — a button-gated branch that "never
+fires" when the button was never held reads as a finding about the game.
+
+### watch({on:'mem'}) misreported multi-byte variables
+
+A range was diffed per BYTE with every event carrying the range's label, so
+a 16-bit value whose high byte held steady reported as its low byte alone
+(`$05F0` read as 240, not 1520) and the constant byte emitted nothing at
+all. Adds `as:'u16le'|'u16be'|'u24le'|'u24be'|'u32le'|'u32be'` for one
+combined series, plus `byteIndex`/`byteLabel` and a `constantBytes[]` roll
+so an un-annotated range stops lying quietly.
+
+A watch armed at an un-cleared breakpoint hit now carries `armedWhileHalted`
+on `on:'mem'` as well as `on:'range'` — an empty window from a mid-frame
+arming is not a clean negative, and "nothing writes X" is load-bearing.
+
+### accessScan drowned in data banks
+
+A DATA bank decodes as fiction that still boundary-verifies, and on 6502 a
+zero-page target hits constantly inside tile data (`C6 C0` is an ordinary
+byte pair). Adds `banks`/`excludeBanks`, an always-on `perBank` density
+rollup, and a PER-BANK row cap (`maxSitesPerBank`, default 32) — the old
+global slice let one flooded bank consume the whole budget and truncate away
+the real hits from the code banks.
+
+### Cheats survive a state load
+
+`state({op:'load', reapplyCheats:true})` snapshots active cheats before the
+load and re-arms them after. `state({op:'save'})` records them in a
+`<path>.cheats.json` SIDECAR so a shared rig describes its own requirements;
+the `.state` bytes are unchanged, so every existing state keeps loading.
+
+### Restart recovery
+
+`catalog({op:'status'})` reports `serverPid`/`serverStartedAt`/
+`serverUptimeSeconds`, so a session can DETECT that the server restarted
+under it. `state({op:'autoSnapshot', enabled:true})` bounds the loss: an
+opt-in periodic save, taken lazily on calls already touching the host (no
+timer, nothing while idle), into a session-scoped temp dir that can never
+clobber a named slot, swallowing its own errors so it can't break the call
+it was protecting. `state({op:'recoverSnapshot'})` restores the newest.
+
+### Smaller
+
+- `disasm({target:'source', projectDir})` now routes to the annotated-source
+  lookup; previously that spelling still meant the PICO-8-only cart read.
+- A legacy `rebuild.json` project is detected by name, and the error no
+  longer advises re-running `disasm({target:'project'})` — on an annotated
+  project that regenerates the sources and destroys the annotations.
+- Parameter aliases across tools: `address`/`cpuAddress` where a memory
+  location is meant, bare addresses in `captureMemory`, `path`/`outputPath`
+  both ways, `dataHex` for `hex`. Individually trivial; the collection was
+  what cost the round trips.
+
 ## 0.108.0 — 2026-07-28
 
 Repin `romdev-core-flycast` 0.4.0 — a Dreamcast core with six SH-4
