@@ -1974,6 +1974,7 @@ export function registerDisasmTools(server, z) {
       context: z.number().int().min(0).max(20).optional().describe("target=sourceLookup: source lines of context each side of a hit block (default 2)."),
       window: z.number().int().min(0).max(64).optional().describe("target=accessScan: how far below the target an indexed/pointer BASE may sit and still count as reaching it (default 2 — catches base-1/base-2 index-from-1 loops; the target's page base $xx00 is always checked too)."),
       banks: z.array(z.number().int().min(0)).optional().describe("target=accessScan: scan ONLY these banks. The fix for a flooded scan: a DATA bank's bytes decode as fiction that still boundary-verifies, and on 6502 a zero-page target hits constantly inside tile/level data (`C6 C0`, `01 C0` are ordinary byte pairs). If you know banks 6-7 hold the code, banks:[6,7] turns hundreds of junk sites into the real answer."),
+      maxSitesPerBank: z.number().int().min(1).max(4096).optional().describe("target=accessScan: cap the rows returned PER BANK (default 32). Without a per-bank cap a flooded data bank consumes the whole `maxRefsReturned` budget and truncates away the real hits from the code banks; each bank now gets its own slice, so a handful of genuine sites always survive however loud a data bank is. `sitesFound` and `perBank` still report the true totals — only the ROWS are bounded."),
       excludeBanks: z.array(z.number().int().min(0)).optional().describe("target=accessScan: scan every bank EXCEPT these — the inverse of `banks`, for when the data banks are the short list. See `perBank` in the result for which banks are dense enough to suspect."),
       endian: z.enum(["LE", "BE"]).optional().describe("target=pointerTable: byte order of the CONTIGUOUS form (split lo/hi ignores this). Default follows the CPU — Genesis/m68k is BE, everything else LE; override only if a table is stored against type."),
       reverseHandler: z.number().int().min(0).max(0xFFFF).optional().describe("target=pointerTable: also report which dispatch INDEX/indices land on this handler address (reverse lookup — 'what state triggers this routine?')."),
@@ -1989,6 +1990,7 @@ export function registerDisasmTools(server, z) {
           if (args.banks && args.excludeBanks) throw new Error("disasm({target:'accessScan'}): pass `banks` OR `excludeBanks`, not both.");
           return jsonContent(await findReferencesCore({
             ...args,
+            maxSitesPerBank: args.maxSitesPerBank ?? 32,
             accessScan: { window: args.window ?? 2, banks: args.banks, excludeBanks: args.excludeBanks },
           }));
         }
