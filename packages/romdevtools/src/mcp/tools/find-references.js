@@ -417,7 +417,7 @@ function romHeaderSkip(platform, data) {
   }
 }
 
-export async function findReferencesCore({ path, platform, address, mapper: _mapper, includeTableHits = false, maxRefsReturned = 256, accessScan = null }) {
+export async function findReferencesCore({ path, platform, address, mapper: _mapper, includeTableHits = false, maxRefsReturned = 256, maxSitesPerBank = 32, accessScan = null }) {
   const data = new Uint8Array(await readFile(path));
   const resolved = platform ?? (
     /\.nes$/i.test(path) ? "nes" :
@@ -743,6 +743,39 @@ export async function findReferencesCore({ path, platform, address, mapper: _map
     // Sites per 1000 decoded lines, highest first. A code bank touching a
     // variable a handful of times sits far below a data bank whose bytes
     // happen to decode as accesses to it.
+    // Per-bank CAP on the rows returned.
+    //
+    // The old slice took the first maxRefsReturned sites GLOBALLY, so a single
+    // flooded data bank ate the entire budget and truncated away the real hits
+    // from the code banks -- the caller got 249 rows of fiction and none of the
+    // answer. Giving each bank its own slice means a code bank's handful of
+    // genuine sites always survive, however loud a data bank is.
+    //
+    // The full count stays in sitesFound and the per-bank totals in perBank, so
+    // nothing is hidden by the cap -- only the ROWS are bounded.
+    const perBankCapped = [];
+    let returnedSites;
+    if (perBankRaw.size > 1) {
+      const bankKeyName = resolved === "nes" ? "prgBank" : "romBank";
+      const kept = new Map();
+      returnedSites = [];
+      for (const site of sites) {
+        const b = site[bankKeyName];
+        const n = kept.get(b) ?? 0;
+        if (n < maxSitesPerBank) { returnedSites.push(site); kept.set(b, n + 1); }
+      }
+      for (const [bank, n] of kept) {
+        const total = perBankRaw.get(bank)?.sites ?? n;
+        if (total > n) perBankCapped.push({ bank, sites: total });
+      }
+      perBankCapped.sort((a, b) => b.sites - a.sites);
+      // The global cap still applies on top, so a 64-bank cart can't blow the
+      // response up by staying just under the per-bank limit everywhere.
+      if (returnedSites.length > maxRefsReturned) returnedSites = returnedSites.slice(0, maxRefsReturned);
+    } else {
+      returnedSites = sites.slice(0, maxRefsReturned);
+    }
+
     const perBank = perBankRaw.size
       ? Array.from(perBankRaw.values())
           .map((b) => ({
@@ -772,9 +805,12 @@ export async function findReferencesCore({ path, platform, address, mapper: _map
       address: "$" + address.toString(16).toUpperCase(),
       window,
       sitesFound: sites.length,
-      sites: sites.slice(0, maxRefsReturned),
-      truncated: sites.length > maxRefsReturned
-        ? `${sites.length - maxRefsReturned} additional sites not returned (raise maxRefsReturned).`
+      sites: returnedSites,
+      truncated: sites.length > returnedSites.length
+        ? `${sites.length - returnedSites.length} additional sites not returned` +
+          (perBankCapped.length
+            ? ` — ${perBankCapped.map((b) => `bank ${b.bank} capped at ${maxSitesPerBank} of ${b.sites}`).join(", ")}. A flooded DATA bank would otherwise consume the whole budget and truncate away the real hits from the code banks; every bank now gets its own slice. Raise maxSitesPerBank for more rows from one bank, or rerun with banks:[…] to scan only the code banks.`
+            : ` (raise maxRefsReturned).`)
         : undefined,
       summary,
       ...(perBank ? { perBank } : {}),
