@@ -82,7 +82,7 @@ function buttonShape(z) {
     // it pressed something it didn't.
     .passthrough()
     .describe(
-      "Per-port controller state. Prefer the spatial face-button names (north/east/south/west) for cross-platform code — they map to the physical button in that compass position on each platform's controller (e.g. on NES east=A, on SNES east=A, on Genesis east=C). Raw libretro names (a/b/x/y/l/r/...) also work if you need direct control. Omitted buttons are released.",
+      "Per-port controller state, POSITIONAL: ports[N] IS port N, so holding A on port 1 is ports:[{}, {a:true}] — there is no 'port' key. Each button is its own boolean key ({a:true, b:true}), NOT a list ({buttons:['a','b']} is rejected). Prefer the spatial face-button names (north/east/south/west) for cross-platform code — they map to the physical button in that compass position on each platform's controller (e.g. on NES east=A, on SNES east=A, on Genesis east=C). Raw libretro names (a/b/x/y/l/r/...) also work if you need direct control. Omitted buttons are released. A malformed port object is REJECTED rather than partially applied: a press that silently doesn't happen would turn into a false negative about the game.",
     );
 }
 
@@ -98,22 +98,48 @@ const KNOWN_BUTTONS = new Set([
 
 /** op:'set' — set held controller state (persists until changed). */
 function inputSetCore({ ports }, sessionKey) {
-      // Flag any key that isn't a real button BEFORE we set input — a typo
-      // ({jump:true}) would otherwise resolve to nothing and press silently.
-      const ignoredButtons = [];
+      // REJECT a malformed port object before touching the host.
+      //
+      // This used to only warn, and only on keys whose value was literally
+      // `true` — so {port:0, buttons:['a','b']} (a plausible-looking shape, and
+      // a real report) slipped past the check AND the `requested` filter, and
+      // came back {inputSet:true, requested:[[]]}: accepted, nothing pressed.
+      //
+      // A silent no-op here is the most expensive wrong answer this tool can
+      // give, because it poisons NEGATIVE results downstream: a button-gated
+      // branch that "never fires" when the button was never actually held reads
+      // as a finding about the game. Every other tool rejects unknown keys
+      // loudly; this one has the most to lose by not doing so.
+      //
+      // Ports are positional (index = port number), so `port` is not a key
+      // either — {port:1, a:true} means "port 0, with a stray key", never port 1.
+      const problems = [];
       ports.forEach((p, port) => {
         for (const k of Object.keys(p)) {
-          if (p[k] === true && !KNOWN_BUTTONS.has(k)) ignoredButtons.push({ port, name: k });
+          if (!KNOWN_BUTTONS.has(k)) {
+            problems.push(
+              k === "port"
+                ? `port ${port}: 'port' is not a button — ports are positional, so ports[N] IS port N. Pass buttons directly: ports:[{}, {a:true}] holds A on port 1.`
+                : k === "buttons"
+                  ? `port ${port}: 'buttons' is not a valid key — buttons are individual boolean keys, not a list. Use {a:true, b:true}, not {buttons:['a','b']}.`
+                  : `port ${port}: unknown button '${k}'.`,
+            );
+          } else if (typeof p[k] !== "boolean") {
+            problems.push(`port ${port}: button '${k}' must be true or false, got ${Array.isArray(p[k]) ? "an array" : typeof p[k]}.`);
+          }
         }
       });
+      if (problems.length) {
+        throw new Error(
+          `input({op:'set'}): ${problems.join(" ")} Valid buttons: ${[...KNOWN_BUTTONS].join(", ")}. ` +
+          "Rejected rather than partially applied — a press that silently doesn't happen turns into a false negative about the game.",
+        );
+      }
       getHost(sessionKey).setInput({ ports });
       const requested = ports.map((p) => Object.keys(p).filter((k) => p[k] === true && KNOWN_BUTTONS.has(k)));
       return {
         inputSet: true,
         requested,
-        ...(ignoredButtons.length
-          ? { ignoredButtons, ignoredNote: `Ignored ${ignoredButtons.length} unknown button name(s) — not pressed. Valid: ${[...KNOWN_BUTTONS].join(", ")}.` }
-          : {}),
         ...coDriveFields(sessionKey),
       };
 }

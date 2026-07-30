@@ -735,7 +735,8 @@ export function registerMemoryTools(server, z, sessionKey) {
       op: z.enum(["read", "write", "readCart", "snapshot", "diff", "diffRuns", "classify", "search", "searchUnknown", "searchNext"])
         .describe("read=bytes→hex; write=hex/base64→region; readCart=loaded cart ROM image; snapshot=capture a baseline; diff=changed bytes vs a baseline; diffRuns=run the SAME start state twice under two different held inputs and return only the DIVERGENT bytes (THE input→RAM mapping primitive — replaces save/run/dump/restore/run/dump/python-diff); classify=what kind of data is here; search=seed a value search (you know the number); searchUnknown=seed the whole region (you DON'T know the number); searchNext=narrow either."),
       region: z.enum(REGIONS).optional().describe("Memory region. Required for read/write/snapshot/diff; defaults to system_ram for classify/search. (readCart targets the cart ROM image, not a region.)"),
-      offset: z.number().int().min(0).default(0).describe("Byte offset within the region (read/write/snapshot/classify) or the cart ROM image (readCart)."),
+      offset: z.number().int().min(0).default(0).describe("Byte offset within the region (read/write/snapshot/classify) or the cart ROM image (readCart). `address` is accepted as an alias (the name breakpoint/disasm use for the same thing), defaulting `region` to system_ram."),
+      address: z.union([z.number().int().min(0), z.string()]).optional().describe("Alias for `offset` — the spelling breakpoint({on:'write'}) and disasm use. Accepts a number or \"$74\"/\"0x74\". Defaults `region` to system_ram when it's the only location given."),
       length: z.number().int().min(1).max(1 << 20).optional().describe("Bytes to read (max 1MB). op:read default 1; op:readCart default 16; op:snapshot default = whole region from offset; op:classify default 256."),
       cpuAddress: z.number().int().min(0).optional().describe("op:readCart (NES/SNES) — read by a BANKED CPU ADDRESS instead of a flat offset (the inverse of the breakpoint result's bank/prgOffset). e.g. read a jump table at $8654 in bank 6: {op:'readCart', cpuAddress:0x8654, bank:6}. A $C000+ NES address resolves to the fixed top bank. Saves the cpuAddr-0x8000+bank*0x4000 hand-arithmetic."),
       bank: z.number().int().min(0).optional().describe("op:readCart with cpuAddress — which 16KB PRG bank is mapped into the switchable $8000-$BFFF window (NES). Ignored for $C000+ (fixed top bank) and for non-banked ROMs."),
@@ -745,7 +746,8 @@ export function registerMemoryTools(server, z, sessionKey) {
       findHex: z.string().optional().describe("op:'readCart' — byte-pattern SCAN over the loaded cart image (even-length hex, spaces/$ ok — e.g. '20 3C 87' = jsr $873C). Returns matches as {fileOffset, cpuAddress[, bank]} — the offset→bank:addr mapping done for you. THE call-site hunt for annotation work; replaces scripting over the ROM file."),
       maxMatches: z.number().int().min(1).max(1000).optional().describe("op:'readCart' findHex — cap on returned matches (default 100; truncated:true when hit)."),
       // write
-      hex: z.string().optional().describe("op:write — hex string, e.g. 'deadbeef' (even length)."),
+      hex: z.string().optional().describe("op:write — hex string, e.g. 'deadbeef' (even length; spaces/$/_ separators are stripped). `dataHex` is accepted as an alias."),
+      dataHex: z.string().optional().describe("Alias for `hex` (op:write)."),
       base64: z.string().optional().describe("op:write — base64 bytes (binary blobs)."),
       data: z.any().optional().describe("op:write — REJECTED. Pass `hex` (string) or `base64` (string), not an array."),
       bytes: z.any().optional().describe("op:write — REJECTED. Pass `hex` (string) or `base64` (string)."),
@@ -773,11 +775,30 @@ export function registerMemoryTools(server, z, sessionKey) {
       compare: z.enum(["eq", "changed", "unchanged", "inc", "dec", "gt", "lt"]).optional().describe("op:searchNext — eq=now equals `value`; changed/unchanged vs the last read; inc/dec=went up/down. All of these work as the FIRST narrow too (baselines are recorded at seed). gt/lt=now >/< `value`."),
       maxCandidates: z.number().int().min(1).max(8192).default(64).describe("op:search/searchNext — cap the candidates RETURNED (the full list is kept server-side; `count` is the true total)."),
       // shared output
-      outputPath: z.string().optional().describe(`op:read/readCart — write RAW bytes here. Required for reads >${INLINE_HEX_LIMIT}B unless inline. Small reads honor it too (writes file AND returns hex), so 'dump to disk then diff two files' works at any size. (Ignored with offsets.) op:diff — write the FULL diff JSON here regardless of size (so a big diff routes to YOUR path, not a harness path).`),
+      outputPath: z.string().optional().describe(`op:read/readCart — write RAW bytes here. Required for reads >${INLINE_HEX_LIMIT}B unless inline. Small reads honor it too (writes file AND returns hex), so 'dump to disk then diff two files' works at any size. (Ignored with offsets.) op:diff — write the FULL diff JSON here regardless of size (so a big diff routes to YOUR path, not a harness path). 'path' is accepted as an alias (the spelling frame({op:'screenshot'}) uses).`),
+      path: z.string().optional().describe("Alias for `outputPath` — the spelling frame({op:'screenshot'}) uses for the same idea."),
       inline: z.boolean().default(false).describe(`op:read/readCart — for reads >${INLINE_HEX_LIMIT}B, return the hex in the response instead of writing to disk.`),
       echo: z.boolean().default(true).describe("op:read/readCart with outputPath — false = return only {path, bytes} with NO inline hex (keeps a 2-4KB dump out of context; the raw bytes are in the file). op:diff with outputPath — false = return only the slim envelope (counts + path), omitting the changes/clusters array."),
     },
-    safeTool(async (args) => {
+    safeTool(async (rawArgs) => {
+      // Accept `address` (what breakpoint/disasm call it) and `cpuAddress` as
+      // spellings of `offset`. Each individual error message here was already
+      // good -- one even suggested "Did you mean 'offset'?" -- but the COLLECTION
+      // of near-synonyms across tools is what costs the round trips, and no
+      // single good message fixes that.
+      let args = rawArgs;
+      if (args.dataHex != null && args.hex == null) args = { ...args, hex: args.dataHex };
+      if (args.outputPath == null && args.path != null) args = { ...args, outputPath: args.path };
+      if (args.offset == null && (args.address != null || args.cpuAddress != null)) {
+        const a = args.address ?? args.cpuAddress;
+        const n = typeof a === "string" ? parseInt(String(a).replace(/^[$]|^0x/i, ""), 16) : a;
+        if (Number.isFinite(n)) {
+          // readCart's `cpuAddress` is a REAL banked-address parameter with its
+          // own meaning, so never rewrite it out from under that op.
+          const keepsCpuAddress = args.op === "readCart" && args.cpuAddress != null;
+          if (!keepsCpuAddress) args = { ...args, offset: n, region: args.region ?? "system_ram" };
+        }
+      }
       switch (args.op) {
         case "read":       return await memRead(sessionKey, args);
         case "write": {

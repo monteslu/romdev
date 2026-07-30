@@ -250,7 +250,7 @@ export function registerTools(server, z, sessionKey) {
     "• op:'status' — a snapshot of the current session: which platform's core/ROM is in the running host (if any), current frame count, last-loaded media, loaded categories. Call this when you've lost context across many tool calls and want to re-ground.",
     {
       op: z.enum(["categories", "status"]).default("categories")
-        .describe("categories=tool-category catalog; status=live session snapshot (romdevVersion + host/platform/frameCount/media + a `capabilities` map of which debug ops the loaded core/toolchain implement — call this to check the running version or pick a working trace strategy before probing by failure)."),
+        .describe("categories=tool-category catalog; status=live session snapshot (romdevVersion + serverPid/serverStartedAt/serverUptimeSeconds + host/platform/frameCount/media + a `capabilities` map of which debug ops the loaded core/toolchain implement — call this to check the running version, pick a working trace strategy before probing by failure, or DETECT a server restart: an unprompted restart discards every host/ROM/state, and a changed serverPid is how a session tells that apart from 'I never loaded a ROM')."),
     },
     safeTool(async ({ op = "categories" }) => {
       if (op === "status") {
@@ -263,8 +263,24 @@ export function registerTools(server, z, sessionKey) {
         // know a human is playing in a playtest window BEFORE it fights them
         // for input/stepping (pause, or use a second session).
         const human = getPlaytestHumanStatus(sessionKey);
+        // Process identity + age, so a session can DETECT a server restart.
+        //
+        // A restart between two consecutive calls seconds apart silently
+        // discarded all emulator state; the error text on the next call was good
+        // (it names the three causes and the recovery), but nothing let the
+        // session notice the event itself, log it, or tell "the server restarted"
+        // apart from "I never loaded a ROM". A pid that changed or an uptime
+        // that went backwards is proof, and costs nothing to report.
+        const uptimeSeconds = Math.round(process.uptime());
+        const startedAt = new Date(Date.now() - uptimeSeconds * 1000).toISOString();
         return jsonContent({
           romdevVersion: PKG_VERSION,
+          serverPid: process.pid,
+          serverStartedAt: startedAt,
+          serverUptimeSeconds: uptimeSeconds,
+          ...(uptimeSeconds < 120
+            ? { serverRecentlyStarted: `This server process is only ${uptimeSeconds}s old. If your session is older than that, it RESTARTED under you and every host/ROM/state is gone — re-run loadMedia; a fresh boot is the recovery point. Compare serverPid across calls to detect this without guessing.` }
+            : {}),
           ...base,
           // Which debug ops the loaded core + installed toolchain implement, so
           // an agent picks a working trace strategy up front instead of probing

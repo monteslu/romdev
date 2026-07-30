@@ -31,24 +31,62 @@ function stateDiffSnapshots(key) {
 // ── *Core functions: one per state operation. The `state` tool routes to them. ──
 
 /** op:'save' — snapshot to an in-memory slot and/or a disk blob. */
-async function saveStateCore({ name, path: outPath }, sessionKey) {
+/**
+ * The cheat sidecar path for a state file: `rig.state` -> `rig.state.cheats.json`.
+ *
+ * A SIDECAR rather than a field inside the blob, deliberately. A rig's cheat
+ * requirements currently live in CLAUDE.md prose, so a `.state` shared between
+ * sessions silently needs knowledge that does not travel with it. Recording them
+ * makes the rig self-describing — but the states already on disk are working
+ * assets people have invested in, and changing the blob format would put every
+ * one of them at risk of a loader that reads the new bytes wrong. A separate
+ * file cannot corrupt anything: old states keep loading untouched, and a state
+ * written without cheats simply has no sidecar.
+ */
+function cheatSidecarPath(statePath) {
+  return statePath + ".cheats.json";
+}
+
+async function saveStateCore({ name, path: outPath, recordCheats = true }, sessionKey) {
       if (!name && !outPath) throw new Error("state({op:'save'}): provide `name` (in-memory slot), `path` (disk), or both.");
       const host = getHost(sessionKey);
       const done = [];
       if (name) { host.saveState(name); done.push(`slot '${name}'`); }
       const resolvedOut = outPath ? resolveStatePath(outPath, host) : null;
+      let cheatsRecorded = null;
+      let cheatsPath = null;
       if (resolvedOut) {
         const blob = host.serializeState();
         await mkdir(path.dirname(resolvedOut), { recursive: true });
         await writeFile(resolvedOut, blob);
         done.push(`${blob.length} bytes → ${resolvedOut}`);
+
+        // Only write a sidecar when there is something to record — an empty one
+        // would be noise next to every state file in a repo.
+        if (recordCheats && typeof host.listActiveCheats === "function") {
+          const active = host.listActiveCheats();
+          if (active.length) {
+            cheatsPath = cheatSidecarPath(resolvedOut);
+            await writeFile(cheatsPath, JSON.stringify({
+              note: "Cheats that were active when this state was saved. state({op:'load'}) reports them; pass reapplyCheats:true to re-arm them automatically.",
+              platform: host.status.platform,
+              cheats: active,
+            }, null, 2) + "\n");
+            cheatsRecorded = active.map((c) => c.code);
+            done.push(`${active.length} active cheat(s) → ${cheatsPath}`);
+          }
+        }
       }
       return {
         saved: true,
         ...(name ? { name } : {}),
         ...(resolvedOut ? { path: resolvedOut, ...(resolvedOut !== outPath ? { resolvedPath: resolvedOut } : {}) } : {}),
         platform: host.status.platform,
-        note: `Saved ${done.join(" + ")}.` + (outPath ? " Restore across sessions with state({op:'load', path}) after loading the same ROM." : ""),
+        ...(cheatsRecorded ? { cheatsRecorded, cheatsPath } : {}),
+        note: `Saved ${done.join(" + ")}.` + (outPath ? " Restore across sessions with state({op:'load', path}) after loading the same ROM." : "") +
+          (cheatsRecorded
+            ? ` The cheat sidecar travels WITH the state — keep them together (commit both) so the rig stays self-describing; state({op:'load'}) reports it and reapplyCheats:true re-arms them.`
+            : ""),
       };
 }
 
@@ -114,11 +152,22 @@ function probeStateLiveness(host, reload) {
   } catch { return null; } // best-effort — never fail the load over the probe
 }
 
-async function loadStateCore({ name, path: inPath, render = true, probeLiveness = true }, sessionKey) {
+async function loadStateCore({ name, path: inPath, render = true, probeLiveness = true, reapplyCheats = false }, sessionKey) {
       if (!name && !inPath) throw new Error("state({op:'load'}): provide `name` (in-memory slot) or `path` (disk).");
       if (name && inPath) throw new Error("state({op:'load'}): provide `name` OR `path`, not both.");
       const host = getHost(sessionKey);
       let cheatsCleared = 0;
+      // Snapshot BEFORE the load, which is what clears them.
+      //
+      // `cheatsCleared:N` already reported this fact at the right moment, in the
+      // right tool — and it still bit, because knowing a cheat was cleared does
+      // not stop you forgetting to re-arm it three calls later while reasoning
+      // about something else. One report cost a 200-frame run and a screenshot
+      // that came back GAME OVER. So the tool does the obvious follow-up rather
+      // than reporting the fact and leaving it to an agent's memory.
+      const cheatsBefore = reapplyCheats && typeof host.listActiveCheats === "function"
+        ? host.listActiveCheats()
+        : null;
       const resolvedIn = inPath ? resolveStatePath(inPath, host) : null;
       if (resolvedIn) {
         const blob = new Uint8Array(await readFile(resolvedIn));
@@ -134,6 +183,39 @@ async function loadStateCore({ name, path: inPath, render = true, probeLiveness 
           else host.loadState(name);
         });
       }
+      // A state saved with cheats active carries a sidecar listing them, so a
+      // rig shared between sessions announces what it needs instead of relying
+      // on the reader having seen a note in CLAUDE.md.
+      let cheatsFromSidecar = null;
+      if (resolvedIn) {
+        try {
+          const raw = await readFile(cheatSidecarPath(resolvedIn), "utf8");
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed?.cheats) && parsed.cheats.length) cheatsFromSidecar = parsed.cheats;
+        } catch { /* no sidecar (the normal case) — nothing to say */ }
+      }
+
+      // Re-arm AFTER the liveness probe, which re-restores the state and would
+      // otherwise clear them all over again. The sidecar is the fallback: a
+      // fresh session loading a shared rig has no cheats active to snapshot, so
+      // what the rig itself recorded is the only source.
+      const toReapply = (cheatsBefore && cheatsBefore.length) ? cheatsBefore : (reapplyCheats ? cheatsFromSidecar : null);
+      let cheatsReapplied = null;
+      let cheatsReapplyFailed = null;
+      let cheatsReapplySource = null;
+      if (toReapply && toReapply.length) {
+        cheatsReapplySource = (cheatsBefore && cheatsBefore.length) ? "session" : "sidecar";
+        cheatsReapplied = [];
+        toReapply.forEach((c, i) => {
+          try {
+            host.setCheat(c.index ?? i, c.code, true);
+            cheatsReapplied.push(c.code);
+          } catch (e) {
+            (cheatsReapplyFailed ??= []).push({ code: c.code, error: String(e?.message ?? e) });
+          }
+        });
+      }
+
       let rendered = false;
       if (render) { host.renderOneFrame(); rendered = true; }
       return {
@@ -144,6 +226,20 @@ async function loadStateCore({ name, path: inPath, render = true, probeLiveness 
         rendered,
         ...(host.status.paused && rendered ? { renderedWhilePaused: true } : {}),
         cheatsCleared, // a restore removes active cheats (frontend cheat state isn't in the blob)
+        ...(cheatsReapplied ? { cheatsReapplied, cheatsReapplySource } : {}),
+        ...(cheatsReapplyFailed ? { cheatsReapplyFailed } : {}),
+        // The rig's own record of what it needs. Reported whether or not it was
+        // acted on, so a session that didn't ask for reapplyCheats still learns
+        // this state expects a cheat rather than discovering it via GAME OVER.
+        ...(cheatsFromSidecar ? { cheatsRecordedWithState: cheatsFromSidecar.map((c) => c.code) } : {}),
+        // Only worth saying when there is something to re-arm and the caller
+        // didn't ask for it — the case where a run is about to be wasted.
+        ...(!reapplyCheats && (cheatsCleared || cheatsFromSidecar)
+          ? { cheatsClearedHint: (cheatsFromSidecar
+              ? `This state was SAVED with ${cheatsFromSidecar.length} cheat(s) active (${cheatsFromSidecar.map((c) => c.code).join(", ")}) and they are NOT applied. `
+              : `${cheatsCleared} cheat(s) were cleared by this load and are NOT active. `) +
+              "Pass reapplyCheats:true to have them restored automatically — reading this field and re-arming three calls later is exactly what gets forgotten." }
+          : {}),
       };
 }
 
@@ -383,9 +479,11 @@ export function registerStateTools(server, z, sessionKey) {
       name: z.string().min(1).optional().describe("op=save/load: in-memory slot name. op=diff: snapshot label (default 'default'). op=putDiskFile: file name on the disk (≤16 chars; default = source basename)."),
       unit: z.number().int().min(8).max(11).default(8).describe("op=exportDisk/importDisk/putDiskFile (C64): drive unit (default 8)."),
       path: z.string().optional().describe("op=save: also write the blob here (survives restarts). op=load: restore from this disk blob. op=export/dump: write the blob here (required). A RELATIVE path resolves against the loaded ROM's directory (NOT the server CWD); an absolute path is used as-is. The result echoes `resolvedPath` when they differ."),
+      recordCheats: z.boolean().default(true).describe("op=save (with `path`): if any cheats are active, record them in a `<path>.cheats.json` SIDECAR so the rig describes its own requirements instead of relying on a note in prose. A shared .state otherwise needs knowledge that doesn't travel with it. The .state bytes are unchanged — old states keep loading, and no sidecar is written when no cheats are active. Keep the two files together (commit both); state({op:'load'}) reports the sidecar and reapplyCheats:true re-arms from it."),
       // load
       render: z.boolean().default(true).describe("op=load: step one frame after restoring so the framebuffer reflects it (fixes the stale-screenshot footgun). false = stay at the exact restored instant."),
       probeLiveness: z.boolean().default(true).describe("op=load: probe that the restored state is LIVE (step 4 frames: does the PC move / framebuffer change?), then RE-RESTORE the exact state — net-zero side effects. A state captured mid-pause/transition has its dispatchers stopped and everything watched from it looks dead; the probe says so up front. false = skip (saves 4 emulated frames of work)."),
+      reapplyCheats: z.boolean().default(false).describe("op=load: snapshot the active cheats BEFORE the load and re-apply them after, reporting `cheatsReapplied`. A restore always clears cheats, and `cheatsCleared:N` says so — but knowing it does not stop you forgetting to re-arm three calls later, which costs a whole run and a screenshot that comes back GAME OVER. Use this on any rig whose recipe includes a cheat (invincibility, a freeze) so the load can't silently disarm it."),
       // export
       fromSlot: z.string().min(1).optional().describe("op=export: in-memory slot to copy to disk (required)."),
       // dump

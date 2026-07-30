@@ -703,17 +703,55 @@ export async function findReferencesCore({ path, platform, address, mapper: _map
   if (accessScan) {
     const family = accessFamilyFor(resolved);
     const window = accessScan.window ?? 2;
+    // Bank filter. A cart's DATA banks decode as fiction — arbitrary tile bytes
+    // disassemble into plausible instructions — and on 6502 a zero-page target
+    // makes that fiction hit constantly, because the two-byte encodings
+    // (`C6 C0` = dec $C0, `01 C0` = ora ($C0,x)) are ordinary byte pairs in
+    // level data. One reported scan returned 249 sites, nearly all from a
+    // single data bank, and the entire result was discarded.
+    //
+    // Per-bank disassembly does not help here and saying so has misled people:
+    // a data bank HAS a per-bank decode, it is simply fiction, and fiction
+    // passes a boundary check. The caller knows which banks hold code; let them
+    // say so.
+    const onlyBanks = accessScan.banks != null ? new Set(accessScan.banks) : null;
+    const skipBanks = accessScan.excludeBanks != null ? new Set(accessScan.excludeBanks) : null;
+    const bankFiltered = onlyBanks != null || skipBanks != null;
+    const keptBanks = [], skippedBanks = [];
     let sites = [];
+    // Per-bank site counts and sizes for the density rollup, kept even when no
+    // filter was requested — density is the signal that lets a caller discard a
+    // flooded bank WITHOUT reading its rows, so it should not require knowing
+    // to ask for it.
+    const perBankRaw = new Map();
     if (segments) {
       const bankKey = resolved === "nes" ? "prgBank" : "romBank";
       for (const seg of segments) {
-        for (const site of scanAsmForAccess(seg.asm, address, { family, window })) {
-          sites.push({ ...site, [bankKey]: seg.bank });
-        }
+        if (onlyBanks && !onlyBanks.has(seg.bank)) { skippedBanks.push(seg.bank); continue; }
+        if (skipBanks && skipBanks.has(seg.bank)) { skippedBanks.push(seg.bank); continue; }
+        keptBanks.push(seg.bank);
+        const found = scanAsmForAccess(seg.asm, address, { family, window });
+        // Instruction-line count approximates the bank's decoded size well
+        // enough to rank banks against each other, which is all density is for.
+        const lines = seg.asm ? seg.asm.split("\n").length : 0;
+        perBankRaw.set(seg.bank, { bank: seg.bank, sites: found.length, lines });
+        for (const site of found) sites.push({ ...site, [bankKey]: seg.bank });
       }
     } else {
       sites = scanAsmForAccess(asm, address, { family, window });
     }
+    // Sites per 1000 decoded lines, highest first. A code bank touching a
+    // variable a handful of times sits far below a data bank whose bytes
+    // happen to decode as accesses to it.
+    const perBank = perBankRaw.size
+      ? Array.from(perBankRaw.values())
+          .map((b) => ({
+            bank: b.bank,
+            sites: b.sites,
+            per1kLines: b.lines ? Math.round((b.sites / b.lines) * 1000 * 10) / 10 : 0,
+          }))
+          .sort((a, b) => b.sites - a.sites)
+      : null;
     const summary = { direct: 0, indexedBase: 0, pageBase: 0, writers: 0, readers: 0, rmw: 0, pointerLoads: 0 };
     for (const site of sites) {
       summary[site.via ?? "direct"]++;
@@ -739,9 +777,18 @@ export async function findReferencesCore({ path, platform, address, mapper: _map
         ? `${sites.length - maxRefsReturned} additional sites not returned (raise maxRefsReturned).`
         : undefined,
       summary,
+      ...(perBank ? { perBank } : {}),
+      ...(bankFiltered ? { banksScanned: keptBanks, banksSkipped: skippedBanks } : {}),
       notes: [
         famNote,
         "This bounds DIRECT + near-base indexed access only — table-driven writes (lda tbl,y / sta base,x with a far base) and fully indirect access need the live census: watch({on:'range', kind:'write'}).",
+        // Only worth saying when the numbers actually look lopsided. Emit the
+        // measurement and let the caller conclude; a bank can legitimately be
+        // both dense and code.
+        !bankFiltered && perBank && perBank.length > 1 && perBank[0].sites >= 20 &&
+        perBank[0].per1kLines >= 4 * (perBank[perBank.length - 1].per1kLines || 0.1)
+          ? `Site density varies sharply across banks (see perBank: bank ${perBank[0].bank} has ${perBank[0].sites} sites at ${perBank[0].per1kLines}/1k lines). A DATA bank decodes as fiction that still boundary-verifies, and on 6502 a zero-page target hits constantly in tile/level data. If you know which banks hold code, rerun with banks:[…] (or excludeBanks:[…]) — that is the static fix for a flooded scan, ahead of the dynamic backstop below.`
+          : null,
         segmentsCapped > 0 ? `Scan covered the first ${SEGMENT_CAP} banks only — ${segmentsCapped} additional bank(s) were NOT scanned.` : null,
       ].filter(Boolean).join(" "),
     };

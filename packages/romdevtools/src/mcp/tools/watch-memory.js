@@ -541,16 +541,75 @@ function snap(host, region, offset, length) {
   return Array.from(host.readMemory(region, offset, length));
 }
 
-function diffSnapshots(before, after, baseOffset, label) {
+// Byte width each `as` code reads. u8 is here so the enum is uniform; it
+// behaves exactly like an unannotated 1-byte range.
+const AS_WIDTH = { u8: 1, u16le: 2, u16be: 2, u24le: 3, u24be: 3, u32le: 4, u32be: 4 };
+
+/** Combine `width` bytes at `bytes[base]` into one unsigned value. */
+function combineBytes(bytes, base, as) {
+  const width = AS_WIDTH[as];
+  let v = 0;
+  if (as.endsWith("be")) {
+    for (let i = 0; i < width; i++) v = v * 256 + bytes[base + i];
+  } else {
+    for (let i = width - 1; i >= 0; i--) v = v * 256 + bytes[base + i];
+  }
+  return v;
+}
+
+/**
+ * Per-byte diff — the default, and the reason `as` exists.
+ *
+ * Emitting one event per CHANGED byte is right for a byte array and wrong for a
+ * multi-byte number: the high byte of a 16-bit variable often holds steady, so
+ * it produces no event at all and the low byte reports alone under the range's
+ * full label. A distance of 1520 reads as 240 with nothing marking it a
+ * fragment. `byteIndex`/`byteLabel` at least make the split VISIBLE for ranges
+ * that didn't opt into `as`; combining is still the real answer.
+ */
+function diffSnapshots(before, after, baseOffset, label, opts = {}) {
+  const { rangeLength = before.length, annotateBytes = false } = opts;
   const changes = [];
   for (let i = 0; i < before.length; i++) {
     if (before[i] !== after[i]) {
+      // Only annotate when the range spans several bytes — a 1-byte range has
+      // no ambiguity to resolve and the extra fields would just be noise.
+      const split = annotateBytes && rangeLength > 1;
       changes.push({
         ...(label ? { label } : {}),
+        ...(split ? { byteIndex: i, ...(label ? { byteLabel: `${label}[${i}]` } : {}) } : {}),
         offset: baseOffset + i,
         offsetHex: "0x" + (baseOffset + i).toString(16).toUpperCase().padStart(4, "0"),
         before: before[i],
         after: after[i],
+      });
+    }
+  }
+  return changes;
+}
+
+/**
+ * Whole-range diff for `as` — one event when the COMBINED value moves.
+ *
+ * A change in any constituent byte is a single event carrying the combined
+ * before/after, so a 16-bit counter rolling 0x00FF -> 0x0100 reports once as
+ * 255 -> 256 rather than as two unrelated byte events.
+ */
+function diffCombined(before, after, baseOffset, label, as) {
+  const width = AS_WIDTH[as];
+  const changes = [];
+  for (let base = 0; base + width <= before.length; base += width) {
+    const b = combineBytes(before, base, as);
+    const a = combineBytes(after, base, as);
+    if (b !== a) {
+      changes.push({
+        ...(label ? { label } : {}),
+        offset: baseOffset + base,
+        offsetHex: "0x" + (baseOffset + base).toString(16).toUpperCase().padStart(4, "0"),
+        before: b,
+        after: a,
+        as,
+        width,
       });
     }
   }
@@ -728,6 +787,13 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     offset: z.number().int().min(0),
     length: z.number().int().min(1).max(4096).default(1),
     label: z.string().optional().describe("Name echoed on every event from this range — tells disjoint ranges apart in one stream."),
+    // Multi-byte variables are the common case in RE (map distance, score,
+    // pointers, timers), and watching them BYTE-WISE lies quietly: a 16-bit
+    // value whose high byte holds steady reports only its low byte, under the
+    // range's label, with nothing saying it is a fragment. `as` reads the range
+    // as ONE number instead.
+    as: z.enum(["u8", "u16le", "u16be", "u24le", "u24be", "u32le", "u32be"]).optional()
+      .describe("Read this range as a SINGLE multi-byte value instead of independent bytes — the fix for 16/32-bit variables (map distance, score, pointers). One series/event stream under the range's `label`, values combined with the given endianness, and a change in ANY constituent byte is one event. `length` must match the width (u16=2, u24=3, u32=4). Without this, a 2-byte range emits per-BYTE series that share the label, and a byte that never changed emits nothing at all."),
     // Per-range overrides of the call-wide filters. The whole point: in a
     // multi-range watch, keep EVERY transition of a slow state byte while
     // sampling/suppressing a fast free-running counter in the SAME pass.
@@ -748,6 +814,21 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
             if (!region) throw new Error("watchMemory: pass `region` (single-range) or `ranges` (multi-range).");
             return [{ region, offset, length }];
           })();
+
+      // `as` and `length` have to agree, and silently reading half a value would
+      // be exactly the class of quiet wrongness `as` exists to remove. An exact
+      // multiple is allowed so one range can cover an ARRAY of same-width values
+      // (a table of 16-bit pointers), which is why this isn't a strict equality.
+      for (const r of watchRanges) {
+        if (!r.as) continue;
+        const w = AS_WIDTH[r.as];
+        if (r.length % w !== 0) {
+          throw new Error(
+            `watch({on:'mem'}): range ${r.label ? `'${r.label}' ` : ""}at ${r.region}+${r.offset} has as:'${r.as}' (${w} bytes) but length:${r.length}, which is not a multiple of ${w}. ` +
+            `Set length:${w} for one value, or a multiple of ${w} for an array of them.`,
+          );
+        }
+      }
 
       // Optional: auto-label watched RAM addresses from the cheat DB. Builds an
       // address→desc map from the matched game's RAM cheats and fills in `label`
@@ -785,6 +866,12 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
       const pressDriver = makePressDriver(host, presses);
       const startFrame = host.status.frameCount;
+      // Was execution parked at an un-cleared breakpoint when this watch was
+      // armed? If so the window starts PART-WAY through a frame and anything the
+      // frame already did is invisible, which makes an empty result
+      // indistinguishable from a real negative. Same detector on:'range' uses.
+      const haltInfo = armedWhileHaltedInfo(host);
+      const armedWhileHalted = haltInfo.armedWhileHalted ? haltInfo : null;
 
       // Per-range previous snapshots.
       let prevs = watchRanges.map((r) => snap(host, r.region, r.offset, r.length));
@@ -820,6 +907,14 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
           if (!s) {
             s = { offset: ev.offset, offsetHex: ev.offsetHex, region: ev.region, frames: [], values: [] };
             if (ev.label != null) s.label = ev.label;
+            // Carry the width through so a combined series says what it is,
+            // and so a per-byte series of a SPLIT range says which byte it is
+            // rather than answering to the whole variable's name.
+            if (ev.as != null) { s.as = ev.as; s.width = ev.width; }
+            if (ev.byteIndex != null) {
+              s.byteIndex = ev.byteIndex;
+              if (ev.byteLabel != null) s.byteLabel = ev.byteLabel;
+            }
             seriesMap.set(key, s);
           }
           s.frames.push(ev.frame);
@@ -855,7 +950,9 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         for (let ri = 0; ri < watchRanges.length; ri++) {
           const r = watchRanges[ri];
           const cur = snap(host, r.region, r.offset, r.length);
-          const changes = diffSnapshots(prevs[ri], cur, r.offset, r.label);
+          const changes = r.as
+            ? diffCombined(prevs[ri], cur, r.offset, r.label, r.as)
+            : diffSnapshots(prevs[ri], cur, r.offset, r.label, { rangeLength: r.length, annotateBytes: true });
           prevs[ri] = cur;
           // Per-range filter overrides fall back to the call-wide values.
           const rOnChange = r.onChange ?? onChange;
@@ -909,9 +1006,18 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         ...(cheatLabelInfo ? { cheatLabels: cheatLabelInfo } : {}),
         stoppedEarly,
         truncated,
-        note: totalMatched === 0
+        // Reported on EVERY result, not only the empty one: a partial count from
+        // a mid-frame window is just as misleading as a zero, and the caller
+        // should know the window's left edge is ragged either way.
+        ...haltInfo,
+        note: (armedWhileHalted
+          ? (totalMatched === 0
+              ? "An empty result here does NOT establish that nothing writes this address — see armedWhileHaltedNote. "
+              : "This count is a LOWER BOUND — see armedWhileHaltedNote. ")
+          : "") +
+          (totalMatched === 0
           ? "No matching changes in the watched window. Try (a) onChange:'any' to confirm the byte moves at all, (b) longer `frames`, (c) `pressDuring` to drive the game past the event, (d) a different region/offset. If the byte never moves even with onChange:'any', this region may be REBUILT as a block (sprite/OAM shadow, display list, VRAM) rather than written in place — watch the SOURCE struct the copy/DMA reads from instead (find it with memory({op:'search'}))."
-          : (tryGetPC(host) == null ? "PC not available for this platform (getCPUState returned no pc field)." : undefined),
+          : (tryGetPC(host) == null ? "PC not available for this platform (getCPUState returned no pc field)." : "")) || undefined,
       };
 
       if (outputPath) {
@@ -946,16 +1052,47 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
           return {
             offset: s.offset, offsetHex: s.offsetHex, region: s.region,
             ...(s.label != null ? { label: s.label } : {}),
+            ...(s.as != null ? { as: s.as, width: s.width } : {}),
+            // A split range's series is one BYTE of a larger value; say so, so
+            // `label` can never be read as "this series is the variable".
+            ...(s.byteIndex != null ? { byteIndex: s.byteIndex } : {}),
+            ...(s.byteLabel != null ? { byteLabel: s.byteLabel } : {}),
             points: fr.length, totalChanges: total,
             ...(total > maxEvents ? { downsampledFrom: total } : {}),
             frames: fr, values: va,
           };
         });
+
+        // A byte that never changed emits NO events, so it is absent from the
+        // series entirely — and a constant high byte is exactly the information
+        // needed to read the low one. Its absence is silent and has been read as
+        // "1520 is 240". Report the bytes that held still, with the value they
+        // held, so a multi-byte range is never quietly under-reported.
+        const constants = [];
+        for (const r of watchRanges) {
+          if (r.as || r.length <= 1) continue;   // combined, or nothing to split
+          const finalBytes = snap(host, r.region, r.offset, r.length);
+          for (let i = 0; i < r.length; i++) {
+            const off = r.offset + i;
+            const hex = "0x" + off.toString(16).toUpperCase().padStart(4, "0");
+            if (!seriesMap.has(hex)) {
+              constants.push({
+                offset: off, offsetHex: hex, region: r.region,
+                ...(r.label != null ? { label: r.label, byteLabel: `${r.label}[${i}]` } : {}),
+                byteIndex: i, value: finalBytes[i], changed: false,
+              });
+            }
+          }
+        }
         return jsonContent({
           ...base,
           format: "series",
           ...(sampleEvery > 1 ? { sampleEvery } : {}),
           series,
+          ...(constants.length ? { constantBytes: constants } : {}),
+          ...(constants.length
+            ? { constantBytesNote: `${constants.length} byte(s) in multi-byte range(s) never changed, so they have no series — listed in constantBytes with the value they held. If a range is one NUMBER rather than independent bytes, pass as:'u16le' (etc.) on it to get ONE combined series instead: a 16-bit value whose high byte holds steady otherwise reports only its low byte under the range's label (0x05F0 reads as 240, not 1520).` }
+            : {}),
           ...(anyDownsampled
             ? { seriesNote: `One or more offsets had >maxEvents (${maxEvents}) changes and were DOWNSAMPLED to an evenly-spaced subset spanning the full window (first+last kept). Raise maxEvents or lower sampleEvery for more resolution; use outputPath for every raw delta.` }
             : {}),
@@ -1331,7 +1468,15 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       let capturedMemory = null;
       if (Array.isArray(captureMemory) && captureMemory.length) {
         capturedMemory = {};
-        for (const m of captureMemory) {
+        for (const raw of captureMemory) {
+          // A bare address is the common case ("capture $74 at the hit"), and
+          // requiring the full {region,offset,length} record for it was one of
+          // the naming asymmetries that cost round trips. Numbers and "$74" /
+          // "0x74" strings both work; region defaults the way abortIf's does.
+          const m = (typeof raw === "object" && raw !== null)
+            ? raw
+            : { region: "system_ram", offset: typeof raw === "string" ? parseInt(String(raw).replace(/^[$]|^0x/i, ""), 16) : raw };
+          if (m.region == null) m.region = "system_ram";
           const label = m.label ?? `${m.region}+${m.offset}`;
           try {
             const bytes = host.readMemory(m.region, m.offset, m.length ?? 1);
@@ -1605,12 +1750,16 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         offset: z.number().int().min(0).describe("byte offset within the region"),
         label: z.string().optional().describe("human name for this guard byte"),
       })).optional().describe("on:'write' exact — ABORT GUARD for a pressDuring run: caller-named 'is this scenario still valid?' bytes (e.g. the area/scene id, the player object-active flag). If ANY changes mid-run the watchpoint stops IMMEDIATELY and returns {aborted:true, abortedBy, before, after} — so a driven scenario that derailed (player died → title screen) doesn't burn all maxFrames and return a meaningless found:false. Each is sampled once per frame (cheap)."),
-      captureMemory: z.array(z.object({
-        region: regionStr("memory region to read"),
-        offset: z.number().int().min(0).describe("byte offset within the region"),
-        length: z.number().int().min(1).max(256).default(1).describe("bytes to read"),
-        label: z.string().optional().describe("human name for this read (else 'region+offset')"),
-      })).optional().describe("on:'pc' — read these memory regions AT the hit and return them inline as `capturedMemory` (collapses break→read-RAM into ONE call, the token win). Pair with `registersAtHit` to get the routine's register + RAM state in a single round trip (e.g. capture the ZP pointer bytes a decoder just wrote). NOTE: registersAtHit is the true break instant (core snapshot); these RAM reads are taken after the hit frame finishes, so on run-to-frame-end cores (fceumm) they're the routine's RAM side effects for that frame — stable + reliable, which is exactly what RE needs."),
+      captureMemory: z.array(z.union([
+        z.number().int().min(0),
+        z.string(),
+        z.object({
+          region: regionStr("memory region to read").optional(),
+          offset: z.number().int().min(0).describe("byte offset within the region"),
+          length: z.number().int().min(1).max(256).default(1).describe("bytes to read"),
+          label: z.string().optional().describe("human name for this read (else 'region+offset')"),
+        }),
+      ])).optional().describe("on:'pc' — accepts a BARE ADDRESS (0x74, or \"$74\") as well as a full {region,offset,length,label} record; a bare address reads 1 byte of system_ram. read these memory regions AT the hit and return them inline as `capturedMemory` (collapses break→read-RAM into ONE call, the token win). Pair with `registersAtHit` to get the routine's register + RAM state in a single round trip (e.g. capture the ZP pointer bytes a decoder just wrote). NOTE: registersAtHit is the true break instant (core snapshot); these RAM reads are taken after the hit frame finishes, so on run-to-frame-end cores (fceumm) they're the routine's RAM side effects for that frame — stable + reliable, which is exactly what RE needs."),
       maxTargets: z.number().int().min(1).max(1024).default(64).describe("on:'jumptable' — stop once this many DISTINCT computed targets have been observed (the run also ends at maxFrames). Sets `truncated:true` if reached."),
       stepLimit: z.number().int().min(1).max(256).default(48).describe("on:'jumptable' — instructions to single-step after each dispatcher hit while collecting control-flow leaps. Must be deep enough to REACH the handler: a compiler-lowered indirect call (cc65 JSR<callax>; JMP(ptr)) runs the table load + trampoline + the indirect jump before the handler is entered — ~30 instructions here, so the default is 48. Too low and you only capture the fixed trampolines (the real arms never appear); raise it if a dispatch does heavy setup before the indirect jump."),
       jumpThreshold: z.number().int().min(1).max(64).default(5).describe("on:'jumptable' — a single-step whose PC delta exceeds this many bytes (or goes backward) counts as a control-flow LEAP (a taken jump/branch/call), vs sequential instruction flow. 5 suits 6502/Z80/SM83 (max ~3-byte instructions); raise for wider ISAs (ARM/m68k) so multi-byte sequential instructions aren't misread as leaps."),
@@ -1710,6 +1859,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         ...(r.stoppedAtPC ? { stoppedAtPC: r.stoppedAtPC } : {}),
         ...(r.finalPC ? { finalPC: r.finalPC } : {}),
         ...(r.finalRegs ? { finalRegs: r.finalRegs } : {}),
+        ...(r.cpuContextRestored ? { cpuContextRestored: true, cpuContextNote: r.cpuContextNote } : {}),
         note,
       }), host, "cpu call");
   }
@@ -1781,7 +1931,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       })).optional().describe("op:call — memory writes applied before the call (codecs that read a global from RAM, not just registers)."),
       maxFrames: z.number().int().min(1).max(100000).default(600).describe("op:call/decompress — frame cap (the outer bound)."),
       maxInstructions: z.number().int().min(1000).optional().describe("op:call — instruction watchdog budget (the REAL cap; default ~maxFrames*500k). Raise for a huge decompress; lower to fail fast while probing the right A0."),
-      sandbox: z.boolean().default(false).describe("op:call — snapshot+restore core state around the call (default FALSE — you want the dst buffer left live to read). True leaves the live game untouched."),
+      sandbox: z.boolean().default(false).describe("op:call — snapshot+restore core state around the call (default FALSE — you want the dst buffer left live to read). True leaves the live game untouched. With sandbox:false, a call that does NOT return (stopAtPC, or a watchdog stop mid-routine) leaves the sentinel push and the callee's own pushes stranded on the game's stack; the CPU register file is now restored automatically in that case (`cpuContextRestored:true`) so the interrupted code can still resume, while the RAM the routine wrote is deliberately left live."),
       pure: z.boolean().default(false).describe("op:call — guarantee the game's own frame logic CANNOT run during the call and stomp the routine's output (ALL 14 platforms; `pureMode` in the result says how: 'cpu-only' on Genesis/SMS/GG, 'irq-blocked' elsewhere, 'no-interrupts' on 2600). Prefer this for any decompressor/codec call."),
       callMode: z.enum(["jsr", "jsl"]).optional().describe("op:call (65816/SNES) — the callee's return type: 'jsr' = a near routine ending in RTS (2-byte return), 'jsl' = a long routine ending in RTL (3-byte return, the default). Set 'jsr' when driving a plain jsr-called helper — otherwise the sentinel is sized for a 3-byte return and the routine 'returns' one byte off into vector-stub land."),
       // decompress
@@ -1942,7 +2092,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     "watch",
     "LOG-ALL dynamic tracing — run N frames and log EVERY hit (not stop-on-first; for stop-on-first use `breakpoint`). One tool keyed by `on`.\n" +
     "• on:'mem' — the power tool: answer 'what code is touching this RAM byte?' OR extract a frame-accurate event timeline (music-driver note onsets, physics arcs). Reports every frame that changed a watched byte as {frame,offset,before,after,pc}. " +
-    "Extras: `ranges:[{region,offset,length,label}]` watches MANY disjoint regions in ONE pass (identical frames); `onChange:'reset'|'increase'|'decrease'|'any'` edge filter (reset = counter-reload = the note-onset signal); `valueFilter:{min,max}`; `format:'series'` = compact columnar value-vs-frame curve (~10× smaller for a ramp); `sampleEvery`; `groupByPC` (collapse by sampled PC); `cheatLabels` (auto-name addresses from the cheat DB); `outputPath` streams all events as NDJSON; `stopOnFirst` exits on the first match. " +
+    "Extras: `ranges:[{region,offset,length,label}]` watches MANY disjoint regions in ONE pass (identical frames); `as:'u16le'|'u16be'|'u24le'|'u32le'|…` on a range reads it as ONE multi-byte number (REQUIRED for 16/32-bit variables — map distance, score, pointers, timers; without it the range is diffed per byte and a value whose high byte holds steady reports as its low byte alone under the range's label); `onChange:'reset'|'increase'|'decrease'|'any'` edge filter (reset = counter-reload = the note-onset signal); `valueFilter:{min,max}`; `format:'series'` = compact columnar value-vs-frame curve (~10× smaller for a ramp); `sampleEvery`; `groupByPC` (collapse by sampled PC); `cheatLabels` (auto-name addresses from the cheat DB); `outputPath` streams all events as NDJSON; `stopOnFirst` exits on the first match. ARMING WHILE HALTED: a watch armed after a breakpoint hit starts PART-WAY through that frame, so accesses the frame already made are invisible and an empty result looks exactly like a genuine 'nothing writes this' — the result carries `armedWhileHalted` when this applies; re-run from a save state with the watch armed from the start before treating a negative as evidence. " +
     "**CAVEAT: frame-level, not instruction-level (last value per frame); the sampled `pc` is a frame-boundary sample — for ISR-driven writes use breakpoint({on:'write', precision:'exact'}) for the real writer.**\n" +
     "• on:'range' — DISCOVERY: log EVERY instruction that reads or writes ANYWHERE in [start,end]. The fix for 'I don't know which PC touches this'. Returns {pc,address,value}[] + the actionable distinctPCs + a per-PC digest (byPC). For a pure 'who writes here?' query, `distinctPCsOnly:true` returns JUST the digest (no per-event flood — a per-frame counter inc'd at one PC otherwise floods hundreds of near-identical rows); `dedupe:true` collapses identical (pc,address,value) events to one row with `occurrences`. (Ring-buffered: `truncated:true` if it overflows — and a truncated run can support a positive but NEVER a negative claim; with a fromState anchor, `autoNarrow:true` halves `frames` deterministically until the log is complete and reports framesUsed.) `fromState`/`fromStatePath` restores a savestate FIRST so the trace runs from a known moment (jump to the boss, then see what writes HP) — deterministic + repeatable. ARMING WHILE HALTED at an un-cleared breakpoint hit misses everything already executed in the broken frame — the result then carries `armedWhileHalted:true` so an empty window isn't mistaken for a clean negative; clear the hit or arm from a savestate restore instead.\n" +
     "• on:'pc' — DISCOVERY (coverage trace): record every DISTINCT PC executed within [start,end] — 'what code runs here?'. Log execution in the bank where you suspect the renderer lives during the moment it draws, then disassemble the PCs. Also takes `fromState`/`fromStatePath` to trace from a restored moment.\n" +
@@ -1957,7 +2107,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       region: z.enum(MEMORY_REGIONS).optional().describe("on:'mem' single-range — the region to watch (same canonical set memory uses, incl. nes_apu_regs, genesis_ym2612, c64_sid_regs). Omit when using `ranges`."),
       offset: z.number().int().min(0).default(0).describe("on:'mem' single-range — first byte of the watched range."),
       length: z.number().int().min(1).max(4096).default(1).describe("on:'mem' single-range — bytes to watch (default 1)."),
-      ranges: z.array(rangeShape).min(1).max(16).optional().describe("on:'mem' — watch several disjoint ranges in one pass (region/offset/length ignored). Each event carries its range's `label`; each range may OVERRIDE call-wide `onChange`/`sampleEvery`/`valueFilter` (keep a slow state byte while suppressing a noisy counter in the same pass)."),
+      ranges: z.array(rangeShape).min(1).max(16).optional().describe("on:'mem' — watch several disjoint ranges in one pass (region/offset/length ignored). Each event carries its range's `label`; each range may OVERRIDE call-wide `onChange`/`sampleEvery`/`valueFilter` (keep a slow state byte while suppressing a noisy counter in the same pass). For a MULTI-BYTE variable (16/32-bit distance, score, pointer, timer) set `as:'u16le'` (or u16be/u24/u32) on the range — without it the range is diffed per BYTE, so a 16-bit value reports only the bytes that moved, each under the range's full label."),
       onChange: z.enum(["any", "increase", "decrease", "reset"]).default("any").describe("on:'mem' edge filter. 'any' (default); 'increase'/'decrease' directional; 'reset' = value jumped UP (counter reload — the note-onset signal)."),
       valueFilter: z.object({ min: z.number().int().min(0).max(255).optional(), max: z.number().int().min(0).max(255).optional() }).optional().describe("on:'mem' — keep only changes whose NEW value is within [min,max]."),
       maxEvents: z.number().int().min(1).max(100_000).default(256).describe("on:'mem' — cap RETURNED events (outputPath gets ALL). With format:'series' caps SAMPLES PER OFFSET and downsamples to span the full window."),
