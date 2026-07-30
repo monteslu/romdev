@@ -47,8 +47,12 @@ async function startClient(key) {
   const [ct, st] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: key + "-c", version: "0.0.1" }, { capabilities: {} });
   await Promise.all([server.connect(st), client.connect(ct)]);
-  return async (name, args) => {
-    const r = await client.callTool({ name, arguments: args });
+  return async (name, args, timeoutMs) => {
+    const r = await client.callTool(
+      { name, arguments: args },
+      undefined,
+      timeoutMs ? { timeout: timeoutMs } : undefined,
+    );
     const text = r.content?.find?.((c) => c.type === "text")?.text;
     if (r.isError) return { _error: text };
     try { return JSON.parse(text); } catch { return text; }
@@ -161,4 +165,69 @@ test("after a cut-short call the machine behaves like one never called into", as
   // And it is still rendering, not sitting on a black screen.
   const v = await testCall("frame", { op: "verify" });
   assert.equal(v.verified, true, "renderHealth: still alive after resuming");
+});
+
+// ── The OTHER stack discipline ──────────────────────────────────────────────
+//
+// Everything above runs on NES, because that is the platform with a checked-in
+// ROM fixture. But callSubroutine has TWO stack branches, and they push in
+// opposite directions:
+//
+//   6502/65816   page stack: bytes go at $0100+SP, SP decremented after each
+//                (SP moves DOWN; measured 253 -> 10 unfixed)
+//   m68k/SM83    predecrement: SP -= width, then the block is written
+//                (SP moves UP on the leak; measured 57342 -> 57344 unfixed)
+//
+// A fix verified only on the first branch is a fix verified on half the
+// platforms -- the profile covers 6502, 65816, Z80, SM83, m68k and ARM. This
+// case pins the predecrement path so it can't regress silently.
+//
+// The GB ROM is COMPILED here rather than committed, which is why this test is
+// slow and carries its own timeout.
+
+const GB_SRC = `
+volatile unsigned char g_w;
+void main(void) {
+    unsigned char a = 0;
+    for (;;) { a++; *((volatile unsigned char*)0xC000) = a; g_w = a; }
+}`;
+
+test("SM83 predecrement stack: a cut-short call restores SP too", { timeout: 300000 }, async () => {
+  const call = await startClient("cpu-call-gb");
+
+  const build = await call(
+    "build",
+    { output: "rom", platform: "gb", language: "c", source: GB_SRC },
+    240000,
+  );
+  assert.equal(build.ok, true, "gb build failed:\n" + String(build.log ?? build._error).slice(-800));
+
+  const load = await call("loadMedia", { platform: "gb", path: build.binaryPath });
+  assert.equal(load.loaded, true, "loadMedia failed: " + JSON.stringify(load));
+  await call("frame", { op: "step", frames: 60 });
+
+  // On GB the stack pointer is a TOP-LEVEL field of the cpu read, not one of
+  // `registers` (which holds A/F/B/C/D/E/H/L and the pairs). Reading the wrong
+  // one yields undefined, and `undefined === undefined` would make this test
+  // pass without measuring anything.
+  const sp = async () => {
+    const st = await call("cpu", { op: "read", platform: "gb" });
+    const v = st?.sp;
+    assert.equal(typeof v, "number", "GB cpu read gave no numeric sp: " + JSON.stringify(st).slice(0, 200));
+    return v;
+  };
+
+  const before = await sp();
+  // The GB entry point is $0150; stop a few bytes in so the routine never
+  // reaches a `ret` and nothing unwinds the sentinel.
+  const r = await call("cpu", {
+    op: "call", pc: 0x0150, stopAtPC: 0x0154, maxFrames: 2, sandbox: false,
+  });
+  const after = await sp();
+
+  assert.equal(r.returned, false, "this is the unsafe shape");
+  assert.equal(r.cpuContextRestored, true, "the repair fired on the predecrement branch");
+  // Unfixed this was 57342 -> 57344: the 2-byte SM83 sentinel leaking UPWARD,
+  // the opposite direction from the 6502 case above.
+  assert.equal(after, before, "SP is back where the interrupted code expects it");
 });
