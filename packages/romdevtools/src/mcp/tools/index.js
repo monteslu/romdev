@@ -18,6 +18,7 @@
 // are fully usable.
 
 import { randomUUID } from "node:crypto";
+import { autoSnapshotStatus } from "../auto-snapshot.js";
 import { registerLifecycleTools } from "./lifecycle.js";
 import { registerFrameTools } from "./frame.js";
 import { registerInputTools } from "./input.js";
@@ -271,6 +272,7 @@ export function registerTools(server, z, sessionKey) {
         // session notice the event itself, log it, or tell "the server restarted"
         // apart from "I never loaded a ROM". A pid that changed or an uptime
         // that went backwards is proof, and costs nothing to report.
+        const autoSnap = autoSnapshotStatus(sessionKey);
         const uptimeSeconds = Math.round(process.uptime());
         const startedAt = new Date(Date.now() - uptimeSeconds * 1000).toISOString();
         return jsonContent({
@@ -278,8 +280,11 @@ export function registerTools(server, z, sessionKey) {
           serverPid: process.pid,
           serverStartedAt: startedAt,
           serverUptimeSeconds: uptimeSeconds,
+          // A session re-grounding after a restart needs to know a recovery point
+          // exists BEFORE it decides to re-drive from scratch.
+          ...(autoSnap ? { autoSnapshot: autoSnap } : {}),
           ...(uptimeSeconds < 120
-            ? { serverRecentlyStarted: `This server process is only ${uptimeSeconds}s old. If your session is older than that, it RESTARTED under you and every host/ROM/state is gone — re-run loadMedia; a fresh boot is the recovery point. Compare serverPid across calls to detect this without guessing.` }
+            ? { serverRecentlyStarted: `This server process is only ${uptimeSeconds}s old. If your session is older than that, it RESTARTED under you and every host/ROM/state is gone — re-run loadMedia${autoSnap?.lastSnapshotPath ? `, then state({op:'recoverSnapshot'}) to get back to the auto-snapshot taken ${autoSnap.lastSnapshotAgeSeconds}s ago` : "; a fresh boot is the recovery point (state({op:'autoSnapshot', enabled:true}) would bound this to the last minute next time)"}. Compare serverPid across calls to detect this without guessing.` }
             : {}),
           ...base,
           // Which debug ops the loaded core + installed toolchain implement, so

@@ -1970,7 +1970,7 @@ export function registerDisasmTools(server, z) {
       grammar: z.record(z.string(), z.any()).optional().describe("target=script: the declarative bytecode grammar. {endian?, recordPrefix?: [field...], opcode?: {type}, commands: {'<opcode>': {name, fields?: [field...], stop?, chain?: '<fieldName>'}}, unknownOpcode?: 'stop'|'error'}. field = {name, type: u8|i8|u16|i16|u24|u32, if?: {field, mask?, eq|ne}, default?, pointer?, repeat?: {count: '<field>'|N} | {until: {name, type, gte|eq}}, fields?: [...]}. `if` reads already-decoded fields ((value & mask) vs eq/ne) so flag-gated layouts ('bit 7 set = delay omitted') are one line; `default` records the implied value when the condition fails. repeat.until reads the leading field each iteration and ends the list (terminator consumed) when it trips."),
       fileOffset: z.number().int().optional().describe("target=script: raw file offset of the script start (alternative to `address`, which maps through the platform's banking)."),
       maxRecords: z.number().int().optional().describe("target=script: decode cap (default 256)."),
-      projectDir: z.string().optional().describe("target=sourceLookup: the disasm PROJECT root (the dir with your annotated .asm/.s files). Searched recursively."),
+      projectDir: z.string().optional().describe("target=sourceLookup (or target='source', which routes here when this is set): the disasm PROJECT root (the dir with your annotated .asm/.s files). Searched recursively."),
       context: z.number().int().min(0).max(20).optional().describe("target=sourceLookup: source lines of context each side of a hit block (default 2)."),
       window: z.number().int().min(0).max(64).optional().describe("target=accessScan: how far below the target an indexed/pointer BASE may sit and still count as reaching it (default 2 — catches base-1/base-2 index-from-1 loops; the target's page base $xx00 is always checked too)."),
       banks: z.array(z.number().int().min(0)).optional().describe("target=accessScan: scan ONLY these banks. The fix for a flooded scan: a DATA bank's bytes decode as fiction that still boundary-verifies, and on 6502 a zero-page target hits constantly inside tile/level data (`C6 C0`, `01 C0` are ordinary byte pairs). If you know banks 6-7 hold the code, banks:[6,7] turns hundreds of junk sites into the real answer."),
@@ -1998,7 +1998,19 @@ export function registerDisasmTools(server, z) {
         case "xrefs":      return jsonContent(await analyzeXrefs(requireRomPath(args), args.address, args.platform));
         case "functions":  return jsonContent(await analyzeFunctions(requireRomPath(args), args.platform));
         case "decompile":  return jsonContent(await analyzeDecompile(requireRomPath(args), args.address, args.platform));
-        case "source":     return jsonContent(await readCartSourceCore(args));
+        case "source": {
+          // The v0.98.0 headline asked for disasm({target:'source', projectDir,
+          // startAddress, endAddress}) -- "show me MY OWN commented source for
+          // $E4DB". That capability shipped as target:'sourceLookup', but
+          // target:'source' still meant the PICO-8-only read they were
+          // complaining about, so the spelling they actually asked for kept
+          // doing the wrong thing. `projectDir` disambiguates with no
+          // ambiguity: a .p8 cart read has no project directory.
+          if (args.projectDir || args.startAddress != null) {
+            return jsonContent(await sourceLookupCore(args));
+          }
+          return jsonContent(await readCartSourceCore(args));
+        }
         case "recompile":  return await recompileCore(args);
         case "pointerTable": return jsonContent(await pointerTableCore(args));
         case "script":     return jsonContent(await scriptCore(args));

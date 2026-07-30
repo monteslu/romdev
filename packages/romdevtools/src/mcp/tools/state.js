@@ -4,6 +4,7 @@ import { getHost } from "../state.js";
 import { getCPUState } from "romdev-core-host/cpu-state.js";
 import { attachObserverFrame } from "./watch-memory.js";
 import { jsonContent, safeTool } from "../util.js";
+import { configureAutoSnapshot, findLatestAutoSnapshot, readAutoSnapshot } from "../auto-snapshot.js";
 
 // Resolve a state-file `path`. An ABSOLUTE path is used as-is. A RELATIVE path
 // is resolved against the LOADED ROM's directory (the agent's mental model is
@@ -475,10 +476,13 @@ export function registerStateTools(server, z, sessionKey) {
     "'list': named in-memory slots. 'diff': whole-machine 'did ANYTHING change?' (coarser than memory diff) — " +
     "snapOrDiff:'snapshot' captures, 'diff' compares.",
     {
-      op: z.enum(["save", "load", "list", "export", "dump", "diff", "exportSram", "importSram", "exportDisk", "importDisk", "putDiskFile"]).describe("save/load a savestate (whole machine — load also LIVENESS-PROBES the restored state and flags one captured mid-pause/transition whose dispatchers aren't running, side-effect-free); list slots; export a slot to disk; dump the raw blob; diff the whole machine. SRAM (the cartridge BATTERY SAVE FILE, distinct from a savestate): exportSram writes the .sav, importSram loads one back. C64 DISK (VICE; the C64 save medium is a floppy, not battery SRAM): exportDisk writes the live .d64, importDisk pushes a .d64 back into the running drive, putDiskFile injects one PRG file into the live disk."),
+      op: z.enum(["save", "load", "list", "export", "dump", "diff", "exportSram", "importSram", "exportDisk", "importDisk", "putDiskFile", "autoSnapshot", "recoverSnapshot"]).describe("autoSnapshot arms/disarms a periodic background save so an unprompted SERVER RESTART costs a minute instead of the session (recoverSnapshot restores the newest one). save/load a savestate (whole machine — load also LIVENESS-PROBES the restored state and flags one captured mid-pause/transition whose dispatchers aren't running, side-effect-free); list slots; export a slot to disk; dump the raw blob; diff the whole machine. SRAM (the cartridge BATTERY SAVE FILE, distinct from a savestate): exportSram writes the .sav, importSram loads one back. C64 DISK (VICE; the C64 save medium is a floppy, not battery SRAM): exportDisk writes the live .d64, importDisk pushes a .d64 back into the running drive, putDiskFile injects one PRG file into the live disk."),
       name: z.string().min(1).optional().describe("op=save/load: in-memory slot name. op=diff: snapshot label (default 'default'). op=putDiskFile: file name on the disk (≤16 chars; default = source basename)."),
       unit: z.number().int().min(8).max(11).default(8).describe("op=exportDisk/importDisk/putDiskFile (C64): drive unit (default 8)."),
       path: z.string().optional().describe("op=save: also write the blob here (survives restarts). op=load: restore from this disk blob. op=export/dump: write the blob here (required). A RELATIVE path resolves against the loaded ROM's directory (NOT the server CWD); an absolute path is used as-is. The result echoes `resolvedPath` when they differ."),
+      enabled: z.boolean().optional().describe("op=autoSnapshot: true to arm periodic snapshots, false to disarm."),
+      intervalSeconds: z.number().int().min(5).max(3600).optional().describe("op=autoSnapshot: how often to capture, in seconds (default 60, minimum 5). Snapshots are taken LAZILY — the check runs when a tool call is already touching the host and does nothing if the interval hasn't elapsed, so there is no background timer and nothing fires while the session is idle."),
+      dir: z.string().optional().describe("op=autoSnapshot/recoverSnapshot: where snapshots live (default a session-scoped dir under the OS temp dir). Deliberately separate from your named slots so an auto-snapshot can never clobber a rig you built by hand."),
       recordCheats: z.boolean().default(true).describe("op=save (with `path`): if any cheats are active, record them in a `<path>.cheats.json` SIDECAR so the rig describes its own requirements instead of relying on a note in prose. A shared .state otherwise needs knowledge that doesn't travel with it. The .state bytes are unchanged — old states keep loading, and no sidecar is written when no cheats are active. Keep the two files together (commit both); state({op:'load'}) reports the sidecar and reapplyCheats:true re-arms from it."),
       // load
       render: z.boolean().default(true).describe("op=load: step one frame after restoring so the framebuffer reflects it (fixes the stale-screenshot footgun). false = stay at the exact restored instant."),
@@ -497,6 +501,43 @@ export function registerStateTools(server, z, sessionKey) {
         case "save":   return jsonContent(await saveStateCore(args, sessionKey));
         case "load":   return attachObserverFrame(jsonContent(await loadStateCore(args, sessionKey)), getHost(sessionKey), `state load ${args.name ?? args.path ?? ""}`.trim());
         case "list":   return jsonContent(listStatesCore(args, sessionKey));
+        case "autoSnapshot": {
+          const r = configureAutoSnapshot(sessionKey, {
+            enabled: args.enabled !== false,
+            intervalSeconds: args.intervalSeconds ?? 60,
+            dir: args.dir,
+          });
+          return jsonContent({
+            ...r,
+            note: r.enabled
+              ? `Auto-snapshot ARMED (every ${r.intervalSeconds}s, into ${r.dir}). Captures happen lazily on tool calls that already touch the host — no background timer, nothing while idle, and a failure is recorded rather than thrown so it can never break the call it was protecting. After a server restart, state({op:'recoverSnapshot'}) restores the newest one; catalog({op:'status'}) reports its age. Two files rotate, so a restart DURING a write can't leave you with only a truncated snapshot.`
+              : "Auto-snapshot disarmed.",
+          });
+        }
+        case "recoverSnapshot": {
+          const found = await findLatestAutoSnapshot(sessionKey, args.dir);
+          if (!found) {
+            return jsonContent({
+              recovered: false,
+              note: "No auto-snapshot found. Arm it with state({op:'autoSnapshot', enabled:true}) — it only helps for restarts that happen AFTER it's armed. Recovery for this session is a fresh loadMedia.",
+            });
+          }
+          const host = getHost(sessionKey);
+          const blob = await readAutoSnapshot(found.path);
+          const cheatsCleared = host.unserializeState(blob) || 0;
+          host.renderOneFrame();
+          return jsonContent({
+            recovered: true,
+            path: found.path,
+            bytes: found.bytes,
+            ageSeconds: found.ageSeconds,
+            platform: host.status.platform,
+            cheatsCleared,
+            note: `Restored the auto-snapshot taken ${found.ageSeconds}s ago. The ROM must already be loaded (loadMedia) — a state blob is not a ROM. ` +
+              (cheatsCleared ? `${cheatsCleared} cheat(s) were cleared by the restore; re-apply them. ` : "") +
+              "Anything done after that snapshot is gone: it bounds the loss, it doesn't erase it.",
+          });
+        }
         case "export": {
           if (!args.fromSlot) throw new Error("state({op:'export'}): `fromSlot` is required.");
           if (!args.path) throw new Error("state({op:'export'}): `path` is required.");

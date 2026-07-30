@@ -124,3 +124,49 @@ test("missing projectDir and endAddress<startAddress are rejected", async () => 
     /not found/,
   );
 });
+
+// ── The spelling they actually asked for ────────────────────────────────────
+//
+// The v0.98.0 headline ask was, verbatim:
+//
+//     disasm({target:'source', projectDir, startAddress, endAddress})
+//
+// The capability shipped as target:'sourceLookup' -- but target:'source' still
+// meant the PICO-8-only cart read, which is one of the three near-misses the
+// note explicitly complained about ("target:'source' exists in the target enum
+// but per the schema is pico8"). So someone following their own ask verbatim
+// still got the wrong tool. `projectDir` disambiguates cleanly: a .p8 cart read
+// has no project directory.
+
+import { registerDisasmTools } from "../src/mcp/tools/disasm.js";
+import { z as zod } from "zod";
+
+function getDisasmHandler() {
+  let handler;
+  registerDisasmTools({ tool(name, _d, _s, h) { if (name === "disasm") handler = h; } }, zod, "srclookup-alias");
+  return handler;
+}
+
+test("target:'source' with projectDir routes to the annotated-source lookup", async () => {
+  const handler = getDisasmHandler();
+  const res = await handler({ target: "source", projectDir: PROJECT, startAddress: 0xE4DB });
+  assert.equal(res.isError, undefined, "unexpected isError: " + JSON.stringify(res).slice(0, 300));
+  const r = JSON.parse(res.content.find((c) => c.type === "text").text);
+  assert.ok(r.results?.length > 0, "found the annotated line via the asked-for spelling");
+  assert.match(r.results[0].lines.find((l) => l.hit).text, /clc/);
+});
+
+test("target:'source' with a RANGE works the same as sourceLookup", async () => {
+  const handler = getDisasmHandler();
+  const viaAlias = JSON.parse((await handler({
+    target: "source", projectDir: PROJECT, startAddress: 0xE4D8, endAddress: 0xE4E2, context: 0,
+  })).content.find((c) => c.type === "text").text);
+  const viaCanonical = await sourceLookupCore({
+    projectDir: PROJECT, startAddress: 0xE4D8, endAddress: 0xE4E2, context: 0,
+  });
+  assert.deepEqual(
+    viaAlias.results.flatMap((b) => b.lines.filter((l) => l.hit).map((l) => l.text)),
+    viaCanonical.results.flatMap((b) => b.lines.filter((l) => l.hit).map((l) => l.text)),
+    "both spellings return the same lines",
+  );
+});

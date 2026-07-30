@@ -232,3 +232,59 @@ test("an unbanked ROM is unaffected by the per-bank cap", async () => {
   assert.ok(r.sitesFound > 1, "nestest writes $0002 constantly");
   assert.ok(r.sites.length > 1, "a flat ROM is not capped per-bank");
 });
+
+// ── The same flood on a NON-NES banked platform ─────────────────────────────
+//
+// NES tags banks `prgBank`; every other banked platform uses `romBank`. The
+// filter and the cap both key off that tag, so a fix verified only on NES is a
+// fix verified on one of eleven banked platforms.
+//
+// Z80 makes the same class of fiction as 6502: `32 00 C0` is `ld ($C000),a`, and
+// those are ordinary bytes in tile data.
+
+function makeSmsRom() {
+  const rom = new Uint8Array(PRG_BANKS * BANK);
+  // Bank 0: one real store into $C000, otherwise NOP filler.
+  rom.set([0x32, 0x00, 0xC0], 0x100);
+  // Banks 1-3: saturated fiction.
+  for (let b = 1; b < PRG_BANKS; b++) {
+    for (let i = 0; i < BANK; i += 3) {
+      rom[b * BANK + i] = 0x32;
+      rom[b * BANK + i + 1] = 0x00;
+      rom[b * BANK + i + 2] = 0xC0;
+    }
+  }
+  const file = path.join(mkdtempSync(path.join(tmpdir(), "accessscan-sms-")), "banked.sms");
+  writeFileSync(file, rom);
+  return file;
+}
+
+const SMS_ROM = makeSmsRom();
+
+test("SMS/Z80: the flood reproduces and banks:[…] cuts it down", async () => {
+  const all = await findReferencesCore({
+    path: SMS_ROM, platform: "sms", address: 0xC000,
+    accessScan: { window: 2 }, maxRefsReturned: 8192, maxSitesPerBank: 4096,
+  });
+  assert.ok(all.sitesFound > 1000, `expected a flood, got ${all.sitesFound}`);
+
+  const filtered = await findReferencesCore({
+    path: SMS_ROM, platform: "sms", address: 0xC000, accessScan: { window: 2, banks: [0] },
+  });
+  assert.ok(filtered.sitesFound > 0, "the real access survives");
+  assert.ok(filtered.sitesFound < 20, `expected a usable count, got ${filtered.sitesFound}`);
+  assert.deepEqual(filtered.banksScanned, [0]);
+  // The platform-neutral tag, not NES's prgBank.
+  assert.equal(filtered.sites[0].romBank, 0);
+});
+
+test("SMS/Z80: perBank density and the per-bank cap both apply", async () => {
+  const r = await findReferencesCore({
+    path: SMS_ROM, platform: "sms", address: 0xC000,
+    accessScan: { window: 2 }, maxSitesPerBank: 5,
+  });
+  assert.ok(r.perBank && r.perBank.length > 1, "density reported on this platform too");
+  const counts = new Map();
+  for (const s of r.sites) counts.set(s.romBank, (counts.get(s.romBank) ?? 0) + 1);
+  for (const [bank, n] of counts) assert.ok(n <= 5, `bank ${bank} returned ${n} rows, over the cap`);
+});
