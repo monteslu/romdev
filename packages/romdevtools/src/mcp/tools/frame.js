@@ -4,6 +4,7 @@ import path from "node:path";
 import { PNG } from "pngjs";
 import { cropPng, resamplePng } from "romdev-core-host/framebuffer-png.js";
 import { getHost, getHostB } from "../state.js";
+import { maybeAutoSnapshot } from "../auto-snapshot.js";
 import { imageContent, jsonContent, safeTool } from "../util.js";
 import { decodeOAM, decodePpuRegs, ppuRegsPopulated } from "../../platforms/snes/ppu.js";
 import { stepInstructionCore, stepInstructionsCore, attachObserverFrame } from "./watch-memory.js";
@@ -320,6 +321,10 @@ export function registerFrameTools(server, z, sessionKey) {
       // await: native-runtime hosts (jsgame) have an async stepFrames that yields for
       // the game's async work; awaiting a sync LibretroHost return is a harmless no-op.
       const n = await host.stepFrames(frames);
+      // Lazy auto-snapshot check: stepping is what actually advances the machine,
+      // so it's the natural place to notice an interval has elapsed. No-op unless
+      // armed, and it can never fail this call (see auto-snapshot.js).
+      await maybeAutoSnapshot(sessionKey, host);
       // Surface a co-drive conflict the moment the agent steps: a human
       // actively playing in the playtest window means this step raced their
       // real-time loop. Field only appears when the conflict is real.
