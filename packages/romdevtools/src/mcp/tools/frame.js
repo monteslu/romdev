@@ -5,6 +5,9 @@ import { PNG } from "pngjs";
 import { cropPng, resamplePng } from "romdev-core-host/framebuffer-png.js";
 import { getHost, getHostB } from "../state.js";
 import { maybeAutoSnapshot } from "../auto-snapshot.js";
+import { getActiveBezel, compositeFrame, activeBezelGeometry, activeBezelStatus, tickForFrame } from "../active-bezel.js";
+import { framebufferToScreenshot } from "romdev-core-host/framebuffer-png.js";
+import { ROMDEV_PIXEL_FORMAT_RGBA8888 } from "romdev-core-host/retroConstants.js";
 import { imageContent, jsonContent, safeTool } from "../util.js";
 import { decodeOAM, decodePpuRegs, ppuRegsPopulated } from "../../platforms/snes/ppu.js";
 import { stepInstructionCore, stepInstructionsCore, attachObserverFrame } from "./watch-memory.js";
@@ -321,6 +324,14 @@ export function registerFrameTools(server, z, sessionKey) {
       // await: native-runtime hosts (jsgame) have an async stepFrames that yields for
       // the game's async work; awaiting a sync LibretroHost return is a harmless no-op.
       const n = await host.stepFrames(frames);
+      // Tick the Active Bezel for the frame the core just produced.
+      //
+      // The contract is "once per emulated frame", and it has to hold here
+      // rather than only at capture time: a package with per-frame state -- an
+      // animation, a room-transition, anything interpolated -- would otherwise
+      // see a timeline with holes in it, ticking only when somebody happened to
+      // take a screenshot. Cheap when no bezel is attached (an early return).
+      tickForFrame(sessionKey, host);
       // Lazy auto-snapshot check: stepping is what actually advances the machine,
       // so it's the natural place to notice an interval has elapsed. No-op unless
       // armed, and it can never fail this call (see auto-snapshot.js).
@@ -347,9 +358,23 @@ export function registerFrameTools(server, z, sessionKey) {
   }
 
   // PNG capture. Writes to outPath, or returns inline when `inline`.
-  async function shootPng({ path: outPath, inline, overlayBoxes, scale, crop }) {
+  async function shootPng({ path: outPath, inline, overlayBoxes, scale, crop, source }) {
     const host = getHost(sessionKey);
-    const shot = host.screenshot();
+    // With an Active Bezel running, the COMPOSITE is the truth an agent needs:
+    // it is what the human sees and what the package actually claims about the
+    // game. `source:'core'` asks for the raw emulator picture instead, which is
+    // the other half of the comparison that makes a package verifiable.
+    const bezel = getActiveBezel(sessionKey);
+    let shot, frameSource = "core";
+    if (bezel && source !== "core") {
+      const composed = compositeFrame(sessionKey, host, { source: source ?? "composite" });
+      frameSource = composed.source;
+      shot = composed.source === "composite"
+        ? { ...framebufferToScreenshot(composed.width, composed.height, composed.rgba, composed.width * 4, ROMDEV_PIXEL_FORMAT_RGBA8888) }
+        : host.screenshot();
+    } else {
+      shot = host.screenshot();
+    }
     let pngBase64 = shot.pngBase64;
     let width = shot.width, height = shot.height;
     let overlayInfo = null;
@@ -383,7 +408,11 @@ export function registerFrameTools(server, z, sessionKey) {
     }
     if (!inline) {
       await writeFile(outPath, Buffer.from(pngBase64, "base64"));
-      const json = jsonContent({ path: outPath, width, height, ...(cropped ? { crop } : {}), ...(scaled || cropped ? { ...(scaled ? { scale } : {}), fullWidth: shot.width, fullHeight: shot.height } : {}), overlay: overlayInfo });
+      const json = jsonContent({ path: outPath, width, height, ...(cropped ? { crop } : {}), ...(scaled || cropped ? { ...(scaled ? { scale } : {}), fullWidth: shot.width, fullHeight: shot.height } : {}), overlay: overlayInfo,
+        // With a bezel running, report WHICH picture this is and the three
+        // geometries that are easy to conflate: the raw core framebuffer, the
+        // game's intended display aspect, and the bezel's logical scene.
+        ...(bezel ? { source: frameSource, geometry: activeBezelGeometry(sessionKey, host) } : {}) });
       json._observerImages = [{ kind: "image", mimeType: "image/png", base64: pngBase64 }];
       return json;
     }
@@ -395,7 +424,7 @@ export function registerFrameTools(server, z, sessionKey) {
     return {
       content: [
         imageContent(pngBase64),
-        { type: "text", text: `framebuffer ${shot.width}x${shot.height}${cropped ? ` (cropped to ${width}x${height} at ${crop.x ?? 0},${crop.y ?? 0})` : ""}${scaled ? ` (scaled ${scale}x${cropped ? "" : ` to ${width}x${height}`})` : ""}${overlayInfo ? ` (overlay: ${overlayInfo.spritesDrawn} sprites)` : ""} — also written to ${tempPath} (use this path for ImageMagick/crops; pass outputPath for a permanent location).` },
+        { type: "text", text: `${bezel ? `[${frameSource}] ` : ""}framebuffer ${shot.width}x${shot.height}${cropped ? ` (cropped to ${width}x${height} at ${crop.x ?? 0},${crop.y ?? 0})` : ""}${scaled ? ` (scaled ${scale}x${cropped ? "" : ` to ${width}x${height}`})` : ""}${overlayInfo ? ` (overlay: ${overlayInfo.spritesDrawn} sprites)` : ""} — also written to ${tempPath} (use this path for ImageMagick/crops; pass outputPath for a permanent location).` },
       ],
     };
   }
@@ -441,10 +470,32 @@ export function registerFrameTools(server, z, sessionKey) {
     return result;
   }
 
-  async function doScreenshot({ format, path: outPath, inline, overlayBoxes, scale, crop, cols, rows, symbols, colors }) {
+  async function doScreenshot({ format, path: outPath, inline, overlayBoxes, scale, crop, cols, rows, symbols, colors, source }) {
       requireImageTarget(outPath, inline, "frame({op:'screenshot'})");
       if (format === "ascii") return shootAscii({ cols, rows, symbols, colors, path: outPath, inline });
-      return shootPng({ path: outPath, inline, overlayBoxes, scale, crop });
+
+      // source:'both' captures the composite AND the raw core picture for the
+      // SAME frame. That pairing is the point: a package can render a confident,
+      // beautiful map of a room the game isn't in, and only the two pictures
+      // side by side (plus the region trace) show it.
+      if (source === "both") {
+        const host = getHost(sessionKey);
+        if (!getActiveBezel(sessionKey)) {
+          throw new Error("frame({op:'screenshot', source:'both'}) needs an Active Bezel loaded — without one there is only the core picture. Load with loadMedia({useActiveBezel:true}).");
+        }
+        const compositeShot = await shootPng({ path: outPath, inline, overlayBoxes, scale, crop, source: "composite" });
+        const corePath = outPath ? outPath.replace(/(\.png)?$/i, ".core.png") : undefined;
+        const coreShot = await shootPng({ path: corePath, inline, overlayBoxes, scale, crop, source: "core" });
+        return jsonContent({
+          source: "both",
+          composite: JSON.parse(compositeShot.content.find((c) => c.type === "text")?.text ?? "{}"),
+          core: JSON.parse(coreShot.content.find((c) => c.type === "text")?.text ?? "{}"),
+          geometry: activeBezelGeometry(sessionKey, host),
+          activeBezel: activeBezelStatus(sessionKey),
+          note: "Same frame, both pictures. Compare them against the guest's region reads to check the package's interpretation, not just that it drew something.",
+        });
+      }
+      return shootPng({ path: outPath, inline, overlayBoxes, scale, crop, source });
   }
 
   // op:'verify' — one-call "did the game actually render / is it alive?" health
@@ -886,6 +937,7 @@ export function registerFrameTools(server, z, sessionKey) {
       maxRanges: z.number().int().min(1).max(256).default(24).describe("op=compareRam: cap on the diverging address ranges returned (largest first)."),
       maxFrames: z.number().int().min(1).max(100000).default(600).describe("op=findDiverge: max frames to step in lockstep looking for the first divergence (default 600 = ~10s)."),
       format: z.enum(["png", "ascii"]).default("png").describe("op=screenshot: 'png' (default, real image) or 'ascii' (lossy text render)."),
+      source: z.enum(["composite", "core", "both"]).optional().describe("op=screenshot/stepAndShot, with an Active Bezel loaded: which picture to capture. 'composite' (default when a bezel is active) = the final scene the package rendered, which is what the human sees. 'core' = the RAW emulator framebuffer, ignoring the bezel. 'both' returns the two together — the comparison that shows whether the package's interpretation actually matches the game. Without a bezel, every value returns the core frame."),
       path: z.string().optional().describe("op=screenshot/stepAndShot: absolute path to write to (required unless inline:true). `outputPath` is accepted as an alias — memory({op:'read'}) spells it that way, and one name failing on the other tool cost round trips."),
       outputPath: z.string().optional().describe("Alias for `path` (op=screenshot/stepAndShot), so the spelling memory({op:'read'}) uses works here too."),
       inline: z.boolean().default(false).describe("op=screenshot/stepAndShot: return the image in the response instead of writing to disk."),

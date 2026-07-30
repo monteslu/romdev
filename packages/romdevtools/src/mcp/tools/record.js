@@ -3,8 +3,8 @@
 // can analyze.
 //
 // Typical agent uses:
-//   - Study existing games: "play Adventure for 600 frames with random inputs,
-//     capture every 30 frames, find when the dragon appears."
+//   - Study an existing game: "play it for 600 frames with random inputs,
+//     capture every 30 frames, find when the enemy appears."
 //   - Smoke-test a new build: "run my game with start-then-A held for 300
 //     frames, screenshot every 60, prove the title screen advances."
 

@@ -2,10 +2,10 @@
 /**
  * Dreamcast WASM SH-4 JIT perf driver.
  *
- * Measures raw throughput of the flycast core on discs from your own library and reads the
- * profiling exports the JIT sprint added (romdev_jit_stats / romdev_aica_prof_ms
- * / romdev_gpu_prof_ms) to attribute frame time to SH-4 vs the interpreted AICA
- * (ARM7) vs the TA-parse/GL path.
+ * Measures raw throughput of the flycast core on discs from your own library
+ * and reads the profiling exports the JIT sprint added (romdev_jit_stats /
+ * romdev_aica_prof_ms / romdev_gpu_prof_ms) to attribute frame time to SH-4 vs
+ * the interpreted AICA (ARM7) vs the TA-parse/GL path.
  *
  * NOT a pass/fail unit test — a measurement harness. It drives LibretroHost
  * in-process (the same class, core and wasm the MCP server's loadMedia uses; see
@@ -13,7 +13,12 @@
  * exports with no MCP tool surface. It lives in test/ rather than a scratchpad
  * because the previous run's driver was lost to a /tmp wipe.
  *
- *   node test/dreamcast-jit-perf.js [--frames N] [game ...]
+ *   ROMDEV_DC_DISCS=/path/to/your/dreamcast/discs \
+ *     node test/dreamcast-jit-perf.js [--frames N] [name-substring ...]
+ *
+ * ROMDEV_DC_DISCS is a directory to scan (one level deep, so redump-style
+ * per-disc folders work) or a colon-separated list of disc paths. No disc is
+ * bundled or named here — supply your own.
  *
  * The staged core must be a JIT build — that is build-flycast.sh's default, so a
  * plain rebuild gives you one. Against an interpreter build
@@ -21,6 +26,8 @@
  */
 
 import crypto from "node:crypto";
+import path from "node:path";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { LibretroHost } from "romdev-core-host/index.js";
 import { resolveCore } from "../src/cores/registry.js";
 
@@ -48,10 +55,37 @@ const arg = (name, dflt) => {
 const FRAMES = Number(arg("--frames", 600));
 const WARMUP = Number(arg("--warmup", 180));
 
+// Discs come from YOUR library, named by env — nothing about a specific title
+// is baked in here. Point ROMDEV_DC_DISCS at a directory (every .gdi/.chd/.cue
+// under it is measured, labelled by filename) or give a colon-separated list of
+// individual disc paths. Aim for a MIXED set: .gdi + .chd + .cue containers,
+// and include a music/rhythm game if you have one — that is the worst case for
+// the still-interpreted AICA.
 const DC = process.env.ROMDEV_DC_DISCS;
-// A deliberately mixed set of containers (.gdi/.chd/.cue), supplied by env.
-const GAMES = [
-          ];
+const DISC_RE = /\.(gdi|chd|cue)$/i;
+
+function discoverGames(spec) {
+  if (!spec) return [];
+  if (spec.includes(":") && !existsSync(spec)) {
+    return spec.split(":").filter(Boolean).map((p) => [path.basename(p).replace(DISC_RE, ""), p]);
+  }
+  if (!existsSync(spec)) return [];
+  if (!statSync(spec).isDirectory()) return [[path.basename(spec).replace(DISC_RE, ""), spec]];
+  // One level of nesting: redump-style sets put each disc in its own folder.
+  const out = [];
+  for (const e of readdirSync(spec, { withFileTypes: true })) {
+    const full = path.join(spec, e.name);
+    if (e.isFile() && DISC_RE.test(e.name)) out.push([e.name.replace(DISC_RE, ""), full]);
+    else if (e.isDirectory()) {
+      for (const inner of readdirSync(full)) {
+        if (DISC_RE.test(inner)) out.push([inner.replace(DISC_RE, ""), path.join(full, inner)]);
+      }
+    }
+  }
+  return out.sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+const GAMES = discoverGames(DC);
 
 /**
  * Read the JIT/AICA/GPU profiling counters off the core Module.
@@ -116,9 +150,9 @@ async function measure(label, path) {
     //
     // The AUTHORITY here is the SH-4 block counter, NOT the framebuffer. A static
     // framebuffer does NOT imply a hang: discs that park on a VMU "create a new
-    // file" prompt or sit on a license screen are both
-    // with the CPU executing ~100M blocks per 300 frames. Judging those two by
-    // pixels alone reports a false "HUNG" for a core that is running fine.
+    // file" prompt or sit on a license screen hold a fixed picture while the CPU
+    // executes ~100M blocks per 300 frames. Judging those by pixels alone
+    // reports a false "HUNG" for a core that is running fine.
     // Three distinct states, reported separately:
     //   RUNNING  — blocks advance and the picture changes.
     //   STATIC   — blocks advance, picture frozen: alive, waiting (input/disc).
@@ -150,15 +184,26 @@ async function measure(label, path) {
   }
 }
 
+if (!GAMES.length) {
+  console.error(
+    DC
+      ? `No .gdi/.chd/.cue discs found under ROMDEV_DC_DISCS='${DC}'.`
+      : "Set ROMDEV_DC_DISCS to a directory of Dreamcast discs (or a colon-separated\n"
+        + "list of disc paths) to measure. This harness bundles no discs of its own.",
+  );
+  process.exit(1);
+}
+
 const want = argv.filter((a) => !a.startsWith("--") && !/^\d+$/.test(a));
 const list = want.length
   ? GAMES.filter(([n]) => want.some((w) => n.toLowerCase().includes(w.toLowerCase())))
   : GAMES;
 
 const results = [];
-for (const [label, path] of list) {
+// `discPath`, not `path` — that name is the node:path import used by discovery.
+for (const [label, discPath] of list) {
   try {
-    results.push(await measure(label, path));
+    results.push(await measure(label, discPath));
   } catch (e) {
     console.log(`  ERROR: ${e.message}`);
   }

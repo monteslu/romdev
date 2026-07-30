@@ -60,8 +60,8 @@ function toolHandler() {
 const parse = (r) => JSON.parse(r.content.find((c) => c.type === "text").text);
 
 test("disasm({target:'pointerTable'}) decodes a split RTS-trick table on a NES ROM + reverse lookup", async () => {
-  // Split-table form: lo array @ $8618, hi array @ $8673, RTS-trick. Handler $B2C1 at
-  // indices 0 and 2 (stored as $B2C0).
+  // Split-table form: lo array @ $8618, hi array @ $8673, RTS-trick. Handler
+  // $B2C1 at indices 0 and 2 (stored as $B2C0).
   const prg = new Uint8Array(0x8000);
   prg.set([0xc0, 0x00, 0xc0], 0x618); // lo: $C0, $00, $C0
   prg.set([0xb2, 0x80, 0xb2], 0x673); // hi: $B2, $80, $B2

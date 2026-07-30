@@ -199,9 +199,9 @@ Usage:
       'play' instead.
 
 Examples:
-  romdev-cli play ~/Downloads/Donkey\\ Kong\\ Country.zip
-  romdev-cli play smb1.nes --scale 4
-  romdev-cli play Adventure.a26 --aspect tv
+  romdev-cli play ~/Downloads/My\\ Game.zip
+  romdev-cli play mygame.nes --scale 4
+  romdev-cli play mygame.a26 --aspect tv
   romdev-cli identify rom.smc
 `);
   process.exit(exitCode);

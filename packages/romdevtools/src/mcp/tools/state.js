@@ -5,6 +5,7 @@ import { getCPUState } from "romdev-core-host/cpu-state.js";
 import { attachObserverFrame } from "./watch-memory.js";
 import { jsonContent, safeTool } from "../util.js";
 import { configureAutoSnapshot, findLatestAutoSnapshot, readAutoSnapshot } from "../auto-snapshot.js";
+import { notifyActiveBezel } from "../active-bezel.js";
 
 // Resolve a state-file `path`. An ABSOLUTE path is used as-is. A RELATIVE path
 // is resolved against the LOADED ROM's directory (the agent's mental model is
@@ -216,6 +217,11 @@ async function loadStateCore({ name, path: inPath, render = true, probeLiveness 
           }
         });
       }
+
+      // Tell the Active Bezel the timeline jumped, BEFORE the render below, so
+      // the first composite after a restore is drawn from the restored memory
+      // rather than from caches belonging to the abandoned timeline.
+      notifyActiveBezel(sessionKey, "state-load");
 
       let rendered = false;
       if (render) { host.renderOneFrame(); rendered = true; }

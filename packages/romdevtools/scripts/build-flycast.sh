@@ -42,7 +42,7 @@ fi
 #    opt-in through 0.2.0 was WRONG on both counts. The boot hang was a
 #    stale-compiled-block SMC hole (fixed via block-code fingerprints), the "emit
 #    bugs" were artifacts of a buggy shadow comparator, and the last real hang
-#    (a test disc) was a block being executed twice because the dispatch-miss
+#    was a block being executed twice because the dispatch-miss
 #    handler called rdv_FailedToFindBlock() AFTER running the block, rewinding pc.
 #    See internal-romdev/FLYCAST_WASM_JIT_RESUME.md for the full story.
 #

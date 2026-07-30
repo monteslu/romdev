@@ -44,6 +44,7 @@
   },
   "dependencies": {
     "@kmamal/sdl": "^0.11.13",
+    "active-bezel": "^0.1.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@monteslu/chafa-wasm": "^0.4.0",
     "ase-parser": "^0.0.18",

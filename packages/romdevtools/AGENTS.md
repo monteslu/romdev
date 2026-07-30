@@ -615,6 +615,84 @@ You have two modes. Pick per task:
 
 Both work fine. Image mode is more flexible but burns more tokens per call. Use text mode for scans and diffs, image mode for "does this look like the hero sprite?" questions.
 
+## Active Bezels — when a screenshot is NOT the core's picture
+
+An **Active Bezel** is an executable companion to a specific ROM (a `.ab`
+package). It runs once per emulated frame, reads the core's live memory, and
+renders the final scene — a map, a HUD, reconstructed world graphics — around or
+over the game. Load one with:
+
+```js
+loadMedia({platform:'nes', path:'/roms/Game.nes', useActiveBezel:true})
+```
+
+That looks for a same-basename sidecar (`Game.nes` → `Game.ab`) and **fails
+loudly** if there isn't one, rather than quietly loading the ROM alone.
+
+**Why this section matters even if you never load one:** with a bezel running,
+`frame({op:'screenshot'})` returns the **composite** by default, not the raw
+emulator framebuffer. If you assume otherwise you will misread every capture. So
+before interpreting a screenshot in an unfamiliar session, check
+`catalog({op:'status'})` — it reports `activeBezel` whenever one is attached.
+
+**A package can be confidently, completely wrong.** It can load, tick without
+trapping, emit perfectly valid draw commands, and still have nothing to do with
+the game — an early package for a maze game declared it read the player's room, X and
+Y, its readable `main.c` contained room-aware logic, and the compiled
+`main.wasm` ignored the room byte entirely and drew fake progress bars. Unit
+tests proved it loaded and drew. They proved nothing about meaning.
+
+Catching that needs three things observed at the same instant, which is exactly
+why the bezel runs inside romdev instead of only in a player:
+
+```js
+frame({op:'screenshot', source:'both', path:'/tmp/shot.png'})
+```
+
+`source` selects the picture: `'composite'` (default with a bezel) = the final
+scene the human sees, `'core'` = the raw framebuffer ignoring the bezel,
+`'both'` = the pair for the SAME frame, plus the geometry triple. Compare the
+two against the guest's own region reads — don't settle for "it drew
+something."
+
+**Geometries that are easy to conflate,** all reported under `geometry`:
+
+| Key       | What it is                                                             |
+| --------- | ---------------------------------------------------------------------- |
+| `core`    | the raw framebuffer the emulator produced — does NOT describe intended shape (Atari 2600 pixels are famously not square) |
+| `scene`   | the bezel's logical composition, which the host may scale               |
+| `display` | the runtime's own account: `logicalWidth/Height`, `internalWidth/Height`, `physicalWidth/Height`, `pictureEffect`, and `rendererBackend` (`opengl-es-3` or `cpu`) |
+
+Conflating them is how a 4:3 game ends up stretched into a tall rectangle. When
+a golden frame stops matching, check `display.rendererBackend` first — a GPU/CPU
+compositor difference is the usual cause.
+
+**Lifecycle, so a stale package never composites over the wrong game:**
+
+- The bezel ticks on `frame({op:'step'})`, not just at capture time — a package
+  with per-frame state (an animation, a room transition) would otherwise see a
+  timeline full of holes.
+- `host({op:'unload'})` / `host({op:'shutdown'})` **detach** it, and a plain
+  `loadMedia` without the flag detaches the previous one. The package is bound
+  to a ROM hash; keeping it across a media swap would draw one game's map over
+  another game's picture.
+- `host({op:'reset'})` and `state({op:'load'})` **keep** the package but notify
+  it that continuity broke, so it discards caches built from a timeline that no
+  longer exists.
+- A guest fault is recorded in `activeBezel.lastError` and the capture falls
+  back to the core frame. A broken package never takes down your session.
+
+**Development overrides** (ordinary use should rely on same-basename discovery):
+`activeBezelPath` points at a package elsewhere (an unpacked directory works),
+`activeBezelConfig` passes per-package settings, `activeBezelForce:true` loads
+despite a ROM-hash mismatch (**the composite may be meaningless** — a map keyed
+to another revision's RAM layout draws confidently wrong things), and
+`activeBezelRenderer:'software'` pins the deterministic CPU compositor, which is
+what you want for golden-frame comparisons.
+
+Not supported on `slot:'b'` — that slot is comparison scratch for
+`frame({op:'sideBySide'})` and never drives the presented frame.
+
 ## NES-specific (most common platform)
 
 Patched fceumm exposes extra memory regions beyond the libretro standard:
@@ -644,7 +722,7 @@ OAM format: bytes per sprite are `[y, tileIndex, attributes, x]`.
 - **Presence:** `cart({op:'identify'})` returns `saveRam:{hasBattery, bytes}` so you know whether a save even exists before reaching for it.
 - **No battery save?** Many carts use passwords or no save (and Atari 2600/7800 + Lynx never had cartridge saves). `save_ram` is empty there and the tools say so plainly — use a full-machine savestate (`state({op:'save'/'load'})`) instead. **C64 is different:** its save medium is the floppy disk, not battery SRAM — use the disk ops (`state({op:'exportDisk'/'importDisk'/'putDiskFile'})`, see the C64 platform notes), not save_ram.
 
-`state({op:'load'})` removes any active cheats (a save-state blob doesn't carry frontend cheat state) and reports `cheatsCleared`. `host({op:'reset'})` resets the frame counter + core state (and clears cheats) but keeps the loaded ROM.
+`state({op:'load'})` removes any active cheats (a save-state blob doesn't carry frontend cheat state) and reports `cheatsCleared`. `host({op:'reset'})` resets the frame counter + core state (and clears cheats) but keeps the loaded ROM. Both KEEP an attached Active Bezel and notify it that the timeline jumped, so the first composite afterwards is drawn from the restored memory rather than from the abandoned timeline's caches.
 
 ## Starting a project: fork an example game
 

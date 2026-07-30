@@ -4,6 +4,59 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## Unreleased
+
+### Active Bezels
+
+An **Active Bezel** is an executable companion to a specific ROM (a `.ab`
+package): it runs once per emulated frame, reads the core's live memory, and
+renders the complete final scene — a map, a HUD, reconstructed world graphics —
+around or over the game. `loadMedia({useActiveBezel:true})` loads the
+same-basename sidecar (`Game.nes` → `Game.ab`) and makes the COMPOSITE the
+presented and captured picture. It fails loudly when there is no sidecar rather
+than quietly loading the ROM alone; a call without the new parameters behaves
+exactly as it always has.
+
+romdev runs these because it is the only consumer that can VERIFY one. A package
+can load cleanly, tick without trapping, emit perfectly valid draw commands, and
+be completely wrong about the game — an early package for a maze game declared it read
+the player's room, X and Y, its readable `main.c` contained room-aware logic, and
+the compiled `main.wasm` ignored the room byte entirely and drew fake progress
+bars. Unit tests proved it loaded and drew; they proved nothing about meaning.
+Catching that needs the raw core framebuffer, the decoded live game state, and
+the final composite at the same instant, so:
+
+- `frame({op:'screenshot', source:'composite'|'core'|'both'})` — `'composite'`
+  is the default with a bezel attached, `'core'` is the raw emulator picture,
+  and `'both'` returns the pair for the SAME frame plus the geometry triple.
+- Responses report the three geometries that are easy to conflate: the raw core
+  framebuffer, the game's intended display aspect, and the bezel's logical
+  scene. Conflating them is how a 4:3 game ends up stretched into a tall
+  rectangle.
+- `catalog({op:'status'})` and `loadMedia` advertise the running package, so a
+  session re-grounding after a restart knows a screenshot is not the core's
+  picture before it interprets one.
+
+Lifecycle keeps a package from ever compositing over the wrong game: the bezel
+ticks on the STEP path (not only at capture time, so a package with per-frame
+state doesn't see a timeline full of holes); `host({op:'unload'/'shutdown'})`
+and a plain `loadMedia` detach it (the package is bound to a ROM hash);
+`host({op:'reset'})` and `state({op:'load'})` keep it but notify it that
+continuity broke, so it drops caches from the abandoned timeline. A guest fault
+is recorded in `activeBezel.lastError` and the capture falls back to the core
+frame — a broken package never takes down a session mid-investigation.
+
+Development overrides, deliberately not the ordinary path: `activeBezelPath`
+(a package elsewhere, unpacked directories included), `activeBezelConfig`
+(validated against the manifest's settings schema), `activeBezelForce` (load
+despite a ROM-hash mismatch — the composite may be meaningless), and
+`activeBezelRenderer:'software'` (pin the deterministic CPU compositor for
+golden-frame comparisons). Not supported on `slot:'b'`, which is comparison
+scratch and never drives the presented frame.
+
+Adds a dependency on `active-bezel`, which carries the format, the reference
+runtime, and the compositor, shared with retroemu.
+
 ## 0.109.0 — 2026-07-30
 
 Acts on three rounds of field notes (v0.98.0, v0.103.0, v0.106.1). Every
@@ -539,8 +592,8 @@ and 'memory' checkpoints work today on every host.
 
 ## 0.103.0 — 2026-07-19
 
-**v0.98.0 feedback batch** (from a NES annotation session, shared
-late — the increments predate 0.99.0 but the asks were still open):
+**v0.98.0 feedback batch** (from a NES annotation session, shared late — the
+increments predate 0.99.0 but the asks were still open):
 
 - **`disasm({target:'sourceLookup', projectDir, startAddress, endAddress?})`**
   (headline) — show YOUR OWN annotated project source for a CPU address, the
