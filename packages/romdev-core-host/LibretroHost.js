@@ -2384,7 +2384,30 @@ export class LibretroHost {
     } = a;
 
     const snapshot = sandbox ? this.serializeState() : null;
+    // Even with sandbox:false, remember the CPU context so an UNBALANCED call can
+    // be undone.
+    //
+    // The setup permanently mutates the interrupted machine: it pushes a sentinel
+    // return address onto the game's own stack, lowers SP by that width, and
+    // overwrites PC (plus any caller-supplied regs). When the callee reaches its
+    // rts that all unwinds — the sentinel is popped, SP balances, and resuming is
+    // safe. When the run is cut short (stopAtPC, or a watchdog stop mid-routine)
+    // NONE of it unwinds: the sentinel stays on the stack along with whatever the
+    // callee had pushed so far, and SP is left metres below where the interrupted
+    // code expects it. Resuming then makes the game's own `pla/pla/rts` pop
+    // garbage and execute into RAM.
+    //
+    // Measured on nestest/fceumm: a stopAtPC call drops S from $FD to $0A and it
+    // STAYS there. A reported session saw $F5 -> $F3 and crashed with the PC
+    // spinning at $0224 — the same failure, and `finalRegs` reporting the lower S
+    // was accurate, not a capture-before-final-pop artifact.
+    //
+    // sandbox:false exists so the caller can read the RAM the routine wrote, which
+    // a full state restore would throw away. Restoring only the REGISTER file
+    // keeps that: RAM side effects survive, the stack pointer goes back.
+    const cpuContext = (!sandbox && this._captureCallRegs) ? this._captureCallRegs(prof) : null;
     let captured, returned = false, framesRun = 0, watchdogTripped = false, stoppedAtPC = false;
+    let contextRestored = false;
     let pureMode = null;
     try {
       // Apply pre-call memory writes (CPU-space).
@@ -2538,6 +2561,13 @@ export class LibretroHost {
       this._lastCallResult = { finalPC, finalRegs };
     } finally {
       if (snapshot) this.unserializeState(snapshot);
+      else if (cpuContext && !returned) {
+        // The call was cut short, so nothing unwound the sentinel push or the
+        // callee's own pushes. Put the register file back (SP above all) so the
+        // interrupted code can still resume; the RAM the routine wrote — the
+        // reason for sandbox:false — is deliberately left alone.
+        contextRestored = this._restoreCallRegs(cpuContext);
+      }
     }
     const fin = this._lastCallResult || {};
     return {
@@ -2547,8 +2577,51 @@ export class LibretroHost {
       ...(stoppedAtPC ? { stoppedAtPC: "$" + (stopAtPC >>> 0).toString(16).toUpperCase() } : {}),
       ...(fin.finalPC != null ? { finalPC: "$" + fin.finalPC.toString(16).toUpperCase(), finalPCRaw: fin.finalPC } : {}),
       ...(fin.finalRegs ? { finalRegs: fin.finalRegs } : {}),
+      ...(contextRestored
+        ? {
+            cpuContextRestored: true,
+            cpuContextNote:
+              "This call did NOT reach its return, so the sentinel push and the callee's own pushes were still on the stack. " +
+              "The CPU register file (SP/PC and the general-purpose regs) has been restored to its pre-call values so the " +
+              "interrupted code can resume — without this, the game's next rts pops garbage and executes into RAM. " +
+              "RAM written by the routine is deliberately NOT rolled back: reading it is the point of sandbox:false. " +
+              "finalRegs above is the state AT the stop (what the routine had done), not the restored state.",
+          }
+        : {}),
       ...(captured !== undefined ? { captured } : {}),
     };
+  }
+
+  /**
+   * Snapshot the CPU registers callSubroutine disturbs, so a call that never
+   * reached its rts can be undone without discarding the RAM it wrote.
+   *
+   * SP and PC are the load-bearing ones — an unbalanced SP is what makes the
+   * resumed game pop garbage — but the caller may also have preset A/X/Y/etc,
+   * and leaving those changed is its own quiet corruption. Reg-ids come from the
+   * per-CPU profile, so this stays correct across 6502/65816/m68k/SM83/ARM.
+   */
+  _captureCallRegs(prof) {
+    const ids = new Set([prof.spReg, prof.pcReg]);
+    // The general-purpose file, where the core exposes it. Best-effort: a core
+    // that refuses an id simply isn't restored for that one.
+    for (const id of Object.values(prof.regNames ?? {})) ids.add(id);
+    const out = [];
+    for (const id of ids) {
+      if (id == null) continue;
+      try { out.push([id, this.getReg(id) >>> 0]); } catch { /* not exposed */ }
+    }
+    return out.length ? out : null;
+  }
+
+  /** Put back what _captureCallRegs took. */
+  _restoreCallRegs(saved) {
+    if (!saved) return false;
+    let restored = false;
+    for (const [id, val] of saved) {
+      try { this.setReg(id, val); restored = true; } catch { /* skip */ }
+    }
+    return restored;
   }
 
   /** Read the small set of registers most useful for callSubroutine progress

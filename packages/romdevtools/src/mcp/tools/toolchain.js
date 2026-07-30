@@ -1192,9 +1192,33 @@ export async function reassembleProjectCore({ path: projPath, platform, outputPa
   try {
     manifest = JSON.parse(await readFile(manifestPath, "utf8"));
   } catch {
+    // Before claiming this was never a disasm project, check for the LEGACY
+    // manifest. Early disasm({target:'project'}) (v0.2x era) wrote rebuild.json,
+    // so a mature annotated project can sit right here and still miss the file
+    // this op looks for — and the old message read as "wrong directory", which
+    // points at the wrong fix.
+    //
+    // The advice mattered more than the diagnosis: telling someone to re-run
+    // disasm({target:'project'}) on an ANNOTATED project would regenerate the
+    // sources and, done into the same directory, destroy months of annotations.
+    // That was actively dangerous on exactly the projects most likely to hit
+    // this error, so the safe hand-maintained path is named first.
+    let legacy = null;
+    try { legacy = JSON.parse(await readFile(path.join(projPath, "rebuild.json"), "utf8")); } catch { /* absent */ }
+    if (legacy) {
+      throw new Error(
+        `build({output:'reassemble'}): found a LEGACY rebuild.json in '${projPath}' (early disasm({target:'project'}) wrote that name; this op wants reassemble.json). ` +
+        "Do NOT re-run disasm({target:'project'}) on an annotated project — it regenerates the sources and would overwrite your annotations. " +
+        "Rebuild this project with build({output:'rom', sourcesPaths:{…}, linkerConfigPath:'…'}) instead, passing the file list from its BUILD docs. " +
+        "Note that a legacy rebuild.json's recorded call is often stale (a single source entry, or the wrong mapper), so validate it against the files actually on disk rather than trusting it. " +
+        "To adopt this op, regenerate into a SCRATCH directory and copy reassemble.json + original.rom across, leaving your sources untouched.",
+      );
+    }
     throw new Error(
       `build({output:'reassemble'}): no reassemble.json in '${projPath}'. This op rebuilds a ` +
-      `disasm({target:'project'}) directory — run that first (it writes reassemble.json + original.rom).`,
+      "disasm({target:'project'}) directory — run that first (it writes reassemble.json + original.rom). " +
+      "If this IS an existing annotated project, do NOT regenerate over it: build it with " +
+      "build({output:'rom', sourcesPaths, linkerConfigPath}), or regenerate into a scratch dir and copy the manifest across.",
     );
   }
   const plat = platform ?? manifest.platform;

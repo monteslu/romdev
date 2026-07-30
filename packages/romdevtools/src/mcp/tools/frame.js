@@ -881,7 +881,8 @@ export function registerFrameTools(server, z, sessionKey) {
       maxRanges: z.number().int().min(1).max(256).default(24).describe("op=compareRam: cap on the diverging address ranges returned (largest first)."),
       maxFrames: z.number().int().min(1).max(100000).default(600).describe("op=findDiverge: max frames to step in lockstep looking for the first divergence (default 600 = ~10s)."),
       format: z.enum(["png", "ascii"]).default("png").describe("op=screenshot: 'png' (default, real image) or 'ascii' (lossy text render)."),
-      path: z.string().optional().describe("op=screenshot/stepAndShot: absolute path to write to (required unless inline:true)."),
+      path: z.string().optional().describe("op=screenshot/stepAndShot: absolute path to write to (required unless inline:true). `outputPath` is accepted as an alias — memory({op:'read'}) spells it that way, and one name failing on the other tool cost round trips."),
+      outputPath: z.string().optional().describe("Alias for `path` (op=screenshot/stepAndShot), so the spelling memory({op:'read'}) uses works here too."),
       inline: z.boolean().default(false).describe("op=screenshot/stepAndShot: return the image in the response instead of writing to disk."),
       overlayBoxes: z.boolean().default(false).describe("op=screenshot png: draw a colored bounding box per visible sprite (SNES+NES only)."),
       crop: z.object({ x: z.number().int().min(0).optional(), y: z.number().int().min(0).optional(), w: z.number().int().min(1).optional(), h: z.number().int().min(1).optional() }).optional().describe("op=screenshot png: crop to a framebuffer-pixel rect BEFORE any scale (clamped to the frame). THE HUD-verification token-saver: a native-res strip of the counter/bar is legible AND a fraction of the image tokens of the full frame (poke a value → crop-read the HUD in one call, no external image tools). Compose with integer scale for an enlarged detail view."),
@@ -891,7 +892,11 @@ export function registerFrameTools(server, z, sessionKey) {
       symbols: z.enum(["ascii", "halfblock", "block", "quad", "sextant"]).default("ascii").describe("op=screenshot ascii: chafa symbol set."),
       colors: z.enum(["true", "256", "16", "fgbg"]).default("256").describe("op=screenshot ascii: color depth. Default '256' (indexed) — far fewer ANSI escape bytes than 'true' (truecolor per cell) for a near-identical read. Use 'true' only when exact color matters."),
     },
-    safeTool(async (args) => {
+    safeTool(async (rawArgs) => {
+      // One spelling wins before dispatch, so no core has to know both.
+      const args = rawArgs.outputPath && !rawArgs.path
+        ? { ...rawArgs, path: rawArgs.outputPath }
+        : rawArgs;
       switch (args.op) {
         case "step":            return doStep(args);
         case "screenshot":      return doScreenshot(args);
