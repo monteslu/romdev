@@ -693,6 +693,57 @@ what you want for golden-frame comparisons.
 Not supported on `slot:'b'` — that slot is comparison scratch for
 `frame({op:'sideBySide'})` and never drives the presented frame.
 
+### Writing one: no toolchain required
+
+The `active-bezel` package ships four prebuilt runtimes, so authoring a bezel
+is copying two files. No emcc, no build step.
+
+| Language | Runtime wasm | Script |
+|---|---|---|
+| Lua 5.4 | `runtimes/lua/main.wasm` | `main.lua` |
+| Python (MicroPython) | `runtimes/python/main.wasm` | `main.py` |
+| JavaScript (QuickJS) | `runtimes/js/main.wasm` | `main.js` |
+| Ruby (mruby) | `runtimes/ruby/main.wasm` | `main.rb` |
+
+```sh
+# Ask node where the package lives -- it may be hoisted to a workspace root,
+# or be a symlink, so a hardcoded node_modules/ path is not portable.
+AB=$(node -p "require('path').dirname(require.resolve('active-bezel/package.json'))")
+mkdir -p my-bezel/assets
+cp "$AB/runtimes/lua/main.wasm" my-bezel/
+cp "$AB/runtimes/lua/main.lua"  my-bezel/   # the commented scaffold
+```
+
+Plus a `manifest.json` with `entry: "main.wasm"` and `renderer:
+"gpu-command-v1"`. Every runtime's shipped script is a **working bezel** with a
+commented example of each capability: 2D shapes, the live game, TrueType and
+bitmap text, live memory reads, transforms, a decoded PNG, a per-vertex mesh,
+and a GLSL shader effect. All four expose the same API, so a bezel ports
+between languages by changing syntax alone.
+
+```lua
+function tick(frame)
+  ab.clear(ab.rgb(14, 16, 26))
+  ab.draw_game(0, 0, 1440, 1080, ab.SAMPLE.NEAREST)
+  local ram = ab.region('system_ram')
+  ab.print(font, ('HP %d'):format(ab.read_u8(ram, 0x0E)), 1500, 80, 40, 0xffffffff)
+end
+```
+
+**The iteration loop is why this matters here.** `activeBezelPath` takes an
+unpacked directory, so: edit the script, `loadMedia` again, `frame({op:
+'screenshot'})`, look. Nothing needs packing until you ship. To keep game state
+across a reload, `state({op:'save'})` → `loadMedia` → `state({op:'load'})`.
+
+A script error does **not** kill the session: the runtime draws the message and
+the failing line on an on-screen panel and keeps ticking, so a screenshot tells
+you what broke.
+
+Single-pass RetroArch shaders port into `ab.effect_set()` almost verbatim
+(rename `Texture` → `u_texture`, `vTexCoord` → `v_uv`, `FragColor` →
+`out_color`, add `#version 300 es`). Gate on `v_uv` to treat only the game rect
+and leave your panels alone.
+
 ## NES-specific (most common platform)
 
 Patched fceumm exposes extra memory regions beyond the libretro standard:

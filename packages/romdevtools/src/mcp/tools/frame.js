@@ -486,7 +486,7 @@ export function registerFrameTools(server, z, sessionKey) {
         const compositeShot = await shootPng({ path: outPath, inline, overlayBoxes, scale, crop, source: "composite" });
         const corePath = outPath ? outPath.replace(/(\.png)?$/i, ".core.png") : undefined;
         const coreShot = await shootPng({ path: corePath, inline, overlayBoxes, scale, crop, source: "core" });
-        return jsonContent({
+        const json = jsonContent({
           source: "both",
           composite: JSON.parse(compositeShot.content.find((c) => c.type === "text")?.text ?? "{}"),
           core: JSON.parse(coreShot.content.find((c) => c.type === "text")?.text ?? "{}"),
@@ -494,6 +494,17 @@ export function registerFrameTools(server, z, sessionKey) {
           activeBezel: activeBezelStatus(sessionKey),
           note: "Same frame, both pictures. Compare them against the guest's region reads to check the package's interpretation, not just that it drew something.",
         });
+        // Forward BOTH pictures to the human's /livestream. This branch builds a
+        // fresh JSON envelope, so without this the child shots' `_observerImages`
+        // sidebands are dropped on the floor and the observer sees nothing at all
+        // for the one call that has the most to show. Composite first: it is what
+        // the human is actually looking at, and the observer leads with image[0].
+        const observed = [];
+        for (const child of [compositeShot, coreShot]) {
+          if (Array.isArray(child?._observerImages)) observed.push(...child._observerImages);
+        }
+        if (observed.length) json._observerImages = observed;
+        return json;
       }
       return shootPng({ path: outPath, inline, overlayBoxes, scale, crop, source });
   }
@@ -849,11 +860,27 @@ export function registerFrameTools(server, z, sessionKey) {
     return [s.width, s.height, s.rgba];
   }
 
-  async function doStepAndShot({ frames, path: outPath, inline }) {
+  async function doStepAndShot({ frames, path: outPath, inline, source }) {
       requireImageTarget(outPath, inline, "frame({op:'stepAndShot'})");
       const host = getHost(sessionKey);
       await host.stepFrames(frames);
-      const shot = host.screenshot();
+      // Tick the bezel for the frames just produced, exactly as op:'step' does —
+      // otherwise stepAndShot advances the machine behind the package's back and
+      // a package with per-frame state sees a hole in its timeline.
+      tickForFrame(sessionKey, host);
+      // Honour `source` here too. Calling host.screenshot() directly would hand
+      // back the RAW core picture even with a bezel attached, so this op alone
+      // would disagree with every other capture about what the frame looks like.
+      const bezel = getActiveBezel(sessionKey);
+      let shot;
+      if (bezel && source !== "core") {
+        const composed = compositeFrame(sessionKey, host, { source: source ?? "composite" });
+        shot = composed.source === "composite"
+          ? framebufferToScreenshot(composed.width, composed.height, composed.rgba, composed.width * 4, ROMDEV_PIXEL_FORMAT_RGBA8888)
+          : host.screenshot();
+      } else {
+        shot = host.screenshot();
+      }
       const coDrive = humanCoDriveWarning(sessionKey);
       if (!inline) {
         await writeFile(outPath, Buffer.from(shot.pngBase64, "base64"));

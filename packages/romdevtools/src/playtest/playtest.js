@@ -21,6 +21,9 @@ import {
   framebufferToRgba,
 } from "romdev-core-runner";
 import { log } from "../mcp/log.js";
+import { getActiveBezel, compositeFrame, tickActiveBezel } from "../mcp/active-bezel.js";
+import { framebufferToScreenshot } from "romdev-core-host/framebuffer-png.js";
+import { ROMDEV_PIXEL_FORMAT_RGBA8888 } from "romdev-core-host/retroConstants.js";
 import { initResampler, resampleS16Stereo } from "romdev-audio-resampler";
 import path from "node:path";
 import { existsSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
@@ -231,6 +234,7 @@ export function createHumanInputTracker(activeWindow = HUMAN_INPUT_ACTIVE_FRAMES
 /**
  * @param {Object} args
  * @param {import("romdev-core-host/index.js").LibretroHost} args.host
+ * @param {string} [args.sessionKey] session whose Active Bezel (if any) to composite
  * @param {number} [args.scale]
  * @param {string} [args.title]
  * @param {"fb" | "tv" | "core"} [args.aspect] "fb" (default) = raw
@@ -246,6 +250,9 @@ export function createHumanInputTracker(activeWindow = HUMAN_INPUT_ACTIVE_FRAMES
  */
 export async function playtest(args) {
   const openHost = args.host;
+  // Needed to find this session's Active Bezel: the window must present the
+  // same composite every capture shows, not the bare core picture.
+  const sessionKey = args.sessionKey;
   if (!openHost) throw new Error("playtest requires a loaded host");
   // Resolve the session's CURRENT host each frame so the window FOLLOWS a
   // rebuild. `runSource`/`loadMedia` call resetHost(), which replaces the host
@@ -310,17 +317,35 @@ export async function playtest(args) {
   const host = openHost;
   host.stepFrames(1);
   const first = host.getFramebuffer();
-  const fbWidth = first.width;
-  const fbHeight = first.height;
+  // With an Active Bezel attached, the COMPOSITE is what the human is meant to
+  // see, and it has its own shape (a 16:9 scene, typically) that has nothing to
+  // do with the core's framebuffer. Size the window to the scene, or the panel
+  // gets letterboxed away into a 4:3 box built for the bare game.
+  const openBezel = getActiveBezel(sessionKey);
+  let bezelScene = null;
+  if (openBezel) {
+    try {
+      const probe = compositeFrame(sessionKey, host, { source: "composite" });
+      if (probe?.source === "composite") bezelScene = { width: probe.width, height: probe.height };
+    } catch { /* fall back to the core framebuffer below */ }
+  }
+  const fbWidth = bezelScene?.width ?? first.width;
+  const fbHeight = bezelScene?.height ?? first.height;
 
   // Decide initial window size. In "tv" / "core" modes, scale by height
   // and let the chosen aspect dictate width — keeps vertical resolution
   // honest (you can still count scanlines) while applying horizontal
   // stretch. Shared + unit-tested in core-runner (the inline copy of this
   // math is what opened a 0-width window when a host reported aspect 0).
+  // A bezel's scene is already the finished picture at its intended shape, so
+  // it must be presented 1:1 ("fb"). Applying the platform's TV aspect on top
+  // would stretch a 16:9 composite as if it were a bare 4:3 NES frame, and the
+  // panel's text is the first thing that smears when that happens.
   const { width: winInitW, height: winInitH } = initialWindowSize({
-    fbWidth, fbHeight, scale, aspectMode,
-    platform: host.status.platform, displayAspect: host.status.displayAspect,
+    fbWidth, fbHeight, scale,
+    aspectMode: bezelScene ? "fb" : aspectMode,
+    platform: host.status.platform,
+    displayAspect: bezelScene ? fbWidth / fbHeight : host.status.displayAspect,
   });
 
   // Open the window.
@@ -511,6 +536,14 @@ export async function playtest(args) {
     if (key === "p" || key === "space") {
       const h = getLiveHost();
       if (h) { h.status.paused ? h.resume() : h.pause(); }
+      return;
+    }
+    // F11 — fullscreen toggle, the convention every player already knows.
+    // ESC intentionally does NOT leave fullscreen: it closes the window (see
+    // the handler above), and silently changing that would surprise anyone who
+    // has learned ESC-to-quit here. Press F11 again to come back.
+    if (key === "f11") {
+      try { window.setFullscreen(!window.fullscreen); } catch { /* some drivers refuse; keep playing */ }
       return;
     }
     if (key === "f3") { fpsOverlay = !fpsOverlay; return; }
@@ -813,9 +846,44 @@ export async function playtest(args) {
     if (!window.destroyed) {
       try {
         const tConvert = performance.now();
-        const fb = h.getFramebuffer();
-        rgbaScratch = framebufferToRgba(fb, rgbaScratch);
-        const rgba = rgbaScratch;
+        // Active Bezel: run the guest against the frame the core just produced
+        // and present the COMPOSITE. This is the human's view, so the window
+        // showing the bare core picture while every capture shows the composite
+        // would be the two disagreeing about what the game looks like.
+        //
+        // The tick happens HERE rather than at capture time so the guest sees
+        // one tick per emulated frame while a human plays -- a package with
+        // per-frame state (an animation, an interpolated marker) would
+        // otherwise freeze whenever nobody took a screenshot.
+        let fb, rgba;
+        const liveBezel = getActiveBezel(sessionKey);
+        let composed = null;
+        if (liveBezel) {
+          try {
+            const core = h.screenshotRgba();
+            composed = tickActiveBezel(sessionKey, core.rgba, core.width, core.height,
+                                       h.status.frameCount);
+          } catch { composed = null; }
+        }
+        if (composed) {
+          const cw = composed.width ?? composed.physicalWidth;
+          const ch = composed.height ?? composed.physicalHeight;
+          const pixels = composed.rgba ?? composed;
+          // node-sdl's render() requires a Node Buffer; the compositor hands
+          // back a Uint8ClampedArray, which throws "buffer must be a Buffer"
+          // every frame and leaves the window black. Wrap (no copy) rather
+          // than convert.
+          rgba = Buffer.isBuffer(pixels)
+            ? pixels
+            : Buffer.from(pixels.buffer, pixels.byteOffset, pixels.byteLength);
+          fb = { width: cw, height: ch };
+        } else {
+          // No bezel, or the guest faulted this frame: show the raw core
+          // picture rather than freezing on a stale composite.
+          fb = h.getFramebuffer();
+          rgbaScratch = framebufferToRgba(fb, rgbaScratch);
+          rgba = rgbaScratch;
+        }
         perf.convertMs = ema(perf.convertMs, performance.now() - tConvert);
         if (fpsOverlay) drawFpsOverlay(rgba, fb.width, fb.height, perf.fps);
 
@@ -831,7 +899,12 @@ export async function playtest(args) {
         const fbW = fb.width;
         const fbH = fb.height;
         let targetAspect;
-        if (aspectMode === "tv") {
+        if (composed) {
+          // The composite is already the finished picture at its intended
+          // shape; the platform's TV aspect describes the BARE GAME and would
+          // stretch the whole scene, smearing the package's text first.
+          targetAspect = fbW / fbH;
+        } else if (aspectMode === "tv") {
           targetAspect = tvAspectFor(h.status.platform, effectiveAspect(h.status.displayAspect, fbW, fbH));
         } else if (aspectMode === "core") {
           targetAspect = effectiveAspect(h.status.displayAspect, fbW, fbH);
@@ -852,7 +925,11 @@ export async function playtest(args) {
 
         const tPresent = performance.now();
         window.render(fbW, fbH, fbW * 4, "rgba32", rgba, {
-          scaling: "nearest",
+          // Nearest keeps emulator pixels crisp, which is right for a bare
+          // core frame. A bezel composite is mostly anti-aliased panel art and
+          // text, so nearest re-aliases exactly the edges the guest smoothed —
+          // linear is the honest presentation of what it drew.
+          scaling: composed ? "linear" : "nearest",
           dstRect: { x: dstX, y: dstY, width: dstW, height: dstH },
         });
         perf.presentMs = ema(perf.presentMs, performance.now() - tPresent);
@@ -968,7 +1045,21 @@ export async function playtest(args) {
     captureFrame() {
       const h = getLiveHost();
       if (!h || !h.status?.loaded) return null;
-      const shot = h.screenshot();
+      // This op's whole job is "capture what the HUMAN sees". With a bezel
+      // running that is the composite, so reading the bare core framebuffer
+      // here would answer a different question than the one asked — and would
+      // disagree with the window sitting in front of them.
+      let shot = null;
+      if (getActiveBezel(sessionKey)) {
+        try {
+          const c = compositeFrame(sessionKey, h, { source: "composite" });
+          if (c?.source === "composite") {
+            shot = framebufferToScreenshot(c.width, c.height, c.rgba, c.width * 4,
+                                           ROMDEV_PIXEL_FORMAT_RGBA8888);
+          }
+        } catch { shot = null; }
+      }
+      if (!shot) shot = h.screenshot();
       return {
         pngBase64: shot.pngBase64,
         width: shot.width,

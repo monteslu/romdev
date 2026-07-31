@@ -27,12 +27,12 @@ test("decodeRaw parses ADDR:VAL and ADDR:VAL:COMPARE", () => {
 test("NES Game Genie: 6-char reference decodes (nesdev)", () => {
   // AAAAAA → $8000 = $00 (all-zero baseline)
   assert.deepEqual(decodeNesGameGenie("AAAAAA"), { address: 0x8000, value: 0x00 });
-  // SXIOPO → $91D9 = $AD  (Super Mario Bros infinite lives — the canonical test)
+  // SXIOPO → $91D9 = $AD  (a widely-published reference code)
   assert.deepEqual(decodeNesGameGenie("SXIOPO"), { address: 0x91d9, value: 0xad });
 });
 
 test("NES Game Genie: 8-char form yields a compare byte", () => {
-  const r = decodeNesGameGenie("SXUZXTSA"); // Rygar infinite health (8-char = ROM+compare)
+  const r = decodeNesGameGenie("SXUZXTSA"); // 8-char form = ROM address + compare byte
   assert.ok(r && typeof r.compare === "number", "8-char decodes a compare byte");
   assert.ok(r.address >= 0x8000, "address in PRG space");
 });

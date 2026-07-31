@@ -107,10 +107,27 @@ export async function attachActiveBezel(sessionKey, host, {
   }
 
   sessions.set(sessionKey, {
-    runtime, packagePath: resolved, config,
+    runtime, packagePath: resolved, config, host,
     lastError: null, lastFrame: null, ticks: 0,
   });
   return runtime;
+}
+
+/**
+ * Find the session a HOST belongs to.
+ *
+ * The observer's deferred frame provider is handed a host, not a session key,
+ * at ~38 call sites. Threading a session key through every one of them would
+ * mean a single missed site silently falls back to the raw core picture --
+ * exactly the bug this exists to fix, and an invisible one. Resolving from the
+ * host instead makes "a bezel is attached" the only thing that matters.
+ */
+export function sessionKeyForHost(host) {
+  if (!host) return null;
+  for (const [key, entry] of sessions) {
+    if (entry.host === host) return key;
+  }
+  return null;
 }
 
 /** Drop the bezel for a session (media unload, host shutdown, a new package). */

@@ -20,6 +20,9 @@ import { getCPUState } from "romdev-core-host/cpu-state.js";
 import { resolveButtonAlias } from "./input.js";
 import { getCPUStateCore } from "./platform-tools.js";
 import { traceVramSourceCore } from "./trace-vram-source.js";
+import { sessionKeyForHost, compositeFrame } from "../active-bezel.js";
+import { framebufferToScreenshot } from "romdev-core-host/framebuffer-png.js";
+import { ROMDEV_PIXEL_FORMAT_RGBA8888 } from "romdev-core-host/retroConstants.js";
 import { resolveStatePath } from "./state.js";
 import { buildBacktrace } from "../../analysis/backtrace.js";
 import { mapNesAddress, mapC64Address, mapAtari2600Address, mapAtari7800Address } from "./disasm.js";
@@ -136,6 +139,27 @@ async function maybeRestoreState(host, fromState, fromStatePath) {
 export function attachObserverFrame(json, host, caption) {
   json._observerFrameProvider = () => {
     try {
+      // With an Active Bezel attached, the COMPOSITE is what the human is
+      // looking at — the playtest window shows it and every capture returns
+      // it. Sending the bare core frame to /livestream made the observer
+      // disagree with both, which is worse than showing nothing: the whole
+      // point of the observer is to be the human's view of what the agent is
+      // doing. If a bezel is running, the composite IS that view.
+      //
+      // The session is resolved from the HOST rather than threaded through all
+      // ~38 call sites, because one missed site would silently fall back to
+      // the core picture — an invisible regression of this exact bug.
+      const sessionKey = sessionKeyForHost(host);
+      if (sessionKey) {
+        const c = compositeFrame(sessionKey, host, { source: "composite" });
+        if (c?.source === "composite") {
+          const shot = framebufferToScreenshot(c.width, c.height, c.rgba, c.width * 4,
+                                               ROMDEV_PIXEL_FORMAT_RGBA8888);
+          if (shot?.pngBase64) {
+            return { kind: "image", mimeType: "image/png", base64: shot.pngBase64 };
+          }
+        }
+      }
       const shot = host.screenshot(); // { pngBase64, width, height }
       return shot && shot.pngBase64
         ? { kind: "image", mimeType: "image/png", base64: shot.pngBase64 }

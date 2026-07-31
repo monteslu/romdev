@@ -181,6 +181,7 @@ export function registerPlaytestTools(server, z, sessionKey) {
         // latest one (instead of dying on the now-unloaded open-time host).
         session = await playtest({
           host,
+          sessionKey,
           getLiveHost: () => getHostOrNull(sessionKey),
           scale,
           title,
@@ -310,6 +311,10 @@ export function registerPlaytestTools(server, z, sessionKey) {
                 "plugged in later is picked up automatically.",
             }
           : {}),
+        // The window's hotkeys were undiscoverable — nothing in the open
+        // response mentioned them, so a human had no way to learn they exist
+        // short of reading the source. Relay them to whoever opened it.
+        hotkeys: "F11 fullscreen · P/Space pause · F2 save state · F4 load state · F3 fps overlay · ESC close. While PAUSED: K frame-advance, R rewind one frame.",
         note: "Window is open and the render loop runs in the background. Other MCP tools (frame, memory, host pause/resume, state, ...) act on the same live host. Call playtest({op:'stop'}) to close the window.",
       });
   }
