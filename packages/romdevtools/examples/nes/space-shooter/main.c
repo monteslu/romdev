@@ -122,12 +122,34 @@ static void draw_number(uint8_t row, uint8_t col, uint16_t value, uint8_t digits
   }
 }
 
+/* Only redraw the HUD when a value actually changed.
+ *
+ * Every tile_set queues a VRAM write, and the NMI drains a fixed budget per
+ * frame. Redrawing all 10 HUD tiles unconditionally spent most of that budget
+ * every frame, so anything else -- a shield repaint -- pushed the queue past
+ * full, and vram_queue_push then BLOCKS on ppu_wait_nmi(), costing a whole
+ * frame per write. That is what made the game crawl. */
+static uint16_t hud_score = 0xFFFF;
+static uint8_t hud_wave = 0xFF;
+static uint8_t hud_lives = 0xFF;
+
+/* Row 0 is inside overscan -- a CRT hides the top and bottom 8 scanlines, and
+ * emulators crop them the same way, so a HUD drawn there is invisible on every
+ * display that matters. Row 2 clears it and still sits well above the aliens,
+ * which start at row 6. */
+#define HUD_ROW 2
+
 static void draw_hud(void) {
   uint8_t i;
 
-  draw_number(0, 1, score, 5);
-  draw_number(0, 14, wave, 2);
-  for (i = 0; i < 3; i++) tile_set(0, (uint8_t)(25 + i), 0, i < lives ? T_SHIELD_FULL : T_BLANK);
+  if (score != hud_score) { draw_number(HUD_ROW, 1, score, 5); hud_score = score; }
+  if (wave != hud_wave) { draw_number(HUD_ROW, 14, wave, 2); hud_wave = wave; }
+  if (lives != hud_lives) {
+    for (i = 0; i < 3; i++) {
+      tile_set(0, (uint8_t)(25 + i), HUD_ROW, i < lives ? T_SHIELD_FULL : T_BLANK);
+    }
+    hud_lives = lives;
+  }
 }
 
 static void clear_tilemap_init(void) {
@@ -136,7 +158,12 @@ static void clear_tilemap_init(void) {
   for (addr = 0x23C0; addr < 0x2400; addr++) vram_unsafe_set(addr, 0);
 }
 
-static void draw_shields(void) {
+/* Redraw ONE shield (or all of them when `which` is SHIELD_COUNT).
+ *
+ * Repainting all 3 x 6 blocks on every hit queued 18 VRAM writes at once,
+ * over the per-frame drain budget on its own. A hit only ever changes one
+ * shield, so only that one is repainted. */
+static void draw_shield(uint8_t which) {
   uint8_t s;
   uint8_t b;
   uint8_t base_col;
@@ -144,7 +171,8 @@ static void draw_shields(void) {
   uint8_t col;
   uint8_t tile;
 
-  for (s = 0; s < SHIELD_COUNT; s++) {
+  for (s = (which < SHIELD_COUNT) ? which : 0;
+       s < ((which < SHIELD_COUNT) ? (uint8_t)(which + 1) : SHIELD_COUNT); s++) {
     base_col = (uint8_t)(6 + s * 9);
     for (b = 0; b < SHIELD_BLOCKS; b++) {
       row = (uint8_t)(22 + b / 3);
@@ -203,7 +231,7 @@ static void reset_wave(void) {
   alien_step_timer = 0;
   player_shot.active = 0;
   alien_shot.active = 0;
-  draw_shields();
+  draw_shield(SHIELD_COUNT);
 }
 
 static void reset_game(void) {
@@ -216,6 +244,7 @@ static void reset_game(void) {
   reset_wave();
 }
 
+/* @returns the index of the shield that was hit, or SHIELD_COUNT for none. */
 static uint8_t point_hits_shield(uint8_t x, uint8_t y) {
   uint8_t s;
   uint8_t bx;
@@ -223,7 +252,7 @@ static uint8_t point_hits_shield(uint8_t x, uint8_t y) {
   uint8_t local_y;
   uint8_t index;
 
-  if (y < 176 || y >= 192) return 0;
+  if (y < 176 || y >= 192) return SHIELD_COUNT;
   for (s = 0; s < SHIELD_COUNT; s++) {
     bx = (uint8_t)(48 + s * 72);
     if (x < bx || x >= (uint8_t)(bx + 24)) continue;
@@ -232,10 +261,12 @@ static uint8_t point_hits_shield(uint8_t x, uint8_t y) {
     index = (uint8_t)((local_y / 8) * 3 + local_x / 8);
     if (index < SHIELD_BLOCKS && shields[s].hp[index] > 0) {
       shields[s].hp[index]--;
-      return 1;
+      /* Return the shield INDEX so the caller repaints only that one.
+       * (SHIELD_COUNT means "no hit" — callers test `< SHIELD_COUNT`.) */
+      return s;
     }
   }
-  return 0;
+  return SHIELD_COUNT;
 }
 
 static void fire_player(void) {
@@ -307,23 +338,30 @@ static void update_shots(void) {
   uint8_t col;
   uint8_t ax;
   uint8_t ay;
+  uint8_t hit;
 
   if (player_shot.active) {
     if (player_shot.y < 18) player_shot.active = 0;
     else player_shot.y = (uint8_t)(player_shot.y - 5);
-    if (player_shot.active && point_hits_shield(player_shot.x, player_shot.y)) {
-      player_shot.active = 0;
-      draw_shields();
+    if (player_shot.active) {
+      hit = point_hits_shield(player_shot.x, player_shot.y);
+      if (hit < SHIELD_COUNT) {
+        player_shot.active = 0;
+        draw_shield(hit);
+      }
     }
   }
 
   if (alien_shot.active) {
     alien_shot.y = (uint8_t)(alien_shot.y + 3);
     if (alien_shot.y > 226) alien_shot.active = 0;
-    if (alien_shot.active && point_hits_shield(alien_shot.x, (uint8_t)(alien_shot.y + 4))) {
-      alien_shot.active = 0;
-      draw_shields();
-      sound_play_noise(8, 8, 3);
+    if (alien_shot.active) {
+      hit = point_hits_shield(alien_shot.x, (uint8_t)(alien_shot.y + 4));
+      if (hit < SHIELD_COUNT) {
+        alien_shot.active = 0;
+        draw_shield(hit);
+        sound_play_noise(8, 8, 3);
+      }
     }
     if (alien_shot.active &&
         alien_shot.x >= player_x && alien_shot.x <= (uint8_t)(player_x + 16) &&
@@ -442,6 +480,10 @@ void main(void) {
   for (;;) {
     stage_sprites();
     ppu_wait_nmi();
+    /* The runtime's background melody is ON by default and needs a tick every
+     * frame to advance. Without it the triangle channel holds whatever note
+     * sound_init left it on -- one continuous tone for the whole session. */
+    sound_music_tick();
     pad = pad_poll(0);
     update_game(pad);
     draw_hud();
