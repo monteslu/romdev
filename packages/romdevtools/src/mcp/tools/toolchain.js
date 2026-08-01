@@ -335,12 +335,25 @@ export function registerToolchainTools(server, z, sessionKey) {
           ? { ...supportSources, ...(source ? { "main.c": source } : {}) }
           : undefined;
       const useSource = mergedSources ? undefined : source;
-      // Assemble caller-supplied crt0 (SDCC platforms). sm83 → sdasgb,
+      // Assemble caller-supplied crt0 (SDCC platforms ONLY). sm83 → sdasgb,
       // everything else → sdasz80.
+      //
+      // GATED on the platform actually using SDCC. This used to run for every
+      // platform, so a cc65/ca65 crt0 on a 6502 target was fed to sdasz80 and
+      // came back as a wall of `?ASxxxx-Error-<o> .org in REL area` -- with a
+      // message blaming "the bundled startup code", which sent the agent
+      // debugging a file that was never the problem. A 6502 platform should
+      // never reach the Z80 assembler.
       let crt0Rel;
       if (crt0) {
+        const { SDCC_PORTS, runSdasgb, runSdasz80 } = await import("../../toolchains/sdcc/sdcc.js");
+        if (!SDCC_PORTS[platform]) {
+          throw new Error(
+            `build: crt0/crt0Path is an SDCC-platform option (${Object.keys(SDCC_PORTS).join(", ")}); `
+            + `'${platform}' builds with a different toolchain and assembles its startup code as part of the project. `
+            + `Put your startup code in the project's own sources instead.`);
+        }
         const isSm83 = platform === "gb" || platform === "gbc";
-        const { runSdasgb, runSdasz80 } = await import("../../toolchains/sdcc/sdcc.js");
         const asm = isSm83 ? await runSdasgb({ source: crt0 }) : await runSdasz80({ source: crt0 });
         if (!asm.rel) {
           throw crt0AssemblyError(asm.log);
@@ -568,11 +581,19 @@ export function registerToolchainTools(server, z, sessionKey) {
           ? { ...supportSources2, ...(source ? { "main.c": source } : {}) }
           : undefined;
       const useSource2 = mergedSources2 ? undefined : source;
-      // Assemble caller-supplied crt0 (SDCC platforms).
+      // Assemble caller-supplied crt0 (SDCC platforms ONLY) -- same gate as
+      // buildSource above; see the comment there for why an ungated version
+      // sent 6502 crt0 files into sdasz80.
       let crt0Rel2;
       if (crt0) {
+        const { SDCC_PORTS, runSdasgb, runSdasz80 } = await import("../../toolchains/sdcc/sdcc.js");
+        if (!SDCC_PORTS[platform]) {
+          throw new Error(
+            `build: crt0/crt0Path is an SDCC-platform option (${Object.keys(SDCC_PORTS).join(", ")}); `
+            + `'${platform}' builds with a different toolchain and assembles its startup code as part of the project. `
+            + `Put your startup code in the project's own sources instead.`);
+        }
         const isSm83 = platform === "gb" || platform === "gbc";
-        const { runSdasgb, runSdasz80 } = await import("../../toolchains/sdcc/sdcc.js");
         const asm = isSm83 ? await runSdasgb({ source: crt0 }) : await runSdasz80({ source: crt0 });
         if (!asm.rel) {
           throw crt0AssemblyError(asm.log);
