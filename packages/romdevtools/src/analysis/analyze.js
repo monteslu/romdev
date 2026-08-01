@@ -15,6 +15,37 @@ import path from "node:path";
 import { runRizinJson, RIZIN_ARCH, RIZIN_ENDIAN } from "./rizin.js";
 import { decompileFunction, SLEIGH_LANGID } from "./decompile.js";
 import { registersForPlatform } from "../platforms/common/registers.js";
+import {
+  mapNesAddress, mapSnesAddress, mapSmsAddress, mapGbAddress,
+  mapAtari2600Address, mapAtari7800Address, mapC64Address, mapGenesisAddress,
+} from "../mcp/tools/disasm.js";
+
+/**
+ * CPU address -> file offset, using the same per-platform mappers target='rom'
+ * uses. Returns null for platforms with no static mapper (msx/pce/lynx/gba),
+ * where the caller falls back to treating the address as a load-based offset.
+ *
+ * Mirrors cpuAddrToFileOffset in disasm.js; kept here rather than imported
+ * because that one is module-private and takes an options bag this path has
+ * no source for.
+ */
+function mapCpuAddressForDecompile(platform, data, cpuAddr) {
+  try {
+    switch (platform) {
+      case "nes": return mapNesAddress(data, cpuAddr, 1).fileOffset;
+      case "snes": return mapSnesAddress(data, cpuAddr, 1).fileOffset;
+      case "sms": case "gg": return mapSmsAddress(data, cpuAddr, 1).fileOffset;
+      case "gb": case "gbc": return mapGbAddress(data, cpuAddr, 1).fileOffset;
+      case "atari2600": return mapAtari2600Address(data, cpuAddr, 1, 0).fileOffset;
+      case "atari7800": return mapAtari7800Address(data, cpuAddr, 1, 0).fileOffset;
+      case "c64": return mapC64Address(data, cpuAddr, 1, 0).fileOffset;
+      case "genesis": case "megadrive": case "md": return mapGenesisAddress(data, cpuAddr, 1).fileOffset;
+      default: return null;
+    }
+  } catch {
+    return null;
+  }
+}
 
 /** B2: name hardware-register MMIO in decompiler output. Ghidra emits raw memory
  * refs like `xRAM2001` / `uRAM400e` for $2001 / $400E; replace those whose
@@ -845,11 +876,25 @@ export async function analyzeDecompile(romPath, address, platformOverride) {
   // offset the raw decompiler image needs. Rizin's map gives `vbase` when it
   // knows the base; left-pad by it so file offset == CPU address for the cases
   // where the code references absolute addresses.
-  const { paddr, vbase } = await vaMapping(romBytes, arch, bits, address, platform);
+  /*
+   * Map the CPU address through the platform's own banking FIRST, the way
+   * target='rom' does.
+   *
+   * rizin's loader has no idea about iNES headers or PRG banking, so for a
+   * cartridge platform it hands back the address as a flat file offset. On NES
+   * that turned $93FB -- a valid address in the $8000-$FFFF PRG window, and
+   * exactly what target='functions' returns -- into offset 37867, past the end
+   * of a 32KB image. The natural functions -> decompile chain therefore failed
+   * on every banked platform while target='rom' accepted the same address
+   * happily: the two ops disagreed about which address space they were in.
+   */
+  const banked = mapCpuAddressForDecompile(platform, romBytes, address >>> 0);
+  const { paddr: rizinPaddr, vbase } = await vaMapping(romBytes, arch, bits, address, platform);
+  const paddr = banked !== null && banked >= 0 && banked < romBytes.length ? banked : rizinPaddr;
   if (paddr < 0 || paddr >= romBytes.length) {
     throw new Error(
       `decompile: address ${hx(address)} maps to file offset ${paddr}, outside the ` +
-      `${romBytes.length}-byte image for ${platform}.`
+      `${romBytes.length}-byte image for ${platform}. Use an address from target='functions'.`
     );
   }
   const base = vbase;

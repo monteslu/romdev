@@ -860,7 +860,7 @@ export function registerFrameTools(server, z, sessionKey) {
     return [s.width, s.height, s.rgba];
   }
 
-  async function doStepAndShot({ frames, path: outPath, inline, source }) {
+  async function doStepAndShot({ frames, path: outPath, inline, source, crop, scale, overlayBoxes }) {
       requireImageTarget(outPath, inline, "frame({op:'stepAndShot'})");
       const host = getHost(sessionKey);
       await host.stepFrames(frames);
@@ -868,33 +868,20 @@ export function registerFrameTools(server, z, sessionKey) {
       // otherwise stepAndShot advances the machine behind the package's back and
       // a package with per-frame state sees a hole in its timeline.
       tickForFrame(sessionKey, host);
-      // Honour `source` here too. Calling host.screenshot() directly would hand
-      // back the RAW core picture even with a bezel attached, so this op alone
-      // would disagree with every other capture about what the frame looks like.
-      const bezel = getActiveBezel(sessionKey);
-      let shot;
-      if (bezel && source !== "core") {
-        const composed = compositeFrame(sessionKey, host, { source: source ?? "composite" });
-        shot = composed.source === "composite"
-          ? framebufferToScreenshot(composed.width, composed.height, composed.rgba, composed.width * 4, ROMDEV_PIXEL_FORMAT_RGBA8888)
-          : host.screenshot();
-      } else {
-        shot = host.screenshot();
-      }
-      const coDrive = humanCoDriveWarning(sessionKey);
-      if (!inline) {
-        await writeFile(outPath, Buffer.from(shot.pngBase64, "base64"));
-        const json = jsonContent({ path: outPath, frameCount: host.status.frameCount, width: shot.width, height: shot.height, ...(coDrive ? { humanCoDriveWarning: coDrive } : {}) });
-        json._observerImages = [{ kind: "image", mimeType: "image/png", base64: shot.pngBase64 }];
-        return json;
-      }
-      return {
-        content: [
-          imageContent(shot.pngBase64),
-          { type: "text", text: `stepped ${frames} → frame ${host.status.frameCount} (${shot.width}x${shot.height})${coDrive ? `\nWARNING: ${coDrive}` : ""}` },
-        ],
-      };
+
+      // Capture through shootPng rather than re-implementing it.
+      //
+      // This op used to call host.screenshot() itself, which meant it silently
+      // ignored `crop` — the one parameter the tool description actively
+      // recommends for reading a HUD ("crop:{x,y,w,h} at native res — legible
+      // AND a fraction of the image tokens"). An agent following that advice
+      // got a full frame back with no error and reasoned about the wrong
+      // pixels. Sharing the capture path also means `scale`, `overlayBoxes`
+      // and the bezel `source` handling can never drift between the two ops
+      // again.
+      return await shootPng({ path: outPath, inline, overlayBoxes, scale, crop, source });
   }
+
 
   server.tool(
     "frame",
@@ -908,7 +895,7 @@ export function registerFrameTools(server, z, sessionKey) {
     "**READING a HUD counter/bar? crop:{x,y,w,h} at native res — legible AND a fraction of the tokens (no external image tools).** **CHEAP VERIFY: for a binary pass/fail check (theme changed? sprite present? HUD ticked?) prefer scale:0.5 or " +
     "format:'ascii' — BETTER, read the byte directly: symbols({op:'resolve', name}) → memory({op:'read'}) is a 1-byte " +
     "assertion that costs zero image tokens.**\n" +
-    "'stepAndShot': step + screenshot in ONE round-trip — the drive-then-look loop. (No overlayBoxes/scale here — png only.)\n" +
+    "'stepAndShot': step + screenshot in ONE round-trip — the drive-then-look loop. Takes the same crop/scale/overlayBoxes/source as 'screenshot'.\n" +
     "'sideBySide': capture BOTH hosts (slot A + the slot-B comparison host) into ONE composited PNG — A left, B right, " +
     "divider between. The two-cores-in-one-call capture for the original-vs-port compare loop: loadMedia the original " +
     "in slot A, loadMedia({slot:'b'}) the port, then frame({op:'sideBySide', frames}) steps BOTH the same N frames and " +
