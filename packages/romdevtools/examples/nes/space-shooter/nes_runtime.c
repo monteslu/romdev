@@ -55,7 +55,8 @@ volatile uint8_t nmi_counter = 0;
 /* OAM bookkeeping. shadow_oam itself is declared in chr-ram.crt0.s
  * (so OAM segment placement at $0200 is linker-enforced). oam_index
  * tracks the next free slot for oam_spr(). */
-static uint8_t oam_index = 0;
+/* Not static: oam_fast.s stores through it. */
+uint8_t oam_index = 0;
 static void oam_hide_unused(void);  /* fwd decl — used by ppu_wait_nmi (NES-1) */
 
 /* ── VRAM write queue ─────────────────────────────────────────────
@@ -147,13 +148,27 @@ void ppu_wait_vblank(void) {
 }
 
 void ppu_wait_nmi(void) {
-  uint8_t target;
+  uint8_t start;
+  /* Sample the counter BEFORE staging, then wait for it to CHANGE.
+   *
+   * This used to read `target = nmi_counter + 1` AFTER oam_hide_unused() and
+   * spin while `nmi_counter != target`. Two problems, both costing whole
+   * frames:
+   *
+   *   - If an NMI landed during oam_hide_unused(), target was already one
+   *     behind, so the equality test missed it and the loop waited for the
+   *     counter to wrap all the way around.
+   *   - Any frame whose work overran vblank at all lost a FULL extra frame,
+   *     turning a slight overrun into an exact halving of the frame rate.
+   *
+   * Sampling first and testing for change means a frame that overruns resumes
+   * at the very next NMI instead of the one after it. */
+  start = nmi_counter;
   /* Hide last frame's now-unused sprite slots BEFORE waiting, so the buffer
    * the NMI's OAM-DMA copies is fully staged (live slots written by oam_spr,
    * stale slots parked off-screen) — never a half-cleared buffer (NES-1). */
   oam_hide_unused();
-  target = (uint8_t)(nmi_counter + 1);
-  while (nmi_counter != target) { /* spin */ }
+  while (nmi_counter == start) { /* spin */ }
 }
 
 uint8_t ppu_system(void) {
@@ -201,26 +216,22 @@ void oam_clear(void) {
  * frame) by parking their Y off-screen. Called from ppu_wait_nmi AFTER the
  * game has staged its live sprites, so live slots are never blanked. */
 static void oam_hide_unused(void) {
-  uint16_t i;
-  for (i = oam_index; i < (uint16_t)oam_high + 4 && i < 256; i += 4) {
+  /* 8-bit counter, deliberately. A uint16_t loop here made cc65 emit software
+   * 16-bit compare + add for EVERY iteration, every frame -- the single
+   * biggest per-frame cost in the runtime. oam_index and oam_high are both
+   * uint8_t and the slots are 4 apart, so `last` is at most 252 and the
+   * arithmetic cannot overflow a byte. */
+  uint8_t i;
+  uint8_t last = oam_high;            /* highest slot used LAST frame */
+  for (i = oam_index; i <= last; i += 4) {
     shadow_oam[i] = 0xFF;             /* Y off-screen */
+    if (i >= 252) break;              /* next += 4 would wrap to 0 */
   }
   oam_high = oam_index;
 }
 
-void oam_spr(uint8_t x, uint8_t y, uint8_t tile, uint8_t attr) {
-  /* OAM byte order: Y, tile, attr, X. Y - 1 for the off-by-one PPU
-   * convention so the caller can pass "screen Y" and have it land
-   * where they expect. */
-  shadow_oam[oam_index + 0] = (uint8_t)(y - 1);
-  shadow_oam[oam_index + 1] = tile;
-  shadow_oam[oam_index + 2] = attr;
-  shadow_oam[oam_index + 3] = x;
-  oam_index += 4;
-  /* Wraps at 256 back to 0 — game code calling oam_spr more than 64
-   * times will overwrite earlier slots. That's fine; hardware caps
-   * at 64 anyway. */
-}
+/* oam_spr is hand-written in oam_fast.s -- cc65's codegen for the four-byte
+ * body cost the whole frame. The note there has the measurements. */
 
 /* ── Input ────────────────────────────────────────────────────── */
 

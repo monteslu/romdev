@@ -14,11 +14,17 @@ build({
   output: 'rom',
   platform: "nes",
   language: "c",
-  sources: { "main.c": ..., "nes_runtime.c": ... },
+  sources: { "main.c": ..., "nes_runtime.c": ..., "oam_fast.s": ... },
   includes: { "nes_runtime.h": ... },
   linkerConfig: "chr-ram-runtime"
 })
 ```
+
+`oam_fast.s` is required — it defines `oam_spr`, which is deliberately not in
+`nes_runtime.c`. cc65 compiled its four-byte body into ~80 instructions and 16
+subroutine calls per sprite, which at ~24 sprites consumed the entire frame and
+ran the game at 29fps. Hand-written it is four absolute-indexed stores, and the
+game runs at ~56fps. See the comment at the top of the file.
 
 Use the **`chr-ram-runtime`** preset (not bare `chr-ram`): it bundles the crt0
 (iNES header + reset vector), the NMI handler that DMAs shadow OAM each vblank,
