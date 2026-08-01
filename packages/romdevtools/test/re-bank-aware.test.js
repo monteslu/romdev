@@ -7,6 +7,9 @@
 // recovers the bank from the flat VA and lays out a real 32KB CPU window (that
 // bank @ $8000 + the fixed top bank @ $C000) so calls resolve.
 //
+// NROM goes through the same builder for a different reason: not bank recovery
+// but absolute-address resolution. See the NROM tests below.
+//
 // Deterministic unit test of the image construction (no ROM toolchain needed).
 
 import { test } from "node:test";
@@ -28,9 +31,29 @@ function synthINes(banks16k) {
   return rom;
 }
 
-test("A1: NROM (≤32KB) returns null (flat path is correct)", () => {
-  assert.equal(buildNesBankImage(synthINes(1), 0x8000), null, "NROM-128 → flat");
-  assert.equal(buildNesBankImage(synthINes(2), 0x8000), null, "NROM-256 → flat");
+// NROM needs a CPU-addressed image too. The flat file (RawBinary loads at vma
+// 0) has nothing above $8000, so a function's own absolute refs -- `jsr $8CBD`
+// -- fail to load and the decompiler reports "No function selected". Lay PRG at
+// $8000 in a 64KB space instead.
+test("A1: NROM-256 lays PRG at $8000 in a 64KB CPU image", () => {
+  const r = buildNesBankImage(synthINes(2), 0x8c50);
+  assert.ok(r, "NROM-256 must produce an image, not fall through to flat");
+  assert.equal(r.image.length, 0x10000, "64KB CPU space");
+  assert.equal(r.cpuAddr, 0x8c50, "address passes through as a CPU address");
+  assert.equal(r.image[0x8000], 0x10, "bank 0 at $8000");
+  assert.equal(r.image[0xc000], 0x11, "bank 1 at $C000");
+});
+
+test("A1: NROM-128 mirrors its single bank into $8000 and $C000", () => {
+  const r = buildNesBankImage(synthINes(1), 0xc005);
+  assert.ok(r);
+  assert.equal(r.image[0x8005], 0x10, "$8005");
+  assert.equal(r.image[0xc005], 0x10, "mirrored at $C005, as the hardware does");
+});
+
+test("A1: NROM rejects addresses outside the $8000-$FFFF window", () => {
+  assert.equal(buildNesBankImage(synthINes(2), 0x7fff), null, "below $8000");
+  assert.equal(buildNesBankImage(synthINes(2), 0x10000), null, "past $FFFF");
 });
 
 test("A1: banked cart lays the right bank @ $8000 + fixed top bank @ $C000", () => {

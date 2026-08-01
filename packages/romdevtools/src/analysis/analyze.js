@@ -726,9 +726,34 @@ export function buildNesBankImage(romBytes, flatVa) {
   }
   const prgBanks16k = romBytes[4];
   const prgSize = prgBanks16k * 0x4000;
-  if (prgSize <= 0x8000) return null; // NROM-128/256 — flat is correct
   const prgStart = 16;
   const prg = romBytes.subarray(prgStart, prgStart + prgSize);
+
+  /* NROM-128/256 still needs a CPU-ADDRESSED image, not the flat file.
+   *
+   * 6502 code refers to absolute CPU addresses: a function at $8C50 contains
+   * `jsr $8CBD`, `lda $9F3A` and so on. Handed the flat 32KB file (RawBinary
+   * loads at vma 0), the decompiler resolves those against a 32784-byte image
+   * where nothing exists above $8000, dies with "Unable to load 16 bytes at
+   * r0x8cbd", and `print C` then reports "No function selected". That is why
+   * the functions -> decompile chain failed on NROM even after the address
+   * mapping was corrected: the address was right, the IMAGE was wrong.
+   *
+   * Lay PRG at $8000 in a 64KB space. NROM-128 (16KB) is mirrored into both
+   * $8000 and $C000, exactly as the hardware does, so reset-vector code and
+   * any $C000-relative reference resolve. */
+  if (prgSize <= 0x8000) {
+    const image = new Uint8Array(0x10000);
+    if (prgSize === 0x4000) {
+      image.set(prg, 0x8000);
+      image.set(prg, 0xC000); // NROM-128 mirrors the single bank
+    } else {
+      image.set(prg, 0x8000);
+    }
+    const cpuAddr = flatVa >>> 0;
+    if (cpuAddr < 0x8000 || cpuAddr >= 0x10000) return null;
+    return { image, cpuAddr, bank: 0 };
+  }
 
   // rizin flat VA → flat PRG offset (segment based at $8000).
   const flatOff = (flatVa >>> 0) - 0x8000;
