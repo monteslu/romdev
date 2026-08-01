@@ -358,7 +358,15 @@ export async function playtest(args) {
   // ever presents CPU pixels (window.render(..., "rgba32", rgba)), so it does NOT need
   // its own GL context — open a SOFTWARE-blit window for HW-render cores to avoid the
   // context fight. Software cores keep the accelerated path (faster upscale blit).
-  const hwRenderCore = !!host.hwRender;
+  //
+  // A GPU Active Bezel owns a native-gles context for exactly the same reason,
+  // on ANY platform -- an NES bezel compositing on the GPU collides just as a
+  // Dreamcast core does. Checking only host.hwRender missed it, so
+  // `loadMedia({activeBezelRenderer:'gpu'})` followed by playtest killed the
+  // whole server every time. The composite likewise arrives as CPU pixels, so
+  // the same software-blit window is the right answer.
+  const gpuBezel = !!openBezel?.compositor?.gpuReady;
+  const hwRenderCore = !!host.hwRender || gpuBezel;
   const window = sdl.video.createWindow({
     title,
     width: winInitW,
