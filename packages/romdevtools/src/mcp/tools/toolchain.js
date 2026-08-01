@@ -850,14 +850,23 @@ export function projectBuildRecipe(platform, names) {
     // game state (grid/RNG seed). 512 bytes of 8KB WRAM is cheap insurance.
     if (has("gb_crt0.s")) { r.crt0File = "gb_crt0.s"; r.codeLoc = 0x150; r.dataLoc = 0xC200; }
   } else if (platform === "nes") {
-    // A SCAFFOLDED NES project ships nes_runtime.c + a crt0 + a .cfg and needs
-    // the chr-ram-runtime preset (it defines the OAM/CHARS segments + a NMI with
-    // OAM-DMA; without it: "Missing memory area 'OAM'"). The preset SUPPLIES its
-    // own crt0 + expects nes_runtime.c, so skip the scaffold's crt0/.cfg (the
-    // preset replaces them). A BARE hand-rolled NES dir (no scaffold crt0/.cfg)
-    // is left alone — forcing the preset there would demand runtime symbols it
-    // doesn't have. Detect "scaffolded" by the presence of a crt0 or .cfg.
-    const looksScaffolded = names.some((n) => /crt0.*\.s$/i.test(n) || /\.cfg$/i.test(n));
+    // A SCAFFOLDED NES project needs the chr-ram-runtime preset (it defines the
+    // OAM/CHARS segments + a NMI with OAM-DMA; without it: "Missing memory area
+    // 'OAM'"). The preset SUPPLIES its own crt0, so skip any the project ships.
+    // A BARE hand-rolled NES dir is left alone — forcing the preset there would
+    // demand runtime symbols it doesn't have.
+    //
+    // "Scaffolded" means a crt0/.cfg OR nes_runtime.c. The nes_runtime.c case
+    // is the one that matters and used to be missed: that file references
+    // _shadow_oam, which ONLY the preset's crt0 exports, so a project shipping
+    // it without its own crt0 -- exactly what examples/nes/space-shooter is --
+    // failed to link with "Unresolved external '_shadow_oam'" while the
+    // equivalent `sources:{...}` call with linkerConfig:'chr-ram-runtime'
+    // built fine. Detecting on the crt0 alone asked the wrong question: what
+    // decides this is whether the project uses the runtime, not whether it
+    // brought its own startup code.
+    const looksScaffolded = names.some((n) =>
+      /crt0.*\.s$/i.test(n) || /\.cfg$/i.test(n) || /^nes_runtime\.c$/i.test(n));
     if (looksScaffolded) {
       r.linkerConfig = "chr-ram-runtime";
       for (const n of names) {

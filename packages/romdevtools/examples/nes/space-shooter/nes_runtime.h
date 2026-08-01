@@ -1,5 +1,5 @@
 /* ── nes_runtime.h — neslib-shaped runtime for cc65 NES builds ───
- * Auto-included on every `build({ output: "rom", platform:"nes", language:"c"})`.
+ * Auto-included on every `build({output:'rom'})({platform:"nes", language:"c"})`.
  *
  * API mirrors Shiru's neslib so existing tutorials port cleanly:
  *
@@ -21,6 +21,18 @@
  *   OAM (shadow buffer at $0200; NMI auto-DMAs each frame)
  *     oam_clear()          — set all 64 sprites Y=$FF (off-screen).
  *     oam_spr(x,y,tile,attr) — push one sprite to the next free slot.
+ *
+ *     ⚠ FRAME ORDER — the #1 NES footgun. Stage sprites (oam_clear +
+ *     oam_spr) BEFORE ppu_wait_nmi(), never after. The NMI handler DMAs
+ *     this shadow buffer → real OAM at the START of vblank, copying
+ *     whatever it holds at that instant. Correct loop:
+ *         for (;;) {
+ *             oam_clear();  oam_spr(...);  // stage FIRST
+ *             ppu_wait_nmi();              // NMI DMAs what you just staged
+ *             update_game();               // logic AFTER the wait
+ *         }
+ *     Flip it (wait, then stage) and the visible frame lags one frame /
+ *     shows stale or empty sprites. Every genre template uses this order.
  *
  *   Input (Shiru bit layout: A=$80, B=$40, ...)
  *     pad_poll(0|1)        — read controller, return packed byte.
@@ -133,9 +145,44 @@ void sound_init(void);
 void sound_play_tone(uint8_t channel, uint16_t period, uint8_t vol_4bit, uint8_t length_frames);
 void sound_play_noise(uint8_t period_4bit, uint8_t vol_4bit, uint8_t length_frames);
 void sound_off(void);
+void sound_music(uint8_t on);      /* background triangle melody — ON by default; 0 = off */
+void sound_music_tick(void);       /* call once per frame (the example games do) */
 
 /* ── Globals ──────────────────────────────────────────────────── */
 extern uint8_t shadow_oam[256];       /* at $0200, DMA'd by NMI */
 extern volatile uint8_t nmi_counter;  /* increments each NMI */
+
+/* ── Text + font (0.29.0 examples contract) ─────────────────────── */
+/*
+ * font_upload()
+ *     Upload the built-in 8x8 font (digits 0-9, A-Z, space, dash) into the
+ *     BACKGROUND pattern table at tile $40+ ('0'-'9' = $40-$49, 'A'-'Z' =
+ *     $4A-$63, '-' = $64; space maps to tile 0). Call once during init
+ *     (PPU off), after your other CHR uploads.
+ *
+ * text_draw_unsafe(ppu_addr, s)   — PPU OFF only (init/title paint).
+ * text_draw(nt, x, y, s)          — queued, safe during rendering (NMI
+ *                                   commits next vblank; 16-entry queue).
+ * text_draw_u16(nt, x, y, v)      — 5 right-aligned decimal digits (queued).
+ */
+void font_upload(void);
+void text_draw_unsafe(uint16_t ppu_addr, const char *s);
+void text_draw(uint8_t nt, uint8_t x, uint8_t y, const char *s);
+void text_draw_u16(uint8_t nt, uint8_t x, uint8_t y, uint16_t v);
+
+/* ── Hi-score persistence (battery PRG-RAM at $6000) ────────────── */
+/*
+ * The bundled chr-ram-runtime crt0 sets the iNES BATTERY flag, so the
+ * emulator maps 8KB persistent PRG-RAM at $6000-$7FFF (the save_ram
+ * region) and persists it like a real battery cart. Layout used here:
+ * $6000-$6001 magic "HS", $6002-$6003 score (LE), $6004 checksum
+ * (score lo ^ score hi ^ $A5).
+ *
+ * hiscore_load() → the saved score, or 0 when the SRAM is empty/corrupt
+ * (first boot reads open-bus-like garbage — the magic+checksum reject it).
+ * hiscore_save(v) → store v. Call when a run ends with a new record.
+ */
+uint16_t hiscore_load(void);
+void hiscore_save(uint16_t v);
 
 #endif /* NES_RUNTIME_H */
