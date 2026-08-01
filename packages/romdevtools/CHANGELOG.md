@@ -4,6 +4,57 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.112.0 — 2026-08-01
+
+### Universal Active Bezels flow through loadMedia
+
+active-bezel 0.5.0 lets a package declare `"universal": true` — it works with
+any ROM, matching at a new level instead of needing `activeBezelForce`. The
+pin moves to `^0.5.0` so that declaration reaches `loadMedia`; nothing changes
+in romdev's own surface.
+
+### NES full-loop feedback round (client session, 2026-07-31)
+
+- `frame` honours `crop` on `op:'screenshot'` AND `op:'stepAndShot'`. It was
+  silently ignored on the step path — the docs recommended it for reading HUD
+  strips cheaply, and an agent following that advice got the full frame while
+  believing it was looking at the crop.
+- The `disasm` functions → decompile chain works on NES. Two layered bugs:
+  `decompile` treated the CPU address `functions` reports as a flat file
+  offset, and once mapped, NROM handed the decompiler the raw file — where a
+  function's own absolute references (`jsr $8CBD`) point past the end of a
+  32KB image loaded at vma 0, so Ghidra bailed with "No function selected".
+  NROM now gets a CPU-addressed 64KB image (PRG at $8000, NROM-128 mirrored
+  into $C000) the way the banked-NES and SNES paths already did.
+- `disasm({target:'functions'})` is bounded: 25 functions by default, sorted
+  by size, with `total`/`truncated` in the response and `topN`/`minSize` to
+  widen or filter. A 32KB NROM previously returned all ~115 functions —
+  including ~40 single-block cc65 stubs — as the single most expensive
+  response in a session.
+- `build` rejects `crt0`/`crt0Path` on non-SDCC platforms with a message that
+  names the actual problem. An NES build with a ca65 crt0Path was routed into
+  sdasz80, which produced a wall of ASxxxx errors blaming "bundled startup
+  code" — the wrong file entirely.
+- `build({output:'project'})` applies the chr-ram-runtime preset when a NES
+  project ships `nes_runtime.c`, not only when it carries its own crt0/cfg.
+
+### NES example and scaffold fixes
+
+- space-shooter runs at ~56fps (was 29). cc65 compiled `oam_spr`'s four-byte
+  body into ~80 instructions and 16 subroutine calls per sprite — the whole
+  frame at ~24 sprites, so the loop missed every other NMI and locked to half
+  rate. `oam_spr` is now four absolute-indexed stores in `oam_fast.s`, and the
+  example's build contract includes that file. The background melody follows:
+  it advances per loop iteration, so half rate meant half tempo.
+- space-shooter's HUD is visible: it was drawn on tilemap row 0, inside the
+  8-scanline overscan band CRTs hide and emulators crop.
+- space-shooter scores hits reliably: the shot-vs-alien hitbox was narrower
+  than the sprite art it had to hit.
+- The shmup scaffold spawns enemies across the whole playfield. `random8() &
+  0x7F` capped spawns at x 143 while the ship travels to 240, so a player
+  right of centre faced nothing and the score never moved — which made a
+  freshly forked scaffold look broken when its collision code was fine.
+
 ## 0.111.0 — 2026-07-31
 
 ### Active Bezels: the bezel can see the controller
