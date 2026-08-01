@@ -1959,6 +1959,8 @@ export function registerDisasmTools(server, z) {
       withShim: z.boolean().default(false).describe("target=recompile: phase-1 STATIC render (default off). Emit the NES-PPU-on-SNES shim — boots the original ROM, converts its tiles/nametable/palette to SNES VRAM/CGRAM data + a 65816 upload routine that draws the original's STATIC boot screen on SNES (verified on snes9x). Draws the first screen only; sprites don't animate. For a LIVE port use withRuntime instead."),
       withRuntime: z.boolean().default(false).describe("target=recompile: phase-2 LIVE render (default off). Implies withShim (BG) and adds the per-frame runtime: each vblank it flushes the game's shadow OAM to SNES sprites and runs the game's own NMI handler, so SPRITES ANIMATE and the game's per-frame logic runs — the port plays, not just boots to a screenshot. Background is static from the shim; live nametable/scroll streaming is phase 3. Verified on snes9x."),
       // references / cfg / xrefs
+      topN: z.number().int().min(1).max(2000).optional().describe("target=functions: how many functions to return, most code-like first (default 25). The response always reports `total` and sets `truncated` when it capped, so you know what you did not see."),
+      minSize: z.number().int().min(0).optional().describe("target=functions: drop functions smaller than this many bytes. A cc65 ROM is roughly half 1-15 byte runtime stubs with no RE signal; minSize:32 removes them."),
       address: z.number().int().min(0).max(0xFFFFFFFF).optional().describe("target=references: CPU address to find references TO. target=cfg: address inside the function to graph. target=xrefs: address to find cross-references TO. target=decompile: address of the function to decompile (use an address from target='functions')."),
       maxRefsReturned: z.number().int().min(1).max(2048).default(256).describe("target=references: cap the references returned."),
       includeTableHits: z.boolean().default(false).describe("target=references: also scan the raw ROM for the address as a 16-bit POINTER (LE/BE, + the 6502 RTS-trick addr-1) — finds inline jump-table / trampoline call sites that no jsr/jmp/branch names. Auto-on when no direct refs are found; set true to get tableHits alongside direct refs too."),
@@ -1996,7 +1998,7 @@ export function registerDisasmTools(server, z) {
         }
         case "cfg":        return jsonContent(await analyzeCfg(requireRomPath(args), args.address, args.platform));
         case "xrefs":      return jsonContent(await analyzeXrefs(requireRomPath(args), args.address, args.platform));
-        case "functions":  return jsonContent(await analyzeFunctions(requireRomPath(args), args.platform));
+        case "functions":  return jsonContent(await analyzeFunctions(requireRomPath(args), args.platform, { topN: args.topN, minSize: args.minSize }));
         case "decompile":  return jsonContent(await analyzeDecompile(requireRomPath(args), args.address, args.platform));
         case "source": {
           // The v0.98.0 headline asked for disasm({target:'source', projectDir,
@@ -2066,7 +2068,10 @@ async function extractCodeSpans(romPath, platform) {
   // spans (verified: whole-region objdump decodes a rizin-missed routine fine).
   if (fam !== "6502" && fam !== "65816") return null;
   const { analyzeFunctions } = await import("../../analysis/analyze.js");
-  const res = await analyzeFunctions(romPath, platform);
+  // topN: Infinity — this builds a code-span MAP and needs every function, not
+  // the 25 most interesting ones. The tool-facing default caps the response for
+  // context reasons; truncating here would silently degrade the disassembly.
+  const res = await analyzeFunctions(romPath, platform, { topN: Number.MAX_SAFE_INTEGER });
   if (!res || !res.functions?.length) return null;
   // rizin analyzes the ROM as one flat image at a load base. A function's FILE
   // offset = its address − baddr. For SNES LoROM every bank shares the $8000 CPU

@@ -399,7 +399,7 @@ function hx(n) { return "0x" + (n >>> 0).toString(16); }
  * Auto-detected function list for a ROM.
  * @returns {{platform, count, functions: Array<{address, name, size, nbbs, cc, callers, callees}>}}
  */
-export async function analyzeFunctions(romPath, platformOverride) {
+export async function analyzeFunctions(romPath, platformOverride, opts = {}) {
   const { platform, romBytes, arch, bits, endian, loadBase, codeStart, warnings } = await loadContext(romPath, platformOverride);
   const { baddr, seedAt, rebase } = mipsAnalysisBase({ arch, platform, loadBase, codeStart });
   const fns = await runRizinJson({ romBytes, arch, bits, endian, baddr, commands: `${analysisSeed({ arch, codeStart: seedAt })}; aflj` });
@@ -433,13 +433,44 @@ export async function analyzeFunctions(romPath, platformOverride) {
     (a.size ?? 0) - (b.size ?? 0)
   );
   const dataCount = functions.filter((f) => f.looksLikeData).length;
+  const total = functions.length;
+
+  /*
+   * BOUND THE RESPONSE.
+   *
+   * A 32KB cc65 NROM yields ~91-115 functions, roughly half of them 1-15 byte
+   * runtime stubs with no RE signal at all. Returned whole that is ~12KB of
+   * JSON, and a field report measured this single response as costing more
+   * context than every cross-platform enum loaded in a whole session -- the
+   * highest-value context fix in the tool set.
+   *
+   * Same knobs symbols({op:'analyze'}) already has, so there is one convention
+   * to learn: `minSize` drops the stub noise, `topN` raises or lowers the cap.
+   * The default cap is generous enough that small ROMs are unaffected, and
+   * `total`/`truncated` are always reported so a caller knows what it did not
+   * see rather than silently believing it has the whole list.
+   */
+  const minSize = Number.isFinite(opts.minSize) ? opts.minSize : 0;
+  const filtered = minSize > 0 ? functions.filter((f) => (f.size ?? 0) >= minSize) : functions;
+  const cap = Number.isFinite(opts.topN) ? Math.max(1, opts.topN) : 25;
+  const shown = filtered.slice(0, cap);
+  const truncated = shown.length < filtered.length;
   // `loadBase` is the CPU address that file offset 0 maps to (0 for flat carts
   // that map 1:1, the header-declared base for ROMs that don't). A function's
   // FILE offset = its (rebased) address − loadBase — exposed so callers
   // (extractCodeSpans) can turn addresses into file offsets on ANY platform,
   // not just SNES LoROM.
-  return { platform, arch, count: functions.length, dataCount, functions, loadBase: loadBase >>> 0,
-    ...(warnings?.length ? { warnings } : {}) };
+  return {
+    platform, arch,
+    count: shown.length,
+    total,
+    ...(minSize > 0 ? { minSize, matched: filtered.length } : {}),
+    ...(truncated ? { truncated: true, hint: `showing the ${shown.length} most code-like of ${filtered.length}; raise with topN, or drop stubs with minSize` } : {}),
+    dataCount,
+    functions: shown,
+    loadBase: loadBase >>> 0,
+    ...(warnings?.length ? { warnings } : {}),
+  };
 }
 
 /**
