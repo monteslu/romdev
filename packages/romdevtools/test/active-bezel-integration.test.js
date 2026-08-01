@@ -34,20 +34,24 @@ import { registerTools } from "../src/mcp/tools/index.js";
 
 const ROM = new URL("./roms/nestest.nes", import.meta.url).pathname;
 
-// Resolve the fixture THROUGH the dependency rather than by absolute path: the
-// `active-bezel` package ships its examples/, so this finds the diagnostic
-// package wherever the install put it (workspace symlink, node_modules, or a
-// hoisted root) on any machine.
-const BEZEL = (() => {
-  try {
-    const require = createRequire(import.meta.url);
-    return path.join(path.dirname(require.resolve("active-bezel")), "examples", "diagnostic");
-  } catch { return null; }
-})();
+// The fixture is OURS, in this repository, not borrowed from the dependency.
+//
+// This used to resolve active-bezel/examples/diagnostic through
+// require.resolve. When that directory was removed upstream in 0.4.1 the path
+// went missing, `skip: !HAVE_BEZEL` fired, and ten integration tests silently
+// stopped running for a whole release. A fixture the suite depends on belongs
+// where nothing outside this repo can move it. See test/fixtures/bezel/.
+const BEZEL = new URL("./fixtures/bezel", import.meta.url).pathname;
 
-// Skip rather than fail when the dependency isn't installed, so this file
-// doesn't break a checkout that hasn't run a full install.
-const HAVE_BEZEL = BEZEL !== null && existsSync(BEZEL);
+// The active-bezel dependency is still optional: without it the runtime cannot
+// load a package at all, so skip rather than fail on a checkout that has not
+// run a full install.
+const HAVE_BEZEL = (() => {
+  try {
+    createRequire(import.meta.url).resolve("active-bezel");
+    return existsSync(BEZEL);
+  } catch { return false; }
+})();
 
 async function session(key) {
   const server = new McpServer({ name: key, version: "0.0.1" }, { capabilities: { tools: {} } });
@@ -94,7 +98,7 @@ test("an explicit package loads, matches, and reports its regions", { skip: !HAV
   assert.equal(load.loaded, true, "load failed: " + JSON.stringify(load).slice(0, 300));
   assert.ok(load.activeBezel, "activeBezel reported on the response");
   assert.equal(load.activeBezel.enabled, true);
-  assert.match(load.activeBezel.path, /diagnostic$/);
+  assert.match(load.activeBezel.path, /fixtures[\\/]bezel$/);
 });
 
 test("the composite is what a screenshot captures, and differs from the core frame", { skip: !HAVE_BEZEL }, async () => {

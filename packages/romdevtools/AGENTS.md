@@ -695,28 +695,28 @@ Not supported on `slot:'b'` — that slot is comparison scratch for
 
 ### Writing one: no toolchain required
 
-The `active-bezel` package ships four prebuilt runtimes, so authoring a bezel
-is copying two files. No emcc, no build step.
-
-| Language | Runtime wasm | Script |
-|---|---|---|
-| Lua 5.4 | `runtimes/lua/main.wasm` | `main.lua` |
-| Python (MicroPython) | `runtimes/python/main.wasm` | `main.py` |
-| JavaScript (QuickJS) | `runtimes/js/main.wasm` | `main.js` |
-| Ruby (mruby) | `runtimes/ruby/main.wasm` | `main.rb` |
+The `active-bezel` package ships prebuilt runtimes, so authoring a bezel is
+**one command**. No emcc, no build step.
 
 ```sh
-# Ask node where the package lives -- it may be hoisted to a workspace root,
-# or be a symlink, so a hardcoded node_modules/ path is not portable.
-AB=$(node -p "require('path').dirname(require.resolve('active-bezel/package.json'))")
-mkdir -p my-bezel/assets
-cp "$AB/runtimes/lua/main.wasm" my-bezel/
-cp "$AB/runtimes/lua/main.lua"  my-bezel/   # the commented scaffold
+npx --package active-bezel abtool scaffold my-bezel lua
 ```
 
-Plus a `manifest.json` with `entry: "main.wasm"` and `renderer:
-"gpu-command-v1"`. Every runtime's shipped script is a **working bezel** with a
-commented example of each capability: 2D shapes, the live game, TrueType and
+`lua | js | python | ruby` need no toolchain at all; `c` adds the SDK header
+and a build.sh for anyone who wants to compile. The scaffold is a complete
+package -- runtime wasm, a commented script that is already a working bezel,
+and a manifest -- so it loads and renders before you have edited a line.
+
+| Language | Scaffold | Script | API root |
+|---|---|---|---|
+| Lua 5.4 | `abtool scaffold my-bezel lua` | `main.lua` | `ab.` |
+| Python (MicroPython) | `abtool scaffold my-bezel python` | `main.py` | `ab.` |
+| JavaScript (QuickJS) | `abtool scaffold my-bezel js` | `main.js` | `ab.` |
+| Ruby (mruby) | `abtool scaffold my-bezel ruby` | `main.rb` | `AB.` |
+| C | `abtool scaffold my-bezel c` | `main.c` | `ab_*()` |
+
+The scaffold's script is a **working bezel** with a commented example of each
+capability: 2D shapes, the live game, TrueType and
 bitmap text, live memory reads, transforms, a decoded PNG, a per-vertex mesh,
 and a GLSL shader effect. All four expose the same API, so a bezel ports
 between languages by changing syntax alone.
@@ -743,6 +743,22 @@ Single-pass RetroArch shaders port into `ab.effect_set()` almost verbatim
 (rename `Texture` → `u_texture`, `vTexCoord` → `v_uv`, `FragColor` →
 `out_color`, add `#version 300 es`). Gate on `v_uv` to treat only the game rect
 and leave your panels alone.
+
+**Offscreen surfaces and multi-pass presets.** `ab.surface_create(w, h)` gives
+a real render target: draw into it, filter it with its own shader, reuse it as
+a texture, keep it across frames. `ab.surface_filter(src, dst, glsl)` runs one
+shader into a surface; `ab.surface_preset(src, dst, 'crt.glslp')` runs a whole
+multi-pass RetroArch preset. Filtering into a surface runs the shader flat at
+the source's own scale, so a CRT shader behaves as written and any geometry
+(tilt, curvature) happens once, afterwards. `ab.GAME` is the live frame as a
+texture handle. No shaders ship with the package -- point at
+[libretro/glsl-shaders](https://github.com/libretro/glsl-shaders) or a
+RetroArch install.
+
+**The bezel sees the controller.** `ab.input(port, ab.DEVICE.JOYPAD, 0,
+ab.BTN.A)` reads the same libretro state the core does, so an on-screen
+controller or input display cannot disagree with the game about what is
+held.
 
 ## NES-specific (most common platform)
 

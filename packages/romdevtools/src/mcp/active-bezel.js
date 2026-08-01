@@ -96,6 +96,31 @@ export async function attachActiveBezel(sessionKey, host, {
       config,
       force,
       allowGpu: renderer !== "software",
+      /*
+       * Let the bezel SEE the controller.
+       *
+       * Without this, ab.input() is wired to `this.inputManager?.getState(...)
+       * ?? 0` and therefore returns 0 forever -- the game receives input
+       * normally (that path goes straight into the core) but a bezel drawing
+       * a live controller, a button-press indicator or an input display can
+       * never light up. It looks like the bezel is broken when nothing is.
+       *
+       * The host already tracks the current frame's state as a libretro
+       * joypad bitmask per port, which is the same thing the core reads, so
+       * the bezel and the game cannot disagree about what is held.
+       */
+      inputManager: {
+        getState(port, device, index, id) {
+          void index;
+          /* RETRO_DEVICE_JOYPAD is 1; nothing else is exposed yet. */
+          if (device !== 1) return 0;
+          const mask = host?.state?.inputPorts?.[port]?.[0] ?? 0;
+          /* id 256 (RETRO_DEVICE_ID_JOYPAD_MASK) asks for the whole word. */
+          if (id === 256) return mask;
+          if (id < 0 || id > 15) return 0;
+          return (mask >> id) & 1;
+        },
+      },
     });
   } catch (cause) {
     const hint = /does not match this ROM/i.test(String(cause?.message))

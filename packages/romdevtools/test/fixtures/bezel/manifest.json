@@ -1,0 +1,31 @@
+{
+  "format": "active-bezel",
+  "formatVersion": 1,
+  "id": "local.romdev.test-bezel",
+  "name": "romdev test bezel",
+  "version": "0.1.0",
+  "author": "romdeck",
+  "description": "Integration fixture. Draws the game and nothing else.",
+  "license": "MIT",
+  "entry": "main.wasm",
+  "runtime": {
+    "abi": "active-bezel-1",
+    "renderer": "cpu-rgba-v1",
+    "internalResolution": [
+      640,
+      360
+    ],
+    "extensions": []
+  },
+  "games": [],
+  "compatible": [],
+  "settings": [
+    {
+      "key": "game_left",
+      "type": "boolean",
+      "label": "Place game on the left",
+      "default": false,
+      "group": "Layout"
+    }
+  ]
+}
