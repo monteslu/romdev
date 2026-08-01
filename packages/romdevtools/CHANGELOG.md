@@ -4,9 +4,41 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
-## Unreleased
+## 0.111.0 — 2026-07-31
 
-### Active Bezels
+### Active Bezels: the bezel can see the controller
+
+`ab.input()` returned 0 forever. The bezel runtime was constructed without an
+`inputManager`, so a package drawing a live controller, an input display or a
+button-press indicator could never light up. The game itself was unaffected --
+that path goes straight into the core -- which made it look like the bezel was
+broken when nothing was. Now wired to the host's `state.inputPorts`, the same
+libretro joypad mask the core reads, so the bezel and the game cannot disagree
+about what is held.
+
+### playtest no longer dies on a GPU bezel
+
+Opening a playtest window after loading a GPU Active Bezel crashed the whole
+server with `X Error BadAccess (GLX X_GLXMakeCurrent)`. A GPU bezel owns a
+native-gles EGL context; an accelerated SDL window then calls `glXMakeCurrent`
+on the same X display and the two contexts collide. playtest already opened a
+software-blit window for HW-render cores (n64/ps1/dreamcast) for exactly this
+reason, but the check was `!!host.hwRender` and a bezel is not a core -- an NES
+bezel collided just as a Dreamcast core would. The composite reaches the window
+as CPU pixels either way, so the software blit costs nothing.
+
+### Fixed
+
+- The Active Bezel integration fixture lives in `test/fixtures/bezel/` instead
+  of being resolved out of `active-bezel/examples/diagnostic`. When that
+  directory was removed upstream in 0.4.1 the path vanished, the suite's
+  `skip: !HAVE_BEZEL` guard fired, and **ten integration tests silently stopped
+  running**. A fixture the suite depends on now lives where nothing outside
+  this repository can move it, and a missing fixture throws instead of skipping.
+- `active-bezel` bumped to `^0.4.1`, which fixes `abtool scaffold` for `js`,
+  `python` and `ruby`.
+
+### Active Bezels: what they are, and why romdev runs them
 
 An **Active Bezel** is an executable companion to a specific ROM (a `.ab`
 package): it runs once per emulated frame, reads the core's live memory, and

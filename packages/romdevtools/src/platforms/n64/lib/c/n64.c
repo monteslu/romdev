@@ -66,8 +66,9 @@ void n64_init(void)
     VI(12) = 0x00000200; VI(13)= 0x00000400;
     VI(1)  = FB_ADDR;
 
-    /* Build the CRC-bait "ucode": 3072 bytes that SUM (as u32 words) to the F3DEX2
-       CRC glide64 expects (UCODE_ZELDA_OOT = 0x5d3099f1). All words 0 except one. */
+    /* Build the CRC-bait "ucode": 3072 bytes that SUM (as u32 words) to the
+       F3DEX2 microcode CRC glide64 expects (0x5d3099f1 in its ucode table).
+       All words 0 except one. */
     { volatile unsigned int *uc = U32P(UC_ADDR);
       for (i = 0; i < 3072/4; i++) uc[i] = 0;
       uc[0] = 0x5d3099f1u; }
