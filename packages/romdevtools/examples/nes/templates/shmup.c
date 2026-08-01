@@ -151,7 +151,12 @@ static void spawn_enemy(void) {
   for (i = 0; i < MAX_ENEMIES; i++) {
     if (!enemy_active[i]) {
       enemy_active[i] = 1;
-      enemy_x[i] = 16 + (random8() & 0x7F);
+      /* Spread across the ship's ACTUAL travel (x 8-240), not just the left
+       * half. `& 0x7F` capped spawns at x 143 while the ship reaches 240, so
+       * a player sitting anywhere right of centre faced no enemies at all and
+       * the score never moved -- which makes a forked scaffold look broken
+       * when the collision code is fine. 8 + rand%224 covers the whole field. */
+      enemy_x[i] = 8 + (uint8_t)(random8() % 224u);
       enemy_y[i] = HUD_ROWS * 8 + 8;       /* spawn below the HUD bar */
       return;
     }
