@@ -1,0 +1,69 @@
+name: test
+
+# The FULL test suite on a clean checkout.
+#
+# The binary packages gitignore their wasm/share payloads; the published npm
+# tarballs carry them, and a unit test pins the in-tree versions to what npm
+# has. scripts/fetch-payloads.mjs closes the loop: it fills each workspace
+# package's missing payload files from its own published tarball (tracked
+# sources always win), after which the suite that boots cores and builds real
+# ROMs runs the same way it does on a dev box.
+#
+# This supersedes lint.yml's hand-picked "pure JS tests" list, which went
+# stale the day it was written — the test that caught a real regression in the
+# NROM decompile path was pure JS and never on it.
+#
+# ONE fixture a clean checkout genuinely cannot have: test/roms/nestest.nes is
+# commercial content, so it is gitignored AND in no npm tarball. The ~15 tests
+# that need it skip themselves with a stated reason (test/helpers/test-rom.js)
+# instead of failing with an opaque `loaded: undefined` that reads like a
+# broken core. A CI run is therefore honestly green on everything it can run
+# and names what it could not. A dev box that has the ROM runs those same
+# tests for real — verified both ways: 45 pass / 0 skip with it, 30 pass /
+# 15 skip / 0 fail without.
+#
+# Sharp edge, deliberate: a commit whose dependency pins reference versions
+# not yet on npm (the short window between push and publish-all) fails the
+# install or the payload fetch. That red is honest — it means the release is
+# half out — and it turns green the moment the publish lands.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24          # repo engines floor is >=24
+          cache: npm
+
+      # The payloads are ~450MB across 25 packages and only change when a
+      # binary package's version does, so cache them on the lockfile hash.
+      - name: Cache payloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            packages/*/wasm
+            packages/*/sleigh
+          key: payloads-${{ hashFiles('package-lock.json') }}
+
+      # --ignore-scripts skips romdevtools' postinstall (SDL prebuilt fetch for
+      # the playtest window; no window opens in CI and the runtime self-heals).
+      - name: Install deps
+        run: npm ci --ignore-scripts
+
+      - name: Fetch binary payloads
+        run: node scripts/fetch-payloads.mjs
+
+      - name: Test
+        run: npm test --workspace=romdevtools

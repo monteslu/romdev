@@ -6,12 +6,14 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { requireTestRom } from "./helpers/test-rom.js";
 import { readFile } from "node:fs/promises";
-import { pathToFileURL, fileURLToPath } from "node:url";
+import { pathToFileURL } from "node:url";
 import * as fceumm from "romdev-core-fceumm";
 import { LibretroHost } from "romdev-core-host";
 
-const ROM = fileURLToPath(new URL("./roms/nestest.nes", import.meta.url));
+const TEST_ROM = requireTestRom(import.meta.url);
+const ROM = TEST_ROM.path;
 
 async function runSession(host, load) {
   await load();
@@ -25,7 +27,7 @@ async function runSession(host, load) {
   };
 }
 
-test("bytes-only host ({io:false}) matches the path-based host byte-for-byte", async () => {
+test("bytes-only host ({io:false}) matches the path-based host byte-for-byte", { skip: TEST_ROM.skip }, async () => {
   const { jsPath, wasmPath } = fceumm.core;
 
   // Reference: the classic Node path-based load.
@@ -61,7 +63,7 @@ test("bytes-only host ({io:false}) matches the path-based host byte-for-byte", a
   assert.equal(b.state.saveDir, "/romdev-save", "pure host upgraded its virtual save dir");
 });
 
-test("pure host refuses path-based loadMedia with a pointer to bytes", async () => {
+test("pure host refuses path-based loadMedia with a pointer to bytes", { skip: TEST_ROM.skip }, async () => {
   const { jsPath, wasmPath } = fceumm.core;
   const factory = (await import(pathToFileURL(jsPath).href)).default;
   const wasmBinary = new Uint8Array(await readFile(wasmPath));

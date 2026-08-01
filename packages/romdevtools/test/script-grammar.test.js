@@ -6,6 +6,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { requireTestRom } from "./helpers/test-rom.js";
+
+const TEST_ROM = requireTestRom(import.meta.url);
 import { decodeScript } from "../src/analysis/script-grammar.js";
 
 const GRAMMAR = {
@@ -107,9 +110,9 @@ test("big-endian scalars and maxRecords cap", () => {
   assert.equal(r.stopped.reason, "max-records");
 });
 
-test("scriptCore maps a CPU address through the platform mapper (nes)", async () => {
+test("scriptCore maps a CPU address through the platform mapper (nes)", { skip: TEST_ROM.skip }, async () => {
   const { scriptCore } = await import("../src/mcp/tools/disasm.js");
-  const path = new URL("./roms/nestest.nes", import.meta.url).pathname;
+  const path = TEST_ROM.path;
   const r = await scriptCore({
     target: "script", path, platform: "nes", address: 0xC000,
     grammar: { commands: {}, unknownOpcode: "stop" },

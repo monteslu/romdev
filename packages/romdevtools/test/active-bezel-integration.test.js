@@ -19,6 +19,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { requireTestRom } from "./helpers/test-rom.js";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -32,7 +33,8 @@ import { createRequire } from "node:module";
 
 import { registerTools } from "../src/mcp/tools/index.js";
 
-const ROM = new URL("./roms/nestest.nes", import.meta.url).pathname;
+const TEST_ROM = requireTestRom(import.meta.url);
+const ROM = TEST_ROM.path;
 
 // The fixture is OURS, in this repository, not borrowed from the dependency.
 //
@@ -67,7 +69,7 @@ async function session(key) {
   };
 }
 
-test("a plain loadMedia is completely unaffected", { skip: !HAVE_BEZEL }, async () => {
+test("a plain loadMedia is completely unaffected",{ skip: TEST_ROM.skip },  { skip: !HAVE_BEZEL }, async () => {
   // The whole extension is opt-in: a call without the new parameters must
   // behave exactly as it did before any of this existed.
   const call = await session("ab-untouched");
@@ -79,7 +81,7 @@ test("a plain loadMedia is completely unaffected", { skip: !HAVE_BEZEL }, async 
   assert.equal(status.activeBezel, undefined, "status stays clean too");
 });
 
-test("useActiveBezel with no sidecar fails loudly, naming the path it looked for", { skip: !HAVE_BEZEL }, async () => {
+test("useActiveBezel with no sidecar fails loudly, naming the path it looked for",{ skip: TEST_ROM.skip },  { skip: !HAVE_BEZEL }, async () => {
   // Silently loading the ROM alone would be the worst outcome: the agent asked
   // for a composite and would get the raw picture, with nothing saying so.
   const call = await session("ab-missing");
@@ -90,7 +92,7 @@ test("useActiveBezel with no sidecar fails loudly, naming the path it looked for
   assert.match(load._error, /activeBezelPath/, "points at the development override");
 });
 
-test("an explicit package loads, matches, and reports its regions", { skip: !HAVE_BEZEL }, async () => {
+test("an explicit package loads, matches, and reports its regions",{ skip: TEST_ROM.skip },  { skip: !HAVE_BEZEL }, async () => {
   const call = await session("ab-load");
   const load = await call("loadMedia", {
     platform: "nes", path: ROM, activeBezelPath: BEZEL, activeBezelForce: true,
@@ -101,7 +103,7 @@ test("an explicit package loads, matches, and reports its regions", { skip: !HAV
   assert.match(load.activeBezel.path, /fixtures[\\/]bezel$/);
 });
 
-test("the composite is what a screenshot captures, and differs from the core frame", { skip: !HAVE_BEZEL }, async () => {
+test("the composite is what a screenshot captures, and differs from the core frame",{ skip: TEST_ROM.skip },  { skip: !HAVE_BEZEL }, async () => {
   // This is the assertion that matters. If the composite and the core picture
   // were identical, the bezel would not actually be compositing -- and every
   // later "the map looks right" judgement would be meaningless.
@@ -161,7 +163,7 @@ test("source:'both' without a bezel says so instead of returning one picture twi
   assert.match(both._error, /needs an Active Bezel loaded/);
 });
 
-test("catalog status advertises the running bezel", { skip: !HAVE_BEZEL }, async () => {
+test("catalog status advertises the running bezel",{ skip: TEST_ROM.skip },  { skip: !HAVE_BEZEL }, async () => {
   // A session re-grounding mid-investigation has to know a bezel is running
   // BEFORE it interprets a screenshot as the game's own output.
   const call = await session("ab-status");
@@ -174,7 +176,7 @@ test("catalog status advertises the running bezel", { skip: !HAVE_BEZEL }, async
   assert.ok(status.activeBezel.ticks > 0, "ticks counted: " + JSON.stringify(status.activeBezel));
 });
 
-test("unloading media detaches the package", { skip: !HAVE_BEZEL }, async () => {
+test("unloading media detaches the package",{ skip: TEST_ROM.skip },  { skip: !HAVE_BEZEL }, async () => {
   // The package is bound to this ROM's hash. Keeping it across an unload would
   // leave one game's map ready to composite over another game's picture.
   const call = await session("ab-unload");
@@ -186,7 +188,7 @@ test("unloading media detaches the package", { skip: !HAVE_BEZEL }, async () => 
   assert.equal(status.activeBezel, undefined, "no bezel after unload");
 });
 
-test("loading different media without a bezel drops the previous one", { skip: !HAVE_BEZEL }, async () => {
+test("loading different media without a bezel drops the previous one",{ skip: TEST_ROM.skip },  { skip: !HAVE_BEZEL }, async () => {
   const call = await session("ab-swap");
   await call("loadMedia", { platform: "nes", path: ROM, activeBezelPath: BEZEL, activeBezelForce: true });
   assert.ok((await call("catalog", { op: "status" })).activeBezel, "bezel attached");
@@ -198,7 +200,7 @@ test("loading different media without a bezel drops the previous one", { skip: !
   );
 });
 
-test("a reset KEEPS the package; a state load notifies it", { skip: !HAVE_BEZEL }, async () => {
+test("a reset KEEPS the package; a state load notifies it",{ skip: TEST_ROM.skip },  { skip: !HAVE_BEZEL }, async () => {
   // Reset and state-load are continuity breaks, not teardowns: the same ROM is
   // still loaded, so the package stays and is told the timeline jumped.
   const call = await session("ab-continuity");

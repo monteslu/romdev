@@ -17,6 +17,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { requireTestRom } from "./helpers/test-rom.js";
 import { z } from "zod";
 import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -27,7 +28,8 @@ import { registerDisasmTools } from "../src/mcp/tools/disasm.js";
 import { registerToolchainTools } from "../src/mcp/tools/toolchain.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const NESTEST = path.join(__dirname, "roms", "nestest.nes");
+const TEST_ROM = requireTestRom(import.meta.url);
+const NESTEST = TEST_ROM.path;
 
 const parse = (res) => JSON.parse(res.content.find((c) => c.type === "text").text);
 
@@ -137,7 +139,7 @@ test("GameTank (W65C02/ca65): reassemble is byte-identical", { timeout: 120000 }
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
-test("NES (6502/ca65): reassemble a real ROM (nestest.nes) is byte-identical", { timeout: 120000 }, async () => {
+test("NES (6502/ca65): reassemble a real ROM (nestest.nes) is byte-identical", {timeout: 120000, skip: TEST_ROM.skip }, async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "romdev-reasm-nes-"));
   try {
     const orig = new Uint8Array(await readFile(NESTEST));

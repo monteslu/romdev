@@ -31,6 +31,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { requireTestRom } from "./helpers/test-rom.js";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -39,7 +40,8 @@ import { z } from "zod";
 
 import { registerTools } from "../src/mcp/tools/index.js";
 
-const ROM = new URL("./roms/nestest.nes", import.meta.url).pathname;
+const TEST_ROM = requireTestRom(import.meta.url);
+const ROM = TEST_ROM.path;
 
 async function startClient(key) {
   const server = new McpServer({ name: key, version: "0.0.1" }, { capabilities: { tools: {} } });
@@ -69,7 +71,7 @@ async function bootedSession(key) {
 
 const stackPointer = async (call) => (await call("cpu", { op: "read" }))?.registers?.S;
 
-test("a call that RETURNS balances the stack on its own", async () => {
+test("a call that RETURNS balances the stack on its own", { skip: TEST_ROM.skip }, async () => {
   const call = await bootedSession("cpu-call-balanced");
   const before = await stackPointer(call);
   const r = await call("cpu", { op: "call", pc: 0xC000, maxFrames: 2, sandbox: false });
@@ -81,7 +83,7 @@ test("a call that RETURNS balances the stack on its own", async () => {
   assert.equal(r.cpuContextRestored, undefined);
 });
 
-test("a call CUT SHORT restores the stack instead of stranding the sentinel", async () => {
+test("a call CUT SHORT restores the stack instead of stranding the sentinel", { skip: TEST_ROM.skip }, async () => {
   const call = await bootedSession("cpu-call-cutshort");
   const before = await stackPointer(call);
   // stopAtPC ends the run mid-routine, so the callee never executes its rts.
@@ -98,7 +100,7 @@ test("a call CUT SHORT restores the stack instead of stranding the sentinel", as
   assert.match(r.cpuContextNote, /RAM written by the routine is deliberately NOT rolled back/i);
 });
 
-test("the RAM the routine wrote survives the restore", async () => {
+test("the RAM the routine wrote survives the restore", { skip: TEST_ROM.skip }, async () => {
   // The point of sandbox:false is reading what the routine produced. Repairing
   // the stack must not throw that away -- otherwise the fix breaks the feature.
   const call = await bootedSession("cpu-call-ram-survives");
@@ -115,7 +117,7 @@ test("the RAM the routine wrote survives the restore", async () => {
   assert.equal(hex, "5a5a77", "pre-call marker AND the presetMemory byte both still live");
 });
 
-test("finalRegs still reports the state AT the stop, not the restored state", async () => {
+test("finalRegs still reports the state AT the stop, not the restored state", { skip: TEST_ROM.skip }, async () => {
   // The repair must not hide what the routine actually did -- finalRegs is the
   // evidence the caller came for.
   const call = await bootedSession("cpu-call-finalregs");
@@ -128,7 +130,7 @@ test("finalRegs still reports the state AT the stop, not the restored state", as
   assert.equal(await stackPointer(call), before, "the LIVE machine is the restored one");
 });
 
-test("sandbox:true is unaffected — it still restores everything", async () => {
+test("sandbox:true is unaffected — it still restores everything", { skip: TEST_ROM.skip }, async () => {
   const call = await bootedSession("cpu-call-sandbox-true");
   await call("memory", { op: "write", region: "system_ram", offset: 0x40, hex: "1234" });
   const before = await stackPointer(call);
@@ -141,7 +143,7 @@ test("sandbox:true is unaffected — it still restores everything", async () => 
   assert.equal(r.cpuContextRestored, undefined);
 });
 
-test("after a cut-short call the machine behaves like one never called into", async () => {
+test("after a cut-short call the machine behaves like one never called into", { skip: TEST_ROM.skip }, async () => {
   // The reported symptom was the game crashing into RAM on resume. Compare
   // against a CONTROL session that was never called into: nestest idles on a
   // static screen, so "RAM stopped changing" alone proves nothing -- the two

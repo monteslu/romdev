@@ -1,10 +1,10 @@
 name: lint
 
-# Static-analysis gate over romdev's own JavaScript. Deliberately scoped to
-# linting (+ the pure-JS unit tests) so it runs on a clean checkout with NO
-# emulator cores / toolchains: the WASM is gitignored, so the full `npm test`
-# suite (which boots cores + builds ROMs) can't run here yet — that needs the
-# wasm-distribution decision (see internal plan D2b). Lint needs none of that.
+# Static-analysis gate over romdev's own JavaScript. The full test suite —
+# including the core-booting, ROM-building parts — runs in test.yml, which
+# fills the gitignored wasm payloads from the published npm tarballs. Lint
+# stays its own fast job so a style break is visible in seconds, not after a
+# 450MB payload fetch.
 
 on:
   push:
@@ -35,17 +35,3 @@ jobs:
 
       - name: ESLint
         run: npm run lint
-
-      # The unit tests that are pure JS (no core/toolchain WASM) — cheap extra
-      # coverage on the same clean checkout. These cover the error-parsing,
-      # issue-ranking, input, and host-recovery logic. The wasm-dependent suite
-      # (cores + ROM builds) is intentionally NOT run here — see header note.
-      - name: Pure-JS unit tests
-        run: >
-          node --test
-          packages/romdevtools/src/toolchains/parse-errors.test.js
-          packages/romdevtools/test/input-button-alias.test.js
-          packages/romdevtools/test/input-ignored-buttons.test.js
-          packages/romdevtools/test/issue-ranking.test.js
-          packages/romdevtools/test/host-eviction-hint.test.js
-          packages/romdevtools/test/watch-memory.test.js

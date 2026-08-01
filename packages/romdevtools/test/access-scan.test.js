@@ -4,9 +4,11 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { requireTestRom } from "./helpers/test-rom.js";
 import { scanAsmForAccess, accessFamilyFor, findReferencesCore } from "../src/mcp/tools/find-references.js";
 
-const ROM = new URL("./roms/nestest.nes", import.meta.url).pathname;
+const TEST_ROM = requireTestRom(import.meta.url);
+const ROM = TEST_ROM.path;
 
 const ASM_6502 = [
   "        sta     $0182                           ; C100 8D 82 01",
@@ -60,7 +62,7 @@ test("family map covers the mapped platforms; literal-pool ISAs map to null", ()
   assert.equal(accessFamilyFor("gba"), null);
 });
 
-test("end-to-end on a real NES ROM returns classified sites + summary", async () => {
+test("end-to-end on a real NES ROM returns classified sites + summary", { skip: TEST_ROM.skip }, async () => {
   const r = await findReferencesCore({ path: ROM, platform: "nes", address: 0x0002, accessScan: { window: 2 } });
   assert.ok(r.sitesFound > 0, "nestest writes $0002 constantly");
   assert.ok(r.summary.writers > 0);
@@ -69,7 +71,7 @@ test("end-to-end on a real NES ROM returns classified sites + summary", async ()
   assert.equal(r.window, 2);
 });
 
-test("literal-pool ISA refuses loudly with the live-tool pointer", async () => {
+test("literal-pool ISA refuses loudly with the live-tool pointer", { skip: TEST_ROM.skip }, async () => {
   await assert.rejects(
     () => findReferencesCore({ path: ROM, platform: "gba", address: 0x03000010, accessScan: {} }),
     /literal-pool|watch\(/,

@@ -5,6 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { requireTestRom } from "./helpers/test-rom.js";
 import { z } from "zod";
 import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -17,11 +18,12 @@ import { planRebuild } from "../src/mcp/tools/disasm-rebuild.js";
 import { registerDisasmTools } from "../src/mcp/tools/disasm.js";
 import { registerToolchainTools } from "../src/mcp/tools/toolchain.js";
 
-const NESTEST = path.join(import.meta.dirname, "roms", "nestest.nes");
+const TEST_ROM = requireTestRom(import.meta.url);
+const NESTEST = TEST_ROM.path;
 
 // ─────────────────────────────────────────────────── ines.js synthesizer (pure)
 
-test("inesHeaderBytes: NROM-128 8KB-CHR header matches nestest.nes exactly", () => {
+test("inesHeaderBytes: NROM-128 8KB-CHR header matches nestest.nes exactly", { skip: TEST_ROM.skip }, () => {
   const want = [...readFileSync(NESTEST).slice(0, 16)];
   const got = [...inesHeaderBytes({ prgBanks: 1, chrBanks: 1, mapper: 0, mirroring: "horizontal" })];
   assert.deepEqual(got, want, "synthesized iNES header should equal nestest.nes's first 16 bytes");
@@ -75,7 +77,7 @@ test("chr-rom preset resolves with its companion crt0 (CHR-ROM header byte5=1)",
 
 // ─────────────────────────────────────────────────── planRebuild (pure)
 
-test("planRebuild(nes): NROM → inesHeader build call + chr.bin blob, verifiable", () => {
+test("planRebuild(nes): NROM → inesHeader build call + chr.bin blob, verifiable", { skip: TEST_ROM.skip }, () => {
   const data = readFileSync(NESTEST);
   // planRegions for NES would give bank0; planRebuild only needs `data` for NES.
   const plan = planRebuild("nes", new Uint8Array(data), [
@@ -121,7 +123,7 @@ function parse(res) {
   return JSON.parse(res.content[0].text);
 }
 
-test("disasm({target:'project'}) on NES emits chr.bin + rebuild.json + BUILD.md", async () => {
+test("disasm({target:'project'}) on NES emits chr.bin + rebuild.json + BUILD.md", { skip: TEST_ROM.skip }, async () => {
   const tmp = await mkdtemp(path.join(os.tmpdir(), "ines-proj-"));
   try {
     const r = parse(await disasmHandler()({ path: NESTEST, platform: "nes", outputDir: tmp }));
@@ -144,7 +146,7 @@ test("disasm({target:'project'}) on NES emits chr.bin + rebuild.json + BUILD.md"
 
 // ─────────────────────────────────────────────── end-to-end: disasm → build → byte-identical
 
-test("inesHeader build round-trips nestest.nes byte-identical (the v0.16.0 ask)", async () => {
+test("inesHeader build round-trips nestest.nes byte-identical (the v0.16.0 ask)", { skip: TEST_ROM.skip }, async () => {
   // Register the build tool and drive output:'rom' with inesHeader, feeding the
   // raw PRG + CHR extracted from nestest.nes. This is the exact NROM rebuild the
   // feedback wanted with zero glue .s/.cfg.

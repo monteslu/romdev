@@ -18,6 +18,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { requireTestRom } from "./helpers/test-rom.js";
 import { existsSync, readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -171,7 +172,8 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
 import { registerTools } from "../src/mcp/tools/index.js";
 
-const ROM = new URL("./roms/nestest.nes", import.meta.url).pathname;
+const TEST_ROM = requireTestRom(import.meta.url);
+const ROM = TEST_ROM.path;
 
 async function session(key) {
   const server = new McpServer({ name: key, version: "0.0.1" }, { capabilities: { tools: {} } });
@@ -187,7 +189,7 @@ async function session(key) {
   };
 }
 
-test("arm → step → recover, the whole restart-survival loop", { timeout: 120000 }, async () => {
+test("arm → step → recover, the whole restart-survival loop",{ skip: TEST_ROM.skip },  { timeout: 120000 }, async () => {
   _resetAutoSnapshots();
   const key = "snap-e2e";
   const dir = tmpDir();
@@ -220,7 +222,7 @@ test("arm → step → recover, the whole restart-survival loop", { timeout: 120
   assert.match(JSON.stringify(ram), /c0de/i, "restored to the snapshotted moment");
 });
 
-test("recoverSnapshot with nothing saved explains itself instead of failing", async () => {
+test("recoverSnapshot with nothing saved explains itself instead of failing", { skip: TEST_ROM.skip }, async () => {
   _resetAutoSnapshots();
   const call = await session("snap-e2e-none");
   assert.equal((await call("loadMedia", { platform: "nes", path: ROM })).loaded, true);

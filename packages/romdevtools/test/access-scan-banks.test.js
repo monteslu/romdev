@@ -15,6 +15,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { requireTestRom } from "./helpers/test-rom.js";
+
+const TEST_ROM = requireTestRom(import.meta.url);
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -158,7 +161,7 @@ test("a lopsided scan names the bank filter as the static fix", async () => {
   assert.match(r.notes, /perBank/);
 });
 
-test("a filtered scan omits the density advice it no longer needs", async () => {
+test("a filtered scan omits the density advice it no longer needs", { skip: TEST_ROM.skip }, async () => {
   const r = await findReferencesCore({
     path: ROM, platform: "nes", address: 0xC0, accessScan: { window: 2, banks: [0] },
   });
@@ -221,10 +224,10 @@ test("the truncation note names the capped banks and both escape hatches", async
   assert.match(r.truncated, /banks:\[/, "names the better fix — scan only the code banks");
 });
 
-test("an unbanked ROM is unaffected by the per-bank cap", async () => {
+test("an unbanked ROM is unaffected by the per-bank cap", { skip: TEST_ROM.skip }, async () => {
   // nestest is a single 16KB bank; the per-bank path must not change its
   // long-standing global-slice behaviour.
-  const NESTEST = new URL("./roms/nestest.nes", import.meta.url).pathname;
+  const NESTEST = TEST_ROM.path;
   const r = await findReferencesCore({
     path: NESTEST, platform: "nes", address: 0x0002,
     accessScan: { window: 2 }, maxSitesPerBank: 1,
