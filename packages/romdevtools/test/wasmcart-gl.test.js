@@ -19,6 +19,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { WasmcartHost } from "../src/host/WasmcartHost.js";
 import { computeVerify } from "../src/mcp/tools/frame.js";
+import { glStackAvailable } from "romdev-core-host/glOptionalDep.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const GLCART = path.join(HERE, "fixtures", "glcart.wasc");
@@ -37,6 +38,7 @@ if (glReady) {
 const GUARD = glReady ? {} : { skip: `wasmcart ${wcVersion.version} < 0.6.0 or webgl-node absent — GL carts run stubbed here (by design)` };
 
 test("GL cart renders REAL pixels headless: screenshot shows the GL clear color", GUARD, async () => {
+  if (!(await glStackAvailable())) { console.log("GL stack unusable here; skipping"); return; }
   const host = new WasmcartHost();
   await host.loadMedia({ platform: "wasmcart", path: GLCART });
   const s = host.getStatus();
@@ -58,6 +60,7 @@ test("GL cart renders REAL pixels headless: screenshot shows the GL clear color"
 });
 
 test("2D cart is untouched: no GL context, no readback, status.gl null", GUARD, async () => {
+  if (!(await glStackAvailable())) { console.log("GL stack unusable here; skipping"); return; }
   const host = new WasmcartHost();
   await host.loadMedia({ platform: "wasmcart", path: DBG });
   assert.equal(host.getStatus().gl, null);
@@ -69,6 +72,7 @@ test("2D cart is untouched: no GL context, no readback, status.gl null", GUARD, 
 });
 
 test("GL frame participates in framebufferHash (regression goldens see GL draws)", GUARD, async () => {
+  if (!(await glStackAvailable())) { console.log("GL stack unusable here; skipping"); return; }
   const host = new WasmcartHost();
   await host.loadMedia({ platform: "wasmcart", path: GLCART });
   host.stepFrames(2);
@@ -78,6 +82,7 @@ test("GL frame participates in framebufferHash (regression goldens see GL draws)
 });
 
 test("screenshotRgba returns `rgba` (the LibretroHost contract) and frame verify runs", async () => {
+  if (!(await glStackAvailable())) { console.log("GL stack unusable here; skipping"); return; }
   // Regression (found by the openarena MCP smoke): both native hosts returned
   // {pixels} where every LibretroHost caller — computeVerify, sideBySide, the
   // livestream — destructures {rgba}, so frame({op:'verify'}) threw a raw

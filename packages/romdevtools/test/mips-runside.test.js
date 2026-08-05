@@ -27,6 +27,7 @@ test("N64: a toolchain-built homebrew boots + RENDERS on the GPU (glide64 GBI dl
   if (!HAS_MIPS_GCC) { console.log("mips-elf-gcc not built; skipping"); return; }
   const core = resolveCore("n64");
   if (!core) { console.log("no n64 core staged; skipping"); return; }
+  if (!(await glStackAvailable())) { console.log("GL stack unusable here; skipping"); return; }
 
   // The bundled n64.c helper emits a GBI (F3DEX2) display list that glide64 HLEs onto
   // the GPU — NOT a software framebuffer (which would be black on glide64 + <1fps).
@@ -78,6 +79,7 @@ test("N64: a toolchain-built homebrew boots + RENDERS on the GPU (glide64 GBI dl
 test("PS1: beetle_psx_hw (OpenBIOS) boots + presents a frame", { timeout: 120000 }, async () => {
   const core = resolveCore("ps1");
   if (!core) { console.log("no ps1 core staged; skipping"); return; }
+  if (!(await glStackAvailable())) { console.log("GL stack unusable here; skipping"); return; }
 
   // A minimal PS-EXE: header + MIPS that drives the GPU to fill the screen.
   const dir = await mkdtemp(path.join(tmpdir(), "ps1-run-"));
@@ -128,6 +130,7 @@ test("PS1: beetle_psx_hw (OpenBIOS) boots + presents a frame", { timeout: 120000
 
 test("build: C → PS1 PS-EXE compiles AND runs on the core", { timeout: 180000 }, async () => {
   if (!HAS_MIPS_GCC) { console.log("mips-elf-gcc WASM not built; skipping build test"); return; }
+  if (!(await glStackAvailable())) { console.log("GL stack unusable here; skipping"); return; }
   const r = await buildForPlatform({
     platform: "ps1", language: "c",
     source: `
@@ -172,6 +175,7 @@ test("live-debug: watchpoint + range-watch fire on PS1 (instrumented core)", { t
   if (!HAS_MIPS_GCC) { console.log("mips-elf-gcc not built; skipping"); return; }
   const core = resolveCore("ps1");
   if (!core) return;
+  if (!(await glStackAvailable())) { console.log("GL stack unusable here; skipping"); return; }
   // A program that drives the GPU (so we know main runs) AND scribbles a global array
   // in user RAM. Under beetle's real OpenBIOS, low kernel/vector space (e.g. 0x80001000)
   // is protected — so we discover what the program ACTUALLY writes via findWriter on the
@@ -209,6 +213,7 @@ test("audioDebug: PS1 SPU register decode (chip:'spu')", { timeout: 180000 }, as
   if (!HAS_MIPS_GCC) { console.log("mips-elf-gcc not built; skipping"); return; }
   const core = resolveCore("ps1");
   if (!core) return;
+  if (!(await glStackAvailable())) { console.log("GL stack unusable here; skipping"); return; }
   const { decodePs1Spu } = await import("romdev-core-host/ps1-spu-state.js");
   // A PS1 program that writes the SPU main volume + a voice volume/pitch.
   // NOTE on what reads back: in beetle (Mednafen) SPU, the main/voice VOLUME
@@ -269,7 +274,8 @@ test("memory: PS1 video_ram exposes the GPU VRAM (beetle, if romdev_vram_get pre
   if (!HAS_MIPS_GCC) { console.log("mips-elf-gcc not built; skipping"); return; }
   const core = resolveCore("ps1");
   if (!core) return;
-  const psxc = await readFile(path.join(process.env.HOME, "code/cliemu/romdev/packages/romdevtools/src/platforms/ps1/lib/c/psx.c"), "utf8");
+  if (!(await glStackAvailable())) { console.log("GL stack unusable here; skipping"); return; }
+  const psxc = await readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src", "platforms", "ps1", "lib", "c", "psx.c"), "utf8");
   const psxh = await readFile(path.join(process.env.HOME, "code/cliemu/romdev/packages/romdevtools/src/platforms/ps1/lib/c/psx.h"), "utf8");
   const src = `#include "psx.h"\nint main(){ psx_init(); for(;;){ psx_clear(RGB(120,80,200)); psx_rect(10,10,40,40,RGB(255,0,0)); psx_vsync(); } }`;
   const b = await buildForPlatform({ platform: "ps1", language: "c", sources: { "main.c": src, "psx.c": psxc }, includes: { "psx.h": psxh } });

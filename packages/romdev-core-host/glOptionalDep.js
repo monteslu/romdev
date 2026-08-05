@@ -54,7 +54,34 @@ export async function loadWebGl2Context() {
   return _webgl;
 }
 
-/** Best-effort probe: is the native GL stack importable? (for capability flags) */
+let _ctxProbe = null; // null = untried; true/false = cached verdict
+
+/**
+ * Is the GL stack actually USABLE — not merely importable?
+ *
+ * The import-only version of this check passed on every machine with the
+ * prebuilt .node installed, and then real context creation decided the truth:
+ * fast EACCES on a box whose /dev/dri is ACL-gated (tests failed), or an
+ * INDEFINITE BLOCK inside eglInitialize on a machine with no GPU device nodes
+ * at all — which is what ate a CI runner's whole 30-minute job with two hung
+ * addon threads. A native hang cannot be timed out in-process, so the probe
+ * creates a real context in a CHILD process with a hard kill. Verdict cached
+ * per process; each test file pays at most one probe.
+ *
+ * ROMDEV_NO_GL=1 short-circuits to false with no probe — set it where the
+ * answer is known ahead of time (CI runners have no GPU, ever).
+ */
 export async function glStackAvailable() {
-  try { await loadNativeGles(); return true; } catch { return false; }
+  if (process.env.ROMDEV_NO_GL === "1") return false;
+  if (_ctxProbe !== null) return _ctxProbe;
+  try { await loadNativeGles(); } catch { _ctxProbe = false; return false; }
+  const { spawnSync } = await import("node:child_process");
+  const probe =
+    "import('webgl-node').then(m => { const c = m.createWebGL2Context(8, 8); " +
+    "process.exit(c && c.gl ? 0 : 1); }).catch(() => process.exit(1));";
+  const r = spawnSync(process.execPath, ["-e", probe], {
+    timeout: 15000, killSignal: "SIGKILL", stdio: "ignore",
+  });
+  _ctxProbe = r.status === 0;
+  return _ctxProbe;
 }

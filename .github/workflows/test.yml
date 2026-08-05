@@ -66,4 +66,11 @@ jobs:
         run: node scripts/fetch-payloads.mjs
 
       - name: Test
+        # Runners have no GPU device nodes, and native EGL init BLOCKS there
+        # rather than failing (it ate this job's whole 30-minute budget once,
+        # with the suite hung inside two addon threads). glStackAvailable()
+        # honors this and every GL-dependent test skips with a stated reason
+        # -- the same honest-skip contract as the nestest fixture above.
+        env:
+          ROMDEV_NO_GL: "1"
         run: npm test --workspace=romdevtools
