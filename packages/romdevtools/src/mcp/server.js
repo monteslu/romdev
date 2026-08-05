@@ -13,6 +13,25 @@ if (
     ["--experimental-vm-modules", ...process.execArgv, process.argv[1], ...process.argv.slice(2)],
     { stdio: "inherit", env: { ...process.env, ROMDEV_REEXEChild: "1" } },
   );
+  // A child killed by a SIGNAL reports status === null, so `r.status ?? 0`
+  // turned every native crash (a segfault inside a GL driver, an OOM kill)
+  // into a clean exit 0. That cost a bezel agent hours: the server vanished
+  // and the logs said it had shut down normally. The parent here is a bare
+  // re-exec wrapper, so it is the only place that knows how the child died.
+  //
+  // Cross-platform: `r.signal` and `r.error` are plain Node fields on every
+  // platform. Windows has no POSIX signals — spawnSync reports a signal there
+  // only for simulated kills — so the 128+signum convention is applied only
+  // where it means something and the name is reported either way.
+  if (r.error) {
+    console.error(`romdev: could not start the server process: ${r.error.message}`);
+    process.exit(1);
+  }
+  if (r.signal) {
+    console.error(`romdev: server process died from ${r.signal} (not a clean shutdown).`);
+    const signum = { SIGSEGV: 11, SIGABRT: 6, SIGBUS: 7, SIGILL: 4, SIGFPE: 8, SIGKILL: 9, SIGTERM: 15 }[r.signal];
+    process.exit(process.platform === "win32" || !signum ? 1 : 128 + signum);
+  }
   process.exit(r.status ?? 0);
 }
 
