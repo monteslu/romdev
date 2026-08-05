@@ -11,7 +11,12 @@
 // REQUIRES the process to run with --experimental-vm-modules (rungame's realm uses
 // vm.SourceTextModule). loadMedia throws a clear message if it's missing.
 
-import { createHostSession } from "rungame";
+// rungame is imported LAZILY (first loadMedia), not here: its module graph
+// statically reaches @kmamal/sdl via gamepad-node, so a top-level import makes
+// EVERY consumer of the tool surface require the SDL native binary at load --
+// which killed whole CI test files at import time on runners where the
+// --ignore-scripts install skips the binary fetch. Nothing needs rungame until
+// a jsgame actually loads.
 import { framebufferToRgba } from "romdev-core-host/framebuffer.js";
 import { framebufferToScreenshot } from "romdev-core-host/framebuffer-png.js";
 import { ROMDEV_PIXEL_FORMAT_RGBA8888 } from "romdev-core-host/retroConstants.js";
@@ -75,6 +80,7 @@ export class JsGameHost {
       // surface it early with the fix.
     }
     try {
+      const { createHostSession } = await import("rungame");
       this.session = await createHostSession(mediaPath, {
         width: width || DEFAULT_W,
         height: height || DEFAULT_H,
