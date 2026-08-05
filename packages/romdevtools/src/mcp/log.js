@@ -36,11 +36,13 @@ const VERBOSE = computeVerbose();
 // to stay flat in memory — two caps guarantee that:
 //   - RING_CAP   : max number of records kept (oldest evicted on overflow)
 //   - MSG_CAP    : max chars per record (a giant stack/object can't bloat one)
-// Sized so a whole multi-turn agent session — including build error logs, which
-// can be several KB each — fits and stays diagnosable. Worst-case footprint ≈
-// RING_CAP * MSG_CAP ≈ 5000 * 8 KB ≈ 40 MB, fixed. Override with
-// ROMDEV_LOG_RING / ROMDEV_LOG_MSG_CAP if you need more/less.
-const RING_CAP = Number(process.env.ROMDEV_LOG_RING) || 5000;
+// Sized for "what went wrong in the last little while", NOT a session archive.
+// 5000 x 8 KB reserved ~40 MB for an observer/diagnostic feed, which is far more
+// than the recent-history question it answers is worth. 500 keeps a long build
+// log plus the surrounding tool calls (~4 MB worst case) and is still ample for
+// diagnosing a failure after the fact. Raise with ROMDEV_LOG_RING if you are
+// chasing something that needs deeper history.
+const RING_CAP = Number(process.env.ROMDEV_LOG_RING) || 500;
 const MSG_CAP = Number(process.env.ROMDEV_LOG_MSG_CAP) || 8000;
 /** @type {{t:number, level:string, msg:string}[]} */
 const ring = [];

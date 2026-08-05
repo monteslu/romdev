@@ -39,7 +39,12 @@
 
 import { EventEmitter } from "node:events";
 
-const RING_SIZE = 200;
+// Replay buffer for a newly-connected observer: "what just happened", not a
+// session archive. Entries are already payload-truncated (see summarise below),
+// so this is small either way, but 200 is more scrollback than the livestream
+// pane ever shows. NOTE this ring is GLOBAL, not per-session -- a busy sweep
+// across many carts shares the same 50 slots.
+const RING_SIZE = Number(process.env.ROMDEV_OBSERVER_RING) || 50;
 
 class ObserverBus extends EventEmitter {
   constructor() {
@@ -75,6 +80,11 @@ class ObserverBus extends EventEmitter {
   sessionDisconnected(sessionKey) {
     this.sessions.delete(sessionKey);
     this.push({ type: "session_disconnect", sessionKey, ts: Date.now() });
+    // Drop this session's frame-throttle state. Each entry can hold a `pending`
+    // provider CLOSURE that captures the emulator host in order to rasterize a
+    // frame later -- so a stale entry pins a whole framebuffer alive, and the
+    // map itself grew one entry per (session, tool) forever.
+    dropObserverFrameState(sessionKey);
   }
 }
 
@@ -95,10 +105,19 @@ export const observer = new ObserverBus();
 //      the current screen, which is exactly what the human wants to converge
 //      on).
 let FRAME_MIN_INTERVAL_MS = 2000;
+// With NO livestream client connected the capture serves only the replay ring,
+// but provider() still rasterizes + PNG-encodes the full composite (~120ms for
+// a 1920x1080 Active Bezel scene) on the event loop -- which landed inside the
+// next bezel tick and showed up as a hard stutter every 2s during playtest.
+// Keep the ring warm on a lazy cadence instead; the moment a client attaches,
+// the 2s cadence resumes on the next frame.
+let FRAME_IDLE_INTERVAL_MS = 15000;
 export function _setFrameThrottleForTest(ms) { FRAME_MIN_INTERVAL_MS = ms; }
 
 /** @type {Map<string, {lastTs: number, timer: any, pending: null | {provider: Function, meta: object}}>} */
 const _frameThrottle = new Map();
+// Hard ceiling on distinct (session, tool) throttle entries.
+const FRAME_STATE_MAX = Number(process.env.ROMDEV_FRAME_STATE_MAX) || 64;
 
 function _emitFrame(provider, meta) {
   try {
@@ -125,12 +144,40 @@ function _emitFrame(provider, meta) {
  * call). `provider` returns {kind:'image', mimeType, base64} or null; it is
  * invoked OFF the agent's critical path.
  */
+/** Forget frame-throttle state for a session (all of its tools). */
+export function dropObserverFrameState(sessionKey) {
+  const prefix = `${sessionKey ?? "http"}|`;
+  for (const [key, st] of _frameThrottle) {
+    if (!key.startsWith(prefix)) continue;
+    if (st.timer) { try { clearTimeout(st.timer); } catch {} }
+    st.pending = null;                 // release the captured provider closure
+    _frameThrottle.delete(key);
+  }
+}
+
 export function pushObserverFrame(meta, provider) {
   const key = `${meta.sessionKey ?? "http"}|${meta.tool ?? "?"}`;
   let st = _frameThrottle.get(key);
-  if (!st) { st = { lastTs: 0, timer: null, pending: null }; _frameThrottle.set(key, st); }
+  if (!st) {
+    // Backstop for sessions that vanish without a clean disconnect: evict the
+    // coldest entries rather than let the map grow without bound.
+    if (_frameThrottle.size >= FRAME_STATE_MAX) {
+      const stale = [..._frameThrottle.entries()]
+        .sort((a, b) => a[1].lastTs - b[1].lastTs)
+        .slice(0, Math.ceil(FRAME_STATE_MAX / 4));
+      for (const [k, v] of stale) {
+        if (v.timer) { try { clearTimeout(v.timer); } catch {} }
+        v.pending = null;
+        _frameThrottle.delete(k);
+      }
+    }
+    st = { lastTs: 0, timer: null, pending: null };
+    _frameThrottle.set(key, st);
+  }
   const now = Date.now();
-  if (!st.timer && now - st.lastTs >= FRAME_MIN_INTERVAL_MS) {
+  const interval = observer.listenerCount("event") === 0
+    ? FRAME_IDLE_INTERVAL_MS : FRAME_MIN_INTERVAL_MS;
+  if (!st.timer && now - st.lastTs >= interval) {
     st.lastTs = now;
     setImmediate(() => _emitFrame(provider, meta));
     return;
@@ -139,7 +186,7 @@ export function pushObserverFrame(meta, provider) {
   // arm the trailing timer once.
   st.pending = { provider, meta };
   if (!st.timer) {
-    const delay = Math.max(1, st.lastTs + FRAME_MIN_INTERVAL_MS - now);
+    const delay = Math.max(1, st.lastTs + interval - now);
     st.timer = setTimeout(() => {
       st.timer = null;
       const p = st.pending;

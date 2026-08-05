@@ -136,6 +136,28 @@ async function maybeRestoreState(host, fromState, fromStatePath) {
 // observer wrapper encodes it ASYNCHRONOUSLY, after the agent's response has
 // already gone out. The provider is stripped from the agent-visible result. The
 // frame is captured by reference now (correct frozen state) but rasterized later.
+// Livestream frames are a MONITORING feed, not an archival capture. Encoding
+// the full 1920x1080 composite PNG takes ~120ms of synchronous event-loop time
+// every 2s, which lands inside the next Active Bezel tick and reads as a hard
+// periodic stutter in playtest. Nearest-neighbour halving to <=960 wide cuts
+// the encode ~4x for a feed that is displayed small anyway. (The real fix is a
+// worker-thread encoder; this makes the cost tolerable until then.)
+function observerDownscale(rgba, w, h) {
+  while (w > 960) {
+    const w2 = w >> 1, h2 = h >> 1;
+    const out = Buffer.allocUnsafe(w2 * h2 * 4);
+    for (let y = 0; y < h2; y++) {
+      let si = (y * 2) * w * 4, di = y * w2 * 4;
+      for (let x = 0; x < w2; x++, si += 8, di += 4) {
+        out[di] = rgba[si]; out[di + 1] = rgba[si + 1];
+        out[di + 2] = rgba[si + 2]; out[di + 3] = rgba[si + 3];
+      }
+    }
+    rgba = out; w = w2; h = h2;
+  }
+  return { rgba, width: w, height: h };
+}
+
 export function attachObserverFrame(json, host, caption) {
   json._observerFrameProvider = () => {
     try {
@@ -153,7 +175,8 @@ export function attachObserverFrame(json, host, caption) {
       if (sessionKey) {
         const c = compositeFrame(sessionKey, host, { source: "composite" });
         if (c?.source === "composite") {
-          const shot = framebufferToScreenshot(c.width, c.height, c.rgba, c.width * 4,
+          const d = observerDownscale(c.rgba, c.width, c.height);
+          const shot = framebufferToScreenshot(d.width, d.height, d.rgba, d.width * 4,
                                                ROMDEV_PIXEL_FORMAT_RGBA8888);
           if (shot?.pngBase64) {
             return { kind: "image", mimeType: "image/png", base64: shot.pngBase64 };
@@ -1040,7 +1063,18 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
               : "This count is a LOWER BOUND — see armedWhileHaltedNote. ")
           : "") +
           (totalMatched === 0
-          ? "No matching changes in the watched window. Try (a) onChange:'any' to confirm the byte moves at all, (b) longer `frames`, (c) `pressDuring` to drive the game past the event, (d) a different region/offset. If the byte never moves even with onChange:'any', this region may be REBUILT as a block (sprite/OAM shadow, display list, VRAM) rather than written in place — watch the SOURCE struct the copy/DMA reads from instead (find it with memory({op:'search'}))."
+          ? "No matching changes in the watched window. "
+            // A scheduled press defaults to holdFrames:2 — a TAP. That is far
+            // too short for anything with movement or animation (walking one
+            // Zelda screen needs ~60+ frames held), so the run looks like "the
+            // byte never changes" when really the input never did anything.
+            // pressesApplied:N says the press landed; it does NOT say it was
+            // held long enough, so name the lever explicitly here.
+            + (presses.length
+              ? `Your \`pressDuring\` schedule held for ${Math.max(...presses.map((p) => p.holdFrames ?? 2))} frame(s) — `
+                + "note holdFrames DEFAULTS TO 2 (a tap). If the effect needs sustained input (walking to the next screen, a charged move), raise `holdFrames` to cover it, or hold the button with input({op:'set'}) and OMIT pressDuring. "
+              : "")
+            + "Try (a) onChange:'any' to confirm the byte moves at all, (b) longer `frames`, (c) `pressDuring` to drive the game past the event, (d) a different region/offset. If the byte never moves even with onChange:'any', this region may be REBUILT as a block (sprite/OAM shadow, display list, VRAM) rather than written in place — watch the SOURCE struct the copy/DMA reads from instead (find it with memory({op:'search'}))."
           : (tryGetPC(host) == null ? "PC not available for this platform (getCPUState returned no pc field)." : "")) || undefined,
       };
 
@@ -1766,7 +1800,10 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         frame: z.number().int().min(0),
         button: z.string(),
         port: z.number().int().min(0).max(3).default(0),
-        holdFrames: z.number().int().min(1).default(2),
+        holdFrames: z.number().int().min(1).default(2).describe("How many frames to HOLD the button. Default 2 -- a TAP, which is "
+          + "right for a menu confirm and far too short for anything with movement: "
+          + "walking one screen typically needs 60+. A too-short hold returns a clean "
+          + "eventCount:0 that reads as 'the byte never changes'."),
       })).optional().describe("Schedule input while waiting (drive the game to the state that triggers the condition). If OMITTED, this run inherits whatever input({op:'set'}) last held — same as frame({op:'step'}). If GIVEN, the schedule OWNS the pad for the whole run (a prior input({op:'set'}) is ignored); use it to drive the watched window itself. Entries with OVERLAPPING windows on the same port are OR'd into a chord (e.g. b+right held while a fires mid-window), not overwritten."),
       settleFrames: z.number().int().min(0).max(120).default(0).describe("on:'pc'/'write' with pressDuring — release the pad to NEUTRAL and step this many frames BEFORE the run, so the PRIOR run's held-button shadow (the game latches the pad into its own RAM each frame) doesn't bleed into this run's frame 0. Set ~10-30 for back-to-back A/B-discriminator / negative-control runs on the same live host (hold A to prove A does NOT reach a B-only branch) — without it the stale chord can false-positive on frame 1. No-op without pressDuring."),
       abortIf: z.array(z.object({
@@ -2168,7 +2205,10 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         frame: z.number().int().min(0),
         button: z.string(),
         port: z.number().int().min(0).max(3).default(0),
-        holdFrames: z.number().int().min(1).default(2),
+        holdFrames: z.number().int().min(1).default(2).describe("How many frames to HOLD the button. Default 2 -- a TAP, which is "
+          + "right for a menu confirm and far too short for anything with movement: "
+          + "walking one screen typically needs 60+. A too-short hold returns a clean "
+          + "eventCount:0 that reads as 'the byte never changes'."),
       })).optional().describe("Schedule input while watching (drive the game to the state that touches the watched bytes/range, or uploads the graphic for on:'dma'). If OMITTED, this run inherits whatever input({op:'set'}) last held — same as frame({op:'step'}). If GIVEN, the schedule OWNS the pad for the whole run (a prior input({op:'set'}) is ignored). Entries with OVERLAPPING windows on the same port are OR'd into a chord (e.g. b+right held while a fires mid-window), not overwritten. MENU SCREENS: if a schedule never registers (some menus poll input in a way scheduled taps miss), hold the button via input({op:'set'}) and OMIT pressDuring — the run inherits the held state and the menu sees the edge."),
       fromState: z.string().optional().describe("on:'range'/'pc' — restore an in-memory savestate SLOT (from state({op:'save', name})) BEFORE tracing, so the log runs from a known moment (jump to the boss fight, then see what writes HP). Deterministic + repeatable."),
       fromStatePath: z.string().optional().describe("on:'range'/'pc' — like fromState but restore from a savestate FILE on disk (state({op:'save', path})). Relative path resolves against the loaded ROM's dir."),
