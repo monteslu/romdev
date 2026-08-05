@@ -6,14 +6,20 @@
 /**
  * @typedef {"system_ram" | "save_ram" | "video_ram" | "rtc"
  *   | "nes_nametables" | "nes_palette" | "nes_oam" | "nes_chr"
- *   | "nes_apu_regs" | "nes_cpu_regs" | "nes_ppu_regs"
+ *   | "nes_apu_regs" | "nes_cpu_regs" | "nes_ppu_regs" | "nes_cart_ram"
+ *   | "nes_ppu_scroll" | "nes_ppu_scroll_lines" | "nes_chr_lines" | "nes_bgfetch" | "nes_sprlines" | "nes_ntmap" | "nes_pallines" | "nes_masklines" | "nes_ntmaplines" | "nes_bgpix" | "nes_backdrop" | "nes_sprdrawn" | "nes_bgval" | "nes_maskpix" | "nes_linepix" | "nes_linedeemp" | "nes_palrgb"
  *   | "snes_oam" | "snes_cgram" | "snes_aram" | "snes_fillram"
  *   | "genesis_cram" | "genesis_vsram" | "genesis_vdp_regs"
  *   | "genesis_z80_ram" | "genesis_m68k" | "genesis_ym2612" | "genesis_psg"
+ *   | "md_linepix" | "md_bgpix" | "md_objpix" | "md_pixrgb" | "md_linestate"
+ *   | "sms_linepix" | "sms_bgpix" | "sms_objpix" | "sms_pixrgb" | "sms_linestate"
+ *   | "gg_linepix" | "gg_bgpix" | "gg_objpix" | "gg_pixrgb" | "gg_linestate"
  *   | "sms_vram" | "sms_cram" | "sms_vdp_regs" | "sms_z80_regs"
  *   | "gg_vram" | "gg_cram"
  *   | "gb_vram" | "gb_oam" | "gb_io" | "gb_hram"
  *   | "gb_bgpdata" | "gb_objpdata" | "gb_cpu_regs"
+ *   | "gb_lineregs" | "gb_bgpix" | "gb_sprpix" | "gb_palline"
+ *   | "gb_bgcol15" | "gb_sprcol15"
  *   | "a26_tia_regs" | "a26_cpu_regs"
  *   | "a78_cpu_regs"
  *   | "c64_color_ram" | "c64_vic_regs" | "c64_sid_regs"
@@ -22,7 +28,13 @@
  *   | "lynx_cpu_regs" | "lynx_hw_regs"
  *   | "pce_vdc_vram" | "pce_vdc_satb" | "pce_vdc_regs"
  *   | "pce_vce_palette" | "pce_cpu_regs" | "pce_psg_regs"
- *   | "msx_vram" | "msx_vdp_regs" | "msx_vdp_status"
+ *   | "pce_vdc_reglines"
+ *   | "pce_vce_pallines"
+ *   | "pce_vdc_linepix"
+ *   | "pce_vce_xofflines"
+ *   | "pce_vce_srclines" | "pce_paldeltas"
+ *   | "msx_vram" | "msx_vdp_regs" | "msx_vdp_status" | "msx_vdp_reglines"
+ *   | "msx_vram_deltas" | "msx_fb_tail"
  *   | "msx_palette" | "msx_cpu_regs" | "msx_psg_regs"
  * } MemoryRegion
  */
@@ -42,10 +54,51 @@ export const RetroMemory = {
   NES_APU_REGS:       0x104,
   NES_CPU_REGS:       0x105,
   NES_PPU_REGS:       0x106,
+  NES_CART_RAM:       0x107,
+  /* The PPU's LATCHED scroll, decoded by the core: [scrollX, scrollY,
+   * ntSelect, pad]. PPUSCROLL ($2005) is WRITE-ONLY, so this is the only
+   * generic way to recover a scroll position -- the alternative is per-
+   * cartridge RAM reverse engineering, which is ALSO read a frame late. */
+  NES_PPU_SCROLL:     0x108,
+  /* 240 x [x, y, ntSelect, pad] -- scroll as each scanline rendered. */
+  NES_PPU_SCROLL_LINES: 0x109,
+  /* 240 x 4KB background pattern data, one per scanline (MMC2/MMC4). */
+  NES_CHR_LINES:      0x10A,
+  /* 240 x 34 x 2: background pattern bytes captured AT FETCH TIME. */
+  NES_BGFETCH:        0x10B,
+  /* 240 x 8 x [patLo, patHi, x, attr] evaluated sprites per scanline. */
+  NES_SPRLINES:       0x10C,
+  /* 4 bytes: logical nametable -> physical CIRAM page (live mirroring). */
+  NES_NTMAP:          0x10D,
+  /* 240 x 32: palette as each scanline rendered. */
+  NES_PALLINES:       0x10E,
+  /* 240 bytes: PPUMASK as each scanline rendered. */
+  NES_MASKLINES:      0x10F,
+  /* 240 x 4: logical->physical nametable map per scanline. */
+  NES_NTMAPLINES:     0x110,
+  /* 240 x 256: resolved background palette index per pixel. */
+  NES_BGPIX:          0x111,
+  NES_BACKDROP:       0x112,
+  NES_SPRDRAWN:       0x113,
+  NES_BGVAL:          0x114,
+  NES_MASKPIX:        0x115,
+  NES_LINEPIX:        0x116,
+  NES_LINEDEEMP:      0x117,
+  NES_PALRGB:         0x118,
+  /* 0x110-0x113 are BAKED INTO THE COMPILED snes9x CORE
+   * (ROMDEV_MEMORY_SNES_* in scripts/patches/snes9x-romdev-memory-regions.patch),
+   * so these cannot move without rebuilding the core wasm. The NES redraw
+   * planes that used to overlap here were moved instead -- see NES_NTMAPLINES. */
   SNES_OAM:           0x110,
   SNES_CGRAM:         0x111,
   SNES_ARAM:          0x112,
   SNES_FILLRAM:       0x113,
+  SNES_LINEPIX:       0x1B0,
+  SNES_LINESTATE:     0x1B1,
+  SNES_FRAMEINFO:     0x1B2,
+  SNES_M7LINES:       0x1B3,
+  SNES_LINEDEPTH:     0x1B4,
+  SNES_CLIPLINES:     0x1B5,
   GENESIS_CRAM:       0x120,
   GENESIS_VSRAM:      0x121,
   GENESIS_VDP_REGS:   0x122,
@@ -53,6 +106,12 @@ export const RetroMemory = {
   GENESIS_M68K:       0x124,
   GENESIS_YM2612:     0x125,
   GENESIS_PSG:        0x126,
+  MD_LINEPIX:         0x127,
+  MD_BGPIX:           0x128,
+  MD_OBJPIX:          0x129,
+  MD_PIXRGB:          0x12A,
+  MD_LINESTATE:       0x12B,
+  MD_PIXLINES:        0x12C,
   SMS_VRAM:           0x130,
   SMS_CRAM:           0x131,
   SMS_VDP_REGS:       0x132,
@@ -66,6 +125,13 @@ export const RetroMemory = {
   GB_BGPDATA:         0x144,
   GB_OBJPDATA:        0x145,
   GB_CPU_REGS:        0x146,
+  /* GB/GBC per-pixel redraw capture planes (universal redraw bezel). */
+  GB_LINEREGS:        0x147,
+  GB_BGPIX:           0x148,
+  GB_SPRPIX:          0x149,
+  GB_PALLINE:         0x14A,
+  GB_BGCOL15:         0x14B,
+  GB_SPRCOL15:        0x14C,
   A78_CPU_REGS:       0x150,
   A26_TIA_REGS:       0x160,
   A26_CPU_REGS:       0x161,
@@ -96,6 +162,26 @@ export const RetroMemory = {
   PCE_VCE_PALETTE:    0x1A3,
   PCE_CPU_REGS:       0x1A4,
   PCE_PSG_REGS:       0x1A5,
+  // Per-scanline LATCHED VDC state (263 x 16 B): bxr, effective byr, cr, mwr,
+  // hdw, raster, valid, burst. PCE games raster-split constantly; the
+  // end-of-frame PCE_VDC_REGS snapshot gives every line the last scroll the
+  // game wrote, which is why parallax reconstructions scored 31%.
+  PCE_REGLINES:       0x1A6,
+  /* Per-scanline VCE palette: 263 x 512 x u16. The colour table is written by
+   * the CPU at any time and resolved live per pixel, so the frame-end
+   * pce_vce_palette misses mid-frame recolours. */
+  PCE_PALLINES:       0x1A7,
+  /* The VDC's resolved line buffer per scanline: 263 x 1024 x u16. Needed
+   * because VRAM is DMA'd during display, so a frame-end VRAM read cannot
+   * reproduce mid-frame pattern animation. */
+  PCE_LINEPIX:        0x1A8,
+  /* Per-scanline framebuffer x of the VDC picture's first pixel; 0xFFFF when
+   * the VDC emitted no picture on that line. */
+  PCE_XOFFLINES:      0x1A9,
+  /* Companion to XOFFLINES: the line-buffer index the row's first copied
+   * pixel came from (non-zero when the picture is clipped on the left). */
+  PCE_SRCLINES:       0x1AA,
+  PCE_PALDELTAS:      0x1AB,
   // MSX / MSX2 (blueMSX): V9938 VDP VRAM (up to 192KB) + 64-entry register file
   // + status registers; 16-entry 9-bit-GRB palette; Z80/R800 CPU snapshot.
   MSX_VRAM:           0x1C0,
@@ -104,6 +190,18 @@ export const RetroMemory = {
   MSX_PALETTE:        0x1C3,
   MSX_CPU_REGS:       0x1C4,
   MSX_PSG_REGS:       0x1C5,
+  // Per-scanline VDP state: 256 records of {regs[64], palette[16], status2,
+  // valid, line, firstLine, activeLines, displayOffest}. A once-per-frame
+  // register snapshot cannot describe a raster-split frame (a status bar in a
+  // different SCREEN mode, a mid-screen palette swap); this records what each
+  // line actually rendered with.
+  MSX_VDP_REGLINES:   0x1C6,
+  // Per-frame VRAM delta log: {count u16, truncated u8, pad} + 8192 x
+  // {line u16, oldv u8, newv u8, addr u32}. Replay turns the end-of-frame VRAM
+  // snapshot into per-scanline state -- required for games that rewrite VRAM
+  // mid-frame with constant registers.
+  MSX_VRAM_DELTAS:    0x1C7,
+  MSX_FB_TAIL:        0x1C8,
 };
 
 /** @type {Record<MemoryRegion, number>} */
@@ -119,10 +217,34 @@ export const MemoryRegionToRetro = {
   nes_apu_regs: RetroMemory.NES_APU_REGS,
   nes_cpu_regs: RetroMemory.NES_CPU_REGS,
   nes_ppu_regs: RetroMemory.NES_PPU_REGS,
+  nes_cart_ram: RetroMemory.NES_CART_RAM,
+  nes_ppu_scroll: RetroMemory.NES_PPU_SCROLL,
+  nes_ppu_scroll_lines: RetroMemory.NES_PPU_SCROLL_LINES,
+  nes_chr_lines: RetroMemory.NES_CHR_LINES,
+  nes_bgfetch: RetroMemory.NES_BGFETCH,
+  nes_sprlines: RetroMemory.NES_SPRLINES,
+  nes_ntmap: RetroMemory.NES_NTMAP,
+  nes_pallines: RetroMemory.NES_PALLINES,
+  nes_masklines: RetroMemory.NES_MASKLINES,
+  nes_ntmaplines: RetroMemory.NES_NTMAPLINES,
+  nes_bgpix: RetroMemory.NES_BGPIX,
+  nes_backdrop: RetroMemory.NES_BACKDROP,
+  nes_sprdrawn: RetroMemory.NES_SPRDRAWN,
+  nes_bgval: RetroMemory.NES_BGVAL,
+  nes_maskpix: RetroMemory.NES_MASKPIX,
+  nes_linepix: RetroMemory.NES_LINEPIX,
+  nes_linedeemp: RetroMemory.NES_LINEDEEMP,
+  nes_palrgb: RetroMemory.NES_PALRGB,
   snes_oam: RetroMemory.SNES_OAM,
   snes_cgram: RetroMemory.SNES_CGRAM,
   snes_aram: RetroMemory.SNES_ARAM,
   snes_fillram: RetroMemory.SNES_FILLRAM,
+  snes_linepix: RetroMemory.SNES_LINEPIX,
+  snes_linestate: RetroMemory.SNES_LINESTATE,
+  snes_frameinfo: RetroMemory.SNES_FRAMEINFO,
+  snes_m7lines: RetroMemory.SNES_M7LINES,
+  snes_linedepth: RetroMemory.SNES_LINEDEPTH,
+  snes_cliplines: RetroMemory.SNES_CLIPLINES,
   genesis_cram: RetroMemory.GENESIS_CRAM,
   genesis_vsram: RetroMemory.GENESIS_VSRAM,
   genesis_vdp_regs: RetroMemory.GENESIS_VDP_REGS,
@@ -130,6 +252,26 @@ export const MemoryRegionToRetro = {
   genesis_m68k: RetroMemory.GENESIS_M68K,
   genesis_ym2612: RetroMemory.GENESIS_YM2612,
   genesis_psg: RetroMemory.GENESIS_PSG,
+  /* gpgx resolved-layer capture (shared line renderer, so the same core
+   * regions serve genesis/sms/gg; per-platform aliases below). */
+  md_linepix: RetroMemory.MD_LINEPIX,
+  md_bgpix: RetroMemory.MD_BGPIX,
+  md_objpix: RetroMemory.MD_OBJPIX,
+  md_pixrgb: RetroMemory.MD_PIXRGB,
+  md_linestate: RetroMemory.MD_LINESTATE,
+  md_pixlines: RetroMemory.MD_PIXLINES,
+  sms_linepix: RetroMemory.MD_LINEPIX,
+  sms_bgpix: RetroMemory.MD_BGPIX,
+  sms_objpix: RetroMemory.MD_OBJPIX,
+  sms_pixrgb: RetroMemory.MD_PIXRGB,
+  sms_linestate: RetroMemory.MD_LINESTATE,
+  sms_pixlines: RetroMemory.MD_PIXLINES,
+  gg_linepix: RetroMemory.MD_LINEPIX,
+  gg_bgpix: RetroMemory.MD_BGPIX,
+  gg_objpix: RetroMemory.MD_OBJPIX,
+  gg_pixrgb: RetroMemory.MD_PIXRGB,
+  gg_linestate: RetroMemory.MD_LINESTATE,
+  gg_pixlines: RetroMemory.MD_PIXLINES,
   sms_vram: RetroMemory.SMS_VRAM,
   sms_cram: RetroMemory.SMS_CRAM,
   sms_vdp_regs: RetroMemory.SMS_VDP_REGS,
@@ -143,6 +285,12 @@ export const MemoryRegionToRetro = {
   gb_bgpdata: RetroMemory.GB_BGPDATA,
   gb_objpdata: RetroMemory.GB_OBJPDATA,
   gb_cpu_regs: RetroMemory.GB_CPU_REGS,
+  gb_lineregs: RetroMemory.GB_LINEREGS,
+  gb_bgpix: RetroMemory.GB_BGPIX,
+  gb_sprpix: RetroMemory.GB_SPRPIX,
+  gb_palline: RetroMemory.GB_PALLINE,
+  gb_bgcol15: RetroMemory.GB_BGCOL15,
+  gb_sprcol15: RetroMemory.GB_SPRCOL15,
   a78_cpu_regs: RetroMemory.A78_CPU_REGS,
   a26_tia_regs: RetroMemory.A26_TIA_REGS,
   a26_cpu_regs: RetroMemory.A26_CPU_REGS,
@@ -165,12 +313,21 @@ export const MemoryRegionToRetro = {
   pce_vce_palette: RetroMemory.PCE_VCE_PALETTE,
   pce_cpu_regs:    RetroMemory.PCE_CPU_REGS,
   pce_psg_regs:    RetroMemory.PCE_PSG_REGS,
+  pce_vdc_reglines: RetroMemory.PCE_REGLINES,
+  pce_vce_pallines: RetroMemory.PCE_PALLINES,
+  pce_vdc_linepix:  RetroMemory.PCE_LINEPIX,
+  pce_vce_xofflines: RetroMemory.PCE_XOFFLINES,
+  pce_vce_srclines:  RetroMemory.PCE_SRCLINES,
+  pce_paldeltas:     RetroMemory.PCE_PALDELTAS,
   msx_vram:        RetroMemory.MSX_VRAM,
   msx_vdp_regs:    RetroMemory.MSX_VDP_REGS,
   msx_vdp_status:  RetroMemory.MSX_VDP_STATUS,
   msx_palette:     RetroMemory.MSX_PALETTE,
   msx_cpu_regs:    RetroMemory.MSX_CPU_REGS,
   msx_psg_regs:    RetroMemory.MSX_PSG_REGS,
+  msx_vdp_reglines: RetroMemory.MSX_VDP_REGLINES,
+  msx_vram_deltas:  RetroMemory.MSX_VRAM_DELTAS,
+  msx_fb_tail:      RetroMemory.MSX_FB_TAIL,
 };
 
 /**

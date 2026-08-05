@@ -1,8 +1,8 @@
 diff --git a/libgambatte/include/gambatte.h b/libgambatte/include/gambatte.h
-index 7e5c43b..4530bc7 100644
+index 7e5c43b..18dcb52 100644
 --- a/libgambatte/include/gambatte.h
 +++ b/libgambatte/include/gambatte.h
-@@ -147,6 +147,16 @@ public:
+@@ -147,6 +147,18 @@ public:
     void *rombank1_ptr() const;
     void *zeropage_ptr() const;
     void *oamram_ptr() const;
@@ -12,6 +12,8 @@ index 7e5c43b..4530bc7 100644
 +   void *objpdata_ptr() const;
 +   void  cpu_snapshot(unsigned char *out) const;
 +   bool  isCgbMode() const;
++   /* romdev GB redraw: publish the active palette into the capture plane. */
++   void  romdev_publishPalettes();
 +   /* rom-dev-mcp RE round 2: SM83 register read/write by romdev reg-id
 +    * (0=A 1=F 2=B 3=C 4=D 5=E 6=H 7=L 16=PC 18=SP). */
 +   int      romdev_setReg(int regId, unsigned value);
@@ -20,10 +22,10 @@ index 7e5c43b..4530bc7 100644
  
  private:
 diff --git a/libgambatte/libretro/libretro.cpp b/libgambatte/libretro/libretro.cpp
-index 15b042c..4947f08 100644
+index 15b042c..7d21ba0 100644
 --- a/libgambatte/libretro/libretro.cpp
 +++ b/libgambatte/libretro/libretro.cpp
-@@ -2874,6 +2874,40 @@ void retro_unload_game()
+@@ -2874,6 +2874,56 @@ void retro_unload_game()
  
  unsigned retro_get_region() { return RETRO_REGION_NTSC; }
  
@@ -61,10 +63,26 @@ index 15b042c..4947f08 100644
 +
 +static unsigned char romdev_gb_cpu_buf[18];
 +
++/* romdev: the GB redraw capture planes. Defined in exactly one TU here.
++ * The header wraps its own declarations in extern "C", so this include must
++ * stay at file scope — nesting it in another extern "C" block gives the
++ * arrays C linkage that ppu.cpp (C++) cannot resolve. */
++#define ROMDEV_GBCAP_IMPL
++#include "romdev_gbcap.h"
++
++/* Per-pixel/per-line capture planes for the universal GB redraw bezel.
++ * Bit layouts documented in scripts/romdev-debug/romdev_gbcap.h. */
++#define ROMDEV_MEMORY_GB_LINEREGS 0x147  /* 144 x 16B per-line register file */
++#define ROMDEV_MEMORY_GB_BGPIX    0x148  /* 144 x 160 BG/window pixel inputs */
++#define ROMDEV_MEMORY_GB_SPRPIX   0x149  /* 144 x 160 sprite pixel inputs */
++#define ROMDEV_MEMORY_GB_PALLINE  0x14A  /* 144 x 128B bgr15 palettes per line */
++#define ROMDEV_MEMORY_GB_BGCOL15  0x14B  /* 144 x 160 x u16 BG bgr15 per pixel */
++#define ROMDEV_MEMORY_GB_SPRCOL15 0x14C  /* 144 x 160 x u16 OBJ bgr15 per pixel */
++
  void *retro_get_memory_data(unsigned id)
  {
     if (rom_loaded) switch (id)
-@@ -2883,11 +2917,20 @@ void *retro_get_memory_data(unsigned id)
+@@ -2883,11 +2933,26 @@ void *retro_get_memory_data(unsigned id)
        case RETRO_MEMORY_RTC:
           return gb.rtcdata_ptr();
        case RETRO_MEMORY_SYSTEM_RAM:
@@ -84,10 +102,16 @@ index 15b042c..4947f08 100644
 +      case ROMDEV_MEMORY_GB_CPU_REGS:
 +         gb.cpu_snapshot(romdev_gb_cpu_buf);
 +         return romdev_gb_cpu_buf;
++      case ROMDEV_MEMORY_GB_LINEREGS: return romdev_gb_lineregs;
++      case ROMDEV_MEMORY_GB_BGPIX:    return romdev_gb_bgpix;
++      case ROMDEV_MEMORY_GB_SPRPIX:   return romdev_gb_sprpix;
++      case ROMDEV_MEMORY_GB_PALLINE:  return romdev_gb_palline;
++      case ROMDEV_MEMORY_GB_BGCOL15:  return romdev_gb_bgcol15;
++      case ROMDEV_MEMORY_GB_SPRCOL15: return romdev_gb_sprcol15;
     }
  
     return 0;
-@@ -2902,14 +2945,21 @@ size_t retro_get_memory_size(unsigned id)
+@@ -2902,14 +2967,27 @@ size_t retro_get_memory_size(unsigned id)
        case RETRO_MEMORY_RTC:
           return gb.rtcdata_size();
        case RETRO_MEMORY_SYSTEM_RAM:
@@ -108,9 +132,37 @@ index 15b042c..4947f08 100644
 +      case ROMDEV_MEMORY_GB_BGPDATA:  return 0x40;
 +      case ROMDEV_MEMORY_GB_OBJPDATA: return 0x40;
 +      case ROMDEV_MEMORY_GB_CPU_REGS: return sizeof(romdev_gb_cpu_buf);
++      case ROMDEV_MEMORY_GB_LINEREGS: return sizeof(romdev_gb_lineregs);
++      case ROMDEV_MEMORY_GB_BGPIX:    return sizeof(romdev_gb_bgpix);
++      case ROMDEV_MEMORY_GB_SPRPIX:   return sizeof(romdev_gb_sprpix);
++      case ROMDEV_MEMORY_GB_PALLINE:  return sizeof(romdev_gb_palline);
++      case ROMDEV_MEMORY_GB_BGCOL15:  return sizeof(romdev_gb_bgcol15);
++      case ROMDEV_MEMORY_GB_SPRCOL15: return sizeof(romdev_gb_sprcol15);
     }
  
     return 0;
+@@ -2924,6 +3002,21 @@ void retro_run()
+    input_poll_cb();
+    update_input_state();
+ 
++   /* romdev: clear the capture planes at frame start so a line the core
++    * never draws reads as invalid rather than keeping last frame's data.
++    *
++    * ORDERING TRAP: the blank-frame flag is set by LCD::updateScreen, which
++    * runs inside the blit event DURING gb.runFor() below — i.e. after this
++    * clear. Clearing here is therefore correct; clearing anywhere later (or
++    * after runFor) erases the flag the same frame it was set, and a blanked
++    * frame then renders as the last live picture instead of the solid fill.
++    * College Slam and 9 others were exactly this. */
++   romdev_gbcap_frame_start();
++   /* Publish the ACTIVE palette for the frame about to render: on DMG,
++    * refreshPalettes() only fires on a palette write, so a cart that sets
++    * BGP once at boot would otherwise leave gb_palline empty forever. */
++   gb.romdev_publishPalettes();
++
+    uint64_t expected_frames = libretro_samples_count / SOUND_SAMPLES_PER_FRAME;
+    if (libretro_frames_count < expected_frames) // Detect frame dupes.
+    {
 diff --git a/libgambatte/src/cpu.cpp b/libgambatte/src/cpu.cpp
 index 0fb6199..7de286d 100644
 --- a/libgambatte/src/cpu.cpp
@@ -296,16 +348,17 @@ index 0fb6199..7de286d 100644
  
  			PC_READ(opcode);
 diff --git a/libgambatte/src/cpu.h b/libgambatte/src/cpu.h
-index 76c29de..7b52f43 100644
+index 76c29de..29d01ca 100644
 --- a/libgambatte/src/cpu.h
 +++ b/libgambatte/src/cpu.h
-@@ -56,6 +56,54 @@ public:
+@@ -56,6 +56,55 @@ public:
     void *rombank1_ptr() const { return mem_.rombank1_ptr(); }
     void *zeropage_ptr() const { return mem_.zeropage_ptr(); }
     void *oamram_ptr() const { return mem_.oamram_ptr(); }
 +   /* rom-dev-mcp: extra state accessors for inspectSprites/Palette/etc. */
 +   void *iohram_ptr() const { return mem_.iohram_ptr(); }
 +   void *bgpdata_ptr() const { return mem_.bgpdata_ptr(); }
++   void romdev_publishPalettes() { mem_.romdev_publishPalettes(); }
 +   void *objpdata_ptr() const { return mem_.objpdata_ptr(); }
 +
 +   /* rom-dev-mcp: 18-byte snapshot of the SM83 CPU state.
@@ -384,7 +437,7 @@ index c8790fc..5028a98 100644
  			unsigned const n = pendingIrqs & -pendingIrqs;
  			unsigned address;
 diff --git a/libgambatte/src/gambatte-memory.h b/libgambatte/src/gambatte-memory.h
-index d82ca85..19b71d7 100644
+index d82ca85..435e5f7 100644
 --- a/libgambatte/src/gambatte-memory.h
 +++ b/libgambatte/src/gambatte-memory.h
 @@ -39,6 +39,19 @@ public:
@@ -407,7 +460,7 @@ index d82ca85..19b71d7 100644
  	void setStatePtrs(SaveState &state);
  	unsigned long saveState(SaveState &state, unsigned long cc);
  	void loadState(SaveState const &state);
-@@ -62,6 +75,12 @@ public:
+@@ -62,6 +75,13 @@ public:
     void *rombank1_ptr() const { return cart_.romdata(0) + 0x4000; }
     void *zeropage_ptr() const { return (void*)(ioamhram_ + 0x0180); }
     void *oamram_ptr() const { return (void*)ioamhram_; }
@@ -416,15 +469,16 @@ index d82ca85..19b71d7 100644
 +   /* rom-dev-mcp: GBC palette RAM accessors (delegate to LCD).
 +    * Each table = 64 bytes (8 palettes x 4 colors x 2 bytes BGR555). */
 +   void *bgpdata_ptr() const { return lcd_.bgpdata_ptr(); }
++   void romdev_publishPalettes() { lcd_.romdev_publishPalettes(true); }
 +   void *objpdata_ptr() const { return lcd_.objpdata_ptr(); }
  #else
     void loadSavedata() { cart_.loadSavedata(); }
     void saveSavedata() { cart_.saveSavedata(); }
 diff --git a/libgambatte/src/gambatte.cpp b/libgambatte/src/gambatte.cpp
-index 5e1f952..4db71c1 100644
+index 5e1f952..1d7df17 100644
 --- a/libgambatte/src/gambatte.cpp
 +++ b/libgambatte/src/gambatte.cpp
-@@ -237,6 +237,35 @@ void *GB::zeropage_ptr() const {
+@@ -237,6 +237,39 @@ void *GB::zeropage_ptr() const {
  void *GB::oamram_ptr() const {
   return p_->cpu.oamram_ptr();
  }
@@ -450,6 +504,10 @@ index 5e1f952..4db71c1 100644
 + return p_->cpu.isCgb();
 +}
 +
++void GB::romdev_publishPalettes() {
++   p_->cpu.romdev_publishPalettes();
++}
++
 +int GB::romdev_setReg(int regId, unsigned value) {
 + return p_->cpu.romdev_setReg(regId, value);
 +}
@@ -460,11 +518,78 @@ index 5e1f952..4db71c1 100644
  #endif
  
  }
+diff --git a/libgambatte/src/video.cpp b/libgambatte/src/video.cpp
+index a997aad..89c05de 100644
+--- a/libgambatte/src/video.cpp
++++ b/libgambatte/src/video.cpp
+@@ -17,6 +17,8 @@
+  *   59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.             *
+  ***************************************************************************/
+ #include "video.h"
++/* romdev: capture planes for the universal GB redraw bezel. */
++#include "romdev_gbcap.h"
+ #include "savestate.h"
+ #include <cstring>
+ #include <algorithm>
+@@ -137,6 +139,10 @@ void LCD::loadState(const SaveState &state, const unsigned char *const oamram)
+ 
+ void LCD::refreshPalettes()
+ {
++   /* romdev: mirror the ACTIVE palette as bgr15 VALUES into the current
++    * line's slot. Values, not RGB — colour math stays in the reconstruction
++    * (Rule 1). Called on every palette write, so a mid-frame change lands on
++    * the line where it took effect. */
+    if (ppu_.cgb() && !ppu_.inDmgMode())
+    {
+       for (unsigned i = 0; i < 8 * 8; i += 2)
+@@ -156,6 +162,22 @@ void LCD::refreshPalettes()
+       setDmgPalette(ppu_.spPalette()    , dmgColorsRgb32_ + 4, objpData_[0]);
+       setDmgPalette(ppu_.spPalette() + 4, dmgColorsRgb32_ + 8, objpData_[1]);
+    }
++
++   /* romdev: publish the RESOLVED palette (post gbcToRgb32, post DMG remap)
++    * for the line this write lands on and every line after it.
++    *
++    * Capturing the resolved table rather than raw CRAM is deliberate and is
++    * the same call the DMG side already forces: gambatte's colour transform
++    * is a runtime OPTION (correction on/off, fast/gold-standard, dark
++    * filter), and the gold-standard path is float std::pow that a Lua
++    * reconstruction cannot reproduce bit-exactly. The emulator owns the
++    * palette — the NES `palo` lesson — so the bezel must read the active
++    * table, not re-derive it.
++    *
++    * Rule 1 still holds: these are palette VALUES, not composited pixels.
++    * Which entry each pixel uses, and whether a sprite or the BG wins, is
++    * still reconstructed from gb_bgpix / gb_sprpix. */
++   romdev_publishPalettes(false);
+ }
+ 
+ void LCD::resetCc(const unsigned long oldCc, const unsigned long newCc)
 diff --git a/libgambatte/src/video.h b/libgambatte/src/video.h
-index 7516ba1..154f649 100644
+index 7516ba1..94ccb70 100644
 --- a/libgambatte/src/video.h
 +++ b/libgambatte/src/video.h
-@@ -158,6 +158,11 @@ class LCD
+@@ -80,6 +80,11 @@ class LCD
+             doCgbBgColorChange(index, data, cycleCounter);
+             if(index < 8)
+                doCgbColorChange(dmgColorsGBC_, dmgColorsRgb32_, index, data);
++            /* romdev: a CRAM write updates ONE entry in place and never calls
++             * refreshPalettes(), so without this the capture misses every
++             * mid-frame palette change — including HDMA-driven ones, which
++             * some CGB games use for the whole picture. */
++            romdev_publishPalettes(false);
+          }
+       }
+ 
+@@ -88,6 +93,7 @@ class LCD
+             doCgbSpColorChange(index, data, cycleCounter);
+             if(index < 8 * 2/*dmg has 2 sprite banks*/)
+                doCgbColorChange(dmgColorsGBC_ + 8, dmgColorsRgb32_ + 4, index, data);
++            romdev_publishPalettes(false);
+          }
+       }
+ 
+@@ -158,6 +164,13 @@ class LCD
        void setColorCorrectionBrightness(float colorCorrectionBrightness);
        void setDarkFilterLevel(unsigned darkFilterLevel);
        video_pixel_t gbcToRgb32(const unsigned bgr15);
@@ -472,7 +597,372 @@ index 7516ba1..154f649 100644
 +      /* rom-dev-mcp: expose raw 64-byte GBC palette RAM tables. */
 +      void *bgpdata_ptr() const { return (void*)bgpData_; }
 +      void *objpdata_ptr() const { return (void*)objpData_; }
++      /* romdev GB redraw: publish the active palette as bgr15 at frame start. */
++      void romdev_publishPalettes(bool wholeFrame = false);
 +#endif
     private:
        enum Event { MEM_EVENT, LY_COUNT }; enum { NUM_EVENTS = LY_COUNT + 1 };
        enum MemEvent { ONESHOT_LCDSTATIRQ, ONESHOT_UPDATEWY2, MODE1_IRQ, LYC_IRQ, SPRITE_MAP,
+diff --git a/libgambatte/src/video/ppu.cpp b/libgambatte/src/video/ppu.cpp
+index 5d36a9d..e16cd95 100644
+--- a/libgambatte/src/video/ppu.cpp
++++ b/libgambatte/src/video/ppu.cpp
+@@ -18,10 +18,56 @@
+ 
+ #include "ppu.h"
+ #include "savestate.h"
++/* romdev: per-pixel capture planes for the universal GB redraw bezel.
++ * Captures timing-resolved INPUTS at each emit site (entry, palette, layer),
++ * never composited results — see romdev_gbcap.h. */
++#include "romdev_gbcap.h"
+ #include <algorithm>
+ #include <cstring>
+ #include <cstddef>
+ 
++/* romdev capture helpers.
++ *
++ * IDX() turns a write cursor into a plane index: the cursor IS the truth,
++ * never recomputed from tile arithmetic (NES lesson). `line` is the LY the
++ * core is drawing; out-of-range indices are dropped rather than clamped so a
++ * bug shows up as missing data instead of corrupted neighbours. */
++#define ROMDEV_CAP_LINE(p) (unsigned)((p).lyCounter.ly())
++#define ROMDEV_CAP_IDX(line, off) ((line) * ROMDEV_GB_W + (unsigned)(off))
++#define ROMDEV_CAP_OK(line, off) \
++	((line) < ROMDEV_GB_H && (long)(off) >= 0 && (long)(off) < ROMDEV_GB_W)
++
++/* BG/window pixel: entry, CGB palette, layer, CGB attr priority, valid. */
++#define ROMDEV_CAP_BG(p, fbline, dstp, entry, pal, win, prio) do { \
++	unsigned const rc_line = ROMDEV_CAP_LINE(p); \
++	long const rc_off = (long)((dstp) - (fbline)); \
++	if (ROMDEV_CAP_OK(rc_line, rc_off)) { \
++		unsigned const rc_i = ROMDEV_CAP_IDX(rc_line, rc_off); \
++		romdev_gb_bgpix[rc_i] = (unsigned char)(0x80u | ((entry) & 3u) \
++			| (((pal) & 7u) << 2) | ((win) ? 0x20u : 0u) | ((prio) ? 0x40u : 0u)); \
++		/* The palette VALUE in force at THIS dot. Per-line capture rounds a \
++		 * mid-line palette write to the wrong pixels; this does not. Still a \
++		 * value, not a composited pixel. */ \
++		romdev_gb_bgcol15[rc_i] = (unsigned short)((p).bgPalette[ \
++			((p).cgb ? ((pal) & 7u) * 4u : 0u) + ((entry) & 3u)]); \
++	} \
++} while (0)
++
++/* Sprite pixel: entry, palette, bgpriority attr, valid. Written at the same
++ * instant the core commits the pixel, so CGB's lowest-OAM-wins guard
++ * (idtab / minId) selects the capture winner too. */
++#define ROMDEV_CAP_SPR(p, fbline, dstp, entry, pal, prio) do { \
++	unsigned const rc_line = ROMDEV_CAP_LINE(p); \
++	long const rc_off = (long)((dstp) - (fbline)); \
++	if (ROMDEV_CAP_OK(rc_line, rc_off)) { \
++		unsigned const rc_i = ROMDEV_CAP_IDX(rc_line, rc_off); \
++		romdev_gb_sprpix[rc_i] = (unsigned char)(0x80u | ((entry) & 3u) \
++			| (((pal) & 7u) << 2) | ((prio) ? 0x20u : 0u)); \
++		romdev_gb_sprcol15[rc_i] = (unsigned short)((p).spPalette[ \
++			((pal) & 7u) * 4u + ((entry) & 3u)]); \
++	} \
++} while (0)
++
+ namespace {
+ 
+ using namespace gambatte;
+@@ -326,13 +372,24 @@ static void doFullTilesUnrolledDmg(PPUPriv &p, int const xend, video_pixel_t *co
+ 			xpos += n;
+ 
+ 			if (!lcdcBgEn(p)) {
+-				do { *dst++ = p.bgPalette[0]; } while (dst != dstend);
++				do {
++					ROMDEV_CAP_BG(p, dbufline, dst, 0, 0, 0, 0);
++					*dst++ = p.bgPalette[0];
++				} while (dst != dstend);
+ 				tileMapXpos += n >> 3;
+ 
+ 				unsigned const tno = tileMapLine[(tileMapXpos - 1) & 0x1F];
+ 				ntileword = expand_lut[(tileDataLine + tno * 16 - (tno & tileIndexSign) * 32)[0]]
+ 				          + expand_lut[(tileDataLine + tno * 16 - (tno & tileIndexSign) * 32)[1]] * 2;
+ 			} else do {
++				ROMDEV_CAP_BG(p, dbufline, dst + 0,  ntileword & 0x0003,       0, 0, 0);
++				ROMDEV_CAP_BG(p, dbufline, dst + 1, (ntileword & 0x000C) >> 2,  0, 0, 0);
++				ROMDEV_CAP_BG(p, dbufline, dst + 2, (ntileword & 0x0030) >> 4,  0, 0, 0);
++				ROMDEV_CAP_BG(p, dbufline, dst + 3, (ntileword & 0x00C0) >> 6,  0, 0, 0);
++				ROMDEV_CAP_BG(p, dbufline, dst + 4, (ntileword & 0x0300) >> 8,  0, 0, 0);
++				ROMDEV_CAP_BG(p, dbufline, dst + 5, (ntileword & 0x0C00) >> 10, 0, 0, 0);
++				ROMDEV_CAP_BG(p, dbufline, dst + 6, (ntileword & 0x3000) >> 12, 0, 0, 0);
++				ROMDEV_CAP_BG(p, dbufline, dst + 7,  ntileword           >> 14, 0, 0, 0);
+ 				dst[0] = p.bgPalette[ ntileword & 0x0003       ];
+ 				dst[1] = p.bgPalette[(ntileword & 0x000C) >>  2];
+ 				dst[2] = p.bgPalette[(ntileword & 0x0030) >>  4];
+@@ -363,6 +420,14 @@ static void doFullTilesUnrolledDmg(PPUPriv &p, int const xend, video_pixel_t *co
+ 			video_pixel_t *const dst = dbufline + (xpos - 8);
+ 			unsigned const tileword = -(p.lcdc & 1U) & p.ntileword;
+ 
++			ROMDEV_CAP_BG(p, dbufline, dst + 0,  tileword & 0x0003,       0, 0, 0);
++			ROMDEV_CAP_BG(p, dbufline, dst + 1, (tileword & 0x000C) >> 2,  0, 0, 0);
++			ROMDEV_CAP_BG(p, dbufline, dst + 2, (tileword & 0x0030) >> 4,  0, 0, 0);
++			ROMDEV_CAP_BG(p, dbufline, dst + 3, (tileword & 0x00C0) >> 6,  0, 0, 0);
++			ROMDEV_CAP_BG(p, dbufline, dst + 4, (tileword & 0x0300) >> 8,  0, 0, 0);
++			ROMDEV_CAP_BG(p, dbufline, dst + 5, (tileword & 0x0C00) >> 10, 0, 0, 0);
++			ROMDEV_CAP_BG(p, dbufline, dst + 6, (tileword & 0x3000) >> 12, 0, 0, 0);
++			ROMDEV_CAP_BG(p, dbufline, dst + 7,  tileword           >> 14, 0, 0, 0);
+ 			dst[0] = p.bgPalette[ tileword & 0x0003       ];
+ 			dst[1] = p.bgPalette[(tileword & 0x000C) >>  2];
+ 			dst[2] = p.bgPalette[(tileword & 0x0030) >>  4];
+@@ -397,14 +462,14 @@ static void doFullTilesUnrolledDmg(PPUPriv &p, int const xend, video_pixel_t *co
+ 
+ 					if (!(attrib & attr_bgpriority)) {
+ 						switch (n) {
+-						case 8: if (spword >> 14    ) { d[7] = spPalette[spword >> 14    ]; }
+-						case 7: if (spword >> 12 & 3) { d[6] = spPalette[spword >> 12 & 3]; }
+-						case 6: if (spword >> 10 & 3) { d[5] = spPalette[spword >> 10 & 3]; }
+-						case 5: if (spword >>  8 & 3) { d[4] = spPalette[spword >>  8 & 3]; }
+-						case 4: if (spword >>  6 & 3) { d[3] = spPalette[spword >>  6 & 3]; }
+-						case 3: if (spword >>  4 & 3) { d[2] = spPalette[spword >>  4 & 3]; }
+-						case 2: if (spword >>  2 & 3) { d[1] = spPalette[spword >>  2 & 3]; }
+-						case 1: if (spword       & 3) { d[0] = spPalette[spword       & 3]; }
++						case 8: if (spword >> 14    ) { ROMDEV_CAP_SPR(p, dbufline, d + 7, spword >> 14,     attrib >> 4 & 1, attrib & attr_bgpriority); d[7] = spPalette[spword >> 14    ]; }
++						case 7: if (spword >> 12 & 3) { ROMDEV_CAP_SPR(p, dbufline, d + 6, spword >> 12 & 3, attrib >> 4 & 1, attrib & attr_bgpriority); d[6] = spPalette[spword >> 12 & 3]; }
++						case 6: if (spword >> 10 & 3) { ROMDEV_CAP_SPR(p, dbufline, d + 5, spword >> 10 & 3, attrib >> 4 & 1, attrib & attr_bgpriority); d[5] = spPalette[spword >> 10 & 3]; }
++						case 5: if (spword >>  8 & 3) { ROMDEV_CAP_SPR(p, dbufline, d + 4, spword >>  8 & 3, attrib >> 4 & 1, attrib & attr_bgpriority); d[4] = spPalette[spword >>  8 & 3]; }
++						case 4: if (spword >>  6 & 3) { ROMDEV_CAP_SPR(p, dbufline, d + 3, spword >>  6 & 3, attrib >> 4 & 1, attrib & attr_bgpriority); d[3] = spPalette[spword >>  6 & 3]; }
++						case 3: if (spword >>  4 & 3) { ROMDEV_CAP_SPR(p, dbufline, d + 2, spword >>  4 & 3, attrib >> 4 & 1, attrib & attr_bgpriority); d[2] = spPalette[spword >>  4 & 3]; }
++						case 2: if (spword >>  2 & 3) { ROMDEV_CAP_SPR(p, dbufline, d + 1, spword >>  2 & 3, attrib >> 4 & 1, attrib & attr_bgpriority); d[1] = spPalette[spword >>  2 & 3]; }
++						case 1: if (spword       & 3) { ROMDEV_CAP_SPR(p, dbufline, d + 0, spword       & 3, attrib >> 4 & 1, attrib & attr_bgpriority); d[0] = spPalette[spword       & 3]; }
+ 						}
+ 
+ 						spword >>= n * 2;
+@@ -425,6 +490,10 @@ static void doFullTilesUnrolledDmg(PPUPriv &p, int const xend, video_pixel_t *co
+                   {
+ 							if (spword & 3)
+                      {
++								/* romdev: the sprite pixel EXISTS here; whether it
++								 * shows is composition (BG entry 0 wins), which the
++								 * reconstruction decides. Capture the input either way. */
++								ROMDEV_CAP_SPR(p, dbufline, d + n, spword & 3, attrib >> 4 & 1, 1);
+ 								d[n] = (tw & 3)
+ 								     ? p.bgPalette[    tw & 3]
+ 								     :   spPalette[spword & 3];
+@@ -510,6 +579,14 @@ static void doFullTilesUnrolledCgb(PPUPriv &p, int const xend, video_pixel_t *co
+ 
+ 			do {
+ 				video_pixel_t const *const bgPalette = p.bgPalette + (nattrib & 7) * 4;
++				ROMDEV_CAP_BG(p, dbufline, dst + 0,  ntileword & 0x0003,       nattrib & 7, 0, nattrib & attr_bgpriority);
++				ROMDEV_CAP_BG(p, dbufline, dst + 1, (ntileword & 0x000C) >> 2,  nattrib & 7, 0, nattrib & attr_bgpriority);
++				ROMDEV_CAP_BG(p, dbufline, dst + 2, (ntileword & 0x0030) >> 4,  nattrib & 7, 0, nattrib & attr_bgpriority);
++				ROMDEV_CAP_BG(p, dbufline, dst + 3, (ntileword & 0x00C0) >> 6,  nattrib & 7, 0, nattrib & attr_bgpriority);
++				ROMDEV_CAP_BG(p, dbufline, dst + 4, (ntileword & 0x0300) >> 8,  nattrib & 7, 0, nattrib & attr_bgpriority);
++				ROMDEV_CAP_BG(p, dbufline, dst + 5, (ntileword & 0x0C00) >> 10, nattrib & 7, 0, nattrib & attr_bgpriority);
++				ROMDEV_CAP_BG(p, dbufline, dst + 6, (ntileword & 0x3000) >> 12, nattrib & 7, 0, nattrib & attr_bgpriority);
++				ROMDEV_CAP_BG(p, dbufline, dst + 7,  ntileword           >> 14, nattrib & 7, 0, nattrib & attr_bgpriority);
+ 				dst[0] = bgPalette[ ntileword & 0x0003       ];
+ 				dst[1] = bgPalette[(ntileword & 0x000C) >>  2];
+ 				dst[2] = bgPalette[(ntileword & 0x0030) >>  4];
+@@ -550,6 +627,14 @@ static void doFullTilesUnrolledCgb(PPUPriv &p, int const xend, video_pixel_t *co
+ 			unsigned const attrib   = p.nattrib;
+ 			video_pixel_t const *const bgPalette = p.bgPalette + (attrib & 7) * 4;
+ 
++			ROMDEV_CAP_BG(p, dbufline, dst + 0,  tileword & 0x0003,       attrib & 7, 0, attrib & attr_bgpriority);
++			ROMDEV_CAP_BG(p, dbufline, dst + 1, (tileword & 0x000C) >> 2,  attrib & 7, 0, attrib & attr_bgpriority);
++			ROMDEV_CAP_BG(p, dbufline, dst + 2, (tileword & 0x0030) >> 4,  attrib & 7, 0, attrib & attr_bgpriority);
++			ROMDEV_CAP_BG(p, dbufline, dst + 3, (tileword & 0x00C0) >> 6,  attrib & 7, 0, attrib & attr_bgpriority);
++			ROMDEV_CAP_BG(p, dbufline, dst + 4, (tileword & 0x0300) >> 8,  attrib & 7, 0, attrib & attr_bgpriority);
++			ROMDEV_CAP_BG(p, dbufline, dst + 5, (tileword & 0x0C00) >> 10, attrib & 7, 0, attrib & attr_bgpriority);
++			ROMDEV_CAP_BG(p, dbufline, dst + 6, (tileword & 0x3000) >> 12, attrib & 7, 0, attrib & attr_bgpriority);
++			ROMDEV_CAP_BG(p, dbufline, dst + 7,  tileword           >> 14, attrib & 7, 0, attrib & attr_bgpriority);
+ 			dst[0] = bgPalette[ tileword & 0x0003       ];
+ 			dst[1] = bgPalette[(tileword & 0x000C) >>  2];
+ 			dst[2] = bgPalette[(tileword & 0x0030) >>  4];
+@@ -597,34 +682,58 @@ static void doFullTilesUnrolledCgb(PPUPriv &p, int const xend, video_pixel_t *co
+ 						switch (n) {
+ 						case 8: if ((spword >> 14    ) && id < idt[7]) {
+ 						        	idt[7] = id;
++						        	ROMDEV_CAP_SPR(p, dbufline, d + 7, spword >> 14    ,
++						        	    p.dmgMode ? (sattrib >> 4 & 1) : (sattrib & 7),
++						        	    (sattrib | attrib) & attr_bgpriority);
+ 						        	  d[7] = spPalette[spword >> 14    ];
+ 						        }
+ 						case 7: if ((spword >> 12 & 3) && id < idt[6]) {
+ 						        	idt[6] = id;
++						        	ROMDEV_CAP_SPR(p, dbufline, d + 6, spword >> 12 & 3,
++						        	    p.dmgMode ? (sattrib >> 4 & 1) : (sattrib & 7),
++						        	    (sattrib | attrib) & attr_bgpriority);
+ 						        	  d[6] = spPalette[spword >> 12 & 3];
+ 						        }
+ 						case 6: if ((spword >> 10 & 3) && id < idt[5]) {
+ 						        	idt[5] = id;
++						        	ROMDEV_CAP_SPR(p, dbufline, d + 5, spword >> 10 & 3,
++						        	    p.dmgMode ? (sattrib >> 4 & 1) : (sattrib & 7),
++						        	    (sattrib | attrib) & attr_bgpriority);
+ 						        	  d[5] = spPalette[spword >> 10 & 3];
+ 						        }
+ 						case 5: if ((spword >>  8 & 3) && id < idt[4]) {
+ 						        	idt[4] = id;
++						        	ROMDEV_CAP_SPR(p, dbufline, d + 4, spword >>  8 & 3,
++						        	    p.dmgMode ? (sattrib >> 4 & 1) : (sattrib & 7),
++						        	    (sattrib | attrib) & attr_bgpriority);
+ 						        	  d[4] = spPalette[spword >>  8 & 3];
+ 						        }
+ 						case 4: if ((spword >>  6 & 3) && id < idt[3]) {
+ 						        	idt[3] = id;
++						        	ROMDEV_CAP_SPR(p, dbufline, d + 3, spword >>  6 & 3,
++						        	    p.dmgMode ? (sattrib >> 4 & 1) : (sattrib & 7),
++						        	    (sattrib | attrib) & attr_bgpriority);
+ 						        	  d[3] = spPalette[spword >>  6 & 3];
+ 						        }
+ 						case 3: if ((spword >>  4 & 3) && id < idt[2]) {
+ 						        	idt[2] = id;
++						        	ROMDEV_CAP_SPR(p, dbufline, d + 2, spword >>  4 & 3,
++						        	    p.dmgMode ? (sattrib >> 4 & 1) : (sattrib & 7),
++						        	    (sattrib | attrib) & attr_bgpriority);
+ 						        	  d[2] = spPalette[spword >>  4 & 3];
+ 						        }
+ 						case 2: if ((spword >>  2 & 3) && id < idt[1]) {
+ 						        	idt[1] = id;
++						        	ROMDEV_CAP_SPR(p, dbufline, d + 1, spword >>  2 & 3,
++						        	    p.dmgMode ? (sattrib >> 4 & 1) : (sattrib & 7),
++						        	    (sattrib | attrib) & attr_bgpriority);
+ 						        	  d[1] = spPalette[spword >>  2 & 3];
+ 						        }
+ 						case 1: if ((spword       & 3) && id < idt[0]) {
+ 						        	idt[0] = id;
++						        	ROMDEV_CAP_SPR(p, dbufline, d + 0, spword       & 3,
++						        	    p.dmgMode ? (sattrib >> 4 & 1) : (sattrib & 7),
++						        	    (sattrib | attrib) & attr_bgpriority);
+ 						        	  d[0] = spPalette[spword       & 3];
+ 						        }
+ 						}
+@@ -646,6 +755,10 @@ static void doFullTilesUnrolledCgb(PPUPriv &p, int const xend, video_pixel_t *co
+ 						do {
+ 							if ((spword & 3) && id < idtab[pos]) {
+ 								idtab[pos] = id;
++								/* romdev: the sprite pixel exists; BG-vs-sprite is
++								 * composition, decided by the reconstruction. */
++								ROMDEV_CAP_SPR(p, dbufline, dst + pos, spword & 3,
++								    p.dmgMode ? (sattrib >> 4 & 1) : (sattrib & 7), 1);
+ 								  dst[pos] = (tw & 3)
+ 								           ? bgPalette[    tw & 3]
+ 								           : spPalette[spword & 3];
+@@ -756,6 +869,10 @@ static void plotPixel(PPUPriv &p) {
+ 	unsigned const twdata = tileword & ((p.lcdc & 1) | p.cgb) * 3;
+ 	video_pixel_t pixel = p.bgPalette[twdata + (p.attrib & 7) * 4];
+ 	int i = static_cast<int>(p.nextSprite) - 1;
++	/* romdev: the sprite the core selected for THIS dot (0 = none). Set in
++	 * the branches below, consumed by the capture at the write. */
++	unsigned romdev_cap_spdata  = 0;
++	unsigned romdev_cap_sattrib = 0;
+ 
+ 	if (i >= 0 && int(p.spriteList[i].spx) > xpos - 8) {
+ 		unsigned spdata = 0;
+@@ -777,6 +894,8 @@ static void plotPixel(PPUPriv &p) {
+ 
+ 			if (spdata && lcdcObjEn(p)
+ 					&& (!((attrib | p.attrib) & attr_bgpriority) || !twdata || !lcdcBgEn(p))) {
++				romdev_cap_spdata  = spdata;
++				romdev_cap_sattrib = attrib;
+             if(p.dmgMode)//support gb games in gbc mode
+                pixel = p.spPalette[(attrib >> 2 & 4) + spdata];
+ 				else
+@@ -793,13 +912,28 @@ static void plotPixel(PPUPriv &p) {
+ 				--i;
+ 			} while (i >= 0 && int(p.spriteList[i].spx) > xpos - 8);
+ 
+-			if (spdata && lcdcObjEn(p) && (!(attrib & attr_bgpriority) || !twdata))
++			if (spdata && lcdcObjEn(p) && (!(attrib & attr_bgpriority) || !twdata)) {
++				romdev_cap_spdata  = spdata;
++				romdev_cap_sattrib = attrib;
+ 				pixel = p.spPalette[(attrib >> 2 & 4) + spdata];
++			}
+ 		}
+ 	}
+ 
+-	if (xpos - 8 >= 0)
++	if (xpos - 8 >= 0) {
++		/* romdev: single capture point for ALL cycle-stepped states.
++		 * twdata/attrib/spdata_cap are the resolved inputs at this dot. */
++		ROMDEV_CAP_BG(p, fbline, fbline + (xpos - 8), twdata,
++		    p.cgb ? (p.attrib & 7) : 0, p.winDrawState & win_draw_started,
++		    p.attrib & attr_bgpriority);
++		if (romdev_cap_spdata) {
++			ROMDEV_CAP_SPR(p, fbline, fbline + (xpos - 8), romdev_cap_spdata,
++			    (p.cgb && !p.dmgMode) ? (romdev_cap_sattrib & 7)
++			                          : (romdev_cap_sattrib >> 4 & 1),
++			    romdev_cap_sattrib & attr_bgpriority);
++		}
+ 		fbline[xpos - 8] = pixel;
++	}
+ 
+ 	p.xpos = xpos + 1;
+ 	p.tileword = tileword >> 2;
+@@ -1748,6 +1882,28 @@ void PPU::update(unsigned long const cc) {
+ 
+ 	if (p_.cycles >= 0) {
+ 		p_.framebuf.setFbline(p_.lyCounter.ly());
++		/* romdev: sample the per-line register file once per line, at the
++		 * first update that touches it. The `written` flag in byte 15 makes
++		 * this idempotent — update() runs many times per line (every register
++		 * write forces one), and the LINE START values are what the
++		 * reconstruction needs. */
++		{
++			unsigned const rl = (unsigned)p_.lyCounter.ly();
++			if (rl < ROMDEV_GB_H) {
++				unsigned char *const lr =
++					romdev_gb_lineregs + rl * ROMDEV_GB_LINEREG_STRIDE;
++				if (!lr[15]) {
++					lr[0]  = (unsigned char)p_.lcdc;
++					lr[1]  = (unsigned char)p_.scx;
++					lr[2]  = (unsigned char)p_.scy;
++					lr[3]  = (unsigned char)p_.wx;
++					lr[4]  = (unsigned char)p_.wy;
++					lr[8]  = (unsigned char)p_.winYPos;
++					lr[9]  = (unsigned char)((p_.cgb ? 1u : 0u) | (p_.dmgMode ? 2u : 0u));
++					lr[15] = 1;
++				}
++			}
++		}
+ 		p_.nextCallPtr->f(p_);
+ 	}
+ }
+diff --git a/libgambatte/src/video_libretro.cpp b/libgambatte/src/video_libretro.cpp
+index 02c140e..5c131a2 100644
+--- a/libgambatte/src/video_libretro.cpp
++++ b/libgambatte/src/video_libretro.cpp
+@@ -17,6 +17,7 @@
+  *   59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.             *
+  ***************************************************************************/
+ #include "video.h"
++#include "romdev_gbcap.h"
+ #include "savestate.h"
+ #include <cstring>
+ #include <algorithm>
+@@ -166,6 +167,19 @@ namespace gambatte
+       refreshPalettes();
+    }
+ 
++   /* romdev: publish the ACTIVE palette for the frame about to be drawn.
++    * refreshPalettes() only runs on a palette WRITE, so a DMG cart that sets
++    * BGP once during boot would leave gb_palline empty forever. Called from
++    * the libretro frame loop. */
++   /* `fromLine 0` seeds every line (frame start); otherwise publish from the
++    * line the PPU is on so a mid-frame CRAM write only affects lines from
++    * there down. */
++   void LCD::romdev_publishPalettes(bool wholeFrame)
++   {
++      romdev_gbcap_palette_publish(ppu_.bgPalette(), ppu_.spPalette(),
++          wholeFrame ? 0u : (unsigned)ppu_.lyCounter().ly());
++   }
++
+    void LCD::updateScreen(const bool blanklcd, const unsigned long cycleCounter)
+    {
+       update(cycleCounter);
+@@ -174,6 +188,14 @@ namespace gambatte
+       {
+          const video_pixel_t color = ppu_.cgb() ? gbcToRgb32(0xFFFF) : dmgColorsRgb32_[0];
+          clear(ppu_.frameBuf().fb(), color, ppu_.frameBuf().pitch());
++         /* romdev: a blanked frame is a whole-screen solid fill, not drawn
++          * pixels. Flag it (and record the fill VALUE) so the bezel renders
++          * the fill instead of the last live frame — the NES stale-row trap. */
++         /* The ACTUAL fill the core just wrote — not a guessed constant.
++          * Hardcoding 0x7FFF/0 put BLACK on DMG blank frames where gambatte
++          * writes dmgColorsRgb32_[0] (white); 10 carts in the full-corpus
++          * sweep were solid-white frames scoring 0.000%. */
++         romdev_gbcap_set_blank((unsigned short)color);
+       }
+    }
+ 

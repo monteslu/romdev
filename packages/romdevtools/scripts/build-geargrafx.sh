@@ -29,11 +29,18 @@ if [ -n "${PATCH_REL:-}" ] && [ -f "$PATCH_FILE" ]; then
   # Reset every file the patch touches: libretro.cpp (memory regions + the
   # pcbreak/readwatch exports), src/memory.{h,_inline.h} (Read→ReadInternal +
   # read-watch hook), src/huc6280_inline.h (PC-break execute hook), and
-  # src/geargrafx_core_inline.h (per-frame budget drain on hit) — so a clean
-  # re-apply always works.
+  # src/geargrafx_core_inline.h (per-frame budget drain on hit), and
+  # src/huc6270.cpp (the per-scanline pce_vdc_reglines capture in RenderLine)
+  # src/huc6260_inline.h (the per-scanline pce_vce_pallines capture plus the
+  # pce_vce_xofflines/srclines placement capture, both at end-of-line),
+  # src/huc6260.cpp (the dot-stamped pce_paldeltas palette write log) and
+  # — so a clean re-apply always works. EVERY file the patch
+  # touches must be listed: one missing entry makes the second build in a row
+  # fail to apply, and the script then silently builds a STOCK core.
   git checkout -- platforms/libretro/libretro.cpp \
     src/memory.h src/memory_inline.h src/huc6280_inline.h \
-    src/geargrafx_core_inline.h src/huc6270_inline.h 2>/dev/null || true
+    src/geargrafx_core_inline.h src/huc6270_inline.h src/huc6270.cpp src/huc6270.h \
+    src/huc6260_inline.h src/huc6260.cpp 2>/dev/null || true
   if git apply --recount --check "$PATCH_FILE" 2>/dev/null; then
     git apply --recount "$PATCH_FILE"; echo "Applied $PATCH_FILE"
   elif grep -rq "romdev_pcbreak_set" platforms/libretro/ 2>/dev/null; then

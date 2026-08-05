@@ -21,7 +21,10 @@ cd "$FCEUMM_DIR"
 # Reset the files the patch touches — libretro.c (memory regions + watchpoint
 # exports), sound.c (drop `static` on the APU register holders), and x6502.c
 # (the write-watchpoint hook + state) — so a clean re-apply always works.
-git checkout -- src/drivers/libretro/libretro.c src/sound.c src/x6502.c src/ppu.c 2>/dev/null || true
+# pputile.h is patched too (the per-pixel bgpix capture). Leaving it out made
+# the re-apply fail with "patch failed to apply and sentinel not present",
+# because the tree was half-reset: ppu.c reverted while pputile.h stayed patched.
+git checkout -- src/drivers/libretro/libretro.c src/sound.c src/x6502.c src/ppu.c src/pputile.h src/palette.c src/palette.h 2>/dev/null || true
 # Use --recount so the patch survives small additions to hunks (e.g. adding
 # a new ROMDEV_MEMORY_* region) without manually re-computing the @@ counts.
 if ! git apply --recount --check "$PATCH_FILE" 2>/dev/null; then

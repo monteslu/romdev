@@ -70,14 +70,16 @@ export const CAPABILITIES = {
     cpus: { main: "6502", secondary: [] },
     audioChips: ["nes"],
     memoryRegions: [...GENERIC_REGIONS, "nes_nametables", "nes_palette", "nes_oam",
-      "nes_chr", "nes_apu_regs", "nes_cpu_regs", "nes_ppu_regs"],
+      "nes_chr", "nes_apu_regs", "nes_cpu_regs", "nes_ppu_regs",
+      "nes_cart_ram", "nes_ppu_scroll", "nes_ppu_scroll_lines", "nes_chr_lines", "nes_bgfetch", "nes_sprlines", "nes_ntmap", "nes_pallines", "nes_masklines", "nes_ntmaplines", "nes_bgpix", "nes_backdrop", "nes_sprdrawn", "nes_bgval", "nes_maskpix", "nes_linepix", "nes_linedeemp", "nes_palrgb"],
     ...tileDeep(),
   },
   snes: {
     cpuFamily: "65816", decompileQuality: "medium",
     cpus: { main: "65816", secondary: ["spc700"] },
     audioChips: ["dsp"],
-    memoryRegions: [...GENERIC_REGIONS, "snes_oam", "snes_cgram", "snes_aram", "snes_fillram"],
+    memoryRegions: [...GENERIC_REGIONS, "snes_oam", "snes_cgram", "snes_aram", "snes_fillram",
+      "snes_linepix", "snes_linestate", "snes_frameinfo", "snes_m7lines", "snes_linedepth", "snes_cliplines"],
     ...tileDeep(),
   },
   genesis: {
@@ -85,21 +87,24 @@ export const CAPABILITIES = {
     cpus: { main: "m68k", secondary: [] }, // z80 not yet decoded
     audioChips: ["ym2612", "psg"],
     memoryRegions: [...GENERIC_REGIONS, "genesis_cram", "genesis_vsram", "genesis_vdp_regs",
-      "genesis_z80_ram", "genesis_m68k", "genesis_ym2612", "genesis_psg"],
+      "genesis_z80_ram", "genesis_m68k", "genesis_ym2612", "genesis_psg",
+      "md_linepix", "md_bgpix", "md_objpix", "md_pixrgb", "md_linestate", "md_pixlines"],
     ...tileDeep(),
   },
   sms: {
     cpuFamily: "z80", decompileQuality: "good",
     cpus: { main: "z80", secondary: [] },
     audioChips: ["psg"],
-    memoryRegions: [...GENERIC_REGIONS, "sms_vram", "sms_cram", "sms_vdp_regs", "sms_z80_regs"],
+    memoryRegions: [...GENERIC_REGIONS, "sms_vram", "sms_cram", "sms_vdp_regs", "sms_z80_regs",
+      "sms_linepix", "sms_bgpix", "sms_objpix", "sms_pixrgb", "sms_linestate", "sms_pixlines"],
     ...tileDeep(),
   },
   gg: {
     cpuFamily: "z80", decompileQuality: "good",
     cpus: { main: "z80", secondary: [] },
     audioChips: ["psg"],
-    memoryRegions: [...GENERIC_REGIONS, "gg_vram", "gg_cram"],
+    memoryRegions: [...GENERIC_REGIONS, "gg_vram", "gg_cram",
+      "gg_linepix", "gg_bgpix", "gg_objpix", "gg_pixrgb", "gg_linestate", "gg_pixlines"],
     ...tileDeep(),
   },
   gb: {
@@ -107,7 +112,10 @@ export const CAPABILITIES = {
     cpus: { main: "sm83", secondary: [] },
     audioChips: ["gb"],
     memoryRegions: [...GENERIC_REGIONS, "gb_vram", "gb_oam", "gb_io", "gb_hram",
-      "gb_bgpdata", "gb_objpdata", "gb_cpu_regs"],
+      "gb_bgpdata", "gb_objpdata", "gb_cpu_regs",
+      /* universal redraw capture planes */
+      "gb_lineregs", "gb_bgpix", "gb_sprpix", "gb_palline",
+      "gb_bgcol15", "gb_sprcol15"],
     ...tileDeep(),
   },
   gbc: {
@@ -115,7 +123,10 @@ export const CAPABILITIES = {
     cpus: { main: "sm83", secondary: [] },
     audioChips: ["gb"],
     memoryRegions: [...GENERIC_REGIONS, "gb_vram", "gb_oam", "gb_io", "gb_hram",
-      "gb_bgpdata", "gb_objpdata", "gb_cpu_regs"],
+      "gb_bgpdata", "gb_objpdata", "gb_cpu_regs",
+      /* universal redraw capture planes */
+      "gb_lineregs", "gb_bgpix", "gb_sprpix", "gb_palline",
+      "gb_bgcol15", "gb_sprcol15"],
     ...tileDeep(),
   },
   gba: {
@@ -230,7 +241,9 @@ export const CAPABILITIES = {
     cpus: { main: "", secondary: [] }, // getCPUState main NOT wired for pce
     audioChips: ["pce"],
     memoryRegions: [...GENERIC_REGIONS, "pce_vdc_vram", "pce_vdc_satb", "pce_vdc_regs",
-      "pce_vce_palette", "pce_cpu_regs", "pce_psg_regs"],
+      "pce_vce_palette", "pce_cpu_regs", "pce_psg_regs", "pce_vdc_reglines",
+      "pce_vce_pallines", "pce_vdc_linepix", "pce_vce_xofflines",
+      "pce_vce_srclines", "pce_paldeltas"],
     renderingKind: "tile", introspection: "deep",
     ops: {
       build: true, run: true, screenshot: true,
@@ -243,7 +256,7 @@ export const CAPABILITIES = {
     cpuFamily: "z80", decompileQuality: "good",
     cpus: { main: "", secondary: [] }, // getCPUState main NOT wired for msx
     audioChips: ["ay8910"],
-    memoryRegions: [...GENERIC_REGIONS, "msx_vram", "msx_vdp_regs", "msx_vdp_status",
+    memoryRegions: [...GENERIC_REGIONS, "msx_vram", "msx_vdp_regs", "msx_vdp_status", "msx_vdp_reglines", "msx_vram_deltas", "msx_fb_tail",
       "msx_palette", "msx_cpu_regs", "msx_psg_regs"],
     renderingKind: "tile", introspection: "deep",
     ops: {

@@ -1,8 +1,8 @@
 diff --git a/platforms/libretro/libretro.cpp b/platforms/libretro/libretro.cpp
-index 131c841..dabb120 100644
+index 131c841..7d6d948 100644
 --- a/platforms/libretro/libretro.cpp
 +++ b/platforms/libretro/libretro.cpp
-@@ -447,6 +447,204 @@ bool retro_unserialize(const void *data, size_t size)
+@@ -447,6 +447,470 @@ bool retro_unserialize(const void *data, size_t size)
      return core->LoadState(reinterpret_cast<const u8*>(data), size);
  }
  
@@ -110,6 +110,272 @@ index 131c841..dabb120 100644
 +#define ROMDEV_MEMORY_PCE_VCE_PALETTE 0x1A3
 +#define ROMDEV_MEMORY_PCE_CPU_REGS    0x1A4
 +#define ROMDEV_MEMORY_PCE_PSG_REGS    0x1A5
++/* PER-SCANLINE VDC state: 263 lines x 16 bytes, captured at the top of
++ * HuC6270::RenderLine -- the moment the VDC commits to what a line renders
++ * with. pce_vdc_regs (0x1A2) is the LIVE register file at frame end, so a
++ * reconstruction gives EVERY line the LAST scroll value the game wrote.
++ * PC Engine games do mid-frame raster splits constantly: Bonk's Adventure
++ * rewrites BXR/BYR per scanline for parallax, and reconstructing it from the
++ * end-of-frame snapshot scored 31% -- top rows pixel-exact, everything below
++ * the first split wrong by whole tiles. The scroll is not recoverable after
++ * the fact at any price; it has to be recorded as it is used.
++ *
++ * The record is the LATCHED state, not the live registers: the VDC renders
++ * from m_latched_bxr / m_latched_cr / m_latched_mwr / m_latched_hdw (latched
++ * at HSYNC / VSW), and m_bg_offset_y is the effective BYR after the per-line
++ * counter and any mid-frame BYR write. Same reasoning as the NES core's
++ * PALLINES/MASKLINES/NTMAPLINES trio.
++ *
++ * Indexed by m_raster_line (0 at VDW start), NOT by framebuffer row: the
++ * VDC's own vertical pipeline decides the offset between the two and a
++ * consumer applies its own bias. `valid` distinguishes "this line rendered"
++ * from a never-written slot. */
++#define ROMDEV_MEMORY_PCE_REGLINES    0x1A6
++/* PER-SCANLINE VCE PALETTE: 263 lines x 512 entries x u16.
++ *
++ * pce_vce_palette (0x1A3) is m_color_table read at frame end. The CPU writes
++ * that table through VCE ports 4/5 at ANY time, and HuC6260::Clock resolves
++ * every emitted pixel through it LIVE -- so a game that rewrites colours on a
++ * raster interrupt shows several palettes in one frame while the snapshot
++ * catches only the last. Air Zonk's title screen does exactly this and a
++ * reconstruction using the frame-end table scored 43.9%: the geometry was
++ * pixel-perfect and two blues were simply swapped over most of the screen.
++ *
++ * Same class of region as pce_vdc_reglines (0x1A6) and the NES core's
++ * nes_pallines. Recorded at end-of-line, keyed by m_vpos, so a consumer
++ * indexes it with the SAME vpos the regline record carries. */
++#define ROMDEV_MEMORY_PCE_PALLINES    0x1A7
++/* PER-SCANLINE RESOLVED VDC LINE BUFFER: 263 lines x 1024 x u16.
++ *
++ * This is the VDC's OWN m_line_buffer after RenderBackground and the sprite
++ * merge -- the final palette index for every pixel of the line, exactly as
++ * HuC6270::Clock will serve it to the VCE.
++ *
++ * Why it is needed on top of reglines+pallines: the remaining reconstruction
++ * error is mid-frame VRAM mutation. HuC6270::VRAMTransfer runs from Clock(),
++ * i.e. DURING display, so a game DMAing new sprite/tile patterns shows one
++ * pattern on line 40 and another on line 120 -- while pce_vdc_vram is a
++ * single post-frame snapshot holding only the final state. Reconstructing
++ * from that snapshot mis-draws exactly the animated patterns (Cratermaze,
++ * Bomberman '93: the bad pixels cluster on a handful of sprite patterns).
++ *
++ * VRAM cannot be captured per line (263 x 64KB), and it does not need to be:
++ * the resolved line buffer is what the VRAM was FOR. Capturing it follows the
++ * same rule the NES profile settled on with nes_bgpix/nes_linepix -- read the
++ * plane the emulator already resolved instead of re-deriving it. */
++#define ROMDEV_MEMORY_PCE_LINEPIX     0x1A8
++/* PER-SCANLINE HORIZONTAL PLACEMENT: 263 x u16, the framebuffer x at which
++ * the VDC's picture starts on that VCE scanline (0xFFFF = the VDC emitted no
++ * picture on that line).
++ *
++ * The VCE emits k_huc6260_line_width pixels per row by clocking the VDC, and
++ * the VDC only returns picture inside its HDW window; everything else is the
++ * 0x100 idle pixel. WHERE the window lands inside the row is the product of
++ * the VDC's HSW/HDS clock chain and the VCE's m_screen_start_x, which run in
++ * different clock domains. The arithmetic ((HSW+1 + HDS+1)*8 - screen_start_x)
++ * reproduces it for most of the library and is off by exactly 8 for others
++ * (Klax: predicted 0, actual 8, a flat 73% until corrected). Rather than
++ * carry a formula with known exceptions, the VCE records the real value. */
++#define ROMDEV_MEMORY_PCE_XOFFLINES   0x1A9
++/* Companion to XOFFLINES; see romdev_pce_srclines. */
++#define ROMDEV_MEMORY_PCE_SRCLINES    0x1AA
++/* DOT-STAMPED VCE PALETTE WRITE LOG: header {count u16, truncated u8, pad u8}
++ * + entries {vpos u16, hpos u16, dot u16, index u16, oldv u16, newv u16}.
++ *
++ * pce_vce_pallines (0x1A7) is per-LINE: slot [vpos] is the table at the END
++ * of that line. A game that rewrites a colour MID-line (Eaggy) renders the
++ * head of the row through the OLD value and the tail through the new one --
++ * unrecoverable from any per-line snapshot. Same design as the MSX core's
++ * msx_vram_deltas: each entry carries BOTH values, because the consumer must
++ * UNDO this line's entries (restore oldv, reverse order) from pallines[vpos]
++ * to reach the line-START table, then REDO forward at each recorded dot to
++ * split the row. Entries are logged only when the write CHANGES the entry
++ * (LSB/MSB port traffic rewriting identical colours logs nothing), and a
++ * truncated log must be rejected whole -- a partial undo reconstructs a
++ * line-start state that never existed.
++ *
++ * `vpos` matches the key of pallines/xofflines. `dot` is the position within
++ * the emitted row (m_pixel_index reduced modulo the line width -- the cursor
++ * is FRAME-wide, the same trap xofflines hit). `hpos` is the raw VCE clock
++ * within the line, recorded so a consumer can tell an hblank write (whole-
++ * line, apply before the row) from a mid-row one without trusting dot alone. */
++#define ROMDEV_MEMORY_PCE_PALDELTAS   0x1AB
++#define ROMDEV_PCE_XOFFLINES 263
++static uint16_t romdev_pce_xofflines[ROMDEV_PCE_XOFFLINES];
++/* Companion to xofflines: WHICH line-buffer pixel the framebuffer's first
++ * copied pixel came from. Non-zero when the VDC's active width overruns what
++ * the VCE copies, so the picture is CLIPPED on the left rather than shifted --
++ * Legend of Hero Tonma and Ninja Spirit program a 352px window into a 341px
++ * line and lose the first 8 source pixels. xofflines alone records only where
++ * the picture LANDS (0), which cannot express the clip. */
++static uint16_t romdev_pce_srclines[ROMDEV_PCE_XOFFLINES];
++/* One-shot per line: only the FIRST in-HDW pixel of a scanline sets it. */
++static int romdev_pce_xoff_seen[ROMDEV_PCE_XOFFLINES];
++
++/* Set by HuC6270::Clock for the pixel it just produced; read by the VCE on
++ * the very next statement. A plain global, not a call into the VDC, because
++ * this translation unit does not include huc6270.h. */
++extern "C" { int romdev_pce_in_hdw = 0; int romdev_pce_src_index = 0; }
++
++extern "C" void romdev_pce_xoff(int vpos, int x, int line_width, int src)
++{
++    if (vpos < 0 || vpos >= ROMDEV_PCE_XOFFLINES)
++        return;
++    if (romdev_pce_xoff_seen[vpos])
++        return;
++    romdev_pce_xoff_seen[vpos] = 1;
++    /* m_pixel_index is a FRAME-wide write cursor into m_vce_buffer_1, not a
++     * per-line one -- it keeps climbing across scanlines. The x we want is the
++     * offset within the row, so reduce modulo the line width. (Caught by the
++     * recorded values reading 0, 256, 512, 768 ... on successive lines.) */
++    if (line_width > 0)
++        x %= line_width;
++    romdev_pce_xofflines[vpos] = (uint16_t)x;
++    romdev_pce_srclines[vpos] = (uint16_t)(src < 0 ? 0 : src);
++}
++#define ROMDEV_PCE_LINEPIX_LINES 263
++#define ROMDEV_PCE_LINEPIX_WIDTH 1024
++static uint16_t romdev_pce_linepix[ROMDEV_PCE_LINEPIX_LINES][ROMDEV_PCE_LINEPIX_WIDTH];
++
++extern "C" void romdev_pce_linepix_store(int chip, int line,
++                                         const unsigned short* buf, int width)
++{
++    /* VDC 1 only, matching the other single-VDC pce_* regions. */
++    if (chip != 0 || !buf)
++        return;
++    if (line < 0 || line >= ROMDEV_PCE_LINEPIX_LINES)
++        return;
++    if (width < 0)
++        width = 0;
++    if (width > ROMDEV_PCE_LINEPIX_WIDTH)
++        width = ROMDEV_PCE_LINEPIX_WIDTH;
++    memcpy(romdev_pce_linepix[line], buf, (size_t)width * sizeof(uint16_t));
++}
++#define ROMDEV_PCE_PALLINES      263
++#define ROMDEV_PCE_PAL_ENTRIES   512
++static uint16_t romdev_pce_pallines[ROMDEV_PCE_PALLINES][ROMDEV_PCE_PAL_ENTRIES];
++
++extern "C" void romdev_pce_palline(int vpos, const unsigned short* table)
++{
++    if (vpos < 0 || vpos >= ROMDEV_PCE_PALLINES || !table)
++        return;
++    memcpy(romdev_pce_pallines[vpos], table,
++           ROMDEV_PCE_PAL_ENTRIES * sizeof(uint16_t));
++}
++
++#define ROMDEV_PCE_PALDELTA_CAP 8192
++#pragma pack(push, 1)
++struct romdev_pce_paldelta {
++    uint16_t vpos;   /* VCE line the write landed on (pallines key) */
++    uint16_t hpos;   /* raw VCE clock within the line */
++    uint16_t dot;    /* pixel within the emitted row */
++    uint16_t index;  /* colour-table entry (0..511) */
++    uint16_t oldv;   /* entry value BEFORE the write (undo) */
++    uint16_t newv;   /* entry value AFTER the write (redo) */
++};
++struct romdev_pce_paldelta_region {
++    uint16_t count;
++    uint8_t  truncated;
++    uint8_t  pad;
++    struct romdev_pce_paldelta e[ROMDEV_PCE_PALDELTA_CAP];
++};
++#pragma pack(pop)
++/* TWO buffers: the VCE calls the frame-boundary publish from the SAME
++ * end-of-line block that sets frame_ready, so retro_run returns immediately
++ * AFTER the boundary -- a single reset-in-place buffer would always read
++ * count=0 from outside (measured: Eaggy, count 0 at every probe depth). The
++ * accumulator collects the running frame; the boundary copies it into the
++ * exposed region and clears the accumulator, so a consumer always sees the
++ * COMPLETED frame's log, exactly like every other per-frame region here. */
++static struct romdev_pce_paldelta_region romdev_pce_paldeltas;      /* exposed */
++static struct romdev_pce_paldelta_region romdev_pce_paldeltas_acc;  /* running */
++
++extern "C" void romdev_pce_paldeltas_reset(void)
++{
++    size_t n = (size_t)romdev_pce_paldeltas_acc.count;
++    if (n > ROMDEV_PCE_PALDELTA_CAP) n = ROMDEV_PCE_PALDELTA_CAP;
++    memcpy(&romdev_pce_paldeltas, &romdev_pce_paldeltas_acc,
++           4 + n * sizeof(struct romdev_pce_paldelta));
++    romdev_pce_paldeltas_acc.count = 0;
++    romdev_pce_paldeltas_acc.truncated = 0;
++}
++
++extern "C" void romdev_pce_paldelta_log(int vpos, int hpos, int dot,
++                                        int index, unsigned short oldv,
++                                        unsigned short newv)
++{
++    if (oldv == newv)
++        return;
++    if (romdev_pce_paldeltas_acc.count >= ROMDEV_PCE_PALDELTA_CAP) {
++        romdev_pce_paldeltas_acc.truncated = 1;
++        return;
++    }
++    struct romdev_pce_paldelta* d =
++        &romdev_pce_paldeltas_acc.e[romdev_pce_paldeltas_acc.count++];
++    d->vpos = (uint16_t)vpos; d->hpos = (uint16_t)hpos;
++    d->dot = (uint16_t)dot;   d->index = (uint16_t)index;
++    d->oldv = oldv;           d->newv = newv;
++}
++
++/* 263 = HUC6270_LINES, the full NTSC line count -- the display window is
++ * shorter but m_raster_line is only bounded by the programmed VDW, and a game
++ * may program a taller one than the 242-line visible area. */
++#define ROMDEV_PCE_REGLINES 263
++#pragma pack(push, 1)
++struct romdev_pce_regline {
++    uint16_t bxr;      /* m_latched_bxr  -- horizontal scroll for this line */
++    uint16_t bgy;      /* m_bg_offset_y  -- effective BYR for this line */
++    uint16_t cr;       /* m_latched_cr   -- layer enables (bit 7 BG, 6 SPR) */
++    uint16_t mwr;      /* m_latched_mwr  -- BAT size + sprite mode */
++    uint16_t hdw;      /* m_latched_hdw  -- display width in 8px units - 1 */
++    uint16_t raster;   /* m_raster_line, echoed for cheap validation */
++    uint8_t  valid;    /* 0 = this line never rendered in the last frame */
++    uint8_t  burst;    /* m_burst_mode: line is blanked, both layers off */
++    /* m_vpos -- the VCE scanline this VDC raster line was rendered on. The
++     * framebuffer row is vpos-14 (HuC6270 sets m_active_line for vpos in
++     * [14,256), and the VCE copies from that same vpos), so this is the ONLY
++     * exact framebuffer-row <-> raster-line mapping. A consumer used to apply
++     * a constant bias, which is wrong: the offset is (VSW+1)+(VDS+2)-14 only
++     * when the display window fits, and games that program VDW to start after
++     * vpos 14 get their picture CLIPPED rather than shifted, so no single
++     * constant or formula covers the corpus. Measured biases ranged 0..17
++     * across the 80-game library. */
++    uint16_t vpos;
++};
++#pragma pack(pop)
++static struct romdev_pce_regline romdev_pce_reglines[ROMDEV_PCE_REGLINES];
++
++extern "C" void romdev_pce_regline(int chip, int line, unsigned short bxr,
++                                   unsigned short bgy, unsigned short cr,
++                                   unsigned short mwr, unsigned short hdw,
++                                   unsigned char burst, unsigned short vpos)
++{
++    /* SuperGrafx has two VDCs; only VDC 1 is what the single-VDC regions
++     * (0x1A0-0x1A2) expose, so keep the per-line record consistent with them. */
++    if (chip != 0)
++        return;
++    /* Line 0 starts a fresh display window (NextVerticalState resets
++     * m_raster_line at VDW start), so invalidate the tail here rather than in
++     * retro_run -- retro_run can return mid-frame on a romdev breakpoint. */
++    if (line == 0)
++    {
++        memset(romdev_pce_reglines, 0, sizeof(romdev_pce_reglines));
++        /* Same frame boundary invalidates the x-placement record. 0xFFFF is
++         * "no picture on this line", which is distinct from x == 0. */
++        memset(romdev_pce_xoff_seen, 0, sizeof(romdev_pce_xoff_seen));
++        for (int i = 0; i < ROMDEV_PCE_XOFFLINES; i++)
++        {
++            romdev_pce_xofflines[i] = 0xFFFF;
++            romdev_pce_srclines[i]  = 0;
++        }
++    }
++    if (line < 0 || line >= ROMDEV_PCE_REGLINES)
++        return;
++    struct romdev_pce_regline* d = &romdev_pce_reglines[line];
++    d->bxr = bxr; d->bgy = bgy; d->cr = cr; d->mwr = mwr; d->hdw = hdw;
++    d->raster = (uint16_t)line; d->valid = 1; d->burst = burst ? 1 : 0;
++    d->vpos = vpos;
++}
 +
 +/* HuC6280 PSG snapshot: 6 channels of {enabled, frequency, control, amplitude,
 + * vol_left, vol_right, wave_index, noise_control, noise_enabled, noise_freq}
@@ -207,7 +473,7 @@ index 131c841..dabb120 100644
  void *retro_get_memory_data(unsigned id)
  {
      switch (id)
-@@ -457,6 +655,18 @@ void *retro_get_memory_data(unsigned id)
+@@ -457,6 +921,30 @@ void *retro_get_memory_data(unsigned id)
              return core->GetMemory()->GetWorkingRAM();
          case RETRO_MEMORY_VIDEO_RAM:
              return (u8*)core->GetHuC6270_1()->GetVRAM();
@@ -223,10 +489,22 @@ index 131c841..dabb120 100644
 +            return romdev_pce_cpu_data();
 +        case ROMDEV_MEMORY_PCE_PSG_REGS:
 +            return romdev_pce_psg_data();
++        case ROMDEV_MEMORY_PCE_REGLINES:
++            return romdev_pce_reglines;
++        case ROMDEV_MEMORY_PCE_PALLINES:
++            return romdev_pce_pallines;
++        case ROMDEV_MEMORY_PCE_PALDELTAS:
++            return &romdev_pce_paldeltas;
++        case ROMDEV_MEMORY_PCE_LINEPIX:
++            return romdev_pce_linepix;
++        case ROMDEV_MEMORY_PCE_XOFFLINES:
++            return romdev_pce_xofflines;
++        case ROMDEV_MEMORY_PCE_SRCLINES:
++            return romdev_pce_srclines;
      }
  
      return NULL;
-@@ -472,6 +682,18 @@ size_t retro_get_memory_size(unsigned id)
+@@ -472,6 +960,30 @@ size_t retro_get_memory_size(unsigned id)
              return core->GetMemory()->GetWorkingRAMSize();
          case RETRO_MEMORY_VIDEO_RAM:
              return HUC6270_VRAM_SIZE * 2;
@@ -242,6 +520,18 @@ index 131c841..dabb120 100644
 +            return sizeof(romdev_pce_cpu);
 +        case ROMDEV_MEMORY_PCE_PSG_REGS:
 +            return sizeof(romdev_pce_psg);
++        case ROMDEV_MEMORY_PCE_REGLINES:
++            return sizeof(romdev_pce_reglines);   /* 263 * 16 = 4208 B */
++        case ROMDEV_MEMORY_PCE_PALLINES:
++            return sizeof(romdev_pce_pallines);   /* 263 * 512 * 2 = 269312 B */
++        case ROMDEV_MEMORY_PCE_PALDELTAS:
++            return sizeof(romdev_pce_paldeltas);  /* 4 + 8192 * 12 B */
++        case ROMDEV_MEMORY_PCE_LINEPIX:
++            return sizeof(romdev_pce_linepix);    /* 263 * 1024 * 2 = 538624 B */
++        case ROMDEV_MEMORY_PCE_XOFFLINES:
++            return sizeof(romdev_pce_xofflines);  /* 263 * 2 = 526 B */
++        case ROMDEV_MEMORY_PCE_SRCLINES:
++            return sizeof(romdev_pce_srclines);   /* 263 * 2 = 526 B */
      }
  
      return 0;
@@ -286,11 +576,202 @@ index 3caa541..0b7c484 100644
          }
          while (!stop);
  
+diff --git a/src/huc6260.cpp b/src/huc6260.cpp
+index 6d99816..73257f4 100644
+--- a/src/huc6260.cpp
++++ b/src/huc6260.cpp
+@@ -20,6 +20,14 @@
+ #include <assert.h>
+ #include <stdlib.h>
+ #include "huc6260.h"
++
++/* romdev dot-stamped palette write log (region pce_paldeltas); defined in
++ * platforms/libretro/libretro.cpp. Logged at the WRITE, with the render
++ * position, because a mid-line colour change is unrecoverable from the
++ * per-line pallines record. */
++extern "C" void romdev_pce_paldelta_log(int vpos, int hpos, int dot,
++                                        int index, unsigned short oldv,
++                                        unsigned short newv);
+ #include "trace_logger.h"
+ 
+ HuC6260::HuC6260(HuC6202* huc6202, HuC6280* huc6280)
+@@ -234,16 +242,30 @@ void HuC6260::WriteRegister(u16 address, u8 value)
+             m_color_table_address = (m_color_table_address & 0x00FF) | ((value & 0x01) << 8);
+             break;
+         case 4:
++        {
+             // Color table data LSB
++            u16 romdev_old = m_color_table[m_color_table_address];
+             m_color_table[m_color_table_address] = (m_color_table[m_color_table_address] & 0x0100) | value;
++            romdev_pce_paldelta_log(m_vpos, m_hpos,
++                m_pixel_index % k_huc6260_line_width[m_overscan][m_speed],
++                m_color_table_address, romdev_old,
++                m_color_table[m_color_table_address]);
+             break;
++        }
+         case 5:
+             // Color table data MSB
+             GG_CHECK_MEMORY_BREAKPOINT(m_huc6280,
+                 HuC6280::HuC6280_BREAKPOINT_TYPE_PALETTE_RAM,
+                 m_color_table_address,
+                 false);
+-            m_color_table[m_color_table_address] = (m_color_table[m_color_table_address] & 0x00FF) | ((value & 0x01) << 8);
++            {
++                u16 romdev_old = m_color_table[m_color_table_address];
++                m_color_table[m_color_table_address] = (m_color_table[m_color_table_address] & 0x00FF) | ((value & 0x01) << 8);
++                romdev_pce_paldelta_log(m_vpos, m_hpos,
++                    m_pixel_index % k_huc6260_line_width[m_overscan][m_speed],
++                    m_color_table_address, romdev_old,
++                    m_color_table[m_color_table_address]);
++            }
+ 
+ #if !defined(GG_DISABLE_DISASSEMBLER)
+             if (m_trace_logger->IsEnabled(TRACE_VCE))
+diff --git a/src/huc6260_inline.h b/src/huc6260_inline.h
+index 5323ee4..b741884 100644
+--- a/src/huc6260_inline.h
++++ b/src/huc6260_inline.h
+@@ -21,6 +21,19 @@
+ #define HUC6260_INLINE_H
+ 
+ #include "huc6260.h"
++
++/* romdev per-scanline VCE palette capture; state + export in the libretro
++ * glue. See ROMDEV_MEMORY_PCE_PALLINES there for why a frame-end
++ * pce_vce_palette read is not a substitute. */
++extern "C" {
++extern void romdev_pce_palline(int vpos, const unsigned short* table);
++extern "C" void romdev_pce_paldeltas_reset(void);
++/* Framebuffer x of the VDC's first picture pixel on this line, and the VDC
++ * predicate that identifies it. See ROMDEV_MEMORY_PCE_XOFFLINES in the glue. */
++extern void romdev_pce_xoff(int vpos, int x, int line_width, int src);
++extern int  romdev_pce_in_hdw;
++extern int  romdev_pce_src_index;
++}
+ #include "huc6202.h"
+ #include "huc6280.h"
+ #include "trace_logger.h"
+@@ -90,6 +103,20 @@ INLINE bool HuC6260::Clock(u32 cycles)
+                 u16 pixel = m_huc6202->Clock();
+                 if (m_active_line && (m_pixel_x >= m_screen_start_x) && (m_pixel_x < m_screen_end_x))
+                 {
++                    /* romdev: the VDC returns 0x100 outside its HDW window and
++                     * a line-buffer pixel inside it. m_huc6202->Clock() has
++                     * just advanced the VDC by one dot, so the first clock on
++                     * this line taken from inside HDW marks where the picture
++                     * begins in FRAMEBUFFER coordinates. Recording it is the
++                     * only exact answer: the placement falls out of the VDC's
++                     * HSW/HDS chain and the VCE's m_screen_start_x running in
++                     * different clock domains, and the obvious arithmetic
++                     * ((HSW+1 + HDS+1)*8 - screen_start_x) matches most games
++                     * but is off by 8 on others (Klax). */
++                    if (romdev_pce_in_hdw)
++                        romdev_pce_xoff(m_vpos, m_pixel_index,
++                                        m_screen_end_x - m_screen_start_x,
++                                        romdev_pce_src_index);
+                     if (pixel & HUC6270_PIXEL_BLACK)
+                         m_vce_buffer_1[m_pixel_index] = HUC6270_PIXEL_BLACK;
+                     else
+@@ -150,9 +177,23 @@ INLINE bool HuC6260::Clock(u32 cycles)
+ 
+             if(m_vpos >= 14 && m_vpos < 256)
+                 m_line_speed[m_vpos - 14] = m_speed;
++            /* romdev per-scanline VCE palette (region pce_vce_pallines).
++             * Recorded HERE, at end-of-line before m_vpos advances, so slot
++             * [vpos] holds the table the line just emitted resolved through.
++             * A frame-end snapshot of m_color_table cannot describe a game
++             * that rewrites colours on a raster interrupt. */
++            romdev_pce_palline(m_vpos, m_color_table);
+             m_vpos++;
+             if (m_vpos == k_huc6260_total_lines[m_blur])
++            {
+                 m_vpos = 0;
++                /* Frame boundary for the dot-stamped palette log. Writes in
++                 * the previous frame's bottom-border tail are dropped, and
++                 * correctly so: they are already baked into the line-START
++                 * state the consumer rebuilds from pallines (the undo rule
++                 * only touches entries stamped with the line's own vpos). */
++                romdev_pce_paldeltas_reset();
++            }
+ 
+             m_active_line = (m_vpos >= m_screen_start_y) && (m_vpos < m_screen_end_y);
+         }
+diff --git a/src/huc6270.cpp b/src/huc6270.cpp
+index 5d0543e..6c0a995 100644
+--- a/src/huc6270.cpp
++++ b/src/huc6270.cpp
+@@ -22,6 +22,21 @@
+ #include "huc6270.h"
+ #include "trace_logger.h"
+ 
++/* romdev per-scanline VDC state capture (region pce_vdc_reglines). Recorded
++ * here, at the top of RenderLine, because THIS is the moment the VDC commits
++ * to the scroll/geometry a line renders with. See the comment block on
++ * ROMDEV_MEMORY_PCE_REGLINES in the libretro glue for why a frame-end
++ * pce_vdc_regs read is not a substitute. */
++extern "C" {
++extern void romdev_pce_regline(int chip, int line, unsigned short bxr,
++                               unsigned short bgy, unsigned short cr,
++                               unsigned short mwr, unsigned short hdw,
++                               unsigned char burst, unsigned short vpos);
++/* romdev resolved-line capture; see ROMDEV_MEMORY_PCE_LINEPIX in the glue. */
++extern void romdev_pce_linepix_store(int chip, int line,
++                                     const unsigned short* buf, int width);
++}
++
+ HuC6270::HuC6270(HuC6280* huC6280)
+ {
+     m_huc6280 = huC6280;
+@@ -675,6 +690,16 @@ void HuC6270::VBlankIRQ()
+ 
+ void HuC6270::RenderLine()
+ {
++    /* romdev: latch what THIS line renders with, before anything consumes it.
++     * m_bg_offset_y is the effective BYR (already advanced by the per-line
++     * counter and by any mid-frame BYR write), which is exactly the value a
++     * reconstruction cannot recover from a frame-end snapshot. */
++    romdev_pce_regline(m_chip_id, m_raster_line, m_latched_bxr,
++                       (unsigned short)m_bg_offset_y, m_latched_cr,
++                       m_latched_mwr, m_latched_hdw,
++                       (unsigned char)(m_burst_mode ? 1 : 0),
++                       (unsigned short)m_vpos);
++
+     int width = MIN(1024, (m_latched_hdw + 1) << 3);
+ 
+     if((m_latched_cr & 0x80) == 0)
+@@ -689,6 +714,14 @@ void HuC6270::RenderLine()
+         if((m_latched_cr & 0x40) != 0)
+             RenderSprites(width);
+     }
++
++    /* romdev: the line is now fully resolved -- background fetched, sprites
++     * merged. Capture it here, because from this point the only thing that
++     * can change the picture is the VCE's palette lookup (captured
++     * separately by pce_vce_pallines). Recording the RESOLVED buffer is what
++     * makes mid-frame VRAM DMA reproducible: the pattern bytes are gone by
++     * frame end, but the pixels they produced are not. */
++    romdev_pce_linepix_store(m_chip_id, m_raster_line, m_line_buffer, width);
+ }
+ 
+ void HuC6270::RenderBackground(int width)
+diff --git a/src/huc6270.h b/src/huc6270.h
+index 17384e1..55f8403 100644
+--- a/src/huc6270.h
++++ b/src/huc6270.h
+@@ -33,6 +33,8 @@ class TraceLogger;
+ class HuC6270
+ {
+ public:
++    /* romdev: see huc6270_inline.h. */
++    bool RomdevInHDW() const;
+     enum HuC6270_Vertical_State
+     {
+         HuC6270_VERTICAL_STATE_VDS,
 diff --git a/src/huc6270_inline.h b/src/huc6270_inline.h
-index 018fd86..0fd8df9 100644
+index 018fd86..d0d943d 100644
 --- a/src/huc6270_inline.h
 +++ b/src/huc6270_inline.h
-@@ -26,6 +26,14 @@
+@@ -26,6 +26,18 @@
  #include "huc6280.h"
  #include "trace_logger.h"
  
@@ -300,12 +781,34 @@ index 018fd86..0fd8df9 100644
 +extern int          romdev_vw_enabled;
 +extern void         romdev_vw_log(unsigned int vaddr, unsigned int pc, unsigned char val);
 +extern unsigned int romdev_huc_instr_pc;
++/* romdev: set by HuC6270::Clock for the pixel it just produced. */
++extern int romdev_pce_in_hdw;
++/* ...and WHICH line-buffer pixel it was. See romdev_pce_xoff. */
++extern int romdev_pce_src_index;
 +}
 +
  INLINE u16 HuC6270::Clock()
  {
      if (m_sat_transfer_pending > 0)
-@@ -225,6 +233,15 @@ INLINE void HuC6270::ProcessVramWrite()
+@@ -44,8 +56,17 @@ INLINE u16 HuC6270::Clock()
+ 
+     u16 pixel = m_burst_mode ? HUC6270_PIXEL_BLACK : 0x100;
+ 
++    /* romdev: publish whether THIS clock produced real picture. The VCE reads
++     * it immediately after calling us, to learn the framebuffer x where the
++     * picture begins; see romdev_pce_xoff. A pushed flag rather than a class
++     * method because the libretro glue does not include huc6270.h. */
++    romdev_pce_in_hdw = 0;
++    romdev_pce_src_index = 0;
++
+     if (m_active_line && (m_h_state == HuC6270_HORIZONTAL_STATE_HDW))
+     {
++        romdev_pce_in_hdw = 1;
++        romdev_pce_src_index = m_line_buffer_index;
+         assert(m_line_buffer_index < HUC6270_MAX_BACKGROUND_WIDTH);
+         if (m_burst_mode)
+             pixel = HUC6270_PIXEL_BLACK;
+@@ -225,6 +246,15 @@ INLINE void HuC6270::ProcessVramWrite()
              m_register[HUC6270_REG_MAWR],
              false);
          m_vram[m_register[HUC6270_REG_MAWR] & 0x7FFF] = m_register[HUC6270_REG_VWR];

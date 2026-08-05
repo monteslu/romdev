@@ -23,6 +23,9 @@ cd "$GAMBATTE_DIR"
 git checkout -- \
   libgambatte/src/cpu.h \
   libgambatte/src/cpu.cpp \
+  libgambatte/src/video/ppu.cpp \
+  libgambatte/src/video.cpp \
+  libgambatte/src/video_libretro.cpp \
   libgambatte/src/gambatte-memory.h \
   libgambatte/src/gambatte-memory.cpp \
   libgambatte/src/video.h \
@@ -51,6 +54,11 @@ fi
 # compile it, and add it to the link. The per-core patch only keeps the GB hooks.
 RDBG_SRC="$PROJECT_DIR/scripts/romdev-debug"
 cp "$RDBG_SRC/romdev_debug.h" "$RDBG_SRC/romdev_debug.c" "$GAMBATTE_DIR/libgambatte/src/"
+# The GB redraw capture planes (header-only; libretro.cpp defines the arrays
+# with ROMDEV_GBCAP_IMPL). Copied alongside romdev_debug.h so the same -I
+# resolves it from ppu.cpp / video.cpp / video_libretro.cpp.
+cp "$RDBG_SRC/romdev_gbcap.h" "$GAMBATTE_DIR/libgambatte/src/"
+cp "$RDBG_SRC/romdev_gbcap.h" "$GAMBATTE_DIR/libgambatte/src/video/"
 ROMDEV_INC="-I$GAMBATTE_DIR/libgambatte/src"
 
 emmake make -f Makefile.libretro platform=emscripten clean >/dev/null 2>&1 || true

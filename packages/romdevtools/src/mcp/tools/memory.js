@@ -4,6 +4,55 @@ import { jsonContent, safeTool, textContent, writeOutput, parseHexBytes } from "
 import { classifyBytes } from "./classify-region.js";
 import { clusterChanges } from "./diff-cluster.js";
 import { mapNesAddress, mapSnesAddress } from "./disasm.js";
+import { CAPABILITIES } from "../../cores/capabilities.js";
+
+/**
+ * Refuse a region the LOADED platform does not expose.
+ *
+ * Region ids are per-platform, not global: the cores bake them in, and two
+ * platforms deliberately reuse the same number for different buffers --
+ * `ROMDEV_MEMORY_NES_NTMAPLINES` and `ROMDEV_MEMORY_SNES_OAM` are both 0x110,
+ * which is safe because only one core is ever loaded. (Renumbering to make
+ * them globally unique desynchronizes the JS from the compiled cores and kills
+ * the reads outright -- tried, verified, reverted.)
+ *
+ * What was NOT safe is that the read path never checked. A region name from
+ * the wrong platform still resolved by id, so on a SNES core
+ * `memory({region:'nes_ntmaplines'})` returned snes_oam's bytes: no error, and
+ * a value with nothing about it to suggest the wrong platform. That is the
+ * worst failure mode we keep hitting -- plausible wrong data -- and it cost a
+ * bezel agent a session, because the apparent id collision in every loadMedia
+ * response led to a "fix" that broke SNES access.
+ *
+ * capabilities.js already declares exactly which regions each platform
+ * exposes; this just makes the read path honour it. The message names the
+ * platform and lists what IS available, so a refusal is a redirect rather than
+ * a dead end.
+ */
+function assertRegionOnPlatform(host, region) {
+  if (!region) return;
+  const platform = host?.status?.platform;
+  const allowed = CAPABILITIES[platform]?.memoryRegions;
+  // Unknown platform, or one that declares no region list: nothing to check
+  // against, so stay out of the way rather than invent a restriction.
+  if (!platform || !Array.isArray(allowed) || allowed.length === 0) return;
+  if (allowed.includes(region)) return;
+
+  // Prefer suggesting this platform's OWN specific regions -- the generic ones
+  // (system_ram, video_ram, …) are on every platform and are rarely what a
+  // caller who named a platform-specific region actually wanted.
+  const specific = allowed.filter((r) => r.includes("_") && !GENERIC_REGION_NAMES.has(r));
+  const suggest = (specific.length ? specific : allowed).join(", ");
+  throw new Error(
+    `memory: region '${region}' is not exposed on platform '${platform}'. `
+    + `Region ids are per-platform -- '${region}' belongs to a different core, and reading it here `
+    + `would return whatever THIS core has at the same id (plausible-looking bytes from the wrong buffer). `
+    + `Regions available on ${platform}: ${suggest}.`,
+  );
+}
+
+/** Regions every platform has; excluded from the "did you mean" suggestion. */
+const GENERIC_REGION_NAMES = new Set(["system_ram", "save_ram", "video_ram", "rtc"]);
 
 // Small reads stay inline (hex) for ergonomics; large reads must go to disk
 // (raw bytes) unless inline:true. The common case — peeking a few bytes of
@@ -82,8 +131,24 @@ function genericEndianness(platform) {
 // Each function is the body of one former narrow tool, verbatim. The `memory`
 // router dispatches on `op`. They share the module-scope helpers below.
 
+/**
+ * op:'read' — bytes out of a live memory region.
+ *
+ * RESULT SHAPE, spelled out because a JSON result has no type system to catch
+ * a wrong key: `{region, offset, length, endianness, wordSize, hex}` — or
+ * `{reads:[...]}` with `offsets`, or `{"0xOFF": "hex"}` with `compact`.
+ *
+ * The bytes are on `hex`. There is NO `base64` on a read result. That is an
+ * easy wrong guess because op:'write' accepts `hex` OR `base64`, so a caller
+ * who writes memory first learns both are currency, then reads and silently
+ * gets undefined -- which a classifier happily scores. (Cost, reported from an
+ * MSX sweep: a detector read `base64`, got '' for every ROM, scored the empty
+ * string as "no error text" and declared 150/150 booting while measuring
+ * nothing.) For raw binary out of a read, pass `outputPath`.
+ */
 async function memRead(sessionKey, { region, offset = 0, length, offsets, outputPath, inline, echo, compact }) {
       const host = getHost(sessionKey);
+      assertRegionOnPlatform(host, region);
       const info0 = REGION_INFO[region] ?? {};
       const endianness0 = info0.endianness ?? genericEndianness(host.status.platform);
 
@@ -200,7 +265,12 @@ async function memWrite(sessionKey, { region, offset = 0, hex, base64, data, byt
           "bytes.map(b => b.toString(16).padStart(2,'0')).join('')"
         );
       }
-      getHost(sessionKey).writeMemory(region, offset, buf);
+      const writeHost = getHost(sessionKey);
+      // Gate writes too -- a write to a wrong-platform region name lands in
+      // whatever THIS core has at that id, silently corrupting an unrelated
+      // buffer. Strictly worse than the wrong-data read.
+      assertRegionOnPlatform(writeHost, region);
+      writeHost.writeMemory(region, offset, buf);
       return textContent(`wrote ${buf.length} bytes to ${region}+${offset}`);
 }
 
@@ -351,6 +421,7 @@ async function memReadCart(sessionKey, { offset = 0, length = 16, cpuAddress, ba
 // ── snapshotMemory / diffMemory — "which bytes changed across this event?" ──
 async function memSnapshot(sessionKey, { region, name = "default", offset = 0, length }) {
       const host = getHost(sessionKey);
+      assertRegionOnPlatform(host, region);
       const bytes = host.readMemory(region, offset, length ?? regionLength(host, region, offset));
       memSnapshots(sessionKey).set(snapKey(region, name), { offset, bytes: Uint8Array.from(bytes) });
       return jsonContent({ region, name, offset, length: bytes.length, note: "Baseline captured — trigger your event, then memory({op:'diff', region, name}) for the changed bytes." });
@@ -364,6 +435,7 @@ async function memSnapshot(sessionKey, { region, name = "default", offset = 0, l
 // (0.27.0 feedback #6). The emulator is left at the END OF RUN B.
 async function memDiffRuns(sessionKey, { region, frames = 60, portsA, portsB, offset = 0, length, minDelta, maxClusters = 64, gap = 4 }) {
       const host = getHost(sessionKey);
+      assertRegionOnPlatform(host, region);
       const baseline = host.serializeState();
       let bufA, bufB;
       try {
@@ -419,6 +491,7 @@ async function memDiffRuns(sessionKey, { region, frames = 60, portsA, portsB, of
 
 async function memDiff(sessionKey, { region, name = "default", view = "summary", maxChanges = 4096, maxClusters = 64, gap = 4, minDelta, changeDir, beforeMin, beforeMax, afterMin, afterMax, deltaEq, outputPath, echo = true }) {
       const host = getHost(sessionKey);
+      assertRegionOnPlatform(host, region);
       const snap = memSnapshots(sessionKey).get(snapKey(region, name));
       if (!snap) throw new Error(`memory({op:'diff'}): no snapshot named '${name}' for region '${region}'. Call memory({op:'snapshot', region, name}) first.`);
       const now = host.readMemory(region, snap.offset, snap.bytes.length);
@@ -528,6 +601,7 @@ function diffOut(result, { outputPath, echo, region, heavyKey, count }) {
 // ── classifyRegion — "what kind of data is at this offset?" ──────────────
 async function memClassify(sessionKey, { region = "system_ram", offset = 0, length = 256 }) {
       const host = getHost(sessionKey);
+      assertRegionOnPlatform(host, region);
       const bytes = host.readMemory(region, offset, length);
       const cls = classifyBytes(bytes, { bigEndian: genericEndianness(host.status.platform) === "big" });
       return jsonContent({ region, offset: "0x" + offset.toString(16), length: bytes.length, ...cls });
@@ -575,6 +649,7 @@ function decodeAt(buf, i, s, k = 0) {
 
 async function memSearch(sessionKey, { value, size = 1, as = "raw", region = "system_ram", name = "default", maxCandidates = 64 }) {
       const host = getHost(sessionKey);
+      assertRegionOnPlatform(host, region);
       const info = REGION_INFO[region] ?? {};
       const little = (info.endianness ?? genericEndianness(host.status.platform)) !== "big";
       const buf = host.readMemory(region, 0, regionLength(host, region, 0));
@@ -635,6 +710,7 @@ async function memSearch(sessionKey, { value, size = 1, as = "raw", region = "sy
 // op:'search' (requires a value) can't do. (0.28.0 feedback #1.)
 async function memSearchUnknown(sessionKey, { size = 1, as = "raw", region = "system_ram", name = "default", maxCandidates: _maxCandidates = 64 }) {
       const host = getHost(sessionKey);
+      assertRegionOnPlatform(host, region);
       if (as === "digits") throw new Error("memory({op:'searchUnknown'}): as:'digits' needs a value; use as:'raw' or 'bcd' for an unknown-value hunt.");
       const info = REGION_INFO[region] ?? {};
       const little = (info.endianness ?? genericEndianness(host.status.platform)) !== "big";
@@ -660,6 +736,8 @@ async function memSearchUnknown(sessionKey, { size = 1, as = "raw", region = "sy
 
 async function memSearchNext(sessionKey, { compare, value, name = "default", maxCandidates = 64 }) {
       const host = getHost(sessionKey);
+      // No region gate here: searchNext narrows an EXISTING search session,
+      // whose region was already validated when op:'search' seeded it.
       const s = searchSessions(sessionKey).get(name);
       if (!s) throw new Error(`memory({op:'searchNext'}): no active search named '${name}'. Call memory({op:'search', value, name}) first.`);
       if ((compare === "eq" || compare === "gt" || compare === "lt") && value === undefined) {
@@ -735,7 +813,19 @@ export function registerMemoryTools(server, z, sessionKey) {
       op: z.enum(["read", "write", "readCart", "snapshot", "diff", "diffRuns", "classify", "search", "searchUnknown", "searchNext"])
         .describe("read=bytes→hex; write=hex/base64→region; readCart=loaded cart ROM image; snapshot=capture a baseline; diff=changed bytes vs a baseline; diffRuns=run the SAME start state twice under two different held inputs and return only the DIVERGENT bytes (THE input→RAM mapping primitive — replaces save/run/dump/restore/run/dump/python-diff); classify=what kind of data is here; search=seed a value search (you know the number); searchUnknown=seed the whole region (you DON'T know the number); searchNext=narrow either."),
       region: z.enum(REGIONS).optional().describe("Memory region. Required for read/write/snapshot/diff; defaults to system_ram for classify/search. (readCart targets the cart ROM image, not a region.)"),
-      offset: z.number().int().min(0).default(0).describe("Byte offset within the region (read/write/snapshot/classify) or the cart ROM image (readCart). `address` is accepted as an alias (the name breakpoint/disasm use for the same thing), defaulting `region` to system_ram."),
+      /*
+       * NO `.default(0)` here, deliberately.
+       *
+       * The MCP SDK applies zod defaults BEFORE the handler runs, so a default
+       * made `offset` indistinguishable from a caller-supplied 0 -- and the
+       * `address` alias below, which only fires when `offset` is absent, could
+       * never fire over MCP. Passing `address: 235` silently read byte 0
+       * instead, with no error and no warning. (Over plain REST the handler
+       * sees raw args, so the same code worked there; that split is why the
+       * defect survived.) The default is applied in the handler instead, after
+       * the alias has had its chance.
+       */
+      offset: z.number().int().min(0).optional().describe("Byte offset within the region (read/write/snapshot/classify) or the cart ROM image (readCart). Defaults to 0. `address` is accepted as an alias (the name breakpoint/disasm use for the same thing), defaulting `region` to system_ram."),
       address: z.union([z.number().int().min(0), z.string()]).optional().describe("Alias for `offset` — the spelling breakpoint({on:'write'}) and disasm use. Accepts a number or \"$74\"/\"0x74\". Defaults `region` to system_ram when it's the only location given."),
       length: z.number().int().min(1).max(1 << 20).optional().describe("Bytes to read (max 1MB). op:read default 1; op:readCart default 16; op:snapshot default = whole region from offset; op:classify default 256."),
       cpuAddress: z.number().int().min(0).optional().describe("op:readCart (NES/SNES) — read by a BANKED CPU ADDRESS instead of a flat offset (the inverse of the breakpoint result's bank/prgOffset). e.g. read a jump table at $8654 in bank 6: {op:'readCart', cpuAddress:0x8654, bank:6}. A $C000+ NES address resolves to the fixed top bank. Saves the cpuAddr-0x8000+bank*0x4000 hand-arithmetic."),
@@ -748,7 +838,7 @@ export function registerMemoryTools(server, z, sessionKey) {
       // write
       hex: z.string().optional().describe("op:write — hex string, e.g. 'deadbeef' (even length; spaces/$/_ separators are stripped). `dataHex` is accepted as an alias."),
       dataHex: z.string().optional().describe("Alias for `hex` (op:write)."),
-      base64: z.string().optional().describe("op:write — base64 bytes (binary blobs)."),
+      base64: z.string().optional().describe("op:write ONLY — base64 bytes (binary blobs). NOT returned by op:'read': a read result carries the bytes as `hex` and nothing else, so reaching for `result.base64` after a read gets undefined. (Easy wrong guess because WRITE takes hex OR base64, so a caller who writes first learns both are currency.) For binary OUT of a read, use `outputPath` — it writes the raw bytes to a file."),
       data: z.any().optional().describe("op:write — REJECTED. Pass `hex` (string) or `base64` (string), not an array."),
       bytes: z.any().optional().describe("op:write — REJECTED. Pass `hex` (string) or `base64` (string)."),
       // snapshot/diff/search session label
@@ -789,6 +879,15 @@ export function registerMemoryTools(server, z, sessionKey) {
       let args = rawArgs;
       if (args.dataHex != null && args.hex == null) args = { ...args, hex: args.dataHex };
       if (args.outputPath == null && args.path != null) args = { ...args, outputPath: args.path };
+      /*
+       * `offset` is intentionally NOT defaulted in the schema (see the note
+       * there): the MCP SDK applies zod defaults before the handler runs, so a
+       * default made an absent `offset` look like a caller-supplied 0 and this
+       * alias could never fire. Real cost, from a Zelda 1 RE session:
+       * `address: 235` ($EB, overworld location) silently read byte 0, both
+       * values looked plausible, and several position readings were wrong
+       * before it was caught.
+       */
       if (args.offset == null && (args.address != null || args.cpuAddress != null)) {
         const a = args.address ?? args.cpuAddress;
         const n = typeof a === "string" ? parseInt(String(a).replace(/^[$]|^0x/i, ""), 16) : a;
@@ -799,6 +898,9 @@ export function registerMemoryTools(server, z, sessionKey) {
           if (!keepsCpuAddress) args = { ...args, offset: n, region: args.region ?? "system_ram" };
         }
       }
+      // Apply offset's default HERE rather than in the schema, so the alias
+      // above can tell "caller omitted offset" from "caller asked for 0".
+      if (args.offset == null) args = { ...args, offset: 0 };
       switch (args.op) {
         case "read":       return await memRead(sessionKey, args);
         case "write": {

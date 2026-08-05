@@ -1,3 +1,14 @@
+diff --git a/Makefile.libretro b/Makefile.libretro
+index 6f412c7..5d65891 100644
+--- a/Makefile.libretro
++++ b/Makefile.libretro
+@@ -1,5 +1,5 @@
+ TARGET_NAME := bluemsx
+-CFLAGS := -std=gnu89
++CFLAGS := -std=gnu89 -fno-common -Wno-error -Wno-incompatible-function-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration
+ CXXFLAGS := -std=gnu++98
+ GIT_VERSION := " $(shell git rev-parse --short HEAD || echo unknown)"
+ ifneq ($(GIT_VERSION)," unknown")
 diff --git a/Src/SoundChips/AY8910.c b/Src/SoundChips/AY8910.c
 index 3e74ec9..b564d1d 100644
 --- a/Src/SoundChips/AY8910.c
@@ -45,11 +56,167 @@ index 01c0752..6076662 100644
 +
  #endif
  
+diff --git a/Src/VideoChips/V9938.c b/Src/VideoChips/V9938.c
+index c45fc63..c6a3b7d 100644
+--- a/Src/VideoChips/V9938.c
++++ b/Src/VideoChips/V9938.c
+@@ -195,7 +195,7 @@ static void setPixel6(VdpCmdState* vdpCmd, int DX, int DY, UInt8 CL, UInt8 OP);
+ static void setPixel7(VdpCmdState* vdpCmd, int DX, int DY, UInt8 CL, UInt8 OP);
+ static void setPixel8(VdpCmdState* vdpCmd, int DX, int DY, UInt8 CL, UInt8 OP);
+ 
+-static void setPixelLow(UInt8 *P, UInt8 CL, UInt8 M, UInt8 OP);
++static void setPixelLow(VdpCmdState* vdpCmd, UInt8 *P, UInt8 CL, UInt8 M, UInt8 OP);
+ 
+ static void SrchEngine(VdpCmdState* vdpCmd);
+ static void LineEngine(VdpCmdState* vdpCmd);
+@@ -327,8 +327,23 @@ INLINE UInt8 getPixel(VdpCmdState* vdpCmd, UInt8 SM, int SX, int SY)
+ **      Low level function to set a pixel on a screen
+ **************************************************************
+ */
+-INLINE void setPixelLow(UInt8 *P, UInt8 CL, UInt8 M, UInt8 OP)
++/* romdev VRAM delta log: every command-engine store goes through here (or the
++ * instrumented setPixelLow below) so a consumer can replay VRAM per scanline.
++ * The line is derived from the ENGINE's clock (vdpCmd->systemTime): a single
++ * vdpCmdExecute call batches work spanning many scanlines, so the caller's
++ * wall time would mis-attribute most writes. */
++extern void romdev_msx_vdelta_log_at(UInt32 systemTime, unsigned int addr,
++                                     unsigned char oldv, unsigned char newv);
++INLINE void romdev_store(VdpCmdState* vdpCmd, UInt8* p, UInt8 v)
+ {
++    romdev_msx_vdelta_log_at(vdpCmd->systemTime,
++                             (unsigned int)(p - vdpCmd->vramBase), *p, v);
++    *p = v;
++}
++
++INLINE void setPixelLow(VdpCmdState* vdpCmd, UInt8 *P, UInt8 CL, UInt8 M, UInt8 OP)
++{
++    UInt8 romdev_oldv = *P;
+     switch (OP) {
+     case 0: 
+         *P = (*P & M) | CL; 
+@@ -367,6 +382,9 @@ INLINE void setPixelLow(UInt8 *P, UInt8 CL, UInt8 M, UInt8 OP)
+         }
+         break;
+     }
++    romdev_msx_vdelta_log_at(vdpCmd->systemTime,
++                             (unsigned int)(P - vdpCmd->vramBase),
++                             romdev_oldv, *P);
+ }
+ 
+ /*************************************************************
+@@ -380,7 +398,7 @@ INLINE void setPixel5(VdpCmdState* vdpCmd, int DX, int DY, UInt8 CL, UInt8 OP)
+ {
+     UInt8 SH = ((~DX)&1)<<2;
+ 
+-    setPixelLow(VDP_VRMP5W(vdpCmd, DX, DY), CL << SH, ~(15<<SH), OP);
++    setPixelLow(vdpCmd, VDP_VRMP5W(vdpCmd, DX, DY), CL << SH, ~(15<<SH), OP);
+ }
+  
+ /*************************************************************
+@@ -393,7 +411,7 @@ INLINE void setPixel6(VdpCmdState* vdpCmd, int DX, int DY, UInt8 CL, UInt8 OP)
+ {
+     UInt8 SH = ((~DX)&3)<<1;
+ 
+-    setPixelLow(VDP_VRMP6W(vdpCmd, DX, DY), CL << SH, ~(3<<SH), OP);
++    setPixelLow(vdpCmd, VDP_VRMP6W(vdpCmd, DX, DY), CL << SH, ~(3<<SH), OP);
+ }
+ 
+ /*************************************************************
+@@ -407,7 +425,7 @@ INLINE void setPixel7(VdpCmdState* vdpCmd, int DX, int DY, UInt8 CL, UInt8 OP)
+ {
+     UInt8 SH = ((~DX)&1)<<2;
+ 
+-    setPixelLow(VDP_VRMP7W(vdpCmd, DX, DY), CL << SH, ~(15<<SH), OP);
++    setPixelLow(vdpCmd, VDP_VRMP7W(vdpCmd, DX, DY), CL << SH, ~(15<<SH), OP);
+ }
+ 
+ /*************************************************************
+@@ -418,7 +436,7 @@ INLINE void setPixel7(VdpCmdState* vdpCmd, int DX, int DY, UInt8 CL, UInt8 OP)
+ */
+ INLINE void setPixel8(VdpCmdState* vdpCmd, int DX, int DY, UInt8 CL, UInt8 OP)
+ {
+-    setPixelLow(VDP_VRMP8W(vdpCmd, DX, DY), CL, 0, OP);
++    setPixelLow(vdpCmd, VDP_VRMP8W(vdpCmd, DX, DY), CL, 0, OP);
+ }
+ 
+ /*************************************************************
+@@ -790,16 +808,16 @@ static void HmmvEngine(VdpCmdState* vdpCmd)
+ 
+     switch (vdpCmd->screenMode) {
+     case 0: 
+-        pre_loop *VDP_VRMP5W(vdpCmd, ADX, DY) = CL; post__x_y(256)
++        pre_loop romdev_store(vdpCmd, VDP_VRMP5W(vdpCmd, ADX, DY), CL); post__x_y(256)
+         break;
+     case 1: 
+-        pre_loop *VDP_VRMP6W(vdpCmd, ADX, DY) = CL; post__x_y(512)
++        pre_loop romdev_store(vdpCmd, VDP_VRMP6W(vdpCmd, ADX, DY), CL); post__x_y(512)
+         break;
+     case 2: 
+-        pre_loop *VDP_VRMP7W(vdpCmd, ADX, DY) = CL; post__x_y(512)
++        pre_loop romdev_store(vdpCmd, VDP_VRMP7W(vdpCmd, ADX, DY), CL); post__x_y(512)
+         break;
+     case 3: 
+-        pre_loop *VDP_VRMP8W(vdpCmd, ADX, DY) = CL; post__x_y(256)
++        pre_loop romdev_store(vdpCmd, VDP_VRMP8W(vdpCmd, ADX, DY), CL); post__x_y(256)
+         break;
+     }
+ 
+@@ -831,16 +849,16 @@ static void HmmmEngine(VdpCmdState* vdpCmd)
+ 
+     switch (vdpCmd->screenMode) {
+     case 0: 
+-        pre_loop2 *VDP_VRMP5W(vdpCmd, vdpCmd->ADX, vdpCmd->DY) = *VDP_VRMP5R(vdpCmd, vdpCmd->ASX, vdpCmd->SY); post_xxyy2(256)
++        pre_loop2 romdev_store(vdpCmd, VDP_VRMP5W(vdpCmd, vdpCmd->ADX, vdpCmd->DY), *VDP_VRMP5R(vdpCmd, vdpCmd->ASX, vdpCmd->SY)); post_xxyy2(256)
+         break;
+     case 1: 
+-        pre_loop2 *VDP_VRMP6W(vdpCmd, vdpCmd->ADX, vdpCmd->DY) = *VDP_VRMP6R(vdpCmd, vdpCmd->ASX, vdpCmd->SY); post_xxyy2(512)
++        pre_loop2 romdev_store(vdpCmd, VDP_VRMP6W(vdpCmd, vdpCmd->ADX, vdpCmd->DY), *VDP_VRMP6R(vdpCmd, vdpCmd->ASX, vdpCmd->SY)); post_xxyy2(512)
+         break;
+     case 2: 
+-        pre_loop2 *VDP_VRMP7W(vdpCmd, vdpCmd->ADX, vdpCmd->DY) = *VDP_VRMP7R(vdpCmd, vdpCmd->ASX, vdpCmd->SY); post_xxyy2(512)
++        pre_loop2 romdev_store(vdpCmd, VDP_VRMP7W(vdpCmd, vdpCmd->ADX, vdpCmd->DY), *VDP_VRMP7R(vdpCmd, vdpCmd->ASX, vdpCmd->SY)); post_xxyy2(512)
+         break;
+     case 3: 
+-        pre_loop2 *VDP_VRMP8W(vdpCmd, vdpCmd->ADX, vdpCmd->DY) = *VDP_VRMP8R(vdpCmd, vdpCmd->ASX, vdpCmd->SY); post_xxyy2(256)
++        pre_loop2 romdev_store(vdpCmd, VDP_VRMP8W(vdpCmd, vdpCmd->ADX, vdpCmd->DY), *VDP_VRMP8R(vdpCmd, vdpCmd->ASX, vdpCmd->SY)); post_xxyy2(256)
+         break;
+     }
+ 
+@@ -874,16 +892,16 @@ static void YmmmEngine(VdpCmdState* vdpCmd)
+ 
+     switch (vdpCmd->screenMode) {
+     case 0: 
+-        pre_loop *VDP_VRMP5W(vdpCmd, ADX, DY) = *VDP_VRMP5R(vdpCmd, ADX, SY); post__xyy(256)
++        pre_loop romdev_store(vdpCmd, VDP_VRMP5W(vdpCmd, ADX, DY), *VDP_VRMP5R(vdpCmd, ADX, SY)); post__xyy(256)
+         break;
+     case 1: 
+-        pre_loop *VDP_VRMP6W(vdpCmd, ADX, DY) = *VDP_VRMP6R(vdpCmd, ADX, SY); post__xyy(512)
++        pre_loop romdev_store(vdpCmd, VDP_VRMP6W(vdpCmd, ADX, DY), *VDP_VRMP6R(vdpCmd, ADX, SY)); post__xyy(512)
+         break;
+     case 2: 
+-        pre_loop *VDP_VRMP7W(vdpCmd, ADX, DY) = *VDP_VRMP7R(vdpCmd, ADX, SY); post__xyy(512)
++        pre_loop romdev_store(vdpCmd, VDP_VRMP7W(vdpCmd, ADX, DY), *VDP_VRMP7R(vdpCmd, ADX, SY)); post__xyy(512)
+         break;
+     case 3: 
+-        pre_loop *VDP_VRMP8W(vdpCmd, ADX, DY) = *VDP_VRMP8R(vdpCmd, ADX, SY); post__xyy(256)
++        pre_loop romdev_store(vdpCmd, VDP_VRMP8W(vdpCmd, ADX, DY), *VDP_VRMP8R(vdpCmd, ADX, SY)); post__xyy(256)
+         break;
+     }
+ 
+@@ -913,7 +931,7 @@ static void YmmmEngine(VdpCmdState* vdpCmd)
+ static void HmmcEngine(VdpCmdState* vdpCmd)
+ {
+     if (!(vdpCmd->status & VDPSTATUS_TR)) {
+-        *getVramPointerW(vdpCmd, vdpCmd->screenMode, vdpCmd->ADX, vdpCmd->DY)=vdpCmd->CL;
++        romdev_store(vdpCmd, getVramPointerW(vdpCmd, vdpCmd->screenMode, vdpCmd->ADX, vdpCmd->DY), vdpCmd->CL);
+         vdpCmd->VdpOpsCnt-=hmmv_timing[vdpCmd->timingMode];
+         vdpCmd->status |= VDPSTATUS_TR;
+ 
 diff --git a/Src/VideoChips/VDP.c b/Src/VideoChips/VDP.c
-index 8e5400d..8a640be 100644
+index 8e5400d..120d425 100644
 --- a/Src/VideoChips/VDP.c
 +++ b/Src/VideoChips/VDP.c
-@@ -397,6 +397,25 @@ struct VDP {
+@@ -397,6 +397,361 @@ struct VDP {
      FrameBufferData* frameBuffer;
  };
  
@@ -72,13 +239,402 @@ index 8e5400d..8a640be 100644
 +    return theVdp ? (unsigned char*)theVdp->paletteReg : (unsigned char*)0;
 +}
 +
++/* ---- romdev per-scanline VDP state capture (region msx_vdp_reglines) ----
++ *
++ * WHY THIS EXISTS. A reconstruction that reads the VDP registers ONCE per frame
++ * cannot describe a frame the game changed partway down the screen: raster
++ * splits (a status bar in a different SCREEN mode), mid-screen palette swaps,
++ * per-line scroll. The framebuffer then holds TWO states while the snapshot
++ * holds one, and the mismatch reads as a renderer bug. Measured on this core:
++ * Dragon Slayer 4 draws rows 30..130 with SCREEN 8 colours while the registers
++ * left at vblank say SCREEN 5, and C-So! splits at rows 48..111.
++ *
++ * The record is what the line renderer ACTUALLY USED, captured at the top of
++ * the line, not re-derived afterwards -- per the standing rule to capture the
++ * resolved value from the core rather than recompute it.
++ *
++ * `valid` distinguishes "this line rendered this frame" from a stale record;
++ * without it a consumer reads register 0 on an unrendered line, and 0 is a
++ * LEGAL value, so the error is silent. Same class of bug the PCE profile hit
++ * with pce_vdc_reglines.
++ */
++#define ROMDEV_MSX_REGLINES 256   /* lastLine is 262 (NTSC) / 313 (PAL); the
++                                   * drawn window is <= SCREEN_HEIGHT (240) plus
++                                   * displayOffest (27 on PAL) = 267 worst case,
++                                   * but only lines inside the framebuffer are
++                                   * ever refreshed, so 256 covers every drawn
++                                   * line and keeps the region a round 24 KB. */
++#pragma pack(push, 1)
++struct romdev_msx_regline {
++    unsigned char  regs[64];      /* the 64 VDP control registers */
++    unsigned short palette[16];   /* paletteReg[] -- games swap it mid-frame */
++    unsigned char  status2;       /* vdpStatus[2]: bit1 feeds vdpIsOddPage */
++    unsigned char  valid;         /* 0 = this line did not render this frame */
++    unsigned short line;          /* the VDP scanline, echoed for validation */
++    unsigned short firstLine;     /* resolved display start for THIS line */
++    unsigned short activeLines;   /* 192 or 212, resolved for THIS line */
++    unsigned char  displayOffest; /* 27 on PAL, 0 on NTSC */
++    unsigned char  pad;
++};
++#pragma pack(pop)
++static struct romdev_msx_regline romdev_msx_reglines[ROMDEV_MSX_REGLINES];
++
++unsigned char* vdpRomdevGetReglines(void) {
++    return (unsigned char*)romdev_msx_reglines;
++}
++int vdpRomdevGetReglinesSize(void) {
++    return (int)sizeof(romdev_msx_reglines);
++}
++int vdpRomdevGetReglineStride(void) {
++    return (int)sizeof(struct romdev_msx_regline);
++}
++
++/* Called from vdp_sync at the top of every line handed to RefreshLine. */
++static void romdev_msx_regline_record(VDP* vdp, int line)
++{
++    struct romdev_msx_regline* d;
++    int i;
++    if (line < 0 || line >= ROMDEV_MSX_REGLINES)
++        return;
++    d = &romdev_msx_reglines[line];
++    for (i = 0; i < 64; i++)
++        d->regs[i] = vdp->vdpRegs[i];
++    for (i = 0; i < 16; i++)
++        d->palette[i] = vdp->paletteReg[i];
++    d->status2       = vdp->vdpStatus[2];
++    d->valid         = 1;
++    d->line          = (unsigned short)line;
++    d->firstLine     = (unsigned short)vdp->firstLine;
++    /* R9 bit7 selects 212 lines; resolved here so a consumer never has to
++     * guess which R9 was live for this particular line. */
++    d->activeLines   = (unsigned short)((vdp->vdpRegs[9] & 0x80) ? 212 : 192);
++    d->displayOffest = (unsigned char)vdp->displayOffest;
++}
++
++/* Invalidate the whole record at the start of a frame. Done on the frame-start
++ * path rather than in retro_run because retro_run can return mid-frame on a
++ * romdev breakpoint, which would leave a half-written record looking valid. */
++static void romdev_msx_reglines_reset(void)
++{
++    memset(romdev_msx_reglines, 0, sizeof(romdev_msx_reglines));
++}
++
++/* ---- romdev per-frame VRAM delta log (region msx_vram_deltas) -----------
++ *
++ * WHY. Per-scanline REGISTER records fixed the raster-split class, but 13 of
++ * the remaining imperfect frames showed NO per-line register or palette
++ * variation at all: the game rewrites VRAM while the beam runs (Car Fighter:
++ * 158 bytes/frame with completely constant registers), so the end-of-frame
++ * VRAM snapshot differs from what earlier lines were rendered from.
++ *
++ * WHAT. Every VRAM write that lands during a frame is logged as
++ * {line, oldValue, newValue, addr}. BOTH values are required: a consumer holds
++ * the END-of-frame snapshot, so it must UNDO the whole log (restore oldv,
++ * reverse order) to recover the frame-START state, then REDO entries (apply
++ * newv, forward order) up to each line as it renders. A new-value-only log
++ * cannot reconstruct any earlier state, which is why the entry is 8 bytes and
++ * not 6.
++ *
++ * The cap makes overflow VISIBLE, never silently wrong: once full, `truncated`
++ * is set and a consumer must fall back to the plain snapshot -- a partial log
++ * would rebuild a frame-start state that never existed. Writes where
++ * oldv == newv are skipped; they have no visual effect and only burn cap.
++ *
++ * Two write paths feed it:
++ *   1. the CPU port write (write() below) -- write() runs vdp_sync first, so
++ *      vdp->curLine is exact at that moment;
++ *   2. the V9938 command engine (V9938.c setPixelLow + the block-copy site),
++ *      which advances its OWN clock -- those writes pass vdpCmd->systemTime
++ *      and the line is derived from it here, NOT from boardSystemTime(),
++ *      because vdpCmdExecute batches work spanning many lines per call.
++ */
++#define ROMDEV_MSX_VDELTA_CAP 8192
++/* addr's top two bits carry the WRITE KIND; the low 30 bits are the address
++ * (VRAM linear offset, VDP register number, or palette register index). */
++#define ROMDEV_MSX_VDELTA_KIND_VRAM (0u << 30)
++#define ROMDEV_MSX_VDELTA_KIND_REG  (1u << 30)
++#define ROMDEV_MSX_VDELTA_KIND_PAL  (2u << 30)
++#pragma pack(push, 1)
++struct romdev_msx_vdelta {
++    unsigned short line;     /* the LAST line rendered with the OLD value */
++    /* The horizontal position, in the VDP's OWN rendering unit: vdp_sync's
++     * lineOffset, one unit = one 8-pixel block of the display area (0..33).
++     * The core renders lines in these blocks, so a mid-line change takes
++     * effect exactly at a block boundary -- recording the block is EXACT, not
++     * an approximation. 0xFF = "not applicable / whole line". */
++    unsigned short dot;
++    unsigned int   addr;     /* kind in bits 31:30, address in bits 29:0 */
++    unsigned short oldv;     /* u16: palette registers are 9-bit values */
++    unsigned short newv;
++};
++struct romdev_msx_vdelta_region {
++    unsigned short count;
++    unsigned char  truncated;   /* 1 = log overflowed; consumer must fall back */
++    unsigned char  pad;
++    /* FRAME-END CUT: where rendering stopped when the previous frame wrapped.
++     * The presented framebuffer's pixels AT AND BEYOND this position were not
++     * re-rendered by the frame the log describes -- they are retained from an
++     * earlier frame (DS4's fossil tail: 15/15 pixels identical to the prior
++     * frame). Captured at the frame-start reset, i.e. it is the PREVIOUS
++     * frame's end position; on a deterministic steady state that equals the
++     * current frame's, which the must-fail control verifies empirically.
++     * cutLine 0xFFFF = not yet known (first frame). */
++    unsigned short cutLine;
++    short          cutOffset;
++    struct romdev_msx_vdelta e[ROMDEV_MSX_VDELTA_CAP];
++};
++#pragma pack(pop)
++static struct romdev_msx_vdelta_region romdev_msx_vdeltas;
++
++unsigned char* vdpRomdevGetVramDeltas(void) {
++    return (unsigned char*)&romdev_msx_vdeltas;
++}
++int vdpRomdevGetVramDeltasSize(void) {
++    return (int)sizeof(romdev_msx_vdeltas);
++}
++
++void romdev_msx_vdelta_log(int line, int dot, unsigned int addr,
++                           unsigned short oldv, unsigned short newv)
++{
++    struct romdev_msx_vdelta* d;
++    if (oldv == newv)
++        return;
++    if (romdev_msx_vdeltas.count >= ROMDEV_MSX_VDELTA_CAP) {
++        romdev_msx_vdeltas.truncated = 1;
++        return;
++    }
++    d = &romdev_msx_vdeltas.e[romdev_msx_vdeltas.count++];
++    d->line = (unsigned short)(line < 0 ? 0 : line);
++    d->dot  = (unsigned short)(dot < 0 ? 0xFFFF : dot);
++    d->oldv = oldv;
++    d->newv = newv;
++    d->addr = addr;
++}
++
++/* Attribution: the entry's `line` means "the LAST line rendered with the OLD
++ * value" -- a consumer applies the write before rendering any line > it.
++ *
++ * The boundary matters: a write landing on line Y BEFORE Y has drawn any
++ * pixels (lineOffset <= 0 in vdp_sync's terms) means Y itself already renders
++ * the NEW value, so the entry must say Y-1. Attributing it to Y made the
++ * replay one line late and REGRESSED a snapshot-perfect frame (Magical Kid
++ * Wiz: 100% -> 99.994%) -- the log must never make a frame worse. A write
++ * landing mid-line is genuinely sub-line and keeps Y (the per-line floor). */
++static int romdev_msx_vdelta_line_for(UInt32 systemTime, int* out_dot)
++{
++    int frameTime, line, lineTime, lineOffset;
++    if (out_dot) *out_dot = 0xFFFF;
++    if (!theVdp)
++        return 0;
++    frameTime  = (int)(systemTime - theVdp->frameStartTime);
++    line       = frameTime / HPERIOD;
++    lineTime   = frameTime % HPERIOD - (theVdp->leftBorder - 20);
++    lineOffset = (lineTime + 32) / 32 - 1;
++    if (lineOffset <= 0) {
++        /* Line has not drawn anything yet: the whole line sees the NEW value,
++         * so the entry belongs to the previous line with no dot split. */
++        return line - 1;
++    }
++    if (out_dot) *out_dot = (lineOffset > 33) ? 0xFFFF : lineOffset;
++    return line;
++}
++
++/* Command-engine entry point.
++ *
++ * NOT the engine's clock: vdp_sync calls vdpCmdExecute BEFORE the render
++ * catch-up, so every block rendered in the same sync already sees the writes
++ * the engine just made -- a write stamped with the engine's own systemTime
++ * looks LATER than it is visible (Livingstone's screen wipe: bytes stamped at
++ * dot 25 were visible to blocks the renderer only drew afterwards in that
++ * same call). The correct visibility boundary is the RENDER position at the
++ * moment of the write: vdp->curLine / vdp->lineOffset, which still hold the
++ * pre-catch-up position while the engine runs. */
++void romdev_msx_vdelta_log_at(UInt32 systemTime, unsigned int addr,
++                              unsigned char oldv, unsigned char newv)
++{
++    int line = 0, dot = 0xFFFF;
++    (void)systemTime;
++    if (theVdp) {
++        line = theVdp->curLine;
++        if (theVdp->lineOffset < 0)
++            line -= 1;                    /* line not started: whole-line entry */
++        else if (theVdp->lineOffset <= 33)
++            dot = theVdp->lineOffset;
++    }
++    romdev_msx_vdelta_log(line, dot, addr | ROMDEV_MSX_VDELTA_KIND_VRAM,
++                          oldv, newv);
++}
++
++static void romdev_msx_vdeltas_reset(void)
++{
++    /* count+truncated only -- clearing the 64KB body every frame is waste. */
++    romdev_msx_vdeltas.count = 0;
++    romdev_msx_vdeltas.truncated = 0;
++    romdev_msx_vdeltas.cutLine   = 0xFFFF;
++    romdev_msx_vdeltas.cutOffset = -1;
++}
++
++/* ---- fossil-row snapshot (region msx_fb_tail) ---------------------------
++ *
++ * The rows at and beyond the frame-end cut are RETAINED FRAMEBUFFER MEMORY:
++ * the frame the log describes never re-rendered them, and their content is
++ * not a function of any current VDP state (it can be arbitrarily old). A
++ * consumer that renders from state alone cannot produce them.
++ *
++ * A stateful consumer retaining ITS OWN prior composite converges only if it
++ * composes every frame -- and Active Bezel ticks fire per COMPOSE, not per
++ * frame, so a harness that steps headless and composes once has no usable
++ * prior. Worse, substituting from a STALE composite corrupts any active rows
++ * below the cut (the wide-frame Blade Lords regression: rows 216..226 of a
++ * 212-line display swallowed by a minutes-old compose).
++ *
++ * So the core snapshots those rows itself, at the frame-start reset, while
++ * the framebuffer still holds the full previous presentation. This is
++ * cut-gated framebuffer memory -- the same class as the PCE core's linepix
++ * region: core-resolved pixels used because they are the ONLY exact source,
++ * with a must-fail control proving exactly which pixels come from it. */
++#define ROMDEV_MSX_FBTAIL_ROWS 32
++#define ROMDEV_MSX_FBTAIL_W    544
++#pragma pack(push, 1)
++struct romdev_msx_fbtail {
++    unsigned short cutLine;    /* first stale VDP line; 0xFFFF = none */
++    short          cutOffset;  /* block within that line */
++    unsigned short rows;       /* rows captured */
++    unsigned short width;      /* pixels per captured row (272 or 544) */
++    unsigned short firstRow;   /* framebuffer row index of pixels[0] */
++    unsigned short pad;
++    unsigned short pixels[ROMDEV_MSX_FBTAIL_ROWS * ROMDEV_MSX_FBTAIL_W];
++};
++#pragma pack(pop)
++static struct romdev_msx_fbtail romdev_msx_fbtail_snap;
++
++unsigned char* vdpRomdevGetFbTail(void) {
++    return (unsigned char*)&romdev_msx_fbtail_snap;
++}
++int vdpRomdevGetFbTailSize(void) {
++    return (int)sizeof(romdev_msx_fbtail_snap);
++}
++
++/* Called from retro_run AFTER emulation, BEFORE the OSK overlay / video_cb:
++ * at that moment romdev_msx_vdeltas still holds the JUST-COMPLETED frame's
++ * cut (every gate capture reads it there and sees the full log), and the
++ * single-buffered image_buffer holds that frame's presentation -- so rows at
++ * and beyond the cut are exactly the fossil pixels a consumer must retain.
++ * Capturing at the VDP frame-START instead is an off-by-one-frame bug: the
++ * struct would carry the PREVIOUS frame's cut when the consumer reads it. */
++void romdev_msx_fbtail_capture_now(void)
++{
++    VDP* vdp = theVdp;
++    FrameBuffer* fb;
++    int cut, fbrow0, nrows, w, r;
++    romdev_msx_fbtail_snap.cutLine = romdev_msx_vdeltas.cutLine;
++    romdev_msx_fbtail_snap.cutOffset = romdev_msx_vdeltas.cutOffset;
++    romdev_msx_fbtail_snap.rows = 0;
++    romdev_msx_fbtail_snap.width = 0;
++    romdev_msx_fbtail_snap.firstRow = 0;
++    if (vdp == NULL || romdev_msx_vdeltas.cutLine == 0xFFFF)
++        return;
++    fb = frameBufferGetDrawFrame();
++    if (fb == NULL)
++        return;
++    cut = (int)romdev_msx_vdeltas.cutLine;
++    fbrow0 = cut - vdp->displayOffest;
++    if (fbrow0 < 0) fbrow0 = 0;
++    nrows = 240 - fbrow0;
++    if (nrows <= 0) return;
++    if (nrows > ROMDEV_MSX_FBTAIL_ROWS) nrows = ROMDEV_MSX_FBTAIL_ROWS;
++    w = frameBufferGetDoubleWidth(fb, fbrow0) ? 544 : 272;
++    if (w > ROMDEV_MSX_FBTAIL_W) w = ROMDEV_MSX_FBTAIL_W;
++    for (r = 0; r < nrows; r++) {
++        Pixel* line = frameBufferGetLine(fb, fbrow0 + r);
++        int x;
++        if (line == NULL) { nrows = r; break; }
++        for (x = 0; x < w; x++)
++            romdev_msx_fbtail_snap.pixels[(size_t)r * ROMDEV_MSX_FBTAIL_W + x] =
++                (unsigned short)line[x];
++    }
++    romdev_msx_fbtail_snap.rows = (unsigned short)nrows;
++    romdev_msx_fbtail_snap.width = (unsigned short)w;
++    romdev_msx_fbtail_snap.firstRow = (unsigned short)fbrow0;
++}
++
++/* Render HIGH-WATER MARK: the furthest position RefreshLine actually reached
++ * this frame. The scanline counter keeps advancing past the presentation
++ * point while the draw-frame guard stops any rendering, so the counter's
++ * wrap position (262) says nothing about where pixels stopped being written.
++ * The stale tail of the PRESENTED frame begins exactly here. */
++static void romdev_msx_cut_update(int line, int x2)
++{
++    if (romdev_msx_vdeltas.cutLine == 0xFFFF ||
++        line > (int)romdev_msx_vdeltas.cutLine) {
++        romdev_msx_vdeltas.cutLine   = (unsigned short)line;
++        romdev_msx_vdeltas.cutOffset = (short)x2;
++    } else if (line == (int)romdev_msx_vdeltas.cutLine &&
++               x2 > (int)romdev_msx_vdeltas.cutOffset) {
++        romdev_msx_vdeltas.cutOffset = (short)x2;
++    }
++}
++
  #include "SpriteLine.h"
  #include "Common.h"
  
-@@ -1131,6 +1150,17 @@ static void write(VDP* vdp, UInt16 ioPort, UInt8 value)
+@@ -633,8 +988,12 @@ static void onDisplay(VDP* vdp, UInt32 time)
+ 
+     refreshRate = isPal ? 50 : 60; // Update global refresh rate
+ 
++    romdev_msx_vdeltas_reset();
+     vdp->scr0splitLine = 0;
+     vdp->curLine = 0;
++    /* New frame: drop the previous frame's per-line records so a consumer
++     * never mistakes a stale line for one this frame actually drew. */
++    romdev_msx_reglines_reset();
+     vdp->VAdjust = (-((Int8)(vdp->vdpRegs[18]) >> 4));
+ 
+     vdp->lastLine = isPal ? 313 : 262;
+@@ -839,6 +1198,28 @@ static void vdpUpdateRegisters(VDP* vdp, UInt8 reg, UInt8 value)
+ //    printf("W %.2x: 0x%.2x\n", reg, value);
+ 
+     change = vdp->vdpRegs[reg] ^ value;
++    {
++        /* romdev sub-line state log: a register change mid-line means the line
++         * renders its earlier blocks with the OLD value and the rest with the
++         * NEW one (Gekitotsu's scroll, Blade Lords' split). Recording it with
++         * the dot lets a consumer reproduce that stitch exactly. */
++        /* Only registers the RENDERER consumes. R14/15/16/17 are access
++         * pointers that churn on every port transfer, and >= 0x20 is the
++         * command engine -- logging those floods the cap with entries no
++         * reconstruction reads and trips `truncated` on ordinary frames. */
++        static const unsigned int romdev_reg_mask[2] = {
++            /* regs 0..31:  0..11, 18, 23, 25, 26, 27 */
++            (0xFFFu) | (1u<<18) | (1u<<23) | (1u<<25) | (1u<<26) | (1u<<27),
++            0u
++        };
++        if (reg < 64 && (romdev_reg_mask[reg >> 5] >> (reg & 31)) & 1u) {
++            int romdev_dot, romdev_line;
++            romdev_line = romdev_msx_vdelta_line_for(boardSystemTime(), &romdev_dot);
++            romdev_msx_vdelta_log(romdev_line, romdev_dot,
++                                  (unsigned int)reg | ROMDEV_MSX_VDELTA_KIND_REG,
++                                  vdp->vdpRegs[reg], value);
++        }
++    }
+     vdp->vdpRegs[reg] = value;
+ 
+     if (reg >= 0x20) {
+@@ -1130,7 +1511,27 @@ static void write(VDP* vdp, UInt16 ioPort, UInt8 value)
+     if (vdp->vramEnable) {
          int index = MAP_VRAMINDEX(vdp, (vdp->vdpRegs[14] << 14) | vdp->vramAddress);
          if (!(index & ~vdp->vramAccMask)) {
-             vdp->vram[index] = value;
+-            vdp->vram[index] = value;
++            {
++                /* romdev VRAM delta log: old value read BEFORE the store. */
++                unsigned char romdev_oldv = vdp->vram[index];
++                int romdev_dot, romdev_line;
++                vdp->vram[index] = value;
++                romdev_line = romdev_msx_vdelta_line_for(boardSystemTime(), &romdev_dot);
++                romdev_msx_vdelta_log(romdev_line, romdev_dot,
++                                      (unsigned int)index | ROMDEV_MSX_VDELTA_KIND_VRAM,
++                                      romdev_oldv, value);
++            }
 +            {
 +                /* romdev VRAM-port copy trace — log {vram addr, executing
 +                 * instruction PC, value} when the write lands in the watched
@@ -93,11 +649,66 @@ index 8e5400d..8a640be 100644
  
              tryWatchpoint(DBGTYPE_VIDEO, index, value, vdp, peekVram);
  //        printf("W(0x%.4x): %.2x\n", (vdp->vdpRegs[14] << 14) | vdp->vramAddress, value);
+@@ -1335,6 +1736,15 @@ static void writePaletteLatch(VDP* vdp, UInt16 ioPort, UInt8 value)
+     if (vdp->palKey) {
+ 		int palEntry = vdp->vdpRegs[16];
+         vdp_sync(vdp, boardSystemTime());
++        {
++            int romdev_dot, romdev_line;
++            unsigned short romdev_new =
++                (unsigned short)(256 * (value & 0x07) | (vdp->vdpDataLatch & 0x77));
++            romdev_line = romdev_msx_vdelta_line_for(boardSystemTime(), &romdev_dot);
++            romdev_msx_vdelta_log(romdev_line, romdev_dot,
++                                  (unsigned int)palEntry | ROMDEV_MSX_VDELTA_KIND_PAL,
++                                  vdp->paletteReg[palEntry], romdev_new);
++        }
+         vdp->paletteReg[palEntry] = 256 * (value & 0x07) | (vdp->vdpDataLatch & 0x77);
+         updatePalette(vdp, palEntry, (vdp->vdpDataLatch & 0x70) * 255 / 112, 
+                                      (value & 0x07) * 255 / 7,
+@@ -1384,14 +1794,26 @@ static void vdp_sync(void *data, UInt32 systemTime)
+ 
+     if (vdp->curLine < scanLine) {
+         if (vdp->lineOffset <= 32) {
+-            if (vdp->curLine >= vdp->displayOffest && vdp->curLine < vdp->displayOffest + SCREEN_HEIGHT)
++            if (vdp->curLine >= vdp->displayOffest && vdp->curLine < vdp->displayOffest + SCREEN_HEIGHT) {
++                /* Record ONLY if this line has not started rendering yet
++                 * (lineOffset < 0). This branch also COMPLETES a partially
++                 * rendered line, and recording there overwrites the line-START
++                 * state with whatever mid-line writes happened since -- the
++                 * regline for Ikari's gradient rows held the POST-write
++                 * palette, which made both halves of a split render wrong. */
++                if (vdp->lineOffset < 0)
++                    romdev_msx_regline_record(vdp, vdp->curLine);
+                 vdp->RefreshLine(vdp, vdp->curLine, vdp->lineOffset, 33);
++                romdev_msx_cut_update(vdp->curLine, 33);
++            }
+         }
+         vdp->lineOffset = -1;
+         vdp->curLine++;
+         while (vdp->curLine < scanLine) {
+             if (vdp->curLine >= vdp->displayOffest && vdp->curLine < vdp->displayOffest + SCREEN_HEIGHT) {
++                romdev_msx_regline_record(vdp, vdp->curLine);
+                 vdp->RefreshLine(vdp, vdp->curLine, -1, 33);
++                romdev_msx_cut_update(vdp->curLine, 33);
+             }
+             vdp->curLine++;
+         }
+@@ -1408,7 +1830,10 @@ static void vdp_sync(void *data, UInt32 systemTime)
+ 
+     if (vdp->lineOffset < curLineOffset) {
+         if (vdp->curLine >= vdp->displayOffest && vdp->curLine < vdp->displayOffest + SCREEN_HEIGHT) {
++            if (vdp->lineOffset < 0)
++                romdev_msx_regline_record(vdp, vdp->curLine);
+             vdp->RefreshLine(vdp, vdp->curLine, vdp->lineOffset, curLineOffset);
++            romdev_msx_cut_update(vdp->curLine, curLineOffset);
+         }
+         vdp->lineOffset = curLineOffset;
+     }
 diff --git a/Src/VideoChips/VDP.h b/Src/VideoChips/VDP.h
-index cc6cbf5..8c1bab2 100644
+index cc6cbf5..3e94c51 100644
 --- a/Src/VideoChips/VDP.h
 +++ b/Src/VideoChips/VDP.h
-@@ -68,6 +68,15 @@ typedef struct {
+@@ -68,6 +68,31 @@ typedef struct {
  int vdpRegisterDaConverter(VdpDaCallbacks* callbacks, void* ref, VideoMode videoModeMask);
  void vdpUnregisterDaConverter(int vdpDaHandle);
  
@@ -109,6 +720,22 @@ index cc6cbf5..8c1bab2 100644
 +unsigned char* vdpRomdevGetRegs(void);
 +unsigned char* vdpRomdevGetStatus(void);
 +unsigned char* vdpRomdevGetPalette(void);
++/* Per-scanline VDP state record (region msx_vdp_reglines). See VDP.c for why a
++ * once-per-frame register snapshot cannot describe a raster-split frame. */
++unsigned char* vdpRomdevGetReglines(void);
++int            vdpRomdevGetReglinesSize(void);
++int            vdpRomdevGetReglineStride(void);
++/* Per-frame VRAM delta log (region msx_vram_deltas): header {count u16,
++ * truncated u8, pad} + 8192 x {line u16, oldv u8, newv u8, addr u32}. Lets a
++ * consumer replay VRAM per scanline from the end-of-frame snapshot. */
++unsigned char* vdpRomdevGetVramDeltas(void);
++int            vdpRomdevGetVramDeltasSize(void);
++/* Fossil-row snapshot (region msx_fb_tail): framebuffer rows at and beyond
++ * the frame-end cut, captured at frame start. See VDP.c for why state-only
++ * reconstruction cannot produce these pixels. */
++unsigned char* vdpRomdevGetFbTail(void);
++int            vdpRomdevGetFbTailSize(void);
++void           romdev_msx_fbtail_capture_now(void);
 +
  /* The following methods needs target dependent implementation */
  extern void RefreshScreen(int);
@@ -287,10 +914,22 @@ index e3dd190..ceea6b9 100644
      }
  
 diff --git a/libretro.c b/libretro.c
-index f583a99..7c6820a 100644
+index f583a99..feea65b 100644
 --- a/libretro.c
 +++ b/libretro.c
-@@ -1838,16 +1838,178 @@ unsigned retro_get_region(void)
+@@ -1705,6 +1705,11 @@ void retro_run(void)
+    }
+    RETRO_PERFORMANCE_STOP(core_retro_run);
+ 
++   /* Snapshot the fossil rows (region msx_fb_tail) while the vdeltas region
++    * still describes the frame just emulated and image_buffer is untouched
++    * by the OSK overlay. */
++   romdev_msx_fbtail_capture_now();
++
+    /* OSK overlay rendered directly onto image_buffer before video_cb */
+    if (vkbd_active && !is_coleco && (!is_sega || is_sega_kb)) {
+       vkbd_x_scale = double_width ? 2 : 1;
+@@ -1838,16 +1843,199 @@ unsigned retro_get_region(void)
           return RETRO_REGION_NTSC;
     }
  }
@@ -303,6 +942,21 @@ index f583a99..7c6820a 100644
 +#define ROMDEV_MEMORY_MSX_PALETTE    0x1C3
 +#define ROMDEV_MEMORY_MSX_CPU_REGS   0x1C4
 +#define ROMDEV_MEMORY_MSX_PSG_REGS   0x1C5
++/* Per-scanline VDP state: 256 records of {regs[64], palette[16], status2,
++ * valid, line, firstLine, activeLines, displayOffest}. Lets a reconstruction
++ * follow a mid-frame register/palette/mode change instead of applying one
++ * vblank snapshot to all 240 rows. */
++#define ROMDEV_MEMORY_MSX_VDP_REGLINES 0x1C6
++/* Per-frame VRAM delta log: {count u16, truncated u8, pad u8} + 8192 entries
++ * of {line u16, oldv u8, newv u8, addr u32}. Replaying it turns the
++ * end-of-frame VRAM snapshot into the state each scanline was rendered from --
++ * the only way to reconstruct a game that rewrites VRAM mid-frame with
++ * constant registers (Car Fighter: 158 B/frame, scored 91% without this). */
++#define ROMDEV_MEMORY_MSX_VRAM_DELTAS  0x1C7
++/* Fossil-row snapshot: framebuffer rows the current frame never re-rendered
++ * (header {cutLine u16, cutOffset s16, rows u16, width u16, firstRow u16,
++ * pad} + 32 rows x 544 u16 pixels). */
++#define ROMDEV_MEMORY_MSX_FB_TAIL      0x1C8
 +
 +/* Z80/R800 register snapshot. R800's active bank `regs` holds RegisterPair
 + * unions (.W = UInt16); pack into a flat little-endian struct so getCPUState
@@ -448,6 +1102,9 @@ index f583a99..7c6820a 100644
 +      case ROMDEV_MEMORY_MSX_PALETTE:    return vdpRomdevGetPalette();
 +      case ROMDEV_MEMORY_MSX_CPU_REGS:   return romdev_msx_cpu_data();
 +      case ROMDEV_MEMORY_MSX_PSG_REGS:   return ay8910RomdevGetRegs();
++      case ROMDEV_MEMORY_MSX_VDP_REGLINES: return vdpRomdevGetReglines();
++      case ROMDEV_MEMORY_MSX_VRAM_DELTAS:  return vdpRomdevGetVramDeltas();
++      case ROMDEV_MEMORY_MSX_FB_TAIL:      return vdpRomdevGetFbTail();
 +      default: break;
 +   }
     return NULL;
@@ -464,6 +1121,9 @@ index f583a99..7c6820a 100644
 +      case ROMDEV_MEMORY_MSX_PALETTE:    return 16 * 2;   /* paletteReg[16] UInt16 */
 +      case ROMDEV_MEMORY_MSX_CPU_REGS:   return sizeof(romdev_msx_cpu);
 +      case ROMDEV_MEMORY_MSX_PSG_REGS:   return 16; /* AY8910 regs[16] */
++      case ROMDEV_MEMORY_MSX_VDP_REGLINES: return (size_t)vdpRomdevGetReglinesSize();
++      case ROMDEV_MEMORY_MSX_VRAM_DELTAS:  return (size_t)vdpRomdevGetVramDeltasSize();
++      case ROMDEV_MEMORY_MSX_FB_TAIL:      return (size_t)vdpRomdevGetFbTailSize();
 +      default: break;
 +   }
     return 0;

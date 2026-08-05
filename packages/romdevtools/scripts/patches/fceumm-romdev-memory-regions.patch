@@ -1,5 +1,5 @@
 diff --git a/src/drivers/libretro/libretro.c b/src/drivers/libretro/libretro.c
-index 96dece6..bf2d32e 100644
+index 96dece6..ae7a694 100644
 --- a/src/drivers/libretro/libretro.c
 +++ b/src/drivers/libretro/libretro.c
 @@ -262,6 +262,17 @@ static unsigned libretro_msg_interface_version = 0;
@@ -20,7 +20,7 @@ index 96dece6..bf2d32e 100644
  
  /* overclock the console by adding dummy scanlines to PPU loop
   * disables DMC DMA and WaveHi filling for these dummies
-@@ -3946,6 +3957,106 @@ unsigned retro_get_region(void)
+@@ -3946,6 +3957,218 @@ unsigned retro_get_region(void)
     return FSettings.PAL ? RETRO_REGION_PAL : RETRO_REGION_NTSC;
  }
  
@@ -103,10 +103,122 @@ index 96dece6..bf2d32e 100644
 +#define ROMDEV_MEMORY_NES_APU_REGS   0x104  /* 24B synthesized APU register snapshot ($4000-$4017) */
 +#define ROMDEV_MEMORY_NES_CPU_REGS   0x105  /* sizeof(X6502) — live 6502 CPU struct snapshot */
 +#define ROMDEV_MEMORY_NES_PPU_REGS   0x106  /* 4B PPU latch — PPUCTRL/PPUMASK/PPUSTATUS/OAMADDR */
++#define ROMDEV_MEMORY_NES_CART_RAM   0x107  /* 8KB cart WRAM at CPU $6000-$7FFF */
++#define ROMDEV_MEMORY_NES_SCROLL     0x108  /* 8B scroll: v[x,y,nt,pad] then t[x,y,nt,pad] */
++/* PER-SCANLINE scroll: 240 entries x [x, y, ntSelect, pad].
++ * A frame-boundary snapshot CANNOT reconstruct a mid-frame scroll change --
++ * games rewrite both v AND t during the frame, so by vblank the value the top
++ * of the screen actually rendered with is simply gone. This table records the
++ * effective scroll AS EACH SCANLINE IS REACHED, which is the only way to
++ * reproduce a raster split (status bars, parallax, Zanac's HUD). */
++#define ROMDEV_MEMORY_NES_SCROLL_LINES 0x109
++/* PER-SCANLINE background CHR: 240 lines x 4KB of pattern data.
++ * MMC2/MMC4 swap a CHR bank when tile $FD/$FE is FETCHED, so the same tile
++ * index legitimately means different pixels in different parts of one frame.
++ * A single 8KB snapshot cannot express that. Only the 4KB half the background
++ * is using is recorded (PPUCTRL bit4 picks it), which keeps this to 960KB. */
++#define ROMDEV_MEMORY_NES_CHR_LINES  0x10A
++/* PER-TILE background pattern bytes: 240 scanlines x 34 tile columns x 2
++ * bitplane bytes. Captured AT FETCH TIME, which is the only point that is
++ * correct for MMC2/MMC4: their CHR latch fires when tile $FD/$FE is FETCHED,
++ * i.e. many times per scanline, so ANY per-scanline snapshot returns
++ * byte-identical data for lines that provably render from different banks.
++ * Storing the fetched bytes themselves sidesteps bank tracking entirely. */
++#define ROMDEV_MEMORY_NES_BGFETCH    0x10B
++/* PER-SCANLINE evaluated SPRITES: 240 lines x 8 slots x 4 bytes
++ * [patternLo, patternHi, attr, x] -- the layout of fceumm's SPRB struct.
++ * Captured inside the PPU's own sprite
++ * evaluation, which is the only point that is correct when a game rewrites OAM
++ * mid-frame (many titles reuse the same 64 slots repeatedly per frame, so at vblank
++ * almost every slot reads y=244 "offscreen" while the screen is full of them).
++ * Already post-flip, post-bank and post-8-per-line cutoff. */
++#define ROMDEV_MEMORY_NES_SPRLINES   0x10C
++/* Which PHYSICAL 1KB page each of the four logical nametables resolves to:
++ * 4 bytes, values 0..1 (an index into the 2KB CIRAM). This is the mapper's own
++ * `vnapage` table, i.e. the mirroring as WIRED RIGHT NOW -- the iNES header is
++ * only a power-on default and any mapper with a mirroring register changes it.
++ * The renderer indexes it directly (vnapage[(v >> 10) & 3]) and does no
++ * mirroring arithmetic of its own; reconstructing that guess-wise is what made
++ * a game fetch its ATTRIBUTE bytes from the wrong half, giving pixel-perfect
++ * tiles in pixel-perfect positions with the wrong sub-palette. */
++#define ROMDEV_MEMORY_NES_NTMAP      0x10D
++/* PER-SCANLINE palette: 240 lines x 32 bytes, captured as each line renders.
++ * Games change PALRAM mid-frame (Kirby recolours a 32-line band), so a single
++ * frame-end read misses colours that are on screen for part of the frame --
++ * they show up as colours present in the core's output and ENTIRELY ABSENT
++ * from a reconstruction. */
++#define ROMDEV_MEMORY_NES_PALLINES   0x10E
++/* PER-SCANLINE PPUMASK: 240 bytes, captured as each line renders. Games toggle
++ * background/sprite enable and the left-column clip MID-FRAME (Kirby disables
++ * sprites for part of the frame, so a frame-end read says "sprites off" while
++ * the screen is full of them). A single frame-end sample makes a renderer skip
++ * layers that are genuinely visible. */
++#define ROMDEV_MEMORY_NES_MASKLINES  0x10F
++/* PER-SCANLINE nametable map: 240 lines x 4 bytes. A mapper can change the
++ * mirroring MID-FRAME (AxROM flips its one-screen selection, so Cobra Triangle
++ * renders some lines from CIRAM page 0 and others from page 1). A single
++ * frame-end vnapage read then attributes the whole screen to one page and every
++ * attribute byte comes from the wrong half. */
++#define ROMDEV_MEMORY_NES_NTMAPLINES 0x110
++/* PER-PIXEL background palette INDEX: 240 lines x 256 px, one byte each
++ * (0-15, already combining the 2 pattern bits with the 2 attribute bits).
++ * This is what pputile.h computes and writes to the framebuffer, captured at
++ * the point it is emitted -- so it is immune to every reconstruction hazard at
++ * once: prefetch pipelining, mid-scanline CHR latches, attribute quadrant math
++ * and nametable mirroring. Reconstructing those from separate captures kept
++ * producing 1-tile and 1-line offsets. */
++#define ROMDEV_MEMORY_NES_BGPIX      0x111
++/* PER-SCANLINE backdrop (palette entry 0): 240 bytes, sampled where the PPU
++ * COMMITS to it -- inside the two blank paths that fill a line with Pal[0].
++ * The DoLine-entry pallines snapshot is a different moment: a game writing
++ * $3F00 partway down a line has the change land in the NEXT line's slot, so
++ * the row that actually used the new colour keeps the old one. */
++#define ROMDEV_MEMORY_NES_BACKDROP   0x112
++#define ROMDEV_MEMORY_NES_SPRDRAWN   0x113
++/* PER-PIXEL resolved background palette VALUE (240 x 256), recorded where
++ * pputile.h does P[n] = PALRAM[index]. pallines is sampled at line entry and
++ * misses a mid-line $3F00-$3F1F write, so the row that used the new colour
++ * keeps the old one (Lion King III flips pal[5] $07 -> $08 mid-line 194). */
++#define ROMDEV_MEMORY_NES_BGVAL      0x114
++/* PER-PIXEL PPUMASK (240 x 256). Emphasis (bits 5-7) and greyscale (bit 0) are
++ * applied per pixel downstream, and games flip them partway down a line. */
++#define ROMDEV_MEMORY_NES_MASKPIX    0x115
++/* The FINAL emitted planes, captured after greyscale and emphasis are applied.
++ * 0x116 is XBuf for the visible 240 lines (palette value per pixel, low 6 bits
++ * significant); 0x117 is one emphasis byte per line from XDBuf. Together with
++ * retro_palette[256 + (deemp & 7) * 64 + (pix & 0x3F)] they reproduce the
++ * framebuffer exactly, including mid-line mask writes that retroactively
++ * re-colour pixels emitted earlier in the same line. */
++#define ROMDEV_MEMORY_NES_LINEPIX    0x116
++#define ROMDEV_MEMORY_NES_LINEDEEMP  0x117
++/* The ACTIVE 64-entry PPU palette as RGB triples. VS System carts select
++ * rp2c03/rp2c04 variants instead of the standard NTSC table, so a baked-in
++ * table renders them entirely wrong. */
++#define ROMDEV_MEMORY_NES_PALRGB     0x118
 +
 +static uint8_t romdev_chr_buf[8192];
 +static uint8_t romdev_apu_buf[24];
 +static uint8_t romdev_cpu_buf[sizeof(X6502)];
++static uint8_t romdev_cartram_buf[8192];
++static uint8_t romdev_scroll_buf[8];
++extern uint8_t romdev_scroll_lines[240 * 4];
++extern uint8_t romdev_chr_lines[240 * 4096];
++extern uint8_t romdev_bgfetch[240 * 34 * 2];
++extern uint8_t romdev_sprlines[240 * 8 * 4];
++extern uint8_t romdev_ntmap[4];
++extern uint8_t romdev_pallines[240 * 32];
++extern uint8_t romdev_masklines[240];
++extern uint8_t romdev_ntmaplines[240 * 4];
++extern uint8_t romdev_bgpix[240 * 256];
++extern uint8_t romdev_bgval[240 * 256];
++extern uint8_t romdev_maskpix[240 * 256];
++extern uint8_t romdev_linepix[240 * 256];
++extern uint8_t romdev_linedeemp[240];
++extern uint8_t romdev_palrgb[64 * 3];
++extern uint8_t romdev_backdrop[240 * 256];
++extern uint8_t romdev_sprdrawn[240 * 256];
++extern void romdev_ntmap_update(void);
++extern void romdev_ppu_scroll(uint8_t *out);   /* decodes loopy v; lives in ppu.c */
 +
 +/* Synthesize the 24-byte APU register file from fceumm's scattered
 + * register-holder vars. Layout matches the NES APU register map at
@@ -127,7 +239,7 @@ index 96dece6..bf2d32e 100644
  void *retro_get_memory_data(unsigned type)
  {
     uint8_t* data;
-@@ -3965,6 +4076,56 @@ void *retro_get_memory_data(unsigned type)
+@@ -3965,6 +4188,189 @@ void *retro_get_memory_data(unsigned type)
        case RETRO_MEMORY_SYSTEM_RAM:
           data = RAM;
           break;
@@ -181,10 +293,143 @@ index 96dece6..bf2d32e 100644
 +      case ROMDEV_MEMORY_NES_PPU_REGS:
 +         data = PPU;
 +         break;
++      case ROMDEV_MEMORY_NES_SCROLL:
++         {
++            /* The PPU's LATCHED scroll, decoded from the loopy v register.
++             *
++             * PPUSCROLL ($2005) is WRITE-ONLY, so there is nothing in the
++             * register file to read a scroll position back from. Consumers that
++             * need it (a bezel re-rendering the scene from PPU state) otherwise
++             * have to reverse-engineer whichever zero-page address a particular
++             * GAME happens to keep its own copy in -- which is per-cartridge
++             * work, and worse, is read a frame late: the game updates its copy
++             * during logic AFTER the PPU latched the value for the frame being
++             * displayed, so it is 1-2px stale whenever the camera is moving.
++             *
++             * v layout (loopy):  yyy NN YYYYY XXXXX
++             *   bits 0-4   coarse X (tile column)
++             *   bits 5-9   coarse Y (tile row)
++             *   bits 10-11 nametable select
++             *   bits 12-14 fine Y
++             * Fine X lives separately in XOffset. Exposed DECODED -- byte 0 is
++             * the full 0-255 X scroll (coarse*8 | fine), byte 1 the full 0-239
++             * Y scroll, byte 2 the nametable select -- so a consumer does not
++             * have to know the loopy bit layout at all. */
++            romdev_ppu_scroll(romdev_scroll_buf);
++            data = romdev_scroll_buf;
++         }
++         break;
++      case ROMDEV_MEMORY_NES_CHR_LINES:
++         data = romdev_chr_lines;
++         break;
++      case ROMDEV_MEMORY_NES_BGFETCH:
++         data = romdev_bgfetch;
++         break;
++      case ROMDEV_MEMORY_NES_SPRLINES:
++         data = romdev_sprlines;
++         break;
++      case ROMDEV_MEMORY_NES_NTMAP:
++         romdev_ntmap_update();
++         data = romdev_ntmap;
++         break;
++      case ROMDEV_MEMORY_NES_PALLINES:
++         data = romdev_pallines;
++         break;
++      case ROMDEV_MEMORY_NES_MASKLINES:
++         data = romdev_masklines;
++         break;
++      case ROMDEV_MEMORY_NES_NTMAPLINES:
++         data = romdev_ntmaplines;
++         break;
++      case ROMDEV_MEMORY_NES_BGPIX:
++         data = romdev_bgpix;
++         break;
++      case ROMDEV_MEMORY_NES_BACKDROP:
++         data = romdev_backdrop;
++         break;
++      case ROMDEV_MEMORY_NES_SPRDRAWN:
++         data = romdev_sprdrawn;
++         break;
++      case ROMDEV_MEMORY_NES_BGVAL:
++         data = romdev_bgval;
++         break;
++      case ROMDEV_MEMORY_NES_MASKPIX:
++         data = romdev_maskpix;
++         break;
++      case ROMDEV_MEMORY_NES_LINEPIX:
++         data = romdev_linepix;
++         break;
++      case ROMDEV_MEMORY_NES_LINEDEEMP:
++         data = romdev_linedeemp;
++         break;
++      case ROMDEV_MEMORY_NES_PALRGB:
++         data = romdev_palrgb;
++         break;
++      case ROMDEV_MEMORY_NES_SCROLL_LINES:
++         {
++            data = romdev_scroll_lines;
++         }
++         break;
++      case ROMDEV_MEMORY_NES_CART_RAM:
++         {
++            /* Cart WRAM at CPU $6000-$7FFF (8KB), regardless of the battery
++             * flag. RETRO_MEMORY_SAVE_RAM deliberately returns NULL for a
++             * non-battery cart -- its contract is "bytes to persist to .srm",
++             * and those are meaningless without a battery. But the WRAM is
++             * still live and full of game state (Metroid keeps its equipment
++             * bits, item flags and energy tanks at $6878-$68xx), and the cheat
++             * engine already gets an unconditional pointer to it via
++             * FCEU_CheatAddRAM(8, 0x6000, WRAM). This region exposes the same
++             * memory for READING, so an agent/bezel can introspect it.
++             *
++             * Read through Page[] so it works for ANY mapper: Page is the
++             * CPU-address page table and is PRE-BIASED, so the access idiom is
++             * Page[A >> 11][A] -- index with the FULL cpu address, not an
++             * offset into the page (same subtlety as VPage above). A NULL slot
++             * (no WRAM mapped there) reads back as 0. */
++            int i;
++            uint8_t *p0 = Page[0x6000 >> 11];
++            int contiguous = (p0 != NULL);
++            /* Prefer returning the LIVE pointer so the region is writable, not
++             * just readable -- retro_get_memory_data hands the host a pointer it
++             * may write through. Page[] is pre-biased, so the bytes for $6000
++             * start at p0 + 0x6000, and the four 2KB slots are contiguous only
++             * if each later slot resolves to that same base. Fall back to the
++             * snapshot buffer (read-only) when a mapper splits them.
++             *
++             * In practice the fallback is rare: the NES mappers that carry WRAM
++             * map $6000-$7FFF as ONE 8KB window. MMC1 does; MMC5 -- the most
++             * elaborate mapper, and the one most likely to break this -- also
++             * documents $6000-$7FFF as "8 KB switchable PRG RAM bank" in every
++             * one of its four PRG modes, never splittable (nesdev.org/wiki/MMC5).
++             *
++             * On a multi-bank cart this region shows whichever 8KB bank is
++             * CURRENTLY mapped (what the CPU sees). A bank switch therefore
++             * changes the contents without changing the region size, and RAM
++             * outside the mapped bank (MMC5 supports up to 128KB) is not
++             * reachable here. MMC5's 1KB ExRAM at $5C00-$5FFF is a separate
++             * on-chip block and is likewise outside this window. */
++            for (i = 1; i < 4 && contiguous; i++) {
++               uint32_t base = 0x6000 + i * 0x800;
++               if (Page[base >> 11] != p0) contiguous = 0;
++            }
++            if (contiguous) {
++               data = p0 + 0x6000;
++            } else {
++               for (i = 0; i < 4; i++) {
++                  uint32_t base = 0x6000 + i * 0x800;
++                  uint8_t *pg   = Page[base >> 11];
++                  if (pg) memcpy(romdev_cartram_buf + i * 0x800, pg + base, 0x800);
++                  else    memset(romdev_cartram_buf + i * 0x800, 0, 0x800);
++               }
++               data = romdev_cartram_buf;
++            }
++         }
++         break;
        default:
           data = NULL;
           break;
-@@ -3992,6 +4153,13 @@ size_t retro_get_memory_size(unsigned type)
+@@ -3992,6 +4398,71 @@ size_t retro_get_memory_size(unsigned type)
        case RETRO_MEMORY_SYSTEM_RAM:
           size = 0x800;
           break;
@@ -195,14 +440,123 @@ index 96dece6..bf2d32e 100644
 +      case ROMDEV_MEMORY_NES_APU_REGS:   size = 24;    break;
 +      case ROMDEV_MEMORY_NES_CPU_REGS:   size = sizeof(X6502); break;
 +      case ROMDEV_MEMORY_NES_PPU_REGS:   size = 4;     break;
++      case ROMDEV_MEMORY_NES_CART_RAM:
++         /* Report 0 when the cart has NO WRAM mapped at $6000 (plain NROM etc).
++          * Reporting a flat 8192 there would hand back 8KB of zeros that look
++          * exactly like real, zeroed WRAM -- the caller could not tell "empty"
++          * from "this cart has none". An honest 0 makes the host say so. */
++         size = Page[0x6000 >> 11] ? 8192 : 0;
++         break;
++      case ROMDEV_MEMORY_NES_SCROLL:
++         size = 8;
++         break;
++      case ROMDEV_MEMORY_NES_SCROLL_LINES:
++         size = 240 * 4;
++         break;
++      case ROMDEV_MEMORY_NES_CHR_LINES:
++         size = 240 * 4096;
++         break;
++      case ROMDEV_MEMORY_NES_BGFETCH:
++         size = 240 * 34 * 2;
++         break;
++      case ROMDEV_MEMORY_NES_SPRLINES:
++         size = 240 * 8 * 4;
++         break;
++      case ROMDEV_MEMORY_NES_NTMAP:
++         size = 4;
++         break;
++      case ROMDEV_MEMORY_NES_PALLINES:
++         size = 240 * 32;
++         break;
++      case ROMDEV_MEMORY_NES_MASKLINES:
++         size = 240;
++         break;
++      case ROMDEV_MEMORY_NES_NTMAPLINES:
++         size = 240 * 4;
++         break;
++      case ROMDEV_MEMORY_NES_BGPIX:
++         size = 240 * 256;
++         break;
++      case ROMDEV_MEMORY_NES_BACKDROP:
++         size = 240 * 256;
++         break;
++      case ROMDEV_MEMORY_NES_SPRDRAWN:
++         size = 240 * 256;
++         break;
++      case ROMDEV_MEMORY_NES_BGVAL:
++         size = 240 * 256;
++         break;
++      case ROMDEV_MEMORY_NES_MASKPIX:
++         size = 240 * 256;
++         break;
++      case ROMDEV_MEMORY_NES_LINEPIX:
++         size = 240 * 256;
++         break;
++      case ROMDEV_MEMORY_NES_LINEDEEMP:
++         size = 240;
++         break;
++      case ROMDEV_MEMORY_NES_PALRGB:
++         size = 64 * 3;
++         break;
        default:
           size = 0;
           break;
+diff --git a/src/palette.c b/src/palette.c
+index 65d6047..7413653 100644
+--- a/src/palette.c
++++ b/src/palette.c
+@@ -55,6 +55,24 @@ static pal *default_palette[8] =
+ 	rp2c03,
+ };
+ 
++/* romdev: the ACTIVE 64-entry PPU palette as RGB triples. `palo` selects
++ * between the standard NTSC table and the VS System's rp2c03/rp2c04 variants
++ * (and a game- or user-supplied palette), so a reconstruction that bakes in the
++ * standard table renders every VS cart in the wrong colours -- VS Baseball came
++ * out 757575 grey against the core's ffb6b6 pink. Refreshed on every palette
++ * change; consumers read the CORE's table rather than assuming one. */
++uint8_t romdev_palrgb[64 * 3];
++
++void romdev_palette_refresh(void) {
++	int i;
++	if (!palo) return;
++	for (i = 0; i < 64; i++) {
++		romdev_palrgb[i * 3 + 0] = palo[i].r;
++		romdev_palrgb[i * 3 + 1] = palo[i].g;
++		romdev_palrgb[i * 3 + 2] = palo[i].b;
++	}
++}
++
+ static void ApplyDeemphasisClassic(int entry, uint8_t *r, uint8_t *g, uint8_t *b) {
+ 	static const float rtmul[] = { 1.239f, 0.794f, 1.019f, 0.905f, 1.023f, 0.741f, 0.75f };
+ 	static const float gtmul[] = { 0.915f, 1.086f, 0.98f,  1.026f, 0.908f, 0.987f, 0.75f };
+@@ -224,6 +242,8 @@ void WritePalette(void) {
+ 	int x;
+ 	int unvaried = sizeof(unvpalette) / sizeof(unvpalette[0]);
+ 
++	romdev_palette_refresh();   /* keep the exported table in step with palo */
++
+ 	for (x = 0; x < unvaried; x++)
+ 		FCEUD_SetPalette(x, unvpalette[x].r, unvpalette[x].g, unvpalette[x].b);
+ 	for (x = unvaried; x < 256; x++)
+diff --git a/src/palette.h b/src/palette.h
+index 946fae3..88ac0eb 100644
+--- a/src/palette.h
++++ b/src/palette.h
+@@ -7,6 +7,8 @@ typedef struct {
+ 
+ extern pal *palo;
+ extern uint8_t palette_game_available;
++extern uint8_t romdev_palrgb[64 * 3];
++extern void romdev_palette_refresh(void);
+ void FCEU_ResetPalette(void);
+ 
+ void FCEU_ResetPalette(void);
 diff --git a/src/ppu.c b/src/ppu.c
-index 2a5ba88..6cabd05 100644
+index 2a5ba88..9a7b7cc 100644
 --- a/src/ppu.c
 +++ b/src/ppu.c
-@@ -303,9 +303,17 @@ static DECLFW(B2006) {
+@@ -303,9 +303,152 @@ static DECLFW(B2006) {
  	vtoggle ^= 1;
  }
  
@@ -211,6 +565,141 @@ index 2a5ba88..6cabd05 100644
 +extern int           romdev_vw_enabled;
 +extern void          romdev_vw_log(unsigned int vaddr, unsigned int pc, unsigned char val);
 +extern uint32_t      romdev_6502_instr_pc;
++/* Defined below; declared here because pputile.h (included further down) writes it. */
++extern uint8_t       romdev_bgfetch[240 * 34 * 2];
++extern uint8_t       romdev_bgpix[240 * 256];
++extern uint8_t       romdev_bgval[240 * 256];
++extern uint8_t       romdev_maskpix[240 * 256];
++extern uint8_t       romdev_linepix[240 * 256];
++extern uint8_t       romdev_linedeemp[240];
++extern uint8_t       romdev_masklines[240];
++extern void          romdev_scroll_record_now(int line);
++extern uint8_t       romdev_sprlines[240 * 8 * 4];
++extern void          romdev_ntmap_update(void);
++
++/* PER-SCANLINE scroll table for romdev's ROMDEV_MEMORY_NES_SCROLL_LINES.
++ * Filled as each visible scanline is rendered, so a consumer can reproduce a
++ * mid-frame scroll change (a raster split) that no frame-boundary snapshot can
++ * recover: games rewrite BOTH v and t during the frame, so at vblank the value
++ * the top of the screen rendered with no longer exists anywhere. */
++uint8_t romdev_scroll_lines[240 * 4];
++uint8_t romdev_chr_lines[240 * 4096];
++uint8_t romdev_bgfetch[240 * 34 * 2];
++uint8_t romdev_sprlines[240 * 8 * 4];
++uint8_t romdev_sprdrawn[240 * 256];
++uint8_t romdev_ntmap[4];
++uint8_t romdev_pallines[240 * 32];
++uint8_t romdev_backdrop[240 * 256];
++uint8_t romdev_masklines[240];
++uint8_t romdev_ntmaplines[240 * 4];
++uint8_t romdev_bgpix[240 * 256];
++uint8_t romdev_bgval[240 * 256];
++uint8_t romdev_maskpix[240 * 256];
++uint8_t romdev_linepix[240 * 256];
++uint8_t romdev_linedeemp[240];
++
++/* Resolve each logical nametable to a physical CIRAM page by comparing the
++ * mapper's vnapage pointers against NTARAM. Anything that is not one of the two
++ * CIRAM halves (four-screen carts with their own RAM) reports its index. */
++void romdev_ntmap_update(void) {
++	int i;
++	for (i = 0; i < 4; i++) {
++		if (vnapage[i] == NTARAM)            romdev_ntmap[i] = 0;
++		else if (vnapage[i] == NTARAM + 0x400) romdev_ntmap[i] = 1;
++		else                                  romdev_ntmap[i] = (uint8_t)i;
++	}
++}
++
++/* Copy the 4KB pattern half the BACKGROUND is currently using. PPUCTRL bit4
++ * selects it; VPage[i] is indexed as the PPU does (VPage[i] + i*0x400). */
++void romdev_chr_record(int line) {
++	int i, base;
++	uint8_t *o;
++	if (line < 0 || line >= 240) return;
++	o = &romdev_chr_lines[line * 4096];
++	base = (PPU[0] & 0x10) ? 4 : 0;
++	for (i = 0; i < 4; i++) {
++		int slot = base + i;
++		if (VPage[slot])
++			memcpy(o + i * 1024, VPage[slot] + slot * 1024, 1024);
++		else
++			memset(o + i * 1024, 0, 1024);
++	}
++}
++
++/* Scroll/nametable state as it stands WHILE the line is being drawn. */
++void romdev_scroll_record_now(int line) {
++	uint8_t *o;
++	int q;
++	if (line < 0 || line >= 240) return;
++	o = &romdev_scroll_lines[line * 4];
++	o[0] = (uint8_t)(((TempAddr & 0x001F) << 3) | (XOffset & 0x07));
++	o[1] = (uint8_t)(((RefreshAddr & 0x03E0) >> 2) | ((RefreshAddr >> 12) & 0x07));
++	o[2] = (uint8_t)(((TempAddr >> 10) & 0x01) | ((RefreshAddr >> 10) & 0x02));
++	o[3] = 0;
++	for (q = 0; q < 4; q++) {
++		if (vnapage[q] == NTARAM)              romdev_ntmaplines[line * 4 + q] = 0;
++		else if (vnapage[q] == NTARAM + 0x400) romdev_ntmaplines[line * 4 + q] = 1;
++		else                                   romdev_ntmaplines[line * 4 + q] = (uint8_t)q;
++	}
++}
++
++void romdev_scroll_record(int line) {
++	uint8_t *o;
++	if (line < 0 || line >= 240) return;
++	romdev_chr_record(line);
++	memcpy(&romdev_pallines[line * 32], PALRAM, 32);
++	{
++		int q;
++		for (q = 0; q < 256; q++) romdev_backdrop[line * 256 + q] = PALRAM[0];
++	}
++	romdev_masklines[line] = PPU[1];
++	{
++		int q;
++		for (q = 0; q < 4; q++) {
++			if (vnapage[q] == NTARAM)              romdev_ntmaplines[line * 4 + q] = 0;
++			else if (vnapage[q] == NTARAM + 0x400) romdev_ntmaplines[line * 4 + q] = 1;
++			else                                   romdev_ntmaplines[line * 4 + q] = (uint8_t)q;
++		}
++	}
++	o = &romdev_scroll_lines[line * 4];
++	/* HORIZONTAL bits come from t, VERTICAL bits from v.
++	 *
++	 * This mirrors what the PPU itself does: Fixit2() copies t's coarse-X and
++	 * horizontal-nametable bits (mask 0x041F) into v during EVERY hblank, so
++	 * the line being drawn always uses t's X -- while v's Y keeps advancing via
++	 * Fixit1(). Recording v wholesale at the top of DoLine reads the PREVIOUS
++	 * line's leftover X, because Fixit2() for this line has not run yet. That
++	 * error is invisible while the whole frame is drawn with one scroll and
++	 * only surfaces once the picture is banded per scanline. */
++	o[0] = (uint8_t)(((TempAddr & 0x001F) << 3) | (XOffset & 0x07));
++	o[1] = (uint8_t)(((RefreshAddr & 0x03E0) >> 2) | ((RefreshAddr >> 12) & 0x07));
++	o[2] = (uint8_t)(((TempAddr >> 10) & 0x01) | ((RefreshAddr >> 10) & 0x02));
++	o[3] = 0;
++}
++
++/* Decode the LATCHED scroll out of the loopy v register for romdev's
++ * ROMDEV_MEMORY_NES_SCROLL region. RefreshAddr and XOffset are statics in this
++ * translation unit, so libretro.c cannot read them directly.
++ *   v:  yyy NN YYYYY XXXXX   (fineY, ntSelect, coarseY, coarseX)
++ * Reported decoded: full 0-255 X, full 0-239 Y, nametable select. */
++void romdev_ppu_scroll(uint8_t *out) {
++	/* [0..3] from v (RefreshAddr) -- the CURRENT address, i.e. whatever the
++	 * last mid-frame write left it at. */
++	out[0] = (uint8_t)(((RefreshAddr & 0x001F) << 3) | (XOffset & 0x07));
++	out[1] = (uint8_t)(((RefreshAddr & 0x03E0) >> 2) | ((RefreshAddr >> 12) & 0x07));
++	out[2] = (uint8_t)((RefreshAddr >> 10) & 0x03);
++	out[3] = 0;
++	/* [4..7] from t (TempAddr) -- the value v is RELOADED FROM at the start of
++	 * each frame, so this is the scroll the TOP of the screen renders with.
++	 * Games with a raster split (a status bar) leave these two DIFFERENT: the
++	 * bar is drawn from t, the playfield from v. A consumer that applies v to
++	 * the whole screen gets a pixel-exact playfield and a wrong status bar. */
++	out[4] = (uint8_t)(((TempAddr & 0x001F) << 3) | (XOffset & 0x07));
++	out[5] = (uint8_t)(((TempAddr & 0x03E0) >> 2) | ((TempAddr >> 12) & 0x07));
++	out[6] = (uint8_t)((TempAddr >> 10) & 0x03);
++	out[7] = 0;
++}
 +
  static DECLFW(B2007) {
  	uint32_t tmp = RefreshAddr & 0x3FFF;
@@ -220,6 +709,300 @@ index 2a5ba88..6cabd05 100644
  	if (tmp < 0x2000) {
  		if (PPUCHRRAM & (1 << (tmp >> 10)))
  			VPage[tmp >> 10][tmp] = V;
+@@ -459,6 +602,42 @@ static void FASTAPASS(1) RefreshLine(int lastpixel) {
+ 		tem = Pal[0] | (Pal[0] << 8) | (Pal[0] << 16) | (Pal[0] << 24);
+ 		tem |= 0x40404040;
+ 		FCEU_dwmemset(Pline, tem, numtiles * 8);
++		/* romdev: the backdrop this fill uses is Pal[0] AS OF NOW. The DoLine-entry
++		 * snapshot can be a different value when the game writes $3F00 partway
++		 * down the line (Last Ninja swaps $10 grey -> $0f black at its split, and
++		 * the change otherwise lands in the NEXT line's slot). Record it here, at
++		 * the point the hardware commits to it. */
++		/* Pline is NOT the row base -- it advances past tiles emitted by earlier
++		 * partial updates on this line. Anchor the span at firsttile, or a later
++		 * partial update overwrites the columns an earlier one correctly filled
++		 * and the mid-line split comes out INVERTED. */
++		/* The fill writes at the Pline CURSOR, so its screen offset is exactly
++		 * Pline - Plinef. Deriving it from firsttile is a guess that is wrong
++		 * whenever an earlier partial update left the cursor somewhere else. */
++		if (scanline >= 0 && scanline < 240) {
++			int rx = (int)(Pline - Plinef), rn = numtiles * 8;
++			if (rx < 0) { rn += rx; rx = 0; }
++			while (rn-- > 0 && rx < 256)
++				romdev_backdrop[scanline * 256 + rx++] = Pal[0];
++		}
++		/* romdev: this branch blanks the line and RETURNS before the tile loop,
++		 * so pputile.h never records these columns and bgpix keeps whatever an
++		 * earlier partial update left there. A game that disables rendering
++		 * part-way down (Kick Master's last visible row) then shows stale
++		 * tiles. Mirror the fill over the same span. */
++		if (scanline >= 0 && scanline < 240) {
++			/* EXACTLY the span fceumm just filled: FCEU_dwmemset(Pline, tem,
++			 * numtiles * 8). The tile-arithmetic form needed slack tiles on both
++			 * ends to paper over the cursor drift; the cursor offset needs none
++			 * and does not overshoot into columns the fill never touched. */
++			int rx = (int)(Pline - Plinef), rn = numtiles * 8;
++			if (rx < 0) { rn += rx; rx = 0; }
++			while (rn-- > 0 && rx < 256) {
++				romdev_bgval[scanline * 256 + rx] = Pal[0];
++				romdev_maskpix[scanline * 256 + rx] = PPU[1];
++				romdev_bgpix[scanline * 256 + rx++] = 0;
++			}
++		}
+ 		P += numtiles * 8;
+ 		Pline = P;
+ 
+@@ -586,6 +765,49 @@ static void FASTAPASS(1) RefreshLine(int lastpixel) {
+ 		}
+ 		if (tcount > 0)
+ 			FCEU_dwmemset(Plinef + tstart * 8, tem, tcount * 8);
++		/* Record the committed backdrop across the SPAN this fill covers. A
++		 * per-LINE byte cannot express a mid-line $3F00 write: Last Ninja shows
++		 * grey left of its split and black right of it on the same scanline. */
++		if (tcount > 0 && scanline >= 0 && scanline < 240) {
++			int rx = tstart * 8, rn = tcount * 8;
++			if (rx < 0) { rn += rx; rx = 0; }
++			while (rn-- > 0 && rx < 256)
++				romdev_backdrop[scanline * 256 + rx++] = Pal[0];
++		}
++		/* romdev: the tiles pputile.h just computed are OVERWRITTEN with the
++		 * backdrop here when rendering is off. Mirror that into bgpix or the
++		 * capture keeps pixels the framebuffer never shows -- it is how a
++		 * mid-scanline disable (Kick Master line 228) leaves a stale row. */
++		/* Blank the SAME span fceumm just filled. It writes Plinef + tstart*8
++		 * for tcount tiles, and Plinef is the row base, so these are absolute
++		 * screen tile columns -- no prefetch offset to re-apply here. Clamp
++		 * rather than assume the span is in range: a partial update near the
++		 * end of a line can run past the visible 256 px. */
++		if (tcount > 0 && scanline >= 0 && scanline < 240) {
++			int rx = tstart * 8, rn = tcount * 8;
++			if (rx < 0) { rn += rx; rx = 0; }
++			while (rn-- > 0 && rx < 256) {
++				romdev_bgval[scanline * 256 + rx] = Pal[0];
++				romdev_maskpix[scanline * 256 + rx] = PPU[1];
++				romdev_bgpix[scanline * 256 + rx++] = 0;
++			}
++		}
++	}
++	/* The LEFT-8 clip (PPU[1] bit1 clear) also overwrites already-computed
++	 * tiles, at line 701 above. Mirror it for the same reason. */
++	if (firsttile <= 2 && 2 < lasttile && !(PPU[1] & 2)
++	    && scanline >= 0 && scanline < 240) {
++		int rx;
++		/* Two 32-bit stores at Plinef == screen columns 0..7, and the value is
++		 * Pal[0], so the BACKDROP capture must record it here too. */
++		for (rx = 0; rx < 8; rx++) {
++			romdev_bgpix[scanline * 256 + rx] = 0;
++			romdev_bgval[scanline * 256 + rx] = Pal[0];
++			romdev_maskpix[scanline * 256 + rx] = PPU[1];
++			romdev_backdrop[scanline * 256 + rx] = Pal[0];
++		}
++	}
++	{
+ 	}
+ 
+ 	if (lastpixel >= TOFIXNUM && tofix) {
+@@ -637,6 +859,11 @@ static void DoLine(void)
+ 	uint8_t *target = NULL;
+ 	uint8_t *dtarget = NULL;
+ 
++	/* romdev: snapshot the scroll IN EFFECT for this scanline, before the line
++	 * is drawn. Doing it here (rather than in the $2005/$2006 write handlers)
++	 * captures the value even when a game sets the scroll once and relies on
++	 * the PPU's own per-line increments. */
++	romdev_scroll_record(scanline);
+ 	if (scanline >= 240 && (unsigned)scanline != totalscanlines)
+ 	{
+ 		X6502_Run(256 + 69);
+@@ -660,9 +887,30 @@ static void DoLine(void)
+ 		FCEU_dwmemset(target, tem, 256);
+ 	}
+ 
++	/* romdev: `target` is XBuf + scanline * 256, so HERE `scanline` really is
++	 * the line being composited -- unlike inside FetchSpriteData/RefreshSprites,
++	 * where it means different lines and no constant offset reconciles them.
++	 * Record one byte per line: did this line's sprites actually get drawn?
++	 * FetchSpriteData records what evaluation FOUND, and a line evaluated while
++	 * sprites were disabled never reaches here (Back to the Future line 203 has
++	 * five solid slots the core does not paint). The renderer keeps using
++	 * sprlines with its own -1 delay and consults this flag as a veto. */
++	/* romdev: default the whole line to TRANSPARENT (0x80, fceumm's own marker
++	 * in sprlinebuf); CopySprites fills it only for lines it really composites. */
++	if (scanline >= 0 && scanline < 240)
++		memset(&romdev_sprdrawn[scanline * 256], 0x80, 256);
+ 	if (SpriteON)
+ 		CopySprites(target);
+ 
++	/* romdev: the greyscale/emphasis post-passes below use PPU[1] AS OF NOW --
++	 * end of line -- and they rewrite the ENTIRE line. pputile.h records
++	 * masklines during the tile emit, so a game that sets bit 0 partway down a
++	 * line (Micro Machines line 139) leaves masklines saying "greyscale off"
++	 * while the core greyscales every pixel. Overwrite with the value the
++	 * post-passes actually apply; the per-pixel emit-time mask is still
++	 * available in maskpix for anything that needs it. */
++	if (scanline >= 0 && scanline < 240) romdev_masklines[scanline] = PPU[1];
++
+ 	if (ScreenON || SpriteON) {	/* Yes, very el-cheapo. */
+ 		if (PPU[1] & 0x01) {
+ 			for (x = 63; x >= 0; x--)
+@@ -684,6 +932,21 @@ static void DoLine(void)
+ 	for (x = 63; x >= 0; x--)
+ 		*(uint32_t*)&dtarget[x << 2] = colour_emphasis;
+ 
++	/* romdev: capture the two FINAL planes for this line, here -- after
++	 * greyscale has masked `target` in place and after the emphasis plane is
++	 * written. Both are applied to the WHOLE line at once from the END-of-line
++	 * PPU[1], so pixels emitted earlier under a different mask are re-coloured
++	 * retroactively. That ordering cannot be expressed by any per-pixel mask
++	 * capture (nes_maskpix could not reproduce it); capturing the result is the
++	 * only faithful form. libretro then does exactly:
++	 *   retro_palette[256 + (deemp & 7) * 64 + (gfx[x] & 0x3F)]
++	 * with deemp taken per ROW from XDBuf, so these two arrays plus that
++	 * formula reproduce the framebuffer bit-for-bit. */
++	if (scanline >= 0 && scanline < 240) {
++		memcpy(&romdev_linepix[scanline * 256], target, 256);
++		romdev_linedeemp[scanline] = dtarget[0];
++	}
++
+     sphitx = 0x100;
+ 
+ 	if (ScreenON || SpriteON)
+@@ -865,6 +1128,22 @@ static void FetchSpriteData(void) {
+ 			PPU_hook(vofs);
+ 		}
+ 	}
++	/* romdev: record the sprites the PPU EVALUATED for this scanline. SPRBUF
++	 * already holds them post-flip, post-bank and post-8-per-line cutoff, and
++	 * this runs before any mid-frame OAM rewrite can hide them -- a frame-end
++	 * read of OAM sees many games parking almost every slot offscreen
++	 * even though the screen is full of sprites. attr 0xFF marks an empty slot. */
++	if (scanline >= 0 && scanline < 240) {
++		int ri;
++		uint8_t *ro = &romdev_sprlines[scanline * 32];
++		for (ri = 0; ri < 8; ri++) {
++			if (ri < ns) memcpy(ro + ri * 4, &SPRBUF[ri << 2], 4);
++			/* SPRB is { ca[2], atr, x } -- byte 2 is ATTR, byte 3 is X. An empty
++			 * slot is flagged with attr = 0xFF (byte 2), NOT byte 3. */
++			else { ro[ri*4] = 0; ro[ri*4+1] = 0; ro[ri*4+2] = 0xFF; ro[ri*4+3] = 0; }
++		}
++	}
++
+ 	numsprites = ns;
+ 	SpriteBlurp = sb;
+ }
+@@ -994,6 +1273,23 @@ static void CopySprites(uint8_t *target) {
+ 
+ 	if (rendis & 1) return;	/* User asked to not display sprites. */
+ 
++	/* romdev: `sprlinebuf` IS the resolved sprite layer -- one byte per pixel,
++	 * 0x80 = transparent, else the palette VALUE with bit 6 set for a
++	 * behind-background sprite. Capturing it here (past every early return, so
++	 * the line is really composited) subsumes the whole sprite path in one
++	 * array: flips, bank selection, the 8-per-line cutoff, the retained SPRBUF
++	 * that evaluation never recorded, and the compositing gate itself. It is to
++	 * sprites what bgpix is to the background. `target` at the call site is
++	 * XBuf + scanline * 256, so `scanline` here is the drawn line.
++	 * Note the x offset: CopySprites starts at n = ((PPU[1] & 4) ^ 4) << 1,
++	 * which is 8 when the left-8 sprite clip is on and 0 otherwise -- so the
++	 * clip is already accounted for by copying the same span it does. */
++	if (scanline >= 0 && scanline < 240) {
++		uint8_t n0 = ((PPU[1] & 4) ^ 4) << 1;
++		memcpy(&romdev_sprdrawn[scanline * 256 + n0], sprlinebuf + n0, 256 - n0);
++	}
++
++
+    do
+ 	{
+ 		uint32_t t = *(uint32_t*)(sprlinebuf + n);
+diff --git a/src/pputile.h b/src/pputile.h
+index aed172b..9551487 100644
+--- a/src/pputile.h
++++ b/src/pputile.h
+@@ -14,11 +14,65 @@ uint32_t vadr;
+ if (X1 >= 2) {
+ 	uint8_t *S = PALRAM;
+ 	uint32_t pixdata;
++	uint32_t romdev_pd;
+ 
+ 	pixdata = ppulut1[(pshift[0] >> (8 - XOffset)) & 0xFF] | ppulut2[(pshift[1] >> (8 - XOffset)) & 0xFF];
+ 
+ 	pixdata |= ppulut3[XOffset | (atlatch << 3)];
+ 
++	/* romdev: the RESOLVED background palette index for these 8 pixels, taken
++	 * exactly where the PPU emits them. Captures pattern bits, attribute bits,
++	 * prefetch pipelining and any mid-scanline CHR latch in one value -- all of
++	 * which produced off-by-one-tile / off-by-one-line errors when
++	 * reconstructed from separate per-tile captures. */
++	romdev_pd = pixdata;
++	if (scanline >= 0 && scanline < 240) {
++		/* The destination is the WRITE CURSOR, not a tile-arithmetic guess.
++		 * `(X1 - 2) * 8` assumes a fixed 2-tile prefetch offset from the start
++		 * of the line, which is only true when the line is emitted in ONE pass.
++		 * A mid-line split restarts the tile loop with a different `firsttile`,
++		 * so on those lines the assumption is off by exactly 2 tiles = 16 px
++		 * (MK3 line 62, Micro Machines, Lion King III). `P - Plinef` is where
++		 * the emit below actually writes, so it is correct in both cases. */
++		int rx = (int)(P - Plinef), ri;
++		/* PPUMASK as it stands WHILE THIS LINE IS BEING DRAWN. Recording it at
++		 * DoLine entry is one line early: a game that disables rendering with a
++		 * mid-scanline write (Kick Master at line 228) has the change land in
++		 * the NEXT line's slot, so the blanked line still reads "enabled". */
++		romdev_masklines[scanline] = PPU[1];
++		/* Same for the SCROLL. A mid-scanline write (a status-bar split, or the
++		 * scroll reset Kick Master does at line 228) affects the pixels still
++		 * being drawn on that line, but a sample taken at DoLine entry records
++		 * it against the NEXT line. Capturing here keeps scroll, mask and the
++		 * resolved pixels all on the same clock. */
++		/* Record on the LAST emitted tile of the line: a mid-scanline write has
++		 * landed by then, and it is the value the tail of the line rendered
++		 * with. Recording at the first tile (or at DoLine entry) samples the
++		 * PREVIOUS state and puts the change one line late. */
++		if (X1 >= 33) romdev_scroll_record_now(scanline);
++		for (ri = 0; ri < 8; ri++, rx++)
++			if (rx >= 0 && rx < 256) {
++				romdev_bgpix[scanline * 256 + rx] = (uint8_t)(romdev_pd & 0xF);
++				/* The emit below is P[n] = S[index] with S = PALRAM, so the
++				 * palette VALUE for this pixel is fixed right here. pallines is
++				 * sampled at DoLine entry and misses a $3F00-$3F1F write made
++				 * partway down the line: Lion King III flips pal[5] from $07 to
++				 * $08 mid-line 194 and the whole row comes out the old colour.
++				 * Recording the resolved value per pixel removes the lookup --
++				 * and with it every mid-line palette hazard -- exactly as bgpix
++				 * did for the index. */
++				romdev_bgval[scanline * 256 + rx] =
++					PALRAM[romdev_pd & 0xF];
++				/* PPUMASK as it stands for THIS pixel. Emphasis (bits 5-7) and
++				 * greyscale (bit 0) are applied downstream per pixel, and a game
++				 * can flip them partway down a line: MK3 goes 0x00 -> 0x9e mid
++				 * line 62 (emphasis 4), Micro Machines turns greyscale on mid
++				 * line 140. A per-LINE mask colours the whole row one way. */
++				romdev_maskpix[scanline * 256 + rx] = PPU[1];
++				romdev_pd >>= 4;
++			}
++	}
++
+ 	P[0] = S[pixdata & 0xF];
+ 	pixdata >>= 4;
+ 	P[1] = S[pixdata & 0xF];
+@@ -86,6 +140,18 @@ pshift[1] <<= 8;
+ 	PPU_hook(vadr);
+ #endif
+ 
++	/* romdev: record the pattern bytes THIS tile actually fetched, before any
++	 * latch-driven bank switch can change what a later read would return.
++	 * MMC2/MMC4 swap CHR inside a scanline, so capturing bytes here is the only
++	 * representation that stays correct -- a per-scanline CHR copy comes back
++	 * identical for lines that render from different banks. */
++	/* X1 is the true tile column, so this stays correct even though a scanline
++	 * is rendered in several partial LineUpdate passes. */
++	if (scanline >= 0 && scanline < 240 && X1 >= 0 && X1 < 34) {
++		romdev_bgfetch[(scanline * 34 + X1) * 2 + 0] = C[0];
++		romdev_bgfetch[(scanline * 34 + X1) * 2 + 1] = C[8];
++	}
++
+ #ifdef PPU_BGFETCH
+ 	if (RefreshAddr & 1) {
+ 		pshift[0] |= C[8];
 diff --git a/src/sound.c b/src/sound.c
 index e1c6438..e925205 100644
 --- a/src/sound.c

@@ -205,8 +205,107 @@ index ec55ea9..a73af88 100644
  	uint32	mask = MEMMAP_MASK & (w == WRAP_PAGE ? 0xff : (w == WRAP_BANK ? 0xffff : 0xffffff));
  	if ((Address & mask) == mask)
  	{
+diff --git a/gfx.cpp b/gfx.cpp
+index 98f9941..f44eb0f 100644
+--- a/gfx.cpp
++++ b/gfx.cpp
+@@ -507,9 +507,94 @@ void S9xUpdateScreen (void)
+ 				GFX.S[x] = black;
+ 	}
+ 
++	/* romdev: resolved-frame capture (snes-redraw). The lines just rendered
++	 * (StartY..EndY, both the composed and forced-blank branches) are FINAL:
++	 * color math, windows, brightness and mode-7 are all baked into
++	 * GFX.Screen by this point. Capture them plus the per-line register
++	 * state, bounds-checked everywhere (an unchecked capture index in the
++	 * gpgx patch corrupted core memory for off-screen sprites; never again).
++	 * Interlace/hires: rows are captured at GFX.PPL pitch as rendered,
++	 * width = IPPU.RenderedScreenWidth (256 or 512), height clamped 240. */
++	{
++		extern unsigned char romdev_snes_linestate[240 * 16];
++		extern unsigned char romdev_snes_m7lines[240 * 16];
++		extern unsigned char romdev_snes_linedepth[240 * 512];
++		extern unsigned char romdev_snes_cliplines[240 * 16];
++		uint32 w = IPPU.RenderedScreenWidth;
++		if (w > 512) w = 512;
++		for (uint32 l = GFX.StartY; l <= GFX.EndY && l < 240; l++)
++		{
++			unsigned char *ls = &romdev_snes_linestate[l * 16];
++			ls[0] = Memory.FillRAM[0x2100];   /* INIDISP */
++			ls[1] = Memory.FillRAM[0x2105];   /* BGMODE */
++			ls[2] = Memory.FillRAM[0x212c];   /* TM */
++			ls[3] = Memory.FillRAM[0x212d];   /* TS */
++			ls[4] = Memory.FillRAM[0x2130];   /* CGWSEL */
++			ls[5] = Memory.FillRAM[0x2131];   /* CGADSUB */
++			ls[6] = Memory.FillRAM[0x2106];   /* MOSAIC */
++			ls[7] = w & 0xFF;
++			ls[8] = (w >> 8) & 0xFF;
++			ls[9] = PPU.ScreenHeight & 0xFF;
++			ls[10] = (PPU.ScreenHeight >> 8) & 0xFF;
++			ls[11] = (IPPU.Interlace ? 1 : 0) | (IPPU.DoubleWidthPixels ? 2 : 0)
++			       | (PPU.ForcedBlanking ? 4 : 0);
++			ls[12] = ls[13] = ls[14] = ls[15] = 0;
++			/* Mode 7 per-line matrix state: HDMA rewrites A-D every line
++			 * for perspective (F-Zero et al). LineMatrixData is the core's
++			 * OWN per-line record (filled at scanline time); PPU.Matrix*
++			 * only holds the LAST written value, which flattened every
++			 * line to the same matrix on first attempt. 8 x s16 LE. */
++			memcpy(&romdev_snes_m7lines[l * 16], &LineMatrixData[l], 16);
++			/* Layer-resolution depth: which layer won each pixel. OBJ
++			 * depths are distinct, so this is an exact sprite mask over
++			 * linepix for HD-substitution renderers. */
++			{
++				uint32 zw = w > 512 ? 512 : w;
++				memcpy(&romdev_snes_linedepth[l * 512],
++				       GFX.ZBuffer + l * GFX.PPL, zw);
++			}
++			/* Resolved window clipping for main-screen BG1 (the layer a
++			 * Mode 7 re-projection must honour: F-Zero windows the plane
++			 * per line via HDMA, and clipped pixels never show the map).
++			 * Per line: count, pad, then up to 3 regions of
++			 * (Left u16 LE, Right u16 LE, DrawMode). */
++			{
++				unsigned char *cl = &romdev_snes_cliplines[l * 16];
++				const struct ClipData *cd = &IPPU.Clip[0][0];
++				int cn = cd->Count > 3 ? 3 : cd->Count;
++				cl[0] = (unsigned char) cn;
++				cl[1] = 0;
++				for (int ci = 0; ci < 3; ci++)
++				{
++					unsigned char *e = &cl[2 + ci * 5];
++					if (ci < cn)
++					{
++						e[0] = cd->Left[ci] & 0xFF;
++						e[1] = (cd->Left[ci] >> 8) & 0xFF;
++						e[2] = cd->Right[ci] & 0xFF;
++						e[3] = (cd->Right[ci] >> 8) & 0xFF;
++						e[4] = cd->DrawMode[ci];
++					}
++					else
++						e[0] = e[1] = e[2] = e[3] = e[4] = 0;
++				}
++			}
++		}
++	}
++
+ 	IPPU.PreviousLine = IPPU.CurrentLine;
+ }
+ 
++/* romdev: capture buffer definitions. linepix moved to libretro.cpp's
++ * S9xDeinitUpdate: hi-res doubling and overscan crop happen THERE, so the
++ * only seam that matches the displayed frame by construction is the exact
++ * (pointer,width,height,pitch) handed to video_cb. Cost a 2-cart hi-res
++ * divergence to learn. */
++unsigned char romdev_snes_linestate[240 * 16];
++unsigned char romdev_snes_m7lines[240 * 16];
++unsigned char romdev_snes_linedepth[240 * 512];
++unsigned char romdev_snes_cliplines[240 * 16];
++
+ static void SetupOBJ (void)
+ {
+ 	int	SmallWidth, SmallHeight, LargeWidth, LargeHeight;
 diff --git a/libretro/libretro.cpp b/libretro/libretro.cpp
-index d381c61..f1165f4 100644
+index d381c61..d76b8c3 100644
 --- a/libretro/libretro.cpp
 +++ b/libretro/libretro.cpp
 @@ -6,6 +6,7 @@
@@ -217,7 +316,7 @@ index d381c61..f1165f4 100644
  #include "gfx.h"
  #include "snapshot.h"
  #include "controls.h"
-@@ -2029,6 +2030,107 @@ unsigned retro_get_region()
+@@ -2029,6 +2030,121 @@ unsigned retro_get_region()
      return Settings.PAL ? RETRO_REGION_PAL : RETRO_REGION_NTSC;
  }
  
@@ -321,11 +420,25 @@ index d381c61..f1165f4 100644
 +#define ROMDEV_MEMORY_SNES_CGRAM  0x111  /* 512B PPU.CGDATA (256 × uint16) */
 +#define ROMDEV_MEMORY_SNES_ARAM   0x112  /* 64KB SPC700 RAM */
 +#define ROMDEV_MEMORY_SNES_FILLRAM 0x113 /* 32KB Memory.FillRAM — PPU/DMA registers shadow */
++/* Resolved-frame capture (gfx.cpp): the FINAL composed RGB565 lines (color
++ * math, windows, brightness, mode 7 all baked) + per-line register state. */
++#define ROMDEV_MEMORY_SNES_LINEPIX   0x1B0  /* 480*512 u16 LE RGB565, displayed rows */
++#define ROMDEV_MEMORY_SNES_LINESTATE 0x1B1  /* 240*16 per-line regs (render lines) */
++#define ROMDEV_MEMORY_SNES_FRAMEINFO 0x1B2  /* u16 LE: width, height, flags, reserved */
++#define ROMDEV_MEMORY_SNES_M7LINES   0x1B3  /* 240*16: s16 LE A,B,C,D,CX,CY,HOFS,VOFS per line */
++#define ROMDEV_MEMORY_SNES_LINEDEPTH 0x1B4  /* 240*512: per-pixel layer depth (OBJ mask) */
++#define ROMDEV_MEMORY_SNES_CLIPLINES 0x1B5  /* 240*16: per-line BG1 window clip regions */
++unsigned char romdev_snes_linepix[480 * 512 * 2];
++unsigned char romdev_snes_frameinfo[8];
++extern unsigned char romdev_snes_linestate[240 * 16];
++extern unsigned char romdev_snes_m7lines[240 * 16];
++extern unsigned char romdev_snes_linedepth[240 * 512];
++extern unsigned char romdev_snes_cliplines[240 * 16];
 +
  void* retro_get_memory_data(unsigned type)
  {
      void* data;
-@@ -2051,6 +2153,18 @@ void* retro_get_memory_data(unsigned type)
+@@ -2051,6 +2167,36 @@ void* retro_get_memory_data(unsigned type)
          case RETRO_MEMORY_VIDEO_RAM:
          data = Memory.VRAM;
          break;
@@ -341,10 +454,28 @@ index d381c61..f1165f4 100644
 +        case ROMDEV_MEMORY_SNES_FILLRAM:
 +            data = Memory.FillRAM;
 +            break;
++        case ROMDEV_MEMORY_SNES_LINEPIX:
++            data = romdev_snes_linepix;
++            break;
++        case ROMDEV_MEMORY_SNES_LINESTATE:
++            data = romdev_snes_linestate;
++            break;
++        case ROMDEV_MEMORY_SNES_FRAMEINFO:
++            data = romdev_snes_frameinfo;
++            break;
++        case ROMDEV_MEMORY_SNES_M7LINES:
++            data = romdev_snes_m7lines;
++            break;
++        case ROMDEV_MEMORY_SNES_LINEDEPTH:
++            data = romdev_snes_linedepth;
++            break;
++        case ROMDEV_MEMORY_SNES_CLIPLINES:
++            data = romdev_snes_cliplines;
++            break;
          //case RETRO_MEMORY_ROM:
          //	data = Memory.ROM;
          //	break;
-@@ -2085,6 +2199,18 @@ size_t retro_get_memory_size(unsigned type)
+@@ -2085,6 +2231,36 @@ size_t retro_get_memory_size(unsigned type)
          case RETRO_MEMORY_VIDEO_RAM:
              size = 64 * 1024;
              break;
@@ -360,9 +491,62 @@ index d381c61..f1165f4 100644
 +        case ROMDEV_MEMORY_SNES_FILLRAM:
 +            size = 0x8000;     /* 32KB — PPU/DMA register shadow at $00:2000+ */
 +            break;
++        case ROMDEV_MEMORY_SNES_LINEPIX:
++            size = 480 * 512 * 2;
++            break;
++        case ROMDEV_MEMORY_SNES_FRAMEINFO:
++            size = 8;
++            break;
++        case ROMDEV_MEMORY_SNES_M7LINES:
++            size = 240 * 16;
++            break;
++        case ROMDEV_MEMORY_SNES_LINEDEPTH:
++            size = 240 * 512;
++            break;
++        case ROMDEV_MEMORY_SNES_CLIPLINES:
++            size = 240 * 16;
++            break;
++        case ROMDEV_MEMORY_SNES_LINESTATE:
++            size = 240 * 16;
++            break;
          //case RETRO_MEMORY_ROM:
          //	size = Memory.CalculatedSize;
          //	break;
+@@ -2259,10 +2435,34 @@ bool8 S9xDeinitUpdate(int width, int height)
+             width >>= 1;
+         }
+ 
++        {
++            /* romdev: capture EXACTLY what is displayed -- same pointer,
++             * width, height and pitch as video_cb. Bounds-clamped. */
++            const uint16 *src = GFX.Screen + ((int)(GFX.Pitch >> 1) * overscan_offset);
++            int cw = width > 512 ? 512 : width;
++            int chh = height > 480 ? 480 : height;
++            for (int l = 0; l < chh; l++)
++                memcpy(&romdev_snes_linepix[l * 512 * 2],
++                       (const unsigned char *)src + (size_t)l * GFX.Pitch, (size_t)cw * 2);
++            romdev_snes_frameinfo[0] = cw & 0xFF; romdev_snes_frameinfo[1] = (cw >> 8) & 0xFF;
++            romdev_snes_frameinfo[2] = chh & 0xFF; romdev_snes_frameinfo[3] = (chh >> 8) & 0xFF;
++        }
+         video_cb(GFX.Screen + ((int)(GFX.Pitch >> 1) * overscan_offset), width, height, GFX.Pitch);
+     }
+     else
+     {
++        {
++            /* romdev: capture EXACTLY what is displayed -- same pointer,
++             * width, height and pitch as video_cb. Bounds-clamped. */
++            const uint16 *src = GFX.Screen + ((int)(GFX.Pitch >> 1) * overscan_offset);
++            int cw = width > 512 ? 512 : width;
++            int chh = height > 480 ? 480 : height;
++            for (int l = 0; l < chh; l++)
++                memcpy(&romdev_snes_linepix[l * 512 * 2],
++                       (const unsigned char *)src + (size_t)l * GFX.Pitch, (size_t)cw * 2);
++            romdev_snes_frameinfo[0] = cw & 0xFF; romdev_snes_frameinfo[1] = (cw >> 8) & 0xFF;
++            romdev_snes_frameinfo[2] = chh & 0xFF; romdev_snes_frameinfo[3] = (chh >> 8) & 0xFF;
++        }
+         video_cb(GFX.Screen + ((int)(GFX.Pitch >> 1) * overscan_offset), width, height, GFX.Pitch);
+     }
+ 
 diff --git a/ppu.h b/ppu.h
 index f5b0e0a..e34c413 100644
 --- a/ppu.h
