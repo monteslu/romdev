@@ -115,7 +115,27 @@ export async function runTool(tool, args, sessionKey) {
     } catch { /* never let the observer kill a tool call */ }
   };
 
-  // Parse against the strict schema if we have a built zod object.
+  /*
+   * Parse against the strict schema, and USE WHAT IT RETURNS.
+   *
+   * This used to validate with safeParse and then hand the handler the RAW
+   * args, throwing `parsed.data` away. Validation is only half of what a zod
+   * schema does: it also applies `.default()`, coercions and transforms. The
+   * MCP SDK applies them; this path did not. So the two transports ran the
+   * same handler with DIFFERENT arguments, and every one of the ~184
+   * `.default()` declarations across the tool surface was a behavioural fork.
+   *
+   * Observed: `frame({op:'step'})` with no `frames` stepped 1 frame over MCP
+   * (default applied) and 0 over HTTP (undefined). `memory({op:'read'})`
+   * diverged the other way -- an alias guard keyed on "offset is absent" fired
+   * over HTTP and never over MCP, so `address` silently read byte 0 there.
+   * Both are the same root cause: the transport, not the tool, decided what
+   * the arguments were.
+   *
+   * A tool must behave identically however it is called. Pass the parsed
+   * value on; fall back to the raw args only when a tool has no zod object.
+   */
+  let effectiveArgs = a;
   const schema = tool.inputSchema;
   if (schema && typeof schema === "object" && "_def" in schema && typeof schema.safeParse === "function") {
     const parsed = schema.safeParse(a);
@@ -126,9 +146,10 @@ export async function runTool(tool, args, sessionKey) {
       emit({ ok: false, error: msg });
       return { ok: false, error: msg };
     }
+    effectiveArgs = parsed.data;
   }
   try {
-    const r = await tool.handler(a, {});
+    const r = await tool.handler(effectiveArgs, {});
     // Re-resolve the platform AFTER the handler: a call like loadMedia /
     // build({output:'run'}) sets it during the call, so the post-call value
     // correctly labels this call's event + frame (the pre-call value was null).
