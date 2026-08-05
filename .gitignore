@@ -73,3 +73,18 @@ publish-all.mjs
 .z80build3/
 a.out
 *.playtest-autosave.state
+
+# Inter-agent feedback and crash reports are INTERNAL — they name commercial
+# ROMs, quote private session logs, and are working notes, not documentation.
+# They belong in internal-romdev/feedback/, outside this repo. These patterns
+# are a backstop so a stray `git add -A` can never publish one.
+feedback_from_*.md
+CRASH_REPORT*.md
+reply_to_*.md
+
+# Capture-dump debris from redraw/bezel debugging sessions -- regenerable
+# one-off dumps (frame PNGs, VRAM/palette/SAT binaries) that otherwise
+# accumulate in packages/romdevtools/ between cleanups.
+packages/romdevtools/mcpcap/
+packages/romdevtools/bk_*.png
+packages/romdevtools/bk_*.bin
