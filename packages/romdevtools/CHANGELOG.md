@@ -4,6 +4,60 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.113.0 — 2026-08-05
+
+### The mouse drives wasmcart pointer carts, in the window and from the tools
+
+- The playtest window forwards real mouse moves/clicks into a pointer cart's
+  slot 0, inverted through the exact letterbox the frame was presented with —
+  a human can just click, including after a resize. Gated on the cart
+  declaring FLAG_POINTER, so pad-only carts never see mouse movement.
+- `input({op:'pointer'})` gains `id` (0 = mouse, 1-9 = touch fingers) and
+  `active:false` to release a slot. The old hardcoded slot 0 made the #1
+  cart-side portability trap untestable: a cart that polls only pointer[0]
+  works with a desktop mouse and silently ignores every touch on a phone.
+
+### Per-scanline capture planes in six cores; regions are platform-gated
+
+The memory regions behind the pixel-exact redraw bezels graduate into the
+shipped cores: NES scroll/CHR/sprite/palette/mask/per-pixel planes (and
+`nes_cart_ram`), GB/GBC capture planes, Genesis/SMS/GG line planes, SNES
+line state + Mode 7, PCE VDC/VCE lines and palette write log, MSX VDP lines
+and VRAM deltas. `memory({op:'read'})` now refuses a region the loaded
+platform does not expose, naming the platform's actual list — region ids are
+baked per-core, and reading another platform's id returned garbage that
+looked like data. Core packages rebuilt and bumped: fceumm 0.12.0,
+gambatte 0.11.0, gpgx 0.14.0, geargrafx 0.9.0, bluemsx 0.8.0 (which also
+now ships its mapper databases — without them unrecognized mapper carts
+loaded, reported success, and sat on a blank screen), platform-snes 0.10.0.
+
+### Exactness and correctness fixes
+
+- Core options that paint non-hardware pixels are pinned off: fceumm's
+  Zapper crosshair (a core-drawn overlay that made light-gun games look
+  like renderer bugs) and gambatte's float-gamma GBC colour correction
+  (unreproducible rounding; also a determinism hazard). core-host 0.5.0.
+- The GB/GBC Game Genie codec is transcribed verbatim from the shipped
+  core. The previous version, written from a third-party reference doc,
+  decoded EVERY published 9-digit code to the wrong address and compare.
+- HTTP and MCP now run tools with IDENTICAL arguments: the HTTP path
+  validated with the zod schema and then threw the parsed result away, so
+  none of the ~184 `.default()` declarations applied over HTTP. Pinned by
+  a transport-parity test.
+- `disasm({target:'decompile'})` accepts `bank` for switchable-mapper
+  addresses; without it the decompiler read bank 0's filler and reported
+  "bad instruction data" for code that lives in another bank.
+
+### Operational
+
+- The re-exec wrapper reports how its child died: a signal-killed server
+  (segfault in a GL driver, OOM kill) exited 0 and the logs said clean
+  shutdown. Now it names the signal and exits 128+signum.
+- Observability priced as a recent-history feed: log ring 5000→500
+  entries (ROMDEV_LOG_RING raises it), livestream frames downscale to
+  <=960 wide before PNG encode (the full-1080p encode was ~120ms of
+  synchronous stutter every 2s inside playtest).
+
 ## 0.112.0 — 2026-08-01
 
 ### Universal Active Bezels flow through loadMedia
