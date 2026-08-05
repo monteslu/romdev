@@ -111,8 +111,12 @@ ls -lh "$OUT/bluemsx_libretro."{js,wasm}
 # host points blueMSX's system dir at our bios/ and mirrors it into the wasm FS,
 # so we need the full `Machines/<machine> - C-BIOS/` tree (NOT loose roms) — the
 # core fopen()s `<systemDir>/Machines/<machineName>/cbios_*.rom` + config.ini.
-# We ship only the Machines tree (~260KB); the multi-MB Databases aren't needed
-# to boot a plain cartridge.
+# The Machines tree (~260KB) boots plain cartridges. The Databases tree is
+# ALSO required: blueMSX picks a cartridge's MAPPER by looking the ROM up in
+# these XMLs, so without them any megaROM/mapper cart loads, reports success,
+# and sits on a blank screen. Databases are staged here from the fetched
+# upstream and published from disk -- they are gitignored (upstream content,
+# fetched not vendored, same as the core wasm).
 mkdir -p "$BIOS_OUT"
 SRC_SYS="$DIR/system/bluemsx"
 if [ -d "$SRC_SYS/Machines" ]; then
@@ -122,6 +126,14 @@ if [ -d "$SRC_SYS/Machines" ]; then
     cp -r "$m" "$BIOS_OUT/Machines/" 2>/dev/null || { mkdir -p "$BIOS_OUT/Machines"; cp -r "$m" "$BIOS_OUT/Machines/"; }
   done
   echo "C-BIOS machine tree staged into $BIOS_OUT/Machines."
+  if [ -d "$SRC_SYS/Databases" ]; then
+    rm -rf "$BIOS_OUT/Databases"
+    cp -r "$SRC_SYS/Databases" "$BIOS_OUT/Databases"
+    echo "Mapper databases staged into $BIOS_OUT/Databases ($(du -sh "$BIOS_OUT/Databases" | cut -f1))."
+  else
+    echo "WARNING: blueMSX source has no system/bluemsx/Databases tree; mapper" >&2
+    echo "         carts will not boot. Re-fetch the pinned blueMSX checkout." >&2
+  fi
 else
   echo "WARNING: blueMSX source has no system/bluemsx/Machines tree at $SRC_SYS." >&2
   echo "         The bundled C-BIOS machines ship with the blueMSX-libretro repo; if absent," >&2

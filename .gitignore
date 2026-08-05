@@ -88,3 +88,11 @@ reply_to_*.md
 packages/romdevtools/mcpcap/
 packages/romdevtools/bk_*.png
 packages/romdevtools/bk_*.bin
+
+# blueMSX's mapper databases: upstream game-identification XMLs, staged from
+# the FETCHED blueMSX checkout by scripts/build-bluemsx.sh and published from
+# disk in the romdev-core-bluemsx tarball (bios/ is in its files list) -- the
+# same fetched-not-vendored treatment as the core wasm binaries. They are
+# required at runtime (mapper carts silently fail to boot without them) but
+# they are upstream content and do not belong in this repo.
+packages/romdev-core-bluemsx/bios/Databases/
