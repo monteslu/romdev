@@ -1938,7 +1938,7 @@ export function registerDisasmTools(server, z) {
       symbolsText: z.string().optional().describe("target=bytes: inline symbol-file text."),
       symbolsFormat: z.enum(["wla", "cc65-lbl"]).optional().describe("target=bytes: explicit symbol-file format override."),
       // rom
-      bank: z.number().int().min(0).max(255).optional().describe("target=rom / pointerTable: switchable ROM bank to map into the windowed slot. NES (mapper>0, $8000), GB/GBC ($4000), SMS/GG (Sega-mapper slot 2, $8000), Atari 2600/7800 (SuperGame $8000). SNES: the bank IS the address high byte — pass either a full 24-bit startAddress ($02AF86) OR a bank-local address + bank:2 (composed to $02AF86 internally); both map correctly. Flat platforms (Genesis/GBA/Lynx/C64) have no cart banking — a non-zero `bank` is REJECTED, never silently applied to bank 0."),
+      bank: z.number().int().min(0).max(255).optional().describe("target=rom / pointerTable / decompile: switchable ROM bank to map into the windowed slot. NES (mapper>0, $8000), GB/GBC ($4000), SMS/GG (Sega-mapper slot 2, $8000), Atari 2600/7800 (SuperGame $8000). SNES: the bank IS the address high byte — pass either a full 24-bit startAddress ($02AF86) OR a bank-local address + bank:2 (composed to $02AF86 internally); both map correctly. Flat platforms (Genesis/GBA/Lynx/C64) have no cart banking — a non-zero `bank` is REJECTED, never silently applied to bank 0. target=decompile NEEDS this for a switchable-mapper address: a live CPU address like $AAC5 on MMC1 has no bank in it, so without `bank` the decompiler reads bank 0 — which usually holds $FF filler there and returns \"bad instruction data\". Take the bank from a breakpoint/watch result (they report bank + prgOffset) or from where you know the code lives."),
       thumb: z.boolean().default(false).describe("target=rom: GBA — disassemble as THUMB (16-bit) instead of ARM."),
       widths: z.object({ a: z.union([z.literal(8), z.literal(16)]).optional(), i: z.union([z.literal(8), z.literal(16)]).optional() }).optional().describe("target=rom, SNES/65816 — FORCE the ENTRY width (a = accumulator/M, i = index/X, default 8) instead of inferring it. Use when YOU know the width (live P capture, surrounding code) for a window with no in-window caller — e.g. widths:{a:16,i:16} to decode a blob entered in 16-bit mode. In-window rep/sep are still followed."),
       endAddress: z.number().int().min(0).max(0xffffff).optional().describe("target=rom: CPU end address (inclusive); alternative to length."),
@@ -1999,7 +1999,7 @@ export function registerDisasmTools(server, z) {
         case "cfg":        return jsonContent(await analyzeCfg(requireRomPath(args), args.address, args.platform));
         case "xrefs":      return jsonContent(await analyzeXrefs(requireRomPath(args), args.address, args.platform));
         case "functions":  return jsonContent(await analyzeFunctions(requireRomPath(args), args.platform, { topN: args.topN, minSize: args.minSize }));
-        case "decompile":  return jsonContent(await analyzeDecompile(requireRomPath(args), args.address, args.platform));
+        case "decompile":  return jsonContent(await analyzeDecompile(requireRomPath(args), args.address, args.platform, args.bank ?? null));
         case "source": {
           // The v0.98.0 headline asked for disasm({target:'source', projectDir,
           // startAddress, endAddress}) -- "show me MY OWN commented source for

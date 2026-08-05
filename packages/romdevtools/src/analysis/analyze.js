@@ -720,7 +720,7 @@ export function buildSnesCpuImage(romBytes, mapperHint) {
  * @returns {{ image: Uint8Array, cpuAddr: number, bank: number } | null} null if
  *   not a banked iNES (caller falls back to the flat path; NROM is fine flat).
  */
-export function buildNesBankImage(romBytes, flatVa) {
+export function buildNesBankImage(romBytes, flatVa, bankOverride = null) {
   if (romBytes[0] !== 0x4e || romBytes[1] !== 0x45 || romBytes[2] !== 0x53 || romBytes[3] !== 0x1a) {
     return null; // not iNES
   }
@@ -755,12 +755,34 @@ export function buildNesBankImage(romBytes, flatVa) {
     return { image, cpuAddr, bank: 0 };
   }
 
+  const topBank = prgBanks16k - 1;                     // fixed top bank
+
+  /* An EXPLICIT bank means the caller handed us a live CPU address, not a
+   * rizin flat VA.
+   *
+   * Without this, a switchable-mapper address like $AAC5 (MMC1/Zelda) has no
+   * flat VA to infer from: it falls into the bank-0 arithmetic below, and
+   * bank 0 holds $FF filler at that address, so the decompiler dutifully
+   * reports "bad instruction data". The bytes it needed were in bank 1.
+   * target='rom' already takes `bank` for exactly this reason; decompile
+   * silently ignored it, which is what sent a caller off to slice banks out
+   * of the ROM with python by hand.
+   */
+  if (bankOverride != null) {
+    if (bankOverride < 0 || bankOverride > topBank) return null;
+    const cpuAddr = flatVa >>> 0;
+    if (cpuAddr < 0x8000 || cpuAddr >= 0x10000) return null;
+    const image = new Uint8Array(0x10000);
+    image.set(prg.subarray(bankOverride * 0x4000, bankOverride * 0x4000 + 0x4000), 0x8000);
+    image.set(prg.subarray(topBank * 0x4000, topBank * 0x4000 + 0x4000), 0xC000);
+    return { image, cpuAddr, bank: bankOverride };
+  }
+
   // rizin flat VA → flat PRG offset (segment based at $8000).
   const flatOff = (flatVa >>> 0) - 0x8000;
   if (flatOff < 0 || flatOff >= prgSize) return null;
   const bank = Math.floor(flatOff / 0x4000);          // which 16KB bank
   const inBank = flatOff % 0x4000;                     // offset within it
-  const topBank = prgBanks16k - 1;                     // fixed top bank
 
   // 32KB CPU window: chosen bank at $8000, fixed top bank at $C000.
   const image = new Uint8Array(0x10000);
@@ -777,7 +799,7 @@ export function buildNesBankImage(romBytes, flatVa) {
  * Decompile the function containing `address` to C pseudocode (Ghidra).
  * @returns {{platform, langid, address, code, warnings, qualityNote, bank?}}
  */
-export async function analyzeDecompile(romPath, address, platformOverride) {
+export async function analyzeDecompile(romPath, address, platformOverride, bank = null) {
   if (address == null) throw new Error("analyze decompile: address required");
   const platform = platformOverride ?? sniffPlatform(romPath);
   if (!platform) throw new Error(`analyze decompile: unknown platform for '${path.basename(romPath)}'`);
@@ -859,7 +881,7 @@ export async function analyzeDecompile(romPath, address, platformOverride) {
   // Build a real 32KB CPU window (this bank @ $8000 + fixed top bank @ $C000) so
   // in-bank AND fixed-bank calls resolve. NROM falls through to the flat path.
   if (platform === "nes") {
-    const banked = buildNesBankImage(romBytes, address);
+    const banked = buildNesBankImage(romBytes, address, bank ?? null);
     if (banked) {
       const rn = await decompileFunction({ platform, romBytes: banked.image, fileOffset: banked.cpuAddr });
       return {
