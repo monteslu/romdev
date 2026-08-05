@@ -106,6 +106,22 @@ export function encodeNesGameGenie({ address, value, compare }) {
   if (compare == null) {
     n[5] |= (v & 8);                // 6-char: n5 bit3 = v3
   } else {
+    /*
+     * Bit 3 of the THIRD letter is the 8-character marker. fceumm (the core
+     * romdev ships) reads it at cheat.c:349 and the check is COMMENTED OUT --
+     *     t = GGtobin(*str++);
+     *     A |= (t & 0x07) << 4;
+     *     // if(t&0x08) return(0);   // 8-character code?!
+     * -- so the core accepts a code with the bit either way, and `& 0x07`
+     * means the bit never contributes to the address.
+     *
+     * We deliberately do NOT set it. Published 8-letter codes disagree about
+     * it (GATKGATX, verified working in test/feedback-0138-fixes.test.js, has
+     * it CLEAR; many others have it SET), so there is no single correct value
+     * to emit, and forcing it changes the text of codes that already work.
+     * Leaving it clear keeps every emitted code decodable by fceumm and by
+     * our own decoder, which branches on length rather than this bit.
+     */
     n[7] |= (v & 8);                // 8-char: n7 bit3 = v3
     const c = compare & 0xFF;
     n[7] |= ((c >> 4) & 7);         // n7 low3 = c4..6
@@ -183,11 +199,25 @@ export function encodeGenesisGameGenie({ address, value }) {
 }
 
 // ── Game Boy Game Genie ─────────────────────────────────────────────────
-// "ABC-DEF-GHI" (9 hex digits) or "ABC-DEF" (6 hex digits). Per Jeff
-// Frohwein's reference (devrs.com/gb/files/gg.html):
-//   value   = digits A,B (direct hex byte)
-//   address = digits reordered D E F C, with the high nibble (D) XOR 0xF
-//   compare = (9-digit only) from G,H,I: GI byte inverted, rotated right 2.
+// "ABC-DEF-GHI" (9 hex digits) or "ABC-DEF" (6 hex digits).
+//
+// Transcribed VERBATIM from `Cartridge::applyGameGenie` in gambatte
+// (src/mem/cartridge.cpp) — the exact core romdev ships for gb/gbc — so this
+// is bit-identical to how the emulator itself applies the code. Letting the
+// two disagree is worse than useless: romdev would report an address the
+// emulator never patches.
+//
+// gambatte indexes the HYPHENATED string, so its code[4],[5],[6] are digits
+// 3,4,5 and its code[8],[10] are digits 6,8. In digit terms:
+//   value   = d0,d1
+//   address = d2<<8 | d3<<4 | d4 | (d5 ^ 0xF)<<12, masked to 0x7FFF
+//   compare = (9-digit) ((d6<<4 | d8) ^ 0xFF), rotate-right 2, then ^ 0x45
+//   d7 ("H") is genuinely unread by the core.
+//
+// This replaces an earlier version written from a third-party reference doc,
+// which used a different nibble order (D E F C) and omitted the ^ 0x45
+// entirely. It decoded EVERY published 9-digit code to the wrong address and
+// the wrong compare; only `value` (the leading two digits) agreed.
 export function decodeGbGameGenie(code) {
   const clean = code.replace(/-/g, "").toUpperCase();
   if (clean.length !== 6 && clean.length !== 9) return null;
@@ -197,18 +227,12 @@ export function decodeGbGameGenie(code) {
     if (Number.isNaN(v)) return null;
     d.push(v);
   }
-  // A B C D E F (G H I)
-  const value = (d[0] << 4) | d[1];
-  // address nibbles in order D E F C, with D (the high nibble) complemented.
-  const hi = d[3] ^ 0xF;
-  const address = ((hi << 12) | (d[4] << 8) | (d[5] << 4) | d[2]) & 0xFFFF;
+  const value = ((d[0] << 4) | d[1]) & 0xFF;
+  const address = ((d[2] << 8) | (d[3] << 4) | d[4] | ((d[5] ^ 0xF) << 12)) & 0x7FFF;
   const out = { address, value };
   if (clean.length === 9) {
-    // compare from G(d6) H(d7) I(d8): form byte (I<<4 | G)?? Per ref the
-    // compare uses digits G,I → byte, inverted, rotate-right 2.
-    let cmp = ((d[8] << 4) | d[6]) & 0xFF;
-    cmp ^= 0xFF;
-    cmp = ((cmp >> 2) | (cmp << 6)) & 0xFF; // rotate right 2
+    let cmp = (((d[6] << 4) | d[8]) ^ 0xFF) & 0xFF;
+    cmp = (((cmp >> 2) | (cmp << 6)) ^ 0x45) & 0xFF;
     out.compare = cmp;
   }
   return out;
@@ -223,24 +247,26 @@ export function encodeGbGameGenie({ address, value, compare }) {
   const addr = address & 0xFFFF;
   const v = value & 0xFF;
   const d = new Array(compare == null ? 6 : 9).fill(0);
-  // value = digits A,B
+  // Exact inverse of decodeGbGameGenie above (which mirrors gambatte).
+  // value = digits 0,1
   d[0] = (v >> 4) & 0xF;
   d[1] = v & 0xF;
-  // address: decode read nibbles as hi=d3^0xF, then d4 d5 d2 for the lower 12.
-  //   addr = (hi<<12)|(d4<<8)|(d5<<4)|d2  where hi = d3^0xF
-  d[3] = ((addr >> 12) & 0xF) ^ 0xF;  // high nibble, complemented
-  d[4] = (addr >> 8) & 0xF;
-  d[5] = (addr >> 4) & 0xF;
-  d[2] = addr & 0xF;
+  // address = d2<<8 | d3<<4 | d4 | (d5 ^ 0xF)<<12  (15-bit)
+  d[2] = (addr >> 8) & 0xF;
+  d[3] = (addr >> 4) & 0xF;
+  d[4] = addr & 0xF;
+  d[5] = ((addr >> 12) & 0xF) ^ 0xF;   // high nibble, complemented
   if (compare != null) {
-    // Invert the compare transform: decode did inv→ROR2 to GET compare.
-    // So encode: ROL2 then invert → the stored byte; then split to G(d6),I(d8).
-    let b = compare & 0xFF;
-    b = ((b << 2) | (b >> 6)) & 0xFF;  // rotate left 2 (inverse of ROR2)
+    // decode: cmp = ROR2((d6<<4|d8) ^ 0xFF) ^ 0x45
+    // encode: undo the 0x45, rotate LEFT 2, invert, then split to d6/d8.
+    let b = (compare ^ 0x45) & 0xFF;
+    b = ((b << 2) | (b >> 6)) & 0xFF;    // rotate left 2 (inverse of ROR2)
     b ^= 0xFF;
-    d[6] = b & 0xF;          // G
-    d[8] = (b >> 4) & 0xF;   // I
-    d[7] = 0;                // H is unused by decode; canonical 0
+    d[6] = (b >> 4) & 0xF;
+    d[8] = b & 0xF;
+    // d7 ("H") is not read by the core. Published codes carry a nonzero digit
+    // there, so it cannot be reconstructed from address/value/compare -- a
+    // re-encode is semantically identical but need not be textually equal.
   }
   const hex = d.map((x) => x.toString(16).toUpperCase()).join("");
   return compare == null

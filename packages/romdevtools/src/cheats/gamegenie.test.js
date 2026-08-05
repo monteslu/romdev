@@ -51,9 +51,35 @@ test("Genesis Game Genie: verbatim Genesis-Plus-GX decode_cheat", () => {
   assert.equal(r.value, 0x6002);
 });
 
-test("Game Boy Game Genie: devrs reference worked example", () => {
-  // 0A1-B9F → reorder D E F C = B 9 F 1, complement high nibble B→4 → $49F1, value $0A
-  assert.deepEqual(decodeGbGameGenie("0A1B9F"), { address: 0x49f1, value: 0x0a });
+/*
+ * Ground truth for GB is gambatte's `Cartridge::applyGameGenie`, not a
+ * third-party reference doc — gambatte is the core romdev actually ships, so
+ * a decode it disagrees with names an address the emulator never patches.
+ *
+ * The previous version of this test asserted the devrs.com worked example
+ * ("0A1B9F" → $49F1). gambatte reads the HYPHENATED string (the libretro layer
+ * passes the code through verbatim: `if (c.find('-') != npos) setGameGenie(c)`)
+ * and computes $01B9 for the same code. The old decoder matched the doc and
+ * disagreed with the core on EVERY published 9-digit code — wrong address and
+ * wrong compare, with only `value` (the leading two digits) correct.
+ */
+test("Game Boy Game Genie: matches gambatte's decode (the shipping core)", () => {
+  // Digit layout per gambatte: value=d0d1, addr = d2<<8 | d3<<4 | d4 | (d5^F)<<12.
+  assert.deepEqual(decodeGbGameGenie("0A1B9F"), { address: 0x01b9, value: 0x0a });
+
+  // Published 9-digit codes: address, value AND compare must match the core.
+  // (Computed with gambatte's own expression, hyphens included.)
+  const asHex = (c) => parseInt(c, 16);
+  const gambatte = (c) => {
+    const value = ((asHex(c[0]) << 4) | asHex(c[1])) & 0xff;
+    const address = ((asHex(c[2]) << 8) | (asHex(c[4]) << 4) | asHex(c[5]) | ((asHex(c[6]) ^ 0xf) << 12)) & 0x7fff;
+    let compare = ((asHex(c[8]) << 4) | asHex(c[10])) ^ 0xff;
+    compare = (((compare >> 2) | (compare << 6)) ^ 0x45) & 0xff;
+    return { address, value, compare };
+  };
+  for (const code of ["00A-17B-E66", "010-30E-E6E", "019-C8B-F7A", "00C-849-19F"]) {
+    assert.deepEqual(decodeGbGameGenie(code), gambatte(code), `matches the core: ${code}`);
+  }
 });
 
 test("Game Boy Game Genie: 9-digit form carries a compare byte", () => {
@@ -168,8 +194,8 @@ test("decodeCode dispatches by platform and falls back on raw", () => {
   assert.deepEqual(decodeCode("00C7:FF", "nes"), { address: 0x00c7, value: 0xff });
   // Letter code routes to the platform decoder.
   assert.deepEqual(decodeCode("SXIOPO", "nes"), { address: 0x91d9, value: 0xad });
-  // gbc shares the GB decoder.
-  assert.deepEqual(decodeCode("0A1B9F", "gbc"), { address: 0x49f1, value: 0x0a });
+  // gbc shares the GB decoder (gambatte's layout — see the GB test above).
+  assert.deepEqual(decodeCode("0A1B9F", "gbc"), { address: 0x01b9, value: 0x0a });
   // A letter code on a platform with no decoder → null (skipped, not guessed).
   assert.equal(decodeCode("SXIOPO", "snes"), null);
 });
