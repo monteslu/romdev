@@ -57,6 +57,34 @@ const PLATFORM_CORE_OPTIONS = {
   // `… - C-BIOS` machine tree ships in romdev-core-bluemsx/bios and is mirrored
   // into the wasm FS as the system dir (see loadMedia + resolveSystemDir).
   msx: { bluemsx_msxtype: "MSX2+ - C-BIOS" },
+  // fceumm paints a Zapper CROSSHAIR straight into the framebuffer after
+  // rendering (video.c: `if (show_crosshair) FCEU_DrawInput(XBuf)`). It is a
+  // host overlay, not PPU output — no reconstruction from PPU state can or
+  // should reproduce it, and leaving it on makes light-gun games look like
+  // renderer bugs (one light-gun title differed by exactly its 13 crosshair pixels).
+  nes: { fceumm_show_crosshair: "disabled" },
+  // gambatte's GBC colour correction defaults to ON in its "gold standard"
+  // mode, which is float std::pow gamma math (video_libretro.cpp:250-284).
+  // Anything reconstructing the picture in Lua carries 64-bit doubles where
+  // the core carries 32-bit floats, so the two round differently at the
+  // final `(x * 31) + 0.5` and disagree by a shade — an unfixable exact-match
+  // failure. Pinned OFF, which makes the transform a passthrough (`rFinal =
+  // r`) that any host can reproduce exactly. `mode: fast` is belt-and-braces
+  // (the integer path) in case correction is ever re-enabled, and the dark
+  // filter is float in both branches so it stays at 0.
+  //
+  // This also makes output deterministic run-to-run, which the redraw sweeps
+  // depend on. See active-bezel-games/gb-redraw-generic/RESULTS-GB.md M0.5e.
+  gb: {
+    gambatte_gbc_color_correction: "disabled",
+    gambatte_gbc_color_correction_mode: "fast",
+    gambatte_dark_filter_level: "0",
+  },
+  gbc: {
+    gambatte_gbc_color_correction: "disabled",
+    gambatte_gbc_color_correction_mode: "fast",
+    gambatte_dark_filter_level: "0",
+  },
   // geargrafx ships with the TurboTap disabled, which makes port-1 input
   // unreachable in-game (every pad scan slot mirrors pad 0). Enabling it
   // costs nothing for 1P games (slot 0 still reads pad 0) and routes the
@@ -277,6 +305,12 @@ export class LibretroHost {
    *     supplies the glue's default export + wasm bytes; no disk touched.
    * opts.io: false disables the Node adapter even under Node (forces the
    * pure bytes-only contract — what a browser bundle gets).
+   *
+   * Same contract as loadMedia: resolves `undefined` on success and THROWS on
+   * failure, so `if (!await host.loadCore(...))` treats every success as a
+   * failure. Use try/catch.
+   *
+   * @returns {Promise<void>} resolves (undefined) on success; THROWS on failure
    */
   async loadCore(jsPath, wasmPath, opts = {}) {
     if (this.mod) throw new Error("core already loaded; create a new host");
@@ -451,7 +485,23 @@ export class LibretroHost {
    *   offset 8:  size_t size       (4 bytes)
    *   offset 12: const char *meta  (4 bytes)
    *
+   * FAILURE IS A THROW, NOT A FALSY RETURN. This resolves `undefined` on
+   * success, so the natural-looking
+   *
+   *     const ok = await host.loadMedia(path);
+   *     if (!ok) { ... treat as a boot failure ... }
+   *
+   * reports EVERY successfully loaded ROM as a failure. In a corpus sweep that
+   * reads as "0 ROMs booted" with no error anywhere -- it looks like a broken
+   * environment rather than an API-shape mismatch (cost: one 816-ROM MSX run).
+   * Wrap the call in try/catch, or check `host.status.mediaPath` after it.
+   *
+   * The return shape is deliberate and NOT changed here: callers already rely
+   * on it, and a load that half-worked should raise, not return a boolean
+   * nobody checks.
+   *
    * @param {import("./types.js").LoadMediaArgs} args
+   * @returns {Promise<void>} resolves (undefined) on success; THROWS on failure
    */
   async loadMedia(args) {
     const mod = this._needMod();
@@ -1007,7 +1057,16 @@ export class LibretroHost {
   }
 
   /** Returns the latest frame as flat RGBA8888 bytes — for piping into
-   * chafa-wasm or other pixel-consuming tools without the PNG round trip. */
+   * chafa-wasm or other pixel-consuming tools without the PNG round trip.
+   *
+   * The bytes are on `.rgba` — NOT `.pixels` (that is getFramebuffer's field
+   * name, in the core's own format) and not `.data`. Reaching for either gets
+   * `undefined`, and feeding that to a scorer produces confidently wrong
+   * numbers instead of an exception, which is why the shape is spelled out.
+   *
+   * @returns {{width: number, height: number, rgba: Uint8Array}} RGBA8888,
+   *   top row first, tightly packed (no pitch padding)
+   */
   screenshotRgba() {
     const f = this.getFramebuffer();
     return {
@@ -2958,6 +3017,14 @@ export class LibretroHost {
         `If you expected a save, confirm the cart header marks it battery-backed. ` +
         `For a full-machine snapshot regardless of SRAM, use state({op:'save'/'load', path}).`;
     }
+    // Cart WRAM: empty means the CART has no RAM at $6000, not a core fault.
+    if (region === "nes_cart_ram") {
+      return `nes_cart_ram is empty: this NES cart has no work RAM mapped at CPU $6000-$7FFF ` +
+        `(plain NROM boards and many simple mappers have none — the game keeps all its state ` +
+        `in the 2KB of system_ram). Use 'system_ram' instead. Carts that DO have WRAM report ` +
+        `8192 bytes here whether or not the iNES header sets the battery flag.`;
+    }
+
     const suggestions = {
       // platform → { generic-region-name: "use this instead" }
       gb:    { video_ram: "gb_vram",  save_ram: "save_ram (likely empty on cartless ROMs — try gb_oam / gb_io / gb_hram for non-VRAM state)" },
