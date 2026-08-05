@@ -23,6 +23,7 @@
  */
 
 import path from "node:path";
+import { createRequire } from "node:module";
 import { stat } from "node:fs/promises";
 
 /** sessionKey -> { runtime, packagePath, config, lastError, lastFrame, ticks } */
@@ -84,7 +85,30 @@ export async function attachActiveBezel(sessionKey, host, {
 
   // Imported here rather than at module load: romdev's other 30-odd tools have
   // no reason to pull in a WASM runtime and a compositor on every server start.
-  const { ActiveBezelRuntime } = await import("active-bezel");
+  const { ActiveBezelRuntime, setGlModule } = await import("active-bezel");
+
+  /*
+   * Hand active-bezel the ONE native-gles instance this process owns.
+   *
+   * A second instance is never a redundancy, it is a hang: two copies of the
+   * addon mean two EGL states in one process (the symlinked-package lesson).
+   * When active-bezel was consumed via a file: symlink its own require could
+   * not even FIND native-gles, and GpuCompositor.create swallowed the error,
+   * silently dropping every gpu-command-v1 package to the CPU compositor
+   * (measured: ~14ms/frame compositing 1920x1080 -- the difference between
+   * 60fps and 40). The dep is a registry install now (0.6.0, native-gles as a
+   * peer), so resolution would land on the hoisted copy anyway -- injection
+   * stays because it makes the single-instance handover explicit instead of
+   * an accident of hoisting. A GL context is still created lazily, and only
+   * for packages that request the GPU renderer. (HW-render cores own the
+   * process context the same way -- if a 3D core and a GPU bezel ever need to
+   * coexist, arbitration goes HERE.)
+   */
+  try {
+    setGlModule(createRequire(import.meta.url)("native-gles"));
+  } catch (err) {
+    console.error(`[active-bezel] native-gles injection failed -- GPU packages will fall back to the CPU compositor: ${err.message}`);
+  }
 
   let runtime;
   try {
@@ -167,6 +191,49 @@ export function detachActiveBezel(sessionKey) {
 /** The live runtime for a session, or null. */
 export function getActiveBezel(sessionKey) {
   return sessions.get(sessionKey)?.runtime ?? null;
+}
+
+/**
+ * Detach this process's GL context from the calling thread, after draining any
+ * work still in flight.
+ *
+ * Serialization boundary between the TWO display stacks romdev can end up
+ * holding at once: native-gles owns an EGL context (created on its own
+ * EGL_PLATFORM_DEVICE display), while an open playtest window drives SDL,
+ * which on X11/XWayland brings up GLX. Both bottom out in the same Mesa
+ * driver state inside one process, and the observed failure is a SIGSEGV in
+ * `__memcpy_avx512` under libgallium during a glTexImage2D whose arguments
+ * were verified correct -- driver state, not caller state.
+ *
+ * The bezel's GL work (texture creates/destroys at guest tick time via
+ * synchronous ab_host imports, then compose) and SDL's present used to run
+ * back to back in one synchronous tick with nothing between them. Calling
+ * this after the composite is in hand and before window.render() means the
+ * bezel's context is finished and no longer current when SDL touches Mesa.
+ *
+ * glFinish first: releasing a context with commands still queued leaves the
+ * driver working on buffers the next stack may disturb. It costs a pipeline
+ * drain, which is why this is called once per COMPOSED frame rather than per
+ * GL call, and not at all when no window is open.
+ *
+ * Portable by construction -- no window handles, no platform branches. The
+ * calls are no-ops on a build without them, and every path is optional-chained
+ * so a CPU-compositor session (native-gles never loaded) costs nothing.
+ *
+ * @returns {boolean} true if a context was actually released
+ */
+export function releaseBezelGl() {
+  try {
+    const gl = createRequire(import.meta.url)("native-gles");
+    if (typeof gl?.releaseCurrent !== "function") return false;
+    gl.glFinish?.();
+    gl.releaseCurrent();
+    return true;
+  } catch {
+    // native-gles absent or never initialised (CPU compositor, or no bezel at
+    // all). Nothing to serialize against.
+    return false;
+  }
 }
 
 /**
@@ -260,10 +327,39 @@ export function compositeFrame(sessionKey, host, { source = "composite" } = {}) 
   const entry = sessions.get(sessionKey);
   if (!entry) return { ...core, source: "core" };
 
+  /* The runtime caches the output of the LAST real tick. When it matches the
+   * current frame, return it instead of re-ticking: an observer capture used
+   * to run a full guest tick plus a 1080p CPU rasterize (~120ms on the event
+   * loop) to photograph a frame that was composed ~3ms earlier on the GPU --
+   * felt as a hard periodic stutter in playtest, and it polluted tick stats. */
+  const rt = entry.runtime;
+  if (rt.lastComposed?.rgba && rt.lastComposedFrame === host.status.frameCount) {
+    /* Same staleness rule as below: in GL-present mode the cached compose
+     * result is a placeholder; read the real frame back from the GPU. */
+    if (rt.lastComposed.stale && rt.compositor?.readbackScene) {
+      const fresh = rt.compositor.readbackScene();
+      return { rgba: fresh.rgba, width: fresh.width, height: fresh.height, source: "composite" };
+    }
+    return {
+      rgba: rt.lastComposed.rgba,
+      width: rt.lastComposed.width ?? rt.physicalWidth,
+      height: rt.lastComposed.height ?? rt.physicalHeight,
+      source: "composite",
+    };
+  }
+
   const composed = tickActiveBezel(
     sessionKey, core.rgba, core.width, core.height, host.status.frameCount,
   );
   if (!composed) return { ...core, source: "core", compositeFailed: true };
+
+  /* GL-direct present mode returns STALE pixels from compose (the live
+   * frame only exists on the GPU); refresh from the scene FBO for the
+   * capture. On-demand only -- the per-frame path never pays this. */
+  if (composed.stale && entry.runtime.compositor?.readbackScene) {
+    const fresh = entry.runtime.compositor.readbackScene();
+    return { rgba: fresh.rgba, width: fresh.width, height: fresh.height, source: "composite" };
+  }
 
   return {
     rgba: composed.rgba ?? composed,
