@@ -21,7 +21,7 @@ import {
   framebufferToRgba,
 } from "romdev-core-runner";
 import { log } from "../mcp/log.js";
-import { getActiveBezel, compositeFrame, tickActiveBezel } from "../mcp/active-bezel.js";
+import { getActiveBezel, compositeFrame, tickActiveBezel, releaseBezelGl } from "../mcp/active-bezel.js";
 import { framebufferToScreenshot } from "romdev-core-host/framebuffer-png.js";
 import { ROMDEV_PIXEL_FORMAT_RGBA8888 } from "romdev-core-host/retroConstants.js";
 import { initResampler, resampleS16Stereo } from "romdev-audio-resampler";
@@ -366,7 +366,33 @@ export async function playtest(args) {
   // whole server every time. The composite likewise arrives as CPU pixels, so
   // the same software-blit window is the right answer.
   const gpuBezel = !!openBezel?.compositor?.gpuReady;
-  const hwRenderCore = !!host.hwRender || gpuBezel;
+  /* EXPERIMENT (bezel-side agent, 2026-08-03): with releaseBezelGl()
+   * serializing bezel GL against the window loop, the accelerated window
+   * may be safe again for GPU bezels -- and the software 1080p blit costs
+   * ~13.6ms/frame, which blows the 16.7ms budget and starves audio.
+   * Opt-in via ROMDEV_ACCEL_WINDOW=1 so the default stays safe. */
+  const forceAccel = process.env.ROMDEV_ACCEL_WINDOW === "1";
+  /*
+   * NON-LIBRETRO hosts hold a GL context too, and checking only `host.hwRender`
+   * missed them: WasmcartHost/JsGameHost set `hwRender = null` (there is no
+   * libretro HW-render path) but a GL cart still creates a real WebGL2 context
+   * through webgl-node/native-gles. So `playtest({op:'open'})` on a GL wasmcart
+   * took the accelerated branch and died exactly like a Dreamcast core:
+   *
+   *     [cart] wasmcart-lua: boot
+   *     X Error of failed request: BadAccess ... X_GLXMakeCurrent
+   *
+   * killing the whole server. Same class as the two cases above, third
+   * discovery of it -- so key off "does this host have a live GL context",
+   * which every host kind can answer, rather than enumerating host types.
+   *
+   * wasmcart reports this per LOAD (`status.gl === "rendered"` only when the
+   * cart actually requested a context), so a 2D cart keeps the fast
+   * accelerated path and pays nothing. jsgame always drives WebGL2 through
+   * rungame, so its kind alone is the signal.
+   */
+  const glHost = host.status?.gl === "rendered" || host.kind === "jsgame";
+  const hwRenderCore = !!host.hwRender || glHost || (gpuBezel && !forceAccel);
   const window = sdl.video.createWindow({
     title,
     width: winInitW,
@@ -376,6 +402,21 @@ export async function playtest(args) {
     vsync: false,
   });
   log.debug(`[playtest] window opened: ${winInitW}x${winInitH}, fb=${fbWidth}x${fbHeight}, aspect=${aspectMode}`);
+
+  /* GL-DIRECT PRESENT (ROMDEV_GL_PRESENT=1, bezel-side agent 2026-08-03):
+   * rebind the bezel compositor's context onto this window's native handle
+   * and present by GPU blit + swap -- no composite readback consumption
+   * here, no SDL software blit, no rescale cliff at any window size. The
+   * software path stays the default until this is proven broadly. */
+  let glPresent = false;
+  if (process.env.ROMDEV_GL_PRESENT === "1" && gpuBezel && window.native?.handle) {
+    try {
+      glPresent = !!openBezel.compositor.migrateToWindow?.(window.native.handle);
+      log.debug(`[playtest] GL-direct present: ${glPresent ? "ACTIVE" : "unavailable, software path"}`);
+    } catch (e) {
+      log.error("[playtest] GL-direct present setup failed:", e.message);
+    }
+  }
 
   // Open audio at the core's NATIVE sample rate, not a hardcoded one.
   // snes9x emits at ~32040 Hz, fceumm at 48000, genesis-plus-gx at 44100.
@@ -528,7 +569,40 @@ export async function playtest(args) {
     convertMs: 0,       // EMA: framebuffer→RGBA conversion per tick
     presentMs: 0,       // EMA: SDL render per tick
     audioQueuedMs: null, // last SDL audio queue depth (null = no audio device)
+    bezelMs: 0,         // EMA: Active Bezel tick+compose per composed frame
+    bezelEveryN: 1,     // composing 1 frame in N (1 = every frame)
+    bezelSkipped: 0,    // composites skipped since the window opened
   };
+
+  // ── Bezel pacing: the GAME never waits for the overlay ──────────────
+  //
+  // The tick used to run core-step → bezel tick+compose → present in one
+  // serial chain, so an expensive bezel slowed the GAME: audio, input latency
+  // and physics all inherited its cost. A 25-31ms SNES HD bezel tick on top of
+  // a 16.7ms frame budget is why an otherwise full-speed game played "slow as
+  // fuck" from the pad.
+  //
+  // The core stepping above is already time-budgeted and audio-paced; this
+  // does the same for the overlay, with the priority the report asks for:
+  // DROP COMPOSITES, NEVER CORE FRAMES. A 60fps game under a 20fps overlay
+  // refresh is playable; a 15fps game is not.
+  //
+  // Self-tuning from measured cost, so no per-package configuration: if a
+  // tick+compose costs more than the frame budget, compose every Nth frame
+  // where N is how many budgets it spans. Cheap bezels keep composing every
+  // frame and are unaffected (N stays 1). The last composite is re-presented
+  // on skipped frames, so the overlay holds still rather than flickering.
+  //
+  // Side benefit noted by the bezel agent: fewer composites means fewer
+  // tick-time GL uploads interleaved with the window loop, which shrinks the
+  // surface of the EGL/GLX driver-state crash.
+  const BEZEL_MAX_EVERY_N = 8;   // never refresh slower than ~7.5fps at 60Hz
+  let lastComposite = null;      // { rgba, width, height } re-presented while skipping
+  /* Where the picture last landed inside the window, for the inverse transform
+   * the mouse handlers need. Null until the first frame is presented, which is
+   * why the handlers ignore events before then. */
+  let lastPresentRect = null;
+  let bezelFrameCounter = 0;
   let perfFrames = 0, perfTicks = 0, perfWinStart = 0;
   const ema = (prev, v) => (prev === 0 ? v : prev + (v - prev) * 0.05);
   // On-window fps: always in the title bar (updated 1/s, zero render cost);
@@ -537,6 +611,77 @@ export async function playtest(args) {
   let fpsOverlay = !!args.fpsOverlay;
 
   window.on("close", () => { stop(); });
+
+  /* ── Mouse → cart pointer (wasmcart FLAG_POINTER carts) ────────────────
+   *
+   * Without this a human could not CLICK a pointer-first cart in the playtest
+   * window at all -- menus, card games, puzzle games, anything built for touch
+   * were agent-drivable (input({op:'pointer'})) but not human-playable, which
+   * is the wrong way round for an acceptance pass.
+   *
+   * Gated on the cart declaring FLAG_POINTER (0x08) so mouse movement never
+   * reaches a pad-only cart. The window coordinate is inverted through the
+   * SAME letterbox the frame was presented with, so a click lands exactly
+   * where the human saw it -- including after a resize, since the rect is
+   * recomputed every frame.
+   */
+  const WC_FLAG_POINTER = 0x08;
+  const cartWantsPointer = () => {
+    try {
+      const info = typeof host.getInfo === "function" ? host.getInfo() : null;
+      return !!((info?.flags ?? 0) & WC_FLAG_POINTER);
+    } catch { return false; }
+  };
+  /** Window (backing-store) coords -> cart pixels, or null if outside the picture. */
+  const windowToCart = (wx, wy) => {
+    const r = lastPresentRect;
+    if (!r || !r.w || !r.h) return null;             // nothing presented yet
+    // node-sdl reports mouse in WINDOW points; the rect is in backing-store
+    // pixels. On HiDPI those differ, so scale by the same ratio the presenter
+    // used rather than assuming 1:1.
+    const sx = (window.pixelWidth || r.winW) / (window.width || r.winW);
+    const sy = (window.pixelHeight || r.winH) / (window.height || r.winH);
+    const px = wx * sx, py = wy * sy;
+    if (px < r.x || py < r.y || px >= r.x + r.w || py >= r.y + r.h) return null; // letterbox bar
+    return {
+      x: Math.floor((px - r.x) * r.fbW / r.w),
+      y: Math.floor((py - r.y) * r.fbH / r.h),
+    };
+  };
+  let mouseButtons = { left: false, right: false };
+  const sendPointer = (pt, active = true) => {
+    if (!pt || typeof host.setInput !== "function") return;
+    try {
+      host.setInput({ pointer: { id: 0, x: pt.x, y: pt.y, left: mouseButtons.left, right: mouseButtons.right, active } });
+    } catch { /* a pointer-less host just ignores it; never kill the loop */ }
+  };
+  window.on("mouseMove", (e) => {
+    if (!cartWantsPointer()) return;
+    sendPointer(windowToCart(e.x, e.y));
+  });
+  window.on("mouseButtonDown", (e) => {
+    if (!cartWantsPointer()) return;
+    if (e.button === 1) mouseButtons.left = true;
+    else if (e.button === 3) mouseButtons.right = true;
+    sendPointer(windowToCart(e.x, e.y));
+  });
+  window.on("mouseButtonUp", (e) => {
+    if (!cartWantsPointer()) return;
+    if (e.button === 1) mouseButtons.left = false;
+    else if (e.button === 3) mouseButtons.right = false;
+    sendPointer(windowToCart(e.x, e.y));
+  });
+  // node-sdl names this "leave", not "mouseLeave" -- an unknown event name
+  // makes createWindow throw "invalid event" and the whole window fails to open.
+  window.on("leave", () => {
+    if (!cartWantsPointer()) return;
+    // Cursor left the window: release the slot so a cart does not keep drawing
+    // a hover state for a mouse that is not there.
+    mouseButtons = { left: false, right: false };
+    if (typeof host.setInput === "function") {
+      try { host.setInput({ pointer: { id: 0, x: 0, y: 0, left: false, right: false, active: false } }); } catch { /* ignore */ }
+    }
+  });
   window.on("keyDown", (e) => {
     if (e.key === "escape") { stop(); return; }
     const key = e.key ? e.key.toLowerCase() : "";
@@ -867,11 +1012,53 @@ export async function playtest(args) {
         const liveBezel = getActiveBezel(sessionKey);
         let composed = null;
         if (liveBezel) {
-          try {
-            const core = h.screenshotRgba();
-            composed = tickActiveBezel(sessionKey, core.rgba, core.width, core.height,
-                                       h.status.frameCount);
-          } catch { composed = null; }
+          // Compose on a schedule derived from what the bezel actually costs
+          // (see the pacing note above). On a skipped frame we re-present the
+          // previous composite: the game keeps running at full rate underneath
+          // and only the overlay refreshes slower.
+          bezelFrameCounter++;
+          const due = bezelFrameCounter >= perf.bezelEveryN;
+          if (due) {
+            bezelFrameCounter = 0;
+            const tBezel = performance.now();
+            try {
+              const core = h.screenshotRgba();
+              composed = tickActiveBezel(sessionKey, core.rgba, core.width, core.height,
+                                         h.status.frameCount);
+            } catch { composed = null; }
+            const bezelMs = performance.now() - tBezel;
+            perf.bezelMs = ema(perf.bezelMs, bezelMs);
+
+            // Retune from the EMA, not the last sample, so one slow frame (a
+            // streaming rebuild) doesn't permanently halve the refresh rate and
+            // one fast frame doesn't undo a real slowdown.
+            const spans = Math.ceil(perf.bezelMs / frameMs);
+            perf.bezelEveryN = Math.max(1, Math.min(BEZEL_MAX_EVERY_N, spans));
+
+            if (composed) {
+              const cw = composed.width ?? composed.physicalWidth;
+              const ch = composed.height ?? composed.physicalHeight;
+              const px = composed.rgba ?? composed;
+              // Hold a Buffer view for re-presenting. The compositor may reuse
+              // its backing store next compose, but we only re-present between
+              // composes, so the view is valid exactly while it is used.
+              lastComposite = {
+                rgba: Buffer.isBuffer(px) ? px : Buffer.from(px.buffer, px.byteOffset, px.byteLength),
+                width: cw, height: ch,
+              };
+            }
+          } else if (lastComposite) {
+            perf.bezelSkipped++;
+            composed = lastComposite;   // re-present, don't re-tick
+          }
+        } else if (lastComposite) {
+          // Bezel unloaded or swapped: drop the held composite so a stale
+          // overlay (possibly at the previous package's dimensions) can never
+          // be re-presented over a later load.
+          lastComposite = null;
+          bezelFrameCounter = 0;
+          perf.bezelMs = 0;
+          perf.bezelEveryN = 1;
         }
         if (composed) {
           const cw = composed.width ?? composed.physicalWidth;
@@ -893,7 +1080,16 @@ export async function playtest(args) {
           rgba = rgbaScratch;
         }
         perf.convertMs = ema(perf.convertMs, performance.now() - tConvert);
-        if (fpsOverlay) drawFpsOverlay(rgba, fb.width, fb.height, perf.fps);
+        if (fpsOverlay) {
+          // drawFpsOverlay writes INTO the buffer. On a re-presented composite
+          // that buffer is the retained one, so the counter would bake into the
+          // held image and every skipped frame would stamp another one over it.
+          // Draw on a copy whenever we're re-presenting.
+          if (composed && composed === lastComposite) {
+            rgba = Buffer.from(rgba);
+          }
+          drawFpsOverlay(rgba, fb.width, fb.height, perf.fps);
+        }
 
         // Letterbox: compute the largest rect with the *target* aspect
         // ratio that fits inside the (possibly-resized) window, centered.
@@ -930,17 +1126,39 @@ export async function playtest(args) {
         const curW = window.pixelWidth || winPixelW;
         const curH = window.pixelHeight || winPixelH;
         const { dstX, dstY, dstW, dstH } = letterbox(curW, curH, targetAspect);
+        // Remember where the picture actually landed so the mouse handlers can
+        // invert this transform (window coords -> cart pixels). Computed here
+        // rather than in the handler because the letterbox depends on the live
+        // window size and the frame's aspect, both of which are known here and
+        // change under a resize.
+        lastPresentRect = { x: dstX, y: dstY, w: dstW, h: dstH, fbW, fbH, winW: curW, winH: curH };
 
-        const tPresent = performance.now();
-        window.render(fbW, fbH, fbW * 4, "rgba32", rgba, {
-          // Nearest keeps emulator pixels crisp, which is right for a bare
-          // core frame. A bezel composite is mostly anti-aliased panel art and
-          // text, so nearest re-aliases exactly the edges the guest smoothed —
-          // linear is the honest presentation of what it drew.
-          scaling: composed ? "linear" : "nearest",
-          dstRect: { x: dstX, y: dstY, width: dstW, height: dstH },
-        });
-        perf.presentMs = ema(perf.presentMs, performance.now() - tPresent);
+        // Serialization boundary: finish and detach the bezel's GL context
+        // before SDL presents. Both stacks share Mesa driver state in this
+        // process, and running them back to back in one tick is what corrupts
+        // it (see releaseBezelGl). Only after a fresh compose -- a
+        // re-presented composite did no GL work, and a bezel-less session has
+        // no context to release. With GL-direct present there is only ONE
+        // stack, so neither the release nor the SDL render happens at all.
+        if (glPresent && composed) {
+          /* One GL stack: blit + swap. Audio enqueue below still runs. */
+          const tPresentGl = performance.now();
+          openBezel.compositor.presentWindow(dstX, dstY, dstW, dstH, curW, curH);
+          perf.presentMs = ema(perf.presentMs, performance.now() - tPresentGl);
+        } else {
+          if (composed && composed !== lastComposite) releaseBezelGl();
+
+          const tPresent = performance.now();
+          window.render(fbW, fbH, fbW * 4, "rgba32", rgba, {
+            // Nearest keeps emulator pixels crisp, which is right for a bare
+            // core frame. A bezel composite is mostly anti-aliased panel art and
+            // text, so nearest re-aliases exactly the edges the guest smoothed —
+            // linear is the honest presentation of what it drew.
+            scaling: composed ? "linear" : "nearest",
+            dstRect: { x: dstX, y: dstY, width: dstW, height: dstH },
+          });
+          perf.presentMs = ema(perf.presentMs, performance.now() - tPresent);
+        }
       } catch (e) {
         // A render throw usually means the window went away under us (the
         // SDL handle was freed without a 'close' event — compositor kill,

@@ -269,6 +269,8 @@ export function registerInputTools(server, z, sessionKey) {
       y: z.number().int().optional().describe("op=pointer: cursor Y in cart pixels."),
       left: z.boolean().optional().describe("op=pointer: hold the left/primary mouse button."),
       right: z.boolean().optional().describe("op=pointer: hold the right/secondary mouse button."),
+      id: z.number().int().min(0).max(9).optional().describe("op=pointer: which pointer SLOT (wasmcart's wc_pointer_t[10]). 0 = MOUSE (default). 1-9 = TOUCH FINGERS — what an Android/tablet host fills in. Use 1+ to test the commonest portability trap: a cart that polls only pointer[0] works perfectly with a desktop mouse and silently ignores every touch on a phone. Multi-finger gestures (pinch, two-finger drag) = several slots active at once."),
+      active: z.boolean().optional().describe("op=pointer: false RELEASES this slot (finger lifted / cursor gone). Default true. For a touch slot, set active:false to end the contact — that is what a real host does on touchend."),
       // set
       ports: z.array(port).min(1).max(2).optional().describe("op=set: per-port input. [{a:true,right:true}] holds A+Right on port 0."),
       // press
@@ -295,8 +297,22 @@ export function registerInputTools(server, z, sessionKey) {
           const host = getHost(sessionKey);
           if (typeof host?.setInput !== "function") throw new Error("input({op:'pointer'}): no host loaded.");
           if (args.x == null || args.y == null) throw new Error("input({op:'pointer'}): `x` and `y` are required.");
-          host.setInput({ pointer: { x: args.x, y: args.y, left: !!args.left, right: !!args.right, active: true } });
-          return attachObserverFrame(jsonContent({ pointer: { x: args.x, y: args.y, left: !!args.left, right: !!args.right } }), host, `pointer ${args.x},${args.y}`);
+          /* `id` selects the pointer SLOT: 0 = mouse (default, unchanged), 1-9
+           * = touch fingers. Without it romdev could only simulate a mouse, so
+           * the commonest portability trap -- a cart polling only pointer[0],
+           * which works on desktop and ignores every touch on Android -- was
+           * untestable. `active:false` releases a finger. */
+          const id = args.id == null ? 0 : args.id | 0;
+          if (id < 0 || id > 9) {
+            throw new Error(`input({op:'pointer'}): \`id\` must be 0-9 (0 = mouse, 1-9 = touch fingers), got ${args.id}.`);
+          }
+          const active = args.active === false ? false : true;
+          host.setInput({ pointer: { id, x: args.x, y: args.y, left: !!args.left, right: !!args.right, active } });
+          return attachObserverFrame(
+            jsonContent({ pointer: { id, x: args.x, y: args.y, left: !!args.left, right: !!args.right, active } }),
+            host,
+            `pointer${id ? ` #${id}` : ""} ${args.x},${args.y}`,
+          );
         }
         case "press": {
           if (!args.button) throw new Error("input({op:'press'}): `button` is required.");

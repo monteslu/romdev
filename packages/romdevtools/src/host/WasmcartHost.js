@@ -30,6 +30,9 @@ import { RETRO_PIXEL_FORMAT_XRGB8888, ROMDEV_PIXEL_FORMAT_RGBA8888 } from "romde
 // binds a single native EGL context (no destroy API), so per-load creation
 // isn't safe. GL state carries across reloads; carts set their own state.
 // 720p ceiling: readback clamps to the drawing buffer.
+/* MINIMUM offscreen GL size, not a ceiling — _getOffscreenGl() takes the max
+ * of this and the cart's own dimensions, so a 1080p cart gets 1080p and a 720p
+ * cart is not cropped by a context sized for someone else. */
 const OFFSCREEN_GL_W = 1280, OFFSCREEN_GL_H = 720;
 let _webglNodeMod; // undefined = untried, null = unavailable
 let _offscreenGl = null;
@@ -38,10 +41,38 @@ async function _webglNode() {
   try { _webglNodeMod = await import("webgl-node"); } catch { _webglNodeMod = null; }
   return _webglNodeMod;
 }
-async function _getOffscreenGl() {
+/**
+ * The ONE offscreen GL context, sized to the largest cart seen this process.
+ *
+ * A single fixed size cannot be right for every cart, and both wrong answers
+ * have shipped: at 1280x720 a 1080p cart was cropped to its top-left corner;
+ * bumped to 1920x1080, a 720p cart was cropped the same way, because readback
+ * takes width*height from a buffer that is now bigger than the cart. Either
+ * way the picture is silently wrong rather than scaled.
+ *
+ * webgl-node binds a single native EGL context with no destroy API, so the
+ * context cannot be recreated per load. Instead it is created at the size the
+ * FIRST GL cart needs and GROWN if a later cart is bigger -- growing is safe
+ * (readback still reads the cart's own width/height from the origin), shrinking
+ * is not, and never needed.
+ */
+let _offscreenGlW = 0, _offscreenGlH = 0;
+async function _getOffscreenGl(wantW, wantH) {
   const wn = await _webglNode();
   if (!wn) return null;
-  if (!_offscreenGl) _offscreenGl = wn.createWebGL2Context(OFFSCREEN_GL_W, OFFSCREEN_GL_H).gl;
+  const w = Math.max(OFFSCREEN_GL_W, wantW | 0);
+  const h = Math.max(OFFSCREEN_GL_H, wantH | 0);
+  if (!_offscreenGl) {
+    _offscreenGl = wn.createWebGL2Context(w, h).gl;
+    _offscreenGlW = w; _offscreenGlH = h;
+  } else if (w > _offscreenGlW || h > _offscreenGlH) {
+    // A bigger cart arrived after the context existed. There is no resize API,
+    // so warn rather than render a silently-cropped picture.
+    console.error(
+      `[wasmcart] this process's GL context is ${_offscreenGlW}x${_offscreenGlH} but this cart wants `
+      + `${w}x${h}. webgl-node cannot resize an existing context, so the picture will be cropped. `
+      + "Restart the server and load the larger cart first.");
+  }
   return _offscreenGl;
 }
 
@@ -152,7 +183,11 @@ export class WasmcartHost {
     let glFactory = null;
     if (!glBackend) {
       glFactory = async () => {
-        const gl = await _getOffscreenGl();
+        // Size the context to THIS cart. Carts declare their own resolution
+        // (720p, 1080p, whatever), so a fixed size crops whichever half of the
+        // corpus it was not chosen for.
+        const ci = this.cart?.getInfo?.() ?? {};
+        const gl = await _getOffscreenGl(ci.width, ci.height);
         if (!gl) {
           // webgl-node/native-gles are REQUIRED dependencies, so reaching here
           // means a broken install rather than an unsupported configuration.
@@ -252,7 +287,16 @@ export class WasmcartHost {
       const p = input.pointer;
       const buttons = (p.left ? 1 : 0) | (p.right ? 2 : 0) | (p.middle ? 4 : 0);
       const active = p.active === false ? false : true;
-      this.cart.setPointer(0, p.x | 0, p.y | 0, buttons, active);
+      /* Slot id, not hardcoded 0.
+       *
+       * The wasmcart v3 pointer ABI is a wc_pointer_t[10] array: mouse is slot
+       * 0, touch fingers land in slots 1+. This hardcoded a 0, so romdev could
+       * only ever simulate a mouse -- which makes the #1 cart-side portability
+       * trap untestable. A cart that polls only pointer[0] works perfectly with
+       * a desktop mouse and silently ignores every touch on Android, and no
+       * regression test could catch it because the tool could not place a
+       * finger in slot 1. CartHost.setPointer already takes any id 0..9. */
+      this.cart.setPointer(p.id | 0, p.x | 0, p.y | 0, buttons, active);
     }
   }
 
