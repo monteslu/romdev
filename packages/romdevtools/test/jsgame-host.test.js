@@ -19,19 +19,45 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import rawr from "rawr";
 import { parentTransport } from "./helpers/rawr-fork-transport.js";
+import { glStackAvailable } from "romdev-core-host/glOptionalDep.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const GAME = path.join(HERE, "fixtures", "simple.jsgame");
 const CHILD = path.join(HERE, "helpers", "jsgame-worker.js");
 
-test("jsgame: load + capabilities + step + screenshot + input + JS introspection (in a child process)", async () => {
+test("jsgame: load + capabilities + step + screenshot + input + JS introspection (in a child process)", { timeout: 180000 }, async () => {
+  // rungame always drives WebGL2 (and loads SDL) in the child. On a machine
+  // that cannot create a GL context the child does not fail -- native EGL
+  // init BLOCKS, the RPC below never resolves, and the whole suite hangs
+  // until the workflow's 30-minute axe (which is exactly what happened in CI,
+  // twice, with this file's child as the orphaned MainThread). Same honest
+  // skip as every other GL-booting test.
+  if (!(await glStackAvailable())) { console.log("GL stack unusable here; skipping"); return; }
+
   // Fork the child WITH the vm-modules flag; talk to it over rawr JSON-RPC (fork IPC).
   const child = fork(CHILD, [], { execArgv: ["--experimental-vm-modules"], stdio: "inherit" });
   const peer = rawr({ transport: parentTransport(child) });
 
   let r;
   try {
-    r = await peer.methods.runJsgame(GAME);
+    // Deadline-raced, because a native hang in the child never rejects on its
+    // own -- and node:test's own timeout would fail the test WITHOUT running
+    // the finally kill, leaving the child holding the run open anyway.
+    let deadline;
+    try {
+      r = await Promise.race([
+        peer.methods.runJsgame(GAME),
+        new Promise((_, rej) => {
+          deadline = setTimeout(
+            () => rej(new Error("jsgame child unresponsive for 120s (native SDL/GL hang)")),
+            120000,
+          );
+          deadline.unref();
+        }),
+      ]);
+    } finally {
+      clearTimeout(deadline);
+    }
   } finally {
     child.kill("SIGKILL"); // dispose rungame's SDL/audio/timer handles
   }
