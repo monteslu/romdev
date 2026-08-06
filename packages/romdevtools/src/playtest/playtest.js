@@ -418,13 +418,17 @@ export async function playtest(args) {
   });
   log.debug(`[playtest] window opened: ${winInitW}x${winInitH}, fb=${fbWidth}x${fbHeight}, aspect=${aspectMode}`);
 
-  /* GL-DIRECT PRESENT (ROMDEV_GL_PRESENT=1, bezel-side agent 2026-08-03):
-   * rebind the bezel compositor's context onto this window's native handle
-   * and present by GPU blit + swap -- no composite readback consumption
-   * here, no SDL software blit, no rescale cliff at any window size. The
-   * software path stays the default until this is proven broadly. */
+  /* GL-DIRECT PRESENT (bezel-side agent 2026-08-03, DEFAULT since
+   * 2026-08-06): rebind the bezel compositor's context onto this window's
+   * native handle and present by GPU blit + swap -- no composite readback
+   * consumption here, no SDL software blit, no rescale cliff at any window
+   * size. Opt OUT with ROMDEV_GL_PRESENT=0. It spent its proving period
+   * behind ROMDEV_GL_PRESENT=1, and the flag being lost in a server
+   * restart is exactly how the software path regressed a live session to
+   * ~54Hz core ticking (present 13.7ms -> missed vblanks) while the
+   * window still reported 60fps. */
   let glPresent = false;
-  if (process.env.ROMDEV_GL_PRESENT === "1" && gpuBezel && window.native?.handle) {
+  if (process.env.ROMDEV_GL_PRESENT !== "0" && gpuBezel && window.native?.handle) {
     try {
       glPresent = !!openBezel.compositor.migrateToWindow?.(window.native.handle);
       log.debug(`[playtest] GL-direct present: ${glPresent ? "ACTIVE" : "unavailable, software path"}`);
