@@ -135,14 +135,47 @@ export async function attachActiveBezel(sessionKey, host, {
        */
       inputManager: {
         getState(port, device, index, id) {
-          void index;
-          /* RETRO_DEVICE_JOYPAD is 1; nothing else is exposed yet. */
-          if (device !== 1) return 0;
-          const mask = host?.state?.inputPorts?.[port]?.[0] ?? 0;
-          /* id 256 (RETRO_DEVICE_ID_JOYPAD_MASK) asks for the whole word. */
-          if (id === 256) return mask;
-          if (id < 0 || id > 15) return 0;
-          return (mask >> id) & 1;
+          /*
+           * Always the PHYSICAL pad, never the overridden view: input_state is
+           * the bezel's read surface, and a bezel that overrode a button must
+           * still see the real press (a left/right swap that read its own
+           * output would re-swap every frame). The core's view goes through
+           * effectiveJoypadMask in the host's input callback instead.
+           */
+          if (device === 1) {
+            const mask = host?.state?.inputPorts?.[port]?.[0] ?? 0;
+            /* id 256 (RETRO_DEVICE_ID_JOYPAD_MASK) asks for the whole word. */
+            if (id === 256) return mask;
+            if (id < 0 || id > 15) return 0;
+            return (mask >> id) & 1;
+          }
+          /* RETRO_DEVICE_ANALOG (5): raw stick/trigger state where the host
+           * tracks it (playtest passes real axes; agent setInput may too).
+           * index 0/1 = left/right stick, id 0/1 = X/Y, -32768..32767;
+           * index 2 = ANALOG_BUTTON, id 12/13 = trigger pressure 0..32767. */
+          if (device === 5) {
+            const axes = host?.state?.analogPorts?.[port];
+            if (!axes) return 0;
+            const s16 = (v) => Math.max(-32768, Math.min(32767, Math.round((v || 0) * 32767)));
+            if (index === 2) {
+              if (id === 12) return Math.max(0, s16(axes.lt));
+              if (id === 13) return Math.max(0, s16(axes.rt));
+              return 0;
+            }
+            if (index === 0) return id === 0 ? s16(axes.lx) : id === 1 ? s16(axes.ly) : 0;
+            if (index === 1) return id === 0 ? s16(axes.rx) : id === 1 ? s16(axes.ry) : 0;
+            return 0;
+          }
+          return 0;
+        },
+        /* The pre_render write surface: one-frame joypad overrides, applied
+         * when the core polls, cleared by the host at the top of every frame.
+         * The runtime only forwards these from inside pre_render. */
+        setOverride(port, device, index, id, value) {
+          return host?.setInputOverride?.(port, device, index, id, value) ?? false;
+        },
+        clearOverrides() {
+          host?.clearInputOverrides?.();
         },
       },
     });
@@ -159,6 +192,36 @@ export async function attachActiveBezel(sessionKey, host, {
     runtime, packagePath: resolved, config, host,
     lastError: null, lastFrame: null, ticks: 0,
   });
+
+  /*
+   * Wire the ABI-2 pre_render hook into the host's per-frame choke point.
+   *
+   * Installed UNCONDITIONALLY (not only when the current script defines
+   * pre_render): an ASSETS_RELOADED reboot can add the hook to a script that
+   * lacked it at attach time, and a conditional install would silently never
+   * call it. The cost when undefined is one function call + a cached property
+   * check per frame — preFrame() early-returns before touching the guest, so
+   * watch/breakpoint bursts pay effectively nothing.
+   *
+   * This lives on the HOST rather than at tool call sites deliberately: the
+   * bezel tick tolerates being per-step-call, but an input remap that skips
+   * frames plays garbage, and _runCore is the one place every frame driver
+   * (frame step, runUntil, watch, breakpoint, playtest) funnels through.
+   */
+  if (typeof host.setInputOverride === "function") {
+    host.beforeFrame = (frameNumber) => {
+      const entry = sessions.get(sessionKey);
+      if (entry?.runtime) entry.runtime.preFrame(frameNumber);
+    };
+  } else if (runtime.status?.()?.preRender?.defined) {
+    /* A guest that WANTS pre_render on a host that cannot run it must fail
+     * loudly, not tick along with the hook silently never called. */
+    detachActiveBezel(sessionKey);
+    throw new Error(
+      "This Active Bezel defines pre_render, but this host has no per-frame "
+      + "beforeFrame/setInputOverride support. Update romdev-core-host.",
+    );
+  }
   return runtime;
 }
 
@@ -183,6 +246,12 @@ export function sessionKeyForHost(host) {
 export function detachActiveBezel(sessionKey) {
   const entry = sessions.get(sessionKey);
   if (!entry) return false;
+  /* Unhook the per-frame pre_render path and drop any override still pending
+   * for the next frame — a detached bezel must stop shaping the game NOW. */
+  if (entry.host) {
+    entry.host.beforeFrame = null;
+    entry.host.clearInputOverrides?.();
+  }
   try { entry.runtime.shutdown?.(); } catch { /* teardown is best-effort */ }
   sessions.delete(sessionKey);
   return true;
@@ -297,6 +366,11 @@ export function activeBezelStatus(sessionKey) {
     ticks: entry.ticks,
     ...(entry.lastFrame ? { lastFrame: entry.lastFrame } : {}),
     ...(entry.lastError ? { lastError: entry.lastError } : {}),
+    /* A beforeFrame hook failure is caught host-side so stepping never
+     * breaks; surface it here so it cannot fail silently either. */
+    ...(entry.host?.beforeFrameError
+      ? { preRenderHookError: String(entry.host.beforeFrameError?.message ?? entry.host.beforeFrameError) }
+      : {}),
     config: entry.config,
     ...inner,
   };

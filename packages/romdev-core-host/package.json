@@ -1,6 +1,6 @@
 {
   "name": "romdev-core-host",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "The romdev libretro host runtime, now ISOMORPHIC: load a romdev-core-* emulator core from disk (Node) or from a factory + wasm bytes (browser/worker), run frames, read the framebuffer/audio/memory regions as typed arrays, drive input, save/load state. The same hardened host the romdev MCP server uses.",
   "type": "module",
   "main": "index.js",

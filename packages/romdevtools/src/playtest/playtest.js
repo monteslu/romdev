@@ -12,6 +12,9 @@ import {
   SDL_BUTTON_TO_LIBRETRO_BIT,
   KEY_TO_LIBRETRO_BIT,
   STICK_DEADZONE,
+  makeTriggerState,
+  deriveTriggerState,
+  normAxis,
   bitToName,
   tvAspectFor,
   effectiveAspect,
@@ -207,7 +210,17 @@ export const HUMAN_INPUT_ACTIVE_FRAMES = 120;
  * @param {Record<string, boolean>} port
  */
 export function anyButtonHeld(port) {
-  for (const k in port) if (port[k]) return true;
+  for (const k in port) {
+    if (k === "axes") continue; // the axes OBJECT is always truthy; judge its values below
+    if (port[k]) return true;
+  }
+  // Analog motion counts as pressing (it must flow to the host while the
+  // human steers), but only past a threshold comfortably above stick drift —
+  // an idle wobbling pad must NOT clobber the agent's input({op:'set'}).
+  const a = port.axes;
+  if (a && (Math.abs(a.lx) > 0.25 || Math.abs(a.ly) > 0.25
+    || Math.abs(a.rx) > 0.25 || Math.abs(a.ry) > 0.25
+    || a.lt > 0.35 || a.rt > 0.35)) return true;
   return false;
 }
 
@@ -468,6 +481,9 @@ export async function playtest(args) {
   // over to play a finished build, etc.).
   /** @type {[any|null, any|null]} */
   const controllers = [null, null];
+  // Per-slot trigger tracking (baseline + hysteresis) — lives beside the
+  // slot map so it survives across ticks and resets with the controller.
+  const triggerStates = [makeTriggerState(), makeTriggerState()];
 
   function openInFreeSlot(device) {
     // If this device is already in a slot (re-add after deviceRemove),
@@ -497,6 +513,7 @@ export async function playtest(args) {
       if (inst && inst._device === device) {
         // SDL auto-closes the instance per its docs; just drop the ref.
         controllers[i] = null;
+        triggerStates[i] = makeTriggerState(); // new pad, new trigger baseline
         log.debug(`[playtest] controller slot ${i + 1} disconnected: ${device.name}`);
         return;
       }
@@ -841,7 +858,7 @@ export async function playtest(args) {
     let quit = false;
     const isC64 = h.status?.platform === "c64";
     const isN64 = h.status?.platform === "n64";
-    function readControllerInto(port, inst) {
+    function readControllerInto(port, inst, slot) {
       if (!inst) return;
       const btn = inst.buttons || {};
       if ((btn.back || btn.guide) && btn.start) {
@@ -859,9 +876,28 @@ export async function playtest(args) {
       else if (lx < -STICK_DEADZONE) port.left = true;
       if (ly > STICK_DEADZONE) port.down = true;
       else if (ly < -STICK_DEADZONE) port.up = true;
-      // NOTE: the analog triggers are NOT used for N64 — its Z/L/R are digital and
-      // map to the SHOULDER buttons (see SDL_BUTTON_TO_LIBRETRO_BIT_N64). (node-sdl's
-      // X360 trigger axes also idle at ~0.5, so reading them as buttons would stick.)
+      // Triggers → L2/R2 digital bits, through the SHARED baseline+hysteresis
+      // derivation (see romdev-core-runner/present.js — X360 trigger axes can
+      // idle mid-scale, so a naive threshold sticks or never fires). Most
+      // retro platforms ignore bits 12/13 entirely, which is exactly what
+      // makes them free real estate for an Active Bezel. Skipped on N64:
+      // its Z is already mapped to the trigger as a DIGITAL shoulder press
+      // via SDL_BUTTON_TO_LIBRETRO_BIT_N64.
+      const trig = deriveTriggerState(axes, triggerStates[slot] ?? makeTriggerState());
+      if (!isN64) {
+        if (trig.l2) port.l2 = true;
+        if (trig.r2) port.r2 = true;
+      }
+      // Raw analog passthrough: sticks -1..1, triggers baseline-corrected
+      // 0..1. Additive — the digital mask above stays the game contract; the
+      // axes feed the core's ANALOG device (real N64 steering instead of
+      // full-deflection d-pad synthesis) and an Active Bezel's ab.input
+      // reads (sticks + trigger pressure on every platform).
+      port.axes = {
+        lx: normAxis(lx), ly: normAxis(ly),
+        rx: normAxis(axes.rightStickX ?? 0), ry: normAxis(axes.rightStickY ?? 0),
+        lt: trig.lt, rt: trig.rt,
+      };
       // C64: the RIGHT stick selects the function keys (F1/F3/F5/F7) — the
       // Batocera/RetroDeck convention so a controller alone reaches the keyboard
       // keys C64 setup screens need. Emitted as virtual buttons the host's C64
@@ -891,8 +927,8 @@ export async function playtest(args) {
 
     const port0 = {};
     const port1 = {};
-    readControllerInto(port0, controllers[0]);
-    readControllerInto(port1, controllers[1]);
+    readControllerInto(port0, controllers[0], 0);
+    readControllerInto(port1, controllers[1], 1);
     if (quit) {
       // Select+Start always closes — even while paused — so the human can
       // dismiss a frozen window from the pad.

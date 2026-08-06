@@ -17,6 +17,9 @@ import {
   SDL_BUTTON_TO_LIBRETRO_BIT,
   KEY_TO_LIBRETRO_BIT,
   STICK_DEADZONE,
+  makeTriggerState,
+  deriveTriggerState,
+  normAxis,
   bitToName,
   tvAspectFor,
   effectiveAspect,
@@ -182,7 +185,12 @@ export async function runRom(rom, opts = {}) {
   const fps = (coreFps >= 20 && coreFps <= 120) ? coreFps : 60;
   const frameMs = 1000 / fps;
 
-  function readControllerInto(port, inst, outQuit) {
+  // Per-slot trigger tracking (baseline + hysteresis) — the SAME derivation
+  // playtest uses (present.js), so "when does a trigger count as pressed"
+  // cannot disagree between the two windows.
+  const triggerStates = [makeTriggerState(), makeTriggerState()];
+
+  function readControllerInto(port, inst, outQuit, slot) {
     if (!inst) return;
     const btn = inst.buttons || {};
     if ((btn.back || btn.guide) && btn.start) { outQuit.quit = true; return; }
@@ -196,6 +204,16 @@ export async function runRom(rom, opts = {}) {
     else if (lx < -STICK_DEADZONE) port.left = true;
     if (ly > STICK_DEADZONE) port.down = true;
     else if (ly < -STICK_DEADZONE) port.up = true;
+    const trig = deriveTriggerState(axes, triggerStates[slot] ?? makeTriggerState());
+    if (trig.l2) port.l2 = true;
+    if (trig.r2) port.r2 = true;
+    // Raw analog passthrough — feeds the host's ANALOG device (real stick
+    // deflection) and any Active Bezel input reads; additive to the mask.
+    port.axes = {
+      lx: normAxis(lx), ly: normAxis(ly),
+      rx: normAxis(axes.rightStickX ?? 0), ry: normAxis(axes.rightStickY ?? 0),
+      lt: trig.lt, rt: trig.rt,
+    };
   }
 
   function tick() {
@@ -213,8 +231,8 @@ export async function runRom(rom, opts = {}) {
     const outQuit = { quit: false };
     const port0 = {};
     const port1 = {};
-    readControllerInto(port0, controllers[0], outQuit);
-    readControllerInto(port1, controllers[1], outQuit);
+    readControllerInto(port0, controllers[0], outQuit, 0);
+    readControllerInto(port1, controllers[1], outQuit, 1);
     if (outQuit.quit) { stop(); return; }
     for (const [keyName, bit] of Object.entries(keyMap)) {
       if (heldKeys.has(keyName)) port0[bitToName(bit)] = true;

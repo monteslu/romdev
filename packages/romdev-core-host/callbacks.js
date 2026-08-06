@@ -125,6 +125,18 @@ export function newCallbackState({ systemDir = "", saveDir = "" } = {}) {
     audioRing: [],
     supportsNoGame: false,
     inputPorts: [new Uint16Array(1), new Uint16Array(1)],
+    // One-frame input overrides (the Active Bezel pre_render path). Per port:
+    // null, or { full: mask|null, set: bits, clear: bits }. Applied when the
+    // CORE polls — inputPorts keeps the PHYSICAL state, so anything reading it
+    // (a bezel's input display, playtest's humanPressing) sees the truth while
+    // the game sees the override. Cleared at the top of every frame by
+    // _runCore; an override is one frame's statement, re-asserted per frame.
+    inputOverrides: [null, null],
+    // Raw analog state per port ({ lx, ly, rx, ry, lt, rt }, sticks -1..1,
+    // triggers 0..1) or null. Fed by setInput({axes}); read by the ANALOG
+    // device callback below and by the bezel inputManager. Additive: the
+    // digital mask stays the game-facing contract on the 2D cores.
+    analogPorts: [null, null],
     // Keyboard state: a set of currently-pressed RETRO_KEY_* codes. The core
     // polls via input_state(port, KEYBOARD, 0, keyCode) and gets 1 if pressed.
     keysDown: new Set(),
@@ -135,6 +147,30 @@ export function newCallbackState({ systemDir = "", saveDir = "" } = {}) {
     _allocatedPtrs: [],
     _logCbPtr: null,
   };
+}
+
+/**
+ * The joypad mask the CORE should see for a port this frame: the physical
+ * mask with any one-frame override applied. `full` replaces the word (the
+ * id-256 form); `set`/`clear` are per-button edits on top of the live
+ * physical state, so overriding one button leaves the rest of the pad real.
+ * @param {CallbackState} state
+ * @param {number} port
+ * @returns {number}
+ */
+export function effectiveJoypadMask(state, port) {
+  const portBits = state.inputPorts[port];
+  if (!portBits) return 0;
+  const ov = state.inputOverrides?.[port];
+  if (!ov) return portBits[0];
+  if (ov.full !== null) return ov.full;
+  return (portBits[0] & ~ov.clear) | ov.set;
+}
+
+/** Clamp a -1..1 (or 0..1) float axis to the libretro s16 range. */
+function axisToS16(value) {
+  const v = Math.round((value || 0) * 32767);
+  return v < -32768 ? -32768 : v > 32767 ? 32767 : v;
 }
 
 /**
@@ -219,23 +255,37 @@ export function registerCallbacks(args) {
     if (device === 3) {
       return state.keysDown.has(id) ? 1 : 0;
     }
-    const portBits = state.inputPorts[port];
-    if (!portBits) return 0;
-    const bits = portBits[0];
+    if (!state.inputPorts[port]) return 0;
+    // The core sees the OVERRIDDEN mask (Active Bezel pre_render); the
+    // physical inputPorts word stays untouched for everything that reads it.
+    const bits = effectiveJoypadMask(state, port);
     // device 5 = RETRO_DEVICE_ANALOG. Games with an analog stick (N64, and the
     // dual-stick consoles) read this INSTEAD of the d-pad for movement — MK64
     // steers entirely off the stick, so a d-pad-only mask leaves the kart dead.
-    // We have no real axis source (setInput is digital), so SYNTHESIZE a full-
-    // deflection stick from the d-pad bits: left/right → X = -/+32767, up/down →
-    // Y = -/+32767. idx 0 = left stick, id 0 = X, id 1 = Y (libretro convention).
+    // A REAL axis (setInput({axes}) from a physical stick) wins per-axis;
+    // otherwise SYNTHESIZE full deflection from the d-pad bits so keyboard and
+    // agent input keep working. idx 0 = left stick, idx 1 = right stick,
+    // id 0 = X, id 1 = Y; idx 2 = ANALOG_BUTTON, id = joypad id (L2/R2
+    // trigger pressure). All libretro convention.
     if (device === 5) {
-      if (idx === 0) {
+      const axes = state.analogPorts?.[port];
+      if (idx === 2) {
+        if (!axes) return 0;
+        if (id === 12) return axisToS16(Math.max(0, axes.lt || 0));
+        if (id === 13) return axisToS16(Math.max(0, axes.rt || 0));
+        return 0;
+      }
+      if (idx === 0 || idx === 1) {
+        const ax = idx === 0 ? axes?.lx : axes?.rx;
+        const ay = idx === 0 ? axes?.ly : axes?.ry;
         if (id === 0) { // X axis
-          if (bits & (1 << 6)) return -32767; // JOYPAD_LEFT
-          if (bits & (1 << 7)) return 32767;  // JOYPAD_RIGHT
+          if (ax) return axisToS16(ax);
+          if (idx === 0 && (bits & (1 << 6))) return -32767; // JOYPAD_LEFT
+          if (idx === 0 && (bits & (1 << 7))) return 32767;  // JOYPAD_RIGHT
         } else if (id === 1) { // Y axis (up = negative)
-          if (bits & (1 << 4)) return -32767; // JOYPAD_UP
-          if (bits & (1 << 5)) return 32767;  // JOYPAD_DOWN
+          if (ay) return axisToS16(ay);
+          if (idx === 0 && (bits & (1 << 4))) return -32767; // JOYPAD_UP
+          if (idx === 0 && (bits & (1 << 5))) return 32767;  // JOYPAD_DOWN
         }
       }
       return 0;
@@ -282,9 +332,9 @@ export function registerProxiedCallbacks(args) {
 
   mod.romdev_inputCb = (port, device, _idx, id) => {
     if (device === 3) return state.keysDown.has(id) ? 1 : 0;
-    const portBits = state.inputPorts[port];
-    if (!portBits) return 0;
-    const bits = portBits[0];
+    if (!state.inputPorts[port]) return 0;
+    // Same override-applied view as the direct callback: one truth per frame.
+    const bits = effectiveJoypadMask(state, port);
     if (id === 256) return bits;
     return bits & (1 << id) ? 1 : 0;
   };

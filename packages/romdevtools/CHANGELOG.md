@@ -4,6 +4,50 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.114.0 — unreleased
+
+### Active Bezel pre_render: a bezel can shape the frame, not just observe it
+
+- active-bezel 0.7.0 (ABI 2): a package may define `pre_render(frame)`,
+  called before EVERY core frame by every frame driver — `frame({op:'step'})`,
+  `runUntil`, watch/breakpoint runs, playtest. Region writes land before the
+  game's logic consumes them, and `ab.input_override` replaces what the core
+  is polled with for that frame (whole mask or per button). Hook lives on the
+  host's per-frame choke point (`romdev-core-host` `beforeFrame`), so no
+  driver can skip it — an input remap that missed frames would play garbage.
+- Overrides are one-frame statements: cleared at the top of every frame,
+  re-asserted by the bezel each frame it still wants them. The physical
+  `inputPorts` word is never touched — `input({op:'set'})` still sets the
+  real pad, input displays and `humanPressing` keep seeing the truth, and the
+  bezel's own `ab.input` reads report physical state so a left/right swap
+  cannot feed back on itself.
+- `catalog({op:'status'})` reports `activeBezel.preRender: {defined, calls}`
+  plus `preRenderHookError`. Check it before trusting a negative input result
+  or a "value changed with no writer" observation: pre_render writes are
+  host-side pokes, invisible to core-side `breakpoint`/`watch`.
+
+### Analog input: raw axes reach the host, triggers reach the mask
+
+- `input({op:'set'})` ports accept `axes: {lx, ly, rx, ry, lt, rt}` (sticks
+  −1..1, triggers 0..1). Additive: the digital mask stays the game-facing
+  contract; axes feed the libretro ANALOG device — real proportional N64
+  steering instead of full-deflection d-pad synthesis (d-pad synthesis still
+  applies per-axis when no real axis is present) — and a bezel's analog
+  `ab.input` reads (sticks + index-2 trigger pressure).
+- The playtest window (and `runRom`) now map the physical pad's analog
+  triggers onto the L2/R2 mask bits through ONE shared derivation
+  (`romdev-core-runner` `deriveTriggerState`): baseline-relative threshold
+  with hysteresis, so an X360 trigger that idles mid-scale neither sticks nor
+  chatters. Both sticks and baseline-corrected trigger pressures flow through
+  as axes. Most retro platforms ignore bits 12-15, which makes L2/R2/L3/R3
+  free real estate for bezel controls.
+
+Tests: `pre-render-hook.test.js` — pure override semantics, the per-frame
+beforeFrame contract on the real core, a control-gated nestest check that the
+CORE genuinely sees a masked button, and an MCP end-to-end run where a Lua
+bezel's pre_render stamps RAM once per frame. Packages: romdev-core-host
+0.6.0, romdev-core-runner 0.2.7, active-bezel ^0.7.0 (repinned).
+
 ## 0.113.0 — 2026-08-05
 
 ### The mouse drives wasmcart pointer carts, in the window and from the tools

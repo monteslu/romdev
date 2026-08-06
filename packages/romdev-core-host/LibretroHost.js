@@ -899,10 +899,65 @@ export class LibretroHost {
   }
 
   /** Run one frame. Proxied cores route retro_run onto the app thread (so the JS main thread
-   *  stays free to service the core's worker-thread proxy calls); others call directly. */
+   *  stays free to service the core's worker-thread proxy calls); others call directly.
+   *
+   *  This is THE per-frame choke point — stepFrames, _runFramesExclusive
+   *  (watch/breakpoint/runUntil), and the playtest loop all funnel here — so
+   *  the pre-frame contract lives here and cannot be skipped by any driver:
+   *  1. One-frame input overrides from the PREVIOUS frame are cleared.
+   *  2. `beforeFrame(n)` runs (the Active Bezel pre_render path): it may
+   *     write core memory and re-assert overrides for THIS frame. `n` is
+   *     frameCount+1 so it names the same frame the post-step bezel tick
+   *     observes (frameCount is incremented after the frame runs).
+   *  A hook failure never breaks emulation: it is caught and remembered on
+   *  `beforeFrameError`; the callback owner surfaces it. */
   _runCore() {
+    if (this.state.inputOverrides) this.state.inputOverrides.fill(null);
+    if (this.beforeFrame) {
+      try {
+        this.beforeFrame(this.status.frameCount + 1);
+      } catch (e) {
+        this.beforeFrameError = e;
+      }
+    }
     if (this._proxied) this.mod._romdev_proxied_run();
     else this.mod._retro_run();
+  }
+
+  /**
+   * Override what the CORE sees for a joypad button (or the whole mask,
+   * id 256) on the frame currently being shaped. Meaningful only from a
+   * beforeFrame hook: _runCore clears all overrides at the top of every
+   * frame, so an override set anywhere else evaporates before a core poll.
+   * The physical inputPorts word is never touched — input displays and
+   * humanPressing checks keep seeing the real pad.
+   * @returns {boolean} accepted
+   */
+  setInputOverride(port, device, index, id, value) {
+    void index;
+    if (device !== 1) return false; // joypad only; ANALOG override is a follow-up
+    const overrides = this.state.inputOverrides;
+    if (!overrides || port < 0 || port >= overrides.length) return false;
+    const ov = overrides[port] ?? (overrides[port] = { full: null, set: 0, clear: 0 });
+    if (id === 256) {
+      ov.full = value & 0xffff;
+      ov.set = 0;
+      ov.clear = 0;
+      return true;
+    }
+    if (id < 0 || id > 15) return false;
+    const bit = 1 << id;
+    if (ov.full !== null) {
+      ov.full = value ? (ov.full | bit) : (ov.full & ~bit);
+      return true;
+    }
+    if (value) { ov.set |= bit; ov.clear &= ~bit; } else { ov.clear |= bit; ov.set &= ~bit; }
+    return true;
+  }
+
+  /** Drop all pending input overrides (also done automatically per frame). */
+  clearInputOverrides() {
+    if (this.state.inputOverrides) this.state.inputOverrides.fill(null);
   }
 
   /** Post-_retro_run hook: HW-render readback. The video callback set
@@ -1096,6 +1151,20 @@ export class LibretroHost {
       const srcPort = platform === "c64" ? (port ^ 1) : port;
       const portInput = this._c64StripKeyButtons(input.ports[srcPort], platform);
       this.state.inputPorts[port][0] = portInputToMask(portInput, platform);
+      // Raw analog passthrough (additive; the mask above stays the digital
+      // contract). `axes` = { lx, ly, rx, ry, lt, rt }: sticks -1..1,
+      // triggers 0..1. Read by the ANALOG device callback (real stick beats
+      // d-pad synthesis per axis) and by an Active Bezel's ab.input reads.
+      // Ports with no axes field keep their previous analog state, matching
+      // how the digital mask persists between setInput calls.
+      const axes = input.ports[srcPort]?.axes;
+      if (axes && this.state.analogPorts) {
+        this.state.analogPorts[port] = {
+          lx: +axes.lx || 0, ly: +axes.ly || 0,
+          rx: +axes.rx || 0, ry: +axes.ry || 0,
+          lt: +axes.lt || 0, rt: +axes.rt || 0,
+        };
+      }
     }
   }
 

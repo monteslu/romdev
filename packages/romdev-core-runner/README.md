@@ -89,7 +89,13 @@ and print its own "install SDL or use an external emulator" message.
 
 The presentation layer is exported for frontends that want the maps and
 math without the stock window: `SDL_BUTTON_TO_LIBRETRO_BIT`,
-`KEY_TO_LIBRETRO_BIT`, `STICK_DEADZONE`, `bitToName(bit)`,
+`KEY_TO_LIBRETRO_BIT`, `STICK_DEADZONE`, `normAxis(value)` (any node-sdl
+axis unit → −1..1), `makeTriggerState()` + `deriveTriggerState(axes, state)`
+(analog triggers → L2/R2 bits + 0..1 pressure, baseline-relative with
+hysteresis so an X360 trigger that idles mid-scale neither sticks nor
+chatters — use this instead of a raw threshold so every window agrees on
+"pressed"; `TRIGGER_PRESS`/`TRIGGER_RELEASE` are the constants),
+`bitToName(bit)`,
 `tvAspectFor(platform, displayAspect)`,
 `effectiveAspect(statusAspect, fbW, fbH)` (a usable ratio even when the
 host reports 0/NaN), `initialWindowSize({fbWidth, fbHeight, scale,

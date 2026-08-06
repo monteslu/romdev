@@ -38,8 +38,9 @@ export const SDL_BUTTON_TO_LIBRETRO_BIT = {
   rightShoulder: 11,  // RETRO R
   leftStick: 14,      // RETRO L3
   rightStick: 15,     // RETRO R3
-  // NOTE: L2/R2 (bits 12/13) are ANALOG triggers in libretro — node-sdl exposes
-  // them as axes (leftTrigger/rightTrigger), not buttons.
+  // L2/R2 (bits 12/13) are ANALOG triggers — node-sdl exposes them as axes
+  // (leftTrigger/rightTrigger), not buttons. They reach the mask through
+  // deriveTriggerState below (baseline-relative threshold + hysteresis).
 };
 
 // Keyboard fallback for users without a gamepad. Same physical-position
@@ -63,6 +64,58 @@ export const KEY_TO_LIBRETRO_BIT = {
 
 // Analog stick → dpad direction (for games that only read dpad).
 export const STICK_DEADZONE = 8000;
+
+/* --- Trigger → L2/R2 + raw-axes normalization ------------------------------
+ * ONE derivation shared by every SDL frontend (playtest, runRom, anything
+ * else over the runner) so "when does a trigger count as pressed" cannot
+ * disagree between windows.
+ *
+ * Two quirks force the shape:
+ * - node-sdl axis units differ by backend/pad; normalize by magnitude
+ *   (raw s16 vs already -1..1) instead of trusting either.
+ * - X360 trigger axes can IDLE at ~mid-scale, so an absolute threshold
+ *   either sticks "pressed" or never fires. Track a per-trigger BASELINE
+ *   (minimum ever seen = the idle value) and threshold RELATIVE to it,
+ *   with hysteresis so a half-pulled trigger cannot chatter the bit.
+ * The corrected 0..1 pressure is also returned so the analog passthrough
+ * reports 0 at idle no matter where the raw axis idles.
+ */
+export const TRIGGER_PRESS = 0.55;   // above baseline → bit sets
+export const TRIGGER_RELEASE = 0.35; // below baseline → bit clears
+
+/** Normalize a node-sdl axis value to -1..1 whatever its native unit. */
+export function normAxis(value) {
+  const v = value || 0;
+  return Math.abs(v) > 2 ? Math.max(-1, Math.min(1, v / 32767)) : v;
+}
+
+/** Per-controller-slot trigger tracking state. */
+export function makeTriggerState() {
+  return { l2: false, r2: false, lBase: null, rBase: null };
+}
+
+/**
+ * Fold this tick's trigger axes into `state`, returning the digital bits and
+ * baseline-corrected pressures. Call once per poll per controller slot.
+ * @param {{leftTrigger?: number, rightTrigger?: number}} axes node-sdl axes
+ * @param {ReturnType<typeof makeTriggerState>} state
+ * @returns {{l2: boolean, r2: boolean, lt: number, rt: number}}
+ */
+export function deriveTriggerState(axes, state) {
+  const step = (raw, held, baseKey) => {
+    const v = normAxis(raw);
+    if (state[baseKey] === null || v < state[baseKey]) state[baseKey] = v;
+    const range = Math.max(0.05, 1 - state[baseKey]);
+    const pressure = Math.max(0, Math.min(1, (v - state[baseKey]) / range));
+    const next = held ? pressure > TRIGGER_RELEASE : pressure > TRIGGER_PRESS;
+    return { held: next, pressure };
+  };
+  const l = step(axes?.leftTrigger, state.l2, "lBase");
+  const r = step(axes?.rightTrigger, state.r2, "rBase");
+  state.l2 = l.held;
+  state.r2 = r.held;
+  return { l2: state.l2, r2: state.r2, lt: l.pressure, rt: r.pressure };
+}
 
 /** libretro JOYPAD bit → the host's setInput() button name. */
 export function bitToName(bit) {

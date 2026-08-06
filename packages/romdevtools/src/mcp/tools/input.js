@@ -75,6 +75,17 @@ function buttonShape(z) {
       r3: z.boolean().optional(),
       start: z.boolean().optional(),
       select: z.boolean().optional(),
+      // Raw analog channel — additive to the digital buttons above.
+      axes: z.object({
+        lx: z.number().optional(), ly: z.number().optional(),
+        rx: z.number().optional(), ry: z.number().optional(),
+        lt: z.number().optional(), rt: z.number().optional(),
+      }).optional().describe(
+        "Raw analog state: sticks lx/ly/rx/ry in -1..1, triggers lt/rt in 0..1. "
+        + "Additive — the digital buttons stay the game-facing mask; axes feed the "
+        + "libretro ANALOG device (real stick deflection on N64) and an Active "
+        + "Bezel's ab.input analog reads.",
+      ),
     })
     // passthrough (not the zod default of stripping) so a TYPO'd button name
     // ({jump:true}, {aa:true}) survives into the handler and can be reported as
@@ -114,8 +125,24 @@ function inputSetCore({ ports }, sessionKey) {
       // Ports are positional (index = port number), so `port` is not a key
       // either — {port:1, a:true} means "port 0, with a stray key", never port 1.
       const problems = [];
+      const AXIS_KEYS = new Set(["lx", "ly", "rx", "ry", "lt", "rt"]);
       ports.forEach((p, port) => {
         for (const k of Object.keys(p)) {
+          // `axes` is the raw analog channel ({lx,ly,rx,ry,lt,rt}: sticks
+          // -1..1, triggers 0..1) — additive to the digital buttons, read by
+          // the ANALOG device and Active Bezel input. Validated here, applied
+          // by setInput below alongside the mask.
+          if (k === "axes") {
+            if (typeof p[k] !== "object" || p[k] === null || Array.isArray(p[k])) {
+              problems.push(`port ${port}: 'axes' must be an object like {lx:0.5, rt:1}.`);
+              continue;
+            }
+            for (const [ak, av] of Object.entries(p[k])) {
+              if (!AXIS_KEYS.has(ak)) problems.push(`port ${port}: unknown axis '${ak}' (valid: lx, ly, rx, ry, lt, rt).`);
+              else if (typeof av !== "number" || !Number.isFinite(av)) problems.push(`port ${port}: axis '${ak}' must be a finite number.`);
+            }
+            continue;
+          }
           if (!KNOWN_BUTTONS.has(k)) {
             problems.push(
               k === "port"

@@ -349,6 +349,10 @@ export const MemoryRegionToRetro = {
  * @property {boolean} [r3]
  * @property {boolean} [start]
  * @property {boolean} [select]
+ * @property {{lx?: number, ly?: number, rx?: number, ry?: number,
+ *   lt?: number, rt?: number}} [axes] raw analog state: sticks -1..1,
+ *   triggers 0..1. Additive to the digital buttons — the mask stays the
+ *   game-facing contract; axes feed the ANALOG device and bezel reads.
  */
 
 /**
