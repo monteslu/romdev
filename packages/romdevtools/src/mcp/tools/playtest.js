@@ -476,7 +476,7 @@ export function registerPlaytestTools(server, z, sessionKey) {
         bezel: bypassed ? "suspended" : "active",
         activeBezel: activeBezelStatus(sessionKey),
         note: bypassed
-          ? "Bezel SUSPENDED: captures/window show the raw core frame (source:'core'), pre_render stops shaping the game, and the guest keeps ALL its state — resume does not re-run init(). The human can also toggle with B."
+          ? "Bezel SUSPENDED: captures/window show the raw core frame (source:'core'), pre_frame stops shaping the game, and the guest keeps ALL its state — resume does not re-run init(). The human can also toggle with B."
           : "Bezel ACTIVE again — same guest instance, nothing was re-initialized.",
       });
   }

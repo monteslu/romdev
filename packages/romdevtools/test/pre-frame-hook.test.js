@@ -1,4 +1,4 @@
-// The ABI-2 pre_render chain: beforeFrame at the host's per-frame choke
+// The ABI-2 pre_frame chain: beforeFrame at the host's per-frame choke
 // point, one-frame input overrides applied where the CORE polls, and the
 // end-to-end path through loadMedia -> Lua-runtime bezel -> live RAM.
 //
@@ -10,7 +10,7 @@
 //      and a game-visible behavior check with a control that must fail:
 //      nestest leaves its menu when Start is held — unless a beforeFrame
 //      override masks Start away, in which case the menu must NOT change.
-//   3. MCP end-to-end: a Lua-script bezel whose pre_render writes RAM and
+//   3. MCP end-to-end: a Lua-script bezel whose pre_frame writes RAM and
 //      swaps left/right; the write must be visible through memory({op:'read'})
 //      and the per-frame call count through catalog status.
 
@@ -82,7 +82,7 @@ test("setInputOverride semantics + per-frame clearing on the real core", { skip:
     };
     const base = host.status.frameCount;
     host.stepFrames(3);
-    // frameCount+1 so pre_render(N) names the same frame the post-step bezel
+    // frameCount+1 so pre_frame(N) names the same frame the post-step bezel
     // tick observes (tick reads frameCount AFTER the increment).
     assert.deepEqual(seen, [base + 1, base + 2, base + 3], "once per frame, tick-aligned numbering");
     assert.deepEqual(host.state.inputOverrides[0], { full: 0x40, set: 0, clear: 0 },
@@ -151,14 +151,14 @@ async function mcpSession(key) {
   };
 }
 
-/* A Lua bezel whose pre_render (a) swaps left/right on port 0 and (b) stamps
+/* A Lua bezel whose pre_frame (a) swaps left/right on port 0 and (b) stamps
  * the frame number into RAM $06F0 — an address nestest never touches, so the
- * value read back through memory({op:'read'}) is exactly what pre_render
+ * value read back through memory({op:'read'}) is exactly what pre_frame
  * wrote for the LAST frame. */
 const SWAP_BEZEL_LUA = `
 local ram
 function init() ram = ab.region('system_ram') end
-function pre_render(frame)
+function pre_frame(frame)
   ab.write_u8(ram, 0x6F0, frame % 256)
   local mask = ab.input(0, ab.DEVICE.JOYPAD, 0, ab.BTN.MASK)
   local left = (mask >> ab.BTN.LEFT) % 2
@@ -172,7 +172,7 @@ function tick(frame)
 end
 `;
 
-test("end-to-end: a Lua bezel's pre_render runs per frame and its RAM writes land", { skip: TEST_ROM.skip || (LUA_RUNTIME_WASM ? false : "active-bezel lua runtime not found"), timeout: 120000 }, async (t) => {
+test("end-to-end: a Lua bezel's pre_frame runs per frame and its RAM writes land", { skip: TEST_ROM.skip || (LUA_RUNTIME_WASM ? false : "active-bezel lua runtime not found"), timeout: 120000 }, async (t) => {
   const dir = await mkdtemp(path.join(tmpdir(), "ab-prerender-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   await copyFile(LUA_RUNTIME_WASM, path.join(dir, "main.wasm"));
@@ -181,7 +181,7 @@ test("end-to-end: a Lua bezel's pre_render runs per frame and its RAM writes lan
     format: "active-bezel",
     formatVersion: 1,
     id: "local.romdev.pre-render-test",
-    name: "pre_render test bezel",
+    name: "pre_frame test bezel",
     version: "0.1.0",
     author: "romdev tests",
     description: "swaps left/right and stamps the frame number into RAM",
@@ -198,27 +198,27 @@ test("end-to-end: a Lua bezel's pre_render runs per frame and its RAM writes lan
     platform: "nes", path: TEST_ROM.path, activeBezelPath: dir, activeBezelForce: true,
   });
   assert.equal(load.loaded, true, "load failed: " + JSON.stringify(load).slice(0, 400));
-  assert.equal(load.activeBezel?.preRender?.defined, true,
+  assert.equal(load.activeBezel?.preFrame?.defined, true,
     "loadMedia must advertise that this bezel shapes the game: " + JSON.stringify(load.activeBezel).slice(0, 400));
 
-  const before = (await call("catalog", { op: "status" })).activeBezel.preRender.calls;
+  const before = (await call("catalog", { op: "status" })).activeBezel.preFrame.calls;
   await call("input", { op: "set", ports: [{ right: true }] });
   const step = await call("frame", { op: "step", frames: 10 });
   assert.ok(!step._error, String(step._error));
 
   const status = await call("catalog", { op: "status" });
-  assert.equal(status.activeBezel.preRender.calls - before, 10,
-    "pre_render must run once per FRAME, not once per step call");
-  assert.equal(status.activeBezel.preRenderHookError, undefined, "no hook errors");
+  assert.equal(status.activeBezel.preFrame.calls - before, 10,
+    "pre_frame must run once per FRAME, not once per step call");
+  assert.equal(status.activeBezel.preFrameHookError, undefined, "no hook errors");
 
-  // The last pre_render stamped its frame number; after the step, frameCount
+  // The last pre_frame stamped its frame number; after the step, frameCount
   // IS that number (frameCount+1 alignment). Read it back through the same
   // memory tool an agent would use — core RAM as ground truth.
   const mem = await call("memory", { op: "read", region: "system_ram", offset: 0x6F0, length: 1 });
   assert.ok(!mem._error, String(mem._error));
   const byte = parseInt(String(mem.hex ?? mem.bytes ?? "").replace(/[^0-9a-f]/gi, "").slice(0, 2), 16);
   assert.equal(byte, status.frameCount % 256,
-    `pre_render's RAM stamp must equal the last frame number (got ${byte}, frameCount ${status.frameCount})`);
+    `pre_frame's RAM stamp must equal the last frame number (got ${byte}, frameCount ${status.frameCount})`);
 
   // ---- suspend/resume WITHOUT re-init (playtest op:'bezel' / the B hotkey) ----
   const ticksBefore = status.activeBezel.stats?.ticks ?? status.activeBezel.ticks;
@@ -227,8 +227,8 @@ test("end-to-end: a Lua bezel's pre_render runs per frame and its RAM writes lan
   await call("frame", { op: "step", frames: 5 });
   const during = await call("catalog", { op: "status" });
   assert.equal(during.activeBezel.bypassed, true, "status must SAY it is suspended");
-  assert.equal(during.activeBezel.preRender.calls, status.activeBezel.preRender.calls,
-    "pre_render must NOT run while suspended");
+  assert.equal(during.activeBezel.preFrame.calls, status.activeBezel.preFrame.calls,
+    "pre_frame must NOT run while suspended");
   const shotDir = await mkdtemp(path.join(tmpdir(), "ab-bypass-"));
   t.after(() => rm(shotDir, { recursive: true, force: true }));
   const shot = await call("frame", { op: "screenshot", path: path.join(shotDir, "s.png") });
@@ -238,8 +238,8 @@ test("end-to-end: a Lua bezel's pre_render runs per frame and its RAM writes lan
   assert.equal(resumed.bezel, "active");
   await call("frame", { op: "step", frames: 5 });
   const after = await call("catalog", { op: "status" });
-  assert.equal(after.activeBezel.preRender.calls - status.activeBezel.preRender.calls, 5,
-    "pre_render resumes counting from where it left off");
+  assert.equal(after.activeBezel.preFrame.calls - status.activeBezel.preFrame.calls, 5,
+    "pre_frame resumes counting from where it left off");
   const ticksAfter = after.activeBezel.stats?.ticks ?? after.activeBezel.ticks;
   assert.ok(ticksAfter >= ticksBefore,
     "the SAME guest instance resumed — tick stats continue, nothing was re-initialized");

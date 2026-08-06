@@ -905,7 +905,7 @@ export class LibretroHost {
    *  (watch/breakpoint/runUntil), and the playtest loop all funnel here — so
    *  the pre-frame contract lives here and cannot be skipped by any driver:
    *  1. One-frame input overrides from the PREVIOUS frame are cleared.
-   *  2. `beforeFrame(n)` runs (the Active Bezel pre_render path): it may
+   *  2. `beforeFrame(n)` runs (the Active Bezel pre_frame path): it may
    *     write core memory and re-assert overrides for THIS frame. `n` is
    *     frameCount+1 so it names the same frame the post-step bezel tick
    *     observes (frameCount is incremented after the frame runs).

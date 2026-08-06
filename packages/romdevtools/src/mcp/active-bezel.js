@@ -168,9 +168,9 @@ export async function attachActiveBezel(sessionKey, host, {
           }
           return 0;
         },
-        /* The pre_render write surface: one-frame joypad overrides, applied
+        /* The pre_frame write surface: one-frame joypad overrides, applied
          * when the core polls, cleared by the host at the top of every frame.
-         * The runtime only forwards these from inside pre_render. */
+         * The runtime only forwards these from inside pre_frame. */
         setOverride(port, device, index, id, value) {
           return host?.setInputOverride?.(port, device, index, id, value) ?? false;
         },
@@ -194,10 +194,10 @@ export async function attachActiveBezel(sessionKey, host, {
   });
 
   /*
-   * Wire the ABI-2 pre_render hook into the host's per-frame choke point.
+   * Wire the ABI-2 pre_frame hook into the host's per-frame choke point.
    *
    * Installed UNCONDITIONALLY (not only when the current script defines
-   * pre_render): an ASSETS_RELOADED reboot can add the hook to a script that
+   * pre_frame): an ASSETS_RELOADED reboot can add the hook to a script that
    * lacked it at attach time, and a conditional install would silently never
    * call it. The cost when undefined is one function call + a cached property
    * check per frame — preFrame() early-returns before touching the guest, so
@@ -213,12 +213,12 @@ export async function attachActiveBezel(sessionKey, host, {
       const entry = sessions.get(sessionKey);
       if (entry?.runtime && !entry.bypassed) entry.runtime.preFrame(frameNumber);
     };
-  } else if (runtime.status?.()?.preRender?.defined) {
-    /* A guest that WANTS pre_render on a host that cannot run it must fail
+  } else if (runtime.status?.()?.preFrame?.defined) {
+    /* A guest that WANTS pre_frame on a host that cannot run it must fail
      * loudly, not tick along with the hook silently never called. */
     detachActiveBezel(sessionKey);
     throw new Error(
-      "This Active Bezel defines pre_render, but this host has no per-frame "
+      "This Active Bezel defines pre_frame, but this host has no per-frame "
       + "beforeFrame/setInputOverride support. Update romdev-core-host.",
     );
   }
@@ -248,7 +248,7 @@ export function sessionKeyForHost(host) {
  * The whole point vs detach: the guest interpreter stays alive — no
  * shutdown, no re-init, no reboot on resume. Script globals, caches,
  * loaded fonts/textures all survive; while bypassed the guest is simply
- * never CALLED (no pre_render, no tick), captures return the raw core
+ * never CALLED (no pre_frame, no tick), captures return the raw core
  * frame, and any input override staged for the next frame is dropped so
  * a suspended bezel stops shaping the game immediately.
  *
@@ -268,7 +268,7 @@ export function setActiveBezelBypassed(sessionKey, force) {
 export function detachActiveBezel(sessionKey) {
   const entry = sessions.get(sessionKey);
   if (!entry) return false;
-  /* Unhook the per-frame pre_render path and drop any override still pending
+  /* Unhook the per-frame pre_frame path and drop any override still pending
    * for the next frame — a detached bezel must stop shaping the game NOW. */
   if (entry.host) {
     entry.host.beforeFrame = null;
@@ -404,7 +404,7 @@ export function activeBezelStatus(sessionKey) {
     /* A beforeFrame hook failure is caught host-side so stepping never
      * breaks; surface it here so it cannot fail silently either. */
     ...(entry.host?.beforeFrameError
-      ? { preRenderHookError: String(entry.host.beforeFrameError?.message ?? entry.host.beforeFrameError) }
+      ? { preFrameHookError: String(entry.host.beforeFrameError?.message ?? entry.host.beforeFrameError) }
       : {}),
     config: entry.config,
     ...inner,

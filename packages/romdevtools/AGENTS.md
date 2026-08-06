@@ -685,14 +685,14 @@ compositor difference is the usual cause.
   back to the core frame. A broken package never takes down your session.
 - **Suspend/resume without teardown:** `playtest({op:'bezel', show:false})`
   (or the human's **B** hotkey — same state) bypasses the bezel: captures and
-  the window show the raw core frame (`source:'core'`), pre_render stops
+  the window show the raw core frame (`source:'core'`), pre_frame stops
   shaping the game, and the guest keeps ALL its state — resuming never
   re-runs `init()`. `catalog({op:'status'})` shows `activeBezel.bypassed`
   while suspended; check it before interpreting a `source:'core'` capture as
   "no bezel exists".
 
-**pre_render — a bezel can SHAPE the frame, not just observe it (ABI 2).**
-A package may define `pre_render(frame)`, which the host calls before EVERY
+**pre_frame — a bezel can SHAPE the frame, not just observe it (ABI 2).**
+A package may define `pre_frame(frame)`, which the host calls before EVERY
 core frame (every driver: `frame({op:'step'})`, `runUntil`, watch/breakpoint
 runs, playtest). Inside it the bezel can write live regions (the write lands
 before the game's logic consumes it — a `tick`-time write is one frame late by
@@ -703,14 +703,14 @@ PHYSICAL pad, so a left/right swap can't feed back on its own output, and a
 bezel can *claim* a button the game uses by reading it and masking it out.
 Two things to know when debugging a session with such a bezel attached:
 
-- `catalog({op:'status'})` reports `activeBezel.preRender` —
+- `catalog({op:'status'})` reports `activeBezel.preFrame` —
   `{defined, calls}`. **Check it before trusting any negative input result or
-  "value changed with no writer" observation**: pre_render writes are
+  "value changed with no writer" observation**: pre_frame writes are
   host-side pokes into core memory, INVISIBLE to `breakpoint`/`watch` (those
   hook CPU access core-side), and an input you "pressed" may never reach the
   game.
 - `input({op:'set'})` still sets the physical pad; what the core sees that
-  frame is physical + the bezel's override. `activeBezel.preRenderHookError`
+  frame is physical + the bezel's override. `activeBezel.preFrameHookError`
   surfaces a hook that threw host-side (the session keeps stepping).
 
 `input({op:'set'})` also accepts a raw analog channel per port —
@@ -779,11 +779,11 @@ unpacked directory, so: edit the script, `loadMedia` again, `frame({op:
 'screenshot'})`, look. Nothing needs packing until you ship. To keep game state
 across a reload, `state({op:'save'})` → `loadMedia` → `state({op:'load'})`.
 
-The script contract is `init()` / `pre_render(frame)` / `tick(frame)` /
-`event(kind)` — only `tick` is required. `pre_render` runs BEFORE the core
-executes the frame (write RAM, override input — see the pre_render block
+The script contract is `init()` / `pre_frame(frame)` / `tick(frame)` /
+`event(kind)` — only `tick` is required. `pre_frame` runs BEFORE the core
+executes the frame (write RAM, override input — see the pre_frame block
 above); `tick` draws the scene the frame produced. `ab.input_override` is only
-honored inside `pre_render` and refuses (logged once) anywhere else.
+honored inside `pre_frame` and refuses (logged once) anywhere else.
 
 A script error does **not** kill the session: the runtime draws the message and
 the failing line on an on-screen panel and keeps ticking, so a screenshot tells

@@ -125,7 +125,7 @@ export function newCallbackState({ systemDir = "", saveDir = "" } = {}) {
     audioRing: [],
     supportsNoGame: false,
     inputPorts: [new Uint16Array(1), new Uint16Array(1)],
-    // One-frame input overrides (the Active Bezel pre_render path). Per port:
+    // One-frame input overrides (the Active Bezel pre_frame path). Per port:
     // null, or { full: mask|null, set: bits, clear: bits }. Applied when the
     // CORE polls — inputPorts keeps the PHYSICAL state, so anything reading it
     // (a bezel's input display, playtest's humanPressing) sees the truth while
@@ -256,7 +256,7 @@ export function registerCallbacks(args) {
       return state.keysDown.has(id) ? 1 : 0;
     }
     if (!state.inputPorts[port]) return 0;
-    // The core sees the OVERRIDDEN mask (Active Bezel pre_render); the
+    // The core sees the OVERRIDDEN mask (Active Bezel pre_frame); the
     // physical inputPorts word stays untouched for everything that reads it.
     const bits = effectiveJoypadMask(state, port);
     // device 5 = RETRO_DEVICE_ANALOG. Games with an analog stick (N64, and the

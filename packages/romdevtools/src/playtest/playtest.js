@@ -744,7 +744,7 @@ export async function playtest(args) {
       // Suspend/resume the Active Bezel WITHOUT tearing it down: the guest
       // interpreter keeps every bit of its state and resume never re-runs
       // init(). While suspended the window (and captures) show the raw core
-      // picture and pre_render stops shaping the game.
+      // picture and pre_frame stops shaping the game.
       const bypassed = setActiveBezelBypassed(sessionKey);
       if (bypassed !== null) log.info(`[playtest] B → bezel ${bypassed ? "SUSPENDED (raw core picture)" : "active"}`);
       return;

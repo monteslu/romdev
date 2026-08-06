@@ -6,9 +6,9 @@ the `romdev-mcp` bin is kept as an alias.)
 
 ## 0.114.0 — unreleased
 
-### Active Bezel pre_render: a bezel can shape the frame, not just observe it
+### Active Bezel pre_frame: a bezel can shape the frame, not just observe it
 
-- active-bezel 0.7.0 (ABI 2): a package may define `pre_render(frame)`,
+- active-bezel 0.7.0 (ABI 2): a package may define `pre_frame(frame)`,
   called before EVERY core frame by every frame driver — `frame({op:'step'})`,
   `runUntil`, watch/breakpoint runs, playtest. Region writes land before the
   game's logic consumes them, and `ab.input_override` replaces what the core
@@ -21,9 +21,9 @@ the `romdev-mcp` bin is kept as an alias.)
   real pad, input displays and `humanPressing` keep seeing the truth, and the
   bezel's own `ab.input` reads report physical state so a left/right swap
   cannot feed back on itself.
-- `catalog({op:'status'})` reports `activeBezel.preRender: {defined, calls}`
-  plus `preRenderHookError`. Check it before trusting a negative input result
-  or a "value changed with no writer" observation: pre_render writes are
+- `catalog({op:'status'})` reports `activeBezel.preFrame: {defined, calls}`
+  plus `preFrameHookError`. Check it before trusting a negative input result
+  or a "value changed with no writer" observation: pre_frame writes are
   host-side pokes, invisible to core-side `breakpoint`/`watch`.
 
 ### Analog input: raw axes reach the host, triggers reach the mask
@@ -48,7 +48,7 @@ the `romdev-mcp` bin is kept as an alias.)
   attached Active Bezel WITHOUT tearing it down: the guest keeps every bit
   of interpreter state (resume never re-runs `init()`); while suspended,
   captures and the window show the raw core frame (`source:'core'`),
-  pre_render stops shaping the game, and any staged input override is
+  pre_frame stops shaping the game, and any staged input override is
   dropped. `catalog({op:'status'})` reports `activeBezel.bypassed` — check
   it before reading a `source:'core'` capture as "no bezel exists". Agent
   and human flip the SAME state (the op:'fps'/F3 pattern).
@@ -61,10 +61,10 @@ the `romdev-mcp` bin is kept as an alias.)
   rewind notification since the feature landed reached no guest and
   refreshed no regions. Names now map to codes.
 
-Tests: `pre-render-hook.test.js` — pure override semantics, the per-frame
+Tests: `pre-frame-hook.test.js` — pure override semantics, the per-frame
 beforeFrame contract on the real core, a control-gated nestest check that the
 CORE genuinely sees a masked button, an MCP end-to-end run where a Lua
-bezel's pre_render stamps RAM once per frame, and a suspend/resume round
+bezel's pre_frame stamps RAM once per frame, and a suspend/resume round
 trip proving frozen counters, core-labeled captures, and same-instance
 resume. Packages: romdev-core-host 0.6.0, romdev-core-runner 0.2.7,
 active-bezel ^0.7.0 (repinned).
