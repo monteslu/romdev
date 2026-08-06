@@ -1035,19 +1035,33 @@ export async function playtest(args) {
           const bps = deviceSampleRate * 4; // stereo s16
           const TARGET_MS = 60;             // keep ~60ms queued — drain sets the speed
           const BUDGET_MS = frameMs * 1.5;  // wall-clock ceiling for the whole burst
-          const burstStart = performance.now();
-          do {
-            stepped += h.stepFrames(1);
-            // Stop the instant we've spent our wall-clock budget — this is what keeps
-            // a slow core from freezing the loop. A single frame already over budget
-            // still steps once (progress), then we yield.
-            if (performance.now() - burstStart >= BUDGET_MS) break;
-            const qMs = ((audio.queued ?? 0) / bps) * 1000;
-            let ringMs = 0;
-            for (const b of h.state.audioRing) ringMs += (b.length / 2);
-            ringMs = (ringMs / deviceSampleRate) * 1000;
-            if (qMs + ringMs >= TARGET_MS) break;
-          } while (true);
+          // DOWN-regulation: the burst below can only speed the game UP (step
+          // extra frames when the queue runs dry) — it could never slow it
+          // DOWN, because every tick stepped at least once. Node's setInterval
+          // floors at ~16ms, under NTSC's 16.69ms, so ticks outpace the device
+          // drain by ~3.5%: the game ran measurably fast and the queue climbed
+          // to the 250ms safety valve (≈a quarter second of audio latency).
+          // If the queue is already a frame past target BEFORE stepping, this
+          // tick presents without stepping; the drain pulls the queue back and
+          // game speed locks to the audio clock exactly.
+          const SKIP_MS = TARGET_MS + frameMs;
+          let preMs = ((audio.queued ?? 0) / bps) * 1000;
+          for (const b of h.state.audioRing) preMs += (b.length / 2 / deviceSampleRate) * 1000;
+          if (preMs < SKIP_MS) {
+            const burstStart = performance.now();
+            do {
+              stepped += h.stepFrames(1);
+              // Stop the instant we've spent our wall-clock budget — this is what keeps
+              // a slow core from freezing the loop. A single frame already over budget
+              // still steps once (progress), then we yield.
+              if (performance.now() - burstStart >= BUDGET_MS) break;
+              const qMs = ((audio.queued ?? 0) / bps) * 1000;
+              let ringMs = 0;
+              for (const b of h.state.audioRing) ringMs += (b.length / 2);
+              ringMs = (ringMs / deviceSampleRate) * 1000;
+              if (qMs + ringMs >= TARGET_MS) break;
+            } while (true);
+          }
         } else {
           stepped = h.stepFrames(1); // no audio device → plain 1 frame/tick
         }
