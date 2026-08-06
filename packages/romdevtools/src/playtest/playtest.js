@@ -24,7 +24,7 @@ import {
   framebufferToRgba,
 } from "romdev-core-runner";
 import { log } from "../mcp/log.js";
-import { getActiveBezel, compositeFrame, tickActiveBezel, releaseBezelGl } from "../mcp/active-bezel.js";
+import { getActiveBezel, compositeFrame, tickActiveBezel, releaseBezelGl, notifyActiveBezel, setActiveBezelBypassed } from "../mcp/active-bezel.js";
 import { framebufferToScreenshot } from "romdev-core-host/framebuffer-png.js";
 import { ROMDEV_PIXEL_FORMAT_RGBA8888 } from "romdev-core-host/retroConstants.js";
 import { initResampler, resampleS16Stereo } from "romdev-audio-resampler";
@@ -172,6 +172,8 @@ Emulator hotkeys (RetroArch defaults):
   P / Space            Pause / unpause emulation
   K                    Frame advance (step one frame while paused)
   R                    Rewind one frame (while paused)
+  H                    Reset (soft — the console RESET button; RetroArch's default binding)
+  B                    Suspend/resume the Active Bezel (keeps its state; raw core picture while off)
   F2                   Save state (to slot)
   F3                   Toggle on-screen fps counter (fps is always in the title bar)
   F4                   Load state (from slot)
@@ -736,6 +738,31 @@ export async function playtest(args) {
       if (h && h.status?.loaded) { try { h.loadState("hotkey"); } catch (err) {
         log.debug("[playtest] load state failed (no save yet?):", err.message);
       } }
+      return;
+    }
+    if (key === "b") {
+      // Suspend/resume the Active Bezel WITHOUT tearing it down: the guest
+      // interpreter keeps every bit of its state and resume never re-runs
+      // init(). While suspended the window (and captures) show the raw core
+      // picture and pre_render stops shaping the game.
+      const bypassed = setActiveBezelBypassed(sessionKey);
+      if (bypassed !== null) log.info(`[playtest] B → bezel ${bypassed ? "SUSPENDED (raw core picture)" : "active"}`);
+      return;
+    }
+    if (key === "h") {
+      // Soft reset — same path as host({op:'reset'}): the console RESET
+      // button, work RAM persists. The attached bezel is told continuity
+      // broke so it drops caches from the abandoned timeline.
+      const h = getLiveHost();
+      if (h && h.status?.loaded) {
+        try {
+          h.reset();
+          notifyActiveBezel(sessionKey, "reset");
+          log.info("[playtest] H → soft reset");
+        } catch (err) {
+          log.debug("[playtest] reset failed:", err.message);
+        }
+      }
       return;
     }
     if (key === "k") {

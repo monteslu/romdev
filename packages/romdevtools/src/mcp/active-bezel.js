@@ -211,7 +211,7 @@ export async function attachActiveBezel(sessionKey, host, {
   if (typeof host.setInputOverride === "function") {
     host.beforeFrame = (frameNumber) => {
       const entry = sessions.get(sessionKey);
-      if (entry?.runtime) entry.runtime.preFrame(frameNumber);
+      if (entry?.runtime && !entry.bypassed) entry.runtime.preFrame(frameNumber);
     };
   } else if (runtime.status?.()?.preRender?.defined) {
     /* A guest that WANTS pre_render on a host that cannot run it must fail
@@ -240,6 +240,28 @@ export function sessionKeyForHost(host) {
     if (entry.host === host) return key;
   }
   return null;
+}
+
+/**
+ * Suspend/resume the bezel WITHOUT tearing it down.
+ *
+ * The whole point vs detach: the guest interpreter stays alive — no
+ * shutdown, no re-init, no reboot on resume. Script globals, caches,
+ * loaded fonts/textures all survive; while bypassed the guest is simply
+ * never CALLED (no pre_render, no tick), captures return the raw core
+ * frame, and any input override staged for the next frame is dropped so
+ * a suspended bezel stops shaping the game immediately.
+ *
+ * @param {string} sessionKey
+ * @param {boolean} [force] true=active, false=bypassed; omit to toggle
+ * @returns {boolean|null} new BYPASSED state, or null if no bezel attached
+ */
+export function setActiveBezelBypassed(sessionKey, force) {
+  const entry = sessions.get(sessionKey);
+  if (!entry) return null;
+  entry.bypassed = force !== undefined ? !!force : !entry.bypassed;
+  if (entry.bypassed) entry.host?.clearInputOverrides?.();
+  return entry.bypassed;
 }
 
 /** Drop the bezel for a session (media unload, host shutdown, a new package). */
@@ -319,7 +341,7 @@ export function releaseBezelGl() {
  */
 export function tickActiveBezel(sessionKey, gameRgba, width, height, frameNumber) {
   const entry = sessions.get(sessionKey);
-  if (!entry) return null;
+  if (!entry || entry.bypassed) return null;
   try {
     const composite = entry.runtime.processFrame(gameRgba, width, height, frameNumber);
     entry.ticks++;
@@ -340,10 +362,22 @@ export function tickActiveBezel(sessionKey, gameRgba, width, height, frameNumber
  * position) and draws a composite that disagrees with the machine it is
  * supposedly describing.
  */
+/* Runtime.event() speaks AB_EVENT numbers; the tool callers here speak
+ * names. This mapping used to be missing, and a string coerced to i32 is 0 —
+ * every lifecycle notification (reset, state load, rewind) was a silent
+ * no-op: the guest never heard the event and snapshot regions never
+ * refreshed. Numbers mirror active-bezel's AB_EVENT / sdk abi.json. */
+const AB_EVENT_BY_NAME = {
+  reset: 1, stateLoaded: 2, rewindJump: 3, configChanged: 4,
+  displayChanged: 5, assetsReloaded: 6, regionsChanged: 7,
+};
+
 export function notifyActiveBezel(sessionKey, eventName) {
   const entry = sessions.get(sessionKey);
   if (!entry) return false;
-  try { entry.runtime.event?.(eventName); return true; } catch { return false; }
+  const type = typeof eventName === "number" ? eventName : AB_EVENT_BY_NAME[eventName];
+  if (!type) return false;
+  try { entry.runtime.event?.(type); return true; } catch { return false; }
 }
 
 /**
@@ -362,6 +396,7 @@ export function activeBezelStatus(sessionKey) {
   try { inner = runtime.status?.() ?? {}; } catch { /* status is best-effort */ }
   return {
     enabled: true,
+    ...(entry.bypassed ? { bypassed: true } : {}),
     path: entry.packagePath,
     ticks: entry.ticks,
     ...(entry.lastFrame ? { lastFrame: entry.lastFrame } : {}),
@@ -400,6 +435,10 @@ export function compositeFrame(sessionKey, host, { source = "composite" } = {}) 
 
   const entry = sessions.get(sessionKey);
   if (!entry) return { ...core, source: "core" };
+  /* Suspended by the B hotkey / playtest({op:'bezel'}): the capture is the
+   * raw core picture and SAYS so — a reader must never mistake it for the
+   * composite the bezel would have drawn. */
+  if (entry.bypassed) return { ...core, source: "core", bezelBypassed: true };
 
   /* The runtime caches the output of the LAST real tick. When it matches the
    * current frame, return it instead of re-ticking: an observer capture used

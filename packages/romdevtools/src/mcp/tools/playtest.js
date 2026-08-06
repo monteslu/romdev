@@ -4,6 +4,7 @@
 // pause / stepFrames etc. while the user is playing.
 
 import { writeFile } from "node:fs/promises";
+import { setActiveBezelBypassed, activeBezelStatus } from "../active-bezel.js";
 
 import { getHost, getHostOrNull, playtestCheckpointPath } from "../state.js";
 import { imageContent, jsonContent, safeTool, textContent } from "../util.js";
@@ -459,6 +460,27 @@ export function registerPlaytestTools(server, z, sessionKey) {
       });
   }
 
+  // op:'bezel' — suspend/resume the Active Bezel (same state the B hotkey
+  // flips). Session-level, not window-level: it also governs screenshots, so
+  // it works with no window open. `show` names the ACTIVE state; the wire
+  // status reports `bypassed` (the suspended state) to match catalog status.
+  function ptBezel({ show }) {
+      const bypassed = setActiveBezelBypassed(sessionKey, show === undefined ? undefined : !show);
+      if (bypassed === null) {
+        return jsonContent({
+          bezel: null,
+          note: "No Active Bezel attached to this session — loadMedia with useActiveBezel/activeBezelPath first.",
+        });
+      }
+      return jsonContent({
+        bezel: bypassed ? "suspended" : "active",
+        activeBezel: activeBezelStatus(sessionKey),
+        note: bypassed
+          ? "Bezel SUSPENDED: captures/window show the raw core frame (source:'core'), pre_render stops shaping the game, and the guest keeps ALL its state — resume does not re-run init(). The human can also toggle with B."
+          : "Bezel ACTIVE again — same guest instance, nothing was re-initialized.",
+      });
+  }
+
   server.tool(
     "playtest",
     "Show the loaded ROM to a HUMAN in a native SDL window, one tool keyed by `op`. For your OWN build-iteration " +
@@ -484,15 +506,15 @@ export function registerPlaytestTools(server, z, sessionKey) {
     "same state as the F3 hotkey). The title bar always shows live fps, and op:'status' returns `perf` " +
     "(fps/tickHz + per-stage ms) for YOUR diagnosis — use op:'fps' when the HUMAN should see the number.",
     {
-      op: z.enum(["open", "stop", "status", "framebuffer", "fps"]).default("open")
-        .describe("open=show the ROM to a human (default); stop=close this session's window; status=is it open + does it match the active host; framebuffer=capture what the human sees; fps=show/hide the on-screen fps counter."),
+      op: z.enum(["open", "stop", "status", "framebuffer", "fps", "bezel"]).default("open")
+        .describe("open=show the ROM to a human (default); stop=close this session's window; status=is it open + does it match the active host; framebuffer=capture what the human sees; fps=show/hide the on-screen fps counter; bezel=suspend/resume the attached Active Bezel WITHOUT tearing it down (same state the B hotkey flips; guest keeps all its state, captures show the raw core while suspended)."),
       scale: z.number().int().min(1).max(8).default(3).describe("op:open — integer upscale factor for the window."),
       title: z.string().optional().describe("op:open — window title."),
       aspect: z.enum(["fb", "tv", "core"]).default("tv").describe("op:open — initial window shape. 'tv' (DEFAULT) = how a player saw the hardware (4:3 consoles; native LCD for handhelds — GB/GBC 10:9 not stretched, GG ~6:5, Lynx 4:3, GBA 3:2). 'fb' = raw framebuffer × scale (square pixels, dev geometry). 'core' honors the core's display_aspect_ratio. NOTE: 'tv' reads the platform from the running host, so pass the correct `platform` to loadMedia (gbc not gb for a CGB game) or it falls back to the fb aspect."),
       path: z.string().optional().describe("op:framebuffer — absolute path to write the PNG to. Required unless inline:true."),
       inline: z.boolean().default(false).describe("op:framebuffer — return the image in the response instead of writing to disk."),
       fpsOverlay: z.boolean().default(false).describe("op:open — start with the on-screen fps counter visible (the title bar shows fps either way; F3 and op:'fps' toggle it later)."),
-      show: z.boolean().optional().describe("op:fps — true=show the counter, false=hide it; omit to toggle."),
+      show: z.boolean().optional().describe("op:fps — true=show the counter, false=hide it; omit to toggle. op:bezel — true=bezel active, false=suspended; omit to toggle."),
     },
     safeTool(async (args) => {
       switch (args.op ?? "open") {
@@ -504,6 +526,7 @@ export function registerPlaytestTools(server, z, sessionKey) {
           return await ptFramebuffer(args);
         }
         case "fps":         return ptFps(args);
+        case "bezel":       return ptBezel(args);
         default: throw new Error(`playtest: unknown op '${args.op}'`);
       }
     }),

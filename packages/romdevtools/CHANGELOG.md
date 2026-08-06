@@ -42,11 +42,32 @@ the `romdev-mcp` bin is kept as an alias.)
   as axes. Most retro platforms ignore bits 12-15, which makes L2/R2/L3/R3
   free real estate for bezel controls.
 
+### Bezel suspend/resume, new window hotkeys, lifecycle events actually delivered
+
+- **`playtest({op:'bezel', show?})` + the B hotkey** suspend/resume an
+  attached Active Bezel WITHOUT tearing it down: the guest keeps every bit
+  of interpreter state (resume never re-runs `init()`); while suspended,
+  captures and the window show the raw core frame (`source:'core'`),
+  pre_render stops shaping the game, and any staged input override is
+  dropped. `catalog({op:'status'})` reports `activeBezel.bypassed` — check
+  it before reading a `source:'core'` capture as "no bezel exists". Agent
+  and human flip the SAME state (the op:'fps'/F3 pattern).
+- **H hotkey** in the playtest window: soft reset (the console RESET
+  button; RetroArch's default binding), same path as `host({op:'reset'})`
+  including the bezel continuity notification.
+- **Bezel lifecycle events were silent no-ops — fixed.** `notifyActiveBezel`
+  passed string names ("reset") where the runtime's `event()` takes numeric
+  AB_EVENT codes; a string coerces to event 0, so every reset/state-load/
+  rewind notification since the feature landed reached no guest and
+  refreshed no regions. Names now map to codes.
+
 Tests: `pre-render-hook.test.js` — pure override semantics, the per-frame
 beforeFrame contract on the real core, a control-gated nestest check that the
-CORE genuinely sees a masked button, and an MCP end-to-end run where a Lua
-bezel's pre_render stamps RAM once per frame. Packages: romdev-core-host
-0.6.0, romdev-core-runner 0.2.7, active-bezel ^0.7.0 (repinned).
+CORE genuinely sees a masked button, an MCP end-to-end run where a Lua
+bezel's pre_render stamps RAM once per frame, and a suspend/resume round
+trip proving frozen counters, core-labeled captures, and same-instance
+resume. Packages: romdev-core-host 0.6.0, romdev-core-runner 0.2.7,
+active-bezel ^0.7.0 (repinned).
 
 ## 0.113.0 — 2026-08-05
 

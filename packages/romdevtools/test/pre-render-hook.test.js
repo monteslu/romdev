@@ -219,4 +219,28 @@ test("end-to-end: a Lua bezel's pre_render runs per frame and its RAM writes lan
   const byte = parseInt(String(mem.hex ?? mem.bytes ?? "").replace(/[^0-9a-f]/gi, "").slice(0, 2), 16);
   assert.equal(byte, status.frameCount % 256,
     `pre_render's RAM stamp must equal the last frame number (got ${byte}, frameCount ${status.frameCount})`);
+
+  // ---- suspend/resume WITHOUT re-init (playtest op:'bezel' / the B hotkey) ----
+  const ticksBefore = status.activeBezel.stats?.ticks ?? status.activeBezel.ticks;
+  const suspended = await call("playtest", { op: "bezel", show: false });
+  assert.equal(suspended.bezel, "suspended", JSON.stringify(suspended).slice(0, 200));
+  await call("frame", { op: "step", frames: 5 });
+  const during = await call("catalog", { op: "status" });
+  assert.equal(during.activeBezel.bypassed, true, "status must SAY it is suspended");
+  assert.equal(during.activeBezel.preRender.calls, status.activeBezel.preRender.calls,
+    "pre_render must NOT run while suspended");
+  const shotDir = await mkdtemp(path.join(tmpdir(), "ab-bypass-"));
+  t.after(() => rm(shotDir, { recursive: true, force: true }));
+  const shot = await call("frame", { op: "screenshot", path: path.join(shotDir, "s.png") });
+  assert.equal(shot.source, "core", "captures show the raw core frame while suspended: " + JSON.stringify(shot).slice(0, 200));
+
+  const resumed = await call("playtest", { op: "bezel" });   // omit show = toggle back
+  assert.equal(resumed.bezel, "active");
+  await call("frame", { op: "step", frames: 5 });
+  const after = await call("catalog", { op: "status" });
+  assert.equal(after.activeBezel.preRender.calls - status.activeBezel.preRender.calls, 5,
+    "pre_render resumes counting from where it left off");
+  const ticksAfter = after.activeBezel.stats?.ticks ?? after.activeBezel.ticks;
+  assert.ok(ticksAfter >= ticksBefore,
+    "the SAME guest instance resumed — tick stats continue, nothing was re-initialized");
 });

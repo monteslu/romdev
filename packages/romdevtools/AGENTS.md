@@ -683,6 +683,13 @@ compositor difference is the usual cause.
   longer exists.
 - A guest fault is recorded in `activeBezel.lastError` and the capture falls
   back to the core frame. A broken package never takes down your session.
+- **Suspend/resume without teardown:** `playtest({op:'bezel', show:false})`
+  (or the human's **B** hotkey — same state) bypasses the bezel: captures and
+  the window show the raw core frame (`source:'core'`), pre_render stops
+  shaping the game, and the guest keeps ALL its state — resuming never
+  re-runs `init()`. `catalog({op:'status'})` shows `activeBezel.bypassed`
+  while suspended; check it before interpreting a `source:'core'` capture as
+  "no bezel exists".
 
 **pre_render — a bezel can SHAPE the frame, not just observe it (ABI 2).**
 A package may define `pre_render(frame)`, which the host calls before EVERY
