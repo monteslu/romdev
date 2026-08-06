@@ -131,6 +131,17 @@ export async function initSdl(opts = {}) {
     process.env.SDL_RENDER_SCALE_QUALITY = "0";
   }
 
+  // Deliver controller input even when the window is unfocused. SDL2 drops
+  // controller button PRESSES while the app lacks input focus (releases pass,
+  // so no stuck buttons) unless this hint is on, and @kmamal/sdl never sets
+  // it. Playtest workflow constantly has the terminal focused while the pad
+  // drives the game window. Keyboard stays focus-gated by design (routes to
+  // the focused window; no hint governs it). MUST be set before SDL inits,
+  // i.e. before the import. Respect an explicit user override (e.g. =0).
+  if (!process.env.SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS) {
+    process.env.SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS = "1";
+  }
+
   try {
     const ns = opts.importSdl ? await opts.importSdl() : await import("@kmamal/sdl");
     const mod = ns.default || ns;
