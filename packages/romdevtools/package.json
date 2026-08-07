@@ -69,7 +69,7 @@
     "romdev-core-host": "0.7.0",
     "romdev-core-parallel-n64": "0.2.0",
     "romdev-core-prosystem": "0.9.0",
-    "romdev-core-runner": "0.2.7",
+    "romdev-core-runner": "0.2.8",
     "romdev-core-vice": "0.10.0",
     "romdev-famitone": "0.2.0",
     "romdev-maxmod": "0.2.0",

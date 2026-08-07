@@ -84,7 +84,11 @@ write watchpoints, read watches, PC breakpoints, `runUntilPC(addr)` /
 open C-BIOS system dir resolves automatically. The 3D cores (N64, PS1,
 Dreamcast) hardware-render through a headless GL context: pass
 `{ hwRender: true }` to `loadCore` and install the optional `native-gles`
-dependency; the software-rendered cores need neither.
+dependency; the software-rendered cores need neither. native-gles 0.6.0+
+is multi-context: each core owns the context it renders into (created for
+it via webgl-node) and re-asserts it before every frame, so several GL
+consumers — more cores, an active-bezel compositor, a wasmcart cart — can
+share one process without drawing into each other's contexts.
 
 ## Browser / bytes-only use
 
