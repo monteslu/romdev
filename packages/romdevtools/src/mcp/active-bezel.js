@@ -408,6 +408,18 @@ export function activeBezelStatus(sessionKey) {
       : {}),
     config: entry.config,
     ...inner,
+    /* Hoist the guest's own script error to the TOP of the object and give
+     * it a loud key. It arrives via ...inner, but a caller scanning a large
+     * status blob reads `error: null` and moves on -- which is exactly how
+     * a broken bezel gets reported as healthy. `error` is a HOST trap;
+     * this is the script failing inside its own runtime, which the host
+     * cannot see because the tick returns normally. */
+    ...(inner.scriptError
+      ? { BEZEL_SCRIPT_ERROR: inner.scriptError,
+          hint: 'The bezel script is failing. Its runtime caught the error and '
+              + 'is drawing an error panel instead of the scene. Fix the script '
+              + 'and reload; `error` stays null for this class of failure.' }
+      : {}),
   };
 }
 
