@@ -4,7 +4,7 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
-## Unreleased
+## 0.115.0 — 2026-08-07
 
 ### Every GL consumer pinned to its own context
 
