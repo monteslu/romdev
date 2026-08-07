@@ -4,6 +4,31 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## Unreleased
+
+### Every GL consumer pinned to its own context
+
+- native-gles is multi-context; the process-global context is gone. One
+  session's playtest window can no longer present another session's
+  rendering (found as: a wasmcart session's window showing a different
+  session's game + bezel). WasmcartHost makes its offscreen context current
+  before each step burst; hw-render cores (LibretroGL) record the handle of
+  the context they render into and bind makeCurrent/resize/destroy to it —
+  the bare `destroyContext()` there used to tear down whichever context
+  happened to be current.
+- **macOS playtest windows: real vsync, correct Retina scale.** Via
+  native-gles' ANGLE **Metal** backend: display-synced presents
+  (`CAMetalLayer.displaySyncEnabled`; the previous CGL backend free-ran at
+  thousands of swaps/sec no matter the swap interval), NSView handles
+  resolved to their backing CALayer (window surfaces on macOS never
+  actually worked before), and per-swap backing-scale re-sync so dragging
+  the window between monitors with different scales keeps the picture
+  full-size instead of collapsing it into a corner.
+- **Honest `convertMs`.** The playtest perf counter started its timer above
+  the whole bezel tick+compose block and re-counted it as ~2.7ms of phantom
+  framebuffer conversion. It now times only the convert/wrap section:
+  ~0.0005ms with a bezel active (a zero-copy Buffer wrap).
+
 ## 0.114.0 — 2026-08-06
 
 ### Active Bezel pre_frame: a bezel can shape the frame, not just observe it
