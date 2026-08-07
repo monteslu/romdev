@@ -1096,7 +1096,6 @@ export async function playtest(args) {
 
     if (!window.destroyed) {
       try {
-        const tConvert = performance.now();
         // Active Bezel: run the guest against the frame the core just produced
         // and present the COMPOSITE. This is the human's view, so the window
         // showing the bare core picture while every capture shows the composite
@@ -1158,6 +1157,10 @@ export async function playtest(args) {
           perf.bezelMs = 0;
           perf.bezelEveryN = 1;
         }
+        // convertMs times ONLY this section (buffer wrap / rgba conversion).
+        // It used to start above the bezel block, so it re-counted the whole
+        // bezel tick+compose and read as phantom CPU conversion cost.
+        const tConvert = performance.now();
         if (composed) {
           const cw = composed.width ?? composed.physicalWidth;
           const ch = composed.height ?? composed.physicalHeight;

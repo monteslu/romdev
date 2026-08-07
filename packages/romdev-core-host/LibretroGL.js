@@ -38,6 +38,11 @@ let gl = null;
 export class LibretroGL {
   constructor() {
     this.active = false;
+    /* Handle of THIS core's EGL context (native-gles is multi-context; the
+     * no-arg calls target whichever context is current, which in a server
+     * running bezel compositors and carts can be anyone's). 0 = not set:
+     * calls fall back to current, the old single-context behavior. */
+    this.ctxId = 0;
     this.contextType = 0;
     this.bottomLeftOrigin = true;
     this.fbo = 0;
@@ -67,7 +72,7 @@ export class LibretroGL {
   /** Make this core's GL context current. Called before each _retro_run so the
    *  core renders into OUR FBO (a multi-host server may have switched contexts). */
   makeCurrent() {
-    if (this.active && gl) gl.makeCurrent();
+    if (this.active && gl) gl.makeCurrent(this.ctxId || undefined);
   }
 
   /**
@@ -145,17 +150,19 @@ export class LibretroGL {
     this.fboH = height;
 
     if (contextExists) {
-      // Context already created by LibretroHost before core loading.
-      // Resize if needed and ensure it's current.
-      gl.resizeContext(width, height);
-      gl.makeCurrent();
+      // Context already created by LibretroHost before core loading (its
+      // handle arrived via this.ctxId). Resize if needed and make it current.
+      gl.resizeContext(width, height, this.ctxId || undefined);
+      gl.makeCurrent(this.ctxId || undefined);
     } else {
       // Create pbuffer EGL context
-      if (!gl.createContext(width, height)) {
+      const ctxId = gl.createContext(width, height);
+      if (!ctxId) {
         console.error('[libretro-gl] Failed to create EGL context');
         return false;
       }
-      gl.makeCurrent();
+      this.ctxId = typeof ctxId === 'number' ? ctxId : 0;
+      gl.makeCurrent(this.ctxId || undefined);
     }
 
     // Core renders to default FBO (0). We read back from there after retro_run.
@@ -266,7 +273,11 @@ export class LibretroGL {
       } catch { /* ignore */ }
     }
     if (this.active) {
-      gl.destroyContext();
+      /* Destroy OUR context specifically — the no-arg form destroys whatever
+       * is current, which after the multi-context change could be another
+       * consumer's live context. */
+      gl.destroyContext(this.ctxId || undefined);
+      this.ctxId = 0;
       this.active = false;
     }
   }

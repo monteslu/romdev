@@ -370,7 +370,10 @@ export class LibretroHost {
       this.hwRender = new LibretroGL();
       await this.hwRender.ensureGl();
       const createWebGL2Context = await loadWebGl2Context();
-      const { canvas } = createWebGL2Context(640, 480);
+      const { canvas, ctxId } = createWebGL2Context(640, 480);
+      // Pin the core to the context webgl-node just created: every
+      // makeCurrent/resize/destroy in LibretroGL binds this handle.
+      this.hwRender.ctxId = typeof ctxId === 'number' ? ctxId : 0;
       // Skip Emscripten's Safari WebGL2 workaround (breaks instanceof) by
       // pre-setting the flag it checks.
       canvas.getContextSafariWebGL2Fixed = canvas.getContext;
