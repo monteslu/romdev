@@ -45,8 +45,10 @@ test("nesFileOffsetToCpu: offset outside PRG returns null", () => {
 
 test("a raw ADDR:VAL:COMPARE on an NES ROM address re-encodes to the working Game Genie code", () => {
   // The exact feedback case: raw "C06C:0C:26" silently no-ops (treated as a RAM
-  // poke), while the Game Genie "GATKGATX" of the SAME patch works. Confirm the
-  // re-encode path produces GATKGATX so applyCheat can install a read-intercept.
+  // poke), while the Game Genie "GATKGATX" of the SAME patch works. The
+  // re-encode now emits the canonical spelling GAVKGATX — same triple, with
+  // the 8-char length marker (bit 3 of letter 3) set the way Galoob and real
+  // hardware set it; fceumm decodes both spellings identically.
   const raw = "C06C:0C:26";
   const decoded = decodeCode(raw, "nes");
   assert.deepEqual(
@@ -56,7 +58,7 @@ test("a raw ADDR:VAL:COMPARE on an NES ROM address re-encodes to the working Gam
   const dev = nativeDevicesFor("nes").find((d) => d !== "raw");
   const enc = encodeForDevice(decoded, "nes", dev);
   assert.equal(enc.device, "game-genie");
-  assert.equal(enc.code, "GATKGATX", "re-encoded ROM patch matches the known-good GG code");
+  assert.equal(enc.code, "GAVKGATX", "re-encoded ROM patch is the canonical spelling of the known-good code");
 });
 
 test("SNES raw ROM cheat re-encodes to Game Genie, NOT Pro Action Replay (the RAM device)", () => {

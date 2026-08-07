@@ -6,6 +6,23 @@ the `romdev-mcp` bin is kept as an alias.)
 
 ## 0.115.0 — 2026-08-07
 
+### NES Game Genie: `cheats({op:'make'})` emits the canonical spelling
+
+- 8-letter NES codes now set bit 3 of the third letter — the 8-character
+  LENGTH MARKER Galoob's encoder sets on every 8-letter code (measured:
+  30,531 of 30,532 published 8-letter codes in the bundled DB, and after
+  the fix 20,090 of 20,118 unique DB codes re-encode byte-identical; the
+  rest are known mis-published outliers). Every emitted 8-letter code used
+  to differ from its published spelling by exactly this bit (`SLZPLOVS`
+  for Contra's `SLXPLOVS`). Codes spelled either way still APPLY — fceumm
+  and romdev's decoder branch on length and mask the bit — but emitted
+  text is published text, and real hardware sets the marker.
+- Why the round-trip test never caught it: the decoder masks the bit, so
+  `decode(encode(x)) === x` held while every emission was mis-spelled. New
+  tests pin emitted TEXT against published codes (verified failing without
+  the fix), assert the marker invariant (set on 8-letter, clear on
+  6-letter), and pin that both spellings still decode identically.
+
 ### Every GL consumer pinned to its own context
 
 - native-gles is multi-context; the process-global context is gone. One

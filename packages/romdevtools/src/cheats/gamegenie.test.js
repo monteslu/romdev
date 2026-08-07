@@ -91,6 +91,40 @@ test("Game Boy Game Genie: 9-digit form carries a compare byte", () => {
 const eq = (a, b) => a.address === b.address && a.value === b.value &&
   ((a.compare == null && b.compare == null) || a.compare === b.compare);
 
+// Emitted TEXT pinned against published codes. The round-trip test below
+// structurally cannot catch a mis-spelled emission: our decoder branches on
+// length and masks bit 3 of the third letter, so decode(encode(x)) === x
+// held for every case while every emitted 8-letter code differed from its
+// canonical published spelling by exactly that bit — the 8-char length
+// marker Galoob sets (30,531 of 30,532 published 8-letter codes in romdev's
+// own bundled DB have it set).
+test("encodeNesGameGenie emits the published spelling (8-char length marker set)", () => {
+  // Contra 30 lives, and a second published pair from the bundled DB.
+  assert.equal(encodeNesGameGenie({ address: 0x9123, value: 0xBD, compare: 0xDE }), "SLXPLOVS");
+  assert.equal(encodeNesGameGenie({ address: 0xE0D2, value: 0x2C, compare: 0x20 }), "GXSTZAAX");
+});
+
+test("NES third letter: marker SET on 8-letter codes, CLEAR on 6-letter", () => {
+  const FIRST_HALF = "APZLGITY";   // bit 3 clear
+  const SECOND_HALF = "EOXUKSVN";  // bit 3 set
+  for (const p of [
+    { address: 0x8e20, value: 0xa5 },
+    { address: 0xd2d3, value: 0x40 },
+  ]) {
+    assert.ok(FIRST_HALF.includes(encodeNesGameGenie(p)[2]),
+      `6-letter marker must be clear: ${encodeNesGameGenie(p)}`);
+    assert.ok(SECOND_HALF.includes(encodeNesGameGenie({ ...p, compare: 0x55 })[2]),
+      `8-letter marker must be set: ${encodeNesGameGenie({ ...p, compare: 0x55 })}`);
+  }
+});
+
+test("decoder still reads BOTH spellings of an 8-letter code identically", () => {
+  // fceumm masks the marker; so do we. A code published with it clear (rare
+  // but real) must decode to the same triple as the canonical spelling.
+  assert.ok(eq(decodeNesGameGenie("SLXPLOVS"), decodeNesGameGenie("SLZPLOVS")));
+  assert.ok(eq(decodeNesGameGenie("GAVKGATX"), decodeNesGameGenie("GATKGATX")));
+});
+
 test("encodeNesGameGenie round-trips (decode∘encode = identity on values)", () => {
   for (const p of [
     { address: 0x91d9, value: 0xad },

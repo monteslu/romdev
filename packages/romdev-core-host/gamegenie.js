@@ -107,21 +107,23 @@ export function encodeNesGameGenie({ address, value, compare }) {
     n[5] |= (v & 8);                // 6-char: n5 bit3 = v3
   } else {
     /*
-     * Bit 3 of the THIRD letter is the 8-character marker. fceumm (the core
-     * romdev ships) reads it at cheat.c:349 and the check is COMMENTED OUT --
-     *     t = GGtobin(*str++);
-     *     A |= (t & 0x07) << 4;
-     *     // if(t&0x08) return(0);   // 8-character code?!
-     * -- so the core accepts a code with the bit either way, and `& 0x07`
-     * means the bit never contributes to the address.
+     * Bit 3 of the THIRD letter is the 8-character LENGTH MARKER: Galoob's
+     * encoder sets it on every 8-letter code and leaves it clear on 6-letter
+     * ones. Measured across romdev's own bundled NES cheat DB, 30,531 of
+     * 30,532 published 8-letter codes have it SET — the one outlier
+     * (GATKGATX-style spellings) is a mis-published code, not a convention.
+     * An earlier version left it clear on the strength of that outlier,
+     * which made every emitted 8-letter code differ from its canonical
+     * published spelling by exactly this bit (SLZPLOVS for Contra's
+     * SLXPLOVS, and so on).
      *
-     * We deliberately do NOT set it. Published 8-letter codes disagree about
-     * it (GATKGATX, verified working in test/feedback-0138-fixes.test.js, has
-     * it CLEAR; many others have it SET), so there is no single correct value
-     * to emit, and forcing it changes the text of codes that already work.
-     * Leaving it clear keeps every emitted code decodable by fceumm and by
-     * our own decoder, which branches on length rather than this bit.
-     */
+     * Decoders are forgiving — fceumm branches on length and masks the bit
+     * (`A |= (t & 0x07) << 4`, its bit-3 rejection commented out), as does
+     * ours — so codes spelled either way still APPLY. But emitted text is
+     * published text: it gets pasted into notes, compared against cheat
+     * sites, and fed to real hardware, and real hardware sets the marker.
+     * Emit the canonical spelling. */
+    n[2] |= 8;                      // 8-char length marker (third letter)
     n[7] |= (v & 8);                // 8-char: n7 bit3 = v3
     const c = compare & 0xFF;
     n[7] |= ((c >> 4) & 7);         // n7 low3 = c4..6

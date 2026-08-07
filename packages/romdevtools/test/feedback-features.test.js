@@ -12,7 +12,9 @@ import { resolveCheatCodeForApply } from "../src/mcp/tools/cheats.js";
 test("resolveCheatCodeForApply: raw NES ROM cheat → Game Genie read-intercept", () => {
   const r = resolveCheatCodeForApply("C06C:0C:26", "nes");
   assert.equal(r.appliedAs, "rom");
-  assert.equal(r.code, "GATKGATX");
+  // Canonical spelling: bit 3 of the third letter is the 8-char length
+  // marker (decode-identical to the bit-clear GATKGATX the feedback cited).
+  assert.equal(r.code, "GAVKGATX");
   assert.equal(r.reencodedFrom, "C06C:0C:26");
 });
 
