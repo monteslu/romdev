@@ -4,7 +4,7 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
-## 0.114.0 — unreleased
+## 0.114.0 — 2026-08-06
 
 ### Active Bezel pre_frame: a bezel can shape the frame, not just observe it
 
