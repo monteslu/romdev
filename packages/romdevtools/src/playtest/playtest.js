@@ -1033,7 +1033,24 @@ export async function playtest(args) {
       try {
         if (audio && deviceSampleRate > 0) {
           const bps = deviceSampleRate * 4; // stereo s16
-          const TARGET_MS = 60;             // keep ~60ms queued — drain sets the speed
+          // Keep ~100ms queued — the drain still sets the speed, but with
+          // enough cushion that ONE late tick cannot empty the device.
+          //
+          // At 60ms the queue measured as an oscillation between 0 and 67ms
+          // (sampled once a second over ten seconds, bezel active AND
+          // suspended — so this is the loop's own pacing, not compositing
+          // cost): the device was running dry and refilling, which is what
+          // clicks and pops actually are. The window is paced by
+          // setInterval, whose ~16ms floor sits under NTSC's 16.69ms, so
+          // ticks arrive slightly fast and any GC pause or MCP request on
+          // this event loop lands as a gap the 60ms buffer could not
+          // absorb.
+          //
+          // 100ms is ~6 frames of latency, still well under the 250ms
+          // runaway valve below, and it widens the skip/burst deadband
+          // (SKIP_MS - TARGET_MS is one frame either way) so the regulator
+          // settles instead of hunting between "step extra" and "skip".
+          const TARGET_MS = 100;
           const BUDGET_MS = frameMs * 1.5;  // wall-clock ceiling for the whole burst
           // DOWN-regulation: the burst below can only speed the game UP (step
           // extra frames when the queue runs dry) — it could never slow it
