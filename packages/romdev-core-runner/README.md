@@ -64,6 +64,12 @@ Keyboard fallback: arrows = d-pad, `Z`/`X`/`A`/`S` = the same four face
 positions, Enter = Start, Right-Shift (or Backspace) = Select, `Q`/`W` =
 L/R shoulders. ESC closes the window.
 
+The gamepad keeps working when the window is not focused (`initSdl()` sets
+SDL's joystick background-events hint, so you can watch a terminal while
+playing; export `SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=0` to restore the
+focus-gated default). The keyboard fallback still requires focus — keys
+route to the focused window.
+
 The title bar shows live fps (`<game> | 60 fps`, updated once a second) —
 the rate the machine actually achieves, not the target.
 

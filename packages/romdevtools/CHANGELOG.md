@@ -61,13 +61,52 @@ the `romdev-mcp` bin is kept as an alias.)
   rewind notification since the feature landed reached no guest and
   refreshed no regions. Names now map to codes.
 
+### The playtest window: GL-direct present by default, pacing that can slow down, unfocused gamepad
+
+- **GL-direct present is the default** (opt out `ROMDEV_GL_PRESENT=0`). The
+  bezel compositor's GL context rebinds onto the window's native handle and
+  presents by GPU blit + swap — ~0.1ms at any window size, no software-blit
+  rescale cliff. It proved out behind `ROMDEV_GL_PRESENT=1` since 2026-08-03;
+  the flag being lost across a server restart is exactly how a live session
+  regressed to a 13.7ms software present, ~54Hz core ticking, and a growing
+  audio queue while the window still reported 60fps.
+- **Audio-paced stepping can now slow the game DOWN, not just speed it up.**
+  Every tick used to step at least one frame, and Node's setInterval floors
+  at ~16ms — under NTSC's 16.69ms — so games ran ~3.5% fast and the queue
+  climbed to the 250ms safety valve (a quarter second of audio latency). A
+  tick that finds the queue already a frame past target now presents without
+  stepping, locking game speed to the audio clock. Queue target raised
+  60ms→100ms: at 60ms the device oscillated dry-and-refill (the clicks and
+  pops), since any GC pause on the event loop out-sized the cushion.
+- **The gamepad works with the window unfocused.** SDL drops controller
+  button presses without input focus unless the background-events hint is
+  set; `initSdl()` (romdev-core-runner) now sets it, so playtest + `runRom`
+  keep taking pad input while the human watches a terminal. Keyboard stays
+  focus-gated by design (keys route to the focused window). Override with
+  `SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=0`.
+
+### active-bezel 0.8.0: script errors you can actually see, layered redraw
+
+- Repinned `^0.8.0` (published 2026-08-06; the ABI 2 pre_frame release plus
+  the layer split). Agent-facing here: **a bezel script error no longer
+  masquerades as healthy.** The runtimes catch script exceptions and draw a
+  readable error panel (embedded TTF face) while the tick returns normally —
+  so `error`/`lastError` stay null. The guest's `ab_last_error` now surfaces
+  through `catalog({op:'status'})` as `activeBezel.BEZEL_SCRIPT_ERROR` with a
+  hint, hoisted to the top of the status object so a health check can't scan
+  past it.
+- For redraw packages: three-way layer routing (backdrop / solid tiles /
+  sprites in one draw), `hide_cell` / `hide_sprite` / `isolate_sprite` (own a
+  class of pixels without screen-scraping; identify entities by OAM slot, not
+  colour), and `surface_filter` mask textures + ordering/ping-pong fixes.
+
 Tests: `pre-frame-hook.test.js` — pure override semantics, the per-frame
 beforeFrame contract on the real core, a control-gated nestest check that the
 CORE genuinely sees a masked button, an MCP end-to-end run where a Lua
 bezel's pre_frame stamps RAM once per frame, and a suspend/resume round
 trip proving frozen counters, core-labeled captures, and same-instance
 resume. Packages: romdev-core-host 0.6.0, romdev-core-runner 0.2.7,
-active-bezel ^0.7.0 (repinned).
+active-bezel ^0.8.0 (repinned).
 
 ## 0.113.0 — 2026-08-05
 

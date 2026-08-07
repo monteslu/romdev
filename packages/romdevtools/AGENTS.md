@@ -683,6 +683,12 @@ compositor difference is the usual cause.
   longer exists.
 - A guest fault is recorded in `activeBezel.lastError` and the capture falls
   back to the core frame. A broken package never takes down your session.
+- **A SCRIPT error is not a guest fault.** The four scripting runtimes catch
+  script exceptions inside the guest and draw an error panel over the scene —
+  the tick returns normally, so `error` and `lastError` stay null while the
+  human is looking at a stack trace. `catalog({op:'status'})` hoists it as
+  `activeBezel.BEZEL_SCRIPT_ERROR` (from the runtime's `scriptError`); check
+  that key before declaring a bezel healthy from a null `error`.
 - **Suspend/resume without teardown:** `playtest({op:'bezel', show:false})`
   (or the human's **B** hotkey — same state) bypasses the bezel: captures and
   the window show the raw core frame (`source:'core'`), pre_frame stops
@@ -899,6 +905,8 @@ When you don't know the symbol yet, `memory({op:'snapshot'})` → trigger the ev
 ## Playtest mode (optional)
 
 `playtest({ scale: 3 })` opens a real SDL window for a human to play the loaded ROM with a keyboard or USB controller. It **returns immediately** — the render loop runs in the background and you keep using every other tool against the same live host (so `build({output:'run'})`/`loadMedia` rebuilds update the window in place; it does not relaunch or crash on rebuild). Close it with `playtest({op:'stop'})` (or the human pressing ESC / Select+Start). Needs a desktop display *and* the optional `@kmamal/sdl` dep; without them the open FAILS with a `reason`-tagged tool error and the rest of the server keeps working headless. Use this when the human wants to feel the game, not when you want to test it (for your own checks, use `frame({op:'screenshot'})` — it reads the same live host the window shows). `playtest({op:'status'})` reports liveness + the window's media/frame + `perf` (rolling fps/tickHz and per-stage ms — the "is it slow, and where" readout); the title bar always shows live fps, and `playtest({op:'fps', show?})` toggles an on-screen counter for the human (F3 does the same from the keyboard). `playtest({op:'framebuffer'})` captures exactly what the human sees.
+
+**Window hotkeys (for the human):** ESC / Select+Start close, F3 toggles the fps counter, **B** suspends/resumes an attached bezel, **H** soft-resets (the console RESET button — same path as `host({op:'reset'})`, including the bezel continuity notification). **The gamepad works even when the window is NOT focused** (the human can watch a terminal while playing; SDL's background-events hint is set by the runner) — the keyboard fallback still requires focus, since keys route to the focused window.
 
 **Windows are PER SESSION.** The server is multi-session (several agents, or a user with 2-3 games open at once); each session gets its OWN window — opening one never disturbs another agent's, `playtest({op:'stop'})` closes only yours, and a session disconnecting tears down just its own window. **Aspect:** the window defaults to `aspect:"tv"` (the 4:3 / native-LCD shape the game was authored for) with nearest-neighbor scaling, so it looks like real hardware and stays crisp + correct aspect when the human resizes it; pass `aspect:"fb"` for raw square-pixel dev geometry.
 
