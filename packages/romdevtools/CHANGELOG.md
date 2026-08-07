@@ -84,6 +84,10 @@ the `romdev-mcp` bin is kept as an alias.)
   keep taking pad input while the human watches a terminal. Keyboard stays
   focus-gated by design (keys route to the focused window). Override with
   `SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=0`.
+- **Lynx presents at its native LCD shape** (160:102 — the Lynx screen is
+  square-pixel) instead of a 102:81 approximation. The rest of the `tv`
+  table is unchanged: consoles present 4:3, the other handhelds already used
+  their native LCD ratios.
 
 ### active-bezel 0.8.0: script errors you can actually see, layered redraw
 

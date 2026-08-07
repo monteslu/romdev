@@ -148,7 +148,7 @@ export function tvAspectFor(platform, displayAspect) {
     case "gb":
     case "gbc":         return 10 / 9;   // GB LCD 160×144 native
     case "gba":         return 3 / 2;    // GBA LCD 240×160 native
-    case "lynx":        return 102 / 81; // Lynx LCD pixel aspect (4:3 displayed)
+    case "lynx":        return 160 / 102; // Lynx LCD is square-pixel — native fb shape
     case "gametank":    return 4 / 3;    // composite out to a 4:3 display
     // Unknown platform (wasmcart/jsgame/newer cores): trust the reported
     // aspect only if it's a real ratio — hosts that don't know theirs report
