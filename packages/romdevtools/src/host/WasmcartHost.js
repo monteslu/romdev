@@ -57,13 +57,20 @@ async function _webglNode() {
  * is not, and never needed.
  */
 let _offscreenGlW = 0, _offscreenGlH = 0;
+/* The full createWebGL2Context result, kept for makeCurrent: native-gles is
+ * multi-context now (each bezel compositor owns one too), so whoever rendered
+ * last owns the current context. A GL cart must claim OURS before its frame
+ * or its draws land in someone else's context — which is exactly how one
+ * session's game ended up inside another session's window. */
+let _offscreenCtx = null;
 async function _getOffscreenGl(wantW, wantH) {
   const wn = await _webglNode();
   if (!wn) return null;
   const w = Math.max(OFFSCREEN_GL_W, wantW | 0);
   const h = Math.max(OFFSCREEN_GL_H, wantH | 0);
   if (!_offscreenGl) {
-    _offscreenGl = wn.createWebGL2Context(w, h).gl;
+    _offscreenCtx = wn.createWebGL2Context(w, h);
+    _offscreenGl = _offscreenCtx.gl;
     _offscreenGlW = w; _offscreenGlH = h;
   } else if (w > _offscreenGlW || h > _offscreenGlH) {
     // A bigger cart arrived after the context existed. There is no resize API,
@@ -305,6 +312,9 @@ export class WasmcartHost {
    *  audioDebug({op:'record'}) tool can drain it exactly like a libretro core. */
   stepFrames(n) {
     if (!this.cart) throw new Error("no cart loaded — loadMedia first");
+    // GL cart on the shared offscreen context: make it current for this
+    // burst. (Caller-supplied glBackends manage their own currency.)
+    if (this._gl && this._gl === _offscreenGl) _offscreenCtx?.makeCurrent?.();
     let r = null;
     for (let i = 0; i < n; i++) {
       r = this.cart.runFrame(this._inputPorts);
