@@ -4,6 +4,21 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.115.2 — unreleased
+
+- **The playtest tool now says what an Active Bezel actually is.** A field
+  session (fresh agent, external user) asked "can the playtest window do
+  RetroArch GL filters?" and the agent answered — from this tool's schema
+  alone — that an Active Bezel is "an image-overlay frame around the
+  picture," concluding no shader path exists. The op:'bezel' surface never
+  contradicted it. The description now states the real thing: a programmable
+  WASM+GPU compositor over live game memory, with `effect_set` (single-pass
+  RetroArch .glsl ports near-verbatim) and `surface_preset` (whole
+  multi-pass .glslp presets) — and that this IS the CRT/scanline/GL-filter
+  mechanism, attached via loadMedia. Tool descriptions are the only surface
+  a fresh agent is guaranteed to read; the capability existed, the schema
+  hid it.
+
 ## 0.115.1 — 2026-08-07
 
 ### playtest: bezel suspend no longer freezes a GL-present window

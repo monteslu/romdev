@@ -504,10 +504,19 @@ export function registerPlaytestTools(server, z, sessionKey) {
     "active host frame({op:'screenshot'}) reads). `path` (default) or `inline:true`.\n" +
     "• op:'fps' — show/hide the on-screen fps counter in the human's window (`show:true|false`, omit to toggle; " +
     "same state as the F3 hotkey). The title bar always shows live fps, and op:'status' returns `perf` " +
-    "(fps/tickHz + per-stage ms) for YOUR diagnosis — use op:'fps' when the HUMAN should see the number.",
+    "(fps/tickHz + per-stage ms) for YOUR diagnosis — use op:'fps' when the HUMAN should see the number.\n" +
+    "• op:'bezel' — suspend/resume the attached Active Bezel (`show:true|false`, omit to toggle; same state as " +
+    "the B hotkey; the guest keeps all its state, captures show the raw core while suspended). An Active Bezel " +
+    "is NOT a static frame image: it is a programmable WASM companion running on a GPU compositor that reads " +
+    "live game memory and owns the whole presented picture — panels, live maps, reconstructed layers, pre_frame " +
+    "input remaps, and GLSL fragment shaders over the frame (`effect_set`, per-surface `surface_filter`). " +
+    "Asked for RetroArch-style CRT/scanline/GL filters in this window? That IS the mechanism: single-pass " +
+    "RetroArch .glsl sources port into `effect_set` near-verbatim, and `surface_preset(src, dst, 'crt.glslp')` " +
+    "runs a whole multi-pass RetroArch preset (bring the preset files — none ship). There is no separate shader " +
+    "parameter on this tool; attach a bezel via loadMedia (useActiveBezel / activeBezelPath).",
     {
       op: z.enum(["open", "stop", "status", "framebuffer", "fps", "bezel"]).default("open")
-        .describe("open=show the ROM to a human (default); stop=close this session's window; status=is it open + does it match the active host; framebuffer=capture what the human sees; fps=show/hide the on-screen fps counter; bezel=suspend/resume the attached Active Bezel WITHOUT tearing it down (same state the B hotkey flips; guest keeps all its state, captures show the raw core while suspended)."),
+        .describe("open=show the ROM to a human (default); stop=close this session's window; status=is it open + does it match the active host; framebuffer=capture what the human sees; fps=show/hide the on-screen fps counter; bezel=suspend/resume the attached Active Bezel WITHOUT tearing it down (same state the B hotkey flips; guest keeps all its state, captures show the raw core while suspended). A bezel is a programmable WASM+GPU compositor — panels/maps/input remaps/GLSL shader effects over the frame — not a static border image; see the main description."),
       scale: z.number().int().min(1).max(8).default(3).describe("op:open — integer upscale factor for the window."),
       title: z.string().optional().describe("op:open — window title."),
       aspect: z.enum(["fb", "tv", "core"]).default("tv").describe("op:open — initial window shape. 'tv' (DEFAULT) = how a player saw the hardware (4:3 consoles; native LCD for handhelds — GB/GBC 10:9 not stretched, GG ~6:5, Lynx 4:3, GBA 3:2). 'fb' = raw framebuffer × scale (square pixels, dev geometry). 'core' honors the core's display_aspect_ratio. NOTE: 'tv' reads the platform from the running host, so pass the correct `platform` to loadMedia (gbc not gb for a CGB game) or it falls back to the fb aspect."),
