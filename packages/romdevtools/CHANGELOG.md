@@ -4,6 +4,18 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.115.1 — 2026-08-07
+
+### playtest: bezel suspend no longer freezes a GL-present window
+
+- With GL-direct present active, the B-key suspend path fell into the SDL
+  software-render branch — but ANGLE's CAMetalLayer owns that window, so
+  SDL's draws landed underneath it: the window froze on the last GL frame
+  (reads as a crash) and the composite did not come back on resume. The
+  raw core picture now presents through the same GL pipeline (draw into
+  the scene, blit, swap — ~0.3ms, still vsynced). One window, one stack,
+  in both toggle states.
+
 ## 0.115.0 — 2026-08-07
 
 ### NES Game Genie: `cheats({op:'make'})` emits the canonical spelling
