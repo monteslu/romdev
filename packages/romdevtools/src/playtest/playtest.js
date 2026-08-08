@@ -1246,6 +1246,26 @@ export async function playtest(args) {
           const tPresentGl = performance.now();
           openBezel.compositor.presentWindow(dstX, dstY, dstW, dstH, curW, curH);
           perf.presentMs = ema(perf.presentMs, performance.now() - tPresentGl);
+        } else if (glPresent && openBezel?.compositor?.gpuReady) {
+          /* Bezel suspended (B) or guest fault while GL-direct present owns
+           * this window. The SDL software renderer must NOT touch it: ANGLE's
+           * CAMetalLayer sits over the view, SDL's draws land UNDERNEATH it —
+           * the window freezes on the last GL frame (reads as a crash) — and
+           * once both stacks have touched one window the GL picture does not
+           * come back when the bezel reactivates. One window, one stack:
+           * present the raw core frame through the SAME GL pipeline — draw it
+           * into the scene, blit, swap. */
+          const comp = openBezel.compositor;
+          const tPresentGl = performance.now();
+          comp.reset();
+          const gameH = 1080;                       // compositor logical space
+          const gameW = Math.round(gameH * targetAspect);
+          comp.drawGame((1920 - gameW) / 2, 0, gameW, gameH, 0); // nearest: bare core pixels
+          comp.compose(rgba, fbW, fbH);
+          const sceneAspect = (comp.outputWidth || 1920) / (comp.outputHeight || 1080);
+          const d = letterbox(curW, curH, sceneAspect);
+          comp.presentWindow(d.dstX, d.dstY, d.dstW, d.dstH, curW, curH);
+          perf.presentMs = ema(perf.presentMs, performance.now() - tPresentGl);
         } else {
           if (composed && composed !== lastComposite) releaseBezelGl();
 
