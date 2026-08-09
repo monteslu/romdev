@@ -531,6 +531,17 @@ export class LibretroHost {
       this.state.variablesUpdated = true;
     }
 
+    // Caller-supplied core options override the platform defaults. This is
+    // how a session asks for core-specific rendering behaviour (e.g.
+    // snes9x's snes9x_layer_3=disabled so an Active Bezel can own a layer).
+    // Applied after PLATFORM_CORE_OPTIONS so an explicit caller wins.
+    if (args.coreOptions) {
+      for (const [key, value] of Object.entries(args.coreOptions)) {
+        this.state.coreVariables.set(key, { value: String(value) });
+      }
+      this.state.variablesUpdated = true;
+    }
+
     // Some cores fopen() BIOS / machine-config files from the system directory
     // (e.g. blueMSX reads `<systemDir>/Machines/<name>/cbios_*.rom`). When the
     // caller didn't pass a systemDir, resolve the platform's bundled BIOS tree

@@ -25,7 +25,7 @@ export function registerLifecycleTools(server, z, sessionKey) {
   // slot:'b' targets the secondary comparison host (for frame sideBySide);
   // it gets its own fresh host and does NOT overwrite slot A's recovery
   // breadcrumb, since B is transient scratch, not the session's main ROM.
-  async function doLoadMedia({ platform, path, base64, mediaKind, virtualName, cheats, slot, deterministicSeed, useActiveBezel, activeBezelPath, activeBezelConfig, activeBezelForce, activeBezelRenderer }) {
+  async function doLoadMedia({ platform, path, base64, mediaKind, virtualName, cheats, slot, deterministicSeed, coreOptions, useActiveBezel, activeBezelPath, activeBezelConfig, activeBezelForce, activeBezelRenderer }) {
     if (!path && !base64) throw new Error("loadMedia: provide either `path` (file on disk) or `base64` (ROM bytes).");
     if (path && base64) throw new Error("loadMedia: provide `path` OR `base64`, not both.");
     if (deterministicSeed !== undefined && !NATIVE_RUNTIME_HOSTS[platform]) {
@@ -73,6 +73,7 @@ export function registerLifecycleTools(server, z, sessionKey) {
       // derive it from the file extension (a C64 .d64 → "disk", .tap → "tape",
       // .prg → "program") so status reports the kind honestly.
       ...(mediaKind ? { mediaKind } : {}),
+      ...(coreOptions ? { coreOptions } : {}),
     });
 
     // Pre-seed cheats BEFORE the first frame — so a boot-time cheat (e.g. a Game
@@ -185,6 +186,7 @@ export function registerLifecycleTools(server, z, sessionKey) {
       activeBezelForce: z.boolean().default(false).describe("Load the package even when the ROM hash does not match what it declares support for. The composite may be meaningless — a map keyed to another revision's RAM layout draws confidently wrong things — so this is for development, not for trusting the output."),
       activeBezelRenderer: z.enum(["software", "gpu"]).optional().describe("Force the compositor. Default: GPU when the package requests it and a GL context is available, else the CPU compositor. 'software' pins the CPU path, which is fully featured and deterministic — the right choice for golden-frame comparisons."),
       deterministicSeed: z.number().int().min(0).optional().describe("wasmcart only: load as a DETERMINISTIC REPLAY — fixed virtual clock + this u32 RNG seed delivered to the cart's wc_set_seed before init. Same seed + same input script = an identical frame sequence (airtight frameHash regression goldens). Only meaningful for carts that declare WC_FLAG_DETERMINISTIC (check capabilities.hasDeterministic after load); other carts get the fixed clock but keep their own entropy."),
+      coreOptions: z.record(z.string(), z.string()).optional().describe("Libretro core options applied before the ROM loads, overriding the core's defaults (e.g. {\"snes9x_layer_3\":\"disabled\"} hides a layer at the RENDERER so an Active Bezel can own it — game state and VRAM are untouched). Keys/values are core-specific and unvalidated: a wrong key is silently ignored by the core, so verify the effect visually."),
     },
     safeTool(doLoadMedia),
   );

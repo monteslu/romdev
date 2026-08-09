@@ -6,6 +6,17 @@ the `romdev-mcp` bin is kept as an alias.)
 
 ## 0.115.2 — unreleased
 
+- **`loadMedia` accepts `coreOptions`** — libretro core options applied
+  before the ROM loads, overriding the core's defaults (romdev-core-host
+  0.7.1 carries the passthrough; core-runner 0.2.9 repins it). The driving
+  case: `{"snes9x_layer_3":"disabled"}` hides a layer at the RENDERER —
+  game state and VRAM untouched — so an Active Bezel can own that layer
+  and re-render it itself (a reverse-mode bezel keeps the status bar
+  readable this way: the core never bakes the text into the frame, so
+  there is no mirrored ghost to fight). Keys are core-specific and
+  unvalidated; a wrong key is silently ignored by the core, so verify the
+  effect visually.
+
 - **The playtest tool now says what an Active Bezel actually is.** A field
   session (fresh agent, external user) asked "can the playtest window do
   RetroArch GL filters?" and the agent answered — from this tool's schema
