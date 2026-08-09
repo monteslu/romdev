@@ -418,36 +418,34 @@ export async function playtest(args) {
   });
   log.debug(`[playtest] window opened: ${winInitW}x${winInitH}, fb=${fbWidth}x${fbHeight}, aspect=${aspectMode}`);
 
-  /* GL-DIRECT PRESENT (bezel-side agent 2026-08-03, DEFAULT since
-   * 2026-08-06): rebind the bezel compositor's context onto this window's
-   * native handle and present by GPU blit + swap -- no composite readback
-   * consumption here, no SDL software blit, no rescale cliff at any window
-   * size. Opt OUT with ROMDEV_GL_PRESENT=0. It spent its proving period
-   * behind ROMDEV_GL_PRESENT=1, and the flag being lost in a server
-   * restart is exactly how the software path regressed a live session to
-   * ~54Hz core ticking (present 13.7ms -> missed vblanks) while the
-   * window still reported 60fps. */
+  /* GL-DIRECT PRESENT (bezel-side agent 2026-08-03; the ONLY present path
+   * for GPU bezels since 2026-08-08): rebind the bezel compositor's context
+   * onto this window's native handle and present by GPU blit + swap -- no
+   * composite readback consumption here, no SDL software blit, no rescale
+   * cliff at any window size. There is NO flag and NO fallback: the
+   * ROMDEV_GL_PRESENT escape hatch let a broken native-gles attachWindow
+   * hide behind a silent 29ms software blit (game at half speed) for two
+   * days. A GPU bezel presents through GL or the window refuses to open --
+   * the machines this runs on always have a GPU, so a failed bind means
+   * the GL stack is broken and the fix is to repair it, not to limp. */
   let glPresent = false;
-  if (process.env.ROMDEV_GL_PRESENT !== "0" && gpuBezel && window.native?.handle) {
-    try {
-      glPresent = !!openBezel.compositor.migrateToWindow?.(window.native.handle);
-      log.debug(`[playtest] GL-direct present: ${glPresent ? "ACTIVE" : "unavailable, software path"}`);
-    } catch (e) {
-      log.error("[playtest] GL-direct present setup failed:", e.message);
+  if (gpuBezel) {
+    if (window.native?.handle) {
+      try {
+        glPresent = !!openBezel.compositor.migrateToWindow?.(window.native.handle);
+      } catch (e) {
+        log.error("[playtest] GL-direct present setup failed:", e.message);
+      }
     }
     if (!glPresent) {
-      // No silent CPU present for a GPU bezel: the 1080p software blit costs
-      // ~29ms/frame and runs the game at HALF SPEED, and this exact silent
-      // degrade hid a broken native-gles attachWindow for two days. The
-      // machines this runs on always have a GPU; if the bind fails the GL
-      // stack is broken and the fix is to repair it, not to limp. CPU present
-      // remains available as an explicit CHOICE via ROMDEV_GL_PRESENT=0.
       try { window.destroy(); } catch { /* window half-open */ }
       throw new Error(
-        "playtest: GL-direct present failed for a GPU-bezel window (compositor "
-        + "could not bind the window surface). Refusing the half-speed software "
-        + "blit. Check native-gles attachWindow in the server log; set "
-        + "ROMDEV_GL_PRESENT=0 only to explicitly choose CPU present.");
+        "playtest: GL-direct present failed for a GPU-bezel window ("
+        + (window.native?.handle
+          ? "the compositor could not bind the window surface"
+          : "SDL exposed no native window handle")
+        + "). There is no software fallback: the GL stack is broken -- check "
+        + "native-gles attachWindow errors in the server log.");
     }
   }
 
