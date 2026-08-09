@@ -6,6 +6,16 @@ the `romdev-mcp` bin is kept as an alias.)
 
 ## 0.115.2 — unreleased
 
+- **snes9x captures the displayed frame as LAYER PLANES** — new regions
+  `snes_lp_world` (every non-OBJ pixel) and `snes_lp_obj` (every OBJ
+  pixel, 0x0000 transparent key), split per line by the core's own depth
+  buffer at capture time. Nothing re-renders, so HDMA gradients and color
+  math stay baked in, and world-then-obj compositing reproduces the frame
+  exactly. This is what gives active-bezel's `snes.draw` its layer split
+  (platform-snes 0.11.0): a SNES bezel can now shade the world and the
+  actors separately, smb-acid style, with the player passed through
+  untouched.
+
 - **GL-direct present is the ONLY present path for GPU-bezel windows, and
   `ROMDEV_GL_PRESENT` no longer exists.** A window that cannot bind the
   compositor's GL context onto its surface refuses to open with an error

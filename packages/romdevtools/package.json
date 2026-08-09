@@ -75,7 +75,7 @@
     "romdev-maxmod": "0.2.0",
     "romdev-platform-atari2600": "0.9.0",
     "romdev-platform-gba": "0.11.0",
-    "romdev-platform-snes": "0.10.0",
+    "romdev-platform-snes": "0.11.0",
     "romdev-toolchain-cc65": "0.1.3",
     "romdev-toolchain-m68k-gcc": "0.3.0",
     "romdev-toolchain-mips-gcc": "0.1.1",

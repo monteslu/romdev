@@ -305,7 +305,7 @@ index 98f9941..f44eb0f 100644
  {
  	int	SmallWidth, SmallHeight, LargeWidth, LargeHeight;
 diff --git a/libretro/libretro.cpp b/libretro/libretro.cpp
-index d381c61..d76b8c3 100644
+index d381c61..63b284f 100644
 --- a/libretro/libretro.cpp
 +++ b/libretro/libretro.cpp
 @@ -6,6 +6,7 @@
@@ -316,7 +316,7 @@ index d381c61..d76b8c3 100644
  #include "gfx.h"
  #include "snapshot.h"
  #include "controls.h"
-@@ -2029,6 +2030,121 @@ unsigned retro_get_region()
+@@ -2029,6 +2030,162 @@ unsigned retro_get_region()
      return Settings.PAL ? RETRO_REGION_PAL : RETRO_REGION_NTSC;
  }
  
@@ -428,17 +428,58 @@ index d381c61..d76b8c3 100644
 +#define ROMDEV_MEMORY_SNES_M7LINES   0x1B3  /* 240*16: s16 LE A,B,C,D,CX,CY,HOFS,VOFS per line */
 +#define ROMDEV_MEMORY_SNES_LINEDEPTH 0x1B4  /* 240*512: per-pixel layer depth (OBJ mask) */
 +#define ROMDEV_MEMORY_SNES_CLIPLINES 0x1B5  /* 240*16: per-line BG1 window clip regions */
++/* The displayed frame SPLIT into layer planes by the depth buffer: world =
++ * every non-OBJ pixel, obj = every OBJ pixel. 0x0000 is the transparent KEY
++ * in both planes (true black pixels are nudged to 0x0821, invisibly), so a
++ * consumer can composite world-then-obj and reproduce the frame exactly --
++ * the world plane's sprite-shaped holes are covered by the obj plane by
++ * construction. Split at capture time from the SAME composed lines the
++ * display shows, so HDMA gradients, color math and windows stay baked in
++ * (re-rendering with layer masks would lose every mid-frame trick). */
++#define ROMDEV_MEMORY_SNES_LP_WORLD  0x1B6  /* 240*512 u16 LE RGB565, no OBJ pixels */
++#define ROMDEV_MEMORY_SNES_LP_OBJ    0x1B7  /* 240*512 u16 LE RGB565, only OBJ pixels */
 +unsigned char romdev_snes_linepix[480 * 512 * 2];
++unsigned char romdev_snes_lp_world[240 * 512 * 2];
++unsigned char romdev_snes_lp_obj[240 * 512 * 2];
 +unsigned char romdev_snes_frameinfo[8];
 +extern unsigned char romdev_snes_linestate[240 * 16];
 +extern unsigned char romdev_snes_m7lines[240 * 16];
 +extern unsigned char romdev_snes_linedepth[240 * 512];
 +extern unsigned char romdev_snes_cliplines[240 * 16];
 +
++/* romdev: split the displayed line into world/obj planes using the main
++ * screen's depth buffer. Screen display row l = rendered row l + ov, and the
++ * ZBuffer is indexed by rendered row at GFX.PPL stride. Main-screen OBJ
++ * depths are exactly D(32)+4+prio*4 = {36,40,44,48} (gfx.cpp DrawOBJS). */
++static void romdev_split_planes(const uint16 *src, int cw, int chh, int ov)
++{
++    int ph = chh > 240 ? 240 : chh;
++    for (int l = 0; l < ph; l++)
++    {
++        const uint16 *srow = (const uint16 *)((const unsigned char *)src + (size_t)l * GFX.Pitch);
++        const uint8  *zrow = GFX.ZBuffer + (size_t)(l + ov) * GFX.PPL;
++        uint16 *wrow = (uint16 *)&romdev_snes_lp_world[l * 512 * 2];
++        uint16 *orow = (uint16 *)&romdev_snes_lp_obj[l * 512 * 2];
++        for (int x = 0; x < cw; x++)
++        {
++            uint16 p = srow[x];
++            if (p == 0) p = 0x0821;   /* reserve 0x0000 as the transparent key */
++            uint8 z = zrow[x];
++            if (z >= 36 && z <= 48 && ((z - 36) & 3) == 0) { orow[x] = p; wrow[x] = 0; }
++            else                                            { wrow[x] = p; orow[x] = 0; }
++        }
++        if (cw < 512)
++        {
++            memset(&wrow[cw], 0, (size_t)(512 - cw) * 2);
++            memset(&orow[cw], 0, (size_t)(512 - cw) * 2);
++        }
++    }
++}
++
  void* retro_get_memory_data(unsigned type)
  {
      void* data;
-@@ -2051,6 +2167,36 @@ void* retro_get_memory_data(unsigned type)
+@@ -2051,6 +2208,42 @@ void* retro_get_memory_data(unsigned type)
          case RETRO_MEMORY_VIDEO_RAM:
          data = Memory.VRAM;
          break;
@@ -472,10 +513,16 @@ index d381c61..d76b8c3 100644
 +        case ROMDEV_MEMORY_SNES_CLIPLINES:
 +            data = romdev_snes_cliplines;
 +            break;
++        case ROMDEV_MEMORY_SNES_LP_WORLD:
++            data = romdev_snes_lp_world;
++            break;
++        case ROMDEV_MEMORY_SNES_LP_OBJ:
++            data = romdev_snes_lp_obj;
++            break;
          //case RETRO_MEMORY_ROM:
          //	data = Memory.ROM;
          //	break;
-@@ -2085,6 +2231,36 @@ size_t retro_get_memory_size(unsigned type)
+@@ -2085,6 +2278,42 @@ size_t retro_get_memory_size(unsigned type)
          case RETRO_MEMORY_VIDEO_RAM:
              size = 64 * 1024;
              break;
@@ -506,13 +553,19 @@ index d381c61..d76b8c3 100644
 +        case ROMDEV_MEMORY_SNES_CLIPLINES:
 +            size = 240 * 16;
 +            break;
++        case ROMDEV_MEMORY_SNES_LP_WORLD:
++            size = 240 * 512 * 2;
++            break;
++        case ROMDEV_MEMORY_SNES_LP_OBJ:
++            size = 240 * 512 * 2;
++            break;
 +        case ROMDEV_MEMORY_SNES_LINESTATE:
 +            size = 240 * 16;
 +            break;
          //case RETRO_MEMORY_ROM:
          //	size = Memory.CalculatedSize;
          //	break;
-@@ -2259,10 +2435,34 @@ bool8 S9xDeinitUpdate(int width, int height)
+@@ -2259,10 +2488,36 @@ bool8 S9xDeinitUpdate(int width, int height)
              width >>= 1;
          }
  
@@ -527,6 +580,7 @@ index d381c61..d76b8c3 100644
 +                       (const unsigned char *)src + (size_t)l * GFX.Pitch, (size_t)cw * 2);
 +            romdev_snes_frameinfo[0] = cw & 0xFF; romdev_snes_frameinfo[1] = (cw >> 8) & 0xFF;
 +            romdev_snes_frameinfo[2] = chh & 0xFF; romdev_snes_frameinfo[3] = (chh >> 8) & 0xFF;
++            romdev_split_planes(src, cw, chh, overscan_offset);
 +        }
          video_cb(GFX.Screen + ((int)(GFX.Pitch >> 1) * overscan_offset), width, height, GFX.Pitch);
      }
@@ -543,6 +597,7 @@ index d381c61..d76b8c3 100644
 +                       (const unsigned char *)src + (size_t)l * GFX.Pitch, (size_t)cw * 2);
 +            romdev_snes_frameinfo[0] = cw & 0xFF; romdev_snes_frameinfo[1] = (cw >> 8) & 0xFF;
 +            romdev_snes_frameinfo[2] = chh & 0xFF; romdev_snes_frameinfo[3] = (chh >> 8) & 0xFF;
++            romdev_split_planes(src, cw, chh, overscan_offset);
 +        }
          video_cb(GFX.Screen + ((int)(GFX.Pitch >> 1) * overscan_offset), width, height, GFX.Pitch);
      }

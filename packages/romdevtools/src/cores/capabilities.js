@@ -79,7 +79,8 @@ export const CAPABILITIES = {
     cpus: { main: "65816", secondary: ["spc700"] },
     audioChips: ["dsp"],
     memoryRegions: [...GENERIC_REGIONS, "snes_oam", "snes_cgram", "snes_aram", "snes_fillram",
-      "snes_linepix", "snes_linestate", "snes_frameinfo", "snes_m7lines", "snes_linedepth", "snes_cliplines"],
+      "snes_linepix", "snes_linestate", "snes_frameinfo", "snes_m7lines", "snes_linedepth", "snes_cliplines",
+      "snes_lp_world", "snes_lp_obj"],
     ...tileDeep(),
   },
   genesis: {
