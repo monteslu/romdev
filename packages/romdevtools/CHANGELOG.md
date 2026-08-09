@@ -6,6 +6,14 @@ the `romdev-mcp` bin is kept as an alias.)
 
 ## 0.115.2 — unreleased
 
+- **A GPU-bezel window that cannot bind GL-direct present now REFUSES to
+  open** instead of silently falling back to the 1080p software blit
+  (~29ms/frame, game at half speed). That silent degrade hid a broken
+  native-gles `attachWindow` for two days of sessions. CPU present stays
+  available as an explicit choice: `ROMDEV_GL_PRESENT=0`. Pairs with
+  active-bezel 0.9.4, where a gpu-command-v1 guest whose GPU compositor
+  fails to init throws instead of quietly composing on the CPU.
+
 - **`loadMedia` accepts `coreOptions`** — libretro core options applied
   before the ROM loads, overriding the core's defaults (romdev-core-host
   0.7.1 carries the passthrough; core-runner 0.2.9 repins it). The driving

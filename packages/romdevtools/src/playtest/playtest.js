@@ -435,6 +435,20 @@ export async function playtest(args) {
     } catch (e) {
       log.error("[playtest] GL-direct present setup failed:", e.message);
     }
+    if (!glPresent) {
+      // No silent CPU present for a GPU bezel: the 1080p software blit costs
+      // ~29ms/frame and runs the game at HALF SPEED, and this exact silent
+      // degrade hid a broken native-gles attachWindow for two days. The
+      // machines this runs on always have a GPU; if the bind fails the GL
+      // stack is broken and the fix is to repair it, not to limp. CPU present
+      // remains available as an explicit CHOICE via ROMDEV_GL_PRESENT=0.
+      try { window.destroy(); } catch { /* window half-open */ }
+      throw new Error(
+        "playtest: GL-direct present failed for a GPU-bezel window (compositor "
+        + "could not bind the window surface). Refusing the half-speed software "
+        + "blit. Check native-gles attachWindow in the server log; set "
+        + "ROMDEV_GL_PRESENT=0 only to explicitly choose CPU present.");
+    }
   }
 
   // Open audio at the core's NATIVE sample rate, not a hardcoded one.
