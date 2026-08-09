@@ -466,15 +466,16 @@ export async function playtest(args) {
   const coreSampleRate = Math.round(host.status.audioSampleRate ?? 48000);
   const AUDIO_RESAMPLE_TO = 48000;
   let needsResample = coreSampleRate > 0 && coreSampleRate < 24000;
-  // Load the WASM+SIMD resampler if this core needs upsampling. If it fails to
-  // load, fall back to opening the device at the native rate (better than no
-  // audio) — needsResample is forced off so we never call a missing resampler.
-  if (needsResample) {
-    const ready = await initResampler();
-    if (!ready) {
-      log.error("[playtest] resampler WASM failed to load — using native rate (audio may click)");
-      needsResample = false;
-    }
+  // The resampler is ALWAYS loaded now, not just for low-rate cores: dynamic
+  // rate control (the enqueue path) bends every chunk's ratio by the audio
+  // queue error, which is what lets the loop step exactly one core frame per
+  // tick instead of dropping/doubling frames to chase the clock. If the WASM
+  // fails to load, DRC is off (drcReady=false, raw enqueue) and low-rate
+  // cores also lose upsampling -- audible, never fatal.
+  let drcReady = await initResampler();
+  if (!drcReady) {
+    log.error("[playtest] resampler WASM failed to load — dynamic rate control off (audio may click)");
+    needsResample = false;
   }
   const deviceSampleRate = needsResample ? AUDIO_RESAMPLE_TO : coreSampleRate;
   try {
@@ -825,7 +826,7 @@ export async function playtest(args) {
   function stop() {
     if (!running) return;
     running = false;
-    if (interval) clearInterval(interval);
+    if (tickTimer) clearTimeout(tickTimer);
     try { sdl.controller.off("deviceAdd", onDeviceAdd); } catch {}
     try { sdl.controller.off("deviceRemove", onDeviceRemove); } catch {}
     try { audio?.close(); } catch {}
@@ -1064,32 +1065,33 @@ export async function playtest(args) {
           // settles instead of hunting between "step extra" and "skip".
           const TARGET_MS = 100;
           const BUDGET_MS = frameMs * 1.5;  // wall-clock ceiling for the whole burst
-          // DOWN-regulation: the burst below can only speed the game UP (step
-          // extra frames when the queue runs dry) — it could never slow it
-          // DOWN, because every tick stepped at least once. Node's setInterval
-          // floors at ~16ms, under NTSC's 16.69ms, so ticks outpace the device
-          // drain by ~3.5%: the game ran measurably fast and the queue climbed
-          // to the 250ms safety valve (≈a quarter second of audio latency).
-          // If the queue is already a frame past target BEFORE stepping, this
-          // tick presents without stepping; the drain pulls the queue back and
-          // game speed locks to the audio clock exactly.
-          const SKIP_MS = TARGET_MS + frameMs;
+          // ONE core frame per tick in the steady state -- smooth game time
+          // is the contract, and skip/burst repair is what made "60fps but
+          // janky". The tick schedule holds the cadence at frameMs and the
+          // resample-ratio nudge (see the enqueue below) holds the queue at
+          // target, so in steady state neither branch below fires.
+          //   - Stall recovery: queue under HALF target (a GC pause ate the
+          //     cushion) -> burst extra frames under the wall-clock budget.
+          //   - Runaway valve: queue past 2x target -> skip this step. Only
+          //     reachable after resume-from-pause or a scheduler anomaly.
           let preMs = ((audio.queued ?? 0) / bps) * 1000;
           for (const b of h.state.audioRing) preMs += (b.length / 2 / deviceSampleRate) * 1000;
-          if (preMs < SKIP_MS) {
-            const burstStart = performance.now();
-            do {
-              stepped += h.stepFrames(1);
-              // Stop the instant we've spent our wall-clock budget — this is what keeps
-              // a slow core from freezing the loop. A single frame already over budget
-              // still steps once (progress), then we yield.
-              if (performance.now() - burstStart >= BUDGET_MS) break;
-              const qMs = ((audio.queued ?? 0) / bps) * 1000;
-              let ringMs = 0;
-              for (const b of h.state.audioRing) ringMs += (b.length / 2);
-              ringMs = (ringMs / deviceSampleRate) * 1000;
-              if (qMs + ringMs >= TARGET_MS) break;
-            } while (true);
+          if (preMs >= TARGET_MS * 2) {
+            // present without stepping; the drain brings it back
+          } else {
+            stepped += h.stepFrames(1);
+            if (preMs < TARGET_MS / 2) {
+              const burstStart = performance.now();
+              do {
+                if (performance.now() - burstStart >= BUDGET_MS) break;
+                const qMs = ((audio.queued ?? 0) / bps) * 1000;
+                let ringMs = 0;
+                for (const b of h.state.audioRing) ringMs += (b.length / 2);
+                ringMs = (ringMs / deviceSampleRate) * 1000;
+                if (qMs + ringMs >= TARGET_MS) break;
+                stepped += h.stepFrames(1);
+              } while (true);
+            }
           }
         } else {
           stepped = h.stepFrames(1); // no audio device → plain 1 frame/tick
@@ -1327,9 +1329,21 @@ export async function playtest(args) {
             merged.set(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength), off);
             off += buf.byteLength;
           }
-          audio.enqueue(needsResample
-            ? resampleS16Stereo(merged, coreSampleRate, deviceSampleRate)
-            : merged);
+          // Dynamic rate control (the RetroArch model): nudge the effective
+          // input rate by the queue error, clamped to +/-0.5%. Queue above
+          // target -> pretend the core rate is a hair higher (fewer device
+          // samples out, queue drains); below -> lower (more samples out,
+          // queue refills). Inaudible at this magnitude, and it replaces
+          // frame drop/double as the clock-difference absorber.
+          if (drcReady) {
+            const drcTarget = 100;
+            const drcAdj = Math.max(-0.005, Math.min(0.005,
+              0.02 * (queuedMs - drcTarget) / drcTarget));
+            audio.enqueue(resampleS16Stereo(
+              merged, coreSampleRate * (1 + drcAdj), deviceSampleRate));
+          } else {
+            audio.enqueue(merged);
+          }
         }
       } catch (e) {
         if (!e.message?.includes("closed")) {
@@ -1340,7 +1354,32 @@ export async function playtest(args) {
     }
   }
 
-  const interval = setInterval(tick, frameMs);
+  // Drift-compensated scheduler, NOT setInterval: integer-ms timers floor
+  // 16.688ms (NTSC) to ~16ms, which runs the loop ~3% hot. The old design
+  // repaired that by SKIPPING core steps when the audio queue overfilled --
+  // a duplicated frame roughly twice a second, i.e. permanent visible jank
+  // at a "perfect 60fps". Anchoring each tick to an absolute schedule keeps
+  // the long-run cadence exactly frameMs; the sub-ms residual against the
+  // audio clock is absorbed by the resample-ratio nudge below, not by
+  // dropping or doubling game frames.
+  let tickTimer = null;
+  let nextTickAt = performance.now() + frameMs;
+  function scheduleTick() {
+    if (!running) return;
+    const delay = Math.max(0, nextTickAt - performance.now());
+    tickTimer = setTimeout(() => {
+      nextTickAt += frameMs;
+      // After a long stall (GC, a heavy MCP call), don't sprint through the
+      // backlog of missed ticks -- realign the schedule and let the audio
+      // cushion + catch-up stepping recover.
+      if (performance.now() > nextTickAt + frameMs) {
+        nextTickAt = performance.now() + frameMs;
+      }
+      tick();
+      scheduleTick();
+    }, delay);
+  }
+  scheduleTick();
 
   // Return a handle the MCP layer can use to stop the session and to wait
   // for natural close. The host stays usable by every other MCP tool while
