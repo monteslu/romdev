@@ -1,6 +1,6 @@
 import { resolveCore } from "../../cores/registry.js";
 import {
-  clearHost, clearHostB, getHost, getHostB, getHostBOrNull, getHostOrNull,
+  clearHost, clearHostB, disposeHost, getHost, getHostB, getHostBOrNull, getHostOrNull,
   installHost, rememberLastMedia, resetHost, resetHostB,
 } from "../state.js";
 import { WasmcartHost } from "../../host/WasmcartHost.js";
@@ -37,6 +37,17 @@ export function registerLifecycleTools(server, z, sessionKey) {
     // share the frame/input/screenshot surface but not loadCore/cheats/regions.
     if (NATIVE_RUNTIME_HOSTS[platform]) {
       if (slot === "b") throw new Error(`slot 'b' (side-by-side) is not supported for '${platform}'`);
+      // Tear the OUTGOING host down BEFORE the new one builds its GL context.
+      // installHost() below also tears down, but by then the new cart has
+      // already loaded -- and a GL cart creates (and for presentWindow,
+      // ATTACHES) its context during loadMedia. Overlapping the two left the
+      // incoming cart validating FBOs while the outgoing context was still
+      // live and window-attached, so the load immediately after a
+      // presentWindow session rendered a broken picture
+      // (GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT every frame) while the load
+      // after THAT was fine. Ordering the disposal explicitly is the fix;
+      // installHost's own teardown then finds nothing left to do.
+      disposeHost(sessionKey);
       const host = NATIVE_RUNTIME_HOSTS[platform]();
       const bytes = base64 ? new Uint8Array(Buffer.from(base64, "base64")) : undefined;
       await host.loadMedia({

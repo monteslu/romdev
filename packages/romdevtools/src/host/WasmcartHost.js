@@ -448,9 +448,16 @@ export class WasmcartHost {
   stepFrames(n) {
     if (!this.cart) throw new Error("no cart loaded — loadMedia first");
     if (this.status.paused) return 0;
-    // GL cart on the shared offscreen context: make it current for this
-    // burst. (Caller-supplied glBackends manage their own currency.)
-    if (this._gl && this._gl === _offscreenGl) _offscreenCtx?.makeCurrent?.();
+    // Claim OUR context for this burst. native-gles is multi-context (another
+    // cart, a bezel compositor, another session), so whoever rendered last
+    // owns currency -- draws land in someone else's context otherwise.
+    // A PRIVATE context (presentWindow) needs this every bit as much as the
+    // shared one: without it the cart rendered into whatever context happened
+    // to be current, and a screenshot read our (empty) buffer while the WINDOW
+    // showed the game correctly -- a black capture of a visibly-working window.
+    // (Caller-supplied glBackends manage their own currency.)
+    if (this._glCtx) this._glCtx.makeCurrent?.();
+    else if (this._gl && this._gl === _offscreenGl) _offscreenCtx?.makeCurrent?.();
     let r = null;
     for (let i = 0; i < n; i++) {
       r = this.cart.runFrame(this._inputPorts);
@@ -513,17 +520,11 @@ export class WasmcartHost {
    *  once per REQUEST rather than once per frame. */
   _syncGl() {
     if (!(this._glDirty && this._gl && this.cart?.usesGL)) return;
-    // While attached, the back buffer IS the window surface, and after a swap
-    // its contents are undefined by the GL spec -- a readback yields a torn or
-    // stale picture. Read it anyway: glReadPixels reads the BACK buffer, which
-    // still holds the frame just drawn as long as nothing has swapped since.
-    // stepFrames sets _glDirty and does NOT swap (presentGl does, and the
-    // playtest loop calls it after the frame is complete), so a consumer that
-    // asks for pixels between step and present gets the correct frame.
-    //
-    // The one unsafe order is present-then-read, which would read post-swap.
-    // presentGl clears _glDirty for exactly that reason, so this path is not
-    // reached after a swap and a stale frame is never served as a fresh one.
+    // Safe at any point in the frame, including after a present: the cart
+    // renders into wasmcart's redirect FBO, which a buffer swap does not
+    // touch, and _readbackGl reads THAT rather than the default framebuffer.
+    // (The window surface really is undefined post-swap -- reading it is what
+    // produced black screenshots of a visibly-working window.)
     this._readbackGl();
   }
 
@@ -535,6 +536,12 @@ export class WasmcartHost {
    *  viewports at 0,0 — the norm — is read exactly). */
   _readbackGl() {
     const gl = this._gl;
+    // Claim our context before reading: this runs on demand (a screenshot, a
+    // frame hash), which can be long after the last frame, by which time
+    // another cart or a bezel compositor may own currency. Reading without it
+    // returns THEIR buffer -- or an empty one.
+    if (this._glCtx) this._glCtx.makeCurrent?.();
+    else if (gl === _offscreenGl) _offscreenCtx?.makeCurrent?.();
     const w = Math.min(this.status.fbWidth || gl.drawingBufferWidth, gl.drawingBufferWidth);
     const h = Math.min(this.status.fbHeight || gl.drawingBufferHeight, gl.drawingBufferHeight);
     if (!(w > 0 && h > 0)) return;
@@ -554,7 +561,18 @@ export class WasmcartHost {
     const raw = this._rbRaw;
     const flipped = this._rbFlipped;
 
-    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, raw);
+    // Read the cart's REDIRECT FBO, not the default framebuffer. With the
+    // context attached to a window the default framebuffer IS the window
+    // surface, whose contents are undefined after a swap — reading it gave a
+    // pure black screenshot from a window that was visibly showing the game.
+    // The redirect FBO always holds the frame the cart drew, so this is
+    // correct on both paths (attached and offscreen) rather than a special
+    // case. Costs one extra bind, and only on the paths that ask for pixels.
+    const readViaFbo = this.cart?.withRenderedFrame?.(() => {
+      gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, raw);
+    });
+    // Older carts (or a 2D cart) have no redirect FBO: read as before.
+    if (!readViaFbo) gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, raw);
 
     // Row flip via TypedArray.set — that is a native memcpy per row, and a
     // hand-written per-word JS loop that fuses the alpha fixup into the same
@@ -648,16 +666,25 @@ export class WasmcartHost {
 
   /** Swap the attached window surface. Returns false if not attached, so a
    *  caller can tell "presented" from "nothing happened". */
-  presentGl() {
+  presentGl(dst) {
     if (!this._glAttached || typeof this._glCtx?.swapBuffers !== "function") return false;
     this._glCtx.makeCurrent?.();
+    // The cart renders into wasmcart's redirect FBO, NOT the window surface,
+    // so presenting means blitting that FBO out. Without this the swap shows
+    // whatever is in the default framebuffer -- and before the redirect
+    // existed, a cart drawing 1:1 from the surface origin put a 1080p picture
+    // in the bottom-left CORNER of any smaller window. `dst` is the letterbox
+    // rect the caller computed, so the aspect ratio survives a resize.
+    this.cart?.presentToSurface?.(dst);
     this._glCtx.swapBuffers();
-    // After the swap the back buffer's contents are undefined, so the frame is
-    // no longer readable. Clearing the dirty flag is what stops _syncGl from
-    // reading post-swap garbage and serving it as this frame's picture; the
-    // next stepFrames sets it again. (state.lastFrame keeps whatever was last
-    // read back, which is honest: it is a real frame, just not this one.)
-    this._glDirty = false;
+    // Deliberately do NOT clear _glDirty here. An earlier version did, on the
+    // reasoning that the back buffer is undefined after a swap and so must not
+    // be read -- true of the DEFAULT framebuffer, but the cart renders into
+    // the redirect FBO, which the swap does not touch. Clearing it made
+    // _syncGl skip the readback, so every screenshot of an open GL-direct
+    // window came back BLACK while the window itself showed the game. The
+    // frame stays readable; the readback stays lazy (only a consumer asking
+    // for pixels pays for it).
     return true;
   }
 

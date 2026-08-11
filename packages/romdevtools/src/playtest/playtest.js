@@ -929,6 +929,18 @@ export async function playtest(args) {
     try { sdl.controller.off("deviceAdd", onDeviceAdd); } catch {}
     try { sdl.controller.off("deviceRemove", onDeviceRemove); } catch {}
     try { audio?.close(); } catch {}
+    // Release the GL-direct binding BEFORE the window goes away. The context
+    // is bound to this window's surface; destroying the window under it leaves
+    // the host attached to a dead surface, and the next cart load in this
+    // process builds its GL against that -- which is how closing a
+    // presentWindow window made the NEXT plain load render a broken picture
+    // (FBO attachments came back GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT, 0x8cd7,
+    // every frame). Detaching here returns the context to offscreen rendering
+    // so the host is in a clean state whether it is reused or torn down.
+    if (cartGlPresent) {
+      try { getLiveHost()?.detachWindow?.(); } catch { /* already gone */ }
+      cartGlPresent = false;
+    }
     try { if (!window.destroyed) window.destroy(); } catch {}
     log.debug(`[playtest] closed after ${frameCount} frames`);
     if (closeResolver) closeResolver();
@@ -1239,7 +1251,28 @@ export async function playtest(args) {
       if (cartGlPresent) {
         try {
           const tPresentGl = performance.now();
-          const swapped = h.presentGl?.();
+          // Letterbox exactly like the readback path below, or the cart is
+          // stretched to the window (wrong aspect) instead of fitted. Read the
+          // live backing size every frame rather than the cached resize values
+          // — node-sdl can miss/mis-report a resize, and during a drag the
+          // cached value lags, which is what made the readback path stop
+          // respecting the aspect ratio on resize.
+          const curW = window.pixelWidth || winPixelW;
+          const curH = window.pixelHeight || winPixelH;
+          const fbW = h.status.fbWidth || curW;
+          const fbH = h.status.fbHeight || curH;
+          const targetAspect = aspectMode === "tv"
+            ? tvAspectFor(h.status.platform, effectiveAspect(h.status.displayAspect, fbW, fbH))
+            : aspectMode === "core"
+              ? effectiveAspect(h.status.displayAspect, fbW, fbH)
+              : fbW / fbH;
+          const lb = letterbox(curW, curH, targetAspect);
+          const swapped = h.presentGl?.({
+            x: lb.dstX, y: lb.dstY, w: lb.dstW, h: lb.dstH, winW: curW, winH: curH,
+          });
+          // Mouse handlers invert this to map window coords back to cart
+          // pixels; without it a GL-direct window reports stale hit positions.
+          lastPresentRect = { x: lb.dstX, y: lb.dstY, w: lb.dstW, h: lb.dstH, fbW, fbH, winW: curW, winH: curH };
           perf.presentMs = ema(perf.presentMs, performance.now() - tPresentGl);
           perf.convertMs = 0; // no conversion happens on this path at all
           if (!swapped) {

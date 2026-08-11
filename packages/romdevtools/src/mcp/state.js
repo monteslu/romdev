@@ -149,6 +149,25 @@ function teardownHost(existing) {
  * @param {string} sessionKey
  * @param {object} hostInstance
  */
+/**
+ * Tear down this session's current host and forget it, WITHOUT installing a
+ * replacement. Use before building a new host whose construction touches
+ * shared process state -- a GL cart creates (and may window-attach) its GL
+ * context during loadMedia, so the outgoing context must be gone first or the
+ * two overlap and the incoming cart's FBOs validate against a live, possibly
+ * window-attached context. installHost() tears down too, but only AFTER the
+ * new host has finished loading, which is too late for that case.
+ *
+ * Safe to call when there is no host. Never throws.
+ * @param {string} sessionKey
+ */
+export function disposeHost(sessionKey) {
+  const existing = hosts.get(sessionKey);
+  if (!existing) return;
+  hosts.delete(sessionKey);
+  teardownHost(existing);
+}
+
 export function installHost(sessionKey, hostInstance) {
   teardownHost(hosts.get(sessionKey));
   hosts.set(sessionKey, hostInstance);
