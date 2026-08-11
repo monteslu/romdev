@@ -25,7 +25,7 @@ export function registerLifecycleTools(server, z, sessionKey) {
   // slot:'b' targets the secondary comparison host (for frame sideBySide);
   // it gets its own fresh host and does NOT overwrite slot A's recovery
   // breadcrumb, since B is transient scratch, not the session's main ROM.
-  async function doLoadMedia({ platform, path, base64, mediaKind, virtualName, cheats, slot, deterministicSeed, coreOptions, useActiveBezel, activeBezelPath, activeBezelConfig, activeBezelForce, activeBezelRenderer }) {
+  async function doLoadMedia({ platform, path, base64, mediaKind, virtualName, cheats, slot, deterministicSeed, coreOptions, presentWindow, useActiveBezel, activeBezelPath, activeBezelConfig, activeBezelForce, activeBezelRenderer }) {
     if (!path && !base64) throw new Error("loadMedia: provide either `path` (file on disk) or `base64` (ROM bytes).");
     if (path && base64) throw new Error("loadMedia: provide `path` OR `base64`, not both.");
     if (deterministicSeed !== undefined && !NATIVE_RUNTIME_HOSTS[platform]) {
@@ -43,6 +43,12 @@ export function registerLifecycleTools(server, z, sessionKey) {
         platform,
         ...(bytes ? { bytes } : { path }),
         ...(deterministicSeed !== undefined ? { deterministic: { seed: deterministicSeed } } : {}),
+        // presentWindow gives a GL cart its OWN GL context so a later
+        // playtest window can bind it and present by GPU swap instead of
+        // reading every frame back to the CPU. It has to be decided here
+        // because the context is bound when the cart's wasm loads and cannot
+        // be swapped afterward.
+        ...(presentWindow ? { presentWindow: true } : {}),
       });
       installHost(sessionKey, host);
       if (path || bytes) rememberLastMedia(sessionKey, { platform, path, fromBase64: !!bytes });
@@ -187,6 +193,7 @@ export function registerLifecycleTools(server, z, sessionKey) {
       activeBezelRenderer: z.enum(["software", "gpu"]).optional().describe("Force the compositor. Default: GPU when the package requests it and a GL context is available, else the CPU compositor. 'software' pins the CPU path, which is fully featured and deterministic — the right choice for golden-frame comparisons."),
       deterministicSeed: z.number().int().min(0).optional().describe("wasmcart only: load as a DETERMINISTIC REPLAY — fixed virtual clock + this u32 RNG seed delivered to the cart's wc_set_seed before init. Same seed + same input script = an identical frame sequence (airtight frameHash regression goldens). Only meaningful for carts that declare WC_FLAG_DETERMINISTIC (check capabilities.hasDeterministic after load); other carts get the fixed clock but keep their own entropy."),
       coreOptions: z.record(z.string(), z.string()).optional().describe("Libretro core options applied before the ROM loads, overriding the core's defaults (e.g. {\"snes9x_layer_3\":\"disabled\"} hides a layer at the RENDERER so an Active Bezel can own it — game state and VRAM are untouched). Keys/values are core-specific and unvalidated: a wrong key is silently ignored by the core, so verify the effect visually."),
+      presentWindow: z.boolean().optional().describe("wasmcart GL carts only: load this cart on its OWN GL context so a later playtest({op:'open'}) can present it by GPU swap instead of reading every frame back to the CPU (measured ~5.4ms/frame of a 16.7ms budget at 1080p). Pass it when you intend to open a window for a HUMAN to play a 3D/GL cart. It must be set at load time — the GL context binds when the cart's wasm loads and cannot be swapped afterward, so a cart already loaded without it keeps the readback path until reloaded. Costs one extra GL context per loaded cart; a cart loaded WITHOUT it shares the process-wide offscreen context, which can never be attached to a window (doing so would drag every other session's cart into that window). No effect on 2D carts or emulator cores."),
     },
     safeTool(doLoadMedia),
   );

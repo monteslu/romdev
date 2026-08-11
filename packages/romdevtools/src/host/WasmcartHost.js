@@ -116,6 +116,35 @@ function _manifestDims(source) {
   }
 }
 
+/**
+ * A PRIVATE GL context for one host, never the process-wide offscreen one.
+ *
+ * The shared context cannot be attached to a window: every wasmcart in every
+ * session draws through it, so binding it to one window would drag all of them
+ * into that window. A host that wants GL-direct present therefore gets its own
+ * context, which it exclusively owns and may attach, and destroys on unload.
+ *
+ * Still floored at OFFSCREEN_GL_*, even though nobody else shares it. The
+ * floor is not about sharing: a cart that declares nothing up front (neither a
+ * manifest size nor a pre-init info struct) reports 0x0 here and only stamps
+ * its real resolution after wc_init runs. Sizing to that literally gives a 1x1
+ * context, and since webgl-node cannot resize, the cart is then cropped to one
+ * pixel for the rest of the session. The floor is what makes the unknown case
+ * land on a sane size instead of a broken one.
+ */
+async function _createPrivateGl(wantW, wantH) {
+  const wn = await _webglNode();
+  if (!wn) return null;
+  const w = Math.max(OFFSCREEN_GL_W, wantW | 0);
+  const h = Math.max(OFFSCREEN_GL_H, wantH | 0);
+  try {
+    return wn.createWebGL2Context(w, h);
+  } catch (e) {
+    console.error(`[wasmcart] private GL context (${w}x${h}) failed: ${e.message}`);
+    return null;
+  }
+}
+
 async function _getOffscreenGl(wantW, wantH) {
   const wn = await _webglNode();
   if (!wn) return null;
@@ -180,6 +209,12 @@ export class WasmcartHost {
       gl: null, // "rendered" for GL carts, null for 2D carts
     };
     this._gl = null; // live GL context for readback (offscreen or caller-supplied)
+    // GL-direct present state. _glCtx is the webgl-node wrapper (the object
+    // carrying attachWindow/swapBuffers) and is non-null ONLY for a private,
+    // exclusively-owned context — never for the shared offscreen one.
+    this._glCtx = null;
+    this._glAttached = false;
+    this._glWindowHandle = null;
   }
 
   /**
@@ -224,7 +259,7 @@ export class WasmcartHost {
    * in-memory cart zip. Mirrors LibretroHost.loadMedia's post-conditions:
    * status.loaded + a first framebuffer so screenshot works immediately.
    */
-  async loadMedia({ platform, path: mediaPath, bytes, glBackend, deterministic } = {}) {
+  async loadMedia({ platform, path: mediaPath, bytes, glBackend, deterministic, presentWindow } = {}) {
     const source = bytes ?? mediaPath;
     if (!source) throw new Error("WasmcartHost.loadMedia: provide `path` or `bytes`.");
 
@@ -241,6 +276,8 @@ export class WasmcartHost {
     // ONLY if the cart's wasm imports GL, so 2D-only sessions never create a
     // context. A caller-supplied glBackend always wins.
     this._gl = null;
+    this._glCtx = null;
+    this._glAttached = false;
     let glFactory = null;
     if (!glBackend) {
       glFactory = async () => {
@@ -261,9 +298,25 @@ export class WasmcartHost {
         // it and fall back to the pre-init struct.
         const ci = this.cart?.getInfo?.() ?? {};
         const mw = _manifestDims(source);
-        const gl = await _getOffscreenGl(
-          Math.max(ci.width | 0, mw.width | 0),
-          Math.max(ci.height | 0, mw.height | 0));
+        const wantW = Math.max(ci.width | 0, mw.width | 0);
+        const wantH = Math.max(ci.height | 0, mw.height | 0);
+        // presentWindow: this cart is destined for a playtest window and wants
+        // to present by GPU swap. That needs a context it exclusively owns
+        // (the shared offscreen one is every other session's too), so build a
+        // private one. Falls through to the shared context if that fails --
+        // a slower present is better than no cart.
+        if (presentWindow) {
+          const priv = await _createPrivateGl(wantW, wantH);
+          if (priv) {
+            this._glCtx = priv;
+            this._gl = priv.gl;
+            priv.makeCurrent?.();
+            return priv.gl;
+          }
+          console.error("[wasmcart] private GL context unavailable — "
+            + "falling back to the shared offscreen context (readback present).");
+        }
+        const gl = await _getOffscreenGl(wantW, wantH);
         if (!gl) {
           // webgl-node/native-gles are REQUIRED dependencies, so reaching here
           // means a broken install rather than an unsupported configuration.
@@ -459,7 +512,19 @@ export class WasmcartHost {
    *  readback. Called by every consumer of the pixels, so the cost is paid
    *  once per REQUEST rather than once per frame. */
   _syncGl() {
-    if (this._glDirty && this._gl && this.cart?.usesGL) this._readbackGl();
+    if (!(this._glDirty && this._gl && this.cart?.usesGL)) return;
+    // While attached, the back buffer IS the window surface, and after a swap
+    // its contents are undefined by the GL spec -- a readback yields a torn or
+    // stale picture. Read it anyway: glReadPixels reads the BACK buffer, which
+    // still holds the frame just drawn as long as nothing has swapped since.
+    // stepFrames sets _glDirty and does NOT swap (presentGl does, and the
+    // playtest loop calls it after the frame is complete), so a consumer that
+    // asks for pixels between step and present gets the correct frame.
+    //
+    // The one unsafe order is present-then-read, which would read post-swap.
+    // presentGl clears _glDirty for exactly that reason, so this path is not
+    // reached after a swap and a stale frame is never served as a fresh one.
+    this._readbackGl();
   }
 
   /** Replace state.lastFrame with the GL context's pixels. GL's origin is
@@ -513,6 +578,87 @@ export class WasmcartHost {
     this.status.fbHeight = h;
     this.status.displayAspect = h > 0 ? w / h : 0;
     this._glDirty = false;
+  }
+
+  /* ── GL-DIRECT PRESENT ───────────────────────────────────────────────────
+   *
+   * A GL cart renders on the GPU and then, by default, has its frame dragged
+   * back to the CPU (`_readbackGl`: a pipeline stall, a row flip, an alpha
+   * pass) purely so SDL can blit it in software. At 1080p that round trip is
+   * ~5.4 ms of a 16.7 ms budget, moving pixels the GPU already had.
+   *
+   * `attachWindow` binds this cart's GL context straight to a window surface,
+   * so `presentGl()` is a swap and the readback never happens.
+   *
+   * THE HAZARD, and why this is opt-in per host rather than automatic: the
+   * offscreen context is ONE process-wide object shared by every wasmcart in
+   * every session (see _getOffscreenGl). Attaching it to a window would
+   * redirect every other session's cart into that window too -- the same
+   * class of bug as "one session's game ended up inside another session's
+   * window", which is what makeCurrent exists to prevent. So a host only
+   * attaches a context it does NOT share: a caller-supplied glBackend. A cart
+   * on the shared offscreen context refuses and keeps the readback path.
+   */
+
+  /** True if this host's GL context can be bound to a window surface. False
+   *  on the shared offscreen context, which must never be attached. */
+  canAttachWindow() {
+    return !!(this._glCtx && typeof this._glCtx.attachWindow === "function"
+      && this._gl && this._gl !== _offscreenGl && this.cart?.usesGL);
+  }
+
+  /**
+   * Bind this cart's GL context to a native window handle. After a successful
+   * attach the cart renders straight to the window and `presentGl()` swaps.
+   * @param {Buffer} handle SDL's native window handle
+   * @returns {boolean} false if this host cannot attach (shared context, no
+   *   GL cart, or the bind was refused) — the caller keeps its old path.
+   */
+  attachWindow(handle) {
+    if (!this.canAttachWindow() || !handle) return false;
+    const ok = !!this._glCtx.attachWindow(handle);
+    if (ok) {
+      this._glAttached = true;
+      this._glWindowHandle = handle;
+      /* Interval 0, NOT the driver default of 1. A vsync-BLOCKING swap parks
+       * the whole Node event loop inside presentGl for most of a frame (33 ms
+       * measured here, i.e. slower than the readback path this replaces) and
+       * fights the playtest loop's audio-clock regulator: the block shifts
+       * tick timing, the queue over/under-drains, and the regulator answers
+       * with burst or skipped steps -- even presents, uneven GAME TIME. Same
+       * call and same reason as the bezel compositor's window attach. */
+      this._glCtx.setSwapInterval?.(0);
+    }
+    return ok;
+  }
+
+  /** Release the window surface, returning the context to offscreen rendering
+   *  (and the host to the readback path). Safe to call when not attached. */
+  detachWindow() {
+    if (!this._glAttached) return false;
+    const ok = !!this._glCtx?.detachWindow?.();
+    if (ok) {
+      this._glAttached = false;
+      this._glWindowHandle = null;
+      // The next consumer of pixels must pay for a real readback again.
+      this._glDirty = true;
+    }
+    return ok;
+  }
+
+  /** Swap the attached window surface. Returns false if not attached, so a
+   *  caller can tell "presented" from "nothing happened". */
+  presentGl() {
+    if (!this._glAttached || typeof this._glCtx?.swapBuffers !== "function") return false;
+    this._glCtx.makeCurrent?.();
+    this._glCtx.swapBuffers();
+    // After the swap the back buffer's contents are undefined, so the frame is
+    // no longer readable. Clearing the dirty flag is what stops _syncGl from
+    // reading post-swap garbage and serving it as this frame's picture; the
+    // next stepFrames sets it again. (state.lastFrame keeps whatever was last
+    // read back, which is honest: it is a real frame, just not this one.)
+    this._glDirty = false;
+    return true;
   }
 
   /** Snapshot of the host status (mirrors LibretroHost.getStatus — used by
@@ -794,8 +940,17 @@ export class WasmcartHost {
     this.cart = null;
     this.state.lastFrame = null;
     this.status.loaded = false;
-    // Drop the reference only — the offscreen context is a process-lifetime
-    // singleton (webgl-node has one native EGL context and no destroy API).
+    // A PRIVATE context (presentWindow) is owned solely by this host, so it
+    // must be released here or every load leaks a GPU context. Detach first:
+    // destroying a context still bound to a window surface leaves the window
+    // pointing at freed GL state. The SHARED offscreen context is a
+    // process-lifetime singleton and is only ever dropped by reference.
+    if (this._glCtx) {
+      try { if (this._glAttached) this._glCtx.detachWindow?.(); } catch { /* ignore */ }
+      try { this._glCtx.destroy?.(); } catch { /* ignore */ }
+      this._glCtx = null;
+    }
+    this._glAttached = false;
     this._gl = null;
   }
 }

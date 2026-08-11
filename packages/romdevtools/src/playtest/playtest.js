@@ -477,6 +477,36 @@ export async function playtest(args) {
     }
   }
 
+  /* GL-DIRECT PRESENT FOR GL CARTS (no bezel involved). Same idea as the
+   * bezel path above, one layer down: a GL cart renders on the GPU, and
+   * without this its every frame is dragged back to the CPU by glReadPixels
+   * and blitted in software -- ~5.4 ms of a 16.7 ms budget at 1080p, spent
+   * moving pixels the GPU already had.
+   *
+   * Deliberately NOT fatal, unlike the bezel branch. A GPU bezel has no other
+   * way to present, so a failed bind there means the GL stack is broken and
+   * limping would hide it. A GL cart always has the readback path, and
+   * attaching requires a PRIVATE context the host only has when it was loaded
+   * with presentWindow -- so "cannot attach" is the ordinary case for an
+   * already-loaded cart, not a broken stack. It stays on readback and says so
+   * once. */
+  let cartGlPresent = false;
+  if (!glPresent && typeof host.canAttachWindow === "function" && host.canAttachWindow()) {
+    if (window.native?.handle) {
+      try {
+        cartGlPresent = !!host.attachWindow(window.native.handle);
+      } catch (e) {
+        log.error("[playtest] GL cart direct present setup failed:", e.message);
+      }
+    }
+    log.info(cartGlPresent
+      ? "[playtest] GL cart presents DIRECT (GPU blit + swap — no readback)."
+      : "[playtest] GL cart could not bind the window; using readback present.");
+  } else if (!glPresent && host.status?.gl === "rendered") {
+    log.debug("[playtest] GL cart on the shared offscreen context — readback present. "
+      + "Load with presentWindow:true for GPU-direct present.");
+  }
+
   // Open audio at the core's NATIVE sample rate, not a hardcoded one.
   // snes9x emits at ~32040 Hz, fceumm at 48000, genesis-plus-gx at 44100.
   // Mismatched rates produce choppy/sped-up/cracking playback because the
@@ -1197,7 +1227,39 @@ export async function playtest(args) {
     }
 
     if (!window.destroyed) {
-      try {
+      // GL CART DIRECT PRESENT: the cart drew straight into the window's own
+      // surface, so presenting is a swap and nothing else. Taking this branch
+      // BEFORE the block below is the entire point -- that block's first act
+      // is getFramebuffer(), which forces the glReadPixels round trip this
+      // path exists to avoid, so merely skipping the blit would keep the cost.
+      //
+      // No bezel case here: an Active Bezel needs the pixels on the CPU to
+      // compose, and its own GL-direct path (glPresent) already handled the
+      // window. cartGlPresent is only ever set when there is no bezel.
+      if (cartGlPresent) {
+        try {
+          const tPresentGl = performance.now();
+          const swapped = h.presentGl?.();
+          perf.presentMs = ema(perf.presentMs, performance.now() - tPresentGl);
+          perf.convertMs = 0; // no conversion happens on this path at all
+          if (!swapped) {
+            // The host lost its attachment (media swapped under us, context
+            // destroyed). Fall back to readback for the rest of the session
+            // rather than presenting nothing.
+            cartGlPresent = false;
+            log.info("[playtest] GL-direct present dropped — reverting to readback present.");
+          }
+        } catch (e) {
+          cartGlPresent = false;
+          log.error("[playtest] GL-direct present failed, reverting to readback:", e.message);
+        }
+        // Presented. The readback/blit block below is skipped, but NOT the
+        // rest of the tick: the audio enqueue after it paces the whole loop.
+      }
+      // `cartGlPresent` can be cleared by the block above (a dropped
+      // attachment falls back to readback on the SAME tick rather than
+      // showing nothing).
+      if (!cartGlPresent) try {
         // Active Bezel: run the guest against the frame the core just produced
         // and present the COMPOSITE. This is the human's view, so the window
         // showing the bare core picture while every capture shows the composite
