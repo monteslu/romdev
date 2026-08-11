@@ -542,8 +542,22 @@ export class WasmcartHost {
     // returns THEIR buffer -- or an empty one.
     if (this._glCtx) this._glCtx.makeCurrent?.();
     else if (gl === _offscreenGl) _offscreenCtx?.makeCurrent?.();
-    const w = Math.min(this.status.fbWidth || gl.drawingBufferWidth, gl.drawingBufferWidth);
-    const h = Math.min(this.status.fbHeight || gl.drawingBufferHeight, gl.drawingBufferHeight);
+    // Read the CART's frame size, and take it from the redirect FBO when there
+    // is one. The old code clamped to gl.drawingBufferWidth/Height, which is
+    // the CONTEXT's (i.e. the window's) size -- fine when the cart drew into
+    // the default framebuffer, but the cart now renders into a cart-sized
+    // redirect FBO. Clamping that to a smaller window read a window-sized
+    // sub-rect: captures came back cropped on the left and scaled up, and the
+    // crop MOVED when the window resized. The FBO is authoritative about its
+    // own size, so ask it.
+    let w = 0, h = 0;
+    const gotFboSize = this.cart?.withRenderedFrame?.((fw, fh) => { w = fw; h = fh; });
+    if (!gotFboSize || !(w > 0 && h > 0)) {
+      // No redirect FBO (older cart, 2D): the cart really did draw into the
+      // default framebuffer, so the context size is the right clamp.
+      w = Math.min(this.status.fbWidth || gl.drawingBufferWidth, gl.drawingBufferWidth);
+      h = Math.min(this.status.fbHeight || gl.drawingBufferHeight, gl.drawingBufferHeight);
+    }
     if (!(w > 0 && h > 0)) return;
     const row = w * 4;
     const bytes = w * h * 4;
@@ -652,6 +666,33 @@ export class WasmcartHost {
 
   /** Release the window surface, returning the context to offscreen rendering
    *  (and the host to the readback path). Safe to call when not attached. */
+  /**
+   * Tell this host's GL context that its window surface changed size.
+   *
+   * `drawingBufferWidth`/`Height` are cached at context creation, so after a
+   * resize (or F11 fullscreen) they still report the ORIGINAL size. The
+   * present blit sizes its viewport from the caller's rect, but the SURFACE
+   * behind it is still the old one — which is how a resized or fullscreened
+   * window went back to showing a corner of the game.
+   *
+   * Safe to call on any host (2D cart, no window attached, older webgl-node):
+   * the playtest loop calls it from an SDL resize handler, where a throw
+   * escapes the tool-call error path entirely and kills the process.
+   *
+   * @returns {boolean} true if a context was actually told.
+   */
+  resizeGlSurface(width, height) {
+    if (!this._glCtx || typeof this._glCtx.resize !== "function") return false;
+    if (!(width > 0 && height > 0)) return false;
+    try {
+      this._glCtx.makeCurrent?.();
+      return !!this._glCtx.resize(width, height);
+    } catch (e) {
+      console.error(`[wasmcart] GL surface resize failed: ${e.message}`);
+      return false;
+    }
+  }
+
   detachWindow() {
     if (!this._glAttached) return false;
     const ok = !!this._glCtx?.detachWindow?.();

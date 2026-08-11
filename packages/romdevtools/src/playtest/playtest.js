@@ -920,6 +920,15 @@ export async function playtest(args) {
   window.on("resize", (e) => {
     winPixelW = e.pixelWidth ?? window.pixelWidth;
     winPixelH = e.pixelHeight ?? window.pixelHeight;
+    // A GL-direct window presents into the context's OWN surface, whose size
+    // is cached at creation — it does not learn about a resize by itself. The
+    // letterbox rect below is computed against the live window size, so
+    // without this the rect and the surface disagree and the picture lands in
+    // a corner (the same symptom as having no letterbox at all). F11
+    // fullscreen is just a large resize and goes through here too.
+    if (cartGlPresent) {
+      try { getLiveHost()?.resizeGlSurface?.(winPixelW, winPixelH); } catch { /* never throw from an SDL callback */ }
+    }
   });
 
   function stop() {
