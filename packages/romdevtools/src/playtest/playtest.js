@@ -291,6 +291,34 @@ export async function playtest(args) {
   const checkpointEverySec = args.checkpointIntervalSec ?? 15;
   let lastCheckpointTick = 0;
   let lastCheckpointError = null;
+  /**
+   * One diagnosable line for a host that just stopped stepping, or null if we
+   * have nothing specific to add.
+   *
+   * "memory access out of bounds" alone gives a human no path forward. When the
+   * host is a wasm cart we can say how big its linear memory actually grew,
+   * which is the difference between "the cart has a bug" and "the cart ran out
+   * of the memory its own build reserved". wasm32 tops out at 4 GB by
+   * architecture and Emscripten builds usually cap themselves well below that
+   * (openarena's binary declares max=2 GB), so a heap sitting on a power-of-two
+   * boundary after a long session is the tell.
+   *
+   * Best-effort and never throws: this runs on the failure path.
+   */
+  function describeCartMemory(h) {
+    try {
+      if (typeof h?.wasmMemorySize !== "function") return null;
+      const bytes = h.wasmMemorySize();
+      if (!bytes) return null;
+      const mb = bytes / (1024 * 1024);
+      return `[playtest] cart WASM linear memory is ${mb.toFixed(0)} MB. `
+        + "If the cart trapped with 'memory access out of bounds', it likely hit the "
+        + "maximum its build declared (wasm32 allows at most 4096 MB; Emscripten caps "
+        + "lower unless MAXIMUM_MEMORY says otherwise) — rebuild the cart with a higher "
+        + "cap or a smaller resident asset set. Reload with loadMedia to recover.";
+    } catch { return null; }
+  }
+
   /** Serialize the live host and write it to the checkpoint path atomically
    *  (temp + rename). Synchronous + best-effort: never throws into the tick. */
   function writeCheckpoint(h, reason) {
@@ -583,6 +611,14 @@ export async function playtest(args) {
   // can OR it into the input mask each tick.
   /** @type {Set<string>} */
   const heldKeys = new Set();
+
+  // A trapped WASM cart fails identically forever (see the step catch below),
+  // so stop stepping after this many consecutive failures. Above 1 so a genuine
+  // one-tick blip mid-swap still rides through; low enough that the log stays
+  // readable. The window keeps rendering the last good frame either way.
+  const MAX_CONSECUTIVE_STEP_ERRORS = 3;
+  let consecutiveStepErrors = 0;
+  let steppingDisabled = false;
 
   // Rewind ring buffer — one serialized snapshot per frame, capped at 10 s.
   const MAX_REWIND_FRAMES = 600;
@@ -926,7 +962,10 @@ export async function playtest(args) {
     // tool is driving the core exclusively this instant) → render only, don't
     // step. The latter prevents this 60fps tick from racing a runUntilPC loop and
     // stepping the CPU past the breakpoint between its iterations.
-    const paused = !!h.status.paused || !!h._renderTickSuspended;
+    // `steppingDisabled` — the core trapped and cannot be stepped again; treat
+    // it exactly like paused so the window keeps presenting the last good frame
+    // (and the human can still hit F2/ESC) instead of going black or spinning.
+    const paused = !!h.status.paused || !!h._renderTickSuspended || steppingDisabled;
     // Read controller state for each slot independently. Slot 0 = port 0
     // (player 1), slot 1 = port 1 (player 2). Each slot's input is built
     // into its own port object. The agent's setInput is only overwritten
@@ -1133,9 +1172,25 @@ export async function playtest(args) {
         // A step error mid-swap (host being torn down/rebuilt) is transient —
         // skip this frame and let the next tick pick up the new host. Don't kill
         // the window. (A window-level failure is handled by the destroyed checks.)
+        //
+        // But a WASM instance that has TRAPPED is not transient: once a cart
+        // traps (`memory access out of bounds` — typically its linear memory
+        // hit the ceiling declared in the binary), every later frame traps too.
+        // Retrying a corpse 60 times a second buries the real cause under
+        // identical lines and burns the tick budget, so give up after a few
+        // consecutive failures and say WHY in one diagnosable line.
+        // A single good frame clears the counter (see below).
+        consecutiveStepErrors++;
+        if (consecutiveStepErrors >= MAX_CONSECUTIVE_STEP_ERRORS) {
+          steppingDisabled = true;
+          log.error(`[playtest] step failed ${consecutiveStepErrors}x in a row — stopping. Last error: ${e.message}`);
+          log.error(`[playtest] ${describeCartMemory(h) ?? "The core is not steppable; reload with loadMedia to recover."}`);
+          return;
+        }
         log.error("[playtest] step error (skipping frame):", e.message);
         return;
       }
+      consecutiveStepErrors = 0;
       perf.stepMs = ema(perf.stepMs, performance.now() - tStep);
       perfFrames += stepped;
       if (stepped > 0) frameCount++;
