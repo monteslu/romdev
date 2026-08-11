@@ -87,7 +87,7 @@
     "rungame": "^0.13.0",
     "socket.io": "^4.8.3",
     "swagger-ui-dist": "^5.17.14",
-    "wasmcart": "^0.18.0",
+    "wasmcart": "^0.19.0",
     "webgl-node": "^1.3.0",
     "yauzl": "^3.3.1",
     "zod": "^4.4.3"
