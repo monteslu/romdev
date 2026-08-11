@@ -176,6 +176,7 @@ export class WasmcartHost {
       coreFps: 60,
       displayAspect: 0,
       audioSampleRate: 0,
+      paused: false,
       gl: null, // "rendered" for GL carts, null for 2D carts
     };
     this._gl = null; // live GL context for readback (offscreen or caller-supplied)
@@ -378,8 +379,22 @@ export class WasmcartHost {
   /** Advance n frames, driving CartHost.runFrame with the current input. Each
    *  frame's audio is accumulated into state.audioRing (as Int16) so the shared
    *  audioDebug({op:'record'}) tool can drain it exactly like a libretro core. */
+  /**
+   * Pause/resume, same contract as LibretroHost: `status.paused` is the ONE
+   * flag the playtest loop and stepFrames both read, so a paused cart is
+   * frozen no matter who asks it to run.
+   */
+  pause() {
+    this.status.paused = true;
+  }
+
+  resume() {
+    this.status.paused = false;
+  }
+
   stepFrames(n) {
     if (!this.cart) throw new Error("no cart loaded — loadMedia first");
+    if (this.status.paused) return 0;
     // GL cart on the shared offscreen context: make it current for this
     // burst. (Caller-supplied glBackends manage their own currency.)
     if (this._gl && this._gl === _offscreenGl) _offscreenCtx?.makeCurrent?.();

@@ -46,6 +46,7 @@ export class JsGameHost {
       coreFps: 60,
       displayAspect: 0,
       audioSampleRate: 0,
+      paused: false,
     };
   }
 
@@ -130,8 +131,22 @@ export class JsGameHost {
    * so this returns a Promise — the tools await it (LibretroHost.stepFrames is sync, but
    * the frame tool already awaits host.stepFrames for proxied cores).
    */
+  /**
+   * Pause/resume, same contract as LibretroHost: `status.paused` is the ONE
+   * flag the playtest loop and stepFrames both read, so a paused game is
+   * frozen no matter who asks it to run.
+   */
+  pause() {
+    this.status.paused = true;
+  }
+
+  resume() {
+    this.status.paused = false;
+  }
+
   async stepFrames(n) {
     if (!this.session) throw new Error("no jsgame loaded — loadMedia first");
+    if (this.status.paused) return 0;
     this.session.setInput(this._inputPorts);
     for (let i = 0; i < n; i++) {
       await this.session.stepFrame();

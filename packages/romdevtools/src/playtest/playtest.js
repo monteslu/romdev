@@ -724,7 +724,18 @@ export async function playtest(args) {
     // RetroArch-style emulator hotkeys — act on the live host, not game input.
     if (key === "p" || key === "space") {
       const h = getLiveHost();
-      if (h) { h.status.paused ? h.resume() : h.pause(); }
+      // Guarded like F2/F4: pause/resume are OPTIONAL host methods, and this
+      // runs inside an SDL event callback where a throw escapes the tool-call
+      // error path entirely and kills the process (it took the whole server
+      // down on wasmcart/jsgame carts, losing every session's host from one
+      // advertised keypress).
+      if (h && typeof h.pause === "function" && typeof h.resume === "function") {
+        try { h.status?.paused ? h.resume() : h.pause(); } catch (err) {
+          log.debug("[playtest] pause toggle failed:", err.message);
+        }
+      } else {
+        log.info("[playtest] P/Space — this host does not support pause.");
+      }
       return;
     }
     // F11 — fullscreen toggle, the convention every player already knows.
@@ -784,10 +795,24 @@ export async function playtest(args) {
     }
     if (key === "k") {
       const h = getLiveHost();
-      if (h && h.status?.loaded && h.status.paused) {
-        h.resume();
-        h.stepFrames(1);
-        h.pause();
+      // Reachable on any host with pause now, so guard the optional methods
+      // and the async stepFrames (jsgame returns a promise: an unhandled
+      // rejection here is the same uncaught-in-callback hazard as the throw).
+      if (h && h.status?.loaded && h.status.paused
+          && typeof h.pause === "function" && typeof h.resume === "function") {
+        try {
+          h.resume();
+          const stepped = h.stepFrames(1);
+          if (stepped && typeof stepped.then === "function") {
+            stepped.catch((err) => log.debug("[playtest] frame advance failed:", err.message))
+              .finally(() => h.pause());
+          } else {
+            h.pause();
+          }
+        } catch (err) {
+          try { h.pause(); } catch { /* leave it paused-ish; nothing else to do */ }
+          log.debug("[playtest] frame advance failed:", err.message);
+        }
       }
       return;
     }
@@ -797,17 +822,25 @@ export async function playtest(args) {
       // re-run a frame to render it. (stepFrames is a no-op while paused, so
       // we resume/step/pause exactly like frame advance.)
       const h = getLiveHost();
-      if (h && h.status?.loaded && h.status.paused && rewindBuffer.length > 1) {
+      if (h && h.status?.loaded && h.status.paused && rewindBuffer.length > 1
+          && typeof h.pause === "function" && typeof h.resume === "function"
+          && typeof h.unserializeState === "function") {
         rewindBuffer.pop();
         const snap = rewindBuffer[rewindBuffer.length - 1];
         try {
           h.unserializeState(snap);
           h.resume();
-          h.stepFrames(1);
-          h.pause();
+          const stepped = h.stepFrames(1);
+          if (stepped && typeof stepped.then === "function") {
+            stepped.catch((err) => log.error("[playtest] rewind error:", err.message))
+              .finally(() => h.pause());
+          } else {
+            h.pause();
+          }
           frameCount++;
           humanInput.note(true, tickCount);
         } catch (e) {
+          try { h.pause(); } catch { /* nothing else to do */ }
           log.error("[playtest] rewind error:", e.message);
         }
       }
