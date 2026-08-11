@@ -1191,8 +1191,19 @@ export async function playtest(args) {
           // No bezel, or the guest faulted this frame: show the raw core
           // picture rather than freezing on a stale composite.
           fb = h.getFramebuffer();
-          rgbaScratch = framebufferToRgba(fb, rgbaScratch);
-          rgba = rgbaScratch;
+          // A GL cart's readback is ALREADY tightly-packed RGBA8888 with
+          // alpha forced opaque, so converting it is a 2-million-pixel copy
+          // that produces a byte-identical buffer (measured 3.8 ms/frame at
+          // 1080p). Hand SDL the readback directly in that case; every other
+          // pixel format still goes through the converter.
+          if (fb.format === ROMDEV_PIXEL_FORMAT_RGBA8888
+              && fb.pitch === fb.width * 4
+              && fb.pixels instanceof Uint8Array) {
+            rgba = Buffer.from(fb.pixels.buffer, fb.pixels.byteOffset, fb.pixels.byteLength);
+          } else {
+            rgbaScratch = framebufferToRgba(fb, rgbaScratch);
+            rgba = rgbaScratch;
+          }
         }
         perf.convertMs = ema(perf.convertMs, performance.now() - tConvert);
         if (fpsOverlay) {
