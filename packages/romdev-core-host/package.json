@@ -26,6 +26,6 @@
     "@monteslu/chafa-wasm": "^0.4.0",
     "native-gles": "^0.6.0",
     "pngjs": "^7.0.0",
-    "webgl-node": "^1.3.0"
+    "webgl-node": "^1.4.0"
   }
 }
