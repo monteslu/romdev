@@ -13,6 +13,9 @@
 // which maps cleanly onto stepFrames + state.lastFrame. We drive its fixed-step
 // clock so frame N is reproducible (setFixedStep), matching how romdev steps a core.
 
+import fs from "node:fs";
+import path from "node:path";
+import zlib from "node:zlib";
 import { CartHost, BUTTON } from "wasmcart";
 import { framebufferToRgba } from "romdev-core-host/framebuffer.js";
 import { framebufferToScreenshot } from "romdev-core-host/framebuffer-png.js";
@@ -63,6 +66,56 @@ let _offscreenGlW = 0, _offscreenGlH = 0;
  * or its draws land in someone else's context — which is exactly how one
  * session's game ended up inside another session's window. */
 let _offscreenCtx = null;
+/* The cart's DECLARED resolution, read straight from its manifest.
+ *
+ * This is the only size that is knowable before the wasm runs, and the GL
+ * context has to be created before the cart can tell us anything. Returns {}
+ * for a bytes-only load or anything unreadable; the caller falls back to the
+ * info struct, which is no worse than the old behaviour.
+ *
+ * Handles both shapes romdev loads: a packed .wasc (a zip, manifest.json at
+ * the root) and an unpacked directory (manifest.json beside the assets).
+ */
+function _manifestDims(source) {
+  if (typeof source !== "string") return {};
+  try {
+    const st = fs.statSync(source);
+    let json = null;
+    if (st.isDirectory()) {
+      json = fs.readFileSync(path.join(source, "manifest.json"), "utf8");
+    } else {
+      // Minimal zip read: find manifest.json in the central directory rather
+      // than pulling in a zip dependency for two integers.
+      const buf = fs.readFileSync(source);
+      const name = Buffer.from("manifest.json");
+      // scan local file headers (PK\x03\x04) for the entry
+      for (let i = 0; i + 30 < buf.length; i++) {
+        if (buf[i] === 0x50 && buf[i + 1] === 0x4b && buf[i + 2] === 0x03 && buf[i + 3] === 0x04) {
+          const method = buf.readUInt16LE(i + 8);
+          const csize = buf.readUInt32LE(i + 18);
+          const nlen = buf.readUInt16LE(i + 26);
+          const elen = buf.readUInt16LE(i + 28);
+          const nameAt = i + 30;
+          if (buf.slice(nameAt, nameAt + nlen).equals(name)) {
+            const dataAt = nameAt + nlen + elen;
+            const raw = buf.slice(dataAt, dataAt + csize);
+            json = method === 0
+              ? raw.toString("utf8")
+              : zlib.inflateRawSync(raw).toString("utf8");
+            break;
+          }
+          i = nameAt + nlen + elen + csize - 1;
+        }
+      }
+    }
+    if (!json) return {};
+    const m = JSON.parse(json);
+    return { width: m.width | 0, height: m.height | 0 };
+  } catch {
+    return {};
+  }
+}
+
 async function _getOffscreenGl(wantW, wantH) {
   const wn = await _webglNode();
   if (!wn) return null;
@@ -193,8 +246,23 @@ export class WasmcartHost {
         // Size the context to THIS cart. Carts declare their own resolution
         // (720p, 1080p, whatever), so a fixed size crops whichever half of the
         // corpus it was not chosen for.
+        //
+        // getInfo() here reports the cart's COMPILE-TIME default, not its final
+        // resolution: this factory runs during cart.load(), and a cart that
+        // picks its size at boot (wasmcart-lua reads conf.lua inside wc_init)
+        // only stamps the real numbers afterward -- CartHost re-reads the info
+        // struct after wc_init for exactly that reason. Sizing from the
+        // pre-init value gave a 1080p cart a 1280x720 context, and since
+        // webgl-node cannot resize, readback then cropped it to its top-left
+        // corner for the rest of the session.
+        //
+        // The MANIFEST knows the answer before the wasm ever runs, so prefer
+        // it and fall back to the pre-init struct.
         const ci = this.cart?.getInfo?.() ?? {};
-        const gl = await _getOffscreenGl(ci.width, ci.height);
+        const mw = _manifestDims(source);
+        const gl = await _getOffscreenGl(
+          Math.max(ci.width | 0, mw.width | 0),
+          Math.max(ci.height | 0, mw.height | 0));
         if (!gl) {
           // webgl-node/native-gles are REQUIRED dependencies, so reaching here
           // means a broken install rather than an unsupported configuration.
