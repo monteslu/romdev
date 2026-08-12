@@ -73,4 +73,30 @@ jobs:
         # -- the same honest-skip contract as the nestest fixture above.
         env:
           ROMDEV_NO_GL: "1"
-        run: npm test --workspace=romdevtools
+        run: npm test --workspace=romdevtools 2>&1 | tee /tmp/test-output.txt
+
+      # A green badge that silently covers nothing is the same failure class as
+      # a tool returning ok:true on a black frame: the signal reports success
+      # while meaning nothing. So SAY what this run could not test, in the job
+      # summary where a human reading the badge will see it -- rather than
+      # leaving it to a doc line nobody opens.
+      - name: Report what this run could NOT cover
+        if: always()
+        run: |
+          skipped=$(grep -c '^# SKIP' /tmp/test-output.txt 2>/dev/null || echo 0)
+          {
+            echo "### Coverage gaps in this run"
+            echo
+            echo "- **GL-dependent tests: SKIPPED.** \`ROMDEV_NO_GL=1\` is set because"
+            echo "  runners have no GPU device nodes and native EGL init *blocks* there."
+            echo "  The wasmcart GL-direct present path (\`presentWindow:true\`, letterbox,"
+            echo "  capture parity, surface resize) has **no automated coverage on CI** —"
+            echo "  it is verified only on a GPU box or against a real cart."
+            echo "- \`test/roms/nestest.nes\` is commercial content and ships in no tarball,"
+            echo "  so the tests needing it skip themselves by design."
+            echo
+            echo "Total skipped in this run: **${skipped}**"
+            echo
+            echo "A green check here means everything runnable passed — not that"
+            echo "everything was run."
+          } >> "$GITHUB_STEP_SUMMARY"
