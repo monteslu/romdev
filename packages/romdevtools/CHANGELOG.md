@@ -4,7 +4,7 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
-## 0.115.2 — unreleased
+## 0.116.0 — 2026-08-12
 
 - **GL wasmcart carts can present straight to the window: `loadMedia({
   platform:'wasmcart', presentWindow:true })`.** A GL cart used to have every
@@ -73,6 +73,8 @@ the `romdev-mcp` bin is kept as an alias.)
     recovered). `displayAspect` became portrait, the letterbox then fitted the
     picture perfectly to a corrupted target, and every geometry check stayed
     green while the window was visibly wrong.
+
+## 0.115.2 — 2026-08-11
 
 - **snes9x captures the displayed frame as LAYER PLANES** — new regions
   `snes_lp_world` (every non-OBJ pixel) and `snes_lp_obj` (every OBJ
