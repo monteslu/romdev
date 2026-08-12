@@ -4,6 +4,24 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.116.1 — 2026-08-12
+
+- **A `presentWindow` load no longer poisons later plain loads.** Tearing down
+  a presentWindow host destroyed its private GL context and left NOTHING
+  current — native-gles unbinds on destroy and does not fall back — so the next
+  cart to load on the shared offscreen context made GL calls against a null
+  current context and died with `Cannot read properties of null (reading
+  '_id')`. One `presentWindow:true` load broke every plain `loadMedia` after
+  it, for the life of the server process.
+
+  It presented as a per-cart rendering fault rather than a lifetime bug: the
+  MCP client agent screenshotted five shipped carts and got 4 of 5 black or
+  failing on the DEFAULT readback path while all five worked with
+  `presentWindow:true`. The one that worked was simply first in the list,
+  before any direct load had happened — nothing about that cart differed.
+  Fixed by handing currency back to the shared context after destroying a
+  private one. Affects 0.116.0 only.
+
 ## 0.116.0 — 2026-08-12
 
 - **GL wasmcart carts can present straight to the window: `loadMedia({
