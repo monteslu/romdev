@@ -503,9 +503,26 @@ export class WasmcartHost {
       this._glDirty = true;
       // Keep the declared size current even without a readback, since
       // getStatus()/aspect consumers read it every tick.
+      //
+      // Take it from the cart's REDIRECT FBO, never from
+      // gl.drawingBufferWidth/Height. Those follow the WINDOW once the
+      // context is attached and resizeGlSurface updates them, and the old
+      // `Math.min(status, drawingBuffer)` clamp then rewrote the cart's
+      // declared size to the window's -- permanently, since min() only ever
+      // shrinks. Dragging a 1920x1080 cart into a 492-wide window made
+      // status.fbWidth 492 and displayAspect 0.455, so the letterbox target
+      // itself became portrait and the game rendered STRETCHED rather than
+      // fitted. The cart's frame size is a property of the cart; a human
+      // resizing a window must never change it.
       const gl = this._gl;
-      const w = Math.min(this.status.fbWidth || gl.drawingBufferWidth, gl.drawingBufferWidth);
-      const h = Math.min(this.status.fbHeight || gl.drawingBufferHeight, gl.drawingBufferHeight);
+      let w = 0, h = 0;
+      const fromFbo = this.cart?.withRenderedFrame?.((fw, fh) => { w = fw; h = fh; });
+      if (!fromFbo || !(w > 0 && h > 0)) {
+        // No redirect FBO: the cart really does draw into the default
+        // framebuffer, so the context size is the honest answer there.
+        w = Math.min(this.status.fbWidth || gl.drawingBufferWidth, gl.drawingBufferWidth);
+        h = Math.min(this.status.fbHeight || gl.drawingBufferHeight, gl.drawingBufferHeight);
+      }
       if (w > 0 && h > 0) {
         this.status.fbWidth = w;
         this.status.fbHeight = h;
