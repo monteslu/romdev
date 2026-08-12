@@ -1034,6 +1034,17 @@ export class WasmcartHost {
       try { if (this._glAttached) this._glCtx.detachWindow?.(); } catch { /* ignore */ }
       try { this._glCtx.destroy?.(); } catch { /* ignore */ }
       this._glCtx = null;
+      // Destroying a context leaves NOTHING current: native-gles unbinds it
+      // and does not fall back to another. The next cart to load on the
+      // SHARED offscreen context then made GL calls against a null current
+      // context and died with "Cannot read properties of null (reading
+      // '_id')" — so ONE presentWindow load poisoned every later plain load
+      // in the process. (Found by the MCP client agent screenshotting five
+      // shipped carts: 4 of 5 came back black or failed, and the discriminator
+      // turned out to be a presentWindow load earlier in the run, not
+      // anything about the carts.) Hand currency back to the shared context
+      // if this process has one.
+      try { _offscreenCtx?.makeCurrent?.(); } catch { /* nothing to restore */ }
     }
     this._glAttached = false;
     this._gl = null;
