@@ -54,6 +54,18 @@ After that, keep iterating with `build({output:'run'})` / `build({output:'rom'})
 
 **The mouse works on pointer carts.** For a wasmcart cart that declares FLAG_POINTER (menus, card games, touch-first games), the window forwards real mouse moves/clicks into the cart's pointer slot 0, mapped through the same letterbox the frame is drawn with — so the human can just click, including after resizing the window. Pad-only carts never see mouse movement.
 
+**Opening a window on a GL wasmcart? Load it with `presentWindow:true`.** A GL cart otherwise has every frame dragged back to the CPU just so SDL can blit it in software — about a third of a frame budget at 1080p spent moving pixels the GPU already had. `loadMedia({platform:'wasmcart', path, presentWindow:true})` lets the window present by GPU blit + swap instead: measured `convertMs` 3.52 → 0, window cost ~7.45 ms → ~2.0 ms on a 1080p 3D cart.
+
+```
+loadMedia({platform:'wasmcart', path:'/carts/game.wasc', presentWindow:true})
+playtest()                       // window now presents GPU-direct
+```
+
+Three things worth knowing:
+- **It must be set at LOAD time.** The cart's GL context binds when its wasm loads and cannot be swapped afterwards, so a cart already loaded without the flag keeps the slower path until you reload it.
+- **Screenshots are unaffected — by contract.** `frame({op:'screenshot'})` and `playtest({op:'framebuffer'})` return the full cart frame at the cart's resolution, byte-identical to a plain load. Capture dimensions are a function of the CART only: nothing the human does to the window (drag, F11, multi-monitor) changes what you capture. If you ever measure otherwise, that's a bug worth reporting, not something to work around.
+- **Skip it for headless work.** It costs one extra GL context per loaded cart and buys nothing when no window is open — the readback path is what you want there anyway.
+
 **"It feels slow" is a number, not a vibe.** The window's title bar always shows live fps (`<game> | 58 fps`, the rate actually achieved). `playtest({op:'status'})` returns `perf` — rolling `fps` (60 = full speed) and `tickHz`, plus per-stage costs (`stepMs` emulation, `convertMs` framebuffer→RGBA, `presentMs` SDL blit, `audioQueuedMs` queue depth) — so YOU can say where the time goes. When the HUMAN should see the number on screen, `playtest({op:'fps', show:true})` draws a corner counter into the frame (they can also toggle it with F3).
 
 Skip playtest only when there's clearly no human in the loop: CI runs, automated test suites, batch reverse-engineering, or when the user has explicitly said "headless." `playtest()` needs a desktop session to draw into; if it can't open a window the call FAILS as a tool error (never a success-shaped `opened:false`) and the message tells you exactly how to fix it. Three distinct cases: `reason:"sdl-binary-missing"` means the `@kmamal/sdl` native binary isn't installed (the server tries to self-heal, but if it can't, the message gives a `fixCommand` to run + restart) — a one-time native-addon fix, NOT a display problem. `reason:"no-display"` means SDL came up on the offscreen/dummy driver — no physical screen (headless/SSH; run the server in a terminal inside the desktop session). `reason:"sdl-error"` quotes whatever SDL actually threw — READ the quoted error; the message only suggests the desktop-session fix when the error really names a display/driver problem, otherwise treat the quoted error itself as the fault to report. Either way, every other tool (build, run, screenshot, inspect) is fully headless and unaffected. When in doubt, ask once, then default to opening it.

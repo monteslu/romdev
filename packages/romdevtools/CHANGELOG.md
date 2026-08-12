@@ -6,6 +6,74 @@ the `romdev-mcp` bin is kept as an alias.)
 
 ## 0.115.2 — unreleased
 
+- **GL wasmcart carts can present straight to the window: `loadMedia({
+  platform:'wasmcart', presentWindow:true })`.** A GL cart used to have every
+  frame dragged back to the CPU (`glReadPixels` + a row flip + an alpha pass)
+  purely so SDL could blit it in software — measured at a third of a frame
+  budget at 1080p, moving pixels the GPU already had. With `presentWindow` the
+  cart renders into its own GL context, which the playtest window binds
+  directly, and presenting is a GPU blit + swap: **`convertMs` 3.52 → 0**,
+  window cost ~7.45 ms → ~2.0 ms on a 1080p 3D cart at a steady 60 fps.
+
+  It is opt-in **at load time** because the GL context binds when the cart's
+  wasm loads and cannot be swapped afterwards, so a cart already loaded without
+  it keeps the readback path until it is reloaded. It is also deliberately not
+  automatic: the offscreen GL context is ONE process-wide object shared by
+  every cart in every session, so attaching *that* to a window would drag every
+  other session's cart into it. `presentWindow` builds a private context the
+  host exclusively owns, and only a private context may ever be attached.
+
+  **Captures are unaffected, by contract.** A screenshot under `presentWindow`
+  is byte-identical to the readback path — full cart frame, cart resolution —
+  and the readback stays lazy: stepping copies no pixels, only a consumer
+  asking for them pays. Requires wasmcart ≥ 0.21.2 and webgl-node ≥ 1.5.0.
+
+- **P/Space no longer kills the server on wasmcart and jsgame windows.**
+  `pause()`/`resume()` existed only on `LibretroHost`, and the hotkey called
+  them unguarded from inside an SDL event callback — where a throw escapes the
+  tool-call error path entirely and takes the whole process down, losing every
+  session's host. With no `status.paused` field the ternary always took the
+  pause branch, so it threw on the FIRST press, every time, on a key the
+  window's own help text invites the human to press. Both hosts now implement
+  the pause contract (a paused cart is genuinely frozen — `stepFrames` returns
+  0), the call site is guarded like its F2/F4 neighbours, and K (frame
+  advance) and R (rewind) — previously unreachable, now live — handle
+  jsgame's async `stepFrames`, whose unhandled rejection was the same hazard
+  by another route.
+
+- **A playtest window stops stepping a core that has trapped.** A WASM cart
+  that traps (typically `memory access out of bounds` — its linear memory hit
+  the maximum its own build declared) fails identically forever, but the tick
+  loop retried it 60 times a second, burying the cause under identical log
+  lines. Three consecutive step errors now disable stepping and log ONE
+  diagnosable line naming the cart's actual linear-memory size; a single good
+  frame clears the counter, so a genuine one-tick blip mid-swap still rides
+  through. The window keeps presenting its last good frame and stays
+  responsive to F2/ESC — `loadMedia` recovers it.
+
+- **Fixes to the GL-direct path, all of which rendered a plausible-but-wrong
+  picture rather than erroring** (found by the MCP client agent measuring
+  frame EXTENT, and by a human looking at a window):
+
+  - the game drew in the **bottom-left corner** of any window that was not
+    exactly the cart's resolution — presenting was a bare `swapBuffers` with
+    no letterbox, where the readback path had always scaled into a `dstRect`;
+  - **screenshots of an open GL-direct window came back black** with
+    `ok:true` — the readback read the window surface, whose contents are
+    undefined after a swap, instead of the cart's own frame;
+  - **captures were cropped and scaled**, and the crop moved with window
+    state — the readback clamped its region to the CONTEXT (window) size while
+    the cart renders into a cart-sized FBO;
+  - **resize and F11 fullscreen** put the game back in a corner — nothing told
+    the GL surface the window had changed, so the letterbox rect and the
+    surface disagreed;
+  - **dragging a window narrow permanently squashed the game** — `stepFrames`
+    clamped the cart's declared `fbWidth`/`fbHeight` to the context size, so a
+    resize rewrote the CART's size (and `Math.min` only shrinks, so it never
+    recovered). `displayAspect` became portrait, the letterbox then fitted the
+    picture perfectly to a corrupted target, and every geometry check stayed
+    green while the window was visibly wrong.
+
 - **snes9x captures the displayed frame as LAYER PLANES** — new regions
   `snes_lp_world` (every non-OBJ pixel) and `snes_lp_obj` (every OBJ
   pixel, 0x0000 transparent key), split per line by the core's own depth
