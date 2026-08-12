@@ -22,6 +22,17 @@ import path from "node:path";
 
 import { WasmcartHost } from "../src/host/WasmcartHost.js";
 
+// SKIP-GUARDED like wasmcart-gl.test.js: these need a real GL context, and CI
+// runners have no GPU. A missing GL stack is a by-design degradation (the host
+// throws a clear "requires headless GL" error), not a regression these tests
+// are meant to catch -- so skip rather than fail there.
+import { glStackAvailable } from "romdev-core-host/glOptionalDep.js";
+let _glReady = true;
+try { await import("webgl-node"); } catch { _glReady = false; }
+if (_glReady) _glReady = await glStackAvailable();
+const GUARD = _glReady ? {} : { skip: "no usable GL stack here (headless CI) — GL carts cannot load" };
+
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const GLCART = path.join(HERE, "fixtures", "glcart.wasc");
 
@@ -43,7 +54,7 @@ function extent(fb) {
   return { minX, maxX, minY, maxY };
 }
 
-test("a GL cart's capture spans the FULL frame, not a window-sized sub-rect", async () => {
+test("a GL cart's capture spans the FULL frame, not a window-sized sub-rect", GUARD, async () => {
   const h = new WasmcartHost();
   await h.loadMedia({ platform: "wasmcart", path: GLCART, presentWindow: true });
   try {
@@ -60,7 +71,7 @@ test("a GL cart's capture spans the FULL frame, not a window-sized sub-rect", as
   } finally { h.destroy(); }
 });
 
-test("presentWindow and plain loads capture pixel-for-pixel the same frame", async () => {
+test("presentWindow and plain loads capture pixel-for-pixel the same frame", GUARD, async () => {
   // The strongest form: the fast path must not change what a capture returns.
   // Run it on the SAME cart at the same frame count and compare bytes.
   const plain = new WasmcartHost();
@@ -84,7 +95,7 @@ test("presentWindow and plain loads capture pixel-for-pixel the same frame", asy
   } finally { plain.destroy(); direct.destroy(); }
 });
 
-test("the capture keeps the CART's size, not the context's", async () => {
+test("the capture keeps the CART's size, not the context's", GUARD, async () => {
   const h = new WasmcartHost();
   await h.loadMedia({ platform: "wasmcart", path: GLCART, presentWindow: true });
   try {
@@ -99,7 +110,7 @@ test("the capture keeps the CART's size, not the context's", async () => {
   } finally { h.destroy(); }
 });
 
-test("repeated captures are stable (no drift as the surface changes)", async () => {
+test("repeated captures are stable (no drift as the surface changes)", GUARD, async () => {
   const h = new WasmcartHost();
   await h.loadMedia({ platform: "wasmcart", path: GLCART, presentWindow: true });
   try {

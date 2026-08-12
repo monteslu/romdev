@@ -34,10 +34,21 @@ import path from "node:path";
 
 import { WasmcartHost } from "../src/host/WasmcartHost.js";
 
+// SKIP-GUARDED like wasmcart-gl.test.js: these need a real GL context, and CI
+// runners have no GPU. A missing GL stack is a by-design degradation (the host
+// throws a clear "requires headless GL" error), not a regression these tests
+// are meant to catch -- so skip rather than fail there.
+import { glStackAvailable } from "romdev-core-host/glOptionalDep.js";
+let _glReady = true;
+try { await import("webgl-node"); } catch { _glReady = false; }
+if (_glReady) _glReady = await glStackAvailable();
+const GUARD = _glReady ? {} : { skip: "no usable GL stack here (headless CI) — GL carts cannot load" };
+
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const GLCART = path.join(HERE, "fixtures", "glcart.wasc");
 
-test("resizing the surface then stepping does not change the cart's size", async () => {
+test("resizing the surface then stepping does not change the cart's size", GUARD, async () => {
   const h = new WasmcartHost();
   await h.loadMedia({ platform: "wasmcart", path: GLCART, presentWindow: true });
   try {
@@ -58,7 +69,7 @@ test("resizing the surface then stepping does not change the cart's size", async
   } finally { h.destroy(); }
 });
 
-test("repeated resizes never erode the cart's size", async () => {
+test("repeated resizes never erode the cart's size", GUARD, async () => {
   // Math.min only shrinks, so the original bug was cumulative and
   // unrecoverable: every narrower window ratcheted the declared size down and
   // nothing ever restored it. Drag through a range and back.
@@ -77,7 +88,7 @@ test("repeated resizes never erode the cart's size", async () => {
   } finally { h.destroy(); }
 });
 
-test("displayAspect stays the CART's aspect, which is what letterboxing targets", async () => {
+test("displayAspect stays the CART's aspect, which is what letterboxing targets", GUARD, async () => {
   // The corrupted value fed the letterbox target, so the picture was fitted
   // to a portrait aspect and looked stretched while all the geometry checks
   // still passed. Pin the aspect specifically, not just the dimensions.

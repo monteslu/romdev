@@ -19,10 +19,21 @@ import path from "node:path";
 
 import { WasmcartHost } from "../src/host/WasmcartHost.js";
 
+// SKIP-GUARDED like wasmcart-gl.test.js: these need a real GL context, and CI
+// runners have no GPU. A missing GL stack is a by-design degradation (the host
+// throws a clear "requires headless GL" error), not a regression these tests
+// are meant to catch -- so skip rather than fail there.
+import { glStackAvailable } from "romdev-core-host/glOptionalDep.js";
+let _glReady = true;
+try { await import("webgl-node"); } catch { _glReady = false; }
+if (_glReady) _glReady = await glStackAvailable();
+const GUARD = _glReady ? {} : { skip: "no usable GL stack here (headless CI) — GL carts cannot load" };
+
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const GLCART = path.join(HERE, "fixtures", "glcart.wasc");
 
-test("a GL host exposes a resize hook for its window surface", async () => {
+test("a GL host exposes a resize hook for its window surface", GUARD, async () => {
   const h = new WasmcartHost();
   await h.loadMedia({ platform: "wasmcart", path: GLCART, presentWindow: true });
   try {
@@ -33,7 +44,7 @@ test("a GL host exposes a resize hook for its window surface", async () => {
   } finally { h.destroy(); }
 });
 
-test("resizeGlSurface reports the new size back", async () => {
+test("resizeGlSurface reports the new size back", GUARD, async () => {
   const h = new WasmcartHost();
   await h.loadMedia({ platform: "wasmcart", path: GLCART, presentWindow: true });
   try {
@@ -44,14 +55,14 @@ test("resizeGlSurface reports the new size back", async () => {
   } finally { h.destroy(); }
 });
 
-test("resizeGlSurface is a no-op (not a crash) on a 2D or unattached host", async () => {
+test("resizeGlSurface is a no-op (not a crash) on a 2D or unattached host", GUARD, async () => {
   const h = new WasmcartHost();
   // No media at all: the hook must still be safe to call.
   assert.doesNotThrow(() => h.resizeGlSurface?.(640, 480));
   h.destroy();
 });
 
-test("the surface size the presenter uses comes from the WINDOW, not the cart", async () => {
+test("the surface size the presenter uses comes from the WINDOW, not the cart", GUARD, async () => {
   // Regression guard for the shape of the bug: presentGl must letterbox
   // against the size its caller passes (the live window), never against the
   // cart's own resolution or a cached drawing-buffer size. A presenter that

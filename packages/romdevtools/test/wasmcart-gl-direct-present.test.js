@@ -19,11 +19,22 @@ import path from "node:path";
 
 import { WasmcartHost } from "../src/host/WasmcartHost.js";
 
+// SKIP-GUARDED like wasmcart-gl.test.js: these need a real GL context, and CI
+// runners have no GPU. A missing GL stack is a by-design degradation (the host
+// throws a clear "requires headless GL" error), not a regression these tests
+// are meant to catch -- so skip rather than fail there.
+import { glStackAvailable } from "romdev-core-host/glOptionalDep.js";
+let _glReady = true;
+try { await import("webgl-node"); } catch { _glReady = false; }
+if (_glReady) _glReady = await glStackAvailable();
+const GUARD = _glReady ? {} : { skip: "no usable GL stack here (headless CI) — GL carts cannot load" };
+
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const GLCART = path.join(HERE, "fixtures", "glcart.wasc");
 const HELLO = path.join(HERE, "fixtures", "hello.wasc");
 
-test("presentWindow gives a GL cart its own attachable context", async () => {
+test("presentWindow gives a GL cart its own attachable context", GUARD, async () => {
   const h = new WasmcartHost();
   await h.loadMedia({ platform: "wasmcart", path: GLCART, presentWindow: true });
   try {
@@ -33,7 +44,7 @@ test("presentWindow gives a GL cart its own attachable context", async () => {
   } finally { h.destroy(); }
 });
 
-test("WITHOUT presentWindow a cart stays on the shared context and refuses to attach", async () => {
+test("WITHOUT presentWindow a cart stays on the shared context and refuses to attach", GUARD, async () => {
   const h = new WasmcartHost();
   await h.loadMedia({ platform: "wasmcart", path: GLCART });
   try {
@@ -45,7 +56,7 @@ test("WITHOUT presentWindow a cart stays on the shared context and refuses to at
   } finally { h.destroy(); }
 });
 
-test("a 2D cart never claims it can attach", async () => {
+test("a 2D cart never claims it can attach", GUARD, async () => {
   const h = new WasmcartHost();
   await h.loadMedia({ platform: "wasmcart", path: HELLO, presentWindow: true });
   try {
@@ -53,7 +64,7 @@ test("a 2D cart never claims it can attach", async () => {
   } finally { h.destroy(); }
 });
 
-test("the private context renders IDENTICALLY to the shared one", async () => {
+test("the private context renders IDENTICALLY to the shared one", GUARD, async () => {
   // The regression this pins: sizing the private context from the cart's
   // pre-init info struct (which a cart that picks its size in wc_init reports
   // as 0) produced a 1x1 context. webgl-node cannot resize, so the cart was
@@ -81,7 +92,7 @@ test("the private context renders IDENTICALLY to the shared one", async () => {
   } finally { shared.destroy(); priv.destroy(); }
 });
 
-test("readback still works on a private context while it is NOT attached", async () => {
+test("readback still works on a private context while it is NOT attached", GUARD, async () => {
   // Screenshots must keep working on a presentWindow cart before a window
   // exists (agents shoot frames headlessly long before a human sees one).
   const h = new WasmcartHost();
@@ -98,7 +109,7 @@ test("readback still works on a private context while it is NOT attached", async
   } finally { h.destroy(); }
 });
 
-test("attach refuses a junk handle and presentGl refuses when unattached", async () => {
+test("attach refuses a junk handle and presentGl refuses when unattached", GUARD, async () => {
   const h = new WasmcartHost();
   await h.loadMedia({ platform: "wasmcart", path: GLCART, presentWindow: true });
   try {
@@ -113,7 +124,7 @@ test("attach refuses a junk handle and presentGl refuses when unattached", async
   } finally { h.destroy(); }
 });
 
-test("destroy releases the private context", async () => {
+test("destroy releases the private context", GUARD, async () => {
   // Each private context is a real GPU context; leaking one per load would
   // exhaust the driver over a long session.
   const h = new WasmcartHost();
