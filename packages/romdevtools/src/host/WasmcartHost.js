@@ -316,6 +316,29 @@ export class WasmcartHost {
           console.error("[wasmcart] private GL context unavailable — "
             + "falling back to the shared offscreen context (readback present).");
         }
+        // Claim the shared context BEFORE the cart's wasm builds anything on
+        // it. The private path does this (see presentWindow above); this one
+        // did not, so a cart loading here built its FBOs against whatever
+        // context happened to be current — and after a presentWindow load,
+        // that is a PRIVATE context belonging to another host. The cart then
+        // ran on the shared context with attachments validated against a
+        // different one, and only a demanding target notices: 3DreamEngine's
+        // sky job (cubemap/MRT) comes back "the framebuffer is incomplete —
+        // the targets must agree on size", while plain 2D canvases complete
+        // fine.
+        //
+        // Why it took four reports to place: the damage lasts EXACTLY ONE
+        // LOAD. The next load finds currency already corrected (the first
+        // load's own stepFrames/teardown fixes it), so the second measurement
+        // always passes — which is why two people on the same box with the
+        // same cart kept getting opposite answers depending on who measured
+        // second. Credit to the MCP client agent for isolating the decay.
+        //
+        // NOTE: this does NOT reproduce on every client. My curl-driven runs
+        // pass with or without this line; theirs fail deterministically 3/3
+        // without it. The call is correct regardless — the shared path should
+        // never have relied on another host leaving the right context current
+        // — so it ships on that reasoning, not on a green run of mine.
         const gl = await _getOffscreenGl(wantW, wantH);
         if (!gl) {
           // webgl-node/native-gles are REQUIRED dependencies, so reaching here
@@ -327,6 +350,9 @@ export class WasmcartHost {
             "failed to load. Reinstall romdevtools (native-gles builds or downloads a native " +
             "module at install time; check that step's output).");
         }
+        // Claim it now that it definitely exists (_getOffscreenGl CREATES it on
+        // the first GL cart, so claiming before the call would no-op).
+        _offscreenCtx?.makeCurrent?.();
         this._gl = gl;
         return gl;
       };
