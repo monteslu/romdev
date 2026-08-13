@@ -5,42 +5,42 @@
 // context happened to be current -- after a presentWindow load, that is
 // another host's PRIVATE context. The cart then ran on the shared context with
 // attachments validated against a different one. Only a demanding target
-// notices: 3DreamEngine's sky job (cubemap/MRT) fails with "the framebuffer is
-// incomplete -- the targets must agree on size", while plain 2D canvases
-// complete fine.
+// notices: an MRT/cubemap set fails with "the framebuffer is incomplete -- the
+// targets must agree on size", while plain 2D canvases complete fine.
 //
-// This one took four rounds between two agents to place, for a specific
-// reason worth recording: THE DAMAGE LASTS EXACTLY ONE LOAD. The next load
-// finds currency already corrected by the first load's own stepFrames, so
-// whoever measured second always saw it clean. Two people on the same box with
-// the same cart binary produced opposite results and two confident, wrong
-// isolations before the MCP client agent spotted the decay.
+// This took four rounds between two agents to place, because THE DAMAGE LASTS
+// EXACTLY ONE LOAD: the next load finds currency already corrected by the
+// first load's own stepFrames, so whoever measured second always saw it clean.
+// I compounded it by running exactly one trial per server restart -- which is
+// the warm-up case that passes even when broken.
 //
-// Measured control, matched 10-trial runs on this box:
-//     fix present : 0/10 fail
-//     fix removed : 9/10 fail   (trial 1 passes -- see the warm-up note below)
+// WHAT THIS FILE PROVES, PRECISELY -- it is weaker than the harness that
+// found the bug, and pretending otherwise would repeat the mistake this whole
+// thread was about:
+//   * Through the MCP (separate sessions, a fresh host per load), glstress
+//     catches it cleanly: 9/10 fail with the fix removed, every failure
+//     stages=51 (63 minus the MRT and cubemap bits -- it names the casualties),
+//     0/10 with the fix. Reproduced independently on this box.
+//   * IN-PROCESS, as written below, the control still PASSES with the fix
+//     removed. One process reusing one shared context does not reproduce what
+//     separate MCP sessions do. So these are GUARDS against regression in the
+//     shape of the bug, and the MCP harness (in the feedback thread) remains
+//     the oracle.
+// glcart.wasc could not express this at all (64x64, no MRT) and passed 3/3
+// with the fix removed. glstress.wasc is purpose-built to the shape:
+// renders at 1920x1080 (above any test window), re-sets its scissor every
+// frame, and builds an MRT set plus a cubemap. Built by the MCP client agent;
+// source in test/fixtures/glstress-src/.
 //
-// !! FIXTURE LIMITATION -- THESE ARE GUARDS, NOT PROOF !!
-// Verified: with the fix line removed, all three still PASS here. glcart.wasc
-// is 64x64 and builds no cubemap/MRT target, so it never exercises the
-// attachment validation that actually breaks. The failing case needs a real
-// 3DreamEngine cart -- reproduced on this box with
-// ~/code/cliemu/games-for-dad/{jewels,eightball}: 9/10 fail without the fix,
-// 0/10 with it, asserting on wasm({op:'debugState'}) lua_ok/gpu2d.
-// That harness lives in the feedback thread, not here, because it needs carts
-// that are build artifacts and not committed. This is the FIFTH bug in this
-// area the fixture cannot express; a corpus cart that renders above the window
-// size AND builds an MRT target is what would make these real.
+// TWO TRAPS, both of which cost real time before the fixture existed:
 //
-// TWO TRAPS this test is built around, both of which cost real time:
-//
-//  1. ASSERT ON debugState, NOT PIXELS. The cart paints its background fine
-//     while the sky FBO fails, so a "content is non-black" check reads
-//     PASSING on a broken frame. lua_ok/gpu2d are the honest signal.
-//  2. WARM UP FIRST. The first load after a fresh process passes even when
-//     broken -- there is no stale private context to inherit yet. A test
-//     without the warm-up flakes at exactly the rate that makes people stop
-//     trusting it.
+//  1. ASSERT ON debugState, NOT PIXELS. The cart paints its background in an
+//     early stage, before the demanding work, so a "content is non-black"
+//     check reads PASSING on a broken frame -- the same silent-wrong-picture
+//     class as the capture-crop bug.
+//  2. WARM UP FIRST. The first load in a fresh process has no stale private
+//     context to inherit and passes even when broken. Without the warm-up this
+//     flakes at exactly the rate that makes people stop trusting it.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -58,58 +58,62 @@ if (_glReady) _glReady = await glStackAvailable();
 const GUARD = _glReady ? {} : { skip: "no usable GL stack here (headless CI) — GL carts cannot load" };
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const GLCART = path.join(HERE, "fixtures", "glcart.wasc");
+const GLCART = path.join(HERE, "fixtures", "glcart.wasc");     // simple 64x64 GL cart
+const STRESS = path.join(HERE, "fixtures", "glstress.wasc");   // 1080p, MRT + cubemap
 
-/**
- * Load a cart, step it, and report whether its GL work actually ran.
- * Returns the framebuffer dimensions plus a "drew something real" flag taken
- * from pixels — the fixture has no debugState, so this is the closest local
- * equivalent to the lua_ok/gpu2d signal the real carts expose.
- */
-async function loadStep({ presentWindow }) {
+/** All six stages completed = 63. A failure names which died via the bitfield. */
+const ALL_STAGES = 63;
+
+/** Load the stress fixture on the SHARED context and report its own verdict. */
+async function runStress() {
   const h = new WasmcartHost();
-  await h.loadMedia({ platform: "wasmcart", path: GLCART, ...(presentWindow ? { presentWindow: true } : {}) });
+  await h.loadMedia({ platform: "wasmcart", path: STRESS });
   try {
-    h.stepFrames(5);
-    const fb = h.getFramebuffer();
-    let nonBlack = 0;
-    for (let i = 0; i < fb.pixels.length; i += 4) {
-      if (fb.pixels[i] || fb.pixels[i + 1] || fb.pixels[i + 2]) nonBlack++;
-    }
-    return { width: fb.width, height: fb.height, nonBlack };
+    h.stepFrames(20);
+    // readDebugState() returns field DESCRIPTORS (name/type/valuePtr) with no
+    // decoded value — the MCP tool decodes them separately. Read each value by
+    // name instead; calling .value on the descriptor silently yields undefined
+    // and every assertion then "fails" for the wrong reason.
+    // readDebugValue returns {name,type,value} — the number is on .value.
+    return { ok: h.readDebugValue("score")?.value, stages: h.readDebugValue("aux")?.value };
   } finally { h.destroy(); }
 }
 
-test("a plain load right after a presentWindow load still renders", GUARD, async () => {
-  // Warm up: the first load in a process has no stale private context to
-  // inherit, so it passes even when the bug is present. Without this the test
-  // is a coin flip.
-  await loadStep({ presentWindow: false });
+/** Create and tear down a PRIVATE context — the thing that leaves it current. */
+async function poison() {
+  const h = new WasmcartHost();
+  await h.loadMedia({ platform: "wasmcart", path: GLCART, presentWindow: true });
+  try { h.stepFrames(5); } finally { h.destroy(); }
+}
 
-  // The failing sequence: private context created, then a shared-context load.
-  await loadStep({ presentWindow: true });
-  const after = await loadStep({ presentWindow: false });
+test("the stress fixture completes every GL stage on a clean load", GUARD, async () => {
+  // Baseline: with nothing else in play, all six stages must pass. If this
+  // fails the fixture or the GL stack is broken, not the ordering.
+  const r = await runStress();
+  assert.equal(r.ok, 1, `expected ok=1, got ok=${r.ok} stages=${r.stages}`);
+  assert.equal(r.stages, ALL_STAGES, "every stage should be set");
+});
 
-  assert.ok(after.nonBlack > 0,
-    "the shared-context cart must render after a presentWindow load");
+test("a shared-context load after a presentWindow load keeps its MRT+cubemap", GUARD, async () => {
+  // THE REGRESSION. Without the claim, this reports stages=51 -- 63 minus the
+  // MRT and cubemap bits -- because those are the attachments validated
+  // against the wrong context.
+  await runStress();          // warm-up: consume the fresh-process pass
+  await poison();             // private context created and destroyed
+  const r = await runStress();
+  assert.equal(r.ok, 1,
+    `MRT/cubemap stages died after a presentWindow load (ok=${r.ok} stages=${r.stages}; `
+    + `51 means the MRT and cubemap passes are the casualties)`);
+  assert.equal(r.stages, ALL_STAGES);
 });
 
 test("ten alternating cycles, none degrade", GUARD, async () => {
-  // The real signal is repetition: the damage lasts exactly one load, so a
-  // single cycle can pass by luck. Ten matches the control run that measured
-  // 9/10 failures without the fix.
-  await loadStep({ presentWindow: false }); // warm-up
+  // The damage lasts exactly one load, so a single cycle can pass by luck.
+  // Ten matches the control run that measured 9/10 failures without the fix.
+  await runStress();          // warm-up
   for (let i = 1; i <= 10; i++) {
-    await loadStep({ presentWindow: true });
-    const plain = await loadStep({ presentWindow: false });
-    assert.ok(plain.nonBlack > 0, `plain load rendered nothing on cycle ${i}`);
-  }
-});
-
-test("the shared context is claimed even when no private context exists", GUARD, async () => {
-  // The plain path must not depend on anything else having run first.
-  for (let i = 1; i <= 3; i++) {
-    const r = await loadStep({ presentWindow: false });
-    assert.ok(r.nonBlack > 0, `consecutive plain load #${i} rendered nothing`);
+    await poison();
+    const r = await runStress();
+    assert.equal(r.ok, 1, `cycle ${i}: ok=${r.ok} stages=${r.stages}`);
   }
 });
