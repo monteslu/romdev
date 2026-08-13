@@ -160,11 +160,24 @@ export function registerPlaytestTools(server, z, sessionKey) {
         // the same session — it shares this session's live host — so report the
         // existing one. (A DIFFERENT session having its own window is fine and
         // independent; this only reuses your own.)
+        const reused = sessions.get(sessionKey);
         return jsonContent({
           opened: true,
           reusedExistingWindow: true,
           loadedMediaPath,
-          frameCount: host.status?.frameCount ?? sessions.get(sessionKey)?.frameCount,
+          frameCount: host.status?.frameCount ?? reused?.frameCount,
+          // Report the present path here too — a reopen must not be the one
+          // call that hides a 5-8x slow window.
+          presenting: reused?.presenting,
+          ...(reused?.presenting === "readback"
+            ? {
+                presentingWarning:
+                  "This GL cart is on the CPU-readback present path — typically 5-8x " +
+                  "slower than it needs to be. To fix: playtest({op:'stop'}), " +
+                  "loadMedia({..., presentWindow:true}), then reopen. NOTE the reload " +
+                  "restarts the cart, so do it BEFORE the human starts playing.",
+              }
+            : {}),
           note: "A playtest window was already open for this session — reused it (it shares your session's live host and already shows your latest loaded/rebuilt ROM). Call playtestStop first to reopen with a different scale/aspect. (Other agents' windows are separate.)",
         });
       }
@@ -284,6 +297,28 @@ export function registerPlaytestTools(server, z, sessionKey) {
         scale,
         aspect,
         controllerCount: session.controllerCount,
+        // WHICH present path this window got. Reported because the difference
+        // is 5-8x on a GL cart and used to be invisible: nothing in this
+        // response said whether the window was GPU-direct or dragging every
+        // frame through the CPU, so the only symptom was a human saying the
+        // game felt slow. "gl-direct" | "readback" | "software".
+        presenting: session.presenting,
+        // A GL cart on the readback path is the one case that is both slow AND
+        // fixable by the caller, so say so where an agent will actually read
+        // it. (The flag has to be set at LOAD time — the GL context binds when
+        // the cart's wasm loads — which is why `open` cannot just fix it, and
+        // why reloading resets the cart rather than being a free upgrade.)
+        ...(session.presenting === "readback"
+          ? {
+              presentingWarning:
+                "This GL cart is on the CPU-readback present path — typically 5-8x " +
+                "slower than it needs to be (measured on 1080p carts: 27.9/45.1/54.9 ms " +
+                "per frame vs 3.4/6.1/9.1 GPU-direct; the worst case is a human playing " +
+                "at 41 fps). To fix: loadMedia({..., presentWindow:true}) then reopen. " +
+                "NOTE the reload restarts the cart, so do it BEFORE the human starts " +
+                "playing, not mid-session.",
+            }
+          : {}),
         // Eviction survivability: while this window is open we roll a .state to
         // disk so the human's manual progress survives a session eviction.
         autoCheckpointPath,
@@ -373,6 +408,18 @@ export function registerPlaytestTools(server, z, sessionKey) {
         // presentMs SDL render, audioQueuedMs SDL queue depth). This is the
         // "is it actually slow, and WHERE" readout.
         ...(session.perf ? { perf: session.perf } : {}),
+        // The present path belongs next to perf: this is where someone asking
+        // "is it slow, and WHERE" looks, and on a GL cart the readback path is
+        // the single biggest answer (convertMs is exactly 0 on gl-direct).
+        presenting: session.presenting,
+        ...(session.presenting === "readback"
+          ? {
+              presentingWarning:
+                "GL cart on the CPU-readback present path — typically 5-8x slower " +
+                "than GPU-direct. Reload with loadMedia({presentWindow:true}) and " +
+                "reopen (the reload restarts the cart).",
+            }
+          : {}),
         fpsOverlay: session.fpsOverlay ?? false,
         ...(matches ? {} : {
           hint: "The active host diverged from the playtest window (a build({output:'run'})/" +

@@ -503,8 +503,16 @@ export async function playtest(args) {
       ? "[playtest] GL cart presents DIRECT (GPU blit + swap — no readback)."
       : "[playtest] GL cart could not bind the window; using readback present.");
   } else if (!glPresent && host.status?.gl === "rendered") {
-    log.debug("[playtest] GL cart on the shared offscreen context — readback present. "
-      + "Load with presentWindow:true for GPU-direct present.");
+    // WARN, not debug: this window is about to run 5-8x slower than it needs
+    // to (measured on three 1080p carts: 27.9/45.1/54.9 ms per frame on
+    // readback vs 3.4/6.1/9.1 GL-direct — the worst case is a human playing at
+    // 41 fps). It used to be log.debug, so in practice nobody saw it and the
+    // window opened slow without complaint. The caller also gets
+    // `presenting:"readback"` in the op:'open' result (see ptOpen) so an agent
+    // reading the tool response can see it without reading the server log.
+    log.info("[playtest] GL cart is on the SHARED offscreen context, so this window "
+      + "presents by CPU readback — typically 5-8x slower than it needs to be. "
+      + "Reload with loadMedia({presentWindow:true}) and reopen for GPU-direct present.");
   }
 
   // Open audio at the core's NATIVE sample rate, not a hardcoded one.
@@ -1593,6 +1601,18 @@ export async function playtest(args) {
     closed: closedPromise,
     get frameCount() { return frameCount; },
     get running() { return running; },
+    // WHICH present path this window actually got. Reported in the op:'open'
+    // result because the difference is 5-8x on a GL cart and was previously
+    // invisible: nothing in the response said whether the window was on the
+    // GPU-direct path or dragging every frame through the CPU, so the only
+    // symptom was a human saying the game felt bad.
+    //   "gl-direct"  — GPU blit + swap, no readback (bezel or cart)
+    //   "readback"   — CPU round trip; on a GL cart this is the slow path
+    //   "software"   — a 2D cart/core, where readback IS the only path
+    get presenting() {
+      if (glPresent || cartGlPresent) return "gl-direct";
+      return host.status?.gl === "rendered" ? "readback" : "software";
+    },
     // Live perf readout (rolling 1s fps/tickHz + per-stage EMAs) — the answer
     // to "the window feels slow, WHERE is the time going".
     get perf() { return { ...perf }; },
