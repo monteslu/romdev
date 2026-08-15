@@ -55,10 +55,15 @@ export function attachObserver(app, ...httpServers) {
 
   // Socket.io on the primary server, then ATTACHED to every other listener too
   // (io.attach is additive). No auth — loopback only.
-  const io = new SocketIOServer(servers[0], {
-    cors: { origin: "*" },
-  });
-  for (const s of servers.slice(1)) io.attach(s, { cors: { origin: "*" } });
+  // maxHttpBufferSize is a STATED choice, not socket.io's silent 1MB default.
+  // A live `event` carrying one full-size composite PNG can exceed 1MB on its
+  // own, and the default doesn't error visibly — it closes the connection, the
+  // client reconnects, and the page looks like it's hanging. The ring is
+  // byte-bounded (bus.js RING_MAX_BYTES) so replay stays well under this;
+  // loopback-only, so a generous ceiling costs nothing.
+  const ioOpts = { cors: { origin: "*" }, maxHttpBufferSize: 32 * 1024 * 1024 };
+  const io = new SocketIOServer(servers[0], ioOpts);
+  for (const s of servers.slice(1)) io.attach(s, ioOpts);
 
   io.on("connection", (socket) => {
     // On connect, replay the ring buffer so the client sees recent

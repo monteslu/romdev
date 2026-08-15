@@ -302,6 +302,12 @@
       if (ev.type === "call") s.events.push(ev);
       if (ev.images && ev.images.length) {
         for (const img of ev.images) {
+          // Replayed events older than the newest few carry `omitted:true`
+          // placeholders instead of base64 (the ring drops payloads to stay
+          // under its byte budget — see bus.js). Skip them: rendering one
+          // would produce a broken data: URI, and a stale placeholder must
+          // never evict a real image we already have for this tool.
+          if (!img || img.omitted || typeof img.base64 !== "string") continue;
           // One latest image per "tool" (kind = tool name); ev.tool
           // identifies which inspect call produced it.
           s.latestByKind[ev.tool] = { ts: ev.ts, base64: img.base64,

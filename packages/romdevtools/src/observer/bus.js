@@ -40,11 +40,63 @@
 import { EventEmitter } from "node:events";
 
 // Replay buffer for a newly-connected observer: "what just happened", not a
-// session archive. Entries are already payload-truncated (see summarise below),
-// so this is small either way, but 200 is more scrollback than the livestream
-// pane ever shows. NOTE this ring is GLOBAL, not per-session -- a busy sweep
+// session archive. NOTE this ring is GLOBAL, not per-session -- a busy sweep
 // across many carts shares the same 50 slots.
 const RING_SIZE = Number(process.env.ROMDEV_OBSERVER_RING) || 50;
+
+// The ring is bounded in EVENTS; these bound it in BYTES. `result` goes through
+// summarizeForLog, but `images` is a SIBLING field that never did -- so a ring
+// full of frames was 50 full-size base64 PNGs, and the single `replay` emit on
+// connect measured ~20MB against socket.io's 1MB default maxHttpBufferSize.
+// Over that limit the server closes the connection, the client reconnects, and
+// gets the same oversized payload again: an invisible reconnect loop whose only
+// symptom was "the livestream page sometimes takes forever to render". It was
+// intermittent because a ring of cheap text calls replays in a few KB.
+//
+// Live emits still carry full images -- only what we RETAIN is stripped. The
+// client keeps just the newest image per (session, tool) anyway (latestByKind),
+// so historical frames in a replay were nearly worthless to begin with.
+// `??`-style resolution, NOT `||`: a deliberate 0 (keep no image payloads at
+// all) must be honoured, and `|| default` silently rewrites it to the default.
+function envNum(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+// Keep ONE full frame by default. The client shows the newest image per tool,
+// so one is what a freshly-opened page can actually display; retaining 3 x
+// 400KB composites still cleared 1MB, which is the limit that was breaking us.
+const RING_IMAGE_KEEP = envNum("ROMDEV_OBSERVER_RING_IMAGES", 1);
+const RING_MAX_BYTES = envNum("ROMDEV_OBSERVER_RING_BYTES", 8 * 1024 * 1024);
+
+/** Rough byte cost of a retained event (base64 dominates; JSON.stringify is honest enough). */
+function eventBytes(event) {
+  try {
+    return JSON.stringify(event).length;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Replace an event's image payloads with `{omitted:true, bytes}` placeholders,
+ * keeping kind/mimeType so the log line can still say a frame happened. Returns
+ * the event unchanged (same reference) when it carries no image payload.
+ */
+function stripImagePayloads(event) {
+  if (!event || !Array.isArray(event.images) || event.images.length === 0) return event;
+  if (!event.images.some((img) => typeof img?.base64 === "string")) return event;
+  return {
+    ...event,
+    images: event.images.map((img) =>
+      typeof img?.base64 === "string"
+        ? { kind: img.kind, mimeType: img.mimeType, omitted: true, bytes: img.base64.length }
+        : img,
+    ),
+  };
+}
 
 class ObserverBus extends EventEmitter {
   constructor() {
@@ -57,14 +109,57 @@ class ObserverBus extends EventEmitter {
   }
 
   push(event) {
+    // Retain a byte-bounded copy; emit the full-fidelity event to live clients.
+    // Newest RING_IMAGE_KEEP image-bearing events keep their payload so a fresh
+    // page still opens on a picture; older ones degrade to placeholders.
     this.ring.push(event);
+    this.#demoteOldImages();
     if (this.ring.length > RING_SIZE) this.ring.shift();
+    this.#enforceByteBudget();
     this.emit("event", event);
+  }
+
+  /** Keep payloads only on the newest RING_IMAGE_KEEP image-bearing entries. */
+  #demoteOldImages() {
+    let kept = 0;
+    for (let i = this.ring.length - 1; i >= 0; i--) {
+      const ev = this.ring[i];
+      if (!Array.isArray(ev?.images) || ev.images.length === 0) continue;
+      const hasPayload = ev.images.some((img) => typeof img?.base64 === "string");
+      if (!hasPayload) continue;
+      if (kept < RING_IMAGE_KEEP) { kept++; continue; }
+      this.ring[i] = stripImagePayloads(ev);
+    }
+  }
+
+  /**
+   * Structural backstop: evict oldest until the ring fits RING_MAX_BYTES. Runs
+   * after image demotion, so it only bites when even the retained payloads (or
+   * a flood of large text results) exceed the budget.
+   */
+  #enforceByteBudget() {
+    let total = 0;
+    for (const ev of this.ring) total += eventBytes(ev);
+    while (this.ring.length > 1 && total > RING_MAX_BYTES) {
+      total -= eventBytes(this.ring.shift());
+    }
+    // A single event over budget can't be evicted away (we always keep one);
+    // strip its payload so replay stays bounded no matter what.
+    if (this.ring.length === 1 && total > RING_MAX_BYTES) {
+      this.ring[0] = stripImagePayloads(this.ring[0]);
+    }
   }
 
   /** Snapshot the ring (newest-last) for replay to a new subscriber. */
   replay() {
     return [...this.ring];
+  }
+
+  /** Total retained bytes — for tests and diagnostics. */
+  ringBytes() {
+    let total = 0;
+    for (const ev of this.ring) total += eventBytes(ev);
+    return total;
   }
 
   /** List active session keys. */
