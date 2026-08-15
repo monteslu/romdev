@@ -76,6 +76,7 @@ import { installObserverMiddleware } from "../observer/tool-wrap.js";
 import { observer } from "../observer/bus.js";
 import { mountHttpToolRoutes } from "../http/routes.js";
 import { mcpPreamble } from "../http/skill-doc.js";
+import { resolveXauthority } from "../host/xauth.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -144,6 +145,13 @@ function cliArg(name) {
 }
 
 async function main() {
+  // BEFORE anything can open a GL context: a compositor restart leaves the
+  // session exporting a stale XAUTHORITY, and the only symptom is EGL failing
+  // with "Invalid MIT-MAGIC-COOKIE-1 key" -- which reads as a GPU problem and
+  // silently costs every GL cart its GPU. Only replaces a cookie that is
+  // demonstrably broken (see host/xauth.js).
+  resolveXauthority({ log });
+
   const instructions = await loadInstructions();
   const host = cliArg("host") ?? process.env.HOST ?? "127.0.0.1";
   // Precedence: --port flag > PORT env > default 7331.
