@@ -213,13 +213,38 @@
 
   // Per-session state.
   // sessionKey → {
-  //   events: [],         // chronological event list
-  //   latestByKind: {},   // kind → latest image-event
+  //   events: [],         // chronological event list, capped at MAX_EVENTS
+  //   latestByKind: {},   // kind → latest image-event, capped at MAX_IMAGE_KINDS
   //   unseen: 0,          // badge count when not active
   //   connected: true,
   // }
   const sessions = new Map();
   let activeSessionKey = null;
+
+  // A livestream page is left open for hours next to a long agent run. Every
+  // bound here exists because the unbounded version grew without limit for as
+  // long as the tab stayed open:
+  //
+  //   events        — one entry per tool call, forever. A long sweep is tens of
+  //                   thousands of objects, each holding its args/result
+  //                   summary, and renderLog() rebuilt a DOM row for EVERY one
+  //                   on EVERY event.
+  //   latestByKind  — one full base64 PNG per distinct tool name. Bounded by
+  //                   the number of tools (~40), but that is ~40 full-size
+  //                   frames pinned in memory, which is tens of MB.
+  //
+  // Both are display state for a monitoring feed, not an archive: the log pane
+  // shows the newest rows and nobody scrolls back a thousand calls.
+  const MAX_EVENTS = 300;        // per session, oldest dropped first
+  const MAX_IMAGE_KINDS = 8;     // per session, oldest-by-ts dropped first
+  const MAX_LOG_ROWS = 200;      // DOM rows built per render
+  // Deliberately generous: many concurrent sessions is a NORMAL romdev shape
+  // (a fan-out across carts), and a tab disappearing is worse than a tab you
+  // scroll past. What must not happen is any single session growing without
+  // limit — that is what MAX_EVENTS / MAX_IMAGE_KINDS above bound. This is only
+  // a backstop against unbounded tab accumulation from sessions that never
+  // send a disconnect, and it evicts DEAD sessions only.
+  const MAX_SESSIONS = 96;
 
   socket.on("connect", () => {
     statusEl.textContent = "connected";
@@ -259,26 +284,73 @@
     autoSelectIfSingle();
   });
 
+  // Append an event, dropping the oldest once the cap is reached. Splicing
+  // from the front keeps the array chronological, which renderLog() relies on.
+  function pushEvent(s, ev) {
+    s.events.push(ev);
+    if (s.events.length > MAX_EVENTS) {
+      s.events.splice(0, s.events.length - MAX_EVENTS);
+    }
+  }
+
+  // Record the newest image for a tool, evicting the least-recently-updated
+  // kind once we hold too many. Each entry pins a full base64 PNG, so this is
+  // where the page's memory actually goes — one per distinct tool name adds up
+  // to tens of MB over a long run.
+  function setLatestImage(s, ev, img) {
+    s.latestByKind[ev.tool] = {
+      ts: ev.ts, base64: img.base64, mimeType: img.mimeType,
+      tool: ev.tool, platform: ev.platform ?? null, caption: ev.caption ?? null,
+    };
+    const kinds = Object.keys(s.latestByKind);
+    if (kinds.length > MAX_IMAGE_KINDS) {
+      kinds
+        .sort((a, b) => s.latestByKind[a].ts - s.latestByKind[b].ts)
+        .slice(0, kinds.length - MAX_IMAGE_KINDS)
+        .forEach((k) => { delete s.latestByKind[k]; });
+    }
+  }
+
   function ensureSession(sessionKey) {
     let s = sessions.get(sessionKey);
     if (!s) {
       s = { events: [], latestByKind: {}, latestAnsi: null,
-            unseen: 0, connected: true };
+            unseen: 0, connected: true, lastTs: Date.now() };
       sessions.set(sessionKey, s);
+      pruneSessions();
     }
     return s;
+  }
+
+  // Sessions are pruned on disconnect, but only when a disconnect actually
+  // arrives — an agent killed mid-run, or a server restart, leaves its tab (and
+  // every event and image it retained) behind forever. Cap the total and drop
+  // the coldest DISCONNECTED sessions first; a connected session, and whatever
+  // the user is currently looking at, are never evicted out from under them.
+  function pruneSessions() {
+    if (sessions.size <= MAX_SESSIONS) return;
+    const victims = [...sessions.entries()]
+      .filter(([k, v]) => !v.connected && k !== activeSessionKey)
+      .sort((a, b) => (a[1].lastTs || 0) - (b[1].lastTs || 0));
+    for (const [k] of victims) {
+      if (sessions.size <= MAX_SESSIONS) break;
+      sessions.delete(k);
+    }
   }
 
   function handleEvent(ev, suppressUnseen) {
     if (!ev.sessionKey) return;
     const s = ensureSession(ev.sessionKey);
+    // Recency for pruneSessions(). Event ts is server-stamped and can be stale
+    // on replay, so track when WE last saw traffic for this session.
+    s.lastTs = Date.now();
 
     if (ev.type === "session_connect") {
       s.connected = true;
-      s.events.push(ev);
+      pushEvent(s, ev);
     } else if (ev.type === "session_disconnect") {
       s.connected = false;
-      s.events.push(ev);
+      pushEvent(s, ev);
       // Prune the tab a short while after it disconnects so the strip
       // tracks reality instead of accumulating one tab per session ever
       // seen. Keep it briefly (and never yank the tab the user is actively
@@ -299,7 +371,7 @@
       // breakpoint/watch tool that advanced the emulator but didn't return an
       // image to the agent) — rendered async so it never slowed the agent. It
       // carries only images; the matching `call` event already logged the call.
-      if (ev.type === "call") s.events.push(ev);
+      if (ev.type === "call") pushEvent(s, ev);
       if (ev.images && ev.images.length) {
         for (const img of ev.images) {
           // Replayed events older than the newest few carry `omitted:true`
@@ -310,9 +382,7 @@
           if (!img || img.omitted || typeof img.base64 !== "string") continue;
           // One latest image per "tool" (kind = tool name); ev.tool
           // identifies which inspect call produced it.
-          s.latestByKind[ev.tool] = { ts: ev.ts, base64: img.base64,
-                                      mimeType: img.mimeType, tool: ev.tool, platform: ev.platform ?? null,
-                                      caption: ev.caption ?? null };
+          setLatestImage(s, ev, img);
         }
       }
       // screenshotAscii pushes both the PNG (above) AND the raw ANSI
@@ -546,11 +616,17 @@
     }
     if (!activeSessionKey) return;
     const s = sessions.get(activeSessionKey);
-    // Newest first — easier to scan when working live.
-    const evs = [...s.events].reverse();
-    for (const ev of evs) {
-      logListEl.appendChild(renderEvent(ev));
+    // Newest first — easier to scan when working live. Only the newest
+    // MAX_LOG_ROWS become DOM nodes: renderAll() runs on EVERY event, so the
+    // cost here is paid per tool call, and building a row for every retained
+    // event made a long-lived tab slower the longer it stayed open. Build into
+    // a fragment so the pane reflows once instead of once per row.
+    const frag = document.createDocumentFragment();
+    const start = Math.max(0, s.events.length - MAX_LOG_ROWS);
+    for (let i = s.events.length - 1; i >= start; i--) {
+      frag.appendChild(renderEvent(s.events[i]));
     }
+    logListEl.appendChild(frag);
   }
 
   function renderEvent(ev) {

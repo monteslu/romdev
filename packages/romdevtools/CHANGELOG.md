@@ -4,6 +4,27 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.116.2 — 2026-08-13
+
+- **`playtest` says which present path a window actually got.** `op:'open'`
+  and `op:'status'` now return `presenting` (`"gl-direct"` | `"readback"` |
+  `"software"`), and a GL cart on the readback path also returns
+  `presentingWarning` with the numbers and the fix. Measured on three 1080p
+  carts: readback 27.85 / 45.13 / 54.89 ms per frame against 3.42 / 6.11 /
+  9.11 GL-direct — the worst case is a human playing at 41 fps. Nothing in the
+  response used to say which path a window got, and the one line that noticed
+  was `log.debug`, so the only symptom was a human saying the game felt bad.
+  That line is `log.info` now, and the reused-window branch reports it too — a
+  reopen must not be the one call that hides a slow window.
+
+  Deliberately NOT auto-reloading with `presentWindow:true` on open, though
+  `open` is where the intent becomes known: `WasmcartHost` has no
+  `serializeState` (only cart save data), so the reload would silently discard
+  the player's progress, and `open` cannot know whether a human is mid-play.
+  Trading a visible 5-8x perf problem for invisible data loss is the wrong
+  direction. The warning names the reload as the fix and says to do it before
+  the human starts.
+
 ## 0.116.1 — 2026-08-12
 
 - **A `presentWindow` load no longer poisons later plain loads.** Tearing down
