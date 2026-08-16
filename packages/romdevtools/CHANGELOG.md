@@ -4,44 +4,134 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
-## 0.116.2 — 2026-08-13
+## 0.117.0 — 2026-08-16
 
-- **`playtest` says which present path a window actually got.** `op:'open'`
-  and `op:'status'` now return `presenting` (`"gl-direct"` | `"readback"` |
-  `"software"`), and a GL cart on the readback path also returns
-  `presentingWarning` with the numbers and the fix. Measured on three 1080p
-  carts: readback 27.85 / 45.13 / 54.89 ms per frame against 3.42 / 6.11 /
-  9.11 GL-direct — the worst case is a human playing at 41 fps. Nothing in the
-  response used to say which path a window got, and the one line that noticed
-  was `log.debug`, so the only symptom was a human saying the game felt bad.
-  That line is `log.info` now, and the reused-window branch reports it too — a
-  reopen must not be the one call that hides a slow window.
+Everything since 0.116.0, which is the last version on npm. 0.116.1 and
+0.116.2 were bumped in the repo but never published, so their changes ship
+here rather than carrying release dates that never happened.
 
-  Deliberately NOT auto-reloading with `presentWindow:true` on open, though
-  `open` is where the intent becomes known: `WasmcartHost` has no
-  `serializeState` (only cart save data), so the reload would silently discard
-  the player's progress, and `open` cannot know whether a human is mid-play.
-  Trading a visible 5-8x perf problem for invisible data loss is the wrong
-  direction. The warning names the reload as the fix and says to do it before
-  the human starts.
+Four of these are GL-context lifetime bugs found in the same area within a
+week of each other. That is the theme of the release: one process-wide shared
+context plus per-host private ones, and every place that assumed whatever was
+current was the right one.
 
-## 0.116.1 — 2026-08-12
+### Fixed — the shared GL context is claimed at LOAD, not just at step
 
-- **A `presentWindow` load no longer poisons later plain loads.** Tearing down
-  a presentWindow host destroyed its private GL context and left NOTHING
-  current — native-gles unbinds on destroy and does not fall back — so the next
-  cart to load on the shared offscreen context made GL calls against a null
-  current context and died with `Cannot read properties of null (reading
-  '_id')`. One `presentWindow:true` load broke every plain `loadMedia` after
-  it, for the life of the server process.
+A cart loading on the shared offscreen context built its FBOs against
+whatever context happened to be current. After a `presentWindow` load that is
+another host's PRIVATE context, so the cart ran on the shared context with
+attachments validated against a different one. Only a demanding target
+notices: 3DreamEngine's sky job (cubemap/MRT) fails with "the framebuffer is
+incomplete — the targets must agree on size", while plain 2D canvases complete
+fine. The private path already claimed its context at load; this one did not.
 
-  It presented as a per-cart rendering fault rather than a lifetime bug: the
-  MCP client agent screenshotted five shipped carts and got 4 of 5 black or
-  failing on the DEFAULT readback path while all five worked with
-  `presentWindow:true`. The one that worked was simply first in the list,
-  before any direct load had happened — nothing about that cart differed.
-  Fixed by handing currency back to the shared context after destroying a
-  private one. Affects 0.116.0 only.
+Why it took four reports to place: **the damage lasts exactly one load.** The
+next load finds currency already corrected by the first load's own
+`stepFrames`, so the second measurement always passes. Two people on the same
+box with the same cart binary got opposite answers depending purely on who
+measured second, and each produced a confident, wrong isolation from it.
+
+It shipped on reasoning rather than on a green run — the shared path must
+never rely on another host having left the right context current — and the
+reproduction followed: 9/10 fail without the fix, 0/10 with it. The earlier
+"cannot reproduce" was a single trial each time, and the first load after a
+fresh server has no stale private context to inherit, so it passes even when
+broken.
+
+`test/fixtures/glstress.wasc` is the fixture that can actually see this
+(1920x1080, re-set scissor, MRT set plus a cubemap); `glcart.wasc` is 64x64
+and builds no such target, so it never reaches the attachment validation. The
+committed tests are **regression guards, not proof**, and say so: in-process,
+one process reusing one shared context does not reproduce what separate MCP
+sessions do. The MCP harness stays the oracle.
+
+### Fixed — EGL failures that were really an X auth problem
+
+A compositor restart regenerates the Xwayland auth file, but a long-lived
+login session keeps exporting the path it was handed at login. The old file
+still exists and is still readable, so nothing looks wrong — EGL just starts
+failing with `Invalid MIT-MAGIC-COOKIE-1 key` / `eglInitialize failed`, which
+reads as a GPU or driver fault. Found on a box whose `$XAUTHORITY` pointed at
+an Aug 5 cookie while the server had moved to an Aug 13 one: **every GL cart
+had silently lost the GPU**, which is never something to fall back from
+quietly.
+
+`resolveXauthority()` runs before anything can create a context. It acts only
+when the current cookie is demonstrably broken and only picks a candidate that
+demonstrably works — verification is a real `xdpyinfo` connection, not an mtime
+guess, because newest-file-wins would happily select a newer-but-wrong cookie.
+Without `xdpyinfo` there is no oracle, so it changes nothing rather than
+swapping blind. Scoped to Linux/X11; Windows and macOS take a `not-linux`
+early return before any fs or exec work.
+
+### Fixed — the livestream replay could be ~20MB
+
+`result` went through `summarizeForLog`; `images` is a sibling field that
+never did, so a ring of 50 frames retained 50 full-size base64 PNGs.
+socket.io's default `maxHttpBufferSize` is 1MB, and exceeding it does not
+error visibly — the server closes the connection and the client reconnects
+into the same oversized payload. The symptom was "the livestream page
+sometimes takes a very long time to render", intermittent because a ring of
+cheap text calls replays in a few KB.
+
+Three bounds, smallest first: image payloads are retained only on the newest
+event (`ROMDEV_OBSERVER_RING_IMAGES`), older ones degrading to
+`{omitted, bytes}` placeholders; a byte budget
+(`ROMDEV_OBSERVER_RING_BYTES`, 8MB) evicts oldest as a structural backstop;
+and `maxHttpBufferSize` is now a stated 32MB choice rather than a silent 1MB
+default. Measured on the shape that broke: **20,486,282 → 416,804 bytes, 49x.**
+
+### Fixed — the livestream PAGE grew for as long as the tab stayed open
+
+The server-side ring is byte-bounded; the page it feeds was not. Every piece
+of per-session state grew without limit — one event entry per tool call
+forever, one full base64 PNG per distinct tool name (~40 tools), one entry per
+session key ever seen — and `renderLog()` rebuilt a DOM row for every retained
+event on every incoming event, so a tab left open next to a long run got
+steadily slower as well as fatter.
+
+Caps are per-session so a fan-out across carts stays a normal shape:
+`MAX_EVENTS` 300, `MAX_IMAGE_KINDS` 8, `MAX_LOG_ROWS` 200, and `MAX_SESSIONS`
+96 as a backstop that evicts DEAD sessions only — never a connected one, and
+never the tab being viewed. The tests run against the REAL shipped HTML (the
+inline IIFE is extracted and run on a stub DOM) rather than a hand-copy that
+would pass forever while the page regressed.
+
+### Added — `playtest` says which present path a window actually got
+
+`op:'open'` and `op:'status'` now return `presenting` (`"gl-direct"` |
+`"readback"` | `"software"`), and a GL cart on the readback path also returns
+`presentingWarning` with the numbers and the fix. Measured on three 1080p
+carts: readback 27.85 / 45.13 / 54.89 ms per frame against 3.42 / 6.11 / 9.11
+GL-direct — the worst case is a human playing at 41 fps. Nothing in the
+response used to say which path a window got, and the one line that noticed
+was `log.debug`, so the only symptom was a human saying the game felt bad.
+That line is `log.info` now, and the reused-window branch reports it too — a
+reopen must not be the one call that hides a slow window.
+
+Deliberately NOT auto-reloading with `presentWindow:true` on open, though
+`open` is where the intent becomes known: `WasmcartHost` has no
+`serializeState` (only cart save data), so the reload would silently discard
+the player's progress, and `open` cannot know whether a human is mid-play.
+Trading a visible 5-8x perf problem for invisible data loss is the wrong
+direction. The warning names the reload as the fix and says to do it before
+the human starts.
+
+### Fixed — a `presentWindow` load no longer poisons later plain loads
+
+Tearing down a presentWindow host destroyed its private GL context and left
+NOTHING current — native-gles unbinds on destroy and does not fall back — so
+the next cart to load on the shared offscreen context made GL calls against a
+null current context and died with `Cannot read properties of null (reading
+'_id')`. One `presentWindow:true` load broke every plain `loadMedia` after it,
+for the life of the server process.
+
+It presented as a per-cart rendering fault rather than a lifetime bug: five
+shipped carts screenshotted, 4 of 5 black or failing on the DEFAULT readback
+path while all five worked with `presentWindow:true`. The one that worked was
+simply first in the list, before any direct load had happened. Fixed by
+handing currency back to the shared context after destroying a private one.
+Affects 0.116.0 only.
 
 ## 0.116.0 — 2026-08-12
 
