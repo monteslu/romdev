@@ -290,7 +290,7 @@ export function registerInputTools(server, z, sessionKey) {
     "when ITS code polls; re-apply immediately before the consuming stepFrames and verify via the held-buttons RAM " +
     "byte, not this echo.",
     {
-      op: z.enum(["set", "press", "sequence", "navigate", "layout", "pressKey", "typeText", "joyport", "pointer"]).describe("set/hold buttons; press one button; run a sequence; navigate a menu; get the input layout. WASMCART: pointer (absolute mouse/touch — position the cursor at an exact {x,y} and click; for carts that declare FLAG_POINTER). C64-ONLY: pressKey/typeText/joyport."),
+      op: z.enum(["set", "press", "sequence", "navigate", "layout", "pressKey", "typeText", "joyport", "pointer", "wheel"]).describe("set/hold buttons; press one button; run a sequence; navigate a menu; get the input layout. WASMCART: pointer (absolute mouse/touch — position the cursor at an exact {x,y} and click; for carts that declare FLAG_POINTER), wheel (scroll delta for the frame). C64-ONLY: pressKey/typeText/joyport."),
       // pointer (wasmcart absolute cursor)
       x: z.number().int().optional().describe("op=pointer: cursor X in cart pixels."),
       y: z.number().int().optional().describe("op=pointer: cursor Y in cart pixels."),
@@ -298,6 +298,11 @@ export function registerInputTools(server, z, sessionKey) {
       right: z.boolean().optional().describe("op=pointer: hold the right/secondary mouse button."),
       id: z.number().int().min(0).max(9).optional().describe("op=pointer: which pointer SLOT (wasmcart's wc_pointer_t[10]). 0 = MOUSE (default). 1-9 = TOUCH FINGERS — what an Android/tablet host fills in. Use 1+ to test the commonest portability trap: a cart that polls only pointer[0] works perfectly with a desktop mouse and silently ignores every touch on a phone. Multi-finger gestures (pinch, two-finger drag) = several slots active at once."),
       active: z.boolean().optional().describe("op=pointer: false RELEASES this slot (finger lifted / cursor gone). Default true. For a touch slot, set active:false to end the contact — that is what a real host does on touchend."),
+      // wheel (wasmcart scroll delta, ABI v3.1)
+      notches: z.number().optional().describe("op=wheel: vertical scroll in NOTCHES — one click of a detented mouse wheel is 1, and fractions are allowed (0.25 = a trackpad nudge). POSITIVE IS UP / away from you, matching SDL and LOVE's wheelmoved. This is the units a cart author thinks in; `dy` is the raw 1/120 form if you need it."),
+      notchesX: z.number().optional().describe("op=wheel: horizontal scroll in notches, positive RIGHT. Tilt wheels and trackpads produce this; most mice never do."),
+      dx: z.number().int().optional().describe("op=wheel: raw horizontal delta in 1/120 of a notch (the WHEEL_DELTA convention). Use `notchesX` unless you are asserting exact ABI values."),
+      dy: z.number().int().optional().describe("op=wheel: raw vertical delta in 1/120 of a notch, positive UP. Use `notches` unless you are asserting exact ABI values."),
       // set
       ports: z.array(port).min(1).max(2).optional().describe("op=set: per-port input. [{a:true,right:true}] holds A+Right on port 0."),
       // press
@@ -339,6 +344,41 @@ export function registerInputTools(server, z, sessionKey) {
             jsonContent({ pointer: { id, x: args.x, y: args.y, left: !!args.left, right: !!args.right, active } }),
             host,
             `pointer${id ? ` #${id}` : ""} ${args.x},${args.y}`,
+          );
+        }
+        case "wheel": {
+          const host = getHost(sessionKey);
+          if (typeof host?.setInput !== "function") throw new Error("input({op:'wheel'}): no host loaded.");
+          /* Two ways in, because they serve different callers: `notches` is
+           * what a cart author thinks in (one click = 1, fractions allowed),
+           * and `dx`/`dy` are the raw 1/120 units for a test asserting exact
+           * ABI values. Notches win when both are given, and are rounded
+           * rather than truncated so 0.1 notches is 12 and not 0. */
+          const hasNotch = args.notches != null || args.notchesX != null;
+          const hasRaw = args.dx != null || args.dy != null;
+          if (!hasNotch && !hasRaw) {
+            throw new Error(
+              "input({op:'wheel'}): pass `notches` (one wheel click = 1, positive UP) " +
+              "or the raw `dy` in 1/120 units. `notchesX`/`dx` scroll horizontally.",
+            );
+          }
+          const dx = hasNotch ? Math.round((args.notchesX ?? 0) * 120) : (args.dx | 0);
+          const dy = hasNotch ? Math.round((args.notches ?? 0) * 120) : (args.dy | 0);
+          if (dx === 0 && dy === 0) {
+            throw new Error(
+              "input({op:'wheel'}): a zero delta is a no-op — the host CLEARS the wheel " +
+              "after every frame, so there is nothing to zero out. Pass a non-zero scroll.",
+            );
+          }
+          /* The delta belongs to the NEXT frame the cart runs: CartHost writes
+           * it before wc_render and zeroes it after, so this must be followed
+           * by a frame step to be observed. Repeated calls before that step
+           * ACCUMULATE, which is how a real host delivers a trackpad flick. */
+          host.setInput({ wheel: { dx, dy } });
+          return attachObserverFrame(
+            jsonContent({ wheel: { dx, dy, notches: +(dy / 120).toFixed(4), notchesX: +(dx / 120).toFixed(4) } }),
+            host,
+            `wheel ${dy > 0 ? "up" : dy < 0 ? "down" : ""}${dx ? ` x${dx}` : ""} ${(dy / 120).toFixed(2)}`,
           );
         }
         case "press": {

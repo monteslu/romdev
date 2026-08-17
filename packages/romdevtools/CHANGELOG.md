@@ -4,6 +4,49 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.118.0 — 2026-08-17
+
+### Added — the scroll wheel reaches wasmcart carts: `input({op:'wheel'})`
+
+wasmcart 0.22.0 added `wc_wheel_t {int32 dx, dy}` behind `wc_info_t.wheel_ptr`
+(ABI v3.1), gated by the existing `WC_FLAG_POINTER`. `WasmcartHost` never
+forwarded it, so a cart that bound one continuous axis — camera zoom, a
+throttle, a scrub bar — had no way to be driven headlessly, and the playtest
+window dropped the platform's wheel events on the floor.
+
+```
+input({op:'wheel', notches: 1})     # one click of a detented wheel, UP
+input({op:'wheel', notches: -0.25}) # a trackpad nudge, DOWN
+input({op:'wheel', notchesX: 1})    # horizontal (tilt wheels, trackpads)
+input({op:'wheel', dy: 120})        # the raw 1/120 units, for ABI assertions
+```
+
+`notches` is the unit a cart author thinks in; `dx`/`dy` are the raw
+1/120-notch WHEEL_DELTA form for a test pinning exact values. Notches win when
+both are passed, and are **rounded rather than truncated** so `0.1` is 12 units
+instead of vanishing. **Positive is UP** — the `wasmcart.h`/SDL/LOVE
+convention, not the browser's downward `deltaY`.
+
+Two contract details that are easy to get wrong, and are tested rather than
+assumed:
+
+- The delta belongs to the **next frame stepped**, and the host clears it
+  afterwards. So a wheel call must be followed by a frame step to be observed,
+  and a cart cannot keep zooming forever off one flick.
+- Repeated calls before that step **accumulate**. A trackpad flick is dozens of
+  events; a host that assigned instead of adding would deliver only the last
+  one. Verified against wasmcart-lua's wheel cart through the MCP: two
+  `notches:1` calls then one step arrives as `dy=2.0000`, and a step with no
+  wheel reads `0.0000`.
+
+A zero delta is **refused** rather than accepted as a no-op: the field is
+already cleared every frame, so scrolling by nothing can only be a caller
+error, and accepting it would let a units mistake (`0.001` notches rounding to
+0) look like it worked.
+
+Also repins `wasmcart ^0.22.0`. A cart host resolved on an older wasmcart
+degrades to a no-op instead of throwing, since `cart.wheel` simply is not there.
+
 ## 0.117.1 — 2026-08-16
 
 ### Fixed — `/livestream` was slow to show its sessions over a network

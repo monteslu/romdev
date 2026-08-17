@@ -453,6 +453,26 @@ export class WasmcartHost {
        * finger in slot 1. CartHost.setPointer already takes any id 0..9. */
       this.cart.setPointer(p.id | 0, p.x | 0, p.y | 0, buttons, active);
     }
+    /* Scroll wheel (ABI v3.1): {wheel:{dx,dy}} in 1/120 of a notch, the
+     * WHEEL_DELTA convention -- one click of a detented wheel is 120, and a
+     * trackpad reports the fraction it actually moved.
+     *
+     * ACCUMULATES rather than sets, and CartHost clears it after the frame,
+     * so this is a per-frame delta the way a real host delivers one: two
+     * setInput calls before a step add up, and a cart cannot keep zooming
+     * forever off one flick.
+     *
+     * `dy` is POSITIVE UP (scroll away from you), matching wasmcart.h, SDL
+     * and LOVE's wheelmoved -- NOT the browser's downward deltaY, which
+     * CartHostWeb flips before it gets here.
+     *
+     * Gated on cart.wheel existing so an older wasmcart in node_modules
+     * degrades to a no-op instead of throwing: the pin is ^0.22.0, but a
+     * transitive resolution can still land older here. */
+    if (input && input.wheel && typeof this.cart?.wheel === "function") {
+      const w = input.wheel;
+      this.cart.wheel(w.dx | 0, w.dy | 0);
+    }
   }
 
   /** Advance n frames, driving CartHost.runFrame with the current input. Each
