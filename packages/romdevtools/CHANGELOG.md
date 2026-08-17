@@ -4,6 +4,37 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.117.1 — 2026-08-16
+
+### Fixed — `/livestream` was slow to show its sessions over a network
+
+The page connected with a bare `io()`, which is socket.io's **polling-first**
+default: it opens on HTTP long-polling and upgrades to WebSocket afterwards.
+That costs **three sequential round trips** before any content arrives —
+`GET`(open, returns the sid) → `POST`(the `40` connect packet) → `GET`(data,
+which is what carries the `replay`) — and the replay body is base64-inflated
+on the way through. Every later server→client message then needs its own
+request cycle instead of a push.
+
+On loopback each leg is ~1.5 ms, so the whole thing is invisible. That is
+exactly why it shipped: the observer was written assuming loopback, and
+`server.js` still says so (`No auth — loopback only`). Over a network it is
+3× RTT before the **"connected" label** even flips — the label waits on the
+POST, not the first GET — and the session tabs wait on the third leg, because
+`replay` is the only thing that populates them. Reported as "kinda slow to
+display the sessions", from another machine, and not reproducible locally at
+any payload size.
+
+Now `io({ transports: ["websocket", "polling"] })`. Polling is **kept as a
+fallback** rather than removed: a proxy or network that blocks WebSocket
+would otherwise get no livestream at all, which is a worse failure than a
+slow one.
+
+A guard test asserts the option on the SHIPPED html, and asserts the option
+itself rather than any behaviour — the UI harness's `io` stub ignores its
+arguments, so a silent revert to bare `io()` would keep every other
+livestream test green. Confirmed it fails on that revert.
+
 ## 0.117.0 — 2026-08-16
 
 Everything since 0.116.0, which is the last version on npm. 0.116.1 and

@@ -203,7 +203,22 @@
 <script src="/socket.io/socket.io.js"></script>
 <script>
 (function() {
-  const socket = io();
+  // WEBSOCKET FIRST, polling only as a fallback.
+  //
+  // socket.io's default is the opposite: it opens on HTTP long-polling and
+  // upgrades to WebSocket afterwards. On loopback that costs ~19ms and is
+  // invisible, which is why this went unnoticed -- the observer was written
+  // assuming loopback ("No auth — loopback only" in server.js). Over a real
+  // network the polling handshake and the upgrade are each round trips, and
+  // the `replay` that populates the session tabs is delivered on the SLOW
+  // transport before the upgrade lands. The page paints immediately and the
+  // sessions arrive late, which reads as "the livestream is slow to show the
+  // sessions" -- reported from a remote machine, never reproducible locally.
+  //
+  // Polling is kept as a fallback rather than removed: a proxy or network
+  // that blocks WebSocket would otherwise get no livestream at all, which is
+  // a worse failure than a slow one.
+  const socket = io({ transports: ["websocket", "polling"] });
   const statusEl = document.getElementById("status");
   const tabsEl = document.getElementById("tabs");
   const imageListEl = document.getElementById("image-list");
