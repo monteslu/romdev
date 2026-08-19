@@ -74,6 +74,7 @@ import { resolveSessionKey, SESSION_META_KEY } from "./session-key.js";
 import { createMcpHandler, isLegacyRequest, McpServer as McpServerV2 } from "@modelcontextprotocol/server";
 import { toNodeHandler, toWebRequest } from "@modelcontextprotocol/node";
 import { withV1ToolApi } from "./v2-adapter.js";
+import { pushCartLine } from "./cart-log.js";
 import { log } from "./log.js";
 import { attachObserver } from "../observer/server.js";
 import { installObserverMiddleware } from "../observer/tool-wrap.js";
@@ -162,11 +163,6 @@ function cliArg(name) {
  * restored to the log wholesale with ROMDEV_LOG_CART=1. What they must not do
  * is drown the log by default.
  */
-const CART_LOG_RING_MAX = 200;
-/** @type {string[]} */
-const cartLogRing = [];
-export function recentCartLog() { return cartLogRing.slice(); }
-
 function installCartLogFilter() {
   if (process.env.ROMDEV_LOG_CART === "1") return; // opt back in, unfiltered
   const realWrite = process.stderr.write.bind(process.stderr);
@@ -174,11 +170,7 @@ function installCartLogFilter() {
     try {
       const text = typeof chunk === "string" ? chunk : chunk?.toString?.("utf8") ?? "";
       if (text.startsWith("[cart] ")) {
-        for (const line of text.split("\n")) {
-          if (!line) continue;
-          cartLogRing.push(line);
-          if (cartLogRing.length > CART_LOG_RING_MAX) cartLogRing.shift();
-        }
+        for (const line of text.split("\n")) pushCartLine(line);
         // Swallow: tell the caller we wrote it. A callback-style write still
         // needs its callback, or a writer awaiting drain would hang.
         const cb = rest.find((a) => typeof a === "function");
