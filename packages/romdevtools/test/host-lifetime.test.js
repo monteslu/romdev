@@ -200,3 +200,44 @@ test("hostLifetimeStats reports what catalog({op:'status'}) surfaces", () => {
   assert.ok(stats.maxHosts > 0);
   assert.ok(stats.hostIdleMs > 0);
 });
+
+test("slot B activity keeps the session alive -- a side-by-side comparison is not idle", async () => {
+  // Slot B is a SECOND live core (the ROM-vs-port comparison workflow), and
+  // eviction clears both slots together. So a session whose every recent call
+  // touched only slot B must still count as active, or the reaper would tear
+  // down a comparison mid-flight -- including the primary ROM the agent was
+  // comparing against.
+  const { installHost, getHostBOrNull, reapIdleHosts, setHostProtectedPredicate, resetHostB, clearHost } =
+    await import("../src/mcp/state.js");
+
+  setHostProtectedPredicate(() => false);
+  const key = "lifetime-slotb";
+  installHost(key, fakeHost());
+  resetHostB(key);
+  assert.ok(getHostBOrNull(key), "slot B is live");
+
+  // Touch ONLY slot B, then sweep from a moment that is past the idle window
+  // relative to install but not relative to this access.
+  const now = Date.now();
+  getHostBOrNull(key);
+  const evicted = reapIdleHosts(now + 1000);
+
+  assert.ok(!evicted.includes(key), "a session working in slot B is not idle");
+  assert.ok(getHostBOrNull(key), "and its comparison core survives");
+  clearHost(key);
+  assert.equal(getHostBOrNull(key), null, "clearHost tears down BOTH slots");
+});
+
+test("resetHostB fully tears the old comparison core down", async () => {
+  const { resetHostB, clearHost, _setHostBForTest } = await import("../src/mcp/state.js");
+  const key = "lifetime-slotb-reset";
+  const old = fakeHost();
+  _setHostBForTest(key, old);
+
+  resetHostB(key);
+
+  // unloadMedia() alone would keep the Emscripten module alive -- the same
+  // leak slot A had. Slot B must dispose too.
+  assert.deepEqual(old.calls, ["dispose"], "the replaced slot-B core is disposed");
+  clearHost(key);
+});

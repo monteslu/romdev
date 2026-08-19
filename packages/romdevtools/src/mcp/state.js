@@ -322,22 +322,31 @@ export function getHostB(sessionKey) {
       "by frame({op:'sideBySide'}); it is not the session's primary ROM.",
     );
   }
+  // Slot B shares the session's activity stamp: a session comparing two ROMs
+  // is active even if every call in the last ten minutes touched only slot B.
+  // Without this the reaper would evict BOTH slots (evictHost clears the
+  // pair) out from under a live side-by-side comparison.
+  touchHost(sessionKey);
   return host;
 }
 
 /** @param {string} sessionKey */
 export function getHostBOrNull(sessionKey) {
-  return hostsB.get(sessionKey) ?? null;
+  const host = hostsB.get(sessionKey) ?? null;
+  if (host) touchHost(sessionKey);
+  return host;
 }
 
 /** @param {string} sessionKey @returns {LibretroHost} */
 export function resetHostB(sessionKey) {
-  const existing = hostsB.get(sessionKey);
-  if (existing && existing.status.loaded) {
-    try { existing.unloadMedia(); } catch {}
-  }
+  // Full teardown, same as slot A: unloadMedia() alone keeps the core and its
+  // WASM heap, which is the leak this whole module exists to close. Slot B is
+  // a SECOND live core, so it is the more expensive one to leave behind.
+  teardownHost(hostsB.get(sessionKey));
+  hostsB.delete(sessionKey);
   const fresh = new LibretroHost();
   hostsB.set(sessionKey, fresh);
+  touchHost(sessionKey);
   return fresh;
 }
 
