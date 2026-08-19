@@ -22,6 +22,7 @@ import { buildSkillDoc } from "./skill-doc.js";
 import { swaggerHtml, swaggerAsset } from "./swagger.js";
 import { observer } from "../observer/bus.js";
 import { log } from "../mcp/log.js";
+import { clearHost } from "../mcp/state.js";
 
 const SESSION_HEADER = "x-romdev-session";
 
@@ -64,6 +65,12 @@ export function mountHttpToolRoutes(app, opts = {}) {
     for (const [key, s] of sessions) {
       if (now - s.lastSeen > idleMs) {
         sessions.delete(key);
+        // Free the EMULATOR too, not just the registry entry. Dropping the
+        // session record alone orphaned its host: nothing else referenced the
+        // key, so the host outlived the session that owned it and was only
+        // ever reclaimed by the host reaper's own timer. (Gate suites drive
+        // this route, so this was a live leak path in the 2026-08-19 OOM.)
+        try { clearHost(key); } catch {}
         if (s.sticky) { try { observer.sessionDisconnected(key); } catch {} }
         log.debug(`[http] session ${key.slice(0, 8)} reaped (idle)`);
       }

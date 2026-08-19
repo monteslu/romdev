@@ -62,7 +62,7 @@ import { registerAudioTools } from "./audio.js";
 import { registerCheatTools } from "./cheats.js";
 import { createDisclosure } from "../disclosure.js";
 import { jsonContent, safeTool, withClearToolErrors } from "../util.js";
-import { getHostOrNull, setDisclosure } from "../state.js";
+import { getHostOrNull, setDisclosure, hostLifetimeStats } from "../state.js";
 import { da65Available } from "../../toolchains/cc65/da65.js";
 import { cc65Available } from "../../toolchains/cc65/cc65.js";
 import { readFileSync } from "node:fs";
@@ -282,6 +282,16 @@ export function registerTools(server, z, sessionKey) {
           serverPid: process.pid,
           serverStartedAt: startedAt,
           serverUptimeSeconds: uptimeSeconds,
+          // Server health. A one-call answer to "is the server about to die?",
+          // so an agent seeing weird failures can check instead of inferring
+          // from a connection error. `liveHosts` is emulator cores held in
+          // memory; each is tens to hundreds of MB, capped at maxHosts and
+          // reaped after hostIdleMs of disuse. (This server was OOM-killed
+          // twice on 2026-08-19 with no such visibility.)
+          serverHealth: {
+            rssMb: Math.round(process.memoryUsage().rss / 1048576),
+            ...hostLifetimeStats(),
+          },
           // A session re-grounding after a restart needs to know a recovery point
           // exists BEFORE it decides to re-drive from scratch.
           ...(autoSnap ? { autoSnapshot: autoSnap } : {}),

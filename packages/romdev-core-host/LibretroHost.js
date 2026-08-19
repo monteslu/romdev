@@ -892,6 +892,59 @@ export class LibretroHost {
   }
 
   /**
+   * Release the CORE, not just the game. `unloadMedia()` frees the ROM but
+   * leaves the Emscripten module — and therefore its entire WASM linear
+   * memory — resident, because a host is normally reused for the next load.
+   * A host that is being thrown away must drop the module too, or the memory
+   * never returns to the OS: WASM memory is only reclaimed when the instance
+   * itself becomes garbage.
+   *
+   * This is what makes host eviction actually reclaim anything. Without it a
+   * long-lived server accumulates one full core heap per host it has ever
+   * created — which is how the server got OOM-killed twice on 2026-08-19
+   * (~5.4 GB RSS, 300-500 GB of mapped address space) under a single agent
+   * running a 21-gate suite that loads 20+ carts. See
+   * internal-romdev/PLAN_mcp_v2_stateless_and_host_lifetime.md.
+   *
+   * Ordering matters: unload the game, then `retro_deinit` so the core frees
+   * its own allocations while its heap is still valid, then drop every
+   * reference we hold into that heap (callback state closes over typed-array
+   * views; a retained view pins the whole ArrayBuffer). Safe to call twice and
+   * on a host that never loaded. Never throws — teardown runs on paths that
+   * are already unwinding.
+   */
+  dispose() {
+    const mod = this.mod;
+    if (mod) {
+      try { if (this.status.loaded) mod._retro_unload_game(); } catch { /* ignore */ }
+      // Proxied cores run retro_deinit on the app thread; calling the main-thread
+      // export directly would race the worker. Their module teardown is the
+      // pthread pool going away with the instance, so skip the explicit deinit.
+      try { if (!this._proxied) mod._retro_deinit?.(); } catch { /* ignore */ }
+    }
+    this.status.loaded = false;
+    this.status.platform = null;
+    this.status.corePath = null;
+    this.status.mediaPath = null;
+    this.status.mediaKind = null;
+    this.status.frameCount = 0;
+    // Drop everything that can hold a view into the core's memory. `state` is
+    // the big one: the callback layer keeps lastFrame/audio buffers that are
+    // subarrays of the module heap.
+    if (this.state) {
+      this.state.lastFrame = null;
+      // audioRing holds Int16Array views pushed per frame; a single retained
+      // entry pins the module's whole ArrayBuffer.
+      if (Array.isArray(this.state.audioRing)) this.state.audioRing.length = 0;
+    }
+    this.beforeFrame = null;
+    this.hwRender = null;
+    this._glContextCreated = false;
+    this.mod = null;
+    this._noderawfsTmp = null;
+  }
+
+  /**
    * Run N frames as fast as possible (no pacing — agent loop, not playback).
    * @param {number} n
    * @returns {number} frames actually run

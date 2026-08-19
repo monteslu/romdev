@@ -68,8 +68,8 @@ import { localhostHostValidation } from "@modelcontextprotocol/sdk/server/middle
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { registerTools } from "./tools/index.js";
-import { stopAllPlaytest, stopPlaytestForSession } from "./tools/playtest.js";
-import { clearHost } from "./state.js";
+import { stopAllPlaytest, stopPlaytestForSession, isPlaytestRunning } from "./tools/playtest.js";
+import { clearHost, reapIdleHosts, setHostProtectedPredicate } from "./state.js";
 import { log } from "./log.js";
 import { attachObserver } from "../observer/server.js";
 import { installObserverMiddleware } from "../observer/tool-wrap.js";
@@ -144,7 +144,51 @@ function cliArg(name) {
   return undefined;
 }
 
+/**
+ * Cart stdout/stderr is DEBUG output, not server output. wasmcart's CartHost
+ * writes every wc_log line and every cart printf straight to process.stderr
+ * prefixed `[cart] `, so a driven cart emits a line or two PER FRAME. One day
+ * of gate runs put 58 MB of per-frame telemetry into the server log, which
+ * buried the actual server events -- including, on 2026-08-19, the fact that
+ * the process had been OOM-killed: the log simply stopped mid-boot with no
+ * marker, because nothing server-level had been written for hours.
+ *
+ * The cart lines still matter WHILE DEBUGGING a cart, so they are kept in a
+ * per-process ring buffer (readable via catalog({op:'status'})) and can be
+ * restored to the log wholesale with ROMDEV_LOG_CART=1. What they must not do
+ * is drown the log by default.
+ */
+const CART_LOG_RING_MAX = 200;
+/** @type {string[]} */
+const cartLogRing = [];
+export function recentCartLog() { return cartLogRing.slice(); }
+
+function installCartLogFilter() {
+  if (process.env.ROMDEV_LOG_CART === "1") return; // opt back in, unfiltered
+  const realWrite = process.stderr.write.bind(process.stderr);
+  process.stderr.write = (chunk, ...rest) => {
+    try {
+      const text = typeof chunk === "string" ? chunk : chunk?.toString?.("utf8") ?? "";
+      if (text.startsWith("[cart] ")) {
+        for (const line of text.split("\n")) {
+          if (!line) continue;
+          cartLogRing.push(line);
+          if (cartLogRing.length > CART_LOG_RING_MAX) cartLogRing.shift();
+        }
+        // Swallow: tell the caller we wrote it. A callback-style write still
+        // needs its callback, or a writer awaiting drain would hang.
+        const cb = rest.find((a) => typeof a === "function");
+        if (cb) cb();
+        return true;
+      }
+    } catch { /* fall through to a real write */ }
+    return realWrite(chunk, ...rest);
+  };
+}
+
 async function main() {
+  installCartLogFilter();
+
   // BEFORE anything can open a GL context: a compositor restart leaves the
   // session exporting a stale XAUTHORITY, and the only symptom is EGL failing
   // with "Invalid MIT-MAGIC-COOKIE-1 key" -- which reads as a GPU problem and
@@ -454,6 +498,10 @@ async function main() {
     process.exit(1);
   });
   httpServer.on("listening", () => {
+    // pid + version on one greppable line. A log that ends without the
+    // matching "shutting down" line was KILLED (OOM, SIGKILL), not stopped --
+    // which is otherwise indistinguishable from a truncated log.
+    log.info(`romdev: server up pid=${process.pid} v${PKG_VERSION}`);
     log.info("");
     log.info(`romdev (v${PKG_VERSION}) listening on http://${bannerHost}:${port}/mcp`);
     log.info("");
@@ -487,6 +535,7 @@ async function main() {
   // Graceful shutdown.
   const shutdown = async (sig) => {
     clearInterval(reaper);
+    clearInterval(hostReaper);
     log.info(`\n[mcp] ${sig} received, draining ${transports.size} session(s)...`);
     // Close ALL open playtest windows (every session) FIRST — the server must
     // not leave emulator windows running that it opened. They're in-process so a
@@ -529,6 +578,30 @@ async function main() {
     }
   }, 60 * 1000);
   reaper.unref(); // don't keep the process alive just for the reaper
+
+  // Host reaper — SEPARATE from the session reaper above, and the one that
+  // actually bounds memory. A host is emulator state (a WASM core plus its
+  // whole linear memory, tens to hundreds of MB); a transport is a socket.
+  // They are evicted on different clocks because they have different costs
+  // and different idleness: a gate script exits without closing its
+  // transport, so its session lingers the full 30 minutes while its host
+  // sits unused from the first second. Sweeping hosts on their own activity
+  // is what stops a suite run from stacking 20+ live cores. (Two OOM kills,
+  // 2026-08-19.) Playtest sessions are exempt: a human may be mid-game.
+  setHostProtectedPredicate((key) => {
+    try { return isPlaytestRunning(key); } catch { return false; }
+  });
+  const hostReaper = setInterval(() => {
+    try {
+      const evicted = reapIdleHosts();
+      if (evicted.length) {
+        log.debug(`[mcp] reaped ${evicted.length} idle host(s): ${evicted.join(", ")}`);
+      }
+    } catch (e) {
+      log.debug(`[mcp] host reaper failed: ${e?.message}`);
+    }
+  }, 60 * 1000);
+  hostReaper.unref();
 
   // Never let one bad tool call take down the long-running server.
   // safeTool wraps every handler, but defense in depth: log + survive

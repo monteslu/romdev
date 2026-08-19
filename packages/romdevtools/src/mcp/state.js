@@ -107,12 +107,118 @@ export function getHost(sessionKey) {
       "pick back up. A fresh boot is the recovery point.",
     );
   }
+  touchHost(sessionKey);
   return host;
 }
 
 /** @param {string} sessionKey */
 export function getHostOrNull(sessionKey) {
-  return hosts.get(sessionKey) ?? null;
+  const host = hosts.get(sessionKey) ?? null;
+  if (host) touchHost(sessionKey);
+  return host;
+}
+
+// --- Host lifetime ----------------------------------------------------------
+// The server owns how much emulator memory it holds, independent of transport
+// behaviour. Two reasons this cannot live on the transport:
+//
+//  1. It didn't work. Every gate script is its own MCP session, so a 21-gate
+//     suite mints 21+ hosts in 12 minutes; the transport-idle reaper
+//     (SESSION_IDLE_MS, 30 min) never fired during the run, and scripts that
+//     just exit never close their transport at all. Two kernel OOM kills on
+//     2026-08-19, ~5.4 GB RSS each, one agent.
+//  2. It is about to be impossible. MCP 2026-07-28 removes protocol sessions
+//     entirely — there is no connection close to hang eviction on. See
+//     internal-romdev/PLAN_mcp_v2_stateless_and_host_lifetime.md.
+//
+// So: stamp every host access, evict on host inactivity, and cap the total.
+// An evicted session self-heals — `lastMedia` survives eviction and getHost
+// tells the agent exactly which loadMedia to re-run.
+
+/** @type {Map<string, number>} */
+const lastUsed = new Map();
+
+/** How long a host may sit unused before eviction, regardless of its transport. */
+const HOST_IDLE_MS = Number(process.env.ROMDEV_HOST_IDLE_MS ?? 10 * 60 * 1000);
+/** Hard ceiling on live hosts; at the cap the oldest-idle evictable host goes. */
+const MAX_HOSTS = Number(process.env.ROMDEV_MAX_HOSTS ?? 10);
+
+/** @type {(sessionKey: string) => boolean} */
+let isProtected = () => false;
+
+/**
+ * Install the predicate that marks a session un-evictable. A playtest window
+ * means a HUMAN may be mid-game: the autoCheckpoint saves the cart, never the
+ * window, and an agent that loses someone's window cannot reopen it.
+ * Wired by the server so state.js keeps no dependency on the playtest module.
+ * @param {(sessionKey: string) => boolean} fn
+ */
+export function setHostProtectedPredicate(fn) {
+  if (typeof fn === "function") isProtected = fn;
+}
+
+/** @param {string} sessionKey */
+function touchHost(sessionKey) {
+  lastUsed.set(sessionKey, Date.now());
+}
+
+/** Evict one session's hosts (both slots) without touching lastMedia. */
+function evictHost(sessionKey) {
+  teardownHost(hosts.get(sessionKey));
+  hosts.delete(sessionKey);
+  teardownHost(hostsB.get(sessionKey));
+  hostsB.delete(sessionKey);
+  lastUsed.delete(sessionKey);
+}
+
+/**
+ * Evict hosts idle past HOST_IDLE_MS. Returns the keys evicted so the caller
+ * can log them. Protected (playtest) sessions are never evicted by age.
+ * @returns {string[]}
+ */
+export function reapIdleHosts(now = Date.now()) {
+  const evicted = [];
+  for (const key of [...hosts.keys()]) {
+    if (isProtected(key)) continue;
+    const seen = lastUsed.get(key);
+    if (seen === undefined) { lastUsed.set(key, now); continue; } // give it one window
+    if (now - seen > HOST_IDLE_MS) { evictHost(key); evicted.push(key); }
+  }
+  return evicted;
+}
+
+/**
+ * Make room before creating a host: while at the cap, evict the oldest-idle
+ * evictable session. Never refuses to create — a refusal would surface as a
+ * mysterious tool failure, while an eviction self-heals via loadMedia.
+ * @param {string} incomingKey the session about to get a host (never evicted)
+ * @returns {string[]} keys evicted
+ */
+function enforceHostCap(incomingKey) {
+  const evicted = [];
+  while (hosts.size >= MAX_HOSTS) {
+    let oldestKey = null;
+    let oldestAt = Infinity;
+    for (const key of hosts.keys()) {
+      if (key === incomingKey || isProtected(key)) continue;
+      const seen = lastUsed.get(key) ?? 0;
+      if (seen < oldestAt) { oldestAt = seen; oldestKey = key; }
+    }
+    if (!oldestKey) break; // everything left is protected or is us
+    evictHost(oldestKey);
+    evicted.push(oldestKey);
+  }
+  return evicted;
+}
+
+/** Live host counts + config, for catalog({op:'status'}). */
+export function hostLifetimeStats() {
+  return {
+    liveHosts: hosts.size,
+    liveHostsSlotB: hostsB.size,
+    maxHosts: MAX_HOSTS,
+    hostIdleMs: HOST_IDLE_MS,
+  };
 }
 
 /**
@@ -123,8 +229,11 @@ export function getHostOrNull(sessionKey) {
  */
 export function resetHost(sessionKey) {
   teardownHost(hosts.get(sessionKey));
+  hosts.delete(sessionKey);
+  enforceHostCap(sessionKey);
   const fresh = new LibretroHost();
   hosts.set(sessionKey, fresh);
+  touchHost(sessionKey);
   return fresh;
 }
 
@@ -133,10 +242,17 @@ export function resetHost(sessionKey) {
 function teardownHost(existing) {
   if (!existing) return;
   try {
-    if (typeof existing.unloadMedia === "function" && existing.status?.loaded) {
-      existing.unloadMedia();
+    // LibretroHost.dispose() releases the CORE (and its WASM linear memory),
+    // not just the ROM. unloadMedia() alone leaves the Emscripten module
+    // resident, so a discarded host kept its whole heap forever — the
+    // mechanism behind the 2026-08-19 OOM kills. Prefer dispose when the host
+    // kind offers it; fall back for older/other host kinds.
+    if (typeof existing.dispose === "function") {
+      existing.dispose();
     } else if (typeof existing.destroy === "function") {
       existing.destroy();
+    } else if (typeof existing.unloadMedia === "function" && existing.status?.loaded) {
+      existing.unloadMedia();
     }
   } catch { /* ignore teardown errors */ }
 }
@@ -165,22 +281,27 @@ export function disposeHost(sessionKey) {
   const existing = hosts.get(sessionKey);
   if (!existing) return;
   hosts.delete(sessionKey);
+  lastUsed.delete(sessionKey);
   teardownHost(existing);
 }
 
 export function installHost(sessionKey, hostInstance) {
   teardownHost(hosts.get(sessionKey));
+  hosts.delete(sessionKey);
+  enforceHostCap(sessionKey);
   hosts.set(sessionKey, hostInstance);
+  touchHost(sessionKey);
   return hostInstance;
 }
 
 /** @param {string} sessionKey */
 export function clearHost(sessionKey) {
   const existing = hosts.get(sessionKey);
-  if (existing && existing.status.loaded) {
-    try { existing.unloadMedia(); } catch {}
-  }
+  // Full teardown, not just unloadMedia: this is a session ending, so the core
+  // and its WASM heap must go, not merely the ROM.
+  teardownHost(existing);
   hosts.delete(sessionKey);
+  lastUsed.delete(sessionKey);
   // A session shutdown tears down BOTH slots — slot B is part of the same
   // session's footprint and must not outlive it.
   clearHostB(sessionKey);
@@ -222,10 +343,7 @@ export function resetHostB(sessionKey) {
 
 /** @param {string} sessionKey */
 export function clearHostB(sessionKey) {
-  const existing = hostsB.get(sessionKey);
-  if (existing && existing.status.loaded) {
-    try { existing.unloadMedia(); } catch {}
-  }
+  teardownHost(hostsB.get(sessionKey));
   hostsB.delete(sessionKey);
 }
 
