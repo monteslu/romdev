@@ -159,3 +159,33 @@ test("list results carry the cache hints the revision requires", async () => {
   assert.equal(typeof list.result.ttlMs, "number");
   assert.ok(["public", "private"].includes(list.result.cacheScope));
 });
+
+test("a modern session that loses its host to eviction recovers by name", async () => {
+  // The A x C interaction, and the one that would bite hardest in practice:
+  // the modern era has no session to notice an eviction, so the ONLY way a
+  // stateless client learns what happened is the error it gets back. It must
+  // name the exact call to re-run, or an agent is left guessing what it had
+  // loaded. Verified live against the server too (an evicted wasmcart session
+  // was told `loadMedia({ platform: "wasmcart", path: "..." })`).
+  const { installHost, rememberLastMedia, reapIdleHosts, getHost, setHostProtectedPredicate } =
+    await import("../src/mcp/state.js");
+
+  setHostProtectedPredicate(() => false);
+  const handle = "modern-evicted";
+  // Whatever key the handle resolves to is the key the host lives under --
+  // that identity is exactly what workstream B guarantees.
+  const { sessionKey } = resolveSessionKey({ meta: { [SESSION_META_KEY]: handle } });
+  assert.equal(sessionKey, handle);
+
+  installHost(sessionKey, { status: { loaded: true }, dispose() {} });
+  rememberLastMedia(sessionKey, { platform: "wasmcart", path: "/tmp/game.wasc" });
+
+  reapIdleHosts(Date.now() + 60 * 60 * 1000);
+
+  assert.throws(() => getHost(sessionKey), (err) => {
+    assert.match(err.message, /loadMedia/);
+    assert.match(err.message, /wasmcart/);
+    assert.match(err.message, /game\.wasc/);
+    return true;
+  }, "an evicted modern session must be told exactly how to get back");
+});
