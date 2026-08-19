@@ -71,6 +71,9 @@ import { registerTools } from "./tools/index.js";
 import { stopAllPlaytest, stopPlaytestForSession, isPlaytestRunning } from "./tools/playtest.js";
 import { clearHost, reapIdleHosts, setHostProtectedPredicate } from "./state.js";
 import { resolveSessionKey, SESSION_META_KEY } from "./session-key.js";
+import { createMcpHandler, isLegacyRequest, McpServer as McpServerV2 } from "@modelcontextprotocol/server";
+import { toNodeHandler, toWebRequest } from "@modelcontextprotocol/node";
+import { withV1ToolApi } from "./v2-adapter.js";
 import { log } from "./log.js";
 import { attachObserver } from "../observer/server.js";
 import { installObserverMiddleware } from "../observer/tool-wrap.js";
@@ -370,8 +373,76 @@ async function main() {
     }
   }
 
+  // ── MODERN ERA (MCP 2026-07-28) ───────────────────────────────────────────
+  // The stateless revision: no initialize handshake, no Mcp-Session-Id, every
+  // request self-describing via `_meta`. It is served by a per-request factory
+  // from the v2 SDK, mounted IN FRONT of the legacy wiring below.
+  //
+  // `legacy: 'reject'` is deliberate, and it is the pattern the SDK's own docs
+  // prescribe for exactly this situation. The default (`'stateless'`) would
+  // answer 2025-era traffic by building a FRESH server per request -- which is
+  // correct for a stateless service and wrong for romdev, where a session owns
+  // a live emulator core across calls. So legacy traffic keeps its existing
+  // sessionful transport (unchanged, below) and only modern traffic takes the
+  // new leg. One factory backs both, so the two eras cannot drift apart.
+  //
+  // Identity in the modern era comes from the client's handle (session-key.js)
+  // because there is no protocol session to borrow one from. Host lifetime is
+  // already owned by state.js, which is what makes this safe: the modern era
+  // has no connection-close signal, so eviction could not have depended on one.
+  //
+  // The factory is called with {era, requestInfo} -- NOT the JSON-RPC request,
+  // and requestInfo is empty here -- so it cannot read the client's handle
+  // itself. We already parse the body in express to classify the era, so the
+  // key is resolved THERE and handed in through this closure. `modernKey` is
+  // set immediately before each dispatch and read synchronously by the factory
+  // (node is single-threaded and createMcpHandler builds the server during the
+  // same synchronous dispatch), so there is no interleaving window.
+  let modernKey = null;
+  const modernHandler = createMcpHandler(
+    () => {
+      const sessionKey = modernKey ?? resolveSessionKey({}).sessionKey;
+      const server = new McpServerV2(
+        { name: "romdev", version: PKG_VERSION },
+        { capabilities: { tools: {} }, instructions },
+      );
+      const wrapped = withV1ToolApi(server);
+      installObserverMiddleware(wrapped, sessionKey);
+      registerTools(wrapped, z, sessionKey);
+      return server;
+    },
+    { legacy: "reject", onerror: (e) => log.debug(`[mcp/modern] ${e?.message}`) },
+  );
+  const modernNodeHandler = toNodeHandler(modernHandler);
+
   app.all("/mcp", async (req, res) => {
     try {
+      // Era routing. A modern request is served statelessly; anything the SDK
+      // classifies as legacy falls through to the sessionful path that has
+      // always been here. Classification is the SDK's, not ours, so it tracks
+      // the spec rather than our reading of it.
+      let legacy = true;
+      try {
+        // toWebRequest is async and needs the ALREADY-PARSED body: express
+        // consumed the stream, so a reconstructed Request has none to read.
+        legacy = await isLegacyRequest(await toWebRequest(req, req.body), req.body);
+      } catch (e) {
+        log.debug(`[mcp] era classification failed, treating as legacy: ${e?.message}`);
+      }
+      if (!legacy) {
+        // Resolve identity from the request the factory cannot see: an
+        // explicit handle in `_meta`, else the x-romdev-session header, else
+        // a minted one. Without this every stateless request would land in a
+        // fresh empty session and no ROM would ever stay loaded.
+        modernKey = resolveSessionKey({
+          meta: req.body?.params?._meta,
+          headers: req.headers,
+        }).sessionKey;
+        // Pass the parsed body: express already consumed the stream, so the
+        // handler cannot re-read it (a raw re-read yields a JSON parse error).
+        return modernNodeHandler(req, res, req.body);
+      }
+
       const sid = req.headers["mcp-session-id"];
       let transport = typeof sid === "string" ? transports.get(sid) : undefined;
       if (transport && typeof sid === "string") lastSeen.set(sid, Date.now());

@@ -157,6 +157,10 @@ hunt when it can, not gate the work when it can't.
 
 **If your session ever returns a 404 "session not found"** (the server restarted), your MCP client should auto-reconnect (re-`initialize`) — and the fresh session again has every tool loaded. You don't re-arm anything. If your client does NOT auto-reconnect on 404, restart its MCP connection once; that's a client limitation, not a server step.
 
+**Your emulator can be evicted while your session lives on.** A loaded ROM is a live WASM core holding real memory, so the server bounds how many it keeps: a host unused for ~10 minutes is torn down, as is the oldest idle one when too many are live at once. This is not an error and not a restart — your session, tools and save states on disk are all fine. You'll see it as a "No ROM loaded" error that **names the exact `loadMedia({...})` call to get back**; re-run it and carry on (if a playtest window was open, the error also points at an auto-checkpoint holding the last ~15s of play). An open playtest window is never evicted — a human may be mid-game. `catalog({op:'status'})` reports `serverHealth {rssMb, liveHosts, maxHosts, hostIdleMs}` if you want to see where things stand.
+
+**Both protocol revisions are served on the same endpoint.** Legacy clients (`initialize` handshake + `Mcp-Session-Id`) work exactly as before. Modern clients speaking **2026-07-28** — no handshake, no session id, per-request `_meta` — are served statelessly, with `server/discover` advertising what this server supports. Since that revision has no protocol session to hold your identity, pass a stable handle as `_meta["dev.romdev/sessionHandle"]` on every call: it is what ties your calls to YOUR emulator, exactly as `x-romdev-session` does over plain HTTP. Omit it and every call lands in a fresh empty session, which shows up as "I did call loadMedia" and no ROM.
+
 ## Large output: write to a path, or ask for it inline
 
 Tools that can return a LARGE payload (ROM bytes, full disassembly, big memory dumps, build logs, tile blobs, **and screenshots/inspect images**) follow ONE rule so they don't silently flood your context:
