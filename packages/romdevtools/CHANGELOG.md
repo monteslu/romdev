@@ -4,6 +4,85 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.121.0 — 2026-08-19
+
+### Fixed — the server bounds its own emulator memory (it was being OOM-killed)
+
+The server was killed by the kernel twice in 28 minutes (~5.4 GB RSS,
+300-500 GB mapped) under a SINGLE agent running one 21-gate cart suite. It
+never logged a crash because it never crashed; it was shot, and the log
+simply stopped mid-boot. Downstream, every gate in the run failed with
+ECONNREFUSED, which reads exactly like a red assertion rather than a dead
+host.
+
+Two mechanisms, neither of them wrong code — both absent policy.
+
+`unloadMedia()` freed the ROM and kept the core: it calls
+`retro_unload_game` and nulls the status fields but leaves the Emscripten
+instance, and therefore its whole WASM linear memory, resident. That is
+correct when a host is about to be REUSED, which is the normal case, and a
+leak only when the host is being thrown away. `LibretroHost.dispose()`
+(new, `romdev-core-host` 0.8.0) unloads the game, runs `retro_deinit`
+while the heap is still valid — skipped for proxied cores, whose deinit
+belongs to the app thread — then drops the module and every view into it
+(`lastFrame` and `audioRing` are subarrays of the module heap, and one
+retained entry pins the whole ArrayBuffer).
+
+Eviction was keyed on the transport, which is the wrong clock. Every
+client script is its own session, so a 12-minute suite mints 20+ hosts,
+and the only reaper was a 30-minute TRANSPORT-idle sweep — it cannot fire
+during the run, and never fires at all for a script that exits without
+closing. Hosts are now stamped on every access and swept on their own
+inactivity (`ROMDEV_HOST_IDLE_MS`, default 10 min) under a hard cap
+(`ROMDEV_MAX_HOSTS`, default 10) that evicts the oldest-idle session
+rather than refusing to load. An eviction is not an error: `lastMedia`
+outlives the host, so the next call returns a "No ROM loaded" error naming
+the exact `loadMedia({...})` to re-run. **Playtest sessions are exempt** —
+a human may be mid-game.
+
+Measured on the workload that did the killing: peak RSS 5.4 GB and a
+kernel kill, versus ~2.9 GB and three consecutive green suite runs on one
+process.
+
+### Added — MCP 2026-07-28 (the stateless revision) served alongside 2025-era clients
+
+The current MCP revision removes the `initialize` handshake, the
+`Mcp-Session-Id` header and protocol sessions outright; every request
+carries its version, capabilities and identity in `_meta`, and servers
+MUST answer `server/discover`. Per the spec's compatibility matrix a
+modern client talking to a legacy-only server simply fails.
+
+Both eras are now served on `/mcp`. Legacy clients are unchanged.
+Modern requests are served statelessly, with `server/discover` advertising
+`["2026-07-28"]`. Since that revision has no protocol session to carry
+identity, pass a stable handle as `_meta["dev.romdev/sessionHandle"]` on
+every call — it ties your calls to YOUR emulator exactly as
+`x-romdev-session` does over plain HTTP. Omit it and every call lands in a
+fresh empty session.
+
+Note for anyone doing the same migration: `createMcpHandler`'s default
+`legacy: 'stateless'` builds a FRESH server per request, which is right for
+a stateless service and wrong for a server where a session owns a live
+emulator. This uses `legacy: 'reject'` behind `isLegacyRequest`, the
+pattern the SDK documents for keeping an existing sessionful deployment.
+
+### Added — `serverHealth` in `catalog({op:'status'})`
+
+`{rssMb, liveHosts, maxHosts, hostIdleMs}`, so an agent seeing odd
+failures can ask instead of inferring from a connection error.
+`liveHosts == maxHosts` during a heavy run is HEALTHY — it is the cap
+working, not a leak.
+
+### Changed — cart output no longer floods the server log
+
+wasmcart's `CartHost` writes every `wc_log` line and cart printf straight
+to stderr, one or two per frame; that put 58 MB of per-frame telemetry
+into the log in a day and buried every actual server event — including the
+evidence of the kills above. Those lines now go to a 200-line ring buffer,
+surfaced as `recentCartLog` in `catalog({op:'status'})` and restored to the
+log wholesale with `ROMDEV_LOG_CART=1`. The log also gained a pid-stamped
+startup line, so a log ending without a shutdown line is legible as a kill.
+
 ## 0.120.0 — 2026-08-19
 
 ### Fixed — wasmcart SRAM is now visible to `state()` and survives a reload
