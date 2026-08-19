@@ -241,3 +241,34 @@ test("resetHostB fully tears the old comparison core down", async () => {
   assert.deepEqual(old.calls, ["dispose"], "the replaced slot-B core is disposed");
   clearHost(key);
 });
+
+test("dispose() skips retro_deinit on a proxied core -- that deinit belongs to the app thread", async () => {
+  // Proxied cores (the 3D consoles) run retro_deinit on their app thread;
+  // calling the main-thread export from here would race the worker. The skip
+  // is a one-line branch that no core in the unproxied sweep exercises, so it
+  // is asserted directly on a stub module rather than left to inspection.
+  const { LibretroHost: Host } = await import("romdev-core-host/index.js");
+
+  const calls = [];
+  const stubMod = {
+    _retro_unload_game: () => calls.push("unload"),
+    _retro_deinit: () => calls.push("deinit"),
+  };
+
+  const proxied = new Host();
+  proxied.mod = stubMod;
+  proxied._proxied = true;
+  proxied.status.loaded = true;
+  proxied.dispose();
+  assert.deepEqual(calls, ["unload"], "a proxied core is unloaded but NOT deinit'd here");
+  assert.equal(proxied.mod, null, "the module is still dropped either way");
+
+  calls.length = 0;
+  const plain = new Host();
+  plain.mod = stubMod;
+  plain._proxied = false;
+  plain.status.loaded = true;
+  plain.dispose();
+  assert.deepEqual(calls, ["unload", "deinit"],
+    "an ordinary core deinits while its heap is still valid, then is dropped");
+});
