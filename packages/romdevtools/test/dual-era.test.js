@@ -189,3 +189,49 @@ test("a modern session that loses its host to eviction recovers by name", async 
     return true;
   }, "an evicted modern session must be told exactly how to get back");
 });
+
+test("concurrent modern requests do not cross-wire sessions", async () => {
+  // THE BUG THIS PINS. The first cut of the modern leg used ONE handler with
+  // the session key stashed in a closure set just before dispatch. That looks
+  // safe on a single-threaded runtime and is not: createMcpHandler calls the
+  // factory ASYNCHRONOUSLY, after fetch() returns, so it reads the closure
+  // after the next request has already overwritten it. Two overlapping
+  // requests both resolved to the SECOND key -- one agent driving another
+  // agent's emulator, silently.
+  //
+  // The fix is to build the handler per request, closing over that request's
+  // own key. This test fires two dispatches without awaiting the first, which
+  // is exactly the interleaving that broke it.
+  const store = new Map();
+
+  // Mirrors the server: a handler built per request, key resolved from that
+  // request's body.
+  const dispatch = (body) => {
+    const { sessionKey } = resolveSessionKey({ meta: body.params?._meta });
+    const handler = createMcpHandler(
+      () => {
+        const server = new McpServerV2(
+          { name: "romdev-test", version: "0.0.1" },
+          { capabilities: { tools: {} } },
+        );
+        const wrapped = withV1ToolApi(server);
+        wrapped.tool("whoami", "report the session this call landed in", async () => ({
+          content: [{ type: "text", text: sessionKey }],
+        }));
+        return server;
+      },
+      { legacy: "reject" },
+    );
+    return handler.fetch(modernRequest(body, "whoami")).then((r) => r.json());
+  };
+
+  const bodyA = modernBody(1, "tools/call", { name: "whoami", arguments: {} }, "agent-A");
+  const bodyB = modernBody(2, "tools/call", { name: "whoami", arguments: {} }, "agent-B");
+
+  // Both in flight before either resolves.
+  const [outA, outB] = await Promise.all([dispatch(bodyA), dispatch(bodyB)]);
+
+  assert.equal(outA.result.content[0].text, "agent-A");
+  assert.equal(outB.result.content[0].text, "agent-B",
+    "each concurrent request must land in ITS OWN session");
+});

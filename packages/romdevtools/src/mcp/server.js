@@ -392,16 +392,23 @@ async function main() {
   // has no connection-close signal, so eviction could not have depended on one.
   //
   // The factory is called with {era, requestInfo} -- NOT the JSON-RPC request,
-  // and requestInfo is empty here -- so it cannot read the client's handle
-  // itself. We already parse the body in express to classify the era, so the
-  // key is resolved THERE and handed in through this closure. `modernKey` is
-  // set immediately before each dispatch and read synchronously by the factory
-  // (node is single-threaded and createMcpHandler builds the server during the
-  // same synchronous dispatch), so there is no interleaving window.
-  let modernKey = null;
-  const modernHandler = createMcpHandler(
+  // and requestInfo is empty -- so it cannot read the client's handle itself.
+  // `registerTools` binds sessionKey into every handler closure at
+  // REGISTRATION time, so the key must be known before the factory runs.
+  //
+  // A single handler with the key stashed in a closure set before dispatch is
+  // WRONG, and measurably so: the factory runs asynchronously, after fetch()
+  // returns, so it reads the closure after the NEXT request may already have
+  // overwritten it. Two concurrent modern requests both resolved to the
+  // SECOND one's key -- one agent would be handed another agent's emulator.
+  //
+  // So the handler is built per request, closing over the key resolved from
+  // that request's own body. The SDK already builds a fresh server per
+  // request (verified: 3 requests, 3 factory calls), so this adds a handler
+  // object per request and nothing more -- and there is no shared mutable
+  // state left to race on.
+  const buildModernHandler = (sessionKey) => toNodeHandler(createMcpHandler(
     () => {
-      const sessionKey = modernKey ?? resolveSessionKey({}).sessionKey;
       const server = new McpServerV2(
         { name: "romdev", version: PKG_VERSION },
         { capabilities: { tools: {} }, instructions },
@@ -412,8 +419,7 @@ async function main() {
       return server;
     },
     { legacy: "reject", onerror: (e) => log.debug(`[mcp/modern] ${e?.message}`) },
-  );
-  const modernNodeHandler = toNodeHandler(modernHandler);
+  ));
 
   app.all("/mcp", async (req, res) => {
     try {
@@ -434,13 +440,13 @@ async function main() {
         // explicit handle in `_meta`, else the x-romdev-session header, else
         // a minted one. Without this every stateless request would land in a
         // fresh empty session and no ROM would ever stay loaded.
-        modernKey = resolveSessionKey({
+        const { sessionKey } = resolveSessionKey({
           meta: req.body?.params?._meta,
           headers: req.headers,
-        }).sessionKey;
+        });
         // Pass the parsed body: express already consumed the stream, so the
         // handler cannot re-read it (a raw re-read yields a JSON parse error).
-        return modernNodeHandler(req, res, req.body);
+        return buildModernHandler(sessionKey)(req, res, req.body);
       }
 
       const sid = req.headers["mcp-session-id"];
