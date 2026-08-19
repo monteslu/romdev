@@ -70,6 +70,7 @@ import { z } from "zod";
 import { registerTools } from "./tools/index.js";
 import { stopAllPlaytest, stopPlaytestForSession, isPlaytestRunning } from "./tools/playtest.js";
 import { clearHost, reapIdleHosts, setHostProtectedPredicate } from "./state.js";
+import { resolveSessionKey, SESSION_META_KEY } from "./session-key.js";
 import { log } from "./log.js";
 import { attachObserver } from "../observer/server.js";
 import { installObserverMiddleware } from "../observer/tool-wrap.js";
@@ -284,8 +285,17 @@ async function main() {
   // just return the client's id. This is how a client survives a server
   // restart: it shows up with an id we've never seen (because WE restarted),
   // and we transparently re-create that exact session under the hood.
-  async function createTransport(fixedId) {
-    const sessionKey = randomUUID();
+  async function createTransport(fixedId, requestedHandle) {
+    // Identity is resolved through session-key.js, not taken from the
+    // transport. It already was independent here (this randomUUID is not the
+    // Mcp-Session-Id), but an explicit client handle must WIN so a caller can
+    // pin its own session -- which is the only mechanism that still exists
+    // under MCP 2026-07-28, where there is no protocol session at all.
+    // Workstream B of
+    // internal-romdev/PLAN_mcp_v2_stateless_and_host_lifetime.md.
+    const { sessionKey } = resolveSessionKey({
+      meta: requestedHandle ? { [SESSION_META_KEY]: requestedHandle } : undefined,
+    });
     // Compute the session id ONCE. The SDK may call sessionIdGenerator more
     // than once; if it returned a fresh randomUUID() each time, the id placed
     // in the response header and the id we register under in `transports`
@@ -382,7 +392,11 @@ async function main() {
           delete req.headers["mcp-session-id"];
           log.debug(`[mcp] initialize carried stale session id ${sid} — stripped, minting fresh`);
         }
-        transport = await createTransport();
+        // A client may pin its own session by sending a handle in the
+        // initialize request's `_meta`. Legacy clients send none and get the
+        // minted key exactly as before.
+        const requestedHandle = req.body?.params?._meta?.[SESSION_META_KEY];
+        transport = await createTransport(undefined, requestedHandle);
       } else if (!transport && typeof sid === "string" && sid.length > 0) {
         // The client presented a session id we don't have — almost always
         // because WE restarted (the client's session is fine from its side).

@@ -23,8 +23,13 @@ import { swaggerHtml, swaggerAsset } from "./swagger.js";
 import { observer } from "../observer/bus.js";
 import { log } from "../mcp/log.js";
 import { clearHost } from "../mcp/state.js";
+import { SESSION_HEADER } from "../mcp/session-key.js";
 
-const SESSION_HEADER = "x-romdev-session";
+// Re-exported from the session-key module so there is ONE definition of how a
+// session is named. That module is the seam the stateless migration moves;
+// this route already works the way it prescribes (a caller-supplied handle,
+// not a transport id), which is why it needs no behaviour change here.
+// NOTE: this route deliberately 401s instead of minting -- see the handler.
 
 /**
  * Mount the HTTP tool surface on an Express app.
