@@ -4,6 +4,33 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.119.0 — 2026-08-19
+
+### Fixed — the playtest window forwards the scroll wheel to the cart
+
+0.118.0 taught `input({op:'wheel'})` to reach a cart, which fixed the
+headless MCP path — but it never touched the playtest window itself, so a
+human at the window still had every platform wheel event dropped on the
+floor. A cart whose only mouse zoom is the wheel was driveable by an agent
+and not by the person holding the mouse: it read as a broken game rather
+than a missing handler. Found on exactly that cart — the pad shoulders
+stepped the zoom correctly and the wheel did nothing at all.
+
+The window's `mouseWheel` handler now converts node-sdl's NOTCHES to
+wasmcart's 1/120-notch `wc_wheel_t` units (ROUNDED, not truncated, so a slow
+trackpad drag's small fractions don't vanish to zero), respects
+`SDL_MOUSEWHEEL_FLIPPED` (natural scrolling — negates both axes), positions
+the pointer at the wheel event's location first (an anchored zoom reads the
+pointer position), and forwards through `host.setInput`. Two-finger trackpad
+scroll and macOS pinch (ctrl+wheel) both arrive as wheel events, so this is
+also the only route those gestures have into a cart.
+
+The conversion (`wheelEventToCartDelta`) is exported and unit-tested in
+isolation, since the window itself cannot be driven headlessly.
+
+Touch is still not wired — the playtest window remains mouse/pad/keyboard
+only for direct human input.
+
 ## 0.118.0 — 2026-08-17
 
 ### Added — the scroll wheel reaches wasmcart carts: `input({op:'wheel'})`

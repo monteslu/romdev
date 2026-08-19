@@ -207,6 +207,32 @@ export const letterbox = runnerLetterbox;
 export const HUMAN_INPUT_ACTIVE_FRAMES = 120;
 
 /**
+ * node-sdl mouseWheel event -> the wasmcart ABI's wheel delta.
+ *
+ * Three conversions, each of which was wrong in an obvious way first:
+ *   * node-sdl reports NOTCHES (a detented click is 1, a trackpad sends
+ *     fractions); wasmcart's wc_wheel_t is 1/120 of a notch, the WHEEL_DELTA
+ *     convention. Hence * 120.
+ *   * `flipped` is SDL_MOUSEWHEEL_FLIPPED — natural scrolling. Negating both
+ *     axes is what makes "push away from me" mean the same thing on a box
+ *     with it on and a box with it off.
+ *   * ROUNDED, not truncated: a slow trackpad drag is a run of small
+ *     fractions, and truncating each to zero makes the whole gesture
+ *     silently do nothing (0.1 notch must survive as 12, not vanish).
+ *
+ * Pure, so the sign and unit contract is testable without an SDL window —
+ * which matters because the window cannot be driven headlessly at all.
+ * @param {{dx?:number, dy?:number, flipped?:boolean}} e
+ */
+export function wheelEventToCartDelta(e) {
+  const sign = e && e.flipped ? -1 : 1;
+  return {
+    dx: Math.round(((e && e.dx) || 0) * 120) * sign,
+    dy: Math.round(((e && e.dy) || 0) * 120) * sign,
+  };
+}
+
+/**
  * Any button held in a built input-port object? The C64 virtual keys
  * (c64_f1 …) count too — any truthy value is a press.
  * @param {Record<string, boolean>} port
@@ -780,6 +806,38 @@ export async function playtest(args) {
     if (e.button === 1) mouseButtons.left = false;
     else if (e.button === 3) mouseButtons.right = false;
     sendPointer(windowToCart(e.x, e.y));
+  });
+  /* THE SCROLL WHEEL, for the HUMAN at the window.
+   *
+   * 0.118.0 taught `input({op:'wheel'})` to reach a cart, which fixed the
+   * headless path -- but this window kept dropping the platform's own wheel
+   * events on the floor, so a cart that binds zoom to the wheel was driveable
+   * by an agent and NOT by the person holding the mouse. Found playing a cart
+   * whose only mouse zoom is the wheel: the pad shoulders stepped the zoom
+   * correctly and the wheel did nothing at all, which reads as a broken game
+   * rather than a missing five lines here.
+   *
+   * node-sdl reports dx/dy in NOTCHES (a detented click is 1, a trackpad
+   * sends fractions); wasmcart wants 1/120 of a notch, positive UP. `flipped`
+   * is SDL_MOUSEWHEEL_FLIPPED -- natural scrolling -- and negating both axes
+   * is what keeps "push away from me" meaning the same thing on every box.
+   *
+   * ROUNDED, not truncated, for the same reason input.js rounds: a slow
+   * trackpad drag is a run of small fractions, and truncating each one to
+   * zero makes the gesture silently do nothing. */
+  window.on("mouseWheel", (e) => {
+    if (!cartWantsPointer()) return;
+    if (typeof host.setInput !== "function") return;
+    const { dx, dy } = wheelEventToCartDelta(e);
+    if (dx === 0 && dy === 0) return;
+    try {
+      /* Put the cursor where the wheel happened FIRST: an anchored zoom reads
+       * the pointer position, and a cart that never saw a mouseMove at this
+       * spot would anchor to a stale one. */
+      const pt = windowToCart(e.x, e.y);
+      if (pt) sendPointer(pt);
+      host.setInput({ wheel: { dx, dy } });
+    } catch { /* a wheel-less host just ignores it; never kill the loop */ }
   });
   // node-sdl names this "leave", not "mouseLeave" -- an unknown event name
   // makes createWindow throw "invalid event" and the whole window fails to open.
