@@ -4,6 +4,48 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.120.0 — 2026-08-19
+
+### Fixed — wasmcart SRAM is now visible to `state()` and survives a reload
+
+wasmcart carts have real SRAM (`WasmcartHost.getSaveData()`), but everything
+around it was broken: `state({op:'exportSram'/'importSram'})` routed every
+platform through the libretro save-RAM REGION api (`regionSize`/
+`readMemory(region,...)`), which wasmcart doesn't implement — the resulting
+TypeError was swallowed by a `catch { return 0 }` into a confidently wrong
+"the loaded ROM has no battery save RAM", even on a cart holding 4096 live
+bytes. `state({op:'save'})` called `host.saveState()`, which also doesn't
+exist on wasmcart, and threw a raw uncaught TypeError. And nothing persisted
+SRAM across `loadMedia` — the only way an agent (or a human at the playtest
+window) restarts a cart — so a save file could never be observed surviving a
+reload, which is the entire point of a save file.
+
+- `WasmcartHost` gained `setSaveData`/`saveDataSize` alongside the existing
+  `getSaveData`, all backed by the cart's own `savePtr`/`saveSize` via the
+  raw-heap `readMemory`/`writeMemory` this host already exposes — there's no
+  named `save_ram` region on wasmcart, just an offset into the cart's heap.
+- `exportSram`/`importSram` now branch on which SRAM shape a host offers
+  (wasmcart's get/set pair vs. libretro's named region) instead of assuming
+  the region API and reporting a false size-0. The "no battery save" error
+  now also distinguishes "this platform genuinely has none" from "this host
+  doesn't implement the region API" — the specific thing that turned a
+  missing implementation into a confidently wrong answer.
+- `state({op:'save'/'load'})` on wasmcart now fails with a clear message
+  ("whole-machine savestates are not supported on 'wasmcart' ... use
+  exportSram/importSram instead") rather than a raw `host.saveState is not a
+  function` TypeError.
+- SRAM now survives a `loadMedia` of the same cart path within a session, via
+  an in-process cache (NOT a file written next to the ROM — the first cut of
+  this fix did that, and it broke every OTHER wasmcart test in this repo's
+  own suite: every load of a tracked `.wasc` fixture left an untracked `.sav`
+  beside it). `state({op:'exportSram'})` remains the explicit, opt-in path
+  for save data that needs to survive across sessions/restarts.
+
+Verified live against formix's real 4096-byte SRAM through the MCP tools:
+`exportSram` now reports 4096 bytes (not 0) and round-trips correctly;
+`state({op:'save'})` fails with the new clear message; a reload of the same
+cart path carries the SRAM forward unchanged.
+
 ## 0.119.0 — 2026-08-19
 
 ### Fixed — the playtest window forwards the scroll wheel to the cart

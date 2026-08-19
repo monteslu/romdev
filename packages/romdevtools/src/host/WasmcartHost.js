@@ -360,9 +360,19 @@ export class WasmcartHost {
     // No allowMissingGL: a GL cart with no context renders black with no error,
     // which is the failure mode wasmcart 0.7.0 made fatal on purpose. romdev
     // guarantees a context instead of opting out of the check.
+    // Restore SRAM from the in-process cache, if this same cart path has been
+    // loaded (and torn down) before this session. Without this, every
+    // loadMedia started from a zeroed save region — the only way an agent (or
+    // a human quitting and reopening the playtest window) restarts a cart, so
+    // a cart's save data could never be observed surviving a reload even
+    // though the bytes it writes mid-session are real and readable. See
+    // _sramCache's comment for why this is a memory cache, not a `<path>.sav`.
+    const cacheKey = typeof mediaPath === "string" && mediaPath ? path.resolve(mediaPath) : null;
+    const savedData = cacheKey ? WasmcartHost._sramCache.get(cacheKey) : undefined;
     await this.cart.load(source, {
       glBackend: glBackend ?? glFactory,
       ...(deterministic ? { deterministic } : {}),
+      ...(savedData ? { saveData: savedData } : {}),
     });
     if (glBackend && this.cart.usesGL) this._gl = glBackend;
     // Surfaced in status: are this GL cart's draws real pixels or stubs?
@@ -850,6 +860,64 @@ export class WasmcartHost {
     return this.cart ? this.cart.getSaveData() : null;
   }
 
+  /**
+   * Overwrite the cart's SRAM equivalent in place (for `state({op:'importSram'})`).
+   * Mirrors `getSaveData()`'s pointer/size, via the same raw-heap `writeMemory`
+   * this host already exposes for WASM introspection — there is no named
+   * "save_ram" region on wasmcart, just an offset into the cart's own heap.
+   */
+  setSaveData(bytes) {
+    const info = this.cart?.info;
+    if (!info || !info.saveSize) return 0;
+    const len = Math.min(bytes.length, info.saveSize);
+    this.writeMemory(info.savePtr, bytes.subarray ? bytes.subarray(0, len) : bytes.slice(0, len));
+    return len;
+  }
+
+  /** Size of the cart's declared SRAM-equivalent region (0 = none). */
+  saveDataSize() {
+    return this.cart?.info?.saveSize || 0;
+  }
+
+  /**
+   * In-PROCESS SRAM cache, keyed by resolved cart path — deliberately NOT a
+   * file written next to the ROM. "Survives a reload within a session" (what
+   * the report actually needed: a cart's save data could never be observed
+   * surviving the only way an agent restarts a cart, `loadMedia`) doesn't
+   * require touching disk, and a `<path>.sav` written unprompted next to
+   * whatever was loaded is a real footgun for a shared/read-only/version-
+   * controlled cart directory (romdev's own test fixtures among them — every
+   * loadMedia of a tracked .wasc would otherwise leave an untracked .sav next
+   * to it in the repo on every run). Explicit persistence to disk is still
+   * available and unaffected: state({op:'exportSram'/'importSram'}).
+   * Process-lifetime only, same as everything else a session holds in memory.
+   */
+  static _sramCache = new Map();
+
+  /** Cache key for the currently loaded cart, or null with nothing to key by
+   *  (loaded from bytes — no path to distinguish one cart from another). */
+  _sramCacheKey() {
+    const p = this.status.mediaPath;
+    return typeof p === "string" && p ? path.resolve(p) : null;
+  }
+
+  /**
+   * Stash the CURRENTLY loaded cart's SRAM into the in-process cache,
+   * best-effort. Called before the cart is torn down (destroy(), or a new
+   * loadMedia replacing it) — the only two moments this host loses the live
+   * bytes. Silent no-op on a cart with no save region or no path to key by.
+   */
+  _persistSaveData() {
+    if (!this.cart) return;
+    const key = this._sramCacheKey();
+    if (!key) return;
+    try {
+      const sram = this.cart.getSaveData();
+      if (!sram) return; // cart declares no save region
+      WasmcartHost._sramCache.set(key, Uint8Array.from(sram));
+    } catch { /* best-effort — never let a save stash break teardown/reload */ }
+  }
+
   // ── WASM introspection (the V8-runtime bonus an emulator can't offer) ─────────
   //
   // A wasmcart runs as a real WebAssembly instance in V8, so we can read its actual
@@ -1067,6 +1135,9 @@ export class WasmcartHost {
   }
 
   destroy() {
+    // The last chance to write SRAM out before this cart's heap goes away —
+    // must run BEFORE cart.destroy(), which frees the memory getSaveData() reads.
+    this._persistSaveData();
     if (this.cart) { try { this.cart.destroy(); } catch { /* ignore */ } }
     this.cart = null;
     this.state.lastFrame = null;

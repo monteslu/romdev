@@ -49,9 +49,28 @@ function cheatSidecarPath(statePath) {
   return statePath + ".cheats.json";
 }
 
+// Savestates (whole-machine, in-memory slots or a serialized blob) are a
+// libretro-core concept: wasmcart has no CPU/address-space to snapshot, so
+// WasmcartHost implements none of saveState/serializeState/loadState/
+// unserializeState/listStates. Calling them landed a raw "host.saveState is
+// not a function" TypeError on an agent, which reads as a bug rather than an
+// unsupported platform, and pointed nowhere useful. Fail with the actual
+// alternative instead: exportSram/importSram, the persistence primitive
+// wasmcart DOES have.
+function requireSavestateSupport(op, host) {
+  if (typeof host.saveState === "function") return;
+  throw new Error(
+    `state({op:'${op}'}): whole-machine savestates are not supported on '${host.status.platform}' ` +
+    `(wasmcart has no CPU/address space to snapshot). Use state({op:'exportSram'/'importSram'}) to ` +
+    `save/restore the cart's own SRAM-equivalent save data instead — and note SRAM now survives a ` +
+    `loadMedia of the same cart path within this session automatically (in-process cache; use ` +
+    `exportSram to write it to disk for real cross-session persistence).`);
+}
+
 async function saveStateCore({ name, path: outPath, recordCheats = true }, sessionKey) {
       if (!name && !outPath) throw new Error("state({op:'save'}): provide `name` (in-memory slot), `path` (disk), or both.");
       const host = getHost(sessionKey);
+      requireSavestateSupport("save", host);
       const done = [];
       if (name) { host.saveState(name); done.push(`slot '${name}'`); }
       const resolvedOut = outPath ? resolveStatePath(outPath, host) : null;
@@ -158,6 +177,7 @@ async function loadStateCore({ name, path: inPath, render = true, probeLiveness 
       if (!name && !inPath) throw new Error("state({op:'load'}): provide `name` (in-memory slot) or `path` (disk).");
       if (name && inPath) throw new Error("state({op:'load'}): provide `name` OR `path`, not both.");
       const host = getHost(sessionKey);
+      requireSavestateSupport("load", host);
       let cheatsCleared = 0;
       // Snapshot BEFORE the load, which is what clears them.
       //
@@ -255,11 +275,50 @@ function listStatesCore(_args, sessionKey) {
   return { states: getHost(sessionKey).listStates() };
 }
 
+// SRAM access has two shapes:
+//   - libretro cores: a NAMED region ("save_ram") read/written via
+//     host.regionSize/readMemory/writeMemory(region, ...).
+//   - wasmcart: no named regions at all (readMemory/writeMemory there take a
+//     raw heap OFFSET, a different signature entirely) — but the cart's own
+//     save area IS live and readable through host.getSaveData()/setSaveData().
+// Routing every platform through the libretro region API made wasmcart look
+// like "no battery save RAM" (size 0) even with a cart holding real save
+// bytes, because host.regionSize simply doesn't exist there and the old
+// catch-and-return-0 couldn't tell "unsupported platform" from "this host
+// doesn't implement the region API". Branch on which shape the host offers
+// instead of guessing from a size of 0.
+function sramShape(host) {
+  if (typeof host.getSaveData === "function") return "wasmcart";
+  if (typeof host.regionSize === "function") return "libretro";
+  return "none";
+}
+
 // SRAM presence: the battery-backed cartridge save RAM size for the loaded ROM
 // (0 = this cart/system has no battery save). Used by exportSram/importSram and
 // surfaced so an agent knows whether a save file even exists.
 function sramSize(host) {
-  try { return host.regionSize("save_ram"); } catch { return 0; }
+  const shape = sramShape(host);
+  if (shape === "wasmcart") {
+    return typeof host.saveDataSize === "function" ? host.saveDataSize() : (host.getSaveData()?.length || 0);
+  }
+  if (shape === "libretro") {
+    try { return host.regionSize("save_ram"); } catch { return 0; }
+  }
+  return 0;
+}
+
+function noSramError(op, host, size) {
+  const shape = sramShape(host);
+  if (shape === "none") {
+    return new Error(
+      `state({op:'${op}'}): this host ('${host.status.platform}') implements neither the libretro ` +
+      `save-RAM region API nor wasmcart's getSaveData — there is no supported way to reach SRAM here.`);
+  }
+  return new Error(
+    `state({op:'${op}'}): the loaded ROM has no battery save RAM ` +
+    `(platform '${host.status.platform}', size ${size}). Either this cart has no battery ` +
+    `save, or this system never had cartridge saves (Atari 2600/7800, Lynx; C64 saves ` +
+    `are disk-based). Use state({op:'save', path}) for a full-machine savestate instead.`);
 }
 
 /** op:'exportSram' — write the cartridge's battery SAVE RAM to a .sav file.
@@ -267,15 +326,10 @@ function sramSize(host) {
  * the bytes a real cart keeps on its battery. Empty on a no-battery cart. */
 async function exportSramCore({ path: outPath }, sessionKey) {
   const host = getHost(sessionKey);
+  const shape = sramShape(host);
   const size = sramSize(host);
-  if (!size) {
-    throw new Error(
-      `state({op:'exportSram'}): the loaded ROM has no battery save RAM ` +
-      `(platform '${host.status.platform}', size 0). Either this cart has no battery ` +
-      `save, or this system never had cartridge saves (Atari 2600/7800, Lynx; C64 saves ` +
-      `are disk-based). Use state({op:'save', path}) for a full-machine savestate instead.`);
-  }
-  const blob = host.readMemory("save_ram", 0, size);
+  if (!size) throw noSramError("exportSram", host, size);
+  const blob = shape === "wasmcart" ? host.getSaveData() : host.readMemory("save_ram", 0, size);
   const resolved = resolveStatePath(outPath, host);
   await mkdir(path.dirname(resolved), { recursive: true });
   await writeFile(resolved, Buffer.from(blob));
@@ -294,12 +348,9 @@ async function exportSramCore({ path: outPath }, sessionKey) {
 /** op:'importSram' — load a .sav file back into the cartridge's battery SAVE RAM. */
 async function importSramCore({ path: inPath }, sessionKey) {
   const host = getHost(sessionKey);
+  const shape = sramShape(host);
   const size = sramSize(host);
-  if (!size) {
-    throw new Error(
-      `state({op:'importSram'}): the loaded ROM has no battery save RAM ` +
-      `(platform '${host.status.platform}', size 0) — nowhere to load a .sav into.`);
-  }
+  if (!size) throw noSramError("importSram", host, size);
   const resolved = resolveStatePath(inPath, host);
   const blob = new Uint8Array(await readFile(resolved));
   if (blob.length !== size) {
@@ -311,7 +362,8 @@ async function importSramCore({ path: inPath }, sessionKey) {
         `— too large (wrong game/region?). Refusing to truncate.`);
     }
   }
-  host.writeMemory("save_ram", 0, blob);
+  if (shape === "wasmcart") host.setSaveData(blob);
+  else host.writeMemory("save_ram", 0, blob);
   return {
     importedSram: true,
     path: resolved,
