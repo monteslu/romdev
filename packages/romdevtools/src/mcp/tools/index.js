@@ -64,6 +64,7 @@ import { createDisclosure } from "../disclosure.js";
 import { jsonContent, safeTool, withClearToolErrors } from "../util.js";
 import { getHostOrNull, setDisclosure, hostLifetimeStats } from "../state.js";
 import { recentCartLog } from "../cart-log.js";
+import { gpuMemory, gpuMemoryWarning } from "../gpu-memory.js";
 import { da65Available } from "../../toolchains/cc65/da65.js";
 import { cc65Available } from "../../toolchains/cc65/cc65.js";
 import { readFileSync } from "node:fs";
@@ -292,6 +293,17 @@ export function registerTools(server, z, sessionKey) {
           serverHealth: {
             rssMb: Math.round(process.memoryUsage().rss / 1048576),
             ...hostLifetimeStats(),
+            // GPU memory this process holds. Reported because NOTHING ELSE
+            // SHOWS IT: GTT is system RAM mapped for the GPU, so ps/top/rssMb
+            // all attribute it to the GPU rather than to us. A 26.69 GB leak
+            // (2026-08-20) was invisible in every ordinary tool and only
+            // surfaced in DRM fdinfo.
+            ...(() => {
+              const gpu = gpuMemory();
+              if (!gpu) return {};
+              const warn = gpuMemoryWarning(gpu);
+              return { gpu, ...(warn ? { gpuMemoryWarning: warn } : {}) };
+            })(),
           },
           // Cart stdout/stderr is kept OUT of the server log by default (it
           // was 58 MB/day of per-frame telemetry) but a cart being debugged
