@@ -159,6 +159,19 @@ hunt when it can, not gate the work when it can't.
 
 **Your emulator can be evicted while your session lives on.** A loaded ROM is a live WASM core holding real memory, so the server bounds how many it keeps: a host unused for ~10 minutes is torn down, as is the oldest idle one when too many are live at once. This is not an error and not a restart — your session, tools and save states on disk are all fine. You'll see it as a "No ROM loaded" error that **names the exact `loadMedia({...})` call to get back**; re-run it and carry on (if a playtest window was open, the error also points at an auto-checkpoint holding the last ~15s of play). An open playtest window is never evicted — a human may be mid-game. `catalog({op:'status'})` reports `serverHealth {rssMb, liveHosts, maxHosts, hostIdleMs}` if you want to see where things stand.
 
+**Running many sessions in parallel? Say who you are.** Send a stable
+`x-romdev-agent` header (REST) or `dev.romdev/agentHandle` in `_meta`
+(2026-07-28 MCP) alongside your per-task session ids — one value for YOU,
+across all your sessions. It is optional and purely cooperative, but it buys
+you two things: at the session/host caps, eviction targets the LARGEST
+holder's oldest session, so declaring yourself means your parallel burst
+evicts its own idle sessions instead of another agent's — and
+`catalog({op:'status'})` reports `sessionsByAgent`, so a human wondering
+"who opened forty sessions?" gets your name instead of a mystery.
+Undeclared sessions pool together as "(unattributed)" and share that pool's
+eviction fate. When you finish a session, `host({op:'shutdown'})` releases
+ALL of it — emulator, session record, livestream entry — immediately.
+
 **Both protocol revisions are served on the same endpoint.** Legacy clients (`initialize` handshake + `Mcp-Session-Id`) work exactly as before. Modern clients speaking **2026-07-28** — no handshake, no session id, per-request `_meta` — are served statelessly, with `server/discover` advertising what this server supports. Since that revision has no protocol session to hold your identity, pass a stable handle as `_meta["dev.romdev/sessionHandle"]` on every call: it is what ties your calls to YOUR emulator, exactly as `x-romdev-session` does over plain HTTP. Omit it and every call lands in a fresh empty session, which shows up as "I did call loadMedia" and no ROM.
 
 ## Large output: write to a path, or ask for it inline

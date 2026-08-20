@@ -13,6 +13,7 @@ import { LibretroHost } from "romdev-core-host/index.js";
 import path from "node:path";
 import os from "node:os";
 import { existsSync } from "node:fs";
+import { pickEvictionVictim, clearSessionAgent } from "./agent-identity.js";
 
 /** @type {Map<string, LibretroHost>} */
 const hosts = new Map();
@@ -169,6 +170,7 @@ function evictHost(sessionKey) {
   teardownHost(hostsB.get(sessionKey));
   hostsB.delete(sessionKey);
   lastUsed.delete(sessionKey);
+  clearSessionAgent(sessionKey);
 }
 
 /**
@@ -197,16 +199,15 @@ export function reapIdleHosts(now = Date.now()) {
 function enforceHostCap(incomingKey) {
   const evicted = [];
   while (hosts.size >= MAX_HOSTS) {
-    let oldestKey = null;
-    let oldestAt = Infinity;
-    for (const key of hosts.keys()) {
-      if (key === incomingKey || isProtected(key)) continue;
-      const seen = lastUsed.get(key) ?? 0;
-      if (seen < oldestAt) { oldestAt = seen; oldestKey = key; }
-    }
-    if (!oldestKey) break; // everything left is protected or is us
-    evictHost(oldestKey);
-    evicted.push(oldestKey);
+    // Fair eviction: oldest-idle host OF THE LARGEST HOLDER (see
+    // agent-identity.js). A parallel agent at the cap pays its own eviction
+    // bill; ten modest agents are not taxed for one greedy one. Undeclared
+    // sessions pool as one anonymous holder -- the pre-attribution behaviour.
+    const candidates = [...hosts.keys()].filter((k) => k !== incomingKey && !isProtected(k));
+    const victim = pickEvictionVictim(candidates, (k) => lastUsed.get(k) ?? 0);
+    if (!victim) break; // everything left is protected or is us
+    evictHost(victim);
+    evicted.push(victim);
   }
   return evicted;
 }

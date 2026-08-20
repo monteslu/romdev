@@ -25,10 +25,12 @@ import { log } from "../mcp/log.js";
 import { clearHost } from "../mcp/state.js";
 import { SESSION_HEADER } from "../mcp/session-key.js";
 import { onSessionEnd } from "../mcp/session-events.js";
+import { AGENT_HEADER, setSessionAgent, clearSessionAgent, pickEvictionVictim, groupByAgent } from "../mcp/agent-identity.js";
 
-// Live HTTP session count, for serverHealth. Reassigned by mountHttpToolRoutes
-// so the reader needs no handle on the closure-owned map.
+// Live HTTP session count + per-agent grouping, for serverHealth. Reassigned
+// by mountHttpToolRoutes so readers need no handle on the closure-owned map.
 export let _liveHttpSessions = () => 0;
+export let _httpSessionsByAgent = () => ({});
 
 // Re-exported from the session-key module so there is ONE definition of how a
 // session is named. That module is the seam the stateless migration moves;
@@ -53,6 +55,11 @@ export function mountHttpToolRoutes(app, opts = {}) {
   /** @type {Map<string, {registry: Map<string,any>, lastSeen: number}>} */
   const sessions = new Map();
   _liveHttpSessions = () => sessions.size;
+  _httpSessionsByAgent = () => {
+    const out = {};
+    for (const [agent, keys] of groupByAgent(sessions.keys())) out[agent] = keys.length;
+    return out;
+  };
 
   /** Forget one session: registry, livestream entry, emulator. */
   function dropSession(key, why) {
@@ -60,6 +67,7 @@ export function mountHttpToolRoutes(app, opts = {}) {
     if (!s) return;
     sessions.delete(key);
     try { clearHost(key); } catch {}
+    clearSessionAgent(key);
     if (s.sticky) { try { observer.sessionDisconnected(key); } catch {} }
     log.debug(`[http] session ${key.slice(0, 8)} ended (${why}, ${sessions.size} active)`);
   }
@@ -85,12 +93,13 @@ export function mountHttpToolRoutes(app, opts = {}) {
     let s = sessions.get(sessionKey);
     if (!s) {
       while (sessions.size >= MAX_HTTP_SESSIONS) {
-        let oldestKey = null, oldestAt = Infinity;
-        for (const [k, v] of sessions) {
-          if (v.lastSeen < oldestAt) { oldestAt = v.lastSeen; oldestKey = k; }
-        }
-        if (!oldestKey) break;
-        dropSession(oldestKey, "evicted at session cap");
+        // Fair eviction: the oldest-idle session OF THE LARGEST HOLDER, so a
+        // parallel agent at the cap evicts its own sessions rather than a
+        // bystander's. Undeclared sessions pool as one anonymous holder,
+        // which is exactly the pre-attribution behaviour.
+        const victim = pickEvictionVictim(sessions.keys(), (k) => sessions.get(k)?.lastSeen);
+        if (!victim) break;
+        dropSession(victim, "evicted at session cap");
       }
       s = { registry: buildToolRegistry(sessionKey), lastSeen: Date.now(), sticky };
       sessions.set(sessionKey, s);
@@ -134,6 +143,11 @@ export function mountHttpToolRoutes(app, opts = {}) {
     // calls later). Requiring the header up front turns that silent footgun into
     // a loud, fixable 401.
     const sessionKey = req.headers[SESSION_HEADER];
+    // Optional agent attribution: which AGENT owns this session. Purely
+    // cooperative -- declaring it buys the caller fair cap eviction (a
+    // parallel agent evicts its own sessions, not a bystander's) and a
+    // grouped sessionsByAgent in serverHealth/livestream.
+    setSessionAgent(sessionKey, req.headers[AGENT_HEADER]);
     if (typeof sessionKey !== "string" || !sessionKey) {
       res.status(401).json({
         error: "Missing required `x-romdev-session` header. Pick ONE stable, " +

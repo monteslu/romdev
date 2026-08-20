@@ -65,7 +65,7 @@ import { jsonContent, safeTool, withClearToolErrors } from "../util.js";
 import { getHostOrNull, setDisclosure, hostLifetimeStats } from "../state.js";
 import { recentCartLog } from "../cart-log.js";
 import { gpuMemory, gpuMemoryWarning } from "../gpu-memory.js";
-import { _liveHttpSessions } from "../../http/routes.js";
+import { _liveHttpSessions, _httpSessionsByAgent } from "../../http/routes.js";
 import { da65Available } from "../../toolchains/cc65/da65.js";
 import { cc65Available } from "../../toolchains/cc65/cc65.js";
 import { readFileSync } from "node:fs";
@@ -298,6 +298,15 @@ export function registerTools(server, z, sessionKey) {
             // eviction at the cap, or 30 idle minutes -- this is the count
             // the livestream session list shows.
             liveHttpSessions: _liveHttpSessions(),
+            // Which AGENT owns them, when callers declare it (x-romdev-agent
+            // header / dev.romdev/agentHandle in _meta). Sessions from
+            // callers that do not declare pool under "(unattributed)". This
+            // is how "is it one agent going parallel or ten agents?" becomes
+            // answerable -- there is no transport signal for it any more.
+            ...(() => {
+              const byAgent = _httpSessionsByAgent();
+              return Object.keys(byAgent).length ? { sessionsByAgent: byAgent } : {};
+            })(),
             // GPU memory this process holds. Reported because NOTHING ELSE
             // SHOWS IT: GTT is system RAM mapped for the GPU, so ps/top/rssMb
             // all attribute it to the GPU rather than to us. A 26.69 GB leak

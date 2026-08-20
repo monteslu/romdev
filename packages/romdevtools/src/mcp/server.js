@@ -71,6 +71,7 @@ import { registerTools } from "./tools/index.js";
 import { stopAllPlaytest, stopPlaytestForSession, isPlaytestRunning } from "./tools/playtest.js";
 import { clearHost, reapIdleHosts, setHostProtectedPredicate } from "./state.js";
 import { resolveSessionKey, SESSION_META_KEY } from "./session-key.js";
+import { AGENT_META_KEY, setSessionAgent } from "./agent-identity.js";
 import { createMcpHandler, isLegacyRequest, McpServer as McpServerV2 } from "@modelcontextprotocol/server";
 import { toNodeHandler, toWebRequest } from "@modelcontextprotocol/node";
 import { withV1ToolApi } from "./v2-adapter.js";
@@ -436,6 +437,10 @@ async function main() {
           meta: req.body?.params?._meta,
           headers: req.headers,
         });
+        // Same cooperative attribution as the REST path: a stateless request
+        // has no connection to group sessions by, so the agent says who it
+        // is in _meta if it wants fair treatment at the caps.
+        setSessionAgent(sessionKey, req.body?.params?._meta?.[AGENT_META_KEY]);
         // Pass the parsed body: express already consumed the stream, so the
         // handler cannot re-read it (a raw re-read yields a JSON parse error).
         return buildModernHandler(sessionKey)(req, res, req.body);
