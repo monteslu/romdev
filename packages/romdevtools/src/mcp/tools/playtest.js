@@ -9,6 +9,7 @@ import { setActiveBezelBypassed, activeBezelStatus } from "../active-bezel.js";
 import { getHost, getHostOrNull, playtestCheckpointPath } from "../state.js";
 import { imageContent, jsonContent, safeTool, textContent } from "../util.js";
 import { log } from "../log.js";
+import { reloadForFastPresent } from "./fast-present.js";
 
 // Playtest windows are PER SESSION: the MCP server is multi-session (one server
 // serves several agents at once), and the same user can have 2-3 different games
@@ -147,9 +148,35 @@ export function humanCoDriveWarning(sessionKey) {
 
 export function registerPlaytestTools(server, z, sessionKey) {
   // op:'open' — open (or reuse) the SDL window for this session.
-  async function ptOpen({ scale = 3, title, aspect = "tv", fpsOverlay = false }) {
-      const host = getHost(sessionKey);
-      const loadedMediaPath = host.status?.mediaPath ?? null;
+  async function ptOpen({ scale = 3, title, aspect = "tv", fpsOverlay = false, fastPresent = false }) {
+      let host = getHost(sessionKey);
+      let loadedMediaPath = host.status?.mediaPath ?? null;
+      // fastPresent: reload a GL cart onto a PRIVATE GL context so this window
+      // can present by GPU blit + swap instead of dragging every frame back to
+      // the CPU (5-8x, measured). Done HERE, before the window exists, because
+      // the context binds at cart-load time and cannot be swapped afterward.
+      //
+      // Deliberately BEFORE the reuse check below reports a window, and skipped
+      // entirely when one is already open: the reload restarts the cart, which
+      // is safe before anyone is playing and never safe on a window a human may
+      // be mid-game in.
+      let fastPresentResult = null;
+      if (fastPresent && !reconcileSession(sessionKey)
+          && typeof host.canAttachWindow === "function" && !host.canAttachWindow()
+          && host.status?.gl === "rendered") {
+        fastPresentResult = await reloadForFastPresent(sessionKey);
+        // REBIND. The reload disposes the old host and installs a new one, so
+        // every later use of `host` here -- opening the window, reading
+        // frameCount, the platform in the warning -- must be the NEW one. It
+        // is not merely stale: the outgoing host is disposed, so opening
+        // against it fails with "no cart loaded", which reads like the reload
+        // wiped the session rather than like a dangling reference.
+        const reloaded = getHostOrNull(sessionKey);
+        if (reloaded) {
+          host = reloaded;
+          loadedMediaPath = reloaded.status?.mediaPath ?? loadedMediaPath;
+        }
+      }
       // No env-var preflight here — the GROUND-TRUTH "is there a real display?"
       // check lives in loadSdl() (it asks SDL which video driver it selected and
       // throws sdlKind:"no-display" if it's offscreen/dummy). That's cross-
@@ -173,9 +200,11 @@ export function registerPlaytestTools(server, z, sessionKey) {
             ? {
                 presentingWarning:
                   "This GL cart is on the CPU-readback present path — typically 5-8x " +
-                  "slower than it needs to be. To fix: playtest({op:'stop'}), " +
-                  "loadMedia({..., presentWindow:true}), then reopen. NOTE the reload " +
-                  "restarts the cart, so do it BEFORE the human starts playing.",
+                  "slower than it needs to be. Fixing it means RELOADING the cart, which " +
+                  "RESTARTS it — and this window is already open, so a human may be " +
+                  "playing in it right now. Only if nobody is: playtest({op:'stop'}), " +
+                  "then playtest({op:'open', fastPresent:true}). Otherwise leave it; a " +
+                  "slow window beats losing someone's progress mid-game.",
               }
             : {}),
           note: "A playtest window was already open for this session — reused it (it shares your session's live host and already shows your latest loaded/rebuilt ROM). Call playtestStop first to reopen with a different scale/aspect. (Other agents' windows are separate.)",
@@ -303,20 +332,34 @@ export function registerPlaytestTools(server, z, sessionKey) {
         // frame through the CPU, so the only symptom was a human saying the
         // game felt slow. "gl-direct" | "readback" | "software".
         presenting: session.presenting,
+        // What fastPresent:true actually did, when it was asked for. Reported
+        // either way: a silent no-op would leave a caller believing it got the
+        // fast path when it did not.
+        ...(fastPresentResult
+          ? { fastPresent: fastPresentResult.ok
+                ? { applied: true, reloaded: true, ...(fastPresentResult.savedBytes ? { saveDataCarriedBytes: fastPresentResult.savedBytes } : {}), ...(fastPresentResult.reason ? { warning: fastPresentResult.reason } : {}) }
+                : { applied: false, reason: fastPresentResult.reason } }
+          : {}),
         // A GL cart on the readback path is the one case that is both slow AND
-        // fixable by the caller, so say so where an agent will actually read
-        // it. (The flag has to be set at LOAD time — the GL context binds when
-        // the cart's wasm loads — which is why `open` cannot just fix it, and
-        // why reloading resets the cart rather than being a free upgrade.)
+        // fixable, so say so where an agent will actually read it — and name
+        // the cart, so the recipe is copy-pasteable rather than a shape to
+        // fill in. (The flag has to be set at LOAD time — the GL context binds
+        // when the cart's wasm loads — which is why the fix is a RELOAD and
+        // why it resets the cart rather than being a free upgrade.)
         ...(session.presenting === "readback"
           ? {
               presentingWarning:
                 "This GL cart is on the CPU-readback present path — typically 5-8x " +
                 "slower than it needs to be (measured on 1080p carts: 27.9/45.1/54.9 ms " +
                 "per frame vs 3.4/6.1/9.1 GPU-direct; the worst case is a human playing " +
-                "at 41 fps). To fix: loadMedia({..., presentWindow:true}) then reopen. " +
-                "NOTE the reload restarts the cart, so do it BEFORE the human starts " +
-                "playing, not mid-session.",
+                "at 41 fps). Easiest fix: reopen with playtest({op:'open', fastPresent:true}), " +
+                "which does the reload for you and carries the cart's save data across. " +
+                "By hand: playtest({op:'stop'}), " +
+                (loadedMediaPath
+                  ? `loadMedia({platform:"${host.status?.platform ?? "wasmcart"}", path:"${loadedMediaPath}", presentWindow:true}), `
+                  : "loadMedia({..., presentWindow:true}), ") +
+                "then reopen. NOTE either way the reload RESTARTS the cart, so do it " +
+                "BEFORE the human starts playing, not mid-session.",
             }
           : {}),
         // Eviction survivability: while this window is open we roll a .state to
@@ -534,6 +577,8 @@ export function registerPlaytestTools(server, z, sessionKey) {
     "testing use frame({op:'screenshot'}) / build({output:'run'}) instead.\n" +
     "• op:'open' (default) — open (or reuse this session's) window. Only call it once the game is worth a human's " +
     "eyes (boots, renders, the feature is visible) — a window on a black screen/crash just wastes their attention. " +
+    "OPENING A GL CART FOR A HUMAN? pass fastPresent:true — a GL cart loaded the ordinary way presents by dragging " +
+    "every frame back to the CPU (5-8x slower; a human at 41 fps), and this call is where you find out. " + +
     "BEST FOR diagnosing a USER-REPORTED bug: hand them the window, let them drive to the exact moment, then " +
     "inspect the SAME live host in real time (memory/watch/sprites/state). Every other tool keeps working against " +
     "that live host while the window is open. FOOTGUN — the window's loop steps the core in REAL TIME, and while " +
@@ -570,6 +615,7 @@ export function registerPlaytestTools(server, z, sessionKey) {
       path: z.string().optional().describe("op:framebuffer — absolute path to write the PNG to. Required unless inline:true."),
       inline: z.boolean().default(false).describe("op:framebuffer — return the image in the response instead of writing to disk."),
       fpsOverlay: z.boolean().default(false).describe("op:open — start with the on-screen fps counter visible (the title bar shows fps either way; F3 and op:'fps' toggle it later)."),
+      fastPresent: z.boolean().default(false).describe("op:open, wasmcart GL carts only — if the cart is on the slow CPU-readback present path, RELOAD it onto its own GL context first so this window presents by GPU blit+swap (5-8x: measured 27.9/45.1/54.9 ms per frame vs 3.4/6.1/9.1 at 1080p; the worst case is a human playing at 41 fps). Equivalent to doing loadMedia({..., presentWindow:true}) by hand, which is otherwise the only fix — the GL context binds when the cart's wasm loads and cannot be swapped afterward. The cart's save data is carried across the reload. PASS THIS WHEN A HUMAN IS ABOUT TO PLAY A GL CART. Two reasons it is opt-in rather than automatic: the reload RESTARTS the cart (safe now, before anyone is playing — never mid-game, so it is SKIPPED entirely if this session already has a window open), and it costs one extra GL context per loaded cart, which is wrong for headless gate work where the readback is what you want. A no-op on 2D carts, emulator cores, and carts already loaded with presentWindow:true."),
       show: z.boolean().optional().describe("op:fps — true=show the counter, false=hide it; omit to toggle. op:bezel — true=bezel active, false=suspended; omit to toggle."),
     },
     safeTool(async (args) => {

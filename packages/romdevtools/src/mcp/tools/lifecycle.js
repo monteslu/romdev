@@ -17,10 +17,16 @@ import { resolveCheatCodeForApply } from "./cheats.js";
 import { attachObserverFrame } from "./watch-memory.js";
 import { attachActiveBezel, detachActiveBezel, activeBezelStatus, notifyActiveBezel } from "../active-bezel.js";
 import { readFile } from "node:fs/promises";
+import { registerMediaLoader } from "./fast-present.js";
 
 const MEDIA_KINDS = ["cartridge", "disk", "tape", "program"];
 
 export function registerLifecycleTools(server, z, sessionKey) {
+  // Expose the loader so playtest({op:'open', fastPresent:true}) can reload a
+  // GL cart onto a private context. doLoadMedia is closure-scoped over this
+  // sessionKey, so handing it over by registration keeps that scoping intact
+  // and avoids a circular import.
+  registerMediaLoader(sessionKey, (opts) => doLoadMedia(opts));
   // Shared loader: accepts a file `path` OR base64 `bytes` (exactly one).
   // slot:'b' targets the secondary comparison host (for frame sideBySide);
   // it gets its own fresh host and does NOT overwrite slot A's recovery
