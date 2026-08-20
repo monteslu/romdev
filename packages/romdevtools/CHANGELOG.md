@@ -4,6 +4,20 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.126.0 — 2026-08-20
+
+### Added — `agentSessionReminder` on a new session's first response
+
+A declared agent (`x-romdev-agent` / `dev.romdev/agentHandle`) that opens a
+NEW session gets its own inventory back on that first response: its other
+live sessions, what each holds, and idle time — with the two actions that
+matter (reuse a key to continue earlier work; `host({op:'shutdown'})` what
+is finished). Parallelize-then-sweep becomes a supported workflow: burst as
+wide as you like, then use the list to clean up everything you opened.
+First call only; declared agents only (an unattributed reminder would leak
+other agents' activity and cry wolf on ordinary parallelism); and listing a
+session never resets its idle clock.
+
 ## 0.125.0 — 2026-08-20
 
 ### Added — agent attribution, and fair eviction at the caps
