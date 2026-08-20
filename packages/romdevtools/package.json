@@ -1,6 +1,6 @@
 {
   "name": "romdevtools",
-  "version": "0.122.0",
+  "version": "0.123.0",
   "description": "Tool server giving coding agents full control of homebrew ROM development AND reverse-engineering/romhacking across 17 retro platforms (NES, SNES, GB, Genesis, Atari, C64, PC Engine, MSX, PlayStation, N64, Dreamcast, ...) via WASM toolchains + emulator cores. Use over plain HTTP, as an Agent Skill, or as an MCP server.",
   "type": "module",
   "main": "src/mcp/server.js",
@@ -89,7 +89,7 @@
     "rungame": "^0.13.0",
     "socket.io": "^4.8.3",
     "swagger-ui-dist": "^5.17.14",
-    "wasmcart": "^0.22.1",
+    "wasmcart": "^0.23.0",
     "webgl-node": "^1.5.0",
     "yauzl": "^3.3.1",
     "zod": "^4.4.3"

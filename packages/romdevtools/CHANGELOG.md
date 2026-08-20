@@ -4,6 +4,30 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.123.0 — 2026-08-20
+
+### Fixed — the GPU memory leak that starved the machine (via wasmcart 0.23.0)
+
+Repeated GL cart loads leaked every GL object the cart created: wasmcart's
+import layer tracked them all and nothing deleted them at cart teardown, and
+on the SHARED offscreen context — which outlives every cart — that meant each
+gate run's full GL footprint (1080p render targets, bloom chains) stayed
+resident forever. VRAM climbed ~1 GB per burst of parallel gate runs until
+the 8 GB card filled, then spilled into GTT (GPU-mapped SYSTEM RAM), reaching
+26.69 GB of a 54 GB machine in ~90 minutes — invisible to ps/top, because
+GTT is accounted to the GPU. Fixed upstream in wasmcart 0.23.0
+(`_releaseAll` wired into cart destroy); this release pins it. The same
+parallel bursts that drove GTT to 3.1 GB now hold dead flat.
+
+### Added — `serverHealth.gpu` in `catalog({op:'status'})`
+
+`gpu {driver, gttMb, vramMb}` — this process's GPU memory, read from DRM
+fdinfo, plus a loud warning past ~2 GB of GTT explaining that GTT is system
+RAM and why ps will not show it. This is the instrument that traced the leak;
+it stays so the next one names itself. The figures are upper bounds (shared
+buffers are counted once per process that maps them) — judge the trend, not
+the absolute number.
+
 ## 0.122.0 — 2026-08-20
 
 ### Added — `playtest({op:'open', fastPresent:true})`
