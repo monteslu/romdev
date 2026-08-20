@@ -171,6 +171,11 @@ evicts its own idle sessions instead of another agent's — and
 Undeclared sessions pool together as "(unattributed)" and share that pool's
 eviction fate. When you finish a session, `host({op:'shutdown'})` releases
 ALL of it — emulator, session record, livestream entry — immediately.
+Declared agents also get a memory aid: the FIRST response of every new
+session you open carries `agentSessionReminder` listing your other live
+sessions (key, what's loaded, idle time) — that list is exactly what you
+need at the end of a parallel burst to shut down every session you opened,
+or to notice you already had a session for the thing you're about to redo.
 
 **Both protocol revisions are served on the same endpoint.** Legacy clients (`initialize` handshake + `Mcp-Session-Id`) work exactly as before. Modern clients speaking **2026-07-28** — no handshake, no session id, per-request `_meta` — are served statelessly, with `server/discover` advertising what this server supports. Since that revision has no protocol session to hold your identity, pass a stable handle as `_meta["dev.romdev/sessionHandle"]` on every call: it is what ties your calls to YOUR emulator, exactly as `x-romdev-session` does over plain HTTP. Omit it and every call lands in a fresh empty session, which shows up as "I did call loadMedia" and no ROM.
 

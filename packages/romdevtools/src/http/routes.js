@@ -22,10 +22,10 @@ import { buildSkillDoc } from "./skill-doc.js";
 import { swaggerHtml, swaggerAsset } from "./swagger.js";
 import { observer } from "../observer/bus.js";
 import { log } from "../mcp/log.js";
-import { clearHost } from "../mcp/state.js";
+import { clearHost, peekSession } from "../mcp/state.js";
 import { SESSION_HEADER } from "../mcp/session-key.js";
 import { onSessionEnd } from "../mcp/session-events.js";
-import { AGENT_HEADER, setSessionAgent, clearSessionAgent, pickEvictionVictim, groupByAgent } from "../mcp/agent-identity.js";
+import { AGENT_HEADER, setSessionAgent, clearSessionAgent, pickEvictionVictim, groupByAgent, getSessionAgent, UNATTRIBUTED } from "../mcp/agent-identity.js";
 
 // Live HTTP session count + per-agent grouping, for serverHealth. Reassigned
 // by mountHttpToolRoutes so readers need no handle on the closure-owned map.
@@ -101,7 +101,7 @@ export function mountHttpToolRoutes(app, opts = {}) {
         if (!victim) break;
         dropSession(victim, "evicted at session cap");
       }
-      s = { registry: buildToolRegistry(sessionKey), lastSeen: Date.now(), sticky };
+      s = { registry: buildToolRegistry(sessionKey), lastSeen: Date.now(), sticky, created: true };
       sessions.set(sessionKey, s);
       log.debug(`[http] session ${sessionKey.slice(0, 8)} created (${sessions.size} active)`);
       // Surface sticky sessions in /livestream (like the MCP path does on init).
@@ -159,7 +159,12 @@ export function mountHttpToolRoutes(app, opts = {}) {
       });
       return;
     }
-    const { registry } = getSession(sessionKey, { sticky: true });
+    const sess = getSession(sessionKey, { sticky: true });
+    const { registry } = sess;
+    // Consume the creation flag: the reminder below rides only on the FIRST
+    // call of a session, never on every call.
+    const isNewSession = sess.created === true;
+    sess.created = false;
     const tool = registry.get(name);
     if (!tool) {
       res.status(404).json({
@@ -170,6 +175,43 @@ export function mountHttpToolRoutes(app, opts = {}) {
     // echo the session id back (convenience for clients that log it)
     res.setHeader(SESSION_HEADER, sessionKey);
     const out = await runTool(tool, req.body, sessionKey);
+    // A DECLARED agent opening a NEW session gets reminded of what it already
+    // holds. This is the fixable half of "an agent keeps minting sessions and
+    // forgetting them": the server cannot know intent, but it can put the
+    // agent's own inventory in front of it at exactly the moment a new
+    // session is born, with the keys needed to reuse or shut them down.
+    // Scoped to the SAME declared agent on purpose -- an unattributed
+    // reminder would list other agents' sessions and cry wolf on ordinary
+    // multi-agent parallelism (a suite legitimately minting dozens is fine).
+    // peekSession is read-only: describing the other sessions must not reset
+    // their idle clocks, or every reminder would immortalize what it lists.
+    if (isNewSession && out.ok && out.result && typeof out.result === "object" && !Array.isArray(out.result)) {
+      const agent = getSessionAgent(sessionKey);
+      if (agent !== UNATTRIBUTED) {
+        const others = (groupByAgent(sessions.keys()).get(agent) ?? []).filter((k) => k !== sessionKey);
+        if (others.length > 0) {
+          const shown = others.slice(0, 8).map((k) => {
+            const p = peekSession(k);
+            return {
+              session: k,
+              ...(p.loaded ? { loaded: true, platform: p.platform, path: p.path } : { loaded: false }),
+              ...(p.idleSeconds != null ? { idleSeconds: p.idleSeconds } : {}),
+            };
+          });
+          out.result.agentSessionReminder = {
+            agent,
+            otherLiveSessions: others.length,
+            sessions: shown,
+            ...(others.length > shown.length ? { andMore: others.length - shown.length } : {}),
+            note: "This call CREATED a new session. You (this agent) already hold the sessions above — "
+              + "reuse one by sending its x-romdev-session value if you meant to continue earlier work, "
+              + "and host({op:'shutdown'}) any you are done with (that releases the emulator, the session, "
+              + "and its livestream entry immediately). Sessions are capped per server; at the cap the "
+              + "largest holder's oldest session is evicted — which will be yours.",
+          };
+        }
+      }
+    }
     if (out.ok) res.json(out.result);
     else res.status(400).json(out.result ?? { error: out.error });
   });

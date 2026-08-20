@@ -212,6 +212,27 @@ function enforceHostCap(incomingKey) {
   return evicted;
 }
 
+/**
+ * A read-only glance at a session, for the new-session reminder: what it
+ * holds and how stale it is. Deliberately does NOT touch the activity stamp
+ * -- this is used to describe an agent's OTHER sessions, and describing a
+ * session must not reset its idle clock (that would make every reminder
+ * immortalize the sessions it mentions).
+ * @param {string} sessionKey
+ */
+export function peekSession(sessionKey) {
+  const host = hosts.get(sessionKey);
+  const lm = lastMedia.get(sessionKey);
+  const seen = lastUsed.get(sessionKey);
+  return {
+    hostLive: !!host,
+    loaded: !!host?.status?.loaded,
+    platform: host?.status?.platform ?? lm?.platform,
+    path: host?.status?.mediaPath ?? lm?.path,
+    idleSeconds: seen === undefined ? null : Math.round((Date.now() - seen) / 1000),
+  };
+}
+
 /** Live host counts + config, for catalog({op:'status'}). */
 export function hostLifetimeStats() {
   return {

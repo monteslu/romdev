@@ -98,3 +98,24 @@ test("clearing a session's attribution forgets it", () => {
   clearSessionAgent("gone");
   assert.equal(getSessionAgent("gone"), UNATTRIBUTED);
 });
+
+test("peekSession is read-only -- describing a session must not reset its idle clock", async () => {
+  // The reminder lists an agent's OTHER sessions. If listing them refreshed
+  // their activity stamps, every reminder would immortalize exactly the
+  // stale sessions it exists to get cleaned up.
+  const { installHost, clearHost, peekSession, reapIdleHosts, setHostProtectedPredicate, getHostOrNull } =
+    await import("../src/mcp/state.js");
+  setHostProtectedPredicate(() => false);
+  const key = "peek-no-touch";
+  installHost(key, { status: { loaded: true, platform: "wasmcart", mediaPath: "/tmp/x.wasc" }, dispose() {} });
+
+  const p = peekSession(key);
+  assert.equal(p.loaded, true);
+  assert.equal(p.platform, "wasmcart");
+
+  // Sweep from far in the future: a peek must not have counted as activity.
+  const evicted = reapIdleHosts(Date.now() + 60 * 60 * 1000);
+  assert.ok(evicted.includes(key), "a peeked-at session still evicts on schedule");
+  assert.equal(getHostOrNull(key), null);
+  clearHost(key);
+});
