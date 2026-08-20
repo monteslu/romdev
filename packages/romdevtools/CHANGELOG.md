@@ -4,6 +4,27 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.125.0 — 2026-08-20
+
+### Added — agent attribution, and fair eviction at the caps
+
+Stateless MCP removed the last transport signal that could group sessions
+by caller, so one agent opening dozens of parallel sessions and ten agents
+opening a few each were indistinguishable — and at the new session/host
+caps, a global oldest-idle eviction let the greediest caller push
+bystanders' sessions out.
+
+Callers can now declare who they are: `x-romdev-agent` header (REST) or
+`dev.romdev/agentHandle` in `_meta` (2026-07-28 MCP) — one stable value per
+agent, across all its sessions. Optional and cooperative. What it buys:
+both caps evict the oldest-idle session of the LARGEST holder, so a
+parallel agent evicts its own sessions rather than a bystander's.
+Undeclared sessions pool as one anonymous holder — unchanged behaviour for
+callers that never send it, and anonymity is not a shield (the pool
+competes like any holder). `catalog({op:'status'})` reports
+`sessionsByAgent`, so "one agent going parallel, or ten agents?" is
+answerable from a status call.
+
 ## 0.124.0 — 2026-08-20
 
 ### Fixed — `host({op:'shutdown'})` ends the session, not just the emulator
