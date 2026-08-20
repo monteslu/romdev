@@ -4,6 +4,27 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.124.0 — 2026-08-20
+
+### Fixed — `host({op:'shutdown'})` ends the session, not just the emulator
+
+An agent that dutifully shut down every session it opened still left each
+session's ~20 MB tool registry and its livestream entry alive for the
+30-minute idle reaper — the cleanup API existed at the emulator layer and
+not at the session layer. Shutdown (primary slot) now drops the whole
+session: registry, livestream entry, emulator. Not destructive: the next
+call on the same `x-romdev-session` re-creates it, and last-media recovery
+breadcrumbs survive independently. Slot-B shutdown deliberately does not
+end the session (a comparison in progress must not lose its primary host).
+
+### Added — HTTP session cap + `liveHttpSessions` in `serverHealth`
+
+For agents that never clean up: sessions are capped
+(`ROMDEV_MAX_HTTP_SESSIONS`, default 32), evicting oldest-idle to make
+room — an eviction self-heals, unbounded growth takes the machine down.
+`serverHealth.liveHttpSessions` is the count the livestream session list
+shows, so ghost-session questions are answerable from a status call.
+
 ## 0.123.0 — 2026-08-20
 
 ### Fixed — the GPU memory leak that starved the machine (via wasmcart 0.23.0)
