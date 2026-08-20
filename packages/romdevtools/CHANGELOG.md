@@ -4,6 +4,40 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.122.0 — 2026-08-20
+
+### Added — `playtest({op:'open', fastPresent:true})`
+
+A wasmcart GL cart loaded the ordinary way shares the one process-wide
+offscreen GL context, which can never be bound to a window (attaching it would
+drag every other session's cart into that window). So it presents by dragging
+every frame back to the CPU: measured 27.9/45.1/54.9 ms per frame at 1080p
+against 3.4/6.1/9.1 GL-direct — the worst case is a human playing at 41 fps.
+
+`op:'open'` already detected that and warned, and it is also the only call that
+knows a human is about to watch — so every caller was left re-deriving the same
+save/reload/restore dance by hand, and an agent that reported success without
+reading `presenting` handed a human a 41 fps window and never knew.
+
+`fastPresent:true` does it for you: read the cart's save data, reload the same
+path with `presentWindow:true`, restore the save, attach. The response reports
+what happened (`fastPresent: {applied, reloaded, saveDataCarriedBytes}`), and a
+failure to make the window faster never fails to open the window.
+
+Opt-in rather than automatic, for two reasons: the reload RESTARTS the cart —
+safe at open time, never on a window a human may be mid-game in, so it is
+skipped entirely when this session already has a window open — and it costs one
+extra GL context per loaded cart, which is wrong for headless gate work where
+the readback is what you want.
+
+### Changed — the readback warning is now actionable
+
+It names the cart, so the manual recipe is copy-pasteable rather than a shape
+to fill in. `op:'open'`'s description leads with `fastPresent`, since that is
+the call an agent reaches for first when a human wants to play. And the
+warning on a REUSED window no longer suggests stop-reload-reopen — that advice
+could cost a human their game; it now says to leave a live window alone.
+
 ## 0.121.0 — 2026-08-19
 
 ### Fixed — the server bounds its own emulator memory (it was being OOM-killed)
