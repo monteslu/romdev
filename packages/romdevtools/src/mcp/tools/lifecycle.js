@@ -18,6 +18,7 @@ import { attachObserverFrame } from "./watch-memory.js";
 import { attachActiveBezel, detachActiveBezel, activeBezelStatus, notifyActiveBezel } from "../active-bezel.js";
 import { readFile } from "node:fs/promises";
 import { registerMediaLoader } from "./fast-present.js";
+import { emitSessionEnd } from "../session-events.js";
 
 const MEDIA_KINDS = ["cartridge", "disk", "tape", "program"];
 
@@ -256,7 +257,20 @@ export function registerLifecycleTools(server, z, sessionKey) {
           return textContent(`unloaded${slotB ? " (slot B)" : ""}${hadBezel ? " (Active Bezel detached)" : ""}`);
         }
         case "shutdown":
-          if (slotB) clearHostB(sessionKey); else { detachActiveBezel(sessionKey); clearHost(sessionKey); }
+          if (slotB) clearHostB(sessionKey);
+          else {
+            detachActiveBezel(sessionKey);
+            clearHost(sessionKey);
+            // Shutdown means the SESSION is done, not just its emulator. The
+            // HTTP route holds a ~20 MB tool registry and a livestream entry
+            // per session, and without this they outlived every clean
+            // shutdown by 30 idle minutes -- a suite that opened and dutifully
+            // shut down ~53 sessions still left ~1 GB of registries behind.
+            // Announced as an event because the session records live behind
+            // transport-layer closures this tool cannot (and should not)
+            // reach. A later call on the same key just re-creates the session.
+            emitSessionEnd(sessionKey);
+          }
           return textContent(`shutdown complete${slotB ? " (slot B)" : ""}`);
         case "reset": {
           const host = get(sessionKey);

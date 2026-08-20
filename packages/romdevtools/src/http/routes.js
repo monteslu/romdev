@@ -24,6 +24,11 @@ import { observer } from "../observer/bus.js";
 import { log } from "../mcp/log.js";
 import { clearHost } from "../mcp/state.js";
 import { SESSION_HEADER } from "../mcp/session-key.js";
+import { onSessionEnd } from "../mcp/session-events.js";
+
+// Live HTTP session count, for serverHealth. Reassigned by mountHttpToolRoutes
+// so the reader needs no handle on the closure-owned map.
+export let _liveHttpSessions = () => 0;
 
 // Re-exported from the session-key module so there is ONE definition of how a
 // session is named. That module is the seam the stateless migration moves;
@@ -47,10 +52,46 @@ export function mountHttpToolRoutes(app, opts = {}) {
   // Mirrors the MCP transports map + idle reaper.
   /** @type {Map<string, {registry: Map<string,any>, lastSeen: number}>} */
   const sessions = new Map();
+  _liveHttpSessions = () => sessions.size;
+
+  /** Forget one session: registry, livestream entry, emulator. */
+  function dropSession(key, why) {
+    const s = sessions.get(key);
+    if (!s) return;
+    sessions.delete(key);
+    try { clearHost(key); } catch {}
+    if (s.sticky) { try { observer.sessionDisconnected(key); } catch {} }
+    log.debug(`[http] session ${key.slice(0, 8)} ended (${why}, ${sessions.size} active)`);
+  }
+
+  // host({op:'shutdown'}) now announces "this session is done" -- honor it
+  // here. Before this, a suite that opened ~53 sessions and shut every one
+  // down still left ~20 MB of tool registry EACH (measured: 50 registries =
+  // 1 GB) plus a livestream entry, all waiting out the 30-minute idle reaper.
+  // The cleanup API existed at the emulator layer and not at the session
+  // layer, so well-behaved agents could not actually clean up.
+  onSessionEnd((key) => dropSession(key, "shutdown"));
+
+  // Hard ceiling for agents that never clean up at all: at the cap, the
+  // oldest-idle session is evicted to make room. Same policy as the host cap
+  // in state.js and for the same reason -- an eviction self-heals (the next
+  // call on that key re-creates the session, and lastMedia survives in
+  // state.js), while unbounded growth took the machine down. 20 MB per
+  // registry makes the default a ~640 MB worst case instead of "however many
+  // sessions the busiest agent ever minted".
+  const MAX_HTTP_SESSIONS = Number(process.env.ROMDEV_MAX_HTTP_SESSIONS ?? 32);
 
   function getSession(sessionKey, { sticky = false } = {}) {
     let s = sessions.get(sessionKey);
     if (!s) {
+      while (sessions.size >= MAX_HTTP_SESSIONS) {
+        let oldestKey = null, oldestAt = Infinity;
+        for (const [k, v] of sessions) {
+          if (v.lastSeen < oldestAt) { oldestAt = v.lastSeen; oldestKey = k; }
+        }
+        if (!oldestKey) break;
+        dropSession(oldestKey, "evicted at session cap");
+      }
       s = { registry: buildToolRegistry(sessionKey), lastSeen: Date.now(), sticky };
       sessions.set(sessionKey, s);
       log.debug(`[http] session ${sessionKey.slice(0, 8)} created (${sessions.size} active)`);
@@ -69,15 +110,10 @@ export function mountHttpToolRoutes(app, opts = {}) {
     const now = Date.now();
     for (const [key, s] of sessions) {
       if (now - s.lastSeen > idleMs) {
-        sessions.delete(key);
-        // Free the EMULATOR too, not just the registry entry. Dropping the
-        // session record alone orphaned its host: nothing else referenced the
-        // key, so the host outlived the session that owned it and was only
-        // ever reclaimed by the host reaper's own timer. (Gate suites drive
-        // this route, so this was a live leak path in the 2026-08-19 OOM.)
-        try { clearHost(key); } catch {}
-        if (s.sticky) { try { observer.sessionDisconnected(key); } catch {} }
-        log.debug(`[http] session ${key.slice(0, 8)} reaped (idle)`);
+        // dropSession frees the EMULATOR too, not just the registry entry --
+        // dropping the record alone orphaned its host (a live leak path in
+        // the 2026-08-19 OOM, since gate suites drive this route).
+        dropSession(key, "idle");
       }
     }
   }, 5 * 60 * 1000);
