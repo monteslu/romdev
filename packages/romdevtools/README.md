@@ -21,7 +21,7 @@ Point any coding agent at it three ways:
 
 - **Plain HTTP** — `POST http://127.0.0.1:7331/tool/{name}`; browse/try every tool at `/documentation`.
 - **Agent Skill** — `GET /skills/romdev/SKILL.md` (the [Agent Skills](https://agentskills.io) standard; save it to your skills dir as `skills/romdev/SKILL.md`; ~100 tokens until invoked).
-- **MCP** — it's also a [Model Context Protocol](https://modelcontextprotocol.io/) server at `/mcp` for clients that want it.
+- **MCP** — it's also a [Model Context Protocol](https://modelcontextprotocol.io/) server at `/mcp` for clients that want it. **Both protocol eras are served on that one endpoint**: legacy clients (the `initialize` handshake + `Mcp-Session-Id`) work unchanged, and clients speaking the stateless **2026-07-28** revision — no handshake, no session id, per-request `_meta` — are served natively, with `server/discover` advertising what the server supports. Since that revision has no protocol session to hold your identity, pass a stable handle as `_meta["dev.romdev/sessionHandle"]` on every call; it is what ties your calls to *your* emulator, exactly as `x-romdev-session` does over plain HTTP.
 
 This package contains all the JavaScript — the tool surface, the WASM emulator host, the per-platform example games, runtime/library source, and debug helpers — but **no emulator or compiler WASM itself.** Those ship in the `romdev-*` binary packages it depends on; each platform's core/toolchain WASM is resolved (`import.meta.resolve`) and instantiated only the first time you build or run that platform, so memory stays proportional to what you actually use.
 
@@ -80,10 +80,20 @@ running server:
   task-descriptive (e.g. `nes-platformer-build`), since it's also the label shown
   in the `/livestream` observer. The emulator host is per-session, so the same id
   keeps your ROM across calls, and several agents can share one server by each
-  using a different id. A call that fails returns a non-2xx (4xx) with the reason
-  in the body — never a 200 that hides an error. romdev runs **locally** and tool
-  path args (`path`, `outputPath`, …) are **local filesystem paths**, not uploads
-  — pass absolute paths on the same machine.
+  using a different id. **Running many sessions at once?** Also send a stable
+  `x-romdev-agent` header — one value for *you*, across all your sessions. It is
+  optional and cooperative, and it buys two things: at the session/host caps
+  eviction targets the **largest holder's** oldest session, so your parallel
+  burst evicts its own idle sessions instead of another agent's, and the first
+  response of each new session you open carries `agentSessionReminder` — your
+  other live sessions, what each holds, how idle they are — which is exactly the
+  list you need to sweep up afterwards. When you finish with a session,
+  **`host({op:'shutdown'})`** releases all of it (emulator, session record,
+  livestream entry) immediately rather than waiting out the idle timer. A call
+  that fails returns a non-2xx (4xx) with the reason in the body — never a 200
+  that hides an error. romdev runs **locally** and tool path args (`path`,
+  `outputPath`, …) are **local filesystem paths**, not uploads — pass absolute
+  paths on the same machine.
 - **Agent Skill:** **`GET /skills/romdev/SKILL.md`** is a portable [Agent
   Skills](https://agentskills.io) `SKILL.md` (works in Claude Code, opencode,
   OpenClaw, Hermes, …). Drop it in your agent's skills dir; it costs ~100 tokens

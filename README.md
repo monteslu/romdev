@@ -187,6 +187,8 @@ In a Codex session, `/mcp` lists the connected servers and their tools.
 
 It's a standard **streamable-HTTP** MCP server — point any MCP-capable client at `http://127.0.0.1:7331/mcp`. Set `PORT` / `HOST` env vars to change the bind address.
 
+**Both protocol eras are served on that one endpoint.** Legacy clients (the `initialize` handshake plus `Mcp-Session-Id`) work exactly as before. Clients speaking the stateless **2026-07-28** revision — no handshake, no session id, protocol version and capabilities in each request's `_meta` — are served natively, and `server/discover` advertises what the server supports. That revision has no protocol session to carry your identity, so send a stable handle as `_meta["dev.romdev/sessionHandle"]` on every call: it is what ties your calls to *your* emulator (the same job `x-romdev-session` does over plain HTTP). Omit it and every call lands in a fresh, empty session.
+
 ---
 
 Then just describe what you want:
