@@ -4,6 +4,52 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.128.0 — 2026-08-21
+
+### Fixed — the HTTP idle reaper destroyed a live playtest window's host
+
+Two idle reapers, and only one knew about playtest. `reapIdleHosts` in
+`mcp/state.js` has always skipped protected sessions; the HTTP session
+reaper in `http/routes.js` did not — and `dropSession` calls
+`clearHost`, so it walked past that protection and destroyed the
+emulator underneath a live window. The window stayed up presenting a
+frozen frame with `liveHosts:0` behind it, which reads as a game crash.
+
+`lastSeen` is stamped by AGENT TOOL CALLS only, so a human playing for
+half an hour while the agent (correctly) keeps its hands off looks
+perfectly idle from the HTTP layer. Not touching a human's window is
+what triggered it; any stray tool call would have kept it alive.
+Measured at 32.6 minutes of Formix against the 30 minute `idleMs`.
+
+This was a regression from the 2026-08-19 OOM fix, which made the reaper
+free the emulator deliberately because dropping the session record alone
+orphaned its host. That leak-plugging is preserved — only live playtest
+sessions are exempt. Cap eviction had the identical hole (the host-side
+cap filtered on `!isProtected`, its HTTP twin did not, so the two caps
+disagreed about what was evictable) and is fixed alongside it.
+
+### Fixed — the playtest auto-checkpoint never wrote, and reported success
+
+`writeCheckpoint` returned early on `typeof h.serializeState !==
+"function"`, and no host in `src/host/` implements it — so this was never
+wasmcart-specific: every playtest window ever opened advertised a rolling
+checkpoint that did not exist. The early return did not set
+`lastCheckpointError`, so the FAILING hint in `playtest({op:'status'})`
+could not fire, and the tool reported the reassuring "auto-saves every
+~15s" note while nothing was being saved.
+
+A wasmcart has no CPU or address space to snapshot, but it does have its
+save region. The checkpoint now takes a whole-machine snapshot when the
+host can, falls back to the cart's SRAM when it cannot, and only gives up
+when it has neither — setting the error in that case so the existing hint
+fires. The checkpoint path's extension follows its content (`.state` vs
+`.sav`), because feeding SRAM to `state({op:'load'})` fails; the note
+names the matching restore call and states plainly that an SRAM
+checkpoint restores saved progress rather than the exact frame.
+`playtest({op:'status'})` gained `autoCheckpointWritten` and
+`autoCheckpointKind`, separating "saving fine" from "has never once
+saved" — a distinction the old shape could not express.
+
 ## 0.127.0 — 2026-08-20
 
 ### Fixed — 3D-core hosts leaked their whole GL context (romdev-core-host 0.9.0)
