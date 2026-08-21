@@ -21,10 +21,13 @@ cycle, monotonic, with the game barely booted (a real play session leaks
 its working set); after, dead flat across every cycle. `dispose()` now
 destroys the HW-render context before dropping it.
 
-Swept the other GL consumers for the same class: jsgame is clean (measured
-flat over repeated cycles — its session teardown owns its context), the 2D
-software cores have no GL at all, and the Active Bezel GPU path is noted
-as unverified (not in recent use).
+Swept every other GL consumer for the same class, and all are clean:
+jsgame measured flat over repeated load/dispose cycles (its session
+teardown owns its context); the 2D software cores have no GL at all; and
+the Active Bezel GPU path (`gpu-command-v1`, 1920x1080) held flat across
+**201 verified composes** — VRAM 2.72 → 2.73 GB, GTT 0.27 → 0.28, i.e.
+desktop noise — with the package's own `ticks` counter proving the
+renderer actually ran each time rather than the reading being vacuous.
 
 ## 0.126.0 — 2026-08-20
 
