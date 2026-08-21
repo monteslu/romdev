@@ -22,7 +22,7 @@ import { buildSkillDoc } from "./skill-doc.js";
 import { swaggerHtml, swaggerAsset } from "./swagger.js";
 import { observer } from "../observer/bus.js";
 import { log } from "../mcp/log.js";
-import { clearHost, peekSession } from "../mcp/state.js";
+import { clearHost, peekSession, isHostProtected } from "../mcp/state.js";
 import { SESSION_HEADER } from "../mcp/session-key.js";
 import { onSessionEnd } from "../mcp/session-events.js";
 import { AGENT_HEADER, setSessionAgent, clearSessionAgent, pickEvictionVictim, groupByAgent, getSessionAgent, UNATTRIBUTED } from "../mcp/agent-identity.js";
@@ -97,7 +97,12 @@ export function mountHttpToolRoutes(app, opts = {}) {
         // parallel agent at the cap evicts its own sessions rather than a
         // bystander's. Undeclared sessions pool as one anonymous holder,
         // which is exactly the pre-attribution behaviour.
-        const victim = pickEvictionVictim(sessions.keys(), (k) => sessions.get(k)?.lastSeen);
+        // Never evict a session with a human mid-game. The HOST-side cap
+        // (state.js enforceHostCap) already filters on !isProtected; this one
+        // did not, so the two caps disagreed about what was evictable and a
+        // live playtest window could be picked as the victim.
+        const evictable = [...sessions.keys()].filter((k) => !isHostProtected(k));
+        const victim = pickEvictionVictim(evictable, (k) => sessions.get(k)?.lastSeen);
         if (!victim) break;
         dropSession(victim, "evicted at session cap");
       }
@@ -119,6 +124,22 @@ export function mountHttpToolRoutes(app, opts = {}) {
     const now = Date.now();
     for (const [key, s] of sessions) {
       if (now - s.lastSeen > idleMs) {
+        // A LIVE PLAYTEST WINDOW IS NOT IDLE, however quiet the agent is.
+        //
+        // `lastSeen` is stamped by AGENT TOOL CALLS only, so a human playing
+        // for half an hour while the agent (correctly) keeps its hands off
+        // looks perfectly idle from here -- and dropSession calls clearHost,
+        // which destroys the emulator behind their window. The window stays
+        // up presenting a frozen frame with liveHosts:0 behind it, which
+        // reads as a game crash.
+        //
+        // Measured 2026-08-21: a human 32.6 minutes into Formix, against the
+        // 30 minute idleMs. The host reaper in state.js has always skipped
+        // protected sessions; this one did not, so the protection could be
+        // walked straight past. The perverse part is that NOT touching a
+        // human's window is what triggered it -- any stray tool call would
+        // have refreshed lastSeen.
+        if (isHostProtected(key)) continue;
         // dropSession frees the EMULATOR too, not just the registry entry --
         // dropping the record alone orphaned its host (a live leak path in
         // the 2026-08-19 OOM, since gate suites drive this route).

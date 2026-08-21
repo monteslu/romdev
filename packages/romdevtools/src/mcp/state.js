@@ -27,14 +27,21 @@ const hosts = new Map();
  * @param {string} sessionKey
  * @param {string|null} mediaPath
  */
-export function playtestCheckpointPath(sessionKey, mediaPath) {
+export function playtestCheckpointPath(sessionKey, mediaPath, kind = "state") {
+  // THE EXTENSION HAS TO MATCH THE CONTENT. A libretro checkpoint is a
+  // whole-machine savestate restored with state({op:'load', path}); a
+  // wasmcart checkpoint is the cart's SRAM, restored with
+  // state({op:'importSram', path}) -- and feeding one to the other's tool
+  // fails. Naming both ".state" invited exactly that mistake, so the SRAM
+  // flavour is spelled ".sav", which is what every other SRAM file here is.
+  const ext = kind === "sram" ? "sav" : "state";
   const safeSession = String(sessionKey).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 40);
   if (mediaPath && !mediaPath.startsWith("<") && path.isAbsolute(mediaPath)) {
     const dir = path.dirname(mediaPath);
     const base = path.basename(mediaPath, path.extname(mediaPath));
-    return path.join(dir, `${base}.playtest-autosave.state`);
+    return path.join(dir, `${base}.playtest-autosave.${ext}`);
   }
-  return path.join(os.tmpdir(), `romdev-playtest-${safeSession}.autosave.state`);
+  return path.join(os.tmpdir(), `romdev-playtest-${safeSession}.autosave.${ext}`);
 }
 
 // Secondary host slot ("B") per session. The primary slot above is what every
@@ -156,6 +163,26 @@ let isProtected = () => false;
  */
 export function setHostProtectedPredicate(fn) {
   if (typeof fn === "function") isProtected = fn;
+}
+
+/**
+ * Is this session un-evictable right now (i.e. does it have a live playtest
+ * window with a human in it)?
+ *
+ * Exported because the HTTP layer has its OWN session reaper and its own
+ * cap-eviction, and both call clearHost() -- which tears down the emulator.
+ * They were doing it with no protection check at all, so a human playing for
+ * 30 minutes without the agent making a single tool call had the host
+ * destroyed out from under their live window: the window stayed up presenting
+ * a frozen frame with liveHosts:0 behind it. (Measured 2026-08-21: a 32.6
+ * minute Formix session against the 30 minute HTTP idleMs.)
+ *
+ * Read accessor rather than exporting `isProtected` itself, so routes.js can
+ * ask the question without importing the playtest module -- keeping the
+ * dependency direction setHostProtectedPredicate exists to preserve.
+ */
+export function isHostProtected(sessionKey) {
+  try { return isProtected(sessionKey); } catch { return false; }
 }
 
 /** @param {string} sessionKey */

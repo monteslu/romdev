@@ -317,6 +317,10 @@ export async function playtest(args) {
   const checkpointEverySec = args.checkpointIntervalSec ?? 15;
   let lastCheckpointTick = 0;
   let lastCheckpointError = null;
+  /** True once a checkpoint has actually been written to disk. */
+  let checkpointWritten = false;
+  /** "state" (whole-machine savestate) or "sram" (the cart's save data). */
+  let checkpointKind = null;
   /**
    * One diagnosable line for a host that just stopped stepping, or null if we
    * have nothing specific to add.
@@ -345,12 +349,57 @@ export async function playtest(args) {
     } catch { return null; }
   }
 
-  /** Serialize the live host and write it to the checkpoint path atomically
-   *  (temp + rename). Synchronous + best-effort: never throws into the tick. */
-  function writeCheckpoint(h, reason) {
-    if (!checkpointPath || !h || !h.status?.loaded || typeof h.serializeState !== "function") return false;
+  /** The host's save-region bytes, however this host spells that call.
+   *  Never throws: this runs inside the 60fps tick. */
+  function _hostSaveBytes(h) {
     try {
-      const blob = h.serializeState();
+      if (typeof h.exportSaveData === "function") return h.exportSaveData();
+      if (typeof h.getSaveData === "function") return h.getSaveData();
+    } catch { /* best-effort */ }
+    return null;
+  }
+
+  /** Serialize the live host and write it to the checkpoint path atomically
+   *  (temp + rename). Synchronous + best-effort: never throws into the tick.
+   *
+   * TWO KINDS OF CHECKPOINT, because two kinds of host.
+   *
+   * A libretro core snapshots the WHOLE MACHINE via serializeState(). A
+   * wasmcart implements none of saveState/serializeState (it has no CPU or
+   * address space to snapshot -- see requireSavestateSupport in
+   * mcp/tools/state.js), so this function used to hit its own type guard and
+   * return false on EVERY tick, silently, forever. The window advertised
+   * "progress auto-saves every ~15s" the whole time and never wrote a byte;
+   * the early return did not even set lastCheckpointError, so the FAILING
+   * hint in playtest({op:'status'}) could not fire either. A human lost a
+   * 32-minute run to that on 2026-08-21 -- the eviction that killed it
+   * pointed them at a recovery file which had never existed.
+   *
+   * What a wasmcart DOES have is its save region (getSaveData), the same
+   * bytes state({op:'exportSram'}) writes. That is not a whole-machine
+   * snapshot -- it restores the cart's own save, not the exact frame -- but
+   * for a game that autosaves its progress it is the difference between
+   * losing a campaign and losing the last few seconds. So: snapshot if the
+   * host can, SRAM if it can't, and only give up when it has neither. */
+  function writeCheckpoint(h, reason) {
+    if (!checkpointPath || !h || !h.status?.loaded) return false;
+    const canSnapshot = typeof h.serializeState === "function";
+    const canSram = typeof h.exportSaveData === "function"
+      || typeof h.getSaveData === "function";
+    if (!canSnapshot && !canSram) {
+      // Say so ONCE, and through the existing error channel, so
+      // playtest({op:'status'}) reports the FAILING hint instead of the
+      // reassuring note. Silence here is what made this cost a whole run.
+      if (!lastCheckpointError) {
+        lastCheckpointError =
+          `host '${h.status?.platform}' supports neither savestates nor SRAM export; `
+          + "no rolling checkpoint is possible for this window";
+        log.warn(`[playtest] NO CHECKPOINT: ${lastCheckpointError}`);
+      }
+      return false;
+    }
+    try {
+      const blob = canSnapshot ? h.serializeState() : _hostSaveBytes(h);
       if (!blob || !blob.length) return false;
       const dir = path.dirname(checkpointPath);
       if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -358,7 +407,10 @@ export async function playtest(args) {
       writeFileSync(tmp, Buffer.from(blob));
       renameSync(tmp, checkpointPath);
       lastCheckpointError = null;
-      log.debug(`[playtest] checkpoint (${reason}) → ${checkpointPath} (${blob.length} B)`);
+      checkpointWritten = true;
+      checkpointKind = canSnapshot ? "state" : "sram";
+      log.debug(`[playtest] checkpoint (${reason}, ${checkpointKind}) `
+        + `-> ${checkpointPath} (${blob.length} B)`);
       return true;
     } catch (e) {
       lastCheckpointError = e.message;
@@ -1711,6 +1763,13 @@ export async function playtest(args) {
         path: checkpointPath,
         lastWrittenTick: lastCheckpointTick || null,
         lastError: lastCheckpointError,
+        // Has a checkpoint EVER landed on disk? `lastWrittenTick` only records
+        // that the cadence fired -- it is stamped before writeCheckpoint runs
+        // and stays set even when the write bails -- so it cannot answer this.
+        // A caller needs "is the human's progress actually being saved", and
+        // that question had no honest answer here.
+        written: checkpointWritten,
+        kind: checkpointKind,
       };
     },
     // The emulator host the window is CURRENTLY rendering. The window follows

@@ -215,7 +215,17 @@ export function registerPlaytestTools(server, z, sessionKey) {
       // Where the rolling auto-checkpoint (eviction survivability) is written.
       // Next to the ROM when it's a real file (so it's obvious + co-located); for
       // base64/in-memory loads, a stable per-session file under the OS temp dir.
-      const autoCheckpointPath = playtestCheckpointPath(sessionKey, loadedMediaPath);
+      // WHICH KIND of checkpoint this host can actually produce. A libretro
+      // core gives a whole-machine savestate; a wasmcart has no CPU or address
+      // space to snapshot and gives its SRAM instead. Deciding here (rather
+      // than discovering it inside the tick and silently giving up, which is
+      // what used to happen) is what lets the path, the note and the recovery
+      // advice below all tell the truth.
+      const ckKind = typeof host.serializeState === "function" ? "state" : "sram";
+      const autoCheckpointPath = playtestCheckpointPath(sessionKey, loadedMediaPath, ckKind);
+      const ckRestore = ckKind === "sram"
+        ? "state({op:'importSram', path})"
+        : "state({op:'load', path})";
       let session;
       try {
         // Pass a live-host accessor so the window FOLLOWS rebuilds: runSource/
@@ -365,7 +375,11 @@ export function registerPlaytestTools(server, z, sessionKey) {
         // Eviction survivability: while this window is open we roll a .state to
         // disk so the human's manual progress survives a session eviction.
         autoCheckpointPath,
-        autoCheckpointNote: `Progress auto-saves to ${autoCheckpointPath} every ~15s while the window is open (and on F2). If the session is evicted, state({op:'load', path}) it to restore the human's playthrough instead of replaying from boot.`,
+        autoCheckpointKind: ckKind,
+        autoCheckpointNote: `Progress auto-saves to ${autoCheckpointPath} every ~15s while the window is open (and on F2). If the session is evicted, ${ckRestore} restores the human's playthrough instead of replaying from boot.`
+          + (ckKind === "sram"
+            ? " NOTE: this platform has no whole-machine savestate, so the checkpoint is the cart's SAVE DATA -- it restores the player's saved progress, not the exact frame."
+            : ""),
         // C64 input is non-obvious (games need keyboard keys to START), so ALWAYS
         // relay the controls — a controller alone IS enough (spare buttons/stick
         // map to F1/Run-Stop/Space/Return), and the keyboard fallback covers the
@@ -477,9 +491,17 @@ export function registerPlaytestTools(server, z, sessionKey) {
           if (!ck || !ck.path) return {};
           return {
             autoCheckpointPath: ck.path,
+            // `written` distinguishes "saving fine" from "has never once
+            // saved". The old shape could only report a THROWN error, so a
+            // checkpoint that bailed on a type guard every tick -- which is
+            // what wasmcart did, forever -- reported the reassuring note with
+            // no error and no file. An agent had no way to know.
+            autoCheckpointWritten: !!ck.written,
             ...(ck.lastError
-              ? { autoCheckpointError: ck.lastError, autoCheckpointHint: "The rolling auto-checkpoint is FAILING — the human's progress is NOT being saved. Have them pick a writable spot: state({op:'save', path}) manually." }
-              : { autoCheckpointNote: "The human's progress auto-saves here every ~15s (and on F2); survives a session eviction via state({op:'load', path})." }),
+              ? { autoCheckpointError: ck.lastError, autoCheckpointHint: "The rolling auto-checkpoint is FAILING - the human's progress is NOT being saved. Save it by hand now: state({op:'exportSram', path}) on wasmcart, state({op:'save', path}) on a libretro core." }
+              : ck.written
+                ? { autoCheckpointNote: `The human's progress auto-saves here every ~15s (and on F2); survives a session eviction via ${ck.kind === "sram" ? "state({op:'importSram', path})" : "state({op:'load', path})"}.` }
+                : { autoCheckpointHint: "The rolling auto-checkpoint has NOT written yet. Normal in the first ~15s; if it persists, the human's progress is NOT being saved." }),
           };
         })()),
       });
