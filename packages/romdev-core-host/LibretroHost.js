@@ -938,6 +938,15 @@ export class LibretroHost {
       if (Array.isArray(this.state.audioRing)) this.state.audioRing.length = 0;
     }
     this.beforeFrame = null;
+    // DESTROY the HW-render context, not just the reference. An EGL context
+    // is a native resource: nulling the JS handle leaks the whole context --
+    // its FBO, and every texture/buffer the core ever allocated in it. This
+    // was never called anywhere, so every discarded 3D-core host (N64 / PS1 /
+    // Dreamcast) leaked its full context for as long as those cores have
+    // existed. Same class as the wasmcart GL-object leak, one layer down:
+    // there, objects leaked into a shared context; here, whole owned contexts
+    // leaked because ownership was dropped without teardown.
+    if (this.hwRender) { try { this.hwRender.destroy(); } catch { /* ignore */ } }
     this.hwRender = null;
     this._glContextCreated = false;
     this.mod = null;

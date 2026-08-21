@@ -4,6 +4,28 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.127.0 — 2026-08-20
+
+### Fixed — 3D-core hosts leaked their whole GL context (romdev-core-host 0.9.0)
+
+The same class as the wasmcart GL-object leak, one layer down. wasmcart
+leaked objects INTO a shared context; the libretro HW-render path (N64,
+PS1, Dreamcast) leaked whole OWNED contexts: `LibretroGL.destroy()` was
+never called anywhere, so every discarded 3D-core host dropped its JS
+reference to a native EGL context — which does not free it — taking the
+context, its FBO, and everything the core ever allocated with it. This
+predates wasmcart carts entirely: it has leaked since the 3D cores landed.
+
+Measured, PS1 load+shutdown cycles: before, +17 MB VRAM and +7 MB GTT per
+cycle, monotonic, with the game barely booted (a real play session leaks
+its working set); after, dead flat across every cycle. `dispose()` now
+destroys the HW-render context before dropping it.
+
+Swept the other GL consumers for the same class: jsgame is clean (measured
+flat over repeated cycles — its session teardown owns its context), the 2D
+software cores have no GL at all, and the Active Bezel GPU path is noted
+as unverified (not in recent use).
+
 ## 0.126.0 — 2026-08-20
 
 ### Added — `agentSessionReminder` on a new session's first response
