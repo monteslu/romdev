@@ -569,10 +569,18 @@ export async function playtest(args) {
    * already-loaded cart, not a broken stack. It stays on readback and says so
    * once. */
   let cartGlPresent = false;
+  // WHICH GL CONTEXT GENERATION THIS WINDOW IS BOUND TO.
+  //
+  // A reload replaces the host's private GL context. The window stays bound
+  // to the OLD surface, so it presents a framebuffer nothing draws into any
+  // more -- a black window at a healthy 60fps. Recording the generation we
+  // attached at lets the tick below notice a replacement and re-attach.
+  let attachedGlGen = null;
   if (!glPresent && typeof host.canAttachWindow === "function" && host.canAttachWindow()) {
     if (window.native?.handle) {
       try {
         cartGlPresent = !!host.attachWindow(window.native.handle);
+        if (cartGlPresent) attachedGlGen = host.glGeneration?.() ?? 0;
       } catch (e) {
         log.error("[playtest] GL cart direct present setup failed:", e.message);
       }
@@ -1375,6 +1383,33 @@ export async function playtest(args) {
       // No bezel case here: an Active Bezel needs the pixels on the CPU to
       // compose, and its own GL-direct path (glPresent) already handled the
       // window. cartGlPresent is only ever set when there is no bezel.
+      if (cartGlPresent) {
+        try {
+          // DID THE HOST SWAP ITS GL CONTEXT UNDER US? A loadMedia/rebuild
+          // replaces the private context, leaving this window bound to a
+          // surface whose context is gone. Blitting into that is what made a
+          // reloaded window go black -- and, when the old context had already
+          // been destroyed, what segfaulted the server. Re-attach to the new
+          // context instead; fall back to readback if it refuses.
+          const gen = h.glGeneration?.() ?? attachedGlGen;
+          if (gen !== attachedGlGen) {
+            let reattached = false;
+            try {
+              reattached = !!(window.native?.handle && h.canAttachWindow?.()
+                && h.attachWindow(window.native.handle));
+            } catch (e) {
+              log.error("[playtest] GL re-attach after reload failed:", e.message);
+            }
+            if (reattached) {
+              attachedGlGen = gen;
+              log.info("[playtest] cart GL context was replaced; window re-attached (GL-direct present kept).");
+            } else {
+              cartGlPresent = false;
+              log.info("[playtest] cart GL context was replaced and could not re-attach; reverting to readback present.");
+            }
+          }
+        } catch { /* never throw out of the present path */ }
+      }
       if (cartGlPresent) {
         try {
           const tPresentGl = performance.now();

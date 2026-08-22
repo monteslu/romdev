@@ -16,7 +16,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
-import { CartHost, BUTTON } from "wasmcart";
+import { CartHost, BUTTON, noteGlCurrent as _noteGlCurrent } from "wasmcart";
 import { framebufferToRgba } from "romdev-core-host/framebuffer.js";
 import { framebufferToScreenshot } from "romdev-core-host/framebuffer-png.js";
 import { RETRO_PIXEL_FORMAT_XRGB8888, ROMDEV_PIXEL_FORMAT_RGBA8888 } from "romdev-core-host/retroConstants.js";
@@ -66,6 +66,39 @@ let _offscreenGlW = 0, _offscreenGlH = 0;
  * or its draws land in someone else's context — which is exactly how one
  * session's game ended up inside another session's window. */
 let _offscreenCtx = null;
+
+/* WHICH GL CONTEXT IS CURRENT IN THIS PROCESS, as far as we know.
+ *
+ * native-gles is multi-context and currency is a PROCESS-WIDE singleton, so
+ * every makeCurrent by any host steals it from every other. That is fine for
+ * offscreen work -- the next host claims it back before its own frame -- but
+ * NOT for a host whose context is bound to a live playtest window: that one
+ * presents on a 60fps timer nobody re-claims for, so whatever ran last wins.
+ *
+ * The bug this exists to stop (measured 2026-08-21, deterministic): session B
+ * shuts down, WasmcartHost.destroy() hands currency to the shared offscreen
+ * context, and session A's ATTACHED WINDOW -- untouched, in another session,
+ * with a human playing in it -- starts blitting with the wrong context
+ * current. Its FBO comes back GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT
+ * (0x8cd7) and the window goes BLACK at a healthy 60fps, while a CPU readback
+ * of the cart still shows a perfect picture.
+ *
+ * Tracking the owner lets a teardown ask "was it even mine?" before taking
+ * currency away from somebody's game. */
+let _currentCtx = null;
+/* Claim currency for `ctx`, recording it. Use INSTEAD of a bare makeCurrent
+ * so the owner record stays true. */
+function _claimCurrent(ctx) {
+  if (!ctx) return false;
+  try { ctx.makeCurrent?.(); } catch { return false; }
+  _currentCtx = ctx;
+  // Tell wasmcart too: a cart tearing down in ANOTHER session restores
+  // currency from that record, and if it is stale it restores the wrong
+  // context (or none) and blanks this window. Best-effort -- an older
+  // wasmcart has no such export.
+  try { _noteGlCurrent?.(ctx); } catch { /* older wasmcart */ }
+  return true;
+}
 /* The cart's DECLARED resolution, read straight from its manifest.
  *
  * This is the only size that is knowable before the wasm runs, and the GL
@@ -275,9 +308,39 @@ export class WasmcartHost {
     // Headless GL: hand CartHost a lazy offscreen-context factory. It runs
     // ONLY if the cart's wasm imports GL, so 2D-only sessions never create a
     // context. A caller-supplied glBackend always wins.
+    // RELEASE THE OLD GL CONTEXT BEFORE DROPPING THE REFERENCE.
+    //
+    // These three lines used to just null the fields. On a reload of a host
+    // that already had a PRIVATE context with a window attached, that meant:
+    //   - the window stayed physically bound to the old context's surface,
+    //   - the old context was leaked (last reference dropped, never destroyed),
+    //   - a NEW private context was built for the new cart,
+    //   - and nothing re-attached the window, because playtest.js calls
+    //     attachWindow ONCE at open time and never again.
+    // The cart then rendered into the new context's redirect FBO while the
+    // window kept presenting from the old one, which nothing drew into any
+    // more: a BLACK WINDOW at a healthy 60fps with presentMs ~0.15, and a
+    // CPU readback that still looked perfect because it reads the CART's FBO
+    // rather than what the window presents. Worse, swapping on a surface
+    // whose context had been torn down could take the whole process down --
+    // observed as `server process died from SIGSEGV` on 2026-08-21, which
+    // killed every other session's window with it.
+    //
+    // Detaching first is what makes the teardown ordered: the window goes
+    // back to whatever it was before, then the context can be released. The
+    // caller (playtest) is told to re-attach via _glGeneration below.
+    if (this._glCtx) {
+      try { if (this._glAttached) this._glCtx.detachWindow?.(); } catch { /* already gone */ }
+      try { this._glCtx.destroy?.(); } catch { /* already gone */ }
+      try { _claimCurrent(_offscreenCtx); } catch { /* nothing to restore */ }
+    }
     this._gl = null;
     this._glCtx = null;
     this._glAttached = false;
+    // Bumped every time this host's GL context is replaced. A presenter that
+    // attached to a previous context can compare this against the value it
+    // attached at and re-attach instead of blitting a dead surface.
+    this._glGeneration = (this._glGeneration || 0) + 1;
     let glFactory = null;
     if (!glBackend) {
       glFactory = async () => {
@@ -310,7 +373,7 @@ export class WasmcartHost {
           if (priv) {
             this._glCtx = priv;
             this._gl = priv.gl;
-            priv.makeCurrent?.();
+            _claimCurrent(priv);
             return priv.gl;
           }
           console.error("[wasmcart] private GL context unavailable — "
@@ -352,7 +415,7 @@ export class WasmcartHost {
         }
         // Claim it now that it definitely exists (_getOffscreenGl CREATES it on
         // the first GL cart, so claiming before the call would no-op).
-        _offscreenCtx?.makeCurrent?.();
+        _claimCurrent(_offscreenCtx);
         this._gl = gl;
         return gl;
       };
@@ -512,8 +575,8 @@ export class WasmcartHost {
     // to be current, and a screenshot read our (empty) buffer while the WINDOW
     // showed the game correctly -- a black capture of a visibly-working window.
     // (Caller-supplied glBackends manage their own currency.)
-    if (this._glCtx) this._glCtx.makeCurrent?.();
-    else if (this._gl && this._gl === _offscreenGl) _offscreenCtx?.makeCurrent?.();
+    if (this._glCtx) _claimCurrent(this._glCtx);
+    else if (this._gl && this._gl === _offscreenGl) _claimCurrent(_offscreenCtx);
     let r = null;
     for (let i = 0; i < n; i++) {
       r = this.cart.runFrame(this._inputPorts);
@@ -613,8 +676,8 @@ export class WasmcartHost {
     // frame hash), which can be long after the last frame, by which time
     // another cart or a bezel compositor may own currency. Reading without it
     // returns THEIR buffer -- or an empty one.
-    if (this._glCtx) this._glCtx.makeCurrent?.();
-    else if (gl === _offscreenGl) _offscreenCtx?.makeCurrent?.();
+    if (this._glCtx) _claimCurrent(this._glCtx);
+    else if (gl === _offscreenGl) _claimCurrent(_offscreenCtx);
     // Read the CART's frame size, and take it from the redirect FBO when there
     // is one. The old code clamped to gl.drawingBufferWidth/Height, which is
     // the CONTEXT's (i.e. the window's) size -- fine when the cart drew into
@@ -707,6 +770,11 @@ export class WasmcartHost {
 
   /** True if this host's GL context can be bound to a window surface. False
    *  on the shared offscreen context, which must never be attached. */
+  /** Which GL context generation this host is on. Increments whenever the
+   *  context is replaced (a reload), so a presenter holding a window bound to
+   *  an older one can notice and re-attach rather than blit a dead surface. */
+  glGeneration() { return this._glGeneration || 0; }
+
   canAttachWindow() {
     return !!(this._glCtx && typeof this._glCtx.attachWindow === "function"
       && this._gl && this._gl !== _offscreenGl && this.cart?.usesGL);
@@ -758,7 +826,7 @@ export class WasmcartHost {
     if (!this._glCtx || typeof this._glCtx.resize !== "function") return false;
     if (!(width > 0 && height > 0)) return false;
     try {
-      this._glCtx.makeCurrent?.();
+      _claimCurrent(this._glCtx);
       return !!this._glCtx.resize(width, height);
     } catch (e) {
       console.error(`[wasmcart] GL surface resize failed: ${e.message}`);
@@ -782,7 +850,10 @@ export class WasmcartHost {
    *  caller can tell "presented" from "nothing happened". */
   presentGl(dst) {
     if (!this._glAttached || typeof this._glCtx?.swapBuffers !== "function") return false;
-    this._glCtx.makeCurrent?.();
+    // Claim currency EVERY present. This window runs on a 60fps timer that
+    // nothing else re-claims for, so any other session's makeCurrent between
+    // frames would otherwise leave this blit reading the wrong context.
+    _claimCurrent(this._glCtx);
     // The cart renders into wasmcart's redirect FBO, NOT the window surface,
     // so presenting means blitting that FBO out. Without this the swap shows
     // whatever is in the default framebuffer -- and before the redirect
@@ -1148,8 +1219,10 @@ export class WasmcartHost {
     // pointing at freed GL state. The SHARED offscreen context is a
     // process-lifetime singleton and is only ever dropped by reference.
     if (this._glCtx) {
+      const wasCurrent = (_currentCtx === this._glCtx);
       try { if (this._glAttached) this._glCtx.detachWindow?.(); } catch { /* ignore */ }
       try { this._glCtx.destroy?.(); } catch { /* ignore */ }
+      if (_currentCtx === this._glCtx) _currentCtx = null;
       this._glCtx = null;
       // Destroying a context leaves NOTHING current: native-gles unbinds it
       // and does not fall back to another. The next cart to load on the
@@ -1161,7 +1234,15 @@ export class WasmcartHost {
       // turned out to be a presentWindow load earlier in the run, not
       // anything about the carts.) Hand currency back to the shared context
       // if this process has one.
-      try { _offscreenCtx?.makeCurrent?.(); } catch { /* nothing to restore */ }
+      //
+      // ONLY IF WE HELD IT. Doing this unconditionally stole currency from
+      // whatever context was actually current -- and when that was ANOTHER
+      // session's attached playtest window, that window went black at 60fps
+      // (0x8cd7) with a human playing in it. A teardown must not reach across
+      // sessions; if someone else owns currency, leave it alone.
+      if (wasCurrent) {
+        try { _claimCurrent(_offscreenCtx); } catch { /* nothing to restore */ }
+      }
     }
     this._glAttached = false;
     this._gl = null;
