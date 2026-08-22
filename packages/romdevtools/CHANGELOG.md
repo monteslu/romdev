@@ -4,6 +4,65 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.129.0 — 2026-08-22
+
+### Fixed — a reload stranded a playtest window on a dead GL context
+
+`WasmcartHost.loadMedia` nulled `_glCtx`/`_glAttached` without detaching
+the window or destroying the context. On a reload of a session that
+already had a private GL context with a window attached, the window
+stayed bound to the OLD surface, a NEW private context was built for the
+new cart, and nothing re-attached the window — `playtest.js` calls
+`attachWindow` once at open time and never again.
+
+The cart then rendered into the new context's redirect FBO while the
+window kept presenting from the old one, which nothing drew into any
+more: a **black window at a healthy 60fps** with `presentMs` ~0.15, and a
+CPU readback that still looked perfect, because it reads the *cart's* FBO
+rather than what the window presents. Swapping on a surface whose context
+had been torn down could also take the whole process down — observed as
+`server process died from SIGSEGV`, which killed every other session's
+window with it.
+
+- `loadMedia` detaches and destroys the old private context in order
+  before dropping the reference, and bumps a generation counter exposed
+  as `glGeneration()`.
+- The playtest present tick records the generation it attached at, and
+  re-attaches when it changes (falling back to readback if that refuses).
+- GL currency claims go through one `_claimCurrent()` that records the
+  owner, so `destroy()` only hands currency back to the shared context
+  when this host actually held it — rather than taking it from another
+  session's live window.
+
+Verified over six consecutive reloads with a window open: the window kept
+rendering every time and the server never died. Measured with an
+OS-level window capture, **not** a CPU readback — see the note below.
+
+### Changed — dependency floors
+
+`wasmcart` ^0.23.0 → **^0.24.0**, `webgl-node` ^1.5.0 → **^1.5.1**.
+
+Those two carry the root cause of a *related* black-window failure that
+needed no reload at all: `makeCurrent` lived only on webgl-node's wrapper
+object, which consumers throw away in favour of the bare context. So
+wasmcart's teardown could not actually switch contexts, and — since GL
+object names are plain integers with no context identity — its deletes
+destroyed another context's identically-numbered textures. One session
+tearing down a GL cart blanked another session's live window.
+
+### Note for anyone debugging a black playtest window
+
+`playtest({op:'framebuffer'})` and `frame({op:'screenshot'})` read the
+cart's own FBO. A GL-direct window presents by a separate GPU blit. When
+those two disagree — which is exactly this class of bug — the capture
+shows a perfect picture while the human's screen is black. Capture the
+real window instead:
+
+```
+DISPLAY=:0 xwininfo -root -tree | grep '"<window title>' | grep node
+DISPLAY=:0 import -window 0x<id> /tmp/real.png
+```
+
 ## 0.128.0 — 2026-08-21
 
 ### Fixed — the HTTP idle reaper destroyed a live playtest window's host
