@@ -237,6 +237,27 @@ export const CAPABILITIES = {
       cart: false, disasm: true, decompile: false,
     },
   },
+  sync32: {
+    // monteslu's RP2350 console (Cortex-M33 games as .s32 ROMs), emulated by
+    // s32core — a first-party pure-C interpreter (11-cart byte-exact
+    // differential suite against the Unicorn reference emulator lives in the
+    // s32core repo). tier:"arm" — new 32-bit tier, analysis/inspectors land
+    // later; today: run + screenshot (+ input/frames/playtest via the host).
+    // Carts build OUTSIDE romdev with the sync32-sdk (arm-none-eabi-gcc);
+    // build=false until that toolchain is wired in.
+    tier: "arm",
+    cpuFamily: "arm", decompileQuality: "n/a",
+    cpus: { main: "", secondary: [] }, // cpuState not wired yet
+    audioChips: [],
+    memoryRegions: [...GENERIC_REGIONS],
+    renderingKind: "framebuffer", introspection: "shallow",
+    ops: {
+      build: false, run: true, screenshot: true,
+      inspectSprites: false, inspectPalette: false, inspectBackground: false,
+      renderingContext: false, cpuState: false, audioDebug: false,
+      cart: false, disasm: false, decompile: false,
+    },
+  },
   pce: {
     cpuFamily: "huc6280", decompileQuality: "medium",
     cpus: { main: "", secondary: [] }, // getCPUState main NOT wired for pce
@@ -357,7 +378,7 @@ export const MIPS_TIER_PLATFORMS = Object.entries(CAPABILITIES)
  *  is held to its OWN conformance, not the "all 14" cross-checks; a new platform
  *  starts here (analysis-first) and graduates as run/build/etc. land. */
 export const NEXTGEN_TIER_PLATFORMS = Object.entries(CAPABILITIES)
-  .filter(([, c]) => c.tier === "mips" || c.tier === "sh" || c.tier === "fantasy")
+  .filter(([, c]) => c.tier === "mips" || c.tier === "sh" || c.tier === "fantasy" || c.tier === "arm")
   .map(([p]) => p);
 
 /** Back-compat: the analysis-only set is now empty (PS1/N64 gained run/screenshot

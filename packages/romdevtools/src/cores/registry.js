@@ -59,6 +59,11 @@ export const CORES = {
   // capability descriptor marks cpuState/disasm/memory-region tools not-applicable; the
   // .p8 Lua source IS the readable "disassembly".
   pico8: { platform: "pico8", coreName: "fake08", pkg: "romdev-core-fake08", displayName: "PICO-8 (FAKE-08)", aka: "p8,fake08" },
+  // sync32: monteslu's RP2350 console. s32core is a first-party pure-C
+  // interpreter (like gametank, built from the sibling checkout, no fetch).
+  // noderawfs: the frontend fopens the .s32 by real path and streams the
+  // "<romname>/" data directory from disk.
+  sync32: { platform: "sync32", coreName: "s32core", pkg: "romdev-core-s32core", displayName: "sync32 (s32core)", aka: "s32", noderawfs: true },
   // 32-bit MIPS tier. These cores HW-render (GL): the host lazy-loads the OPTIONAL
   // webgl-node bridge only when one of these boots (hwRender:true). The other 14 are
   // software-rendered and never touch GL, so a headless user without the GPU module
