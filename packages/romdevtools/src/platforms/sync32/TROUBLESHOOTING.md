@@ -71,6 +71,19 @@ int space = api->audio_space();
 if (space > 0) api->audio_push(buf, space < have ? space : have);
 ```
 
+## Tooling
+
+**A ROM file suddenly became a few bytes** — something passed the ROM's path
+where a tool writes its OUTPUT. `memory({op:'readCart'})` takes the ROM to read
+as **`romPath`**; its `path`/`outputPath` is where bytes get *written*. (Before
+0.132.0 the schema declared `path` twice and the input silently became an output
+path — that is fixed, but the general shape of the mistake is easy to repeat
+with any tool that has both.)
+
+Recovery: a built ROM is usually a gitignored build output, so `git checkout`
+will not bring it back — rebuild it from its sources with `build(...)`. Keep
+outputs out of source directories to begin with.
+
 ## Input
 
 **Works on your setup, not on someone else's** — the game depends on analog

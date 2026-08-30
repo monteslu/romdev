@@ -1,6 +1,6 @@
 # romdev
 
-The entry point for **romdev** — vibe-code real retro games. Build, run, inspect, and reverse-engineer actual homebrew ROMs (NES, SNES, Game Boy, Genesis, Atari, C64, GBA, PC Engine, MSX, GameTank — and the 3D consoles N64, PlayStation, and Dreamcast), plus the **PICO-8** fantasy console (via FAKE-08), with one command — drive it yourself or let a coding assistant do it.
+The entry point for **romdev** — vibe-code real retro games. Build, run, inspect, and reverse-engineer actual homebrew ROMs (NES, SNES, Game Boy, Genesis, Atari, C64, GBA, PC Engine, MSX, GameTank, sync32 — and the 3D consoles N64, PlayStation, and Dreamcast), plus the **PICO-8** fantasy console (via FAKE-08), with one command — drive it yourself or let a coding assistant do it.
 
 ```bash
 npx romdevtools
@@ -39,7 +39,7 @@ This package contains all the JavaScript — the tool surface, the WASM emulator
 
 `romdevtools` depends on the binary/data packages it needs (exact-pinned), so a single install gets a matched, tested set:
 
-- 2D cores: `romdev-core-{fceumm,gambatte,gpgx,vice,handy,prosystem,geargrafx,bluemsx,gametank,fake08}`
+- 2D cores: `romdev-core-{fceumm,gambatte,gpgx,vice,handy,prosystem,geargrafx,bluemsx,gametank,s32core,fake08}`
 - 3D / GPU cores (rendered through `native-gles`): `romdev-core-{parallel-n64,beetle-psx-hw,flycast}`
 - Platforms (core + dedicated toolchain bundled): `romdev-platform-{snes,gba,atari2600}`
 - Toolchains: `romdev-toolchain-{cc65,sdcc,m68k-gcc,vasm,rgbds,mips-gcc,sh-gcc}` (mips-gcc = N64/PS1 C; sh-gcc = Dreamcast C)

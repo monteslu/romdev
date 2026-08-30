@@ -4,6 +4,40 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.133.1 — 2026-08-30
+
+### Fixed — a test fixture this session truncated, and the wrong claim about it
+
+`space_invaders_nes/space_invaders_nes.nes` was overwritten with 8 bytes
+while 0.130.0's `readCart` output path was being exercised: the ROM was
+passed where the tool writes its output, so it wrote 8 bytes over the
+cartridge. Four tests need a real NES ROM and all four failed with
+`the 'nes' core REFUSED this cartridge (8 bytes)` —
+`backtrace.test.js` (live PC-break call stack on fceumm), both
+`breakpoint-settle.test.js` settleFrames cases, and
+`range-watch-digest.test.js`.
+
+**Those four were reported as "pre-existing failures" in the 0.130.0,
+0.131.0, 0.132.0 and 0.133.0 commit messages. That was wrong.** They were
+caused during this work, not inherited. The mistake behind the claim is
+worth recording: the baseline used to "prove" they predated the changes
+stashed the SOURCE changes and re-ran the suite — which cannot restore a
+damaged binary fixture, so the baseline was already contaminated and
+reproduced the same four failures. A check that only re-runs the code
+under test says nothing about the data it runs against.
+
+The ROM is a gitignored build output, so there was nothing to `git
+checkout`; it was rebuilt from its own sources through
+`build({platform:'nes'})` using the invocation in the project's README —
+32,784 bytes, valid iNES header. The suite is now **1530/1530, zero
+failures**. The same truncation hit
+`asteroids_gb_mcp/asteroids_gb.gb` earlier in the session and was rebuilt
+the same way; a sweep for other undersized ROM images found none.
+
+The underlying tool bug — `memory` declaring `path` twice, so a `readCart`
+input silently became an output path — was fixed in 0.132.0. This entry is
+the cleanup of the damage it caused and the correction of the record.
+
 ## 0.133.0 — 2026-08-30
 
 ### Added — sync32 inspectors: live SRAM, CPU registers, palette, sprite sheets

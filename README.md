@@ -42,7 +42,7 @@ Every capability is exposed as a tool, so a coding agent can drive the whole loo
 
 ## Supported systems — pick your platform
 
-Eighteen consoles/computers, oldest → newest — fifteen 2D systems (including the open-hardware GameTank) plus three 3D consoles (N64, PlayStation, Dreamcast) — plus the **PICO-8** fantasy console and the two **native game runtimes** (wasmcart, jsgame), each its own tier after the 3D consoles. They vary enormously in how hard a game is to make and how hard an existing game is to hack. **Build** = write code → compile → run. **Hack** = modify an existing commercial ROM (find data → patch → reinsert). A system can be easy on one and hard on the other. (Difficulty is rated *as it feels through romdev today* — see the note under the table; it gets easier as the tooling improves.)
+Nineteen consoles/computers, oldest → newest — sixteen 2D systems (including the open-hardware GameTank and sync32) plus three 3D consoles (N64, PlayStation, Dreamcast) — plus the **PICO-8** fantasy console and the two **native game runtimes** (wasmcart, jsgame), each its own tier after the 3D consoles. They vary enormously in how hard a game is to make and how hard an existing game is to hack. **Build** = write code → compile → run. **Hack** = modify an existing commercial ROM (find data → patch → reinsert). A system can be easy on one and hard on the other. (Difficulty is rated *as it feels through romdev today* — see the note under the table; it gets easier as the tooling improves.)
 
 | System | Year | Languages (toolkit) | Build a game | Romhack a game | Best for |
 |---|---|---|---|---|---|
@@ -61,6 +61,7 @@ Eighteen consoles/computers, oldest → newest — fifteen 2D systems (including
 | **Game Boy Color** | 1998 | C / SM83 asm (SDCC / RGBDS) | 🟢 Easy | 🟢 Easy | The Game Boy with a real color palette — same easy tooling, plus CGB color. |
 | **Game Boy Advance** | 2001 | C (libtonc / libgba) | 🟡 Medium | — | 32-bit ARM, comfortable C with the well-documented Tonc library — but a big machine (IRQ/DMA/video modes = lots of surface to learn). |
 | **GameTank** | 2024 | C / 6502 asm (cc65) | 🟡 Medium | — | Clyde Shaffer's **open-hardware** W65C02S console — a 128×128 framebuffer drawn by a hardware blitter + a second 65C02 audio coprocessor. Full Tier-1 (build/run/cpuState/watchpoints/audioDebug/cart). Open docs + a clean SDK make it a friendly modern 8-bit target; ships ~July 2026. |
+| **sync32** | 2026 | C (arm-none-eabi, Cortex-M33) | 🟢 Easy | — | An RP2350 console with a **flat framebuffer and a function-pointer ABI** — no PPU, no tilemap, no banking, no scanline timing. A game is `game_main(api)` drawing into a byte array, so it is the gentlest build target here despite being the newest hardware. Build/run/cpuState/memory/palette are wired; there is no romhack column because there are no commercial ROMs. |
 
 The three **3D consoles** are a newer, distinct tier — they compile + boot + render on the **real GPU**, but they're at a different maturity than the 2D lineup: no genre scaffolds yet, and their renderable starting points come from open GPU SDKs (libdragon / PSn00bSDK) rather than romdev's own helper libs. Build = bare C that drives the GPU; Hack = code analysis works (disasm/decompile), data-romhack tooling is minimal.
 
