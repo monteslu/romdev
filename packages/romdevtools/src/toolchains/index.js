@@ -98,6 +98,9 @@ const LANGUAGE_TOOLCHAIN = {
     c:   { toolchain: "cc65", available: true, note: "C for PC Engine via cc65's huc6280 target — crt0 + pce.lib (VDC/VCE/PSG/joypad helpers) auto-linked. #include <pce.h>." },
     asm: { toolchain: "cc65", available: true },
   },
+  sync32: {
+    c: { toolchain: "arm-none-eabi-gcc", available: true, note: "C for sync32 (monteslu's RP2350 console) — freestanding Cortex-M33 via the WASM arm-none-eabi gcc (-mcpu=cortex-m33 -mthumb -mfloat-abi=hard -mfpu=fpv5-sp-d16), linked against the SDK's crt0 + ram.ld/xip.ld and packed into a .s32 with its 64-byte header. #include \"sync32.h\" for the console API; a freestanding stdint.h is provided. `mode:'ram'|'xip'`, `title`/`id`/`video`/`api` fill the cart header. No libraries are linked (the SDK is freestanding), and the whole pipeline is WASM — no native gcc, no Python. Output is a launchable .s32; for a game with resources, pack the folder form with the SDK's s32pack." },
+  },
   gametank: {
     c:   { toolchain: "cc65", available: true, note: "C for GameTank (Clyde Shaffer's open W65C02S console) via cc65 `--cpu 65c02` + a bundled single-bank 32KB preset (crt0 + linker cfg + vectors), pass linkerConfig:'single-bank'. #include \"gametank.h\" for the blitter/DMA/banking/gamepad registers ($4000-$4007 blitter, $2007 dma_flags, $2005 bank_reg, $2008/9 gamepads). Bare path — color-fill the 128x128 framebuffer via the blitter; the full SDK gfx/audio/text runtime + 2MB multi-bank flash pipeline is not bundled (Tier B, deferred). Output is a flat 32KB .gtr (EEPROM32K, size-keyed mapper)." },
     asm: { toolchain: "cc65", available: true },
@@ -1088,8 +1091,49 @@ export async function buildForPlatform(args) {
     }
   }
 
+  if (args.platform === "sync32") {
+    // sync32 carts are freestanding Cortex-M33 C. The compiler is the same
+    // WASM arm-none-eabi toolchain the GBA platform ships (different -mcpu),
+    // and the SDK's crt0/linker script/headers come from
+    // romdev-platform-sync32 — so a cart builds from source text with no
+    // native gcc, no Python and no sibling checkout.
+    const { buildSync32 } = await import("./sync32/sync32.js");
+    const { loadSdk } = await import("romdev-platform-sync32");
+    const mode = args.mode === "xip" ? "xip" : "ram";
+    const sdk = loadSdk(mode);
+    const r = await buildSync32({
+      source: args.source,
+      sources: args.sources,
+      // The SDK headers are defaults: a cart's own headers win, so a game can
+      // ship its own sheet.h (or even override sync32.h) without a flag.
+      includes: { ...sdk.includes, ...(args.includes ?? {}) },
+      crt0: sdk.crt0,
+      linkScript: sdk.linkScript,
+      mode,
+      title: args.title ?? args.projectName ?? "untitled",
+      id: args.id,
+      video: args.video === "180" ? "180" : "240",
+      api: args.api ?? 1,
+      options: args.options,
+      linkOptions: args.linkOptions,
+    });
+    return {
+      ok: r.exitCode === 0 && r.binary !== null,
+      binary: r.binary,
+      listing: "",
+      symbols: "",
+      map: r.map ?? "",
+      log: r.log,
+      issues: parseBuildLog(r.log),
+      exitCode: r.exitCode,
+      ...(r.failedTU ? { failedTU: r.failedTU } : {}),
+      ...(r.entryOffset != null ? { entryOffset: r.entryOffset, imageBytes: r.imageBytes, mode: r.mode } : {}),
+      toolchain: "arm-none-eabi-gcc (cortex-m33) + s32pack",
+    };
+  }
+
   throw new Error(
-    `no bundled toolchain for platform '${args.platform}'. Supported: atari2600 (dasm), nes/c64/atari7800/lynx (cc65), snes (C via tcc-65816+wla+PVSnesLib, or asm via asar), genesis (C via m68k-gcc+SGDK, or asm via vasm68k), gba (C via arm-gcc+libtonc/libgba), gb/gbc (sdcc sm83 / rgbds), sms/gg (sdcc), pico8 (.p8 cart packager). Call listPlatforms for the live matrix.`,
+    `no bundled toolchain for platform '${args.platform}'. Supported: atari2600 (dasm), nes/c64/atari7800/lynx (cc65), snes (C via tcc-65816+wla+PVSnesLib, or asm via asar), genesis (C via m68k-gcc+SGDK, or asm via vasm68k), gba (C via arm-gcc+libtonc/libgba), gb/gbc (sdcc sm83 / rgbds), sms/gg (sdcc), sync32 (C via arm-gcc cortex-m33 + the sync32 SDK), pico8 (.p8 cart packager). Call listPlatforms for the live matrix.`,
   );
 }
 

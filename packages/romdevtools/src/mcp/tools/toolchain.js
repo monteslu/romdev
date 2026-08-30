@@ -266,7 +266,7 @@ export function installToolchainCore({ id }) {
 }
 
 export function registerToolchainTools(server, z, sessionKey) {
-  async function buildSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, crt0, crt0Path, codeLoc, dataLoc, options, linkerConfig, linkerConfigPath, inesHeader, outputPath, inline = false, includeSymbols = false, lint = "advisory", runtime, maxmod, rebuildSdk }) {
+  async function buildSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, crt0, crt0Path, codeLoc, dataLoc, options, linkerConfig, linkerConfigPath, inesHeader, outputPath, inline = false, includeSymbols = false, lint = "advisory", runtime, maxmod, rebuildSdk, title, id, mode, video, api, linkOptions, projectName }) {
       // Reject conflicting inline vs path args — fail loud, not silent.
       if (source != null && sourcePath != null) {
         throw new Error("build({output:'rom'}): pass either `source` OR `sourcePath`, not both.");
@@ -379,6 +379,8 @@ export function registerToolchainTools(server, z, sessionKey) {
         crt0: crt0Rel,
         codeLoc,
         dataLoc,
+        // sync32 cart-header fields; ignored by every other platform's branch.
+        title, id, mode, video, api, linkOptions, projectName,
       });
       logBuildResult("build:rom", platform, result);
       // lint:"strict" — if any lint warning fired, fail the build with
@@ -776,6 +778,14 @@ export function registerToolchainTools(server, z, sessionKey) {
       holdInputs: z.array(holdInputShape).max(2).optional().describe("output:'run' — per-port input state to hold during the run (index 0 = port 0)."),
       screenshotPath: z.string().optional().describe("output:'run' — write the screenshot here and return {screenshotPath} instead of the inline image (for clients that can't show inline images)."),
       projectName: z.string().optional().describe("output:'run' — playtest window title (no effect on the ROM)."),
+      // sync32 cart header fields (the SDK's mks32 arguments). They only apply
+      // to platform:'sync32'; every other platform ignores them.
+      title: z.string().optional().describe("sync32 — game name in the cart header, shown by the launcher (16 bytes, truncated). Defaults to `projectName` or 'untitled'."),
+      id: z.string().optional().describe("sync32 — 8-byte save-file key in the cart header. Defaults to a slug of `title`; set it explicitly if the game already has saves in the wild."),
+      mode: z.enum(["ram", "xip"]).optional().describe("sync32 — memory mode, selecting the SDK linker script and the image base: 'ram' (0x20030000, default) or 'xip' (0x10100000, execute-in-place from flash)."),
+      video: z.enum(["240", "180"]).optional().describe("sync32 — video mode the game requests (default '240')."),
+      api: z.number().int().min(1).optional().describe("sync32 — minimum console API version the game requires; use 2 if it calls the disk functions (default 1)."),
+      linkOptions: z.array(z.string()).optional().describe("sync32 — extra linker flags (the SDK's LDFLAGS_EXTRA), e.g. '--defsym=S32_STACK=0xA000' to raise the stack reservation for a deeply recursive port."),
       // project-only
       path: z.string().optional().describe("output:'project' — absolute path to the project directory."),
       entry: z.string().optional().describe("output:'project' — name of the top-level source file when it isn't main.c/main.s/main.asm (e.g. 'smw.asm' for an existing disassembly). Project-relative or a bare filename. Default: auto-detect main.c / main.s / main.asm."),

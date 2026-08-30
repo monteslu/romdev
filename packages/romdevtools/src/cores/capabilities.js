@@ -243,8 +243,11 @@ export const CAPABILITIES = {
     // differential suite against the Unicorn reference emulator lives in the
     // s32core repo). tier:"arm" — new 32-bit tier, analysis/inspectors land
     // later; today: run + screenshot (+ input/frames/playtest via the host).
-    // Carts build OUTSIDE romdev with the sync32-sdk (arm-none-eabi-gcc);
-    // build=false until that toolchain is wired in.
+    // Carts build IN romdev now (0.131.0): the WASM arm-none-eabi toolchain
+    // that ships for GBA also targets Cortex-M33, and the SDK's
+    // crt0/linker-scripts/headers ship in romdev-platform-sync32, so
+    // build({platform:'sync32'}) produces a .s32 with no native gcc and no
+    // Python. Verified byte-identical to the SDK's own native build.
     tier: "arm",
     cpuFamily: "arm", decompileQuality: "n/a",
     cpus: { main: "", secondary: [] }, // cpuState not wired yet
@@ -252,7 +255,7 @@ export const CAPABILITIES = {
     memoryRegions: [...GENERIC_REGIONS],
     renderingKind: "framebuffer", introspection: "shallow",
     ops: {
-      build: false, run: true, screenshot: true,
+      build: true, run: true, screenshot: true,
       inspectSprites: false, inspectPalette: false, inspectBackground: false,
       renderingContext: false, cpuState: false, audioDebug: false,
       cart: false, disasm: false, decompile: false,

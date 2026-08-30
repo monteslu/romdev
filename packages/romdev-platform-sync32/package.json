@@ -1,0 +1,30 @@
+{
+  "name": "romdev-platform-sync32",
+  "version": "0.1.0",
+  "description": "sync32 SDK tree for romdev: crt0, ram/xip linker scripts and sync32.h, so a Cortex-M33 .s32 cart builds from source with no sibling checkout. The ARM compiler itself is the WASM arm-none-eabi toolchain shipped in romdev-platform-gba.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./share/*": "./share/*"
+  },
+  "files": [
+    "index.js",
+    "share",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monteslu/romdev.git",
+    "directory": "packages/romdev-platform-sync32"
+  },
+  "homepage": "https://github.com/monteslu/romdev#readme",
+  "bugs": {
+    "url": "https://github.com/monteslu/romdev/issues"
+  },
+  "author": "Luis Montes"
+}

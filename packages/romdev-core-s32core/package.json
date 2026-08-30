@@ -1,0 +1,33 @@
+{
+  "name": "romdev-core-s32core",
+  "version": "0.1.0",
+  "description": "sync32 console core (s32core) for romdev, bundled as WASM. sync32 is an RP2350/Cortex-M33 console; s32core is a first-party pure-C interpreter exposed through the libretro API.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./wasm/*": "./wasm/*"
+  },
+  "files": [
+    "index.js",
+    "wasm",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monteslu/romdev.git",
+    "directory": "packages/romdev-core-s32core"
+  },
+  "homepage": "https://github.com/monteslu/romdev#readme",
+  "bugs": {
+    "url": "https://github.com/monteslu/romdev/issues"
+  },
+  "author": "Luis Montes",
+  "scripts": {
+    "prepublishOnly": "node ../../scripts/verify-wasm.mjs"
+  }
+}

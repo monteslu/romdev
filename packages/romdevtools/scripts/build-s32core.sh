@@ -31,5 +31,17 @@ emcc -O2 -ffp-contract=off -Iinclude \
 mkdir -p "$OUT"
 cp s32core_libretro.js "$OUT/s32core_libretro.js"
 cp s32core_libretro.wasm "$OUT/s32core_libretro.wasm"
-rm -f s32core_libretro.js s32core_libretro.wasm
 echo "s32core_libretro staged at $OUT"
+
+# ALSO stage into the binary package — that is what actually SHIPS.
+# `src/cores/wasm/` is gitignored build-staging: a core that lands only there
+# works on the build machine and nowhere else. Every other core resolves
+# through its romdev-core-* package (see registry.js resolveCore), so miss this
+# step and `sync32` silently drops off listPlatforms for every installed user.
+PKG_OUT="$PROJECT_DIR/../romdev-core-s32core/wasm"
+if [ -d "$PKG_OUT" ]; then
+  cp s32core_libretro.js   "$PKG_OUT/s32core_libretro.js"
+  cp s32core_libretro.wasm "$PKG_OUT/s32core_libretro.wasm"
+  echo "also staged into romdev-core-s32core package: $PKG_OUT"
+fi
+rm -f s32core_libretro.js s32core_libretro.wasm
