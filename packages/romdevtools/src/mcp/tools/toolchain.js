@@ -266,7 +266,7 @@ export function installToolchainCore({ id }) {
 }
 
 export function registerToolchainTools(server, z, sessionKey) {
-  async function buildSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, crt0, crt0Path, codeLoc, dataLoc, options, linkerConfig, linkerConfigPath, inesHeader, outputPath, inline = false, includeSymbols = false, lint = "advisory", runtime, maxmod, rebuildSdk, title, id, mode, video, api, linkOptions, projectName, data, dataPaths, icon, iconPath, form }) {
+  async function buildSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, crt0, crt0Path, codeLoc, dataLoc, options, linkerConfig, linkerConfigPath, inesHeader, outputPath, inline = false, includeSymbols = false, lint = "advisory", runtime, maxmod, rebuildSdk, title, id, mode, video, api, linkOptions, projectName, data, dataPaths, icon, iconPath, form, asmIncludes, asmIncludePaths }) {
       // Reject conflicting inline vs path args — fail loud, not silent.
       if (source != null && sourcePath != null) {
         throw new Error("build({output:'rom'}): pass either `source` OR `sourcePath`, not both.");
@@ -360,6 +360,15 @@ export function registerToolchainTools(server, z, sessionKey) {
         }
         crt0Rel = asm.rel;
       }
+      // ca65 .include files, by value or by path.
+      let resolvedAsmIncludes = asmIncludes ? { ...asmIncludes } : undefined;
+      if (asmIncludePaths) {
+        resolvedAsmIncludes = resolvedAsmIncludes ?? {};
+        for (const [name, p] of Object.entries(asmIncludePaths)) {
+          resolvedAsmIncludes[name] = await readFile(p, "utf-8");
+        }
+      }
+
       // sync32 resources: accept them as base64 (`data`/`icon`) or as host
       // paths (`dataPaths`/`iconPath`), and hand the toolchain bytes either
       // way — the same either/or contract binaryIncludes uses.
@@ -397,6 +406,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         crt0: crt0Rel,
         codeLoc,
         dataLoc,
+        asmIncludes: resolvedAsmIncludes,
         // sync32 cart-header fields; ignored by every other platform's branch.
         title, id, mode, video, api, linkOptions, projectName,
         data: resolvedS32Data, icon: resolvedS32Icon, form,
@@ -781,6 +791,8 @@ export function registerToolchainTools(server, z, sessionKey) {
       sources: sourcesShape.optional().describe("Multi-file project: filename → contents ({'main.s':'...', 'aliens.s':'...'})."),
       sourcesPaths: sourcesShape.optional().describe("Path-based `sources`: virtual filename → absolute path. Mutually exclusive with `sources`. NOT read by output:'romWithDebug'."),
       includes: sourcesShape.optional().describe("Virtual filename → contents for `.include`d files (NOT separate translation units)."),
+      asmIncludes: z.record(z.string()).optional().describe("cc65 platforms — .include files for the ASSEMBLER (ca65), as {filename: contents}. Distinct from `includes`, which only reaches the C compiler: a C source still goes through a per-TU ca65 pass, and an SDK whose generated .inc is pulled in by its assembly (GameTank's modules_enabled.inc) needs it here or ca65 reports \"Cannot open include file\"."),
+      asmIncludePaths: z.record(z.string()).optional().describe("Path-based `asmIncludes`: {filename: absolute path}."),
       includePaths: sourcesShape.optional().describe("Path-based `includes` (text files; server reads them). NOT read by output:'romWithDebug'."),
       binaryIncludes: sourcesShape.optional().describe("Like `includes` but BINARY blobs (CHR ROM, music) as base64, for `.incbin`. PREFER `binaryIncludePaths`. NOT read by output:'romWithDebug'."),
       binaryIncludePaths: sourcesShape.optional().describe("Path-based `binaryIncludes`: virtual filename → absolute path (server reads the bytes). NOT read by output:'romWithDebug'."),
@@ -920,6 +932,18 @@ export function projectBuildRecipe(platform, names) {
       for (const n of names) {
         if (/crt0.*\.s$/i.test(n) || /\.cfg$/i.test(n)) r.skip.add(n);
       }
+    }
+  } else if (platform === "gametank") {
+    // GameTank: a scaffolded project ships the SDK runtime and its sdk.cfg,
+    // which adds the LOADERS/COMMON/SAVE/WAVES segments that runtime needs.
+    // Without selecting it the link dies on "Missing memory area assignment
+    // for segment 'COMMON'". The preset carries the crt0/vectors, so a .cfg
+    // the project brought along is skipped as a SOURCE (it is the linker
+    // script, not something to assemble).
+    const scaffolded = names.some((n) => /^sdk\.cfg$/i.test(n) || /^gfx_sys\.c$/i.test(n) || /^draw_queue\.c$/i.test(n));
+    if (scaffolded) {
+      r.linkerConfig = "sdk";
+      for (const n of names) if (/\.cfg$/i.test(n)) r.skip.add(n);
     }
   } else if (platform === "msx") {
     // MSX ships msx_crt0.s — it MUST be passed AS the crt0 (replacing the stock
@@ -1117,6 +1141,7 @@ export async function readProjectDir(projPath, platform, opts = {}) {
 
   /** @type {Record<string,string>} */ const sources = {};
   /** @type {Record<string,string>} */ const includes = {};
+  /** @type {Record<string,string>} */ const asmIncludes = {};
   /** @type {Record<string,string>} */ const binaryIncludes = {};
   let crt0 = null;
   for (const f of files) {
@@ -1127,7 +1152,14 @@ export async function readProjectDir(projPath, platform, opts = {}) {
     // includes snes_sfx.c) — make it an include, NOT a separate source TU.
     if (recipe.includeAsC.has(n)) { includes[n] = await readFile(path.join(projPath, n), "utf-8"); continue; }
     if (/\.(c|s|asm)$/i.test(n))    sources[n] = await readFile(path.join(projPath, n), "utf-8");
-    else if (/\.(h|inc)$/i.test(n)) includes[n] = await readFile(path.join(projPath, n), "utf-8");
+    else if (/\.(h|inc)$/i.test(n)) {
+      includes[n] = await readFile(path.join(projPath, n), "utf-8");
+      // A .inc is an ASSEMBLER include. `includes` only reaches the C
+      // compiler, but a C source still goes through a per-TU ca65 pass, and an
+      // SDK whose assembly pulls in a generated .inc (GameTank's
+      // modules_enabled.inc) fails there with "Cannot open include file".
+      if (/\.inc$/i.test(n)) asmIncludes[n] = includes[n];
+    }
     else if (/\.(bin|chr|pcm|brr|vgm|vgz|xgm|xgc|xgm2|esf|tfi|eif|nsf|raw|pal|map|tmx|spc|wav|gbs)$/i.test(n)) {
       // Any binary asset an .incbin might reference. (.xgc = compiled XGM2 blob,
       // .vgz/.esf/etc = music driver inputs.) Missing one = "file not found: X".
@@ -1143,6 +1175,7 @@ export async function readProjectDir(projPath, platform, opts = {}) {
     if (recipe.skip.has(a.rel) || a.rel === entrySubAsset?.rel) continue;
     if (/\.(h|inc|asm|s)$/i.test(a.rel)) {
       includes[a.rel] = (await readFile(a.abs)).toString("utf-8");
+      if (/\.inc$/i.test(a.rel)) asmIncludes[a.rel] = includes[a.rel];
     } else {
       binaryIncludes[a.rel] = (await readFile(a.abs)).toString("base64");
     }
@@ -1172,11 +1205,11 @@ export async function readProjectDir(projPath, platform, opts = {}) {
     runtime = "libgba";
   }
 
-  return { sources, includes, binaryIncludes, crt0, codeLoc: recipe.codeLoc, dataLoc: recipe.dataLoc, linkerConfig: recipe.linkerConfig, runtime, maxmod: recipe.maxmod };
+  return { sources, includes, asmIncludes, binaryIncludes, crt0, codeLoc: recipe.codeLoc, dataLoc: recipe.dataLoc, linkerConfig: recipe.linkerConfig, runtime, maxmod: recipe.maxmod };
 }
 
 export async function buildProjectCore({ path: projPath, platform, outputPath, options, defines, entry }) {
-  const { sources, includes, binaryIncludes, crt0, codeLoc, dataLoc, linkerConfig, runtime, maxmod } = await readProjectDir(projPath, platform, { entry });
+  const { sources, includes, asmIncludes, binaryIncludes, crt0, codeLoc, dataLoc, linkerConfig, runtime, maxmod } = await readProjectDir(projPath, platform, { entry });
 
   // Thread `options` (e.g. asar `--define _VER=1`, `--fix-checksum=off`) + the `defines`
   // convenience map through to the toolchain — project mode used to silently drop them.
@@ -1219,6 +1252,7 @@ export async function buildProjectCore({ path: projPath, platform, outputPath, o
       ? { source: sources[srcNames[0]], sourceName: srcNames[0] }
       : { sources: mergedSources }),
     includes: Object.keys(includes).length ? includes : undefined,
+    asmIncludes: Object.keys(asmIncludes).length ? asmIncludes : undefined,
     binaryIncludes: Object.keys(binaryIncludes).length ? binaryIncludes : undefined,
     linkerConfig: resolvedLinkerConfig,
     crt0: crt0Rel,

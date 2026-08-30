@@ -4,6 +4,47 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.135.0 — 2026-08-30
+
+### Added — the five GameTank example games now exist as far as the tools care
+
+The five genre templates were already **written** — complete games on the
+bundled SDK draw-queue runtime, with pixel-art sprites in GRAM, SFX and
+full title/play/game-over loops — but they were never **registered** in the
+template manifest. `examples({op:'list', platform:'gametank'})` reported
+none, and nothing could fork them. They are registered now, with the exact
+runtime file set a verified build needs.
+
+Getting them to build end-to-end took four fixes, each a real gap rather
+than a template problem:
+
+- **`build` never exposed `asmIncludes`.** The plumbing existed internally
+  (with a comment naming GameTank as the case that needs it) but no schema
+  field reached it. A C source still goes through a per-TU ca65 pass, so an
+  SDK whose assembly pulls in a generated `.inc` — GameTank's
+  `modules_enabled.inc` — failed there with "Cannot open include file" and
+  no way for a caller to supply it. Now `asmIncludes`/`asmIncludePaths`.
+- **`build({output:'project'})` dropped `.inc` files.** `readProjectDir`
+  classified them as C includes only, so a forked project hit the same wall
+  even with the file sitting right there on disk. `.inc` now routes to the
+  assembler as well.
+- **No GameTank project recipe.** A scaffolded project ships `sdk.cfg` (it
+  adds the LOADERS/COMMON/SAVE/WAVES segments the SDK runtime needs), but
+  with no recipe branch the build ignored it and died on "Missing memory
+  area assignment for segment 'COMMON'".
+- **`fork` crashed on a template with no `crt0`.** The README generator
+  dereferenced `tmpl.crt0.dst` unconditionally; GameTank's linker preset
+  carries its own crt0, so the fork threw *after* writing all 45 project
+  files.
+
+Verified the whole path: fork → `build({output:'project'})` → load → run,
+with screenshots of all five (the shmup's pixel-art raiders, the
+platformer's coins, JEWELS, VOLLEY's two paddles, REDLINE's road).
+
+`text.c` and `persist.c` are deliberately absent from the runtime list —
+one wants a generated font asset that is not bundled, the other a module
+flag that is not set. Neither is needed by the templates.
+
 ## 0.134.0 — 2026-08-30
 
 ### Added — five sync32 example games, and two real bugs they caught
