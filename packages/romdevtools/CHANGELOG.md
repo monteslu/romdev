@@ -4,6 +4,68 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.132.0 — 2026-08-30
+
+Closes the gap between "sync32 builds a cart" and "sync32 makes games."
+
+### Added — ARMv8-M libgcc, so a cart can use the compiler's helper routines
+
+0.131.0 shipped with the note that a sync32 cart links no libraries,
+verified against the `planes` example. That example never needed a helper.
+`diskdemo` does: a 64-bit divide emits `__aeabi_uldivmod`, and the link
+failed exactly where 0.131.0 predicted it would. The bundled ARM archives
+are ARMv4T (they exist for the GBA) and are link-incompatible with a
+Cortex-M33 object, so `scripts/build-arm-libgcc-v8m.sh` builds libgcc from
+the same gcc 14.2.0 the toolchain uses, configured for `armv8-m.main+fp`
+hard-float, asserting the result really is v8-M rather than trusting the
+multilib path. Stripped, it is 1.2MB. It is **libgcc only** — a cart still
+links no libc.
+
+### Fixed — `-ffreestanding` was dropped along with `-nostartfiles`
+
+`cc1` rejects `-nostartfiles` (a driver option) and both were removed
+together. Without `-ffreestanding`, gcc assumes a hosted environment and
+is free to turn a struct initializer into a `bl memset` that cannot link
+against a cart with no libc. Measured both ways: with the flag only
+`__aeabi_uldivmod` is undefined; without it, `memset` as well.
+
+### Added — the folder and archive forms, for games with resources
+
+A cart that reads through the disk API needs its namespace to travel with
+it (ABI 3.2-3.4). The SDK does this with a Python tool; romdev builds with
+no Python, so `s32-archive.js` ports it — a sorted, uncompressed, plain
+ustar tar, verified by round-trip and by GNU tar reading our output with
+valid checksums.
+
+`form:'folder'` is the other half, and it matters: the libretro core loads
+a **bare executable** and reads a sibling `<romname>/` data directory. It
+does not unpack a tar — the SDK's own `diskdemo.s32` archive is refused by
+it too. So `archive` is the shape you distribute and `folder` is the shape
+that runs in romdev; the schema says so. Pass `data`/`dataPaths` (plus
+`api:2` for the disk functions) and optionally `icon`.
+
+Verified: `diskdemo` built through
+`build({platform:'sync32', form:'folder'})` loads, runs, and reads its data
+files.
+
+### Added — the sync32 platform tree, the way GB has one
+
+`platform({op:'docs', platform:'sync32'})` previously answered "no docs
+shipped". It now serves MENTAL_MODEL.md and TROUBLESHOOTING.md, written
+against the real `sync32.h`: the API struct and its v1/v2 split, the audio
+ring back-pressure trap (the ring is smaller than one video frame of
+audio, `audio_push` drops the excess silently, and the sink mutes), the
+single-precision FPU, and the ram/xip modes. Every troubleshooting entry
+is a failure hit while bringing the platform up.
+
+### Fixed — `memory` declared `path` twice
+
+The readCart ROM input added in 0.130.0 collided with the existing
+`outputPath` alias, so `readCart({path})` would have tried to **write** the
+ROM to that path. The input is now `romPath`. Two pre-existing lint errors
+in `dual-era.test.js` are fixed alongside it, so `npx eslint .` is clean
+for the first time since before 0.129.0.
+
 ## 0.131.0 — 2026-08-30
 
 ### Fixed — the sync32 core never actually shipped

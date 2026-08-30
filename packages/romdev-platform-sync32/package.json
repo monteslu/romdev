@@ -1,6 +1,6 @@
 {
   "name": "romdev-platform-sync32",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "sync32 SDK tree for romdev: crt0, ram/xip linker scripts and sync32.h, so a Cortex-M33 .s32 cart builds from source with no sibling checkout. The ARM compiler itself is the WASM arm-none-eabi toolchain shipped in romdev-platform-gba.",
   "type": "module",
   "main": "index.js",
