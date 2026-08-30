@@ -17,7 +17,7 @@ import { toolJsonSchema } from "./tool-registry.js";
  * hands instructions to an MCP client. Talks ONLY about MCP tool-calling.
  */
 export const mcpPreamble = [
-  "romdev: homebrew retro game development + reverse-engineering for coding agents — 18 platforms (NES through GBA, C64, GameTank, + the 3D consoles N64/PlayStation/Dreamcast).",
+  "romdev: homebrew retro game development + reverse-engineering for coding agents — 19 platforms (NES through GBA, C64, GameTank, sync32, + the 3D consoles N64/PlayStation/Dreamcast).",
   "HARD RULE: NEVER install a host compiler or emulator (no clang/gcc/Xcode/devkitPro/brew/apt, no downloaded emulator). romdev BUNDLES every compiler (cc65, sdcc, gcc, arm/m68k/mips/sh-gcc, tcc, wla, rgbds, vasm, asar, dasm) + every emulator core as WASM and runs them through these tools — build({output:'rom'|'run'}) compiles, loadMedia+frame runs. If you're about to install or call a host toolchain, STOP and use the romdev build tool instead; an install kicking off is a DEFECT to report.",
   "All ~32 tools register at session init — call any by name directly, no loading step. Each is a domain VERB with an operation axis: memory({op}), build({output}), breakpoint({on}), cpu({op}), sprites({op}), tiles({op}), disasm({target}), romPatch({op}), …",
   "RE engine (all 18 platforms): disasm({target:'functions'}) auto-detects functions, disasm({target:'cfg'}) graphs control flow, disasm({target:'xrefs'}) finds cross-references, disasm({target:'decompile'}) emits Ghidra C pseudocode, symbols({op:'analyze'}) maps a ROM's structure in one call.",
@@ -28,7 +28,7 @@ export const mcpPreamble = [
  * Skill-channel preamble — talks ONLY about the HTTP routes. No MCP.
  */
 export const skillPreamble = [
-  "romdev gives you homebrew retro game development + reverse-engineering for 18 platforms (NES, SNES, Game Boy, Genesis, GBA, Atari, C64, GameTank, the 3D consoles N64/PlayStation/Dreamcast, and more) — build, run, screenshot, inspect, patch, disassemble, convert assets, drive emulators.",
+  "romdev gives you homebrew retro game development + reverse-engineering for 19 platforms (NES, SNES, Game Boy, Genesis, GBA, Atari, C64, GameTank, sync32, the 3D consoles N64/PlayStation/Dreamcast, and more) — build, run, screenshot, inspect, patch, disassemble, convert assets, drive emulators.",
   "It also ships a full RE analysis engine (Rizin + Ghidra, all 18 platforms): control-flow graphs, cross-references, auto-detected functions, a one-shot structural map, and a C-pseudocode decompiler — `disasm({target:'cfg'|'xrefs'|'functions'|'decompile'})` and `symbols({op:'analyze'})`.",
   "",
   "## HARD RULE: never install a compiler or emulator — romdev already bundles every one",
@@ -62,7 +62,7 @@ export function buildSkillDoc({ registry, agentsBody, version }) {
   const frontmatter = [
     "---",
     "name: romdev",
-    "description: Homebrew retro game development and ROM reverse-engineering for 18 platforms (NES, SNES, Game Boy/Color, Genesis, GBA, Atari 2600/7800, Lynx, C64, SMS, Game Gear, PC Engine, MSX, GameTank, N64, PlayStation, Dreamcast). Use when building, running, debugging, disassembling, asset-converting, or romhacking a retro game — drives bundled emulators and toolchains over HTTP. NEVER install a host compiler/emulator; romdev bundles all of them as WASM (use the build tool).",
+    "description: Homebrew retro game development and ROM reverse-engineering for 19 platforms (NES, SNES, Game Boy/Color, Genesis, GBA, Atari 2600/7800, Lynx, C64, SMS, Game Gear, PC Engine, MSX, GameTank, sync32, N64, PlayStation, Dreamcast). Use when building, running, debugging, disassembling, asset-converting, or romhacking a retro game — drives bundled emulators and toolchains over HTTP. NEVER install a host compiler/emulator; romdev bundles all of them as WASM (use the build tool).",
     `metadata:`,
     `  version: "${version ?? "0.0.0"}"`,
     "---",

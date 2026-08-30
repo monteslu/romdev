@@ -85,6 +85,15 @@ if (space > 0) api->audio_push(buf, space < have ? space : have);
 
 ## Tooling
 
+**`frame({op:'verify'})` says "nearlyBlank" on a game that looks fine** — the
+check flags a screen that is >92% one colour, which is tuned for tilemap
+platforms whose backgrounds fill the frame. A sync32 game composing sprites
+over a flat `clear()` backdrop — a shmup on space, a paddle game on an empty
+court — legitimately sits at 93-98% one colour while being completely correct.
+Look at the screenshot before believing the verdict; on this platform
+`verified:false` is evidence to check, not a failure.
+
+
 **A ROM file suddenly became a few bytes** — something passed the ROM's path
 where a tool writes its OUTPUT. `memory({op:'readCart'})` takes the ROM to read
 as **`romPath`**; its `path`/`outputPath` is where bytes get *written*. (Before
