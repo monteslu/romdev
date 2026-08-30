@@ -47,8 +47,18 @@ in its header (`build({api: 2})`) and the console refuses to run it on older
 firmware — so check the version rather than calling a v2 pointer on a v1
 console.
 
-**Video.** `clear`, `rect` and `sprite` draw; `present()` shows the frame and
-paces the game. For direct pixel work, `canvas()` returns the framebuffer bytes
+**Video — and the one idiom that surprises everyone.** `clear(rgb565)` and
+`rect(..., rgb565)` take a COLOUR, but the canvas is 8-bit **indexed**. The
+console therefore maps your colour to the **nearest entry in the 256-slot
+palette** and stores that index. A colour you never put in the palette does not
+render as itself; it snaps to whatever is closest — which is how a "grey road"
+comes out blue when the palette holds only sprite colours.
+
+So: **every colour a game draws with must also be in the palette.** Put your
+backgrounds, HUD colours and grid lines in there alongside the sprite colours.
+
+`sprite()` blits from a loaded sheet, and `present()` shows the frame and paces
+the game. For direct pixel work, `canvas()` returns the framebuffer bytes
 and `canvas_mark(y0, y1)` tells the console which rows changed — mark only what
 you touched, since the console uploads marked rows.
 

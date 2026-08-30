@@ -39,6 +39,18 @@ but not for C"** — you are passing driver options to `cc1`. It takes
 
 ## Running
 
+**A colour renders as the wrong colour** (a grey road comes out blue, a green
+court comes out black) — `rect()`/`clear()` snap to the **nearest palette
+entry**, because the canvas is 8-bit indexed. If the palette only holds sprite
+colours, every background colour you pass is rounded to one of those. Add the
+colours you draw with to the palette. This is not a bug and there is no way to
+draw an off-palette colour.
+
+**A sprite does not appear at all** — check the sheet cell. `sprite(sh, sx, sy,
+w, h, ...)` reads columns `sx..sx+w-1`; art drawn outside that span is silently
+clipped. Drawing a 4px bullet at x=54 in a cell that starts at x=48 with w=8
+puts half of it outside the blit.
+
 **Black screen, but the frame counter advances** — the game is running and
 drawing nothing. Usual causes: no `present()` in the loop (nothing is ever
 shown); drawing to `canvas()` without `canvas_mark()`, so the console uploads no
