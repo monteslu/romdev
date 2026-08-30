@@ -516,16 +516,24 @@ export async function buildForPlatform(args) {
     if (args.language === "asm") {
       const r = await buildGB({
         source: args.source,
+        // Multi-file rgbds projects: every .asm gets assembled and linked,
+        // instead of only `source` with the rest as INCLUDE payload.
+        sources: args.sources,
         includes: args.includes,
       });
       return {
         ok: r.exitCode === 0 && r.binary !== null,
         binary: r.binary,
         listing: "",
-        symbols: "",
+        // rgblink's own -n symbol map (label -> bank:address) and -m section
+        // map, passed straight through. Previously hardcoded "", which is why
+        // `includeSymbols:true` returned nothing on a GB asm build.
+        symbols: r.symbols ?? "",
+        map: r.map ?? "",
         log: r.log,
         issues: parseBuildLog(r.log),
         exitCode: r.exitCode,
+        ...(r.failedTU ? { failedTU: r.failedTU } : {}),
         toolchain: "rgbds",
       };
     }

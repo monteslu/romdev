@@ -82,6 +82,39 @@ import { dirname, join } from "node:path";
  * to the host's existing *Supported() probes.
  * @param {import("romdev-core-host/index.js").LibretroHost|null} host
  */
+/**
+ * Upstream version/commit of each bundled toolchain, from scripts/versions.json
+ * (the single source of truth the build scripts compile from).
+ *
+ * Memoized: the file is small but this is read on every status call. Failure is
+ * non-fatal — a missing file just omits the field rather than breaking status.
+ * @returns {Record<string, string>|undefined}
+ */
+let _tcVersions;
+function toolchainVersions() {
+  if (_tcVersions !== undefined) return _tcVersions || undefined;
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const raw = JSON.parse(readFileSync(join(here, "..", "..", "..", "scripts", "versions.json"), "utf8"));
+    /** @type {Record<string,string>} */
+    const out = {};
+    for (const [name, pin] of Object.entries(raw.toolchains ?? {})) {
+      // `ref` is the human label ("4.4.0", "master"); `commit` is the exact
+      // pin. A tag alone is ambiguous for the git-tracked ones, so show both
+      // when the ref is not itself a version number.
+      const ref = pin?.ref ?? "";
+      const commit = typeof pin?.commit === "string" ? pin.commit.slice(0, 8) : "";
+      out[name] = /^v?\d/.test(ref) ? ref : (commit ? `${ref}@${commit}` : ref);
+    }
+    if (raw.emsdk) out.emsdk = String(raw.emsdk);
+    _tcVersions = out;
+    return out;
+  } catch {
+    _tcVersions = null;
+    return undefined;
+  }
+}
+
 function hostCapabilities(host) {
   const da65 = da65Available();
   const cc65 = cc65Available();
@@ -92,6 +125,15 @@ function hostCapabilities(host) {
     cc65Build: cc65,     // build({platform:'nes'/'c64'/'atari7800'/'lynx'}) — cc65/ca65
     ld65Link: cc65,      // the ld65 linker (ships with cc65 in the same package)
     da65Toolchain: da65, // legacy alias for da65Disasm (kept for back-compat)
+    // WHICH UPSTREAM each bundled assembler/compiler actually is.
+    //
+    // A project targets a specific toolchain version (a GB disassembly's README
+    // may pin RGBDS 0.3.5, whose `NAME: MACRO` syntax modern rgbasm rejects),
+    // and status reported `romdevVersion` but nothing per-toolchain — so there
+    // was no way to check the bundled version except by triggering a parse
+    // error and inferring it. Read from scripts/versions.json, the same pin the
+    // build scripts compile from, so it cannot drift from what actually ships.
+    versions: toolchainVersions(),
   };
   if (!host) return toolchains;
   const has = (m) => { try { return !!host[m]?.(); } catch { return false; } };

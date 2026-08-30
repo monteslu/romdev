@@ -124,9 +124,23 @@ async function runJob(job) {
   for (const f of (job.inputFiles ?? [])) {
     const parent = path.posix.dirname(f.vfsPath);
     if (parent !== "/" && parent !== ".") ensureDir(mod.FS, parent);
+    // ALWAYS hand MEMFS BYTES, never a JS string.
+    //
+    // FS.writeFile accepts a string in most Emscripten builds, but a module
+    // built without the string path (rgbasm is one) aborts with the
+    // spectacularly unhelpful `Aborted(Unsupported data type)` from inside
+    // writeFile -- no filename, no hint that the TYPE is the problem. That
+    // abort is what made multi-file GB builds look like a crash in the
+    // assembler rather than a marshalling bug on our side.
+    //
+    // Encoding here (rather than at each textFile() call site) fixes it for
+    // EVERY bundled toolchain at once, and makes the worker's contract
+    // simply "bytes in MEMFS".
     const bytes = f.encoding === "base64"
       ? new Uint8Array(Buffer.from(f.data, "base64"))
-      : f.data;
+      : typeof f.data === "string"
+        ? new Uint8Array(Buffer.from(f.data, "utf8"))
+        : f.data;
     mod.FS.writeFile(f.vfsPath, bytes);
   }
   // Pre-create parent directories for declared output files so tools

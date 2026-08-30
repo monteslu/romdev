@@ -22,6 +22,7 @@
 // Patterns drawn from retroemu/LibretroHost.js + wasmcart-libretro/libretro.c.
 // See memory `libretro-wasm-patterns`.
 
+import { cartImageFromBytes } from "./cart-image.js";
 import { getCPUState } from "./cpu-state.js";
 import { loadLibretroCore } from "./coreLoader.js";
 import { newCallbackState, registerCallbacks } from "./callbacks.js";
@@ -1121,37 +1122,9 @@ export class LibretroHost {
     if (!this._loadArgs || !this._loadArgs.bytes) {
       throw new Error("no ROM loaded — call loadMedia first");
     }
-    const platform = this._loadArgs.platform;
-    const raw = this._loadArgs.bytes;
-    let headerSkipped = 0;
-    let mapped = false;
-    let base = 0;
-    let note = "File image == CPU ROM space (un-banked): offset N is the byte the CPU fetches at ROM address N.";
-
-    if (platform === "nes") {
-      // iNES / NES2.0: 16-byte header, then PRG (then CHR). The CPU sees PRG via
-      // the mapper at $8000-$FFFF — file offset is NOT a flat CPU address.
-      if (raw.length >= 4 && raw[0] === 0x4e && raw[1] === 0x45 && raw[2] === 0x53 && raw[3] === 0x1a) headerSkipped = 16;
-      mapped = true;
-      note = "NES PRG-ROM (iNES header skipped). Bytes are correct but the CPU sees them through the mapper at $8000-$FFFF — a file offset is not a flat CPU address. Use findWriter's prgOffset/bank to map a CPU PC to a PRG offset.";
-    } else if (platform === "snes") {
-      // Copier header: 512 bytes iff (len % 1024) == 512. After that, LoROM/HiROM
-      // banking maps the image into $00:8000+ — also not a flat CPU address.
-      if ((raw.length % 1024) === 512) headerSkipped = 512;
-      mapped = true;
-      note = "SNES ROM (copier header skipped if present). Bytes are correct but LoROM/HiROM banking maps them into $xx:8000+ — a file offset is not a flat CPU address.";
-    } else if (platform === "gba") {
-      mapped = true;
-      base = 0x08000000;
-      note = "GBA ROM is mapped flat at 0x08000000 — CPU address = 0x08000000 + file offset.";
-    }
-    // genesis/megadrive, gb, gbc, sms, gg, lynx, pce, c64, msx, atari*: file base
-    // is the CPU ROM base (un-banked or banked-from-0), default note applies.
-
-    const bytes = headerSkipped ? raw.subarray(headerSkipped) : raw;
-    // `raw` is the FULL on-disk image incl. any header — needed by the banked
-    // CPU-address mapping (mapNesAddress expects the iNES header present).
-    return { bytes, raw, base, headerSkipped, mapped, platform, note };
+    // Shared with memory({op:'readCart', path}) so a host-backed read and a
+    // file-backed read of the same cart can never disagree about header size.
+    return cartImageFromBytes(this._loadArgs.bytes, this._loadArgs.platform);
   }
 
   /**

@@ -305,7 +305,41 @@ export async function cheatsClearCore(_args, sessionKey) {
 }
 
 /** op:'make' — CREATE a new cheat code from an address + value. */
-export async function cheatsMakeCore({ platform, address, value, values, compare, device }) {
+export async function cheatsMakeCore({ platform, address, value, values, compare, device, entries }) {
+      // TRUE BATCH: many INDEPENDENT patches in one call.
+      //
+      // `values` batches one ADDRESS across several values; `entries` batches
+      // whole {address, value, compare} triples, which is the shape a real
+      // session actually has. One agent published 26 codes as 26 separate
+      // round trips because there was no way to say "here are all of them" --
+      // and every response repeated ~40 tokens of identical apply-instructions
+      // boilerplate restating fields that were already structured data.
+      if (entries && entries.length) {
+        const results = [];
+        for (const e of entries) {
+          if (!e || typeof e.address !== "number") {
+            throw new Error("cheats({op:'make', entries}): every entry needs a numeric `address` (and `value`).");
+          }
+          const one = await cheatsMakeCore({
+            platform,
+            address: e.address,
+            value: e.value,
+            compare: e.compare ?? undefined,
+            device,
+          });
+          // Drop the per-entry prose: it is the SAME sentence every time and
+          // restates codes[0].code / raw, which the caller already has here.
+          const { note, ...rest } = one;
+          results.push(rest);
+        }
+        return {
+          platform,
+          count: results.length,
+          results,
+          note: `${results.length} independent patches for ${platform}; each carries device codes + raw. ` +
+            "Apply any with cheats({op:'apply', code}). Non-destructive — no ROM file is touched.",
+        };
+      }
       const range = GG_ADDR_RANGE[platform];
       const devices = device ? [device] : nativeDevicesFor(platform);
 
@@ -363,9 +397,9 @@ export async function cheatsMakeCore({ platform, address, value, values, compare
         codes: built.codes,
         raw: built.raw,
         ...(built.rangeNote ? { rangeNote: built.rangeNote } : {}),
-        note: (compare != null ? "ROM/code patch" : "RAM cheat") + " for " + platform + ". " +
-          "Devices: " + (built.codes.length ? built.codes.map((c) => `${c.device} ${c.code}`).join(", ") + ", " : "") + "raw " + built.raw + ". " +
-          "Apply to confirm: cheats({op:'apply', code: \"" + primary + "\" }). Non-destructive — no ROM file is touched.",
+        // Short on purpose: `codes` and `raw` are structured fields right above,
+        // so repeating them in prose was pure token cost on every call.
+        note: "Apply to confirm: cheats({op:'apply', code: \"" + primary + "\" }). Non-destructive.",
       };
 }
 
@@ -409,6 +443,11 @@ export function registerCheatTools(server, z, sessionKey) {
       address: z.number().int().min(0).optional().describe("op=make: address to cheat (RAM addr, or the ROM addr to patch)."),
       value: z.number().int().min(0).max(255).optional().describe("op=make: replacement byte (0-255). Provide value OR values."),
       values: z.array(z.number().int().min(0).max(255)).min(1).max(64).optional().describe("op=make: batch — a code per value at the same address. Returns variants[]."),
+      entries: z.array(z.object({
+        address: z.number().int().min(0),
+        value: z.number().int().min(0).max(255),
+        compare: z.number().int().min(0).max(255).optional(),
+      })).min(1).max(256).optional().describe("op=make: BATCH of INDEPENDENT patches — [{address, value, compare?}, ...] in ONE call, returning results[] in the same order. Use this when publishing a set of codes (25 separate make calls is the pattern this replaces); `values` only batches one address across several values."),
       compare: z.number().int().min(0).max(255).optional().describe("op=make: ROM cheats only — the byte CURRENTLY at `address` (read it first). Selects the device's ROM-patch form."),
       device: z.enum(["game-genie", "pro-action-replay", "gameshark", "action-replay", "raw"]).optional().describe("op=make: force a specific device's encoding. Default: the platform's native device(s)."),
     },

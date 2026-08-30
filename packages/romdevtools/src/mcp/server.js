@@ -70,7 +70,7 @@ import { z } from "zod";
 import { registerTools } from "./tools/index.js";
 import { stopAllPlaytest, stopPlaytestForSession, isPlaytestRunning } from "./tools/playtest.js";
 import { clearHost, reapIdleHosts, setHostProtectedPredicate } from "./state.js";
-import { resolveSessionKey, SESSION_META_KEY } from "./session-key.js";
+import { resolveSessionKey, SESSION_META_KEY, rememberMinted } from "./session-key.js";
 import { AGENT_META_KEY, setSessionAgent } from "./agent-identity.js";
 import { createMcpHandler, isLegacyRequest, McpServer as McpServerV2 } from "@modelcontextprotocol/server";
 import { toNodeHandler, toWebRequest } from "@modelcontextprotocol/node";
@@ -433,10 +433,16 @@ async function main() {
         // explicit handle in `_meta`, else the x-romdev-session header, else
         // a minted one. Without this every stateless request would land in a
         // fresh empty session and no ROM would ever stay loaded.
-        const { sessionKey } = resolveSessionKey({
+        const { sessionKey, minted } = resolveSessionKey({
           meta: req.body?.params?._meta,
           headers: req.headers,
         });
+        // A minted key is one the caller CANNOT send back, so its next request
+        // gets a different session and its ROM appears to vanish. Remember it
+        // so the "No ROM loaded" path can name the real cause (and the fix)
+        // instead of telling an agent that just called loadMedia to call it
+        // again. See resolveSessionKey/rememberMinted.
+        if (minted) rememberMinted(sessionKey);
         // Same cooperative attribution as the REST path: a stateless request
         // has no connection to group sessions by, so the agent says who it
         // is in _meta if it wants fair treatment at the caps.

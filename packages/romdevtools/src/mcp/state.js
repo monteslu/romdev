@@ -14,6 +14,7 @@ import path from "node:path";
 import os from "node:os";
 import { existsSync } from "node:fs";
 import { pickEvictionVictim, clearSessionAgent } from "./agent-identity.js";
+import { wasMinted } from "./session-key.js";
 
 /** @type {Map<string, LibretroHost>} */
 const hosts = new Map();
@@ -88,9 +89,16 @@ export function getHost(sessionKey) {
         : `loadMedia({ platform: "${prev.platform}", base64: ... })  (your ROM came from base64 — re-supply the bytes)`;
       // If a playtest window was open, a rolling auto-checkpoint may be on disk —
       // restoring it recovers the human's MANUAL progress, not just a fresh boot.
-      const ckpt = playtestCheckpointPath(sessionKey, prev.path ?? null);
-      const ckptHint = existsSync(ckpt)
-        ? `\nA playtest auto-checkpoint is on disk (your last ~15s of play): after the load above, run\n  state({ op: "load", path: "${ckpt}" })\nto restore the human's progress instead of replaying from boot.`
+      // Check BOTH checkpoint flavours: a libretro core rolls a whole-machine
+      // `.state`, a wasmcart rolls its SRAM as `.sav`, and each is restored by
+      // a DIFFERENT tool. Looking only for `.state` (as this did) silently
+      // missed every wasmcart checkpoint and told the human to replay from
+      // boot with their save sitting right there on disk.
+      const ckptState = playtestCheckpointPath(sessionKey, prev.path ?? null, "state");
+      const ckptSram = playtestCheckpointPath(sessionKey, prev.path ?? null, "sram");
+      const ckpt = existsSync(ckptState) ? ckptState : (existsSync(ckptSram) ? ckptSram : null);
+      const ckptHint = ckpt
+        ? `\nA playtest auto-checkpoint is on disk (your last ~15s of play): after the load above, run\n  state({ op: "${ckpt === ckptSram ? "importSram" : "load"}", path: "${ckpt}" })\nto restore the human's progress instead of replaying from boot.`
         : "";
       throw new Error(
         "No ROM loaded in this session — the host was evicted (the server restarted, " +
@@ -101,6 +109,24 @@ export function getHost(sessionKey) {
         "\nThen replay any boot/navigate steps to get back to where you were. " +
         "(If instead you expected a DIFFERENT session, you may be sending an inconsistent " +
         "`x-romdev-session` header — reuse one stable id on every call.)",
+      );
+    }
+    // A MINTED session is the one case where "call loadMedia first" is actively
+    // wrong advice: the caller may have called it, successfully, one request
+    // ago -- into a session it was never told the name of, so this request is a
+    // different one. Say that plainly and give the fix, instead of sending an
+    // agent round the loop of retrying a load that will keep "working".
+    if (wasMinted(sessionKey)) {
+      throw new Error(
+        "No ROM loaded in this session — and this session was AUTO-MINTED because " +
+        "your request carried no session handle, so EVERY request of yours lands in " +
+        "a brand-new empty session. That is why loadMedia can report `loaded:true` " +
+        "and the very next call still says no ROM (and why catalog({op:'status'}) " +
+        "can show `loaded:false` next to `liveHosts:1` — the host from your previous " +
+        "request is alive, just not reachable from this one).\n" +
+        "FIX: pick ONE stable, descriptive id and send it on EVERY call — as the " +
+        "`x-romdev-session` header over plain HTTP, or as `_meta[\"dev.romdev/sessionHandle\"]` " +
+        "on an MCP request. Then re-run loadMedia({path}) once and your ROM will stay put.",
       );
     }
     throw new Error(

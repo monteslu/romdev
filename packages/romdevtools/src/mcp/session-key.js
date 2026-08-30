@@ -82,3 +82,40 @@ export function resolveSessionKey({ meta, headers, transportSessionId } = {}) {
 
   return { sessionKey: mintSessionHandle(), source: "minted", minted: true };
 }
+
+/**
+ * Sessions that were MINTED for a caller that supplied no handle.
+ *
+ * A minted key is a session the caller cannot name, so it cannot send the same
+ * one twice: every request gets a brand-new empty session. `loadMedia` then
+ * honestly reports `loaded:true` (it DID load, into that request's throwaway
+ * session), and the very next call lands somewhere else and reports "No ROM
+ * loaded" — with `catalog({op:'status'})` showing `loaded:false` alongside
+ * `liveHosts:1`, because the host from the previous request really is still
+ * there, just not reachable from here.
+ *
+ * That contradiction is the single most confusing failure on this route, and
+ * it was invisible: `minted` was computed and then thrown away by every call
+ * site. Remembering it lets the tools that DEPEND on session continuity say
+ * what is actually wrong instead of "call loadMedia first" to someone who just
+ * did. Bounded so a long-lived server cannot accumulate keys without limit.
+ */
+const mintedKeys = new Set();
+const MINTED_KEYS_MAX = 512;
+
+/** Record that `sessionKey` was minted (i.e. the caller sent no handle). */
+export function rememberMinted(sessionKey) {
+  if (typeof sessionKey !== "string" || !sessionKey) return;
+  // Cheap FIFO bound: a minted key is only useful for the request that made it
+  // plus the diagnosis right after, so dropping the oldest costs nothing.
+  if (mintedKeys.size >= MINTED_KEYS_MAX) {
+    const oldest = mintedKeys.values().next().value;
+    if (oldest !== undefined) mintedKeys.delete(oldest);
+  }
+  mintedKeys.add(sessionKey);
+}
+
+/** Was this session minted for a caller that sent no handle? */
+export function wasMinted(sessionKey) {
+  return mintedKeys.has(sessionKey);
+}

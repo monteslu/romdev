@@ -1,4 +1,6 @@
+import { readFile } from "node:fs/promises";
 import { getHost } from "../state.js";
+import { cartImageFromBytes } from "romdev-core-host/cart-image.js";
 import { MemoryRegionToRetro } from "romdev-core-host/types.js";
 import { jsonContent, safeTool, textContent, writeOutput, parseHexBytes } from "../util.js";
 import { classifyBytes } from "./classify-region.js";
@@ -274,9 +276,31 @@ async function memWrite(sessionKey, { region, offset = 0, hex, base64, data, byt
       return textContent(`wrote ${buf.length} bytes to ${region}+${offset}`);
 }
 
-async function memReadCart(sessionKey, { offset = 0, length = 16, cpuAddress, bank, mapper, outputPath, inline, echo, findHex, maxMatches = 100 }) {
-      const host = getHost(sessionKey);
-      const rom = host.getCartRom();
+async function memReadCart(sessionKey, { offset = 0, length = 16, cpuAddress, bank, mapper, outputPath, inline, echo, findHex, maxMatches = 100, path: romPath, platform: romPlatform }) {
+      // HOST-FREE when given a `path`, exactly like disasm({target:'rom', path}).
+      //
+      // Reading bytes out of a cartridge is a STATIC question, and requiring a
+      // live emulator to answer it made this tool the most fragile way to ask
+      // it: any session whose host went away (eviction, restart, a session-id
+      // mismatch) lost byte verification and had to fall back to reading the
+      // ROM in Python. `disasm` and `cheats` already work this way; this makes
+      // the byte-reading tool consistent with them.
+      let rom;
+      if (romPath) {
+        if (!romPlatform) {
+          throw new Error(
+            "memory({op:'readCart', path}): `platform` is required alongside `path` — " +
+            "header layout is per-platform (NES skips 16 bytes, SNES 512 if a copier " +
+            "header is present), so the bytes cannot be interpreted without it. " +
+            "Example: memory({op:'readCart', path:'/roms/game.gb', platform:'gb', offset:0, length:16})."
+          );
+        }
+        const raw = new Uint8Array(await readFile(romPath));
+        rom = cartImageFromBytes(raw, romPlatform);
+      } else {
+        const host = getHost(sessionKey);
+        rom = host.getCartRom();
+      }
 
       // findHex (v0.94.0 round 2): byte-pattern scan over the LOADED cart image —
       // the call-site hunt ("who jsr's $873C?" = scan for `20 3C 87`) that agents
@@ -794,7 +818,7 @@ export function registerMemoryTools(server, z, sessionKey) {
     "OP CHEAT-SHEET (params each op uses): " +
     "read → {region, offset?, length?|offsets?, outputPath?|inline?}; " +
     "write → {region, offset, hex|base64}; " +
-    "readCart → {offset?, length?, outputPath?|inline?}; " +
+    "readCart → {offset?, length?, outputPath?|inline?} — or {path, platform, ...} with NO host; " +
     "snapshot → {region, name, offset?, length?}; " +
     "diff → {region, name, view?}; " +
     "classify → {region?, offset?, length?}; " +
@@ -802,7 +826,7 @@ export function registerMemoryTools(server, z, sessionKey) {
     "searchNext → {compare, value?}.\n" +
     `• op:'read' — bytes as a \`hex\` string. ≤${INLINE_HEX_LIMIT}B come back inline; >${INLINE_HEX_LIMIT}B need \`outputPath\` (RAW bytes written → {path,bytes}) or \`inline:true\`. BATCH: \`offsets\` (addresses or {offset,length}) reads many non-contiguous spots in ONE call → reads:[{offset,length,hex}]. (Genesis video_ram is raw host-LE word-swapped — not a direct tile map; use tiles({op:'pixels'}).)\n` +
     "• op:'write' — pass payload as `hex` (e.g. 'deadbeef') OR `base64` — **NOT `data`, `bytes`, or an array (those are REJECTED with guidance).** hex for byte patterns, base64 for binary blobs.\n" +
-    "• op:'readCart' — read the LOADED CARTRIDGE ROM image ('is the emulator running my patched bytes?'). With `findHex` it SCANS the whole image for a byte pattern and maps every hit to a CPU address (call-site hunts: '20 3C 87' finds every jsr $873C). For 'who can write/read RAM address X' prefer disasm({target:'accessScan', address}) — it also catches indexed forms whose BASE differs from X (sta $0181,y reaching $0182), which a raw byte pattern can never match. For un-banked platforms (Genesis/GB/SMS/Lynx/PCE) the file `offset` IS the CPU ROM address; **NES/SNES skip the header and reach bytes through a mapper, so `mapped:true`+note say the offset is not a flat CPU address.**\n" +
+    "• op:'readCart' — read a CARTRIDGE ROM image. Reads the LOADED cart by default ('is the emulator running my patched bytes?'), or pass `path`+`platform` to read a ROM FILE with NO host loaded (same host-free ergonomics as disasm({target:'rom', path}) — byte verification keeps working after an eviction/restart, and static romhacking never needs loadMedia at all). With `findHex` it SCANS the whole image for a byte pattern and maps every hit to a CPU address (call-site hunts: '20 3C 87' finds every jsr $873C). For 'who can write/read RAM address X' prefer disasm({target:'accessScan', address}) — it also catches indexed forms whose BASE differs from X (sta $0181,y reaching $0182), which a raw byte pattern can never match. For un-banked platforms (Genesis/GB/SMS/Lynx/PCE) the file `offset` IS the CPU ROM address; **NES/SNES skip the header and reach bytes through a mapper, so `mapped:true`+note say the offset is not a flat CPU address.**\n" +
     "• op:'snapshot' — capture a baseline of `region` (server RAM, keyed by `name`) to later diff. The 'which bytes did THIS event touch?' workflow: snapshot → trigger event → op:'diff'.\n" +
     "• op:'diff' — compare a region against a snapshot baseline → the CHANGED bytes. DEFAULT `view:'summary'` is a CLUSTERED summary (+ stride detection — '4 islands at stride 0x80' = a struct array) so a churny gameplay diff doesn't flood context; `view:'raw'` = the per-byte before/after list.\n" +
     "• op:'classify' — heuristically classify the bytes at an offset BEFORE you trust a 'found table'. **Kills the classic trap: a run that 'matches' your stats is often ASCII TEXT (bytes 82/79/68 = 'ROD' from a taunt string) or code.** Returns looksLike/printableRatio/entropy/asciiPreview/confidence.\n" +
@@ -833,6 +857,8 @@ export function registerMemoryTools(server, z, sessionKey) {
       mapper: z.enum(["lorom", "hirom"]).optional().describe("op:readCart with cpuAddress (SNES) — force LoROM/HiROM mapping if auto-detect is wrong."),
       offsets: offsetsShape.optional().describe("op:read BATCH — a list of addresses (each read `length` bytes, default 1) or {offset,length} objects → reads:[{offset,length,hex}]. Takes precedence over offset/length."),
       compact: z.boolean().optional().describe("op:read with `offsets` — return reads as ONE {\"0xOFF\": \"hex\"} map instead of an object per read (~4x fewer tokens for the sample-N-flags pattern)."),
+      path: z.string().optional().describe("op:'readCart' — read this ROM FILE instead of the loaded cart. Requires `platform` (header layout is per-platform). No emulator/host needed, exactly like disasm({target:'rom', path})."),
+      platform: z.string().optional().describe("op:'readCart' with `path` — which platform the file is, so the right header is skipped (nes=16B iNES, snes=512B copier if present, gba=flat at 0x08000000, others un-banked)."),
       findHex: z.string().optional().describe("op:'readCart' — byte-pattern SCAN over the loaded cart image (even-length hex, spaces/$ ok — e.g. '20 3C 87' = jsr $873C). Returns matches as {fileOffset, cpuAddress[, bank]} — the offset→bank:addr mapping done for you. THE call-site hunt for annotation work; replaces scripting over the ROM file."),
       maxMatches: z.number().int().min(1).max(1000).optional().describe("op:'readCart' findHex — cap on returned matches (default 100; truncated:true when hit)."),
       // write

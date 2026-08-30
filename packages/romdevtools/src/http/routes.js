@@ -19,6 +19,7 @@
 
 import { buildToolRegistry, runTool, toolJsonSchema } from "./tool-registry.js";
 import { buildSkillDoc } from "./skill-doc.js";
+import { schemaForTarget, filterableTargets } from "./schema-subset.js";
 import { swaggerHtml, swaggerAsset } from "./swagger.js";
 import { observer } from "../observer/bus.js";
 import { log } from "../mcp/log.js";
@@ -241,7 +242,20 @@ export function mountHttpToolRoutes(app, opts = {}) {
   app.get("/tool/:name/schema", (req, res) => {
     const tool = metaRegistry.get(req.params.name);
     if (!tool) { res.status(404).json({ error: `Unknown tool '${req.params.name}'.` }); return; }
-    res.json(toolJsonSchema(tool.inputSchema));
+    const full = toolJsonSchema(tool.inputSchema);
+    // `?for=<target>` narrows a broad tool's schema to the parameters that
+    // target actually uses — `disasm` alone carries 49 across everything from
+    // "read a byte range" to "recompile NES to 65816", and a caller pulling the
+    // schema in on demand pays for all of them to use six. Default is unchanged
+    // (complete schema), so no existing caller is affected.
+    const want = typeof req.query.for === "string" ? req.query.for : undefined;
+    const { schema, filtered, note } = schemaForTarget(req.params.name, want, full);
+    if (!filtered) {
+      const targets = filterableTargets(req.params.name);
+      res.json(targets.length ? { ...schema, "x-filterableTargets": targets } : schema);
+      return;
+    }
+    res.json({ ...schema, "x-filtered": note });
   });
 
   // ── GET /openapi.json ─────────────────────────────────────────────────────

@@ -299,16 +299,59 @@ function parseAsar(text, stage = "asar") {
 //   warning: file.asm(3): something
 function parseRgbds(text, stage) {
   const out = [];
-  // ERROR/WARNING in caps, with file(line)
-  const re = /^(?<sev>ERROR|WARNING|error|warning):\s*(?<file>\S+?)\((?<line>\d+)\)(?::\s*)?(?<msg>.*)$/gm;
+  // Modern rgbds (0.5+) colourizes and splits a diagnostic over TWO lines:
+  //   error: syntax error, unexpected MACRO
+  //       at /work/bank0.asm(2)
+  // with ANSI SGR sequences in between. The single-line `ERROR: file(line):`
+  // form below is the older shape. Strip colour first so both parse; without
+  // this, EVERY modern rgbds diagnostic fell through and issues[] came back
+  // empty on a failed GB build (the agent got a raw ANSI log to read instead).
+  const plain = text.replace(/\u001b\[[0-9;]*m/g, "");
+
+  const twoLine = /^(?<sev>error|warning):\s*(?<msg>.*)\n\s*at\s+(?<file>\S+?)\((?<line>\d+)\)/gim;
   let m;
-  while ((m = re.exec(text))) {
+  while ((m = twoLine.exec(plain))) {
+    out.push({
+      severity: m.groups.sev.toLowerCase(),
+      file: m.groups.file,
+      line: parseInt(m.groups.line, 10),
+      message: m.groups.msg.trim(),
+      stage,
+    });
+  }
+
+  // Legacy single-line form: `ERROR: file(line): message`.
+  const re = /^(?<sev>ERROR|WARNING|error|warning):\s*(?<file>\S+?)\((?<line>\d+)\)(?::\s*)?(?<msg>.*)$/gm;
+  while ((m = re.exec(plain))) {
     out.push({
       severity: m.groups.sev.toLowerCase(),
       file: m.groups.file,
       line: parseInt(m.groups.line, 10),
       message: m.groups.msg.trim() || "(see following lines)",
       stage,
+    });
+  }
+
+  // PRE-0.5 MACRO SYNTAX — the single most likely reason an old GB
+  // disassembly won't assemble here.
+  //
+  // RGBDS changed macro definition from `NAME: MACRO` to `MACRO NAME` in 0.5,
+  // and the bundled toolchain is modern. The parse error it produces
+  // ("syntax error, unexpected MACRO") never mentions the syntax change, so
+  // the failure reads as a broken source file. Published GB disassemblies are
+  // overwhelmingly 0.3.x-era, so this will keep happening: name it explicitly.
+  if (/syntax error, unexpected MACRO/i.test(plain)) {
+    const site = /^\s*(?<name>\w+):\s*MACRO\s*$/im.exec(plain);
+    out.push({
+      severity: "info",
+      stage,
+      message:
+        "This looks like PRE-0.5 RGBDS macro syntax. RGBDS 0.5 changed macro " +
+        "definitions from `NAME: MACRO` to `MACRO NAME` (and `ENDM` is still " +
+        "`ENDM`). The bundled rgbasm is modern, so an old disassembly (0.3.x-era, " +
+        "which is most of them) needs its macro definitions rewritten" +
+        (site ? ` — e.g. \`${site.groups.name}: MACRO\` becomes \`MACRO ${site.groups.name}\`` : "") +
+        ". Check the project's README for the RGBDS version it targets.",
     });
   }
   return out;
