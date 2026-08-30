@@ -1,6 +1,6 @@
 {
   "name": "romdev-platform-gba",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Game Boy Advance binaries + C library tree for romdev: mGBA emulator core + arm-none-eabi-gcc toolchain (cc1 / as / ld / objcopy / objdump) + the GBA C library share/ tree (libtonc, libgba, maxmod, sysbase, crt0, ldscripts). WASM. Single-consumer: the GBA platform.",
   "type": "module",
   "main": "index.js",

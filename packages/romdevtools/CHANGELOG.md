@@ -4,6 +4,32 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.135.1 — 2026-08-30
+
+### Fixed — two binary packages shipped changed code under a published version
+
+`publish-all.mjs`'s drift check caught it before anything went out:
+`romdev-platform-gba@0.11.0` and `romdev-toolchain-m68k-gcc@0.4.0` had
+in-tree content that no longer matched their registry tarballs.
+
+Both vendor the build kit (`_worker/wasm-worker.js`, `parse-errors.js`)
+that is canonical in `romdevtools/src/toolchains`. 0.130.0's two fixes —
+always hand MEMFS bytes rather than a JS string, and parse modern rgbds's
+ANSI/two-line diagnostics — were correctly synced into both packages by
+`scripts/sync-build-kit.sh`, but neither package was bumped. Publishing
+would have skipped them, pairing new romdevtools with the old tarballs and
+silently reintroducing `Aborted(Unsupported data type)` on the GBA and
+Genesis C paths for anyone installing fresh.
+
+Bumped to `romdev-platform-gba@0.12.0` and
+`romdev-toolchain-m68k-gcc@0.4.0`, repinned in romdevtools.
+
+**The general lesson:** the build kit is deliberately duplicated into the
+binary packages, and `build-kit-parity.test.js` enforces that the copies
+match. That test guards CORRECTNESS but says nothing about VERSIONS — a
+synced copy still needs its package bumped, or the fix never reaches an
+installed user.
+
 ## 0.135.0 — 2026-08-30
 
 ### Added — the five GameTank example games now exist as far as the tools care
