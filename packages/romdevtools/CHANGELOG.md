@@ -4,6 +4,65 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.131.0 — 2026-08-30
+
+### Fixed — the sync32 core never actually shipped
+
+`src/cores/wasm/` is a gitignored build-staging directory. Every other core
+resolves through its own `romdev-core-*` package (`resolveCore` tries the
+package first, then falls back to staging), but sync32's registry entry
+named `romdev-core-s32core` — a package that did not exist and was not a
+dependency. The platform therefore worked on the machine that built it and
+silently disappeared from `listPlatforms` for everyone else.
+
+`romdev-core-s32core` now exists, romdevtools depends on it, and
+`build-s32core.sh` stages into it the way `build-gametank.sh` always has.
+The shipped WASM was also stale (built 2026-08-27 against a tree that moved
+on 2026-08-28); rebuilt, which brings in the predecoded micro-op engine
+(2.6x), audio ring back-pressure, and the disk fix that refuses the
+console's `.s32id` marker.
+
+### Added — `build({platform:'sync32'})`, entirely in WASM
+
+sync32 carts previously had to be built outside romdev with a native
+`arm-none-eabi-gcc` and Python. `build: false` turned out to be a wiring
+gap rather than a missing toolchain:
+
+- The ARM toolchain shipped for GBA is a **full** arm-none-eabi gcc. Given
+  `-mcpu=cortex-m33 -mthumb -mfloat-abi=hard -mfpu=fpv5-sp-d16` it emits
+  `.cpu cortex-m33 / .arch armv8-m.main / .fpu fpv5-sp-d16`, and
+  as/ld/objcopy accept it — so no new toolchain build was needed.
+- A sync32 cart links against **no libraries**: the SDK is freestanding,
+  and a natively-built cart's ELF has zero undefined symbols and zero
+  libgcc helpers. That matters because the bundled ARM archives are ARMv4T
+  (ARM7TDMI, for the GBA) and are link-incompatible with ARMv8-M. If a
+  future cart does pull in an `__aeabi_*` helper, the link fails loudly and
+  that is when an ARMv8-M libgcc gets built.
+
+The pipeline is `cc1 → as → ld → objcopy` plus a JS port of the SDK's
+`mks32.py` for the 64-byte container header. The port reads `_start`
+straight out of the ELF symbol table rather than shelling out to
+`arm-none-eabi-nm`, so the entire build is WASM + JS — no native compiler,
+no Python.
+
+New `romdev-platform-sync32` ships the SDK assets a build needs (`crt0.S`,
+`ram.ld`/`xip.ld`, `sync32.h`) so nothing depends on a sibling checkout,
+plus a minimal freestanding `stdint.h` (sync32.h includes one, and newlib's
+pulls a hosted header tree behind it). Cart-header fields are exposed as
+`title`, `id`, `mode` (`ram`|`xip`), `video`, `api`, with `linkOptions` for
+the SDK's `LDFLAGS_EXTRA`.
+
+**Verified against the SDK itself:** rebuilding the SDK's own `planes`
+example through `build({platform:'sync32'})` produces a `.s32` that is
+byte-identical to the natively-built cart, and that cart loads and renders
+correctly on the emulator. A new oracle test pins the container format to
+real SDK output so header drift cannot pass silently.
+
+### Fixed — workspace pin drift
+
+0.130.0 bumped `romdev-core-runner` to 0.2.13 without repinning it in
+romdevtools; the workspace-contract test caught it.
+
 ## 0.130.0 — 2026-08-30
 
 Client feedback from a `find-game-genie` session against a Super Mario Land
