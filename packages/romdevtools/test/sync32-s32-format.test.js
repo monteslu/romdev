@@ -11,7 +11,7 @@
 // box, a fresh clone) the test SKIPS rather than fails: it is a parity check
 // against an external tree, not a contract romdev can satisfy alone.
 
-import { test, skip } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";

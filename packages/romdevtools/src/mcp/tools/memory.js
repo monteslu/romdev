@@ -276,7 +276,7 @@ async function memWrite(sessionKey, { region, offset = 0, hex, base64, data, byt
       return textContent(`wrote ${buf.length} bytes to ${region}+${offset}`);
 }
 
-async function memReadCart(sessionKey, { offset = 0, length = 16, cpuAddress, bank, mapper, outputPath, inline, echo, findHex, maxMatches = 100, path: romPath, platform: romPlatform }) {
+async function memReadCart(sessionKey, { offset = 0, length = 16, cpuAddress, bank, mapper, outputPath, inline, echo, findHex, maxMatches = 100, romPath, platform: romPlatform }) {
       // HOST-FREE when given a `path`, exactly like disasm({target:'rom', path}).
       //
       // Reading bytes out of a cartridge is a STATIC question, and requiring a
@@ -289,10 +289,10 @@ async function memReadCart(sessionKey, { offset = 0, length = 16, cpuAddress, ba
       if (romPath) {
         if (!romPlatform) {
           throw new Error(
-            "memory({op:'readCart', path}): `platform` is required alongside `path` — " +
+            "memory({op:'readCart', romPath}): `platform` is required alongside `romPath` — " +
             "header layout is per-platform (NES skips 16 bytes, SNES 512 if a copier " +
             "header is present), so the bytes cannot be interpreted without it. " +
-            "Example: memory({op:'readCart', path:'/roms/game.gb', platform:'gb', offset:0, length:16})."
+            "Example: memory({op:'readCart', romPath:'/roms/game.gb', platform:'gb', offset:0, length:16})."
           );
         }
         const raw = new Uint8Array(await readFile(romPath));
@@ -857,7 +857,7 @@ export function registerMemoryTools(server, z, sessionKey) {
       mapper: z.enum(["lorom", "hirom"]).optional().describe("op:readCart with cpuAddress (SNES) — force LoROM/HiROM mapping if auto-detect is wrong."),
       offsets: offsetsShape.optional().describe("op:read BATCH — a list of addresses (each read `length` bytes, default 1) or {offset,length} objects → reads:[{offset,length,hex}]. Takes precedence over offset/length."),
       compact: z.boolean().optional().describe("op:read with `offsets` — return reads as ONE {\"0xOFF\": \"hex\"} map instead of an object per read (~4x fewer tokens for the sample-N-flags pattern)."),
-      path: z.string().optional().describe("op:'readCart' — read this ROM FILE instead of the loaded cart. Requires `platform` (header layout is per-platform). No emulator/host needed, exactly like disasm({target:'rom', path})."),
+      romPath: z.string().optional().describe("op:'readCart' — read this ROM FILE instead of the loaded cart. Requires `platform` (header layout is per-platform). No emulator/host needed, exactly like disasm({target:'rom', path}). NOTE it is `romPath`, not `path`: on this tool `path` is the OUTPUT alias (where bytes get written), so the input ROM needs its own name."),
       platform: z.string().optional().describe("op:'readCart' with `path` — which platform the file is, so the right header is skipped (nes=16B iNES, snes=512B copier if present, gba=flat at 0x08000000, others un-banked)."),
       findHex: z.string().optional().describe("op:'readCart' — byte-pattern SCAN over the loaded cart image (even-length hex, spaces/$ ok — e.g. '20 3C 87' = jsr $873C). Returns matches as {fileOffset, cpuAddress[, bank]} — the offset→bank:addr mapping done for you. THE call-site hunt for annotation work; replaces scripting over the ROM file."),
       maxMatches: z.number().int().min(1).max(1000).optional().describe("op:'readCart' findHex — cap on returned matches (default 100; truncated:true when hit)."),

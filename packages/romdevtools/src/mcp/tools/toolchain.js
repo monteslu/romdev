@@ -266,7 +266,7 @@ export function installToolchainCore({ id }) {
 }
 
 export function registerToolchainTools(server, z, sessionKey) {
-  async function buildSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, crt0, crt0Path, codeLoc, dataLoc, options, linkerConfig, linkerConfigPath, inesHeader, outputPath, inline = false, includeSymbols = false, lint = "advisory", runtime, maxmod, rebuildSdk, title, id, mode, video, api, linkOptions, projectName }) {
+  async function buildSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, crt0, crt0Path, codeLoc, dataLoc, options, linkerConfig, linkerConfigPath, inesHeader, outputPath, inline = false, includeSymbols = false, lint = "advisory", runtime, maxmod, rebuildSdk, title, id, mode, video, api, linkOptions, projectName, data, dataPaths, icon, iconPath, form }) {
       // Reject conflicting inline vs path args — fail loud, not silent.
       if (source != null && sourcePath != null) {
         throw new Error("build({output:'rom'}): pass either `source` OR `sourcePath`, not both.");
@@ -360,6 +360,24 @@ export function registerToolchainTools(server, z, sessionKey) {
         }
         crt0Rel = asm.rel;
       }
+      // sync32 resources: accept them as base64 (`data`/`icon`) or as host
+      // paths (`dataPaths`/`iconPath`), and hand the toolchain bytes either
+      // way — the same either/or contract binaryIncludes uses.
+      if (data != null && dataPaths != null) {
+        throw new Error("build({platform:'sync32'}): pass either `data` OR `dataPaths`, not both.");
+      }
+      let resolvedS32Data;
+      if (data) {
+        resolvedS32Data = {};
+        for (const [name, b64] of Object.entries(data)) resolvedS32Data[name] = new Uint8Array(Buffer.from(b64, "base64"));
+      } else if (dataPaths) {
+        resolvedS32Data = {};
+        for (const [name, p] of Object.entries(dataPaths)) resolvedS32Data[name] = new Uint8Array(await readFile(p));
+      }
+      const resolvedS32Icon = icon
+        ? new Uint8Array(Buffer.from(icon, "base64"))
+        : (iconPath ? new Uint8Array(await readFile(iconPath)) : undefined);
+
       const result = await buildForPlatform({
         platform,
         language,
@@ -381,6 +399,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         dataLoc,
         // sync32 cart-header fields; ignored by every other platform's branch.
         title, id, mode, video, api, linkOptions, projectName,
+        data: resolvedS32Data, icon: resolvedS32Icon, form,
       });
       logBuildResult("build:rom", platform, result);
       // lint:"strict" — if any lint warning fired, fail the build with
@@ -403,6 +422,19 @@ export function registerToolchainTools(server, z, sessionKey) {
           await mkdir(path.dirname(outputPath), { recursive: true });
           await writeFile(outputPath, result.binary);
           finalPath = outputPath;
+          // sync32 form:'folder' — the resources go in a sibling directory
+          // named after the cart, which is where the console (and the
+          // emulator core) look for a game's namespace. Without this the
+          // executable lands alone and every disk_* call finds nothing.
+          if (result.dataFiles) {
+            const dir = outputPath.replace(/\.[^./]*$/, "");
+            await mkdir(dir, { recursive: true });
+            for (const [name, bytes] of Object.entries(result.dataFiles)) {
+              await writeFile(path.join(dir, name), Buffer.from(bytes));
+            }
+            result.dataDir = dir;
+            result.dataFileNames = Object.keys(result.dataFiles);
+          }
         } else if (!inline) {
           // Default: write to a temp file so the response stays tiny.
           const tmpDir = await mkdtemp(path.join(tmpdir(), "romdev-"));
@@ -434,6 +466,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         exitCode: result.exitCode,
         binaryBytes: result.binary ? result.binary.length : 0,
         binaryPath: finalPath,
+        ...(result.dataDir ? { dataDir: result.dataDir, dataFiles: result.dataFileNames } : {}),
         outputPath: outputPath && result.binary ? outputPath : null,
         romLayout: describeRomLayout(platform, result.binary),
         ...(result.ramUsage ? { ramUsage: result.ramUsage } : {}),
@@ -786,6 +819,11 @@ export function registerToolchainTools(server, z, sessionKey) {
       video: z.enum(["240", "180"]).optional().describe("sync32 — video mode the game requests (default '240')."),
       api: z.number().int().min(1).optional().describe("sync32 — minimum console API version the game requires; use 2 if it calls the disk functions (default 1)."),
       linkOptions: z.array(z.string()).optional().describe("sync32 — extra linker flags (the SDK's LDFLAGS_EXTRA), e.g. '--defsym=S32_STACK=0xA000' to raise the stack reservation for a deeply recursive port."),
+      data: z.record(z.string()).optional().describe("sync32 — resource files the game reads through the disk API, as {filename: base64}. Passing any switches the output to the ARCHIVE form (main.s32e + info.txt + your files, tarred into one .s32), because a game with resources needs its namespace to travel with it. Set `api:2` if the game calls the disk functions."),
+      dataPaths: z.record(z.string()).optional().describe("sync32 — path-based `data`: {filename: absolute path}. Mutually exclusive with `data`."),
+      icon: z.string().optional().describe("sync32 — launcher icon as base64 of a 16x16 24/32bpp BMP, shipped as icon.bmp in the archive. A malformed icon is a warning, not a build failure: the launcher draws its own."),
+      iconPath: z.string().optional().describe("sync32 — path to the 16x16 BMP launcher icon (alternative to `icon`)."),
+      form: z.enum(["archive", "folder"]).optional().describe("sync32 with `data` — which shipping form to produce. 'archive' (default) is the single-file tar: main.s32e + info.txt + your files in one .s32, the shape you distribute. 'folder' writes the bare executable to `outputPath` and its resources into a sibling '<name>/' directory — REQUIRED if you want to run the cart in romdev, because the emulator core loads a bare executable and reads its data dir from disk; it does not unpack a tar."),
       // project-only
       path: z.string().optional().describe("output:'project' — absolute path to the project directory."),
       entry: z.string().optional().describe("output:'project' — name of the top-level source file when it isn't main.c/main.s/main.asm (e.g. 'smw.asm' for an existing disassembly). Project-relative or a bare filename. Default: auto-detect main.c / main.s / main.asm."),

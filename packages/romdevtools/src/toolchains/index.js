@@ -1104,6 +1104,13 @@ export async function buildForPlatform(args) {
     const r = await buildSync32({
       source: args.source,
       sources: args.sources,
+      // Resources a game reads through the disk API. With `data`, the cart is
+      // packed as the ARCHIVE form (main.s32e + info.txt + the files, tarred)
+      // rather than a bare executable — a game with resources needs its
+      // namespace to travel with it (ABI 3.2-3.4).
+      data: args.data,
+      icon: args.icon,
+      form: args.form,
       // The SDK headers are defaults: a cart's own headers win, so a game can
       // ship its own sheet.h (or even override sync32.h) without a flag.
       includes: { ...sdk.includes, ...(args.includes ?? {}) },
@@ -1128,6 +1135,9 @@ export async function buildForPlatform(args) {
       exitCode: r.exitCode,
       ...(r.failedTU ? { failedTU: r.failedTU } : {}),
       ...(r.entryOffset != null ? { entryOffset: r.entryOffset, imageBytes: r.imageBytes, mode: r.mode } : {}),
+      ...(r.form ? { form: r.form } : {}),
+      ...(r.dataFiles ? { dataFiles: r.dataFiles } : {}),
+      ...(r.notes ? { notes: r.notes } : {}),
       toolchain: "arm-none-eabi-gcc (cortex-m33) + s32pack",
     };
   }

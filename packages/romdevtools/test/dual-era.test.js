@@ -86,7 +86,7 @@ function buildHandler(store) {
     { legacy: "reject" },
   );
   return {
-    async dispatch(body, handle) {
+    async dispatch(body, _handle) {
       currentKey = resolveSessionKey({ meta: body.params?._meta }).sessionKey;
       const res = await handler.fetch(modernRequest(body, body.params?.name));
       return res.json();
@@ -202,7 +202,7 @@ test("concurrent modern requests do not cross-wire sessions", async () => {
   // The fix is to build the handler per request, closing over that request's
   // own key. This test fires two dispatches without awaiting the first, which
   // is exactly the interleaving that broke it.
-  const store = new Map();
+  const _store = new Map();
 
   // Mirrors the server: a handler built per request, key resolved from that
   // request's body.

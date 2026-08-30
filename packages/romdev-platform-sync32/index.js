@@ -33,6 +33,12 @@ export const sdk = {
     // than borrowing newlib's, which drags a hosted header tree behind it.
     "stdint.h": path.join(SHARE, "sysinclude", "stdint.h"),
   },
+  // The compiler's own helper routines for ARMv8-M main + hard float — 64-bit
+  // division, double-precision soft float, and friends. NOT a libc: a cart
+  // still links none. Built by romdevtools/scripts/build-arm-libgcc-v8m.sh,
+  // because the ARM archives that ship for the GBA are ARMv4T and are
+  // link-incompatible with a Cortex-M33 object.
+  libgcc: path.join(SHARE, "lib", "libgcc.a"),
 };
 
 /**

@@ -31,8 +31,11 @@
 // romdev-platform-sync32 (see share/), so a cart builds from source text
 // alone with no sibling checkout.
 
+import { readFileSync, existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { makeGccToolchain } from "../common/gcc-toolchain.js";
 import { packS32 } from "./s32-format.js";
+import { packS32Archive, buildInfoTxt, checkIconBmp } from "./s32-archive.js";
 
 // Exactly the SDK's CFLAGS architecture flags (sync32.mk). Kept as one list so
 // cc1 and as cannot disagree about the target — a mismatch there produces
@@ -47,18 +50,24 @@ const M33_FLAGS = [
 // The rest of the SDK's CFLAGS. -fsingle-precision-constant matters: the M33's
 // FPU is single-precision only (fpv5-SP), so an unsuffixed float literal would
 // otherwise promote to double and drag in soft-float helpers we do not link.
-// NOTE what is absent: `-nostartfiles` and `-ffreestanding` are in the SDK's
-// CFLAGS but are DRIVER options (gcc), not cc1 options. We invoke cc1 directly,
-// which rejects them outright ("valid for the driver but not for C"). Their
-// effect is preserved anyway: nothing is auto-linked here because we drive ld
-// ourselves with only the objects we built, which is exactly what
-// -nostartfiles means.
+// `-nostartfiles` is absent on purpose: it is a DRIVER option (gcc), not a cc1
+// one, and cc1 rejects it outright ("valid for the driver but not for C"). Its
+// effect is preserved anyway, because we drive ld ourselves with only the
+// objects we built.
+//
+// `-ffreestanding` IS a cc1 option and MUST be kept. Without it gcc assumes a
+// hosted environment and is free to synthesize libc calls: a struct/array
+// initializer becomes a `bl memset`, which then fails to link against a cart
+// that has no libc. (Measured: the same source compiles with only
+// `__aeabi_uldivmod` undefined WITH the flag, and `memset` + `__aeabi_uldivmod`
+// without it.) Dropping it alongside -nostartfiles was a real bug.
 const SDK_CFLAGS = [
   "-O2",
   "-ffunction-sections",
   "-fdata-sections",
   "-fsingle-precision-constant",
   "-Wall",
+  "-ffreestanding",
 ];
 
 /**
@@ -103,12 +112,15 @@ export const { runCc1: runCc1m33, runAs: runM33As, runLd: runM33Ld, runObjcopy: 
  * @param {number} [args.api] minimum console API the game requires
  * @param {string[]} [args.options] extra cc1 flags (the SDK's CFLAGS_EXTRA)
  * @param {string[]} [args.linkOptions] extra ld flags (LDFLAGS_EXTRA)
+ * @param {Record<string,Uint8Array|string>} [args.data] resource files the game
+ *   reads through the disk API. Present ⇒ the ARCHIVE form is produced.
+ * @param {Uint8Array} [args.icon] 16x16 24/32bpp BMP launcher icon (archive form)
  */
 export async function buildSync32(args) {
   const {
     source, sources, includes = {}, crt0, linkScript,
     mode = "ram", title = "untitled", id, video = "240", api = 1,
-    options = [], linkOptions = [],
+    options = [], linkOptions = [], data, icon,
   } = args;
 
   if (!crt0) return fail("sync32 build needs the SDK's crt0.S (`crt0`)", "setup");
@@ -146,9 +158,26 @@ export async function buildSync32(args) {
     objects[objName] = as.object;
   }
 
+  // libgcc: the compiler's own helper routines (64-bit divide, soft-float
+  // doubles, ...). NOT libc — a cart still links no libc at all. It is last on
+  // the link line, as libgcc always is, so it only pulls the members actually
+  // referenced.
+  //
+  // It must be the ARMv8-M build: the ARM archives that ship for the GBA are
+  // ARMv4T and would be silently link-incompatible with a Cortex-M33 object.
+  // Absent, the link fails loudly on `__aeabi_*` rather than producing
+  // something that faults on hardware.
+  const archives = {};
+  const libgcc = args.libgcc ?? loadBundledLibgcc();
+  if (libgcc) archives["libgcc.a"] = libgcc;
+
   const ld = await runM33Ld({
-    objects, linkScript,
-    options: ["--gc-sections", ...linkOptions],
+    objects, linkScript, archives,
+    // The archive is MOUNTED via `archives` but must also be NAMED on the
+    // command line — runLd only lists `objects` there — and it has to come
+    // AFTER the objects, because ld resolves an archive against the undefined
+    // symbols it has seen so far.
+    options: ["--gc-sections", ...(libgcc ? ["/work/libgcc.a"] : []), ...linkOptions],
   });
   log += "\n--- ld ---\n" + ld.log;
   if (ld.exitCode !== 0 || !ld.elf) return fail(log, "ld", ld.exitCode);
@@ -167,8 +196,64 @@ export async function buildSync32(args) {
     return fail(log + "\n--- pack ---\n" + e.message, "pack", 1);
   }
 
+  // THREE SHIPPING FORMS, and the caller picks by whether it passed resources.
+  //
+  // A bare .s32 is the executable alone. A game that reads files through the
+  // disk API needs its namespace with it, which is the folder form
+  // (main.s32e + info.txt + icon.bmp + resources) or that folder tarred into
+  // one .s32. We emit the archive, because it is a single file the console
+  // loads directly and `tar xf` recovers the folder from it.
+  const hasData = data && Object.keys(data).length > 0;
+  let binary = packed.bytes;
+  let form = "executable";
+  const notes = [];
+  // `archive` (default when there are resources) is the single-file tar form.
+  // `folder` writes the game directory instead: main.s32e plus the resources
+  // beside it. BOTH are valid per the ABI, but they are not interchangeable at
+  // load time — the libretro core reads a BARE EXECUTABLE and looks for a
+  // sibling `<romname>/` data directory, and does NOT unpack a tar. So a cart
+  // you intend to run through romdev's own emulator wants `form:'folder'`,
+  // while `archive` is the shape you ship.
+  const wantFolder = args.form === "folder";
+  if (hasData && wantFolder) {
+    const members = { "info.txt": toBytes(buildInfoTxt(title)) };
+    if (icon) members["icon.bmp"] = icon;
+    for (const [name, bytes] of Object.entries(data)) members[name.split("/").pop()] = toBytes(bytes);
+    return {
+      binary: packed.bytes,           // the bare executable
+      dataFiles: members,             // written beside it as <romname>/
+      elf: ld.elf, map: ld.map ?? "", log, exitCode: 0, stage: "done",
+      imageBytes: image.length, entryOffset: packed.entryOffset, mode,
+      form: "folder",
+    };
+  }
+  if (hasData) {
+    /** @type {Record<string, Uint8Array>} */
+    const members = { "main.s32e": packed.bytes, "info.txt": toBytes(buildInfoTxt(title)) };
+    if (icon) {
+      // A bad icon is a WARNING, never a build failure: the launcher ignores
+      // one it cannot read and draws its own (matching the SDK's s32pack).
+      const why = checkIconBmp(icon);
+      if (why) notes.push(`icon.bmp will be ignored by the launcher (${why})`);
+      members["icon.bmp"] = icon;
+    }
+    for (const [name, bytes] of Object.entries(data)) {
+      const base = name.split("/").pop();
+      if (base === "main.s32e" || base === "info.txt" || base === ".s32id") {
+        return fail(log + `\n--- pack ---\n'${base}' is a name the console owns inside a game namespace; rename the resource`, "pack", 1);
+      }
+      members[base] = toBytes(bytes);
+    }
+    try {
+      binary = packS32Archive(members);
+      form = "archive";
+    } catch (e) {
+      return fail(log + "\n--- pack ---\n" + e.message, "pack", 1);
+    }
+  }
+
   return {
-    binary: packed.bytes,
+    binary,
     elf: ld.elf,
     map: ld.map ?? "",
     log,
@@ -177,7 +262,37 @@ export async function buildSync32(args) {
     imageBytes: image.length,
     entryOffset: packed.entryOffset,
     mode,
+    form,
+    ...(hasData ? { members: Object.keys(data).length + 2 + (icon ? 1 : 0) } : {}),
+    ...(notes.length ? { notes } : {}),
   };
+}
+
+/** Accept resource files as bytes or as text. */
+function toBytes(v) {
+  if (typeof v === "string") return new TextEncoder().encode(v);
+  return v instanceof Uint8Array ? v : new Uint8Array(v);
+}
+
+
+/**
+ * The bundled ARMv8-M libgcc, or null if this install does not ship one.
+ *
+ * Null is not fatal: a cart that never needs a helper routine links fine
+ * without it, and one that does gets a clear `undefined reference to
+ * __aeabi_*` naming exactly what is missing. Memoized — the archive is a few
+ * MB and every build would otherwise re-read it.
+ */
+let _libgcc;
+function loadBundledLibgcc() {
+  if (_libgcc !== undefined) return _libgcc;
+  try {
+    const { sdk } = createRequire(import.meta.url)("romdev-platform-sync32");
+    _libgcc = sdk?.libgcc && existsSync(sdk.libgcc) ? new Uint8Array(readFileSync(sdk.libgcc)) : null;
+  } catch {
+    _libgcc = null;
+  }
+  return _libgcc;
 }
 
 /** An 8-byte save key derived from the title, when the caller gives none. */
