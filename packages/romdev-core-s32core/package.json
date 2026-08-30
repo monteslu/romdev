@@ -1,6 +1,6 @@
 {
   "name": "romdev-core-s32core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "sync32 console core (s32core) for romdev, bundled as WASM. sync32 is an RP2350/Cortex-M33 console; s32core is a first-party pure-C interpreter exposed through the libretro API.",
   "type": "module",
   "main": "index.js",

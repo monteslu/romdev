@@ -4,6 +4,43 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.133.0 — 2026-08-30
+
+### Added — sync32 inspectors: live SRAM, CPU registers, palette, sprite sheets
+
+sync32 could build and run a cart but not look inside one. The core's
+`retro_get_memory_data` returned NULL for every id, so a frontend had no
+view into a running game — no memory reads, no cheat search, no
+watchpoints. s32core now exposes its state (SYSTEM_RAM plus private ids for
+the debugger views) and romdev decodes it.
+
+Scoped to **developing** a cart, not reverse-engineering one: sync32 has no
+commercial games, so `decompile` stays false rather than pointing the RE
+engine at a platform with nothing to decompile.
+
+- **`system_ram`** is the console's 520KB SRAM at `0x20000000` — a game's
+  globals, its stack, and in ram mode its code. The whole existing memory
+  toolkit now works against it: `snapshot`/`diff` (measured: 4089 changed
+  bytes across 227 clusters over 120 frames of `planes`), value search,
+  watchpoints.
+- **`cpu({op:'read'})`** decodes r0-r15, the packed APSR, and the FPv5-SP
+  register file. It deliberately does **not** report an `execPc`: the GBA
+  decoder adjusts for pipeline prefetch because ARM7TDMI really prefetches,
+  while s32core is an interpreter where r15 is the next instruction, so an
+  offset would be invented. Only non-zero s-registers are listed.
+- **`palette({source:'live'})`** decodes the 256-entry RGB565 table,
+  expanding each channel by bit-replication (`0x1F` → `0xFF`, not `0xF8`)
+  so full-scale stays full-scale.
+- **Sprite sheets** are readable as `sync32_sheet0` (and `0x1B0+n`).
+
+`inspectSprites` stays **false**, which is an answer rather than a gap: it
+means OAM slots and sync32 has no OAM — a game blits from loaded sheets
+with `api->sprite()`. `inspectBackground` and `renderingContext` stay false
+for the same reason: there is no tilemap and no PPU, just a flat 8-bit
+canvas that `frame({op:'screenshot'})` already shows.
+
+Requires romdev-core-host 0.11.0 and romdev-core-s32core 0.2.0.
+
 ## 0.132.0 — 2026-08-30
 
 Closes the gap between "sync32 builds a cart" and "sync32 makes games."
