@@ -20,6 +20,33 @@ import { starterSnippetsCore, copyStarterSnippetsCore } from "./snippets.js";
  *   - buildHint: string telling the agent what build args to use
  */
 const TEMPLATES = {
+  // sync32 — monteslu's RP2350 console. No PPU/tilemap/OAM/banking: a cart is
+  // game_main(api) drawing into a flat 8-bit canvas, so these templates carry
+  // no runtime/crt0/linker files at all (the SDK ships in
+  // romdev-platform-sync32 and build({platform:'sync32'}) supplies it).
+  sync32: {
+    shmup: {
+      main: "templates/shmup.c", runtime: [], lang: "C (arm-none-eabi, cortex-m33)", ext: ".s32",
+      describe: "STARFALL — vertical shooter: starfield, enemy waves, bullet pool, lives, hi-score in save slot 0.",
+    },
+    platformer: {
+      main: "templates/platformer.c", runtime: [], lang: "C (arm-none-eabi, cortex-m33)", ext: ".s32",
+      describe: "SKYHOP — side-scroller: gravity + jump arc, swept tile collision, follow camera, parallax hills, coins.",
+    },
+    puzzle: {
+      main: "templates/puzzle.c", runtime: [], lang: "C (arm-none-eabi, cortex-m33)", ext: ".s32",
+      describe: "CASCADE — match-4 gravity puzzle: falling pieces, row/column runs, cascade chains that score more.",
+    },
+    sports: {
+      main: "templates/sports.c", runtime: [], lang: "C (arm-none-eabi, cortex-m33)", ext: ".s32",
+      players: 2,
+      describe: "RALLY — 2P paddle versus with angle-off-the-paddle physics; falls back to a beatable AI when pad 1 reports connected==0.",
+    },
+    racing: {
+      main: "templates/racing.c", runtime: [], lang: "C (arm-none-eabi, cortex-m33)", ext: ".s32",
+      describe: "OVERDRIVE — lane racer: eased lane steering, scrolling stripes, traffic spawning, speed ramp, crash states.",
+    },
+  },
   nes: {
     default: {
       main: "templates/default.c",

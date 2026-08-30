@@ -4,6 +4,56 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.134.0 — 2026-08-30
+
+### Added — five sync32 example games, and two real bugs they caught
+
+sync32 shipped as a first-class build target in 0.131.0-0.133.0 but had
+**zero examples**, while every established platform has nine or ten. That
+gap matters more than it sounds: `examples({op:'list'})` tells an agent to
+"fork the example whose CORE LOOP matches your game", so a platform with no
+examples has no on-ramp at all.
+
+All five canonical genres now ship, each a complete game with a title
+screen, scoring, and a hi-score persisted to save slot 0:
+
+| example | game | core loop |
+|---|---|---|
+| `sync32/shmup` | STARFALL | starfield, enemy waves, bullet pool, lives |
+| `sync32/platformer` | SKYHOP | gravity + jump arc, swept tile collision, follow camera, coins |
+| `sync32/puzzle` | CASCADE | match-4 grid, gravity settle, cascade chains |
+| `sync32/sports` | RALLY | 2P paddle versus, angle-off-the-paddle, AI fallback |
+| `sync32/racing` | OVERDRIVE | eased lane steering, traffic spawning, speed ramp |
+
+Verified the way an agent would actually use them:
+`examples({op:'fork', example:'sync32/shmup'})` stamps the game name into
+`GAME_TITLE`, and `build({output:'project', path})` compiles the forked
+directory in one call with no manifest. The result boots and plays.
+
+### Fixed — libretro A and B were swapped (romdev-core-s32core)
+
+The core's mapping table paired libretro's face buttons with the sync32 pad
+bits **positionally**. libretro lays A/B/X/Y out SNES-style, so that put
+libretro A on `S32_PAD_B`: a cart binding fire to `S32_PAD_A` — the obvious
+binding, and the one the SDK header names — never fired. The CLI and SDL
+frontends have always mapped A to `0x1000`; only libretro disagreed, with
+both of them and with `sync32.h`.
+
+Found while writing the shmup: holding A produced no bullets, and reading
+the cart's bullet array out of SRAM showed zero live entries with the
+cooldown at 0 — so the button was never reaching the game, rather than the
+fire logic being wrong. Pressing libretro B fired the gun, which pinned it.
+
+### Documented — `rect()`/`clear()` snap to the palette
+
+The templates originally treated `api->rect(..., rgb565)` as an arbitrary
+colour. It is not: the canvas is 8-bit **indexed**, so the console maps the
+colour to the NEAREST palette entry and stores that index. A colour that is
+not in the palette does not render as itself — which is why a grey road came
+out blue. Every template now registers the colours it draws with, and leads
+with the idiom, because it is the single most surprising thing about
+drawing on this console.
+
 ## 0.133.1 — 2026-08-30
 
 ### Fixed — a test fixture this session truncated, and the wrong claim about it
