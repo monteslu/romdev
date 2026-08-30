@@ -4,6 +4,90 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.130.0 — 2026-08-30
+
+Client feedback from a `find-game-genie` session against a Super Mario Land
+disassembly (GB/MBC1): three bugs and four token sinks.
+
+### Fixed — multi-file rgbds builds crashed, and dropped the extra files anyway
+
+Two defects stacked. The WASM worker passed a JS **string** to
+`FS.writeFile` for utf8 inputs; rgbasm is built without the string path and
+aborts `Aborted(Unsupported data type)` from inside `writeFile`, naming
+neither the file nor the type — so it read as a crash in the assembler
+rather than a marshalling bug. Fixed in the worker, where it covers every
+bundled toolchain at once (and synced into the vendored GBA/m68k build
+kits, so those pipelines get it too).
+
+Underneath it, `buildGB` assembled `main.asm` ONLY and linked a single
+object — `sources` was never passed through, so the other `.asm` files were
+mounted as INCLUDE payload and their sections never existed in the ROM.
+Now one object per translation unit (`.asm`/`.s`), linked together, with
+the failing unit named in `failedTU`.
+
+### Added — `build` returns the linker's symbol map on GB asm builds
+
+`rgblink` is always asked for `-n` (symbols) and `-m` (section map);
+`symbols` was previously hardcoded `""`. Without a label → `bank:address`
+table an agent has to re-derive addresses by sizing every instruction —
+one wrote a ~470-line SM83 assembler-lite to do it, which was the largest
+single cost of the reported session.
+
+### Added — `memory({op:'readCart', path, platform})` works with no host
+
+Reading bytes out of a cartridge is a static question, but this was the one
+byte-reading tool that required a live emulator, so any session that lost
+its host also lost byte verification. Now host-free with `path`+`platform`,
+matching `disasm({target:'rom'})` and `cheats({op:'make'})`. The
+header/mapping derivation moved to `romdev-core-host/cart-image.js` and
+`LibretroHost.getCartRom()` delegates to it, so file-backed and host-backed
+reads cannot disagree about header size.
+
+### Fixed — `loadMedia` reported `loaded:true` while the next call saw no ROM
+
+Not a load failure. A request carrying no session handle gets an
+auto-minted key it is never told, so every request lands in a brand-new
+session: the load really did succeed, into a session the caller can never
+address again. `resolveSessionKey` computed `minted` and every call site
+discarded it. It is now remembered (bounded), and the "No ROM loaded" error
+names this cause and gives the fix instead of telling an agent that just
+called `loadMedia` to call it again. The reported `loaded:false` alongside
+`liveHosts:1` was the correct read: the previous request's host is alive,
+just unreachable from the current one.
+
+Also fixed: that error's checkpoint-recovery hint only looked for a
+libretro `.state` and missed every wasmcart `.sav` — a gap left by
+0.128.0's own SRAM checkpoint.
+
+### Changed — token cost
+
+- `cheats({op:'make', entries:[{address, value, compare?}, …])` batches
+  INDEPENDENT patches; publishing 26 codes took 26 round trips. The
+  per-call `note` no longer restates `codes[0].code`/`raw`, which are
+  structured fields directly above it.
+- `GET /tool/:name/schema?for=<target>` narrows a broad tool's schema to
+  the parameters that target actually reads. `disasm` carries 49
+  parameters (~3.5k tokens) spanning everything from "read a byte range"
+  to "recompile NES to 65816"; a one-shot `target:'rom'` read needs 16 —
+  **62% smaller**, measured. The default is unchanged, and an unknown
+  target returns the full schema plus the filterable target list rather
+  than hiding a needed field.
+
+### Changed — diagnostics
+
+- `parseRgbds` strips ANSI colour and parses modern rgbds's two-line
+  `error: …` / `at file(line)` form. Every modern diagnostic was falling
+  through, so a failed GB build returned `issues: []` and left the agent a
+  raw colour-coded log to read.
+- A `NAME: MACRO` parse error now says it is **pre-0.5 RGBDS macro syntax**
+  and shows the rewrite (`MACRO NAME`). Published GB disassemblies are
+  overwhelmingly 0.3.x-era, so this recurs; the raw error
+  ("syntax error, unexpected MACRO") never mentions the syntax change.
+- `catalog({op:'status'})` reports bundled toolchain versions
+  (`capabilities.versions`) from `scripts/versions.json` — the same pin the
+  build scripts compile from. Previously only `romdevVersion` was exposed,
+  so the bundled assembler's version could only be inferred from a failure.
+
 ## 0.129.0 — 2026-08-22
 
 ### Fixed — a reload stranded a playtest window on a dead GL context
