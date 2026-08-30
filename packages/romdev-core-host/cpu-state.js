@@ -533,6 +533,57 @@ export function getCPUState(host, platform, cpu = "main") {
         "(PC-8 in ARM, PC-4 in THUMB). Registers are decimal; cpsr/spsr/execPc are hex.",
     };
   }
+  if (platform === "sync32") {
+    // Cortex-M33 (ARMv8-M, Thumb-2). s32core exposes 50 u32s:
+    //   [0..15] r0-r15 (r13=SP, r14=LR, r15=PC), [16] APSR, [17..48] s0-s31,
+    //   [49] ITSTATE.
+    //
+    // Unlike the GBA's ARM7TDMI there is NO pipeline adjustment to make: the
+    // core is an interpreter, so r15 is the instruction about to execute, not
+    // a prefetched address. Reporting an `execPc` here would be inventing one.
+    const bytes = host.readMemory("sync32_cpu_regs", 0, 200);
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const u32 = (i) => dv.getUint32(i * 4, true) >>> 0;
+    const gprs = [];
+    for (let i = 0; i < 16; i++) gprs.push(u32(i));
+    const apsr = u32(16);
+    const hex32 = (n) => "0x" + (n >>> 0).toString(16).toUpperCase().padStart(8, "0");
+    const registers = {};
+    for (let i = 0; i < 13; i++) registers["R" + i] = gprs[i];
+    registers.SP = gprs[13];
+    registers.LR = gprs[14];
+    registers.PC = gprs[15];
+    // The FPU is single-precision (fpv5-sp-d16), so each s-register is one
+    // float. Decode the raw bits so a caller sees the VALUE, not a word.
+    const fbuf = new ArrayBuffer(4);
+    const fdv = new DataView(fbuf);
+    const asFloat = (bits) => { fdv.setUint32(0, bits >>> 0, true); return fdv.getFloat32(0, true); };
+    const fpu = {};
+    for (let i = 0; i < 32; i++) {
+      const bits = u32(17 + i);
+      if (bits !== 0) fpu["S" + i] = asFloat(bits);
+    }
+    const itstate = u32(49);
+    return {
+      pc: gprs[15],
+      sp: gprs[13],
+      registers,
+      cpu: "cortex-m33 (ARMv8-M, Thumb-2)",
+      flags: {
+        N: !!(apsr & 0x10), Z: !!(apsr & 0x08), C: !!(apsr & 0x04),
+        V: !!(apsr & 0x02), Q: !!(apsr & 0x01),
+        raw: hex32(apsr),
+      },
+      // Only the non-zero float registers, so a dump of a game that barely
+      // touches the FPU stays readable.
+      ...(Object.keys(fpu).length ? { fpu } : {}),
+      ...(itstate ? { itstate: hex32(itstate) } : {}),
+      note: "Cortex-M33 is always Thumb. PC is the NEXT instruction to execute " +
+        "(this is an interpreter, so there is no pipeline offset to undo). " +
+        "Registers are decimal; flags.raw is the packed APSR (N|Z|C|V|Q in bits 4..0). " +
+        "`fpu` lists only non-zero single-precision s-registers.",
+    };
+  }
   if (platform === "gametank") {
     // The patched GameTank core exposes the LIVE W65C02S register file via
     // romdev_getreg (regId: 0=A 1=X 2=Y 3=P 4=SP 16=PC) — no synthesized region

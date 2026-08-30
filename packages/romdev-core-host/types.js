@@ -25,6 +25,7 @@
  *   | "c64_color_ram" | "c64_vic_regs" | "c64_sid_regs"
  *   | "c64_cia1_regs" | "c64_cia2_regs" | "c64_cpu_regs"
  *   | "gba_cpu_regs" | "gba_io_regs" | "gba_palette" | "gba_oam" | "gba_iwram"
+ *   | "sync32_cpu_regs" | "sync32_palette" | "sync32_canvas"
  *   | "lynx_cpu_regs" | "lynx_hw_regs"
  *   | "pce_vdc_vram" | "pce_vdc_satb" | "pce_vdc_regs"
  *   | "pce_vce_palette" | "pce_cpu_regs" | "pce_psg_regs"
@@ -155,6 +156,17 @@ export const RetroMemory = {
   // (sprite regs, LCD control, audio $FD20-$FD3F, palette $FDA0-$FDBF).
   LYNX_CPU_REGS:      0x190,
   LYNX_HW_REGS:       0x191,
+
+  // sync32 (s32core). The console is monteslu's own, so the core exposes
+  // exactly what a game DEVELOPER needs to debug their own cart — there are no
+  // commercial ROMs here to reverse-engineer.
+  SYNC32_CPU_REGS:    0x1A0,   // Cortex-M33: r0-r15, APSR, s0-s31, ITSTATE
+  SYNC32_PALETTE:     0x1A1,   // 256 entries, RGB565
+  SYNC32_CANVAS:      0x1A2,   // the 320x240 8-bit indexed framebuffer
+  // Sprite sheets 0..31 at 0x1B0+n: 8-bit indices into the palette. sync32 has
+  // no OAM — a game blits from these with api->sprite() — so the sheets ARE
+  // the sprite data. Only sheet0 is named here; the rest are reachable by id.
+  SYNC32_SHEET0:      0x1B0,
   // PC Engine / TurboGrafx-16 (geargrafx): HuC6270 VDC VRAM + sprite attribute
   // table + 20-entry register file; HuC6260 VCE 9-bit-GRB color table; HuC6280
   // CPU register snapshot.
@@ -309,6 +321,10 @@ export const MemoryRegionToRetro = {
   gba_palette:   RetroMemory.GBA_PALETTE,
   gba_oam:       RetroMemory.GBA_OAM,
   gba_iwram:     RetroMemory.GBA_IWRAM,
+  sync32_cpu_regs: RetroMemory.SYNC32_CPU_REGS,
+  sync32_palette:  RetroMemory.SYNC32_PALETTE,
+  sync32_canvas:   RetroMemory.SYNC32_CANVAS,
+  sync32_sheet0:   RetroMemory.SYNC32_SHEET0,
   lynx_cpu_regs: RetroMemory.LYNX_CPU_REGS,
   lynx_hw_regs:  RetroMemory.LYNX_HW_REGS,
   pce_vdc_vram:    RetroMemory.PCE_VDC_VRAM,

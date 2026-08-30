@@ -297,6 +297,34 @@ export function registerPlatformTools(server, z, sessionKey) {
         }, png);
       }
 
+      if (p === "sync32") {
+        // 256 entries, RGB565, straight from the console palette the game set
+        // with api->palette_set(). Every sprite sheet and canvas byte indexes
+        // into this one table — there are no sub-palettes or banks.
+        const pal = host.readMemory("sync32_palette", 0, 512);
+        const dv = new DataView(pal.buffer, pal.byteOffset, pal.byteLength);
+        const colors = [];
+        for (let i = 0; i < 256; i++) {
+          const v = dv.getUint16(i * 2, true);
+          // RGB565 -> 8-bit per channel, replicating the high bits into the
+          // low ones so full-scale stays full-scale (0x1F -> 0xFF, not 0xF8).
+          const r5 = (v >> 11) & 0x1f, g6 = (v >> 5) & 0x3f, b5 = v & 0x1f;
+          const r = (r5 << 3) | (r5 >> 2);
+          const g = (g6 << 2) | (g6 >> 4);
+          const b = (b5 << 3) | (b5 >> 2);
+          const hex = "#" + [r, g, b].map((c) => c.toString(16).padStart(2, "0")).join("").toUpperCase();
+          colors.push({ r, g, b, hex, index: i, raw: "0x" + v.toString(16).toUpperCase().padStart(4, "0") });
+        }
+        const png = renderColorsAsPng(colors, 16);
+        return emit({
+          platform: p,
+          colors,
+          note: "sync32 palette: 256 entries, RGB565, as set by api->palette_set(). " +
+            "One flat table — sheets and the canvas both index it directly, with no " +
+            "sub-palettes. `raw` is the RGB565 word; r/g/b are expanded to 8 bits.",
+        }, png);
+      }
+
       if (p === "lynx") {
         // Mikey 16-entry 12-bit palette from the $FC00-$FDFF HW window.
         const hw = host.readMemory("lynx_hw_regs", 0, 0x200);

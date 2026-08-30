@@ -250,14 +250,28 @@ export const CAPABILITIES = {
     // Python. Verified byte-identical to the SDK's own native build.
     tier: "arm",
     cpuFamily: "arm", decompileQuality: "n/a",
-    cpus: { main: "", secondary: [] }, // cpuState not wired yet
+    cpus: { main: "cortex-m33", secondary: [] },
     audioChips: [],
-    memoryRegions: [...GENERIC_REGIONS],
+    // system_ram IS the console's 520KB SRAM at 0x20000000 — a game's globals,
+    // its stack, and in ram mode its code. The sync32_* regions are the
+    // debugger views the core exposes on top.
+    memoryRegions: ["system_ram", "sync32_cpu_regs", "sync32_palette", "sync32_canvas", "sync32_sheet0"],
     renderingKind: "framebuffer", introspection: "shallow",
     ops: {
       build: true, run: true, screenshot: true,
-      inspectSprites: false, inspectPalette: false, inspectBackground: false,
-      renderingContext: false, cpuState: false, audioDebug: false,
+      // inspectSprites stays FALSE, and that is not a gap: it means OAM
+      // slots, and sync32 has no OAM. A game blits from loaded SHEETS with
+      // api->sprite(), so the sheets are what there is to look at — read them
+      // as the sync32_sheet* regions (8-bit indices into the palette below).
+      //
+      // inspectBackground/renderingContext are false for the same reason:
+      // there is no tilemap and no PPU. A game composes straight into a flat
+      // 8-bit canvas, which frame({op:'screenshot'}) already shows.
+      //
+      // decompile stays false deliberately: this console has no commercial
+      // ROMs to reverse-engineer, so the RE engine has no subject here.
+      inspectSprites: false, inspectPalette: true, inspectBackground: false,
+      renderingContext: false, cpuState: true, audioDebug: false,
       cart: false, disasm: false, decompile: false,
     },
   },
