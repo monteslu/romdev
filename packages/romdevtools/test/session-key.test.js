@@ -16,6 +16,7 @@ import {
   mintSessionHandle,
   SESSION_HEADER,
   SESSION_META_KEY,
+  sessionHandleNote,
 } from "../src/mcp/session-key.js";
 
 test("an explicit _meta handle wins over the transport id", () => {
@@ -74,4 +75,40 @@ test("minted handles are unique", () => {
   const seen = new Set();
   for (let i = 0; i < 50; i++) seen.add(mintSessionHandle());
   assert.equal(seen.size, 50);
+});
+
+// ── the two sources a tool-calling agent can actually produce ──────────────
+// Claude Code (2.1.x) speaks 2026-07-28 and sets neither `_meta` nor a header,
+// so before these two branches every request minted a fresh session and a
+// loaded ROM vanished on the next call (jaymcgavren, 2026-09-05).
+
+test("the `session` tool argument is a handle -- the form an agent can send from inside a tool call", () => {
+  const r = resolveSessionKey({ args: { session: "nes-platformer", path: "/x.nes" }, socketKey: "sock-1" });
+  assert.equal(r.sessionKey, "nes-platformer");
+  assert.equal(r.source, "argument");
+  assert.equal(r.minted, false);
+});
+
+test("a header handle still beats the argument (an operator-pinned session wins)", () => {
+  const r = resolveSessionKey({ headers: { "x-romdev-session": "pinned" }, args: { session: "arg" } });
+  assert.equal(r.sessionKey, "pinned");
+});
+
+test("with nothing named, the key bound to the caller's socket is reused -- connection affinity", () => {
+  const r = resolveSessionKey({ args: { path: "/x.nes" }, socketKey: "sock-1" });
+  assert.equal(r.sessionKey, "sock-1");
+  assert.equal(r.source, "socket");
+  assert.equal(r.minted, false);
+});
+
+test("a socket with no binding yet mints -- and the caller is told to bind it", () => {
+  const r = resolveSessionKey({ args: {} });
+  assert.equal(r.source, "minted");
+  assert.equal(r.minted, true);
+  assert.match(sessionHandleNote(r.sessionKey), new RegExp(`session:"${r.sessionKey}"`));
+});
+
+test("an empty `session` argument is not an identity", () => {
+  const r = resolveSessionKey({ args: { session: "" }, socketKey: "sock-2" });
+  assert.equal(r.sessionKey, "sock-2");
 });

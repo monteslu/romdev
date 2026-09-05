@@ -124,17 +124,23 @@ export function getHost(sessionKey) {
         "and the very next call still says no ROM (and why catalog({op:'status'}) " +
         "can show `loaded:false` next to `liveHosts:1` — the host from your previous " +
         "request is alive, just not reachable from this one).\n" +
-        "FIX: pick ONE stable, descriptive id and send it on EVERY call — as the " +
-        "`x-romdev-session` header over plain HTTP, or as `_meta[\"dev.romdev/sessionHandle\"]` " +
-        "on an MCP request. Then re-run loadMedia({path}) once and your ROM will stay put.",
+        "FIX (pick one): (1) every tool takes an optional `session` argument — pass ONE stable, " +
+        "descriptive slug (e.g. session:\"nes-platformer\") on EVERY call, starting with the " +
+        "loadMedia you re-run now; every result also ends with a `session: <id>` line you can " +
+        "copy back. (2) Over plain HTTP, send the same value as the `x-romdev-session` header " +
+        "on every call AND reuse the Mcp-Session-Id from ONE initialize — re-initializing per " +
+        "call mints a fresh session even with the header set (that is how a duplicate playtest " +
+        "window gets opened with the first one orphaned). (3) On a 2026-07-28 MCP request, " +
+        "`_meta[\"dev.romdev/sessionHandle\"]`. Then re-run loadMedia({path}) once and your ROM will stay put.",
       );
     }
     throw new Error(
       "No ROM loaded in this session — call loadMedia({path}) first. " +
       "If you DID loadMedia and still see this, your calls are landing in DIFFERENT " +
-      "sessions: over plain HTTP/skill you must send the SAME `x-romdev-session` " +
-      "header on every call (pick one stable id and reuse it) — a new/missing id is " +
-      "a fresh empty session each time. " +
+      "sessions: pass the same `session` argument on every call (each result ends with " +
+      "a `session: <id>` line naming the one it ran in), or over plain HTTP/skill send " +
+      "the SAME `x-romdev-session` header on every call and reuse ONE Mcp-Session-Id " +
+      "(pick one stable id and reuse it) — a new/missing id is a fresh empty session each time. " +
       "If you WERE mid-session and just got reconnected (the server restarted or " +
       "your session expired): emulator state is held in server memory only, so it " +
       "did not survive — re-run loadMedia({path}) with your ROM (still on disk) to " +

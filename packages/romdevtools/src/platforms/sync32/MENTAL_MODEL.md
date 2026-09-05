@@ -65,7 +65,17 @@ you touched, since the console uploads marked rows.
 **Sprites.** `sheet_load(pixels8, w, h)` uploads an 8-bit indexed sheet and
 returns a handle; `palette_set()` supplies the 256-entry RGB565 palette.
 `sprite(sheet, sx, sy, w, h, x, y, flags)` blits a rect from it, with
-`S32_SPRITE_FLIP_X` / `S32_SPRITE_FLIP_Y`.
+`S32_SPRITE_FLIP_X` / `S32_SPRITE_FLIP_Y`. **Index 0 is the global transparent
+key**: a sheet pixel of 0 is skipped by `sprite()`, so never quantize art into
+slot 0 — reserve it, start your colours at 1 (`encodeArt({stage:'tiles',
+platform:'sync32'})` does this by default). Note the asymmetry with `rect()`:
+passing colour 0x0000 to `rect()` draws black (it snaps to the nearest palette
+entry), while index 0 in a sheet draws nothing.
+
+**The header is the API.** There is no register map to memorise — `sync32.h`
+IS the platform: the `sync32_api_t` struct, the `S32_PAD_*` bits and the
+`S32_*` limits. Read it through `platform({op:'doc', platform:'sync32',
+name:'abi'})`; it is the exact header `build()` compiles against.
 
 **Input.** `pad(player, &out)` fills `buttons` (the `S32_PAD_*` bits) plus
 analog `lx/ly/rx/ry` and `connected`. Analog axes are reported when hardware has
@@ -119,9 +129,26 @@ Two consequences worth internalising:
 - **Avoid 64-bit integer division** in a hot loop for the same reason: it is a
   library call, not an instruction.
 
-## Memory modes
+## Memory modes — and the image budget
 
 `ram` copies the image to RAM at 0x20030000 and runs it there — faster, and the
 default. `xip` executes in place from flash at 0x10100000, which leaves more RAM
 for the game at the cost of slower fetches. The mode selects a different linker
 script, so it is a build-time decision, and the header records it.
+
+The number every asset decision turns on is **how many bytes an image may
+occupy**, and it is the same number `platform({op:'capabilities',
+platform:'sync32'})` reports as `imageBudget`:
+
+| mode | what counts | budget |
+|---|---|---|
+| `ram` | text + rodata + data + bss, all in one region | **311 296 bytes** (0x50000 − 16 KB stack) at 0x20030000 |
+| `xip` | code + rodata run from the flash slot | **12 MB** at 0x10100000 |
+| `xip` | data + bss in RAM | **311 296 bytes** at 0x20030000 |
+
+The top 16 KB of the RAM region is the stack (`S32_STACK`; raise it for a
+deeply recursive port with `linkOptions: ['--defsym=S32_STACK=0x8000']`, at the
+cost of your own RAM). A 189 KB `ram` cart therefore has ~120 KB left for
+everything else; a game whose assets alone pass 300 KB wants `xip`, or wants its
+backgrounds deduped to 8×8 chr + map and its SFX at 24 kHz — decide that before
+converting, not at link time.

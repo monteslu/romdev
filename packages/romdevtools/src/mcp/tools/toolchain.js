@@ -9,6 +9,12 @@ import { inesHeaderSource, charsSource, nromFlatCfg } from "../../toolchains/cc6
 import { resolveCore } from "../../cores/registry.js";
 import { resetHost, getDisclosure } from "../state.js";
 import { PLATFORM_VIRTUAL_EXT } from "romdev-core-host/LibretroHost.js";
+
+// Virtual-filename extensions for in-memory loads. The host's table is the
+// source of truth; sync32 is added here so the pinned host version keeps
+// working (its temp file must be `*.s32` — the core derives the cart's data
+// directory from the path with the extension stripped).
+const VIRTUAL_EXT = { ...PLATFORM_VIRTUAL_EXT, sync32: ".s32" };
 import { imageContent, jsonContent, safeTool } from "../util.js";
 import { isPlaytestRunning } from "./playtest.js";
 import { buildSourceWithDebugCore } from "./symbols.js";
@@ -146,6 +152,12 @@ export function denoiseSuccessLog(log) {
     //   " <*free_lang_data> {heap 32M} <visibility> {heap 32M} ..."
     if (/^\s*Performing interprocedural optimizations\s*$/.test(line)) continue;
     if (/^\s*<[\w*][^>]*>\s*\{heap\b/.test(line)) continue;
+    // The WASM host's "unsupported syscall" chatter (cc1 probing prlimit64 for
+    // its memory limits) — one line per translation unit, meaning nothing to
+    // the user, and the most alarming-looking text in a log that succeeded.
+    if (/warning: unsupported syscall: __syscall_\w+/.test(line)) continue;
+    // A flat cart image (sync32) is one RWX LOAD segment by design.
+    if (/ld: warning: .* has a LOAD segment with RWX permissions/.test(line)) continue;
     kept.push(line);
   }
   return kept.join("\n");
@@ -266,7 +278,7 @@ export function installToolchainCore({ id }) {
 }
 
 export function registerToolchainTools(server, z, sessionKey) {
-  async function buildSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, crt0, crt0Path, codeLoc, dataLoc, options, linkerConfig, linkerConfigPath, inesHeader, outputPath, inline = false, includeSymbols = false, lint = "advisory", runtime, maxmod, rebuildSdk, title, id, mode, video, api, linkOptions, projectName, data, dataPaths, icon, iconPath, form, asmIncludes, asmIncludePaths }) {
+  async function buildSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, includeDirs, crt0, crt0Path, codeLoc, dataLoc, options, linkerConfig, linkerConfigPath, inesHeader, outputPath, inline = false, includeSymbols = false, lint = "advisory", runtime, maxmod, rebuildSdk, title, id, mode, video, api, linkOptions, projectName, data, dataPaths, icon, iconPath, form, asmIncludes, asmIncludePaths }) {
       // Reject conflicting inline vs path args — fail loud, not silent.
       if (source != null && sourcePath != null) {
         throw new Error("build({output:'rom'}): pass either `source` OR `sourcePath`, not both.");
@@ -306,7 +318,9 @@ export function registerToolchainTools(server, z, sessionKey) {
       }
       // Resolve path-based includes by reading from disk. Lets agents skip
       // pumping big binary blobs through their own context window.
-      const mergedIncludes = { ...(includes ?? {}) };
+      // `includeDirs` (whole directories) is staged FIRST so an explicit
+      // `includePaths` entry wins on a name clash.
+      const mergedIncludes = { ...(await readIncludeDirs(includeDirs)), ...(includes ?? {}) };
       if (includePaths) {
         for (const [name, p] of Object.entries(includePaths)) {
           mergedIncludes[name] = await readFile(p, "utf-8");
@@ -319,6 +333,8 @@ export function registerToolchainTools(server, z, sessionKey) {
           mergedBinaryIncludes[name] = bytes.toString("base64");
         }
       }
+      const romHeaderDrop = dropGenesisRomHeader(platform, sources);
+      sources = romHeaderDrop.sources;
       // inesHeader — NES NROM rebuild convenience (see applyInesHeader).
       if (inesHeader) {
         ({ sources, source, linkerConfig } = applyInesHeader({
@@ -484,6 +500,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         ...(result.sdkEditIgnored ? { sdkEditIgnored: result.sdkEditIgnored } : {}),
         ...(await logField(result.log, inline, logSibling, result.ok)),
         issues: rankIssues(result.issues ?? []),
+        ...(romHeaderDrop.dropped.length ? { droppedSources: romHeaderDrop.dropped, droppedSourcesNote: droppedSourcesNote(romHeaderDrop.dropped) } : {}),
         ...(showHint ? { hint: showHint } : {}),
       };
       // When a build failed on a specific TU (multi-source SDCC build),
@@ -528,7 +545,7 @@ export function registerToolchainTools(server, z, sessionKey) {
       return jsonContent(payload);
   }
 
-  async function runSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, runtime, maxmod, rebuildSdk, crt0, crt0Path, codeLoc, dataLoc, linkerConfig, linkerConfigPath, inesHeader, options, defines, entry, path: projPath, frames = 60, holdInputs, screenshotPath, projectName }) {
+  async function runSourceImpl({ platform, language, source, sourcePath, sources, sourcesPaths, includes, binaryIncludes, binaryIncludePaths, includePaths, includeDirs, exclude, runtime, maxmod, rebuildSdk, crt0, crt0Path, codeLoc, dataLoc, linkerConfig, linkerConfigPath, inesHeader, options, defines, entry, path: projPath, frames = 60, holdInputs, screenshotPath, projectName }) {
       const { buildForPlatform } = await import("../../toolchains/index.js");
       // Merge `defines` ({_VER:1}) into `options` (--define) just like the project/rom paths,
       // so a project-dir RUN honors them too.
@@ -547,7 +564,7 @@ export function registerToolchainTools(server, z, sessionKey) {
       // happy path; without it, output:'run' + path errored ("requires source").
       const noExplicitSources = source == null && sourcePath == null && sources == null && sourcesPaths == null;
       if (projPath && noExplicitSources) {
-        const r = await readProjectDir(projPath, platform, { entry });
+        const r = await readProjectDir(projPath, platform, { entry, exclude });
         includes = { ...(includes ?? {}), ...r.includes };
         binaryIncludes = { ...(binaryIncludes ?? {}), ...r.binaryIncludes };
         if (r.crt0 != null) crt0 = r.crt0;
@@ -600,12 +617,14 @@ export function registerToolchainTools(server, z, sessionKey) {
           sources[name] = await readFile(p, "utf-8");
         }
       }
-      const mergedIncludes = { ...(includes ?? {}) };
+      const mergedIncludes = { ...(await readIncludeDirs(includeDirs)), ...(includes ?? {}) };
       if (includePaths) {
         for (const [name, p] of Object.entries(includePaths)) {
           mergedIncludes[name] = await readFile(p, "utf-8");
         }
       }
+      const romHeaderDrop = dropGenesisRomHeader(platform, sources);
+      sources = romHeaderDrop.sources;
       const mergedBinaryIncludes = { ...(binaryIncludes ?? {}) };
       if (binaryIncludePaths) {
         for (const [name, p] of Object.entries(binaryIncludePaths)) {
@@ -678,13 +697,20 @@ export function registerToolchainTools(server, z, sessionKey) {
       }
 
       const host = resetHost(sessionKey);
-      await host.loadCore(resolved.jsPath, resolved.wasmPath, { hwRender: resolved.hwRender });
+      // `noderawfs` is what the loadMedia tool passes (lifecycle.js) and this
+      // path did not: a NODERAWFS core (s32core, flycast) fopen()s the cart by
+      // real path, and the host spills in-memory bytes to a temp file ONLY
+      // when it knows the core is one. Without the flag every sync32
+      // build({output:'run'}) — the documented first step of a fork — was
+      // refused at retro_load_game with a "corrupt / wrong platform" hint that
+      // pointed nowhere near the cause (jaymcgavren, 2026-09-05).
+      await host.loadCore(resolved.jsPath, resolved.wasmPath, { hwRender: resolved.hwRender, noderawfs: resolved.noderawfs });
       // Pass projectName as a virtualName so the playtest window titles itself
       // with the game name (the SDL window reads host.status.mediaPath). Keep
-      // a platform-correct extension so shared cores still resolve the system.
-      const virtualName = projectName
-        ? sanitizeProjectName(projectName) + (PLATFORM_VIRTUAL_EXT[platform] ?? "")
-        : undefined;
+      // a platform-correct extension so shared cores still resolve the system
+      // — and so a NODERAWFS core's temp file carries the extension it keys
+      // its data directory off (`<name>.s32` → `<name>/`).
+      const virtualName = sanitizeProjectName(projectName ?? "rom") + (VIRTUAL_EXT[platform] ?? "");
       await host.loadMedia({ platform, bytes: build.binary, virtualName });
       if (holdInputs && holdInputs.length > 0) {
         host.setInput({ ports: holdInputs });
@@ -730,6 +756,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         // linter warnings BEFORE the next iteration (was: runSource silently
         // ran with warnings, agent missed them, hit the crash 100 functions later).
         ...((build.issues ?? []).length > 0 ? { issues: rankIssues(build.issues) } : {}),
+        ...(romHeaderDrop.dropped.length ? { droppedSources: romHeaderDrop.dropped, droppedSourcesNote: droppedSourcesNote(romHeaderDrop.dropped) } : {}),
         ...(hint ? { hint } : {}),
       };
 
@@ -775,10 +802,11 @@ export function registerToolchainTools(server, z, sessionKey) {
     "build",
     "Compile/assemble source for a target platform; one tool keyed by `output`.\n" +
     "ON FAILURE (ok:false): READ `issues[]` FIRST — it's the structured error list ({file,line,col,severity,message,stage}) and usually names the exact line to fix. Only fall back to the raw `log` if `issues[]` is empty. Don't guess or rebuild blindly before reading it.\n" +
+    "REFACTORING? Capture a `regression({op:'capture'})` golden (frameHash at a few checkpoints + an inputScript) BEFORE you change anything, then `regression({op:'check'})` after: it is the one-call proof that a data/header refactor left the ROM behaviourally identical, and far cheaper than screenshot-and-cmp by hand.\n" +
     "• output:'rom' (default) — assemble or compile `source` (single) / `sources` ({name:contents}) / `sourcePath` / `sourcesPaths`. Returns the ROM (path by default; `inline:true` for binaryBase64) + build log. **`binaryIncludes`/`binaryIncludePaths` (base64/path CHR-ROM, music blobs for `.incbin`) — WITHOUT them no game with external assets builds.** `includes`/`includePaths` for `.include`d text. `linkerConfig` (cc65; NES preset 'chr-ram-runtime' RECOMMENDED). `crt0`/`crt0Path`/`codeLoc`/`dataLoc` (SDCC). `runtime`/`maxmod`/`rebuildSdk` (GBA/Genesis SDK). **`lint:'strict'` fails the build (stage:'lint', no binary) if the pre-flight SDCC crash-pattern scan flags anything (e.g. the uint8 loop-bound trap); 'advisory' (default) just lists hits in issues[].** **`includeSymbols:true` returns the .map text inline on a PLAIN rom build — distinct from output:'romWithDebug' which writes .dbg/.map FILES.** Language is inferred from extension/content — usually OMIT `language`.\n" +
     "• output:'romWithDebug' — like 'rom' but also emits linker debug info for the `symbols` tool: cc65 → `.dbg`, SDCC → sdld `.map`, Genesis m68k → GNU ld map (find where a RAM var landed). DEFAULT writes ROM + debug file + log to disk (`outputPath` required unless `inline:true`). **`resolveSymbols:['grid','score']` folds those names' addresses ({resolvedSymbols:{grid:{address,hex,region?,ramOffset?}}}) straight into the result — the cheap way to a WRAM variable's address without loading the whole map (or round-tripping it through `symbols`).**\n" +
     "• output:'run' — BUILD + LOAD + RUN + SCREENSHOT in one round trip — the fastest iteration loop. Same build args; runs `frames` frames and returns the screenshot INLINE. `holdInputs` holds controller state; `screenshotPath` writes the PNG to disk instead; `projectName` titles the playtest window.\n" +
-    "• output:'project' — build a project DIRECTORY (`path`) without re-passing the file manifest each call. Entry point auto-detects `main.c` (C/SGDK Genesis, GBA, cc65/SDCC C) OR `main.s`/`main.asm` (asm); pass `entry:'smw.asm'` to point at a differently-named top-level file (e.g. an existing disassembly). Every `.c`/`.s`/`.asm` in the dir is a translation unit (linked together), every `.h`/`.inc` an include, and `.bin/.chr/.pcm/.brr/.vgm/...` (recursively, including subdirectories) become binaryIncludes (for `.incbin`). `options` (e.g. asar `--define _VER=1`) and `defines` are honored here too. Iterate an on-disk project by re-calling with just `{path, platform}`. **This is the no-boilerplate path for an examples({op:'fork'}) dir: the per-platform recipe auto-supplies the crt0 + load address — GB/GBC default `gb_crt0.s` + `codeLoc:0x150` (don't hand-pass them!), MSX routes `msx_crt0.s` + `codeLoc:0x4010`, SMS/GG auto-inject their bundled crt0, NES applies the chr-ram-runtime preset. PREFER this over re-passing `crt0Path`/`codeLoc` to output:'rom' for a forked project.**\n" +
+    "• output:'project' — build a project DIRECTORY (`path`) without re-passing the file manifest each call. Entry point auto-detects `main.c` (C/SGDK Genesis, GBA, cc65/SDCC C) OR `main.s`/`main.asm` (asm); pass `entry:'smw.asm'` to point at a differently-named top-level file (e.g. an existing disassembly). Every `.c`/`.s`/`.asm` in the dir is a translation unit (linked together) — `exclude:['asset_check.c']` keeps a second entry point (a test harness beside the game) out of the link; `includeDirs:['/abs/shared']` pulls headers from OUTSIDE the dir — every `.h`/`.inc` an include, and `.bin/.chr/.pcm/.brr/.vgm/...` (recursively, including subdirectories) become binaryIncludes (for `.incbin`). `options` (e.g. asar `--define _VER=1`) and `defines` are honored here too. Iterate an on-disk project by re-calling with just `{path, platform}`. **This is the no-boilerplate path for an examples({op:'fork'}) dir: the per-platform recipe auto-supplies the crt0 + load address — GB/GBC default `gb_crt0.s` + `codeLoc:0x150` (don't hand-pass them!), MSX routes `msx_crt0.s` + `codeLoc:0x4010`, SMS/GG auto-inject their bundled crt0, NES applies the chr-ram-runtime preset. PREFER this over re-passing `crt0Path`/`codeLoc` to output:'rom' for a forked project.**\n" +
     "• output:'reassemble' — **the UNIFORM byte-exact ROUND-TRIP**: rebuild a `disasm({target:'project'})` output dir (`path`) into a byte-identical ROM in ONE call, on EVERY classic platform (NES/SNES/Genesis/GB/GBC/SMS/GG/MSX/GBA/C64/Atari/PCE/Lynx) — not just the cc65-native subset that `rebuild.json` covers. It reads the `reassemble.json` manifest disasm wrote, ASSEMBLES each region `.asm` with the platform's native assembler (ca65 for 6502/65816, GNU-as for m68k/arm/z80/sm83), and SPLICES each result into a copy of the original ROM (`original.rom`, kept in the dir) at its file offset — so the cartridge header, inter-region gaps, and trailing pad return verbatim. Returns `{ok, byteExact, outputPath, regions:[{file,byteExact,...}]}` (a failed region carries structured `issues[]` — {file,line,message} pointing at the REGION'S source file, ANSI-free); writes the ROM to `outputPath` (or `<dir>/rebuilt.<ext>` by default). **This is the 'cmp before commit' gate for a ROM-hacking / annotation workflow: edit a region `.asm`, call this, get a byte-identical ROM back (or a precise per-region mismatch if your edit changed a region's length).** `byteExact:true` = the rebuild equals `original.rom` exactly.",
     {
       output: z.enum(["rom", "romWithDebug", "run", "project", "reassemble"])
@@ -839,6 +867,8 @@ export function registerToolchainTools(server, z, sessionKey) {
       // project-only
       path: z.string().optional().describe("output:'project' — absolute path to the project directory."),
       entry: z.string().optional().describe("output:'project' — name of the top-level source file when it isn't main.c/main.s/main.asm (e.g. 'smw.asm' for an existing disassembly). Project-relative or a bare filename. Default: auto-detect main.c / main.s / main.asm."),
+      exclude: z.array(z.string()).optional().describe("output:'project' (and output:'run' with `path`) — files in the directory that must NOT be treated as sources: bare names ('asset_check.c'), simple globs ('*.test.c', 'tests/**'). For a second entry point that lives beside the game — a verification harness with its own main/game_main — without which the two link together as \"multiple definition\"."),
+      includeDirs: z.array(z.string()).optional().describe("ALL outputs — absolute directories whose .h/.inc files are staged as includes, keyed by their path relative to that directory (so #include \"x.h\" and #include \"sub/x.h\" both resolve). The DIRECTORY form of `includePaths`, which is an exact virtual-name → file MAP (not a search path: omit one entry and you get a plain 'foo.h: No such file'). For a multi-target repo's shared/ headers or a whole include tree, pass the directory here instead of retyping every header."),
       // shared output
       outputPath: z.string().optional().describe("output:'rom'/'romWithDebug'/'project' — absolute path to write the ROM (romWithDebug writes .dbg/.map/.log alongside; REQUIRED for romWithDebug unless inline:true). output:'rom' omitted → temp-file path returned (or inline:true for base64)."),
       inline: z.boolean().default(false).describe("output:'rom'/'romWithDebug' — return binaryBase64 (+ debug text for romWithDebug) in the response instead of writing to disk."),
@@ -1063,6 +1093,81 @@ async function walkSubdirAssets(root) {
 }
 
 /**
+ * Genesis: the build compiles ITS OWN bundled `rom_header.c` and assembles
+ * `sega.s` (which carries `rom_header` at .text.keepboot+0x100). A project's
+ * copy — the scaffold drops one in the dir and the README calls it "yours" —
+ * passed as a translation unit is therefore a guaranteed duplicate symbol.
+ * There is no legitimate reason to compile it, so drop it and say so instead
+ * of failing the link (jaymcgavren, 2026-09-05).
+ * @param {string} platform
+ * @param {Record<string,string>|undefined} sources
+ * @returns {{sources: Record<string,string>|undefined, dropped: string[]}}
+ */
+export function dropGenesisRomHeader(platform, sources) {
+  if (platform !== "genesis" || !sources) return { sources, dropped: [] };
+  const dropped = Object.keys(sources).filter((n) => /(^|\/)rom_header\.c$/i.test(n));
+  if (!dropped.length) return { sources, dropped };
+  const kept = { ...sources };
+  for (const n of dropped) delete kept[n];
+  return { sources: kept, dropped };
+}
+
+/** The note that accompanies a dropped rom_header.c. */
+function droppedSourcesNote(dropped) {
+  return `${dropped.join(", ")} was NOT compiled: the Genesis build supplies the ROM header itself (its bundled rom_header.c + sega.s define \`rom_header\`), so a project's copy as a translation unit is always a duplicate. Edit rom_header.c in place — it IS picked up — just never list it in sourcesPaths.`;
+}
+
+/**
+ * Compile an `exclude` list (names or simple globs) into a predicate over
+ * project-relative paths. `*` matches within one path segment, `**` any
+ * depth. A bare name matches that name at any depth.
+ * @param {string[]|undefined} patterns
+ * @returns {(rel: string) => boolean}
+ */
+export function compileExcludes(patterns) {
+  if (!Array.isArray(patterns) || patterns.length === 0) return () => false;
+  const res = patterns.filter((p) => typeof p === "string" && p.length).map((p) => {
+    const norm = p.replace(/\\/g, "/").replace(/^[./]+/, "");
+    const esc = norm.replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      .replace(/\*\*/g, "\u0000").replace(/\*/g, "[^/]*").replace(/\u0000/g, ".*");
+    // A pattern without a slash (bare name or `*.test.c`) matches at any depth.
+    return new RegExp(norm.includes("/") ? `^${esc}$` : `(^|/)${esc}$`);
+  });
+  return (rel) => res.some((re) => re.test(rel.replace(/\\/g, "/")));
+}
+
+/**
+ * Stage every text include (.h/.inc/.hpp/.i) under each directory in
+ * `includeDirs`, keyed by its path relative to that directory — the
+ * directory form of `includePaths` (which is an exact virtual-name → file
+ * MAP, not a search path). `#include "x.h"` and `#include "sub/x.h"` both
+ * resolve. Earlier directories win on a name clash.
+ * @param {string[]|undefined} dirs
+ * @returns {Promise<Record<string,string>>}
+ */
+export async function readIncludeDirs(dirs) {
+  const out = {};
+  if (!Array.isArray(dirs)) return out;
+  for (const dir of dirs) {
+    if (typeof dir !== "string" || !dir) continue;
+    const stack = [""];
+    while (stack.length) {
+      const rel = stack.pop();
+      let ents;
+      try { ents = await readdir(path.join(dir, rel), { withFileTypes: true }); }
+      catch (e) { throw new Error(`includeDirs: cannot read '${path.join(dir, rel)}': ${e.message}`); }
+      for (const e of ents) {
+        const r = rel ? `${rel}/${e.name}` : e.name;
+        if (e.isDirectory()) { if (!/^(node_modules|\.git)$/.test(e.name)) stack.push(r); continue; }
+        if (!e.isFile() || !/\.(h|hpp|hh|inc|i)$/i.test(e.name)) continue;
+        if (!(r in out)) out[r] = await readFile(path.join(dir, r), "utf-8");
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * Read a scaffolded project DIRECTORY into the build inputs, applying the
  * per-platform recipe (crt0 routing, linker preset, runtime, skip-list) and
  * the GBA runtime content-sniff. The SINGLE source of truth shared by
@@ -1070,18 +1175,25 @@ async function walkSubdirAssets(root) {
  * can never drift. Returns crt0 as RAW source text (callers assemble it).
  * @param {string} projPath
  * @param {string} platform
- * @param {{entry?: string}} [opts]  entry: name of the top-level source when it isn't main.*
+ * @param {{entry?: string, exclude?: string[]}} [opts]  entry: name of the top-level source when it isn't main.*; exclude: names/globs never treated as sources
  */
 export async function readProjectDir(projPath, platform, opts = {}) {
   const entries = await readdir(projPath, { withFileTypes: true });
-  const files = entries.filter((e) => e.isFile());
+  // `exclude`: project-relative names/globs the build must NOT treat as
+  // translation units. A project legitimately holds a second entry point —
+  // an asset-verification harness with its own game_main beside the game —
+  // and "every .c in the dir is a TU" linked them together ("multiple
+  // definition of `game_main'"). Matched against top-level names and
+  // subdir-relative paths; `*` matches within a segment, `**` across.
+  const excluded = compileExcludes(opts.exclude);
+  const files = entries.filter((e) => e.isFile() && !excluded(e.name));
 
   // Subdirectory assets — a real disassembly keeps palettes/gfx in nested dirs
   // (e.g. col/misc/back_area.pal) and `.incbin`s them by relative path. The old
   // flat readdir never saw them → "file not found". Walk recursively and add any
   // binary asset (regardless of extension/double-extension) keyed by its path
   // RELATIVE to the project root, so the asar/incbin mount resolves it.
-  const subAssets = await walkSubdirAssets(projPath);
+  const subAssets = (await walkSubdirAssets(projPath)).filter((a) => !excluded(a.rel));
 
   // Entry override: an existing project whose top file isn't main.* (e.g.
   // smw.asm) OR is nested (e.g. src/main.c — common for decomps/SDK projects).
@@ -1208,8 +1320,11 @@ export async function readProjectDir(projPath, platform, opts = {}) {
   return { sources, includes, asmIncludes, binaryIncludes, crt0, codeLoc: recipe.codeLoc, dataLoc: recipe.dataLoc, linkerConfig: recipe.linkerConfig, runtime, maxmod: recipe.maxmod };
 }
 
-export async function buildProjectCore({ path: projPath, platform, outputPath, options, defines, entry }) {
-  const { sources, includes, asmIncludes, binaryIncludes, crt0, codeLoc, dataLoc, linkerConfig, runtime, maxmod } = await readProjectDir(projPath, platform, { entry });
+export async function buildProjectCore({ path: projPath, platform, outputPath, options, defines, entry, exclude, includeDirs }) {
+  const { sources, includes: dirIncludes, asmIncludes, binaryIncludes, crt0, codeLoc, dataLoc, linkerConfig, runtime, maxmod } = await readProjectDir(projPath, platform, { entry, exclude });
+  // Headers that live OUTSIDE the project dir (a multi-target repo's shared/)
+  // come in through `includeDirs`; the project's own files win on a clash.
+  const includes = { ...(await readIncludeDirs(includeDirs)), ...dirIncludes };
 
   // Thread `options` (e.g. asar `--define _VER=1`, `--fix-checksum=off`) + the `defines`
   // convenience map through to the toolchain — project mode used to silently drop them.
@@ -1272,6 +1387,7 @@ export async function buildProjectCore({ path: projPath, platform, outputPath, o
     binaryBytes: result.binary ? result.binary.length : 0,
     outputPath: outputPath && result.binary ? outputPath : null,
     sourcesBuilt: Object.keys(sources),
+    ...(Array.isArray(exclude) && exclude.length ? { excluded: exclude } : {}),
     ...(Object.keys(binaryIncludes).length ? { binaryIncludes: Object.keys(binaryIncludes) } : {}),
     romLayout: describeRomLayout(platform, result.binary),
     ...(result.stage ? { stage: result.stage } : {}),
@@ -1422,7 +1538,7 @@ export async function reassembleProjectCore({ path: projPath, platform, outputPa
   if (romExact) for (let i = 0; i < rom.length; i++) if (rom[i] !== template[i]) { romExact = false; break; }
 
   const anyRegionFailed = regionResults.some((r) => !r.ok);
-  const ext = PLATFORM_VIRTUAL_EXT[plat] ?? ".bin";
+  const ext = VIRTUAL_EXT[plat] ?? ".bin";
   const outPath = outputPath ?? path.join(projPath, "rebuilt" + ext);
   // Only write when every region assembled (a failed region means the ROM is
   // incomplete/garbage — don't hand back a broken image).

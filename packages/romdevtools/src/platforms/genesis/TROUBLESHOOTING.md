@@ -97,6 +97,42 @@ The Genesis colour encoding is **BGR**, not RGB, and each channel is
 If you're seeing all-green, you wrote RGB-ordered values (the green
 nibble is in the middle of both layouts, so it survives).
 
+## "Build fails with `stdint.h: No such file or directory`"
+
+The Genesis C build is **freestanding**: there is no `<stdint.h>` (and no
+hosted libc headers at all). SGDK's own spellings are the intended ones —
+`u8`/`u16`/`u32`/`s8`/`s16`/`s32` from `include/types.h`, which `<genesis.h>`
+pulls in. Grepping the vendored SDK will show `<stdint.h>` referenced under
+`src/ext/` — those units are NOT compiled into your ROM, so that is not
+evidence it exists.
+
+This bites hardest in a **multi-target repo**: a sync32 build DOES have a
+`<stdint.h>` and its example uses `uint8_t` freely, so a header shared between
+the two silently carries an unavailable include Genesis-ward. The portable
+answer for shared headers is plain C types — `unsigned char` / `short` /
+`long` — which m68k-elf and arm-none-eabi agree on (8/16/32 bits), so no
+per-target `#ifdef` is needed.
+
+## "Build fails with `multiple definition of 'rom_header'`"
+
+You listed the project's `rom_header.c` in `sourcesPaths` (or your project dir
+build picked it up). The build **supplies the header itself**: it compiles its
+own bundled `rom_header.c` and assembles `sega.s`, which carries `rom_header`
+at `.text.keepboot+0x100` — so a second copy is always a duplicate. Since
+0.136.0 `build()` drops a `rom_header.c` translation unit with a
+`droppedSources` note instead of failing; on older servers, remove it from the
+manifest. Editing `rom_header.c` in place still works — it is picked up by
+name — just never pass it as a source.
+
+## "`foo.h: No such file or directory` though the file is right there"
+
+`includePaths` is an exact virtual-filename → path **map**, not a search path:
+every header the sources `#include` needs its own entry, and a missing one
+gives exactly this error with nothing pointing at the manifest. Pass
+`includeDirs: ['/abs/project', '/abs/shared']` instead — the directory form
+stages every `.h` under each tree keyed by relative path — or check the map
+against `grep -h '^#include "' *.c | sort -u`.
+
 ## "Build fails with `undefined reference to '_system'`"
 
 You're using a newlib that wasn't patched for bare-metal m68k. Our
@@ -184,6 +220,12 @@ data) to change these.
 
 The header checksum at offset $18E is computed by the link step from
 your code+data; don't hand-edit it.
+
+**Edit it in place, never list it as a source.** The build compiles its own
+copy of `rom_header.c` (and assembles `sega.s`, which also defines
+`rom_header`), so passing the project's `rom_header.c` in `sourcesPaths` is a
+guaranteed `multiple definition of 'rom_header'` — since 0.136.0 the build
+drops it with a `droppedSources` note rather than failing.
 
 ## "My splash / title screen is the right shapes but all one color and choppy/striped"
 

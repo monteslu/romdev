@@ -275,6 +275,69 @@ export function registerAudioTools(server, z, sessionKey) {
       return jsonContent(out);
   }
 
+  // encodeAudio({target:'sync32'}) — note-song → (hz, frames) event tables for
+  // the game's own software synth (the console has no sound chip).
+  async function encSync32Song({ song, defaultTicks, name, outputBinPath, outputCPath, psgQuantize }) {
+      const { compileSong } = await import("../../platforms/sync32/song.js");
+      if (!song) throw new Error("encodeAudio({target:'sync32'}): pass `song` — { rows:[ \"C4:16\", {note,ticks}, {hz,ticks}, \"R:8\" ] } or { voices:[{rows}], ... }.");
+      const spec = typeof song === "string" ? JSON.parse(song) : song;
+      const merged = { ...(defaultTicks !== undefined ? { defaultTicks } : {}), ...(name ? { name } : {}), ...(psgQuantize !== undefined ? { psgQuantize } : {}), ...spec };
+      let r;
+      try { r = compileSong(merged); }
+      catch (e) { throw new Error(`encodeAudio({target:'sync32'}): ${e.message}`); }
+      const out = {
+        platform: "sync32",
+        chip: "software synth (game-mixed 48 kHz s16 ring)",
+        voices: r.voices.length,
+        rows: r.rows,
+        frames: r.frames,
+        tableBytes: r.bytes.length,
+        note: `sync32 song: ${r.voices.length} voice(s) of (hz, frames) events, ${r.frames} frames long. There is no driver to paste into — the C carries the tables plus the s32_song_t/s32_voice_t structs and a mixer sketch in its tail comment; the raw bytes are per voice u16 count then u16 hz,frames pairs (LE).` +
+          (merged.psgQuantize ? " Pitches snapped to SN76489 dividers so a Genesis/SMS original keeps its grid." : ""),
+      };
+      if (outputCPath) {
+        await mkdir(path.dirname(outputCPath), { recursive: true });
+        await writeFile(outputCPath, r.cSource);
+        out.cPath = outputCPath;
+      } else out.cSource = r.cSource;
+      if (outputBinPath) {
+        await mkdir(path.dirname(outputBinPath), { recursive: true });
+        await writeFile(outputBinPath, Buffer.from(r.bytes));
+        out.binPath = outputBinPath;
+      } else out.tableBase64 = Buffer.from(r.bytes).toString("base64");
+      return jsonContent(out);
+  }
+
+  // encodeAudio({target:'sync32pcm'}) — WAV/PCM → s16 mono at a ring-dividing rate.
+  async function encSync32Pcm({ wavPath, wavBase64, name = "pcm_sample", format = "wav", pcmRate, rate, outputCPath, outputPcmPath }) {
+      const { wavToSync32Pcm, emitSync32PcmC } = await import("../../platforms/sync32/pcm.js");
+      let inputBytes;
+      if (wavPath) inputBytes = await readFile(wavPath);
+      else if (wavBase64) inputBytes = Buffer.from(wavBase64, "base64");
+      else throw new Error("encodeAudio({target:'sync32pcm'}): pass wavPath (preferred) or wavBase64.");
+      let r;
+      try { r = wavToSync32Pcm(inputBytes, { rate, format, pcmRate }); }
+      catch (e) { throw new Error(`encodeAudio({target:'sync32pcm'}): ${e.message}`); }
+      const cSource = emitSync32PcmC(r, name);
+      const out = {
+        platform: "sync32", name, rate: r.rate, sourceRate: r.sourceRate, sampleCount: r.sampleCount, bytes: r.bytes,
+        step: r.step, durationSeconds: Math.round(r.durationSeconds * 1000) / 1000, peak: r.peak,
+        lenDefine: `${name.toUpperCase()}_LEN`,
+        note: `s16 mono @ ${r.rate} Hz (${r.bytes} B). The mixer holds each sample ${r.step} ring frame(s) — ${r.rate === 48000 ? "one per frame" : "a zero-order hold, no resampler"}. Count it against the image budget (platform capabilities imageBudget): 24 kHz halves the cost of 48 kHz.`,
+      };
+      if (outputCPath) {
+        await mkdir(path.dirname(outputCPath), { recursive: true });
+        await writeFile(outputCPath, cSource);
+        out.cPath = outputCPath;
+      } else out.cSource = cSource;
+      if (outputPcmPath) {
+        await mkdir(path.dirname(outputPcmPath), { recursive: true });
+        await writeFile(outputPcmPath, Buffer.from(r.pcm.buffer, r.pcm.byteOffset, r.pcm.byteLength));
+        out.pcmPath = outputPcmPath;
+      }
+      return jsonContent(out);
+  }
+
   server.tool(
     "encodeAudio",
     "Encode an external audio clip into a platform's native sample/music format, keyed by `target`.\n" +
@@ -284,21 +347,25 @@ export function registerAudioTools(server, z, sessionKey) {
     "• target:'maxmod' — **GBA MUSIC: a tracker module (`.xm`/`.mod`/`.it`/`.s3m`) → a Maxmod SOUNDBANK** (.bin + .h). Pure-JS port of devkitPro `mmutil`, BYTE-IDENTICAL to it. Link the .bin as your soundbank, `mmInitDefault()`, then `mmStart(MOD_<NAME>, MM_PLAY_LOOP)`. Input `modulePath` or `moduleBase64`; output `outputBinPath` (+ `outputHeaderPath` for the .h) or inline base64 + `header`.\n" +
     "• target:'famitone' — **NES MUSIC: a FamiTracker text export (`.txt`) → FamiTone2 ca65 data.** Pure-JS port of `text2data` (text2data -ca65 compatible). Assemble with the bundled famitone2.s driver; `FamiToneInit(<name>_music_data)` then `FamiToneMusicPlay(song)`. Input `txtPath` or `txt` (the File→Export Text output from FamiTracker/Dn-FamiTracker); output `outputAsmPath` or inline `asmSource`.\n" +
     "• target:'spc' — **SNES MUSIC: a simple note/duration `song` → the bundled apu_blob driver's row table.** Single voice; each note re-triggers the loaded BRR sample at its pitch (P = baseP·2^(semitones/12)). `song` = `{ rows:[ {note:\"C4\", ticks:16} | \"C4:16\" | {p:0x0400, ticks:16} ] }` with `base` (note the sample sounds at `baseP`, default C4) + `baseP` (default 0x1000). Output `outputAsmPath` (paste at the apu_blob.asm `song:` label, rebuild apu_blob.bin) or raw `tableBase64`/`outputBinPath` for ARAM $5000.\n" +
+    "• target:'sync32' — **sync32 MUSIC: a note/duration `song` → (hz, frames) event tables** for the game's OWN software synth (the console has no sound chip; a game mixes a 48 kHz s16 ring itself). Single voice `{rows:[\"C4:16\", {note,ticks}, {hz,ticks}, \"R:8\"]}` or `{voices:[{rows,amp?},…]}` (≤8); `psgQuantize:true` snaps pitches to SN76489 dividers so a Genesis/SMS original keeps its exact grid. Emits C (tables + s32_song_t structs + a mixer sketch) and raw bytes.\n" +
+    "• target:'sync32pcm' — **sync32 SFX: WAV (or raw s16) → s16 mono at a ring-dividing `rate`** (default 24000 = half the 48 kHz ring: zero-order hold, no resampler, half the bytes). Emits `const int16_t name[]` + `NAME_LEN/RATE/STEP`. Input `wavPath`/`wavBase64` (or `format:'pcm16'` + `pcmRate`); output `outputCPath` / `outputPcmPath`.\n" +
     "• target:'gg'|'sms'|'c64'|'lynx'|'atari7800'|'gb'|'gbc' — **synth-chip MUSIC: a note/duration `song` → that platform's bundled-driver note table.** Most take `{ rows:[{note,dur/ticks}|\"C4:16\"] }`; **gb/gbc are MULTI-channel hUGEDriver** so they take `{ ticksPerRow?, channels:[ {rows:[\"C5\",\"-\"(sustain),\".\"(rest)]}, ... ] }` (1-4 channels). Note→native pitch per chip: gg/sms=SN76489 10-bit divider, c64=SID 16-bit freq word (3 voices), lynx=Mikey note index, atari7800=TIA 5-bit AUDF (32 pitches → snapped), gb/gbc=hUGE note index (C3..B8). Emits a drop-in `cSource` (paste over the demo song in <plat>_music.c / song_data.c) + raw `tableBase64`/`outputCPath`/`outputBinPath`. **These chips SYNTHESIZE — they play notes, not your recording; for arbitrary audio see the MUSIC_SOURCING guide (transcribe first).**",
     {
-      target: z.enum(["brr", "xgm2pcm", "xgm2", "maxmod", "famitone", "spc", "gg", "sms", "c64", "lynx", "atari7800", "gb", "gbc"]).describe("SAMPLE: brr=SNES BRR; xgm2pcm=Genesis PCM SFX. MUSIC: xgm2=Genesis (VGM); maxmod=GBA (tracker module); famitone=NES (FamiTracker txt); spc=SNES note-song; gg/sms/c64/lynx/atari7800/gb/gbc=synth note-song → that driver's table."),
+      target: z.enum(["brr", "xgm2pcm", "xgm2", "maxmod", "famitone", "spc", "gg", "sms", "c64", "lynx", "atari7800", "gb", "gbc", "sync32", "sync32pcm"]).describe("SAMPLE: brr=SNES BRR; xgm2pcm=Genesis PCM SFX; sync32pcm=sync32 s16 PCM. MUSIC: xgm2=Genesis (VGM); maxmod=GBA (tracker module); famitone=NES (FamiTracker txt); spc=SNES note-song; gg/sms/c64/lynx/atari7800/gb/gbc=synth note-song → that driver's table; sync32=note-song → (hz,frames) tables for a software synth."),
+      rate: z.number().int().optional().describe("target:'sync32pcm' — output sample rate; must divide 48000 (48000/24000/16000/12000/9600/8000/6000). Default 24000."),
+      psgQuantize: z.boolean().optional().describe("target:'sync32' — snap every pitch to the nearest SN76489 divider (a Genesis/SMS port keeps the original's pitch grid)."),
       // brr
       pcmBase64: z.string().optional().describe("target:'brr' — base64 raw 16-bit signed PCM (mono, LE)."),
       pcmPath: z.string().optional().describe("target:'brr' — absolute path to a raw PCM file (preferred over pcmBase64)."),
       loop: z.boolean().default(false).describe("target:'brr' — set the LOOP bit on the final block (sustained tones/instruments)."),
       // xgm2pcm
-      wavPath: z.string().optional().describe("target:'xgm2pcm' — absolute path to a .wav (or raw s16le if format:'pcm16'); preferred over wavBase64."),
+      wavPath: z.string().optional().describe("target:'xgm2pcm'/'sync32pcm' — absolute path to a .wav (or raw s16le if format:'pcm16'); preferred over wavBase64."),
       wavBase64: z.string().optional().describe("target:'xgm2pcm' — base64 WAV (or raw s16le) bytes."),
-      name: z.string().default("pcm_sample").describe("xgm2pcm/xgm2/maxmod/famitone/gg/sms/c64/lynx/atari7800/gb/gbc — C/asm identifier for the emitted data (xgm2pcm define <NAME>_LEN; maxmod → MOD_<NAME>; famitone → <NAME>_music_data). NOT used by target:'spc'."),
+      name: z.string().default("pcm_sample").describe("xgm2pcm/xgm2/maxmod/famitone/gg/sms/c64/lynx/atari7800/gb/gbc/sync32/sync32pcm — C/asm identifier for the emitted data (xgm2pcm define <NAME>_LEN; maxmod → MOD_<NAME>; famitone → <NAME>_music_data). NOT used by target:'spc'."),
       halfRate: z.boolean().default(false).describe("target:'xgm2pcm' — encode for 6.65 kHz (XGM2_playPCMEx halfRate=TRUE); halves ROM size."),
       format: z.enum(["wav", "pcm16"]).default("wav").describe("target:'xgm2pcm' — 'wav' (parse RIFF) or 'pcm16' (raw s16le mono; then pass pcmRate)."),
       pcmRate: z.number().int().min(1).optional().describe("target:'xgm2pcm' — source sample rate (Hz), REQUIRED for format:'pcm16'."),
-      outputCPath: z.string().optional().describe("xgm2pcm/xgm2/gg/sms/c64/lynx/atari7800/gb/gbc — write the C source here and return path-only (else cSource is inline)."),
+      outputCPath: z.string().optional().describe("xgm2pcm/xgm2/gg/sms/c64/lynx/atari7800/gb/gbc/sync32/sync32pcm — write the C source here and return path-only (else cSource is inline)."),
       outputPcmPath: z.string().optional().describe("target:'xgm2pcm' — also/instead write the raw padded PCM bytes here."),
       // xgm2 (music)
       vgmPath: z.string().optional().describe("target:'xgm2' — absolute path to a .vgm or gzipped .vgz Mega Drive music log."),
@@ -333,6 +400,8 @@ export function registerAudioTools(server, z, sessionKey) {
         case "spc":      return await encSpcSong(args);
         case "gg": case "sms": case "c64": case "lynx": case "atari7800": case "gb": case "gbc":
           return await encSynthSong(args.target, args);
+        case "sync32":    return await encSync32Song(args);
+        case "sync32pcm": return await encSync32Pcm(args);
         default: throw new Error(`encodeAudio: unknown target '${args.target}'`);
       }
     }),

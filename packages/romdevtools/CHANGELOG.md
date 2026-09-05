@@ -4,6 +4,110 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.136.0 — 2026-09-05
+
+The sync32-port feedback round (jaymcgavren, three reports against 0.135.1
+plus a correction pass). Every item closed; the two headline ones were not
+sync32 bugs at all.
+
+### Fixed — a modern (2026-07-28) MCP client lost its ROM on every call
+
+Claude Code 2.1.x speaks the stateless revision and sets neither
+`_meta["dev.romdev/sessionHandle"]` nor an `x-romdev-session` header, so
+`resolveSessionKey` minted a throwaway key per request: `loadMedia` said
+`loaded:true`, the next `frame` said "No ROM loaded". Reproduced from this
+repo's own Claude Code client, not only on the reporter's machine. The
+minted handle was "returned to the caller so it can pin subsequent calls"
+in the design and returned nowhere in practice — no tool took it and no
+result carried it.
+
+Identity now resolves, in order: `_meta` handle → `x-romdev-session` →
+**the `session` tool argument** (advertised on every shaped tool by the v2
+adapter, resolved in `server.js` before dispatch, never seen by a handler)
+→ `x-mcp-client-session-id` → **the key bound to the caller's keep-alive
+socket** → transport id → mint. A minted key is bound to the socket, so a
+client that names nothing keeps its emulator across calls with zero effort
+(measured: each Claude Code process holds one persistent connection), and
+every result of such a session ends with a `session: <id>` line the agent
+can pass back if the connection is ever replaced. The server's HTTP
+keep-alive timeout is raised to 30 minutes so an agent's thinking time
+between calls does not replace the socket. The "No ROM loaded" text names
+all three recipes, including the `Mcp-Session-Id` trap (re-initializing per
+call is a fresh session even with the header set — the way a second
+playtest window got opened with the first one orphaned).
+
+Also found while fixing it: the v2 adapter's Proxy had no `set` trap, so
+`installObserverMiddleware` and `withClearToolErrors` — which wrap `.tool`
+by assignment — were silently bypassed in the modern era. It honours the
+assignment now.
+
+### Fixed — `build({output:'run'})` refused every sync32 cart
+
+The documented first step of a sync32 fork failed at `retro_load_game`
+with a "wrong platform / corrupt / bad header" hint. The s32core is a
+NODERAWFS build (it `fopen()`s the cart by real path and streams `<name>/`
+off disk); the host spills in-memory bytes to a temp file for such cores
+**only when told the core is one**, and the run path omitted the
+`noderawfs` flag the `loadMedia` tool passes. One argument. The temp file
+also carries `.s32` now (the core strips the extension to find the data
+directory; `PLATFORM_VIRTUAL_EXT` gained sync32 in romdev-core-host 0.12.0,
+with a local override so the pinned host works too).
+
+### Added — the sync32 asset pipeline agents kept hand-writing
+
+- `encodeArt({stage:'tiles', platform:'sync32'})` — flat 8bpp indices +
+  one RGB565 palette BANK (`baseIndex` + `maxColors`, index 0 reserved as
+  the transparent key, alpha → 0), pixels.bin / palette.bin / preview.png,
+  and a C emitter (`name` + `outputCPath`).
+- `encodeArt({stage:'tilemap', platform:'sync32'})` — 8×8 chr dedup (flip-
+  aware with `flip:true`) + a uint8/uint16 map, for the framebuffer console
+  that has no tilemap hardware but a 311 296-byte image budget.
+- `encodeAudio({target:'sync32'})` — note-song → `(hz, frames)` event
+  tables per voice for a software synth, with `psgQuantize` so a
+  Genesis/SMS original keeps its pitch grid; and `target:'sync32pcm'` —
+  WAV → s16 mono at a ring-dividing rate (default 24 kHz, zero-order hold).
+- `platform({op:'doc', platform:'sync32', name:'abi'})` serves `sync32.h`
+  itself — the struct of function pointers IS the platform, and it was
+  reachable only by `find /`.
+- `input({op:'layout', platform:'sync32'})` — the `S32_PAD_*` bits, the
+  by-name libretro mapping, and the playtest window's keyboard binding.
+  `FACE_BUTTON_MAP.sync32` so spatial names press something.
+- `platform({op:'capabilities', platform:'sync32'})` carries `imageBudget`
+  per mode (the linker script's numbers).
+- `build` gained `exclude:[…]` (a second `game_main` beside the game no
+  longer links into it) and `includeDirs:[…]` (the directory form of
+  `includePaths`, which is a map, not a search path). Genesis builds drop a
+  project's own `rom_header.c` translation unit with a `droppedSources`
+  note instead of failing the link.
+- `feedback({op:'record'})` — one stamped line (version, pid, loaded
+  platform + media, time) into a local append-only log the human collects.
+  Nothing leaves the machine.
+
+### Fixed — smaller
+
+- `catalog({op:'status'})` reports server-wide toolchain flags under
+  `toolchains`, not inside the platform-scoped `capabilities` (a sync32
+  status claimed cc65/da65).
+- sync32 `naReasons` named `video_ram` (not one of its regions) and called
+  the cartridge console "disc-based"; both now come from the platform entry.
+- `examples({op:'fork'})` for sync32 stamps `.s32`, not `.bin`, into the
+  README and `nextStep`.
+- Not a change, an answer: the "10/10 hosts live, what happens to my next
+  `loadMedia`" question (015806 §2, left unverified by the reporter) has no
+  capacity error to improve. At `maxHosts` the oldest-idle evictable host
+  is torn down to make room; only live playtest windows are exempt. The
+  saturated pool the report watched self-heal through the idle reaper
+  would equally have yielded to the next load.
+- A successful build's log tail drops the WASM host's
+  `unsupported syscall: __syscall_prlimit64` lines and the RWX LOAD-segment
+  warning (both benign).
+- Docs: sync32 MENTAL_MODEL states the index-0 transparent key and the
+  image budget; sync32 TROUBLESHOOTING gains the holes-in-sprites, two-
+  game_main, run-refused, session, RWX and "which key jumps" entries;
+  Genesis TROUBLESHOOTING gains `stdint.h`, `rom_header.c`-is-not-a-TU and
+  includePaths-is-a-map entries; `build` cross-references `regression` for
+  the "prove my refactor changed nothing" task.
+
 ## 0.135.1 — 2026-08-30
 
 ### Fixed — two binary packages shipped changed code under a published version

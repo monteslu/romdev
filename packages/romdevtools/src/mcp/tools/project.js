@@ -2584,6 +2584,10 @@ TEMPLATES.atari7800 = {
 
 function pickRomExt(platform) {
   if (TEMPLATES[platform]) {
+    // A template that declares its own extension is the authority (sync32
+    // → .s32; the README/nextStep used to stamp `.bin` for it).
+    const declared = Object.values(TEMPLATES[platform]).find((t) => t && t.ext)?.ext;
+    if (declared) return declared;
     if (platform === "gbc") return ".gbc";
     if (platform === "gb")  return ".gb";
     if (platform === "nes") return ".nes";
@@ -3194,7 +3198,7 @@ ${buildBlock}
     snippetsCopied: withSnippets ? snippetFiles : null,
     sourceFile: path.join(projPath, mainFilename),
     toolchain: lang,
-    nextStep: `Build the scaffold AS-IS in one call: build({output:"project", platform:"${platform}", path:"${projPath}", outputPath:"<game>.<ext>"}) — it infers the toolchain/crt0/linker from the directory, no sourcesPaths/includePaths/linkerConfig needed. Then edit ${mainFilename} and re-run the same call. (build({output:"run", ...}) with a hand-specified sourcesPaths manifest is the alternative when you're compiling edited loose source instead of a project dir.)`,
+    nextStep: `Build the scaffold AS-IS in one call: build({output:"project", platform:"${platform}", path:"${projPath}", outputPath:"${path.join(projPath, name + pickRomExt(platform))}"}) — it infers the toolchain/crt0/linker from the directory, no sourcesPaths/includePaths/linkerConfig needed. Then edit ${mainFilename} and re-run the same call. (build({output:"run", ...}) with a hand-specified sourcesPaths manifest is the alternative when you're compiling edited loose source instead of a project dir.)`,
   };
 }
 

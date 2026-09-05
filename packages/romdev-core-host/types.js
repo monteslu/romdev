@@ -462,6 +462,9 @@ export const FACE_BUTTON_MAP = {
   c64:       { south: "b" },         // C64 joystick fire
   pce:       { east: "a", west: "b" },  // PC Engine pad: libretro A=button I, B=button II (Run=start, Select=select)
   msx:       { east: "a", west: "b" },  // MSX joystick: libretro A=trigger 1, B=trigger 2
+  // sync32: a SNES-shaped pad; s32core maps libretro a/b/x/y BY NAME onto
+  // S32_PAD_A/B/X/Y, so the spatial layout is the SNES one.
+  sync32:    { north: "x", east: "a", south: "b", west: "y" },
 };
 
 /**

@@ -32,6 +32,27 @@ import { randomUUID } from "node:crypto";
 export const SESSION_HEADER = "x-romdev-session";
 
 /**
+ * Optional tool ARGUMENT carrying the handle. Advertised on every tool's
+ * schema in the modern era (v2-adapter.js) and resolved before dispatch
+ * (server.js), never read by a handler.
+ */
+export const SESSION_ARG = "session";
+
+/** Per-client id Claude Code's claude.ai-proxy transport sends. */
+export const CLIENT_SESSION_HEADER = "x-mcp-client-session-id";
+
+/**
+ * The one line every result carries when the caller never NAMED its session
+ * (the key came from a mint or from connection affinity). It is the only
+ * surface a tool-calling agent is guaranteed to read, so it is where the
+ * handle has to live.
+ * @param {string} sessionKey
+ */
+export function sessionHandleNote(sessionKey) {
+  return `session: ${sessionKey} — this emulator is keyed to your connection; pass session:"${sessionKey}" on later calls to keep it if a call ever says "No ROM loaded" (a replaced connection starts empty).`;
+}
+
+/**
  * `_meta` key carrying an explicit session handle on a modern (2026-07-28)
  * request. Namespaced per the spec's `_meta` naming rules: reverse-DNS-ish
  * prefix, so it cannot collide with `io.modelcontextprotocol/*` keys.
@@ -49,9 +70,16 @@ export function mintSessionHandle() {
  *  1. an EXPLICIT handle -- `_meta["dev.romdev/sessionHandle"]` or the
  *     `x-romdev-session` header. Caller-controlled and transport-independent,
  *     so it keeps working when protocol sessions disappear.
- *  2. the TRANSPORT's id (`Mcp-Session-Id`), for legacy-era clients that do
+ *  2. the `session` TOOL ARGUMENT (`params.arguments.session` on a
+ *     tools/call) -- the form an agent can actually produce from inside a
+ *     tool call, and the spec's prescribed replacement for protocol sessions.
+ *  3. Claude Code's `x-mcp-client-session-id` header, when its transport
+ *     sends one.
+ *  4. the key bound to the caller's SOCKET on an earlier request
+ *     (connection affinity; server.js owns the binding).
+ *  5. the TRANSPORT's id (`Mcp-Session-Id`), for legacy-era clients that do
  *     not send a handle. This branch is what 2026-07-28 removes.
- *  3. a freshly minted handle, returned to the caller so it can pin
+ *  6. a freshly minted handle, returned to the caller so it can pin
  *     subsequent calls to the same session.
  *
  * `minted` tells the caller whether to advertise the handle back: a client
@@ -63,9 +91,11 @@ export function mintSessionHandle() {
  * @param {Record<string, any>} [src.meta]      request `_meta`, if any
  * @param {Record<string, any>} [src.headers]   request headers, if any
  * @param {string|null} [src.transportSessionId] id the transport bound, if any
- * @returns {{sessionKey: string, source: "handle"|"transport"|"minted", minted: boolean}}
+ * @param {Record<string, any>} [src.args]      tools/call `arguments`, if any
+ * @param {string|null} [src.socketKey]  key already bound to the caller's socket
+ * @returns {{sessionKey: string, source: "handle"|"argument"|"socket"|"transport"|"minted", minted: boolean}}
  */
-export function resolveSessionKey({ meta, headers, transportSessionId } = {}) {
+export function resolveSessionKey({ meta, headers, transportSessionId, args, socketKey } = {}) {
   const fromMeta = meta?.[SESSION_META_KEY];
   if (typeof fromMeta === "string" && fromMeta.length > 0) {
     return { sessionKey: fromMeta, source: "handle", minted: false };
@@ -74,6 +104,37 @@ export function resolveSessionKey({ meta, headers, transportSessionId } = {}) {
   const fromHeader = headers?.[SESSION_HEADER];
   if (typeof fromHeader === "string" && fromHeader.length > 0) {
     return { sessionKey: fromHeader, source: "handle", minted: false };
+  }
+
+  // The spec's own answer to "no protocol session": a handle passed back as
+  // an ORDINARY TOOL ARGUMENT. Every tool advertises an optional `session`
+  // (see v2-adapter.js); the value is resolved HERE, once, before dispatch,
+  // so no handler has to know it exists. This is the one form an agent can
+  // actually produce — it cannot set `_meta` or an HTTP header from a tool
+  // call, which is why the two branches above were unreachable from Claude
+  // Code and every request landed in a freshly minted session.
+  const fromArg = args?.[SESSION_ARG];
+  if (typeof fromArg === "string" && fromArg.length > 0) {
+    return { sessionKey: fromArg, source: "argument", minted: false };
+  }
+
+  // Claude Code's claude.ai-proxy transport stamps a per-client id. When it
+  // is present it is exactly the stable-per-process identity we want.
+  const fromClientHeader = headers?.[CLIENT_SESSION_HEADER];
+  if (typeof fromClientHeader === "string" && fromClientHeader.length > 0) {
+    return { sessionKey: fromClientHeader, source: "handle", minted: false };
+  }
+
+  // CONNECTION AFFINITY. A stateless client that names nothing still speaks
+  // over a keep-alive socket that is private to its process (measured: each
+  // Claude Code process holds its own persistent connection to this server).
+  // The server binds the key it minted for a socket's first request to that
+  // socket, so the next request on the same connection lands in the same
+  // session with zero effort from the agent. The handle is advertised back in
+  // every result so the agent can pin it (`session:"..."`) if the connection
+  // is ever replaced -- a new socket with no handle is a new session.
+  if (typeof socketKey === "string" && socketKey.length > 0) {
+    return { sessionKey: socketKey, source: "socket", minted: false };
   }
 
   if (typeof transportSessionId === "string" && transportSessionId.length > 0) {

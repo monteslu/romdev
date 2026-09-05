@@ -257,6 +257,26 @@ export const CAPABILITIES = {
     // debugger views the core exposes on top.
     memoryRegions: ["system_ram", "sync32_cpu_regs", "sync32_palette", "sync32_canvas", "sync32_sheet0"],
     renderingKind: "framebuffer", introspection: "shallow",
+    // The framebuffer region the flat-renderer naReasons point at (the shared
+    // text used to name `video_ram`, which this platform does not have).
+    framebufferRegion: "sync32_canvas",
+    // No cart(): a .s32 is an ELF-derived image with a 64-byte header, not a
+    // mapper-banked ROM — nothing to identify or patch as a "cart".
+    cartNa: "sync32 carts are ELF-derived .s32 images with a 64-byte header (title/id/api/video/mode), not a mapper-banked ROM — there is no board or mapper for cart() to identify or patch. build({platform:'sync32'}) reports the header fields it wrote.",
+    // The single most decision-relevant number on the platform, and it lived
+    // only in a linker script on disk: how many bytes an IMAGE may occupy.
+    // ram mode: text+rodata+data+bss all live in the 320KB game region minus
+    // the 16KB stack. xip mode: code+rodata execute from a 12MB flash slot and
+    // only data+bss count against the same RAM region (stack reservation is
+    // S32_STACK, default 16KB, raisable with linkOptions
+    // ['--defsym=S32_STACK=0x8000'] at the cost of your own RAM).
+    imageBudget: {
+      ram: { base: 0x20030000, imageBytes: 0x50000 - 0x4000, counts: "text+rodata+data+bss", stackBytes: 0x4000,
+             note: "everything in one 311296-byte region; the top 16KB is the stack" },
+      xip: { base: 0x10100000, imageBytes: 12 * 1024 * 1024, counts: "text+rodata (execute in place from flash)",
+             ramBase: 0x20030000, ramBytes: 0x50000 - 0x4000, ramCounts: "data+bss", stackBytes: 0x4000,
+             note: "code and rodata run from the flash slot; data+bss take the 311296-byte RAM region (stack default 16KB, S32_STACK)" },
+    },
     ops: {
       build: true, run: true, screenshot: true,
       // inspectSprites stays FALSE, and that is not a gap: it means OAM
@@ -436,10 +456,25 @@ export function naReason(platform, op) {
   const cap = CAPABILITIES[platform];
   if (!cap || cap.ops?.[op]) return null;            // supported → no N/A reason
   if (op === "cart") {
+    // The boilerplate said "disc-based" for every framebuffer platform —
+    // true of PlayStation, false of sync32 (a cartridge console whose carts
+    // simply have no mapper). A platform states its own reason when it has one.
+    if (cap.cartNa) return cap.cartNa;
     return cap.renderingKind === "framebuffer"
       ? "this platform is disc-based (no cartridge ROM to inspect/patch as a cart)."
       : null;
   }
-  if (NA_OPS.has(op)) return RENDERING_NA[cap.renderingKind] ?? null;
+  if (NA_OPS.has(op)) {
+    const text = RENDERING_NA[cap.renderingKind] ?? null;
+    // Name the framebuffer region THIS platform actually exposes; the shared
+    // text's `video_ram` is not in every framebuffer platform's region list.
+    if (text && cap.renderingKind === "framebuffer") {
+      const region = cap.framebufferRegion
+        ?? (cap.memoryRegions ?? []).find((r) => /canvas|video_ram|framebuffer|vram/.test(r))
+        ?? "video_ram";
+      return text.replace("memory({region:'video_ram'})", `memory({region:'${region}'})`);
+    }
+    return text;
+  }
   return null;
 }

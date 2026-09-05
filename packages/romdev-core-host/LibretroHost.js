@@ -186,6 +186,10 @@ export const PLATFORM_VIRTUAL_EXT = {
   msx:        ".rom",
   gametank:   ".gtr",
   pico8:      ".p8",
+  // sync32: the NODERAWFS core derives the cart's data directory from the
+  // path with its extension stripped, so an in-memory load's temp file must
+  // be `*.s32` for `<name>/` resources to resolve.
+  sync32:     ".s32",
 };
 import { RETRO_DEVICE_JOYPAD, ROMDEV_PIXEL_FORMAT_RGBA8888 } from "./retroConstants.js";
 import { decodeCode as decodeCheatCode } from "./gamegenie.js";

@@ -235,3 +235,61 @@ test("concurrent modern requests do not cross-wire sessions", async () => {
   assert.equal(outB.result.content[0].text, "agent-B",
     "each concurrent request must land in ITS OWN session");
 });
+
+// ── 2026-09-05: identity from INSIDE a tool call ─────────────────────────────
+// Claude Code 2.1.x speaks 2026-07-28 and sets neither `_meta` nor a header,
+// so every request minted a fresh session and a loaded ROM vanished on the
+// next call. The fix has two halves: the `session` tool argument (resolved by
+// the server before dispatch, advertised on every shaped tool), and the
+// server binding a minted key to the caller's socket. This pins the first.
+
+import { SESSION_ARG, sessionHandleNote } from "../src/mcp/session-key.js";
+
+function buildArgHandler(store) {
+  // Mirrors server.js: key resolved from the request body (here: the
+  // `session` argument), handler built per request, note when the caller
+  // never named the session.
+  return (body) => {
+    const args = body.method === "tools/call" ? body.params?.arguments : undefined;
+    const { sessionKey, minted } = resolveSessionKey({ meta: body.params?._meta, args });
+    const note = minted ? sessionHandleNote(sessionKey) : null;
+    if (args && SESSION_ARG in args) delete args[SESSION_ARG];
+    const handler = createMcpHandler(
+      () => {
+        const server = new McpServerV2({ name: "romdev-test", version: "0.0.1" }, { capabilities: { tools: {} } });
+        const wrapped = withV1ToolApi(server, { sessionParam: true, sessionNote: note });
+        wrapped.tool("put", "store", { v: z.string() }, async ({ v }) => { store.set(sessionKey, v); return { content: [{ type: "text", text: "stored" }] }; });
+        wrapped.tool("get", "read", { unused: z.string().optional() }, async () => ({ content: [{ type: "text", text: store.get(sessionKey) ?? "(empty)" }] }));
+        return server;
+      },
+      { legacy: "reject" },
+    );
+    return handler.fetch(modernRequest(body, body.params?.name ?? body.method)).then((r) => r.json());
+  };
+}
+
+test("the `session` ARGUMENT ties two stateless calls together with no _meta and no header", async () => {
+  const dispatch = buildArgHandler(new Map());
+  await dispatch(modernBody(1, "tools/call", { name: "put", arguments: { v: "from-arg", session: "jay-platformer" } }));
+  const got = await dispatch(modernBody(2, "tools/call", { name: "get", arguments: { session: "jay-platformer" } }));
+  assert.equal(got.result.content[0].text, "from-arg");
+  // An explicit handle gets no reminder line.
+  assert.equal(got.result.content.length, 1);
+});
+
+test("every shaped tool advertises `session` in tools/list", async () => {
+  const dispatch = buildArgHandler(new Map());
+  const list = await dispatch(modernBody(1, "tools/list", {}));
+  const put = list.result.tools.find((t) => t.name === "put");
+  assert.ok(put.inputSchema.properties.session, "session param present");
+  assert.match(put.inputSchema.properties.session.description, /stable slug/);
+  assert.ok(put.inputSchema.properties.v, "original params intact");
+});
+
+test("a call that names nothing is told the handle it was given", async () => {
+  const dispatch = buildArgHandler(new Map());
+  const r = await dispatch(modernBody(1, "tools/call", { name: "put", arguments: { v: "x" } }));
+  assert.equal(r.result.content.length, 2);
+  assert.match(r.result.content[1].text, /^session: [0-9a-f-]{36} — /);
+  assert.match(r.result.content[1].text, /pass session:"/);
+});

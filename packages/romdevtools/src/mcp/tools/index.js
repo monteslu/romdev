@@ -48,6 +48,7 @@ import { registerRunUntilTools } from "./run-until.js";
 import { registerWatchMemoryTools } from "./watch-memory.js";
 import { registerAddressToSymbolTools } from "./address-to-symbol.js";
 import { registerRecordTools } from "./record.js";
+import { registerFeedbackTools } from "./feedback.js";
 import { registerTileInspectTools } from "./tile-inspect.js";
 import { registerAssetTools } from "./assets.js";
 import { registerArtLoaderTools } from "./art-loaders.js";
@@ -135,7 +136,11 @@ function hostCapabilities(host) {
     // build scripts compile from, so it cannot drift from what actually ships.
     versions: toolchainVersions(),
   };
-  if (!host) return toolchains;
+  // Server-wide toolchain facts are NOT platform capabilities. They used to
+  // ride inside `capabilities` and a sync32 (Cortex-M33) status therefore
+  // reported cc65/da65 (6502) as things the loaded platform could do. They
+  // are returned under `toolchains` now; `capabilities` is host-scoped only.
+  if (!host) return { capabilities: {}, toolchains };
   const has = (m) => { try { return !!host[m]?.(); } catch { return false; } };
   // Native-runtime hosts (wasmcart/jsgame) expose a getCapabilities() descriptor
   // instead of the per-supported() methods. When present, surface its facts so an
@@ -154,17 +159,19 @@ function hostCapabilities(host) {
       }
     : {};
   return {
-    pcBreakpoint: has("pcBreakSupported"),       // breakpoint({on:'pc'})
-    watchpointExact: has("watchpointSupported"), // breakpoint({on:'write', precision:'exact'}) + condition filter
-    readWatch: has("readWatchSupported"),        // breakpoint({on:'read'})
-    rangeWatch: has("vramWatchSupported"),       // watch({on:'range'}) (VRAM-port trace)
-    registerWrite: has("setRegSupported"),       // register write + callSubroutine
-    registerSnapshot: has("regSnapSupported"),   // registersAtHit on a break
-    cheats: has("cheatsSupported"),              // cheats({op:'apply'}) via retro_cheat_set
-    diskImage: has("diskImageSupported"),        // C64 .d64 loadMedia
-    keyboard: has("keyboardSupported"),          // keyboard input (C64/MSX)
-    ...wasm,
-    ...toolchains,
+    capabilities: {
+      pcBreakpoint: has("pcBreakSupported"),       // breakpoint({on:'pc'})
+      watchpointExact: has("watchpointSupported"), // breakpoint({on:'write', precision:'exact'}) + condition filter
+      readWatch: has("readWatchSupported"),        // breakpoint({on:'read'})
+      rangeWatch: has("vramWatchSupported"),       // watch({on:'range'}) (VRAM-port trace)
+      registerWrite: has("setRegSupported"),       // register write + callSubroutine
+      registerSnapshot: has("regSnapSupported"),   // registersAtHit on a break
+      cheats: has("cheatsSupported"),              // cheats({op:'apply'}) via retro_cheat_set
+      diskImage: has("diskImageSupported"),        // C64 .d64 loadMedia
+      keyboard: has("keyboardSupported"),          // keyboard input (C64/MSX)
+      ...wasm,
+    },
+    toolchains,
   };
 }
 
@@ -259,7 +266,7 @@ const CATEGORIES = [
     name: "advanced",
     description: "Less common automation + MOTION/TELEMETRY tracing: runUntil (drive a ROM headlessly until a condition), watch({on:'mem', format:'series'}) (a compact value-vs-frame CURVE per byte — the primitive for velocity/scroll/sprite-position over time), runUntilWrite (step until target byte is written, return the PC), recordSession (hold/script input over N frames while sampling memory + screenshots into an analyzable timeline — use it to diagnose game-FEEL issues: choppy movement, scroll jumps, camera-vs-sprite desync, NOT just input macros).",
     useWhen: ["want to automate reaching a specific game state", "tracking down which code writes a specific RAM byte (gameplay variable hunting)", "diagnosing why movement/scrolling feels choppy or wrong — sample sprite X + scroll regs over frames with recordSession or watch series", "recording an input macro for regression testing"],
-    register: (s, z, k) => { registerRunUntilTools(s, z, k); registerWatchMemoryTools(s, z, k); registerRecordTools(s, z, k); registerRegressionTools(s, z, k); },
+    register: (s, z, k) => { registerRunUntilTools(s, z, k); registerWatchMemoryTools(s, z, k); registerRecordTools(s, z, k); registerRegressionTools(s, z, k); registerFeedbackTools(s, z, k); },
   },
 ];
 
@@ -297,7 +304,7 @@ export function registerTools(server, z, sessionKey) {
     "• op:'status' — a snapshot of the current session: which platform's core/ROM is in the running host (if any), current frame count, last-loaded media, loaded categories. Call this when you've lost context across many tool calls and want to re-ground.",
     {
       op: z.enum(["categories", "status"]).default("categories")
-        .describe("categories=tool-category catalog; status=live session snapshot (romdevVersion + serverPid/serverStartedAt/serverUptimeSeconds + host/platform/frameCount/media + a `capabilities` map of which debug ops the loaded core/toolchain implement — call this to check the running version, pick a working trace strategy before probing by failure, or DETECT a server restart: an unprompted restart discards every host/ROM/state, and a changed serverPid is how a session tells that apart from 'I never loaded a ROM')."),
+        .describe("categories=tool-category catalog; status=live session snapshot (romdevVersion + serverPid/serverStartedAt/serverUptimeSeconds + host/platform/frameCount/media + a `capabilities` map of which debug ops the LOADED core implements (platform-scoped) and a separate `toolchains` map of server-wide build/disasm toolchains + bundled versions — call this to check the running version, pick a working trace strategy before probing by failure, or DETECT a server restart: an unprompted restart discards every host/ROM/state, and a changed serverPid is how a session tells that apart from 'I never loaded a ROM')."),
     },
     safeTool(async ({ op = "categories" }) => {
       if (op === "status") {
@@ -383,7 +390,7 @@ export function registerTools(server, z, sessionKey) {
           // Which debug ops the loaded core + installed toolchain implement, so
           // an agent picks a working trace strategy up front instead of probing
           // by failure (~4 dead calls/session). v0.41.0 feedback #2 (002129).
-          capabilities: hostCapabilities(host),
+          ...hostCapabilities(host),
           playtestWindowOpen: human.windowOpen,
           ...(human.windowOpen
             ? {

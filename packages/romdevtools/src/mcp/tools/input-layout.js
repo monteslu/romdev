@@ -4,7 +4,21 @@
 
 import { FACE_BUTTON_MAP } from "romdev-core-host/types.js";
 
+// sync32's spatial face-button map ships in romdev-core-host >= 0.12.0. Fill
+// it in here for an older pinned host so input({op:'set', ports:[{east:true}]})
+// resolves instead of silently pressing nothing.
+if (!FACE_BUTTON_MAP.sync32) FACE_BUTTON_MAP.sync32 = { north: "x", east: "a", south: "b", west: "y" };
+
 const HARDWARE_LAYOUTS = {
+  sync32: {
+    register: "none — a game calls api->pad(port, &pad) and reads pad.buttons (uint16_t) + pad.lx/ly (int8_t sticks) + pad.connected",
+    protocol: "api-struct",
+    strobe: "No strobe and no register: the console polls the pad for you; api->pad() returns the state sampled for this frame.",
+    readSequence: "s32_pad_t pad; api->pad(0, &pad); if (pad.buttons & S32_PAD_A) jump(); — edge-detect yourself by keeping last frame's word (pressed = now & ~prev).",
+    bitOrder: ["UP 0x0001", "DOWN 0x0002", "LEFT 0x0004", "RIGHT 0x0008", "START 0x0010", "SELECT 0x0020", "L 0x0100", "R 0x0200", "A 0x1000", "B 0x2000", "X 0x4000", "Y 0x8000"],
+    note: "Bits are the S32_PAD_* constants in sync32.h (platform({op:'doc', platform:'sync32', name:'abi'})). The s32core libretro frontend maps by NAME, not position: libretro a→S32_PAD_A (0x1000), b→S32_PAD_B (0x2000), x→S32_PAD_X, y→S32_PAD_Y, l/r→S32_PAD_L/R, start/select/dpad→their bits. So input({op:'set', ports:[{a:true}]}) is what a cart reads as S32_PAD_A. Playtest window keyboard (the romdev default binding): arrows = dpad, Z = libretro b (S32_PAD_B), X = libretro a (S32_PAD_A), A = libretro y, S = libretro x, Q/W = l/r, Enter = start, RShift = select; ESC closes the window. Port 0..3 are the four pads; pad.connected==0 means nothing plugged in that port.",
+    faceButtons: FACE_BUTTON_MAP.sync32,
+  },
   nes: {
     register: "$4016 (port 1), $4017 (port 2)",
     protocol: "strobe-and-shift",
@@ -159,6 +173,11 @@ const LIBRETRO_JOYPAD_IDS = {
 // are protocol ids for setInput, NOT hardware bit positions. (Confusing
 // the two is a classic footgun.)
 const HARDWARE_BITS = {
+  sync32: { // the uint16 `buttons` word api->pad() fills; identical to sync32.h's S32_PAD_*
+    up: 0x0001, down: 0x0002, left: 0x0004, right: 0x0008,
+    start: 0x0010, select: 0x0020, l: 0x0100, r: 0x0200,
+    a: 0x1000, b: 0x2000, x: 0x4000, y: 0x8000,
+  },
   nes: { // 8-bit shift register; bit positions in the 8-bit keydown byte
     a: 0x80, b: 0x40, select: 0x20, start: 0x10,
     up: 0x08, down: 0x04, left: 0x02, right: 0x01,
@@ -212,6 +231,7 @@ const PHYSICAL_BUTTONS = {
   c64:       ["up", "down", "left", "right", "south"],
   pce:       ["up", "down", "left", "right", "east", "west", "start", "select"], // pad I/II + Run/Select
   msx:       ["up", "down", "left", "right", "east", "west"],                      // joystick + 2 triggers
+  sync32:    ["up", "down", "left", "right", "north", "east", "south", "west", "l", "r", "start", "select"], // + lx/ly analog on the same pad
 };
 
 /** op:'layout' on the `input` tool — platform input register format + physical buttons. */

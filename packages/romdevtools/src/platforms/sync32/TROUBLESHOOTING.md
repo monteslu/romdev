@@ -37,7 +37,52 @@ but not for C"** — you are passing driver options to `cc1`. It takes
 `-ffreestanding`, `-O2`, `-ffunction-sections`; it does not take
 `-nostartfiles`, `-Wl,…`, or `-T`.
 
+**`ld: warning: main.elf has a LOAD segment with RWX permissions`** — expected
+and harmless: a flat cart image IS one segment that is loaded, read and
+executed. romdev strips it from a successful build's log tail, as it does the
+WASM host's `warning: unsupported syscall: __syscall_prlimit64` (cc1 probing
+for a memory limit the host does not implement — one line per translation
+unit, meaning nothing). Neither is a diagnostic.
+
+**`multiple definition of \`game_main'`** from `build({output:'project'})` —
+the directory holds two entry points (the game and, say, an `asset_check.c`
+verification harness), and a project build treats every `.c` as a translation
+unit. Keep the harness; pass `exclude: ['asset_check.c']` (names or globs) and
+it stays out of the link. Swap the exclusion to build the harness instead.
+
+**Headers shared with another target live outside the project dir** — pass
+`includeDirs: ['/abs/shared']`. `includePaths` is an exact virtual-name → file
+*map*, not a search path, so a forgotten entry surfaces as a plain
+`foo.h: No such file or directory`; `includeDirs` stages a whole tree keyed by
+relative path.
+
 ## Running
+
+**`build({output:'run'})` refuses the cart (`retro_load_game returned false`)
+but `build({output:'rom', outputPath})` + `loadMedia({path})` runs it** — that
+was a romdev bug through 0.135.1: the s32core is a NODERAWFS build (it
+`fopen()`s the cart by real path and streams `<name>/` off disk), and the run
+path did not tell the host so, so the in-memory bytes were never spilled to a
+temp file. Fixed in 0.136.0 — `output:'run'` is the documented first step of a
+fork again. If you see it on a newer server, the cart really is refused: check
+the header (`SY32`, 64 bytes) and that `mode` matches the linker script.
+
+**`loadMedia` says `loaded:true` and the very next call says "No ROM
+loaded"** — your calls are landing in different sessions. On a 2026-07-28 MCP
+client (Claude Code 2.1.x) the server keys a session to your connection and
+every result ends with a `session: <id>` line; pass `session:"<id>"` on later
+calls (or your own stable slug from the start) and the emulator stays put.
+Over plain HTTP send the same `x-romdev-session` header on every call AND
+reuse the `Mcp-Session-Id` from one `initialize` — re-initializing per call
+mints a fresh session even with the header set, which is how a second playtest
+window gets opened with the first one orphaned.
+
+**Sprites have transparent holes, or a solid box around them** — index 0 is
+the global transparent key for `sprite()`. Holes mean your quantizer put a real
+colour into slot 0; a box means your transparent pixels landed on some other
+index. Reserve index 0 for transparency and start art colours at 1
+(`encodeArt({stage:'tiles', platform:'sync32'})` reserves it by default; pass
+`baseIndex` to place a bank higher up).
 
 **A colour renders as the wrong colour** (a grey road comes out blue, a green
 court comes out black) — `rect()`/`clear()` snap to the **nearest palette
@@ -84,6 +129,17 @@ if (space > 0) api->audio_push(buf, space < have ? space : have);
 ```
 
 ## Tooling
+
+**"How many bytes may my image be?"** — `platform({op:'capabilities',
+platform:'sync32'})` reports `imageBudget` per mode (ram: 311 296 bytes for
+text+rodata+data+bss; xip: 12 MB flash for code+rodata plus the same 311 296
+for data+bss). It is the linker script's number, not an estimate.
+
+**"Which key jumps in the playtest window?"** — `input({op:'layout',
+platform:'sync32'})`: the `S32_PAD_*` bits, the libretro name mapping (s32core
+maps a/b/x/y BY NAME, so `{a:true}` is `S32_PAD_A`), and the window's keyboard
+binding (Z = libretro b = `S32_PAD_B`, X = libretro a = `S32_PAD_A`, arrows =
+d-pad, Enter = START, RShift = SELECT).
 
 **`frame({op:'verify'})` says "nearlyBlank" on a game that looks fine** — the
 check flags a screen that is >92% one colour, which is tuned for tilemap

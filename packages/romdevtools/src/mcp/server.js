@@ -70,7 +70,7 @@ import { z } from "zod";
 import { registerTools } from "./tools/index.js";
 import { stopAllPlaytest, stopPlaytestForSession, isPlaytestRunning } from "./tools/playtest.js";
 import { clearHost, reapIdleHosts, setHostProtectedPredicate } from "./state.js";
-import { resolveSessionKey, SESSION_META_KEY, rememberMinted } from "./session-key.js";
+import { resolveSessionKey, SESSION_META_KEY, SESSION_ARG, rememberMinted, sessionHandleNote } from "./session-key.js";
 import { AGENT_META_KEY, setSessionAgent } from "./agent-identity.js";
 import { createMcpHandler, isLegacyRequest, McpServer as McpServerV2 } from "@modelcontextprotocol/server";
 import { toNodeHandler, toWebRequest } from "@modelcontextprotocol/node";
@@ -400,13 +400,17 @@ async function main() {
   // request (verified: 3 requests, 3 factory calls), so this adds a handler
   // object per request and nothing more -- and there is no shared mutable
   // state left to race on.
-  const buildModernHandler = (sessionKey) => toNodeHandler(createMcpHandler(
+  // socket -> sessionKey for callers that never name their session. A WeakMap
+  // so a closed connection takes its binding with it; the HOST behind the key
+  // is owned by state.js and reaped on idle exactly as before.
+  const socketSessions = new WeakMap();
+  const buildModernHandler = (sessionKey, sessionNote) => toNodeHandler(createMcpHandler(
     () => {
       const server = new McpServerV2(
         { name: "romdev", version: PKG_VERSION },
         { capabilities: { tools: {} }, instructions },
       );
-      const wrapped = withV1ToolApi(server);
+      const wrapped = withV1ToolApi(server, { sessionParam: true, sessionNote });
       installObserverMiddleware(wrapped, sessionKey);
       registerTools(wrapped, z, sessionKey);
       return server;
@@ -431,25 +435,42 @@ async function main() {
       if (!legacy) {
         // Resolve identity from the request the factory cannot see: an
         // explicit handle in `_meta`, else the x-romdev-session header, else
-        // a minted one. Without this every stateless request would land in a
-        // fresh empty session and no ROM would ever stay loaded.
-        const { sessionKey, minted } = resolveSessionKey({
+        // the `session` tool argument, else the key already bound to this
+        // SOCKET, else a minted one that we bind to the socket for next time.
+        // Without the last two, every stateless request from a client that
+        // names nothing (Claude Code, 2.1.x) landed in a fresh empty session
+        // and no ROM ever stayed loaded past the call that loaded it.
+        const args = req.body?.method === "tools/call" ? req.body?.params?.arguments : undefined;
+        const { sessionKey, source, minted } = resolveSessionKey({
           meta: req.body?.params?._meta,
           headers: req.headers,
+          args,
+          socketKey: req.socket ? socketSessions.get(req.socket) : undefined,
         });
-        // A minted key is one the caller CANNOT send back, so its next request
-        // gets a different session and its ROM appears to vanish. Remember it
-        // so the "No ROM loaded" path can name the real cause (and the fix)
-        // instead of telling an agent that just called loadMedia to call it
-        // again. See resolveSessionKey/rememberMinted.
-        if (minted) rememberMinted(sessionKey);
+        // A minted key is one the caller CANNOT send back BY ITSELF, so bind
+        // it to the connection: the next request on this socket resolves to
+        // the same key. The handle is also advertised in every result so the
+        // agent can pin it with `session:"…"` should the connection change.
+        if (minted) {
+          rememberMinted(sessionKey);
+          if (req.socket) socketSessions.set(req.socket, sessionKey);
+        }
+        // The caller never named this session (minted now, or inherited from
+        // the socket): tell it the handle in every result. An explicit handle
+        // (meta / header / argument) gets no reminder.
+        const sessionNote = (minted || source === "socket") ? sessionHandleNote(sessionKey) : null;
+        // An explicit `session` argument is resolved above and must not reach
+        // the schema validator as an unknown key on tools that predate it.
+        if (args && typeof args === "object" && SESSION_ARG in args) {
+          delete args[SESSION_ARG];
+        }
         // Same cooperative attribution as the REST path: a stateless request
         // has no connection to group sessions by, so the agent says who it
         // is in _meta if it wants fair treatment at the caps.
         setSessionAgent(sessionKey, req.body?.params?._meta?.[AGENT_META_KEY]);
         // Pass the parsed body: express already consumed the stream, so the
         // handler cannot re-read it (a raw re-read yields a JSON parse error).
-        return buildModernHandler(sessionKey)(req, res, req.body);
+        return buildModernHandler(sessionKey, sessionNote)(req, res, req.body);
       }
 
       const sid = req.headers["mcp-session-id"];
@@ -573,6 +594,12 @@ async function main() {
   // explicit non-loopback HOST, show exactly what was bound.
   const bannerHost = isDefaultLoopback ? "localhost" : host;
   const httpServer = app.listen(port, bindHosts[0]);
+  // A modern (2026-07-28) client's session is keyed to its keep-alive
+  // connection when it names nothing, so an idle connection must outlive the
+  // minutes an agent spends thinking between tool calls. Node's 5 s default
+  // would replace the socket -- and the session -- on almost every call.
+  httpServer.keepAliveTimeout = 30 * 60 * 1000;
+  httpServer.headersTimeout = httpServer.keepAliveTimeout + 5000;
   // FAIL LOUDLY on a bad bind (commonly: port already in use). The primary
   // listener's 'error' event would otherwise be unhandled — and because
   // app.listen()'s success callback fires before the async EADDRINUSE arrives,
@@ -614,6 +641,8 @@ async function main() {
   const extraServers = [];
   for (const h of bindHosts.slice(1)) {
     const s = app.listen(port, h);
+    s.keepAliveTimeout = httpServer.keepAliveTimeout;
+    s.headersTimeout = httpServer.headersTimeout;
     // A missing IPv6 stack shouldn't take the server down — log and move on.
     s.on("error", (e) => log.debug(`[mcp] secondary bind ${h}:${port} skipped: ${e.code || e.message}`));
     extraServers.push(s);

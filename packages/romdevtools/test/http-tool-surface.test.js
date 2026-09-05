@@ -65,9 +65,10 @@ test("observer `call` event carries the loaded platform/system (livestream shows
 test("registry harvests the full consolidated tool surface with handler + schema", () => {
   const reg = buildToolRegistry(randomUUID());
   // Don't hardcode the count (it shifts as tools consolidate — e.g. dmaTrace→
-  // watch({on:'dma'}), patchGbHeader→romPatch({op:'gbHeader'})). Just guard the
+  // watch({on:'dma'}), patchGbHeader→romPatch({op:'gbHeader'}); 0.136.0 added
+  // `feedback` and hit the old 35 ceiling). Just guard the
   // budget ceiling the manifest test owns, and a sane floor.
-  assert.ok(reg.size >= 28 && reg.size <= 35, `tool count ${reg.size} outside the consolidated 28..35 range`);
+  assert.ok(reg.size >= 28 && reg.size <= 40, `tool count ${reg.size} outside the consolidated 28..40 range`);
   for (const [name, t] of reg) {
     assert.equal(typeof t.handler, "function", `${name} has a handler`);
     const js = toolJsonSchema(t.inputSchema);

@@ -142,7 +142,7 @@ export function humanCoDriveWarning(sessionKey) {
     "emulator. While they press, the window's input overwrites yours each tick (the human wins), and its " +
     "real-time 60fps loop races your frame-stepping (non-deterministic results). Either host({op:'pause'}) " +
     "while you inspect (the window keeps rendering, frozen), do deterministic work in a SECOND session " +
-    "(a different x-romdev-session header = a fully isolated emulator), or wait for the human to stop."
+    "(a different `session` argument, or x-romdev-session header over HTTP = a fully isolated emulator), or wait for the human to stop."
   );
 }
 
@@ -609,7 +609,7 @@ export function registerPlaytestTools(server, z, sessionKey) {
     "your frame({op:'step'}).) You'll KNOW: frame/input responses carry `humanCoDriveWarning` while the human " +
     "pressed within ~2s, and catalog({op:'status'})/playtest({op:'status'}) expose `humanInputActive`. To inspect " +
     "a moving state freeze it first: host({op:'pause'}) → read → host({op:'resume'}); for deterministic stepping " +
-    "while the human plays, use a SECOND session (different x-romdev-session = fully isolated emulator). " +
+    "while the human plays, use a SECOND session (a different `session` argument — or x-romdev-session header over HTTP — = a fully isolated emulator; the first window stays bound to the session that opened it). " +
     "Requires @kmamal/sdl. `scale`/`title`/`aspect` shape the window.\n" +
     "• op:'stop' — close THIS session's window (the host stays loaded; other agents' windows unaffected).\n" +
     "• op:'status' — is a window open, what ROM/frame it shows, and `activeHostMatchesWindow` (false = a build/" +
