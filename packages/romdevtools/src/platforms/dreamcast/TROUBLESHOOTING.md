@@ -34,6 +34,13 @@ lists are submitted + sorted per tile. Submitting polys to the wrong list type, 
 finalizing the list, drops them. Use KOS's `pvr_*` list API (it orders this correctly)
 rather than hand-encoding TA commands.
 
+## "decompile: which address space?"
+
+`disasm({target:'decompile'})` loads the image at its load address (the ELF
+`PT_LOAD` vaddr, or 0x8C010000 for a flat binary) — `provenance.loadedAt`
+and `analysisAddressSpace:"absolute"` say so — so absolute references resolve
+during analysis. PC-relative loads (below) are a separate matter.
+
 ## "disasm/decompile returns junk addresses on a multi-function program"
 
 SH-4 decompiles well, but it uses **PC-relative loads** (`mov.l @(disp,PC)`) heavily,

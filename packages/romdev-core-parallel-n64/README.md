@@ -29,3 +29,19 @@ Built reproducibly by `scripts/build-parallel-n64.sh` in the romdev repo.
 The `.wasm` is gitignored and shipped to npm via the package's `files` allowlist.
 
 License: GPL-2.0-or-later (inherits ParaLLEl-N64's license).
+
+## 0.3.0 — the debug hooks work
+
+Through 0.2.0 `romdev_pcbreak_set` / single-step / the PC coverage log never
+fired on this core: the hook was wired only into the pure interpreter (which
+this wasm build cannot boot — it faults into the exception vector) and a hit
+set `stop = 1`, which ended the emulation loop for good. 0.3.0 hooks the
+CACHED interpreter's instruction loop (the default CPU here; the build is
+NO_LIBCO, single-threaded) and a hit does `retro_return(0); break;` — the
+frame ends with the CPU stopped AT the hit PC and the next `retro_run`
+resumes there. `breakpoint({on:'pc'})`, `frame({op:'stepInstructions'})`,
+`watch({on:'pc'})` and the new exact PC coverage bitmap
+(`romdev_covbits_set/get`, host `logPCBitmap`) are real on N64 now. Measured
+on a commercial ROM: single-step advances 0x80000184 → 0x80000188 → …, an
+osRecvMesg break hits with a0/a1/ra readable, 5 frames log 759,452 executed
+instructions / 32,140 distinct PCs in 24 ms.

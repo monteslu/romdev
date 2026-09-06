@@ -82,3 +82,15 @@ endian libs, then `wrapN64Rom` produces the bootable image. `#include` the bundl
 - No custom RSP microcode path (glide64 HLEs the standard F3DEX-style display lists).
 - No real-hardware Expansion Pak detection beyond the standard 4/8 MB split.
 - `renderingContext` is N/A (3D, no tile VDP).
+
+## Reverse engineering and matching decompilation
+
+`disasm({target:'decompile', platform:'n64', address, project})` resolves the
+address through a registered splat project's segment map (a relocated code
+segment or an overlay is NOT where the header's entry formula says), loads
+that segment at its true VA and names the project's symbols; without
+`project` it falls back to the boot-segment formula and says so in
+`provenance.warning`. The full matching loop — the project's own IDO/GCC,
+compile-and-compare with one aggregate verdict, permuter search, integrate
+with full-ROM verify, live trace/coverage (real PC breaks since core 0.3.0)
+— is `decomp({op})`: read `platform({op:'doc', platform:'n64', name:'decomp'})`.

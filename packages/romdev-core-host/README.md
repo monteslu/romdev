@@ -149,3 +149,13 @@ Node >= 24, ESM only. For a ready-made SDL window over this host (keyboard
 For the full agent tooling surface (MCP server, build toolchains,
 disassembly, playtest) see
 [`romdevtools`](https://www.npmjs.com/package/romdevtools).
+
+## 0.13.0 — exact PC coverage bitmap
+
+`pcBitmapSupported()` / `logPCBitmap(lo, hi, frames)`: on a core built with
+the 0.13.0 shared debug lib (`romdev_covbits_set/get`), run `frames` frames
+recording EVERY executed PC in `[lo, hi)` as one bit per instruction word —
+O(1) per instruction, no distinct-PC cap — and return `{pcs, distinct,
+total, words}`. `logPCRange` (the 8192-entry distinct ring) remains for older
+core builds. Shipped in romdev-core-parallel-n64 0.3.0; the other cores pick
+it up on their next rebuild.

@@ -58,7 +58,7 @@ via the voice registers. The helper lib has a minimal tone path.
 ## MCP debug & inspection tooling — current state
 
 - **`memory({op:'read', region:'system_ram'})`** — main RAM. ✅
-- **`disasm` / `decompile`** — MIPS via rizin/Ghidra. ✅ (R3000A `jal` targets are
+- **`disasm` / `decompile`** — MIPS via rizin/Ghidra; `decompile` loads the PS-EXE at its `t_addr` (or a splat psx project's segment at its VA with `project`/`splatYaml`), so calls, globals and jump tables resolve during analysis and `provenance` says `loadedAt`. ✅ (R3000A `jal` targets are
   absolute VAs — the analysis buffer is base-aligned so call-following works; see
   TROUBLESHOOTING if a fixed-VA image misbehaves.)
 - **`frame({op:'verify'})` / screenshot** — render-health + capture. ✅
@@ -83,3 +83,12 @@ the LE side), then `wrapPsExe` produces the bootable PS-EXE. `#include` the bund
 - No CD-ROM/XA/streaming or MDEC video.
 - `breakpoint`/`watch` not yet (need interpreter-step hooks; cpuState/audioDebug ARE wired).
 - `renderingContext` is N/A (3D GPU, no tile VDP).
+
+## Matching decompilation
+
+`decomp({op})` is parameterized for splat **psx** projects (little-endian
+words, `-march=r3000 -EL`, MIPS GCC, m2c `mips-gcc-c`, permuter `gcc`) but
+has NOT been run on a real PS1 checkout yet: `import` records
+`platformVerified:false` and the capability manifest keeps `decomp:false`
+for ps1 until a known-matching PS1 function compares exact through it. The
+loop itself is documented at `platform({op:'doc', platform:'n64', name:'decomp'})`.
