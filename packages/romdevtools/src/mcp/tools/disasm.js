@@ -5,6 +5,30 @@ import nodePath from "node:path";
 import { jsonContent, safeTool, writeOutput } from "../util.js";
 import { parseSymbols, buildSymbolMap } from "../../toolchains/common/symbols.js";
 import { registersForPlatform } from "../../platforms/common/registers.js";
+import { CAPABILITIES } from "../../cores/capabilities.js";
+
+/**
+ * Platforms the `platform` argument accepts. The capability manifest is the
+ * source of truth: every platform with ops.disasm or ops.decompile is here
+ * (pico8 is the one non-manifest entry: target:'source' reads a .p8 cart).
+ * test/disasm-platform-contract.test.js ties this list to the manifest.
+ */
+export const DISASM_PLATFORMS = [...new Set([
+  ...Object.keys(CAPABILITIES).filter((p) => CAPABILITIES[p]?.ops?.disasm || CAPABILITIES[p]?.ops?.decompile),
+  "pico8",
+])];
+
+/** Which disasm targets each capability tier implements. */
+export function supportsDisasmTarget(platform, target) {
+  const c = CAPABILITIES[platform];
+  if (!c) return platform === "pico8" ? target === "source" : false;
+  const reEngine = new Set(["functions", "cfg", "xrefs", "decompile"]);
+  if (c.tier === "mips" || c.tier === "sh") {
+    if (reEngine.has(target)) return target === "decompile" ? !!c.ops.decompile : !!c.ops.disasm;
+    return false; // bytes/rom/project/references are the 8/16-bit reassembly pipeline
+  }
+  return target === "decompile" ? !!c.ops.decompile : !!c.ops.disasm;
+}
 import { findReferencesCore } from "./find-references.js";
 import { analyzeCfg, analyzeXrefs, analyzeFunctions, analyzeDecompile } from "../../analysis/analyze.js";
 import { recompileNesToSnes, sliceFirstRoutine } from "../../analysis/recompile-65816.js";
@@ -1926,7 +1950,7 @@ export function registerDisasmTools(server, z) {
       // shared
       path: z.string().optional().describe("target=bytes: raw binary path. target=rom/project/references: ROM file path."),
       base64: z.string().optional().describe("target=bytes: base64 of the bytes (OR `path`)."),
-      platform: z.enum(["nes", "snes", "sms", "gg", "gb", "gbc", "atari2600", "atari7800", "c64", "genesis", "gba", "pce", "msx", "lynx", "pico8"]).optional().describe("target=rom/project/references: override platform (else sniffed from extension). target=source: pico8 (.p8 carts are Lua source)."),
+      platform: z.enum(DISASM_PLATFORMS).optional().describe("target=rom/project/references: override platform (else sniffed from extension). target=source: pico8 (.p8 carts are Lua source). n64/ps1/dreamcast: functions/cfg/xrefs/decompile (the MIPS/SH-4 RE engine); their bytes/rom/project/references targets are not implemented and return a capability error."),
       startAddress: z.number().int().min(0).max(0xffffffff).default(0x8000).describe("target=bytes/rom: address of the first byte (GBA auto-bumped to 0x08000000)."),
       length: z.number().int().min(1).max(65536).optional().describe("target=rom: bytes to disassemble (default 256; mutually exclusive with endAddress)."),
       addOrigin: z.boolean().default(true).describe("target=bytes/rom: prepend `.org` so the asm re-assembles through ca65."),
@@ -1972,6 +1996,9 @@ export function registerDisasmTools(server, z) {
       grammar: z.record(z.string(), z.any()).optional().describe("target=script: the declarative bytecode grammar. {endian?, recordPrefix?: [field...], opcode?: {type}, commands: {'<opcode>': {name, fields?: [field...], stop?, chain?: '<fieldName>'}}, unknownOpcode?: 'stop'|'error'}. field = {name, type: u8|i8|u16|i16|u24|u32, if?: {field, mask?, eq|ne}, default?, pointer?, repeat?: {count: '<field>'|N} | {until: {name, type, gte|eq}}, fields?: [...]}. `if` reads already-decoded fields ((value & mask) vs eq/ne) so flag-gated layouts ('bit 7 set = delay omitted') are one line; `default` records the implied value when the condition fails. repeat.until reads the leading field each iteration and ends the list (terminator consumed) when it trips."),
       fileOffset: z.number().int().optional().describe("target=script: raw file offset of the script start (alternative to `address`, which maps through the platform's banking)."),
       maxRecords: z.number().int().optional().describe("target=script: decode cap (default 256)."),
+      project: z.string().optional().describe("target=decompile, n64: a decomp-registered project id (decomp({op:'import'})) — the VA is resolved through the project's splat segment map (relocated segments + overlays) and the output is symbolized with the project's names. Without it the header-entry formula is used, which maps ONLY the boot segment (the result says so)."),
+      splatYaml: z.string().optional().describe("target=decompile, n64: path to a splat yaml to use for segment mapping when no project is registered."),
+      segment: z.string().optional().describe("target=decompile, n64: segment name to disambiguate an overlay VA (the error for an ambiguous VA lists the candidates)."),
       projectDir: z.string().optional().describe("target=sourceLookup (or target='source', which routes here when this is set): the disasm PROJECT root (the dir with your annotated .asm/.s files). Searched recursively."),
       context: z.number().int().min(0).max(20).optional().describe("target=sourceLookup: source lines of context each side of a hit block (default 2)."),
       window: z.number().int().min(0).max(64).optional().describe("target=accessScan: how far below the target an indexed/pointer BASE may sit and still count as reaching it (default 2 — catches base-1/base-2 index-from-1 loops; the target's page base $xx00 is always checked too)."),
@@ -1982,6 +2009,17 @@ export function registerDisasmTools(server, z) {
       reverseHandler: z.number().int().min(0).max(0xFFFF).optional().describe("target=pointerTable: also report which dispatch INDEX/indices land on this handler address (reverse lookup — 'what state triggers this routine?')."),
     },
     safeTool(async (args) => {
+      // Capability gate: a platform that names itself (or is sniffed from the
+      // ROM path) only gets the targets its tier implements. The 8/16-bit
+      // reassembly pipeline (bytes/rom/project/references) is not the MIPS/SH
+      // RE engine, and the error must say so instead of failing deep inside.
+      {
+        const gp = args.platform ?? (args.path && /\.(z64|n64|v64|exe|psexe|bin|elf)$/i.test(args.path) ? sniffPlatformFromPath(args.path) : null);
+        const tier = gp ? CAPABILITIES[gp]?.tier : null;
+        if (gp && (tier === "mips" || tier === "sh") && !supportsDisasmTarget(gp, args.target)) {
+          throw new Error(`disasm({target:'${args.target}'}) is not implemented for ${gp} (${tier.toUpperCase()} tier): its RE engine offers target:'functions' | 'cfg' | 'xrefs' | 'decompile'. bytes/rom/project/references are the 8/16-bit reassembly pipeline.`);
+        }
+      }
       switch (args.target) {
         case "bytes":      return await disassembleCore(args);
         case "rom":        return await disassembleRomCore(args);
@@ -1999,7 +2037,11 @@ export function registerDisasmTools(server, z) {
         case "cfg":        return jsonContent(await analyzeCfg(requireRomPath(args), args.address, args.platform));
         case "xrefs":      return jsonContent(await analyzeXrefs(requireRomPath(args), args.address, args.platform));
         case "functions":  return jsonContent(await analyzeFunctions(requireRomPath(args), args.platform, { topN: args.topN, minSize: args.minSize }));
-        case "decompile":  return jsonContent(await analyzeDecompile(requireRomPath(args), args.address, args.platform, args.bank ?? null));
+        case "decompile": {
+          const p = args.platform ?? sniffPlatformFromPath(requireRomPath(args));
+          if (p && !supportsDisasmTarget(p, "decompile")) throw new Error(`disasm({target:'decompile'}) is not available on ${p}: ${CAPABILITIES[p]?.ops?.decompile === false ? "the capability manifest says decompile:false" : "no decompiler backend"}.`);
+          return jsonContent(await analyzeDecompile(requireRomPath(args), args.address, args.platform, args.bank ?? null, { project: args.project, splatYaml: args.splatYaml, segment: args.segment }));
+        }
         case "source": {
           // The v0.98.0 headline asked for disasm({target:'source', projectDir,
           // startAddress, endAddress}) -- "show me MY OWN commented source for

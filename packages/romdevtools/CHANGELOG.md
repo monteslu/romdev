@@ -4,6 +4,119 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.137.0 — 2026-09-06
+
+The matching-decompilation round (the Wave Race 64 handoff: "accelerate
+matching decompilation"). A new `decomp` domain tool runs the function-level
+generate → compile → compare → refine loop against a registered project's
+OWN compiler and build system; the N64 decompile path gets segment-exact
+addressing with provenance.
+
+### Fixed — P0 correctness
+
+- `disasm.platform` accepts every platform the capability manifest says has
+  disasm/decompile: `n64`, `ps1`, `dreamcast` were inferred from the file
+  extension and REJECTED when named explicitly. The enum is now derived from
+  the manifest (`DISASM_PLATFORMS`) and `test/disasm-platform-contract.test.js`
+  ties the MCP/HTTP schema to it. Unsupported target/platform pairs (the
+  8/16-bit reassembly targets on a MIPS/SH platform) return a capability
+  error instead of falling through.
+- N64 decompile mapped EVERY address with the boot-segment formula
+  `fileOff = va - entry + 0x1000`. A relocated code segment or an overlay
+  resolved to wrong bytes that still lay inside the 8 MiB image, so the bounds
+  check never fired (Wave Race codeseg 0x801DAFA0 → 0x1957A0 instead of
+  0xA95D0; the decompiler then reported "bad instruction data" on zeros).
+  `disasm({target:'decompile', platform:'n64', project|splatYaml, segment})`
+  now resolves through the splat segment map, analyzes ONLY that segment's
+  bytes at segment-relative offsets (no dense image up to 0x80000000), and
+  returns `provenance` (requested/resolved VA, segment, ROM offset, byte-order
+  normalization, sha1 + preview of the analyzed bytes). An overlay VA is
+  refused with the candidate segments — never guessed. Without a map the
+  formula is still used and `provenance.warning` says exactly what it cannot
+  map.
+- Decompiled output is symbolized with the project's names: Ghidra's
+  raw-at-0 `FUN_/DAT_/LAB_` labels and region-0 `jal` targets are rebased to
+  VAs and swapped for linker-map/symbol_addrs names (`symbols` reports how
+  many resolved). Every decompile result now says `kind:'pseudocode'` — it is
+  for understanding and is never matching evidence.
+
+### Added — `decomp`, the matching loop (P1)
+
+- `decomp({op:'import', project, root})` registers a splat project: yaml
+  auto-detected, base-ROM sha1 verified against the yaml, byte order and
+  header read, IDO/binutils/python fingerprinted (content hashes + the
+  ido-static-recomp commit), git state recorded, the full-build command
+  captured. Nothing in the checkout is modified. The durable workspace is
+  `~/.romdev/decomp/<project>/`.
+- `op:'resolve'` — symbol or VA → segment, ROM offset, size, TU + line, state
+  (asm/C), target asm, the object, a sha1 + preview of the ROM bytes, and
+  whether the extracted asm agrees with the map. Overlays need `segment`.
+- `op:'context'` — the TU preprocessed with the build's own include paths and
+  defines (GLOBAL_ASM stripped), cached by a hash of the TU, every header it
+  pulls in (`gcc -MM`) and the compile fingerprint, so a header edit
+  invalidates it.
+- `op:'generate'` — m2c (`mips-ido-c`, pinned commit) with that context.
+  Reports the declarations m2c invented, type hypotheses with offsets and
+  their evidence, the prototype the context declared (placeholder `u8*`/`void*`
+  parameters are flagged: m2c honours them and the draft cannot compile), and
+  stores the draft as a candidate file — never in the source.
+- `op:'compare'` — THE operation. The candidate is spliced into its real TU
+  (replacing the pragma, or an existing definition) in an isolated work dir
+  and compiled with the exact per-object invocation captured from
+  `make --dry-run` (the Makefile's per-file `-O`/`-mips` exceptions intact).
+  Three independent verdicts: `exactFunctionMatch` (every word AND every
+  relocation type+symbol+addend equal to the target assembled from the
+  extracted asm), `romLinked.status` (the candidate's words linked with the
+  project's symbol addresses vs the base ROM bytes at the resolved offset —
+  independent of the asm; also the target when no asm exists), and
+  `verification.translationUnit` (every OTHER function in the TU's object
+  unchanged, section sizes reported). Plus a documented distance
+  (`levenshtein-instructions-v1`) for ranking, classified difference kinds
+  (register-allocation / immediate / branch-target / relocation-target /
+  stack-frame / instruction-count / instruction-scheduling / unclassified
+  with the raw pairs), changed ranges, an inline diff preview and full
+  artifacts (build log, diff JSON/text, stored candidate). Results are cached
+  by dependency hash + candidate sha; a compile failure has no distance and
+  carries the compiler diagnostics (plus the host syntax check's clearer
+  message).
+- `op:'integrate'` — a unified patch for the TU (reviewable); `apply:true`
+  applies it, runs the project's full build and compares the ROM sha1,
+  restoring the TU on mismatch. `op:'verify'` = the full build + sha1 alone.
+
+### Added — throughput and honesty (P2)
+
+- `op:'search'` — a bounded decomp-permuter job (pinned commit) built WITHOUT
+  import.py touching the tree: base.c is the real TU preprocessed with the
+  candidate spliced in, target.o is romdev's assembled target, compile.sh is
+  the captured IDO invocation. Time/thread budget, seed, detached process,
+  `op:'job'` status/best/cancel, `resumeFrom:<jobId>` seeds a new search from
+  a job's best. Status is `complete-zero` / `complete-budget` / `cancelled` /
+  `failed` — "budget exhausted" is never reported as decompiled, and a zero
+  score still has to pass `compare`.
+- `op:'progress'` — code bytes per object from the linker map (a function is
+  asm when its `.NON_MATCHING` twin exists); game code, libultra and
+  handwritten-asm subsegments reported apart; GLOBAL_ASM function vs data
+  references counted with the conditional-block caveat;
+  `builtRomMatchesBase` explicitly NOT a completion claim.
+- `op:'candidates'` — every compared candidate for a function with its
+  verdicts, sorted by distance.
+
+### Added — runtime (P3, narrow)
+
+- `op:'smoke'` — base ROM vs rebuilt ROM on the pinned core in two isolated
+  sessions with an identical input script: decoded RGB compared per pixel,
+  CPU register file compared at the end, PNGs + report on disk, and a
+  coverage sentence that says it is a boot/render check, not gameplay.
+
+### Docs
+
+- `platform({op:'doc', platform:'n64', name:'decomp'})` — the loop, the
+  three verdicts, address rules, what generate cannot know, search honesty.
+- AGENTS.md: a registered matching project is the user-authorized
+  local-toolchain path; the "never compile on this machine" paragraph does
+  not apply to it and romdev must not substitute a WASM toolchain.
+- Tool count 36 → 37 (`decomp`).
+
 ## 0.136.0 — 2026-09-05
 
 The sync32-port feedback round (jaymcgavren, three reports against 0.135.1

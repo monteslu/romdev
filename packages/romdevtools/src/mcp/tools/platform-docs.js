@@ -23,7 +23,7 @@ const __dirname = path.dirname(__filename);
 const PLATFORMS_ROOT = path.resolve(__dirname, "..", "..", "platforms");
 
 /** Known doc-file names. Add new ones here when shipping more. */
-const DOC_FILES = ["MENTAL_MODEL.md", "TROUBLESHOOTING.md", "UPSTREAM_SOURCES.md"];
+const DOC_FILES = ["MENTAL_MODEL.md", "TROUBLESHOOTING.md", "UPSTREAM_SOURCES.md", "DECOMP.md"];
 
 // Docs that are not markdown in the platform dir but a file romdev already
 // ships elsewhere. sync32's API header IS the platform (no registers, no VRAM
@@ -125,9 +125,11 @@ export async function getPlatformDocCore({ platform, name }) {
         docFile = "TROUBLESHOOTING.md";
       } else if (lower === "upstream_sources" || lower === "upstream-sources" || lower === "upstreamsources" || lower === "upstream" || lower === "sources") {
         docFile = "UPSTREAM_SOURCES.md";
+      } else if (lower === "decomp" || lower === "matching" || lower === "decompilation") {
+        docFile = "DECOMP.md";
       } else {
         const extras = Object.keys(EXTRA_DOCS[platform] ?? {}).map((n) => `'${n}'`);
-        throw new Error(`unknown doc '${name}'. Valid: 'mental_model' | 'troubleshooting' | 'upstream_sources'${extras.length ? " | " + extras.join(" | ") : ""}.`);
+        throw new Error(`unknown doc '${name}'. Valid: 'mental_model' | 'troubleshooting' | 'upstream_sources' | 'decomp' (where shipped)${extras.length ? " | " + extras.join(" | ") : ""}.`);
       }
       const full = path.join(PLATFORMS_ROOT, platform, docFile);
       try {

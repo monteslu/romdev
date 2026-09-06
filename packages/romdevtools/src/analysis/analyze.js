@@ -799,7 +799,7 @@ export function buildNesBankImage(romBytes, flatVa, bankOverride = null) {
  * Decompile the function containing `address` to C pseudocode (Ghidra).
  * @returns {{platform, langid, address, code, warnings, qualityNote, bank?}}
  */
-export async function analyzeDecompile(romPath, address, platformOverride, bank = null) {
+export async function analyzeDecompile(romPath, address, platformOverride, bank = null, opts = {}) {
   if (address == null) throw new Error("analyze decompile: address required");
   const platform = platformOverride ?? sniffPlatform(romPath);
   if (!platform) throw new Error(`analyze decompile: unknown platform for '${path.basename(romPath)}'`);
@@ -816,10 +816,32 @@ export async function analyzeDecompile(romPath, address, platformOverride, bank 
   // IPL3). PS1: strip PS-EXE, fileOff = vaddr - loadAddr.
   if (platform === "n64" || platform === "ps1" || platform === "dreamcast") {
     let fileOff;
+    /** Mapping provenance: how the VA became a file offset. Always returned so a wrong mapping is visible, not silent. */
+    let provenance = null;
+    let symbolize = null;
     if (platform === "n64") {
-      romBytes = normalizeN64ByteOrder(romBytes).bytes;
+      const norm = normalizeN64ByteOrder(romBytes);
+      romBytes = norm.bytes;
       const entry = ((romBytes[0x08] << 24) | (romBytes[0x09] << 16) | (romBytes[0x0a] << 8) | romBytes[0x0b]) >>> 0;
-      fileOff = ((address >>> 0) - entry + 0x1000) >>> 0;
+      const mapping = await n64SegmentMapping(address, opts);
+      if (mapping) {
+        // Explicit segment identity from the project's splat map: slice ONLY that
+        // segment's bytes and analyze them at segment-relative offsets (no dense
+        // image up to 0x80000000), then rebase names back to real VAs.
+        const seg = mapping.segment;
+        const segBytes = romBytes.subarray(seg.romStart, seg.romEnd);
+        fileOff = (address >>> 0) - seg.vram;
+        provenance = { method: "splat-segment", requestedVa: hx(address), resolvedVa: hx(address), segment: seg.name, overlay: seg.overlay, romOffset: hx(mapping.romOffset), segmentRomStart: hx(seg.romStart), segmentVram: hx(seg.vram),
+          analyzedBytes: segBytes.length, analyzedFrom: hx(seg.romStart), byteOrder: norm.reordered ?? "z64 (native)", bytesSha1: sha1Hex(segBytes.subarray(fileOff, fileOff + 64)), preview: hexPreview(segBytes.subarray(fileOff, fileOff + 16)),
+          project: mapping.project ?? null, candidates: mapping.candidates ?? undefined };
+        romBytes = segBytes;
+        symbolize = mapping.symbolize;
+      } else {
+        fileOff = ((address >>> 0) - entry + 0x1000) >>> 0;
+        provenance = { method: "header-entry-formula", requestedVa: hx(address), resolvedVa: hx(address), romOffset: hx(fileOff), entry: hx(entry), byteOrder: norm.reordered ?? "z64 (native)",
+          bytesSha1: fileOff < romBytes.length ? sha1Hex(romBytes.subarray(fileOff, fileOff + 64)) : null, preview: fileOff < romBytes.length ? hexPreview(romBytes.subarray(fileOff, fileOff + 16)) : null,
+          warning: "fileOff = va - entry + 0x1000 maps ONLY the boot segment. A relocated code segment or an overlay resolves to the WRONG bytes with this formula and the offset still lands inside the image. Pass `project` (a decomp-registered splat project) or `splatYaml` for segment-exact mapping; pass `segment` to pick an overlay." };
+      }
     } else if (platform === "dreamcast") {
       // SH-4: strip the ELF to its first PT_LOAD segment (vaddr = loadBase), or treat
       // a raw image as flat at 0x8c010000. fileOff = address - segment vaddr.
@@ -846,9 +868,13 @@ export async function analyzeDecompile(romPath, address, platformOverride, bank 
       throw new Error(`decompile: ${platform} address ${hx(address)} maps to file offset ${hx(fileOff)}, outside the ${romBytes.length}-byte image. Use an address from target='functions'.`);
     }
     const rm = await decompileFunction({ platform, romBytes, fileOffset: fileOff });
+    let code = prettyDecompile(rm.code, platform);
+    let symbols = undefined;
+    if (symbolize) { const sr = symbolize(code, fileOff, address); code = sr.code; symbols = sr.stats; }
     return {
       platform, langid: rm.langid, address, addressHex: hx(address),
-      code: prettyDecompile(rm.code, platform), warnings: rm.warnings,
+      kind: "pseudocode", note: "Ghidra pseudocode for UNDERSTANDING. It is not matching evidence: nothing here was compiled or compared. For a compile-and-compare loop use decomp({op:'compare'}).",
+      code, warnings: rm.warnings, ...(provenance ? { provenance } : {}), ...(symbols ? { symbols } : {}),
     };
   }
 
@@ -991,4 +1017,63 @@ export async function analyzeDecompile(romPath, address, platformOverride, bank 
     warnings: r.warnings,
     qualityNote: QUALITY[platform] ?? "unknown",
   };
+}
+
+
+// ── N64 segment-exact mapping (decomp projects) ─────────────────────────────
+import { createHash as _createHash } from "node:crypto";
+function sha1Hex(u8) { return _createHash("sha1").update(u8).digest("hex"); }
+function hexPreview(u8) { return Buffer.from(u8).toString("hex"); }
+
+/**
+ * Resolve an N64 VA through a splat map when the caller named one (a decomp
+ * project id or a yaml path). Returns null when no map was given. Throws on
+ * an ambiguous overlay VA (with candidates) or an unmapped VA.
+ */
+async function n64SegmentMapping(address, { project, splatYaml, segment } = {}) {
+  if (!project && !splatYaml) return null;
+  const { loadSplatMap } = await import("../decomp/splat-map.js");
+  let map, proj = null;
+  if (project) {
+    const { Project } = await import("../decomp/project.js");
+    proj = await Project.open(project);
+    map = await proj.map();
+  } else map = await loadSplatMap(splatYaml);
+  const r = map.resolveVa(address, { segment });
+  if (!r.ok) { const e = new Error(r.error); e.code = r.code; e.candidates = r.candidates?.map((c) => c.segment); throw e; }
+  const seg = map.segment(r.resolved.segment);
+  if (r.resolved.kind !== "rom") { const e = new Error(`VA ${hx(address)} is in ${seg.name}'s BSS — no ROM bytes to decompile`); e.code = "BSS_ADDRESS"; throw e; }
+  // Symbolizer: Ghidra names things by the segment-relative offset (FUN_000xxxxx / DAT_000xxxxx) or by absolute VA for
+  // out-of-image targets (func_0x80xxxxxx). Rebase both to VAs and swap in project symbol names where known.
+  let nameFor = () => null;
+  if (proj) {
+    const ld = await proj.linkerMap();
+    const sa = await proj.symbolAddrs();
+    const byVa = new Map();
+    if (ld) for (const s of ld.symbols.values()) if (!s.name.endsWith(".NON_MATCHING") && !byVa.has(s.va)) byVa.set(s.va, s.name);
+    for (const [n, v] of sa) if (!byVa.has(v.va)) byVa.set(v.va, n);
+    nameFor = (va) => byVa.get(va >>> 0) ?? null;
+  }
+  const symbolize = (code, fileOff, va) => {
+    const stats = { rebased: 0, named: 0, unresolved: [] };
+    const seen = new Set();
+    const imageLen = seg.romEnd - seg.romStart;
+    const rewrite = (prefix, hexStr, absolute) => {
+      const v = parseInt(hexStr, 16) >>> 0;
+      // Three shapes: a full VA (lui/addiu-derived, >= 0x80000000); an offset inside
+      // the analyzed slice (Ghidra's raw-at-0 labels); or a jal target computed in
+      // region 0 (the high nibble comes from the segment's VA).
+      const vaOut = v >= 0x80000000 ? v : v < imageLen ? (seg.vram + v) >>> 0 : ((seg.vram & 0xf0000000) | v) >>> 0;
+      const name = nameFor(vaOut);
+      stats.rebased++;
+      if (name) { stats.named++; return name; }
+      if (!seen.has(vaOut) && stats.unresolved.length < 12) { seen.add(vaOut); stats.unresolved.push(`${prefix}${hx(vaOut)}`); }
+      return `${prefix.toLowerCase().replace(/_$/, "")}_${vaOut.toString(16)}`;
+    };
+    code = code.replace(/\b(FUN|DAT|LAB|PTR_[A-Za-z_]*)_([0-9a-fA-F]{8})\b/g, (m, p, h) => rewrite(p + "_", h, false));
+    code = code.replace(/\bfunc_0x([0-9a-fA-F]{8})\b/g, (m, h) => rewrite("FUN_", h, true));
+    code = code.replace(/\b(?:_DAT|DAT)_0x([0-9a-fA-F]{8})\b/g, (m, h) => rewrite("DAT_", h, true));
+    return { code, stats };
+  };
+  return { segment: seg, romOffset: r.resolved.romOffset, candidates: r.candidates.length > 1 ? r.candidates.map((c) => c.segment) : undefined, project: proj?.id ?? null, symbolize };
 }

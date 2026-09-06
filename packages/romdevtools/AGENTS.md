@@ -14,6 +14,9 @@ Internalize this above all else: **you never need — and must never install —
 
 **So if a build toolchain or emulator is ever invoked or prompts to install — `clang`, `gcc`, Xcode / macOS Command Line Tools, `node-gyp`, devkitPro, `brew/apt install <compiler>` — that is a DEFECT, not your cue to proceed.** Stop, do NOT install it, do NOT investigate it with host-side diagnostic commands (that just alarms the user), and surface it: "romdev should provide this — a host compiler/emulator should never be needed." Then find the romdev tool or report the gap. `platform({op:'list'})` / `platform({op:'toolchains'})` show what's bundled.
 
+**The one exception is a registered matching-decompilation project.** `decomp({op:'import'})` registers a checkout whose OWN toolchain (an IDO static recompilation, MIPS binutils, the project's make) is the point: recovering C that compiles to the original bytes needs the original compiler, and romdev runs that project's compiler and build as-is, with the flags its Makefile chooses per file. That is user-authorized by the act of registering the project; do not refuse it because of the paragraph above, and do not substitute a romdev WASM toolchain for it. romdev still never installs anything on the machine for you — the project's docs say how its toolchain is set up.
+
+
 ### Host content tools (art / audio / map editors) are totally fine
 
 This rule is about **compilers and emulators only** — NOT about content tools. ImageMagick, GIMP, Aseprite/LibreSprite, Audacity, Tiled, a tracker (FamiStudio/Deflemask), Python for a quick art script — all fine to use, and fine for the user to install. They produce **raw source art/audio** (a PNG, a sprite sheet, a `.wav`, a `.tmx`); romdev then **imports and packs** that into platform-native data. Use them freely when they help; just don't reach for a *compiler or emulator*.
