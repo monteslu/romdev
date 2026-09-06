@@ -61,9 +61,30 @@ if [ ! -f mupen64plus-core/src/r4300/romdev_n64_debug.c ]; then
   sed -i 's|\$(CORE_DIR)/src/r4300/r4300.c \\|$(CORE_DIR)/src/r4300/r4300.c \\\n\t$(CORE_DIR)/src/r4300/romdev_debug.c \\\n\t$(CORE_DIR)/src/r4300/romdev_n64_debug.c \\|' Makefile.common
   perl -0pi -e 's/int write_rdram_dram\(void\* opaque, uint32_t address, uint32_t value, uint32_t mask\)\n\{/extern void romdev_n64_write(unsigned int,unsigned int);\nint write_rdram_dram(void* opaque, uint32_t address, uint32_t value, uint32_t mask)\n{\n    romdev_n64_write(address, value);/ unless /romdev_n64_write/' mupen64plus-core/src/ri/rdram.c
   perl -0pi -e 's/void pure_interpreter\(void\)\n\{/extern int romdev_n64_step(unsigned int);\nextern int stop;\nvoid pure_interpreter(void)\n{/ unless /romdev_n64_step/' mupen64plus-core/src/r4300/pure_interp.c
-  perl -0pi -e 's/     InterpretOpcode\(\);\n   \}/     if (romdev_n64_step(PC->addr)) { stop = 1; break; }\n     InterpretOpcode();\n   }/ unless /romdev_n64_step\(PC/' mupen64plus-core/src/r4300/pure_interp.c
+  perl -0pi -e 's/     InterpretOpcode\(\);\n   \}/     if (romdev_n64_step(PC->addr)) { romdev_n64_yield(); break; }\n     InterpretOpcode();\n   }/ unless /romdev_n64_step\(PC/' mupen64plus-core/src/r4300/pure_interp.c
+# 0.138.0: a PC-break / single-step hit must YIELD to the frontend (co_switch back to
+# retro_run, exactly what the VI frame-end does), not `stop = 1` — that ended the
+# emulation thread, so every later retro_run ran nothing: the break "hit" once and the
+# machine froze forever (single-step returned no PC after the first step). The
+# instruction at the break executes when the host resumes, i.e. "stopped AT pc".
   rm -f mupen64plus-core/src/ri/rdram.o mupen64plus-core/src/r4300/pure_interp.o
 fi
+# 0.138.0 (always, idempotent): the debug shim + the yield form of the interpreter hook.
+# The block above only runs on a fresh tree; a rebuilt tree keeps the OLD shim and the
+# OLD `stop = 1` hook otherwise, and the fix silently does not ship.
+cp "$SCRIPT_DIR/patches/romdev-snippets/n64-debug.c" mupen64plus-core/src/r4300/romdev_n64_debug.c
+cp "$SCRIPT_DIR/romdev-debug/romdev_debug.c" mupen64plus-core/src/r4300/romdev_debug.c 2>/dev/null || true
+cp "$SCRIPT_DIR/romdev-debug/romdev_debug.h" mupen64plus-core/src/r4300/romdev_debug.h 2>/dev/null || true
+perl -0pi -e 's/extern int romdev_n64_step\(unsigned int\);\nextern int stop;/extern int romdev_n64_step(unsigned int);\nextern void romdev_n64_yield(void);\nextern int stop;/ unless /romdev_n64_yield/' mupen64plus-core/src/r4300/pure_interp.c
+perl -0pi -e 's/if \(romdev_n64_step\(PC->addr\)\) \{ stop = 1; break; \}/if (romdev_n64_step(PC->addr)) { romdev_n64_yield(); break; }/; s/while \(romdev_n64_step\(PC->addr\)\) \{ romdev_n64_yield\(\); \}/if (romdev_n64_step(PC->addr)) { romdev_n64_yield(); break; }/' mupen64plus-core/src/r4300/pure_interp.c
+# The CACHED interpreter is this build's default CPU (no dynarec on wasm); hook its
+# instruction loop the same way so PC breaks / single-step / coverage work without a
+# core-option change. (The pure interpreter in this pin faults into the exception
+# vector at boot on wasm; keep the hook there too, but the cached path is the one used.)
+perl -0pi -e 's/void r4300_step\(void\)\n\{\n   while \(!stop && !retro_stop_stepping\(\)\)\n   \{\n      PC->ops\(\);\n   \}\n\}/extern int romdev_n64_step(unsigned int);\nextern void romdev_n64_yield(void);\nvoid r4300_step(void)\n{\n   while (!stop && !retro_stop_stepping())\n   {\n      if (romdev_n64_step(PC->addr)) { romdev_n64_yield(); break; }\n      PC->ops();\n   }\n}/ unless /romdev_n64_step\(PC->addr\)\) \{ romdev_n64_yield\(\); break/' mupen64plus-core/src/r4300/r4300.c
+perl -0pi -e 's/while \(romdev_n64_step\(PC->addr\)\) \{ romdev_n64_yield\(\); \}/if (romdev_n64_step(PC->addr)) { romdev_n64_yield(); break; }/g' mupen64plus-core/src/r4300/r4300.c
+grep -q 'romdev_n64_yield' mupen64plus-core/src/r4300/r4300.c || { echo "FATAL: cached-interpreter hook did not apply" >&2; exit 1; }
+rm -f mupen64plus-core/src/r4300/pure_interp.o mupen64plus-core/src/r4300/r4300.o mupen64plus-core/src/r4300/romdev_n64_debug.o mupen64plus-core/src/r4300/romdev_debug.o
 
 # romdev N64 AI register reader (getAudioState chip:'ai').
 if ! grep -q "romdev_ai_get" mupen64plus-core/src/plugin/audio_libretro/audio_backend_libretro.c; then
@@ -118,7 +139,7 @@ done
 # native-gles. Linking every object explicitly (like retroemu does) keeps the GL path.
 OBJ_FILES=$(find . -name "*.o" | tr '\n' ' ')
 
-EXPORTED='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_mips_regs_get","_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get","_romdev_regsnap_get","_romdev_watchdog_set","_romdev_irqblock_set","_romdev_ai_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free","_emscripten_GetProcAddress"]'
+EXPORTED='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_mips_regs_get","_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get","_romdev_covbits_set","_romdev_covbits_get","_romdev_regsnap_get","_romdev_watchdog_set","_romdev_irqblock_set","_romdev_ai_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free","_emscripten_GetProcAddress"]'
 EXPORTED_RT='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS","dynCall","GL"]'
 
 # GL link: glide64 renders the RDP through GLES2/WebGL2. native-gles owns the EGL

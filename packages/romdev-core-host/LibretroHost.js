@@ -2944,6 +2944,43 @@ export class LibretroHost {
    * Run `frames` frames recording every DISTINCT PC executed within [lo,hi] — the
    * coverage trace ("what code runs here?"). Returns { pcs:[...], distinct, total, truncated }.
    */
+  /** True when this core build exposes the exact coverage bitmap. */
+  pcBitmapSupported() {
+    const mod = this.mod;
+    return !!(mod && typeof mod._romdev_covbits_set === "function" && typeof mod._romdev_covbits_get === "function");
+  }
+
+  /**
+   * Run `frames` frames recording EVERY executed PC in [lo, hi) as one bit per
+   * word — exact, uncapped, O(1) per instruction. Returns
+   * { pcs:number[], distinct, total, words, lo, hi } (pcs decoded from the bitmap).
+   */
+  logPCBitmap(lo, hi, frames) {
+    const mod = this._needMod();
+    this._needMedia();
+    if (!this.pcBitmapSupported()) throw new Error("PC coverage bitmap not supported by this core.");
+    mod._romdev_covbits_set(lo >>> 0, hi >>> 0, 1);
+    this._runFramesExclusive(() => false, frames);
+    const words = mod._romdev_covbits_get(0, 0, 0);
+    const outPtr = mod._malloc(Math.max(4, words * 4));
+    const out2Ptr = mod._malloc(8);
+    try {
+      mod._romdev_covbits_get(outPtr, words, out2Ptr);
+      const out2 = new Uint32Array(mod.HEAPU8.buffer, out2Ptr, 2);
+      const total = out2[0], distinct = out2[1];
+      const bits = new Uint32Array(mod.HEAPU8.buffer, outPtr, words);
+      const pcs = [];
+      for (let w = 0; w < words; w++) {
+        let v = bits[w];
+        while (v) { const b = 31 - Math.clz32(v & -v); pcs.push((lo + ((w * 32 + b) << 2)) >>> 0); v &= v - 1; }
+      }
+      mod._romdev_covbits_set(0, 0, 0); // disarm (keeps the buffer for reuse)
+      return { pcs, distinct, total, words, lo: lo >>> 0, hi: hi >>> 0 };
+    } finally {
+      mod._free(outPtr); mod._free(out2Ptr);
+    }
+  }
+
   logPCRange(lo, hi, frames) {
     const mod = this._needMod();
     this._needMedia();

@@ -42,9 +42,10 @@ resolver returns the candidate segments and refuses to pick. Pass
 `segment:'ovl_i8'`.
 
 `disasm({target:'decompile', platform:'n64', project:'wr64', address:…})`
-uses the same resolver, analyzes only that segment's bytes, returns
-`provenance` (segment, ROM offset, bytes hash) and swaps in the project's
-symbol names. Without `project` it falls back to the header formula and
+uses the same resolver, loads only that segment's bytes AT ITS TRUE VA (so
+absolute calls, globals and jump tables resolve during analysis), returns
+`provenance` (segment, ROM offset, loadedAt, bytes hash) and swaps in the
+project's symbol names. Without `project` it falls back to the header formula and
 says so in `provenance.warning`.
 
 ## What generate can and cannot know
@@ -88,7 +89,7 @@ placeholder prototype in one header). `decomp({op:'types'})` is the
 accumulated evidence: offsets with the access widths the asm uses. None of
 it is a confirmed type until it is in a header and the compare says exact.
 
-## Runtime, and what this core can and cannot do
+## Runtime
 
 - `decomp({op:'overlays', session})` says which overlay is resident at
   0x802C5800 by comparing RAM with every candidate's ROM bytes.
@@ -98,13 +99,37 @@ it is a confirmed type until it is in a header and the compare says exact.
 - `decomp({op:'state', session})` says whether the emulator is still there
   and, if not, why (`never-loaded`, `evicted`, `server-restart`) and how to
   recover (reload + replay the persisted input script).
-- `decomp({op:'trace'})` and `decomp({op:'coverage'})` PROBE the core
-  first. parallel_n64 does not single-step and does not stop at a PC break
-  under any CPU option, so trace answers `PC_BREAK_UNSUPPORTED` with the
-  evidence and the static call targets, and coverage is limited to the
-  frame-boundary PC (it says so, and says when it observed nothing). On a
-  core that passes the probes the same calls capture registers and
-  attribute instructions.
+- `decomp({op:'trace', session, symbol})` stops the CPU at the function's
+  entry (a real PC break: parallel_n64 0.3.0 hooks the cached interpreter
+  and yields to the frontend at the hit), reads a0-a3/f12/f14 and the stack
+  arguments, then stops at the return address and reads v0/v1/f0. Every
+  result carries the live core probe; on a core that cannot stop it says
+  `PC_BREAK_UNSUPPORTED` with the evidence instead of inventing values.
+- `decomp({op:'coverage', session, frames, inputs})` is instruction-exact:
+  the core's PC log over the code window in short chunks, unioned, then
+  attributed to functions and basic blocks (leaders from branch targets and
+  delay slots). Observed / unobserved (has a static caller) / unreferenced
+  (no static caller) are kept apart; `truncatedChunks` says when a chunk
+  overflowed the core's distinct-PC cap (shorten `chunkFrames`).
+
+## Types without hand recovery
+
+`decomp({op:'types', propose:true})` turns the evidence into struct
+typedefs (field types from the asm access widths, `s32*` where the draft
+dereferences or indexes a field, byte arrays for gaps) plus a prototype
+with the placeholder pointer parameters replaced. Pass the text to
+`generate` as `extraContext` and to `compare` as `declarations`: the draft
+is regenerated with those types and compiled with them, the TU's own
+prototype rewritten in the work copy. The compare decides; a proposal is
+never written to a header by the tool.
+
+## Rodata
+
+`compare` compares the function's own jump tables and literals by
+reference order — against the target object when the extracted asm exists,
+against the base ROM bytes at the object's `.rodata` VA when it does not.
+A differing jump table fails `exactFunctionMatch` even when the text is
+identical; `textExact` keeps the text-only verdict.
 
 ## Workspace
 

@@ -55,7 +55,15 @@ export async function generateCandidate(project, fn, opts = {}) {
   if (!tuRel) throw Object.assign(new Error(`function '${fn.symbol}' is in no TU; pass contextTu`), { code: "FUNCTION_NOT_IN_TU" });
   const ctx = await buildContext(project, tuRel);
   const asmAbs = project.abs(asmRel);
-  const args = [t.m2c, "--target", "mips-ido-c", "--context", ctx.path, ...(opts.extraArgs ?? []), asmAbs];
+  // Extra context: proposed structs/prototypes (from decomp({op:'types', propose:true}) or the
+  // agent) appended to the TU's context so a draft can be regenerated with better types WITHOUT
+  // editing a header first. Recorded with the candidate.
+  let ctxPath = ctx.path;
+  if (opts.extraContext) {
+    ctxPath = ctx.path.replace(/\.ctx\.c$/, `.plus-${sha256Text(opts.extraContext).slice(0, 8)}.ctx.c`);
+    await writeFile(ctxPath, (await readFile(ctx.path, "utf8")) + "\n/* --- extra context (proposed, unverified) --- */\n" + opts.extraContext + "\n");
+  }
+  const args = [t.m2c, "--target", "mips-ido-c", "--context", ctxPath, ...(opts.extraArgs ?? []), asmAbs];
   const t0 = Date.now();
   const r = await run(t.python, args, { cwd: project.root, env: project.env, timeoutMs: 120_000 });
   const ms = Date.now() - t0;
@@ -78,8 +86,14 @@ export async function generateCandidate(project, fn, opts = {}) {
   // Type hypotheses: struct field accesses m2c could not type (M2C_FIELD / unkNN) with the access width it used.
   const hypotheses = [];
   for (const m of parsed.body.matchAll(/M2C_FIELD\(([^,]+),\s*([^,]+),\s*(0x[0-9A-Fa-f]+|\d+)\)/g)) hypotheses.push({ base: m[1].trim(), type: m[2].trim(), offset: Number(m[3]), evidence: "m2c untyped field access" });
-  for (const m of parsed.body.matchAll(/\b(\w+)(?:->|\.)unk_?([0-9A-Fa-f]+)\b/g)) hypotheses.push({ base: m[1], offset: parseInt(m[2], 16), evidence: "m2c unk field (width from the load/store, see asm)" });
-  const seen = new Set(); const uniq = hypotheses.filter((h) => { const k = `${h.base}:${h.offset}:${h.type ?? ""}`; if (seen.has(k)) return false; seen.add(k); return true; });
+  for (const m of parsed.body.matchAll(/\b(\w+)(?:->|\.)unk_?([0-9A-Fa-f]+)\b/g)) {
+    // Used as a pointer base? `*(base->unkN + …)`, `base->unkN[…]`, `base->unkN->`
+    const tail = parsed.body.slice(m.index + m[0].length, m.index + m[0].length + 6);
+    const head = parsed.body.slice(Math.max(0, m.index - 3), m.index);
+    const usedAsPointer = /^\s*(\[|->)/.test(tail) || (/\*\($/.test(head) && /^\s*\+/.test(tail));
+    hypotheses.push({ base: m[1], offset: parseInt(m[2], 16), evidence: usedAsPointer ? "m2c unk field used as a POINTER base (dereferenced/indexed)" : "m2c unk field (width from the load/store, see asm)", pointer: usedAsPointer });
+  }
+  const seen = new Map(); for (const h of hypotheses) { const k = `${h.base}:${h.offset}:${h.type ?? ""}`; const prev = seen.get(k); if (!prev) seen.set(k, h); else if (h.pointer && !prev.pointer) seen.set(k, h); } const uniq = [...seen.values()];
   const errors = [...parsed.body.matchAll(/M2C_ERROR\(([^)]*)\)/g)].map((m) => m[1]);
   // Persist what this draft says about types (offsets + asm access widths), so evidence accumulates across attempts.
   try { const { recordTypeEvidence } = await import("./types.js"); await recordTypeEvidence(project, fn, { hypotheses: uniq, asmText: await readFile(asmAbs, "utf8"), source: "m2c" }); } catch {}
@@ -94,7 +108,7 @@ export async function generateCandidate(project, fn, opts = {}) {
     declarationsNeeded: parsed.declarations, missingDeclarations: missing.filter((m) => !m.inContext), typeHypotheses: uniq.slice(0, 40), errors,
     contextPrototype: contextPrototype(ctxText, fn.symbol),
     targetAsm: asmRel,
-    context: { path: ctx.path, hash: ctx.hash, cacheHit: ctx.cacheHit, dependencies: ctx.deps, tu: tuRel },
+    context: { path: ctxPath, hash: ctx.hash, cacheHit: ctx.cacheHit, dependencies: ctx.deps, tu: tuRel, extraContext: opts.extraContext ? { chars: opts.extraContext.length, note: "proposed declarations were appended to the context; pass the same text as `declarations` to compare/integrate" } : undefined },
     backend: { name: "m2c", target: "mips-ido-c", commit: (await backendStatus()).m2c?.commit, python: t.python, ms },
     warnings: stderr.trim() ? stderr.trim().split("\n").slice(-8) : [],
   };

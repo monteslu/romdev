@@ -35,7 +35,7 @@ function decodePng(buf) {
  * @param {import('./project.js').Project} project
  * @param {{frames:number, inputs:Array<{frame:number,buttons:object}>, sessionKey:string, sessionHandle?:string}} a
  */
-export async function runSmoke(project, { frames, inputs, sessionKey, sessionHandle, scriptPath, saveState = true }) {
+export async function runSmoke(project, { frames, inputs, sessionKey, sessionHandle, scriptPath, saveState = true, cpuCore }) {
   if (scriptPath) {
     const sc = JSON.parse(await readFile(scriptPath, "utf8"));
     inputs = sc.inputs ?? inputs; frames = sc.frames ?? frames;
@@ -57,7 +57,7 @@ export async function runSmoke(project, { frames, inputs, sessionKey, sessionHan
   const results = {};
   for (const side of sides) {
     const reg = buildToolRegistry(side.key);
-    const load = await callTool(reg, "loadMedia", { platform: project.m.platform, path: side.rom }, side.key);
+    const load = await callTool(reg, "loadMedia", { platform: project.m.platform, path: side.rom, ...(cpuCore && project.m.platform === "n64" ? { coreOptions: { "parallel-n64-cpucore": cpuCore } } : {}) }, side.key);
     let at = 0;
     for (const step of script) {
       if (step.frame > at) { await callTool(reg, "frame", { op: "step", frames: step.frame - at }, side.key); at = step.frame; }
@@ -84,7 +84,7 @@ export async function runSmoke(project, { frames, inputs, sessionKey, sessionHan
   const regsA = JSON.stringify(a.cpu?.registers ?? a.cpu ?? null), regsB = JSON.stringify(b.cpu?.registers ?? b.cpu ?? null);
   const report = {
     project: project.id, frames, inputs: script.length, inputScript: path.join(outDir, "inputs.json"), replay: `decomp({op:'smoke', project:'${project.id}', scriptPath:'${path.join(outDir, "inputs.json")}'})`,
-    core: { name: a.load.core ?? null, package: corePkg, version: coreVersion }, sessions: { original: a.session, rebuilt: b.session }, checkpoints: { original: a.checkpoint, rebuilt: b.checkpoint },
+    core: { name: a.load.core ?? null, package: corePkg, version: coreVersion, cpuCore: cpuCore ?? "core default" }, sessions: { original: a.session, rebuilt: b.session }, checkpoints: { original: a.checkpoint, rebuilt: b.checkpoint },
     pcAtEnd: { original: a.cpu?.pcHex ?? null, rebuilt: b.cpu?.pcHex ?? null, note: (a.cpu?.pcHex === "$80000180" || b.cpu?.pcHex === "$80000180") ? "the frame-boundary PC is the exception vector ($80000180): it is the interrupt handler, NOT the main loop or the code responsible for any memory change" : undefined },
     original: { rom: project.m.rom.path, romSha1: a.romSha1, pixelsSha1: a.pixelsSha1, png: a.png, size: `${a.width}x${a.height}` },
     rebuilt: { rom: project.m.built.rom, romSha1: b.romSha1, pixelsSha1: b.pixelsSha1, png: b.png, size: `${b.width}x${b.height}` },

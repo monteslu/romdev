@@ -140,6 +140,7 @@ export async function traceFunction(project, { sessionKey, symbol, va, segment, 
   const probe = await probeCore(sessionKey);
   if (!probe.pcBreak.supported) {
     return { function: { symbol: fn.symbol, segment: fn.segment, va: fn.vaHex }, captured: false, code: "PC_BREAK_UNSUPPORTED", coreProbe: probe,
+      recipe: project.m.platform === "n64" ? `the N64 debug hooks live in the pure interpreter: loadMedia({platform:'n64', path, coreOptions:{'parallel-n64-cpucore':'pure_interpreter'}, session}) then replay your inputs (or decomp({op:'smoke', cpuCore:'pure_interpreter'}))` : undefined,
       evidence: `the loaded core does not stop at a PC break (${probe.pcBreak.evidence}) and ${probe.singleStep.supported ? "single-steps" : "does not single-step (" + probe.singleStep.evidence + ")"}: argument/return capture is not available on this core. What IS available: overlays (bytes in RAM), symbolize (live VA), state, smoke (pixels + registers at frame boundaries), and the static call targets below.`,
       staticCallTargets: await staticCallTargets(project, fn), provenance: prov, ms: Date.now() - t0 };
   }
@@ -181,40 +182,74 @@ async function staticCallTargets(project, fn) {
 }
 
 /**
- * Function-level coverage for a scenario. The core is probed first: with
- * single-step support every instruction of a bounded window is attributed;
- * without it (parallel_n64: no single-step, no PC break) only the
- * frame-boundary PC and the core's per-frame busiest-PC sample are visible,
- * and the report says so. Observed = at least one sample inside the function;
- * unobserved = referenced by a static jal but never sampled; unreferenced =
- * no static caller at all (a table/pointer target or dead code).
+ * Coverage for a scenario. Instruction-exact when the core exposes its PC
+ * coverage log (romdev_cov: every executed PC in a window, distinct-capped
+ * per call, so the scenario is run in chunks and unioned) or single-step;
+ * otherwise the frame-boundary PC only, and the method line says so.
+ * Basic blocks are derived from each function's instruction stream (leaders:
+ * entry, branch/jump targets, the instruction after a branch's delay slot).
+ * observed = a PC inside the function was executed; unobserved = referenced
+ * by a static jal but never executed; unreferenced = no static caller at all.
  */
-export async function coverage(project, { sessionKey, frames = 600, inputs = [], stepBudget = 200000 }) {
+export async function coverage(project, { sessionKey, frames = 600, inputs = [], stepBudget = 200000, chunkFrames = 10 }) {
   const reg = await registry(sessionKey);
   const { callGraph } = await import("./plan.js");
   const g = await callGraph(project);
   const ld = await project.linkerMap();
   const prov = await provenance(project, reg, sessionKey);
   const probe = await probeCore(sessionKey);
+  const { getHostOrNull } = await import("../mcp/state.js");
+  const host = getHostOrNull(sessionKey);
+  const covBitmap = !!host?.pcBitmapSupported?.();
+  const covLog = covBitmap || !!host?.rangeWatchSupported?.();
   const funcs = [...ld.symbols.values()].filter((s) => s.section === ".text" && s.size && !s.name.endsWith(".NON_MATCHING")).sort((a, b) => a.va - b.va);
   const findFn = (pc) => { let lo = 0, hi = funcs.length - 1; while (lo <= hi) { const m = (lo + hi) >> 1; const f = funcs[m]; if (pc < f.va) hi = m - 1; else if (pc >= f.va + f.size) lo = m + 1; else return f; } return null; };
   const script = [...inputs].sort((a, b) => a.frame - b.frame);
-  const hits = new Map(); let samples = 0, exceptionSamples = 0, instructionSamples = 0;
+  const pcs = new Set(); const hits = new Map(); let samples = 0, exceptionSamples = 0, instructionSamples = 0, truncatedChunks = 0;
   const t0 = Date.now();
-  const record = (pc) => { samples++; if (pc >= 0x80000000 && pc < 0x80000400) { exceptionSamples++; return; } const f = findFn(pc); if (f) hits.set(f.name, (hits.get(f.name) ?? 0) + 1); };
-  const { getHostOrNull } = await import("../mcp/state.js");
-  const host = getHostOrNull(sessionKey);
-  let si = 0;
-  for (let at = 0; at < frames; at++) {
+  const record = (pc) => { samples++; if (pc >= 0x80000000 && pc < 0x80000400) { exceptionSamples++; return; } pcs.add(pc); const f = findFn(pc); if (f) hits.set(f.name, (hits.get(f.name) ?? 0) + 1); };
+  // Code window for the PC log: every .text VA of the map.
+  const lo = funcs[0]?.va ?? 0x80000000, hi = funcs.length ? funcs[funcs.length - 1].va + funcs[funcs.length - 1].size : 0x80400000;
+  let si = 0, at = 0;
+  while (at < frames) {
     while (si < script.length && script[si].frame <= at) { await callTool(reg, "input", { op: "set", ports: [script[si].buttons] }, sessionKey); si++; }
-    await callTool(reg, "frame", { op: "step", frames: 1 }, sessionKey);
-    const cpu = await callTool(reg, "cpu", { op: "read" }, sessionKey);
-    if (cpu?.pc != null) record(cpu.pc >>> 0);
-    if (probe.singleStep.supported && instructionSamples < stepBudget) {
-      // Attribute a window of real instructions after the frame boundary.
-      const n = Math.min(4096, stepBudget - instructionSamples);
-      for (let i = 0; i < n; i++) { const r = host.stepInstruction(); if (r?.pc == null) break; record(r.pc >>> 0); instructionSamples++; }
+    const nextInput = si < script.length ? script[si].frame : frames;
+    const step = Math.max(1, Math.min(covLog ? chunkFrames : 1, nextInput - at, frames - at));
+    if (covBitmap) {
+      // Exact: one bit per word over the whole code window, no cap.
+      const r = host.logPCBitmap(lo, hi, step);
+      for (const pc of r.pcs) record(pc >>> 0);
+      instructionSamples += r.total;
+    } else if (covLog) {
+      const r = host.logPCRange(lo, hi, step);
+      for (const pc of r.pcs) record(pc >>> 0);
+      instructionSamples += r.total ?? r.pcs.length;
+      // The core's distinct-PC ring holds 8192 entries; a chunk that fills it exactly lost PCs too.
+      if (r.truncated || r.distinct >= 8192 || r.pcs.length >= 8192) truncatedChunks++;
+    } else {
+      await callTool(reg, "frame", { op: "step", frames: step }, sessionKey);
+      const cpu = await callTool(reg, "cpu", { op: "read" }, sessionKey);
+      if (cpu?.pc != null) record(cpu.pc >>> 0);
+      if (probe.singleStep.supported && instructionSamples < stepBudget) {
+        const n = Math.min(4096, stepBudget - instructionSamples);
+        for (let i = 0; i < n; i++) { const r = host.stepInstruction(); if (r?.pc == null) break; record(r.pc >>> 0); instructionSamples++; }
+      }
     }
+    at += step;
+  }
+  // Basic blocks for the observed functions (asm from the .s; C from the build object).
+  const blocks = [];
+  let blocksTotal = 0, blocksObserved = 0;
+  for (const [name] of hits) {
+    try {
+      const fn = await project.resolveFunction({ symbol: name });
+      const stream = await instructionStream(project, fn);
+      if (!stream.length) continue;
+      const bb = basicBlocks(stream, fn.va);
+      const obs = bb.map((b) => ({ ...b, observed: [...pcs].some((pc) => pc >= b.start && pc < b.end) }));
+      blocksTotal += bb.length; blocksObserved += obs.filter((b) => b.observed).length;
+      blocks.push({ symbol: name, blocks: obs.length, observed: obs.filter((b) => b.observed).length, unobserved: obs.filter((b) => !b.observed).map((b) => hx(b.start)).slice(0, 12) });
+    } catch {}
   }
   const observed = [...hits.entries()].map(([name, n]) => ({ symbol: name, samples: n, state: g.state[name] ?? null, bytes: g.sizes[name] ?? null })).sort((a, b) => b.samples - a.samples);
   const referenced = new Set(Object.keys(g.callers));
@@ -223,16 +258,50 @@ export async function coverage(project, { sessionKey, frames = 600, inputs = [],
   const outDir = path.join(project.ws, "coverage");
   await mkdir(outDir, { recursive: true });
   const file = path.join(outDir, `${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
-  const method = probe.singleStep.supported
-    ? `frame-boundary PC every frame + up to ${stepBudget} single-stepped instructions attributed to functions (instruction-exact inside those windows, sampled outside)`
-    : `frame-boundary PC only: this core does not single-step (${probe.singleStep.evidence}) and does not stop at a PC break (${probe.pcBreak.evidence}); in-frame execution is INVISIBLE to this measurement`;
-  const report = { method, coreProbe: probe, frames, inputs: script.length, samples, instructionSamples, exceptionVectorSamples: exceptionSamples,
+  const method = covBitmap
+    ? `instruction-exact: the core's PC coverage BITMAP (one bit per word over [${hx(lo)}, ${hx(hi)}), uncapped) — every executed instruction in the scenario is recorded`
+    : covLog
+    ? `instruction-exact within the ring: the core's PC coverage log (romdev_cov) over [${hx(lo)}, ${hx(hi)}) in ${chunkFrames}-frame chunks, distinct PCs unioned${truncatedChunks ? ` — ${truncatedChunks} chunk(s) filled the core's 8192-distinct-PC ring: PCs beyond the ring were lost in those chunks (use chunkFrames:1, or a narrower window)` : ""}`
+    : probe.singleStep.supported
+      ? `frame-boundary PC every frame + up to ${stepBudget} single-stepped instructions`
+      : `frame-boundary PC only: this core does not single-step (${probe.singleStep.evidence}) and does not stop at a PC break (${probe.pcBreak.evidence}); in-frame execution is INVISIBLE to this measurement`;
+  const report = { method, coreProbe: probe, coverageSource: covBitmap ? "bitmap" : covLog ? "ring" : "frame-boundary", frames, inputs: script.length, samples, distinctPcs: pcs.size, instructionSamples, exceptionVectorSamples: exceptionSamples, truncatedChunks,
     functions: { total: funcs.length, observed: observed.length, unobserved: unobserved.length, unreferenced: unreferenced.length },
+    basicBlocks: covLog || probe.singleStep.supported ? { available: true, total: blocksTotal, observed: blocksObserved, perFunction: blocks.sort((a, b) => b.blocks - a.blocks).slice(0, 40) } : { available: false, reason: "no instruction-level PC source on this core" },
     observed: observed.slice(0, 60), unobservedTop: unobserved.slice(0, 40), unreferencedTop: unreferenced.slice(0, 40),
-    basicBlocks: { available: false, reason: probe.singleStep.supported ? "block attribution is not implemented; instruction samples are attributed to functions" : "no instruction hook on this core" },
-    distinction: "unobserved = has a static caller (R_MIPS_26) and was never sampled in this scenario; unreferenced = no static caller anywhere (jump-table/function-pointer target or dead code) — neither is proof of unreachability",
-    honesty: exceptionSamples === samples ? "every frame-boundary sample was the exception vector: this scenario observed NO game function — the numbers below are the static partition, not runtime coverage" : undefined,
+    distinction: "unobserved = has a static caller (R_MIPS_26) and was never executed in this scenario; unreferenced = no static caller anywhere (jump-table/function-pointer target or dead code) — neither is proof of unreachability",
+    honesty: samples > 0 && exceptionSamples === samples ? "every sample was the exception vector: this scenario observed NO game function" : undefined,
     provenance: prov, ms: Date.now() - t0, file };
   await writeFile(file, JSON.stringify(report, null, 2));
   return report;
+}
+
+/** The function's instruction stream: from its extracted asm, else from the build object. */
+async function instructionStream(project, fn) {
+  const asmRel = fn.targetAsm?.path ?? fn.source?.asmPath;
+  if (asmRel) { const { parseSplatAsm } = await import("./splat-map.js"); return parseSplatAsm(await readFile(project.abs(asmRel), "utf8")).instructions.map((i) => ({ va: i.va, word: i.word, text: i.text })); }
+  if (!fn.object) return [];
+  const { dumpObject, findSymbol, symbolTable, trimToSize } = await import("./mips-obj.js");
+  const objdump = project.m.toolchain.objdump?.path ?? "mips-linux-gnu-objdump";
+  const d = await dumpObject({ objdump, objPath: project.abs(fn.object), cwd: project.root, env: project.env });
+  const sym = findSymbol(d, fn.symbol); if (!sym) return [];
+  const syms = await symbolTable({ objdump, objPath: project.abs(fn.object), cwd: project.root, env: project.env });
+  return trimToSize(sym.instructions, syms.get(fn.symbol)?.size ?? 0).map((i) => ({ va: fn.va + (i.offset - sym.offset), word: i.word, text: `${i.mnemonic} ${i.operands}` }));
+}
+
+/** Basic blocks from a MIPS instruction stream: leaders = entry, branch targets, post-delay-slot successors. */
+export function basicBlocks(stream, baseVa) {
+  const n = stream.length;
+  const leaders = new Set([0]);
+  for (let i = 0; i < n; i++) {
+    const w = stream[i].word >>> 0;
+    const op = w >>> 26;
+    const isBranch = (op >= 1 && op <= 7) || (op >= 20 && op <= 23) || (op === 17 && ((w >>> 21) & 0x1f) === 8); // REGIMM/beq/bne/blez/bgtz/…l, bc1
+    const isJ = op === 2 || op === 3;
+    const isJr = op === 0 && ((w & 0x3f) === 8 || (w & 0x3f) === 9);
+    if (isBranch) { const off = (w << 16) >> 16; const t = i + 1 + off; if (t >= 0 && t < n) leaders.add(t); if (i + 2 < n) leaders.add(i + 2); }
+    else if (isJ || isJr) { if (i + 2 < n) leaders.add(i + 2); if (isJ) { const target = (((baseVa + (i + 1) * 4) & 0xf0000000) | ((w & 0x03ffffff) << 2)) >>> 0; const idx = (target - baseVa) / 4; if (idx >= 0 && idx < n) leaders.add(idx); } }
+  }
+  const idx = [...leaders].sort((a, b) => a - b);
+  return idx.map((s, k) => ({ start: baseVa + s * 4, end: baseVa + (idx[k + 1] ?? n) * 4, instructions: (idx[k + 1] ?? n) - s }));
 }

@@ -832,10 +832,12 @@ export async function analyzeDecompile(romPath, address, platformOverride, bank 
         const segBytes = romBytes.subarray(seg.romStart, seg.romEnd);
         fileOff = (address >>> 0) - seg.vram;
         provenance = { method: "splat-segment", requestedVa: hx(address), resolvedVa: hx(address), segment: seg.name, overlay: seg.overlay, romOffset: hx(mapping.romOffset), segmentRomStart: hx(seg.romStart), segmentVram: hx(seg.vram),
+          loadedAt: hx(seg.vram), analysisAddressSpace: "absolute: the segment is loaded at its VA, so calls/globals/jump tables resolve to real addresses (no post-hoc rebasing)",
           analyzedBytes: segBytes.length, analyzedFrom: hx(seg.romStart), byteOrder: norm.reordered ?? "z64 (native)", bytesSha1: sha1Hex(segBytes.subarray(fileOff, fileOff + 64)), preview: hexPreview(segBytes.subarray(fileOff, fileOff + 16)),
           project: mapping.project ?? null, candidates: mapping.candidates ?? undefined };
         romBytes = segBytes;
         symbolize = mapping.symbolize;
+        opts.__baseAddress = seg.vram;
       } else {
         fileOff = ((address >>> 0) - entry + 0x1000) >>> 0;
         provenance = { method: "header-entry-formula", requestedVa: hx(address), resolvedVa: hx(address), romOffset: hx(fileOff), entry: hx(entry), byteOrder: norm.reordered ?? "z64 (native)",
@@ -867,7 +869,7 @@ export async function analyzeDecompile(romPath, address, platformOverride, bank 
     if (fileOff >= romBytes.length) {
       throw new Error(`decompile: ${platform} address ${hx(address)} maps to file offset ${hx(fileOff)}, outside the ${romBytes.length}-byte image. Use an address from target='functions'.`);
     }
-    const rm = await decompileFunction({ platform, romBytes, fileOffset: fileOff });
+    const rm = await decompileFunction({ platform, romBytes, fileOffset: fileOff, baseAddress: opts.__baseAddress ?? 0 });
     let code = prettyDecompile(rm.code, platform);
     let symbols = undefined;
     if (symbolize) { const sr = symbolize(code, fileOff, address); code = sr.code; symbols = sr.stats; }
@@ -1057,13 +1059,10 @@ async function n64SegmentMapping(address, { project, splatYaml, segment } = {}) 
   const symbolize = (code, fileOff, va) => {
     const stats = { rebased: 0, named: 0, unresolved: [] };
     const seen = new Set();
-    const imageLen = seg.romEnd - seg.romStart;
     const rewrite = (prefix, hexStr, absolute) => {
-      const v = parseInt(hexStr, 16) >>> 0;
-      // Three shapes: a full VA (lui/addiu-derived, >= 0x80000000); an offset inside
-      // the analyzed slice (Ghidra's raw-at-0 labels); or a jal target computed in
-      // region 0 (the high nibble comes from the segment's VA).
-      const vaOut = v >= 0x80000000 ? v : v < imageLen ? (seg.vram + v) >>> 0 : ((seg.vram & 0xf0000000) | v) >>> 0;
+      // The image is loaded at its VA: every Ghidra name (FUN_801de690, DAT_801542b4,
+      // func_0x801de690) already carries the real address. Only names are swapped.
+      const vaOut = parseInt(hexStr, 16) >>> 0;
       const name = nameFor(vaOut);
       stats.rebased++;
       if (name) { stats.named++; return name; }

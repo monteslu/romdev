@@ -8,6 +8,7 @@
    build-parallel-n64.sh into mupen64plus-core/src/r4300/. */
 #include <stdint.h>
 #include "romdev_debug.h"
+#include <stdlib.h>
 
 extern int64_t reg[32], hi, lo;
 struct precomp_instr; extern struct precomp_instr *PC;
@@ -57,3 +58,16 @@ int romdev_n64_step(uint32_t pc){
    }
    return 0;
 }
+
+/* A PC-break / single-step / watchdog hit yields to the frontend the same way the
+   VI frame end does (co_switch to main_thread inside retro_return), so retro_run
+   returns to the host with the CPU stopped AT the hit PC and the next retro_run
+   resumes right here. Never `stop = 1`: that ends the emulation thread for good. */
+extern int retro_return(int just_flipping);
+/* This build has NO_LIBCO: there is no second thread. retro_return(0) records that the
+   CPU loop must stop for this frame (stop_stepping = 1, flip_only = 0) and RETURNS; the
+   CPU loop then `break`s, EmuThreadStep() returns, emu_step_render() finds nothing
+   flipped and retro_run exits with the last frame duped. The CPU is stopped AT the hit
+   PC (the instruction did not execute) and the next retro_run re-enters the loop
+   there. A `while (hook) yield;` here would spin forever: nothing else runs. */
+void romdev_n64_yield(void){ retro_return(0); }

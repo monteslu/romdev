@@ -180,8 +180,25 @@ export async function compileAndCompare(project, fn, opts) {
   // (from m2c's own m2c_macros.h semantics) so a draft can compile as-is. They are
   // recorded in the result — a matched function must not keep them.
   const injected = m2cMacroDefinitions(opts.candidateText);
-  const candidateForTu = injected.text + opts.candidateText;
-  const spliced = spliceFunction(tuText, fn.symbol, candidateForTu);
+  const candidateForTu = injected.text + (opts.declarations ? opts.declarations.replace(/\s*$/, "\n\n") : "") + opts.candidateText;
+  let spliced = spliceFunction(tuText, fn.symbol, candidateForTu);
+  let prototypeRewritten = false;
+  if (opts.declarations) {
+    // A proposed prototype for THIS function replaces the TU's own declaration(s) of it (a
+    // header-declared prototype cannot be shadowed here: the diagnostics will name the header).
+    const esc = fn.symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const protoRe = new RegExp(`^[ \\t]*[A-Za-z_][^;{}\\n]*\\b${esc}\\s*\\([^;{}]*\\)\\s*;[ \\t]*$`, "gm");
+    const proposed = opts.declarations.match(protoRe)?.[0]?.trim();
+    if (proposed) {
+      const before = spliced.text;
+      const bodyStart = before.indexOf(candidateForTu);
+      const head = before.slice(0, bodyStart), tail = before.slice(bodyStart);
+      const head2 = head.replace(protoRe, (m) => (m.trim() === proposed ? m : `/* romdev: prototype replaced by the proposed declarations */`));
+      const tail2 = tail.slice(candidateForTu.length).replace(protoRe, (m) => (m.trim() === proposed ? m : `/* romdev: prototype replaced by the proposed declarations */`));
+      prototypeRewritten = head2 !== head || tail2 !== tail.slice(candidateForTu.length);
+      spliced = { ...spliced, text: head2 + candidateForTu + tail2 };
+    }
+  }
   await writeFile(newTuAbs, spliced.text);
   const compileArgv = retargetArgv(inv.compile, { tuRel, objRel, newTu: newTuAbs, newObj: newObjAbs });
   const t0 = Date.now();
@@ -202,7 +219,9 @@ export async function compileAndCompare(project, fn, opts) {
   };
   await writeFile(result.candidate.storedAt, opts.candidateText);
   if (!result.compileSucceeded) {
-    if (result.diagnostics.some((d) => /Selector requires struct\/union/.test(d.message))) result.hint = "a field access through a non-struct pointer: the TU's prototype for this function (or a callee) types the argument as u8*/void*; declare the real struct type in the TU/header and regenerate";
+    const redecl = result.diagnostics.find((d) => /redeclaration of '(\w+)'; previous declaration at line (\d+) in file '([^']+)'/.test(d.message));
+    if (redecl && opts.declarations) { const m = /previous declaration at line (\d+) in file '([^']+)'/.exec(redecl.message); result.hint = `the proposed prototype conflicts with the declaration at ${m[2].replace(/^.*\/work\/[0-9a-f]+\//, "")}:${m[1]}; apply the proposal there (a header is not shadowed by the work copy) and compare again without \`declarations\``; }
+    else if (result.diagnostics.some((d) => /Selector requires struct\/union/.test(d.message))) result.hint = "a field access through a non-struct pointer: the TU's prototype for this function (or a callee) types the argument as u8*/void*; declare the real struct type in the TU/header and regenerate";
     else if (/->unk-\d|\.unk-\d/.test(opts.candidateText)) result.hint = "m2c emitted a NEGATIVE field offset (`->unk-N`): the draft advanced a typed pointer and then indexed behind it — rewrite as an array/index expression before compiling";
     else if (/M2C_ERROR\(/.test(opts.candidateText)) result.hint = "the draft contains M2C_ERROR(...) markers: m2c could not translate those instructions; each needs a hand rewrite";
     // A clearer parse error from the host syntax check, when the project has one.
@@ -262,15 +281,20 @@ export async function compileAndCompare(project, fn, opts) {
   await writeFile(diffPath, JSON.stringify({ target: tstream, candidate: cstream, strict, classes }, null, 1));
   const diffTxt = path.join(candDir, `${cacheKey}.diff.txt`);
   await writeFile(diffTxt, renderDiff(tstream, cstream, strict, 100000));
+  // Function-local rodata (jump tables, float literals): compared directly, by reference order.
+  let rodata;
+  try { rodata = target.romOnly ? await compareRodataAgainstRom(project, fn, { objdump, candidateO: newObjAbs, cstream }) : await compareRodata(project, fn, { objdump, targetO: target.targetO, candidateO: newObjAbs, tstream, cstream }); }
+  catch (e) { rodata = { compared: false, error: String(e?.message ?? e).slice(0, 200) }; }
   // Translation-unit verification: every OTHER function in the object must be unchanged vs the verified build object.
   let tu = { status: "not-run" };
   if (opts.verifyTu !== false) tu = await verifyTranslationUnit(project, fn, { objdump, candidateObj: newObjAbs, buildObj: project.abs(objRel), csyms });
   const { romStream: _rs, linkedStream: _ls, ...romLinkedOut } = romLinked;
   Object.assign(result, {
     targetFrom: target.romOnly ? "rom-bytes" : `asm:${target.targetFrom ?? "pragma"}`,
-    exactFunctionMatch: strict.exact, targetBytes: strict.targetBytes, candidateBytes: strict.candidateBytes,
+    exactFunctionMatch: strict.exact && (rodata?.compared === false || rodata?.equal !== false), textExact: strict.exact, targetBytes: strict.targetBytes, candidateBytes: strict.candidateBytes,
     distance, differenceKinds: classes.kinds, evidence: classes.evidence, changedRanges: ranges, strictMismatches: strict.mismatchCount,
-    rodata: target.rodata.length ? { targetSymbols: target.rodata, compared: false, note: "the function's .rodata/.late_rodata is verified by the TU + full-ROM steps, not by the function-local text compare" } : { compared: true, note: "target carries no rodata" },
+    rodata,
+    declarationsInjected: opts.declarations ? true : undefined, prototypeRewritten: opts.declarations ? prototypeRewritten : undefined,
     romLinked: romLinkedOut,
     verification: { functionLocal: strict.exact ? "exact" : "mismatch", romLinkedBytes: romLinked.status, translationUnit: tu.status, fullRom: "not-run" }, translationUnitCheck: tu,
     diffPreview: diffText,
@@ -295,7 +319,11 @@ async function compareAgainstRom(project, fn, cstream, csyms) {
   const local = new Map();
   // Symbols local to the candidate object (its own functions/data) sit at fn VA-relative offsets we cannot know
   // without the link; use the linker map's VA for them (same object in the verified build).
-  const symbolVa = (name) => ld?.symbols.get(name)?.va ?? sa.get(name)?.va ?? local.get(name) ?? null;
+  // Section symbols (.rodata/.data/.bss/.text) resolve to THIS object's section VA from the
+  // linker map: IDO references its local literals and jump tables as section+addend.
+  const objSections = fn.object ? (ld?.objects.get(fn.object) ?? []) : [];
+  const sectionVa = (name) => objSections.find((s) => s.section === name)?.va ?? null;
+  const symbolVa = (name) => ld?.symbols.get(name)?.va ?? sa.get(name)?.va ?? local.get(name) ?? (name.startsWith(".") ? sectionVa(name) : null);
   const linked = applyRelocations(cstream, symbolVa, fn.va);
   const size = cstream.length * 4;
   const rom = await project.romSlice(fn.romOffset, Math.max(size, (fn.sizeBytes ?? size)));
@@ -396,4 +424,132 @@ export function lintCandidate(text) {
   if (/\b(\w+)\s*=\s*\1\s*(\+\+|--)|(\+\+|--)\s*(\w+)\s*[^;]*\b\4\s*=/.test(text)) flags.push("possibly unsequenced modification of the same object in one expression");
   if (/M2C_ERROR\(/.test(text)) flags.push("M2C_ERROR markers: untranslated instructions");
   return { rejected: reasons.length > 0, reasons, flags, countsAsRecoveredC: reasons.length === 0 };
+}
+
+/**
+ * Compare the function's OWN rodata — jump tables and float/double literals —
+ * between the target object and the candidate object. References are taken
+ * from the function's instruction stream in order (HI16/LO16 pairs into
+ * .rodata; the target names them jtbl_/D_, IDO emits section+addend locals),
+ * so the k-th reference on each side is compared: bytes with R_MIPS_32 entries
+ * resolved to function-relative offsets (a jump table's targets), plus the
+ * literal words. Sizes come from the target's symbol table.
+ */
+export async function compareRodata(project, fn, { objdump, targetO, candidateO, tstream, cstream }) {
+  const objcopy = project.m.toolchain.objcopy?.path ?? "mips-linux-gnu-objcopy";
+  const side = async (objPath, stream, funcName) => {
+    const syms = await symbolTable({ objdump, objPath, cwd: project.root, env: project.env });
+    const secBytes = await sectionBytesOf(objcopy, objPath, ".rodata", project);
+    const relocs = await sectionRelocs(objdump, objPath, ".rodata", project);
+    const funcOff = syms.get(funcName)?.value ?? 0;
+    // References: LO16 relocs whose symbol is in .rodata (named) or the .rodata section itself.
+    const refs = [];
+    for (const ins of stream) {
+      const r = ins.reloc; if (!r || r.type !== "R_MIPS_LO16") continue;
+      const sym = syms.get(r.symbol);
+      const inRodata = r.symbol === ".rodata" || sym?.section === ".rodata";
+      if (!inRodata) continue;
+      const lo = ((ins.word << 16) >> 16);
+      const off = ((sym?.value ?? 0) + lo + (r.addend | 0));
+      if (!refs.some((x) => x.offset === off)) refs.push({ offset: off, symbol: r.symbol === ".rodata" ? null : r.symbol, size: sym && r.symbol !== ".rodata" ? sym.size : null });
+    }
+    return { refs, secBytes, relocs, funcOff, syms };
+  };
+  const T = await side(targetO, tstream, fn.symbol), C = await side(candidateO, cstream, fn.symbol);
+  const items = [];
+  const n = Math.max(T.refs.length, C.refs.length);
+  let equal = T.refs.length === C.refs.length;
+  for (let i = 0; i < n; i++) {
+    const t = T.refs[i], c = C.refs[i];
+    if (!t || !c) { items.push({ index: i, target: t ? describe(t) : null, candidate: c ? describe(c) : null, equal: false, note: !t ? "candidate references rodata the target does not" : "target rodata the candidate never references" }); equal = false; continue; }
+    // Size: the target symbol's size; else up to the next reference/section end (literal = 4 or 8).
+    let size = t.size || 0;
+    if (!size) { const nextT = T.refs.map((x) => x.offset).filter((o) => o > t.offset).sort((a, b) => a - b)[0]; size = Math.min(nextT != null ? nextT - t.offset : 8, 8); }
+    const tb = T.secBytes ? T.secBytes.subarray(t.offset, t.offset + size) : Buffer.alloc(0);
+    const cb = C.secBytes ? C.secBytes.subarray(c.offset, c.offset + size) : Buffer.alloc(0);
+    const tw = wordsWithRelocs(tb, t.offset, T.relocs, T.funcOff), cw = wordsWithRelocs(cb, c.offset, C.relocs, C.funcOff);
+    const same = tw.length === cw.length && tw.every((w, k) => w === cw[k]);
+    if (!same) equal = false;
+    const kind = tw.some((w) => String(w).startsWith("text+")) ? "jump-table" : size === 8 ? "double-literal" : "literal";
+    items.push({ index: i, kind, target: describe(t), candidate: describe(c), bytes: size, equal: same, ...(same ? {} : { targetWords: tw.slice(0, 16), candidateWords: cw.slice(0, 16) }) });
+  }
+  return { compared: true, equal, references: { target: T.refs.length, candidate: C.refs.length }, items, note: "function-local rodata compared by reference order: jump-table entries as function-relative offsets, literals as words; a differing jump table makes exactFunctionMatch false even when the text matches" };
+}
+function describe(r) { return r.symbol ? `${r.symbol}@0x${r.offset.toString(16)}` : `.rodata+0x${r.offset.toString(16)}`; }
+function wordsWithRelocs(buf, base, relocs, funcOff) {
+  const out = [];
+  for (let i = 0; i + 4 <= buf.length; i += 4) {
+    const off = base + i;
+    const rel = relocs.find((r) => r.offset === off);
+    const w = buf.readUInt32BE(i);
+    if (rel && rel.type === "R_MIPS_32" && rel.symbol === ".text") out.push("text+0x" + (((rel.addend ?? 0) || w) - funcOff).toString(16));
+    else if (rel && rel.type === "R_MIPS_32") out.push(`${rel.symbol}+0x${((rel.addend ?? 0) || w).toString(16)}`);
+    else out.push("0x" + w.toString(16).padStart(8, "0"));
+  }
+  return out;
+}
+async function sectionBytesOf(objcopy, objPath, section, project) {
+  const tmp = objPath + `.${section.replace(".", "")}.bin`;
+  const r = await run(objcopy, ["-O", "binary", "--only-section=" + section, objPath, tmp], { cwd: project.root, env: project.env });
+  if (r.code !== 0) return null;
+  try { const b = await readFile(tmp); await rm(tmp, { force: true }); return b; } catch { return null; }
+}
+async function sectionRelocs(objdump, objPath, section, project) {
+  const r = await run(objdump, ["-r", "-j", section, objPath], { cwd: project.root, env: project.env });
+  const out = [];
+  for (const m of r.stdout.matchAll(/^([0-9a-f]+)\s+(R_MIPS_\w+)\s+(\S+?)(?:\+0x([0-9a-f]+))?\s*$/gm)) out.push({ offset: parseInt(m[1], 16), type: m[2], symbol: m[3], addend: m[4] ? parseInt(m[4], 16) : 0 });
+  return out;
+}
+
+/**
+ * ROM-only target: the candidate's rodata references are placed where the
+ * linked build put this object's .rodata (linker map), and compared with the
+ * base ROM's bytes there — jump-table entries as function-relative offsets
+ * (ROM holds absolute VAs), literals as words. Valid because the same TU
+ * links to the same layout; a layout change shows up as a mismatch.
+ */
+export async function compareRodataAgainstRom(project, fn, { objdump, candidateO, cstream }) {
+  const ld = await project.linkerMap();
+  const map = await project.map();
+  const objcopy = project.m.toolchain.objcopy?.path ?? "mips-linux-gnu-objcopy";
+  const rodataSec = fn.object ? (ld?.objects.get(fn.object) ?? []).find((s) => s.section === ".rodata") : null;
+  if (!rodataSec) return { compared: false, reason: `no .rodata placement for ${fn.object ?? "the object"} in the linker map` };
+  const syms = await symbolTable({ objdump, objPath: candidateO, cwd: project.root, env: project.env });
+  const secBytes = await sectionBytesOf(objcopy, candidateO, ".rodata", project);
+  const relocs = await sectionRelocs(objdump, candidateO, ".rodata", project);
+  const funcOff = syms.get(fn.symbol)?.value ?? 0;
+  const refs = [];
+  for (const ins of cstream) {
+    const r = ins.reloc; if (!r || r.type !== "R_MIPS_LO16") continue;
+    const sym = syms.get(r.symbol);
+    if (!(r.symbol === ".rodata" || sym?.section === ".rodata")) continue;
+    const lo = ((ins.word << 16) >> 16);
+    const off = ((sym?.value ?? 0) + lo + (r.addend | 0));
+    if (!refs.some((x) => x.offset === off)) refs.push({ offset: off, symbol: r.symbol === ".rodata" ? null : r.symbol, size: sym && r.symbol !== ".rodata" ? sym.size : null });
+  }
+  const items = []; let equal = true;
+  for (let i = 0; i < refs.length; i++) {
+    const c = refs[i];
+    let size = c.size || 0;
+    if (!size) { const next = refs.map((x) => x.offset).filter((o) => o > c.offset).sort((a, b) => a - b)[0]; size = next != null ? Math.min(next - c.offset, 256) : 8; }
+    // Jump tables: extend to the run of R_MIPS_32 entries starting here.
+    let run = 0; while (relocs.some((r) => r.offset === c.offset + run * 4 && r.type === "R_MIPS_32")) run++;
+    if (run) size = run * 4;
+    const cb = secBytes ? secBytes.subarray(c.offset, c.offset + size) : Buffer.alloc(0);
+    const cw = wordsWithRelocs(cb, c.offset, relocs, funcOff);
+    const va = (rodataSec.va + c.offset) >>> 0;
+    const rv = map.resolveVa(va, { segment: fn.segment });
+    if (!rv.ok || rv.resolved.romOffset == null) { items.push({ index: i, candidate: describe(c), va: "0x" + va.toString(16), equal: false, note: "rodata VA does not map to ROM bytes" }); equal = false; continue; }
+    const rom = await project.romSlice(rv.resolved.romOffset, size);
+    const rw = [];
+    for (let k = 0; k + 4 <= rom.bytes.length; k += 4) {
+      const w = rom.bytes.readUInt32BE(k);
+      const isText = run > 0; // jump-table entries hold absolute VAs into this function
+      rw.push(isText ? "text+0x" + ((w - fn.va) >>> 0).toString(16) : "0x" + w.toString(16).padStart(8, "0"));
+    }
+    const same = rw.length === cw.length && rw.every((w, k) => w === cw[k]);
+    if (!same) equal = false;
+    items.push({ index: i, kind: run ? "jump-table" : size === 8 ? "double-literal" : "literal", candidate: describe(c), va: "0x" + va.toString(16), romOffset: "0x" + rv.resolved.romOffset.toString(16), bytes: size, equal: same, ...(same ? {} : { romWords: rw.slice(0, 16), candidateWords: cw.slice(0, 16) }) });
+  }
+  return { compared: true, equal, references: { candidate: refs.length }, items, method: "rom-linked: candidate .rodata references placed at this object's .rodata VA from the linker map, compared with the base ROM bytes", note: "a differing jump table or literal makes exactFunctionMatch false even when the text matches" };
 }

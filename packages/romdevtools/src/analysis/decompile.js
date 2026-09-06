@@ -60,15 +60,28 @@ export const SLEIGH_LANGID = {
  * Decompile the function at `fileOffset` in `romBytes` for `platform`.
  * @returns {{platform, langid, address, code, warnings:string[], raw:string}}
  */
-export async function decompileFunction({ platform, romBytes, fileOffset, name = "fn_target" }) {
+export async function decompileFunction({ platform, romBytes, fileOffset, name = "fn_target", baseAddress = 0 }) {
   const langid = SLEIGH_LANGID[platform];
   if (!langid) throw new Error(`decompile: no SLEIGH language for platform '${platform}'`);
   const { js, sleigh } = decompilerPaths();
-  const addr = "0x" + (fileOffset >>> 0).toString(16);
+  // With a base address the image is placed at its TRUE virtual address, so absolute
+  // calls, global references and jump tables resolve as they will in the running
+  // program, and Ghidra's own names carry the real VA. `adjust vma` takes a `long`,
+  // which is 32 bits in WASM: a base >= 0x80000000 would go negative, so it is applied
+  // in two halves (adjustVma accumulates).
+  const base = (baseAddress >>> 0);
+  const addr = "0x" + ((base + (fileOffset >>> 0)) >>> 0).toString(16);
+  const adjust = [];
+  if (base) {
+    const h1 = Math.floor(base / 2), h2 = base - h1;
+    adjust.push(`adjust vma 0x${h1.toString(16)}`);
+    if (h2) adjust.push(`adjust vma 0x${h2.toString(16)}`);
+  }
 
-  // REPL script. RawBinary loads at vma 0; `print C` emits the pseudocode.
+  // REPL script. RawBinary loads at vma 0 (or the base); `print C` emits the pseudocode.
   const script = [
     `load file ${langid} /work/rom.bin`,
+    ...adjust,
     `map function ${addr} ${name}`,
     `decompile ${name}`,
     `print C`,
@@ -96,7 +109,7 @@ export async function decompileFunction({ platform, romBytes, fileOffset, name =
   if (!code) {
     throw new Error(`decompile produced no C output (exit=${res.exitCode}): ${raw.slice(-400)}`);
   }
-  return { platform, langid, address: fileOffset, addressHex: addr, code, warnings, raw };
+  return { platform, langid, address: fileOffset, addressHex: addr, baseAddress: base, code, warnings, raw };
 }
 
 /** Pull the C function text out of the REPL transcript (between `print C` and

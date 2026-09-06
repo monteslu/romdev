@@ -93,6 +93,12 @@ void romdev_watchdog_set(unsigned limit);
  * `max` distinct PCs (returns the count); out2 (if non-null) gets [distinct, total]. */
 void romdev_cov_set(unsigned lo, unsigned hi, int enabled);
 unsigned romdev_cov_get(unsigned *out, unsigned max, unsigned *out2);
+/* Exact coverage: one bit per 4-byte word over [lo, hi) — no cap, O(1) per instruction.
+   covbits_set allocates the bitmap ((hi-lo)/4 bits) and arms it; covbits_get copies up to
+   `maxWords` 32-bit words of the bitmap into `out` and returns the bitmap's word count
+   (out2[0] = executed instruction count, out2[1] = distinct PCs set). */
+void romdev_covbits_set(unsigned lo, unsigned hi, int enabled);
+unsigned romdev_covbits_get(unsigned *out, unsigned maxWords, unsigned *out2);
 
 /* At-hit CPU register snapshot. The core fills romdev_snap_regs[] (ROMDEV_SNAP_REGS
  * registers) on a hit via its snapshot shim; the host reads it here. out is

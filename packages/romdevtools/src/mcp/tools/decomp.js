@@ -55,7 +55,7 @@ export function registerDecompTools(server, z, sessionKey) {
         "progress=per-object code-byte progress (asm vs C, library, hasm, data refs, retained inline asm) from the linker map; " +
         "smoke=run base ROM vs rebuilt ROM for N frames on the pinned core in two isolated sessions and compare decoded pixels + CPU registers (script persisted; `scriptPath` replays); " +
         "overlays=which overlay is resident at each shared VA in the live session (`session`), by comparing RAM with each candidate's ROM bytes; symbolize=live `va` → symbol/segment using the resident overlay; state=is `session`'s emulator alive, else a machine-readable loss reason + recovery; " +
-        "trace=stop at a function's entry on the live session and read a0-a3/f12/f14/stack args, then v0/v1/f0 at return (reports PC_BREAK_UNSUPPORTED with evidence when the core cannot stop); coverage=sampled function-level observed/unobserved/unreferenced over `frames` with `inputs`."),
+        "trace=stop at a function's entry on the live session and read a0-a3/f12/f14/stack args, then v0/v1/f0 at return (N64: load the session with coreOptions {'parallel-n64-cpucore':'pure_interpreter'}; the result carries the core probe and says PC_BREAK_UNSUPPORTED with evidence otherwise); coverage=instruction-exact function + basic-block observed/unobserved/unreferenced over `frames` with `inputs` from the core's PC log (interpreter), else frame-boundary samples with the method stated."),
       project: z.string().optional().describe("Project id (required by every op except list). op:'import' picks it."),
       root: z.string().optional().describe("op:'import' — absolute path of the decompilation checkout (the dir with the splat yaml + Makefile)."),
       splatYaml: z.string().optional().describe("op:'import' — splat yaml (relative to root) when auto-detection finds more than one."),
@@ -73,7 +73,11 @@ export function registerDecompTools(server, z, sessionKey) {
       candidatePath: z.string().optional().describe("op:'compare'/'search'/'integrate' — path to a C file holding the function definition (+ any local declarations it needs)."),
       candidateText: z.string().optional().describe("op:'compare'/'search'/'integrate' — the candidate C inline (alternative to candidatePath)."),
       contextHash: z.string().optional().describe("op:'compare' — the context hash the candidate was generated against; the result flags contextStale when the TU/headers/flags changed since."),
-      declarations: z.string().optional().describe("op:'integrate' — extra declarations to place before the function in the TU."),
+      declarations: z.string().optional().describe("op:'compare'/'integrate' — extra declarations (proposed structs/prototypes) placed before the function in the TU copy; pair with the same text passed to generate as extraContext."),
+      extraContext: z.string().optional().describe("op:'generate' — C declarations (proposed structs/prototypes, e.g. decomp({op:'types', propose:true}).text) appended to the TU's context so the draft is generated with those types WITHOUT editing a header."),
+      propose: z.boolean().default(false).describe("op:'types' — also propose struct typedefs + a prototype from the evidence (a proposal, not confirmed types)."),
+      chunkFrames: z.number().int().min(1).max(600).default(10).describe("op:'coverage' — frames per coverage chunk (input events split chunks anyway). Only matters on a core without the exact bitmap, whose 8192-distinct-PC ring is per chunk."),
+      cpuCore: z.enum(["pure_interpreter", "cached_interpreter", "dynamic_recompiler"]).optional().describe("op:'smoke' — N64 CPU core option for both sessions (pure_interpreter enables PC breaks, single-step and the PC coverage log; default is the core's dynarec)."),
       label: z.string().optional().describe("Free label stored with the candidate/job."),
       maxDiffInstructions: z.number().int().min(4).max(400).default(40).describe("op:'compare' — lines in the inline diff preview (full diff always on disk)."),
       noCache: z.boolean().default(false).describe("op:'compare' — recompile even if this candidate was compared under the same dependency hash."),
@@ -180,7 +184,7 @@ export function registerDecompTools(server, z, sessionKey) {
           const fn = await resolveFn();
           const { generateCandidate } = await import("../../decomp/m2c.js");
           const { recordTypeEvidence } = await import("../../decomp/types.js");
-          const g = await generateCandidate(project, fn);
+          const g = await generateCandidate(project, fn, { extraContext: args.extraContext });
           let types = null;
           try { const asmText = g.targetAsm ? await readFile(project.abs(g.targetAsm), "utf8") : null; const rec = await recordTypeEvidence(project, fn, { hypotheses: g.typeHypotheses, asmText }); types = { file: path.join(project.ws, "types", `${fn.symbol}.json`), bases: Object.keys(rec.bases).length }; } catch (e) { types = { error: e.message.slice(0, 120) }; }
           const { code, ...rest } = g;
@@ -188,14 +192,16 @@ export function registerDecompTools(server, z, sessionKey) {
             nextStep: `decomp({op:'compare', project:'${project.id}', symbol:'${fn.symbol}', candidatePath:'${g.candidatePath}', contextHash:'${g.context.hash}'})` });
         }
         case "types": {
-          const { typeReport } = await import("../../decomp/types.js");
-          return jsonContent({ project: project.id, ...(await typeReport(project, { symbol: args.symbol })) });
+          const { typeReport, proposeTypes } = await import("../../decomp/types.js");
+          const rep = await typeReport(project, { symbol: args.symbol });
+          if (args.propose) return jsonContent({ project: project.id, ...rep, proposal: await proposeTypes(project, { symbol: args.symbol }) });
+          return jsonContent({ project: project.id, ...rep });
         }
         case "compare": {
           const fn = await resolveFn();
           const { compileAndCompare } = await import("../../decomp/compile.js");
           const c = await candidateSource();
-          const r = await compileAndCompare(project, fn, { candidateText: c.text, candidatePath: c.path, label: args.label, maxDiffInstructions: args.maxDiffInstructions, noCache: args.noCache, verifyTu: args.verifyTu, contextHash: args.contextHash });
+          const r = await compileAndCompare(project, fn, { candidateText: c.text, candidatePath: c.path, label: args.label, maxDiffInstructions: args.maxDiffInstructions, noCache: args.noCache, verifyTu: args.verifyTu, contextHash: args.contextHash, declarations: args.declarations });
           const { evidence, ...rest } = r;
           return jsonContent({ ...rest, evidence, nextStep: r.exactFunctionMatch && r.romLinked?.status === "exact" ? `decomp({op:'integrate', project:'${project.id}', symbol:'${fn.symbol}', candidatePath:'${r.candidate.storedAt}', apply:true})` : r.code === "CANDIDATE_REJECTED" ? "remove the retained assembly / copied bytes: that is not a translation" : r.compileSucceeded ? `fix the classified differences, or decomp({op:'search', project:'${project.id}', symbol:'${fn.symbol}', candidatePath:'${r.candidate.storedAt}'})` : "fix the diagnostics (declarations/types) and compare again" });
         }
@@ -260,7 +266,7 @@ export function registerDecompTools(server, z, sessionKey) {
         }
         case "smoke": {
           const { runSmoke } = await import("../../decomp/smoke.js");
-          return jsonContent(await runSmoke(project, { frames: args.frames, inputs: args.inputs ?? [], sessionKey, sessionHandle: args.session, scriptPath: args.scriptPath }));
+          return jsonContent(await runSmoke(project, { frames: args.frames, inputs: args.inputs ?? [], sessionKey, sessionHandle: args.session, scriptPath: args.scriptPath, cpuCore: args.cpuCore }));
         }
         case "overlays": {
           const { detectOverlays } = await import("../../decomp/runtime.js");
@@ -281,7 +287,7 @@ export function registerDecompTools(server, z, sessionKey) {
         }
         case "coverage": {
           const { coverage } = await import("../../decomp/runtime.js");
-          return jsonContent({ project: project.id, ...(await coverage(project, { sessionKey: live, frames: args.frames, inputs: args.inputs ?? [] })) });
+          return jsonContent({ project: project.id, ...(await coverage(project, { sessionKey: live, frames: args.frames, inputs: args.inputs ?? [], chunkFrames: args.chunkFrames })) });
         }
         default: throw Object.assign(new Error(`decomp: unknown op '${args.op}'`), { code: "UNSUPPORTED_OP" });
       }

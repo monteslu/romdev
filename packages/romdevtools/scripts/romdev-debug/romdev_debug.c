@@ -51,6 +51,10 @@ static unsigned      cov_lo = 0, cov_hi = 0;
 static int           cov_enabled = 0;
 static unsigned      cov_pcs[ROMDEV_COV_CAP];
 static unsigned      cov_count = 0, cov_total = 0;
+/* exact coverage bitmap */
+static unsigned     *covb_bits = 0;
+static unsigned      covb_lo = 0, covb_hi = 0, covb_words = 0, covb_total = 0, covb_distinct = 0;
+static int           covb_enabled = 0;
 
 /* pc breakpoint + single-step + watchdog */
 static unsigned      pc_addr = 0;
@@ -207,6 +211,21 @@ void romdev_cov_set(unsigned lo, unsigned hi, int enabled) {
     cov_count = 0; cov_total = 0;
 }
 EMSCRIPTEN_KEEPALIVE
+#include <stdlib.h>
+#include <string.h>
+void romdev_covbits_set(unsigned lo, unsigned hi, int enabled) {
+    unsigned words = hi > lo ? (((hi - lo) >> 2) + 31) >> 5 : 0;
+    if (!enabled || !words) { covb_enabled = 0; return; }
+    if (words != covb_words || !covb_bits) { free(covb_bits); covb_bits = (unsigned *)calloc(words, sizeof(unsigned)); covb_words = covb_bits ? words : 0; }
+    else memset(covb_bits, 0, words * sizeof(unsigned));
+    covb_lo = lo; covb_hi = hi; covb_total = 0; covb_distinct = 0; covb_enabled = covb_bits ? 1 : 0;
+}
+unsigned romdev_covbits_get(unsigned *out, unsigned maxWords, unsigned *out2) {
+    unsigned n = covb_words < maxWords ? covb_words : maxWords, i;
+    if (out2) { out2[0] = covb_total; out2[1] = covb_distinct; }
+    if (out && covb_bits) for (i = 0; i < n; i++) out[i] = covb_bits[i];
+    return covb_words;
+}
 unsigned romdev_cov_get(unsigned *out, unsigned max, unsigned *out2) {
     unsigned i, n = cov_count;
     if (out2) { out2[0] = cov_count; out2[1] = cov_total; }
@@ -233,7 +252,7 @@ void romdev_irqblock_set(int on) { romdev_irq_block = on ? 1 : 0; }
 int romdev_wp_wants_old(void) { return wp_enabled && wp_cond; }
 
 int romdev_any_armed(void) {
-    return wp_enabled || rd_enabled || range_enabled || cov_enabled
+    return wp_enabled || rd_enabled || range_enabled || cov_enabled || covb_enabled
         || pc_enabled || pc_step || wd_limit || pc_hit;
 }
 
@@ -281,6 +300,12 @@ int romdev_on_read(unsigned addr, unsigned char val, unsigned pc) {
 }
 
 int romdev_on_dispatch(unsigned pc) {
+    /* exact coverage bitmap: O(1) per instruction */
+    if (covb_enabled && pc >= covb_lo && pc < covb_hi) {
+        unsigned bit = (pc - covb_lo) >> 2, w = bit >> 5, m = 1u << (bit & 31);
+        covb_total++;
+        if (!(covb_bits[w] & m)) { covb_bits[w] |= m; covb_distinct++; }
+    }
     /* coverage: record the distinct PC if it's in-window */
     if (cov_enabled && pc >= cov_lo && pc <= cov_hi) {
         unsigned i;

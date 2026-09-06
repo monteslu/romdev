@@ -156,6 +156,59 @@ addressing with provenance.
 - `platform({op:'capabilities'})` declares `decomp` (true for the MIPS
   tier's splat projects, an N/A reason elsewhere).
 
+### Fixed — the five gaps the Wave Race agent measured after the first pass
+
+- **parallel_n64 PC breaks / single-step / coverage never worked**
+  (romdev-core-parallel-n64 0.3.0). The instruction hook was wired only
+  into the pure interpreter — which this wasm pin cannot boot (it faults
+  into the exception vector) — and a hit set `stop = 1`, which ENDED the
+  emulation thread: the first break "hit" once and the machine was dead
+  from then on (single-step returned no PC, every later frame ran
+  nothing). The hook now sits in the CACHED interpreter (this build's
+  default CPU) too, and a hit ends the frame the way the VI does in this
+  single-threaded (NO_LIBCO) build — `retro_return(0)` marks the CPU loop
+  to stop, the loop breaks, retro_run returns with the last frame duped —
+  so the CPU stays exactly at the hit PC (the instruction has not executed)
+  and the next `retro_run` resumes there. Measured: single-step advances
+  0x80000184 → 0x80000188 → 0x800CAB60…, a break on osRecvMesg hits with
+  a0/a1/ra readable, the PC log records ~90k executed PCs per frame. `breakpoint({on:'pc'})`, `frame({op:'stepInstructions'})`,
+  the PC coverage log and therefore `decomp trace` (a0-a3/f12/f14/stack
+  args at entry, v0/v1/f0 at return) and `decomp coverage` (instruction-
+  exact, basic blocks) are real on N64 now. Both probe the core live and
+  still say so with evidence on a core that cannot.
+- **Ghidra analyzed segment-relative bytes and names were rewritten
+  afterwards.** The segment is now loaded at its true VA (`adjust vma`,
+  applied as two halves because the REPL's `long` is 32 bits in wasm), so
+  absolute calls, globals and jump tables resolve during analysis;
+  `provenance.loadedAt` + `analysisAddressSpace` say so. Only the name
+  swap (Ghidra's `FUN_801de690` → the map's `func_801DE690`) remains.
+- **Function-local rodata was not compared.** `compare` now compares the
+  function's own jump tables and float/double literals by reference order
+  — against the target object when the asm exists, and against the base
+  ROM (at the object's `.rodata` VA from the linker map) when it does not.
+  Jump-table entries are compared as function-relative offsets. A
+  differing table makes `exactFunctionMatch` false even when the text
+  matches (`textExact` keeps the text verdict). The ROM-linked word
+  compare also resolves section symbols (`.rodata+addend`), which a
+  matched C function with a literal needs to be exact.
+- **Types required manual recovery.** `decomp({op:'types', propose:true})`
+  builds struct typedefs from the evidence (field types by asm access
+  width, `s32*` for fields the draft dereferences or indexes, gaps as byte
+  arrays) and a prototype with placeholder `u8*`/`void*` parameters
+  replaced; `generate` takes it as `extraContext` and `compare` as
+  `declarations` (the TU's own prototype is rewritten in the work copy; a
+  header-declared conflict is named in the hint). On func_801DEB08 that
+  turned a draft that could not compile into one that compiles at
+  distance 12.
+- **Coverage was frame-boundary sampling.** With the core fixed it is
+  exact: the shared debug lib gained a PC coverage BITMAP (one bit per
+  word over the code window, O(1) per instruction, no cap —
+  `romdev_covbits_set/get`, romdev-core-host 0.13.0 `logPCBitmap`), and
+  `decomp coverage` unions it per chunk and attributes to functions and
+  basic blocks. Measured on Wave Race: 5 frames = 759,452 executed
+  instructions, 32,140 distinct PCs in 24 ms (the 8192-entry ring took
+  1.2 s and lost 3/4 of them). The method line still states the source.
+
 ### Docs
 
 - `platform({op:'doc', platform:'n64', name:'decomp'})` — the loop, the
