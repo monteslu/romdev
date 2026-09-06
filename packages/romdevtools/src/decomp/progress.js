@@ -63,6 +63,10 @@ export async function computeProgress(project) {
     }
   };
   if (fs.existsSync(project.abs(srcRoot))) walk(project.abs(srcRoot));
+  // C functions that keep assembly inside them are NOT recovered C: count them apart.
+  const inlineAsm = [];
+  const walk2 = (dir) => { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const f = path.join(dir, e.name); if (e.isDirectory()) walk2(f); else if (e.name.endsWith(".c")) { const t = fs.readFileSync(f, "utf8"); if (/\b(__asm__|asm)\s*(volatile\s*)?\(/.test(t)) inlineAsm.push(path.relative(project.root, f)); } } };
+  if (fs.existsSync(project.abs(srcRoot))) walk2(project.abs(srcRoot));
   const romBuilt = project.m.built?.rom ? project.abs(project.m.built.rom) : null;
   let romMatches = null;
   if (romBuilt && fs.existsSync(romBuilt)) { const { sha1File } = await import("./project.js"); romMatches = (await sha1File(romBuilt)) === project.m.rom.sha1; }
@@ -74,6 +78,8 @@ export async function computeProgress(project) {
     library: { ...groups.library, codeBytesInC_percent: pct(groups.library.cBytes, groups.library.asmBytes) },
     handwrittenAsm: { ...groups.hasm, policy: "hasm subsegments are excluded from the decompilation denominator" },
     pragmas: { functionReferences: funcRefs, dataReferences: dataRefs, insideConditionalBlocks: conditionalRefs, note: "pragma counts are a WORK QUEUE (conditional references included), not a completion percentage" },
+    retainedAssemblyInC: { files: inlineAsm, note: inlineAsm.length ? "these TUs keep inline asm: their functions count as C in the byte totals above but are NOT recovered C" : "no inline asm in any TU" },
+    states: { asm: "GLOBAL_ASM (the .NON_MATCHING twin exists)", pseudocodeDraft: "candidates/<func>/gen-*.c in the workspace (never in the tree)", compilableC: "a compare result with compileSucceeded and no exact match", functionMatchingC: "exactFunctionMatch + romLinked exact", integratedRomVerified: "integrate apply:true with fullRom byte-exact", reviewedTypes: "the project's headers (not tracked here)", data: "dataReferences above + bin/ assets (not tracked here)" },
     objects: objects.sort((a, b) => b.asmBytes - a.asmBytes).slice(0, 40),
   };
 }

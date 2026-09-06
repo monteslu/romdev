@@ -41,6 +41,7 @@ export const OP_KEYS = /** @type {const} */ ([
   "cart",               // cart({op:'extract'/'wrap'})
   "disasm",             // disasm({target:'rom'/'project'/'references'})
   "decompile",          // disasm({target:'decompile'}) — RE engine, all 14
+  "decomp",             // decomp({op}) — matching decompilation on a splat project's own compiler
 ]);
 
 // Generic regions every running core exposes (libretro RETRO_MEMORY_*).
@@ -59,6 +60,7 @@ const tileDeep = ({ ops: opsOverride = {}, ...rest } = {}) => ({
     inspectSprites: true, inspectPalette: true, inspectBackground: true,
     renderingContext: true, cpuState: true, audioDebug: true,
     cart: true, disasm: true, decompile: true,
+    decomp: false,
     ...opsOverride,
   },
 });
@@ -145,6 +147,7 @@ export const CAPABILITIES = {
       inspectSprites: true, inspectPalette: true, inspectBackground: false,
       renderingContext: true, cpuState: true, audioDebug: true,
       cart: false, disasm: true, decompile: true,
+      decomp: false,
     },
   },
   atari2600: {
@@ -184,6 +187,7 @@ export const CAPABILITIES = {
       inspectSprites: true, inspectPalette: true, inspectBackground: false,
       renderingContext: true, cpuState: true, audioDebug: true,
       cart: false, disasm: true, decompile: true,
+      decomp: false,
     },
   },
   gametank: {
@@ -208,6 +212,7 @@ export const CAPABILITIES = {
       inspectSprites: false, inspectPalette: true, inspectBackground: false,
       renderingContext: true, cpuState: true, audioDebug: true,
       cart: true, disasm: true, decompile: true,
+      decomp: false,
     },
   },
   pico8: {
@@ -235,6 +240,7 @@ export const CAPABILITIES = {
       inspectSprites: false, inspectPalette: false, inspectBackground: false,
       renderingContext: false, cpuState: false, audioDebug: false,
       cart: false, disasm: true, decompile: false,
+      decomp: false,
     },
   },
   sync32: {
@@ -293,6 +299,7 @@ export const CAPABILITIES = {
       inspectSprites: false, inspectPalette: true, inspectBackground: false,
       renderingContext: false, cpuState: true, audioDebug: false,
       cart: false, disasm: false, decompile: false,
+      decomp: false,
     },
   },
   pce: {
@@ -309,6 +316,7 @@ export const CAPABILITIES = {
       inspectSprites: true, inspectPalette: true, inspectBackground: false,
       renderingContext: true, cpuState: false, audioDebug: true,
       cart: false, disasm: true, decompile: true,
+      decomp: false,
     },
   },
   msx: {
@@ -323,6 +331,7 @@ export const CAPABILITIES = {
       inspectSprites: true, inspectPalette: true, inspectBackground: false,
       renderingContext: true, cpuState: false, audioDebug: true,
       cart: false, disasm: true, decompile: true,
+      decomp: false,
     },
   },
 
@@ -357,6 +366,7 @@ export const CAPABILITIES = {
       inspectSprites: false, inspectPalette: false, inspectBackground: false,
       renderingContext: false, cpuState: true, audioDebug: true,
       cart: false, disasm: true, decompile: true,
+      decomp: true,
     },
   },
   n64: {
@@ -374,6 +384,7 @@ export const CAPABILITIES = {
       inspectSprites: false, inspectPalette: false, inspectBackground: false,
       renderingContext: false, cpuState: true, audioDebug: true,
       cart: false, disasm: true, decompile: true,
+      decomp: true,
     },
   },
 
@@ -397,6 +408,7 @@ export const CAPABILITIES = {
       inspectSprites: false, inspectPalette: false, inspectBackground: false,
       renderingContext: false, cpuState: true, audioDebug: true,
       cart: false, disasm: true, decompile: true,
+      decomp: false,
     },
   },
 };
@@ -455,6 +467,7 @@ const NA_OPS = new Set(["inspectSprites", "inspectPalette", "inspectBackground",
 export function naReason(platform, op) {
   const cap = CAPABILITIES[platform];
   if (!cap || cap.ops?.[op]) return null;            // supported → no N/A reason
+  if (op === "decomp") return "matching decompilation needs a splat-layout project with its original compiler registered (decomp({op:'import'})); shipped for the MIPS tier (n64/ps1 splat + IDO/GCC projects) — other platforms have no compile-and-compare adapter yet";
   if (op === "cart") {
     // The boilerplate said "disc-based" for every framebuffer platform —
     // true of PlayStation, false of sync32 (a cartridge console whose carts

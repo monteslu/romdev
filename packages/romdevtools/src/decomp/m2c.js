@@ -81,6 +81,8 @@ export async function generateCandidate(project, fn, opts = {}) {
   for (const m of parsed.body.matchAll(/\b(\w+)(?:->|\.)unk_?([0-9A-Fa-f]+)\b/g)) hypotheses.push({ base: m[1], offset: parseInt(m[2], 16), evidence: "m2c unk field (width from the load/store, see asm)" });
   const seen = new Set(); const uniq = hypotheses.filter((h) => { const k = `${h.base}:${h.offset}:${h.type ?? ""}`; if (seen.has(k)) return false; seen.add(k); return true; });
   const errors = [...parsed.body.matchAll(/M2C_ERROR\(([^)]*)\)/g)].map((m) => m[1]);
+  // Persist what this draft says about types (offsets + asm access widths), so evidence accumulates across attempts.
+  try { const { recordTypeEvidence } = await import("./types.js"); await recordTypeEvidence(project, fn, { hypotheses: uniq, asmText: await readFile(asmAbs, "utf8"), source: "m2c" }); } catch {}
   const n = fs.readdirSync(dir).filter((f) => /^gen-\d+\.c$/.test(f)).length + 1;
   const candPath = path.join(dir, `gen-${n}.c`);
   const candidateText = parsed.body.trim() + "\n";

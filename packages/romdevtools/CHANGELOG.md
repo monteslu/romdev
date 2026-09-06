@@ -101,12 +101,60 @@ addressing with provenance.
 - `op:'candidates'` — every compared candidate for a function with its
   verdicts, sorted by distance.
 
-### Added — runtime (P3, narrow)
+- `op:'plan'` — the call graph from the built objects' R_MIPS_26 relocations
+  ranks the remaining asm functions by expected payoff (bytes × certainty ×
+  typed neighbours) and groups the ones that call each other inside one TU
+  into batches, so shared struct/prototype fixes land once. `op:'batch'` runs
+  generate → compare for a batch under a time budget and names the shared
+  blocker. `op:'map'` lists TU → object → segment → functions.
+- `op:'types'` — persistent type evidence: every generate records the
+  offsets m2c guessed together with the access WIDTH the asm actually uses
+  (lb/lh/lw/lwc1…), kept as hypotheses with evidence, never as confirmed
+  types.
+- Candidate lint: inline asm, a GLOBAL_ASM pragma, incbin or an array of
+  32-bit words that looks like copied code are REJECTED
+  (`CANDIDATE_REJECTED`) before compiling; type punning, unsequenced
+  modification and `M2C_ERROR` markers are flagged. `countsAsRecoveredC`
+  is on every result; `progress` reports TUs that retain inline asm apart.
+- Typed error codes on every failure (`[AMBIGUOUS_OVERLAY]`,
+  `[MISSING_COMPILER]`, `[STALE_CONTEXT]` via `contextStale`,
+  `[COMPILE_FAILED]`, `[CANDIDATE_REJECTED]`, `[JOB_NOT_FOUND]`,
+  `[CANCELLED]`, `[LOST_RUNTIME_STATE]`, `[PC_BREAK_UNSUPPORTED]`, …).
+- `op:'job', action:'report'` writes a durable JSON + Markdown report of a
+  search (base, best, every improvement, budget, seed, artifacts).
+- `resolve` carries the TU's exact compile invocation (argv, never a shell
+  string) and its fingerprint.
+
+### Added — runtime (P3)
 
 - `op:'smoke'` — base ROM vs rebuilt ROM on the pinned core in two isolated
   sessions with an identical input script: decoded RGB compared per pixel,
-  CPU register file compared at the end, PNGs + report on disk, and a
-  coverage sentence that says it is a boot/render check, not gameplay.
+  CPU register file compared at the end, PNGs + report + the input script
+  on disk (`scriptPath` replays it), core package + version and session keys
+  recorded, and a coverage sentence that says it is a boot/render check, not
+  gameplay. A frame-boundary PC in the exception vector is labelled as such.
+- `op:'overlays'` — which overlay is resident at each shared VA, decided by
+  comparing RAM (byte-swapped RDRAM words) with every candidate segment's
+  ROM bytes; `op:'symbolize'` resolves a live VA through the resident
+  overlay with that evidence and never guesses.
+- `op:'state'` — whether a session's emulator is still there; if not, a
+  machine-readable reason (`never-loaded` / `evicted` / `server-restart`),
+  the last media, server pid/start time, and the recovery call.
+- `op:'trace'` — argument/return capture at a function's entry and return
+  address where the core can stop at a PC. The core is PROBED first (does
+  single-step advance the PC, does a break on the frame PC ever hit) and
+  the result carries that evidence; on parallel_n64 every CPU option
+  (dynarec, cached and pure interpreter) fails both probes, so the result
+  is `PC_BREAK_UNSUPPORTED` with the static call targets instead of an
+  invented trace.
+- `op:'coverage'` — function-level observed / unobserved (has a static
+  caller, never sampled) / unreferenced (no static caller: table target or
+  dead code) for a scenario, from the frame-boundary PC every frame plus
+  single-stepped windows when the core supports them; the method line says
+  exactly what was visible, and a scenario whose every sample was the
+  exception vector says it observed no game function.
+- `platform({op:'capabilities'})` declares `decomp` (true for the MIPS
+  tier's splat projects, an N/A reason elsewhere).
 
 ### Docs
 

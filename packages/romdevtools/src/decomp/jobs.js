@@ -160,3 +160,19 @@ export async function listJobs(project, symbol) {
 }
 
 function isAlive(pid) { try { process.kill(pid, 0); return true; } catch { return false; } }
+
+/** A durable report of one job: base, best, every score improvement with its time, timings, and where everything is. */
+export async function jobReport(project, jobId) {
+  const s = await jobStatus(project, jobId);
+  const log = fs.existsSync(s.log) ? await readFile(s.log, "utf8") : "";
+  const history = [...log.matchAll(/found (?:new best|a better) score!? \((\d+) vs (\d+)\)/g)].map((m, i) => ({ n: i + 1, score: Number(m[1]), previous: Number(m[2]) }));
+  const outputs = fs.existsSync(s.permuterDir) ? (await readdir(s.permuterDir)).filter((d) => /^output-\d+-\d+$/.test(d)).length : 0;
+  const report = { jobId, project: project.id, function: s.function, label: s.label, status: s.status, startedAt: s.startedAt, endedAt: s.endedAt ?? null, elapsedS: s.elapsedS, timeLimitS: s.timeLimitS, threads: s.threads, seed: s.seed,
+    baseCandidateSha256: s.baseCandidateSha256, baseScore: s.baseScore, best: s.best, improvements: history, candidatesWritten: outputs, zeroFound: s.zeroFound, resumeFrom: s.resumeFrom,
+    backend: s.backend, artifacts: { dir: s.dir, permuterDir: s.permuterDir, log: s.log, importLog: s.importLog, base: path.join(s.dir, "base.c") },
+    verdict: s.zeroFound ? "zero score found — run decomp({op:'compare'}) on best.path; the permuter's score is not the strict test" : s.status === "complete-budget" ? "budget exhausted — best is the closest candidate, not a match" : s.status };
+  const md = [`# search ${jobId}`, ``, `- function: ${s.function.symbol} (${s.function.segment} ${s.function.va})`, `- status: ${s.status} (${s.elapsedS}s of ${s.timeLimitS}s, ${s.threads} threads${s.seed ? ", seed " + s.seed : ""})`, `- base score: ${s.baseScore} → best: ${s.best?.score ?? "none"} (${outputs} candidates written, ${history.length} improvements)`, `- verdict: ${report.verdict}`, `- best candidate: ${s.best?.path ?? "none"}`, ``, `## improvements`, ...history.map((h) => `${h.n}. ${h.previous} → ${h.score}`), ``, `## artifacts`, `- ${s.dir}`, `- ${s.log}`].join("\n");
+  await writeFile(path.join(s.dir, "report.json"), JSON.stringify(report, null, 2));
+  await writeFile(path.join(s.dir, "report.md"), md);
+  return { ...report, reportJson: path.join(s.dir, "report.json"), reportMd: path.join(s.dir, "report.md") };
+}

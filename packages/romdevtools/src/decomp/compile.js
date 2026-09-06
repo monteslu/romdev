@@ -151,9 +151,16 @@ export async function compileAndCompare(project, fn, opts) {
   const tuRel = fn.source?.tu;
   if (!tuRel) throw Object.assign(new Error(`function '${fn.symbol}' was not found in any TU under ${project.m.splat.srcPath}/`), { code: "FUNCTION_NOT_IN_TU" });
   const objRel = path.join(project.m.splat.buildPath, tuRel.replace(/\.c$/, ".o"));
+  if (!project.m.toolchain?.compiler) throw Object.assign(new Error(`project '${project.id}' has no compiler fingerprint: the IDO binary was not found at import time (tools/ido-static-recomp/build/<ver>/out/cc). Build it per the project's docs and re-import.`), { code: "MISSING_COMPILER" });
   const inv = await project.compileInvocation(tuRel);
   const dep = await dependencyHash(project, tuRel, inv);
   const candSha = sha256Text(opts.candidateText).slice(0, 16);
+  const lint = lintCandidate(opts.candidateText);
+  if (lint.rejected) {
+    return { project: project.id, function: { symbol: fn.symbol, segment: fn.segment, va: fn.vaHex, tu: tuRel }, candidate: { sha256: candSha, path: opts.candidatePath ?? null }, code: "CANDIDATE_REJECTED",
+      compileSucceeded: false, exactFunctionMatch: false, distance: null, lint, countsAsRecoveredC: false,
+      verification: { functionLocal: "rejected", translationUnit: "not-run", fullRom: "not-run" }, error: { code: "CANDIDATE_REJECTED", message: lint.reasons.join("; ") }, elapsedMs: Date.now() - startedAt };
+  }
   const candDir = path.join(project.ws, "candidates", fn.symbol);
   await mkdir(candDir, { recursive: true });
   const cacheKey = `${dep.hash}-${candSha}`;
@@ -189,6 +196,8 @@ export async function compileAndCompare(project, fn, opts) {
     compiler: { invocation: compileArgv, fingerprint: inv.fingerprint, compiler: project.m.toolchain.compiler, dependencyHash: dep.hash, dependencyCount: dep.deps.length },
     compileSucceeded: cr.code === 0 && fs.existsSync(newObjAbs), compileMs, diagnostics: extractDiagnostics(cr.stdout + "\n" + cr.stderr),
     injectedMacros: injected.names.length ? injected.names : undefined,
+    lint: lint.flags.length ? lint : undefined, countsAsRecoveredC: lint.countsAsRecoveredC,
+    contextStale: opts.contextHash ? opts.contextHash !== dep.hash : undefined,
     artifacts: { log: logPath }, cacheHit: false,
   };
   await writeFile(result.candidate.storedAt, opts.candidateText);
@@ -205,6 +214,7 @@ export async function compileAndCompare(project, fn, opts) {
     }
     result.exactFunctionMatch = false;
     result.distance = null;
+    result.code = "COMPILE_FAILED";
     result.verification = { functionLocal: "compile-failed", translationUnit: "not-run", fullRom: "not-run" };
     await rm(work, { recursive: true, force: true });
     await writeFile(cachedPath, JSON.stringify(result, null, 2));
@@ -368,4 +378,22 @@ export function m2cMacroDefinitions(candidateText) {
   const lines = names.map((n) => M2C_MACROS[n]);
   if (names.some((n) => /MEMCPY|STRUCT_COPY/.test(n))) lines.push("void* memcpy(void*, const void*, unsigned int);");
   return { names, text: lines.length ? lines.join("\n") + "\n" : "" };
+}
+
+/**
+ * Candidate lint: what must never count as recovered C, and what is
+ * suspicious enough to flag. Rejections stop the compile (they would
+ * "match" by construction); flags are reported and carried to the result.
+ */
+export function lintCandidate(text) {
+  const reasons = [], flags = [];
+  if (/\b(__asm__|asm)\s*(volatile\s*)?\(/.test(text)) reasons.push("inline assembly (__asm__/asm) — retained assembly is not recovered C");
+  if (/#pragma\s+GLOBAL_ASM/.test(text)) reasons.push("GLOBAL_ASM pragma inside the candidate — that is the asm, not a translation");
+  if (/\.incbin|INCBIN\(/.test(text)) reasons.push("incbin of ROM bytes");
+  const hexWords = text.match(/0x[0-9A-Fa-f]{8}\b/g) ?? [];
+  if (hexWords.length >= 8 && /\{\s*0x[0-9A-Fa-f]{8}(\s*,\s*0x[0-9A-Fa-f]{8}){7,}/.test(text)) reasons.push("an array of 32-bit words that looks like copied instruction/ROM bytes");
+  if (/\*\s*\(\s*(u32|s32|unsigned|int)\s*\*\s*\)\s*&\s*\w/.test(text) || /\*\s*\(\s*(f32|float)\s*\*\s*\)\s*&\s*\w/.test(text)) flags.push("type punning through a pointer cast (*(u32*)&x): review for aliasing UB");
+  if (/\b(\w+)\s*=\s*\1\s*(\+\+|--)|(\+\+|--)\s*(\w+)\s*[^;]*\b\4\s*=/.test(text)) flags.push("possibly unsequenced modification of the same object in one expression");
+  if (/M2C_ERROR\(/.test(text)) flags.push("M2C_ERROR markers: untranslated instructions");
+  return { rejected: reasons.length > 0, reasons, flags, countsAsRecoveredC: reasons.length === 0 };
 }

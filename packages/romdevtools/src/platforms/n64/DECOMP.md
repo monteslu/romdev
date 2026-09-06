@@ -77,6 +77,35 @@ handwritten-asm subsegments are reported apart, data references apart, and
 `builtRomMatchesBase:true` only says the mixed build is byte-exact, never
 that the game is decompiled.
 
+## Picking work, sharing types
+
+`decomp({op:'plan'})` ranks the remaining asm functions by expected payoff
+(bytes, discounted by what earlier attempts learned, boosted by typed C
+neighbours) and groups functions that call each other inside one TU into
+batches. `decomp({op:'batch', symbols:[…]})` runs generate → compare for a
+batch under a time budget and names the shared blocker (usually a
+placeholder prototype in one header). `decomp({op:'types'})` is the
+accumulated evidence: offsets with the access widths the asm uses. None of
+it is a confirmed type until it is in a header and the compare says exact.
+
+## Runtime, and what this core can and cannot do
+
+- `decomp({op:'overlays', session})` says which overlay is resident at
+  0x802C5800 by comparing RAM with every candidate's ROM bytes.
+- `decomp({op:'symbolize', session, va})` resolves a live address through
+  that; an address in the exception vectors is labelled as the interrupt
+  handler, never as the main loop.
+- `decomp({op:'state', session})` says whether the emulator is still there
+  and, if not, why (`never-loaded`, `evicted`, `server-restart`) and how to
+  recover (reload + replay the persisted input script).
+- `decomp({op:'trace'})` and `decomp({op:'coverage'})` PROBE the core
+  first. parallel_n64 does not single-step and does not stop at a PC break
+  under any CPU option, so trace answers `PC_BREAK_UNSUPPORTED` with the
+  evidence and the static call targets, and coverage is limited to the
+  frame-boundary PC (it says so, and says when it observed nothing). On a
+  core that passes the probes the same calls capture registers and
+  attribute instructions.
+
 ## Workspace
 
 Everything durable lives in `~/.romdev/decomp/<project>/` (manifest,
