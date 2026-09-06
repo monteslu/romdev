@@ -152,10 +152,17 @@ disassembly, playtest) see
 
 ## 0.13.0 — exact PC coverage bitmap
 
-`pcBitmapSupported()` / `logPCBitmap(lo, hi, frames)`: on a core built with
-the 0.13.0 shared debug lib (`romdev_covbits_set/get`), run `frames` frames
-recording EVERY executed PC in `[lo, hi)` as one bit per instruction word —
-O(1) per instruction, no distinct-PC cap — and return `{pcs, distinct,
-total, words}`. `logPCRange` (the 8192-entry distinct ring) remains for older
-core builds. Shipped in romdev-core-parallel-n64 0.3.0; the other cores pick
-it up on their next rebuild.
+`pcBitmapSupported()` / `logPCBitmap(lo, hi, frames, {shift})`: on a core
+built with the 0.13.0 shared debug lib (`romdev_covbits_set/get`), run
+`frames` frames recording EVERY executed PC in `[lo, hi)` as one bit per PC —
+O(1) per instruction, no distinct-PC cap — and return `{pcs, distinct, total,
+words, shift, granularityBytes, exact}`. The bit granularity is `1 << shift`
+bytes and defaults to `pcAlignShift()` for the loaded platform: 2 (word) on
+MIPS (n64, ps1, psp), 1 (halfword) on the 68000 / Thumb / SH-4 machines
+(genesis, gba, dreamcast, sync32), 0 (byte) on every byte-addressed CPU (6502,
+Z80, SM83, 65816, HuC6280, W65C02) and when the platform is unknown. The core
+reports the shift it actually recorded at; a core built before the shift
+argument records 4-byte words, which the result flags as `exact:false` on any
+platform whose instructions are packed tighter than that. `logPCRange` (the
+8192-entry distinct ring) remains for core builds without the bitmap. Every
+shipped romdev core carries the bitmap as of this release.

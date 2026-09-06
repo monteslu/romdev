@@ -9,7 +9,6 @@
 //              reported as unsupported with evidence when it cannot)
 //   coverage   function-level observed/unobserved/unreferenced for a scenario
 // Every observation carries ROM sha1, core identity, session key, frame count.
-import fs from "node:fs";
 import path from "node:path";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
@@ -213,16 +212,17 @@ export async function coverage(project, { sessionKey, frames = 600, inputs = [],
   const record = (pc) => { samples++; if (pc >= 0x80000000 && pc < 0x80000400) { exceptionSamples++; return; } pcs.add(pc); const f = findFn(pc); if (f) hits.set(f.name, (hits.get(f.name) ?? 0) + 1); };
   // Code window for the PC log: every .text VA of the map.
   const lo = funcs[0]?.va ?? 0x80000000, hi = funcs.length ? funcs[funcs.length - 1].va + funcs[funcs.length - 1].size : 0x80400000;
-  let si = 0, at = 0;
+  let si = 0, at = 0, covGranularity = null, covExact = true;
   while (at < frames) {
     while (si < script.length && script[si].frame <= at) { await callTool(reg, "input", { op: "set", ports: [script[si].buttons] }, sessionKey); si++; }
     const nextInput = si < script.length ? script[si].frame : frames;
     const step = Math.max(1, Math.min(covLog ? chunkFrames : 1, nextInput - at, frames - at));
     if (covBitmap) {
-      // Exact: one bit per word over the whole code window, no cap.
+      // Exact: one bit per PC (at the platform's instruction granularity) over the whole code window, no cap.
       const r = host.logPCBitmap(lo, hi, step);
       for (const pc of r.pcs) record(pc >>> 0);
       instructionSamples += r.total;
+      covGranularity = r.granularityBytes; if (!r.exact) covExact = false;
     } else if (covLog) {
       const r = host.logPCRange(lo, hi, step);
       for (const pc of r.pcs) record(pc >>> 0);
@@ -262,13 +262,15 @@ export async function coverage(project, { sessionKey, frames = 600, inputs = [],
   await mkdir(outDir, { recursive: true });
   const file = path.join(outDir, `${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
   const method = covBitmap
-    ? `instruction-exact: the core's PC coverage BITMAP (one bit per word over [${hx(lo)}, ${hx(hi)}), uncapped) — every executed instruction in the scenario is recorded`
+    ? covExact
+      ? `instruction-exact: the core's PC coverage BITMAP (one bit per ${covGranularity}-byte PC over [${hx(lo)}, ${hx(hi)}), uncapped) — every executed instruction in the scenario is recorded`
+      : `PC coverage BITMAP at ${covGranularity}-byte granularity, COARSER than this CPU's instruction alignment (a core build from before per-platform granularity): adjacent instructions inside one ${covGranularity}-byte group share a PC — rebuild the core package for exact coverage`
     : covLog
     ? `instruction-exact within the ring: the core's PC coverage log (romdev_cov) over [${hx(lo)}, ${hx(hi)}) in ${chunkFrames}-frame chunks, distinct PCs unioned${truncatedChunks ? ` — ${truncatedChunks} chunk(s) filled the core's 8192-distinct-PC ring: PCs beyond the ring were lost in those chunks (use chunkFrames:1, or a narrower window)` : ""}`
     : probe.singleStep.supported
       ? `frame-boundary PC every frame + up to ${stepBudget} single-stepped instructions`
       : `frame-boundary PC only: this core does not single-step (${probe.singleStep.evidence}) and does not stop at a PC break (${probe.pcBreak.evidence}); in-frame execution is INVISIBLE to this measurement`;
-  const report = { method, coreProbe: probe, coverageSource: covBitmap ? "bitmap" : covLog ? "ring" : "frame-boundary", frames, inputs: script.length, samples, distinctPcs: pcs.size, instructionSamples, exceptionVectorSamples: exceptionSamples, truncatedChunks,
+  const report = { method, coreProbe: probe, coverageSource: covBitmap ? "bitmap" : covLog ? "ring" : "frame-boundary", ...(covBitmap ? { granularityBytes: covGranularity, exact: covExact } : {}), frames, inputs: script.length, samples, distinctPcs: pcs.size, instructionSamples, exceptionVectorSamples: exceptionSamples, truncatedChunks,
     functions: { total: funcs.length, observed: observed.length, unobserved: unobserved.length, unreferenced: unreferenced.length },
     basicBlocks: covLog || probe.singleStep.supported ? { available: true, total: blocksTotal, observed: blocksObserved, perFunction: blocks.sort((a, b) => b.blocks - a.blocks).slice(0, 40) } : { available: false, reason: "no instruction-level PC source on this core" },
     observed: observed.slice(0, 60), unobservedTop: unobserved.slice(0, 40), unreferencedTop: unreferenced.slice(0, 40),

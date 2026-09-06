@@ -21,7 +21,9 @@ OUT="$PROJECT_DIR/src/cores/wasm"
 fetch_pinned cores.genesis_plus_gx "$GPGX_DIR"
 
 cd "$GPGX_DIR"
-git checkout -- libretro/libretro.c core/m68k/m68kcpu.c core/m68k/m68kcpu.h core/z80/z80.c core/vdp_ctrl.c 2>/dev/null || true
+# Every file the patch touches (vdp_render.c included: the patch rewrites its CRLF
+# endings, so a second run on the same tree fails --check unless it is reverted too).
+git checkout -- libretro/libretro.c core/m68k/m68kcpu.c core/m68k/m68kcpu.h core/z80/z80.c core/vdp_ctrl.c core/vdp_render.c 2>/dev/null || true
 # --recount lets the patch survive small additions (new ROMDEV_MEMORY_*
 # region IDs etc) without re-numbering hunk headers by hand.
 if ! git apply --recount --check "$PATCH_FILE" 2>/dev/null; then

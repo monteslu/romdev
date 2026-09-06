@@ -76,7 +76,7 @@ export function registerDecompTools(server, z, sessionKey) {
       declarations: z.string().optional().describe("op:'compare'/'integrate' — extra declarations (proposed structs/prototypes) placed before the function in the TU copy; pair with the same text passed to generate as extraContext."),
       extraContext: z.string().optional().describe("op:'generate' — C declarations (proposed structs/prototypes, e.g. decomp({op:'types', propose:true}).text) appended to the TU's context so the draft is generated with those types WITHOUT editing a header."),
       propose: z.boolean().default(false).describe("op:'types' — also propose struct typedefs + a prototype from the evidence (a proposal, not confirmed types)."),
-      chunkFrames: z.number().int().min(1).max(600).default(10).describe("op:'coverage' — frames per coverage chunk (input events split chunks anyway). Only matters on a core without the exact bitmap, whose 8192-distinct-PC ring is per chunk."),
+      chunkFrames: z.number().int().min(1).max(600).default(10).describe("op:'coverage' — frames per coverage chunk (input events split chunks anyway). Only matters on a core build without the exact bitmap (every shipped core has it), whose 8192-distinct-PC ring is per chunk."),
       cpuCore: z.enum(["pure_interpreter", "cached_interpreter", "dynamic_recompiler"]).optional().describe("op:'smoke' — N64 CPU core option for both sessions (pure_interpreter enables PC breaks, single-step and the PC coverage log; default is the core's dynarec)."),
       label: z.string().optional().describe("Free label stored with the candidate/job."),
       maxDiffInstructions: z.number().int().min(4).max(400).default(40).describe("op:'compare' — lines in the inline diff preview (full diff always on disk)."),

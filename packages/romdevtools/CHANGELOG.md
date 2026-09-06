@@ -169,6 +169,20 @@ bluemsx 0.9.0, prosystem 0.10.0, stella2014 (romdev-platform-atari2600
 beetle-psx-hw build script now refreshes the shared debug lib on every run
 (it did so only on a fresh tree, so a rebuilt tree linked the old lib).
 
+The bitmap's granularity is now per platform. The first build was one bit per
+4-byte word, which is exact for MIPS and WRONG for every other core: adjacent
+6502/Z80/SM83/65816/HuC6280 instructions inside one word collapsed into a
+single PC, and 68000/Thumb halfwords paired up. `romdev_covbits_set` takes a
+shift (0 byte, 1 halfword, 2 word); `romdev-core-host` picks it per platform
+(`pcAlignShift()`), reads back the shift the core actually recorded at and
+reports `granularityBytes` + `exact` (false when a pre-granularity core build
+is coarser than the CPU's instruction alignment). `watch({on:'pc'})` now runs
+on the bitmap (`method:'bitmap'`, no 8192-distinct cap, `limit` caps only the
+PCs returned) and falls back to the ring on an older core build;
+`decomp({op:'coverage'})` reports `granularityBytes`/`exact` too. Regression:
+`test/pc-bitmap-granularity.test.js` (fceumm byte-exact, with a
+word-granularity control that must collapse). All fourteen cores rebuilt again.
+
 ### Changed — the decomp path is parameterized by platform; PS1/Dreamcast decompile at true addresses
 
 - `disasm({target:'decompile'})` on **ps1** and **dreamcast** now loads the

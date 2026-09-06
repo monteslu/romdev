@@ -53,7 +53,7 @@ static unsigned      cov_pcs[ROMDEV_COV_CAP];
 static unsigned      cov_count = 0, cov_total = 0;
 /* exact coverage bitmap */
 static unsigned     *covb_bits = 0;
-static unsigned      covb_lo = 0, covb_hi = 0, covb_words = 0, covb_total = 0, covb_distinct = 0;
+static unsigned      covb_lo = 0, covb_hi = 0, covb_words = 0, covb_total = 0, covb_distinct = 0, covb_shift = 0;
 static int           covb_enabled = 0;
 
 /* pc breakpoint + single-step + watchdog */
@@ -213,16 +213,23 @@ void romdev_cov_set(unsigned lo, unsigned hi, int enabled) {
 EMSCRIPTEN_KEEPALIVE
 #include <stdlib.h>
 #include <string.h>
-void romdev_covbits_set(unsigned lo, unsigned hi, int enabled) {
-    unsigned words = hi > lo ? (((hi - lo) >> 2) + 31) >> 5 : 0;
+void romdev_covbits_set(unsigned lo, unsigned hi, int enabled, unsigned shift) {
+    /* shift = log2 of the PC granularity: 0 = every byte address gets its own bit
+       (8-bit CPUs, 65816, HuC6280), 1 = halfword (68000, Thumb, SH-4), 2 = word (MIPS,
+       ARM state). A shift wider than the CPU's instruction alignment would merge
+       adjacent instructions into one bit, so the host picks it per platform and
+       covbits_get reports the shift actually in force. */
+    unsigned words;
+    if (shift > 2) shift = 2;
+    words = hi > lo ? (((hi - lo) >> shift) + 31) >> 5 : 0;
     if (!enabled || !words) { covb_enabled = 0; return; }
     if (words != covb_words || !covb_bits) { free(covb_bits); covb_bits = (unsigned *)calloc(words, sizeof(unsigned)); covb_words = covb_bits ? words : 0; }
     else memset(covb_bits, 0, words * sizeof(unsigned));
-    covb_lo = lo; covb_hi = hi; covb_total = 0; covb_distinct = 0; covb_enabled = covb_bits ? 1 : 0;
+    covb_lo = lo; covb_hi = hi; covb_shift = shift; covb_total = 0; covb_distinct = 0; covb_enabled = covb_bits ? 1 : 0;
 }
 unsigned romdev_covbits_get(unsigned *out, unsigned maxWords, unsigned *out2) {
     unsigned n = covb_words < maxWords ? covb_words : maxWords, i;
-    if (out2) { out2[0] = covb_total; out2[1] = covb_distinct; }
+    if (out2) { out2[0] = covb_total; out2[1] = covb_distinct; out2[2] = covb_shift; }
     if (out && covb_bits) for (i = 0; i < n; i++) out[i] = covb_bits[i];
     return covb_words;
 }
@@ -302,7 +309,7 @@ int romdev_on_read(unsigned addr, unsigned char val, unsigned pc) {
 int romdev_on_dispatch(unsigned pc) {
     /* exact coverage bitmap: O(1) per instruction */
     if (covb_enabled && pc >= covb_lo && pc < covb_hi) {
-        unsigned bit = (pc - covb_lo) >> 2, w = bit >> 5, m = 1u << (bit & 31);
+        unsigned bit = (pc - covb_lo) >> covb_shift, w = bit >> 5, m = 1u << (bit & 31);
         covb_total++;
         if (!(covb_bits[w] & m)) { covb_bits[w] |= m; covb_distinct++; }
     }

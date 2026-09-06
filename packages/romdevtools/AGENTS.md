@@ -387,7 +387,7 @@ Different platforms have different levels of MCP-exposed debugging — different
 > **`watch({on:'range'})`** (log EVERY read/write hitting an address range — discovery;
 > pass **`fromState`**/`fromStatePath` to restore a savestate FIRST so the trace runs from a
 > known, repeatable moment — jump to the boss, then see what writes HP),
-> **`watch({on:'pc'})`** (coverage trace — distinct PCs executed in a window; also takes `fromState`),
+> **`watch({on:'pc'})`** (coverage trace — EVERY distinct PC executed in a window, exact and uncapped on every core: a one-bit-per-PC bitmap at the CPU's instruction granularity, `method:'bitmap', exact:true` in the result; also takes `fromState`),
 > **the RE-INJECT trio** (put an edited asset BACK, all 15 classic platforms): **`romPatch({op:'findPointer'})`**
 > (find every pointer to a ROM offset — Genesis 32-bit BE, SNES LoROM/HiROM, GBA
 > 0x08000000+offset incl. literal pools, banked 8-bit 16-bit-LE aliases),

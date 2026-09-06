@@ -160,3 +160,14 @@ emcc $OBJ_FILES -O3 -flto -s WASM=1 -s MODULARIZE=1 -s EXPORT_ES6=1 \
 sed -i 's/var GL={/var GL=Module.GL={/' "$OUT/parallel_n64_libretro.js" 2>/dev/null || true
 
 echo "Built: $OUT/parallel_n64_libretro.{js,wasm} (glide64 GL / native-gles)"
+
+# Mirror the fresh build into the romdev-core-parallel-n64 package, which is what
+# resolves at runtime (src/cores/registry.js → romdev-core-parallel-n64). Without
+# this a rebuild lands only in src/cores/wasm and the package keeps serving the
+# previous core (2026-09-06: a granularity fix was verified against a stale package).
+PKG_OUT="$PROJECT_DIR/../romdev-core-parallel-n64/wasm"
+if [ -d "$PKG_OUT" ]; then
+  cp "$OUT/parallel_n64_libretro.js"   "$PKG_OUT/parallel_n64_libretro.js"
+  cp "$OUT/parallel_n64_libretro.wasm" "$PKG_OUT/parallel_n64_libretro.wasm"
+  echo "Mirrored into $PKG_OUT"
+fi

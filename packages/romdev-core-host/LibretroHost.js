@@ -2951,31 +2951,52 @@ export class LibretroHost {
   }
 
   /**
-   * Run `frames` frames recording EVERY executed PC in [lo, hi) as one bit per
-   * word — exact, uncapped, O(1) per instruction. Returns
-   * { pcs:number[], distinct, total, words, lo, hi } (pcs decoded from the bitmap).
+   * log2 of the coarsest PC granularity that still gives every instruction of
+   * the loaded platform's CPU its own bit: 2 (word) for MIPS, 1 (halfword) for
+   * the 68000 / Thumb / SH-4 machines, 0 (byte) for every byte-addressed CPU
+   * (6502, Z80, SM83, 65816, HuC6280, W65C02) and when the platform is unknown.
    */
-  logPCBitmap(lo, hi, frames) {
+  pcAlignShift() {
+    const p = this.status.platform;
+    if (p === "n64" || p === "ps1" || p === "psp") return 2;
+    if (p === "genesis" || p === "gba" || p === "dreamcast" || p === "sync32") return 1;
+    return 0;
+  }
+
+  /**
+   * Run `frames` frames recording EVERY executed PC in [lo, hi) as one bit per
+   * PC at (1 << shift) bytes — exact, uncapped, O(1) per instruction. `shift`
+   * defaults to pcAlignShift() for the loaded platform. Returns
+   * { pcs:number[], distinct, total, words, lo, hi, shift, granularityBytes, exact }
+   * where `shift`/`granularityBytes` are what the core actually recorded at
+   * (a pre-granularity core build ignores the argument and records 4-byte
+   * words) and `exact` is false when that is coarser than the CPU's
+   * instruction alignment, i.e. adjacent instructions may share a bit.
+   */
+  logPCBitmap(lo, hi, frames, opts = {}) {
     const mod = this._needMod();
     this._needMedia();
     if (!this.pcBitmapSupported()) throw new Error("PC coverage bitmap not supported by this core.");
-    mod._romdev_covbits_set(lo >>> 0, hi >>> 0, 1);
+    const wanted = opts.shift ?? this.pcAlignShift();
+    mod._romdev_covbits_set(lo >>> 0, hi >>> 0, 1, wanted >>> 0);
     this._runFramesExclusive(() => false, frames);
     const words = mod._romdev_covbits_get(0, 0, 0);
     const outPtr = mod._malloc(Math.max(4, words * 4));
-    const out2Ptr = mod._malloc(8);
+    const out2Ptr = mod._malloc(12);
     try {
+      const out2 = new Uint32Array(mod.HEAPU8.buffer, out2Ptr, 3);
+      out2[2] = 0xFFFFFFFF; // sentinel: a core built before the shift argument leaves it untouched
       mod._romdev_covbits_get(outPtr, words, out2Ptr);
-      const out2 = new Uint32Array(mod.HEAPU8.buffer, out2Ptr, 2);
       const total = out2[0], distinct = out2[1];
+      const shift = out2[2] === 0xFFFFFFFF ? 2 : out2[2];
       const bits = new Uint32Array(mod.HEAPU8.buffer, outPtr, words);
       const pcs = [];
       for (let w = 0; w < words; w++) {
         let v = bits[w];
-        while (v) { const b = 31 - Math.clz32(v & -v); pcs.push((lo + ((w * 32 + b) << 2)) >>> 0); v &= v - 1; }
+        while (v) { const b = 31 - Math.clz32(v & -v); pcs.push((lo + ((w * 32 + b) << shift)) >>> 0); v &= v - 1; }
       }
-      mod._romdev_covbits_set(0, 0, 0); // disarm (keeps the buffer for reuse)
-      return { pcs, distinct, total, words, lo: lo >>> 0, hi: hi >>> 0 };
+      mod._romdev_covbits_set(0, 0, 0, 0); // disarm (keeps the buffer for reuse)
+      return { pcs, distinct, total, words, lo: lo >>> 0, hi: hi >>> 0, shift, granularityBytes: 1 << shift, exact: shift <= this.pcAlignShift() };
     } finally {
       mod._free(outPtr); mod._free(out2Ptr);
     }
