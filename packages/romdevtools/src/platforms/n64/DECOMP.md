@@ -144,6 +144,15 @@ A differing jump table or literal makes `verdict.functionLocal` mismatch and
 keeps the text-only verdict. A rodata comparison that could not run is
 `unknown`/`error`, never exact.
 
+## Other platforms
+
+The loop is MIPS-generic and parameterized in `src/decomp/platform.js`:
+splat psx/psp/ps2 layouts, little-endian words, GCC instead of IDO, the
+matching m2c target and permuter type. None of that has been run on a real
+PS1 checkout yet; `import` says so (`platformVerified:false`) and the
+capability manifest keeps `decomp:false` for ps1 until a known-matching PS1
+function compares exact through it.
+
 ## Workspace
 
 Everything durable lives in `~/.romdev/decomp/<project>/` (manifest,

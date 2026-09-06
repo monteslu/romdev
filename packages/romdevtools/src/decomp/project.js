@@ -18,6 +18,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { run } from "./mips-obj.js";
 import { loadSplatMap, loadSymbolAddrs, loadLinkerMap, findFunctionSource, parseSplatAsm, hx } from "./splat-map.js";
+import { profileFor, readRomHeader, classifyInvocation, binutilsPrefixFromAssembler } from "./platform.js";
 
 export const DECOMP_HOME = process.env.ROMDEV_DECOMP_HOME || path.join(os.homedir(), ".romdev", "decomp");
 export const MANIFEST_VERSION = 1;
@@ -73,15 +74,15 @@ export async function importProject({ id, root, splatYaml, rom, expectedSha1, bu
   const want = expectedSha1 ?? map.sha1 ?? null;
   if (want && want.toLowerCase() !== romSha1) throw new Error(`base ROM sha1 ${romSha1} != expected ${want} (from ${expectedSha1 ? "argument" : "splat yaml"}). Wrong ROM — refusing to register.`);
   const romBuf = await readFile(romPath, { encoding: null });
-  const magic = romBuf.subarray(0, 4).toString("hex");
-  const byteOrder = magic === "80371240" ? "z64 (big-endian, native)" : magic === "37804012" ? "v64 (byte-swapped)" : magic === "40123780" ? "n64 (little-endian)" : `unknown magic ${magic}`;
-  const romHeader = magic === "80371240" ? {
-    entry: hx(romBuf.readUInt32BE(8)), name: romBuf.subarray(0x20, 0x34).toString("latin1").trim(), cartId: romBuf.subarray(0x3b, 0x3e).toString("latin1"), region: String.fromCharCode(romBuf[0x3e]), version: romBuf[0x3f],
-  } : null;
+  const splatPlatform = map.options.platform ?? "n64";
+  const profile = profileFor(splatPlatform);
+  const { byteOrder, header: romHeader } = readRomHeader(profile, romBuf);
 
   const buildCmd = buildCommand ?? (fs.existsSync(path.join(root, "tools", "matching-build.sh")) ? ["bash", "tools/matching-build.sh"] : ["make"]);
   const manifest = {
-    manifestVersion: MANIFEST_VERSION, id, root, platform: map.options.platform ?? "n64", registeredAt: new Date().toISOString(),
+    manifestVersion: MANIFEST_VERSION, id, root, platform: profile.platform, splatPlatform, endian: profile.endian, platformVerified: profile.verified,
+    platformNote: profile.verified ? undefined : `the ${splatPlatform} splat path shares the MIPS code with n64 but has not been run on a real ${profile.platform} checkout yet — treat verdicts as unproven until a known-matching function compares exact here`,
+    registeredAt: new Date().toISOString(),
     splat: { yaml: path.relative(root, yamlPath), name: map.name, compiler: o.compiler ?? null, srcPath: sourceDir ?? o.src_path ?? "src", asmPath: o.asm_path ?? "asm", buildPath: o.build_path ?? "build",
       symbolAddrs: (o.symbol_addrs_path ? [].concat(o.symbol_addrs_path) : []), elfPath: o.elf_path ?? null, ldScript: o.ld_script_path ?? null, basename: o.basename ?? null },
     rom: { path: path.relative(root, romPath), sha1: romSha1, expectedSha1: want, bytes: romBuf.length, byteOrder, header: romHeader },
@@ -105,7 +106,7 @@ function builtArtifacts(manifest) {
   return {
     elf: elf && path.relative(manifest.root, elf),
     map: base && path.relative(manifest.root, base + ".map"),
-    rom: base && path.relative(manifest.root, base + ".z64"),
+    rom: base && path.relative(manifest.root, base + (manifest.platform === "n64" ? ".z64" : manifest.platform === "ps1" ? ".exe" : ".bin")),
     buildDir: b,
   };
 }
@@ -120,14 +121,33 @@ async function gitState(root) {
 export async function fingerprintToolchain(manifest, idoHint) {
   const env = projectEnv(manifest);
   const root = manifest.root;
-  const ido = idoHint ? path.resolve(root, idoHint) : path.join(root, "tools", "ido-static-recomp", "build", "5.3", "out", "cc");
-  const out = { compiler: null, assembler: null, objdump: null, python: null, asmProcessor: null };
-  if (fs.existsSync(ido)) {
-    const rel = path.relative(root, ido);
+  const profile = profileFor(manifest.splatPlatform ?? manifest.platform);
+  const out = { compiler: null, assembler: null, objdump: null, objcopy: null, python: null, asmProcessor: null, binutilsPrefix: null };
+  // The compiler is whatever the project's OWN build invokes: capture one TU's command and classify it.
+  let cls = null;
+  try {
+    const firstTu = firstTranslationUnit(root, manifest.splat.srcPath);
+    if (firstTu) { const inv = await new Project(manifest).compileInvocation(firstTu); cls = classifyInvocation(inv.compile); }
+  } catch { cls = null; }
+  const idoPath = idoHint ? path.resolve(root, idoHint) : path.join(root, "tools", "ido-static-recomp", "build", "5.3", "out", "cc");
+  if (cls?.compiler) {
+    const abs = path.isAbsolute(cls.compiler) ? cls.compiler : fs.existsSync(path.join(root, cls.compiler)) ? path.join(root, cls.compiler) : (await run("bash", ["-lc", `command -v ${cls.compiler}`], { env, cwd: root })).stdout.trim() || null;
+    const ver = abs && cls.kind === "gcc" ? (await run(abs, ["--version"], { env, cwd: root })).stdout.split("\n")[0]?.trim() : null;
+    out.compiler = { kind: cls.kind, path: abs ? path.relative(root, abs).replace(/^\.\.\//, "") : cls.compiler, version: cls.kind === "ido" ? (/\/(\d+\.\d+)\//.exec(cls.compiler)?.[1] ?? null) : ver, sha256: abs && fs.existsSync(abs) ? await sha256File(abs) : null, fromInvocation: true };
+    if (cls.kind === "ido") { const subHead = await run("git", ["-C", path.join(root, "tools", "ido-static-recomp"), "rev-parse", "HEAD"]); out.compiler.recompCommit = subHead.code === 0 ? subHead.stdout.trim() : null; }
+  } else if (fs.existsSync(idoPath)) {
+    const rel = path.relative(root, idoPath);
     const subHead = await run("git", ["-C", path.join(root, "tools", "ido-static-recomp"), "rev-parse", "HEAD"]);
-    out.compiler = { kind: "ido", version: /\/(\d+\.\d+)\//.exec(rel)?.[1] ?? null, path: rel, sha256: await sha256File(ido), recompCommit: subHead.code === 0 ? subHead.stdout.trim() : null };
+    out.compiler = { kind: "ido", version: /\/(\d+\.\d+)\//.exec(rel)?.[1] ?? null, path: rel, sha256: await sha256File(idoPath), recompCommit: subHead.code === 0 ? subHead.stdout.trim() : null };
   }
-  for (const [key, name] of [["assembler", "mips-linux-gnu-as"], ["objdump", "mips-linux-gnu-objdump"], ["objcopy", "mips-linux-gnu-objcopy"]]) {
+  // binutils: the prefix the build's assembler uses, else the first available one for the platform.
+  const prefixes = [binutilsPrefixFromAssembler(cls?.assembler), ...profile.binutilsPrefixes].filter(Boolean);
+  for (const prefix of prefixes) {
+    const w = await run("bash", ["-lc", `command -v ${prefix}as`], { env, cwd: root });
+    if (w.stdout.trim()) { out.binutilsPrefix = prefix; break; }
+  }
+  for (const [key, tool] of [["assembler", "as"], ["objdump", "objdump"], ["objcopy", "objcopy"]]) {
+    const name = (out.binutilsPrefix ?? profile.binutilsPrefixes[0]) + tool;
     const w = await run("bash", ["-lc", `command -v ${name}`], { env, cwd: root });
     const p = w.stdout.trim();
     if (!p) { out[key] = null; continue; }
@@ -323,6 +343,17 @@ function findAsmByName(dir, name) {
       if (e.isDirectory()) stack.push(full);
       else if (e.name === want) return full;
     }
+  }
+  return null;
+}
+
+/** The first .c file under src/ (to capture a representative compile invocation). */
+function firstTranslationUnit(root, srcDir) {
+  const stack = [path.join(root, srcDir)];
+  while (stack.length) {
+    const d = stack.pop();
+    let ents; try { ents = fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)); } catch { continue; }
+    for (const e of ents) { const full = path.join(d, e.name); if (e.isDirectory()) stack.push(full); else if (e.name.endsWith(".c") && !e.name.endsWith(".inc.c")) return path.relative(root, full); }
   }
   return null;
 }

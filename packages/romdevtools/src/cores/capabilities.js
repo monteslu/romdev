@@ -366,7 +366,7 @@ export const CAPABILITIES = {
       inspectSprites: false, inspectPalette: false, inspectBackground: false,
       renderingContext: false, cpuState: true, audioDebug: true,
       cart: false, disasm: true, decompile: true,
-      decomp: true,
+      decomp: false,
     },
   },
   n64: {
@@ -467,7 +467,7 @@ const NA_OPS = new Set(["inspectSprites", "inspectPalette", "inspectBackground",
 export function naReason(platform, op) {
   const cap = CAPABILITIES[platform];
   if (!cap || cap.ops?.[op]) return null;            // supported → no N/A reason
-  if (op === "decomp") return "matching decompilation needs a splat-layout project with its original compiler registered (decomp({op:'import'})); shipped for the MIPS tier (n64/ps1 splat + IDO/GCC projects) — other platforms have no compile-and-compare adapter yet";
+  if (op === "decomp") return platform === "ps1" ? "the decomp tool's MIPS path is parameterized for splat psx projects (little-endian, GCC, PS-EXE), but no PS1 checkout has been run through it yet: import works and marks the project platformVerified:false; the capability is declared only once a known-matching PS1 function compares exact" : "matching decompilation needs a splat-layout project with its original compiler registered (decomp({op:'import'})); proven for n64 (IDO 5.3) — other platforms have no compile-and-compare adapter";
   if (op === "cart") {
     // The boilerplate said "disc-based" for every framebuffer platform —
     // true of PlayStation, false of sync32 (a cartridge console whose carts

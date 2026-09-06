@@ -823,7 +823,7 @@ export async function analyzeDecompile(romPath, address, platformOverride, bank 
       const norm = normalizeN64ByteOrder(romBytes);
       romBytes = norm.bytes;
       const entry = ((romBytes[0x08] << 24) | (romBytes[0x09] << 16) | (romBytes[0x0a] << 8) | romBytes[0x0b]) >>> 0;
-      const mapping = await n64SegmentMapping(address, opts);
+      const mapping = await splatSegmentMapping(address, opts);
       if (mapping) {
         // Explicit segment identity from the project's splat map: slice ONLY that
         // segment's bytes and analyze them at segment-relative offsets (no dense
@@ -847,8 +847,9 @@ export async function analyzeDecompile(romPath, address, platformOverride, bank 
     } else if (platform === "dreamcast") {
       // SH-4: strip the ELF to its first PT_LOAD segment (vaddr = loadBase), or treat
       // a raw image as flat at 0x8c010000. fileOff = address - segment vaddr.
-      let loadVa = 0x8c010000;
+      let loadVa = 0x8c010000, dcIsElf = false;
       if (romBytes.length >= 0x34 && romBytes[0] === 0x7f && romBytes[1] === 0x45 && romBytes[2] === 0x4c && romBytes[3] === 0x46) {
+        dcIsElf = true;
         const u32 = (o) => (romBytes[o] | (romBytes[o + 1] << 8) | (romBytes[o + 2] << 16) | (romBytes[o + 3] << 24)) >>> 0;
         const u16 = (o) => romBytes[o] | (romBytes[o + 1] << 8);
         const phoff = u32(0x1c), phentsize = u16(0x2a), phnum = u16(0x2c);
@@ -858,13 +859,34 @@ export async function analyzeDecompile(romPath, address, platformOverride, bank 
         }
       }
       fileOff = ((address >>> 0) - loadVa) >>> 0;
+      // Load the image at its true VA so absolute calls/globals resolve during analysis.
+      opts.__baseAddress = loadVa;
+      provenance = { method: dcIsElf ? "elf-load-segment" : "flat-at-0x8C010000", requestedVa: hx(address), resolvedVa: hx(address), imageOffset: hx(fileOff), loadedAt: hx(loadVa), analysisAddressSpace: "absolute: the image is loaded at its load address, so calls/globals/jump tables resolve to real addresses", analyzedBytes: romBytes.length,
+        bytesSha1: fileOff < romBytes.length ? sha1Hex(romBytes.subarray(fileOff, fileOff + 64)) : null, preview: fileOff < romBytes.length ? hexPreview(romBytes.subarray(fileOff, fileOff + 16)) : null };
     } else {
-      let loadAddr = 0;
-      if (romBytes.length >= 0x800 && romBytes[0] === 0x50 && romBytes[1] === 0x53 && romBytes[2] === 0x2d && romBytes[3] === 0x58) {
-        loadAddr = (romBytes[0x18] | (romBytes[0x19] << 8) | (romBytes[0x1a] << 16) | (romBytes[0x1b] << 24)) >>> 0;
-        romBytes = romBytes.subarray(0x800);
+      let loadAddr = 0, mapped = null;
+      const mappingPs1 = await ps1SegmentMapping(address, opts);
+      if (mappingPs1) {
+        // A splat psx project: segment-exact, like N64.
+        const seg = mappingPs1.segment;
+        romBytes = romBytes.subarray(seg.romStart, seg.romEnd);
+        fileOff = (address >>> 0) - seg.vram;
+        opts.__baseAddress = seg.vram;
+        symbolize = mappingPs1.symbolize;
+        provenance = { method: "splat-segment", requestedVa: hx(address), resolvedVa: hx(address), segment: seg.name, overlay: seg.overlay, romOffset: hx(mappingPs1.romOffset), segmentVram: hx(seg.vram), loadedAt: hx(seg.vram), analysisAddressSpace: "absolute: the segment is loaded at its VA", analyzedBytes: romBytes.length,
+          bytesSha1: sha1Hex(romBytes.subarray(fileOff, fileOff + 64)), preview: hexPreview(romBytes.subarray(fileOff, fileOff + 16)), project: mappingPs1.project ?? null, candidates: mappingPs1.candidates ?? undefined };
+        mapped = true;
+      } else {
+        if (romBytes.length >= 0x800 && romBytes[0] === 0x50 && romBytes[1] === 0x53 && romBytes[2] === 0x2d && romBytes[3] === 0x58) {
+          loadAddr = (romBytes[0x18] | (romBytes[0x19] << 8) | (romBytes[0x1a] << 16) | (romBytes[0x1b] << 24)) >>> 0;
+          romBytes = romBytes.subarray(0x800);
+        }
+        fileOff = ((address >>> 0) - loadAddr) >>> 0;
+        opts.__baseAddress = loadAddr;
+        provenance = { method: loadAddr ? "ps-exe-header" : "flat-at-zero", requestedVa: hx(address), resolvedVa: hx(address), imageOffset: hx(fileOff), loadedAt: hx(loadAddr), analysisAddressSpace: loadAddr ? "absolute: the executable is loaded at its t_addr, so calls/globals resolve to real addresses" : "flat: a raw image with no load address; pass `project`/`splatYaml` (a splat psx project) or use a PS-EXE",
+          analyzedBytes: romBytes.length, bytesSha1: fileOff < romBytes.length ? sha1Hex(romBytes.subarray(fileOff, fileOff + 64)) : null, preview: fileOff < romBytes.length ? hexPreview(romBytes.subarray(fileOff, fileOff + 16)) : null,
+          warning: loadAddr ? "a PS-EXE maps only its own load segment; overlays loaded from the disc need a splat project (`project`) for segment identity" : undefined };
       }
-      fileOff = ((address >>> 0) - loadAddr) >>> 0;
     }
     if (fileOff >= romBytes.length) {
       throw new Error(`decompile: ${platform} address ${hx(address)} maps to file offset ${hx(fileOff)}, outside the ${romBytes.length}-byte image. Use an address from target='functions'.`);
@@ -1032,7 +1054,7 @@ function hexPreview(u8) { return Buffer.from(u8).toString("hex"); }
  * project id or a yaml path). Returns null when no map was given. Throws on
  * an ambiguous overlay VA (with candidates) or an unmapped VA.
  */
-async function n64SegmentMapping(address, { project, splatYaml, segment } = {}) {
+async function splatSegmentMapping(address, { project, splatYaml, segment } = {}) {
   if (!project && !splatYaml) return null;
   const { loadSplatMap } = await import("../decomp/splat-map.js");
   let map, proj = null;
@@ -1076,3 +1098,6 @@ async function n64SegmentMapping(address, { project, splatYaml, segment } = {}) 
   };
   return { segment: seg, romOffset: r.resolved.romOffset, candidates: r.candidates.length > 1 ? r.candidates.map((c) => c.segment) : undefined, project: proj?.id ?? null, symbolize };
 }
+
+/** PS1: the same splat resolver when a project/yaml is given (psx layouts: PS-EXE + overlays). */
+async function ps1SegmentMapping(address, opts) { return splatSegmentMapping(address, opts); }

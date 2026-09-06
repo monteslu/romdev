@@ -15,15 +15,18 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { callTool } from "./smoke.js";
 import { hx } from "./splat-map.js";
+import { profileFor } from "./platform.js";
 
 async function registry(sessionKey) { const { buildToolRegistry } = await import("../http/tool-registry.js"); return buildToolRegistry(sessionKey); }
 
 /** RDRAM is exposed as 32-bit little-endian words; ROM is big-endian. Swap to compare. */
 function swapWords(buf) { const out = Buffer.alloc(buf.length); for (let i = 0; i + 3 < buf.length; i += 4) { out[i] = buf[i + 3]; out[i + 1] = buf[i + 2]; out[i + 2] = buf[i + 1]; out[i + 3] = buf[i]; } return out; }
 
-async function readRam(reg, sessionKey, va, length) {
+async function readRam(reg, sessionKey, va, length, project) {
   const r = await callTool(reg, "memory", { op: "read", address: (va & 0x1fffffff) >>> 0, length }, sessionKey);
-  return swapWords(Buffer.from(r.hex, "hex"));
+  const buf = Buffer.from(r.hex, "hex");
+  const swap = project ? profileFor(project.m.splatPlatform ?? project.m.platform).ramWordSwap : true;
+  return swap ? swapWords(buf) : buf;
 }
 
 async function provenance(project, reg, sessionKey) {
@@ -74,7 +77,7 @@ export async function detectOverlays(project, { sessionKey, probeBytes = 512 }) 
   for (const s of map.segments) if (s.overlay && s.vram != null) { if (!groups.has(s.vram)) groups.set(s.vram, []); groups.get(s.vram).push(s); }
   const out = [];
   for (const [vram, segs] of groups) {
-    const ram = await readRam(reg, sessionKey, vram, probeBytes);
+    const ram = await readRam(reg, sessionKey, vram, probeBytes, project);
     const matches = [];
     for (const s of segs) {
       const n = Math.min(probeBytes, s.romEnd - s.romStart);
@@ -140,7 +143,7 @@ export async function traceFunction(project, { sessionKey, symbol, va, segment, 
   const probe = await probeCore(sessionKey);
   if (!probe.pcBreak.supported) {
     return { function: { symbol: fn.symbol, segment: fn.segment, va: fn.vaHex }, captured: false, code: "PC_BREAK_UNSUPPORTED", coreProbe: probe,
-      recipe: project.m.platform === "n64" ? `the N64 debug hooks live in the pure interpreter: loadMedia({platform:'n64', path, coreOptions:{'parallel-n64-cpucore':'pure_interpreter'}, session}) then replay your inputs (or decomp({op:'smoke', cpuCore:'pure_interpreter'}))` : undefined,
+      recipe: project.m.platform === "n64" ? "N64 PC breaks need romdev-core-parallel-n64 >= 0.3.0 (the hook is in the default cached-interpreter CPU; no core option needed) — check catalog({op:'status'}) for the core version and update the package" : undefined,
       evidence: `the loaded core does not stop at a PC break (${probe.pcBreak.evidence}) and ${probe.singleStep.supported ? "single-steps" : "does not single-step (" + probe.singleStep.evidence + ")"}: argument/return capture is not available on this core. What IS available: overlays (bytes in RAM), symbolize (live VA), state, smoke (pixels + registers at frame boundaries), and the static call targets below.`,
       staticCallTargets: await staticCallTargets(project, fn), provenance: prov, ms: Date.now() - t0 };
   }
@@ -156,7 +159,7 @@ export async function traceFunction(project, { sessionKey, symbol, va, segment, 
   const val = (n) => regs[n] != null ? parseInt(String(regs[n]).replace("$", ""), 16) >>> 0 : null;
   const sp = val("sp");
   const stackArgs = [];
-  if (sp != null) { const b = await readRam(reg, sessionKey, sp + 16, 16); for (let i = 0; i < 4; i++) stackArgs.push(hx(b.readUInt32BE(i * 4))); }
+  if (sp != null) { const b = await readRam(reg, sessionKey, sp + 16, 16, project); for (let i = 0; i < 4; i++) stackArgs.push(hx(b.readUInt32BE(i * 4))); }
   const ra = val("ra");
   const args = { a0: hx(val("a0")), a1: hx(val("a1")), a2: hx(val("a2")), a3: hx(val("a3")), f12: regs.f12 ?? null, f14: regs.f14 ?? null, stack: stackArgs };
   const callTargets = await staticCallTargets(project, fn);

@@ -9,6 +9,7 @@ import path from "node:path";
 import { run } from "./mips-obj.js";
 import { buildContext, scanContextDeclarations } from "./context.js";
 import { sha256Text } from "./project.js";
+import { profileFor } from "./platform.js";
 
 export const TOOLS_HOME = process.env.ROMDEV_DECOMP_TOOLS || path.join(os.homedir(), ".romdev", "tools");
 export const PINNED = {
@@ -63,7 +64,10 @@ export async function generateCandidate(project, fn, opts = {}) {
     ctxPath = ctx.path.replace(/\.ctx\.c$/, `.plus-${sha256Text(opts.extraContext).slice(0, 8)}.ctx.c`);
     await writeFile(ctxPath, (await readFile(ctx.path, "utf8")) + "\n/* --- extra context (proposed, unverified) --- */\n" + opts.extraContext + "\n");
   }
-  const args = [t.m2c, "--target", "mips-ido-c", "--context", ctxPath, ...(opts.extraArgs ?? []), asmAbs];
+  const profile = profileFor(project.m.splatPlatform ?? project.m.platform);
+  const compilerKind = project.m.toolchain?.compiler?.kind ?? "ido";
+  const m2cTarget = profile.m2cTargetByCompiler[compilerKind] ?? Object.values(profile.m2cTargetByCompiler)[0];
+  const args = [t.m2c, "--target", m2cTarget, "--context", ctxPath, ...(opts.extraArgs ?? []), asmAbs];
   const t0 = Date.now();
   const r = await run(t.python, args, { cwd: project.root, env: project.env, timeoutMs: 120_000 });
   const ms = Date.now() - t0;
@@ -101,7 +105,7 @@ export async function generateCandidate(project, fn, opts = {}) {
   const candPath = path.join(dir, `gen-${n}.c`);
   const candidateText = parsed.body.trim() + "\n";
   await writeFile(candPath, candidateText);
-  await writeFile(candPath.replace(/\.c$/, ".json"), JSON.stringify({ symbol: fn.symbol, asm: asmRel, context: ctx, backend: { name: "m2c", commit: (await backendStatus()).m2c?.commit, target: "mips-ido-c" }, args, stderr: stderr.slice(-2000), declarations: parsed.declarations }, null, 2));
+  await writeFile(candPath.replace(/\.c$/, ".json"), JSON.stringify({ symbol: fn.symbol, asm: asmRel, context: ctx, backend: { name: "m2c", commit: (await backendStatus()).m2c?.commit, target: m2cTarget }, args, stderr: stderr.slice(-2000), declarations: parsed.declarations }, null, 2));
   return {
     kind: "pseudocode-candidate", note: "m2c output is a DRAFT: compile it with decomp({op:'compare'}) before believing any of it.",
     candidatePath: candPath, candidateSha256: sha256Text(candidateText).slice(0, 16), code: candidateText,
@@ -109,7 +113,7 @@ export async function generateCandidate(project, fn, opts = {}) {
     contextPrototype: contextPrototype(ctxText, fn.symbol),
     targetAsm: asmRel,
     context: { path: ctxPath, hash: ctx.hash, cacheHit: ctx.cacheHit, dependencies: ctx.deps, tu: tuRel, extraContext: opts.extraContext ? { chars: opts.extraContext.length, note: "proposed declarations were appended to the context; pass the same text as `declarations` to compare/integrate" } : undefined },
-    backend: { name: "m2c", target: "mips-ido-c", commit: (await backendStatus()).m2c?.commit, python: t.python, ms },
+    backend: { name: "m2c", target: m2cTarget, compilerKind, commit: (await backendStatus()).m2c?.commit, python: t.python, ms },
     warnings: stderr.trim() ? stderr.trim().split("\n").slice(-8) : [],
   };
 }

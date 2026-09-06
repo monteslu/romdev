@@ -13,6 +13,7 @@ import { spawn } from "node:child_process";
 import { run } from "./mips-obj.js";
 import { toolPaths, backendStatus } from "./m2c.js";
 import { sha256Text } from "./project.js";
+import { profileFor } from "./platform.js";
 
 const jobsDir = (project) => path.join(project.ws, "jobs");
 let counter = 0;
@@ -66,8 +67,11 @@ async function preparePermuterDir(project, fn, baseCandidateText, jobDir) {
   const envLines = Object.entries(project.env).map(([k, v]) => `export ${k}=${shq(v)}`).join("\n");
   const sh = `#!/usr/bin/env bash\nset -euo pipefail\nINPUT="$(realpath "$1")"\nOUTPUT="$(realpath "$3")"\n${envLines}\ncd ${shq(project.root)}\n${ccOut.join(" ")}\n`;
   await writeFile(path.join(permDir, "compile.sh"), sh, { mode: 0o755 });
-  const objdump = project.m.toolchain.objdump?.path ?? "mips-linux-gnu-objdump";
-  await writeFile(path.join(permDir, "settings.toml"), `func_name = "${fn.symbol}"\ncompiler_type = "ido"\nobjdump_command = "${objdump} --disassemble --reloc --disassemble-zeroes -Mreg-names=32 -Mno-aliases"\n`);
+  const objdump = project.m.toolchain.objdump?.path ?? (project.m.toolchain.binutilsPrefix ?? "mips-linux-gnu-") + "objdump";
+  const profile = profileFor(project.m.splatPlatform ?? project.m.platform);
+  const compilerKind = project.m.toolchain?.compiler?.kind ?? "ido";
+  const permuterType = profile.permuterTypeByCompiler[compilerKind] ?? "gcc";
+  await writeFile(path.join(permDir, "settings.toml"), `func_name = "${fn.symbol}"\ncompiler_type = "${permuterType}"\nobjdump_command = "${objdump} --disassemble --reloc --disassemble-zeroes -Mreg-names=32 -Mno-aliases"\n`);
   await writeFile(path.join(jobDir, "import.log"), `base.c: preprocessed ${tuRel} with the candidate spliced at ${fn.symbol}\ncompile.sh: ${ccOut.join(" ")}\ntarget.o: ${target.targetO}\n`);
   return { permDir, importLog: path.join(jobDir, "import.log"), compile: ccOut.join(" ") };
 }

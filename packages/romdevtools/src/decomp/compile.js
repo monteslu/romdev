@@ -16,6 +16,7 @@ import { strictCompare, scoreDistance, classifyDifferences, changedRanges, rende
 import { parseSplatAsm } from "./splat-map.js";
 import { dependencyHash, sha256Text } from "./project.js";
 import { assembleVerdictFields, cacheUsable, VERIFIER_VERSION } from "./verdict.js";
+import { profileFor, readWord } from "./platform.js";
 
 /**
  * Replace a function in a TU's text with candidate C. Handles both states:
@@ -131,9 +132,10 @@ export async function ensureTarget(project, fn) {
     try { const m = JSON.parse(await readFile(meta, "utf8")); if (m.key === key && fs.existsSync(m.targetO)) return m; } catch {}
   }
   const tc = project.m.toolchain;
-  const as = tc.assembler?.path ?? "mips-linux-gnu-as";
+  const profile = profileFor(project.m.splatPlatform ?? project.m.platform);
+  const as = tc.assembler?.path ?? (tc.binutilsPrefix ?? profile.binutilsPrefixes[0]) + "as";
   const inc = [project.abs("include"), path.dirname(asmAbs)];
-  const t = await assembleTarget({ asmText, outDir: dir, as, asFlags: ["-march=vr4300", "-32", "-G0", "-EB"], includeDirs: inc, cwd: project.root, env: project.env });
+  const t = await assembleTarget({ asmText, outDir: dir, as, asFlags: profile.asFlags, includeDirs: inc, cwd: project.root, env: project.env });
   const parsed = parseSplatAsm(asmText);
   const m = { key, symbol: fn.symbol, asmPath: asmRel, targetFrom: fn.targetAsm?.from ?? "pragma", targetO: t.targetO, targetS: t.targetS, instructions: parsed.instructions.length, sizeBytes: parsed.sizeBytes, rodata: parsed.rodataSymbols.map((r) => r.name) };
   await writeFile(meta, JSON.stringify(m, null, 2));
@@ -152,7 +154,7 @@ export async function compileAndCompare(project, fn, opts) {
   const tuRel = fn.source?.tu;
   if (!tuRel) throw Object.assign(new Error(`function '${fn.symbol}' was not found in any TU under ${project.m.splat.srcPath}/`), { code: "FUNCTION_NOT_IN_TU" });
   const objRel = path.join(project.m.splat.buildPath, tuRel.replace(/\.c$/, ".o"));
-  if (!project.m.toolchain?.compiler) throw Object.assign(new Error(`project '${project.id}' has no compiler fingerprint: the IDO binary was not found at import time (tools/ido-static-recomp/build/<ver>/out/cc). Build it per the project's docs and re-import.`), { code: "MISSING_COMPILER" });
+  if (!project.m.toolchain?.compiler) throw Object.assign(new Error(`project '${project.id}' has no compiler fingerprint: no compiler could be identified from the build's own compile command at import time (IDO under tools/ido-static-recomp, or a MIPS gcc on PATH). Set the project's toolchain up per its docs and re-import.`), { code: "MISSING_COMPILER" });
   const inv = await project.compileInvocation(tuRel);
   const dep = await dependencyHash(project, tuRel, inv);
   const candSha = sha256Text(opts.candidateText).slice(0, 16);
@@ -251,7 +253,7 @@ export async function compileAndCompare(project, fn, opts) {
   }
   // Extract + compare.
   const tc = project.m.toolchain;
-  const objdump = tc.objdump?.path ?? "mips-linux-gnu-objdump";
+  const objdump = tc.objdump?.path ?? (tc.binutilsPrefix ?? "mips-linux-gnu-") + "objdump";
   const target = await ensureTarget(project, fn);
   let tstream = [];
   if (!target.romOnly) {
@@ -340,8 +342,9 @@ async function compareAgainstRom(project, fn, cstream, csyms) {
   const linked = applyRelocations(cstream, symbolVa, fn.va);
   const size = cstream.length * 4;
   const rom = await project.romSlice(fn.romOffset, Math.max(size, (fn.sizeBytes ?? size)));
+  const profile = profileFor(project.m.splatPlatform ?? project.m.platform);
   const romWords = [];
-  for (let i = 0; i + 4 <= rom.bytes.length; i += 4) romWords.push(rom.bytes.readUInt32BE(i));
+  for (let i = 0; i + 4 <= rom.bytes.length; i += 4) romWords.push(readWord(profile, rom.bytes, i));
   const n = Math.max(romWords.length, linked.stream.length);
   let mismatches = 0; const first = [];
   for (let i = 0; i < n; i++) {
@@ -449,7 +452,7 @@ export function lintCandidate(text) {
  * literal words. Sizes come from the target's symbol table.
  */
 export async function compareRodata(project, fn, { objdump, targetO, candidateO, tstream, cstream }) {
-  const objcopy = project.m.toolchain.objcopy?.path ?? "mips-linux-gnu-objcopy";
+  const objcopy = project.m.toolchain.objcopy?.path ?? (project.m.toolchain.binutilsPrefix ?? "mips-linux-gnu-") + "objcopy";
   const side = async (objPath, stream, funcName) => {
     const syms = await symbolTable({ objdump, objPath, cwd: project.root, env: project.env });
     const secBytes = await sectionBytesOf(objcopy, objPath, ".rodata", project);
@@ -482,7 +485,8 @@ export async function compareRodata(project, fn, { objdump, targetO, candidateO,
     if (!size) size = t.width ?? c.width ?? 4; // a literal: the load's width
     const tb = T.secBytes ? T.secBytes.subarray(t.offset, t.offset + size) : Buffer.alloc(0);
     const cb = C.secBytes ? C.secBytes.subarray(c.offset, c.offset + size) : Buffer.alloc(0);
-    const tw = wordsWithRelocs(tb, t.offset, T.relocs, T.funcOff), cw = wordsWithRelocs(cb, c.offset, C.relocs, C.funcOff);
+    const endian = profileFor(project.m.splatPlatform ?? project.m.platform).endian;
+    const tw = wordsWithRelocs(tb, t.offset, T.relocs, T.funcOff, endian), cw = wordsWithRelocs(cb, c.offset, C.relocs, C.funcOff, endian);
     const same = tw.length === cw.length && tw.every((w, k) => w === cw[k]);
     if (!same) equal = false;
     const kind = tw.some((w) => String(w).startsWith("text+")) ? "jump-table" : size === 8 ? "double-literal" : "literal";
@@ -492,12 +496,12 @@ export async function compareRodata(project, fn, { objdump, targetO, candidateO,
   return { compared: true, equal, references: { target: T.refs.length, candidate: C.refs.length }, items, note: "function-local rodata compared by reference order: jump-table entries as function-relative offsets, literals as words; a differing jump table makes exactFunctionMatch false even when the text matches" };
 }
 function describe(r) { return r.symbol ? `${r.symbol}@0x${r.offset.toString(16)}` : `.rodata+0x${r.offset.toString(16)}`; }
-function wordsWithRelocs(buf, base, relocs, funcOff) {
+function wordsWithRelocs(buf, base, relocs, funcOff, endian = "big") {
   const out = [];
   for (let i = 0; i + 4 <= buf.length; i += 4) {
     const off = base + i;
     const rel = relocs.find((r) => r.offset === off);
-    const w = buf.readUInt32BE(i);
+    const w = endian === "big" ? buf.readUInt32BE(i) : buf.readUInt32LE(i);
     if (rel && rel.type === "R_MIPS_32" && rel.symbol === ".text") out.push("text+0x" + (((rel.addend ?? 0) || w) - funcOff).toString(16));
     else if (rel && rel.type === "R_MIPS_32") out.push(`${rel.symbol}+0x${((rel.addend ?? 0) || w).toString(16)}`);
     else out.push("0x" + w.toString(16).padStart(8, "0"));
@@ -527,7 +531,7 @@ async function sectionRelocs(objdump, objPath, section, project) {
 export async function compareRodataAgainstRom(project, fn, { objdump, candidateO, cstream }) {
   const ld = await project.linkerMap();
   const map = await project.map();
-  const objcopy = project.m.toolchain.objcopy?.path ?? "mips-linux-gnu-objcopy";
+  const objcopy = project.m.toolchain.objcopy?.path ?? (project.m.toolchain.binutilsPrefix ?? "mips-linux-gnu-") + "objcopy";
   const rodataSec = fn.object ? (ld?.objects.get(fn.object) ?? []).find((s) => s.section === ".rodata") : null;
   const syms = await symbolTable({ objdump, objPath: candidateO, cwd: project.root, env: project.env });
   const secBytes = await sectionBytesOf(objcopy, candidateO, ".rodata", project);
@@ -557,14 +561,14 @@ export async function compareRodataAgainstRom(project, fn, { objdump, candidateO
     let run = 0; while (relocs.some((r) => r.offset === c.offset + run * 4 && r.type === "R_MIPS_32")) run++;
     if (run) size = run * 4;
     const cb = secBytes ? secBytes.subarray(c.offset, c.offset + size) : Buffer.alloc(0);
-    const cw = wordsWithRelocs(cb, c.offset, relocs, funcOff);
+    const cw = wordsWithRelocs(cb, c.offset, relocs, funcOff, profileFor(project.m.splatPlatform ?? project.m.platform).endian);
     const va = (rodataSec.va + c.offset) >>> 0;
     const rv = map.resolveVa(va, { segment: fn.segment });
     if (!rv.ok || rv.resolved.romOffset == null) { items.push({ index: i, candidate: describe(c), va: "0x" + va.toString(16), equal: false, note: "rodata VA does not map to ROM bytes" }); equal = false; continue; }
     const rom = await project.romSlice(rv.resolved.romOffset, size);
     const rw = [];
     for (let k = 0; k + 4 <= rom.bytes.length; k += 4) {
-      const w = rom.bytes.readUInt32BE(k);
+      const w = readWord(profileFor(project.m.splatPlatform ?? project.m.platform), rom.bytes, k);
       const isText = run > 0; // jump-table entries hold absolute VAs into this function
       rw.push(isText ? "text+0x" + ((w - fn.va) >>> 0).toString(16) : "0x" + w.toString(16).padStart(8, "0"));
     }

@@ -156,6 +156,31 @@ addressing with provenance.
 - `platform({op:'capabilities'})` declares `decomp` (true for the MIPS
   tier's splat projects, an N/A reason elsewhere).
 
+### Changed — the decomp path is parameterized by platform; PS1/Dreamcast decompile at true addresses
+
+- `disasm({target:'decompile'})` on **ps1** and **dreamcast** now loads the
+  image at its load address (PS-EXE `t_addr`, or the ELF `PT_LOAD` vaddr /
+  0x8C010000 for a flat SH-4 image), the same fix N64 got: absolute calls,
+  globals and jump tables resolve during analysis, and `provenance` reports
+  `loadedAt` + `analysisAddressSpace`. A splat psx project can be named
+  with `project`/`splatYaml` for segment-exact mapping of overlays.
+- `src/decomp/platform.js` holds the per-platform profile (byte order,
+  assembler flags, binutils prefixes, m2c target and permuter type per
+  compiler kind, RDRAM word swap, exception vector). The compiler kind is
+  classified from the project's OWN compile command (asm-processor + IDO,
+  or a plain MIPS gcc) instead of assuming IDO; the binutils prefix comes
+  from the captured assembler; ROM words and rodata words are read in the
+  profile's byte order. `import` records `splatPlatform`, `endian`,
+  `platformVerified` and a note when the platform has not been proven.
+- Capabilities: `decomp` is **true for n64 only**. ps1's entry is false with
+  the reason that the psx path is implemented but unverified on a real
+  checkout — it becomes true when a known-matching PS1 function compares
+  exact. `test/decomp-platform.test.js` covers the profiles, the
+  classifier, byte order, header readers and a synthetic PS-EXE decompiled
+  at its `t_addr`.
+- The trace recipe no longer tells N64 users to switch to the pure
+  interpreter (the hook lives in the default CPU since core 0.3.0).
+
 ### Fixed — the verifier could report "exact" when the data check had not run
 
 `compare` derived `exactFunctionMatch` as `strict.exact && (rodata.compared
