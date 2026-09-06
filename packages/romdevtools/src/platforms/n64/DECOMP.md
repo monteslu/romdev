@@ -32,6 +32,17 @@ project's make, then reports three independent verdicts:
 `distance` is a documented edit distance for RANKING candidates. It is not
 proof. A compile failure has no distance.
 
+The verdict contract: every required check (text, rodata, romLinked) has a
+state — `exact`, `mismatch`, `error`, `unknown`, `not-applicable` — and
+`verdict.functionLocal` aggregates them: any mismatch → mismatch, else any
+error → error, else any unknown → unknown, else exact. `exactFunctionMatch`
+is true ONLY for exact; `verification.functionLocal` is the same aggregate;
+`textExact` is the text check alone. A data comparison that threw, could not
+locate its bytes, or is missing is never equality. `not-applicable` is
+granted only when neither side references rodata at all. The verifier
+version is part of the compare cache key; results from an older verifier
+are ignored (`candidates` marks them `stale-verifier`).
+
 ## Addresses
 
 The project's splat yaml is the only resolver. The ROM header's entry point
@@ -128,8 +139,10 @@ never written to a header by the tool.
 `compare` compares the function's own jump tables and literals by
 reference order — against the target object when the extracted asm exists,
 against the base ROM bytes at the object's `.rodata` VA when it does not.
-A differing jump table fails `exactFunctionMatch` even when the text is
-identical; `textExact` keeps the text-only verdict.
+A differing jump table or literal makes `verdict.functionLocal` mismatch and
+`exactFunctionMatch` false even when the text is identical; `textExact`
+keeps the text-only verdict. A rodata comparison that could not run is
+`unknown`/`error`, never exact.
 
 ## Workspace
 

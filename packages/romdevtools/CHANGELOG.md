@@ -156,6 +156,30 @@ addressing with provenance.
 - `platform({op:'capabilities'})` declares `decomp` (true for the MIPS
   tier's splat projects, an N/A reason elsewhere).
 
+### Fixed — the verifier could report "exact" when the data check had not run
+
+`compare` derived `exactFunctionMatch` as `strict.exact && (rodata.compared
+=== false || rodata.equal !== false)`: a thrown rodata comparison, an
+unavailable one, or a missing result all counted as equality, and
+`verification.functionLocal` said `exact` even on a real data mismatch.
+Reported by the Wave Race agent with the expression evaluated; it was right.
+Now every required check has a state — `exact`, `mismatch`, `error`,
+`unknown`, `not-applicable` — and ONE aggregate (`verdict.functionLocal`,
+policy: any mismatch → mismatch, else any error → error, else any unknown →
+unknown, else exact) is the source of both public fields.
+`exactFunctionMatch` is true only for `exact`; `textExact` stays the
+narrower text verdict; `verification.{text,rodata,romLinkedBytes}` carry the
+per-check states; errors and reasons stay in the output and on disk.
+`not-applicable` is granted only when the tool positively establishes that
+neither side references any rodata; "could not find the .rodata placement"
+is `unknown`. The verifier version is part of the compare cache key and a
+cached result without it is never returned (`candidates` lists such files
+as `stale-verifier`). Consumers (`batch`, `candidates`, evidence for
+`plan`, the compare `nextStep`) read the aggregate. `test/decomp-verdict.test.js`
+drives the production assembler with injected failures (thrown comparison,
+missing placement, missing/malformed result, changed literal, changed jump
+table, absent data, stale cache).
+
 ### Fixed — the five gaps the Wave Race agent measured after the first pass
 
 - **parallel_n64 PC breaks / single-step / coverage never worked**

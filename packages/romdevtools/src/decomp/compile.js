@@ -15,6 +15,7 @@ import { run, assembleTarget, dumpObject, findSymbol, symbolTable, trimToSize } 
 import { strictCompare, scoreDistance, classifyDifferences, changedRanges, renderDiff } from "./diff.js";
 import { parseSplatAsm } from "./splat-map.js";
 import { dependencyHash, sha256Text } from "./project.js";
+import { assembleVerdictFields, cacheUsable, VERIFIER_VERSION } from "./verdict.js";
 
 /**
  * Replace a function in a TU's text with candidate C. Handles both states:
@@ -158,16 +159,19 @@ export async function compileAndCompare(project, fn, opts) {
   const lint = lintCandidate(opts.candidateText);
   if (lint.rejected) {
     return { project: project.id, function: { symbol: fn.symbol, segment: fn.segment, va: fn.vaHex, tu: tuRel }, candidate: { sha256: candSha, path: opts.candidatePath ?? null }, code: "CANDIDATE_REJECTED",
-      compileSucceeded: false, exactFunctionMatch: false, distance: null, lint, countsAsRecoveredC: false,
+      compileSucceeded: false, exactFunctionMatch: false, textExact: false, distance: null, lint, countsAsRecoveredC: false, verifierVersion: VERIFIER_VERSION,
+      verdict: { functionLocal: "rejected", checks: {}, reasons: lint.reasons, exactFunctionMatch: false, verifierVersion: VERIFIER_VERSION },
       verification: { functionLocal: "rejected", translationUnit: "not-run", fullRom: "not-run" }, error: { code: "CANDIDATE_REJECTED", message: lint.reasons.join("; ") }, elapsedMs: Date.now() - startedAt };
   }
   const candDir = path.join(project.ws, "candidates", fn.symbol);
   await mkdir(candDir, { recursive: true });
-  const cacheKey = `${dep.hash}-${candSha}`;
+  // The verifier version is part of the cache key: a result verified under an older policy
+  // is never returned as a current verdict (and its file is ignored even if present).
+  const cacheKey = `${dep.hash}-${candSha}-v${VERIFIER_VERSION}`;
   const cachedPath = path.join(candDir, `${cacheKey}.result.json`);
   if (fs.existsSync(cachedPath) && !opts.noCache) {
     const cached = JSON.parse(await readFile(cachedPath, "utf8"));
-    return { ...cached, cacheHit: true, elapsedMs: Date.now() - startedAt };
+    if (cacheUsable(cached)) return { ...cached, cacheHit: true, elapsedMs: Date.now() - startedAt };
   }
   // Isolated work dir mirroring the TU's relative path (asm-processor mangles statics with the file name).
   const workId = randomUUID().slice(0, 8);
@@ -231,9 +235,11 @@ export async function compileAndCompare(project, fn, opts) {
       const chk = await run(ca[0], ca.slice(1), { cwd: project.root, env: project.env, timeoutMs: 60_000 });
       result.diagnostics.push(...extractDiagnostics(chk.stderr).map((d) => ({ ...d, from: "host-syntax-check" })));
     }
-    result.exactFunctionMatch = false;
+    result.exactFunctionMatch = false; result.textExact = false;
     result.distance = null;
     result.code = "COMPILE_FAILED";
+    result.verifierVersion = VERIFIER_VERSION;
+    result.verdict = { functionLocal: "compile-failed", checks: {}, reasons: ["the candidate did not compile"], exactFunctionMatch: false, verifierVersion: VERIFIER_VERSION };
     result.verification = { functionLocal: "compile-failed", translationUnit: "not-run", fullRom: "not-run" };
     await rm(work, { recursive: true, force: true });
     await writeFile(cachedPath, JSON.stringify(result, null, 2));
@@ -256,7 +262,9 @@ export async function compileAndCompare(project, fn, opts) {
   const csyms = await symbolTable({ objdump, objPath: newObjAbs, cwd: project.root, env: project.env });
   const csym = findSymbol(cdump, fn.symbol);
   if (!csym) {
-    result.exactFunctionMatch = false; result.distance = null;
+    result.exactFunctionMatch = false; result.textExact = false; result.distance = null;
+    result.verifierVersion = VERIFIER_VERSION;
+    result.verdict = { functionLocal: "symbol-missing", checks: {}, reasons: ["the compiled object has no symbol for the function"], exactFunctionMatch: false, verifierVersion: VERIFIER_VERSION };
     result.verification = { functionLocal: "symbol-missing", translationUnit: "not-run", fullRom: "not-run" };
     result.error = { code: "SYMBOL_NOT_EMITTED", message: `the compiled object has no symbol '${fn.symbol}' (did the candidate define it with that exact name? static? a different name?)`, symbolsInText: [...(cdump.sections.get(".text")?.keys() ?? [])].slice(0, 20) };
     await rm(work, { recursive: true, force: true });
@@ -283,20 +291,25 @@ export async function compileAndCompare(project, fn, opts) {
   await writeFile(diffTxt, renderDiff(tstream, cstream, strict, 100000));
   // Function-local rodata (jump tables, float literals): compared directly, by reference order.
   let rodata;
-  try { rodata = target.romOnly ? await compareRodataAgainstRom(project, fn, { objdump, candidateO: newObjAbs, cstream }) : await compareRodata(project, fn, { objdump, targetO: target.targetO, candidateO: newObjAbs, tstream, cstream }); }
-  catch (e) { rodata = { compared: false, error: String(e?.message ?? e).slice(0, 200) }; }
+  try {
+    if (opts._injectRodataError || process.env.ROMDEV_DECOMP_INJECT_RODATA_ERROR) throw new Error("injected rodata-comparison failure (test hook)");
+    rodata = target.romOnly ? await compareRodataAgainstRom(project, fn, { objdump, candidateO: newObjAbs, cstream }) : await compareRodata(project, fn, { objdump, targetO: target.targetO, candidateO: newObjAbs, tstream, cstream });
+  } catch (e) { rodata = { compared: false, error: String(e?.message ?? e).slice(0, 200) }; }
   // Translation-unit verification: every OTHER function in the object must be unchanged vs the verified build object.
   let tu = { status: "not-run" };
   if (opts.verifyTu !== false) tu = await verifyTranslationUnit(project, fn, { objdump, candidateObj: newObjAbs, buildObj: project.abs(objRel), csyms });
   const { romStream: _rs, linkedStream: _ls, ...romLinkedOut } = romLinked;
+  // ONE aggregate verdict; the public fields derive from it (see verdict.js).
+  const verdictFields = assembleVerdictFields({ strict, rodata, romLinked: romLinkedOut, tuStatus: tu.status });
   Object.assign(result, {
     targetFrom: target.romOnly ? "rom-bytes" : `asm:${target.targetFrom ?? "pragma"}`,
-    exactFunctionMatch: strict.exact && (rodata?.compared === false || rodata?.equal !== false), textExact: strict.exact, targetBytes: strict.targetBytes, candidateBytes: strict.candidateBytes,
+    ...verdictFields,
+    targetBytes: strict.targetBytes, candidateBytes: strict.candidateBytes,
     distance, differenceKinds: classes.kinds, evidence: classes.evidence, changedRanges: ranges, strictMismatches: strict.mismatchCount,
     rodata,
     declarationsInjected: opts.declarations ? true : undefined, prototypeRewritten: opts.declarations ? prototypeRewritten : undefined,
     romLinked: romLinkedOut,
-    verification: { functionLocal: strict.exact ? "exact" : "mismatch", romLinkedBytes: romLinked.status, translationUnit: tu.status, fullRom: "not-run" }, translationUnitCheck: tu,
+    translationUnitCheck: tu,
     diffPreview: diffText,
   });
   result.artifacts.diff = diffPath; result.artifacts.diffText = diffTxt; result.artifacts.object = null;
@@ -451,11 +464,13 @@ export async function compareRodata(project, fn, { objdump, targetO, candidateO,
       if (!inRodata) continue;
       const lo = ((ins.word << 16) >> 16);
       const off = ((sym?.value ?? 0) + lo + (r.addend | 0));
-      if (!refs.some((x) => x.offset === off)) refs.push({ offset: off, symbol: r.symbol === ".rodata" ? null : r.symbol, size: sym && r.symbol !== ".rodata" ? sym.size : null });
+      const width = /^(ldc1|ld|sdc1|sd)$/.test(ins.mnemonic) ? 8 : /^(lwc1|lw|swc1|sw|lwu)$/.test(ins.mnemonic) ? 4 : /^(lh|lhu|sh)$/.test(ins.mnemonic) ? 2 : /^(lb|lbu|sb)$/.test(ins.mnemonic) ? 1 : null;
+      if (!refs.some((x) => x.offset === off)) refs.push({ offset: off, symbol: r.symbol === ".rodata" ? null : r.symbol, size: sym && r.symbol !== ".rodata" ? sym.size : null, width });
     }
     return { refs, secBytes, relocs, funcOff, syms };
   };
   const T = await side(targetO, tstream, fn.symbol), C = await side(candidateO, cstream, fn.symbol);
+  if (T.refs.length === 0 && C.refs.length === 0) return { compared: true, equal: true, applicable: false, references: { target: 0, candidate: 0 }, items: [], reason: "neither the target nor the candidate references .rodata (no jump tables, no literals): nothing to compare" };
   const items = [];
   const n = Math.max(T.refs.length, C.refs.length);
   let equal = T.refs.length === C.refs.length;
@@ -464,13 +479,14 @@ export async function compareRodata(project, fn, { objdump, targetO, candidateO,
     if (!t || !c) { items.push({ index: i, target: t ? describe(t) : null, candidate: c ? describe(c) : null, equal: false, note: !t ? "candidate references rodata the target does not" : "target rodata the candidate never references" }); equal = false; continue; }
     // Size: the target symbol's size; else up to the next reference/section end (literal = 4 or 8).
     let size = t.size || 0;
-    if (!size) { const nextT = T.refs.map((x) => x.offset).filter((o) => o > t.offset).sort((a, b) => a - b)[0]; size = Math.min(nextT != null ? nextT - t.offset : 8, 8); }
+    if (!size) size = t.width ?? c.width ?? 4; // a literal: the load's width
     const tb = T.secBytes ? T.secBytes.subarray(t.offset, t.offset + size) : Buffer.alloc(0);
     const cb = C.secBytes ? C.secBytes.subarray(c.offset, c.offset + size) : Buffer.alloc(0);
     const tw = wordsWithRelocs(tb, t.offset, T.relocs, T.funcOff), cw = wordsWithRelocs(cb, c.offset, C.relocs, C.funcOff);
     const same = tw.length === cw.length && tw.every((w, k) => w === cw[k]);
     if (!same) equal = false;
     const kind = tw.some((w) => String(w).startsWith("text+")) ? "jump-table" : size === 8 ? "double-literal" : "literal";
+    if (t.size && t.size > 8 && !tw.some((w) => String(w).startsWith("text+"))) { /* a data symbol (table of literals): compared whole */ }
     items.push({ index: i, kind, target: describe(t), candidate: describe(c), bytes: size, equal: same, ...(same ? {} : { targetWords: tw.slice(0, 16), candidateWords: cw.slice(0, 16) }) });
   }
   return { compared: true, equal, references: { target: T.refs.length, candidate: C.refs.length }, items, note: "function-local rodata compared by reference order: jump-table entries as function-relative offsets, literals as words; a differing jump table makes exactFunctionMatch false even when the text matches" };
@@ -513,7 +529,6 @@ export async function compareRodataAgainstRom(project, fn, { objdump, candidateO
   const map = await project.map();
   const objcopy = project.m.toolchain.objcopy?.path ?? "mips-linux-gnu-objcopy";
   const rodataSec = fn.object ? (ld?.objects.get(fn.object) ?? []).find((s) => s.section === ".rodata") : null;
-  if (!rodataSec) return { compared: false, reason: `no .rodata placement for ${fn.object ?? "the object"} in the linker map` };
   const syms = await symbolTable({ objdump, objPath: candidateO, cwd: project.root, env: project.env });
   const secBytes = await sectionBytesOf(objcopy, candidateO, ".rodata", project);
   const relocs = await sectionRelocs(objdump, candidateO, ".rodata", project);
@@ -525,13 +540,19 @@ export async function compareRodataAgainstRom(project, fn, { objdump, candidateO
     if (!(r.symbol === ".rodata" || sym?.section === ".rodata")) continue;
     const lo = ((ins.word << 16) >> 16);
     const off = ((sym?.value ?? 0) + lo + (r.addend | 0));
-    if (!refs.some((x) => x.offset === off)) refs.push({ offset: off, symbol: r.symbol === ".rodata" ? null : r.symbol, size: sym && r.symbol !== ".rodata" ? sym.size : null });
+    const width = /^(ldc1|ld|sdc1|sd)$/.test(ins.mnemonic) ? 8 : /^(lwc1|lw|swc1|sw|lwu)$/.test(ins.mnemonic) ? 4 : /^(lh|lhu|sh)$/.test(ins.mnemonic) ? 2 : /^(lb|lbu|sb)$/.test(ins.mnemonic) ? 1 : null;
+    if (!refs.some((x) => x.offset === off)) refs.push({ offset: off, symbol: r.symbol === ".rodata" ? null : r.symbol, size: sym && r.symbol !== ".rodata" ? sym.size : null, width });
   }
+  // Positively established absence of data: the candidate references no .rodata at all. (The target's
+  // rodata cannot be enumerated without asm; a candidate that references none while the target did would
+  // differ in TEXT — the load instructions would be missing — so text exactness covers it.)
+  if (refs.length === 0) return { compared: true, equal: true, applicable: false, references: { candidate: 0 }, items: [], reason: "the candidate references no .rodata (no jump tables, no literals): nothing to compare" };
+  if (!rodataSec) return { compared: false, reason: `the candidate references .rodata but the linker map has no .rodata placement for ${fn.object ?? "the object"}: cannot locate the bytes in the ROM` };
   const items = []; let equal = true;
   for (let i = 0; i < refs.length; i++) {
     const c = refs[i];
     let size = c.size || 0;
-    if (!size) { const next = refs.map((x) => x.offset).filter((o) => o > c.offset).sort((a, b) => a - b)[0]; size = next != null ? Math.min(next - c.offset, 256) : 8; }
+    if (!size) size = c.width ?? 4; // a literal: the load's width
     // Jump tables: extend to the run of R_MIPS_32 entries starting here.
     let run = 0; while (relocs.some((r) => r.offset === c.offset + run * 4 && r.type === "R_MIPS_32")) run++;
     if (run) size = run * 4;

@@ -11,6 +11,7 @@ import path from "node:path";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dumpObject, symbolTable } from "./mips-obj.js";
 import { parseSplatAsm } from "./splat-map.js";
+import { VERIFIER_VERSION } from "./verdict.js";
 
 /** Build (and cache by object mtimes) the static call graph of the project. */
 export async function callGraph(project, { force = false } = {}) {
@@ -109,7 +110,7 @@ export async function loadCandidateEvidence(project) {
     let best = null, attempts = 0, lastCompile = null, placeholder = null;
     for (const f of fs.readdirSync(d)) {
       if (f.endsWith(".result.json")) {
-        try { const r = JSON.parse(fs.readFileSync(path.join(d, f), "utf8")); attempts++; lastCompile = r.compileSucceeded; if (r.distance && (best == null || r.distance.value < best)) best = r.distance.value; if (r.exactFunctionMatch) best = 0; } catch {}
+        try { const r = JSON.parse(fs.readFileSync(path.join(d, f), "utf8")); attempts++; lastCompile = r.compileSucceeded; if (r.distance && (best == null || r.distance.value < best)) best = r.distance.value; if (r.verdict?.functionLocal === "exact" && r.verifierVersion === VERIFIER_VERSION) best = 0; } catch {}
       } else if (/^gen-\d+\.json$/.test(f)) {
         try { const g = JSON.parse(fs.readFileSync(path.join(d, f), "utf8")); if (g.contextPrototype?.placeholderPointerTypes != null) placeholder = g.contextPrototype.placeholderPointerTypes; } catch {}
       }
@@ -135,10 +136,10 @@ export async function runBatch(project, symbols, { maxFunctions = 12, timeBudget
       const fn = await project.resolveFunction({ symbol: sym });
       const g = await generateCandidate(project, fn);
       const r = await compileAndCompare(project, fn, { candidateText: g.code, candidatePath: g.candidatePath, label: "batch" });
-      results.push({ symbol: sym, sizeBytes: fn.sizeBytes, candidatePath: g.candidatePath, compileSucceeded: r.compileSucceeded, exactFunctionMatch: r.exactFunctionMatch, romLinked: r.romLinked?.status ?? null, distance: r.distance?.value ?? null, kinds: r.differenceKinds ?? [], hint: r.hint, placeholderPrototype: g.contextPrototype?.placeholderPointerTypes ?? null, missingDeclarations: g.missingDeclarations.map((m) => m.name), ms: Date.now() - t0, cacheHit: r.cacheHit });
+      results.push({ symbol: sym, sizeBytes: fn.sizeBytes, candidatePath: g.candidatePath, compileSucceeded: r.compileSucceeded, exactFunctionMatch: r.exactFunctionMatch, functionLocal: r.verdict?.functionLocal ?? r.verification?.functionLocal ?? null, verdictReasons: r.verdict?.reasons ?? [], romLinked: r.romLinked?.status ?? null, distance: r.distance?.value ?? null, kinds: r.differenceKinds ?? [], hint: r.hint, placeholderPrototype: g.contextPrototype?.placeholderPointerTypes ?? null, missingDeclarations: g.missingDeclarations.map((m) => m.name), ms: Date.now() - t0, cacheHit: r.cacheHit });
     } catch (e) { results.push({ symbol: sym, error: `${e.code ?? "ERROR"}: ${e.message.slice(0, 200)}`, ms: Date.now() - t0 }); }
   }
-  const exact = results.filter((r) => r.exactFunctionMatch).length;
+  const exact = results.filter((r) => r.exactFunctionMatch && r.functionLocal === "exact").length;
   return { functions: results.length, exactMatches: exact, compiled: results.filter((r) => r.compileSucceeded).length, elapsedMs: Date.now() - started, results,
     sharedBlockers: summarizeBlockers(results) };
 }
@@ -146,7 +147,7 @@ export async function runBatch(project, symbols, { maxFunctions = 12, timeBudget
 function summarizeBlockers(results) {
   const counts = {};
   for (const r of results) {
-    const k = r.error ? "error" : r.exactFunctionMatch ? "exact" : r.compileSucceeded ? "mismatch" : r.hint ? "compile-failed: " + r.hint.split(":")[0] : r.missingDeclarations?.length ? "compile-failed: undeclared symbols the draft needs (missingDeclarations)" : "compile-failed";
+    const k = r.error ? "error" : r.functionLocal === "exact" ? "exact" : r.compileSucceeded ? (r.functionLocal ?? "mismatch") : r.hint ? "compile-failed: " + r.hint.split(":")[0] : r.missingDeclarations?.length ? "compile-failed: undeclared symbols the draft needs (missingDeclarations)" : "compile-failed";
     counts[k] = (counts[k] ?? 0) + 1;
   }
   return counts;
