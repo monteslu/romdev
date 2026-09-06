@@ -94,6 +94,13 @@ for src in $EXTRAS; do
   [ -f "$obj" ] || emcc -O3 -flto -c "$src" -o "$obj" $INCLUDES $DEFINES 2>/dev/null
 done
 
+# Always refresh the SHARED debug lib (the fresh-tree block above only runs once; a
+# rebuilt tree would otherwise link the old lib and the linker would miss any export
+# added since — 0.13.0's romdev_covbits_*).
+RDBG_SRC="$(cd "$SCRIPT_DIR/romdev-debug" && pwd)"
+cp "$RDBG_SRC/romdev_debug.h" mednafen/psx/romdev_debug.h
+cp "$RDBG_SRC/romdev_debug.c" mednafen/psx/romdev_debug.c
+rm -f mednafen/psx/romdev_debug.o
 # Compile the shared romdev_debug.c (the make picks up cpu.c's appended shim itself).
 emcc -O3 -flto -c mednafen/psx/romdev_debug.c -o mednafen/psx/romdev_debug.o $INCLUDES $DEFINES
 
@@ -102,7 +109,7 @@ emcc -O3 -flto -c mednafen/psx/romdev_debug.c -o mednafen/psx/romdev_debug.o $IN
 # (-lGL + GL_ENABLE_GET_PROC_ADDRESS + "GL" in EXPORTED_RUNTIME_METHODS) make Emscripten
 # emit Module["GL"]=GL so the returned module exposes the GL context the host drives.
 OBJ_FILES=$(find . -name "*.o" | tr '\n' ' ')
-EXPORTED='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_romdev_mips_regs_get","_romdev_spu_get","_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_watchdog_set","_romdev_irqblock_set","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get","_romdev_regsnap_get","_malloc","_free","_emscripten_GetProcAddress"]'
+EXPORTED='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_romdev_mips_regs_get","_romdev_spu_get","_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_watchdog_set","_romdev_irqblock_set","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get","_romdev_covbits_set","_romdev_covbits_get","_romdev_regsnap_get","_malloc","_free","_emscripten_GetProcAddress"]'
 EXPORTED_RT='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS","dynCall","GL"]'
 
 emcc $OBJ_FILES -O3 -flto -s WASM=1 -s MODULARIZE=1 -s EXPORT_ES6=1 \

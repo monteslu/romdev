@@ -72,7 +72,7 @@ echo "romdev: instrumented MemoryWrite / MemoryRead / mos6502 dispatch + per-fra
 source "$HOME/code/mine/emsdk/emsdk_env.sh" >/dev/null 2>&1 || true
 
 # the romdev_* exports the host feature-detects (shared lib surface + per-core snap/setreg)
-ROMDEV_EXPORTS='"_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_watchdog_set","_romdev_regsnap_get","_romdev_irqblock_set","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get","_romdev_setreg","_romdev_getreg","_romdev_acp_get","_romdev_cheat_set","_romdev_cheat_get","_romdev_cheat_read"'
+ROMDEV_EXPORTS='"_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_watchdog_set","_romdev_regsnap_get","_romdev_irqblock_set","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get","_romdev_covbits_set","_romdev_covbits_get","_romdev_setreg","_romdev_getreg","_romdev_acp_get","_romdev_cheat_set","_romdev_cheat_get","_romdev_cheat_read"'
 
 # Step 1: compile the core objects via the Makefile's retroemu target (with
 # romdev_debug.c added to SOURCES). The Makefile's EM_EXPORTS only lists the

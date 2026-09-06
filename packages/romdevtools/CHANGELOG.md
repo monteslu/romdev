@@ -156,6 +156,19 @@ addressing with provenance.
 - `platform({op:'capabilities'})` declares `decomp` (true for the MIPS
   tier's splat projects, an N/A reason elsewhere).
 
+### Changed — every core rebuilt with the exact PC coverage bitmap
+
+All thirteen other debug-instrumented cores are rebuilt against the 0.13.0
+shared debug lib and export `romdev_covbits_set/get`, so
+`host.logPCBitmap` (and `decomp coverage`, where a splat project exists) is
+exact on every platform, not only N64: fceumm 0.13.0, gambatte 0.12.0,
+snes9x (romdev-platform-snes 0.12.0), genesis-plus-gx (romdev-core-gpgx
+0.15.0), mgba (romdev-platform-gba 0.13.0), handy 0.9.0, geargrafx 0.10.0,
+bluemsx 0.9.0, prosystem 0.10.0, stella2014 (romdev-platform-atari2600
+0.10.0), vice 0.11.0, gametank 0.5.0, beetle-psx-hw 0.3.0. The
+beetle-psx-hw build script now refreshes the shared debug lib on every run
+(it did so only on a fresh tree, so a rebuilt tree linked the old lib).
+
 ### Changed — the decomp path is parameterized by platform; PS1/Dreamcast decompile at true addresses
 
 - `disasm({target:'decompile'})` on **ps1** and **dreamcast** now loads the
