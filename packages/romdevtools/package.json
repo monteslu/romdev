@@ -71,7 +71,7 @@
     "romdev-core-host": "0.13.1",
     "romdev-core-parallel-n64": "0.3.0",
     "romdev-core-prosystem": "0.10.0",
-    "romdev-core-runner": "0.2.16",
+    "romdev-core-runner": "0.2.17",
     "romdev-core-s32core": "0.2.0",
     "romdev-core-vice": "0.11.0",
     "romdev-famitone": "0.2.0",
