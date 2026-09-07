@@ -1,6 +1,6 @@
 {
   "name": "romdev-core-runner",
-  "version": "0.2.16",
+  "version": "0.2.17",
   "description": "Play a ROM you just built: an SDL window over the romdev libretro host (romdev-core-host) with keyboard + hot-plug gamepad input, audio, and aspect-correct pixel-perfect scaling. The human 'fire it up' tier between an external emulator and the romdev MCP server. Bundles NO cores; pass any romdev-core-* package.",
   "type": "module",
   "main": "index.js",
@@ -23,7 +23,7 @@
     "url": "git+https://github.com/monteslu/romdev.git"
   },
   "dependencies": {
-    "romdev-core-host": "0.13.0"
+    "romdev-core-host": "0.13.1"
   },
   "optionalDependencies": {
     "@kmamal/sdl": "^0.11.13"

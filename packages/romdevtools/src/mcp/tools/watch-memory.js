@@ -2127,32 +2127,27 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
 
   async function wLogPC({ start, end, frames = 120, pressDuring, limit = 512, fromState, fromStatePath }) {
       const host = getHost(sessionKey);
-      const bitmap = !!(host.pcBitmapSupported && host.pcBitmapSupported());
-      if (!bitmap && !(host.rangeWatchSupported && host.rangeWatchSupported())) {
+      if (!(host.pcBitmapSupported && host.pcBitmapSupported())) {
         return jsonContent({ notSupported: true, pcs: [],
-          note: "This core build has no coverage trace (shipped on all 14 platforms as of 0.6.0 — update the core package)." });
+          note: "This core build has no PC coverage bitmap (romdev_covbits_set/get); every romdev core package ships it — update the core package." });
       }
       if (end < start) throw new Error("watch({on:'pc'}): end must be >= start.");
       const stateInfo = await maybeRestoreState(host, fromState, fromStatePath);
       const presses = (pressDuring ?? []).slice().sort((a, b) => a.frame - b.frame);
       const pressDriver = makePressDriver(host, presses);
       if (presses.length) pressDriver.applyForFrame(0);
-      // The exact bitmap (0.13.0 debug lib) records every PC in [start, end] with no distinct
-      // cap; the 8192-entry ring is the fallback for an older core build.
-      const r = bitmap ? host.logPCBitmap(start, end + 1, frames) : host.logPCRange(start, end, frames);
+      // One bit per PC at the CPU's instruction granularity over [start, end]: every executed
+      // PC is recorded, no distinct cap.
+      const r = host.logPCBitmap(start, end + 1, frames);
       pressDriver.finish();
-      const truncated = bitmap ? false : !!r.truncated;
       const pcs = r.pcs.slice(0, limit).map((p) => "$" + p.toString(16).toUpperCase());
       return attachObserverFrame(jsonContent({
         window: "$" + start.toString(16).toUpperCase() + "..$" + end.toString(16).toUpperCase(),
-        method: bitmap ? "bitmap" : "ring",
-        ...(bitmap ? { granularityBytes: r.granularityBytes, exact: r.exact } : { exact: !truncated }),
-        distinct: r.distinct, total: r.total, returned: pcs.length, truncated,
+        method: "bitmap", granularityBytes: r.granularityBytes, exact: r.exact,
+        distinct: r.distinct, total: r.total, returned: pcs.length, truncated: false,
         ...(stateInfo ? { restoredFrom: stateInfo } : {}),
         pcs,
-        note: "Each PC is code that EXECUTED in this window. disasm({target:'rom'}) them to find the routine you're hunting. " +
-          (bitmap && !r.exact ? `GRANULARITY ${r.granularityBytes} bytes: this core build predates per-platform granularity, so adjacent instructions inside one ${r.granularityBytes}-byte group share a PC — rebuild the core package for byte-exact coverage. ` : "") +
-          (truncated ? "TRUNCATED — narrow the window for the full distinct set." : "") +
+        note: "Each PC is code that EXECUTED in this window. disasm({target:'rom'}) them to find the routine you're hunting." +
           (r.distinct > pcs.length ? ` ${r.distinct - pcs.length} more distinct PCs not returned — raise \`limit\` (max 4000).` : ""),
       }), host);
   }
@@ -2164,7 +2159,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     "Extras: `ranges:[{region,offset,length,label}]` watches MANY disjoint regions in ONE pass (identical frames); `as:'u16le'|'u16be'|'u24le'|'u32le'|…` on a range reads it as ONE multi-byte number (REQUIRED for 16/32-bit variables — map distance, score, pointers, timers; without it the range is diffed per byte and a value whose high byte holds steady reports as its low byte alone under the range's label); `onChange:'reset'|'increase'|'decrease'|'any'` edge filter (reset = counter-reload = the note-onset signal); `valueFilter:{min,max}`; `format:'series'` = compact columnar value-vs-frame curve (~10× smaller for a ramp); `sampleEvery`; `groupByPC` (collapse by sampled PC); `cheatLabels` (auto-name addresses from the cheat DB); `outputPath` streams all events as NDJSON; `stopOnFirst` exits on the first match. ARMING WHILE HALTED: a watch armed after a breakpoint hit starts PART-WAY through that frame, so accesses the frame already made are invisible and an empty result looks exactly like a genuine 'nothing writes this' — the result carries `armedWhileHalted` when this applies; re-run from a save state with the watch armed from the start before treating a negative as evidence. " +
     "**CAVEAT: frame-level, not instruction-level (last value per frame); the sampled `pc` is a frame-boundary sample — for ISR-driven writes use breakpoint({on:'write', precision:'exact'}) for the real writer.**\n" +
     "• on:'range' — DISCOVERY: log EVERY instruction that reads or writes ANYWHERE in [start,end]. The fix for 'I don't know which PC touches this'. Returns {pc,address,value}[] + the actionable distinctPCs + a per-PC digest (byPC). For a pure 'who writes here?' query, `distinctPCsOnly:true` returns JUST the digest (no per-event flood — a per-frame counter inc'd at one PC otherwise floods hundreds of near-identical rows); `dedupe:true` collapses identical (pc,address,value) events to one row with `occurrences`. (Ring-buffered: `truncated:true` if it overflows — and a truncated run can support a positive but NEVER a negative claim; with a fromState anchor, `autoNarrow:true` halves `frames` deterministically until the log is complete and reports framesUsed.) `fromState`/`fromStatePath` restores a savestate FIRST so the trace runs from a known moment (jump to the boss, then see what writes HP) — deterministic + repeatable. ARMING WHILE HALTED at an un-cleared breakpoint hit misses everything already executed in the broken frame — the result then carries `armedWhileHalted:true` so an empty window isn't mistaken for a clean negative; clear the hit or arm from a savestate restore instead.\n" +
-    "• on:'pc' — DISCOVERY (coverage trace): record every DISTINCT PC executed within [start,end] — 'what code runs here?'. EXACT and uncapped on every shipped core (a one-bit-per-PC bitmap at the CPU's instruction granularity: byte on the 8-bit machines/65816/HuC6280, halfword on 68000/Thumb, word on MIPS; the result says `method:'bitmap', exact:true` — `method:'ring'` is the 8192-distinct fallback on an older core build). `limit` (max 4000) caps the PCs RETURNED, never the count. Log execution in the bank where you suspect the renderer lives during the moment it draws, then disassemble the PCs. Also takes `fromState`/`fromStatePath` to trace from a restored moment.\n" +
+    "• on:'pc' — DISCOVERY (coverage trace): record every DISTINCT PC executed within [start,end] — 'what code runs here?'. EXACT and uncapped on every core (a one-bit-per-PC bitmap at the CPU's instruction granularity: byte on the 8-bit machines/65816/HuC6280, halfword on 68000/Thumb, word on MIPS; the result carries `granularityBytes` and `exact:true`). `limit` (max 4000) caps the PCs RETURNED, never the count. Log execution in the bank where you suspect the renderer lives during the moment it draws, then disassemble the PCs. Also takes `fromState`/`fromStatePath` to trace from a restored moment.\n" +
     "• on:'dma' — GENESIS ONLY: trace mem→VDP DMAs (the answer to 'this name/portrait/logo is a pre-rendered bitmap DMA'd into VRAM — WHERE in ROM?', which on:'write' can't catch). `precision:'exact'` (default) logs every mem→VDP DMA with its VRAM DESTINATION + ROM SOURCE + length (filter by `vramDest`±`destWindow`; `dedupe` collapses the per-frame refresh; `sourceFilter:'rom-only'` drops RAM→VRAM noise; catches a same-frame second DMA). `precision:'sampled'` is the cheap frame-sampled source-register read (may miss two DMAs in one frame, dest-agnostic). `perFrame:true` switches to FEEL/PERF MODE: a per-frame timeline of VDP-DMA WORK ({frame,dmas,bytes,romBytes,ramBytes} + peakFrame + `spikes`) — the cheap 'why does horizontal movement feel choppy?' diagnostic (a per-frame byte spike = too much VDP work in the loop, e.g. a tilemap rewrite). On non-Genesis cores returns `notSupported`.\n" +
     "• on:'copy' — ALL 14 PLATFORMS: log every write landing in a VRAM/dest address window [start,end] with the EXECUTING instruction's PC — the generic answer to 'this tile/nametable/portrait on screen: which routine uploads it?'. Port-based video memory (NES $2007, SNES $2118/19 — incl. the DMA path, PCE VWR, MSX/SMS/GG VDP data port, Genesis data port) is hooked INSIDE the core, so `start`/`end` are VRAM addresses (NES PPU $0000-$3FFF; SNES VRAM byte addr; PCE VRAM word addr; MSX/SMS/GG VRAM addr). Direct-mapped platforms (GB/GBC $8000-$9FFF, GBA 0x06000000+, C64/Lynx/7800 RAM framebuffers) route through the CPU-address range log automatically — pass CPU addresses there. Follow up with breakpoint({on:'pc', address: pc}) to get registersAtHit at the uploader.",
     {

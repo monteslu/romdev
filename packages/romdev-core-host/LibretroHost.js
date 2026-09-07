@@ -2968,10 +2968,9 @@ export class LibretroHost {
    * PC at (1 << shift) bytes — exact, uncapped, O(1) per instruction. `shift`
    * defaults to pcAlignShift() for the loaded platform. Returns
    * { pcs:number[], distinct, total, words, lo, hi, shift, granularityBytes, exact }
-   * where `shift`/`granularityBytes` are what the core actually recorded at
-   * (a pre-granularity core build ignores the argument and records 4-byte
-   * words) and `exact` is false when that is coarser than the CPU's
-   * instruction alignment, i.e. adjacent instructions may share a bit.
+   * where `shift`/`granularityBytes` are what the core recorded at and `exact`
+   * is false only when a caller asked for a granularity coarser than the CPU's
+   * instruction alignment (adjacent instructions then share a bit).
    */
   logPCBitmap(lo, hi, frames, opts = {}) {
     const mod = this._needMod();
@@ -2984,11 +2983,9 @@ export class LibretroHost {
     const outPtr = mod._malloc(Math.max(4, words * 4));
     const out2Ptr = mod._malloc(12);
     try {
-      const out2 = new Uint32Array(mod.HEAPU8.buffer, out2Ptr, 3);
-      out2[2] = 0xFFFFFFFF; // sentinel: a core built before the shift argument leaves it untouched
       mod._romdev_covbits_get(outPtr, words, out2Ptr);
-      const total = out2[0], distinct = out2[1];
-      const shift = out2[2] === 0xFFFFFFFF ? 2 : out2[2];
+      const out2 = new Uint32Array(mod.HEAPU8.buffer, out2Ptr, 3);
+      const total = out2[0], distinct = out2[1], shift = out2[2];
       const bits = new Uint32Array(mod.HEAPU8.buffer, outPtr, words);
       const pcs = [];
       for (let w = 0; w < words; w++) {

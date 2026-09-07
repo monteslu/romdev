@@ -4,6 +4,21 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 —
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.137.1 — 2026-09-06
+
+Cleanup after 0.137.0 shipped: the coverage bitmap is the ONLY coverage path.
+
+- `watch({on:'pc'})` requires the bitmap (`method:'bitmap'`, `granularityBytes`,
+  `exact`, never truncated); the 8192-entry ring fallback is gone. A core
+  build without `romdev_covbits_*` gets `notSupported` naming the export.
+- `decomp({op:'coverage'})` no longer has a ring branch either; the report is
+  `coverageSource:'bitmap'` or `'frame-boundary'` (the N64 dynarec/cached
+  mode that cannot log PCs), and `truncatedChunks` is gone with the ring.
+- `romdev-core-host` 0.13.1: `logPCBitmap` reads the shift straight from the
+  core; the guess for a core built before the shift argument is removed
+  (every published core has it). `exact` is false only when a caller asks for
+  a granularity coarser than the CPU's instruction alignment.
+
 ## 0.137.0 — 2026-09-06
 
 The matching-decompilation round (the Wave Race 64 handoff: "accelerate

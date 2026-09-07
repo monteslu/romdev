@@ -150,7 +150,7 @@ For the full agent tooling surface (MCP server, build toolchains,
 disassembly, playtest) see
 [`romdevtools`](https://www.npmjs.com/package/romdevtools).
 
-## 0.13.0 — exact PC coverage bitmap
+## 0.13.1 — exact PC coverage bitmap
 
 `pcBitmapSupported()` / `logPCBitmap(lo, hi, frames, {shift})`: on a core
 built with the 0.13.0 shared debug lib (`romdev_covbits_set/get`), run
@@ -161,8 +161,7 @@ bytes and defaults to `pcAlignShift()` for the loaded platform: 2 (word) on
 MIPS (n64, ps1, psp), 1 (halfword) on the 68000 / Thumb / SH-4 machines
 (genesis, gba, dreamcast, sync32), 0 (byte) on every byte-addressed CPU (6502,
 Z80, SM83, 65816, HuC6280, W65C02) and when the platform is unknown. The core
-reports the shift it actually recorded at; a core built before the shift
-argument records 4-byte words, which the result flags as `exact:false` on any
-platform whose instructions are packed tighter than that. `logPCRange` (the
-8192-entry distinct ring) remains for core builds without the bitmap. Every
-shipped romdev core carries the bitmap as of this release.
+reports the shift it recorded at; `exact` is false only when a caller asked for
+a granularity coarser than the CPU's instruction alignment. `logPCRange` is
+the older 8192-entry distinct ring (`romdev_cov_set/get`), still exported by
+every core. Every romdev core carries the bitmap.
