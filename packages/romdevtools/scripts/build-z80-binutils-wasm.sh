@@ -34,7 +34,14 @@ if [ ! -f Makefile ]; then
   # EXACT recipe the m68k/arm binutils builds use - just the z80-elf target.
   # Build EVERYTHING (gas + ld + binutils); the earlier --disable-gas path is
   # what triggered the liblto_plugin / "instruction set" friction. Plain make.
+  # -ffile-prefix-map: without it the BUILDER'S absolute source path is baked
+  # into the binary (assert strings, __FILE__, DWARF). Those path strings are
+  # suffix-shared by the linker with short literals - binutils' 1-char register
+  # names among them - so they must never be rewritten after the fact. Keep the
+  # path out at compile time instead. See never-byte-edit-prebuilt-binaries.
   emconfigure "$SRC/configure" \
+    CFLAGS="-O2 -ffile-prefix-map=$SRC=/binutils" \
+    CXXFLAGS="-O2 -ffile-prefix-map=$SRC=/binutils" \
     --target=z80-elf \
     --host=wasm32-unknown-emscripten \
     --build="$(gcc -dumpmachine)" \

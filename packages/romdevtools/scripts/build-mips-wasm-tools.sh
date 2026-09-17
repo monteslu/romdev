@@ -82,7 +82,14 @@ PSIGNAL_CACHE=""
 # ── 2. cc1 as WASM ──────────────────────────────────────────────────
 if [ ! -f "$ROOT/build-wasm-gcc/gcc/cc1.wasm" ]; then
   cd "$ROOT"; mkdir -p build-wasm-gcc; cd build-wasm-gcc
+    # -ffile-prefix-map keeps the builder's absolute source path OUT of the
+    # binary. It must never be scrubbed afterwards: the linker suffix-shares
+    # those path strings with short literals (a 1-char register name can BE the
+    # tail of ".../foo.h"), so an in-place rewrite silently corrupts unrelated
+    # data. See never-byte-edit-prebuilt-binaries.
   [ -f Makefile ] || env $PSIGNAL_CACHE emconfigure "$SRC_DIR/gcc-$GCC_VER/configure" \
+    CFLAGS="-O2 -ffile-prefix-map=$SRC_DIR=/src" \
+    CXXFLAGS="-O2 -ffile-prefix-map=$SRC_DIR=/src" \
     --target=$TARGET --prefix="$WASM_PREFIX/gcc-wasm" \
     --host=wasm32-unknown-emscripten --build="$(gcc -dumpmachine)" \
     --enable-languages=c --disable-nls --disable-multilib \
@@ -105,6 +112,8 @@ fi
 if [ ! -f "$ROOT/build-wasm-binutils/gas/as-new.wasm" ]; then
   cd "$ROOT"; mkdir -p build-wasm-binutils; cd build-wasm-binutils
   [ -f Makefile ] || emconfigure "$SRC_DIR/binutils-$BINUTILS_VER/configure" \
+    CFLAGS="-O2 -ffile-prefix-map=$SRC_DIR=/src" \
+    CXXFLAGS="-O2 -ffile-prefix-map=$SRC_DIR=/src" \
     --target=$TARGET --prefix="$WASM_PREFIX/binutils-wasm" \
     --host=wasm32-unknown-emscripten --build="$(gcc -dumpmachine)" \
     --disable-nls --disable-werror --disable-multilib
