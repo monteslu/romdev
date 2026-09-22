@@ -11,6 +11,7 @@
 import { z80Cycles, z80Flags, z80Control, CYCLE_PROVENANCE } from "./z80-metadata.js";
 import { liftZ80, DOCUMENTED_Z80 } from "./lift-z80.js";
 import { m68kCycles, m68kControl, M68K_CYCLE_PROVENANCE } from "./m68k-metadata.js";
+import { gbCycles, gbControl, GB_CYCLE_PROVENANCE, GB_ILLEGAL } from "./gb-metadata.js";
 
 /** @typedef {{arch:string, maxInstr:number, align:number, bankSize:number|null,
  *             cycles:(b:Buffer)=>number|null, control:Function,
@@ -73,12 +74,36 @@ export const ISAS = {
     pad: Buffer.from([0x4a, 0xfc]),
     provenance: M68K_CYCLE_PROVENANCE,
   },
+  gb: {
+    // binutils decodes the Game Boy CPU via its `gbz80` machine (z80-dis.c
+    // has full INSS_GBZ80 support), which objdump.js already exposes.
+    arch: "gbz80",
+    // The longest LR35902 instruction is 3 bytes (`ld (nn),a`, `jp nn`).
+    // There is no DD/FD prefixing as on the Z80, and CB-prefixed ops are
+    // exactly 2. 4 leaves headroom without costing correctness.
+    maxInstr: 4,
+    // Every byte is a legal entry point, as on the Z80.
+    align: 1,
+    // MBC banks the $4000-$7FFF window in 16KB units.
+    bankSize: 0x4000,
+    cycles: gbCycles,
+    control: gbControl,
+    flags: null,
+    lift: null,
+    documented: (m) => !/^(\.|unknown|bad)/i.test(m),
+    // 0x00 is `nop`: one byte, decodes and stops, so zero padding cannot
+    // carry a decode out of a batch slice. Same property as Z80.
+    pad: Buffer.from([0x00]),
+    illegal: GB_ILLEGAL,
+    provenance: GB_CYCLE_PROVENANCE,
+  },
 };
 
 /** Which ISA a platform's cartridge code is written in. */
 export const PLATFORM_ISA = {
   sms: "z80", gg: "z80", msx: "z80", z80: "z80",
   genesis: "m68k",
+  gb: "gb", gbc: "gb",
 };
 
 export function isaFor(platform) {
