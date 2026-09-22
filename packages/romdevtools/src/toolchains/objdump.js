@@ -116,7 +116,12 @@ export async function runObjdump(args) {
 // objdump line format (binary target):
 //    "   202:\t46fc 2700      \tmove #0x2700,%sr"
 // addr (hex), TAB, space-separated opcode bytes, TAB, mnemonic + operands.
-const LINE_RE = /^\s*([0-9a-fA-F]+):\t([0-9a-fA-F ]+?)\s*\t(.*)$/;
+// A disassembly line. The trailing text is OPTIONAL: objdump wraps a wide
+// instruction's encoding onto a following address line carrying only bytes and
+// NO tab-separated mnemonic. Requiring the second tab made those lines fail to
+// match at all, so their bytes vanished and an 8-byte m68k instruction was
+// reported as 6 - which a completeness check then saw as a gap.
+const LINE_RE = /^\s*([0-9a-fA-F]+):\t([0-9a-fA-F ]+?)\s*(?:\t(.*))?$/;
 
 /**
  * Convert objdump's raw text into romdev's annotated-asm shape:
@@ -155,8 +160,23 @@ export function parseObjdumpRows(raw, arch = "") {
         return leWord ? bs.reverse() : bs;
       })
       .join(" ");
-    let text = m[3].trim();
-    if (!text) continue;
+    let text = (m[3] ?? "").trim();
+    // CONTINUATION LINE. objdump wraps an instruction whose encoding is too
+    // wide for one line, emitting the trailing bytes on their own address line
+    // with NO mnemonic:
+    //
+    //     200:  33fc 0100 00a1   movew #256,0xa11100
+    //     206:  1100
+    //     208:  4e71             nop
+    //
+    // Dropping it lost those bytes: `movew` reported 6 bytes when it is 8, so
+    // a completeness check saw a gap at 0x206 and refused the whole export.
+    // The bytes belong to the PREVIOUS row - append them there.
+    if (!text) {
+      const prev = rows[rows.length - 1];
+      if (prev && bytes) prev.bytes = `${prev.bytes} ${bytes}`;
+      continue;
+    }
     // Split mnemonic / operands.
     const sp = text.search(/\s/);
     const mnem = sp < 0 ? text : text.slice(0, sp);

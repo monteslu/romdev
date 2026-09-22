@@ -337,7 +337,13 @@ function scopesFromDescription(desc) {
   // "op=a/b:" / "target=a:"
   for (const m of String(desc).matchAll(/\b(?:op|target)\s*=\s*([A-Za-z0-9'"|/,\s]+?)\s*:/g)) add(m[1]);
   // "op:'a' -" / "op:a -" / "target:'a' -", ending at an em-dash, hyphen or colon.
-  for (const m of String(desc).matchAll(/\b(?:op|target)\s*:\s*((?:'[A-Za-z0-9]+'|[A-Za-z0-9]+)(?:\s*[/,|]\s*(?:'[A-Za-z0-9]+'|[A-Za-z0-9]+))*)\s*(?=[--:-]|\s)/g)) add(m[1]);
+  // Accept BOTH spellings a description uses for a scope: `target:'x'` and
+  // `target=x`. Matching only the colon form meant a parameter documented as
+  // "target=recompile emit=ir: ..." was scoped ONLY by its other clause
+  // ("target=script: ..."), so the checker refused it on recompile - the very
+  // target its own text says it applies to. That made fileOffset/length
+  // unusable on emit:'ir', forcing whole-ROM exports where a range was wanted.
+  for (const m of String(desc).matchAll(/\b(?:op|target)\s*[:=]\s*((?:'[A-Za-z0-9]+'|[A-Za-z0-9]+)(?:\s*[/,|]\s*(?:'[A-Za-z0-9]+'|[A-Za-z0-9]+))*)/g)) add(m[1]);
   return scopes.size ? scopes : null;
 }
 

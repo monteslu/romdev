@@ -7,6 +7,7 @@ import { runObjdump } from "../../toolchains/objdump.js";
 import { liftZ80, DOCUMENTED_Z80 } from "./lift-z80.js";
 import { z80Cycles, z80Flags, z80Control, CYCLE_PROVENANCE } from "./z80-metadata.js";
 import { smsWindows, SMS_MAPPERS } from "../sms-mapping.js";
+import { isaFor, ISAS, PLATFORM_ISA } from "./isa.js";
 
 /** Longest Z80 instruction: DD/FD CB dd op. Bounds the decode lookahead. */
 const MAX_Z80_INSTR = 4;
@@ -27,22 +28,38 @@ const MAX_Z80_INSTR = 4;
  * decodes independently. Measured: 8,192 offsets resolved in a single 277ms
  * call, 100% hit rate.
  */
-const BATCH_STRIDE = 8;
 const BATCH_MAX = 8192;
 
-async function decodeAtOffsets(rom, offsets) {
+// The slice stride must EXCEED the ISA's longest instruction, so the zero
+// padding after each slice's real bytes cannot be reached by an instruction
+// starting at the slice head. Z80's longest is 4 (stride 8); m68k's is 10, so
+// a fixed stride of 8 would let one slice decode into the next and silently
+// produce wrong instructions. Derived per ISA, rounded up to a power of two so
+// slice heads stay cheap to compute.
+function strideFor(isa) {
+  let s = 8;
+  while (s <= isa.maxInstr) s *= 2;
+  return s;
+}
+
+async function decodeAtOffsets(rom, offsets, isa) {
   /** @type {Map<number, {mnem:string, ops:string, bytes:string}>} */
   const out = new Map();
+  const stride = strideFor(isa);
   for (let i = 0; i < offsets.length; i += BATCH_MAX) {
     const slice = offsets.slice(i, i + BATCH_MAX);
-    const buf = Buffer.alloc(slice.length * BATCH_STRIDE);   // zero-filled: nop padding
-    slice.forEach((off, k) => rom.copy(buf, k * BATCH_STRIDE, off, Math.min(off + MAX_Z80_INSTR, rom.length)));
-    const decoded = await runObjdump({ arch: "z80", startAddress: 0, bytes: buf });
+    // Fill with the ISA's terminator FIRST, then overwrite each slice head
+    // with real bytes. Zero-filling is only correct when 0x00 decodes-and-stops
+    // (true on Z80, false on m68k where 0x0000 is `orib`).
+    const buf = Buffer.alloc(slice.length * stride);
+    for (let b = 0; b < buf.length; b += isa.pad.length) isa.pad.copy(buf, b);
+    slice.forEach((off, k) => rom.copy(buf, k * stride, off, Math.min(off + isa.maxInstr, rom.length)));
+    const decoded = await runObjdump({ arch: isa.arch, startAddress: 0, bytes: buf });
     if (!decoded.available || decoded.exitCode !== 0 || decoded.crash) {
-      throw new Error(`Z80 decoder failed on an alignment batch: ${decoded.raw?.slice(-300)}`);
+      throw new Error(`${isa.arch} decoder failed on an alignment batch: ${decoded.raw?.slice(-300)}`);
     }
     const byAddr = new Map(decoded.instructions.map((r) => [r.addr, r]));
-    slice.forEach((off, k) => { const r = byAddr.get(k * BATCH_STRIDE); if (r) out.set(off, r); });
+    slice.forEach((off, k) => { const r = byAddr.get(k * stride); if (r) out.set(off, r); });
   }
   return out;
 }
@@ -73,7 +90,27 @@ export function irWindows(size, { allOffsets = false, startAddress = 0, length =
   return smsWindows(size, startAddress, length, { bank, mapper, mapperState });
 }
 
-export function decodedIR(row, window, rom, { allowStraddle = false } = {}) {
+/**
+ * Windows for a FLAT address space (Genesis: ROM maps at $000000, no banking).
+ *
+ * One window per chunk so a single objdump invocation stays bounded, but every
+ * window carries bank 0 and addr == off, because the CPU address IS the file
+ * offset. Lookahead still applies at each chunk edge for the same reason it
+ * does on a bank edge: objdump only sees the bytes it is handed.
+ */
+export function flatWindows(size, { allOffsets = false, startAddress = 0, length = 4096, fileOffset } = {}) {
+  const CHUNK = 0x8000;
+  if (allOffsets) {
+    return Array.from({ length: Math.ceil(size / CHUNK) }, (_, i) => ({
+      off: i * CHUNK, length: Math.min(CHUNK, size - i * CHUNK), bank: 0,
+      addr: i * CHUNK, slot: 0 }));
+  }
+  const off = fileOffset ?? startAddress;
+  if (off >= size || off + length > size) throw new Error("window exceeds ROM size");
+  return [{ off, length, bank: 0, addr: off, slot: 0 }];
+}
+
+export function decodedIR(row, window, rom, { allowStraddle = false, isa = ISAS.z80 } = {}) {
   const bytes = row.bytes.split(/\s+/).filter(Boolean).map((b) => parseInt(b, 16));
   const off = window.off + row.addr - window.addr;
   const windowEnd = window.off + window.length;
@@ -92,23 +129,96 @@ export function decodedIR(row, window, rom, { allowStraddle = false } = {}) {
     || (straddles && !allowStraddle && off + bytes.length > rom.length)
     || bytes.some((b, i) => b !== rom[off + i])) throw new Error(`decoder byte/offset mismatch at ROM offset ${off}`);
   const mnemonic = row.mnem.toLowerCase(), len = bytes.length;
-  const documented = DOCUMENTED_Z80.has(mnemonic);
-  const lifted = liftZ80(`${mnemonic} ${row.ops.replace(/0x([0-9a-f]+)/gi, "$$$1")}`).ir.filter((n) => n.name !== "RECOMPILE_ENTRY");
+  const documented = isa.documented(mnemonic);
+  // `lifted` is Z80-only. A recompiler lowers from mnemonic+ops itself, so an
+  // ISA without a lifter omits the field rather than emitting a fake one.
+  const lifted = isa.lift ? isa.lift(mnemonic, row.ops) : undefined;
   return { schema: "romdev-decoded-ir-v1", off, addr: row.addr, bank: window.bank, slot: window.slot,
     bytes, mnemonic, ops: row.ops, len,
     ...(straddles ? { straddlesWindow: true, windowEnd, bytesBeyondWindow: off + bytes.length - windowEnd,
       straddleNote: "this instruction starts in this bank and its operand bytes continue into the NEXT physical bank. The bytes are the ROM's real bytes; at run time the trailing bytes come from whichever bank is mapped after this one, so treat the decode as correct for this bank's layout and not as proof of the executed operand." } : {}),
-    cycles: documented ? z80Cycles(bytes) : null,
+    cycles: documented ? isa.cycles(bytes) : null,
     cycleOrder: ["taken-or-repeat", "not-taken-or-final"],
-    ...(documented ? z80Control(mnemonic, row.ops, row.addr, len)
+    ...(documented ? isa.control(mnemonic, row.ops, row.addr, len)
       : { kind: "unknown", targets: [], fallthrough: null }),
-    ...(documented ? z80Flags(mnemonic, row.ops) : { flagsRead: null, flagsWritten: null }),
-    lifted, decodeStatus: documented ? "decoded" : "unknown",
+    ...(isa.flags
+      ? (documented ? isa.flags(mnemonic, row.ops) : { flagsRead: null, flagsWritten: null })
+      : {}),
+    ...(lifted ? { lifted } : {}),
+    decodeStatus: documented ? "decoded" : "unknown",
     targetAddressDomain: "cpu", reachability: "unproven-linear-decode" };
 }
 
+/**
+ * A COMPACT block map: {offset: instructionLength} for every offset that can
+ * begin an instruction, plus the manifest's completeness fields.
+ *
+ * This exists because every consumer of the full IR was re-deriving the same
+ * thing: a static recompiler emits one entry point per byte offset, and all it
+ * needs per offset is "how long is the instruction here". Reading the whole
+ * JSONL to extract one integer per record is wasteful on both sides - a 512KB
+ * Genesis cart is ~260k records - and it meant the block map's correctness
+ * lived in each consumer instead of here.
+ *
+ * Runs the SAME export, so the map cannot drift from the decode it summarises.
+ */
+export async function exportBlockMap(args) {
+  const primaryOnly = args.primaryOnly === true;
+  const tmp = `${path.resolve(args.outputPath)}.ir.tmp`;
+  const manifest = await exportZ80IR({ ...args, outputPath: tmp });
+  const { createReadStream } = await import("node:fs");
+  const { createInterface } = await import("node:readline");
+  const blocks = {};
+  let dataOffsets = 0;
+  const rl = createInterface({ input: createReadStream(tmp), crlfDelay: Infinity });
+  for await (const line of rl) {
+    if (!line) continue;
+    const r = JSON.parse(line);
+    // BOTH alignments by default. A static recompiler emits one entry point
+    // per byte offset, because a computed jump can land mid-instruction - so
+    // it needs the decode at offsets the primary tiling never begins an
+    // instruction at. Returning only the primary tiling gave 21,689 of 32,768
+    // offsets on a real cart and the consumer had to go back to the full IR
+    // for the rest, which is the re-derivation this emit exists to remove.
+    //
+    // `primaryOnly:true` restores the linear tiling, where each byte is owned
+    // exactly once - the right choice for a disassembly listing rather than a
+    // recompiler.
+    if (primaryOnly && r.alignment === "secondary") continue;
+    blocks[r.off] = r.len;
+    if (r.decodeStatus === "data") dataOffsets++;
+  }
+  await unlink(tmp).catch(() => {});
+  const out = path.resolve(args.outputPath);
+  await mkdir(path.dirname(out), { recursive: true });
+  const body = JSON.stringify({
+    schema: "romdev-blockmap-v1",
+    primaryOnly,
+    romBytes: manifest.romBytes,
+    instructionAlignment: manifest.instructionAlignment ?? 1,
+    blockCount: Object.keys(blocks).length,
+    dataOffsets,
+    coveredBytes: manifest.coveredBytes,
+    unresolvedOffsets: manifest.unresolvedOffsets,
+    sourceIsa: manifest.provenance?.sourceIsa,
+    blocks,
+  });
+  await (await open(out, "w")).writeFile(body).catch(async (e) => { throw e; });
+  return { schema: "romdev-blockmap-manifest-v1", path: out, format: "json",
+    romBytes: manifest.romBytes, blockCount: Object.keys(blocks).length,
+    dataOffsets, coveredBytes: manifest.coveredBytes,
+    unresolvedOffsets: manifest.unresolvedOffsets,
+    instructionAlignment: manifest.instructionAlignment ?? 1,
+    primaryOnly,
+    note: primaryOnly
+      ? "blocks maps FILE OFFSET -> instruction length, PRIMARY tiling only: each byte owned by exactly one instruction. Use for a disassembly listing."
+      : "blocks maps FILE OFFSET -> instruction length at EVERY offset that can begin an instruction, primary and secondary alignments both. This is what a static recompiler needs: a computed jump can land mid-instruction, so every offset is a potential entry point." };
+}
+
 export async function exportZ80IR(args) {
-  if (!["sms", "gg"].includes(args.platform)) throw new Error("emit:'ir' currently supports SMS/GG cartridge mapping only; MSX/raw Z80 mapping is not inferred from SMS slots");
+  const isa = isaFor(args.platform);
+  if (!isa) throw new Error(`emit:'ir' has no ISA descriptor for platform '${args.platform}'. Supported: ${Object.keys(PLATFORM_ISA).join(", ")}`);
+  if (isa.arch === "z80" && !["sms", "gg"].includes(args.platform)) throw new Error("emit:'ir' currently supports SMS/GG cartridge mapping only; MSX/raw Z80 mapping is not inferred from SMS slots");
   if (!args.outputPath) throw new Error("emit:'ir' requires outputPath for JSONL; bulk IR is never returned inline");
   const input = path.resolve(args.path), output = path.resolve(args.outputPath);
   if (input === output) throw new Error("IR outputPath must not overwrite the input ROM");
@@ -118,7 +228,7 @@ export async function exportZ80IR(args) {
   };
   await protectInput();
   const rom = await readFile(input);
-  const windows = irWindows(rom.length, args);
+  const windows = isa.bankSize ? irWindows(rom.length, args) : flatWindows(rom.length, args);
   await mkdir(path.dirname(output), { recursive: true });
   const temp = `${output}.${randomUUID()}.tmp`;
   const fd = await open(temp, "wx");
@@ -136,15 +246,15 @@ export async function exportZ80IR(args) {
       // decode; records are still only KEPT when they start inside the window,
       // so nothing from the next bank is emitted twice.
       const windowEnd = window.off + window.length;
-      const lookahead = Math.min(MAX_Z80_INSTR - 1, rom.length - windowEnd);
-      const decoded = await runObjdump({ arch: "z80", startAddress: window.addr, bytes: rom.subarray(window.off, windowEnd + lookahead) });
-      if (!decoded.available || decoded.exitCode !== 0 || decoded.crash) throw new Error(`Z80 decoder failed for bank ${window.bank}: ${decoded.raw?.slice(-300)}`);
+      const lookahead = Math.min(isa.maxInstr - 1, rom.length - windowEnd);
+      const decoded = await runObjdump({ arch: isa.arch, startAddress: window.addr, bytes: rom.subarray(window.off, windowEnd + lookahead) });
+      if (!decoded.available || decoded.exitCode !== 0 || decoded.crash) throw new Error(`${isa.arch} decoder failed for bank ${window.bank}: ${decoded.raw?.slice(-300)}`);
       let cursor = window.off, chunk = "";
       const primaryStarts = new Set();
       for (const row of decoded.instructions) {
         const rowOff = window.off + row.addr - window.addr;
         if (rowOff >= windowEnd) break;          // belongs to the next window
-        const record = decodedIR(row, window, rom);
+        const record = decodedIR(row, window, rom, { isa });
         if (record.off !== cursor) throw new Error(`decoder left a gap/overlap at file offset ${cursor}; refusing an incomplete IR export`);
         primaryStarts.add(record.off);
         if (wantAllAlignments) record.alignment = "primary";
@@ -189,13 +299,45 @@ export async function exportZ80IR(args) {
       // unchanged linear tiling.
       if (wantAllAlignments) {
         const missing = [];
-        for (let off = window.off; off < windowEnd; off++) if (!primaryStarts.has(off)) missing.push(off);
+        // ALIGNMENT. On Z80 every byte is a legal entry point. On m68k
+        // instructions are WORD-ALIGNED, so an odd offset cannot begin one and
+        // a record there would be fiction - the exporter would be inventing
+        // entry points that no jump can reach. isa.align makes that explicit
+        // rather than leaving it to the decoder to produce garbage.
+        for (let off = window.off; off < windowEnd; off++) {
+          if (off % isa.align !== 0) continue;
+          if (!primaryStarts.has(off)) missing.push(off);
+        }
         if (missing.length) {
-          const decodedAt = await decodeAtOffsets(rom, missing);
+          const decodedAt = await decodeAtOffsets(rom, missing, isa);
           for (const off of missing) {
             const row = decodedAt.get(off);
             if (!row) { unresolvedOffsets++; continue; }
-            const record = decodedIR({ ...row, addr: window.addr + (off - window.off) }, window, rom, { allowStraddle: true });
+            // objdump emits `.short` where NO valid instruction of this ISA
+            // begins - genuinely undecodable data, not a decoder failure. On
+            // one 512KB Genesis cart 25 of 262144 offsets are like this
+            // (e.g. 0x1DCB2 = `47 45 73 aa`, mid-table data).
+            //
+            // Emit them as explicit `data` records rather than dropping them:
+            // a consumer compiling every offset as an entry point needs an
+            // entry for these too, and silently having no record is how
+            // coverage gaps hide. The recompiler turns them into a trap, which
+            // is correct - executing them IS a fault.
+            if (row.mnem === ".short" || row.mnem === ".word" || row.mnem === ".byte") {
+              const dbytes = row.bytes.split(/\s+/).filter(Boolean).map((b) => parseInt(b, 16));
+              const rec = { schema: "romdev-decoded-ir-v1", off,
+                addr: window.addr + (off - window.off), bank: window.bank, slot: window.slot,
+                bytes: dbytes, mnemonic: null, ops: "", len: dbytes.length,
+                cycles: null, kind: "unknown", targets: [], fallthrough: null,
+                decodeStatus: "data", alignment: "secondary",
+                targetAddressDomain: "cpu", reachability: "unproven-linear-decode",
+                dataNote: "no valid instruction of this ISA begins here; the bytes are retained and not lifted." };
+              secondaryCount++; unknownCount++;
+              chunk += JSON.stringify(rec) + "\n";
+              if (chunk.length >= 256 * 1024) { await fd.writeFile(chunk); bytesWritten += Buffer.byteLength(chunk); chunk = ""; }
+              continue;
+            }
+            const record = decodedIR({ ...row, addr: window.addr + (off - window.off) }, window, rom, { allowStraddle: true, isa });
             record.alignment = "secondary";
             secondaryCount++;
             chunk += JSON.stringify(record) + "\n";
@@ -211,7 +353,14 @@ export async function exportZ80IR(args) {
     bytesWritten, coveredBytes, romBytes: rom.length,
     straddleCount,
     ...(wantAllAlignments ? { alignments: "all", secondaryCount,
-      offsetsTotal: rom.length, offsetsWithRecord: instrCount + secondaryCount,
+      // offsetsTotal counts offsets that CAN legally begin an instruction, not
+      // raw bytes. On a word-aligned ISA (m68k) only even offsets qualify, so
+      // comparing `offsetsWithRecord` against rom.length would look like 50%
+      // coverage on a perfectly complete export. instructionAlignment is
+      // reported so a consumer can check the arithmetic rather than trust it.
+      instructionAlignment: isa.align,
+      offsetsTotal: Math.ceil(rom.length / isa.align),
+      offsetsWithRecord: instrCount + secondaryCount,
       // ALWAYS present when alignments:'all' is on, including at zero.
       //
       // This was `...(unresolvedOffsets ? {...} : {})`, so the healthy case -
@@ -233,7 +382,7 @@ export async function exportZ80IR(args) {
     ...(truncatedTailBytes ? { truncatedTailNote: `${truncatedTailBytes} byte(s) at the very end of the ROM are an opcode whose operands would run past the file. They are retained as decodeStatus:'truncated-at-rom-end' rather than refusing the export.` } : {}),
     ...(straddleCount ? { straddleNote: `${straddleCount} instruction(s) start in one bank and their operand bytes continue into the next. Their records carry straddlesWindow:true with bytesBeyondWindow. coveredBytes counts each byte once, in the bank it physically lives in.` } : {}), romSha256: createHash("sha256").update(rom).digest("hex"),
     banks: [...new Set(windows.map((w) => w.bank))], windows,
-    cycles: CYCLE_PROVENANCE, source: args.platform, sourceIsa: "z80",
+    cycles: isa.provenance, source: args.platform, sourceIsa: isa.arch,
     mapper: args.mapper ?? "sega",
     mappingMode: args.allOffsets || args.fileOffset != null ? "physical-banks-with-declared-cpu-slot" : "static-cpu-mapping",
     mapperState: args.mapperState ?? null,

@@ -37,6 +37,7 @@ import { widthRanges, addrmode } from "../../toolchains/common/reassemble.js";
 import { decodePointerTable, reverseLookup } from "../../analysis/pointer-table.js";
 import { decodeScript } from "../../analysis/script-grammar.js";
 import { sourceLookupCore } from "../../analysis/source-lookup.js";
+import { isaFor, PLATFORM_ISA } from "../../analysis/recompile/isa.js";
 
 /** cfg/xrefs/functions all operate on a ROM file. Reuse the `path` arg. */
 function requireRomPath(args) {
@@ -1655,9 +1656,10 @@ const Z80_SOURCES = new Set(["sms", "gg", "msx", "z80"]);
  * caller can recompile one routine instead of a whole ROM.
  */
 async function recompileZ80(args, targetPlatform) {
-  if (args.emit === "ir") {
-    const { exportZ80IR } = await import("../../analysis/recompile/export-z80-ir.js");
-    return jsonContent(await exportZ80IR({ ...args, path: requireRomPath(args) }));
+  if (args.emit === "ir" || args.emit === "blockMap") {
+    const mod = await import("../../analysis/recompile/export-z80-ir.js");
+    const fn = args.emit === "blockMap" ? mod.exportBlockMap : mod.exportZ80IR;
+    return jsonContent(await fn({ ...args, path: requireRomPath(args) }));
   }
   const platform = args.platform;
   const romPath = requireRomPath(args);
@@ -1687,9 +1689,19 @@ async function recompileZ80(args, targetPlatform) {
 
 async function recompileCore(args) {
   const { platform } = args;
-  if (args.emit === "ir" && !Z80_SOURCES.has(platform)) throw new Error("emit:'ir' currently exports Z80 sources (sms/gg/msx/z80); other source lifters still use emit:'asm'");
-  if (args.allOffsets && args.emit !== "ir") throw new Error("allOffsets requires emit:'ir'; existing assembly recompilation remains a CPU-window operation");
+  // emit:'ir' is no longer Z80-only: the exporter dispatches on an ISA
+  // descriptor (src/analysis/recompile/isa.js). A platform is supported when
+  // it has one - which requires an objdump arch AND a cycle table extracted
+  // from a core we verify against, neither of which can be faked.
+  if ((args.emit === "ir" || args.emit === "blockMap") && !isaFor(platform)) {
+    throw new Error(`emit:'ir' has no ISA descriptor for platform '${platform}'. Supported: ${Object.keys(PLATFORM_ISA).join(", ")}. Others still use emit:'asm'.`);
+  }
+  if (args.allOffsets && args.emit !== "ir" && args.emit !== "blockMap") throw new Error("allOffsets requires emit:'ir' or emit:'blockMap'; existing assembly recompilation remains a CPU-window operation");
   const targetPlatform = args.targetPlatform || "snes";
+  // emit:'ir' routes to the ISA-dispatching exporter for ANY platform with a
+  // descriptor. The Z80 assembly path (emit:'asm') is unchanged and still
+  // gated on Z80_SOURCES - it lowers to SNES and has no m68k equivalent.
+  if ((args.emit === "ir" || args.emit === "blockMap") && isaFor(platform)) return await recompileZ80(args, targetPlatform);
   if (platform && Z80_SOURCES.has(platform)) return await recompileZ80(args, targetPlatform);
   if (platform && platform !== "nes") {
     const { supportedPairs } = await import("../../analysis/recompile/index.js");
@@ -2005,7 +2017,8 @@ export function registerDisasmTools(server, z) {
       platform: z.enum(DISASM_PLATFORMS).optional().describe("target=rom/project/references: override platform (else sniffed from extension). target=source: pico8 (.p8 carts are Lua source). n64/ps1/dreamcast: functions/cfg/xrefs/decompile (the MIPS/SH-4 RE engine); their bytes/rom/project/references targets are not implemented and return a capability error."),
       startAddress: z.number().int().min(0).max(0xffffffff).default(0x8000).describe("target=bytes/rom/range/recompile: address of the first byte (GBA auto-bumped to 0x08000000). On target=recompile this is the routine to lift - NOT `address`, which belongs to the analysis targets."),
       length: z.number().int().min(1).max(65536).optional().describe("target=rom/range/recompile: bytes to disassemble or lift (default 256; mutually exclusive with endAddress)."),
-      emit: z.enum(["asm", "ir"]).default("asm").describe("target=recompile: asm preserves existing output; ir exports decoded/lifted instructions as JSONL at outputPath, with byte offsets, CPU addresses, banks, cycles and flags. SOURCE PLATFORMS: sms, gg, msx, z80 (Z80 only) - every other platform refuses, because the IR carries per-ISA cycle and control-flow metadata that exists only for Z80 today. No WAT backend."),
+      emit: z.enum(["asm", "ir", "blockMap"]).default("asm").describe("target=recompile: asm preserves existing output; ir exports decoded instructions as JSONL at outputPath, with byte offsets, CPU addresses, banks, cycles and control flow; blockMap exports the same decode as a COMPACT {offset: length} map - what a recompiler needs to emit one entry point per byte offset, without re-deriving it from the full IR. SOURCE PLATFORMS: any with an ISA descriptor (src/analysis/recompile/isa.js) - today sms, gg, msx, z80 (Z80) and genesis (m68k). A platform needs an objdump arch AND a cycle table extracted from a core we verify against. No WAT backend."),
+      primaryOnly: z.boolean().optional().describe("emit='blockMap': return only the PRIMARY linear tiling (each byte owned by exactly one instruction) instead of every offset that can begin an instruction. Default false, because a static recompiler needs an entry point at every offset - a computed jump can land mid-instruction."),
       allOffsets: z.boolean().default(false).describe("target=recompile emit=ir: export the entire SMS/GG ROM in bank-sized windows in one call, including ROMs larger than 64KB. Linear decode, not reachability proof."),
       alignments: z.enum(["primary", "all"]).default("primary").describe("target=recompile emit=ir: 'primary' (default) emits ONE linear tiling - every byte owned by exactly one instruction. 'all' additionally emits a decode STARTING at every offset the tiling did not begin an instruction at, marked alignment:'secondary'. A static recompiler needs those: a computed jump (jp (hl), an rst table) can land mid-instruction. Secondary records overlap by design and must NOT be summed against romBytes."),
 
@@ -2062,7 +2075,7 @@ export function registerDisasmTools(server, z) {
       // target=recompile emit=ir and once for target=script - and an object
       // literal keeps only the LAST, so the recompile form silently lost its
       // min(0) bound and its documentation.
-      fileOffset: z.number().int().min(0).optional().describe("target=recompile emit=ir: physical ROM byte offset, explicitly distinct from startAddress (CPU address). target=script: raw file offset of the script start (alternative to `address`, which maps through the platform's banking)."),
+      fileOffset: z.number().int().min(0).optional().describe("target=recompile emit=ir/blockMap: physical ROM byte offset, explicitly distinct from startAddress (CPU address). target=script: raw file offset of the script start (alternative to `address`, which maps through the platform's banking)."),
       maxRecords: z.number().int().optional().describe("target=script: decode cap (default 256)."),
       project: z.string().optional().describe("target=decompile, n64: a decomp-registered project id (decomp({op:'import'})) - the VA is resolved through the project's splat segment map (relocated segments + overlays) and the output is symbolized with the project's names. Without it the header-entry formula is used, which maps ONLY the boot segment (the result says so)."),
       splatYaml: z.string().optional().describe("target=decompile, n64: path to a splat yaml to use for segment mapping when no project is registered."),
