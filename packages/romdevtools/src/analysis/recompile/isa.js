@@ -18,6 +18,11 @@ import { decodeBatch as decode65816, decodeLinear as decodeLinear65816 } from ".
 import { M65816_CYCLE_PROVENANCE, modeAccesses } from "./m65816-metadata.js";
 import { armCycles, armControl, armDocumented, ARM_CYCLE_PROVENANCE } from "./arm-metadata.js";
 
+// What binutils prints when a word is not a legal encoding (`@ <UNDEFINED>`)
+// or when it gives up entirely. Shared by the ARM and Thumb rows so the two
+// cannot drift - they are the same disassembler.
+const ARM_DATA_MNEMONICS = new Set(["@", ".word", ".short", ".byte", ".inst"]);
+
 /** @typedef {{arch:string, maxInstr:number, align:number, bankSize:number|null,
  *             cycles:(b:Buffer)=>number|null, control:Function,
  *             flags:Function|null, lift:Function|null,
@@ -188,7 +193,7 @@ export const ISAS = {
     // - runObjdump surfaces mnemonic `@`. That is the ARM spelling of the
     // `.short` the m68k decoder emits, so the exporter must recognise it or
     // every undefined word becomes an "instruction" named `@`.
-    dataMnemonics: new Set(["@", ".word", ".short", ".byte", ".inst"]),
+    dataMnemonics: ARM_DATA_MNEMONICS,
     // PADDING MUST BE A REAL 4-BYTE INSTRUCTION, and on ARM every 4-byte word
     // is exactly one instruction, so any legal word terminates a batch slice.
     // `00 00 a0 e1` is `mov r0, r0` (the canonical ARM nop) little-endian.
@@ -201,6 +206,43 @@ export const ISAS = {
     pad: Buffer.from([0x00, 0x00, 0xa0, 0xe1]),
     provenance: ARM_CYCLE_PROVENANCE,
   },
+  gbaThumb: {
+    // ARM7TDMI, THUMB state. Same CPU and the same address space as the `gba`
+    // row above - what differs is which state the core is in, which is a
+    // RUN-TIME fact set by `bx`. Keeping the two as separate ISAs is
+    // deliberate: decoding every offset in both states and calling both "the
+    // instruction" would invent entry points that never execute.
+    //
+    // A GBA cart matters here because essentially all commercial game code is
+    // Thumb - the 16-bit cart bus makes it roughly twice as fast to fetch -
+    // so an ARM-only export stops about a dozen instructions into the boot,
+    // at the `bx` that switches state.
+    arch: "thumb",
+    // A Thumb instruction is 2 bytes, EXCEPT `bl`/`blx <label>`, which is an
+    // aligned PAIR of 16-bit halves that binutils prints as one 4-byte
+    // instruction. So the longest decode is 4.
+    maxInstr: 4,
+    // HALFWORD-ALIGNED: in Thumb state the PC's low bit is always zero.
+    align: 2,
+    bankSize: null,
+    // Same reason as the ARM row: mGBA has no per-opcode table, because cost
+    // depends on the memory region, the live WAITCNT and (for multiplies)
+    // register contents. Thumb fetches are 16-bit, so the S/N/I model uses
+    // the 16-bit waitstate arrays in arm-metadata.js.
+    cycles: armCycles,
+    // Thumb shares ARM's mnemonics, so the same classifier applies. It
+    // already covers the Thumb idioms: `pop {pc}` and `bx lr` as returns,
+    // `bl <label>` as a call, `bx <reg>` as an indirect jump.
+    control: armControl,
+    flags: null,
+    lift: null,
+    documented: armDocumented,
+    dataMnemonics: ARM_DATA_MNEMONICS,
+    // `mov r8, r8` (46c0) is Thumb's canonical nop: two bytes, decodes and
+    // stops, so padding a batch slice cannot carry a decode into the next.
+    pad: Buffer.from([0xc0, 0x46]),
+    provenance: ARM_CYCLE_PROVENANCE,
+  },
 };
 
 /** Which ISA a platform's cartridge code is written in. */
@@ -211,6 +253,7 @@ export const PLATFORM_ISA = {
   nes: "m6502",
   snes: "m65816",
   gba: "gba",
+  gbaThumb: "gbaThumb",
 };
 
 export function isaFor(platform) {

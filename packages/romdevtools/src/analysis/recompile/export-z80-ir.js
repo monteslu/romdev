@@ -407,6 +407,28 @@ export async function exportZ80IR(args) {
               if (chunk.length >= 256 * 1024) { await fd.writeFile(chunk); bytesWritten += Buffer.byteLength(chunk); chunk = ""; }
               continue;
             }
+            // A SECONDARY decode whose operands would run past the END of
+            // the ROM is tail data, not a decoder failure - the same case the
+            // primary pass emits as `truncated-at-rom-end`. Thumb makes it
+            // routine: `bl` is an aligned PAIR of halfwords, so the final two
+            // bytes of any ROM ending in a bl-first-half decode to nothing.
+            // Advance Wars ends in `ff ff` and the whole 4MB export was being
+            // refused over it.
+            const rowBytes = row.bytes.split(/\s+/).filter(Boolean);
+            if (!rowBytes.length || off + rowBytes.length > rom.length) {
+              const tail = [...rom.subarray(off, rom.length)];
+              const rec = { schema: "romdev-decoded-ir-v1", off,
+                addr: window.addr + (off - window.off), bank: window.bank, slot: window.slot,
+                bytes: tail, mnemonic: null, ops: "", len: tail.length,
+                cycles: null, kind: "unknown", targets: [], fallthrough: null,
+                decodeStatus: "truncated-at-rom-end", alignment: "secondary",
+                targetAddressDomain: "cpu", reachability: "unproven-linear-decode",
+                truncatedNote: "an instruction here would need operand bytes past the END of the ROM file." };
+              secondaryCount++; unknownCount++; truncatedTailBytes += tail.length;
+              chunk += JSON.stringify(rec) + "\n";
+              if (chunk.length >= 256 * 1024) { await fd.writeFile(chunk); bytesWritten += Buffer.byteLength(chunk); chunk = ""; }
+              continue;
+            }
             const record = decodedIR({ ...row, addr: window.addr + (off - window.off) }, window, rom, { allowStraddle: true, isa });
             record.alignment = "secondary";
             secondaryCount++;
