@@ -54,6 +54,14 @@ async function decodeAtOffsets(rom, offsets, isa) {
     const buf = Buffer.alloc(slice.length * stride);
     for (let b = 0; b < buf.length; b += isa.pad.length) isa.pad.copy(buf, b);
     slice.forEach((off, k) => rom.copy(buf, k * stride, off, Math.min(off + isa.maxInstr, rom.length)));
+    // An ISA may carry its OWN decoder (the 6502 does - binutils has no
+    // 6502 target). Those decode straight from the ROM at real offsets and
+    // skip the batch buffer entirely, which is both simpler and faster.
+    if (isa.decode) {
+      const got = isa.decode(rom, slice);
+      for (const [off, r] of got) out.set(off, r);
+      continue;
+    }
     const decoded = await runObjdump({ arch: isa.arch, startAddress: 0, bytes: buf });
     if (!decoded.available || decoded.exitCode !== 0 || decoded.crash) {
       throw new Error(`${isa.arch} decoder failed on an alignment batch: ${decoded.raw?.slice(-300)}`);
@@ -247,7 +255,17 @@ export async function exportZ80IR(args) {
       // so nothing from the next bank is emitted twice.
       const windowEnd = window.off + window.length;
       const lookahead = Math.min(isa.maxInstr - 1, rom.length - windowEnd);
-      const decoded = await runObjdump({ arch: isa.arch, startAddress: window.addr, bytes: rom.subarray(window.off, windowEnd + lookahead) });
+      // An ISA with its own decoder walks the window linearly here, producing
+      // the same {addr, mnemonic, ops, bytes} rows objdump would.
+      let decoded;
+      if (isa.decodeLinear) {
+        decoded = { available: true, exitCode: 0,
+                    instructions: isa.decodeLinear(rom, window.off,
+                                                   windowEnd + lookahead,
+                                                   window.addr) };
+      } else {
+        decoded = await runObjdump({ arch: isa.arch, startAddress: window.addr, bytes: rom.subarray(window.off, windowEnd + lookahead) });
+      }
       if (!decoded.available || decoded.exitCode !== 0 || decoded.crash) throw new Error(`${isa.arch} decoder failed for bank ${window.bank}: ${decoded.raw?.slice(-300)}`);
       let cursor = window.off, chunk = "";
       const primaryStarts = new Set();

@@ -12,6 +12,8 @@ import { z80Cycles, z80Flags, z80Control, CYCLE_PROVENANCE } from "./z80-metadat
 import { liftZ80, DOCUMENTED_Z80 } from "./lift-z80.js";
 import { m68kCycles, m68kControl, M68K_CYCLE_PROVENANCE } from "./m68k-metadata.js";
 import { gbCycles, gbControl, GB_CYCLE_PROVENANCE, GB_ILLEGAL } from "./gb-metadata.js";
+import { m6502Cycles, m6502Control, M6502_CYCLE_PROVENANCE } from "./m6502-metadata.js";
+import { decodeBatch as decode6502, decodeLinear as decodeLinear6502 } from "./decode-6502.js";
 
 /** @typedef {{arch:string, maxInstr:number, align:number, bankSize:number|null,
  *             cycles:(b:Buffer)=>number|null, control:Function,
@@ -97,6 +99,31 @@ export const ISAS = {
     illegal: GB_ILLEGAL,
     provenance: GB_CYCLE_PROVENANCE,
   },
+  m6502: {
+    // NOT an objdump arch - binutils has no 6502 target, and da65 is a
+    // whole-file disassembler that cannot be asked for one instruction at a
+    // given offset without a per-offset flood. The 6502 needs neither: 256
+    // fixed-length opcodes, no prefixes, so `decode` below IS the decoder.
+    // It is validated against da65 on a real ROM (259/260 identical; the one
+    // difference is da65 printing a symbol name for an address).
+    arch: "m6502",
+    decode: decode6502,
+    decodeLinear: decodeLinear6502,
+    // The longest 6502 instruction is 3 bytes; there are no prefixes.
+    maxInstr: 3,
+    // Every byte is a legal entry point.
+    align: 1,
+    // NROM maps 16KB or 32KB flat; mappers bank $8000-$FFFF in 16KB units.
+    bankSize: 0x4000,
+    cycles: m6502Cycles,
+    control: m6502Control,
+    flags: null,
+    lift: null,
+    documented: (m) => m !== ".byte",
+    // $EA is `nop`: one byte, decodes and stops.
+    pad: Buffer.from([0xea]),
+    provenance: M6502_CYCLE_PROVENANCE,
+  },
 };
 
 /** Which ISA a platform's cartridge code is written in. */
@@ -104,6 +131,7 @@ export const PLATFORM_ISA = {
   sms: "z80", gg: "z80", msx: "z80", z80: "z80",
   genesis: "m68k",
   gb: "gb", gbc: "gb",
+  nes: "m6502",
 };
 
 export function isaFor(platform) {
