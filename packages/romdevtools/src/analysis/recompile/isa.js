@@ -14,6 +14,8 @@ import { m68kCycles, m68kControl, M68K_CYCLE_PROVENANCE } from "./m68k-metadata.
 import { gbCycles, gbControl, GB_CYCLE_PROVENANCE, GB_ILLEGAL } from "./gb-metadata.js";
 import { m6502Cycles, m6502Control, M6502_CYCLE_PROVENANCE } from "./m6502-metadata.js";
 import { decodeBatch as decode6502, decodeLinear as decodeLinear6502 } from "./decode-6502.js";
+import { decodeBatch as decode65816, decodeLinear as decodeLinear65816 } from "./decode-65816.js";
+import { M65816_CYCLE_PROVENANCE, modeAccesses } from "./m65816-metadata.js";
 
 /** @typedef {{arch:string, maxInstr:number, align:number, bankSize:number|null,
  *             cycles:(b:Buffer)=>number|null, control:Function,
@@ -124,6 +126,30 @@ export const ISAS = {
     pad: Buffer.from([0xea]),
     provenance: M6502_CYCLE_PROVENANCE,
   },
+  m65816: {
+    // No binutils target and no usable da65 batch mode, same as the 6502.
+    // Validated against da65 on Super Mario World: 182 of 183 instructions
+    // identical, and the one difference is da65 giving up (`.byte $ad`)
+    // where this decoder correctly reads `lda $1DF9`.
+    arch: "m65816",
+    decode: decode65816,
+    decodeLinear: decodeLinear65816,
+    // The longest 65816 instruction is 4 bytes (a long absolute operand).
+    maxInstr: 4,
+    align: 1,
+    // LoROM maps 32KB per bank into $8000-$FFFF.
+    bankSize: 0x8000,
+    // snes9x charges per memory ACCESS, not from a table; cost is
+    // accesses * MemSpeed + internals. See m65816-metadata.js.
+    cycles: () => null,
+    control: () => ({ kind: "none", fallsThrough: true }),
+    flags: null,
+    lift: null,
+    documented: (m) => m !== ".byte",
+    // $EA is `nop`: one byte, decodes and stops.
+    pad: Buffer.from([0xea]),
+    provenance: M65816_CYCLE_PROVENANCE,
+  },
 };
 
 /** Which ISA a platform's cartridge code is written in. */
@@ -132,6 +158,7 @@ export const PLATFORM_ISA = {
   genesis: "m68k",
   gb: "gb", gbc: "gb",
   nes: "m6502",
+  snes: "m65816",
 };
 
 export function isaFor(platform) {
