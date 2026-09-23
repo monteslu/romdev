@@ -16,6 +16,7 @@ import { m6502Cycles, m6502Control, M6502_CYCLE_PROVENANCE } from "./m6502-metad
 import { decodeBatch as decode6502, decodeLinear as decodeLinear6502 } from "./decode-6502.js";
 import { decodeBatch as decode65816, decodeLinear as decodeLinear65816 } from "./decode-65816.js";
 import { M65816_CYCLE_PROVENANCE, modeAccesses } from "./m65816-metadata.js";
+import { armCycles, armControl, armDocumented, ARM_CYCLE_PROVENANCE } from "./arm-metadata.js";
 
 /** @typedef {{arch:string, maxInstr:number, align:number, bankSize:number|null,
  *             cycles:(b:Buffer)=>number|null, control:Function,
@@ -30,6 +31,9 @@ export const ISAS = {
     maxInstr: 4,
     align: 1,
     bankSize: 0x4000,
+    // This ISA's windows go through the SMS mapper logic; every other ISA
+    // uses the flat chunked walk (see exportZ80IR's window choice).
+    smsMapper: true,
     cycles: z80Cycles,
     control: z80Control,
     flags: z80Flags,
@@ -150,6 +154,53 @@ export const ISAS = {
     pad: Buffer.from([0xea]),
     provenance: M65816_CYCLE_PROVENANCE,
   },
+  gba: {
+    // ARM7TDMI, ARM state. binutils' arm objdump ships in romdev-platform-gba
+    // (same package as as/ld/objcopy) and objdump.js already exposes it as the
+    // `arm` arch; there is also a `thumb` arch for force-thumb decoding.
+    //
+    // THUMB IS NOT COVERED HERE. Thumb is a 2-byte ISA sharing the same address
+    // space, and which state the CPU is in at a given address is a RUN-TIME
+    // fact (set by bx/blx). Decoding every offset twice and labelling both
+    // "the instruction" would be inventing entry points, so this descriptor is
+    // ARM-state only and a Thumb-state export is a separate, later ISA row.
+    arch: "arm",
+    // ARM instructions are EXACTLY 4 bytes. No prefixes, no variable-length
+    // operands: there is nothing for the lookahead to be wrong about.
+    maxInstr: 4,
+    // WORD-ALIGNED. In ARM state the PC's low two bits are always zero, so an
+    // unaligned offset cannot begin an instruction and a record there would be
+    // fiction - the same reason m68k uses align:2.
+    align: 4,
+    // The GBA maps cartridge ROM FLAT at $08000000 (mirrored at $0A/$0C for
+    // different waitstate rows). There is no bank window.
+    bankSize: null,
+    // ALWAYS null - mGBA has no per-opcode table to extract, because an
+    // ARM7TDMI instruction's cost depends on the memory region touched, the
+    // live WAITCNT value, and (for multiplies) register contents. The S/N/I
+    // model and mGBA's verbatim waitstate arrays are in arm-metadata.js.
+    cycles: armCycles,
+    control: armControl,
+    flags: null,   // the recompiler lowers from mnemonic+ops; flags unmodelled
+    lift: null,
+    documented: armDocumented,
+    // binutils ARM prints an illegal word as `@ <UNDEFINED> instruction: 0x..`
+    // - runObjdump surfaces mnemonic `@`. That is the ARM spelling of the
+    // `.short` the m68k decoder emits, so the exporter must recognise it or
+    // every undefined word becomes an "instruction" named `@`.
+    dataMnemonics: new Set(["@", ".word", ".short", ".byte", ".inst"]),
+    // PADDING MUST BE A REAL 4-BYTE INSTRUCTION, and on ARM every 4-byte word
+    // is exactly one instruction, so any legal word terminates a batch slice.
+    // `00 00 a0 e1` is `mov r0, r0` (the canonical ARM nop) little-endian.
+    //
+    // Zero padding would NOT be safe in spirit even though it is fixed-length:
+    // 0x00000000 decodes as `andeq r0, r0, r0`, which is legal but is also the
+    // single most common data word in a ROM, so a bug that read padding as
+    // real bytes would look like plausible output. A distinctive nop makes
+    // that failure visible in the byte check instead of silent.
+    pad: Buffer.from([0x00, 0x00, 0xa0, 0xe1]),
+    provenance: ARM_CYCLE_PROVENANCE,
+  },
 };
 
 /** Which ISA a platform's cartridge code is written in. */
@@ -159,6 +210,7 @@ export const PLATFORM_ISA = {
   gb: "gb", gbc: "gb",
   nes: "m6502",
   snes: "m65816",
+  gba: "gba",
 };
 
 export function isaFor(platform) {

@@ -30,6 +30,14 @@ const MAX_Z80_INSTR = 4;
  */
 const BATCH_MAX = 8192;
 
+/** Default "the decoder produced no instruction here" mnemonics. An ISA whose
+ *  decoder spells it differently overrides with isa.dataMnemonics. */
+const DEFAULT_DATA_MNEMONICS = new Set([".short", ".word", ".byte", ".inst"]);
+function isData(mnem, isa) {
+  const m = (mnem || "").toLowerCase();
+  return (isa.dataMnemonics ?? DEFAULT_DATA_MNEMONICS).has(m);
+}
+
 // The slice stride must EXCEED the ISA's longest instruction, so the zero
 // padding after each slice's real bytes cannot be reached by an instruction
 // starting at the slice head. Z80's longest is 4 (stride 8); m68k's is 10, so
@@ -173,7 +181,26 @@ export function decodedIR(row, window, rom, { allowStraddle = false, isa = ISAS.
 export async function exportBlockMap(args) {
   const primaryOnly = args.primaryOnly === true;
   const tmp = `${path.resolve(args.outputPath)}.ir.tmp`;
-  const manifest = await exportZ80IR({ ...args, outputPath: tmp });
+  // A BLOCK MAP IS WHOLE-ROM BY DEFINITION - it answers "what is the
+  // instruction at every offset". Forwarding args verbatim meant a caller
+  // who did not also pass allOffsets got the default single 4096-byte
+  // window, which fails with "window exceeds ROM size" on anything smaller
+  // and silently maps only the first 4KB on anything larger. Neither is a
+  // block map. An explicit startAddress/length/bank still wins, for the
+  // caller who really does want one window.
+  // `startAddress` carries a SCHEMA DEFAULT of 0x8000 at the MCP layer, so
+  // it is never undefined by the time it arrives here - checking for that is
+  // why this worked in-process and still failed through the server. Only an
+  // explicitly narrowed request (a real length, fileOffset or bank) means
+  // "one window"; a bare blockMap call means the whole ROM.
+  const wholeRom = args.length === undefined &&
+                   args.fileOffset === undefined &&
+                   args.bank === undefined;
+  const manifest = await exportZ80IR({
+    ...args,
+    ...(wholeRom ? { allOffsets: true } : {}),
+    outputPath: tmp,
+  });
   const { createReadStream } = await import("node:fs");
   const { createInterface } = await import("node:readline");
   const blocks = {};
@@ -236,7 +263,21 @@ export async function exportZ80IR(args) {
   };
   await protectInput();
   const rom = await readFile(input);
-  const windows = isa.bankSize ? irWindows(rom.length, args) : flatWindows(rom.length, args);
+  // WINDOW CHOICE IS BY MAPPER, NOT BY "has banks".
+  //
+  // irWindows() is SMS-specific: it validates the bank against an SMS mapper
+  // and throws "SMS bank N out of range". Routing every ISA with a bankSize
+  // through it meant NES and Game Boy - which bank, but not like an SMS -
+  // failed with an SMS error on a perfectly good cart.
+  //
+  // A flat, chunked walk is correct for any ISA whose ROM is addressed
+  // linearly by file offset, which is how the NES, GB, SNES and GBA exports
+  // are consumed: the recompiler keys arms by ROM offset and resolves the
+  // bank itself at run time.
+  const useSmsWindows = isa.bankSize && isa.smsMapper === true;
+  const windows = useSmsWindows
+    ? irWindows(rom.length, args)
+    : flatWindows(rom.length, args);
   await mkdir(path.dirname(output), { recursive: true });
   const temp = `${output}.${randomUUID()}.tmp`;
   const fd = await open(temp, "wx");
@@ -341,7 +382,18 @@ export async function exportZ80IR(args) {
             // entry for these too, and silently having no record is how
             // coverage gaps hide. The recompiler turns them into a trap, which
             // is correct - executing them IS a fault.
-            if (row.mnem === ".short" || row.mnem === ".word" || row.mnem === ".byte") {
+            // The mnemonics that mean "no instruction begins here" are
+            // PER-ISA. m68k/6502 objdump says `.short`/`.word`/`.byte`; ARM
+            // objdump says `@` and prints `<UNDEFINED> instruction: 0x...` as
+            // the operand. Hardcoding the m68k spelling made every undefined
+            // ARM word fall through to decodedIR and be emitted as a real
+            // instruction named `@`.
+            //
+            // This is NOT the same question as isa.documented(): on Z80 an
+            // undocumented-but-real opcode is !documented yet still an
+            // instruction with bytes that execute. `isa.isData` answers only
+            // "the decoder produced no instruction at all".
+            if (isData(row.mnem, isa)) {
               const dbytes = row.bytes.split(/\s+/).filter(Boolean).map((b) => parseInt(b, 16));
               const rec = { schema: "romdev-decoded-ir-v1", off,
                 addr: window.addr + (off - window.off), bank: window.bank, slot: window.slot,

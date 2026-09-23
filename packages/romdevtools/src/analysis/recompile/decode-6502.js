@@ -164,7 +164,12 @@ export function decodeLinear(rom, from, to, startAddr) {
   const rows = [];
   let off = from;
   while (off < to) {
-    const addr = (startAddr + (off - from)) & 0xffff;
+    // DO NOT WRAP AT 16 BITS. The exporter recovers a record's file offset
+    // as `window.off + row.addr - window.addr`, so wrapping breaks that
+    // arithmetic on any ROM whose window base exceeds $FFFF - Super Metroid
+    // (3MB) failed with "decoder byte/offset mismatch at ROM offset 2".
+    // Operand RENDERING still masks to 16 bits where the CPU would.
+    const addr = startAddr + (off - from);
     const r = decodeOne(rom, off, addr);
     if (!r) break;
     // Match objdump's row shape exactly: `mnem`, and `bytes` as a SPACE-
