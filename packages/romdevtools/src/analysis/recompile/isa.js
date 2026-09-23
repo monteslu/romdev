@@ -256,8 +256,33 @@ export const PLATFORM_ISA = {
   gbaThumb: "gbaThumb",
 };
 
-export function isaFor(platform) {
+/**
+ * The ISA a platform's cartridge code is written in.
+ *
+ * `cpuState` selects between a platform's INSTRUCTION SETS where it has more
+ * than one. The GBA's ARM7TDMI runs ARM and Thumb over the same address
+ * space, and which one is live at a given address is a run-time fact set by
+ * `bx` - so it is a caller's choice, not a property of the platform. Without
+ * this a caller had to pass the internal ISA key as a fake platform, which
+ * the tool layer rightly rejects.
+ */
+export const PLATFORM_CPU_STATES = {
+  gba: { arm: "gba", thumb: "gbaThumb" },
+};
+
+export function isaFor(platform, cpuState) {
+  if (cpuState) {
+    const states = PLATFORM_CPU_STATES[platform];
+    const key = states && states[cpuState];
+    if (!key) return null;
+    return ISAS[key];
+  }
   const key = PLATFORM_ISA[platform];
   if (!key) return null;
   return ISAS[key];
+}
+
+/** Which instruction sets a platform has, for error messages and discovery. */
+export function cpuStatesFor(platform) {
+  return Object.keys(PLATFORM_CPU_STATES[platform] || {});
 }

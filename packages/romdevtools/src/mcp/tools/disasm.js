@@ -1693,7 +1693,7 @@ async function recompileCore(args) {
   // descriptor (src/analysis/recompile/isa.js). A platform is supported when
   // it has one - which requires an objdump arch AND a cycle table extracted
   // from a core we verify against, neither of which can be faked.
-  if ((args.emit === "ir" || args.emit === "blockMap") && !isaFor(platform)) {
+  if ((args.emit === "ir" || args.emit === "blockMap") && !isaFor(platform, args.cpuState)) {
     throw new Error(`emit:'ir' has no ISA descriptor for platform '${platform}'. Supported: ${Object.keys(PLATFORM_ISA).join(", ")}. Others still use emit:'asm'.`);
   }
   if (args.allOffsets && args.emit !== "ir" && args.emit !== "blockMap") throw new Error("allOffsets requires emit:'ir' or emit:'blockMap'; existing assembly recompilation remains a CPU-window operation");
@@ -1701,7 +1701,7 @@ async function recompileCore(args) {
   // emit:'ir' routes to the ISA-dispatching exporter for ANY platform with a
   // descriptor. The Z80 assembly path (emit:'asm') is unchanged and still
   // gated on Z80_SOURCES - it lowers to SNES and has no m68k equivalent.
-  if ((args.emit === "ir" || args.emit === "blockMap") && isaFor(platform)) return await recompileZ80(args, targetPlatform);
+  if ((args.emit === "ir" || args.emit === "blockMap") && isaFor(platform, args.cpuState)) return await recompileZ80(args, targetPlatform);
   if (platform && Z80_SOURCES.has(platform)) return await recompileZ80(args, targetPlatform);
   if (platform && platform !== "nes") {
     const { supportedPairs } = await import("../../analysis/recompile/index.js");
@@ -2018,6 +2018,7 @@ export function registerDisasmTools(server, z) {
       startAddress: z.number().int().min(0).max(0xffffffff).default(0x8000).describe("target=bytes/rom/range/recompile: address of the first byte (GBA auto-bumped to 0x08000000). On target=recompile this is the routine to lift - NOT `address`, which belongs to the analysis targets."),
       length: z.number().int().min(1).max(65536).optional().describe("target=rom/range/recompile: bytes to disassemble or lift (default 256; mutually exclusive with endAddress)."),
       emit: z.enum(["asm", "ir", "blockMap"]).default("asm").describe("target=recompile: asm preserves existing output; ir exports decoded instructions as JSONL at outputPath, with byte offsets, CPU addresses, banks, cycles and control flow; blockMap exports the same decode as a COMPACT {offset: length} map - what a recompiler needs to emit one entry point per byte offset, without re-deriving it from the full IR. SOURCE PLATFORMS: any with an ISA descriptor (src/analysis/recompile/isa.js) - today sms, gg, msx, z80 (Z80) and genesis (m68k). A platform needs an objdump arch AND a cycle table extracted from a core we verify against. No WAT backend."),
+      cpuState: z.enum(["arm", "thumb"]).optional().describe("target=recompile emit=ir/blockMap: which INSTRUCTION SET to decode, for a platform whose CPU has more than one. GBA only: its ARM7TDMI runs ARM (4-byte, word-aligned) and Thumb (2-byte, halfword-aligned) over the SAME address space, and which is live at a given address is a run-time fact set by `bx` - so it is your choice, not a property of the ROM. Default is the platform's primary set (ARM for GBA). Essentially all commercial GBA game code is Thumb, so a recompiler wants BOTH exports."),
       primaryOnly: z.boolean().optional().describe("emit='blockMap': return only the PRIMARY linear tiling (each byte owned by exactly one instruction) instead of every offset that can begin an instruction. Default false, because a static recompiler needs an entry point at every offset - a computed jump can land mid-instruction."),
       allOffsets: z.boolean().default(false).describe("target=recompile emit=ir: export the entire SMS/GG ROM in bank-sized windows in one call, including ROMs larger than 64KB. Linear decode, not reachability proof."),
       alignments: z.enum(["primary", "all"]).default("primary").describe("target=recompile emit=ir: 'primary' (default) emits ONE linear tiling - every byte owned by exactly one instruction. 'all' additionally emits a decode STARTING at every offset the tiling did not begin an instruction at, marked alignment:'secondary'. A static recompiler needs those: a computed jump (jp (hl), an rst table) can land mid-instruction. Secondary records overlap by design and must NOT be summed against romBytes."),

@@ -7,7 +7,7 @@ import { runObjdump } from "../../toolchains/objdump.js";
 import { liftZ80, DOCUMENTED_Z80 } from "./lift-z80.js";
 import { z80Cycles, z80Flags, z80Control, CYCLE_PROVENANCE } from "./z80-metadata.js";
 import { smsWindows, SMS_MAPPERS } from "../sms-mapping.js";
-import { isaFor, ISAS, PLATFORM_ISA } from "./isa.js";
+import { isaFor, ISAS, PLATFORM_ISA, cpuStatesFor } from "./isa.js";
 
 /** Longest Z80 instruction: DD/FD CB dd op. Bounds the decode lookahead. */
 const MAX_Z80_INSTR = 4;
@@ -251,7 +251,14 @@ export async function exportBlockMap(args) {
 }
 
 export async function exportZ80IR(args) {
-  const isa = isaFor(args.platform);
+  // `cpuState` picks between a platform's instruction sets (GBA: arm/thumb).
+  const isa = isaFor(args.platform, args.cpuState);
+  if (!isa && args.cpuState) {
+    const have = cpuStatesFor(args.platform);
+    throw new Error(have.length
+      ? `unknown cpuState '${args.cpuState}' for ${args.platform}; expected one of: ${have.join(", ")}`
+      : `platform ${args.platform} has a single instruction set; cpuState does not apply`);
+  }
   if (!isa) throw new Error(`emit:'ir' has no ISA descriptor for platform '${args.platform}'. Supported: ${Object.keys(PLATFORM_ISA).join(", ")}`);
   if (isa.arch === "z80" && !["sms", "gg"].includes(args.platform)) throw new Error("emit:'ir' currently supports SMS/GG cartridge mapping only; MSX/raw Z80 mapping is not inferred from SMS slots");
   if (!args.outputPath) throw new Error("emit:'ir' requires outputPath for JSONL; bulk IR is never returned inline");
