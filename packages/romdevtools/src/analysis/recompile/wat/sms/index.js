@@ -26,6 +26,7 @@ import { cost } from "./cycles.js";
 import { lower, flagHelpersWat, m1Count, rIncWat } from "./z80.js";
 import { hwWat, renderWat, psgWat, miscWat, cramBody, startBody, ggLutBytes, VRAM, CRAM, VREG, GGLUT, PROBE, PCWATCH, SMSFB, LINEPROBE } from "./hw.js";
 import { watBytes } from "../cart-abi.js";
+import { emitFlatWat } from "./flat.js";
 
 export const platforms = ["sms", "gg"];
 export const REFERENCE_CORE = "genesis_plus_gx";
@@ -93,6 +94,11 @@ function segaHeader(img) {
  *                            itself: loadMedia + this many frames, then
  *                            system_ram. Implies a whole-RAM snapshot region
  *                            ($C000, 8KB) when ramRegions is not given.
+ *   emitter: 'banked'|'flat' 'banked' (default) is the full model: paged
+ *                            windows, scanline budget carry, line interrupts.
+ *                            'flat' is sms-wat's older emitter for carts of
+ *                            32KB or less (no mapper, IRQ at line 192 only),
+ *                            kept so a cart built with it can be reproduced.
  *
  * @param {Uint8Array} rom
  * @param {object} [opts]
@@ -136,9 +142,14 @@ export function describe(rom, opts = {}) {
     }
   }
 
+  const emitter = opts.emitter || "banked";
+  if (emitter !== "banked" && emitter !== "flat") throw new Error(`sms recompile: emitter must be 'banked' or 'flat', got '${emitter}'`);
+  if (emitter === "flat" && (img.length > 0x8000 || ramRegions.length)) throw new Error("sms recompile: emitter 'flat' handles unbanked carts of 32KB or less with no RAM code");
+
   return {
     platform,
     referenceCore: REFERENCE_CORE,
+    emitter,
     supported,
     unsupportedReason: supported ? null : `ROM size ${img.length} is not a multiple of 8KB up to 4MB`,
     romBytes: img.length,
@@ -872,8 +883,7 @@ export function layoutFor(d) {
       trappc: { offset: PROBE + 8, size: 4 },
       irqs: { offset: PROBE + 20, size: 4 },
       vdpWrites: { offset: PROBE + 16, size: 4 },
-      bank2: { offset: PROBE + 40, size: 4 },
-      bank1: { offset: PROBE + 44, size: 4 },
+      ...(d.emitter === "flat" ? {} : { bank2: { offset: PROBE + 40, size: 4 }, bank1: { offset: PROBE + 44, size: 4 } }),
     },
     vramZero: ["vram"],
     warmupFrames: 0,
@@ -897,6 +907,7 @@ export function recompileSection(rom, sha1, opts = {}) {
       reference: d.platform,
       referenceCore: REFERENCE_CORE,
       romSha1: sha1 || null,
+      emitter: d.emitter,
       mapper: d.mapper,
       pagesSlot1: d.pagesSlot1,
       ...layoutFor(d),
@@ -930,6 +941,11 @@ export async function* emitWat(rom, opts = {}) {
   const stats = opts.stats || {};
 
   const { idx, stats: irStats } = await instructionIndex(IMG, PLATFORM);
+  if (cfg.emitter === "flat") {
+    yield* emitFlatWat(IMG, cfg, idx, stats);
+    Object.assign(stats, { platform: PLATFORM, irUnresolvedOffsets: irStats.unresolvedOffsets });
+    return;
+  }
   let ramSnap = null, snapIdx = new Map();
   if (cfg.ramRegions.some((r) => r.src === "snapshot")) {
     ramSnap = await loadRamSnapshot(opts, PLATFORM);
@@ -1079,6 +1095,7 @@ export async function* emitWat(rom, opts = {}) {
 
   const trapped = em.unsupported + em.missing;
   Object.assign(stats, {
+    emitter: "banked",
     arms: n,
     lowered: n - trapped,
     trapped,
