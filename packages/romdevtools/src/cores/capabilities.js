@@ -91,7 +91,7 @@ export const CAPABILITIES = {
     audioChips: ["ym2612", "psg"],
     memoryRegions: [...GENERIC_REGIONS, "genesis_cram", "genesis_vsram", "genesis_vdp_regs",
       "genesis_z80_ram", "genesis_m68k", "genesis_ym2612", "genesis_psg",
-      "md_linepix", "md_bgpix", "md_objpix", "md_pixrgb", "md_linestate", "md_pixlines"],
+      "md_linepix", "md_bgpix", "md_objpix", "md_pixrgb", "md_linestate", "md_pixlines", "gpgx_blip_deltas"],
     ...tileDeep(),
   },
   sms: {
@@ -99,7 +99,7 @@ export const CAPABILITIES = {
     cpus: { main: "z80", secondary: [] },
     audioChips: ["psg"],
     memoryRegions: [...GENERIC_REGIONS, "sms_vram", "sms_cram", "sms_vdp_regs", "sms_z80_regs",
-      "sms_linepix", "sms_bgpix", "sms_objpix", "sms_pixrgb", "sms_linestate", "sms_pixlines"],
+      "sms_linepix", "sms_bgpix", "sms_objpix", "sms_pixrgb", "sms_linestate", "sms_pixlines", "gpgx_blip_deltas"],
     ...tileDeep(),
   },
   gg: {
@@ -107,7 +107,7 @@ export const CAPABILITIES = {
     cpus: { main: "z80", secondary: [] },
     audioChips: ["psg"],
     memoryRegions: [...GENERIC_REGIONS, "gg_vram", "gg_cram",
-      "gg_linepix", "gg_bgpix", "gg_objpix", "gg_pixrgb", "gg_linestate", "gg_pixlines"],
+      "gg_linepix", "gg_bgpix", "gg_objpix", "gg_pixrgb", "gg_linestate", "gg_pixlines", "gpgx_blip_deltas"],
     ...tileDeep(),
   },
   gb: {

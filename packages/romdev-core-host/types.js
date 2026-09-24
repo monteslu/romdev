@@ -15,7 +15,7 @@
  *   | "sms_linepix" | "sms_bgpix" | "sms_objpix" | "sms_pixrgb" | "sms_linestate"
  *   | "gg_linepix" | "gg_bgpix" | "gg_objpix" | "gg_pixrgb" | "gg_linestate"
  *   | "sms_vram" | "sms_cram" | "sms_vdp_regs" | "sms_z80_regs"
- *   | "gg_vram" | "gg_cram"
+ *   | "gg_vram" | "gg_cram" | "gpgx_blip_deltas"
  *   | "gb_vram" | "gb_oam" | "gb_io" | "gb_hram"
  *   | "gb_bgpdata" | "gb_objpdata" | "gb_cpu_regs"
  *   | "gb_lineregs" | "gb_bgpix" | "gb_sprpix" | "gb_palline"
@@ -124,6 +124,11 @@ export const RetroMemory = {
   SMS_Z80_REGS:       0x133,
   GG_VRAM:            0x134,
   GG_CRAM:            0x135,
+  /** RDAS per-frame event stream (s32 x 3, rate 0): every blip_add_delta on
+   *  the main blip buffer this retro_run as (blip clock time, delta_l, delta_r)
+   *  - the FM + PSG input to blip_buf BEFORE band-limited resampling. Shared by
+   *  the genesis / sms / gg platforms (all genesis_plus_gx). */
+  GPGX_BLIP_DELTAS:   0x136,
   GB_VRAM:            0x140,
   GB_OAM:             0x141,
   GB_IO:              0x142,
@@ -309,6 +314,7 @@ export const MemoryRegionToRetro = {
   sms_z80_regs: RetroMemory.SMS_Z80_REGS,
   gg_vram: RetroMemory.GG_VRAM,
   gg_cram: RetroMemory.GG_CRAM,
+  gpgx_blip_deltas: RetroMemory.GPGX_BLIP_DELTAS,
   gb_vram: RetroMemory.GB_VRAM,
   gb_oam: RetroMemory.GB_OAM,
   gb_io: RetroMemory.GB_IO,

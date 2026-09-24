@@ -76,11 +76,11 @@
 //       "format": "s16",            ring format: "s16" (exact compare possible) | "f32"
 //       "reference": "output",      the reference stream the ring must equal: "output" = what the
 //                                   core hands libretro's audio_batch_cb, or the name of a per-frame
-//                                   stream region the core exposes (AUDIO_STREAM_REGION layout)
+//                                   stream region the core exposes (RDAS header: AUDIO_STREAM in src/host/audio-verify.js)
 //       "streams": {                optional debug buffers (pre-mix, per-channel, pre-resample),
 //                                   rewritten every wc_render: u32 count of sample frames at
 //                                   countOffset, samples at offset
-//         "sq1": { "offset": 1234, "countOffset": 1230, "capacity": 1024, "channels": 1,
+//         "sq1": { "offset": 1234, "countOffset": 1230, "capacity": 1024, "channels": 1,  (1-4)
 //                  "format": "s16",  s16 | s32 | f32
 //                  "ref": "nes_apu_sq1",   optional: a reference stream region with the same content
 //                  "compare": true }       false = reported only
@@ -337,7 +337,7 @@ export function validateAudioBlock(a) {
     for (const k of ["offset", "countOffset"]) if (!isInt(s[k])) throw new Error(`audio.streams.${n}.${k} must be a non-negative integer`);
     if (!(isInt(s.capacity) && s.capacity > 0)) throw new Error(`audio.streams.${n}.capacity must be a positive integer (sample frames the buffer holds)`);
     const ch = s.channels ?? 1;
-    if (ch !== 1 && ch !== 2) throw new Error(`audio.streams.${n}.channels must be 1 or 2`);
+    if (![1, 2, 3, 4].includes(ch)) throw new Error(`audio.streams.${n}.channels must be 1-4 (3 for an event stream such as gpgx_blip_deltas: time, delta_l, delta_r)`);
     if (s.format != null && !AUDIO_STREAM_FORMATS.includes(s.format)) throw new Error(`audio.streams.${n}.format must be one of ${AUDIO_STREAM_FORMATS.join(" | ")}`);
     if (s.ref != null && (typeof s.ref !== "string" || !s.ref)) throw new Error(`audio.streams.${n}.ref must name a reference stream region`);
     if (s.compare != null && typeof s.compare !== "boolean") throw new Error(`audio.streams.${n}.compare must be a boolean`);

@@ -298,7 +298,7 @@ export function audioPushWat(o) {
 /**
  * WAT for a debug stream (section audio.streams.<name>): `$<name>_reset`
  * (call at the top of wc_render) and `$<name>_push` (one sample frame; one
- * param per channel). Pushes beyond capacity still count, so the verifier
+ * param per channel: $v, $l $r, or $c0..$c3 for a 3-4 channel event stream). Pushes beyond capacity still count, so the verifier
  * reports the overflow instead of comparing a truncated frame silently.
  * @param {string} name  identifier (letters, digits, _)
  * @param {{offset:number, countOffset:number, capacity:number, channels?:number, format?:"s16"|"s32"|"f32"}} s
@@ -308,11 +308,11 @@ export function audioStreamWat(name, s) {
   const ch = s.channels ?? 1, fmt = s.format ?? "s16", size = fmt === "s16" ? 2 : 4;
   const ty = fmt === "f32" ? "f32" : "i32";
   const store = fmt === "s16" ? "i32.store16" : fmt === "f32" ? "f32.store" : "i32.store";
-  const params = ch === 2 ? `(param $l ${ty}) (param $r ${ty})` : `(param $v ${ty})`;
-  const stores = ch === 2
-    ? `      (${store} (local.get $a) (local.get $l))
-      (${store} offset=${size} (local.get $a) (local.get $r))`
-    : `      (${store} (local.get $a) (local.get $v))`;
+  if (![1, 2, 3, 4].includes(ch)) throw new Error(`cart-abi: stream '${name}' channels must be 1-4`);
+  // 1 channel: $v; 2: $l $r; 3-4 (event streams, e.g. time/delta_l/delta_r): $c0..$c3
+  const names = ch === 1 ? ["$v"] : ch === 2 ? ["$l", "$r"] : Array.from({ length: ch }, (_, i) => `$c${i}`);
+  const params = names.map((n) => `(param ${n} ${ty})`).join(" ");
+  const stores = names.map((n, i) => `      (${store}${i ? ` offset=${i * size}` : ""} (local.get $a) (local.get ${n}))`).join("\n");
   return `  (func $${name}_reset (i32.store (i32.const ${s.countOffset}) (i32.const 0)))
   (func $${name}_push ${params}
     (local $n i32) (local $a i32)

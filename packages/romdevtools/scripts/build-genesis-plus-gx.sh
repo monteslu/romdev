@@ -23,7 +23,7 @@ fetch_pinned cores.genesis_plus_gx "$GPGX_DIR"
 cd "$GPGX_DIR"
 # Every file the patch touches (vdp_render.c included: the patch rewrites its CRLF
 # endings, so a second run on the same tree fails --check unless it is reverted too).
-git checkout -- libretro/libretro.c core/m68k/m68kcpu.c core/m68k/m68kcpu.h core/z80/z80.c core/vdp_ctrl.c core/vdp_render.c 2>/dev/null || true
+git checkout -- libretro/libretro.c core/m68k/m68kcpu.c core/m68k/m68kcpu.h core/z80/z80.c core/vdp_ctrl.c core/vdp_render.c core/sound/blip_buf.c 2>/dev/null || true
 # --recount lets the patch survive small additions (new ROMDEV_MEMORY_*
 # region IDs etc) without re-numbering hunk headers by hand.
 if ! git apply --recount --check "$PATCH_FILE" 2>/dev/null; then
@@ -47,6 +47,8 @@ fi
 # include via INCFLAGS_PLATFORM, and compile+archive the .c.
 RDBG_SRC="$PROJECT_DIR/scripts/romdev-debug"
 cp "$RDBG_SRC/romdev_debug.h" "$RDBG_SRC/romdev_debug.c" "$GPGX_DIR/"
+# The gpgx_blip_deltas audio stream region (libretro.c) uses the shared RDAS helper.
+cp "$RDBG_SRC/romdev_audio_stream.h" "$GPGX_DIR/"
 ROMDEV_INC="-I$GPGX_DIR"
 
 emmake make -f Makefile.libretro platform=emscripten clean >/dev/null 2>&1 || true

@@ -228,6 +228,32 @@ index b702173..0474f19 100644
    m68ki_set_fc(FLAG_S | FUNCTION_CODE_USER_DATA) /* auto-disable (see m68kcpu.h) */
    m68ki_check_address_error(address, MODE_WRITE, FLAG_S | FUNCTION_CODE_USER_DATA) /* auto-disable (see m68kcpu.h) */
  
+diff --git a/core/sound/blip_buf.c b/core/sound/blip_buf.c
+index 65e3e72..8580411 100644
+--- a/core/sound/blip_buf.c
++++ b/core/sound/blip_buf.c
+@@ -486,8 +486,13 @@ simply ignoring the low half. */
+ 
+ #ifndef BLIP_MONO
+ 
++/* romdev: libretro/libretro.c records every delta into the gpgx_blip_deltas
++ * stream (debug copy only, never read back by the core). */
++extern void romdev_blip_tap(const void* m, unsigned time, int delta_l, int delta_r);
++
+ void blip_add_delta( blip_t* m, unsigned time, int delta_l, int delta_r )
+ {
++  romdev_blip_tap(m, time, delta_l, delta_r);
+   if (delta_l | delta_r)
+   {
+     unsigned fixed = (unsigned) ((time * m->factor + m->offset) >> pre_shift);
+@@ -611,6 +616,7 @@ void blip_add_delta( blip_t* m, unsigned time, int delta_l, int delta_r )
+ 
+ void blip_add_delta_fast( blip_t* m, unsigned time, int delta_l, int delta_r )
+ {
++  romdev_blip_tap(m, time, delta_l, delta_r);
+   if (delta_l | delta_r)
+   {
+     unsigned fixed = (unsigned) ((time * m->factor + m->offset) >> pre_shift);
 diff --git a/core/vdp_ctrl.c b/core/vdp_ctrl.c
 index bd454f6..b18e45e 100644
 --- a/core/vdp_ctrl.c
@@ -17504,10 +17530,10 @@ index 74d5053..3ab6eab 100644
 +}
 +
 diff --git a/libretro/libretro.c b/libretro/libretro.c
-index 798c6cc..c5a4544 100644
+index 798c6cc..fc9abb8 100644
 --- a/libretro/libretro.c
 +++ b/libretro/libretro.c
-@@ -1,4016 +1,4320 @@
+@@ -1,4016 +1,4347 @@
 -/****************************************************************************
 - *  libretro.c
 - *
@@ -25489,6 +25515,27 @@ index 798c6cc..c5a4544 100644
 +#define ROMDEV_MEMORY_SMS_Z80_REGS 0x133
 +#define ROMDEV_MEMORY_GG_VRAM      0x134
 +#define ROMDEV_MEMORY_GG_CRAM      0x135
++/* RDAS stream (s32 x 3 per event, rate 0): every blip_add_delta on the main
++ * blip buffer this retro_run as (time in blip clocks, delta_l, delta_r), the
++ * FM and PSG input to blip_buf BEFORE band-limited resampling. Zero deltas
++ * are skipped, as blip_add_delta skips them. */
++#define ROMDEV_MEMORY_GPGX_BLIP_DELTAS 0x136
++#include "romdev_audio_stream.h"
++#define ROMDEV_GPGX_BLIP_CAP 32768u
++static uint8_t romdev_gpgx_blip[ROMDEV_AS_BYTES(ROMDEV_GPGX_BLIP_CAP, 3, 4)];
++static void romdev_gpgx_blip_init(void)
++{
++   if (romdev_as_hdr(romdev_gpgx_blip)->magic != ROMDEV_AS_MAGIC)
++      romdev_as_init(romdev_gpgx_blip, 3, ROMDEV_AS_S32, 0, ROMDEV_GPGX_BLIP_CAP);
++}
++void romdev_blip_tap(const void* m, unsigned time, int delta_l, int delta_r)
++{
++   int32_t ev[3];
++   if (m != (const void*)snd.blips[0] || !(delta_l | delta_r)) return;
++   romdev_gpgx_blip_init();
++   ev[0] = (int32_t)time; ev[1] = delta_l; ev[2] = delta_r;
++   romdev_as_push(romdev_gpgx_blip, ev, 1, 4);
++}
 +
 +/* shared.h already brings in genesis.h / vdp_ctrl.h / m68k.h. Sound
 + * headers aren't in shared.h; add them. Header paths are relative to
@@ -25560,6 +25607,9 @@ index 798c6cc..c5a4544 100644
 +      case ROMDEV_MEMORY_SMS_Z80_REGS:
 +         memcpy(romdev_z80_snap, &Z80, sizeof(Z80_Regs));
 +         return romdev_z80_snap;
++      case ROMDEV_MEMORY_GPGX_BLIP_DELTAS:
++         romdev_gpgx_blip_init();
++         return romdev_gpgx_blip;
 +      default:
 +         return NULL;
 +   }
@@ -25631,6 +25681,7 @@ index 798c6cc..c5a4544 100644
 +      case ROMDEV_MEMORY_GG_CRAM:          return 0x40;     /* GG CRAM  = 64 B  */
 +      case ROMDEV_MEMORY_SMS_VDP_REGS:     return 0x10;     /* SMS uses lower 16 of the 32-byte reg file */
 +      case ROMDEV_MEMORY_SMS_Z80_REGS:     return sizeof(romdev_z80_snap);
++      case ROMDEV_MEMORY_GPGX_BLIP_DELTAS: return sizeof(romdev_gpgx_blip);
 +
 +      default:
 +        return 0;
@@ -25705,6 +25756,8 @@ index 798c6cc..c5a4544 100644
 +   int soundbuffer_size = 0;
 +
 +   is_running = true;
++   romdev_gpgx_blip_init();
++   romdev_as_begin_frame(romdev_gpgx_blip);
 +
 +#ifdef HAVE_OVERCLOCK
 +  /* update overclock delay */

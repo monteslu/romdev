@@ -180,9 +180,14 @@ export function fft(re, im) {
 
 const pow2 = (n) => { let p = 1; while (p < n) p <<= 1; return p; };
 
-/** Mono mix of interleaved samples (channels 1 or 2), as Float64Array. */
+/** Mono mix of interleaved samples (the mean of the channels), as Float64Array. */
 export function toMono(samples, channels = 2) {
   if (channels === 1) return Float64Array.from(samples);
+  if (channels > 2) {
+    const n = Math.floor(samples.length / channels), out = new Float64Array(n);
+    for (let i = 0; i < n; i++) { let v = 0; for (let k = 0; k < channels; k++) v += samples[i * channels + k]; out[i] = v / channels; }
+    return out;
+  }
   const n = samples.length >> 1, out = new Float64Array(n);
   for (let i = 0; i < n; i++) out[i] = (samples[2 * i] + samples[2 * i + 1]) / 2;
   return out;
