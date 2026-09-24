@@ -186,3 +186,122 @@ test("a 1 MiB image is mirrored 4 times (Classic NES carts), and forced blank is
   for (let i = 0x400; i < 0x100000; i += 4) new DataView(rom.buffer).setUint32(i, 0x01010101 * (1 + ((i >> 16) & 0xF)), true);
   await assertLockstep(rom, 2);
 });
+
+// ---- the renderer: synthetic scenes built by a small ARM "script VM" that
+// copies halfword blocks into palette/VRAM/OAM/IO, compared with mGBA's
+// picture after 12 frames (the setup takes a few)
+
+/** ARM VM at $C0, script at $400: [dst u32, count u32, count halfwords...] ; dst 1 = end. */
+function sceneRom(cmds) {
+  const words = [
+    0xE28F4FCE,             // add r4, pc, #0x338 -> $08000400 (C0 + 8 + 0x338)
+    0xE4940004,             // L: ldr r0, [r4], #4
+    0xE3500001,             // cmp r0, #1
+    0x0A000007,             // beq END
+    0xE4941004,             // ldr r1, [r4], #4
+    0xE0D420B2,             // C: ldrh r2, [r4], #2
+    0xE0C020B2,             // strh r2, [r0], #2
+    0xE2511001,             // subs r1, r1, #1
+    0x1AFFFFFB,             // bne C
+    0xE2844002,             // add r4, r4, #2
+    0xE3C44003,             // bic r4, r4, #3
+    0xEAFFFFF4,             // b L
+    0xEAFFFFFE,             // END: b END
+  ];
+  const script = [];
+  for (const [dst, halves] of cmds) {
+    script.push(dst >>> 0, halves.length);
+    const hw = [...halves];
+    if (hw.length & 1) hw.push(0);
+    for (let i = 0; i < hw.length; i += 2) script.push(((hw[i] & 0xFFFF) | ((hw[i + 1] & 0xFFFF) << 16)) >>> 0);
+  }
+  script.push(1);
+  const size = Math.max(0x1000, 1 << Math.ceil(Math.log2(0x400 + script.length * 4)));
+  const r = new Uint8Array(size);
+  const dv = new DataView(r.buffer);
+  dv.setUint32(0, 0xEA00002E, true);
+  words.forEach((w, i) => dv.setUint32(0xC0 + 4 * i, w >>> 0, true));
+  script.forEach((w, i) => dv.setUint32(0x400 + 4 * i, w >>> 0, true));
+  return r;
+}
+
+const IO = 0x04000000, PAL = 0x05000000, VRAM = 0x06000000, OAM = 0x07000000;
+const rng = (seed) => () => (seed = (seed * 1103515245 + 12345) >>> 0) >>> 16;
+
+/** Common content: palettes, 4bpp BG tiles, 8bpp tiles, a text map, OBJ tiles. */
+function common() {
+  const R = rng(7);
+  const pal = []; for (let i = 0; i < 512; i++) pal.push(R() & 0x7FFF);
+  const bgTiles = []; for (let i = 0; i < 0x2000; i++) bgTiles.push(R());           // 16KB of tile data at char block 0
+  const map = []; for (let i = 0; i < 0x400; i++) map.push((i & 0x3FF) | ((i & 3) << 10) | ((i & 0xF) << 12));
+  const affMap = []; for (let i = 0; i < 0x200; i++) affMap.push(R());                  // 128x128 affine map (bytes)
+  const objTiles = []; for (let i = 0; i < 0x4000; i++) objTiles.push(R());           // 32KB OBJ tiles
+  return [[PAL, pal], [VRAM, bgTiles], [VRAM + 0x8000, map], [VRAM + 0xC000, affMap], [VRAM + 0x10000, objTiles]];
+}
+
+/** OAM: 128 entries, all hidden, then `sprites` (a0,a1,a2) from 0, and affine params. */
+function oam(sprites, mats = []) {
+  const o = [];
+  for (let i = 0; i < 128; i++) {
+    const s = sprites[i] ?? [0x0200, 0, 0];            // bit 9 on a non-affine sprite: disabled
+    o.push(s[0], s[1], s[2], 0);
+  }
+  mats.forEach(([pa, pb, pc, pd], m) => { o[m * 16 + 3] = pa; o[m * 16 + 7] = pb; o[m * 16 + 11] = pc; o[m * 16 + 15] = pd; });
+  return [OAM, o];
+}
+
+const SCENES = {
+  // mode 1: BG0 text + BG2 affine (wrapping, rotated), both with mosaic;
+  // sprites with OBJ mosaic (normal, h-flipped, affine double-size), an
+  // affine sprite clipped at the left edge, one wrapping past line 255,
+  // and a prohibited-mode one
+  mode1: () => [...common(),
+    oam([
+      [0x1000 | 40, (1 << 14) | 20, 0x0000],             // 16x16 4bpp, mosaic
+      [0x1000 | 40, (1 << 14) | 0x1000 | 60, 0x0004],     // h-flip, mosaic
+      [0x2000 | 0x1000 | 0x300 | 70, (2 << 14) | (1 << 9) | 100, 0x0010], // 8bpp affine double 32x32, mosaic, matrix 1
+      [0x0100 | 90, (2 << 14) | (0 << 9) | 0x1F0, 0x0020], // affine 32x32 at x=-16, matrix 0
+      [0x0300 | 150, (3 << 14) | (1 << 9) | 160, 0x0030], // affine double 64x64 at y=150: wraps, clipped by mGBA's list
+      [0x0C00 | 20, (1 << 14) | 200, 0x0040],             // mode 3 (prohibited)
+    ], [[0x0100, 0x0000, 0x0000, 0x0100], [0x00B5, 0x0055, -0x0055 & 0xFFFF, 0x00B5]]),
+    [IO + 0x4C, [0x2413]],                                 // MOSAIC: BG 4x2, OBJ 5x3
+    [IO + 0x08, [0x1040]],                                 // BG0CNT: map 16, mosaic
+    [IO + 0x0C, [0x6041 | (24 << 8) | (0 << 2)]],          // BG2CNT: 128x128, wrap, map 24, mosaic, prio 1
+    [IO + 0x20, [0x00F0, 0x0030, -0x0030 & 0xFFFF, 0x00F0]], // BG2PA..PD
+    [IO + 0x28, [0x1000, 0x0000, 0x0800, 0x0000]],         // BG2X/BG2Y
+    [IO + 0x00, [0x1501 | 0x0040]],                        // mode 1, BG0 + BG2 + OBJ, 1D mapping
+  ],
+  // mode 3 bitmap, rotated and scaled, with mosaic
+  mode3: () => {
+    const R = rng(3); const bmp = []; for (let i = 0; i < 240 * 160; i++) bmp.push(R() & 0x7FFF);
+    return [[VRAM, bmp], [IO + 0x4C, [0x0032]], [IO + 0x0C, [0x0040]],
+      [IO + 0x20, [0x00E0, 0x0020, -0x0020 & 0xFFFF, 0x00E0]], [IO + 0x28, [0x0800, 0x0000, 0x0400, 0x0000]],
+      [IO + 0x00, [0x0403]]];
+  },
+  // mode 4 bitmap (page 1), palette, mosaic, and a non-wrapping affine
+  // BG2 edge (the run starts outside it)
+  mode4: () => {
+    const R = rng(4); const bmp = []; for (let i = 0; i < 120 * 160; i++) bmp.push(R());
+    const pal = []; for (let i = 0; i < 256; i++) pal.push(R() & 0x7FFF);
+    return [[PAL, pal], [VRAM + 0xA000, bmp], [IO + 0x4C, [0x0025]], [IO + 0x0C, [0x0040]],
+      [IO + 0x20, [0x0110, 0x0000, 0x0000, 0x0100]], [IO + 0x28, [-0x0400 & 0xFFFF, 0xFFFF, 0x0000, 0x0000]],
+      [IO + 0x00, [0x0414]]];
+  },
+  // OBJ line budget: 64x64 sprites on the same lines, more than 1210 cycles
+  budget: () => {
+    const s = []; for (let i = 0; i < 40; i++) s.push([0x0000 | 10, (3 << 14) | ((i * 5) & 0x1FF), (i * 16) & 0x3FF]);
+    return [...common(), oam(s), [IO + 0x00, [0x1040]]];
+  },
+};
+
+
+for (const [name, what] of [
+  ["mode1", "mode 1: text and affine BG mosaic; OBJ mosaic (normal, h-flipped, affine double-size), an affine sprite clipped at the left edge, one wrapping past line 255, a prohibited-mode one"],
+  ["mode3", "mode 3: a rotated, scaled bitmap with mosaic"],
+  ["mode4", "mode 4: a paletted bitmap page with mosaic, runs starting outside a non-wrapping BG2"],
+  ["budget", "the OBJ line budget: 40 64x64 sprites on the same lines, more than OBJ_LENGTH cycles"],
+]) {
+  test(`renderer as mGBA's: ${what}`, { skip, timeout: 180000 }, async () => {
+    await assertLockstep(sceneRom(SCENES[name]()), 12);
+  });
+}
