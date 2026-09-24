@@ -702,7 +702,66 @@ export function miscWat(opts = {}) {
     .replace("  (func $indr (call $otdr))", `  (func $indr (block $d (loop $l (call $ini_step (i32.const -1))
     (br_if $d (i32.eqz (global.get $b))) (br $l))))`);
   if (fixed === text) throw new Error("sms recompile: INI/IND helpers not found in the misc text");
-  return fixed + `
+  // Undocumented flags (F bits 5 and 3) and DAA's P/V, as gpgx computes them:
+  // they reach RAM through push af, so the machine state is only exact with them.
+  let exact = replaceFunc(fixed, "daa", `  (func $daa
+    (local $a i32) (local $f i32)
+    (local.set $a (global.get $a))
+    (local.set $f (global.get $f))
+    (if (i32.and (local.get $f) (i32.const 2))
+      (then
+        (if (i32.or (i32.and (local.get $f) (i32.const 0x10)) (i32.gt_u (i32.and (global.get $a) (i32.const 0xF)) (i32.const 9)))
+          (then (local.set $a (i32.sub (local.get $a) (i32.const 6)))))
+        (if (i32.or (i32.and (local.get $f) (i32.const 1)) (i32.gt_u (global.get $a) (i32.const 0x99)))
+          (then (local.set $a (i32.sub (local.get $a) (i32.const 0x60))))))
+      (else
+        (if (i32.or (i32.and (local.get $f) (i32.const 0x10)) (i32.gt_u (i32.and (global.get $a) (i32.const 0xF)) (i32.const 9)))
+          (then (local.set $a (i32.add (local.get $a) (i32.const 6)))))
+        (if (i32.or (i32.and (local.get $f) (i32.const 1)) (i32.gt_u (global.get $a) (i32.const 0x99)))
+          (then (local.set $a (i32.add (local.get $a) (i32.const 0x60)))))))
+    (local.set $a (i32.and (local.get $a) (i32.const 0xFF)))
+    (global.set $f (i32.or (i32.or (i32.and (local.get $f) (i32.const 3))
+                                   (i32.gt_u (global.get $a) (i32.const 0x99)))
+                           (i32.or (i32.and (i32.xor (global.get $a) (local.get $a)) (i32.const 0x10))
+                                   (call $szp (local.get $a)))))
+    (global.set $a (local.get $a)))
+`);
+  for (const name of ["sbc16", "adc16"]) {
+    const body = funcText(exact, name);
+    const patched = body.replace("(i32.and (i32.shr_u (local.get $r) (i32.const 8)) (i32.const 0x80))",
+      "(i32.and (i32.shr_u (local.get $r) (i32.const 8)) (i32.const 0xA8))");
+    if (patched === body) throw new Error(`sms recompile: could not patch $${name}`);
+    exact = exact.replace(body, patched);
+  }
+  {
+    const body = funcText(exact, "ldi_step");
+    const patched = body
+      .replace("(local $hl i32) (local $de i32) (local $bc i32)", "(local $hl i32) (local $de i32) (local $bc i32) (local $io i32) (local $n i32)")
+      .replace("(call $wr8 (local.get $de) (call $rd8 (local.get $hl)))", "(local.set $io (call $rd8 (local.get $hl))) (call $wr8 (local.get $de) (local.get $io))")
+      .replace(`    (global.set $f (i32.or (i32.and (global.get $f) (i32.const 0xC1))
+                           (select (i32.const 4) (i32.const 0) (local.get $bc)))))`, `    (local.set $n (i32.add (global.get $a) (local.get $io)))
+    (global.set $f (i32.or (i32.or (i32.and (global.get $f) (i32.const 0xC1))
+                                   (select (i32.const 4) (i32.const 0) (local.get $bc)))
+                           (i32.or (i32.shl (i32.and (local.get $n) (i32.const 2)) (i32.const 4))
+                                   (i32.and (local.get $n) (i32.const 8))))))`);
+    if (patched === body || !patched.includes("local.set $n")) throw new Error("sms recompile: could not patch $ldi_step");
+    exact = exact.replace(body, patched);
+  }
+  {
+    const body = funcText(exact, "cpi_step");
+    const patched = body.replace(`    (if (local.get $bc)
+      (then (local.set $f (i32.or (local.get $f) (i32.const 4)))))
+    (global.set $f (local.get $f)))`, `    (if (local.get $bc)
+      (then (local.set $f (i32.or (local.get $f) (i32.const 4)))))
+    (if (i32.and (local.get $f) (i32.const 0x10))
+      (then (local.set $r (i32.and (i32.sub (local.get $r) (i32.const 1)) (i32.const 0xFF)))))
+    (local.set $f (i32.or (local.get $f)
+      (i32.or (i32.shl (i32.and (local.get $r) (i32.const 2)) (i32.const 4)) (i32.and (local.get $r) (i32.const 8)))))
+    (global.set $f (local.get $f)))`);
+    if (patched === body) throw new Error("sms recompile: could not patch $cpi_step");
+    exact = exact.replace(body, patched);
+  }
+  return exact + `
   (func $ini_step (param $dir i32)
     (local $hl i32) (local $io i32) (local $t i32) (local $f i32)
     (local.set $io (call $io_read (global.get $c)))
@@ -721,6 +780,19 @@ export function miscWat(opts = {}) {
       (i32.and (call $szp (i32.xor (i32.and (local.get $t) (i32.const 0x07)) (global.get $b))) (i32.const 0x04))))
     (global.set $f (local.get $f)))
 `;
+}
+
+/** The text of `(func $name ...)` in a module fragment, up to the next top-level func. */
+function funcText(text, name) {
+  const start = text.indexOf(`  (func $${name} `) >= 0 ? text.indexOf(`  (func $${name} `) : text.indexOf(`  (func $${name}\n`);
+  if (start < 0) throw new Error(`sms recompile: helper $${name} not found`);
+  const next = text.indexOf("\n  (func ", start + 5);
+  return text.slice(start, next < 0 ? text.length : next + 1);
+}
+
+function replaceFunc(text, name, replacement) {
+  const body = funcText(text, name);
+  return text.replace(body, replacement.endsWith("\n") ? replacement : replacement + "\n");
 }
 
 function miscLegacyWat() {

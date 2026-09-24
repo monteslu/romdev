@@ -12,6 +12,29 @@
 //
 // Plain JS ESM + JSDoc.
 
+/**
+ * genesis_plus_gx's accumulator ops, whose F bits 5 and 3 come from A (or the
+ * rotated result) and whose CCF sets H to the old carry.
+ */
+const EXACT_ACC = {
+  rlca: "(global.set $a (i32.and (i32.or (i32.shl (global.get $a) (i32.const 1)) (i32.shr_u (global.get $a) (i32.const 7))) (i32.const 0xFF))) " +
+    "(global.set $f (i32.or (i32.and (global.get $f) (i32.const 0xC4)) (i32.and (global.get $a) (i32.const 0x29))))",
+  rrca: "(local.set $cf (i32.and (global.get $a) (i32.const 1))) " +
+    "(global.set $a (i32.or (i32.shr_u (global.get $a) (i32.const 1)) (i32.shl (local.get $cf) (i32.const 7)))) " +
+    "(global.set $f (i32.or (i32.or (i32.and (global.get $f) (i32.const 0xC4)) (local.get $cf)) (i32.and (global.get $a) (i32.const 0x28))))",
+  rla: "(local.set $cf (i32.shr_u (global.get $a) (i32.const 7))) " +
+    "(global.set $a (i32.and (i32.or (i32.shl (global.get $a) (i32.const 1)) (i32.and (global.get $f) (i32.const 1))) (i32.const 0xFF))) " +
+    "(global.set $f (i32.or (i32.or (i32.and (global.get $f) (i32.const 0xC4)) (local.get $cf)) (i32.and (global.get $a) (i32.const 0x28))))",
+  rra: "(local.set $cf (i32.and (global.get $a) (i32.const 1))) " +
+    "(global.set $a (i32.or (i32.shr_u (global.get $a) (i32.const 1)) (i32.shl (i32.and (global.get $f) (i32.const 1)) (i32.const 7)))) " +
+    "(global.set $f (i32.or (i32.or (i32.and (global.get $f) (i32.const 0xC4)) (local.get $cf)) (i32.and (global.get $a) (i32.const 0x28))))",
+  cpl: "(global.set $a (i32.xor (global.get $a) (i32.const 0xFF))) " +
+    "(global.set $f (i32.or (i32.or (i32.and (global.get $f) (i32.const 0xC5)) (i32.const 0x12)) (i32.and (global.get $a) (i32.const 0x28))))",
+  scf: "(global.set $f (i32.or (i32.or (i32.and (global.get $f) (i32.const 0xEC)) (i32.const 1)) (i32.and (global.get $a) (i32.const 0x28))))",
+  ccf: "(global.set $f (i32.xor (i32.or (i32.or (i32.and (global.get $f) (i32.const 0xED)) (i32.shl (i32.and (global.get $f) (i32.const 1)) (i32.const 4))) " +
+    "(i32.and (global.get $a) (i32.const 0x28))) (i32.const 1)))",
+};
+
 /** Thrown for an instruction the lowering has no rule for (becomes a trap arm). */
 export class Unsupported extends Error {}
 
@@ -27,7 +50,17 @@ const HALVES = new Set(["ixh", "ixl", "iyh", "iyl"]);
  * Flag/ALU helper functions emitted once into the module ($szp, $add8,
  * $sub8, $add16). The banked emitter supplies its own memory accessors.
  */
-export function flagHelpersWat() {
+export function flagHelpersWat(opts = {}) {
+  const text = flagHelpersLegacyWat();
+  if (!opts.exact) return text;
+  // gpgx ADD16: F bits 5 and 3 from the high byte of the result.
+  const old = "(i32.and (i32.shr_u (i32.xor (i32.xor (local.get $x) (local.get $y)) (local.get $r))\n                                  (i32.const 8)) (i32.const 0x10)))))";
+  const neu = "(i32.or (i32.and (i32.shr_u (i32.xor (i32.xor (local.get $x) (local.get $y)) (local.get $r))\n                                  (i32.const 8)) (i32.const 0x10))\n                      (i32.and (i32.shr_u (local.get $r) (i32.const 8)) (i32.const 0x28))))))";
+  if (!text.includes(old)) throw new Error("sms recompile: $add16 text not found");
+  return text.replace(old, neu);
+}
+
+function flagHelpersLegacyWat() {
   return `
   (func $szp (param $v i32) (result i32)
     (local $f i32) (local $p i32) (local $x i32)
@@ -265,7 +298,12 @@ export function lower(mnem, ops, addr, size, mode = {}) {
     if (mnem === "adc") return [`(global.set $a (call $add8 (global.get $a) ${sv} ${cy}))`, null];
     if (mnem === "sub") return [`(global.set $a (call $sub8 (global.get $a) ${sv} (i32.const 0)))`, null];
     if (mnem === "sbc") return [`(global.set $a (call $sub8 (global.get $a) ${sv} ${cy}))`, null];
-    if (mnem === "cp") return [`(drop (call $sub8 (global.get $a) ${sv} (i32.const 0)))`, null];
+    if (mnem === "cp") {
+      // gpgx CP: F bits 5 and 3 come from the OPERAND, not the result.
+      if (mode.exact) return [`(local.set $t ${sv}) (drop (call $sub8 (global.get $a) (local.get $t) (i32.const 0))) ` +
+        "(global.set $f (i32.or (i32.and (global.get $f) (i32.const 0xD7)) (i32.and (local.get $t) (i32.const 0x28))))", null];
+      return [`(drop (call $sub8 (global.get $a) ${sv} (i32.const 0)))`, null];
+    }
     const op = { and: "i32.and", or: "i32.or", xor: "i32.xor" }[mnem];
     const h = mnem === "and" ? "0x10" : "0x00";
     return [`(global.set $a (${op} (global.get $a) ${sv})) ` +
@@ -293,6 +331,7 @@ export function lower(mnem, ops, addr, size, mode = {}) {
       "(global.set $f (i32.or (i32.and (global.get $f) (i32.const 0xFE)) (local.get $cf)))", null];
   }
 
+  if (mode.exact && EXACT_ACC[mnem]) return [EXACT_ACC[mnem], null];
   if (mnem === "rlca") {
     return ["(global.set $a (i32.and (i32.or (i32.shl (global.get $a) (i32.const 1)) " +
       "(i32.shr_u (global.get $a) (i32.const 7))) (i32.const 0xFF))) " +
@@ -362,6 +401,20 @@ export function lower(mnem, ops, addr, size, mode = {}) {
     need(o, 2, mnem);
     const n = imm(o[0]), r = o[1];
     const mask = n >= 0 && n < 31 ? (1 << n) : 2 ** n;
+    if (mnem === "bit" && mode.exact) {
+      // gpgx BIT: F bits 5 and 3 from the register tested, or for (ix+d)
+      // from the high byte of the address. BIT n,(hl) takes them from the
+      // internal MEMPTR register, which is not modelled (left clear).
+      const x = typeof r === "string" ? idxDisp(r) : null;
+      const xy = r === "(hl)" ? "(i32.const 0)"
+        : x ? `(i32.and (i32.shr_u (i32.and (i32.add ${get16(x.p)} (i32.const ${x.d})) (i32.const 0xFFFF)) (i32.const 8)) (i32.const 0x28))`
+          : `(i32.and ${get8(r)} (i32.const 0x28))`;
+      return [`(local.set $t (i32.and ${get8(r)} (i32.const ${mask}))) ` +
+        "(global.set $f (i32.or (i32.and (global.get $f) (i32.const 0x01)) " +
+        "(i32.or (i32.const 0x10) " +
+        "(select (i32.const 0) (i32.const 0x44) (local.get $t))))) " +
+        `(global.set $f (i32.or (i32.or (global.get $f) (i32.and (local.get $t) (i32.const 0x80))) ${xy}))`, null];
+    }
     if (mnem === "bit") {
       return [`(local.set $t (i32.and ${get8(r)} (i32.const ${mask}))) ` +
         "(global.set $f (i32.or (i32.and (global.get $f) (i32.const 0x01)) " +
@@ -414,6 +467,11 @@ export function lower(mnem, ops, addr, size, mode = {}) {
       return ["(local.set $t (call $io_read " + pe + ")) " +
         "(global.set $f (i32.or (call $szp (local.get $t)) " +
         "(i32.and (global.get $f) (i32.const 1))))", null];
+    }
+    // gpgx IN r,(C) sets S Z 5 3 P from the value, clears H and N, keeps C.
+    if (mode.exact && port === "(c)") {
+      return ["(local.set $t (call $io_read " + pe + ")) " + set8(dst, "(local.get $t)") + " " +
+        "(global.set $f (i32.or (call $szp (local.get $t)) (i32.and (global.get $f) (i32.const 1))))", null];
     }
     return [set8(dst, `(call $io_read ${pe})`), null];
   }

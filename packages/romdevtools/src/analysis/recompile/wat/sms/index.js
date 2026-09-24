@@ -1197,7 +1197,7 @@ export async function* emitWat(rom, opts = {}) {
     "  (global $tracei (mut i32) (i32.const 0))",
     "  (global $linectr (mut i32) (i32.const 0))");
   head.push(bankHelpersWat(G, cfg, NBANK));
-  head.push(flagHelpersWat());
+  head.push(flagHelpersWat({ exact: !cfg.legacy }));
   head.push(hwWat(PLATFORM, { exact: !cfg.legacy, region: cfg.region }));
   head.push(renderWat());
   head.push(psgWat(AUDIO, ABI));
