@@ -193,15 +193,49 @@ test("a wrong frame offset is caught, and the sweep points at the right one", as
   } finally { dispose(r); }
 });
 
-test("a control that cannot fail blocks the verdict (a still picture)", async () => {
+test("a control that cannot fail blocks the verdict (a still picture, no state to compare)", async () => {
   // With no input the picture repeats every 512 frames, so a reference 512
-  // frames away is pixel-identical: the control CANNOT fail there and must be
-  // reported as such rather than counted.
-  const r = await run({ input: "", controls: ["wrongFrame"], wrongFrameDelta: 512, frames: [600, 610] });
+  // frames away is pixel-identical, and with no compared regions there is no
+  // state signal either: the control CANNOT fail and must be reported as such
+  // rather than counted.
+  const layout = validateRecompileLayout({ ...LAYOUT, regions: {}, fields: {} });
+  const r = await run({ input: "", controls: ["wrongFrame"], wrongFrameDelta: 512, frames: [600, 610], layout });
   try {
     assert.equal(r.result.controls.wrongFrame.failed, false);
+    assert.equal(r.result.controls.wrongFrame.signal, "none");
+    assert.equal(r.result.controls.wrongFrame.changeRegion.changedPx, 0);
+    assert.match(r.result.controls.wrongFrame.couldNotFail, /changes in only 0 px/);
     assert.equal(r.result.verdict, "NOT VERIFIED");
     assert.match(r.result.reasons.join(" "), /control wrongFrame did NOT fail/);
+  } finally { dispose(r); }
+});
+
+test("wrong frame on a STILL screen fails by state: the frame counter moved, the picture did not", async () => {
+  // Picture frozen on both sides (a still title), RAM frame counter running:
+  // no pixel can tell frames apart, the compared RAM can.
+  const r = await run({ input: "", controls: ["wrongFrame"], frames: [200, 300] }, { cart: cartBytes({ still: true }), core: { still: true } });
+  try {
+    const c = r.result.controls.wrongFrame;
+    assert.equal(c.changeRegion.changedPx, 0, "nothing moved in the reference");
+    assert.equal(c.failed, true);
+    assert.equal(c.signal, "state");
+    assert.ok(c.state.wrongFrameBytesDiffer > 0);
+  } finally { dispose(r); }
+});
+
+test("wrong frame on a nearly-static screen is decided on the pixels that changed, at the delta that changed most", async () => {
+  // Only the white frame bar and the scroll move; the whole-picture content
+  // score of a wrong frame stays high, the changed-region score does not.
+  const layout = validateRecompileLayout({ ...LAYOUT, regions: {}, fields: {} });
+  const r = await run({ input: "", controls: ["wrongFrame"], frames: [300], layout });
+  try {
+    const c = r.result.controls.wrongFrame;
+    assert.equal(c.signal, "pixels-changed-region", JSON.stringify(c));
+    assert.equal(c.failed, true);
+    assert.ok(c.changeRegion.rightMatchPct >= 99, "the cart matches the RIGHT frame where the two differ");
+    assert.ok(c.changeRegion.wrongMatchPct < 95);
+    const most = Math.max(...c.tried.map((t) => t.changedPx));
+    assert.equal(c.changeRegion.changedPx, most, "the delta with the most reference change was used");
   } finally { dispose(r); }
 });
 

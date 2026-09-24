@@ -93,9 +93,10 @@ export async function runVerifyRecompile(sessionKey, args) {
     frames, input: args.input, wrongInput: args.wrongInput, cartFrameOffset: args.cartFrameOffset,
     searchFrame: args.searchFrame, searchWindow: args.searchWindow, minSharpness: args.minSharpness,
     sweep: args.sweep, cartOrigin: args.cartOrigin, cartButtonMap: args.cartButtonMap,
-    controls: args.controls, movingWindow: args.movingWindow, wrongFrameDelta: args.wrongFrameDelta,
+    controls: args.controls, movingWindow: args.movingWindow, wrongFrameDelta: args.wrongFrameDelta, wrongFrameMaxDelta: args.wrongFrameMaxDelta,
     bar: { ...(args.minContentPct != null ? { minContentPct: args.minContentPct } : {}), ...(args.minContentPx != null ? { minContentPx: args.minContentPx } : {}),
-      ...(args.minMovingPct != null ? { minMovingPct: args.minMovingPct } : {}), ...(args.minMovingPx != null ? { minMovingPx: args.minMovingPx } : {}), },
+      ...(args.minMovingPct != null ? { minMovingPct: args.minMovingPct } : {}), ...(args.minMovingPx != null ? { minMovingPx: args.minMovingPx } : {}),
+      ...(args.minChangePx != null ? { minChangePx: args.minChangePx } : {}) },
     requireStateMatch: args.requireStateMatch, outputDir, tag,
   });
   installHost(sessionKey, cartHost);

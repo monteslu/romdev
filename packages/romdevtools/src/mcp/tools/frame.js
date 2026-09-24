@@ -942,8 +942,9 @@ export function registerFrameTools(server, z, sessionKey) {
     "romdev.recompile section (or caller `regions`: {name:{offset,length,ref,refOffset?,transform?,mask?}}) against the " +
     "reference's memory regions and reads `fields`/`probe` (probe.trapped fails the run). Writes [cart|ref|diff] PNGs " +
     "(mismatches magenta) to outputDir. Runs must-fail CONTROLS on separate cart instances: vramZero (zero the cart's VRAM " +
-    "regions, render one frame), wrongFrame (score against the reference wrongFrameDelta frames earlier, at the most-moving " +
-    "sample), wrongInput (a second cart run with ALL input withheld, then a perturbed schedule if that did not fail; couldNotFail explains a control no variant could fail). Verdict VERIFIED needs every scored frame >= 95% content " +
+    "regions, render one frame), wrongFrame (the cart's aligned picture against a reference 5-120 frames earlier - the delta and " +
+    "sample where the reference changed most - scored on the pixels where the two reference frames DIFFER; else the compared state " +
+    "(equal at the aligned frame, different at the wrong one); `signal` says which decided, couldNotFail when neither can), wrongInput (a second cart run with ALL input withheld, then a perturbed schedule if that did not fail; couldNotFail explains a control no variant could fail). Verdict VERIFIED needs every scored frame >= 95% content " +
     "on >= 2000 content px (and >= 95% moving where >= 200 px moved), every control failing, no trap; reasons[] names each " +
     "miss. Returns a per-frame markdown `table`. Afterwards slot A = the cart and slot B = the reference at the last frame.\n" +
     "IMAGE CONTRACT (screenshot/stepAndShot): the image goes to `path` (default, returns {path}) OR inline:true - " +
@@ -983,7 +984,9 @@ export function registerFrameTools(server, z, sessionKey) {
       vramZero: z.array(z.string()).optional().describe("op=verifyRecompile: region names the VRAM-zero control wipes (default: regions named *vram*/*chr*/*nametable*)."),
       controls: z.array(z.enum(["vramZero", "wrongFrame", "wrongInput"])).optional().describe("op=verifyRecompile: which must-fail controls to run (default all three). Dropping one is a claim you can defend: a still screen makes wrongFrame unfailable."),
       movingWindow: z.number().int().min(1).max(600).optional().describe("op=verifyRecompile: frames back for the moving-pixel mask (default 10)."),
-      wrongFrameDelta: z.number().int().min(1).max(10000).optional().describe("op=verifyRecompile: how far from the right frame the wrong-frame control's reference is (default 30)."),
+      wrongFrameDelta: z.number().int().min(1).max(10000).optional().describe("op=verifyRecompile: how far before the right frame the wrong-frame control's reference is. Default: 5/10/20/30/60/120 are tried and the one where the reference picture CHANGED most is used (controls.wrongFrame.delta, .tried)."),
+      wrongFrameMaxDelta: z.number().int().min(1).max(10000).optional().describe("op=verifyRecompile: upper bound on the wrong-frame candidates (default 120)."),
+      minChangePx: z.number().int().min(1).optional().describe("op=verifyRecompile: pixels that must differ between the right and wrong reference frames before the wrong-frame control may be decided on them (default 50)."),
       minContentPct: z.number().min(0).max(100).optional().describe("op=verifyRecompile: bar for strict content % (default 95)."),
       minContentPx: z.number().int().min(0).optional().describe("op=verifyRecompile: minimum reference content pixels for a frame to count as evidence (default 2000)."),
       minMovingPct: z.number().min(0).max(100).optional().describe("op=verifyRecompile: bar for moving-pixel % (default 95)."),

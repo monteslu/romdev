@@ -229,6 +229,30 @@ export function scorePictures(cart, ref, origin, refPrev = null) {
 }
 
 /**
+ * The wrong-frame control's pixel signal: only the pixels where the RIGHT
+ * reference frame and the WRONG one differ can tell the two apart, so the
+ * cart is scored there alone. A cart that tracks the right frame matches the
+ * wrong one on few of them; a still screen has none (changedPx 0) and cannot
+ * fail this way, which is reported, not passed.
+ */
+export function scoreChangeRegion(cart, refRight, refWrong, origin) {
+  let changed = 0, matchWrong = 0, matchRight = 0;
+  for (let y = 0; y < refRight.height; y++) {
+    for (let x = 0; x < refRight.width; x++) {
+      const ri = (y * refRight.width + x) * 4;
+      const a = key(refRight.rgba, ri), b = key(refWrong.rgba, ri);
+      if (a === b) continue;
+      changed++;
+      const c = key(cart.rgba, ((y + origin.y) * cart.width + (x + origin.x)) * 4);
+      if (c === b) matchWrong++;
+      if (c === a) matchRight++;
+    }
+  }
+  const pct = (v) => (changed ? Math.round((10000 * v) / changed) / 100 : null);
+  return { changedPx: changed, wrongMatchPct: pct(matchWrong), rightMatchPct: pct(matchRight) };
+}
+
+/**
  * [cart | reference | diff] PNG. The cart pane is the scored window of the
  * cart framebuffer; the diff pane is the reference dimmed to 30% with every
  * mismatching pixel in magenta. A score says how much differs; this says where.
@@ -266,6 +290,21 @@ function applyTransform(bytes, transform) {
   const n = bytes.length >> 1, o = new Uint8Array(n), hi = transform === "highbyte16" ? 1 : 0;
   for (let i = 0; i < n; i++) o[i] = bytes[2 * i + hi];
   return o;
+}
+
+/** A region's reference bytes, transformed and masked, as compared. */
+function refRegionBytes(refHost, spec) {
+  const mult = spec.transform === "lowbyte16" || spec.transform === "highbyte16" ? 2 : 1;
+  let ref = applyTransform(Uint8Array.from(refHost.readMemory(spec.ref, spec.refOffset ?? 0, spec.length * mult)), spec.transform);
+  if (spec.mask != null) ref = ref.map((b) => b & spec.mask);
+  return ref;
+}
+
+/** A region's cart bytes, masked, as compared. */
+function cartRegionBytes(cartHost, spec) {
+  let cart = Uint8Array.from(cartHost.readMemory(spec.offset, spec.length));
+  if (spec.mask != null) cart = cart.map((b) => b & spec.mask);
+  return cart;
 }
 
 /** Read one region's cart bytes and reference bytes, comparable byte for byte. */
@@ -513,8 +552,10 @@ function disposeHost(h) {
  * @param {Record<string,string>} [a.cartButtonMap] rename buttons for the cart side only
  * @param {string[]} [a.controls]              subset of vramZero | wrongFrame | wrongInput
  * @param {number} [a.movingWindow]            frames back for the moving-pixel mask (default 10)
- * @param {number} [a.wrongFrameDelta]         distance of the wrong-frame reference (default 30)
- * @param {object} [a.bar]                     {minContentPct, minContentPx, minMovingPct, minMovingPx}
+ * @param {number} [a.wrongFrameDelta]         distance of the wrong-frame reference (default: tried at 5/10/20/30/60/120
+ *                                             and the one where the reference changed most is used)
+ * @param {number} [a.wrongFrameMaxDelta]      bound on those candidates (default 120)
+ * @param {object} [a.bar]                     {minContentPct, minContentPx, minMovingPct, minMovingPx, minChangePx}
  * @param {boolean} [a.requireStateMatch]      a region/field difference fails the verdict
  * @param {string} [a.outputDir]               where [cart|ref|diff] PNGs go (omit: none written)
  * @param {string} [a.tag]                     PNG filename prefix
@@ -529,8 +570,13 @@ export async function verifyRecompile(a) {
   let sweep = a.sweep ?? 0;
   const mw = a.movingWindow ?? 10;
   const wfd = a.wrongFrameDelta ?? 30;
+  // Wrong-frame candidates: the caller's delta, or a spread (the control
+  // takes the one where the reference picture changed most, within the bound).
+  const wfMax = a.wrongFrameMaxDelta ?? 120;
+  const wfCands = a.wrongFrameDelta != null ? [a.wrongFrameDelta]
+    : [...new Set([wfd, 5, 10, 20, 60, 120])].filter((d) => d >= 1 && d <= Math.max(wfMax, 1)).sort((x, y) => x - y);
   const controls = a.controls ?? DEFAULT_CONTROLS;
-  const bar = { minContentPct: 95, minContentPx: 2000, minMovingPct: 95, minMovingPx: 200, ...(a.bar ?? {}) };
+  const bar = { minContentPct: 95, minContentPx: 2000, minMovingPct: 95, minMovingPx: 200, minChangePx: 50, ...(a.bar ?? {}) };
   const nameMap = a.cartButtonMap ?? (layout.buttons === "byName" ? BY_NAME_CART_MAP : null);
   const tag = (a.tag ?? "verify").replace(/[^A-Za-z0-9_.-]/g, "_");
 
@@ -560,14 +606,19 @@ export async function verifyRecompile(a) {
   const last = frames[frames.length - 1];
   const refShots = new Map();
   const want = new Set();
+  const wfFrames = new Set();
   for (const F of frames) {
     want.add(F);
     if (F - mw >= 0) want.add(F - mw);
-    // The wrong-frame control's reference for this sample (chosen after the run).
-    if (controls.includes("wrongFrame") && F - wfd >= 1) { want.add(F - wfd); if (F - wfd - mw >= 0) want.add(F - wfd - mw); }
+    // The wrong-frame control's candidate references for this sample (chosen after the run).
+    if (controls.includes("wrongFrame")) for (const d of wfCands) if (F - d >= 1) { want.add(F - d); wfFrames.add(F - d); if (F - d - mw >= 0) want.add(F - d - mw); }
   }
   const refFrames = [...want].sort((x, y) => x - y);
   const sampleSet = new Set(frames);
+  // Compared regions (not diagnostic ones) at each wrong-frame candidate, for
+  // the control's state signal.
+  const cmpRegions = Object.entries(layout.regions ?? {}).filter(([, r]) => r.compare !== false);
+  const wfState = new Map();
 
   const rows = [];
   let origin = null, trapped = null;
@@ -575,6 +626,11 @@ export async function verifyRecompile(a) {
   for (const r of refFrames) {
     await ref.to(r);
     refShots.set(r, snap(refHost.screenshotRgba()));
+    if (wfFrames.has(r) && cmpRegions.length) {
+      const m = {};
+      for (const [n, spec] of cmpRegions) { try { m[n] = refRegionBytes(refHost, spec); } catch { /* unreadable: no state signal */ } }
+      wfState.set(r, m);
+    }
     if (!sampleSet.has(r)) continue;
     const F = r, refPic = refShots.get(F), prev = refShots.get(F - mw) ?? null;
     const curve = [], cands = [];
@@ -591,6 +647,24 @@ export async function verifyRecompile(a) {
       // may pick one of them).
       if (d === 0 || searched) {
         const c = { d, cf, pic, s, regions: compareRegions(cartHost, refHost, layout.regions) };
+        // bytes differing between this cart state and each wrong-frame reference
+        if (controls.includes("wrongFrame") && cmpRegions.length) {
+          c.wrongState = {};
+          const cartBytes = {};
+          for (const [n, spec] of cmpRegions) { try { cartBytes[n] = cartRegionBytes(cartHost, spec); } catch { /* skip */ } }
+          for (const dd of wfCands) {
+            const snapW = wfState.get(F - dd);
+            if (!snapW) continue;
+            let differ = 0, compared = 0;
+            for (const n of Object.keys(snapW)) {
+              const x = cartBytes[n], y = snapW[n];
+              if (!x || x.length !== y.length) continue;
+              compared += x.length;
+              for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) differ++;
+            }
+            if (compared) c.wrongState[dd] = differ;
+          }
+        }
         if (Object.keys(layout.fields ?? {}).length) c.fields = compareFields(cartHost, refHost, a.refPlatform, layout.fields);
         if (Object.keys(layout.probe ?? {}).length) c.probe = readProbe(cartHost, layout.probe);
         cands.push(c);
@@ -609,6 +683,7 @@ export async function verifyRecompile(a) {
     if (!pick) continue;
     alignedCartPics.set(F, pick.pic);
     const row = { refFrame: F, cartFrame: pick.cf, ...(pick.d !== 0 ? { refinedBy: pick.d } : {}), ...pick.s, pass: passesBar(pick.s, bar), regions: pick.regions };
+    if (pick.wrongState) Object.defineProperty(row, "_wrongState", { value: pick.wrongState, enumerable: false });
     if (pick.fields) row.fields = pick.fields;
     if (pick.probe) {
       row.probe = pick.probe;
@@ -626,18 +701,50 @@ export async function verifyRecompile(a) {
   const lastRef = refShots.get(last), lastPrev = refShots.get(last - mw) ?? null;
   const ctl = {};
   if (controls.includes("wrongFrame")) {
-    // The cart's aligned picture at one sample, scored against the reference
-    // `wfd` frames EARLIER (with that frame's own moving mask). The sample is
-    // the one whose reference moved most: on a still screen every frame
-    // matches every other, so a control taken there cannot fail and proves
-    // nothing (the sms-wat GBA verifier picked its control frame the same way).
-    const cands = rows.filter((r) => alignedCartPics.has(r.refFrame) && refShots.has(r.refFrame - wfd));
-    const pick = cands.reduce((b, r) => (b == null || (r.movingTotal ?? -1) > (b.movingTotal ?? -1) ? r : b), null);
-    if (!pick || !origin) ctl.wrongFrame = { skipped: `no scored frame lies more than wrongFrameDelta (${wfd}) frames after frame 0` };
+    // The cart's aligned picture at one sample scored against the reference
+    // `d` frames EARLIER. Three signals, strongest first:
+    //  1. PIXELS WHERE THE TWO REFERENCE FRAMES DIFFER: the only pixels that
+    //     can tell right from wrong. (sample, d) is chosen to maximise that
+    //     change, so a near-static game (NES Golf: 40 moving px) is still
+    //     tested on everything that did change. Needs >= bar.minChangePx.
+    //  2. STATE: the compared regions equal the reference at the aligned frame
+    //     but differ from it at the wrong frame (a frame counter in RAM moves
+    //     even when the picture does not).
+    //  3. The whole-picture score (content / moving), as before.
+    // A control none of these can fail is reported as couldNotFail, never
+    // passed: a still screen with no compared state cannot tell frames apart.
+    const alignedStateSame = (r) => Object.values(r.regions ?? {}).every((v) => v.diagnostic || (!v.error && !v.differ));
+    let best = null, stateHit = null;
+    const tried = [];
+    for (const r of rows) {
+      if (!alignedCartPics.has(r.refFrame)) continue;
+      for (const d of wfCands) {
+        const wf = r.refFrame - d;
+        if (!refShots.has(wf)) continue;
+        const cr = scoreChangeRegion(alignedCartPics.get(r.refFrame), refShots.get(r.refFrame), refShots.get(wf), origin);
+        const st = r._wrongState?.[d];
+        tried.push({ sampleRefFrame: r.refFrame, delta: d, changedPx: cr.changedPx, ...(st != null ? { stateDiffer: st } : {}) });
+        if (!best || cr.changedPx > best.cr.changedPx) best = { r, d, wf, cr };
+        if (!stateHit && st > 0 && alignedStateSame(r)) stateHit = { r, d, wf, differ: st };
+      }
+    }
+    if (!best || !origin) ctl.wrongFrame = { skipped: `no scored frame lies more than ${Math.min(...wfCands)} frame(s) after frame 0` };
     else {
-      const wf = pick.refFrame - wfd;
-      ctl.wrongFrame = { refFrame: wf, cartFrame: pick.cartFrame, sampleRefFrame: pick.refFrame, ...scorePictures(alignedCartPics.get(pick.refFrame), refShots.get(wf), origin, refShots.get(wf - mw) ?? null) };
-      ctl.wrongFrame.failed = controlFailed(ctl.wrongFrame, bar);
+      const { r, d, wf, cr } = best;
+      const whole = scorePictures(alignedCartPics.get(r.refFrame), refShots.get(wf), origin, refShots.get(wf - mw) ?? null);
+      const pixelFail = cr.changedPx >= bar.minChangePx && cr.wrongMatchPct < bar.minMovingPct;
+      const wholeFail = controlFailed(whole, bar);
+      ctl.wrongFrame = { refFrame: wf, cartFrame: r.cartFrame, sampleRefFrame: r.refFrame, delta: d, ...whole,
+        changeRegion: { ...cr, note: `pixels where reference frames ${r.refFrame} and ${wf} differ; the cart matches the WRONG frame on wrongMatchPct of them (and the right one on rightMatchPct)` },
+        ...(stateHit ? { state: { sampleRefFrame: stateHit.r.refFrame, delta: stateHit.d, wrongFrameBytesDiffer: stateHit.differ, alignedBytesDiffer: 0 } } : {}),
+        tried };
+      ctl.wrongFrame.signal = pixelFail ? "pixels-changed-region" : wholeFail ? "pixels-whole-picture" : stateHit ? "state" : "none";
+      ctl.wrongFrame.failed = pixelFail || wholeFail || !!stateHit;
+      if (!ctl.wrongFrame.failed) {
+        ctl.wrongFrame.couldNotFail = `the reference picture changes in only ${cr.changedPx} px between frames ${r.refFrame} and ${wf} (the most over deltas ${wfCands.join("/")}; the change-region signal needs ${bar.minChangePx})`
+          + (cmpRegions.length ? ", and no sample has compared state that equals the reference at the aligned frame yet differs at the wrong one" : ", and the cart declares no compared regions for a state signal")
+          + ". Score frames where the picture moves, or add a region the game writes every frame.";
+      }
     }
   }
   if (controls.includes("vramZero")) {
