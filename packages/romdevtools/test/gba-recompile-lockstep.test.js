@@ -180,7 +180,7 @@ test("ROM reads past the image follow GBALoadROM: the address pattern, or 0 on a
   await assertLockstep(makeRom(romReads(offs), [], 0x3B8), 2);
 });
 
-test("a 1 MiB image is mirrored 4 times (Classic NES carts), and forced blank is mGBA's white", { skip, timeout: 300000 }, async () => {
+test("a 1 MiB image is mirrored 4 times (NES-emulator carts rely on it), and forced blank is mGBA's white", { skip, timeout: 300000 }, async () => {
   const rom = makeRom(romReads([0x100001, 0x200002, 0x3FFFFC, 0x400001, 0x400002, 0x4FFFFC]), [], 0x100000);
   // 16 distinct words, one per 64KB, so a mirrored read names the bank it came from
   for (let i = 0x400; i < 0x100000; i += 4) new DataView(rom.buffer).setUint32(i, 0x01010101 * (1 + ((i >> 16) & 0xF)), true);

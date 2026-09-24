@@ -63,7 +63,7 @@ export function sysWat(L, rom_size, idle_loop, savetype) {
   while (rom_mask < rom_size) rom_mask *= 2;
   rom_mask -= 1;
   // GBALoadROM's size rules. A 1 MiB image is mirrored 4 times (romSize
-  // 4 MiB: Classic NES carts rely on it). An image whose size is not a power
+  // 4 MiB: carts that run NES games in an emulator rely on it). An image whose size is not a power
   // of two is "a bad dump or homebrew": mGBA emulates a flash cart, copying
   // it into a zeroed 32 MiB ROM, so every read past the image is 0 instead of
   // the out-of-bounds address pattern.
