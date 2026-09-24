@@ -868,8 +868,11 @@ export function ioWat(opts = {}) {
 `;
 }
 
-// VDP (vdp_ctrl.c, Mode 5 / 68k side)
-export function vdpWat() {
+// VDP (vdp_ctrl.c, Mode 5 / 68k side). opts.pal: vdp_pal (313 lines, the
+// PAL column of vc_table, the PAL bit in the status register).
+export function vdpWat(opts = {}) {
+  const LINES = opts.pal ? 313 : 262;
+  const VC = opts.pal ? [0xF2, 0x102, 0xF2, 0x10A] : [0xDA, 0xEA, 0xDA, 0x106];
   const ZCYC = ZREGS + 64;
   return `
   (func $reg (param $n i32) (result i32) (i32.load8_u (i32.add (i32.const ${VREG}) (local.get $n))))
@@ -988,11 +991,11 @@ export function vdpWat() {
     (global.set $v_pf_col_mask (i32.const 0x0F)) (global.set $v_pf_row_mask (i32.const 0xFF))
     (global.set $v_sat_base_mask (i32.const 0xFE00)) (global.set $v_sat_addr_mask (i32.const 0x1FF))
     (call $window_clip (i32.const 0) (i32.const 0))
-    (global.set $v_status (i32.const 0))
+    (global.set $v_status (i32.const ${opts.pal ? 1 : 0}))
     (global.set $vp_w (i32.const 256)) (global.set $vp_h (i32.const 192))
     (global.set $vp_ow (i32.const 256)) (global.set $vp_oh (i32.const 192))
     (global.set $v_hvc_latch (i32.const 0x10000)) (global.set $v_h40 (i32.const 0))
-    (global.set $v_vc_max (i32.const 0xDA)) (global.set $v_v_counter (i32.const 192))
+    (global.set $v_vc_max (i32.const ${VC[0]})) (global.set $v_v_counter (i32.const 192))
     (global.set $v_h_counter (i32.const 0xFF)) (global.set $v_max_sprite_pixels (i32.const 256))
     (global.set $v_vint_cycle (i32.const 770))
     (global.set $v_hblank_start (i32.const 280)) (global.set $v_hblank_end (i32.const 860)))
@@ -1149,7 +1152,7 @@ export function vdpWat() {
               (then (local.set $cycles (i32.add (local.get $cycles)
                       (i32.mul (i32.const 2) (i32.div_s (i32.const 3420) (local.get $rate)))))))))
     (if (i32.and (global.get $v_status) (i32.const 8))
-      (then (local.set $dcyc (i32.sub (i32.mul (i32.sub (i32.sub (i32.const 262) (global.get $vp_h)) (i32.const 1))
+      (then (local.set $dcyc (i32.sub (i32.mul (i32.sub (i32.sub (i32.const ${LINES}) (global.get $vp_h)) (i32.const 1))
                                                (i32.const 3420)) (local.get $cycles))))
       (else (local.set $dcyc (i32.sub (i32.add (global.get $mcvdp) (i32.const 3420)) (local.get $cycles)))))
     (local.set $dbytes (i32.div_s (i32.mul (local.get $dcyc) (local.get $rate)) (i32.const 3420)))
@@ -1322,8 +1325,8 @@ export function vdpWat() {
                                                 (i32.rem_u (local.get $cycles) (i32.const 3420)))))))
     (local.set $vc (global.get $v_v_counter))
     (if (i32.ge_u (i32.sub (local.get $cycles) (global.get $mcvdp)) (i32.const 3420))
-      (then (local.set $vc (i32.rem_u (i32.add (local.get $vc) (i32.const 1)) (i32.const 262)))))
-    (if (i32.gt_s (local.get $vc) (global.get $v_vc_max)) (then (local.set $vc (i32.sub (local.get $vc) (i32.const 262)))))
+      (then (local.set $vc (i32.rem_u (i32.add (local.get $vc) (i32.const 1)) (i32.const ${LINES})))))
+    (if (i32.gt_s (local.get $vc) (global.get $v_vc_max)) (then (local.set $vc (i32.sub (local.get $vc) (i32.const ${LINES})))))
     (if (global.get $v_interlaced)
       (then (local.set $vc (i32.shl (local.get $vc) (global.get $v_im2)))
             (local.set $vc (i32.or (i32.and (local.get $vc) (i32.const -2))
@@ -1440,7 +1443,7 @@ export function vdpWat() {
               (br $sw)))
       (if (i32.eq (local.get $r) (i32.const 8))
         (then (if (i32.ge_u (i32.sub (local.get $cycles) (global.get $mcvdp)) (i32.const 3420))
-                (then (local.set $i (i32.rem_u (i32.add (global.get $v_v_counter) (i32.const 1)) (i32.const 262)))
+                (then (local.set $i (i32.rem_u (i32.add (global.get $v_v_counter) (i32.const 1)) (i32.const ${LINES})))
                       (if (i32.lt_u (local.get $i) (global.get $vp_h))
                         (then (global.set $v_v_counter (local.get $i)) (call $render_line (local.get $i))))))
               ${RS(8, '(local.get $d)')}
@@ -1502,7 +1505,7 @@ export function vdpWat() {
 
   (func $set_vc_max (param $d i32)
     (local.set $d (i32.and (i32.shr_u (local.get $d) (i32.const 2)) (i32.const 3)))
-    (global.set $v_vc_max (select (i32.const 0x106) (select (i32.const 0xEA) (i32.const 0xDA) (i32.eq (local.get $d) (i32.const 1)))
+    (global.set $v_vc_max (select (i32.const ${VC[3]}) (select (i32.const ${VC[1]}) (i32.const ${VC[0]}) (i32.eq (local.get $d) (i32.const 1)))
                                   (i32.eq (local.get $d) (i32.const 3)))))
 
   ;; the 16K <-> 64K VRAM address re-arrangement done when Mode 5 toggles

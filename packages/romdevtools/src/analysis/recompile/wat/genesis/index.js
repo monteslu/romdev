@@ -195,11 +195,27 @@ export function regionCode(img) {
       else if (u >= "A" && u <= "F") country |= u.charCodeAt(0) - 55;
     }
   }
+  // get_region: carts whose header region is wrong
+  const product = String.fromCharCode(...img.subarray(0x182, 0x18e));
+  const checksum = (img[0x18e] << 8) | img[0x18f];
+  if ((product.includes("T-45033") && checksum === 0x0f81) || product.includes("T-69046-50") || product.includes("T-120106-00")
+    || product.includes("T-97126 -50") || product.includes("T-113026-50") || product.includes("T-70096 -00")
+    || (checksum === 0 && realChecksum(img) === 0x1f7f)) return 0xc0;
+  if (realChecksum(img) === 0x532e && product.includes("1011-00")) return 0x00;
   if (country & 4) return 0x80;
   if (country & 1) return 0x00;
   if (country & 8) return 0xc0;
   if (country & 2) return 0x40;
   return 0x80;
+}
+
+/**
+ * gpgx get_region: vdp_pal = (region_code >> 6) & 1, i.e. PAL timing for a
+ * European (or Japanese PAL) cart.
+ * @param {Uint8Array} img
+ */
+export function palTiming(img) {
+  return ((regionCode(img) >> 6) & 1) === 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -394,6 +410,7 @@ export function describe(rom, opts = {}) {
     title: txt(0x150, 0x180) || txt(0x120, 0x150), // overseas name, else domestic (ASCII only)
     regionField: txt(0x1f0, 0x1f4),
     regionCode: regionCode(img),
+    pal: palTiming(img),
     // gpgx input_init: a '6' in the header's I/O support field ($190-$19D)
     // connects 6-button pads, anything else 3-button ones
     sixButton: sixButtonPads(img),
@@ -558,7 +575,8 @@ export async function* emitWat(rom, opts = {}) {
   const SRAM = sramConfig(img), MAPPER = cartMapper(img);
   yield RT.cartWat(ROMIMG, ROMSIZE, { sramOn: SRAM.on && SRAM.start < 0x400000, ssf2: MAPPER.kind === "ssf2" });
   yield RT.ioWat({ sixButton: sixButtonPads(img) });
-  yield RT.vdpWat();
+  const PAL = palTiming(img);
+  yield RT.vdpWat({ pal: PAL });
   yield RT.renderWat();
   // the Z80: one function per opcode handler, dispatched via the table
   zlay.tbase = nsh;
@@ -794,7 +812,7 @@ function frameWat(narms, PACKED, PCTAB, img, ROMSIZE, sramBank) {
     (if (i32.eq (global.get $zstate) (i32.const 1)) (then (call $z80_run (i32.add (global.get $mcvdp) (i32.const 3420)))))
       (global.set $mcvdp (i32.add (global.get $mcvdp) (i32.const 3420)))
       (local.set $line (i32.add (local.get $line) (i32.const 1)))
-      (br_if $l (i32.lt_s (local.get $line) (i32.const 261)))))
+      (br_if $l (i32.lt_s (local.get $line) (i32.const ${(palTiming(img) ? 313 : 262) - 1})))))
     (global.set $v_v_counter (local.get $line))
     (global.set $v_h_counter ${R(10)})
     (global.set $v_status (i32.and (global.get $v_status) (i32.const -9)))
@@ -908,7 +926,8 @@ ${RT.cartInitWat(ROMSIZE, sramBank)}    (call $vdp_reset)
     (global.set $zbank (i32.const 0))
     (call $z80_init)
     (call $z80_reset)
-    (global.set $mc (i32.const ${Math.floor(((262 - 192 + 159) * 3420 + 1004) / 7) * 7}))
+    ;; gen_reset: ((lines - 192 + 159 - 27 on PAL) lines + 1004) master cycles, rounded to 7
+    (global.set $mc (i32.const ${Math.floor((((palTiming(img) ? 313 : 262) - 192 + 159 - (palTiming(img) ? 27 : 0)) * 3420 + 1004) / 7) * 7}))
     (global.set $stopped (i32.const 0))
     (global.set $ft1 (i32.const 0))
     (global.set $imask (i32.const 0x700))
@@ -923,6 +942,8 @@ ${RT.cartInitWat(ROMSIZE, sramBank)}    (call $vdp_reset)
   (func (export "wc_render")
     (local $i i32)
     (call $frame)
+    ;; the picture is as tall as the active display (224, or 240 in V30 mode)
+    (i32.store (i32.const ${ABI + 8}) (select (i32.const 240) (i32.const 224) (i32.eq (global.get $vp_h) (i32.const 240))))
     ;; state block for the differ (all little-endian u32)
     (local.set $i (i32.const 0))
     (block $d (loop $l

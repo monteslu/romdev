@@ -130,3 +130,21 @@ test("the Z80 reads the VDP through \$7Fxx and the 68000 bus (VDP, I/O, backup R
   const r = await gpgxParity({ platform: "genesis", rom, maxFrames: 5 });
   assert.equal(r.diverged, false, divergenceText(r));
 });
+
+test("a European cart runs PAL: 313 lines, the PAL V counter, the status PAL bit and V30 mode", T, async () => {
+  // record the V counter peak, the status register and frame count; switch to V30 (R1 = $7C) midway
+  const code = [...W(0x41f9), ...L(0xff0000), ...W(0x4280, 0x4281),          // clr.l d0; clr.l d1
+    ...W(0x33fc, 0x8174), ...L(0xc00004),                                       // R1 = $74: display, V28, Mode 5
+    "loop", ...W(0x3039), ...L(0xc00008), ...W(0xe048),                        // move.w $C00008,d0; lsr.w #8,d0
+    ...W(0xb240, 0x6c02, 0x3200),                                               // cmp.w d0,d1; bge.s +2; move.w d0,d1
+    ...W(0x33c1), ...L(0xff0000), ...W(0x33f9), ...L(0xc00004), ...L(0xff0002),
+    ...W(0x5279), ...L(0xff0004),                                               // addq.w #1,$FF0004
+    ...W(0x0c79, 0x2000), ...L(0xff0004), ...W(0x6608), ...W(0x33fc, 0x817c), ...L(0xc00004), "back"];
+  const li = code.indexOf("loop"), bi = code.indexOf("back");
+  const body = code.slice(li + 1, bi);
+  const prog = [...code.slice(0, li), ...body, ...W(0x6000, (-(body.length + 2)) & 0xffff)];
+  for (const region of ["E", "JUE"]) {
+    const r = await gpgxParity({ platform: "genesis", rom: mdImage(prog, { region }), maxFrames: 30, picture: true });
+    assert.equal(r.diverged, false, `${region}: ${divergenceText(r)}`);
+  }
+});
