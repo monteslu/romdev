@@ -1666,7 +1666,8 @@ export async function* emitWat(rom, opts = {}) {
   head.push(cfg.legacy ? bankHelpersWat(G, cfg, NBANK) : bankHelpersExactWat(G, cfg, NBANK));
   head.push(flagHelpersWat({ exact: !cfg.legacy }));
   head.push(hwWat(PLATFORM, { exact: !cfg.legacy, region: cfg.region, pal: cfg.pal, fm: cfg.fm, sms1: cfg.vdp === "315-5124" }));
-  head.push(renderWat({ exact: !cfg.legacy, sms1: cfg.vdp === "315-5124" }));
+  // TMS9918-mode colours: the fixed Master System set, or the Game Gear's CRAM palette 1
+  head.push(renderWat({ exact: !cfg.legacy, sms1: cfg.vdp === "315-5124", tmsBase: PLATFORM === "sms" ? 0x20 : 0x10 }));
   // the exact model: genesis_plus_gx's PSG + blip_buf, s16 44100 Hz (psg.js)
   head.push(cfg.legacy ? psgWat(AUDIO, ABI, { pal: false }) : smsSoundWat({ base: AUDIO, cursorAddr: ABI + 256, pal: cfg.pal }));
   head.push(miscWat({ exact: !cfg.legacy }));

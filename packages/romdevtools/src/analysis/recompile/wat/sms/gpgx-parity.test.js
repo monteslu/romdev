@@ -298,3 +298,33 @@ test("315-5124 (SMS1) VDP: R3/R4 mask the tile index per bitplane pair, R6 bits 
     assert.equal(r.picture.exactPct, 100, JSON.stringify(r.picture));
   }
 });
+
+test("TMS9918 modes (Graphics I/II, Text, Multicolor, extended tables, invalid) and TMS sprites, on the SMS and the GG", T, async () => {
+  // Fill VRAM with an address-derived pattern (every table the mode picks has
+  // content), write CRAM, then show the mode. Sprites: four on one line plus a
+  // fifth (overflow, fifth-sprite number), an early-clock one, 16x16, zoom,
+  // and overlapping ones (collision).
+  const sat = [[40, 20, 1, 0x0F], [40, 28, 2, 0x06], [40, 60, 3, 0x8A], [40, 100, 4, 0x03], [40, 140, 5, 0x0C], [90, 250, 6, 0x05], [0xD0, 0, 0, 0]];
+  const prog = (r0, r1, gg) => z80([
+    [0xF3, 0x31, 0xF0, 0xDF],
+    vaddr(0), [0x21, 0x00, 0x00, 0x01, 0x00, 0x40], "fill:", [0x7D, 0xAC, 0xD3, 0xBE, 0x23, 0x0B, 0x78, 0xB1], ["jr", "nz", "fill"],   // VRAM[a] = lo ^ hi
+    vaddr(0x1B00), ...sat.map((e) => e.flatMap((b) => outA(b))),
+    vaddr(0, 3), [0x06, gg ? 0x40 : 0x20, 0xAF], "cr:", [0xD3, 0xBE, 0xC6, 0x07], ["djnz", "cr"],
+    vreg(2, 0x06), vreg(3, 0xFF), vreg(4, 0x03), vreg(5, 0x36), vreg(6, 0x07), vreg(7, 0xF4),
+    vreg(0, r0), vreg(1, r1),
+    // poll the status: the last value and every flag seen (overflow, collision, fifth-sprite number)
+    "end:", [0xDB, 0xBF, 0x32, 0x10, 0xC0, 0x47, 0x3A, 0x11, 0xC0, 0xB0, 0x32, 0x11, 0xC0], ["jr", null, "end"]], 0x100);
+  // [R0, R1]: G1, G1 16x16 zoom, G2, Text, Text + extended PG, Multicolor, Multicolor + ext, invalid, left column blank, display off
+  const modes = [[0x00, 0xC0], [0x00, 0xC3], [0x02, 0xC2], [0x00, 0xD0], [0x02, 0xD0], [0x00, 0xC8], [0x02, 0xC9], [0x00, 0xD8], [0x22, 0xC0], [0x00, 0x80]];
+  for (const platform of ["sms", "gg"]) {
+    for (const [r0, r1] of modes) {
+      const rom = smsImage([0xC3, 0x00, 0x01], { region: platform === "gg" ? 6 : 4, at: [[0x100, prog(r0, r1, platform === "gg")]] });
+      const r = await gpgxParity({ platform, rom, maxFrames: 20, picture: true });   // the VRAM fill takes ~14 frames
+      const what = `${platform} R0=${r0.toString(16)} R1=${r1.toString(16)}`;
+      assert.equal(r.diverged, false, `${what}: ${divergenceText(r)}`);
+      // display off: the whole picture is the backdrop (no content to score, every pixel still compared)
+      if (r1 & 0x40) assert.equal(r.picture.status, "OK", `${what}: ${JSON.stringify(r.picture)}`);
+      assert.equal(r.picture.exactPct, 100, `${what}: ${JSON.stringify(r.picture)}`);
+    }
+  }
+});
