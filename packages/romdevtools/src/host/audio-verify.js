@@ -244,6 +244,16 @@ export function crossCorrelationLag(ref, cart, { maxLag = 2048, maxLen = 65536 }
   return { lag, peak: r4(peak), atZero: r4(at(0)), span: [start, start + len] };
 }
 
+function acRms(x) {
+  if (!x.length) return 0;
+  let m = 0;
+  for (let i = 0; i < x.length; i++) m += x[i];
+  m /= x.length;
+  let e = 0;
+  for (let i = 0; i < x.length; i++) e += (x[i] - m) ** 2;
+  return Math.sqrt(e / x.length);
+}
+
 function pearson(x, y) {
   const n = Math.min(x.length, y.length);
   if (n < 3) return null;
@@ -352,9 +362,10 @@ export function scoreAudio(a) {
       firstFrame = { refFrame: refFrames[i], cartFrame: refFrames[i] + off, sampleFrame: Math.floor(k / refCh), channel: refCh === 2 ? (k % 2 ? "R" : "L") : "mono",
         ref: r[k] ?? null, cart: c[k] ?? null, refSamples: rn, cartSamples: cn };
     }
-    const rm = toMono(r, refCh), cm = toMono(c, cartCh);
-    perFrameRms.ref.push(Math.sqrt(rm.reduce((s, v) => s + v * v, 0) / (rm.length || 1)));
-    perFrameRms.cart.push(Math.sqrt(cm.reduce((s, v) => s + v * v, 0) / (cm.length || 1)));
+    // AC level (the frame's mean removed): a core's raw stream can carry a
+    // DC bias its output filter removes, which would swamp the envelope.
+    perFrameRms.ref.push(acRms(toMono(r, refCh)));
+    perFrameRms.cart.push(acRms(toMono(c, cartCh)));
   }
   const refAll = concatChunks(refChunks, refChunks[0].constructor), cartAll = concatChunks(cartChunks, cartChunks[0].constructor);
   const refStats = stats(refAll), cartStats = stats(cartAll);
@@ -387,11 +398,17 @@ export function scoreAudio(a) {
     out.rmsError = n ? Math.round(Math.sqrt(se / n) * 100) / 100 : null;
     out.lengthDiff = cartAll.length / cartCh - refAll.length / refCh;
   }
-  // lag, envelope, spectrum: on the mono mix, cart resampled to the ref rate when they differ
-  const refMono = toMono(refAll, refCh);
-  const cartMono = sameRate || !refRate || !cartRate ? toMono(cartAll, cartCh) : resampleLinear(toMono(cartAll, cartCh), cartRate, refRate);
-  const perFrame = refRate ? Math.round(refRate / 60) : 800;
-  out.xcorr = crossCorrelationLag(refMono, cartMono, { maxLag: a.maxLag ?? perFrame * 2 });
+  // lag, envelope, spectrum: on the mono mix; when the rates differ both are
+  // brought to the LOWER rate (a 2 MHz raw stream is never upsampled to), and
+  // the lag is reported in reference samples and seconds.
+  const common = sameRate || !refRate || !cartRate ? (refRate || cartRate) : Math.min(refRate, cartRate);
+  const refMono = sameRate || !common ? toMono(refAll, refCh) : resampleLinear(toMono(refAll, refCh), refRate, common);
+  const cartMono = sameRate || !common ? toMono(cartAll, cartCh) : resampleLinear(toMono(cartAll, cartCh), cartRate, common);
+  const perFrame = common ? Math.round(common / 60) : 800;
+  const scaleLag = !sameRate && refRate && common ? refRate / common : 1;
+  out.xcorr = crossCorrelationLag(refMono, cartMono, { maxLag: a.maxLag ? Math.round(a.maxLag / scaleLag) : perFrame * 2 });
+  if (out.xcorr && scaleLag !== 1) Object.assign(out.xcorr, { lag: Math.round(out.xcorr.lag * scaleLag), lagAtRate: common });
+  if (out.xcorr && common) out.xcorr.lagSeconds = Math.round((out.xcorr.lag / (refRate || common)) * 1e6) / 1e6;
   if (!out.xcorr) out.xcorrNote = refSilent || cartSilent ? "one side is silent in the loudest span: no lag to measure" : "too few samples";
   const env = pearson(perFrameRms.ref, perFrameRms.cart);
   const sumR = perFrameRms.ref.reduce((s, v) => s + v, 0), sumC = perFrameRms.cart.reduce((s, v) => s + v, 0);

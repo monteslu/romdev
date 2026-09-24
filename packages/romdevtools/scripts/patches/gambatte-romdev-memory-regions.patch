@@ -22,10 +22,10 @@ index 7e5c43b..18dcb52 100644
  
  private:
 diff --git a/libgambatte/libretro/libretro.cpp b/libgambatte/libretro/libretro.cpp
-index 15b042c..0e0541b 100644
+index 15b042c..8db8749 100644
 --- a/libgambatte/libretro/libretro.cpp
 +++ b/libgambatte/libretro/libretro.cpp
-@@ -2874,6 +2874,57 @@ void retro_unload_game()
+@@ -2874,6 +2874,70 @@ void retro_unload_game()
  
  unsigned retro_get_region() { return RETRO_REGION_NTSC; }
  
@@ -79,11 +79,24 @@ index 15b042c..0e0541b 100644
 +#define ROMDEV_MEMORY_GB_BGCOL15  0x14B  /* 144 x 160 x u16 BG bgr15 per pixel */
 +#define ROMDEV_MEMORY_GB_SPRCOL15 0x14C  /* 144 x 160 x u16 OBJ bgr15 per pixel */
 +#define ROMDEV_MEMORY_GB_LCDLOG   0x14D  /* LCD timing decision ring (romdev_gbcap.h) */
++#define ROMDEV_MEMORY_GB_APU_RAW  0x14E  /* RDAS stream: PSG::fillBuffer's stereo s16 at 2097152 Hz, before blipper/CC */
++
++/* romdev: gb_apu_raw - every sample frame runFor produced this retro_run (the
++ * 2 MiHz PSG output blipper/CC resample from), as an RDAS stream region. */
++#include "romdev_audio_stream.h"
++#define ROMDEV_GB_APU_CAP 40960u
++static uint8_t romdev_gb_apu_raw[ROMDEV_AS_BYTES(ROMDEV_GB_APU_CAP, 2, 2)];
++static void romdev_gb_apu_raw_init(void)
++{
++   if (romdev_as_hdr(romdev_gb_apu_raw)->magic != ROMDEV_AS_MAGIC)
++      romdev_as_init(romdev_gb_apu_raw, 2, ROMDEV_AS_S16, 2097152u, ROMDEV_GB_APU_CAP);
++}
++
 +
  void *retro_get_memory_data(unsigned id)
  {
     if (rom_loaded) switch (id)
-@@ -2883,11 +2934,27 @@ void *retro_get_memory_data(unsigned id)
+@@ -2883,11 +2947,28 @@ void *retro_get_memory_data(unsigned id)
        case RETRO_MEMORY_RTC:
           return gb.rtcdata_ptr();
        case RETRO_MEMORY_SYSTEM_RAM:
@@ -110,10 +123,11 @@ index 15b042c..0e0541b 100644
 +      case ROMDEV_MEMORY_GB_BGCOL15:  return romdev_gb_bgcol15;
 +      case ROMDEV_MEMORY_GB_SPRCOL15: return romdev_gb_sprcol15;
 +      case ROMDEV_MEMORY_GB_LCDLOG:   return romdev_gb_lcdlog;
++      case ROMDEV_MEMORY_GB_APU_RAW:  romdev_gb_apu_raw_init(); return romdev_gb_apu_raw;
     }
  
     return 0;
-@@ -2902,14 +2969,28 @@ size_t retro_get_memory_size(unsigned id)
+@@ -2902,14 +2983,29 @@ size_t retro_get_memory_size(unsigned id)
        case RETRO_MEMORY_RTC:
           return gb.rtcdata_size();
        case RETRO_MEMORY_SYSTEM_RAM:
@@ -141,10 +155,20 @@ index 15b042c..0e0541b 100644
 +      case ROMDEV_MEMORY_GB_BGCOL15:  return sizeof(romdev_gb_bgcol15);
 +      case ROMDEV_MEMORY_GB_SPRCOL15: return sizeof(romdev_gb_sprcol15);
 +      case ROMDEV_MEMORY_GB_LCDLOG:   return sizeof(romdev_gb_lcdlog);
++      case ROMDEV_MEMORY_GB_APU_RAW:  return sizeof(romdev_gb_apu_raw);
     }
  
     return 0;
-@@ -2924,6 +3005,21 @@ void retro_run()
+@@ -2917,6 +3013,8 @@ size_t retro_get_memory_size(unsigned id)
+ 
+ void retro_run()
+ {
++   romdev_gb_apu_raw_init();
++   romdev_as_begin_frame(romdev_gb_apu_raw);
+    /* libretro_samples_count and libretro_frames_count are
+     * file-scope so they can be reset in retro_load_game,
+     * retro_reset, and retro_unserialize. */
+@@ -2924,6 +3022,21 @@ void retro_run()
     input_poll_cb();
     update_input_state();
  
@@ -166,6 +190,22 @@ index 15b042c..0e0541b 100644
     uint64_t expected_frames = libretro_samples_count / SOUND_SAMPLES_PER_FRAME;
     if (libretro_frames_count < expected_frames) // Detect frame dupes.
     {
+@@ -2941,6 +3054,7 @@ void retro_run()
+ 
+    while (gb.runFor(video_buf, VIDEO_PITCH, sound_buf.u32, SOUND_BUFF_SIZE, samples) == -1)
+    {
++      romdev_as_push(romdev_gb_apu_raw, sound_buf.i16, samples, 2);
+       if (use_cc_resampler)
+          CC_renderaudio((audio_frame_t*)sound_buf.u32, samples);
+       else
+@@ -2965,6 +3079,7 @@ void retro_run()
+ 
+    video_cb(video_buf, VIDEO_WIDTH, VIDEO_HEIGHT, VIDEO_PITCH * sizeof(gambatte::video_pixel_t));
+ 
++   romdev_as_push(romdev_gb_apu_raw, sound_buf.i16, samples, 2);
+    if (use_cc_resampler)
+       CC_renderaudio((audio_frame_t*)sound_buf.u32, samples);
+    else
 diff --git a/libgambatte/src/cpu.cpp b/libgambatte/src/cpu.cpp
 index 0fb6199..5ba140a 100644
 --- a/libgambatte/src/cpu.cpp

@@ -60,6 +60,8 @@ cp "$RDBG_SRC/romdev_debug.h" "$RDBG_SRC/romdev_debug.c" "$GAMBATTE_DIR/libgamba
 # resolves it from ppu.cpp / video.cpp / video_libretro.cpp.
 cp "$RDBG_SRC/romdev_gbcap.h" "$GAMBATTE_DIR/libgambatte/src/"
 cp "$RDBG_SRC/romdev_gbcap.h" "$GAMBATTE_DIR/libgambatte/src/video/"
+# The gb_apu_raw audio stream region (libretro.cpp) uses the shared RDAS helper.
+cp "$RDBG_SRC/romdev_audio_stream.h" "$GAMBATTE_DIR/libgambatte/src/"
 ROMDEV_INC="-I$GAMBATTE_DIR/libgambatte/src"
 
 emmake make -f Makefile.libretro platform=emscripten clean >/dev/null 2>&1 || true

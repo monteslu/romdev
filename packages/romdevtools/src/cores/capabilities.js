@@ -118,7 +118,7 @@ export const CAPABILITIES = {
       "gb_bgpdata", "gb_objpdata", "gb_cpu_regs",
       /* universal redraw capture planes */
       "gb_lineregs", "gb_bgpix", "gb_sprpix", "gb_palline",
-      "gb_bgcol15", "gb_sprcol15", "gb_lcdlog"],
+      "gb_bgcol15", "gb_sprcol15", "gb_lcdlog", "gb_apu_raw"],
     ...tileDeep(),
   },
   gbc: {
@@ -129,7 +129,7 @@ export const CAPABILITIES = {
       "gb_bgpdata", "gb_objpdata", "gb_cpu_regs",
       /* universal redraw capture planes */
       "gb_lineregs", "gb_bgpix", "gb_sprpix", "gb_palline",
-      "gb_bgcol15", "gb_sprcol15", "gb_lcdlog"],
+      "gb_bgcol15", "gb_sprcol15", "gb_lcdlog", "gb_apu_raw"],
     ...tileDeep(),
   },
   gba: {
