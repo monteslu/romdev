@@ -47,34 +47,48 @@ export function oplen(mode, m, x) {
   return 1 + MODE_BYTES[mode];
 }
 
-// Cycle costs: accesses(mode) + internal(opcode class), in CPU cycles (one
-// fast access = 1). The same decomposition m65816-metadata.js documents
-// from snes9x's per-access charging. NOT a flat count per instruction.
-const MODE_CYC = {
-  imp: 1, acc: 1,
-  imm8: 2, imm16: 3,
-  dp: 3, dpx: 4, dpy: 4,
-  idp: 5, idpx: 6, idpy: 6, ildp: 6, ildpy: 6,
-  abs: 4, absx: 4, absy: 4, absl: 5, abslx: 5,
-  ind: 5, indx: 6, indl: 6,
-  sr: 4, sry: 7,
-  rel: 2, rell: 3,
-  bm: 7,
+// Cycle cost, snes9x's way (cpuops.cpp / cpuaddr.h / getset.h): every
+// program byte fetched costs the code region's memory speed ($ms, set per
+// instruction by $step), every data byte read or written costs its own
+// region's speed ($rd8/$wr8 charge it), and each internal operation costs
+// ONE_CYCLE (6 master clocks). lower() returns the STATIC internal-operation
+// count; the conditional ones (D low byte non-zero, an indexed read that
+// crosses a page or uses a 16-bit index, a taken branch) are charged by the
+// code the addressing helpers and the arm tail emit.
+const IO_MODE = { dpx: 1, dpy: 1, idpx: 1, sr: 1, sry: 1, indx: 1 };
+const IO_MNEM = {
+  asl: 1, lsr: 1, rol: 1, ror: 1, inc: 1, dec: 1, tsb: 1, trb: 1,   // RMW (and the accumulator forms)
+  inx: 1, iny: 1, dex: 1, dey: 1,
+  tax: 1, tay: 1, txa: 1, tya: 1, txy: 1, tyx: 1, tsx: 1, txs: 1, tcd: 1, tdc: 1, tcs: 1, tsc: 1,
+  clc: 1, sec: 1, cli: 1, sei: 1, clv: 1, cld: 1, sed: 1, nop: 1, wdm: 1, xce: 1, rep: 1, sep: 1,
+  xba: 2, wai: 1,
+  pha: 1, phx: 1, phy: 1, php: 1, phb: 1, phk: 1, phd: 1,
+  pla: 2, plx: 2, ply: 2, plp: 2, plb: 2, pld: 2,
+  jsr: 1, jsl: 1, rts: 3, rtl: 2, rti: 2, brl: 1,
+  mvn: 2, mvp: 2,
 };
-const EXTRA = {
-  asl: 2, lsr: 2, rol: 2, ror: 2, inc: 2, dec: 2,
-  tsb: 2, trb: 2, jsr: 2, jsl: 4, jml: 1,
-  rts: 5, rtl: 5, rti: 6, brk: 7, cop: 7,
-  pha: 2, phx: 2, phy: 2, php: 2, phb: 2, phk: 2,
-  phd: 3, pla: 3, plx: 3, ply: 3, plp: 3, plb: 3,
-  pld: 4, pea: 4, pei: 5, per: 5,
-  mvn: 0, mvp: 0, xba: 2, wai: 2, stp: 2,
-};
-
 /** @param {string} mode @param {string} mnem */
 function cycles(mode, mnem) {
-  return (MODE_CYC[mode] ?? 3) + (EXTRA[mnem] ?? 0);
+  let io = (IO_MODE[mode] ?? 0) + (IO_MNEM[mnem] ?? 0);
+  // A read-modify-write on memory spends its internal cycle between the
+  // read and the write (snes9x ASL8 ... TRB16): the body charges it there.
+  if (RMW.has(mnem) && mode !== "acc") io -= 1;
+  // JMP/JSR (a,X): the one internal cycle is AbsoluteIndexedIndirect's.
+  if ((mnem === "jmp" || mnem === "jsr") && mode === "indx") io = 1;
+  if (mnem === "wdm") io = 0;   // Op42: S9xGetWord at PC instead (see below)
+  // Internal cycles snes9x spends AFTER the data accesses are charged there
+  // by the body (TRAILING_IO), not up front.
+  return io - (TRAILING_IO[mnem] ?? 0);
 }
+/** Internal cycles after the accesses: RTS's last (Op60), MVN/MVP's two (Op54/Op44). */
+const TRAILING_IO = { rts: 1, mvn: 2, mvp: 2 };
+/** snes9x charges these leading internal cycles as ONE AddCycles(TWO_CYCLES): an event is seen after both. */
+const IO_CHUNK = new Set(["pla", "plx", "ply", "plp", "plb", "pld", "rts", "rtl", "rti", "xba"]);
+const RMW = new Set(["asl", "lsr", "rol", "ror", "inc", "dec", "tsb", "trb"]);
+/** Charge one internal operation (6 master clocks). */
+export const IO1 = "(global.set $cyc (i32.sub (global.get $cyc) (i32.const 6)))";
+const DL_IO = `(if (i32.and (global.get $d) (i32.const 0xFF)) (then ${IO1}))`;
+const DP_MODES = new Set(["dp", "dpx", "dpy", "idp", "idpx", "idpy", "ildp", "ildpy"]);
 
 /**
  * -> {mnem, mode, op} for the opcode at `off`, mode UNRESOLVED.
@@ -91,6 +105,15 @@ export function decode(rom, off) {
 /** @param {string[]} parts */
 const seq = (parts) => parts.filter((p) => p).join(" ");
 
+// The program bank and addresses relative to the executing instruction come
+// from the LIVE pc, never from the ROM offset: the same ROM byte runs at
+// $00:8000 and at its $80:8000 FastROM mirror (and, on HiROM, at $C0:8000),
+// and snes9x pushes, branches and returns inside whichever bank is running.
+const PB = "(i32.and (global.get $pc) (i32.const 0xFF0000))";
+/** pc + n inside the program bank (the 65816's PC does not carry into PB). */
+export const pcRel = (n) => `(i32.or ${PB} (i32.and (i32.add (global.get $pc) (i32.const ${n})) (i32.const 0xFFFF)))`;
+const pc16Rel = (n) => `(i32.and (i32.add (global.get $pc) (i32.const ${n})) (i32.const 0xFFFF))`;
+
 // Direct page: D + offset, wrapping inside bank 0.
 const dp = (off) => `(i32.and (i32.add (global.get $d) (i32.const ${off})) (i32.const 0xFFFF))`;
 const dpIdx = (off, reg) =>
@@ -98,7 +121,39 @@ const dpIdx = (off, reg) =>
 // A 16-bit address in the DATA BANK; indexing may carry out of the bank.
 const db = (expr16) => `(i32.add (global.get $db24) ${expr16})`;
 
-function addr24(mode, b) {
+// The last operand byte the CPU fetched is on the data bus when the data
+// access happens (snes9x cpuaddr.h sets OpenBus = the address's high byte,
+// the bank byte for long modes, the operand for direct page). A read of an
+// unmapped address returns it. Indirect modes read their pointer through
+// $rd16/$rd24, which leave the pointer's last byte there by themselves.
+const OB_BYTE = { dp: 1, dpx: 1, dpy: 1, sr: 1, abs: 2, absx: 2, absy: 2, absl: 3, abslx: 3 };
+/**
+ * The effective address, with the addressing mode's conditional internal
+ * cycles. `kind` is 'r' (read), 'w' (write) or 'm' (read-modify-write):
+ * snes9x's indexed modes charge their extra cycle unconditionally for a
+ * write or a 16-bit index, and for an 8-bit-index read only on a page cross.
+ */
+function addr24(mode, b, kind = "r") {
+  let e = addr24raw(mode, b);
+  const pre = [];
+  const k = OB_BYTE[mode];
+  if (k) pre.push(`(global.set $ob (i32.const ${b[k]}))`);
+  if (DP_MODES.has(mode)) pre.push(DL_IO);
+  if (mode === "absx" || mode === "absy") {
+    const r = mode === "absx" ? "x" : "y";
+    if (kind === "r") pre.push(`(if (i32.or (i32.eqz (global.get $fx)) (i32.gt_u (i32.add (i32.const ${b[1]}) (i32.and (global.get $${r}) (i32.const 0xFF))) (i32.const 0xFF))) (then ${IO1}))`);
+    else pre.push(IO1);
+  }
+  if (mode === "idpy") {
+    // (d),Y: the page-cross test needs the pointer, so read it first.
+    e = `(i32.add ${db("(global.get $t5)")} (global.get $y))`;
+    pre.push(`(global.set $t5 (call $rd16 ${dp(b[1])}))`);
+    if (kind === "r") pre.push(`(if (i32.or (i32.eqz (global.get $fx)) (i32.gt_u (i32.add (i32.and (global.get $t5) (i32.const 0xFF)) (i32.and (global.get $y) (i32.const 0xFF))) (i32.const 0xFF))) (then ${IO1}))`);
+    else pre.push(IO1);
+  }
+  return pre.length ? `(block (result i32) ${pre.join(" ")} ${e})` : e;
+}
+function addr24raw(mode, b) {
   const u8 = b[1], u16 = b[1] | (b[2] << 8), u24 = b[1] | (b[2] << 8) | (b[3] << 16);
   switch (mode) {
     case "dp": return dp(u8);
@@ -157,12 +212,10 @@ const PUSH8 = (v) =>
 const PULL8 =
   "(global.set $s (i32.and (i32.add (global.get $s) (i32.const 1)) (i32.const 0xFFFF)))" +
   "(global.set $t (call $rd8 (i32.and (global.get $s) (i32.const 0xFFFF))))";
-const push16 = (v) =>
-  `(global.set $t2 ${v})` +
-  PUSH8("(i32.shr_u (global.get $t2) (i32.const 8))") +
-  PUSH8("(i32.and (global.get $t2) (i32.const 0xFF))");
-const PULL16 = PULL8 + "(global.set $t2 (global.get $t))" + PULL8 +
-  "(global.set $t (i32.or (global.get $t2) (i32.shl (global.get $t) (i32.const 8))))";
+// 16-bit pushes and pulls are one word access (snes9x PushW / PullW:
+// S9xSetWord / S9xGetWord at S-1 / S+1, high byte first on the write).
+const push16 = (v) => `(call $push16 ${v})`;
+const PULL16 = "(global.set $t (call $pull16))";
 
 // P as a byte: NVMXDIZC.
 const PACK_P = "(i32.or " +
@@ -186,6 +239,8 @@ const unpackP = (src) =>
   "(global.set $fi (i32.and (i32.shr_u (global.get $t3) (i32.const 2)) (i32.const 1)))" +
   "(global.set $fz (i32.and (i32.shr_u (global.get $t3) (i32.const 1)) (i32.const 1)))" +
   "(global.set $fc (i32.and (global.get $t3) (i32.const 1)))" +
+  // Emulation mode keeps M and X set (snes9x S9xUnpackStatus callers).
+  "(if (global.get $fe) (then (global.set $fm (i32.const 1)) (global.set $fx (i32.const 1))))" +
   "(call $narrowx)";
 
 // A narrow write into A preserves B (the high byte).
@@ -199,7 +254,7 @@ const KEEP_B_T8 = "(global.set $a (if (result i32) (global.get $fm) " +
 
 /**
  * @typedef {{kind:'jp', bank:number, addr:number} | {kind:'jp_expr'} |
- *   {kind:'jp_file'|'br_file', delta:number, next16:number, cond?:string}} Flow
+ *   {kind:'jp_file'|'br_file', delta:number, next16:number, cond?:string, noTakenIo?:boolean}} Flow
  */
 
 /**
@@ -252,7 +307,7 @@ export function lower(rom, off, n, pb, pc16) {
   // ---- stores
   if (mnem === "sta" || mnem === "stx" || mnem === "sty" || mnem === "stz") {
     if (imm) throw new Unsupported(`${mnem} immediate`);
-    const a = addr24(mode, b);
+    const a = addr24(mode, b, "w");
     let src, fl;
     if (mnem === "stz") { src = "(i32.const 0)"; fl = "fm"; }
     else {
@@ -318,12 +373,13 @@ export function lower(rom, off, n, pb, pc16) {
     let src;
     if (imm) src = `(i32.const ${mode === "imm8" ? u8 : u16})`;
     else src = `(call $rdw ${addr24(mode, b)} (global.get $fm))`;
-    // Decimal mode is not modelled (binary arithmetic; the D flag round-trips).
+    // D set: snes9x's nibble-by-nibble decimal ADC/SBC ($adc_dec).
     const neg = mnem === "sbc"
       ? "(global.set $t2 (i32.xor (global.get $t2) (call $wmask (global.get $fm))))"
       : "";
     return [seq([
-      `(global.set $t2 ${src})`, neg,
+      `(global.set $t2 ${src})`,
+      `(if (global.get $fd) (then (call $adc_dec (global.get $t2) (i32.const ${mnem === "sbc" ? 1 : 0}))) (else`, neg,
       "(global.set $t3 (i32.and (global.get $a) " +
       "(call $wmask (global.get $fm))))",
       "(global.set $t (i32.add (i32.add (global.get $t3) " +
@@ -338,7 +394,7 @@ export function lower(rom, off, n, pb, pc16) {
       "(then (i32.or (i32.and (global.get $a) (i32.const 0xFF00)) " +
       "(i32.and (global.get $t) (i32.const 0xFF)))) " +
       "(else (i32.and (global.get $t) (i32.const 0xFFFF)))))",
-      setnz("(global.get $t)", "fm")]), null, cyc];
+      setnz("(global.get $t)", "fm"), "))"]), null, cyc];
   }
 
   if (mnem === "cmp" || mnem === "cpx" || mnem === "cpy") {
@@ -381,13 +437,14 @@ export function lower(rom, off, n, pb, pc16) {
     const op = mnem === "tsb" ? "i32.or" : "i32.and";
     const rhs = mnem === "tsb" ? "(global.get $t3)" : "(i32.xor (global.get $t3) (i32.const -1))";
     return [seq([
-      `(global.set $t2 ${addr24(mode, b)})`,
+      `(global.set $t2 ${addr24(mode, b, "m")})`,
       "(global.set $t (call $rdw (global.get $t2) (global.get $fm)))",
       "(global.set $t3 (i32.and (global.get $a) " +
       "(call $wmask (global.get $fm))))",
       "(global.set $fz (i32.eqz (i32.and (global.get $t) " +
       "(global.get $t3))))",
-      `(call $wrw (global.get $t2) (${op} (global.get $t) ${rhs}) ` +
+      IO1,
+      `(call $wrw10 (global.get $t2) (${op} (global.get $t) ${rhs}) ` +
       "(global.get $fm))"]), null, cyc];
   }
 
@@ -404,11 +461,12 @@ export function lower(rom, off, n, pb, pc16) {
   if (mnem === "inc" || mnem === "dec") {
     const d = mnem === "inc" ? 1 : -1;
     return [seq([
-      `(global.set $t3 ${addr24(mode, b)})`,
+      `(global.set $t3 ${addr24(mode, b, "m")})`,
       "(global.set $t (i32.and (i32.add (call $rdw (global.get $t3) " +
       `(global.get $fm)) (i32.const ${d})) ` +
       "(call $wmask (global.get $fm))))",
-      "(call $wrw (global.get $t3) (global.get $t) (global.get $fm))",
+      IO1,
+      "(call $wrw10 (global.get $t3) (global.get $t) (global.get $fm))",
       setnz("(global.get $t)", "fm")]), null, cyc];
   }
   if (mnem === "inx" || mnem === "iny" || mnem === "dex" || mnem === "dey") {
@@ -423,7 +481,7 @@ export function lower(rom, off, n, pb, pc16) {
   // ---- shifts and rotates
   if (mnem === "asl" || mnem === "lsr" || mnem === "rol" || mnem === "ror") {
     const acc = mode === "acc";
-    const pre = acc ? "" : `(global.set $t3 ${addr24(mode, b)})`;
+    const pre = acc ? "" : `(global.set $t3 ${addr24(mode, b, "m")})`;
     const src = acc
       ? "(i32.and (global.get $a) (call $wmask (global.get $fm)))"
       : "(call $rdw (global.get $t3) (global.get $fm))";
@@ -447,13 +505,16 @@ export function lower(rom, off, n, pb, pc16) {
       `(global.set $t4 ${cbit})`,
       `(global.set $t (i32.and ${res} (call $wmask (global.get $fm))))`,
       "(global.set $fc (global.get $t4))",
-      acc ? KEEP_B_T : "(call $wrw (global.get $t3) (global.get $t) (global.get $fm))",
+      acc ? KEEP_B_T : IO1 + "(call $wrw10 (global.get $t3) (global.get $t) (global.get $fm))",
       setnz("(global.get $t)", "fm")];
     return [seq(body), null, cyc];
   }
 
   // ---- flags
-  const FLAG = { clc: ["fc", 0], sec: ["fc", 1], cli: ["fi", 0], sei: ["fi", 1],
+  // CLI / SEI take effect one instruction late ($apply_ichg in $run_frame).
+  if (mnem === "cli") return ["(global.set $ichg (i32.or (global.get $ichg) (i32.const 1)))", null, cyc];
+  if (mnem === "sei") return ["(global.set $ichg (i32.or (global.get $ichg) (i32.const 2)))", null, cyc];
+  const FLAG = { clc: ["fc", 0], sec: ["fc", 1],
     clv: ["fv", 0], cld: ["fd", 0], sed: ["fd", 1] };
   if (FLAG[mnem]) {
     const [f, v] = FLAG[mnem];
@@ -468,6 +529,8 @@ export function lower(rom, off, n, pb, pc16) {
     }
     // Narrowing X zeroes the high bytes of X and Y.
     if ((v & 0x10) && setv === 1) bits.push("(call $narrowx)");
+    // REP cannot clear M or X in emulation mode.
+    if ((v & 0x30) && setv === 0) bits.push("(if (global.get $fe) (then (global.set $fm (i32.const 1)) (global.set $fx (i32.const 1))))");
     return [seq(bits), null, cyc];
   }
   if (mnem === "xce") {
@@ -482,7 +545,10 @@ export function lower(rom, off, n, pb, pc16) {
       "(global.set $s (i32.or (i32.const 0x100) " +
       "(i32.and (global.get $s) (i32.const 0xFF))))))"]), null, cyc];
   }
-  if (mnem === "nop" || mnem === "wdm") return ["", null, cyc];
+  if (mnem === "nop") return ["", null, cyc];
+  // WDM (snes9x Op42) reads a WORD at the operand (two program-speed reads)
+  // and skips one byte.
+  if (mnem === "wdm") return ["(global.set $cyc (i32.sub (global.get $cyc) (global.get $ms)))", null, cyc];
   // WAI: pc moves past it and $step burns cycles until $nmi/$irq clear $wai.
   if (mnem === "wai") return ["(global.set $wai (i32.const 1))", null, cyc];
 
@@ -496,14 +562,14 @@ export function lower(rom, off, n, pb, pc16) {
   }
   if (mnem === "php") return [PUSH8(PACK_P), null, cyc];
   if (mnem === "phb") return [PUSH8("(global.get $db)"), null, cyc];
-  if (mnem === "phk") return [PUSH8(`(i32.const ${pb})`), null, cyc];
+  if (mnem === "phk") return [PUSH8("(i32.shr_u (global.get $pc) (i32.const 16))"), null, cyc];
   if (mnem === "phd") return [push16("(global.get $d)"), null, cyc];
   if (mnem === "pea") return [push16(`(i32.const ${u16})`), null, cyc];
-  if (mnem === "pei") return [push16(`(call $rd16 ${dp(u8)})`), null, cyc];
+  if (mnem === "pei") return [DL_IO + push16(`(call $rd16 ${dp(u8)})`), null, cyc];
   if (mnem === "per") {
     // Relative to the NEXT instruction, inside the program bank.
     const d = u16 > 0x7fff ? u16 - 0x10000 : u16;
-    return [push16(`(i32.const ${(nxt16 + d) & 0xffff})`), null, cyc];
+    return [push16(pc16Rel(n + d)), null, cyc];
   }
   if (mnem === "pla") {
     return [seq([
@@ -534,8 +600,6 @@ export function lower(rom, off, n, pb, pc16) {
   if (mnem === "mvn" || mnem === "mvp") {
     const step = mnem === "mvn" ? 1 : -1;
     const srcBank = b[2], dstBank = b[1];
-    const here24 = (pb << 16) | pc16;
-    const nxt24 = (pb << 16) | nxt16;
     return [seq([
       `(call $setdb (i32.const ${dstBank}))`,
       `(call $wr8 (i32.add (i32.const ${dstBank * 0x10000}) ` +
@@ -548,9 +612,11 @@ export function lower(rom, off, n, pb, pc16) {
       `(i32.const ${step})) (call $wmask (global.get $fx))))`,
       "(global.set $a (i32.and (i32.sub (global.get $a) (i32.const 1)) " +
       "(i32.const 0xFFFF)))",
+      // Op54/Op44 end with AddCycles(TWO_CYCLES), after the byte moved.
+      "(global.set $cyc (i32.sub (global.get $cyc) (i32.const 12)))",
       "(global.set $t (if (result i32) (i32.eq (global.get $a) " +
-      `(i32.const 0xFFFF)) (then (i32.const ${nxt24})) ` +
-      `(else (i32.const ${here24}))))`]), { kind: "jp_expr" }, 7];
+      `(i32.const 0xFFFF)) (then ${pcRel(n)}) ` +
+      "(else (global.get $pc))))"]), { kind: "jp_expr" }, cyc];
   }
 
   // ---- control flow
@@ -561,18 +627,19 @@ export function lower(rom, off, n, pb, pc16) {
   }
   if (mnem === "brl") {
     const d = u16 > 0x7fff ? u16 - 0x10000 : u16;
-    return ["", { kind: "jp_file", delta: n + d, next16: nxt16 }, cyc];
+    // Op82: the one internal cycle is its static one, with no taken-branch
+    // or page-cross extra.
+    return ["", { kind: "jp_file", delta: n + d, next16: nxt16, noTakenIo: true }, cyc];
   }
-  if (mnem === "jmp" && mode === "abs") return ["", { kind: "jp", bank: pb, addr: u16 }, cyc];
+  if (mnem === "jmp" && mode === "abs") return ["", { kind: "jp_bank", addr: u16 }, cyc];
   if (mnem === "jml" && mode === "absl") return ["", { kind: "jp", bank: u24 >> 16, addr: u24 & 0xffff }, cyc];
   if (mnem === "jmp" && mode === "ind") {
     // (abs) reads the pointer from BANK 0.
-    return [`(global.set $t (i32.or (i32.shl (i32.const ${pb}) ` +
-      `(i32.const 16)) (call $rd16 (i32.const ${u16}))))`, { kind: "jp_expr" }, cyc];
+    return [`(global.set $t (i32.or ${PB} (call $rd16 (i32.const ${u16}))))`, { kind: "jp_expr" }, cyc];
   }
   const indxTarget = () =>
-    `(global.set $t (i32.or (i32.shl (i32.const ${pb}) (i32.const 16)) ` +
-    `(call $rd16 (i32.or (i32.shl (i32.const ${pb}) (i32.const 16)) ` +
+    `(global.set $t (i32.or ${PB} ` +
+    `(call $rd16 (i32.or ${PB} ` +
     `(i32.and (i32.add (i32.const ${u16}) (global.get $x)) ` +
     "(i32.const 0xFFFF))))))";
   // (abs,x) indexes inside the PROGRAM bank.
@@ -582,22 +649,20 @@ export function lower(rom, off, n, pb, pc16) {
   }
   // JSR/JSL push the address of the instruction's LAST byte.
   if (mnem === "jsr" && mode === "abs") {
-    const ret = (nxt16 - 1) & 0xffff;
-    return [push16(`(i32.const ${ret})`), { kind: "jp", bank: pb, addr: u16 }, cyc];
+    return [push16(pc16Rel(n - 1)), { kind: "jp_bank", addr: u16 }, cyc];
   }
   if (mnem === "jsr" && mode === "indx") {
-    const ret = (nxt16 - 1) & 0xffff;
-    return [push16(`(i32.const ${ret})`) + indxTarget(), { kind: "jp_expr" }, cyc];
+    return [push16(pc16Rel(n - 1)) + indxTarget(), { kind: "jp_expr" }, cyc];
   }
   if (mnem === "jsl") {
-    const ret = (nxt16 - 1) & 0xffff;
-    return [PUSH8(`(i32.const ${pb})`) + push16(`(i32.const ${ret})`),
+    return [PUSH8("(i32.shr_u (global.get $pc) (i32.const 16))") + push16(pc16Rel(n - 1)),
       { kind: "jp", bank: u24 >> 16, addr: u24 & 0xffff }, cyc];
   }
   if (mnem === "rts") {
     return [seq([
       PULL16,
-      `(global.set $t (i32.or (i32.shl (i32.const ${pb}) (i32.const 16)) ` +
+      IO1,   // Op60: the last internal cycle comes after the pull
+      `(global.set $t (i32.or ${PB} ` +
       "(i32.and (i32.add (global.get $t) (i32.const 1)) " +
       "(i32.const 0xFFFF))))"]), { kind: "jp_expr" }, cyc];
   }
@@ -610,17 +675,33 @@ export function lower(rom, off, n, pb, pc16) {
       "(global.get $t3)))"]), { kind: "jp_expr" }, cyc];
   }
   if (mnem === "rti") {
-    // Native RTI pulls P, a 16-bit PC, then the bank; no +1.
+    // Native RTI pulls P, a 16-bit PC, then the bank; no +1. In emulation
+    // mode there is no bank byte and PB stays (snes9x Op40).
     return [seq([
       PULL8, unpackP("(global.get $t)"),
+      "(if (global.get $fe) (then (global.set $fm (i32.const 1)) (global.set $fx (i32.const 1)) (call $narrowx)))",
       PULL16, "(global.set $t3 (global.get $t))",
+      `(if (global.get $fe) (then (global.set $t (i32.or ${PB} (global.get $t3)))) (else`,
       PULL8,
       "(global.set $t (i32.or (i32.shl (global.get $t) (i32.const 16)) " +
-      "(global.get $t3)))"]), { kind: "jp_expr" }, cyc];
+      "(global.get $t3)))))"]), { kind: "jp_expr" }, cyc];
   }
-  // brk/cop in a recompiled cart are almost always data being executed.
-  if (mnem === "brk" || mnem === "cop") throw new Unsupported(mnem);
-  if (mnem === "stp") throw new Unsupported("stp");
+  // BRK / COP (snes9x Op00 / Op02): push PB (native only), the address
+  // after the signature byte and P, clear D, set I, and vector through
+  // $FFE6 / $FFE4 (native) or $FFFE / $FFF4 (emulation) in bank 0.
+  if (mnem === "brk" || mnem === "cop") {
+    const [nv, ev] = mnem === "brk" ? [0xffe6, 0xfffe] : [0xffe4, 0xfff4];
+    return [seq([
+      "(if (i32.eqz (global.get $fe)) (then " + PUSH8("(i32.shr_u (global.get $pc) (i32.const 16))") + "))",
+      push16(pc16Rel(2)),
+      PUSH8(PACK_P),
+      "(global.set $fd (i32.const 0))",
+      "(global.set $fi (i32.const 1))",
+      `(global.set $t (call $rd16 (if (result i32) (global.get $fe) (then (i32.const ${ev})) (else (i32.const ${nv})))))`,
+    ]), { kind: "jp_expr" }, cyc];
+  }
+  // STP (snes9x OpDB): the pc stays on the STP and the CPU stops.
+  if (mnem === "stp") return ["(global.set $t (global.get $pc))", { kind: "jp_expr" }, cyc];
   throw new Unsupported(`${mnem} ${mode}`);
 }
 
@@ -661,6 +742,36 @@ export function modeTable() {
   for (let op = 0; op < 256; op++) {
     const e = opcodeInfo(op);
     if (e) tab[op] = MODEID[e.mode] ?? 0;
+  }
+  return tab;
+}
+
+/**
+ * The RAM interpreter's cycle table, two bytes per opcode: [length | flags,
+ * static internal cycles], the same model the arms use (cycles()). Flags:
+ * 0x80 = one more byte when M is 16-bit, 0x40 = when X is 16-bit, 0x20 = a
+ * direct-page mode (one more cycle when D's low byte is non-zero), 0x10 = a
+ * relative branch (one more cycle when taken).
+ * @returns {Uint8Array}
+ */
+export function interpCostTable() {
+  const tab = new Uint8Array(512);
+  const DP = new Set(["dp", "dpx", "dpy", "idp", "idpx", "idpy", "ildp", "ildpy"]);
+  for (let op = 0; op < 256; op++) {
+    const e = opcodeInfo(op);
+    if (!e) continue;
+    let lf = oplen(e.mode, 1, 1);
+    if (e.mode === "immM") lf |= 0x80;
+    if (e.mode === "immX") lf |= 0x40;
+    if (DP.has(e.mode) || e.mnem === "pei") lf |= 0x20;
+    if (e.mode === "rel") lf |= 0x10;
+    // MVN/MVP read their two operands as two Immediate8s (events between).
+    if (e.mnem === "mvn" || e.mnem === "mvp") lf |= 0x08;
+    tab[op * 2] = lf;
+    // (the interpreter charges a read-modify-write's internal cycle up front)
+    // bit 7: the leading internal cycles are one AddCycles (IO_CHUNK).
+    tab[op * 2 + 1] = cycles(e.mode, e.mnem) + (RMW.has(e.mnem) && e.mode !== "acc" ? 1 : 0) |
+      (IO_CHUNK.has(e.mnem) ? 0x80 : 0);
   }
   return tab;
 }

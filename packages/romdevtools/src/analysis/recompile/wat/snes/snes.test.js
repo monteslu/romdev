@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 import {
   describe as describeRom, emitWat, emitWatString, recompileSection, platforms, conventions,
 } from "./index.js";
-import { lower, decode, oplen, isopTable, modeTable, Unsupported } from "./lower.js";
-import { computeLayout, WRAM, VRAM, CGRAM, PROBE, PROBE_FIELDS } from "./layout.js";
+import { lower, decode, oplen, isopTable, modeTable } from "./lower.js";
+import { computeLayout, WRAM, VRAM, CGRAM, PROBE, PROBE_FIELDS, INPUT } from "./layout.js";
 import { opcodeInfo } from "../../decode-65816.js";
 import { backendFor } from "../index.js";
 import { assembleWat } from "../assemble.js";
@@ -78,7 +78,7 @@ test("describe: LoROM header, copier header, SRAM mask", () => {
   const c = describeRom(synthRom({ copier: true }));
   assert.equal(c.copierHeader, 512);
   assert.equal(c.romSize, 0x8000);
-  assert.equal(c.sramMask, 0x7fff);     // no SRAM: the 32KB scratch window
+  assert.equal(c.sramMask, 0);          // no SRAM: snes9x SRAMMask 0 (reads byte 0, writes dropped)
   assert.equal(c.layout.regions.sram, undefined);
   assert.equal(d.layout.diagnosticRegions.sram.length, 8192);
 });
@@ -95,7 +95,7 @@ test("describe refuses coprocessor carts and names the chip", async () => {
   assert.equal(describeRom(synthRom({ chipset: 0x02 })).supported, true);
 });
 
-test("describe detects HiROM and refuses it with the reason", () => {
+test("describe detects HiROM and accepts it", () => {
   const img = new Uint8Array(0x10000).fill(0);
   const h = 0xffc0;
   for (let i = 0; i < 21; i++) img[h + i] = "HIROM SYNTH          ".charCodeAt(i);
@@ -104,8 +104,8 @@ test("describe detects HiROM and refuses it with the reason", () => {
   img[0xfffc] = 0x00; img[0xfffd] = 0x80;
   const d = describeRom(img);
   assert.equal(d.mapping, "hirom");
-  assert.equal(d.supported, false);
-  assert.match(d.refusal, /HiROM/);
+  assert.equal(d.supported, true);
+  assert.equal(d.resetVector, 0x8000);
 });
 
 test("the lowerer's opcode grid IS romdev's 65816 decoder table", () => {
@@ -148,9 +148,14 @@ test("relative branches resolve in file-offset space inside their own bank", () 
   rom[0x20] = 0x22; rom[0x21] = 0x56; rom[0x22] = 0x34; rom[0x23] = 0x82;
   const [body, jf] = lower(rom, 0x20, 4, 0, 0x8020);
   assert.deepEqual(jf, { kind: "jp", bank: 0x82, addr: 0x3456 });
-  assert.match(body, /\(i32\.const 0\)\)\(global\.set \$s/);
-  assert.match(body, /\(i32\.const 32803\)/);   // $8023
-  assert.throws(() => lower(Uint8Array.of(0x00, 0x00), 0, 2, 0, 0x8000), Unsupported);
+  // The pushed bank and return address come from the LIVE pc (the arm also
+  // runs at the $80 mirror): PB = pc >> 16, return = pc + 3.
+  assert.match(body, /\(i32\.shr_u \(global\.get \$pc\) \(i32\.const 16\)\)\)\(global\.set \$s/);
+  assert.match(body, /\(i32\.add \(global\.get \$pc\) \(i32\.const 3\)\)/);
+  // BRK lowers to the snes9x interrupt sequence through $FFE6 / $FFFE.
+  const [brk, bf] = lower(Uint8Array.of(0x00, 0x00), 0, 2, 0, 0x8000);
+  assert.equal(bf.kind, "jp_expr");
+  assert.match(brk, /i32\.const 65510/);
 });
 
 test("layout places every region clear of its neighbours and follows the ROM size", () => {
@@ -248,10 +253,27 @@ test("a synthetic cart runs: runtime M/X width, CGRAM, backdrop colour, NMI", as
   assert.equal(dv.getUint32(PROBE + PROBE_FIELDS.trapped, true), 0);
 });
 
-test("a cart that executes BRK falls to the interpreter, which traps", async () => {
-  const rom = synthRom({ code: [0x18, 0xfb, 0x00, 0x00] });
-  const { ex } = await runCart(rom, 1);
-  assert.equal(ex.dbg_trapped(), 1);
+test("BRK and COP vector, push PB/PC+2/P and clear D, as snes9x does", async () => {
+  const code = [
+    0x78, 0x18, 0xfb, 0xc2, 0x30, 0xa2, 0xf0, 0x01, 0x9a, 0xe2, 0x30, // native, S=$01F0, 8-bit
+    0xf8,                           // sed
+    0x00, 0x11,                     // brk #$11
+    0x8d, 0x10, 0x01,               // sta $0110 (A from the handler)
+    0x08, 0x68, 0x8d, 0x11, 0x01,   // P after rti (D back on)
+    0x02, 0x22,                     // cop #$22
+    0x8d, 0x12, 0x01, 0x80, 0xfe,
+  ];
+  const rom = synthRom({ code });
+  // BRK handler $8100: copy the 4 stacked bytes and its own P, return $AB.
+  rom.set([0xba, 0xbd, 0x01, 0x01, 0x8d, 0x20, 0x01, 0xbd, 0x02, 0x01, 0x8d, 0x21, 0x01, 0xbd, 0x03, 0x01, 0x8d, 0x22, 0x01,
+    0xbd, 0x04, 0x01, 0x8d, 0x23, 0x01, 0x08, 0x68, 0x8d, 0x24, 0x01, 0xa9, 0xab, 0x40], 0x100);
+  rom.set([0xa9, 0xcd, 0x40], 0x140);   // COP handler $8140
+  rom[0x7fe6] = 0x00; rom[0x7fe7] = 0x81; rom[0x7fe4] = 0x40; rom[0x7fe5] = 0x81;
+  const { mem, ex } = await runCart(rom, 8);
+  assert.equal(ex.dbg_trapped(), 0);
+  // snes9x: A $AB / P $3D / A $CD; stacked P $3D, PC $800E, PB $00; handler P $37.
+  assert.deepEqual([...mem.subarray(WRAM + 0x110, WRAM + 0x113)], [0xab, 0x3d, 0xcd]);
+  assert.deepEqual([...mem.subarray(WRAM + 0x120, WRAM + 0x125)], [0x3d, 0x0e, 0x80, 0x00, 0x37]);
 });
 
 test("options.traceEntries records the 65816 registers per ROM instruction; breakArm flips A after one", async () => {
@@ -284,4 +306,513 @@ test("options.traceEntries records the 65816 registers per ROM instruction; brea
   assert.equal(e(2, 16) >> 8, 1, "emulation flag set before xce");
   assert.equal(e(6, 16) >> 8, 0, "native mode after xce");
   assert.equal(e(6, 4) >>> 16, 0x5678, "X loaded");
+});
+
+/**
+ * 65816 code that uploads `prog` to ARAM $0200 through the IPL boot protocol,
+ * starts it, waits for $2141 == $77 and copies $2142/$2143 to $7E0010/11.
+ * The program bytes sit at ROM $8200.
+ */
+function uploadRom(prog) {
+  const len = prog.length;
+  const code = [
+    0x78, 0x18, 0xfb, 0xc2, 0x10, 0xe2, 0x20,       // sei, native, 16-bit X, 8-bit A
+    0xa9, 0xaa, 0xcd, 0x40, 0x21, 0xd0, 0xfb,       // wait $2140 == $AA
+    0xa9, 0xbb, 0xcd, 0x41, 0x21, 0xd0, 0xfb,       // wait $2141 == $BB
+    0xa2, 0x00, 0x02, 0x8e, 0x42, 0x21,             // destination $0200
+    0xa9, 0x01, 0x8d, 0x41, 0x21, 0xa9, 0xcc, 0x8d, 0x40, 0x21,
+    0xcd, 0x40, 0x21, 0xd0, 0xfb,                   // wait echo $CC
+    0xa2, 0x00, 0x00,
+    0xbd, 0x00, 0x82, 0x8d, 0x41, 0x21, 0x8a, 0x8d, 0x40, 0x21,   // lda prog,x / sta $2141 / txa / sta $2140
+    0xcd, 0x40, 0x21, 0xd0, 0xfb,
+    0xe8, 0xe0, len & 0xff, len >> 8, 0xd0, 0xeb,   // inx / cpx #len / bne
+    0xa2, 0x00, 0x02, 0x8e, 0x42, 0x21, 0x9c, 0x41, 0x21,       // entry $0200
+    0xa9, (len + 1) & 0xff, 0x8d, 0x40, 0x21,
+    0xa9, 0x77, 0xcd, 0x41, 0x21, 0xd0, 0xfb,       // wait for the program's $77
+    0xad, 0x42, 0x21, 0x8f, 0x10, 0x00, 0x7e,
+    0xad, 0x43, 0x21, 0x8f, 0x11, 0x00, 0x7e,
+    0x80, 0xfe,
+  ];
+  const rom = synthRom({ code });
+  rom.set(prog, 0x200);
+  return rom;
+}
+
+test("APU: the uploaded SPC700 program runs and answers through the ports", async () => {
+  // mov a,#$12 / mov y,#$34 / mul ya / mov $f6,a / mov $f7,y / mov $f5,#$77 / bra *
+  const prog = [0xe8, 0x12, 0x8d, 0x34, 0xcf, 0xc4, 0xf6, 0xcb, 0xf7, 0x8f, 0x77, 0xf5, 0x2f, 0xfe];
+  const rom = uploadRom(prog);
+  const { mem, ex } = await runCart(rom, 10);
+  assert.equal(ex.dbg_trapped(), 0);
+  assert.deepEqual([mem[WRAM + 0x10], mem[WRAM + 0x11]], [0xa8, 0x03], "$12 * $34 = $03A8 computed by the SPC700");
+  const lay = describeRom(rom).memory;
+  assert.deepEqual([...mem.subarray(lay.ARAM + 0x200, lay.ARAM + 0x200 + prog.length)], prog, "the IPL copied the program");
+  assert.equal(ex.dbg_spcpc(), 0x20c, "the SPC700 parks on its bra *");
+});
+
+test("APU: S-DSP voice, envelope and echo writes match snes9x's ARAM byte for byte", async () => {
+  // A table-driven SPC program: page-0 writes build a one-block looping BRR
+  // sample and its DIR entry, then DSP register writes through $F2/$F3 key
+  // voice 0 on with ADSR and echo into $8000 (EDL 1). After a delay loop it
+  // reads ENVX, OUTX and ENDX back through $F3.
+  const pairs = [[0x00, 0x40], [0x01, 0x00], [0x02, 0x40], [0x03, 0x00],
+    [0x40, 0xb3], [0x41, 0x77], [0x42, 0x77], [0x43, 0x77], [0x44, 0x77], [0x45, 0x99], [0x46, 0x99], [0x47, 0x99], [0x48, 0x99]];
+  const dsp = [[0x5d, 0x00], [0x6d, 0x80], [0x7d, 0x01], [0x6c, 0x00], [0x0d, 0x40], [0x4d, 0x01], [0x0c, 0x7f], [0x1c, 0x7f],
+    [0x2c, 0x40], [0x3c, 0x40], [0x0f, 0x7f], [0x00, 0x7f], [0x01, 0x60], [0x02, 0x00], [0x03, 0x10], [0x04, 0x00],
+    [0x05, 0x8f], [0x06, 0xe0], [0x4c, 0x01]];
+  for (const [r, v] of dsp) pairs.push([0xf2, r], [0xf3, v]);
+  const tab = pairs.flat();
+  const code = [
+    0xcd, 0x00, 0xf5, 0x80, 0x02, 0xfd, 0x3d, 0xf5, 0x80, 0x02, 0xd6, 0x00, 0x00, 0x3d, 0xc8, tab.length, 0xd0, 0xf0,
+    0xcd, 0x00, 0x8d, 0x00, 0xfe, 0xfe, 0x1d, 0xd0, 0xfb,
+    0x8f, 0x08, 0xf2, 0xe4, 0xf3, 0xc4, 0xf6, 0x8f, 0x09, 0xf2, 0xe4, 0xf3, 0xc4, 0xf7,
+    0x8f, 0x7c, 0xf2, 0xe4, 0xf3, 0xc4, 0x20, 0x8f, 0x77, 0xf5, 0x2f, 0xfe,
+  ];
+  const prog = new Array(0x80 + tab.length).fill(0);
+  prog.splice(0, code.length, ...code);
+  prog.splice(0x80, tab.length, ...tab);
+  const rom = uploadRom(prog);
+  // snes9x (romdev's pinned core) after loadMedia + 60 frames: ENVX $7F,
+  // OUTX $C7, ENDX bit 0, 2016 nonzero echo bytes, and this ARAM sha1. The
+  // cart is compared 65 frames in (the reference's 5 settle frames).
+  const { mem, ex } = await runCart(rom, 65);
+  assert.equal(ex.dbg_trapped(), 0);
+  const lay = describeRom(rom).memory;
+  const aram = mem.subarray(lay.ARAM, lay.ARAM + 0x10000);
+  assert.deepEqual([mem[WRAM + 0x10], mem[WRAM + 0x11], aram[0x20]], [0x7f, 0xc7, 0x01]);
+  assert.equal(aram.subarray(0x8000, 0x8800).filter((x) => x).length, 2016, "echo buffer written");
+  const { createHash } = await import("node:crypto");
+  assert.equal(createHash("sha1").update(aram).digest("hex"), "a66773a52eceb7452859063b3197e11334e4151e");
+  // The DSP's output reaches the wasmcart host: a 32040 Hz int16 stereo ring.
+  const info = new Uint32Array(mem.buffer, ex.wc_get_info(), 18);
+  assert.equal(info[13], 32040);
+  assert.ok(info[4] && info[5] && info[6], "audioPtr, audioCap, audioWritePtr");
+  const ring = new Int16Array(mem.buffer, info[4], info[5] * 2);
+  assert.ok(ring.some((v) => v !== 0), "the keyed-on voice is audible");
+});
+
+test("power-on: work RAM reads $55 before it is written, as snes9x fills it", async () => {
+  // sei / clc xce / rep #$30 / tsc / sta $7E0020 / sep #$20 / lda $7E1000 / sta $7E0010 / bra *
+  const code = [0x78, 0x18, 0xfb, 0xc2, 0x30, 0x3b, 0x8f, 0x20, 0x00, 0x7e, 0xe2, 0x20, 0xaf, 0x00, 0x10, 0x7e, 0x8f, 0x10, 0x00, 0x7e, 0x80, 0xfe];
+  const { mem } = await runCart(synthRom({ code }), 1);
+  // snes9x after loadMedia: $7E0010 = $55, S = $01FF.
+  assert.equal(mem[WRAM + 0x10], 0x55);
+  assert.equal(mem[WRAM + 0x20] | (mem[WRAM + 0x21] << 8), 0x01ff);
+  assert.equal(mem[WRAM + 0x1ffff], 0x55);
+});
+
+test("controllers: automatic read into $4218/$4219 and the serial $4016 port, pads read by position", async () => {
+  const code = [
+    0x78, 0x18, 0xfb, 0xe2, 0x30,                 // sei, native, 8-bit A/X/Y
+    0xa9, 0x01, 0x8d, 0x00, 0x42,                 // $4200 = $01: auto joypad read on
+    0xad, 0x19, 0x42, 0x8d, 0x11, 0x00,           // L: lda $4219 / sta $0011
+    0xad, 0x18, 0x42, 0x8d, 0x10, 0x00,           //    lda $4218 / sta $0010
+    0xa9, 0x01, 0x8d, 0x16, 0x40, 0x9c, 0x16, 0x40, // latch pulse on $4016
+    0xa2, 0x00,                                   //    ldx #0
+    0xad, 0x16, 0x40, 0x9d, 0x20, 0x00, 0xe8, 0xe0, 0x12, 0xd0, 0xf5, // M: 18 serial reads to $0020,x
+    0x80, 0xdd,                                   //    bra L
+  ];
+  const rom = synthRom({ code });
+  const { bytes } = await assembleWat(emitWat(rom));
+  const { instance } = await WebAssembly.instantiate(bytes, {});
+  const ex = instance.exports;
+  ex.wc_init();
+  const mem = new Uint8Array(ex.memory.buffer);
+  const dv = new DataView(ex.memory.buffer);
+  // wasmcart A (south) + START + RIGHT + LEFT: SNES B, Start, Right (Left dropped).
+  for (let f = 0; f < 3; f++) { dv.setUint16(INPUT, 1 | 64 | 2048 | 1024, true); ex.wc_render(); }
+  assert.deepEqual([mem[WRAM + 0x10], mem[WRAM + 0x11]], [0x00, 0x91], "JOY1 = $9100 (B, Start, Right)");
+  // Bits 7-2 are open bus: the $40 of the \`lda $4016\` operand (snes9x reads $40/$41).
+  assert.deepEqual([...mem.subarray(WRAM + 0x20, WRAM + 0x32)], [1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1].map((b) => 0x40 | b));
+  // wasmcart B (east) is SNES A: JOY1L bit 7.
+  for (let f = 0; f < 2; f++) { dv.setUint16(INPUT, 2, true); ex.wc_render(); }
+  assert.deepEqual([mem[WRAM + 0x10], mem[WRAM + 0x11]], [0x80, 0x00]);
+});
+
+test("HDMA: a $420C write takes effect mid-frame (snes9x PPU.HDMA = Byte & ~HDMAEnded)", async () => {
+  // Channel 0 streams a repeat-mode table into the WRAM port ($2180), one
+  // byte per line, from the frame after it is enabled in vblank. A V-IRQ at
+  // line 100 turns HDMA off on its second firing. snes9x: exactly bytes
+  // 1..100 land at $7E2000 (lines 0-99), the rest of the buffer is untouched.
+  const code = [
+    0x78, 0x18, 0xfb, 0xe2, 0x30,
+    0x9c, 0x81, 0x21, 0xa9, 0x20, 0x8d, 0x82, 0x21, 0x9c, 0x83, 0x21,
+    0x9c, 0x00, 0x43, 0xa9, 0x80, 0x8d, 0x01, 0x43,
+    0x9c, 0x02, 0x43, 0xa9, 0x84, 0x8d, 0x03, 0x43, 0x9c, 0x04, 0x43,
+    0xa9, 0x64, 0x8d, 0x09, 0x42, 0x9c, 0x0a, 0x42, 0xa9, 0x20, 0x8d, 0x00, 0x42,
+    0x64, 0x00, 0xad, 0x12, 0x42, 0x10, 0xfb,
+    0xa9, 0x01, 0x8d, 0x0c, 0x42, 0x58, 0x80, 0xfe,
+  ];
+  const rom = synthRom({ code });
+  rom.set([0xad, 0x11, 0x42, 0xe6, 0x00, 0xa5, 0x00, 0xc9, 0x02, 0xd0, 0x03, 0x9c, 0x0c, 0x42, 0x40], 0x100);
+  rom.set([0xff, ...Array.from({ length: 127 }, (_, i) => i + 1), 0xff, ...Array.from({ length: 127 }, (_, i) => 128 + i), 0x00], 0x400);
+  rom[0x7fee] = 0x00; rom[0x7fef] = 0x81;
+  const { mem } = await runCart(rom, 11);
+  assert.deepEqual([...mem.subarray(WRAM + 0x2000, WRAM + 0x2064)], Array.from({ length: 100 }, (_, i) => i + 1));
+  assert.equal(mem[WRAM + 0x2064], 0x55, "nothing after line 99");
+});
+
+test("decimal mode: ADC/SBC 8- and 16-bit results and flags match snes9x exhaustively", async () => {
+  // 8-bit: every (A, operand) pair with C = bit 0 of A (X = operand<<8 | A,
+  // 32768 pairs); 16-bit: 16384 A values against A ^ $9696. Results land at
+  // $7E8000+X and P at $7F0000+X; the sha1 of $7E8000-$7FFFFF is snes9x's
+  // after loadMedia + 65 frames (the cart runs 70).
+  const rom8 = (op) => synthRom({ code: [
+    0x78, 0x18, 0xfb, 0xc2, 0x10, 0xe2, 0x20, 0xf8, 0xa2, 0x00, 0x00,
+    0x86, 0x00, 0xa5, 0x00, 0x4a, 0xa5, 0x00, op, 0x01,
+    0x9f, 0x00, 0x80, 0x7e, 0x08, 0x68, 0x9f, 0x00, 0x00, 0x7f,
+    0xe8, 0xe0, 0x00, 0x80, 0xd0, 0xe7, 0xd8, 0x80, 0xfe] });
+  const rom16 = (op) => synthRom({ code: [
+    0x78, 0x18, 0xfb, 0xc2, 0x30, 0xf8, 0xa2, 0x00, 0x00,
+    0x8a, 0x49, 0x96, 0x96, 0x85, 0x00, 0x8a, 0x4a, 0x8a, op, 0x00,
+    0x9f, 0x00, 0x80, 0x7e, 0x08, 0xe2, 0x20, 0x68, 0x9f, 0x00, 0x00, 0x7f, 0xc2, 0x20,
+    0xe8, 0xe8, 0xe0, 0x00, 0x80, 0xd0, 0xe0, 0xd8, 0x80, 0xfe] });
+  const { createHash } = await import("node:crypto");
+  const cases = [
+    [rom8(0x65), "0aacba4bc87ef5b7e31d42c5827f1c52c9781580"],
+    [rom8(0xe5), "feb5dd71aaf774c8acdfa3f70ecd5e8a3996579e"],
+    [rom16(0x65), "3b4a0db8643962c5aab9916bdd1fd4b5176ef63f"],
+    [rom16(0xe5), "d0a40d92ae4beb4cbfb704e58023bccfefbad035"],
+  ];
+  for (const [rom, sha] of cases) {
+    const { mem } = await runCart(rom, 70);
+    assert.equal(createHash("sha1").update(mem.subarray(WRAM + 0x8000, WRAM + 0x18000)).digest("hex"), sha);
+  }
+});
+
+test("bus: open bus, the LoROM holes and mirrors, SRAM rules and the running program bank match snes9x", async () => {
+  // Runs from the $80 FastROM mirror; every result is stored at $0110+.
+  let n = 0;
+  const st = () => [0x8d, (0x10 + n++) & 0xff, 0x01];
+  const code = [
+    0x78, 0x18, 0xfb, 0xe2, 0x30, 0x5c, 0x0b, 0x80, 0x80, 0xea, 0xea,
+    0x4b, 0x68, ...st(),             // phk: $80, not the ROM offset's bank $00
+    0x22, 0x40, 0x81, 0x80,          // jsl $808140: the pushed bank is $80
+    0xad, 0x00, 0x20, ...st(),       // lda $2000: open bus = operand high byte $20
+    0xad, 0x00, 0x40, ...st(),       // lda $4000: $40
+    0xad, 0x00, 0x60, ...st(),       // lda $6000: LoROM hole, $60
+    0xad, 0x10, 0x42, ...st(),       // lda $4210: NMI flag | $02 | open bus bits 6-4
+    0xad, 0x16, 0x40, ...st(),       // lda $4016: open bus $40 | pad bit
+    0xad, 0x81, 0x21, ...st(),       // lda $2181: write-only, CPU open bus $21
+    0xad, 0x04, 0x21, ...st(),       // lda $2104: PPU1 open bus
+    0xaf, 0x00, 0x00, 0x40, ...st(), // lda $400000: banks $40+ map ROM in both halves
+    0xaf, 0x05, 0x80, 0x40, ...st(), // lda $408005
+    0xaf, 0x00, 0x00, 0x70, ...st(), // lda $700000: no SRAM, byte 0 of the $60-filled buffer
+    0xa9, 0x12, 0x8f, 0x00, 0x00, 0x70, 0xaf, 0x00, 0x00, 0x70, ...st(), // that write is dropped
+    0xaf, 0x00, 0x80, 0x71, ...st(), // lda $718000: small carts map SRAM up to $FFFF
+    0xc2, 0x20, 0xad, 0xff, 0x1f, 0xe2, 0x20, 0xeb, ...st(), // 16-bit lda $1FFF: high byte from open bus
+    0x80, 0xfe,
+  ];
+  const rom = synthRom({ code });
+  rom.set([0xba, 0xbd, 0x01, 0x01, 0x8d, 0x20, 0x01, 0xbd, 0x02, 0x01, 0x8d, 0x21, 0x01, 0xbd, 0x03, 0x01, 0x8d, 0x22, 0x01, 0x6b], 0x140);
+  const { mem } = await runCart(rom, 8);
+  // snes9x after loadMedia + 3 frames
+  assert.deepEqual([...mem.subarray(WRAM + 0x110, WRAM + 0x11e)],
+    [0x80, 0x20, 0x40, 0x60, 0x42, 0x40, 0x21, 0x00, 0x78, 0x5c, 0x60, 0x60, 0x60, 0x55]);
+  assert.deepEqual([...mem.subarray(WRAM + 0x120, WRAM + 0x123)], [0x13, 0x80, 0x80], "jsl frame: return $8012+1-1, bank $80");
+});
+
+test("HiROM: 64KB banks, $40/$C0/$00/$80 mirrors, $20:6000 SRAM, write-protected ROM, running bank", async () => {
+  const img = new Uint8Array(0x20000).fill(0xea);
+  let n = 0;
+  const st = () => [0x8d, (0x10 + n++) & 0xff, 0x01];
+  img.set([0x78, 0x18, 0xfb, 0xe2, 0x30, 0x5c, 0x10, 0x80, 0xc0], 0x8000);   // jml $C08010
+  img.set([
+    0x4b, 0x68, ...st(),
+    0xaf, 0x00, 0x00, 0xc1, ...st(), 0xaf, 0x05, 0x00, 0x41, ...st(),
+    0xaf, 0x02, 0x80, 0x01, ...st(), 0xaf, 0x02, 0x80, 0x81, ...st(),
+    0xa9, 0x5a, 0x8f, 0x00, 0x60, 0x20, 0xaf, 0x00, 0x60, 0x30, ...st(),
+    0xaf, 0x00, 0x60, 0x00, ...st(),
+    0xa9, 0x99, 0x8f, 0x00, 0x00, 0xc1, 0xaf, 0x00, 0x00, 0xc1, ...st(),
+    0x22, 0x00, 0x90, 0xc1, 0x20, 0x00, 0xa0, 0x80, 0xfe,
+  ], 0x8010);
+  img.set([0x4b, 0x68, 0x8d, 0x30, 0x01, 0xba, 0xbd, 0x03, 0x01, 0x8d, 0x31, 0x01, 0x6b], 0x19000);
+  img.set([0x4b, 0x68, 0x8d, 0x32, 0x01, 0x60], 0xa000);
+  img.set([0x11, 0x22, 0x33, 0x44, 0x55, 0x66], 0x10000);
+  img.set([0x77, 0x88, 0x99], 0x18000);
+  const h = 0xffc0;
+  for (let i = 0; i < 21; i++) img[h + i] = "HIROM SYNTH TEST     ".charCodeAt(i);
+  img[h + 0x15] = 0x21; img[h + 0x16] = 0x02; img[h + 0x17] = 0x07; img[h + 0x18] = 0x01; img[h + 0x19] = 1;
+  img[0xfffc] = 0x00; img[0xfffd] = 0x80; img[0xffea] = 0x00; img[0xffeb] = 0x80; img[0xffee] = 0x00; img[0xffef] = 0x80;
+  let sum = 0; for (const b of img) sum = (sum + b) & 0xffff;
+  img[h + 0x1c] = (sum ^ 0xffff) & 0xff; img[h + 0x1d] = (sum ^ 0xffff) >> 8; img[h + 0x1e] = sum & 0xff; img[h + 0x1f] = sum >> 8;
+  const d = describeRom(img);
+  assert.equal(d.mapping, "hirom");
+  assert.equal(d.sramMask, 0x7ff);
+  const { mem, ex } = await runCart(img, 8);
+  assert.equal(ex.dbg_trapped(), 0);
+  // snes9x after loadMedia + 3 frames
+  assert.deepEqual([...mem.subarray(WRAM + 0x110, WRAM + 0x118)], [0xc0, 0x11, 0x66, 0x99, 0x99, 0x5a, 0x00, 0x11]);
+  assert.deepEqual([...mem.subarray(WRAM + 0x130, WRAM + 0x133)], [0xc1, 0xc0, 0xc0]);
+});
+
+test("PPU status: $2137 latch, OPVCT/OPHCT flip-flops, STAT78 latch flag and field, STAT77 range over", async () => {
+  let n = 0;
+  const st = () => [0x8d, (0x10 + n++) & 0xff, 0x01];
+  const code = [
+    0x78, 0x18, 0xfb, 0xe2, 0x30,
+    0xad, 0x12, 0x42, 0x30, 0xfb, 0xad, 0x12, 0x42, 0x10, 0xfb,   // to the start of vblank
+    0xad, 0x37, 0x21,
+    0xad, 0x3f, 0x21, ...st(), 0xad, 0x3d, 0x21, ...st(), 0xad, 0x3d, 0x21, ...st(),
+    0xad, 0x3f, 0x21, ...st(), 0xad, 0x3c, 0x21, ...st(), 0xad, 0x3c, 0x21, ...st(),
+    0xad, 0x3e, 0x21, ...st(),
+    0xa2, 0x00,                                                    // then STAT78 once per frame
+    0xad, 0x12, 0x42, 0x30, 0xfb, 0xad, 0x12, 0x42, 0x10, 0xfb, 0xad, 0x3f, 0x21, 0x9d, 0x20, 0x01,
+    0xe8, 0xe0, 0x08, 0xd0, 0xeb, 0x80, 0xfe,
+  ];
+  const { mem } = await runCart(synthRom({ code }), 14);
+  const r = [...mem.subarray(WRAM + 0x110, WRAM + 0x117)];
+  // snes9x: STAT78 $43 (latched), V = 225, high byte $E0 (PPU2 open bus
+  // $E1 & $FE), STAT78 $23 (flag cleared, bit 5 from open bus), STAT77 $41
+  // (the all-zero OAM puts 128 sprites on row 0: range over).
+  assert.deepEqual([r[0], r[1], r[2], r[3], r[6]], [0x43, 0xe1, 0xe0, 0x23, 0x41]);
+  assert.equal(r[5] & 0xfe, r[4] & 0xfe, "OPHCT high byte carries PPU2 open bus");
+  assert.equal(r[4], 0x12, "H latch: dot 18, as snes9x");
+  const f = [...mem.subarray(WRAM + 0x120, WRAM + 0x128)];
+  assert.ok(f.every((v, i) => (v & 0x7f) === 0x03 && (i === 0 || (v ^ f[i - 1]) === 0x80)), `field bit flips every frame: ${f}`);
+});
+
+test("CPU timing: per-access memory speeds, internal cycles and DRAM refresh give snes9x's instructions per frame", async () => {
+  // Count `inx / lda $4210 / bpl` iterations over one frame: an opcode
+  // fetch and two operand fetches at 8 (SlowROM), a $4210 read at 6, an
+  // internal cycle each for inx and the taken branch, less 40 clocks of
+  // DRAM refresh per line. snes9x counts 5256.
+  const code = [0x78, 0x18, 0xfb, 0xc2, 0x10, 0xe2, 0x20, 0xa2, 0x00, 0x00,
+    0xad, 0x10, 0x42, 0xad, 0x10, 0x42, 0x10, 0xfb,     // clear, then wait for the NMI flag
+    0xad, 0x10, 0x42,                                   // clear it
+    0xe8, 0xad, 0x10, 0x42, 0x10, 0xfa,                 // L: inx / lda $4210 / bpl L
+    0x8e, 0x20, 0x01, 0x80, 0xfe];
+  const { mem } = await runCart(synthRom({ code }), 8);
+  const n = mem[WRAM + 0x120] | (mem[WRAM + 0x121] << 8);
+  assert.equal(n, 5256, "loop iterations per frame, as snes9x");
+});
+
+test("DMA: WRAM to the WRAM port $2180 is dropped and leaves the port address alone (snes9x inWRAM_DMA)", async () => {
+  const code = [
+    0x78, 0x18, 0xfb, 0xc2, 0x10, 0xe2, 0x20,
+    0xa9, 0x77, 0x8f, 0x00, 0x10, 0x7e, 0x8f, 0x01, 0x10, 0x7e,
+    0x9c, 0x81, 0x21, 0xa9, 0x20, 0x8d, 0x82, 0x21, 0x9c, 0x83, 0x21,
+    0x9c, 0x00, 0x43, 0xa9, 0x80, 0x8d, 0x01, 0x43,
+    0xa2, 0x00, 0x10, 0x8e, 0x02, 0x43, 0xa9, 0x7e, 0x8d, 0x04, 0x43,
+    0xa2, 0x02, 0x00, 0x8e, 0x05, 0x43, 0xa9, 0x01, 0x8d, 0x0b, 0x42,   // $7E1000 -> $2180: dropped
+    0xa2, 0x00, 0x81, 0x8e, 0x02, 0x43, 0x9c, 0x04, 0x43,
+    0xa2, 0x02, 0x00, 0x8e, 0x05, 0x43, 0xa9, 0x01, 0x8d, 0x0b, 0x42,   // $008100 -> $2180: lands at $2000
+    0x80, 0xfe,
+  ];
+  const rom = synthRom({ code });
+  rom.set([0x11, 0x22], 0x100);
+  const { mem } = await runCart(rom, 3);
+  assert.deepEqual([...mem.subarray(WRAM + 0x2000, WRAM + 0x2003)], [0x11, 0x22, 0x55]);
+});
+
+test("code in RAM: a store does not read its target first (the WRAM port address does not move)", async () => {
+  // RAM routine at $7E1000: lda #$AA / sta $2180 / sta $2180 / rtl
+  const routine = [0xa9, 0xaa, 0x8d, 0x80, 0x21, 0x8d, 0x80, 0x21, 0x6b];
+  const code = [0x78, 0x18, 0xfb, 0xe2, 0x30,
+    0x9c, 0x81, 0x21, 0xa9, 0x30, 0x8d, 0x82, 0x21, 0x9c, 0x83, 0x21];   // WRAM port -> $003000
+  routine.forEach((b, i) => code.push(0xa9, b, 0x8f, i & 0xff, 0x10, 0x7e));   // copy the routine
+  code.push(0x22, 0x00, 0x10, 0x7e, 0x80, 0xfe);                           // jsl $7E1000 / bra *
+  const { mem, ex } = await runCart(synthRom({ code }), 3);
+  assert.equal(ex.dbg_trapped(), 0);
+  assert.deepEqual([...mem.subarray(WRAM + 0x3000, WRAM + 0x3003)], [0xaa, 0xaa, 0x55]);
+});
+
+test("DMA: events happen inside a transfer (an HDMA on its channel ends it; the frame's audio stops at vblank)", async () => {
+  const code = [
+    0x78, 0x18, 0xfb, 0xc2, 0x10, 0xe2, 0x20,
+    0x9c, 0x10, 0x43, 0xa9, 0x26, 0x8d, 0x11, 0x43,             // HDMA ch1: mode 0 -> $2126
+    0xa2, 0x00, 0x81, 0x8e, 0x12, 0x43, 0x9c, 0x14, 0x43,       // table $00:8100
+    0xa9, 0x02, 0x8d, 0x0c, 0x42,                               // $420C = ch1
+    0x2c, 0x12, 0x42, 0x10, 0xfb, 0x2c, 0x12, 0x42, 0x30, 0xfb, // wait for vblank, then its end
+    0xa9, 0x80, 0x8d, 0x15, 0x21, 0x9c, 0x16, 0x21, 0x9c, 0x17, 0x21,
+    0xa9, 0x01, 0x8d, 0x10, 0x43, 0xa9, 0x18, 0x8d, 0x11, 0x43, // ch1 DMA mode 1 -> $2118
+    0xa2, 0x00, 0x80, 0x8e, 0x12, 0x43, 0x9c, 0x14, 0x43,
+    0xa2, 0x00, 0x80, 0x8e, 0x15, 0x43, 0xa9, 0x02, 0x8d, 0x0b, 0x42, // 32KB: the line's HDMA on ch1 ends it
+    0xae, 0x12, 0x43, 0x8e, 0x00, 0x10, 0xae, 0x15, 0x43, 0x8e, 0x02, 0x10,
+    0xad, 0x37, 0x21, 0xad, 0x3d, 0x21, 0x8d, 0x04, 0x10, 0xad, 0x3d, 0x21, 0x8d, 0x05, 0x10,
+    0xa9, 0x01, 0x8d, 0x00, 0x43, 0xa9, 0x18, 0x8d, 0x01, 0x43, // ch0 DMA mode 1 -> $2118
+    0xa2, 0x00, 0x80, 0x8e, 0x02, 0x43, 0x9c, 0x04, 0x43,
+    0xa2, 0x00, 0x00, 0x8e, 0x05, 0x43, 0xa9, 0x01, 0x8d, 0x0b, 0x42, // 64KB, across the frame end
+    0xae, 0x02, 0x43, 0x8e, 0x06, 0x10, 0xae, 0x05, 0x43, 0x8e, 0x08, 0x10,
+    0xad, 0x37, 0x21, 0xad, 0x3d, 0x21, 0x8d, 0x0a, 0x10, 0xad, 0x3d, 0x21, 0x8d, 0x0b, 0x10,
+    0x80, 0xfe,
+  ];
+  const rom = synthRom({ code });
+  rom.set([0x7f, 0x11, 0x7f, 0x22, 0x7f, 0x33, 0x00], 0x100);
+  const { bytes } = await assembleWat(emitWat(rom));
+  const { instance } = await WebAssembly.instantiate(bytes, {});
+  const ex = instance.exports;
+  ex.wc_init();
+  const counts = [];
+  let last = 0;
+  for (let i = 0; i < 6; i++) {
+    ex.wc_render();
+    const dv = new DataView(ex.memory.buffer);
+    const w = dv.getUint32(dv.getUint32(ex.wc_get_info() + 24, true), true);
+    counts.push((w - last + 4096) % 4096);
+    last = w;
+  }
+  // snes9x: ch1 moved $4B bytes before line 0's HDMA ended it ($4312 = $804B,
+  // $4315 = $7FB5 left); the 64KB ch0 transfer ends on line 143 of the next
+  // frame (the values read back from snes9x's WRAM after the same code).
+  const mem = new Uint8Array(ex.memory.buffer);
+  assert.deepEqual([...mem.subarray(WRAM + 0x1000, WRAM + 0x100c)],
+    [0x4b, 0x80, 0xb5, 0x7f, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x8f, 0x8e]);
+  // The frame the transfer runs across still hands over only the samples
+  // made up to its vblank (S9xSyncSpeed at V=225): one frame's worth.
+  for (const n of counts.slice(1)) assert.ok(n === 533 || n === 534, `per-frame samples ${counts}`);
+});
+
+test("16-bit immediates: the operand fetch that crosses a line end sets the APU catch-up point, in ROM and in RAM", async () => {
+  // snes9x Immediate16 is one AddCycles(MemSpeedx2): a line end crossed by
+  // the opcode or operand fetch is processed after both operand bytes. The
+  // per-frame sample counts (set by the APU catch-up at the vblank line end)
+  // and the RAM loop's iteration count are snes9x's.
+  const loop = [0x69, 0x01, 0x00, 0x69, 0x01, 0x00, 0xa9, 0x34, 0x12, 0xa2, 0x00, 0x10, 0xe6, 0x10];
+  const code = [0x78, 0x18, 0xfb, 0xc2, 0x30, 0xe2, 0x20];
+  [...loop, 0x80, 0x100 - (loop.length + 2)].forEach((b, i) => code.push(0xa9, b, 0x8f, i & 0xff, 0x20, 0x7e));
+  code.push(0xc2, 0x20);
+  const top = code.length;
+  code.push(...loop, 0xa5, 0x10, 0xc9, 0x00, 0x40, 0x90);
+  code.push(0x100 - (code.length - top + 1));
+  code.push(0x64, 0x10, 0x5c, 0x00, 0x20, 0x7e);   // stz $10 / jml $7E2000
+  const { bytes } = await assembleWat(emitWat(synthRom({ code })));
+  const { instance } = await WebAssembly.instantiate(bytes, {});
+  const ex = instance.exports;
+  ex.wc_init();
+  const counts = [];
+  let last = 0;
+  for (let f = 0; f < 155; f++) {
+    ex.wc_render();
+    const dv = new DataView(ex.memory.buffer);
+    const w = dv.getUint32(dv.getUint32(ex.wc_get_info() + 24, true), true);
+    counts.push((w - last + 4096) % 4096);
+    last = w;
+    // snes9x's $10 after 40 frames (cart frame 45)
+    if (f === 44) assert.equal(new DataView(ex.memory.buffer).getUint16(WRAM + 0x10, true), 0x615e);
+  }
+  // snes9x frames 1-150 (cart frames 6-155): 533 samples, 534 at these.
+  const at534 = new Set([4, 12, 20, 28, 37, 45, 53, 60, 70, 77, 85, 93, 102, 110, 118, 126, 135, 143]);
+  assert.deepEqual(counts.slice(5), Array.from({ length: 150 }, (_, i) => (at534.has(i) ? 534 : 533)));
+});
+
+test("an event inside an instruction happens at snes9x's next AddCycles: fetches, TWO_CYCLES chunks, trailing internal cycles", async () => {
+  // Where snes9x processes an event (here the vblank line end, whose
+  // position is where the APU catches up) that falls inside each
+  // instruction of this loop: after the operand bytes (one AddCycles), after
+  // each internal-cycle AddCycles (PLx/RTS/RTL/XBA add TWO_CYCLES at once,
+  // RTS's last cycle and MVN's two come after the accesses), after each
+  // memory access (a stack or WRAM word is one access). Offsets are master
+  // clocks from the instruction start, SlowROM code, WRAM data.
+  const code = [
+    0x78, 0x18, 0xfb, 0xc2, 0x10, 0xe2, 0x20, 0xa9, 0x0f, 0x8d, 0x00, 0x21,
+    0x48, 0x68, 0x20, 0x40, 0x80, 0xeb, 0xeb, 0x8b, 0xab, 0x0b, 0x2b, 0x22, 0x41, 0x80, 0x00,
+    0xc2, 0x20, 0xa9, 0x03, 0x00, 0xa2, 0x00, 0x10, 0xa0, 0x00, 0x11,
+    0x54, 0x7e, 0x7e, 0xe2, 0x20, 0xee, 0x00, 0x12, 0x80, 0xdc,
+  ];
+  const rom = synthRom({ code });
+  rom.set([0x60, 0x6b], 0x40);
+  const points = {
+    0x800c: [14, 22], 0x800d: [20, 28], 0x800e: [24, 30, 46], 0x8011: [20], 0x8012: [20],
+    0x8013: [14, 22], 0x8014: [20, 28], 0x8015: [14, 30], 0x8016: [20, 36], 0x8017: [32, 38, 46, 62],
+    0x801b: [16, 22], 0x801d: [24], 0x8020: [24], 0x8023: [24], 0x8026: [16, 24, 32, 40, 52],
+    0x8029: [16, 22], 0x802b: [24, 32, 38, 46], 0x802e: [16, 22], 0x8040: [20, 36, 42], 0x8041: [20, 36, 44],
+  };
+  const { bytes } = await assembleWat(emitWat(rom));
+  const { instance } = await WebAssembly.instantiate(bytes, {});
+  const ex = instance.exports;
+  ex.wc_init();
+  const seen = new Set();
+  for (let f = 0; f < 400; f++) {
+    ex.wc_render();
+    if (f < 2) continue;
+    const dv = new DataView(ex.memory.buffer);
+    const p = dv.getInt32(PROBE + PROBE_FIELDS.vblankpos, true);
+    const st = dv.getInt32(PROBE + PROBE_FIELDS.vblankistart, true);
+    const pc = dv.getUint32(PROBE + PROBE_FIELDS.vblankpc, true) & 0xffff;
+    const pts = points[pc];
+    assert.ok(pts, `line end inside $${pc.toString(16)}`);
+    const want = st + pts.find((o) => st + o >= 1364);
+    assert.equal(p, want, `frame ${f}: $${pc.toString(16)} from ${st}, line end at +${1364 - st}`);
+    seen.add(pc);
+  }
+  assert.ok(seen.size >= 12, `covered ${seen.size} instructions`);
+});
+
+test("an interrupt's entry cycles are one AddCycles: a line end they cross happens before the pushes", async () => {
+  // H+V IRQ at V 224, HTIME 333 (HC 1350): taken at the first boundary at
+  // or past it, and S9xOpcode_IRQ's AddCycles(MemSpeed + ONE_CYCLE) carries
+  // the clock over the line end at 1364, which is processed right there.
+  const code = [
+    0x78, 0x18, 0xfb, 0xc2, 0x10, 0xe2, 0x20,
+    0xa9, 0xe0, 0x8d, 0x09, 0x42, 0x9c, 0x0a, 0x42,   // VTIME 224
+    0xa9, 0x4d, 0x8d, 0x07, 0x42, 0xa9, 0x01, 0x8d, 0x08, 0x42, // HTIME 333
+    0xa9, 0x30, 0x8d, 0x00, 0x42, 0x58,               // H+V IRQ on, cli
+    0xea, 0xea, 0xea, 0x80, 0xfb,                     // nop loop @ $801F
+  ];
+  const rom = synthRom({ code });
+  rom.set([0xad, 0x11, 0x42, 0x40], 0x100);           // lda $4211 / rti
+  rom[0x7fee] = 0x00; rom[0x7fef] = 0x81;
+  const len = { 0x801f: 14, 0x8020: 14, 0x8021: 14, 0x8022: 22 };
+  const { bytes } = await assembleWat(emitWat(rom));
+  const { instance } = await WebAssembly.instantiate(bytes, {});
+  const ex = instance.exports;
+  ex.wc_init();
+  let checked = 0;
+  for (let f = 0; f < 60; f++) {
+    ex.wc_render();
+    if (f < 2) continue;
+    const dv = new DataView(ex.memory.buffer);
+    const p = dv.getInt32(PROBE + PROBE_FIELDS.vblankpos, true);
+    const st = dv.getInt32(PROBE + PROBE_FIELDS.vblankistart, true);
+    const pc = dv.getUint32(PROBE + PROBE_FIELDS.vblankpc, true) & 0xffff;
+    assert.ok(len[pc], `frame ${f}: line end reached in $${pc.toString(16)}`);
+    if (st + len[pc] >= 1364) continue;   // the instruction itself crossed it
+    assert.equal(p, st + len[pc] + 14, `frame ${f}: IRQ entry after $${pc.toString(16)} at ${st + len[pc]}`);
+    checked++;
+  }
+  assert.ok(checked > 40, `IRQ entries checked: ${checked}`);
+});
+
+test("BRL costs its one internal cycle and no taken-branch extra (snes9x Op82)", async () => {
+  // inc $10 / brl back: snes9x's loop count after 3 frames (cart frame 8).
+  const code = [0x78, 0x18, 0xfb, 0xc2, 0x30, 0xe6, 0x10, 0x82, 0xfb, 0xff];
+  const { mem } = await runCart(synthRom({ code }), 8);
+  assert.equal(mem[WRAM + 0x10] | (mem[WRAM + 0x11] << 8), 0xd418);
+});
+
+test("an NMI raised during a DMA comes Timings.NMIDMADelay after the transfer ends (S9xDoDMA)", async () => {
+  // NMI on, a 40KB DMA running across vblank every frame; the NMI handler
+  // latches and stores the H/V counters. Values are snes9x's after 20
+  // frames (cart frame 25).
+  const code = [
+    0x78, 0x18, 0xfb, 0xc2, 0x10, 0xe2, 0x20,
+    0xa9, 0x80, 0x8d, 0x15, 0x21,
+    0xa9, 0x01, 0x8d, 0x00, 0x43, 0xa9, 0x18, 0x8d, 0x01, 0x43,
+    0xa9, 0x80, 0x8d, 0x00, 0x42,
+    0xa2, 0x00, 0x80, 0x8e, 0x02, 0x43, 0x9c, 0x04, 0x43,
+    0xa2, 0x00, 0xa0, 0x8e, 0x05, 0x43, 0xa9, 0x01, 0x8d, 0x0b, 0x42,
+    0x80, 0xed,
+  ];
+  const rom = synthRom({ code, nmi: 0x8100 });
+  rom.set([0xad, 0x37, 0x21, 0xad, 0x3c, 0x21, 0x8d, 0x00, 0x10, 0xad, 0x3c, 0x21, 0x8d, 0x01, 0x10,
+    0xad, 0x3d, 0x21, 0x8d, 0x02, 0x10, 0xad, 0x3d, 0x21, 0x8d, 0x03, 0x10, 0xee, 0x04, 0x10, 0x40], 0x100);
+  const { mem } = await runCart(rom, 25);
+  assert.deepEqual([...mem.subarray(WRAM + 0x1000, WRAM + 0x1005)], [0x44, 0x44, 0x9f, 0x9e, 0x6d]);
+});
+
+test("enabling NMI during vblank: the NMI is taken after the NEXT instruction (snes9x IRQ_TRIGGER_NMI)", async () => {
+  // Wait for vblank ($4212, leaving $4210 set), write $4200 = $80, then
+  // inc $10. The handler copies $10 to $11: snes9x runs the inc first.
+  const code = [
+    0x78, 0x18, 0xfb, 0xe2, 0x30, 0x64, 0x10, 0x64, 0x11,
+    0x2c, 0x12, 0x42, 0x10, 0xfb,
+    0xa9, 0x80, 0x8d, 0x00, 0x42,
+    0xe6, 0x10,
+    0x80, 0xfe,
+  ];
+  const rom = synthRom({ code, nmi: 0x8100 });
+  rom.set([0xa5, 0x10, 0x85, 0x11, 0x9c, 0x00, 0x42, 0x40], 0x100);
+  const { mem } = await runCart(rom, 10);
+  assert.deepEqual([mem[WRAM + 0x10], mem[WRAM + 0x11]], [1, 1]);
 });

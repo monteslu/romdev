@@ -12,7 +12,7 @@
 // Plain JS ESM + JSDoc.
 
 import {
-  FB_W, FB_H, WRAM, PPUREG, INPUT, PROBE, ITRACE, PCRING, PCRING_N,
+  FB_W, FB_H, WRAM, PPUREG, INPUT, PROBE, ITRACE, PCRING, PCRING_N, MAPTAB, ROM, SRAMB, HDMAST, AUDIO, AUDIO_FRAMES, ICOST,
   REGWATCH, REGWATCH_N, REGWATCH_STRIDE,
 } from "./layout.js";
 
@@ -57,7 +57,9 @@ export function regwatchWat(pc) {
           (global.get $d))
         (i32.store (i32.add (i32.add (i32.const ${REGWATCH})
           (i32.mul (global.get $nrw) (i32.const ${REGWATCH_STRIDE}))) (i32.const 24))
-          (call $rd24 (i32.and (global.get $d) (i32.const 0xFFFF))))
+          (i32.or (call $rd8m (i32.and (global.get $d) (i32.const 0xFFFF)))
+            (i32.or (i32.shl (call $rd8m (i32.and (i32.add (global.get $d) (i32.const 1)) (i32.const 0xFFFF))) (i32.const 8))
+                    (i32.shl (call $rd8m (i32.and (i32.add (global.get $d) (i32.const 2)) (i32.const 0xFFFF))) (i32.const 16)))))
         (global.set $nrw (i32.add (global.get $nrw) (i32.const 1)))))`;
 }
 
@@ -76,7 +78,8 @@ function regRingWat(lay) {
                     (i32.store offset=4 ${at} ${two("a", "x")})
                     (i32.store offset=8 ${at} ${two("y", "s")})
                     (i32.store offset=12 ${at} ${two("d", "db")})
-                    (i32.store offset=16 ${at} (i32.or (call $packp) (i32.shl (global.get $fe) (i32.const 8))))`;
+                    (i32.store offset=16 ${at} (i32.or (call $packp) (i32.shl (global.get $fe) (i32.const 8))))
+                    (i32.store offset=20 ${at} (i32.add (i32.mul (global.get $scanline) (global.get $hmax)) (call $hnow)))`;
 }
 
 /**
@@ -88,13 +91,24 @@ function regRingWat(lay) {
 export function stepHeadWat(regwatch, pcringExcl, lay) {
   return `
   (func $step
-    (local $id i32) (local $bank i32) (local $off i32)
-    ;; WAI: halted until an interrupt; burn the rest of the segment.
-    (if (global.get $wai) (then (global.set $cyc (i32.const 0)) (return)))
+    (local $id i32) (local $bank i32) (local $off i32) (local $e i32) (local $isrom i32)
+    ;; WAI: snes9x leaves the PC on the WAI and executes it again every
+    ;; turn of the main loop (an opcode fetch and an internal cycle) until an
+    ;; interrupt wakes it, so the wait advances 14 clocks at a time.
+    (if (global.get $wai)
+      (then (global.set $cyc (i32.sub (global.get $cyc) (i32.add (global.get $ms) (i32.const 6))))
+            (return)))
     (global.set $curpc (global.get $pc))
+    (global.set $istart (call $hnow))
     (local.set $bank (i32.and (i32.shr_u (global.get $pc) (i32.const 16))
                               (i32.const 0x7F)))
     (local.set $off (i32.and (global.get $pc) (i32.const 0xFFFF)))
+    ;; Where the pc points, by the CPU bus map: only a ROM block has arms.
+    (local.set $e (i32.add (i32.const ${MAPTAB})
+      (i32.shl (i32.shr_u (i32.and (global.get $pc) (i32.const 0xFFFFFF)) (i32.const 12)) (i32.const 3))))
+    (local.set $isrom (i32.eq (i32.load (local.get $e)) (i32.const 1)))
+    ;; snes9x CPU.MemSpeed: what each program byte of this instruction costs.
+    (global.set $ms (call $speed (i32.and (global.get $pc) (i32.const 0xFFFFFF))))
     ;; CODE IN RAM. A static recompiler has no arm for it, because the bytes
     ;; do not exist until the game writes them: one LoROM cart BUILDS a
     ;; 380-byte OAM-clear routine at $7F8000 during its reset handler (the
@@ -119,10 +133,9 @@ export function stepHeadWat(regwatch, pcringExcl, lay) {
     ;; Record the last pc that was genuinely in ROM. Testing $off alone is
     ;; wrong: bank $7F offset $8000 passes an "off >= 0x8000" test while
     ;; being WRAM, so the probe recorded the RAM address as its own caller.
-    (if (i32.and (i32.ge_u (local.get $off) (i32.const 0x8000))
-                 (i32.lt_u (i32.and (i32.shr_u (global.get $pc) (i32.const 16))
-                                    (i32.const 0x7F))
-                           (i32.const 0x7E)))
+    ;; The ring keeps ROM pcs at $8000+ (the verify ops' "snesLoRom" filter
+    ;; leaves the same ones out of the reference stream).
+    (if (i32.and (local.get $isrom) (i32.ge_u (local.get $off) (i32.const 0x8000)))
       (then (global.set $lastrom (global.get $pc))
             ;; ROM pc ring. The excluded ranges come from PCRING_SKIP above:
             ;; each is a boot loop that runs thousands of times and would
@@ -153,15 +166,7 @@ export function stepHeadWat(regwatch, pcringExcl, lay) {
                       (global.get $pc))${lay.REGRING != null ? regRingWat(lay) : ""}
                     (global.set $npc
                       (i32.add (global.get $npc) (i32.const 1)))))))
-    (if (i32.or (i32.lt_u (local.get $off) (i32.const 0x8000))
-                (i32.and (i32.ge_u (i32.and (i32.shr_u (global.get $pc)
-                                                       (i32.const 16))
-                                            (i32.const 0xFF))
-                                   (i32.const 0x7E))
-                         (i32.le_u (i32.and (i32.shr_u (global.get $pc)
-                                                       (i32.const 16))
-                                            (i32.const 0xFF))
-                                   (i32.const 0x7F))))
+    (if (i32.eqz (local.get $isrom))
       (then
             ;; Remember where a jump into RAM came FROM. The destination
             ;; alone ("pc = $3738") says nothing about which instruction
@@ -184,32 +189,25 @@ export function stepHeadWat(regwatch, pcringExcl, lay) {
                   (global.get $pc))
                 (i32.store (i32.add (i32.add (i32.const ${ITRACE})
                   (i32.mul (global.get $ninterp) (i32.const 12))) (i32.const 4))
-                  (call $rd8 (global.get $pc)))
+                  (call $rd8m (global.get $pc)))
                 (i32.store (i32.add (i32.add (i32.const ${ITRACE})
                   (i32.mul (global.get $ninterp) (i32.const 12))) (i32.const 8))
                   (global.get $s))))
-            (call $interp)
+            ;; $istep charges the interpreted instruction as an arm would
+            ;; be charged: without it a loop in RAM never drains the line.
+            (call $istep)
             (global.set $ninterp (i32.add (global.get $ninterp) (i32.const 1)))
-            ;; THE INTERPRETER MUST CHARGE CYCLES TOO. Without this, any
-            ;; loop running out of RAM spins forever inside wc_render,
-            ;; because the scanline budget only drains in the compiled arms.
-            ;; A flat 6 is an average, not a per-opcode cost - the arms carry
-            ;; the real figures, and RAM code is a rounding error next to
-            ;; them.
-            (global.set $cyc (i32.sub (global.get $cyc) (i32.const 6)))
             (return)))
 ${regwatch}
-    (local.set $off (i32.rem_u
-      (i32.add (i32.shl (local.get $bank) (i32.const 15))
-               (i32.sub (local.get $off) (i32.const 0x8000)))
-      (i32.const ${lay.romlen})))
+    ;; ROM file offset of the pc: the block's base plus the offset in it.
+    (local.set $off (i32.add (i32.sub (i32.load offset=4 (local.get $e)) (i32.const ${ROM}))
+                             (i32.and (global.get $pc) (i32.const 0xFFF))))
     (local.set $id (i32.load (i32.add (i32.const ${lay.PCTAB})
       (i32.mul (local.get $off) (i32.const 4)))))
     ;; No arm at this offset: interpret it rather than trap. $interp traps
     ;; on anything it cannot execute, so a wild pc still stops the cart.
     (if (i32.eqz (local.get $id))
-      (then (call $interp)
-            (global.set $cyc (i32.sub (global.get $cyc) (i32.const 6)))
+      (then (call $istep)
             (return)))
     (local.set $id (i32.sub (local.get $id) (i32.const 1)))
 `;
@@ -239,6 +237,12 @@ export function frameWat(lay) {
     (i32.store (i32.add (i32.const ${lay.ABI}) (i32.const 4))  (i32.const ${FB_W}))
     (i32.store (i32.add (i32.const ${lay.ABI}) (i32.const 8))  (i32.const ${FB_H}))
     (i32.store (i32.add (i32.const ${lay.ABI}) (i32.const 12)) (i32.const ${lay.FB}))
+    ;; audioPtr / audioCap / audioWritePtr and audio_sample_rate: the S-DSP's
+    ;; 32040 Hz stereo int16 ring (apu-wat.js $apu_out).
+    (i32.store (i32.add (i32.const ${lay.ABI}) (i32.const 16)) (i32.const ${AUDIO}))
+    (i32.store (i32.add (i32.const ${lay.ABI}) (i32.const 20)) (i32.const ${AUDIO_FRAMES}))
+    (i32.store (i32.add (i32.const ${lay.ABI}) (i32.const 24)) (i32.const ${lay.ABI + 0x100}))
+    (i32.store (i32.add (i32.const ${lay.ABI}) (i32.const 52)) (i32.const 32040))
     ;; inputPtr (WCInfo field 7, byte 28). MUST be a real address: the host
     ;; writes 64 bytes of pad state here every frame WITHOUT checking for
     ;; zero, so leaving it 0 scribbles over WASM offset 0 - the SNES direct
@@ -260,38 +264,66 @@ export function frameWat(lay) {
     (i32.const ${lay.ABI}))
 
   (func (export "wc_init")
+    (local $i i32)
     (call $initmap)
+    ;; snes9x S9xReset: work RAM powers on as $55 (cpu.cpp memset), not zero.
+    ;; Games that read a byte before writing it see $55.
+    (memory.fill (i32.const ${WRAM}) (i32.const 0x55) (i32.const 0x20000))
+    ;; snes9x ClearSRAM: cartridge SRAM powers on as $60.
+    (memory.fill (i32.const ${SRAMB}) (i32.const 0x60) (i32.const 0x8000))
+    ;; snes9x S9xResetPPU / S9xResetDMA register state that the cart keeps
+    ;; in its shadow: WRIO/RDIO $FF, both windows empty (left 1 > right 0),
+    ;; the H/V IRQ positions $1FF, every DMA channel register $FF and each
+    ;; HDMA line counter $7F without repeat.
+    (i32.store8 (i32.const ${PPUREG + 0x80 + 0x01}) (i32.const 0xFF))
+    (i32.store8 (i32.const ${PPUREG + 0x80 + 0x13}) (i32.const 0xFF))
+    (i32.store16 (i32.const ${PPUREG + 0x80 + 0x07}) (i32.const 0x1FF))
+    (i32.store16 (i32.const ${PPUREG + 0x80 + 0x09}) (i32.const 0x1FF))
+    (i32.store8 (i32.const ${PPUREG + 0x26}) (i32.const 1))
+    (i32.store8 (i32.const ${PPUREG + 0x28}) (i32.const 1))
+    (memory.fill (i32.const ${PPUREG + 0x80 + 0x100}) (i32.const 0xFF) (i32.const 0x80))
+    (local.set $i (i32.const 0))
+    (block $hd (loop $hl
+      (br_if $hd (i32.ge_u (local.get $i) (i32.const 8)))
+      (i32.store8 (i32.add (i32.const ${HDMAST + 4}) (i32.shl (local.get $i) (i32.const 4))) (i32.const 0x7F))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $hl)))
     (global.set $s (i32.const 0x01FF))
     (global.set $fi (i32.const 1))
     (global.set $fm (i32.const 1))
     (global.set $fx (i32.const 1))
     (global.set $fe (i32.const 1))
     (call $setdb (i32.const 0))
-    ;; The SPC700's IPL ROM holds $AA/$BB in ports 0/1 from its own reset.
-    ;; The boot code's first act is to compare against exactly that.
-    (i32.store8 (i32.const 198912) (i32.const 0xAA))
-    (i32.store8 (i32.const 198913) (i32.const 0xBB))
+    ;; snes9x S9xSoftResetCPU: CPU.Cycles = 182, "the cycle count just after
+    ;; the jump to the Reset Vector", and then its own S9xGetWord($FFFC)
+    ;; charges the vector read (two ROM bytes, 16): the first instruction
+    ;; starts 198 master clocks into line 0 while the APU's reference is 0.
+    (global.set $hpos (i32.const 198))
+    ;; APU power-on: the SPC700 starts in its IPL ROM, which puts $AA/$BB in
+    ;; ports 0/1 a few hundred SPC clocks later.
+    (call $apu_power)
     ;; RESET vector at $FFFC in bank 0, which on a LoROM board is the last
     ;; word of the first 32KB slice.
     (global.set $pc (call $rd16 (i32.const 0xFFFC))))
 
   (func $nmi
     (global.set $wai (i32.const 0))
-    (global.set $cyc (i32.sub (global.get $cyc) (i32.const 8)))
+    ;; snes9x S9xOpcode_NMI: an opcode fetch and an internal cycle, then the
+    ;; pushes and the vector read (charged by $wr8/$rd8).
+    (global.set $cyc (i32.sub (global.get $cyc) (i32.add (global.get $ms) (i32.const 6))))
+    ;; (one AddCycles: an event it reaches happens right here)
+    (call $ev_due)
     (global.set $nnmi (i32.add (global.get $nnmi) (i32.const 1)))
     ;; Native-mode NMI pushes PB, the 16-bit PC and P, then vectors through
     ;; $FFEA. The bank byte goes FIRST - pushing it last leaves the \`rti\`
     ;; reassembling the address out of the wrong two bytes.
-    (call $wr8 (global.get $s) (i32.shr_u (global.get $pc) (i32.const 16)))
-    (global.set $s (i32.and (i32.sub (global.get $s) (i32.const 1))
-                            (i32.const 0xFFFF)))
-    (call $wr8 (global.get $s)
-      (i32.and (i32.shr_u (global.get $pc) (i32.const 8)) (i32.const 0xFF)))
-    (global.set $s (i32.and (i32.sub (global.get $s) (i32.const 1))
-                            (i32.const 0xFFFF)))
-    (call $wr8 (global.get $s) (i32.and (global.get $pc) (i32.const 0xFF)))
-    (global.set $s (i32.and (i32.sub (global.get $s) (i32.const 1))
-                            (i32.const 0xFFFF)))
+    ;; (Emulation mode pushes no bank and uses the $FFFA vector.)
+    (if (i32.eqz (global.get $fe)) (then
+      (call $wr8 (global.get $s) (i32.shr_u (global.get $pc) (i32.const 16)))
+      (global.set $s (i32.and (i32.sub (global.get $s) (i32.const 1))
+                              (i32.const 0xFFFF)))))
+    ;; PushW(PC): one word access (snes9x S9xOpcode_NMI).
+    (call $push16 (i32.and (global.get $pc) (i32.const 0xFFFF)))
     (call $wr8 (global.get $s) (i32.or
       (i32.shl (global.get $fn) (i32.const 7)) (i32.or
       (i32.shl (global.get $fv) (i32.const 6)) (i32.or
@@ -304,35 +336,83 @@ export function frameWat(lay) {
                             (i32.const 0xFFFF)))
     (global.set $fi (i32.const 1))
     (global.set $fd (i32.const 0))
-    (global.set $pc (call $rd16 (i32.const 0xFFEA))))
+    (global.set $pc (call $rd16 (if (result i32) (global.get $fe) (then (i32.const 0xFFFA)) (else (i32.const 0xFFEA))))))
 
-  ;; Run the CPU until the line position reaches $t (170 units per line).
-  ;; An instruction or DMA that overshoots leaves a debt carried in $hpos,
-  ;; so a long DMA really does cost the lines it spans.
-  (func $run_to (param $t i32)
-    (global.set $segend (local.get $t))
-    (global.set $cyc (i32.sub (local.get $t) (global.get $hpos)))
+  ;; Run the CPU until the frame ends (snes9x S9xMainLoop). Time is the
+  ;; position in the current line, $hnow = $segend - $cyc, where $segend is
+  ;; the next event ($evk); every charge lowers $cyc, and an event is
+  ;; processed as soon as the clock reaches it: inside the access or DMA
+  ;; byte that carried it there, or here at the instruction boundary. The
+  ;; line-end event moves to the next line itself, so an instruction or a
+  ;; DMA can run across any number of lines and every event on the way
+  ;; happens where snes9x has it (the APU catch-up at each line end among
+  ;; them). The frame ends at the first boundary after vblank begins
+  ;; (SCAN_KEYS_FLAG), after that boundary's NMI and IRQ checks.
+  (func $run_frame
     (block $d (loop $l
-      (br_if $d (global.get $trapped))
-      (if (global.get $nmipend)
-        (then (global.set $nmipend (i32.const 0)) (call $nmi)))
+      ;; A trapped cart runs no code; time still passes to the frame end.
+      (if (i32.and (global.get $trapped) (i32.gt_s (global.get $cyc) (i32.const 0)))
+        (then (global.set $cyc (i32.const 0))))
+      ;; Events the last instruction's fetch or internal cycles crossed.
+      (if (i32.le_s (global.get $cyc) (i32.const 0))
+        (then (call $ev_process (call $evpos (call $hnow)))
+              (call $ev_due)))
+      ;; snes9x S9xMainLoop: a pending NMI is taken at the first instruction
+      ;; boundary at or past its trigger position; WAI wakes 14 clocks later
+      ;; (TWO_CYCLES + half a dot), and the events that crosses happen then.
+      (if (i32.and (global.get $nmipend) (i32.ge_s (call $hnow) (global.get $nmipos)))
+        (then (global.set $nmipend (i32.const 0))
+              (if (global.get $wai) (then (global.set $wai (i32.const 0))
+                (global.set $cyc (i32.sub (global.get $cyc) (i32.const 14)))
+                (call $ev_due)))
+              (call $apply_ichg)
+              (call $nmi)))
+      ;; The H/V timer (snes9x Timings.NextIRQTimer) is looked at here only.
+      (if (i32.ge_s (call $hnow) (global.get $ipos))
+        (then (global.set $ipos (i32.const 99999))
+              (global.set $irqline (i32.const 1))))
+      ;; An IRQ line wakes WAI even with I set.
+      (if (i32.and (global.get $irqline) (global.get $wai))
+        (then (global.set $wai (i32.const 0))
+              (global.set $cyc (i32.sub (global.get $cyc) (i32.const 14)))
+              (call $ev_due)))
       (if (i32.and (global.get $irqline) (i32.eqz (global.get $fi)))
-        (then (call $irq)))
-      (br_if $d (i32.le_s (global.get $cyc) (i32.const 0)))
-      (call $step)
-      (global.set $steps (i32.add (global.get $steps) (i32.const 1)))
-      (br $l)))
-    (global.set $hpos (i32.sub (local.get $t) (global.get $cyc))))
+        (then (call $apply_ichg) (call $irq)))
+      ;; CLI / SEI change I one instruction late (snes9x IRQFlagChanging):
+      ;; the check above still saw the old flag.
+      (call $apply_ichg)
+      (br_if $d (global.get $fdone))
+      (if (i32.gt_s (global.get $cyc) (i32.const 0))
+        (then (if (i32.eqz (global.get $trapped))
+          (then (call $step)
+                (global.set $steps (i32.add (global.get $steps) (i32.const 1)))))))
+      (br $l))))
+
+  ;; snes9x CHECK_FOR_IRQ_CHANGE: Timings.IRQFlagChanging applied at the
+  ;; boundary. Bit 0 CLI, bit 1 SEI, bit 2 an NMI enabled during vblank
+  ;; (IRQ_TRIGGER_NMI: pending from here, triggered 6 clocks on).
+  (func $apply_ichg
+    (if (global.get $ichg)
+      (then (if (i32.and (global.get $ichg) (i32.const 4))
+              (then (global.set $nmipend (i32.const 1))
+                    (global.set $nmipos (i32.add (call $hnow) (i32.const 6)))))
+            (if (i32.and (global.get $ichg) (i32.const 1))
+              (then (global.set $fi (i32.const 0)))
+              (else (if (i32.and (global.get $ichg) (i32.const 2))
+                (then (global.set $fi (i32.const 1))))))
+            (global.set $ichg (i32.const 0)))))
 
   (func $irq
     (global.set $wai (i32.const 0))
-    (call $wr8 (global.get $s) (i32.shr_u (global.get $pc) (i32.const 16)))
-    (global.set $s (i32.and (i32.sub (global.get $s) (i32.const 1)) (i32.const 0xFFFF)))
-    (call $wr8 (global.get $s)
-      (i32.and (i32.shr_u (global.get $pc) (i32.const 8)) (i32.const 0xFF)))
-    (global.set $s (i32.and (i32.sub (global.get $s) (i32.const 1)) (i32.const 0xFFFF)))
-    (call $wr8 (global.get $s) (i32.and (global.get $pc) (i32.const 0xFF)))
-    (global.set $s (i32.and (i32.sub (global.get $s) (i32.const 1)) (i32.const 0xFFFF)))
+    ;; snes9x S9xOpcode_IRQ: an opcode fetch and an internal cycle (one
+    ;; AddCycles, so an event it reaches happens right here), then the
+    ;; pushes and the vector read (charged by $wr8/$rd16).
+    (global.set $cyc (i32.sub (global.get $cyc) (i32.add (global.get $ms) (i32.const 6))))
+    (call $ev_due)
+    (if (i32.eqz (global.get $fe)) (then
+      (call $wr8 (global.get $s) (i32.shr_u (global.get $pc) (i32.const 16)))
+      (global.set $s (i32.and (i32.sub (global.get $s) (i32.const 1)) (i32.const 0xFFFF)))))
+    (call $push16 (i32.and (global.get $pc) (i32.const 0xFFFF)))
     (call $wr8 (global.get $s) (i32.or
       (i32.shl (global.get $fn) (i32.const 7)) (i32.or
       (i32.shl (global.get $fv) (i32.const 6)) (i32.or
@@ -344,81 +424,212 @@ export function frameWat(lay) {
     (global.set $s (i32.and (i32.sub (global.get $s) (i32.const 1)) (i32.const 0xFFFF)))
     (global.set $fi (i32.const 1))
     (global.set $fd (i32.const 0))
-    (global.set $cyc (i32.sub (global.get $cyc) (i32.const 8)))
-    (global.set $pc (call $rd16 (i32.const 0xFFEE))))
+    (global.set $pc (call $rd16 (if (result i32) (global.get $fe) (then (i32.const 0xFFFE)) (else (i32.const 0xFFEE))))))
 
-  ;; H/V timer IRQ position on line $ln in scanline units, or 999.
+  ;; H/V timer IRQ position on line $ln in master clocks, or 99999
+  ;; (snes9x S9xUpdateIRQPositions: HTIME dots x 4 + IRQTriggerCycles 14,
+  ;; minus a dot at HTIME 0, plus half a dot past dots 322 and 326; a V-only
+  ;; IRQ fires at 14 - 4).
   (func $irqpos (param $ln i32) (result i32)
     (local $en i32) (local $vt i32) (local $ht i32) (local $p i32)
     (local.set $en (i32.and (call $io_reg (i32.const 0x4200)) (i32.const 0x30)))
-    (if (i32.eqz (local.get $en)) (then (return (i32.const 999))))
+    (if (i32.eqz (local.get $en)) (then (return (i32.const 99999))))
     (local.set $vt (i32.or (call $io_reg (i32.const 0x4209))
       (i32.shl (i32.and (call $io_reg (i32.const 0x420A)) (i32.const 1)) (i32.const 8))))
     (local.set $ht (i32.or (call $io_reg (i32.const 0x4207))
       (i32.shl (i32.and (call $io_reg (i32.const 0x4208)) (i32.const 1)) (i32.const 8))))
-    (local.set $p (i32.shr_u (i32.add (i32.shl (local.get $ht) (i32.const 2)) (i32.const 14))
-                             (i32.const 3)))
+    (local.set $p (i32.add (i32.shl (local.get $ht) (i32.const 2)) (i32.const 14)))
+    (if (i32.eqz (local.get $ht)) (then (local.set $p (i32.sub (local.get $p) (i32.const 4)))))
+    (if (i32.gt_u (local.get $ht) (i32.const 322)) (then (local.set $p (i32.add (local.get $p) (i32.const 2)))))
+    (if (i32.gt_u (local.get $ht) (i32.const 326)) (then (local.set $p (i32.add (local.get $p) (i32.const 2)))))
     (if (i32.eq (local.get $en) (i32.const 0x20))
       (then (return (if (result i32) (i32.eq (local.get $ln) (local.get $vt))
-        (then (i32.const 1)) (else (i32.const 999))))))
-    (if (i32.gt_u (local.get $p) (i32.const 169)) (then (return (i32.const 999))))
+        (then (i32.const 10)) (else (i32.const 99999))))))
+    (if (i32.ge_u (local.get $p) (global.get $hmax)) (then (return (i32.const 99999))))
     (if (i32.eq (local.get $en) (i32.const 0x10)) (then (return (local.get $p))))
     (if (result i32) (i32.eq (local.get $ln) (local.get $vt))
-      (then (local.get $p)) (else (i32.const 999))))
+      (then (local.get $p)) (else (i32.const 99999))))
 
-  ;; One segment of a line: run to $t, firing the timer IRQ on the way if it
-  ;; falls inside. Returns the IRQ position still pending.
-  (func $seg (param $t i32) (param $ip i32) (result i32)
-    (if (i32.le_s (local.get $ip) (local.get $t))
-      (then (call $run_to (local.get $ip))
-            (global.set $irqline (i32.const 1))
-            (local.set $ip (i32.const 999))))
-    (call $run_to (local.get $t))
-    (local.get $ip))
+  ;; The next event after kind $k (0 = the line has just begun) in this
+  ;; line, snes9x S9xReschedule without its no-op events: HDMA table
+  ;; reload at HC 20 (line 0 only), row render at HC 512 (row V-1), DRAM
+  ;; refresh (40 clocks) at HC 534/538, HDMA at HC 1106 (lines 0-224), and
+  ;; the line end, where the APU catches up and the DSP with it
+  ;; (S9xAPUEndScanline). The CPU's position does not move.
+  (func $ev_sched (param $k i32)
+    (local $h i32) (local $t i32)
+    (local.set $h (call $hnow))
+    (local.set $k (if (result i32) (i32.and (i32.eqz (local.get $k)) (i32.ne (global.get $scanline) (i32.const 0)))
+      (then (i32.const 2)) (else (i32.add (local.get $k) (i32.const 1)))))
+    (local.set $t (if (result i32) (i32.eq (local.get $k) (i32.const 1)) (then (i32.const 20))
+      (else (if (result i32) (i32.eq (local.get $k) (i32.const 2)) (then (i32.const 512))
+      (else (if (result i32) (i32.eq (local.get $k) (i32.const 3)) (then (global.get $refpos))
+      (else (if (result i32) (i32.eq (local.get $k) (i32.const 4)) (then (i32.const 1106))
+      (else (global.get $hmax))))))))))
+    (global.set $evk (local.get $k))
+    (global.set $segend (local.get $t))
+    (global.set $cyc (i32.sub (local.get $t) (local.get $h))))
 
-  (func $line (param $ln i32)
-    (local $ip i32)
+  ;; snes9x S9xDoHEventProcessing for the due event, the CPU at $p. The
+  ;; line end rebases the clock and starts the next line.
+  (func $ev_process (param $p i32)
+    (local $k i32) (local $ln i32)
+    (local.set $k (global.get $evk))
+    (if (i32.and (i32.eq (local.get $k) (i32.const 5)) (i32.eq (global.get $scanline) (i32.const 224)))
+      (then (i32.store (i32.const ${PROBE + 124}) (local.get $p))
+            (i32.store (i32.const ${PROBE + 128}) (global.get $istart))
+            (i32.store (i32.const ${PROBE + 132}) (global.get $curpc))))
+    (call $event_do (local.get $k) (local.get $p))
+    (if (i32.ne (local.get $k) (i32.const 5))
+      (then (call $ev_sched (local.get $k)) (return)))
+    (call $apu_newline (global.get $hmax))
+    (global.set $segend (i32.sub (global.get $segend) (global.get $hmax)))
+    (global.set $nmipos (i32.sub (global.get $nmipos) (global.get $hmax)))
+    ;; A timer position this line never reached stays due (NextIRQTimer
+    ;; -= H_Max), so a DMA that ran past it still raises it afterwards.
+    (if (i32.ne (global.get $ipos) (i32.const 99999))
+      (then (global.set $ipos (i32.sub (global.get $ipos) (global.get $hmax)))))
+    (local.set $ln (i32.add (global.get $scanline) (i32.const 1)))
+    (if (i32.eq (local.get $ln) (i32.const 262)) (then (local.set $ln (i32.const 0))))
+    (call $line_begin (local.get $ln))
+    (if (i32.eq (global.get $ipos) (i32.const 99999))
+      (then (global.set $ipos (call $irqpos (local.get $ln)))))
+    ;; VBlank begins: libretro's frame is over (SCAN_KEYS_FLAG).
+    (if (i32.eq (local.get $ln) (i32.const 225))
+      (then (global.set $fdone (i32.const 1))
+            (call $apu_flush)))
+    (call $ev_sched (i32.const 0)))
+
+  ;; Every event the clock has reached (snes9x: while (CPU.Cycles >=
+  ;; CPU.NextEvent) S9xDoHEventProcessing()).
+  (func $ev_due
+    (block $d (loop $l
+      (br_if $d (i32.or (i32.eqz (global.get $evk)) (i32.gt_s (global.get $cyc) (i32.const 0))))
+      (call $ev_process (call $hnow))
+      (br $l))))
+
+  ;; Where an event at $segend was processed, given the CPU is now at $p and
+  ;; the crossing happened in the running instruction's fetch or leading
+  ;; internal cycles (the line-end APU sync position depends on it).
+  (func $evpos (param $p i32) (result i32)
+    (local $st i32) (local $n i32) (local $fe i32) (local $ie i32) (local $t i32)
+    (local $io i32)
+    (local.set $t (global.get $segend))
+    (local.set $n (call $fetch_len))
+    (local.set $io (i32.and (global.get $iio) (i32.const 0x7F)))
+    (local.set $st (global.get $istart))
+    (if (i32.ge_s (local.get $st) (local.get $t)) (then (return (local.get $p))))
+    (local.set $fe (i32.add (local.get $st) (i32.mul (local.get $n) (global.get $ms))))
+    ;; snes9x's opcode fetch adds its cycles without looking at events
+    ;; (S9xMainLoop), and the operand bytes are one AddCycles (Immediate8/16,
+    ;; AbsoluteLong; MVN/MVP read theirs one Immediate8 at a time): a
+    ;; crossing anywhere in the fetch is seen after the operand, or after
+    ;; the first internal cycles of a one-byte opcode.
+    (if (i32.ge_s (local.get $fe) (local.get $t))
+      (then (if (i32.and (global.get $ifl) (i32.const 0x08))
+              (then (return (if (result i32) (i32.ge_s (i32.add (local.get $st) (i32.shl (global.get $ms) (i32.const 1))) (local.get $t))
+                (then (i32.add (local.get $st) (i32.shl (global.get $ms) (i32.const 1)))) (else (local.get $fe))))))
+            (if (i32.gt_u (local.get $n) (i32.const 1)) (then (return (local.get $fe))))
+            (if (i32.and (global.get $iio) (i32.const 0x80))
+              (then (return (i32.add (local.get $fe) (i32.mul (local.get $io) (i32.const 6))))))
+            (if (local.get $io) (then (return (i32.add (local.get $fe) (i32.const 6)))))
+            (return (local.get $p))))
+    ;; ... or in its leading internal cycles: 6 clocks each, or all of them
+    ;; at once where snes9x adds them in one AddCycles.
+    (local.set $ie (i32.add (local.get $fe) (i32.mul (local.get $io) (i32.const 6))))
+    (if (i32.ge_s (local.get $ie) (local.get $t))
+      (then (if (i32.and (global.get $iio) (i32.const 0x80)) (then (return (local.get $ie))))
+            (return (i32.add (local.get $fe)
+              (i32.mul (i32.const 6) (i32.div_s (i32.add (i32.sub (local.get $t) (local.get $fe)) (i32.const 5)) (i32.const 6)))))))
+    (local.get $p))
+
+  ;; The work of event $k with the CPU at position $p (in this line).
+  (func $event_do (param $k i32) (param $p i32)
+    (if (i32.eq (local.get $k) (i32.const 1)) (then (call $hdma_init) (return)))
+    (if (i32.eq (local.get $k) (i32.const 2))
+      (then (if (i32.and (i32.ge_u (global.get $scanline) (i32.const 1))
+                         (i32.le_u (global.get $scanline) (i32.const ${FB_H})))
+              (then (call $render_row (i32.sub (global.get $scanline) (i32.const 1)))))
+            (return)))
+    (if (i32.eq (local.get $k) (i32.const 3))
+      (then (global.set $cyc (i32.sub (global.get $cyc) (i32.const 40))) (return)))
+    (if (i32.eq (local.get $k) (i32.const 4))
+      (then (if (i32.le_u (global.get $scanline) (i32.const 224)) (then (call $hdma_do))) (return)))
+    (if (i32.eq (local.get $k) (i32.const 5))
+      (then (call $apu_sync (local.get $p)) (call $d_sync))))
+
+  ;; Program bytes of the instruction at $curpc (ICOST, M/X as they are now).
+  (func $fetch_len (result i32)
+    (local $op i32) (local $lf i32) (local $n i32)
+    (local.set $op (call $rd8m (global.get $curpc)))
+    (local.set $lf (i32.load8_u (i32.add (i32.const ${ICOST}) (i32.shl (local.get $op) (i32.const 1)))))
+    (local.set $n (i32.and (local.get $lf) (i32.const 7)))
+    (if (i32.and (i32.ne (i32.and (local.get $lf) (i32.const 0x80)) (i32.const 0)) (i32.eqz (global.get $fm)))
+      (then (local.set $n (i32.add (local.get $n) (i32.const 1)))))
+    (if (i32.and (i32.ne (i32.and (local.get $lf) (i32.const 0x40)) (i32.const 0)) (i32.eqz (global.get $fx)))
+      (then (local.set $n (i32.add (local.get $n) (i32.const 1)))))
+    ;; (the static internal cycle count, for $evpos)
+    (global.set $iio (i32.load8_u offset=1 (i32.add (i32.const ${ICOST}) (i32.shl (local.get $op) (i32.const 1)))))
+    (global.set $ifl (local.get $lf))
+    (local.get $n))
+
+  (func $line_begin (param $ln i32)
     (global.set $scanline (local.get $ln))
+    ;; snes9x's H_Max event for the new line: line 240 of an odd field is one
+    ;; dot short (1360), and the 5A22 v2 DRAM refresh alternates between HC
+    ;; 534 and 538 every line except that one (538 after power-on).
+    (if (i32.and (i32.eq (local.get $ln) (i32.const 240)) (i32.ne (global.get $field) (i32.const 0)))
+      (then (global.set $hmax (i32.const 1360)))
+      (else (global.set $hmax (i32.const 1364))
+            (if (global.get $linesrun)
+              (then (global.set $refpos (if (result i32) (i32.eq (global.get $refpos) (i32.const 534))
+                                          (then (i32.const 538)) (else (i32.const 534))))))))
+    (global.set $linesrun (i32.const 1))
     (if (i32.eqz (local.get $ln))
       (then (global.set $nmiflag (i32.const 0))
-            (global.set $cyc (i32.const 0))
-            (call $hdma_init)
-            (global.set $hpos (i32.sub (global.get $hpos) (global.get $cyc)))))
+            (global.set $rto (i32.const 0))
+            ;; snes9x flips $213F bit 7 (the field) every time V wraps to 0,
+            ;; interlaced or not; power-on starts at V=0 without a wrap.
+            (if (global.get $nframes) (then (global.set $field (i32.xor (global.get $field) (i32.const 0x80)))))
+            (global.set $nframes (i32.add (global.get $nframes) (i32.const 1)))))
     (if (i32.eq (local.get $ln) (i32.const 1))
       (then (global.set $mosstart (i32.const 0))))
+    ;; snes9x runs the automatic joypad read as line ScreenHeight + 3 begins.
+    (if (i32.and (i32.eq (local.get $ln) (i32.const 227))
+                 (i32.and (call $io_reg (i32.const 0x4200)) (i32.const 1)))
+      (then (call $auto_joypad)))
     (if (i32.eq (local.get $ln) (i32.const 225))
       (then
-        (global.set $nmiflag (i32.const 0x80))
-        (global.set $hdmaon (i32.const 0))
+        (global.set $nmiflag (if (result i32) (global.get $nmiearly) (then (i32.const 0)) (else (i32.const 0x80))))
+        (global.set $nmiearly (i32.const 0))
         (global.set $maxbright (i32.and (i32.load8_u (i32.const ${PPUREG}))
                                         (i32.const 15)))
         (if (i32.eqz (global.get $fblank)) (then (call $oam_vblank_reset)))
         (if (i32.and (i32.ne (global.get $nmien) (i32.const 0))
                      (i32.eqz (global.get $trapped)))
-          (then (global.set $nmipend (i32.const 1))))))
-    (local.set $ip (call $irqpos (local.get $ln)))
-    ;; snes9x renders a row at HC 512 of line V (row V-1): 64 units.
-    (local.set $ip (call $seg (i32.const 64) (local.get $ip)))
-    (if (i32.and (i32.ge_u (local.get $ln) (i32.const 1))
-                 (i32.le_u (local.get $ln) (i32.const ${FB_H})))
-      (then (call $render_row (i32.sub (local.get $ln) (i32.const 1)))))
-    ;; HDMA at HC 1106 (138 units), for lines 0-224.
-    (local.set $ip (call $seg (i32.const 138) (local.get $ip)))
-    (if (i32.le_u (local.get $ln) (i32.const 224))
-      (then (global.set $cyc (i32.const 0))
-            (call $hdma_do)
-            (global.set $hpos (i32.sub (global.get $hpos) (global.get $cyc)))))
-    (drop (call $seg (i32.const 170) (local.get $ip)))
-    (global.set $hpos (i32.sub (global.get $hpos) (i32.const 170))))
+          (then (global.set $nmipend (i32.const 1))
+                ;; snes9x Timings.NMITriggerPos = 6 + 6
+                (global.set $nmipos (i32.const 12)))))))
 
   (func (export "wc_render")
     (local $ln i32) (local $i i32)
-    (local.set $ln (i32.const 0))
-    (block $fd (loop $fl
-      (br_if $fd (i32.ge_u (local.get $ln) (i32.const 262)))
-      (call $line (local.get $ln))
-      (local.set $ln (i32.add (local.get $ln) (i32.const 1)))
-      (br $fl)))
+    ;; libretro retro_run reports the pads before it emulates the frame.
+    (call $pads_sample)
+    ;; A libretro snes9x frame (retro_run -> S9xMainLoop) ends when the
+    ;; picture is complete, at the start of vblank (line 225): the first
+    ;; call runs from power-on, every later one from where the last left
+    ;; off. So the NMI and the automatic joypad read come at the START of a
+    ;; call, as they do in the reference, and input given before a call is
+    ;; read inside it.
+    (if (i32.eqz (global.get $started))
+      (then (global.set $started (i32.const 1))
+            (call $line_begin (i32.const 0))
+            (global.set $ipos (call $irqpos (i32.const 0)))
+            (global.set $segend (i32.const 0))
+            (global.set $cyc (i32.sub (i32.const 0) (global.get $hpos)))
+            (call $ev_sched (i32.const 0))))
+    (global.set $fdone (i32.const 0))
+    (call $run_frame)
     ;; LIVENESS PROBE BLOCK at $3F000, mirrored every frame.
     ;; Globals are invisible to a host: \`wasm read\` reads LINEAR
     ;; MEMORY, so a counter kept only in a global cannot be seen through the
@@ -436,8 +647,8 @@ export function frameWat(lay) {
     (i32.store (i32.const ${PROBE + 36}) (global.get $s))
     (i32.store (i32.const ${PROBE + 40}) (global.get $ninterp))
     (i32.store (i32.const ${PROBE + 44}) (global.get $napuw))
-    (i32.store (i32.const ${PROBE + 48}) (global.get $napucc))
-    (i32.store (i32.const ${PROBE + 52}) (global.get $apuph))
+    (i32.store (i32.const ${PROBE + 48}) (global.get $apu_nsmp))
+    (i32.store (i32.const ${PROBE + 52}) (global.get $s_pc))
     (i32.store (i32.const ${PROBE + 56}) (global.get $stkw))
     (i32.store (i32.const ${PROBE + 60}) (global.get $stkwa))
     ;; The circular pc ring's WRITE CURSOR. Without it the ring is a bag of
@@ -464,9 +675,9 @@ export function frameWat(lay) {
     ;; like "the IPL never ran". _check_probe_layout() guards the REGIONS;
     ;; nothing guards offsets inside one, so the rule is: append, and keep
     ;; PROBE_N equal to the highest offset used, divided by four, plus one.
-    (i32.store (i32.const ${PROBE + 112}) (global.get $napub))
-    (i32.store (i32.const ${PROBE + 116}) (global.get $apuptr))
-    (i32.store (i32.const ${PROBE + 120}) (global.get $apuctr))
+    (i32.store (i32.const ${PROBE + 112}) (global.get $apu_nout))
+    (i32.store (i32.const ${PROBE + 116}) (global.get $s_clock))
+    (i32.store (i32.const ${PROBE + 120}) (global.get $d_phase))
     )
 
   (func (export "dbg_pc") (result i32) (global.get $pc))
@@ -489,16 +700,11 @@ export function frameWat(lay) {
   (func (export "dbg_npal") (result i32) (global.get $npal))
   (func (export "dbg_ndma") (result i32) (global.get $ndma))
   (func (export "dbg_nnmi") (result i32) (global.get $nnmi))
-  (func (export "dbg_apuph") (result i32) (global.get $apuph))
-  (func (export "dbg_apuptr") (result i32) (global.get $apuptr))
-  (func (export "dbg_apuctr") (result i32) (global.get $apuctr))
+  (func (export "dbg_spcpc") (result i32) (global.get $s_pc))
+  (func (export "dbg_nspc") (result i32) (global.get $apu_nsmp))
+  (func (export "dbg_nsamples") (result i32) (global.get $apu_nout))
   (func (export "dbg_napuw") (result i32) (global.get $napuw))
-  (func (export "dbg_napub") (result i32) (global.get $napub))
   (func (export "dbg_scanline") (result i32) (global.get $scanline))
   (func (export "dbg_cyc") (result i32) (global.get $cyc))
-  ;; Run ONE scanline of the frame loop, so a hang inside wc_render can be
-  ;; located a line at a time instead of by waiting on the whole frame.
-  (func (export "dbg_line") (param $ln i32)
-    (call $line (local.get $ln)))
 `;
 }

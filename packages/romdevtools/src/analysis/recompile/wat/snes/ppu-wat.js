@@ -1,6 +1,5 @@
-// PPU/APU-side WAT of a recompiled SNES cart: the $2140-$2143 ports driven
-// by the SPC700 IPL boot ROM's own control flow (transcribed from snes9x
-// apu/bapu/smp/iplrom.cpp), the PPU registers following snes9x ppu.cpp, and
+// PPU-side WAT of a recompiled SNES cart: the PPU registers following
+// snes9x ppu.cpp ($2140-$2143 go to apu-wat.js), and
 // a scanline renderer following snes9x gfx.cpp/tileimpl.h (same depths,
 // windows, RGB565 colour math, brightness table, mosaic and offset-per-tile),
 // so a strict per-pixel score against snes9x is achievable.
@@ -13,7 +12,7 @@
 // Plain JS ESM + JSDoc.
 
 import {
-  FB_W, WRAM, VRAM, CGRAM, OAM, R, APUIO, MAINC, MAINZ, SUBC, SUBZ, COL565,
+  FB_W, WRAM, VRAM, CGRAM, OAM, R, MAINC, MAINZ, SUBC, SUBZ, COL565,
   DMTAB, OBJLIST, XBTAB, OBJSZ,
 } from "./layout.js";
 import tables from "./snes9x-tables.json" with { type: "json" };
@@ -27,224 +26,21 @@ const bytesWat = (b) => Array.from(b, (x) => "\\" + x.toString(16).padStart(2, "
 export function ppuDataWat() {
   const xb = TABLES.mulBrightness.flat();
   const sz = TABLES.objSizes.flat();
+  // snes9x S9xResetPPU's power-on palette: red = (c & 7) << 2, green =
+  // ((c >> 3) & 7) << 2, blue = ((c >> 6) & 2) << 3 for colour c.
+  const cg = [];
+  for (let c = 0; c < 256; c++) {
+    const w = ((c & 7) << 2) | ((((c >> 3) & 7) << 2) << 5) | ((((c >> 6) & 2) << 3) << 10);
+    cg.push(w & 0xff, w >> 8);
+  }
   return `  (data (i32.const ${XBTAB}) "${bytesWat(xb)}")\n` +
-    `  (data (i32.const ${OBJSZ}) "${bytesWat(sz)}")\n`;
-}
-
-// hw_snes.py apu_wat() lines 54-327
-/** @param {import("./layout.js").SnesLayout} [lay] */
-export function apuWat(lay) {
-  return `
-  (func $apu_read (param $p i32) (result i32)
-    (i32.load8_u (i32.add (i32.const ${APUIO}) (i32.and (local.get $p)
-                                                       (i32.const 3)))))
-
-  ;; One CPU write to $2140-$2143. Ports 1-3 are plain latches on the SPC
-  ;; side; the IPL only ever READS them, so a write to them advances nothing.
-  ;; Every state transition hangs off a write to PORT 0.
-  (func $apu_write (param $p i32) (param $v i32)
-    (local.set $p (i32.and (local.get $p) (i32.const 3)))
-    (local.set $v (i32.and (local.get $v) (i32.const 0xFF)))
-    (i32.store8 (i32.add (i32.const ${APUIO + 4}) (local.get $p))
-                (local.get $v))
-    (global.set $napuw (i32.add (global.get $napuw) (i32.const 1)))
-    ;; THE TWO DIRECTIONS ARE SEPARATE REGISTERS, and conflating them is the
-    ;; bug that defeated seven previous port-pattern guesses.
-    ;;
-    ;; $2140-$2143 are not four bytes of shared memory. Each port is a PAIR:
-    ;; a CPU->APU latch that the 65816 writes and only the SPC700 reads, and
-    ;; an APU->CPU latch that only the SPC700 writes and the 65816 reads.
-    ;; They are independent. A CPU write to $2141 CANNOT change what a CPU
-    ;; read of $2141 returns.
-    ;;
-    ;; Modelling them as one byte breaks the boot immediately and in a way
-    ;; that looks like a CPU fault: a LoROM cart clears the ports with \`stz $2140-43\`
-    ;; before it starts, which under the shared-byte model wipes the IPL's
-    ;; $BB out of port 1, so the \`cmp $2140 / bne\` at $8082 waits forever for
-    ;; a $BBAA that the CPU itself erased. Measured on the first build of
-    ;; this IPL: 4 APU writes, napucc 0, pc parked at $8082, ARAM untouched.
-    ;;
-    ;; So: CPU writes land at APUIO+4..7 (where $apu_startblock and
-    ;; $apu_takebyte read them, exactly as the IPL's \`mov a,$f5\` and
-    ;; \`movw ya,$f6\` do), and APUIO+0..3 are written ONLY by the IPL model.
-    ;;
-    ;; ONE 65816 STORE IS ONE EVENT, EVEN WHEN IT TOUCHES TWO PORTS.
-    ;; The uploader streams data with a 16-BIT \`sta $2140\` ($80A2), which
-    ;; this emitter lowers to two byte writes, port 0 then port 1. The
-    ;; counter goes to port 0 and the DATA BYTE to port 1, so a port-0
-    ;; handler that reads port 1 immediately sees the byte from the PREVIOUS
-    ;; store. That is not a subtle error: it uploads the right bytes one
-    ;; address too high, and the measured result was the cart's ARAM
-    ;; matching snes9x's exactly at a shift of one ($0501 == ref $0500),
-    ;; 32/3645 bytes in place.
-    ;;
-    ;; The IPL cannot observe a half-completed CPU store, so neither does
-    ;; this: a port-0 write only ARMS the step, and the step runs on the
-    ;; following port-1 write when the store is 16-bit, or at once when it
-    ;; is not. $apupend carries the armed value. Note this is a property of
-    ;; the STORE, not of elapsed time - there is still no clock anywhere in
-    ;; this model.
-    (if (i32.eq (local.get $p) (i32.const 1))
-      (then
-        ;; The second half of a 16-bit \`sta $2140\`: run the armed step now
-        ;; that port 1 holds this store's data byte.
-        (if (global.get $apupend)
-          (then (global.set $apupend (i32.const 0))
-                (call $apu_step (global.get $apupendv))))
-        (return)))
-    (if (i32.ne (local.get $p) (i32.const 0)) (then (return)))
-    ;; A 16-bit store to $2140 is about to write port 1 as well; wait for it.
-    (if (global.get $wwide)
-      (then (global.set $apupend (i32.const 1))
-            (global.set $apupendv (local.get $v))
-            (return)))
-    (call $apu_step (local.get $v)))
-
-  ;; One completed CPU store to port 0, with port 1 already settled.
-  (func $apu_step (param $v i32)
-
-    ;; ---- PHASE 0: $ffcf, \`cmp $f4,#$cc\`. Only a $CC gets past. ----
-    (if (i32.eqz (global.get $apuph))
-      (then
-        (if (i32.ne (local.get $v) (i32.const 0xCC)) (then (return)))
-        (global.set $napucc (i32.add (global.get $napucc) (i32.const 1)))
-        (call $apu_startblock (local.get $v))
-        (return)))
-
-    ;; ---- PHASE 1: $ffd6, \`mov y,$f4 / bne $ffd6\`. Wait for a ZERO. ----
-    ;; The uploader's first per-byte write is the counter 0, and the game reaches
-    ;; here having just had its $CC echoed; anything non-zero is re-read.
-    (if (i32.eq (global.get $apuph) (i32.const 1))
-      (then
-        (if (i32.ne (local.get $v) (i32.const 0)) (then (return)))
-        (global.set $apuctr (i32.const 0))
-        (global.set $apuph (i32.const 2))
-        ;; $ffda falls through with y == 0 and port 0 == 0, so the first byte
-        ;; is taken immediately by the loop below.
-        (call $apu_takebyte)
-        (return)))
-
-    ;; ---- PHASE 2: $ffda, the byte loop. ----
-    (if (i32.eq (global.get $apuph) (i32.const 2))
-      (then
-        ;; \`cmp y,$f4 / bne $ffe9\`: the counter matches -> take the byte.
-        (if (i32.eq (local.get $v) (global.get $apuctr))
-          (then (call $apu_takebyte) (return)))
-        ;; A MISMATCH TAKES \`bne $ffe9\`, and $ffe9's \`bpl $ffda\` branches on
-        ;; the N flag that the \`cmp y,$f4\` at $ffda itself set - that is, on
-        ;; bit 7 of (Y - port0), NOT on bit 7 of port0. Testing the port
-        ;; value directly is wrong and it is what left this stalled at $80D3:
-        ;; the game computes the next block's kick with \`adc #$7F\` at $80CD, so
-        ;; the value it writes has bit 7 CLEAR about half the time ($41 in
-        ;; the measured run), and a bit-7 test then ignores the kick and
-        ;; waits for a counter that will never come.
-        ;;
-        ;; With the subtraction, a port value that is merely AHEAD of the
-        ;; counter still reads as "not yet" and the IPL keeps waiting, while
-        ;; the uploader's kick - which is deliberately far from the counter -
-        ;; falls through $ffeb/$ffed into $ffef and starts the next block.
-        (if (i32.eqz (i32.and (i32.sub (global.get $apuctr) (local.get $v))
-                              (i32.const 0x80)))
-          (then (return)))
-        ;; $ffeb \`cmp y,$f4\` / $ffed \`bpl $ffda\`: the same test again, so a
-        ;; value that got here falls straight into $ffef.
-        (call $apu_startblock (local.get $v))
-        (return)))
-
-    ;; ---- PHASE 3: the driver is running. ----
-    ;; The deferred $AA/$BB re-arm, taken on the first write after the IPL
-    ;; handed control to the driver.
-    (if (global.get $apurearm)
-      (then (global.set $apurearm (i32.const 0))
-            (global.set $apuph (i32.const 0))
-            (i32.store8 (i32.const ${APUIO}) (i32.const 0xAA))
-            (i32.store8 (i32.const ${APUIO + 1}) (i32.const 0xBB))
-            (return)))
-    ;; The uploaded driver RUNS THE SAME PROTOCOL, so phase 3 is not the end.
-    ;;
-    ;; This is not an assumption. One cart uploads three times ($80F8, $8122 and
-    ;; the $98B1 block), and each call re-enters $8079 and waits on $BBAA
-    ;; again. The answer the second time comes from the driver that the first
-    ;; upload installed, and that driver's code is now sitting in this cart's
-    ;; own ARAM where it can be read: at $12F2 the uploaded image holds
-    ;;
-    ;;     12F2  e8 aa        mov a,#$aa
-    ;;     12F4  c5 f4 00     mov $00f4,a
-    ;;     12F7  e8 bb        mov a,#$bb
-    ;;     12F9  c5 f5 00     mov $00f5,a
-    ;;     12FC  e5 f4 00     mov a,$00f4
-    ;;     12FF  68 cc        cmp a,#$cc
-    ;;     1301  d0 f9        bne $12fc
-    ;;
-    ;; which is the IPL's own $ffc9-$ffd2 sequence re-implemented, followed
-    ;; at $1304 by a transfer loop with the same counter-echo shape. So the
-    ;; model below is what the driver does, read off the driver's bytes
-    ;; rather than guessed: on entry the ports go back to $AA/$BB, and a
-    ;; later $CC starts another block.
-    ;;
-    ;; The re-arm happens in $apu_startblock at the moment phase 3 is
-    ;; entered; here, a $CC simply begins the next upload.
-    (if (i32.eq (local.get $v) (i32.const 0xCC))
-      (then (global.set $napucc (i32.add (global.get $napucc) (i32.const 1)))
-            (call $apu_startblock (local.get $v))
-            (return)))
-    ;; Anything else is the game talking to its driver's own command
-    ;; protocol, which needs a real SPC700. Hold the port.
-    (i32.store8 (i32.const ${APUIO}) (local.get $v)))
-
-  ;; $ffef: latch ports 2-3 as the ARAM pointer, echo port 0, and branch on
-  ;; port 1 - non-zero transfers a block, zero means EXECUTE.
-  (func $apu_startblock (param $v i32)
-    (global.set $apuptr (i32.or
-      (i32.load8_u (i32.const ${APUIO + 6}))
-      (i32.shl (i32.load8_u (i32.const ${APUIO + 7})) (i32.const 8))))
-    ;; \`mov $f4,a\` - the echo the CPU's \`cmp $2140 / bne\` is spinning on.
-    (i32.store8 (i32.const ${APUIO}) (local.get $v))
-    ;; \`mov a,y / mov x,a / bne\` reads PORT 1 as the CPU last wrote it.
-    (if (i32.eqz (i32.load8_u (i32.const ${APUIO + 5})))
-      (then
-        ;; \`jmp ($0000+x)\` - the driver starts, and its first act is to put
-        ;; $AA/$BB back in ports 0 and 1 (ARAM $12F2 above), which is what
-        ;; lets the game's NEXT call to the uploader get past its $BBAA wait.
-        ;; Without it the cart uploads one block perfectly and then spins at
-        ;; $8082 for every remaining frame - measured: 11,974 bytes at
-        ;; 100.00% against snes9x, then pc parked at $8085 from f30 to f900.
-        ;;
-        ;; BUT NOT YET. The CPU is at $80D3 waiting to read back the echo
-        ;; this function just wrote, and stamping $AA over it here destroys
-        ;; the very handshake that ends the upload: the pc then parks at
-        ;; $80D3 instead of $8085, which is a different hang, not progress.
-        ;; The driver does not run until the IPL's \`jmp\` has retired and the
-        ;; CPU has moved on, so the re-arm is DEFERRED to the CPU's next
-        ;; port write - which is the \`stz $2140\` at $80DA, i.e. after $80D3
-        ;; has been satisfied. Still no clock: the trigger is a write.
-        (global.set $apuph (i32.const 3))
-        (global.set $apurearm (i32.const 1)))
-      (else (global.set $apuph (i32.const 1)))))        ;; -> $ffd6
-
-  ;; $ffde-$ffe7: take PORT 1 as the data byte, echo the counter to port 0,
-  ;; store into ARAM at ($00)+y, and advance. \`inc $01\` on the wrap is what
-  ;; carries an upload past 256 bytes.
-  (func $apu_takebyte
-    (i32.store8 (i32.add (i32.const ${lay.ARAM})
-                  (i32.and (i32.add (global.get $apuptr) (global.get $apuctr))
-                           (i32.const 0xFFFF)))
-                (i32.load8_u (i32.const ${APUIO + 5})))
-    (global.set $napub (i32.add (global.get $napub) (i32.const 1)))
-    ;; \`mov $f4,y\`: the acknowledgement IS the counter, not the data.
-    (i32.store8 (i32.const ${APUIO}) (global.get $apuctr))
-    (global.set $apuctr (i32.and (i32.add (global.get $apuctr) (i32.const 1))
-                                 (i32.const 0xFF)))
-    (if (i32.eqz (global.get $apuctr))
-      (then (global.set $apuptr (i32.and (i32.add (global.get $apuptr)
-                                                  (i32.const 0x100))
-                                         (i32.const 0xFFFF))))))
-`;
+    `  (data (i32.const ${OBJSZ}) "${bytesWat(sz)}")\n` +
+    `  (data (i32.const ${CGRAM}) "${bytesWat(cg)}")\n`;
 }
 
 // hw_snes.py ppu_globals_wat() lines 388-416
 /** @param {import("./layout.js").SnesLayout} [lay] */
-export function ppuGlobalsWat(lay) {
+export function ppuGlobalsWat(_lay) {
   return `
   (global $bgofsprev (mut i32) (i32.const 0))
   (global $m7prev (mut i32) (i32.const 0))
@@ -272,12 +68,22 @@ export function ppuGlobalsWat(lay) {
   (global $dmbase (mut i32) (i32.const 0))
   (global $inhdma (mut i32) (i32.const 0))
   (global $mosstart (mut i32) (i32.const 0))
+  (global $ob1 (mut i32) (i32.const 0))
+  (global $ob2 (mut i32) (i32.const 0))
+  (global $hlatch (mut i32) (i32.const 0))
+  (global $vlatch (mut i32) (i32.const 0))
+  (global $hflip (mut i32) (i32.const 0))
+  (global $vflip (mut i32) (i32.const 0))
+  (global $latched (mut i32) (i32.const 0))
+  (global $rto (mut i32) (i32.const 0))
+  (global $field (mut i32) (i32.const 0))
+  (global $nframes (mut i32) (i32.const 0))
 `;
 }
 
 // hw_snes.py ppu_wat() lines 419-767
 /** @param {import("./layout.js").SnesLayout} [lay] */
-export function ppuWat(lay) {
+export function ppuWat(_lay) {
   return `
   (func $reg (param $r i32) (result i32)
     (i32.load8_u (i32.add (i32.const ${R}) (local.get $r))))
@@ -331,6 +137,8 @@ export function ppuWat(lay) {
       (then (call $apu_write (i32.and (local.get $r) (i32.const 3))
                              (local.get $v)) (return)))
     ;; WRAM port: $2180 data, $2181-$2183 17-bit address.
+    (if (i32.and (i32.eq (local.get $r) (i32.const 0x80)) (global.get $wramdma))
+      (then (return)))
     (if (i32.eq (local.get $r) (i32.const 0x80))
       (then (i32.store8 (i32.add (i32.const ${WRAM}) (global.get $wmadd))
                         (local.get $v))
@@ -359,7 +167,9 @@ export function ppuWat(lay) {
                       (global.get $maxbright))
           (then (global.set $maxbright (i32.and (local.get $v)
                                                 (i32.const 15)))))
-        (if (i32.and (i32.and (local.get $v) (i32.const 0x80))
+        ;; snes9x tests the forced blank bit $2100 HAD (FillRAM is written
+        ;; after the switch) while V is the first vblank line.
+        (if (i32.and (i32.ne (i32.and (i32.load8_u (i32.const ${R})) (i32.const 0x80)) (i32.const 0))
                      (i32.eq (global.get $scanline) (i32.const 225)))
           (then (call $oam_vblank_reset)))))
     (i32.store8 (i32.add (i32.const ${R}) (local.get $r)) (local.get $v))
@@ -539,6 +349,8 @@ export function ppuWat(lay) {
     (if (i32.and (i32.ge_u (local.get $r) (i32.const 0x40))
                  (i32.le_u (local.get $r) (i32.const 0x7F)))
       (then (return (call $apu_read (i32.and (local.get $r) (i32.const 3))))))
+    (if (i32.and (i32.eq (local.get $r) (i32.const 0x80)) (global.get $wramdma))
+      (then (return (global.get $ob))))
     (if (i32.eq (local.get $r) (i32.const 0x80))
       (then (local.set $v (i32.load8_u (i32.add (i32.const ${WRAM})
                                                 (global.get $wmadd))))
@@ -555,9 +367,10 @@ export function ppuWat(lay) {
                               (i32.const 16)) (i32.const 16))
           (i32.shr_s (i32.shl (i32.load8_u (i32.const ${R + 0x53}))
                               (i32.const 24)) (i32.const 24))))
-        (return (i32.and (i32.shr_u (local.get $p)
+        (global.set $ob1 (i32.and (i32.shr_u (local.get $p)
           (i32.shl (i32.sub (local.get $r) (i32.const 0x34)) (i32.const 3)))
-          (i32.const 0xFF)))))
+          (i32.const 0xFF)))
+        (return (global.get $ob1))))
     (if (i32.eq (local.get $r) (i32.const 0x38))
       (then
         (if (i32.and (global.get $oamaddr) (i32.const 0x100))
@@ -572,16 +385,19 @@ export function ppuWat(lay) {
         (if (i32.eqz (global.get $oamflip))
           (then (global.set $oamaddr (i32.and (i32.add (global.get $oamaddr)
                   (i32.const 1)) (i32.const 0x1FF)))))
+        (global.set $ob1 (local.get $v))
         (return (local.get $v))))
     (if (i32.eq (local.get $r) (i32.const 0x39))
       (then (local.set $v (i32.and (global.get $vrbuf) (i32.const 0xFF)))
             (if (i32.eqz (i32.and (call $reg (i32.const 0x15)) (i32.const 0x80)))
               (then (call $vrload) (call $vinc)))
+            (global.set $ob1 (local.get $v))
             (return (local.get $v))))
     (if (i32.eq (local.get $r) (i32.const 0x3A))
       (then (local.set $v (i32.shr_u (global.get $vrbuf) (i32.const 8)))
             (if (i32.and (call $reg (i32.const 0x15)) (i32.const 0x80))
               (then (call $vrload) (call $vinc)))
+            (global.set $ob1 (local.get $v))
             (return (local.get $v))))
     (if (i32.eq (local.get $r) (i32.const 0x3B))
       (then
@@ -589,20 +405,69 @@ export function ppuWat(lay) {
           (i32.shl (i32.and (global.get $cgaddr) (i32.const 0xFF))
                    (i32.const 1)))))
         (if (global.get $cgrflip)
-          (then (local.set $v (i32.shr_u (local.get $p) (i32.const 8)))
+          (then (local.set $v (i32.or (i32.and (global.get $ob2) (i32.const 0x80))
+                                      (i32.and (i32.shr_u (local.get $p) (i32.const 8)) (i32.const 0x7F))))
                 (global.set $cgaddr (i32.and (i32.add (global.get $cgaddr)
                                                       (i32.const 1))
                                              (i32.const 0xFF))))
           (else (local.set $v (i32.and (local.get $p) (i32.const 0xFF)))))
         (global.set $cgrflip (i32.xor (global.get $cgrflip) (i32.const 1)))
+        (global.set $ob2 (local.get $v))
         (return (local.get $v))))
+    ;; $213C/$213D OPHCT/OPVCT: the latched H/V position, low byte then
+    ;; bit 8 with PPU2 open bus above it (snes9x ppu.cpp).
+    (if (i32.eq (local.get $r) (i32.const 0x3C))
+      (then (local.set $v (if (result i32) (global.get $hflip)
+              (then (i32.or (i32.and (global.get $ob2) (i32.const 0xFE)) (i32.and (i32.shr_u (global.get $hlatch) (i32.const 8)) (i32.const 1))))
+              (else (i32.and (global.get $hlatch) (i32.const 0xFF)))))
+            (global.set $hflip (i32.xor (global.get $hflip) (i32.const 1)))
+            (global.set $ob2 (local.get $v))
+            (return (local.get $v))))
     (if (i32.eq (local.get $r) (i32.const 0x3D))
-      (then (return (i32.and (global.get $scanline) (i32.const 0xFF)))))
+      (then (local.set $v (if (result i32) (global.get $vflip)
+              (then (i32.or (i32.and (global.get $ob2) (i32.const 0xFE)) (i32.and (i32.shr_u (global.get $vlatch) (i32.const 8)) (i32.const 1))))
+              (else (i32.and (global.get $vlatch) (i32.const 0xFF)))))
+            (global.set $vflip (i32.xor (global.get $vflip) (i32.const 1)))
+            (global.set $ob2 (local.get $v))
+            (return (local.get $v))))
+    ;; $213E STAT77: time/range over (bits 7-6), PPU1 open bus bit 4,
+    ;; PPU1 version 1.
     (if (i32.eq (local.get $r) (i32.const 0x3E))
-      (then (return (i32.const 1))))   ;; PPU1 version, chip 1
+      (then (global.set $ob1 (i32.or (i32.or (i32.and (global.get $ob1) (i32.const 0x10)) (global.get $rto)) (i32.const 1)))
+            (return (global.get $ob1))))
+    ;; $213F STAT78: PPU2 version 3, bit 6 = counters latched (cleared by
+    ;; this read, which also resets both flip-flops), bit 7 the field, bit 5
+    ;; PPU2 open bus.
     (if (i32.eq (local.get $r) (i32.const 0x3F))
-      (then (return (i32.const 3))))   ;; PPU2 version 3
-    (i32.const 0))
+      (then (global.set $hflip (i32.const 0)) (global.set $vflip (i32.const 0))
+            (global.set $ob2 (i32.or (i32.or (i32.and (global.get $ob2) (i32.const 0x20)) (global.get $field))
+                                     (i32.or (i32.shl (global.get $latched) (i32.const 6)) (i32.const 3))))
+            (global.set $latched (i32.const 0))
+            (return (global.get $ob2))))
+    ;; $2137 SLHV latches the counters (when $4201 bit 7 is set) and
+    ;; returns PPU1 open bus.
+    (if (i32.eq (local.get $r) (i32.const 0x37))
+      (then (if (i32.and (call $io_reg (i32.const 0x4213)) (i32.const 0x80)) (then (call $latch_hv)))
+            (return (global.get $ob1))))
+    ;; The write-only registers that snes9x answers with PPU1 open bus.
+    (if (i32.and (i32.lt_u (local.get $r) (i32.const 0x40))
+                 (i32.and (i32.wrap_i64 (i64.shr_u (i64.const 0x0000077007700770) (i64.extend_i32_u (local.get $r))))
+                          (i32.const 1)))
+      (then (return (global.get $ob1))))
+    ;; Everything else in $2100-$21FF reads the CPU's open bus.
+    (global.get $ob))
+
+  ;; S9xLatchCounters: V = the scanline, H = the dot (4 master clocks per
+  ;; dot, dots 322 and 326 six).
+  (func $latch_hv
+    (local $hc i32)
+    (call $beam)
+    (local.set $hc (global.get $bh))
+    (if (i32.ge_s (local.get $hc) (i32.const 1292)) (then (local.set $hc (i32.sub (local.get $hc) (i32.const 2)))))
+    (if (i32.ge_s (local.get $hc) (i32.const 1308)) (then (local.set $hc (i32.sub (local.get $hc) (i32.const 2)))))
+    (global.set $hlatch (i32.and (i32.div_s (local.get $hc) (i32.const 4)) (i32.const 0x1FF)))
+    (global.set $vlatch (global.get $bv))
+    (global.set $latched (i32.const 1)))
 
   ;; 565 -> 0xAARRGGBB, expanded exactly as the reference's screenshot path
   ;; does: 5-bit red/blue as (v<<3)|(v>>2), 6-bit green as (g<<2)|(g>>4).
@@ -1200,6 +1065,53 @@ export function renderWat(lay) {
       (local.set $x (i32.add (local.get $x) (i32.const 1)))
       (br $xl))))
 
+  ;; $213E's range / time over flags (snes9x SetupOBJ RTOFlags, ORed into
+  ;; PPU.RangeTimeOver as each row renders, forced blank or not): more than
+  ;; 32 sprites on the row sets bit 6, more than 34 tiles among the first 32
+  ;; sets bit 7.
+  (func $rto_row (param $y i32)
+    (local $sel i32) (local $s i32) (local $k i32) (local $o i32) (local $hi i32)
+    (local $big i32) (local $w i32) (local $h i32) (local $hp i32) (local $n i32)
+    (local $tiles i32) (local $vis i32)
+    (local.set $sel (i32.shr_u (call $reg (i32.const 0x01)) (i32.const 5)))
+    (local.set $tiles (i32.const 34))
+    (local.set $s (global.get $firstspr))
+    (block $sd (loop $sl
+      (br_if $sd (i32.ge_u (local.get $k) (i32.const 128)))
+      (local.set $o (i32.add (i32.const ${OAM}) (i32.shl (local.get $s) (i32.const 2))))
+      (local.set $hi (i32.and (i32.shr_u (i32.load8_u (i32.add (i32.const ${OAM + 0x200})
+                                (i32.shr_u (local.get $s) (i32.const 2))))
+                              (i32.shl (i32.and (local.get $s) (i32.const 3)) (i32.const 1)))
+                     (i32.const 3)))
+      (local.set $big (i32.shr_u (local.get $hi) (i32.const 1)))
+      (local.set $w (i32.load8_u (i32.add (i32.const ${OBJSZ})
+        (i32.add (i32.shl (local.get $sel) (i32.const 2)) (i32.shl (local.get $big) (i32.const 1))))))
+      (local.set $h (i32.load8_u (i32.add (i32.const ${OBJSZ + 1})
+        (i32.add (i32.shl (local.get $sel) (i32.const 2)) (i32.shl (local.get $big) (i32.const 1))))))
+      (local.set $hp (i32.load8_u (local.get $o)))
+      (if (i32.and (local.get $hi) (i32.const 1)) (then (local.set $hp (i32.sub (local.get $hp) (i32.const 256)))))
+      (if (i32.eq (local.get $hp) (i32.const -256)) (then (local.set $hp (i32.const 0))))
+      (if (i32.and (i32.and (i32.gt_s (local.get $hp) (i32.sub (i32.const 0) (local.get $w)))
+                            (i32.le_s (local.get $hp) (i32.const 256)))
+                   (i32.lt_u (i32.and (i32.sub (local.get $y) (i32.load8_u offset=1 (local.get $o))) (i32.const 0xFF))
+                             (local.get $h)))
+        (then
+          (if (i32.ge_u (local.get $n) (i32.const 32))
+            (then (global.set $rto (i32.or (global.get $rto) (i32.const 0x40))))
+            (else
+              (local.set $vis (if (result i32) (i32.lt_s (local.get $hp) (i32.const 0))
+                (then (i32.shr_s (i32.add (i32.add (local.get $w) (local.get $hp)) (i32.const 7)) (i32.const 3)))
+                (else (if (result i32) (i32.gt_s (i32.add (local.get $hp) (local.get $w)) (i32.const 255))
+                  (then (i32.shr_s (i32.sub (i32.const 263) (local.get $hp)) (i32.const 3)))
+                  (else (i32.shr_u (local.get $w) (i32.const 3)))))))
+              (local.set $tiles (i32.sub (local.get $tiles) (local.get $vis)))
+              (if (i32.lt_s (local.get $tiles) (i32.const 0))
+                (then (global.set $rto (i32.or (global.get $rto) (i32.const 0x80)))))
+              (local.set $n (i32.add (local.get $n) (i32.const 1)))))))
+      (local.set $s (i32.and (i32.add (local.get $s) (i32.const 1)) (i32.const 0x7F)))
+      (local.set $k (i32.add (local.get $k) (i32.const 1)))
+      (br $sl))))
+
   ;; snes9x SetupOBJ (normal FirstSprite case) + DrawOBJS, for one row.
   (func $draw_objs (param $y i32) (param $D i32)
     (local $sel i32) (local $s i32) (local $n i32) (local $o i32)
@@ -1394,7 +1306,7 @@ export function renderWat(lay) {
       (if (i32.and (local.get $act) (i32.const 1)) (then (call $draw_bg (local.get $y) (i32.const 0) (i32.const 0) (i32.const 4) (i32.add (local.get $D) (i32.const 15)) (i32.add (local.get $D) (i32.const 7)) (i32.const 1))))))
     (if (i32.eq (local.get $mode) (i32.const 7)) (then
       (if (i32.and (local.get $act) (i32.const 1)) (then (call $draw_m7 (local.get $y) (i32.const 0) (local.get $D))))
-      (if (i32.and (i32.and (call $reg (i32.const 0x33)) (i32.const 0x40))
+      (if (i32.and (i32.ne (i32.and (call $reg (i32.const 0x33)) (i32.const 0x40)) (i32.const 0))
                    (i32.ne (i32.and (local.get $act) (i32.const 2)) (i32.const 0)))
         (then (call $draw_m7 (local.get $y) (i32.const 1) (local.get $D))))))
     ;; Backdrop: colour 0 at depth 1.
@@ -1413,6 +1325,7 @@ export function renderWat(lay) {
     (local $ad i32)
     (local.set $fb (i32.add (i32.const ${lay.FB}) (i32.shl (i32.mul (local.get $y)
                                                            (i32.const ${FB_W})) (i32.const 2))))
+    (call $rto_row (local.get $y))
     (if (global.get $fblank)
       (then
         (local.set $x (i32.const 0))

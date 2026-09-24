@@ -12,7 +12,7 @@
 // Plain JS ESM + JSDoc.
 
 import {
-  WRAM, ROM, SRAMB, PPUREG, HDMAST, DPWATCH, DMALOG, DMALOG_N, DMALOG_STRIDE,
+  WRAM, SRAMB, PPUREG, INPUT, MAPTAB, ICOST, OPTAB, HDMAST, DPWATCH, DMALOG, DMALOG_N, DMALOG_STRIDE,
 } from "./layout.js";
 import { ppuGlobalsWat } from "./ppu-wat.js";
 
@@ -82,22 +82,21 @@ export function globalsWat(lay) {
   (global $nptrw1 (mut i32) (i32.const 0))
   (global $ninterp (mut i32) (i32.const 0))
   (global $napuw (mut i32) (i32.const 0))
-  (global $napucc (mut i32) (i32.const 0))
-  (global $napub (mut i32) (i32.const 0))
-  ;; IPL boot-ROM state. See hw_snes.apu_wat(): $apuph is the IPL's own
-  ;; program position, $apuptr its ARAM destination pointer ($00/$01) and
-  ;; $apuctr its Y register. Nothing here advances on a clock.
-  (global $apuph (mut i32) (i32.const 0))
-  ;; A 16-bit \`sta $2140\` writes port 0 then port 1; $apupend holds the
-  ;; port-0 value until port 1 lands so the IPL sees one whole store.
-  (global $apupend (mut i32) (i32.const 0))
-  (global $apupendv (mut i32) (i32.const 0))
-  ;; Set when the IPL hands control to the uploaded driver; the driver's
-  ;; $AA/$BB re-arm runs on the CPU's next port write, not immediately.
-  (global $apurearm (mut i32) (i32.const 0))
-  (global $apuptr (mut i32) (i32.const 0))
-  (global $apuctr (mut i32) (i32.const 0))
-  (global $wwide (mut i32) (i32.const 0))
+  ;; The CPU data bus (snes9x OpenBus): the last byte read or written.
+  (global $ob (mut i32) (i32.const 0))
+  ;; Master clocks per access: $ms for the running code's region (set by
+  ;; $step), $fastrom for ROM at $80-$FF ($420D bit 0), $indma while (H)DMA
+  ;; moves bytes (it charges its own 8 per byte).
+  (global $ms (mut i32) (i32.const 8))
+  (global $fastrom (mut i32) (i32.const 8))
+  (global $indma (mut i32) (i32.const 0))
+  (global $wramdma (mut i32) (i32.const 0))
+  (global $t5 (mut i32) (i32.const 0))
+  (global $pad0 (mut i32) (i32.const 0))
+  (global $pad1 (mut i32) (i32.const 0))
+  (global $joylatch (mut i32) (i32.const 0))
+  (global $jidx0 (mut i32) (i32.const 0))
+  (global $jidx1 (mut i32) (i32.const 0))
   (global $scanline (mut i32) (i32.const 0))
   (global $nvram (mut i32) (i32.const 0))
   (global $npal (mut i32) (i32.const 0))
@@ -106,10 +105,32 @@ export function globalsWat(lay) {
   (global $nrw (mut i32) (i32.const 0))
   (global $irqline (mut i32) (i32.const 0))
   (global $nmipend (mut i32) (i32.const 0))
+  (global $nmipos (mut i32) (i32.const 0))
+  ;; A CLI (1), SEI (2) or vblank NMI enable (4) waiting for the next boundary.
+  (global $ichg (mut i32) (i32.const 0))
+  (global $started (mut i32) (i32.const 0))
+  (global $evk (mut i32) (i32.const 0))
+  (global $istart (mut i32) (i32.const 0))
+  (global $iio (mut i32) (i32.const 0))
+  (global $ifl (mut i32) (i32.const 0))
+  (global $nmiearly (mut i32) (i32.const 0))
+  (global $hmax (mut i32) (i32.const 1364))
+  (global $refpos (mut i32) (i32.const 538))
+  (global $linesrun (mut i32) (i32.const 0))
+  (global $bv (mut i32) (i32.const 0))
+  (global $bh (mut i32) (i32.const 0))
   (global $wai (mut i32) (i32.const 0))
   (global $hpos (mut i32) (i32.const 0))
   (global $segend (mut i32) (i32.const 0))
+  ;; The H/V timer IRQ position in this line (99999 = none), the frame-end
+  ;; flag, and a general DMA running (with the HDMA channels that ran
+  ;; inside it, snes9x CPU.HDMARanInDMA).
+  (global $ipos (mut i32) (i32.const 99999))
+  (global $fdone (mut i32) (i32.const 0))
+  (global $ingdma (mut i32) (i32.const 0))
+  (global $hdmaran (mut i32) (i32.const 0))
   (global $hdmaon (mut i32) (i32.const 0))
+  (global $hdmaended (mut i32) (i32.const 0))
 ` +
     ppuGlobalsWat(lay);
 }
@@ -142,53 +163,123 @@ export function memWat(lay) {
     (global.set $db (i32.and (local.get $v) (i32.const 0xFF)))
     (global.set $db24 (i32.shl (global.get $db) (i32.const 16))))
 
+  ;; CPU bus read through the snes9x-style block map (memmap.js): 4096
+  ;; blocks of 4KB, each {type, base}. Every read leaves its byte on the
+  ;; data bus ($ob, snes9x OpenBus); an unmapped address returns what is
+  ;; already there.
+  ;; An event inside an instruction: snes9x processes one as soon as an
+  ;; access pushes CPU.Cycles past it, so an event the program fetch (or an
+  ;; earlier access) crossed has happened before this access.
+  (func $refresh_due
+    (if (i32.and (i32.and (i32.ne (global.get $evk) (i32.const 0)) (i32.le_s (global.get $cyc) (i32.const 0)))
+                 (i32.eqz (global.get $indma)))
+      (then (call $ev_process (call $evpos (call $hnow)))
+            (call $ev_due))))
+  (func $event_after
+    (call $ev_due))
+
   (func $rd8 (param $a i32) (result i32)
-    (local $bank i32) (local $x i32)
+    (local $v i32)
+    (call $refresh_due)
+    (local.set $v (call $rd8m (local.get $a)))
+    (global.set $ob (local.get $v))
+    ;; Each CPU access costs its region's speed, added AFTER the access
+    ;; (snes9x addCyclesInMemoryAccess); (H)DMA charges its own. An event
+    ;; the access carried the clock past fires right after it.
+    (if (i32.eqz (global.get $indma))
+      (then (global.set $cyc (i32.sub (global.get $cyc) (call $speed (i32.and (local.get $a) (i32.const 0xFFFFFF)))))
+            (call $event_after)))
+    ;; (an HDMA the event ran leaves its own byte on the bus afterwards)
+    (local.get $v))
+
+  (func $rd8m (param $a i32) (result i32)
+    (local $e i32) (local $x i32)
     (local.set $a (i32.and (local.get $a) (i32.const 0xFFFFFF)))
-    (local.set $bank (i32.shr_u (local.get $a) (i32.const 16)))
+    (local.set $e (i32.add (i32.const ${MAPTAB}) (i32.shl (i32.shr_u (local.get $a) (i32.const 12)) (i32.const 3))))
     (local.set $x (i32.and (local.get $a) (i32.const 0xFFFF)))
-    ;; $7E-$7F: 128KB of work RAM, flat.
-    (if (i32.and (i32.ge_u (local.get $bank) (i32.const 0x7E))
-                 (i32.le_u (local.get $bank) (i32.const 0x7F)))
-      (then (return (i32.load8_u (i32.add (i32.const ${WRAM})
-        (i32.add (i32.shl (i32.sub (local.get $bank) (i32.const 0x7E))
-                          (i32.const 16)) (local.get $x)))))))
-    ;; Banks $00-$3F and $80-$BF mirror the first 8KB of work RAM at $0000,
-    ;; and carry the hardware ports at $2100-$21FF and $4200-$43FF.
-    (if (i32.le_u (i32.and (local.get $bank) (i32.const 0x7F))
-                  (i32.const 0x3F))
-      (then
-        (if (i32.lt_u (local.get $x) (i32.const 0x2000))
-          (then (return (i32.load8_u (i32.add (i32.const ${WRAM})
-                                              (local.get $x))))))
-        (if (i32.and (i32.ge_u (local.get $x) (i32.const 0x2100))
-                     (i32.lt_u (local.get $x) (i32.const 0x2200)))
-          (then (return (call $ppu_read (i32.and (local.get $x)
-                                                 (i32.const 0xFF))))))
-        (if (i32.and (i32.ge_u (local.get $x) (i32.const 0x4200))
-                     (i32.lt_u (local.get $x) (i32.const 0x4400)))
-          (then (return (call $io_read (local.get $x)))))))
-    ;; Everything at $8000 and above is ROM, under the LoROM map.
-    (if (i32.ge_u (local.get $x) (i32.const 0x8000))
-      (then (return (i32.load8_u (i32.add (i32.const ${ROM})
-        (i32.rem_u (i32.add (i32.shl (i32.and (local.get $bank)
-                                              (i32.const 0x7F))
-                                     (i32.const 15))
-                            (i32.sub (local.get $x) (i32.const 0x8000)))
-                   (i32.const ${lay.romlen})))))))
-    ;; Banks $70-$7D are cartridge SRAM on a LoROM board.
-    (if (i32.and (i32.ge_u (i32.and (local.get $bank) (i32.const 0x7F))
-                           (i32.const 0x70))
-                 (i32.lt_u (i32.and (local.get $bank) (i32.const 0x7F))
-                           (i32.const 0x7E)))
-      (then (return (i32.load8_u (i32.add (i32.const ${SRAMB})
-        (i32.and (local.get $x) (i32.const ${lay.sram})))))))
-    (i32.const 0))
+    (block $none (block $sramhi (block $sramlo (block $cpu (block $ppu (block $direct
+      (br_table $none $direct $direct $ppu $cpu $sramlo $sramhi $none (i32.load (local.get $e))))
+      ;; ROM / RAM
+      (return (i32.load8_u (i32.add (i32.load offset=4 (local.get $e)) (i32.and (local.get $a) (i32.const 0xFFF))))))
+      ;; $2000-$3FFF: the B bus. $2100-$21FF are the PPU/APU/WRAM-port registers.
+      (if (i32.eq (i32.and (local.get $x) (i32.const 0xFF00)) (i32.const 0x2100))
+        (then (return (call $ppu_read (i32.and (local.get $x) (i32.const 0xFF))))))
+      (return (global.get $ob)))
+      ;; $4000-$5FFF: controller ports and the CPU's registers.
+      (if (i32.eq (i32.and (local.get $x) (i32.const 0xFFFE)) (i32.const 0x4016))
+        (then (return (call $joyser_read (i32.and (local.get $x) (i32.const 1))))))
+      (if (i32.and (i32.ge_u (local.get $x) (i32.const 0x4200)) (i32.lt_u (local.get $x) (i32.const 0x4400)))
+        (then (return (call $io_read (local.get $x)))))
+      (return (global.get $ob)))
+      ;; LoROM SRAM: ((bank >> 1) | offset & $7FFF) & SRAMMask.
+      (return (i32.load8_u (i32.add (i32.const ${SRAMB})
+        (i32.and (i32.or (i32.shr_u (i32.and (local.get $a) (i32.const 0xFF0000)) (i32.const 1))
+                         (i32.and (local.get $a) (i32.const 0x7FFF)))
+                 (i32.const ${lay.sram}))))))
+      ;; HiROM SRAM: (offset - $6000 + (bank & $1F) * $2000) & SRAMMask.
+      (return (i32.load8_u (i32.add (i32.const ${SRAMB})
+        (i32.and (i32.add (i32.sub (i32.and (local.get $a) (i32.const 0x7FFF)) (i32.const 0x6000))
+                          (i32.shr_u (i32.and (local.get $a) (i32.const 0x1F0000)) (i32.const 3)))
+                 (i32.const ${lay.sram}))))))
+    (global.get $ob))
+
+  ;; snes9x S9xGetWord / S9xSetWord take a FAST PATH when both bytes are
+  ;; plain memory in one 4KB block: one access of twice the speed, and the
+  ;; event check after both bytes (addCyclesInMemoryAccess_x2). Anything
+  ;; else - I/O, SRAM windows handled byte by byte, a word that straddles a
+  ;; block - goes byte by byte. $want is 1 for ROM or RAM (reads), 2 for RAM
+  ;; only (writes: ROM is write-protected, so it is not a plain block there).
+  (func $fast2 (param $a i32) (param $want i32) (result i32)
+    (local $t i32)
+    (if (i32.eq (i32.and (local.get $a) (i32.const 0xFFF)) (i32.const 0xFFF)) (then (return (i32.const 0))))
+    (if (global.get $indma) (then (return (i32.const 0))))
+    (local.set $t (i32.load (i32.add (i32.const ${MAPTAB})
+      (i32.shl (i32.shr_u (i32.and (local.get $a) (i32.const 0xFFFFFF)) (i32.const 12)) (i32.const 3)))))
+    (if (result i32) (i32.eq (local.get $want) (i32.const 1))
+      (then (i32.or (i32.eq (local.get $t) (i32.const 1)) (i32.eq (local.get $t) (i32.const 2))))
+      (else (i32.eq (local.get $t) (i32.const 2)))))
 
   (func $rd16 (param $a i32) (result i32)
+    (local $v i32)
+    (if (call $fast2 (local.get $a) (i32.const 1))
+      (then
+        (call $refresh_due)
+        (local.set $v (i32.or (call $rd8m (local.get $a))
+                              (i32.shl (call $rd8m (i32.add (local.get $a) (i32.const 1))) (i32.const 8))))
+        (global.set $ob (i32.shr_u (local.get $v) (i32.const 8)))
+        (global.set $cyc (i32.sub (global.get $cyc) (i32.shl (call $speed (i32.and (local.get $a) (i32.const 0xFFFFFF))) (i32.const 1))))
+        (call $event_after)
+        (return (local.get $v))))
     (i32.or (call $rd8 (local.get $a))
             (i32.shl (call $rd8 (i32.add (local.get $a) (i32.const 1)))
                      (i32.const 8))))
+
+  ;; snes9x PushW: S9xSetWord(w, S - 1, WRAP_BANK, WRITE_10), S -= 2.
+  (func $push16 (param $v i32)
+    (local $a i32)
+    (local.set $a (i32.and (i32.sub (global.get $s) (i32.const 1)) (i32.const 0xFFFF)))
+    (if (call $fast2 (local.get $a) (i32.const 2))
+      (then (call $wr16fast (local.get $a) (local.get $v)))
+      (else (call $wr8 (global.get $s) (i32.shr_u (local.get $v) (i32.const 8)))
+            (call $wr8 (local.get $a) (i32.and (local.get $v) (i32.const 0xFF)))))
+    (global.set $s (i32.and (i32.sub (global.get $s) (i32.const 2)) (i32.const 0xFFFF))))
+  ;; snes9x PullW: S9xGetWord(S + 1, WRAP_BANK), S += 2.
+  (func $pull16 (result i32)
+    (local $a i32) (local $v i32)
+    (local.set $a (i32.and (i32.add (global.get $s) (i32.const 1)) (i32.const 0xFFFF)))
+    (if (call $fast2 (local.get $a) (i32.const 1))
+      (then (local.set $v (call $rd16 (local.get $a))))
+      (else (local.set $v (i32.or (call $rd8 (local.get $a))
+              (i32.shl (call $rd8 (i32.and (i32.add (local.get $a) (i32.const 1)) (i32.const 0xFFFF))) (i32.const 8))))))
+    (global.set $s (i32.and (i32.add (global.get $s) (i32.const 2)) (i32.const 0xFFFF)))
+    (local.get $v))
+
+  (func $wr16fast (param $a i32) (param $v i32)
+    (call $refresh_due)
+    (call $wr8m (local.get $a) (local.get $v))
+    (call $wr8m (i32.add (local.get $a) (i32.const 1)) (i32.shr_u (local.get $v) (i32.const 8)))
+    (global.set $cyc (i32.sub (global.get $cyc) (i32.shl (call $speed (i32.and (local.get $a) (i32.const 0xFFFFFF))) (i32.const 1))))
+    (call $event_after))
 
   (func $rd24 (param $a i32) (result i32)
     (i32.or (call $rd16 (local.get $a))
@@ -202,23 +293,47 @@ export function memWat(lay) {
       (else (call $rd16 (local.get $a)))))
 
   (func $wrw (param $a i32) (param $v i32) (param $f i32)
-    ;; Publish the ACCESS WIDTH for the duration of this store. The APU
-    ;; handshake needs it: the cart writes the block flag to $2141 with an
-    ;; 8-BIT store and streams data through $2140 with a 16-BIT store that
-    ;; hits $2141 as a side effect. The two are indistinguishable by port
-    ;; or by value (data bytes are often 0 or 1), and six attempts to tell
-    ;; them apart downstream each broke a working transfer. The width is
-    ;; known HERE and nowhere later.
-    (global.set $wwide (i32.eqz (local.get $f)))
+    (if (i32.and (i32.eqz (local.get $f)) (call $fast2 (local.get $a) (i32.const 2)))
+      (then (call $wr16fast (local.get $a) (local.get $v)) (return)))
     (if (local.get $f)
       (then (call $wr8 (local.get $a) (local.get $v)))
       (else (call $wr8 (local.get $a) (local.get $v))
             (call $wr8 (i32.add (local.get $a) (i32.const 1))
-                       (i32.shr_u (local.get $v) (i32.const 8)))))
-    (global.set $wwide (i32.const 0)))
+                       (i32.shr_u (local.get $v) (i32.const 8))))))
+
+  ;; A 16-bit read-modify-write stores the HIGH byte first (snes9x
+  ;; S9xSetWord ... WRITE_10), then the low byte, which stays on the bus.
+  (func $wrw10 (param $a i32) (param $v i32) (param $f i32)
+    (if (i32.and (i32.eqz (local.get $f)) (call $fast2 (local.get $a) (i32.const 2)))
+      (then (call $wr16fast (local.get $a) (local.get $v)) (return)))
+    (if (local.get $f)
+      (then (call $wr8 (local.get $a) (local.get $v)))
+      (else (call $wr8 (i32.add (local.get $a) (i32.const 1))
+                       (i32.shr_u (local.get $v) (i32.const 8)))
+            (call $wr8 (local.get $a) (local.get $v)))))
+
+  ;; snes9x memory_speed(): master clocks for one access at $a. ROM in
+  ;; banks $80-$FF is FastROM ($ms6 = 6 when $420D bit 0 is set, else 8).
+  (func $speed (param $a i32) (result i32)
+    (if (i32.and (local.get $a) (i32.const 0x408000))
+      (then (return (if (result i32) (i32.and (local.get $a) (i32.const 0x800000))
+                      (then (global.get $fastrom)) (else (i32.const 8))))))
+    (if (i32.and (i32.add (local.get $a) (i32.const 0x6000)) (i32.const 0x4000))
+      (then (return (i32.const 8))))
+    (if (i32.and (i32.sub (local.get $a) (i32.const 0x4000)) (i32.const 0x7E00))
+      (then (return (i32.const 6))))
+    (i32.const 12))
 
   (func $wr8 (param $a i32) (param $v i32)
-    (local $bank i32) (local $x i32)
+    (call $refresh_due)
+    (call $wr8m (local.get $a) (local.get $v))
+    ;; The access costs its region's speed, after the write (snes9x).
+    (if (i32.eqz (global.get $indma))
+      (then (global.set $cyc (i32.sub (global.get $cyc) (call $speed (i32.and (local.get $a) (i32.const 0xFFFFFF)))))
+            (call $event_after))))
+
+  (func $wr8m (param $a i32) (param $v i32)
+    (local $bank i32) (local $x i32) (local $e i32)
     (local.set $a (i32.and (local.get $a) (i32.const 0xFFFFFF)))
     (local.set $v (i32.and (local.get $v) (i32.const 0xFF)))
     (local.set $bank (i32.shr_u (local.get $a) (i32.const 16)))
@@ -260,7 +375,7 @@ export function memWat(lay) {
           (then (global.set $nptrw
                   (i32.add (global.get $nptrw) (i32.const 1)))))
         (if (i32.and (i32.lt_u (local.get $x) (i32.const 3))
-                     (i32.and (i32.and (global.get $ptrarm)
+                     (i32.and (i32.and (i32.ne (global.get $ptrarm) (i32.const 0))
                                        (i32.eqz (global.get $ptrw)))
                               (i32.ne (local.get $v)
                                 (i32.load8_u (i32.add
@@ -295,47 +410,47 @@ export function memWat(lay) {
             (global.set $ptrarm (i32.const 1))
             (global.set $ptrw (i32.const 0))
             (global.set $nptrw (i32.const 0))))))
-    (if (i32.and (i32.ge_u (local.get $bank) (i32.const 0x7E))
-                 (i32.le_u (local.get $bank) (i32.const 0x7F)))
-      (then (i32.store8 (i32.add (i32.const ${WRAM})
-        (i32.add (i32.shl (i32.sub (local.get $bank) (i32.const 0x7E))
-                          (i32.const 16)) (local.get $x))) (local.get $v))
-            (return)))
-    (if (i32.le_u (i32.and (local.get $bank) (i32.const 0x7F))
-                  (i32.const 0x3F))
-      (then
-        (if (i32.lt_u (local.get $x) (i32.const 0x2000))
-          (then
-            ;; WATCH THE STACK PAGE. A \`jsl\` frame that is correct at frame
-            ;; 10 is gone by frame 25, so something writes $01F0-$01FF that
-            ;; is not a push. Record the FIRST such writer that is not the
-            ;; stack pointer itself.
-            (if (i32.and (i32.and (i32.ge_u (local.get $x) (i32.const 0x01F0))
-                                  (i32.le_u (local.get $x) (i32.const 0x01FF)))
-                         (i32.and (i32.eqz (global.get $stkw))
-                                  (i32.ne (local.get $x) (global.get $s))))
-              (then (global.set $stkw (global.get $curpc))
-                    (global.set $stkwa (local.get $x))))
-            ;; The $00-$1F watch now lives at the TOP of $wr8, above the
-            ;; bank $7E/$7F fast path, so it sees both spellings of these
-            ;; addresses. It used to sit here, where it could only ever see
-            ;; the bank $00-$3F mirror.
-            (i32.store8 (i32.add (i32.const ${WRAM})
-                              (local.get $x)) (local.get $v)) (return)))
-        (if (i32.and (i32.ge_u (local.get $x) (i32.const 0x2100))
-                     (i32.lt_u (local.get $x) (i32.const 0x2200)))
-          (then (call $ppu_write (i32.and (local.get $x) (i32.const 0xFF))
-                                 (local.get $v)) (return)))
-        (if (i32.and (i32.ge_u (local.get $x) (i32.const 0x4200))
-                     (i32.lt_u (local.get $x) (i32.const 0x4400)))
-          (then (call $io_write (local.get $x) (local.get $v)) (return)))))
-    (if (i32.and (i32.ge_u (i32.and (local.get $bank) (i32.const 0x7F))
-                           (i32.const 0x70))
-                 (i32.lt_u (i32.and (local.get $bank) (i32.const 0x7F))
-                           (i32.const 0x7E)))
-      (then (i32.store8 (i32.add (i32.const ${SRAMB})
-        (i32.and (local.get $x) (i32.const ${lay.sram}))) (local.get $v))
-            (return))))
+    ;; The written byte is what the data bus holds afterwards (snes9x
+    ;; STA8 / STA16 leave OpenBus = the last byte stored).
+    (global.set $ob (local.get $v))
+    ;; WATCH THE STACK PAGE. A \`jsl\` frame that is correct at frame
+    ;; 10 is gone by frame 25, so something writes $01F0-$01FF that
+    ;; is not a push. Record the FIRST such writer that is not the
+    ;; stack pointer itself.
+    (if (i32.and (i32.le_u (i32.and (local.get $bank) (i32.const 0x7F)) (i32.const 0x3F))
+                 (i32.and (i32.and (i32.ge_u (local.get $x) (i32.const 0x01F0))
+                                   (i32.le_u (local.get $x) (i32.const 0x01FF)))
+                          (i32.and (i32.eqz (global.get $stkw))
+                                   (i32.ne (local.get $x) (global.get $s)))))
+      (then (global.set $stkw (global.get $curpc))
+            (global.set $stkwa (local.get $x))))
+    (local.set $e (i32.add (i32.const ${MAPTAB}) (i32.shl (i32.shr_u (local.get $a) (i32.const 12)) (i32.const 3))))
+    (block $none (block $sramhi (block $sramlo (block $cpu (block $ppu (block $ram
+      (br_table $none $none $ram $ppu $cpu $sramlo $sramhi $none (i32.load (local.get $e))))
+      (i32.store8 (i32.add (i32.load offset=4 (local.get $e)) (i32.and (local.get $a) (i32.const 0xFFF))) (local.get $v))
+      (return))
+      (if (i32.eq (i32.and (local.get $x) (i32.const 0xFF00)) (i32.const 0x2100))
+        (then (call $ppu_write (i32.and (local.get $x) (i32.const 0xFF)) (local.get $v))))
+      (return))
+      ;; $4016 bit 0 is the controller latch; $4017 writes do nothing.
+      (if (i32.eq (local.get $x) (i32.const 0x4016))
+        (then (call $joy_latch (i32.and (local.get $v) (i32.const 1))) (return)))
+      (if (i32.and (i32.ge_u (local.get $x) (i32.const 0x4200)) (i32.lt_u (local.get $x) (i32.const 0x4400)))
+        (then (call $io_write (local.get $x) (local.get $v))))
+      (return))
+      ;; SRAM writes need an SRAM (snes9x: if (Memory.SRAMMask)).
+      ${lay.sram ? "" : ";; this cart has no SRAM: writes are dropped\n      (return)"}
+      (i32.store8 (i32.add (i32.const ${SRAMB})
+        (i32.and (i32.or (i32.shr_u (i32.and (local.get $a) (i32.const 0xFF0000)) (i32.const 1))
+                         (i32.and (local.get $a) (i32.const 0x7FFF)))
+                 (i32.const ${lay.sram}))) (local.get $v))
+      (return))
+      ${lay.sram ? "" : "(return)"}
+      (i32.store8 (i32.add (i32.const ${SRAMB})
+        (i32.and (i32.add (i32.sub (i32.and (local.get $a) (i32.const 0x7FFF)) (i32.const 0x6000))
+                          (i32.shr_u (i32.and (local.get $a) (i32.const 0x1F0000)) (i32.const 3)))
+                 (i32.const ${lay.sram}))) (local.get $v))
+      (return)))
 
   ;; $4200-$43FF: interrupt enables, the multiply/divide unit, IRQ timers,
   ;; DMA and HDMA. The shadow at PPUREG+0x80 holds every written value, and
@@ -353,7 +468,10 @@ export function memWat(lay) {
                                       (i32.const 0)))
                      (i32.and (i32.ne (global.get $nmiflag) (i32.const 0))
                               (i32.ge_u (global.get $scanline) (i32.const 225))))
-          (then (global.set $nmipend (i32.const 1))))
+          ;; snes9x sets Timings.IRQFlagChanging |= IRQ_TRIGGER_NMI: the NMI
+          ;; becomes pending at the next boundary ($apply_ichg), so one more
+          ;; instruction runs before it is taken.
+          (then (global.set $ichg (i32.or (global.get $ichg) (i32.const 4)))))
         (global.set $nmien (i32.and (local.get $v) (i32.const 0x80)))
         (if (i32.eqz (i32.and (local.get $v) (i32.const 0x30)))
           (then (global.set $irqline (i32.const 0))))
@@ -378,44 +496,159 @@ export function memWat(lay) {
                   (i32.rem_u (local.get $p) (local.get $v)))))
         (return)))
     (if (i32.eq (local.get $r) (i32.const 0x420B))
-      (then (call $dma_run (local.get $v)) (return))))
+      (then (call $dma_run (local.get $v)) (return)))
+    ;; $4201 WRIO: bit 7 falling (while RDIO bit 7 is set) latches the H/V
+    ;; counters; RDIO ($4213) reads back what was written.
+    (if (i32.eq (local.get $r) (i32.const 0x4201))
+      (then (if (i32.and (i32.eqz (i32.and (local.get $v) (i32.const 0x80)))
+                         (i32.ne (i32.and (call $io_reg (i32.const 0x4213)) (i32.const 0x80)) (i32.const 0)))
+              (then (call $latch_hv)))
+            (call $io_set8 (i32.const 0x4213) (local.get $v))
+            (return)))
+    ;; $420D MEMSEL: FastROM speed for banks $80-$FF.
+    (if (i32.eq (local.get $r) (i32.const 0x420D))
+      (then (global.set $fastrom (if (result i32) (i32.and (local.get $v) (i32.const 1)) (then (i32.const 6)) (else (i32.const 8))))
+            (return)))
+    ;; $43xB and $43xF are one register.
+    (if (i32.eq (i32.and (local.get $r) (i32.const 0xFF8F)) (i32.const 0x430F))
+      (then (call $io_set8 (i32.sub (local.get $r) (i32.const 4)) (local.get $v))))
+    (if (i32.eq (i32.and (local.get $r) (i32.const 0xFF8F)) (i32.const 0x430B))
+      (then (call $io_set8 (i32.add (local.get $r) (i32.const 4)) (local.get $v))))
+    ;; $420C HDMAEN takes effect at once: channels switch on or off
+    ;; mid-frame, and a channel whose table already ended stays off
+    ;; (snes9x PPU.HDMA = Byte & ~PPU.HDMAEnded).
+    (if (i32.eq (local.get $r) (i32.const 0x420C))
+      (then (global.set $hdmaon (i32.and (local.get $v)
+              (i32.xor (global.get $hdmaended) (i32.const -1)))) (return)))
+    ;; $43xA NLTRx sets the HDMA line counter and repeat flag.
+    (if (i32.eq (i32.and (local.get $r) (i32.const 0xFF8F)) (i32.const 0x430A))
+      (then
+        (local.set $p (i32.add (i32.const ${HDMAST})
+          (i32.and (local.get $r) (i32.const 0x70))))
+        (if (i32.and (local.get $v) (i32.const 0x7F))
+          (then (i32.store8 offset=4 (local.get $p) (i32.and (local.get $v) (i32.const 0x7F)))
+                (i32.store8 offset=5 (local.get $p) (i32.eqz (i32.and (local.get $v) (i32.const 0x80)))))
+          (else (i32.store8 offset=4 (local.get $p) (i32.const 128))
+                (i32.store8 offset=5 (local.get $p) (i32.ne (i32.and (local.get $v) (i32.const 0x80)) (i32.const 0)))))
+        (return))))
 
   (func $io_read (param $r i32) (result i32)
     (local $v i32)
+    ;; $43xA NLTRx reads the live line counter, bit 7 = NOT repeat.
+    (if (i32.eq (i32.and (local.get $r) (i32.const 0xFF8F)) (i32.const 0x430A))
+      (then (local.set $v (i32.add (i32.const ${HDMAST}) (i32.and (local.get $r) (i32.const 0x70))))
+            (return (i32.xor (i32.load8_u offset=4 (local.get $v))
+              (if (result i32) (i32.load8_u offset=5 (local.get $v)) (then (i32.const 0)) (else (i32.const 0x80)))))))
     ;; $4210 RDNMI: bit 7 is the NMI flag, and READING IT CLEARS the flag.
     (if (i32.eq (local.get $r) (i32.const 0x4210))
-      (then (global.set $t4 (i32.or (i32.const 2) (global.get $nmiflag)))
+      (then
+            ;; A read that lands past the end of line 224 sees line 225's
+            ;; flag (snes9x sets it inside the access); remember that it was
+            ;; read so the line-225 start does not set it again.
+            (call $beam)
+            (if (i32.and (i32.eq (global.get $scanline) (i32.const 224)) (i32.eq (global.get $bv) (i32.const 225)))
+              (then (global.set $nmiflag (i32.const 0x80)) (global.set $nmiearly (i32.const 1))))
+            (global.set $t4 (i32.or (i32.or (i32.const 2) (global.get $nmiflag))
+                                    (i32.and (global.get $ob) (i32.const 0x70))))
             (global.set $nmiflag (i32.const 0))
             (return (global.get $t4))))
     ;; $4211 TIMEUP: bit 7 set when the H/V IRQ fired; reading acknowledges.
     (if (i32.eq (local.get $r) (i32.const 0x4211))
-      (then (local.set $v (i32.shl (global.get $irqline) (i32.const 7)))
+      (then (local.set $v (i32.or (i32.shl (global.get $irqline) (i32.const 7))
+                                  (i32.and (global.get $ob) (i32.const 0x7F))))
             (global.set $irqline (i32.const 0))
             (return (local.get $v))))
     ;; $4212 HVBJOY (snes9x REGISTER_4212).
     (if (i32.eq (local.get $r) (i32.const 0x4212))
       (then
         (local.set $v (i32.const 0))
-        (if (i32.and (i32.ge_u (global.get $scanline) (i32.const 225))
-                     (i32.lt_u (global.get $scanline) (i32.const 228)))
+        (call $beam)
+        (if (i32.and (i32.ge_u (global.get $bv) (i32.const 225))
+                     (i32.lt_u (global.get $bv) (i32.const 228)))
           (then (local.set $v (i32.const 1))))
-        (if (i32.or (i32.ge_s (call $hnow) (i32.const 137))
-                    (i32.lt_s (call $hnow) (i32.const 1)))
+        (if (i32.or (i32.ge_s (global.get $bh) (i32.const 1096))
+                    (i32.lt_s (global.get $bh) (i32.const 4)))
           (then (local.set $v (i32.or (local.get $v) (i32.const 0x40)))))
-        (if (i32.ge_u (global.get $scanline) (i32.const 225))
+        (if (i32.ge_u (global.get $bv) (i32.const 225))
           (then (local.set $v (i32.or (local.get $v) (i32.const 0x80)))))
-        (return (local.get $v))))
-    ;; Controller ports: nothing pressed (verification runs are input-free).
-    (if (i32.and (i32.ge_u (local.get $r) (i32.const 0x4218))
-                 (i32.le_u (local.get $r) (i32.const 0x421F)))
-      (then (return (i32.const 0))))
-    (i32.load8_u (i32.add (i32.const ${PPUREG + 0x80})
-      (i32.and (local.get $r) (i32.const 0x1FF)))))
+        (return (i32.or (local.get $v) (i32.and (global.get $ob) (i32.const 0x3E))))))
+    ;; snes9x S9xGetCPU: $4213-$421F and the DMA channel registers
+    ;; $43x0-$43xB/$43xF read back; everything else in $4200-$43FF
+    ;; (the write-only $4200-$420F, $4220-$42FF, $43xC-$43xE, $4380+) is
+    ;; open bus. $43xF mirrors $43xB.
+    (if (i32.and (i32.ge_u (local.get $r) (i32.const 0x4213)) (i32.le_u (local.get $r) (i32.const 0x421F)))
+      (then (return (call $io_reg (local.get $r)))))
+    (if (i32.and (i32.ge_u (local.get $r) (i32.const 0x4300)) (i32.lt_u (local.get $r) (i32.const 0x4380)))
+      (then
+        (local.set $v (i32.and (local.get $r) (i32.const 0xF)))
+        (if (i32.le_u (local.get $v) (i32.const 0xB)) (then (return (call $io_reg (local.get $r)))))
+        (if (i32.eq (local.get $v) (i32.const 0xF)) (then (return (call $io_reg (i32.sub (local.get $r) (i32.const 4))))))))
+    (global.get $ob))
 
-  ;; Position inside the current line, in the 8-master-clock units the
-  ;; scanline budget uses (170 per line).
+  ;; Position inside the current line in master clocks (1364 per line).
   (func $hnow (result i32)
     (i32.sub (global.get $segend) (global.get $cyc)))
+
+  ;; The beam where this access happens: an instruction that started before
+  ;; the end of a line can make its access after it, and snes9x processes
+  ;; the line change inside the access (addCyclesInMemoryAccess), so a
+  ;; position past 1364 is the next line. Sets $bv (line) and $bh (clock).
+  (func $beam
+    (global.set $bh (call $hnow))
+    (global.set $bv (global.get $scanline))
+    (if (i32.ge_s (global.get $bh) (global.get $hmax))
+      (then (global.set $bh (i32.sub (global.get $bh) (global.get $hmax)))
+            (global.set $bv (i32.add (global.get $bv) (i32.const 1)))
+            (if (i32.eq (global.get $bv) (i32.const 262)) (then (global.set $bv (i32.const 0)))))))
+
+  ;; ---- Controllers (snes9x controls.cpp) ----------------------------------
+  ;; Two joypads. $pad0/$pad1 hold snes9x's joypad[].buttons word (B Y Sel
+  ;; Start Up Down Left Right in bits 15-8, A X L R in bits 7-4), sampled
+  ;; from the wasmcart pads at the start of every frame the way libretro's
+  ;; retro_run reports buttons before emulating. The pads are POSITIONAL:
+  ;; wasmcart A (south) is SNES B, B (east) is SNES A, X (west) is SNES Y,
+  ;; Y (north) is SNES X. Up+Down and Left+Right are filtered as snes9x does
+  ;; with UpAndDown off (the later-reported Down / Right wins).
+  (func $pad_word (param $b i32) (result i32)
+    (local $j i32)
+    ${[[0, 15], [1, 7], [2, 14], [3, 6], [4, 5], [5, 4], [6, 12], [7, 13], [8, 11], [9, 10], [10, 9], [11, 8]]
+      .map(([w, sn]) => `(if (i32.and (local.get $b) (i32.const ${1 << w})) (then (local.set $j (i32.or (local.get $j) (i32.const ${1 << sn})))))`).join("\n    ")}
+    (if (i32.and (local.get $j) (i32.const 0x400)) (then (local.set $j (i32.and (local.get $j) (i32.const 0xF7FF)))))
+    (if (i32.and (local.get $j) (i32.const 0x100)) (then (local.set $j (i32.and (local.get $j) (i32.const 0xFDFF)))))
+    (local.get $j))
+  (func $pads_sample
+    (global.set $pad0 (call $pad_word (i32.load16_u (i32.const ${INPUT}))))
+    (global.set $pad1 (call $pad_word (i32.load16_u (i32.const ${INPUT + 16})))))
+  ;; S9xSetJoypadLatch: raising the latch rewinds both shift positions.
+  (func $joy_latch (param $l i32)
+    (if (i32.and (local.get $l) (i32.eqz (global.get $joylatch)))
+      (then (global.set $jidx0 (i32.const 0)) (global.set $jidx1 (i32.const 0))))
+    (global.set $joylatch (local.get $l)))
+  ;; S9xReadJOYSERn for a joypad on port $n. Bits 7-2 are open bus, plus
+  ;; $1C on $4017.
+  (func $joyser_read (param $n i32) (result i32)
+    (local $bits i32) (local $b i32) (local $i i32)
+    (local.set $bits (i32.or (i32.and (global.get $ob) (i32.const 0xFC))
+      (if (result i32) (local.get $n) (then (i32.const 0x1C)) (else (i32.const 0)))))
+    (local.set $b (if (result i32) (local.get $n) (then (global.get $pad1)) (else (global.get $pad0))))
+    (if (global.get $joylatch)
+      (then (return (i32.or (local.get $bits) (i32.shr_u (local.get $b) (i32.const 15))))))
+    (local.set $i (if (result i32) (local.get $n) (then (global.get $jidx1)) (else (global.get $jidx0))))
+    (if (local.get $n) (then (global.set $jidx1 (i32.add (local.get $i) (i32.const 1))))
+                       (else (global.set $jidx0 (i32.add (local.get $i) (i32.const 1)))))
+    (if (i32.ge_u (local.get $i) (i32.const 16)) (then (return (i32.or (local.get $bits) (i32.const 1)))))
+    (i32.or (local.get $bits) (i32.and (i32.shr_u (local.get $b) (i32.sub (i32.const 15) (local.get $i))) (i32.const 1))))
+  ;; S9xDoAutoJoypad: latch pulse, then JOY1/JOY2 = the pads, JOY3/JOY4 = 0,
+  ;; and the serial ports read past the end (all 1s) afterwards.
+  (func $auto_joypad
+    (call $joy_latch (i32.const 1))
+    (call $joy_latch (i32.const 0))
+    (i32.store16 (i32.const ${PPUREG + 0x80 + 0x18}) (global.get $pad0))
+    (i32.store16 (i32.const ${PPUREG + 0x80 + 0x1A}) (global.get $pad1))
+    (i32.store16 (i32.const ${PPUREG + 0x80 + 0x1C}) (i32.const 0))
+    (i32.store16 (i32.const ${PPUREG + 0x80 + 0x1E}) (i32.const 0))
+    (global.set $jidx0 (i32.const 16))
+    (global.set $jidx1 (i32.const 16)))
 
   ;; The B-bus offset each transfer mode cycles through, 2 bits per step,
   ;; four steps per mode (modes 0-7): 0 | 01 | 00 | 0011 | 0123 | 0101 | 00 | 0011
@@ -430,7 +663,10 @@ export function memWat(lay) {
   (func $dma_run (param $mask i32)
     (local $ch i32) (local $base i32) (local $mode i32) (local $bport i32)
     (local $src i32) (local $cnt i32) (local $i i32) (local $step i32)
-    (local $dir i32) (local $k i32) (local $p i32)
+    (local $dir i32) (local $k i32) (local $p i32) (local $abort i32)
+    ;; Timings.DMACPUSync, once per $420B write that starts a channel.
+    (if (i32.and (local.get $mask) (i32.const 0xFF))
+      (then (global.set $cyc (i32.sub (global.get $cyc) (i32.const 18)))))
     (local.set $ch (i32.const 0))
     (block $d (loop $l
       (br_if $d (i32.ge_u (local.get $ch) (i32.const 8)))
@@ -463,20 +699,24 @@ export function memWat(lay) {
               (then (local.set $step (i32.const -1))))))
           (local.set $i (i32.const 0))
           (local.set $k (i32.const 0))
+          ;; snes9x S9xDoDMA: 8 master clocks per channel before its bytes.
+          (global.set $cyc (i32.sub (global.get $cyc) (i32.const 8)))
+          (global.set $indma (i32.const 1))
+          (global.set $ingdma (i32.const 1))
+          ;; snes9x inWRAM_DMA: a WRAM A-bus address cannot also reach the
+          ;; WRAM port $2180 (the write is dropped / the read is open bus).
+          (global.set $wramdma (if (result i32) (local.get $dir)
+            (then (i32.eq (i32.and (i32.shr_u (local.get $src) (i32.const 17)) (i32.const 0x7F)) (i32.const 0x3F)))
+            (else (i32.or (i32.eq (i32.and (i32.shr_u (local.get $src) (i32.const 17)) (i32.const 0x7F)) (i32.const 0x3F))
+                          (i32.and (i32.eqz (i32.and (local.get $src) (i32.const 0x400000)))
+                                   (i32.lt_u (i32.and (local.get $src) (i32.const 0xFFFF)) (i32.const 0x2000)))))))
           (block $td (loop $tl
             (br_if $td (i32.ge_u (local.get $i) (local.get $cnt)))
-            (if (local.get $dir)
-              (then (call $wr8 (local.get $src)
-                      (call $rd8 (i32.or (i32.const 0x2100) (i32.and
-                        (i32.add (local.get $bport)
-                                 (call $dmaoff (local.get $mode) (local.get $k)))
-                        (i32.const 0xFF))))))
-              (else (call $wr8
-                (i32.or (i32.const 0x2100) (i32.and
-                  (i32.add (local.get $bport)
-                           (call $dmaoff (local.get $mode) (local.get $k)))
-                  (i32.const 0xFF)))
-                (call $rd8 (local.get $src)))))
+            (call $dma_byte (local.get $src)
+              (i32.or (i32.const 0x2100) (i32.and
+                (i32.add (local.get $bport) (call $dmaoff (local.get $mode) (local.get $k)))
+                (i32.const 0xFF)))
+              (local.get $dir))
             (local.set $k (i32.add (local.get $k) (i32.const 1)))
             ;; The A-bus address walks inside its BANK.
             (local.set $src (i32.or
@@ -484,17 +724,36 @@ export function memWat(lay) {
               (i32.and (i32.add (local.get $src) (local.get $step))
                        (i32.const 0xFFFF))))
             (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            ;; UPDATE_COUNTERS: the address ($43x2) and the count ($43x5)
+            ;; the CPU and HDMA see move with every byte.
+            (i32.store16 (i32.add (i32.const ${PPUREG + 0x80})
+              (i32.and (i32.add (local.get $base) (i32.const 2)) (i32.const 0x1FF)))
+              (local.get $src))
+            (i32.store16 (i32.add (i32.const ${PPUREG + 0x80})
+              (i32.and (i32.add (local.get $base) (i32.const 5)) (i32.const 0x1FF)))
+              (i32.sub (local.get $cnt) (local.get $i)))
+            ;; addCyclesInDMA: 8 per byte, then every event that reaches
+            ;; (render, HDMA, refresh, line ends and the APU catch-up with
+            ;; them, vblank). An HDMA that ran on this channel meanwhile
+            ;; ends the transfer where it stands.
+            (global.set $cyc (i32.sub (global.get $cyc) (i32.const 8)))
+            (call $ev_due)
+            (if (i32.and (global.get $hdmaran) (i32.shl (i32.const 1) (local.get $ch)))
+              (then (global.set $hdmaran (i32.const 0)) (local.set $abort (i32.const 1)) (br $td)))
+            (global.set $hdmaran (i32.const 0))
             (br $tl)))
-          ;; After a transfer the count reads 0 and the address has advanced.
-          (i32.store16 (i32.add (i32.const ${PPUREG + 0x80})
-            (i32.and (i32.add (local.get $base) (i32.const 2)) (i32.const 0x1FF)))
-            (local.get $src))
-          (i32.store16 (i32.add (i32.const ${PPUREG + 0x80})
-            (i32.and (i32.add (local.get $base) (i32.const 5)) (i32.const 0x1FF)))
-            (i32.const 0))
-          ;; 8 master clocks per byte = one unit of the scanline budget.
-          (global.set $cyc (i32.sub (global.get $cyc)
-                                    (i32.add (local.get $cnt) (i32.const 2))))
+          (global.set $indma (i32.const 0))
+          (global.set $ingdma (i32.const 0))
+          (global.set $wramdma (i32.const 0))
+          ;; S9xDoDMA's tail (not reached by an aborted transfer or the
+          ;; refused WRAM -> $2180 one): an NMI that became pending during
+          ;; the transfer triggers Timings.NMIDMADelay (24) after it.
+          (if (i32.and (i32.and (global.get $nmipend) (i32.eqz (local.get $abort)))
+                       (i32.eqz (i32.and (i32.and (i32.eq (i32.and (i32.shr_u (local.get $src) (i32.const 16)) (i32.const 0xFE)) (i32.const 0x7E))
+                                                  (i32.eq (local.get $bport) (i32.const 0x80)))
+                                         (i32.eqz (local.get $dir)))))
+            (then (global.set $nmipos (i32.add (call $hnow) (i32.const 24)))))
+          (local.set $abort (i32.const 0))
           (if (i32.lt_u (global.get $ndma) (i32.const ${DMALOG_N}))
             (then
               (local.set $base (i32.add (i32.const ${DMALOG})
@@ -514,13 +773,27 @@ export function memWat(lay) {
       (local.set $ch (i32.add (local.get $ch) (i32.const 1)))
       (br $l))))
 
+  ;; One DMA byte between A-bus $src and B-bus $b (snes9x S9xDoDMA): the
+  ;; A bus cannot address the B bus, so an A-bus $21xx reads open bus and
+  ;; is not written.
+  (func $dma_byte (param $src i32) (param $b i32) (param $dir i32)
+    (local $ab i32)
+    (local.set $ab (i32.eq (i32.and (local.get $src) (i32.const 0x40FF00)) (i32.const 0x2100)))
+    (if (local.get $dir)
+      (then (local.set $b (call $rd8 (local.get $b)))
+            (if (i32.eqz (local.get $ab)) (then (call $wr8 (local.get $src) (local.get $b)))))
+      (else (call $wr8 (local.get $b)
+              (if (result i32) (local.get $ab) (then (global.get $ob)) (else (call $rd8 (local.get $src))))))))
+
   (func $io_reg (param $r i32) (result i32)
     (i32.load8_u (i32.add (i32.const ${PPUREG + 0x80})
       (i32.and (local.get $r) (i32.const 0x1FF)))))
 
-  ;; ---- HDMA (snes9x dma.cpp S9xStartHDMA / S9xDoHDMA) -----------------
-  ;; Per channel, HDMAST+ch*16: +0 table address (u16), +2 indirect address
-  ;; (u16), +4 line counter, +5 repeat, +6 do-transfer.
+  ;; ---- HDMA (snes9x dma.cpp S9xStartHDMA / S9xDoHDMA / HDMAReadLineCount)
+  ;; The channel state lives where snes9x keeps it and the CPU can see it:
+  ;; the table address in $43x8/9 (A2A), the indirect address in $43x5/6
+  ;; (DAS), and the line counter / repeat flag behind $43xA. HDMAST+ch*16
+  ;; holds +4 line counter, +5 repeat, +6 do-transfer.
   (func $hdma_linecount (param $ch i32) (result i32)
     (local $st i32) (local $base i32) (local $bank i32) (local $ad i32)
     (local $line i32)
@@ -528,13 +801,26 @@ export function memWat(lay) {
     (local.set $base (i32.add (i32.const 0x4300) (i32.shl (local.get $ch) (i32.const 4))))
     (local.set $bank (i32.shl (call $io_reg (i32.add (local.get $base) (i32.const 4)))
                               (i32.const 16)))
-    (local.set $ad (i32.load16_u (local.get $st)))
+    (local.set $ad (call $io_reg16 (i32.add (local.get $base) (i32.const 8))))
     (local.set $line (call $rd8 (i32.or (local.get $bank) (local.get $ad))))
+    (global.set $cyc (i32.sub (global.get $cyc) (i32.const 8)))
     (if (i32.eqz (local.get $line))
       (then
         (i32.store8 (i32.add (local.get $st) (i32.const 5)) (i32.const 0))
         (i32.store8 (i32.add (local.get $st) (i32.const 4)) (i32.const 128))
-        (i32.store16 (local.get $st) (i32.add (local.get $ad) (i32.const 1)))
+        ;; A terminated indirect channel still loads its indirect address,
+        ;; one byte further on when a later channel is still running.
+        (if (i32.and (call $io_reg (local.get $base)) (i32.const 0x40))
+          (then
+            (if (i32.and (global.get $hdmaon) (i32.shl (i32.const 0xFE) (local.get $ch)))
+              (then (local.set $ad (i32.and (i32.add (local.get $ad) (i32.const 1)) (i32.const 0xFFFF)))
+                    (global.set $cyc (i32.sub (global.get $cyc) (i32.const 16))))
+              (else (global.set $cyc (i32.sub (global.get $cyc) (i32.const 8)))))
+            (call $io_set16 (i32.add (local.get $base) (i32.const 5))
+              (call $rd16 (i32.or (local.get $bank) (local.get $ad))))
+            (local.set $ad (i32.and (i32.add (local.get $ad) (i32.const 1)) (i32.const 0xFFFF)))))
+        (call $io_set16 (i32.add (local.get $base) (i32.const 8))
+          (i32.and (i32.add (local.get $ad) (i32.const 1)) (i32.const 0xFFFF)))
         (return (i32.const 0))))
     (if (i32.eq (local.get $line) (i32.const 0x80))
       (then (i32.store8 (i32.add (local.get $st) (i32.const 5)) (i32.const 1))
@@ -547,37 +833,68 @@ export function memWat(lay) {
     (i32.store8 (i32.add (local.get $st) (i32.const 6)) (i32.const 1))
     (if (i32.and (call $io_reg (local.get $base)) (i32.const 0x40))
       (then
-        (i32.store16 (i32.add (local.get $st) (i32.const 2))
+        (global.set $cyc (i32.sub (global.get $cyc) (i32.const 16)))
+        (call $io_set16 (i32.add (local.get $base) (i32.const 5))
           (call $rd16 (i32.or (local.get $bank) (local.get $ad))))
         (local.set $ad (i32.and (i32.add (local.get $ad) (i32.const 2)) (i32.const 0xFFFF)))))
-    (i32.store16 (local.get $st) (local.get $ad))
+    (call $io_set16 (i32.add (local.get $base) (i32.const 8)) (local.get $ad))
     (i32.const 1))
 
+  (func $io_reg16 (param $r i32) (result i32)
+    (i32.load16_u (i32.add (i32.const ${PPUREG + 0x80})
+      (i32.and (local.get $r) (i32.const 0x1FF)))))
+  (func $io_set8 (param $r i32) (param $v i32)
+    (i32.store8 (i32.add (i32.const ${PPUREG + 0x80})
+      (i32.and (local.get $r) (i32.const 0x1FF))) (local.get $v)))
+  (func $io_set16 (param $r i32) (param $v i32)
+    (i32.store16 (i32.add (i32.const ${PPUREG + 0x80})
+      (i32.and (local.get $r) (i32.const 0x1FF))) (local.get $v)))
+
+  ;; S9xStartHDMA, at line 0.
   (func $hdma_init
-    (local $ch i32)
+    (local $ch i32) (local $base i32) (local $sv i32)
     (global.set $hdmaon (call $io_reg (i32.const 0x420C)))
+    (global.set $hdmaended (i32.const 0))
+    (if (global.get $hdmaon) (then (global.set $cyc (i32.sub (global.get $cyc) (i32.const 18)))))
+    ;; (H)DMA state is saved around it: this can run inside a general DMA.
+    (local.set $sv (i32.or (global.get $indma) (i32.shl (global.get $wramdma) (i32.const 1))))
+    (global.set $indma (i32.const 1))
+    (global.set $wramdma (i32.const 0))
     (local.set $ch (i32.const 0))
     (block $d (loop $l
       (br_if $d (i32.ge_u (local.get $ch) (i32.const 8)))
-      (i32.store8 (i32.add (i32.const ${HDMAST + 6}) (i32.shl (local.get $ch) (i32.const 4)))
-                  (i32.const 0))
+      (local.set $base (i32.add (i32.const 0x4300) (i32.shl (local.get $ch) (i32.const 4))))
       (if (i32.and (global.get $hdmaon) (i32.shl (i32.const 1) (local.get $ch)))
         (then
-          (i32.store16 (i32.add (i32.const ${HDMAST}) (i32.shl (local.get $ch) (i32.const 4)))
-            (i32.or (call $io_reg (i32.add (i32.const 0x4302) (i32.shl (local.get $ch) (i32.const 4))))
-                    (i32.shl (call $io_reg (i32.add (i32.const 0x4303)
-                                (i32.shl (local.get $ch) (i32.const 4)))) (i32.const 8))))
+          (call $io_set16 (i32.add (local.get $base) (i32.const 8))
+            (call $io_reg16 (i32.add (local.get $base) (i32.const 2))))
           (if (i32.eqz (call $hdma_linecount (local.get $ch)))
             (then (global.set $hdmaon (i32.and (global.get $hdmaon)
-                    (i32.xor (i32.shl (i32.const 1) (local.get $ch)) (i32.const -1))))))))
+                    (i32.xor (i32.shl (i32.const 1) (local.get $ch)) (i32.const -1))))
+                  (global.set $hdmaended (i32.or (global.get $hdmaended)
+                    (i32.shl (i32.const 1) (local.get $ch)))))))
+        (else (i32.store8 (i32.add (i32.const ${HDMAST + 6}) (i32.shl (local.get $ch) (i32.const 4)))
+                          (i32.const 0))))
       (local.set $ch (i32.add (local.get $ch) (i32.const 1)))
-      (br $l))))
+      (br $l)))
+    (global.set $indma (i32.and (local.get $sv) (i32.const 1)))
+    (global.set $wramdma (i32.shr_u (local.get $sv) (i32.const 1)))
+    ;; CPU.HDMARanInDMA = CPU.InDMA ? PPU.HDMA : 0
+    (global.set $hdmaran (if (result i32) (global.get $ingdma) (then (global.get $hdmaon)) (else (i32.const 0)))))
 
+  ;; S9xDoHDMA, once per visible line.
   (func $hdma_do
     (local $ch i32) (local $st i32) (local $base i32) (local $p i32)
     (local $mode i32) (local $n i32) (local $k i32) (local $src i32)
-    (local $ind i32) (local $bb i32) (local $lc i32)
+    (local $ind i32) (local $bb i32) (local $lc i32) (local $breg i32) (local $sv i32)
     (if (i32.eqz (global.get $hdmaon)) (then (return)))
+    ;; CPU.HDMARanInDMA = CPU.InDMA ? byte : 0
+    (global.set $hdmaran (if (result i32) (global.get $ingdma) (then (global.get $hdmaon)) (else (i32.const 0))))
+    ;; Timings.DMACPUSync per HDMA line.
+    (global.set $cyc (i32.sub (global.get $cyc) (i32.const 18)))
+    (local.set $sv (i32.or (global.get $indma) (i32.shl (global.get $wramdma) (i32.const 1))))
+    (global.set $indma (i32.const 1))
+    (global.set $wramdma (i32.const 0))
     (local.set $ch (i32.const 0))
     (block $d (loop $l
       (br_if $d (i32.ge_u (local.get $ch) (i32.const 8)))
@@ -597,24 +914,29 @@ export function memWat(lay) {
               (local.set $src (if (result i32) (local.get $ind)
                 (then (i32.or (i32.shl (call $io_reg (i32.add (local.get $base) (i32.const 7)))
                                        (i32.const 16))
-                              (i32.load16_u (i32.add (local.get $st) (i32.const 2)))))
+                              (call $io_reg16 (i32.add (local.get $base) (i32.const 5)))))
                 (else (i32.or (i32.shl (call $io_reg (i32.add (local.get $base) (i32.const 4)))
                                        (i32.const 16))
-                              (i32.load16_u (local.get $st))))))
+                              (call $io_reg16 (i32.add (local.get $base) (i32.const 8)))))))
               (global.set $inhdma (i32.const 1))
               (local.set $k (i32.const 0))
               (block $kd (loop $kl
                 (br_if $kd (i32.ge_u (local.get $k) (local.get $n)))
+                (local.set $breg (i32.or (i32.const 0x2100) (i32.and
+                  (i32.add (local.get $bb) (call $dmaoff (local.get $mode) (local.get $k)))
+                  (i32.const 0xFF))))
                 (if (i32.eqz (i32.and (local.get $p) (i32.const 0x80)))
-                  (then (call $wr8 (i32.or (i32.const 0x2100) (i32.and
-                          (i32.add (local.get $bb) (call $dmaoff (local.get $mode) (local.get $k)))
-                          (i32.const 0xFF)))
+                  (then (call $wr8 (local.get $breg)
                           (call $rd8 (i32.or (i32.and (local.get $src) (i32.const 0xFF0000))
-                            (i32.and (i32.add (local.get $src) (local.get $k)) (i32.const 0xFFFF)))))))
+                            (i32.and (i32.add (local.get $src) (local.get $k)) (i32.const 0xFFFF))))))
+                  ;; Reverse HDMA: B bus to A bus.
+                  (else (call $wr8 (i32.or (i32.and (local.get $src) (i32.const 0xFF0000))
+                            (i32.and (i32.add (local.get $src) (local.get $k)) (i32.const 0xFFFF)))
+                          (call $rd8 (local.get $breg)))))
                 (local.set $k (i32.add (local.get $k) (i32.const 1)))
                 (br $kl)))
               (global.set $inhdma (i32.const 0))
-              (global.set $cyc (i32.sub (global.get $cyc) (local.get $n)))))))
+              (global.set $cyc (i32.sub (global.get $cyc) (i32.shl (local.get $n) (i32.const 3))))))))
       (local.set $ch (i32.add (local.get $ch) (i32.const 1)))
       (br $l)))
     (local.set $ch (i32.const 0))
@@ -631,23 +953,29 @@ export function memWat(lay) {
           (if (i32.load8_u (i32.add (local.get $st) (i32.const 6)))
             (then
               (if (i32.and (local.get $p) (i32.const 0x40))
-                (then (i32.store16 (i32.add (local.get $st) (i32.const 2))
-                        (i32.add (i32.load16_u (i32.add (local.get $st) (i32.const 2))) (local.get $n))))
-                (else (i32.store16 (local.get $st)
-                        (i32.add (i32.load16_u (local.get $st)) (local.get $n)))))))
+                (then (call $io_set16 (i32.add (local.get $base) (i32.const 5))
+                        (i32.add (call $io_reg16 (i32.add (local.get $base) (i32.const 5))) (local.get $n))))
+                (else (call $io_set16 (i32.add (local.get $base) (i32.const 8))
+                        (i32.add (call $io_reg16 (i32.add (local.get $base) (i32.const 8))) (local.get $n)))))))
           (i32.store8 (i32.add (local.get $st) (i32.const 6))
             (i32.eqz (i32.load8_u (i32.add (local.get $st) (i32.const 5)))))
           (local.set $lc (i32.sub (i32.load8_u (i32.add (local.get $st) (i32.const 4))) (i32.const 1)))
           (i32.store8 (i32.add (local.get $st) (i32.const 4)) (local.get $lc))
+          (if (i32.and (local.get $lc) (i32.const 0xFF))
+            (then (global.set $cyc (i32.sub (global.get $cyc) (i32.const 8)))))
           (if (i32.eqz (i32.and (local.get $lc) (i32.const 0xFF)))
             (then
               (if (i32.eqz (call $hdma_linecount (local.get $ch)))
                 (then
                   (global.set $hdmaon (i32.and (global.get $hdmaon)
                     (i32.xor (i32.shl (i32.const 1) (local.get $ch)) (i32.const -1))))
+                  (global.set $hdmaended (i32.or (global.get $hdmaended)
+                    (i32.shl (i32.const 1) (local.get $ch))))
                   (i32.store8 (i32.add (local.get $st) (i32.const 6)) (i32.const 0))))))))
       (local.set $ch (i32.add (local.get $ch) (i32.const 1)))
-      (br $l2))))
+      (br $l2)))
+    (global.set $indma (i32.and (local.get $sv) (i32.const 1)))
+    (global.set $wramdma (i32.shr_u (local.get $sv) (i32.const 1))))
 
   (func $trap
     (global.set $trapped (i32.const 1))
@@ -657,11 +985,38 @@ export function memWat(lay) {
 
 // m65816.py interp_wat() lines 343-952
 /** @param {import("./layout.js").SnesLayout} lay */
-export function interpWat(lay) {
+export function interpWat(_lay) {
   return `
-  ;; Fetch the byte at PC+k without disturbing PC.
+  ;; One interpreted instruction, charged the way an arm is: the program
+  ;; bytes at the code region's speed and the static internal cycles
+  ;; (ICOST, from lower.js cycles()) before it runs, its data accesses as
+  ;; they happen, one more cycle for a direct page off a page boundary and
+  ;; for a taken branch.
+  (func $istep
+    (local $op i32) (local $lf i32) (local $n i32) (local $pc0 i32)
+    (local.set $pc0 (global.get $pc))
+    (local.set $op (call $rd8m (global.get $pc)))
+    (local.set $lf (i32.load8_u (i32.add (i32.const ${ICOST}) (i32.shl (local.get $op) (i32.const 1)))))
+    (local.set $n (i32.and (local.get $lf) (i32.const 7)))
+    (if (i32.and (i32.ne (i32.and (local.get $lf) (i32.const 0x80)) (i32.const 0)) (i32.eqz (global.get $fm)))
+      (then (local.set $n (i32.add (local.get $n) (i32.const 1)))))
+    (if (i32.and (i32.ne (i32.and (local.get $lf) (i32.const 0x40)) (i32.const 0)) (i32.eqz (global.get $fx)))
+      (then (local.set $n (i32.add (local.get $n) (i32.const 1)))))
+    (global.set $cyc (i32.sub (global.get $cyc) (i32.add
+      (i32.mul (global.get $ms) (local.get $n))
+      (i32.mul (i32.and (i32.load8_u offset=1 (i32.add (i32.const ${ICOST}) (i32.shl (local.get $op) (i32.const 1)))) (i32.const 0x7F)) (i32.const 6)))))
+    (if (i32.and (i32.ne (i32.and (local.get $lf) (i32.const 0x20)) (i32.const 0)) (i32.ne (i32.and (global.get $d) (i32.const 0xFF)) (i32.const 0)))
+      (then (global.set $cyc (i32.sub (global.get $cyc) (i32.const 6)))))
+    (call $interp)
+    (if (i32.and (i32.ne (i32.and (local.get $lf) (i32.const 0x10)) (i32.const 0))
+                 (i32.ne (global.get $pc) (i32.or (i32.and (local.get $pc0) (i32.const 0xFF0000))
+                                                  (i32.and (i32.add (local.get $pc0) (i32.const 2)) (i32.const 0xFFFF)))))
+      (then (global.set $cyc (i32.sub (global.get $cyc) (i32.const 6))))))
+
+  ;; Fetch the byte at PC+k without disturbing PC (the fetch is charged by
+  ;; $istep, not here).
   (func $ifetch (param $k i32) (result i32)
-    (call $rd8 (i32.or
+    (call $rd8m (i32.or
       (i32.and (global.get $pc) (i32.const 0xFF0000))
       (i32.and (i32.add (global.get $pc) (local.get $k))
                (i32.const 0xFFFF)))))
@@ -693,9 +1048,9 @@ export function interpWat(lay) {
     (if (i32.eq (local.get $op) (i32.const 0x38))
       (then (global.set $fc (i32.const 1)) (call $ipc (i32.const 1)) (return)))
     (if (i32.eq (local.get $op) (i32.const 0x58))
-      (then (global.set $fi (i32.const 0)) (call $ipc (i32.const 1)) (return)))
+      (then (global.set $ichg (i32.or (global.get $ichg) (i32.const 1))) (call $ipc (i32.const 1)) (return)))
     (if (i32.eq (local.get $op) (i32.const 0x78))
-      (then (global.set $fi (i32.const 1)) (call $ipc (i32.const 1)) (return)))
+      (then (global.set $ichg (i32.or (global.get $ichg) (i32.const 2))) (call $ipc (i32.const 1)) (return)))
     (if (i32.eq (local.get $op) (i32.const 0xB8))
       (then (global.set $fv (i32.const 0)) (call $ipc (i32.const 1)) (return)))
     (if (i32.eq (local.get $op) (i32.const 0xD8))
@@ -886,6 +1241,8 @@ export function interpWat(lay) {
                (i32.and (global.get $pc) (i32.const 0xFF0000))
                (i32.and (i32.add (call $ipull (i32.const 0)) (i32.const 1))
                         (i32.const 0xFFFF))))
+            ;; Op60: the last internal cycle comes after the pull.
+            (global.set $cyc (i32.sub (global.get $cyc) (i32.const 6)))
             (return)))
     (if (i32.eq (local.get $op) (i32.const 0x6B))   ;; rtl
       (then (local.set $v (i32.and (i32.add (call $ipull (i32.const 0))
@@ -967,6 +1324,8 @@ export function interpWat(lay) {
                                 (call $wmask (global.get $fx))))
         (global.set $a (i32.and (i32.sub (global.get $a) (i32.const 1))
                                 (i32.const 0xFFFF)))
+        ;; Op54/Op44 end with AddCycles(TWO_CYCLES), after the byte moved.
+        (global.set $cyc (i32.sub (global.get $cyc) (i32.const 12)))
         (if (i32.eq (global.get $a) (i32.const 0xFFFF))
           (then (call $ipc (i32.const 3))))
         (return)))
@@ -1030,7 +1389,11 @@ export function interpWat(lay) {
     (if (global.get $t2)              ;; immediate: value, not address
       (then (local.set $v (if (result i32) (local.get $w)
               (then (local.get $u8)) (else (local.get $u16)))))
-      (else (local.set $v (call $rdw (local.get $ea) (local.get $w)))))
+      ;; Stores (operation ids 4-7: sta stx sty stz) do not read their
+      ;; target: a read of an I/O register has side effects ($2139 moves the
+      ;; VRAM address, $4210 clears the NMI flag) and costs a bus cycle.
+      (else (if (i32.gt_u (i32.sub (i32.load8_u (i32.add (i32.const ${OPTAB}) (local.get $op))) (i32.const 4)) (i32.const 3))
+              (then (local.set $v (call $rdw (local.get $ea) (local.get $w)))))))
 
     ;; lda / ldx / ldy
     (if (call $isop (local.get $op) (i32.const 0xA9) (i32.const 1))
@@ -1208,8 +1571,57 @@ export function interpWat(lay) {
   (func $idp (param $o i32) (result i32)
     (i32.and (i32.add (global.get $d) (local.get $o)) (i32.const 0xFFFF)))
 
+  ;; Decimal-mode ADC/SBC (snes9x cpumacro.h ADC/SBC, CheckDecimal branch):
+  ;; nibble by nibble with the +6/-6 corrections, V from the result before
+  ;; the top-nibble correction, 8- or 16-bit by M. $v is the raw operand.
+  (func $adc_dec (param $v i32) (param $sub i32)
+    (local $a i32) (local $r i32) (local $c i32) (local $top i32)
+    (local.set $a (i32.and (global.get $a) (call $wmask (global.get $fm))))
+    (if (local.get $sub) (then (local.set $v (i32.xor (local.get $v) (call $wmask (global.get $fm))))))
+    (local.set $c (global.get $fc))
+    ;; low nibble
+    (local.set $r (i32.add (i32.add (i32.and (local.get $a) (i32.const 0xF)) (i32.and (local.get $v) (i32.const 0xF))) (local.get $c)))
+    (if (local.get $sub)
+      (then (if (i32.lt_u (local.get $r) (i32.const 0x10)) (then (local.set $r (i32.sub (local.get $r) (i32.const 6))))))
+      (else (if (i32.gt_u (local.get $r) (i32.const 9)) (then (local.set $r (i32.add (local.get $r) (i32.const 6)))))))
+    (local.set $c (i32.gt_s (local.get $r) (i32.const 0xF)))
+    (local.set $r (i32.add (i32.add (i32.add (i32.and (local.get $a) (i32.const 0xF0)) (i32.and (local.get $v) (i32.const 0xF0)))
+                                    (i32.and (local.get $r) (i32.const 0xF))) (i32.shl (local.get $c) (i32.const 4))))
+    (if (i32.eqz (global.get $fm)) (then
+      ;; 16-bit: two more nibbles before the top one.
+      (if (local.get $sub)
+        (then (if (i32.lt_s (local.get $r) (i32.const 0x100)) (then (local.set $r (i32.sub (local.get $r) (i32.const 0x60))))))
+        (else (if (i32.gt_s (local.get $r) (i32.const 0x9F)) (then (local.set $r (i32.add (local.get $r) (i32.const 0x60)))))))
+      (local.set $c (i32.gt_s (local.get $r) (i32.const 0xFF)))
+      (local.set $r (i32.add (i32.add (i32.add (i32.and (local.get $a) (i32.const 0xF00)) (i32.and (local.get $v) (i32.const 0xF00)))
+                                      (i32.and (local.get $r) (i32.const 0xFF))) (i32.shl (local.get $c) (i32.const 8))))
+      (if (local.get $sub)
+        (then (if (i32.lt_s (local.get $r) (i32.const 0x1000)) (then (local.set $r (i32.sub (local.get $r) (i32.const 0x600))))))
+        (else (if (i32.gt_s (local.get $r) (i32.const 0x9FF)) (then (local.set $r (i32.add (local.get $r) (i32.const 0x600)))))))
+      (local.set $c (i32.gt_s (local.get $r) (i32.const 0xFFF)))
+      (local.set $r (i32.add (i32.add (i32.add (i32.and (local.get $a) (i32.const 0xF000)) (i32.and (local.get $v) (i32.const 0xF000)))
+                                      (i32.and (local.get $r) (i32.const 0xFFF))) (i32.shl (local.get $c) (i32.const 12))))))
+    (local.set $top (if (result i32) (global.get $fm) (then (i32.const 0x80)) (else (i32.const 0x8000))))
+    ;; V: operands agree in sign and the result's sign differs.
+    (global.set $fv (i32.and (i32.eqz (i32.and (i32.xor (local.get $a) (local.get $v)) (local.get $top)))
+                             (i32.ne (i32.and (i32.xor (local.get $a) (local.get $r)) (local.get $top)) (i32.const 0))))
+    ;; top nibble: ADC > $9F / $9FFF adds $60 / $6000; SBC < $100 / $10000 subtracts it.
+    (if (local.get $sub)
+      (then (if (i32.lt_s (local.get $r) (if (result i32) (global.get $fm) (then (i32.const 0x100)) (else (i32.const 0x10000))))
+              (then (local.set $r (i32.sub (local.get $r) (if (result i32) (global.get $fm) (then (i32.const 0x60)) (else (i32.const 0x6000))))))))
+      (else (if (i32.gt_s (local.get $r) (if (result i32) (global.get $fm) (then (i32.const 0x9F)) (else (i32.const 0x9FFF))))
+              (then (local.set $r (i32.add (local.get $r) (if (result i32) (global.get $fm) (then (i32.const 0x60)) (else (i32.const 0x6000)))))))))
+    (global.set $fc (i32.gt_s (local.get $r) (call $wmask (global.get $fm))))
+    (global.set $a (if (result i32) (global.get $fm)
+      (then (i32.or (i32.and (global.get $a) (i32.const 0xFF00)) (i32.and (local.get $r) (i32.const 0xFF))))
+      (else (i32.and (local.get $r) (i32.const 0xFFFF)))))
+    (local.set $r (i32.and (local.get $r) (call $wmask (global.get $fm))))
+    (global.set $fz (i32.eqz (local.get $r)))
+    (global.set $fn (i32.ne (i32.and (local.get $r) (local.get $top)) (i32.const 0))))
+
   (func $iadc (param $v i32) (param $sub i32)
     (local $t i32) (local $acc i32)
+    (if (global.get $fd) (then (call $adc_dec (local.get $v) (local.get $sub)) (return)))
     (if (local.get $sub)
       (then (local.set $v (i32.xor (local.get $v)
                                    (call $wmask (global.get $fm))))))

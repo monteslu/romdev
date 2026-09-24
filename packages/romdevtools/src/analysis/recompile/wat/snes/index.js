@@ -1,11 +1,14 @@
-// SNES WAT backend: statically recompile a whole LoROM SNES cartridge into
-// one WAT module (a wasmcart), ported from sms-wat's emit_snes.py.
+// SNES WAT backend: statically recompile a whole LoROM or HiROM SNES
+// cartridge into one WAT module (a wasmcart), ported from sms-wat's
+// emit_snes.py. The cart carries snes9x's bus (memmap.js), CPU timing and
+// DMA/HDMA (cpu-wat.js, frame-wat.js), PPU (ppu-wat.js) and a port of its
+// SPC700 + S-DSP (apu-wat.js) whose output goes to the wasmcart audio ring.
 //
 // SHAPE. One dispatch ARM PER ROM FILE OFFSET (every byte, not just the ones
 // a static walk reaches), 1024 arms per br_table shard, and a binary search
 // over shards. A packed (offset, arm) table expands into PCTAB at wc_init;
-// $step maps the 24-bit pc through the LoROM rule to a file offset and
-// dispatches. PCs in WRAM ($7E/$7F, or below $8000) go to a small RAM
+// $step maps the 24-bit pc through the cart's memory map to a file offset
+// and dispatches. PCs outside ROM (work RAM, SRAM, I/O) go to a small
 // interpreter that shares every register and memory routine with the arms.
 //
 // M/X WIDTH IS DECIDED AT RUNTIME. Only the nine immediate forms whose
@@ -24,13 +27,15 @@
 //
 // Plain JS ESM + JSDoc.
 
-import { decode, lower, oplen, isopTable, modeTable } from "./lower.js";
+import { decode, lower, oplen, isopTable, modeTable, interpCostTable, pcRel, IO1 } from "./lower.js";
 import {
   computeLayout, FB_W, FB_H, WRAM, VRAM, CGRAM, OAM, SRAMB, OPTAB, MODTAB, PROBE,
-  PROBE_FIELDS, INPUT, ROM, PCRING, PCRING_N,
+  PROBE_FIELDS, INPUT, ROM, PCRING, PCRING_N, MAPTAB, APUST, ICOST,
 } from "./layout.js";
+import { buildMemMap, sramMaskFor } from "./memmap.js";
 import { globalsWat, memWat, interpWat, interpTablesWat } from "./cpu-wat.js";
-import { apuWat, ppuDataWat, ppuWat, renderWat } from "./ppu-wat.js";
+import { ppuDataWat, ppuWat, renderWat } from "./ppu-wat.js";
+import { apuWat, apuDataWat, apuGlobalsWat, APU_OFF } from "./apu-wat.js";
 import { regwatchWat, stepHeadWat, frameWat } from "./frame-wat.js";
 
 /** Platform ids this backend accepts. */
@@ -128,22 +133,22 @@ export function describe(rom, opts = {}) {
   const mapMode = byte(0x15);
   const chipset = byte(0x16);
   const sramByte = byte(0x18);
-  // SRAM decodes only log2(size) address lines, so it MIRRORS through the
-  // $70-$7D window; a LoROM cart that checks the mirror to detect copiers
-  // shows its anti-copier screen on a flat 32KB window. 0 (or nonsense) = no SRAM:
-  // keep the 32KB scratch window rather than invent open-bus behaviour.
-  // (The Python emitter reads the byte at $7FD8 whatever the mapping.)
-  const sramLow = img.length > 0x7fd8 ? img[0x7fd8] : 0;
-  const sramMask = sramLow === 0 || sramLow > 5 ? 0x7fff : (1024 << sramLow) - 1;
+  // snes9x Memory.SRAMMask from the header's SRAM size byte: the SRAM
+  // decodes only log2(size) address lines, so it MIRRORS through its window.
+  // No SRAM: mask 0, reads see byte 0 of the (0x60-filled) buffer and writes
+  // are dropped, as in snes9x. The cart keeps 32KB, so the mask is capped.
+  const sramMask = sramMaskFor(sramByte);
   const sramSize = sramByte === 0 || sramByte > 7 ? 0 : 1024 << sramByte;
   const hasCoproc = (chipset & 0x0f) >= 3;
   const coprocessor = hasCoproc ? (COPROCESSORS[chipset >> 4] ?? `unknown (chipset $${chipset.toString(16)})`) : null;
-  const reset = img.length > 0x7ffd ? img[0x7ffc] | (img[0x7ffd] << 8) : 0;
+  const vec = best.mapping === "hirom" ? 0xfffc : 0x7ffc;
+  const reset = img.length > vec + 1 ? img[vec] | (img[vec + 1] << 8) : 0;
 
   let refusal = null;
-  if (img.length < 0x8000) refusal = `ROM image is ${img.length} bytes; a LoROM cart needs at least one 32KB bank`;
+  if (img.length < 0x8000) refusal = `ROM image is ${img.length} bytes; a cart needs at least one 32KB bank`;
+  else if (best.mapping === "hirom" && img.length < 0x10000) refusal = `ROM image is ${img.length} bytes; a HiROM cart needs at least one 64KB bank`;
   else if (coprocessor) refusal = `cart uses the ${coprocessor} coprocessor (chipset byte $${chipset.toString(16).padStart(2, "0")}); the SNES recompiler models the base console only`;
-  else if (best.mapping !== "lorom") refusal = `cart is ${best.mapping === "hirom" ? "HiROM" : "ExHiROM"} (map mode $${mapMode.toString(16)}); the SNES recompiler implements the LoROM memory map only`;
+  else if (best.mapping === "exhirom" || img.length > 0x400000) refusal = `cart is ExHiROM / over 4MB (map mode $${mapMode.toString(16)}); the SNES recompiler implements the LoROM and HiROM memory maps only`;
 
   const layout = computeLayout(img.length, sramMask, Math.max(1, opts.limit ? Math.min(opts.limit, img.length) : img.length));
   const tn = opts.traceEntries;
@@ -165,6 +170,8 @@ export function describe(rom, opts = {}) {
     mapping: best.mapping,
     headerOffset: h,
     fastRom: (mapMode & 0x10) !== 0,
+    romSizeByte: byte(0x17),
+    sramSizeByte: sramByte,
     mapMode,
     chipset,
     coprocessor,
@@ -179,7 +186,7 @@ export function describe(rom, opts = {}) {
     conventions,
     options: {
       regwatchPc: "16-bit ROM address: record (A, X, Y, P, $8D, D, [$00]) each time execution reaches it (REGWATCH probe)",
-      pcSkip: "extra 16-bit pc ranges the ROM pc ring skips, [[lo,hi],...] or \"806B-806D,9A74-9A8A\"",
+      pcSkip: "extra 16-bit pc ranges the ROM pc ring skips, [[lo,hi],...] or \"806B-806D,9A74-9A8A\"; \"none\" also drops the built-in boot-loop ranges",
       limit: "emit arms only below this ROM offset (debugging)",
       breakArm: "DEBUG / must-fail control: 24-bit ROM address whose arm also flips bit 0 of A",
       traceEntries: "power of two 1024-262144: also record the 65816 registers per ROM instruction for findDiverge level:'instruction' (off by default)",
@@ -191,18 +198,20 @@ export function describe(rom, opts = {}) {
 export const REFERENCE_CORE = "snes9x";
 
 /**
- * Frame / input conventions the verify op needs. The cart does not model
- * the APU's timing, so it boots ahead of snes9x by a game-dependent number
- * of frames (56, 82 and 39-41 on three of the verified carts): the
- * reference frame is SEARCHED over a window, never assumed. The controller ports read "nothing pressed" (the cart ignores
- * wasmcart pad input), so verification runs are input-free.
+ * Frame / input conventions the verify op needs. The cart keeps snes9x's
+ * clock (per-access memory speeds, internal cycles, DRAM refresh, (H)DMA
+ * time, the APU at 15664/328125 of the master clock) and ends each
+ * wc_render where retro_run ends, at the start of vblank, so cart frame
+ * F + 4 is reference frame F (5 settle frames against 1): the computed
+ * alignment, no search. The pads are read POSITIONALLY (wasmcart south =
+ * SNES B, east = SNES A), through the automatic read and $4016/$4017.
  */
 export const conventions = {
   frameAxis: "total",
   settleFrames: { cart: 1, reference: 5 },
-  frameAlignment: { mode: "search", window: [0, 120] },
   warmupFrames: 0,
-  input: false,
+  input: true,
+  buttons: "positional",
 };
 
 /**
@@ -218,12 +227,11 @@ function cartLayout(lay, sramSize) {
     cgram: { offset: CGRAM, length: 0x200, ref: "snes_cgram" },
     oam: { offset: OAM, length: 0x220, ref: "snes_oam" },
   };
-  // ARAM holds what the IPL boot protocol uploaded. No SPC700 runs the
-  // driver, so once it starts snes9x's ARAM moves on and this does not.
-  // SRAM starts zeroed in the cart and snes9x fills it differently at power
-  // on, so it differs until a game writes all of it. Both are diagnostic,
-  // not pass/fail regions.
-  const diagnosticRegions = { aram: { offset: lay.ARAM, length: 0x10000, ref: "snes_aram" } };
+  // ARAM: the SPC700 and S-DSP run in the cart on snes9x's clock, so the
+  // audio RAM (driver, sequence data, echo buffer) is compared too.
+  regions.aram = { offset: lay.ARAM, length: 0x10000, ref: "snes_aram" };
+  // SRAM is diagnostic: a reference core may load a save the cart never sees.
+  const diagnosticRegions = {};
   if (sramSize) diagnosticRegions.sram = { offset: SRAMB, length: Math.min(sramSize, 0x8000), ref: "save_ram" };
   return {
     regions,
@@ -258,12 +266,16 @@ export function recompileSection(rom, sha1, opts = {}) {
       romSha1: sha1 || null,
       mapping: d.mapping,
       warmupFrames: 0,
-      // the cart boots a game-dependent number of frames ahead of snes9x (no
-      // APU timing): the verify ops FIND the offset by picture, callers never
-      // pass one (recompile-section.js frameAlignment)
-      frameAlignment: "search",
       regions: L.regions,
       diagnosticRegions: L.diagnosticRegions,
+      // The S-DSP's output ring: snes9x hands libretro the DSP's 32040 Hz
+      // samples unresampled (SoundInputRate = SoundPlaybackRate = 32040), so
+      // the ring can equal the core's output sample for sample. muteMask is
+      // SPC_DSP::mute_voices (a voice keyed off every sample).
+      audio: {
+        sampleRate: 32040, channels: 2, format: "s16", reference: "output",
+        muteMask: { offset: APUST + APU_OFF.MUTE, size: 1, channels: ["v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7"] },
+      },
       probe: L.probe.fields,
       trap: L.trap,
       pcRing: L.pcRing,
@@ -275,16 +287,19 @@ export function recompileSection(rom, sha1, opts = {}) {
         offset: L.pcRing.offset, entries: L.pcRing.entries, stride: L.pcRing.stride,
         cursor: { offset: L.probe.fields.npc.offset, mode: "count" },
         pc: { offset: 0, mask: 0xffffff },
-        filter: { romOnly: "snesLoRom", skip: [...PCRING_SKIP_DEFAULT, ...parsePcSkip(opts.pcSkip)] },
+        filter: { romOnly: "snesLoRom", skip: pcSkipRanges(opts.pcSkip) },
         ...(d.memory.REGRING != null ? {
           offset: d.memory.REGRING, entries: d.memory.REGRING_N, stride: REGRING_STRIDE,
+          // master clock of the frame (line x 1364 + position) as the
+          // instruction starts, like snes9x's V_Counter * H_Max + Cycles
+          clock: { offset: 20 },
           fields: {
             a: { offset: 4, mask: 0xffff }, x: { offset: 4, shift: 16, mask: 0xffff },
             y: { offset: 8, mask: 0xffff }, s: { offset: 8, shift: 16, mask: 0xffff },
             d: { offset: 12, mask: 0xffff }, db: { offset: 12, shift: 16, mask: 0xff },
             p: { offset: 16, mask: 0x1ff },
           },
-          note: "options.traceEntries: registers before each ROM instruction (p = the status byte, emulation flag at bit 8), compared with snes9x's per-instruction columns",
+          note: "options.traceEntries: registers and the master clock before each ROM instruction (p = the status byte, emulation flag at bit 8), compared with snes9x's per-instruction columns",
         } : {}),
       },
       framebuffer: L.framebuffer,
@@ -294,10 +309,17 @@ export function recompileSection(rom, sha1, opts = {}) {
   };
 }
 
-/** ROM offset -> [bank, 16-bit address] under the LoROM map. */
-const loromAddr = (off) => [off >> 15, 0x8000 + (off & 0x7fff)];
+/**
+ * ROM offset -> [bank, 16-bit address] under the cart's map: LoROM puts 32KB
+ * at $8000 of banks $00-$7F, HiROM a whole 64KB bank at $40-$7F (the
+ * $C0-$FF and $00-$3F:$8000 mirrors run the same bytes). The arm's code does
+ * not depend on the bank: every pc it computes follows the live $pc.
+ */
+const romAddr = (mapping, off) => (mapping === "hirom"
+  ? [0x40 | (off >> 16), off & 0xffff]
+  : [off >> 15, 0x8000 + (off & 0x7fff)]);
 /** ROM offset -> 24-bit address with the bank's $80 mirror folded. */
-const armAddr = (off) => { const [b, a] = loromAddr(off); return ((b & 0x7f) << 16) | a; };
+const armAddr = (mapping, off) => { const [b, a] = romAddr(mapping, off); return ((b & 0x7f) << 16) | a; };
 
 /**
  * options.breakArm as a 24-bit address with the $80 mirror folded.
@@ -316,7 +338,6 @@ function breakFlip(stats) {
   return " (global.set $a (i32.xor (global.get $a) (i32.const 1)))";
 }
 
-const HEXESC = Array.from({ length: 256 }, (_, i) => "\\" + i.toString(16).padStart(2, "0"));
 
 /**
  * Yield a WAT string literal's escaped bytes in pieces.
@@ -336,6 +357,16 @@ function* escChunks(bytes, piece = 1 << 20) {
     }
     yield buf.toString("latin1");
   }
+}
+
+/**
+ * The pc ranges the ring skips: the built-in boot loops plus options.pcSkip,
+ * or none at all for pcSkip "none".
+ * @param {SnesOptions["pcSkip"]} v
+ */
+function pcSkipRanges(v) {
+  if (v === "none") return [];
+  return [...PCRING_SKIP_DEFAULT, ...parsePcSkip(v)];
 }
 
 /** @param {SnesOptions["pcSkip"]} v */
@@ -368,14 +399,19 @@ export async function* emitWat(rom, opts = {}) {
 
   yield `(module\n  (memory (export "memory") ${lay.pages})`;
   yield "\n" + globalsWat(lay);
+  yield apuGlobalsWat();
   yield "\n" + memWat(lay);
+  // The CPU bus map (snes9x Memory.Map), 4096 blocks x {type, base}.
+  yield "\n" + `  (data (i32.const ${MAPTAB}) "` + [...escChunks(buildMemMap({ mapping: d.mapping, romSize: img.length, romSizeByte: d.romSizeByte, sramSizeByte: d.sramSizeByte }))].join("") + '")';
   // The interpreter's opcode tables come from the same decoder table the
   // arms are lowered from, so the two cannot drift.
   yield "\n" + `  (data (i32.const ${OPTAB}) "` + [...escChunks(isopTable())].join("") + '")';
   yield "\n" + `  (data (i32.const ${MODTAB}) "` + [...escChunks(modeTable())].join("") + '")';
+  yield "\n" + `  (data (i32.const ${ICOST}) "` + [...escChunks(interpCostTable())].join("") + '")';
   yield "\n" + interpTablesWat(lay, OPTAB, MODTAB);
   yield "\n" + interpWat(lay);
   yield "\n" + apuWat(lay);
+  yield "\n" + apuDataWat();
   yield "\n" + ppuDataWat();
   yield "\n" + ppuWat(lay);
   yield "\n" + renderWat(lay);
@@ -394,7 +430,7 @@ export async function* emitWat(rom, opts = {}) {
     for (let i = 0; i < cnt; i++) {
       const a = lo + i;
       lines.push(`    ) ;; $s${i} @ ${a.toString(16).toUpperCase().padStart(6, "0")}`);
-      lines.push(`    ${armCode(img, a, stats)}${breakAt !== null && armAddr(a) === breakAt ? breakFlip(stats) : ""} (return)`);
+      lines.push(`    ${armCode(img, a, stats, d.mapping)}${breakAt !== null && armAddr(d.mapping, a) === breakAt ? breakFlip(stats) : ""} (return)`);
     }
     lines.push("    (call $trap))");
     yield "\n" + lines.join("\n");
@@ -403,13 +439,13 @@ export async function* emitWat(rom, opts = {}) {
     if (!stats.brokenArms) throw new Error(`snes recompile: options.breakArm $${breakAt.toString(16)} is not a ROM address of this cart`);
   }
 
-  const skip = [...PCRING_SKIP_DEFAULT, ...parsePcSkip(opts.pcSkip)];
+  const skip = pcSkipRanges(opts.pcSkip);
   const pcv = "(i32.and (global.get $pc) (i32.const 0xFFFF))";
   const h4 = (v) => v.toString(16).toUpperCase().padStart(4, "0");
   const terms = skip.map(([lo, hi]) =>
     `(i32.or (i32.lt_u ${pcv} (i32.const 0x${h4(lo)}))` +
     ` (i32.gt_u ${pcv} (i32.const 0x${h4(hi)})))`);
-  let excl = terms[0];
+  let excl = terms.length ? terms[0] : "(i32.const 1)";
   for (const t of terms.slice(1)) excl = `(i32.and ${excl} ${t})`;
   const rw = opts.regwatchPc ? regwatchWat(opts.regwatchPc) : "";
   yield "\n" + stepHeadWat(rw, excl, lay) + shardDispatch(nshards) + "\n    (call $trap))";
@@ -443,8 +479,8 @@ export async function* emitWat(rom, opts = {}) {
  * @param {number} a
  * @param {any} stats
  */
-function armCode(img, a, stats) {
-  const [pb, pc16] = loromAddr(a);
+function armCode(img, a, stats, mapping) {
+  const [pb, pc16] = romAddr(mapping, a);
   let mode = null;
   try { mode = decode(img, a).mode; } catch { mode = null; }
   try {
@@ -463,27 +499,34 @@ function armCode(img, a, stats) {
     stats.reasons[r] = (stats.reasons[r] ?? 0) + 1;
     stats.interpreted++;
     stats.trapped = stats.interpreted;   // "trapped" in the shared stats vocabulary: not lowered
-    return "(call $interp) (global.set $cyc (i32.sub (global.get $cyc) (i32.const 6)))";
+    return "(call $istep)";
   }
 }
 
 /** Lower one instruction of length n and append its pc/cycle tail. */
 function arm(img, a, n, pb, pc16) {
   const [body, flow, cyc] = lower(img, a, n, pb, pc16);
-  const nxt24 = (pb << 16) | ((pc16 + n) & 0xffff);
+  // Every pc the tail computes stays in the RUNNING program bank (the live
+  // $pc's bank), except a long jump, which names its own.
   let tail;
-  if (flow === null) tail = `(global.set $pc (i32.const ${nxt24}))`;
+  if (flow === null) tail = `(global.set $pc ${pcRel(n)})`;
   else if (flow.kind === "jp") tail = `(global.set $pc (i32.const ${((flow.bank & 0xff) << 16) | (flow.addr & 0xffff)}))`;
+  else if (flow.kind === "jp_bank") tail = `(global.set $pc (i32.or (i32.and (global.get $pc) (i32.const 0xFF0000)) (i32.const ${flow.addr & 0xffff})))`;
   else if (flow.kind === "jp_expr") tail = "(global.set $pc (global.get $t))";
   else {
-    // A relative branch cannot leave its bank: the target is this
-    // instruction's bank plus the 16-bit address the delta lands on.
-    const tgt24 = (pb << 16) | ((pc16 + flow.delta) & 0xffff);
+    // A relative branch cannot leave its bank.
+    // A taken branch costs one more internal cycle, two in emulation mode
+    // when it lands in another page (snes9x bOP).
+    const taken = `${IO1} (if (i32.and (global.get $fe) (i32.ne (i32.and ${pcRel(n)} (i32.const 0xFF00)) (i32.and ${pcRel(flow.delta)} (i32.const 0xFF00)))) (then ${IO1}))`;
     tail = flow.kind === "jp_file"
-      ? `(global.set $pc (i32.const ${tgt24}))`
-      : `(if ${flow.cond} (then (global.set $pc (i32.const ${tgt24}))) (else (global.set $pc (i32.const ${nxt24}))))`;
+      ? `${flow.noTakenIo ? "" : taken} (global.set $pc ${pcRel(flow.delta)})`
+      : `(if ${flow.cond} (then ${taken} (global.set $pc ${pcRel(flow.delta)})) (else (global.set $pc ${pcRel(n)})))`;
   }
-  return `${body} ${tail} (global.set $cyc (i32.sub (global.get $cyc) (i32.const ${cyc})))`;
+  // n program bytes at the code region's speed plus the static internal
+  // cycles, charged BEFORE the body: snes9x has fetched the instruction and
+  // (mostly) done its internal cycles by the time the data access happens,
+  // and an access observes the clock before its own cost is added.
+  return `(global.set $cyc (i32.sub (global.get $cyc) (i32.add (i32.mul (global.get $ms) (i32.const ${n})) (i32.const ${cyc * 6})))) ${body} ${tail}`;
 }
 
 /**

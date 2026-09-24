@@ -22,7 +22,6 @@ export const VRAM = 0x020000;   // 64KB video RAM, word-addressed by $2116/$2118
 export const CGRAM = 0x030000;  // 512 bytes: 256 BGR555 entries
 export const OAM = 0x030400;    // 544 bytes: 128 sprites x 4 + 32-byte high table
 export const PPUREG = 0x030800; // $2100-$213F shadow; +0x80 holds $4200-$43FF
-export const APUIO = 0x030900;  // 4 bytes CPU-visible + 4 bytes last-written
 export const SNESFB = 0x031000; // (unused by the renderer)
 export const ROM = 0x100000;    // ROM image
 /** Local alias the PPU templates use for the register shadow. */
@@ -42,16 +41,29 @@ export const XBTAB = 0x099600;  // 16 x 32 brightness table (snes9x mul_brightne
 export const OBJSZ = 0x099800;  // 8 x (sw, sh, lw, lh)
 export const PPUX_END = 0x099a00;
 
+// APU state (apu-wat.js APU_OFF): DSP registers, port latches, IPL ROM, DSP
+// tables and voices. ARAM itself is cart-sized-layout (lay.ARAM).
+export const APUST = 0x09a000;
+export const APUST_SZ = 0x1800;
+// The CPU bus map (memmap.js): 4096 blocks x 8 bytes.
+export const MAPTAB = 0x09c000;
+export const MAPTAB_SZ = 0x8000;
+// The S-DSP's output: a ring of 4096 stereo int16 frames at 32040 Hz that
+// the wasmcart host drains (wc_info audioPtr/audioCap/audioWritePtr).
+export const AUDIO = 0x0a4000;
+export const AUDIO_FRAMES = 4096;
+
 // RAM interpreter tables (emit_snes.py).
 export const OPTAB = 0x030c00;  // opcode -> operation id
 export const MODTAB = 0x030d00; // opcode -> addressing-mode id
+export const ICOST = 0x030e00;  // opcode -> [length | flags, internal cycles] (interpCostTable)
 
 // Debug probes. The host writes 64 bytes of pad state at inputPtr every
 // frame without a zero check, so INPUT must be a real address clear of WRAM
 // (at 0 it overwrote the SNES direct page between frames).
 export const INPUT = 0x03e000;
 export const INPUT_SZ = 64;
-export const PROBE_N = 31;          // i32 counters, mirrored every frame
+export const PROBE_N = 34;          // i32 counters, mirrored every frame
 export const PROBE = 0x03f000;
 export const ITRACE_N = 160;        // (pc, opcode, S) triples
 export const ITRACE = 0x03f100;
@@ -69,10 +81,14 @@ export const DMALOG = 0x0fa000;
 /** PROBE block field offsets (bytes from PROBE), as mirrored by wc_render. */
 export const PROBE_FIELDS = {
   steps: 0, nvram: 4, trapped: 8, trappc: 12, pc: 16, nnmi: 20, ndma: 24,
-  npal: 28, ramsrc: 32, s: 36, ninterp: 40, napuw: 44, napucc: 48, apuph: 52,
+  npal: 28, ramsrc: 32, s: 36, ninterp: 40, napuw: 44, nspc: 48, spcpc: 52,
   stkw: 56, stkwa: 60, npc: 64, nrw: 68, ptrw: 72, ptrwa: 76, ptrwv: 80,
   ptrwy: 84, ptrarm: 88, nptrw: 92, ptrw1: 96, ptrwv1: 100, ptrwy1: 104,
-  nptrw1: 108, napub: 112, apuptr: 116, apuctr: 120,
+  nptrw1: 108, nsamples: 112, spcclock: 116, dspphase: 120,
+  // where the vblank line end (V 224 -> 225) caught the APU up, and where
+  // the instruction that crossed it began (master clocks into line 224)
+  // and its pc
+  vblankpos: 124, vblankistart: 128, vblankpc: 132,
 };
 
 /**
@@ -136,6 +152,9 @@ export function checkLayout(lay, imgLen) {
     ["DMALOG", DMALOG, DMALOG_N * DMALOG_STRIDE],
     ["ARAM", lay.ARAM, 0x10000],
     ["PPUX", SRAMB, PPUX_END - SRAMB],
+    ["APUST", APUST, APUST_SZ],
+    ["MAPTAB", MAPTAB, MAPTAB_SZ],
+    ["AUDIO", AUDIO, AUDIO_FRAMES * 4],
     ["FB", lay.FB, FB_W * FB_H * 4],
     ["ABI", lay.ABI, 0x1000],
     ["ROM", ROM, Math.max(1, imgLen)],
