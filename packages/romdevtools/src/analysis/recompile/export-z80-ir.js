@@ -75,7 +75,10 @@ async function decodeAtOffsets(rom, offsets, isa) {
       throw new Error(`${isa.arch} decoder failed on an alignment batch: ${decoded.raw?.slice(-300)}`);
     }
     const byAddr = new Map(decoded.instructions.map((r) => [r.addr, r]));
-    slice.forEach((off, k) => { const r = byAddr.get(k * stride); if (r) out.set(off, r); });
+    // `decodedAt` = the address objdump decoded this slice at; every
+    // pc-relative operand it printed is relative to THAT, not to the offset's
+    // real address (decodedIR rebases them).
+    slice.forEach((off, k) => { const r = byAddr.get(k * stride); if (r) out.set(off, { ...r, decodedAt: k * stride }); });
   }
   return out;
 }
@@ -126,6 +129,34 @@ export function flatWindows(size, { allOffsets = false, startAddress = 0, length
   return [{ off, length, bank: 0, addr: off, slot: 0 }];
 }
 
+/**
+ * Move every pc-relative value objdump printed by `delta` (true address minus
+ * the address it decoded at). Which tokens are pc-relative is per ISA
+ * (`isa.pcRelative`): the branch target of a relative branch (the LAST bare
+ * 0x token of `branch` mnemonics), `pcTokens` (m68k %pc@(0x..)) and
+ * `comment` (ARM/Thumb `@ (0x..)` literal-pool addresses). Absolute operands
+ * (jp nn, abs.w/abs.l EAs, immediates) are never touched.
+ * @param {object} isa @param {string} mnemonic @param {string} ops @param {number} delta
+ */
+export function rebaseOps(isa, mnemonic, ops, delta) {
+  const pr = isa.pcRelative;
+  if (!delta || !pr || !ops) return ops;
+  const move = (hex) => {
+    const v = (parseInt(hex, 16) + delta) >>> 0;
+    // keep a zero-padded spelling zero-padded (gbz80 prints 0x0003); never add padding
+    return v.toString(16).padStart(hex.length > 1 && hex[0] === "0" ? hex.length : 0, "0");
+  };
+  let out = ops;
+  if (pr.pcTokens) out = out.replace(pr.pcTokens, (m, h) => m.slice(0, m.length - h.length) + move(h));
+  if (pr.comment) out = out.replace(pr.comment, (m, h) => m.slice(0, m.length - h.length - (m.endsWith(")") ? 1 : 0)) + move(h) + (m.endsWith(")") ? ")" : ""));
+  if (pr.branch && pr.branch(mnemonic.toLowerCase())) {
+    // the last bare 0x token outside a %pc@(...) operand
+    const re = /(^|[\s,])0x([0-9a-f]+)(?![\s\S]*(?:^|[\s,])0x[0-9a-f])/i;
+    out = out.replace(re, (m, pre, h) => `${pre}0x${move(h)}`);
+  }
+  return out;
+}
+
 export function decodedIR(row, window, rom, { allowStraddle = false, isa = ISAS.z80 } = {}) {
   const bytes = row.bytes.split(/\s+/).filter(Boolean).map((b) => parseInt(b, 16));
   const off = window.off + row.addr - window.addr;
@@ -153,7 +184,15 @@ export function decodedIR(row, window, rom, { allowStraddle = false, isa = ISAS.
   // secondary `jr` came back aimed at the batch buffer (Tetris $01DA `18 FA`,
   // jr -6, exported as $048C). An ISA that knows its relative encodings
   // rewrites the operand from `bytes` and `row.addr` here, for every record.
-  const ops = isa.fixOps ? isa.fixOps(mnemonic, row.ops, bytes, row.addr) : row.ops;
+  //
+  // Every ISA decoded through the batch gets its pc-relative operands rebased
+  // from the batch address to the true one (m68k Bcc/BRA/BSR/DBcc targets and
+  // %pc@(...) operands, Z80 jr/djnz, ARM/Thumb branches and pc-literal
+  // comments): the primary records were right because they are decoded at
+  // their real address; every secondary one was off by exactly the distance
+  // to its batch slot.
+  const rebased = row.decodedAt != null ? rebaseOps(isa, mnemonic, row.ops, row.addr - row.decodedAt) : row.ops;
+  const ops = isa.fixOps ? isa.fixOps(mnemonic, rebased, bytes, row.addr) : rebased;
   // `lifted` is Z80-only. A recompiler lowers from mnemonic+ops itself, so an
   // ISA without a lifter omits the field rather than emitting a fake one.
   const lifted = isa.lift ? isa.lift(mnemonic, ops) : undefined;

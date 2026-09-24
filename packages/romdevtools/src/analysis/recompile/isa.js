@@ -46,6 +46,8 @@ export const ISAS = {
       liftZ80(`${mnem} ${ops.replace(/0x([0-9a-f]+)/gi, "$$$1")}`).ir
         .filter((n) => n.name !== "RECOMPILE_ENTRY"),
     documented: (m) => DOCUMENTED_Z80.has(m),
+    // relative encodings whose printed target moves with the decode address
+    pcRelative: { branch: (m) => m === "jr" || m === "djnz" },
     // 0x00 is `nop` on Z80: one byte, decodes and stops. Padding a batch slice
     // with zeros cannot carry a decode into the next slice.
     pad: Buffer.from([0x00]),
@@ -79,6 +81,12 @@ export const ISAS = {
     flags: null,   // the recompiler lowers from mnemonic+ops; flags unmodelled
     lift: null,
     documented: () => true,
+    // Bcc/BRA/BSR/DBcc targets and (d16,PC) / (d8,PC,Xn) operands are
+    // printed as absolute addresses computed from the decode address
+    pcRelative: {
+      branch: (m) => /^(bra|bsr|bhi|bls|bcc|bcs|bne|beq|bvc|bvs|bpl|bmi|bge|blt|bgt|ble)[sbwl]?$/.test(m) || /^db[a-z]{1,2}$/.test(m),
+      pcTokens: /%pc@\(0x([0-9a-f]+)/gi,
+    },
     // 0x00 0x00 is NOT safe padding on m68k - it decodes as `orib`, a valid
     // instruction, so a decode ran 12 bytes into the padding and produced
     // bytes that did not match the ROM (caught by the byte check at offset
@@ -200,6 +208,12 @@ export const ISAS = {
     flags: null,   // the recompiler lowers from mnemonic+ops; flags unmodelled
     lift: null,
     documented: armDocumented,
+    // b/bl/blx<cond> targets and the `@ (0x..)` pc-literal address are
+    // printed from the decode address
+    pcRelative: {
+      branch: (m) => /^(b|bl|blx)(eq|ne|cs|hs|cc|lo|mi|pl|vs|vc|hi|ls|ge|lt|gt|le|al)?(\.n|\.w)?$/.test(m),
+      comment: /@ \(?0x([0-9a-f]+)\)?/gi,
+    },
     // binutils ARM prints an illegal word as `@ <UNDEFINED> instruction: 0x..`
     // - runObjdump surfaces mnemonic `@`. That is the ARM spelling of the
     // `.short` the m68k decoder emits, so the exporter must recognise it or
@@ -248,6 +262,12 @@ export const ISAS = {
     flags: null,
     lift: null,
     documented: armDocumented,
+    // b/bl/blx<cond> targets and the `@ (0x..)` pc-literal address are
+    // printed from the decode address
+    pcRelative: {
+      branch: (m) => /^(b|bl|blx)(eq|ne|cs|hs|cc|lo|mi|pl|vs|vc|hi|ls|ge|lt|gt|le|al)?(\.n|\.w)?$/.test(m),
+      comment: /@ \(?0x([0-9a-f]+)\)?/gi,
+    },
     dataMnemonics: ARM_DATA_MNEMONICS,
     // `mov r8, r8` (46c0) is Thumb's canonical nop: two bytes, decodes and
     // stops, so padding a batch slice cannot carry a decode into the next.
