@@ -879,7 +879,8 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
                                     (i32.and (local.get $v) (i32.const 0x78))))))
       (if (i32.eq (local.get $m) (i32.const 5))
         (then
-          (if (i32.and (i32.and (i32.xor (local.get $v) (i32.load8_u (i32.const ${IOREG + 0x26}))) (i32.const 0x80))
+          ;; (a 0x80 bit ANDed with an eqz 1 was always 0: the zero writes never ran)
+          (if (i32.and (i32.ne (i32.and (i32.xor (local.get $v) (i32.load8_u (i32.const ${IOREG + 0x26}))) (i32.const 0x80)) (i32.const 0))
                        (i32.eqz (i32.and (local.get $v) (i32.const 0x80))))
             (then
               (local.set $i (i32.const 0x10))
