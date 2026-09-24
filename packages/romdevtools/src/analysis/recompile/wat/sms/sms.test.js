@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { describe as describeRom, emitWatString, recompileSection, fullBlocks, z80Length, platforms } from "./index.js";
 import { lower, imm } from "./z80.js";
+import { miscWat, hwWat, renderWat } from "./hw.js";
 import { cost } from "./cycles.js";
 import { assembleWatSync } from "../assemble.js";
 import { backendFor } from "../index.js";
@@ -97,4 +98,29 @@ test("a synthetic cart assembles, validates and runs the program", async () => {
   assert.equal(mem[0xC001], 0x47);
   assert.equal(mem[0xC002] | (mem[0xC003] << 8), 0x1234);
   assert.equal(e.dbg_trapped.value, 0);
+});
+
+test("exact mode fixes the sms-wat semantics that differed from genesis_plus_gx", () => {
+  // adc hl,rr adds the carry (sms-wat lowered it through the add path)
+  assert.match(lower("adc", "hl,de", 0, 2, { exact: true })[0], /\$adc16/);
+  assert.match(lower("adc", "hl,de", 0, 2)[0], /\$add16/);
+  // EI arms the one-instruction delay; RETI leaves IFF1 alone
+  assert.match(lower("ei", "", 0, 1, { exact: true })[0], /\$eidelay/);
+  assert.equal(lower("reti", "", 0, 2, { exact: true })[0], "");
+  // CP takes F bits 5/3 from the operand
+  assert.match(lower("cp", "$28", 0, 2, { exact: true })[0], /0xD7/);
+  // INI/IND read the port (sms-wat ran OUTI/OUTD)
+  const misc = miscWat({ exact: true });
+  assert.match(misc, /\(func \$ini \(call \$ini_step \(i32\.const 1\)\)\)/);
+  assert.match(miscWat(), /\(func \$ini \(call \$outi_step\)\)/);
+  // I/O decoded by port & $C1 with GG registers; sprite flags in the renderer
+  assert.match(hwWat("gg", { exact: true }), /\$vcounter/);
+  assert.match(renderWat({ exact: true }), /\$parse_satb/);
+});
+
+test("region comes from the header region code", () => {
+  const rom = tinyRom();
+  assert.equal(describeRom(rom).region, "export");
+  const jp = new Uint8Array(rom); jp[0x7FFF] = 0x3C;
+  assert.equal(describeRom(jp).region, "japan");
 });
