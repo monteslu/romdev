@@ -111,6 +111,69 @@ export function normalizeRom(raw) {
   return img;
 }
 
+/** getrominfo's name fields: runs of spaces collapsed to one. */
+const romName = (img, off) => headerText(img, off, off + 48).replace(/ {2,}/g, " ");
+/** loadrom.c getchecksum: 16-bit sum of the words from $200. */
+function realChecksum(img) {
+  let s = 0;
+  for (let i = 0x200; i + 1 < img.length; i += 2) s = (s + ((img[i] << 8) | img[i + 1])) & 0xffff;
+  return s;
+}
+
+/**
+ * Backup RAM as gpgx's sram_init + md_cart_init set it up: from the "RA"
+ * header block, the product-code fixes, or by default 64KB at $200000 for a
+ * ROM of 2MB or less; mapped at power-on when it does not overlap the ROM
+ * (Sonic 3 excepted), otherwise switched in by $A130F1.
+ * @param {Uint8Array} img normalised ROM
+ */
+export function sramConfig(img) {
+  const product = headerText(img, 0x182, 0x18e);
+  const international = romName(img, 0x150);
+  const checksum = (img[0x18e] << 8) | img[0x18f];
+  const u32 = (o) => ((img[o] << 24) | (img[o + 1] << 16) | (img[o + 2] << 8) | img[o + 3]) >>> 0;
+  let on = false, start = 0, end = 0, detected = false, note = null;
+  if (img[0x1b0] === 0x52 && img[0x1b1] === 0x41) {
+    detected = on = true;
+    start = u32(0x1b4); end = u32(0x1b8);
+    const real = realChecksum(img);
+    if (product.includes("T-26013")) { start = 0x200001; end = 0x203fff; }
+    else if (product.includes("00000000-00") && ((checksum === 0xcdf5 && real === 0x603a) || (checksum === 0x6bd5 && real === 0x1fea) || (checksum === 0x45c1 && real === 0xc613))) { start = 0x3f0000; end = 0x3fffff; }
+    else if (start === 0xff0000) on = false;
+    else if (start >= 0x800000) { start = 0x200000; end = 0x20ffff; }
+    else if (start > end || end - start >= 0x10000) end = start + 0xffff;
+  } else {
+    const real = realChecksum(img);
+    if (product.includes("T-50086") || product.includes("T-50286")) { on = true; start = 0x200001; end = 0x203fff; }
+    else if (product.includes("ACLD007")) { on = true; start = 0x200001; end = 0x200fff; }
+    else if ((real === 0xaeaa || real === 0x8dba) && checksum === 0x8104) { on = true; start = 0x400001; end = 0x40ffff; }
+    else if (checksum === 0 && real === 0x1f7f && img.length > 0x801b1 && img[0x801b0] === 0x52 && img[0x801b1] === 0x41) { on = true; start = 0x200001; end = 0x203fff; }
+    else if (international.includes("SONIC & KNUCKLES")) { if (img.length === 0x400000) { on = true; start = 0x200001; end = 0x203fff; } }
+    else if (product.includes("T-113016") || international.includes("SONIC THE HEDGEHOG 2")) on = false;
+    else if (img.length <= 0x200000) { on = true; start = 0x200000; end = 0x20ffff; }
+  }
+  const mapped = on && start >= img.length && !international.includes("SONIC THE HEDGEHOG 3") && start < 0x400000;
+  if (on && start >= 0x400000) note = `backup RAM at $${start.toString(16)} (outside the cartridge area) is not modelled`;
+  return { on, detected, start, end, bank: mapped ? start >>> 16 : null, note };
+}
+
+/**
+ * md_cart_init's mapper choice, for the ones this backend models ('default'
+ * = default_time_w, 'ssf2' = mapper_ssf2_w) or the reason it refuses.
+ * @param {Uint8Array} img
+ */
+export function cartMapper(img) {
+  const consoleType = headerText(img, 0x100, 0x110), romType = headerText(img, 0x180, 0x182), product = headerText(img, 0x182, 0x18e);
+  const international = romName(img, 0x150), domestic = romName(img, 0x120);
+  if (international.includes("DEMONS OF ASTEBORG") || international.includes("ASTEBROS") || domestic.includes("DAEMON CLAW")) return { kind: "default" };
+  if (consoleType.includes("SEGA SSF")) return { kind: null, reason: "the Everdrive extended SSF mapper (\"SEGA SSF\" console type)" };
+  if (domestic.includes("SUPER STREET FIGHTER2")) return { kind: "ssf2" };
+  if (product.includes("T-5740")) return { kind: null, reason: "the T-5740 mapper with its SPI EEPROM" };
+  if (romType.includes("SF") && (product.includes("001") || product.includes("002") || product.includes("004"))) return { kind: null, reason: "an SF-00x mapper" };
+  if (img.length > 0x400000) return { kind: "default", note: "ROM beyond 4MB: linear at $400000-$9FFFFF as gpgx maps it; code run from a remapped bank traps" };
+  return { kind: "default" };
+}
+
 /** loadrom.c: USA > JAPAN > EUROPE from the header country field. */
 export function regionCode(img) {
   const s = String.fromCharCode(...img.subarray(0x1f0, 0x1f4));
@@ -321,7 +384,8 @@ export function describe(rom, opts = {}) {
   return {
     platform: "genesis",
     referenceCore: REFERENCE_CORE,
-    supported: true,
+    supported: cartMapper(img).kind !== null,
+    unsupportedReason: cartMapper(img).kind === null ? `genesis_plus_gx runs this cart with ${cartMapper(img).reason}, which this backend does not model` : null,
     romSha1: createHash("sha1").update(raw).digest("hex"),
     ...(img !== raw ? { romFormat: raw.length !== img.length ? "smd (512-byte header, interleaved): de-interleaved as gpgx loads it" : "byte-swapped: swapped back as gpgx loads it" } : {}),
     romBytes: img.length,
@@ -333,6 +397,8 @@ export function describe(rom, opts = {}) {
     // gpgx input_init: a '6' in the header's I/O support field ($190-$19D)
     // connects 6-button pads, anything else 3-button ones
     sixButton: sixButtonPads(img),
+    sram: sramConfig(img),
+    mapper: cartMapper(img),
     ramCode,
     arms: narms,
     shards: Math.ceil(narms / SH),
@@ -489,6 +555,8 @@ export async function* emitWat(rom, opts = {}) {
   yield RT.globalsWat();
   yield RT.cpuWat();
   yield RT.memWat(ROMIMG, ROMSIZE);
+  const SRAM = sramConfig(img), MAPPER = cartMapper(img);
+  yield RT.cartWat(ROMIMG, ROMSIZE, { sramOn: SRAM.on && SRAM.start < 0x400000, ssf2: MAPPER.kind === "ssf2" });
   yield RT.ioWat({ sixButton: sixButtonPads(img) });
   yield RT.vdpWat();
   yield RT.renderWat();
@@ -563,6 +631,11 @@ export async function* emitWat(rom, opts = {}) {
     (call $trace (local.get $p))
     (if (i32.and (local.get $p) (i32.const 1)) (then (call $trap) (return)))
     (local.set $p (i32.and (local.get $p) (i32.const 0xFFFFFF)))
+    ;; a bank a mapper re-based no longer holds the code these arms were
+    ;; compiled from: stop loudly (trappc = the pc) instead of running it
+    (if (i32.and (global.get $remapped) (i32.lt_u (local.get $p) (i32.const 0x400000)))
+      (then (if (i32.ne (call $cartmap (local.get $p)) (i32.and (i32.and (local.get $p) (i32.const 0x3F0000)) (i32.const ${ROMSIZE - 1})))
+              (then (call $trap) (return)))))
     (if (i32.lt_u (local.get $p) (i32.const 0x400000))
       (then (local.set $id (i32.load (i32.add (i32.const ${PCTAB})
               (i32.shl (i32.shr_u (i32.and (local.get $p) (i32.const ${ROMSIZE - 1})) (i32.const 1)) (i32.const 2))))))
@@ -588,7 +661,7 @@ export async function* emitWat(rom, opts = {}) {
   yield `  (data (i32.const ${PACKED}) "${watBytes(ents)}")\n`;
   for (const [off, b] of tabsegs) yield `  (data (i32.const ${off}) "${watBytes(b)}")\n`;
   yield `  (data (i32.const ${ROMIMG}) "${watBytes(ROMDATA)}")\n`;
-  yield frameWat(narms, PACKED, PCTAB, img).replace("(call $initmap)", `(call $initmap) (i32.store (i32.const ${STATE + 0xf4}) (i32.const ${tracebuf}))`);
+  yield frameWat(narms, PACKED, PCTAB, img, ROMSIZE, SRAM.bank).replace("(call $initmap)", `(call $initmap) (i32.store (i32.const ${STATE + 0xf4}) (i32.const ${tracebuf}))`);
   yield ")\n";
   if (breakAt !== null && !broken) throw new Error(`genesis recompile: options.breakArm $${breakAt.toString(16)} is not an instruction address of this cart`);
   if (opts.stats) Object.assign(opts.stats, { arms: narms, lowered: narms - bad, trapped: bad, shards: nsh, ramCodeArms: narms - Math.ceil(img.length / 2), ...(broken ? { brokenArms: broken } : {}) });
@@ -631,7 +704,7 @@ function regTraceWat(tracebuf, entries) {
         (i32.store (i32.const ${STATE + 0xFC}) (i32.and (i32.add (i32.load (i32.const ${STATE + 0xFC})) (i32.const 1)) (i32.const ${entries - 1}))))))`;
 }
 
-function frameWat(narms, PACKED, PCTAB, img) {
+function frameWat(narms, PACKED, PCTAB, img, ROMSIZE, sramBank) {
   return `
   ;; m68k_run: interrupt check on entry, bus refresh before each instruction,
   ;; and the one-instruction IRQ latency of m68k_set_irq_delay.
@@ -828,7 +901,7 @@ function frameWat(narms, PACKED, PCTAB, img) {
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $l)))
     (global.set $region (i32.const ${regionCode(img)}))
-    (call $vdp_reset)
+${RT.cartInitWat(ROMSIZE, sramBank)}    (call $vdp_reset)
     (call $io_reset)
     (global.set $zstate (i32.const 0))
     (global.set $zmap (i32.const 0))

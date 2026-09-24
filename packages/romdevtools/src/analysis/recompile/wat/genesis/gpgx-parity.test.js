@@ -80,3 +80,53 @@ test("ROM loading as gpgx's load_rom: .smd copier header and interleave, byte-sw
   const r2 = await gpgxParity({ platform: "genesis", rom: swapped, maxFrames: 3 });
   assert.equal(r2.diverged, false, `byte-swapped: ${divergenceText(r2)}`);
 });
+
+const writeB = (a, v) => [...W(0x13fc, v & 0xff), ...L(a)];
+const writeW = (a, v) => [...W(0x33fc, v & 0xffff), ...L(a)];
+
+test("backup RAM as sram_init maps it: 64KB at \$200000 by default, switched and write-protected by \$A130F1", T, async () => {
+  const readB = (a) => [...W(0x10f9), ...L(a), ...W(0x5248)]; // move.b abs.l,(a0)+; addq.w #1,a0 (keep a0 even)
+  const code = [...W(0x41f9), ...L(0xff0000),
+    ...writeB(0x200001, 0x5a), ...writeW(0x200010, 0x1234), ...readB(0x200001), ...readW(0x200010),
+    ...writeB(0xa130f1, 0), ...readW(0x200000),                      // ROM mirror back
+    ...writeB(0xa130f1, 3), ...writeB(0x200001, 0x77), ...readB(0x200001),   // write-protected
+    ...writeB(0xa130f1, 1), ...writeB(0x200001, 0x66), ...readB(0x200001), ...readB(0x200003),
+    ...W(0x60fe)];
+  const r = await gpgxParity({ platform: "genesis", rom: mdImage(code), maxFrames: 3 });
+  assert.equal(r.diverged, false, `default: ${divergenceText(r)}`);
+  // header "RA": odd-byte backup RAM $200001-$203FFF
+  const ra = mdImage(code, { header: { 0x1b0: [0x52, 0x41, 0xf8, 0x20, ...L(0x200001), ...L(0x203fff)] } });
+  const r2 = await gpgxParity({ platform: "genesis", rom: ra, maxFrames: 3 });
+  assert.equal(r2.diverged, false, `header: ${divergenceText(r2)}`);
+});
+
+test("the \$A130F3-\$A130FF bank registers re-map 512KB windows (mapper_512k_w)", T, async () => {
+  const size = 0x100000;
+  const at = [[0x80000, [0xca, 0xfe, 0xba, 0xbe]], [0x100000 - 0x100, [0x11, 0x22]]];
+  const code = [...W(0x41f9), ...L(0xff0000), ...readW(0x100000), ...writeB(0xa130f5, 1), ...readW(0x100000), ...readW(0x100002),
+    ...writeB(0xa130f5, 2), ...readW(0x100000), ...W(0x60fe)];
+  const r = await gpgxParity({ platform: "genesis", rom: mdImage(code, { size, at }), maxFrames: 3 });
+  assert.equal(r.diverged, false, divergenceText(r));
+});
+
+test("the Z80 reads the VDP through \$7Fxx and the 68000 bus (VDP, I/O, backup RAM) through its bank", T, async () => {
+  // bank = $A10000: address bits 15..23, least significant first
+  const bankBits = [0, 1, 0, 0, 0, 0, 1, 0, 1];
+  const z80 = [0x3a, 0x08, 0x7f, 0x32, 0x00, 0x10,      // ld a,($7F08) (V counter); ld ($1000),a
+    0x3a, 0x04, 0x7f, 0x32, 0x01, 0x10,                   // ld a,($7F04) (status high); ld ($1001),a
+    0x3a, 0x05, 0x7f, 0x32, 0x02, 0x10,                   // ld a,($7F05) (status low)
+    ...bankBits.flatMap((b) => [0x3e, b, 0x32, 0x00, 0x60]),
+    0x3a, 0x01, 0x80, 0x32, 0x03, 0x10,                   // ld a,($8001): version register
+    0x3a, 0x03, 0x80, 0x32, 0x04, 0x10,                   // ld a,($8003): port A data
+    0x18, 0xfe];
+  const code = [...writeW(0xa11100, 0x100), ...writeW(0xa11200, 0x100),   // $200: bus request, reset released
+    ...W(0x41f9), ...L(0xa00000),                                          // $210: lea $A00000,a0
+    ...W(0x43fa, 0x0028),                                                  // $216: lea $240(pc),a1
+    ...W(0x303c, z80.length - 1),                                          // $21A: move.w #n-1,d0
+    ...W(0x10d9, 0x51c8, 0xfffc),                                          // $21E: copy loop
+    ...writeW(0xa11200, 0), ...writeW(0xa11100, 0), ...writeW(0xa11200, 0x100),   // $224: reset pulse, bus back
+    ...W(0x60fe)];                                                         // $23C
+  const rom = mdImage(code, { at: [[0x240, z80]] });
+  const r = await gpgxParity({ platform: "genesis", rom, maxFrames: 5 });
+  assert.equal(r.diverged, false, divergenceText(r));
+});
