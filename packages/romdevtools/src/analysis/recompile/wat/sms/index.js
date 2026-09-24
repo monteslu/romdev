@@ -1040,7 +1040,18 @@ ${cfg.legacy ? "" : `    ;; gpgx sram_init: backup RAM powers on as $FF
     (if (i32.and (local.get $btn) (i32.const 2))
       (then (global.set $joy1 (i32.and (global.get $joy1) (i32.const 0xDF)))))
 ${STARTBTN}
-${FRAME_START}    (local.set $k (i32.const 0))
+${cfg.legacy ? "" : `    ;; the second pad (wasmcart pad 1): up/down on $DC bits 6-7, left/right
+    ;; and buttons 1/2 on $DD bits 0-3 (gpgx io_z80_read)
+    (local.set $btn (i32.load16_u (i32.add (i32.const ${ABI}) (i32.const 304))))
+    (global.set $joy2 (i32.const 0xFF))
+    (if (i32.and (local.get $btn) (i32.const 256)) (then (global.set $joy1 (i32.and (global.get $joy1) (i32.const 0xBF)))))
+    (if (i32.and (local.get $btn) (i32.const 512)) (then (global.set $joy1 (i32.and (global.get $joy1) (i32.const 0x7F)))))
+    (if (i32.and (local.get $btn) (i32.const 1024)) (then (global.set $joy2 (i32.and (global.get $joy2) (i32.const 0xFE)))))
+    (if (i32.and (local.get $btn) (i32.const 2048)) (then (global.set $joy2 (i32.and (global.get $joy2) (i32.const 0xFD)))))
+    (if (i32.and (local.get $btn) (i32.const 1)) (then (global.set $joy2 (i32.and (global.get $joy2) (i32.const 0xFB)))))
+    (if (i32.and (local.get $btn) (i32.const 2)) (then (global.set $joy2 (i32.and (global.get $joy2) (i32.const 0xF7)))))
+    (local.set $btn (i32.load16_u (i32.add (i32.const ${ABI}) (i32.const 288))))
+`}${FRAME_START}    (local.set $k (i32.const 0))
     (block $fd (loop $fl
       (br_if $fd (i32.ge_u (local.get $k) (i32.const ${LINES})))
       (local.set $ln (i32.rem_u (i32.add (local.get $k) (i32.const 192)) (i32.const ${LINES})))

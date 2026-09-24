@@ -21,6 +21,7 @@ import path from "node:path";
  * @param {object} [a.options]      backend options
  * @param {Record<string, object>} [a.regions]  extra caller regions
  * @param {boolean} [a.picture]     also score the two pictures at the last frame (result.picture)
+ * Buttons named "p2<name>" in `input` press <name> on the SECOND pad (same schedule alignment).
  * @returns {Promise<object>} findDiverge's result (diverged, atRefFrame, regions, fields, ...)
  */
 export async function gpgxParity(a) {
@@ -57,6 +58,14 @@ export async function gpgxParity(a) {
     };
     const refHost = await openRef();
     const cartHost = await openCart();
+    for (const h of [refHost, cartHost]) {
+      const set = h.setInput.bind(h);
+      h.setInput = (inp) => {
+        const p0 = {}, p1 = {};
+        for (const [k, v] of Object.entries(inp?.ports?.[0] ?? {})) (k.startsWith("p2") ? p1 : p0)[k.replace(/^p2/, "")] = v;
+        return set({ ...inp, ports: [p0, p1] });
+      };
+    }
     const r = await findRecompileDivergence({
       cartHost, refHost, refPlatform: a.platform, layout, input: a.input ?? "",
       maxFrames: a.maxFrames ?? 60, startFrame: 0, openCart, openRef,

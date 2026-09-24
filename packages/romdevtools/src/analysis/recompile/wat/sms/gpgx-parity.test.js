@@ -234,3 +234,9 @@ test("BIT n,(HL) copies the high byte of WZ (MEMPTR) into F bits 5 and 3, WZ set
   const r = await gpgxParity({ platform: "sms", rom, maxFrames: 5 });
   assert.equal(r.diverged, false, divergenceText(r));
 });
+
+test("the second pad reads on \$DC bits 6-7 and \$DD bits 0-3", T, async () => {
+  const main = z80([[0xF3, 0x31, 0xF0, 0xDF], "loop:", [0xDB, 0xDC, 0x32, 0x00, 0xC1, 0xDB, 0xDD, 0x32, 0x01, 0xC1], ["jr", null, "loop"]]);
+  const r = await gpgxParity({ platform: "sms", rom: smsImage(main), maxFrames: 12, input: "1:p2up+p2left+p2b:4,6:p2down+p2right+p2a:4" });
+  assert.equal(r.diverged, false, divergenceText(r));
+});
