@@ -146,19 +146,27 @@ export function decodedIR(row, window, rom, { allowStraddle = false, isa = ISAS.
     || bytes.some((b, i) => b !== rom[off + i])) throw new Error(`decoder byte/offset mismatch at ROM offset ${off}`);
   const mnemonic = row.mnem.toLowerCase(), len = bytes.length;
   const documented = isa.documented(mnemonic);
+  // PC-RELATIVE OPERANDS ARE RECOMPUTED FROM THE BYTES AT THE TRUE ADDRESS.
+  // The decoder prints a relative branch's target from the address IT was
+  // handed, and that is not always the instruction's CPU address: the
+  // all-alignments batch decodes every slice at a fake stride address, so a
+  // secondary `jr` came back aimed at the batch buffer (Tetris $01DA `18 FA`,
+  // jr -6, exported as $048C). An ISA that knows its relative encodings
+  // rewrites the operand from `bytes` and `row.addr` here, for every record.
+  const ops = isa.fixOps ? isa.fixOps(mnemonic, row.ops, bytes, row.addr) : row.ops;
   // `lifted` is Z80-only. A recompiler lowers from mnemonic+ops itself, so an
   // ISA without a lifter omits the field rather than emitting a fake one.
-  const lifted = isa.lift ? isa.lift(mnemonic, row.ops) : undefined;
+  const lifted = isa.lift ? isa.lift(mnemonic, ops) : undefined;
   return { schema: "romdev-decoded-ir-v1", off, addr: row.addr, bank: window.bank, slot: window.slot,
-    bytes, mnemonic, ops: row.ops, len,
+    bytes, mnemonic, ops, len,
     ...(straddles ? { straddlesWindow: true, windowEnd, bytesBeyondWindow: off + bytes.length - windowEnd,
       straddleNote: "this instruction starts in this bank and its operand bytes continue into the NEXT physical bank. The bytes are the ROM's real bytes; at run time the trailing bytes come from whichever bank is mapped after this one, so treat the decode as correct for this bank's layout and not as proof of the executed operand." } : {}),
     cycles: documented ? isa.cycles(bytes) : null,
     cycleOrder: ["taken-or-repeat", "not-taken-or-final"],
-    ...(documented ? isa.control(mnemonic, row.ops, row.addr, len)
+    ...(documented ? isa.control(mnemonic, ops, row.addr, len, bytes)
       : { kind: "unknown", targets: [], fallthrough: null }),
     ...(isa.flags
-      ? (documented ? isa.flags(mnemonic, row.ops) : { flagsRead: null, flagsWritten: null })
+      ? (documented ? isa.flags(mnemonic, ops) : { flagsRead: null, flagsWritten: null })
       : {}),
     ...(lifted ? { lifted } : {}),
     decodeStatus: documented ? "decoded" : "unknown",
@@ -250,7 +258,182 @@ export async function exportBlockMap(args) {
       : "blocks maps FILE OFFSET -> instruction length at EVERY offset that can begin an instruction, primary and secondary alignments both. This is what a static recompiler needs: a computed jump can land mid-instruction, so every offset is a potential entry point." };
 }
 
-export async function exportZ80IR(args) {
+/**
+ * The decode as a stream of IR records, in export order: per window, the
+ * primary tiling, then (alignments:'all') the secondary decodes. This is the
+ * ONE decode path - exportZ80IR serialises it to JSONL, and an in-process
+ * consumer (a WAT backend discovering blocks) iterates it directly instead of
+ * writing and re-reading hundreds of megabytes of JSONL.
+ *
+ * `st` accumulates the manifest counters as records are produced.
+ * @param {Buffer} rom
+ * @param {object} isa ISA descriptor (isa.js)
+ * @param {Array<object>} windows
+ * @param {{wantAllAlignments?:boolean, st?:object}} [o]
+ */
+export async function* irRecords(rom, isa, windows, { wantAllAlignments = false, st = newIrStats() } = {}) {
+  for (const window of windows) {
+    // LOOKAHEAD, so the window's LAST instruction can decode whole.
+    //
+    // objdump only sees the bytes it is handed. Slicing exactly at the window
+    // edge truncated any instruction whose operands continue past it, the
+    // decode came up short, and the completeness check below refused the
+    // whole cart. Handing it a few trailing bytes lets that instruction
+    // decode; records are still only KEPT when they start inside the window,
+    // so nothing from the next bank is emitted twice.
+    const windowEnd = window.off + window.length;
+    const lookahead = Math.min(isa.maxInstr - 1, rom.length - windowEnd);
+    // An ISA with its own decoder walks the window linearly here, producing
+    // the same {addr, mnemonic, ops, bytes} rows objdump would.
+    let decoded;
+    if (isa.decodeLinear) {
+      decoded = { available: true, exitCode: 0,
+                  instructions: isa.decodeLinear(rom, window.off,
+                                                 windowEnd + lookahead,
+                                                 window.addr) };
+    } else {
+      decoded = await runObjdump({ arch: isa.arch, startAddress: window.addr, bytes: rom.subarray(window.off, windowEnd + lookahead) });
+    }
+    if (!decoded.available || decoded.exitCode !== 0 || decoded.crash) throw new Error(`${isa.arch} decoder failed for bank ${window.bank}: ${decoded.raw?.slice(-300)}`);
+    let cursor = window.off;
+    const primaryStarts = new Set();
+    for (const row of decoded.instructions) {
+      const rowOff = window.off + row.addr - window.addr;
+      if (rowOff >= windowEnd) break;          // belongs to the next window
+      const record = decodedIR(row, window, rom, { isa });
+      if (record.off !== cursor) throw new Error(`decoder left a gap/overlap at file offset ${cursor}; refusing an incomplete IR export`);
+      primaryStarts.add(record.off);
+      if (wantAllAlignments) record.alignment = "primary";
+      cursor += record.len; st.instrCount++;
+      // Coverage counts bytes of THIS window only: a straddling instruction's
+      // trailing bytes belong to the next bank and are counted there, so
+      // coveredBytes still sums to romBytes exactly.
+      st.coveredBytes += Math.min(record.len, windowEnd - record.off);
+      if (record.decodeStatus === "unknown") st.unknownCount++;
+      if (record.straddlesWindow) st.straddleCount++;
+      yield record;
+    }
+    // Completeness is now "every byte of the window is accounted for", which
+    // a straddling final instruction satisfies: it starts inside and its
+    // in-window bytes run to the edge.
+    //
+    // ONE case is not a decoder failure: an opcode sitting in the ROM's final
+    // bytes whose operands would run off the END of the file. There is no
+    // lookahead to give it and no next bank to take the bytes from, so the
+    // trailing bytes are undecodable data. Refusing the whole export for that
+    // would block a cart over its last byte or two; they are emitted as
+    // `truncated-at-rom-end` records that retain their bytes, the same way
+    // unknown opcodes are handled.
+    if (cursor < windowEnd && windowEnd === rom.length) {
+      const tail = [...rom.subarray(cursor, windowEnd)];
+      const record = { schema: "romdev-decoded-ir-v1", off: cursor, addr: window.addr + (cursor - window.off),
+        bank: window.bank, slot: window.slot, bytes: tail, mnemonic: null, ops: "", len: tail.length,
+        cycles: null, kind: "unknown", targets: [], fallthrough: null, flagsRead: null, flagsWritten: null,
+        lifted: [], decodeStatus: "truncated-at-rom-end", targetAddressDomain: "cpu",
+        reachability: "unproven-linear-decode",
+        truncatedNote: "an opcode here would need operand bytes past the END of the ROM file. The bytes are retained and not lifted: this is undecodable tail data, not a decoder failure." };
+      cursor = windowEnd; st.coveredBytes += tail.length; st.instrCount++; st.unknownCount++; st.truncatedTailBytes += tail.length;
+      yield record;
+    }
+    if (cursor < windowEnd) throw new Error(`decoder did not cover the complete bank window ending at ${windowEnd} (stopped at ${cursor})`);
+
+    // SECONDARY ALIGNMENTS: the decode at every offset the primary tiling did
+    // not START an instruction at. These are the mid-instruction entry points
+    // a computed jump can land on. They are emitted AFTER the primary records
+    // and marked, so a consumer reading only `alignment:'primary'` sees the
+    // unchanged linear tiling.
+    if (wantAllAlignments) {
+      const missing = [];
+      // ALIGNMENT. On Z80 every byte is a legal entry point. On m68k
+      // instructions are WORD-ALIGNED, so an odd offset cannot begin one and
+      // a record there would be fiction - the exporter would be inventing
+      // entry points that no jump can reach. isa.align makes that explicit
+      // rather than leaving it to the decoder to produce garbage.
+      for (let off = window.off; off < windowEnd; off++) {
+        if (off % isa.align !== 0) continue;
+        if (!primaryStarts.has(off)) missing.push(off);
+      }
+      if (missing.length) {
+        const decodedAt = await decodeAtOffsets(rom, missing, isa);
+        for (const off of missing) {
+          const row = decodedAt.get(off);
+          if (!row) { st.unresolvedOffsets++; continue; }
+          // objdump emits `.short` where NO valid instruction of this ISA
+          // begins - genuinely undecodable data, not a decoder failure. On
+          // one 512KB Genesis cart 25 of 262144 offsets are like this
+          // (e.g. 0x1DCB2 = `47 45 73 aa`, mid-table data).
+          //
+          // Emit them as explicit `data` records rather than dropping them:
+          // a consumer compiling every offset as an entry point needs an
+          // entry for these too, and silently having no record is how
+          // coverage gaps hide. The recompiler turns them into a trap, which
+          // is correct - executing them IS a fault.
+          // The mnemonics that mean "no instruction begins here" are
+          // PER-ISA. m68k/6502 objdump says `.short`/`.word`/`.byte`; ARM
+          // objdump says `@` and prints `<UNDEFINED> instruction: 0x...` as
+          // the operand. Hardcoding the m68k spelling made every undefined
+          // ARM word fall through to decodedIR and be emitted as a real
+          // instruction named `@`.
+          //
+          // This is NOT the same question as isa.documented(): on Z80 an
+          // undocumented-but-real opcode is !documented yet still an
+          // instruction with bytes that execute. `isa.isData` answers only
+          // "the decoder produced no instruction at all".
+          if (isData(row.mnem, isa)) {
+            const dbytes = row.bytes.split(/\s+/).filter(Boolean).map((b) => parseInt(b, 16));
+            const rec = { schema: "romdev-decoded-ir-v1", off,
+              addr: window.addr + (off - window.off), bank: window.bank, slot: window.slot,
+              bytes: dbytes, mnemonic: null, ops: "", len: dbytes.length,
+              cycles: null, kind: "unknown", targets: [], fallthrough: null,
+              decodeStatus: "data", alignment: "secondary",
+              targetAddressDomain: "cpu", reachability: "unproven-linear-decode",
+              dataNote: "no valid instruction of this ISA begins here; the bytes are retained and not lifted." };
+            st.secondaryCount++; st.unknownCount++;
+            yield rec;
+            continue;
+          }
+          // A SECONDARY decode whose operands would run past the END of
+          // the ROM is tail data, not a decoder failure - the same case the
+          // primary pass emits as `truncated-at-rom-end`. Thumb makes it
+          // routine: `bl` is an aligned PAIR of halfwords, so the final two
+          // bytes of any ROM ending in a bl-first-half decode to nothing.
+          // Advance Wars ends in `ff ff` and the whole 4MB export was being
+          // refused over it.
+          const rowBytes = row.bytes.split(/\s+/).filter(Boolean);
+          if (!rowBytes.length || off + rowBytes.length > rom.length) {
+            const tail = [...rom.subarray(off, rom.length)];
+            const rec = { schema: "romdev-decoded-ir-v1", off,
+              addr: window.addr + (off - window.off), bank: window.bank, slot: window.slot,
+              bytes: tail, mnemonic: null, ops: "", len: tail.length,
+              cycles: null, kind: "unknown", targets: [], fallthrough: null,
+              decodeStatus: "truncated-at-rom-end", alignment: "secondary",
+              targetAddressDomain: "cpu", reachability: "unproven-linear-decode",
+              truncatedNote: "an instruction here would need operand bytes past the END of the ROM file." };
+            st.secondaryCount++; st.unknownCount++; st.truncatedTailBytes += tail.length;
+            yield rec;
+            continue;
+          }
+          const record = decodedIR({ ...row, addr: window.addr + (off - window.off) }, window, rom, { allowStraddle: true, isa });
+          record.alignment = "secondary";
+          st.secondaryCount++;
+          yield record;
+        }
+      }
+    }
+  }
+}
+
+/** Zeroed manifest counters for irRecords. */
+export function newIrStats() {
+  return { instrCount: 0, unknownCount: 0, coveredBytes: 0, straddleCount: 0,
+    truncatedTailBytes: 0, secondaryCount: 0, unresolvedOffsets: 0 };
+}
+
+/**
+ * The ISA descriptor a decode request names, validated.
+ * @param {{platform:string, cpuState?:string}} args
+ */
+export function irIsa(args) {
   // `cpuState` picks between a platform's instruction sets (GBA: arm/thumb).
   const isa = isaFor(args.platform, args.cpuState);
   if (!isa && args.cpuState) {
@@ -261,6 +444,39 @@ export async function exportZ80IR(args) {
   }
   if (!isa) throw new Error(`emit:'ir' has no ISA descriptor for platform '${args.platform}'. Supported: ${Object.keys(PLATFORM_ISA).join(", ")}`);
   if (isa.arch === "z80" && !["sms", "gg"].includes(args.platform)) throw new Error("emit:'ir' currently supports SMS/GG cartridge mapping only; MSX/raw Z80 mapping is not inferred from SMS slots");
+  return isa;
+}
+
+/**
+ * Resolve the ISA and the windows for a decode request, with the same
+ * validation the tool applies. Shared by the JSONL export and in-process
+ * consumers so both decode exactly the same bytes the same way.
+ * @param {Buffer} rom
+ * @param {object} args {platform, cpuState?, allOffsets?, fileOffset?, startAddress?, length?, bank?, ...}
+ */
+export function irPlan(rom, args) {
+  const isa = irIsa(args);
+  // WINDOW CHOICE IS BY MAPPER, NOT BY "has banks".
+  //
+  // irWindows() is SMS-specific: it validates the bank against an SMS mapper
+  // and throws "SMS bank N out of range". Routing every ISA with a bankSize
+  // through it meant NES and Game Boy - which bank, but not like an SMS -
+  // failed with an SMS error on a perfectly good cart.
+  //
+  // An ISA whose banks are seen through a FIXED CPU window supplies its own
+  // `windows` (Game Boy: bank 0 at $0000, every other bank at $4000), so each
+  // record's `addr` is the address the CPU executes it at. Everything else
+  // takes the flat, chunked walk, correct for any ISA whose ROM is addressed
+  // linearly by file offset.
+  const windows = isa.windows ? isa.windows(rom.length, args)
+    : (isa.bankSize && isa.smsMapper === true) ? irWindows(rom.length, args)
+    : flatWindows(rom.length, args);
+  return { isa, windows };
+}
+
+export async function exportZ80IR(args) {
+  // Validate the platform before touching the filesystem.
+  irIsa(args);
   if (!args.outputPath) throw new Error("emit:'ir' requires outputPath for JSONL; bulk IR is never returned inline");
   const input = path.resolve(args.path), output = path.resolve(args.outputPath);
   if (input === output) throw new Error("IR outputPath must not overwrite the input ROM");
@@ -270,184 +486,23 @@ export async function exportZ80IR(args) {
   };
   await protectInput();
   const rom = await readFile(input);
-  // WINDOW CHOICE IS BY MAPPER, NOT BY "has banks".
-  //
-  // irWindows() is SMS-specific: it validates the bank against an SMS mapper
-  // and throws "SMS bank N out of range". Routing every ISA with a bankSize
-  // through it meant NES and Game Boy - which bank, but not like an SMS -
-  // failed with an SMS error on a perfectly good cart.
-  //
-  // A flat, chunked walk is correct for any ISA whose ROM is addressed
-  // linearly by file offset, which is how the NES, GB, SNES and GBA exports
-  // are consumed: the recompiler keys arms by ROM offset and resolves the
-  // bank itself at run time.
-  const useSmsWindows = isa.bankSize && isa.smsMapper === true;
-  const windows = useSmsWindows
-    ? irWindows(rom.length, args)
-    : flatWindows(rom.length, args);
+  const { isa, windows } = irPlan(rom, args);
   await mkdir(path.dirname(output), { recursive: true });
   const temp = `${output}.${randomUUID()}.tmp`;
   const fd = await open(temp, "wx");
-  let instrCount = 0, unknownCount = 0, bytesWritten = 0, coveredBytes = 0, straddleCount = 0, truncatedTailBytes = 0;
-  let secondaryCount = 0, unresolvedOffsets = 0;
+  const st = newIrStats();
+  let bytesWritten = 0;
   const wantAllAlignments = args.alignments === "all";
   try {
-    for (const window of windows) {
-      // LOOKAHEAD, so the window's LAST instruction can decode whole.
-      //
-      // objdump only sees the bytes it is handed. Slicing exactly at the window
-      // edge truncated any instruction whose operands continue past it, the
-      // decode came up short, and the completeness check below refused the
-      // whole cart. Handing it a few trailing bytes lets that instruction
-      // decode; records are still only KEPT when they start inside the window,
-      // so nothing from the next bank is emitted twice.
-      const windowEnd = window.off + window.length;
-      const lookahead = Math.min(isa.maxInstr - 1, rom.length - windowEnd);
-      // An ISA with its own decoder walks the window linearly here, producing
-      // the same {addr, mnemonic, ops, bytes} rows objdump would.
-      let decoded;
-      if (isa.decodeLinear) {
-        decoded = { available: true, exitCode: 0,
-                    instructions: isa.decodeLinear(rom, window.off,
-                                                   windowEnd + lookahead,
-                                                   window.addr) };
-      } else {
-        decoded = await runObjdump({ arch: isa.arch, startAddress: window.addr, bytes: rom.subarray(window.off, windowEnd + lookahead) });
-      }
-      if (!decoded.available || decoded.exitCode !== 0 || decoded.crash) throw new Error(`${isa.arch} decoder failed for bank ${window.bank}: ${decoded.raw?.slice(-300)}`);
-      let cursor = window.off, chunk = "";
-      const primaryStarts = new Set();
-      for (const row of decoded.instructions) {
-        const rowOff = window.off + row.addr - window.addr;
-        if (rowOff >= windowEnd) break;          // belongs to the next window
-        const record = decodedIR(row, window, rom, { isa });
-        if (record.off !== cursor) throw new Error(`decoder left a gap/overlap at file offset ${cursor}; refusing an incomplete IR export`);
-        primaryStarts.add(record.off);
-        if (wantAllAlignments) record.alignment = "primary";
-        cursor += record.len; instrCount++;
-        // Coverage counts bytes of THIS window only: a straddling instruction's
-        // trailing bytes belong to the next bank and are counted there, so
-        // coveredBytes still sums to romBytes exactly.
-        coveredBytes += Math.min(record.len, windowEnd - record.off);
-        if (record.decodeStatus === "unknown") unknownCount++;
-        if (record.straddlesWindow) straddleCount++;
-        chunk += JSON.stringify(record) + "\n";
-        if (chunk.length >= 256 * 1024) { await fd.writeFile(chunk); bytesWritten += Buffer.byteLength(chunk); chunk = ""; }
-      }
-      // Completeness is now "every byte of the window is accounted for", which
-      // a straddling final instruction satisfies: it starts inside and its
-      // in-window bytes run to the edge.
-      //
-      // ONE case is not a decoder failure: an opcode sitting in the ROM's final
-      // bytes whose operands would run off the END of the file. There is no
-      // lookahead to give it and no next bank to take the bytes from, so the
-      // trailing bytes are undecodable data. Refusing the whole export for that
-      // would block a cart over its last byte or two; they are emitted as
-      // `truncated-at-rom-end` records that retain their bytes, the same way
-      // unknown opcodes are handled.
-      if (cursor < windowEnd && windowEnd === rom.length) {
-        const tail = [...rom.subarray(cursor, windowEnd)];
-        const record = { schema: "romdev-decoded-ir-v1", off: cursor, addr: window.addr + (cursor - window.off),
-          bank: window.bank, slot: window.slot, bytes: tail, mnemonic: null, ops: "", len: tail.length,
-          cycles: null, kind: "unknown", targets: [], fallthrough: null, flagsRead: null, flagsWritten: null,
-          lifted: [], decodeStatus: "truncated-at-rom-end", targetAddressDomain: "cpu",
-          reachability: "unproven-linear-decode",
-          truncatedNote: "an opcode here would need operand bytes past the END of the ROM file. The bytes are retained and not lifted: this is undecodable tail data, not a decoder failure." };
-        cursor = windowEnd; coveredBytes += tail.length; instrCount++; unknownCount++; truncatedTailBytes += tail.length;
-        chunk += JSON.stringify(record) + "\n";
-      }
-      if (cursor < windowEnd) throw new Error(`decoder did not cover the complete bank window ending at ${windowEnd} (stopped at ${cursor})`);
-
-      // SECONDARY ALIGNMENTS: the decode at every offset the primary tiling did
-      // not START an instruction at. These are the mid-instruction entry points
-      // a computed jump can land on. They are emitted AFTER the primary records
-      // and marked, so a consumer reading only `alignment:'primary'` sees the
-      // unchanged linear tiling.
-      if (wantAllAlignments) {
-        const missing = [];
-        // ALIGNMENT. On Z80 every byte is a legal entry point. On m68k
-        // instructions are WORD-ALIGNED, so an odd offset cannot begin one and
-        // a record there would be fiction - the exporter would be inventing
-        // entry points that no jump can reach. isa.align makes that explicit
-        // rather than leaving it to the decoder to produce garbage.
-        for (let off = window.off; off < windowEnd; off++) {
-          if (off % isa.align !== 0) continue;
-          if (!primaryStarts.has(off)) missing.push(off);
-        }
-        if (missing.length) {
-          const decodedAt = await decodeAtOffsets(rom, missing, isa);
-          for (const off of missing) {
-            const row = decodedAt.get(off);
-            if (!row) { unresolvedOffsets++; continue; }
-            // objdump emits `.short` where NO valid instruction of this ISA
-            // begins - genuinely undecodable data, not a decoder failure. On
-            // one 512KB Genesis cart 25 of 262144 offsets are like this
-            // (e.g. 0x1DCB2 = `47 45 73 aa`, mid-table data).
-            //
-            // Emit them as explicit `data` records rather than dropping them:
-            // a consumer compiling every offset as an entry point needs an
-            // entry for these too, and silently having no record is how
-            // coverage gaps hide. The recompiler turns them into a trap, which
-            // is correct - executing them IS a fault.
-            // The mnemonics that mean "no instruction begins here" are
-            // PER-ISA. m68k/6502 objdump says `.short`/`.word`/`.byte`; ARM
-            // objdump says `@` and prints `<UNDEFINED> instruction: 0x...` as
-            // the operand. Hardcoding the m68k spelling made every undefined
-            // ARM word fall through to decodedIR and be emitted as a real
-            // instruction named `@`.
-            //
-            // This is NOT the same question as isa.documented(): on Z80 an
-            // undocumented-but-real opcode is !documented yet still an
-            // instruction with bytes that execute. `isa.isData` answers only
-            // "the decoder produced no instruction at all".
-            if (isData(row.mnem, isa)) {
-              const dbytes = row.bytes.split(/\s+/).filter(Boolean).map((b) => parseInt(b, 16));
-              const rec = { schema: "romdev-decoded-ir-v1", off,
-                addr: window.addr + (off - window.off), bank: window.bank, slot: window.slot,
-                bytes: dbytes, mnemonic: null, ops: "", len: dbytes.length,
-                cycles: null, kind: "unknown", targets: [], fallthrough: null,
-                decodeStatus: "data", alignment: "secondary",
-                targetAddressDomain: "cpu", reachability: "unproven-linear-decode",
-                dataNote: "no valid instruction of this ISA begins here; the bytes are retained and not lifted." };
-              secondaryCount++; unknownCount++;
-              chunk += JSON.stringify(rec) + "\n";
-              if (chunk.length >= 256 * 1024) { await fd.writeFile(chunk); bytesWritten += Buffer.byteLength(chunk); chunk = ""; }
-              continue;
-            }
-            // A SECONDARY decode whose operands would run past the END of
-            // the ROM is tail data, not a decoder failure - the same case the
-            // primary pass emits as `truncated-at-rom-end`. Thumb makes it
-            // routine: `bl` is an aligned PAIR of halfwords, so the final two
-            // bytes of any ROM ending in a bl-first-half decode to nothing.
-            // Advance Wars ends in `ff ff` and the whole 4MB export was being
-            // refused over it.
-            const rowBytes = row.bytes.split(/\s+/).filter(Boolean);
-            if (!rowBytes.length || off + rowBytes.length > rom.length) {
-              const tail = [...rom.subarray(off, rom.length)];
-              const rec = { schema: "romdev-decoded-ir-v1", off,
-                addr: window.addr + (off - window.off), bank: window.bank, slot: window.slot,
-                bytes: tail, mnemonic: null, ops: "", len: tail.length,
-                cycles: null, kind: "unknown", targets: [], fallthrough: null,
-                decodeStatus: "truncated-at-rom-end", alignment: "secondary",
-                targetAddressDomain: "cpu", reachability: "unproven-linear-decode",
-                truncatedNote: "an instruction here would need operand bytes past the END of the ROM file." };
-              secondaryCount++; unknownCount++; truncatedTailBytes += tail.length;
-              chunk += JSON.stringify(rec) + "\n";
-              if (chunk.length >= 256 * 1024) { await fd.writeFile(chunk); bytesWritten += Buffer.byteLength(chunk); chunk = ""; }
-              continue;
-            }
-            const record = decodedIR({ ...row, addr: window.addr + (off - window.off) }, window, rom, { allowStraddle: true, isa });
-            record.alignment = "secondary";
-            secondaryCount++;
-            chunk += JSON.stringify(record) + "\n";
-            if (chunk.length >= 256 * 1024) { await fd.writeFile(chunk); bytesWritten += Buffer.byteLength(chunk); chunk = ""; }
-          }
-        }
-      }
-      if (chunk) { await fd.writeFile(chunk); bytesWritten += Buffer.byteLength(chunk); }
+    let chunk = "";
+    for await (const record of irRecords(rom, isa, windows, { wantAllAlignments, st })) {
+      chunk += JSON.stringify(record) + "\n";
+      if (chunk.length >= 256 * 1024) { await fd.writeFile(chunk); bytesWritten += Buffer.byteLength(chunk); chunk = ""; }
     }
+    if (chunk) { await fd.writeFile(chunk); bytesWritten += Buffer.byteLength(chunk); }
     await fd.close(); await protectInput(); await rename(temp, output);
   } catch (e) { await fd.close().catch(() => {}); await unlink(temp).catch(() => {}); throw e; }
+  const { instrCount, unknownCount, coveredBytes, straddleCount, truncatedTailBytes, secondaryCount, unresolvedOffsets } = st;
   return { schema: "romdev-ir-manifest-v1", path: output, format: "jsonl", instrCount, unknownCount,
     bytesWritten, coveredBytes, romBytes: rom.length,
     straddleCount,

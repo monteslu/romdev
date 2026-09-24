@@ -11,7 +11,7 @@
 import { z80Cycles, z80Flags, z80Control, CYCLE_PROVENANCE } from "./z80-metadata.js";
 import { liftZ80, DOCUMENTED_Z80 } from "./lift-z80.js";
 import { m68kCycles, m68kControl, M68K_CYCLE_PROVENANCE } from "./m68k-metadata.js";
-import { gbCycles, gbControl, GB_CYCLE_PROVENANCE, GB_ILLEGAL } from "./gb-metadata.js";
+import { gbCycles, gbControl, gbWindows, gbFixOps, GB_CYCLE_PROVENANCE, GB_ILLEGAL } from "./gb-metadata.js";
 import { m6502Cycles, m6502Control, M6502_CYCLE_PROVENANCE } from "./m6502-metadata.js";
 import { decodeBatch as decode6502, decodeLinear as decodeLinear6502 } from "./decode-6502.js";
 import { decodeBatch as decode65816, decodeLinear as decodeLinear65816 } from "./decode-65816.js";
@@ -99,8 +99,19 @@ export const ISAS = {
     align: 1,
     // MBC banks the $4000-$7FFF window in 16KB units.
     bankSize: 0x4000,
+    // Banks are seen through fixed CPU windows (bank 0 at $0000, the rest at
+    // $4000), so the exporter walks one window per bank at its CPU address
+    // rather than the flat file-offset walk. See gbWindows.
+    windows: gbWindows,
+    // `jr` targets are recomputed from the bytes at the true CPU address,
+    // primary and secondary records alike. See gbFixOps.
+    fixOps: gbFixOps,
     cycles: gbCycles,
-    control: gbControl,
+    // gbControl classifies from the opcode BYTES; the exporter's control
+    // hook passes (mnemonic, ops, addr, len, bytes). Wiring gbControl in
+    // directly handed it the mnemonic string, so every record came out
+    // kind:'none'.
+    control: (mnemonic, ops, addr, len, bytes) => gbControl(bytes, addr),
     flags: null,
     lift: null,
     documented: (m) => !/^(\.|unknown|bad)/i.test(m),
