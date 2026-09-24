@@ -29,12 +29,13 @@
 // Plain JS ESM + JSDoc.
 
 import { readFileSync } from "node:fs";
+import { crc32 } from "node:zlib";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { lower, cyc, PACK_P, Unsupported, OPS, LEN } from "./cpu.js";
 import {
   FB_W, FB_H, NESFB, PRG, WRAM, CHR, APUREG, RGBTAB, CYCTAB, DMCTAB,
-  NTRAM, PAL, OAM, luts, globalsWat, ppuWat,
+  NTRAM, PAL, OAM, EMPH, luts, globalsWat, ppuWat,
 } from "./ppu.js";
 import { MAPPERS, ntSelFixed } from "./mappers.js";
 
@@ -50,6 +51,11 @@ export const REFERENCE_CORE = "fceumm";
 // ---- linear-memory probe block (host-readable via wasm({op:'read'})) -------
 // Cart GLOBALS are invisible to the host, so everything worth reading from
 // outside is mirrored here.
+/** fceumm SetSoundVariables: fhinc = 14915 * 24 (NTSC), in 1/48 CPU cycles. */
+const FHINC = 14915 * 24;
+/** sound.c lengthtable[0x20], 32 bytes. */
+export const LENTAB = 0x06C40;
+
 export const PROBE = 0x08000;   // PROBE_FIELDS, u32 each
 export const PCRING = 0x09000;  // 1024 x (pc u16 | opcode<<16, ts): last instructions
 /** options.traceEntries rings live above the ABI block (memory is 1MB). */
@@ -63,7 +69,7 @@ export const ABI = FB + FB_W * FB_H * 4 + 0x1000;
 export const PROBE_FIELDS = ["steps", "trapped", "trappc", "pc", "frame", "nnmi", "ts",
   "a", "x", "y", "s", "p", "ppu0", "ppu1", "ppustatus",
   "refaddr", "tmpaddr", "xoff", "joy", "trapop", "nvram",
-  "ringi", "nbrk", "nemph", "cnt", "apu4017", "dmcsize", "dmcirq"];
+  "ringi", "nbrk", "nemph", "cnt", "apu4017", "dmcsize", "dmcirq", "nirq", "sirq"];
 
 /**
  * The cart's `romdev.recompile` layout (schema: recompile/recompile-section.js):
@@ -156,49 +162,112 @@ export function traceFor(opts = {}) {
  * @param {Uint8Array} rom  the whole .nes file
  * @param {object} [_opts]
  */
-export function describe(rom, _opts = {}) {
+export function describe(rom, opts = {}) {
   rom = toBytes(rom);
   if (rom.length < 16 || rom[0] !== 0x4E || rom[1] !== 0x45 || rom[2] !== 0x53 || rom[3] !== 0x1A) {
     throw new Error("nes recompile: not an iNES image (missing 'NES\\x1A' header)");
   }
   rom = cleanHeader(rom);
-  const nes2 = (rom[7] & 0x0C) === 0x08;
-  const prgBanks = rom[4], chrBanks = rom[5];
-  const mapper = (rom[6] >> 4) | (rom[7] & 0xF0);
+  // ines.c iNES_get_mapper_id / iNES_read_header_info: byte 7 bits 2-3 pick
+  // the header version. NES 2.0 adds byte 8's mapper bits and byte 9's size
+  // nibbles; "archaic" iNES (01 or 11) ignores byte 7 entirely, because old
+  // dumpers left junk there.
+  const ver = rom[7] & 0x0C;
+  let nes2 = ver === 0x08;
+  let mapper = nes2 ? ((rom[8] << 8) & 0xF00) | (rom[7] & 0xF0) | (rom[6] >> 4)
+    : ver === 0 ? (rom[7] & 0xF0) | (rom[6] >> 4) : rom[6] >> 4;
+  let prgBanks = rom[4], chrBanks = rom[5];
+  if (nes2) {
+    if ((rom[9] & 0x0F) === 0x0F || (rom[9] & 0xF0) === 0xF0) throw new Error("nes recompile: NES 2.0 exponent-multiplier ROM sizes are not supported");
+    prgBanks |= (rom[9] & 0x0F) << 8;
+    chrBanks |= (rom[9] & 0xF0) << 4;
+  }
   const trainer = (rom[6] & 4) ? 512 : 0;
   const prgStart = 16 + trainer;
   const prgSize = prgBanks * 0x4000;
-  const chrSize = chrBanks * 0x2000;
+  let chrSize = chrBanks * 0x2000;
   if (prgSize === 0) throw new Error("nes recompile: header declares 0 PRG banks");
   if (rom.length < prgStart + prgSize + chrSize) {
     throw new Error(`nes recompile: file is ${rom.length} bytes, header needs ${prgStart + prgSize + chrSize}`);
   }
+  // iNESCart.mirror: 2 = four-screen, else flags6 bit 0 (1 = vertical)
+  let mirror = (rom[6] & 8) ? 2 : (rom[6] & 1);
+  let submapper = nes2 ? rom[8] >> 4 : 0;
+  let region = nes2 ? rom[12] & 3 : 0;
+  let battery = !!(rom[6] & 2);
+  let prgRam = null;
+  // ines.c: an iNES 1.0 file whose NAME carries a PAL-country tag runs as PAL.
+  if (!nes2 && opts.romPath && PAL_NAME_TAGS.some((t) => String(opts.romPath).includes(t))) region = 1;
+  let headerFix = null;
+  if (!nes2) {
+    // ines.c CheckHInfo(): the CRC32 (PRG+CHR) keyed correction table.
+    const crc = crc32(rom.subarray(prgStart, prgStart + prgSize + chrSize)) >>> 0;
+    const row = INES_CORRECT.get(crc);
+    if (row) {
+      const [, fMapper, fSub, fMirror, fBattery, fPrgRam, , fRegion, fExtra] = row;
+      headerFix = { crc32: crc.toString(16).padStart(8, "0"), mapper: fMapper, submapper: fSub, mirror: fMirror, battery: fBattery, prgram: fPrgRam, region: fRegion, extra: fExtra };
+      if (fMapper >= 0) {
+        if (fExtra === 0x800 && chrSize) chrSize = 0; // the dump's CHR is really CHR RAM
+        mapper = fMapper & 0xFFF;
+      }
+      if (fSub >= 0) { nes2 = true; submapper = fSub; }
+      if (fMirror >= 0) {
+        if (fMirror === 8) { if (mirror === 2) mirror = 0; }
+        else mirror = fMirror;
+      }
+      if (fBattery > 0) battery = true;
+      if (fRegion >= 0) region = fRegion;
+      if (fPrgRam >= 0) prgRam = ((fPrgRam & 0x0F) ? 64 << (fPrgRam & 0xF) : 0) + ((fPrgRam & 0xF0) ? 64 << ((fPrgRam >> 4) & 0xF) : 0);
+    }
+    if ((mapper === 118 || mapper === 24 || mapper === 26) && mirror === 2) mirror = 0;
+    if (mapper === 99) mirror = 2;
+  }
+  // SetupCartMirroring: 2 = four-screen, >= 0x10 one-screen (hard-wired),
+  // else H/V with bit 2 = hard-wired (the mapper cannot change it).
+  const mirroring = mirror === 2 ? "four-screen" : mirror >= 0x10 ? ((mirror & 1) ? "one-screen-b" : "one-screen-a")
+    : ((mirror & 1) ? "vertical" : "horizontal");
+  const mirrorHard = mirror >= 0x10 || !!(mirror & 4);
   const m = MAPPERS[mapper];
-  const fourScreen = !!(rom[6] & 8);
   let unsupportedReason = null;
   if (!m) unsupportedReason = `mapper ${mapper} has no WAT backend yet (supported: ${Object.keys(MAPPERS).join(", ")})`;
-  else if (prgSize > 0x8000) unsupportedReason = `mapper ${mapper} with ${prgSize} bytes of PRG`;
-  else if (fourScreen) unsupportedReason = "four-screen nametables (4KB of cart VRAM) are not modelled";
+  else if (m.supports && m.supports({ prgSize, chrSize, submapper, nes2 })) unsupportedReason = m.supports({ prgSize, chrSize, submapper, nes2 });
+  else if (mirroring === "four-screen") unsupportedReason = "four-screen nametables (4KB of cart VRAM) are not modelled";
+  else if (region === 1) unsupportedReason = "PAL timing (fceumm runs this cart as PAL: NES 2.0 region, ines-correct.h, or a PAL tag in the file name)";
+  else if (region === 3) unsupportedReason = "Dendy timing (fceumm runs this cart as a Dendy)";
   return {
     platform: "nes",
     referenceCore: REFERENCE_CORE,
     mapper,
     mapperName: m ? m.name : null,
+    submapper,
     supported: unsupportedReason === null,
     unsupportedReason,
     nes2,
-    prgBanks, chrBanks, prgSize, chrSize,
+    prgBanks, chrBanks: chrSize / 0x2000, prgSize, chrSize,
     prgOffset: prgStart,
     chrOffset: prgStart + prgSize,
     trainer: trainer > 0,
-    chrRam: chrBanks === 0,
-    // iNES flags6 bit 0: 0 = HORIZONTAL mirroring, 1 = VERTICAL.
-    mirroring: fourScreen ? "four-screen" : ((rom[6] & 1) ? "vertical" : "horizontal"),
-    battery: !!(rom[6] & 2),
+    chrRam: chrSize === 0,
+    mirroring,
+    mirrorHard,
+    region,
+    battery,
+    prgRam,
+    headerFix,
     arms: prgSize,
-    layout,
+    layout: m && m.layout ? m.layout(layout) : layout,
     conventions,
   };
+}
+
+/** ines.c: iNES 1.0 file-name tags that make fceumm pick PAL. */
+const PAL_NAME_TAGS = ["(E)", "(e)", "(Europe)", "(PAL)", "(F)", "(f)", "(G)", "(g)", "(I)", "(i)", "(S)", "(s)",
+  "(France)", "(Germany)", "(Italy)", "(Spain)", "(Sweden)", "(Sw)", "(Australia)", "(A)", "(a)"];
+
+/** ines-correct.h rows by CRC32; CheckHInfo takes the FIRST match. */
+const INES_CORRECT = new Map();
+for (const r of JSON.parse(readFileSync(path.join(__dirname, "fceumm-ines-correct.json"), "utf8")).rows) {
+  if (!INES_CORRECT.has(r[0] >>> 0)) INES_CORRECT.set(r[0] >>> 0, r);
 }
 
 /**
@@ -218,6 +287,28 @@ function cleanHeader(rom) {
   const out = new Uint8Array(rom.length);
   out.set(rom);
   out.set(h, 0);
+  return out;
+}
+
+/**
+ * fceumm's palette[512] as the libretro blit indexes it: entry d*64+c is
+ * colour c under emphasis bits d, built by ApplyDeemphasisComplete /
+ * ApplyDeemphasisClassic: each channel is `(int)(ch * mul[d-1])` in C float
+ * (float32) arithmetic, clamped to 255.
+ * @returns {number[]} 0xRRGGBB
+ */
+export function palette512() {
+  const { rtmul, gtmul, btmul } = FCEUMM.deemphasis;
+  const f = Math.fround;
+  const ch = (v, m) => Math.min(255, Math.trunc(f(f(v) * f(m))));
+  const out = [];
+  for (let d = 0; d < 8; d++) {
+    for (const c of FCEUMM.paletteRgb) {
+      let r = c >> 16, g = (c >> 8) & 0xFF, b = c & 0xFF;
+      if (d) { r = ch(r, rtmul[d - 1]); g = ch(g, gtmul[d - 1]); b = ch(b, btmul[d - 1]); }
+      out.push((r << 16) | (g << 8) | b);
+    }
+  }
   return out;
 }
 
@@ -250,7 +341,7 @@ function u32le(arr) {
  * @param {string} [sha1]  sha1 of the ROM file (hex), if the caller has it
  */
 export function recompileSection(rom, sha1, opts = {}) {
-  const d = describe(rom);
+  const d = describe(rom, opts);
   const ring = pcRingFor(opts);
   return {
     name: "romdev.recompile",
@@ -278,12 +369,19 @@ function cpuGlobals() {
     "irqlow", "nframe", "nnmi", "nvram", "joy", "joybit", "joybit2", "laststrobe",
     "ringi", "nbrk", "nemph", "apu4017", "lastts", "dmcbitcount",
     "dmcaddrlatch", "dmcsizelatch", "dmcformat", "dmcaddress", "dmcsize",
-    "dmcshift", "dmchavedma", "dmcdmabuf", "dmchavesample", "dmcirq"];
+    "dmcshift", "dmchavedma", "dmcdmabuf", "dmchavesample", "dmcirq",
+    "nirq", "fcnt", "sirq", "ench", "len0", "len1", "len2", "len3"];
   let s = g.map((n) => `  (global $${n} (mut i32) (i32.const 0))\n`).join("");
   s += "  (global $s (mut i32) (i32.const 0xFD))\n";
   s += "  (global $fi (mut i32) (i32.const 1))\n";
   s += "  (global $dmcacc (mut i32) (i32.const 1))\n";
   s += "  (global $dmcperiod (mut i32) (i32.const 0x1AC))\n";
+  // fceumm _PI (I flag before the previous instruction), the frame sequencer
+  // (FCEUSND_Reset: fhcnt = fhinc; FCEUSND_Power: IRQFrameMode = 1, i.e.
+  // the frame IRQ starts inhibited).
+  s += "  (global $pi (mut i32) (i32.const 1))\n";
+  s += `  (global $fhcnt (mut i32) (i32.const ${FHINC}))\n`;
+  s += "  (global $irqfm (mut i32) (i32.const 1))\n";
   return s;
 }
 
@@ -304,6 +402,26 @@ function memWat(mapper, n) {
     (if (i32.and (i32.ge_u (local.get $a) (i32.const 0x2000))
                  (i32.lt_u (local.get $a) (i32.const 0x4018)))
       (then (drop (call $rd8 (local.get $a))))))
+
+  ;; A read that can hit open bus, with X.DB (the last byte the bus carried)
+  ;; supplied by the caller: fceumm's ANull returns X.DB for $4000-$4014 and
+  ;; $4018-$5FFF. $rd8's own fallback (the operand's high byte) is X.DB for
+  ;; every non-indexed read; indexed reads come through here.
+  (func $rd8i (param $a i32) (param $db i32) (result i32)
+    (local.set $a (i32.and (local.get $a) (i32.const 0xFFFF)))
+    (if (i32.or
+          (i32.and (i32.ge_u (local.get $a) (i32.const 0x4000)) (i32.le_u (local.get $a) (i32.const 0x4014)))
+          (i32.and (i32.ge_u (local.get $a) (i32.const 0x4018)) (i32.lt_u (local.get $a) (i32.const 0x6000))))
+      (then (return (i32.and (local.get $db) (i32.const 0xFF)))))
+    (call $rd8 (local.get $a)))
+
+  ;; Page-cross dummy read that also reports X.DB after it: only I/O has side
+  ;; effects or can change what an open-bus target then returns.
+  (func $dummyrdb (param $a i32) (param $db i32) (result i32)
+    (if (i32.and (i32.ge_u (local.get $a) (i32.const 0x2000))
+                 (i32.lt_u (local.get $a) (i32.const 0x4018)))
+      (then (return (call $rd8i (local.get $a) (local.get $db)))))
+    (local.get $db))
 
   ;; ReadGP with FSDisable=1 (fceumm libretro default): bits past 8 read 1.
   (func $joyread (param $w i32) (result i32)
@@ -333,11 +451,12 @@ function memWat(mapper, n) {
       (then (return (i32.load8_u (i32.add (i32.const ${WRAM - 0x6000}) (local.get $a))))))
     (if (i32.eq (local.get $a) (i32.const 0x4016)) (then (return (call $joyread (i32.const 0)))))
     (if (i32.eq (local.get $a) (i32.const 0x4017)) (then (return (call $joyread (i32.const 1)))))
-    (if (i32.eq (local.get $a) (i32.const 0x4015)) (then (return (i32.const 0))))
+    (if (i32.eq (local.get $a) (i32.const 0x4015)) (then (return (call $status_read))))
     ;; open bus: the last byte on the bus was the operand's high byte
     (i32.shr_u (local.get $a) (i32.const 8)))
 
   (func $wr8 (param $a i32) (param $v i32)
+    (local $m i32)
     (local.set $a (i32.and (local.get $a) (i32.const 0xFFFF)))
     (local.set $v (i32.and (local.get $v) (i32.const 0xFF)))
     (if (i32.lt_u (local.get $a) (i32.const 0x2000))
@@ -353,34 +472,110 @@ function memWat(mapper, n) {
           (then (global.set $joybit (i32.const 0)) (global.set $joybit2 (i32.const 0))))
         (global.set $laststrobe (i32.and (local.get $v) (i32.const 1)))
         (return)))
+    ;; Write_PSG: $4003/$4007/$400B/$400F load an ENABLED channel's length
+    (if (i32.eq (i32.and (local.get $a) (i32.const 0xFFF3)) (i32.const 0x4003))
+      (then (call $len_load (i32.shr_u (i32.and (local.get $a) (i32.const 0xC)) (i32.const 2)) (local.get $v))))
     (if (i32.eq (local.get $a) (i32.const 0x4010))
       (then
         (global.set $dmcperiod (i32.load (i32.add (i32.const ${DMCTAB})
           (i32.shl (i32.and (local.get $v) (i32.const 0xF)) (i32.const 2)))))
+        ;; Write_DMCRegs: clearing bit 7 acks a pending DMC IRQ; setting it re-asserts it
+        (if (i32.and (global.get $sirq) (i32.const 0x80))
+          (then (if (i32.and (local.get $v) (i32.const 0x80))
+            (then (global.set $irqlow (i32.or (global.get $irqlow) (i32.const 0x100))))
+            (else
+              (global.set $irqlow (i32.and (global.get $irqlow) (i32.const -257)))
+              (global.set $sirq (i32.and (global.get $sirq) (i32.const 0x7F)))))))
         (global.set $dmcformat (local.get $v))))
     (if (i32.eq (local.get $a) (i32.const 0x4012)) (then (global.set $dmcaddrlatch (local.get $v))))
     (if (i32.eq (local.get $a) (i32.const 0x4013)) (then (global.set $dmcsizelatch (local.get $v))))
     (if (i32.eq (local.get $a) (i32.const 0x4015))
       (then
+        ;; StatusWrite: disabled channels' length counters are forced to 0
+        (if (i32.eqz (i32.and (local.get $v) (i32.const 1))) (then (global.set $len0 (i32.const 0))))
+        (if (i32.eqz (i32.and (local.get $v) (i32.const 2))) (then (global.set $len1 (i32.const 0))))
+        (if (i32.eqz (i32.and (local.get $v) (i32.const 4))) (then (global.set $len2 (i32.const 0))))
+        (if (i32.eqz (i32.and (local.get $v) (i32.const 8))) (then (global.set $len3 (i32.const 0))))
         (if (i32.and (local.get $v) (i32.const 0x10))
           (then (if (i32.eqz (global.get $dmcsize)) (then (call $prep_dpcm))))
-          (else (global.set $dmcsize (i32.const 0))))))
+          (else (global.set $dmcsize (i32.const 0))))
+        (global.set $sirq (i32.and (global.get $sirq) (i32.const 0x7F)))
+        (global.set $irqlow (i32.and (global.get $irqlow) (i32.const -257)))
+        (global.set $ench (i32.and (local.get $v) (i32.const 0x1F)))))
     (if (i32.eq (local.get $a) (i32.const 0x4017))
-      (then (global.set $apu4017 (i32.or (local.get $v) (i32.const 0x100)))))
+      (then
+        (global.set $apu4017 (i32.or (local.get $v) (i32.const 0x100)))
+        ;; Write_IRQFM
+        (local.set $m (i32.shr_u (i32.and (local.get $v) (i32.const 0xC0)) (i32.const 6)))
+        (global.set $fcnt (i32.const 0))
+        (if (i32.and (local.get $m) (i32.const 2)) (then (call $frame_update)))
+        (global.set $fhcnt (i32.const ${FHINC}))
+        (if (i32.and (local.get $m) (i32.const 1))
+          (then
+            (global.set $irqlow (i32.and (global.get $irqlow) (i32.const -513)))
+            (global.set $sirq (i32.and (global.get $sirq) (i32.const 0xBF)))))
+        (global.set $irqfm (local.get $m))))
     (if (i32.lt_u (local.get $a) (i32.const 0x4018))
       (then (i32.store8 (i32.add (i32.const ${APUREG}) (i32.sub (local.get $a) (i32.const 0x4000)))
                         (local.get $v)) (return)))
     (if (i32.and (i32.ge_u (local.get $a) (i32.const 0x6000)) (i32.lt_u (local.get $a) (i32.const 0x8000)))
       (then (i32.store8 (i32.add (i32.const ${WRAM - 0x6000}) (local.get $a)) (local.get $v))))${mapper.romWrite})
 
+  (func $len_load (param $ch i32) (param $v i32)
+    (local $n i32)
+    (if (i32.eqz (i32.and (global.get $ench) (i32.shl (i32.const 1) (local.get $ch)))) (then (return)))
+    (local.set $n (i32.load8_u (i32.add (i32.const ${LENTAB}) (i32.shr_u (local.get $v) (i32.const 3)))))
+    (if (i32.eq (local.get $ch) (i32.const 0)) (then (global.set $len0 (local.get $n))))
+    (if (i32.eq (local.get $ch) (i32.const 1)) (then (global.set $len1 (local.get $n))))
+    (if (i32.eq (local.get $ch) (i32.const 2)) (then (global.set $len2 (local.get $n))))
+    (if (i32.eq (local.get $ch) (i32.const 3)) (then (global.set $len3 (local.get $n)))))
+
+  ;; StatusRead: SIRQStat | length counters running | DMC active; clears the
+  ;; frame IRQ flag and line. (No open-bus bits: fceumm returns exactly this.)
+  (func $status_read (result i32)
+    (local $r i32)
+    (local.set $r (i32.or (global.get $sirq) (i32.or
+      (i32.or (i32.ne (global.get $len0) (i32.const 0)) (i32.shl (i32.ne (global.get $len1) (i32.const 0)) (i32.const 1)))
+      (i32.or (i32.shl (i32.ne (global.get $len2) (i32.const 0)) (i32.const 2)) (i32.shl (i32.ne (global.get $len3) (i32.const 0)) (i32.const 3))))))
+    (if (global.get $dmcsize) (then (local.set $r (i32.or (local.get $r) (i32.const 0x10)))))
+    (global.set $sirq (i32.and (global.get $sirq) (i32.const 0xBF)))
+    (global.set $irqlow (i32.and (global.get $irqlow) (i32.const -513)))
+    (local.get $r))
+
+  ;; FrameSoundUpdate. Only what the CPU can observe is kept: the length
+  ;; counters (FrameSoundStuff on even steps, unless the channel's halt bit is
+  ;; set in PSG, i.e. the $4000-$400F write shadow) and the frame IRQ.
+  (func $frame_update
+    (if (i32.and (i32.eq (global.get $fcnt) (i32.const 3)) (i32.ne (i32.and (global.get $irqfm) (i32.const 2)) (i32.const 0)))
+      (then (global.set $fhcnt (i32.add (global.get $fhcnt) (i32.const ${FHINC})))))
+    (if (i32.eqz (i32.and (global.get $fcnt) (i32.const 1)))
+      (then
+        (if (i32.and (i32.eqz (i32.and (i32.load8_u (i32.const ${APUREG + 8})) (i32.const 0x80))) (i32.gt_s (global.get $len2) (i32.const 0)))
+          (then (global.set $len2 (i32.sub (global.get $len2) (i32.const 1)))))
+        (if (i32.and (i32.eqz (i32.and (i32.load8_u (i32.const ${APUREG + 0xC})) (i32.const 0x20))) (i32.gt_s (global.get $len3) (i32.const 0)))
+          (then (global.set $len3 (i32.sub (global.get $len3) (i32.const 1)))))
+        (if (i32.and (i32.eqz (i32.and (i32.load8_u (i32.const ${APUREG})) (i32.const 0x20))) (i32.gt_s (global.get $len0) (i32.const 0)))
+          (then (global.set $len0 (i32.sub (global.get $len0) (i32.const 1)))))
+        (if (i32.and (i32.eqz (i32.and (i32.load8_u (i32.const ${APUREG + 4})) (i32.const 0x20))) (i32.gt_s (global.get $len1) (i32.const 0)))
+          (then (global.set $len1 (i32.sub (global.get $len1) (i32.const 1)))))))
+    (global.set $fcnt (i32.and (i32.add (global.get $fcnt) (i32.const 1)) (i32.const 3)))
+    (if (i32.and (i32.eqz (global.get $fcnt)) (i32.eqz (i32.and (global.get $irqfm) (i32.const 3))))
+      (then
+        (global.set $sirq (i32.or (global.get $sirq) (i32.const 0x40)))
+        (global.set $irqlow (i32.or (global.get $irqlow) (i32.const 0x200))))))
+
   (func $prep_dpcm
     (global.set $dmcaddress (i32.add (i32.const 0x4000) (i32.shl (global.get $dmcaddrlatch) (i32.const 6))))
     (global.set $dmcsize (i32.add (i32.shl (global.get $dmcsizelatch) (i32.const 4)) (i32.const 1))))
 
-  ;; FCEU_SoundCPUHook, the DMC half (the frame counter only feeds length
-  ;; counters and an IRQ that fceumm powers up DISABLED; no cart here reads
-  ;; $4015 or writes $4017 with the IRQ enabled).
+  ;; FCEU_SoundCPUHook: the frame sequencer, then DMC DMA, then the DMC
+  ;; output unit's bit clock (only what moves the CPU or $4015 is modelled).
   (func $apu_hook (param $cycles i32)
+    (global.set $fhcnt (i32.sub (global.get $fhcnt) (i32.mul (local.get $cycles) (i32.const 48))))
+    (if (i32.le_s (global.get $fhcnt) (i32.const 0))
+      (then
+        (call $frame_update)
+        (global.set $fhcnt (i32.add (global.get $fhcnt) (i32.const ${FHINC})))))
     ;; DMCDMA: four X6502_DMR, i.e. 4 stolen cycles per sample byte
     (if (i32.and (i32.ne (global.get $dmcsize) (i32.const 0)) (i32.eqz (global.get $dmchavedma)))
       (then
@@ -394,8 +589,10 @@ function memWat(mapper, n) {
             (if (i32.and (global.get $dmcformat) (i32.const 0x40))
               (then (call $prep_dpcm))
               (else (if (i32.and (global.get $dmcformat) (i32.const 0x80))
-                ;; DMC IRQ: not modelled; counted so a cart that needs it shows
-                (then (global.set $dmcirq (i32.add (global.get $dmcirq) (i32.const 1)))))))))))
+                (then
+                  (global.set $sirq (i32.or (global.get $sirq) (i32.const 0x80)))
+                  (global.set $irqlow (i32.or (global.get $irqlow) (i32.const 0x100)))
+                  (global.set $dmcirq (i32.add (global.get $dmcirq) (i32.const 1)))))))))))
     (global.set $dmcacc (i32.sub (global.get $dmcacc) (local.get $cycles)))
     (block $d (loop $l
       (br_if $d (i32.gt_s (global.get $dmcacc) (i32.const 0)))
@@ -473,6 +670,7 @@ ${probeStores})
 
   (func $step
     (local $o i32) (local $r i32)
+    (global.set $pi (global.get $fi))
     (global.set $curpc (global.get $pc))
     (if (i32.lt_u (global.get $pc) (i32.const 0x8000))
       (then (call $trap (i32.const 0x100)) (return)))
@@ -509,19 +707,24 @@ function frameWat() {
       (if (global.get $irqlow)
         (then
           (call $do_irq)
-          (br_if $out (i32.le_s (global.get $cnt) (i32.const 0)))))
+          (if (i32.le_s (global.get $cnt) (i32.const 0))
+            (then (global.set $pi (global.get $fi)) (br $out)))))
       (call $step)
       (if (global.get $trapped) (then (global.set $cnt (i32.const 0)) (br $out)))
       (br $l))))
 
-  ;; irqlow bit 1 = NMI, bit 2 = NMI2 (B2000 enabling NMI inside vblank:
-  ;; becomes a real NMI one instruction later, as in fceumm).
+  ;; irqlow bits are fceumm's FCEU_IQ* (x6502.h): 0x80 NMI, 0x40 NMI2 (B2000
+  ;; enabling NMI inside vblank: becomes a real NMI one instruction later),
+  ;; 0x100 DPCM, 0x200 FCOUNT, 0x001 EXT (mapper). X6502_Run's order: NMI2,
+  ;; then NMI, else a maskable IRQ, which is taken only if the I flag was
+  ;; clear BEFORE the previous instruction ($pi = fceumm's _PI), so CLI and
+  ;; PLP let one more instruction run first; RTI sets _PI itself.
   (func $do_irq
-    (if (i32.and (global.get $irqlow) (i32.const 2))
+    (if (i32.and (global.get $irqlow) (i32.const 0x40))
       (then
-        (global.set $irqlow (i32.or (i32.and (global.get $irqlow) (i32.const -3)) (i32.const 1)))
+        (global.set $irqlow (i32.or (i32.and (global.get $irqlow) (i32.const -65)) (i32.const 0x80)))
         (return)))
-    (if (i32.and (global.get $irqlow) (i32.const 1))
+    (if (i32.and (global.get $irqlow) (i32.const 0x80))
       (then
         ${cyc(7)}
         (i32.store8 (i32.or (i32.const 0x100) (global.get $s)) (i32.shr_u (global.get $pc) (i32.const 8)))
@@ -534,7 +737,21 @@ function frameWat() {
         (global.set $pc (i32.or (call $rd8 (i32.const 0xFFFA))
                                 (i32.shl (call $rd8 (i32.const 0xFFFB)) (i32.const 8))))
         (global.set $nnmi (i32.add (global.get $nnmi) (i32.const 1)))
-        (global.set $irqlow (i32.and (global.get $irqlow) (i32.const -2))))))
+        (global.set $irqlow (i32.and (global.get $irqlow) (i32.const -129)))
+        (return)))
+    (if (i32.eqz (global.get $pi))
+      (then
+        ${cyc(7)}
+        (i32.store8 (i32.or (i32.const 0x100) (global.get $s)) (i32.shr_u (global.get $pc) (i32.const 8)))
+        (global.set $s (i32.and (i32.sub (global.get $s) (i32.const 1)) (i32.const 0xFF)))
+        (i32.store8 (i32.or (i32.const 0x100) (global.get $s)) (i32.and (global.get $pc) (i32.const 0xFF)))
+        (global.set $s (i32.and (i32.sub (global.get $s) (i32.const 1)) (i32.const 0xFF)))
+        (i32.store8 (i32.or (i32.const 0x100) (global.get $s)) ${PACK_P})
+        (global.set $s (i32.and (i32.sub (global.get $s) (i32.const 1)) (i32.const 0xFF)))
+        (global.set $fi (i32.const 1))
+        (global.set $pc (i32.or (call $rd8 (i32.const 0xFFFE))
+                                (i32.shl (call $rd8 (i32.const 0xFFFF)) (i32.const 8))))
+        (global.set $nirq (i32.add (global.get $nirq) (i32.const 1))))))
 
   (func $read_pad
     (local $b i32) (local $j i32)
@@ -587,7 +804,7 @@ function frameWat() {
         (global.set $ppuspl (i32.const 0))
         (call $run (i32.const 12))
         (if (i32.and (global.get $ppu0) (i32.const 0x80))
-          (then (global.set $irqlow (i32.or (global.get $irqlow) (i32.const 1)))))
+          (then (global.set $irqlow (i32.or (global.get $irqlow) (i32.const 0x80)))))
         (call $run (i32.const ${20 * 341 - 12}))
         (global.set $ppustatus (i32.and (global.get $ppustatus) (i32.const 0x1F)))
         (call $run (i32.const 256))
@@ -608,8 +825,10 @@ function frameWat() {
     (block $pd (loop $pl
       (br_if $pd (i32.ge_u (local.get $i) (i32.const ${256 * 240})))
       (i32.store (i32.add (i32.const ${FB}) (i32.shl (local.get $i) (i32.const 2)))
-        (i32.load (i32.add (i32.const ${RGBTAB}) (i32.shl (i32.and
-          (i32.load8_u (i32.add (i32.const ${NESFB}) (local.get $i))) (i32.const 0x3F))
+        (i32.load (i32.add (i32.const ${RGBTAB}) (i32.shl (i32.or
+          (i32.and (i32.load8_u (i32.add (i32.const ${NESFB}) (local.get $i))) (i32.const 0x3F))
+          (i32.shl (i32.and (i32.load8_u (i32.add (i32.const ${EMPH}) (i32.shr_u (local.get $i) (i32.const 8))))
+            (i32.const 7)) (i32.const 6)))
           (i32.const 2)))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $pl)))
@@ -629,7 +848,7 @@ const SHARD = 1024;
  */
 export async function* emitWat(rom, opts = {}) {
   rom = toBytes(rom);
-  const d = describe(rom);
+  const d = describe(rom, opts);
   if (!d.supported) throw new Error(`nes recompile: ${d.unsupportedReason}`);
   const mapper = MAPPERS[d.mapper];
   const prg = rom.subarray(d.prgOffset, d.prgOffset + d.prgSize);
@@ -667,19 +886,20 @@ export async function* emitWat(rom, opts = {}) {
   }
   if (opts.stats) Object.assign(opts.stats, { arms: n, lowered: ok, trapped: bad });
 
-  const vertical = d.mirroring === "vertical";
+
   yield "(module\n";
   yield '  (memory (export "memory") 16)\n';
   yield cpuGlobals() + mapper.globals + "\n";
   yield globalsWat() + "\n";
   yield memWat(mapper, n) + "\n";
   yield ppuWat({
-    NTSEL: ntSelFixed(vertical),
+    NTSEL: ntSelFixed(d.mirroring),
     CHRWRITE: d.chrRam ? `(i32.store8 (i32.add (i32.const ${CHR}) (local.get $tmp)) (local.get $v))` : "",
   }) + "\n";
-  yield `  (data (i32.const ${RGBTAB}) "${watBytes(u32le(FCEUMM.paletteRgb.map((c) => (0xFF000000 | c) >>> 0)))}")\n`;
+  yield `  (data (i32.const ${RGBTAB}) "${watBytes(u32le(palette512().map((c) => (0xFF000000 | c) >>> 0)))}")\n`;
   yield `  (data (i32.const ${CYCTAB}) "${watBytes(Uint8Array.from(CYCLES.base))}")\n`;
   yield `  (data (i32.const ${DMCTAB}) "${watBytes(u32le(FCEUMM.ntscDmcPeriod))}")\n`;
+  yield `  (data (i32.const ${LENTAB}) "${watBytes(Uint8Array.from(FCEUMM.lengthTable))}")\n`;
   for (const [addr, data] of luts()) yield `  (data (i32.const ${addr}) "${watBytes(data)}")\n`;
 
   const nsh = Math.ceil(n / SHARD);

@@ -93,6 +93,17 @@ function ioPage(hi) {
   return (hi >= 0x20 && hi <= 0x40) || hi === 0x1F;
 }
 
+/**
+ * Can an indexed read from base `n16` (+0..$FF) land on open bus, i.e. an
+ * address fceumm answers with X.DB ($4000-$4014 and $4018-$5FFF: write-only
+ * APU registers and the unmapped expansion area)?
+ * @param {number} n16
+ */
+function openBusRange(n16) {
+  const lo = n16, hi = n16 + 0xFF;
+  return (lo <= 0x4014 && hi >= 0x4000) || (lo <= 0x5FFF && hi >= 0x4018);
+}
+
 /** @param {string} v */
 function push(v) {
   return `(i32.store8 (i32.or (i32.const 0x100) (global.get $s)) ${v})` +
@@ -169,6 +180,16 @@ function operand(mode, mnem, b1, b2, rom) {
     const io = ioPage(b2) || ioPage((b2 + 1) & 0xFF);
     const uncarried = `(i32.or (i32.const ${n16 & 0xFF00}) ` +
       "(i32.and (global.get $ea) (i32.const 0xFF)))";
+    if (isread && openBusRange(n16)) {
+      // fceumm returns X.DB (the last byte on the bus) for an open-bus read:
+      // the operand's high byte, or what the page-cross dummy read of the
+      // uncarried address put there. $rd8i takes that byte explicitly.
+      pre += `(global.set $t3 (i32.const ${b2}))`;
+      pre += `(if (i32.gt_u (i32.add (global.get ${r}) (i32.const ${b1})) (i32.const 0xFF)) (then `;
+      if (io) pre += `(global.set $t3 (call $rd8i ${uncarried} (i32.const ${b2})))`;
+      pre += "(call $addcyc1)))";
+      return [pre, ["dyn", null], "(call $rd8i (global.get $ea) (global.get $t3))"];
+    }
     if (isread) {
       // GetABIRD: page cross -> dummy read of the uncarried address, then ADDCYC(1).
       let pc = `(if (i32.gt_u (i32.add (global.get ${r}) (i32.const ${b1})) (i32.const 0xFF)) (then `;
@@ -198,12 +219,15 @@ function operand(mode, mnem, b1, b2, rom) {
     const unc = "(i32.or (i32.and (global.get $t2) (i32.const 0xFF00)) " +
       "(i32.and (global.get $ea) (i32.const 0xFF)))";
     if (isread) {
-      pre += "(if (i32.gt_u (i32.add (i32.and (global.get $t2) (i32.const 0xFF)) " +
+      // X.DB before the target read: the pointer's high byte, or the byte the
+      // page-cross dummy read returned (only I/O can change it), for $rd8i.
+      pre += "(global.set $t3 (i32.shr_u (global.get $t2) (i32.const 8)))" +
+        "(if (i32.gt_u (i32.add (i32.and (global.get $t2) (i32.const 0xFF)) " +
         "(global.get $y)) (i32.const 0xFF)) (then " +
-        `(call $dummyrd ${unc}) (call $addcyc1)))`;
-    } else {
-      pre += `(call $dummyrd ${unc})`;
+        `(global.set $t3 (call $dummyrdb ${unc} (global.get $t3))) (call $addcyc1)))`;
+      return [pre, ["dyn", null], "(call $rd8i (global.get $ea) (global.get $t3))"];
     }
+    pre += `(call $dummyrd ${unc})`;
     return [pre, ["dyn", null], "(call $rd8 (global.get $ea))"];
   }
   throw new Unsupported(mode);
@@ -332,7 +356,8 @@ export function lower(op, b1, b2, rom, pcbase) {
       "(global.set $pc (i32.and (i32.add (global.get $t) (i32.const 1)) (i32.const 0xFFFF)))";
   }
   if (m === "rti") {
-    return unpackP(POP) +
+    // fceumm RTI: _PI = _P, so a pending IRQ is taken right after it
+    return unpackP(POP) + "(global.set $pi (global.get $fi))" +
       `(global.set $t ${POP})` +
       `(global.set $pc (i32.or (global.get $t) (i32.shl ${POP} (i32.const 8))))`;
   }
@@ -341,7 +366,7 @@ export function lower(op, b1, b2, rom, pcbase) {
       push("(i32.shr_u (global.get $t) (i32.const 8))") +
       push("(i32.and (global.get $t) (i32.const 0xFF))") +
       push(`(i32.or ${PACK_P} (i32.const 0x10))`) +
-      "(global.set $fi (i32.const 1))" +
+      "(global.set $fi (i32.const 1))(global.set $pi (i32.const 1))" +
       "(global.set $pc (i32.or (call $rd8 (i32.const 0xFFFE)) " +
       "(i32.shl (call $rd8 (i32.const 0xFFFF)) (i32.const 8))))" +
       "(global.set $nbrk (i32.add (global.get $nbrk) (i32.const 1)))";

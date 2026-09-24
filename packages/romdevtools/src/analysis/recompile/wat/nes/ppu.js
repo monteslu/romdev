@@ -43,7 +43,8 @@ export const APUREG = 0x05500;  // $4000-$4017 write shadow
 export const LUT1 = 0x06000;    // ppulut1[256] u32
 export const LUT2 = 0x06400;    // ppulut2[256] u32
 export const LUT3 = 0x06800;    // ppulut3[128] u32
-export const RGBTAB = 0x06A00;  // 64 x RGBA
+export const EMPH = 0x05600;    // 240 bytes: each line's colour emphasis (fceumm XDBuf row)
+export const RGBTAB = 0x07000;  // 512 x RGBA: 8 emphasis levels x 64 colours (fceumm palette[512])
 export const CYCTAB = 0x06B00;  // fceumm CycTable, 256 bytes
 export const DMCTAB = 0x06C00;  // NTSCDMCTable, 16 x u32
 export const NESFB = 0x30000;   // XBuf: 256 x 240 palette indices (+ overflow slack)
@@ -440,6 +441,9 @@ export function ppuWat({ NTSEL, CHRWRITE }) {
       (i32.store8 (i32.add (local.get $target) (local.get $x)) (i32.and (local.get $v) (i32.const 0x3F)))
       (local.set $x (i32.add (local.get $x) (i32.const 1)))
       (br $l)))
+    ;; colour emphasis for the whole line, from PPU[1] as it is NOW (DoLine
+    ;; writes XDBuf here; the libretro blit picks palette[256 + deemp*64 + pix])
+    (i32.store8 (i32.add (i32.const ${EMPH}) (global.get $scanline)) (i32.shr_u (global.get $ppu1) (i32.const 5)))
     (if (i32.and (global.get $ppu1) (i32.const 0xE0))
       (then (global.set $nemph (i32.add (global.get $nemph) (i32.const 1)))))
     (global.set $sphitx (i32.const 0x100))
@@ -518,7 +522,7 @@ export function ppuWat({ NTSEL, CHRWRITE }) {
               (i32.eqz (i32.and (global.get $ppu0) (i32.const 0x80)))
               (i32.ne (i32.and (local.get $v) (i32.const 0x80)) (i32.const 0)))
               (i32.ne (i32.and (global.get $ppustatus) (i32.const 0x80)) (i32.const 0)))
-          (then (global.set $irqlow (i32.or (global.get $irqlow) (i32.const 2)))))
+          (then (global.set $irqlow (i32.or (global.get $irqlow) (i32.const 0x40)))))
         (global.set $ppu0 (local.get $v))
         (global.set $tmpaddr (i32.or (i32.and (global.get $tmpaddr) (i32.const 0xF3FF))
           (i32.shl (i32.and (local.get $v) (i32.const 3)) (i32.const 10))))

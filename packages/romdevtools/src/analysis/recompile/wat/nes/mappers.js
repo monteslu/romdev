@@ -66,16 +66,20 @@ export const MAPPERS = {
     armBase: (n, off) => 0x10000 - n + off,
     romWrite: "",
     globals: "",
+    supports: ({ prgSize }) => (prgSize > 0x8000 ? `mapper 0 with ${prgSize} bytes of PRG` : null),
   },
 };
 
 /**
  * Nametable page select for header (fixed) mirroring: slot (0-3, local $slot)
- * -> CIRAM page 0/1. iNES flags6 bit 0: 0 = HORIZONTAL, 1 = VERTICAL.
- * @param {boolean} vertical
+ * -> CIRAM page 0/1. iNES flags6 bit 0: 0 = HORIZONTAL, 1 = VERTICAL;
+ * ines-correct.h can also hard-wire one-screen (MI_0 / MI_1).
+ * @param {string} mirroring  describe().mirroring
  */
-export function ntSelFixed(vertical) {
-  return vertical
+export function ntSelFixed(mirroring) {
+  if (mirroring === "one-screen-a") return "(i32.const 0)";
+  if (mirroring === "one-screen-b") return "(i32.const 1)";
+  return mirroring === "vertical"
     ? "(i32.and (local.get $slot) (i32.const 1))"
     : "(i32.shr_u (local.get $slot) (i32.const 1))";
 }

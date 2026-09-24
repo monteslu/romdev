@@ -1,10 +1,10 @@
 {
  "provenance": {
-  "source": "fceumm (libretro-fceumm) src/sound.c NTSCDMCTable[0x10]; src/palettes/palettes.h palette[0..63]",
+  "source": "fceumm (libretro-fceumm) src/sound.c NTSCDMCTable[0x10], lengthtable[0x20]; src/palettes/palettes.h palette[0..63]; src/palette.c ApplyDeemphasisClassic rtmul/gtmul/btmul",
   "fceummCommit": "3a84a6fd0ba20dd4877c06b1d58741172148395f",
   "method": "verbatim table extraction by scripts/recompile-gen/generate-nes-wat-tables.mjs",
-  "note": "palette is 0xRRGGBB, the default NTSC palette fceumm renders with (default_palette[0]).",
-  "extractedAt": "2026-09-24T06:47:47.908Z"
+  "note": "palette is 0xRRGGBB, the default NTSC palette fceumm renders with (default_palette[0]). deemphasis multipliers are C floats: entry = (int)(channel * mul[bits-1]) in float32, clamped to 255 (ApplyDeemphasisComplete fills palette[64..511]).",
+  "extractedAt": "2026-09-24T15:34:58.267Z"
  },
  "ntscDmcPeriod": [
   428,
@@ -23,6 +23,40 @@
   84,
   72,
   54
+ ],
+ "lengthTable": [
+  10,
+  254,
+  20,
+  2,
+  40,
+  4,
+  80,
+  6,
+  160,
+  8,
+  60,
+  10,
+  14,
+  12,
+  26,
+  14,
+  12,
+  16,
+  24,
+  18,
+  48,
+  20,
+  96,
+  22,
+  192,
+  24,
+  72,
+  26,
+  16,
+  28,
+  32,
+  30
  ],
  "paletteRgb": [
   7697781,
@@ -89,5 +123,34 @@
   13092807,
   0,
   0
- ]
+ ],
+ "deemphasis": {
+  "rtmul": [
+   1.239,
+   0.794,
+   1.019,
+   0.905,
+   1.023,
+   0.741,
+   0.75
+  ],
+  "gtmul": [
+   0.915,
+   1.086,
+   0.98,
+   1.026,
+   0.908,
+   0.987,
+   0.75
+  ],
+  "btmul": [
+   0.743,
+   0.882,
+   0.653,
+   1.277,
+   0.979,
+   0.101,
+   0.75
+  ]
+ }
 }
