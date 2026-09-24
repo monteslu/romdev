@@ -27,6 +27,9 @@ const hc = Array.from({ length: 228 }, (_, t) => vals[t * 15]);
 // The sprite-collision check in gpgx's status read samples the table at
 // (cycles + SMS_CYCLE_OFFSET + 15) % 3420, SMS_CYCLE_OFFSET = 530.
 const hcol = Array.from({ length: 228 }, (_, t) => vals[(t * 15 + 530 + 15) % 3420]);
+// A TH low-to-high write to port $3F latches the H counter at
+// hctab[(cycles + SMS_CYCLE_OFFSET) % 3420] (io_z80_write, no extra +15).
+const hlat = Array.from({ length: 228 }, (_, t) => vals[(t * 15 + 530) % 3420]);
 const out = outArg || path.join(path.dirname(fileURLToPath(import.meta.url)), "../../src/analysis/recompile/wat/sms/gpgx-hcounter.json");
-writeFileSync(out, JSON.stringify({ source: "genesis_plus_gx core/hvc.h cycle2hc32, every 15 master cycles", entries: 228, hc, hcol }) + "\n");
+writeFileSync(out, JSON.stringify({ source: "genesis_plus_gx core/hvc.h cycle2hc32, every 15 master cycles", entries: 228, hc, hcol, hlat }) + "\n");
 console.log(`wrote ${out}`);

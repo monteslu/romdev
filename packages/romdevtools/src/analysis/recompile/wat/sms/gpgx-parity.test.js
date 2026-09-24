@@ -4,7 +4,34 @@
 // registers), see gpgx-parity.js. Tiny synthetic ROMs only.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { gpgxParity, divergenceText } from "./gpgx-parity.js";
+import { gpgxParity, divergenceText, forgeCrc32 } from "./gpgx-parity.js";
+
+/**
+ * A few-line Z80 assembler for the test programs: each item is a byte array,
+ * a label string ("name:"), or ["jr", cond|null, "label"] / ["djnz", "label"]
+ * / ["jp", "label"] / ["call", "label"].
+ */
+function z80(items, org = 0) {
+  const labels = {}, fix = [];
+  const out = [];
+  for (const it of items) {
+    if (typeof it === "string") { labels[it.replace(/:$/, "")] = org + out.length; continue; }
+    if (Array.isArray(it) && typeof it[0] === "string") {
+      const [op, a, b] = it;
+      if (op === "jr") { out.push(a ? { nz: 0x20, z: 0x28, nc: 0x30, c: 0x38 }[a] : 0x18, 0); fix.push([out.length - 1, b, "rel"]); }
+      else if (op === "djnz") { out.push(0x10, 0); fix.push([out.length - 1, a, "rel"]); }
+      else if (op === "jp" || op === "call") { out.push(op === "jp" ? 0xC3 : 0xCD, 0, 0); fix.push([out.length - 2, a, "abs"]); }
+      continue;
+    }
+    out.push(...it);
+  }
+  for (const [at, l, kind] of fix) {
+    if (!(l in labels)) throw new Error(`label ${l}`);
+    if (kind === "rel") out[at] = (labels[l] - (org + at + 1)) & 0xFF;
+    else { out[at] = labels[l] & 0xFF; out[at + 1] = labels[l] >> 8; }
+  }
+  return out;
+}
 
 /**
  * A Master System / Game Gear image with a TMR SEGA header.
@@ -116,4 +143,64 @@ test("a cart of 48KB or less has no mapper: \$FFFC-\$FFFF are plain RAM and \$80
   assert.equal(r32.diverged, false, divergenceText(r32));
   const r16 = await gpgxParity({ platform: "sms", rom: smsImage(main, { size: 0x8000 }).subarray(0, 0x4000).map((b, i, a) => b), maxFrames: 5 });
   assert.equal(r16.diverged, false, divergenceText(r16));
+});
+
+test("the H counter reads the value a TH low-to-high write latched (0 from power-on); TH/TR read back only as outputs", T, async () => {
+  const main = z80([
+    [0xF3, 0x31, 0xF0, 0xDF],
+    [0xDB, 0x7F, 0x32, 0x00, 0xC1],   // in a,($7F); ld ($C100),a   (latched 0 since reset)
+    [0xDB, 0xDD, 0x32, 0x01, 0xC1],   // in a,($DD)                 (TH/TR inputs)
+    [0x3E, 0x55, 0xD3, 0x3F],         // TH/TR outputs, low
+    [0xDB, 0xDD, 0x32, 0x02, 0xC1, 0xDB, 0xDC, 0x32, 0x03, 0xC1],
+    [0x00, 0x00, 0x00],
+    [0x3E, 0xF5, 0xD3, 0x3F],         // TH high: latch
+    [0xDB, 0x7F, 0x32, 0x04, 0xC1, 0x00, 0xDB, 0x7F, 0x32, 0x05, 0xC1],
+    [0xDB, 0xDD, 0x32, 0x06, 0xC1],
+    [0x3E, 0x0F, 0xD3, 0x3F],         // inputs again, levels low: reads the pad's (high) TH
+    [0xDB, 0xDD, 0x32, 0x07, 0xC1],
+    "loop:", [0xDB, 0x7F, 0x32, 0x08, 0xC1], ["jr", null, "loop"]]);
+  const r = await gpgxParity({ platform: "sms", rom: smsImage(main), maxFrames: 10 });
+  assert.equal(r.diverged, false, divergenceText(r));
+});
+
+test("a Japanese console decodes the I/O ports by address, has the FM control register at \$F2 and masks TH/TR outputs", T, async () => {
+  const main = z80([
+    [0xF3, 0x31, 0xF0, 0xDF],
+    [0x3E, 0x01, 0xD3, 0xF2, 0xDB, 0xF2, 0x32, 0x00, 0xC1],   // out ($F2),1; in a,($F2)
+    [0xDB, 0xC2, 0x32, 0x01, 0xC1],                            // $C2: not decoded on a Japanese console
+    [0xDB, 0xC0, 0x32, 0x02, 0xC1, 0xDB, 0xC1, 0x32, 0x03, 0xC1],
+    [0x3E, 0xF5, 0xD3, 0x3F, 0xDB, 0xDD, 0x32, 0x04, 0xC1],   // TH outputs high read 0 here
+    ["jr", null, "end"], "end:", [0x18, 0xFE]]);
+  const r = await gpgxParity({ platform: "sms", rom: smsImage(main, { region: 3 }), maxFrames: 5 });
+  assert.equal(r.diverged, false, divergenceText(r));
+});
+
+test("a PAL cart from gpgx's database runs 313 lines with the V counter folded at \$F2", T, async () => {
+  const main = z80([
+    [0xF3, 0x31, 0xF0, 0xDF, 0xED, 0x56],                     // di; ld sp; im 1
+    [0x3E, 0xA0, 0xD3, 0xBF, 0x3E, 0x81, 0xD3, 0xBF, 0xFB],   // R1 = $A0 (frame interrupt); ei
+    "loop:", [0xDB, 0x7E, 0x47, 0x3A, 0x20, 0xC0, 0xB8],     // in a,($7E); ld b,a; ld a,($C020); cp b
+    ["jr", "nc", "loop"], [0x78, 0x32, 0x20, 0xC0], ["jr", null, "loop"]]);
+  const rom = smsImage(main, { size: 0x10000, at: [[0x38, [0xF5, 0xDB, 0xBF, 0x2A, 0x10, 0xC0, 0x23, 0x22, 0x10, 0xC0, 0xDB, 0x7E, 0x32, 0x12, 0xC0, 0xF1, 0xFB, 0xED, 0x4D]]] });
+  // CRC of a European entry (MAPPER_SEGA, SYSTEM_SMS2, REGION_EUROPE) in gpgx's database
+  const pal = await forgeCrc32(rom, 0x4000, 0xD6F2BFCA);
+  const r = await gpgxParity({ platform: "sms", rom: pal, maxFrames: 20 });
+  assert.equal(r.diverged, false, divergenceText(r));
+});
+
+test("vertical scroll is latched once a frame: an R9 write mid-frame shows from the next frame", T, async () => {
+  const main = z80([
+    [0xF3, 0x31, 0xF0, 0xDF, 0xED, 0x56],
+    [0x3E, 0x20, 0xD3, 0xBF, 0x3E, 0x40, 0xD3, 0xBF, 0x06, 0x20, 0x3E, 0xFF], "t1:", [0xD3, 0xBE], ["djnz", "t1"],   // tile 1: colour 15
+    [0xAF, 0xD3, 0xBF, 0x3E, 0x78, 0xD3, 0xBF, 0x0E, 0x1C],                                                        // name table @ $3800, 28 rows
+    "row:", [0x79, 0xE6, 0x01, 0x5F, 0x06, 0x20], "col:", [0x7B, 0xD3, 0xBE, 0xAF, 0xD3, 0xBE], ["djnz", "col"], [0x0D], ["jr", "nz", "row"],
+    [0x3E, 0x0F, 0xD3, 0xBF, 0x3E, 0xC0, 0xD3, 0xBF, 0x3E, 0x3F, 0xD3, 0xBE],                                    // CRAM 15 = white
+    [0x3E, 0xE0, 0xD3, 0xBF, 0x3E, 0x81, 0xD3, 0xBF, 0xFB],                                                        // display + frame interrupt
+    "main:", [0x76], "wv:", [0xDB, 0x7E, 0xFE, 0x64], ["jr", "nz", "wv"],                                           // wait for line 100
+    [0x3A, 0x30, 0xC0, 0xC6, 0x08, 0x32, 0x30, 0xC0, 0xD3, 0xBF, 0x3E, 0x89, 0xD3, 0xBF], ["jr", null, "main"]], 0x100);  // R9 += 8
+  const rom = smsImage([0xC3, 0x00, 0x01], { at: [[0x38, [0xF5, 0xDB, 0xBF, 0xF1, 0xFB, 0xED, 0x4D]], [0x100, main]] });
+  const r = await gpgxParity({ platform: "sms", rom, maxFrames: 12, picture: true });
+  assert.equal(r.diverged, false, divergenceText(r));
+  assert.equal(r.picture.status, "OK", JSON.stringify(r.picture));
+  assert.equal(r.picture.exactPct, 100, JSON.stringify(r.picture));
 });

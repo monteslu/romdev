@@ -15,6 +15,7 @@ import { readFileSync } from "node:fs";
 const HC_DATA = JSON.parse(readFileSync(new URL("./gpgx-hcounter.json", import.meta.url), "utf8"));
 const HC_TABLE = HC_DATA.hc;
 const HCOL_TABLE = HC_DATA.hcol;
+const HLAT_TABLE = HC_DATA.hlat;
 
 // Linear memory map (beyond the 64KB Z80 address space at 0):
 //   0x10000  VRAM 16KB           0x14000  CRAM (32 SMS / 64 GG bytes)
@@ -206,6 +207,8 @@ export const HCTAB = 0x14B00;
 export const HCOLTAB = 0x14C00;
 /** Sprites parsed for the NEXT line (gpgx parse_satb): u8 count, then 8 x {x, attr, row, 0}. */
 export const OBJLIST = 0x14D00;
+/** The H counter a TH low-to-high write on port $3F latches, by T-state (gpgx io_z80_write). */
+export const HLATTAB = 0x14E00;
 
 /**
  * VDP + I/O modelled the way genesis_plus_gx models them (the banked
@@ -217,8 +220,14 @@ export const OBJLIST = 0x14D00;
  * only in Mode 4, and a status read that lands after the end of line 192 sees
  * (and consumes) the VINT flag early. `$curbudget` is the line budget left
  * after the IN instruction's own cost, set by every IN arm.
+ * Also as gpgx: the H counter reads the value latched by the last TH
+ * low-to-high write on port $3F (vdp_reset starts it latched at 0, and Mode 4
+ * never unlatches it); TH/TR read back the written level only when configured
+ * as outputs (io_z80_read), always 0 on a Japanese console; a Japanese
+ * console decodes the I/O ports by full address and has the FM audio control
+ * register at $F2; PAL consoles run 313 lines with the V counter folded at $F2.
  * @param {'sms'|'gg'} platform
- * @param {{region?: 'export'|'japan'}} opts
+ * @param {{region?: 'export'|'japan', pal?: boolean, fm?: boolean}} opts
  */
 function hwExactWat(platform, opts) {
   const legacy = hwWat(platform);
@@ -246,11 +255,29 @@ function hwExactWat(platform, opts) {
           (else (global.set $cram_latch (i32.and (local.get $v) (i32.const 0xFF))))))`) + "  (global $cram_latch (mut i32) (i32.const 0))\n";
   }
   const japan = opts.region === "japan";
-  const io0 = gg ? (japan ? 0x80 : 0xC0) : 0;
+  const LINES = opts.pal ? 313 : 262;
+  // GG port $00: bit 6 = export, bit 5 = PAL (gpgx io_reset: 0x80 | region_code >> 1)
+  const io0 = gg ? (japan ? 0x80 : 0xC0) | (opts.pal ? 0x20 : 0) : 0;
+  const tInLine = `(select (i32.sub (i32.const 228) (global.get $curbudget))
+                          (i32.sub (i32.const 0) (global.get $curbudget))
+                          (i32.gt_s (global.get $curbudget) (i32.const 0)))`;
+  // port $3F: TH low-to-high on either port latches the H counter
+  const IOCTL_W = `(call $ioctl_write (local.get $v))`;
   return vdpPart + `  (global $curbudget (mut i32) (i32.const 228))
   (global $vintdone (mut i32) (i32.const 0))
   (global $memctl (mut i32) (i32.const 0xA8))
   (global $ioctl (mut i32) (i32.const 0xFF))
+  (global $hvlatch (mut i32) (i32.const 0x10000))
+  (global $vcmax (mut i32) (i32.const ${opts.pal ? 0xF2 : 0xDA}))
+  (global $io6 (mut i32) (i32.const 0))
+  (global $fmstatus (mut i32) (i32.const 0))
+
+  (func $ioctl_write (param $v i32)
+    (if (i32.or (i32.and (i32.eqz (i32.and (global.get $ioctl) (i32.const 0x80))) (i32.ne (i32.and (local.get $v) (i32.const 0x80)) (i32.const 0)))
+                (i32.and (i32.eqz (i32.and (global.get $ioctl) (i32.const 0x20))) (i32.ne (i32.and (local.get $v) (i32.const 0x20)) (i32.const 0))))
+      (then (global.set $hvlatch (i32.or (i32.const 0x10000)
+              (i32.load8_u (i32.add (i32.const ${HLATTAB}) (i32.rem_u ${tInLine} (i32.const 228))))))))
+    (global.set $ioctl ${japan ? "(i32.and (local.get $v) (i32.const 0x0F))" : "(local.get $v)"}))
 
   (global $earlyline (mut i32) (i32.const -1))
   (func $vdp_status_read (result i32)
@@ -265,7 +292,7 @@ function hwExactWat(platform, opts) {
                     (global.set $vdp_status (i32.or (global.get $vdp_status) (i32.const 0x80))))))
           (else
             ;; gpgx renders the next line NOW (cycle-accurate collision flags)
-            (local.set $nl (i32.rem_u (i32.add (global.get $line) (i32.const 1)) (i32.const 262)))
+            (local.set $nl (i32.rem_u (i32.add (global.get $line) (i32.const 1)) (i32.const ${LINES})))
             (if (i32.lt_u (local.get $nl) (i32.const 192))
               (then
                 (if (i32.ne (global.get $earlyline) (local.get $nl))
@@ -299,24 +326,34 @@ function hwExactWat(platform, opts) {
     (local $vc i32)
     (local.set $vc (global.get $line))
     (if (i32.le_s (global.get $curbudget) (i32.const 0))
-      (then (local.set $vc (i32.rem_u (i32.add (local.get $vc) (i32.const 1)) (i32.const 262)))))
-    (if (i32.gt_u (local.get $vc) (i32.const 0xDA))
-      (then (local.set $vc (i32.sub (local.get $vc) (i32.const 262)))))
+      (then (local.set $vc (i32.rem_u (i32.add (local.get $vc) (i32.const 1)) (i32.const ${LINES})))))
+    (if (i32.gt_u (local.get $vc) (global.get $vcmax))
+      (then (local.set $vc (i32.sub (local.get $vc) (i32.const ${LINES})))))
     (i32.and (local.get $vc) (i32.const 0xFF)))
 
+  ;; gpgx vdp_hvc_r in Mode 4: the latched H counter (live only on the
+  ;; Mega Drive VDP in Mode 5).
   (func $hcounter (result i32)
-    (local $t i32)
-    (local.set $t (select (i32.sub (i32.const 228) (global.get $curbudget))
-                          (i32.sub (i32.const 0) (global.get $curbudget))
-                          (i32.gt_s (global.get $curbudget) (i32.const 0))))
-    (i32.load8_u (i32.add (i32.const ${HCTAB}) (i32.rem_u (local.get $t) (i32.const 228)))))
+    (i32.and (global.get $hvlatch) (i32.const 0xFF)))
 
+  ;; io_z80_read: TH A/B and TR B read the written level only as outputs
   (func $port_dd (result i32)
-    (i32.or
-      (i32.and (global.get $joy2) (i32.const 0x3F))
-      (i32.or
-        (i32.shl (i32.and (i32.shr_u (global.get $ioctl) (i32.const 5)) (i32.const 1)) (i32.const 6))
-        (i32.shl (i32.and (i32.shr_u (global.get $ioctl) (i32.const 7)) (i32.const 1)) (i32.const 7)))))
+    (local $d i32)
+    (local.set $d (i32.or (i32.and (global.get $joy2) (i32.const 0x3F))
+      (i32.or (select (i32.const 0x40) (i32.shl (i32.and (global.get $ioctl) (i32.const 0x20)) (i32.const 1))
+                      (i32.and (global.get $ioctl) (i32.const 0x02)))
+              (select (i32.const 0x80) (i32.and (global.get $ioctl) (i32.const 0x80))
+                      (i32.and (global.get $ioctl) (i32.const 0x08))))))
+    (if (i32.eqz (i32.and (global.get $ioctl) (i32.const 0x04)))
+      (then (local.set $d (i32.or (i32.and (local.get $d) (i32.const 0xF7))
+              (i32.shr_u (i32.and (global.get $ioctl) (i32.const 0x40)) (i32.const 3))))))
+    (local.get $d))
+  ;; ...and TR A on port $DC
+  (func $port_dc (result i32)
+    (if (result i32) (i32.and (global.get $ioctl) (i32.const 0x01))
+      (then (global.get $joy1))
+      (else (i32.or (i32.and (global.get $joy1) (i32.const 0xDF))
+                    (i32.shl (i32.and (global.get $ioctl) (i32.const 0x10)) (i32.const 1))))))
 
   (func $io_write (param $port i32) (param $v i32)
     (local $p i32) (local $g i32)
@@ -336,18 +373,24 @@ ${gg ? `        (if (i32.lt_u (local.get $p) (i32.const 7))
               (then (i32.store8 (i32.const ${IOREGS + 6}) (local.get $v))))
             (return)))
         (if (i32.eq (local.get $p) (i32.const 0x3E)) (then (global.set $memctl (local.get $v)) (return)))
-        (if (i32.eq (local.get $p) (i32.const 0x3F)) (then (global.set $ioctl (local.get $v)) (return)))
+        (if (i32.eq (local.get $p) (i32.const 0x3F)) (then ${IOCTL_W} (return)))
         (return)))`
     : japan ? `        (if (i32.eq (local.get $p) (i32.const 0x3E)) (then (global.set $memctl (local.get $v)) (return)))
-        (if (i32.eq (local.get $p) (i32.const 0x3F)) (then (global.set $ioctl (local.get $v)) (return)))
+        (if (i32.eq (local.get $p) (i32.const 0x3F)) (then ${IOCTL_W} (return)))
         (return)))`
     : `        (if (i32.and (local.get $p) (i32.const 1))
-          (then (global.set $ioctl (local.get $v)))
+          (then ${IOCTL_W})
           (else (global.set $memctl (local.get $v))))
         (return)))`}
     (if (i32.lt_u (local.get $g) (i32.const 0x80)) (then (call $psg_write (local.get $v)) (return)))
     (if (i32.eq (local.get $g) (i32.const 0x80)) (then (call $vdp_data_write (local.get $v)) (return)))
-    (if (i32.eq (local.get $g) (i32.const 0x81)) (then (call $vdp_ctrl_write (local.get $v)) (return))))
+    (if (i32.eq (local.get $g) (i32.const 0x81)) (then (call $vdp_ctrl_write (local.get $v)) (return)))
+${gg ? "" : japan ? `    ;; 315-5297: the FM audio control register at $F2 (FM is on for a Japanese console)
+    (if (i32.eq (local.get $p) (i32.const 0xF2))
+      (then (global.set $io6 (local.get $v)) (global.set $fmstatus (i32.and (local.get $v) (i32.const 1)))))`
+    : opts.fm ? `    ;; external FM unit: bit 1 selects its output control register
+    (if (i32.eqz (i32.and (local.get $p) (i32.const 4)))
+      (then (if (i32.and (local.get $p) (i32.const 2)) (then (global.set $fmstatus (i32.and (local.get $v) (i32.const 1)))))))` : ""})
 
   (func $io_read (param $port i32) (result i32)
     (local $p i32) (local $g i32)
@@ -370,14 +413,24 @@ ${gg ? `    (if (i32.lt_u (local.get $g) (i32.const 0x40))
           (then (return (i32.load8_u (i32.add (i32.const ${IOREGS}) (local.get $p))))))
         (return (i32.const 0xFF))))
     (if (i32.or (i32.eq (local.get $p) (i32.const 0xC0)) (i32.eq (local.get $p) (i32.const 0xDC)))
-      (then (return (global.get $joy1))))
+      (then (return (call $port_dc))))
     (if (i32.or (i32.eq (local.get $p) (i32.const 0xC1)) (i32.eq (local.get $p) (i32.const 0xDD)))
       (then (return (call $port_dd))))
     (i32.const 0xFF))`
-    : `    (if (i32.lt_u (local.get $g) (i32.const 0x40)) (then (return (i32.const 0xFF))))
-    (if (i32.and (global.get $memctl) (i32.const 0x04)) (then (return (i32.const 0xFF))))
-    (if (i32.and (local.get $p) (i32.const 1)) (then (return (call $port_dd))))
-    (global.get $joy1))`}
+    : japan ? `    (if (i32.lt_u (local.get $g) (i32.const 0x40)) (then (return (i32.const 0xFF))))
+    (if (i32.eq (local.get $p) (i32.const 0xF2)) (then (return (i32.and (global.get $io6) (i32.const 3)))))
+    (if (i32.or (i32.eq (local.get $p) (i32.const 0xC0)) (i32.eq (local.get $p) (i32.const 0xDC)))
+      (then (return (select (i32.const 0xFF) (call $port_dc) (i32.and (global.get $memctl) (i32.const 0x04))))))
+    (if (i32.or (i32.eq (local.get $p) (i32.const 0xC1)) (i32.eq (local.get $p) (i32.const 0xDD)))
+      (then (return (select (i32.const 0xFF) (call $port_dd) (i32.and (global.get $memctl) (i32.const 0x04))))))
+    (i32.const 0xFF))`
+    : `    (local.set $g (i32.const 0xFF))
+    (if (i32.lt_u (i32.and (local.get $p) (i32.const 0xC1)) (i32.const 0x40)) (then (return (i32.const 0xFF))))
+${opts.fm ? `    (if (i32.eqz (i32.and (local.get $p) (i32.const 4))) (then (local.set $g (i32.or (i32.const 0xF8) (global.get $fmstatus)))))
+` : ""}    (if (i32.eqz (i32.and (global.get $memctl) (i32.const 0x04)))
+      (then (local.set $g (i32.and (local.get $g)
+              (if (result i32) (i32.and (local.get $p) (i32.const 1)) (then (call $port_dd)) (else (call $port_dc)))))))
+    (local.get $g))`}
 ${gg ? `  (data (i32.const ${IOREGS}) "${[io0, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF].map((b) => "\\" + b.toString(16).padStart(2, "0")).join("")}")
 ` : ""}`;
 }
@@ -389,6 +442,11 @@ ${gg ? `  (data (i32.const ${IOREGS}) "${[io0, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xF
  */
 export function hcounterBytes() {
   return Uint8Array.from(HC_TABLE);
+}
+
+/** @returns {Uint8Array} the H counter a TH latch captures, by T-state (228 bytes) */
+export function hlatchBytes() {
+  return Uint8Array.from(HLAT_TABLE);
 }
 
 /** @returns {Uint8Array} the collision-check H counter table (228 bytes) */
@@ -405,7 +463,7 @@ export function hcolBytes() {
  * pixel and bit 6 a sprite-claimed one while the line is built.
  */
 export function renderWat(opts = {}) {
-  const text = renderLegacyWat();
+  let text = renderLegacyWat();
   if (!opts.exact) return text;
   // Sprites as genesis_plus_gx's parse_satb_m4 / render_obj_m4 draw them:
   // Y past 208 wraps to the top, zoom (R1 bit 0) doubles pixels and rows,
@@ -460,6 +518,11 @@ export function renderWat(opts = {}) {
       (br $sp)))
     (if (i32.lt_u (local.get $y) (i32.const 191)) (then (call $parse_satb (local.get $y))))
 `;
+  // gpgx latches R9 (vertical scroll) once a frame, after the last line
+  // runs; the cart kept reading the live register on every line.
+  const vsOld = "(local.set $sy (i32.add (local.get $y) (call $vreg (i32.const 9))))";
+  if (!text.includes(vsOld)) throw new Error("sms recompile: vertical scroll read not found in the renderer text");
+  text = text.replace(vsOld, "(local.set $sy (i32.add (local.get $y) (global.get $vscroll)))");
   const withLocals = text.replace("(local $r0 i32) (local $hs i32) (local $bd i32) (local $o i32)",
     "(local $r0 i32) (local $hs i32) (local $bd i32) (local $o i32) (local $zoom i32)");
   if (withLocals === text) throw new Error("sms recompile: renderer locals not found");
@@ -688,7 +751,10 @@ function renderLegacyWat() {
  * @param {number} AUDIO ring address
  * @param {number} ABI ABI block address
  */
-export function psgWat(AUDIO, ABI) {
+export function psgWat(AUDIO, ABI, opts = {}) {
+  // 48 kHz: 800 samples a 60 Hz frame (NTSC clock 3579545 / 16 / 48000 =
+  // 4.661 PSG steps a sample) or 960 a 50 Hz frame (PAL 3546893: 4.618).
+  const SAMPLES = opts.pal ? 960 : 800, STEP = opts.pal ? 4618 : 4661;
   return `
   (global $psg_latch (mut i32) (i32.const 0))
 
@@ -814,8 +880,8 @@ export function psgWat(AUDIO, ABI) {
     (local $i i32) (local $cur i32) (local $addr i32) (local $s f32)
     (local.set $cur (i32.load (i32.add (i32.const ${ABI}) (i32.const 256))))
     (block $d (loop $l
-      (br_if $d (i32.ge_u (local.get $i) (i32.const 800)))
-      (global.set $psg_acc (i32.add (global.get $psg_acc) (i32.const 4661)))
+      (br_if $d (i32.ge_u (local.get $i) (i32.const ${SAMPLES})))
+      (global.set $psg_acc (i32.add (global.get $psg_acc) (i32.const ${STEP})))
       (call $psg_tick (i32.div_u (global.get $psg_acc) (i32.const 1000)))
       (global.set $psg_acc (i32.rem_u (global.get $psg_acc) (i32.const 1000)))
       (local.set $s (f32.add
