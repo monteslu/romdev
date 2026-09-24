@@ -1,0 +1,154 @@
+// Linear-memory layout of a recompiled SNES cart.
+//
+// The fixed regions below the ROM image are the emulated machine state and
+// the debug probes; everything from the ROM image up is sized from the CART,
+// because two bugs came from fixed addresses that were only right for a
+// 512KB ROM (Super Metroid's 3MB image ran under the arm table, and a table
+// that followed the ROM ran through the framebuffer and the WCInfo block).
+// checkLayout() fails the BUILD on any overlap: a WAT store to a literal
+// address hits whatever is there, and two probes sharing an address produce
+// a reading that is neither one.
+//
+// Ported from sms-wat's hw_snes.py / emit_snes.py constants.
+//
+// Plain JS ESM + JSDoc.
+
+export const FB_W = 256;
+export const FB_H = 224;
+
+// Emulated machine state (hw_snes.py).
+export const WRAM = 0x000000;   // 128KB work RAM ($7E0000-$7FFFFF)
+export const VRAM = 0x020000;   // 64KB video RAM, word-addressed by $2116/$2118-9
+export const CGRAM = 0x030000;  // 512 bytes: 256 BGR555 entries
+export const OAM = 0x030400;    // 544 bytes: 128 sprites x 4 + 32-byte high table
+export const PPUREG = 0x030800; // $2100-$213F shadow; +0x80 holds $4200-$43FF
+export const APUIO = 0x030900;  // 4 bytes CPU-visible + 4 bytes last-written
+export const SNESFB = 0x031000; // (unused by the renderer)
+export const ROM = 0x100000;    // ROM image
+/** Local alias the PPU templates use for the register shadow. */
+export const R = PPUREG;
+
+// PPU state that is not a register shadow, in the gap between PCRING and REGWATCH.
+export const SRAMB = 0x090000;  // 32KB cartridge SRAM
+export const MAINC = 0x098000;  // 256 x u16 main-screen colour (RGB565)
+export const MAINZ = 0x098200;  // 256 x u8 main-screen depth
+export const SUBC = 0x098300;   // 256 x u16 sub-screen colour
+export const SUBZ = 0x098500;   // 256 x u8 sub-screen depth
+export const COL565 = 0x098600; // 256 x u16 CGRAM with brightness applied
+export const DMTAB = 0x098800;  // 2 screens x 6 layers x 256 px window draw modes
+export const OBJLIST = 0x099400; // 32 x (sprite, line) for the row being drawn
+export const HDMAST = 0x099500; // 8 channels x 16 bytes of HDMA state
+export const XBTAB = 0x099600;  // 16 x 32 brightness table (snes9x mul_brightness)
+export const OBJSZ = 0x099800;  // 8 x (sw, sh, lw, lh)
+export const PPUX_END = 0x099a00;
+
+// RAM interpreter tables (emit_snes.py).
+export const OPTAB = 0x030c00;  // opcode -> operation id
+export const MODTAB = 0x030d00; // opcode -> addressing-mode id
+
+// Debug probes. The host writes 64 bytes of pad state at inputPtr every
+// frame without a zero check, so INPUT must be a real address clear of WRAM
+// (at 0 it overwrote the SNES direct page between frames).
+export const INPUT = 0x03e000;
+export const INPUT_SZ = 64;
+export const PROBE_N = 31;          // i32 counters, mirrored every frame
+export const PROBE = 0x03f000;
+export const ITRACE_N = 160;        // (pc, opcode, S) triples
+export const ITRACE = 0x03f100;
+export const DPWATCH = 0x041000;    // direct-page write-watch
+export const DPWATCH_SZ = 0x1000;
+export const PCRING_N = 65536;      // ROM pc ring, one i32 per entry
+export const PCRING = 0x050000;
+export const REGWATCH_N = 6000;     // (A, X, Y, P, $8D, D, [$00])
+export const REGWATCH_STRIDE = 28;
+export const REGWATCH = 0x0d0000;
+export const DMALOG_N = 1024;       // (bport, mode, src24, count, vaddr, pc)
+export const DMALOG_STRIDE = 24;
+export const DMALOG = 0x0fa000;
+
+/** PROBE block field offsets (bytes from PROBE), as mirrored by wc_render. */
+export const PROBE_FIELDS = {
+  steps: 0, nvram: 4, trapped: 8, trappc: 12, pc: 16, nnmi: 20, ndma: 24,
+  npal: 28, ramsrc: 32, s: 36, ninterp: 40, napuw: 44, napucc: 48, apuph: 52,
+  stkw: 56, stkwa: 60, npc: 64, nrw: 68, ptrw: 72, ptrwa: 76, ptrwv: 80,
+  ptrwy: 84, ptrarm: 88, nptrw: 92, ptrw1: 96, ptrwv1: 100, ptrwy1: 104,
+  nptrw1: 108, napub: 112, apuptr: 116, apuctr: 120,
+};
+
+/**
+ * @typedef {object} SnesLayout
+ * @property {number} romlen  ROM image length (>= 1)
+ * @property {number} sram    SRAM address mask
+ * @property {number} PCTAB   one i32 per ROM byte: arm index + 1, or 0
+ * @property {number} PACKED  the (offset, arm) pairs $initmap expands
+ * @property {number} FB      the RGBA framebuffer the host presents
+ * @property {number} ABI     the WCInfo block the host reads
+ * @property {number} ARAM    64KB SPC700 audio RAM
+ * @property {number} narms   arm count (one per ROM offset)
+ * @property {number} pages   wasm memory pages
+ */
+
+/**
+ * Place the cart-sized regions for a ROM image of `imgLen` bytes carrying
+ * `narms` arms, and check every region against its neighbours.
+ * @param {number} imgLen
+ * @param {number} sram
+ * @param {number} narms
+ * @returns {SnesLayout}
+ */
+export function computeLayout(imgLen, sram, narms) {
+  const n1 = Math.max(1, imgLen);
+  const PCTAB = (ROM + imgLen + 0xffff) & ~0xffff;
+  const PACKED = PCTAB + 4 * n1;
+  // PACKED's upper bound is 8 bytes per ROM byte (at most one arm per offset).
+  const FB = (PACKED + 8 * n1 + 0xfffff) & ~0xfffff;
+  const ABI = FB + FB_W * FB_H * 4 + 0x1000;
+  const ARAM = (ABI + 0x1000 + 0xffff) & ~0xffff;
+  const lay = { romlen: n1, sram, PCTAB, PACKED, FB, ABI, ARAM, narms, pages: 0 };
+  checkLayout(lay, imgLen);
+  const packedTop = PACKED + narms * 8;
+  for (const [name, addr] of [["FB", FB], ["ABI", ABI], ["ARAM", ARAM]]) {
+    if (packedTop > addr) {
+      throw new Error(`snes layout: PACKED ends 0x${hex(packedTop)}, past ${name} 0x${hex(addr)}`);
+    }
+  }
+  const top = Math.max(packedTop, ROM + imgLen, ABI + 0x1000, ARAM + 0x10000);
+  lay.pages = Math.floor(top / 65536) + 4;
+  return lay;
+}
+
+const hex = (v) => v.toString(16).toUpperCase();
+
+/**
+ * Fail on any overlap between probe, state, host and table regions, and on
+ * a probe that runs past the ROM image (probes are addressed by literals).
+ * @param {SnesLayout} lay
+ * @param {number} imgLen
+ */
+export function checkLayout(lay, imgLen) {
+  const regions = [
+    ["INPUT", INPUT, INPUT_SZ],
+    ["PROBE", PROBE, PROBE_N * 4],
+    ["ITRACE", ITRACE, ITRACE_N * 12],
+    ["DPWATCH", DPWATCH, DPWATCH_SZ],
+    ["PCRING", PCRING, PCRING_N * 4],
+    ["REGWATCH", REGWATCH, REGWATCH_N * REGWATCH_STRIDE],
+    ["DMALOG", DMALOG, DMALOG_N * DMALOG_STRIDE],
+    ["ARAM", lay.ARAM, 0x10000],
+    ["PPUX", SRAMB, PPUX_END - SRAMB],
+    ["FB", lay.FB, FB_W * FB_H * 4],
+    ["ABI", lay.ABI, 0x1000],
+    ["ROM", ROM, Math.max(1, imgLen)],
+    ["PCTAB", lay.PCTAB, lay.PACKED - lay.PCTAB],
+  ];
+  regions.sort((a, b) => a[1] - b[1]);
+  for (let i = 0; i + 1 < regions.length; i++) {
+    const [na, aa, sa] = regions[i], [nb, ab, sb] = regions[i + 1];
+    if (aa + sa > ab) {
+      throw new Error(`snes layout: ${na} (0x${hex(aa)}..0x${hex(aa + sa)}) overlaps ${nb} (0x${hex(ab)}..0x${hex(ab + sb)})`);
+    }
+  }
+  const skip = new Set(["ROM", "PCTAB", "ARAM", "FB", "ABI"]);
+  const probetop = Math.max(...regions.filter((r) => !skip.has(r[0])).map((r) => r[1] + r[2]));
+  if (probetop > ROM) throw new Error(`snes layout: probes end 0x${hex(probetop)}, past ROM 0x${hex(ROM)}`);
+}

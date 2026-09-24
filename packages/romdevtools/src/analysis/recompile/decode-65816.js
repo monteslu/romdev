@@ -102,6 +102,19 @@ const FIXED = {
 };
 for (const [op, [mnem, mode]] of Object.entries(FIXED)) set(Number(op), mnem, mode);
 
+/**
+ * The opcode grid entry for one opcode byte, with the addressing mode left
+ * UNRESOLVED (`immM`/`immX` stay as-is). The WAT recompiler lowers from this
+ * so the arms, the RAM interpreter's tables and the IR exporter all share
+ * one table.
+ * @param {number} op
+ * @returns {{mnem: string, mode: string} | null}
+ */
+export function opcodeInfo(op) {
+  const e = M[op & 0xff];
+  return e ? { mnem: e.mnem, mode: e.mode } : null;
+}
+
 const HEX = (v, n) => "$" + v.toString(16).toUpperCase().padStart(n, "0");
 
 function resolveMode(mode, mflag, xflag) {
