@@ -241,6 +241,15 @@ export function recompileSection(rom, sha1, opts = {}) {
       probe: L.probe.fields,
       trap: L.trap,
       pcRing: L.pcRing,
+      // the ROM pc ring in recompile-section.js's `trace` schema: it records
+      // ROM pcs only (bank < $7E, offset >= $8000) minus the skip ranges, so
+      // the differ filters the reference the same way
+      trace: {
+        offset: L.pcRing.offset, entries: L.pcRing.entries, stride: L.pcRing.stride,
+        cursor: { offset: L.probe.fields.npc.offset, mode: "count" },
+        pc: { offset: 0, mask: 0xffffff },
+        filter: { romOnly: "snesLoRom", skip: [...PCRING_SKIP_DEFAULT, ...parsePcSkip(opts.pcSkip)] },
+      },
       framebuffer: L.framebuffer,
       vramZero: ["vram"],
       conventions,

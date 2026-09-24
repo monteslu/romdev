@@ -13,7 +13,8 @@ import { decodeOAM, decodePpuRegs, ppuRegsPopulated } from "../../platforms/snes
 import { stepInstructionCore, stepInstructionsCore, attachObserverFrame } from "./watch-memory.js";
 import { getRenderingContextCore } from "./rendering-context.js";
 import { humanCoDriveWarning } from "./playtest.js";
-import { runVerifyRecompile, runRecompileDiverge } from "./verify-recompile-op.js";
+import { runVerifyRecompile, runRecompileDiverge, runInstructionDiverge } from "./verify-recompile-op.js";
+import { traceInstructionsCore } from "./trace-instructions.js";
 
 // Normalize each platform's render-context into a CONSERVATIVE renderEnabled
 // (true | false | null). null = "can't tell from the registers" - verify never
@@ -693,6 +694,7 @@ export function registerFrameTools(server, z, sessionKey) {
     // core, loaded fresh, stepped on one schedule and one frame axis, with
     // every region/field of the cart's romdev.recompile layout compared on
     // every frame. Selected by passing the cart (or its layout regions).
+    if (args.level === "instruction") return jsonContent(await runInstructionDiverge(sessionKey, { ...args }));
     if (args.cart || args.reference || args.fields || (args.regions && typeof args.regions === "object")) {
       return jsonContent(await runRecompileDiverge(sessionKey, { ...args }));
     }
@@ -854,7 +856,7 @@ export function registerFrameTools(server, z, sessionKey) {
 
   server.tool(
     "frame",
-    "Advance the emulator and capture frames. `op`: 'step' | 'screenshot' | 'stepAndShot' | 'sideBySide' | 'compareRam' | 'findDiverge' | 'compareRender' | 'portStatus' | 'stepInstruction' | 'stepInstructions' | 'verify' | 'verifyRecompile'.\n" +
+    "Advance the emulator and capture frames. `op`: 'step' | 'screenshot' | 'stepAndShot' | 'sideBySide' | 'compareRam' | 'findDiverge' | 'compareRender' | 'portStatus' | 'stepInstruction' | 'stepInstructions' | 'traceInstructions' | 'verify' | 'verifyRecompile'.\n" +
     "'step': advance N `frames` as fast as possible - NO pacing/audio/vsync. Cores run at WASM speed, so frames:3600 " +
     "(1 min of game time) finishes in ~5-30ms, cheaper than a screenshot. Don't be timid - skip a title with 300, a " +
     "level with 7200; prefer ONE big call.\n" +
@@ -888,7 +890,16 @@ export function registerFrameTools(server, z, sessionKey) {
     "cart's romdev.recompile layout (CPU registers vs cpu({op:'read'}) paths or reference struct offsets, cycle counters, " +
     "VRAM/RAM/palette/OAM) compared EVERY frame (or every `stride`) from `startFrame`; returns the first differing frame with " +
     "the region's first differing byte and the differing fields. Replaces native emulator trace differs: thousands of frames " +
-    "in seconds, all in romdev.\n" +
+    "in seconds, all in romdev. " +
+    "INSTRUCTION LEVEL (`level:'instruction'`, with cart + reference): traces ONE frame on both sides - the cart's own trace ring " +
+    "(declared in its romdev.recompile section) and the reference core's FREE-RUNNING instruction trace - and walks the two pc streams " +
+    "to the first divergent instruction, with `context` instructions from both sides. Normalises what differs only in spelling (SNES " +
+    "$80 bank mirrors, the GBA core's pipeline pc, the SNES ring's ROM-only filter), reports an interrupt handler entered at a " +
+    "different instruction (kind 'interrupt-timing') and then strips handler runs to find the first divergence in program LOGIC, " +
+    "compares per-instruction cycle costs when both sides record a clock (firstClockDivergence), compares per-instruction registers " +
+    "where both traces carry them (GBA r0-r15/cpsr, GB sp/hl) and names the instruction that first produced a different value " +
+    "(registers.producedBy), and reads the reference CPU at the first pc divergence (firstDivergence.refCpuHere). `atFrame` = the reference frame to trace (its execution from " +
+    "the end of atFrame-1; 0 = the load-time frames from power-on); omitted, the per-frame differ runs first and the first differing frame is traced.\n" +
     "'compareRender': the PRESENTATION oracle - compare the decoded RENDERING STATE of slot A vs slot B (BG/sprites " +
     "enabled? which tilemap/palette? forced blank?) instead of bytes. This is what an agent building/tuning the graphics " +
     "shim needs: it says in plain terms WHAT the port's presentation is missing vs. the original. Same-platform ports get " +
@@ -905,6 +916,11 @@ export function registerFrameTools(server, z, sessionKey) {
     "visible directly - the 65816 `.a8` vs `.i16` case (a 2-byte lda #imm8 vs a 3-byte ldx #imm16 shows up only as the PC " +
     "delta), which is what confirms a routine's boundaries when static da65 floored the bank to `.byte`. `withRegisters:true` " +
     "adds the register file at each step. This collapses the ~1-round-trip-per-instruction cost of tracing a routine.\n" +
+    "'traceInstructions': the instruction stream the host REALLY executes over `frames` frames (default 1, max 600) in ONE call: on a " +
+    "core, the free-running trace (every executed pc + the core's clock at dispatch; stepInstructions freezes the CPU while the " +
+    "machine finishes each frame, so it is NOT this); on a recompiled wasmcart, the trace ring its romdev.recompile section declares. " +
+    "Returns the first `head` entries, the pcRanges loop map, and writes every entry to `outputPath` (one line per instruction) when " +
+    "given. `fromPc` starts the output at that pc's first execution. `slot:'b'` traces the comparison host.\n" +
     "'verify': one-call 'is the game actually rendering / alive?' health check WITHOUT vision - for the spiral where an " +
     "agent can't see the screen and doesn't know if a black frame means broken. Pass `frames` to boot-then-check in one " +
     "call. Fuses (1) a pixel-content scan of the live framebuffer (distinctColors, dominant-color %) - works on EVERY " +
@@ -933,7 +949,7 @@ export function registerFrameTools(server, z, sessionKey) {
     "IMAGE CONTRACT (screenshot/stepAndShot): the image goes to `path` (default, returns {path}) OR inline:true - " +
     "you MUST pass one. Keeps PNGs out of context unless asked.",
     {
-      op: z.enum(["step", "screenshot", "stepAndShot", "sideBySide", "compareRam", "findDiverge", "compareRender", "portStatus", "stepInstruction", "stepInstructions", "verify", "verifyRecompile"]).describe("step frames; capture a screenshot; step+capture in one call; capture both hosts side-by-side (A|B); compareRam = diff slot-A vs slot-B work-RAM (the logic-port oracle); findDiverge = find the first frame+byte where the two slots split (root-cause finder; with `cart` it runs the recompile per-frame state differ); compareRender = diff the decoded rendering state of the two slots (the presentation oracle); portStatus = ONE fused 'state of your port' verdict + next action (the capstone); single-step one CPU instruction; stepInstructions = bulk single-step N instructions into one ordered trace; verify the game is actually rendering/alive (no vision needed); verifyRecompile = verify a recompiled wasmcart against its reference core (scores, state compare, controls, verdict)."),
+      op: z.enum(["step", "screenshot", "stepAndShot", "sideBySide", "compareRam", "findDiverge", "compareRender", "portStatus", "stepInstruction", "stepInstructions", "traceInstructions", "verify", "verifyRecompile"]).describe("traceInstructions = the free-running instruction stream over N frames; step frames; capture a screenshot; step+capture in one call; capture both hosts side-by-side (A|B); compareRam = diff slot-A vs slot-B work-RAM (the logic-port oracle); findDiverge = find the first frame+byte where the two slots split (root-cause finder; with `cart` it runs the recompile per-frame state differ); compareRender = diff the decoded rendering state of the two slots (the presentation oracle); portStatus = ONE fused 'state of your port' verdict + next action (the capstone); single-step one CPU instruction; stepInstructions = bulk single-step N instructions into one ordered trace; verify the game is actually rendering/alive (no vision needed); verifyRecompile = verify a recompiled wasmcart against its reference core (scores, state compare, controls, verdict)."),
       count: z.number().int().min(1).max(1_000_000).optional().describe("op=stepInstructions/step: stepInstructions = how many CPU instructions to single-step into the trace (default 16, max 4096); step = accepted as an alias for `frames`, since the unit is fixed by the op."),
       withRegisters: z.boolean().default(false).describe("op=stepInstructions: include the CPU register file at each step (heavier payload; omit if you only need pc/width/bytes for boundary+immediate-width analysis)."),
       stepFormat: z.enum(["full", "compact"]).default("full").describe("op=stepInstructions: 'full' = per-step objects (pc/flow/width/nextPc); 'compact' = one string per step (`$PC flow->$target`) + a `pcRanges` loop-map with hit counts (~90% fewer tokens for triage)."),
@@ -975,6 +991,13 @@ export function registerFrameTools(server, z, sessionKey) {
       requireStateMatch: z.boolean().optional().describe("op=verifyRecompile: any region/field difference fails the verdict (default false: differences are reported in stateDiffs, the pixels decide)."),
       outputDir: z.string().optional().describe("op=verifyRecompile: directory for the [cart|ref|diff] PNGs (default a temp dir, reported as outputDir)."),
       tag: z.string().optional().describe("op=verifyRecompile: PNG filename prefix (default the cart's basename)."),
+      level: z.enum(["frame", "instruction"]).optional().describe("op=findDiverge (recompile mode): 'frame' (default) compares regions/fields per frame; 'instruction' traces one frame on both sides and returns the first divergent instruction (see the op description)."),
+      atFrame: z.number().int().min(1).optional().describe("op=findDiverge level:'instruction': the REFERENCE frame whose execution is traced (from the end of atFrame-1 to the end of atFrame). Default: the first frame the per-frame differ finds different (bounded by startFrame/maxFrames)."),
+      context: z.number().int().min(0).max(200).optional().describe("op=findDiverge level:'instruction': instructions of context reported on each side of a divergence (default 8)."),
+      refState: z.boolean().optional().describe("op=findDiverge level:'instruction': read the reference CPU registers at the first pc divergence by replaying the frame to that instruction under the instruction watchdog (default true; single-CPU cores)."),
+      fromPc: z.number().int().min(0).optional().describe("op=traceInstructions: start the returned stream at the first execution of this pc (in the host's own pc spelling)."),
+      maxEntries: z.number().int().min(4096).max(4194304).optional().describe("op=traceInstructions: core trace ring capacity (default 2,097,152 entries; the oldest are overwritten past it)."),
+      head: z.number().int().min(0).max(4096).optional().describe("op=traceInstructions: entries returned inline (default 64); the rest go to outputPath."),
       startFrame: z.number().int().min(0).optional().describe("op=findDiverge: recompile mode - first reference frame compared; earlier frames run but are not compared (use it to bisect a late divergence cheaply)."),
       stride: z.number().int().min(1).max(10000).optional().describe("op=findDiverge: recompile mode - compare every Nth frame (default 1). A hit at stride N is between the reported frame and the last identical one; rerun there with stride 1."),
       format: z.enum(["png", "ascii", "full", "compact"]).default("png").describe("op=screenshot: 'png' (default, real image) or 'ascii' (lossy text render). op=stepInstructions: 'full' or 'compact' is accepted here as the trace format (same as stepFormat)."),
@@ -1016,6 +1039,7 @@ export function registerFrameTools(server, z, sessionKey) {
           if (args.count != null && args.count > 4096) throw new Error(`frame({op:'stepInstructions'}): count ${args.count} is over the 4096 cap - trace in chunks of <= 4096.`);
           return await stepInstructionsCore(sessionKey, { count: args.count ?? 16, withRegisters: args.withRegisters, format: args.format === "full" || args.format === "compact" ? args.format : args.stepFormat });
         case "verifyRecompile": return jsonContent(await runVerifyRecompile(sessionKey, { ...args }));
+        case "traceInstructions": return await traceInstructionsCore(sessionKey, { frames: args.frames, slot: args.slot, maxEntries: args.maxEntries, fromPc: args.fromPc, outputPath: args.path, head: args.head });
         case "verify":          return await doVerify(args);
         default: throw new Error(`frame: unknown op '${args.op}'`);
       }

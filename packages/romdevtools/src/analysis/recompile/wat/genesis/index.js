@@ -316,6 +316,18 @@ export function recompileSection(rom, sha1, opts = {}) {
       probe: layout.probe,
       vramZero: layout.vramZero,
       conventions,
+      // the instruction ring $trace writes (findDiverge level:'instruction')
+      trace: {
+        baseField: { offset: STATE + 0xf4 }, entries: TRACEN, stride: 16,
+        cursor: { offset: STATE + 0xfc, mode: "index", writable: true, note: "wraps at entries" },
+        enable: { offset: STATE + 0xf8 },
+        pc: { offset: 0, mask: 0xffffff }, skipIf: { offset: 0, bit: 31, note: "interrupt-entry event records" },
+        // $mc is the frame's master cycle count, but it is not charged at the
+        // same point of an instruction as gpgx's m68k.cycles at dispatch (the
+        // two differ by up to ~130 cycles mid-frame and agree again), so it is
+        // reported as a field, not compared as a per-instruction clock
+        fields: { mc: { offset: 4 }, refresh: { offset: 8 }, cycleEnd: { offset: 12 } },
+      },
       ramCode: d.ramCode.map(({ romOffset, ramAddress, length, source }) => ({ romOffset, ramAddress, length, source })),
       trapHint: "probe trapped=1 with trappc in work RAM ($FFxxxxxx) means the game ran code it copied to RAM that discovery missed: rebuild with options.ramCode:[{romOffset, ramAddress, length}]",
       license: d.licenseNote,

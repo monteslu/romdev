@@ -45,8 +45,26 @@
 //     "probe": {                    cart-only diagnostics; `trapped` != 0 fails a verification
 //       "trapped": { "offset": 32772, "size": 4 }
 //     },
-//     "vramZero": ["vram"]          regions the VRAM-zero control wipes (default: regions whose
+//     "vramZero": ["vram"],         regions the VRAM-zero control wipes (default: regions whose
 //                                   name contains vram/chr/nametable)
+//     "trace": {                    the cart's instruction ring, read by findDiverge
+//                                   level:'instruction' and frame({op:'traceInstructions'})
+//       "offset": 36864,            ring base (or "baseField": {offset} where the base is stored)
+//       "entries": 1024, "stride": 8,
+//       "cursor": { "offset": 32852, "mode": "count" },  "count" = monotone entries written
+//                                   (ring index = count % entries); "index" = the next slot,
+//                                   restarted at 0 by the reader ("writable": true)
+//       "enable": { "offset": 1234 },            optional: nonzero records
+//       "pc": { "offset": 0, "mask": 65535 },    u32 LE at offset, >>> shift, & mask
+//       "clock": { "offset": 4 },                optional per-instruction clock (compared as
+//                                   per-instruction deltas with the core's trace clock)
+//       "skipIf": { "offset": 0, "bit": 31 },    optional: entries with this bit set are events
+//       "fields": { "sp": { "offset": 8, "mask": 65535 } },  per-entry values; a name the
+//                                   reference core also records per instruction (GBA r0-r15,
+//                                   cpsr; GB sp, hl, bc, de) is compared instruction by instruction
+//       "filter": { "romOnly": "snesLoRom", "skip": [[lo, hi]] }  what the ring leaves out, so the
+//                                   reference stream is filtered the same way
+//     }
 //   }
 
 import { readFileSync } from "node:fs";
@@ -254,6 +272,16 @@ export function validateRecompileLayout(layout) {
       if (key === "fields") normalizeFieldRef(name, f.ref, size);
     }
     out[key] = fields;
+  }
+  if (out.trace != null) {
+    const t = out.trace;
+    if (typeof t !== "object") throw new Error("trace must be an object");
+    if (!(isInt(t.entries) && t.entries > 0) || !(isInt(t.stride) && t.stride >= 4)) throw new Error("trace.entries and trace.stride must be positive integers (stride >= 4)");
+    if (!isInt(t.offset) && !isInt(t.baseField?.offset)) throw new Error("trace needs offset (the ring base) or baseField:{offset}");
+    if (!isInt(t.cursor?.offset) || !["count", "index"].includes(t.cursor.mode ?? "count")) throw new Error("trace.cursor must be {offset, mode:'count'|'index'}");
+    if (t.cursor.mode === "index" && !t.cursor.writable) throw new Error("trace.cursor mode 'index' must be writable (the reader restarts it at 0)");
+    for (const [n, f] of Object.entries(t.fields ?? {})) if (!isInt(f?.offset) || f.offset + 4 > t.stride) throw new Error(`trace.fields.${n}.offset must lie inside the ${t.stride}-byte entry`);
+    if (t.pc && (!isInt(t.pc.offset) || t.pc.offset + 4 > t.stride)) throw new Error("trace.pc.offset must lie inside the entry");
   }
   if (out.vramZero != null) {
     if (!Array.isArray(out.vramZero)) throw new Error("vramZero must be an array of region names");

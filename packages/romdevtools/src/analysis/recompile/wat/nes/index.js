@@ -31,7 +31,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { lower, cyc, PACK_P, Unsupported } from "./cpu.js";
+import { lower, cyc, PACK_P, Unsupported, OPS, LEN } from "./cpu.js";
 import {
   FB_W, FB_H, NESFB, PRG, WRAM, CHR, APUREG, RGBTAB, CYCTAB, DMCTAB,
   NTRAM, PAL, OAM, luts, globalsWat, ppuWat,
@@ -52,6 +52,9 @@ export const REFERENCE_CORE = "fceumm";
 // outside is mirrored here.
 export const PROBE = 0x08000;   // PROBE_FIELDS, u32 each
 export const PCRING = 0x09000;  // 1024 x (pc u16 | opcode<<16, ts): last instructions
+/** options.traceEntries rings live above the ABI block (memory is 1MB). */
+export const BIGRING = 0xB0000;
+export const BIGRING_MAX = 16384; // x 16 bytes = 256KB, ends at 0xF0000
 export const INPUT = 0x08400;   // 64 bytes host pad state (inputPtr) - MUST NOT be 0
 export const TIME = 0x08440;    // 24 bytes host clock (timePtr) - MUST NOT be 0, 8-aligned
 export const FB = 0x70000;
@@ -110,6 +113,43 @@ export const diagnostics = {
   pcRing: { offset: PCRING, entries: 1024, stride: 8, format: "u32 pc|opcode<<16, u32 ts" },
   framebuffer: { offset: FB, width: FB_W, height: FB_H, format: "u32 0xAABBGGRR" },
 };
+
+/**
+ * Where the pc ring is for these options: the default 1024 entries of
+ * {pc|opcode<<16, ts} at PCRING, or options.traceEntries (a power of two up
+ * to 16384) at BIGRING with the registers as well: {pc|opcode<<16, ts,
+ * A|X<<8|Y<<16|S<<24, P}. A frame runs ~7,500-15,000 instructions, so only
+ * a ring of 16384+ holds a whole frame for findDiverge level:'instruction'.
+ * @param {object} [opts]
+ */
+export function pcRingFor(opts = {}) {
+  const n = opts.traceEntries;
+  if (n == null) return { offset: PCRING, entries: 1024, stride: 8 };
+  if (!Number.isInteger(n) || n < 1024 || n > BIGRING_MAX || (n & (n - 1))) {
+    throw new Error(`nes recompile: options.traceEntries must be a power of two from 1024 to ${BIGRING_MAX}, got ${n}`);
+  }
+  return { offset: BIGRING, entries: n, stride: 16 };
+}
+
+/**
+ * The instruction trace declaration (recompile-section.js `trace`): every
+ * executed instruction's pc, opcode and CPU cycle timestamp (fceumm's
+ * `timestamp`, which the core's instruction trace records as its clock).
+ * @param {object} [opts]
+ */
+export function traceFor(opts = {}) {
+  const r = pcRingFor(opts);
+  const regs = r.stride === 16 ? {
+    a: { offset: 8, mask: 0xFF }, x: { offset: 8, shift: 8, mask: 0xFF }, y: { offset: 8, shift: 16, mask: 0xFF },
+    s: { offset: 8, shift: 24, mask: 0xFF }, p: { offset: 12, mask: 0xCF, note: "B and bit 5 are not flags" },
+  } : {};
+  return {
+    offset: r.offset, entries: r.entries, stride: r.stride,
+    cursor: { offset: PROBE + 4 * PROBE_FIELDS.indexOf("ringi"), mode: "count", note: "written by $probe at the end of every wc_render" },
+    pc: { offset: 0, mask: 0xFFFF }, clock: { offset: 4, unit: "cpu cycles (fceumm timestamp)" },
+    fields: { opcode: { offset: 0, shift: 16, mask: 0xFF }, ...regs },
+  };
+}
 
 /**
  * Parse the iNES header and derive everything the emitter needs.
@@ -209,8 +249,9 @@ function u32le(arr) {
  * @param {Uint8Array} rom
  * @param {string} [sha1]  sha1 of the ROM file (hex), if the caller has it
  */
-export function recompileSection(rom, sha1) {
+export function recompileSection(rom, sha1, opts = {}) {
   const d = describe(rom);
+  const ring = pcRingFor(opts);
   return {
     name: "romdev.recompile",
     json: {
@@ -223,7 +264,10 @@ export function recompileSection(rom, sha1) {
       mirroring: d.mirroring,
       ...conventions,
       ...layout,
-      diagnostics,
+      diagnostics: { ...diagnostics, pcRing: { ...diagnostics.pcRing, offset: ring.offset, entries: ring.entries, stride: ring.stride,
+        ...(ring.stride === 16 ? { format: "u32 pc|opcode<<16, u32 ts, u32 A|X<<8|Y<<16|S<<24, u32 P" } : {}) } },
+      trace: traceFor(opts),
+      ...(opts.breakArm != null ? { debugBreakArm: opts.breakArm, warning: "built with options.breakArm: one arm is a deliberate no-op (a must-fail control), NOT a faithful cart" } : {}),
     },
   };
 }
@@ -417,7 +461,12 @@ function dispatch(nsh, SH) {
  * @param {string} probeStores
  * @param {string} disp
  */
-function stepWat(mapper, n, probeStores, disp) {
+function stepWat(mapper, n, probeStores, disp, ring = { offset: PCRING, entries: 1024, stride: 8 }) {
+  const shift = ring.stride === 16 ? 4 : 3;
+  const regStores = ring.stride === 16 ? `
+    (i32.store (i32.add (local.get $r) (i32.const 8)) (i32.or (i32.or (global.get $a) (i32.shl (global.get $x) (i32.const 8)))
+      (i32.or (i32.shl (global.get $y) (i32.const 16)) (i32.shl (global.get $s) (i32.const 24)))))
+    (i32.store (i32.add (local.get $r) (i32.const 12)) ${PACK_P})` : "";
   return `
   (func $probe
 ${probeStores})
@@ -428,11 +477,11 @@ ${probeStores})
     (if (i32.lt_u (global.get $pc) (i32.const 0x8000))
       (then (call $trap (i32.const 0x100)) (return)))
     (local.set $o ${mapper.pcOffset(n)})
-    (local.set $r (i32.add (i32.const ${PCRING})
-      (i32.shl (i32.and (global.get $ringi) (i32.const 1023)) (i32.const 3))))
+    (local.set $r (i32.add (i32.const ${ring.offset})
+      (i32.shl (i32.and (global.get $ringi) (i32.const ${ring.entries - 1})) (i32.const ${shift}))))
     (i32.store (local.get $r) (i32.or (global.get $pc)
       (i32.shl (i32.load8_u (i32.add (i32.const ${PRG}) (local.get $o))) (i32.const 16))))
-    (i32.store (i32.add (local.get $r) (i32.const 4)) (global.get $ts))
+    (i32.store (i32.add (local.get $r) (i32.const 4)) (global.get $ts))${regStores}
     (global.set $ringi (i32.add (global.get $ringi) (i32.const 1)))
     (global.set $steps (i32.add (global.get $steps) (i32.const 1)))
     ;; X6502_Run: ADDCYC(CycTable[op]) at fetch, then the sound hook with
@@ -601,6 +650,21 @@ export async function* emitWat(rom, opts = {}) {
       bad++;
     }
   }
+  if (opts.breakArm != null) {
+    // DEBUG / MUST-FAIL CONTROL: the arm(s) at this CPU address only step
+    // the pc past the instruction, so a differ must name exactly this one.
+    const at = typeof opts.breakArm === "number" ? opts.breakArm : parseInt(String(opts.breakArm).replace(/^\$/, ""), 16);
+    let hit = 0;
+    for (let off = 0; off < n; off++) {
+      if (mapper.armBase(n, off) !== at) continue;
+      const ent = OPS.get(prg[off]);
+      if (!ent) throw new Error(`nes recompile: options.breakArm $${at.toString(16)} is not an instruction (byte $${prg[off].toString(16)})`);
+      bodies[off] = `(global.set $pc (i32.and (i32.add (global.get $pc) (i32.const ${LEN[ent[1]]})) (i32.const 0xFFFF)))`;
+      hit++;
+    }
+    if (!hit) throw new Error(`nes recompile: options.breakArm $${at.toString(16)} is not a PRG address of this cart`);
+    if (opts.stats) opts.stats.brokenArms = hit;
+  }
   if (opts.stats) Object.assign(opts.stats, { arms: n, lowered: ok, trapped: bad });
 
   const vertical = d.mirroring === "vertical";
@@ -639,7 +703,7 @@ export async function* emitWat(rom, opts = {}) {
     const v = f === "p" ? PACK_P : f === "frame" ? "(global.get $nframe)" : `(global.get $${f})`;
     return `    (i32.store (i32.const ${PROBE + 4 * i}) ${v})`;
   }).join("\n");
-  yield stepWat(mapper, n, probeStores, dispatch(nsh, SHARD)) + "\n";
+  yield stepWat(mapper, n, probeStores, dispatch(nsh, SHARD), pcRingFor(opts)) + "\n";
   yield frameWat() + "\n";
   yield `  (data (i32.const ${PRG}) "${watBytes(prg)}")\n`;
   if (chr.length) yield `  (data (i32.const ${CHR}) "${watBytes(chr)}")\n`;

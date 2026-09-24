@@ -239,6 +239,21 @@ function sectionFor(L, romSha1, buttons) {
     },
     vramZero: ["vram"],
     fields,
+    // the per-step TRACE ring below, in recompile-section.js's `trace` schema
+    // (findDiverge level:'instruction'); r0-r15/cpsr are compared per
+    // instruction against mGBA's register columns of the same names
+    trace: {
+      offset: L.TRACE, entries: TRACE_CAP, stride: TRACE_ENTRY,
+      cursor: { offset: L.PROBE + 68, mode: "index", writable: true, note: "linear: stops at the capacity" },
+      enable: { offset: L.PROBE + 64 },
+      pc: { offset: 0 }, clock: { offset: 8, unit: "mTiming master cycles" },
+      fields: {
+        thumb: { offset: 4 },
+        ...Object.fromEntries(Array.from({ length: 15 }, (_, i) => [`r${i}`, { offset: 12 + 4 * i }])),
+        r15: { offset: 72, note: "gprs[PC] before the step = exec + width" },
+        cpsr: { offset: 76 },
+      },
+    },
     probe: {
       steps: { offset: L.PROBE + 0, size: 4 },
       trapped: { offset: L.PROBE + 4, size: 4 },

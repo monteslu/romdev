@@ -12,6 +12,7 @@ import { LibretroHost } from "romdev-core-host/index.js";
 import { resolveCore } from "../../cores/registry.js";
 import { WasmcartHost } from "../../host/WasmcartHost.js";
 import { verifyRecompile, findRecompileDivergence } from "../../host/verify-recompile.js";
+import { findInstructionDivergence } from "../../host/instruction-diverge.js";
 import { readRecompileLayout, validateRecompileLayout, cartWasmBytes, wascFromWasm } from "../../analysis/recompile/recompile-section.js";
 import { installHost, installHostB, getHost, getHostBOrNull } from "../state.js";
 
@@ -58,19 +59,19 @@ function resolveInputs(sessionKey, args, opName) {
   const wasm = cartWasmBytes(cartBytes);
   const loadBytes = wasm === cartBytes ? wascFromWasm(cartBytes, path.basename(cartPath, ".wasm")) : cartBytes;
 
-  const openCart = async () => {
+  const openCart = async (hooks = {}) => {
     const h = new WasmcartHost();
-    await h.loadMedia({ platform: "wasmcart", bytes: loadBytes });
+    await h.loadMedia({ platform: "wasmcart", bytes: loadBytes, beforeSettle: hooks.beforeSettle });
     h.status.mediaPath = path.resolve(cartPath);
     return h;
   };
-  const openRef = async () => {
+  const openRef = async (hooks = {}) => {
     const h = new LibretroHost();
     await h.loadCore(resolved.jsPath, resolved.wasmPath, { hwRender: resolved.hwRender, noderawfs: resolved.noderawfs });
-    await h.loadMedia({ platform, path: refPath });
+    await h.loadMedia({ platform, path: refPath, beforeSettle: hooks.beforeSettle });
     return h;
   };
-  return { cartPath, refPath, refSha1, layout, layoutSource, platform, core: resolved.coreName, openCart, openRef };
+  return { cartPath, refPath, refSha1, refBytes: new Uint8Array(refBytes), layout, layoutSource, platform, core: resolved.coreName, openCart, openRef };
 }
 
 function describeSides(ctx, cartHost, refHost) {
@@ -94,7 +95,7 @@ export async function runVerifyRecompile(sessionKey, args) {
     sweep: args.sweep, cartOrigin: args.cartOrigin, cartButtonMap: args.cartButtonMap,
     controls: args.controls, movingWindow: args.movingWindow, wrongFrameDelta: args.wrongFrameDelta,
     bar: { ...(args.minContentPct != null ? { minContentPct: args.minContentPct } : {}), ...(args.minContentPx != null ? { minContentPx: args.minContentPx } : {}),
-      ...(args.minMovingPct != null ? { minMovingPct: args.minMovingPct } : {}), ...(args.minMovingPx != null ? { minMovingPx: args.minMovingPx } : {}) },
+      ...(args.minMovingPct != null ? { minMovingPct: args.minMovingPct } : {}), ...(args.minMovingPx != null ? { minMovingPx: args.minMovingPx } : {}), },
     requireStateMatch: args.requireStateMatch, outputDir, tag,
   });
   installHost(sessionKey, cartHost);
@@ -128,4 +129,21 @@ export async function runRecompileDiverge(sessionKey, args) {
   installHost(sessionKey, cartHost);
   installHostB(sessionKey, refHost);
   return { ...res, ...describeSides(ctx, cartHost, refHost), slots: "slot A = the cart, slot B = the reference, both stopped at the reported frame." };
+}
+
+/** frame({op:'findDiverge', cart, reference, level:'instruction'}) - the instruction-level differ. */
+export async function runInstructionDiverge(sessionKey, args) {
+  const ctx = resolveInputs(sessionKey, args, "findDiverge");
+  const { result, cartHost, refHost } = await findInstructionDivergence({
+    openCart: ctx.openCart, openRef: ctx.openRef, refPlatform: ctx.platform, layout: ctx.layout, rom: ctx.refBytes,
+    input: args.input, cartFrameOffset: args.cartFrameOffset, atFrame: args.atFrame, startFrame: args.startFrame, maxFrames: args.maxFrames,
+    context: args.context, refState: args.refState, cartButtonMap: args.cartButtonMap,
+    searchFrame: args.searchFrame, searchWindow: args.searchWindow, minSharpness: args.minSharpness,
+  });
+  if (cartHost && refHost) {
+    installHost(sessionKey, cartHost);
+    installHostB(sessionKey, refHost);
+    return { ...result, ...describeSides(ctx, cartHost, refHost), slots: "slot A = the cart, slot B = the reference, both at the end of the traced frame." };
+  }
+  return { ...result, cart: { path: ctx.cartPath, layoutSource: ctx.layoutSource }, reference: { platform: ctx.platform, core: ctx.core, path: ctx.refPath, sha1: ctx.refSha1 } };
 }

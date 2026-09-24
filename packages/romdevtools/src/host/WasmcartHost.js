@@ -311,7 +311,7 @@ export class WasmcartHost {
    * in-memory cart zip. Mirrors LibretroHost.loadMedia's post-conditions:
    * status.loaded + a first framebuffer so screenshot works immediately.
    */
-  async loadMedia({ platform, path: mediaPath, bytes, glBackend, deterministic, presentWindow } = {}) {
+  async loadMedia({ platform, path: mediaPath, bytes, glBackend, deterministic, presentWindow, beforeSettle } = {}) {
     const source = bytes ?? mediaPath;
     if (!source) throw new Error("WasmcartHost.loadMedia: provide `path` or `bytes`.");
 
@@ -486,6 +486,9 @@ export class WasmcartHost {
     try { this.status.audioSampleRate = this.cart.getInfo()?.audioSampleRate || 0; }
     catch { this.status.audioSampleRate = 0; }
 
+    // A caller that must observe the settle frame itself (the instruction
+    // differ traces power-on) arms its hooks here, after wc_init.
+    if (typeof beforeSettle === "function") beforeSettle(this);
     // Settle a first frame so width/height and a framebuffer exist (carts often
     // finalize their resolution during the first render).
     this.stepFrames(1);
