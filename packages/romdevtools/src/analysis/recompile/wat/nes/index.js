@@ -37,7 +37,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { lower, cyc, PACK_P, Unsupported, OPS, LEN } from "./cpu.js";
 import {
-  FB_W, FB_H, NESFB, PRG, WRAM, CHR, APUREG, RGBTAB, CYCTAB, DMCTAB,
+  FB_W, FB_H, NESFB, WRAM, CHR, APUREG, RGBTAB, CYCTAB, DMCTAB,
   NTRAM, PAL, OAM, EMPH, luts, globalsWat, ppuWat,
 } from "./ppu.js";
 import { MAPPERS, ntSelFixed } from "./mappers.js";
