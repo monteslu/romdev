@@ -94,7 +94,11 @@ test("platforms and describe(): header flags, MBC, sizes, SGB warning", () => {
   assert.match(g.warnings.join(" "), /SGB flag set/);
   assert.equal(g.layout.regions.vram1, undefined, "DMG has one VRAM bank");
   assert.ok(g.layout.regions.dmgPalettes);
-  assert.throws(() => gbDescribe(makeRom([], { cartType: 0x05 })), /not supported/);
+  // gambatte's mapper set: MBC2 (and $08/$09, which it runs as MBC2), HuC1
+  assert.equal(gbDescribe(makeRom([], { cartType: 0x05 })).mbc, "mbc2");
+  assert.equal(gbDescribe(makeRom([], { cartType: 0x09 })).mbc, "mbc2");
+  assert.equal(gbDescribe(makeRom([], { cartType: 0xFF })).mbc, "huc1");
+  assert.throws(() => gbDescribe(makeRom([], { cartType: 0x0B })), /not supported/);
   assert.throws(() => gbDescribe(new Uint8Array(0x100)), /too small/);
 });
 

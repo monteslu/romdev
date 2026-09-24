@@ -33,7 +33,7 @@ import { createHash } from "node:crypto";
 import { emitGbWat, gbLayout, gbOriginAndPages, gbBigRing, PROBE, PROBE_FIELDS } from "./emit.js";
 import { mbcKind, VRAM0, VRAM1, WRAMX, BGPAL, OBJPAL } from "./hw-gbc.js";
 import { OAM, IOREG, WRAM, FB_W, FB_H } from "./hw-gb.js";
-import { discoverBlocks, blocksFromJson } from "./blocks.js";
+import { discoverBlocks, blocksFromJson, opcodeCatalogue } from "./blocks.js";
 
 export const platforms = ["gb", "gbc"];
 
@@ -76,9 +76,11 @@ export function describe(rom, opts = {}) {
   if (cgbFlag === 0xC0) warnings.push("CGB-only ROM ($0143 = $C0).");
   if (headerRomBytes !== null && headerRomBytes !== rom.length) warnings.push(`header ROM size $${romSizeCode.toString(16)} says ${headerRomBytes} bytes; the file is ${rom.length}. Banks wrap by the file size.`);
   if (headerRamBytes === null) warnings.push(`unknown RAM size code $${ramSizeCode.toString(16)}.`);
-  else if (headerRamBytes > 0x8000) warnings.push(`header RAM size is ${headerRamBytes} bytes; the cart models 4 banks of 8KB (32KB), so RAM banks 4+ alias banks 0-3.`);
+  else if (ramSizeCode >= 4) warnings.push(`header RAM size code $${ramSizeCode.toString(16)}: 16 banks of 8KB (128KB), as gambatte allocates them.`);
+  if (headerRomBytes !== null && (rom.length & (rom.length - 1))) warnings.push(`the ROM is ${rom.length} bytes, not a power of two: gambatte pads it with $FF to the next power of two and masks the bank number; the cart does not (bank numbers past the file read other memory).`);
   if (cartType === 0x0F || cartType === 0x10) warnings.push("MBC3 real-time clock: the RTC registers are a stub that holds what was written (a stopped clock).");
   if ([0x1C, 0x1D, 0x1E].includes(cartType)) warnings.push("MBC5 rumble motor is not modelled.");
+  if (cartType === 0x08 || cartType === 0x09) warnings.push("cart type ROM+RAM: gambatte runs it as MBC2 ($2100 writes select a ROM bank), and so does the recompile.");
   if (hsum !== rom[0x14D]) warnings.push(`header checksum $${rom[0x14D].toString(16)} does not match the computed $${hsum.toString(16)}.`);
 
   const L = gbLayout(rom.length);
@@ -198,7 +200,8 @@ export async function* emitWat(rom, opts = {}) {
   if (!blocks) blocks = await discoverBlocks(rom);
   else if (!(blocks instanceof Map)) blocks = blocksFromJson(blocks);
   if (blocks.size !== rom.length) throw new Error(`gb: block index covers ${blocks.size} offsets; the ROM has ${rom.length}. A hole becomes a silent trap.`);
-  yield* emitGbWat(rom, blocks, { cgb: d.cgb, mbc: d.mbc, watch: opts.watch, hits: opts.hits, stopAt: opts.stopAt, stats: opts.stats, traceEntries: opts.traceEntries, breakArm: parseBreakArm(opts.breakArm) });
+  const opcat = await opcodeCatalogue();
+  yield* emitGbWat(rom, blocks, { opcat, cgb: d.cgb, mbc: d.mbc, watch: opts.watch, hits: opts.hits, stopAt: opts.stopAt, stats: opts.stats, traceEntries: opts.traceEntries, breakArm: parseBreakArm(opts.breakArm) });
 }
 
 export { gbLayout, gbOriginAndPages };

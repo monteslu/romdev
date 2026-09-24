@@ -105,3 +105,23 @@ export function blocksFromJson(obj) {
   for (const [k, v] of Object.entries(obj)) blocks.set(Number(k), { m: v.m, o: v.o ?? "", n: v.n });
   return blocks;
 }
+
+let catalogue = null;
+/**
+ * Every SM83 opcode (and every $CB opcode) as the IR decode spells it, for
+ * the RAM interpreter's templates: RAM code may use opcodes the ROM's own
+ * code never does. Decoded once from a synthetic image (opcode, $A5, $C3).
+ * @returns {Promise<{ops: Map<number,{m:string,o:string,n:number}>, cb: Map<number,{m:string,o:string,n:number}>}>}
+ */
+export async function opcodeCatalogue() {
+  if (catalogue) return catalogue;
+  const img = new Uint8Array(0x8000);
+  for (let op = 0; op < 256; op++) img.set([op, 0xA5, 0xC3, 0x00], op * 16);
+  for (let op = 0; op < 256; op++) img.set([0xCB, op, 0x00, 0x00], 0x1000 + op * 4);
+  const b = await discoverBlocks(img);
+  const ops = new Map(), cb = new Map();
+  for (let op = 0; op < 256; op++) if (op !== 0xCB) ops.set(op, b.get(op * 16));
+  for (let op = 0; op < 256; op++) cb.set(op, b.get(0x1000 + op * 4));
+  catalogue = { ops, cb };
+  return catalogue;
+}

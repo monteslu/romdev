@@ -111,12 +111,32 @@ export function cgbObjpInit() {
  */
 export function mbcKind(img) {
   const t = img.length > 0x147 ? img[0x147] : 0;
+  // gambatte Cartridge::loadROM's type switch (0x08/0x09 "ROM+RAM" run as
+  // MBC2 there, and 0xEA as MBC1)
   if (t === 0x00) return "none";
-  if ([0x01, 0x02, 0x03].includes(t)) return "mbc1";
+  if ([0x01, 0x02, 0x03, 0xEA].includes(t)) return "mbc1";
+  if ([0x05, 0x06, 0x08, 0x09].includes(t)) return "mbc2";
   if ([0x0F, 0x10, 0x11, 0x12, 0x13].includes(t)) return "mbc3";
   if ([0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E].includes(t)) return "mbc5";
-  throw new Error(`gb: cartridge type $${t.toString(16).toUpperCase().padStart(2, "0")} is not supported (none/MBC1/MBC3/MBC5 only) - refusing to build.`);
+  if (t === 0xFF) return "huc1";
+  throw new Error(`gb: cartridge type $${t.toString(16).toUpperCase().padStart(2, "0")} is not supported (none/MBC1/MBC2/MBC3/MBC5/HuC1 only) - refusing to build.`);
 }
+
+/**
+ * Cart RAM banks of 8KB as gambatte allocates them from header $0149:
+ * 0 -> none (1 on MBC2), 1-2 -> 1, 3 -> 4, anything else -> 16.
+ * @param {Uint8Array} img
+ */
+export function ramBanks(img) {
+  const code = img.length > 0x149 ? img[0x149] : 0;
+  if (code === 0) return mbcKind(img) === "mbc2" ? 1 : 0;
+  if (code <= 2) return 1;
+  if (code === 3) return 4;
+  return 16;
+}
+
+/** Cart RAM banks 4-15 live at options.cramhi (see gbOriginAndPages). */
+export const CRAMHI_BYTES = 12 * 0x2000;
 
 export function globalsWat() {
   return `
@@ -153,6 +173,12 @@ export function globalsWat() {
   (global $ramexec (mut i32) (i32.const 0))
   (global $ramobase (mut i32) (i32.const 0))
   (global $rambias (mut i32) (i32.const 0))
+  ;; cycles past $ioff of the current access (multi-access instructions)
+  (global $accx (mut i32) (i32.const 0))
+  ;; nonzero: the interrupt dispatch's own access offset, used as is
+  (global $irqacc (mut i32) (i32.const 0))
+  (global $pushv (mut i32) (i32.const 0))
+  (global $rmwv (mut i32) (i32.const 0))
   (global $imm8 (mut i32) (i32.const 0))
   (global $imm16 (mut i32) (i32.const 0))
   (global $wline (mut i32) (i32.const 0))
@@ -173,63 +199,117 @@ export function globalsWat() {
 }
 
 /** MBC control writes ($0000-$7FFF). */
-function romWrite(mbc, imgLen) {
+/** $setbank for MBC1 (Mbc1::setRombank) and HuC1 (setRombank + setRambank). */
+function setbankFn(mbc, imgLen, rb) {
+  const bm = Math.max(2, Math.floor(imgLen / 0x4000)) - 1;
+  const rm = Math.max(1, rb) - 1;
+  if (mbc === "huc1") {
+    return `  (func $setbank
+    (global.set $rambank (if (result i32) (global.get $bankmode)
+      (then (i32.and (global.get $bankhi) (i32.const ${rm}))) (else (i32.const 0))))
+    (global.set $rombank (i32.and (if (result i32) (global.get $bankmode)
+      (then (global.get $banklo))
+      (else (i32.or (i32.shl (global.get $bankhi) (i32.const 6)) (global.get $banklo))))
+      (i32.const ${bm}))))`;
+  }
+  // MBC1: (bank & 0x1F) == 0 selects bank | 1
+  return `  (func $setbank
+    (global.set $rombank (i32.and (if (result i32) (i32.and (global.get $banklo) (i32.const 0x1F))
+      (then (global.get $banklo)) (else (i32.or (global.get $banklo) (i32.const 1))))
+      (i32.const ${bm}))))`;
+}
+
+function romWrite(mbc, imgLen, rb, rtc) {
+  // ROM banks as gambatte masks them (bank & (rombanks - 1), rombanks a
+  // power of two); RAM banks & (rambanks - 1). Every mapper is gambatte's
+  // (mem/cartridge.cpp Mbc0/Mbc1/Mbc2/Mbc3/Mbc5/HuC1 romWrite).
   const nbanks = Math.max(2, Math.floor(imgLen / 0x4000));
+  const bm = nbanks - 1;
+  const rm = Math.max(1, rb) - 1;
   const ramen = `
         (if (i32.lt_u (local.get $x) (i32.const 0x2000))
           (then (global.set $ramen (i32.eq (i32.and (local.get $v) (i32.const 0x0F))
                                            (i32.const 0x0A))) (return)))`;
-  if (mbc === "none") return "(return)";
+  if (mbc === "none") return ramen + "(return)";
   if (mbc === "mbc5") {
     // $2000-$2FFF low 8 bits, $3000-$3FFF bit 8. Bank 0 IS selectable on
-    // MBC5 (it is not remapped to 1 as on MBC1/MBC3).
+    // MBC5 (it is not remapped to 1 as on MBC1/MBC3). A rumble cart's
+    // $4000-$4FFF write drops bit 3 (the motor).
     return ramen + `
         (if (i32.lt_u (local.get $x) (i32.const 0x3000))
           (then (global.set $banklo (local.get $v))
-                (global.set $rombank (i32.rem_u (i32.or (global.get $banklo)
-                  (i32.shl (global.get $bankhi) (i32.const 8))) (i32.const ${nbanks})))
+                (global.set $rombank (i32.and (i32.or (global.get $banklo)
+                  (i32.shl (global.get $bankhi) (i32.const 8))) (i32.const ${bm})))
                 (return)))
         (if (i32.lt_u (local.get $x) (i32.const 0x4000))
           (then (global.set $bankhi (i32.and (local.get $v) (i32.const 1)))
-                (global.set $rombank (i32.rem_u (i32.or (global.get $banklo)
-                  (i32.shl (global.get $bankhi) (i32.const 8))) (i32.const ${nbanks})))
+                (global.set $rombank (i32.and (i32.or (global.get $banklo)
+                  (i32.shl (global.get $bankhi) (i32.const 8))) (i32.const ${bm})))
                 (return)))
         (if (i32.lt_u (local.get $x) (i32.const 0x6000))
-          (then (global.set $rambank (i32.and (local.get $v) (i32.const 0x0F)))
+          (then (global.set $rambank (i32.and (local.get $v)
+                  (i32.const ${rtc === "rumble" ? "0x0F" : "0x0F"})))
+                ${rtc === "rumble" ? "(if (i32.lt_u (local.get $x) (i32.const 0x5000)) (then (global.set $rambank (i32.and (global.get $rambank) (i32.const 7)))))" : ""}
+                (global.set $rambank (i32.and (global.get $rambank) (i32.const ${rm})))
                 (return)))
         (return)`;
   }
   if (mbc === "mbc3") {
-    // $2000-$3FFF 7-bit ROM bank (0 reads as 1); $4000-$5FFF RAM bank 0-3
-    // or RTC register $08-$0C. The RTC is a stub: registers hold what was
-    // written (a game that reads the clock sees a stopped clock at 0).
+    // $2000-$3FFF 7-bit ROM bank (0 after masking reads as 1); $4000-$5FFF
+    // RAM bank, or RTC register $08-$0C on a timer cart. The RTC is a stub:
+    // registers hold what was written (gambatte's runs on the host clock).
     return ramen + `
         (if (i32.lt_u (local.get $x) (i32.const 0x4000))
-          (then (global.set $rombank
-                  (if (result i32) (i32.eqz (i32.and (local.get $v) (i32.const 0x7F)))
-                    (then (i32.const 1))
-                    (else (i32.rem_u (i32.and (local.get $v) (i32.const 0x7F))
-                                     (i32.const ${nbanks})))))
+          (then (global.set $rombank (i32.and (i32.and (local.get $v) (i32.const 0x7F)) (i32.const ${bm})))
+                (if (i32.eqz (global.get $rombank)) (then (global.set $rombank (i32.const 1))))
                 (return)))
         (if (i32.lt_u (local.get $x) (i32.const 0x6000))
-          (then (global.set $rambank (i32.and (local.get $v) (i32.const 0x0F)))
+          (then ${rtc ? `(if (i32.lt_u (i32.sub (local.get $v) (i32.const 8)) (i32.const 5))
+                  (then (global.set $rambank (local.get $v)) (return)))` : ""}
+                (global.set $rambank (i32.and (local.get $v) (i32.const ${rm})))
                 (return)))
         (return)`;
   }
-  // MBC1: the three-register logic, via $setbank.
+  if (mbc === "mbc2") {
+    // address bit 8 picks the register: $0000 (A8=0) RAM enable, $2100
+    // (A8=1) a 4-bit ROM bank (0 stays 0 in gambatte's Mbc2)
+    return `
+        (if (i32.eqz (i32.and (local.get $x) (i32.const 0x6100)))
+          (then (global.set $ramen (i32.eq (i32.and (local.get $v) (i32.const 0x0F)) (i32.const 0x0A))) (return)))
+        (if (i32.eq (i32.and (local.get $x) (i32.const 0x6100)) (i32.const 0x2100))
+          (then (global.set $rombank (i32.and (i32.and (local.get $v) (i32.const 0x0F)) (i32.const ${bm}))) (return)))
+        (return)`;
+  }
+  if (mbc === "huc1") {
+    // $banklo = 6-bit ROM bank, $bankhi = 2-bit RAM bank, $bankmode = RAM mode
+    return ramen + `
+        (if (i32.lt_u (local.get $x) (i32.const 0x4000))
+          (then (global.set $banklo (i32.and (local.get $v) (i32.const 0x3F))) (call $setbank) (return)))
+        (if (i32.lt_u (local.get $x) (i32.const 0x6000))
+          (then (global.set $bankhi (i32.and (local.get $v) (i32.const 3))) (call $setbank) (return)))
+        (global.set $bankmode (i32.and (local.get $v) (i32.const 1)))
+        (call $setbank)
+        (return)`;
+  }
+  // MBC1 (gambatte Mbc1): $banklo holds the 7-bit ROM bank register. In RAM
+  // mode a $2000 write replaces all of it and $4000 selects the RAM bank; in
+  // ROM mode $4000 sets bits 5-6. The mode write itself remaps nothing.
   return ramen + `
         (if (i32.lt_u (local.get $x) (i32.const 0x4000))
           (then
-            (global.set $banklo
-              (if (result i32) (i32.eqz (i32.and (local.get $v) (i32.const 0x1F)))
-                (then (i32.const 1))
-                (else (i32.and (local.get $v) (i32.const 0x1F)))))
+            (global.set $banklo (if (result i32) (global.get $bankmode)
+              (then (i32.and (local.get $v) (i32.const 0x1F)))
+              (else (i32.or (i32.and (global.get $banklo) (i32.const 0x60)) (i32.and (local.get $v) (i32.const 0x1F))))))
             (call $setbank) (return)))
         (if (i32.lt_u (local.get $x) (i32.const 0x6000))
-          (then (global.set $bankhi (i32.and (local.get $v) (i32.const 3)))
-                (call $setbank) (return)))
+          (then
+            (if (global.get $bankmode)
+              (then (global.set $rambank (i32.and (i32.and (local.get $v) (i32.const 3)) (i32.const ${rm}))))
+              (else (global.set $banklo (i32.or (i32.and (i32.shl (local.get $v) (i32.const 5)) (i32.const 0x60))
+                                                (i32.and (global.get $banklo) (i32.const 0x1F))))
+                    (call $setbank)))
+            (return)))
         (global.set $bankmode (i32.and (local.get $v) (i32.const 1)))
-        (call $setbank)
         (return)`;
 }
 
@@ -265,8 +345,13 @@ export function memWat(o) {
   return o.cgb === false ? dropBranches(t, CGB_ONLY_REGS) : t;
 }
 
-function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, origin, cgb = true }) {
+function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, origin, cgb = true, rb = 4, rtc = false, rumble = false, cramhi }) {
   const mask = Math.max(1, imgLen) - 1;
+  const setbankWat = setbankFn(mbc, imgLen, rb);
+  // cart RAM: none (reads $FF, writes dropped), else enabled by $ramen
+  // (HuC1 always reads: its disable is write-protect only)
+  const ramOff = rb === 0 ? "(i32.const 1)" : mbc === "huc1" ? "(i32.const 0)" : "(i32.eqz (global.get $ramen))";
+  const ramWOff = rb === 0 ? "(i32.const 1)" : "(i32.eqz (global.get $ramen))";
   return `
   ;; linear address of a WRAM CPU address in $C000-$FDFF (echo folded)
   (func $wram_lin (param $x i32) (result i32)
@@ -277,20 +362,43 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
         (i32.add (i32.mul (global.get $svbk) (i32.const 0x1000))
                  (i32.and (local.get $x) (i32.const 0xFFF)))))))
 
+  ;; cart RAM bank $rambank (masked to the chip): banks 0-3 at CRAMX, 4-15
+  ;; at the high region
   (func $cram_lin (param $x i32) (result i32)
+    (if (i32.ge_u (global.get $rambank) (i32.const 4))
+      (then (return (i32.add (i32.const ${cramhi - 4 * 0x2000})
+        (i32.add (i32.mul (global.get $rambank) (i32.const 0x2000))
+                 (i32.sub (local.get $x) (i32.const 0xA000)))))))
     (i32.add (i32.const ${CRAMX})
-      (i32.add (i32.mul (i32.and (global.get $rambank) (i32.const 3)) (i32.const 0x2000))
+      (i32.add (i32.mul (global.get $rambank) (i32.const 0x2000))
                (i32.sub (local.get $x) (i32.const 0xA000)))))
 
   ;; STAT mode bits from where the CPU is inside the current line.
   ;; cycles from the start of the current instruction to its memory access:
   ;; one 4-cycle fetch per instruction byte (OPLEN), CB-prefixed = 8.
   (func $ioff (result i32)
-    (local $save i32) (local $op i32)
-    (local.set $save (global.get $lastrom))
-    (local.set $op (call $rd8 (global.get $curpc)))
-    (global.set $lastrom (local.get $save))
-    (i32.shl (i32.load8_u (i32.add (i32.const ${OPLEN}) (local.get $op))) (i32.const 2)))
+    (local $x i32) (local $op i32)
+    (if (global.get $irqacc) (then (return (global.get $irqacc))))
+    ;; the opcode byte as stored, not through $rd8: a RAM pc read through
+    ;; $rd8 during an OAM DMA asked $dmaupd for the access cycle, which is
+    ;; this function again (unbounded recursion in code run from HRAM)
+    (local.set $x (global.get $curpc))
+    (local.set $op (if (result i32) (i32.lt_u (local.get $x) (i32.const 0x4000))
+      (then (i32.load8_u (i32.add (i32.const ${romimg}) (local.get $x))))
+      (else (if (result i32) (i32.lt_u (local.get $x) (i32.const 0x8000))
+        (then (i32.load8_u (i32.add (i32.const ${romimg})
+          (i32.and (i32.add (i32.mul (global.get $rombank) (i32.const 0x4000))
+                            (i32.sub (local.get $x) (i32.const 0x4000))) (i32.const ${mask})))))
+        (else (if (result i32) (i32.lt_u (local.get $x) (i32.const 0xA000))
+          (then (i32.load8_u (i32.add (i32.add (i32.const ${VRAM0}) (i32.sub (local.get $x) (i32.const 0x8000)))
+                                      (i32.mul (global.get $vbk) (i32.const ${VBANK_DELTA})))))
+          (else (if (result i32) (i32.lt_u (local.get $x) (i32.const 0xC000))
+            (then (i32.load8_u (call $cram_lin (local.get $x))))
+            (else (if (result i32) (i32.lt_u (local.get $x) (i32.const 0xFE00))
+              (then (i32.load8_u (call $wram_lin (local.get $x))))
+              (else (i32.load8_u (i32.add (i32.const ${IOREG}) (i32.sub (local.get $x) (i32.const 0xFF00)))))))))))))))
+    (i32.add (i32.shl (i32.load8_u (i32.add (i32.const ${OPLEN}) (local.get $op))) (i32.const 2))
+             (global.get $accx)))
 
   ;; gambatte LCD::getStat at the ACCESS cycle ($ioff into the instruction):
   ;; the mode bits and the LYC coincidence flag, computed from where the
@@ -413,8 +521,8 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
         (i32.mul (global.get $vbk) (i32.const ${VBANK_DELTA})))))))
     (if (i32.lt_u (local.get $x) (i32.const 0xC000))
       (then
-        (if (i32.eqz (global.get $ramen)) (then (return (i32.const 0xFF))))
-        (if (i32.ge_u (global.get $rambank) (i32.const 8))
+        (if ${ramOff} (then (return (i32.const 0xFF))))
+        (if ${rtc ? "(i32.ge_u (global.get $rambank) (i32.const 8))" : "(i32.const 0)"}
           (then (return (i32.load8_u (i32.add (i32.const ${probe + 3840})
                           (i32.and (global.get $rambank) (i32.const 7)))))))
         (return (i32.load8_u (call $cram_lin (local.get $x))))))
@@ -443,8 +551,20 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
                              (i32.const 0xFF)))))
     (if (i32.or (i32.eq (local.get $x) (i32.const 0xFF01)) (i32.eq (local.get $x) (i32.const 0xFF02)))
       (then (call $serupd (i32.add (global.get $abscc) (call $ioff)))))
+    ;; TIMA at the access cycle (gambatte Tima::tima)
+    (if (i32.eq (local.get $x) (i32.const 0xFF05))
+      (then
+        (if (i32.and (i32.load8_u (i32.const ${IOREG + 0x07})) (i32.const 4))
+          (then (call $tupd (i32.add (global.get $abscc) (call $ioff)))))
+        (return (i32.load8_u (i32.const ${IOREG + 0x05})))))
+    ;; IF: the serial and timer requests due by the access cycle are visible
+    ;; (gambatte Memory::updateIrqs before reading IF)
     (if (i32.eq (local.get $x) (i32.const 0xFF0F))
-      (then (return (i32.or (i32.load8_u (i32.const ${IOREG + 0x0F})) (i32.const 0xE0)))))
+      (then
+        (call $serupd (i32.add (global.get $abscc) (call $ioff)))
+        (call $tirqupd (i32.add (global.get $abscc) (call $ioff)))
+        (call $ifsync)
+        (return (i32.or (i32.load8_u (i32.const ${IOREG + 0x0F})) (i32.const 0xE0)))))
     ;; gambatte: ioamhram[0x141] | getStat. The stored low bits are cleared
     ;; at LCD enable and hold the LYC flag latched at LCD disable ($statlow).
     (if (i32.eq (local.get $x) (i32.const 0xFF41))
@@ -527,7 +647,7 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
         (i32.store (i32.const ${probe + 1016})
           (i32.add (i32.load (i32.const ${probe + 1016})) (i32.const 1)))))
     (if (i32.lt_u (local.get $x) (i32.const 0x8000))
-      (then ${romWrite(mbc, imgLen)}))
+      (then ${romWrite(mbc, imgLen, rb, rumble ? "rumble" : rtc)}))
     ;; OAM DMA bus conflict (gambatte Memory::nontrivial_write): a write in
     ;; the source's conflict area lands in the OAM byte being moved
     (if (i32.and (i32.ne (global.get $dmalast) (i32.const -1)) (i32.lt_u (local.get $x) (i32.const 0xFF80)))
@@ -545,8 +665,8 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
         (i32.mul (global.get $vbk) (i32.const ${VBANK_DELTA}))) (local.get $v)) (return)))
     (if (i32.lt_u (local.get $x) (i32.const 0xC000))
       (then
-        (if (i32.eqz (global.get $ramen)) (then (return)))
-        (if (i32.ge_u (global.get $rambank) (i32.const 8))
+        (if ${ramWOff} (then (return)))
+        (if ${rtc ? "(i32.ge_u (global.get $rambank) (i32.const 8))" : "(i32.const 0)"}
           (then (i32.store8 (i32.add (i32.const ${probe + 3840})
                   (i32.and (global.get $rambank) (i32.const 7))) (local.get $v))
                 (return)))
@@ -612,6 +732,16 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
     (if (i32.eq (local.get $x) (i32.const 0xFF04))
       (then (global.set $divcnt (i32.sub (i32.const 0) (call $ioff))) (return)))
     (if (i32.eq (local.get $x) (i32.const 0xFF44)) (then (return)))
+    (if (i32.and (i32.ge_u (local.get $x) (i32.const 0xFF05)) (i32.le_u (local.get $x) (i32.const 0xFF07)))
+      (then (call $timerwrite (i32.sub (local.get $x) (i32.const 0xFF00)) (local.get $v)
+              (i32.add (global.get $abscc) (call $ioff))) (return)))
+    ;; IF write: requests due before the write cycle are set first, then
+    ;; overwritten (gambatte Memory::updateIrqs before setIfreg)
+    (if (i32.eq (local.get $x) (i32.const 0xFF0F))
+      (then
+        (call $serupd (i32.add (global.get $abscc) (call $ioff)))
+        (call $tirqupd (i32.add (global.get $abscc) (call $ioff)))
+        (call $ifsync)))
     (if (i32.eq (local.get $x) (i32.const 0xFF40))
       (then
         (local.set $old (i32.load8_u (i32.const ${IOREG + 0x40})))
@@ -821,31 +951,75 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
       (else (i32.xor (i32.ne (i32.and (global.get $f) (i32.const 0x10)) (i32.const 0))
                      (i32.eq (local.get $cc) (i32.const 2))))))
 
-  (func $ram_push (param $v i32)
-    (global.set $sp (i32.and (i32.sub (global.get $sp) (i32.const 2)) (i32.const 0xFFFF)))
-    (call $wr8 (global.get $sp) (i32.and (local.get $v) (i32.const 0xFF)))
-    (call $wr8 (i32.and (i32.add (global.get $sp) (i32.const 1)) (i32.const 0xFFFF))
-               (i32.shr_u (i32.and (local.get $v) (i32.const 0xFFFF)) (i32.const 8))))
+  ;; the opcodes $ram_interp interprets itself: jp/jp cc/call/call cc/
+  ;; ret/reti/ret cc/jr/jr cc/rst/jp (hl)
+  (func $ram_isctl (param $op i32) (result i32)
+    (i32.or (i32.or (i32.or (i32.eq (local.get $op) (i32.const 0xC3)) (i32.eq (local.get $op) (i32.const 0xCD)))
+                    (i32.or (i32.eq (local.get $op) (i32.const 0xC9)) (i32.eq (local.get $op) (i32.const 0xD9))))
+      (i32.or (i32.or (i32.eq (local.get $op) (i32.const 0x18)) (i32.eq (local.get $op) (i32.const 0xE9)))
+        (i32.or (i32.eq (i32.and (local.get $op) (i32.const 0xC7)) (i32.const 0xC7))
+          (i32.or (i32.eq (i32.and (local.get $op) (i32.const 0xE7)) (i32.const 0x20))
+            (i32.lt_u (i32.sub (i32.and (local.get $op) (i32.const 0xE7)) (i32.const 0xC0)) (i32.const 5)))))))
 
-  (func $ram_pop (result i32)
+  ;; byte $k of the current instruction, read at its own fetch cycle (4k):
+  ;; an operand in memory the PPU or an OAM DMA is blocking reads as the
+  ;; bus sees it at THAT cycle (gambatte PC_READ)
+  (func $opfetch (param $a i32) (param $k i32) (result i32)
     (local $v i32)
-    (local.set $v (i32.or (call $rd8 (global.get $sp))
+    (global.set $accx (i32.const 0))
+    (global.set $accx (i32.sub (i32.shl (local.get $k) (i32.const 2)) (call $ioff)))
+    (local.set $v (call $rd8 (i32.and (local.get $a) (i32.const 0xFFFF))))
+    (global.set $accx (i32.const 0))
+    (local.get $v))
+
+  ;; high byte first, at $hiat cycles past $ioff (gambatte PUSH)
+  (func $ram_push (param $v i32) (param $hiat i32)
+    (global.set $sp (i32.and (i32.sub (global.get $sp) (i32.const 2)) (i32.const 0xFFFF)))
+    (global.set $accx (local.get $hiat))
+    (call $wr8 (i32.and (i32.add (global.get $sp) (i32.const 1)) (i32.const 0xFFFF))
+               (i32.shr_u (i32.and (local.get $v) (i32.const 0xFFFF)) (i32.const 8)))
+    (global.set $accx (i32.add (local.get $hiat) (i32.const 4)))
+    (call $wr8 (global.get $sp) (i32.and (local.get $v) (i32.const 0xFF)))
+    (global.set $accx (i32.const 0)))
+
+  (func $ram_pop (param $loat i32) (result i32)
+    (local $v i32)
+    (global.set $accx (local.get $loat))
+    (local.set $v (call $rd8 (global.get $sp)))
+    (global.set $accx (i32.add (local.get $loat) (i32.const 4)))
+    (local.set $v (i32.or (local.get $v)
       (i32.shl (call $rd8 (i32.and (i32.add (global.get $sp) (i32.const 1)) (i32.const 0xFFFF)))
                (i32.const 8))))
+    (global.set $accx (i32.const 0))
     (global.set $sp (i32.and (i32.add (global.get $sp) (i32.const 2)) (i32.const 0xFFFF)))
     (local.get $v))
 
+  ;; Control flow is interpreted here even for a byte-intact ROM copy: the
+  ;; ROM arm's return address (call, rst) and relative target (jr) are the
+  ;; ROM's, so a copy run as its ROM arm pushed a ROM address and jumped
+  ;; back into ROM. Everything else in an intact copy runs as its ROM arm.
   (func $ram_interp (result i32)
     (local $op i32) (local $t i32) (local $nx i32) (local $o i32)
-    (local.set $o (call $get_origin (global.get $pc)))
-    (if (local.get $o)
-      (then (if (call $ram_bytes_intact (global.get $pc) (local.get $o))
-              (then (return (i32.const 0))))))
+    (local.set $op (call $opfetch (global.get $pc) (i32.const 0)))
+    ;; ...and so is anything whose operand bytes reach into $FE00-$FF7F
+    ;; (OAM/IO), where a read depends on the cycle it happens at
+    (if (i32.and (i32.eqz (call $ram_isctl (local.get $op)))
+                 (i32.or (i32.lt_u (global.get $pc) (i32.const 0xFDFE)) (i32.ge_u (global.get $pc) (i32.const 0xFF80))))
+      (then
+        (local.set $o (call $get_origin (global.get $pc)))
+        (if (local.get $o)
+          (then (if (call $ram_bytes_intact (global.get $pc) (local.get $o))
+                  (then (return (i32.const 0))))))))
     (i32.store (i32.const ${probe + 232}) (i32.add (i32.load (i32.const ${probe + 232})) (i32.const 1)))
-    (local.set $op (call $rd8 (global.get $pc)))
-    (local.set $t (i32.or (call $rd8 (i32.and (i32.add (global.get $pc) (i32.const 1)) (i32.const 0xFFFF)))
-      (i32.shl (call $rd8 (i32.and (i32.add (global.get $pc) (i32.const 2)) (i32.const 0xFFFF)))
-               (i32.const 8))))
+    ;; only the instruction's own operand bytes are fetched: a read past
+    ;; them is a bus access at a LATER cycle (it advanced an OAM DMA early)
+    (local.set $nx (i32.load8_u (i32.add (i32.const ${OPLEN}) (local.get $op))))
+    (local.set $t (i32.const 0))
+    (if (i32.ge_u (local.get $nx) (i32.const 2))
+      (then (local.set $t (call $opfetch (i32.add (global.get $pc) (i32.const 1)) (i32.const 1)))))
+    (if (i32.ge_u (local.get $nx) (i32.const 3))
+      (then (local.set $t (i32.or (local.get $t)
+              (i32.shl (call $opfetch (i32.add (global.get $pc) (i32.const 2)) (i32.const 2)) (i32.const 8))))))
     ;; jp nn / jp cc,nn
     (if (i32.or (i32.eq (local.get $op) (i32.const 0xC3))
                 (i32.eq (i32.and (local.get $op) (i32.const 0xE7)) (i32.const 0xC2)))
@@ -862,7 +1036,7 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
       (then
         (local.set $nx (i32.and (i32.add (global.get $pc) (i32.const 3)) (i32.const 0xFFFF)))
         (if (i32.or (i32.eq (local.get $op) (i32.const 0xCD)) (call $ram_cond (local.get $op)))
-          (then (call $ram_push (local.get $nx)) (global.set $pc (local.get $t))
+          (then (call $ram_push (local.get $nx) (i32.const 4)) (global.set $pc (local.get $t))
                 (global.set $cyc (i32.sub (global.get $cyc) (i32.const 24))))
           (else (global.set $pc (local.get $nx))
                 (global.set $cyc (i32.sub (global.get $cyc) (i32.const 12)))))
@@ -873,9 +1047,13 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
       (then
         (if (i32.or (i32.ne (i32.and (local.get $op) (i32.const 0xE7)) (i32.const 0xC0))
                     (call $ram_cond (local.get $op)))
-          (then (global.set $pc (call $ram_pop))
+          (then (global.set $pc (call $ram_pop
+                  (select (i32.const 4) (i32.const 0) (i32.eq (i32.and (local.get $op) (i32.const 0xE7)) (i32.const 0xC0)))))
                 (if (i32.eq (local.get $op) (i32.const 0xD9)) (then (global.set $ime (i32.const 1))))
-                (global.set $cyc (i32.sub (global.get $cyc) (i32.const 16))))
+                ;; ret/reti 16, ret cc taken 20
+                (global.set $cyc (i32.sub (global.get $cyc)
+                  (select (i32.const 20) (i32.const 16)
+                    (i32.eq (i32.and (local.get $op) (i32.const 0xE7)) (i32.const 0xC0))))))
           (else (global.set $pc (i32.and (i32.add (global.get $pc) (i32.const 1)) (i32.const 0xFFFF)))
                 (global.set $cyc (i32.sub (global.get $cyc) (i32.const 8)))))
         (return (i32.const 1))))
@@ -895,7 +1073,7 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
     ;; rst n
     (if (i32.eq (i32.and (local.get $op) (i32.const 0xC7)) (i32.const 0xC7))
       (then
-        (call $ram_push (i32.and (i32.add (global.get $pc) (i32.const 1)) (i32.const 0xFFFF)))
+        (call $ram_push (i32.and (i32.add (global.get $pc) (i32.const 1)) (i32.const 0xFFFF)) (i32.const 0))
         (global.set $pc (i32.and (local.get $op) (i32.const 0x38)))
         (global.set $cyc (i32.sub (global.get $cyc) (i32.const 16)))
         (return (i32.const 1))))
@@ -956,8 +1134,8 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
                                           (i32.mul (global.get $vbk) (i32.const ${VBANK_DELTA})))))))
     (if (i32.eq (global.get $dmasrc) (i32.const 1))
       (then
-        (if (i32.eqz (global.get $ramen)) (then (return (i32.const 0xFF))))
-        (if (i32.ge_u (global.get $rambank) (i32.const 8))
+        (if ${ramOff} (then (return (i32.const 0xFF))))
+        (if ${rtc ? "(i32.ge_u (global.get $rambank) (i32.const 8))" : "(i32.const 0)"}
           (then (return (i32.load8_u (i32.add (i32.const ${probe + 3840}) (i32.and (global.get $rambank) (i32.const 7)))))))
         (return (i32.load8_u (call $cram_lin (local.get $a))))))
     (if (i32.eq (global.get $dmasrc) (i32.const 3))
@@ -1038,16 +1216,7 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
                                 (i32.const 3))
                        (global.get $speed))))
 
-  (func $setbank
-    (if (global.get $bankmode)
-      (then
-        (global.set $rombank (global.get $banklo))
-        (global.set $rambank (global.get $bankhi)))
-      (else
-        (global.set $rombank (i32.or (global.get $banklo)
-          (i32.shl (global.get $bankhi) (i32.const 5))))
-        (global.set $rambank (i32.const 0)))))
-
+${setbankWat}
   ;; STOP: with KEY1 bit 0 armed it is the CGB speed switch.
   ;; gambatte Memory::stop: with KEY1 armed the speed flips and, if the LCD
   ;; is off, the next frame event moves to 70224<<(old speed) from now.

@@ -151,19 +151,45 @@ function store8(t, expr) {
 }
 
 /** Push a 16-bit constant, low byte first (the GB stack grows down). */
-function push16(v) {
-  return "(global.set $sp (i32.and (i32.sub (global.get $sp) "
-    + "(i32.const 2)) (i32.const 0xFFFF)))"
-    + `(call $wr8 (global.get $sp) (i32.const ${v & 0xFF}))`
-    + "(call $wr8 (i32.and (i32.add (global.get $sp) (i32.const 1)) "
-    + `(i32.const 0xFFFF)) (i32.const ${(v >> 8) & 0xFF}))`;
+// Multi-access instructions touch memory at gambatte's cycles, not all at
+// the one access offset $ioff assumes (opcode + operand fetches): $accx is
+// added to it for the later accesses (cpu.cpp PUSH / pop_rr / RMW macros).
+const accx = (n, body) => `(global.set $accx (i32.const ${n})) ${body} (global.set $accx (i32.const 0))`;
+
+/**
+ * Push a 16-bit value, high byte first (gambatte PUSH): the high byte at
+ * `hiAt` cycles past $ioff, the low byte 4 later. `v` is a WAT expression
+ * or a constant.
+ */
+export function pushWat(v, hiAt) {
+  const e = typeof v === "number" ? null : "(global.get $pushv)";
+  const hi = e ? `(i32.shr_u (i32.and ${e} (i32.const 0xFFFF)) (i32.const 8))` : `(i32.const ${(v >> 8) & 0xFF})`;
+  const lo = e ? `(i32.and ${e} (i32.const 0xFF))` : `(i32.const ${v & 0xFF})`;
+  return (e ? `(global.set $pushv ${v})` : "")
+    + "(global.set $sp (i32.and (i32.sub (global.get $sp) (i32.const 2)) (i32.const 0xFFFF)))"
+    + accx(hiAt, `(call $wr8 (i32.and (i32.add (global.get $sp) (i32.const 1)) (i32.const 0xFFFF)) ${hi})`)
+    + accx(hiAt + 4, `(call $wr8 (global.get $sp) ${lo})`);
 }
 
-const POP16 = "(global.set $tmp (i32.or (call $rd8 (global.get $sp)) "
-  + "(i32.shl (call $rd8 (i32.and (i32.add (global.get $sp) "
-  + "(i32.const 1)) (i32.const 0xFFFF))) (i32.const 8))))"
-  + "(global.set $sp (i32.and (i32.add (global.get $sp) "
-  + "(i32.const 2)) (i32.const 0xFFFF)))";
+function push16(v, hiAt) {
+  return pushWat(v, hiAt);
+}
+
+/** Pop into $tmp: the low byte at `loAt` cycles past $ioff, the high 4 later. */
+export function popWat(loAt) {
+  return accx(loAt, "(global.set $tmp (call $rd8 (global.get $sp)))")
+    + accx(loAt + 4, "(global.set $tmp (i32.or (global.get $tmp) (i32.shl (call $rd8 (i32.and (i32.add (global.get $sp) "
+    + "(i32.const 1)) (i32.const 0xFFFF))) (i32.const 8))))")
+    + "(global.set $sp (i32.and (i32.add (global.get $sp) "
+    + "(i32.const 2)) (i32.const 0xFFFF)))";
+}
+const POP16 = popWat(0);
+
+/** Read-modify-write store: the value first, then the write 4 cycles after the read. */
+function rmwStore(t, expr) {
+  if (t.trim() !== "(hl)") return store8(t, expr);
+  return `(global.set $rmwv ${expr}) ` + accx(4, `(call $wr8 ${hl()} (global.get $rmwv))`);
+}
 
 const CIN = "(i32.shr_u (i32.and (global.get $f) (i32.const 0x10)) (i32.const 4))";
 
@@ -206,8 +232,8 @@ export function lower(mnem, ops, addr, nxt) {
       const a = num(d.slice(1, -1));
       return [`(call $wr8 (i32.const ${a}) `
         + `(i32.and ${pair(s)} (i32.const 0xFF)))`
-        + `(call $wr8 (i32.const ${(a + 1) & 0xFFFF}) `
-        + `(i32.shr_u ${pair(s)} (i32.const 8)))`, null];
+        + accx(4, `(call $wr8 (i32.const ${(a + 1) & 0xFFFF}) `
+        + `(i32.shr_u ${pair(s)} (i32.const 8)))`), null];
     }
     // (hl+)/(hl-) post-inc/dec
     for (const [tok, delta] of [["(hl+)", 1], ["(hl-)", -1], ["(hli)", 1], ["(hld)", -1]]) {
@@ -330,7 +356,7 @@ export function lower(mnem, ops, addr, nxt) {
           h: "(i32.eq (i32.and (global.get $tmp) (i32.const 0xF)) "
             + "(i32.const 0xF))" })];
     }
-    body.push(store8(t, "(global.get $tmp)"));
+    body.push(rmwStore(t, "(global.get $tmp)"));
     return [seq(body), null];
   }
 
@@ -385,20 +411,10 @@ export function lower(mnem, ops, addr, nxt) {
 
   // ---- stack ----------------------------------------------------------
   if (m === "push" && o.length === 1) {
-    return ["(global.set $sp (i32.and (i32.sub (global.get $sp) "
-      + "(i32.const 2)) (i32.const 0xFFFF)))"
-      + `(call $wr8 (global.get $sp) (i32.and ${pair(o[0])} (i32.const 0xFF)))`
-      + "(call $wr8 (i32.and (i32.add (global.get $sp) (i32.const 1)) "
-      + `(i32.const 0xFFFF)) (i32.shr_u ${pair(o[0])} (i32.const 8)))`, null];
+    return [pushWat(pair(o[0]), 0), null];
   }
   if (m === "pop" && o.length === 1) {
-    return [seq([
-      "(global.set $tmp (i32.or (call $rd8 (global.get $sp)) "
-      + "(i32.shl (call $rd8 (i32.and (i32.add (global.get $sp) "
-      + "(i32.const 1)) (i32.const 0xFFFF))) (i32.const 8))))",
-      "(global.set $sp (i32.and (i32.add (global.get $sp) (i32.const 2)) "
-      + "(i32.const 0xFFFF)))",
-      setpair(o[0], "(global.get $tmp)")]), null];
+    return [seq([popWat(0), setpair(o[0], "(global.get $tmp)")]), null];
   }
 
   // ---- control flow ----------------------------------------------------
@@ -424,7 +440,7 @@ export function lower(mnem, ops, addr, nxt) {
   }
 
   if (m === "call") {
-    const push = push16(nxt);
+    const push = push16(nxt, 4);
     if (o.length === 1 && isNum(o[0])) return [push, { kind: "jp", target: num(o[0]) }];
     if (o.length === 2 && isCC(o[0]) && isNum(o[1])) {
       return ["", { kind: "call_cc", cond: CC[o[0]], push, target: num(o[1]), next: nxt }];
@@ -433,13 +449,13 @@ export function lower(mnem, ops, addr, nxt) {
   }
 
   if (m === "rst" && o.length === 1 && isNum(o[0])) {
-    return [push16(nxt), { kind: "jp", target: num(o[0]) & 0x38 }];
+    return [push16(nxt, 0), { kind: "jp", target: num(o[0]) & 0x38 }];
   }
 
   if (m === "ret" || m === "reti") {
     const pre = m === "reti" ? "(global.set $ime (i32.const 1))" : "";
     if (o.length === 1 && isCC(o[0])) {
-      return ["", { kind: "ret_cc", cond: CC[o[0]], pop: pre + POP16, next: nxt }];
+      return ["", { kind: "ret_cc", cond: CC[o[0]], pop: pre + popWat(4), next: nxt }];
     }
     return [pre + POP16, { kind: "ret_expr" }];
   }
@@ -481,7 +497,7 @@ export function lower(mnem, ops, addr, nxt) {
       `(global.set $tmp ${nv})`,
       `(global.set $tmp3 ${c})`,
       setf({ z: zof("(global.get $tmp)"), n: 0, h: 0, c: "(global.get $tmp3)" }),
-      store8(t, "(global.get $tmp)")]), null];
+      rmwStore(t, "(global.get $tmp)")]), null];
   }
 
   if ((m === "bit" || m === "set" || m === "res") && o.length === 2 && isNum(o[0])) {
@@ -491,8 +507,8 @@ export function lower(mnem, ops, addr, nxt) {
     if (m === "bit") {
       return [setf({ z: `(i32.eqz (i32.and ${cur} (i32.const ${1 << n})))`, n: 0, h: 1 }), null];
     }
-    if (m === "set") return [store8(t, `(i32.or ${cur} (i32.const ${1 << n}))`), null];
-    return [store8(t, `(i32.and ${cur} (i32.const ${(~(1 << n)) & 0xFF}))`), null];
+    if (m === "set") return [rmwStore(t, `(i32.or ${cur} (i32.const ${1 << n}))`), null];
+    return [rmwStore(t, `(i32.and ${cur} (i32.const ${(~(1 << n)) & 0xFF}))`), null];
   }
 
   throw new Unsupported(`${mnem} ${ops}`);

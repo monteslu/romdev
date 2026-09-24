@@ -113,8 +113,10 @@ function bigRingWat(big) {
 /** RAM-code provenance table base and the page count, given the arm count. */
 export function gbOriginAndPages(L, nArms) {
   const ORIGIN = (L.PACKED + nArms * 8 + 0x1000 + 0xFFF) & ~0xFFF;
-  const pages = Math.floor((ORIGIN + 0x8080 * 4 + 0xFFFF) / 65536) + 1;
-  return { ORIGIN, pages };
+  // cart RAM banks 4-15 (gambatte allocates 16 banks for header codes 4/5)
+  const CRAMHI = (ORIGIN + 0x8080 * 4 + 0xFFF) & ~0xFFF;
+  const pages = Math.floor((CRAMHI + P.CRAMHI_BYTES + 0xFFFF) / 65536) + 1;
+  return { ORIGIN, CRAMHI, pages };
 }
 
 /** options.traceEntries: the whole-frame ring's entry size and maximum length. */
@@ -233,8 +235,16 @@ function stepWat(cgb) {
   (global $irqonly (mut i32) (i32.const 0))
   (global $resume (mut i32) (i32.const 0))
   (global $blitnow (mut i32) (i32.const 0))
-  ;; absolute cycle a pending TIMA interrupt is requested at (0 = none)
+  ;; absolute cycle of the next TIMA interrupt (0 = timer off), and the
+  ;; lazy timer's last update and reload time (see $tupd)
   (global $timairq (mut i32) (i32.const 0))
+  ;; $ifsync: events looked at this many cycles into the instruction, and
+  ;; a line-144 VBlank request already made by an IF access
+  (global $ahead (mut i32) (i32.const 0))
+  (global $m1early (mut i32) (i32.const 0))
+  (global $tlast (mut i32) (i32.const 0))
+  (global $tmat (mut i32) (i32.const 0))
+  (global $tmaon (mut i32) (i32.const 0))
 
   ;; LCD-OFF frame events at their exact cycle. gambatte schedules the next
   ;; blank-frame event 70224<<speed cycles after the last and hands the
@@ -640,7 +650,10 @@ function stepWat(cgb) {
     (if (i32.ne (global.get $dmalast) (i32.const -1)) (then (call $dmaupd (global.get $abscc))))
     (if (i32.eqz (i32.and (i32.load8_u (i32.const ${IO + 0x40})) (i32.const 0x80))) (then (return)))
     (block $out (loop $again
-      (local.set $now (global.get $abscc))
+      ;; $ahead: an IF access asks for the events due by ITS cycle
+      ;; (gambatte Memory::updateIrqs -> LCD::update(cc) before IF is read
+      ;; or written), which is $ahead cycles into the running instruction
+      (local.set $now (i32.add (global.get $abscc) (global.get $ahead)))
       (local.set $lyt (i32.add (global.get $abscc) (global.get $cyc)))
       (local.set $k (i32.const 0))
       (local.set $t (i32.const -1))
@@ -668,10 +681,11 @@ function stepWat(cgb) {
           (if (i32.and (i32.le_s (i32.sub (local.get $e) (local.get $now)) (i32.const 0))
                        (i32.lt_u (local.get $e) (local.get $t)))
             (then (local.set $t (local.get $e)) (local.set $k (i32.const 4))))))
-      (if (global.get $hdmanow)
+      (if (global.get $ahead) (then (br_if $out (i32.eqz (local.get $k)))))
+      (if (i32.and (global.get $hdmanow) (i32.eqz (global.get $ahead)))
         (then (local.set $k (i32.const 5)))
         (else
-          (if (i32.eqz (global.get $hdmadone))
+          (if (i32.and (i32.eqz (global.get $hdmadone)) (i32.eqz (global.get $ahead)))
             (then
               (local.set $e (i32.add (i32.sub (local.get $lyt) (global.get $linelen)) (global.get $hdmaat)))
               (if (i32.and (i32.le_s (i32.sub (local.get $e) (local.get $now)) (i32.const 0))
@@ -745,12 +759,31 @@ function stepWat(cgb) {
               (global.set $cyc (i32.sub (global.get $cyc) (i32.const 4)))
               (call $tick (i32.sub (local.get $L) (global.get $cyc)))))))
       (br $again)))
-    (if (i32.and (local.get $hit)
+    (if (i32.and (i32.and (local.get $hit) (i32.eqz (global.get $ahead)))
           (i32.and (global.get $ime)
             (i32.ne (i32.and (i32.load8_u (i32.const ${IO + 0xFF}))
                              (i32.and (i32.load8_u (i32.const ${IO + 0x0F})) (i32.const 0x1F)))
                     (i32.const 0))))
       (then (global.set $irqonly (i32.const 1)) (call $step) (global.set $irqonly (i32.const 0)))))
+
+  ;; IF read or written at the access cycle: the LCD requests due by then
+  ;; are set first (gambatte Memory::updateIrqs before touching IF): the
+  ;; in-line STAT events, and the VBlank request of line 144 when the access
+  ;; falls past the end of line 143 (flagged once: $m1early).
+  (func $ifsync
+    (local $off i32)
+    (if (i32.eqz (i32.and (i32.load8_u (i32.const ${IO + 0x40})) (i32.const 0x80))) (then (return)))
+    (local.set $off (call $ioff))
+    (global.set $ahead (local.get $off))
+    (call $statev)
+    (global.set $ahead (i32.const 0))
+    (if (i32.and (i32.and (i32.eq (global.get $ln) (i32.const 143)) (i32.eqz (global.get $m1early)))
+                 (i32.ge_s (local.get $off) (global.get $cyc)))
+      (then
+        (global.set $m1early (i32.const 1))
+        (call $irq (if (result i32) (i32.eq (i32.and (global.get $m1s) (i32.const 0x18)) (i32.const 0x10))
+                     (then (i32.const 3)) (else (i32.const 1))))
+        (global.set $m1s (global.get $statreg)))))
 
   (func $irq (param $m i32)
     (i32.store8 (i32.const ${IO + 0x0F})
@@ -775,23 +808,19 @@ function stepWat(cgb) {
                 (if (i32.le_s (global.get $stopcd) (i32.const 0))
                   (then (global.set $halted (i32.const 0)))))))))
       (else (if (i32.eqz (global.get $irqonly)) (then (call $exec)))))
-    ;; A RAM copy of BANKED code ran as its ROM arm (see _ramcode). Its next
-    ;; pc is a $4000-window address; if the RAM byte at pc+bias came from
-    ;; exactly that ROM byte, execution is still inside the copy - move it
-    ;; back to RAM. Anything else (a ret to a real caller) is left alone.
+    ;; A RAM copy ran as its ROM arm (see _ramcode). Control flow in RAM is
+    ;; always interpreted ($ram_interp), so the arm was straight-line code
+    ;; and its next pc (a ROM-window address) is the fall-through: move it
+    ;; back to the RAM instruction after the copy's. Checking that the next
+    ;; RAM byte came from the next ROM byte was wrong for a routine built
+    ;; from pieces: the pc stayed in ROM and ran the wrong code.
     (if (global.get $ramexec)
       (then
         (global.set $ramexec (i32.const 0))
         (if (i32.lt_u (global.get $pc) (i32.const 0x8000))
           (then
-            (local.set $per (i32.and (i32.add (global.get $pc) (global.get $rambias))
-                                     (i32.const 0xFFFF)))
-            (if (i32.and (i32.ge_u (local.get $per) (i32.const 0xC000))
-                  (i32.eq (call $get_origin (local.get $per))
-                          (i32.add (i32.add (global.get $ramobase)
-                                            (i32.and (global.get $pc) (i32.const 0x3FFF)))
-                                   (i32.const 1))))
-              (then (global.set $pc (local.get $per))))))))
+            (global.set $pc (i32.and (i32.add (global.get $pc) (global.get $rambias))
+                                     (i32.const 0xFFFF)))))))
     ;; ---- DIV / TIMA for the instruction, BEFORE the interrupt check: a
     ;; TIMA overflow inside this instruction requests its interrupt at that
     ;; cycle, and gambatte takes it before the next instruction.
@@ -813,9 +842,13 @@ function stepWat(cgb) {
         ${cgb ? '(if (global.get $halted) (then (global.set $cyc (i32.sub (global.get $cyc) (i32.const 4)))))' : ''}
         (global.set $halted (i32.const 0))
         (global.set $sp (i32.and (i32.sub (global.get $sp) (i32.const 2)) (i32.const 0xFFFF)))
-        (call $wr8 (global.get $sp) (i32.and (global.get $pc) (i32.const 0xFF)))
+        ;; high byte at +8, low at +12 (gambatte Interrupter::interrupt)
+        (global.set $irqacc (i32.const 8))
         (call $wr8 (i32.and (i32.add (global.get $sp) (i32.const 1)) (i32.const 0xFFFF))
                    (i32.shr_u (global.get $pc) (i32.const 8)))
+        (global.set $irqacc (i32.const 12))
+        (call $wr8 (global.get $sp) (i32.and (global.get $pc) (i32.const 0xFF)))
+        (global.set $irqacc (i32.const 0))
         (global.set $pc (i32.add (i32.const 0x40) (i32.shl (local.get $bit) (i32.const 3))))
         (global.set $cyc (i32.sub (global.get $cyc) (i32.const 20)))
         (i32.store (i32.add (i32.const ${PROBE + 200}) (i32.shl (local.get $bit) (i32.const 2)))
@@ -829,45 +862,116 @@ function stepWat(cgb) {
     ;; ---- DIV / TIMA, in CPU cycles ----
     (global.set $rres (i32.add (global.get $rres) (i32.shr_u (local.get $t) (global.get $speed))))
     (global.set $divcnt (i32.and (i32.add (global.get $divcnt) (local.get $t)) (i32.const 0xFFFF)))
-    ;; TIMA ticks when the ABSOLUTE cycle counter crosses a multiple of
-    ;; 2^k, k = 10/4/6/8 by TAC (gambatte tima.cpp: lastUpdate_ is aligned to
-    ;; cc, not to DIV). $abscc starts at gambatte's power-on $102A0.
-    (local.set $per (global.get $abscc))
+    ;; TIMA itself is computed lazily at each access (gambatte tima.cpp,
+    ;; see $tupd); here only the interrupt events that fell inside this span.
     (global.set $abscc (i32.add (global.get $abscc) (local.get $t)))
-    (if (i32.and (i32.load8_u (i32.const ${IO + 0x07})) (i32.const 4))
-      (then
-        (local.set $bit (i32.load8_u (i32.add (i32.const ${IO + 0x1F0})
-          (i32.and (i32.load8_u (i32.const ${IO + 0x07})) (i32.const 3)))))
-        (local.set $pend (i32.sub (i32.shr_u (global.get $abscc) (local.get $bit))
-                                  (i32.shr_u (local.get $per) (local.get $bit))))
-        (block $d (loop $l
-          (br_if $d (i32.le_s (local.get $pend) (i32.const 0)))
-          (local.set $pend (i32.sub (local.get $pend) (i32.const 1)))
-          (if (i32.ge_u (i32.load8_u (i32.const ${IO + 0x05})) (i32.const 0xFF))
-            (then
-              (i32.store8 (i32.const ${IO + 0x05}) (i32.load8_u (i32.const ${IO + 0x06})))
-              ;; the interrupt is requested 3 cycles after the overflow tick
-              ;; (gambatte tima.cpp: next irq event = lastUpdate + ... + 3)
-              (global.set $timairq (i32.add (i32.shl (i32.add (i32.shr_u (local.get $per) (local.get $bit))
-                                                               (i32.sub (i32.sub (i32.shr_u (global.get $abscc) (local.get $bit))
-                                                                                 (i32.shr_u (local.get $per) (local.get $bit)))
-                                                                        (local.get $pend)))
-                                                      (local.get $bit))
-                                             (i32.const 3))))
-            (else
-              (i32.store8 (i32.const ${IO + 0x05})
-                (i32.add (i32.load8_u (i32.const ${IO + 0x05})) (i32.const 1)))))
-          (br $l)))))
+    (call $tirqupd (global.get $abscc))
     ;; a serial transfer finishing inside this span
     (if (i32.and (i32.ne (global.get $serev) (i32.const 0))
                  (i32.ge_s (i32.sub (global.get $abscc) (global.get $serev)) (i32.const 0)))
       (then (call $serupd (global.get $abscc))))
-    (if (i32.and (i32.ne (global.get $timairq) (i32.const 0))
-                 (i32.ge_s (i32.sub (global.get $abscc) (global.get $timairq)) (i32.const 0)))
+    )
+
+  ;; ---- the timer as gambatte's Tima runs it (tima.cpp). TIMA ticks when
+  ;; the ABSOLUTE cycle counter crosses a multiple of 2^k, k = 10/4/6/8 by
+  ;; TAC ($tlast is aligned to cc, not to DIV); its value is brought up to
+  ;; date at each access cycle. After an overflow TIMA reads 0 until
+  ;; $tmat (overflow tick + 3), then TMA, and a TIMA write in the 4 cycles
+  ;; from $tmat is not overridden by the reload. The interrupt is its own
+  ;; event at overflow tick + 3 ($timairq, 0 = timer off).
+  (func $tclk (param $tac i32) (result i32)
+    (i32.load8_u (i32.add (i32.const ${IO + 0x1F0}) (i32.and (local.get $tac) (i32.const 3)))))
+
+  (func $tupd (param $cc i32)
+    (local $k i32) (local $ticks i32) (local $tmp i32) (local $d i32) (local $tma i32)
+    (local.set $k (call $tclk (i32.load8_u (i32.const ${IO + 0x07}))))
+    (local.set $tma (i32.load8_u (i32.const ${IO + 0x06})))
+    (local.set $ticks (i32.shr_u (i32.sub (local.get $cc) (global.get $tlast)) (local.get $k)))
+    (global.set $tlast (i32.add (global.get $tlast) (i32.shl (local.get $ticks) (local.get $k))))
+    (if (i32.and (global.get $tmaon) (i32.ge_s (i32.sub (local.get $cc) (global.get $tmat)) (i32.const 0)))
       (then
-        (global.set $timairq (i32.const 0))
-        (i32.store8 (i32.const ${IO + 0x0F})
-          (i32.or (i32.load8_u (i32.const ${IO + 0x0F})) (i32.const 4))))))
+        (if (i32.ge_s (i32.sub (local.get $cc) (global.get $tmat)) (i32.const 4))
+          (then (global.set $tmaon (i32.const 0))))
+        (i32.store8 (i32.const ${IO + 0x05}) (local.get $tma))))
+    (local.set $tmp (i32.add (i32.load8_u (i32.const ${IO + 0x05})) (local.get $ticks)))
+    ;; while (tmp > 0x100) tmp -= 0x100 - tma, in one step
+    (if (i32.gt_u (local.get $tmp) (i32.const 0x100))
+      (then
+        (local.set $d (i32.sub (i32.const 0x100) (local.get $tma)))
+        (local.set $tmp (i32.sub (local.get $tmp)
+          (i32.mul (local.get $d)
+            (i32.div_u (i32.add (i32.sub (local.get $tmp) (i32.const 0x101)) (local.get $d)) (local.get $d)))))))
+    (if (i32.eq (local.get $tmp) (i32.const 0x100))
+      (then
+        (local.set $tmp (i32.const 0))
+        (global.set $tmat (i32.add (global.get $tlast) (i32.const 3)))
+        (global.set $tmaon (i32.const 1))
+        (if (i32.ge_s (i32.sub (local.get $cc) (global.get $tmat)) (i32.const 0))
+          (then
+            (if (i32.ge_s (i32.sub (local.get $cc) (global.get $tmat)) (i32.const 4))
+              (then (global.set $tmaon (i32.const 0))))
+            (local.set $tmp (local.get $tma))))))
+    (i32.store8 (i32.const ${IO + 0x05}) (local.get $tmp)))
+
+  ;; timer interrupt events up to cc (Memory::updateTimaIrq / doIrqEvent)
+  (func $tirqupd (param $cc i32)
+    (block $d (loop $l
+      (br_if $d (i32.eqz (global.get $timairq)))
+      (br_if $d (i32.lt_s (i32.sub (local.get $cc) (global.get $timairq)) (i32.const 0)))
+      (i32.store8 (i32.const ${IO + 0x0F}) (i32.or (i32.load8_u (i32.const ${IO + 0x0F})) (i32.const 4)))
+      (global.set $timairq (i32.add (global.get $timairq)
+        (i32.shl (i32.sub (i32.const 256) (i32.load8_u (i32.const ${IO + 0x06})))
+                 (call $tclk (i32.load8_u (i32.const ${IO + 0x07}))))))
+      (br $l))))
+
+  ;; FF05-FF07 writes at cycle cc (Tima::setTima / setTma / setTac)
+  (func $timerwrite (param $p i32) (param $v i32) (param $cc i32)
+    (local $tac i32) (local $nxt i32) (local $d i32) (local $k i32)
+    (local.set $tac (i32.load8_u (i32.const ${IO + 0x07})))
+    (if (i32.eq (local.get $p) (i32.const 5))
+      (then
+        (if (i32.and (local.get $tac) (i32.const 4))
+          (then
+            (call $tirqupd (local.get $cc))
+            (call $tupd (local.get $cc))
+            (if (i32.and (global.get $tmaon) (i32.lt_u (i32.sub (global.get $tmat) (local.get $cc)) (i32.const 4)))
+              (then (global.set $tmaon (i32.const 0))))
+            (global.set $timairq (i32.add (i32.add (global.get $tlast)
+              (i32.shl (i32.sub (i32.const 256) (local.get $v)) (call $tclk (local.get $tac)))) (i32.const 3)))))
+        (i32.store8 (i32.const ${IO + 0x05}) (local.get $v))
+        (return)))
+    (if (i32.eq (local.get $p) (i32.const 6))
+      (then
+        (if (i32.and (local.get $tac) (i32.const 4))
+          (then (call $tirqupd (local.get $cc)) (call $tupd (local.get $cc))))
+        (i32.store8 (i32.const ${IO + 0x06}) (local.get $v))
+        (return)))
+    (local.set $v (i32.or (local.get $v) (i32.const 0xF8)))
+    (if (i32.ne (local.get $v) (local.get $tac))
+      (then
+        (local.set $nxt (global.get $timairq))
+        (if (i32.and (local.get $tac) (i32.const 4))
+          (then
+            (call $tirqupd (local.get $cc))
+            (call $tupd (local.get $cc))
+            (local.set $nxt (global.get $timairq))
+            (local.set $d (i32.add (i32.shl (i32.const 1) (i32.sub (call $tclk (local.get $tac)) (i32.const 1))) (i32.const 3)))
+            (global.set $tlast (i32.sub (global.get $tlast) (local.get $d)))
+            (global.set $tmat (i32.sub (global.get $tmat) (local.get $d)))
+            (local.set $nxt (i32.sub (local.get $nxt) (local.get $d)))
+            (if (i32.ge_s (i32.sub (local.get $cc) (local.get $nxt)) (i32.const 0))
+              (then (i32.store8 (i32.const ${IO + 0x0F}) (i32.or (i32.load8_u (i32.const ${IO + 0x0F})) (i32.const 4)))))
+            (call $tupd (local.get $cc))
+            (global.set $tmaon (i32.const 0))
+            (local.set $nxt (i32.const 0))))
+        (if (i32.and (local.get $v) (i32.const 4))
+          (then
+            (local.set $k (call $tclk (local.get $v)))
+            (global.set $tlast (i32.shl (i32.shr_u (local.get $cc) (local.get $k)) (local.get $k)))
+            (local.set $nxt (i32.add (i32.add (global.get $tlast)
+              (i32.shl (i32.sub (i32.const 256) (i32.load8_u (i32.const ${IO + 0x05}))) (local.get $k))) (i32.const 3)))))
+        (global.set $timairq (local.get $nxt))))
+    (i32.store8 (i32.const ${IO + 0x07}) (local.get $v)))
 `;
 }
 
@@ -877,9 +981,10 @@ function stepWat(cgb) {
  * BG palette RAM all $7FFF, OBJ palette RAM its fixed dump. DMG:
  * cycleCounter $102A0+$8D2C = $18FCC, PPU at line 153 + 396, DIV $AB.
  */
-function initWat(cgb) {
+function initWat(cgb, cramhi) {
   // gambatte clears SRAM to $FF on first load (clearSram) - both modes
-  const sram = `(memory.fill (i32.const ${P.CRAMX}) (i32.const 0xFF) (i32.const 0x8000))`;
+  const sram = `(memory.fill (i32.const ${P.CRAMX}) (i32.const 0xFF) (i32.const 0x8000))`
+    + `(memory.fill (i32.const ${cramhi}) (i32.const 0xFF) (i32.const ${P.CRAMHI_BYTES}))`;
   const { BGPAL } = P;
   if (!cgb) {
     return `
@@ -972,9 +1077,12 @@ function frameWat(cgb) {
           ;; latched STAT has mode 1 enabled and mode 0 not
           (if (i32.eq (global.get $ln) (i32.const 144))
             (then
-              (call $irq (if (result i32) (i32.eq (i32.and (global.get $m1s) (i32.const 0x18)) (i32.const 0x10))
-                           (then (i32.const 3)) (else (i32.const 1))))
-              (global.set $m1s (global.get $statreg))))))
+              (if (global.get $m1early)
+                (then (global.set $m1early (i32.const 0)))
+                (else
+                  (call $irq (if (result i32) (i32.eq (i32.and (global.get $m1s) (i32.const 0x18)) (i32.const 0x10))
+                               (then (i32.const 3)) (else (i32.const 1))))
+                  (global.set $m1s (global.get $statreg))))))))
       (if (global.get $ln) (then (global.set $lcdinactive (i32.const 0))))
       ;; this line's mode 3 length, as gambatte predicts it (SCX, window, sprites)
       (call $m3setup)
@@ -1083,6 +1191,8 @@ function frameWat(cgb) {
         (local.set $i (i32.sub (i32.and (global.get $abscc) (i32.const -32768)) (i32.const 0x8000)))
         (global.set $abscc (i32.sub (global.get $abscc) (local.get $i)))
         (if (global.get $timairq) (then (global.set $timairq (i32.sub (global.get $timairq) (local.get $i)))))
+        (global.set $tlast (i32.sub (global.get $tlast) (local.get $i)))
+        (global.set $tmat (i32.sub (global.get $tmat) (local.get $i)))
         (if (global.get $serev) (then (global.set $serev (i32.sub (global.get $serev) (local.get $i)))))
         (if (i32.ne (global.get $lyct) (i32.const -1)) (then (global.set $lyct (i32.sub (global.get $lyct) (local.get $i)))))
         (if (i32.ne (global.get $m2t) (i32.const -1)) (then (global.set $m2t (i32.sub (global.get $m2t) (local.get $i)))))
@@ -1140,7 +1250,7 @@ function ramCodeWat(PCSPAN) {
  * block index (the modal length of records starting with that byte), not
  * typed in. Ties go to the length seen first, in block-index order.
  */
-function opLenTable(img, blocks) {
+function opLenTable(img, blocks, opcat) {
   const by = new Map();
   for (const [o, v] of blocks) {
     if (o < img.length && v.m !== "?" && v.m !== "defb") {
@@ -1152,7 +1262,9 @@ function opLenTable(img, blocks) {
   const out = new Uint8Array(256);
   for (let b = 0; b < 256; b++) {
     const c = by.get(b);
-    if (!c) { out[b] = 1; continue; }
+    // an opcode this ROM's code never uses: its length from the catalogue
+    // (RAM code can still run it)
+    if (!c) { out[b] = b === 0xCB ? 2 : opcat?.ops.get(b)?.n ?? 1; continue; }
     let best = null, bn = -1;
     for (const [n, k] of c) if (k > bn) { best = n; bn = k; }
     out[b] = best;
@@ -1169,21 +1281,28 @@ function opLenTable(img, blocks) {
 // then swapped for globals the interpreter fills from memory. Every template
 // is checked: no sentinel may survive, and an opcode with operands must end
 // up reading them. Control flow (jp/jr/call/ret/rst) is interpreted in
-// hw-gbc $ram_interp instead; add sp,e8 / ld hl,sp+e8 are left out (their
-// lowering folds the operand into flag constants) and trap if patched.
+// hw-gbc $ram_interp instead; add sp,e8 / ld hl,sp+e8 are written out by
+// hand (their lowering folds the operand into flag constants).
 const CONTROL = new Set(["jp", "jr", "call", "ret", "reti", "rst"]);
 const REP = [["(i32.const 42435)", "(global.get $imm16)"],
   ["(i32.const 42436)", "(i32.and (i32.add (global.get $imm16) (i32.const 1)) (i32.const 0xFFFF))"],
   ["(i32.const 65445)", "(i32.add (i32.const 0xFF00) (global.get $imm8))"],
   ["(i32.const 165)", "(global.get $imm8)"]];
 
-function ramTemplates(img, blocks) {
+function ramTemplates(img, blocks, opcat) {
   const seen = new Map(), seenCb = new Map();
   for (const [o, v] of blocks) {
     if (o + 1 >= img.length || v.m === "?" || v.m === "defb") continue;
     const op = img[o];
     if (op === 0xCB) { if (!seenCb.has(img[o + 1])) seenCb.set(img[o + 1], v); }
     else if (!seen.has(op)) seen.set(op, v);
+  }
+  // Opcodes this ROM's code never uses can still run from RAM (a routine
+  // assembled at run time, or a test that executes every opcode from WRAM):
+  // the rest come from the full opcode catalogue (blocks.opcodeCatalogue).
+  if (opcat) {
+    for (const [op, v] of opcat.ops) if (!seen.has(op) && v.m !== "defb" && v.m !== "?") seen.set(op, v);
+    for (const [op, v] of opcat.cb) if (!seenCb.has(op)) seenCb.set(op, v);
   }
   const out = new Map(), cbout = new Map();
   for (const [op, v] of seen) {
@@ -1205,6 +1324,17 @@ function ramTemplates(img, blocks) {
     }
     out.set(op, [body, n, cyclesForOp(op)]);
   }
+  // add sp,e8 / ld hl,sp+e8 with the operand read from RAM: lower() folds a
+  // constant operand into its flag expressions, so these two are written
+  // out here (H and C from the unsigned low nibble / low byte sums, Z=N=0).
+  const e8 = "(i32.sub (i32.xor (global.get $imm8) (i32.const 0x80)) (i32.const 0x80))";
+  const spFlags = "(global.set $f (i32.or"
+    + " (i32.shl (i32.gt_u (i32.add (i32.and (global.get $sp) (i32.const 0xF)) (i32.and (global.get $imm8) (i32.const 0xF))) (i32.const 0xF)) (i32.const 5))"
+    + " (i32.shl (i32.gt_u (i32.add (i32.and (global.get $sp) (i32.const 0xFF)) (global.get $imm8)) (i32.const 0xFF)) (i32.const 4))))";
+  const spSum = `(i32.and (i32.add (global.get $sp) ${e8}) (i32.const 0xFFFF))`;
+  out.set(0xE8, [`${spFlags} (global.set $sp ${spSum})`, 2, cyclesForOp(0xE8)]);
+  out.set(0xF8, [`(global.set $tmp ${spSum}) ${spFlags}`
+    + " (global.set $h (i32.shr_u (global.get $tmp) (i32.const 8))) (global.set $l (i32.and (global.get $tmp) (i32.const 0xFF)))", 2, cyclesForOp(0xF8)]);
   for (const [op2, v] of seenCb) {
     let body, flow;
     try { [body, flow] = lower(v.m, v.o ?? "", 0, 0); } catch { continue; }
@@ -1231,16 +1361,22 @@ function templateTable(name, d) {
   return lines.join("\n");
 }
 
-function ramTemplatesWat(img, blocks) {
-  const [t, tcb] = ramTemplates(img, blocks);
+function ramTemplatesWat(img, blocks, opcat) {
+  const [t, tcb] = ramTemplates(img, blocks, opcat);
   return templateTable("tmpl", t) + "\n" + templateTable("tmpl_cb", tcb) + `
   ;; run the instruction at $pc from RAM through a template; 1 if handled
   (func $tmpl_run (param $op i32) (result i32)
     (local $n i32)
-    (global.set $imm8 (call $rd8 (i32.and (i32.add (global.get $pc) (i32.const 1)) (i32.const 0xFFFF))))
-    (global.set $imm16 (i32.or (global.get $imm8)
-      (i32.shl (call $rd8 (i32.and (i32.add (global.get $pc) (i32.const 2)) (i32.const 0xFFFF)))
-               (i32.const 8))))
+    ;; only this instruction's operand bytes, each at its fetch cycle
+    (local.set $n (i32.load8_u (i32.add (i32.const ${P.OPLEN}) (local.get $op))))
+    (global.set $imm8 (i32.const 0))
+    (global.set $imm16 (i32.const 0))
+    (if (i32.ge_u (local.get $n) (i32.const 2))
+      (then (global.set $imm8 (call $opfetch (i32.add (global.get $pc) (i32.const 1)) (i32.const 1)))
+            (global.set $imm16 (global.get $imm8))))
+    (if (i32.ge_u (local.get $n) (i32.const 3))
+      (then (global.set $imm16 (i32.or (global.get $imm8)
+              (i32.shl (call $opfetch (i32.add (global.get $pc) (i32.const 2)) (i32.const 2)) (i32.const 8))))))
     (local.set $n (if (result i32) (i32.eq (local.get $op) (i32.const 0xCB))
       (then (call $tmpl_cb (global.get $imm8)))
       (else (call $tmpl (local.get $op)))))
@@ -1277,7 +1413,7 @@ export function* emitGbWat(img, blocks, o) {
   const { FB, ABI, PCTAB, PCSPAN, PACKED } = L;
   const [WATCH_LO, WATCH_HI] = o.watch ?? [0x10000, 0];
   const addrs = [...blocks.keys()].sort((a, b) => a - b);
-  const { ORIGIN, pages: basePages } = gbOriginAndPages(L, addrs.length);
+  const { ORIGIN, CRAMHI, pages: basePages } = gbOriginAndPages(L, addrs.length);
   const big = o.traceEntries != null ? gbBigRing(IMGLEN, addrs.length, o.traceEntries) : null;
   const pages = big ? big.pages : basePages;
   const mask = Math.max(1, IMGLEN) - 1;
@@ -1306,16 +1442,17 @@ export function* emitGbWat(img, blocks, o) {
   yield part(globalsWat());
   yield part(P.globalsWat());
   yield part(P.memWat({ imgLen: IMGLEN, mbc: o.mbc, romimg: ROMIMG, probe: PROBE,
-    watchLo: WATCH_LO, watchHi: WATCH_HI, padptr: ABI + 0x100, origin: ORIGIN, cgb }));
+    watchLo: WATCH_LO, watchHi: WATCH_HI, padptr: ABI + 0x100, origin: ORIGIN, cgb,
+    rb: P.ramBanks(img), rtc: [0x0F, 0x10].includes(img[0x147]), rumble: [0x1C, 0x1D, 0x1E].includes(img[0x147]), cramhi: CRAMHI }));
   yield part(commonWat());
   yield part(`  (data (i32.const ${IOREG + 0x100}) "${watBytes(shadeBytes)}")`);
   yield part(H.paletteWat());
   yield part(H.renderWat());
   yield part(cgb ? P.renderWat(FB) : P.dmgRenderWat(FB));
   yield part(P.initstateDataWat(cgb));
-  yield part(`  (data (i32.const ${P.OPLEN}) "${watBytes(opLenTable(img, blocks))}")`);
+  yield part(`  (data (i32.const ${P.OPLEN}) "${watBytes(opLenTable(img, blocks, o.opcat))}")`);
   yield part(`  (data (i32.const ${P.IOTAB}) "${watBytes(P.ioTable(cgb))}")`);
-  yield part(ramTemplatesWat(img, blocks));
+  yield part(ramTemplatesWat(img, blocks, o.opcat));
 
   // ---- one arm per ROM offset ----
   let ok = 0, bad = 0, broken = 0;
@@ -1503,7 +1640,7 @@ export function* emitGbWat(img, blocks, o) {
     ;; LCDC/BGP as the boot ROM leaves them: display on, BG on, tiles at $8000.
     (i32.store8 (i32.const ${IOREG + 0x40}) (i32.const 0x91))
     (i32.store8 (i32.const ${IOREG + 0x47}) (i32.const 0xFC))
-    ${initWat(cgb)})
+    ${initWat(cgb, CRAMHI)})
 
   (func (export "wc_render")
     (local $i i32) (local $ln i32)
