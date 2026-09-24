@@ -59,6 +59,8 @@ const SRC_CAP = J.gb.audioBufferSamples;
 const DEST_CAP = Math.ceil(Math.round(AUDIO_RATE * 280896 / J.gba.cpuFrequency) / 1024) * 1024;
 /** the wasmcart ring the host drains after every wc_render (5 frames of DEST_CAP fit) */
 export const OUT_CAP = 16384;
+/** the pre-resample debug stream: one frame of native samples (262144 Hz is 4389 a frame) */
+const NATIVE_CAP = 8192;
 const TF = J.gb.timingFactor;
 
 // state block offsets (from A.STATE)
@@ -90,7 +92,8 @@ export function audioLayout(L) {
   A.SRC = Math.ceil((A.WIN + 8 * LUTN) / 16) * 16;
   A.OUT = A.SRC + 4 * SRC_CAP;
   A.STATE = A.OUT + 4 * OUT_CAP;
-  A.END = A.STATE + S.SIZE;
+  A.NATIVE = A.STATE + S.SIZE;
+  A.END = A.NATIVE + 16 + 4 * NATIVE_CAP;
   A.TRACE = A.END;
   A.TRACE_ENTRIES = 1 << 16;
   A.END_TRACE = A.TRACE + 12 * A.TRACE_ENTRIES;
@@ -136,6 +139,9 @@ export function audioSection(A) {
     note: "mGBA 0.11 libretro's audio_batch_cb stream: the GBA core's samples (native rate 16777216 / (0x200 >> SOUNDBIAS "
       + `resolution)) drained after every retro_run and resampled to ${AUDIO_RATE} Hz by mGBA's windowed-sinc resampler `
       + `(passed through when the native rate already is ${AUDIO_RATE} Hz); the first wc_render carries the warm-up frames' samples too`,
+    // the native (pre-resample) samples of the last frame, as mGBA's
+    // gba_audio_raw stream region taps them from _sample
+    streams: { native: { offset: A.NATIVE + 16, countOffset: A.NATIVE, capacity: NATIVE_CAP, channels: 2, format: "s16", ref: "gba_audio_raw" } },
     // mGBA's own mute switches: GBAudio forceDisableCh[0..3], GBAAudio forceDisableChA/B
     muteMask: { offset: A.STATE + S.MUTE, size: 1, channels: ["sq1", "sq2", "wave", "noise", "fifoA", "fifoB"] },
   };
@@ -673,6 +679,11 @@ export function audioWat(L, A, evSample, opts = {}) {
     (local.set $n (i32.shl ${c(2)} ${res}))
     (memory.fill ${c(ST + S.SMPA)} (i32.load8_u (i32.add ${c(ST + S.SMPA - 1)} ${lg("n")})) ${c(J.gba.maxSamples)})
     (memory.fill ${c(ST + S.SMPB)} (i32.load8_u (i32.add ${c(ST + S.SMPB - 1)} ${lg("n")})) ${c(J.gba.maxSamples)})
+    ;; the debug copy of what this event hands the buffer (the whole block, before the buffer's own limit)
+    (local.set $w (i32.load (i32.const ${A.NATIVE})))
+    (if (i32.le_u (i32.add ${lg("w")} ${lg("n")}) ${c(NATIVE_CAP)})
+      (then (memory.copy (i32.add ${c(A.NATIVE + 16)} (i32.shl ${lg("w")} ${c(2)})) ${c(ST + S.CUR)} (i32.shl ${lg("n")} ${c(2)}))
+            (i32.store (i32.const ${A.NATIVE}) (i32.add ${lg("w")} ${lg("n")}))))
     (if (i32.gt_u ${lg("n")} (i32.sub ${c(SRC_CAP)} ${g("src_n")})) (then (local.set $n (i32.sub ${c(SRC_CAP)} ${g("src_n")}))))
     (local.set $i ${c(0)})
     (block $d (loop $l
@@ -682,6 +693,10 @@ export function audioWat(L, A, evSample, opts = {}) {
       ${set("src_n", `(i32.add ${g("src_n")} ${c(1)})`)}
       (local.set $i (i32.add ${lg("i")} ${c(1)}))
       (br $l))))
+
+  ;; top of every emulated frame (retro_run): the native debug stream restarts
+  (func $au_frame_begin
+    (i32.store (i32.const ${A.NATIVE}) ${c(0)}))
 
   ;; _updateFrame (the PSG frame sequencer event, GBA side)
   (func $au_frame_event (param $late i32)
