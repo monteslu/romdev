@@ -48,3 +48,19 @@ test("IM 2 takes the vector at (I << 8) | $FF; IM 0 behaves as RST $38", T, asyn
   const r0 = await gpgxParity({ platform: "sms", rom: smsImage(im0, { at: [[0x38, rst38], [0x200, im2]] }), maxFrames: 30 });
   assert.equal(r0.diverged, false, divergenceText(r0));
 });
+
+test("VDP control port: the first byte updates the address LSB at once", T, async () => {
+  // ctrl $00,$40 (VRAM write @0); ctrl $05 (first byte only); data $AA -> VRAM $0005 on gpgx
+  const main = [0xF3, 0x31, 0xF0, 0xDF, 0xAF, 0xD3, 0xBF, 0x3E, 0x40, 0xD3, 0xBF,
+    0x3E, 0x05, 0xD3, 0xBF, 0x3E, 0xAA, 0xD3, 0xBE, 0x18, 0xFE];
+  const r = await gpgxParity({ platform: "sms", rom: smsImage(main), maxFrames: 5 });
+  assert.equal(r.diverged, false, divergenceText(r));
+});
+
+test("Game Gear CRAM: an even byte is latched and written with the odd one", T, async () => {
+  // ctrl $00,$C0 (CRAM @0); data $12 (latched only); ctrl $03,$C0 (CRAM @3); data $5A (odd: writes $02-$03 from the latch)
+  const main = [0xF3, 0x31, 0xF0, 0xDF, 0xAF, 0xD3, 0xBF, 0x3E, 0xC0, 0xD3, 0xBF, 0x3E, 0x12, 0xD3, 0xBE,
+    0x3E, 0x03, 0xD3, 0xBF, 0x3E, 0xC0, 0xD3, 0xBF, 0x3E, 0x5A, 0xD3, 0xBE, 0x18, 0xFE];
+  const r = await gpgxParity({ platform: "gg", rom: smsImage(main, { region: 6 }), maxFrames: 5 });
+  assert.equal(r.diverged, false, divergenceText(r));
+});

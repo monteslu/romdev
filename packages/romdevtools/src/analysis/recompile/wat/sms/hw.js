@@ -223,8 +223,28 @@ export const OBJLIST = 0x14D00;
 function hwExactWat(platform, opts) {
   const legacy = hwWat(platform);
   const cut = legacy.indexOf("  (func $vdp_status_read");
-  const vdpPart = legacy.slice(0, cut);
   const gg = platform === "gg";
+  // gpgx vdp_sms_ctrl_w: the first control byte already replaces the address
+  // LSB (a data access before the second byte uses it).
+  let vdpPart = legacy.slice(0, cut);
+  const first = `        (global.set $vdp_latch (i32.and (local.get $v) (i32.const 0xFF)))
+        (global.set $vdp_first (i32.const 0)))`;
+  if (!vdpPart.includes(first)) throw new Error("sms recompile: control-port first byte not found in the VDP text");
+  vdpPart = vdpPart.replace(first, `        (global.set $vdp_latch (i32.and (local.get $v) (i32.const 0xFF)))
+        (global.set $vdp_addr (i32.or (i32.and (global.get $vdp_addr) (i32.const 0x3F00)) (global.get $vdp_latch)))
+        (global.set $vdp_first (i32.const 0)))`);
+  if (gg) {
+    // gpgx vdp_z80_data_w_gg: CRAM is written a colour (two bytes) at a time;
+    // an even address only latches the byte, the odd one stores the pair.
+    const cramStore = `        (i32.store8 (i32.add (i32.const ${CRAM})
+                      (i32.and (global.get $vdp_addr) (i32.const 63)))
+                    (i32.and (local.get $v) (i32.const 0xFF))))`;
+    if (!vdpPart.includes(cramStore)) throw new Error("sms recompile: CRAM store not found in the VDP text");
+    vdpPart = vdpPart.replace(cramStore, `        (if (i32.and (global.get $vdp_addr) (i32.const 1))
+          (then (i32.store16 (i32.add (i32.const ${CRAM}) (i32.and (global.get $vdp_addr) (i32.const 0x3E)))
+                  (i32.or (i32.shl (i32.and (local.get $v) (i32.const 0xFF)) (i32.const 8)) (global.get $cram_latch))))
+          (else (global.set $cram_latch (i32.and (local.get $v) (i32.const 0xFF))))))`) + "  (global $cram_latch (mut i32) (i32.const 0))\n";
+  }
   const japan = opts.region === "japan";
   const io0 = gg ? (japan ? 0x80 : 0xC0) : 0;
   return vdpPart + `  (global $curbudget (mut i32) (i32.const 228))
