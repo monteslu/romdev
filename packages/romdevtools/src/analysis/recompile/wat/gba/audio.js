@@ -712,8 +712,8 @@ export function audioWat(L, A, evSample, opts = {}) {
       (br $l)))
     (if ${lg("rem")}
       (then (if ${lg("id")}
-        (then ${set("au_intB", `(i32.shr_s ${g("au_intB")} ${c(8)})`)})
-        (else ${set("au_intA", `(i32.shr_s ${g("au_intA")} ${c(8)})`)})))))
+        (then ${set("au_intB", `(i32.shr_u ${g("au_intB")} ${c(8)})`)})
+        (else ${set("au_intA", `(i32.shr_u ${g("au_intA")} ${c(8)})`)})))))
   ;; GBAAudioWriteFIFO's store (the cart advances the ring)
   (func $au_fifo_write (param $b i32) (param $v i32)
     (if ${lg("b")}
