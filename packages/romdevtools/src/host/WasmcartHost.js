@@ -202,10 +202,29 @@ async function _getOffscreenGl(wantW, wantH) {
 // memory, identical to libretro's XRGB8888, so romdev's decoder handles it as-is.
 const WASMCART_FB_FORMAT = RETRO_PIXEL_FORMAT_XRGB8888;
 
-// libretro RETRO_DEVICE_ID_JOYPAD bit → wasmcart pad button field. romdev's
-// setInput speaks the libretro button vocabulary (b,y,select,start,up,down,left,
-// right,a,x,l,r,...); wasmcart pads carry the same conceptual buttons. We translate
-// the input bitmask/object into the pad object shape CartHost._writePads expects.
+// romdev's setInput speaks the libretro RetroPad vocabulary, and the RetroPad
+// names its face buttons by POSITION with the Nintendo labels: b = SOUTH,
+// a = EAST, y = WEST, x = NORTH. wasmcart names its face buttons by position
+// too, but with the Xbox labels: WC_BTN_A = SOUTH (wasmcart docs/input.md:
+// "an Xbox controller's A button = WC_BTN_A = W3C buttons[0]"), B = EAST,
+// X = WEST, Y = NORTH.
+//
+// This used to translate BY NAME (libretro 'a' -> WC_BTN_A), which pressed a
+// DIFFERENT physical button on a wasmcart than the same input call pressed on
+// every core: input({ports:[{a:true}]}) was EAST (SMS button 2) on
+// genesis_plus_gx and SOUTH (button 1) on a recompiled SMS cart, so Alex Kidd
+// punched on one and jumped on the other and a whole verification run
+// diverged from that frame. Translate by POSITION, so one input schedule
+// presses the same physical button on both sides. The spatial names
+// (south/east/west/north) are accepted too, exactly as the cores accept them.
+const RETROPAD_TO_WASMCART = {
+  b: "A", a: "B", y: "X", x: "Y",
+  south: "A", east: "B", west: "X", north: "Y",
+  l: "L", r: "R", l3: "L3", r3: "R3",
+  start: "START", select: "SELECT", up: "UP", down: "DOWN", left: "LEFT", right: "RIGHT",
+};
+
+// libretro RETRO_DEVICE_ID_JOYPAD bit indices (kept for callers that pass a bitmask).
 const _JOYPAD = {
   b: 0, y: 1, select: 2, start: 3, up: 4, down: 5, left: 6, right: 7,
   a: 8, x: 9, l: 10, r: 11, l2: 12, r2: 13, l3: 14, r3: 15,
@@ -438,6 +457,7 @@ export class WasmcartHost {
       ...(savedData ? { saveData: savedData } : {}),
     });
     if (glBackend && this.cart.usesGL) this._gl = glBackend;
+    this._guardHostWrites();
     // Surfaced in status: are this GL cart's draws real pixels or stubs?
     // "stubbed" is no longer reachable: the factory either supplies a context
     // or throws, so a loaded GL cart is always really rendering.
@@ -478,6 +498,39 @@ export class WasmcartHost {
     return this.status;
   }
 
+  /**
+   * CartHost writes 64 bytes of pad state at WCInfo.inputPtr and 20 bytes of
+   * clock (f64 time, f64 delta, u32 frame) at WCInfo.timePtr EVERY frame, with
+   * no check for 0 - so a cart that leaves either field unset gets the host
+   * scribbling over linear offset 0, underneath the running program. For a
+   * recompiled console that is the emulated zero page / direct page: four
+   * recompiler agents spent hours on "CPU bugs" that were this one write (an
+   * NES cart's PPUCTRL shadow at $10 cycled with the frame counter). timePtr
+   * is also indexed through a Float64Array, so a pointer that is not 8-byte
+   * aligned lands somewhere else entirely.
+   *
+   * Skip those writes instead, and say so: status.abiWarnings, the loadMedia
+   * result and wasm({op:'conformance'}) all carry it.
+   */
+  _guardHostWrites() {
+    const info = this.cart?.info ?? this.cart?.getInfo?.();
+    const warnings = [];
+    if (info && this.cart) {
+      if (!info.inputPtr) {
+        this.cart._writePads = () => {};
+        warnings.push({ code: "input-ptr-zero", message: "cart declares inputPtr=0 (WCInfo field 7, byte 28): pad state is NOT delivered (the host would otherwise write 64 bytes at linear offset 0 every frame). Fill the field to receive input." });
+      }
+      if (!info.timePtr || info.timePtr % 8 !== 0) {
+        this.cart._writeTime = () => {};
+        warnings.push({ code: info.timePtr ? "time-ptr-misaligned" : "time-ptr-zero",
+          message: info.timePtr
+            ? `cart declares timePtr=${info.timePtr}, which is not 8-byte aligned: the host indexes it as a Float64Array, so the clock would land at ${info.timePtr & ~7}. The clock is NOT delivered. Align WCInfo field 10 (byte 40) to 8.`
+            : "cart declares timePtr=0 (WCInfo field 10, byte 40): the clock is NOT delivered (the host would otherwise write 20 bytes at linear offset 0 every frame). Point it at 20 bytes of 8-byte-aligned memory." });
+      }
+    }
+    this.status.abiWarnings = warnings;
+  }
+
   /** Translate romdev's setInput vocabulary into the pad object
    *  CartHost._writePads expects: {connected, buttons: <BUTTON bitmask>,
    *  leftX..rightTrigger}. A pad without `connected` is ZEROED by CartHost,
@@ -485,8 +538,8 @@ export class WasmcartHost {
   _padFromInput(input) {
     const src = input && typeof input === "object" ? input : {};
     let buttons = 0;
-    for (const [name, bit] of Object.entries(BUTTON)) {
-      if (src[name.toLowerCase()]) buttons |= bit;
+    for (const [name, wc] of Object.entries(RETROPAD_TO_WASMCART)) {
+      if (src[name] && BUTTON[wc] != null) buttons |= BUTTON[wc];
     }
     return {
       connected: true,
@@ -1185,6 +1238,23 @@ export class WasmcartHost {
     if (!flagDet && hasSeedExport) {
       issues.push({ severity: "warn", code: "deterministic-unflagged",
         message: "cart exports wc_set_seed() but WC_FLAG_DETERMINISTIC isn't set - hosts won't seed it (default is a normal run). Set the flag if the cart truly honors seeded replay." });
+    }
+
+    // 7. Host-written pointers. CartHost writes pads at inputPtr and the clock
+    //    at timePtr every frame without checking them; 0 means "linear offset
+    //    0" to it, not "none". The host now skips those writes (see
+    //    _guardHostWrites), but a cart relying on them is still broken:
+    //    it gets no input, or no clock.
+    if (!info.inputPtr) {
+      issues.push({ severity: "error", code: "input-ptr-zero",
+        message: "WCInfo.inputPtr (field 7, byte 28) is 0. The cart receives NO input, and an unguarded host writes 64 bytes of pad state over linear offset 0 every frame. Point it at 64 bytes of cart memory." });
+    }
+    if (!info.timePtr) {
+      issues.push({ severity: "error", code: "time-ptr-zero",
+        message: "WCInfo.timePtr (field 10, byte 40) is 0. The cart receives NO clock, and an unguarded host writes 20 bytes (f64 time, f64 delta, u32 frame) over linear offset 0 every frame. Point it at 20 bytes of 8-byte-aligned memory." });
+    } else if (info.timePtr % 8 !== 0) {
+      issues.push({ severity: "error", code: "time-ptr-misaligned",
+        message: `WCInfo.timePtr is ${info.timePtr}, not 8-byte aligned. The host indexes it as a Float64Array, so the clock lands at ${info.timePtr & ~7}. Align it to 8.` });
     }
 
     return {
