@@ -265,3 +265,36 @@ test("the 224- and 240-line modes: height, V counter, name table at \$3700 with 
     assert.equal(r.picture.exactPct, 100, `${platform} R1=${r1.toString(16)}: ${JSON.stringify(r.picture)}`);
   }
 });
+
+// ---- VDP picture helpers for the renderer tests (display on, no interrupts) ----
+const vaddr = (a, code = 1) => [0x3E, a & 0xFF, 0xD3, 0xBF, 0x3E, ((a >> 8) & 0x3F) | (code << 6), 0xD3, 0xBF];
+const vreg = (r, v) => [0x3E, v, 0xD3, 0xBF, 0x3E, 0x80 | r, 0xD3, 0xBF];
+const outA = (v) => [0x3E, v, 0xD3, 0xBE];
+/** 8 rows of the same 4 bitplane bytes (a Mode 4 tile) at VRAM `at`. */
+const tile4 = (at, p, lbl) => [vaddr(at), [0x06, 0x08], `${lbl}:`, [...outA(p[0]), ...outA(p[1]), ...outA(p[2]), ...outA(p[3])], ["djnz", lbl]];
+
+test("315-5124 (SMS1) VDP: R3/R4 mask the tile index per bitplane pair, R6 bits 0-1 mask sprite patterns, only the first sprites zoom", T, async () => {
+  // BG tile $61 everywhere. On the 315-5124, bitplanes 0-1 come from tile
+  // $61 & (1 | R3 << 1) and 2-3 from $61 & ($3F | (R4 & 7) << 6); a sprite's
+  // pattern is (tile | $100) & (~$1C0 ^ R6 << 6). With zoom (R1 bit 0) only
+  // all but the last four sprites of a line are doubled.
+  const prog = z80([
+    [0xF3, 0x31, 0xF0, 0xDF],
+    ...tile4(0x0020, [0xFF, 0, 0, 0], "a"), ...tile4(0x0420, [0, 0, 0xFF, 0], "b"), ...tile4(0x0C20, [0xFF, 0xFF, 0xFF, 0xFF], "c"),
+    ...tile4(0x20A0, [0xFF, 0xFF, 0, 0], "d"), ...tile4(0x38A0, [0xFF, 0xFF, 0xFF, 0xFF], "e"),
+    vaddr(0x3800), [0x0E, 0x1C], "row:", [0x06, 0x20], "col:", [...outA(0x61), 0xAF, 0xD3, 0xBE], ["djnz", "col"], [0x0D], ["jr", "nz", "row"],
+    vaddr(0, 3), [0x06, 0x20, 0xAF], "cr:", [0xD3, 0xBE, 0xC6, 0x04, 0xE6, 0x3F], ["djnz", "cr"],
+    vaddr(0x3F00), outA(50), outA(50), outA(50), outA(50), outA(50), outA(208),
+    vaddr(0x3F80), ...[20, 60, 100, 140, 180].map((x) => [...outA(x), ...outA(0xC5)]),
+    vreg(3, 0x00), vreg(4, 0xF8), vreg(6, 0xFC), vreg(1, 0xC1),
+    "end:", ["jr", null, "end"]], 0x100);
+  const rom = smsImage([0xC3, 0x00, 0x01], { at: [[0x100, prog]] });
+  // a USA SYSTEM_SMS (315-5124) entry of gpgx's database, and the same cart as
+  // an unlisted one (315-5246: no masking, every sprite zoomed)
+  for (const img of [await forgeCrc32(rom, 0x4000, 0x1C951F8E), rom]) {
+    const r = await gpgxParity({ platform: "sms", rom: img, maxFrames: 4, picture: true });
+    assert.equal(r.diverged, false, divergenceText(r));
+    assert.equal(r.picture.status, "OK", JSON.stringify(r.picture));
+    assert.equal(r.picture.exactPct, 100, JSON.stringify(r.picture));
+  }
+});

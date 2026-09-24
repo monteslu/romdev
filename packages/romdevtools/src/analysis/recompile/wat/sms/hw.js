@@ -534,16 +534,21 @@ export function renderWat(opts = {}) {
       (local.set $py (i32.load8_u (i32.add (i32.const ${OBJLIST + 6}) (i32.shl (local.get $i) (i32.const 2)))))
       (if (i32.and (call $vreg (i32.const 6)) (i32.const 4))
         (then (local.set $stile (i32.add (local.get $stile) (i32.const 256)))))
-      (if (i32.ge_u (local.get $py) (i32.const 8))
+${opts.sms1 ? `      ;; 315-5124: R6 bits 0-1 mask pattern bits 6-7 (render_obj_m4 sg_mask),
+      ;; and the last four sprites of a line are never zoomed
+      (local.set $stile (i32.and (local.get $stile) (i32.or (i32.const 0x13F) (i32.shl (i32.and (call $vreg (i32.const 6)) (i32.const 3)) (i32.const 6)))))
+      (local.set $sz (select (local.get $zoom) (i32.const 0) (i32.lt_u (i32.add (local.get $i) (i32.const 4)) (i32.load8_u (i32.const ${OBJLIST})))))
+` : `      (local.set $sz (local.get $zoom))
+`}      (if (i32.ge_u (local.get $py) (i32.const 8))
         (then (local.set $stile (i32.add (local.get $stile) (i32.const 1)))
               (local.set $py (i32.sub (local.get $py) (i32.const 8)))))
       (local.set $px (i32.const 0))
       (block $sdone (loop $spx
-        (br_if $sdone (i32.ge_u (local.get $px) (i32.shl (i32.const 8) (local.get $zoom))))
+        (br_if $sdone (i32.ge_u (local.get $px) (i32.shl (i32.const 8) (local.get $sz))))
         (local.set $x (i32.add (local.get $sxx) (local.get $px)))
         (if (i32.and (i32.ge_s (local.get $x) (i32.const 0)) (i32.lt_s (local.get $x) (i32.const 256)))
           (then
-            (local.set $c (call $tile_pixel (local.get $stile) (i32.shr_u (local.get $px) (local.get $zoom)) (local.get $py)))
+            (local.set $c (call $tile_pixel (local.get $stile) (i32.shr_u (local.get $px) (local.get $sz)) (local.get $py)))
             (local.set $o (i32.load8_u (i32.add (local.get $fbrow) (local.get $x))))
             (if (i32.ne (local.get $c) (i32.const 0))
               (then
@@ -590,8 +595,12 @@ export function renderWat(opts = {}) {
   must(`    (local.set $lp (i32.add (i32.const ${LINEPROBE}) (i32.mul (local.get $y) (i32.const 8))))`,
     `    (local.set $lp (i32.add (i32.const ${LINEPROBE}) (i32.mul (select (local.get $y) (i32.const 191) (i32.lt_u (local.get $y) (i32.const 192))) (i32.const 8))))`);
 
+  // 315-5124: bitplanes 0-1 of a background tile are fetched with the tile
+  // index masked by R3 (bits 1-8), bitplanes 2-3 with it masked by R4 bits
+  // 0-2 (bits 6-8), as render_bg_m4 does on that VDP.
+  if (opts.sms1) must(`        (local.set $c (call $tile_pixel (local.get $tile)`, `        (local.set $c (call $tile_pixel_s1 (local.get $tile)`);
   const withLocals = text.replace("(local $r0 i32) (local $hs i32) (local $bd i32) (local $o i32)",
-    "(local $r0 i32) (local $hs i32) (local $bd i32) (local $o i32) (local $zoom i32)");
+    "(local $r0 i32) (local $hs i32) (local $bd i32) (local $o i32) (local $zoom i32) (local $sz i32)");
   if (withLocals === text) throw new Error("sms recompile: renderer locals not found");
   const s2 = withLocals.indexOf("    (local.set $i (i32.const 0))\n    (local.set $drawn (i32.const 0))");
   const e2 = withLocals.indexOf(endMark, s2) + endMark.length;
@@ -603,7 +612,12 @@ export function renderWat(opts = {}) {
         (global.set $sprovr (i32.const 0))
         (call $parse_satb (local.get $y))
         (return)))`);
-  return `
+  return `${opts.sms1 ? `
+  (func $tile_pixel_s1 (param $tile i32) (param $px i32) (param $py i32) (result i32)
+    (i32.or
+      (i32.and (call $tile_pixel (i32.and (local.get $tile) (i32.or (i32.const 1) (i32.shl (call $vreg (i32.const 3)) (i32.const 1)))) (local.get $px) (local.get $py)) (i32.const 3))
+      (i32.and (call $tile_pixel (i32.and (local.get $tile) (i32.or (i32.const 0x3F) (i32.shl (i32.and (call $vreg (i32.const 4)) (i32.const 7)) (i32.const 6)))) (local.get $px) (local.get $py)) (i32.const 12))))
+` : ""}
   (global $sprcol (mut i32) (i32.const 0))
   (global $sprovr (mut i32) (i32.const 0))
   (func $parse_satb (param $line i32)
