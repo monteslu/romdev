@@ -3085,6 +3085,13 @@ export class LibretroHost {
     if (p === "gba") return [...Array.from({ length: 16 }, (_, i) => `r${i}`), "cpsr"];
     if (p === "gb" || p === "gbc") return ["sp", "hl", "bc", "de"];
     if (p === "nes") return ["a", "x", "y", "s", "p"];
+    // genesis_plus_gx: one filler for both CPUs (17 columns); the 68000's
+    // d0-d7, a0-a7 (a7 = the active stack pointer), sr, or on SMS / Game Gear
+    // the Z80's (r as LD A,R reads it; af2.. = the alternate set; the rest 0).
+    if (p === "genesis" || p === "md") return [...Array.from({ length: 8 }, (_, i) => `d${i}`), ...Array.from({ length: 8 }, (_, i) => `a${i}`), "sr"];
+    if (p === "sms" || p === "gg") return ["af", "bc", "de", "hl", "ix", "iy", "sp", "r", "af2", "bc2", "de2", "hl2", "i"];
+    // snes9x: p = the status byte as PHP pushes it, emulation flag at bit 8.
+    if (p === "snes") return ["a", "x", "y", "s", "d", "db", "p"];
     return [];
   }
 

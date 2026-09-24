@@ -1,8 +1,8 @@
 diff --git a/cpuexec.cpp b/cpuexec.cpp
-index aa43b2f..7f0074a 100644
+index aa43b2f..dd4beea 100644
 --- a/cpuexec.cpp
 +++ b/cpuexec.cpp
-@@ -19,8 +19,49 @@
+@@ -19,8 +19,72 @@
  
  static inline void S9xReschedule (void);
  
@@ -40,6 +40,29 @@ index aa43b2f..7f0074a 100644
 +}
 +}
 +
++/* romdev instruction-trace register columns (romdev_trace_provide_regs, 7):
++ * a, x, y, s, d, db, p. p is the status byte as PHP would push it (the N/Z/C/V
++ * flags live unpacked in ICPU between instructions, so they are packed here
++ * without touching Registers.PL) with the emulation flag at bit 8. */
++extern "C" {
++static void romdev_snes_trace_regs (unsigned *dst)
++{
++	unsigned pl = (Registers.PL & ~(Zero | Negative | Carry | Overflow))
++		| ICPU._Carry | ((ICPU._Zero == 0) << 1) | (ICPU._Negative & 0x80) | (ICPU._Overflow << 6);
++	dst[0] = Registers.A.W;
++	dst[1] = Registers.X.W;
++	dst[2] = Registers.Y.W;
++	dst[3] = Registers.S.W;
++	dst[4] = Registers.D.W;
++	dst[5] = Registers.DB;
++	dst[6] = (pl & 0xff) | (Registers.P.W & 0x100);
++}
++}
++static struct RomdevTraceRegsInit
++{
++	RomdevTraceRegsInit () { romdev_trace_provide_regs(romdev_snes_trace_regs, 7); }
++} romdev_trace_regs_init;
++
  void S9xMainLoop (void)
  {
 +	/* romdev: once a breakpoint/watchdog hit has frozen this CPU, KEEP it
@@ -52,7 +75,7 @@ index aa43b2f..7f0074a 100644
  	#define CHECK_FOR_IRQ_CHANGE() \
  	if (Timings.IRQFlagChanging) \
  	{ \
-@@ -44,7 +85,7 @@ void S9xMainLoop (void)
+@@ -44,7 +108,7 @@ void S9xMainLoop (void)
  
  	for (;;)
  	{
@@ -61,7 +84,7 @@ index aa43b2f..7f0074a 100644
  		{
  			#ifdef DEBUGGER
  			if (Settings.TraceHCEvent)
-@@ -78,7 +119,7 @@ void S9xMainLoop (void)
+@@ -78,7 +142,7 @@ void S9xMainLoop (void)
  			CPU.IRQLine = TRUE;
  		}
  
@@ -70,7 +93,7 @@ index aa43b2f..7f0074a 100644
  		{
  			if (CPU.WaitingForInterrupt)
  			{
-@@ -135,6 +176,20 @@ void S9xMainLoop (void)
+@@ -135,6 +199,20 @@ void S9xMainLoop (void)
  			break;
  		}
  

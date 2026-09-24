@@ -1,8 +1,8 @@
 diff --git a/core/m68k/m68kcpu.c b/core/m68k/m68kcpu.c
-index 36112a5..600e44b 100644
+index 36112a5..3474629 100644
 --- a/core/m68k/m68kcpu.c
 +++ b/core/m68k/m68kcpu.c
-@@ -31,6 +31,51 @@ static int irq_latency;
+@@ -31,6 +31,66 @@ static int irq_latency;
  
  m68ki_cpu_core m68k;
  
@@ -21,6 +21,21 @@ index 36112a5..600e44b 100644
 + * on Genesis the sound Z80 runs concurrently with the m68k.) */
 +unsigned int  romdev_m68k_instr_pc = 0xFFFFFFFF;
 +unsigned int  romdev_z80_instr_pc  = 0xFFFFFFFF;
++
++/* Instruction-trace register columns (romdev_trace_provide_regs). One filler
++ * serves both CPUs, so each sets romdev_gpgx_trace_cpu right before its dispatch
++ * hook: 0 = 68000 (d0-d7, a0-a7 with a7 the active stack pointer, sr as
++ * m68ki_get_sr() packs it), 1 = Z80 (romdev_z80_trace_regs in z80.c; the main
++ * CPU on SMS / Game Gear). Registered by z80_init, which every system runs. */
++int romdev_gpgx_trace_cpu = 0;
++extern void romdev_z80_trace_regs(unsigned *dst);
++void romdev_gpgx_trace_regs(unsigned *dst)
++{
++   int i;
++   if (romdev_gpgx_trace_cpu) { romdev_z80_trace_regs(dst); return; }
++   for (i = 0; i < 16; i++) dst[i] = m68ki_cpu.dar[i];
++   dst[16] = m68ki_get_sr();
++}
 +
 +void romdev_m68k_snap(int kind)
 +{
@@ -54,7 +69,7 @@ index 36112a5..600e44b 100644
  
  /* ======================================================================== */
  /* =============================== CALLBACKS ============================== */
-@@ -262,6 +307,18 @@ void m68k_run(unsigned int cycles)
+@@ -262,6 +322,18 @@ void m68k_run(unsigned int cycles)
      return;
    }
  
@@ -73,7 +88,7 @@ index 36112a5..600e44b 100644
    /* Check interrupt mask to process IRQ if needed */
    m68ki_check_interrupts();
  
-@@ -284,6 +341,23 @@ void m68k_run(unsigned int cycles)
+@@ -284,6 +356,24 @@ void m68k_run(unsigned int cycles)
  
    while (m68k.cycles < cycles)
    {
@@ -81,6 +96,7 @@ index 36112a5..600e44b 100644
 +     * latch it for the m68k mid-instruction R/W hooks, then ask the shared lib whether
 +     * to FREEZE (coverage + watchdog + pc-break/single-step live in romdev_debug.c). */
 +    romdev_m68k_instr_pc = REG_PC;
++    romdev_gpgx_trace_cpu = 0;
 +
 +    if (romdev_on_dispatch_ex(REG_PC, m68k.cycles, 0))
 +    {
@@ -10413,10 +10429,10 @@ index 8f3aca8..8978292 100644
 +  }
 +}
 diff --git a/core/z80/z80.c b/core/z80/z80.c
-index 74d5053..54f9512 100644
+index 74d5053..3ab6eab 100644
 --- a/core/z80/z80.c
 +++ b/core/z80/z80.c
-@@ -1,3481 +1,3567 @@
+@@ -1,3481 +1,3589 @@
 -/*****************************************************************************
 - *
 - *   z80.c
@@ -14556,6 +14572,24 @@ index 74d5053..54f9512 100644
 +  romdev_snap_kind = kind;
 +}
 +
++/* romdev instruction-trace register columns for the Z80 (called through
++ * romdev_gpgx_trace_regs in m68kcpu.c, 17 columns): af, bc, de, hl, ix, iy, sp,
++ * r (as LD A,R reads it: (r & 127) | (r2 & 128)), af', bc', de', hl', i, then
++ * zero. The hook runs before R is bumped for the fetch, so r is the value the
++ * previous instruction left. */
++extern int romdev_gpgx_trace_cpu;
++extern void romdev_gpgx_trace_regs(unsigned *dst);
++void romdev_z80_trace_regs(unsigned *dst)
++{
++  int i;
++  dst[0] = Z80.af.w.l; dst[1] = Z80.bc.w.l; dst[2] = Z80.de.w.l; dst[3] = Z80.hl.w.l;
++  dst[4] = Z80.ix.w.l; dst[5] = Z80.iy.w.l; dst[6] = Z80.sp.w.l;
++  dst[7] = (Z80.r & 0x7f) | (Z80.r2 & 0x80);
++  dst[8] = Z80.af2.w.l; dst[9] = Z80.bc2.w.l; dst[10] = Z80.de2.w.l; dst[11] = Z80.hl2.w.l;
++  dst[12] = Z80.i;
++  for (i = 13; i < 17; i++) dst[i] = 0;
++}
++
 +#define RM(addr) romdev_z80_rm((addr))
 +INLINE unsigned char romdev_z80_rm(unsigned int addr)
 +{
@@ -17256,6 +17290,9 @@ index 74d5053..54f9512 100644
 +  UINT8 *padc = &SZHVC_add[256*256];
 +  UINT8 *psub = &SZHVC_sub[  0*256];
 +  UINT8 *psbc = &SZHVC_sub[256*256];
++  /* romdev: per-instruction register columns for the instruction trace (17: the
++   * 68000's d0-d7/a0-a7/sr, or the Z80's, whichever CPU dispatched the entry) */
++  romdev_trace_provide_regs(romdev_gpgx_trace_regs, 17);
 +  for (oldval = 0; oldval < 256; oldval++)
 +  {
 +    for (newval = 0; newval < 256; newval++)
@@ -17406,6 +17443,7 @@ index 74d5053..54f9512 100644
 +     * the interrupted one. Before, a pc breakpoint on $0038 never fired on an IRQ
 +     * entry and the instruction trace recorded the interrupted pc instead of $0038. */
 +    romdev_z80_instr_pc = PC;
++    romdev_gpgx_trace_cpu = 1;
 +
 +    if (romdev_on_dispatch_ex(PC, Z80.cycles, 1))
 +    {
