@@ -82,18 +82,24 @@ function segaHeader(img) {
  *                else the header region code (5-7 = Game Gear).
  *   mapper       'codemasters' when the Codemasters header checksum pair at
  *                $7FE6/$7FE8 sums to $10000; 'korean-a000' when bank 0
- *                stores to $A000 and never to $FFFF; else 'sega'.
+ *                stores to $A000 and never to $FFFF; 'none' for a cart of
+ *                48KB or less (gpgx maps no paging registers then); else
+ *                'sega'.
  *   pagesSlot1   whether the ROM contains a direct store to the slot-1 page
  *                register $FFFE (ld ($FFFE),a / ld ($FFFE),hl /
  *                ld ($FFFD),hl, ED and DD/FD 16-bit forms). A cart that pages
  *                slot 1 needs per-bank arms for $4000-$7FFF. A false
  *                positive only costs arms (bank 1 stays mapped); a false
  *                negative runs the wrong bank's code, so the scan errs wide.
+ *   pagesSlot0   the same for slot 0: a direct store to $FFFD (Sega) or
+ *                $0000 (Codemasters). Without it, code run from a paged
+ *                slot 0 traps instead of running page 0's arms.
  *
  * Options (all optional):
  *   platform: 'sms'|'gg'
- *   mapper: 'sega'|'codemasters'|'korean-a000'
+ *   mapper: 'sega'|'codemasters'|'korean-a000'|'none'
  *   pagesSlot1: boolean
+ *   pagesSlot0: boolean
  *   slot1Bank: number        bank in slot 1 before the cart writes $FFFE (1)
  *   ramRegions: [{cpu, bytes, bank?, romOffset?, src?}]
  *                            RAM-resident code compiled as arms. src:'snapshot'
@@ -173,14 +179,29 @@ export function describe(rom, opts = {}) {
   const segaStores = countPattern(bank0, [0x32, 0xFF, 0xFF]);
   let mapper = cmHeader ? "codemasters" : (koreanStores > 0 && segaStores === 0) ? "korean-a000" : "sega";
   const mapperEvidence = { codemastersHeader: cmHeader, bank0StoresA000: koreanStores, bank0StoresFFFF: segaStores };
+  // gpgx sms_cart_init: a cart of 48KB or less has no mapper hardware
+  // ($FFFC-$FFFF are plain RAM); the legacy model kept sms-wat's Sega mapper.
+  if (mapper === "sega" && img.length <= 0xC000 && opts.legacy !== true) mapper = "none";
   if (opts.mapper) mapper = opts.mapper;
-  if (!["sega", "codemasters", "korean-a000"].includes(mapper)) throw new Error(`sms recompile: unknown mapper '${mapper}' (sega, codemasters, korean-a000)`);
+  if (!["sega", "codemasters", "korean-a000", "none"].includes(mapper)) throw new Error(`sms recompile: unknown mapper '${mapper}' (sega, codemasters, korean-a000, none)`);
 
   const slot1Pats = [[0x32, 0xFE, 0xFF], [0x22, 0xFE, 0xFF], [0x22, 0xFD, 0xFF]];
   for (const o of [0x43, 0x53, 0x63, 0x73]) slot1Pats.push([0xED, o, 0xFE, 0xFF], [0xED, o, 0xFD, 0xFF]);
   for (const p of [0xDD, 0xFD]) slot1Pats.push([p, 0x22, 0xFE, 0xFF], [p, 0x22, 0xFD, 0xFF]);
   const slot1Stores = slot1Pats.reduce((a, p) => a + countPattern(img, p), 0);
   const pagesSlot1 = typeof opts.pagesSlot1 === "boolean" ? opts.pagesSlot1 : slot1Stores > 0;
+  // Slot 0 ($0000-$3FFF) is paged by $FFFD on the Sega mapper (its first 1KB
+  // stays on page 0) and by $0000 on the Codemasters one (all of it). Found
+  // the same way as slot 1: any direct store to the register.
+  const slot0Reg = mapper === "codemasters" ? [0x00, 0x00] : mapper === "sega" ? [0xFD, 0xFF] : null;
+  let slot0Stores = 0;
+  if (slot0Reg && opts.legacy !== true) {
+    const pats = [[0x32, ...slot0Reg]];
+    if (mapper === "sega") pats.push([0x22, 0xFC, 0xFF], [0xED, 0x43, 0xFC, 0xFF], [0xED, 0x53, 0xFC, 0xFF], [0xED, 0x63, 0xFC, 0xFF], [0xED, 0x73, 0xFC, 0xFF], [0xDD, 0x22, 0xFC, 0xFF], [0xFD, 0x22, 0xFC, 0xFF]);
+    for (const pre of [[0x22], [0xED, 0x43], [0xED, 0x53], [0xED, 0x63], [0xED, 0x73], [0xDD, 0x22], [0xFD, 0x22]]) pats.push([...pre, ...slot0Reg]);
+    slot0Stores = pats.reduce((a, p) => a + countPattern(img, p), 0);
+  }
+  const pagesSlot0 = typeof opts.pagesSlot0 === "boolean" ? opts.pagesSlot0 && slot0Reg !== null : slot0Stores > 0;
 
   let ramRegions = Array.isArray(opts.ramRegions) ? opts.ramRegions.map((r) => ({ bank: 0, romOffset: 0, ...r })) : [];
   if (!ramRegions.length && (Number.isInteger(opts.ramSnapshotFrame) || opts.ramCode)) {
@@ -225,6 +246,9 @@ export function describe(rom, opts = {}) {
     mapperEvidence,
     pagesSlot1,
     slot1StoreSites: slot1Stores,
+    pagesSlot0,
+    slot0StoreSites: slot0Stores,
+    slot0From: mapper === "codemasters" ? 0 : 0x400,
     slot1Bank: Number.isInteger(opts.slot1Bank) ? opts.slot1Bank : 1,
     ramRegions,
     ramSnapshot: typeof opts.ramSnapshot === "string" ? opts.ramSnapshot
@@ -330,16 +354,26 @@ export function z80Length(img, i) {
 
 /**
  * Every arm: [key, cpuAddress, bank, size], sorted by key, where key is the
- * address for slot 0 (and slot 1 when it is not paged) and
+ * address for slot 0 page 0 (and slot 1 when it is not paged) and
  * bank*0x10000+address for the paged windows.
  */
-export function fullBlocks(img, pagesSlot1) {
+export function fullBlocks(img, pagesSlot1, slot0From = null) {
   const nbank = Math.floor(img.length / 0x4000);
   const blocks = new Map();
   for (let addr = 0; addr < 0x4000; addr++) {
     if (addr >= img.length) break;
     const ln = z80Length(img, addr);
     if (ln > 0) blocks.set(addr, [addr, addr, 0, ln]);
+  }
+  // A paged slot 0 (slot0From = first paged address) gets per-bank arms too.
+  if (slot0From !== null) {
+    for (let bank = 1; bank < nbank; bank++) {
+      for (let addr = slot0From; addr < 0x4000; addr++) {
+        const off = bank * 0x4000 + addr;
+        const ln = z80Length(img, off);
+        if (ln > 0) blocks.set(bank * 0x10000 + addr, [bank * 0x10000 + addr, addr, bank, ln]);
+      }
+    }
   }
   if (pagesSlot1) {
     for (let bank = 0; bank < nbank; bank++) {
@@ -375,12 +409,31 @@ export function fullBlocks(img, pagesSlot1) {
 function align(x, a = 0x10000) { return Math.ceil(x / a) * a; }
 
 /**
+ * $0000-$BFFF as a cart with no mapper presents it (gpgx mapper_reset):
+ * 1KB pages, the first 32KB mirrored over $0000-$7FFF, $8000-$BFFF the rest
+ * of a 48KB ROM (mirrored) or open bus ($FF) for 32KB or less.
+ * @param {Uint8Array} img
+ */
+export function noMapperImage(img) {
+  const pages = Math.ceil(img.length / 0x400);
+  const out = new Uint8Array(0xC000).fill(0xFF);
+  for (let i = 0; i < 0x30; i++) {
+    let src;
+    if (i < 0x20) src = i % pages;
+    else if (pages <= 0x20) continue;
+    else src = 0x20 + (i % (pages - 0x20));
+    out.set(img.subarray(src * 0x400, src * 0x400 + 0x400), i * 0x400);
+  }
+  return out;
+}
+
+/**
  * @param {number} narms
  * @param {number} romLen
  * @param {number} nbank
  * @param {boolean} pagesSlot1
  */
-export function computeLayout(narms, romLen, nbank, pagesSlot1) {
+export function computeLayout(narms, romLen, nbank, pagesSlot1, pagesSlot0 = false) {
   const g = {};
   g.ABI = 0xA0000;
   g.FB = 0xA1000;
@@ -397,7 +450,8 @@ export function computeLayout(narms, romLen, nbank, pagesSlot1) {
   g.BMAPP = align(g.BMAP0 + (pagesSlot1 ? 0x4000 : 0x8000) * 4);
   g.BMAP1 = align(g.BMAPP + nbank * 0x4000 * 4);
   g.BMAPR = align(g.BMAP1 + (pagesSlot1 ? nbank * 0x4000 * 4 : 4));
-  g.TOP = align(g.BMAPR + 0x2000 * 4);
+  g.BMAPS0 = align(g.BMAPR + 0x2000 * 4);
+  g.TOP = align(g.BMAPS0 + (pagesSlot0 ? nbank * 0x4000 * 4 : 4));
   return g;
 }
 
@@ -597,6 +651,151 @@ ${RAMMAP_LOOKUP}    (i32.const 0))
 `;
 }
 
+/**
+ * The memory map as genesis_plus_gx's sms_cart.c pages it (exact model).
+ *  - 'sega' (write_mapper_sega / mapper_16k_w): $FFFC bit 3 puts cart RAM at
+ *    $8000-$BFFF (bit 2 = its upper 16KB), bit 4 at $C000-$FFFF, bits 0-1
+ *    add (4 - n) * 8 to every page number written from then on; $FFFD pages
+ *    $0400-$3FFF, $FFFE $4000-$7FFF, $FFFF $8000-$BFFF (unless cart RAM is
+ *    there); the register write itself also lands in (the now mapped) RAM.
+ *  - 'codemasters' (write_mapper_codies): $0000, $4000 and $8000 page the
+ *    three slots (all of slot 0), bit 7 of the $4000 value puts 8KB of cart
+ *    RAM at $A000-$BFFF; the register writes do not reach memory.
+ *  - 'korean-a000' (write_mapper_korea_16k_v1): $A000 pages slot 2.
+ *  - 'none': no registers; the image is already the CPU's view (noMapperImage).
+ * Code fetched from a slot the scan did not find paged traps (a page other
+ * than the one its arms were compiled for) instead of running wrong code.
+ */
+function bankHelpersExactWat(G, cfg, nbank) {
+  const { ROMIMG, CARTRAM, BMAP0, BMAPP, BMAP1, BMAPR, BMAPS0 } = G;
+  const M = cfg.mapper;
+  const sega = M === "sega", cm = M === "codemasters", kr = M === "korean-a000";
+  const page = (v) => `(i32.rem_u ${v} (i32.const ${nbank}))`;
+  const romAt = (bank, off) => `(i32.load8_u (i32.add (i32.const ${ROMIMG}) (i32.add (i32.mul ${bank} (i32.const 0x4000)) ${off})))`;
+  const cartRam = (off) => `(i32.add (i32.const ${CARTRAM}) ${off})`;
+  const SLOT1_LOOKUP = cfg.pagesSlot1
+    ? `(i32.load (i32.add (i32.const ${BMAP1}) (i32.mul (i32.add (i32.mul (global.get $bank1) (i32.const 0x4000)) (i32.sub (local.get $a) (i32.const 0x4000))) (i32.const 4))))`
+    : `(i32.load (i32.add (i32.const ${BMAP0}) (i32.mul (local.get $a) (i32.const 4))))`;
+  const from0 = cfg.slot0From ?? 0x400;
+  const SLOT0_LOOKUP = cfg.pagesSlot0
+    ? `(if (i32.ge_u (local.get $a) (i32.const ${from0}))
+        (then (return (i32.load (i32.add (i32.const ${BMAPS0}) (i32.mul (i32.add (i32.mul (global.get $bank0) (i32.const 0x4000)) (local.get $a)) (i32.const 4)))))))`
+    : (sega || cm ? `(if (i32.and (i32.ge_u (local.get $a) (i32.const ${from0})) (i32.ne (global.get $bank0) (i32.const 0))) (then (return (i32.const 0))))` : "");
+  const SLOT1_GUARD = !cfg.pagesSlot1 && M !== "none"
+    ? `(if (i32.ne (global.get $bank1) (i32.const ${cfg.slot1Bank})) (then (return (i32.const 0))))` : "";
+  const RAMMAP_LOOKUP = cfg.ramRegions.length ? `    (if (i32.ge_u (local.get $a) (i32.const 0xC000))
+      (then (return (i32.load (i32.add (i32.const ${BMAPR})
+        (i32.mul (i32.and (local.get $a) (i32.const 0x1FFF)) (i32.const 4)))))))
+` : "";
+  return `
+  (global $bank2 (mut i32) (i32.const 0))
+  (global $bank1 (mut i32) (i32.const ${cfg.slot1Bank}))
+  (global $bank0 (mut i32) (i32.const 0))
+  (global $carry (mut i32) (i32.const 0))
+  (global $eiarm (mut i32) (i32.const 0))
+  (global $eidelay (mut i32) (i32.const 0))
+  (global $ctl (mut i32) (i32.const 0))
+  (global $fcr3 (mut i32) (i32.const 2))
+  (global $cmram (mut i32) (i32.const 0))
+
+  (func $rd8 (param $addr i32) (result i32)
+    (local $a i32)
+    (local.set $a (i32.and (local.get $addr) (i32.const 0xFFFF)))
+    (if (i32.ge_u (local.get $a) (i32.const 0xC000))
+      (then
+${sega ? `        (if (i32.and (global.get $ctl) (i32.const 0x10))
+          (then (return (i32.load8_u ${cartRam("(i32.and (local.get $a) (i32.const 0x3FFF))")}))))
+` : ""}        (return (i32.load8_u (i32.or (i32.and (local.get $a) (i32.const 0x1FFF)) (i32.const 0xC000))))))
+    (if (i32.ge_u (local.get $a) (i32.const 0x8000))
+      (then
+${sega ? `        (if (i32.and (global.get $ctl) (i32.const 0x08))
+          (then (return (i32.load8_u ${cartRam("(i32.or (i32.shl (i32.and (global.get $ctl) (i32.const 4)) (i32.const 12)) (i32.and (local.get $a) (i32.const 0x3FFF)))")}))))
+` : ""}${cm ? `        (if (i32.and (global.get $cmram) (i32.ge_u (local.get $a) (i32.const 0xA000)))
+          (then (return (i32.load8_u ${cartRam("(i32.and (local.get $a) (i32.const 0x3FFF))")}))))
+` : ""}        (return ${romAt("(global.get $bank2)", "(i32.sub (local.get $a) (i32.const 0x8000))")})))
+    (if (i32.ge_u (local.get $a) (i32.const 0x4000))
+      (then (return ${romAt("(global.get $bank1)", "(i32.sub (local.get $a) (i32.const 0x4000))")})))
+${sega ? `    (if (i32.lt_u (local.get $a) (i32.const 0x400)) (then (return (i32.load8_u (i32.add (i32.const ${ROMIMG}) (local.get $a))))))
+` : ""}    ${romAt("(global.get $bank0)", "(local.get $a)")})
+${sega ? `
+  ;; gpgx mapper_16k_w for the Sega mapper's four registers
+  (func $mapper_w (param $o i32) (param $v i32)
+    (local $p i32)
+    (local.set $p ${page("(local.get $v)")})
+    (if (i32.and (global.get $ctl) (i32.const 3))
+      (then (local.set $p ${page(`(i32.add (local.get $p) (i32.shl (i32.sub (i32.const 4) (i32.and (global.get $ctl) (i32.const 3))) (i32.const 3)))`)})))
+    (if (i32.eqz (local.get $o))
+      (then (global.set $ctl (local.get $v))
+            (if (i32.eqz (i32.and (local.get $v) (i32.const 0x08)))
+              (then (local.set $p ${page("(global.get $fcr3)")})
+                    (if (i32.and (local.get $v) (i32.const 3))
+                      (then (local.set $p ${page(`(i32.add (local.get $p) (i32.shl (i32.sub (i32.const 4) (i32.and (local.get $v) (i32.const 3))) (i32.const 3)))`)})))
+                    (global.set $bank2 (local.get $p))))
+            (return)))
+    (if (i32.eq (local.get $o) (i32.const 1)) (then (global.set $bank0 (local.get $p)) (return)))
+    (if (i32.eq (local.get $o) (i32.const 2)) (then (global.set $bank1 (local.get $p)) (return)))
+    (global.set $fcr3 (local.get $v))
+    (if (i32.eqz (i32.and (global.get $ctl) (i32.const 0x08))) (then (global.set $bank2 (local.get $p)))))
+` : ""}
+  (func $wr8 (param $addr i32) (param $v i32)
+    (local $a i32)
+    (local.set $a (i32.and (local.get $addr) (i32.const 0xFFFF)))
+    (local.set $v (i32.and (local.get $v) (i32.const 0xFF)))
+    (if (i32.lt_u (local.get $a) (i32.const 0xC000))
+      (then
+${kr ? `        (if (i32.eq (local.get $a) (i32.const 0xA000)) (then (global.set $bank2 ${page("(local.get $v)")}) (return)))
+` : ""}${cm ? `        (if (i32.eqz (local.get $a)) (then (global.set $bank0 ${page("(local.get $v)")}) (return)))
+        (if (i32.eq (local.get $a) (i32.const 0x4000))
+          (then (global.set $bank1 ${page("(local.get $v)")})
+                (global.set $cmram (i32.and (local.get $v) (i32.const 0x80)))
+                (return)))
+        (if (i32.eq (local.get $a) (i32.const 0x8000)) (then (global.set $bank2 ${page("(local.get $v)")}) (return)))
+        (if (i32.and (global.get $cmram) (i32.ge_u (local.get $a) (i32.const 0xA000)))
+          (then (i32.store8 ${cartRam("(i32.and (local.get $a) (i32.const 0x3FFF))")} (local.get $v))))
+` : ""}${sega ? `        (if (i32.and (i32.ne (i32.and (global.get $ctl) (i32.const 0x08)) (i32.const 0)) (i32.ge_u (local.get $a) (i32.const 0x8000)))
+          (then (i32.store8 ${cartRam("(i32.or (i32.shl (i32.and (global.get $ctl) (i32.const 4)) (i32.const 12)) (i32.and (local.get $a) (i32.const 0x3FFF)))")} (local.get $v))))
+` : ""}        (return)))
+${sega ? `    (if (i32.ge_u (local.get $a) (i32.const 0xFFFC)) (then (call $mapper_w (i32.and (local.get $a) (i32.const 3)) (local.get $v))))
+    (if (i32.and (global.get $ctl) (i32.const 0x10))
+      (then (i32.store8 ${cartRam("(i32.and (local.get $a) (i32.const 0x3FFF))")} (local.get $v)) (return)))
+` : ""}    (i32.store8 (i32.or (i32.and (local.get $a) (i32.const 0x1FFF)) (i32.const 0xC000)) (local.get $v)))
+
+  (func $rd16 (param $addr i32) (result i32)
+    (i32.or (call $rd8 (local.get $addr))
+            (i32.shl (call $rd8 (i32.add (local.get $addr) (i32.const 1))) (i32.const 8))))
+  (func $wr16 (param $addr i32) (param $v i32)
+    (call $wr8 (local.get $addr) (i32.and (local.get $v) (i32.const 0xFF)))
+    (call $wr8 (i32.add (local.get $addr) (i32.const 1)) (i32.shr_u (local.get $v) (i32.const 8))))
+
+  (func $push16 (param $v i32)
+    (global.set $sp (i32.and (i32.sub (global.get $sp) (i32.const 2)) (i32.const 0xFFFF)))
+    (call $wr16 (global.get $sp) (local.get $v)))
+  (func $pop16 (result i32)
+    (local $v i32)
+    (local.set $v (call $rd16 (global.get $sp)))
+    (global.set $sp (i32.and (i32.add (global.get $sp) (i32.const 2)) (i32.const 0xFFFF)))
+    (local.get $v))
+
+  (func $pop16_logged (param $frompc i32) (result i32) (call $pop16))
+
+  (func $blockid (param $pc i32) (result i32)
+    (local $a i32)
+    (local.set $a (i32.and (local.get $pc) (i32.const 0xFFFF)))
+    (if (i32.lt_u (local.get $a) (i32.const 0x4000))
+      (then
+        ${SLOT0_LOOKUP}
+        (return (i32.load (i32.add (i32.const ${BMAP0}) (i32.mul (local.get $a) (i32.const 4)))))))
+    (if (i32.lt_u (local.get $a) (i32.const 0x8000))
+      (then ${SLOT1_GUARD} (return ${SLOT1_LOOKUP})))
+    (if (i32.lt_u (local.get $a) (i32.const 0xC000))
+      (then (return (i32.load (i32.add (i32.const ${BMAPP})
+        (i32.mul (i32.add (i32.mul (global.get $bank2) (i32.const 0x4000))
+                          (i32.sub (local.get $a) (i32.const 0x8000)))
+                 (i32.const 4)))))))
+${RAMMAP_LOOKUP}    (i32.const 0))
+`;
+}
+
 /** Block maps init, CRAM->RGBA present, the wasmcart ABI exports and wc_render's frame loop. */
 function abiWat(G, cfg, n, platform) {
   const { ABI, FB, AUDIO, TRACE, BTAB, BMAP0, BMAPP, BMAP1, BMAPR } = G;
@@ -607,6 +806,14 @@ function abiWat(G, cfg, n, platform) {
                  (i32.mul (i32.and (local.get $a) (i32.const 0x1FFF)) (i32.const 4)))
                            (i32.add (local.get $i) (i32.const 1)))))
 ` : "";
+  const SLOT0_STORE = cfg.pagesSlot0 ? `      (if (i32.lt_u (local.get $a) (i32.const 0x4000))
+        (then (if (i32.ge_u (local.get $a) (i32.const ${cfg.slot0From}))
+          (then (i32.store (i32.add (i32.const ${G.BMAPS0}) (i32.mul (i32.add (i32.mul (local.get $bk) (i32.const 0x4000)) (local.get $a)) (i32.const 4)))
+                           (i32.add (local.get $i) (i32.const 1))))
+          (else (i32.store (i32.add (i32.const ${BMAP0}) (i32.mul (local.get $a) (i32.const 4)))
+                           (i32.add (local.get $i) (i32.const 1)))))))` : `      (if (i32.lt_u (local.get $a) (i32.const 0x4000))
+        (then (i32.store (i32.add (i32.const ${BMAP0}) (i32.mul (local.get $a) (i32.const 4)))
+                           (i32.add (local.get $i) (i32.const 1)))))`;
   const SLOT1_STORE = cfg.pagesSlot1
     ? `(i32.store (i32.add (i32.const ${BMAP1}) ` +
       "(i32.mul (i32.add (i32.mul (local.get $bk) (i32.const 0x4000)) " +
@@ -638,6 +845,8 @@ function abiWat(G, cfg, n, platform) {
     ...(platform === "gg" ? [] : [[0, 0x36], [1, 0x80]]),
     [2, 0xFF], [3, 0xFF], [4, 0xFF], [5, 0xFF], [6, 0xFF], [10, 0xFF],
   ].map(([r, v]) => `    (i32.store8 (i32.const ${VREG + r}) (i32.const ${v}))\n`).join("") + "    (global.set $linectr (i32.const 0xFF))\n" +
+    // gpgx z80_init: every register 0 except F, which powers on as ZF.
+    "    (global.set $f (i32.const 0x40))\n" +
     // gpgx hard reset (gen_reset): the CPU starts ((262 - 192 + 159) lines +
     // 1004) master cycles into the first frame, rounded to 7 then 15 master
     // cycles: 784170 = 52278 T after the frame's line-192 start. Carried as
@@ -646,7 +855,7 @@ function abiWat(G, cfg, n, platform) {
     // Sega mapper reset (gpgx sms_cart_reset): slot 2 holds page 2 until the
     // cart writes $FFFF. Without a BIOS gpgx also leaves the memory-control
     // value $A8 at $C000 on a Master System, as the BIOS would.
-    (cfg.mapper === "sega" ? `    (global.set $bank2 (i32.const ${2 % cfg.banks}))\n` : "") +
+    (cfg.mapper === "sega" || cfg.mapper === "none" ? `    (global.set $bank2 (i32.const ${2 % cfg.banks}))\n` : "") +
     (platform === "gg" ? "" : "    (i32.store8 (i32.const 0xC000) (i32.const 0xA8))\n");
   // gpgx reloads the line counter from R10 BEFORE line 261's CPU run, so a
   // write to R10 during that line takes effect a frame later.
@@ -673,9 +882,7 @@ function abiWat(G, cfg, n, platform) {
       (br_if $d (i32.ge_u (local.get $i) (i32.const ${n})))
       (local.set $a  (i32.load16_u (i32.add (i32.const ${BTAB}) (i32.mul (local.get $i) (i32.const 4)))))
       (local.set $bk (i32.load8_u  (i32.add (i32.const ${BTAB + 2}) (i32.mul (local.get $i) (i32.const 4)))))
-      (if (i32.lt_u (local.get $a) (i32.const 0x4000))
-        (then (i32.store (i32.add (i32.const ${BMAP0}) (i32.mul (local.get $a) (i32.const 4)))
-                           (i32.add (local.get $i) (i32.const 1)))))
+${SLOT0_STORE}
       (if (i32.and (i32.ge_u (local.get $a) (i32.const 0x4000))
                    (i32.lt_u (local.get $a) (i32.const 0x8000)))
         (then ${SLOT1_STORE}))
@@ -727,7 +934,11 @@ ${CRAMBODY}
     (global.set $bank2 (i32.const 0))
     (global.set $pc (i32.const 0))
     (global.set $sp (i32.const 0xDFF0))
-${POWER_ON})
+${cfg.legacy ? "" : `    ;; gpgx sram_init: backup RAM powers on as $FF
+    (memory.fill (i32.const ${G.CARTRAM}) (i32.const 0xFF) (i32.const 0x8000))
+`}${!cfg.legacy && platform === "sms" && cfg.region === "japan" ? `    ;; gpgx gen_reset: a Japanese Master System's RAM powers on as $F0
+    (memory.fill (i32.const 0xC000) (i32.const 0xF0) (i32.const 0x2000))
+` : ""}${POWER_ON})
 
   (func $irq_line (result i32)
     (i32.and
@@ -912,7 +1123,7 @@ class Emitter {
       }
       return null;
     }
-    if (addr < 0x4000) return addr;
+    if (addr < 0x4000) return this.cfg.pagesSlot0 && addr >= this.cfg.slot0From ? bank * 0x4000 + addr : addr;
     if (addr < 0x8000) return this.cfg.pagesSlot1 ? bank * 0x4000 + (addr - 0x4000) : this.cfg.slot1Bank * 0x4000 + (addr - 0x4000);
     return bank * 0x4000 + (addr - 0x8000);
   }
@@ -1249,7 +1460,6 @@ export async function* emitWat(rom, opts = {}) {
   let cfg = describe(IMG, opts);
   if (!cfg.supported) throw new Error(`sms recompile: ${cfg.unsupportedReason}`);
   const PLATFORM = cfg.platform;
-  const NBANK = cfg.banks;
   const stats = opts.stats || {};
 
   // RAM code, automatically: a cart whose reference executes RAM code with
@@ -1262,7 +1472,12 @@ export async function* emitWat(rom, opts = {}) {
       cfg = describe(IMG, opts);
     }
   }
-  const { idx, stats: irStats } = await instructionIndex(IMG, PLATFORM);
+  // A cart with no mapper is compiled from what the CPU sees at $0000-$BFFF
+  // (gpgx mapper_reset's mirroring); every other cart from the ROM itself.
+  const CODE = cfg.mapper === "none" && cfg.emitter !== "flat" ? noMapperImage(IMG) : IMG;
+  const NBANK = Math.floor(CODE.length / 0x4000);
+  cfg = { ...cfg, banks: NBANK };
+  const { idx, stats: irStats } = await instructionIndex(CODE, PLATFORM);
   if (cfg.emitter === "flat") {
     yield* emitFlatWat(IMG, cfg, idx, stats);
     Object.assign(stats, { platform: PLATFORM, irUnresolvedOffsets: irStats.unresolvedOffsets });
@@ -1292,7 +1507,7 @@ export async function* emitWat(rom, opts = {}) {
   }
   const snapIdx = snaps.length ? snaps[0].idx : new Map();
 
-  let items = fullBlocks(IMG, cfg.pagesSlot1);
+  let items = fullBlocks(CODE, cfg.pagesSlot1, cfg.pagesSlot0 ? cfg.slot0From : null);
   if (cfg.ramRegions.length) {
     for (const r of cfg.ramRegions) {
       for (let off = 0; off < r.bytes; off++) {
@@ -1307,7 +1522,7 @@ export async function* emitWat(rom, opts = {}) {
     items = items.map((t, i) => [t, i]).sort((a, b) => (a[0][0] - b[0][0]) || (a[1] - b[1])).map((x) => x[0]);
   }
   const n = items.length;
-  const G = computeLayout(n, IMG.length, NBANK, cfg.pagesSlot1);
+  const G = computeLayout(n, CODE.length, NBANK, cfg.pagesSlot1, cfg.pagesSlot0);
   const { ABI, TRACE, AUDIO, ROMIMG, BTAB } = G;
   // options.traceEntries: the register ring goes above everything else.
   if (cfg.traceEntries) G.BIGRING = G.TOP;
@@ -1332,7 +1547,7 @@ export async function* emitWat(rom, opts = {}) {
     "  (global $irqs (mut i32) (i32.const 0))",
     "  (global $tracei (mut i32) (i32.const 0))",
     "  (global $linectr (mut i32) (i32.const 0))");
-  head.push(bankHelpersWat(G, cfg, NBANK));
+  head.push(cfg.legacy ? bankHelpersWat(G, cfg, NBANK) : bankHelpersExactWat(G, cfg, NBANK));
   head.push(flagHelpersWat({ exact: !cfg.legacy }));
   head.push(hwWat(PLATFORM, { exact: !cfg.legacy, region: cfg.region }));
   head.push(renderWat({ exact: !cfg.legacy }));
@@ -1341,7 +1556,7 @@ export async function* emitWat(rom, opts = {}) {
   head.push("  (func $trap (global.set $trapped (i32.const 1)) (global.set $trappc (global.get $pc)))");
   yield head.join("\n") + "\n";
 
-  const em = new Emitter(IMG, cfg, idx, snaps, executed);
+  const em = new Emitter(CODE, cfg, idx, snaps, executed);
   const nshard = Math.ceil(n / SHARD_SZ);
   for (let sh = 0; sh < nshard; sh++) {
     const lo = sh * SHARD_SZ, hi = Math.min(n, lo + SHARD_SZ), cnt = hi - lo;
@@ -1462,7 +1677,7 @@ export async function* emitWat(rom, opts = {}) {
   yield `  (data (i32.const ${BTAB}) "${watBytes(btab)}")\n`;
   yield `  (data (i32.const ${GGLUT}) "${watBytes(ggLutBytes())}")\n`;
   if (!cfg.legacy) yield `  (data (i32.const ${HCTAB}) "${watBytes(hcounterBytes())}")\n  (data (i32.const ${HCOLTAB}) "${watBytes(hcolBytes())}")\n`;
-  yield `  (data (i32.const ${ROMIMG}) "${watBytes(IMG)}")\n`;
+  yield `  (data (i32.const ${ROMIMG}) "${watBytes(CODE)}")\n`;
   yield ")";
 
   const trapped = em.unsupported + em.missing;

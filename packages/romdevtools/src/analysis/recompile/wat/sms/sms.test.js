@@ -38,7 +38,11 @@ test("describe derives platform, mapper and slot-1 paging from the ROM", () => {
   const rom = tinyRom();
   const d = describeRom(rom);
   assert.equal(d.platform, "sms");
-  assert.equal(d.mapper, "sega");
+  // 48KB or less: no mapper (gpgx sms_cart_init); bigger: the Sega mapper
+  assert.equal(d.mapper, "none");
+  assert.equal(describeRom(rom, { legacy: true }).mapper, "sega");
+  const big = new Uint8Array(0x10000); big.set(rom);
+  assert.equal(describeRom(big).mapper, "sega");
   assert.equal(d.pagesSlot1, false);
   const gg = new Uint8Array(rom); gg[0x7FFF] = 0x6C;
   assert.equal(describeRom(gg).platform, "gg");
@@ -82,7 +86,8 @@ test("a synthetic cart assembles, validates and runs the program", async () => {
   const rom = tinyRom();
   const stats = {};
   const text = await emitWatString(rom, { stats });
-  assert.equal(stats.arms, 0x10000);
+  // no mapper: compiled from the 48KB the CPU sees (slots 0, 1 and one page of slot 2)
+  assert.equal(stats.arms, 0x14000);
   assert.equal(stats.trapped, stats.unsupported + stats.noInstruction);
   const sec = recompileSection(rom, "00", {});
   assert.equal(sec.json.regions.vram.ref, "sms_vram");

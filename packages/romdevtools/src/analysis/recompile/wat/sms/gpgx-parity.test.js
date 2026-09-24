@@ -64,3 +64,56 @@ test("Game Gear CRAM: an even byte is latched and written with the odd one", T, 
   const r = await gpgxParity({ platform: "gg", rom: smsImage(main, { region: 6 }), maxFrames: 5 });
   assert.equal(r.diverged, false, divergenceText(r));
 });
+
+test("Sega mapper \$FFFC: bit 3 puts cart RAM at \$8000 (bit 2 = upper 16KB), bit 4 at \$C000", T, async () => {
+  const main = [0xF3, 0x31, 0xF0, 0xDF,
+    0x3E, 0x08, 0x32, 0xFC, 0xFF, // ld a,$08; ld ($FFFC),a   cart RAM (lower) at $8000
+    0x3E, 0x5A, 0x32, 0x00, 0x80, // ld a,$5A; ld ($8000),a
+    0x3E, 0xA5, 0x32, 0x00, 0xC1, // ld a,$A5; ld ($C100),a   still system RAM
+    0x3A, 0x00, 0x80, 0x32, 0x01, 0xC1, // ld a,($8000); ld ($C101),a
+    0x3E, 0x0C, 0x32, 0xFC, 0xFF, // cart RAM upper 16KB at $8000
+    0x3A, 0x00, 0x80, 0x32, 0x02, 0xC1, // ld a,($8000); ld ($C102),a   ($FF: never written)
+    0x3E, 0x10, 0x32, 0xFC, 0xFF, // ROM at $8000, cart RAM at $C000
+    0x3E, 0x77, 0x32, 0x00, 0xC2, // ld a,$77; ld ($C200),a   -> cart RAM $0200
+    0x3A, 0x00, 0xC2, 0x47,       // ld a,($C200); ld b,a
+    0xAF, 0x32, 0xFC, 0xFF,       // xor a; ld ($FFFC),a      system RAM back
+    0x78, 0x32, 0x03, 0xC1,       // ld a,b; ld ($C103),a
+    0x3A, 0x00, 0xC2, 0x32, 0x04, 0xC1, // ld a,($C200); ld ($C104),a (system RAM, untouched)
+    0x3A, 0x00, 0x80, 0x32, 0x05, 0xC1, // ld a,($8000); ld ($C105),a (ROM page 2)
+    0x18, 0xFE];
+  const r = await gpgxParity({ platform: "sms", rom: smsImage(main, { size: 0x10000, at: [[0x8000, [0x42]]] }), maxFrames: 5 });
+  assert.equal(r.diverged, false, divergenceText(r));
+});
+
+test("Sega mapper \$FFFD pages slot 0 above its first 1KB (code runs from the paged bank); \$FFFC bits 0-1 shift the page", T, async () => {
+  const size = 0x80000;
+  // bank k holds k+$10 at $0510 and, at $0500, `ld a,k+$20; ld ($C120),a; ret`
+  const at = [];
+  for (let k = 0; k < size / 0x4000; k++) at.push([k * 0x4000 + 0x510, [k + 0x10]], [k * 0x4000 + 0x500, [0x3E, k + 0x20, 0x32, 0x20, 0xC1, 0xC9]]);
+  const main = [0xF3, 0x31, 0xF0, 0xDF,
+    0x3E, 0x03, 0x32, 0xFD, 0xFF, // ld a,3; ld ($FFFD),a
+    0x3A, 0x10, 0x05, 0x32, 0x10, 0xC1, // ld a,($0510); ld ($C110),a
+    0xCD, 0x00, 0x05,             // call $0500 (bank 3's routine)
+    0x3A, 0x10, 0x81, 0x32, 0x11, 0xC1, // ld a,($8110); ld ($C111),a (page 2)
+    0x3E, 0x01, 0x32, 0xFC, 0xFF, // ld a,1; ld ($FFFC),a    shift: page 2 + 24
+    0x3A, 0x10, 0x85, 0x32, 0x12, 0xC1, // ld a,($8510); ld ($C112),a
+    0xAF, 0x32, 0xFD, 0xFF,       // xor a; ld ($FFFD),a (with the shift: page 24)
+    0x3A, 0x10, 0x05, 0x32, 0x13, 0xC1, // ld a,($0510); ld ($C113),a
+    0x18, 0xFE];
+  const rom = smsImage([], { size, at });
+  rom.set(main, 0);
+  const r = await gpgxParity({ platform: "sms", rom, maxFrames: 5 });
+  assert.equal(r.diverged, false, divergenceText(r));
+});
+
+test("a cart of 48KB or less has no mapper: \$FFFC-\$FFFF are plain RAM and \$8000-\$BFFF reads open bus up to 32KB", T, async () => {
+  const main = [0xF3, 0x31, 0xF0, 0xDF,
+    0x3E, 0x01, 0x32, 0xFF, 0xFF, // ld a,1; ld ($FFFF),a (RAM only)
+    0x3A, 0x00, 0x80, 0x32, 0x00, 0xC1, // ld a,($8000); ld ($C100),a
+    0x3A, 0x00, 0x40, 0x32, 0x01, 0xC1, // ld a,($4000); ld ($C101),a
+    0x18, 0xFE];
+  const r32 = await gpgxParity({ platform: "sms", rom: smsImage(main, { size: 0x8000, at: [[0x4000, [0x44]]] }), maxFrames: 5 });
+  assert.equal(r32.diverged, false, divergenceText(r32));
+  const r16 = await gpgxParity({ platform: "sms", rom: smsImage(main, { size: 0x8000 }).subarray(0, 0x4000).map((b, i, a) => b), maxFrames: 5 });
+  assert.equal(r16.diverged, false, divergenceText(r16));
+});
