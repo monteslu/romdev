@@ -1,0 +1,254 @@
+// The `romdev.recompile` wasm custom section: a recompiled cart's own map of
+// where the emulated machine lives in its linear memory, so a verifier can
+// byte-compare it against the reference core with NO sidecar file.
+//
+// Written by the WAT backends (src/analysis/recompile/wat/<platform>/), read
+// by frame({op:'verifyRecompile'}) and frame({op:'findDiverge', cart}).
+//
+// JSON schema (version 1). Every key but `regions` is optional.
+//
+//   {
+//     "version": 1,
+//     "platform": "sms",            source platform of the ROM the cart was built from
+//     "reference": "sms",           loadMedia platform id of the reference core (default = platform)
+//     "romSha1": "<hex>",           sha1 of the source ROM; checked against the reference ROM
+//     "warmupFrames": 0,            frames the cart runs INSIDE its first wc_render beyond the
+//                                   one the wasmcart host's loadMedia settle frame counts
+//                                   (a GBA cart that runs 4 warm-up frames there declares 4)
+//     "screen": { "origin": [x, y] } where the reference picture sits inside the cart
+//                                   framebuffer (default: centred)
+//     "buttons": "positional",      how the cart maps wasmcart pad bits. "positional" (the only
+//                                   convention new carts should use): WC_BTN_A = south, B = east,
+//                                   X = west, Y = north, so a libretro name reaches the same
+//                                   physical button on the cart as on the core. "byName" marks a
+//                                   legacy cart that reads WC_BTN_A as the console's "A"; the
+//                                   verifier then sends the cart the swapped name.
+//     "regions": {                  name -> linear-memory span compared against a core region
+//       "vram": { "offset": 65536, "length": 16384, "ref": "sms_vram",
+//                 "refOffset": 0,             byte offset into the reference region
+//                 "transform": "lowbyte16",   applied to the REFERENCE bytes before comparing:
+//                                             swap16 | lowbyte16 | highbyte16
+//                 "mask": 63 }                AND-ed into both sides before comparing
+//     },
+//     "fields": {                   scalar CPU/machine state, compared per frame by findDiverge
+//       "pc":     { "offset": 32772, "size": 2, "ref": "cpu:pc" },
+//       "a":      { "offset": 32776, "size": 1, "ref": "cpu:registers.A" },
+//       "cycles": { "offset": 233544, "size": 4, "ref": { "region": "genesis_m68k", "offset": 5132 } }
+//     },
+//     "probe": {                    cart-only diagnostics; `trapped` != 0 fails a verification
+//       "trapped": { "offset": 32772, "size": 4 }
+//     },
+//     "vramZero": ["vram"]          regions the VRAM-zero control wipes (default: regions whose
+//                                   name contains vram/chr/nametable)
+//   }
+
+import { readFileSync } from "node:fs";
+import { unzipSync, zipSync } from "fflate";
+
+export const RECOMPILE_SECTION = "romdev.recompile";
+export const RECOMPILE_SECTION_VERSION = 1;
+export const REGION_TRANSFORMS = ["swap16", "lowbyte16", "highbyte16"];
+
+const WASM_MAGIC = [0x00, 0x61, 0x73, 0x6d];
+
+function isWasm(bytes) {
+  return bytes.length >= 8 && WASM_MAGIC.every((b, i) => bytes[i] === b);
+}
+
+function isZip(bytes) {
+  return bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
+}
+
+function readLeb(bytes, pos) {
+  let result = 0, shift = 0, b;
+  do {
+    if (pos >= bytes.length) throw new Error("truncated LEB128 in wasm section header");
+    b = bytes[pos++];
+    result += (b & 0x7f) * 2 ** shift;
+    shift += 7;
+  } while (b & 0x80);
+  return [result, pos];
+}
+
+function encodeLeb(n) {
+  const out = [];
+  do {
+    let b = n & 0x7f;
+    n = Math.floor(n / 128);
+    if (n) b |= 0x80;
+    out.push(b);
+  } while (n);
+  return out;
+}
+
+/**
+ * Every custom section with `name` in a wasm binary, as payload byte arrays.
+ * Walks section headers only, so a 100 MB module costs a few thousand reads.
+ * @param {Uint8Array} wasm
+ * @param {string} name
+ * @returns {Uint8Array[]}
+ */
+export function readCustomSections(wasm, name) {
+  if (!isWasm(wasm)) throw new Error("not a wasm binary (missing \\0asm magic)");
+  const out = [];
+  let pos = 8;
+  const dec = new TextDecoder();
+  while (pos < wasm.length) {
+    const id = wasm[pos++];
+    let size;
+    [size, pos] = readLeb(wasm, pos);
+    const end = pos + size;
+    if (end > wasm.length) throw new Error(`wasm section ${id} runs past the end of the module`);
+    if (id === 0) {
+      let nlen, p;
+      [nlen, p] = readLeb(wasm, pos);
+      const secName = dec.decode(wasm.subarray(p, p + nlen));
+      if (secName === name) out.push(wasm.slice(p + nlen, end));
+    }
+    pos = end;
+  }
+  return out;
+}
+
+/**
+ * The bytes of a complete custom section (id, size, name, JSON payload), ready
+ * to append to a wasm module. The WAT backends call this; appending a custom
+ * section after the last standard section is always valid.
+ * @param {object} layout
+ * @returns {Uint8Array}
+ */
+export function encodeRecompileSection(layout) {
+  const checked = validateRecompileLayout(layout);
+  const enc = new TextEncoder();
+  const name = enc.encode(RECOMPILE_SECTION);
+  const payload = enc.encode(JSON.stringify(checked));
+  const body = [...encodeLeb(name.length), ...name, ...payload];
+  return Uint8Array.from([0, ...encodeLeb(body.length), ...body]);
+}
+
+/**
+ * Append the section to a wasm binary.
+ * @param {Uint8Array} wasm
+ * @param {object} layout
+ */
+export function withRecompileSection(wasm, layout) {
+  if (!isWasm(wasm)) throw new Error("not a wasm binary");
+  const sec = encodeRecompileSection(layout);
+  const out = new Uint8Array(wasm.length + sec.length);
+  out.set(wasm, 0);
+  out.set(sec, wasm.length);
+  return out;
+}
+
+/**
+ * The cart module inside a .wasc (or the bytes themselves for a bare .wasm).
+ * @param {Uint8Array} bytes
+ * @returns {Uint8Array}
+ */
+export function cartWasmBytes(bytes) {
+  if (isWasm(bytes)) return bytes;
+  if (!isZip(bytes)) throw new Error("cart is neither a .wasm module nor a .wasc (zip) archive");
+  const manifestOnly = unzipSync(bytes, { filter: (f) => f.name === "manifest.json" });
+  let entry = "cart.wasm";
+  if (manifestOnly["manifest.json"]) {
+    try { entry = JSON.parse(new TextDecoder().decode(manifestOnly["manifest.json"])).entry || entry; } catch { /* default entry */ }
+  }
+  const files = unzipSync(bytes, { filter: (f) => f.name === entry });
+  if (!files[entry]) throw new Error(`.wasc has no ${entry}`);
+  return files[entry];
+}
+
+/**
+ * Wrap a bare cart .wasm into an in-memory .wasc so the wasmcart host (which
+ * loads archives) can run it. Stored, not deflated: this never touches disk.
+ * @param {Uint8Array} wasm
+ * @param {string} [name]
+ */
+export function wascFromWasm(wasm, name = "cart") {
+  const manifest = new TextEncoder().encode(JSON.stringify({ name, version: "1.0.0", entry: "cart.wasm" }));
+  return zipSync({ "cart.wasm": [wasm, { level: 0 }], "manifest.json": [manifest, { level: 0 }] });
+}
+
+/**
+ * Read + validate the cart's `romdev.recompile` layout.
+ * @param {string|Uint8Array} cart path or bytes of a .wasm / .wasc
+ * @returns {object|null} the layout, or null when the cart carries no section
+ */
+export function readRecompileLayout(cart) {
+  const bytes = typeof cart === "string" ? new Uint8Array(readFileSync(cart)) : cart;
+  const secs = readCustomSections(cartWasmBytes(bytes), RECOMPILE_SECTION);
+  if (!secs.length) return null;
+  if (secs.length > 1) throw new Error(`cart carries ${secs.length} '${RECOMPILE_SECTION}' sections; exactly one is allowed`);
+  let obj;
+  try { obj = JSON.parse(new TextDecoder().decode(secs[0])); }
+  catch (e) { throw new Error(`'${RECOMPILE_SECTION}' section is not valid JSON: ${e.message}`); }
+  return validateRecompileLayout(obj);
+}
+
+const isInt = (v) => Number.isInteger(v) && v >= 0;
+
+function checkSpan(kind, name, s, needLength) {
+  if (!s || typeof s !== "object") throw new Error(`${kind} '${name}' must be an object`);
+  if (!isInt(s.offset)) throw new Error(`${kind} '${name}'.offset must be a non-negative integer`);
+  if (needLength && !(isInt(s.length) && s.length > 0)) throw new Error(`${kind} '${name}'.length must be a positive integer`);
+}
+
+/** Normalise a field's `ref` into {cpu} | {region, offset, size}. */
+export function normalizeFieldRef(name, ref, size) {
+  if (ref == null) return null;
+  if (typeof ref === "string") {
+    if (ref.startsWith("cpu:")) return { cpu: ref.slice(4) };
+    const m = /^([A-Za-z0-9_]+)(?:\+(\d+|0x[0-9a-fA-F]+))?$/.exec(ref);
+    if (!m) throw new Error(`field '${name}'.ref '${ref}' must be 'cpu:<path>' or '<region>[+offset]'`);
+    return { region: m[1], offset: m[2] ? Number(m[2]) : 0, size };
+  }
+  if (typeof ref === "object") {
+    if (typeof ref.cpu === "string") return { cpu: ref.cpu };
+    if (typeof ref.region === "string") return { region: ref.region, offset: ref.offset ?? 0, size: ref.size ?? size, signed: !!ref.signed };
+  }
+  throw new Error(`field '${name}'.ref must be 'cpu:<path>', '<region>[+offset]', {cpu} or {region, offset}`);
+}
+
+/**
+ * Validate a layout object and return it with defaults filled in. Throws with
+ * the offending key named, so a malformed section is refused rather than
+ * compared wrongly.
+ * @param {object} layout
+ */
+export function validateRecompileLayout(layout) {
+  if (!layout || typeof layout !== "object") throw new Error("recompile layout must be an object");
+  const v = layout.version ?? RECOMPILE_SECTION_VERSION;
+  if (v !== RECOMPILE_SECTION_VERSION) throw new Error(`recompile layout version ${v} is not supported (this romdev reads version ${RECOMPILE_SECTION_VERSION})`);
+  const out = { ...layout, version: v };
+  if (out.warmupFrames != null && !isInt(out.warmupFrames)) throw new Error("warmupFrames must be a non-negative integer");
+  if (out.buttons != null && !["positional", "byName"].includes(out.buttons)) throw new Error("buttons must be 'positional' or 'byName'");
+  if (out.screen?.origin != null) {
+    const o = out.screen.origin;
+    if (!Array.isArray(o) || o.length !== 2 || !o.every((n) => Number.isInteger(n) && n >= 0)) throw new Error("screen.origin must be [x, y]");
+  }
+  const regions = out.regions ?? {};
+  if (typeof regions !== "object") throw new Error("regions must be an object of name -> {offset, length, ref}");
+  for (const [name, r] of Object.entries(regions)) {
+    checkSpan("region", name, r, true);
+    if (typeof r.ref !== "string" || !r.ref) throw new Error(`region '${name}'.ref must name a reference memory region (e.g. 'sms_vram')`);
+    if (r.refOffset != null && !isInt(r.refOffset)) throw new Error(`region '${name}'.refOffset must be a non-negative integer`);
+    if (r.transform != null && !REGION_TRANSFORMS.includes(r.transform)) throw new Error(`region '${name}'.transform must be one of ${REGION_TRANSFORMS.join(" | ")}`);
+    if (r.mask != null && !(Number.isInteger(r.mask) && r.mask >= 0 && r.mask <= 255)) throw new Error(`region '${name}'.mask must be a byte (0-255)`);
+  }
+  out.regions = regions;
+  for (const key of ["fields", "probe"]) {
+    const fields = out[key] ?? {};
+    for (const [name, f] of Object.entries(fields)) {
+      checkSpan(key === "fields" ? "field" : "probe", name, f, false);
+      const size = f.size ?? 4;
+      if (![1, 2, 4].includes(size)) throw new Error(`${key} '${name}'.size must be 1, 2 or 4`);
+      if (key === "fields") normalizeFieldRef(name, f.ref, size);
+    }
+    out[key] = fields;
+  }
+  if (out.vramZero != null) {
+    if (!Array.isArray(out.vramZero)) throw new Error("vramZero must be an array of region names");
+    for (const n of out.vramZero) if (!regions[n]) throw new Error(`vramZero names region '${n}', which is not in regions`);
+  }
+  return out;
+}
