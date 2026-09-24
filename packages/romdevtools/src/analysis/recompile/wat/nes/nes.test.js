@@ -190,3 +190,11 @@ test("layout and the romdev.recompile section describe the compared regions", ()
   assert.equal(j.regions.oam.offset, 0x5100);
   assert.equal(j.conventions.totalFrameOffset, 0);
 });
+
+test("describe zeroes a 'DiskDude!' header tail as fceumm does", () => {
+  const rom = synthRom({ flags6: 0x01 });
+  rom.set([..."DiskDude!"].map((c) => c.charCodeAt(0)), 7);
+  const d = describeRom(rom);
+  assert.equal(d.mapper, 0);
+  assert.equal(d.supported, true);
+});

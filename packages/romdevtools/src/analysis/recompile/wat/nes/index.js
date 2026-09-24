@@ -119,6 +119,7 @@ export function describe(rom, _opts = {}) {
   if (rom.length < 16 || rom[0] !== 0x4E || rom[1] !== 0x45 || rom[2] !== 0x53 || rom[3] !== 0x1A) {
     throw new Error("nes recompile: not an iNES image (missing 'NES\\x1A' header)");
   }
+  rom = cleanHeader(rom);
   const nes2 = (rom[7] & 0x0C) === 0x08;
   const prgBanks = rom[4], chrBanks = rom[5];
   const mapper = (rom[6] >> 4) | (rom[7] & 0xF0);
@@ -131,15 +132,18 @@ export function describe(rom, _opts = {}) {
     throw new Error(`nes recompile: file is ${rom.length} bytes, header needs ${prgStart + prgSize + chrSize}`);
   }
   const m = MAPPERS[mapper];
+  const fourScreen = !!(rom[6] & 8);
+  let unsupportedReason = null;
+  if (!m) unsupportedReason = `mapper ${mapper} has no WAT backend yet (supported: ${Object.keys(MAPPERS).join(", ")})`;
+  else if (prgSize > 0x8000) unsupportedReason = `mapper ${mapper} with ${prgSize} bytes of PRG`;
+  else if (fourScreen) unsupportedReason = "four-screen nametables (4KB of cart VRAM) are not modelled";
   return {
     platform: "nes",
     referenceCore: REFERENCE_CORE,
     mapper,
     mapperName: m ? m.name : null,
-    supported: !!m && prgSize <= 0x8000,
-    unsupportedReason: !m
-      ? `mapper ${mapper} has no WAT backend yet (supported: ${Object.keys(MAPPERS).join(", ")})`
-      : (prgSize > 0x8000 ? `mapper ${mapper} with ${prgSize} bytes of PRG` : null),
+    supported: unsupportedReason === null,
+    unsupportedReason,
     nes2,
     prgBanks, chrBanks, prgSize, chrSize,
     prgOffset: prgStart,
@@ -147,12 +151,32 @@ export function describe(rom, _opts = {}) {
     trainer: trainer > 0,
     chrRam: chrBanks === 0,
     // iNES flags6 bit 0: 0 = HORIZONTAL mirroring, 1 = VERTICAL.
-    mirroring: (rom[6] & 8) ? "four-screen" : ((rom[6] & 1) ? "vertical" : "horizontal"),
+    mirroring: fourScreen ? "four-screen" : ((rom[6] & 1) ? "vertical" : "horizontal"),
     battery: !!(rom[6] & 2),
     arms: prgSize,
     layout,
     conventions,
   };
+}
+
+/**
+ * fceumm ines.c's header clean-up: old dumpers wrote a signature over bytes
+ * 7-15 ("DiskDude!", "demiforce", "Ni03"), which would otherwise read as a
+ * mapper high nibble. Returns a copy with those bytes zeroed, as fceumm does.
+ * @param {Uint8Array} rom
+ */
+function cleanHeader(rom) {
+  const at = (o, str) => [...str].every((c, i) => rom[o + i] === c.charCodeAt(0));
+  let from = -1, len = 0;
+  if (at(7, "DiskDude") || at(7, "demiforce")) { from = 7; len = 9; }
+  else if (at(0xA, "Ni03")) { if (at(7, "Dis")) { from = 7; len = 9; } else { from = 0xA; len = 6; } }
+  if (from < 0) return rom;
+  const h = Uint8Array.from(rom.subarray(0, 16));
+  h.fill(0, from, from + len);
+  const out = new Uint8Array(rom.length);
+  out.set(rom);
+  out.set(h, 0);
+  return out;
 }
 
 /** @param {Uint8Array|ArrayBuffer|Buffer} b */
