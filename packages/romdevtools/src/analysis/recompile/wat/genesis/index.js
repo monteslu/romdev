@@ -59,12 +59,14 @@ export function traceRingFor(opts = {}) {
 const SH = 1024; // arms per dispatch shard
 
 /**
- * gpgx pads the ROM to a power of two and mirrors it (md_cart.c: cart.mask).
+ * gpgx pads the ROM to a power of two of at least 64KB with $FF and mirrors
+ * it (md_cart_init: cart.mask); the Sonic & Knuckles cart is not mirrored.
  * @param {Uint8Array} img
  */
 function padRom(img) {
-  let size = 1;
+  let size = 0x10000;
   while (size < img.length) size <<= 1;
+  if (headerText(img, 0x150, 0x180).includes("SONIC & KNUCKLES")) size = Math.max(size, 0x400000);
   const rom = new Uint8Array(size).fill(0xff);
   rom.set(img);
   return rom;
@@ -78,6 +80,35 @@ function padRom(img) {
 export function sixButtonPads(img) {
   for (let i = 0; i < 14; i++) if (img[0x190 + i] === 0x36) return true;
   return false;
+}
+
+const headerText = (img, a, b) => String.fromCharCode(...img.subarray(a, Math.min(b, img.length)));
+
+/**
+ * The ROM as gpgx's load_rom leaves it: byte-swapped dumps swapped back, and
+ * a 512-byte copier header (no "SEGA" at $100, an odd number of 512-byte
+ * blocks) removed with the .smd 16KB blocks de-interleaved.
+ * @param {Uint8Array} raw
+ * @returns {Uint8Array}
+ */
+export function normalizeRom(raw) {
+  let img = raw;
+  const at = (o, s) => o + s.length <= img.length && headerText(img, o, o + s.length) === s;
+  if (at(0x100, "ESAGM GE ARDVI E") || at(0x100, "ESAGG NESESI") || at(0x80100, "ESAGM GE ARDVI E") || at(0x80100, "ESAGG NESESI")) {
+    img = new Uint8Array(img);
+    for (let i = 0; i + 1 < img.length; i += 2) { const x = img[i]; img[i] = img[i + 1]; img[i + 1] = x; }
+  }
+  if (!at(0x100, "SEGA") && ((img.length / 512) & 1) && !(img.length % 512)) {
+    const body = img.subarray(512);
+    const out = new Uint8Array(body.length);
+    out.set(body);
+    for (let b = 0; b + 0x4000 <= out.length; b += 0x4000) {
+      const blk = body.subarray(b, b + 0x4000);
+      for (let i = 0; i < 0x2000; i++) { out[b + i * 2] = blk[0x2000 + i]; out[b + i * 2 + 1] = blk[i]; }
+    }
+    img = out;
+  }
+  return img;
 }
 
 /** loadrom.c: USA > JAPAN > EUROPE from the header country field. */
@@ -279,7 +310,8 @@ export const layout = {
  * @param {{ramCode?:{romOffset:number, ramAddress:number, length:number}[], discoverRamCode?:boolean}} [opts]
  */
 export function describe(rom, opts = {}) {
-  const img = rom instanceof Uint8Array ? rom : new Uint8Array(rom);
+  const raw = rom instanceof Uint8Array ? rom : new Uint8Array(rom);
+  const img = normalizeRom(raw);
   if (img.length < 0x200) throw new Error("genesis recompile: ROM smaller than its 512-byte header");
   const padded = padRom(img);
   const txt = (a, b) => Array.from(img.subarray(a, b), (c) => (c >= 0x20 && c < 0x7f ? String.fromCharCode(c) : " ")).join("").replace(/\s+/g, " ").trim();
@@ -290,7 +322,8 @@ export function describe(rom, opts = {}) {
     platform: "genesis",
     referenceCore: REFERENCE_CORE,
     supported: true,
-    romSha1: createHash("sha1").update(img).digest("hex"),
+    romSha1: createHash("sha1").update(raw).digest("hex"),
+    ...(img !== raw ? { romFormat: raw.length !== img.length ? "smd (512-byte header, interleaved): de-interleaved as gpgx loads it" : "byte-swapped: swapped back as gpgx loads it" } : {}),
     romBytes: img.length,
     romMirrorSize: padded.length,
     system: txt(0x100, 0x110),
@@ -412,7 +445,7 @@ const hex6 = (v) => (v >>> 0).toString(16).toUpperCase().padStart(6, "0");
  *   traceEntries: record d0-d7/a0-a7/sr per instruction (see traceRingFor); breakArm: see parseBreakArm
  */
 export async function* emitWat(rom, opts = {}) {
-  const img = rom instanceof Uint8Array ? rom : new Uint8Array(rom);
+  const img = normalizeRom(rom instanceof Uint8Array ? rom : new Uint8Array(rom));
   const D = loadGpgxData();
   const ROMDATA = padRom(img);
   const ROMSIZE = ROMDATA.length;

@@ -61,3 +61,22 @@ test("a pad the header declares 6-button ('6' in \$190) answers the TH-count pro
     assert.equal(r.diverged, false, `${io}: ${divergenceText(r)}`);
   }
 });
+
+test("ROM loading as gpgx's load_rom: .smd copier header and interleave, byte-swapped dumps, 64KB minimum mirror", T, async () => {
+  // reads $8000 (above a 32KB ROM: $FF padding up to 64KB on gpgx) and a word of ROM
+  const code = [...W(0x41f9), ...L(0xff0000), ...readB(0x8000), ...readB(0x00c000), ...readW(0x200), ...W(0x60fe)];
+  const small = mdImage(code, { size: 0x8000 });
+  const r0 = await gpgxParity({ platform: "genesis", rom: small, maxFrames: 3 });
+  assert.equal(r0.diverged, false, `32KB: ${divergenceText(r0)}`);
+  const plain = mdImage(code);
+  // .smd: 512-byte header, then each 16KB block as odd bytes followed by even bytes
+  const smd = new Uint8Array(512 + plain.length);
+  for (let b = 0; b < plain.length; b += 0x4000) {
+    for (let i = 0; i < 0x2000; i++) { smd[512 + b + i] = plain[b + i * 2 + 1]; smd[512 + b + 0x2000 + i] = plain[b + i * 2]; }
+  }
+  const r1 = await gpgxParity({ platform: "genesis", rom: smd, maxFrames: 3 });
+  assert.equal(r1.diverged, false, `smd: ${divergenceText(r1)}`);
+  const swapped = Uint8Array.from(plain, (_, i) => plain[i ^ 1]);
+  const r2 = await gpgxParity({ platform: "genesis", rom: swapped, maxFrames: 3 });
+  assert.equal(r2.diverged, false, `byte-swapped: ${divergenceText(r2)}`);
+});
