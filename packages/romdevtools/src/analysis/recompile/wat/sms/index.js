@@ -24,7 +24,7 @@
 import { readFileSync } from "node:fs";
 import { cost, costExact } from "./cycles.js";
 import { lower, flagHelpersWat, m1Count, rIncWat } from "./z80.js";
-import { hwWat, renderWat, psgWat, miscWat, cramBody, startBody, ggLutBytes, hcounterBytes, hcolBytes, VRAM, CRAM, VREG, GGLUT, PROBE, PCWATCH, SMSFB, LINEPROBE, HCTAB, HCOLTAB } from "./hw.js";
+import { hwWat, renderWat, psgWat, miscWat, cramBody, startBody, pauseNmiWat, ggLutBytes, hcounterBytes, hcolBytes, VRAM, CRAM, VREG, GGLUT, PROBE, PCWATCH, SMSFB, LINEPROBE, HCTAB, HCOLTAB } from "./hw.js";
 import { watBytes } from "../cart-abi.js";
 import { emitFlatWat } from "./flat.js";
 
@@ -601,7 +601,7 @@ ${RAMMAP_LOOKUP}    (i32.const 0))
 function abiWat(G, cfg, n, platform) {
   const { ABI, FB, AUDIO, TRACE, BTAB, BMAP0, BMAPP, BMAP1, BMAPR } = G;
   const CRAMBODY = cramBody(platform, CRAM);
-  const STARTBTN = startBody(platform);
+  const STARTBTN = startBody(platform, !cfg.legacy);
   const RAMMAP_STORE = cfg.ramRegions.length ? `      (if (i32.ge_u (local.get $a) (i32.const 0xC000))
         (then (i32.store (i32.add (i32.const ${BMAPR})
                  (i32.mul (i32.and (local.get $a) (i32.const 0x1FFF)) (i32.const 4)))
@@ -654,7 +654,9 @@ function abiWat(G, cfg, n, platform) {
         (then (global.set $linectr (call $vreg (i32.const 10)))))
 `;
   // ...and parses the sprites for line 0 then too (parse_satb(-1)).
-  const RELOAD_BEFORE = cfg.legacy ? "" : RELOAD.replace("(then (global.set $linectr (call $vreg (i32.const 10)))))", "(then (global.set $linectr (call $vreg (i32.const 10))) (call $parse_satb (i32.const -1))))");
+  // ...and takes the PAUSE button's NMI between the two.
+  const RELOAD_BEFORE = cfg.legacy ? "" : RELOAD.replace("(then (global.set $linectr (call $vreg (i32.const 10)))))",
+    `(then (global.set $linectr (call $vreg (i32.const 10)))\n${pauseNmiWat(platform)}          (call $parse_satb (i32.const -1))))`);
   const RELOAD_AFTER = cfg.legacy ? RELOAD : "";
   const RENDER_LINE = cfg.legacy ? `      (if (i32.lt_u (local.get $ln) (i32.const 192))
         (then (call $render_line (local.get $ln))))` : `      (if (i32.and (i32.lt_u (local.get $ln) (i32.const 192)) (i32.ne (local.get $ln) (global.get $earlyline)))
@@ -1317,6 +1319,8 @@ export async function* emitWat(rom, opts = {}) {
   head.push("  (global $sp (mut i32) (i32.const 0xDFF0))",
     "  (global $pc (mut i32) (i32.const 0))",
     "  (global $iff (mut i32) (i32.const 0))",
+    "  (global $iff2 (mut i32) (i32.const 0))",
+    "  (global $pauseb (mut i32) (i32.const 0))",
     "  (global $halted (mut i32) (i32.const 0))",
     "  (global $joy1 (mut i32) (i32.const 0xFF))",
     "  (global $joy2 (mut i32) (i32.const 0xFF))",
@@ -1374,6 +1378,7 @@ export async function* emitWat(rom, opts = {}) {
       "        (then (if (call $irq_line)",
       "          (then (global.set $irqs (i32.add (global.get $irqs) (i32.const 1)))",
       "                (global.set $iff (i32.const 0))",
+      "                (global.set $iff2 (i32.const 0))",
       "                (global.set $halted (i32.const 0))",
       "                (call $push16 (global.get $pc))",
       "                (local.set $budget (i32.sub (local.get $budget) (i32.const 13)))",

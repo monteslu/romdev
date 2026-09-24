@@ -104,9 +104,9 @@ test("exact mode fixes the sms-wat semantics that differed from genesis_plus_gx"
   // adc hl,rr adds the carry (sms-wat lowered it through the add path)
   assert.match(lower("adc", "hl,de", 0, 2, { exact: true })[0], /\$adc16/);
   assert.match(lower("adc", "hl,de", 0, 2)[0], /\$add16/);
-  // EI arms the one-instruction delay; RETI leaves IFF1 alone
+  // EI arms the one-instruction delay; RETI/RETN copy IFF2 into IFF1
   assert.match(lower("ei", "", 0, 1, { exact: true })[0], /\$eidelay/);
-  assert.equal(lower("reti", "", 0, 2, { exact: true })[0], "");
+  assert.equal(lower("reti", "", 0, 2, { exact: true })[0], "(global.set $iff (global.get $iff2))");
   // CP takes F bits 5/3 from the operand
   assert.match(lower("cp", "$28", 0, 2, { exact: true })[0], /0xD7/);
   // INI/IND read the port (sms-wat ran OUTI/OUTD)

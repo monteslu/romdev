@@ -1209,14 +1209,40 @@ export function cramBody(platform, base) {
 }
 
 /**
- * START handling in wc_render. SMS has no START (it is aliased to button 1);
- * the GG has a real one on port $00 bit 7, active low.
+ * START handling in wc_render. The GG has a real START on port $00 bit 7,
+ * active low. The Master System's is the PAUSE button: exact mode takes it
+ * as an NMI (pauseNmiWat), as genesis_plus_gx does; sms-wat's legacy model
+ * aliased it to button 1.
  * @param {'sms'|'gg'} platform
+ * @param {boolean} [exact]
  */
-export function startBody(platform) {
+export function startBody(platform, exact = false) {
   if (platform === "gg") return `    (global.set $ggstart (i32.const 0x80))
     (if (i32.and (local.get $btn) (i32.const 64))
       (then (global.set $ggstart (i32.const 0))))`;
+  if (exact) return "";
   return `    (if (i32.and (local.get $btn) (i32.const 64))
       (then (global.set $joy1 (i32.and (global.get $joy1) (i32.const 0xEF)))))`;
+}
+
+/**
+ * The Master System PAUSE button (wasmcart START, bit 64), as
+ * genesis_plus_gx's system_frame_sms raises it: checked once a frame, at the
+ * start of the last line (after the line counter reload, before that line
+ * runs), edge-triggered, and taken on the spot: IFF1 cleared (IFF2 kept for
+ * RETN), PC pushed, PC = $0066, 11 T. The Game Gear has no NMI.
+ * @param {'sms'|'gg'} platform
+ */
+export function pauseNmiWat(platform) {
+  if (platform === "gg") return "";
+  return `          (if (i32.and (local.get $btn) (i32.const 64))
+            (then (if (i32.eqz (global.get $pauseb))
+              (then (global.set $pauseb (i32.const 1))
+                    (global.set $halted (i32.const 0))
+                    (global.set $iff (i32.const 0))
+                    (call $push16 (global.get $pc))
+                    (global.set $pc (i32.const 0x66))
+                    (global.set $carry (i32.sub (global.get $carry) (i32.const 11))))))
+            (else (global.set $pauseb (i32.const 0))))
+`;
 }

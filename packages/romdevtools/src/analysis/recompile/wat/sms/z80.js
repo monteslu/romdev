@@ -227,9 +227,10 @@ function need(o, n, what) {
  * @param {number} size  its length in bytes
  * @param {{exact?: boolean}} [mode]  exact: genesis_plus_gx semantics where
  *   sms-wat's lowering differed: `ei` also arms the one-instruction EI delay
- *   ($eidelay), reti/retn leave IFF1 as it is (IFF1 = IFF2, and nothing here
- *   separates the two), and `adc hl,rr` adds the carry (sms-wat routed it
- *   through the add path). The banked emitter uses it unless `legacy`.
+ *   ($eidelay), DI/EI set IFF2 as well as IFF1, reti/retn copy IFF2 into
+ *   IFF1 (the pause NMI clears IFF1 only), and `adc hl,rr` adds the carry
+ *   (sms-wat routed it through the add path). The banked emitter uses it
+ *   unless `legacy`.
  * @returns {[string, object|null]} [wat, flow]; flow says how control leaves the block
  */
 export function lower(mnem, ops, addr, size, mode = {}) {
@@ -245,11 +246,13 @@ export function lower(mnem, ops, addr, size, mode = {}) {
     // C preserved. R is the refresh counter the emitter bumps per fetch.
     if (d === "a" && (s === "r" || s === "i")) {
       const src = s === "r" ? "(global.get $rreg)" : "(global.get $ireg)";
+      // P/V is IFF2 (gpgx LD_A_I/LD_A_R), which only differs from IFF1 inside an NMI handler.
+      const iff2 = mode.exact ? "$iff2" : "$iff";
       return [`(global.set $a (i32.and ${src} (i32.const 0xFF))) ` +
         "(global.set $f (i32.or (i32.or (i32.and (global.get $f) (i32.const 1)) " +
         "(i32.and (global.get $a) (i32.const 0xA8))) (i32.or " +
         "(select (i32.const 0x40) (i32.const 0) (i32.eqz (global.get $a))) " +
-        "(select (i32.const 4) (i32.const 0) (i32.ne (global.get $iff) (i32.const 0))))))", null];
+        `(select (i32.const 4) (i32.const 0) (i32.ne (global.get ${iff2}) (i32.const 0))))))`, null];
     }
     if (d === "r" && s === "a") return ["(global.set $rreg (global.get $a))", null];
     if (d === "i" && s === "a") return ["(global.set $ireg (global.get $a))", null];
@@ -475,9 +478,10 @@ export function lower(mnem, ops, addr, size, mode = {}) {
     }
     return [set8(dst, `(call $io_read ${pe})`), null];
   }
-  if (mnem === "di") return ["(global.set $iff (i32.const 0))", null];
+  // DI/EI set both flip-flops (IFF2 is what an NMI saves and RETN restores).
+  if (mnem === "di") return [mode.exact ? "(global.set $iff (i32.const 0)) (global.set $iff2 (i32.const 0))" : "(global.set $iff (i32.const 0))", null];
   // ei: see `mode.exact` above for the EI delay.
-  if (mnem === "ei") return [mode.exact ? "(global.set $iff (i32.const 1)) (global.set $eidelay (i32.const 1))" : "(global.set $iff (i32.const 1))", null];
+  if (mnem === "ei") return [mode.exact ? "(global.set $iff (i32.const 1)) (global.set $iff2 (i32.const 1)) (global.set $eidelay (i32.const 1))" : "(global.set $iff (i32.const 1))", null];
   if (mnem === "im") return ["(nop)", null];
   // HALT: park until an interrupt, PC at the next instruction so the
   // handler returns past the halt.
@@ -538,7 +542,8 @@ export function lower(mnem, ops, addr, size, mode = {}) {
     if (!o.length) return ["", { kind: "ret", at: addr }];
     return ["", { kind: "ret_cc", cond: cond(o[0]), next: nxt, at: addr }];
   }
-  if (mnem === "reti" || mnem === "retn") return [mode.exact ? "" : "(global.set $iff (i32.const 1))", { kind: "ret", at: addr }];
+  // gpgx RETN and RETI both copy IFF2 into IFF1 (the pause NMI's return).
+  if (mnem === "reti" || mnem === "retn") return [mode.exact ? "(global.set $iff (global.get $iff2))" : "(global.set $iff (i32.const 1))", { kind: "ret", at: addr }];
   if (mnem === "defb" || mnem === ".byte") return ["(nop)", null];
   throw new Unsupported(`${mnem} ${ops}`);
 }
