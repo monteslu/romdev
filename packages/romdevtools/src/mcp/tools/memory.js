@@ -133,7 +133,7 @@ const REGION_INFO = {
   snes_aram:         { endianness: "little", wordSize: 1, note: "64KB SPC700 audio CPU RAM" },
   snes_fillram:      { endianness: "little", wordSize: 1, note: "32KB PPU/DMA register shadow at $00:2000+" },
   // Genesis (gpgx patch) - BIG-ENDIAN (68000 chip). CRAM is BGR words.
-  genesis_cram:      { endianness: "big",    wordSize: 2, note: "128B = 64 colors × uint16 big-endian, 9-bit effective (bits 1-3 R, 5-7 G, 9-11 B)" },
+  genesis_cram:      { endianness: "little", wordSize: 2, note: "128B = 64 colors × uint16 LITTLE-endian holding gpgx's PACKED 9-bit colour (bits 2-0 R, 5-3 G, 8-6 B). This is the core's internal form, NOT the hardware's 0x0BGR CRAM word the 68000 wrote (measured 64/64 entries on three carts; the hardware reading agreed on only 3-29/64)" },
   genesis_vsram:     { endianness: "big",    wordSize: 2, note: "128B vertical scroll table (per-cell or per-line depending on VDP reg $0B)" },
   genesis_vdp_regs:  { endianness: "big",    wordSize: 1, note: "32 VDP registers $00-$1F (write-only on hardware; this is gpgx's mirror)" },
   genesis_z80_ram:   { endianness: "little", wordSize: 1, note: "8KB Z80 sound CPU RAM (Z80 is little-endian even though main CPU is big)" },

@@ -5,7 +5,7 @@
 // (inspectSprites, getPalette, etc.) for the Genesis platform.
 //
 // Memory regions exposed by the gpgx libretro patch (see memory.js):
-//   genesis_cram  - 128 B, 64 colors × uint16 big-endian, 9-bit BGR
+//   genesis_cram  - 128 B, 64 colors × uint16 little-endian, gpgx PACKED 9-bit (bits 2-0 R, 5-3 G, 8-6 B; see below)
 //   genesis_vsram - 128 B, per-cell vertical scroll
 //   genesis_vdp_regs - 32 bytes (VDP registers $00-$1F)
 //
