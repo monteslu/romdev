@@ -102,7 +102,26 @@ export function globalsWat() {
  * @param {string} o.NTSEL     WAT expression: nametable slot (local $slot, 0-3) -> CIRAM page (0/1)
  * @param {string} o.CHRWRITE  WAT statement for a $2007 write below $2000 (CHR RAM), or ''
  */
-export function ppuWat({ NTSEL, CHRWRITE }) {
+export function ppuWat({ NTSEL, CHRWRITE, HBHOOK = "" }) {
+  // DoLine with a mapper GameHBIRQHook (MMC3's scanline counter): run 6,
+  // Fixit2, run 4, hook, run 59 when rendering and (PPU[0] & $38) != $18;
+  // otherwise the plain path, then the hook if that became true meanwhile.
+  const hbCond = "(i32.and (i32.ne (i32.and (global.get $ppu1) (i32.const 0x18)) (i32.const 0)) " +
+    "(i32.ne (i32.and (global.get $ppu0) (i32.const 0x38)) (i32.const 0x18)))";
+  const hblank = HBHOOK ? `(if ${hbCond}
+      (then
+        (call $run (i32.const 6))
+        (call $fixit2)
+        (call $run (i32.const 4))
+        ${HBHOOK}
+        (call $run (i32.const ${85 - 16 - 10})))
+      (else
+        (call $run (i32.const 6))
+        (call $fixit2)
+        (call $run (i32.const ${85 - 6 - 16}))
+        (if ${hbCond} (then ${HBHOOK}))))` : `(call $run (i32.const 6))
+    (call $fixit2)
+    (call $run (i32.const ${85 - 6 - 16}))`;
   return `
   ;; vnapage[slot] -> linear address of that 1KB nametable.
   (func $nt (param $slot i32) (result i32)
@@ -448,9 +467,7 @@ export function ppuWat({ NTSEL, CHRWRITE }) {
       (then (global.set $nemph (i32.add (global.get $nemph) (i32.const 1)))))
     (global.set $sphitx (i32.const 0x100))
     (if (i32.and (global.get $ppu1) (i32.const 0x18)) (then (call $fetch_sprite_data)))
-    (call $run (i32.const 6))
-    (call $fixit2)
-    (call $run (i32.const ${85 - 6 - 16}))
+    ${hblank}
     (if (i32.and (global.get $ppu1) (i32.const 0x10)) (then (call $refresh_sprites)))
     (global.set $scanline (i32.add (global.get $scanline) (i32.const 1)))
     (if (i32.lt_s (global.get $scanline) (i32.const 240))

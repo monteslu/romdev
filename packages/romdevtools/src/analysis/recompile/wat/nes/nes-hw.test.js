@@ -260,9 +260,9 @@ test("header: an iNES 1.0 file named with a PAL tag runs as PAL in fceumm, so it
  * of $C000 keeps running it; bank b has b at offset $3000 and $A0|b at $3001.
  * CHR: byte 0 of each 4KB = $40 | its 4KB index.
  */
-function romMap({ main, prgBanks, chrBanks, flags6 }) {
+function romMap({ main, prgBanks, chrBanks, flags6, irq = "rti", tag8 = false, chr1k = false }) {
   const prg = new Uint8Array(prgBanks * 0x4000).fill(0xEA);
-  const { bytes, labels } = asm(`${main}\nnmi_h:\nrti\nirq_h:\nrti`, 0xC000);
+  const { bytes, labels } = asm(`${main}\nnmi_h:\nrti\nirq_h:\n${irq}`, 0xC000);
   for (let b = 0; b < prgBanks; b++) {
     const base = b * 0x4000;
     prg.set(bytes, base);
@@ -270,7 +270,11 @@ function romMap({ main, prgBanks, chrBanks, flags6 }) {
     vec(0x3FFA, labels.nmi_h); vec(0x3FFC, 0xC000); vec(0x3FFE, labels.irq_h);
     prg[base + 0x3000] = b; prg[base + 0x3001] = 0xA0 | b;
   }
-  const chr = new Uint8Array(chrBanks * 0x2000).map((_, i) => ((i & 0xFFF) === 0 ? (i >> 12) | 0x40 : (i * 7) & 0xFF));
+  // tag8: every 8KB bank k holds $C0|k at its offset $1F00 (MMC3 windows)
+  if (tag8) for (let k = 0; k < prgBanks * 2; k++) prg[k * 0x2000 + 0x1F00] = 0xC0 | k;
+  // CHR: byte 0 of each 4KB = $40|index (chr1k: of each 1KB = $80|index)
+  const chr = new Uint8Array(chrBanks * 0x2000).map((_, i) => (chr1k ? ((i & 0x3FF) === 0 ? (i >> 10) | 0x80 : (i * 7) & 0xFF)
+    : ((i & 0xFFF) === 0 ? (i >> 12) | 0x40 : (i * 7) & 0xFF)));
   const out = new Uint8Array(16 + prg.length + chr.length);
   out.set([0x4E, 0x45, 0x53, 0x1A, prgBanks, chrBanks, flags6, 0]);
   out.set(prg, 16); out.set(chr, 16 + prg.length);
@@ -491,4 +495,37 @@ sta $55
   assert.equal(r.ram[0x341], 0x99);
   assert.ok(r.p.ndyn > 0);
   assert.equal(r.p.trapped, 0);
+});
+
+// ---- mapper 4 (MMC3, fceumm boards/mmc3.c) --------------------------------------
+
+const m3 = (r, v) => `lda #$${r.toString(16)}\nsta $8000\nlda #$${v.toString(16)}\nsta $8001\n`;
+const chr1kRead = (zz, hi) => `lda $2002\nlda #$${hi.toString(16)}\nsta $2006\nlda #$00\nsta $2006\nlda $2007\nlda $2007\nsta $${zz.toString(16)}\n`;
+
+test("mapper 4 (MMC3): 8KB PRG windows in both PRG modes, 2KB/1KB CHR banks with the A12 inversion, mirroring", async () => {
+  const r = await run(romMap({
+    prgBanks: 8, chrBanks: 4, flags6: 0x40, tag8: true, chr1k: true,
+    main: PRO + m3(6, 4) + m3(7, 5) + "lda $9F00\nsta $30\nlda $BF00\nsta $31\nlda $DF00\nsta $32\nlda $FF00\nsta $33\n" +
+      "lda #$46\nsta $8000\nlda $9F00\nsta $34\nlda $DF00\nsta $35\n" +
+      m3(0x40, 0x0A) + m3(0x42, 9) + m3(0x45, 0x0D) + m3(0x41, 0x13) +
+      chr1kRead(0x36, 0x00) + chr1kRead(0x37, 0x04) + chr1kRead(0x38, 0x0C) + chr1kRead(0x39, 0x10) + chr1kRead(0x3A, 0x1C) +
+      "lda #$80\nsta $8000\n" + chr1kRead(0x3E, 0x00) + chr1kRead(0x3F, 0x10) + chr1kRead(0x40, 0x14) +
+      "lda #$81\nsta $8000\nlda #$FE\nsta $8001\n" + chr1kRead(0x41, 0x18) +
+      "lda #$01\nsta $A000\nlda #$20\nsta $2006\nlda #$00\nsta $2006\nlda #$5A\nsta $2007\nlda #$24\nsta $2006\nlda #$00\nsta $2006\nlda $2007\nlda $2007\nsta $3C\n" +
+      "lda #$00\nsta $A000\nlda #$28\nsta $2006\nlda #$00\nsta $2006\nlda $2007\nlda $2007\nsta $3D\n" + LOOP,
+  }), 3);
+  assert.deepEqual([...r.ram.slice(0x30, 0x42)], [196, 197, 206, 207, 206, 196, 138, 139, 147, 137, 141, 255, 90, 90, 137, 138, 139, 158]);
+  assertCpu(r, { pc: 49519, a: 90, x: 255, y: 0, s: 255, p: 4, count: -80 });
+});
+
+test("mapper 4 (MMC3): the scanline IRQ counter (latch, reload, ack/enable) fires on fceumm's lines", async () => {
+  const r = await run(romMap({
+    prgBanks: 2, chrBanks: 1, flags6: 0x40,
+    main: PRO + "lda #$40\nsta $4017\nldx #0\nvw:\nbit $2002\nbpl vw\nlda #$1E\nsta $2001\nlda #$21\nsta $C000\nsta $C001\nsta $E001\nldy #0\ncli\n" + LOOP,
+    irq: "pha\nlda $10\nsta $0300,y\nlda $2002\nsta $0340,y\niny\nsta $E000\nlda $0400\nsta $C000\nclc\nadc #7\nsta $0400\nsta $E001\ninc $20\npla\nrti",
+  }), 12);
+  assert.deepEqual([...r.ram.slice(0x300, 0x320)], [248, 79, 170, 104, 138, 15, 248, 68, 30, 50, 168, 130, 234, 139, 144, 34, 237, 71, 217, 249, 82, 57, 89, 7, 25, 99, 59, 119, 22, 239, 85, 31]);
+  assert.equal(r.ram[0x20], 31);
+  assert.deepEqual([...r.ram.slice(0x1FC, 0x200)], [33, 32, 38, 192]);
+  assertCpu(r, { pc: 49190, a: 33, x: 0, y: 32, s: 255, p: 160, count: -144 });
 });

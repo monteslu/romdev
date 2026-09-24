@@ -241,7 +241,7 @@ export function describe(rom, opts = {}) {
   const inputOk = !input || ((input[0] === -1 || input[0] === 1) && (input[1] === -1 || input[1] === 1) && (input[2] === -1 || input[2] === 0));
   const m = MAPPERS[mapper];
   let unsupportedReason = null;
-  const facts = { prgSize, chrSize, submapper, nes2, prgRam, mirroring, mirrorHard };
+  const facts = { prgSize, chrSize, submapper, nes2, prgRam, mirroring, mirrorHard, crc32: crcAll };
   if (!m) unsupportedReason = `mapper ${mapper} has no WAT backend yet (supported: ${Object.keys(MAPPERS).join(", ")})`;
   else if (m.supports && m.supports(facts)) unsupportedReason = m.supports(facts);
   else if (mirroring === "four-screen") unsupportedReason = "four-screen nametables (4KB of cart VRAM) are not modelled";
@@ -268,6 +268,7 @@ export function describe(rom, opts = {}) {
     battery,
     prgRam,
     headerFix,
+    crc32: crcAll,
     inputDevices: input,
     arms: prgSize,
     layout: m && m.layout ? m.layout(layout) : layout,
@@ -861,7 +862,11 @@ function frameWat(mapper) {
           (then (global.set $irqlow (i32.or (global.get $irqlow) (i32.const 0x80)))))
         (call $run (i32.const ${20 * 341 - 12}))
         (global.set $ppustatus (i32.and (global.get $ppustatus) (i32.const 0x1F)))
-        (call $run (i32.const 256))
+        (call $run (i32.const 256))${mapper.hbHook ? `
+        ;; FCEUPPU_Loop: the pre-render line clocks GameHBIRQHook too
+        (if (i32.and (i32.ne (i32.and (global.get $ppu1) (i32.const 0x18)) (i32.const 0))
+                     (i32.ne (i32.and (global.get $ppu0) (i32.const 0x38)) (i32.const 0x18)))
+          (then ${mapper.hbHook}))` : ""}
         (call $run (i32.const ${85 - 16}))
         (if (i32.and (global.get $ppu1) (i32.const 0x18))
           (then (global.set $refaddr (global.get $tmpaddr))))
@@ -962,6 +967,7 @@ export async function* emitWat(rom, opts = {}) {
   yield dynopWat(mapper) + "\n";
   yield ppuWat({
     NTSEL: mapper.ntSel || ntSelFixed(d.mirroring),
+    HBHOOK: mapper.hbHook || "",
     CHRWRITE: d.chrRam ? `(i32.store8 (i32.add (i32.const ${CHR}) (local.get $tmp)) (local.get $v))` : "",
   }) + "\n";
   yield `  (data (i32.const ${RGBTAB}) "${watBytes(u32le(palette512().map((c) => (0xFF000000 | c) >>> 0)))}")\n`;
