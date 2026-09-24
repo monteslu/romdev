@@ -91,6 +91,8 @@ const i32data = (vals) => {
  * @param {string} [o.beforeBlipEnd] WAT run at frame end after psg_end_frame, before blip_end_frame (the FM flush)
  * @param {number} [o.muteAddr] u16 mute mask (0 at power-on, never written by the cart)
  * @param {number} [o.muteShift=0] bit of PSG channel 0 in the mask
+ * @param {{offset:number, countOffset:number, capacity:number}} [o.deltas] debug stream of every
+ *   blip delta (gpgx_blip_deltas' layout); $snd_frame_begin resets it (call at the top of wc_render)
  */
 export function soundCoreWat(o) {
   const T = gpgxSoundTables();
@@ -135,7 +137,15 @@ export function soundCoreWat(o) {
   const blipAdd = `
   (func $blip_add (param $t i32) (param $dl i32) (param $dr i32)
     (local $fx i32) (local $ph i32) (local $in i32) (local $revm i32) (local $interp i32) (local $pos i32) (local $d i32) (local $o i32)
-    (if (i32.eqz (i32.or (local.get $dl) (local.get $dr))) (then (return)))
+    (if (i32.eqz (i32.or (local.get $dl) (local.get $dr))) (then (return)))${o.deltas ? `
+    ;; options.audioDeltas: (time, delta_l, delta_r) as gpgx_blip_deltas records them
+    (local.set $d (i32.load (i32.const ${o.deltas.countOffset})))
+    (if (i32.lt_u (local.get $d) (i32.const ${o.deltas.capacity}))
+      (then (local.set $o (i32.add (i32.const ${o.deltas.offset}) (i32.mul (local.get $d) (i32.const 12))))
+            (i32.store (local.get $o) (local.get $t))
+            (i32.store offset=4 (local.get $o) (local.get $dl))
+            (i32.store offset=8 (local.get $o) (local.get $dr))))
+    (i32.store (i32.const ${o.deltas.countOffset}) (i32.add (local.get $d) (i32.const 1)))` : ""}
     (local.set $fx (i32.wrap_i64 (i64.shr_u (i64.add (i64.mul (i64.extend_i32_u (local.get $t)) (i64.const ${factor})) (global.get $blip_off)) (i64.const 32))))
     (local.set $ph (i32.and (i32.shr_u (local.get $fx) (i32.const 15)) (i32.const 31)))
     (local.set $in (i32.add (i32.const ${lay.blstep}) (i32.shl (local.get $ph) (i32.const 5))))
@@ -251,6 +261,7 @@ ${side(lay.br, "$dr")})
       (global.set ${integ} (i32.sub (global.get ${integ}) (i32.shl (local.get $s) (i32.const 6))))`;
 
   return `${globals}
+  (func $snd_frame_begin${o.deltas ? ` (i32.store (i32.const ${o.deltas.countOffset}) (i32.const 0))` : ""})
   (data (i32.const ${lay.blstep}) "${i32data(T.blip.blStep)}")
   (data (i32.const ${lay.chanvol}) "${i32data(T.psg.chanVolume)}")
 ${blipAdd}
