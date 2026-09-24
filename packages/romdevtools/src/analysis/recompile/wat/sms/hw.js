@@ -1,0 +1,823 @@
+// SMS / Game Gear hardware in WAT: VDP (Mode 4), I/O ports, SN76489 PSG,
+// the scanline renderer, the CRAM -> RGB conversion and the small Z80 block
+// helpers that are simpler as calls than inline.
+//
+// Ported from sms-wat src/hw.py and src/emit.py (misc_wat, cram/start
+// bodies). The WAT text is the Python emitter's with its commentary removed;
+// the rationale for each behaviour (the genesis_plus_gx frame order, the
+// 565 palette round-trip, status-port latch rules, TH region detection on
+// port $3F) is kept in the JS comments below.
+//
+// Plain JS ESM + JSDoc.
+
+// Linear memory map (beyond the 64KB Z80 address space at 0):
+//   0x10000  VRAM 16KB           0x14000  CRAM (32 SMS / 64 GG bytes)
+//   0x14100  VDP registers       0x14200  VDP latch state
+//   0x14300  CRAM->RGB888 LUT    0x14380  PROBE (liveness counters)
+//   0x14400  LINEPROBE, 192 x 8 bytes: R1 R2 R8 R9, name-table row read,
+//            non-blank entries on that row, u16 non-zero BG pixels. The
+//            end-of-frame registers are not what a mid-frame line rendered.
+//   0x14A80  PCWATCH, 4 x (u32 pc, u32 hits): host-armed PC counters
+//   0x15000  SMSFB, 256x192 palette indices
+export const VRAM = 0x10000;
+export const CRAM = 0x14000;
+export const VREG = 0x14100;
+export const VSTATE = 0x14200;
+export const GGLUT = 0x14300;
+export const PROBE = 0x14380;
+export const LINEPROBE = 0x14400;
+export const PCWATCH = 0x14A80;
+export const SMSFB = 0x15000;
+
+/**
+ * 4-bit channel -> 8-bit, as genesis_plus_gx presents it. The core is built
+ * with 16bpp rendering, so a 4-bit channel is packed into RGB565 and the
+ * presented frame expands 565 -> 888 by bit replication: red and blue
+ * round-trip through 5 bits and GREEN through 6, so green needs its own table
+ * (n*17 is off by 1-4 on nearly every colour). SMS 2-bit channels index the
+ * same table at n*5 (gpgx widens them to 4 bits first).
+ * @returns {Uint8Array} 48 bytes: R[16] G[16] B[16]
+ */
+export function ggLutBytes() {
+  const mk = (r, g, b) => (r << 12) | ((r >> 3) << 11) | (g << 7) | ((g >> 2) << 5) | (b << 1) | (b >> 3);
+  const exp = (p) => {
+    const R = (p >> 11) & 0x1F, G = (p >> 5) & 0x3F, B = p & 0x1F;
+    return [(R << 3) | (R >> 2), (G << 2) | (G >> 4), (B << 3) | (B >> 2)];
+  };
+  const out = new Uint8Array(48);
+  for (let n = 0; n < 16; n++) {
+    out[n] = exp(mk(n, 0, 0))[0];
+    out[16 + n] = exp(mk(0, n, 0))[1];
+    out[32 + n] = exp(mk(0, 0, n))[2];
+  }
+  return out;
+}
+
+/**
+ * VDP + I/O dispatch. `platform` is 'sms' or 'gg'. GG differences: CRAM is
+ * 64 bytes (32 colours x 2, write mask 0x3F), and port $00 carries the GG
+ * START button (bit 7, active low; bit 6 region).
+ *
+ * Notes on behaviour, all measured against genesis_plus_gx:
+ *  - status-port reads return bits 4-0 as 1 (0x9F with only VBlank set) and
+ *    clear VBlank, collision and the pending H-INT, and reset the latch;
+ *  - port $3F drives the TH output levels, read back on $DD bits 6/7 (the
+ *    region check: ioctl $F5 -> $DD $FF, ioctl $55 -> $DD $3F);
+ *  - $vdpwn counts data-port writes only (no ring: a probe written into
+ *    another region's memory corrupts what it measures).
+ * @param {'sms'|'gg'} platform
+ */
+export function hwWat(platform = "sms") {
+  const CMASK = platform === "gg" ? 0x3F : 0x1F;
+  const GGPORT = platform === "gg"
+    ? `    (if (i32.eq (local.get $p) (i32.const 0x00))
+      (then (return (i32.or (i32.and (global.get $ggstart) (i32.const 0x80))
+                            (i32.const 0x7F)))))`
+    : "";
+  return `
+  (global $vdp_latch (mut i32) (i32.const 0))
+  (global $vdp_addr  (mut i32) (i32.const 0))
+  (global $vdp_code  (mut i32) (i32.const 0))
+  (global $vdp_first (mut i32) (i32.const 1))
+  (global $vdp_status (mut i32) (i32.const 0))
+  (global $hintpend (mut i32) (i32.const 0))
+  (global $vdp_readbuf (mut i32) (i32.const 0))
+  (global $line (mut i32) (i32.const 0))
+  (global $lineint (mut i32) (i32.const 0))
+  (global $ggstart (mut i32) (i32.const 0x80))
+
+  (global $dbg_r1pc (mut i32) (i32.const 0))
+  (global $dbg_r1d (mut i32) (i32.const 0))
+  (global $dbg_r1e (mut i32) (i32.const 0))
+  (global $dbg_r1val (mut i32) (i32.const 0))
+  (func $vdp_ctrl_write (param $v i32)
+    (if (global.get $vdp_first)
+      (then
+        (global.set $vdp_latch (i32.and (local.get $v) (i32.const 0xFF)))
+        (global.set $vdp_first (i32.const 0)))
+      (else
+        (global.set $vdp_first (i32.const 1))
+        (global.set $vdp_code (i32.shr_u (i32.and (local.get $v) (i32.const 0xC0)) (i32.const 6)))
+        (global.set $vdp_addr (i32.or (global.get $vdp_latch)
+          (i32.shl (i32.and (local.get $v) (i32.const 0x3F)) (i32.const 8))))
+        (if (i32.eq (global.get $vdp_code) (i32.const 2))
+          (then
+            (if (i32.eq (i32.and (local.get $v) (i32.const 0x0F)) (i32.const 1))
+              (then (global.set $dbg_r1pc (global.get $pc))
+                    (global.set $dbg_r1val (global.get $vdp_latch))
+                    (global.set $dbg_r1d (global.get $d))
+                    (global.set $dbg_r1e (global.get $e))))
+            (i32.store8 (i32.add (i32.const ${VREG})
+                          (i32.and (local.get $v) (i32.const 0x0F)))
+                        (global.get $vdp_latch))))
+        (if (i32.eqz (global.get $vdp_code))
+          (then
+            (global.set $vdp_readbuf
+              (i32.load8_u (i32.add (i32.const ${VRAM}) (global.get $vdp_addr))))
+            (global.set $vdp_addr
+              (i32.and (i32.add (global.get $vdp_addr) (i32.const 1)) (i32.const 0x3FFF))))))))
+
+  (global $vdpwn (mut i32) (i32.const 0))
+  (func $vdp_data_write (param $v i32)
+    (global.set $vdpwn (i32.add (global.get $vdpwn) (i32.const 1)))
+    (global.set $vdp_first (i32.const 1))
+    (if (i32.eq (global.get $vdp_code) (i32.const 3))
+      (then
+        (i32.store8 (i32.add (i32.const ${CRAM})
+                      (i32.and (global.get $vdp_addr) (i32.const ${CMASK})))
+                    (i32.and (local.get $v) (i32.const 0xFF))))
+      (else
+        (i32.store8 (i32.add (i32.const ${VRAM}) (global.get $vdp_addr))
+                    (i32.and (local.get $v) (i32.const 0xFF)))))
+    (global.set $vdp_readbuf (i32.and (local.get $v) (i32.const 0xFF)))
+    (global.set $vdp_addr
+      (i32.and (i32.add (global.get $vdp_addr) (i32.const 1)) (i32.const 0x3FFF))))
+
+  (func $vdp_data_read (result i32)
+    (local $r i32)
+    (global.set $vdp_first (i32.const 1))
+    (local.set $r (global.get $vdp_readbuf))
+    (global.set $vdp_readbuf
+      (i32.load8_u (i32.add (i32.const ${VRAM}) (global.get $vdp_addr))))
+    (global.set $vdp_addr
+      (i32.and (i32.add (global.get $vdp_addr) (i32.const 1)) (i32.const 0x3FFF)))
+    (local.get $r))
+
+  (func $vdp_status_read (result i32)
+    (local $s i32)
+    (local.set $s (i32.or (global.get $vdp_status) (i32.const 0x1F)))
+    (global.set $vdp_status (i32.const 0))
+    (global.set $hintpend (i32.const 0))
+    (global.set $vdp_first (i32.const 1))
+    (local.get $s))
+
+  (func $vreg (param $n i32) (result i32)
+    (i32.load8_u (i32.add (i32.const ${VREG}) (local.get $n))))
+
+  (func $io_write (param $port i32) (param $v i32)
+    (local $p i32)
+    (local.set $p (i32.and (local.get $port) (i32.const 0xFF)))
+    (block $done
+      (if (i32.eq (local.get $p) (i32.const 0xBF))
+        (then (call $vdp_ctrl_write (local.get $v)) (br $done)))
+      (if (i32.eq (local.get $p) (i32.const 0xBE))
+        (then (call $vdp_data_write (local.get $v)) (br $done)))
+      (if (i32.or (i32.eq (local.get $p) (i32.const 0x7E))
+                  (i32.eq (local.get $p) (i32.const 0x7F)))
+        (then (call $psg_write (local.get $v)) (br $done)))
+      (if (i32.eq (local.get $p) (i32.const 0x3F))
+        (then (global.set $ioctl (i32.and (local.get $v) (i32.const 0xFF))) (br $done)))))
+
+  (global $ioctl (mut i32) (i32.const 0xFF))
+
+  (func $io_read (param $port i32) (result i32)
+    (local $p i32)
+    (local.set $p (i32.and (local.get $port) (i32.const 0xFF)))
+    (if (i32.eq (local.get $p) (i32.const 0xBF)) (then (return (call $vdp_status_read))))
+    (if (i32.eq (local.get $p) (i32.const 0xBE)) (then (return (call $vdp_data_read))))
+    (if (i32.eq (local.get $p) (i32.const 0x7E)) (then (return (global.get $line))))
+    (if (i32.eq (local.get $p) (i32.const 0x7F)) (then (return (i32.const 0))))
+    (if (i32.eq (local.get $p) (i32.const 0xDC)) (then (return (global.get $joy1))))
+${GGPORT}
+    (if (i32.eq (local.get $p) (i32.const 0xDD))
+      (then (return (i32.or
+        (i32.and (global.get $joy2) (i32.const 0x3F))
+        (i32.or
+          (i32.shl (i32.and (i32.shr_u (global.get $ioctl) (i32.const 5)) (i32.const 1)) (i32.const 6))
+          (i32.shl (i32.and (i32.shr_u (global.get $ioctl) (i32.const 7)) (i32.const 1)) (i32.const 7)))))))
+    (i32.const 0xFF))
+`;
+}
+
+/**
+ * Mode 4 scanline renderer into the index buffer at SMSFB: background with
+ * H/V scroll (vertical wraps at 224, R0 bit 6/7 scroll locks), priority
+ * tiles, up to 8 sprites per line (8x16 via R1 bit 1, R0 bit 3 shift, lower
+ * sprite wins an overlap), display blank (R1 bit 6) and the left-column mask
+ * (R0 bit 5) in the backdrop colour. Bit 7 of an index marks a priority BG
+ * pixel and bit 6 a sprite-claimed one while the line is built.
+ */
+export function renderWat() {
+  return `
+  (func $tile_pixel (param $tile i32) (param $px i32) (param $py i32) (result i32)
+    (local $base i32) (local $b i32) (local $sh i32) (local $c i32)
+    (local.set $base (i32.add (i32.const ${VRAM})
+      (i32.add (i32.mul (local.get $tile) (i32.const 32))
+               (i32.mul (local.get $py) (i32.const 4)))))
+    (local.set $sh (i32.sub (i32.const 7) (local.get $px)))
+    (local.set $c (i32.and (i32.shr_u (i32.load8_u (local.get $base)) (local.get $sh)) (i32.const 1)))
+    (local.set $c (i32.or (local.get $c) (i32.shl
+      (i32.and (i32.shr_u (i32.load8_u (i32.add (local.get $base) (i32.const 1))) (local.get $sh)) (i32.const 1))
+      (i32.const 1))))
+    (local.set $c (i32.or (local.get $c) (i32.shl
+      (i32.and (i32.shr_u (i32.load8_u (i32.add (local.get $base) (i32.const 2))) (local.get $sh)) (i32.const 1))
+      (i32.const 2))))
+    (local.set $c (i32.or (local.get $c) (i32.shl
+      (i32.and (i32.shr_u (i32.load8_u (i32.add (local.get $base) (i32.const 3))) (local.get $sh)) (i32.const 1))
+      (i32.const 3))))
+    (local.get $c))
+
+  (func $render_line (param $y i32)
+    (local $ntbase i32) (local $sx i32) (local $sy i32) (local $col i32)
+    (local $row i32) (local $tx i32) (local $ty i32) (local $ent i32)
+    (local $tile i32) (local $attr i32) (local $px i32) (local $py i32)
+    (local $c i32) (local $pal i32) (local $x i32) (local $prio i32)
+    (local $satb i32) (local $i i32) (local $syy i32) (local $sxx i32)
+    (local $stile i32) (local $h16 i32) (local $drawn i32) (local $fbrow i32)
+    (local $lp i32) (local $bgnz i32) (local $ntnz i32)
+    (local $r0 i32) (local $hs i32) (local $bd i32) (local $o i32)
+
+    (local.set $lp (i32.add (i32.const ${LINEPROBE}) (i32.mul (local.get $y) (i32.const 8))))
+    (i32.store8 (i32.add (local.get $lp) (i32.const 0)) (call $vreg (i32.const 1)))
+    (i32.store8 (i32.add (local.get $lp) (i32.const 1)) (call $vreg (i32.const 2)))
+    (i32.store8 (i32.add (local.get $lp) (i32.const 2)) (call $vreg (i32.const 8)))
+    (i32.store8 (i32.add (local.get $lp) (i32.const 3)) (call $vreg (i32.const 9)))
+
+    (local.set $ntbase (i32.shl (i32.and (call $vreg (i32.const 2)) (i32.const 0x0E)) (i32.const 10)))
+    (local.set $fbrow (i32.add (i32.const ${SMSFB}) (i32.mul (local.get $y) (i32.const 256))))
+    (local.set $r0 (call $vreg (i32.const 0)))
+    (local.set $bd (i32.or (i32.const 16) (i32.and (call $vreg (i32.const 7)) (i32.const 15))))
+    (if (i32.eqz (i32.and (call $vreg (i32.const 1)) (i32.const 0x40)))
+      (then
+        (local.set $x (i32.const 0))
+        (block $bkd (loop $bkl
+          (br_if $bkd (i32.ge_u (local.get $x) (i32.const 256)))
+          (i32.store8 (i32.add (local.get $fbrow) (local.get $x)) (local.get $bd))
+          (local.set $x (i32.add (local.get $x) (i32.const 1)))
+          (br $bkl)))
+        (return)))
+    (local.set $hs (call $vreg (i32.const 8)))
+    (if (i32.and (i32.and (local.get $r0) (i32.const 0x40)) (i32.lt_u (local.get $y) (i32.const 16)))
+      (then (local.set $hs (i32.const 0))))
+
+    (local.set $sy (i32.add (local.get $y) (call $vreg (i32.const 9))))
+    (if (i32.ge_u (local.get $sy) (i32.const 224))
+      (then (local.set $sy (i32.sub (local.get $sy) (i32.const 224)))))
+    (local.set $row (i32.div_u (local.get $sy) (i32.const 8)))
+    (local.set $py (i32.and (local.get $sy) (i32.const 7)))
+    (local.set $col (i32.const 0))
+    (block $bgdone (loop $bg
+      (br_if $bgdone (i32.ge_u (local.get $col) (i32.const 32)))
+      (if (i32.and (local.get $r0) (i32.const 0x80))
+        (then
+          (local.set $o (i32.add (i32.mul (local.get $col) (i32.const 8)) (i32.and (local.get $hs) (i32.const 7))))
+          (if (i32.ge_u (i32.and (local.get $o) (i32.const 255)) (i32.const 192))
+            (then (local.set $row (i32.div_u (local.get $y) (i32.const 8)))
+                  (local.set $py (i32.and (local.get $y) (i32.const 7))))
+            (else (local.set $row (i32.div_u (local.get $sy) (i32.const 8)))
+                  (local.set $py (i32.and (local.get $sy) (i32.const 7)))))))
+      (local.set $tx (i32.and (i32.sub (local.get $col)
+                        (i32.div_u (local.get $hs) (i32.const 8))) (i32.const 31)))
+      (local.set $ent (i32.add (i32.add (i32.const ${VRAM}) (local.get $ntbase))
+        (i32.mul (i32.add (i32.mul (local.get $row) (i32.const 32)) (local.get $tx)) (i32.const 2))))
+      (local.set $tile (i32.load8_u (local.get $ent)))
+      (local.set $attr (i32.load8_u (i32.add (local.get $ent) (i32.const 1))))
+      (if (i32.ne (local.get $tile) (i32.const 0))
+        (then (local.set $ntnz (i32.add (local.get $ntnz) (i32.const 1)))))
+      (local.set $tile (i32.or (local.get $tile)
+        (i32.shl (i32.and (local.get $attr) (i32.const 1)) (i32.const 8))))
+      (local.set $pal (i32.shl (i32.and (local.get $attr) (i32.const 8)) (i32.const 1)))
+      (local.set $ty (local.get $py))
+      (if (i32.and (local.get $attr) (i32.const 4))
+        (then (local.set $ty (i32.sub (i32.const 7) (local.get $py)))))
+      (local.set $px (i32.const 0))
+      (block $pdone (loop $pl
+        (br_if $pdone (i32.ge_u (local.get $px) (i32.const 8)))
+        (local.set $c (call $tile_pixel (local.get $tile)
+          (select (i32.sub (i32.const 7) (local.get $px)) (local.get $px)
+                  (i32.and (local.get $attr) (i32.const 2)))
+          (local.get $ty)))
+        (local.set $x (i32.and (i32.add (i32.mul (local.get $col) (i32.const 8))
+          (i32.add (local.get $px) (i32.and (local.get $hs) (i32.const 7))))
+          (i32.const 255)))
+        (i32.store8 (i32.add (local.get $fbrow) (local.get $x))
+                    (i32.or (i32.or (local.get $c) (local.get $pal))
+                      (select (i32.const 0x80) (i32.const 0)
+                        (i32.and (i32.ne (local.get $c) (i32.const 0))
+                                 (i32.ne (i32.and (local.get $attr) (i32.const 0x10)) (i32.const 0))))))
+        (if (local.get $c)
+          (then (local.set $bgnz (i32.add (local.get $bgnz) (i32.const 1)))))
+        (local.set $px (i32.add (local.get $px) (i32.const 1)))
+        (br $pl)))
+      (local.set $col (i32.add (local.get $col) (i32.const 1)))
+      (br $bg)))
+    (i32.store8  (i32.add (local.get $lp) (i32.const 4)) (local.get $row))
+    (i32.store8  (i32.add (local.get $lp) (i32.const 5)) (local.get $ntnz))
+    (i32.store16 (i32.add (local.get $lp) (i32.const 6)) (local.get $bgnz))
+
+    (local.set $satb (i32.shl (i32.and (call $vreg (i32.const 5)) (i32.const 0x7E)) (i32.const 7)))
+    (local.set $h16 (i32.and (call $vreg (i32.const 1)) (i32.const 2)))
+    (local.set $i (i32.const 0))
+    (local.set $drawn (i32.const 0))
+    (block $spdone (loop $sp
+      (br_if $spdone (i32.ge_u (local.get $i) (i32.const 64)))
+      (br_if $spdone (i32.ge_u (local.get $drawn) (i32.const 8)))
+      (local.set $syy (i32.load8_u (i32.add (i32.add (i32.const ${VRAM}) (local.get $satb)) (local.get $i))))
+      (br_if $spdone (i32.eq (local.get $syy) (i32.const 208)))
+      (local.set $syy (i32.and (i32.add (local.get $syy) (i32.const 1)) (i32.const 0xFF)))
+      (if (i32.and (i32.ge_s (local.get $y) (local.get $syy))
+                   (i32.lt_s (local.get $y) (i32.add (local.get $syy)
+                     (select (i32.const 16) (i32.const 8) (local.get $h16)))))
+        (then
+          (local.set $sxx (i32.load8_u (i32.add (i32.add (i32.const ${VRAM})
+            (i32.add (local.get $satb) (i32.const 128))) (i32.mul (local.get $i) (i32.const 2)))))
+          (local.set $stile (i32.load8_u (i32.add (i32.add (i32.const ${VRAM})
+            (i32.add (local.get $satb) (i32.const 129))) (i32.mul (local.get $i) (i32.const 2)))))
+          (if (i32.and (call $vreg (i32.const 6)) (i32.const 4))
+            (then (local.set $stile (i32.add (local.get $stile) (i32.const 256)))))
+          (local.set $py (i32.sub (local.get $y) (local.get $syy)))
+          (if (local.get $h16)
+            (then
+              (local.set $stile (i32.and (local.get $stile) (i32.const 0xFFFFFFFE)))
+              (if (i32.ge_u (local.get $py) (i32.const 8))
+                (then (local.set $stile (i32.add (local.get $stile) (i32.const 1)))
+                      (local.set $py (i32.sub (local.get $py) (i32.const 8)))))))
+          (if (i32.and (call $vreg (i32.const 0)) (i32.const 8))
+            (then (local.set $sxx (i32.sub (local.get $sxx) (i32.const 8)))))
+          (local.set $px (i32.const 0))
+          (block $sdone (loop $spx
+            (br_if $sdone (i32.ge_u (local.get $px) (i32.const 8)))
+            (local.set $x (i32.add (local.get $sxx) (local.get $px)))
+            (if (i32.and (i32.ge_s (local.get $x) (i32.const 0)) (i32.lt_s (local.get $x) (i32.const 256)))
+              (then
+                (local.set $c (call $tile_pixel (local.get $stile) (local.get $px) (local.get $py)))
+                (local.set $o (i32.load8_u (i32.add (local.get $fbrow) (local.get $x))))
+                (if (i32.and (i32.ne (local.get $c) (i32.const 0))
+                             (i32.eqz (i32.and (local.get $o) (i32.const 0x40))))
+                  (then
+                    (if (i32.and (local.get $o) (i32.const 0x80))
+                      (then (i32.store8 (i32.add (local.get $fbrow) (local.get $x))
+                                        (i32.or (local.get $o) (i32.const 0x40))))
+                      (else (i32.store8 (i32.add (local.get $fbrow) (local.get $x))
+                                        (i32.or (local.get $c) (i32.const 0x50)))))))))
+            (local.set $px (i32.add (local.get $px) (i32.const 1)))
+            (br $spx)))
+          (local.set $drawn (i32.add (local.get $drawn) (i32.const 1)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $sp)))
+    (local.set $x (i32.const 0))
+    (block $std (loop $stl
+      (br_if $std (i32.ge_u (local.get $x) (i32.const 256)))
+      (i32.store8 (i32.add (local.get $fbrow) (local.get $x))
+        (select (local.get $bd)
+                (i32.and (i32.load8_u (i32.add (local.get $fbrow) (local.get $x))) (i32.const 0x1F))
+                (i32.and (i32.ne (i32.and (local.get $r0) (i32.const 0x20)) (i32.const 0))
+                         (i32.lt_u (local.get $x) (i32.const 8)))))
+      (local.set $x (i32.add (local.get $x) (i32.const 1)))
+      (br $stl))))
+`;
+}
+
+/**
+ * SN76489 PSG: three tone channels and the noise LFSR, rendered at 48000 Hz,
+ * 800 stereo f32 frames per video frame into the wasmcart ring (cursor at
+ * ABI+256, a ring index bounded by the 4096-frame capacity). The divider runs
+ * at 3579545/16 Hz with a fractional accumulator; the per-channel gain is
+ * calibrated against genesis_plus_gx's output level.
+ * @param {number} AUDIO ring address
+ * @param {number} ABI ABI block address
+ */
+export function psgWat(AUDIO, ABI) {
+  return `
+  (global $psg_latch (mut i32) (i32.const 0))
+
+  (global $p_t0 (mut i32) (i32.const 0)) (global $p_t1 (mut i32) (i32.const 0)) (global $p_t2 (mut i32) (i32.const 0))
+  (global $p_v0 (mut i32) (i32.const 15)) (global $p_v1 (mut i32) (i32.const 15)) (global $p_v2 (mut i32) (i32.const 15))
+  (global $p_c0 (mut i32) (i32.const 0)) (global $p_c1 (mut i32) (i32.const 0)) (global $p_c2 (mut i32) (i32.const 0))
+  (global $p_o0 (mut i32) (i32.const 1)) (global $p_o1 (mut i32) (i32.const 1)) (global $p_o2 (mut i32) (i32.const 1))
+  (global $nreg (mut i32) (i32.const 0)) (global $nvol (mut i32) (i32.const 15))
+  (global $ncnt (mut i32) (i32.const 0)) (global $nlfsr (mut i32) (i32.const 0x8000))
+  (global $nout (mut i32) (i32.const 0))
+  (global $psg_acc (mut i32) (i32.const 0))
+
+  (func $psg_write (param $v i32)
+    (local $b i32) (local $ch i32) (local $typ i32)
+    (local.set $b (i32.and (local.get $v) (i32.const 0xFF)))
+    (if (i32.and (local.get $b) (i32.const 0x80))
+      (then
+        (local.set $ch (i32.and (i32.shr_u (local.get $b) (i32.const 5)) (i32.const 3)))
+        (local.set $typ (i32.and (i32.shr_u (local.get $b) (i32.const 4)) (i32.const 1)))
+        (global.set $psg_latch (i32.or (i32.shl (local.get $ch) (i32.const 1)) (local.get $typ)))
+        (call $psg_set (global.get $psg_latch)
+                       (i32.and (local.get $b) (i32.const 0x0F))
+                       (i32.const 1)))
+      (else
+        (call $psg_set (global.get $psg_latch)
+                       (i32.and (local.get $b) (i32.const 0x3F))
+                       (i32.const 0)))))
+
+  (func $psg_set (param $reg i32) (param $val i32) (param $low i32)
+    (local $cur i32)
+    (block $done
+      (if (i32.and (local.get $reg) (i32.const 1))
+        (then
+          (if (i32.eq (local.get $reg) (i32.const 1)) (then (global.set $p_v0 (local.get $val))))
+          (if (i32.eq (local.get $reg) (i32.const 3)) (then (global.set $p_v1 (local.get $val))))
+          (if (i32.eq (local.get $reg) (i32.const 5)) (then (global.set $p_v2 (local.get $val))))
+          (if (i32.eq (local.get $reg) (i32.const 7)) (then (global.set $nvol (local.get $val))))
+          (br $done)))
+      (if (i32.eq (local.get $reg) (i32.const 6))
+        (then
+          (global.set $nreg (i32.and (local.get $val) (i32.const 7)))
+          (global.set $nlfsr (i32.const 0x8000))
+          (br $done)))
+      (if (i32.eq (local.get $reg) (i32.const 0))
+        (then (global.set $p_t0 (select
+                (i32.or (i32.and (global.get $p_t0) (i32.const 0x3F0)) (local.get $val))
+                (i32.or (i32.and (global.get $p_t0) (i32.const 0x00F)) (i32.shl (local.get $val) (i32.const 4)))
+                (local.get $low)))))
+      (if (i32.eq (local.get $reg) (i32.const 2))
+        (then (global.set $p_t1 (select
+                (i32.or (i32.and (global.get $p_t1) (i32.const 0x3F0)) (local.get $val))
+                (i32.or (i32.and (global.get $p_t1) (i32.const 0x00F)) (i32.shl (local.get $val) (i32.const 4)))
+                (local.get $low)))))
+      (if (i32.eq (local.get $reg) (i32.const 4))
+        (then (global.set $p_t2 (select
+                (i32.or (i32.and (global.get $p_t2) (i32.const 0x3F0)) (local.get $val))
+                (i32.or (i32.and (global.get $p_t2) (i32.const 0x00F)) (i32.shl (local.get $val) (i32.const 4)))
+                (local.get $low)))))))
+
+  (func $psg_vol (param $att i32) (result f32)
+    (local $a i32)
+    (local.set $a (i32.and (local.get $att) (i32.const 15)))
+    (if (i32.eq (local.get $a) (i32.const 0)) (then (return (f32.const 0.062069))))
+    (if (i32.eq (local.get $a) (i32.const 1)) (then (return (f32.const 0.049303))))
+    (if (i32.eq (local.get $a) (i32.const 2)) (then (return (f32.const 0.039163))))
+    (if (i32.eq (local.get $a) (i32.const 3)) (then (return (f32.const 0.031108))))
+    (if (i32.eq (local.get $a) (i32.const 4)) (then (return (f32.const 0.024710))))
+    (if (i32.eq (local.get $a) (i32.const 5)) (then (return (f32.const 0.019628))))
+    (if (i32.eq (local.get $a) (i32.const 6)) (then (return (f32.const 0.015591))))
+    (if (i32.eq (local.get $a) (i32.const 7)) (then (return (f32.const 0.012384))))
+    (if (i32.eq (local.get $a) (i32.const 8)) (then (return (f32.const 0.009837))))
+    (if (i32.eq (local.get $a) (i32.const 9)) (then (return (f32.const 0.007814))))
+    (if (i32.eq (local.get $a) (i32.const 10)) (then (return (f32.const 0.006207))))
+    (if (i32.eq (local.get $a) (i32.const 11)) (then (return (f32.const 0.004930))))
+    (if (i32.eq (local.get $a) (i32.const 12)) (then (return (f32.const 0.003916))))
+    (if (i32.eq (local.get $a) (i32.const 13)) (then (return (f32.const 0.003111))))
+    (if (i32.eq (local.get $a) (i32.const 14)) (then (return (f32.const 0.002471))))
+    (if (i32.eq (local.get $a) (i32.const 15)) (then (return (f32.const 0.000000))))
+    (f32.const 0))
+
+  (func $psg_tick (param $steps i32)
+    (local $i i32)
+    (block $d (loop $l
+      (br_if $d (i32.ge_u (local.get $i) (local.get $steps)))
+      (global.set $p_c0 (i32.sub (global.get $p_c0) (i32.const 1)))
+      (if (i32.le_s (global.get $p_c0) (i32.const 0))
+        (then (global.set $p_c0 (select (global.get $p_t0) (i32.const 1)
+                                 (i32.gt_u (global.get $p_t0) (i32.const 0))))
+              (global.set $p_o0 (i32.xor (global.get $p_o0) (i32.const 1)))))
+      (global.set $p_c1 (i32.sub (global.get $p_c1) (i32.const 1)))
+      (if (i32.le_s (global.get $p_c1) (i32.const 0))
+        (then (global.set $p_c1 (select (global.get $p_t1) (i32.const 1)
+                                 (i32.gt_u (global.get $p_t1) (i32.const 0))))
+              (global.set $p_o1 (i32.xor (global.get $p_o1) (i32.const 1)))))
+      (global.set $p_c2 (i32.sub (global.get $p_c2) (i32.const 1)))
+      (if (i32.le_s (global.get $p_c2) (i32.const 0))
+        (then (global.set $p_c2 (select (global.get $p_t2) (i32.const 1)
+                                 (i32.gt_u (global.get $p_t2) (i32.const 0))))
+              (global.set $p_o2 (i32.xor (global.get $p_o2) (i32.const 1)))))
+      (global.set $ncnt (i32.sub (global.get $ncnt) (i32.const 1)))
+      (if (i32.le_s (global.get $ncnt) (i32.const 0))
+        (then
+          (global.set $ncnt
+            (select (global.get $p_t2)
+                    (i32.shl (i32.const 0x10) (i32.and (global.get $nreg) (i32.const 3)))
+                    (i32.eq (i32.and (global.get $nreg) (i32.const 3)) (i32.const 3))))
+          (if (i32.eqz (global.get $ncnt)) (then (global.set $ncnt (i32.const 1))))
+          (global.set $nout (i32.and (global.get $nlfsr) (i32.const 1)))
+          (global.set $nlfsr
+            (i32.or (i32.shr_u (global.get $nlfsr) (i32.const 1))
+              (i32.shl
+                (select
+                  (i32.and (i32.xor (global.get $nlfsr)
+                                    (i32.shr_u (global.get $nlfsr) (i32.const 3)))
+                           (i32.const 1))
+                  (i32.and (global.get $nlfsr) (i32.const 1))
+                  (i32.and (global.get $nreg) (i32.const 4)))
+                (i32.const 15))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l))))
+
+  (func $psg_render
+    (local $i i32) (local $cur i32) (local $addr i32) (local $s f32)
+    (local.set $cur (i32.load (i32.add (i32.const ${ABI}) (i32.const 256))))
+    (block $d (loop $l
+      (br_if $d (i32.ge_u (local.get $i) (i32.const 800)))
+      (global.set $psg_acc (i32.add (global.get $psg_acc) (i32.const 4661)))
+      (call $psg_tick (i32.div_u (global.get $psg_acc) (i32.const 1000)))
+      (global.set $psg_acc (i32.rem_u (global.get $psg_acc) (i32.const 1000)))
+      (local.set $s (f32.add
+        (f32.add
+          (f32.mul (f32.convert_i32_s (i32.sub (i32.shl (global.get $p_o0) (i32.const 1)) (i32.const 1)))
+                   (call $psg_vol (global.get $p_v0)))
+          (f32.mul (f32.convert_i32_s (i32.sub (i32.shl (global.get $p_o1) (i32.const 1)) (i32.const 1)))
+                   (call $psg_vol (global.get $p_v1))))
+        (f32.add
+          (f32.mul (f32.convert_i32_s (i32.sub (i32.shl (global.get $p_o2) (i32.const 1)) (i32.const 1)))
+                   (call $psg_vol (global.get $p_v2)))
+          (f32.mul (f32.convert_i32_s (i32.sub (i32.shl (global.get $nout) (i32.const 1)) (i32.const 1)))
+                   (call $psg_vol (global.get $nvol))))))
+      (local.set $addr (i32.add (i32.const ${AUDIO})
+        (i32.mul (i32.and (local.get $cur) (i32.const 4095)) (i32.const 8))))
+      (f32.store (local.get $addr) (local.get $s))
+      (f32.store offset=4 (local.get $addr) (local.get $s))
+      (local.set $cur (i32.and (i32.add (local.get $cur) (i32.const 1))
+                               (i32.const 4095)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (i32.store (i32.add (i32.const ${ABI}) (i32.const 256)) (local.get $cur)))
+`;
+}
+
+/**
+ * Z80 ops that are simpler as calls: ex af / exx, daa, adc/sbc hl (full
+ * flags: S from bit 15, H from bit 11, PV signed overflow - the signed
+ * 16-bit compare idiom `sbc hl,de` + `jp m` depends on S), CB shifts and
+ * rotates (sll/sli sets bit 0), ldi/ldd/cpi/cpd steps, outi/outd with the
+ * exact OUTI flag rules, rld/rrd.
+ */
+export function miscWat() {
+  return `
+  (func $ex_af
+    (local $t i32)
+    (local.set $t (global.get $a)) (global.set $a (global.get $a2)) (global.set $a2 (local.get $t))
+    (local.set $t (global.get $f)) (global.set $f (global.get $f2)) (global.set $f2 (local.get $t)))
+
+  (func $exx
+    (local $t i32)
+    (local.set $t (global.get $b)) (global.set $b (global.get $b2)) (global.set $b2 (local.get $t))
+    (local.set $t (global.get $c)) (global.set $c (global.get $c2)) (global.set $c2 (local.get $t))
+    (local.set $t (global.get $d)) (global.set $d (global.get $d2)) (global.set $d2 (local.get $t))
+    (local.set $t (global.get $e)) (global.set $e (global.get $e2)) (global.set $e2 (local.get $t))
+    (local.set $t (global.get $h)) (global.set $h (global.get $h2)) (global.set $h2 (local.get $t))
+    (local.set $t (global.get $l)) (global.set $l (global.get $l2)) (global.set $l2 (local.get $t)))
+
+  (func $daa
+    (local $c i32) (local $add i32) (local $r i32)
+    (local.set $c (i32.and (global.get $f) (i32.const 1)))
+    (if (i32.or (i32.and (global.get $f) (i32.const 0x10))
+                (i32.gt_u (i32.and (global.get $a) (i32.const 0xF)) (i32.const 9)))
+      (then (local.set $add (i32.const 6))))
+    (if (i32.or (local.get $c) (i32.gt_u (global.get $a) (i32.const 0x99)))
+      (then (local.set $add (i32.or (local.get $add) (i32.const 0x60)))
+            (local.set $c (i32.const 1))))
+    (if (i32.and (global.get $f) (i32.const 2))
+      (then (local.set $r (call $sub8 (global.get $a) (local.get $add) (i32.const 0))))
+      (else (local.set $r (call $add8 (global.get $a) (local.get $add) (i32.const 0)))))
+    (global.set $a (local.get $r))
+    (global.set $f (i32.or (i32.and (global.get $f) (i32.const 0xFE)) (local.get $c))))
+
+  (func $sbc16 (param $x i32) (param $y i32) (result i32)
+    (local $r i32) (local $c i32)
+    (local.set $c (i32.and (global.get $f) (i32.const 1)))
+    (local.set $r (i32.sub (i32.sub (local.get $x) (local.get $y)) (local.get $c)))
+    (global.set $f (i32.or (i32.or (i32.or
+      (i32.const 2)
+      (i32.and (i32.shr_u (local.get $r) (i32.const 16)) (i32.const 1)))
+      (i32.or
+        (select (i32.const 0x40) (i32.const 0) (i32.eqz (i32.and (local.get $r) (i32.const 0xFFFF))))
+        (i32.and (i32.shr_u (local.get $r) (i32.const 8)) (i32.const 0x80))))
+      (i32.or
+        (i32.shl (i32.and (i32.shr_u
+          (i32.sub (i32.sub (i32.and (local.get $x) (i32.const 0xFFF))
+                            (i32.and (local.get $y) (i32.const 0xFFF)))
+                   (local.get $c))
+          (i32.const 12)) (i32.const 1)) (i32.const 4))
+        (i32.shr_u (i32.and
+          (i32.and (i32.xor (local.get $x) (local.get $y))
+                   (i32.xor (local.get $x) (local.get $r)))
+          (i32.const 0x8000)) (i32.const 13)))))
+    (i32.and (local.get $r) (i32.const 0xFFFF)))
+
+  (func $adc16 (param $x i32) (param $y i32) (result i32)
+    (local $r i32) (local $c i32)
+    (local.set $c (i32.and (global.get $f) (i32.const 1)))
+    (local.set $r (i32.add (i32.add (local.get $x) (local.get $y)) (local.get $c)))
+    (global.set $f (i32.or (i32.or
+      (i32.and (i32.shr_u (local.get $r) (i32.const 16)) (i32.const 1))
+      (i32.or
+        (select (i32.const 0x40) (i32.const 0) (i32.eqz (i32.and (local.get $r) (i32.const 0xFFFF))))
+        (i32.and (i32.shr_u (local.get $r) (i32.const 8)) (i32.const 0x80))))
+      (i32.or
+        (i32.shl (i32.and (i32.shr_u
+          (i32.add (i32.add (i32.and (local.get $x) (i32.const 0xFFF))
+                            (i32.and (local.get $y) (i32.const 0xFFF)))
+                   (local.get $c))
+          (i32.const 12)) (i32.const 1)) (i32.const 4))
+        (i32.shr_u (i32.and
+          (i32.and (i32.xor (local.get $x) (i32.xor (local.get $y) (i32.const 0xFFFF)))
+                   (i32.xor (local.get $x) (local.get $r)))
+          (i32.const 0x8000)) (i32.const 13)))))
+    (i32.and (local.get $r) (i32.const 0xFFFF)))
+
+  (func $rl (param $v i32) (result i32)
+    (local $r i32)
+    (local.set $r (i32.or (i32.shl (local.get $v) (i32.const 1)) (i32.and (global.get $f) (i32.const 1))))
+    (global.set $f (i32.or (call $szp (i32.and (local.get $r) (i32.const 0xFF)))
+                           (i32.shr_u (local.get $v) (i32.const 7))))
+    (i32.and (local.get $r) (i32.const 0xFF)))
+  (func $rr (param $v i32) (result i32)
+    (local $r i32)
+    (local.set $r (i32.or (i32.shr_u (local.get $v) (i32.const 1))
+                          (i32.shl (i32.and (global.get $f) (i32.const 1)) (i32.const 7))))
+    (global.set $f (i32.or (call $szp (local.get $r)) (i32.and (local.get $v) (i32.const 1))))
+    (local.get $r))
+  (func $rlc (param $v i32) (result i32)
+    (local $r i32)
+    (local.set $r (i32.and (i32.or (i32.shl (local.get $v) (i32.const 1))
+                                   (i32.shr_u (local.get $v) (i32.const 7))) (i32.const 0xFF)))
+    (global.set $f (i32.or (call $szp (local.get $r)) (i32.shr_u (local.get $v) (i32.const 7))))
+    (local.get $r))
+  (func $rrc (param $v i32) (result i32)
+    (local $r i32)
+    (local.set $r (i32.and (i32.or (i32.shr_u (local.get $v) (i32.const 1))
+                                   (i32.shl (local.get $v) (i32.const 7))) (i32.const 0xFF)))
+    (global.set $f (i32.or (call $szp (local.get $r)) (i32.and (local.get $v) (i32.const 1))))
+    (local.get $r))
+  (func $sla (param $v i32) (result i32)
+    (local $r i32)
+    (local.set $r (i32.and (i32.shl (local.get $v) (i32.const 1)) (i32.const 0xFF)))
+    (global.set $f (i32.or (call $szp (local.get $r)) (i32.shr_u (local.get $v) (i32.const 7))))
+    (local.get $r))
+  (func $sra (param $v i32) (result i32)
+    (local $r i32)
+    (local.set $r (i32.or (i32.shr_u (local.get $v) (i32.const 1))
+                          (i32.and (local.get $v) (i32.const 0x80))))
+    (global.set $f (i32.or (call $szp (local.get $r)) (i32.and (local.get $v) (i32.const 1))))
+    (local.get $r))
+  (func $srl (param $v i32) (result i32)
+    (local $r i32)
+    (local.set $r (i32.shr_u (local.get $v) (i32.const 1)))
+    (global.set $f (i32.or (call $szp (local.get $r)) (i32.and (local.get $v) (i32.const 1))))
+    (local.get $r))
+  (func $sll (param $v i32) (result i32)
+    (local $r i32)
+    (local.set $r (i32.and (i32.or (i32.shl (local.get $v) (i32.const 1))
+                                   (i32.const 1)) (i32.const 0xFF)))
+    (global.set $f (i32.or (call $szp (local.get $r))
+                           (i32.shr_u (i32.and (local.get $v) (i32.const 0x80)) (i32.const 7))))
+    (local.get $r))
+
+  (func $ldi_step (param $dir i32)
+    (local $hl i32) (local $de i32) (local $bc i32)
+    (local.set $hl (i32.or (i32.shl (global.get $h) (i32.const 8)) (global.get $l)))
+    (local.set $de (i32.or (i32.shl (global.get $d) (i32.const 8)) (global.get $e)))
+    (local.set $bc (i32.or (i32.shl (global.get $b) (i32.const 8)) (global.get $c)))
+    (call $wr8 (local.get $de) (call $rd8 (local.get $hl)))
+    (local.set $hl (i32.and (i32.add (local.get $hl) (local.get $dir)) (i32.const 0xFFFF)))
+    (local.set $de (i32.and (i32.add (local.get $de) (local.get $dir)) (i32.const 0xFFFF)))
+    (local.set $bc (i32.and (i32.sub (local.get $bc) (i32.const 1)) (i32.const 0xFFFF)))
+    (global.set $h (i32.shr_u (local.get $hl) (i32.const 8))) (global.set $l (i32.and (local.get $hl) (i32.const 0xFF)))
+    (global.set $d (i32.shr_u (local.get $de) (i32.const 8))) (global.set $e (i32.and (local.get $de) (i32.const 0xFF)))
+    (global.set $b (i32.shr_u (local.get $bc) (i32.const 8))) (global.set $c (i32.and (local.get $bc) (i32.const 0xFF)))
+    (global.set $f (i32.or (i32.and (global.get $f) (i32.const 0xC1))
+                           (select (i32.const 4) (i32.const 0) (local.get $bc)))))
+
+  (func $ldi (call $ldi_step (i32.const 1)))
+  (func $ldd (call $ldi_step (i32.const -1)))
+  (func $ldir (block $d (loop $l (call $ldi_step (i32.const 1))
+    (br_if $d (i32.eqz (i32.or (global.get $b) (global.get $c)))) (br $l))))
+  (func $lddr (block $d (loop $l (call $ldi_step (i32.const -1))
+    (br_if $d (i32.eqz (i32.or (global.get $b) (global.get $c)))) (br $l))))
+
+  (func $outi_step
+    (local $hl i32) (local $io i32)
+    (local.set $hl (i32.or (i32.shl (global.get $h) (i32.const 8)) (global.get $l)))
+    (local.set $io (call $rd8 (local.get $hl)))
+    (call $io_write (global.get $c) (local.get $io))
+    (local.set $hl (i32.and (i32.add (local.get $hl) (i32.const 1)) (i32.const 0xFFFF)))
+    (global.set $h (i32.shr_u (local.get $hl) (i32.const 8)))
+    (global.set $l (i32.and (local.get $hl) (i32.const 0xFF)))
+    (global.set $b (i32.and (i32.sub (global.get $b) (i32.const 1)) (i32.const 0xFF)))
+    (call $blockio_flags (local.get $io)))
+
+  (func $blockio_flags (param $io i32)
+    (local $t i32) (local $f i32)
+    (local.set $f (call $szp (global.get $b)))
+    (local.set $f (i32.and (local.get $f) (i32.const 0xA8)))
+    (if (i32.eqz (global.get $b))
+      (then (local.set $f (i32.or (local.get $f) (i32.const 0x40)))))
+    (local.set $t (i32.add (global.get $l) (local.get $io)))
+    (if (i32.and (local.get $io) (i32.const 0x80))
+      (then (local.set $f (i32.or (local.get $f) (i32.const 0x02)))))
+    (if (i32.and (local.get $t) (i32.const 0x100))
+      (then (local.set $f (i32.or (local.get $f) (i32.const 0x11)))))
+    (local.set $f (i32.or (local.get $f)
+      (i32.and (call $szp (i32.xor (i32.and (local.get $t) (i32.const 0x07))
+                                   (global.get $b)))
+               (i32.const 0x04))))
+    (global.set $f (local.get $f)))
+  (func $outi (call $outi_step))
+  (func $otir (block $d (loop $l (call $outi_step)
+    (br_if $d (i32.eqz (global.get $b))) (br $l))))
+  (func $ini (call $outi_step))
+  (func $inir (call $otir))
+
+  (func $outd_step
+    (local $hl i32) (local $io i32)
+    (local.set $hl (i32.or (i32.shl (global.get $h) (i32.const 8)) (global.get $l)))
+    (local.set $io (call $rd8 (local.get $hl)))
+    (call $io_write (global.get $c) (local.get $io))
+    (local.set $hl (i32.and (i32.sub (local.get $hl) (i32.const 1)) (i32.const 0xFFFF)))
+    (global.set $h (i32.shr_u (local.get $hl) (i32.const 8)))
+    (global.set $l (i32.and (local.get $hl) (i32.const 0xFF)))
+    (global.set $b (i32.and (i32.sub (global.get $b) (i32.const 1)) (i32.const 0xFF)))
+    (call $blockio_flags (local.get $io)))
+  (func $outd (call $outd_step))
+  (func $otdr (block $d (loop $l (call $outd_step)
+    (br_if $d (i32.eqz (global.get $b))) (br $l))))
+  (func $ind (call $outd_step))
+  (func $indr (call $otdr))
+
+  (func $rld
+    (local $hl i32) (local $m i32) (local $a i32)
+    (local.set $hl (i32.or (i32.shl (global.get $h) (i32.const 8)) (global.get $l)))
+    (local.set $m (call $rd8 (local.get $hl)))
+    (local.set $a (global.get $a))
+    (call $wr8 (local.get $hl)
+      (i32.and (i32.or (i32.shl (local.get $m) (i32.const 4))
+                       (i32.and (local.get $a) (i32.const 0x0F)))
+               (i32.const 0xFF)))
+    (global.set $a (i32.or (i32.and (local.get $a) (i32.const 0xF0))
+                           (i32.shr_u (local.get $m) (i32.const 4))))
+    (global.set $f (i32.or (i32.and (global.get $f) (i32.const 0x01))
+                           (i32.and (call $szp (global.get $a)) (i32.const 0xFC)))))
+
+  (func $rrd
+    (local $hl i32) (local $m i32) (local $a i32)
+    (local.set $hl (i32.or (i32.shl (global.get $h) (i32.const 8)) (global.get $l)))
+    (local.set $m (call $rd8 (local.get $hl)))
+    (local.set $a (global.get $a))
+    (call $wr8 (local.get $hl)
+      (i32.and (i32.or (i32.shl (i32.and (local.get $a) (i32.const 0x0F)) (i32.const 4))
+                       (i32.shr_u (local.get $m) (i32.const 4)))
+               (i32.const 0xFF)))
+    (global.set $a (i32.or (i32.and (local.get $a) (i32.const 0xF0))
+                           (i32.and (local.get $m) (i32.const 0x0F))))
+    (global.set $f (i32.or (i32.and (global.get $f) (i32.const 0x01))
+                           (i32.and (call $szp (global.get $a)) (i32.const 0xFC)))))
+  (func $cpi_step (param $dir i32)
+    (local $hl i32) (local $bc i32) (local $v i32) (local $r i32) (local $f i32)
+    (local.set $hl (i32.or (i32.shl (global.get $h) (i32.const 8)) (global.get $l)))
+    (local.set $bc (i32.or (i32.shl (global.get $b) (i32.const 8)) (global.get $c)))
+    (local.set $v (call $rd8 (local.get $hl)))
+    (local.set $r (i32.and (i32.sub (global.get $a) (local.get $v)) (i32.const 0xFF)))
+    (local.set $hl (i32.and (i32.add (local.get $hl) (local.get $dir)) (i32.const 0xFFFF)))
+    (local.set $bc (i32.and (i32.sub (local.get $bc) (i32.const 1)) (i32.const 0xFFFF)))
+    (global.set $h (i32.shr_u (local.get $hl) (i32.const 8)))
+    (global.set $l (i32.and (local.get $hl) (i32.const 0xFF)))
+    (global.set $b (i32.shr_u (local.get $bc) (i32.const 8)))
+    (global.set $c (i32.and (local.get $bc) (i32.const 0xFF)))
+    (local.set $f (i32.or (i32.and (global.get $f) (i32.const 1)) (i32.const 2)))
+    (if (i32.eqz (local.get $r))
+      (then (local.set $f (i32.or (local.get $f) (i32.const 0x40)))))
+    (local.set $f (i32.or (local.get $f) (i32.and (local.get $r) (i32.const 0x80))))
+    (if (i32.lt_u (i32.and (global.get $a) (i32.const 0x0F))
+                  (i32.and (local.get $v) (i32.const 0x0F)))
+      (then (local.set $f (i32.or (local.get $f) (i32.const 0x10)))))
+    (if (local.get $bc)
+      (then (local.set $f (i32.or (local.get $f) (i32.const 4)))))
+    (global.set $f (local.get $f)))
+  (func $cpi (call $cpi_step (i32.const 1)))
+  (func $cpd (call $cpi_step (i32.const -1)))
+  (func $cpir (block $d (loop $l (call $cpi_step (i32.const 1))
+    (br_if $d (i32.eqz (i32.and (global.get $f) (i32.const 4))))
+    (br_if $d (i32.and (global.get $f) (i32.const 0x40))) (br $l))))
+  (func $cpdr (block $d (loop $l (call $cpi_step (i32.const -1))
+    (br_if $d (i32.eqz (i32.and (global.get $f) (i32.const 4))))
+    (br_if $d (i32.and (global.get $f) (i32.const 0x40))) (br $l))))
+
+`;
+}
+
+/**
+ * CRAM entry -> r/g/b locals for $cram_rgba. SMS: 1 byte --BBGGRR, 2 bits
+ * per channel, looked up at n*5. GG: 2 bytes little-endian 0x0BGR, 4 bits
+ * per channel.
+ * @param {'sms'|'gg'} platform
+ * @param {number} base CRAM address
+ */
+export function cramBody(platform, base) {
+  if (platform === "gg") return `    (local.set $c (i32.load16_u (i32.add (i32.const ${base}) (i32.mul (i32.and (local.get $i) (i32.const 0x1F)) (i32.const 2)))))
+    (local.set $r (i32.load8_u (i32.add (i32.const ${GGLUT}) (i32.and (local.get $c) (i32.const 0xF)))))
+    (local.set $g (i32.load8_u (i32.add (i32.const ${GGLUT}) (i32.add (i32.const 16) (i32.and (i32.shr_u (local.get $c) (i32.const 4)) (i32.const 0xF))))))
+    (local.set $b (i32.load8_u (i32.add (i32.const ${GGLUT}) (i32.add (i32.const 32) (i32.and (i32.shr_u (local.get $c) (i32.const 8)) (i32.const 0xF))))))`;
+  return `    (local.set $c (i32.load8_u (i32.add (i32.const ${base}) (i32.and (local.get $i) (i32.const 0x1F)))))
+    (local.set $r (i32.load8_u (i32.add (i32.const ${GGLUT}) (i32.mul (i32.and (local.get $c) (i32.const 3)) (i32.const 5)))))
+    (local.set $g (i32.load8_u (i32.add (i32.const ${GGLUT}) (i32.add (i32.const 16) (i32.mul (i32.and (i32.shr_u (local.get $c) (i32.const 2)) (i32.const 3)) (i32.const 5))))))
+    (local.set $b (i32.load8_u (i32.add (i32.const ${GGLUT}) (i32.add (i32.const 32) (i32.mul (i32.and (i32.shr_u (local.get $c) (i32.const 4)) (i32.const 3)) (i32.const 5))))))`;
+}
+
+/**
+ * START handling in wc_render. SMS has no START (it is aliased to button 1);
+ * the GG has a real one on port $00 bit 7, active low.
+ * @param {'sms'|'gg'} platform
+ */
+export function startBody(platform) {
+  if (platform === "gg") return `    (global.set $ggstart (i32.const 0x80))
+    (if (i32.and (local.get $btn) (i32.const 64))
+      (then (global.set $ggstart (i32.const 0))))`;
+  return `    (if (i32.and (local.get $btn) (i32.const 64))
+      (then (global.set $joy1 (i32.and (global.get $joy1) (i32.const 0xEF)))))`;
+}
