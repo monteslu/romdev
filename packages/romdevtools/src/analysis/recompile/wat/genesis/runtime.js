@@ -927,6 +927,7 @@ export function ioWat(opts = {}) {
 // VDP (vdp_ctrl.c, Mode 5 / 68k side). opts.pal: vdp_pal (313 lines, the
 // PAL column of vc_table, the PAL bit in the status register).
 export function vdpWat(opts = {}) {
+  const hw = opts.hw || null;
   const LINES = opts.pal ? 313 : 262;
   const VC = opts.pal ? [0xF2, 0x102, 0xF2, 0x10A] : [0xDA, 0xEA, 0xDA, 0x106];
   const ZCYC = ZREGS + 64;
@@ -1126,10 +1127,15 @@ export function vdpWat(opts = {}) {
     (local.set $src (i32.or (local.get $hi) (i32.shl (global.get $v_dma_src) (i32.const 1))))
     (block $d (loop $l
       (local.set $src (i32.and (local.get $src) (i32.const 0xFFFFFF)))
+      ;; vdp_dma_68k_ext: the bank's read16 handler when it has one (backup
+      ;; RAM, serial EEPROM, rom_database registers), else its memory
       (if (i32.lt_u (local.get $src) (i32.const 0x800000))
         (then (if (i32.lt_u (local.get $src) (i32.const 0x400000))
-                (then (local.set $data (call $raw16 (local.get $src))))
-                (else (local.set $data (call $bus16)))))
+                (then (local.set $data (call $cart_rd16 (local.get $src))))
+                (else ${hw && hw.regsR ? `(if (i32.and (i32.ge_u (i32.shr_u (local.get $src) (i32.const 16)) (i32.const ${hw.bankStart}))
+                                (i32.le_u (i32.shr_u (local.get $src) (i32.const 16)) (i32.const ${hw.bankEnd})))
+                        (then (local.set $data (i32.and (call $regs_r (local.get $src)) (i32.const 0xFFFF))))
+                        (else (local.set $data (call $bus16))))` : "(local.set $data (call $bus16))"})))
         (else
           (if (i32.eq (i32.shr_u (local.get $src) (i32.const 16)) (i32.const 0xA1))
             (then (local.set $data (call $io_68k_read (i32.and (i32.shr_u (local.get $src) (i32.const 1)) (i32.const 0xF))))
@@ -1149,11 +1155,12 @@ export function vdpWat(opts = {}) {
     (if (i32.eqz (i32.and (global.get $v_code) (i32.const 0x10))) (then (return)))
     (local.set $src (global.get $v_dma_src))
     (block $d (loop $l
-      (local.set $data (i32.load8_u (i32.add (i32.const ${VRAM}) (i32.xor (i32.and (local.get $src) (i32.const 0xFFFF)) (i32.const 1)))))
+      ;; READ_BYTE(vram, source ^ 1) / WRITE_BYTE(vram, addr ^ 1): LSB_FIRST's ^1 cancels both
+      (local.set $data (i32.load8_u (i32.add (i32.const ${VRAM}) (i32.and (local.get $src) (i32.const 0xFFFF)))))
       (if (i32.eq (i32.and (global.get $v_addr) (global.get $v_sat_base_mask)) (global.get $v_satb))
-        (then (i32.store8 (i32.add (i32.const ${SAT}) (i32.xor (i32.and (global.get $v_addr) (global.get $v_sat_addr_mask)) (i32.const 1)))
+        (then (i32.store8 (i32.add (i32.const ${SAT}) (i32.and (global.get $v_addr) (global.get $v_sat_addr_mask)))
                           (local.get $data))))
-      (i32.store8 (i32.add (i32.const ${VRAM}) (i32.xor (global.get $v_addr) (i32.const 1))) (local.get $data))
+      (i32.store8 (i32.add (i32.const ${VRAM}) (global.get $v_addr)) (local.get $data))
       (local.set $src (i32.and (i32.add (local.get $src) (i32.const 1)) (i32.const 0xFFFF)))
       (global.set $v_addr (i32.and (i32.add (global.get $v_addr) ${R(15)}) (i32.const 0xFFFF)))
       (local.set $len (i32.sub (local.get $len) (i32.const 1)))
@@ -1166,11 +1173,12 @@ export function vdpWat(opts = {}) {
     (if (i32.eq (local.get $cd) (i32.const 1))
       (then
         (local.set $data (i32.shr_u (call $fifo_get (i32.add (global.get $v_fifo_idx) (i32.const 3))) (i32.const 8)))
+        ;; WRITE_BYTE(vram, addr ^ 1): with LSB_FIRST's own ^1 that is byte addr of the array
         (block $d (loop $l
           (if (i32.eq (i32.and (global.get $v_addr) (global.get $v_sat_base_mask)) (global.get $v_satb))
-            (then (i32.store8 (i32.add (i32.const ${SAT}) (i32.xor (i32.and (global.get $v_addr) (global.get $v_sat_addr_mask)) (i32.const 1)))
+            (then (i32.store8 (i32.add (i32.const ${SAT}) (i32.and (global.get $v_addr) (global.get $v_sat_addr_mask)))
                               (local.get $data))))
-          (i32.store8 (i32.add (i32.const ${VRAM}) (i32.xor (global.get $v_addr) (i32.const 1))) (local.get $data))
+          (i32.store8 (i32.add (i32.const ${VRAM}) (global.get $v_addr)) (local.get $data))
           (global.set $v_addr (i32.and (i32.add (global.get $v_addr) ${R(15)}) (i32.const 0xFFFF)))
           (local.set $len (i32.sub (local.get $len) (i32.const 1)))
           (br_if $l (local.get $len))))

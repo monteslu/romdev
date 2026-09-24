@@ -948,7 +948,7 @@ export async function* emitWat(rom, opts = {}) {
   // options.audio (default on): genesis_plus_gx's YM2612 + PSG output (ym2612.js)
   const AUDIO = opts.audio !== false;
   if (AUDIO && mdSoundInfo(SND).end > RT.ZT) throw new Error("genesis recompile: the sound state overlaps the Z80 tables");
-  yield AUDIO ? hookVdpWat(RT.vdpWat({ pal: PAL })) : RT.vdpWat({ pal: PAL });
+  yield AUDIO ? hookVdpWat(RT.vdpWat({ pal: PAL, hw: HW })) : RT.vdpWat({ pal: PAL, hw: HW });
   if (AUDIO) yield ymWat({ base: SND, cursorAddr: ABI + 256, fmBuf: FMBUF, pal: PAL, deltas: opts.audioDeltas ? DELTAS : undefined });
   yield RT.renderWat();
   // the Z80: one function per opcode handler, dispatched via the table

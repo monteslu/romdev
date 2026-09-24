@@ -428,3 +428,18 @@ test("Mode 4 on the Mega Drive VDP: 16KB VRAM words, 6-bit CRAM, tiles with flip
     assert.equal(r.picture.exactPct, 100, `R0=${r0.toString(16)} R1=${r1.toString(16)}: ${JSON.stringify(r.picture)}`);
   }
 });
+
+test("VRAM DMA fill and copy write the byte gpgx's WRITE_BYTE(vram, addr ^ 1) lands on (odd starts, R15 = 1 and 2, odd lengths)", T, async () => {
+  const cmd = (c) => [...W(0x33fc, c), ...L(0xc00004)];
+  const cmd2 = (a, cd) => { const c = (((cd & 3) << 30) | ((a & 0x3fff) << 16) | ((cd & 0x3c) << 2) | (a >> 14)) >>> 0; return [...W(0x23fc), ...L(c), ...L(0xc00004)]; };
+  const dat = (...ws) => ws.flatMap((w) => [...W(0x33fc, w), ...L(0xc00000)]);
+  const wait = [...W(0x3e39), ...L(0xc00004), ...W(0x0807, 0x0001, 0x66f4)];  // until DMA is done
+  const fill = (a, len, inc, v) => [...cmd(0x8f00 | inc), ...cmd(0x9300 | len), ...cmd(0x9400), ...cmd(0x9780), ...cmd2(a, 0x21), ...dat(v), ...wait];
+  const copy = (src, a, len, inc) => [...cmd(0x8f00 | inc), ...cmd(0x9300 | len), ...cmd(0x9400), ...cmd(0x9500 | (src & 0xff)), ...cmd(0x9600 | (src >> 8)), ...cmd(0x97c0), ...cmd2(a, 0x30), ...wait];
+  const code = [...cmd(0x8114), ...cmd2(0x0000, 1), ...dat(...Array.from({ length: 64 }, (_, i) => (i * 0x1357 + 0x2468) & 0xffff)),
+    ...fill(0x0101, 7, 1, 0x5a5a), ...fill(0x0200, 9, 2, 0xc3c3), ...fill(0x0301, 5, 2, 0x8181),
+    ...copy(0x0005, 0x0401, 11, 1), ...copy(0x0010, 0x0500, 9, 2), ...fill(0xf801, 7, 2, 0x7e7e),   // the last one into the SAT ($F800)
+    ...cmd(0x857c), ...W(0x60fe)];
+  const r = await gpgxParity({ platform: "genesis", rom: mdImage(code), maxFrames: 3 });
+  assert.equal(r.diverged, false, divergenceText(r));
+});
