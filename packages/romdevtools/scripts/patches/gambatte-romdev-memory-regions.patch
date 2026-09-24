@@ -22,10 +22,10 @@ index 7e5c43b..18dcb52 100644
  
  private:
 diff --git a/libgambatte/libretro/libretro.cpp b/libgambatte/libretro/libretro.cpp
-index 15b042c..477404d 100644
+index 15b042c..0e0541b 100644
 --- a/libgambatte/libretro/libretro.cpp
 +++ b/libgambatte/libretro/libretro.cpp
-@@ -2874,6 +2874,56 @@ void retro_unload_game()
+@@ -2874,6 +2874,57 @@ void retro_unload_game()
  
  unsigned retro_get_region() { return RETRO_REGION_NTSC; }
  
@@ -78,11 +78,12 @@ index 15b042c..477404d 100644
 +#define ROMDEV_MEMORY_GB_PALLINE  0x14A  /* 144 x 128B bgr15 palettes per line */
 +#define ROMDEV_MEMORY_GB_BGCOL15  0x14B  /* 144 x 160 x u16 BG bgr15 per pixel */
 +#define ROMDEV_MEMORY_GB_SPRCOL15 0x14C  /* 144 x 160 x u16 OBJ bgr15 per pixel */
++#define ROMDEV_MEMORY_GB_LCDLOG   0x14D  /* LCD timing decision ring (romdev_gbcap.h) */
 +
  void *retro_get_memory_data(unsigned id)
  {
     if (rom_loaded) switch (id)
-@@ -2883,11 +2933,26 @@ void *retro_get_memory_data(unsigned id)
+@@ -2883,11 +2934,27 @@ void *retro_get_memory_data(unsigned id)
        case RETRO_MEMORY_RTC:
           return gb.rtcdata_ptr();
        case RETRO_MEMORY_SYSTEM_RAM:
@@ -108,10 +109,11 @@ index 15b042c..477404d 100644
 +      case ROMDEV_MEMORY_GB_PALLINE:  return romdev_gb_palline;
 +      case ROMDEV_MEMORY_GB_BGCOL15:  return romdev_gb_bgcol15;
 +      case ROMDEV_MEMORY_GB_SPRCOL15: return romdev_gb_sprcol15;
++      case ROMDEV_MEMORY_GB_LCDLOG:   return romdev_gb_lcdlog;
     }
  
     return 0;
-@@ -2902,14 +2967,27 @@ size_t retro_get_memory_size(unsigned id)
+@@ -2902,14 +2969,28 @@ size_t retro_get_memory_size(unsigned id)
        case RETRO_MEMORY_RTC:
           return gb.rtcdata_size();
        case RETRO_MEMORY_SYSTEM_RAM:
@@ -138,10 +140,11 @@ index 15b042c..477404d 100644
 +      case ROMDEV_MEMORY_GB_PALLINE:  return sizeof(romdev_gb_palline);
 +      case ROMDEV_MEMORY_GB_BGCOL15:  return sizeof(romdev_gb_bgcol15);
 +      case ROMDEV_MEMORY_GB_SPRCOL15: return sizeof(romdev_gb_sprcol15);
++      case ROMDEV_MEMORY_GB_LCDLOG:   return sizeof(romdev_gb_lcdlog);
     }
  
     return 0;
-@@ -2924,6 +3002,21 @@ void retro_run()
+@@ -2924,6 +3005,21 @@ void retro_run()
     input_poll_cb();
     update_input_state();
  
@@ -548,7 +551,7 @@ index 5e1f952..1d7df17 100644
  
  }
 diff --git a/libgambatte/src/video.cpp b/libgambatte/src/video.cpp
-index a997aad..89276c3 100644
+index a997aad..2b480c2 100644
 --- a/libgambatte/src/video.cpp
 +++ b/libgambatte/src/video.cpp
 @@ -17,6 +17,8 @@
@@ -594,6 +597,24 @@ index a997aad..89276c3 100644
  }
  
  void LCD::resetCc(const unsigned long oldCc, const unsigned long newCc)
+@@ -653,6 +675,7 @@ unsigned LCD::getStat(const unsigned lycReg, const unsigned long cc)
+ 
+       if (lycReg == lycCmp.ly && lycCmp.timeToNextLy > 4 - is_doublespeed * 4)
+          stat |= 4;
++      romdev_gb_lcdev(1, cc, ppu_.lyCounter().ly() | stat << 8, nextM0Time_.predictedNextM0Time(), ppu_.lyCounter().time());
+    }
+ 
+    return stat;
+@@ -687,6 +710,9 @@ inline void LCD::doMode2IrqEvent()
+ 
+ inline void LCD::event()
+ {
++   romdev_gb_lcdev(3, eventTimes_.nextEventTime(),
++      (eventTimes_.nextEvent() == MEM_EVENT ? (unsigned)eventTimes_.nextMemEvent() : 0x10u) | ppu_.lyCounter().ly() << 8,
++      statReg_, ppu_.lastM0Time());
+    switch (eventTimes_.nextEvent())
+    {
+       case MEM_EVENT:
 diff --git a/libgambatte/src/video.h b/libgambatte/src/video.h
 index 7516ba1..bf231cb 100644
 --- a/libgambatte/src/video.h
@@ -632,6 +653,19 @@ index 7516ba1..bf231cb 100644
     private:
        enum Event { MEM_EVENT, LY_COUNT }; enum { NUM_EVENTS = LY_COUNT + 1 };
        enum MemEvent { ONESHOT_LCDSTATIRQ, ONESHOT_UPDATEWY2, MODE1_IRQ, LYC_IRQ, SPRITE_MAP,
+diff --git a/libgambatte/src/video/next_m0_time.cpp b/libgambatte/src/video/next_m0_time.cpp
+index bf382c3..3fe4720 100644
+--- a/libgambatte/src/video/next_m0_time.cpp
++++ b/libgambatte/src/video/next_m0_time.cpp
+@@ -1,6 +1,8 @@
+ #include "next_m0_time.h"
++#include "romdev_gbcap.h"
+ #include "ppu.h"
+ 
+ void gambatte::NextM0Time::predictNextM0Time(PPU const &ppu) {
+ 	predictedNextM0Time_ = ppu.predictedNextXposTime(167);
++	romdev_gb_lcdev(2, ppu.now(), ppu.lyCounter().ly(), predictedNextM0Time_, ppu.now());
+ }
 diff --git a/libgambatte/src/video/ppu.cpp b/libgambatte/src/video/ppu.cpp
 index 5d36a9d..ed29282 100644
 --- a/libgambatte/src/video/ppu.cpp

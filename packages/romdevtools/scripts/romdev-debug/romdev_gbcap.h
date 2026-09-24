@@ -76,6 +76,23 @@ extern unsigned char romdev_gb_palline[ROMDEV_GB_H * ROMDEV_GB_PALLINE_STRIDE];
 extern unsigned short romdev_gb_bgcol15[ROMDEV_GB_PIX];
 extern unsigned short romdev_gb_sprcol15[ROMDEV_GB_PIX];
 
+/* gb_lcdlog: the LCD's timing decisions, for differs that must match the
+ * core cycle for cycle. A running ring: word 0 = entries written so far,
+ * then ROMDEV_GB_LCDLOG_N entries of 4 x u32 {cycleCounter, kind | a << 8,
+ * b, c}, entry i at word 4 + (i % N) * 4. Recording only: nothing here feeds
+ * back into emulation.
+ *   kind 1 STAT read      a = ly | stat << 8   b = predictedNextM0Time  c = lyCounter time
+ *   kind 2 m0 prediction  a = ly               b = predicted m0 time    c = ppu now
+ *   kind 3 LCD event      a = event | ly << 8  b = statReg             c = lastM0Time
+ * (event: 0-7 = MemEvent + 0x10 for LY_COUNT) */
+#define ROMDEV_GB_LCDLOG_N 16384
+extern unsigned romdev_gb_lcdlog[4 + ROMDEV_GB_LCDLOG_N * 4];
+static inline void romdev_gb_lcdev(unsigned kind, unsigned long cc, unsigned a, unsigned b, unsigned c) {
+	unsigned *e = romdev_gb_lcdlog + 4 + (romdev_gb_lcdlog[0] % ROMDEV_GB_LCDLOG_N) * 4;
+	e[0] = (unsigned)cc; e[1] = kind | a << 8; e[2] = b; e[3] = c;
+	romdev_gb_lcdlog[0]++;
+}
+
 /* Cleared at frame start; the blank flag is set by updateScreen. */
 void romdev_gbcap_frame_start(void);
 void romdev_gbcap_set_blank(unsigned short fill_bgr15);
@@ -128,6 +145,7 @@ unsigned char  romdev_gb_lineregs[ROMDEV_GB_H * ROMDEV_GB_LINEREG_STRIDE];
 unsigned char  romdev_gb_palline[ROMDEV_GB_H * ROMDEV_GB_PALLINE_STRIDE];
 unsigned short romdev_gb_bgcol15[ROMDEV_GB_PIX];
 unsigned short romdev_gb_sprcol15[ROMDEV_GB_PIX];
+unsigned romdev_gb_lcdlog[4 + ROMDEV_GB_LCDLOG_N * 4];
 
 void romdev_gbcap_frame_start(void) {
 	/* Clearing every frame is what makes a stale row impossible: a line the

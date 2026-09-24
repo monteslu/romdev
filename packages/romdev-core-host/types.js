@@ -19,7 +19,7 @@
  *   | "gb_vram" | "gb_oam" | "gb_io" | "gb_hram"
  *   | "gb_bgpdata" | "gb_objpdata" | "gb_cpu_regs"
  *   | "gb_lineregs" | "gb_bgpix" | "gb_sprpix" | "gb_palline"
- *   | "gb_bgcol15" | "gb_sprcol15"
+ *   | "gb_bgcol15" | "gb_sprcol15" | "gb_lcdlog"
  *   | "a26_tia_regs" | "a26_cpu_regs"
  *   | "a78_cpu_regs"
  *   | "c64_color_ram" | "c64_vic_regs" | "c64_sid_regs"
@@ -138,6 +138,7 @@ export const RetroMemory = {
   GB_PALLINE:         0x14A,
   GB_BGCOL15:         0x14B,
   GB_SPRCOL15:        0x14C,
+  GB_LCDLOG:          0x14D,
   A78_CPU_REGS:       0x150,
   A26_TIA_REGS:       0x160,
   A26_CPU_REGS:       0x161,
@@ -314,6 +315,7 @@ export const MemoryRegionToRetro = {
   gb_palline: RetroMemory.GB_PALLINE,
   gb_bgcol15: RetroMemory.GB_BGCOL15,
   gb_sprcol15: RetroMemory.GB_SPRCOL15,
+  gb_lcdlog: RetroMemory.GB_LCDLOG,
   a78_cpu_regs: RetroMemory.A78_CPU_REGS,
   a26_tia_regs: RetroMemory.A26_TIA_REGS,
   a26_cpu_regs: RetroMemory.A26_CPU_REGS,

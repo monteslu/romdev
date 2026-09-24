@@ -24,6 +24,7 @@ git checkout -- \
   libgambatte/src/cpu.h \
   libgambatte/src/cpu.cpp \
   libgambatte/src/video/ppu.cpp \
+  libgambatte/src/video/next_m0_time.cpp \
   libgambatte/src/video.cpp \
   libgambatte/src/video_libretro.cpp \
   libgambatte/src/gambatte-memory.h \
