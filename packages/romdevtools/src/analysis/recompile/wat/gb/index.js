@@ -106,9 +106,8 @@ export function describe(rom, opts = {}) {
     // Host frame alignment is the verify op's (gambatte settles 5 frames,
     // the wasmcart host 1); the cart runs no extra frames inside wc_render.
     warmupFrames: 0,
-    // The cart reads wasmcart pad bit 0 as the Game Boy's A and bit 1 as B
-    // (the convention it was verified with), i.e. by NAME.
-    buttons: "byName",
+    // Face buttons by position: GB A = east (WC_BTN_B), GB B = south (WC_BTN_A).
+    buttons: "positional",
     screen: { origin: [0, 0] },
     regions,
     vramZero: cgb ? ["vram0", "vram1"] : ["vram0"],

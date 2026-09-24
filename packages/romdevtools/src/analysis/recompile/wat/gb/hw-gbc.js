@@ -270,6 +270,10 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
   ;; ACTIVE LOW. P14 (bit 4) low selects the d-pad (right,left,up,down in
   ;; bits 0-3); P15 (bit 5) low selects A,B,Select,Start. wasmcart bits:
   ;; A 0, B 1, START 6, SELECT 7, UP 8, DOWN 9, LEFT 10, RIGHT 11.
+  ;; Face buttons are read BY POSITION, the wasmcart convention: the Game
+  ;; Boy's A is the EAST button (WC_BTN_B, bit 1) and its B the SOUTH button
+  ;; (WC_BTN_A, bit 0), exactly where a libretro RetroPad puts them, so one
+  ;; input schedule presses the same button on the cart and on gambatte.
   (func $joypad (result i32)
     (local $sel i32) (local $b i32) (local $n i32)
     (local.set $sel (i32.and (i32.load8_u (i32.const ${IOREG})) (i32.const 0x30)))
@@ -283,7 +287,8 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
                 (i32.shr_u (i32.and (local.get $b) (i32.const 0x200)) (i32.const 6)))))))))
     (if (i32.eqz (i32.and (local.get $sel) (i32.const 0x20)))
       (then (local.set $n (i32.and (local.get $n) (i32.xor (i32.const 0xFF) (i32.or
-        (i32.and (local.get $b) (i32.const 3))
+        (i32.or (i32.shr_u (i32.and (local.get $b) (i32.const 2)) (i32.const 1))
+                (i32.shl (i32.and (local.get $b) (i32.const 1)) (i32.const 1)))
         (i32.or (i32.shr_u (i32.and (local.get $b) (i32.const 0x80)) (i32.const 5))
                 (i32.shr_u (i32.and (local.get $b) (i32.const 0x40)) (i32.const 3)))))))))
     (i32.or (i32.or (i32.const 0xC0) (local.get $sel)) (local.get $n)))
