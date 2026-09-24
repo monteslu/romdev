@@ -404,6 +404,10 @@ export function lower(op, b1, b2, rom, pcbase) {
     let dbl = false;
     if (kind[0] === "abs" && kind[1] >= 0x2000 && kind[1] < 0x4020) dbl = true;
     if (mode === "abx" && (ioPage(b2) || ioPage((b2 + 1) & 0xFF))) dbl = true;
+    // mapper registers live at $8000+: `inc $8000` writes the old value
+    // first (an MMC1 reset idiom relies on it)
+    if (rom.romWritesMatter && kind[0] === "abs" && kind[1] >= 0x8000) dbl = true;
+    if (rom.romWritesMatter && mode === "abx" && b2 >= 0x7F) dbl = true;
     if (dbl) {
       body.push(`(global.set $t3 ${load})`);
       body.push(storeTo(kind, "(global.get $t3)"));

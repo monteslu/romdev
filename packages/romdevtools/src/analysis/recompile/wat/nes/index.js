@@ -12,8 +12,11 @@
 //   X6502_Run(dots) adds dots*16 to a signed budget and runs whole
 //   instructions while it is positive; each cycle costs 48. Instructions that
 //   overrun carry the debt into the next Run, exactly as fceumm's _count does.
-//   APU   only the parts that move the CPU clock or RAM: DMC DMA cycle
-//         steals (4 per sample byte) and the $4016/$4017 pads.
+//   APU   only the parts the CPU can observe: DMC DMA cycle steals (4 per
+//         sample byte), the frame sequencer, length counters and $4015
+//         status, the frame and DMC IRQs, and the $4016/$4017 pads. No audio.
+//   IRQ   X6502_Run's order (NMI2, NMI, maskable IRQ gated by _PI).
+//   MAP   mappers.js: NROM, UxROM, CNROM, MMC1 (fceumm boards/).
 //
 // Every PRG offset gets an arm (data bytes included) so any entry point the
 // game reaches is covered; an offset whose byte is not an official opcode
@@ -69,7 +72,7 @@ export const ABI = FB + FB_W * FB_H * 4 + 0x1000;
 export const PROBE_FIELDS = ["steps", "trapped", "trappc", "pc", "frame", "nnmi", "ts",
   "a", "x", "y", "s", "p", "ppu0", "ppu1", "ppustatus",
   "refaddr", "tmpaddr", "xoff", "joy", "trapop", "nvram",
-  "ringi", "nbrk", "nemph", "cnt", "apu4017", "dmcsize", "dmcirq", "nirq", "sirq"];
+  "ringi", "nbrk", "nemph", "cnt", "apu4017", "dmcsize", "dmcirq", "nirq", "sirq", "mapwarn"];
 
 /**
  * The cart's `romdev.recompile` layout (schema: recompile/recompile-section.js):
@@ -98,7 +101,7 @@ export const layout = {
     p: { offset: p4("p"), size: 1, ref: "cpu:registers.P", mask: 0xCF },
     cycles: { offset: p4("cnt"), size: 4, signed: true, ref: "cpu:coreInternal.count" },
   },
-  probe: Object.fromEntries(["trapped", "trappc", "trapop", "steps", "frame", "nnmi", "nbrk", "dmcirq"]
+  probe: Object.fromEntries(["trapped", "trappc", "trapop", "steps", "frame", "nnmi", "nbrk", "dmcirq", "nirq", "mapwarn"]
     .map((f) => [f, { offset: p4(f), size: 4 }])),
   // The Python verifier's VRAM-zero control wiped nametables + CHR.
   vramZero: ["nametables", "chr"],
@@ -195,7 +198,8 @@ export function describe(rom, opts = {}) {
   let submapper = nes2 ? rom[8] >> 4 : 0;
   let region = nes2 ? rom[12] & 3 : 0;
   let battery = !!(rom[6] & 2);
-  let prgRam = null;
+  // NES 2.0 byte 10: PRG RAM (low nibble) + battery PRG RAM (high nibble), 64 << n
+  let prgRam = nes2 ? ((rom[10] & 0x0F) ? 64 << (rom[10] & 0xF) : 0) + ((rom[10] & 0xF0) ? 64 << (rom[10] >> 4) : 0) : null;
   // ines.c: an iNES 1.0 file whose NAME carries a PAL-country tag runs as PAL.
   if (!nes2 && opts.romPath && PAL_NAME_TAGS.some((t) => String(opts.romPath).includes(t))) region = 1;
   let headerFix = null;
@@ -227,11 +231,19 @@ export function describe(rom, opts = {}) {
   const mirroring = mirror === 2 ? "four-screen" : mirror >= 0x10 ? ((mirror & 1) ? "one-screen-b" : "one-screen-a")
     : ((mirror & 1) ? "vertical" : "horizontal");
   const mirrorHard = mirror >= 0x10 || !!(mirror & 4);
+  // ines.c SetInput(): byte 15 (ExpDevice) or the CRC32 table assigns the
+  // controllers; the cart models two standard pads only.
+  const crcAll = crc32(rom.subarray(prgStart, prgStart + prgSize + (chrBanks * 0x2000))) >>> 0;
+  let input = INPUT_DEV.expDevice[rom[15]] || null;
+  if (!input) { const r = INPUT_DEV.byCrc.get(crcAll); if (r) input = r.slice(1); }
+  const inputOk = !input || ((input[0] === -1 || input[0] === 1) && (input[1] === -1 || input[1] === 1) && (input[2] === -1 || input[2] === 0));
   const m = MAPPERS[mapper];
   let unsupportedReason = null;
+  const facts = { prgSize, chrSize, submapper, nes2, prgRam, mirroring, mirrorHard };
   if (!m) unsupportedReason = `mapper ${mapper} has no WAT backend yet (supported: ${Object.keys(MAPPERS).join(", ")})`;
-  else if (m.supports && m.supports({ prgSize, chrSize, submapper, nes2 })) unsupportedReason = m.supports({ prgSize, chrSize, submapper, nes2 });
+  else if (m.supports && m.supports(facts)) unsupportedReason = m.supports(facts);
   else if (mirroring === "four-screen") unsupportedReason = "four-screen nametables (4KB of cart VRAM) are not modelled";
+  else if (!inputOk) unsupportedReason = `fceumm attaches a non-gamepad input device (ports ${input[0]}/${input[1]}, expansion ${input[2]}; driver.h SI_*/SIFC_*)`;
   else if (region === 1) unsupportedReason = "PAL timing (fceumm runs this cart as PAL: NES 2.0 region, ines-correct.h, or a PAL tag in the file name)";
   else if (region === 3) unsupportedReason = "Dendy timing (fceumm runs this cart as a Dendy)";
   return {
@@ -254,6 +266,7 @@ export function describe(rom, opts = {}) {
     battery,
     prgRam,
     headerFix,
+    inputDevices: input,
     arms: prgSize,
     layout: m && m.layout ? m.layout(layout) : layout,
     conventions,
@@ -266,9 +279,13 @@ const PAL_NAME_TAGS = ["(E)", "(e)", "(Europe)", "(PAL)", "(F)", "(f)", "(G)", "
 
 /** ines-correct.h rows by CRC32; CheckHInfo takes the FIRST match. */
 const INES_CORRECT = new Map();
-for (const r of JSON.parse(readFileSync(path.join(__dirname, "fceumm-ines-correct.json"), "utf8")).rows) {
+const INES_JSON = JSON.parse(readFileSync(path.join(__dirname, "fceumm-ines-correct.json"), "utf8"));
+for (const r of INES_JSON.rows) {
   if (!INES_CORRECT.has(r[0] >>> 0)) INES_CORRECT.set(r[0] >>> 0, r);
 }
+/** SetInput(): CRC32 -> [crc, input0, input1, inputfc] (first match), ExpDevice -> triple. */
+const INPUT_DEV = { byCrc: new Map(), expDevice: INES_JSON.inputDevices.expDevice };
+for (const r of INES_JSON.inputDevices.rows) if (!INPUT_DEV.byCrc.has(r[0] >>> 0)) INPUT_DEV.byCrc.set(r[0] >>> 0, r);
 
 /**
  * fceumm ines.c's header clean-up: old dumpers wrote a signature over bytes
@@ -354,7 +371,7 @@ export function recompileSection(rom, sha1, opts = {}) {
       mapper: d.mapper,
       mirroring: d.mirroring,
       ...conventions,
-      ...layout,
+      ...d.layout,
       diagnostics: { ...diagnostics, pcRing: { ...diagnostics.pcRing, offset: ring.offset, entries: ring.entries, stride: ring.stride,
         ...(ring.stride === 16 ? { format: "u32 pc|opcode<<16, u32 ts, u32 A|X<<8|Y<<16|S<<24, u32 P" } : {}) } },
       trace: traceFor(opts),
@@ -370,7 +387,7 @@ function cpuGlobals() {
     "ringi", "nbrk", "nemph", "apu4017", "lastts", "dmcbitcount",
     "dmcaddrlatch", "dmcsizelatch", "dmcformat", "dmcaddress", "dmcsize",
     "dmcshift", "dmchavedma", "dmcdmabuf", "dmchavesample", "dmcirq",
-    "nirq", "fcnt", "sirq", "ench", "len0", "len1", "len2", "len3"];
+    "nirq", "fcnt", "sirq", "ench", "len0", "len1", "len2", "len3", "mapwarn"];
   let s = g.map((n) => `  (global $${n} (mut i32) (i32.const 0))\n`).join("");
   s += "  (global $s (mut i32) (i32.const 0xFD))\n";
   s += "  (global $fi (mut i32) (i32.const 1))\n";
@@ -387,10 +404,9 @@ function cpuGlobals() {
 
 /**
  * Memory map, pads, APU DMC, OAM DMA, trap.
- * @param {import("./mappers.js").NesMapper} mapper
- * @param {number} n  PRG size
+ * @param {object} mapper  MAPPERS[id].make(d, prg)
  */
-function memWat(mapper, n) {
+function memWat(mapper) {
   return `
   (func $addcyc1
     (global.set $cnt (i32.sub (global.get $cnt) (i32.const 48)))
@@ -446,9 +462,10 @@ function memWat(mapper, n) {
     (if (i32.lt_u (local.get $a) (i32.const 0x4000))
       (then (return (call $ppu_read (i32.and (local.get $a) (i32.const 7))))))
     (if (i32.ge_u (local.get $a) (i32.const 0x8000))
-      (then (return ${mapper.prgRead(n)})))
+      (then (return ${mapper.prgRead})))
     (if (i32.ge_u (local.get $a) (i32.const 0x6000))
-      (then (return (i32.load8_u (i32.add (i32.const ${WRAM - 0x6000}) (local.get $a))))))
+      (then ${mapper.wramGate ? `(if (i32.eqz ${mapper.wramGate}) (then (return (i32.shr_u (local.get $a) (i32.const 8)))))
+        ` : ""}(return (i32.load8_u (i32.add (i32.const ${WRAM - 0x6000}) (local.get $a))))))
     (if (i32.eq (local.get $a) (i32.const 0x4016)) (then (return (call $joyread (i32.const 0)))))
     (if (i32.eq (local.get $a) (i32.const 0x4017)) (then (return (call $joyread (i32.const 1)))))
     (if (i32.eq (local.get $a) (i32.const 0x4015)) (then (return (call $status_read))))
@@ -519,7 +536,7 @@ function memWat(mapper, n) {
       (then (i32.store8 (i32.add (i32.const ${APUREG}) (i32.sub (local.get $a) (i32.const 0x4000)))
                         (local.get $v)) (return)))
     (if (i32.and (i32.ge_u (local.get $a) (i32.const 0x6000)) (i32.lt_u (local.get $a) (i32.const 0x8000)))
-      (then (i32.store8 (i32.add (i32.const ${WRAM - 0x6000}) (local.get $a)) (local.get $v))))${mapper.romWrite})
+      (then ${mapper.wramGate ? `(if ${mapper.wramGate} (then ` : ""}(i32.store8 (i32.add (i32.const ${WRAM - 0x6000}) (local.get $a)) (local.get $v))${mapper.wramGate ? "))" : ""}))${mapper.romWrite})
 
   (func $len_load (param $ch i32) (param $v i32)
     (local $n i32)
@@ -658,7 +675,7 @@ function dispatch(nsh, SH) {
  * @param {string} probeStores
  * @param {string} disp
  */
-function stepWat(mapper, n, probeStores, disp, ring = { offset: PCRING, entries: 1024, stride: 8 }) {
+function stepWat(mapper, probeStores, disp, ring = { offset: PCRING, entries: 1024, stride: 8 }) {
   const shift = ring.stride === 16 ? 4 : 3;
   const regStores = ring.stride === 16 ? `
     (i32.store (i32.add (local.get $r) (i32.const 8)) (i32.or (i32.or (global.get $a) (i32.shl (global.get $x) (i32.const 8)))
@@ -674,11 +691,11 @@ ${probeStores})
     (global.set $curpc (global.get $pc))
     (if (i32.lt_u (global.get $pc) (i32.const 0x8000))
       (then (call $trap (i32.const 0x100)) (return)))
-    (local.set $o ${mapper.pcOffset(n)})
+    (local.set $o ${mapper.pcOffset})
     (local.set $r (i32.add (i32.const ${ring.offset})
       (i32.shl (i32.and (global.get $ringi) (i32.const ${ring.entries - 1})) (i32.const ${shift}))))
     (i32.store (local.get $r) (i32.or (global.get $pc)
-      (i32.shl (i32.load8_u (i32.add (i32.const ${PRG}) (local.get $o))) (i32.const 16))))
+      (i32.shl (i32.load8_u (i32.add (i32.const ${mapper.prgBase}) (local.get $o))) (i32.const 16))))
     (i32.store (i32.add (local.get $r) (i32.const 4)) (global.get $ts))${regStores}
     (global.set $ringi (i32.add (global.get $ringi) (i32.const 1)))
     (global.set $steps (i32.add (global.get $steps) (i32.const 1)))
@@ -686,7 +703,7 @@ ${probeStores})
     ;; every cycle since the previous hook (this one's base, the previous
     ;; instruction's extras, DMA, NMI, and the hook's own DMC steals).
     (local.set $r (i32.load8_u (i32.add (i32.const ${CYCTAB})
-      (i32.load8_u (i32.add (i32.const ${PRG}) (local.get $o))))))
+      (i32.load8_u (i32.add (i32.const ${mapper.prgBase}) (local.get $o))))))
     (global.set $cnt (i32.sub (global.get $cnt) (i32.mul (local.get $r) (i32.const 48))))
     (global.set $ts (i32.add (global.get $ts) (local.get $r)))
     (local.set $r (i32.sub (global.get $ts) (global.get $lastts)))
@@ -696,7 +713,7 @@ ${probeStores})
 }
 
 /** $run, $do_irq, pads, the wasmcart ABI exports and FCEUPPU_Loop. */
-function frameWat() {
+function frameWat(mapper) {
   return `
   ;; X6502_Run(dots)
   (func $run (param $dots i32)
@@ -784,7 +801,9 @@ function frameWat() {
     ;; fceumm_ramstate default "fill $ff"
     (memory.fill (i32.const 0) (i32.const 0xFF) (i32.const 0x800))
     (global.set $s (i32.const 0xFD))
-    (global.set $fi (i32.const 1))
+    (global.set $fi (i32.const 1))${mapper.init ? `
+    ;; the mapper's power-on mapping
+    ${mapper.init}` : ""}
     (global.set $pc (i32.or (call $rd8 (i32.const 0xFFFC))
                             (i32.shl (call $rd8 (i32.const 0xFFFD)) (i32.const 8)))))
 
@@ -850,18 +869,18 @@ export async function* emitWat(rom, opts = {}) {
   rom = toBytes(rom);
   const d = describe(rom, opts);
   if (!d.supported) throw new Error(`nes recompile: ${d.unsupportedReason}`);
-  const mapper = MAPPERS[d.mapper];
   const prg = rom.subarray(d.prgOffset, d.prgOffset + d.prgSize);
   const chr = rom.subarray(d.chrOffset, d.chrOffset + d.chrSize);
+  const mapper = MAPPERS[d.mapper].make(d, prg);
   const n = prg.length;
-  const view = { fixedByte: mapper.fixedByte(prg) };
+  const view = { fixedByte: mapper.fixedByte, romWritesMatter: mapper.romWritesMatter };
 
   const bodies = new Array(n);
   let ok = 0, bad = 0;
   for (let off = 0; off < n; off++) {
     const op = prg[off];
     try {
-      bodies[off] = lower(op, prg[(off + 1) % n], prg[(off + 2) % n], view, mapper.armBase(n, off));
+      bodies[off] = lower(op, mapper.operand(off, 1), mapper.operand(off, 2), view, mapper.armBase(off));
       ok++;
     } catch (e) {
       if (!(e instanceof Unsupported)) throw e;
@@ -875,7 +894,7 @@ export async function* emitWat(rom, opts = {}) {
     const at = typeof opts.breakArm === "number" ? opts.breakArm : parseInt(String(opts.breakArm).replace(/^\$/, ""), 16);
     let hit = 0;
     for (let off = 0; off < n; off++) {
-      if (mapper.armBase(n, off) !== at) continue;
+      if (mapper.armBase(off) !== at) continue;
       const ent = OPS.get(prg[off]);
       if (!ent) throw new Error(`nes recompile: options.breakArm $${at.toString(16)} is not an instruction (byte $${prg[off].toString(16)})`);
       bodies[off] = `(global.set $pc (i32.and (i32.add (global.get $pc) (i32.const ${LEN[ent[1]]})) (i32.const 0xFFFF)))`;
@@ -888,12 +907,13 @@ export async function* emitWat(rom, opts = {}) {
 
 
   yield "(module\n";
-  yield '  (memory (export "memory") 16)\n';
+  yield `  (memory (export "memory") ${mapper.pages})\n`;
   yield cpuGlobals() + mapper.globals + "\n";
   yield globalsWat() + "\n";
-  yield memWat(mapper, n) + "\n";
+  yield memWat(mapper) + "\n";
+  if (mapper.funcs) yield mapper.funcs + "\n";
   yield ppuWat({
-    NTSEL: ntSelFixed(d.mirroring),
+    NTSEL: mapper.ntSel || ntSelFixed(d.mirroring),
     CHRWRITE: d.chrRam ? `(i32.store8 (i32.add (i32.const ${CHR}) (local.get $tmp)) (local.get $v))` : "",
   }) + "\n";
   yield `  (data (i32.const ${RGBTAB}) "${watBytes(u32le(palette512().map((c) => (0xFF000000 | c) >>> 0)))}")\n`;
@@ -911,7 +931,7 @@ export async function* emitWat(rom, opts = {}) {
     parts.push("      (br_table " + sh.map((_, i) => `$s${i}`).join(" ") + " $sdef (local.get $id))");
     parts.push("    ) (return)");
     for (let i = 0; i < sh.length; i++) {
-      const cpu = mapper.armBase(n, si * SHARD + i);
+      const cpu = mapper.armBase(si * SHARD + i);
       parts.push(`    ) ;; ${cpu.toString(16).toUpperCase().padStart(4, "0")}`);
       parts.push(`    ${sh[i]} (return)`);
     }
@@ -923,10 +943,12 @@ export async function* emitWat(rom, opts = {}) {
     const v = f === "p" ? PACK_P : f === "frame" ? "(global.get $nframe)" : `(global.get $${f})`;
     return `    (i32.store (i32.const ${PROBE + 4 * i}) ${v})`;
   }).join("\n");
-  yield stepWat(mapper, n, probeStores, dispatch(nsh, SHARD), pcRingFor(opts)) + "\n";
-  yield frameWat() + "\n";
-  yield `  (data (i32.const ${PRG}) "${watBytes(prg)}")\n`;
-  if (chr.length) yield `  (data (i32.const ${CHR}) "${watBytes(chr)}")\n`;
+  yield stepWat(mapper, probeStores, dispatch(nsh, SHARD), pcRingFor(opts)) + "\n";
+  yield frameWat(mapper) + "\n";
+  yield `  (data (i32.const ${mapper.prgBase}) "${watBytes(prg)}")\n`;
+  // the 8KB window starts as the first 8KB (every supported mapper powers up on bank 0)
+  if (chr.length) yield `  (data (i32.const ${CHR}) "${watBytes(chr.subarray(0, 0x2000))}")\n`;
+  if (chr.length && mapper.chrStore) yield `  (data (i32.const ${mapper.chrStore}) "${watBytes(chr)}")\n`;
   yield ")";
 }
 

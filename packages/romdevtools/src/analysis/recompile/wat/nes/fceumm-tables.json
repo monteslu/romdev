@@ -4,7 +4,7 @@
   "fceummCommit": "3a84a6fd0ba20dd4877c06b1d58741172148395f",
   "method": "verbatim table extraction by scripts/recompile-gen/generate-nes-wat-tables.mjs",
   "note": "palette is 0xRRGGBB, the default NTSC palette fceumm renders with (default_palette[0]). deemphasis multipliers are C floats: entry = (int)(channel * mul[bits-1]) in float32, clamped to 255 (ApplyDeemphasisComplete fills palette[64..511]).",
-  "extractedAt": "2026-09-24T15:34:58.267Z"
+  "extractedAt": "2026-09-24T15:48:27.300Z"
  },
  "ntscDmcPeriod": [
   428,

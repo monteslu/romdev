@@ -87,6 +87,29 @@ while (effective < rows.length && (rows[effective][3] >= 0 || rows[effective][1]
 const inesCorrect = rows.slice(0, effective);
 if (new Set(inesCorrect.map((r) => r[0])).size < inesCorrect.length * 0.95) throw new Error("ines-correct: CRCs not unique enough");
 
+// ines.c SetInput(): the CRC32-keyed input-device table (Zapper, Arkanoid
+// paddle, Power Pad, Famicom expansion devices...) and the NES 2.0
+// default-expansion-device switch (head.ExpDevice, byte 15), with
+// driver.h's SI_* / SIFC_* values.
+const inesC = readFileSync(path.join(dir, "ines.c"), "utf8");
+const driverH = readFileSync(path.join(dir, "driver.h"), "utf8");
+const DEV = {};
+for (const m of driverH.matchAll(/#define\s+(SIS?F?C?_\w+)\s+(-?\d+)/g)) DEV[m[1]] = Number(m[2]);
+if (DEV.SI_GAMEPAD !== 1 || DEV.SI_UNSET !== -1 || DEV.SIFC_NONE !== 0) throw new Error("driver.h SI_* values");
+const setInput = inesC.slice(inesC.indexOf("static void SetInput(void)"), inesC.indexOf("#define INESB_INCOMPLETE"));
+const devOf = (t) => { if (!(t in DEV)) throw new Error(`SetInput: unknown device ${t}`); return DEV[t]; };
+const inputRows = [];
+for (const m of setInput.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/\{\s*(0x[0-9a-f]+)\s*,\s*(\w+)\s*,\s*(\w+)\s*,\s*(\w+)\s*\}/gi)) {
+  const r = [Number(m[1]) >>> 0, devOf(m[2]), devOf(m[3]), devOf(m[4])];
+  if (r[1] < 0 && r[2] < 0 && r[3] < 0) break; // while (input1 >= 0 || input2 >= 0 || inputfc >= 0)
+  inputRows.push(r);
+}
+const expDevice = {};
+for (const m of setInput.matchAll(/case (0x[0-9a-f]+): GameInfo->input\[0\] =(\w+); GameInfo->input\[1\] =(\w+);\s*GameInfo->inputfc =(\w+);/gi)) {
+  expDevice[Number(m[1])] = [devOf(m[2]), devOf(m[3]), devOf(m[4])];
+}
+if (inputRows.length < 50 || Object.keys(expDevice).length < 20) throw new Error(`SetInput: ${inputRows.length} rows, ${Object.keys(expDevice).length} cases`);
+
 let commit = null;
 try {
   const root = path.resolve(dir, "..");
@@ -111,7 +134,7 @@ writeFileSync(out, JSON.stringify({
 const correctOut = path.join(path.dirname(out), "fceumm-ines-correct.json");
 writeFileSync(correctOut, JSON.stringify({
   provenance: {
-    source: "fceumm (libretro-fceumm) src/ines-correct.h, consumed by src/ines.c CheckHInfo() (iNES 1.0 images only)",
+    source: "fceumm (libretro-fceumm) src/ines-correct.h, consumed by src/ines.c CheckHInfo() (iNES 1.0 images only); src/ines.c SetInput() + src/driver.h (input devices)",
     fceummCommit: commit,
     method: "parsed by scripts/recompile-gen/generate-nes-wat-tables.mjs; rows after CheckHInfo's do/while terminator are dropped",
     fields: ["crc32 (PRG+CHR, no header/trainer)", "mapper", "submapper", "mirror", "battery", "prgram", "chrram", "region", "extra"],
@@ -119,5 +142,7 @@ writeFileSync(correctOut, JSON.stringify({
     rowsInHeader: rows.length,
   },
   rows: inesCorrect,
+  // SetInput(): [crc32, input[0], input[1], inputfc]; expDevice: byte 15 -> the same triple
+  inputDevices: { values: Object.fromEntries(Object.entries(DEV).filter(([k]) => /^SI(FC)?_/.test(k))), rows: inputRows, expDevice },
 }) + "\n");
 console.log(`wrote ${out}: dmc ${dmc.length}, palette ${triples.length}; ${correctOut}: ${inesCorrect.length} of ${rows.length} rows`);

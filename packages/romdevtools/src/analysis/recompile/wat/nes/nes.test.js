@@ -81,11 +81,14 @@ test("describe parses the iNES header", () => {
 });
 
 test("describe reports unsupported mappers and rejects bad images", async () => {
+  const m4 = describeRom(synthRom({ flags6: 0x41 }));      // mapper 4 (MMC3)
+  assert.equal(m4.mapper, 4);
+  assert.equal(m4.supported, false);
+  assert.match(m4.unsupportedReason, /mapper 4/);
+  await assert.rejects(emitWatString(synthRom({ flags6: 0x41 })), /mapper 4/);
   const m2 = describeRom(synthRom({ flags6: 0x21 }));      // mapper 2 (UxROM)
-  assert.equal(m2.mapper, 2);
-  assert.equal(m2.supported, false);
-  assert.match(m2.unsupportedReason, /mapper 2/);
-  await assert.rejects(emitWatString(synthRom({ flags6: 0x21 })), /mapper 2/);
+  assert.equal(m2.mapperName, "UxROM");
+  assert.equal(m2.supported, true);
   const m1 = describeRom(synthRom({ flags6: 0x10, flags7: 0x00 }));
   assert.equal(m1.mapper, 1);
   const hi = describeRom(synthRom({ flags6: 0x00, flags7: 0x40 })); // high nibble in flags7

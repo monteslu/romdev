@@ -246,3 +246,117 @@ test("header: an iNES 1.0 file named with a PAL tag runs as PAL in fceumm, so it
   assert.equal(e.supported, false);
   assert.match(e.unsupportedReason, /PAL/);
 });
+
+// ---- mappers 1/2/3 (fceumm boards/datalatch.c, boards/mmc1.c) ------------------
+
+/**
+ * Banked test image: the code (and vectors) in EVERY 16KB bank so any mapping
+ * of $C000 keeps running it; bank b has b at offset $3000 and $A0|b at $3001.
+ * CHR: byte 0 of each 4KB = $40 | its 4KB index.
+ */
+function romMap({ main, prgBanks, chrBanks, flags6 }) {
+  const prg = new Uint8Array(prgBanks * 0x4000).fill(0xEA);
+  const { bytes, labels } = asm(`${main}\nnmi_h:\nrti\nirq_h:\nrti`, 0xC000);
+  for (let b = 0; b < prgBanks; b++) {
+    const base = b * 0x4000;
+    prg.set(bytes, base);
+    const vec = (o, a) => { prg[base + o] = a & 0xFF; prg[base + o + 1] = a >> 8; };
+    vec(0x3FFA, labels.nmi_h); vec(0x3FFC, 0xC000); vec(0x3FFE, labels.irq_h);
+    prg[base + 0x3000] = b; prg[base + 0x3001] = 0xA0 | b;
+  }
+  const chr = new Uint8Array(chrBanks * 0x2000).map((_, i) => ((i & 0xFFF) === 0 ? (i >> 12) | 0x40 : (i * 7) & 0xFF));
+  const out = new Uint8Array(16 + prg.length + chr.length);
+  out.set([0x4E, 0x45, 0x53, 0x1A, prgBanks, chrBanks, flags6, 0]);
+  out.set(prg, 16); out.set(chr, 16 + prg.length);
+  return out;
+}
+/** read CHR $0000 and $1000 through $2007 into zz, zz+1 */
+const chrRead = (zz) => `lda $2002\nlda #$00\nsta $2006\nsta $2006\nlda $2007\nlda $2007\nsta $${zz.toString(16)}
+lda #$10\nsta $2006\nlda #$00\nsta $2006\nlda $2007\nlda $2007\nsta $${(zz + 1).toString(16)}\n`;
+/** MMC1 serial write: 5 x (sta reg, lsr) */
+const mmc1 = (reg, v) => `lda #$${v.toString(16)}\n` + Array.from({ length: 5 }, (_, i) => `sta $${reg.toString(16)}\n${i < 4 ? "lsr\n" : ""}`).join("");
+
+test("mapper 2 (UxROM): $8000 window follows the latch, $C000 is the last bank, 8KB WRAM", async () => {
+  const r = await run(romMap({
+    prgBanks: 8, chrBanks: 0, flags6: 0x21,
+    main: PRO + "ldx #0\nb1:\nstx $8000\nlda $B000\nsta $30,x\nlda $B001\nsta $38,x\ninx\ncpx #8\nbne b1\n" +
+      "lda #$5A\nsta $6000\nlda $6000\nsta $40\nlda $F000\nsta $41\nlda #$13\nsta $8000\nlda $B000\nsta $42\n" + LOOP,
+  }), 4);
+  assert.deepEqual([...r.ram.slice(0x30, 0x43)], [0, 1, 2, 3, 4, 5, 6, 7, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0x5A, 7, 3]);
+  assertCpu(r, { pc: 49202, a: 3, x: 8, y: 0, s: 255, p: 133, count: -48 });
+});
+
+test("mapper 2: an instruction at the end of a switchable bank reads its operand from $C000", async () => {
+  // only the last bank holds code; bank 0 ends with `lda #imm` whose operand
+  // byte is $C000's `sei` ($78), not bank 1's first byte
+  const r = rom({
+    prgBanks: 4, flags6: 0x21,
+    main: "sei\nsta $51\ncld\nldx #$FF\ntxs\nlda $50\ncmp #$42\nbeq done\nlda #$42\nsta $50\nlda #0\nsta $8000\njmp $BFFF\ndone:\n" + LOOP,
+  });
+  r[4] = 4; r[5] = 0; // PRG 64KB, CHR RAM
+  const img = new Uint8Array(16 + 0x10000);
+  img.set(r.subarray(0, 16)); img.set(r.subarray(16, 16 + 0x10000), 16);
+  img[16 + 0x3FFF] = 0xA9;
+  const x = await run(img, 2);
+  assert.deepEqual([x.ram[0x50], x.ram[0x51]], [0x42, 0x78]);
+});
+
+test("mapper 3 (CNROM): the latch picks the 8KB CHR bank the PPU sees (masked by the CHR size)", async () => {
+  const r = await run(romMap({
+    prgBanks: 2, chrBanks: 4, flags6: 0x31,
+    main: PRO + "lda #0\nsta $8000\n" + chrRead(0x30) + "lda #2\nsta $8000\n" + chrRead(0x32) + "lda #7\nsta $8000\n" + chrRead(0x34) + LOOP,
+  }), 4);
+  assert.deepEqual([...r.ram.slice(0x30, 0x36)], [0x40, 0x41, 0x44, 0x45, 0x46, 0x47]);
+  assertCpu(r, { pc: 49283, a: 71, x: 255, y: 0, s: 255, p: 132, count: -48 });
+});
+
+test("mapper 1 (MMC1): PRG modes, 4/8KB CHR, WRAM enable bit", async () => {
+  const r = await run(romMap({
+    prgBanks: 8, chrBanks: 4, flags6: 0x10,
+    main: PRO + "lda #$80\nsta $8000\n" + mmc1(0x8000, 0x1E) + mmc1(0xE000, 2) + "lda $B000\nsta $30\n" +
+      mmc1(0xE000, 5) + "lda $B000\nsta $31\n" + mmc1(0x8000, 0x12) + mmc1(0xE000, 3) + "lda $B000\nsta $32\nlda $F000\nsta $33\n" +
+      mmc1(0x8000, 0x0E) + mmc1(0xE000, 6) + "lda $B000\nsta $34\nlda $F000\nsta $35\n" +
+      mmc1(0x8000, 0x1C) + mmc1(0xA000, 5) + mmc1(0xC000, 2) + chrRead(0x36) + mmc1(0x8000, 0x0C) + mmc1(0xA000, 5) + chrRead(0x38) +
+      "lda #$77\nsta $6000\nlda $6000\nsta $3A\n" + mmc1(0xE000, 0x10) + "lda $6000\nsta $3B\nlda #$11\nsta $6001\n" +
+      mmc1(0xE000, 0x00) + "lda $6001\nsta $3C\n" + LOOP,
+  }), 4);
+  assert.deepEqual([...r.ram.slice(0x30, 0x3D)], [2, 5, 2, 3, 6, 7, 0x45, 0x42, 0x44, 0x45, 0x77, 0x60, 0]);
+  assertCpu(r, { pc: 49587, a: 0, x: 255, y: 0, s: 255, p: 132, count: -48 });
+});
+
+test("mapper 1: a RMW's double write reaches the register and the busy window drops the second one", async () => {
+  const r = await run(romMap({
+    prgBanks: 8, chrBanks: 1, flags6: 0x10,
+    main: PRO + mmc1(0x8000, 0x0E) + "inc ffbyte\n" + mmc1(0xE000, 3) + "lda $B000\nsta $30\nlda $F000\nsta $31\nldx #0\ninc ffbyte,x\n" +
+      mmc1(0xE000, 5) + "lda $B000\nsta $32\n" + LOOP + "ffbyte:\n.byte $FF",
+  }), 4);
+  assert.deepEqual([...r.ram.slice(0x30, 0x33)], [3, 7, 5]);
+  assertCpu(r, { pc: 49245, a: 5, x: 0, y: 0, s: 255, p: 132, count: -96 });
+});
+
+test("mapper 1: mirroring register (one-screen A/B, vertical, horizontal) and CHR RAM 4KB swaps", async () => {
+  const w = (i) => `lda #$20\nsta $2006\nlda #$00\nsta $2006\nlda #$${(0x10 + i).toString(16)}\nsta $2007
+lda #$24\nsta $2006\nlda #$00\nsta $2006\nlda #$${(0x20 + i).toString(16)}\nsta $2007\n` +
+    [[0x20, 0], [0x24, 1], [0x28, 2]].map(([hi, k]) => `lda #$${hi.toString(16)}\nsta $2006\nlda #$00\nsta $2006\nlda $2007\nlda $2007\nsta $${(0x30 + i * 3 + k).toString(16)}\n`).join("");
+  const m = await run(romMap({ prgBanks: 2, chrBanks: 1, flags6: 0x10, main: PRO + [2, 3, 0, 1].map((mm, i) => mmc1(0x8000, mm | 0x0C) + w(i)).join("") + LOOP }), 4);
+  assert.deepEqual([...m.ram.slice(0x30, 0x3C)], [0x10, 0x20, 0x10, 0x21, 0x21, 0x20, 0x22, 0x22, 0x22, 0x23, 0x23, 0x23]);
+  assertCpu(m, { pc: 49579, a: 35, x: 255, y: 0, s: 255, p: 133, count: 0 });
+  const c = await run(romMap({
+    prgBanks: 2, chrBanks: 0, flags6: 0x10,
+    main: PRO + mmc1(0x8000, 0x1C) + mmc1(0xA000, 0) + mmc1(0xC000, 1) + "lda #$00\nsta $2006\nsta $2006\nlda #$AA\nsta $2007\n" +
+      "lda #$10\nsta $2006\nlda #$00\nsta $2006\nlda #$BB\nsta $2007\n" + mmc1(0xA000, 1) + mmc1(0xC000, 0) + chrRead(0x30) + LOOP,
+  }), 4);
+  assert.deepEqual([...c.ram.slice(0x30, 0x32)], [0xBB, 0xAA]);
+  assertCpu(c, { pc: 49329, a: 170, x: 255, y: 0, s: 255, p: 132, count: -192 });
+});
+
+test("input devices: a cart fceumm gives a non-gamepad controller (ines.c SetInput) is refused", () => {
+  const r = rom({ main: LOOP, flags6: 0x01 });
+  r[15] = 0x08; // NES 2.0 default expansion device: Zapper in port 2
+  const d = describeRom(r);
+  assert.equal(d.supported, false);
+  assert.match(d.unsupportedReason, /non-gamepad/);
+  assert.deepEqual(d.inputDevices, [1, 2, 0]);
+  r[15] = 0;
+  assert.equal(describeRom(r).supported, true);
+});
