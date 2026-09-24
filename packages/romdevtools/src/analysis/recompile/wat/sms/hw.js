@@ -10,6 +10,10 @@
 //
 // Plain JS ESM + JSDoc.
 
+import { readFileSync } from "node:fs";
+
+const HC_TABLE = JSON.parse(readFileSync(new URL("./gpgx-hcounter.json", import.meta.url), "utf8")).hc;
+
 // Linear memory map (beyond the 64KB Z80 address space at 0):
 //   0x10000  VRAM 16KB           0x14000  CRAM (32 SMS / 64 GG bytes)
 //   0x14100  VDP registers       0x14200  VDP latch state
@@ -18,6 +22,8 @@
 //            non-blank entries on that row, u16 non-zero BG pixels. The
 //            end-of-frame registers are not what a mid-frame line rendered.
 //   0x14A80  PCWATCH, 4 x (u32 pc, u32 hits): host-armed PC counters
+//   0x14AC0  IOREGS (Game Gear I/O registers $00-$06)
+//   0x14B00  HCTAB, 228 bytes: H counter per T-state of a line
 //   0x15000  SMSFB, 256x192 palette indices
 export const VRAM = 0x10000;
 export const CRAM = 0x14000;
@@ -67,7 +73,8 @@ export function ggLutBytes() {
  *    another region's memory corrupts what it measures).
  * @param {'sms'|'gg'} platform
  */
-export function hwWat(platform = "sms") {
+export function hwWat(platform = "sms", opts = {}) {
+  if (opts.exact) return hwExactWat(platform, opts);
   const CMASK = platform === "gg" ? 0x3F : 0x1F;
   const GGPORT = platform === "gg"
     ? `    (if (i32.eq (local.get $p) (i32.const 0x00))
@@ -187,6 +194,149 @@ ${GGPORT}
           (i32.shl (i32.and (i32.shr_u (global.get $ioctl) (i32.const 7)) (i32.const 1)) (i32.const 7)))))))
     (i32.const 0xFF))
 `;
+}
+
+/** Game Gear I/O registers $00-$06 and the SMS memory/I/O control latches. */
+export const IOREGS = 0x14AC0;
+/** H counter by T-state within the line (gpgx cycle2hc32 sampled every 15 master cycles). */
+export const HCTAB = 0x14B00;
+
+/**
+ * VDP + I/O modelled the way genesis_plus_gx models them (the banked
+ * emitter's default): I/O ports decoded by `port & 0xC1` with the SMS/GG
+ * mirrors, the Game Gear I/O registers $00-$06 (serial/link registers read
+ * back what was written, with gpgx's reset values), the V counter read at the
+ * cycle the IN completes (the next line once the line's budget is spent) and
+ * folded at $DA, the H counter from gpgx's cycle table, the status low bits
+ * only in Mode 4, and a status read that lands after the end of line 192 sees
+ * (and consumes) the VINT flag early. `$curbudget` is the line budget left
+ * after the IN instruction's own cost, set by every IN arm.
+ * @param {'sms'|'gg'} platform
+ * @param {{region?: 'export'|'japan'}} opts
+ */
+function hwExactWat(platform, opts) {
+  const legacy = hwWat(platform);
+  const cut = legacy.indexOf("  (func $vdp_status_read");
+  const vdpPart = legacy.slice(0, cut);
+  const gg = platform === "gg";
+  const japan = opts.region === "japan";
+  const io0 = gg ? (japan ? 0x80 : 0xC0) : 0;
+  return vdpPart + `  (global $curbudget (mut i32) (i32.const 228))
+  (global $vintdone (mut i32) (i32.const 0))
+  (global $memctl (mut i32) (i32.const 0xA8))
+  (global $ioctl (mut i32) (i32.const 0xFF))
+
+  (func $vdp_status_read (result i32)
+    (local $s i32)
+    (if (i32.and (i32.eq (global.get $line) (i32.const 192))
+                 (i32.and (i32.le_s (global.get $curbudget) (i32.const 0)) (i32.eqz (global.get $vintdone))))
+      (then (global.set $vintdone (i32.const 1))
+            (global.set $vdp_status (i32.or (global.get $vdp_status) (i32.const 0x80)))))
+    (local.set $s (global.get $vdp_status))
+    (if (i32.and (call $vreg (i32.const 0)) (i32.const 0x04))
+      (then (local.set $s (i32.or (local.get $s) (i32.const 0x1F)))))
+    (global.set $vdp_status (i32.and (global.get $vdp_status) (i32.const 0x1F)))
+    (global.set $hintpend (i32.const 0))
+    (global.set $vdp_first (i32.const 1))
+    (local.get $s))
+
+  (func $vreg (param $n i32) (result i32)
+    (i32.load8_u (i32.add (i32.const ${VREG}) (local.get $n))))
+
+  (func $vcounter (result i32)
+    (local $vc i32)
+    (local.set $vc (global.get $line))
+    (if (i32.le_s (global.get $curbudget) (i32.const 0))
+      (then (local.set $vc (i32.rem_u (i32.add (local.get $vc) (i32.const 1)) (i32.const 262)))))
+    (if (i32.gt_u (local.get $vc) (i32.const 0xDA))
+      (then (local.set $vc (i32.sub (local.get $vc) (i32.const 262)))))
+    (i32.and (local.get $vc) (i32.const 0xFF)))
+
+  (func $hcounter (result i32)
+    (local $t i32)
+    (local.set $t (select (i32.sub (i32.const 228) (global.get $curbudget))
+                          (i32.sub (i32.const 0) (global.get $curbudget))
+                          (i32.gt_s (global.get $curbudget) (i32.const 0))))
+    (i32.load8_u (i32.add (i32.const ${HCTAB}) (i32.rem_u (local.get $t) (i32.const 228)))))
+
+  (func $port_dd (result i32)
+    (i32.or
+      (i32.and (global.get $joy2) (i32.const 0x3F))
+      (i32.or
+        (i32.shl (i32.and (i32.shr_u (global.get $ioctl) (i32.const 5)) (i32.const 1)) (i32.const 6))
+        (i32.shl (i32.and (i32.shr_u (global.get $ioctl) (i32.const 7)) (i32.const 1)) (i32.const 7)))))
+
+  (func $io_write (param $port i32) (param $v i32)
+    (local $p i32) (local $g i32)
+    (local.set $p (i32.and (local.get $port) (i32.const 0xFF)))
+    (local.set $g (i32.and (local.get $p) (i32.const 0xC1)))
+    (local.set $v (i32.and (local.get $v) (i32.const 0xFF)))
+    (if (i32.lt_u (local.get $g) (i32.const 0x40))
+      (then
+${gg ? `        (if (i32.lt_u (local.get $p) (i32.const 7))
+          (then
+            (if (i32.or (i32.eq (local.get $p) (i32.const 1))
+                        (i32.or (i32.eq (local.get $p) (i32.const 2)) (i32.eq (local.get $p) (i32.const 3))))
+              (then (i32.store8 (i32.add (i32.const ${IOREGS}) (local.get $p)) (local.get $v))))
+            (if (i32.eq (local.get $p) (i32.const 5))
+              (then (i32.store8 (i32.const ${IOREGS + 5}) (i32.and (local.get $v) (i32.const 0xF8)))))
+            (if (i32.eq (local.get $p) (i32.const 6))
+              (then (i32.store8 (i32.const ${IOREGS + 6}) (local.get $v))))
+            (return)))
+        (if (i32.eq (local.get $p) (i32.const 0x3E)) (then (global.set $memctl (local.get $v)) (return)))
+        (if (i32.eq (local.get $p) (i32.const 0x3F)) (then (global.set $ioctl (local.get $v)) (return)))
+        (return)))`
+    : japan ? `        (if (i32.eq (local.get $p) (i32.const 0x3E)) (then (global.set $memctl (local.get $v)) (return)))
+        (if (i32.eq (local.get $p) (i32.const 0x3F)) (then (global.set $ioctl (local.get $v)) (return)))
+        (return)))`
+    : `        (if (i32.and (local.get $p) (i32.const 1))
+          (then (global.set $ioctl (local.get $v)))
+          (else (global.set $memctl (local.get $v))))
+        (return)))`}
+    (if (i32.lt_u (local.get $g) (i32.const 0x80)) (then (call $psg_write (local.get $v)) (return)))
+    (if (i32.eq (local.get $g) (i32.const 0x80)) (then (call $vdp_data_write (local.get $v)) (return)))
+    (if (i32.eq (local.get $g) (i32.const 0x81)) (then (call $vdp_ctrl_write (local.get $v)) (return))))
+
+  (func $io_read (param $port i32) (result i32)
+    (local $p i32) (local $g i32)
+    (local.set $p (i32.and (local.get $port) (i32.const 0xFF)))
+    (local.set $g (i32.and (local.get $p) (i32.const 0xC1)))
+    (if (i32.eq (local.get $g) (i32.const 0x40)) (then (return (call $vcounter))))
+    (if (i32.eq (local.get $g) (i32.const 0x41)) (then (return (call $hcounter))))
+    (if (i32.eq (local.get $g) (i32.const 0x80)) (then (return (call $vdp_data_read))))
+    (if (i32.eq (local.get $g) (i32.const 0x81)) (then (return (call $vdp_status_read))))
+${gg ? `    (if (i32.lt_u (local.get $g) (i32.const 0x40))
+      (then
+        (if (i32.eqz (local.get $p))
+          (then (return (i32.and (i32.load8_u (i32.const ${IOREGS}))
+                                 (i32.xor (i32.xor (global.get $ggstart) (i32.const 0x80)) (i32.const 0xFF))))))
+        (if (i32.eq (local.get $p) (i32.const 1))
+          (then (return (i32.or (i32.and (i32.load8_u (i32.const ${IOREGS + 1}))
+                                         (i32.xor (i32.and (i32.load8_u (i32.const ${IOREGS + 2})) (i32.const 0x7F)) (i32.const 0xFF)))
+                                (i32.and (i32.load8_u (i32.const ${IOREGS + 2})) (i32.const 0x7F))))))
+        (if (i32.lt_u (local.get $p) (i32.const 6))
+          (then (return (i32.load8_u (i32.add (i32.const ${IOREGS}) (local.get $p))))))
+        (return (i32.const 0xFF))))
+    (if (i32.or (i32.eq (local.get $p) (i32.const 0xC0)) (i32.eq (local.get $p) (i32.const 0xDC)))
+      (then (return (global.get $joy1))))
+    (if (i32.or (i32.eq (local.get $p) (i32.const 0xC1)) (i32.eq (local.get $p) (i32.const 0xDD)))
+      (then (return (call $port_dd))))
+    (i32.const 0xFF))`
+    : `    (if (i32.lt_u (local.get $g) (i32.const 0x40)) (then (return (i32.const 0xFF))))
+    (if (i32.and (global.get $memctl) (i32.const 0x04)) (then (return (i32.const 0xFF))))
+    (if (i32.and (local.get $p) (i32.const 1)) (then (return (call $port_dd))))
+    (global.get $joy1))`}
+${gg ? `  (data (i32.const ${IOREGS}) "${[io0, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF].map((b) => "\\" + b.toString(16).padStart(2, "0")).join("")}")
+` : ""}`;
+}
+
+/**
+ * gpgx's H counter per T-state of a 228-T line (its cycle2hc32 table taken
+ * every 15 master cycles, generated by scripts/recompile-gen/sms-hcounter.mjs).
+ * @returns {Uint8Array}
+ */
+export function hcounterBytes() {
+  return Uint8Array.from(HC_TABLE);
 }
 
 /**
@@ -537,7 +687,43 @@ export function psgWat(AUDIO, ABI) {
  * rotates (sll/sli sets bit 0), ldi/ldd/cpi/cpd steps, outi/outd with the
  * exact OUTI flag rules, rld/rrd.
  */
-export function miscWat() {
+export function miscWat(opts = {}) {
+  const text = miscLegacyWat();
+  if (!opts.exact) return text;
+  // sms-wat implemented INI/IND as OUTI/OUTD (writing memory to the port
+  // instead of reading the port into memory). These follow gpgx's INI/IND
+  // macros: read port BC, B-1, store at HL, HL+-1, flags from B and
+  // ((C+-1) & $FF) + value.
+  const fixed = text
+    .replace("  (func $ini (call $outi_step))", "  (func $ini (call $ini_step (i32.const 1)))")
+    .replace("  (func $inir (call $otir))", `  (func $inir (block $d (loop $l (call $ini_step (i32.const 1))
+    (br_if $d (i32.eqz (global.get $b))) (br $l))))`)
+    .replace("  (func $ind (call $outd_step))", "  (func $ind (call $ini_step (i32.const -1)))")
+    .replace("  (func $indr (call $otdr))", `  (func $indr (block $d (loop $l (call $ini_step (i32.const -1))
+    (br_if $d (i32.eqz (global.get $b))) (br $l))))`);
+  if (fixed === text) throw new Error("sms recompile: INI/IND helpers not found in the misc text");
+  return fixed + `
+  (func $ini_step (param $dir i32)
+    (local $hl i32) (local $io i32) (local $t i32) (local $f i32)
+    (local.set $io (call $io_read (global.get $c)))
+    (global.set $b (i32.and (i32.sub (global.get $b) (i32.const 1)) (i32.const 0xFF)))
+    (local.set $hl (i32.or (i32.shl (global.get $h) (i32.const 8)) (global.get $l)))
+    (call $wr8 (local.get $hl) (local.get $io))
+    (local.set $hl (i32.and (i32.add (local.get $hl) (local.get $dir)) (i32.const 0xFFFF)))
+    (global.set $h (i32.shr_u (local.get $hl) (i32.const 8)))
+    (global.set $l (i32.and (local.get $hl) (i32.const 0xFF)))
+    (local.set $f (i32.and (call $szp (global.get $b)) (i32.const 0xA8)))
+    (if (i32.eqz (global.get $b)) (then (local.set $f (i32.or (local.get $f) (i32.const 0x40)))))
+    (local.set $t (i32.add (i32.and (i32.add (global.get $c) (local.get $dir)) (i32.const 0xFF)) (local.get $io)))
+    (if (i32.and (local.get $io) (i32.const 0x80)) (then (local.set $f (i32.or (local.get $f) (i32.const 0x02)))))
+    (if (i32.and (local.get $t) (i32.const 0x100)) (then (local.set $f (i32.or (local.get $f) (i32.const 0x11)))))
+    (local.set $f (i32.or (local.get $f)
+      (i32.and (call $szp (i32.xor (i32.and (local.get $t) (i32.const 0x07)) (global.get $b))) (i32.const 0x04))))
+    (global.set $f (local.get $f)))
+`;
+}
+
+function miscLegacyWat() {
   return `
   (func $ex_af
     (local $t i32)

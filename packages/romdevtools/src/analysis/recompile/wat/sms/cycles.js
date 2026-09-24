@@ -132,3 +132,18 @@ export function cost(mnem, ops) {
   // instead of freezing the budget.
   return [4, 4];
 }
+
+/**
+ * genesis_plus_gx's cost where it differs from the published table: INI/IND
+ * charge their ex[] cycles unconditionally inside the macro (20 T), and
+ * INIR/INDR add the repeat ex[] on top (25 T repeating, 20 T last).
+ * @param {string} mnem
+ * @param {string} ops
+ * @returns {[number, number]}
+ */
+export function costExact(mnem, ops) {
+  const m = mnem.toLowerCase();
+  if (m === "ini" || m === "ind") return [20, 20];
+  if (m === "inir" || m === "indr") return [25, 20];
+  return cost(mnem, ops);
+}

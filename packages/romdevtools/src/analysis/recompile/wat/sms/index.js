@@ -22,14 +22,21 @@
 // Plain JS ESM + JSDoc.
 
 import { readFileSync } from "node:fs";
-import { cost } from "./cycles.js";
+import { cost, costExact } from "./cycles.js";
 import { lower, flagHelpersWat, m1Count, rIncWat } from "./z80.js";
-import { hwWat, renderWat, psgWat, miscWat, cramBody, startBody, ggLutBytes, VRAM, CRAM, VREG, GGLUT, PROBE, PCWATCH, SMSFB, LINEPROBE } from "./hw.js";
+import { hwWat, renderWat, psgWat, miscWat, cramBody, startBody, ggLutBytes, hcounterBytes, VRAM, CRAM, VREG, GGLUT, PROBE, PCWATCH, SMSFB, LINEPROBE, HCTAB } from "./hw.js";
 import { watBytes } from "../cart-abi.js";
 import { emitFlatWat } from "./flat.js";
 
 export const platforms = ["sms", "gg"];
 export const REFERENCE_CORE = "genesis_plus_gx";
+
+/** Register file mirrored into the probe block at the end of each frame (bytes from PROBE+48). */
+const REG_PROBE = ["a", "f", "b", "c", "d", "e", "h", "l", "ixh", "ixl", "iyh", "iyl", "rreg", "ireg", "iff", "halted"];
+const REG_PROBE_BASE = 48;
+
+/** Z80 T-states genesis_plus_gx lets pass in frame 1 before the first instruction (NTSC hard reset). */
+const RESET_T = Math.floor(Math.floor(((262 - 192 + 159) * 3420 + 1004) / 7) * 7 / 15);
 
 /** Arms per dispatch shard (a single giant br_table blows V8's compiler zone). */
 const SHARD_SZ = 1024;
@@ -94,6 +101,22 @@ function segaHeader(img) {
  *                            itself: loadMedia + this many frames, then
  *                            system_ram. Implies a whole-RAM snapshot region
  *                            ($C000, 8KB) when ramRegions is not given.
+ *   probeRegs: boolean      mirror the Z80 register file into the probe block
+ *                            each frame (default true)
+ *   region: 'export'|'japan' console region (GG port $00 bit 6, SMS I/O port
+ *                            mirrors); default from the header region code
+ *   legacy: boolean          reproduce sms-wat's emit_bank.py module exactly
+ *                            (interrupts sampled only at scanline starts, no
+ *                            register probe); for the differential gate.
+ *   ramCode: true | {frames, input}
+ *                            DISCOVER RAM-resident code from the reference
+ *                            itself: run it `frames` frames from power-on
+ *                            (default 3000) on the `input` schedule, record
+ *                            every RAM pc it executes and every encoding seen
+ *                            there, and compile each as a guarded variant (a
+ *                            RAM instruction the discovery never saw traps
+ *                            instead of running stale bytes). Implies a
+ *                            whole-RAM region ($C000, 8KB).
  *   emitter: 'banked'|'flat' 'banked' (default) is the full model: paged
  *                            windows, scanline budget carry, line interrupts.
  *                            'flat' is sms-wat's older emitter for carts of
@@ -133,7 +156,7 @@ export function describe(rom, opts = {}) {
   const pagesSlot1 = typeof opts.pagesSlot1 === "boolean" ? opts.pagesSlot1 : slot1Stores > 0;
 
   let ramRegions = Array.isArray(opts.ramRegions) ? opts.ramRegions.map((r) => ({ bank: 0, romOffset: 0, ...r })) : [];
-  if (!ramRegions.length && Number.isInteger(opts.ramSnapshotFrame)) {
+  if (!ramRegions.length && (Number.isInteger(opts.ramSnapshotFrame) || opts.ramCode)) {
     ramRegions = [{ cpu: 0xC000, bytes: 0x2000, bank: 0, romOffset: 0, src: "snapshot" }];
   }
   for (const r of ramRegions) {
@@ -142,6 +165,10 @@ export function describe(rom, opts = {}) {
     }
   }
 
+  // Region as genesis_plus_gx picks it for a cart missing from its database:
+  // a missing header or a Japanese region code runs as a Japanese console.
+  const region = opts.region === "japan" || opts.region === "export" ? opts.region
+    : (!hdr || hdr.regionCode === 3 || hdr.regionCode === 5) ? "japan" : "export";
   const emitter = opts.emitter || "banked";
   if (emitter !== "banked" && emitter !== "flat") throw new Error(`sms recompile: emitter must be 'banked' or 'flat', got '${emitter}'`);
   if (emitter === "flat" && (img.length > 0x8000 || ramRegions.length)) throw new Error("sms recompile: emitter 'flat' handles unbanked carts of 32KB or less with no RAM code");
@@ -150,6 +177,9 @@ export function describe(rom, opts = {}) {
     platform,
     referenceCore: REFERENCE_CORE,
     emitter,
+    region,
+    legacy: opts.legacy === true,
+    probeRegs: opts.probeRegs !== false && opts.legacy !== true,
     supported,
     unsupportedReason: supported ? null : `ROM size ${img.length} is not a multiple of 8KB up to 4MB`,
     romBytes: img.length,
@@ -395,7 +425,7 @@ function bankHelpersWat(G, cfg, nbank) {
   (global $bank1 (mut i32) (i32.const ${SLOT1_BANK}))
   (global $bank0 (mut i32) (i32.const 0))
   (global $carry (mut i32) (i32.const 0))
-  (global $eiarm (mut i32) (i32.const 0))
+  (global $eiarm (mut i32) (i32.const 0))${cfg.legacy ? "" : "\n  (global $eidelay (mut i32) (i32.const 0))"}
   (global $ctl (mut i32) (i32.const 0))
 
   (func $rd8 (param $addr i32) (result i32)
@@ -499,6 +529,50 @@ function abiWat(G, cfg, n, platform) {
     : `(i32.store (i32.add (i32.const ${BMAP0}) ` +
       "(i32.mul (local.get $a) (i32.const 4))) " +
       "(i32.add (local.get $i) (i32.const 1)))";
+  // Z80 register file + unspent line budget at the end of each frame, so a
+  // per-frame differ can compare the CPU against the reference core's.
+  // gpgx latches a line interrupt that falls exactly on an instruction
+  // boundary (no overshoot carried into the line) after the NEXT instruction.
+  const HINT_EDGE = cfg.legacy ? "" : `              (if (i32.and (i32.eqz (global.get $carry))
+                           (i32.ne (i32.and (call $vreg (i32.const 0)) (i32.const 0x10)) (i32.const 0)))
+                (then (global.set $carry (i32.sub (call $run (i32.const 1)) (i32.const 1)))))
+`;
+  // Legacy model: interrupts sampled only here, at the start of each line.
+  // Otherwise $run samples them before every instruction.
+  // gpgx: a status read in the overshoot past line 192 already took the flag.
+  const VINT_SET = cfg.legacy ? `      (if (i32.eq (local.get $ln) (i32.const 192))
+        (then (global.set $vdp_status
+                (i32.or (global.get $vdp_status) (i32.const 0x80)))))` : `      (if (i32.and (i32.eq (local.get $ln) (i32.const 192)) (i32.eqz (global.get $vintdone)))
+        (then (global.set $vdp_status
+                (i32.or (global.get $vdp_status) (i32.const 0x80)))))`;
+  const FRAME_START = cfg.legacy ? "" : "    (global.set $vintdone (i32.const 0))\n";
+  // Power-on VDP state gpgx sets without a BIOS: R10 = $FF (line interrupt
+  // off), the line counter $FF, and R0-R6 as its boot-ROM stand-in writes.
+  const POWER_ON = cfg.legacy ? "" : [
+    ...(platform === "gg" ? [] : [[0, 0x36], [1, 0x80]]),
+    [2, 0xFF], [3, 0xFF], [4, 0xFF], [5, 0xFF], [6, 0xFF], [10, 0xFF],
+  ].map(([r, v]) => `    (i32.store8 (i32.const ${VREG + r}) (i32.const ${v}))\n`).join("") + "    (global.set $linectr (i32.const 0xFF))\n" +
+    // gpgx hard reset (gen_reset): the CPU starts ((262 - 192 + 159) lines +
+    // 1004) master cycles into the first frame, rounded to 7 then 15 master
+    // cycles: 784170 = 52278 T after the frame's line-192 start. Carried as
+    // debt so the first instruction runs at that point of frame 1.
+    `    (global.set $carry (i32.const ${-RESET_T}))\n` +
+    // Sega mapper reset (gpgx sms_cart_reset): slot 2 holds page 2 until the
+    // cart writes $FFFF. Without a BIOS gpgx also leaves the memory-control
+    // value $A8 at $C000 on a Master System, as the BIOS would.
+    (cfg.mapper === "sega" ? `    (global.set $bank2 (i32.const ${2 % cfg.banks}))\n` : "") +
+    (platform === "gg" ? "" : "    (i32.store8 (i32.const 0xC000) (i32.const 0xA8))\n");
+  // gpgx reloads the line counter from R10 BEFORE line 261's CPU run, so a
+  // write to R10 during that line takes effect a frame later.
+  const RELOAD = `      (if (i32.eq (local.get $ln) (i32.const 261))
+        (then (global.set $linectr (call $vreg (i32.const 10)))))
+`;
+  const RELOAD_BEFORE = cfg.legacy ? "" : RELOAD;
+  const RELOAD_AFTER = cfg.legacy ? RELOAD : "";
+  const LINE_IRQ = cfg.legacy ? "      (call $irq_check)\n" : "";
+  const REGPROBE = cfg.probeRegs === false ? "" : REG_PROBE.map((g, i) =>
+    `    (i32.store8 (i32.const ${PROBE + REG_PROBE_BASE + i}) (global.get $${g}))\n`).join("") +
+    `    (i32.store (i32.const ${PROBE + REG_PROBE_BASE + 16}) (global.get $carry))\n`;
   return `
   (func $blockmap_init
     (local $i i32) (local $a i32) (local $bk i32)
@@ -559,12 +633,13 @@ ${CRAMBODY}
     (call $blockmap_init)
     (global.set $bank2 (i32.const 0))
     (global.set $pc (i32.const 0))
-    (global.set $sp (i32.const 0xDFF0)))
+    (global.set $sp (i32.const 0xDFF0))
+${POWER_ON})
 
   (func $irq_line (result i32)
     (i32.and
-      (i32.and (i32.ne (global.get $iff) (i32.const 0))
-               (i32.ne (global.get $vdp_first) (i32.const 0)))
+      ${cfg.legacy ? `(i32.and (i32.ne (global.get $iff) (i32.const 0))
+               (i32.ne (global.get $vdp_first) (i32.const 0)))` : "(i32.ne (global.get $iff) (i32.const 0))"}
       (i32.or
         (i32.and (i32.ne (i32.and (call $vreg (i32.const 1)) (i32.const 0x20)) (i32.const 0))
                  (i32.ne (i32.and (global.get $vdp_status) (i32.const 0x80)) (i32.const 0)))
@@ -598,7 +673,7 @@ ${CRAMBODY}
     (if (i32.and (local.get $btn) (i32.const 2))
       (then (global.set $joy1 (i32.and (global.get $joy1) (i32.const 0xDF)))))
 ${STARTBTN}
-    (local.set $k (i32.const 0))
+${FRAME_START}    (local.set $k (i32.const 0))
     (block $fd (loop $fl
       (br_if $fd (i32.ge_u (local.get $k) (i32.const 262)))
       (local.set $ln (i32.rem_u (i32.add (local.get $k) (i32.const 192)) (i32.const 262)))
@@ -611,18 +686,13 @@ ${STARTBTN}
             (then
               (if (i32.lt_u (local.get $ln) (i32.const 192))
                 (then (global.set $linectr (call $vreg (i32.const 10)))))
-              (global.set $hintpend (i32.const 1)))
+${HINT_EDGE}              (global.set $hintpend (i32.const 1)))
             (else
               (if (i32.lt_u (local.get $ln) (i32.const 192))
                 (then (global.set $linectr
                         (i32.sub (global.get $linectr) (i32.const 1)))))))))
-      (call $irq_check)
-      (global.set $carry (call $run (i32.add (i32.const 228) (global.get $carry))))
-      (if (i32.eq (local.get $ln) (i32.const 261))
-        (then (global.set $linectr (call $vreg (i32.const 10)))))
-      (if (i32.eq (local.get $ln) (i32.const 192))
-        (then (global.set $vdp_status
-                (i32.or (global.get $vdp_status) (i32.const 0x80)))))
+${LINE_IRQ}${RELOAD_BEFORE}      (global.set $carry (call $run (i32.add (i32.const 228) (global.get $carry))))
+${RELOAD_AFTER}${VINT_SET}
       (local.set $k (i32.add (local.get $k) (i32.const 1)))
       (br $fl)))
     (call $present)
@@ -639,7 +709,7 @@ ${STARTBTN}
     (i32.store (i32.add (i32.const ${PROBE}) (i32.const 36)) (global.get $tracei))
     (i32.store (i32.add (i32.const ${PROBE}) (i32.const 40)) (global.get $bank2))
     (i32.store (i32.add (i32.const ${PROBE}) (i32.const 44)) (global.get $bank1))
-  )
+${REGPROBE}  )
 
   (export "dbg_pc" (global $pc))
   (export "dbg_trapped" (global $trapped))
@@ -709,6 +779,7 @@ function splitMnem(s) {
   return m ? [m[1], m[2] || ""] : ["", ""];
 }
 
+const IN_OPS = new Set(["in", "ini", "ind", "inir", "indr"]);
 const REL_OP = /(L[0-9A-Fa-f]{6}|\$[0-9A-Fa-f]{4})/g;
 const ED_TEXT = new Set(["ldir", "lddr", "cpir", "cpdr", "otir", "otdr", "inir", "indr", "ldi", "ldd", "cpi", "cpd",
   "outi", "outd", "ini", "ind", "neg", "im", "reti", "retn", "rld", "rrd"]);
@@ -720,14 +791,24 @@ function rebaseSnap(ops) {
 }
 
 class Emitter {
-  constructor(img, cfg, idx, snapIdx, ramSnap) {
+  /**
+   * @param {Uint8Array} img
+   * @param {object} cfg describe() result
+   * @param {Map<number, [number, string]>} idx ROM instruction index
+   * @param {{bytes: Uint8Array, idx: Map<number, [number, string]>}[]} snaps RAM snapshots, decoded
+   * @param {Set<number>|null} executed RAM pcs the reference executed (ramCode discovery)
+   */
+  constructor(img, cfg, idx, snaps, executed) {
     this.img = img;
     this.cfg = cfg;
     this.idx = idx;
-    this.snapIdx = snapIdx;
-    this.ramSnap = ramSnap;
+    this.snaps = snaps;
+    this.snapIdx = snaps.length ? snaps[0].idx : new Map();
+    this.ramSnap = snaps.length ? snaps[0].bytes : null;
+    this.executed = executed;
     this.unsupported = 0;
     this.missing = 0;
+    this.ramVariants = 0;
   }
 
   /** Z80 address + bank -> ROM file offset, or null when unmappable. */
@@ -751,6 +832,43 @@ class Emitter {
     return off >= 0 && off < this.img.length ? this.img[off] : null;
   }
 
+  /**
+   * RAM-resident code (exact mode): one guarded variant per distinct
+   * encoding the reference was seen executing at this address (or the
+   * snapshot's, for an address never executed during discovery). The guard
+   * compares the live RAM bytes with the variant's; code the discovery never
+   * saw traps loudly instead of running stale bytes.
+   */
+  ramArm(addr, bank, snapoff) {
+    const off = snapoff & 0x1FFF;
+    const which = this.executed && this.executed.has(addr) ? this.snaps : this.snaps.slice(0, 1);
+    const seen = new Set();
+    const variants = [];
+    for (const sn of which) {
+      const ent = sn.idx.get(off);
+      if (!ent) continue;
+      const n = ent[0];
+      const bytes = Array.from({ length: n }, (_, k) => (off + k < sn.bytes.length ? sn.bytes[off + k] : 0));
+      const key = bytes.join(",");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      variants.push({ n, text: ent[1], bytes });
+    }
+    if (!variants.length) { this.missing++; return "    (call $trap)"; }
+    this.ramVariants += variants.length;
+    const parts = [];
+    for (const v of variants) {
+      const mn0 = splitMnem(v.text)[0];
+      const txt = (mn0 === "jr" || mn0 === "djnz") ? rebaseSnap(v.text) : v.text;
+      const guard = v.bytes.map((b, k) => `(i32.eq (call $rd8 (i32.const ${(addr + k) & 0xFFFF})) (i32.const ${b}))`)
+        .reduce((acc, g) => (acc ? `(i32.and ${acc} ${g})` : g), "");
+      const body = this.body(addr, bank, v.n, [[addr, v.n, txt]], (k) => v.bytes[k] ?? null, v.bytes[0]);
+      parts.push(`    (if ${guard}\n      (then\n${body}\n      (return (local.get $budget))))`);
+    }
+    parts.push("    (call $trap)");
+    return parts.join("\n");
+  }
+
   /** WAT body of the arm at (addr, bank). */
   arm(addr, bank, size) {
     let snapoff = null;
@@ -759,6 +877,7 @@ class Emitter {
         if (r.src === "snapshot" && r.cpu <= addr && addr < r.cpu + r.bytes) { snapoff = addr - 0xC000; break; }
       }
     }
+    if (snapoff !== null && !this.cfg.legacy) return this.ramArm(addr, bank, snapoff);
     let ins;
     if (snapoff !== null) {
       const ent = this.snapIdx.get(snapoff);
@@ -774,6 +893,15 @@ class Emitter {
       if (!ent) { this.missing++; return "    (call $trap)"; }
       ins = [[off, ent[0], ent[1]]];
     }
+    return this.body(addr, bank, size, ins, (k) => this.romByte(addr, bank, k), snapoff === null ? undefined : null);
+  }
+
+  /**
+   * Lower `ins` ([[fileOffset|addr, length, text]]) as one arm.
+   * @param {(k: number) => number|null} byteAt  byte k of the instruction (relative-branch displacement, prefix)
+   * @param {number|null|undefined} b0  first opcode byte when known (null = judge the prefix from the text)
+   */
+  body(addr, bank, size, ins, byteAt, b0Known) {
     const base = ins[0][0];
     const parts = [];
     for (const [a, n, s] of ins) {
@@ -782,34 +910,39 @@ class Emitter {
       // Relative branches: the target is (next instruction) + the displacement
       // byte, recomputed from the encoding rather than trusting any window base.
       if ((mn === "jr" || mn === "djnz") && n >= 2) {
-        const d = this.romByte(addr, bank, n - 1);
+        const d = byteAt(n - 1);
         if (d !== null) {
           const t = (za + n + (d > 127 ? d - 256 : d)) & 0xFFFF;
           ops = ops.replace(REL_OP, "L" + t.toString(16).toUpperCase().padStart(6, "0"));
         }
       }
-      const ci = Math.max(1, cost(mn, ops)[1]);
+      const costOf = this.cfg.legacy ? cost : costExact;
+      const ci = Math.max(1, costOf(mn, ops)[1]);
       if (parts.length) {
         parts.push("    (if (i32.le_s (local.get $budget) (i32.const 0)) " +
           `(then (global.set $pc (i32.const ${za & 0xFFFF})) ` +
           "(return (local.get $budget))))");
       }
       parts.push(`    (local.set $budget (i32.sub (local.get $budget) (i32.const ${ci})))`);
-      let b0 = snapoff === null ? this.romByte(addr, bank, a - base) : null;
+      let b0 = b0Known === undefined ? byteAt(a - base) : b0Known;
       if (b0 === null) b0 = ED_TEXT.has(mn) ? 0xED : (/\bi[xy]/.test(ops) ? 0xDD : 0);
       parts.push("    " + rIncWat(m1Count(b0)));
       let wat, flow;
       try {
-        [wat, flow] = lower(mn, ops, za, n);
+        [wat, flow] = lower(mn, ops, za, n, { exact: !this.cfg.legacy });
       } catch {
         this.unsupported++;
         parts.push(`    ;; UNSUPPORTED ${s}`);
         parts.push("    (call $trap)");
         return parts.join("\n");
       }
+      // An IN samples the V/H counters and the VINT flag at the cycle it
+      // completes: publish the line budget left after its own cost.
+      // INI/IND read the port before their extra 4 T are charged.
+      if (!this.cfg.legacy && IN_OPS.has(mn)) parts.push(`    (global.set $curbudget ${mn === "in" ? "(local.get $budget)" : "(i32.add (local.get $budget) (i32.const 4))"})`);
       if (wat) parts.push("    " + wat);
       if (flow) {
-        const [tk, nt] = cost(mn, ops);
+        const [tk, nt] = costOf(mn, ops);
         parts.push(emitFlow(flow, tk - nt));
         return parts.join("\n");
       }
@@ -838,6 +971,60 @@ export async function captureReferenceRam(romPath, platform, frames) {
     await host.loadMedia({ platform, path: romPath });
     if (frames > 0) await host.stepFrames(frames);
     return new Uint8Array(host.readMemory("system_ram", 0, 0x2000));
+  } finally {
+    try { host.dispose?.(); } catch { /* best effort */ }
+  }
+}
+
+/**
+ * Run the reference core from power-on and collect the RAM code it executes:
+ * every frame, the RAM pcs executed that frame (the core's exact PC bitmap)
+ * and, whenever the bytes at any of those pcs change, a copy of system RAM.
+ * @param {string} romPath
+ * @param {'sms'|'gg'} platform
+ * @param {{frames?: number, input?: string|Array<object>}} o
+ * @returns {Promise<{snapshots: Uint8Array[], executed: Set<number>, frames: number}>}
+ */
+export async function discoverRamCode(romPath, platform, o = {}) {
+  if (!romPath) throw new Error("sms recompile: ramCode needs the ROM on disk (romPath) to run the reference core");
+  const frames = Number.isInteger(o.frames) && o.frames > 0 ? o.frames : 3000;
+  const { LibretroHost } = await import("romdev-core-host/index.js");
+  const { resolveCore } = await import("../../../../cores/registry.js");
+  const { ScheduleDriver, parseInputSchedule } = await import("../../../../host/verify-recompile.js");
+  const resolved = resolveCore(platform);
+  if (!resolved) throw new Error(`sms recompile: no reference core for ${platform}`);
+  const host = new LibretroHost();
+  try {
+    await host.loadCore(resolved.jsPath, resolved.wasmPath, { hwRender: resolved.hwRender, noderawfs: resolved.noderawfs });
+    // From power-on: no settle frames, so boot-time RAM code is seen too. The
+    // input schedule is in frames after loadMedia's usual 5 settle frames.
+    host.status.paused = true;
+    await host.loadMedia({ platform, path: romPath });
+    host.status.paused = false;
+    const settle = 5;
+    const driver = new ScheduleDriver(host, parseInputSchedule(o.input ?? ""));
+    const executed = new Set();
+    const windows = new Map();
+    const snapshots = [];
+    for (let f = 1; f <= frames + settle; f++) {
+      const rf = f - settle;
+      if (rf >= 0) driver._apply(driver._want(rf));
+      const { pcs } = host.logPCBitmap(0xC000, 0x10000, 1);
+      if (!pcs.length) continue;
+      const ram = Uint8Array.from(host.readMemory("system_ram", 0, 0x2000));
+      let changed = false;
+      for (const pc of pcs) {
+        executed.add(pc);
+        const off = pc & 0x1FFF;
+        const key = `${ram[off]},${ram[(off + 1) & 0x1FFF]},${ram[(off + 2) & 0x1FFF]},${ram[(off + 3) & 0x1FFF]}`;
+        let set = windows.get(pc);
+        if (!set) windows.set(pc, (set = new Set()));
+        if (!set.has(key)) { set.add(key); changed = true; }
+      }
+      if (changed) snapshots.push(ram);
+      if (snapshots.length > 256) throw new Error("sms recompile: ramCode saw more than 256 distinct RAM code states; this cart generates code at run time and cannot be compiled statically");
+    }
+    return { snapshots, executed, frames };
   } finally {
     try { host.dispose?.(); } catch { /* best effort */ }
   }
@@ -876,6 +1063,9 @@ export function layoutFor(d) {
     fields: {
       pc: { offset: PROBE + 12, size: 2, ref: "cpu:pc" },
       sp: { offset: PROBE + 28, size: 2, ref: "cpu:sp" },
+      ...(d.emitter === "flat" || d.probeRegs === false ? {} : Object.fromEntries(
+        [["a", "A"], ["f", "F"], ["b", "B"], ["c", "C"], ["d", "D"], ["e", "E"], ["h", "H"], ["l", "L"], ["r", "R"], ["i", "I"]]
+          .map(([k, ref]) => [k, { offset: PROBE + REG_PROBE_BASE + ["a", "f", "b", "c", "d", "e", "h", "l", "ixh", "ixl", "iyh", "iyl", "r", "i"].indexOf(k), size: 1, ref: `cpu:registers.${ref}` }]))),
     },
     probe: {
       frames: { offset: PROBE + 0, size: 4 },
@@ -884,6 +1074,7 @@ export function layoutFor(d) {
       irqs: { offset: PROBE + 20, size: 4 },
       vdpWrites: { offset: PROBE + 16, size: 4 },
       ...(d.emitter === "flat" ? {} : { bank2: { offset: PROBE + 40, size: 4 }, bank1: { offset: PROBE + 44, size: 4 } }),
+      ...(d.emitter === "flat" || d.probeRegs === false ? {} : { iff: { offset: PROBE + REG_PROBE_BASE + 14, size: 1 }, halted: { offset: PROBE + REG_PROBE_BASE + 15, size: 1 }, lineCarry: { offset: PROBE + REG_PROBE_BASE + 16, size: 4 } }),
     },
     vramZero: ["vram"],
     warmupFrames: 0,
@@ -946,15 +1137,29 @@ export async function* emitWat(rom, opts = {}) {
     Object.assign(stats, { platform: PLATFORM, irUnresolvedOffsets: irStats.unresolvedOffsets });
     return;
   }
-  let ramSnap = null, snapIdx = new Map();
+  // RAM snapshots, each decoded as a 16KB pseudo-ROM at 0 (RAM offset =
+  // pseudo-ROM offset). ramCode discovery supplies several plus the set of
+  // RAM pcs the reference executed.
+  const snaps = [];
+  let executed = null, discovery = null;
   if (cfg.ramRegions.some((r) => r.src === "snapshot")) {
-    ramSnap = await loadRamSnapshot(opts, PLATFORM);
-    if (!ramSnap) throw new Error("sms recompile: a ramRegions entry has src:'snapshot' but no ramSnapshot / ramSnapshotFrame was given");
-    // Decode the snapshot as a 16KB pseudo-ROM at 0 (RAM offset = pseudo-ROM offset).
-    const pad = new Uint8Array(0x4000);
-    pad.set(ramSnap.subarray(0, Math.min(ramSnap.length, 0x4000)));
-    snapIdx = (await instructionIndex(pad, "sms")).idx;
+    let raws;
+    if (opts.ramCode) {
+      discovery = await discoverRamCode(opts.romPath, PLATFORM, opts.ramCode === true ? {} : opts.ramCode);
+      raws = discovery.snapshots;
+      executed = discovery.executed;
+    } else {
+      const one = await loadRamSnapshot(opts, PLATFORM);
+      if (!one) throw new Error("sms recompile: a ramRegions entry has src:'snapshot' but no ramSnapshot / ramSnapshotFrame / ramCode was given");
+      raws = [one];
+    }
+    for (const raw of raws) {
+      const pad = new Uint8Array(0x4000);
+      pad.set(raw.subarray(0, Math.min(raw.length, 0x4000)));
+      snaps.push({ bytes: raw, idx: (await instructionIndex(pad, "sms")).idx });
+    }
   }
+  const snapIdx = snaps.length ? snaps[0].idx : new Map();
 
   let items = fullBlocks(IMG, cfg.pagesSlot1);
   if (cfg.ramRegions.length) {
@@ -993,14 +1198,14 @@ export async function* emitWat(rom, opts = {}) {
     "  (global $linectr (mut i32) (i32.const 0))");
   head.push(bankHelpersWat(G, cfg, NBANK));
   head.push(flagHelpersWat());
-  head.push(hwWat(PLATFORM));
+  head.push(hwWat(PLATFORM, { exact: !cfg.legacy, region: cfg.region }));
   head.push(renderWat());
   head.push(psgWat(AUDIO, ABI));
-  head.push(miscWat());
+  head.push(miscWat({ exact: !cfg.legacy }));
   head.push("  (func $trap (global.set $trapped (i32.const 1)) (global.set $trappc (global.get $pc)))");
   yield head.join("\n") + "\n";
 
-  const em = new Emitter(IMG, cfg, idx, snapIdx, ramSnap);
+  const em = new Emitter(IMG, cfg, idx, snaps, executed);
   const nshard = Math.ceil(n / SHARD_SZ);
   for (let sh = 0; sh < nshard; sh++) {
     const lo = sh * SHARD_SZ, hi = Math.min(n, lo + SHARD_SZ), cnt = hi - lo;
@@ -1030,6 +1235,20 @@ export async function* emitWat(rom, opts = {}) {
     "    (block $exit (loop $next",
     "      (br_if $exit (i32.le_s (local.get $budget) (i32.const 0)))",
     "      (br_if $exit (global.get $trapped))",
+    // Interrupts are sampled before EVERY instruction, as genesis_plus_gx's
+    // z80_run does, except the one right after EI. Acceptance (IM1) costs
+    // 13 T; a line whose budget that exhausts ends before the handler runs.
+    ...(cfg.legacy ? [] : [
+      "      (if (i32.and (i32.ne (global.get $iff) (i32.const 0)) (i32.eqz (global.get $eidelay)))",
+      "        (then (if (call $irq_line)",
+      "          (then (global.set $irqs (i32.add (global.get $irqs) (i32.const 1)))",
+      "                (global.set $iff (i32.const 0))",
+      "                (global.set $halted (i32.const 0))",
+      "                (call $push16 (global.get $pc))",
+      "                (local.set $budget (i32.sub (local.get $budget) (i32.const 13)))",
+      "                (global.set $pc (i32.const 0x38))",
+      "                (br_if $exit (i32.le_s (local.get $budget) (i32.const 0)))))))",
+      "      (global.set $eidelay (i32.const 0))"]),
     // A halted Z80 still burns the line as 4 T re-executions, each an opcode
     // fetch that R counts.
     "      (if (global.get $halted) (then",
@@ -1048,8 +1267,17 @@ export async function* emitWat(rom, opts = {}) {
   // Host-settable PC watches (0 = slot off).
   for (let w = 0; w < 4; w++) {
     const b = PCWATCH + w * 8;
+    // Slot 0 also snapshots the machine at its FIRST hit (hit count 0 ->
+    // 1): line, line budget left, R, A F B C D E H L, at PCWATCH+32. Re-arm
+    // by zeroing the count. Lets a per-instruction divergence be located
+    // against the reference's own PC breakpoint snapshot.
+    const snap = w === 0 && !cfg.legacy ? `(if (i32.eqz (i32.load (i32.const ${b + 4}))) (then ` +
+      `(i32.store16 (i32.const ${PCWATCH + 32}) (global.get $line)) ` +
+      `(i32.store (i32.const ${PCWATCH + 36}) (local.get $budget)) ` +
+      ["rreg", "a", "f", "b", "c", "d", "e", "h", "l"].map((g, i) => `(i32.store8 (i32.const ${PCWATCH + 40 + i}) (global.get $${g}))`).join(" ") +
+      ")) " : "";
     r.push(`      (if (i32.eq (global.get $pc) (i32.load (i32.const ${b}))) ` +
-      `(then (i32.store (i32.const ${b + 4}) ` +
+      `(then ${snap}(i32.store (i32.const ${b + 4}) ` +
       `(i32.add (i32.load (i32.const ${b + 4})) (i32.const 1)))))`);
   }
   r.push("      (local.set $id (call $blockid (global.get $pc)))",
@@ -1069,7 +1297,7 @@ export async function* emitWat(rom, opts = {}) {
     // A pending interrupt armed by `ei` is taken at the next instruction
     // boundary (eiarm counts the one-instruction EI delay), with the same
     // /INT condition as the scanline path, never mid VDP write pair.
-    r.push("      (if (i32.and (i32.eq (global.get $eiarm) (i32.const 1)) (call $irq_line))",
+    if (cfg.legacy) r.push("      (if (i32.and (i32.eq (global.get $eiarm) (i32.const 1)) (call $irq_line))",
       "        (then (global.set $eiarm (i32.const 0))",
       "              (global.set $irqs (i32.add (global.get $irqs) (i32.const 1)))",
       "              (global.set $iff (i32.const 0))",
@@ -1078,8 +1306,8 @@ export async function* emitWat(rom, opts = {}) {
       "              (local.set $budget (i32.sub (local.get $budget) (i32.const 13)))",
       "              (global.set $pc (i32.const 0x38))))",
       "      (if (i32.gt_u (global.get $eiarm) (i32.const 1))",
-      "        (then (global.set $eiarm (i32.sub (global.get $eiarm) (i32.const 1)))))",
-      "      (br $next)");
+      "        (then (global.set $eiarm (i32.sub (global.get $eiarm) (i32.const 1)))))");
+    r.push("      (br $next)");
   }
   r.push("    ))", "    (local.get $budget)", "  )");
   r.push(abiWat(G, cfg, n, PLATFORM));
@@ -1090,6 +1318,7 @@ export async function* emitWat(rom, opts = {}) {
   items.forEach(([, a, bk], i) => { btab[i * 4] = a & 0xFF; btab[i * 4 + 1] = (a >> 8) & 0xFF; btab[i * 4 + 2] = bk & 0xFF; });
   yield `  (data (i32.const ${BTAB}) "${watBytes(btab)}")\n`;
   yield `  (data (i32.const ${GGLUT}) "${watBytes(ggLutBytes())}")\n`;
+  if (!cfg.legacy) yield `  (data (i32.const ${HCTAB}) "${watBytes(hcounterBytes())}")\n`;
   yield `  (data (i32.const ${ROMIMG}) "${watBytes(IMG)}")\n`;
   yield ")";
 
@@ -1106,6 +1335,8 @@ export async function* emitWat(rom, opts = {}) {
     mapper: cfg.mapper,
     pagesSlot1: cfg.pagesSlot1,
     ramArms: cfg.ramRegions.reduce((a, rr) => a + Math.min(rr.bytes, 0x10000 - rr.cpu), 0),
+    ramVariants: em.ramVariants,
+    ...(discovery ? { ramCode: { frames: discovery.frames, snapshots: discovery.snapshots.length, executedRamPcs: discovery.executed.size } } : {}),
     irUnresolvedOffsets: irStats.unresolvedOffsets,
     memory: { pages, ...G },
   });

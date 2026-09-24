@@ -192,9 +192,14 @@ function need(o, n, what) {
  * @param {string} ops
  * @param {number} addr  CPU address of the instruction
  * @param {number} size  its length in bytes
+ * @param {{exact?: boolean}} [mode]  exact: genesis_plus_gx semantics where
+ *   sms-wat's lowering differed: `ei` also arms the one-instruction EI delay
+ *   ($eidelay), reti/retn leave IFF1 as it is (IFF1 = IFF2, and nothing here
+ *   separates the two), and `adc hl,rr` adds the carry (sms-wat routed it
+ *   through the add path). The banked emitter uses it unless `legacy`.
  * @returns {[string, object|null]} [wat, flow]; flow says how control leaves the block
  */
-export function lower(mnem, ops, addr, size) {
+export function lower(mnem, ops, addr, size, mode = {}) {
   const o = ops ? ops.split(",").map((x) => x.trim()) : [];
   const nxt = (addr + size) & 0xFFFF;
 
@@ -245,7 +250,7 @@ export function lower(mnem, ops, addr, size) {
   }
 
   if (mnem === "add" || mnem === "adc" || mnem === "sub" || mnem === "sbc" || mnem === "and" || mnem === "or" || mnem === "xor" || mnem === "cp") {
-    if ((mnem === "add" || mnem === "adc") && (o[0] === "hl" || o[0] === "ix" || o[0] === "iy") && o.length === 2 && R16.has(o[1])) {
+    if ((mnem === "add" || (mnem === "adc" && !mode.exact)) && (o[0] === "hl" || o[0] === "ix" || o[0] === "iy") && o.length === 2 && R16.has(o[1])) {
       return [set16(o[0], `(call $add16 ${get16(o[0])} ${get16(o[1])})`), null];
     }
     if (mnem === "sbc" && o[0] === "hl" && o.length === 2 && R16.has(o[1])) return [set16("hl", `(call $sbc16 ${get16("hl")} ${get16(o[1])})`), null];
@@ -413,9 +418,8 @@ export function lower(mnem, ops, addr, size) {
     return [set8(dst, `(call $io_read ${pe})`), null];
   }
   if (mnem === "di") return ["(global.set $iff (i32.const 0))", null];
-  // ei takes effect at the next scanline-boundary check; mid-line injection
-  // is deliberately not armed (it can split a VDP control-port write pair).
-  if (mnem === "ei") return ["(global.set $iff (i32.const 1))", null];
+  // ei: see `mode.exact` above for the EI delay.
+  if (mnem === "ei") return [mode.exact ? "(global.set $iff (i32.const 1)) (global.set $eidelay (i32.const 1))" : "(global.set $iff (i32.const 1))", null];
   if (mnem === "im") return ["(nop)", null];
   // HALT: park until an interrupt, PC at the next instruction so the
   // handler returns past the halt.
@@ -476,7 +480,7 @@ export function lower(mnem, ops, addr, size) {
     if (!o.length) return ["", { kind: "ret", at: addr }];
     return ["", { kind: "ret_cc", cond: cond(o[0]), next: nxt, at: addr }];
   }
-  if (mnem === "reti" || mnem === "retn") return ["(global.set $iff (i32.const 1))", { kind: "ret", at: addr }];
+  if (mnem === "reti" || mnem === "retn") return [mode.exact ? "" : "(global.set $iff (i32.const 1))", { kind: "ret", at: addr }];
   if (mnem === "defb" || mnem === ".byte") return ["(nop)", null];
   throw new Unsupported(`${mnem} ${ops}`);
 }
