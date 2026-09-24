@@ -21,6 +21,8 @@ import path from "node:path";
  * @param {object} [a.options]      backend options
  * @param {Record<string, object>} [a.regions]  extra caller regions
  * @param {boolean} [a.picture]     also score the two pictures at the last frame (result.picture)
+ * @param {boolean} [a.audio]       also compare every frame's audio samples (result.audio on a difference)
+ * @param {Uint8Array} [a.refRom]   run the reference on this ROM instead (a must-fail control)
  * Buttons named "p2<name>" in `input` press <name> on the SECOND pad (same schedule alignment).
  * @returns {Promise<object>} findDiverge's result (diverged, atRefFrame, regions, fields, ...)
  */
@@ -37,6 +39,9 @@ export async function gpgxParity(a) {
     const ext = a.platform === "genesis" ? "md" : a.platform;
     const romPath = path.join(dir, `t.${ext}`);
     writeFileSync(romPath, a.rom);
+    // a.refRom (must-fail controls): the reference runs a different ROM
+    const refRomPath = a.refRom ? path.join(dir, `ref.${ext}`) : romPath;
+    if (a.refRom) writeFileSync(refRomPath, a.refRom);
     const cartPath = path.join(dir, "t.wasc");
     await recompileToWasmcart({ platform: a.platform, romPath, outputPath: cartPath, options: a.options ?? {}, log: () => {} });
     const cartBytes = new Uint8Array(readFileSync(cartPath));
@@ -53,7 +58,7 @@ export async function gpgxParity(a) {
       const h = new LibretroHost();
       hosts.push(h);
       await h.loadCore(resolved.jsPath, resolved.wasmPath, { hwRender: resolved.hwRender, noderawfs: resolved.noderawfs });
-      await h.loadMedia({ platform: a.platform, path: romPath });
+      await h.loadMedia({ platform: a.platform, path: refRomPath });
       return h;
     };
     const refHost = await openRef();
@@ -68,7 +73,7 @@ export async function gpgxParity(a) {
     }
     const r = await findRecompileDivergence({
       cartHost, refHost, refPlatform: a.platform, layout, input: a.input ?? "",
-      maxFrames: a.maxFrames ?? 60, startFrame: 0, openCart, openRef,
+      maxFrames: a.maxFrames ?? 60, startFrame: 0, openCart, openRef, audio: a.audio,
     });
     if (a.picture) {
       const cart = cartHost.screenshotRgba(), ref = refHost.screenshotRgba();
@@ -84,7 +89,7 @@ export async function gpgxParity(a) {
 /** A short text for assert messages: where the two sides first differ. */
 export function divergenceText(r) {
   if (!r.diverged) return "no divergence";
-  return `ref frame ${r.atRefFrame}: ` + [...(r.regions ?? []).map((x) => `${x.region}@${x.firstDiff?.offset} cart=${x.firstDiff?.cart} ref=${x.firstDiff?.ref} (${x.differ} bytes)`),
+  return `ref frame ${r.atRefFrame}: ` + [...(r.audio?.refFrame != null ? [`audio: ${r.audio.note}`] : []), ...(r.regions ?? []).map((x) => `${x.region}@${x.firstDiff?.offset} cart=${x.firstDiff?.cart} ref=${x.firstDiff?.ref} (${x.differ} bytes)`),
     ...(r.fields ?? []).map((x) => `${x.field} cart=${x.cart} ref=${x.ref}`)].join("; ");
 }
 

@@ -10,7 +10,8 @@
 //   TIMING cycles.js per-instruction T-states; a scanline is 228 T and the
 //                    frame starts at line 192 as gpgx's system_frame_sms does.
 //   VIDEO  hw.js     Mode 4 VDP, rendered line by line between CPU runs.
-//   AUDIO  hw.js     SN76489 into the wasmcart ring at 48 kHz.
+//   AUDIO  psg.js    genesis_plus_gx's SN76489 + blip_buf, s16 stereo 44100 Hz,
+//                    sample-exact with its libretro output (legacy: hw.js, 48 kHz f32).
 //
 // Mapper, slot-1 paging and RAM-resident code are derived from the ROM where
 // possible (see describe()); the rest are documented options.
@@ -25,6 +26,7 @@ import { readFileSync } from "node:fs";
 import { crc32 } from "node:zlib";
 import { cost, costExact } from "./cycles.js";
 import { lower, flagHelpersWat, m1Count, rIncWat } from "./z80.js";
+import { smsSoundWat, smsSoundInfo } from "./psg.js";
 import { hwWat, renderWat, psgWat, miscWat, cramBody, startBody, pauseNmiWat, ggLutBytes, hcounterBytes, hcolBytes, hlatchBytes, VRAM, CRAM, VREG, GGLUT, PROBE, PCWATCH, SMSFB, LINEPROBE, HCTAB, HCOLTAB, HLATTAB } from "./hw.js";
 import { watBytes } from "../cart-abi.js";
 import { emitFlatWat } from "./flat.js";
@@ -890,7 +892,8 @@ function abiWat(G, cfg, n, platform) {
   // boundary (no overshoot carried into the line) after the NEXT instruction.
   const HINT_EDGE = cfg.legacy ? "" : `              (if (i32.and (i32.eqz (global.get $carry))
                            (i32.ne (i32.and (call $vreg (i32.const 0)) (i32.const 0x10)) (i32.const 0)))
-                (then (global.set $carry (i32.sub (call $run (i32.const 1)) (i32.const 1)))))
+                (then (global.set $snd_tend (i32.add (i32.mul (local.get $k) (i32.const 228)) (i32.const 1)))
+                      (global.set $carry (i32.sub (call $run (i32.const 1)) (i32.const 1)))))
 `;
   // Legacy model: interrupts sampled only here, at the start of each line.
   // Otherwise $run samples them before every instruction.
@@ -998,15 +1001,15 @@ ${cfg.legacy ? `    (block $d (loop $l
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 8))  (i32.const 192))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 12)) (i32.const ${FB}))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 16)) (i32.const ${AUDIO}))
-    (i32.store (i32.add (i32.const ${ABI}) (i32.const 20)) (i32.const 4096))
+    (i32.store (i32.add (i32.const ${ABI}) (i32.const 20)) (i32.const ${cfg.legacy ? 4096 : smsSoundInfo(AUDIO).audioCap}))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 24)) (i32.add (i32.const ${ABI}) (i32.const 256)))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 28)) (i32.add (i32.const ${ABI}) (i32.const 288)))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 32)) (i32.const 0))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 36)) (i32.const 0))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 40)) (i32.add (i32.const ${ABI}) (i32.const 320)))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 44)) (i32.add (i32.const ${ABI}) (i32.const 352)))
-    (i32.store (i32.add (i32.const ${ABI}) (i32.const 48)) (i32.const 1))
-    (i32.store (i32.add (i32.const ${ABI}) (i32.const 52)) (i32.const 48000))
+    (i32.store (i32.add (i32.const ${ABI}) (i32.const 48)) (i32.const ${cfg.legacy ? 1 : 0}))
+    (i32.store (i32.add (i32.const ${ABI}) (i32.const 52)) (i32.const ${cfg.legacy ? 48000 : smsSoundInfo(AUDIO).sampleRate}))
     (i32.const ${ABI}))
 
   (func (export "wc_init")
@@ -1085,7 +1088,7 @@ ${HINT_EDGE}              (global.set $hintpend (i32.const 1)))
               (if (i32.lt_u (local.get $ln) ${VPH})
                 (then (global.set $linectr
                         (i32.sub (global.get $linectr) (i32.const 1)))))))))
-${LINE_IRQ}${RELOAD_BEFORE}      (global.set $carry (call $run (i32.add (i32.const 228) (global.get $carry))))
+${LINE_IRQ}${RELOAD_BEFORE}${cfg.legacy ? "" : "      (global.set $snd_tend (i32.mul (i32.add (local.get $k) (i32.const 1)) (i32.const 228)))\n"}      (global.set $carry (call $run (i32.add (i32.const 228) (global.get $carry))))
 ${RELOAD_AFTER}${cfg.legacy ? "" : `      (if (i32.eq (local.get $ln) (i32.const ${LINES - 1}))
         (then (global.set $vscroll (call $vreg (i32.const 9)))))
 `}${VINT_SET}
@@ -1548,6 +1551,8 @@ export function recompileSection(rom, sha1, opts = {}) {
         frameBuffer: { note: "wc_get_info fbPtr, 256x192 RGBA" },
       },
       ...(d.traceEntries ? { trace: traceFor(d.traceEntries) } : {}),
+      // genesis_plus_gx's libretro output (psg.js): s16 stereo 44100 Hz
+      ...(d.emitter === "banked" && !d.legacy ? { audio: smsSoundInfo(computeLayout(0, 0, 0, false, false, 240).AUDIO).section } : {}),
       ...(d.breakArm != null ? { debugBreakArm: d.breakArm, warning: "built with options.breakArm: one instruction also flips bit 0 of A (a must-fail control), NOT a faithful cart" } : {}),
     },
   };
@@ -1662,7 +1667,8 @@ export async function* emitWat(rom, opts = {}) {
   head.push(flagHelpersWat({ exact: !cfg.legacy }));
   head.push(hwWat(PLATFORM, { exact: !cfg.legacy, region: cfg.region, pal: cfg.pal, fm: cfg.fm, sms1: cfg.vdp === "315-5124" }));
   head.push(renderWat({ exact: !cfg.legacy, sms1: cfg.vdp === "315-5124" }));
-  head.push(psgWat(AUDIO, ABI, { pal: cfg.pal && !cfg.legacy }));
+  // the exact model: genesis_plus_gx's PSG + blip_buf, s16 44100 Hz (psg.js)
+  head.push(cfg.legacy ? psgWat(AUDIO, ABI, { pal: false }) : smsSoundWat({ base: AUDIO, cursorAddr: ABI + 256, pal: cfg.pal }));
   head.push(miscWat({ exact: !cfg.legacy }));
   head.push("  (func $trap (global.set $trapped (i32.const 1)) (global.set $trappc (global.get $pc)))");
   yield head.join("\n") + "\n";
