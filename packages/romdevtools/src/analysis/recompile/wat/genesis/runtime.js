@@ -1468,7 +1468,7 @@ export function vdpWat(opts = {}) {
       (if (i32.eq (local.get $r) (i32.const 5))
         (then ${RS(5, '(local.get $d)')}
               (global.set $v_satb (i32.and (i32.shl (local.get $d) (i32.const 9)) (global.get $v_sat_base_mask)))
-              (if (call $in_hblank_redraw (local.get $cycles)) (then (call $parse_satb (global.get $v_v_counter))))
+              (if (call $in_hblank_redraw (local.get $cycles)) (then (call $parse_satb_any (global.get $v_v_counter))))
               (br $sw)))
       (if (i32.eq (local.get $r) (i32.const 7))
         (then ${RS(7, '(local.get $d)')}
@@ -1640,7 +1640,7 @@ export function vdpWat(opts = {}) {
 
 // renderer (vdp_render.c, Mode 5, non-interlaced)
 export function renderWat() {
-  return `
+  const base = `
   ;; one 8-pixel pattern row, as bg_pattern_cache would hold it: pixel p of a
   ;; row is nibble (p ^ 3) of the little-endian u32, (p ^ 4) when h-flipped.
   (func $draw_tile (param $dst i32) (param $attr i32) (param $vline i32)
@@ -1942,15 +1942,98 @@ export function renderWat() {
           (then (global.set $nm4 (i32.add (global.get $nm4) (i32.const 1)))
                 (memory.fill (i32.const ${LB0 + 0x20}) (i32.const 0x40) (global.get $vp_w))
                 (call $remap_line (local.get $line)) (return)))
-        (if (global.get $v_im2) (then (global.set $nim2 (i32.add (global.get $nim2) (i32.const 1)))))
-        (call $render_bg (local.get $line))
-        (call $render_obj (i32.and (local.get $line) (i32.const 1)))
+        (if (global.get $v_im2)
+          (then (global.set $nim2 (i32.add (global.get $nim2) (i32.const 1)))
+                (call $render_bg_im2 (local.get $line))
+                (call $render_obj_im2 (i32.and (local.get $line) (i32.const 1))))
+          (else (call $render_bg (local.get $line))
+                (call $render_obj (i32.and (local.get $line) (i32.const 1)))))
         (if (i32.and ${R(0)} (i32.const 0x20))
           (then (memory.fill (i32.const ${LB0 + 0x20}) (i32.const 0x40) (i32.const 8))))
         (if (i32.lt_s (local.get $line) (i32.sub (global.get $vp_h) (i32.const 1)))
-          (then (call $parse_satb (local.get $line)))))
+          (then (call $parse_satb_any (local.get $line)))))
       (else (memory.fill (i32.const ${LB0 + 0x20}) (i32.const 0x40) (global.get $vp_w))))
     (call $remap_line (local.get $line)))
+`;
+  return base + im2Wat(base);
+}
+
+/** The text of one `(func $name ...)` in `wat` (balanced parentheses). */
+function funcText(wat, name) {
+  const i = wat.indexOf(`(func ${name} `);
+  if (i < 0) throw new Error(`renderWat: no ${name}`);
+  let d = 0;
+  for (let j = i; j < wat.length; j++) {
+    if (wat[j] === "(") d++;
+    else if (wat[j] === ")" && --d === 0) return wat.slice(i, j + 1);
+  }
+  throw new Error(`renderWat: ${name} unbalanced`);
+}
+
+/** Replace `from` (which must occur, `n` times when given) in `s`. */
+function must(s, from, to, n) {
+  const k = s.split(from).length - 1;
+  if (!k || (n !== undefined && k !== n)) throw new Error(`renderWat im2: '${from.slice(0, 60)}' found ${k} times`);
+  return s.split(from).join(to);
+}
+
+/**
+ * Interlace mode 2 (reg12 bits 1-2 = 3): render_bg_m5_im2(_vs),
+ * render_obj_m5_im2(_ste) and parse_satb_m5_im2 are the Mode 5 functions on
+ * the doubled line ((line << 1) + odd_frame) with 8x16 patterns: pattern
+ * row 0-15 of a 10-bit pattern number N is 8x8 pattern 2N + half at row & 7,
+ * half = (row >> 3) ^ vflip (the cache's GET_*_TILE_IM2 index). Derived from
+ * the Mode 5 text so the two cannot drift.
+ * @param {string} base renderWat's Mode 5 functions
+ */
+function im2Wat(base) {
+  let bg = funcText(base, "$render_bg");
+  bg = must(bg, "(func $render_bg ", "(func $render_bg_im2 ", 1);
+  bg = must(bg, "(local.set $rm (global.get $v_pf_row_mask))", "(local.set $rm (i32.or (i32.shl (global.get $v_pf_row_mask) (i32.const 1)) (i32.const 1)))", 1);
+  bg = must(bg, `(local.set $a (i32.shl (i32.and ${R(18)} (i32.const 0x1F)) (i32.const 3)))`,
+    `(local.set $line (i32.add (i32.shl (local.get $line) (i32.const 1)) (global.get $v_odd_frame)))
+    (local.set $a (i32.shl (i32.and ${R(18)} (i32.const 0x1F)) (i32.const 4)))`, 1);
+  bg = must(bg, "(i32.shr_u (local.get $vl) (i32.const 3))", "(i32.shr_u (local.get $vl) (i32.const 4))");
+  bg = must(bg, "(i32.shl (i32.and (local.get $vl) (i32.const 7)) (i32.const 3))", "(i32.shl (i32.and (local.get $vl) (i32.const 15)) (i32.const 3))");
+  bg = must(bg, "(i32.shl (i32.shr_u (local.get $line) (i32.const 3)) (i32.add (i32.const 6)", "(i32.shl (i32.shr_u (local.get $line) (i32.const 4)) (i32.add (i32.const 6)", 1);
+  bg = must(bg, "(local.set $vl (i32.shl (i32.and (local.get $line) (i32.const 7)) (i32.const 3)))", "(local.set $vl (i32.shl (i32.and (local.get $line) (i32.const 15)) (i32.const 3)))", 1);
+  bg = must(bg, "(call $draw_col ", "(call $draw_col_im2 ");
+  let ps = funcText(base, "$parse_satb");
+  ps = must(ps, "(func $parse_satb ", "(func $parse_satb_im2 ", 1);
+  ps = must(ps, "(local.set $line (i32.add (local.get $line) (i32.const 0x81)))",
+    "(local.set $line (i32.add (i32.shl (i32.add (local.get $line) (i32.const 0x81)) (i32.const 1)) (global.get $v_odd_frame)))", 1);
+  ps = must(ps, "(i32.shl (local.get $link) (i32.const 1)))) (i32.const 0x1FF)))", "(i32.shl (local.get $link) (i32.const 1)))) (i32.const 0x3FF)))", 1);
+  ps = must(ps, "(local.set $height (i32.add (i32.const 8) (i32.shl (i32.and (local.get $size) (i32.const 3)) (i32.const 3))))",
+    "(local.set $height (i32.add (i32.const 16) (i32.shl (i32.and (local.get $size) (i32.const 3)) (i32.const 4))))", 1);
+  ps = must(ps, `(i32.store8 (i32.add (i32.const ${OBJCNT}) (i32.and (local.get $line) (i32.const 1))) (local.get $count))`,
+    `(i32.store8 (i32.add (i32.const ${OBJCNT}) (i32.and (i32.shr_u (local.get $line) (i32.const 1)) (i32.const 1))) (local.get $count))`, 1);
+  let ob = funcText(base, "$render_obj");
+  ob = must(ob, "(func $render_obj ", "(func $render_obj_im2 ", 1);
+  ob = must(ob, "(local.set $name (i32.and (local.get $attr) (i32.const 0x7FF)))", "(local.set $name (i32.and (local.get $attr) (i32.const 0x3FF)))", 1);
+  ob = must(ob, "(i32.shr_u (i32.and (local.get $vline) (i32.const 0x18)) (i32.const 1))", "(i32.shr_u (i32.and (local.get $vline) (i32.const 0x30)) (i32.const 2))", 1);
+  ob = must(ob, "(local.set $vline (i32.and (local.get $vline) (i32.const 7)))", "(local.set $vline (i32.and (local.get $vline) (i32.const 15)))", 1);
+  ob = must(ob, `(local.set $tmp (i32.or (local.get $attr)
+              (i32.and (i32.add (local.get $name) (i32.load8_u (i32.add (local.get $s) (local.get $col)))) (i32.const 0x7FF))))`,
+    `(local.set $tmp (i32.or (local.get $attr) (i32.or
+              (i32.shl (i32.and (i32.add (local.get $name) (i32.load8_u (i32.add (local.get $s) (local.get $col)))) (i32.const 0x3FF)) (i32.const 1))
+              (i32.xor (i32.shr_u (local.get $vline) (i32.const 3)) (i32.shr_u (i32.and (local.get $attr) (i32.const 0x1000)) (i32.const 12))))))`, 1);
+  ob = must(ob, "(local.set $row (local.get $vline))", "(local.set $row (i32.and (local.get $vline) (i32.const 7)))", 1);
+  return `
+  ;; ---- interlace mode 2 (see im2Wat) ----
+  (func $parse_satb_any (param $line i32)
+    (if (global.get $v_im2) (then (call $parse_satb_im2 (local.get $line))) (else (call $parse_satb (local.get $line)))))
+  (func $draw_col_im2 (param $dst i32) (param $at i32) (param $vline i32)
+    (call $draw_tile_im2 (local.get $dst) (i32.and (local.get $at) (i32.const 0xFFFF)) (local.get $vline))
+    (call $draw_tile_im2 (i32.add (local.get $dst) (i32.const 8)) (i32.shr_u (local.get $at) (i32.const 16)) (local.get $vline)))
+  (func $draw_tile_im2 (param $dst i32) (param $attr i32) (param $vline i32)
+    (call $draw_tile (local.get $dst)
+      (i32.or (i32.and (local.get $attr) (i32.const 0xF800))
+        (i32.or (i32.shl (i32.and (local.get $attr) (i32.const 0x3FF)) (i32.const 1))
+                (i32.xor (i32.shr_u (local.get $vline) (i32.const 6)) (i32.shr_u (i32.and (local.get $attr) (i32.const 0x1000)) (i32.const 12)))))
+      (i32.and (local.get $vline) (i32.const 0x3F))))
+  ${bg}
+  ${ps}
+  ${ob}
 `;
 }
 

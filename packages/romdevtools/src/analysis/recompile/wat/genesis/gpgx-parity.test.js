@@ -286,3 +286,34 @@ test("md_cart_init's special backup RAM maps: the whole upper 2MB (T-119186), $2
   const r2 = await gpgxParity({ platform: "genesis", rom: triple, maxFrames: 3 });
   assert.equal(r2.diverged, false, `T-172026: ${divergenceText(r2)}`);
 });
+
+// VDP set-up helpers (68000 immediate writes to the control/data ports)
+const vreg = (r, v) => [...W(0x33fc, 0x8000 | (r << 8) | v), ...L(0xc00004)];
+const vcmd = (c) => [...W(0x23fc), ...L(c), ...L(0xc00004)];
+const vramAt = (a) => vcmd((0x40000000 | ((a & 0x3fff) << 16) | (a >> 14)) >>> 0);
+const vdata = (...ws) => ws.flatMap((w) => [...W(0x33fc, w), ...L(0xc00000)]);
+
+test("interlace mode 2: 8x16 patterns on the doubled line for planes, window and sprites, both fields", T, async () => {
+  const code = [
+    ...vreg(1, 0x04), ...vreg(0, 0x04), ...vreg(2, 0x30), ...vreg(3, 0x3c), ...vreg(4, 0x07), ...vreg(5, 0x6c),
+    ...vreg(12, 0x06), ...vreg(13, 0x3f), ...vreg(15, 2), ...vreg(16, 0x00), ...vreg(17, 0x02), ...vreg(18, 0x81),
+    ...vcmd(0xc0000000), ...vdata(...Array.from({ length: 16 }, (_, i) => ((i * 5) & 0xe) | (((i * 3) & 0xe) << 4) | ((i & 0xe) << 8))),
+    // 8x16 patterns 1 and 2: row r in colour (r + k) & 15, a notch in the left pixel
+    ...vramAt(0x40), ...vdata(...[1, 2].flatMap((k) => Array.from({ length: 16 }, (_, r) => { const c = (r + k) & 15; const b = (c << 4) | c; return [((r & 1 ? 0 : 0xf0) | c) << 8 | b, (b << 8) | b]; }).flat())),
+    // plane A (nt $C000): flips; window (nt $F000, top row); plane B (nt $E000)
+    ...vramAt(0xc000), ...vdata(0x0001, 0x1001, 0x0802, 0x1802, 0x8001, 0x0002),
+    ...vramAt(0xc040), ...vdata(0x0002, 0x1002, 0x0801, 0x1801),
+    ...vramAt(0xf000), ...vdata(0x0002, 0x0001),
+    ...vramAt(0xe000), ...vdata(0x2001, 0x2001, 0x2002, 0x3002, 0x2001, 0x2001, 0x2001, 0x2001, 0x2001, 0x2001),
+    // sprites (SAT $D800): 16x32 v-flipped and 8x16, IM2 y is 10 bits
+    ...vramAt(0xd800), ...vdata(0x0110, 0x0501, 0x1001, 0x00a8, 0x0121, 0x0000, 0x0802, 0x00d1),
+    ...vramAt(0xfc00), ...vdata(0x0003, 0x0005),
+    ...vreg(1, 0x44), ...W(0x60fe),
+  ];
+  for (const maxFrames of [7, 8]) {
+    const r = await gpgxParity({ platform: "genesis", rom: mdImage(code), maxFrames, picture: true });
+    assert.equal(r.diverged, false, divergenceText(r));
+    assert.equal(r.picture.status, "OK", JSON.stringify(r.picture));
+    assert.equal(r.picture.exactPct, 100, `field ${maxFrames & 1}: ${JSON.stringify(r.picture)}`);
+  }
+});

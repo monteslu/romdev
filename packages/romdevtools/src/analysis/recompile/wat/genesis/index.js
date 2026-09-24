@@ -1226,7 +1226,7 @@ function frameWat(narms, PACKED, PCTAB, img, ROMSIZE, sramBank, eep) {
     (global.set $v_h_counter ${R(10)})
     (global.set $v_status (i32.and (global.get $v_status) (i32.const -9)))
     (if (global.get $v_dma_length) (then (call $dma_update (global.get $mcvdp))))
-    (if (i32.and ${R(1)} (i32.const 0x40)) (then (if (i32.and ${R(1)} (i32.const 4)) (then (call $parse_satb (i32.const -1))))))
+    (if (i32.and ${R(1)} (i32.const 0x40)) (then (if (i32.and ${R(1)} (i32.const 4)) (then (call $parse_satb_any (i32.const -1))))))
     (call $input_refresh)${eep && eep.jcart ? " (call $jpad_refresh)" : ""}
     (call $m68k_run (i32.add (global.get $mcvdp) (i32.const 3420)))
     (if (i32.eq (global.get $zstate) (i32.const 1)) (then (call $z80_run (i32.add (global.get $mcvdp) (i32.const 3420)))))
